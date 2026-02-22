@@ -1260,3 +1260,146 @@ VARIABLE _CET-N
     _CET-BA @ _CET-BL @
     _CET-LA @ _CET-LL @
     4 ;
+
+\ =====================================================================
+\  Layer 8 — @-Rule Parsing
+\ =====================================================================
+\
+\ Parse @-rules: @media, @import, @keyframes.
+\ @font-face body is regular CSS declarations — use CSS-DECL-NEXT.
+
+\ _CSS-EXTRACT-BODY ( a u -- a' u' body-a body-u )
+\   Cursor at '{'. Returns cursor past block, and trimmed body.
+VARIABLE _CEB-A
+VARIABLE _CEB-BA   VARIABLE _CEB-BL
+
+: _CSS-EXTRACT-BODY  ( a u -- a' u' body-a body-u )
+    DUP 0= IF 0 0 EXIT THEN
+    OVER C@ 123 <> IF 0 0 EXIT THEN   \ not '{'
+    OVER _CEB-A !                      \ save '{' address
+    CSS-SKIP-BLOCK                     \ cursor past '}'
+    \ body = chars between { and }
+    _CEB-A @ 1+  _CEB-BA !            \ body starts after '{'
+    OVER _CEB-A @ - 2 -               \ body len
+    DUP 0< IF DROP 0 THEN
+    _CEB-BL !
+    _CEB-BA @ _CEB-BL @ CSS-SKIP-WS _CSS-TRIM-END
+    _CEB-BL ! _CEB-BA !
+    _CEB-BA @ _CEB-BL @ ;
+
+\ CSS-MEDIA-QUERY ( a u -- cond-a cond-u body-a body-u flag )
+\   Parse @media rule. Cursor at '@media condition { body }'.
+\   Returns media condition string and body content.
+\   Flag=-1 success, 0 failure.
+VARIABLE _CMQ-CA   VARIABLE _CMQ-CL
+VARIABLE _CMQ-BA   VARIABLE _CMQ-BL
+
+: CSS-MEDIA-QUERY  ( a u -- cond-a cond-u body-a body-u flag )
+    DUP 0= IF 2DROP 0 0 0 0 0 EXIT THEN
+    OVER C@ 64 <> IF 2DROP 0 0 0 0 0 EXIT THEN
+    CSS-AT-RULE-NAME                   \ a' u' name-a name-u
+    2DUP S" media" _CSS-STRI= 0= IF
+        2DROP 2DROP 0 0 0 0 0 EXIT
+    THEN
+    2DROP                              \ drop name
+    CSS-SKIP-WS
+    OVER _CMQ-CA !                     \ save condition start
+    123 CSS-SKIP-UNTIL                 \ at '{'
+    DUP 0= IF 2DROP 0 0 0 0 0 EXIT THEN
+    \ condition = from saved start to here
+    OVER _CMQ-CA @ -
+    _CMQ-CA @ SWAP _CSS-TRIM-END
+    _CMQ-CL ! _CMQ-CA !
+    \ body = content between { and }
+    _CSS-EXTRACT-BODY
+    _CMQ-BL ! _CMQ-BA !
+    2DROP                              \ drop cursor
+    _CMQ-CA @ _CMQ-CL @
+    _CMQ-BA @ _CMQ-BL @
+    -1 ;
+
+\ _CSS-IS-URL-FUNC? ( a u -- a u flag )
+\   Check if cursor is at "url(" (case-insensitive). Non-consuming.
+VARIABLE _CUF-T
+
+: _CSS-IS-URL-FUNC?  ( a u -- a u flag )
+    DUP 4 < IF 0 EXIT THEN
+    OVER _CUF-T !
+    _CUF-T @ C@ _CSS-TOLOWER 117 <>     IF 0 EXIT THEN
+    _CUF-T @ 1+ C@ _CSS-TOLOWER 114 <>  IF 0 EXIT THEN
+    _CUF-T @ 2 + C@ _CSS-TOLOWER 108 <> IF 0 EXIT THEN
+    _CUF-T @ 3 + C@ 40 <>               IF 0 EXIT THEN
+    -1 ;
+
+\ _CSS-STRING-CONTENT ( a u -- content-a content-u )
+\   Extract content between quotes. Cursor at opening quote.
+VARIABLE _CSC-A
+
+: _CSS-STRING-CONTENT  ( a u -- content-a content-u )
+    OVER _CSC-A !                      \ save start address
+    CSS-SKIP-STRING                    \ past closing quote
+    DROP _CSC-A @ - 2 -               \ content len = consumed - 2
+    DUP 0< IF DROP 0 THEN
+    _CSC-A @ 1+ SWAP ;                \ content starts after quote
+
+\ CSS-IMPORT-URL ( a u -- url-a url-u flag )
+\   Parse @import rule. Cursor at '@import'.
+\   Handles: @import "url"; @import url("url"); @import url(bare);
+VARIABLE _CIU-A
+
+: CSS-IMPORT-URL  ( a u -- url-a url-u flag )
+    DUP 0= IF 2DROP 0 0 0 EXIT THEN
+    OVER C@ 64 <> IF 2DROP 0 0 0 EXIT THEN
+    CSS-AT-RULE-NAME                   \ a' u' name-a name-u
+    2DUP S" import" _CSS-STRI= 0= IF
+        2DROP 2DROP 0 0 0 EXIT
+    THEN
+    2DROP
+    CSS-SKIP-WS
+    DUP 0= IF 2DROP 0 0 0 EXIT THEN
+    \ Try url(...)
+    _CSS-IS-URL-FUNC? IF
+        4 /STRING CSS-SKIP-WS          \ skip "url(" + ws
+        DUP 0= IF 2DROP 0 0 0 EXIT THEN
+        OVER C@ DUP 34 = SWAP 39 = OR IF
+            _CSS-STRING-CONTENT -1 EXIT
+        THEN
+        \ bare URL: up to ')'
+        OVER _CIU-A !
+        41 CSS-SKIP-UNTIL              \ at ')'
+        DROP _CIU-A @ -               \ url len
+        _CIU-A @ SWAP _CSS-TRIM-END
+        -1 EXIT
+    THEN
+    \ Try quoted string
+    OVER C@ DUP 34 = SWAP 39 = OR IF
+        _CSS-STRING-CONTENT -1 EXIT
+    THEN
+    2DROP 0 0 0 ;
+
+\ CSS-KEYFRAMES ( a u -- name-a name-u body-a body-u flag )
+\   Parse @keyframes rule. Cursor at '@keyframes name { body }'.
+VARIABLE _CKF-NA   VARIABLE _CKF-NL
+VARIABLE _CKF-BA   VARIABLE _CKF-BL
+
+: CSS-KEYFRAMES  ( a u -- name-a name-u body-a body-u flag )
+    DUP 0= IF 2DROP 0 0 0 0 0 EXIT THEN
+    OVER C@ 64 <> IF 2DROP 0 0 0 0 0 EXIT THEN
+    CSS-AT-RULE-NAME                   \ a' u' name-a name-u
+    2DUP S" keyframes" _CSS-STRI= 0= IF
+        2DROP 2DROP 0 0 0 0 0 EXIT
+    THEN
+    2DROP
+    CSS-SKIP-WS
+    CSS-GET-IDENT                      \ a' u' name-a name-u
+    DUP 0= IF 2DROP 2DROP 0 0 0 0 0 EXIT THEN
+    _CKF-NL ! _CKF-NA !               \ save name
+    CSS-SKIP-WS
+    DUP 0= IF 2DROP 0 0 0 0 0 EXIT THEN
+    OVER C@ 123 <> IF 2DROP 0 0 0 0 0 EXIT THEN
+    _CSS-EXTRACT-BODY
+    _CKF-BL ! _CKF-BA !
+    2DROP                              \ drop cursor
+    _CKF-NA @ _CKF-NL @
+    _CKF-BA @ _CKF-BL @
+    -1 ;
