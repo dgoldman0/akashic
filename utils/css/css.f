@@ -945,3 +945,177 @@ VARIABLE _SPC-A2   VARIABLE _SPC-B2   VARIABLE _SPC-C2
 \   Pack specificity into single integer: a*65536 + b*256 + c.
 : CSS-SPEC-PACK  ( a b c -- spec )
     SWAP 256 * + SWAP 65536 * + ;
+
+\ =====================================================================
+\  Layer 6 — Value Parsing
+\ =====================================================================
+\
+\ Parse CSS property values: numbers, units, colors.
+\ No floating point — uses integer + fractional parts.
+
+\ _CSS-DIGIT? ( c -- flag )
+\   Is this character a decimal digit?
+: _CSS-DIGIT?  ( c -- flag )
+    DUP 48 >= SWAP 57 <= AND ;
+
+\ CSS-PARSE-INT ( a u -- a' u' n flag )
+\   Parse integer with optional sign.
+VARIABLE _CPI-N   VARIABLE _CPI-NEG
+
+: CSS-PARSE-INT  ( a u -- a' u' n flag )
+    DUP 0= IF 0 0 EXIT THEN
+    0 _CPI-NEG !
+    \ optional sign
+    OVER C@ DUP 45 = IF
+        DROP -1 _CPI-NEG !  1 /STRING
+    ELSE 43 = IF
+        1 /STRING
+    THEN THEN
+    \ must have at least one digit
+    DUP 0= IF 0 0 EXIT THEN
+    OVER C@ _CSS-DIGIT? 0= IF 0 0 EXIT THEN
+    0 _CPI-N !
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ _CSS-DIGIT? 0= IF
+            _CPI-NEG @ IF _CPI-N @ NEGATE ELSE _CPI-N @ THEN
+            -1 EXIT
+        THEN
+        OVER C@ 48 -  _CPI-N @ 10 * +  _CPI-N !
+        1 /STRING
+    REPEAT
+    _CPI-NEG @ IF _CPI-N @ NEGATE ELSE _CPI-N @ THEN -1 ;
+
+\ CSS-PARSE-NUMBER ( a u -- a' u' int frac frac-digits flag )
+\   Parse number: integer part + optional fractional part.
+\   Example: "3.14" → int=3, frac=14, frac-digits=2.
+\   No floating point — caller combines as needed.
+VARIABLE _CPN-INT  VARIABLE _CPN-FRAC
+VARIABLE _CPN-FD   VARIABLE _CPN-NEG
+VARIABLE _CPN-OK
+
+: CSS-PARSE-NUMBER  ( a u -- a' u' int frac frac-digits flag )
+    DUP 0= IF 0 0 0 0 EXIT THEN
+    0 _CPN-NEG !  0 _CPN-INT !
+    0 _CPN-FRAC !  0 _CPN-FD !  0 _CPN-OK !
+    \ optional sign
+    OVER C@ DUP 45 = IF
+        DROP -1 _CPN-NEG !  1 /STRING
+    ELSE 43 = IF
+        1 /STRING
+    THEN THEN
+    \ integer digits
+    BEGIN
+        DUP 0> IF OVER C@ _CSS-DIGIT? ELSE 0 THEN
+    WHILE
+        -1 _CPN-OK !
+        OVER C@ 48 -  _CPN-INT @ 10 * +  _CPN-INT !
+        1 /STRING
+    REPEAT
+    \ decimal point
+    DUP 0> IF
+        OVER C@ 46 = IF
+            1 /STRING
+            BEGIN
+                DUP 0> IF OVER C@ _CSS-DIGIT? ELSE 0 THEN
+            WHILE
+                -1 _CPN-OK !
+                OVER C@ 48 -  _CPN-FRAC @ 10 * +  _CPN-FRAC !
+                1 _CPN-FD +!
+                1 /STRING
+            REPEAT
+        THEN
+    THEN
+    _CPN-OK @ 0= IF 0 0 0 0 EXIT THEN
+    _CPN-NEG @ IF _CPN-INT @ NEGATE ELSE _CPN-INT @ THEN
+    _CPN-FRAC @  _CPN-FD @  -1 ;
+
+\ CSS-SKIP-NUMBER ( a u -- a' u' )
+\   Skip a numeric value (sign + digits + optional dot + digits).
+: CSS-SKIP-NUMBER  ( a u -- a' u' )
+    DUP 0= IF EXIT THEN
+    OVER C@ DUP 43 = SWAP 45 = OR IF 1 /STRING THEN
+    BEGIN
+        DUP 0> IF OVER C@ _CSS-DIGIT? ELSE 0 THEN
+    WHILE
+        1 /STRING
+    REPEAT
+    DUP 0> IF
+        OVER C@ 46 = IF
+            1 /STRING
+            BEGIN
+                DUP 0> IF OVER C@ _CSS-DIGIT? ELSE 0 THEN
+            WHILE
+                1 /STRING
+            REPEAT
+        THEN
+    THEN ;
+
+\ CSS-PARSE-UNIT ( a u -- a' u' unit-a unit-u )
+\   Extract unit suffix: px, em, rem, %, pt, cm, etc.
+\   Returns empty (0 0) if no unit follows.
+VARIABLE _CPU-A
+
+: CSS-PARSE-UNIT  ( a u -- a' u' unit-a unit-u )
+    DUP 0= IF 0 0 EXIT THEN
+    OVER C@ 37 = IF              \ '%'
+        OVER _CPU-A !
+        1 /STRING
+        _CPU-A @ 1 EXIT
+    THEN
+    OVER C@ _CSS-IDENT-START? IF  \ px, em, rem, etc.
+        CSS-GET-IDENT EXIT
+    THEN
+    0 0 ;
+
+\ _CSS-HEX-DIGIT ( c -- n flag )
+\   Convert a hex digit character to its value.
+: _CSS-HEX-DIGIT  ( c -- n flag )
+    DUP 48 >= OVER 57  <= AND IF 48 - -1 EXIT THEN
+    DUP 65 >= OVER 70  <= AND IF 55 - -1 EXIT THEN
+    DUP 97 >= OVER 102 <= AND IF 87 - -1 EXIT THEN
+    DROP 0 0 ;
+
+\ _CSS-HEX-PAIR ( addr -- n flag )
+\   Parse two hex digits at addr into a byte value.
+: _CSS-HEX-PAIR  ( addr -- n flag )
+    DUP C@ _CSS-HEX-DIGIT
+    0= IF 2DROP 0 0 EXIT THEN
+    SWAP 1+ C@ _CSS-HEX-DIGIT
+    0= IF 2DROP 0 0 EXIT THEN
+    SWAP 16 * + -1 ;
+
+\ CSS-PARSE-HEX-COLOR ( a u -- a' u' r g b flag )
+\   Parse #RGB or #RRGGBB hex color.
+\   Returns r, g, b as 0-255 values.
+VARIABLE _CHC-A   VARIABLE _CHC-R
+VARIABLE _CHC-G   VARIABLE _CHC-B
+
+: CSS-PARSE-HEX-COLOR  ( a u -- a' u' r g b flag )
+    DUP 0= IF 0 0 0 0 EXIT THEN
+    OVER C@ 35 <> IF 0 0 0 0 EXIT THEN   \ not '#'
+    1 /STRING
+    OVER _CHC-A !
+    \ try 6-digit #RRGGBB
+    DUP 6 >= IF
+        _CHC-A @     _CSS-HEX-PAIR
+        0= IF DROP 0 0 0 0 EXIT THEN  _CHC-R !
+        _CHC-A @ 2 + _CSS-HEX-PAIR
+        0= IF DROP 0 0 0 0 EXIT THEN  _CHC-G !
+        _CHC-A @ 4 + _CSS-HEX-PAIR
+        0= IF DROP 0 0 0 0 EXIT THEN  _CHC-B !
+        6 /STRING
+        _CHC-R @ _CHC-G @ _CHC-B @ -1 EXIT
+    THEN
+    \ try 3-digit #RGB
+    DUP 3 >= IF
+        _CHC-A @     C@ _CSS-HEX-DIGIT
+        0= IF DROP 0 0 0 0 EXIT THEN  17 * _CHC-R !
+        _CHC-A @ 1+  C@ _CSS-HEX-DIGIT
+        0= IF DROP 0 0 0 0 EXIT THEN  17 * _CHC-G !
+        _CHC-A @ 2 + C@ _CSS-HEX-DIGIT
+        0= IF DROP 0 0 0 0 EXIT THEN  17 * _CHC-B !
+        3 /STRING
+        _CHC-R @ _CHC-G @ _CHC-B @ -1 EXIT
+    THEN
+    0 0 0 0 ;
