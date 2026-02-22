@@ -1119,3 +1119,144 @@ VARIABLE _CHC-G   VARIABLE _CHC-B
         _CHC-R @ _CHC-G @ _CHC-B @ -1 EXIT
     THEN
     0 0 0 0 ;
+
+\ =====================================================================
+\  Layer 7 — Shorthand Expansion
+\ =====================================================================
+\
+\ Parse value lists and expand TRBL shorthands.
+\ CSS-SKIP-VALUE skips one value token.
+\ CSS-NEXT-VALUE extracts the next space-separated value.
+\ CSS-EXPAND-TRBL expands 1-4 values to Top/Right/Bottom/Left.
+
+\ CSS-SKIP-VALUE ( a u -- a' u' )
+\   Skip one CSS value token.
+\   Handles identifiers, numbers, strings, functions, #colors, etc.
+: CSS-SKIP-VALUE  ( a u -- a' u' )
+    DUP 0= IF EXIT THEN
+    OVER C@
+    DUP 34 = OVER 39 = OR IF        \ string
+        DROP CSS-SKIP-STRING EXIT
+    THEN
+    DUP 35 = IF                      \ '#' color
+        DROP 1 /STRING
+        BEGIN
+            DUP 0> WHILE
+            OVER C@ _CSS-HEX-DIGIT IF
+                DROP 1 /STRING
+            ELSE
+                DROP EXIT
+            THEN
+        REPEAT EXIT
+    THEN
+    DUP 43 = OVER 45 = OR           \ + or - sign
+    OVER _CSS-DIGIT? OR
+    OVER 46 = OR IF                  \ or '.' for .5
+        DROP CSS-SKIP-NUMBER
+        \ skip optional unit
+        DUP 0> IF
+            OVER C@ DUP 37 = IF     \ '%'
+                DROP 1 /STRING
+            ELSE
+                _CSS-IDENT-START? IF
+                    CSS-SKIP-IDENT
+                THEN
+            THEN
+        THEN EXIT
+    THEN
+    _CSS-IDENT-START? IF             \ ident or function
+        CSS-SKIP-IDENT
+        \ check for '(' — function call
+        DUP 0> IF
+            OVER C@ 40 = IF
+                CSS-SKIP-PARENS
+            THEN
+        THEN EXIT
+    THEN
+    \ unknown — skip one char
+    DROP 1 /STRING ;
+
+\ CSS-NEXT-VALUE ( a u -- a' u' val-a val-u flag )
+\   Get next space-separated value from a value list.
+\   Skips leading whitespace. Returns the value string.
+\   Flag = -1 found, 0 end of input.
+VARIABLE _CNV-A
+
+: CSS-NEXT-VALUE  ( a u -- a' u' val-a val-u flag )
+    CSS-SKIP-WS
+    DUP 0= IF 0 0 0 EXIT THEN
+    OVER _CNV-A !
+    CSS-SKIP-VALUE
+    OVER _CNV-A @ - DUP 0= IF
+        DROP 0 0 0 EXIT
+    THEN
+    >R _CNV-A @ R> -1 ;
+
+\ CSS-EXPAND-TRBL ( val-a val-u -- t-a t-u r-a r-u b-a b-u l-a l-u n )
+\   Parse 1-4 space-separated values and expand to
+\   Top, Right, Bottom, Left using CSS shorthand rules.
+\   n = number of values found (1-4).
+\   Returns all four as string pairs plus count.
+\   1 value:  T=R=B=L
+\   2 values: T=B, R=L
+\   3 values: T, R=L, B
+\   4 values: T, R, B, L
+VARIABLE _CET-TA  VARIABLE _CET-TL
+VARIABLE _CET-RA  VARIABLE _CET-RL
+VARIABLE _CET-BA  VARIABLE _CET-BL
+VARIABLE _CET-LA  VARIABLE _CET-LL
+VARIABLE _CET-N
+
+: CSS-EXPAND-TRBL  ( val-a val-u -- t-a t-u r-a r-u b-a b-u l-a l-u n )
+    0 _CET-N !
+    0 _CET-TA !  0 _CET-TL !
+    0 _CET-RA !  0 _CET-RL !
+    0 _CET-BA !  0 _CET-BL !
+    0 _CET-LA !  0 _CET-LL !
+    \ parse first value
+    CSS-NEXT-VALUE 0= IF
+        2DROP
+        0 0 0 0 0 0 0 0 0 EXIT
+    THEN
+    _CET-TL !  _CET-TA !  1 _CET-N !
+    \ parse 2nd
+    CSS-NEXT-VALUE IF
+        _CET-RL !  _CET-RA !  2 _CET-N !
+        \ parse 3rd
+        CSS-NEXT-VALUE IF
+            _CET-BL !  _CET-BA !  3 _CET-N !
+            \ parse 4th
+            CSS-NEXT-VALUE IF
+                _CET-LL !  _CET-LA !  4 _CET-N !
+            THEN
+        THEN
+    THEN
+    2DROP                            \ drop remaining cursor
+    \ apply expansion rules based on count
+    _CET-N @ 1 = IF
+        _CET-TA @ _CET-TL @         \ T
+        _CET-TA @ _CET-TL @         \ R = T
+        _CET-TA @ _CET-TL @         \ B = T
+        _CET-TA @ _CET-TL @         \ L = T
+        1 EXIT
+    THEN
+    _CET-N @ 2 = IF
+        _CET-TA @ _CET-TL @         \ T
+        _CET-RA @ _CET-RL @         \ R
+        _CET-TA @ _CET-TL @         \ B = T
+        _CET-RA @ _CET-RL @         \ L = R
+        2 EXIT
+    THEN
+    _CET-N @ 3 = IF
+        _CET-TA @ _CET-TL @         \ T
+        _CET-RA @ _CET-RL @         \ R
+        _CET-BA @ _CET-BL @         \ B
+        _CET-RA @ _CET-RL @         \ L = R
+        3 EXIT
+    THEN
+    \ 4 values
+    _CET-TA @ _CET-TL @
+    _CET-RA @ _CET-RL @
+    _CET-BA @ _CET-BL @
+    _CET-LA @ _CET-LL @
+    4 ;
