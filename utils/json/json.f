@@ -526,3 +526,50 @@ VARIABLE _JPQ-SAVE-ABORT
     JSON-PATH
     _JPQ-SAVE-ABORT @ JSON-ABORT-ON-ERROR !
     JSON-OK? DUP 0= IF >R 2DROP 0 0 R> THEN ;
+
+\ =====================================================================
+\  Layer 6 — Iteration
+\ =====================================================================
+\
+\  Structured iteration over object key-value pairs.
+\  Array iteration uses JSON-ENTER + JSON-NEXT from Layers 3-4.
+
+\ JSON-EACH-KEY ( addr len -- addr' len' key-addr key-len flag )
+\   Iterate over object entries.  Call after JSON-ENTER on an object.
+\   On each call:
+\     - If at a "key":value pair, extracts key name, leaves cursor
+\       at the value, and returns flag = -1.
+\     - At } or empty, returns flag = 0 (and dummy key 0 0).
+\   After processing the value, caller must call JSON-SKIP-VALUE
+\   (or JSON-NEXT) to advance past the value before calling again.
+\
+\   Typical usage:
+\     my-json JSON-ENTER
+\     BEGIN JSON-EACH-KEY WHILE
+\       2SWAP                      ( key-addr key-len val-addr val-len )
+\       ... process key and value ...
+\       JSON-SKIP-VALUE            ( advance past value )
+\       JSON-SKIP-WS
+\     REPEAT 2DROP
+: JSON-EACH-KEY  ( addr len -- addr' len' key-addr key-len flag )
+    JSON-SKIP-WS
+    DUP 0> 0= IF 0 0 0 EXIT THEN
+    OVER C@ 125 = IF 0 0 0 EXIT THEN    \ } — end of object
+    OVER C@ 93  = IF 0 0 0 EXIT THEN    \ ] — shouldn't happen, but safe
+    \ skip comma if present
+    OVER C@ 44 = IF 1 /STRING JSON-SKIP-WS THEN
+    OVER C@ 125 = IF 0 0 0 EXIT THEN    \ } after comma (trailing comma)
+    \ expect a key string
+    OVER C@ 34 <> IF
+        JSON-E-UNEXPECTED JSON-FAIL
+        0 0 0 EXIT
+    THEN
+    \ extract key name
+    2DUP JSON-GET-STRING             ( obj-a obj-l key-a key-l )
+    2>R                              \ save key on rstack
+    \ skip past the key string and colon
+    JSON-SKIP-STRING
+    JSON-SKIP-WS
+    OVER C@ 58 = IF 1 /STRING THEN  \ skip :
+    JSON-SKIP-WS
+    2R> -1 ;
