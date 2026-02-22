@@ -467,3 +467,62 @@ VARIABLE _JH-SAVE-ABORT
         ELSE 0 THEN
     0= UNTIL
     2DROP R> ;
+
+\ =====================================================================
+\  Layer 5 — Path Access
+\ =====================================================================
+\
+\  Navigate deep structures with dot-separated key paths.
+\  e.g. S" post.author.handle" JSON-PATH
+
+\ _JSON-FIND-DOT ( addr len -- offset | -1 )
+\   Find the first '.' (46) in a string.  Returns offset or -1.
+: _JSON-FIND-DOT  ( addr len -- offset )
+    0 DO
+        DUP I + C@ 46 = IF DROP I UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+\ JSON-PATH ( addr len path-addr path-len -- addr' len' )
+\   Navigate a dot-separated path.  Each segment is a key name.
+\   Enters objects automatically.
+\   Example: S" user.name" JSON-PATH
+\   is equivalent to: JSON-ENTER S" user" JSON-KEY JSON-ENTER S" name" JSON-KEY
+VARIABLE _JP-PA
+VARIABLE _JP-PL
+
+: JSON-PATH  ( addr len paddr plen -- addr' len' )
+    _JP-PL ! _JP-PA !
+    BEGIN
+        _JP-PL @ 0>
+    WHILE
+        \ Enter the current object
+        JSON-ENTER
+        JSON-OK? 0= IF EXIT THEN
+        \ Find dot in remaining path
+        _JP-PA @ _JP-PL @ _JSON-FIND-DOT
+        DUP -1 = IF
+            \ no dot — last segment
+            DROP
+            _JP-PA @ _JP-PL @ JSON-KEY
+            EXIT
+        THEN
+        \ dot found at offset — extract segment before dot
+        >R
+        _JP-PA @ R@ JSON-KEY         \ look up this segment
+        JSON-OK? 0= IF R> DROP EXIT THEN
+        \ advance path past the dot
+        _JP-PA @ R@ 1+ + _JP-PA !
+        _JP-PL @ R> 1+ - _JP-PL !
+    REPEAT ;
+
+\ JSON-PATH? ( addr len path-addr path-len -- addr' len' flag )
+\   Like JSON-PATH but returns flag instead of failing.
+VARIABLE _JPQ-SAVE-ABORT
+: JSON-PATH?  ( addr len paddr plen -- addr' len' flag )
+    JSON-ABORT-ON-ERROR @ _JPQ-SAVE-ABORT !
+    JSON-CLEAR-ERR
+    0 JSON-ABORT-ON-ERROR !
+    JSON-PATH
+    _JPQ-SAVE-ABORT @ JSON-ABORT-ON-ERROR !
+    JSON-OK? DUP 0= IF >R 2DROP 0 0 R> THEN ;
