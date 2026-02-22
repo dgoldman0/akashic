@@ -327,3 +327,154 @@ VARIABLE _CSP-D
     REPEAT
     R> DROP ;
 
+\ =====================================================================
+\  Layer 1 — Declaration Parsing
+\ =====================================================================
+\
+\ Parse property: value; pairs inside a { } block.
+\ Cursor should be INSIDE the block (past '{').
+
+\ _CSS-TRIM-END ( addr len -- addr len' )
+\   Remove trailing whitespace from a string.
+: _CSS-TRIM-END  ( addr len -- addr len' )
+    BEGIN
+        DUP 0> WHILE
+        OVER OVER + 1- C@ _CSS-WS?
+        0= IF EXIT THEN
+        1-
+    REPEAT ;
+
+\ CSS-DECL-NEXT ( a u -- a' u' prop-a prop-u val-a val-u flag )
+\   Iterate declarations in a { } block.
+\   Cursor inside the block (past '{').
+\   Returns: advanced cursor, property name, value string, flag.
+\   Flag = -1 if a declaration was found, 0 if end of block.
+\   Value is everything between ':' and ';' (whitespace-trimmed).
+\   Skips empty declarations (bare semicolons).
+VARIABLE _CDN-PA   VARIABLE _CDN-PL   \ property
+VARIABLE _CDN-VA   VARIABLE _CDN-VL   \ value
+
+: CSS-DECL-NEXT  ( a u -- a' u' prop-a prop-u val-a val-u flag )
+    CSS-SKIP-WS
+    \ end of block?
+    DUP 0= IF 0 0 0 0 0 EXIT THEN
+    OVER C@ 125 = IF                 \ '}'
+        0 0 0 0 0 EXIT
+    THEN
+    \ skip bare semicolons
+    OVER C@ 59 = IF                  \ ';'
+        1 /STRING RECURSE EXIT
+    THEN
+    \ extract property name
+    CSS-GET-IDENT
+    _CDN-PL !  _CDN-PA !
+    \ skip to ':'
+    CSS-SKIP-WS
+    DUP 0> IF
+        OVER C@ 58 = IF             \ ':'
+            1 /STRING                \ skip ':'
+        ELSE
+            \ malformed — skip to ; or }
+            BEGIN
+                DUP 0> WHILE
+                OVER C@ DUP 59 = SWAP 125 = OR IF
+                    OVER C@ 59 = IF 1 /STRING THEN
+                    _CDN-PA @ _CDN-PL @
+                    0 0 -1 EXIT      \ return prop with empty value
+                THEN
+                1 /STRING
+            REPEAT
+            _CDN-PA @ _CDN-PL @ 0 0 -1 EXIT
+        THEN
+    THEN
+    \ extract value: everything until ';' or '}'
+    CSS-SKIP-WS
+    OVER _CDN-VA !
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ DUP 59 = SWAP 125 = OR IF
+            \ compute value length
+            OVER _CDN-VA @ -  _CDN-VL !
+            \ skip ';' if present
+            OVER C@ 59 = IF 1 /STRING THEN
+            _CDN-PA @ _CDN-PL @
+            _CDN-VA @ _CDN-VL @ _CSS-TRIM-END
+            -1 EXIT
+        THEN
+        OVER C@
+        DUP 34 = OVER 39 = OR IF
+            DROP CSS-SKIP-STRING
+        ELSE DUP 40 = IF
+            DROP CSS-SKIP-PARENS
+        ELSE
+            DROP 1 /STRING
+        THEN THEN
+    REPEAT
+    \ end of input — return what we have
+    OVER _CDN-VA @ -  _CDN-VL !
+    _CDN-PA @ _CDN-PL @
+    _CDN-VA @ _CDN-VL @ _CSS-TRIM-END
+    -1 ;
+
+\ CSS-DECL-FIND ( a u prop-a prop-u -- val-a val-u flag )
+\   Find a specific property in a declaration block.
+\   Cursor inside the block (past '{').
+\   Case-insensitive property match.
+VARIABLE _CDF-SA   VARIABLE _CDF-SL
+
+: CSS-DECL-FIND  ( a u prop-a prop-u -- val-a val-u flag )
+    _CDF-SL !  _CDF-SA !
+    BEGIN
+        CSS-DECL-NEXT                \ ( a' u' pa pu va vu flag )
+        DUP 0= IF                   \ no more decls
+            >R 2DROP 2DROP 2DROP R>
+            0 0 ROT EXIT             \ ( 0 0 0 )
+        THEN
+        DROP                         \ drop flag
+        2>R                          \ save val  R: va vu
+        _CDF-SA @ _CDF-SL @ _CSS-STRI=
+        IF
+            2DROP                    \ drop cursor
+            2R> -1 EXIT              \ ( va vu -1 )
+        THEN
+        2R> 2DROP                    \ discard val, continue
+    AGAIN ;
+
+\ CSS-DECL-HAS? ( a u prop-a prop-u -- flag )
+\   Does this block declare the given property?
+: CSS-DECL-HAS?  ( a u prop-a prop-u -- flag )
+    CSS-DECL-FIND
+    >R 2DROP R> ;
+
+\ CSS-IMPORTANT? ( val-a val-u -- flag )
+\   Does this value end with !important?
+\   Checks for "!important" at end (after trimming whitespace).
+VARIABLE _CIP-A
+
+: CSS-IMPORTANT?  ( val-a val-u -- flag )
+    _CSS-TRIM-END
+    DUP 10 < IF 2DROP 0 EXIT THEN   \ too short
+    \ look at last 10 chars for "!important"
+    OVER OVER + 10 - _CIP-A !
+    _CIP-A @    C@ 33  =            \ !
+    _CIP-A @ 1+ C@ _CSS-TOLOWER 105 = AND   \ i
+    _CIP-A @ 2 + C@ _CSS-TOLOWER 109 = AND  \ m
+    _CIP-A @ 3 + C@ _CSS-TOLOWER 112 = AND  \ p
+    _CIP-A @ 4 + C@ _CSS-TOLOWER 111 = AND  \ o
+    _CIP-A @ 5 + C@ _CSS-TOLOWER 114 = AND  \ r
+    _CIP-A @ 6 + C@ _CSS-TOLOWER 116 = AND  \ t
+    _CIP-A @ 7 + C@ _CSS-TOLOWER  97 = AND  \ a
+    _CIP-A @ 8 + C@ _CSS-TOLOWER 110 = AND  \ n
+    _CIP-A @ 9 + C@ _CSS-TOLOWER 116 = AND  \ t
+    IF 2DROP -1 EXIT THEN
+    2DROP 0 ;
+
+\ CSS-STRIP-IMPORTANT ( val-a val-u -- val-a' val-u' )
+\   Remove trailing !important from a value string.
+\   If !important is not present, returns unchanged.
+: CSS-STRIP-IMPORTANT  ( val-a val-u -- val-a' val-u' )
+    2DUP CSS-IMPORTANT? 0= IF EXIT THEN
+    \ remove last 10 chars and trim trailing whitespace
+    10 -
+    _CSS-TRIM-END ;
+
