@@ -478,3 +478,165 @@ VARIABLE _CIP-A
     10 -
     _CSS-TRIM-END ;
 
+\ =====================================================================
+\  Layer 2 — Rule Iteration
+\ =====================================================================
+\
+\ Iterate top-level rules in a stylesheet.
+\ CSS-RULE-NEXT returns selector + body for each rule.
+\ @-rules are skipped by default; dedicated words handle them.
+
+\ CSS-AT-RULE? ( a u -- flag )
+\   Is cursor at an @-rule (starts with '@')?
+: CSS-AT-RULE?  ( a u -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    DROP C@ 64 = ;                   \ '@'
+
+\ CSS-AT-RULE-NAME ( a u -- a' u' name-a name-u )
+\   Extract the @-rule name.  Cursor must be at '@'.
+\   Returns cursor past the name and the name string.
+: CSS-AT-RULE-NAME  ( a u -- a' u' name-a name-u )
+    DUP 0= IF 0 0 EXIT THEN
+    OVER C@ 64 <> IF 0 0 EXIT THEN  \ not '@'
+    1 /STRING                         \ skip '@'
+    CSS-GET-IDENT ;
+
+\ CSS-SKIP-AT-RULE ( a u -- a' u' )
+\   Skip one @-rule entirely.
+\   Block @-rules (@media, @keyframes): skip to closing '}'.
+\   Statement @-rules (@import, @charset): skip to ';'.
+VARIABLE _CSAR-A
+
+: CSS-SKIP-AT-RULE  ( a u -- a' u' )
+    DUP 0= IF EXIT THEN
+    OVER C@ 64 <> IF EXIT THEN      \ not '@'
+    1 /STRING                         \ skip '@'
+    CSS-SKIP-IDENT                    \ skip rule name
+    \ scan for '{' or ';', whichever comes first
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ DUP 123 = IF        \ '{' — block @-rule
+            DROP CSS-SKIP-BLOCK EXIT
+        THEN
+        DUP 59 = IF                  \ ';' — statement @-rule
+            DROP 1 /STRING EXIT
+        THEN
+        DUP 34 = OVER 39 = OR IF    \ string
+            DROP CSS-SKIP-STRING
+        ELSE DUP 40 = IF            \ parens
+            DROP CSS-SKIP-PARENS
+        ELSE DUP 47 = IF            \ possible comment
+            DROP
+            DUP 2 >= IF
+                OVER _CSAR-A !
+                _CSAR-A @    C@ 47 =
+                _CSAR-A @ 1+ C@ 42 = AND
+                IF CSS-SKIP-COMMENT
+                ELSE 1 /STRING THEN
+            ELSE 1 /STRING THEN
+        ELSE
+            DROP 1 /STRING
+        THEN THEN THEN
+    REPEAT ;
+
+\ CSS-RULE-NEXT ( a u -- a' u' sel-a sel-u body-a body-u flag )
+\   Get next rule from a stylesheet.
+\   Returns: advanced cursor, selector string (trimmed),
+\   body (inner content of { } block, no braces), flag.
+\   Flag = -1 found, 0 end of stylesheet.
+\   Skips @-rules automatically.
+VARIABLE _CRN-SA                     \ selector start
+VARIABLE _CRN-SL                     \ selector length
+VARIABLE _CRN-BA                     \ body start
+VARIABLE _CRN-BL                     \ body length
+VARIABLE _CRN-D                      \ depth counter
+
+: CSS-RULE-NEXT  ( a u -- a' u' sel-a sel-u body-a body-u flag )
+    CSS-SKIP-WS
+    DUP 0= IF 0 0 0 0 0 EXIT THEN
+    \ skip @-rules
+    OVER C@ 64 = IF                  \ '@'
+        CSS-SKIP-AT-RULE RECURSE EXIT
+    THEN
+    \ save selector start
+    OVER _CRN-SA !
+    \ find '{' — skip strings, comments, parens in selector
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ 123 = IF            \ '{' found
+            \ compute selector length
+            OVER _CRN-SA @ -  _CRN-SL !
+            \ body starts after '{'
+            1 /STRING
+            OVER _CRN-BA !
+            \ find matching '}' using depth counter
+            1 _CRN-D !
+            BEGIN
+                _CRN-D @ 0> WHILE
+                DUP 0> 0= IF        \ unterminated block
+                    OVER _CRN-BA @ -  _CRN-BL !
+                    _CRN-SA @ _CRN-SL @ _CSS-TRIM-END
+                    _CRN-BA @ _CRN-BL @
+                    -1 EXIT
+                THEN
+                OVER C@
+                DUP 123 = IF        \ nested '{'
+                    DROP 1 _CRN-D +!
+                    1 /STRING
+                ELSE DUP 125 = IF   \ '}'
+                    DROP -1 _CRN-D +!
+                    _CRN-D @ 0= IF  \ matching close
+                        OVER _CRN-BA @ -  _CRN-BL !
+                        1 /STRING    \ skip '}'
+                        _CRN-SA @ _CRN-SL @ _CSS-TRIM-END
+                        _CRN-BA @ _CRN-BL @
+                        -1 EXIT
+                    THEN
+                    1 /STRING
+                ELSE DUP 34 = OVER 39 = OR IF
+                    DROP CSS-SKIP-STRING
+                ELSE DUP 40 = IF
+                    DROP CSS-SKIP-PARENS
+                ELSE DUP 47 = IF
+                    DROP
+                    DUP 2 >= IF
+                        OVER 1+ C@ 42 = IF
+                            CSS-SKIP-COMMENT
+                        ELSE
+                            1 /STRING
+                        THEN
+                    ELSE
+                        1 /STRING
+                    THEN
+                ELSE
+                    DROP 1 /STRING
+                THEN THEN THEN THEN THEN
+            REPEAT
+            \ shouldn't reach here, but safety return
+            _CRN-SA @ _CRN-SL @ _CSS-TRIM-END
+            _CRN-BA @ _CRN-BL @
+            -1 EXIT
+        THEN
+        \ skip non-brace content in selector
+        OVER C@
+        DUP 34 = OVER 39 = OR IF
+            DROP CSS-SKIP-STRING
+        ELSE DUP 40 = IF
+            DROP CSS-SKIP-PARENS
+        ELSE DUP 47 = IF
+            DROP
+            DUP 2 >= IF
+                OVER 1+ C@ 42 = IF
+                    CSS-SKIP-COMMENT
+                ELSE
+                    1 /STRING
+                THEN
+            ELSE
+                1 /STRING
+            THEN
+        ELSE
+            DROP 1 /STRING
+        THEN THEN THEN
+    REPEAT
+    \ no '{' found
+    0 0 0 0 0 ;
