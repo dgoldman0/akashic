@@ -640,3 +640,162 @@ VARIABLE _CRN-D                      \ depth counter
     REPEAT
     \ no '{' found
     0 0 0 0 0 ;
+
+\ =====================================================================
+\  Layer 3 — Selector Parsing
+\ =====================================================================
+\
+\ Parse and tokenize CSS selectors.
+\ CSS-SEL-NEXT-SIMPLE parses one simple selector component.
+\ CSS-SEL-COMBINATOR parses a combinator between compound selectors.
+\ CSS-SEL-GROUP-NEXT iterates comma-separated selector groups.
+
+\ Component type constants
+1 CONSTANT CSS-S-TYPE
+2 CONSTANT CSS-S-UNIVERSAL
+3 CONSTANT CSS-S-CLASS
+4 CONSTANT CSS-S-ID
+5 CONSTANT CSS-S-ATTR
+6 CONSTANT CSS-S-PSEUDO-C
+7 CONSTANT CSS-S-PSEUDO-E
+
+\ Combinator type constants
+0 CONSTANT CSS-C-DESCENDANT
+1 CONSTANT CSS-C-CHILD
+2 CONSTANT CSS-C-ADJACENT
+3 CONSTANT CSS-C-GENERAL
+
+\ CSS-SEL-NEXT-SIMPLE ( a u -- a' u' type name-a name-u flag )
+\   Parse one simple selector component from cursor.
+\   Does NOT skip leading whitespace.
+\   Returns type constant, name string, and flag.
+\   Flag = -1 found, 0 nothing at cursor.
+VARIABLE _CSNS-A
+
+: CSS-SEL-NEXT-SIMPLE  ( a u -- a' u' type name-a name-u flag )
+    DUP 0= IF 0 0 0 0 EXIT THEN
+    OVER C@
+    DUP 46 = IF                      \ '.' class
+        DROP 1 /STRING
+        CSS-GET-IDENT
+        CSS-S-CLASS -ROT -1 EXIT
+    THEN
+    DUP 35 = IF                      \ '#' ID
+        DROP 1 /STRING
+        CSS-GET-IDENT
+        CSS-S-ID -ROT -1 EXIT
+    THEN
+    DUP 91 = IF                      \ '[' attribute
+        DROP 1 /STRING               \ skip '['
+        OVER _CSNS-A !
+        BEGIN
+            DUP 0> WHILE
+            OVER C@ 93 = IF          \ ']'
+                OVER _CSNS-A @ -
+                >R 1 /STRING
+                CSS-S-ATTR _CSNS-A @ R>
+                -1 EXIT
+            THEN
+            OVER C@ DUP 34 = OVER 39 = OR IF
+                DROP CSS-SKIP-STRING
+            ELSE
+                DROP 1 /STRING
+            THEN
+        REPEAT
+        \ unterminated
+        OVER _CSNS-A @ -
+        >R CSS-S-ATTR _CSNS-A @ R>
+        -1 EXIT
+    THEN
+    DUP 58 = IF                      \ ':' pseudo
+        DROP 1 /STRING               \ skip first ':'
+        DUP 0> IF
+            OVER C@ 58 = IF          \ '::' pseudo-element
+                1 /STRING
+                CSS-GET-IDENT
+                CSS-S-PSEUDO-E -ROT -1 EXIT
+            THEN
+        THEN
+        \ ':' pseudo-class (possibly with parens)
+        OVER _CSNS-A !
+        CSS-SKIP-IDENT
+        DUP 0> IF
+            OVER C@ 40 = IF          \ '(' function pseudo
+                CSS-SKIP-PARENS
+            THEN
+        THEN
+        OVER _CSNS-A @ -
+        >R CSS-S-PSEUDO-C _CSNS-A @ R>
+        -1 EXIT
+    THEN
+    DUP 42 = IF                      \ '*' universal
+        DROP 1 /STRING
+        CSS-S-UNIVERSAL 0 0 -1 EXIT
+    THEN
+    \ type selector?
+    _CSS-IDENT-START? IF
+        CSS-GET-IDENT
+        CSS-S-TYPE -ROT -1 EXIT
+    THEN
+    \ nothing recognized
+    0 0 0 0 ;
+
+\ CSS-SEL-COMBINATOR ( a u -- a' u' comb-type flag )
+\   Parse a combinator between compound selectors.
+\   Call AFTER CSS-SEL-NEXT-SIMPLE returns flag=0.
+\   Returns combinator type and flag.
+\   Flag = 0 means end of selector (comma, brace, or empty).
+: CSS-SEL-COMBINATOR  ( a u -- a' u' comb-type flag )
+    CSS-SKIP-WS
+    DUP 0= IF 0 0 EXIT THEN
+    OVER C@
+    DUP 44 = IF DROP 0 0 EXIT THEN   \ ',' end of group
+    DUP 123 = IF DROP 0 0 EXIT THEN  \ '{' end of selector
+    DUP 125 = IF DROP 0 0 EXIT THEN  \ '}' safety
+    DUP 62 = IF                      \ '>' child
+        DROP 1 /STRING CSS-SKIP-WS
+        CSS-C-CHILD -1 EXIT
+    THEN
+    DUP 43 = IF                      \ '+' adjacent
+        DROP 1 /STRING CSS-SKIP-WS
+        CSS-C-ADJACENT -1 EXIT
+    THEN
+    126 = IF                         \ '~' general
+        1 /STRING CSS-SKIP-WS
+        CSS-C-GENERAL -1 EXIT
+    THEN
+    \ whitespace was the combinator (descendant)
+    CSS-C-DESCENDANT -1 ;
+
+\ CSS-SEL-GROUP-NEXT ( a u -- a' u' sel-a sel-u flag )
+\   Iterate comma-separated selector groups.
+\   Returns one selector string (trimmed) at a time.
+\   Flag = -1 found, 0 no more groups.
+VARIABLE _CSGN-A
+
+: CSS-SEL-GROUP-NEXT  ( a u -- a' u' sel-a sel-u flag )
+    CSS-SKIP-WS
+    DUP 0= IF 0 0 0 EXIT THEN
+    OVER _CSGN-A !
+    BEGIN
+        DUP 0> WHILE
+        OVER C@
+        DUP 44 = IF                  \ ',' separator
+            DROP
+            OVER _CSGN-A @ -
+            >R 1 /STRING             \ skip ','
+            _CSGN-A @ R>
+            _CSS-TRIM-END -1 EXIT
+        THEN
+        DUP 34 = OVER 39 = OR IF
+            DROP CSS-SKIP-STRING
+        ELSE DUP 40 = IF
+            DROP CSS-SKIP-PARENS
+        ELSE
+            DROP 1 /STRING
+        THEN THEN
+    REPEAT
+    \ end of input — last group
+    OVER _CSGN-A @ -
+    DUP 0= IF DROP 0 0 0 EXIT THEN
+    >R _CSGN-A @ R> _CSS-TRIM-END -1 ;
