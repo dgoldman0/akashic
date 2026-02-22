@@ -309,3 +309,97 @@ VARIABLE _JSON-NUM-NEG
     OVER C@ 116 = IF 2DROP -1 EXIT THEN    \ t -> true
     OVER C@ 102 = IF 2DROP  0 EXIT THEN    \ f -> false
     2DROP JSON-E-WRONG-TYPE JSON-FAIL 0 ;
+
+\ =====================================================================
+\  Layer 3 — Object Navigation (Depth-Aware)
+\ =====================================================================
+\
+\  Scoped key lookup: searches only at the current nesting level.
+
+\ JSON-ENTER ( addr len -- addr' len' )
+\   Enter a { or [.  Returns cursor positioned at first element
+\   (after the opening brace/bracket + whitespace).
+: JSON-ENTER  ( addr len -- addr' len' )
+    JSON-SKIP-WS
+    DUP 0> 0= IF JSON-E-UNEXPECTED JSON-FAIL EXIT THEN
+    OVER C@ DUP 123 = SWAP 91 = OR 0= IF
+        JSON-E-WRONG-TYPE JSON-FAIL EXIT
+    THEN
+    1 /STRING JSON-SKIP-WS ;
+
+\ _JSON-STR=  ( s1 l1 s2 l2 -- flag )
+\   Compare two strings for equality.
+: _JSON-STR=  ( s1 l1 s2 l2 -- flag )
+    ROT OVER <> IF 2DROP DROP 0 EXIT THEN     \ lengths differ
+    0 DO
+        OVER I + C@  OVER I + C@ <> IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP -1 ;
+
+\ JSON-KEY ( addr len key-addr key-len -- val-addr val-len )
+\   Depth-aware key lookup within the current object.
+\   Searches only top-level keys of the object (does not descend
+\   into nested structures).  Cursor must be inside an object
+\   (past the opening {).  Returns cursor at the value for the key.
+\   Calls JSON-FAIL if key not found.
+VARIABLE _JK-KA
+VARIABLE _JK-KL
+
+: JSON-KEY  ( addr len kaddr klen -- vaddr vlen )
+    _JK-KL ! _JK-KA !
+    JSON-SKIP-WS
+    BEGIN
+        DUP 0> IF OVER C@ 125 <> ELSE 0 THEN   \ not } and len > 0
+    WHILE
+        \ skip comma if present
+        OVER C@ 44 = IF 1 /STRING JSON-SKIP-WS THEN
+        \ current position should be at a key string "..."
+        OVER C@ 34 <> IF
+            JSON-E-UNEXPECTED JSON-FAIL
+            0 0 EXIT
+        THEN
+        \ extract key name and compare
+        2DUP JSON-GET-STRING         ( oaddr olen kstr klen )
+        _JK-KA @ _JK-KL @ _JSON-STR=
+        IF
+            \ found it — skip past the key string and colon
+            JSON-SKIP-STRING         \ skip "key"
+            JSON-SKIP-WS
+            OVER C@ 58 = IF 1 /STRING THEN   \ skip :
+            JSON-SKIP-WS
+            EXIT
+        THEN
+        \ not this key — skip the whole key:value pair
+        JSON-SKIP-KV
+        JSON-SKIP-WS
+    REPEAT
+    2DROP
+    JSON-E-NOT-FOUND JSON-FAIL
+    0 0 ;
+
+\ JSON-KEY? ( addr len key-addr key-len -- val-addr val-len flag )
+\   Like JSON-KEY but returns a flag instead of failing.
+\   flag = -1 on success, 0 on not-found.
+VARIABLE _JK-SAVE-ABORT
+: JSON-KEY?  ( addr len kaddr klen -- vaddr vlen flag )
+    JSON-ABORT-ON-ERROR @ _JK-SAVE-ABORT !
+    JSON-CLEAR-ERR
+    0 JSON-ABORT-ON-ERROR !
+    JSON-KEY
+    _JK-SAVE-ABORT @ JSON-ABORT-ON-ERROR !
+    JSON-OK? DUP 0= IF >R 2DROP 0 0 R> THEN ;
+
+\ JSON-HAS? ( addr len key-addr key-len -- flag )
+\   Does this object contain the key?  Does not move cursor.
+VARIABLE _JH-SAVE-ABORT
+: JSON-HAS?  ( addr len kaddr klen -- flag )
+    JSON-ABORT-ON-ERROR @ _JH-SAVE-ABORT !
+    2>R 2DUP 2R>
+    JSON-CLEAR-ERR
+    0 JSON-ABORT-ON-ERROR !
+    JSON-KEY
+    _JH-SAVE-ABORT @ JSON-ABORT-ON-ERROR !
+    JSON-OK?
+    >R 2DROP 2DROP R> ;
