@@ -303,3 +303,141 @@ VARIABLE _MTT-A   VARIABLE _MTT-L
         THEN
     REPEAT
     2DROP MU-T-TEXT ;                \ malformed — no closing >
+
+\ =====================================================================
+\  Layer 2 — Tag Scanning
+\ =====================================================================
+
+\ MU-SKIP-TAG ( addr len -- addr' len' )
+\   Skip one complete tag: <...>.
+\   Handles quoted attributes so '>' inside quotes doesn't stop early.
+\   If not at '<', does nothing.
+: MU-SKIP-TAG  ( addr len -- addr' len' )
+    DUP 0> 0= IF EXIT THEN
+    OVER C@ 60 <> IF EXIT THEN      \ not '<'
+    1 /STRING                        \ skip '<'
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ DUP 62 = IF         \ '>'
+            DROP 1 /STRING EXIT
+        THEN
+        DUP 34 = IF                  \ '"'
+            DROP MU-SKIP-QUOTED
+        ELSE
+            39 = IF                  \ '\''
+                MU-SKIP-QUOTED
+            ELSE
+                1 /STRING
+            THEN
+        THEN
+    REPEAT ;
+
+\ MU-SKIP-COMMENT ( addr len -- addr' len' )
+\   Skip <!-- ... -->.  Cursor must be at '<'.
+\   Scans for '-->' end marker.
+VARIABLE _MSC-A
+: MU-SKIP-COMMENT  ( addr len -- addr' len' )
+    DUP 4 < IF EXIT THEN
+    4 /STRING                        \ skip '<!--'
+    BEGIN
+        DUP 0> WHILE
+        \ look for '-->'
+        DUP 3 >= IF
+            OVER _MSC-A !
+            _MSC-A @     C@ 45 =     \ -
+            _MSC-A @ 1+  C@ 45 = AND \ -
+            _MSC-A @ 2 + C@ 62 = AND \ >
+            IF 3 /STRING EXIT THEN
+        THEN
+        1 /STRING
+    REPEAT ;
+
+\ MU-SKIP-PI ( addr len -- addr' len' )
+\   Skip <?...?>.  Cursor must be at '<'.
+VARIABLE _MSP-A
+: MU-SKIP-PI  ( addr len -- addr' len' )
+    DUP 2 < IF EXIT THEN
+    2 /STRING                        \ skip '<?'
+    BEGIN
+        DUP 0> WHILE
+        DUP 2 >= IF
+            OVER _MSP-A !
+            _MSP-A @     C@ 63 =     \ ?
+            _MSP-A @ 1+  C@ 62 = AND \ >
+            IF 2 /STRING EXIT THEN
+        THEN
+        1 /STRING
+    REPEAT ;
+
+\ MU-SKIP-CDATA ( addr len -- addr' len' )
+\   Skip <![CDATA[...]]>.  Cursor must be at '<'.
+VARIABLE _MSD-A
+: MU-SKIP-CDATA  ( addr len -- addr' len' )
+    DUP 9 < IF EXIT THEN
+    9 /STRING                        \ skip '<![CDATA['
+    BEGIN
+        DUP 0> WHILE
+        DUP 3 >= IF
+            OVER _MSD-A !
+            _MSD-A @     C@ 93 =     \ ]
+            _MSD-A @ 1+  C@ 93 = AND \ ]
+            _MSD-A @ 2 + C@ 62 = AND \ >
+            IF 3 /STRING EXIT THEN
+        THEN
+        1 /STRING
+    REPEAT ;
+
+\ MU-SKIP-TO-TAG ( addr len -- addr' len' )
+\   Skip text content, stopping at the next '<' (or end of input).
+: MU-SKIP-TO-TAG  ( addr len -- addr' len' )
+    60 MU-SKIP-UNTIL-CH ;           \ '<'
+
+\ MU-GET-TEXT ( addr len -- addr' len' txt-a txt-u )
+\   Extract text content before the next '<'.
+\   Returns cursor advanced past text, and the text string.
+VARIABLE _MGT-A
+: MU-GET-TEXT  ( addr len -- addr' len' txt-a txt-u )
+    OVER _MGT-A !
+    MU-SKIP-TO-TAG
+    OVER _MGT-A @ -                  \ txt-len = new-addr - old-addr
+    _MGT-A @ SWAP ;                  \ ( addr' len' txt-a txt-u )
+
+\ MU-GET-TAG-NAME ( addr len -- addr' len' name-a name-u )
+\   Extract the tag name from a tag.
+\   Works for open, close, self-close tags.
+\   Cursor must be at '<'.
+\   After: cursor past tag name, name string returned.
+: MU-GET-TAG-NAME  ( addr len -- addr' len' name-a name-u )
+    DUP 0> 0= IF 0 0 EXIT THEN
+    1 /STRING                        \ skip '<'
+    \ skip '/' for close tags
+    DUP 0> IF
+        OVER C@ 47 = IF 1 /STRING THEN
+    THEN
+    MU-SKIP-WS
+    MU-GET-NAME ;
+
+\ MU-GET-TAG-BODY ( addr len -- body-a body-u )
+\   Extract everything between '<' and '>'.
+\   Returns the inner content (e.g. "div class=\"x\"").
+\   Does NOT advance the cursor — returns a slice.
+VARIABLE _MGB-A
+: MU-GET-TAG-BODY  ( addr len -- body-a body-u )
+    DUP 0> 0= IF 0 0 EXIT THEN
+    1 /STRING                        \ skip '<'
+    OVER _MGB-A !                    \ save inner start
+    \ scan forward for '>'
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ 62 = IF             \ '>'
+            OVER _MGB-A @ -          \ body-len
+            _MGB-A @ SWAP EXIT
+        THEN
+        OVER C@ DUP 34 = SWAP 39 = OR IF
+            MU-SKIP-QUOTED
+        ELSE
+            1 /STRING
+        THEN
+    REPEAT
+    \ no closing '>' found
+    2DROP 0 0 ;
