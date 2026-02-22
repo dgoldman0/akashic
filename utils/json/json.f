@@ -593,3 +593,205 @@ VARIABLE _JPQ-SAVE-ABORT
 \   Is the JSON number value equal to n?
 : JSON-NUMBER=  ( addr len n -- flag )
     >R JSON-GET-NUMBER R> = ;
+
+\ =====================================================================
+\  Layer 8 — JSON Builder
+\ =====================================================================
+\
+\  Build JSON text with automatic comma insertion.
+\  Output is vectored: set JSON-EMIT-XT and JSON-TYPE-XT to
+\  redirect output (e.g. to a buffer, UART, pipe).
+\
+\  Comma-state stack tracks nesting depth.  Each level records
+\  whether a comma is needed before the next value.
+
+\ ── Vectored output ──────────────────────────────────────────────────
+\  Default output words: EMIT and TYPE from the Forth system.
+\  Users can redirect by storing an XT into these variables.
+VARIABLE JSON-EMIT-XT              \ ( char -- )
+VARIABLE JSON-TYPE-XT              \ ( addr len -- )
+
+: _JSON-DEFAULT-EMIT  EMIT ;
+: _JSON-DEFAULT-TYPE  TYPE ;
+
+' _JSON-DEFAULT-EMIT JSON-EMIT-XT !
+' _JSON-DEFAULT-TYPE JSON-TYPE-XT !
+
+: JSON-EMIT  ( c -- )   JSON-EMIT-XT @ EXECUTE ;
+: JSON-TYPE  ( a u -- ) JSON-TYPE-XT @ EXECUTE ;
+
+\ ── Buffer-based output target ───────────────────────────────────────
+\  JSON-SET-OUTPUT ( addr max -- )
+\    Direct builder output into a user-provided buffer.
+\  JSON-OUTPUT-RESULT ( -- addr len )
+\    Return what was written so far.
+\  JSON-OUTPUT-RESET  ( -- )
+\    Reset write position to 0.
+
+VARIABLE _JB-BUF                   \ buffer base address
+VARIABLE _JB-MAX                   \ buffer capacity
+VARIABLE _JB-POS                   \ current write position
+
+: _JB-EMIT  ( c -- )
+    _JB-POS @  _JB-MAX @  < IF
+        _JB-BUF @ _JB-POS @ + C!
+        1 _JB-POS +!
+    ELSE
+        DROP
+    THEN ;
+
+: _JB-TYPE  ( addr len -- )
+    0 DO
+        DUP I + C@ _JB-EMIT
+    LOOP DROP ;
+
+: JSON-SET-OUTPUT  ( addr max -- )
+    _JB-MAX ! _JB-BUF !  0 _JB-POS !
+    ['] _JB-EMIT JSON-EMIT-XT !
+    ['] _JB-TYPE JSON-TYPE-XT ! ;
+
+: JSON-OUTPUT-RESULT  ( -- addr len )
+    _JB-BUF @ _JB-POS @ ;
+
+: JSON-OUTPUT-RESET  ( -- )
+    0 _JB-POS ! ;
+
+\ ── Comma-state stack ────────────────────────────────────────────────
+\  Each nesting level has a flag: 0 = no comma needed, 1 = need comma.
+\  Max nesting: 16 levels.
+CREATE _JC-STACK 16 ALLOT
+VARIABLE _JC-DEPTH
+
+: _JC-RESET  0 _JC-DEPTH ! ;
+_JC-RESET
+
+: _JC-PUSH  ( -- )
+    _JC-DEPTH @ 15 < IF
+        0 _JC-STACK _JC-DEPTH @ + C!
+        1 _JC-DEPTH +!
+    THEN ;
+
+: _JC-POP  ( -- )
+    _JC-DEPTH @ 0> IF  -1 _JC-DEPTH +!  THEN ;
+
+: _JC-NEED?  ( -- flag )
+    _JC-DEPTH @ 0> IF
+        _JC-STACK _JC-DEPTH @ 1- + C@
+    ELSE 0 THEN ;
+
+: _JC-MARK  ( -- )
+    _JC-DEPTH @ 0> IF
+        1 _JC-STACK _JC-DEPTH @ 1- + C!
+    THEN ;
+
+: _JC-COMMA  ( -- )
+    _JC-NEED? IF 44 JSON-EMIT THEN
+    _JC-MARK ;
+
+\ ── Structural tokens ───────────────────────────────────────────────
+
+: JSON-{  ( -- )
+    _JC-COMMA
+    123 JSON-EMIT                    \ {
+    _JC-PUSH ;
+
+: JSON-}  ( -- )
+    _JC-POP
+    125 JSON-EMIT ;                  \ }
+
+: JSON-[  ( -- )
+    _JC-COMMA
+    91 JSON-EMIT                     \ [
+    _JC-PUSH ;
+
+: JSON-]  ( -- )
+    _JC-POP
+    93 JSON-EMIT ;                   \ ]
+
+\ ── Key ──────────────────────────────────────────────────────────────
+
+: _JSON-QUOTED  ( addr len -- )
+    34 JSON-EMIT                     \ "
+    JSON-TYPE
+    34 JSON-EMIT ;                   \ "
+
+: JSON-KEY:  ( addr len -- )
+    _JC-COMMA
+    _JSON-QUOTED
+    58 JSON-EMIT                     \ :
+    \ Reset comma flag so value is not preceded by comma
+    _JC-DEPTH @ 0> IF
+        0 _JC-STACK _JC-DEPTH @ 1- + C!
+    THEN ;
+
+\ ── Scalar values ───────────────────────────────────────────────────
+
+: JSON-STR  ( addr len -- )
+    _JC-COMMA  _JSON-QUOTED ;
+
+: JSON-NULL  ( -- )
+    _JC-COMMA  S" null" JSON-TYPE ;
+
+: JSON-TRUE  ( -- )
+    _JC-COMMA  S" true" JSON-TYPE ;
+
+: JSON-FALSE  ( -- )
+    _JC-COMMA  S" false" JSON-TYPE ;
+
+: JSON-BOOL  ( flag -- )
+    IF JSON-TRUE ELSE JSON-FALSE THEN ;
+
+\ ── Number output ────────────────────────────────────────────────────
+\  Print a signed integer as decimal text.
+
+VARIABLE _JN-NEG
+CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
+
+: JSON-NUM  ( n -- )
+    _JC-COMMA
+    DUP 0< IF
+        45 JSON-EMIT                 \ -
+        NEGATE
+    THEN
+    DUP 0= IF
+        DROP 48 JSON-EMIT           \ 0
+        EXIT
+    THEN
+    \ Build digits right-to-left in _JN-BUF.
+    \ Loop invariant: ( n ptr ) where ptr moves leftward from end.
+    _JN-BUF 24 +                     \ ptr starts past end
+    SWAP                             ( ptr n )
+    BEGIN
+        DUP 0>
+    WHILE
+        10 /MOD                      ( ptr rem quot )
+        SWAP 48 +                    ( ptr quot digit )
+        ROT 1-                       ( quot digit ptr-1 )
+        DUP >R C!                    ( quot  R: ptr-1 )
+        R>                           ( quot ptr-1 )
+        SWAP                         ( ptr-1 quot )
+    REPEAT
+    DROP                             ( ptr' )
+    _JN-BUF 24 + OVER -             ( ptr' len )
+    JSON-TYPE ;
+
+\ ── Convenience: key-value pairs ────────────────────────────────────
+
+: JSON-KV-STR   ( kaddr klen vaddr vlen -- )
+    2SWAP JSON-KEY: JSON-STR ;
+
+: JSON-KV-NUM   ( kaddr klen n -- )
+    >R JSON-KEY: R> JSON-NUM ;
+
+: JSON-KV-BOOL  ( kaddr klen flag -- )
+    >R JSON-KEY: R> JSON-BOOL ;
+
+: JSON-KV-NULL  ( kaddr klen -- )
+    JSON-KEY: JSON-NULL ;
+
+\ ── Reset builder state ─────────────────────────────────────────────
+
+: JSON-BUILD-RESET  ( -- )
+    _JC-RESET
+    ' _JSON-DEFAULT-EMIT JSON-EMIT-XT !
+    ' _JSON-DEFAULT-TYPE JSON-TYPE-XT ! ;
