@@ -331,6 +331,7 @@ VARIABLE _JSON-NUM-NEG
 \   Compare two strings for equality.
 : _JSON-STR=  ( s1 l1 s2 l2 -- flag )
     ROT OVER <> IF 2DROP DROP 0 EXIT THEN     \ lengths differ
+    DUP 0= IF DROP 2DROP -1 EXIT THEN         \ both empty → equal
     0 DO
         OVER I + C@  OVER I + C@ <> IF
             2DROP 0 UNLOOP EXIT
@@ -573,3 +574,22 @@ VARIABLE _JPQ-SAVE-ABORT
     OVER C@ 58 = IF 1 /STRING THEN  \ skip :
     JSON-SKIP-WS
     2R> -1 ;
+
+\ =====================================================================
+\  Layer 7 — Comparison & Matching
+\ =====================================================================
+\
+\  Compare JSON values without extracting to separate buffers.
+
+\ JSON-STRING= ( addr len str-addr str-len -- flag )
+\   Is the JSON string value equal to the given Forth string?
+\   Compares raw (un-escaped) inner bytes.
+: JSON-STRING=  ( addr len saddr slen -- flag )
+    2>R
+    JSON-GET-STRING                  ( got-addr got-len  R: saddr slen )
+    2R> _JSON-STR= ;
+
+\ JSON-NUMBER= ( addr len n -- flag )
+\   Is the JSON number value equal to n?
+: JSON-NUMBER=  ( addr len n -- flag )
+    >R JSON-GET-NUMBER R> = ;
