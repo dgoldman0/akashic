@@ -1403,3 +1403,92 @@ VARIABLE _CKF-BA   VARIABLE _CKF-BL
     _CKF-NA @ _CKF-NL @
     _CKF-BA @ _CKF-BL @
     -1 ;
+
+\ =====================================================================
+\  Layer 9 — Builder
+\ =====================================================================
+\
+\ Build CSS text programmatically into a user-provided buffer.
+
+VARIABLE _CB-BUF   VARIABLE _CB-MAX   VARIABLE _CB-POS
+
+: CSS-SET-OUTPUT  ( addr max -- )
+    _CB-MAX !  _CB-BUF !  0 _CB-POS ! ;
+
+: CSS-OUTPUT-RESET  ( -- )
+    0 _CB-POS ! ;
+
+: CSS-OUTPUT-RESULT  ( -- addr len )
+    _CB-BUF @ _CB-POS @ ;
+
+: _CSS-EMIT  ( char -- )
+    _CB-POS @ _CB-MAX @ < IF
+        _CB-BUF @ _CB-POS @ + C!
+        1 _CB-POS +!
+    ELSE
+        DROP CSS-E-OVERFLOW CSS-FAIL
+    THEN ;
+
+: _CSS-TYPE  ( addr len -- )
+    0 ?DO
+        DUP I + C@ _CSS-EMIT
+    LOOP DROP ;
+
+\ CSS-RULE-START ( sel-a sel-u -- )
+\   Emit "selector { "
+: CSS-RULE-START  ( sel-a sel-u -- )
+    _CSS-TYPE
+    32 _CSS-EMIT  123 _CSS-EMIT  32 _CSS-EMIT ;  \ ' { '
+
+\ CSS-RULE-END ( -- )
+\   Emit "} "
+: CSS-RULE-END  ( -- )
+    125 _CSS-EMIT  32 _CSS-EMIT ;    \ '} '
+
+\ CSS-PROP! ( prop-a prop-u val-a val-u -- )
+\   Emit "property: value; "
+: CSS-PROP!  ( prop-a prop-u val-a val-u -- )
+    2>R                              \ save value
+    _CSS-TYPE                        \ emit property
+    58 _CSS-EMIT  32 _CSS-EMIT      \ ': '
+    2R>
+    _CSS-TYPE                        \ emit value
+    59 _CSS-EMIT  32 _CSS-EMIT ;    \ '; '
+
+\ CSS-COMMENT! ( txt-a txt-u -- )
+\   Emit "/* text */ "
+: CSS-COMMENT!  ( txt-a txt-u -- )
+    47 _CSS-EMIT  42 _CSS-EMIT      \ '/*'
+    32 _CSS-EMIT                     \ ' '
+    _CSS-TYPE                        \ text
+    32 _CSS-EMIT                     \ ' '
+    42 _CSS-EMIT  47 _CSS-EMIT      \ '*/'
+    32 _CSS-EMIT ;                   \ trailing space
+
+\ CSS-MEDIA-START ( query-a query-u -- )
+\   Emit "@media query { "
+: CSS-MEDIA-START  ( query-a query-u -- )
+    64 _CSS-EMIT                     \ '@'
+    109 _CSS-EMIT 101 _CSS-EMIT 100 _CSS-EMIT
+    105 _CSS-EMIT  97 _CSS-EMIT      \ 'media'
+    32 _CSS-EMIT                     \ ' '
+    _CSS-TYPE                        \ query
+    32 _CSS-EMIT  123 _CSS-EMIT  32 _CSS-EMIT ;  \ ' { '
+
+\ CSS-MEDIA-END ( -- )
+\   Emit "} "
+: CSS-MEDIA-END  ( -- )
+    125 _CSS-EMIT  32 _CSS-EMIT ;    \ '} '
+
+\ CSS-IMPORT! ( url-a url-u -- )
+\   Emit "@import url(\"...\"); "
+: CSS-IMPORT!  ( url-a url-u -- )
+    64 _CSS-EMIT                     \ '@'
+    105 _CSS-EMIT 109 _CSS-EMIT 112 _CSS-EMIT
+    111 _CSS-EMIT 114 _CSS-EMIT 116 _CSS-EMIT  \ 'import'
+    32 _CSS-EMIT                     \ ' '
+    117 _CSS-EMIT 114 _CSS-EMIT 108 _CSS-EMIT  \ 'url'
+    40 _CSS-EMIT  34 _CSS-EMIT       \ '("'
+    _CSS-TYPE                        \ url
+    34 _CSS-EMIT  41 _CSS-EMIT       \ '")'
+    59 _CSS-EMIT  32 _CSS-EMIT ;     \ '; '
