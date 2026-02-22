@@ -799,3 +799,81 @@ VARIABLE _CSGN-A
     OVER _CSGN-A @ -
     DUP 0= IF DROP 0 0 0 EXIT THEN
     >R _CSGN-A @ R> _CSS-TRIM-END -1 ;
+
+\ =====================================================================
+\  Layer 4 — Selector Matching
+\ =====================================================================
+\
+\ Standalone matching: takes element properties as parameters.
+\ Does NOT depend on akashic-html.
+
+\ CSS-MATCH-TYPE ( sel-a sel-u tag-a tag-u -- flag )
+\   Type selector match (case-insensitive).
+: CSS-MATCH-TYPE  ( sel-a sel-u tag-a tag-u -- flag )
+    _CSS-STRI= ;
+
+\ CSS-MATCH-ID ( sel-a sel-u id-a id-u -- flag )
+\   ID selector match (exact).
+: CSS-MATCH-ID  ( sel-a sel-u id-a id-u -- flag )
+    _CSS-STR= ;
+
+\ CSS-MATCH-CLASS ( class-a class-u classes-a classes-u -- flag )
+\   Does the space-separated class list contain this class?
+VARIABLE _CMC-CA   VARIABLE _CMC-CL
+VARIABLE _CMC-TA
+
+: CSS-MATCH-CLASS  ( class-a class-u classes-a classes-u -- flag )
+    2SWAP _CMC-CL !  _CMC-CA !       \ save class to find
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ 32 = IF
+            1 /STRING                 \ skip space
+        ELSE
+            OVER _CMC-TA !            \ save token start
+            BEGIN
+                1 /STRING
+                DUP 0> IF
+                    OVER C@ 32 =
+                ELSE -1 THEN
+            UNTIL
+            \ compare token
+            OVER _CMC-TA @ -
+            >R _CMC-CA @ _CMC-CL @ _CMC-TA @ R>
+            _CSS-STR=
+            IF 2DROP -1 EXIT THEN
+        THEN
+    REPEAT
+    2DROP 0 ;
+
+\ Element state for CSS-MATCH-SIMPLE
+VARIABLE _CMS-TA   VARIABLE _CMS-TL   \ tag name
+VARIABLE _CMS-IA   VARIABLE _CMS-IL   \ element id
+VARIABLE _CMS-CA   VARIABLE _CMS-CL   \ space-sep class list
+
+\ CSS-MATCH-SET ( tag-a tag-u id-a id-u cls-a cls-u -- )
+\   Set element properties for matching.
+\   Must be called before CSS-MATCH-SIMPLE.
+: CSS-MATCH-SET  ( tag-a tag-u id-a id-u cls-a cls-u -- )
+    _CMS-CL !  _CMS-CA !
+    _CMS-IL !  _CMS-IA !
+    _CMS-TL !  _CMS-TA ! ;
+
+\ CSS-MATCH-SIMPLE ( type sel-a sel-u -- flag )
+\   Match one simple selector against the element set
+\   by CSS-MATCH-SET.
+: CSS-MATCH-SIMPLE  ( type sel-a sel-u -- flag )
+    ROT
+    DUP CSS-S-UNIVERSAL = IF
+        DROP 2DROP -1 EXIT
+    THEN
+    DUP CSS-S-TYPE = IF
+        DROP _CMS-TA @ _CMS-TL @ _CSS-STRI= EXIT
+    THEN
+    DUP CSS-S-ID = IF
+        DROP _CMS-IA @ _CMS-IL @ _CSS-STR= EXIT
+    THEN
+    DUP CSS-S-CLASS = IF
+        DROP _CMS-CA @ _CMS-CL @ CSS-MATCH-CLASS EXIT
+    THEN
+    \ unsupported: attr, pseudo-class, pseudo-element
+    DROP 2DROP 0 ;
