@@ -877,3 +877,71 @@ VARIABLE _CMS-CA   VARIABLE _CMS-CL   \ space-sep class list
     THEN
     \ unsupported: attr, pseudo-class, pseudo-element
     DROP 2DROP 0 ;
+
+\ =====================================================================
+\  Layer 5 — Specificity & Cascade
+\ =====================================================================
+\
+\ CSS specificity is a triple (a, b, c):
+\   a = number of ID selectors
+\   b = number of class, attribute, pseudo-class selectors
+\   c = number of type, pseudo-element selectors
+\ Universal (*) and combinators don't count.
+
+VARIABLE _CSP-A   VARIABLE _CSP-B   VARIABLE _CSP-C
+
+\ CSS-SPECIFICITY ( sel-a sel-u -- a b c )
+\   Calculate specificity for a selector string.
+: CSS-SPECIFICITY  ( sel-a sel-u -- a b c )
+    0 _CSP-A !  0 _CSP-B !  0 _CSP-C !
+    BEGIN
+        CSS-SEL-NEXT-SIMPLE
+        IF
+            2DROP                    \ drop name
+            DUP CSS-S-ID = IF
+                DROP 1 _CSP-A +!
+            ELSE
+                DUP CSS-S-CLASS =
+                OVER CSS-S-ATTR = OR
+                OVER CSS-S-PSEUDO-C = OR IF
+                    DROP 1 _CSP-B +!
+                ELSE
+                    DUP CSS-S-TYPE =
+                    OVER CSS-S-PSEUDO-E = OR IF
+                        DROP 1 _CSP-C +!
+                    ELSE
+                        DROP         \ universal
+                    THEN
+                THEN
+            THEN
+        ELSE
+            2DROP DROP               \ drop type/name zeros
+            CSS-SEL-COMBINATOR
+            IF DROP                  \ drop comb-type, continue
+            ELSE
+                DROP 2DROP           \ drop comb-type + cursor
+                _CSP-A @ _CSP-B @ _CSP-C @
+                EXIT
+            THEN
+        THEN
+    AGAIN ;
+
+\ CSS-SPEC-COMPARE ( a1 b1 c1 a2 b2 c2 -- n )
+\   Compare two specificities.
+\   n > 0: first wins.  n < 0: second wins.  n = 0: equal.
+VARIABLE _SPC-A2   VARIABLE _SPC-B2   VARIABLE _SPC-C2
+
+: CSS-SPEC-COMPARE  ( a1 b1 c1 a2 b2 c2 -- n )
+    _SPC-C2 !  _SPC-B2 !  _SPC-A2 !
+    ROT _SPC-A2 @ -
+    DUP 0<> IF NIP NIP EXIT THEN
+    DROP
+    SWAP _SPC-B2 @ -
+    DUP 0<> IF NIP EXIT THEN
+    DROP
+    _SPC-C2 @ - ;
+
+\ CSS-SPEC-PACK ( a b c -- spec )
+\   Pack specificity into single integer: a*65536 + b*256 + c.
+: CSS-SPEC-PACK  ( a b c -- spec )
+    SWAP 256 * + SWAP 65536 * + ;
