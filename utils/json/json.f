@@ -795,3 +795,79 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
     _JC-RESET
     ' _JSON-DEFAULT-EMIT JSON-EMIT-XT !
     ' _JSON-DEFAULT-TYPE JSON-TYPE-XT ! ;
+
+\ =====================================================================
+\  Layer 9 — Type Guards & Escaped String Output
+\ =====================================================================
+\
+\  Assertion words that verify the JSON cursor points at the
+\  expected type, calling JSON-FAIL if not.  Preserves the cursor
+\  on success; on failure sets JSON-ERR and returns cursor unchanged.
+
+: JSON-EXPECT-STRING  ( addr len -- addr len )
+    2DUP JSON-STRING? 0= IF
+        JSON-E-WRONG-TYPE JSON-FAIL
+    THEN ;
+
+: JSON-EXPECT-NUMBER  ( addr len -- addr len )
+    2DUP JSON-NUMBER? 0= IF
+        JSON-E-WRONG-TYPE JSON-FAIL
+    THEN ;
+
+: JSON-EXPECT-OBJECT  ( addr len -- addr len )
+    2DUP JSON-OBJECT? 0= IF
+        JSON-E-WRONG-TYPE JSON-FAIL
+    THEN ;
+
+: JSON-EXPECT-ARRAY  ( addr len -- addr len )
+    2DUP JSON-ARRAY? 0= IF
+        JSON-E-WRONG-TYPE JSON-FAIL
+    THEN ;
+
+: JSON-EXPECT-BOOL  ( addr len -- addr len )
+    2DUP JSON-BOOL? 0= IF
+        JSON-E-WRONG-TYPE JSON-FAIL
+    THEN ;
+
+: JSON-EXPECT-NULL  ( addr len -- addr len )
+    2DUP JSON-NULL? 0= IF
+        JSON-E-WRONG-TYPE JSON-FAIL
+    THEN ;
+
+\ ── Escaped string output for builder ────────────────────────────────
+\  JSON-ESTR ( addr len -- )
+\    Emit a JSON string value with proper escaping of special chars.
+\    Handles: " → \"  \ → \\  newline → \n  return → \r  tab → \t
+\    backspace → \b  formfeed → \f
+\  Use instead of JSON-STR when the string may contain special chars.
+
+: JSON-ESTR  ( addr len -- )
+    _JC-COMMA
+    34 JSON-EMIT                     \ opening "
+    0 DO
+        DUP I + C@
+        DUP 34 = IF                  \ "
+            DROP 92 JSON-EMIT 34 JSON-EMIT
+        ELSE DUP 92 = IF             \ backslash
+            DROP 92 JSON-EMIT 92 JSON-EMIT
+        ELSE DUP 10 = IF             \ newline
+            DROP 92 JSON-EMIT 110 JSON-EMIT
+        ELSE DUP 13 = IF             \ return
+            DROP 92 JSON-EMIT 114 JSON-EMIT
+        ELSE DUP  9 = IF             \ tab
+            DROP 92 JSON-EMIT 116 JSON-EMIT
+        ELSE DUP  8 = IF             \ backspace
+            DROP 92 JSON-EMIT 98 JSON-EMIT
+        ELSE DUP 12 = IF             \ formfeed
+            DROP 92 JSON-EMIT 102 JSON-EMIT
+        ELSE
+            JSON-EMIT
+        THEN THEN THEN THEN THEN THEN THEN
+    LOOP
+    DROP
+    34 JSON-EMIT ;                   \ closing "
+
+\ JSON-KV-ESTR  ( kaddr klen vaddr vlen -- )
+\   Key-value convenience with escaped string value.
+: JSON-KV-ESTR  ( kaddr klen vaddr vlen -- )
+    2SWAP JSON-KEY: JSON-ESTR ;
