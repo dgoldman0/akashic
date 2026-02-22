@@ -177,3 +177,129 @@ VARIABLE _MQ-VL
         THEN
     LOOP
     2DROP -1 ;
+
+\ =====================================================================
+\  Layer 1 — Tag Detection & Classification
+\ =====================================================================
+
+\ Type constants
+0 CONSTANT MU-T-TEXT         \ plain text (not a tag)
+1 CONSTANT MU-T-OPEN        \ <tag ...>
+2 CONSTANT MU-T-CLOSE       \ </tag>
+3 CONSTANT MU-T-SELF-CLOSE  \ <tag .../>
+4 CONSTANT MU-T-COMMENT     \ <!-- ... -->
+5 CONSTANT MU-T-PI          \ <?target ... ?>
+6 CONSTANT MU-T-CDATA       \ <![CDATA[ ... ]]>
+7 CONSTANT MU-T-DOCTYPE     \ <!DOCTYPE ...>
+
+\ MU-AT-TAG? ( addr len -- flag )
+\   True if cursor is at a '<' character.
+: MU-AT-TAG?  ( addr len -- flag )
+    DUP 0> IF DROP C@ 60 = EXIT THEN   \ 60 = '<'
+    2DROP 0 ;
+
+\ _MU-PEEK2 ( addr len -- c1 c2 | 0 0 )
+\   Peek at first two characters.  Returns 0 0 if less than 2 chars.
+: _MU-PEEK2  ( addr len -- c1 c2 )
+    DUP 2 < IF 2DROP 0 0 EXIT THEN
+    OVER C@  SWAP DROP  SWAP 1+ C@ ;
+
+\ MU-TAG-TYPE ( addr len -- type )
+\   Classify what kind of tag starts at cursor.
+\   Cursor must be AT the '<'.  Returns MU-T-TEXT if not at a tag.
+\
+\   Detection logic:
+\     not '<'             → MU-T-TEXT
+\     <!--                → MU-T-COMMENT
+\     <![CDATA[           → MU-T-CDATA
+\     <!DOCTYPE / <!doctype → MU-T-DOCTYPE
+\     <?                  → MU-T-PI
+\     </                  → MU-T-CLOSE
+\     <name .../>         → MU-T-SELF-CLOSE  (scan needed)
+\     <name ...>          → MU-T-OPEN
+VARIABLE _MTT-A   VARIABLE _MTT-L
+
+: MU-TAG-TYPE  ( addr len -- type )
+    DUP 0> 0= IF 2DROP MU-T-TEXT EXIT THEN
+    OVER C@ 60 <> IF 2DROP MU-T-TEXT EXIT THEN  \ not '<'
+
+    \ save addr for multi-byte peeks
+    OVER _MTT-A !
+
+    \ check <!-- (comment)
+    DUP 4 >= IF
+        _MTT-A @     C@ 60  =           \ <
+        _MTT-A @ 1+  C@ 33  = AND       \ !
+        _MTT-A @ 2 + C@ 45  = AND       \ -
+        _MTT-A @ 3 + C@ 45  = AND       \ -
+        IF 2DROP MU-T-COMMENT EXIT THEN
+    THEN
+
+    \ check <![CDATA[
+    DUP 9 >= IF
+        _MTT-A @     C@ 60  =           \ <
+        _MTT-A @ 1+  C@ 33  = AND       \ !
+        _MTT-A @ 2 + C@ 91  = AND       \ [
+        _MTT-A @ 3 + C@ 67  = AND       \ C
+        _MTT-A @ 4 + C@ 68  = AND       \ D
+        _MTT-A @ 5 + C@ 65  = AND       \ A
+        _MTT-A @ 6 + C@ 84  = AND       \ T
+        _MTT-A @ 7 + C@ 65  = AND       \ A
+        _MTT-A @ 8 + C@ 91  = AND       \ [
+        IF 2DROP MU-T-CDATA EXIT THEN
+    THEN
+
+    \ check <!DOCTYPE (case-insensitive on DOCTYPE)
+    DUP 10 >= IF
+        _MTT-A @     C@ 60  =                   \ <
+        _MTT-A @ 1+  C@ 33  = AND               \ !
+        IF
+            _MTT-A @ 2 + C@ _MU-TOLOWER 100 =   \ d
+            _MTT-A @ 3 + C@ _MU-TOLOWER 111 = AND \ o
+            _MTT-A @ 4 + C@ _MU-TOLOWER  99 = AND \ c
+            _MTT-A @ 5 + C@ _MU-TOLOWER 116 = AND \ t
+            _MTT-A @ 6 + C@ _MU-TOLOWER 121 = AND \ y
+            _MTT-A @ 7 + C@ _MU-TOLOWER 112 = AND \ p
+            _MTT-A @ 8 + C@ _MU-TOLOWER 101 = AND \ e
+            IF 2DROP MU-T-DOCTYPE EXIT THEN
+        THEN
+    THEN
+
+    \ check <? (processing instruction)
+    DUP 2 >= IF
+        _MTT-A @     C@ 60 =            \ <
+        _MTT-A @ 1+  C@ 63 = AND        \ ?
+        IF 2DROP MU-T-PI EXIT THEN
+    THEN
+
+    \ check </ (closing tag)
+    DUP 2 >= IF
+        _MTT-A @     C@ 60 =            \ <
+        _MTT-A @ 1+  C@ 47 = AND        \ /
+        IF 2DROP MU-T-CLOSE EXIT THEN
+    THEN
+
+    \ Must be <name...> or <name.../>
+    \ Scan forward to find > and check if preceded by /
+    1 /STRING                        \ skip '<'
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ DUP 62 = IF         \ '>'
+            DROP
+            \ check if previous char was '/'
+            OVER 1- C@ 47 = IF
+                2DROP MU-T-SELF-CLOSE EXIT
+            THEN
+            2DROP MU-T-OPEN EXIT
+        THEN
+        DUP 34 = IF                  \ '"' — skip double-quoted
+            DROP MU-SKIP-QUOTED
+        ELSE
+            39 = IF                  \ '\'' — skip single-quoted
+                MU-SKIP-QUOTED
+            ELSE
+                1 /STRING
+            THEN
+        THEN
+    REPEAT
+    2DROP MU-T-TEXT ;                \ malformed — no closing >
