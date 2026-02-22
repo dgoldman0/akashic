@@ -548,3 +548,167 @@ VARIABLE _MAF-SA  VARIABLE _MAF-SL   \ search name
 : MU-ATTR-HAS?  ( body-a body-u attr-a attr-u -- flag )
     MU-ATTR-FIND                     \ ( val-a val-u flag )
     >R 2DROP R> ;
+
+\ =====================================================================
+\  Layer 4 — Entity Decoding
+\ =====================================================================
+
+\ MU-DECODE-ENTITY ( addr len -- char addr' len' )
+\   Decode one &...; entity starting at '&'.
+\   Handles:
+\     &amp; &lt; &gt; &quot; &apos;    (XML built-ins)
+\     &#60;                            (decimal numeric)
+\     &#x3C;                           (hex numeric)
+\   If unrecognised, returns '&' and advances 1 char.
+
+VARIABLE _MDE-A
+VARIABLE _MDE-B    \ current position for named entity checks
+VARIABLE _MDE-ACC  \ accumulator for numeric entities
+
+: _MU-DIGIT?  ( c -- n flag )
+    DUP 48 >= OVER 57 <= AND IF 48 - -1 EXIT THEN
+    0 ;
+
+: _MU-HEXDIG?  ( c -- n flag )
+    DUP 48 >= OVER 57 <= AND IF 48 - -1 EXIT THEN
+    DUP 65 >= OVER 70 <= AND IF 55 - -1 EXIT THEN   \ A-F
+    DUP 97 >= OVER 102 <= AND IF 87 - -1 EXIT THEN  \ a-f
+    0 ;
+
+: MU-DECODE-ENTITY  ( addr len -- char addr' len' )
+    DUP 0> 0= IF 0 EXIT THEN
+    OVER C@ 38 <> IF                 \ not '&'
+        OVER C@ -ROT 1 /STRING EXIT \ return char as-is
+    THEN
+    OVER _MDE-A !                    \ save '&' position
+    1 /STRING                        \ skip '&'
+
+    \ &#  (numeric)
+    DUP 0> IF OVER C@ 35 = IF       \ '#'
+        1 /STRING                    \ skip '#'
+        \ &#x (hex)
+        DUP 0> IF OVER C@ DUP 120 = SWAP 88 = OR IF
+            1 /STRING                \ skip 'x'
+            0 _MDE-ACC !
+            BEGIN
+                DUP 0> WHILE
+                OVER C@ DUP 59 = IF \ ';'
+                    DROP 1 /STRING
+                    _MDE-ACC @ -ROT EXIT
+                THEN
+                _MU-HEXDIG? IF
+                    _MDE-ACC @ 16 * + _MDE-ACC !
+                    1 /STRING
+                ELSE
+                    DROP
+                    _MDE-ACC @ -ROT EXIT
+                THEN
+            REPEAT
+            _MDE-ACC @ -ROT EXIT
+        THEN THEN
+        \ &#DD (decimal)
+        0 _MDE-ACC !
+        BEGIN
+            DUP 0> WHILE
+            OVER C@ DUP 59 = IF     \ ';'
+                DROP 1 /STRING
+                _MDE-ACC @ -ROT EXIT
+            THEN
+            _MU-DIGIT? IF
+                _MDE-ACC @ 10 * + _MDE-ACC !
+                1 /STRING
+            ELSE
+                DROP
+                _MDE-ACC @ -ROT EXIT
+            THEN
+        REPEAT
+        _MDE-ACC @ -ROT EXIT
+    THEN THEN
+
+    \ Named entities — save position for multi-byte checks
+    DUP 2 < IF 38 EXIT THEN         \ too short, return '&'
+    OVER _MDE-B !                    \ save current addr
+    OVER C@
+    DUP 97 = IF                      \ 'a' — amp or apos
+        DROP
+        \ check amp;  (a=97 m=109 p=112 ;=59)
+        DUP 4 >= IF
+            _MDE-B @     C@ 97  =
+            _MDE-B @ 1+  C@ 109 = AND
+            _MDE-B @ 2 + C@ 112 = AND
+            _MDE-B @ 3 + C@ 59  = AND
+            IF 38 -ROT 4 /STRING EXIT THEN   \ '&'
+        THEN
+        \ check apos;  (a=97 p=112 o=111 s=115 ;=59)
+        DUP 5 >= IF
+            _MDE-B @     C@ 97  =
+            _MDE-B @ 1+  C@ 112 = AND
+            _MDE-B @ 2 + C@ 111 = AND
+            _MDE-B @ 3 + C@ 115 = AND
+            _MDE-B @ 4 + C@ 59  = AND
+            IF 39 -ROT 5 /STRING EXIT THEN   \ '\''
+        THEN
+        38 -ROT EXIT                 \ unrecognised, return '&'
+    THEN
+
+    DUP 108 = IF                     \ 'l' — lt  (l=108 t=116 ;=59)
+        DROP
+        DUP 3 >= IF
+            _MDE-B @     C@ 108 =
+            _MDE-B @ 1+  C@ 116 = AND
+            _MDE-B @ 2 + C@ 59  = AND
+            IF 60 -ROT 3 /STRING EXIT THEN   \ '<'
+        THEN
+        38 -ROT EXIT
+    THEN
+
+    DUP 103 = IF                     \ 'g' — gt  (g=103 t=116 ;=59)
+        DROP
+        DUP 3 >= IF
+            _MDE-B @     C@ 103 =
+            _MDE-B @ 1+  C@ 116 = AND
+            _MDE-B @ 2 + C@ 59  = AND
+            IF 62 -ROT 3 /STRING EXIT THEN   \ '>'
+        THEN
+        38 -ROT EXIT
+    THEN
+
+    113 = IF                         \ 'q' — quot (q=113 u=117 o=111 t=116 ;=59)
+        DUP 5 >= IF
+            _MDE-B @     C@ 113 =
+            _MDE-B @ 1+  C@ 117 = AND
+            _MDE-B @ 2 + C@ 111 = AND
+            _MDE-B @ 3 + C@ 116 = AND
+            _MDE-B @ 4 + C@ 59  = AND
+            IF 34 -ROT 5 /STRING EXIT THEN   \ '"'
+        THEN
+        38 -ROT EXIT
+    THEN
+
+    \ unrecognised entity — return '&', cursor stays after '&'
+    38 -ROT ;
+
+\ MU-UNESCAPE ( src slen dest dmax -- len )
+\   Decode all entities from src into dest buffer.
+\   Returns number of bytes written.
+\   Stops at end of src or when dest is full.
+VARIABLE _MUE-D   VARIABLE _MUE-N   VARIABLE _MUE-MAX
+
+: MU-UNESCAPE  ( src slen dest dmax -- len )
+    _MUE-MAX !  _MUE-D !  0 _MUE-N !
+    BEGIN
+        DUP 0> WHILE
+        _MUE-N @ _MUE-MAX @ >= IF 2DROP _MUE-N @ EXIT THEN
+        OVER C@ 38 = IF             \ '&'
+            MU-DECODE-ENTITY         \ ( char addr' len' )
+            ROT                      \ ( addr' len' char )
+            _MUE-D @ _MUE-N @ + C!
+            1 _MUE-N +!
+        ELSE
+            OVER C@
+            _MUE-D @ _MUE-N @ + C!
+            1 _MUE-N +!
+            1 /STRING
+        THEN
+    REPEAT
+    2DROP _MUE-N @ ;
