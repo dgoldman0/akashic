@@ -441,3 +441,110 @@ VARIABLE _MGB-A
     REPEAT
     \ no closing '>' found
     2DROP 0 0 ;
+
+\ =====================================================================
+\  Layer 3 — Attribute Parsing
+\ =====================================================================
+
+\ Attribute iteration works on the "body" of a tag — the content
+\ between '<' and '>'.  Typically obtained via MU-GET-TAG-BODY, then
+\ MU-SKIP-NAME to skip past the tag name, leaving the attribute area.
+\
+\ MU-ATTR-NEXT iterates attributes one at a time:
+\   name="value"     → name + inner value (without quotes)
+\   name='value'     → same
+\   name=value       → bare value (scan to space or > or /)
+\   name             → bare attribute (value is 0 0)
+
+\ Variables for returning multi-value results
+VARIABLE _MAN-NA  VARIABLE _MAN-NL   \ attribute name
+VARIABLE _MAN-VA  VARIABLE _MAN-VL   \ attribute value
+
+\ MU-ATTR-NEXT ( a u -- a' u' na nl va vl flag )
+\   Parse one attribute from the body cursor.
+\   Returns: advanced cursor, name (na nl), value (va vl), flag.
+\   flag = -1 if an attribute was found, 0 if none left.
+\   If bare attribute (no =value), va vl = 0 0.
+: MU-ATTR-NEXT  ( a u -- a' u' na nl va vl flag )
+    MU-SKIP-WS
+    \ end of body?  Check for end-of-input, '>', '/'
+    DUP 0= IF 0 0 0 0 0 EXIT THEN
+    OVER C@ DUP 62 = SWAP 47 = OR IF   \ '>' or '/'
+        0 0 0 0 0 EXIT
+    THEN
+    \ extract attribute name
+    MU-GET-NAME
+    _MAN-NL !  _MAN-NA !
+    \ check for '='
+    MU-SKIP-WS
+    DUP 0> IF
+        OVER C@ 61 = IF             \ '='
+            1 /STRING                \ skip '='
+            MU-SKIP-WS
+            \ check if quoted
+            DUP 0> IF
+                OVER C@ DUP 34 = SWAP 39 = OR IF
+                    MU-GET-QUOTED
+                    _MAN-VL !  _MAN-VA !
+                ELSE
+                    \ bare value — scan to space, >, /
+                    OVER _MAN-VA !
+                    BEGIN
+                        DUP 0> WHILE
+                        OVER C@ DUP 32 <=       \ ws
+                        OVER 62 = OR            \ >
+                        SWAP 47 = OR            \ /
+                        IF
+                            OVER _MAN-VA @ -  _MAN-VL !
+                            _MAN-NA @ _MAN-NL @
+                            _MAN-VA @ _MAN-VL @
+                            -1 EXIT
+                        THEN
+                        1 /STRING
+                    REPEAT
+                    \ ran off end — value is rest of string
+                    OVER _MAN-VA @ -  _MAN-VL !
+                THEN
+            ELSE
+                0 _MAN-VA !  0 _MAN-VL !
+            THEN
+        ELSE
+            \ bare attribute (no =)
+            0 _MAN-VA !  0 _MAN-VL !
+        THEN
+    ELSE
+        0 _MAN-VA !  0 _MAN-VL !
+    THEN
+    _MAN-NA @ _MAN-NL @  _MAN-VA @ _MAN-VL @  -1 ;
+
+\ MU-ATTR-FIND ( body-a body-u attr-a attr-u -- val-a val-u flag )
+\   Find an attribute by name in a tag body.
+\   Returns value string and flag (-1 found, 0 not found).
+\   body cursor should point PAST the tag name.
+VARIABLE _MAF-SA  VARIABLE _MAF-SL   \ search name
+
+: MU-ATTR-FIND  ( body-a body-u attr-a attr-u -- val-a val-u flag )
+    _MAF-SL !  _MAF-SA !
+    BEGIN
+        MU-ATTR-NEXT                 \ ( a' u' na nl va vl flag )
+        DUP 0= IF                   \ no more attrs
+            \ stack: a' u' na nl va vl 0
+            >R 2DROP 2DROP 2DROP R>  \ ( 0 )
+            0 0 ROT EXIT             \ ( 0 0 0 )
+        THEN
+        DROP                         \ drop flag
+        \ ( a' u' na nl va vl )
+        2>R                          \ save value  R: va vl
+        _MAF-SA @ _MAF-SL @ _MU-STR=
+        IF                           \ name matches
+            2DROP                    \ drop cursor
+            2R> -1 EXIT              \ ( va vl -1 )
+        THEN
+        2R> 2DROP                    \ discard value, continue
+    AGAIN ;
+
+\ MU-ATTR-HAS? ( body-a body-u attr-a attr-u -- flag )
+\   Does this tag body have the named attribute?
+: MU-ATTR-HAS?  ( body-a body-u attr-a attr-u -- flag )
+    MU-ATTR-FIND                     \ ( val-a val-u flag )
+    >R 2DROP R> ;
