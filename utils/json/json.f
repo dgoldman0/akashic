@@ -149,3 +149,42 @@ VARIABLE _JSON-DEPTH
         THEN
     THEN
     JSON-SKIP-VALUE ;               \ skip value
+
+\ =====================================================================
+\  Layer 1 — Type Introspection
+\ =====================================================================
+\
+\  Examine the current value without consuming it.
+
+\ Type tag constants
+0 CONSTANT JSON-T-ERROR
+1 CONSTANT JSON-T-STRING
+2 CONSTANT JSON-T-NUMBER
+3 CONSTANT JSON-T-OBJECT
+4 CONSTANT JSON-T-ARRAY
+5 CONSTANT JSON-T-BOOL
+6 CONSTANT JSON-T-NULL
+
+\ JSON-TYPE? ( addr len -- type )
+\   Return the type tag for the value at the current cursor position.
+: JSON-TYPE?  ( addr len -- type )
+    JSON-SKIP-WS
+    DUP 0> 0= IF 2DROP JSON-T-ERROR EXIT THEN
+    OVER C@
+    DUP 34 = IF DROP 2DROP JSON-T-STRING EXIT THEN       \ "
+    DUP 123 = IF DROP 2DROP JSON-T-OBJECT EXIT THEN      \ {
+    DUP 91 = IF DROP 2DROP JSON-T-ARRAY EXIT THEN        \ [
+    DUP 116 = IF DROP 2DROP JSON-T-BOOL EXIT THEN        \ t (true)
+    DUP 102 = IF DROP 2DROP JSON-T-BOOL EXIT THEN        \ f (false)
+    DUP 110 = IF DROP 2DROP JSON-T-NULL EXIT THEN        \ n (null)
+    DUP 45 = IF DROP 2DROP JSON-T-NUMBER EXIT THEN       \ - (negative)
+    DUP 48 >= OVER 57 <= AND IF DROP 2DROP JSON-T-NUMBER EXIT THEN  \ 0-9
+    DROP 2DROP JSON-T-ERROR ;
+
+\ Convenience type-checking words
+: JSON-STRING?  ( addr len -- flag )  JSON-TYPE? JSON-T-STRING = ;
+: JSON-NUMBER?  ( addr len -- flag )  JSON-TYPE? JSON-T-NUMBER = ;
+: JSON-OBJECT?  ( addr len -- flag )  JSON-TYPE? JSON-T-OBJECT = ;
+: JSON-ARRAY?   ( addr len -- flag )  JSON-TYPE? JSON-T-ARRAY  = ;
+: JSON-BOOL?    ( addr len -- flag )  JSON-TYPE? JSON-T-BOOL   = ;
+: JSON-NULL?    ( addr len -- flag )  JSON-TYPE? JSON-T-NULL   = ;
