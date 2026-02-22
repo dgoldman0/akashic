@@ -1,0 +1,329 @@
+\ css.f — CSS parser for KDOS Forth
+\
+\ Standalone CSS parser: tokenization, declaration parsing,
+\ rule iteration, selector parsing, matching, specificity.
+\ Same (addr len) cursor model as json.f and markup/core.f.
+\
+\ Prefix: CSS-   (public API)
+\         _CSS-  (internal helpers)
+\
+\ Load with:   REQUIRE css.f
+
+PROVIDED akashic-css
+
+\ =====================================================================
+\  Utility — may already exist; safe to redefine
+\ =====================================================================
+
+: /STRING  ( addr len n -- addr+n len-n )
+    ROT OVER + -ROT - ;
+
+\ =====================================================================
+\  Error Handling
+\ =====================================================================
+
+VARIABLE CSS-ERR
+VARIABLE CSS-ABORT-ON-ERROR
+0 CSS-ERR !
+0 CSS-ABORT-ON-ERROR !
+
+1 CONSTANT CSS-E-NOT-FOUND
+2 CONSTANT CSS-E-MALFORMED
+3 CONSTANT CSS-E-UNTERMINATED
+4 CONSTANT CSS-E-UNEXPECTED
+5 CONSTANT CSS-E-OVERFLOW
+
+: CSS-FAIL  ( err-code -- )
+    CSS-ERR !
+    CSS-ABORT-ON-ERROR @ IF ABORT" CSS error" THEN ;
+
+: CSS-OK?  ( -- flag )
+    CSS-ERR @ 0= ;
+
+: CSS-CLEAR-ERR  ( -- )
+    0 CSS-ERR ! ;
+
+\ =====================================================================
+\  String comparison helpers
+\ =====================================================================
+
+: _CSS-TOLOWER  ( c -- c' )
+    DUP 65 >= OVER 90 <= AND IF 32 + THEN ;
+
+: _CSS-STRI=  ( s1 l1 s2 l2 -- flag )
+    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
+    DUP 0= IF DROP 2DROP -1 EXIT THEN
+    0 DO
+        OVER I + C@ _CSS-TOLOWER
+        OVER I + C@ _CSS-TOLOWER
+        <> IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP -1 ;
+
+: _CSS-STR=  ( s1 l1 s2 l2 -- flag )
+    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
+    DUP 0= IF DROP 2DROP -1 EXIT THEN
+    0 DO
+        OVER I + C@  OVER I + C@ <> IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP -1 ;
+
+\ =====================================================================
+\  Layer 0 — Scanning Primitives
+\ =====================================================================
+
+\ _CSS-WS? ( c -- flag )
+\   Is this character CSS whitespace?
+: _CSS-WS?  ( c -- flag )
+    DUP 32 =
+    OVER  9 = OR
+    OVER 10 = OR
+    SWAP 13 = OR ;
+
+\ CSS-SKIP-COMMENT ( addr len -- addr' len' )
+\   Skip one /* ... */ block comment.
+\   Cursor must be at '/'.  If next char is not '*', does nothing.
+VARIABLE _CSC-A
+
+: CSS-SKIP-COMMENT  ( addr len -- addr' len' )
+    DUP 2 < IF EXIT THEN
+    OVER _CSC-A !
+    _CSC-A @ C@ 47 <>  IF EXIT THEN        \ not '/'
+    _CSC-A @ 1+ C@ 42 <> IF EXIT THEN      \ not '*'
+    2 /STRING                                \ skip '/*'
+    BEGIN
+        DUP 0> WHILE
+        DUP 2 >= IF
+            OVER _CSC-A !
+            _CSC-A @    C@ 42 =              \ '*'
+            _CSC-A @ 1+ C@ 47 = AND          \ '/'
+            IF 2 /STRING EXIT THEN
+        THEN
+        1 /STRING
+    REPEAT ;
+
+\ CSS-SKIP-WS ( addr len -- addr' len' )
+\   Skip CSS whitespace AND /* ... */ comments.
+VARIABLE _CSW-A
+
+: CSS-SKIP-WS  ( addr len -- addr' len' )
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ _CSS-WS? IF
+            1 /STRING
+        ELSE
+            \ check for /* comment
+            DUP 2 >= IF
+                OVER _CSW-A !
+                _CSW-A @    C@ 47 =          \ '/'
+                _CSW-A @ 1+ C@ 42 = AND      \ '*'
+                IF
+                    CSS-SKIP-COMMENT
+                ELSE
+                    EXIT
+                THEN
+            ELSE
+                EXIT
+            THEN
+        THEN
+    REPEAT ;
+
+\ CSS-SKIP-STRING ( addr len -- addr' len' )
+\   Skip a quoted string: "..." or '...'.
+\   Handles backslash escapes.
+\   Cursor must be at the opening quote character.
+: CSS-SKIP-STRING  ( addr len -- addr' len' )
+    DUP 0> 0= IF EXIT THEN
+    OVER C@ DUP 34 = SWAP 39 = OR 0= IF EXIT THEN  \ not " or '
+    OVER C@ >R                       \ save quote char
+    1 /STRING                        \ skip opening quote
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ R@ = IF             \ closing quote
+            R> DROP
+            1 /STRING EXIT
+        THEN
+        OVER C@ 92 = IF             \ backslash escape
+            DUP 2 >= IF
+                2 /STRING            \ skip \ + next char
+            ELSE
+                1 /STRING
+            THEN
+        ELSE
+            1 /STRING
+        THEN
+    REPEAT
+    R> DROP ;                        \ unterminated string
+
+\ _CSS-IDENT-CHAR? ( c -- flag )
+\   Is this a CSS identifier character?
+\   Letters, digits, hyphen, underscore, non-ASCII (>127).
+: _CSS-IDENT-CHAR?  ( c -- flag )
+    DUP 65 >= OVER 90  <= AND IF DROP -1 EXIT THEN   \ A-Z
+    DUP 97 >= OVER 122 <= AND IF DROP -1 EXIT THEN   \ a-z
+    DUP 48 >= OVER 57  <= AND IF DROP -1 EXIT THEN   \ 0-9
+    DUP 45 = IF DROP -1 EXIT THEN                    \ -
+    DUP 95 = IF DROP -1 EXIT THEN                    \ _
+    127 > IF -1 EXIT THEN                            \ non-ASCII
+    0 ;
+
+\ _CSS-IDENT-START? ( c -- flag )
+\   Can this character start an identifier?
+\   Same as ident-char but no digit and no leading hyphen-digit.
+: _CSS-IDENT-START?  ( c -- flag )
+    DUP 65 >= OVER 90  <= AND IF DROP -1 EXIT THEN
+    DUP 97 >= OVER 122 <= AND IF DROP -1 EXIT THEN
+    DUP 95 = IF DROP -1 EXIT THEN                    \ _
+    DUP 45 = IF DROP -1 EXIT THEN                    \ - (CSS allows leading -)
+    127 > IF -1 EXIT THEN
+    0 ;
+
+\ CSS-SKIP-IDENT ( addr len -- addr' len' )
+\   Skip a CSS identifier.
+: CSS-SKIP-IDENT  ( addr len -- addr' len' )
+    DUP 0> 0= IF EXIT THEN
+    OVER C@ _CSS-IDENT-START? 0= IF EXIT THEN
+    \ skip leading - if present, then check next
+    OVER C@ 45 = IF
+        1 /STRING
+        DUP 0> 0= IF EXIT THEN
+    THEN
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ _CSS-IDENT-CHAR?
+        0= IF EXIT THEN
+        \ handle backslash escapes in identifiers
+        OVER C@ 92 = IF
+            DUP 2 >= IF
+                2 /STRING
+            ELSE
+                EXIT
+            THEN
+        ELSE
+            1 /STRING
+        THEN
+    REPEAT ;
+
+\ CSS-GET-IDENT ( addr len -- addr' len' name-a name-u )
+\   Extract identifier string.
+: CSS-GET-IDENT  ( addr len -- addr' len' name-a name-u )
+    OVER >R
+    CSS-SKIP-IDENT
+    OVER R> TUCK - ;
+
+\ CSS-SKIP-BLOCK ( addr len -- addr' len' )
+\   Skip a balanced { ... } block.
+\   Cursor must be at '{'.
+\   Respects nested blocks, strings, and comments.
+VARIABLE _CSB-D
+
+: CSS-SKIP-BLOCK  ( addr len -- addr' len' )
+    DUP 0> 0= IF EXIT THEN
+    OVER C@ 123 <> IF EXIT THEN     \ not '{'
+    1 _CSB-D !
+    1 /STRING                        \ skip '{'
+    BEGIN
+        _CSB-D @ 0> WHILE
+        DUP 0> 0= IF EXIT THEN
+        OVER C@
+        DUP 123 = IF                 \ '{'
+            DROP 1 _CSB-D +!
+            1 /STRING
+        ELSE DUP 125 = IF           \ '}'
+            DROP -1 _CSB-D +!
+            _CSB-D @ 0> IF 1 /STRING THEN
+        ELSE DUP 34 = OVER 39 = OR IF  \ string
+            DROP CSS-SKIP-STRING
+        ELSE DUP 47 = IF            \ possible comment
+            DROP
+            DUP 2 >= IF
+                OVER 1+ C@ 42 = IF  \ '/*'
+                    CSS-SKIP-COMMENT
+                ELSE
+                    1 /STRING
+                THEN
+            ELSE
+                1 /STRING
+            THEN
+        ELSE
+            DROP 1 /STRING
+        THEN THEN THEN THEN
+    REPEAT
+    \ skip closing '}'
+    DUP 0> IF 1 /STRING THEN ;
+
+\ CSS-SKIP-PARENS ( addr len -- addr' len' )
+\   Skip a balanced ( ... ) group.
+\   Cursor must be at '('.
+VARIABLE _CSP-D
+
+: CSS-SKIP-PARENS  ( addr len -- addr' len' )
+    DUP 0> 0= IF EXIT THEN
+    OVER C@ 40 <> IF EXIT THEN      \ not '('
+    1 _CSP-D !
+    1 /STRING                        \ skip '('
+    BEGIN
+        _CSP-D @ 0> WHILE
+        DUP 0> 0= IF EXIT THEN
+        OVER C@
+        DUP 40 = IF                  \ '('
+            DROP 1 _CSP-D +!
+            1 /STRING
+        ELSE DUP 41 = IF            \ ')'
+            DROP -1 _CSP-D +!
+            _CSP-D @ 0> IF 1 /STRING THEN
+        ELSE DUP 34 = OVER 39 = OR IF
+            DROP CSS-SKIP-STRING
+        ELSE DUP 47 = IF
+            DROP
+            DUP 2 >= IF
+                OVER 1+ C@ 42 = IF
+                    CSS-SKIP-COMMENT
+                ELSE
+                    1 /STRING
+                THEN
+            ELSE
+                1 /STRING
+            THEN
+        ELSE
+            DROP 1 /STRING
+        THEN THEN THEN THEN
+    REPEAT
+    DUP 0> IF 1 /STRING THEN ;
+
+\ CSS-SKIP-UNTIL ( addr len char -- addr' len' )
+\   Skip forward until char is found, respecting strings,
+\   comments, and balanced blocks/parens.
+: CSS-SKIP-UNTIL  ( addr len char -- addr' len' )
+    >R
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ R@ = IF R> DROP EXIT THEN
+        OVER C@
+        DUP 34 = OVER 39 = OR IF
+            DROP CSS-SKIP-STRING
+        ELSE DUP 123 = IF
+            DROP CSS-SKIP-BLOCK
+        ELSE DUP 40 = IF
+            DROP CSS-SKIP-PARENS
+        ELSE DUP 47 = IF
+            DROP
+            DUP 2 >= IF
+                OVER 1+ C@ 42 = IF
+                    CSS-SKIP-COMMENT
+                ELSE
+                    1 /STRING
+                THEN
+            ELSE
+                1 /STRING
+            THEN
+        ELSE
+            DROP 1 /STRING
+        THEN THEN THEN THEN
+    REPEAT
+    R> DROP ;
+
