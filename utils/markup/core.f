@@ -712,3 +712,170 @@ VARIABLE _MUE-D   VARIABLE _MUE-N   VARIABLE _MUE-MAX
         THEN
     REPEAT
     2DROP _MUE-N @ ;
+
+\ =====================================================================
+\  Layer 5 — Element Navigation (depth-aware)
+\ =====================================================================
+
+\ MU-ENTER ( addr len -- addr' len' )
+\   Skip past the opening tag.  Cursor must be at '<'.
+\   After: cursor is at the content inside the element.
+: MU-ENTER  ( addr len -- addr' len' )
+    MU-SKIP-TAG ;
+
+\ MU-SKIP-ELEMENT ( addr len -- addr' len' )
+\   Skip an entire element including its content and closing tag.
+\   Cursor must be at an opening '<'.
+\   Handles nested elements via depth tracking.
+\   For self-closing tags, just skips the tag.
+VARIABLE _MSE-D    \ depth counter
+VARIABLE _MSE-NA   VARIABLE _MSE-NL   \ tag name saved
+
+: MU-SKIP-ELEMENT  ( addr len -- addr' len' )
+    \ classify what we're at
+    2DUP MU-TAG-TYPE
+    DUP MU-T-SELF-CLOSE = IF DROP MU-SKIP-TAG EXIT THEN
+    DUP MU-T-COMMENT    = IF DROP MU-SKIP-COMMENT EXIT THEN
+    DUP MU-T-PI         = IF DROP MU-SKIP-PI EXIT THEN
+    DUP MU-T-CDATA      = IF DROP MU-SKIP-CDATA EXIT THEN
+    MU-T-OPEN <> IF EXIT THEN       \ not an open tag, do nothing
+
+    1 _MSE-D !                       \ depth = 1
+    MU-SKIP-TAG                      \ skip the opening tag
+    BEGIN
+        _MSE-D @ 0> WHILE
+        DUP 0> 0= IF EXIT THEN      \ ran out of input
+        2DUP MU-TAG-TYPE
+        DUP MU-T-OPEN = IF
+            DROP 1 _MSE-D +!
+            MU-SKIP-TAG
+        ELSE DUP MU-T-CLOSE = IF
+            DROP -1 _MSE-D +!
+            MU-SKIP-TAG
+        ELSE DUP MU-T-SELF-CLOSE = IF
+            DROP MU-SKIP-TAG
+        ELSE DUP MU-T-COMMENT = IF
+            DROP MU-SKIP-COMMENT
+        ELSE DUP MU-T-PI = IF
+            DROP MU-SKIP-PI
+        ELSE DUP MU-T-CDATA = IF
+            DROP MU-SKIP-CDATA
+        ELSE
+            DROP MU-SKIP-TO-TAG      \ skip text
+        THEN THEN THEN THEN THEN THEN
+    REPEAT ;
+
+\ MU-FIND-CLOSE ( addr len name-a name-u -- addr' len' )
+\   Find the matching closing tag </name> for the given name.
+\   Depth-aware: tracks nested elements with the same name.
+\   Cursor should be INSIDE the element (past the opening tag).
+VARIABLE _MFC-NA   VARIABLE _MFC-NL
+VARIABLE _MFC-D
+VARIABLE _MFC-TA   VARIABLE _MFC-TL   \ temp tag name
+
+: MU-FIND-CLOSE  ( addr len name-a name-u -- addr' len' )
+    _MFC-NL !  _MFC-NA !
+    1 _MFC-D !                       \ depth = 1
+    BEGIN
+        _MFC-D @ 0> WHILE
+        DUP 0> 0= IF EXIT THEN      \ end of input
+        2DUP MU-TAG-TYPE
+        DUP MU-T-OPEN = IF
+            DROP
+            2DUP MU-GET-TAG-NAME  _MFC-TL !  _MFC-TA !  2DROP
+            _MFC-TA @ _MFC-TL @ _MFC-NA @ _MFC-NL @ _MU-STR= IF
+                1 _MFC-D +!
+            THEN
+            MU-SKIP-TAG
+        ELSE DUP MU-T-CLOSE = IF
+            DROP
+            2DUP MU-GET-TAG-NAME  _MFC-TL !  _MFC-TA !  2DROP
+            _MFC-TA @ _MFC-TL @ _MFC-NA @ _MFC-NL @ _MU-STR= IF
+                -1 _MFC-D +!
+            THEN
+            _MFC-D @ 0> IF MU-SKIP-TAG THEN
+        ELSE DUP MU-T-SELF-CLOSE = IF
+            DROP MU-SKIP-TAG
+        ELSE DUP MU-T-COMMENT = IF
+            DROP MU-SKIP-COMMENT
+        ELSE DUP MU-T-PI = IF
+            DROP MU-SKIP-PI
+        ELSE DUP MU-T-CDATA = IF
+            DROP MU-SKIP-CDATA
+        ELSE
+            DROP MU-SKIP-TO-TAG
+        THEN THEN THEN THEN THEN THEN
+    REPEAT ;
+
+\ MU-INNER ( addr len -- inner-a inner-u )
+\   Extract the content between the opening and closing tags.
+\   Cursor must be at the opening '<tag...>'.
+\   Returns the inner content (everything between > and </tag>).
+VARIABLE _MI-A
+VARIABLE _MI-NA  VARIABLE _MI-NL
+
+: MU-INNER  ( addr len -- inner-a inner-u )
+    \ get tag name
+    2DUP MU-GET-TAG-NAME  _MI-NL !  _MI-NA !  2DROP
+    \ skip past opening tag
+    MU-SKIP-TAG
+    OVER _MI-A !                     \ save inner start
+    \ find matching close
+    _MI-NA @ _MI-NL @  MU-FIND-CLOSE
+    \ cursor is now at </tag>, inner ends here
+    OVER _MI-A @ -                   \ inner-len = current - start
+    _MI-A @ SWAP ;
+
+\ MU-NEXT-SIBLING ( addr len -- addr' len' flag )
+\   Skip to the next sibling element.
+\   Cursor must be at an element's opening tag.
+\   Skips the current element, then any text/ws, stops at next tag.
+\   flag = -1 if a sibling found, 0 if end reached.
+: MU-NEXT-SIBLING  ( addr len -- addr' len' flag )
+    MU-SKIP-ELEMENT                  \ skip current element
+    MU-SKIP-WS                      \ skip whitespace
+    MU-SKIP-TO-TAG                  \ skip any remaining text
+    DUP 0> IF
+        2DUP MU-AT-TAG? IF
+            -1
+        ELSE
+            0
+        THEN
+    ELSE
+        0
+    THEN ;
+
+\ MU-FIND-TAG ( addr len name-a name-u -- addr' len' flag )
+\   Find next opening tag with the given name at the SAME depth.
+\   Skips over non-matching elements entirely.
+\   flag = -1 if found, 0 if not.
+VARIABLE _MFT-NA  VARIABLE _MFT-NL
+VARIABLE _MFT-TA  VARIABLE _MFT-TL
+
+: MU-FIND-TAG  ( addr len name-a name-u -- addr' len' flag )
+    _MFT-NL !  _MFT-NA !
+    BEGIN
+        DUP 0> WHILE
+        MU-SKIP-WS
+        MU-SKIP-TO-TAG
+        DUP 0= IF 0 EXIT THEN
+        2DUP MU-TAG-TYPE
+        DUP MU-T-OPEN = OVER MU-T-SELF-CLOSE = OR IF
+            DROP
+            2DUP MU-GET-TAG-NAME _MFT-TL ! _MFT-TA ! 2DROP
+            _MFT-TA @ _MFT-TL @  _MFT-NA @ _MFT-NL @  _MU-STR= IF
+                -1 EXIT              \ found it
+            THEN
+            MU-SKIP-ELEMENT          \ skip non-matching element
+        ELSE DUP MU-T-CLOSE = IF
+            \ hit a closing tag at our level — no more siblings
+            DROP 0 EXIT
+        ELSE DUP MU-T-COMMENT = IF
+            DROP MU-SKIP-COMMENT
+        ELSE DUP MU-T-PI = IF
+            DROP MU-SKIP-PI
+        ELSE
+            DROP MU-SKIP-TAG         \ skip whatever it is
+        THEN THEN THEN THEN
+    REPEAT
+    0 ;
