@@ -403,3 +403,67 @@ VARIABLE _JH-SAVE-ABORT
     _JH-SAVE-ABORT @ JSON-ABORT-ON-ERROR !
     JSON-OK?
     >R 2DROP 2DROP R> ;
+
+\ =====================================================================
+\  Layer 4 — Array Navigation
+\ =====================================================================
+\
+\  Uses JSON-ENTER from Layer 3 to enter arrays.
+
+\ JSON-NEXT ( addr len -- addr' len' flag )
+\   Advance to the next element in an array or object.
+\   Skips the current value, then skips comma + whitespace.
+\   Returns flag = -1 if another element exists, 0 at end (] or }).
+: JSON-NEXT  ( addr len -- addr' len' flag )
+    JSON-SKIP-VALUE
+    JSON-SKIP-WS
+    DUP 0> 0= IF 0 EXIT THEN
+    OVER C@ 93 = IF 0 EXIT THEN          \ ]
+    OVER C@ 125 = IF 0 EXIT THEN         \ }
+    OVER C@ 44 = IF 1 /STRING THEN       \ skip ,
+    JSON-SKIP-WS
+    DUP 0> 0= IF 0 EXIT THEN
+    OVER C@ 93 = IF 0 EXIT THEN          \ ] after comma
+    OVER C@ 125 = IF 0 EXIT THEN         \ } after comma
+    -1 ;
+
+\ JSON-NTH ( addr len n -- addr' len' )
+\   Jump to the nth element (0-based) in an array.
+\   Cursor must be inside the array (past [).
+: JSON-NTH  ( addr len n -- addr' len' )
+    DUP 0= IF DROP EXIT THEN        \ 0th element: already there
+    0 DO
+        JSON-SKIP-VALUE
+        JSON-SKIP-WS
+        DUP 0> 0= IF
+            JSON-E-NOT-FOUND JSON-FAIL UNLOOP EXIT
+        THEN
+        OVER C@ 93 = IF
+            JSON-E-NOT-FOUND JSON-FAIL UNLOOP EXIT
+        THEN
+        OVER C@ 44 = IF 1 /STRING THEN
+        JSON-SKIP-WS
+    LOOP ;
+
+\ JSON-COUNT ( addr len -- n )
+\   Count elements in an array or object.
+\   Cursor must be inside (past [ or {).  Scans without consuming.
+: JSON-COUNT  ( addr len -- n )
+    0 >R
+    JSON-SKIP-WS
+    DUP 0> 0= IF 2DROP R> EXIT THEN
+    OVER C@ 93 = IF 2DROP R> EXIT THEN    \ empty array
+    OVER C@ 125 = IF 2DROP R> EXIT THEN   \ empty object
+    R> 1+ >R                              \ count first element
+    BEGIN
+        JSON-SKIP-VALUE
+        JSON-SKIP-WS
+        DUP 0> IF
+            OVER C@ 44 = IF
+                1 /STRING JSON-SKIP-WS
+                R> 1+ >R
+                -1
+            ELSE 0 THEN
+        ELSE 0 THEN
+    0= UNTIL
+    2DROP R> ;
