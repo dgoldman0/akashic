@@ -860,3 +860,109 @@ VARIABLE _DNC-I
         _DNC-I @ 1- _DNC-I !
         N.NEXT-SIB @
     REPEAT ;
+
+\ =====================================================================
+\ L7 — SERIALISATION  (DOM → HTML)
+\ =====================================================================
+\
+\ Leverages the html.f builder:  HTML-SET-OUTPUT, HTML-<, HTML->,
+\ HTML-</, HTML-ATTR!, HTML-TEXT!, HTML-COMMENT!, HTML-VOID?.
+\
+\ Public:
+\   DOM-TO-HTML    ( node buf max -- n )  Serialise subtree
+\   DOM-OUTER-HTML ( node buf max -- n )  Same as DOM-TO-HTML
+\   DOM-INNER-HTML ( node buf max -- n )  Serialise children only
+
+\ -- Emit attributes of one node --------------------------------------
+
+VARIABLE _SER-AA   VARIABLE _SER-AL
+VARIABLE _SER-VA   VARIABLE _SER-VL
+
+: _DOM-SER-ATTRS  ( node -- )
+    DOM-ATTR-FIRST
+    BEGIN ?DUP WHILE
+        DUP DOM-ATTR-NAME@ _SER-AL ! _SER-AA !
+        DUP DOM-ATTR-VAL@  _SER-VL ! _SER-VA !
+        _SER-AA @ _SER-AL @
+        _SER-VA @ _SER-VL @
+        HTML-ATTR!
+        DOM-ATTR-NEXTATTR
+    REPEAT ;
+
+\ -- Open / close tag --------------------------------------------------
+
+VARIABLE _SER-N
+
+: _DOM-SER-OPEN  ( node -- )
+    _SER-N !
+    _SER-N @ DOM-TAG-NAME HTML-<
+    _SER-N @ _DOM-SER-ATTRS
+    HTML-> ;
+
+: _DOM-SER-CLOSE  ( node -- )
+    DUP DOM-TAG-NAME HTML-VOID? IF DROP EXIT THEN
+    DOM-TAG-NAME HTML-</ ;
+
+\ -- Node enter / leave ------------------------------------------------
+
+VARIABLE _SER-CUR   VARIABLE _SER-ROOT
+
+: _DOM-SER-NODE-ENTER  ( -- )
+    _SER-CUR @ DOM-TYPE@
+    DUP DOM-T-ELEMENT = IF DROP _SER-CUR @ _DOM-SER-OPEN    EXIT THEN
+    DUP DOM-T-TEXT    = IF DROP _SER-CUR @ DOM-TEXT HTML-TEXT!   EXIT THEN
+    DUP DOM-T-COMMENT = IF DROP _SER-CUR @ DOM-TEXT HTML-COMMENT! EXIT THEN
+    DROP ;
+
+: _DOM-SER-NODE-LEAVE  ( -- )
+    _SER-CUR @ DOM-TYPE@ DOM-T-ELEMENT = IF
+        _SER-CUR @ _DOM-SER-CLOSE
+    THEN ;
+
+\ -- Iterative DFS walk (enter + leave) --------------------------------
+
+: _DOM-SER-WALK  ( root -- )
+    DUP _SER-ROOT !  _SER-CUR !
+    BEGIN
+        _DOM-SER-NODE-ENTER
+        _SER-CUR @ DOM-FIRST-CHILD ?DUP IF
+            _SER-CUR !
+        ELSE
+            BEGIN
+                _DOM-SER-NODE-LEAVE
+                _SER-CUR @ _SER-ROOT @ = IF EXIT THEN
+                _SER-CUR @ DOM-NEXT ?DUP IF
+                    _SER-CUR ! TRUE
+                ELSE
+                    _SER-CUR @ DOM-PARENT _SER-CUR !
+                    FALSE
+                THEN
+            UNTIL
+        THEN
+    AGAIN ;
+
+\ -- Public API --------------------------------------------------------
+
+VARIABLE _SER-NODE-SAVE
+
+: DOM-TO-HTML  ( node buf max -- n )
+    ROT _SER-NODE-SAVE !
+    HTML-SET-OUTPUT  HTML-OUTPUT-RESET
+    _SER-NODE-SAVE @ _DOM-SER-WALK
+    HTML-OUTPUT-RESULT NIP ;
+
+: DOM-OUTER-HTML  ( node buf max -- n )
+    DOM-TO-HTML ;
+
+VARIABLE _SIH-NEXT
+
+: DOM-INNER-HTML  ( node buf max -- n )
+    ROT _SER-NODE-SAVE !
+    HTML-SET-OUTPUT  HTML-OUTPUT-RESET
+    _SER-NODE-SAVE @ DOM-FIRST-CHILD
+    BEGIN ?DUP WHILE
+        DUP DOM-NEXT _SIH-NEXT !
+        _DOM-SER-WALK
+        _SIH-NEXT @
+    REPEAT
+    HTML-OUTPUT-RESULT NIP ;
