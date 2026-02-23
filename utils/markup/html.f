@@ -50,7 +50,7 @@ VARIABLE _HV-NA   VARIABLE _HV-NL
         SWAP 1+                      \ ( entry-len entry-name-addr )
         OVER                         \ ( el ena el )
         _HV-NA @ _HV-NL @           \ ( el ena el search-a search-u )
-        _MU-STRI= IF
+        STR-STRI= IF
             DROP -1 UNLOOP EXIT
         THEN
         DROP
@@ -67,8 +67,8 @@ CREATE _HR-STYLE   115 C, 116 C, 121 C, 108 C, 101 C,         \ style
 \ _HTML-RAW-TEXT? ( name-a name-u -- flag )
 \   Is this a raw text element?
 : _HTML-RAW-TEXT?  ( name-a name-u -- flag )
-    2DUP _HR-SCRIPT 6 _MU-STRI= IF 2DROP -1 EXIT THEN
-    _HR-STYLE 5 _MU-STRI= ;
+    2DUP _HR-SCRIPT 6 STR-STRI= IF 2DROP -1 EXIT THEN
+    _HR-STYLE 5 STR-STRI= ;
 
 \ _HTML-FIND-RAW-CLOSE ( addr len name-a name-u -- addr' len' )
 \   Scan raw text content for </name> (case-insensitive).
@@ -83,7 +83,7 @@ VARIABLE _HFRC-NA  VARIABLE _HFRC-NL
             DUP 2 > IF
                 OVER 1+ C@ 47 = IF               \ '</'
                     2DUP 2 /STRING MU-GET-NAME    \ ( a u a' u' n-a n-u )
-                    _HFRC-NA @ _HFRC-NL @ _MU-STRI= IF
+                    _HFRC-NA @ _HFRC-NL @ STR-STRI= IF
                         2DROP EXIT                \ stop AT </name>
                     THEN
                     2DROP                         \ drop a'/u'
@@ -147,7 +147,7 @@ VARIABLE _HSE-D   VARIABLE _HSE-NA  VARIABLE _HSE-NL
                 MU-SKIP-TAG
                 2R> _HTML-SKIP-RAW
             ELSE
-                _HSE-NA @ _HSE-NL @ _MU-STRI= IF
+                _HSE-NA @ _HSE-NL @ STR-STRI= IF
                     2DROP 1 _HSE-D +!
                 ELSE
                     2DROP
@@ -157,7 +157,7 @@ VARIABLE _HSE-D   VARIABLE _HSE-NA  VARIABLE _HSE-NL
         ELSE DUP MU-T-CLOSE = IF
             DROP
             2DUP MU-GET-TAG-NAME     \ ( a u a' u' n-a n-u )
-            _HSE-NA @ _HSE-NL @ _MU-STRI= IF
+            _HSE-NA @ _HSE-NL @ STR-STRI= IF
                 2DROP -1 _HSE-D +!
             ELSE
                 2DROP
@@ -189,7 +189,7 @@ VARIABLE _HFT-TA  VARIABLE _HFT-TL
         DUP MU-T-OPEN = OVER MU-T-SELF-CLOSE = OR IF
             DROP
             2DUP MU-GET-TAG-NAME _HFT-TL ! _HFT-TA ! 2DROP
-            _HFT-TA @ _HFT-TL @  _HFT-NA @ _HFT-NL @  _MU-STRI= IF
+            _HFT-TA @ _HFT-TL @  _HFT-NA @ _HFT-NL @  STR-STRI= IF
                 -1 EXIT
             THEN
             _HTML-SKIP-ELEMENT
@@ -230,7 +230,7 @@ VARIABLE _HFC-TA  VARIABLE _HFC-TL
                 MU-SKIP-TAG
                 _HFC-TA @ _HFC-TL @ _HTML-SKIP-RAW
             ELSE
-                _HFC-TA @ _HFC-TL @  _HFC-NA @ _HFC-NL @  _MU-STRI= IF
+                _HFC-TA @ _HFC-TL @  _HFC-NA @ _HFC-NL @  STR-STRI= IF
                     1 _HFC-D +!
                 THEN
                 MU-SKIP-TAG
@@ -238,7 +238,7 @@ VARIABLE _HFC-TA  VARIABLE _HFC-TL
         ELSE DUP MU-T-CLOSE = IF
             DROP
             2DUP MU-GET-TAG-NAME _HFC-TL ! _HFC-TA ! 2DROP
-            _HFC-TA @ _HFC-TL @ _HFC-NA @ _HFC-NL @ _MU-STRI= IF
+            _HFC-TA @ _HFC-TL @ _HFC-NA @ _HFC-NL @ STR-STRI= IF
                 -1 _HFC-D +!
             THEN
             _HFC-D @ 0> IF MU-SKIP-TAG THEN
@@ -359,7 +359,7 @@ VARIABLE _HCH-WA  VARIABLE _HCH-WL
         DUP 32 = OVER 9 = OR OVER 10 = OR OVER 13 = OR IF
             DROP
             _HCH-WL @ 0> IF
-                _HCH-WA @ _HCH-WL @  _HCH-CA @ _HCH-CL @ _MU-STR= IF
+                _HCH-WA @ _HCH-WL @  _HCH-CA @ _HCH-CL @ STR-STR= IF
                     -1 EXIT
                 THEN
             THEN
@@ -372,7 +372,7 @@ VARIABLE _HCH-WA  VARIABLE _HCH-WL
     REPEAT
     \ check last word
     _HCH-WL @ 0> IF
-        _HCH-WA @ _HCH-WL @  _HCH-CA @ _HCH-CL @ _MU-STR=
+        _HCH-WA @ _HCH-WL @  _HCH-CA @ _HCH-CL @ STR-STR=
         EXIT
     THEN
     0 ;
@@ -478,37 +478,37 @@ VARIABLE _HDE-OU   \ save original length
     2SWAP 2DROP                      \ drop the pre-; cursor
     \ stack: ( a-past-;, u-past-;) — result cursor
     \ try extended named entities
-    _HDE-NA @ _HDE-NL @  _HE-NBSP   4 _MU-STR= IF  160 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-COPY   4 _MU-STR= IF  169 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-REG    3 _MU-STR= IF  174 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-TRADE  5 _MU-STR= IF 8482 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-MDASH  5 _MU-STR= IF 8212 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-NDASH  5 _MU-STR= IF 8211 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-LSQUO  5 _MU-STR= IF 8216 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-RSQUO  5 _MU-STR= IF 8217 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-LDQUO  5 _MU-STR= IF 8220 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-RDQUO  5 _MU-STR= IF 8221 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-BULL   4 _MU-STR= IF 8226 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-HELLIP 6 _MU-STR= IF 8230 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-EURO   4 _MU-STR= IF 8364 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-RARR   4 _MU-STR= IF 8594 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-LARR   4 _MU-STR= IF 8592 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-TIMES  5 _MU-STR= IF  215 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-DIVIDE 6 _MU-STR= IF  247 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-PARA   4 _MU-STR= IF  182 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-SECT   4 _MU-STR= IF  167 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-DEG    3 _MU-STR= IF  176 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-PLUSMN 6 _MU-STR= IF  177 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-MICRO  5 _MU-STR= IF  181 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-MIDDOT 6 _MU-STR= IF  183 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-IQUEST 6 _MU-STR= IF  191 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-IEXCL  5 _MU-STR= IF  161 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-CENT   4 _MU-STR= IF  162 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-POUND  5 _MU-STR= IF  163 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-YEN    3 _MU-STR= IF  165 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-CURREN 6 _MU-STR= IF  164 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-LAQUO  5 _MU-STR= IF  171 -ROT EXIT THEN
-    _HDE-NA @ _HDE-NL @  _HE-RAQUO  5 _MU-STR= IF  187 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-NBSP   4 STR-STR= IF  160 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-COPY   4 STR-STR= IF  169 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-REG    3 STR-STR= IF  174 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-TRADE  5 STR-STR= IF 8482 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-MDASH  5 STR-STR= IF 8212 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-NDASH  5 STR-STR= IF 8211 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-LSQUO  5 STR-STR= IF 8216 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-RSQUO  5 STR-STR= IF 8217 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-LDQUO  5 STR-STR= IF 8220 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-RDQUO  5 STR-STR= IF 8221 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-BULL   4 STR-STR= IF 8226 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-HELLIP 6 STR-STR= IF 8230 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-EURO   4 STR-STR= IF 8364 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-RARR   4 STR-STR= IF 8594 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-LARR   4 STR-STR= IF 8592 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-TIMES  5 STR-STR= IF  215 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-DIVIDE 6 STR-STR= IF  247 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-PARA   4 STR-STR= IF  182 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-SECT   4 STR-STR= IF  167 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-DEG    3 STR-STR= IF  176 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-PLUSMN 6 STR-STR= IF  177 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-MICRO  5 STR-STR= IF  181 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-MIDDOT 6 STR-STR= IF  183 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-IQUEST 6 STR-STR= IF  191 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-IEXCL  5 STR-STR= IF  161 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-CENT   4 STR-STR= IF  162 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-POUND  5 STR-STR= IF  163 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-YEN    3 STR-STR= IF  165 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-CURREN 6 STR-STR= IF  164 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-LAQUO  5 STR-STR= IF  171 -ROT EXIT THEN
+    _HDE-NA @ _HDE-NL @  _HE-RAQUO  5 STR-STR= IF  187 -ROT EXIT THEN
     38 -ROT ;                        \ unknown → return '&'
 
 \ =====================================================================

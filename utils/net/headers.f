@@ -8,6 +8,8 @@
 \
 \ Load with:   REQUIRE headers.f
 
+REQUIRE string.f
+
 PROVIDED akashic-http-headers
 
 \ =====================================================================
@@ -21,23 +23,6 @@ VARIABLE HDR-ERR
 : HDR-FAIL       ( code -- )  HDR-ERR ! ;
 : HDR-OK?        ( -- flag )  HDR-ERR @ 0= ;
 : HDR-CLEAR-ERR  ( -- )       0 HDR-ERR ! ;
-
-\ =====================================================================
-\  Case-Insensitive Helpers (from tools.f pattern)
-\ =====================================================================
-
-: _CI-LOWER  ( c -- c' )
-    DUP 65 >= OVER 90 <= AND IF 32 + THEN ;
-
-: _CI-EQ  ( c1 c2 -- flag )
-    _CI-LOWER SWAP _CI-LOWER = ;
-
-: _CI-PREFIX  ( src match len -- flag )
-    0 DO
-        OVER I + C@  OVER I + C@  _CI-EQ
-        0= IF 2DROP 0 UNLOOP EXIT THEN
-    LOOP
-    2DROP -1 ;
 
 \ =====================================================================
 \  Header Building
@@ -213,7 +198,7 @@ VARIABLE _HPC-ACC
     BEGIN
         _HPC-PTR @ 16 + _HPC-END @ <=
     WHILE
-        _HPC-PTR @ S" content-length: " _CI-PREFIX IF
+        _HPC-PTR @ 16 S" content-length: " STR-STARTSI? IF
             16 _HPC-PTR +!
             0 _HPC-ACC !
             BEGIN
@@ -244,7 +229,7 @@ VARIABLE _HF-SCAN
     BEGIN
         _HF-PTR @ _HF-NLEN @ + 2 + _HF-END @ <=
     WHILE
-        _HF-PTR @ _HF-NADDR @ _HF-NLEN @ _CI-PREFIX IF
+        _HF-PTR @ _HF-NLEN @ _HF-NADDR @ _HF-NLEN @ STR-STARTSI? IF
             _HF-PTR @ _HF-NLEN @ + C@ 58 =
             _HF-PTR @ _HF-NLEN @ + 1 + C@ 32 = AND IF
                 \ Value starts after "name: "
@@ -269,8 +254,8 @@ VARIABLE _HF-SCAN
 \ HDR-CHUNKED? ( hdr-a hdr-u -- flag )
 : HDR-CHUNKED?  ( hdr-a hdr-u -- flag )
     S" Transfer-Encoding" HDR-FIND IF
-        7 < IF DROP 0 EXIT THEN
-        S" chunked" _CI-PREFIX
+        DUP 7 < IF 2DROP 0 EXIT THEN
+        S" chunked" STR-STARTSI?
     ELSE
         2DROP 0
     THEN ;

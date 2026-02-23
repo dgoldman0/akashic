@@ -11,6 +11,8 @@
 \
 \ Load with:   REQUIRE core.f
 
+REQUIRE string.f
+
 PROVIDED akashic-markup-core
 
 \ =====================================================================
@@ -146,37 +148,7 @@ VARIABLE _MQ-VL
     _MQ-VA @ _MQ-VL @ ;
 
 \ ── String comparison helpers ────────────────────────────────────────
-
-\ _MU-STR= ( s1 l1 s2 l2 -- flag )
-\   Case-sensitive string comparison.
-: _MU-STR=  ( s1 l1 s2 l2 -- flag )
-    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
-    DUP 0= IF DROP 2DROP -1 EXIT THEN
-    0 DO
-        OVER I + C@  OVER I + C@ <> IF
-            2DROP 0 UNLOOP EXIT
-        THEN
-    LOOP
-    2DROP -1 ;
-
-\ _MU-TOLOWER ( c -- c' )
-\   Convert A-Z to a-z; other chars unchanged.
-: _MU-TOLOWER  ( c -- c' )
-    DUP 65 >= OVER 90 <= AND IF 32 + THEN ;
-
-\ _MU-STRI= ( s1 l1 s2 l2 -- flag )
-\   Case-insensitive string comparison.
-: _MU-STRI=  ( s1 l1 s2 l2 -- flag )
-    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
-    DUP 0= IF DROP 2DROP -1 EXIT THEN
-    0 DO
-        OVER I + C@ _MU-TOLOWER
-        OVER I + C@ _MU-TOLOWER
-        <> IF
-            2DROP 0 UNLOOP EXIT
-        THEN
-    LOOP
-    2DROP -1 ;
+\ Now provided by REQUIRE string.f → STR-STR=, STR-STRI=
 
 \ =====================================================================
 \  Layer 1 — Tag Detection & Classification
@@ -254,13 +226,13 @@ VARIABLE _MTT-A   VARIABLE _MTT-L
         _MTT-A @     C@ 60  =                   \ <
         _MTT-A @ 1+  C@ 33  = AND               \ !
         IF
-            _MTT-A @ 2 + C@ _MU-TOLOWER 100 =   \ d
-            _MTT-A @ 3 + C@ _MU-TOLOWER 111 = AND \ o
-            _MTT-A @ 4 + C@ _MU-TOLOWER  99 = AND \ c
-            _MTT-A @ 5 + C@ _MU-TOLOWER 116 = AND \ t
-            _MTT-A @ 6 + C@ _MU-TOLOWER 121 = AND \ y
-            _MTT-A @ 7 + C@ _MU-TOLOWER 112 = AND \ p
-            _MTT-A @ 8 + C@ _MU-TOLOWER 101 = AND \ e
+            _MTT-A @ 2 + C@ _STR-LC 100 =   \ d
+            _MTT-A @ 3 + C@ _STR-LC 111 = AND \ o
+            _MTT-A @ 4 + C@ _STR-LC  99 = AND \ c
+            _MTT-A @ 5 + C@ _STR-LC 116 = AND \ t
+            _MTT-A @ 6 + C@ _STR-LC 121 = AND \ y
+            _MTT-A @ 7 + C@ _STR-LC 112 = AND \ p
+            _MTT-A @ 8 + C@ _STR-LC 101 = AND \ e
             IF 2DROP MU-T-DOCTYPE EXIT THEN
         THEN
     THEN
@@ -535,7 +507,7 @@ VARIABLE _MAF-SA  VARIABLE _MAF-SL   \ search name
         DROP                         \ drop flag
         \ ( a' u' na nl va vl )
         2>R                          \ save value  R: va vl
-        _MAF-SA @ _MAF-SL @ _MU-STR=
+        _MAF-SA @ _MAF-SL @ STR-STR=
         IF                           \ name matches
             2DROP                    \ drop cursor
             2R> -1 EXIT              \ ( va vl -1 )
@@ -783,14 +755,14 @@ VARIABLE _MFC-TA   VARIABLE _MFC-TL   \ temp tag name
         DUP MU-T-OPEN = IF
             DROP
             2DUP MU-GET-TAG-NAME  _MFC-TL !  _MFC-TA !  2DROP
-            _MFC-TA @ _MFC-TL @ _MFC-NA @ _MFC-NL @ _MU-STR= IF
+            _MFC-TA @ _MFC-TL @ _MFC-NA @ _MFC-NL @ STR-STR= IF
                 1 _MFC-D +!
             THEN
             MU-SKIP-TAG
         ELSE DUP MU-T-CLOSE = IF
             DROP
             2DUP MU-GET-TAG-NAME  _MFC-TL !  _MFC-TA !  2DROP
-            _MFC-TA @ _MFC-TL @ _MFC-NA @ _MFC-NL @ _MU-STR= IF
+            _MFC-TA @ _MFC-TL @ _MFC-NA @ _MFC-NL @ STR-STR= IF
                 -1 _MFC-D +!
             THEN
             _MFC-D @ 0> IF MU-SKIP-TAG THEN
@@ -863,7 +835,7 @@ VARIABLE _MFT-TA  VARIABLE _MFT-TL
         DUP MU-T-OPEN = OVER MU-T-SELF-CLOSE = OR IF
             DROP
             2DUP MU-GET-TAG-NAME _MFT-TL ! _MFT-TA ! 2DROP
-            _MFT-TA @ _MFT-TL @  _MFT-NA @ _MFT-NL @  _MU-STR= IF
+            _MFT-TA @ _MFT-TL @  _MFT-NA @ _MFT-NL @  STR-STR= IF
                 -1 EXIT              \ found it
             THEN
             MU-SKIP-ELEMENT          \ skip non-matching element
