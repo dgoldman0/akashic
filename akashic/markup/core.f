@@ -11,7 +11,7 @@
 \
 \ Load with:   REQUIRE core.f
 
-REQUIRE string.f
+REQUIRE ../utils/string.f
 
 PROVIDED akashic-markup-core
 

@@ -8,7 +8,7 @@
 \
 \ Load with:   REQUIRE headers.f
 
-REQUIRE string.f
+REQUIRE ../utils/string.f
 
 PROVIDED akashic-http-headers
 
