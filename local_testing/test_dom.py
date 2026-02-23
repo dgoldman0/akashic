@@ -253,6 +253,13 @@ def build_snapshot():
         ': UA  ( -- addr u ) _UB _UL @ ;',
         # Output buffer
         'CREATE _OB 1024 ALLOT',
+        # Third buffer for stylesheets
+        'CREATE _VB 1024 ALLOT  VARIABLE _VL',
+        ': VR  0 _VL ! ;',
+        ': VC  ( c -- ) _VB _VL @ + C!  1 _VL +! ;',
+        ': VA  ( -- addr u ) _VB _VL @ ;',
+        # Style result buffer
+        'CREATE _SB 2048 ALLOT',
         # Create test arena and document
         '524288 A-XMEM ARENA-NEW DROP CONSTANT _TARN',
         '_TARN 64 64 DOM-DOC-NEW CONSTANT _TDOC',
@@ -313,6 +320,24 @@ def tstr2(s):
     parts = ['UR']
     for ch in s:
         parts.append(f'{ord(ch)} UC')
+    full = " ".join(parts)
+    lines = []
+    while len(full) > 70:
+        split_at = full.rfind(' ', 0, 70)
+        if split_at == -1:
+            split_at = 70
+        lines.append(full[:split_at])
+        full = full[split_at:].lstrip()
+    if full:
+        lines.append(full)
+    return lines
+
+
+def vstr(s):
+    """Build string in third test buffer _VB using VR/VC."""
+    parts = ['VR']
+    for ch in s:
+        parts.append(f'{ord(ch)} VC')
     full = " ".join(parts)
     lines = []
     while len(full) > 70:
@@ -1381,6 +1406,171 @@ def test_dom_remove():
 
 
 # ---------------------------------------------------------------------------
+#  Stage 5 Tests — Style Resolution
+# ---------------------------------------------------------------------------
+
+def test_style_basic():
+    log_and_print("\n=== Style — Basic ===")
+
+    # 1. Compute style with tag selector
+    check("Compute style tag selector",
+        vstr('div { color: red }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t1 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  _N @ _SB 2048 DOM-COMPUTE-STYLE',
+            '  CR ." [L=" DUP . ." ]"',
+            '  _SB SWAP CR ." [S=" TYPE ." ]" ; t1'],
+        check_fn=lambda out: '[L=' in out and 'color: red' in out)
+
+    # 2. No matching rules → 0 bytes
+    check("No matching rules",
+        vstr('span { color: blue }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t2 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  _N @ _SB 2048 DOM-COMPUTE-STYLE',
+            '  CR ." [L=" . ." ]" ; t2'],
+        '[L=0 ]')
+
+    # 3. Class selector match
+    check("Class selector match",
+        vstr('.box { display: flex }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t3 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+            '  UR 98 UC 111 UC 120 UC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ _SB 2048 DOM-COMPUTE-STYLE',
+            '  _SB SWAP CR ." [S=" TYPE ." ]" ; t3'],
+        check_fn=lambda out: 'display: flex' in out)
+
+    # 4. ID selector match
+    check("ID selector match",
+        vstr('#main { margin: 0 }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t4 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  TR 105 TC 100 TC',
+            '  UR 109 UC 97 UC 105 UC 110 UC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ _SB 2048 DOM-COMPUTE-STYLE',
+            '  _SB SWAP CR ." [S=" TYPE ." ]" ; t4'],
+        check_fn=lambda out: 'margin: 0' in out)
+
+    # 5. Multiple matching rules cascade
+    check("Multiple rules cascade",
+        vstr('div { color: red } div { font-size: 14px }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t5 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  _N @ _SB 2048 DOM-COMPUTE-STYLE',
+            '  _SB SWAP CR ." [S=" TYPE ." ]" ; t5'],
+        check_fn=lambda out: 'color: red' in out and 'font-size: 14px' in out)
+
+    # 6. Non-element node returns 0
+    check("Text node returns 0 styles",
+        tstr('hello') + [
+            ': t6 TA DOM-CREATE-TEXT _SB 2048 DOM-COMPUTE-STYLE',
+            '  CR ." [L=" . ." ]" ; t6'],
+        '[L=0 ]')
+
+
+def test_style_inline():
+    log_and_print("\n=== Style — Inline ===")
+
+    # 1. Inline style attribute is included
+    check("Inline style included",
+        vstr('div { color: red }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t1 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  TR 115 TC 116 TC 121 TC 108 TC 101 TC',
+            '  UR 102 UC 111 UC 110 UC 116 UC 45 UC 119 UC',
+            '  101 UC 105 UC 103 UC 104 UC 116 UC 58 UC',
+            '  32 UC 98 UC 111 UC 108 UC 100 UC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ _SB 2048 DOM-COMPUTE-STYLE',
+            '  _SB SWAP CR ." [S=" TYPE ." ]" ; t1'],
+        check_fn=lambda out: 'color: red' in out and 'font-weight: bold' in out)
+
+    # 2. Inline-only (no stylesheet rules)
+    check("Inline only no rules",
+        ['VARIABLE _N2',
+         ': t2',
+         '  VR VA DOM-SET-STYLESHEET',
+         '  TR 100 TC 105 TC 118 TC',
+         '  TA DOM-CREATE-ELEMENT _N2 !',
+         '  TR 115 TC 116 TC 121 TC 108 TC 101 TC',
+         '  UR 99 UC 111 UC 108 UC 111 UC 114 UC 58 UC',
+         '  32 UC 98 UC 108 UC 117 UC 101 UC',
+         '  _N2 @ TA UA DOM-ATTR!',
+         '  _N2 @ _SB 2048 DOM-COMPUTE-STYLE',
+         '  _SB SWAP CR ." [S=" TYPE ." ]" ; t2'],
+        check_fn=lambda out: 'color: blue' in out)
+
+
+def test_style_lookup():
+    log_and_print("\n=== Style — Property Lookup ===")
+
+    # 1. DOM-STYLE@ finds property
+    check("DOM-STYLE@ finds color",
+        vstr('div { color: red; font-size: 14px }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t1 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  _N @ S" color" DOM-STYLE@',
+            '  CR ." [F=" . ." ]"',
+            '  CR ." [V=" TYPE ." ]" ; t1'],
+        check_fn=lambda out: '[F=-1 ]' in out and '[V=red]' in out)
+
+    # 2. DOM-STYLE@ for missing property
+    check("DOM-STYLE@ missing prop",
+        vstr('div { color: red }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t2 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  _N @ S" margin" DOM-STYLE@',
+            '  CR ." [F=" . ." ]" 2DROP ; t2'],
+        '[F=0 ]')
+
+    # 3. DOM-STYLE@ second property
+    check("DOM-STYLE@ second prop",
+        vstr('div { color: red; display: block }') + tstr('div') + [
+            'VARIABLE _N',
+            ': t3 VA DOM-SET-STYLESHEET',
+            '  TA DOM-CREATE-ELEMENT _N !',
+            '  _N @ S" display" DOM-STYLE@',
+            '  CR ." [F=" . ." ]"',
+            '  CR ." [V=" TYPE ." ]" ; t3'],
+        check_fn=lambda out: '[F=-1 ]' in out and '[V=block]' in out)
+
+    # 4. DOM-STYLE@ on text node
+    check("DOM-STYLE@ on text node",
+        tstr('hello') + [
+            ': t4 TA DOM-CREATE-TEXT S" color" DOM-STYLE@',
+            '  CR ." [F=" . ." ]" 2DROP ; t4'],
+        '[F=0 ]')
+
+
+def test_style_stubs():
+    log_and_print("\n=== Style — Cache Stubs ===")
+
+    # 1. DOM-STYLE-CACHED? returns 0
+    check("STYLE-CACHED? returns 0",
+        [': t1 DOM-T-ELEMENT _DOM-ALLOC DOM-STYLE-CACHED?',
+         '  CR ." [C=" . ." ]" ; t1'],
+        '[C=0 ]')
+
+    # 2. DOM-INVALIDATE-STYLE is no-op
+    check("INVALIDATE-STYLE no crash",
+        [': t2 DOM-T-ELEMENT _DOM-ALLOC DOM-INVALIDATE-STYLE',
+         '  CR ." [OK]" ; t2'],
+        '[OK]')
+
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -1407,6 +1597,10 @@ if __name__ == '__main__':
         test_create_nodes()
         test_text_ops()
         test_dom_remove()
+        test_style_basic()
+        test_style_inline()
+        test_style_lookup()
+        test_style_stubs()
     finally:
         log_and_print(f"\n{'='*50}")
         log_and_print(f"Results: {_pass_count} passed, {_fail_count} failed, "

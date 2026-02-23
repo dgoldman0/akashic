@@ -589,3 +589,108 @@ VARIABLE _DRM-CUR   VARIABLE _DRM-PAR
         _DRM-PAR @ 0= IF EXIT THEN
         _DRM-PAR @ _DRM-CUR !
     AGAIN ;
+
+\ =====================================================================
+\  Layer 5 — Style Resolution
+\ =====================================================================
+\
+\  Computes applied CSS styles for DOM elements by:
+\    1. Reconstructing an HTML opening tag from node tag + attrs
+\    2. Feeding it to CSSB-APPLY-INLINE with the document stylesheet
+\    3. Providing property lookup via CSS-DECL-FIND
+\
+\  v1: no caching — recomputes on each call.
+
+\ -- Stylesheet storage -----------------------------------------------
+
+VARIABLE _DOM-CSS-A    \ stylesheet text address
+VARIABLE _DOM-CSS-L    \ stylesheet text length
+
+: DOM-SET-STYLESHEET  ( css-a css-u -- )
+    _DOM-CSS-L !  _DOM-CSS-A ! ;
+
+\ -- Open-tag reconstruction -----------------------------------------
+\
+\  Rebuilds <tag attr="val" ...> from a DOM element node so the
+\  CSS bridge can parse tag/id/class/style as if it were raw HTML.
+
+CREATE _DOM-TAG-BUF 512 ALLOT    \ scratch buffer for open tag
+
+VARIABLE _DBOT-BA   VARIABLE _DBOT-BL   VARIABLE _DBOT-MX
+VARIABLE _DBOT-AT
+
+\ _DBOT-C ( ch -- )  Append one byte, bounds-checked.
+: _DBOT-C  ( ch -- )
+    _DBOT-BL @ _DBOT-MX @ >= IF DROP EXIT THEN
+    _DBOT-BA @ _DBOT-BL @ + C!  1 _DBOT-BL +! ;
+
+\ _DBOT-S ( a u -- )  Append string, truncated to fit.
+VARIABLE _DBOT-SA   VARIABLE _DBOT-SN
+
+: _DBOT-S  ( a u -- )
+    _DBOT-SN !  _DBOT-SA !
+    _DBOT-BL @ _DBOT-MX @ >= IF EXIT THEN
+    _DBOT-BL @ _DBOT-SN @ + _DBOT-MX @ > IF
+        _DBOT-MX @ _DBOT-BL @ -  _DBOT-SN !
+    THEN
+    _DBOT-SN @ 0= IF EXIT THEN
+    _DBOT-SA @  _DBOT-BA @ _DBOT-BL @ +  _DBOT-SN @  CMOVE
+    _DBOT-SN @ _DBOT-BL +! ;
+
+\ _DOM-BUILD-OPEN-TAG ( node buf max -- n )
+\   Reconstruct <tagname attr="val" ...> from DOM element.
+VARIABLE _DBOT-N
+
+: _DOM-BUILD-OPEN-TAG  ( node buf max -- n )
+    _DBOT-MX !  _DBOT-BA !  _DBOT-N !
+    0 _DBOT-BL !
+    60 _DBOT-C                          \ '<'
+    _DBOT-N @ DOM-TAG-NAME _DBOT-S      \ tag name
+    _DBOT-N @ DOM-ATTR-FIRST _DBOT-AT !
+    BEGIN _DBOT-AT @ WHILE
+        32 _DBOT-C                      \ space
+        _DBOT-AT @ DOM-ATTR-NAME@ _DBOT-S
+        61 _DBOT-C                      \ '='
+        34 _DBOT-C                      \ '"'
+        _DBOT-AT @ DOM-ATTR-VAL@  _DBOT-S
+        34 _DBOT-C                      \ '"'
+        _DBOT-AT @ DOM-ATTR-NEXTATTR _DBOT-AT !
+    REPEAT
+    62 _DBOT-C                          \ '>'
+    _DBOT-BL @ ;
+
+\ -- Style computation -----------------------------------------------
+
+CREATE _DOM-STY-BUF 2048 ALLOT    \ scratch buffer for computed styles
+
+VARIABLE _DCS-N   VARIABLE _DCS-BA   VARIABLE _DCS-MX
+VARIABLE _DCS-TL
+
+: DOM-COMPUTE-STYLE  ( node buf max -- n )
+    _DCS-MX !  _DCS-BA !  _DCS-N !
+    \ Only element nodes have styles
+    _DCS-N @ DOM-TYPE@ DOM-T-ELEMENT <> IF 0 EXIT THEN
+    \ Reconstruct open tag
+    _DCS-N @ _DOM-TAG-BUF 512 _DOM-BUILD-OPEN-TAG _DCS-TL !
+    \ Compute matched styles + inline via bridge
+    _DOM-CSS-A @ _DOM-CSS-L @      \ css-a css-u
+    _DOM-TAG-BUF _DCS-TL @        \ html-a html-u
+    _DCS-BA @ _DCS-MX @           \ buf max
+    CSSB-APPLY-INLINE ;
+
+\ -- Property lookup --------------------------------------------------
+
+VARIABLE _DSL-N   VARIABLE _DSL-PA   VARIABLE _DSL-PL
+
+: DOM-STYLE@  ( node prop-a prop-u -- val-a val-u flag )
+    _DSL-PL !  _DSL-PA !  _DSL-N !
+    _DSL-N @ DOM-TYPE@ DOM-T-ELEMENT <> IF 0 0 0 EXIT THEN
+    _DSL-N @ _DOM-STY-BUF 2048 DOM-COMPUTE-STYLE
+    _DOM-STY-BUF SWAP
+    _DSL-PA @ _DSL-PL @
+    CSS-DECL-FIND ;
+
+\ -- Cache stubs (v1: no caching) ------------------------------------
+
+: DOM-STYLE-CACHED?     ( node -- flag )   DROP 0 ;
+: DOM-INVALIDATE-STYLE  ( node -- )        DROP ;
