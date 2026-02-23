@@ -11,11 +11,12 @@
 # hand-rolled HTTP/URL code in favour of library calls.
 #
 # Files:
+#   utils/string/string.f — Shared string utilities (CR-4)
 #   utils/net/url.f       — URL parsing, encoding, query strings
 #   utils/net/base64.f    — Base64 encode/decode (RFC 4648)
 #   utils/net/headers.f   — HTTP header builder/parser
 #   utils/net/http.f      — HTTP/1.1 client (GET/POST/PUT/DELETE)
-#   utils/net/websocket.f — WebSocket client (RFC 6455)
+#   utils/net/websocket.f — WebSocket client (RFC 6455, CR-2)
 #   utils/net/ftp.f       — FTP/FTPS client
 #   utils/net/gopher.f    — Gopher client (type-0 text)
 #   utils/net/tftp.f      — TFTP client (RRQ/DATA/ACK)
@@ -23,8 +24,19 @@
 #   utils/net/irc.f       — IRC client (RFC 2812)
 #   utils/net/rabbit.f    — Rabbit protocol client (burrow browser)
 #   utils/net/smtp.f      — SMTP client (RFC 5321, STARTTLS)
+#   utils/datetime/datetime.f — Date/time parsing & formatting (CR-5)
+#   utils/table/table.f   — Slot-array / table abstraction (CR-6)
+#   utils/cbor/cbor.f     — CBOR codec (RFC 8949, CR-3)
+#   utils/cbor/dag-cbor.f — DAG-CBOR subset for AT Protocol (CR-3)
+#   utils/atproto/aturi.f — AT URI parser (CR-1)
+#   utils/atproto/tid.f   — TID generation (CR-1)
+#   utils/atproto/did.f   — DID validation (CR-1)
+#   utils/atproto/xrpc.f  — XRPC primitives (CR-1)
+#   utils/atproto/session.f — AT Protocol session management (CR-1)
+#   utils/atproto/repo.f  — Repo record CRUD (CR-1)
 #
-# PREFIX:  NET-   (shared infra — errors, polling, buffer helpers)
+# PREFIX:  STR-   (string.f)
+#          NET-   (shared infra — errors, polling, buffer helpers)
 #          URL-   (url.f)
 #          B64-   (base64.f)
 #          HDR-   (headers.f)
@@ -37,6 +49,16 @@
 #          IRC-   (irc.f)
 #          RBT-   (rabbit.f)
 #          SMTP-  (smtp.f)
+#          DT-    (datetime.f)
+#          TBL-   (table.f)
+#          CBOR-  (cbor.f)
+#          DCBOR- (dag-cbor.f)
+#          ATURI- (aturi.f)
+#          TID-   (tid.f)
+#          DID-   (did.f)
+#          XRPC-  (xrpc.f)
+#          SESS-  (session.f)
+#          REPO-  (repo.f)
 #
 # Internal prefixes follow _PREFIX- convention throughout.
 #
@@ -112,7 +134,10 @@
 #  Architecture — Dependency Graph
 # =====================================================================
 #
-#   url.f ────────┐
+#   string.f ────────────────────────┐ (shared by css.f, markup/core.f,
+#              │                     │  headers.f, atproto/, etc.)
+#              ▼                     ▼
+#   url.f ────────┐            css.f, markup/core.f
 #                  │
 #   base64.f ──┐   │
 #              │   │
@@ -124,6 +149,18 @@
 #     ┌────────┼────────┬──────────┐
 #     ▼        ▼        ▼          ▼
 #  websocket.f  smtp.f  (apps: bsky.f, tools.f SCROLL)
+#                          │
+#                          ▼
+#                      xrpc.f ◄── atproto/ entry point
+#                        │
+#              ┌─────────┼─────────┐
+#              ▼         ▼         ▼
+#          session.f   repo.f   aturi.f, tid.f, did.f
+#
+#   datetime.f — standalone (no REQUIRE, uses RTC)
+#   table.f    — standalone (no REQUIRE)
+#   cbor.f     — standalone (no REQUIRE)
+#   dag-cbor.f — REQUIRE cbor.f
 #
 #   rabbit.f  — standalone (uses TLS directly, own framing)
 #
@@ -1047,6 +1084,347 @@
 #
 #
 # =====================================================================
+#  §13 — string.f — Shared String Utilities (CR-4)
+# =====================================================================
+#
+#  PROVIDED akashic-string
+#
+#  Eliminates duplicate _CSS-STRI=, _MU-STRI=, _CI-EQ etc.
+#  across css.f, markup/core.f, headers.f.  All libraries
+#  REQUIRE string.f and use the STR- public words instead.
+#
+#  ── Character Case ──
+#
+#    STR-TOLOWER     ( addr len -- )
+#        Lowercase string in place.
+#
+#    STR-TOUPPER     ( addr len -- )
+#        Uppercase string in place.
+#
+#    _STR-LC         ( c -- c' )   internal: lowercase one char
+#    _STR-UC         ( c -- c' )   internal: uppercase one char
+#
+#
+#  ── Comparison ──
+#
+#    STR-STR=        ( s1 l1 s2 l2 -- flag )
+#        Case-sensitive string comparison.
+#
+#    STR-STRI=       ( s1 l1 s2 l2 -- flag )
+#        Case-insensitive string comparison.
+#
+#    STR-STARTS?     ( str-a str-u pfx-a pfx-u -- flag )
+#        True if str starts with pfx (case-sensitive).
+#
+#    STR-STARTSI?    ( str-a str-u pfx-a pfx-u -- flag )
+#        True if str starts with pfx (case-insensitive).
+#
+#    STR-ENDS?       ( str-a str-u sfx-a sfx-u -- flag )
+#        True if str ends with sfx (case-sensitive).
+#
+#
+#  ── Searching ──
+#
+#    STR-INDEX       ( str-a str-u c -- idx | -1 )
+#        Index of first occurrence of char c.
+#
+#    STR-RINDEX      ( str-a str-u c -- idx | -1 )
+#        Index of last occurrence of char c.
+#
+#    STR-SPLIT       ( str-a str-u c -- pre-a pre-u post-a post-u flag )
+#        Split at first occurrence of char c.
+#        flag = -1 if found, 0 if not (post = empty).
+#
+#
+#  ── Trimming ──
+#
+#    STR-TRIM        ( addr len -- addr' len' )
+#        Trim leading and trailing whitespace (space, tab, CR, LF).
+#
+#    STR-TRIM-L      ( addr len -- addr' len' )
+#        Trim leading whitespace only.
+#
+#    STR-TRIM-R      ( addr len -- addr' len' )
+#        Trim trailing whitespace only.
+#
+#
+#  ── Conversion ──
+#
+#    NUM>STR         ( n -- addr len )
+#        Signed decimal number to string.
+#        Uses internal static buffer (not re-entrant).
+#
+#    STR>NUM         ( addr len -- n flag )
+#        Parse signed decimal string.
+#        flag = -1 on success, 0 on failure.
+#
+#
+# =====================================================================
+#  §14 — datetime.f — Date/Time Utilities (CR-5)
+# =====================================================================
+#
+#  PROVIDED akashic-datetime
+#
+#  Epoch seconds ↔ broken-down time.  ISO 8601 formatting.
+#  No floating point.  Integer-only leap-year calculation.
+#
+#  ── Epoch Conversion ──
+#
+#    DT-EPOCH>YMD    ( epoch -- year month day )
+#        Unix epoch seconds to year/month/day.
+#
+#    DT-EPOCH>HMS    ( epoch -- hour min sec )
+#        Unix epoch seconds to hour/minute/second.
+#
+#    DT-YMD>EPOCH    ( year month day -- epoch )
+#        Year/month/day to Unix epoch at midnight UTC.
+#
+#    DT-LEAP?        ( year -- flag )
+#        Gregorian leap year test.
+#
+#
+#  ── Formatting ──
+#
+#    DT-ISO8601      ( epoch dst max -- written )
+#        Format epoch as "2024-06-15T14:30:00Z".
+#
+#    DT-DATE         ( epoch dst max -- written )
+#        Format epoch as "2024-06-15".
+#
+#    DT-TIME         ( epoch dst max -- written )
+#        Format epoch as "14:30:00".
+#
+#
+#  ── Parsing ──
+#
+#    DT-PARSE-ISO    ( addr len -- epoch ior )
+#        Parse "2024-06-15T14:30:00Z" to epoch seconds.
+#
+#    DT-NOW          ( -- epoch )
+#        Read RTC hardware, return epoch seconds.
+#
+#
+# =====================================================================
+#  §15 — table.f — Slot-Array / Table Abstraction (CR-6)
+# =====================================================================
+#
+#  PROVIDED akashic-table
+#
+#  Fixed-width slot array with alloc/free/iterate.
+#  Useful for DNS caches, session pools, record lists.
+#
+#    TBL-CREATE      ( slot-size max-slots addr -- )
+#        Initialise table at addr.  Header: size, max, count,
+#        then max-slots × (1-byte flag + slot-size data).
+#
+#    TBL-ALLOC       ( tbl -- slot-addr | 0 )
+#        Find first free slot, mark used, return data pointer.
+#
+#    TBL-FREE        ( tbl slot-addr -- )
+#        Mark slot as free.
+#
+#    TBL-COUNT       ( tbl -- n )
+#        Number of used slots.
+#
+#    TBL-SLOT        ( tbl idx -- slot-addr | 0 )
+#        Address of slot by index (0-based).  0 if idx out of range
+#        or slot is free.
+#
+#    TBL-EACH        ( tbl xt -- )
+#        Execute xt for each used slot.  xt: ( slot-addr -- ).
+#
+#    TBL-FIND        ( tbl xt -- slot-addr | 0 )
+#        Find first slot where xt returns true.
+#        xt: ( slot-addr -- flag ).
+#
+#    TBL-FLUSH       ( tbl -- )
+#        Mark all slots free.
+#
+#
+# =====================================================================
+#  §16 — cbor.f — CBOR Codec (CR-3)
+# =====================================================================
+#
+#  PROVIDED akashic-cbor
+#
+#  RFC 8949 subset: integers, byte strings, text strings,
+#  arrays, maps, booleans, null, tags.
+#
+#  ── Encoding ──
+#
+#    CBOR-RESET      ( dst max -- )
+#        Set output buffer.
+#
+#    CBOR-UINT       ( n -- )       Encode unsigned integer.
+#    CBOR-NINT       ( n -- )       Encode negative integer.
+#    CBOR-BSTR       ( addr len -- ) Encode byte string.
+#    CBOR-TSTR       ( addr len -- ) Encode text string.
+#    CBOR-ARRAY      ( n -- )       Start array of n items.
+#    CBOR-MAP        ( n -- )       Start map of n pairs.
+#    CBOR-TRUE       ( -- )         Encode true.
+#    CBOR-FALSE      ( -- )         Encode false.
+#    CBOR-NULL       ( -- )         Encode null.
+#    CBOR-TAG        ( n -- )       Encode semantic tag.
+#    CBOR-RESULT     ( -- addr len ) Return encoded bytes.
+#
+#
+#  ── Decoding ──
+#
+#    CBOR-PARSE      ( addr len -- ior )
+#        Set input cursor for decoding.
+#
+#    CBOR-TYPE       ( -- type )
+#        Peek at next item type (0=uint, 1=nint, 2=bstr, ...).
+#
+#    CBOR-NEXT-UINT  ( -- n )      Decode unsigned integer.
+#    CBOR-NEXT-NINT  ( -- n )      Decode negative integer.
+#    CBOR-NEXT-BSTR  ( -- addr len ) Decode byte string.
+#    CBOR-NEXT-TSTR  ( -- addr len ) Decode text string.
+#    CBOR-NEXT-ARRAY ( -- n )      Decode array header, return count.
+#    CBOR-NEXT-MAP   ( -- n )      Decode map header, return count.
+#    CBOR-NEXT-BOOL  ( -- flag )   Decode boolean.
+#    CBOR-SKIP       ( -- )        Skip one CBOR item.
+#    CBOR-DONE?      ( -- flag )   True if input exhausted.
+#
+#
+# =====================================================================
+#  §17 — dag-cbor.f — DAG-CBOR for AT Protocol (CR-3)
+# =====================================================================
+#
+#  PROVIDED akashic-dag-cbor
+#  REQUIRE cbor.f
+#
+#  DAG-CBOR subset: sorted map keys, CID links.
+#  Used by AT Protocol repo operations.
+#
+#    DCBOR-CID       ( addr len -- )   Encode CID link (tag 42).
+#    DCBOR-SORT-MAP  ( -- )            Validate map key ordering.
+#
+#
+# =====================================================================
+#  §18 — atproto/ — AT Protocol Primitives (CR-1)
+# =====================================================================
+#
+#  Six files under utils/atproto/, each independently REQUIRE-able.
+#  Provides the foundation for Bluesky and any AT Protocol app.
+#
+#  ─ aturi.f ─
+#
+#    PROVIDED akashic-aturi
+#
+#    ATURI-PARSE     ( addr len -- ior )
+#        Parse "at://did:plc:xxx/app.bsky.feed.post/tid" into:
+#          ATURI-AUTHORITY (64B), ATURI-COLLECTION (64B),
+#          ATURI-RKEY (32B) and corresponding length VARIABLEs.
+#
+#    ATURI-BUILD     ( auth-a auth-u coll-a coll-u rkey-a rkey-u
+#                      dst max -- written )
+#        Build AT URI from components.
+#
+#
+#  ─ tid.f ─
+#
+#    PROVIDED akashic-tid
+#
+#    TID-NOW         ( dst -- )
+#        Generate 13-char TID from RTC microseconds + clock ID.
+#        Base32-sortable.  Stored at dst (13 bytes).
+#
+#    TID-COMPARE     ( tid1 tid2 -- n )
+#        Lexicographic comparison of two 13-byte TIDs.
+#
+#
+#  ─ did.f ─
+#
+#    PROVIDED akashic-did
+#
+#    DID-VALID?      ( addr len -- flag )
+#        True if string is a valid DID (did:plc:... or did:web:...).
+#
+#    DID-METHOD      ( addr len -- method-a method-u )
+#        Extract method portion ("plc" or "web").
+#
+#
+#  ─ xrpc.f ─
+#
+#    PROVIDED akashic-xrpc
+#    REQUIRE http.f
+#
+#    XRPC-HOST       CREATE 64 ALLOT   (default: bsky.social)
+#    XRPC-HOST-LEN   VARIABLE
+#
+#    XRPC-QUERY      ( nsid-a nsid-u params-a params-u -- body-a body-u ior )
+#        XRPC query (GET).  params is URL query string.
+#        Example: S" app.bsky.feed.getTimeline" S" limit=20"
+#
+#    XRPC-PROCEDURE  ( nsid-a nsid-u body-a body-u -- resp-a resp-u ior )
+#        XRPC procedure (POST with JSON body).
+#
+#    XRPC-SET-HOST   ( addr len -- )
+#        Set XRPC host (for PDS switching).
+#
+#
+#  ─ session.f ─
+#
+#    PROVIDED akashic-session
+#    REQUIRE xrpc.f
+#
+#    SESS-LOGIN      ( handle-a handle-u pass-a pass-u -- ior )
+#        createSession.  Stores access/refresh tokens.
+#
+#    SESS-REFRESH    ( -- ior )
+#        refreshSession with stored refresh token.
+#
+#    SESS-DID        ( -- addr len )
+#        Return current session DID.
+#
+#    SESS-ACTIVE?    ( -- flag )
+#        True if session tokens are set.
+#
+#
+#  ─ repo.f ─
+#
+#    PROVIDED akashic-repo
+#    REQUIRE session.f
+#
+#    REPO-GET        ( aturi-a aturi-u -- json-a json-u ior )
+#        getRecord.
+#
+#    REPO-CREATE     ( coll-a coll-u json-a json-u -- uri-a uri-u ior )
+#        createRecord.  Returns AT URI of new record.
+#
+#    REPO-PUT        ( aturi-a aturi-u json-a json-u -- ior )
+#        putRecord.
+#
+#    REPO-DELETE     ( aturi-a aturi-u -- ior )
+#        deleteRecord.
+#
+#
+# =====================================================================
+#  §19 — Cursor/Pagination Helper (CR-7)
+# =====================================================================
+#
+#  Not a separate file — a small set of words in xrpc.f that manage
+#  the cursor= parameter for paginated XRPC queries.
+#
+#    XRPC-CURSOR     CREATE 128 ALLOT   cursor buffer
+#    XRPC-CURSOR-LEN VARIABLE
+#
+#    XRPC-SET-CURSOR ( addr len -- )
+#        Set cursor for next XRPC-QUERY.
+#
+#    XRPC-CLEAR-CURSOR ( -- )
+#        Clear cursor (start from beginning).
+#
+#    XRPC-HAS-CURSOR? ( -- flag )
+#        True if cursor is set (more pages available).
+#
+#    XRPC-EXTRACT-CURSOR ( json-a json-u -- )
+#        Extract "cursor":"..." from JSON response body.
+#        Stores into XRPC-CURSOR.  Clears if not present.
+#
+#
+# =====================================================================
 #  Implementation Stages
 # =====================================================================
 #
@@ -1114,29 +1492,48 @@
 #  ── Core net/ complete at this point ──
 #  ── Stages 12+ are independently orderable ──
 #
-#  Stage 12: ftp.f — FTP/FTPS client
+#  Stage 12: string.f — Shared string utilities (CR-4, P1)
+#     STR-STR=, STR-STRI=, STR-STARTS?, STR-STARTSI?,
+#     STR-ENDS?, STR-INDEX, STR-RINDEX, STR-SPLIT,
+#     STR-TRIM, STR-TOLOWER, STR-TOUPPER, NUM>STR, STR>NUM
+#     + Clean up: css.f drops _CSS-STRI=/_CSS-STR=/_CSS-TOLOWER,
+#       markup/core.f drops _MU-STRI=/_MU-STR=/_MU-TOLOWER,
+#       headers.f drops _CI-LOWER/_CI-EQ/_CI-PREFIX
+#     Tests → commit
+#
+#  Stage 13: datetime.f — Date/time utilities (CR-5, P2)
+#     DT-EPOCH>YMD, DT-EPOCH>HMS, DT-YMD>EPOCH, DT-LEAP?,
+#     DT-ISO8601, DT-DATE, DT-TIME, DT-PARSE-ISO, DT-NOW
+#     Tests → commit
+#
+#  Stage 14: table.f — Slot-array abstraction (CR-6, P2)
+#     TBL-CREATE, TBL-ALLOC, TBL-FREE, TBL-COUNT,
+#     TBL-SLOT, TBL-EACH, TBL-FIND, TBL-FLUSH
+#     Tests → commit
+#
+#  Stage 15: ftp.f — FTP/FTPS client
 #     FTP-CONNECT, FTP-LOGIN, FTP-PASV, FTP-RETR, FTP-STOR,
 #     FTP-LIST, FTP-CWD, FTP-PWD, FTP-QUIT, FTP-AUTH-TLS
-#     Tests → commitdwarf
+#     Tests → commit
 #
-#  Stage 13: gopher.f — Gopher client
+#  Stage 16: gopher.f — Gopher client
 #     GOPH-GET, GOPH-FETCH, GOPH-TYPE, GOPH-MENU-NEXT
 #     Tests → commit
 #
-#  Stage 14: tftp.f — TFTP client
+#  Stage 17: tftp.f — TFTP client
 #     TFTP-GET, TFTP-PUT, TFTP-FETCH
 #     Tests → commit
 #
-#  Stage 15: ntp.f — NTP time sync
+#  Stage 18: ntp.f — NTP time sync
 #     NTP-QUERY, NTP-SYNC, NTP-SYNC-DNS, NTP-AUTO
 #     Tests → commit
-#dwarf
-#  Stage 16: irc.f — IRC client
+#
+#  Stage 19: irc.f — IRC client
 #     IRC-CONNECT, IRC-REGISTER, IRC-JOIN, IRC-PRIVMSG,
 #     IRC-RECV-LINE, IRC-PARSE-MSG, IRC-POLL, IRC-RUN
 #     Tests → commit
 #
-#  Stage 17: rabbit.f — Rabbit protocol client
+#  Stage 20: rabbit.f — Rabbit protocol client
 #     Layers 0-1: RBT-FRAME-RESET, RBT-FRAME-VERB,
 #     RBT-FRAME-HEADER, RBT-FRAME-END, RBT-FRAME-BODY,
 #     RBT-FRAME-PARSE, RBT-CONNECT, RBT-HELLO,
@@ -1146,23 +1543,43 @@
 #     Layer 4: RBT-BROWSE, RBT-URL-FETCH
 #     Tests → commit
 #
-#  Stage 18: smtp.f — SMTP client
+#  Stage 21: smtp.f — SMTP client
 #     SMTP-CONNECT, SMTP-EHLO, SMTP-STARTTLS, SMTP-AUTH-LOGIN,
 #     SMTP-FROM, SMTP-TO, SMTP-DATA, SMTP-QUIT, SMTP-SEND-MAIL
 #     Tests → commit
 #
-#  Stage 19: websocket.f — WebSocket client
+#  Stage 22: websocket.f — WebSocket client (CR-2, P0)
 #     WS-CONNECT, WS-DISCONNECT, WS-FRAME-SEND, WS-FRAME-RECV,
 #     WS-SEND-TEXT, WS-SEND-BINARY, WS-RECV, WS-PING
 #     Tests → commit
 #
-#  Stage 20: tools.f refactor
+#  Stage 23: cbor.f + dag-cbor.f — CBOR codec (CR-3, P3)
+#     CBOR-UINT, CBOR-BSTR, CBOR-TSTR, CBOR-ARRAY, CBOR-MAP,
+#     CBOR-PARSE, CBOR-NEXT-*, CBOR-SKIP, DCBOR-CID
+#     Tests → commit
+#
+#  Stage 24: atproto/ — aturi.f + tid.f + did.f (CR-1, P0)
+#     ATURI-PARSE, ATURI-BUILD, TID-NOW, TID-COMPARE,
+#     DID-VALID?, DID-METHOD
+#     Tests → commit
+#
+#  Stage 25: atproto/ — xrpc.f + pagination (CR-1+CR-7)
+#     XRPC-QUERY, XRPC-PROCEDURE, XRPC-SET-HOST,
+#     XRPC-SET-CURSOR, XRPC-EXTRACT-CURSOR
+#     Tests → commit
+#
+#  Stage 26: atproto/ — session.f + repo.f (CR-1)
+#     SESS-LOGIN, SESS-REFRESH, SESS-ACTIVE?,
+#     REPO-GET, REPO-CREATE, REPO-PUT, REPO-DELETE
+#     Tests → commit
+#
+#  Stage 27: tools.f refactor
 #     Replace SCROLL internals with net/ library calls.
 #     SCROLL-GET, SCROLL-SAVE, SCROLL-LOAD unchanged API.
 #     ED (line editor) untouched.
 #     Tests → verify existing SCROLL tests still pass.
 #
-#  Stage 21: Documentation
+#  Stage 28: Documentation
 #     docs/utils/net/url.md
 #     docs/utils/net/base64.md
 #     docs/utils/net/headers.md
@@ -1175,6 +1592,11 @@
 #     docs/utils/net/irc.md
 #     docs/utils/net/rabbit.md
 #     docs/utils/net/smtp.md
+#     docs/utils/string/string.md
+#     docs/utils/datetime/datetime.md
+#     docs/utils/table/table.md
+#     docs/utils/cbor/cbor.md
+#     docs/utils/atproto/atproto.md
 #
 #
 # =====================================================================
@@ -1183,6 +1605,7 @@
 #
 #  | File          | Est. Lines | Notes                                |
 #  |---------------|-----------|--------------------------------------|
+#  | string.f      |   ~100    | String compare, search, trim, conv   |
 #  | url.f         |   ~200    | Parsing + encoding + query + build   |
 #  | base64.f      |   ~100    | Encode/decode + lookup table         |
 #  | headers.f     |   ~250    | Build + parse + find headers         |
@@ -1195,8 +1618,18 @@
 #  | rabbit.f      |   ~300    | Frame builder/parser, TLS, browse    |
 #  | smtp.f        |   ~200    | EHLO/STARTTLS/auth/DATA              |
 #  | websocket.f   |   ~250    | Handshake + framing + masking        |
+#  | datetime.f    |   ~120    | Epoch ↔ YMD/HMS, ISO 8601            |
+#  | table.f       |    ~80    | Slot-array with alloc/free/iterate   |
+#  | cbor.f        |   ~350    | Encode + decode full codec           |
+#  | dag-cbor.f    |    ~50    | CID tag + sorted map validation      |
+#  | aturi.f       |    ~60    | AT URI parsing + building            |
+#  | tid.f         |    ~40    | TID generation + comparison          |
+#  | did.f         |    ~30    | DID validation + method extraction   |
+#  | xrpc.f        |   ~150    | XRPC query/procedure + pagination    |
+#  | session.f     |   ~100    | Login, refresh, token storage        |
+#  | repo.f        |   ~100    | CRUD via XRPC                        |
 #  |---------------|-----------|--------------------------------------|
-#  | **Total**     | **~2280** |                                      |
+#  | **Total**     | **~3510** |                                      |
 #
 #  For comparison:
 #    json.f = 874 lines
@@ -1223,6 +1656,14 @@
 #     (url.f + headers.f).  All protocol clients (ftp, gopher,
 #     tftp, ntp, irc, rabbit) are standalone — they talk directly
 #     to KDOS TCP/UDP/TLS, not through http.f.
+#
+#  4a. string.f is a shared dependency of css.f, markup/core.f,
+#      headers.f, and atproto/*.  It must be loaded first.
+#      All case-insensitive string comparison is centralised here.
+#
+#  4b. atproto/ has a clear dependency chain:
+#      xrpc.f → session.f → repo.f.
+#      aturi.f, tid.f, did.f are standalone leaf libraries.
 #
 #  5. Receive buffers:
 #     - Static mode: caller provides buffer (HTTP-USE-STATIC)
@@ -1320,7 +1761,8 @@
 #     layers with tests at each stage.
 #
 #  4. The stage numbering makes cross-file dependencies explicit:
-#     "Stage 19 (websocket.f) depends on Stages 4 + 9."
+#     "Stage 22 (websocket.f) depends on Stages 4 + 9."
+#     "Stage 25 (xrpc.f) depends on Stages 9 + 12."
 #
 #
 # =====================================================================
@@ -1341,15 +1783,22 @@
 #  | 9     | HTTP-GET https://example.com/ — see HTML body |
 #  | 10    | Set bearer token, verify it appears in request |
 #  | 11    | DNS cache hit/miss, redirect following |
-#  | 12    | FTP RETR from test server |
-#  | 13    | Gopher fetch from test server |
-#  | 14    | TFTP GET from test server |
-#  | 15    | NTP-QUERY to pool.ntp.org, verify sane epoch |
-#  | 16    | IRC connect, NICK, JOIN, receive PING, send PONG |
-#  | 17    | Rabbit: connect, HELLO, LIST, FETCH from test burrow |
-#  | 18    | SMTP connect, EHLO, DATA to local test server |
-#  | 19    | WebSocket upgrade, send text frame, recv echo |
-#  | 20    | SCROLL-GET regression — same URLs, same output |
+#  | 12    | String compare, search, trim, conversion |
+#  | 13    | Epoch ↔ YMD, ISO 8601 format/parse |
+#  | 14    | Slot alloc/free/iterate, find, flush |
+#  | 15    | FTP RETR from test server |
+#  | 16    | Gopher fetch from test server |
+#  | 17    | TFTP GET from test server |
+#  | 18    | NTP-QUERY to pool.ntp.org, verify sane epoch |
+#  | 19    | IRC connect, NICK, JOIN, receive PING, send PONG |
+#  | 20    | Rabbit: connect, HELLO, LIST, FETCH from test burrow |
+#  | 21    | SMTP connect, EHLO, DATA to local test server |
+#  | 22    | WebSocket upgrade, send text frame, recv echo |
+#  | 23    | CBOR encode/decode known-answer vectors |
+#  | 24    | AT URI parse, TID generate, DID validate |
+#  | 25    | XRPC query/procedure, cursor pagination |
+#  | 26    | Session login/refresh, repo CRUD |
+#  | 27    | SCROLL-GET regression — same URLs, same output |
 #
 #  Python test file: local_testing/test_net.py
 #

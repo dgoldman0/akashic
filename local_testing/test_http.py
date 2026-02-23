@@ -13,6 +13,7 @@ import os, sys, time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+STR_F      = os.path.join(ROOT_DIR, "utils", "string", "string.f")
 URL_F      = os.path.join(ROOT_DIR, "utils", "net", "url.f")
 HDR_F      = os.path.join(ROOT_DIR, "utils", "net", "headers.f")
 HTTP_F     = os.path.join(ROOT_DIR, "utils", "net", "http.f")
@@ -34,8 +35,15 @@ def _load_bios():
 
 def _load_forth_lines(path):
     with open(path) as f:
-        return [line for line in f.read().splitlines()
-                if line.strip() and not line.strip().startswith('\\')]
+        lines = []
+        for line in f.read().splitlines():
+            s = line.strip()
+            if not s or s.startswith('\\'):
+                continue
+            if s.startswith('REQUIRE ') or s.startswith('PROVIDED '):
+                continue
+            lines.append(line)
+        return lines
 
 def _next_line_chunk(data, pos):
     nl = data.find(b'\n', pos)
@@ -67,10 +75,11 @@ def restore_cpu_state(cpu, state):
 def build_snapshot():
     global _snapshot
     if _snapshot: return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + url.f + headers.f + http.f ...")
+    print("[*] Building snapshot: BIOS + KDOS + string.f + url.f + headers.f + http.f ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
+    str_lines  = _load_forth_lines(STR_F)
     url_lines  = _load_forth_lines(URL_F)
     hdr_lines  = _load_forth_lines(HDR_F)
     http_lines = _load_forth_lines(HTTP_F)
@@ -83,11 +92,11 @@ def build_snapshot():
         'CREATE _RB 4096 ALLOT',
         ': _SETUP  TA _RB SWAP CMOVE  _RB HTTP-RECV-BUF !  _TL @ HTTP-RECV-LEN !  4096 HTTP-RECV-MAX ! ;',
     ]
-    sys_obj = MegapadSystem(ram_size=1024*1024)
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
-    payload = "\n".join(kdos_lines + url_lines + hdr_lines + http_lines + helpers) + "\n"
+    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + str_lines + url_lines + hdr_lines + http_lines + helpers) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
     while steps < mx:
         if sys_obj.cpu.halted: break
@@ -104,15 +113,17 @@ def build_snapshot():
     if errs:
         print("[!] Compilation errors:")
         for ln in errs[-5:]: print(f"    {ln}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu))
+    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+                 bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024)
+    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
+    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0

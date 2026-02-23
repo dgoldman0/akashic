@@ -9,6 +9,8 @@
 \
 \ Load with:   REQUIRE css.f
 
+REQUIRE string.f
+
 PROVIDED akashic-css
 
 \ =====================================================================
@@ -42,35 +44,6 @@ VARIABLE CSS-ABORT-ON-ERROR
 
 : CSS-CLEAR-ERR  ( -- )
     0 CSS-ERR ! ;
-
-\ =====================================================================
-\  String comparison helpers
-\ =====================================================================
-
-: _CSS-TOLOWER  ( c -- c' )
-    DUP 65 >= OVER 90 <= AND IF 32 + THEN ;
-
-: _CSS-STRI=  ( s1 l1 s2 l2 -- flag )
-    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
-    DUP 0= IF DROP 2DROP -1 EXIT THEN
-    0 DO
-        OVER I + C@ _CSS-TOLOWER
-        OVER I + C@ _CSS-TOLOWER
-        <> IF
-            2DROP 0 UNLOOP EXIT
-        THEN
-    LOOP
-    2DROP -1 ;
-
-: _CSS-STR=  ( s1 l1 s2 l2 -- flag )
-    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
-    DUP 0= IF DROP 2DROP -1 EXIT THEN
-    0 DO
-        OVER I + C@  OVER I + C@ <> IF
-            2DROP 0 UNLOOP EXIT
-        THEN
-    LOOP
-    2DROP -1 ;
 
 \ =====================================================================
 \  Layer 0 — Scanning Primitives
@@ -432,7 +405,7 @@ VARIABLE _CDF-SA   VARIABLE _CDF-SL
         THEN
         DROP                         \ drop flag
         2>R                          \ save val  R: va vu
-        _CDF-SA @ _CDF-SL @ _CSS-STRI=
+        _CDF-SA @ _CDF-SL @ STR-STRI=
         IF
             2DROP                    \ drop cursor
             2R> -1 EXIT              \ ( va vu -1 )
@@ -457,15 +430,15 @@ VARIABLE _CIP-A
     \ look at last 10 chars for "!important"
     OVER OVER + 10 - _CIP-A !
     _CIP-A @    C@ 33  =            \ !
-    _CIP-A @ 1+ C@ _CSS-TOLOWER 105 = AND   \ i
-    _CIP-A @ 2 + C@ _CSS-TOLOWER 109 = AND  \ m
-    _CIP-A @ 3 + C@ _CSS-TOLOWER 112 = AND  \ p
-    _CIP-A @ 4 + C@ _CSS-TOLOWER 111 = AND  \ o
-    _CIP-A @ 5 + C@ _CSS-TOLOWER 114 = AND  \ r
-    _CIP-A @ 6 + C@ _CSS-TOLOWER 116 = AND  \ t
-    _CIP-A @ 7 + C@ _CSS-TOLOWER  97 = AND  \ a
-    _CIP-A @ 8 + C@ _CSS-TOLOWER 110 = AND  \ n
-    _CIP-A @ 9 + C@ _CSS-TOLOWER 116 = AND  \ t
+    _CIP-A @ 1+ C@ _STR-LC 105 = AND   \ i
+    _CIP-A @ 2 + C@ _STR-LC 109 = AND  \ m
+    _CIP-A @ 3 + C@ _STR-LC 112 = AND  \ p
+    _CIP-A @ 4 + C@ _STR-LC 111 = AND  \ o
+    _CIP-A @ 5 + C@ _STR-LC 114 = AND  \ r
+    _CIP-A @ 6 + C@ _STR-LC 116 = AND  \ t
+    _CIP-A @ 7 + C@ _STR-LC  97 = AND  \ a
+    _CIP-A @ 8 + C@ _STR-LC 110 = AND  \ n
+    _CIP-A @ 9 + C@ _STR-LC 116 = AND  \ t
     IF 2DROP -1 EXIT THEN
     2DROP 0 ;
 
@@ -810,12 +783,12 @@ VARIABLE _CSGN-A
 \ CSS-MATCH-TYPE ( sel-a sel-u tag-a tag-u -- flag )
 \   Type selector match (case-insensitive).
 : CSS-MATCH-TYPE  ( sel-a sel-u tag-a tag-u -- flag )
-    _CSS-STRI= ;
+    STR-STRI= ;
 
 \ CSS-MATCH-ID ( sel-a sel-u id-a id-u -- flag )
 \   ID selector match (exact).
 : CSS-MATCH-ID  ( sel-a sel-u id-a id-u -- flag )
-    _CSS-STR= ;
+    STR-STR= ;
 
 \ CSS-MATCH-CLASS ( class-a class-u classes-a classes-u -- flag )
 \   Does the space-separated class list contain this class?
@@ -839,7 +812,7 @@ VARIABLE _CMC-TA
             \ compare token
             OVER _CMC-TA @ -
             >R _CMC-CA @ _CMC-CL @ _CMC-TA @ R>
-            _CSS-STR=
+            STR-STR=
             IF 2DROP -1 EXIT THEN
         THEN
     REPEAT
@@ -867,10 +840,10 @@ VARIABLE _CMS-CA   VARIABLE _CMS-CL   \ space-sep class list
         DROP 2DROP -1 EXIT
     THEN
     DUP CSS-S-TYPE = IF
-        DROP _CMS-TA @ _CMS-TL @ _CSS-STRI= EXIT
+        DROP _CMS-TA @ _CMS-TL @ STR-STRI= EXIT
     THEN
     DUP CSS-S-ID = IF
-        DROP _CMS-IA @ _CMS-IL @ _CSS-STR= EXIT
+        DROP _CMS-IA @ _CMS-IL @ STR-STR= EXIT
     THEN
     DUP CSS-S-CLASS = IF
         DROP _CMS-CA @ _CMS-CL @ CSS-MATCH-CLASS EXIT
@@ -1298,7 +1271,7 @@ VARIABLE _CMQ-BA   VARIABLE _CMQ-BL
     DUP 0= IF 2DROP 0 0 0 0 0 EXIT THEN
     OVER C@ 64 <> IF 2DROP 0 0 0 0 0 EXIT THEN
     CSS-AT-RULE-NAME                   \ a' u' name-a name-u
-    2DUP S" media" _CSS-STRI= 0= IF
+    2DUP S" media" STR-STRI= 0= IF
         2DROP 2DROP 0 0 0 0 0 EXIT
     THEN
     2DROP                              \ drop name
@@ -1325,9 +1298,9 @@ VARIABLE _CUF-T
 : _CSS-IS-URL-FUNC?  ( a u -- a u flag )
     DUP 4 < IF 0 EXIT THEN
     OVER _CUF-T !
-    _CUF-T @ C@ _CSS-TOLOWER 117 <>     IF 0 EXIT THEN
-    _CUF-T @ 1+ C@ _CSS-TOLOWER 114 <>  IF 0 EXIT THEN
-    _CUF-T @ 2 + C@ _CSS-TOLOWER 108 <> IF 0 EXIT THEN
+    _CUF-T @ C@ _STR-LC 117 <>     IF 0 EXIT THEN
+    _CUF-T @ 1+ C@ _STR-LC 114 <>  IF 0 EXIT THEN
+    _CUF-T @ 2 + C@ _STR-LC 108 <> IF 0 EXIT THEN
     _CUF-T @ 3 + C@ 40 <>               IF 0 EXIT THEN
     -1 ;
 
@@ -1351,7 +1324,7 @@ VARIABLE _CIU-A
     DUP 0= IF 2DROP 0 0 0 EXIT THEN
     OVER C@ 64 <> IF 2DROP 0 0 0 EXIT THEN
     CSS-AT-RULE-NAME                   \ a' u' name-a name-u
-    2DUP S" import" _CSS-STRI= 0= IF
+    2DUP S" import" STR-STRI= 0= IF
         2DROP 2DROP 0 0 0 EXIT
     THEN
     2DROP
@@ -1386,7 +1359,7 @@ VARIABLE _CKF-BA   VARIABLE _CKF-BL
     DUP 0= IF 2DROP 0 0 0 0 0 EXIT THEN
     OVER C@ 64 <> IF 2DROP 0 0 0 0 0 EXIT THEN
     CSS-AT-RULE-NAME                   \ a' u' name-a name-u
-    2DUP S" keyframes" _CSS-STRI= 0= IF
+    2DUP S" keyframes" STR-STRI= 0= IF
         2DROP 2DROP 0 0 0 0 0 EXIT
     THEN
     2DROP
@@ -1664,7 +1637,7 @@ VARIABLE _CCF-P
         >R                           \ save entry-len
         2DUP                          \ copy input name
         _CCF-P @ 1+ R@               \ tbl-name-addr entry-len
-        _CSS-STRI= IF
+        STR-STRI= IF
             2DROP                    \ drop input name
             R>                       \ entry-len
             1+ _CCF-P @ +           \ addr of R byte
