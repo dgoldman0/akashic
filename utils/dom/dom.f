@@ -694,3 +694,169 @@ VARIABLE _DSL-N   VARIABLE _DSL-PA   VARIABLE _DSL-PL
 
 : DOM-STYLE-CACHED?     ( node -- flag )   DROP 0 ;
 : DOM-INVALIDATE-STYLE  ( node -- )        DROP ;
+
+\ =====================================================================
+\  Layer 6 — Query & Traversal
+\ =====================================================================
+\
+\  Shared depth-first search infrastructure, CSS selector queries,
+\  by-id/tag/class helpers, depth-first walk, nth-child.
+
+\ -- Shared DFS infrastructure ----------------------------------------
+
+VARIABLE _DFS-CUR   VARIABLE _DFS-ROOT
+VARIABLE _DFS-DONE  VARIABLE _DFS-FND
+
+: _DOM-DFS-INIT  ( root -- )
+    DUP _DFS-ROOT !  _DFS-CUR !  0 _DFS-DONE ! ;
+
+: _DOM-DFS-ADVANCE  ( -- )
+    _DFS-CUR @ DOM-FIRST-CHILD ?DUP IF
+        _DFS-CUR !  EXIT
+    THEN
+    0 _DFS-FND !
+    BEGIN _DFS-FND @ 0=  _DFS-DONE @ 0=  AND WHILE
+        _DFS-CUR @ DOM-NEXT ?DUP IF
+            _DFS-CUR !  -1 _DFS-FND !
+        ELSE
+            _DFS-CUR @ _DFS-ROOT @ = IF
+                -1 _DFS-DONE !
+            ELSE
+                _DFS-CUR @ DOM-PARENT _DFS-CUR !
+            THEN
+        THEN
+    REPEAT ;
+
+\ -- DOM-MATCHES? -----------------------------------------------------
+
+VARIABLE _DMQ-N   VARIABLE _DMQ-SA   VARIABLE _DMQ-SL
+VARIABLE _DMQ-TL
+
+: DOM-MATCHES?  ( node sel-a sel-u -- flag )
+    _DMQ-SL !  _DMQ-SA !  _DMQ-N !
+    _DMQ-N @ DOM-TYPE@ DOM-T-ELEMENT <> IF 0 EXIT THEN
+    _DMQ-N @ _DOM-TAG-BUF 512 _DOM-BUILD-OPEN-TAG  _DMQ-TL !
+    _DMQ-SA @ _DMQ-SL @
+    _DOM-TAG-BUF _DMQ-TL @
+    CSSB-MATCH-ELEMENT ;
+
+\ -- DOM-QUERY ---------------------------------------------------------
+
+VARIABLE _DQ-SA   VARIABLE _DQ-SL
+
+: DOM-QUERY  ( root sel-a sel-u -- node|0 )
+    _DQ-SL !  _DQ-SA !
+    _DOM-DFS-INIT
+    BEGIN _DFS-DONE @ 0= WHILE
+        _DFS-CUR @ _DFS-ROOT @ <> IF
+            _DFS-CUR @ _DQ-SA @ _DQ-SL @ DOM-MATCHES? IF
+                _DFS-CUR @ EXIT
+            THEN
+        THEN
+        _DOM-DFS-ADVANCE
+    REPEAT
+    0 ;
+
+\ -- DOM-QUERY-ALL -----------------------------------------------------
+
+VARIABLE _DQA-SA   VARIABLE _DQA-SL
+VARIABLE _DQA-BA   VARIABLE _DQA-MX   VARIABLE _DQA-CNT
+
+: DOM-QUERY-ALL  ( root sel-a sel-u buf max -- n )
+    _DQA-MX !  _DQA-BA !  _DQA-SL !  _DQA-SA !
+    _DOM-DFS-INIT  0 _DQA-CNT !
+    BEGIN _DFS-DONE @ 0= WHILE
+        _DFS-CUR @ _DFS-ROOT @ <> IF
+            _DFS-CUR @ _DQA-SA @ _DQA-SL @ DOM-MATCHES? IF
+                _DQA-CNT @ _DQA-MX @ < IF
+                    _DFS-CUR @  _DQA-BA @ _DQA-CNT @ 8 * + !
+                    _DQA-CNT @ 1+ _DQA-CNT !
+                THEN
+            THEN
+        THEN
+        _DOM-DFS-ADVANCE
+    REPEAT
+    _DQA-CNT @ ;
+
+\ -- DOM-GET-BY-ID -----------------------------------------------------
+
+VARIABLE _DGBI-IA   VARIABLE _DGBI-IL
+
+: DOM-GET-BY-ID  ( root id-a id-u -- node|0 )
+    _DGBI-IL !  _DGBI-IA !
+    _DOM-DFS-INIT
+    BEGIN _DFS-DONE @ 0= WHILE
+        _DFS-CUR @ _DFS-ROOT @ <> IF
+            _DFS-CUR @ DOM-TYPE@ DOM-T-ELEMENT = IF
+                _DFS-CUR @ DOM-ID
+                _DGBI-IA @ _DGBI-IL @  _DOM-CISTREQ IF
+                    _DFS-CUR @ EXIT
+                THEN
+            THEN
+        THEN
+        _DOM-DFS-ADVANCE
+    REPEAT
+    0 ;
+
+\ -- DOM-GET-BY-TAG ----------------------------------------------------
+
+VARIABLE _DGBT-TA   VARIABLE _DGBT-TL
+VARIABLE _DGBT-BA   VARIABLE _DGBT-MX   VARIABLE _DGBT-CNT
+
+: DOM-GET-BY-TAG  ( root tag-a tag-u buf max -- n )
+    _DGBT-MX !  _DGBT-BA !  _DGBT-TL !  _DGBT-TA !
+    _DOM-DFS-INIT  0 _DGBT-CNT !
+    BEGIN _DFS-DONE @ 0= WHILE
+        _DFS-CUR @ _DFS-ROOT @ <> IF
+            _DFS-CUR @ DOM-TYPE@ DOM-T-ELEMENT = IF
+                _DFS-CUR @ DOM-TAG-NAME
+                _DGBT-TA @ _DGBT-TL @  _DOM-CISTREQ IF
+                    _DGBT-CNT @ _DGBT-MX @ < IF
+                        _DFS-CUR @  _DGBT-BA @ _DGBT-CNT @ 8 * + !
+                        _DGBT-CNT @ 1+ _DGBT-CNT !
+                    THEN
+                THEN
+            THEN
+        THEN
+        _DOM-DFS-ADVANCE
+    REPEAT
+    _DGBT-CNT @ ;
+
+\ -- DOM-GET-BY-CLASS --------------------------------------------------
+
+VARIABLE _DGBC-CA   VARIABLE _DGBC-CL
+VARIABLE _DGBC-BA   VARIABLE _DGBC-MX
+CREATE _DGBC-SEL 256 ALLOT
+
+: DOM-GET-BY-CLASS  ( root cls-a cls-u buf max -- n )
+    _DGBC-MX !  _DGBC-BA !  _DGBC-CL !  _DGBC-CA !
+    46 _DGBC-SEL C!                              \ '.'
+    _DGBC-CA @  _DGBC-SEL 1+  _DGBC-CL @  CMOVE
+    _DGBC-SEL _DGBC-CL @ 1+
+    _DGBC-BA @ _DGBC-MX @
+    DOM-QUERY-ALL ;
+
+\ -- DOM-WALK-DEPTH ----------------------------------------------------
+
+VARIABLE _DWD-XT
+
+: DOM-WALK-DEPTH  ( root xt -- )
+    _DWD-XT !
+    _DOM-DFS-INIT
+    BEGIN _DFS-DONE @ 0= WHILE
+        _DFS-CUR @ _DWD-XT @ EXECUTE
+        _DOM-DFS-ADVANCE
+    REPEAT ;
+
+\ -- DOM-NTH-CHILD -----------------------------------------------------
+
+VARIABLE _DNC-I
+
+: DOM-NTH-CHILD  ( parent n -- node|0 )
+    _DNC-I !
+    N.FIRST-CHILD @
+    BEGIN  DUP  WHILE
+        _DNC-I @ 0= IF EXIT THEN
+        _DNC-I @ 1- _DNC-I !
+        N.NEXT-SIB @
+    REPEAT ;

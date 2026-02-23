@@ -1571,6 +1571,246 @@ def test_style_stubs():
 
 
 # ---------------------------------------------------------------------------
+#  Stage 6 Tests — Query & Traversal
+# ---------------------------------------------------------------------------
+
+# Helper: builds a small DOM tree for query tests
+# Tree: root(div) -> [h1#title, p.intro, div.box -> [span, a.link]]
+def _query_tree_setup():
+    """Return Forth lines that create a test tree with known structure.
+    Variables: _QR (root), _QH (h1), _QP (p), _QD (div.box), _QS (span), _QA (a)"""
+    return [
+        'VARIABLE _QR  VARIABLE _QH  VARIABLE _QP',
+        'VARIABLE _QD  VARIABLE _QS  VARIABLE _QA',
+        # root div
+        'TR 100 TC 105 TC 118 TC',
+        'TA DOM-CREATE-ELEMENT _QR !',
+        # h1#title
+        'TR 104 TC 49 TC',
+        'TA DOM-CREATE-ELEMENT _QH !',
+        'TR 105 TC 100 TC  UR 116 UC 105 UC 116 UC 108 UC 101 UC',
+        '_QH @ TA UA DOM-ATTR!',
+        '_QH @ _QR @ DOM-APPEND',
+        # p.intro
+        'TR 112 TC',
+        'TA DOM-CREATE-ELEMENT _QP !',
+        'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+        'UR 105 UC 110 UC 116 UC 114 UC 111 UC',
+        '_QP @ TA UA DOM-ATTR!',
+        '_QP @ _QR @ DOM-APPEND',
+        # div.box
+        'TR 100 TC 105 TC 118 TC',
+        'TA DOM-CREATE-ELEMENT _QD !',
+        'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+        'UR 98 UC 111 UC 120 UC',
+        '_QD @ TA UA DOM-ATTR!',
+        '_QD @ _QR @ DOM-APPEND',
+        # span (inside div.box)
+        'TR 115 TC 112 TC 97 TC 110 TC',
+        'TA DOM-CREATE-ELEMENT _QS !',
+        '_QS @ _QD @ DOM-APPEND',
+        # a.link (inside div.box)
+        'TR 97 TC',
+        'TA DOM-CREATE-ELEMENT _QA !',
+        'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+        'UR 108 UC 105 UC 110 UC 107 UC',
+        '_QA @ TA UA DOM-ATTR!',
+        '_QA @ _QD @ DOM-APPEND',
+    ]
+
+
+def test_query_matches():
+    log_and_print("\n=== Query — DOM-MATCHES? ===")
+
+    # 1. Tag match
+    check("MATCHES? tag",
+        tstr('div') + [
+            ': t1 TA DOM-CREATE-ELEMENT S" div" DOM-MATCHES? CR ." [M=" . ." ]" ; t1'],
+        '[M=-1 ]')
+
+    # 2. Tag no match
+    check("MATCHES? tag no match",
+        tstr('div') + [
+            ': t2 TA DOM-CREATE-ELEMENT S" span" DOM-MATCHES? CR ." [M=" . ." ]" ; t2'],
+        '[M=0 ]')
+
+    # 3. Class match
+    check("MATCHES? class",
+        tstr('div') + tstr2('box') + [
+            'VARIABLE _N',
+            ': t3 TA DOM-CREATE-ELEMENT _N ! TR 99 TC 108 TC 97 TC 115 TC 115 TC _N @ TA UA DOM-ATTR! _N @ S" .box" DOM-MATCHES? CR ." [M=" . ." ]" ; t3'],
+        '[M=-1 ]')
+
+    # 4. Text node never matches
+    check("MATCHES? text node",
+        tstr('hi') + [
+            ': t4 TA DOM-CREATE-TEXT S" div" DOM-MATCHES? CR ." [M=" . ." ]" ; t4'],
+        '[M=0 ]')
+
+
+def test_query_single():
+    log_and_print("\n=== Query — DOM-QUERY ===")
+
+    # 1. Find by tag
+    check("Query by tag",
+        _query_tree_setup() + [
+            ': t1 _QR @ S" h1" DOM-QUERY _QH @ = CR ." [OK=" . ." ]" ; t1'],
+        '[OK=-1 ]')
+
+    # 2. Find by class
+    check("Query by class",
+        _query_tree_setup() + [
+            ': t2 _QR @ S" .intro" DOM-QUERY _QP @ = CR ." [OK=" . ." ]" ; t2'],
+        '[OK=-1 ]')
+
+    # 3. Find nested element
+    check("Query finds nested",
+        _query_tree_setup() + [
+            ': t3 _QR @ S" span" DOM-QUERY _QS @ = CR ." [OK=" . ." ]" ; t3'],
+        '[OK=-1 ]')
+
+    # 4. No match returns 0
+    check("Query no match returns 0",
+        _query_tree_setup() + [
+            ': t4 _QR @ S" table" DOM-QUERY CR ." [R=" . ." ]" ; t4'],
+        '[R=0 ]')
+
+    # 5. First of multiple matches (depth-first)
+    check("Query returns first match",
+        _query_tree_setup() + [
+            ': t5 _QR @ S" div" DOM-QUERY _QD @ = CR ." [OK=" . ." ]" ; t5'],
+        '[OK=-1 ]')
+
+
+def test_query_all():
+    log_and_print("\n=== Query — DOM-QUERY-ALL ===")
+
+    # 1. Find all by tag
+    check("Query-all by tag",
+        _query_tree_setup() + [
+            'CREATE _QB 256 ALLOT',
+            ': t1 _QR @ S" div" _QB 32 DOM-QUERY-ALL CR ." [N=" . ." ]" _QB @ _QD @ = CR ." [OK=" . ." ]" ; t1'],
+        check_fn=lambda out: '[N=1 ]' in out and '[OK=-1 ]' in out)
+
+    # 2. No matches returns 0
+    check("Query-all no matches",
+        _query_tree_setup() + [
+            'CREATE _QB 256 ALLOT',
+            ': t2 _QR @ S" table" _QB 32 DOM-QUERY-ALL CR ." [N=" . ." ]" ; t2'],
+        '[N=0 ]')
+
+    # 3. Multiple matches
+    check("Query-all multiple",
+        _query_tree_setup() + [
+            'CREATE _QB 256 ALLOT',
+            # Add a text node inside span to make it interesting
+            ': t3 _QR @ S" .link" _QB 32 DOM-QUERY-ALL CR ." [N=" DUP . ." ]" 1 = IF _QB @ _QA @ = CR ." [OK=" . ." ]" THEN ; t3'],
+        check_fn=lambda out: '[N=1 ]' in out and '[OK=-1 ]' in out)
+
+
+def test_get_by_id():
+    log_and_print("\n=== Query — DOM-GET-BY-ID ===")
+
+    # 1. Find by id
+    check("Get by id",
+        _query_tree_setup() + [
+            ': t1 _QR @ S" title" DOM-GET-BY-ID _QH @ = CR ." [OK=" . ." ]" ; t1'],
+        '[OK=-1 ]')
+
+    # 2. No match
+    check("Get by id no match",
+        _query_tree_setup() + [
+            ': t2 _QR @ S" nope" DOM-GET-BY-ID CR ." [R=" . ." ]" ; t2'],
+        '[R=0 ]')
+
+
+def test_get_by_tag():
+    log_and_print("\n=== Query — DOM-GET-BY-TAG ===")
+
+    # 1. Find all divs
+    check("Get by tag div",
+        _query_tree_setup() + [
+            'CREATE _QB 256 ALLOT',
+            ': t1 _QR @ S" div" _QB 32 DOM-GET-BY-TAG CR ." [N=" . ." ]" ; t1'],
+        '[N=1 ]')
+
+    # 2. Find all with no match
+    check("Get by tag no match",
+        _query_tree_setup() + [
+            'CREATE _QB 256 ALLOT',
+            ': t2 _QR @ S" table" _QB 32 DOM-GET-BY-TAG CR ." [N=" . ." ]" ; t2'],
+        '[N=0 ]')
+
+
+def test_get_by_class():
+    log_and_print("\n=== Query — DOM-GET-BY-CLASS ===")
+
+    # 1. Find by class
+    check("Get by class",
+        _query_tree_setup() + [
+            'CREATE _QB 256 ALLOT',
+            ': t1 _QR @ S" box" _QB 32 DOM-GET-BY-CLASS CR ." [N=" . ." ]" _QB @ _QD @ = CR ." [OK=" . ." ]" ; t1'],
+        check_fn=lambda out: '[N=1 ]' in out and '[OK=-1 ]' in out)
+
+
+def test_walk_depth():
+    log_and_print("\n=== Query — DOM-WALK-DEPTH ===")
+
+    # 1. Walk counts all nodes
+    check("Walk counts nodes",
+        _query_tree_setup() + [
+            'VARIABLE _WC',
+            ': _WINC  ( node -- ) DROP 1 _WC +! ;',
+            ": t1 0 _WC !  _QR @ ['] _WINC DOM-WALK-DEPTH _WC @ CR .\" [C=\" . .\" ]\" ; t1"],
+        '[C=6 ]')
+
+    # 2. Walk visits in depth-first order
+    check("Walk depth-first order",
+        ['VARIABLE _WP  VARIABLE _WC',
+         'TR 100 TC 105 TC 118 TC',
+         'TA DOM-CREATE-ELEMENT _WP !',
+         'TR 97 TC  TA DOM-CREATE-ELEMENT _WP @ DOM-APPEND',
+         'TR 98 TC  TA DOM-CREATE-ELEMENT _WP @ DOM-APPEND',
+         'VARIABLE _WO',
+         ': _WLOG  ( node -- ) DOM-TYPE@ DOM-T-ELEMENT = IF _WO @ 1+ _WO ! THEN ;',
+         ": t2 0 _WO !  _WP @ ['] _WLOG DOM-WALK-DEPTH _WO @ CR .\" [C=\" . .\" ]\" ; t2"],
+        '[C=3 ]')
+
+
+def test_nth_child():
+    log_and_print("\n=== Query — DOM-NTH-CHILD ===")
+
+    # 1. 0th child
+    check("Nth child 0",
+        _query_tree_setup() + [
+            ': t1 _QR @ 0 DOM-NTH-CHILD _QH @ = CR ." [OK=" . ." ]" ; t1'],
+        '[OK=-1 ]')
+
+    # 2. 1st child
+    check("Nth child 1",
+        _query_tree_setup() + [
+            ': t2 _QR @ 1 DOM-NTH-CHILD _QP @ = CR ." [OK=" . ." ]" ; t2'],
+        '[OK=-1 ]')
+
+    # 3. 2nd child
+    check("Nth child 2",
+        _query_tree_setup() + [
+            ': t3 _QR @ 2 DOM-NTH-CHILD _QD @ = CR ." [OK=" . ." ]" ; t3'],
+        '[OK=-1 ]')
+
+    # 4. Out of range
+    check("Nth child out of range",
+        _query_tree_setup() + [
+            ': t4 _QR @ 10 DOM-NTH-CHILD CR ." [R=" . ." ]" ; t4'],
+        '[R=0 ]')
+
+    # 5. Empty parent
+    check("Nth child empty parent",
+        [': t5 DOM-T-ELEMENT _DOM-ALLOC 0 DOM-NTH-CHILD CR ." [R=" . ." ]" ; t5'],
+        '[R=0 ]')
+
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -1601,6 +1841,14 @@ if __name__ == '__main__':
         test_style_inline()
         test_style_lookup()
         test_style_stubs()
+        test_query_matches()
+        test_query_single()
+        test_query_all()
+        test_get_by_id()
+        test_get_by_tag()
+        test_get_by_class()
+        test_walk_depth()
+        test_nth_child()
     finally:
         log_and_print(f"\n{'='*50}")
         log_and_print(f"Results: {_pass_count} passed, {_fail_count} failed, "
