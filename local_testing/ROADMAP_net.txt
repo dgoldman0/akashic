@@ -1501,10 +1501,11 @@
 #       headers.f drops _CI-LOWER/_CI-EQ/_CI-PREFIX
 #     Tests → commit
 #
-#  Stage 13: datetime.f — Date/time utilities (CR-5, P2)
+#  Stage 13: datetime.f — Date/time utilities (CR-5, P2)  ✔ DONE
 #     DT-EPOCH>YMD, DT-EPOCH>HMS, DT-YMD>EPOCH, DT-LEAP?,
-#     DT-ISO8601, DT-DATE, DT-TIME, DT-PARSE-ISO, DT-NOW
-#     Tests → commit
+#     DT-ISO8601, DT-DATE, DT-TIME, DT-PARSE-ISO,
+#     DT-NOW, DT-NOW-S, DT-NOW-MS
+#     48 tests — all pass → commit
 #
 #  Stage 14: table.f — Slot-array abstraction (CR-6, P2)
 #     TBL-CREATE, TBL-ALLOC, TBL-FREE, TBL-COUNT,
