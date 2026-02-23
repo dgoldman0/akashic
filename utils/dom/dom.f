@@ -515,3 +515,77 @@ VARIABLE _DAD-A   VARIABLE _DAD-P
 
 : DOM-ID     ( node -- str-a str-u )   S" id" DOM-ATTR@ DROP ;
 : DOM-CLASS  ( node -- str-a str-u )   S" class" DOM-ATTR@ DROP ;
+
+\ =====================================================================
+\  Layer 4 — Mutation
+\ =====================================================================
+\
+\  High-level node creation, text manipulation, and subtree removal.
+
+\ -- Node creation ---------------------------------------------------
+
+: DOM-CREATE-ELEMENT  ( tag-a tag-u -- node )
+    _DOM-STR-ALLOC
+    DOM-T-ELEMENT _DOM-ALLOC
+    SWAP OVER N.NAME ! ;
+
+: DOM-CREATE-TEXT  ( txt-a txt-u -- node )
+    _DOM-STR-ALLOC
+    DOM-T-TEXT _DOM-ALLOC
+    SWAP OVER N.NAME ! ;
+
+: DOM-CREATE-COMMENT  ( txt-a txt-u -- node )
+    _DOM-STR-ALLOC
+    DOM-T-COMMENT _DOM-ALLOC
+    SWAP OVER N.NAME ! ;
+
+: DOM-CREATE-FRAGMENT  ( -- node )
+    DOM-T-FRAGMENT _DOM-ALLOC ;
+
+\ -- Name / text access ----------------------------------------------
+
+: DOM-TAG-NAME  ( node -- name-a name-u )   N.NAME @ _DOM-STR-GET ;
+: DOM-TEXT      ( node -- txt-a txt-u )     N.NAME @ _DOM-STR-GET ;
+
+VARIABLE _DST-N
+
+: DOM-SET-TEXT  ( node txt-a txt-u -- )
+    ROT _DST-N !
+    _DST-N @ N.NAME @ _DOM-STR-RELEASE
+    _DOM-STR-ALLOC
+    _DST-N @ N.NAME ! ;
+
+\ -- Deep removal ----------------------------------------------------
+
+\ _DOM-FREE-ATTRS ( node -- )
+\   Release and free all attr records on a node.
+VARIABLE _DFA-A   VARIABLE _DFA-NX
+
+: _DOM-FREE-ATTRS  ( node -- )
+    N.FIRST-ATTR @  _DFA-A !
+    BEGIN _DFA-A @ WHILE
+        _DFA-A @ A.NEXT @  _DFA-NX !
+        _DFA-A @ _DOM-ATTR-RELEASE
+        _DFA-NX @  _DFA-A !
+    REPEAT ;
+
+\ DOM-REMOVE ( node -- )
+\   Detach node, iteratively depth-first free entire subtree.
+VARIABLE _DRM-CUR   VARIABLE _DRM-PAR
+
+: DOM-REMOVE  ( node -- )
+    DUP DOM-DETACH
+    _DRM-CUR !
+    BEGIN
+        \ Navigate to deepest first child (leaf)
+        BEGIN _DRM-CUR @ DOM-FIRST-CHILD DUP WHILE
+            _DRM-CUR !
+        REPEAT DROP
+        \ Free this leaf/childless node
+        _DRM-CUR @ N.PARENT @  _DRM-PAR !
+        _DRM-CUR @ DOM-DETACH
+        _DRM-CUR @ _DOM-FREE-ATTRS
+        _DRM-CUR @ _DOM-FREE
+        _DRM-PAR @ 0= IF EXIT THEN
+        _DRM-PAR @ _DRM-CUR !
+    AGAIN ;
