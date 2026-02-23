@@ -10,9 +10,10 @@
 \ Prefix: ATURI-   (public API)
 \         _ATU-    (internal helpers)
 \
-\ REQUIRE uri.f     (for URI-PARSE, URI-SCHEME-A/L, URI-AUTH-A/L, URI-PATH-A/L)
-\ REQUIRE string.f  (for STR-STR=)
 \ Load with:   REQUIRE aturi.f
+
+REQUIRE string.f
+REQUIRE uri.f  
 
 PROVIDED akashic-aturi
 
@@ -36,12 +37,12 @@ VARIABLE ATURI-RKEY-LEN
 \ _ATU-COPY ( src len dst max -- actual )
 \   Copy min(len, max) bytes from src to dst.
 : _ATU-COPY  ( src len dst max -- actual )
-    OVER MIN                     \ actual = min(len, max)
-    DUP 0 ?DO                   \ actual
-        3 PICK I + C@            \ src[i]
-        3 PICK I + C!            \ dst[i] = src[i]
+    ROT MIN                      \ ( src dst actual )
+    DUP 0 ?DO                    \ ( src dst actual )
+        2 PICK I + C@            \ src[i]
+        2 PICK I + C!            \ dst[i] = src[i]
     LOOP
-    SWAP DROP SWAP DROP SWAP DROP ;
+    NIP NIP ;
 
 \ _ATU-SPLIT-PATH ( addr len -- )
 \   Split path (without leading '/') into collection + rkey.

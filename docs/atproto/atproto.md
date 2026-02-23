@@ -1,15 +1,20 @@
 # akashic-atproto — AT Protocol Primitives for KDOS / Megapad-64
 
-AT Protocol identity and record-addressing primitives: AT URIs, DIDs,
-and TIDs.  Foundation layer for Bluesky and any AT Protocol application.
+AT Protocol identity, record-addressing, XRPC client, session
+management, and repository CRUD.  Foundation layer for Bluesky and
+any AT Protocol application.
 
 ```forth
 REQUIRE aturi.f    \ AT URI parser + builder
 REQUIRE did.f      \ DID validation + method extraction
 REQUIRE tid.f      \ TID generation + comparison
+REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
+REQUIRE session.f  \ Session auth (login/refresh/bearer)
+REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 ```
 
-`PROVIDED akashic-aturi` / `akashic-did` / `akashic-tid` — safe to
+`PROVIDED akashic-aturi` / `akashic-did` / `akashic-tid` /
+`akashic-xrpc` / `akashic-session` / `akashic-repo` — safe to
 include multiple times.
 
 ---
@@ -20,6 +25,9 @@ include multiple times.
 - [AT URI — aturi.f](#at-uri--aturif)
 - [DID — did.f](#did--didf)
 - [TID — tid.f](#tid--tidf)
+- [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
+- [Session — session.f](#session--sessionf)
+- [Repository — repo.f](#repository--repof)
 - [Quick Reference](#quick-reference)
 - [Cookbook](#cookbook)
 - [Dependencies](#dependencies)
@@ -30,10 +38,11 @@ include multiple times.
 
 | Principle | Detail |
 |---|---|
-| **Three independent files** | Each file is independently `REQUIRE`-able with its own `PROVIDED` guard. |
+| **Six independent files** | Each file is independently `REQUIRE`-able with its own `PROVIDED` guard. |
 | **Buffer-based** | Parsed components are copied into fixed-size static buffers. |
-| **AT Protocol spec** | Follows the AT Protocol specification for URI syntax, DID validation, and TID encoding. |
+| **AT Protocol spec** | Follows the AT Protocol specification for URI syntax, DID validation, TID encoding, XRPC, and session management. |
 | **Variable-based state** | All internal loops use `VARIABLE`s to avoid KDOS R-stack conflicts. |
+| **ASCII codes for JSON** | Manual JSON building uses numeric char codes (34 for `"`, 123 for `{`, etc.) since KDOS has no `S\"` word. |
 
 ---
 
@@ -157,6 +166,156 @@ Returns:
 
 ---
 
+## XRPC Client — xrpc.f
+
+XRPC (Cross-RPC) wraps HTTP GET/POST calls to the AT Protocol lexicon
+endpoint format: `https://<host>/xrpc/<nsid>`.
+
+### Host Configuration
+
+```forth
+XRPC-SET-HOST  ( addr len -- )
+```
+
+Set the PDS hostname (max 63 chars).  Default: `bsky.social`.
+
+### URL Building
+
+Internally builds `https://<host>/xrpc/<nsid>?<params>&cursor=<val>`
+into a 512-byte buffer.  Query parameters and cursor are appended
+automatically when present.
+
+### Cursor / Pagination
+
+```forth
+XRPC-SET-CURSOR       ( addr len -- )
+XRPC-CLEAR-CURSOR     ( -- )
+XRPC-HAS-CURSOR?      ( -- flag )
+XRPC-EXTRACT-CURSOR   ( json-a json-u -- )
+```
+
+Pagination cursor management.  `XRPC-EXTRACT-CURSOR` parses a JSON
+response and stores the `"cursor"` field value into the cursor buffer.
+If no cursor key is found, clears the cursor (no more pages).
+
+### XRPC-QUERY (GET)
+
+```forth
+XRPC-QUERY  ( nsid-a nsid-u params-a params-u -- body-a body-u ior )
+```
+
+Execute a GET request to `<host>/xrpc/<nsid>?<params>[&cursor=<val>]`.
+Returns response body and `ior` (0 = success).
+
+### XRPC-PROCEDURE (POST)
+
+```forth
+XRPC-PROCEDURE  ( nsid-a nsid-u body-a body-u -- resp-a resp-u ior )
+```
+
+Execute a POST request with JSON body.  Returns response body and `ior`.
+
+---
+
+## Session — session.f
+
+Manages authentication with an AT Protocol PDS via `createSession`
+and `refreshSession` XRPC procedures.  Stores access + refresh JWT
+tokens and the session DID.
+
+### Token Storage
+
+| Buffer | Size | Purpose |
+|---|---|---|
+| `_SES-ACCESS` | 512 bytes | Access JWT |
+| `_SES-REFRESH` | 512 bytes | Refresh JWT |
+| `_SES-DID` | 128 bytes | Session DID |
+
+### SESS-LOGIN
+
+```forth
+SESS-LOGIN  ( handle-a handle-u pass-a pass-u -- ior )
+```
+
+Authenticate with a PDS.  Builds `{"identifier":"...","password":"..."}`
+and calls `com.atproto.server.createSession`.  On success, stores
+JWTs, DID, and sets the HTTP bearer token for subsequent requests.
+
+### SESS-REFRESH
+
+```forth
+SESS-REFRESH  ( -- ior )
+```
+
+Refresh the session using the stored refresh JWT.  Sends the refresh
+token as a Bearer header (per AT Protocol spec) and calls
+`com.atproto.server.refreshSession`.  Updates tokens on success.
+
+### SESS-ACTIVE? / SESS-DID
+
+```forth
+SESS-ACTIVE?  ( -- flag )
+SESS-DID      ( -- addr len )
+```
+
+Check if a session is active (access token stored) and retrieve
+the session DID.
+
+---
+
+## Repository — repo.f
+
+CRUD operations on AT Protocol records via XRPC.  All operations
+require an active session (`SESS-ACTIVE?`).
+
+### JSON Building
+
+Uses manual string concatenation with ASCII char codes for JSON
+construction (34 for `"`, 123/125 for `{}`), since KDOS has no `S\"`
+word.  Record values are embedded raw (unquoted) to support
+pre-built JSON records.
+
+### REPO-GET
+
+```forth
+REPO-GET  ( aturi-a aturi-u -- json-a json-u ior )
+```
+
+Fetch a record by AT URI.  Parses the URI, builds query params
+(`repo=<did>&collection=<nsid>[&rkey=<rkey>]`), and calls
+`com.atproto.repo.getRecord`.
+
+### REPO-CREATE
+
+```forth
+REPO-CREATE  ( coll-a coll-u json-a json-u -- uri-a uri-u ior )
+```
+
+Create a new record.  Builds
+`{"repo":"<did>","collection":"<coll>","record":<json>}` and calls
+`com.atproto.repo.createRecord`.  Returns the AT URI of the created
+record.
+
+### REPO-PUT
+
+```forth
+REPO-PUT  ( aturi-a aturi-u json-a json-u -- ior )
+```
+
+Overwrite a record at the given AT URI.  Builds
+`{"repo":"<did>","collection":"<coll>","rkey":"<rkey>","record":<json>}`.
+
+### REPO-DELETE
+
+```forth
+REPO-DELETE  ( aturi-a aturi-u -- ior )
+```
+
+Delete a record at the given AT URI.  Builds
+`{"repo":"<did>","collection":"<coll>","rkey":"<rkey>"}`.
+
+---
+
 ## Quick Reference
 
 ### aturi.f
@@ -185,6 +344,38 @@ Returns:
 |---|---|---|
 | `TID-NOW` | `( dst -- )` | Generate 13-char TID |
 | `TID-COMPARE` | `( tid1 tid2 -- n )` | Compare two TIDs |
+
+### xrpc.f
+
+| Word | Stack | Purpose |
+|---|---|---|
+| `XRPC-SET-HOST` | `( addr len -- )` | Set PDS hostname |
+| `XRPC-QUERY` | `( nsid params -- body ior )` | XRPC GET request |
+| `XRPC-PROCEDURE` | `( nsid body -- resp ior )` | XRPC POST request |
+| `XRPC-SET-CURSOR` | `( addr len -- )` | Set pagination cursor |
+| `XRPC-CLEAR-CURSOR` | `( -- )` | Clear cursor |
+| `XRPC-HAS-CURSOR?` | `( -- flag )` | Check if cursor set |
+| `XRPC-EXTRACT-CURSOR` | `( json-a json-u -- )` | Extract cursor from JSON |
+| `XRPC-HOST` | CREATE | 64-byte hostname buffer |
+| `XRPC-CURSOR` | CREATE | 128-byte cursor buffer |
+
+### session.f
+
+| Word | Stack | Purpose |
+|---|---|---|
+| `SESS-LOGIN` | `( handle pass -- ior )` | Authenticate with PDS |
+| `SESS-REFRESH` | `( -- ior )` | Refresh session tokens |
+| `SESS-ACTIVE?` | `( -- flag )` | Check if session active |
+| `SESS-DID` | `( -- addr len )` | Get session DID |
+
+### repo.f
+
+| Word | Stack | Purpose |
+|---|---|---|
+| `REPO-GET` | `( aturi -- json ior )` | Fetch record by AT URI |
+| `REPO-CREATE` | `( coll json -- uri ior )` | Create new record |
+| `REPO-PUT` | `( aturi json -- ior )` | Overwrite record |
+| `REPO-DELETE` | `( aturi -- ior )` | Delete record |
 
 ---
 
@@ -246,6 +437,42 @@ _T1 13 TYPE              \ → e.g. 3kfg7h2abc222
 _T1 _T2 TID-COMPARE .    \ → -1 (T1 < T2, generated earlier)
 ```
 
+### XRPC: Paginated query
+
+```forth
+S" pds.example.com" XRPC-SET-HOST
+XRPC-CLEAR-CURSOR
+BEGIN
+  S" app.bsky.feed.getTimeline"
+  S" limit=25"
+  XRPC-QUERY                   ( body-a body-u ior )
+  0= WHILE
+    \ process body...
+    2DUP XRPC-EXTRACT-CURSOR
+    2DROP
+  XRPC-HAS-CURSOR? 0= UNTIL THEN ;
+```
+
+### Login and create a post
+
+```forth
+S" pds.example.com" XRPC-SET-HOST
+S" handle.example.com" S" password"
+SESS-LOGIN 0= IF
+  S" app.bsky.feed.post"
+  S" {\"text\":\"Hello from KDOS!\"}"
+  REPO-CREATE                   ( uri-a uri-u ior )
+  0= IF  TYPE CR  THEN          \ print AT URI
+THEN
+```
+
+### Delete a record
+
+```forth
+S" at://did:plc:abc/app.bsky.feed.post/rk42" REPO-DELETE
+0= IF ." Deleted" ELSE ." Failed" THEN
+```
+
 ---
 
 ## Dependencies
@@ -254,6 +481,16 @@ _T1 _T2 TID-COMPARE .    \ → -1 (T1 < T2, generated earlier)
   (for `STR-INDEX`).
 - **did.f** — standalone, no dependencies.
 - **tid.f** — standalone, uses BIOS `EPOCH@` for timestamps.
+- **xrpc.f** — requires `http.f`, `string.f`, `json.f`.
+- **session.f** — requires `xrpc.f`, `json.f`, `http.f`.
+- **repo.f** — requires `session.f`, `xrpc.f`, `json.f`, `aturi.f`.
+
+Full dependency chain for `repo.f`:
+```
+repo.f → session.f → xrpc.f → http.f → headers.f → url.f → string.f
+                                      → json.f
+                   → aturi.f → uri.f
+```
 
 ## Internal State
 
@@ -273,3 +510,27 @@ _T1 _T2 TID-COMPARE .    \ → -1 (T1 < T2, generated earlier)
 - `_TID-ALPHA` — 32-byte base32-sort lookup table
 - `_TID-VAL` — 64-bit value being encoded
 - `_TID-CLK` — clock ID counter (wraps at 1023)
+
+### xrpc.f — prefixed `_XR-`
+
+- `_XR-URL` — 512-byte URL build buffer
+- `_XR-POS` — URL write position
+- `XRPC-HOST` / `XRPC-HOST-LEN` — PDS hostname (default `bsky.social`)
+- `XRPC-CURSOR` / `XRPC-CURSOR-LEN` — pagination cursor buffer
+
+### session.f — prefixed `_SES-`
+
+- `_SES-ACCESS` / `_SES-ACCESS-LEN` — access JWT (512 bytes)
+- `_SES-REFRESH` / `_SES-REFRESH-LEN` — refresh JWT (512 bytes)
+- `_SES-DID` / `_SES-DID-LEN` — session DID (128 bytes)
+- `_SES-JBUF` — 512-byte JSON build buffer for login
+- `_SES-EX-DST/MAX/LEN` — key extraction state
+- `_SES-HA/HL/PA/PL` — login build stash
+
+### repo.f — prefixed `_REP-`
+
+- `_REP-JBUF` — 2048-byte JSON body buffer
+- `_REP-PBUF` — 256-byte query params buffer
+- `_REP-URI` / `_REP-URI-LEN` — result URI buffer (256 bytes)
+- `_REP-JP` / `_REP-PP` — write positions for JSON/params
+- `_REP-V1A/L`, `_REP-V2A/L` — deep stack stash slots
