@@ -1186,6 +1186,201 @@ def test_attr_shortcuts():
 
 
 # ---------------------------------------------------------------------------
+#  Stage 4 Tests — Mutation
+# ---------------------------------------------------------------------------
+
+def test_create_nodes():
+    log_and_print("\n=== Mutation — Create Nodes ===")
+
+    # 1. Create element
+    check("Create element node",
+        tstr('div') + [
+            ': t1 TA DOM-CREATE-ELEMENT',
+            '  DUP DOM-TYPE@ CR ." [T=" . ." ]"',
+            '  DOM-TAG-NAME CR ." [N=" TYPE ." ]" ; t1'],
+        check_fn=lambda out: '[T=1 ]' in out and '[N=div]' in out)
+
+    # 2. Create text node
+    check("Create text node",
+        tstr('hello world') + [
+            ': t2 TA DOM-CREATE-TEXT',
+            '  DUP DOM-TYPE@ CR ." [T=" . ." ]"',
+            '  DOM-TEXT CR ." [S=" TYPE ." ]" ; t2'],
+        check_fn=lambda out: '[T=2 ]' in out and '[S=hello world]' in out)
+
+    # 3. Create comment node
+    check("Create comment node",
+        tstr('a comment') + [
+            ': t3 TA DOM-CREATE-COMMENT',
+            '  DUP DOM-TYPE@ CR ." [T=" . ." ]"',
+            '  DOM-TEXT CR ." [S=" TYPE ." ]" ; t3'],
+        check_fn=lambda out: '[T=3 ]' in out and '[S=a comment]' in out)
+
+    # 4. Create fragment
+    check("Create fragment node",
+        [': t4 DOM-CREATE-FRAGMENT DOM-TYPE@',
+         '  CR ." [T=" . ." ]" ; t4'],
+        '[T=5 ]')
+
+    # 5. Create element + append children
+    check("Create + append tree",
+        tstr('ul') + [
+            'VARIABLE _P',
+            ': t5 TA DOM-CREATE-ELEMENT _P !',
+            '  TR 108 TC 105 TC',
+            '  TA DOM-CREATE-ELEMENT _P @ DOM-APPEND',
+            '  _P @ DOM-CHILD-COUNT',
+            '  CR ." [CC=" . ." ]"',
+            '  _P @ DOM-FIRST-CHILD DOM-TAG-NAME',
+            '  CR ." [C=" TYPE ." ]" ; t5'],
+        check_fn=lambda out: '[CC=1 ]' in out and '[C=li]' in out)
+
+
+def test_text_ops():
+    log_and_print("\n=== Mutation — Text Operations ===")
+
+    # 1. DOM-TEXT returns text content
+    check("DOM-TEXT on text node",
+        tstr('initial') + [
+            ': t1 TA DOM-CREATE-TEXT DOM-TEXT',
+            '  CR ." [S=" TYPE ." ]" ; t1'],
+        '[S=initial]')
+
+    # 2. DOM-SET-TEXT changes content
+    check("DOM-SET-TEXT updates text",
+        tstr('old') + [
+            'VARIABLE _N',
+            ': t2 TA DOM-CREATE-TEXT _N !',
+            '  UR 110 UC 101 UC 119 UC',
+            '  _N @ UA DOM-SET-TEXT',
+            '  _N @ DOM-TEXT',
+            '  CR ." [S=" TYPE ." ]" ; t2'],
+        '[S=new]')
+
+    # 3. DOM-TAG-NAME on element
+    check("DOM-TAG-NAME returns tag",
+        tstr('span') + [
+            ': t3 TA DOM-CREATE-ELEMENT DOM-TAG-NAME',
+            '  CR ." [N=" TYPE ." ]" ; t3'],
+        '[N=span]')
+
+    # 4. DOM-SET-TEXT on text node then read back
+    check("SET-TEXT preserves old text gone",
+        tstr('aaa') + [
+            'VARIABLE _N',
+            ': t4 TA DOM-CREATE-TEXT _N !',
+            '  TR 98 TC 98 TC 98 TC',
+            '  _N @ TA DOM-SET-TEXT',
+            '  _N @ DOM-TEXT',
+            '  CR ." [S=" TYPE ." ]" ; t4'],
+        '[S=bbb]')
+
+
+def test_dom_remove():
+    log_and_print("\n=== Mutation — DOM-REMOVE ===")
+
+    # 1. Remove single leaf node
+    check("Remove leaf node",
+        ['VARIABLE _P  VARIABLE _C',
+         ': t1 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _C @ _P @ DOM-APPEND',
+         '  _C @ DOM-REMOVE',
+         '  _P @ DOM-CHILD-COUNT',
+         '  CR ." [CC=" . ." ]" ; t1'],
+        '[CC=0 ]')
+
+    # 2. Remove node with children (deep free)
+    check("Remove node with children",
+        ['VARIABLE _GP  VARIABLE _P  VARIABLE _C',
+         ': t2 DOM-T-ELEMENT _DOM-ALLOC _GP !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _P @ _GP @ DOM-APPEND',
+         '  _C @ _P @ DOM-APPEND',
+         '  _P @ DOM-REMOVE',
+         '  _GP @ DOM-CHILD-COUNT',
+         '  CR ." [CC=" . ." ]" ; t2'],
+        '[CC=0 ]')
+
+    # 3. Remove frees attrs too
+    check("Remove frees attrs",
+        tstr('id') + tstr2('x') + [
+            'VARIABLE _P  VARIABLE _C',
+            ': t3 DOM-T-ELEMENT _DOM-ALLOC _P !',
+            '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+            '  _C @ TA UA DOM-ATTR!',
+            '  _C @ _P @ DOM-APPEND',
+            '  _C @ DOM-REMOVE',
+            '  _P @ DOM-CHILD-COUNT',
+            '  CR ." [CC=" . ." ]" ; t3'],
+        '[CC=0 ]')
+
+    # 4. Remove middle child keeps siblings
+    check("Remove middle child",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B  VARIABLE _C',
+         ': t4 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _C @ _P @ DOM-APPEND',
+         '  _B @ DOM-REMOVE',
+         '  _P @ DOM-CHILD-COUNT',
+         '  CR ." [CC=" . ." ]"',
+         '  _A @ DOM-NEXT _C @ =',
+         '  CR ." [OK=" . ." ]" ; t4'],
+        check_fn=lambda out: '[CC=2 ]' in out and '[OK=-1 ]' in out)
+
+    # 5. Remove orphan node (no parent)
+    check("Remove orphan node",
+        [': t5 DOM-T-ELEMENT _DOM-ALLOC DOM-REMOVE',
+         '  CR ." [OK]" ; t5'],
+        '[OK]')
+
+    # 6. Remove deep tree (3 levels)
+    check("Remove 3-level deep tree",
+        ['VARIABLE _R  VARIABLE _A  VARIABLE _B  VARIABLE _C',
+         ': t6 DOM-T-ELEMENT _DOM-ALLOC _R !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _A @ _R @ DOM-APPEND',
+         '  _B @ _A @ DOM-APPEND',
+         '  _C @ _B @ DOM-APPEND',
+         '  _A @ DOM-REMOVE',
+         '  _R @ DOM-CHILD-COUNT',
+         '  CR ." [CC=" . ." ]" ; t6'],
+        '[CC=0 ]')
+
+    # 7. Remove returns nodes to free-list (can alloc again)
+    check("Remove recycles nodes",
+        ['VARIABLE _R  VARIABLE _BEFORE  VARIABLE _AFTER',
+         ': t7',
+         '  DOM-DOC D.NODE-FREE @ _BEFORE !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _R !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _R @ DOM-APPEND',
+         '  DOM-T-ELEMENT _DOM-ALLOC _R @ DOM-APPEND',
+         '  _R @ DOM-REMOVE',
+         '  DOM-DOC D.NODE-FREE @ _AFTER !',
+         '  _BEFORE @ _AFTER @ =',
+         '  CR ." [OK=" . ." ]" ; t7'],
+        '[OK=-1 ]')
+
+    # 8. Remove wide tree (3 children)
+    check("Remove wide tree (3 kids)",
+        ['VARIABLE _R',
+         ': t8 DOM-T-ELEMENT _DOM-ALLOC _R !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _R @ DOM-APPEND',
+         '  DOM-T-ELEMENT _DOM-ALLOC _R @ DOM-APPEND',
+         '  DOM-T-ELEMENT _DOM-ALLOC _R @ DOM-APPEND',
+         '  _R @ DOM-REMOVE',
+         '  CR ." [OK]" ; t8'],
+        '[OK]')
+
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -1209,6 +1404,9 @@ if __name__ == '__main__':
         test_attr_delete()
         test_attr_iterate()
         test_attr_shortcuts()
+        test_create_nodes()
+        test_text_ops()
+        test_dom_remove()
     finally:
         log_and_print(f"\n{'='*50}")
         log_and_print(f"Results: {_pass_count} passed, {_fail_count} failed, "
