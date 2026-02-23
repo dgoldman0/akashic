@@ -285,3 +285,83 @@ VARIABLE _TCD-DEST  VARIABLE _TCD-SMASK  VARIABLE _TCD-PMASK
 : TTF-PT-FLAG    ( i -- flag ) _TTF-PTS-FL + C@ ;
 : TTF-PT-ONCURVE? ( i -- f )  TTF-PT-FLAG 1 AND ;
 : TTF-CONT-END   ( i -- idx ) CELLS _TTF-CONT-ENDS + @ ;
+
+\ =====================================================================
+\  cmap — character to glyph mapping (format 4 only)
+\ =====================================================================
+\  Format 4 is "Segment mapping to delta values", the standard encoding
+\  for BMP (Basic Multilingual Plane) characters in virtually all TTFs.
+
+VARIABLE _TTF-CMAP          \ base address of cmap table
+VARIABLE _TTF-CMAP4         \ base address of format 4 subtable
+VARIABLE _TTF-CMAP4-NSEG    \ segment count
+
+VARIABLE _CM-PID   VARIABLE _CM-EID
+
+: TTF-PARSE-CMAP  ( -- flag )
+    S" cmap" TTF-TAG TTF-FIND-TABLE
+    DUP 0= IF 2DROP FALSE EXIT THEN
+    DROP _TTF-CMAP !
+    \ Scan encoding records for format 4 subtable
+    \ Prefer (3,1) Windows Unicode BMP or (0,*) Unicode
+    _TTF-CMAP @ 2 + BE-W@              ( numRecs )
+    _TTF-CMAP @ 4 +                    ( numRecs rec )
+    SWAP 0 DO
+        DUP BE-W@ _CM-PID !
+        DUP 2 + BE-W@ _CM-EID !
+        _CM-PID @ 0=
+        _CM-PID @ 3 = _CM-EID @ 1 = AND
+        OR IF
+            DUP 4 + BE-L@ _TTF-CMAP @ + ( rec subtable )
+            DUP BE-W@ 4 = IF            \ format 4?
+                _TTF-CMAP4 !
+                DROP
+                _TTF-CMAP4 @ 6 + BE-W@ 2 / _TTF-CMAP4-NSEG !
+                TRUE UNLOOP EXIT
+            THEN
+            DROP
+        THEN
+        8 +
+    LOOP
+    DROP FALSE ;
+
+\ --- Format 4 segment array accessors ---
+\  endCode[i]        at subtable + 14 + 2*i
+\  (reservedPad)     at subtable + 14 + 2*segCount
+\  startCode[i]      at subtable + 16 + 2*segCount + 2*i
+\  idDelta[i]        at subtable + 16 + 4*segCount + 2*i
+\  idRangeOffset[i]  at subtable + 16 + 6*segCount + 2*i
+
+: _CMAP4-ENDCODE    ( i -- addr )
+    2 * _TTF-CMAP4 @ 14 + + ;
+: _CMAP4-STARTCODE  ( i -- addr )
+    2 * _TTF-CMAP4-NSEG @ 2 * + _TTF-CMAP4 @ 16 + + ;
+: _CMAP4-IDDELTA    ( i -- addr )
+    2 * _TTF-CMAP4-NSEG @ 4 * + _TTF-CMAP4 @ 16 + + ;
+: _CMAP4-IDRANGEOFF ( i -- addr )
+    2 * _TTF-CMAP4-NSEG @ 6 * + _TTF-CMAP4 @ 16 + + ;
+
+: TTF-CMAP-LOOKUP  ( unicode -- glyph-id )
+    _TTF-CMAP4-NSEG @ 0 DO
+        DUP I _CMAP4-ENDCODE BE-W@ <= IF
+            DUP I _CMAP4-STARTCODE BE-W@ >= IF
+                \ Codepoint is in segment I
+                I _CMAP4-IDRANGEOFF DUP BE-W@   ( cp ro-addr ro-val )
+                DUP 0= IF
+                    \ Simple delta: glyph = (cp + idDelta) mod 65536
+                    2DROP I _CMAP4-IDDELTA BE-SW@ + 0xFFFF AND
+                    UNLOOP EXIT
+                ELSE
+                    \ Indexed: addr = &rangeOff[i] + rangeOff + 2*(cp-start)
+                    OVER +                          ( cp base )
+                    SWAP I _CMAP4-STARTCODE BE-W@ - ( base c-s )
+                    2 * + BE-W@                     ( raw-gid )
+                    DUP 0<> IF
+                        I _CMAP4-IDDELTA BE-SW@ + 0xFFFF AND
+                    THEN
+                    UNLOOP EXIT
+                THEN
+            THEN
+        THEN
+    LOOP
+    DROP 0 ;
