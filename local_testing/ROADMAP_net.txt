@@ -1507,10 +1507,10 @@
 #     DT-NOW, DT-NOW-S, DT-NOW-MS
 #     48 tests — all pass → commit
 #
-#  Stage 14: table.f — Slot-array abstraction (CR-6, P2)
+#  Stage 14: table.f — Slot-array abstraction (CR-6, P2)  ✔ DONE
 #     TBL-CREATE, TBL-ALLOC, TBL-FREE, TBL-COUNT,
 #     TBL-SLOT, TBL-EACH, TBL-FIND, TBL-FLUSH
-#     Tests → commit
+#     28 tests — all pass → commit
 #
 #  Stage 15: ftp.f — FTP/FTPS client
 #     FTP-CONNECT, FTP-LOGIN, FTP-PASV, FTP-RETR, FTP-STOR,
