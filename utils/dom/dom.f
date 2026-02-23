@@ -966,3 +966,125 @@ VARIABLE _SIH-NEXT
         _SIH-NEXT @
     REPEAT
     HTML-OUTPUT-RESULT NIP ;
+
+\ =====================================================================
+\ Parser — HTML → DOM
+\ =====================================================================
+\
+\ DOM-PARSE-HTML     ( html-a html-u -- root )
+\ DOM-PARSE-FRAGMENT ( html-a html-u parent -- )
+\
+\ Walks input with MU-TAG-TYPE / MU-GET-TAG-NAME / MU-ATTR-NEXT.
+\ Builds DOM tree using L0–L4 words.  Void-element aware (html.f).
+
+\ -- Parser state ------------------------------------------------------
+
+VARIABLE _PH-CA   VARIABLE _PH-CL       \ cursor (addr, remaining len)
+VARIABLE _PH-PAR                          \ current parent node
+VARIABLE _PH-ROOT                         \ root parent (safety bound)
+VARIABLE _PH-NA   VARIABLE _PH-NL        \ extracted tag name
+VARIABLE _PH-NODE                         \ newly created node
+VARIABLE _PH-TYPE                         \ current tag type
+
+\ -- Parse attributes from post-name cursor ----------------------------
+
+VARIABLE _DPA-N
+VARIABLE _DPA-NA  VARIABLE _DPA-NL
+VARIABLE _DPA-VA  VARIABLE _DPA-VL
+
+: _DOM-PARSE-ATTRS  ( attr-a attr-u node -- )
+    _DPA-N !
+    BEGIN
+        MU-ATTR-NEXT
+    WHILE
+        _DPA-VL ! _DPA-VA ! _DPA-NL ! _DPA-NA !
+        _DPA-N @ _DPA-NA @ _DPA-NL @ _DPA-VA @ _DPA-VL @
+        DOM-ATTR!
+    REPEAT
+    2DROP 2DROP 2DROP ;
+
+\ -- Handle open tag ---------------------------------------------------
+
+: _DOM-PARSE-OPEN-CORE  ( -- )
+    _PH-CA @ _PH-CL @
+    MU-GET-TAG-NAME
+    _PH-NL ! _PH-NA !
+    _PH-NA @ _PH-NL @ DOM-CREATE-ELEMENT  _PH-NODE !
+    _PH-NODE @ _DOM-PARSE-ATTRS
+    _PH-NODE @ _PH-PAR @ DOM-APPEND
+    _PH-CA @ _PH-CL @ MU-SKIP-TAG  _PH-CL ! _PH-CA ! ;
+
+: _DOM-PARSE-OPEN  ( -- )
+    _DOM-PARSE-OPEN-CORE
+    _PH-NA @ _PH-NL @ HTML-VOID? 0= IF
+        _PH-NODE @ _PH-PAR !
+    THEN ;
+
+: _DOM-PARSE-SELF-CLOSE  ( -- )
+    _DOM-PARSE-OPEN-CORE ;
+
+\ -- Handle close tag --------------------------------------------------
+
+: _DOM-PARSE-CLOSE  ( -- )
+    _PH-CA @ _PH-CL @ MU-SKIP-TAG  _PH-CL ! _PH-CA !
+    _PH-PAR @ _PH-ROOT @ <> IF
+        _PH-PAR @ DOM-PARENT ?DUP IF _PH-PAR ! THEN
+    THEN ;
+
+\ -- Handle text -------------------------------------------------------
+
+VARIABLE _PH-TA   VARIABLE _PH-TL
+
+: _DOM-PARSE-TEXT  ( -- )
+    _PH-CA @ _PH-CL @ MU-GET-TEXT
+    _PH-TL ! _PH-TA !
+    _PH-CL ! _PH-CA !
+    _PH-TL @ 0> IF
+        _PH-TA @ _PH-TL @ DOM-CREATE-TEXT
+        _PH-PAR @ DOM-APPEND
+    THEN ;
+
+\ -- Handle comment ----------------------------------------------------
+
+VARIABLE _PHC-SA
+
+: _DOM-PARSE-COMMENT  ( -- )
+    _PH-CA @ _PHC-SA !
+    _PH-CA @ _PH-CL @ MU-SKIP-COMMENT  _PH-CL ! _PH-CA !
+    _PH-CA @ _PHC-SA @ - 7 -
+    DUP 0> IF
+        _PHC-SA @ 4 + SWAP
+        DOM-CREATE-COMMENT
+        _PH-PAR @ DOM-APPEND
+    ELSE
+        DROP
+    THEN ;
+
+\ -- Main parse loop ---------------------------------------------------
+
+: DOM-PARSE-FRAGMENT  ( html-a html-u parent -- )
+    _PH-PAR !  _PH-PAR @ _PH-ROOT !
+    _PH-CL ! _PH-CA !
+    BEGIN _PH-CL @ 0> WHILE
+        _PH-CA @ _PH-CL @ MU-TAG-TYPE  _PH-TYPE !
+        _PH-TYPE @ MU-T-TEXT = IF
+            _DOM-PARSE-TEXT
+        ELSE _PH-TYPE @ MU-T-OPEN = IF
+            _DOM-PARSE-OPEN
+        ELSE _PH-TYPE @ MU-T-CLOSE = IF
+            _DOM-PARSE-CLOSE
+        ELSE _PH-TYPE @ MU-T-SELF-CLOSE = IF
+            _DOM-PARSE-SELF-CLOSE
+        ELSE _PH-TYPE @ MU-T-COMMENT = IF
+            _DOM-PARSE-COMMENT
+        ELSE
+            _PH-CA @ _PH-CL @ MU-SKIP-TAG  _PH-CL ! _PH-CA !
+        THEN THEN THEN THEN THEN
+    REPEAT ;
+
+VARIABLE _PH-RESULT
+
+: DOM-PARSE-HTML  ( html-a html-u -- root )
+    DOM-CREATE-FRAGMENT _PH-RESULT !
+    _PH-RESULT @ DOM-PARSE-FRAGMENT
+    _PH-RESULT @ ;
