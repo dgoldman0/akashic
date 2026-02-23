@@ -1810,6 +1810,193 @@ def test_nth_child():
         '[R=0 ]')
 
 
+def test_serialize():
+    log_and_print("\n=== Serialization — DOM-TO-HTML ===")
+
+    # 1. Empty element → <div></div>
+    check("Serialize empty element",
+        tstr('div') + [
+            'VARIABLE _N1',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            ': t1 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t1'],
+        '[<div></div>]')
+
+    # 2. Void element → <br> (no close tag)
+    check("Serialize void element",
+        tstr('br') + [
+            'VARIABLE _N1',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            ': t2 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t2'],
+        '[<br>]')
+
+    # 3. Text node alone → hello
+    check("Serialize text node",
+        tstr('hello') + [
+            'VARIABLE _N1',
+            'TA DOM-CREATE-TEXT _N1 !',
+            ': t3 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t3'],
+        '[hello]')
+
+    # 4. Comment → <!-- hello -->
+    check("Serialize comment",
+        tstr('hello') + [
+            'VARIABLE _N1',
+            'TA DOM-CREATE-COMMENT _N1 !',
+            ': t4 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t4'],
+        '[<!-- hello -->]')
+
+    # 5. Element with text child → <div>hello</div>
+    check("Serialize element + text",
+        tstr('div') + [
+            'VARIABLE _N1  VARIABLE _N2',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 104 TC 101 TC 108 TC 108 TC 111 TC',
+            'TA DOM-CREATE-TEXT _N2 !',
+            '_N2 @ _N1 @ DOM-APPEND',
+            ': t5 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t5'],
+        '[<div>hello</div>]')
+
+    # 6. Nested elements → <div><span></span></div>
+    check("Serialize nested elements",
+        tstr('div') + [
+            'VARIABLE _N1  VARIABLE _N2',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 115 TC 112 TC 97 TC 110 TC',
+            'TA DOM-CREATE-ELEMENT _N2 !',
+            '_N2 @ _N1 @ DOM-APPEND',
+            ': t6 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t6'],
+        '[<div><span></span></div>]')
+
+    # 7. Deep nesting → <div><p><span>txt</span></p></div>
+    check("Serialize deep nesting",
+        tstr('div') + [
+            'VARIABLE _N1  VARIABLE _N2  VARIABLE _N3  VARIABLE _N4',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 112 TC  TA DOM-CREATE-ELEMENT _N2 !',
+            '_N2 @ _N1 @ DOM-APPEND',
+            'TR 115 TC 112 TC 97 TC 110 TC',
+            'TA DOM-CREATE-ELEMENT _N3 !',
+            '_N3 @ _N2 @ DOM-APPEND',
+            'TR 116 TC 120 TC 116 TC',
+            'TA DOM-CREATE-TEXT _N4 !',
+            '_N4 @ _N3 @ DOM-APPEND',
+            ': t7 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t7'],
+        '[<div><p><span>txt</span></p></div>]')
+
+    # 8. Siblings → <ul><li></li><li></li></ul>
+    check("Serialize siblings",
+        tstr('ul') + [
+            'VARIABLE _N1  VARIABLE _N2  VARIABLE _N3',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 108 TC 105 TC',
+            'TA DOM-CREATE-ELEMENT _N2 !',
+            '_N2 @ _N1 @ DOM-APPEND',
+            'TA DOM-CREATE-ELEMENT _N3 !',
+            '_N3 @ _N1 @ DOM-APPEND',
+            ': t8 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t8'],
+        '[<ul><li></li><li></li></ul>]')
+
+    # 9. Element with attribute → <div class="box"></div>
+    check("Serialize with attr",
+        tstr('div') + tstr2('box') + [
+            'VARIABLE _N1',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+            '_N1 @ TA UA DOM-ATTR!',
+            ': t9 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t9'],
+        '[<div class="box"></div>]')
+
+    # 10. Text escaping (< and > in text content)
+    check("Serialize text escaping",
+        tstr('p') + [
+            'VARIABLE _N1  VARIABLE _N2',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 60 TC 101 TC 109 TC 62 TC',
+            'TA DOM-CREATE-TEXT _N2 !',
+            '_N2 @ _N1 @ DOM-APPEND',
+            ': t10 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t10'],
+        '[<p>&lt;em&gt;</p>]')
+
+    # 11. Return value = correct length
+    check("TO-HTML returns length",
+        tstr('div') + [
+            'VARIABLE _N1',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            ': t11 _N1 @ _OB 1024 DOM-TO-HTML CR ." [N=" . ." ]" ; t11'],
+        '[N=11 ]')
+
+    # 12. Multiple attributes
+    check("Serialize multiple attrs",
+        tstr('a') + [
+            'VARIABLE _N1',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 104 TC 114 TC 101 TC 102 TC',
+            'UR 117 UC 114 UC 108 UC',
+            '_N1 @ TA UA DOM-ATTR!',
+            'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+            'UR 108 UC 105 UC 110 UC 107 UC',
+            '_N1 @ TA UA DOM-ATTR!',
+            ': t12 _N1 @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t12'],
+        check_fn=lambda out: 'href="url"' in out and 'class="link"' in out
+                             and '</a>]' in out)
+
+
+def test_inner_outer_html():
+    log_and_print("\n=== Serialization — Inner/Outer HTML ===")
+
+    # 1. Inner HTML → children only
+    check("Inner HTML",
+        tstr('div') + [
+            'VARIABLE _N1  VARIABLE _N2',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 115 TC 112 TC 97 TC 110 TC',
+            'TA DOM-CREATE-ELEMENT _N2 !',
+            '_N2 @ _N1 @ DOM-APPEND',
+            ': t1 _N1 @ _OB 1024 DOM-INNER-HTML CR ." [" _OB SWAP TYPE ." ]" ; t1'],
+        '[<span></span>]')
+
+    # 2. Inner HTML empty → returns 0
+    check("Inner HTML empty",
+        tstr('div') + [
+            'VARIABLE _N1',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            ': t2 _N1 @ _OB 1024 DOM-INNER-HTML CR ." [N=" . ." ]" ; t2'],
+        '[N=0 ]')
+
+    # 3. Outer HTML == TO-HTML (same length)
+    check("Outer HTML equals TO-HTML",
+        tstr('div') + [
+            'VARIABLE _N1  VARIABLE _L1',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            ': t3 _N1 @ _OB 1024 DOM-TO-HTML _L1 ! _N1 @ _OB 1024 DOM-OUTER-HTML _L1 @ = CR ." [OK=" . ." ]" ; t3'],
+        '[OK=-1 ]')
+
+    # 4. Fragment → children only (no wrapping tag)
+    check("Serialize fragment",
+        ['VARIABLE _F  VARIABLE _N1  VARIABLE _N2',
+         'DOM-CREATE-FRAGMENT _F !',
+         'TR 100 TC 105 TC 118 TC',
+         'TA DOM-CREATE-ELEMENT _N1 !',
+         '_N1 @ _F @ DOM-APPEND',
+         'TR 112 TC',
+         'TA DOM-CREATE-ELEMENT _N2 !',
+         '_N2 @ _F @ DOM-APPEND',
+         ': t4 _F @ _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t4'],
+        '[<div></div><p></p>]')
+
+    # 5. Inner HTML with multiple children
+    check("Inner HTML multi children",
+        tstr('div') + [
+            'VARIABLE _N1  VARIABLE _N2  VARIABLE _N3',
+            'TA DOM-CREATE-ELEMENT _N1 !',
+            'TR 97 TC  TA DOM-CREATE-ELEMENT _N2 !',
+            '_N2 @ _N1 @ DOM-APPEND',
+            'TR 98 TC  TA DOM-CREATE-ELEMENT _N3 !',
+            '_N3 @ _N1 @ DOM-APPEND',
+            ': t5 _N1 @ _OB 1024 DOM-INNER-HTML CR ." [" _OB SWAP TYPE ." ]" ; t5'],
+        '[<a></a><b></b>]')
+
+
 # ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
@@ -1849,6 +2036,8 @@ if __name__ == '__main__':
         test_get_by_class()
         test_walk_depth()
         test_nth_child()
+        test_serialize()
+        test_inner_outer_html()
     finally:
         log_and_print(f"\n{'='*50}")
         log_and_print(f"Results: {_pass_count} passed, {_fail_count} failed, "
