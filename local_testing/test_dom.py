@@ -308,6 +308,24 @@ def tstr(s):
     return lines
 
 
+def tstr2(s):
+    """Build string in second test buffer _UB using UR/UC."""
+    parts = ['UR']
+    for ch in s:
+        parts.append(f'{ord(ch)} UC')
+    full = " ".join(parts)
+    lines = []
+    while len(full) > 70:
+        split_at = full.rfind(' ', 0, 70)
+        if split_at == -1:
+            split_at = 70
+        lines.append(full[:split_at])
+        full = full[split_at:].lstrip()
+    if full:
+        lines.append(full)
+    return lines
+
+
 # ---------------------------------------------------------------------------
 #  Test framework
 # ---------------------------------------------------------------------------
@@ -919,6 +937,255 @@ def test_tree_traversal():
 
 
 # ---------------------------------------------------------------------------
+#  Stage 3 Tests — Attribute Storage
+# ---------------------------------------------------------------------------
+
+def test_attr_basic():
+    log_and_print("\n=== Attribute — Basic ===")
+
+    # 1. Set attr and get it back
+    check("Set and get attr",
+        tstr('id') + tstr2('main') + [
+            'VARIABLE _N',
+            ': t1 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ TA DOM-ATTR@',
+            '  CR ." [F=" . ." ]"',
+            '  CR ." [V=" TYPE ." ]" ; t1'],
+        check_fn=lambda out: '[F=-1 ]' in out and '[V=main]' in out)
+
+    # 2. Get non-existent attr returns 0 0 0
+    check("Get missing attr",
+        tstr('href') + [
+            ': t2 DOM-T-ELEMENT _DOM-ALLOC TA DOM-ATTR@',
+            '  CR ." [F=" . ." ][A=" . ." ][L=" . ." ]" ; t2'],
+        '[F=0 ][A=0 ][L=0 ]')
+
+    # 3. DOM-ATTR-HAS? true
+    check("ATTR-HAS? true",
+        tstr('id') + tstr2('x') + [
+            'VARIABLE _N',
+            ': t3 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ TA DOM-ATTR-HAS?',
+            '  CR ." [H=" . ." ]" ; t3'],
+        '[H=-1 ]')
+
+    # 4. DOM-ATTR-HAS? false
+    check("ATTR-HAS? false",
+        tstr('href') + [
+            ': t4 DOM-T-ELEMENT _DOM-ALLOC TA DOM-ATTR-HAS?',
+            '  CR ." [H=" . ." ]" ; t4'],
+        '[H=0 ]')
+
+    # 5. DOM-ATTR-COUNT on empty node
+    check("Attr count = 0",
+        [': t5 DOM-T-ELEMENT _DOM-ALLOC DOM-ATTR-COUNT',
+         '  CR ." [AC=" . ." ]" ; t5'],
+        '[AC=0 ]')
+
+    # 6. Set one attr, count = 1
+    check("Attr count = 1",
+        tstr('id') + tstr2('x') + [
+            'VARIABLE _N',
+            ': t6 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ DOM-ATTR-COUNT',
+            '  CR ." [AC=" . ." ]" ; t6'],
+        '[AC=1 ]')
+
+    # 7. Set two attrs, count = 2
+    check("Attr count = 2",
+        tstr('id') + tstr2('x') + [
+            'VARIABLE _N',
+            ': t7 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+            '  UR 102 TC 111 TC 111 TC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ DOM-ATTR-COUNT',
+            '  CR ." [AC=" . ." ]" ; t7'],
+        check_fn=lambda out: '[AC=2 ]' in out)
+
+    # 8. Update existing attr
+    check("Update existing attr",
+        tstr('id') + tstr2('old') + [
+            'VARIABLE _N',
+            ': t8 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  UR 110 UC 101 UC 119 UC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ TA DOM-ATTR@',
+            '  CR ." [F=" . ." ]"',
+            '  CR ." [V=" TYPE ." ]"',
+            '  _N @ DOM-ATTR-COUNT',
+            '  CR ." [AC=" . ." ]" ; t8'],
+        check_fn=lambda out: '[F=-1 ]' in out and '[V=new]' in out and '[AC=1 ]' in out)
+
+
+def test_attr_case():
+    log_and_print("\n=== Attribute — Case Insensitive ===")
+
+    # 1. Case-insensitive get
+    check("Case-insensitive get",
+        tstr('ID') + tstr2('main') + [
+            'VARIABLE _N',
+            ': t1 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 105 TC 100 TC',
+            '  _N @ TA DOM-ATTR@',
+            '  CR ." [F=" . ." ]"',
+            '  CR ." [V=" TYPE ." ]" ; t1'],
+        check_fn=lambda out: '[F=-1 ]' in out and '[V=main]' in out)
+
+    # 2. Case-insensitive has
+    check("Case-insensitive has",
+        tstr('Class') + tstr2('box') + [
+            'VARIABLE _N',
+            ': t2 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+            '  _N @ TA DOM-ATTR-HAS?',
+            '  CR ." [H=" . ." ]" ; t2'],
+        '[H=-1 ]')
+
+    # 3. Case-insensitive update (set with different case)
+    check("Case-insensitive update",
+        tstr('id') + tstr2('old') + [
+            'VARIABLE _N',
+            ': t3 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 73 TC 68 TC',
+            '  UR 110 UC 101 UC 119 UC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ DOM-ATTR-COUNT',
+            '  CR ." [AC=" . ." ]"',
+            '  TR 105 TC 100 TC',
+            '  _N @ TA DOM-ATTR@',
+            '  CR ." [F=" . ." ]"',
+            '  CR ." [V=" TYPE ." ]" ; t3'],
+        check_fn=lambda out: '[AC=1 ]' in out and '[F=-1 ]' in out and '[V=new]' in out)
+
+
+def test_attr_delete():
+    log_and_print("\n=== Attribute — Delete ===")
+
+    # 1. Delete only attr
+    check("Delete only attr",
+        tstr('id') + tstr2('x') + [
+            'VARIABLE _N',
+            ': t1 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ TA DOM-ATTR-DEL',
+            '  _N @ DOM-ATTR-COUNT',
+            '  CR ." [AC=" . ." ]"',
+            '  _N @ TA DOM-ATTR-HAS?',
+            '  CR ." [H=" . ." ]" ; t1'],
+        check_fn=lambda out: '[AC=0 ]' in out and '[H=0 ]' in out)
+
+    # 2. Delete first of two
+    check("Delete first of two attrs",
+        tstr('id') + tstr2('x') + [
+            'VARIABLE _N',
+            ': t2 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 104 TC 114 TC 101 TC 102 TC',
+            '  UR 47 UC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 104 TC 114 TC 101 TC 102 TC',
+            '  _N @ TA DOM-ATTR-DEL',
+            '  _N @ DOM-ATTR-COUNT',
+            '  CR ." [AC=" . ." ]"',
+            '  TR 105 TC 100 TC',
+            '  _N @ TA DOM-ATTR-HAS?',
+            '  CR ." [H=" . ." ]" ; t2'],
+        check_fn=lambda out: '[AC=1 ]' in out and '[H=-1 ]' in out)
+
+    # 3. Delete second of two
+    check("Delete second of two attrs",
+        tstr('id') + tstr2('x') + [
+            'VARIABLE _N',
+            ': t3 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 104 TC 114 TC 101 TC 102 TC',
+            '  UR 47 UC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 105 TC 100 TC',
+            '  _N @ TA DOM-ATTR-DEL',
+            '  _N @ DOM-ATTR-COUNT',
+            '  CR ." [AC=" . ." ]"',
+            '  TR 104 TC 114 TC 101 TC 102 TC',
+            '  _N @ TA DOM-ATTR-HAS?',
+            '  CR ." [H=" . ." ]" ; t3'],
+        check_fn=lambda out: '[AC=1 ]' in out and '[H=-1 ]' in out)
+
+    # 4. Delete non-existent attr is no-op
+    check("Delete non-existent no-op",
+        tstr('nope') + [
+            'VARIABLE _N',
+            ': t4 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA DOM-ATTR-DEL',
+            '  CR ." [OK]" ; t4'],
+        '[OK]')
+
+
+def test_attr_iterate():
+    log_and_print("\n=== Attribute — Iteration ===")
+
+    # 1. Iterate over attrs (order: last-set is first in list)
+    check("Iterate attrs",
+        tstr('id') + tstr2('main') + [
+            'VARIABLE _N  VARIABLE _AT',
+            ': t1 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  TR 104 TC 114 TC 101 TC 102 TC',
+            '  UR 47 UC',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ DOM-ATTR-FIRST _AT !',
+            '  _AT @ DOM-ATTR-NAME@ CR ." [N1=" TYPE ." ]"',
+            '  _AT @ DOM-ATTR-VAL@ CR ." [V1=" TYPE ." ]"',
+            '  _AT @ DOM-ATTR-NEXTATTR _AT !',
+            '  _AT @ DOM-ATTR-NAME@ CR ." [N2=" TYPE ." ]"',
+            '  _AT @ DOM-ATTR-VAL@ CR ." [V2=" TYPE ." ]"',
+            '  _AT @ DOM-ATTR-NEXTATTR',
+            '  CR ." [END=" . ." ]" ; t1'],
+        check_fn=lambda out: '[N1=href]' in out and '[V1=/]' in out and
+                             '[N2=id]' in out and '[V2=main]' in out and
+                             '[END=0 ]' in out)
+
+
+def test_attr_shortcuts():
+    log_and_print("\n=== Attribute — Shortcuts ===")
+
+    # 1. DOM-ID
+    check("DOM-ID returns id value",
+        tstr('id') + tstr2('page') + [
+            'VARIABLE _N',
+            ': t1 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ DOM-ID',
+            '  CR ." [L=" DUP . ." ]"',
+            '  CR ." [V=" TYPE ." ]" ; t1'],
+        check_fn=lambda out: '[L=4 ]' in out and '[V=page]' in out)
+
+    # 2. DOM-ID on node without id
+    check("DOM-ID no id returns 0 0",
+        [': t2 DOM-T-ELEMENT _DOM-ALLOC DOM-ID',
+         '  CR ." [L=" . ." ][A=" . ." ]" ; t2'],
+        '[L=0 ][A=0 ]')
+
+    # 3. DOM-CLASS
+    check("DOM-CLASS returns class value",
+        tstr('class') + tstr2('box red') + [
+            'VARIABLE _N',
+            ': t3 DOM-T-ELEMENT _DOM-ALLOC _N !',
+            '  _N @ TA UA DOM-ATTR!',
+            '  _N @ DOM-CLASS',
+            '  CR ." [V=" TYPE ." ]" ; t3'],
+        '[V=box red]')
+
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -937,6 +1204,11 @@ if __name__ == '__main__':
         test_tree_detach()
         test_tree_insert_before()
         test_tree_traversal()
+        test_attr_basic()
+        test_attr_case()
+        test_attr_delete()
+        test_attr_iterate()
+        test_attr_shortcuts()
     finally:
         log_and_print(f"\n{'='*50}")
         log_and_print(f"Results: {_pass_count} passed, {_fail_count} failed, "
