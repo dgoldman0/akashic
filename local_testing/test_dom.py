@@ -1997,6 +1997,122 @@ def test_inner_outer_html():
         '[<a></a><b></b>]')
 
 
+def test_parse_basic():
+    log_and_print("\n=== Parser — Basic ===")
+
+    # 1. Simple element
+    check("Parse simple element",
+        tstr('<div></div>') + [
+            'VARIABLE _R',
+            ': t1 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD DOM-TAG-NAME CR ." [" TYPE ." ]" ; t1'],
+        '[div]')
+
+    # 2. Nested elements
+    check("Parse nested",
+        tstr('<div><span></span></div>') + [
+            'VARIABLE _R',
+            ': t2 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD DOM-FIRST-CHILD DOM-TAG-NAME CR ." [" TYPE ." ]" ; t2'],
+        '[span]')
+
+    # 3. Text content
+    check("Parse text content",
+        tstr('<p>hello</p>') + [
+            'VARIABLE _R',
+            ': t3 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD DOM-FIRST-CHILD DOM-TEXT CR ." [" TYPE ." ]" ; t3'],
+        '[hello]')
+
+    # 4. Attribute
+    check("Parse attribute",
+        tstr('<div class="box"></div>') + [
+            'VARIABLE _R',
+            ': t4 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD DOM-CLASS CR ." [" TYPE ." ]" ; t4'],
+        '[box]')
+
+    # 5. Void element — br has no children, text after it is sibling
+    check("Parse void element",
+        tstr('<br>') + [
+            'VARIABLE _R  VARIABLE _B',
+            ': t5 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD _B ! _B @ DOM-TAG-NAME CR ." [" TYPE ." ]" _B @ DOM-CHILD-COUNT CR ." [C=" . ." ]" ; t5'],
+        check_fn=lambda out: '[br]' in out and '[C=0 ]' in out)
+
+    # 6. Self-closing tag
+    check("Parse self-closing",
+        tstr('<img/>') + [
+            'VARIABLE _R',
+            ': t6 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD DOM-TAG-NAME CR ." [" TYPE ." ]" ; t6'],
+        '[img]')
+
+    # 7. Comment
+    check("Parse comment",
+        tstr('<!-- note -->') + [
+            'VARIABLE _R  VARIABLE _C',
+            ': t7 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD _C ! _C @ DOM-TYPE@ CR ." [T=" . ." ]" ; t7'],
+        '[T=3 ]')
+
+    # 8. DOCTYPE is skipped
+    check("Parse skips DOCTYPE",
+        tstr('<!DOCTYPE html><p></p>') + [
+            'VARIABLE _R',
+            ': t8 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD DOM-TAG-NAME CR ." [" TYPE ." ]" ; t8'],
+        '[p]')
+
+
+def test_parse_complex():
+    log_and_print("\n=== Parser — Complex ===")
+
+    # 1. Multiple children
+    check("Parse multiple children",
+        tstr('<ul><li></li><li></li></ul>') + [
+            'VARIABLE _R',
+            ': t1 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD DOM-CHILD-COUNT CR ." [C=" . ." ]" ; t1'],
+        '[C=2 ]')
+
+    # 2. Deep nesting
+    check("Parse deep nesting",
+        tstr('<div><p><span>x</span></p></div>') + [
+            'VARIABLE _R  VARIABLE _D',
+            ': t2 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD _D !',
+            '  _D @ DOM-FIRST-CHILD DOM-FIRST-CHILD DOM-FIRST-CHILD',
+            '  DOM-TEXT CR ." [" TYPE ." ]" ; t2'],
+        '[x]')
+
+    # 3. Void inside element — text after br
+    check("Parse void inside element",
+        tstr('<p>a<br>b</p>') + [
+            'VARIABLE _R  VARIABLE _P',
+            ': t3 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD _P ! _P @ DOM-CHILD-COUNT CR ." [C=" . ." ]" ; t3'],
+        '[C=3 ]')
+
+    # 4. Multiple attributes
+    check("Parse multiple attrs",
+        tstr('<a href="u" class="l"></a>') + [
+            'VARIABLE _R  VARIABLE _A',
+            ': t4 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD _A ! _A @ DOM-ATTR-COUNT CR ." [C=" . ." ]" _A @ DOM-CLASS CR ." [" TYPE ." ]" ; t4'],
+        check_fn=lambda out: '[C=2 ]' in out and '[l]' in out)
+
+    # 5. Mixed text and elements
+    check("Parse mixed text and elements",
+        tstr('hi <b>world</b>!') + [
+            'VARIABLE _R',
+            ': t5 TA DOM-PARSE-HTML _R ! _R @ DOM-CHILD-COUNT CR ." [C=" . ." ]" ; t5'],
+        '[C=3 ]')
+
+    # 6. Parse fragment into existing parent
+    check("Parse fragment",
+        vstr('<a></a><b></b>') + [
+            'VARIABLE _P',
+            'TR 100 TC 105 TC 118 TC  TA DOM-CREATE-ELEMENT _P !',
+            ': t6 VA _P @ DOM-PARSE-FRAGMENT _P @ DOM-CHILD-COUNT CR ." [C=" . ." ]" ; t6'],
+        '[C=2 ]')
+
+    # 7. Round-trip: parse then serialize
+    check("Parse-serialize round trip",
+        tstr('<div><p>hello</p></div>') + [
+            'VARIABLE _R',
+            ': t7 TA DOM-PARSE-HTML _R ! _R @ DOM-FIRST-CHILD _OB 1024 DOM-TO-HTML CR ." [" _OB SWAP TYPE ." ]" ; t7'],
+        '[<div><p>hello</p></div>]')
+
+
 # ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
@@ -2038,6 +2154,8 @@ if __name__ == '__main__':
         test_nth_child()
         test_serialize()
         test_inner_outer_html()
+        test_parse_basic()
+        test_parse_complex()
     finally:
         log_and_print(f"\n{'='*50}")
         log_and_print(f"Results: {_pass_count} passed, {_fail_count} failed, "
