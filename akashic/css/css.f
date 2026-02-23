@@ -9,7 +9,7 @@
 \
 \ Load with:   REQUIRE css.f
 
-REQUIRE string.f
+REQUIRE ../utils/string.f
 
 PROVIDED akashic-css
 
