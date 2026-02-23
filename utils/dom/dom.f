@@ -365,3 +365,153 @@ VARIABLE _DCC-N
     BEGIN  OVER  WHILE
         1+  SWAP N.NEXT-SIB @ SWAP
     REPEAT  NIP ;
+
+\ =====================================================================
+\  Layer 3 — Attribute Storage
+\ =====================================================================
+\
+\  Attr record layout (3 cells = 24 bytes):
+\    +0   name    string handle
+\    +8   value   string handle
+\   +16   next    next attr address (0 = end of list)
+
+: A.NAME   ;            \ +0
+: A.VALUE  8 + ;        \ +8
+: A.NEXT   16 + ;       \ +16
+
+\ -- Helpers -------------------------------------------------------
+
+\ _DOM-TOLOWER ( c -- c' )
+\   Convert ASCII uppercase to lowercase; leave others unchanged.
+: _DOM-TOLOWER  ( c -- c' )
+    DUP 65 < IF EXIT THEN
+    DUP 90 > IF EXIT THEN
+    32 + ;
+
+\ _DOM-CISTREQ ( a1 u1 a2 u2 -- flag )
+\   Case-insensitive byte-string equality.
+VARIABLE _DCS-1   VARIABLE _DCS-2
+VARIABLE _DCS-L   VARIABLE _DCS-I
+
+: _DOM-CISTREQ  ( a1 u1 a2 u2 -- flag )
+    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
+    _DCS-L !  _DCS-2 !  _DCS-1 !
+    _DCS-L @ 0= IF -1 EXIT THEN
+    0 _DCS-I !
+    BEGIN _DCS-I @ _DCS-L @ < WHILE
+        _DCS-1 @ _DCS-I @ + C@  _DOM-TOLOWER
+        _DCS-2 @ _DCS-I @ + C@  _DOM-TOLOWER
+        <> IF 0 EXIT THEN
+        _DCS-I @ 1+ _DCS-I !
+    REPEAT
+    -1 ;
+
+\ -- Attr allocation -----------------------------------------------
+
+\ _DOM-ATTR-ALLOC ( -- attr )
+\   Pop attr slot from free-list, zero and return.
+: _DOM-ATTR-ALLOC  ( -- attr )
+    DOM-DOC D.ATTR-FREE @
+    DUP 0= ABORT" DOM attr pool exhausted"
+    DUP @  DOM-DOC D.ATTR-FREE !
+    DUP 24 0 FILL ;
+
+\ _DOM-ATTR-RELEASE ( attr -- )
+\   Release name/value strings, zero slot, push onto free-list.
+: _DOM-ATTR-RELEASE  ( attr -- )
+    DUP A.NAME @ _DOM-STR-RELEASE
+    DUP A.VALUE @ _DOM-STR-RELEASE
+    DUP 24 0 FILL
+    DOM-DOC D.ATTR-FREE @  OVER !
+    DOM-DOC D.ATTR-FREE ! ;
+
+\ -- Attribute access -----------------------------------------------
+
+\ DOM-ATTR@ ( node name-a name-u -- val-a val-u flag )
+\   Get attribute value by name (case-insensitive).
+\   Returns value string and -1 if found, or 0 0 0 if not.
+VARIABLE _DAG-NA   VARIABLE _DAG-NL   VARIABLE _DAG-A
+
+: DOM-ATTR@  ( node name-a name-u -- val-a val-u flag )
+    _DAG-NL !  _DAG-NA !
+    N.FIRST-ATTR @  _DAG-A !
+    BEGIN _DAG-A @ WHILE
+        _DAG-A @ A.NAME @ _DOM-STR-GET
+        _DAG-NA @ _DAG-NL @  _DOM-CISTREQ IF
+            _DAG-A @ A.VALUE @ _DOM-STR-GET -1 EXIT
+        THEN
+        _DAG-A @ A.NEXT @  _DAG-A !
+    REPEAT
+    0 0 0 ;
+
+\ DOM-ATTR! ( node name-a name-u val-a val-u -- )
+\   Set attribute: update existing or create new.
+VARIABLE _DAS-N   VARIABLE _DAS-NA   VARIABLE _DAS-NL
+VARIABLE _DAS-VA  VARIABLE _DAS-VL   VARIABLE _DAS-A
+
+: DOM-ATTR!  ( node name-a name-u val-a val-u -- )
+    _DAS-VL !  _DAS-VA !  _DAS-NL !  _DAS-NA !  _DAS-N !
+    _DAS-N @ N.FIRST-ATTR @  _DAS-A !
+    BEGIN _DAS-A @ WHILE
+        _DAS-A @ A.NAME @ _DOM-STR-GET
+        _DAS-NA @ _DAS-NL @  _DOM-CISTREQ IF
+            \ Update existing
+            _DAS-A @ A.VALUE @ _DOM-STR-RELEASE
+            _DAS-VA @ _DAS-VL @ _DOM-STR-ALLOC  _DAS-A @ A.VALUE !
+            EXIT
+        THEN
+        _DAS-A @ A.NEXT @  _DAS-A !
+    REPEAT
+    \ Create new attr — link at head
+    _DOM-ATTR-ALLOC  _DAS-A !
+    _DAS-NA @ _DAS-NL @ _DOM-STR-ALLOC  _DAS-A @ A.NAME !
+    _DAS-VA @ _DAS-VL @ _DOM-STR-ALLOC  _DAS-A @ A.VALUE !
+    _DAS-N @ N.FIRST-ATTR @  _DAS-A @ A.NEXT !
+    _DAS-A @  _DAS-N @ N.FIRST-ATTR ! ;
+
+\ DOM-ATTR-DEL ( node name-a name-u -- )
+\   Remove attribute by name (case-insensitive).
+VARIABLE _DAD-N   VARIABLE _DAD-NA   VARIABLE _DAD-NL
+VARIABLE _DAD-A   VARIABLE _DAD-P
+
+: DOM-ATTR-DEL  ( node name-a name-u -- )
+    _DAD-NL !  _DAD-NA !  _DAD-N !
+    _DAD-N @ N.FIRST-ATTR @  _DAD-A !
+    0 _DAD-P !
+    BEGIN _DAD-A @ WHILE
+        _DAD-A @ A.NAME @ _DOM-STR-GET
+        _DAD-NA @ _DAD-NL @  _DOM-CISTREQ IF
+            _DAD-P @ IF
+                _DAD-A @ A.NEXT @  _DAD-P @ A.NEXT !
+            ELSE
+                _DAD-A @ A.NEXT @  _DAD-N @ N.FIRST-ATTR !
+            THEN
+            _DAD-A @ _DOM-ATTR-RELEASE
+            EXIT
+        THEN
+        _DAD-A @ _DAD-P !
+        _DAD-A @ A.NEXT @  _DAD-A !
+    REPEAT ;
+
+\ DOM-ATTR-HAS? ( node name-a name-u -- flag )
+: DOM-ATTR-HAS?  ( node name-a name-u -- flag )
+    DOM-ATTR@  NIP NIP ;
+
+\ DOM-ATTR-COUNT ( node -- n )
+: DOM-ATTR-COUNT  ( node -- n )
+    N.FIRST-ATTR @  0
+    BEGIN OVER WHILE
+        1+  SWAP A.NEXT @ SWAP
+    REPEAT NIP ;
+
+\ -- Attr iteration -------------------------------------------------
+
+: DOM-ATTR-FIRST    ( node -- attr|0 )    N.FIRST-ATTR @ ;
+: DOM-ATTR-NEXTATTR ( attr -- attr|0 )    A.NEXT @ ;
+: DOM-ATTR-NAME@    ( attr -- a u )       A.NAME @ _DOM-STR-GET ;
+: DOM-ATTR-VAL@     ( attr -- a u )       A.VALUE @ _DOM-STR-GET ;
+
+\ -- Shortcuts -------------------------------------------------------
+
+: DOM-ID     ( node -- str-a str-u )   S" id" DOM-ATTR@ DROP ;
+: DOM-CLASS  ( node -- str-a str-u )   S" class" DOM-ATTR@ DROP ;
