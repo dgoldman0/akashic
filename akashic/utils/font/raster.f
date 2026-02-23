@@ -183,3 +183,80 @@ VARIABLE _RST-PAIR-I
         _RST-SORT-XINTS
         I _RST-FILL-PAIRS
     LOOP ;
+
+\ =====================================================================
+\  Glyph contour → edge table (Stage C)
+\ =====================================================================
+\  Walks decoded glyph contours (from ttf.f's TTF-DECODE-GLYPH),
+\  scales coordinates, and feeds edges into the raster edge table.
+\
+\  TrueType contours: sequence of on-curve and off-curve points.
+\  Off-curve points are quadratic Bézier control points.
+\  Two consecutive off-curve points have an implied on-curve midpoint.
+\
+\  For now (C1): all points treated as line vertices (coarse but
+\  functional — Bézier flatten integration comes in Stage C2).
+
+REQUIRE ttf.f
+
+VARIABLE _RST-SCALE-N   \ numerator: target pixel size
+VARIABLE _RST-SCALE-D   \ denominator: unitsPerEm
+VARIABLE _RST-YFLIP     \ target height for Y-flip
+
+: RAST-SCALE!  ( pixel-size upem -- )
+    _RST-SCALE-D !  _RST-SCALE-N ! ;
+
+: _RST-SCALE-X  ( font-x -- pixel-x )
+    _RST-SCALE-N @ * _RST-SCALE-D @ / ;
+
+: _RST-SCALE-Y  ( font-y -- pixel-y )
+    _RST-SCALE-N @ * _RST-SCALE-D @ /
+    _RST-YFLIP @ SWAP - ;            \ flip Y (TTF y-up → screen y-down)
+
+\ Walk one contour from point index 'start' to 'end' (inclusive).
+\ Emits edges between consecutive points, closing the contour.
+VARIABLE _RST-PREV-X   VARIABLE _RST-PREV-Y
+VARIABLE _RST-FIRST-X  VARIABLE _RST-FIRST-Y
+VARIABLE _RST-CONT-S   VARIABLE _RST-CONT-E
+
+: _RST-WALK-CONTOUR  ( start end -- )
+    _RST-CONT-E !  _RST-CONT-S !
+    \ First point → prev and first
+    _RST-CONT-S @ TTF-PT-X _RST-SCALE-X
+    DUP _RST-PREV-X !  _RST-FIRST-X !
+    _RST-CONT-S @ TTF-PT-Y _RST-SCALE-Y
+    DUP _RST-PREV-Y !  _RST-FIRST-Y !
+    \ Remaining points
+    _RST-CONT-E @ 1+ _RST-CONT-S @ 1+ DO
+        _RST-PREV-X @ _RST-PREV-Y @
+        I TTF-PT-X _RST-SCALE-X
+        I TTF-PT-Y _RST-SCALE-Y
+        2DUP _RST-PREV-Y ! _RST-PREV-X !
+        RAST-EDGE
+    LOOP
+    \ Close contour: prev → first
+    _RST-PREV-X @ _RST-PREV-Y @
+    _RST-FIRST-X @ _RST-FIRST-Y @
+    RAST-EDGE ;
+
+\ Rasterize a glyph into a bitmap buffer.
+\ Pre: TTF-PARSE-HEAD, MAXP, LOCA, GLYF already called.
+VARIABLE _RST-G-BUF  VARIABLE _RST-G-W  VARIABLE _RST-G-H
+
+: RAST-GLYPH  ( glyph-id pixel-size buf-addr w h -- ok? )
+    DUP _RST-YFLIP !
+    _RST-G-H !  _RST-G-W !  _RST-G-BUF !   ( gid pxsz )
+    TTF-UPEM RAST-SCALE!                     ( gid )
+    RAST-RESET
+    TTF-DECODE-GLYPH                         ( npts ncont | 0 0 )
+    DUP 0= IF 2DROP FALSE EXIT THEN
+    \ Walk each contour
+    0                                        ( npts ncont start )
+    SWAP 0 DO                                ( npts start )
+        DUP I TTF-CONT-END                   ( npts start end )
+        _RST-WALK-CONTOUR                    ( npts )
+        I TTF-CONT-END 1+                    ( npts next-start )
+    LOOP
+    2DROP
+    _RST-G-BUF @ _RST-G-W @ _RST-G-H @ RAST-FILL
+    TRUE ;
