@@ -532,6 +532,393 @@ def test_multi_document():
 
 
 # ---------------------------------------------------------------------------
+#  Stage 2 Tests — Node Allocation & Tree Structure
+# ---------------------------------------------------------------------------
+
+def test_node_alloc():
+    log_and_print("\n=== Node Allocation ===")
+
+    # 1. Alloc element node returns non-zero
+    check("Alloc element returns non-zero",
+        [': t1 DOM-T-ELEMENT _DOM-ALLOC CR ." [N=" . ." ]" ; t1'],
+        check_fn=lambda out: '[N=' in out and '[N=0 ]' not in out)
+
+    # 2. Alloc element sets type = 1
+    check("Alloc element type = 1",
+        [': t2 DOM-T-ELEMENT _DOM-ALLOC DOM-TYPE@ CR ." [T=" . ." ]" ; t2'],
+        '[T=1 ]')
+
+    # 3. Alloc text node sets type = 2
+    check("Alloc text type = 2",
+        [': t3 DOM-T-TEXT _DOM-ALLOC DOM-TYPE@ CR ." [T=" . ." ]" ; t3'],
+        '[T=2 ]')
+
+    # 4. Alloc comment sets type = 3
+    check("Alloc comment type = 3",
+        [': t4 DOM-T-COMMENT _DOM-ALLOC DOM-TYPE@ CR ." [T=" . ." ]" ; t4'],
+        '[T=3 ]')
+
+    # 5. Two allocs give different addresses
+    check("Two allocs different addresses",
+        [': t5 DOM-T-ELEMENT _DOM-ALLOC DOM-T-ELEMENT _DOM-ALLOC',
+         '  CR ." [EQ=" = . ." ]" ; t5'],
+        '[EQ=0 ]')
+
+    # 6. Freshly allocated node has zero parent
+    check("Fresh node parent = 0",
+        [': t6 DOM-T-ELEMENT _DOM-ALLOC DOM-PARENT',
+         '  CR ." [P=" . ." ]" ; t6'],
+        '[P=0 ]')
+
+    # 7. Freshly allocated node has no children
+    check("Fresh node first-child = 0",
+        [': t7 DOM-T-ELEMENT _DOM-ALLOC DOM-FIRST-CHILD',
+         '  CR ." [FC=" . ." ]" ; t7'],
+        '[FC=0 ]')
+
+    # 8. Freshly allocated node has no siblings
+    check("Fresh node next-sib = 0",
+        [': t8 DOM-T-ELEMENT _DOM-ALLOC DOM-NEXT',
+         '  CR ." [NS=" . ." ]" ; t8'],
+        '[NS=0 ]')
+
+    # 9. Free + re-alloc reuses slot
+    check("Free then re-alloc reuses slot",
+        [': t9 DOM-T-ELEMENT _DOM-ALLOC DUP _DOM-FREE',
+         '  DOM-T-TEXT _DOM-ALLOC',
+         '  CR ." [EQ=" = . ." ]" ; t9'],
+        '[EQ=-1 ]')
+
+    # 10. Re-allocated node has correct new type
+    check("Re-alloc node has new type",
+        [': t10 DOM-T-ELEMENT _DOM-ALLOC DUP _DOM-FREE',
+         '  DOM-T-TEXT _DOM-ALLOC DOM-TYPE@',
+         '  CR ." [T=" . ." ]" ; t10'],
+        '[T=2 ]')
+
+    # 11. DOM-FLAGS@ starts at 0
+    check("Flags start at 0",
+        [': t11 DOM-T-ELEMENT _DOM-ALLOC DOM-FLAGS@',
+         '  CR ." [F=" . ." ]" ; t11'],
+        '[F=0 ]')
+
+    # 12. DOM-FLAGS! sets flags
+    check("Flags store/fetch",
+        [': t12 DOM-T-ELEMENT _DOM-ALLOC',
+         '  42 OVER DOM-FLAGS!  DOM-FLAGS@',
+         '  CR ." [F=" . ." ]" ; t12'],
+        '[F=42 ]')
+
+    # 13. Node free-list head is non-zero (has free nodes)
+    check("Free-list head non-zero",
+        [': t13 DOM-DOC D.NODE-FREE @',
+         '  CR ." [FL=" . ." ]" ; t13'],
+        check_fn=lambda out: '[FL=' in out and '[FL=0 ]' not in out)
+
+    # 14. Alloc 64 nodes exhausts pool (64 = max), next alloc should abort
+    check("Pool exhaustion aborts",
+        ['VARIABLE _DUMMY',
+         ': t14 64 0 DO DOM-T-ELEMENT _DOM-ALLOC _DUMMY ! LOOP',
+         '  DOM-DOC D.NODE-FREE @',
+         '  CR ." [FL=" . ." ]" ; t14'],
+        '[FL=0 ]')
+
+
+def test_tree_append():
+    log_and_print("\n=== Tree Structure — Append ===")
+
+    # 1. Append one child: parent.first = parent.last = child
+    check("Append 1 child: first=last=child",
+        ['VARIABLE _P  VARIABLE _C',
+         ': t1 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _C @ _P @ DOM-APPEND',
+         '  _P @ DOM-FIRST-CHILD _C @ =',
+         '  _P @ DOM-LAST-CHILD  _C @ = AND',
+         '  CR ." [OK=" . ." ]" ; t1'],
+        '[OK=-1 ]')
+
+    # 2. Child's parent is set
+    check("Child parent set after append",
+        ['VARIABLE _P  VARIABLE _C',
+         ': t2 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _C @ _P @ DOM-APPEND',
+         '  _C @ DOM-PARENT _P @ =',
+         '  CR ." [OK=" . ." ]" ; t2'],
+        '[OK=-1 ]')
+
+    # 3. Append two children: first!=last, correct order
+    check("Append 2 children order",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B',
+         ': t3 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-TEXT _DOM-ALLOC _B !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _P @ DOM-FIRST-CHILD _A @ =',
+         '  _P @ DOM-LAST-CHILD  _B @ = AND',
+         '  _A @ DOM-NEXT _B @ = AND',
+         '  _B @ DOM-PREV _A @ = AND',
+         '  CR ." [OK=" . ." ]" ; t3'],
+        '[OK=-1 ]')
+
+    # 4. Append three children, child-count = 3
+    check("Append 3 children count=3",
+        ['VARIABLE _P',
+         ': t4 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _P @ DOM-APPEND',
+         '  DOM-T-ELEMENT _DOM-ALLOC _P @ DOM-APPEND',
+         '  DOM-T-ELEMENT _DOM-ALLOC _P @ DOM-APPEND',
+         '  _P @ DOM-CHILD-COUNT',
+         '  CR ." [CC=" . ." ]" ; t4'],
+        '[CC=3 ]')
+
+    # 5. Empty parent has child-count = 0
+    check("Empty parent count=0",
+        [': t5 DOM-T-ELEMENT _DOM-ALLOC DOM-CHILD-COUNT',
+         '  CR ." [CC=" . ." ]" ; t5'],
+        '[CC=0 ]')
+
+    # 6. First child has prev=0, last child has next=0
+    check("First.prev=0 Last.next=0",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B',
+         ': t6 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _A @ DOM-PREV 0=',
+         '  _B @ DOM-NEXT 0= AND',
+         '  CR ." [OK=" . ." ]" ; t6'],
+        '[OK=-1 ]')
+
+
+def test_tree_prepend():
+    log_and_print("\n=== Tree Structure — Prepend ===")
+
+    # 1. Prepend to empty parent
+    check("Prepend to empty parent",
+        ['VARIABLE _P  VARIABLE _C',
+         ': t1 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _C @ _P @ DOM-PREPEND',
+         '  _P @ DOM-FIRST-CHILD _C @ =',
+         '  _P @ DOM-LAST-CHILD  _C @ = AND',
+         '  CR ." [OK=" . ." ]" ; t1'],
+        '[OK=-1 ]')
+
+    # 2. Prepend before existing child
+    check("Prepend before existing",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B',
+         ': t2 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-PREPEND',
+         '  _P @ DOM-FIRST-CHILD _B @ =',
+         '  _P @ DOM-LAST-CHILD  _A @ = AND',
+         '  _B @ DOM-NEXT _A @ = AND',
+         '  _A @ DOM-PREV _B @ = AND',
+         '  CR ." [OK=" . ." ]" ; t2'],
+        '[OK=-1 ]')
+
+    # 3. Prepend sets parent
+    check("Prepend sets parent",
+        ['VARIABLE _P  VARIABLE _C',
+         ': t3 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _C @ _P @ DOM-PREPEND',
+         '  _C @ DOM-PARENT _P @ =',
+         '  CR ." [OK=" . ." ]" ; t3'],
+        '[OK=-1 ]')
+
+
+def test_tree_detach():
+    log_and_print("\n=== Tree Structure — Detach ===")
+
+    # 1. Detach only child → parent empty
+    check("Detach only child",
+        ['VARIABLE _P  VARIABLE _C',
+         ': t1 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _C @ _P @ DOM-APPEND',
+         '  _C @ DOM-DETACH',
+         '  _P @ DOM-FIRST-CHILD 0=',
+         '  _P @ DOM-LAST-CHILD 0= AND',
+         '  _P @ DOM-CHILD-COUNT 0= AND',
+         '  _C @ DOM-PARENT 0= AND',
+         '  CR ." [OK=" . ." ]" ; t1'],
+        '[OK=-1 ]')
+
+    # 2. Detach first of two
+    check("Detach first of two",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B',
+         ': t2 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _A @ DOM-DETACH',
+         '  _P @ DOM-FIRST-CHILD _B @ =',
+         '  _P @ DOM-LAST-CHILD  _B @ = AND',
+         '  _B @ DOM-PREV 0= AND',
+         '  _P @ DOM-CHILD-COUNT 1 = AND',
+         '  CR ." [OK=" . ." ]" ; t2'],
+        '[OK=-1 ]')
+
+    # 3. Detach last of two
+    check("Detach last of two",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B',
+         ': t3 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _B @ DOM-DETACH',
+         '  _P @ DOM-FIRST-CHILD _A @ =',
+         '  _P @ DOM-LAST-CHILD  _A @ = AND',
+         '  _A @ DOM-NEXT 0= AND',
+         '  _P @ DOM-CHILD-COUNT 1 = AND',
+         '  CR ." [OK=" . ." ]" ; t3'],
+        '[OK=-1 ]')
+
+    # 4. Detach middle of three
+    check("Detach middle of three",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B  VARIABLE _C',
+         ': t4 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _C @ _P @ DOM-APPEND',
+         '  _B @ DOM-DETACH',
+         '  _P @ DOM-FIRST-CHILD _A @ =',
+         '  _P @ DOM-LAST-CHILD  _C @ = AND',
+         '  _A @ DOM-NEXT _C @ = AND',
+         '  _C @ DOM-PREV _A @ = AND',
+         '  _P @ DOM-CHILD-COUNT 2 = AND',
+         '  _B @ DOM-PARENT 0= AND',
+         '  CR ." [OK=" . ." ]" ; t4'],
+        '[OK=-1 ]')
+
+    # 5. Detach node with no parent is no-op
+    check("Detach orphan is no-op",
+        [': t5 DOM-T-ELEMENT _DOM-ALLOC DOM-DETACH',
+         '  CR ." [OK]" ; t5'],
+        '[OK]')
+
+    # 6. Detached node can be re-appended
+    check("Re-append after detach",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B',
+         ': t6 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _A @ DOM-DETACH',
+         '  _A @ _P @ DOM-APPEND',
+         '  _P @ DOM-FIRST-CHILD _B @ =',
+         '  _P @ DOM-LAST-CHILD  _A @ = AND',
+         '  _P @ DOM-CHILD-COUNT 2 = AND',
+         '  CR ." [OK=" . ." ]" ; t6'],
+        '[OK=-1 ]')
+
+
+def test_tree_insert_before():
+    log_and_print("\n=== Tree Structure — Insert Before ===")
+
+    # 1. Insert before first child (becomes new first)
+    check("Insert before first",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B',
+         ': t1 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _A @ DOM-INSERT-BEFORE',
+         '  _P @ DOM-FIRST-CHILD _B @ =',
+         '  _B @ DOM-NEXT _A @ = AND',
+         '  _A @ DOM-PREV _B @ = AND',
+         '  _B @ DOM-PARENT _P @ = AND',
+         '  CR ." [OK=" . ." ]" ; t1'],
+        '[OK=-1 ]')
+
+    # 2. Insert before last child (becomes middle)
+    check("Insert before last (middle)",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B  VARIABLE _C',
+         ': t2 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _B !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _C !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _C @ _B @ DOM-INSERT-BEFORE',
+         '  _P @ DOM-FIRST-CHILD _A @ =',
+         '  _A @ DOM-NEXT _C @ = AND',
+         '  _C @ DOM-NEXT _B @ = AND',
+         '  _B @ DOM-PREV _C @ = AND',
+         '  _C @ DOM-PREV _A @ = AND',
+         '  _P @ DOM-CHILD-COUNT 3 = AND',
+         '  CR ." [OK=" . ." ]" ; t2'],
+        '[OK=-1 ]')
+
+
+def test_tree_traversal():
+    log_and_print("\n=== Tree Structure — Traversal ===")
+
+    # 1. Walk children via DOM-NEXT
+    check("Walk children via next",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B  VARIABLE _C',
+         ': t1 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-TEXT _DOM-ALLOC _B !',
+         '  DOM-T-COMMENT _DOM-ALLOC _C !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _C @ _P @ DOM-APPEND',
+         '  _P @ DOM-FIRST-CHILD DOM-TYPE@',
+         '  CR ." [T1=" . ." ]"',
+         '  _P @ DOM-FIRST-CHILD DOM-NEXT DOM-TYPE@',
+         '  CR ." [T2=" . ." ]"',
+         '  _P @ DOM-LAST-CHILD DOM-TYPE@',
+         '  CR ." [T3=" . ." ]" ; t1'],
+        check_fn=lambda out: '[T1=1 ]' in out and '[T2=2 ]' in out and '[T3=3 ]' in out)
+
+    # 2. Walk children via DOM-PREV (reverse)
+    check("Walk children via prev",
+        ['VARIABLE _P  VARIABLE _A  VARIABLE _B  VARIABLE _C',
+         ': t2 DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _A !',
+         '  DOM-T-TEXT _DOM-ALLOC _B !',
+         '  DOM-T-COMMENT _DOM-ALLOC _C !',
+         '  _A @ _P @ DOM-APPEND',
+         '  _B @ _P @ DOM-APPEND',
+         '  _C @ _P @ DOM-APPEND',
+         '  _P @ DOM-LAST-CHILD DOM-TYPE@',
+         '  CR ." [T3=" . ." ]"',
+         '  _P @ DOM-LAST-CHILD DOM-PREV DOM-TYPE@',
+         '  CR ." [T2=" . ." ]"',
+         '  _P @ DOM-FIRST-CHILD DOM-TYPE@',
+         '  CR ." [T1=" . ." ]" ; t2'],
+        check_fn=lambda out: '[T1=1 ]' in out and '[T2=2 ]' in out and '[T3=3 ]' in out)
+
+    # 3. Deep nesting: grandchild
+    check("Deep nesting grandchild",
+        ['VARIABLE _GP  VARIABLE _P  VARIABLE _C',
+         ': t3 DOM-T-ELEMENT _DOM-ALLOC _GP !',
+         '  DOM-T-ELEMENT _DOM-ALLOC _P !',
+         '  DOM-T-TEXT _DOM-ALLOC _C !',
+         '  _P @ _GP @ DOM-APPEND',
+         '  _C @ _P @ DOM-APPEND',
+         '  _GP @ DOM-FIRST-CHILD DOM-FIRST-CHILD _C @ =',
+         '  _C @ DOM-PARENT _P @ = AND',
+         '  _C @ DOM-PARENT DOM-PARENT _GP @ = AND',
+         '  CR ." [OK=" . ." ]" ; t3'],
+        '[OK=-1 ]')
+
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -544,6 +931,12 @@ if __name__ == '__main__':
         test_doc_creation()
         test_string_pool()
         test_multi_document()
+        test_node_alloc()
+        test_tree_append()
+        test_tree_prepend()
+        test_tree_detach()
+        test_tree_insert_before()
+        test_tree_traversal()
     finally:
         log_and_print(f"\n{'='*50}")
         log_and_print(f"Results: {_pass_count} passed, {_fail_count} failed, "
