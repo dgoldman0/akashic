@@ -431,7 +431,7 @@ VARIABLE _MGB-A
         DUP 0> WHILE
         OVER C@ 62 = IF             \ '>'
             OVER _MGB-A @ -          \ body-len
-            _MGB-A @ SWAP EXIT
+            >R 2DROP _MGB-A @ R> EXIT
         THEN
         OVER C@ DUP 34 = SWAP 39 = OR IF
             MU-SKIP-QUOTED
