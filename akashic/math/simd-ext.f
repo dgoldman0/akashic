@@ -292,7 +292,7 @@ VARIABLE _SIMX-RUNNING
         \ Set unused lanes to +inf so they don't affect min
         _SIMX-REM @ 32 < IF
             _SIMX-REM @ DUP 32 SWAP - 0 DO
-                FP16-POS-INF _SIMX-PA @ OVER 2 * + W!
+                DUP 2 * _SIMX-PA @ + FP16-POS-INF SWAP W!
                 1+
             LOOP
             DROP
@@ -321,7 +321,7 @@ VARIABLE _SIMX-RUNNING
         \ Set unused lanes to -inf so they don't affect max
         _SIMX-REM @ 32 < IF
             _SIMX-REM @ DUP 32 SWAP - 0 DO
-                FP16-NEG-INF _SIMX-PA @ OVER 2 * + W!
+                DUP 2 * _SIMX-PA @ + FP16-NEG-INF SWAP W!
                 1+
             LOOP
             DROP
