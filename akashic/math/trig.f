@@ -157,31 +157,49 @@ VARIABLE _TR-CP
     FP16-DIV ;
 
 \ =====================================================================
-\  TRIG-ATAN — arctangent via polynomial on [−1, 1]
+\  TRIG-ATAN — arctangent via polynomial with range reduction
 \ =====================================================================
-\  For |x| > 1: atan(x) = π/2 − atan(1/x)
-\  Polynomial: atan(x) ≈ x*(1 − x²/3 + x⁴/5), Horner form
+\  Three-range approach for accuracy across [0, +inf):
+\    1. |x| > 1          : atan(x) = pi/2 - atan(1/x)  -> maps to (0,1)
+\    2. x > tan(pi/8)    : atan(x) = pi/4 + atan((x-1)/(x+1)) -> maps to (-0.414, 0]
+\    3. |x| <= tan(pi/8) : polynomial x*(a1 + x^2*(a3 + x^2*a5))
+\
+\  Polynomial is accurate to <1 ULP for |x| < 0.42.
 
 VARIABLE _TR-ATAN-NEG                \ sign flag
 VARIABLE _TR-ATAN-INV                \ reciprocal flag
+VARIABLE _TR-ATAN-MID                \ mid-range flag
+
+0x36A1 CONSTANT _TR-ATAN-TH          \ tan(pi/8) ~ 0.4143
 
 : TRIG-ATAN  ( x -- angle )
     0 _TR-ATAN-NEG !
     0 _TR-ATAN-INV !
+    0 _TR-ATAN-MID !
     DUP FP16-SIGN IF
         FP16-NEG 1 _TR-ATAN-NEG !
     THEN
-    \ Now x >= 0.  If x > 1, use atan(x) = π/2 − atan(1/x)
+    \ Now x >= 0.  If x > 1, use atan(x) = pi/2 - atan(1/x)
     DUP FP16-POS-ONE FP16-GT IF
         FP16-RECIP 1 _TR-ATAN-INV !
     THEN
-    \ Polynomial: x*(a1 + x²*(a3 + x²*a5))  Horner
-    DUP DUP FP16-MUL _TR-X2 !        \ x²
-    _TR-X2 @ _TR-AT-A5 FP16-MUL      \ x²*a5
-    _TR-AT-A3 FP16-ADD               \ a3 + x²*a5
-    _TR-X2 @ FP16-MUL                \ x²*(a3 + x²*a5)
-    _TR-AT-A1 FP16-ADD               \ a1 + x²*(...)
+    \ If x > tan(pi/8), use atan(x) = pi/4 + atan((x-1)/(x+1))
+    DUP _TR-ATAN-TH FP16-GT IF
+        DUP FP16-POS-ONE FP16-SUB    \ x - 1
+        SWAP FP16-POS-ONE FP16-ADD   \ x + 1
+        FP16-DIV                       \ (x-1)/(x+1)
+        1 _TR-ATAN-MID !
+    THEN
+    \ Polynomial on reduced range: x*(a1 + x^2*(a3 + x^2*a5))
+    DUP DUP FP16-MUL _TR-X2 !        \ x^2
+    _TR-X2 @ _TR-AT-A5 FP16-MUL      \ x^2*a5
+    _TR-AT-A3 FP16-ADD               \ a3 + x^2*a5
+    _TR-X2 @ FP16-MUL                \ x^2*(a3 + x^2*a5)
+    _TR-AT-A1 FP16-ADD               \ a1 + x^2*(...)
     FP16-MUL                          \ x * (...)
+    _TR-ATAN-MID @ IF
+        TRIG-PI/4 FP16-ADD
+    THEN
     _TR-ATAN-INV @ IF
         TRIG-PI/2 SWAP FP16-SUB
     THEN

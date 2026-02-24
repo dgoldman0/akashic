@@ -347,7 +347,7 @@ VARIABLE _STAT-FP32-TMP
     _STAT-SS                           ( sxx syy )
 
     \ r = Sxy / sqrt(Sxx * Syy)
-    FP32-MUL FP32-SQRT                 ( sqrt(Sxx*Syy) )
+    FP32-MUL FP32-SQRT                 \ sqrt(Sxx*Syy)
     DUP FP32-0= IF
         DROP FP16-POS-ZERO EXIT
     THEN

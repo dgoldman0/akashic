@@ -143,17 +143,17 @@ VARIABLE _EX-LMANT
 \  Uses the identity: σ(x) = 0.5 + 0.5 * tanh(x/2)
 \  But since TANH needs SIGMOID, we implement directly.
 
-: EXP-SIGMOID  ( x -- σ )
-    FP16-NEG EXP-EXP                  ( e^(−x) )
-    _EX-ONE FP16-ADD                  ( 1 + e^(−x) )
-    FP16-RECIP ;                      ( 1 / (1 + e^(−x)) )
+: EXP-SIGMOID  \ x -- sigma
+    FP16-NEG EXP-EXP                  \ e^(-x)
+    _EX-ONE FP16-ADD                  \ 1 + e^(-x)
+    FP16-RECIP ;                      \ 1 / [1 + e^(-x)]
 
 \ =====================================================================
 \  EXP-TANH — hyperbolic tangent: tanh(x) = 2σ(2x) − 1
 \ =====================================================================
 
-: EXP-TANH  ( x -- tanh )
-    _EX-TWO FP16-MUL                  ( 2x )
-    EXP-SIGMOID                        ( σ(2x) )
-    _EX-TWO FP16-MUL                  ( 2·σ(2x) )
-    _EX-ONE FP16-SUB ;               ( 2·σ(2x) − 1 )
+: EXP-TANH  \ x -- tanh
+    _EX-TWO FP16-MUL                  \ 2x
+    EXP-SIGMOID                        \ sigma(2x)
+    _EX-TWO FP16-MUL                  \ 2*sigma(2x)
+    _EX-ONE FP16-SUB ;               \ 2*sigma(2x) - 1
