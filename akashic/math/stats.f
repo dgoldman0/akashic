@@ -4,6 +4,18 @@
 \  Megapad-64 / KDOS Forth      Prefix: STAT-
 \  Depends on: fp16.f fp16-ext.f fp32.f accum.f simd.f simd-ext.f sort.f
 \
+\  Load with:   REQUIRE stats.f
+
+REQUIRE fp16.f
+REQUIRE fp16-ext.f
+REQUIRE fp32.f
+REQUIRE accum.f
+REQUIRE simd.f
+REQUIRE simd-ext.f
+REQUIRE sort.f
+
+PROVIDED akashic-stats
+\
 \  Mixed-precision pipeline:
 \    FP16 data → tile reductions (FP32 per tile) → accum.f (48.16)
 \    → fp32.f (final arithmetic) → FP16 output

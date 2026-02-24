@@ -74,7 +74,7 @@ VARIABLE _EX-F
     \ split x = n + f and handle directly.
     DUP FP16-FLOOR                    ( x floor_x )
     DUP FP16>INT _EX-N !             \ n = integer part
-    FP16-SUB                          ( f )  fractional part [0, 1)
+    FP16-SUB                          \ f = fractional part [0, 1)
     \ Polynomial for 2^f: c0 + f*(c1 + f*(c2 + f*c3))  Horner
     DUP _EX-E2-C3 FP16-MUL _EX-E2-C2 FP16-ADD
     OVER FP16-MUL _EX-E2-C1 FP16-ADD
@@ -114,7 +114,7 @@ VARIABLE _EX-LMANT
     \ As FP16: we build 1.0 + m by setting exp=15, mant=raw
     \ Actually easier: build the FP16 for 1.m, then subtract 1.0
     0x3C00 OR                          ( fp16 of 1.m with exp=15 )
-    _EX-ONE FP16-SUB                  ( m )  m ∈ [0, 1)
+    _EX-ONE FP16-SUB                  \ m = mantissa frac in [0, 1)
     \ log2(1+m) = m * (c0 + m*(c1 + m*c2))  Horner
     DUP _EX-L2-C2 FP16-MUL _EX-L2-C1 FP16-ADD
     OVER FP16-MUL _EX-L2-C0 FP16-ADD

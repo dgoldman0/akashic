@@ -306,7 +306,7 @@ VARIABLE _MI-ID
     DUP FP16-POS-ZERO FP16-EQ IF
         DROP DROP 0 EXIT               \ singular → fail
     THEN
-    FP16-RECIP _MI-DET !               ( dst )  inv_det saved
+    FP16-RECIP _MI-DET !               \ inv_det saved ( dst )
     \ Inverse 2×2: ia=d/det, ib=-b/det, ic=-c/det, id=a/det
     _M-D  @ _MI-DET @ FP16-MUL  _MI-IA !
     _M-B  @ FP16-NEG _MI-DET @ FP16-MUL  _MI-IB !

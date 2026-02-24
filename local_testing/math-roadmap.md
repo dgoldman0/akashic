@@ -1576,12 +1576,12 @@ akashic/
 │   ├── accum.f         ✅  T3.2    Extended-precision accumulators
 │   ├── simd.f          ✅  T4.1    32-lane SIMD primitives
 │   ├── simd-ext.f      ✅  T4.2    Batch SIMD (N-element arrays)
-│   ├── stats.f         ❌  T5.2    Descriptive statistics (core)
+│   ├── stats.f         ✅  T5.2    Descriptive statistics (core)
 │   ├── regression.f    ❌  T5.3    Linear models & curve fitting
 │   ├── timeseries.f    ❌  T5.4    Time series analysis
 │   ├── probability.f   ❌  T5.5    Distributions & hypothesis testing
 │   ├── counting.f      ❌  T5.6    Combinatorics & frequency
-│   ├── sort.f          ❌  T5.1    Sorting & rank operations
+│   ├── sort.f          ✅  T5.1    Sorting & rank operations
 │   ├── color.f         ❌  T10.1   Color space math
 │   ├── fft.f           ❌  T7.1    Fast Fourier transform
 │   ├── filter.f        ❌  T7.2    Digital filters (FIR/IIR)
