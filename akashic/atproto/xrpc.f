@@ -6,9 +6,9 @@
 \ Depends on: http.f (HTTP client), string.f (STR-INDEX, /STRING),
 \             json.f (JSON-KEY? for cursor extraction)
 \
-REQUIRE http.f   
-REQUIRE string.f 
-REQUIRE json.f 
+REQUIRE http.f
+REQUIRE string.f
+REQUIRE json.f
 
 PROVIDED akashic-xrpc
 

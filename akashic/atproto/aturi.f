@@ -13,7 +13,7 @@
 \ Load with:   REQUIRE aturi.f
 
 REQUIRE string.f
-REQUIRE uri.f  
+REQUIRE uri.f
 
 PROVIDED akashic-aturi
 

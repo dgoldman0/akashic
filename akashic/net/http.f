@@ -30,6 +30,60 @@ VARIABLE HTTP-ERR
 : HTTP-CLEAR-ERR  ( -- )       0 HTTP-ERR ! ;
 
 \ =====================================================================
+\  DNS Cache (8-slot) — must appear before Layer 0 so HTTP-CONNECT
+\  can call HTTP-DNS-LOOKUP.
+\ =====================================================================
+
+8 CONSTANT _DNS-SLOTS
+CREATE _DNS-HOSTS  _DNS-SLOTS 64 * ALLOT     \ 8 * 64 = 512 bytes
+CREATE _DNS-LENS   _DNS-SLOTS CELLS ALLOT
+CREATE _DNS-IPS    _DNS-SLOTS CELLS ALLOT
+
+\ HTTP-DNS-FLUSH ( -- )
+: HTTP-DNS-FLUSH  ( -- )
+    _DNS-HOSTS _DNS-SLOTS 64 * 0 FILL
+    _DNS-LENS  _DNS-SLOTS CELLS 0 FILL
+    _DNS-IPS   _DNS-SLOTS CELLS 0 FILL ;
+
+HTTP-DNS-FLUSH
+
+\ _DNS-SLOT-HOST ( n -- addr )   Host buffer for slot n.
+: _DNS-SLOT-HOST  ( n -- addr )  64 * _DNS-HOSTS + ;
+
+VARIABLE _DM-HOST
+VARIABLE _DM-LEN
+
+\ _DNS-MATCH? ( host-a host-u slot -- flag )
+: _DNS-MATCH?  ( host-a host-u slot -- flag )
+    DUP CELLS _DNS-LENS + @                \ stored length
+    SWAP _DNS-SLOT-HOST                    \ slot host addr
+    _DM-HOST ! _DM-LEN !                   \ save stored host/len
+    _DM-LEN @ <> IF DROP 0 EXIT THEN       \ length mismatch; drop host-a
+    \ ( host-a )  lengths match
+    _DM-LEN @  _DM-HOST @  _DM-LEN @       \ ( host-a host-u slot-host stored-len )
+    COMPARE 0= ;
+
+\ HTTP-DNS-LOOKUP ( host-a host-u -- ip | 0 )
+\   Check cache first, else DNS-RESOLVE and cache.
+: HTTP-DNS-LOOKUP  ( host-a host-u -- ip )
+    \ Search cache
+    _DNS-SLOTS 0 DO
+        2DUP I CELLS _DNS-LENS + @ 0> IF
+            2DUP I _DNS-MATCH? IF
+                2DROP I CELLS _DNS-IPS + @ UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    \ Cache miss — resolve
+    2DUP DNS-RESOLVE                       ( host-a host-u ip )
+    DUP 0= IF NIP NIP EXIT THEN           \ failed
+    \ Store in slot 0
+    0 CELLS _DNS-IPS + !                   \ store ip;   ( host-a host-u )
+    DUP 0 CELLS _DNS-LENS + !             \ store len;  ( host-a host-u )
+    0 _DNS-SLOT-HOST SWAP CMOVE            \ copy host;  ( )
+    0 CELLS _DNS-IPS + @ ;                 \ return ip
+
+\ =====================================================================
 \  Layer 0 — Connection Abstraction
 \ =====================================================================
 \
@@ -39,10 +93,12 @@ VARIABLE HTTP-ERR
 VARIABLE _HTTP-CTX              \ connection handle (TCB or TLS ctx)
 VARIABLE _HTTP-TLS              \ -1=TLS, 0=plaintext
 VARIABLE _HTTP-LPORT            \ local port counter
-12345 _HTTP-LPORT !
+RANDOM32 16383 AND 49152 + _HTTP-LPORT !
 
 : _HTTP-NEXT-PORT  ( -- port )
-    _HTTP-LPORT @ DUP 1 + 65535 MIN _HTTP-LPORT ! ;
+    _HTTP-LPORT @ DUP 1 +
+    DUP 65535 > IF DROP 49152 THEN
+    _HTTP-LPORT ! ;
 
 VARIABLE _HC-HOST
 VARIABLE _HC-HLEN
@@ -53,7 +109,7 @@ VARIABLE _HC-HLEN
     _HTTP-TLS !
     >R                                     \ save port
     DUP _HC-HLEN !  OVER _HC-HOST !        \ save host for SNI
-    DNS-RESOLVE                            \ ( ip | 0 )
+    HTTP-DNS-LOOKUP                        \ ( ip | 0 )
     DUP 0= IF
         R> DROP HTTP-E-DNS HTTP-FAIL EXIT
     THEN
@@ -116,7 +172,8 @@ VARIABLE _HR-EMPTY              \ consecutive empty-read counter
 
 \ HTTP-RECV-LOOP ( -- )
 \   Receive full response into HTTP-RECV-BUF.  Polls with TCP-POLL
-\   + NET-IDLE.  Stops after 10 consecutive empty reads.
+\   + NET-IDLE.  Stops after 10 consecutive empty reads (or 50 if
+\   no data has arrived yet — prevents long spin on broken connections).
 : HTTP-RECV-LOOP  ( -- )
     0 HTTP-RECV-LEN !  0 _HR-EMPTY !
     500 0 DO
@@ -133,9 +190,11 @@ VARIABLE _HR-EMPTY              \ consecutive empty-read counter
             DROP HTTP-E-TLS HTTP-FAIL LEAVE
         ELSE
             DROP
+            _HR-EMPTY @ 1 + DUP _HR-EMPTY !
             HTTP-RECV-LEN @ 0> IF
-                _HR-EMPTY @ 1 + DUP _HR-EMPTY !
                 10 >= IF LEAVE THEN
+            ELSE
+                50 >= IF LEAVE THEN
             THEN
         THEN THEN
     LOOP ;
@@ -250,6 +309,43 @@ VARIABLE _HDC-DLEN
     2SWAP HDR-FIND ;
 
 \ =====================================================================
+\  Session / Persistent Headers
+\ =====================================================================
+\  Must appear before Layer 3 so HTTP-REQUEST / HTTP-POST can call
+\  HTTP-APPLY-SESSION.
+
+CREATE _HTTP-BEARER 256 ALLOT
+VARIABLE _HTTP-BEARER-LEN
+0 _HTTP-BEARER-LEN !
+
+CREATE _HTTP-UA 64 ALLOT
+VARIABLE _HTTP-UA-LEN
+0 _HTTP-UA-LEN !
+
+\ HTTP-SET-BEARER ( token-a token-u -- )
+: HTTP-SET-BEARER  ( token-a token-u -- )
+    255 MIN DUP _HTTP-BEARER-LEN !
+    _HTTP-BEARER SWAP CMOVE ;
+
+\ HTTP-CLEAR-BEARER ( -- )
+: HTTP-CLEAR-BEARER  ( -- )  0 _HTTP-BEARER-LEN ! ;
+
+\ HTTP-SET-UA ( ua-a ua-u -- )
+: HTTP-SET-UA  ( ua-a ua-u -- )
+    63 MIN DUP _HTTP-UA-LEN !
+    _HTTP-UA SWAP CMOVE ;
+
+\ HTTP-APPLY-SESSION ( -- )
+\   Add session headers (bearer token, user-agent).
+: HTTP-APPLY-SESSION  ( -- )
+    _HTTP-BEARER-LEN @ 0> IF
+        _HTTP-BEARER _HTTP-BEARER-LEN @ HDR-AUTH-BEARER
+    THEN
+    _HTTP-UA-LEN @ 0> IF
+        _HTTP-UA _HTTP-UA-LEN @ HDR-USER-AGENT
+    THEN ;
+
+\ =====================================================================
 \  Layer 3 — Request Execution
 \ =====================================================================
 
@@ -275,6 +371,7 @@ VARIABLE _HDC-DLEN
     URL-HOST URL-HOST-LEN @ HDR-HOST
     HDR-CONNECTION-CLOSE
     S" KDOS/1.1 Megapad-64" HDR-USER-AGENT
+    HTTP-APPLY-SESSION
     HDR-END
     \ Send
     HDR-RESULT HTTP-SEND
@@ -324,10 +421,15 @@ VARIABLE _HP-CTLEN
     _HP-BLEN @ HDR-CONTENT-LENGTH
     _HP-CT @ _HP-CTLEN @ HDR-CONTENT-TYPE
     HDR-CONNECTION-CLOSE
+    HTTP-APPLY-SESSION
     HDR-END
     _HP-BODY @ _HP-BLEN @ HDR-BODY         \ append body
     \ Send + recv + parse
-    HDR-RESULT HTTP-SEND DROP
+    HDR-RESULT HTTP-SEND
+    0= IF
+        HTTP-DISCONNECT
+        HTTP-E-SEND HTTP-FAIL 0 0 EXIT
+    THEN
     HTTP-RECV-LOOP
     HTTP-DISCONNECT
     HTTP-PARSE 0= IF
@@ -337,94 +439,6 @@ VARIABLE _HP-CTLEN
 \ HTTP-POST-JSON ( url-a url-u json-a json-u -- resp-a resp-u | 0 0 )
 : HTTP-POST-JSON  ( url-a url-u json-a json-u -- resp-a resp-u )
     S" application/json" HTTP-POST ;
-
-\ =====================================================================
-\  Layer 4 — Session / Persistent Headers
-\ =====================================================================
-
-CREATE _HTTP-BEARER 256 ALLOT
-VARIABLE _HTTP-BEARER-LEN
-0 _HTTP-BEARER-LEN !
-
-CREATE _HTTP-UA 64 ALLOT
-VARIABLE _HTTP-UA-LEN
-0 _HTTP-UA-LEN !
-
-\ HTTP-SET-BEARER ( token-a token-u -- )
-: HTTP-SET-BEARER  ( token-a token-u -- )
-    255 MIN DUP _HTTP-BEARER-LEN !
-    _HTTP-BEARER SWAP CMOVE ;
-
-\ HTTP-CLEAR-BEARER ( -- )
-: HTTP-CLEAR-BEARER  ( -- )  0 _HTTP-BEARER-LEN ! ;
-
-\ HTTP-SET-UA ( ua-a ua-u -- )
-: HTTP-SET-UA  ( ua-a ua-u -- )
-    63 MIN DUP _HTTP-UA-LEN !
-    _HTTP-UA SWAP CMOVE ;
-
-\ HTTP-APPLY-SESSION ( -- )
-\   Add session headers (bearer token, user-agent).
-: HTTP-APPLY-SESSION  ( -- )
-    _HTTP-BEARER-LEN @ 0> IF
-        _HTTP-BEARER _HTTP-BEARER-LEN @ HDR-AUTH-BEARER
-    THEN
-    _HTTP-UA-LEN @ 0> IF
-        _HTTP-UA _HTTP-UA-LEN @ HDR-USER-AGENT
-    THEN ;
-
-\ =====================================================================
-\  Layer 5 — DNS Cache (8-slot)
-\ =====================================================================
-
-8 CONSTANT _DNS-SLOTS
-CREATE _DNS-HOSTS  _DNS-SLOTS 64 * ALLOT     \ 8 * 64 = 512 bytes
-CREATE _DNS-LENS   _DNS-SLOTS CELLS ALLOT
-CREATE _DNS-IPS    _DNS-SLOTS CELLS ALLOT
-
-\ HTTP-DNS-FLUSH ( -- )
-: HTTP-DNS-FLUSH  ( -- )
-    _DNS-HOSTS _DNS-SLOTS 64 * 0 FILL
-    _DNS-LENS  _DNS-SLOTS CELLS 0 FILL
-    _DNS-IPS   _DNS-SLOTS CELLS 0 FILL ;
-
-HTTP-DNS-FLUSH
-
-\ _DNS-SLOT-HOST ( n -- addr )   Host buffer for slot n.
-: _DNS-SLOT-HOST  ( n -- addr )  64 * _DNS-HOSTS + ;
-
-VARIABLE _DM-HOST
-VARIABLE _DM-LEN
-
-\ _DNS-MATCH? ( host-a host-u slot -- flag )
-: _DNS-MATCH?  ( host-a host-u slot -- flag )
-    DUP CELLS _DNS-LENS + @                \ stored length
-    SWAP _DNS-SLOT-HOST                    \ slot host addr
-    _DM-HOST ! _DM-LEN !                   \ save stored host/len
-    _DM-LEN @ <> IF DROP 0 EXIT THEN       \ length mismatch; drop host-a
-    \ ( host-a )  lengths match
-    _DM-LEN @  _DM-HOST @  _DM-LEN @       \ ( host-a host-u slot-host stored-len )
-    COMPARE 0= ;
-
-\ HTTP-DNS-LOOKUP ( host-a host-u -- ip | 0 )
-\   Check cache first, else DNS-RESOLVE and cache.
-: HTTP-DNS-LOOKUP  ( host-a host-u -- ip )
-    \ Search cache
-    _DNS-SLOTS 0 DO
-        2DUP I CELLS _DNS-LENS + @ 0> IF
-            2DUP I _DNS-MATCH? IF
-                2DROP I CELLS _DNS-IPS + @ UNLOOP EXIT
-            THEN
-        THEN
-    LOOP
-    \ Cache miss — resolve
-    2DUP DNS-RESOLVE                       ( host-a host-u ip )
-    DUP 0= IF NIP NIP EXIT THEN           \ failed
-    \ Store in slot 0
-    0 CELLS _DNS-IPS + !                   \ store ip;   ( host-a host-u )
-    DUP 0 CELLS _DNS-LENS + !             \ store len;  ( host-a host-u )
-    0 _DNS-SLOT-HOST SWAP CMOVE            \ copy host;  ( )
-    0 CELLS _DNS-IPS + @ ;                 \ return ip
 
 \ =====================================================================
 \  Layer 6 — Redirect Following

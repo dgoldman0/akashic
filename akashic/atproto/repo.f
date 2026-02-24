@@ -13,10 +13,10 @@
 \         _REP-   (internal helpers)
 \
 
-REQUIRE session.f    (for SESS-DID, SESS-ACTIVE?)
-REQUIRE xrpc.f       (for XRPC-QUERY, XRPC-PROCEDURE)
-REQUIRE json.f       (for JSON builder + parser)
-REQUIRE aturi.f      (for ATURI-PARSE, ATURI-AUTHORITY, etc.)
+REQUIRE session.f
+REQUIRE xrpc.f
+REQUIRE json.f
+REQUIRE aturi.f
 
 PROVIDED akashic-repo
 
