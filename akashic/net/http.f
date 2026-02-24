@@ -117,7 +117,7 @@ VARIABLE _HC-HLEN
     _HTTP-TLS @ IF
         \ Set SNI before TLS connect
         _HC-HLEN @ 63 MIN DUP TLS-SNI-LEN !
-        _HC-HOST @ TLS-SNI-HOST SWAP CMOVE
+        _HC-HOST @ TLS-SNI-HOST ROT CMOVE
         TLS-CONNECT
     ELSE
         TCP-CONNECT
