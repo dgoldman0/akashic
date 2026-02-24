@@ -30,7 +30,7 @@ and rasterize glyph outlines into bitmaps.
 │  math/bezier.f  — Bézier eval & flatten    ✅   │
 ├─────────────────────────────────────────────────┤
 │  text/utf8.f    — UTF-8 codec              ✅   │
-│  text/layout.f  — advance widths, breaks   ❌   │
+│  text/layout.f  — advance widths, breaks   ✅   │
 ├─────────────────────────────────────────────────┤
 │  font/ttf.f     — TrueType parser          ✅   │
 │  font/raster.f  — scanline fill            ✅   │
@@ -119,7 +119,7 @@ bezier.f ──→ fp16-ext.f ──→ fp16.f
 raster.f ──→ fixed.f
          ──→ ttf.f
 
-layout.f ──→ utf8.f         (planned)
+layout.f ──→ utf8.f         ✅
          ──→ ttf.f           (planned)
          ──→ cache.f          (planned)
 
@@ -249,14 +249,16 @@ cache.f  ──→ raster.f        (planned)
 - **Depends on**: raster.f
 
 #### `text/layout.f` — Text Layout Engine
-- **Status**: Not started
+- **Status**: ✅ Done
 - **Purpose**: Advance width accumulation, line breaking, cursor
   positioning. Uses utf8.f for codepoint iteration.
-- **Design considerations**:
-  - Iterate UTF-8 string → codepoint → glyph ID → advance width
-  - Simple line-break at word boundaries or pixel width limit
-  - Kerning pairs (if `kern` table is parsed) for tight spacing
-- **Depends on**: utf8.f, ttf.f, cache.f
+- **Implemented**:
+  - `LAY-SCALE!` — set pixel size and cache UPEM
+  - `LAY-CHAR-WIDTH`, `LAY-TEXT-WIDTH` — character / string measurement
+  - `LAY-ASCENDER`, `LAY-DESCENDER`, `LAY-LINE-HEIGHT` — vertical metrics
+  - `LAY-CURSOR-INIT`, `LAY-CURSOR@`, `LAY-CURSOR-ADV`, `LAY-CURSOR-NL` — cursor positioning
+  - `LAY-WRAP-WIDTH!`, `LAY-WRAP-INIT`, `LAY-WRAP-LINE` — word-wrap iterator
+- **Depends on**: utf8.f, ttf.f
 
 ---
 
@@ -272,7 +274,7 @@ cache.f  ──→ raster.f        (planned)
 | 6 | ttf.f | font/ | — | ✅ Done |
 | 7 | raster.f | font/ | fixed.f, ttf.f, bezier.f | ✅ Done |
 | 8 | cache.f | font/ | raster.f | ✅ Done |
-| 9 | layout.f | text/ | utf8, ttf, cache | ❌ Not started |
+| 9 | layout.f | text/ | utf8, ttf | ✅ Done |
 
 ---
 
@@ -327,13 +329,14 @@ structure should follow the existing patterns (e.g., `test_css.py`,
 3. Integrate with raster.f: miss → rasterize → store
 4. Write tests for hit/miss/eviction paths
 
-### Phase 4 — Text Layout (layout.f)
+### Phase 4 — Text Layout (layout.f) ✅
 
-1. Implement advance-width accumulation: codepoint → glyph → width
-2. Simple line-break algorithm at configurable pixel width
-3. Cursor positioning (x, y baseline) for rendering pipeline
-4. Optional: kern table parsing in ttf.f for pair adjustments
-5. Write tests for multi-character strings, word-wrap, mixed-width text
+All items complete:
+
+1. ✅ Advance-width accumulation: codepoint → glyph → width
+2. ✅ Line-break algorithm at configurable pixel width (word-wrap iterator)
+3. ✅ Cursor positioning (x, y baseline) for rendering pipeline
+4. ✅ Tests for char width, text width, metrics, cursor, word-wrap (multiple scenarios)
 
 ### Phase 5 — Anti-Aliasing (raster.f enhancement)
 
@@ -354,8 +357,8 @@ existing documentation style:
 - `docs/text/utf8.md`
 - `docs/font/ttf.md`
 - `docs/font/raster.md`
-- `docs/font/cache.md` (when implemented)
-- `docs/text/layout.md` (when implemented)
+- `docs/font/cache.md` ✅
+- `docs/text/layout.md` ✅
 
 Each doc should include: purpose, dependencies, public API reference
 with stack effects, internal word table, usage examples, and known

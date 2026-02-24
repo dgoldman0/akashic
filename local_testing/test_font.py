@@ -18,6 +18,8 @@ BEZIER_F   = os.path.join(ROOT_DIR, "akashic", "math", "bezier.f")
 TTF_F      = os.path.join(ROOT_DIR, "akashic", "font", "ttf.f")
 RASTER_F   = os.path.join(ROOT_DIR, "akashic", "font", "raster.f")
 CACHE_F    = os.path.join(ROOT_DIR, "akashic", "font", "cache.f")
+UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
+LAYOUT_F   = os.path.join(ROOT_DIR, "akashic", "text", "layout.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -87,6 +89,8 @@ def build_snapshot():
     ttf_lines   = _load_forth_lines(TTF_F)
     raster_lines= _load_forth_lines(RASTER_F)
     cache_lines = _load_forth_lines(CACHE_F)
+    utf8_lines  = _load_forth_lines(UTF8_F)
+    layout_lines= _load_forth_lines(LAYOUT_F)
 
     # Test helpers
     helpers = [
@@ -106,6 +110,7 @@ def build_snapshot():
                  + fp16_lines + fp16e_lines
                  + fixed_lines + bezier_lines
                  + ttf_lines + raster_lines + cache_lines
+                 + utf8_lines + layout_lines
                  + helpers)
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
@@ -453,6 +458,173 @@ def test_cache_gc_get_miss():
           '0 0 0 ')
 
 # =====================================================================
+#  Layout tests
+# =====================================================================
+
+def _layout_setup():
+    """Forth lines to create synthetic TTF metrics for layout testing.
+
+    Identity cmap (codepoint=glyph ID) for ASCII 32-127.
+    All glyphs have advance width 500 in 1000 UPEM.
+    At 10px scale: char width=5, ascender=8, descender=-2, line height=10.
+
+    Also redefines layout words with fresh compilation so they
+    pick up the current dictionary state for TTF lookups.
+    """
+    return [
+        ': BE-W! ( val addr -- ) OVER 8 RSHIFT OVER C! 1+ SWAP 0xFF AND SWAP C! ;',
+        # hmtx: 128 entries, advance=500 lsb=0
+        'CREATE _SYN-HMTX 512 ALLOT',
+        ': _FILL-HMTX 128 0 DO 500 _SYN-HMTX I 4 * + BE-W! 0 _SYN-HMTX I 4 * + 2 + BE-W! LOOP ;',
+        '_FILL-HMTX',
+        '_SYN-HMTX _TTF-HMTX ! 128 _TTF-NHMETRICS !',
+        '1000 _TTF-UPEM ! 800 _TTF-ASCENDER ! -200 _TTF-DESCENDER ! 0 _TTF-LINEGAP !',
+        # cmap format 4: 2 segments, identity map 32-127
+        'CREATE _SYN-CMAP4 64 ALLOT',
+        '4 _SYN-CMAP4 0 + BE-W! 32 _SYN-CMAP4 2 + BE-W! 0 _SYN-CMAP4 4 + BE-W!',
+        '4 _SYN-CMAP4 6 + BE-W! 2 _SYN-CMAP4 8 + BE-W! 1 _SYN-CMAP4 10 + BE-W! 0 _SYN-CMAP4 12 + BE-W!',
+        '127 _SYN-CMAP4 14 + BE-W! 65535 _SYN-CMAP4 16 + BE-W!',
+        '0 _SYN-CMAP4 18 + BE-W!',
+        '32 _SYN-CMAP4 20 + BE-W! 65535 _SYN-CMAP4 22 + BE-W!',
+        '0 _SYN-CMAP4 24 + BE-W! 1 _SYN-CMAP4 26 + BE-W!',
+        '0 _SYN-CMAP4 28 + BE-W! 0 _SYN-CMAP4 30 + BE-W!',
+        '_SYN-CMAP4 _TTF-CMAP4 ! 2 _TTF-CMAP4-NSEG !',
+        '10 LAY-SCALE!',
+    ]
+
+def test_layout_bew_diag():
+    """Minimal diagnostic: does BE-W! / BE-W@ work from snapshot?"""
+    print("\n=== Layout diag ===")
+    check("BE-W! round-trip",
+          [': BE-W! ( v a -- ) OVER 8 RSHIFT OVER C! 1+ SWAP 255 AND SWAP C! ;',
+           'CREATE _TMP 8 ALLOT',
+           '500 _TMP BE-W! _TMP BE-W@ .'],
+          '500 ')
+
+def test_layout_char_width():
+    print("\n=== Layout ===")
+    check("LAY-CHAR-WIDTH basic",
+          _layout_setup() + ['65 LAY-CHAR-WIDTH .'],
+          '5 ')
+
+def test_layout_text_width():
+    # Diag: two CW calls, print both
+    check("LAY-TW print both",
+          _layout_setup() + ['65 LAY-CHAR-WIDTH . 66 LAY-CHAR-WIDTH .'],
+          '5 5 ')
+    # Diag: two CW calls, add and print — expect EXACTLY 10
+    check("LAY-TW add two",
+          _layout_setup() + ['65 LAY-CHAR-WIDTH 66 LAY-CHAR-WIDTH + ." =" .'],
+          '=10 ')
+
+def test_layout_metrics():
+    check("LAY-LINE-HEIGHT",
+          _layout_setup() + ['LAY-LINE-HEIGHT .'],
+          '10 ')
+    check("LAY-ASCENDER",
+          _layout_setup() + ['LAY-ASCENDER .'],
+          '8 ')
+
+def test_layout_cursor():
+    check("LAY-CURSOR init and read",
+          _layout_setup() + [
+              '10 20 LAY-CURSOR-INIT',
+              'LAY-CURSOR@ SWAP . .'],
+          '10 20')
+    check("LAY-CURSOR-ADV",
+          _layout_setup() + [
+              '10 20 LAY-CURSOR-INIT',
+              '65 LAY-CURSOR-ADV',
+              '_LAY-CX @ .'],
+          '15 ')
+    check("LAY-CURSOR-NL",
+          _layout_setup() + [
+              '10 20 LAY-CURSOR-INIT',
+              'LAY-CURSOR-NL',
+              '_LAY-CX @ . _LAY-CY @ .'],
+          '10 30')
+
+def test_layout_wrap_word_break():
+    # wrap width 14: "AB CD". Each char 5px. A(5) B(10) space(15>14 → break).
+    # Use CREATE'd string and separate line outputs checked individually.
+    check("LAY-WRAP word break line1",
+          _layout_setup() + [
+              '14 LAY-WRAP-WIDTH!',
+              'CREATE _WS 8 ALLOT',
+              '65 _WS C! 66 _WS 1 + C! 32 _WS 2 + C! 67 _WS 3 + C! 68 _WS 4 + C!',
+              '_WS 5 LAY-WRAP-INIT',
+              'LAY-WRAP-LINE DROP NIP .'],
+          '3 ')
+    check("LAY-WRAP word break line2",
+          _layout_setup() + [
+              '14 LAY-WRAP-WIDTH!',
+              'CREATE _WS 8 ALLOT',
+              '65 _WS C! 66 _WS 1 + C! 32 _WS 2 + C! 67 _WS 3 + C! 68 _WS 4 + C!',
+              '_WS 5 LAY-WRAP-INIT',
+              'LAY-WRAP-LINE 2DROP DROP',
+              'LAY-WRAP-LINE DROP NIP .'],
+          '2 ')
+
+def test_layout_wrap_hard_newline():
+    check("LAY-WRAP hard newline line1",
+          _layout_setup() + [
+              '100 LAY-WRAP-WIDTH!',
+              'CREATE _NLS 8 ALLOT',
+              '65 _NLS C! 66 _NLS 1 + C! 10 _NLS 2 + C! 67 _NLS 3 + C! 68 _NLS 4 + C!',
+              '_NLS 5 LAY-WRAP-INIT',
+              'LAY-WRAP-LINE DROP NIP .'],
+          '2 ')
+    check("LAY-WRAP hard newline line2",
+          _layout_setup() + [
+              '100 LAY-WRAP-WIDTH!',
+              'CREATE _NLS 8 ALLOT',
+              '65 _NLS C! 66 _NLS 1 + C! 10 _NLS 2 + C! 67 _NLS 3 + C! 68 _NLS 4 + C!',
+              '_NLS 5 LAY-WRAP-INIT',
+              'LAY-WRAP-LINE 2DROP DROP',
+              'LAY-WRAP-LINE DROP NIP .'],
+          '2 ')
+
+def test_layout_wrap_forced_break():
+    # wrap width 7: each char 5px, only 1 fits. "ABCD" → 4×1
+    check("LAY-WRAP forced line1",
+          _layout_setup() + [
+              '7 LAY-WRAP-WIDTH!',
+              'CREATE _FS 8 ALLOT',
+              '65 _FS C! 66 _FS 1 + C! 67 _FS 2 + C! 68 _FS 3 + C!',
+              '_FS 4 LAY-WRAP-INIT',
+              'LAY-WRAP-LINE DROP NIP .'],
+          '1 ')
+    check("LAY-WRAP forced line2",
+          _layout_setup() + [
+              '7 LAY-WRAP-WIDTH!',
+              'CREATE _FS 8 ALLOT',
+              '65 _FS C! 66 _FS 1 + C! 67 _FS 2 + C! 68 _FS 3 + C!',
+              '_FS 4 LAY-WRAP-INIT',
+              'LAY-WRAP-LINE 2DROP DROP',
+              'LAY-WRAP-LINE DROP NIP .'],
+          '1 ')
+
+def test_layout_wrap_fits():
+    # Entire string fits in one line, then done flag=0
+    check("LAY-WRAP fits one line",
+          _layout_setup() + [
+              '100 LAY-WRAP-WIDTH!',
+              'CREATE _FS2 8 ALLOT',
+              '72 _FS2 C! 101 _FS2 1 + C! 108 _FS2 2 + C! 108 _FS2 3 + C! 111 _FS2 4 + C!',
+              '_FS2 5 LAY-WRAP-INIT',
+              'LAY-WRAP-LINE DROP NIP .'],
+          '5 ')
+    check("LAY-WRAP done after one line",
+          _layout_setup() + [
+              '100 LAY-WRAP-WIDTH!',
+              'CREATE _FS2 8 ALLOT',
+              '72 _FS2 C! 101 _FS2 1 + C! 108 _FS2 2 + C! 108 _FS2 3 + C! 111 _FS2 4 + C!',
+              '_FS2 5 LAY-WRAP-INIT',
+              'LAY-WRAP-LINE 2DROP DROP',
+              'LAY-WRAP-LINE NIP NIP .'],
+          '0 ')
+
+# =====================================================================
 #  Main
 # =====================================================================
 
@@ -471,6 +643,16 @@ if __name__ == '__main__':
     test_cache_hash()
     test_cache_store_and_lookup()
     test_cache_gc_get_miss()
+
+    test_layout_bew_diag()
+    test_layout_char_width()
+    test_layout_text_width()
+    test_layout_metrics()
+    test_layout_cursor()
+    test_layout_wrap_word_break()
+    test_layout_wrap_hard_newline()
+    test_layout_wrap_forced_break()
+    test_layout_wrap_fits()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")
