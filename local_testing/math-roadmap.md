@@ -44,6 +44,14 @@ library that exploits the hardware across the board.
 | `math/fp16-ext.f` | 279 | ✅ | Extended FP16 | LT/GT/LE/GE/EQ, LERP, CLAMP, RECIP, DIV, SQRT, FLOOR, FRAC, FP16↔FX |
 | `math/fixed.f` | 118 | ✅ | 16.16 fixed-point | FX\*, FX/, LERP, CLAMP, MIN/MAX, rounding, INT↔FX |
 | `math/bezier.f` | 257 | ✅ | Bézier curves (FP16) | Quad/cubic eval, flatness test, adaptive flatten with callback |
+| `math/trig.f` | 242 | ✅ | FP16 trigonometry | SIN, COS, SINCOS, TAN, ATAN, ATAN2, ASIN, ACOS, DEG↔RAD |
+| `math/exp.f` | — | ✅ | Exponentials & logarithms | EXP, LN, EXP2, LOG2, POW, SIGMOID, TANH |
+| `math/interp.f` | — | ✅ | Interpolation & easing | SMOOTHSTEP, ease-in/out/in-out, CUBIC-BEZIER, CATMULL-ROM |
+| `math/fp32.f` | 734 | ✅ | Software IEEE 754 binary32 | ADD, SUB, MUL, DIV, SQRT, FMA, comparisons, FP16↔FP32↔FX↔INT |
+| `math/accum.f` | 200 | ✅ | Extended-precision accumulators | ACCUM-ADD-TILE, ACCUM-GET-FP32, 48.16 fixed-point pipeline |
+| `math/vec2.f` | 242 | ✅ | 2D vectors (FP16) | ADD, SUB, SCALE, DOT, CROSS, LEN, NORM, LERP, ROTATE, REFLECT |
+| `math/mat2d.f` | 363 | ✅ | 2×3 affine transforms (FP16) | IDENTITY, TRANSLATE, SCALE, ROTATE, MULTIPLY, TRANSFORM, INVERT, COMPOSE |
+| `math/rect.f` | 255 | ✅ | Axis-aligned rectangles (FP16) | CONTAINS?, INTERSECT?, INTERSECT, UNION, EXPAND, AREA, CENTER |
 
 ### What's Missing
 
@@ -239,13 +247,15 @@ CSS timing functions (`cubic-bezier()`) are directly needed by
 
 ---
 
-## Tier 2 — Linear Algebra & Geometry
+## Tier 2 — Linear Algebra & Geometry  ✅ DONE
 
-### 2.1  `math/vec2.f` — 2D Vectors (FP16)
+### 2.1  `math/vec2.f` — 2D Vectors (FP16)  ✅ DONE
 
 **File:** `math/vec2.f`
 **Prefix:** `V2-`
-**Depends on:** `fp16.f`, `fp16-ext.f`
+**Depends on:** `fp16.f`, `fp16-ext.f`, `trig.f`
+**Guard:** `PROVIDED akashic-vec2`
+**Status:** Implemented.
 
 Vectors are two FP16 values on the stack: `( x y )`.
 
@@ -268,11 +278,13 @@ Vectors are two FP16 values on the stack: `( x y )`.
 | `V2-MIN` | `( ax ay bx by -- rx ry )` | Component-wise min |
 | `V2-MAX` | `( ax ay bx by -- rx ry )` | Component-wise max |
 
-### 2.2  `math/mat2d.f` — 2×3 Affine Transform Matrices (FP16)
+### 2.2  `math/mat2d.f` — 2×3 Affine Transform Matrices (FP16)  ✅ DONE
 
 **File:** `math/mat2d.f`
 **Prefix:** `M2D-`
 **Depends on:** `fp16.f`, `fp16-ext.f`, `trig.f`
+**Guard:** `PROVIDED akashic-mat2d`
+**Status:** Implemented.
 
 A 2×3 matrix stored as 6 consecutive FP16 values in memory
 (row-major: a b tx c d ty).
@@ -304,11 +316,13 @@ A 2×3 matrix stored as 6 consecutive FP16 values in memory
 - SVG path transforms
 - Game/demo sprite transforms
 
-### 2.3  `math/rect.f` — Axis-Aligned Rectangles
+### 2.3  `math/rect.f` — Axis-Aligned Rectangles  ✅ DONE
 
 **File:** `math/rect.f`
 **Prefix:** `RECT-`
 **Depends on:** `fp16.f`, `fp16-ext.f`
+**Guard:** `PROVIDED akashic-rect`
+**Status:** Implemented.
 
 Rectangles as `( x y w h )` in FP16, stored as 4 consecutive values.
 
@@ -363,12 +377,13 @@ in wider formats, and perform final-stage arithmetic in software FP32.
                                  └──────────────┘
 ```
 
-### 3.1  `math/fp32.f` — Software IEEE 754 Single-Precision
+### 3.1  `math/fp32.f` — Software IEEE 754 Single-Precision  ✅ DONE
 
-**File:** `math/fp32.f`
+**File:** `math/fp32.f` (734 lines)
 **Prefix:** `FP32-`
 **Depends on:** nothing (pure integer ALU)
 **Guard:** `PROVIDED akashic-fp32`
+**Status:** Implemented.
 
 Software emulation of IEEE 754 binary32 (single-precision) using the
 64-bit integer ALU.  A 32-bit float is packed in the low 32 bits of a
@@ -447,12 +462,13 @@ FP32-NAN         0x7FC00000     quiet NaN
   iterations.  Each iteration: `x_{n+1} = (x_n + a/x_n) / 2`,
   implemented in FP32 arithmetic (self-bootstrapping).
 
-### 3.2  `math/accum.f` — Extended-Precision Accumulators
+### 3.2  `math/accum.f` — Extended-Precision Accumulators  ✅ DONE
 
-**File:** `math/accum.f`
+**File:** `math/accum.f` (200 lines)
 **Prefix:** `ACCUM-`
 **Depends on:** `fp32.f`, `fp16.f`
 **Guard:** `PROVIDED akashic-accum`
+**Status:** Implemented.
 
 64-bit integer accumulators for numerically stable summation across
 tile passes.  The tile engine's reductions (TSUM, TSUMSQ, etc.)
@@ -1621,15 +1637,16 @@ Legend: ✅ = implemented, ❌ = not started, T#.# = Tier.Item reference
 3. Tests for both
 4. `docs/math/trig.md`, `docs/math/exp.md`
 
-### Stage C — Linear Algebra & Geometry (Tiers 2.1–2.3)
+### Stage C — Linear Algebra & Geometry (Tiers 2.1–2.3)  ✅ DONE
 **Effort:** 2–3 sessions  
 **Priority:** High — needed by font composites, CSS transforms, games
+**Status:** Completed — `vec2.f`, `mat2d.f`, `rect.f` implemented.
 
-1. `vec2.f` — 2D vector operations
-2. `mat2d.f` — affine transforms
-3. `rect.f` — AABB rectangles
+1. ✅ `vec2.f` — 2D vector operations
+2. ✅ `mat2d.f` — affine transforms
+3. ✅ `rect.f` — AABB rectangles
 4. Wire into font/raster.f for composite glyph assembly
-5. Tests, docs
+5. ✅ Docs: `docs/math/vec2.md`, `docs/math/mat2d.md`, `docs/math/rect.md`
 
 ### Stage D — SIMD Batch Operations (Tiers 4.1–4.2)
 **Effort:** 2–3 sessions  
@@ -1640,19 +1657,19 @@ Legend: ✅ = implemented, ❌ = not started, T#.# = Tier.Item reference
 3. Benchmark vs scalar loop equivalents
 4. Tests, docs
 
-### Stage D½ — Precision Infrastructure (Tiers 3.1–3.2)
+### Stage D½ — Precision Infrastructure (Tiers 3.1–3.2)  ✅ DONE
 **Effort:** 2–3 sessions  
 **Priority:** High — required before statistics (Stage F)  
 **Unlocks:** Numerically stable mean, variance, regression, R²
+**Status:** Completed — `fp32.f` (734 lines) and `accum.f` (200 lines) implemented.
 
-1. `fp32.f` — software IEEE 754 binary32 (add, sub, mul, div, sqrt,
+1. ✅ `fp32.f` — software IEEE 754 binary32 (add, sub, mul, div, sqrt,
    comparisons, conversions FP16↔FP32↔FX↔int, ACC>FP32)
-2. `accum.f` — 48.16 fixed-point accumulators for cross-tile
+2. ✅ `accum.f` — 48.16 fixed-point accumulators for cross-tile
    summation (ACCUM-ADD-TILE, ACCUM-GET-FP32)
 3. Tests: fp32 arithmetic accuracy (vs Python `struct.pack('f',...)`),
    accumulator drift tests (sum 10,000 values, compare to exact)
 4. `docs/math/fp32.md`, `docs/math/accum.md`
-4. Tests, docs
 
 ### Stage E — Interpolation & Easing (Tier 1.3)
 **Effort:** 1–2 sessions  
