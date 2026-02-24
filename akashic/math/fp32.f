@@ -232,7 +232,7 @@ VARIABLE _FA-RM    \ result mantissa (with guard bits)
             _FA-MB @ _FA-MA @ - _FA-RM !
         ELSE
             \ Equal magnitudes, different signs → +0.0
-            2DROP FP32-ZERO EXIT
+            FP32-ZERO EXIT
         THEN THEN
     THEN
     \ --- Normalize ---
