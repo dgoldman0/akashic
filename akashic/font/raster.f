@@ -1,7 +1,12 @@
-\ raster.f — Scanline rasterizer for glyph outlines
+\ raster.f — Scanline rasterizer for glyph outlines (Stage C2)
 \
 \ Takes line segments (edges), rasterizes into a monochrome
 \ bitmap using even-odd scanline fill.
+\
+\ Contour walker handles TrueType on-curve and off-curve points:
+\ off-curve quadratic Bézier control points are flattened via
+\ BZ-QUAD-FLATTEN from bezier.f.  Consecutive off-curve points
+\ generate implied on-curve midpoints per the TrueType spec.
 \
 \ Coordinates are integers (pre-scaled from font units to pixels).
 \ Caller is responsible for coordinate scaling and Y-flip.
@@ -194,10 +199,12 @@ VARIABLE _RST-PAIR-I
 \  Off-curve points are quadratic Bézier control points.
 \  Two consecutive off-curve points have an implied on-curve midpoint.
 \
-\  For now (C1): all points treated as line vertices (coarse but
-\  functional — Bézier flatten integration comes in Stage C2).
+\  Stage C2: Off-curve points are flattened via BZ-QUAD-FLATTEN from
+\  bezier.f.  Coordinates are converted to FP16 for the Bézier math,
+\  then back to integers for edge insertion.
 
 REQUIRE ttf.f
+REQUIRE ../math/bezier.f
 
 VARIABLE _RST-SCALE-N   \ numerator: target pixel size
 VARIABLE _RST-SCALE-D   \ denominator: unitsPerEm
@@ -213,31 +220,155 @@ VARIABLE _RST-YFLIP     \ target height for Y-flip
     _RST-SCALE-N @ * _RST-SCALE-D @ /
     _RST-YFLIP @ SWAP - ;            \ flip Y (TTF y-up → screen y-down)
 
-\ Walk one contour from point index 'start' to 'end' (inclusive).
-\ Emits edges between consecutive points, closing the contour.
-VARIABLE _RST-PREV-X   VARIABLE _RST-PREV-Y
-VARIABLE _RST-FIRST-X  VARIABLE _RST-FIRST-Y
-VARIABLE _RST-CONT-S   VARIABLE _RST-CONT-E
+\ ── Bézier flatten support ──────────────────────────────────────────
+\ Tolerance: 0.25 pixel in FP16.  Good for 8-64 px sizes.
+0x3400 CONSTANT _RST-BZ-TOL
+
+\ Callback for BZ-QUAD-FLATTEN: receives ( x0 y0 x1 y1 ) in FP16,
+\ converts to integer pixel coords, and emits a raster edge.
+VARIABLE _RST-BZ-X0   VARIABLE _RST-BZ-Y0
+VARIABLE _RST-BZ-X1   VARIABLE _RST-BZ-Y1
+
+: _RST-BZ-CB  ( x0fp y0fp x1fp y1fp -- )
+    FP16>INT _RST-BZ-Y1 !   FP16>INT _RST-BZ-X1 !
+    FP16>INT _RST-BZ-Y0 !   FP16>INT _RST-BZ-X0 !
+    _RST-BZ-X0 @ _RST-BZ-Y0 @ _RST-BZ-X1 @ _RST-BZ-Y1 @ RAST-EDGE ;
+
+\ Emit a flattened quadratic Bézier from three integer pixel points.
+\ Converts to FP16, calls BZ-QUAD-FLATTEN with _RST-BZ-CB.
+: _RST-EMIT-QUAD  ( x0 y0 x1 y1 x2 y2 -- )
+    INT>FP16 >R INT>FP16 R>           ( x0 y0 x1 y1 x2fp y2fp )
+    >R >R                             ( x0 y0 x1 y1 ) ( R: y2fp x2fp )
+    INT>FP16 >R INT>FP16 R>           ( x0 y0 x1fp y1fp )
+    >R >R                             ( x0 y0 ) ( R: y2fp x2fp y1fp x1fp )
+    INT>FP16 >R INT>FP16 R>           ( x0fp y0fp )
+    R> R> R> R>                        ( x0fp y0fp x1fp y1fp x2fp y2fp )
+    _RST-BZ-TOL ['] _RST-BZ-CB BZ-QUAD-FLATTEN ;
+
+\ ── Contour walker (Stage C2) ──────────────────────────────────────
+\ Walks decoded TrueType contour points, handling on-curve and
+\ off-curve (quadratic control) points per the TrueType spec.
+\
+\ Algorithm:
+\   - Find a starting on-curve point.  If the first point is off-curve,
+\     check the last point: if on-curve, start there; otherwise the
+\     implied midpoint of first and last off-curve points is the start.
+\   - Walk points sequentially.  On-curve → emit line or quad.
+\     Off-curve → accumulate; consecutive off-curve → implied midpoint.
+\   - Close the contour back to the starting point.
+
+VARIABLE _RST-PREV-X   VARIABLE _RST-PREV-Y   \ current on-curve pos
+VARIABLE _RST-FIRST-X  VARIABLE _RST-FIRST-Y   \ contour start (on-curve)
+VARIABLE _RST-CTRL-X   VARIABLE _RST-CTRL-Y    \ pending off-curve control pt
+VARIABLE _RST-HAS-CTRL                          \ flag: have pending ctrl pt?
+VARIABLE _RST-CONT-S   VARIABLE _RST-CONT-E    \ contour start/end indices
+VARIABLE _RST-FIRST-OFF                         \ first pt was off-curve?
+
+\ Helper: get scaled pixel coords for point index
+: _RST-PX  ( i -- x )  TTF-PT-X _RST-SCALE-X ;
+: _RST-PY  ( i -- y )  TTF-PT-Y _RST-SCALE-Y ;
+
+\ Process an on-curve point at (px, py).
+\ If we have a pending control point, emit a quad; otherwise a line.
+VARIABLE _RST-OC-X   VARIABLE _RST-OC-Y
+
+: _RST-ON-CURVE  ( px py -- )
+    _RST-OC-Y !  _RST-OC-X !
+    _RST-HAS-CTRL @ IF
+        \ Emit quad: prev → ctrl → this
+        _RST-PREV-X @ _RST-PREV-Y @
+        _RST-CTRL-X @ _RST-CTRL-Y @
+        _RST-OC-X @ _RST-OC-Y @
+        _RST-EMIT-QUAD
+        0 _RST-HAS-CTRL !
+    ELSE
+        \ Emit line: prev → this
+        _RST-PREV-X @ _RST-PREV-Y @
+        _RST-OC-X @ _RST-OC-Y @
+        RAST-EDGE
+    THEN
+    _RST-OC-X @ _RST-PREV-X !
+    _RST-OC-Y @ _RST-PREV-Y ! ;
+
+\ Process an off-curve point at (px, py).
+\ If we already have a pending ctrl, emit a quad to the implied
+\ midpoint, then store this as the new pending ctrl.
+VARIABLE _RST-NEW-X   VARIABLE _RST-NEW-Y
+VARIABLE _RST-MID-X   VARIABLE _RST-MID-Y
+
+: _RST-OFF-CURVE  ( px py -- )
+    _RST-NEW-Y !  _RST-NEW-X !
+    _RST-HAS-CTRL @ IF
+        \ Implied on-curve midpoint between previous ctrl and this
+        _RST-NEW-X @ _RST-CTRL-X @ + 2 /  _RST-MID-X !
+        _RST-NEW-Y @ _RST-CTRL-Y @ + 2 /  _RST-MID-Y !
+        \ Emit quad: prev → old ctrl → midpoint
+        _RST-PREV-X @ _RST-PREV-Y @
+        _RST-CTRL-X @ _RST-CTRL-Y @
+        _RST-MID-X @ _RST-MID-Y @
+        _RST-EMIT-QUAD
+        \ Update prev to midpoint
+        _RST-MID-X @ _RST-PREV-X !
+        _RST-MID-Y @ _RST-PREV-Y !
+    THEN
+    _RST-NEW-X @ _RST-CTRL-X !
+    _RST-NEW-Y @ _RST-CTRL-Y !
+    1 _RST-HAS-CTRL ! ;
 
 : _RST-WALK-CONTOUR  ( start end -- )
     _RST-CONT-E !  _RST-CONT-S !
-    \ First point → prev and first
-    _RST-CONT-S @ TTF-PT-X _RST-SCALE-X
-    DUP _RST-PREV-X !  _RST-FIRST-X !
-    _RST-CONT-S @ TTF-PT-Y _RST-SCALE-Y
-    DUP _RST-PREV-Y !  _RST-FIRST-Y !
-    \ Remaining points
-    _RST-CONT-E @ 1+ _RST-CONT-S @ 1+ DO
-        _RST-PREV-X @ _RST-PREV-Y @
-        I TTF-PT-X _RST-SCALE-X
-        I TTF-PT-Y _RST-SCALE-Y
-        2DUP _RST-PREV-Y ! _RST-PREV-X !
-        RAST-EDGE
+    0 _RST-HAS-CTRL !
+    0 _RST-FIRST-OFF !
+
+    \ ── Determine starting on-curve point ──
+    _RST-CONT-S @ TTF-PT-ONCURVE? IF
+        \ First point is on-curve: use it directly
+        _RST-CONT-S @ _RST-PX  DUP _RST-PREV-X !  _RST-FIRST-X !
+        _RST-CONT-S @ _RST-PY  DUP _RST-PREV-Y !  _RST-FIRST-Y !
+    ELSE
+        \ First point is off-curve
+        1 _RST-FIRST-OFF !
+        _RST-CONT-E @ TTF-PT-ONCURVE? IF
+            \ Last point is on-curve: start from last
+            _RST-CONT-E @ _RST-PX  DUP _RST-PREV-X !  _RST-FIRST-X !
+            _RST-CONT-E @ _RST-PY  DUP _RST-PREV-Y !  _RST-FIRST-Y !
+        ELSE
+            \ Both first and last are off-curve: implied midpoint
+            _RST-CONT-S @ _RST-PX  _RST-CONT-E @ _RST-PX  + 2 /
+            DUP _RST-PREV-X !  _RST-FIRST-X !
+            _RST-CONT-S @ _RST-PY  _RST-CONT-E @ _RST-PY  + 2 /
+            DUP _RST-PREV-Y !  _RST-FIRST-Y !
+        THEN
+    THEN
+
+    \ ── Walk points ──
+    _RST-CONT-E @ 1+ _RST-CONT-S @ DO
+        \ Skip the starting point if it was on-curve (already consumed)
+        I _RST-CONT-S @ = _RST-FIRST-OFF @ 0= AND IF
+            \ skip — this is the on-curve start we already used
+        ELSE
+            I _RST-PX  I _RST-PY           ( px py )
+            I TTF-PT-ONCURVE? IF
+                _RST-ON-CURVE
+            ELSE
+                _RST-OFF-CURVE
+            THEN
+        THEN
     LOOP
-    \ Close contour: prev → first
-    _RST-PREV-X @ _RST-PREV-Y @
-    _RST-FIRST-X @ _RST-FIRST-Y @
-    RAST-EDGE ;
+
+    \ ── Close contour ──
+    \ If there's a pending ctrl point, emit quad to first point
+    _RST-HAS-CTRL @ IF
+        _RST-PREV-X @ _RST-PREV-Y @
+        _RST-CTRL-X @ _RST-CTRL-Y @
+        _RST-FIRST-X @ _RST-FIRST-Y @
+        _RST-EMIT-QUAD
+    ELSE
+        \ Just a line back to start
+        _RST-PREV-X @ _RST-PREV-Y @
+        _RST-FIRST-X @ _RST-FIRST-Y @
+        RAST-EDGE
+    THEN ;
 
 \ Rasterize a glyph into a bitmap buffer.
 \ Pre: TTF-PARSE-HEAD, MAXP, LOCA, GLYF already called.
