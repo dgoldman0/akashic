@@ -144,6 +144,54 @@ my-arr 10 SORT-REVERSE
 
 ---
 
+## Index & Rank Operations
+
+### SORT-ARGSORT
+
+```forth
+SORT-ARGSORT  ( src idx n -- )
+```
+
+Fills `idx[0..n-1]` with the indices that would sort `src` in
+ascending order.  Uses stable insertion sort on the index array,
+O(n²) but sufficient for typical dataset sizes (n ≤ 2048).
+
+| Parameter | Description |
+|---|---|
+| `src` | HBW array of FP16 values |
+| `idx` | HBW output array of 64-bit cells (8 bytes each) |
+| `n` | Number of elements |
+
+After the call, `src[idx[0]]` is the smallest element,
+`src[idx[1]]` the second smallest, and so on.
+
+### SORT-RANK
+
+```forth
+SORT-RANK  ( src dst n -- )
+```
+
+Assigns 1-based ranks to each element of `src`.  Tied elements
+receive the average of their positional ranks (fractional via FP16).
+
+| Parameter | Description |
+|---|---|
+| `src` | HBW array of FP16 values |
+| `dst` | HBW output array of FP16 rank values |
+| `n` | Number of elements (≤ 512) |
+
+**Algorithm:**
+1. Argsort `src` → index permutation (`_SORT-RANKBUF`).
+2. Walk sorted order, detect tie groups, compute average rank
+   using integer + FP16 math: `(i+j+2)/2`.
+3. Scatter ranks back to original positions.
+
+**Memory:** Uses `_SORT-RANKBUF` (4096 bytes HBW) for the internal
+index permutation.  No FP32 dependency — rank computation is
+entirely integer + FP16.
+
+---
+
 ## Internals
 
 ### Shell Sort Variables
@@ -167,6 +215,16 @@ my-arr 10 SORT-REVERSE
 | `_QS-I` | Scan index during Lomuto partition |
 | `_QS-PIVOT-VAL` | Pivot value (FP16) |
 
+### Argsort / Rank Variables
+
+| Variable | Purpose |
+|---|---|
+| `_SA-SRC` / `_SA-IDX` / `_SA-LEN` | Argsort source, index array, count |
+| `_SA-KEY` / `_SA-J` | Insertion sort key and scan index |
+| `_SR-SRC` / `_SR-DST` / `_SR-LEN` | Rank source, destination, count |
+| `_SR-I` / `_SR-J` | Tie group bounds |
+| `_SORT-RANKBUF` | 4096-byte HBW buffer for rank index array |
+
 ### Internal Helpers
 
 | Word | Stack | Description |
@@ -186,6 +244,8 @@ SORT-FP16-DESC   ( addr n -- )           sort + reverse
 SORT-NTH         ( addr n k -- val )     k-th smallest (destructive), O(n)
 SORT-IS-SORTED?  ( addr n -- flag )      check ascending order
 SORT-REVERSE     ( addr n -- )           reverse in-place
+SORT-ARGSORT     ( src idx n -- )        index permutation (stable)
+SORT-RANK        ( src dst n -- )        rank elements (1-based, avg ties)
 ```
 
 ## Limitations
@@ -195,5 +255,7 @@ SORT-REVERSE     ( addr n -- )           reverse in-place
 - `SORT-NTH` is destructive — it rearranges the array.  Use
   `SIMD-COPY-N` to preserve the original, or use `STAT-MEDIAN` /
   `STAT-PERCENTILE` which handle the copy internally.
-- Not stable — equal elements may be reordered.
+- `SORT-RANK` limited to n ≤ 512 (due to `_SORT-RANKBUF` size).
+- Not stable — equal elements may be reordered (except `SORT-ARGSORT`
+  which is stable via insertion sort).
 - Not re-entrant (module-scoped VARIABLEs).

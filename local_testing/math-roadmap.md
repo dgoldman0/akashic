@@ -20,6 +20,9 @@ library that exploits the hardware across the board.
 - [Tier 3 — Precision Infrastructure](#tier-3--precision-infrastructure)
 - [Tier 4 — SIMD Batch Operations](#tier-4--simd-batch-operations)
 - [Tier 5 — Statistics & Data Analysis](#tier-5--statistics--data-analysis)
+  - [5.7 — Inferential Extensions](#57--inferential-extensions)
+  - [5.8 — Non-Parametric & Model Diagnostics](#58--non-parametric--model-diagnostics)
+  - [5.9 — Advanced Modeling](#59--advanced-modeling)
 - [Tier 6 — Crypto Wrappers](#tier-6--crypto-wrappers)
 - [Tier 7 — Signal Processing](#tier-7--signal-processing)
 - [Tier 8 — Random & Sampling](#tier-8--random--sampling)
@@ -1148,6 +1151,225 @@ factorial overflow.  `COMB-IS-PRIME?` uses the hardware
 
 ---
 
+### 5.7  Inferential Extensions
+
+**File:** `math/advanced-stats.f`
+**Prefix:** `ADVS-` (public API), `_AS-` (internal)
+**Depends on:** `probability.f`, `stats.f`, `sort.f`, `counting.f`
+
+Direct extensions of the existing inferential pipeline.  These
+build on `PROB-STANDARD-CDF`, `PROB-NORMAL-INV`, and the
+mixed-precision accumulation already proven in probability.f.
+
+#### Ranking Infrastructure (sort.f extension)
+
+| Word | Stack | Description |
+|---|---|---|
+| `SORT-RANK` | `( src dst n -- )` | Rank each element (1-based, average ties) |
+| `SORT-ARGSORT` | `( src idx n -- )` | Index permutation (stable) |
+
+`SORT-RANK` is the single most important missing building block.
+Mann-Whitney, Wilcoxon, Spearman, and Kruskal-Wallis all require
+ranking with tie handling.  Algorithm: argsort the data, walk sorted
+order assigning ranks, average within tied groups.
+
+#### Effect Sizes
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-COHENS-D` | `( x nx y ny -- d )` | Cohen's d (pooled SD) |
+| `ADVS-HEDGES-G` | `( x nx y ny -- g )` | Bias-corrected Cohen's d |
+
+Trivial arithmetic on means and standard deviations.  Hedges'
+correction factor is $1 - 3/(4(n_1+n_2)-9)$, easily computed in
+FP32.
+
+#### Additional Confidence Intervals
+
+| Word | Stack | Description |
+|---|---|---|
+| `PROB-CI-PROPORTION` | `( successes n alpha -- lo hi )` | Wilson score interval |
+| `PROB-CI-DIFF-MEANS` | `( x nx y ny alpha -- lo hi )` | CI for difference of means |
+
+`PROB-CI-PROPORTION` uses the Wilson score formula (more accurate
+than Wald for small n or extreme p).  `PROB-CI-DIFF-MEANS` is
+Welch's t-interval, reusing the existing `_PR-T-CDF` machinery.
+
+#### F-Distribution & ANOVA
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-F-CDF` | `( f df1 df2 -- p )` | F-distribution CDF |
+| `ADVS-ANOVA-1` | `( groups k dst -- F p-value )` | One-way ANOVA (k groups) |
+
+`ADVS-F-CDF`: Wilson-Hilferty approximation — transform F-statistic
+to approximate standard normal, then use `PROB-STANDARD-CDF`.
+Same trick we used for chi² in `PROB-CHI2-GOF`.  Accurate to
+~2 decimal digits for typical df values — well within FP16.
+
+`ADVS-ANOVA-1`: groups is a packed descriptor
+`( addr₁ n₁ addr₂ n₂ ... addrₖ nₖ )`.  Computes SSB (between-group)
+and SSW (within-group) via `STAT-MEAN` per group + overall mean.
+Returns F-statistic and p-value via `ADVS-F-CDF`.
+
+#### Non-Parametric Two-Sample & Paired Tests
+
+| Word | Stack | Description |
+|---|---|---|
+| `PROB-MANN-WHITNEY` | `( x nx y ny -- U p-value )` | Mann-Whitney U test |
+| `PROB-WILCOXON` | `( x y n -- W p-value )` | Wilcoxon signed-rank test |
+
+**`PROB-MANN-WHITNEY`:** Merge both samples, rank with `SORT-RANK`,
+sum ranks for group x → R₁.  $U = R_1 - n_1(n_1+1)/2$.  For
+n₁+n₂ > 20, approximate with normal:
+$z = (U - n_1 n_2/2) / \sqrt{n_1 n_2 (n_1+n_2+1)/12}$,
+then `PROB-STANDARD-CDF` for p-value.
+
+**`PROB-WILCOXON`:** Compute differences, drop zeros, rank absolute
+values, sum ranks of positive differences → W⁺.  Normal
+approximation for n > 20: $z = (W^+ - n(n+1)/4) / \sqrt{n(n+1)(2n+1)/24}$.
+
+#### Multiple Comparison Correction
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-BONFERRONI` | `( alpha k -- alpha' )` | Bonferroni: α/k |
+| `ADVS-HOLM` | `( p-values n alpha dst -- )` | Holm-Bonferroni step-down |
+
+Bonferroni is trivial division.  Holm sorts p-values ascending,
+compares each $p_{(i)}$ to $\alpha / (k - i + 1)$, rejects until
+first non-rejection.  Both are essential when running multiple
+hypothesis tests.
+
+#### Public T-CDF
+
+| Word | Stack | Description |
+|---|---|---|
+| `PROB-T-CDF` | `( t df -- p )` | Student's t CDF (was internal `_PR-T-CDF`) |
+
+Expose the existing Cornish-Fisher t→z mapping as public API.
+
+---
+
+### 5.8  Non-Parametric & Model Diagnostics
+
+**File:** `math/advanced-stats.f` (continued)
+**Depends on:** all of 5.7, `exp.f`
+
+Moderate complexity, high practical value.  These require either
+additional approximation algorithms or precomputed tables, but
+all are feasible within FP16/FP32 precision.
+
+#### Distribution Tests
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-KS-TEST` | `( x nx y ny -- D p-value )` | Kolmogorov-Smirnov two-sample test |
+| `ADVS-SHAPIRO-WILK` | `( src n -- W p-value )` | Shapiro-Wilk normality test (n ≤ 50) |
+
+**`ADVS-KS-TEST`:** Sort both samples, compute empirical CDFs,
+find maximum absolute difference D.  P-value via the Kolmogorov
+distribution approximation:
+$p \approx 2 \sum_{k=1}^{\infty} (-1)^{k-1} e^{-2k^2 \lambda^2}$
+where $\lambda = D \sqrt{n_{eff}}$.  Converges fast — 3–4 terms
+suffice for FP16.
+
+**`ADVS-SHAPIRO-WILK`:** Requires precomputed $a_i$ coefficient
+table.  For n ≤ 50, this is ~400 bytes stored in ROM.  Compute
+$W = (\sum a_i x_{(i)})^2 / \sum (x_i - \bar{x})^2$.  P-value
+via log-normal approximation of the W statistic.
+
+#### Rank Correlation
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-SPEARMAN` | `( x y n -- rho )` | Spearman rank correlation |
+| `ADVS-KRUSKAL-WALLIS` | `( groups k -- H p-value )` | Non-parametric ANOVA |
+
+**`ADVS-SPEARMAN`:** Rank both x and y via `SORT-RANK`, then
+`STAT-CORRELATION` on the ranks.  Elegant reuse.
+
+**`ADVS-KRUSKAL-WALLIS`:** Rank all observations combined, compute
+rank sums per group.  $H = \frac{12}{N(N+1)} \sum \frac{R_j^2}{n_j} - 3(N+1)$.
+P-value via chi² approximation with k−1 degrees of freedom
+(reuse `PROB-CHI2-GOF`'s Wilson-Hilferty path).
+
+#### Power Analysis
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-POWER-T-TEST` | `( effect-d alpha power -- n )` | Required sample size for t-test |
+
+Iterative search: for increasing n, compute the non-centrality
+parameter $\delta = d\sqrt{n}$, find the critical t-value at α,
+compute power from the shifted t-distribution.  Converges in
+< 50 iterations for typical inputs.
+
+---
+
+### 5.9  Advanced Modeling
+
+**File:** `math/advanced-stats.f` (continued)
+**Depends on:** all of 5.7–5.8, `regression.f`
+
+Substantial implementations that push the platform's precision
+limits.  All feasible but require careful FP32 intermediate
+arithmetic and convergence control.
+
+#### Logistic Regression
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-LOGISTIC-FIT` | `( x y n ctx -- )` | Fit binary logistic model via IRLS |
+| `ADVS-LOGISTIC-PREDICT` | `( ctx x -- p )` | Predict probability |
+| `ADVS-LOGISTIC-COEFF` | `( ctx -- b0 b1 )` | Extract coefficients |
+
+**Algorithm:** Iteratively Reweighted Least Squares (IRLS).
+Each iteration is a weighted OLS step — reuses `REG-OLS`
+machinery with updated weights from the sigmoid function.
+Converges in 5–10 iterations for well-separated data.  All
+arithmetic in FP32; sigmoid via `EXP-SIGMOID` (already in exp.f).
+
+#### Multiple Regression
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-REG-MULTIPLE` | `( X y n p ctx -- )` | p-predictor OLS (normal equations) |
+| `ADVS-REG-MULTI-PREDICT` | `( ctx x-vec -- y-hat )` | Predict from predictor vector |
+| `ADVS-REG-MULTI-R2` | `( ctx -- r² )` | Multiple R² |
+
+**Algorithm:** Form X'X (p×p) and X'y (p×1) via tile-accelerated
+dot products, solve via Gaussian elimination with partial pivoting.
+Feasible for p ≤ 8 predictors — the system matrix fits in
+< 600 bytes.  All accumulation via `accum.f`, solve in FP32.
+
+#### Bayesian Conjugate Updates
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-BAYES-BETA-UPDATE` | `( a b successes trials -- a' b' )` | Beta-binomial conjugate update |
+| `ADVS-BAYES-NORMAL-UPDATE` | `( mu0 sigma0² x-bar s² n -- mu1 sigma1² )` | Normal-normal conjugate update |
+
+Conjugate Bayesian updating is closed-form arithmetic — no MCMC
+needed.  The Beta-binomial posterior is just
+$\text{Beta}(a + s, b + n - s)$.  The normal-normal update
+combines prior and likelihood precision.  Both are single
+expressions in FP32.
+
+#### Survival Analysis
+
+| Word | Stack | Description |
+|---|---|---|
+| `ADVS-KAPLAN-MEIER` | `( times events n dst -- )` | Kaplan-Meier survival curve |
+| `ADVS-KM-MEDIAN` | `( dst n -- median )` | Median survival time from KM curve |
+
+**Algorithm:** Sort event times, compute product-limit estimator
+$S(t) = \prod_{t_i \le t} (1 - d_i/n_i)$.  Uses `SORT-FP16`
+and simple FP32 running product.  Output is an array of
+(time, survival-probability) pairs.
+
+---
+
 ### Design Decisions
 
 **Why FP16 for statistics?**
@@ -1703,6 +1925,26 @@ fp32.f (final arithmetic) → FP16 output.
 7. Tests for each module (~150 tests total)
 8. `docs/math/stats.md`, `docs/math/regression.md`,
    `docs/math/timeseries.md`, `docs/math/probability.md`
+
+### Stage F½ — Advanced Statistics (Tiers 5.7–5.9)
+**Effort:** 4–6 sessions  
+**Priority:** High — completes the inferential toolkit  
+**Requires:** Stage F (probability.f, stats.f, sort.f, counting.f)
+
+Extends the statistical library with non-parametric tests, effect
+sizes, ANOVA, model diagnostics, and advanced modeling.
+
+1. ✅ `sort.f` extension — `SORT-ARGSORT`, `SORT-RANK` with avg ties
+2. ✅ `advanced-stats.f` (5.7) — effect sizes (Cohen's d, Hedges' g),
+   CI-proportion, CI-diff-means, F-CDF, one-way ANOVA,
+   Mann-Whitney U, Wilcoxon signed-rank, Bonferroni/Holm,
+   public PROB-T-CDF — **33 tests, 0 failures**
+3. `advanced-stats.f` (5.8) — KS test, Shapiro-Wilk normality,
+   Spearman rank correlation, Kruskal-Wallis, power analysis
+4. `advanced-stats.f` (5.9) — logistic regression, multiple
+   regression, Bayesian conjugate updates, Kaplan-Meier survival
+5. Tests for each phase (~120+ tests)
+6. ✅ `docs/math/advanced-stats.md`, `docs/math/sort.md` updated
 
 ### Stage G — Crypto Wrappers (Tier 6)
 **Effort:** 3–5 sessions  
