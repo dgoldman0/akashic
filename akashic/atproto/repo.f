@@ -15,7 +15,7 @@
 
 REQUIRE session.f
 REQUIRE xrpc.f
-REQUIRE json.f
+REQUIRE ../utils/json.f
 REQUIRE aturi.f
 
 PROVIDED akashic-repo
