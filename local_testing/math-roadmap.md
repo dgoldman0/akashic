@@ -1577,10 +1577,10 @@ akashic/
 │   ├── simd.f          ✅  T4.1    32-lane SIMD primitives
 │   ├── simd-ext.f      ✅  T4.2    Batch SIMD (N-element arrays)
 │   ├── stats.f         ✅  T5.2    Descriptive statistics (core)
-│   ├── regression.f    ❌  T5.3    Linear models & curve fitting
-│   ├── timeseries.f    ❌  T5.4    Time series analysis
-│   ├── probability.f   ❌  T5.5    Distributions & hypothesis testing
-│   ├── counting.f      ❌  T5.6    Combinatorics & frequency
+│   ├── regression.f    ✅  T5.3    Linear models & curve fitting
+│   ├── timeseries.f    ✅  T5.4    Time series analysis
+│   ├── probability.f   ✅  T5.5    Distributions & hypothesis testing
+│   ├── counting.f      ✅  T5.6    Combinatorics & frequency
 │   ├── sort.f          ✅  T5.1    Sorting & rank operations
 │   ├── color.f         ❌  T10.1   Color space math
 │   ├── fft.f           ❌  T7.1    Fast Fourier transform
@@ -1811,8 +1811,8 @@ math module gets a `test_math_<module>.py` file that:
 | stats.f | 40 | Empty/single-element arrays, constant values, known distributions, online merge |
 | regression.f | 30 | Perfect fit, no correlation, outlier sensitivity, polynomial degree edge cases |
 | timeseries.f | 30 | Constant series, trending, seasonal, step changes, window boundary cases |
-| probability.f | 35 | Distribution tails, p=0/1, extreme z-scores, small sample t-tests, CDF round-trip |
-| counting.f | 15 | Factorial overflow at n=21, C(n,0), C(n,n), primality of known primes/composites |
+| probability.f | 81 ✅ | Distribution tails, p=0/1, extreme z-scores, small sample t-tests, CDF round-trip, hypothesis tests, CI |
+| counting.f | 50 ✅ | Factorial overflow at n=21, C(n,0), C(n,n), primality of known primes/composites |
 | Each crypto module | 20+ | NIST vectors, empty input, streaming, partial blocks |
 | color.f | 25 | Boundary colors (black, white, primaries), round-trip conversions |
 

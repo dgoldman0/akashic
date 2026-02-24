@@ -251,7 +251,7 @@ VARIABLE _FA-RM    \ result mantissa (with guard bits)
     _FA-RM @ 7 AND                     ( guard bits )
     _FA-RM @ 3 RSHIFT _FA-RM !        ( drop guard bits → 24-bit mantissa )
     DUP 4 > IF                         \ > 0.5 → round up
-        _FA-RM @ 1+ _FA-RM !
+        DROP _FA-RM @ 1+ _FA-RM !
     ELSE 4 = IF                         \ exactly 0.5 → round to even
         _FA-RM @ 1 AND IF              \ odd → round up
             _FA-RM @ 1+ _FA-RM !
