@@ -1569,13 +1569,13 @@ akashic/
 │   ├── trig.f          ✅  T1.1    Trigonometry (sin/cos/atan)
 │   ├── exp.f           ✅  T1.2    Exponentials & logarithms
 │   ├── interp.f        ✅  T1.3    Easing & interpolation
-│   ├── vec2.f          ❌  T2.1    2D vectors
-│   ├── mat2d.f         ❌  T2.2    2×3 affine matrices
-│   ├── rect.f          ❌  T2.3    Axis-aligned rectangles
-│   ├── fp32.f          ❌  T3.1    Software IEEE 754 single-precision
-│   ├── accum.f         ❌  T3.2    Extended-precision accumulators
-│   ├── simd.f          ❌  T4.1    32-lane SIMD primitives
-│   ├── simd-ext.f      ❌  T4.2    Batch SIMD (N-element arrays)
+│   ├── vec2.f          ✅  T2.1    2D vectors
+│   ├── mat2d.f         ✅  T2.2    2×3 affine matrices
+│   ├── rect.f          ✅  T2.3    Axis-aligned rectangles
+│   ├── fp32.f          ✅  T3.1    Software IEEE 754 single-precision
+│   ├── accum.f         ✅  T3.2    Extended-precision accumulators
+│   ├── simd.f          ✅  T4.1    32-lane SIMD primitives
+│   ├── simd-ext.f      ✅  T4.2    Batch SIMD (N-element arrays)
 │   ├── stats.f         ❌  T5.2    Descriptive statistics (core)
 │   ├── regression.f    ❌  T5.3    Linear models & curve fitting
 │   ├── timeseries.f    ❌  T5.4    Time series analysis
@@ -1648,14 +1648,15 @@ Legend: ✅ = implemented, ❌ = not started, T#.# = Tier.Item reference
 4. Wire into font/raster.f for composite glyph assembly
 5. ✅ Docs: `docs/math/vec2.md`, `docs/math/mat2d.md`, `docs/math/rect.md`
 
-### Stage D — SIMD Batch Operations (Tiers 4.1–4.2)
+### Stage D — SIMD Batch Operations (Tiers 4.1–4.2)  ✅ DONE
 **Effort:** 2–3 sessions  
 **Priority:** High — unlocks mass-parallel computation
+**Status:** Completed — `simd.f` and `simd-ext.f` implemented.
 
-1. `simd.f` — raw 32-lane tile wrappers
-2. `simd-ext.f` — N-element chunked operations
+1. ✅ `simd.f` — raw 32-lane tile wrappers
+2. ✅ `simd-ext.f` — N-element chunked operations
 3. Benchmark vs scalar loop equivalents
-4. Tests, docs
+4. ✅ Tests, docs
 
 ### Stage D½ — Precision Infrastructure (Tiers 3.1–3.2)  ✅ DONE
 **Effort:** 2–3 sessions  
