@@ -12,7 +12,8 @@
 \ Load with:   REQUIRE fixed.f
 \
 \ === Public API ===
-\   FX*       ( a b -- a*b )       fixed multiply
+\   FX*       ( a b -- a*b )       fixed multiply (truncating)
+\   FX*R      ( a b -- a*b )       fixed multiply (half-up rounding)
 \   FX/       ( a b -- a/b )       fixed divide
 \   FX-ABS    ( a -- |a| )         absolute value
 \   FX-NEG    ( a -- -a )          negate
@@ -59,6 +60,13 @@ PROVIDED akashic-fixed
     \ reasonable 16.16 values (±32767.9999).
     \ Use signed division (not RSHIFT which is unsigned).
     * 65536 / ;
+
+: FX*R  ( a b -- a*b )
+    \ Rounded fixed multiply: add half-unit before dividing.
+    \ (a * b + 32768) / 65536 — half-up rounding.
+    \ Reduces drift in long accumulation chains (animation,
+    \ filter coefficients, iterative geometry).
+    * 32768 + 65536 / ;
 
 : FX/  ( a b -- a/b )
     \ (a << 16) / b.

@@ -12,6 +12,10 @@
 \ Load with:   REQUIRE bezier.f
 \
 \ === Public API ===
+\  2D Interpolation:
+\   LERP2D         ( x0 y0 x1 y1 t -- rx ry )  2D linear interpolation
+\   MID2D          ( x0 y0 x1 y1 -- mx my )     midpoint (LERP2D at t=0.5)
+\
 \  Evaluation:
 \   BZ-QUAD-EVAL   ( x0 y0 x1 y1 x2 y2 t -- rx ry )
 \   BZ-CUBIC-EVAL  ( x0 y0 x1 y1 x2 y2 x3 y3 t -- rx ry )

@@ -122,6 +122,78 @@ _FP16-INIT-TILES
     0x8000 AND IF -1 ELSE 0 THEN ;
 
 \ =====================================================================
+\  FP16-DOT — dot product of n FP16 pairs
+\ =====================================================================
+\  addr points to an array of interleaved FP16 pairs:
+\    a0 b0 a1 b1 a2 b2 ...  (each pair is 4 bytes: 2 × 16-bit)
+\  n = number of pairs.
+\
+\  Strategy: process full 32-pair tiles with TDOT/TSUM, accumulate
+\  the FP32 partial sums via the accumulator.  Handle the tail
+\  (<32 pairs) by zero-padding a scratch tile.
+\
+\  FP16-DOT32 processes exactly one 32-pair tile (64 bytes per
+\  source) — useful when caller has pre-loaded aligned buffers.
+
+VARIABLE _DOT-ADDR
+VARIABLE _DOT-N
+VARIABLE _DOT-ACC
+
+\ Scratch tiles for dot — separate from scalar tiles to avoid conflict.
+VARIABLE _DOT-TA                       \ src0 (a values)
+VARIABLE _DOT-TB                       \ src1 (b values)
+
+: _FP16-INIT-DOT-TILES  ( -- )
+    64 HBW-ALLOT _DOT-TA !
+    64 HBW-ALLOT _DOT-TB ! ;
+
+_FP16-INIT-DOT-TILES
+
+\ De-interleave n pairs from addr into tile A (a values) and
+\ tile B (b values).  n must be <= 32.  Remaining lanes are zeroed.
+: _DOT-DEINTERLEAVE  ( addr n -- )
+    \ Zero both tiles first
+    _DOT-TA @ 64 0 FILL
+    _DOT-TB @ 64 0 FILL
+    \ Copy pairs: addr[i*4+0..1] → TA[i*2], addr[i*4+2..3] → TB[i*2]
+    0 DO                               ( addr )
+        DUP I 4 * + W@                 \ a_i
+        _DOT-TA @ I 2 * + W!
+        DUP I 4 * + 2 + W@            \ b_i
+        _DOT-TB @ I 2 * + W!
+    LOOP
+    DROP ;
+
+: FP16-DOT32  ( addr-a addr-b -- acc )
+    \ Full 32-pair dot product.  addr-a and addr-b are 64-byte
+    \ aligned tile buffers containing 32 FP16 values each.
+    FP16-MODE
+    SWAP TSRC0!  TSRC1!
+    _DOT-TA @ TDST!                    \ dst needed by some engines
+    TDOT
+    ACC@ ;
+
+: FP16-DOT  ( addr n -- acc )
+    \ addr → interleaved pairs (a0 b0 a1 b1 ...), n = pair count.
+    DUP 0= IF 2DROP 0 EXIT THEN
+    _DOT-N !  _DOT-ADDR !
+    0 _DOT-ACC !                       \ running accumulator
+    BEGIN _DOT-N @ 0> WHILE
+        _DOT-N @ 32 MIN                ( chunk )
+        _DOT-ADDR @ OVER _DOT-DEINTERLEAVE
+        FP16-MODE
+        _DOT-TA @ TSRC0!
+        _DOT-TB @ TSRC1!
+        _DOT-TA @ TDST!               \ dst tile (unused by TDOT, but set)
+        TDOT
+        ACC@ _DOT-ACC @ + _DOT-ACC !  \ accumulate FP32 partial
+        \ Advance pointer: chunk * 4 bytes per pair
+        DUP 4 * _DOT-ADDR @ + _DOT-ADDR !
+        _DOT-N @ SWAP - _DOT-N !
+    REPEAT
+    _DOT-ACC @ ;
+
+\ =====================================================================
 \  FP16-FMA — fused multiply-add: a*b + c
 \ =====================================================================
 \  Tile engine FMA: dst[i] = src0[i] * src1[i] + dst[i]
