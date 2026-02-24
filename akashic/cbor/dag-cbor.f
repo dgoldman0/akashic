@@ -8,12 +8,13 @@
 \   - No indefinite-length items.
 \   - No floating point.
 \
-\ REQUIRE cbor.f
 \
 \ Prefix: DCBOR-   (public API)
 \         _DCB-    (internal helpers)
 \
 \ Load with:   REQUIRE dag-cbor.f
+
+REQUIRE cbor.f
 
 PROVIDED akashic-dag-cbor
 

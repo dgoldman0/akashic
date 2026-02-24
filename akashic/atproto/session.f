@@ -8,9 +8,9 @@
 \         _SES-   (internal helpers)
 \
 
-REQUIRE xrpc.f      
-REQUIRE json.f    
-REQUIRE http.f   
+REQUIRE xrpc.f
+REQUIRE ../utils/json.f
+REQUIRE ../net/http.f
 
 PROVIDED akashic-session
 

@@ -12,8 +12,8 @@
 \
 \ Load with:   REQUIRE aturi.f
 
-REQUIRE string.f
-REQUIRE uri.f  
+REQUIRE ../utils/string.f
+REQUIRE ../net/uri.f
 
 PROVIDED akashic-aturi
 

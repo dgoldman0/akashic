@@ -12,8 +12,9 @@
 \ Prefix: URI-   (public API)
 \         _URI-  (internal helpers)
 \
-\ REQUIRE string.f   (for /STRING, STR-INDEX)
 \ Load with:   REQUIRE uri.f
+
+REQUIRE ../utils/string.f
 
 PROVIDED akashic-uri
 
