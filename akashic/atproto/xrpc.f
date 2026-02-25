@@ -24,7 +24,12 @@ VARIABLE XRPC-HOST-LEN                  \ hostname length
   DUP XRPC-HOST-LEN !                   ( src len )
   MOVE ;
 _XRPC-DEFAULT-HOST
-S" application/json" HTTP-SET-ACCEPT
+
+\ Set default Accept header.  Wrapped in a colon definition
+\ because interpret-mode S" returns a garbage length on KDOS.
+: _XRPC-DEFAULT-ACCEPT  ( -- )
+  S" application/json" HTTP-SET-ACCEPT ;
+_XRPC-DEFAULT-ACCEPT
 
 : XRPC-SET-HOST  ( addr len -- )
   DUP 63 > IF  2DROP EXIT  THEN

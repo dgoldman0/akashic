@@ -348,13 +348,15 @@ VARIABLE _HTTP-ACCEPT-LEN
 : HTTP-CLEAR-ACCEPT  ( -- )  0 _HTTP-ACCEPT-LEN ! ;
 
 \ HTTP-APPLY-SESSION ( -- )
-\   Add session headers (bearer token, user-agent).
+\   Add session headers (bearer token, user-agent, accept).
 : HTTP-APPLY-SESSION  ( -- )
     _HTTP-BEARER-LEN @ 0> IF
         _HTTP-BEARER _HTTP-BEARER-LEN @ HDR-AUTH-BEARER
     THEN
     _HTTP-UA-LEN @ 0> IF
         _HTTP-UA _HTTP-UA-LEN @ HDR-USER-AGENT
+    ELSE
+        S" KDOS/1.1 Megapad-64" HDR-USER-AGENT
     THEN
     _HTTP-ACCEPT-LEN @ 0> IF
         _HTTP-ACCEPT _HTTP-ACCEPT-LEN @ HDR-ACCEPT
@@ -390,11 +392,18 @@ VARIABLE _HTTP-RT-LEN
 
 \ HTTP-REQUEST ( method-a method-u url-a url-u -- ior )
 \   Full request cycle: parse URL → connect → build/send → recv → parse.
+CREATE _HTTP-METHOD-BUF 16 ALLOT
+VARIABLE _HTTP-METHOD-LEN
+
 : HTTP-REQUEST  ( method-a method-u url-a url-u -- ior )
     HTTP-CLEAR-ERR
+    \ Save method to buffer (S" transient buffer gets clobbered)
+    2SWAP                                  ( url-a url-u method-a method-u )
+    15 MIN DUP _HTTP-METHOD-LEN !          ( url-a url-u method-a clamped )
+    _HTTP-METHOD-BUF SWAP CMOVE            ( url-a url-u )
     \ Parse URL
     URL-PARSE 0<> IF
-        2DROP HTTP-E-PARSE HTTP-FAIL -1 EXIT
+        HTTP-E-PARSE HTTP-FAIL -1 EXIT
     THEN
     \ Connect
     URL-HOST URL-HOST-LEN @
@@ -402,14 +411,15 @@ VARIABLE _HTTP-RT-LEN
     URL-SCHEME @ URL-S-HTTPS = URL-SCHEME @ URL-S-FTPS = OR
     URL-SCHEME @ URL-S-WSS = OR
     HTTP-CONNECT
-    DUP 0= IF DROP 2DROP -1 EXIT THEN
+    DUP 0= IF DROP -1 EXIT THEN
     DROP                                   \ drop ctx (stored in _HTTP-CTX)
     \ Build request
     HDR-RESET
-    _HTTP-REQ-TARGET HDR-METHOD            ( method was on stack )
+    _HTTP-METHOD-BUF _HTTP-METHOD-LEN @
+    _HTTP-REQ-TARGET
+    HDR-METHOD
     URL-HOST URL-HOST-LEN @ HDR-HOST
     HDR-CONNECTION-CLOSE
-    S" KDOS/1.1 Megapad-64" HDR-USER-AGENT
     HTTP-APPLY-SESSION
     HDR-END
     \ Send
@@ -431,6 +441,10 @@ VARIABLE _HTTP-RT-LEN
     S" GET" 2SWAP HTTP-REQUEST
     0= IF
         HTTP-BODY-ADDR @ HTTP-BODY-LEN @
+        \ Dechunk if Transfer-Encoding: chunked
+        HTTP-RECV-BUF @ _HTTP-HEND-OFF @ HDR-CHUNKED? IF
+            HTTP-DECHUNK
+        THEN
     ELSE 0 0 THEN ;
 
 \ HTTP-POST ( url-a url-u body-a body-u ct-a ct-u -- resp-a resp-u | 0 0 )
@@ -473,6 +487,10 @@ VARIABLE _HP-CTLEN
     HTTP-DISCONNECT
     HTTP-PARSE 0= IF
         HTTP-BODY-ADDR @ HTTP-BODY-LEN @
+        \ Dechunk if Transfer-Encoding: chunked
+        HTTP-RECV-BUF @ _HTTP-HEND-OFF @ HDR-CHUNKED? IF
+            HTTP-DECHUNK
+        THEN
     ELSE 0 0 THEN ;
 
 \ HTTP-POST-JSON ( url-a url-u json-a json-u -- resp-a resp-u | 0 0 )
