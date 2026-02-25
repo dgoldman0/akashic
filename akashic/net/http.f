@@ -349,6 +349,26 @@ VARIABLE _HTTP-UA-LEN
 \  Layer 3 — Request Execution
 \ =====================================================================
 
+\ _HTTP-REQ-TARGET ( -- addr len )
+\   Build full request target: path + "?" + query (if any).
+CREATE _HTTP-RT-BUF 512 ALLOT
+VARIABLE _HTTP-RT-LEN
+
+: _HTTP-REQ-TARGET  ( -- addr len )
+    0 _HTTP-RT-LEN !
+    URL-PATH URL-PATH-LEN @
+    DUP _HTTP-RT-LEN +!
+    _HTTP-RT-BUF SWAP CMOVE
+    URL-QUERY-LEN @ 0> IF
+        63 _HTTP-RT-BUF _HTTP-RT-LEN @ + C!
+        1 _HTTP-RT-LEN +!
+        URL-QUERY-BUF URL-QUERY-LEN @
+        _HTTP-RT-BUF _HTTP-RT-LEN @ + SWAP
+        DUP _HTTP-RT-LEN +!
+        CMOVE
+    THEN
+    _HTTP-RT-BUF _HTTP-RT-LEN @ ;
+
 \ HTTP-REQUEST ( method-a method-u url-a url-u -- ior )
 \   Full request cycle: parse URL → connect → build/send → recv → parse.
 : HTTP-REQUEST  ( method-a method-u url-a url-u -- ior )
@@ -367,7 +387,7 @@ VARIABLE _HTTP-UA-LEN
     DROP                                   \ drop ctx (stored in _HTTP-CTX)
     \ Build request
     HDR-RESET
-    URL-PATH URL-PATH-LEN @ HDR-METHOD     ( method was on stack )
+    _HTTP-REQ-TARGET HDR-METHOD            ( method was on stack )
     URL-HOST URL-HOST-LEN @ HDR-HOST
     HDR-CONNECTION-CLOSE
     S" KDOS/1.1 Megapad-64" HDR-USER-AGENT
@@ -416,7 +436,7 @@ VARIABLE _HP-CTLEN
     DROP
     \ Build request
     HDR-RESET
-    S" POST" URL-PATH URL-PATH-LEN @ HDR-METHOD
+    S" POST" _HTTP-REQ-TARGET HDR-METHOD
     URL-HOST URL-HOST-LEN @ HDR-HOST
     _HP-BLEN @ HDR-CONTENT-LENGTH
     _HP-CT @ _HP-CTLEN @ HDR-CONTENT-TYPE
