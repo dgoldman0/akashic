@@ -24,6 +24,7 @@ VARIABLE XRPC-HOST-LEN                  \ hostname length
   DUP XRPC-HOST-LEN !                   ( src len )
   MOVE ;
 _XRPC-DEFAULT-HOST
+S" application/json" HTTP-SET-ACCEPT
 
 : XRPC-SET-HOST  ( addr len -- )
   DUP 63 > IF  2DROP EXIT  THEN

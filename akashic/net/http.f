@@ -322,6 +322,10 @@ CREATE _HTTP-UA 64 ALLOT
 VARIABLE _HTTP-UA-LEN
 0 _HTTP-UA-LEN !
 
+CREATE _HTTP-ACCEPT 64 ALLOT
+VARIABLE _HTTP-ACCEPT-LEN
+0 _HTTP-ACCEPT-LEN !
+
 \ HTTP-SET-BEARER ( token-a token-u -- )
 : HTTP-SET-BEARER  ( token-a token-u -- )
     511 MIN DUP _HTTP-BEARER-LEN !
@@ -335,6 +339,14 @@ VARIABLE _HTTP-UA-LEN
     63 MIN DUP _HTTP-UA-LEN !
     _HTTP-UA SWAP CMOVE ;
 
+\ HTTP-SET-ACCEPT ( type-a type-u -- )
+: HTTP-SET-ACCEPT  ( type-a type-u -- )
+    63 MIN DUP _HTTP-ACCEPT-LEN !
+    _HTTP-ACCEPT SWAP CMOVE ;
+
+\ HTTP-CLEAR-ACCEPT ( -- )
+: HTTP-CLEAR-ACCEPT  ( -- )  0 _HTTP-ACCEPT-LEN ! ;
+
 \ HTTP-APPLY-SESSION ( -- )
 \   Add session headers (bearer token, user-agent).
 : HTTP-APPLY-SESSION  ( -- )
@@ -343,6 +355,9 @@ VARIABLE _HTTP-UA-LEN
     THEN
     _HTTP-UA-LEN @ 0> IF
         _HTTP-UA _HTTP-UA-LEN @ HDR-USER-AGENT
+    THEN
+    _HTTP-ACCEPT-LEN @ 0> IF
+        _HTTP-ACCEPT _HTTP-ACCEPT-LEN @ HDR-ACCEPT
     THEN ;
 
 \ =====================================================================
