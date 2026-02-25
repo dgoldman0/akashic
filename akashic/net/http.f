@@ -372,15 +372,19 @@ VARIABLE _HTTP-RT-LEN
 : _HTTP-REQ-TARGET  ( -- addr len )
     0 _HTTP-RT-LEN !
     URL-PATH URL-PATH-LEN @
+    511 MIN
     DUP _HTTP-RT-LEN +!
     _HTTP-RT-BUF SWAP CMOVE
     URL-QUERY-LEN @ 0> IF
-        63 _HTTP-RT-BUF _HTTP-RT-LEN @ + C!
-        1 _HTTP-RT-LEN +!
-        URL-QUERY-BUF URL-QUERY-LEN @
-        _HTTP-RT-BUF _HTTP-RT-LEN @ + SWAP
-        DUP _HTTP-RT-LEN +!
-        CMOVE
+        _HTTP-RT-LEN @ 510 < IF
+            63 _HTTP-RT-BUF _HTTP-RT-LEN @ + C!
+            1 _HTTP-RT-LEN +!
+            URL-QUERY-BUF URL-QUERY-LEN @
+            511 _HTTP-RT-LEN @ - MIN
+            _HTTP-RT-BUF _HTTP-RT-LEN @ + SWAP
+            DUP _HTTP-RT-LEN +!
+            CMOVE
+        THEN
     THEN
     _HTTP-RT-BUF _HTTP-RT-LEN @ ;
 

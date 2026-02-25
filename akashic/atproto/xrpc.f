@@ -38,12 +38,14 @@ CREATE _XR-URL  512 ALLOT               \ assembled URL buffer
 VARIABLE _XR-POS                         \ current write position
 
 : _XR-APPEND  ( addr len -- )
+  _XR-POS @ OVER + 512 > IF  2DROP EXIT  THEN
   _XR-URL _XR-POS @ +                   ( addr len dst )
   SWAP                                   ( addr dst len )
   DUP _XR-POS +!                        ( addr dst len )
   MOVE ;
 
 : _XR-C!  ( char -- )
+  _XR-POS @ 511 > IF  DROP EXIT  THEN
   _XR-URL _XR-POS @ + C!
   1 _XR-POS +! ;
 
