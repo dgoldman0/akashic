@@ -207,45 +207,37 @@ cache.f  ──→ raster.f        (planned)
 ### Tier 4 — Rasterization
 
 #### `font/raster.f` — Scanline Rasterizer
-- **Status**: Partially implemented (Stage C1)
+- **Status**: ✅ Implemented (Stage C2 complete)
 - **Working**: Edge table, scanline x-intercept collection, insertion
   sort, even-odd fill, bitmap output (1 byte/pixel, 0xFF=filled).
-- **CRITICAL ISSUE — Off-curve points not handled**:
-  `_RST-WALK-CONTOUR` treats ALL decoded TrueType points as straight-line
-  vertices. Off-curve quadratic Bézier control points are connected
-  as straight line segments instead of being flattened through `bezier.f`.
-  Curved contours render as coarse polygons. This is the single most
-  important fix needed. To implement (Stage C2):
-  1. Check `TTF-PT-ONCURVE?` for each point in the contour walker
-  2. When off-curve: find next on-curve point (or compute implied
-     midpoint between consecutive off-curve points per TrueType spec)
-  3. Convert integer pixel coordinates to FP16 via `INT>FP16`
-  4. Call `BZ-QUAD-FLATTEN` with appropriate tolerance
-  5. In callback: convert FP16 endpoints back to integers, call `RAST-EDGE`
-  6. The `bezier.f` API (`BZ-QUAD-FLATTEN`) already exists and is ready
-- **Other issues**:
+- **Stage C2 — Off-curve handling**: ✅ Implemented.
+  `_RST-WALK-CONTOUR` now dispatches on `TTF-PT-ONCURVE?` for every
+  contour point. `_RST-OFF-CURVE` accumulates control points and computes
+  implied on-curve midpoints between consecutive off-curve points per
+  the TrueType spec. `_RST-EMIT-QUAD` converts integer pixel coords to
+  FP16 and calls `BZ-QUAD-FLATTEN` (tolerance 0.25 px); the flatten
+  callback (`_RST-BZ-CB`) converts results back to integers and emits
+  `RAST-EDGE`. All starting-point edge cases are handled (first on-curve,
+  first off-curve + last on-curve, both off-curve → implied midpoint).
+  The now-unused `REQUIRE fixed.f` was removed.
+- **Remaining issues**:
   - **1bpp only** — no anti-aliasing. 4× vertical supersampling
     (render at 4× height, average down) is the planned approach but
     not implemented.
-  - `REQUIRE fixed.f` is loaded but not used by current code — was
-    added in anticipation of Bézier integration in C2.
   - **Hard limits** (undocumented in header):
     - `_RST-MAX-EDGES` = 512
     - `_RST-MAX-XINTS` = 256
-- **Tests needed**: Critical — the contour walker needs integration
-  tests with real glyph data to verify correct rendering.
-
-### Not Yet Started
+- **Tests needed**: Integration tests with real glyph data to verify
+  correct rendering of curved contours.
 
 #### `font/cache.f` — Glyph Bitmap Cache
-- **Status**: Not started
-- **Purpose**: Cache rendered glyph bitmaps in XMEM/HBW to avoid
-  re-rasterizing frequently used characters.
-- **Design considerations**:
-  - LRU eviction or simple hash table keyed on (glyph_id, pixel_size)
-  - At 8×16 px, a glyph bitmap is 128 bytes at 1 byte/pixel.
-    A 256-glyph cache ≈ 32 KiB — fits easily in HBW's 3 MiB.
-  - Should handle cache miss → rasterize → store → return bitmap addr
+- **Status**: ✅ Implemented
+- **Design**: Direct-mapped hash table (256 slots, Knuth multiplicative
+  hash) keyed on `(glyph_id, pixel_size)`. Linear bitmap pool with
+  generational flush on exhaustion (256 KiB pool; fits sizes up to 32 px
+  without eviction pressure).
+- **API**: `GC-GET` (main entry: lookup or rasterize), `GC-LOOKUP`,
+  `GC-STORE`, `GC-FLUSH`.
 - **Depends on**: raster.f
 
 #### `text/layout.f` — Text Layout Engine
@@ -280,15 +272,15 @@ cache.f  ──→ raster.f        (planned)
 
 ## Phase Plan
 
-### Phase 1 — Fix Critical Rasterizer Gap (raster.f Stage C2)
+### Phase 1 — Fix Critical Rasterizer Gap (raster.f Stage C2) ✅
 
-**Priority**: Highest. Without this, all curved glyphs render incorrectly.
+**Status**: Complete.
 
-1. Modify `_RST-WALK-CONTOUR` to inspect `TTF-PT-ONCURVE?`
-2. Implement TrueType implied-midpoint logic for consecutive off-curve pts
-3. Convert to FP16, call `BZ-QUAD-FLATTEN`, convert results back
-4. Write integration tests with known glyph outlines
-5. Validate against reference renderings for basic Latin characters
+1. ✅ `_RST-WALK-CONTOUR` inspects `TTF-PT-ONCURVE?` for every point
+2. ✅ TrueType implied-midpoint logic for consecutive off-curve pts
+3. ✅ FP16 conversion, `BZ-QUAD-FLATTEN` with 0.25 px tolerance, callback
+4. Write integration tests with known glyph outlines _(Phase 2)_
+5. Validate against reference renderings for basic Latin characters _(Phase 2)_
 
 ### Phase 2 — Write Tests for All Modules
 
@@ -320,14 +312,16 @@ structure should follow the existing patterns (e.g., `test_css.py`,
 - `test_raster.py` — Edge insertion/normalization; horizontal edge
   discard; scanline intercept math; sort correctness; even-odd fill
   for known polygons (triangle, rectangle, overlapping); full
-  RAST-GLYPH pipeline once C2 is complete
+  RAST-GLYPH pipeline with curved contours
 
-### Phase 3 — Glyph Cache (cache.f)
+### Phase 3 — Glyph Cache (cache.f) ✅
 
-1. Design cache data structure (hash map or direct-mapped)
-2. Implement CACHE-LOOKUP, CACHE-STORE, CACHE-EVICT
-3. Integrate with raster.f: miss → rasterize → store
-4. Write tests for hit/miss/eviction paths
+**Status**: Complete.
+
+1. ✅ Direct-mapped hash table keyed on (glyph_id, pixel_size)
+2. ✅ `GC-LOOKUP`, `GC-STORE`, `GC-FLUSH`; `GC-GET` as unified API
+3. ✅ Pool-based bitmap allocator with generational flush on exhaustion
+4. Write tests for hit/miss/eviction paths _(Phase 2)_
 
 ### Phase 4 — Text Layout (layout.f) ✅
 

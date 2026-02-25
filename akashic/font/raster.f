@@ -17,7 +17,6 @@
 \ Load with:   REQUIRE raster.f
 
 PROVIDED akashic-raster
-REQUIRE ../math/fixed.f
 
 \ =====================================================================
 \  Edge table
