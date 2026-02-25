@@ -418,7 +418,7 @@ synchronization, and general resource counting.
 ;
 ```
 
-**Status:** ☐ Not started
+**Status:** ✅ Done — `akashic/concurrency/semaphore.f`
 
 ---
 
@@ -816,7 +816,7 @@ Priority order, highest-impact first:
 | 1  | event.f      | 1     | Everything else depends on wait/notify             | ✅     |
 | 2  | channel.f    | 2     | Unlocks CSP; makes web server concurrent trivially | ☐      |
 | 3  | future.f     | 3     | Most ergonomic async API (ASYNC/AWAIT)             | ☐      |
-| 4  | semaphore.f  | 1     | Rate-limiting, resource counting                   | ☐      |
+| 4  | semaphore.f  | 1     | Rate-limiting, resource counting                   | ✅     |
 | 5  | par.f        | 3     | Parallel map/reduce for math workloads             | ☐      |
 | 6  | scope.f      | 4     | Structured concurrency prevents leaks              | ☐      |
 | 7  | cvar.f       | 5     | Atomic variables with change notification          | ☐      |
