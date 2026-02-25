@@ -205,7 +205,7 @@ VARIABLE _SEM-DEADLINE
 
 : WITH-SEM  ( xt sem -- )
     DUP >R SEM-WAIT
-    SWAP CATCH
+    CATCH
     R> SEM-SIGNAL
     THROW ;                            \ re-throw if xt failed
 
