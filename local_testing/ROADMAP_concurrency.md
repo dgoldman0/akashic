@@ -430,29 +430,46 @@ synchronization, and general resource counting.
 Critical for shared lookup tables (font cache, route table, hash
 tables) that are read-heavy.
 
-**Data structure — 5 cells = 40 bytes:**
+**Data structure — 11 cells = 88 bytes:**
 
-| Offset | Field         | Description                     |
-|--------|---------------|---------------------------------|
-| +0     | readers       | Active reader count             |
-| +8     | writer        | -1 if write-locked, 0 otherwise |
-| +16    | lock#         | Spinlock number                 |
-| +24    | read-event    | Event: readers can proceed      |
-| +32    | write-event   | Event: writer can proceed       |
+Events are embedded inline (same pattern as semaphore.f) for
+zero-indirection access.  Each rwlock carries its own spinlock
+number so that unrelated rwlocks do not contend on the same
+hardware spinlock during state transitions.
+
+| Offset | Field         | Size    | Description                          |
+|--------|---------------|---------|--------------------------------------|
+| +0     | lock#         | 1 cell  | Per-lock spinlock number             |
+| +8     | readers       | 1 cell  | Active reader count                  |
+| +16    | writer        | 1 cell  | -1 if write-locked, 0 otherwise      |
+| +24    | read-event    | 4 cells | Embedded EVENT: pulsed when writer   |
+|        |               | (32 B)  | unlocks, waking blocked readers      |
+| +56    | write-event   | 4 cells | Embedded EVENT: pulsed when last     |
+|        |               | (32 B)  | reader or writer unlocks, waking     |
+|        |               |         | a blocked writer                     |
+
+**Notes on lock# field:**
+- KDOS currently has 8 hardware spinlocks (0–7), but this limit
+  is expected to be revised by the KDOS team.
+- Callers pass a spinlock number at creation time.
+- EVT-LOCK (6) is a reasonable default when no dedicated spinlock
+  is available.  Multiple rwlocks can share the same spinlock
+  number — correctness is preserved, only contention increases.
 
 **Public API:**
 
-| Word            | Signature          | Behavior                             |
-|-----------------|--------------------|--------------------------------------|
-| `RWLOCK`        | `( "name" -- )`    | Create a named reader-writer lock    |
-| `READ-LOCK`     | `( rwl -- )`       | Acquire shared read access           |
-| `READ-UNLOCK`   | `( rwl -- )`       | Release read access                  |
-| `WRITE-LOCK`    | `( rwl -- )`       | Acquire exclusive write access       |
-| `WRITE-UNLOCK`  | `( rwl -- )`       | Release write access                 |
-| `WITH-READ`     | `( xt rwl -- )`    | Execute xt under read lock           |
-| `WITH-WRITE`    | `( xt rwl -- )`    | Execute xt under write lock          |
+| Word            | Signature               | Behavior                             |
+|-----------------|-------------------------|--------------------------------------|
+| `RWLOCK`        | `( lock# "name" -- )`   | Create a named reader-writer lock    |
+| `READ-LOCK`     | `( rwl -- )`            | Acquire shared read access           |
+| `READ-UNLOCK`   | `( rwl -- )`            | Release read access                  |
+| `WRITE-LOCK`    | `( rwl -- )`            | Acquire exclusive write access       |
+| `WRITE-UNLOCK`  | `( rwl -- )`            | Release write access                 |
+| `WITH-READ`     | `( xt rwl -- )`         | Execute xt under read lock (RAII)    |
+| `WITH-WRITE`    | `( xt rwl -- )`         | Execute xt under write lock (RAII)   |
+| `RW-INFO`       | `( rwl -- )`            | Debug: print lock state              |
 
-**Status:** ☐ Not started
+**Status:** ✅ Complete
 
 ---
 
@@ -820,7 +837,7 @@ Priority order, highest-impact first:
 | 5  | par.f        | 3     | Parallel map/reduce for math workloads             | ☐      |
 | 6  | scope.f      | 4     | Structured concurrency prevents leaks              | ☐      |
 | 7  | cvar.f       | 5     | Atomic variables with change notification          | ☐      |
-| 8  | rwlock.f     | 1     | Read-heavy shared structures                       | ☐      |
+| 8  | rwlock.f     | 1     | Read-heavy shared structures                       | ✅     |
 | 9  | mailbox.f    | 2     | Actor messaging (lower priority than channels)     | ☐      |
 | 10 | conc-map.f   | 5     | Fine-grained concurrent hash map                   | ☐      |
 
