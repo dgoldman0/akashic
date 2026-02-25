@@ -1804,7 +1804,7 @@ akashic/
 │   ├── probability.f   ✅  T5.5    Distributions & hypothesis testing
 │   ├── counting.f      ✅  T5.6    Combinatorics & frequency
 │   ├── sort.f          ✅  T5.1    Sorting & rank operations
-│   ├── color.f         ❌  T10.1   Color space math
+│   ├── color.f         ✅  T10.1   Color space math
 │   ├── fft.f           ❌  T7.1    Fast Fourier transform
 │   ├── filter.f        ❌  T7.2    Digital filters (FIR/IIR)
 │   ├── prng.f          ❌  T8.1    Pseudorandom (xoshiro256**)

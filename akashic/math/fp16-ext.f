@@ -23,6 +23,7 @@
 \   FP16-SQRT   ( a -- sqrt )     square root (Newton-Raphson)
 \   FP16-FLOOR  ( a -- floor )    floor to integral FP16
 \   FP16-FRAC   ( a -- frac )     fractional part
+\   FP16-ROUND  ( a -- rounded )  round to nearest integer (half-up)
 \   FP16>FX     ( fp16 -- fx )    FP16 → 16.16 fixed-point
 \   FX>FP16     ( fx -- fp16 )    16.16 fixed-point → FP16
 
@@ -200,6 +201,14 @@ VARIABLE _FR-SIGN
 
 : FP16-FRAC  ( a -- frac )
     DUP FP16-FLOOR FP16-SUB ;
+
+\ =====================================================================
+\  FP16-ROUND — round to nearest integer (half-up)
+\ =====================================================================
+\  round(x) = floor(x + 0.5)
+
+: FP16-ROUND  ( a -- rounded )
+    FP16-POS-HALF FP16-ADD FP16-FLOOR ;
 
 \ =====================================================================
 \  FP16 ↔ 16.16 fixed-point conversion
