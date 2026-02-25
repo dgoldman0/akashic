@@ -370,7 +370,7 @@ Can extend to a linked list if task slots grow.)
 ;
 ```
 
-**Status:** ☐ Not started
+**Status:** ✅ Done — `akashic/concurrency/event.f`
 
 ---
 
@@ -813,7 +813,7 @@ Priority order, highest-impact first:
 
 | #  | File         | Layer | Why First                                          | Status |
 |----|--------------|-------|----------------------------------------------------|--------|
-| 1  | event.f      | 1     | Everything else depends on wait/notify             | ☐      |
+| 1  | event.f      | 1     | Everything else depends on wait/notify             | ✅     |
 | 2  | channel.f    | 2     | Unlocks CSP; makes web server concurrent trivially | ☐      |
 | 3  | future.f     | 3     | Most ergonomic async API (ASYNC/AWAIT)             | ☐      |
 | 4  | semaphore.f  | 1     | Rate-limiting, resource counting                   | ☐      |
