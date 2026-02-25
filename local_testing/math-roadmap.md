@@ -1805,7 +1805,7 @@ akashic/
 │   ├── counting.f      ✅  T5.6    Combinatorics & frequency
 │   ├── sort.f          ✅  T5.1    Sorting & rank operations
 │   ├── color.f         ✅  T10.1   Color space math
-│   ├── fft.f           ❌  T7.1    Fast Fourier transform
+│   ├── fft.f           ✅  T7.1    Fast Fourier transform
 │   ├── filter.f        ❌  T7.2    Digital filters (FIR/IIR)
 │   ├── prng.f          ❌  T8.1    Pseudorandom (xoshiro256**)
 │   ├── bigint.f        ❌  T9.1    Arbitrary-precision integers
