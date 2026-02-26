@@ -1,6 +1,7 @@
 # akashic-raster — Scanline Glyph Rasterizer for KDOS / Megapad-64
 
-Even-odd scanline fill rasterizer for TrueType glyph outlines.
+Even-odd scanline fill rasterizer for TrueType glyph outlines
+with configurable N×N anti-aliased supersampling.
 Handles on-curve and off-curve (quadratic Bézier) points, flattening
 curves via `BZ-QUAD-FLATTEN` from `bezier.f`.
 
@@ -17,6 +18,7 @@ REQUIRE raster.f
 - [Design Principles](#design-principles)
 - [Dependencies](#dependencies)
 - [Edge Table](#edge-table)
+- [Anti-Aliased Fill](#anti-aliased-fill)
 - [Scanline Fill](#scanline-fill)
 - [Contour Walker](#contour-walker)
 - [RAST-GLYPH](#rast-glyph)
@@ -30,7 +32,8 @@ REQUIRE raster.f
 | Principle | Detail |
 |---|---|
 | **Even-odd fill rule** | Scanline x-intercepts are sorted; pixels between pairs are filled. |
-| **1 byte/pixel** | Bitmap format: 0x00 = empty, 0xFF = filled.  Row-major. |
+| **Anti-aliased** | Configurable N×N supersampling grid; each pixel gets 0-255 coverage. Default N=6. |
+| **1 byte/pixel** | Bitmap format: 0x00 = empty, 0xFF = fully covered, intermediates for AA edges.  Row-major. |
 | **Integer pixel coords** | Coordinates are scaled to pixels before edge insertion. |
 | **Bézier flattening** | Off-curve TrueType control points are flattened through `BZ-QUAD-FLATTEN` with 0.25px tolerance. |
 | **Coordinate pipeline** | Font units → integer pixels → FP16 (for Bézier) → integer pixels (for edges). |
@@ -67,7 +70,7 @@ Maximum edges: 512 (`_RST-MAX-EDGES`).
 
 | Word | Stack Effect | Description |
 |---|---|---|
-| `RAST-FILL` | `( buf-addr width height -- )` | Rasterize edges into bitmap |
+| `RAST-FILL` | `( buf-addr width height -- )` | Rasterize edges into bitmap (no AA) |
 
 For each scanline `y` from 0 to `height-1`:
 1. Collect x-intercepts from all active edges (`y0 <= y < y1`)
@@ -76,6 +79,35 @@ For each scanline `y` from 0 to `height-1`:
 
 The bitmap at `buf-addr` is cleared to zero before filling.
 Each pixel is 1 byte: 0x00 = empty, 0xFF = filled.
+
+---
+
+## Anti-Aliased Fill
+
+| Word | Stack Effect | Description |
+|---|---|---|
+| `RAST-AA!` | `( n -- )` | Set supersampling rate (1=off, 4–8 typical, default 6) |
+| `RAST-AA@` | `( -- n )` | Get current supersampling rate |
+| `RAST-FILL-AA` | `( buf-addr width height -- )` | Rasterize edges with N×N AA |
+
+For each output pixel, an N×N grid of sub-pixels is sampled:
+
+1. Edges must be pre-scaled to N× resolution (done by `RAST-GLYPH`)
+2. For each output row, N sub-scanlines are rasterized at N× width
+3. Sub-pixel hits are accumulated (0 to N per sub-column per row)
+4. N sub-columns are summed per output pixel (total 0–N²)
+5. Coverage mapped: `255 * hits / N²`
+
+Higher N values give smoother edges but cost O(N²) per pixel.
+Typical values:
+
+| N | Sub-pixels | Coverage levels | Speed |
+|---|---|---|---|
+| 1 | 1 | 2 (binary) | Fastest |
+| 4 | 16 | 17 | Fast |
+| 6 | 36 | 37 | Default |
+| 8 | 64 | 65 | High quality |
+| 10 | 100 | 101 | Ultra |
 
 ---
 
@@ -116,7 +148,7 @@ Integer pixel edges → RAST-EDGE
 
 | Word | Stack Effect | Description |
 |---|---|---|
-| `RAST-SCALE!` | `( pixel-size upem -- )` | Set coordinate scaling |
+| `RAST-SCALE!` | `( pixel-size-y pixel-size-x upem -- )` | Set coordinate scaling (separate X/Y for AA) |
 
 ---
 
@@ -131,7 +163,7 @@ Steps:
 2. Reset edge table
 3. Decode glyph via `TTF-DECODE-GLYPH`
 4. Walk each contour, emitting edges
-5. Fill bitmap via `RAST-FILL`
+5. Fill bitmap via `RAST-FILL-AA` (anti-aliased, uses current `RAST-AA@` rate)
 
 Returns `TRUE` on success, `FALSE` if glyph has no data (e.g.,
 space character or composite glyph).
@@ -147,8 +179,11 @@ Prerequisite: All TTF tables must be parsed (`TTF-PARSE-HEAD`,
 RAST-RESET      ( -- )
 RAST-EDGE       ( x0 y0 x1 y1 -- )
 RAST-NEDGES     ( -- n )
-RAST-FILL       ( buf-addr width height -- )
-RAST-SCALE!     ( pixel-size upem -- )
+RAST-FILL       ( buf-addr width height -- )     \ no AA
+RAST-FILL-AA    ( buf-addr width height -- )     \ N×N AA
+RAST-AA!        ( n -- )                         \ set AA rate
+RAST-AA@        ( -- n )                         \ get AA rate
+RAST-SCALE!     ( pixel-size-y pixel-size-x upem -- )
 RAST-GLYPH      ( glyph-id pixel-size buf-addr w h -- ok? )
 ```
 
@@ -156,13 +191,13 @@ RAST-GLYPH      ( glyph-id pixel-size buf-addr w h -- ok? )
 
 ## Known Limitations
 
-1. **1bpp only** — No anti-aliasing.  Planned: 4× vertical
-   supersampling for 4-level alpha.
-2. **512 edge limit** — Complex glyphs with many curve segments
+1. **512 edge limit** — Complex glyphs with many curve segments
    may exceed this.
-3. **256 x-intercept limit** — Extremely complex scanlines could
+2. **256 x-intercept limit** — Extremely complex scanlines could
    overflow.
-4. **Simple glyphs only** — Inherits ttf.f limitation: composite
+3. **Simple glyphs only** — Inherits ttf.f limitation: composite
    glyphs are skipped.
-5. **No hinting** — Outline geometry only; small sizes may look
+4. **No hinting** — Outline geometry only; small sizes may look
    rough compared to hinted renderers.
+5. **Max AA width** — Output width × N must fit in 1280-byte
+   scratch buffer (e.g. N=8 → 160px max, N=6 → 213px max).

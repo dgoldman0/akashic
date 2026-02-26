@@ -750,15 +750,27 @@ VARIABLE _DRAW-PATH-BH
 \  DRAW-GLYPH — Render a cached glyph bitmap
 \ =====================================================================
 \  ( surf glyph-id size x y rgba -- )
-\  Uses GC-GET from font/cache.f.  The glyph bitmap is monochrome
-\  (1 byte/pixel: 0x00 or 0xFF).  Non-zero bytes get the foreground
-\  color written to the surface.
+\  Uses GC-GET from font/cache.f.  The glyph bitmap contains coverage
+\  values (0-255) from anti-aliased rasterization.  Non-zero bytes are
+\  alpha-blended with the surface using the coverage as opacity.
 
 VARIABLE _DRAW-GL-BMP
 VARIABLE _DRAW-GL-W
 VARIABLE _DRAW-GL-H
 VARIABLE _DRAW-GL-X
 VARIABLE _DRAW-GL-Y
+VARIABLE _DRAW-GL-COV    \ coverage value 0-255
+VARIABLE _DRAW-GL-BG     \ background pixel
+VARIABLE _DRAW-GL-FR     \ foreground R
+VARIABLE _DRAW-GL-FG     \ foreground G
+VARIABLE _DRAW-GL-FB     \ foreground B
+VARIABLE _DRAW-GL-OUT    \ blended rgba output
+
+: _DRAW-GL-BLEND  ( fg bg cov -- out )
+    >R                     ( fg bg )
+    SWAP R@ *              ( bg fg*cov )
+    SWAP 255 R> - *        ( fg*cov bg*(255-cov) )
+    + 255 / ;
 
 : DRAW-GLYPH  ( surf glyph-id size x y rgba -- )
     _DRAW-RGBA !  _DRAW-GL-Y !  _DRAW-GL-X !
@@ -771,16 +783,64 @@ VARIABLE _DRAW-GL-Y
     \ 0 0 0 = cache miss, skip
     _DRAW-GL-BMP @ 0= IF EXIT THEN
 
-    \ Blit monochrome bitmap: write foreground where byte != 0
+    \ Extract foreground RGB
+    _DRAW-RGBA @ 24 RSHIFT 255 AND _DRAW-GL-FR !
+    _DRAW-RGBA @ 16 RSHIFT 255 AND _DRAW-GL-FG !
+    _DRAW-RGBA @  8 RSHIFT 255 AND _DRAW-GL-FB !
+
+    \ Blit with alpha blending using coverage
     _DRAW-GL-H @ 0 DO
         _DRAW-GL-W @ 0 DO
             _DRAW-GL-BMP @  J _DRAW-GL-W @ * +  I +
-            C@ 0<> IF
-                _DRAW-SURF @
-                _DRAW-GL-X @ I +
-                _DRAW-GL-Y @ J +
-                _DRAW-RGBA @
-                SURF-PIXEL!
+            C@ DUP 0<> IF
+                _DRAW-GL-COV !
+                _DRAW-GL-COV @ 255 = IF
+                    \ Full coverage — write foreground directly
+                    _DRAW-SURF @
+                    _DRAW-GL-X @ I +
+                    _DRAW-GL-Y @ J +
+                    _DRAW-RGBA @
+                    SURF-PIXEL!
+                ELSE
+                    \ Partial coverage — alpha blend
+                    _DRAW-SURF @
+                    _DRAW-GL-X @ I +
+                    _DRAW-GL-Y @ J +
+                    SURF-PIXEL@  _DRAW-GL-BG !
+
+                    \ Blend R
+                    _DRAW-GL-FR @
+                    _DRAW-GL-BG @ 24 RSHIFT 255 AND
+                    _DRAW-GL-COV @
+                    _DRAW-GL-BLEND
+                    24 LSHIFT
+
+                    \ Blend G
+                    _DRAW-GL-FG @
+                    _DRAW-GL-BG @ 16 RSHIFT 255 AND
+                    _DRAW-GL-COV @
+                    _DRAW-GL-BLEND
+                    16 LSHIFT OR
+
+                    \ Blend B
+                    _DRAW-GL-FB @
+                    _DRAW-GL-BG @  8 RSHIFT 255 AND
+                    _DRAW-GL-COV @
+                    _DRAW-GL-BLEND
+                    8 LSHIFT OR
+
+                    \ Alpha = 0xFF
+                    255 OR
+
+                    \ Write blended pixel
+                    _DRAW-GL-OUT !
+                    _DRAW-SURF @
+                    _DRAW-GL-X @ I +
+                    _DRAW-GL-Y @ J +
+                    _DRAW-GL-OUT @ SURF-PIXEL!
+                THEN
+            ELSE
+                DROP
             THEN
         LOOP
     LOOP ;

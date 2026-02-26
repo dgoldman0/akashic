@@ -130,9 +130,9 @@ VARIABLE _GC-ST-BMP   VARIABLE _GC-ST-SLOT
 
 : GC-STORE  ( glyph-id size -- bmp-addr w h | 0 0 0 )
     _GC-ST-SZ !  _GC-ST-GID !
-    \ Compute bitmap dimensions: width = height = pixel size
+    \ Compute bitmap dimensions: w=size, h=(asc-desc)*size/upem
     _GC-ST-SZ @ _GC-ST-W !
-    _GC-ST-SZ @ _GC-ST-H !
+    TTF-ASCENDER TTF-DESCENDER - _GC-ST-SZ @ * TTF-UPEM / _GC-ST-H !
     \ Compute needed bytes
     _GC-ST-W @ _GC-ST-H @ *          ( nbytes )
     \ Try to allocate from pool

@@ -1,12 +1,16 @@
 \ raster.f — Scanline rasterizer for glyph outlines (Stage C2)
 \
-\ Takes line segments (edges), rasterizes into a monochrome
-\ bitmap using even-odd scanline fill.
+\ Takes line segments (edges), rasterizes into an anti-aliased
+\ bitmap using even-odd scanline fill with configurable N×N
+\ supersampling (default N=6, set via RAST-AA!).
 \
 \ Contour walker handles TrueType on-curve and off-curve points:
 \ off-curve quadratic Bézier control points are flattened via
 \ BZ-QUAD-FLATTEN from bezier.f.  Consecutive off-curve points
 \ generate implied on-curve midpoints per the TrueType spec.
+\
+\ Each output pixel has 0-255 coverage from the supersampling grid.
+\ Caller's alpha-blending composites the glyph with the background.
 \
 \ Coordinates are integers (pre-scaled from font units to pixels).
 \ Caller is responsible for coordinate scaling and Y-flip.
@@ -189,6 +193,73 @@ VARIABLE _RST-PAIR-I
     LOOP ;
 
 \ =====================================================================
+\  Anti-aliased fill — 4× Y supersampling
+\ =====================================================================
+\  Anti-aliased fill with configurable N×N supersampling.
+\
+\  RAST-AA! sets the supersampling rate (1 = off, 4–8 typical).
+\  RAST-FILL-AA rasterizes at N× resolution in both X and Y.
+\  For each output row, N sub-scanlines are filled into a temp row
+\  at N× output width.  Coverage is accumulated per sub-pixel,
+\  then N adjacent sub-columns are summed giving 0–N² total
+\  coverage → mapped to 0-255.
+\
+\  Max output width = 1280 / N pixels (N=8 → 160px, N=4 → 320px).
+\  For width > limit, reduce N or increase _RST-AA-MAXW.
+
+VARIABLE _RST-AA-N     \ supersampling rate (default 6)
+6 _RST-AA-N !
+
+: RAST-AA!  ( n -- )  _RST-AA-N ! ;
+: RAST-AA@  ( -- n )  _RST-AA-N @ ;
+
+1280 CONSTANT _RST-AA-MAXW
+CREATE _RST-AA-ROW  _RST-AA-MAXW ALLOT    \ temp row (N× output width)
+CREATE _RST-AA-ACC  _RST-AA-MAXW ALLOT    \ accumulator (N× output width)
+
+VARIABLE _RST-AA-W
+VARIABLE _RST-AA-BUF
+VARIABLE _RST-AA-WN    \ width * N
+VARIABLE _RST-AA-N2    \ N * N (total sub-pixels)
+
+: RAST-FILL-AA  ( buf-addr width height -- )
+    >R _RST-AA-W !  _RST-AA-BUF !
+    _RST-AA-W @ _RST-AA-N @ * _RST-AA-WN !
+    _RST-AA-N @ DUP * _RST-AA-N2 !
+    \ Clear output buffer
+    _RST-AA-BUF @ _RST-AA-W @ R@ * 0 FILL
+    \ For each output row
+    R> 0 DO
+        \ Clear accumulator (N× width)
+        _RST-AA-ACC _RST-AA-WN @ 0 FILL
+        \ Rasterize N sub-scanlines at N× width, accumulate
+        _RST-AA-N @ 0 DO
+            _RST-AA-ROW _RST-AA-WN @ 0 FILL
+            _RST-AA-ROW _RST-BUF !
+            _RST-AA-WN @ _RST-WIDTH !
+            J _RST-AA-N @ * I +  _RST-COLLECT-XINTS
+            _RST-SORT-XINTS
+            0 _RST-FILL-PAIRS
+            \ Accumulate sub-pixel hits across N× width
+            _RST-AA-WN @ 0 DO
+                _RST-AA-ROW I + C@ 0<> IF
+                    _RST-AA-ACC I + DUP C@ 1+ SWAP C!
+                THEN
+            LOOP
+        LOOP
+        \ Downsample: sum N sub-columns per output pixel (total 0–N²)
+        _RST-AA-W @ 0 DO
+            0                              ( sum )
+            _RST-AA-N @ 0 DO
+                J _RST-AA-N @ * I +        ( sum idx )
+                _RST-AA-ACC + C@ +         ( sum' )
+            LOOP
+            255 * _RST-AA-N2 @ /           ( coverage 0-255 )
+            _RST-AA-BUF @ J _RST-AA-W @ * + I + C!
+        LOOP
+    LOOP ;
+
+\ =====================================================================
 \  Glyph contour → edge table (Stage C)
 \ =====================================================================
 \  Walks decoded glyph contours (from ttf.f's TTF-DECODE-GLYPH),
@@ -205,15 +276,16 @@ VARIABLE _RST-PAIR-I
 REQUIRE ttf.f
 REQUIRE ../math/bezier.f
 
-VARIABLE _RST-SCALE-N   \ numerator: target pixel size
+VARIABLE _RST-SCALE-N   \ numerator: target pixel size (Y, may be 4×)
+VARIABLE _RST-SCALE-NX  \ numerator: target pixel size (X, always 1×)
 VARIABLE _RST-SCALE-D   \ denominator: unitsPerEm
 VARIABLE _RST-YFLIP     \ target height for Y-flip
 
-: RAST-SCALE!  ( pixel-size upem -- )
-    _RST-SCALE-D !  _RST-SCALE-N ! ;
+: RAST-SCALE!  ( pixel-size-y pixel-size-x upem -- )
+    _RST-SCALE-D !  _RST-SCALE-NX !  _RST-SCALE-N ! ;
 
 : _RST-SCALE-X  ( font-x -- pixel-x )
-    _RST-SCALE-N @ * _RST-SCALE-D @ / ;
+    _RST-SCALE-NX @ * _RST-SCALE-D @ / ;
 
 : _RST-SCALE-Y  ( font-y -- pixel-y )
     _RST-SCALE-N @ * _RST-SCALE-D @ /
@@ -374,9 +446,10 @@ VARIABLE _RST-MID-X   VARIABLE _RST-MID-Y
 VARIABLE _RST-G-BUF  VARIABLE _RST-G-W  VARIABLE _RST-G-H
 
 : RAST-GLYPH  ( glyph-id pixel-size buf-addr w h -- ok? )
-    DUP _RST-YFLIP !
     _RST-G-H !  _RST-G-W !  _RST-G-BUF !   ( gid pxsz )
-    TTF-UPEM RAST-SCALE!                     ( gid )
+    DUP TTF-ASCENDER * TTF-UPEM / _RST-AA-N @ * _RST-YFLIP !
+    DUP _RST-AA-N @ * DUP TTF-UPEM RAST-SCALE!  ( gid pxsz )
+    DROP                                     ( gid )
     RAST-RESET
     TTF-DECODE-GLYPH                         ( npts ncont | 0 0 )
     DUP 0= IF 2DROP FALSE EXIT THEN
@@ -388,5 +461,5 @@ VARIABLE _RST-G-BUF  VARIABLE _RST-G-W  VARIABLE _RST-G-H
         I TTF-CONT-END 1+                    ( npts next-start )
     LOOP
     2DROP
-    _RST-G-BUF @ _RST-G-W @ _RST-G-H @ RAST-FILL
+    _RST-G-BUF @ _RST-G-W @ _RST-G-H @ RAST-FILL-AA
     TRUE ;
