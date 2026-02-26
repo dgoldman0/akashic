@@ -72,6 +72,7 @@ PROVIDED akashic-surface
 
 \ Flag bits
 1 CONSTANT _SURF-F-OWNS-BUF
+2 CONSTANT _SURF-F-XMEM-BUF    \ pixel buffer lives in ext RAM
 
 \ =====================================================================
 \  Internal scratch variables
@@ -121,18 +122,27 @@ VARIABLE _SFR-RGBA
     OVER _SURF-W2 !        \ save w
     DUP  _SURF-H2 !        \ save h
 
-    \ Allocate descriptor
+    \ Allocate descriptor (always internal heap — 80 bytes)
     SURF-DESC-SIZE ALLOCATE
     0<> ABORT" SURF-CREATE: descriptor alloc failed"
     _SURF-TMP !             \ surf → TMP
 
     \ Allocate pixel buffer: w × h × 4
-    _SURF-W2 @ _SURF-H2 @ * 4 * ALLOCATE
-    0<> IF
-        _SURF-TMP @ FREE
-        0 ABORT" SURF-CREATE: pixel buffer alloc failed"
+    _SURF-W2 @ _SURF-H2 @ * 4 *   ( bytes )
+    XMEM? IF
+        XMEM-ALLOT              ( buf )
+        _SURF-PTR !
+        _SURF-F-OWNS-BUF _SURF-F-XMEM-BUF OR
+    ELSE
+        ALLOCATE                 ( buf ior )
+        0<> IF
+            _SURF-TMP @ FREE
+            0 ABORT" SURF-CREATE: pixel buffer alloc failed"
+        THEN
+        _SURF-PTR !
+        _SURF-F-OWNS-BUF
     THEN
-    _SURF-PTR !             \ buf → PTR
+    _SURF-RGBA !            \ flags → temp
 
     \ Zero the pixel buffer
     _SURF-PTR @
@@ -148,7 +158,7 @@ VARIABLE _SFR-RGBA
     0                     _SURF-TMP @ S.CLIP-Y !
     _SURF-W2 @            _SURF-TMP @ S.CLIP-W !
     _SURF-H2 @            _SURF-TMP @ S.CLIP-H !
-    _SURF-F-OWNS-BUF     _SURF-TMP @ S.FLAGS  !
+    _SURF-RGBA @          _SURF-TMP @ S.FLAGS  !
 
     _SURF-TMP @ ;
 
@@ -189,7 +199,13 @@ VARIABLE _SFR-RGBA
 
 : SURF-DESTROY  ( surf -- )
     DUP S.FLAGS @ _SURF-F-OWNS-BUF AND IF
-        DUP S.BUF @ FREE
+        DUP S.FLAGS @ _SURF-F-XMEM-BUF AND IF
+            DUP  S.W @ OVER S.H @ * 4 *  ( surf size )
+            OVER S.BUF @                  ( surf size buf )
+            SWAP XMEM-FREE-BLOCK         ( surf )
+        ELSE
+            DUP S.BUF @ FREE
+        THEN
     THEN
     FREE ;
 
