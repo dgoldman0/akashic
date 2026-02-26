@@ -368,6 +368,16 @@ VARIABLE _BRS-FB    VARIABLE _BRS-FL
         0 _BRS-FB @ !   0 _BRS-FL @ !
     THEN ;
 
+\ Check one individual side property and override a field if found.
+\ ( box prop-a prop-u field-addr -- )
+VARIABLE _BRSD-FLD
+: _BOX-RESOLVE-SIDE  ( box prop-a prop-u fld -- )
+    _BRSD-FLD !
+    ROT B.DOM @   \ ( prop-a prop-u dom )
+    -ROT          \ ( dom prop-a prop-u )
+    DOM-STYLE@
+    IF  _BOX-PARSE-PX _BRSD-FLD @ !  ELSE  2DROP  THEN ;
+
 : BOX-RESOLVE-STYLE  ( box -- )
     _BRS-BOX !
 
@@ -389,23 +399,35 @@ VARIABLE _BRS-FB    VARIABLE _BRS-FL
     IF  _BOX-PARSE-PX  ELSE  2DROP BOX-AUTO  THEN
     _BRS-BOX @ B.H !
 
-    \ --- Margin (shorthand) ---
+    \ --- Margin (shorthand then individual overrides) ---
     _BRS-BOX @  S" margin"
     _BRS-BOX @ B.MT  _BRS-BOX @ B.MR
     _BRS-BOX @ B.MB  _BRS-BOX @ B.ML
     _BOX-RESOLVE-TRBL
+    _BRS-BOX @  S" margin-top"     _BRS-BOX @ B.MT  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" margin-right"   _BRS-BOX @ B.MR  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" margin-bottom"  _BRS-BOX @ B.MB  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" margin-left"    _BRS-BOX @ B.ML  _BOX-RESOLVE-SIDE
 
-    \ --- Padding (shorthand) ---
+    \ --- Padding (shorthand then individual overrides) ---
     _BRS-BOX @  S" padding"
     _BRS-BOX @ B.PT  _BRS-BOX @ B.PR
     _BRS-BOX @ B.PB  _BRS-BOX @ B.PL
     _BOX-RESOLVE-TRBL
+    _BRS-BOX @  S" padding-top"     _BRS-BOX @ B.PT  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" padding-right"   _BRS-BOX @ B.PR  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" padding-bottom"  _BRS-BOX @ B.PB  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" padding-left"    _BRS-BOX @ B.PL  _BOX-RESOLVE-SIDE
 
-    \ --- Border-width (shorthand) ---
+    \ --- Border-width (shorthand then individual overrides) ---
     _BRS-BOX @  S" border-width"
     _BRS-BOX @ B.BT  _BRS-BOX @ B.BR
     _BRS-BOX @ B.BB  _BRS-BOX @ B.BL
     _BOX-RESOLVE-TRBL
+    _BRS-BOX @  S" border-top-width"     _BRS-BOX @ B.BT  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" border-right-width"   _BRS-BOX @ B.BR  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" border-bottom-width"  _BRS-BOX @ B.BB  _BOX-RESOLVE-SIDE
+    _BRS-BOX @  S" border-left-width"    _BRS-BOX @ B.BL  _BOX-RESOLVE-SIDE
 
     \ --- Check if this is a text node box ---
     _BRS-BOX @ B.DOM @  DOM-TYPE@  DOM-T-TEXT = IF
@@ -493,6 +515,7 @@ VARIABLE _BBT-BOX        \ current box being created
 \   Called when we discover display:none after linking.
 \   ( box -- )  Frees the box and restores _BBT-LAST.
 VARIABLE _BUL-BOX
+VARIABLE _BUL-PREV
 : _BOX-UNLINK-LAST  ( box -- )
     _BUL-BOX !
     \ If it was set as first child of parent, clear that
@@ -501,16 +524,23 @@ VARIABLE _BUL-BOX
             0 _BBT-CUR-PAR @ B.CHILD !
         THEN
     THEN
-    \ _BBT-LAST was set to this box by _BOX-LINK-CHILD.
-    \ We need to find the previous sibling (or 0).
+    \ Find the previous sibling (whose B.NEXT = _BUL-BOX) and unlink.
     0 _BBT-LAST !   \ default: no previous
     _BBT-CUR-PAR @ 0<> IF
         _BBT-CUR-PAR @ B.CHILD @ 0<> IF
-            _BBT-CUR-PAR @ B.CHILD @  _BBT-LAST !
-            BEGIN
-                _BBT-LAST @ B.NEXT @ 0<> WHILE
-                _BBT-LAST @ B.NEXT @  _BBT-LAST !
-            REPEAT
+            _BBT-CUR-PAR @ B.CHILD @  _BUL-PREV !
+            _BUL-PREV @ _BUL-BOX @ = IF
+                \ First child IS the box — already handled above
+            ELSE
+                \ Walk until we find the predecessor
+                BEGIN
+                    _BUL-PREV @ B.NEXT @  _BUL-BOX @ <> WHILE
+                    _BUL-PREV @ B.NEXT @  _BUL-PREV !
+                REPEAT
+                \ _BUL-PREV's B.NEXT = _BUL-BOX.  Unlink.
+                0  _BUL-PREV @ B.NEXT  !
+                _BUL-PREV @  _BBT-LAST !
+            THEN
         THEN
     THEN
     _BUL-BOX @ BOX-DESTROY ;

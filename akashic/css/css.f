@@ -1201,9 +1201,9 @@ VARIABLE _CET-N
             \ parse 4th
             CSS-NEXT-VALUE IF
                 _CET-LL !  _CET-LA !  4 _CET-N !
-            THEN
-        THEN
-    THEN
+            ELSE 2DROP THEN
+        ELSE 2DROP THEN
+    ELSE 2DROP THEN
     2DROP                            \ drop remaining cursor
     \ apply expansion rules based on count
     _CET-N @ 1 = IF
