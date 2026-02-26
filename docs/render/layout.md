@@ -10,14 +10,15 @@ REQUIRE render/layout.f
 ```
 
 `PROVIDED akashic-layout-engine` — safe to include multiple times.
-Automatically requires `box.f` and `line.f` (and transitively
-`dom.f`, `css.f`, `markup/`, `utils/string.f`).
+Automatically requires `box.f`, `line.f`, and `text/layout.f` (and
+transitively `dom.f`, `css.f`, `markup/`, `utils/string.f`).
 
 ---
 
 ## Table of Contents
 
 - [Design Principles](#design-principles)
+- [Dependencies](#dependencies)
 - [Public API](#public-api)
   - [LAYO-LAYOUT](#layo-layout)
   - [LAYO-BLOCK](#layo-block)
@@ -32,6 +33,17 @@ Automatically requires `box.f` and `line.f` (and transitively
 - [Internals](#internals)
 - [Quick Reference](#quick-reference)
 - [Cookbook](#cookbook)
+
+---
+
+## Dependencies
+
+```
+layout.f
+├── box.f          (akashic-box)
+├── line.f         (akashic-line)
+└── text/layout.f  (akashic-text-layout — LAY-TEXT-WIDTH, LAY-SCALE!)
+```
 
 ---
 
@@ -56,8 +68,15 @@ LAYO-LAYOUT  ( box-root vp-w vp-h -- )
 ```
 
 Top-level entry point.  Sets the viewport dimensions, positions the
-root box (applying its margin + border + padding offsets), then
-runs block layout on the entire tree.
+root box (applying its margin + border + padding offsets), runs a
+**text measurement pre-pass** on the entire tree, then runs block
+layout.
+
+The text measurement pre-pass (`_LAYO-MEASURE-TEXT-REC`) walks the
+box tree recursively and sets `BOX-W` / `BOX-H` on every text box
+by measuring glyph advance widths via `LAY-TEXT-WIDTH` from
+`text/layout.f`.  Font size is read from the parent element's CSS
+`font-size` property (text nodes have no CSS of their own).
 
 | Parameter | Description |
 |---|---|
@@ -101,7 +120,8 @@ LAYO-INLINE-CONTEXT  ( box -- )
 Enter inline formatting context for a block box whose children are
 all inline or text.  Builds `LINE-RUN-*` runs from children, breaks
 into lines via `LINE-BREAK`, positions lines vertically, applies
-left alignment, and maps run positions back to child boxes.
+text alignment via `LINE-ALIGN` (reading `text-align` from the
+parent box's CSS), and maps run positions back to child boxes.
 
 ---
 
@@ -111,12 +131,20 @@ left alignment, and maps run positions back to child boxes.
 LAYO-RESOLVE-WIDTH  ( box -- )
 ```
 
-Resolve a box's content width.  If `width = auto`:
+Resolve a box's content width.
+
+**Percentage widths:** If the width was encoded as a percentage marker
+by `_BOX-PARSE-PX` (i.e. `BOX-W <= -2`), the percentage is resolved
+against the containing block width:
+
+$$w = \left\lfloor \frac{w_{\text{containing}} \times \text{pct}}{100} \right\rfloor$$
+
+**Auto width:** If `width = auto`:
 
 $$w = w_{\text{containing}} - m_L - m_R - p_L - p_R - b_L - b_R$$
 
-Clamped to $\geq 0$.  If width is already a concrete value, this is
-a no-op.
+Clamped to $\geq 0$.  If width is already a concrete value (positive
+or zero), this is a no-op.
 
 ---
 
@@ -202,7 +230,11 @@ When all children of a block are inline or text boxes:
 2. Runs are linked into a list and broken into **line boxes** via
    `LINE-BREAK` using the parent's content width.
 3. Lines are stacked vertically from Y = 0.
-4. Left alignment is applied via `LINE-ALIGN`.
+4. **Text alignment** is applied via `LINE-ALIGN`, reading the
+   parent box's CSS `text-align` property:
+   - `left` (default) — runs stay at their break positions.
+   - `center` — runs are shifted right by half the available space.
+   - `right` — runs are shifted right by all available space.
 5. Child boxes receive X and Y positions from their corresponding
    runs and line boxes.
 6. Text boxes with auto width/height get dimensions from run metrics;
@@ -234,6 +266,9 @@ When all children of a block are inline or text boxes:
 | `_LAYO-IS-INLINE` | `( display -- flag )` Check if inline or inline-block |
 | `_LAYO-ALL-CHILDREN-INLINE` | `( box -- flag )` Scan children for block types |
 | `_LAYO-MAKE-INLINE-RUN` | `( child -- run\|0 )` Create line run from box |
+| `_LAYO-GET-TEXT-FONT-SIZE` | `( text-box -- font-size )` Read parent's CSS `font-size` (default 16) |
+| `_LAYO-MEASURE-TEXT-REC` | `( box -- )` Recursive text measurement pre-pass |
+| `_LAYO-PARSE-TEXT-ALIGN` | `( box -- align-const )` Read CSS `text-align` → `LINE-A-LEFT`/`CENTER`/`RIGHT` |
 
 ---
 

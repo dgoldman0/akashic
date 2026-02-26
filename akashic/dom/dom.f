@@ -682,13 +682,106 @@ VARIABLE _DCS-TL
 
 VARIABLE _DSL-N   VARIABLE _DSL-PA   VARIABLE _DSL-PL
 
+\ -- CSS Inherited Properties -----------------------------------------
+\ CSS 2.1 § 6.2: certain properties inherit from parent when not
+\ explicitly set.  We check by property name.
+\
+\ Inherited properties we support:
+\   color, font-size, font-family, font-weight, font-style,
+\   line-height, text-align, text-decoration, text-transform,
+\   letter-spacing, word-spacing, white-space, direction,
+\   visibility, cursor, list-style, list-style-type,
+\   list-style-position, list-style-image
+
+\ Helper: check if byte at addr = constant
+\ ( a -- flag )  for quick char comparison
+
+CREATE _DOM-INHERIT-TBL   \ table of inherited property names (addr, len)
+\ We check against a hardcoded list. For speed, check prefix + length.
+
+: _DOM-IS-INHERITED?  ( prop-a prop-u -- flag )
+    \ Check common inherited properties by name
+    \ color (5)
+    2DUP S" color"             STR-STR= IF 2DROP -1 EXIT THEN
+    \ font-size (9)
+    2DUP S" font-size"         STR-STR= IF 2DROP -1 EXIT THEN
+    \ font-family (11)
+    2DUP S" font-family"       STR-STR= IF 2DROP -1 EXIT THEN
+    \ font-weight (11)
+    2DUP S" font-weight"       STR-STR= IF 2DROP -1 EXIT THEN
+    \ font-style (10)
+    2DUP S" font-style"        STR-STR= IF 2DROP -1 EXIT THEN
+    \ text-align (10)
+    2DUP S" text-align"        STR-STR= IF 2DROP -1 EXIT THEN
+    \ text-decoration (15)
+    2DUP S" text-decoration"   STR-STR= IF 2DROP -1 EXIT THEN
+    \ text-transform (14)
+    2DUP S" text-transform"    STR-STR= IF 2DROP -1 EXIT THEN
+    \ line-height (11)
+    2DUP S" line-height"       STR-STR= IF 2DROP -1 EXIT THEN
+    \ letter-spacing (14)
+    2DUP S" letter-spacing"    STR-STR= IF 2DROP -1 EXIT THEN
+    \ word-spacing (12)
+    2DUP S" word-spacing"      STR-STR= IF 2DROP -1 EXIT THEN
+    \ white-space (11)
+    2DUP S" white-space"       STR-STR= IF 2DROP -1 EXIT THEN
+    \ direction (9)
+    2DUP S" direction"         STR-STR= IF 2DROP -1 EXIT THEN
+    \ visibility (10)
+    2DUP S" visibility"        STR-STR= IF 2DROP -1 EXIT THEN
+    \ cursor (6)
+    2DUP S" cursor"            STR-STR= IF 2DROP -1 EXIT THEN
+    \ list-style-type (15)
+    2DUP S" list-style-type"   STR-STR= IF 2DROP -1 EXIT THEN
+    2DROP 0 ;
+
+\ Second style buffer for inheritance lookups (avoids clobbering _DOM-STY-BUF)
+CREATE _DOM-STY-BUF2 2048 ALLOT
+
 : DOM-STYLE@  ( node prop-a prop-u -- val-a val-u flag )
     _DSL-PL !  _DSL-PA !  _DSL-N !
     _DSL-N @ DOM-TYPE@ DOM-T-ELEMENT <> IF 0 0 0 EXIT THEN
+
+    \ Look up on this node first
     _DSL-N @ _DOM-STY-BUF 2048 DOM-COMPUTE-STYLE
     _DOM-STY-BUF SWAP
     _DSL-PA @ _DSL-PL @
-    CSS-DECL-FIND ;
+    CSS-DECL-FIND
+    DUP IF EXIT THEN      \ found — return (val-a val-u -1)
+
+    \ Not found.  Check if property is inherited.
+    DROP 2DROP             \ discard 0 0 0
+    _DSL-PA @ _DSL-PL @ _DOM-IS-INHERITED?
+    0= IF 0 0 0 EXIT THEN   \ not inherited — return not-found
+
+    \ Walk up parent chain looking for the property
+    _DSL-N @ DOM-PARENT    ( parent|0 )
+    BEGIN
+        DUP 0<> WHILE
+        DUP DOM-TYPE@ DOM-T-ELEMENT = IF
+            DUP _DOM-STY-BUF2 2048 DOM-COMPUTE-STYLE
+            _DOM-STY-BUF2 SWAP
+            _DSL-PA @ _DSL-PL @
+            CSS-DECL-FIND
+            IF
+                \ Found on ancestor — val-a val-u are in _DOM-STY-BUF2
+                ROT DROP       \ drop the parent node
+                -1 EXIT        \ return (val-a val-u -1)
+            THEN
+            2DROP              \ drop val-a val-u (both 0)
+        THEN
+        DOM-PARENT             ( next-parent|0 )
+    REPEAT
+    DROP   \ drop the 0
+    0 0 0  \ not found anywhere up the chain
+;
+
+\ DOM-STYLE-INHERIT@ — Look up ignoring the current node, only ancestors.
+\   Useful when a child wants to get the parent's value.
+: DOM-STYLE-INHERIT@  ( node prop-a prop-u -- val-a val-u flag )
+    ROT DOM-PARENT   ( prop-a prop-u parent|0 )
+    DUP 0= IF DROP 0 0 0 EXIT THEN
+    -ROT DOM-STYLE@ ;
 
 \ -- Cache stubs (v1: no caching) ------------------------------------
 

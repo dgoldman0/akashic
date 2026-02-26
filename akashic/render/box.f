@@ -282,6 +282,15 @@ VARIABLE _BPP-FD
     THEN
 
     _BPP-FD !  _BPP-FRAC !  _BPP-INT !
+
+    \ Check remaining string for '%' unit (ASCII 37)
+    DUP 0> IF
+        OVER C@ 37 = IF
+            2DROP
+            _BPP-INT @ 2 + NEGATE EXIT   \ -(pct+2): percentage marker
+        THEN
+    THEN
+
     2DROP                                \ drop remaining string
 
     \ Just use integer part (truncate fractional — pixel rounding)
@@ -432,6 +441,7 @@ VARIABLE _BRSD-FLD
     \ --- Check if this is a text node box ---
     _BRS-BOX @ B.DOM @  DOM-TYPE@  DOM-T-TEXT = IF
         _BOX-F-TEXT  _BRS-BOX @ B.FLAGS  !
+        BOX-D-INLINE  _BRS-BOX @ B.DISPLAY  !
     THEN ;
 
 \ =====================================================================

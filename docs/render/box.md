@@ -188,10 +188,33 @@ Read CSS properties from the box's DOM node and populate box fields:
 | `padding` | `B.PT B.PR B.PB B.PL` | Same. |
 | `border-width` | `B.BT B.BR B.BB B.BL` | Same. |
 
-Text nodes (`DOM-T-TEXT`) get the `_BOX-F-TEXT` flag set in `B.FLAGS`.
+Text nodes (`DOM-T-TEXT`) get the `_BOX-F-TEXT` flag set in `B.FLAGS`
+and their display is forced to `BOX-D-INLINE` (regardless of any CSS
+`display` value) so that the layout engine treats them as inline
+content within their parent's inline formatting context.
 
-**Supported units:** `px` and unitless (treated as px).  Percentage,
-`em`, `rem` are left for the layout engine.
+**Supported units:** `px`, unitless (treated as px), and `%`
+(percentage).  Other units (`em`, `rem`) are left for the layout
+engine.
+
+### Percentage Encoding
+
+`_BOX-PARSE-PX` detects a trailing `%` character and encodes the
+value as a marker for later resolution by the layout engine:
+
+$$\text{marker} = -(\text{percentage} + 2)$$
+
+Examples:
+
+| CSS Value | Stored in `B.W` | Meaning |
+|---|---|---|
+| `50%` | `-52` | 50 percent |
+| `100%` | `-102` | 100 percent |
+| `25%` | `-27` | 25 percent |
+| `auto` | `-1` (`BOX-AUTO`) | Auto (not a percentage) |
+
+The layout engine (`LAYO-RESOLVE-WIDTH`) checks for `BOX-W <= -2`
+and resolves the percentage against the containing block width.
 
 ---
 

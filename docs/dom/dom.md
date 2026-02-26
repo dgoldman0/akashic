@@ -299,7 +299,8 @@ A stylesheet must be set before style queries work.
 |---|---|---|
 | `DOM-SET-STYLESHEET` | `( css-a css-u -- )` | Set the current CSS stylesheet for style computation. |
 | `DOM-COMPUTE-STYLE` | `( node buf max -- n )` | Compute all matching CSS declarations for an element node.  Reconstructs the open tag (`<tag attrs>`) and feeds it to `CSSB-APPLY-INLINE`.  Returns bytes written.  Returns 0 for non-element nodes. |
-| `DOM-STYLE@` | `( node prop-a prop-u -- val-a val-u flag )` | Look up a single CSS property.  Computes style, then searches declarations with `CSS-DECL-FIND`.  Flag = -1 found, 0 not found. |
+| `DOM-STYLE@` | `( node prop-a prop-u -- val-a val-u flag )` | Look up a single CSS property.  Computes style, then searches declarations with `CSS-DECL-FIND`.  If not found and the property is _inherited_ (see below), walks up the parent chain until found or root reached.  Flag = -1 found, 0 not found. |
+| `DOM-STYLE-INHERIT@` | `( node prop-a prop-u -- val-a val-u flag )` | Look up a CSS property starting from the node's **parent**.  Useful when a node (e.g. a text node) has no styles of its own and needs to read from the nearest ancestor. |
 | `DOM-STYLE-CACHED?` | `( node -- flag )` | Stub: always returns 0 (cache not yet implemented). |
 | `DOM-INVALIDATE-STYLE` | `( node -- )` | Stub: no-op (cache not yet implemented). |
 
@@ -324,6 +325,25 @@ IF TYPE CR ELSE 2DROP ." not found" CR THEN
 \ Output: 8px
 ```
 
+### CSS Property Inheritance
+
+`DOM-STYLE@` implements CSS inheritance for properties that inherit
+by default per CSS 2.1 §6.2.  If a property is not found on the
+current node, and it is one of the 16 inherited properties below,
+the lookup walks up the `DOM-PARENT` chain until a value is found
+or the root is reached.
+
+| Inherited Properties |
+|---|
+| `color`, `font-size`, `font-family`, `font-weight`, `font-style` |
+| `text-align`, `text-decoration`, `text-transform`, `line-height` |
+| `letter-spacing`, `word-spacing`, `white-space` |
+| `direction`, `visibility`, `cursor`, `list-style-type` |
+
+Non-inherited properties (e.g. `margin`, `padding`, `width`,
+`display`, `border-*`) are **never** inherited — `DOM-STYLE@`
+returns not-found immediately.
+
 ### How It Works
 
 1. `DOM-COMPUTE-STYLE` reconstructs the element's open tag string
@@ -334,6 +354,9 @@ IF TYPE CR ELSE 2DROP ." not found" CR THEN
    selector matching, cascade, and inline style merging.
 3. `DOM-STYLE@` calls `DOM-COMPUTE-STYLE` then searches the result
    with `CSS-DECL-FIND`.
+4. If not found and the property is inherited, `DOM-STYLE@` moves
+   to `DOM-PARENT` and repeats steps 1–3 until either a value is
+   found or the root is reached.
 
 ---
 
@@ -559,7 +582,8 @@ DOM-SET-TEXT        ( node txt-a txt-u -- )
 ```
 DOM-SET-STYLESHEET  ( css-a css-u -- )
 DOM-COMPUTE-STYLE   ( node buf max -- n )
-DOM-STYLE@          ( node prop-a prop-u -- va vu flag )
+DOM-STYLE@          ( node prop-a prop-u -- va vu flag )   inherits
+DOM-STYLE-INHERIT@  ( node prop-a prop-u -- va vu flag )   from parent
 DOM-STYLE-CACHED?   ( node -- flag )               stub
 DOM-INVALIDATE-STYLE ( node -- )                    stub
 ```
@@ -611,6 +635,8 @@ and may change without notice.
 | `_DOM-NODE-INIT-FREE` / `_DOM-ATTR-INIT-FREE` | Free-list construction at doc creation |
 | `_DOM-FREE-ATTRS` | Release all attributes on a node |
 | `_DOM-BUILD-OPEN-TAG` | Reconstruct `<tag attrs>` from a DOM node |
+| `_DOM-IS-INHERITED?` | `( prop-a prop-u -- flag )` Check if a CSS property inherits |
+| `_DOM-STY-BUF2` | Second 2048-byte scratch buffer for parent lookups |
 | `_DOM-SER-*` | Serialisation DFS walk |
 | `_DFS-*` | Shared DFS infrastructure for queries |
 | `_DMQ-*` | DOM-MATCHES? state variables |

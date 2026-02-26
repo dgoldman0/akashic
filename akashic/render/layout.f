@@ -19,6 +19,7 @@
 
 REQUIRE box.f
 REQUIRE line.f
+REQUIRE ../text/layout.f
 
 PROVIDED akashic-layout-engine
 
@@ -40,6 +41,77 @@ VARIABLE _LAYO-RUNS         \ run list head for inline context
 VARIABLE _LAYO-LINES        \ line box list from LINE-BREAK
 VARIABLE _LAYO-LINE-CUR     \ current line during iteration
 VARIABLE _LAYO-RUN          \ current run during line processing
+
+\ =====================================================================
+\  Text measurement pre-pass
+\ =====================================================================
+\  Walk the box tree before layout and set BOX-W / BOX-H on text boxes
+\  by measuring glyph advance widths via text/layout.f's LAY-TEXT-WIDTH.
+\  Font size comes from the parent element's "font-size" CSS property
+\  (text nodes have no CSS of their own).
+
+VARIABLE _LMT-BOX
+
+: _LAYO-GET-TEXT-FONT-SIZE  ( text-box -- font-size )
+    BOX-PARENT DUP 0<> IF
+        BOX-DOM S" font-size" DOM-STYLE@
+        IF
+            _BOX-PARSE-PX
+            DUP 1 < IF DROP 16 THEN
+        ELSE
+            2DROP 16
+        THEN
+    ELSE
+        DROP 16
+    THEN ;
+
+: _LAYO-MEASURE-TEXT-REC  ( box -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP B.FLAGS @ _BOX-F-TEXT AND IF
+        \ Text box — measure width and height
+        _LMT-BOX !
+        _LMT-BOX @ _LAYO-GET-TEXT-FONT-SIZE
+        LAY-SCALE!
+        _LMT-BOX @ BOX-DOM DOM-TEXT
+        LAY-TEXT-WIDTH
+        _LMT-BOX @ BOX-W!
+        _LMT-BOX @ BOX-H BOX-AUTO = IF
+            LAY-LINE-HEIGHT _LMT-BOX @ BOX-H!
+        THEN
+    ELSE
+        \ Non-text — recurse into children
+        BOX-FIRST-CHILD
+        BEGIN DUP 0<> WHILE
+            DUP BOX-NEXT >R
+            _LAYO-MEASURE-TEXT-REC
+            R>
+        REPEAT
+        DROP
+    THEN ;
+
+\ =====================================================================
+\  _LAYO-PARSE-TEXT-ALIGN  ( box -- align-const )
+\ =====================================================================
+\  Read CSS "text-align" from the box's DOM node and return a
+\  LINE-A-LEFT / LINE-A-CENTER / LINE-A-RIGHT constant.
+
+: _LAYO-PARSE-TEXT-ALIGN  ( box -- align-const )
+    BOX-DOM S" text-align" DOM-STYLE@
+    IF
+        DUP 6 = IF
+            OVER C@ 99 = IF        \ "center" starts with 'c'
+                2DROP LINE-A-CENTER EXIT
+            THEN
+        THEN
+        DUP 5 = IF
+            OVER C@ 114 = IF       \ "right" starts with 'r'
+                2DROP LINE-A-RIGHT EXIT
+            THEN
+        THEN
+        2DROP LINE-A-LEFT
+    ELSE
+        2DROP LINE-A-LEFT
+    THEN ;
 
 \ =====================================================================
 \  LAYO-CONTAINING-W  ( box -- w )
@@ -91,6 +163,17 @@ VARIABLE _LAYO-RUN          \ current run during line processing
 
 : LAYO-RESOLVE-WIDTH  ( box -- )
     _LAYO-BOX !
+
+    \ Check for percentage width marker: w <= -2
+    \ Encoding: -(percentage + 2), so pct = NEGATE(w) - 2
+    _LAYO-BOX @ BOX-W -2 <= IF
+        _LAYO-BOX @ BOX-W NEGATE 2 -         ( percentage )
+        _LAYO-BOX @ LAYO-CONTAINING-W        ( pct cw )
+        * 100 /                               ( resolved-w )
+        DUP 0 < IF DROP 0 THEN
+        _LAYO-BOX @ BOX-W!
+        EXIT
+    THEN
 
     _LAYO-BOX @ BOX-W BOX-AUTO = IF
         \ auto width: fill containing block
@@ -211,13 +294,15 @@ VARIABLE _LIC-ASC       \ ascender for current run
         _LAYO-LINE-CUR @ LINE-NEXT _LAYO-LINE-CUR !
     REPEAT
 
-    \ Align lines (left alignment by default)
+    \ Align lines — read text-align from CSS
+    _LIC-BOX @ _LAYO-PARSE-TEXT-ALIGN   ( align-const )
     _LAYO-LINES @ _LAYO-LINE-CUR !
     BEGIN
         _LAYO-LINE-CUR @ 0<> WHILE
-        _LAYO-LINE-CUR @  _LIC-BOX @ BOX-W  LINE-A-LEFT  LINE-ALIGN
+        _LAYO-LINE-CUR @  _LIC-BOX @ BOX-W  ROT DUP >R  LINE-ALIGN  R>
         _LAYO-LINE-CUR @ LINE-NEXT _LAYO-LINE-CUR !
     REPEAT
+    DROP    \ drop align-const
 
     \ Update inline children positions from line runs
     \ Walk lines → runs, match back to child boxes
@@ -437,6 +522,9 @@ VARIABLE _LL-BOX
     _LAYO-VP-H !
     _LAYO-VP-W !
     _LL-BOX !
+
+    \ Pre-pass: measure text box widths using font metrics
+    _LL-BOX @ _LAYO-MEASURE-TEXT-REC
 
     \ Root content origin = margin + border + padding
     _LL-BOX @ BOX-MARGIN-L  _LL-BOX @ BOX-BORDER-L +  _LL-BOX @ BOX-PADDING-L +
