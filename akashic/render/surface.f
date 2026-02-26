@@ -93,6 +93,14 @@ VARIABLE _SURF-ROW
 VARIABLE _SURF-I
 VARIABLE _SURF-J
 
+\ Dedicated variables for SURF-FILL-RECT (avoid clobbering by SURF-HLINE)
+VARIABLE _SFR-SURF
+VARIABLE _SFR-X
+VARIABLE _SFR-Y
+VARIABLE _SFR-W
+VARIABLE _SFR-H
+VARIABLE _SFR-RGBA
+
 \ =====================================================================
 \  Accessors
 \ =====================================================================
@@ -332,14 +340,14 @@ VARIABLE _SURF-J
 \  Clipped to the clip rectangle.  Delegates to SURF-HLINE per row.
 
 : SURF-FILL-RECT  ( surf x y w h rgba -- )
-    _SURF-RGBA !  _SURF-H2 !  _SURF-W2 !  _SURF-Y !  _SURF-X !  _SURF-TMP !
+    _SFR-RGBA !  _SFR-H !  _SFR-W !  _SFR-Y !  _SFR-X !  _SFR-SURF !
 
-    _SURF-H2 @ 0 DO
-        _SURF-TMP @
-        _SURF-X @
-        _SURF-Y @ I +
-        _SURF-W2 @
-        _SURF-RGBA @
+    _SFR-H @ 0 DO
+        _SFR-SURF @
+        _SFR-X @
+        _SFR-Y @ I +
+        _SFR-W @
+        _SFR-RGBA @
         SURF-HLINE
     LOOP ;
 
