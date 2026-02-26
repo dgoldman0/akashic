@@ -326,8 +326,8 @@ VARIABLE _LIC-ASC       \ ascender for current run
 
             _LIC-CHILD @ 0<> IF
                 \ Set child position from run
-                _LAYO-RUN @ LINE-RUN-X  _LIC-CHILD @ BOX-X!
-                _LAYO-LINE-CUR @ LINE-Y  _LIC-CHILD @ BOX-Y!
+                _LIC-BOX @ BOX-X  _LAYO-RUN @ LINE-RUN-X +  _LIC-CHILD @ BOX-X!
+                _LIC-BOX @ BOX-Y  _LAYO-LINE-CUR @ LINE-Y +  _LIC-CHILD @ BOX-Y!
 
                 \ Set child dimensions from run if auto
                 _LIC-CHILD @ BOX-W BOX-AUTO = IF
@@ -444,8 +444,11 @@ VARIABLE _LB-ALL-INLINE   \ flag: 1 if all children are inline
                     _LAYO-PREV-MB @  _LB-CHILD @ BOX-MARGIN-T
                     LAYO-COLLAPSE-MARGINS _LAYO-COLLAPSED !
 
-                    _LAYO-CUR-Y @
-                    _LAYO-COLLAPSED @ +        \ apply collapsed margin
+                    _LB-BOX @ BOX-Y
+                    _LAYO-CUR-Y @ +
+                    _LAYO-COLLAPSED @ +
+                    _LB-CHILD @ BOX-BORDER-T +
+                    _LB-CHILD @ BOX-PADDING-T +
                     _LB-CHILD @ BOX-Y!
 
                     \ child height defaults to 0 if auto
@@ -453,8 +456,10 @@ VARIABLE _LB-ALL-INLINE   \ flag: 1 if all children are inline
                         0 _LB-CHILD @ BOX-H!
                     THEN
 
-                    \ Advance Y past child's border-box bottom
-                    _LB-CHILD @ BOX-Y
+                    \ Advance Y past child's full border-box
+                    _LAYO-CUR-Y @  _LAYO-COLLAPSED @ +
+                    _LB-CHILD @ BOX-BORDER-T +
+                    _LB-CHILD @ BOX-PADDING-T +
                     _LB-CHILD @ BOX-H +
                     _LB-CHILD @ BOX-PADDING-B +
                     _LB-CHILD @ BOX-BORDER-B +
@@ -467,9 +472,12 @@ VARIABLE _LB-ALL-INLINE   \ flag: 1 if all children are inline
                     _LAYO-PREV-MB @  _LB-CHILD @ BOX-MARGIN-T
                     LAYO-COLLAPSE-MARGINS _LAYO-COLLAPSED !
 
-                    \ Set child Y position
-                    _LAYO-CUR-Y @
-                    _LAYO-COLLAPSED @ +        \ apply collapsed margin
+                    \ Set child Y position (absolute content origin)
+                    _LB-BOX @ BOX-Y
+                    _LAYO-CUR-Y @ +
+                    _LAYO-COLLAPSED @ +
+                    _LB-CHILD @ BOX-BORDER-T +
+                    _LB-CHILD @ BOX-PADDING-T +
                     _LB-CHILD @ BOX-Y!
 
                     \ Recurse
@@ -489,8 +497,10 @@ VARIABLE _LB-ALL-INLINE   \ flag: 1 if all children are inline
                     R> _LB-CHILD !
                     R> _LB-BOX !
 
-                    \ Advance Y past child's border-box bottom
-                    _LB-CHILD @ BOX-Y
+                    \ Advance Y past child's full border-box
+                    _LAYO-CUR-Y @  _LAYO-COLLAPSED @ +
+                    _LB-CHILD @ BOX-BORDER-T +
+                    _LB-CHILD @ BOX-PADDING-T +
                     _LB-CHILD @ BOX-H +
                     _LB-CHILD @ BOX-PADDING-B +
                     _LB-CHILD @ BOX-BORDER-B +

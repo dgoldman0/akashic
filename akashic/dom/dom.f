@@ -740,7 +740,14 @@ CREATE _DOM-STY-BUF2 2048 ALLOT
 
 : DOM-STYLE@  ( node prop-a prop-u -- val-a val-u flag )
     _DSL-PL !  _DSL-PA !  _DSL-N !
-    _DSL-N @ DOM-TYPE@ DOM-T-ELEMENT <> IF 0 0 0 EXIT THEN
+    _DSL-N @ DOM-TYPE@ DOM-T-ELEMENT <> IF
+        _DSL-PA @ _DSL-PL @ _DOM-IS-INHERITED? IF
+            _DSL-N @ DOM-PARENT DUP 0= IF DROP 0 0 0 EXIT THEN
+            _DSL-N !
+        ELSE
+            0 0 0 EXIT
+        THEN
+    THEN
 
     \ Look up on this node first
     _DSL-N @ _DOM-STY-BUF 2048 DOM-COMPUTE-STYLE
