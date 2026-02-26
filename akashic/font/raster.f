@@ -193,15 +193,15 @@ VARIABLE _RST-PAIR-I
     LOOP ;
 
 \ =====================================================================
-\  Anti-aliased fill — 4× Y supersampling
+\  Anti-aliased fill — configurable N×N supersampling
 \ =====================================================================
 \  Anti-aliased fill with configurable N×N supersampling.
 \
 \  RAST-AA! sets the supersampling rate (1 = off, 4–8 typical).
 \  RAST-FILL-AA rasterizes at N× resolution in both X and Y.
-\  For each output row, N sub-scanlines are filled into a temp row
-\  at N× output width.  Coverage is accumulated per sub-pixel,
-\  then N adjacent sub-columns are summed giving 0–N² total
+\  For each output row, N sub-scanlines are processed: x-intercept
+\  pairs directly increment the accumulator (no temp row needed).
+\  Then N adjacent sub-columns are summed giving 0–N² total
 \  coverage → mapped to 0-255.
 \
 \  Max output width = 1280 / N pixels (N=8 → 160px, N=4 → 320px).
@@ -214,13 +214,33 @@ VARIABLE _RST-AA-N     \ supersampling rate (default 6)
 : RAST-AA@  ( -- n )  _RST-AA-N @ ;
 
 1280 CONSTANT _RST-AA-MAXW
-CREATE _RST-AA-ROW  _RST-AA-MAXW ALLOT    \ temp row (N× output width)
 CREATE _RST-AA-ACC  _RST-AA-MAXW ALLOT    \ accumulator (N× output width)
 
 VARIABLE _RST-AA-W
 VARIABLE _RST-AA-BUF
 VARIABLE _RST-AA-WN    \ width * N
 VARIABLE _RST-AA-N2    \ N * N (total sub-pixels)
+
+\ Increment accumulator bytes in span [x_start, x_end) clipped to [0, WN)
+: _RST-AA-INC-SPAN  ( x_start x_end -- )
+    _RST-AA-WN @ MIN  SWAP 0 MAX      ( x_end' x_start' )
+    SWAP OVER - DUP 1 < IF 2DROP EXIT THEN   ( x_start' count )
+    SWAP _RST-AA-ACC +                 ( count addr )
+    SWAP 0 DO
+        DUP C@ 1+ OVER C!
+        1+
+    LOOP DROP ;
+
+\ Walk x-intercept pairs, increment accumulator spans directly
+VARIABLE _RST-AA-PI
+: _RST-AA-INC-PAIRS  ( -- )
+    0 _RST-AA-PI !
+    BEGIN _RST-AA-PI @ 2 * 1+ _RST-NXINTS @ < WHILE
+        _RST-AA-PI @ 2 * CELLS _RST-XINTS + @
+        _RST-AA-PI @ 2 * 1+ CELLS _RST-XINTS + @
+        _RST-AA-INC-SPAN
+        _RST-AA-PI @ 1+ _RST-AA-PI !
+    REPEAT ;
 
 : RAST-FILL-AA  ( buf-addr width height -- )
     >R _RST-AA-W !  _RST-AA-BUF !
@@ -232,20 +252,11 @@ VARIABLE _RST-AA-N2    \ N * N (total sub-pixels)
     R> 0 DO
         \ Clear accumulator (N× width)
         _RST-AA-ACC _RST-AA-WN @ 0 FILL
-        \ Rasterize N sub-scanlines at N× width, accumulate
+        \ Process N sub-scanlines, incrementing accumulator directly
         _RST-AA-N @ 0 DO
-            _RST-AA-ROW _RST-AA-WN @ 0 FILL
-            _RST-AA-ROW _RST-BUF !
-            _RST-AA-WN @ _RST-WIDTH !
             J _RST-AA-N @ * I +  _RST-COLLECT-XINTS
             _RST-SORT-XINTS
-            0 _RST-FILL-PAIRS
-            \ Accumulate sub-pixel hits across N× width
-            _RST-AA-WN @ 0 DO
-                _RST-AA-ROW I + C@ 0<> IF
-                    _RST-AA-ACC I + DUP C@ 1+ SWAP C!
-                THEN
-            LOOP
+            _RST-AA-INC-PAIRS
         LOOP
         \ Downsample: sum N sub-columns per output pixel (total 0–N²)
         _RST-AA-W @ 0 DO
