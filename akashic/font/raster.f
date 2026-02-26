@@ -302,6 +302,55 @@ VARIABLE _RST-YFLIP     \ target height for Y-flip
     _RST-SCALE-N @ * _RST-SCALE-D @ /
     _RST-YFLIP @ SWAP - ;            \ flip Y (TTF y-up → screen y-down)
 
+\ =====================================================================
+\  Auto-hinting — snap outlines to pixel grid
+\ =====================================================================
+\ Lightweight auto-hinter: scales all glyph points to N× pixel
+\ space, then rounds X and Y coords to the nearest pixel boundary
+\ (multiple of N).  This ensures vertical stems are one pixel wide
+\ instead of blurred across two pixels.
+
+VARIABLE _HNT-ON       1 _HNT-ON !
+VARIABLE _HNT-N        \ AA rate (grid spacing in N× space)
+
+: HINT-ON!   ( -- )  1 _HNT-ON ! ;
+: HINT-OFF!  ( -- )  0 _HNT-ON ! ;
+: HINT-ON?   ( -- f )  _HNT-ON @ ;
+
+\ Scale all decoded points in-place from font units to N× pixel coords
+: _HNT-SCALE-POINTS  ( npts -- )
+    0 DO
+        I CELLS _TTF-PTS-X + @
+        _RST-SCALE-NX @ * _RST-SCALE-D @ /
+        I CELLS _TTF-PTS-X + !
+        I CELLS _TTF-PTS-Y + @
+        _RST-SCALE-N @ * _RST-SCALE-D @ /
+        _RST-YFLIP @ SWAP -
+        I CELLS _TTF-PTS-Y + !
+    LOOP ;
+
+\ Round x to nearest multiple of N (pixel boundary in N× space)
+: _HNT-ROUND  ( x -- x' )
+    DUP 0< IF
+        NEGATE _HNT-N @ 2 / + _HNT-N @ / _HNT-N @ * NEGATE
+    ELSE
+        _HNT-N @ 2 / + _HNT-N @ / _HNT-N @ *
+    THEN ;
+
+\ Snap all points' X and Y to full-pixel grid
+: _HNT-SNAP  ( npts -- )
+    0 DO
+        I CELLS _TTF-PTS-X + @  _HNT-ROUND  I CELLS _TTF-PTS-X + !
+        I CELLS _TTF-PTS-Y + @  _HNT-ROUND  I CELLS _TTF-PTS-Y + !
+    LOOP ;
+
+\ Main entry: scale + snap all glyph points
+: HINT-GLYPH  ( npts -- )
+    _HNT-ON @ 0= IF DROP EXIT THEN
+    _RST-AA-N @ _HNT-N !
+    DUP _HNT-SCALE-POINTS
+    _HNT-SNAP ;
+
 \ ── Bézier flatten support ──────────────────────────────────────────
 \ Tolerance: 0.25 pixel in FP16.  Good for 8-64 px sizes.
 0x3400 CONSTANT _RST-BZ-TOL
@@ -347,8 +396,12 @@ VARIABLE _RST-CONT-S   VARIABLE _RST-CONT-E    \ contour start/end indices
 VARIABLE _RST-FIRST-OFF                         \ first pt was off-curve?
 
 \ Helper: get scaled pixel coords for point index
-: _RST-PX  ( i -- x )  TTF-PT-X _RST-SCALE-X ;
-: _RST-PY  ( i -- y )  TTF-PT-Y _RST-SCALE-Y ;
+VARIABLE _RST-HINTED   0 _RST-HINTED !
+
+: _RST-PX  ( i -- x )
+    _RST-HINTED @ IF CELLS _TTF-PTS-X + @ ELSE TTF-PT-X _RST-SCALE-X THEN ;
+: _RST-PY  ( i -- y )
+    _RST-HINTED @ IF CELLS _TTF-PTS-Y + @ ELSE TTF-PT-Y _RST-SCALE-Y THEN ;
 
 \ Process an on-curve point at (px, py).
 \ If we have a pending control point, emit a quad; otherwise a line.
@@ -464,6 +517,13 @@ VARIABLE _RST-G-BUF  VARIABLE _RST-G-W  VARIABLE _RST-G-H
     RAST-RESET
     TTF-DECODE-GLYPH                         ( npts ncont | 0 0 )
     DUP 0= IF 2DROP FALSE EXIT THEN
+    \ Auto-hint if enabled: scales + snaps points in-place
+    HINT-ON? IF
+        OVER HINT-GLYPH
+        1 _RST-HINTED !
+    ELSE
+        0 _RST-HINTED !
+    THEN
     \ Walk each contour
     0                                        ( npts ncont start )
     SWAP 0 DO                                ( npts start )
