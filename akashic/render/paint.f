@@ -377,21 +377,21 @@ VARIABLE _PTD-W    VARIABLE _PTD-SZ VARIABLE _PTD-C
 : _PNT-DRAW-DECOR  ( surf x y w font-size rgba -- )
     _PTD-C !  _PTD-SZ !  _PTD-W !  _PTD-Y !  _PTD-X !  _PTD-SRF !
 
-    \ Underline: draw 1px line at baseline + 2px
+    \ Underline: draw 1px line 1px below baseline
     _PTX-TD-UL @ IF
         _PTD-SRF @
         _PTD-X @
-        _PTD-Y @  _PTD-SZ @ 9 * 10 / +   \ ~90% of font-size = baseline offset
+        _PTD-Y @  _PTD-SZ @ TTF-ASCENDER * TTF-UPEM / +  1 +
         _PTD-W @  1
         _PTD-C @
         SURF-FILL-RECT
     THEN
 
-    \ Line-through: draw 1px line through middle of x-height
+    \ Line-through: draw 1px line at mid x-height (~baseline - 30% of font-size)
     _PTX-TD-LT @ IF
         _PTD-SRF @
         _PTD-X @
-        _PTD-Y @  _PTD-SZ @ 2 / +         \ ~50% of font-size
+        _PTD-Y @  _PTD-SZ @ TTF-ASCENDER * TTF-UPEM / +  _PTD-SZ @ 3 * 10 / -
         _PTD-W @  1
         _PTD-C @
         SURF-FILL-RECT
