@@ -51,6 +51,7 @@ REQUIRE ../font/raster.f
 REQUIRE ../font/cache.f
 REQUIRE ../text/layout.f
 REQUIRE ../text/utf8.f
+REQUIRE ../math/simd.f
 
 PROVIDED akashic-draw
 
@@ -766,6 +767,24 @@ VARIABLE _DRAW-GL-FG     \ foreground G
 VARIABLE _DRAW-GL-FB     \ foreground B
 VARIABLE _DRAW-GL-OUT    \ blended rgba output
 
+\ ── Tile-accelerated glyph blend scratch ─────────────────────────
+\  Used by the U16-mode tile path in DRAW-GLYPH.
+\  Tile layout (all 32-lane U16):
+\    S0=T_COV  S1=T_ICOV  S2=T_BGR  S3=T_BGG  S4=T_BGB
+\    S5=T_FG   S6=T_CONST S7=T_WORK
+
+VARIABLE _DRAW-TB-N       \ pixels in current row batch
+VARIABLE _DRAW-TB-FGR     \ pre-linearized foreground R
+VARIABLE _DRAW-TB-FGG     \ pre-linearized foreground G
+VARIABLE _DRAW-TB-FGB     \ pre-linearized foreground B
+VARIABLE _DRAW-TB-BG      \ temp: background pixel
+VARIABLE _DRAW-TB-ROWI    \ current row index
+
+CREATE _DRAW-TB-COV  32 ALLOT   \ coverage bytes (scatter fast-path)
+CREATE _DRAW-TB-OUTR 32 ALLOT   \ blended output R (sRGB)
+CREATE _DRAW-TB-OUTG 32 ALLOT   \ blended output G (sRGB)
+CREATE _DRAW-TB-OUTB 32 ALLOT   \ blended output B (sRGB)
+
 \ ── sRGB linearize / delinearize LUTs ──────────────────────────────
 \  Naive alpha blending in sRGB space makes antialiased edges too
 \  light ("faded text" problem).  We linearize channels before
@@ -810,6 +829,113 @@ _DRAW-INIT-SRGB
     + 255 /                   ( blended_linear )
     _DRAW-L2S + C@ ;          \ delinearize → sRGB
 
+\ =====================================================================
+\  Tile-accelerated glyph blend (U16 mode, up to 32 pixels/row)
+\ =====================================================================
+\  Operates on pre-linearized channel values in U16 tiles.
+\  Blend formula (per channel, linear space):
+\    out_lin = (fg_lin * cov + bg_lin * (255 - cov) + 128) >> 8
+\  The >> 8 is read as the high byte of the U16 result.
+
+\ Gather one row of pixels into U16 tiles
+: _DRAW-TB-GATHER  ( -- )
+    _SIMD-S0 @ TILE-ZERO    \ T_COV
+    _SIMD-S2 @ TILE-ZERO    \ T_BGR
+    _SIMD-S3 @ TILE-ZERO    \ T_BGG
+    _SIMD-S4 @ TILE-ZERO    \ T_BGB
+    _DRAW-TB-N @ 0 DO
+        _DRAW-GL-BMP @  _DRAW-TB-ROWI @ _DRAW-GL-W @ * +  I +  C@
+        DUP I _DRAW-TB-COV + C!
+        DUP 0<> IF
+            _SIMD-S0 @ I 2 * + W!       \ coverage → T_COV
+            _DRAW-SURF @
+            _DRAW-GL-X @ I +
+            _DRAW-GL-Y @ _DRAW-TB-ROWI @ +
+            SURF-PIXEL@  _DRAW-TB-BG !
+            \ Linearize bg R → T_BGR
+            _DRAW-TB-BG @ 24 RSHIFT 255 AND  _DRAW-S2L + C@
+            _SIMD-S2 @ I 2 * + W!
+            \ Linearize bg G → T_BGG
+            _DRAW-TB-BG @ 16 RSHIFT 255 AND  _DRAW-S2L + C@
+            _SIMD-S3 @ I 2 * + W!
+            \ Linearize bg B → T_BGB
+            _DRAW-TB-BG @  8 RSHIFT 255 AND  _DRAW-S2L + C@
+            _SIMD-S4 @ I 2 * + W!
+        ELSE
+            DROP
+        THEN
+    LOOP ;
+
+\ Tile-blend one channel.  Result in _SIMD-S7 (T_WORK) as U16.
+\ T_CONST (_SIMD-S6) must already hold broadcast 128.
+: _DRAW-TB-BLEND-CH  ( fg-lin bg-tile -- )
+    >R
+    _SIMD-S5 @ SWAP TILE-FILL-U16       \ T_FG = broadcast fg_lin
+    _SIMD-S5 @ _SIMD-S0 @ _SIMD-S7 @ TILE-MUL   \ T_WORK = fg * cov
+    R> _SIMD-S1 @ _SIMD-S5 @ TILE-MUL            \ T_FG = bg * icov
+    _SIMD-S7 @ _SIMD-S5 @ _SIMD-S7 @ TILE-ADD   \ T_WORK += bg*icov
+    _SIMD-S7 @ _SIMD-S6 @ _SIMD-S7 @ TILE-ADD ; \ T_WORK += 128
+
+\ Extract high bytes from T_WORK, delinearize, store to buffer
+: _DRAW-TB-EXTRACT  ( out-buf -- )
+    _DRAW-TB-N @ 0 DO
+        _SIMD-S7 @ I 2 * 1+ + C@      \ high byte = result >> 8
+        _DRAW-L2S + C@                \ delinearize → sRGB
+        OVER I + C!
+    LOOP
+    DROP ;
+
+\ Write blended pixels back to surface
+: _DRAW-TB-SCATTER  ( -- )
+    _DRAW-TB-N @ 0 DO
+        I _DRAW-TB-COV + C@
+        DUP 255 = IF
+            DROP
+            _DRAW-SURF @
+            _DRAW-GL-X @ I +
+            _DRAW-GL-Y @ _DRAW-TB-ROWI @ +
+            _DRAW-RGBA @
+            SURF-PIXEL!
+        ELSE
+            DUP 0<> IF
+                DROP
+                I _DRAW-TB-OUTR + C@ 24 LSHIFT
+                I _DRAW-TB-OUTG + C@ 16 LSHIFT OR
+                I _DRAW-TB-OUTB + C@  8 LSHIFT OR
+                255 OR
+                _DRAW-GL-OUT !
+                _DRAW-SURF @
+                _DRAW-GL-X @ I +
+                _DRAW-GL-Y @ _DRAW-TB-ROWI @ +
+                _DRAW-GL-OUT @
+                SURF-PIXEL!
+            ELSE
+                DROP
+            THEN
+        THEN
+    LOOP ;
+
+\ Process one glyph row via tile engine
+: _DRAW-TB-ROW  ( row -- )
+    _DRAW-TB-ROWI !
+    _DRAW-TB-GATHER
+    U16-MODE
+    \ Inverse coverage: T_ICOV = 255 - T_COV
+    _SIMD-S6 @ 255 TILE-FILL-U16
+    _SIMD-S6 @ _SIMD-S0 @ _SIMD-S1 @ TILE-SUB
+    \ Rounding constant
+    _SIMD-S6 @ 128 TILE-FILL-U16
+    \ Blend R
+    _DRAW-TB-FGR @  _SIMD-S2 @  _DRAW-TB-BLEND-CH
+    _DRAW-TB-OUTR _DRAW-TB-EXTRACT
+    \ Blend G
+    _DRAW-TB-FGG @  _SIMD-S3 @  _DRAW-TB-BLEND-CH
+    _DRAW-TB-OUTG _DRAW-TB-EXTRACT
+    \ Blend B
+    _DRAW-TB-FGB @  _SIMD-S4 @  _DRAW-TB-BLEND-CH
+    _DRAW-TB-OUTB _DRAW-TB-EXTRACT
+    _DRAW-TB-SCATTER ;
+
 : DRAW-GLYPH  ( surf glyph-id size x y rgba -- )
     _DRAW-RGBA !  _DRAW-GL-Y !  _DRAW-GL-X !
     >R >R  ( surf ) ( R: size glyph-id )
@@ -826,51 +952,58 @@ _DRAW-INIT-SRGB
     _DRAW-RGBA @ 16 RSHIFT 255 AND _DRAW-GL-FG !
     _DRAW-RGBA @  8 RSHIFT 255 AND _DRAW-GL-FB !
 
-    \ Blit with alpha blending using coverage
+    \ Pre-linearize foreground (constant for entire glyph)
+    _DRAW-GL-FR @ _DRAW-S2L + C@  _DRAW-TB-FGR !
+    _DRAW-GL-FG @ _DRAW-S2L + C@  _DRAW-TB-FGG !
+    _DRAW-GL-FB @ _DRAW-S2L + C@  _DRAW-TB-FGB !
+
+    \ ── Tile path (glyph width ≤ 32, fits in 32 U16 lanes) ──
+    _DRAW-GL-W @ 32 <= IF
+        _DRAW-GL-W @ _DRAW-TB-N !
+        _DRAW-GL-H @ 0 DO
+            I _DRAW-TB-ROW
+        LOOP
+        EXIT
+    THEN
+
+    \ ── Scalar fallback (glyph width > 32, very rare) ──
     _DRAW-GL-H @ 0 DO
         _DRAW-GL-W @ 0 DO
             _DRAW-GL-BMP @  J _DRAW-GL-W @ * +  I +
             C@ DUP 0<> IF
                 _DRAW-GL-COV !
                 _DRAW-GL-COV @ 255 = IF
-                    \ Full coverage — write foreground directly
                     _DRAW-SURF @
                     _DRAW-GL-X @ I +
                     _DRAW-GL-Y @ J +
                     _DRAW-RGBA @
                     SURF-PIXEL!
                 ELSE
-                    \ Partial coverage — alpha blend
                     _DRAW-SURF @
                     _DRAW-GL-X @ I +
                     _DRAW-GL-Y @ J +
                     SURF-PIXEL@  _DRAW-GL-BG !
 
-                    \ Blend R
                     _DRAW-GL-FR @
                     _DRAW-GL-BG @ 24 RSHIFT 255 AND
                     _DRAW-GL-COV @
                     _DRAW-GL-BLEND
                     24 LSHIFT
 
-                    \ Blend G
                     _DRAW-GL-FG @
                     _DRAW-GL-BG @ 16 RSHIFT 255 AND
                     _DRAW-GL-COV @
                     _DRAW-GL-BLEND
                     16 LSHIFT OR
 
-                    \ Blend B
                     _DRAW-GL-FB @
                     _DRAW-GL-BG @  8 RSHIFT 255 AND
                     _DRAW-GL-COV @
                     _DRAW-GL-BLEND
                     8 LSHIFT OR
 
-                    \ Alpha = 0xFF
                     255 OR
 
-                    \ Write blended pixel
                     _DRAW-GL-OUT !
                     _DRAW-SURF @
                     _DRAW-GL-X @ I +
