@@ -477,40 +477,68 @@ hardware spinlock during state transitions.
 
 ### 2.1 channel.f — Go-Style Bounded Channels
 
-**Depends on:** ring buffers (§18), event.f
+**Depends on:** event.f
 
-**Purpose:** CSP-style typed channels.  The primary inter-task
-communication mechanism.  A channel is a RING buffer + two events
-(not-full, not-empty).  Sending blocks if full; receiving blocks
-if empty.
+**Purpose:** CSP-style bounded channels.  The primary inter-task
+communication mechanism.  A channel embeds an inline circular buffer
++ two events (not-full, not-empty).  Sending blocks if full;
+receiving blocks if empty.
 
-**Data structure:**
+**Design decisions (approved):**
+- **Custom inline ring ops** — direct `!`/`@`/`CMOVE` under the
+  channel's own spinlock.  Does NOT use RING-PUSH/RING-POP (avoids
+  double-locking and the global `_RP-RING` variable multi-core issue).
+- **Per-channel lock#** — like rwlock.f.  Reduces contention vs.
+  sharing EVT-LOCK across all channels.
+- **1-cell default + addr-variants** — `CHAN-SEND`/`CHAN-RECV` for
+  single 64-bit cell values.  `CHAN-SEND-BUF`/`CHAN-RECV-BUF` for
+  arbitrary elem-size (addr-based, uses CMOVE).
+- **CHAN-SELECT included** — polls N channels using `CHAN-TRY-RECV`
+  in a YIELD? loop.
 
-A `CHANNEL` wraps:
-- A `RING` buffer (already lock-protected)
-- An `evt-not-full` event (for senders)
-- An `evt-not-empty` event (for receivers)
-- A `closed` flag
+**Data structure — 15 cells = 120 bytes + data area:**
+
+```
++0    lock#       per-channel spinlock number          (1 cell)
++8    closed      0 | -1                               (1 cell)
++16   elem-size   bytes per element                    (1 cell)
++24   capacity    max elements                         (1 cell)
++32   head        read index                           (1 cell)
++40   tail        write index                          (1 cell)
++48   count       current elements                     (1 cell)
++56   evt-nf      not-full event   (4 cells = 32 B)   (+56..+80)
++88   evt-ne      not-empty event  (4 cells = 32 B)   (+88..+112)
++120  data...     capacity × elem-size bytes
+```
 
 **Public API:**
 
-| Word             | Signature                        | Behavior                                     |
-|------------------|----------------------------------|----------------------------------------------|
-| `CHANNEL`        | `( cell-size capacity "name" -- )` | Create a bounded channel                   |
-| `CHAN-SEND`       | `( val chan -- )`               | Send value; block if full                   |
-| `CHAN-RECV`       | `( chan -- val )`               | Receive value; block if empty               |
-| `CHAN-TRY-SEND`   | `( val chan -- flag )`          | Non-blocking send; TRUE if sent             |
-| `CHAN-TRY-RECV`   | `( chan -- val flag )`          | Non-blocking receive                        |
-| `CHAN-CLOSE`      | `( chan -- )`                   | Close channel; future sends fail            |
-| `CHAN-CLOSED?`    | `( chan -- flag )`              | Is channel closed?                          |
-| `CHAN-COUNT`      | `( chan -- n )`                 | Items currently buffered                    |
-| `CHAN-SELECT`     | `( chan1 chan2 ... n -- idx val )` | Wait on N channels, return first ready    |
+| Word             | Signature                           | Behavior                                     |
+|------------------|-------------------------------------|----------------------------------------------|
+| `CHANNEL`        | `( lock# elem-size capacity "name" -- )` | Create a bounded channel              |
+| `CHAN-SEND`       | `( val chan -- )`                  | Send 1-cell value; block if full             |
+| `CHAN-RECV`       | `( chan -- val )`                  | Receive 1-cell value; block if empty         |
+| `CHAN-TRY-SEND`   | `( val chan -- flag )`            | Non-blocking 1-cell send                     |
+| `CHAN-TRY-RECV`   | `( chan -- val flag )`            | Non-blocking 1-cell receive                  |
+| `CHAN-SEND-BUF`   | `( addr chan -- )`               | Send elem-size bytes from addr; blocking     |
+| `CHAN-RECV-BUF`   | `( addr chan -- )`               | Receive elem-size bytes to addr; blocking    |
+| `CHAN-CLOSE`      | `( chan -- )`                     | Close channel; future sends fail             |
+| `CHAN-CLOSED?`    | `( chan -- flag )`                | Is channel closed?                           |
+| `CHAN-COUNT`      | `( chan -- n )`                   | Items currently buffered                     |
+| `CHAN-SELECT`     | `( chan1 chan2 ... n -- idx val )` | Wait on N channels; return first ready       |
+| `CHAN-INFO`       | `( chan -- )`                     | Debug print (UART)                           |
+
+**Closed-channel semantics:**
+- `CHAN-SEND` on a closed channel: `-1 THROW`
+- `CHAN-RECV` on a closed + empty channel: returns 0
+- `CHAN-TRY-RECV` on closed + empty: returns `( 0 0 )`
+- `CHAN-SELECT` when all channels closed + empty: returns `( -1 0 )`
 
 **Usage example:**
 
 ```forth
-1 CELLS 8 CHANNEL work-queue
-1 CELLS 8 CHANNEL results
+6 1 CELLS 8 CHANNEL work-queue
+6 1 CELLS 8 CHANNEL results
 
 : worker   BEGIN  work-queue CHAN-RECV  DUP 0= IF DROP EXIT THEN
            process-item  results CHAN-SEND  AGAIN ;
@@ -521,31 +549,29 @@ A `CHANNEL` wraps:
 **Implementation sketch:**
 
 ```forth
-: CHAN-SEND  ( val chan -- )
-  DUP CHAN-CLOSED? IF  2DROP -1 ABORT" send on closed channel"  THEN
-  BEGIN
-    DUP _CHAN-RING RING-FULL? 0= IF          \ room available
-      SWAP OVER _CHAN-RING RING-PUSH DROP     \ push value
-      _CHAN-EVT-NE EVT-SET  EXIT              \ signal not-empty
-    THEN
-    DUP _CHAN-EVT-NF EVT-WAIT                 \ wait for room
-  AGAIN
-;
+: _CHAN-PUSH-CELL  ( val chan -- )       \ caller must hold lock
+    >R
+    R@ _CHAN-TAIL @ R@ _CHAN-ESIZE @ * R@ _CHAN-DATA + !  \ store val
+    R@ _CHAN-TAIL @ 1+ R@ _CHAN-CAP @ MOD R@ _CHAN-TAIL !
+    1 R> _CHAN-COUNT-ADDR +! ;
 
-: CHAN-RECV  ( chan -- val )
-  BEGIN
-    DUP _CHAN-RING RING-EMPTY? 0= IF          \ data available
-      _CHAN-TMP OVER _CHAN-RING RING-POP DROP  \ pop value
-      OVER _CHAN-EVT-NF EVT-SET               \ signal not-full
-      _CHAN-TMP @  EXIT
-    THEN
-    DUP CHAN-CLOSED? IF  DROP 0 EXIT  THEN    \ closed + empty = done
-    DUP _CHAN-EVT-NE EVT-WAIT                 \ wait for data
-  AGAIN
-;
+: CHAN-SEND  ( val chan -- )
+    DUP CHAN-CLOSED? IF -1 THROW THEN
+    BEGIN
+        DUP _CHAN-FULL? 0= IF
+            DUP _CHAN-LOCK# @ LOCK
+            DUP _CHAN-FULL? 0= IF            \ re-check under lock
+                SWAP OVER _CHAN-PUSH-CELL
+                DUP _CHAN-LOCK# @ UNLOCK
+                _CHAN-EVT-NE EVT-SET  EXIT
+            THEN
+            DUP _CHAN-LOCK# @ UNLOCK
+        THEN
+        DUP _CHAN-EVT-NF EVT-WAIT
+    AGAIN ;
 ```
 
-**Status:** ☐ Not started
+**Status:** ✅ Done — channel.f + channel.md + test_channel.py (50 tests)
 
 ---
 
