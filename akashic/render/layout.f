@@ -172,24 +172,43 @@ VARIABLE _LMT-BOX
         * 100 /                               ( resolved-w )
         DUP 0 < IF DROP 0 THEN
         _LAYO-BOX @ BOX-W!
-        EXIT
+    ELSE
+        _LAYO-BOX @ BOX-W BOX-AUTO = IF
+            \ auto width: fill containing block
+            _LAYO-BOX @ LAYO-CONTAINING-W
+
+            _LAYO-BOX @ BOX-MARGIN-L -
+            _LAYO-BOX @ BOX-MARGIN-R -
+            _LAYO-BOX @ BOX-PADDING-L -
+            _LAYO-BOX @ BOX-PADDING-R -
+            _LAYO-BOX @ BOX-BORDER-L -
+            _LAYO-BOX @ BOX-BORDER-R -
+
+            \ Clamp to 0
+            DUP 0 < IF DROP 0 THEN
+
+            _LAYO-BOX @ BOX-W!
+        THEN
     THEN
 
-    _LAYO-BOX @ BOX-W BOX-AUTO = IF
-        \ auto width: fill containing block
-        _LAYO-BOX @ LAYO-CONTAINING-W
-
-        _LAYO-BOX @ BOX-MARGIN-L -
-        _LAYO-BOX @ BOX-MARGIN-R -
-        _LAYO-BOX @ BOX-PADDING-L -
-        _LAYO-BOX @ BOX-PADDING-R -
-        _LAYO-BOX @ BOX-BORDER-L -
-        _LAYO-BOX @ BOX-BORDER-R -
-
-        \ Clamp to 0
-        DUP 0 < IF DROP 0 THEN
-
-        _LAYO-BOX @ BOX-W!
+    \ Clamp to min-width / max-width
+    _LAYO-BOX @ BOX-MIN-W DUP 0> IF
+        _LAYO-BOX @ BOX-W OVER < IF
+            _LAYO-BOX @ BOX-W!
+        ELSE
+            DROP
+        THEN
+    ELSE
+        DROP
+    THEN
+    _LAYO-BOX @ BOX-MAX-W DUP BOX-AUTO <> OVER 0> AND IF
+        _LAYO-BOX @ BOX-W OVER > IF
+            _LAYO-BOX @ BOX-W!
+        ELSE
+            DROP
+        THEN
+    ELSE
+        DROP
     THEN
 ;
 
@@ -205,6 +224,26 @@ VARIABLE _LMT-BOX
 
     _LAYO-BOX @ BOX-H BOX-AUTO = IF
         _LAYO-CUR-Y @  _LAYO-BOX @ BOX-H!
+    THEN
+
+    \ Clamp to min-height / max-height
+    _LAYO-BOX @ BOX-MIN-H DUP 0> IF
+        _LAYO-BOX @ BOX-H OVER < IF
+            _LAYO-BOX @ BOX-H!
+        ELSE
+            DROP
+        THEN
+    ELSE
+        DROP
+    THEN
+    _LAYO-BOX @ BOX-MAX-H DUP BOX-AUTO <> OVER 0> AND IF
+        _LAYO-BOX @ BOX-H OVER > IF
+            _LAYO-BOX @ BOX-H!
+        ELSE
+            DROP
+        THEN
+    ELSE
+        DROP
     THEN
 ;
 

@@ -167,6 +167,45 @@ VARIABLE _SR-CH
     LOOP
     -1 ;
 
+\ STR-STR-CONTAINS ( hay-a hay-u ndl-a ndl-u -- flag )
+\   Does the haystack contain the needle as a substring?
+\   Case-sensitive.  flag = -1 if found, 0 if not found.
+VARIABLE _SSC-HA   VARIABLE _SSC-HL
+VARIABLE _SSC-NA   VARIABLE _SSC-NL
+
+: STR-STR-CONTAINS  ( hay-a hay-u ndl-a ndl-u -- flag )
+    _SSC-NL !  _SSC-NA !  _SSC-HL !  _SSC-HA !
+    _SSC-NL @ 0= IF -1 EXIT THEN            \ empty needle always matches
+    _SSC-NL @ _SSC-HL @ > IF 0 EXIT THEN    \ needle longer than haystack
+    _SSC-HL @ _SSC-NL @ - 1+  0 DO
+        -1  _SSC-NL @ 0 DO
+            _SSC-HA @ J + I + C@
+            _SSC-NA @ I + C@
+            <> IF DROP 0 LEAVE THEN
+        LOOP
+        IF -1 UNLOOP EXIT THEN
+    LOOP
+    0 ;
+
+\ STR-STRI-CONTAINS ( hay-a hay-u ndl-a ndl-u -- flag )
+\   Case-insensitive substring search.
+VARIABLE _SIC-HA   VARIABLE _SIC-HL
+VARIABLE _SIC-NA   VARIABLE _SIC-NL
+
+: STR-STRI-CONTAINS  ( hay-a hay-u ndl-a ndl-u -- flag )
+    _SIC-NL !  _SIC-NA !  _SIC-HL !  _SIC-HA !
+    _SIC-NL @ 0= IF -1 EXIT THEN
+    _SIC-NL @ _SIC-HL @ > IF 0 EXIT THEN
+    _SIC-HL @ _SIC-NL @ - 1+  0 DO
+        -1  _SIC-NL @ 0 DO
+            _SIC-HA @ J + I + C@  _STR-LC
+            _SIC-NA @ I + C@      _STR-LC
+            <> IF DROP 0 LEAVE THEN
+        LOOP
+        IF -1 UNLOOP EXIT THEN
+    LOOP
+    0 ;
+
 \ STR-SPLIT ( str-a str-u c -- pre-a pre-u post-a post-u flag )
 \   Split at first occurrence of delimiter char c.
 \   flag = -1 if found, 0 if not found (post = 0 0).

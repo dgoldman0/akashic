@@ -82,8 +82,12 @@ PROVIDED akashic-box
 \  +160  border-l     Border width left
 \  +168  flags        Bit 0: 1 = text box (no children, content is text)
 \  +176  frags        Pointer to word-fragment array (for word-wrapped text)
+\  +184  min-w        min-width   (integer px, 0 = no minimum)
+\  +192  max-w        max-width   (integer px, BOX-AUTO = no maximum)
+\  +200  min-h        min-height  (integer px, 0 = no minimum)
+\  +208  max-h        max-height  (integer px, BOX-AUTO = no maximum)
 
-184 CONSTANT BOX-DESC-SIZE
+216 CONSTANT BOX-DESC-SIZE
 
 \ =====================================================================
 \  Field accessor words  ( box -- addr )
@@ -112,6 +116,10 @@ PROVIDED akashic-box
 : B.BL        ( box -- addr )  160 + ;            \ +160
 : B.FLAGS     ( box -- addr )  168 + ;            \ +168
 : B.FRAGS     ( box -- addr )  176 + ;            \ +176  word fragments
+: B.MINW      ( box -- addr )  184 + ;            \ +184  min-width
+: B.MAXW      ( box -- addr )  192 + ;            \ +192  max-width
+: B.MINH      ( box -- addr )  200 + ;            \ +200  min-height
+: B.MAXH      ( box -- addr )  208 + ;            \ +208  max-height
 
 \ Flag bits
 1 CONSTANT _BOX-F-TEXT
@@ -142,6 +150,10 @@ PROVIDED akashic-box
 : BOX-BORDER-B   ( box -- n )     B.BB @ ;
 : BOX-BORDER-L   ( box -- n )     B.BL @ ;
 : BOX-FRAGS      ( box -- ptr )   B.FRAGS @ ;
+: BOX-MIN-W      ( box -- n )     B.MINW @ ;
+: BOX-MAX-W      ( box -- n )     B.MAXW @ ;
+: BOX-MIN-H      ( box -- n )     B.MINH @ ;
+: BOX-MAX-H      ( box -- n )     B.MAXH @ ;
 
 \ Setters for layout engine
 : BOX-X!     ( x box -- )     B.X ! ;
@@ -183,6 +195,8 @@ VARIABLE _BOX-DISP
     BOX-D-BLOCK  _BOX-TMP @ B.DISPLAY  !
     BOX-AUTO     _BOX-TMP @ B.W        !
     BOX-AUTO     _BOX-TMP @ B.H        !
+    BOX-AUTO     _BOX-TMP @ B.MAXW     !
+    BOX-AUTO     _BOX-TMP @ B.MAXH     !
 
     _BOX-TMP @ ;
 
@@ -259,6 +273,9 @@ VARIABLE _BPP-INT
 VARIABLE _BPP-FRAC
 VARIABLE _BPP-FD
 
+\ Current font-size context for em resolution (set by BOX-RESOLVE-STYLE)
+VARIABLE _BOX-EM-SIZE     \ 0 = not yet set (default 16)
+
 : _BOX-IS-AUTO  ( a u -- flag )
     4 <> IF DROP 0 EXIT THEN
     DUP     C@ 97  <> IF DROP 0 EXIT THEN    \ 'a'
@@ -292,6 +309,54 @@ VARIABLE _BPP-FD
         OVER C@ 37 = IF
             2DROP
             _BPP-INT @ 2 + NEGATE EXIT   \ -(pct+2): percentage marker
+        THEN
+    THEN
+
+    \ Check for 'em' unit (ASCII 101, 109)
+    DUP 2 >= IF
+        OVER C@ 101 = IF               \ 'e'
+            OVER 1+ C@ 109 = IF        \ 'm'
+                2DROP
+                \ Resolve em: multiply by current font-size context
+                _BOX-EM-SIZE @ DUP 0= IF DROP 16 THEN
+                _BPP-INT @ *
+                \ Add fractional part: frac * em-size / 10^frac-digits
+                _BPP-FRAC @ 0<> IF
+                    _BOX-EM-SIZE @ DUP 0= IF DROP 16 THEN
+                    _BPP-FRAC @ *
+                    1  _BPP-FD @ 0 ?DO 10 * LOOP  /
+                    +
+                THEN
+                EXIT
+            THEN
+        THEN
+    THEN
+
+    \ Check for 'rem' unit (ASCII 114, 101, 109) — resolve at 16px
+    DUP 3 >= IF
+        OVER C@ 114 = IF               \ 'r'
+            OVER 1+ C@ 101 = IF        \ 'e'
+                OVER 2 + C@ 109 = IF   \ 'm'
+                    2DROP
+                    _BPP-INT @ 16 *
+                    _BPP-FRAC @ 0<> IF
+                        16 _BPP-FRAC @ *
+                        1  _BPP-FD @ 0 ?DO 10 * LOOP  /
+                        +
+                    THEN
+                    EXIT
+                THEN
+            THEN
+        THEN
+    THEN
+
+    \ Check for 'pt' unit (1pt = 1.333px, approx 4/3)
+    DUP 2 >= IF
+        OVER C@ 112 = IF               \ 'p'
+            OVER 1+ C@ 116 = IF        \ 't'
+                2DROP
+                _BPP-INT @ 4 * 3 / EXIT
+            THEN
         THEN
     THEN
 
@@ -394,6 +459,25 @@ VARIABLE _BRSD-FLD
 : BOX-RESOLVE-STYLE  ( box -- )
     _BRS-BOX !
 
+    \ --- Set em context from parent's font-size ---
+    _BRS-BOX @ B.DOM @ DOM-PARENT DUP 0<> IF
+        DUP DOM-TYPE@ DOM-T-ELEMENT = IF
+            S" font-size" DOM-STYLE@
+            IF
+                16 _BOX-EM-SIZE !   \ set default first
+                _BOX-PARSE-PX
+                DUP 1 < IF DROP 16 THEN
+                _BOX-EM-SIZE !
+            ELSE
+                2DROP 16 _BOX-EM-SIZE !
+            THEN
+        ELSE
+            DROP 16 _BOX-EM-SIZE !
+        THEN
+    ELSE
+        DROP 16 _BOX-EM-SIZE !
+    THEN
+
     \ --- Display ---
     _BRS-BOX @ B.DOM @  S" display"  DOM-STYLE@
     IF
@@ -411,6 +495,23 @@ VARIABLE _BRSD-FLD
     _BRS-BOX @ B.DOM @  S" height"  DOM-STYLE@
     IF  _BOX-PARSE-PX  ELSE  2DROP BOX-AUTO  THEN
     _BRS-BOX @ B.H !
+
+    \ --- Min/Max width & height ---
+    _BRS-BOX @ B.DOM @  S" min-width"  DOM-STYLE@
+    IF  _BOX-PARSE-PX  DUP BOX-AUTO = IF DROP 0 THEN  ELSE  2DROP 0  THEN
+    _BRS-BOX @ B.MINW !
+
+    _BRS-BOX @ B.DOM @  S" max-width"  DOM-STYLE@
+    IF  _BOX-PARSE-PX  ELSE  2DROP BOX-AUTO  THEN
+    _BRS-BOX @ B.MAXW !
+
+    _BRS-BOX @ B.DOM @  S" min-height"  DOM-STYLE@
+    IF  _BOX-PARSE-PX  DUP BOX-AUTO = IF DROP 0 THEN  ELSE  2DROP 0  THEN
+    _BRS-BOX @ B.MINH !
+
+    _BRS-BOX @ B.DOM @  S" max-height"  DOM-STYLE@
+    IF  _BOX-PARSE-PX  ELSE  2DROP BOX-AUTO  THEN
+    _BRS-BOX @ B.MAXH !
 
     \ --- Margin (shorthand then individual overrides) ---
     _BRS-BOX @  S" margin"
@@ -446,6 +547,60 @@ VARIABLE _BRSD-FLD
     _BRS-BOX @ B.DOM @  DOM-TYPE@  DOM-T-TEXT = IF
         _BOX-F-TEXT  _BRS-BOX @ B.FLAGS  !
         BOX-D-INLINE  _BRS-BOX @ B.DISPLAY  !
+    THEN
+
+    \ --- User-agent defaults for special elements ---
+    \ Only apply defaults when CSS didn't set explicit values.
+    _BRS-BOX @ B.DOM @  DOM-TYPE@  DOM-T-ELEMENT = IF
+        _BRS-BOX @ B.DOM @ DOM-TAG-NAME
+
+        \ <hr>: margin 8px top/bottom, height 0, 1px border-top
+        2DUP S" hr" STR-STRI= IF
+            _BRS-BOX @ B.H @ BOX-AUTO = IF  0 _BRS-BOX @ B.H !  THEN
+            _BRS-BOX @ B.MT @ 0= IF  8 _BRS-BOX @ B.MT !  THEN
+            _BRS-BOX @ B.MB @ 0= IF  8 _BRS-BOX @ B.MB !  THEN
+        THEN
+
+        \ <ul> / <ol>: left padding 40px, margin 16px top/bottom
+        2DUP S" ul" STR-STRI= OVER 2 = AND IF
+            _BRS-BOX @ B.PL @ 0= IF  40 _BRS-BOX @ B.PL !  THEN
+            _BRS-BOX @ B.MT @ 0= IF  16 _BRS-BOX @ B.MT !  THEN
+            _BRS-BOX @ B.MB @ 0= IF  16 _BRS-BOX @ B.MB !  THEN
+        THEN
+        2DUP S" ol" STR-STRI= OVER 2 = AND IF
+            _BRS-BOX @ B.PL @ 0= IF  40 _BRS-BOX @ B.PL !  THEN
+            _BRS-BOX @ B.MT @ 0= IF  16 _BRS-BOX @ B.MT !  THEN
+            _BRS-BOX @ B.MB @ 0= IF  16 _BRS-BOX @ B.MB !  THEN
+        THEN
+
+        \ <p>: margin 16px top/bottom
+        2DUP S" p" STR-STRI= OVER 1 = AND IF
+            _BRS-BOX @ B.MT @ 0= IF  16 _BRS-BOX @ B.MT !  THEN
+            _BRS-BOX @ B.MB @ 0= IF  16 _BRS-BOX @ B.MB !  THEN
+        THEN
+
+        \ <h1>-<h6>: default margins (simplified)
+        2DUP S" h1" STR-STRI= IF
+            _BRS-BOX @ B.MT @ 0= IF  21 _BRS-BOX @ B.MT !  THEN
+            _BRS-BOX @ B.MB @ 0= IF  21 _BRS-BOX @ B.MB !  THEN
+        THEN
+        2DUP S" h2" STR-STRI= IF
+            _BRS-BOX @ B.MT @ 0= IF  19 _BRS-BOX @ B.MT !  THEN
+            _BRS-BOX @ B.MB @ 0= IF  19 _BRS-BOX @ B.MB !  THEN
+        THEN
+        2DUP S" h3" STR-STRI= IF
+            _BRS-BOX @ B.MT @ 0= IF  18 _BRS-BOX @ B.MT !  THEN
+            _BRS-BOX @ B.MB @ 0= IF  18 _BRS-BOX @ B.MB !  THEN
+        THEN
+
+        \ <blockquote>: left margin 40px, top/bottom 16px
+        2DUP S" blockquote" STR-STRI= IF
+            _BRS-BOX @ B.ML @ 0= IF  40 _BRS-BOX @ B.ML !  THEN
+            _BRS-BOX @ B.MT @ 0= IF  16 _BRS-BOX @ B.MT !  THEN
+            _BRS-BOX @ B.MB @ 0= IF  16 _BRS-BOX @ B.MB !  THEN
+        THEN
+
+        2DROP
     THEN ;
 
 \ =====================================================================

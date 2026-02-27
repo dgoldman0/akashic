@@ -28,6 +28,8 @@ All words use the standard `( addr len )` string model.
 | `STR-ENDS?` | `( str-a str-u sfx-a sfx-u -- flag )` | Case-sensitive suffix |
 | `STR-INDEX` | `( str-a str-u c -- idx \| -1 )` | First char occurrence |
 | `STR-RINDEX` | `( str-a str-u c -- idx \| -1 )` | Last char occurrence |
+| `STR-STR-CONTAINS` | `( hay-a hay-u ndl-a ndl-u -- flag )` | Case-sensitive substring search |
+| `STR-STRI-CONTAINS` | `( hay-a hay-u ndl-a ndl-u -- flag )` | Case-insensitive substring search |
 | `STR-SPLIT` | `( str-a str-u c -- pre-a pre-u post-a post-u flag )` | Split at delimiter |
 | `STR-TRIM` | `( addr len -- addr' len' )` | Trim whitespace both ends |
 | `STR-TRIM-L` | `( addr len -- addr' len' )` | Trim leading whitespace |
@@ -113,6 +115,17 @@ Returns the index of the last occurrence of char `c`, or `-1`.
 ```forth
 S" hello" 108 STR-INDEX   \ → 2  (first 'l')
 S" hello" 108 STR-RINDEX  \ → 3  (last 'l')
+```
+
+### `STR-STR-CONTAINS` / `STR-STRI-CONTAINS`
+
+Substring search. Returns `-1` if needle is found anywhere in the
+haystack, `0` otherwise. The `I` variant is case-insensitive.
+
+```forth
+S" underline line-through" S" underline" STR-STR-CONTAINS  \ → -1
+S" Hello World" S" WORLD" STR-STRI-CONTAINS               \ → -1
+S" solid" S" dashed" STR-STR-CONTAINS                     \ → 0
 ```
 
 ---

@@ -1094,6 +1094,75 @@ VARIABLE _CHC-G   VARIABLE _CHC-B
     0 0 0 0 ;
 
 \ =====================================================================
+\  CSS-PARSE-RGB — Parse rgb() / rgba() color functions
+\ =====================================================================
+\  ( a u -- a' u' r g b flag )
+\  Parses "rgb(R, G, B)" or "rgba(R, G, B, A)".
+\  A (alpha) is parsed but discarded — caller gets r g b only.
+\  Returns flag=-1 on success, 0 on failure (with r=g=b=0).
+\
+\  Values can be integers 0-255.  Spaces and commas between args.
+
+VARIABLE _CPR-R  VARIABLE _CPR-G  VARIABLE _CPR-B
+
+\ Skip whitespace + commas between rgb() args
+VARIABLE _CPR-SK
+: _CPR-SKIP  ( a u -- a' u' )
+    BEGIN
+        DUP 0> IF
+            OVER C@ _CPR-SK !
+            _CPR-SK @ 32 =
+            _CPR-SK @ 9  = OR
+            _CPR-SK @ 10 = OR
+            _CPR-SK @ 13 = OR
+            _CPR-SK @ 44 = OR    \ comma
+        ELSE 0 THEN
+    WHILE
+        1 /STRING
+    REPEAT ;
+
+: CSS-PARSE-RGB  ( a u -- a' u' r g b flag )
+    \ Check starts with "rgb"
+    DUP 3 < IF 0 0 0 0 EXIT THEN
+    OVER     C@ 114 <> IF 0 0 0 0 EXIT THEN   \ 'r'
+    OVER 1 + C@ 103 <> IF 0 0 0 0 EXIT THEN   \ 'g'
+    OVER 2 + C@ 98  <> IF 0 0 0 0 EXIT THEN   \ 'b'
+    3 /STRING
+    \ optional 'a' for rgba
+    DUP 0> IF OVER C@ 97 = IF 1 /STRING THEN THEN
+    \ must have '('
+    DUP 0= IF 0 0 0 0 EXIT THEN
+    OVER C@ 40 <> IF 0 0 0 0 EXIT THEN   \ '('
+    1 /STRING
+    \ skip ws
+    _CPR-SKIP
+    \ parse R
+    CSS-PARSE-INT   ( a' u' n flag )
+    0= IF DROP 0 0 0 0 EXIT THEN
+    0 MAX 255 MIN _CPR-R !
+    \ skip comma+ws, parse G
+    _CPR-SKIP
+    CSS-PARSE-INT
+    0= IF DROP 0 0 0 0 EXIT THEN
+    0 MAX 255 MIN _CPR-G !
+    \ skip comma+ws, parse B
+    _CPR-SKIP
+    CSS-PARSE-INT
+    0= IF DROP 0 0 0 0 EXIT THEN
+    0 MAX 255 MIN _CPR-B !
+    \ skip past closing ')', consuming optional alpha arg
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ 41 = IF    \ ')'
+            1 /STRING
+            _CPR-R @ _CPR-G @ _CPR-B @ -1 EXIT
+        THEN
+        1 /STRING
+    REPEAT
+    \ No closing paren found — still return what we parsed
+    _CPR-R @ _CPR-G @ _CPR-B @ -1 ;
+
+\ =====================================================================
 \  Layer 7 — Shorthand Expansion
 \ =====================================================================
 \
