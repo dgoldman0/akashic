@@ -271,6 +271,152 @@ VARIABLE _RST-AA-PI
     LOOP ;
 
 \ =====================================================================
+\  Analytic coverage fill — fractional x-intercepts
+\ =====================================================================
+\  Replaces the N×N grid with exact fractional coverage.
+\  For each output row, N sub-scanlines for vertical AA.
+\  X-intercepts computed in 256× fixed-point for smooth horizontal AA.
+\  For each intercept pair, left/right edge pixels get fractional
+\  coverage; interior pixels get full coverage.
+\  Accumulates into a cell array per output pixel, then scales to 0-255.
+
+VARIABLE _RST-ANA-W       \ output width
+VARIABLE _RST-ANA-BUF     \ output buffer
+VARIABLE _RST-ANA-N       \ sub-scanline count (= AA rate)
+640 CONSTANT _RST-ANA-MAXW
+CREATE _RST-ANA-ROW  _RST-ANA-MAXW CELLS ALLOT   \ cell accumulator per pixel
+
+\ Collect x-intercepts in 256× fixed-point for a given N× sub-scanline Y.
+\ Same logic as _RST-COLLECT-XINTS but multiplies numerator by 256
+\ before dividing, giving 8 fractional bits.
+
+: _RST-ANA-COLLECT  ( sub-y -- )
+    _RST-CUR-Y !
+    0 _RST-NXINTS !
+    _RST-NEDGES @ 0 DO
+        I CELLS _RST-EY0 + @
+        _RST-CUR-Y @ OVER >= IF
+            DROP
+            I CELLS _RST-EY1 + @
+            _RST-CUR-Y @ OVER < IF
+                DROP
+                \ x = x0 + (y - y0) * (x1 - x0) / (y1 - y0)
+                \ but we compute x * 256 for fractional precision
+                I CELLS _RST-EX1 + @ I CELLS _RST-EX0 + @ -   ( dx )
+                _RST-CUR-Y @ I CELLS _RST-EY0 + @ -            ( dx dy )
+                * 256 *                                          ( dx*dy*256 )
+                I CELLS _RST-EY1 + @ I CELLS _RST-EY0 + @ -    ( num denom )
+                /                                                ( dx_fp )
+                I CELLS _RST-EX0 + @ 256 * +                    ( x_fp )
+                _RST-NXINTS @ _RST-MAX-XINTS < IF
+                    _RST-NXINTS @ CELLS _RST-XINTS + !
+                    _RST-NXINTS @ 1+ _RST-NXINTS !
+                ELSE
+                    DROP
+                THEN
+            ELSE DROP THEN
+        ELSE DROP THEN
+    LOOP ;
+
+\ Accumulate fractional coverage for one intercept pair (xl, xr) in
+\ 256× fixed-point of N× space, into _RST-ANA-ROW cells.
+\ Each output pixel column c spans [c*N*256, (c+1)*N*256) in this space.
+\ Left edge pixel gets partial coverage, interior pixels full, right partial.
+
+VARIABLE _RST-ANA-XL   VARIABLE _RST-ANA-XR
+VARIABLE _RST-ANA-NF   \ N * 256 (one output pixel width in fp space)
+VARIABLE _RST-ANA-PL   VARIABLE _RST-ANA-PR   \ pixel indices
+
+: _RST-ANA-ACCUM-SPAN  ( xl xr -- )
+    _RST-ANA-XR !  _RST-ANA-XL !
+    \ Clip to [0, W*N*256)
+    _RST-ANA-XL @ 0 MAX _RST-ANA-XL !
+    _RST-ANA-XR @ 0 MAX _RST-ANA-XR !
+    _RST-ANA-W @ _RST-ANA-NF @ *          ( max-x )
+    _RST-ANA-XL @ OVER MIN _RST-ANA-XL !
+    _RST-ANA-XR @ SWAP MIN _RST-ANA-XR !
+    \ Compute pixel columns
+    _RST-ANA-XL @ _RST-ANA-NF @ / _RST-ANA-PL !
+    _RST-ANA-XR @ 1- 0 MAX _RST-ANA-NF @ / _RST-ANA-PR !
+    \ If xr <= xl, nothing to do
+    _RST-ANA-XR @ _RST-ANA-XL @ <= IF EXIT THEN
+    \ Same pixel?
+    _RST-ANA-PL @ _RST-ANA-PR @ = IF
+        _RST-ANA-XR @ _RST-ANA-XL @ -    ( coverage in fp units )
+        _RST-ANA-PL @ CELLS _RST-ANA-ROW + DUP @ ROT + SWAP !
+        EXIT
+    THEN
+    \ Left edge pixel: coverage = right edge of pixel - xl
+    _RST-ANA-PL @ 1+ _RST-ANA-NF @ * _RST-ANA-XL @ -
+    _RST-ANA-PL @ CELLS _RST-ANA-ROW + DUP @ ROT + SWAP !
+    \ Interior pixels: full coverage = NF (only if there are any)
+    _RST-ANA-PR @ _RST-ANA-PL @ 1+ > IF
+        _RST-ANA-PR @ _RST-ANA-PL @ 1+ DO
+            _RST-ANA-NF @
+            I CELLS _RST-ANA-ROW + DUP @ ROT + SWAP !
+        LOOP
+    THEN
+    \ Right edge pixel: coverage = xr - left edge of pixel
+    _RST-ANA-XR @ _RST-ANA-PR @ _RST-ANA-NF @ * -
+    _RST-ANA-PR @ CELLS _RST-ANA-ROW + DUP @ ROT + SWAP ! ;
+
+\ Walk intercept pairs and accumulate spans
+VARIABLE _RST-ANA-PI
+: _RST-ANA-PAIRS  ( -- )
+    0 _RST-ANA-PI !
+    BEGIN _RST-ANA-PI @ 2 * 1+ _RST-NXINTS @ < WHILE
+        _RST-ANA-PI @ 2 * CELLS _RST-XINTS + @
+        _RST-ANA-PI @ 2 * 1+ CELLS _RST-XINTS + @
+        _RST-ANA-ACCUM-SPAN
+        _RST-ANA-PI @ 1+ _RST-ANA-PI !
+    REPEAT ;
+
+\ Main analytic fill: replaces RAST-FILL-AA
+: RAST-FILL-ANALYTIC  ( buf-addr width height -- )
+    >R _RST-ANA-W !  _RST-ANA-BUF !
+    _RST-AA-N @ _RST-ANA-N !
+    _RST-ANA-N @ 256 * _RST-ANA-NF !
+    \ Clear output buffer
+    _RST-ANA-BUF @ _RST-ANA-W @ R@ * 0 FILL
+    \ For each output row
+    R> 0 DO
+        \ Clear cell accumulator
+        _RST-ANA-ROW _RST-ANA-W @ CELLS 0 FILL
+        \ Process N sub-scanlines
+        _RST-ANA-N @ 0 DO
+            J _RST-ANA-N @ * I +  _RST-ANA-COLLECT
+            _RST-SORT-XINTS
+            _RST-ANA-PAIRS
+        LOOP
+        \ Convert accumulated coverage to 0-255 per pixel
+        \ Max accumulation per pixel = N * N * 256 (N sub-rows, full NF width)
+        \ coverage_byte = accumulated * 255 / (N * N * 256)
+        _RST-ANA-N @ DUP * 256 *          ( divisor = N² * 256 )
+        _RST-ANA-W @ 0 DO
+            I CELLS _RST-ANA-ROW + @      ( divisor accum )
+            255 * OVER /                   ( divisor byte )
+            255 MIN                        ( divisor clamped )
+            _RST-ANA-BUF @ J _RST-ANA-W @ * + I + C!
+        LOOP
+        DROP
+    LOOP ;
+
+\ =====================================================================
+\  Rasterizer mode select
+\ =====================================================================
+VARIABLE _RST-MODE    0 _RST-MODE !   \ 0 = analytic, 1 = grid
+
+: RAST-MODE!  ( n -- )  _RST-MODE ! ;
+: RAST-MODE@  ( -- n )  _RST-MODE @ ;
+
+: _RST-DO-FILL  ( buf w h -- )
+    _RST-MODE @ IF
+        RAST-FILL-AA
+    ELSE
+        RAST-FILL-ANALYTIC
+    THEN ;
+
+\ =====================================================================
 \  Glyph contour → edge table (Stage C)
 \ =====================================================================
 \  Walks decoded glyph contours (from ttf.f's TTF-DECODE-GLYPH),
@@ -310,7 +456,7 @@ VARIABLE _RST-YFLIP     \ target height for Y-flip
 \ (multiple of N).  This ensures vertical stems are one pixel wide
 \ instead of blurred across two pixels.
 
-VARIABLE _HNT-ON       1 _HNT-ON !
+VARIABLE _HNT-ON       0 _HNT-ON !
 VARIABLE _HNT-N        \ AA rate (grid spacing in N× space)
 
 : HINT-ON!   ( -- )  1 _HNT-ON ! ;
@@ -532,5 +678,5 @@ VARIABLE _RST-G-BUF  VARIABLE _RST-G-W  VARIABLE _RST-G-H
         I TTF-CONT-END 1+                    ( npts next-start )
     LOOP
     2DROP
-    _RST-G-BUF @ _RST-G-W @ _RST-G-H @ RAST-FILL-AA
+    _RST-G-BUF @ _RST-G-W @ _RST-G-H @ _RST-DO-FILL
     TRUE ;
