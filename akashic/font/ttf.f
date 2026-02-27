@@ -256,6 +256,7 @@ VARIABLE _TCD-DEST  VARIABLE _TCD-SMASK  VARIABLE _TCD-PMASK
     DROP                               ( addr )
     DUP TTF-GLYPH-NCONTOURS           ( addr ncont )
     DUP 0< IF 2DROP 0 0 EXIT THEN     \ composite — skip
+    DUP 0= IF 2DROP 0 0 EXIT THEN     \ empty glyph (no contours)
     DUP _TTF-DEC-NCONT !              ( addr ncont )
     \ Read endPtsOfContours array
     SWAP 10 + SWAP                     ( epc-addr ncont )

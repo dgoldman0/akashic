@@ -119,7 +119,7 @@ VARIABLE _UD-L                         \ buffer length
 
 : UTF8-ENCODE  ( cp buf -- buf' )
     OVER 0x80 < IF                     \ 1-byte ASCII
-        OVER SWAP C!  1+  NIP EXIT
+        OVER OVER C!  1+  NIP EXIT
     THEN
     OVER 0x800 < IF                    \ 2-byte
         OVER 6 RSHIFT 0xC0 OR OVER C!  1+

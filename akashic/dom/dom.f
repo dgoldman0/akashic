@@ -11,6 +11,7 @@
 
 PROVIDED akashic-dom
 REQUIRE ../css/bridge.f
+REQUIRE ../text/utf8.f
 
 \ =====================================================================
 \  Constants
@@ -1136,13 +1137,35 @@ VARIABLE _DPA-VA  VARIABLE _DPA-VL
 VARIABLE _PH-TA   VARIABLE _PH-TL
 
 CREATE _DOM-UE-BUF 4096 ALLOT
+VARIABLE _DUE-D   VARIABLE _DUE-N   VARIABLE _DUE-MAX
+
+\ _DOM-UNESCAPE ( src slen dest dmax -- len )
+\   Like MU-UNESCAPE but writes multi-byte codepoints as UTF-8.
+: _DOM-UNESCAPE  ( src slen dest dmax -- len )
+    _DUE-MAX !  _DUE-D !  0 _DUE-N !
+    BEGIN
+        DUP 0> WHILE
+        _DUE-N @ _DUE-MAX @ >= IF 2DROP _DUE-N @ EXIT THEN
+        OVER C@ 38 = IF
+            MU-DECODE-ENTITY
+            ROT
+            _DUE-D @ _DUE-N @ + UTF8-ENCODE
+            _DUE-D @ - _DUE-N !
+        ELSE
+            OVER C@
+            _DUE-D @ _DUE-N @ + C!
+            1 _DUE-N +!
+            1 /STRING
+        THEN
+    REPEAT
+    2DROP _DUE-N @ ;
 
 : _DOM-PARSE-TEXT  ( -- )
     _PH-CA @ _PH-CL @ MU-GET-TEXT
     _PH-TL ! _PH-TA !
     _PH-CL ! _PH-CA !
     _PH-TL @ 0> IF
-        _PH-TA @ _PH-TL @ _DOM-UE-BUF 4096 MU-UNESCAPE
+        _PH-TA @ _PH-TL @ _DOM-UE-BUF 4096 _DOM-UNESCAPE
         _DOM-UE-BUF SWAP
         DOM-CREATE-TEXT
         _PH-PAR @ DOM-APPEND
