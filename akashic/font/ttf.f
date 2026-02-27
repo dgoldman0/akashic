@@ -250,12 +250,11 @@ VARIABLE _TCD-DEST  VARIABLE _TCD-SMASK  VARIABLE _TCD-PMASK
     _TCD-SRC @ ;
 
 \ --- Main decoder ---
-: TTF-DECODE-GLYPH  ( glyph-id -- npoints ncontours | 0 0 )
-    TTF-GLYPH-DATA
-    DUP 0= IF EXIT THEN
-    DROP                               ( addr )
-    DUP TTF-GLYPH-NCONTOURS           ( addr ncont )
-    DUP 0< IF 2DROP 0 0 EXIT THEN     \ composite — skip
+
+\ Forward declaration — _TTF-DECODE-SIMPLE fills arrays from index 0.
+\ _TTF-DECODE-COMPOSITE calls it per-component and accumulates.
+
+: _TTF-DECODE-SIMPLE  ( addr ncont -- npoints ncontours | 0 0 )
     DUP 0= IF 2DROP 0 0 EXIT THEN     \ empty glyph (no contours)
     DUP _TTF-DEC-NCONT !              ( addr ncont )
     \ Read endPtsOfContours array
@@ -279,6 +278,150 @@ VARIABLE _TCD-DEST  VARIABLE _TCD-SMASK  VARIABLE _TCD-PMASK
     _TTF-DECODE-COORDS                 ( end )
     DROP
     _TTF-DEC-NPTS @ _TTF-DEC-NCONT @ ;
+
+\ =====================================================================
+\  Composite glyph decoder
+\ =====================================================================
+\  Parses component records, decodes each sub-glyph, accumulates
+\  points with x/y translation into result arrays, then copies back.
+\
+\  Composite flags (relevant bits):
+\    0  ARG_1_AND_2_ARE_WORDS   args are 16-bit signed
+\    1  ARGS_ARE_XY_OFFSETS     args are dx,dy (not point indices)
+\    3  WE_HAVE_A_SCALE         one F2Dot14 scale follows
+\    5  MORE_COMPONENTS         another component follows
+\    6  WE_HAVE_AN_X_AND_Y_SCALE  two F2Dot14 scales follow
+\    7  WE_HAVE_A_TWO_BY_TWO   four F2Dot14 values follow
+
+\ Accumulation arrays (same size as main arrays)
+HERE _TTF-MAX-PTS CELLS ALLOT CONSTANT _CG-ACC-X
+HERE _TTF-MAX-PTS CELLS ALLOT CONSTANT _CG-ACC-Y
+HERE _TTF-MAX-PTS       ALLOT CONSTANT _CG-ACC-FL
+HERE 64                  ALLOT CONSTANT _CG-ACC-CE
+
+VARIABLE _CG-ADDR          \ read pointer into composite data
+VARIABLE _CG-TPT            \ total accumulated points
+VARIABLE _CG-TCN            \ total accumulated contours
+VARIABLE _CG-FLAGS          \ current component flags
+VARIABLE _CG-GID            \ current component glyph-id
+VARIABLE _CG-DX             \ current component x-offset
+VARIABLE _CG-DY             \ current component y-offset
+VARIABLE _CG-SCX            \ scale X (F2Dot14, 16384 = 1.0)
+VARIABLE _CG-SCY            \ scale Y (F2Dot14, 16384 = 1.0)
+VARIABLE _CG-SNP            \ sub-glyph npoints
+VARIABLE _CG-SNC            \ sub-glyph ncontours
+VARIABLE _CG-I              \ loop index
+
+: _CG-PARSE-COMPONENT  ( -- )
+    \ Read flags and glyph index
+    _CG-ADDR @ BE-W@ _CG-FLAGS !
+    _CG-ADDR @ 2 + BE-W@ _CG-GID !
+    _CG-ADDR @ 4 + _CG-ADDR !
+    \ Parse dx, dy
+    _CG-FLAGS @ 1 AND IF              \ ARG_1_AND_2_ARE_WORDS
+        _CG-ADDR @ BE-SW@ _CG-DX !
+        _CG-ADDR @ 2 + BE-SW@ _CG-DY !
+        _CG-ADDR @ 4 + _CG-ADDR !
+    ELSE                               \ args are bytes
+        _CG-ADDR @ C@ DUP 128 >= IF 256 - THEN _CG-DX !
+        _CG-ADDR @ 1+ C@ DUP 128 >= IF 256 - THEN _CG-DY !
+        _CG-ADDR @ 2 + _CG-ADDR !
+    THEN
+    \ Parse scale / matrix data (F2Dot14 signed, 16384 = 1.0)
+    16384 _CG-SCX !  16384 _CG-SCY !  \ default: identity
+    _CG-FLAGS @ 8 AND IF              \ WE_HAVE_A_SCALE (uniform)
+        _CG-ADDR @ BE-SW@ DUP _CG-SCX !  _CG-SCY !
+        _CG-ADDR @ 2 + _CG-ADDR !
+    THEN
+    _CG-FLAGS @ 64 AND IF             \ WE_HAVE_AN_X_AND_Y_SCALE
+        _CG-ADDR @ BE-SW@ _CG-SCX !
+        _CG-ADDR @ 2 + BE-SW@ _CG-SCY !
+        _CG-ADDR @ 4 + _CG-ADDR !
+    THEN
+    _CG-FLAGS @ 128 AND IF            \ WE_HAVE_A_TWO_BY_TWO (skip 8 bytes)
+        _CG-ADDR @ BE-SW@ _CG-SCX !   \ use m00 as scaleX
+        _CG-ADDR @ 4 + BE-SW@ _CG-SCY !  \ use m11 as scaleY
+        _CG-ADDR @ 8 + _CG-ADDR !     \ skip all 8 bytes
+    THEN ;
+
+: _CG-ACCUMULATE  ( -- )
+    \ After _TTF-DECODE-SIMPLE filled main arrays from 0,
+    \ copy sub_npts/sub_ncont to accumulation arrays at offset,
+    \ applying scale then dx/dy translation.
+    _TTF-DEC-NPTS @ _CG-SNP !
+    _TTF-DEC-NCONT @ _CG-SNC !
+    _CG-SNP @ 0= IF EXIT THEN
+    \ Check bounds
+    _CG-TPT @ _CG-SNP @ + _TTF-MAX-PTS > IF EXIT THEN
+    \ Copy X coords: apply scaleX then dx
+    _CG-SNP @ 0 DO
+        _TTF-PTS-X I CELLS + @
+        _CG-SCX @ 16384 <> IF  _CG-SCX @ * 16384 /  THEN
+        _CG-DX @ +
+        _CG-ACC-X _CG-TPT @ I + CELLS + !
+    LOOP
+    \ Copy Y coords: apply scaleY then dy
+    _CG-SNP @ 0 DO
+        _TTF-PTS-Y I CELLS + @
+        _CG-SCY @ 16384 <> IF  _CG-SCY @ * 16384 /  THEN
+        _CG-DY @ +
+        _CG-ACC-Y _CG-TPT @ I + CELLS + !
+    LOOP
+    \ Copy flags
+    _TTF-PTS-FL  _CG-ACC-FL _CG-TPT @ +  _CG-SNP @ CMOVE
+    \ Copy contour ends + adjust by accumulated point offset
+    _CG-SNC @ 0 DO
+        _TTF-CONT-ENDS I CELLS + @  _CG-TPT @ +
+        _CG-ACC-CE _CG-TCN @ I + CELLS + !
+    LOOP
+    \ Advance totals
+    _CG-SNP @ _CG-TPT +!
+    _CG-SNC @ _CG-TCN +! ;
+
+: _TTF-DECODE-COMPOSITE  ( addr -- npoints ncontours | 0 0 )
+    10 + _CG-ADDR !                    \ skip glyph header
+    0 _CG-TPT !  0 _CG-TCN !
+    BEGIN
+        _CG-PARSE-COMPONENT
+        \ Only handle XY offsets (bit 1 set)
+        _CG-FLAGS @ 2 AND IF
+            \ Decode sub-glyph (fills main arrays from 0)
+            _CG-GID @ TTF-GLYPH-DATA
+            DUP 0<> IF
+                DROP                   ( sub-addr )
+                DUP TTF-GLYPH-NCONTOURS ( sub-addr sub-ncont )
+                DUP 0> IF
+                    _TTF-DECODE-SIMPLE
+                    DROP DROP          \ discard simple's return, use accumulator
+                    _CG-ACCUMULATE
+                ELSE
+                    2DROP              \ skip if empty or nested composite
+                THEN
+            ELSE
+                2DROP                  \ no glyph data
+            THEN
+        THEN
+        _CG-FLAGS @ 32 AND            \ MORE_COMPONENTS?
+    0= UNTIL
+    \ Copy accumulated data back to main arrays
+    _CG-TPT @ 0= IF 0 0 EXIT THEN
+    _CG-ACC-X  _TTF-PTS-X   _CG-TPT @ CELLS CMOVE
+    _CG-ACC-Y  _TTF-PTS-Y   _CG-TPT @ CELLS CMOVE
+    _CG-ACC-FL _TTF-PTS-FL  _CG-TPT @       CMOVE
+    _CG-ACC-CE _TTF-CONT-ENDS _CG-TCN @ CELLS CMOVE
+    _CG-TPT @ _TTF-DEC-NPTS !
+    _CG-TCN @ _TTF-DEC-NCONT !
+    _CG-TPT @ _CG-TCN @ ;
+
+: TTF-DECODE-GLYPH  ( glyph-id -- npoints ncontours | 0 0 )
+    TTF-GLYPH-DATA
+    DUP 0= IF EXIT THEN
+    DROP                               ( addr )
+    DUP TTF-GLYPH-NCONTOURS           ( addr ncont )
+    DUP 0< IF
+        DROP _TTF-DECODE-COMPOSITE EXIT   \ composite glyph
+    THEN
+    _TTF-DECODE-SIMPLE ;
 
 \ Accessors for decoded data
 : TTF-PT-X       ( i -- x )    CELLS _TTF-PTS-X + @ ;
