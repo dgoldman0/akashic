@@ -231,28 +231,166 @@ VARIABLE _LIC-W         \ width for current run
 VARIABLE _LIC-H         \ height for current run
 VARIABLE _LIC-ASC       \ ascender for current run
 
-: _LAYO-MAKE-INLINE-RUN  ( child -- run | 0 )
+\ =====================================================================
+\  Word-level text splitting for inline context
+\ =====================================================================
+\  Splits text box content at space boundaries into word-runs.
+\  Each word-run carries its substring (addr, len) and a back-reference
+\  to the source text box for CSS style lookup during painting.
+\  A fragment array is allocated on the text box (B.FRAGS) to store
+\  the final (x, y, addr, len) for each word after line breaking.
+
+VARIABLE _WSP-BOX     \ text box being split
+VARIABLE _WSP-SZ      \ font size
+
+\ Check if a string contains a space character
+: _LAYO-HAS-SPACE?  ( addr len -- flag )
+    BEGIN DUP 0> WHILE
+        OVER C@ 0x20 = IF 2DROP -1 EXIT THEN
+        1 /STRING
+    REPEAT
+    2DROP 0 ;
+
+\ Count space-separated chunks in text
+VARIABLE _WC-A   VARIABLE _WC-L   VARIABLE _WC-N
+
+: _LAYO-COUNT-WORDS  ( addr len -- n )
+    _WC-L !  _WC-A !
+    0 _WC-N !
+    BEGIN _WC-L @ 0> WHILE
+        \ Start of a chunk — count it
+        _WC-N @ 1+ _WC-N !
+        \ Skip non-spaces
+        BEGIN
+            _WC-L @ 0> IF _WC-A @ C@ 0x20 <> ELSE 0 THEN
+        WHILE
+            _WC-A @ 1+ _WC-A !  _WC-L @ 1- _WC-L !
+        REPEAT
+        \ Include trailing space if present
+        _WC-L @ 0> IF
+            _WC-A @ C@ 0x20 = IF
+                _WC-A @ 1+ _WC-A !  _WC-L @ 1- _WC-L !
+            THEN
+        THEN
+    REPEAT
+    _WC-N @ ;
+
+\ Word-run creation variables
+VARIABLE _WSP-RA    \ word start addr
+VARIABLE _WSP-WA    \ scanning addr
+VARIABLE _WSP-WL    \ scanning remaining len
+VARIABLE _WSP-WLEN  \ saved word length (survives ALLOCATE)
+
+\ Split a text box into word-runs, append to _LIC-RUN-HEAD.
+\ Allocates a fragment array on the text box's B.FRAGS.
+: _LAYO-SPLIT-TEXT  ( text-box -- )
+    _WSP-BOX !
+
+    \ Get font size and set scale
+    _WSP-BOX @ _LAYO-GET-TEXT-FONT-SIZE _WSP-SZ !
+    _WSP-SZ @ LAY-SCALE!
+
+    \ Get text content
+    _WSP-BOX @ B.DOM @ DOM-TEXT   ( addr len )
+    DUP 0= IF 2DROP EXIT THEN
+
+    \ Count words for fragment array allocation
+    2DUP _LAYO-COUNT-WORDS        ( addr len nwords )
+    DUP 0= IF DROP 2DROP EXIT THEN
+
+    \ Allocate fragment array: (1 + 4*n) cells
+    DUP 4 * 1+ CELLS ALLOCATE
+    0<> ABORT" layout.f: frag alloc failed"
+    DUP 0 SWAP !                   \ count = 0
+    _WSP-BOX @ B.FRAGS !          ( addr len nwords )
+    DROP                           ( addr len )
+
+    \ Scan text and create one run per word
+    _WSP-WL !  _WSP-WA !
+
+    BEGIN _WSP-WL @ 0> WHILE
+        _WSP-WA @ _WSP-RA !       \ word start
+
+        \ Skip non-spaces (word characters)
+        BEGIN
+            _WSP-WL @ 0> IF _WSP-WA @ C@ 0x20 <> ELSE 0 THEN
+        WHILE
+            _WSP-WA @ 1+ _WSP-WA !  _WSP-WL @ 1- _WSP-WL !
+        REPEAT
+
+        \ Include trailing space if present
+        _WSP-WL @ 0> IF
+            _WSP-WA @ C@ 0x20 = IF
+                _WSP-WA @ 1+ _WSP-WA !  _WSP-WL @ 1- _WSP-WL !
+            THEN
+        THEN
+
+        \ Create run for this word chunk
+        _WSP-WA @ _WSP-RA @ -     ( word-len )
+        DUP 0> IF
+            _WSP-WLEN !                    ( -- )  \ save word-len in variable
+            \ Compute text width — note: word-len is in _WSP-WLEN, not on stack
+            _WSP-RA @  _WSP-WLEN @  LAY-TEXT-WIDTH  ( width )
+            LAY-LINE-HEIGHT                ( width height )
+            LAY-ASCENDER                   ( width height asc )
+            LINE-RUN-TEXT                  ( run )
+            \ Set substring data, length, and source box from variables
+            \ (word-len was saved BEFORE ALLOCATE which may corrupt the data stack)
+            DUP _LR.DATA   _WSP-RA @   SWAP !
+            DUP _LR.DLEN   _WSP-WLEN @ SWAP !
+            DUP _LR.SRCBOX _WSP-BOX @  SWAP !
+            \ Append to run list
+            _LIC-RUN-HEAD @ LINE-RUN-APPEND _LIC-RUN-HEAD !
+        ELSE
+            DROP
+        THEN
+    REPEAT ;
+
+\ =====================================================================
+\  _LAYO-MAKE-INLINE-RUNS  ( child -- )
+\ =====================================================================
+\  Creates one or more runs for an inline child and appends to
+\  _LIC-RUN-HEAD.  Text boxes with spaces are word-split; others
+\  get a single run.  All runs have srcbox set for positioning.
+
+: _LAYO-MAKE-INLINE-RUNS  ( child -- )
     DUP B.FLAGS @ _BOX-F-TEXT AND IF
-        \ Text box — create text run
-        DUP BOX-W
-        DUP BOX-AUTO = IF DROP 0 THEN   _LIC-W !
-        DUP BOX-H
-        DUP BOX-AUTO = IF DROP 16 THEN  _LIC-H !  \ default text height 16
-        \ Ascender = ~80% of height (rough default)
-        _LIC-H @ 4 * 5 / _LIC-ASC !
-        DROP
-        _LIC-W @  _LIC-H @  _LIC-ASC @  LINE-RUN-TEXT
+        \ Text box — check if needs word splitting
+        DUP B.DOM @ DOM-TEXT _LAYO-HAS-SPACE? IF
+            \ Has spaces — word-split with fragment array
+            _LAYO-SPLIT-TEXT
+        ELSE
+            \ No spaces — single run (classic path)
+            DUP >R
+            DUP BOX-W
+            DUP BOX-AUTO = IF DROP 0 THEN   _LIC-W !
+            DUP BOX-H
+            DUP BOX-AUTO = IF DROP 16 THEN  _LIC-H !
+            _LIC-H @ 4 * 5 / _LIC-ASC !
+            DROP
+            _LIC-W @  _LIC-H @  _LIC-ASC @  LINE-RUN-TEXT
+            R> OVER _LR.SRCBOX !
+            _LIC-RUN-HEAD @ LINE-RUN-APPEND  _LIC-RUN-HEAD !
+        THEN
     ELSE
-        \ Inline or inline-block box — create box run
+        \ Inline or inline-block box — single box run
+        DUP >R
         DUP BOX-W
         DUP BOX-AUTO = IF DROP 0 THEN   _LIC-W !
         DUP BOX-H
         DUP BOX-AUTO = IF DROP 0 THEN   _LIC-H !
-        _LIC-H @ _LIC-ASC !    \ ascender = full height for box runs
+        _LIC-H @ _LIC-ASC !
         DROP
         _LIC-W @  _LIC-H @  _LIC-ASC @  LINE-RUN-BOX
-    THEN
-;
+        R> OVER _LR.SRCBOX !
+        _LIC-RUN-HEAD @ LINE-RUN-APPEND  _LIC-RUN-HEAD !
+    THEN ;
+
+\ Fragment positioning scratch variables
+VARIABLE _LPF-FBOX   \ fragment source box
+VARIABLE _LPF-FP     \ fragment array pointer
+VARIABLE _LPF-FN     \ fragment count
+VARIABLE _LPF-FE     \ fragment entry pointer
 
 : LAYO-INLINE-CONTEXT  ( box -- )
     _LIC-BOX !
@@ -264,12 +402,7 @@ VARIABLE _LIC-ASC       \ ascender for current run
         _LIC-CHILD @ 0<> WHILE
 
         _LIC-CHILD @ BOX-DISPLAY BOX-D-NONE <> IF
-            _LIC-CHILD @ _LAYO-MAKE-INLINE-RUN
-            DUP 0<> IF
-                _LIC-RUN-HEAD @ LINE-RUN-APPEND  _LIC-RUN-HEAD !
-            ELSE
-                DROP
-            THEN
+            _LIC-CHILD @ _LAYO-MAKE-INLINE-RUNS
         THEN
 
         _LIC-CHILD @ BOX-NEXT _LIC-CHILD !
@@ -304,45 +437,75 @@ VARIABLE _LIC-ASC       \ ascender for current run
     REPEAT
     DROP    \ drop align-const
 
-    \ Update inline children positions from line runs
-    \ Walk lines → runs, match back to child boxes
-    \ For now, position children based on run x/y
+    \ Update inline children positions from line runs.
+    \ Word-split text boxes: store fragments in B.FRAGS array.
+    \ Single-run text/box: set BOX-X/BOX-Y directly from srcbox.
+
     _LAYO-LINES @ _LAYO-LINE-CUR !
-    _LIC-BOX @ BOX-FIRST-CHILD _LIC-CHILD !
     BEGIN
         _LAYO-LINE-CUR @ 0<> WHILE
         _LAYO-LINE-CUR @ LINE-FIRST-RUN _LAYO-RUN !
         BEGIN
-            _LAYO-RUN @ 0<> _LIC-CHILD @ 0<> AND WHILE
+            _LAYO-RUN @ 0<> WHILE
 
-            \ Skip display:none children
-            BEGIN
-                _LIC-CHILD @ 0<> IF
-                    _LIC-CHILD @ BOX-DISPLAY BOX-D-NONE =
-                ELSE 0 THEN
-            WHILE
-                _LIC-CHILD @ BOX-NEXT _LIC-CHILD !
-            REPEAT
-
-            _LIC-CHILD @ 0<> IF
-                \ Set child position from run
-                _LIC-BOX @ BOX-X  _LAYO-RUN @ LINE-RUN-X +  _LIC-CHILD @ BOX-X!
-                _LIC-BOX @ BOX-Y  _LAYO-LINE-CUR @ LINE-Y +  _LIC-CHILD @ BOX-Y!
-
-                \ Set child dimensions from run if auto
-                _LIC-CHILD @ BOX-W BOX-AUTO = IF
-                    _LAYO-RUN @ LINE-RUN-W  _LIC-CHILD @ BOX-W!
+            _LAYO-RUN @ _LR.SRCBOX @ DUP 0<> IF
+                \ Run has a source box
+                DUP B.FRAGS @ 0<> IF
+                    \ Word-run with fragment array — store fragment
+                    _LPF-FBOX !
+                    _LPF-FBOX @ B.FRAGS @ _LPF-FP !
+                    _LPF-FP @ @ _LPF-FN !
+                    _LPF-FN @ 4 * 1+ CELLS _LPF-FP @ + _LPF-FE !
+                    _LIC-BOX @ BOX-X  _LAYO-RUN @ LINE-RUN-X +
+                    _LPF-FE @       !
+                    _LIC-BOX @ BOX-Y  _LAYO-LINE-CUR @ LINE-Y +
+                    _LPF-FE @ 8 +   !
+                    _LAYO-RUN @ _LR.DATA @
+                    _LPF-FE @ 16 +  !
+                    _LAYO-RUN @ _LR.DLEN @
+                    _LPF-FE @ 24 +  !
+                    _LPF-FN @ 1+ _LPF-FP @ !
+                ELSE
+                    \ Single run (no fragments) — set box position
+                    _LIC-BOX @ BOX-X  _LAYO-RUN @ LINE-RUN-X +
+                    OVER BOX-X!
+                    _LIC-BOX @ BOX-Y  _LAYO-LINE-CUR @ LINE-Y +
+                    OVER BOX-Y!
+                    DUP BOX-W BOX-AUTO = IF
+                        _LAYO-RUN @ LINE-RUN-W OVER BOX-W!
+                    THEN
+                    DUP BOX-H BOX-AUTO = IF
+                        _LAYO-RUN @ LINE-RUN-H OVER BOX-H!
+                    THEN
+                    DROP
                 THEN
-                _LIC-CHILD @ BOX-H BOX-AUTO = IF
-                    _LAYO-RUN @ LINE-RUN-H  _LIC-CHILD @ BOX-H!
-                THEN
-
-                _LIC-CHILD @ BOX-NEXT _LIC-CHILD !
+            ELSE
+                DROP
             THEN
+
             _LAYO-RUN @ LINE-RUN-NEXT _LAYO-RUN !
         REPEAT
 
         _LAYO-LINE-CUR @ LINE-NEXT _LAYO-LINE-CUR !
+    REPEAT
+
+    \ Set word-split text boxes' position from their first fragment
+    _LIC-BOX @ BOX-FIRST-CHILD _LIC-CHILD !
+    BEGIN _LIC-CHILD @ 0<> WHILE
+        _LIC-CHILD @ B.FLAGS @ _BOX-F-TEXT AND IF
+            _LIC-CHILD @ B.FRAGS @ DUP 0<> IF
+                DUP @ 0> IF
+                    CELL+                              ( entry-ptr )
+                    DUP @  _LIC-CHILD @ BOX-X!        ( entry-ptr )
+                    CELL+ @  _LIC-CHILD @ BOX-Y!      ( -- )
+                ELSE
+                    DROP
+                THEN
+            ELSE
+                DROP
+            THEN
+        THEN
+        _LIC-CHILD @ BOX-NEXT _LIC-CHILD !
     REPEAT
 
     \ Free line boxes (runs were part of them)

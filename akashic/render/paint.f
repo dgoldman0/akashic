@@ -316,12 +316,19 @@ VARIABLE _PBD-BB   VARIABLE _PBD-BL
 \  Render the text content of a text-flagged box.
 \  Uses DRAW-TEXT ( surf addr len x y size rgba -- ).
 \
-\  Text is rendered at the box's content origin (B.X, B.Y).
+\  If the text box has word-split fragments (B.FRAGS != 0), each
+\  word is drawn at its individually computed position.
+\  Otherwise, the full text is drawn at the box content origin.
+\
 \  Foreground colour from CSS "color" property, default black.
 \  Font size from CSS "font-size" property, default 16.
 
 VARIABLE _PTX-RGBA
 VARIABLE _PTX-SIZE
+VARIABLE _PTX-FP     \ fragment array pointer
+VARIABLE _PTX-FN     \ fragment count
+VARIABLE _PTX-FE     \ fragment entry pointer
+VARIABLE _PTX-FI     \ fragment index
 
 : PAINT-TEXT  ( box surf -- )
     _PNT-SURF !  _PNT-BOX !
@@ -329,25 +336,42 @@ VARIABLE _PTX-SIZE
     \ Must be a text box
     _PNT-BOX @ B.FLAGS @ _BOX-F-TEXT AND 0= IF EXIT THEN
 
-    \ Get text content from DOM node
-    _PNT-BOX @ B.DOM @ DOM-TEXT   ( txt-a txt-u )
-    DUP 0= IF 2DROP EXIT THEN    \ empty text
-
-    \ Get foreground colour
+    \ Get foreground colour and font size (common for all fragments)
     _PNT-BOX @  S" color"  0x000000FF  _PNT-GET-COLOR
     _PTX-RGBA !
-
-    \ Get font size
     _PNT-BOX @ _PNT-GET-FONT-SIZE  _PTX-SIZE !
 
-    \ Draw text at content origin
-    _PNT-SURF @
-    -ROT                          ( surf txt-a txt-u )
-    _PNT-BOX @ BOX-X             ( surf txt-a txt-u x )
-    _PNT-BOX @ BOX-Y             ( surf txt-a txt-u x y )
-    _PTX-SIZE @                   ( surf txt-a txt-u x y size )
-    _PTX-RGBA @                   ( surf txt-a txt-u x y size rgba )
-    DRAW-TEXT ;
+    \ Check for word-split fragments
+    _PNT-BOX @ B.FRAGS @ DUP 0<> IF
+        \ Has fragments — draw each word at its computed position
+        _PTX-FP !
+        _PTX-FP @ @ _PTX-FN !
+        0 _PTX-FI !
+        BEGIN _PTX-FI @ _PTX-FN @ < WHILE
+            _PTX-FI @ 4 * 1+ CELLS _PTX-FP @ + _PTX-FE !
+            _PNT-SURF @
+            _PTX-FE @ 16 + @              \ addr
+            _PTX-FE @ 24 + @              \ len
+            _PTX-FE @ @                   \ x
+            _PTX-FE @ 8 + @              \ y
+            _PTX-SIZE @
+            _PTX-RGBA @
+            DRAW-TEXT
+            _PTX-FI @ 1+ _PTX-FI !
+        REPEAT
+    ELSE
+        DROP
+        \ No fragments — draw full text at box position (classic path)
+        _PNT-BOX @ B.DOM @ DOM-TEXT   ( txt-a txt-u )
+        DUP 0= IF 2DROP EXIT THEN
+        _PNT-SURF @
+        -ROT                          ( surf txt-a txt-u )
+        _PNT-BOX @ BOX-X             ( surf txt-a txt-u x )
+        _PNT-BOX @ BOX-Y             ( surf txt-a txt-u x y )
+        _PTX-SIZE @                   ( surf txt-a txt-u x y size )
+        _PTX-RGBA @                   ( surf txt-a txt-u x y size rgba )
+        DRAW-TEXT
+    THEN ;
 
 \ =====================================================================
 \  PAINT-BOX  ( box surf -- )

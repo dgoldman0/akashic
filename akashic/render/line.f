@@ -82,7 +82,7 @@ PROVIDED akashic-line
 \  +48  data       text: string addr / box: box pointer
 \  +56  data-len   text: string length / box: unused
 
-64 CONSTANT _LN-RUN-SIZE
+72 CONSTANT _LN-RUN-SIZE
 
 \ Run field accessors ( run -- addr )
 : _LR.TYPE  ( run -- addr )         ;       \ +0
@@ -93,6 +93,7 @@ PROVIDED akashic-line
 : _LR.NEXT  ( run -- addr )  40 + ;         \ +40
 : _LR.DATA  ( run -- addr )  48 + ;         \ +48
 : _LR.DLEN  ( run -- addr )  56 + ;         \ +56
+: _LR.SRCBOX ( run -- addr )  64 + ;        \ +64  source box
 
 \ Public run accessors ( run -- value )
 : LINE-RUN-TYPE  ( run -- type )   _LR.TYPE @ ;
@@ -101,6 +102,9 @@ PROVIDED akashic-line
 : LINE-RUN-ASC   ( run -- asc )    _LR.ASC @ ;
 : LINE-RUN-X     ( run -- x )      _LR.X @ ;
 : LINE-RUN-NEXT  ( run -- run|0 )  _LR.NEXT @ ;
+: LINE-RUN-DATA  ( run -- addr )   _LR.DATA @ ;
+: LINE-RUN-DLEN  ( run -- len )    _LR.DLEN @ ;
+: LINE-RUN-SRCBOX ( run -- box )   _LR.SRCBOX @ ;
 
 \ =====================================================================
 \  Line box descriptor  (6 cells = 48 bytes)

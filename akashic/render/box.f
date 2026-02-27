@@ -81,8 +81,9 @@ PROVIDED akashic-box
 \  +152  border-b     Border width bottom
 \  +160  border-l     Border width left
 \  +168  flags        Bit 0: 1 = text box (no children, content is text)
+\  +176  frags        Pointer to word-fragment array (for word-wrapped text)
 
-176 CONSTANT BOX-DESC-SIZE
+184 CONSTANT BOX-DESC-SIZE
 
 \ =====================================================================
 \  Field accessor words  ( box -- addr )
@@ -110,6 +111,7 @@ PROVIDED akashic-box
 : B.BB        ( box -- addr )  152 + ;            \ +152
 : B.BL        ( box -- addr )  160 + ;            \ +160
 : B.FLAGS     ( box -- addr )  168 + ;            \ +168
+: B.FRAGS     ( box -- addr )  176 + ;            \ +176  word fragments
 
 \ Flag bits
 1 CONSTANT _BOX-F-TEXT
@@ -139,6 +141,7 @@ PROVIDED akashic-box
 : BOX-BORDER-R   ( box -- n )     B.BR @ ;
 : BOX-BORDER-B   ( box -- n )     B.BB @ ;
 : BOX-BORDER-L   ( box -- n )     B.BL @ ;
+: BOX-FRAGS      ( box -- ptr )   B.FRAGS @ ;
 
 \ Setters for layout engine
 : BOX-X!     ( x box -- )     B.X ! ;
@@ -189,6 +192,7 @@ VARIABLE _BOX-DISP
 \  ( box -- )
 
 : BOX-DESTROY  ( box -- )
+    DUP B.FRAGS @ 0<> IF DUP B.FRAGS @ FREE THEN
     FREE ;
 
 \ =====================================================================
