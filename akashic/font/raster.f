@@ -271,6 +271,54 @@ VARIABLE _RST-AA-PI
     LOOP ;
 
 \ =====================================================================
+\  Gamma correction LUT
+\ =====================================================================
+\  sRGB-ish gamma correction makes thin stems look heavier.
+\  Maps linear coverage 0-255 → perceptually corrected 0-255.
+\  Approximation: pow(x/255, 0.7)*255 via integer sqrt blend.
+\  RAST-GAMMA! toggles gamma on/off.  Default: on.
+
+CREATE _RST-GAMMA-LUT  256 ALLOT
+
+VARIABLE _RST-GAMMA-ON    1 _RST-GAMMA-ON !
+
+: RAST-GAMMA!  ( flag -- )  _RST-GAMMA-ON ! ;
+: RAST-GAMMA@  ( -- flag )  _RST-GAMMA-ON @ ;
+
+\ Integer square root (Newton's method, variable-based)
+VARIABLE _RST-ISQRT-N   VARIABLE _RST-ISQRT-G   VARIABLE _RST-ISQRT-NG
+
+: _RST-ISQRT  ( n -- root )
+    DUP 1 < IF EXIT THEN
+    _RST-ISQRT-N !
+    1 _RST-ISQRT-G !
+    BEGIN
+        _RST-ISQRT-N @ _RST-ISQRT-G @ / _RST-ISQRT-G @ + 2 /
+        _RST-ISQRT-NG !
+        _RST-ISQRT-NG @ _RST-ISQRT-G @ >= IF
+            _RST-ISQRT-G @ EXIT
+        THEN
+        _RST-ISQRT-NG @ _RST-ISQRT-G !
+    AGAIN ;
+
+\ Populate LUT: out = (154 * isqrt(i*255) + 101 * i) / 255
+: _RST-INIT-GAMMA  ( -- )
+    256 0 DO
+        I 255 * _RST-ISQRT 154 *
+        I 101 * +
+        255 /
+        255 MIN
+        I _RST-GAMMA-LUT + C!
+    LOOP ;
+
+_RST-INIT-GAMMA
+
+: _RST-GAMMA  ( coverage -- corrected )
+    _RST-GAMMA-ON @ IF
+        255 MIN  _RST-GAMMA-LUT + C@
+    THEN ;
+
+\ =====================================================================
 \  Analytic coverage fill — fractional x-intercepts
 \ =====================================================================
 \  Replaces the N×N grid with exact fractional coverage.
@@ -396,6 +444,7 @@ VARIABLE _RST-ANA-PI
             I CELLS _RST-ANA-ROW + @      ( divisor accum )
             255 * OVER /                   ( divisor byte )
             255 MIN                        ( divisor clamped )
+            _RST-GAMMA                     ( divisor gamma-corrected )
             _RST-ANA-BUF @ J _RST-ANA-W @ * + I + C!
         LOOP
         DROP
