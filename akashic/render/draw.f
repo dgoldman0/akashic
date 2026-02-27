@@ -766,11 +766,49 @@ VARIABLE _DRAW-GL-FG     \ foreground G
 VARIABLE _DRAW-GL-FB     \ foreground B
 VARIABLE _DRAW-GL-OUT    \ blended rgba output
 
+\ ── sRGB linearize / delinearize LUTs ──────────────────────────────
+\  Naive alpha blending in sRGB space makes antialiased edges too
+\  light ("faded text" problem).  We linearize channels before
+\  blending, then convert back to sRGB.
+\  Approximations (fast integer math, no floating point):
+\    sRGB→linear:  i * i / 255          ≈ pow(i/255, 2.0) * 255
+\    linear→sRGB:  isqrt(i * 255)       ≈ pow(i/255, 0.5) * 255
+\  True sRGB uses 2.2/0.455 but 2.0/0.5 is close and free.
+
+CREATE _DRAW-S2L  256 ALLOT    \ sRGB → linear
+CREATE _DRAW-L2S  256 ALLOT    \ linear → sRGB
+
+VARIABLE _DRAW-ISQRT-N  VARIABLE _DRAW-ISQRT-G  VARIABLE _DRAW-ISQRT-NG
+
+: _DRAW-ISQRT  ( n -- root )
+    DUP 1 < IF EXIT THEN
+    DUP _DRAW-ISQRT-N !
+    _DRAW-ISQRT-G !            \ initial guess = n (converges downward)
+    BEGIN
+        _DRAW-ISQRT-N @ _DRAW-ISQRT-G @ / _DRAW-ISQRT-G @ + 2 /
+        _DRAW-ISQRT-NG !
+        _DRAW-ISQRT-NG @ _DRAW-ISQRT-G @ >= IF
+            _DRAW-ISQRT-G @ EXIT
+        THEN
+        _DRAW-ISQRT-NG @ _DRAW-ISQRT-G !
+    AGAIN ;
+
+: _DRAW-INIT-SRGB  ( -- )
+    256 0 DO
+        I I * 270 / 255 MIN  I _DRAW-S2L + C!    \ sRGB→linear (γ≈2.1)
+        I 255 * _DRAW-ISQRT  255 MIN  I _DRAW-L2S + C!    \ linear→sRGB
+    LOOP ;
+
+_DRAW-INIT-SRGB
+
 : _DRAW-GL-BLEND  ( fg bg cov -- out )
-    >R                     ( fg bg )
-    SWAP R@ *              ( bg fg*cov )
-    SWAP 255 R> - *        ( fg*cov bg*(255-cov) )
-    + 255 / ;
+    >R
+    SWAP _DRAW-S2L + C@       ( bg_lin fg_lin )  \ linearize fg
+    SWAP _DRAW-S2L + C@       ( fg_lin bg_lin )  \ linearize bg
+    SWAP R@ *                 ( bg_lin fg_lin*cov )
+    SWAP 255 R> - *           ( fg_lin*cov  bg_lin*(255-cov) )
+    + 255 /                   ( blended_linear )
+    _DRAW-L2S + C@ ;          \ delinearize → sRGB
 
 : DRAW-GLYPH  ( surf glyph-id size x y rgba -- )
     _DRAW-RGBA !  _DRAW-GL-Y !  _DRAW-GL-X !

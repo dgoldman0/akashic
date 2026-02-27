@@ -280,7 +280,7 @@ VARIABLE _RST-AA-PI
 
 CREATE _RST-GAMMA-LUT  256 ALLOT
 
-VARIABLE _RST-GAMMA-ON    1 _RST-GAMMA-ON !
+VARIABLE _RST-GAMMA-ON    0 _RST-GAMMA-ON !
 
 : RAST-GAMMA!  ( flag -- )  _RST-GAMMA-ON ! ;
 : RAST-GAMMA@  ( -- flag )  _RST-GAMMA-ON @ ;
@@ -290,8 +290,8 @@ VARIABLE _RST-ISQRT-N   VARIABLE _RST-ISQRT-G   VARIABLE _RST-ISQRT-NG
 
 : _RST-ISQRT  ( n -- root )
     DUP 1 < IF EXIT THEN
-    _RST-ISQRT-N !
-    1 _RST-ISQRT-G !
+    DUP _RST-ISQRT-N !
+    _RST-ISQRT-G !            \ initial guess = n (converges downward)
     BEGIN
         _RST-ISQRT-N @ _RST-ISQRT-G @ / _RST-ISQRT-G @ + 2 /
         _RST-ISQRT-NG !
@@ -301,12 +301,14 @@ VARIABLE _RST-ISQRT-N   VARIABLE _RST-ISQRT-G   VARIABLE _RST-ISQRT-NG
         _RST-ISQRT-NG @ _RST-ISQRT-G !
     AGAIN ;
 
-\ Populate LUT: out = (154 * isqrt(i*255) + 101 * i) / 255
+\ Populate LUT: gamma-correct compositing compensation.
+\ Coverage is blended in sRGB space, which makes midtones too light.
+\ Boost coverage so the naive sRGB blend produces the perceptually
+\ correct result.  out = isqrt(i * 255) ≈ pow(i/255, 0.5) * 255
+\ This maps e.g. 128→181, 64→128, 32→90 — strong edge darkening.
 : _RST-INIT-GAMMA  ( -- )
     256 0 DO
-        I 255 * _RST-ISQRT 154 *
-        I 101 * +
-        255 /
+        I 255 * _RST-ISQRT
         255 MIN
         I _RST-GAMMA-LUT + C!
     LOOP ;

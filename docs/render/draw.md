@@ -312,8 +312,18 @@ DRAW-GLYPH  ( surf glyph-id size x y rgba -- )
 ```
 
 Render a single cached glyph at $(x, y)$.  Retrieves the glyph
-bitmap from `font/cache.f` via `GC-GET`.  The bitmap is monochrome
-(1 byte/pixel) — non-zero bytes receive the foreground color.
+bitmap from `font/cache.f` via `GC-GET`.  The bitmap contains
+coverage values (0-255) from anti-aliased rasterization.
+
+Non-zero coverage pixels are alpha-blended with the surface using
+**sRGB-correct compositing**: channel values are linearized via a
+256-byte LUT before blending, then converted back to sRGB.  This
+prevents the "faded text" artifact that naive sRGB-space blending
+produces on antialiased edges.
+
+The linearization uses a gamma ≈ 2.1 approximation:
+- sRGB → linear: `i² / 270`
+- linear → sRGB: `isqrt(i × 255)`
 
 Returns silently if the glyph is not in the cache.
 
