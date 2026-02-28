@@ -1,13 +1,17 @@
 \ state-tree.f — LIRAQ State Tree (Layer 1)
 \
-\ Hierarchical key-value store, path-addressed with dot-separated
-\ paths.  Implements LIRAQ v1.0 spec §03.
+\ Arena-backed hierarchical key-value store, path-addressed with
+\ dot-separated paths.  Each state tree lives in a single KDOS
+\ arena, enabling multiple simultaneous trees and O(1) bulk
+\ teardown via ARENA-DESTROY.
 \
 \ Value types: String, Integer, Boolean, Null, Array, Object.
 \ (Float deferred — no FPU on Megapad-64.)
 \
 \ Prefix: ST-   (public API)
 \         _ST-  (internal helpers)
+\
+\ Load with:   REQUIRE state-tree.f
 
 REQUIRE ../utils/string.f
 
@@ -35,13 +39,6 @@ PROVIDED akashic-state-tree
 \ =====================================================================
 \  Error codes
 \ =====================================================================
-
-VARIABLE ST-ERR
-0 ST-ERR !
-
-: ST-FAIL  ( code -- )  ST-ERR ! ;
-: ST-OK?   ( -- flag )  ST-ERR @ 0= ;
-: ST-CLEAR-ERR  ( -- )  0 ST-ERR ! ;
 
 1 CONSTANT ST-E-NOT-FOUND
 2 CONSTANT ST-E-TYPE
@@ -71,85 +68,182 @@ VARIABLE ST-ERR
 96 CONSTANT _ST-NODESZ
 
 \ =====================================================================
-\  Pool sizes
+\  Defaults
 \ =====================================================================
 
-256 CONSTANT _ST-MAXNODES
-8192 CONSTANT _ST-SPOOL-SZ
 128 CONSTANT _ST-JRNL-MAX
 72 CONSTANT _ST-JRNL-ENTRY
 
 \ =====================================================================
-\  Node pool — flag byte + 96 bytes per slot
+\  Descriptor layout — 128 bytes (16 cells)
+\ =====================================================================
+\
+\  +0    arena        KDOS arena handle
+\  +8    node-base    node pool start
+\  +16   node-max     max node count
+\  +24   node-free    free-list head (0 = empty)
+\  +32   node-used    count of allocated nodes
+\  +40   str-base     string pool region start
+\  +48   str-ptr      string pool bump pointer
+\  +56   str-end      string pool region end
+\  +64   root         root node address
+\  +72   jrnl-base    journal entry array
+\  +80   jrnl-max     max journal entries
+\  +88   jrnl-pos     circular write position
+\  +96   jrnl-seq     sequence counter
+\  +104  jrnl-cnt     entry count
+\  +112  jrnl-src     current source tag
+\  +120  err          error code
+
+128 CONSTANT _ST-DESCSZ
+
+: SD.ARENA      ( st -- addr )  ;              \ +0
+: SD.NODE-BASE  ( st -- addr )  8 + ;          \ +8
+: SD.NODE-MAX   ( st -- addr )  16 + ;         \ +16
+: SD.NODE-FREE  ( st -- addr )  24 + ;         \ +24
+: SD.NODE-USED  ( st -- addr )  32 + ;         \ +32
+: SD.STR-BASE   ( st -- addr )  40 + ;         \ +40
+: SD.STR-PTR    ( st -- addr )  48 + ;         \ +48
+: SD.STR-END    ( st -- addr )  56 + ;         \ +56
+: SD.ROOT       ( st -- addr )  64 + ;         \ +64
+: SD.JRNL-BASE  ( st -- addr )  72 + ;         \ +72
+: SD.JRNL-MAX   ( st -- addr )  80 + ;         \ +80
+: SD.JRNL-POS   ( st -- addr )  88 + ;         \ +88
+: SD.JRNL-SEQ   ( st -- addr )  96 + ;         \ +96
+: SD.JRNL-CNT   ( st -- addr )  104 + ;        \ +104
+: SD.JRNL-SRC   ( st -- addr )  112 + ;        \ +112
+: SD.ERR        ( st -- addr )  120 + ;        \ +120
+
+\ =====================================================================
+\  Current document
 \ =====================================================================
 
-_ST-NODESZ 1+ CONSTANT _ST-STRIDE     \ 97
+VARIABLE _ST-CUR    \ current state tree handle
 
-CREATE _ST-POOL  _ST-MAXNODES _ST-STRIDE * ALLOT
-VARIABLE _ST-NUSED
+: ST-USE  ( st -- )  _ST-CUR ! ;
+: ST-DOC  ( -- st )  _ST-CUR @ ;
 
-: _ST-POOL-ZERO  ( -- )
-    _ST-POOL _ST-MAXNODES _ST-STRIDE * 0 DO
-        0 OVER I + C!
-    LOOP DROP
-    0 _ST-NUSED ! ;
+\ =====================================================================
+\  Error handling
+\ =====================================================================
 
-: _ST-FLAG  ( idx -- addr )
-    _ST-STRIDE * _ST-POOL + ;
+: ST-ERR       ( -- addr )  ST-DOC SD.ERR ;
+: ST-FAIL      ( code -- )  ST-ERR ! ;
+: ST-OK?       ( -- flag )  ST-ERR @ 0= ;
+: ST-CLEAR-ERR ( -- )       0 ST-ERR ! ;
 
-: _ST-DATA  ( idx -- addr )
-    _ST-FLAG 1+ ;
+\ =====================================================================
+\  Journal source constants
+\ =====================================================================
+
+0 CONSTANT ST-SRC-DCS
+1 CONSTANT ST-SRC-BINDING
+2 CONSTANT ST-SRC-BEHAVIOR
+3 CONSTANT ST-SRC-RUNTIME
+
+\ =====================================================================
+\  Node pool — free-list allocation from arena slab
+\ =====================================================================
+
+VARIABLE _SNIF-A
+
+: _ST-NODE-INIT-FREE  ( -- )
+    ST-DOC SD.NODE-BASE @  _SNIF-A !
+    ST-DOC SD.NODE-MAX @  1- 0 DO
+        _SNIF-A @  _ST-NODESZ +
+        _SNIF-A @ !
+        _SNIF-A @  _ST-NODESZ +  _SNIF-A !
+    LOOP
+    0  _SNIF-A @ !
+    ST-DOC SD.NODE-BASE @  ST-DOC SD.NODE-FREE ! ;
 
 : _ST-ALLOC  ( -- node | 0 )
-    _ST-MAXNODES 0 DO
-        I _ST-FLAG C@ 0= IF
-            1 I _ST-FLAG C!
-            I _ST-DATA
-            DUP _ST-NODESZ 0 DO
-                0 OVER I + C!
-            LOOP DROP
-            1 _ST-NUSED +!
-            UNLOOP EXIT
-        THEN
-    LOOP
-    ST-E-FULL ST-FAIL 0 ;
+    ST-DOC SD.NODE-FREE @
+    DUP 0= IF  ST-E-FULL ST-FAIL EXIT  THEN
+    DUP @  ST-DOC SD.NODE-FREE !
+    DUP _ST-NODESZ 0 FILL
+    1 ST-DOC SD.NODE-USED +! ;
 
 : _ST-FREE-NODE  ( node -- )
-    1-  0 OVER C!  DROP
-    -1 _ST-NUSED +! ;
+    DUP _ST-NODESZ 0 FILL
+    ST-DOC SD.NODE-FREE @  OVER !
+    ST-DOC SD.NODE-FREE !
+    -1 ST-DOC SD.NODE-USED +! ;
 
 \ =====================================================================
-\  String pool — bump allocator
+\  Document creation
 \ =====================================================================
 
-CREATE _ST-SPOOL  _ST-SPOOL-SZ ALLOT
-VARIABLE _ST-SPOS
+VARIABLE _SDN-AR
+VARIABLE _SDN-NN
+VARIABLE _SDN-DOC
 
-: _ST-SPOOL-ZERO  ( -- )  0 _ST-SPOS ! ;
+: ST-DOC-NEW  ( arena max-nodes -- st )
+    _SDN-NN !  _SDN-AR !
+    \ Allot descriptor (128 bytes) from arena
+    _SDN-AR @  _ST-DESCSZ ARENA-ALLOT  _SDN-DOC !
+    _SDN-DOC @ _ST-DESCSZ 0 FILL
+    _SDN-AR @  _SDN-DOC @ SD.ARENA !
+    \ Allot node pool slab
+    _SDN-AR @  _SDN-NN @ _ST-NODESZ * ARENA-ALLOT
+    _SDN-DOC @ SD.NODE-BASE !
+    _SDN-NN @  _SDN-DOC @ SD.NODE-MAX !
+    0          _SDN-DOC @ SD.NODE-FREE !
+    0          _SDN-DOC @ SD.NODE-USED !
+    \ Allot journal slab
+    _SDN-AR @  _ST-JRNL-MAX _ST-JRNL-ENTRY * ARENA-ALLOT
+    _SDN-DOC @ SD.JRNL-BASE !
+    _ST-JRNL-MAX  _SDN-DOC @ SD.JRNL-MAX !
+    0  _SDN-DOC @ SD.JRNL-POS !
+    0  _SDN-DOC @ SD.JRNL-SEQ !
+    0  _SDN-DOC @ SD.JRNL-CNT !
+    ST-SRC-DCS  _SDN-DOC @ SD.JRNL-SRC !
+    0  _SDN-DOC @ SD.ERR !
+    \ String region = remaining arena space
+    _SDN-AR @ A.PTR @   _SDN-DOC @ SD.STR-BASE !
+    _SDN-AR @ A.PTR @   _SDN-DOC @ SD.STR-PTR  !
+    \ str-end = arena base + arena size
+    _SDN-AR @ DUP A.BASE @ SWAP A.SIZE @ +
+    _SDN-DOC @ SD.STR-END !
+    \ Claim remaining arena space (advance ptr to end)
+    _SDN-DOC @ SD.STR-END @  _SDN-AR @ A.PTR !
+    \ Set as current document and build free list
+    _SDN-DOC @  ST-USE
+    _ST-NODE-INIT-FREE
+    \ Create root node (object)
+    _ST-ALLOC  DUP 0= ABORT" ST-DOC-NEW: pool empty"
+    ST-T-OBJECT OVER SN.TYPE !
+    ST-DOC SD.ROOT !
+    \ Return handle
+    ST-DOC ;
 
-\ _ST-STR-COPY ( src len -- addr len )
-\   Copy string into pool.  Returns pool address and length.
+\ =====================================================================
+\  Public handle accessors
+\ =====================================================================
+
+: ST-ROOT       ( -- node )  ST-DOC SD.ROOT @ ;
+: ST-NODE-COUNT ( -- n )     ST-DOC SD.NODE-USED @ ;
+
+\ =====================================================================
+\  String pool — bump allocator from arena string region
+\ =====================================================================
+
 VARIABLE _STC-L
 VARIABLE _STC-D
 : _ST-STR-COPY  ( src len -- addr len )
     DUP _STC-L !
-    _ST-SPOS @ OVER + _ST-SPOOL-SZ > IF
+    ST-DOC SD.STR-PTR @  OVER +
+    ST-DOC SD.STR-END @  > IF
         2DROP ST-E-POOL-FULL ST-FAIL 0 0 EXIT
     THEN
-    _ST-SPOOL _ST-SPOS @ +  _STC-D !
-    DROP                               \ drop len, keep src
+    ST-DOC SD.STR-PTR @  _STC-D !
+    DROP
     _STC-L @ 0 ?DO
         DUP I + C@  _STC-D @ I + C!
     LOOP
-    DROP                               \ drop src
-    _STC-L @ _ST-SPOS +!
+    DROP
+    _STC-L @ ST-DOC SD.STR-PTR +!
     _STC-D @ _STC-L @ ;
-
-\ =====================================================================
-\  Root node
-\ =====================================================================
-
-VARIABLE _ST-ROOT
 
 \ =====================================================================
 \  Tree structure operations
@@ -239,10 +333,10 @@ VARIABLE _STFC-L
     STR>NUM ;
 
 \ _ST-DESCEND ( node seg-a seg-l -- child | 0 )
-\   Descend one level.  Rewritten without CASE for stack clarity.
+\   Descend one level into an object (by name) or array (by index).
 VARIABLE _STDES-N
 : _ST-DESCEND  ( node seg-a seg-l -- child | 0 )
-    ROT _STDES-N !                      \ save node; stack: ( seg-a seg-l )
+    ROT _STDES-N !
     _STDES-N @ SN.TYPE @
     DUP ST-T-OBJECT = IF
         DROP
@@ -262,7 +356,7 @@ VARIABLE _STDES-N
 
 VARIABLE _STN-CUR
 : ST-NAVIGATE  ( path-a path-l -- node | 0 )
-    _ST-ROOT @ _STN-CUR !
+    ST-DOC SD.ROOT @ _STN-CUR !
     BEGIN
         DUP 0> WHILE
         _ST-SPLIT-DOT IF
@@ -302,7 +396,7 @@ VARIABLE _STEC-T
 
 VARIABLE _STEP-CUR
 : ST-ENSURE-PATH  ( path-a path-l -- parent last-a last-l )
-    _ST-ROOT @ _STEP-CUR !
+    ST-DOC SD.ROOT @ _STEP-CUR !
     BEGIN
         _ST-SPLIT-DOT IF
             2>R
@@ -478,19 +572,8 @@ VARIABLE _STEP-CUR
 \  Journal
 \ =====================================================================
 
-CREATE _ST-JRNL  _ST-JRNL-MAX _ST-JRNL-ENTRY * ALLOT
-VARIABLE _ST-JPOS
-VARIABLE _ST-JSEQ
-VARIABLE _ST-JCNT
-VARIABLE _ST-JSRC
-
-0 CONSTANT ST-SRC-DCS
-1 CONSTANT ST-SRC-BINDING
-2 CONSTANT ST-SRC-BEHAVIOR
-3 CONSTANT ST-SRC-RUNTIME
-
 : _ST-JRNL-ENTRY-ADDR  ( idx -- addr )
-    _ST-JRNL-ENTRY * _ST-JRNL + ;
+    _ST-JRNL-ENTRY * ST-DOC SD.JRNL-BASE @ + ;
 
 VARIABLE _STJ-OP
 VARIABLE _STJ-PA
@@ -502,44 +585,28 @@ VARIABLE _STJ-NV
 : ST-JOURNAL-ADD  ( op path-a path-l old-type old-val new-type new-val -- )
     _STJ-NV ! _STJ-NT ! _STJ-OV ! _STJ-OT !
     _STJ-PL ! _STJ-PA ! _STJ-OP !
-    _ST-JPOS @ _ST-JRNL-ENTRY-ADDR
-    _ST-JSEQ @     OVER !
-    _ST-JSRC @     OVER 8 + !
-    _STJ-OP @      OVER 16 + !
-    _STJ-PA @      OVER 24 + !
-    _STJ-PL @      OVER 32 + !
-    _STJ-OT @      OVER 40 + !
-    _STJ-OV @      OVER 48 + !
-    _STJ-NT @      OVER 56 + !
-    _STJ-NV @      SWAP 64 + !
-    1 _ST-JSEQ +!
-    _ST-JPOS @ 1+ _ST-JRNL-MAX MOD _ST-JPOS !
-    _ST-JCNT @ _ST-JRNL-MAX < IF 1 _ST-JCNT +! THEN ;
+    ST-DOC SD.JRNL-POS @ _ST-JRNL-ENTRY-ADDR
+    ST-DOC SD.JRNL-SEQ @     OVER !
+    ST-DOC SD.JRNL-SRC @     OVER 8 + !
+    _STJ-OP @                OVER 16 + !
+    _STJ-PA @                OVER 24 + !
+    _STJ-PL @                OVER 32 + !
+    _STJ-OT @                OVER 40 + !
+    _STJ-OV @                OVER 48 + !
+    _STJ-NT @                OVER 56 + !
+    _STJ-NV @                SWAP 64 + !
+    1 ST-DOC SD.JRNL-SEQ +!
+    ST-DOC SD.JRNL-POS @ 1+  ST-DOC SD.JRNL-MAX @ MOD
+    ST-DOC SD.JRNL-POS !
+    ST-DOC SD.JRNL-CNT @  ST-DOC SD.JRNL-MAX @  < IF
+        1 ST-DOC SD.JRNL-CNT +!
+    THEN ;
 
-: ST-JOURNAL-SEQ  ( -- n )  _ST-JSEQ @ ;
-: ST-JOURNAL-COUNT  ( -- n )  _ST-JCNT @ ;
+: ST-JOURNAL-SEQ    ( -- n )  ST-DOC SD.JRNL-SEQ @ ;
+: ST-JOURNAL-COUNT  ( -- n )  ST-DOC SD.JRNL-CNT @ ;
 
 : ST-JOURNAL-NTH  ( n -- addr | 0 )
-    DUP _ST-JCNT @ >= IF DROP 0 EXIT THEN
-    _ST-JPOS @ 1- SWAP -
-    DUP 0< IF _ST-JRNL-MAX + THEN
+    DUP ST-DOC SD.JRNL-CNT @ >= IF DROP 0 EXIT THEN
+    ST-DOC SD.JRNL-POS @ 1- SWAP -
+    DUP 0< IF ST-DOC SD.JRNL-MAX @ + THEN
     _ST-JRNL-ENTRY-ADDR ;
-
-\ =====================================================================
-\  Initialization
-\ =====================================================================
-
-: ST-INIT  ( -- )
-    _ST-POOL-ZERO
-    _ST-SPOOL-ZERO
-    0 _ST-JPOS !
-    0 _ST-JSEQ !
-    0 _ST-JCNT !
-    ST-SRC-DCS _ST-JSRC !
-    ST-CLEAR-ERR
-    _ST-ALLOC  DUP 0= IF DROP EXIT THEN
-    ST-T-OBJECT OVER SN.TYPE !
-    _ST-ROOT ! ;
-
-: ST-ROOT  ( -- node )  _ST-ROOT @ ;
-: ST-NODE-COUNT  ( -- n )  _ST-NUSED @ ;

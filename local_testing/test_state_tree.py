@@ -110,6 +110,7 @@ def build_snapshot():
         ': TA  ( -- addr u ) _TB _TL @ ;',
         'CREATE _UB 512 ALLOT',
         'CREATE _WB 4096 ALLOT',
+        ': T-INIT  65536 A-XMEM ARENA-NEW ABORT" arena fail"  256 ST-DOC-NEW  DROP ;',
     ]
 
     sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
@@ -236,24 +237,24 @@ def check(name, forth_lines, expected=None, check_fn=None):
 # ---------------------------------------------------------------------------
 
 def test_init():
-    """ST-INIT creates root, node count = 1."""
+    """ST-DOC-NEW creates root, node count = 1."""
     check("init-root-exists", [
-        'ST-INIT',
+        'T-INIT',
         'ST-ROOT 0<> IF 1 ELSE 0 THEN . CR',
     ], '1')
 
     check("init-node-count", [
-        'ST-INIT',
+        'T-INIT',
         'ST-NODE-COUNT . CR',
     ], '1')
 
     check("init-root-is-object", [
-        'ST-INIT',
+        'T-INIT',
         'ST-ROOT ST-GET-TYPE . CR',
     ], '6')
 
     check("init-err-clear", [
-        'ST-INIT',
+        'T-INIT',
         'ST-OK? IF 1 ELSE 0 THEN . CR',
     ], '1')
 
@@ -264,19 +265,19 @@ def test_init():
 def test_alloc_free():
     """Allocate and free nodes."""
     check("alloc-basic", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC DUP 0<> IF 1 ELSE 0 THEN . CR',
         'DROP',
     ], '1')
 
     check("alloc-bumps-count", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC DROP',
         'ST-NODE-COUNT . CR',
     ], '2')
 
     check("free-decrements-count", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC _ST-FREE-NODE',
         'ST-NODE-COUNT . CR',
     ], '1')
@@ -288,13 +289,13 @@ def test_alloc_free():
 def test_string_pool():
     """_ST-STR-COPY copies into pool and returns valid addr/len."""
     check("str-copy-len", [
-        'ST-INIT',
+        'T-INIT',
         'S" hello" _ST-STR-COPY . . CR',
     ], expected='5 ')
 
     # Round-trip: copy a string in, read it back byte by byte
     check("str-copy-content", [
-        'ST-INIT',
+        'T-INIT',
         'S" abc" _ST-STR-COPY',     # ( addr len )
         'OVER C@ .  OVER 1+ C@ .  OVER 2 + C@ .  CR',
         '2DROP',
@@ -308,7 +309,7 @@ def test_tree_structure():
     """Append child, find child, detach child."""
     # Create a child under root
     check("append-child", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC VARIABLE CH1  CH1 !',
         '7 CH1 @ SN.TYPE !',
         'S" foo" _ST-STR-COPY  CH1 @ SN.NAMEL !  CH1 @ SN.NAMEA !',
@@ -318,7 +319,7 @@ def test_tree_structure():
 
     # Find child by name
     check("find-child-found", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC VARIABLE CH1  CH1 !',
         '7 CH1 @ SN.TYPE !',
         'S" bar" _ST-STR-COPY  CH1 @ SN.NAMEL !  CH1 @ SN.NAMEA !',
@@ -328,13 +329,13 @@ def test_tree_structure():
 
     # Find child — not found
     check("find-child-missing", [
-        'ST-INIT',
+        'T-INIT',
         'ST-ROOT S" nope" _ST-FIND-CHILD . CR',
     ], '0')
 
     # Detach child
     check("detach-child", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC VARIABLE CH1  CH1 !',
         '7 CH1 @ SN.TYPE !',
         'S" baz" _ST-STR-COPY  CH1 @ SN.NAMEL !  CH1 @ SN.NAMEA !',
@@ -345,7 +346,7 @@ def test_tree_structure():
 
     # Multiple children, detach middle
     check("detach-middle", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC VARIABLE A  A !  7 A @ SN.TYPE !',
         'S" a" _ST-STR-COPY  A @ SN.NAMEL !  A @ SN.NAMEA !',
         'A @ ST-ROOT _ST-APPEND-CHILD',
@@ -366,7 +367,7 @@ def test_tree_structure():
 def test_destroy():
     """_ST-DESTROY frees subtree."""
     check("destroy-simple", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC VARIABLE CH1  CH1 !',
         '6 CH1 @ SN.TYPE !',
         'CH1 @ ST-ROOT _ST-APPEND-CHILD',
@@ -381,7 +382,7 @@ def test_destroy():
 def test_index_child():
     """_ST-INDEX-CHILD returns nth child."""
     check("index-child-0", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC VARIABLE A  A !  7 A @ SN.TYPE !',
         'S" a" _ST-STR-COPY  A @ SN.NAMEL !  A @ SN.NAMEA !',
         'A @ ST-ROOT _ST-APPEND-CHILD',
@@ -392,7 +393,7 @@ def test_index_child():
     ], '1')
 
     check("index-child-1", [
-        'ST-INIT',
+        'T-INIT',
         '_ST-ALLOC VARIABLE A  A !  7 A @ SN.TYPE !',
         'A @ ST-ROOT _ST-APPEND-CHILD',
         '_ST-ALLOC VARIABLE B  B !  7 B @ SN.TYPE !',
@@ -401,7 +402,7 @@ def test_index_child():
     ], '1')
 
     check("index-child-oob", [
-        'ST-INIT',
+        'T-INIT',
         'ST-ROOT 5 _ST-INDEX-CHILD . CR',
     ], '0')
 
@@ -413,7 +414,7 @@ def test_set_get_path():
     """ST-SET-PATH-INT / ST-GET-PATH etc."""
     # Set an integer at a simple path
     check("set-path-int-simple", [
-        'ST-INIT',
+        'T-INIT',
         '42 S" score" ST-SET-PATH-INT',
         'ST-OK? IF 1 ELSE 0 THEN . CR',
         'S" score" ST-GET-PATH DUP 0<> IF ST-GET-INT . THEN CR',
@@ -421,35 +422,35 @@ def test_set_get_path():
 
     # Set nested path
     check("set-path-int-nested", [
-        'ST-INIT',
+        'T-INIT',
         '100 S" ship.speed" ST-SET-PATH-INT',
         'S" ship.speed" ST-GET-PATH ST-GET-INT . CR',
     ], '100')
 
     # Deeply nested
     check("set-path-int-deep", [
-        'ST-INIT',
+        'T-INIT',
         '7 S" a.b.c.d" ST-SET-PATH-INT',
         'S" a.b.c.d" ST-GET-PATH ST-GET-INT . CR',
     ], '7')
 
     # Set boolean
     check("set-path-bool", [
-        'ST-INIT',
+        'T-INIT',
         '1 S" ship.active" ST-SET-PATH-BOOL',
         'S" ship.active" ST-GET-PATH ST-GET-BOOL . CR',
     ], '1')
 
     # Set null
     check("set-path-null", [
-        'ST-INIT',
+        'T-INIT',
         'S" ship.target" ST-SET-PATH-NULL',
         'S" ship.target" ST-GET-PATH ST-NULL? IF 1 ELSE 0 THEN . CR',
     ], '1')
 
     # Set string
     check("set-path-str", [
-        'ST-INIT',
+        'T-INIT',
         'S" warp" S" ship.drive" ST-SET-PATH-STR',
         'S" ship.drive" ST-GET-PATH DUP ST-GET-TYPE 1 = IF',
         '  ST-GET-STR TYPE CR',
@@ -458,7 +459,7 @@ def test_set_get_path():
 
     # Overwrite — second set replaces first
     check("set-path-overwrite", [
-        'ST-INIT',
+        'T-INIT',
         '10 S" x" ST-SET-PATH-INT',
         '20 S" x" ST-SET-PATH-INT',
         'S" x" ST-GET-PATH ST-GET-INT . CR',
@@ -466,7 +467,7 @@ def test_set_get_path():
 
     # Get non-existent path
     check("get-path-missing", [
-        'ST-INIT',
+        'T-INIT',
         'S" no.such.path" ST-GET-PATH . CR',
     ], '0')
 
@@ -477,14 +478,14 @@ def test_set_get_path():
 def test_delete_path():
     """ST-DELETE-PATH removes a node and its subtree."""
     check("delete-path-simple", [
-        'ST-INIT',
+        'T-INIT',
         '42 S" score" ST-SET-PATH-INT',
         'S" score" ST-DELETE-PATH',
         'S" score" ST-GET-PATH . CR',
     ], '0')
 
     check("delete-path-subtree", [
-        'ST-INIT',
+        'T-INIT',
         '1 S" a.b" ST-SET-PATH-INT',
         '2 S" a.c" ST-SET-PATH-INT',
         'S" a" ST-DELETE-PATH',
@@ -492,7 +493,7 @@ def test_delete_path():
     ], '0')
 
     check("delete-path-missing", [
-        'ST-INIT',
+        'T-INIT',
         'S" nope" ST-DELETE-PATH',
         'ST-OK? IF 0 ELSE ST-ERR @ . THEN CR',
     ], '1')  # ST-E-NOT-FOUND = 1
@@ -504,19 +505,19 @@ def test_delete_path():
 def test_node_count_ops():
     """Node count tracks allocs/frees through path ops."""
     check("node-count-set", [
-        'ST-INIT',
+        'T-INIT',
         '42 S" a" ST-SET-PATH-INT',
         'ST-NODE-COUNT . CR',
     ], '2')   # root + a
 
     check("node-count-nested", [
-        'ST-INIT',
+        'T-INIT',
         '42 S" a.b.c" ST-SET-PATH-INT',
         'ST-NODE-COUNT . CR',
     ], '4')   # root + a + b + c
 
     check("node-count-delete", [
-        'ST-INIT',
+        'T-INIT',
         '42 S" a.b" ST-SET-PATH-INT',
         'S" a" ST-DELETE-PATH',
         'ST-NODE-COUNT . CR',
@@ -529,7 +530,7 @@ def test_node_count_ops():
 def test_arrays():
     """Array mutations: append, count, nth, remove."""
     check("array-append-int", [
-        'ST-INIT',
+        'T-INIT',
         '10 S" scores" ST-ARRAY-APPEND-INT',
         '20 S" scores" ST-ARRAY-APPEND-INT',
         '30 S" scores" ST-ARRAY-APPEND-INT',
@@ -537,21 +538,21 @@ def test_arrays():
     ], '3')
 
     check("array-nth-0", [
-        'ST-INIT',
+        'T-INIT',
         '10 S" v" ST-ARRAY-APPEND-INT',
         '20 S" v" ST-ARRAY-APPEND-INT',
         'S" v" 0 ST-ARRAY-NTH ST-GET-INT . CR',
     ], '10')
 
     check("array-nth-1", [
-        'ST-INIT',
+        'T-INIT',
         '10 S" v" ST-ARRAY-APPEND-INT',
         '20 S" v" ST-ARRAY-APPEND-INT',
         'S" v" 1 ST-ARRAY-NTH ST-GET-INT . CR',
     ], '20')
 
     check("array-remove", [
-        'ST-INIT',
+        'T-INIT',
         '10 S" v" ST-ARRAY-APPEND-INT',
         '20 S" v" ST-ARRAY-APPEND-INT',
         '30 S" v" ST-ARRAY-APPEND-INT',
@@ -560,14 +561,14 @@ def test_arrays():
     ], '2')
 
     check("array-append-str", [
-        'ST-INIT',
+        'T-INIT',
         'S" alice" S" names" ST-ARRAY-APPEND-STR',
         'S" bob"   S" names" ST-ARRAY-APPEND-STR',
         'S" names" 0 ST-ARRAY-NTH ST-GET-STR TYPE CR',
     ], 'alice')
 
     check("array-nested", [
-        'ST-INIT',
+        'T-INIT',
         '99 S" ship.crew" ST-ARRAY-APPEND-INT',
         'S" ship.crew" ST-ARRAY-COUNT . CR',
     ], '1')
@@ -579,18 +580,18 @@ def test_arrays():
 def test_protected():
     """ST-PROTECTED? detects underscore prefix."""
     check("protected-yes", [
-        'ST-INIT',
+        'T-INIT',
         'S" _internal" ST-PROTECTED? IF 1 ELSE 0 THEN . CR',
     ], '1')
 
     check("protected-no", [
-        'ST-INIT',
+        'T-INIT',
         'S" public" ST-PROTECTED? IF 1 ELSE 0 THEN . CR',
     ], '0')
 
     # Protected flag is set on node
     check("protected-flag-on-node", [
-        'ST-INIT',
+        'T-INIT',
         '42 S" _secret" ST-SET-PATH-INT',
         'S" _secret" ST-GET-PATH SN.FLAGS @ 1 AND . CR',
     ], '1')
@@ -602,44 +603,44 @@ def test_protected():
 def test_journal():
     """Journal: add entries, read them back."""
     check("journal-empty", [
-        'ST-INIT',
+        'T-INIT',
         'ST-JOURNAL-COUNT . CR',
     ], '0')
 
     check("journal-seq-starts-0", [
-        'ST-INIT',
+        'T-INIT',
         'ST-JOURNAL-SEQ . CR',
     ], '0')
 
     check("journal-add-one", [
-        'ST-INIT',
+        'T-INIT',
         # op=1 path-addr=0 path-len=0 old-type=0 old-val=0 new-type=2 new-val=42
         '1 0 0  0 0  2 42 ST-JOURNAL-ADD',
         'ST-JOURNAL-COUNT . CR',
     ], '1')
 
     check("journal-seq-increments", [
-        'ST-INIT',
+        'T-INIT',
         '1 0 0 0 0 2 42 ST-JOURNAL-ADD',
         'ST-JOURNAL-SEQ . CR',
     ], '1')
 
     check("journal-nth-0", [
-        'ST-INIT',
+        'T-INIT',
         '1 0 0 0 0 2 42 ST-JOURNAL-ADD',
         '2 0 0 0 0 2 99 ST-JOURNAL-ADD',
         '0 ST-JOURNAL-NTH 64 + @ . CR',   # new-val of most recent
     ], '99')
 
     check("journal-nth-1", [
-        'ST-INIT',
+        'T-INIT',
         '1 0 0 0 0 2 42 ST-JOURNAL-ADD',
         '2 0 0 0 0 2 99 ST-JOURNAL-ADD',
         '1 ST-JOURNAL-NTH 64 + @ . CR',   # new-val of second most recent
     ], '42')
 
     check("journal-nth-oob", [
-        'ST-INIT',
+        'T-INIT',
         '1 0 0 0 0 2 42 ST-JOURNAL-ADD',
         '5 ST-JOURNAL-NTH . CR',
     ], '0')
@@ -651,28 +652,28 @@ def test_journal():
 def test_type_overwrite():
     """Setting a new type on existing node coerces correctly."""
     check("int-to-str", [
-        'ST-INIT',
+        'T-INIT',
         '42 S" x" ST-SET-PATH-INT',
         'S" hello" S" x" ST-SET-PATH-STR',
         'S" x" ST-GET-PATH DUP 0<> IF ST-GET-TYPE . CR ELSE DROP THEN',
     ], '1')   # ST-T-STRING
 
     check("str-to-null", [
-        'ST-INIT',
+        'T-INIT',
         'S" hi" S" x" ST-SET-PATH-STR',
         'S" x" ST-SET-PATH-NULL',
         'S" x" ST-GET-PATH ST-NULL? IF 1 ELSE 0 THEN . CR',
     ], '1')
 
     check("object-to-int", [
-        'ST-INIT',
+        'T-INIT',
         '1 S" a.b" ST-SET-PATH-INT',   # creates a as object
         '99 S" a" ST-SET-PATH-INT',     # overwrite a to int, destroys children
         'S" a" ST-GET-PATH ST-GET-INT . CR',
     ], '99')
 
     check("object-to-int-children-gone", [
-        'ST-INIT',
+        'T-INIT',
         '1 S" a.b" ST-SET-PATH-INT',
         '99 S" a" ST-SET-PATH-INT',
         'S" a.b" ST-GET-PATH . CR',
