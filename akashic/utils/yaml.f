@@ -117,21 +117,21 @@ VARIABLE YAML-ABORT-ON-ERROR
 : YAML-INDENT  ( addr len -- n )
     0 >R
     BEGIN
-        DUP 0> WHILE
-        OVER C@ 32 = WHILE
+        DUP 0> IF OVER C@ 32 = ELSE 0 THEN
+    WHILE
         R> 1+ >R
         1 /STRING
-    REPEAT THEN
+    REPEAT
     2DROP R> ;
 
 \ _YAML-SKIP-INDENT ( addr len -- addr' len' )
 \   Skip leading spaces at start of a line.
 : _YAML-SKIP-INDENT  ( addr len -- addr' len' )
     BEGIN
-        DUP 0> WHILE
-        OVER C@ 32 = WHILE
+        DUP 0> IF OVER C@ 32 = ELSE 0 THEN
+    WHILE
         1 /STRING
-    REPEAT THEN ;
+    REPEAT ;
 
 \ ── Line Boundary Helpers ────────────────────────────────────────────
 
@@ -306,10 +306,10 @@ VARIABLE _YSBS-BASE
     2DUP YAML-INDENT _YSBS-BASE !
     _YSBS-BASE @ 0= IF EXIT THEN    \ empty block scalar
     BEGIN
-        DUP 0> WHILE
-        2DUP YAML-INDENT _YSBS-BASE @ >= WHILE
+        DUP 0> IF 2DUP YAML-INDENT _YSBS-BASE @ >= ELSE 0 THEN
+    WHILE
         YAML-SKIP-LINE
-    REPEAT THEN ;
+    REPEAT ;
 
 \ ── Skip Any Scalar ──────────────────────────────────────────────────
 
@@ -321,6 +321,9 @@ VARIABLE _YSBS-BASE
     BEGIN
         DUP 0> WHILE
         OVER C@ DUP 10 = SWAP 13 = OR IF EXIT THEN
+        \ Flow indicators — plain scalars stop at , [ ] { }
+        OVER C@ DUP 44 = OVER 91 = OR OVER 93 = OR
+        OVER 123 = OR SWAP 125 = OR IF EXIT THEN
         \ '#' preceded by space = comment
         DUP 2 >= IF
             OVER C@ 32 = IF
@@ -684,16 +687,16 @@ VARIABLE _YGSS-CNT
     OVER                             \ save start
     >R
     _YAML-SKIP-PLAIN-SCALAR
-    OVER R> -                        \ compute length
+    OVER R@ -                        \ compute length (end - start)
     \ Trim trailing whitespace
     DUP 0> IF
         BEGIN
-            DUP 0> WHILE
-            2 PICK OVER + 1- C@ DUP 32 = SWAP 9 = OR WHILE
+            DUP 0> IF R@ OVER + 1- C@ DUP 32 = SWAP 9 = OR ELSE 0 THEN
+        WHILE
             1-
-        REPEAT THEN
+        REPEAT
     THEN
-    >R DROP R> ;                     \ ( start-addr trimmed-len )
+    >R 2DROP R> R> SWAP ;            \ ( start-addr trimmed-len )
 
 \ ── Dispatch string extraction ───────────────────────────────────────
 
@@ -1041,23 +1044,12 @@ VARIABLE _YEK-L
             DUP 1 > IF
                 OVER 1+ C@ DUP 32 = OVER 10 = OR SWAP 13 = OR IF
                     \ Found ': ' — key is (start, count)
-                    \ Trim trailing whitespace from key
-                    BEGIN
-                        OVER 0> WHILE
-                        3 PICK 2 PICK + 1- C@ DUP 32 = SWAP 9 = OR WHILE
-                        SWAP 1- SWAP
-                    REPEAT THEN
                     1 /STRING       \ skip :
                     YAML-SKIP-WS
                     2SWAP EXIT
                 THEN
             ELSE
-                \ ':' at end of input
-                BEGIN
-                    OVER 0> WHILE
-                    3 PICK 2 PICK + 1- C@ DUP 32 = SWAP 9 = OR WHILE
-                    SWAP 1- SWAP
-                REPEAT THEN
+                \ ':' at end of input  — skip : and ws
                 1 /STRING
                 YAML-SKIP-WS
                 2SWAP EXIT
@@ -1075,18 +1067,29 @@ VARIABLE _YK-KA
 VARIABLE _YK-KL
 VARIABLE _YK-BASE
 
+\ _YAML-SKIP-BLANKLINES ( addr len -- addr' len' )
+\   Skip past blank lines (CR/LF only) but preserve leading spaces
+\   on the first content-bearing line.  Needed for indent detection.
+: _YAML-SKIP-BLANKLINES  ( addr len -- addr' len' )
+    BEGIN
+        DUP 0> WHILE
+        OVER C@ DUP 10 = SWAP 13 = OR IF
+            1 /STRING
+        ELSE EXIT THEN
+    REPEAT ;
+
 \ YAML-KEY ( addr len kaddr klen -- vaddr vlen )
 \   Find key in a block mapping. Searches only at the current
 \   indentation level (depth-aware).  Returns cursor at value.
 : YAML-KEY  ( addr len kaddr klen -- vaddr vlen )
     _YK-KL ! _YK-KA !
-    YAML-SKIP-NL
+    _YAML-SKIP-BLANKLINES
     \ Record base indent
     2DUP YAML-INDENT _YK-BASE !
     BEGIN
         DUP 0>
     WHILE
-        YAML-SKIP-NL
+        _YAML-SKIP-BLANKLINES
         DUP 0> 0= IF YAML-E-NOT-FOUND _YAML-FAIL-00 EXIT THEN
         \ Check for document markers — stop search
         2DUP _YAML-3DASH? IF 2DROP YAML-E-NOT-FOUND _YAML-FAIL-00 EXIT THEN
@@ -1099,11 +1102,10 @@ VARIABLE _YK-BASE
         _YK-BASE @ = IF
             \ Same indent level — try to match key
             _YAML-SKIP-INDENT
-            2DUP _YAML-EXTRACT-KEY     ( key-a key-l val-a val-l )
-            2SWAP
+            2DUP _YAML-EXTRACT-KEY     ( orig-a orig-l rest-a rest-l key-a key-l )
             _YK-KA @ _YK-KL @ STR-STR=
-            IF EXIT THEN               \ found!
-            2DROP                       \ not this key — skip value
+            IF 2SWAP 2DROP EXIT THEN   \ found! return (rest-a rest-l)
+            2DROP                       \ not this key — drop (rest-a rest-l)
             YAML-SKIP-LINE
         ELSE
             \ More indented — skip (belongs to previous key's value)
