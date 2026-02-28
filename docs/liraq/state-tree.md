@@ -44,7 +44,7 @@ REQUIRE state-tree.f
 | **No hidden heap use** | No dynamic allocation outside the arena.  All state lives in the passed-in arena. |
 | **Multiple trees** | Switch between trees with `ST-USE` / `ST-DOC`, identical to the DOM pattern. |
 | **Dot-separated paths** | Access any node with a single path string: `ship.systems.warp.status`. |
-| **7 value types** | Free, String, Integer, Boolean, Null, Array, Object. |
+| **8 value types** | Free, String, Integer, Boolean, Null, Float, Array, Object.  Float values are stored as packed IEEE-754 FP32 (software, via `akashic-fp32`). |
 | **Change journal** | 128-entry circular buffer records every mutation with sequence numbers and source tags. |
 
 ---
@@ -53,7 +53,8 @@ REQUIRE state-tree.f
 
 ```
 state-tree.f
-└── ../utils/string.f   (akashic-string)
+├── ../utils/string.f   (akashic-string)
+└── ../math/fp32.f      (akashic-fp32)
 ```
 
 All dependencies are loaded automatically via `REQUIRE` with relative
@@ -135,8 +136,9 @@ once (nodes, strings, journal, descriptor).
 | `ST-T-INTEGER` | 2 | 64-bit integer value |
 | `ST-T-BOOLEAN` | 3 | Boolean (0 = false, non-zero = true) |
 | `ST-T-NULL` | 4 | Null sentinel |
-| `ST-T-ARRAY` | 5 | Ordered child list (index-addressed) |
-| `ST-T-OBJECT` | 6 | Named child list (key-addressed) |
+| `ST-T-FLOAT` | 5 | IEEE-754 FP32 packed in low 32 bits of cell |
+| `ST-T-ARRAY` | 6 | Ordered child list (index-addressed) |
+| `ST-T-OBJECT` | 7 | Named child list (key-addressed) |
 
 ### Flag Bits
 
@@ -188,8 +190,8 @@ Each node is 96 bytes (12 cells):
 | +56 | `SN.NCHILD` | Child count |
 | +64 | `SN.NAMEA` | Name string address (in pool) |
 | +72 | `SN.NAMEL` | Name string length |
-| +80 | `SN.VAL1` | Value cell 1 (integer, bool, or string addr) |
-| +88 | `SN.VAL2` | Value cell 2 (string length) |
+| +80 | `SN.VAL1` | Value cell 1 (integer, bool, FP32, or string addr) |
+| +88 | `SN.VAL2` | Value cell 2 (string length, unused for int/bool/float) |
 
 When freed, a node's `+0` cell holds the next free-list pointer.
 
@@ -241,7 +243,7 @@ Each segment is either:
 ```forth
 42 S" ship.speed" ST-SET-PATH-INT
 S" ship.speed" ST-NAVIGATE ST-GET-INT .   \ 42
-S" ship" ST-NAVIGATE ST-GET-TYPE .        \ 6  (ST-T-OBJECT)
+S" ship" ST-NAVIGATE ST-GET-TYPE .        \ 7  (ST-T-OBJECT)
 ```
 
 ---
@@ -256,6 +258,7 @@ S" ship" ST-NAVIGATE ST-GET-TYPE .        \ 6  (ST-T-OBJECT)
 | `ST-GET-INT` | `( node -- n )` | Read integer value |
 | `ST-GET-BOOL` | `( node -- flag )` | Read boolean value |
 | `ST-GET-STR` | `( node -- addr len )` | Read string value (pool pointer + length) |
+| `ST-GET-FLOAT` | `( node -- fp32 )` | Read FP32 value (packed in low 32 bits) |
 | `ST-NULL?` | `( node -- flag )` | True if node is Null type |
 
 ### Writing values
@@ -265,6 +268,7 @@ S" ship" ST-NAVIGATE ST-GET-TYPE .        \ 6  (ST-T-OBJECT)
 | `ST-SET-INT` | `( n node -- )` | Set integer value.  If node was a container, clears children first. |
 | `ST-SET-BOOL` | `( flag node -- )` | Set boolean value.  Container coercion as above. |
 | `ST-SET-STR` | `( addr len node -- )` | Set string value.  Copies into string pool. |
+| `ST-SET-FLOAT` | `( fp32 node -- )` | Set FP32 value.  Container coercion as above. |
 | `ST-SET-NULL` | `( node -- )` | Set to Null.  Container coercion as above. |
 | `ST-MAKE-OBJECT` | `( node -- )` | Convert node to Object container. |
 | `ST-MAKE-ARRAY` | `( node -- )` | Convert node to Array container. |
@@ -287,6 +291,7 @@ Intermediate Object nodes are auto-created as needed.
 | `ST-SET-PATH-INT` | `( n path-a path-l -- )` | Set integer at path |
 | `ST-SET-PATH-BOOL` | `( flag path-a path-l -- )` | Set boolean at path |
 | `ST-SET-PATH-STR` | `( str-a str-l path-a path-l -- )` | Set string at path |
+| `ST-SET-PATH-FLOAT` | `( fp32 path-a path-l -- )` | Set FP32 at path |
 | `ST-SET-PATH-NULL` | `( path-a path-l -- )` | Set null at path |
 | `ST-GET-PATH` | `( path-a path-l -- node\|0 )` | Navigate to node; sets `ST-E-NOT-FOUND` if missing |
 | `ST-DELETE-PATH` | `( path-a path-l -- )` | Remove node and entire subtree |
@@ -451,6 +456,7 @@ ST-JOURNAL-COUNT .    \ 1
 | `ST-SET-PATH-INT` | `( n path-a path-l -- )` |
 | `ST-SET-PATH-BOOL` | `( flag path-a path-l -- )` |
 | `ST-SET-PATH-STR` | `( str-a str-l path-a path-l -- )` |
+| `ST-SET-PATH-FLOAT` | `( fp32 path-a path-l -- )` |
 | `ST-SET-PATH-NULL` | `( path-a path-l -- )` |
 
 ### Value Access
@@ -461,10 +467,12 @@ ST-JOURNAL-COUNT .    \ 1
 | `ST-GET-INT` | `( node -- n )` |
 | `ST-GET-BOOL` | `( node -- flag )` |
 | `ST-GET-STR` | `( node -- addr len )` |
+| `ST-GET-FLOAT` | `( node -- fp32 )` |
 | `ST-NULL?` | `( node -- flag )` |
 | `ST-SET-INT` | `( n node -- )` |
 | `ST-SET-BOOL` | `( flag node -- )` |
 | `ST-SET-STR` | `( addr len node -- )` |
+| `ST-SET-FLOAT` | `( fp32 node -- )` |
 | `ST-SET-NULL` | `( node -- )` |
 | `ST-MAKE-OBJECT` | `( node -- )` |
 | `ST-MAKE-ARRAY` | `( node -- )` |
@@ -540,6 +548,25 @@ S" ship.speed" ST-GET-PATH ST-GET-INT .     \ 100
 S" ship.drive" ST-GET-PATH ST-GET-STR TYPE  \ warp
 S" ship.active" ST-GET-PATH ST-GET-BOOL .   \ 1
 S" ship.target" ST-GET-PATH ST-NULL? .      \ -1
+```
+
+### Store and retrieve floats
+
+```forth
+\ Store pi as an FP32 float
+FP32-PI S" ship.heading" ST-SET-PATH-FLOAT
+S" ship.heading" ST-GET-PATH ST-GET-FLOAT FP32>INT .   \ 3
+
+\ Integer to float conversion
+42 INT>FP32 S" x" ST-SET-PATH-FLOAT
+S" x" ST-GET-PATH ST-GET-FLOAT FP32>INT .              \ 42
+
+\ Arithmetic on float state values
+FP32-ONE S" a" ST-SET-PATH-FLOAT
+FP32-TWO S" b" ST-SET-PATH-FLOAT
+S" a" ST-GET-PATH ST-GET-FLOAT
+S" b" ST-GET-PATH ST-GET-FLOAT
+FP32-ADD FP32>INT .   \ 3
 ```
 
 ### Manage an array

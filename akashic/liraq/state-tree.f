@@ -5,8 +5,8 @@
 \ arena, enabling multiple simultaneous trees and O(1) bulk
 \ teardown via ARENA-DESTROY.
 \
-\ Value types: String, Integer, Boolean, Null, Array, Object.
-\ (Float deferred — no FPU on Megapad-64.)
+\ Value types: String, Integer, Boolean, Null, Float, Array, Object.
+\ Float values stored as packed IEEE-754 FP32 (software, via akashic-fp32).
 \
 \ Prefix: ST-   (public API)
 \         _ST-  (internal helpers)
@@ -14,6 +14,7 @@
 \ Load with:   REQUIRE state-tree.f
 
 REQUIRE ../utils/string.f
+REQUIRE ../math/fp32.f
 
 PROVIDED akashic-state-tree
 
@@ -26,8 +27,9 @@ PROVIDED akashic-state-tree
 2 CONSTANT ST-T-INTEGER
 3 CONSTANT ST-T-BOOLEAN
 4 CONSTANT ST-T-NULL
-5 CONSTANT ST-T-ARRAY
-6 CONSTANT ST-T-OBJECT
+5 CONSTANT ST-T-FLOAT
+6 CONSTANT ST-T-ARRAY
+7 CONSTANT ST-T-OBJECT
 
 \ =====================================================================
 \  Flag bits
@@ -419,6 +421,7 @@ VARIABLE _STEP-CUR
 : ST-GET-INT   ( node -- n )    SN.VAL1 @ ;
 : ST-GET-BOOL  ( node -- f )    SN.VAL1 @ ;
 : ST-GET-STR   ( node -- a l )  DUP SN.VAL1 @ SWAP SN.VAL2 @ ;
+: ST-GET-FLOAT ( node -- fp32 ) SN.VAL1 @ ;
 : ST-NULL?     ( node -- f )    SN.TYPE @ ST-T-NULL = ;
 
 : _ST-CLEAR-CHILDREN  ( node -- )
@@ -449,6 +452,11 @@ VARIABLE _STEP-CUR
     ST-T-STRING R@ SN.TYPE !
     R@ SN.VAL2 !
     R> SN.VAL1 ! ;
+
+: ST-SET-FLOAT  ( fp32 node -- )
+    DUP SN.TYPE @ ST-T-ARRAY >= IF DUP _ST-CLEAR-CHILDREN THEN
+    ST-T-FLOAT OVER SN.TYPE !
+    SN.VAL1 ! ;
 
 : ST-SET-NULL  ( node -- )
     DUP SN.TYPE @ ST-T-ARRAY >= IF DUP _ST-CLEAR-CHILDREN THEN
@@ -491,6 +499,14 @@ VARIABLE _STEP-CUR
     ST-T-STRING _ST-ENSURE-CHILD
     DUP 0= IF DROP 2DROP EXIT THEN
     ST-SET-STR ;
+
+: ST-SET-PATH-FLOAT  ( fp32 path-a path-l -- )
+    ST-CLEAR-ERR
+    ST-ENSURE-PATH
+    ST-OK? 0= IF 2DROP 2DROP EXIT THEN
+    ST-T-FLOAT _ST-ENSURE-CHILD
+    DUP 0= IF 2DROP EXIT THEN
+    ST-SET-FLOAT ;
 
 : ST-SET-PATH-NULL  ( path-a path-l -- )
     ST-CLEAR-ERR

@@ -12,6 +12,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
 STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
+FP32_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp32.f")
 STREE_F    = os.path.join(ROOT_DIR, "akashic", "liraq", "state-tree.f")
 
 sys.path.insert(0, EMU_DIR)
@@ -101,6 +102,7 @@ def build_snapshot():
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
     str_lines  = _load_forth_lines(STR_F)
+    fp32_lines = _load_forth_lines(FP32_F)
     stree_lines = _load_forth_lines(STREE_F)
 
     test_helpers = [
@@ -119,7 +121,7 @@ def build_snapshot():
     sys_obj.boot()
 
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
-                 + str_lines + stree_lines + test_helpers)
+                 + str_lines + fp32_lines + stree_lines + test_helpers)
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode()
     pos = 0
@@ -251,7 +253,7 @@ def test_init():
     check("init-root-is-object", [
         'T-INIT',
         'ST-ROOT ST-GET-TYPE . CR',
-    ], '6')
+    ], '7')
 
     check("init-err-clear", [
         'T-INIT',
@@ -369,9 +371,9 @@ def test_destroy():
     check("destroy-simple", [
         'T-INIT',
         '_ST-ALLOC VARIABLE CH1  CH1 !',
-        '6 CH1 @ SN.TYPE !',
+        '7 CH1 @ SN.TYPE !',
         'CH1 @ ST-ROOT _ST-APPEND-CHILD',
-        '_ST-ALLOC DUP 6 OVER SN.TYPE ! CH1 @ _ST-APPEND-CHILD',
+        '_ST-ALLOC DUP 7 OVER SN.TYPE ! CH1 @ _ST-APPEND-CHILD',
         'ST-NODE-COUNT .  CH1 @ _ST-DETACH  CH1 @ _ST-DESTROY  ST-NODE-COUNT . CR',
     ], '3 1')
 
@@ -680,6 +682,96 @@ def test_type_overwrite():
     ], '0')
 
 # ---------------------------------------------------------------------------
+#  Tests — Stage 4: float support (FP32)
+# ---------------------------------------------------------------------------
+
+def test_float():
+    """ST-SET-FLOAT / ST-GET-FLOAT / ST-SET-PATH-FLOAT using software FP32."""
+
+    # Store and retrieve FP32-ONE (0x3F800000 = 1065353216)
+    check("set-get-float-one", [
+        'T-INIT',
+        'FP32-ONE S" x" ST-SET-PATH-FLOAT',
+        'S" x" ST-GET-PATH ST-GET-FLOAT . CR',
+    ], '1065353216')
+
+    # Verify type tag is ST-T-FLOAT (5)
+    check("float-type-tag", [
+        'T-INIT',
+        'FP32-ONE S" speed" ST-SET-PATH-FLOAT',
+        'S" speed" ST-GET-PATH ST-GET-TYPE . CR',
+    ], '5')
+
+    # FP32-TWO (0x40000000 = 1073741824) — round-trip
+    check("set-get-float-two", [
+        'T-INIT',
+        'FP32-TWO S" val" ST-SET-PATH-FLOAT',
+        'S" val" ST-GET-PATH ST-GET-FLOAT . CR',
+    ], '1073741824')
+
+    # FP32-ZERO (0x00000000) — round-trip
+    check("set-get-float-zero", [
+        'T-INIT',
+        'FP32-ZERO S" z" ST-SET-PATH-FLOAT',
+        'S" z" ST-GET-PATH ST-GET-FLOAT FP32-0= IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+    # Nested path float
+    check("float-nested-path", [
+        'T-INIT',
+        'FP32-PI S" ship.heading" ST-SET-PATH-FLOAT',
+        'S" ship.heading" ST-GET-PATH ST-GET-FLOAT . CR',
+    ], '1078530011')  # 0x40490FDB
+
+    # Convert float to int using FP32>INT
+    check("float-to-int", [
+        'T-INIT',
+        'FP32-TWO S" x" ST-SET-PATH-FLOAT',
+        'S" x" ST-GET-PATH ST-GET-FLOAT FP32>INT . CR',
+    ], '2')
+
+    # Convert int to float, store, convert back
+    check("int-fp32-roundtrip", [
+        'T-INIT',
+        '42 INT>FP32 S" x" ST-SET-PATH-FLOAT',
+        'S" x" ST-GET-PATH ST-GET-FLOAT FP32>INT . CR',
+    ], '42')
+
+    # Overwrite int with float
+    check("int-to-float-overwrite", [
+        'T-INIT',
+        '10 S" x" ST-SET-PATH-INT',
+        'FP32-ONE S" x" ST-SET-PATH-FLOAT',
+        'S" x" ST-GET-PATH ST-GET-TYPE . CR',
+    ], '5')   # ST-T-FLOAT
+
+    # Overwrite float with int
+    check("float-to-int-overwrite", [
+        'T-INIT',
+        'FP32-ONE S" x" ST-SET-PATH-FLOAT',
+        '99 S" x" ST-SET-PATH-INT',
+        'S" x" ST-GET-PATH ST-GET-INT . CR',
+    ], '99')
+
+    # Arithmetic: add two FP32 values, check result
+    check("fp32-add-via-tree", [
+        'T-INIT',
+        'FP32-ONE S" a" ST-SET-PATH-FLOAT',
+        'FP32-TWO S" b" ST-SET-PATH-FLOAT',
+        'S" a" ST-GET-PATH ST-GET-FLOAT',
+        'S" b" ST-GET-PATH ST-GET-FLOAT',
+        'FP32-ADD FP32>INT . CR',
+    ], '3')
+
+    # Overwrite object-with-children to float clears children
+    check("object-to-float-clears", [
+        'T-INIT',
+        '1 S" a.b" ST-SET-PATH-INT',
+        'FP32-ONE S" a" ST-SET-PATH-FLOAT',
+        'S" a.b" ST-GET-PATH . CR',        # should be 0 (not found)
+    ], '0')
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -701,6 +793,7 @@ def main():
         ("Protected Paths", test_protected),
         ("Journal", test_journal),
         ("Type Overwrite", test_type_overwrite),
+        ("Float (FP32)", test_float),
     ]
 
     for label, fn in groups:
