@@ -437,3 +437,12 @@ VARIABLE _SY-FREQ
     _SY-BUF @ _SY-TMP @ SY.AENV @ ENV-APPLY
 
     _SY-BUF @ ;
+
+\ =====================================================================
+\  Filter state save / restore for polyphonic context switching
+\ =====================================================================
+\  The biquad filter uses global state (_SY-FS1, _SY-FS2).  For
+\  polyphony, callers must save/restore around each SYNTH-RENDER.
+
+: SYNTH-SAVE-FILT  ( -- s1 s2 )  _SY-FS1 @ _SY-FS2 @ ;
+: SYNTH-LOAD-FILT  ( s1 s2 -- )  _SY-FS2 ! _SY-FS1 ! ;
