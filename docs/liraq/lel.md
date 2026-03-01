@@ -64,7 +64,39 @@ Bare identifiers resolve against the state tree via `ST-GET-PATH`:
 function-name(arg1, arg2, ...)
 ```
 
-## Built-in Functions (38 total)
+## Infix Operators
+
+LEL supports both function-call and infix syntax for common operations.
+A conforming implementation accepts both forms; results are identical.
+
+| Prec | Operators | Assoc | Equivalent |
+|-----:|-----------|-------|------------|
+| 7 | `not` (prefix) | Right | `not(x)` |
+| 6 | `*`, `/`, `%` | Left | `mul`, `div`, `mod` |
+| 5 | `+`, `-` (binary) | Left | `add`, `sub` |
+| 5 | `-` (prefix) | Right | `neg` |
+| 4 | `>`, `>=`, `<`, `<=` | Left | `gt`, `gte`, `lt`, `lte` |
+| 3 | `==`, `!=` | Left | `eq`, `neq` |
+| 2 | `and` | Left | `and` |
+| 1 | `or` | Left | `or` |
+| 0 | `? :` (ternary) | Right | `if` |
+
+Examples:
+```
+2 + 3 * 4           → 14  (precedence: mul before add)
+(2 + 3) * 4         → 20  (parentheses override)
+-5                  → -5  (unary minus)
+age > 18 and active → boolean
+x > 0 ? x : -x     → abs(x)
+not done or paused  → (not done) or paused
+```
+
+Implementation: Pratt parser (top-down operator precedence) with 13
+additional token types (TK-PLUS through TK-COLON). The parser replaces
+the original recursive-descent expression entry point via the
+`_XT-EXPR` forward-reference variable.
+
+## Built-in Functions (48 total)
 
 ### Arithmetic (13)
 All arithmetic functions support **float promotion**: if either operand is a float,
@@ -107,7 +139,7 @@ These functions evaluate arguments lazily (short-circuit):
 | `or(a,b)` | 2 | If a is truthy, return a; else evaluate and return b |
 | `coalesce(a,b)` | 2 | If a is not null, return a; else evaluate b |
 
-### String (9)
+### String (13)
 | Function | Args | Description |
 |----------|------|-------------|
 | `concat(a,b,...)` | variadic | Concatenate (coerces all args to string) |
@@ -119,8 +151,21 @@ These functions evaluate arguments lazily (short-circuit):
 | `contains(s,sub)` | 2 | True if s contains sub |
 | `starts-with(s,pfx)` | 2 | True if s starts with pfx |
 | `ends-with(s,sfx)` | 2 | True if s ends with sfx |
+| `replace(s,search,rep)` | 3 | Replace all occurrences of search with rep |
+| `split(s,delim)` | 2 | Split string into array (under `_scratch.split`) |
+| `join(arr,delim)` | 2 | Join array elements with delimiter |
+| `format(number,pattern)` | 2 | Convert number to string (pattern reserved) |
 
-### Type (5)
+### Array (5)
+| Function | Args | Description |
+|----------|------|-------------|
+| `at(arr,idx)` | 2 | Element at index (0-based); out-of-bounds → null |
+| `first(arr)` | 1 | First element; empty → null |
+| `last(arr)` | 1 | Last element; empty → null |
+| `includes(arr,val)` | 2 | True if array contains val (type-aware compare) |
+| `reverse(arr)` | 1 | Reversed copy (under `_scratch.reverse`) |
+
+### Type (6)
 | Function | Args | Description |
 |----------|------|-------------|
 | `to-string(v)` | 1 | Convert to string |
@@ -128,6 +173,7 @@ These functions evaluate arguments lazily (short-circuit):
 | `to-boolean(v)` | 1 | Convert to boolean (truthy test) |
 | `is-null(v)` | 1 | True if v is null |
 | `type-of(v)` | 1 | Returns type name as string |
+| `literal(v)` | 1 | Identity — returns argument unchanged |
 
 ## Coercion Rules
 
@@ -163,13 +209,40 @@ These functions evaluate arguments lazily (short-circuit):
 - Scratch string buffer: 4096 bytes
 - Max function args: limited by value stack depth
 
+## Computed Value Linkage
+
+When `akashic-state-tree` computed values are enabled (via `ST-COMPUTED!`),
+the stored expression string is evaluated through LEL automatically:
+
+```forth
+_ST-LEL-COMPUTE ( expr-a expr-l -- type v1 v2 )
+```
+
+This is wired at load time: `' _ST-LEL-COMPUTE _ST-COMPUTE-XT !`.
+No public API change — `ST-GET-*` on a computed node transparently
+evaluates the expression and returns the result.
+
 ## Example Expressions
 ```
-42                          → INTEGER 42
+\ Infix operators
+2 + 3 * 4                   → INTEGER 14
+(2 + 3) * 4                 → INTEGER 20
+score > 100 ? 'high' : 'low'
+active and health > 0
+not done or paused
+
+\ Function-call form (equivalent)
 add(3, 4)                   → INTEGER 7
 mul(2.5, 4)                 → FLOAT 10.0
 if(gt(score, 100), 'high', 'low')
 concat('Hello, ', name, '!')
 coalesce(nickname, name)
-and(active, gt(health, 0))
+
+\ New Phase 2 functions
+replace('hello world', 'world', 'forth')
+split('a,b,c', ',')         → array ['a','b','c']
+join(items, ', ')
+at(scores, 0)               → first element
+includes(tags, 'urgent')    → boolean
+reverse(items)              → reversed array
 ```

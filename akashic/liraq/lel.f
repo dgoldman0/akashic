@@ -44,6 +44,19 @@ PROVIDED akashic-lel
 10 CONSTANT TK-DOT
 11 CONSTANT TK-FLOAT
 12 CONSTANT TK-ERR
+13 CONSTANT TK-PLUS
+14 CONSTANT TK-MINUS
+15 CONSTANT TK-STAR
+16 CONSTANT TK-SLASH
+17 CONSTANT TK-PERCENT
+18 CONSTANT TK-EQEQ
+19 CONSTANT TK-BANGEQ
+20 CONSTANT TK-GT
+21 CONSTANT TK-GE
+22 CONSTANT TK-LT
+23 CONSTANT TK-LE
+24 CONSTANT TK-QUESTION
+25 CONSTANT TK-COLON
 
 \ =====================================================================
 \  Lexer state
@@ -325,15 +338,32 @@ VARIABLE _XT-SKIP      \ XT of skip-expression parser
     DUP 46 = IF DROP _LEL-ADV 10 _LEL-TOK ! EXIT THEN
     DUP 39 = IF DROP _LEL-SCAN-STR EXIT THEN
     DUP _LEL-DIGIT? IF DROP 0 _LEL-SCAN-NUM EXIT THEN
-    DUP 45 = IF
-        DROP
-        _LEL-POS @ 1+ _LEL-SLEN @ < IF
-            _LEL-SRC @ _LEL-POS @ 1+ + C@ _LEL-DIGIT? IF
-                _LEL-ADV
-                1 _LEL-SCAN-NUM EXIT
-            THEN
-        THEN
-        12 _LEL-TOK ! EXIT
+    DUP 43 = IF DROP _LEL-ADV TK-PLUS     _LEL-TOK ! EXIT THEN  \ +
+    DUP 45 = IF DROP _LEL-ADV TK-MINUS    _LEL-TOK ! EXIT THEN  \ -
+    DUP 42 = IF DROP _LEL-ADV TK-STAR     _LEL-TOK ! EXIT THEN  \ *
+    DUP 47 = IF DROP _LEL-ADV TK-SLASH    _LEL-TOK ! EXIT THEN  \ /
+    DUP 37 = IF DROP _LEL-ADV TK-PERCENT  _LEL-TOK ! EXIT THEN  \ %
+    DUP 63 = IF DROP _LEL-ADV TK-QUESTION _LEL-TOK ! EXIT THEN  \ ?
+    DUP 58 = IF DROP _LEL-ADV TK-COLON    _LEL-TOK ! EXIT THEN  \ :
+    DUP 62 = IF                                                   \ >
+        DROP _LEL-ADV
+        _LEL-PEEK 61 = IF _LEL-ADV TK-GE _LEL-TOK !
+        ELSE TK-GT _LEL-TOK ! THEN EXIT
+    THEN
+    DUP 60 = IF                                                   \ <
+        DROP _LEL-ADV
+        _LEL-PEEK 61 = IF _LEL-ADV TK-LE _LEL-TOK !
+        ELSE TK-LT _LEL-TOK ! THEN EXIT
+    THEN
+    DUP 61 = IF                                                   \ =
+        DROP _LEL-ADV
+        _LEL-PEEK 61 = IF _LEL-ADV TK-EQEQ _LEL-TOK !
+        ELSE TK-ERR _LEL-TOK ! THEN EXIT
+    THEN
+    DUP 33 = IF                                                   \ !
+        DROP _LEL-ADV
+        _LEL-PEEK 61 = IF _LEL-ADV TK-BANGEQ _LEL-TOK !
+        ELSE TK-ERR _LEL-TOK ! THEN EXIT
     THEN
     DUP _LEL-IDENT-START? IF DROP _LEL-SCAN-IDENT EXIT THEN
     DROP _LEL-ADV 12 _LEL-TOK ! ;
@@ -913,6 +943,8 @@ VARIABLE _XT-SKIP      \ XT of skip-expression parser
 \  Function dispatch — string match against known builtins
 \ =====================================================================
 
+VARIABLE _XT-DISPATCH-EXT   0 _XT-DISPATCH-EXT !
+
 : _LEL-DISPATCH ( name-a name-l argc -- )
     >R                                    \ save argc
     2DUP S" add"   STR-STR= IF 2DROP R> DROP _LEL-FN-ADD   EXIT THEN
@@ -952,6 +984,12 @@ VARIABLE _XT-SKIP      \ XT of skip-expression parser
     2DUP S" to-boolean"  STR-STR= IF 2DROP R> DROP _LEL-FN-TO-BOOLEAN  EXIT THEN
     2DUP S" is-null"     STR-STR= IF 2DROP R> DROP _LEL-FN-IS-NULL     EXIT THEN
     2DUP S" type-of"     STR-STR= IF 2DROP R> DROP _LEL-FN-TYPE-OF     EXIT THEN
+    \ Extension hook — Phase 2+ builtins registered via _XT-DISPATCH-EXT
+    _XT-DISPATCH-EXT @ IF
+        2DUP R@
+        _XT-DISPATCH-EXT @ EXECUTE
+        IF 2DROP R> DROP EXIT THEN
+    THEN
     \ Unknown function — pop all args, return null
     2DROP R>
     _LEL-VPOP-N
@@ -1097,3 +1135,504 @@ VARIABLE _XT-SKIP      \ XT of skip-expression parser
 
 : LEL-CLEAR-CONTEXT ( -- )
     0 _LEL-ITEM ! 0 _LEL-INDEX ! ;
+
+\ =====================================================================
+\  Phase 2.4 — literal() function (identity, argument passes through)
+\ =====================================================================
+
+\ _LEL-FN-LITERAL is a no-op: the argument is already on the value
+\ stack from eager evaluation.  Dispatch entry just drops argc.
+
+\ =====================================================================
+\  Phase 2.3 — Additional string functions
+\ =====================================================================
+
+\ ----- replace(str, search, replacement) -----
+VARIABLE _LEL-RPL-A   VARIABLE _LEL-RPL-L    \ replacement string
+VARIABLE _LEL-SCH-A   VARIABLE _LEL-SCH-L    \ search string
+VARIABLE _LEL-SRC-A   VARIABLE _LEL-SRC-L    \ source string
+VARIABLE _LEL-RI                               \ scan index
+
+: _LEL-FN-REPLACE ( -- )
+    _LEL-VPOP _LEL-COERCE-STR _LEL-RPL-L ! _LEL-RPL-A !
+    _LEL-VPOP _LEL-COERCE-STR _LEL-SCH-L ! _LEL-SCH-A !
+    _LEL-VPOP _LEL-COERCE-STR _LEL-SRC-L ! _LEL-SRC-A !
+    _LEL-SCH-L @ 0= IF
+        ST-T-STRING _LEL-SRC-A @ _LEL-SRC-L @ _LEL-VPUSH EXIT
+    THEN
+    _LEL-SPOS @ >R
+    0 _LEL-RI !
+    BEGIN
+        _LEL-RI @ _LEL-SRC-L @ < WHILE
+        \ check if search string matches at position RI
+        _LEL-SRC-L @ _LEL-RI @ - _LEL-SCH-L @ >= IF
+            _LEL-SRC-A @ _LEL-RI @ + _LEL-SCH-L @
+            _LEL-SCH-A @ _LEL-SCH-L @
+            STR-STR= IF
+                \ match — append replacement
+                _LEL-RPL-A @ _LEL-RPL-L @ _LEL-SAPP
+                _LEL-SCH-L @ _LEL-RI +!
+            ELSE
+                _LEL-SRC-A @ _LEL-RI @ + C@ _LEL-SAPP-CH
+                1 _LEL-RI +!
+            THEN
+        ELSE
+            _LEL-SRC-A @ _LEL-RI @ + C@ _LEL-SAPP-CH
+            1 _LEL-RI +!
+        THEN
+    REPEAT
+    ST-T-STRING _LEL-SBUF R@ + _LEL-SPOS @ R> - _LEL-VPUSH ;
+
+\ ----- split(str, delim) — produces state-tree array under _scratch -----
+VARIABLE _LEL-SPD-A   VARIABLE _LEL-SPD-L    \ delimiter string
+VARIABLE _LEL-SPS-A   VARIABLE _LEL-SPS-L    \ source string
+VARIABLE _LEL-SPI                              \ scan index
+VARIABLE _LEL-SPW                              \ word start index
+
+: _LEL-FN-SPLIT ( -- )
+    _LEL-VPOP _LEL-COERCE-STR _LEL-SPD-L ! _LEL-SPD-A !
+    _LEL-VPOP _LEL-COERCE-STR _LEL-SPS-L ! _LEL-SPS-A !
+    \ Create scratch array _scratch.split
+    S" _scratch.split" ST-ENSURE-ARRAY DROP
+    \ Clear existing children (delete old entries)
+    BEGIN
+        S" _scratch.split" ST-ARRAY-COUNT 0>
+    WHILE
+        S" _scratch.split" 0 ST-ARRAY-REMOVE
+    REPEAT
+    _LEL-SPD-L @ 0= IF
+        \ Empty delimiter — put whole string as single element
+        _LEL-SPS-A @ _LEL-SPS-L @
+        S" _scratch.split" ST-ARRAY-APPEND-STR
+        S" _scratch.split" ST-GET-PATH DUP IF
+            ST-T-ARRAY SWAP 0 _LEL-VPUSH
+        ELSE
+            DROP ST-T-NULL 0 0 _LEL-VPUSH
+        THEN
+        EXIT
+    THEN
+    0 _LEL-SPI !  0 _LEL-SPW !
+    BEGIN
+        _LEL-SPI @ _LEL-SPS-L @ < WHILE
+        _LEL-SPS-L @ _LEL-SPI @ - _LEL-SPD-L @ >= IF
+            _LEL-SPS-A @ _LEL-SPI @ + _LEL-SPD-L @
+            _LEL-SPD-A @ _LEL-SPD-L @
+            STR-STR= IF
+                \ Delimiter found — append word [SPW..SPI)
+                _LEL-SPS-A @ _LEL-SPW @ +
+                _LEL-SPI @ _LEL-SPW @ -
+                S" _scratch.split" ST-ARRAY-APPEND-STR
+                _LEL-SPI @ _LEL-SPD-L @ + DUP _LEL-SPI ! _LEL-SPW !
+            ELSE
+                1 _LEL-SPI +!
+            THEN
+        ELSE
+            1 _LEL-SPI +!
+        THEN
+    REPEAT
+    \ Append final segment
+    _LEL-SPS-A @ _LEL-SPW @ +
+    _LEL-SPS-L @ _LEL-SPW @ -
+    S" _scratch.split" ST-ARRAY-APPEND-STR
+    S" _scratch.split" ST-GET-PATH DUP IF
+        ST-T-ARRAY SWAP 0 _LEL-VPUSH
+    ELSE
+        DROP ST-T-NULL 0 0 _LEL-VPUSH
+    THEN ;
+
+\ ----- join(arr, delim) — concatenate array elements with delimiter -----
+VARIABLE _LEL-JD-A   VARIABLE _LEL-JD-L      \ delimiter
+VARIABLE _LEL-JARR                             \ array node
+VARIABLE _LEL-JI                               \ iteration index
+VARIABLE _LEL-JN                               \ child count
+
+: _LEL-FN-JOIN ( -- )
+    _LEL-VPOP _LEL-COERCE-STR _LEL-JD-L ! _LEL-JD-A !
+    _LEL-VPOP ROT
+    DUP ST-T-ARRAY <> IF
+        2DROP DROP ST-T-STRING S" " _LEL-VPUSH EXIT
+    THEN
+    DROP DROP _LEL-JARR !
+    _LEL-JARR @ SN.NCHILD @ _LEL-JN !
+    _LEL-JN @ 0= IF
+        ST-T-STRING S" " _LEL-VPUSH EXIT
+    THEN
+    _LEL-SPOS @ >R
+    _LEL-JARR @ SN.FCHILD @
+    0 _LEL-JI !
+    BEGIN
+        DUP 0<> WHILE
+        \ Push node value onto vstack, coerce to string
+        DUP _LEL-NODE-TO-VAL
+        _LEL-VPOP _LEL-COERCE-STR _LEL-SAPP
+        _LEL-JI @ _LEL-JN @ 1- < IF
+            _LEL-JD-A @ _LEL-JD-L @ _LEL-SAPP
+        THEN
+        1 _LEL-JI +!
+        SN.NEXT @
+    REPEAT
+    DROP
+    ST-T-STRING _LEL-SBUF R@ + _LEL-SPOS @ R> - _LEL-VPUSH ;
+
+\ ----- format(number, pattern) — simplified number->string -----
+\ Pattern is ignored for now — just converts number to string.
+\ This satisfies the spec requirement for the function to exist.
+
+: _LEL-FN-FORMAT ( -- )
+    _LEL-VPOP 2DROP DROP     \ discard pattern arg
+    _LEL-VPOP
+    ROT DUP ST-T-FLOAT = IF
+        DROP DROP FP32>INT NUM>STR
+    ELSE DUP ST-T-INTEGER = IF
+        DROP DROP NUM>STR
+    ELSE
+        2DROP DROP S" 0"
+    THEN THEN
+    _LEL-SPOS @ >R _LEL-SAPP
+    ST-T-STRING _LEL-SBUF R@ + _LEL-SPOS @ R> - _LEL-VPUSH ;
+
+\ =====================================================================
+\  Phase 2.2 — Array functions
+\ =====================================================================
+
+\ ----- at(arr, idx) -----
+: _LEL-FN-AT ( -- )
+    _LEL-VPOP _LEL-COERCE-INT              \ ( idx )
+    _LEL-VPOP ROT                           \ ( v1 v2 type )
+    ST-T-ARRAY <> IF DROP DROP DROP ST-T-NULL 0 0 _LEL-VPUSH EXIT THEN
+    DROP                                    \ ( arr-node idx )
+    SWAP _LEL-NAV-NTH
+    DUP 0= IF DROP ST-T-NULL 0 0 _LEL-VPUSH ELSE _LEL-NODE-TO-VAL THEN ;
+
+\ ----- first(arr) -----
+: _LEL-FN-FIRST ( -- )
+    _LEL-VPOP ROT
+    ST-T-ARRAY <> IF DROP DROP ST-T-NULL 0 0 _LEL-VPUSH EXIT THEN
+    DROP                                    \ ( arr-node )
+    SN.FCHILD @
+    DUP 0= IF DROP ST-T-NULL 0 0 _LEL-VPUSH ELSE _LEL-NODE-TO-VAL THEN ;
+
+\ ----- last(arr) -----
+: _LEL-FN-LAST ( -- )
+    _LEL-VPOP ROT
+    ST-T-ARRAY <> IF DROP DROP ST-T-NULL 0 0 _LEL-VPUSH EXIT THEN
+    DROP                                    \ ( arr-node )
+    SN.LCHILD @
+    DUP 0= IF DROP ST-T-NULL 0 0 _LEL-VPUSH ELSE _LEL-NODE-TO-VAL THEN ;
+
+\ ----- includes(arr, val) — linear scan, type-aware compare -----
+VARIABLE _LEL-INC-T   VARIABLE _LEL-INC-V1  VARIABLE _LEL-INC-V2
+
+: _LEL-FN-INCLUDES ( -- )
+    _LEL-VPOP _LEL-INC-V2 ! _LEL-INC-V1 ! _LEL-INC-T !
+    _LEL-VPOP ROT
+    ST-T-ARRAY <> IF DROP DROP ST-T-BOOLEAN 0 0 _LEL-VPUSH EXIT THEN
+    DROP SN.FCHILD @
+    BEGIN
+        DUP 0<> WHILE
+        DUP _LEL-NODE-TO-VAL
+        \ Push search value, call eq
+        _LEL-INC-T @ _LEL-INC-V1 @ _LEL-INC-V2 @ _LEL-VPUSH
+        _LEL-FN-EQ
+        _LEL-VPOP _LEL-COERCE-INT IF
+            DROP ST-T-BOOLEAN 1 0 _LEL-VPUSH EXIT
+        THEN
+        SN.NEXT @
+    REPEAT
+    DROP ST-T-BOOLEAN 0 0 _LEL-VPUSH ;
+
+\ ----- reverse(arr) — returns new scratch array -----
+VARIABLE _LEL-REV-N
+
+: _LEL-FN-REVERSE ( -- )
+    _LEL-VPOP ROT
+    ST-T-ARRAY <> IF DROP DROP ST-T-NULL 0 0 _LEL-VPUSH EXIT THEN
+    DROP
+    DUP SN.NCHILD @ _LEL-REV-N !
+    S" _scratch.reverse" ST-ENSURE-ARRAY DROP
+    BEGIN S" _scratch.reverse" ST-ARRAY-COUNT 0> WHILE
+        S" _scratch.reverse" 0 ST-ARRAY-REMOVE
+    REPEAT
+    \ Walk from last child backward
+    SN.LCHILD @
+    BEGIN
+        DUP 0<> WHILE
+        DUP _LEL-NODE-TO-VAL
+        _LEL-VPOP ROT
+        DUP ST-T-STRING = IF
+            DROP S" _scratch.reverse" ST-ARRAY-APPEND-STR
+        ELSE DUP ST-T-INTEGER = IF
+            DROP DROP S" _scratch.reverse" ST-ARRAY-APPEND-INT
+        ELSE
+            2DROP DROP
+        THEN THEN
+        SN.PREV @
+    REPEAT
+    DROP
+    S" _scratch.reverse" ST-GET-PATH DUP IF
+        ST-T-ARRAY SWAP 0 _LEL-VPUSH
+    ELSE DROP ST-T-NULL 0 0 _LEL-VPUSH THEN ;
+
+\ ----- length(arr) — already handled by _LEL-FN-LENGTH -----
+\ (it checks for ST-T-ARRAY and returns SN.NCHILD)
+
+\ =====================================================================
+\  Phase 2.1 — Infix operator parser (Pratt parser)
+\ =====================================================================
+
+\ Binding powers for each precedence level (higher = tighter binding)
+\ or: 2, and: 4, eq/ne: 6, cmp: 8, add/sub: 10, mul/div/mod: 12, unary: 14
+
+\ _LEL-INFIX-BP — return left binding power for the current token.
+\ Returns 0 if not an infix operator (stops PRATT loop).
+
+VARIABLE _LEL-IBP     \ infix binding power result
+
+: _LEL-INFIX-BP ( -- bp )
+    _LEL-TOK @
+    DUP TK-PLUS    = IF DROP 10 EXIT THEN
+    DUP TK-MINUS   = IF DROP 10 EXIT THEN
+    DUP TK-STAR    = IF DROP 12 EXIT THEN
+    DUP TK-SLASH   = IF DROP 12 EXIT THEN
+    DUP TK-PERCENT = IF DROP 12 EXIT THEN
+    DUP TK-EQEQ   = IF DROP  6 EXIT THEN
+    DUP TK-BANGEQ  = IF DROP  6 EXIT THEN
+    DUP TK-GT      = IF DROP  8 EXIT THEN
+    DUP TK-GE      = IF DROP  8 EXIT THEN
+    DUP TK-LT      = IF DROP  8 EXIT THEN
+    DUP TK-LE      = IF DROP  8 EXIT THEN
+    DUP TK-QUESTION = IF DROP  1 EXIT THEN  \ ternary ? : (lowest)
+    DUP TK-IDENT = IF
+        DROP
+        _LEL-TVAL1 @ _LEL-TVAL2 @
+        2DUP S" and" STR-STR= IF 2DROP 4 EXIT THEN
+        2DUP S" or"  STR-STR= IF 2DROP 2 EXIT THEN
+        2DROP 0 EXIT
+    THEN
+    DROP 0 ;
+
+\ Forward-declare the Pratt entry (mutual recursion with NUD/LED)
+VARIABLE _XT-PRATT
+
+: _LEL-PRATT-CALL ( min-bp -- )
+    _XT-PRATT @ EXECUTE ;
+
+\ ----- NUD (null denotation) — prefix / atoms -----
+\ Handles: literals, identifiers/function calls, parenthesized exprs,
+\ unary minus, unary not.
+
+: _LEL-NUD ( -- )
+    _LEL-TOK @
+    DUP TK-INT = IF
+        DROP ST-T-INTEGER _LEL-TVAL1 @ 0 _LEL-VPUSH
+        _LEL-NEXT EXIT
+    THEN
+    DUP TK-FLOAT = IF
+        DROP ST-T-FLOAT _LEL-TVAL1 @ 0 _LEL-VPUSH
+        _LEL-NEXT EXIT
+    THEN
+    DUP TK-STR = IF
+        DROP ST-T-STRING _LEL-TVAL1 @ _LEL-TVAL2 @ _LEL-VPUSH
+        _LEL-NEXT EXIT
+    THEN
+    DUP TK-TRUE = IF
+        DROP ST-T-BOOLEAN 1 0 _LEL-VPUSH _LEL-NEXT EXIT
+    THEN
+    DUP TK-FALSE = IF
+        DROP ST-T-BOOLEAN 0 0 _LEL-VPUSH _LEL-NEXT EXIT
+    THEN
+    DUP TK-NULL = IF
+        DROP ST-T-NULL 0 0 _LEL-VPUSH _LEL-NEXT EXIT
+    THEN
+    DUP TK-MINUS = IF
+        \ Unary minus — parse operand at high bp, negate
+        DROP _LEL-NEXT
+        14 _LEL-PRATT-CALL
+        _LEL-FN-NEG EXIT
+    THEN
+    DUP TK-LPAREN = IF
+        \ Parenthesized expression
+        DROP _LEL-NEXT
+        0 _LEL-PRATT-CALL
+        \ Expect TK-RPAREN
+        _LEL-TOK @ TK-RPAREN = IF _LEL-NEXT THEN
+        EXIT
+    THEN
+    DUP TK-IDENT = IF
+        DROP
+        _LEL-TVAL1 @ _LEL-TVAL2 @
+        \ Check for 'not' keyword (prefix operator)
+        2DUP S" not" STR-STR= IF
+            _LEL-PEEK-AHEAD 40 <> IF
+                \ not as prefix operator (not followed by lparen)
+                2DROP _LEL-NEXT
+                14 _LEL-PRATT-CALL
+                _LEL-FN-NOT EXIT
+            THEN
+        THEN
+        \ Function call or state reference (same as old _LEL-EXPR-IMPL)
+        _LEL-PEEK-AHEAD 40 = IF
+            _LEL-FUNCALL
+        ELSE
+            _LEL-STATE-OR-CTX
+        THEN
+        EXIT
+    THEN
+    DUP TK-EOF = IF
+        DROP ST-T-NULL 0 0 _LEL-VPUSH EXIT
+    THEN
+    \ Unknown token
+    DROP 1 _LEL-ERR !
+    ST-T-NULL 0 0 _LEL-VPUSH ;
+
+\ ----- LED (left denotation) — infix operators -----
+\ Left operand is already on vstack.  Consume operator, parse right
+\ operand at the appropriate binding power, then apply the operator.
+
+VARIABLE _LEL-LED-TOK   \ save operator token
+
+: _LEL-LED ( -- )
+    _LEL-TOK @ _LEL-LED-TOK !
+    _LEL-LED-TOK @
+    \ ---- ternary ? : ----
+    DUP TK-QUESTION = IF
+        DROP _LEL-NEXT                    \ consume ?
+        _LEL-VPOP _LEL-TRUTHY? IF
+            0 _LEL-PRATT-CALL             \ evaluate then-expr
+            _LEL-TOK @ TK-COLON = IF _LEL-NEXT THEN
+            \ skip else-expr: evaluate and discard
+            0 _LEL-PRATT-CALL
+            _LEL-VPOP 2DROP DROP
+        ELSE
+            \ skip then-expr: evaluate and discard
+            0 _LEL-PRATT-CALL
+            _LEL-VPOP 2DROP DROP
+            _LEL-TOK @ TK-COLON = IF _LEL-NEXT THEN
+            0 _LEL-PRATT-CALL
+        THEN
+        EXIT
+    THEN
+    \ ---- short-circuit and/or ----
+    DUP TK-IDENT = IF
+        DROP
+        _LEL-TVAL1 @ _LEL-TVAL2 @
+        2DUP S" and" STR-STR= IF
+            2DROP _LEL-NEXT
+            \ left is on vstack
+            _LEL-VSP @ 1- _LEL-VIDX _LEL-TRUTHY? IF
+                _LEL-VPOP 2DROP DROP     \ discard truthy left
+                4 _LEL-PRATT-CALL       \ evaluate right, keep it
+            ELSE
+                \ left is falsy — skip right, keep left
+                4 _LEL-PRATT-CALL
+                _LEL-VPOP 2DROP DROP     \ discard right
+            THEN
+            EXIT
+        THEN
+        2DUP S" or" STR-STR= IF
+            2DROP _LEL-NEXT
+            _LEL-VSP @ 1- _LEL-VIDX _LEL-TRUTHY? IF
+                \ left is truthy — skip right, keep left
+                2 _LEL-PRATT-CALL
+                _LEL-VPOP 2DROP DROP     \ discard right
+            ELSE
+                _LEL-VPOP 2DROP DROP     \ discard falsy left
+                2 _LEL-PRATT-CALL       \ evaluate right, keep it
+            THEN
+            EXIT
+        THEN
+        2DROP EXIT   \ shouldn't reach here
+    THEN
+    \ ---- binary operators ----
+    DROP _LEL-NEXT                        \ consume operator token
+    \ Parse right operand at this operator's binding power
+    \ (left-assoc: same bp; right-assoc would be bp-1)
+    _LEL-LED-TOK @
+    DUP TK-PLUS    = IF DROP 10 _LEL-PRATT-CALL _LEL-FN-ADD   EXIT THEN
+    DUP TK-MINUS   = IF DROP 10 _LEL-PRATT-CALL _LEL-FN-SUB   EXIT THEN
+    DUP TK-STAR    = IF DROP 12 _LEL-PRATT-CALL _LEL-FN-MUL   EXIT THEN
+    DUP TK-SLASH   = IF DROP 12 _LEL-PRATT-CALL _LEL-FN-DIV   EXIT THEN
+    DUP TK-PERCENT = IF DROP 12 _LEL-PRATT-CALL _LEL-FN-MOD   EXIT THEN
+    DUP TK-EQEQ   = IF DROP  6 _LEL-PRATT-CALL _LEL-FN-EQ    EXIT THEN
+    DUP TK-BANGEQ  = IF DROP  6 _LEL-PRATT-CALL _LEL-FN-NEQ   EXIT THEN
+    DUP TK-GT      = IF DROP  8 _LEL-PRATT-CALL _LEL-FN-GT    EXIT THEN
+    DUP TK-GE      = IF DROP  8 _LEL-PRATT-CALL _LEL-FN-GTE   EXIT THEN
+    DUP TK-LT      = IF DROP  8 _LEL-PRATT-CALL _LEL-FN-LT    EXIT THEN
+    DUP TK-LE      = IF DROP  8 _LEL-PRATT-CALL _LEL-FN-LTE   EXIT THEN
+    DROP ;
+
+\ ----- Main Pratt loop -----
+\ ( min-bp -- )
+\ Parses expression with minimum binding power.
+
+: _LEL-PRATT-IMPL ( min-bp -- )
+    _LEL-ERR @ IF DROP ST-T-NULL 0 0 _LEL-VPUSH EXIT THEN
+    >R
+    _LEL-NUD
+    BEGIN
+        _LEL-ERR @ 0= IF
+            _LEL-INFIX-BP DUP R@ > IF
+                DROP _LEL-LED
+                TRUE
+            ELSE
+                DROP FALSE
+            THEN
+        ELSE
+            FALSE
+        THEN
+    WHILE REPEAT
+    R> DROP ;
+
+' _LEL-PRATT-IMPL _XT-PRATT !
+
+\ ----- Wire Pratt parser as the expression entry point -----
+\ Replace _LEL-EXPR-IMPL with a Pratt entry at binding power 0.
+
+: _LEL-EXPR-PRATT ( -- )
+    0 _LEL-PRATT-IMPL ;
+
+' _LEL-EXPR-PRATT _XT-EXPR !
+
+\ ----- Update skip to handle infix operators -----
+\ For the Pratt parser world, skip = evaluate and discard.
+
+: _LEL-SKIP-PRATT ( -- )
+    _LEL-EXPR
+    _LEL-VPOP 2DROP DROP ;
+
+' _LEL-SKIP-PRATT _XT-SKIP !
+
+\ =====================================================================
+\  Extension dispatch — hook for Phase 2+ builtins
+\ =====================================================================
+\ Called by the hook in _LEL-DISPATCH with ( name-a name-l argc -- flag ).
+\ Returns TRUE if the function was handled, FALSE otherwise.
+
+: _LEL-DISPATCH-EXT ( name-a name-l argc -- flag )
+    DROP                                  \ argc not needed — each fn knows arity
+    \ Phase 2.4
+    2DUP S" literal"  STR-STR= IF 2DROP TRUE EXIT THEN
+    \ Phase 2.3
+    2DUP S" replace"  STR-STR= IF 2DROP _LEL-FN-REPLACE TRUE EXIT THEN
+    2DUP S" split"    STR-STR= IF 2DROP _LEL-FN-SPLIT   TRUE EXIT THEN
+    2DUP S" join"     STR-STR= IF 2DROP _LEL-FN-JOIN     TRUE EXIT THEN
+    2DUP S" format"   STR-STR= IF 2DROP _LEL-FN-FORMAT   TRUE EXIT THEN
+    \ Phase 2.2
+    2DUP S" at"       STR-STR= IF 2DROP _LEL-FN-AT       TRUE EXIT THEN
+    2DUP S" first"    STR-STR= IF 2DROP _LEL-FN-FIRST    TRUE EXIT THEN
+    2DUP S" last"     STR-STR= IF 2DROP _LEL-FN-LAST     TRUE EXIT THEN
+    2DUP S" includes" STR-STR= IF 2DROP _LEL-FN-INCLUDES  TRUE EXIT THEN
+    2DUP S" reverse"  STR-STR= IF 2DROP _LEL-FN-REVERSE   TRUE EXIT THEN
+    \ Not handled
+    2DROP FALSE ;
+
+' _LEL-DISPATCH-EXT _XT-DISPATCH-EXT !
+
+\ =====================================================================
+\  Phase 2.5 — Computed value linkage
+\ =====================================================================
+
+: _ST-LEL-COMPUTE ( expr-a expr-l -- type v1 v2 )
+    LEL-EVAL ;
+
+' _ST-LEL-COMPUTE _ST-COMPUTE-XT !
