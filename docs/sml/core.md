@@ -1,8 +1,8 @@
 # akashic-sml-core — SML Parser Core for KDOS / Megapad-64
 
 Element classification, validation, and attribute extraction for
-the Structured Markup Language (SML) — the document format used by
-the 1D non-visual UI layer (Inceptor).
+the Sequential Markup Language (SML) — the modality-neutral
+document format for 1D user interfaces.
 
 SML uses angle-bracket XML syntax.  This module builds on
 `markup/core.f` for low-level tag scanning, attribute parsing, and
