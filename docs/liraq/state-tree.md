@@ -28,6 +28,13 @@ REQUIRE state-tree.f
 - [Arrays](#arrays)
 - [Protected Paths](#protected-paths)
 - [Journal](#journal)
+- [Object Merge](#object-merge)
+- [Array Insertion](#array-insertion)
+- [Journal Resize](#journal-resize)
+- [Schema Validation](#schema-validation)
+- [Snapshot / Restore](#snapshot--restore)
+- [Computed Values (Stubs)](#computed-values-stubs)
+- [Subscriptions](#subscriptions)
 - [Quick Reference](#quick-reference)
 - [Internal Words](#internal-words)
 - [Cookbook](#cookbook)
@@ -45,7 +52,10 @@ REQUIRE state-tree.f
 | **Multiple trees** | Switch between trees with `ST-USE` / `ST-DOC`, identical to the DOM pattern. |
 | **Dot-separated paths** | Access any node with a single path string: `ship.systems.warp.status`. |
 | **8 value types** | Free, String, Integer, Boolean, Null, Float, Array, Object.  Float values are stored as packed IEEE-754 FP32 (software, via `akashic-fp32`). |
-| **Change journal** | 128-entry circular buffer records every mutation with sequence numbers and source tags. |
+| **Change journal** | Configurable circular buffer (default 128 entries, resizable via `ST-JRNL-SIZE!`) records every mutation with sequence numbers and source tags. |
+| **Schema validation** | Optional type/range/length/readonly constraints stored under the `_schema` path prefix; checked via `ST-VALIDATE`. |
+| **Snapshot/restore** | Capture and restore full arena state for undo/rollback. |
+| **Subscriptions** | Path-hashed callback table fires on mutation notification. |
 
 ---
 
@@ -424,6 +434,242 @@ ST-JOURNAL-COUNT .    \ 1
 
 ---
 
+## Object Merge
+
+`ST-MERGE` performs a shallow merge of one object into another.  For
+each child of the source object, the matching key in the destination
+is created or overwritten with the source value.  Array and object
+children are skipped (shallow — only scalar values are copied).
+
+```forth
+: ST-MERGE  ( src-path-a src-path-l dst-path-a dst-path-l -- )
+```
+
+Both paths must resolve to existing object nodes.  Sets `ST-E-NOT-FOUND`
+if either path does not exist, or `ST-E-TYPE` if either is not an object.
+
+### Example
+
+```forth
+1 S" src.x" ST-SET-PATH-INT
+2 S" src.y" ST-SET-PATH-INT
+3 S" dst.z" ST-SET-PATH-INT
+
+S" src" S" dst" ST-MERGE
+
+S" dst.x" ST-GET-PATH ST-GET-INT .   \ 1
+S" dst.y" ST-GET-PATH ST-GET-INT .   \ 2
+S" dst.z" ST-GET-PATH ST-GET-INT .   \ 3  (preserved)
+```
+
+---
+
+## Array Insertion
+
+Insert a value at a specific index in an array, shifting subsequent
+elements right.  Analogous to `ST-ARRAY-APPEND-*` but with position
+control.
+
+```forth
+: ST-ARRAY-INSERT-INT  ( n index path-a path-l -- )
+: ST-ARRAY-INSERT-STR  ( str-a str-l index path-a path-l -- )
+```
+
+Index must be in range `0..count`.  When `index = count`, behaves
+identically to append.  Sets `ST-E-BAD-INDEX` on out-of-bounds.
+
+### Internal helper
+
+```forth
+: _ST-INSERT-AT  ( new-node ref-node parent -- )
+```
+
+Links `new-node` before `ref-node` in the parent's doubly-linked
+child chain, updating prev/next pointers and `SN.FCHILD` if needed.
+
+### Example
+
+```forth
+10 S" v" ST-ARRAY-APPEND-INT
+30 S" v" ST-ARRAY-APPEND-INT
+20 1 S" v" ST-ARRAY-INSERT-INT
+
+S" v" 0 ST-ARRAY-NTH ST-GET-INT .   \ 10
+S" v" 1 ST-ARRAY-NTH ST-GET-INT .   \ 20
+S" v" 2 ST-ARRAY-NTH ST-GET-INT .   \ 30
+```
+
+---
+
+## Journal Resize
+
+The journal defaults to 128 entries.  `ST-JRNL-SIZE!` resizes it,
+preserving existing entries up to the new capacity.
+
+```forth
+: ST-JRNL-SIZE!  ( new-max -- )
+```
+
+Allocates a new journal slab from the arena, copies existing entries
+(most-recent-first, up to `min(count, new-max)`), and updates the
+descriptor.  A `new-max` less than 1 is a no-op.
+
+### Example
+
+```forth
+500 ST-JRNL-SIZE!
+ST-DOC SD.JRNL-MAX @ .   \ 500
+```
+
+---
+
+## Schema Validation
+
+Schemas are stored as ordinary state-tree nodes under the `_schema`
+path prefix.  No special schema API is needed to **define**
+constraints — use the standard path setters.
+
+### Constraint keys
+
+| Key | Type | Checks |
+|---|---|---|
+| `type` | string | Value type matches: `"integer"`, `"string"`, `"boolean"`, `"float"`, `"null"`, `"array"`, `"object"` |
+| `min` | integer | Integer value ≥ min |
+| `max` | integer | Integer value ≤ max |
+| `min-length` | integer | String length ≥ min-length |
+| `max-length` | integer | String length ≤ max-length |
+| `read-only` | integer (boolean) | If true, sets `ST-F-READONLY` flag on the node |
+
+### Defining a schema
+
+```forth
+S" integer" S" _schema.user.age.type" ST-SET-PATH-STR
+0           S" _schema.user.age.min"  ST-SET-PATH-INT
+150         S" _schema.user.age.max"  ST-SET-PATH-INT
+```
+
+### Validation API
+
+```forth
+: ST-VALIDATE  ( path-a path-l -- flag )
+```
+
+Returns true (non-zero) if the node at `path` satisfies all
+constraints defined under `_schema.<path>.*`.  Returns false and sets
+`ST-E-SCHEMA` (8) on failure.  Returns true if no constraints exist.
+
+### Error code
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `ST-E-SCHEMA` | 8 | Schema validation failed |
+
+### Example
+
+```forth
+42 S" user.age" ST-SET-PATH-INT
+S" integer" S" _schema.user.age.type" ST-SET-PATH-STR
+0           S" _schema.user.age.min"  ST-SET-PATH-INT
+150         S" _schema.user.age.max"  ST-SET-PATH-INT
+
+S" user.age" ST-VALIDATE IF ." valid" ELSE ." invalid" THEN
+\ prints: valid
+
+200 S" user.age" ST-SET-PATH-INT
+S" user.age" ST-VALIDATE IF ." valid" ELSE ." invalid" THEN
+\ prints: invalid  (200 > max 150)
+```
+
+---
+
+## Snapshot / Restore
+
+Capture the full arena state for undo/rollback.  The snapshot is
+stored in a 64 KB static buffer (`_ST-SNAP-BUF`).
+
+```forth
+: ST-SNAPSHOT  ( -- snap-addr snap-len )
+: ST-RESTORE   ( snap-addr snap-len -- )
+```
+
+`ST-SNAPSHOT` copies the arena region (from base to string pointer)
+into the static buffer and returns its address and length.
+
+`ST-RESTORE` copies a snapshot back over the arena and updates the
+string pointer.
+
+> **Limitation:** Only one snapshot at a time (single static buffer).
+> Arena must be ≤ 64 KB.
+
+### Example
+
+```forth
+42 S" x" ST-SET-PATH-INT
+ST-SNAPSHOT                     \ save state
+99 S" x" ST-SET-PATH-INT       \ mutate
+ST-RESTORE                      \ rollback
+S" x" ST-GET-PATH ST-GET-INT .  \ 42
+```
+
+---
+
+## Computed Values (Stubs)
+
+Forward declarations for computed values.  Full evaluation linkage
+is deferred to Phase 2 (LEL alignment) when array function support
+is available.
+
+```forth
+4 CONSTANT ST-F-COMPUTED    \ flag bit on node
+
+: ST-COMPUTED?  ( node -- flag )
+: ST-COMPUTED!  ( expr-a expr-l path-a path-l -- )
+```
+
+`ST-COMPUTED!` stores the expression string at the path and sets the
+`ST-F-COMPUTED` flag bit.  `ST-COMPUTED?` tests for that flag.
+
+The `_ST-COMPUTE-XT` variable holds the execution token for the
+expression evaluator (defaults to `NOOP`).
+
+---
+
+## Subscriptions
+
+Path-hashed callback table.  When `_ST-NOTIFY` is called with a
+path, all active subscriptions whose path hash matches are fired.
+
+```forth
+: ST-SUBSCRIBE    ( path-a path-l xt -- sub-id )
+: ST-UNSUBSCRIBE  ( sub-id -- )
+: _ST-NOTIFY      ( path-a path-l -- )
+```
+
+Up to 64 simultaneous subscriptions (`_ST-SUB-MAX`).  Each entry
+stores an FNV-1a hash of the path, the xt, and an active flag.
+
+`ST-SUBSCRIBE` returns a subscription ID (0-based).  Returns -1 if
+the table is full.
+
+`ST-UNSUBSCRIBE` deactivates the entry by ID.
+
+`_ST-NOTIFY` is an internal word — surface layers call it after
+mutations to trigger callbacks.
+
+### Example
+
+```forth
+: my-handler  ." state changed!" CR ;
+S" user.settings" ' my-handler ST-SUBSCRIBE CONSTANT my-sub
+
+S" user.settings" _ST-NOTIFY   \ prints: state changed!
+
+my-sub ST-UNSUBSCRIBE
+S" user.settings" _ST-NOTIFY   \ (silence)
+```
+
+---
+
 ## Quick Reference
 
 ### Lifecycle
@@ -487,6 +733,8 @@ ST-JOURNAL-COUNT .    \ 1
 | `ST-ARRAY-COUNT` | `( path-a path-l -- n )` |
 | `ST-ARRAY-NTH` | `( path-a path-l n -- node\|0 )` |
 | `ST-ARRAY-REMOVE` | `( path-a path-l n -- )` |
+| `ST-ARRAY-INSERT-INT` | `( n index path-a path-l -- )` |
+| `ST-ARRAY-INSERT-STR` | `( str-a str-l index path-a path-l -- )` |
 
 ### Journal
 
@@ -496,6 +744,40 @@ ST-JOURNAL-COUNT .    \ 1
 | `ST-JOURNAL-SEQ` | `( -- n )` |
 | `ST-JOURNAL-COUNT` | `( -- n )` |
 | `ST-JOURNAL-NTH` | `( n -- addr\|0 )` |
+| `ST-JRNL-SIZE!` | `( new-max -- )` |
+
+### Merge
+
+| Word | Stack |
+|---|---|
+| `ST-MERGE` | `( src-path-a src-path-l dst-path-a dst-path-l -- )` |
+
+### Schema
+
+| Word | Stack |
+|---|---|
+| `ST-VALIDATE` | `( path-a path-l -- flag )` |
+
+### Snapshot
+
+| Word | Stack |
+|---|---|
+| `ST-SNAPSHOT` | `( -- snap-addr snap-len )` |
+| `ST-RESTORE` | `( snap-addr snap-len -- )` |
+
+### Computed Values
+
+| Word | Stack |
+|---|---|
+| `ST-COMPUTED?` | `( node -- flag )` |
+| `ST-COMPUTED!` | `( expr-a expr-l path-a path-l -- )` |
+
+### Subscriptions
+
+| Word | Stack |
+|---|---|
+| `ST-SUBSCRIBE` | `( path-a path-l xt -- sub-id )` |
+| `ST-UNSUBSCRIBE` | `( sub-id -- )` |
 
 ---
 
@@ -520,6 +802,11 @@ code.
 | `_ST-CLEAR-CHILDREN` | `( node -- )` | Destroy all children of a container node |
 | `_ST-SPLIT-DOT` | `( path-a path-l -- first-a first-l rest-a rest-l flag )` | Split path at first `.` |
 | `_ST-JRNL-ENTRY-ADDR` | `( idx -- addr )` | Address of journal entry by index |
+| `_ST-COPY-VALUE` | `( src-node dst-node -- )` | Copy scalar value between nodes (type-dispatched) |
+| `_ST-INSERT-AT` | `( new-node ref-node parent -- )` | Link new node before ref in doubly-linked child chain |
+| `_ST-SCHEMA-PATH` | `( path-a path-l suffix-a suffix-l -- addr len )` | Build `_schema.<path>.<suffix>` in scratch buffer |
+| `_ST-FNV1A` | `( addr len -- hash )` | FNV-1a hash of a byte string |
+| `_ST-NOTIFY` | `( path-a path-l -- )` | Fire matching subscription callbacks |
 
 ---
 

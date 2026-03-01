@@ -626,3 +626,405 @@ VARIABLE _STJ-NV
     ST-DOC SD.JRNL-POS @ 1- SWAP -
     DUP 0< IF ST-DOC SD.JRNL-MAX @ + THEN
     _ST-JRNL-ENTRY-ADDR ;
+
+\ =====================================================================
+\  Gap 1.1 — ST-MERGE  (shallow object merge)
+\ =====================================================================
+
+VARIABLE _STM-SRC
+VARIABLE _STM-DST
+VARIABLE _STM-CH
+VARIABLE _STM-NA
+VARIABLE _STM-NL
+VARIABLE _STM-TY
+
+: _ST-COPY-VALUE  ( src-node dst-node -- )
+    SWAP DUP SN.TYPE @ _STM-TY !
+    _STM-TY @ ST-T-INTEGER = IF
+        SN.VAL1 @ SWAP ST-SET-INT EXIT
+    THEN
+    _STM-TY @ ST-T-BOOLEAN = IF
+        SN.VAL1 @ SWAP ST-SET-BOOL EXIT
+    THEN
+    _STM-TY @ ST-T-STRING = IF
+        DUP SN.VAL1 @ SWAP SN.VAL2 @
+        ROT ST-SET-STR EXIT
+    THEN
+    _STM-TY @ ST-T-FLOAT = IF
+        SN.VAL1 @ SWAP ST-SET-FLOAT EXIT
+    THEN
+    _STM-TY @ ST-T-NULL = IF
+        DROP ST-SET-NULL EXIT
+    THEN
+    \ array/object: skip (shallow merge)
+    2DROP ;
+
+: ST-MERGE  ( src-path-a src-path-l dst-path-a dst-path-l -- )
+    ST-CLEAR-ERR
+    2>R
+    ST-NAVIGATE DUP 0= IF
+        2R> 2DROP ST-E-NOT-FOUND ST-FAIL EXIT
+    THEN
+    DUP SN.TYPE @ ST-T-OBJECT <> IF
+        DROP 2R> 2DROP ST-E-TYPE ST-FAIL EXIT
+    THEN
+    _STM-SRC !
+    2R> ST-NAVIGATE DUP 0= IF
+        DROP ST-E-NOT-FOUND ST-FAIL EXIT
+    THEN
+    DUP SN.TYPE @ ST-T-OBJECT <> IF
+        DROP ST-E-TYPE ST-FAIL EXIT
+    THEN
+    _STM-DST !
+    \ iterate source children
+    _STM-SRC @ SN.FCHILD @
+    BEGIN DUP 0<> WHILE
+        _STM-CH !
+        _STM-CH @ SN.NAMEA @ _STM-NA !
+        _STM-CH @ SN.NAMEL @ _STM-NL !
+        _STM-CH @ SN.TYPE @  _STM-TY !
+        \ ensure child in dst with matching type
+        _STM-DST @  _STM-NA @ _STM-NL @  _STM-TY @  _ST-ENSURE-CHILD
+        DUP 0= IF DROP EXIT THEN
+        \ copy value
+        _STM-CH @ SWAP _ST-COPY-VALUE
+        _STM-CH @ SN.NEXT @
+    REPEAT DROP ;
+
+\ =====================================================================
+\  Gap 1.2 — Array insertion
+\ =====================================================================
+
+VARIABLE _STI-ARR
+VARIABLE _STI-ND
+VARIABLE _STI-REF
+
+VARIABLE _STLB-N   \ new node
+VARIABLE _STLB-R   \ ref node
+VARIABLE _STLB-P   \ parent
+
+: _ST-INSERT-AT  ( new-node ref-node parent -- )
+    _STLB-P !  _STLB-R !  _STLB-N !
+    \ set new.parent
+    _STLB-P @ _STLB-N @ SN.PARENT !
+    \ set new.next = ref
+    _STLB-R @ _STLB-N @ SN.NEXT !
+    \ set new.prev = ref.prev
+    _STLB-R @ SN.PREV @ _STLB-N @ SN.PREV !
+    \ if ref had a prev, prev.next = new
+    _STLB-R @ SN.PREV @ ?DUP IF
+        _STLB-N @ SWAP SN.NEXT !
+    ELSE
+        \ ref was first child: parent.fchild = new
+        _STLB-N @ _STLB-P @ SN.FCHILD !
+    THEN
+    \ ref.prev = new
+    _STLB-N @ _STLB-R @ SN.PREV !
+    \ bump child count
+    1 _STLB-P @ SN.NCHILD +! ;
+
+: ST-ARRAY-INSERT-INT  ( n index path-a path-l -- )
+    ST-CLEAR-ERR
+    ST-ENSURE-ARRAY
+    DUP 0= IF DROP 2DROP EXIT THEN
+    _STI-ARR !
+    \ validate index: 0 <= idx <= count
+    DUP _STI-ARR @ SN.NCHILD @ > IF
+        DROP DROP ST-E-BAD-INDEX ST-FAIL EXIT
+    THEN
+    DUP _STI-ARR @ SN.NCHILD @ = IF
+        \ index == count: append
+        DROP
+        _STI-ARR @ SWAP >R
+        _ST-ALLOC DUP 0= IF R> DROP DROP EXIT THEN
+        R> OVER ST-SET-INT
+        SWAP _ST-APPEND-CHILD
+        EXIT
+    THEN
+    \ find ref node at index
+    _STI-ARR @ SWAP _ST-INDEX-CHILD
+    DUP 0= IF DROP DROP ST-E-BAD-INDEX ST-FAIL EXIT THEN
+    _STI-REF !
+    \ alloc new node, set value
+    _ST-ALLOC DUP 0= IF DROP EXIT THEN
+    _STI-ND !
+    _STI-ND @ ST-SET-INT
+    \ insert before ref
+    _STI-ND @ _STI-REF @ _STI-ARR @ _ST-INSERT-AT ;
+
+: ST-ARRAY-INSERT-STR  ( str-a str-l index path-a path-l -- )
+    ST-CLEAR-ERR
+    ST-ENSURE-ARRAY
+    DUP 0= IF DROP DROP 2DROP EXIT THEN
+    _STI-ARR !
+    DUP _STI-ARR @ SN.NCHILD @ > IF
+        DROP DROP 2DROP ST-E-BAD-INDEX ST-FAIL EXIT
+    THEN
+    DUP _STI-ARR @ SN.NCHILD @ = IF
+        \ append
+        DROP
+        _STI-ARR @ >R
+        _ST-ALLOC DUP 0= IF R> DROP 2DROP EXIT THEN
+        DUP >R -ROT R> ST-SET-STR
+        R> _ST-APPEND-CHILD
+        EXIT
+    THEN
+    _STI-ARR @ SWAP _ST-INDEX-CHILD
+    DUP 0= IF DROP 2DROP ST-E-BAD-INDEX ST-FAIL EXIT THEN
+    _STI-REF !
+    _ST-ALLOC DUP 0= IF 2DROP EXIT THEN
+    _STI-ND !
+    _STI-ND @ ST-SET-STR
+    _STI-ND @ _STI-REF @ _STI-ARR @ _ST-INSERT-AT ;
+
+\ =====================================================================
+\  Gap 1.3 — Journal resize
+\ =====================================================================
+
+VARIABLE _STJR-OLD
+VARIABLE _STJR-NEW
+VARIABLE _STJR-I
+VARIABLE _STJR-SRC
+VARIABLE _STJR-DST
+
+: ST-JRNL-SIZE!  ( new-max -- )
+    DUP 1 < IF DROP EXIT THEN
+    _STJR-NEW !
+    ST-DOC SD.JRNL-MAX @ _STJR-OLD !
+    \ allot new slab from arena
+    ST-DOC SD.ARENA @
+    _STJR-NEW @ _ST-JRNL-ENTRY * ARENA-ALLOT
+    _STJR-DST !
+    \ copy existing entries (up to min of old-cnt, new-max)
+    ST-DOC SD.JRNL-CNT @  _STJR-NEW @ MIN
+    _STJR-I !
+    _STJR-I @ 0 ?DO
+        I ST-JOURNAL-NTH DUP 0<> IF
+            _STJR-DST @ I _ST-JRNL-ENTRY * +
+            _ST-JRNL-ENTRY CMOVE
+        ELSE
+            DROP
+        THEN
+    LOOP
+    \ update descriptor
+    _STJR-DST @  ST-DOC SD.JRNL-BASE !
+    _STJR-NEW @  ST-DOC SD.JRNL-MAX !
+    _STJR-I @    ST-DOC SD.JRNL-CNT !
+    _STJR-I @    ST-DOC SD.JRNL-POS !  ;
+
+\ =====================================================================
+\  Gap 1.4 — Schema validation
+\ =====================================================================
+\
+\  Schemas are stored under the _schema path prefix using the normal
+\  state-tree path setters.  For example, to constrain user.age:
+\
+\    S" integer" S" _schema.user.age.type" ST-SET-PATH-STR
+\    0           S" _schema.user.age.min"  ST-SET-PATH-INT
+\    150         S" _schema.user.age.max"  ST-SET-PATH-INT
+\
+\  ST-VALIDATE checks these constraints.
+
+8 CONSTANT ST-E-SCHEMA     \ schema validation error
+
+CREATE _STV-BUF 256 ALLOT    \ path construction buffer
+VARIABLE _STV-LEN
+
+: _STV-RESET  0 _STV-LEN ! ;
+
+: _STV-APPEND  ( addr len -- )
+    DUP _STV-LEN @ + 255 > IF 2DROP EXIT THEN
+    _STV-BUF _STV-LEN @ + SWAP CMOVE
+    _STV-LEN +! ;
+
+: _STV-PATH  ( -- addr len )  _STV-BUF _STV-LEN @ ;
+
+: _ST-SCHEMA-PATH  ( path-a path-l suffix-a suffix-l -- addr len )
+    2>R 2>R
+    _STV-RESET
+    S" _schema." _STV-APPEND
+    2R> _STV-APPEND
+    S" ." _STV-APPEND
+    2R> _STV-APPEND
+    _STV-PATH ;
+
+VARIABLE _STV-NODE
+VARIABLE _STV-ERR
+
+: ST-VALIDATE  ( path-a path-l -- flag )
+    ST-CLEAR-ERR
+    0 _STV-ERR !
+    2DUP ST-NAVIGATE DUP 0= IF
+        DROP 2DROP ST-E-NOT-FOUND ST-FAIL 0 EXIT
+    THEN
+    _STV-NODE !
+    \ Check type constraint
+    2DUP S" type" _ST-SCHEMA-PATH
+    ST-NAVIGATE DUP 0<> IF
+        \ schema node has type string, compare with actual
+        DUP SN.TYPE @ ST-T-STRING = IF
+            ST-GET-STR                   ( path-a path-l schema-str-a schema-str-l )
+            _STV-NODE @ SN.TYPE @
+            DUP ST-T-INTEGER = IF DROP S" integer" ELSE
+            DUP ST-T-STRING  = IF DROP S" string"  ELSE
+            DUP ST-T-BOOLEAN = IF DROP S" boolean" ELSE
+            DUP ST-T-FLOAT   = IF DROP S" float"   ELSE
+            DUP ST-T-NULL    = IF DROP S" null"    ELSE
+            DUP ST-T-ARRAY   = IF DROP S" array"   ELSE
+            DUP ST-T-OBJECT  = IF DROP S" object"  ELSE
+                DROP S" unknown"
+            THEN THEN THEN THEN THEN THEN THEN
+            STR-STR= 0= IF 1 _STV-ERR ! THEN
+        ELSE DROP THEN
+    ELSE DROP THEN
+    \ Check min constraint (integer/float)
+    2DUP S" min" _ST-SCHEMA-PATH
+    ST-NAVIGATE DUP 0<> IF
+        _STV-NODE @ SN.TYPE @ ST-T-INTEGER = IF
+            ST-GET-INT _STV-NODE @ ST-GET-INT
+            < IF 1 _STV-ERR ! THEN
+        ELSE DROP THEN
+    ELSE DROP THEN
+    \ Check max constraint
+    2DUP S" max" _ST-SCHEMA-PATH
+    ST-NAVIGATE DUP 0<> IF
+        _STV-NODE @ SN.TYPE @ ST-T-INTEGER = IF
+            ST-GET-INT _STV-NODE @ ST-GET-INT
+            > IF 1 _STV-ERR ! THEN
+        ELSE DROP THEN
+    ELSE DROP THEN
+    \ Check min-length (string)
+    2DUP S" min-length" _ST-SCHEMA-PATH
+    ST-NAVIGATE DUP 0<> IF
+        _STV-NODE @ SN.TYPE @ ST-T-STRING = IF
+            ST-GET-INT _STV-NODE @ SN.VAL2 @
+            > IF 1 _STV-ERR ! THEN
+        ELSE DROP THEN
+    ELSE DROP THEN
+    \ Check max-length (string)
+    2DUP S" max-length" _ST-SCHEMA-PATH
+    ST-NAVIGATE DUP 0<> IF
+        _STV-NODE @ SN.TYPE @ ST-T-STRING = IF
+            ST-GET-INT _STV-NODE @ SN.VAL2 @
+            < IF 1 _STV-ERR ! THEN
+        ELSE DROP THEN
+    ELSE DROP THEN
+    \ Check read-only flag
+    2DUP S" read-only" _ST-SCHEMA-PATH
+    ST-NAVIGATE DUP 0<> IF
+        ST-GET-INT 0<> IF
+            _STV-NODE @ SN.FLAGS @ ST-F-READONLY OR
+            _STV-NODE @ SN.FLAGS !
+        THEN
+    ELSE DROP THEN
+    2DROP
+    _STV-ERR @ 0= IF 1 ELSE ST-E-SCHEMA ST-FAIL 0 THEN ;
+
+\ =====================================================================
+\  Gap 1.5 — Snapshot / Restore
+\ =====================================================================
+\
+\  Snapshots copy the full arena region into XMEM.
+\  Uses ARENA-ALLOT on a separate temp arena.
+
+CREATE _ST-SNAP-BUF 65536 ALLOT
+VARIABLE _ST-SNAP-LEN
+
+: ST-SNAPSHOT  ( -- snap-addr snap-len )
+    \ Calculate used region: from arena base to str-ptr
+    ST-DOC SD.ARENA @ A.BASE @    ( base )
+    ST-DOC SD.STR-PTR @           ( base str-ptr )
+    OVER -                        ( base len )
+    DUP _ST-SNAP-LEN !
+    DUP 65536 > ABORT" snapshot too large"
+    \ Copy arena region into static buffer
+    >R  _ST-SNAP-BUF R@ CMOVE    ( ; src=base dst=buf len=R )
+    R>
+    _ST-SNAP-BUF SWAP ;
+
+: ST-RESTORE  ( snap-addr snap-len -- )
+    >R                             ( snap-a ; R: len )
+    ST-DOC SD.ARENA @ A.BASE @    ( snap-a base )
+    R@ CMOVE                      ( )
+    \ Adjust str-ptr
+    ST-DOC SD.ARENA @ A.BASE @  R> +
+    ST-DOC SD.STR-PTR ! ;
+
+\ =====================================================================
+\  Gap 1.6 — Computed value stubs
+\ =====================================================================
+
+4 CONSTANT ST-F-COMPUTED    \ node has a computed expression
+
+VARIABLE _ST-COMPUTE-XT
+' NOOP _ST-COMPUTE-XT !
+
+: ST-COMPUTED?  ( node -- flag )
+    SN.FLAGS @ ST-F-COMPUTED AND 0<> ;
+
+: ST-COMPUTED!  ( expr-a expr-l path-a path-l -- )
+    ST-CLEAR-ERR
+    ST-ENSURE-PATH
+    ST-OK? 0= IF 2DROP 2DROP EXIT THEN
+    ST-T-STRING _ST-ENSURE-CHILD
+    DUP 0= IF 2DROP EXIT THEN
+    DUP >R ST-SET-STR
+    R@ SN.FLAGS @ ST-F-COMPUTED OR R> SN.FLAGS ! ;
+
+\ =====================================================================
+\  Gap 1.7 — Subscriptions
+\ =====================================================================
+
+64 CONSTANT _ST-SUB-MAX
+CREATE _ST-SUB-TABLE  _ST-SUB-MAX 24 * ALLOT
+VARIABLE _ST-SUB-CNT
+0 _ST-SUB-CNT !
+
+\ Each entry: 24 bytes = 3 cells
+\   +0  path-hash (FNV-1a)
+\   +8  xt (execution token)
+\   +16 active flag (0 or 1)
+
+: _ST-SUB-ENTRY  ( idx -- addr )  24 * _ST-SUB-TABLE + ;
+
+: _ST-FNV1A  ( addr len -- hash )
+    2166136261 -ROT     ( hash addr len )
+    0 ?DO               ( hash addr )
+        OVER I + C@     ( hash addr byte )
+        ROT XOR         ( addr hash' )
+        16777619 *      ( addr hash'' )
+        SWAP            ( hash addr )
+    LOOP
+    DROP ;
+
+: ST-SUBSCRIBE  ( path-a path-l xt -- sub-id )
+    >R
+    _ST-FNV1A          ( hash ; R: xt )
+    _ST-SUB-CNT @ _ST-SUB-MAX >= IF
+        DROP R> DROP -1 EXIT
+    THEN
+    _ST-SUB-CNT @ _ST-SUB-ENTRY
+    OVER SWAP !                 ( hash ; entry.hash = hash )
+    _ST-SUB-CNT @ _ST-SUB-ENTRY 8 +
+    R> SWAP !                   ( ; entry.xt = xt )
+    _ST-SUB-CNT @ _ST-SUB-ENTRY 16 +
+    1 SWAP !                    ( ; entry.active = 1 )
+    _ST-SUB-CNT @
+    1 _ST-SUB-CNT +!  ;
+
+: ST-UNSUBSCRIBE  ( sub-id -- )
+    DUP 0< IF DROP EXIT THEN
+    DUP _ST-SUB-CNT @ >= IF DROP EXIT THEN
+    _ST-SUB-ENTRY 16 + 0 SWAP ! ;
+
+: _ST-NOTIFY  ( path-a path-l -- )
+    2DUP _ST-FNV1A          ( path-a path-l hash )
+    _ST-SUB-CNT @ 0 ?DO
+        I _ST-SUB-ENTRY     ( path-a path-l hash entry )
+        DUP 16 + @ 0<> IF   ( active? )
+            DUP @ 3 PICK = IF  ( hash matches? )
+                8 + @ EXECUTE
+            ELSE DROP THEN
+        ELSE DROP THEN
+    LOOP
+    DROP 2DROP ;

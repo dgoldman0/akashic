@@ -772,6 +772,342 @@ def test_float():
     ], '0')
 
 # ---------------------------------------------------------------------------
+#  Tests — Stage 5: ST-MERGE (Gap 1.1)
+# ---------------------------------------------------------------------------
+
+def test_merge():
+    """ST-MERGE shallow merges source object into destination object."""
+
+    check("merge-disjoint", [
+        'T-INIT',
+        '1 S" src.x" ST-SET-PATH-INT',
+        '2 S" src.y" ST-SET-PATH-INT',
+        '3 S" dst.z" ST-SET-PATH-INT',
+        'S" src" S" dst" ST-MERGE',
+        'ST-OK? IF 1 ELSE 0 THEN . CR',
+        'S" dst.x" ST-GET-PATH ST-GET-INT . CR',
+        'S" dst.y" ST-GET-PATH ST-GET-INT . CR',
+        'S" dst.z" ST-GET-PATH ST-GET-INT . CR',
+    ], check_fn=lambda t: '1' in t and '2' in t and '3' in t)
+
+    check("merge-overlap", [
+        'T-INIT',
+        '10 S" src.a" ST-SET-PATH-INT',
+        '99 S" dst.a" ST-SET-PATH-INT',
+        'S" src" S" dst" ST-MERGE',
+        'S" dst.a" ST-GET-PATH ST-GET-INT . CR',
+    ], '10')
+
+    check("merge-into-empty", [
+        'T-INIT',
+        '42 S" src.val" ST-SET-PATH-INT',
+        # ensure dst exists as empty object
+        'S" dst" ST-NAVIGATE 0= IF',
+        '  ST-ROOT S" dst" ST-T-OBJECT _ST-ENSURE-CHILD DROP',
+        'THEN',
+        'S" src" S" dst" ST-MERGE',
+        'S" dst.val" ST-GET-PATH ST-GET-INT . CR',
+    ], '42')
+
+    check("merge-from-non-object", [
+        'T-INIT',
+        '42 S" src" ST-SET-PATH-INT',
+        'S" dst" ST-NAVIGATE 0= IF',
+        '  ST-ROOT S" dst" ST-T-OBJECT _ST-ENSURE-CHILD DROP',
+        'THEN',
+        'S" src" S" dst" ST-MERGE',
+        'ST-OK? IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+    check("merge-from-nonexistent", [
+        'T-INIT',
+        'S" dst" ST-NAVIGATE 0= IF',
+        '  ST-ROOT S" dst" ST-T-OBJECT _ST-ENSURE-CHILD DROP',
+        'THEN',
+        'S" nope" S" dst" ST-MERGE',
+        'ST-OK? IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+# ---------------------------------------------------------------------------
+#  Tests — Stage 5: Array insertion (Gap 1.2)
+# ---------------------------------------------------------------------------
+
+def test_array_insert():
+    """ST-ARRAY-INSERT-INT / ST-ARRAY-INSERT-STR."""
+
+    check("insert-at-beginning", [
+        'T-INIT',
+        '10 S" v" ST-ARRAY-APPEND-INT',
+        '20 S" v" ST-ARRAY-APPEND-INT',
+        '99 0 S" v" ST-ARRAY-INSERT-INT',
+        'S" v" 0 ST-ARRAY-NTH ST-GET-INT . CR',
+    ], '99')
+
+    check("insert-at-end", [
+        'T-INIT',
+        '10 S" v" ST-ARRAY-APPEND-INT',
+        '20 S" v" ST-ARRAY-APPEND-INT',
+        '99 2 S" v" ST-ARRAY-INSERT-INT',
+        'S" v" 2 ST-ARRAY-NTH ST-GET-INT . CR',
+    ], '99')
+
+    check("insert-in-middle", [
+        'T-INIT',
+        '10 S" v" ST-ARRAY-APPEND-INT',
+        '30 S" v" ST-ARRAY-APPEND-INT',
+        '20 1 S" v" ST-ARRAY-INSERT-INT',
+        'S" v" 0 ST-ARRAY-NTH ST-GET-INT . S" v" 1 ST-ARRAY-NTH ST-GET-INT . S" v" 2 ST-ARRAY-NTH ST-GET-INT . CR',
+    ], '10 20 30')
+
+    check("insert-oob", [
+        'T-INIT',
+        '10 S" v" ST-ARRAY-APPEND-INT',
+        '99 5 S" v" ST-ARRAY-INSERT-INT',
+        'ST-OK? IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+    check("insert-str-middle", [
+        'T-INIT',
+        'S" alice" S" n" ST-ARRAY-APPEND-STR',
+        'S" charlie" S" n" ST-ARRAY-APPEND-STR',
+        'S" bob" 1 S" n" ST-ARRAY-INSERT-STR',
+        'S" n" 1 ST-ARRAY-NTH ST-GET-STR TYPE CR',
+    ], 'bob')
+
+# ---------------------------------------------------------------------------
+#  Tests — Stage 5: Journal resize (Gap 1.3)
+# ---------------------------------------------------------------------------
+
+def test_journal_resize():
+    """ST-JRNL-SIZE! resizes the journal."""
+
+    check("jrnl-resize-basic", [
+        'T-INIT',
+        '1 0 0 0 0 2 42 ST-JOURNAL-ADD',
+        '2 0 0 0 0 2 99 ST-JOURNAL-ADD',
+        '500 ST-JRNL-SIZE!',
+        'ST-DOC SD.JRNL-MAX @ . CR',
+    ], '500')
+
+    check("jrnl-resize-entries-survive", [
+        'T-INIT',
+        '1 0 0 0 0 2 42 ST-JOURNAL-ADD',
+        '2 0 0 0 0 2 99 ST-JOURNAL-ADD',
+        '500 ST-JRNL-SIZE!',
+        'ST-JOURNAL-COUNT . CR',
+    ], '2')
+
+    check("jrnl-resize-read-back", [
+        'T-INIT',
+        '1 0 0 0 0 2 42 ST-JOURNAL-ADD',
+        '500 ST-JRNL-SIZE!',
+        '0 ST-JOURNAL-NTH 64 + @ . CR',
+    ], '42')
+
+# ---------------------------------------------------------------------------
+#  Tests — Stage 5: Schema validation (Gap 1.4)
+# ---------------------------------------------------------------------------
+
+def test_schema():
+    """Schema validation via _schema prefix."""
+
+    check("schema-type-ok", [
+        'T-INIT',
+        '42 S" user.age" ST-SET-PATH-INT',
+        'S" integer" S" _schema.user.age.type" ST-SET-PATH-STR',
+        'S" user.age" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+    check("schema-type-reject", [
+        'T-INIT',
+        'S" hello" S" user.age" ST-SET-PATH-STR',
+        'S" integer" S" _schema.user.age.type" ST-SET-PATH-STR',
+        'S" user.age" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+    check("schema-min-ok", [
+        'T-INIT',
+        '10 S" x" ST-SET-PATH-INT',
+        'S" integer" S" _schema.x.type" ST-SET-PATH-STR',
+        '0 S" _schema.x.min" ST-SET-PATH-INT',
+        'S" x" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+    check("schema-min-reject", [
+        'T-INIT',
+        '-5 S" x" ST-SET-PATH-INT',
+        'S" integer" S" _schema.x.type" ST-SET-PATH-STR',
+        '0 S" _schema.x.min" ST-SET-PATH-INT',
+        'S" x" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+    check("schema-max-ok", [
+        'T-INIT',
+        '50 S" x" ST-SET-PATH-INT',
+        '100 S" _schema.x.max" ST-SET-PATH-INT',
+        'S" x" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+    check("schema-max-reject", [
+        'T-INIT',
+        '200 S" x" ST-SET-PATH-INT',
+        '100 S" _schema.x.max" ST-SET-PATH-INT',
+        'S" x" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+    check("schema-minlen-ok", [
+        'T-INIT',
+        'S" hello" S" name" ST-SET-PATH-STR',
+        '2 S" _schema.name.min-length" ST-SET-PATH-INT',
+        'S" name" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+    check("schema-minlen-reject", [
+        'T-INIT',
+        'S" a" S" name" ST-SET-PATH-STR',
+        '3 S" _schema.name.min-length" ST-SET-PATH-INT',
+        'S" name" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+    check("schema-maxlen-ok", [
+        'T-INIT',
+        'S" hi" S" name" ST-SET-PATH-STR',
+        '10 S" _schema.name.max-length" ST-SET-PATH-INT',
+        'S" name" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+    check("schema-maxlen-reject", [
+        'T-INIT',
+        'S" toolongstring" S" name" ST-SET-PATH-STR',
+        '5 S" _schema.name.max-length" ST-SET-PATH-INT',
+        'S" name" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+    check("schema-readonly-flag", [
+        'T-INIT',
+        '42 S" x" ST-SET-PATH-INT',
+        '1 S" _schema.x.read-only" ST-SET-PATH-INT',
+        'S" x" ST-VALIDATE DROP',
+        'S" x" ST-GET-PATH SN.FLAGS @ 2 AND 0<> IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+    check("schema-no-constraints", [
+        'T-INIT',
+        '42 S" x" ST-SET-PATH-INT',
+        'S" x" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+# ---------------------------------------------------------------------------
+#  Tests — Stage 5: Snapshot / Restore (Gap 1.5)
+# ---------------------------------------------------------------------------
+
+def test_snapshot():
+    """ST-SNAPSHOT / ST-RESTORE."""
+
+    check("snapshot-roundtrip", [
+        'T-INIT',
+        '42 S" x" ST-SET-PATH-INT',
+        'ST-SNAPSHOT',
+        '99 S" x" ST-SET-PATH-INT',
+        'ST-RESTORE',
+        'S" x" ST-GET-PATH ST-GET-INT . CR',
+    ], '42')
+
+    check("snapshot-empty-tree", [
+        'T-INIT',
+        'ST-SNAPSHOT',
+        '42 S" x" ST-SET-PATH-INT',
+        'ST-RESTORE',
+        'S" x" ST-GET-PATH . CR',
+    ], '0')
+
+    check("snapshot-multiple-values", [
+        'T-INIT',
+        '1 S" a" ST-SET-PATH-INT',
+        '2 S" b" ST-SET-PATH-INT',
+        'ST-SNAPSHOT',
+        '99 S" a" ST-SET-PATH-INT',
+        '99 S" b" ST-SET-PATH-INT',
+        'ST-RESTORE',
+        'S" a" ST-GET-PATH ST-GET-INT . S" b" ST-GET-PATH ST-GET-INT . CR',
+    ], '1 2')
+
+    check("snapshot-double-restore", [
+        'T-INIT',
+        '42 S" x" ST-SET-PATH-INT',
+        'ST-SNAPSHOT  VARIABLE _SA  VARIABLE _SL  _SL !  _SA !',
+        '99 S" x" ST-SET-PATH-INT',
+        '_SA @ _SL @ ST-RESTORE',
+        'S" x" ST-GET-PATH ST-GET-INT . _SA @ _SL @ ST-RESTORE S" x" ST-GET-PATH ST-GET-INT . CR',
+    ], '42 42')
+
+# ---------------------------------------------------------------------------
+#  Tests — Stage 5: Computed stubs (Gap 1.6)
+# ---------------------------------------------------------------------------
+
+def test_computed_stubs():
+    """ST-COMPUTED? / ST-COMPUTED!"""
+
+    check("computed-set-flag", [
+        'T-INIT',
+        'S" add(a,b)" S" result" ST-COMPUTED!',
+        'S" result" ST-GET-PATH ST-COMPUTED? IF 1 ELSE 0 THEN . CR',
+    ], '1')
+
+    check("computed-normal-node", [
+        'T-INIT',
+        '42 S" x" ST-SET-PATH-INT',
+        'S" x" ST-GET-PATH ST-COMPUTED? IF 1 ELSE 0 THEN . CR',
+    ], '0')
+
+# ---------------------------------------------------------------------------
+#  Tests — Stage 5: Subscriptions (Gap 1.7)
+# ---------------------------------------------------------------------------
+
+def test_subscriptions():
+    """ST-SUBSCRIBE / ST-UNSUBSCRIBE / _ST-NOTIFY."""
+
+    check("subscribe-returns-id", [
+        'T-INIT',
+        "S\" test\" ' NOOP ST-SUBSCRIBE . CR",
+    ], '0')
+
+    check("subscribe-second-id", [
+        'T-INIT',
+        "S\" a\" ' NOOP ST-SUBSCRIBE DROP",
+        "S\" b\" ' NOOP ST-SUBSCRIBE . CR",
+    ], '1')
+
+    check("notify-fires-callback", [
+        'T-INIT',
+        'VARIABLE _FIRED  0 _FIRED !',
+        ': MY-CB  1 _FIRED ! ;',
+        "S\" x\" ' MY-CB ST-SUBSCRIBE DROP",
+        'S" x" _ST-NOTIFY',
+        '_FIRED @ . CR',
+    ], '1')
+
+    check("notify-wrong-path-no-fire", [
+        'T-INIT',
+        'VARIABLE _FIRED  0 _FIRED !',
+        ': MY-CB  1 _FIRED ! ;',
+        "S\" x\" ' MY-CB ST-SUBSCRIBE DROP",
+        'S" y" _ST-NOTIFY',
+        '_FIRED @ . CR',
+    ], '0')
+
+    check("unsubscribe-no-fire", [
+        'T-INIT',
+        'VARIABLE _FIRED  0 _FIRED !',
+        ': MY-CB  1 _FIRED ! ;',
+        "S\" x\" ' MY-CB ST-SUBSCRIBE",
+        'ST-UNSUBSCRIBE',
+        'S" x" _ST-NOTIFY',
+        '_FIRED @ . CR',
+    ], '0')
+
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -794,6 +1130,13 @@ def main():
         ("Journal", test_journal),
         ("Type Overwrite", test_type_overwrite),
         ("Float (FP32)", test_float),
+        ("Merge (1.1)", test_merge),
+        ("Array Insert (1.2)", test_array_insert),
+        ("Journal Resize (1.3)", test_journal_resize),
+        ("Schema (1.4)", test_schema),
+        ("Snapshot (1.5)", test_snapshot),
+        ("Computed Stubs (1.6)", test_computed_stubs),
+        ("Subscriptions (1.7)", test_subscriptions),
     ]
 
     for label, fn in groups:
