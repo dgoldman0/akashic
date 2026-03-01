@@ -872,6 +872,8 @@ note A1 (55 Hz) = 802 samples × 2 bytes ≈ 1.6 KiB.
 
 ## Tier 5 — Sequencing & Format
 
+**Status: ✅ COMPLETE** — wav.f (363 lines), seq.f (352 lines), midi.f (371 lines).  39/39 tests passing.
+
 ### 5.1 audio/wav.f — WAV/RIFF Codec
 
 ```
@@ -1425,7 +1427,7 @@ REQUIRE audio/midi.f
 60 100 4  0 my-seq SEQ-STEP!     \ step 0: C4, vel 100, gate 4
 64 100 4  4 my-seq SEQ-STEP!     \ step 4: E4
 67 100 4  8 my-seq SEQ-STEP!     \ step 8: G4
-' my-note-handler my-seq SEQ-CALLBACK!
+['] my-note-handler my-seq SEQ-CALLBACK!
 my-seq SEQ-START
 ```
 
@@ -1454,8 +1456,8 @@ sensor-data 64 SCALE-PENTATONIC 100 44100 D2T-SONIFY SPK-WRITE
 | 3 Analysis | analysis.f | ~400 |
 | 4 Synthesis | synth.f, fm.f, pluck.f | ~500 |
 | 4b Voice Mgmt | poly.f, porta.f | ~300 |
-| 5 I/O & Codec | speaker.f, mic.f, wav.f | ~400 |
-| 6 Sequencing | seq.f, midi.f | ~350 |
+| 5 I/O & Codec | speaker.f, mic.f, wav.f | ~400 (wav.f: 363 ✅) |
+| 6 Sequencing | seq.f, midi.f | ~350 (seq: 352, midi: 371 ✅) |
 | 7 Sonification | param-map.f, data2tone.f, earcon.f, scene2audio.f | ~500 |
 | **Total** | **22 files** | **~4,500** |
 
