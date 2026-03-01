@@ -1104,6 +1104,378 @@ def test_complete_document():
           check_fn=lambda o: int(o.split('\n')[-1].strip()) >= 20)
 
 # =====================================================================
+#  Phase 3 Tests
+# =====================================================================
+
+# --- Validation documents ---
+
+DOC_VALID = (
+    '<uidl>'
+    '<region id="r1" arrange="flex" />'
+    '<label id="lbl1" text="hi" />'
+    '</uidl>'
+)
+
+DOC_BAD_ID = (
+    '<uidl>'
+    '<label id="1bad" text="oops" />'
+    '</uidl>'
+)
+
+DOC_BAD_ID2 = (
+    '<uidl>'
+    '<label id="has space" text="oops" />'
+    '</uidl>'
+)
+
+DOC_BAD_BIND = (
+    '<uidl>'
+    '<label id="b1" bind="=123bad" />'
+    '</uidl>'
+)
+
+DOC_BAD_WHEN = (
+    '<uidl>'
+    '<label id="w1" when="=@#$" />'
+    '</uidl>'
+)
+
+DOC_COLL_NO_TPL = (
+    '<uidl>'
+    '<collection id="c1">'
+    '  <label id="x1" text="no template here" />'
+    '</collection>'
+    '</uidl>'
+)
+
+DOC_EXCL_CONFLICT = (
+    '<uidl>'
+    '<action id="act1" on-activate="do" emit="ev" />'
+    '</uidl>'
+)
+
+DOC_MULTI_ERR = (
+    '<uidl>'
+    '<label id="1bad" when="=@#$" />'
+    '<action id="act1" on-activate="do" emit="ev" />'
+    '</uidl>'
+)
+
+# --- Mutation documents ---
+
+DOC_MUT = (
+    '<uidl>'
+    '<group id="g1">'
+    '  <label id="l1" text="first" />'
+    '  <label id="l2" text="second" />'
+    '</group>'
+    '</uidl>'
+)
+
+# --- Action dispatch documents ---
+
+DOC_ACTIONS = (
+    '<uidl>'
+    '<action id="a-activate" on-activate="go" />'
+    '<action id="a-emit" emit="help" />'
+    '<action id="a-setState" set-state="ui.mode" />'
+    '<label id="no-action" text="plain" />'
+    '<action id="a-both" on-activate="go" emit="ev" />'
+    '</uidl>'
+)
+
+def test_validate():
+    """Gap 3.1 — UIDL-VALIDATE."""
+    print("\n── Validation ──\n")
+
+    # Valid document → 0 errors
+    check("validate: valid doc",
+          tstr(DOC_VALID) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE . CR'],
+          '0')
+
+    # Bad ID format (starts with digit)
+    check("validate: bad id format",
+          tstr(DOC_BAD_ID) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE 0> . CR'],
+          '-1')
+
+    check("validate: bad id rule=2",
+          tstr(DOC_BAD_ID) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE DROP',
+              '0 UIDL-ERROR-NTH DROP . CR'],
+          '2')
+
+    # Bad ID format (has space)
+    check("validate: bad id space",
+          tstr(DOC_BAD_ID2) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE 0> . CR'],
+          '-1')
+
+    # Bad bind path (starts with digit)
+    check("validate: bad bind path",
+          tstr(DOC_BAD_BIND) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE DROP',
+              '0 UIDL-ERROR-NTH DROP . CR'],
+          '3')
+
+    # Bad when expression
+    check("validate: bad when expr",
+          tstr(DOC_BAD_WHEN) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE DROP',
+              '0 UIDL-ERROR-NTH DROP . CR'],
+          '4')
+
+    # Collection without template
+    check("validate: coll no template",
+          tstr(DOC_COLL_NO_TPL) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE DROP',
+              '0 UIDL-ERROR-NTH DROP . CR'],
+          '5')
+
+    # on-activate + emit conflict
+    check("validate: excl conflict",
+          tstr(DOC_EXCL_CONFLICT) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE DROP',
+              '0 UIDL-ERROR-NTH DROP . CR'],
+          '8')
+
+    # Multiple errors
+    check("validate: multi errors",
+          tstr(DOC_MULTI_ERR) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE . CR'],
+          check_fn=lambda o: int(o.strip().split('\n')[-1].strip()) >= 2)
+
+    # Missing root → rule 10 error
+    check("validate: no root",
+          ['TR', 'TA UIDL-PARSE DROP',
+           'UIDL-VALIDATE DROP',
+           '0 UIDL-ERROR-NTH DROP . CR'],
+          '10')
+
+    # Error count / nth access
+    check("validate: error count",
+          tstr(DOC_EXCL_CONFLICT) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE DROP',
+              'UIDL-ERROR-COUNT . CR'],
+          '1')
+
+    # Errors clear
+    check("validate: errors clear",
+          tstr(DOC_EXCL_CONFLICT) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE DROP',
+              'UIDL-ERRORS-CLEAR',
+              'UIDL-ERROR-COUNT . CR'],
+          '0')
+
+    # Valid arrange values pass
+    check("validate: valid arranges",
+          tstr(DOC_ARRANGE) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE . CR'],
+          '0')
+
+    # Out-of-range nth → 0 0
+    check("validate: nth out of range",
+          tstr(DOC_VALID) + [
+              'TA UIDL-PARSE DROP',
+              'UIDL-VALIDATE DROP',
+              '99 UIDL-ERROR-NTH . . CR'],
+          '0 0')
+
+
+def test_mutation():
+    """Gap 3.2 — Document mutation API."""
+    print("\n── Mutation API ──\n")
+
+    setup = tstr(DOC_MUT) + ['TA UIDL-PARSE DROP']
+
+    # Add element
+    check("mutation: add elem",
+          setup + tstr('g1') + [
+              'TA UIDL-BY-ID UIDL-T-LABEL UIDL-ADD-ELEM 0<> . CR'],
+          '-1')
+
+    check("mutation: add elem parent nchild",
+          setup + tstr('g1') + [
+              'TA UIDL-BY-ID DUP UIDL-T-LABEL UIDL-ADD-ELEM DROP',
+              'UIDL-NCHILDREN . CR'],
+          '3')
+
+    # Remove element
+    check("mutation: remove elem",
+          setup + tstr('l2') + [
+              'TA UIDL-BY-ID UIDL-REMOVE-ELEM'] +
+          tstr('g1') + [
+              'TA UIDL-BY-ID UIDL-NCHILDREN . CR'],
+          '1')
+
+    # Remove element with children
+    check("mutation: remove with children",
+          setup + tstr('g1') + [
+              'TA UIDL-BY-ID UIDL-REMOVE-ELEM',
+              'UIDL-ROOT UIDL-NCHILDREN . CR'],
+          '0')
+
+    # Set new attribute (use tstr for name to avoid S" aliasing)
+    check("mutation: set new attr",
+          setup + tstr('l1') + [
+              'TA UIDL-BY-ID DUP'] +
+          tstr('color') + [
+              'TA S" red" UIDL-SET-ATTR',
+              'S" color" UIDL-ATTR IF .S ELSE 2DROP THEN'],
+          '#red')
+
+    # Overwrite existing attribute
+    check("mutation: overwrite attr",
+          setup + tstr('l1') + [
+              'TA UIDL-BY-ID DUP'] +
+          tstr('text') + [
+              'TA S" changed" UIDL-SET-ATTR',
+              'S" text" UIDL-ATTR IF .S ELSE 2DROP THEN'],
+          '#changed')
+
+    # Remove attribute
+    check("mutation: remove attr",
+          setup + tstr('l1') + [
+              'TA UIDL-BY-ID DUP',
+              'S" text" UIDL-REMOVE-ATTR',
+              'S" text" UIDL-ATTR IF 2DROP 1 ELSE 0 THEN . CR'],
+          '0')
+
+    # Move element
+    check("mutation: move elem",
+          setup + tstr('l1') + [
+              'TA UIDL-BY-ID'] +
+          tstr('g1') + [
+              'TA UIDL-BY-ID UIDL-PARENT   \\ uidl root',
+              'UIDL-MOVE-ELEM'] +
+          tstr('g1') + [
+              'TA UIDL-BY-ID UIDL-NCHILDREN . CR'],
+          '1')
+
+
+def test_bind_write():
+    """Gap 3.3 — Two-way binding write-back."""
+    print("\n── Bind Write-Back ──\n")
+
+    st_setup = [
+        '65536 A-XMEM ARENA-NEW DROP',
+        '256 ST-DOC-NEW DROP',
+    ]
+
+    # Input → string write-back
+    doc_input = '<uidl><input id="inp1" bind="=form.email" /></uidl>'
+    check("write-back: input string",
+          st_setup + tstr(doc_input) + [
+              'TA UIDL-PARSE DROP'] +
+          tstr('inp1') + [
+              'TA UIDL-BY-ID S" hello@test" UIDL-BIND-WRITE',
+              'S" form.email" ST-GET-PATH DUP IF ST-GET-STR TYPE ELSE DROP THEN CR'],
+          'hello@test')
+
+    # Toggle → bool write-back
+    doc_toggle = '<uidl><toggle id="t1" bind="=ui.dark" /></uidl>'
+    check("write-back: toggle bool",
+          st_setup + tstr(doc_toggle) + [
+              'TA UIDL-PARSE DROP'] +
+          tstr('t1') + [
+              'TA UIDL-BY-ID S" true" UIDL-BIND-WRITE',
+              'S" ui.dark" ST-GET-PATH DUP IF ST-GET-BOOL . ELSE DROP THEN CR'],
+          '-1')
+
+    # Range → int write-back
+    doc_range = '<uidl><range id="r1" bind="=vol.level" /></uidl>'
+    check("write-back: range int",
+          st_setup + tstr(doc_range) + [
+              'TA UIDL-PARSE DROP'] +
+          tstr('r1') + [
+              'TA UIDL-BY-ID S" 42" UIDL-BIND-WRITE',
+              'S" vol.level" ST-GET-PATH DUP IF ST-GET-INT . ELSE DROP THEN CR'],
+          '42')
+
+    # No bind → no-op
+    doc_nobind = '<uidl><label id="nb1" text="hi" /></uidl>'
+    check("write-back: no bind noop",
+          st_setup + tstr(doc_nobind) + [
+              'TA UIDL-PARSE DROP'] +
+          tstr('nb1') + [
+              'TA UIDL-BY-ID S" whatever" UIDL-BIND-WRITE',
+              '42 .R'],
+          '42')
+
+
+def test_action_dispatch():
+    """Gap 3.4 — Action dispatch helpers."""
+    print("\n── Action Dispatch ──\n")
+
+    setup = tstr(DOC_ACTIONS) + ['TA UIDL-PARSE DROP']
+
+    # on-activate → type 0
+    check("dispatch: on-activate",
+          setup + tstr('a-activate') + [
+              'TA UIDL-BY-ID UIDL-DISPATCH . CR'],
+          '0')
+
+    # emit → type 1
+    check("dispatch: emit",
+          setup + tstr('a-emit') + [
+              'TA UIDL-BY-ID UIDL-DISPATCH . CR'],
+          '1')
+
+    # set-state → type 2
+    check("dispatch: set-state",
+          setup + tstr('a-setState') + [
+              'TA UIDL-BY-ID UIDL-DISPATCH . CR'],
+          '2')
+
+    # No action → -1
+    check("dispatch: no action",
+          setup + tstr('no-action') + [
+              'TA UIDL-BY-ID UIDL-DISPATCH . CR'],
+          '-1')
+
+    # on-activate beats emit (priority)
+    check("dispatch: activate wins",
+          setup + tstr('a-both') + [
+              'TA UIDL-BY-ID UIDL-DISPATCH . CR'],
+          '0')
+
+    # HAS-ACTION?
+    check("dispatch: has-action true",
+          setup + tstr('a-emit') + [
+              'TA UIDL-BY-ID UIDL-HAS-ACTION? . CR'],
+          '-1')
+
+    check("dispatch: has-action false",
+          setup + tstr('no-action') + [
+              'TA UIDL-BY-ID UIDL-HAS-ACTION? . CR'],
+          '0')
+
+    # ACTION-VALUE
+    check("dispatch: action-value",
+          setup + tstr('a-activate') + [
+              'TA UIDL-BY-ID UIDL-ACTION-VALUE IF TYPE ELSE 2DROP THEN CR'],
+          'go')
+
+    check("dispatch: action-value emit",
+          setup + tstr('a-emit') + [
+              'TA UIDL-BY-ID UIDL-ACTION-VALUE IF TYPE ELSE 2DROP THEN CR'],
+          'help')
+
+
+# =====================================================================
 #  Main
 # =====================================================================
 
@@ -1130,6 +1502,10 @@ if __name__ == '__main__':
     test_binding_eval()
     test_when_eval()
     test_complete_document()
+    test_validate()
+    test_mutation()
+    test_bind_write()
+    test_action_dispatch()
 
     print(f"\n{'='*60}")
     print(f"  UIDL Document Model: {_pass} passed, {_fail} failed")

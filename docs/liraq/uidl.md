@@ -245,6 +245,130 @@ UIDL-REP-BY-MOD ( media mod-a mod-l -- rep | 0 )
 Find a `<rep>` child whose `modality` attribute matches the given string.
 Returns the rep element, or 0 if not found.
 
+### Document Validation
+
+#### UIDL-VALIDATE
+```forth
+UIDL-VALIDATE ( -- n-errors )
+```
+Scan all allocated elements and check validation rules.  Up to 16 errors
+are stored in an internal buffer.  Returns the number of errors found.
+
+**Rules checked:**
+| Rule | Description |
+|------|-------------|
+| 2 | ID format: `[a-z][a-z0-9-]*`, max 64 characters |
+| 3 | Bind path: dot-separated `[a-z_][a-z0-9_.]*` |
+| 4 | When expression: must parse without LEL error |
+| 5 | Collection elements must have a `<template>` child |
+| 7 | Arrange value in range 0–5 |
+| 8 | `on-activate` and `emit` are mutually exclusive |
+| 10 | Root must be `<uidl>` |
+
+#### UIDL-ERROR-COUNT
+```forth
+UIDL-ERROR-COUNT ( -- n )
+```
+Return the current number of validation errors.
+
+#### UIDL-ERROR-NTH
+```forth
+UIDL-ERROR-NTH ( n -- rule elem )
+```
+Return the rule number and element address of the nth error (0-based).
+Returns `0 0` if `n` is out of range.
+
+#### UIDL-ERRORS-CLEAR
+```forth
+UIDL-ERRORS-CLEAR ( -- )
+```
+Clear the error buffer and reset the error count to zero.
+
+### Document Mutation
+
+#### UIDL-ADD-ELEM
+```forth
+UIDL-ADD-ELEM ( parent type -- new-elem | 0 )
+```
+Allocate a new element of the given type and link it as the last child
+of `parent`.  Returns the element address, or 0 if the pool is full.
+
+#### UIDL-REMOVE-ELEM
+```forth
+UIDL-REMOVE-ELEM ( elem -- )
+```
+Recursively remove an element and all its children.  Unlinks from the
+parent's child chain and zeroes the element slots.
+
+#### UIDL-SET-ATTR
+```forth
+UIDL-SET-ATTR ( elem name-a name-l val-a val-l -- )
+```
+Set an attribute on an element.  If an attribute with the same name
+already exists, its value is overwritten.  Otherwise a new attribute is
+created via the attribute pool.  Both name and value are copied to the
+string pool.
+
+#### UIDL-REMOVE-ATTR
+```forth
+UIDL-REMOVE-ATTR ( elem name-a name-l -- )
+```
+Remove the named attribute from the element's attribute chain.  No-op
+if the attribute is not found.
+
+#### UIDL-MOVE-ELEM
+```forth
+UIDL-MOVE-ELEM ( elem new-parent -- )
+```
+Unlink an element from its current parent and re-link it as the last
+child of `new-parent`.
+
+### Bind Write-Back
+
+#### UIDL-BIND-WRITE
+```forth
+UIDL-BIND-WRITE ( elem value-a value-l -- )
+```
+Write a value back to the state tree through the element's bind path.
+The write strategy depends on the element type:
+
+| Type | State tree operation |
+|------|---------------------|
+| Toggle | `ST-SET-PATH-BOOL` — value `"true"` → -1 (TRUE), else 0 |
+| Range | `ST-SET-PATH-INT` — value parsed via `STR>NUM` |
+| Other | `ST-SET-PATH-STR` — value stored as string |
+
+No-op if the element has no bind expression.
+
+### Action Dispatch
+
+#### UIDL-DISPATCH
+```forth
+UIDL-DISPATCH ( elem -- action-type )
+```
+Determine the action type of an element by checking for action
+attributes in priority order: `on-activate` (→ 0), `emit` (→ 1),
+`set-state` (→ 2).  Returns -1 if no action attribute is present.
+
+| Constant | Value | Attribute |
+|----------|-------|-----------|
+| `UIDL-ACT-ACTIVATE` | 0 | `on-activate` |
+| `UIDL-ACT-EMIT` | 1 | `emit` |
+| `UIDL-ACT-SET-STATE` | 2 | `set-state` |
+
+#### UIDL-HAS-ACTION?
+```forth
+UIDL-HAS-ACTION? ( elem -- flag )
+```
+Return TRUE if the element has any action attribute.
+
+#### UIDL-ACTION-VALUE
+```forth
+UIDL-ACTION-VALUE ( elem -- a l flag )
+```
+Return the value of the element's action attribute (same priority as
+`UIDL-DISPATCH`).  Returns `( a l -1 )` if found, `( 0 0 0 )` if none.
+
 ## Element Types
 
 ### Semantic Types (1–16)
@@ -400,7 +524,7 @@ All other attributes (e.g. `label`, `on-activate`, `emit`, `src`, `when`,
 
 ## Test Coverage
 
-132 tests in `local_testing/test_uidl.py` covering:
+167 tests in `local_testing/test_uidl.py` covering:
 
 - Parse basics (minimal doc, root validation, error codes)
 - All 16+4 element types
@@ -419,3 +543,7 @@ All other attributes (e.g. `label`, `on-activate`, `emit`, `src`, `when`,
 - Meta element attributes
 - Binding and when evaluation (via LEL + state tree)
 - Complete document integration test (15 assertions)
+- Document validation (14 tests — all 7 rules, error buffer, clear)
+- Document mutation (8 tests — add, remove, set/overwrite/remove attr, move)
+- Bind write-back (4 tests — string, bool, int, no-bind no-op)
+- Action dispatch (9 tests — types, priority, has-action, action-value)

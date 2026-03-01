@@ -650,3 +650,333 @@ VARIABLE _UPA-VA  VARIABLE _UPA-VL
         THEN
         UIDL-NEXT-SIB
     REPEAT ;
+
+\ =====================================================================
+\  Phase 3 — Gap 3.1: Document Validation
+\ =====================================================================
+\
+\ UIDL-VALIDATE scans all allocated elements and checks 8 rules.
+\ Up to 16 errors stored in a buffer (rule# + elem-addr pairs).
+
+CREATE _UDL-VERR  256 ALLOT   \ 16 entries × (8 rule + 8 elem) = 256
+VARIABLE _UDL-VCNT             \ error count
+
+: UIDL-ERROR-COUNT  ( -- n )  _UDL-VCNT @ ;
+
+: UIDL-ERRORS-CLEAR ( -- )
+    0 _UDL-VCNT !
+    _UDL-VERR 256 0 FILL ;
+
+: _UDL-VERR-ADD  ( rule elem -- )
+    _UDL-VCNT @ 16 >= IF 2DROP EXIT THEN
+    _UDL-VCNT @ 16 * _UDL-VERR +    \ slot addr
+    >R
+    R@ 8 + !                          \ store elem
+    R> !                               \ store rule
+    1 _UDL-VCNT +! ;
+
+: UIDL-ERROR-NTH  ( n -- rule elem )
+    DUP 0< OVER _UDL-VCNT @ >= OR IF
+        DROP 0 0 EXIT
+    THEN
+    16 * _UDL-VERR +
+    DUP @ SWAP 8 + @ ;
+
+\ --- Helper: element by pool index ---
+: _UDL-ELEM-I  ( i -- elem )
+    _UDL-ELEMSZ * _UDL-ELEMS + ;
+
+\ --- Rule 2: Valid ID format [a-z][a-z0-9-]*, max 64 ---
+VARIABLE _UDL-VF   \ validation flag temp
+
+: _UDL-ID-CH?  ( ch -- flag )
+    DUP 97 >= OVER 122 <= AND IF DROP TRUE EXIT THEN
+    DUP 48 >= OVER 57 <= AND IF DROP TRUE EXIT THEN
+    45 = ;
+
+: _UDL-CHK-ID-FMT  ( elem -- )
+    DUP UE.ID-L @ DUP 0= IF 2DROP EXIT THEN    \ no ID → skip
+    DUP 64 > IF DROP 2 SWAP _UDL-VERR-ADD EXIT THEN
+    SWAP DUP UE.ID-A @                           \ ( len elem id-a )
+    SWAP >R                                       \ ( len id-a  R: elem )
+    DUP C@ DUP 97 >= SWAP 122 <= AND 0= IF
+        2DROP 2 R> _UDL-VERR-ADD EXIT
+    THEN
+    \ scan rest
+    TRUE _UDL-VF !
+    SWAP 1 ?DO
+        DUP I + C@ _UDL-ID-CH? 0= IF FALSE _UDL-VF ! THEN
+    LOOP
+    DROP
+    _UDL-VF @ 0= IF 2 R> _UDL-VERR-ADD ELSE R> DROP THEN ;
+
+\ --- Rule 3: Valid bind path (dot-separated [a-z_][a-z0-9_]*) ---
+
+: _UDL-BIND-CH?  ( ch -- flag )
+    DUP 97 >= OVER 122 <= AND IF DROP TRUE EXIT THEN
+    DUP 48 >= OVER 57 <= AND IF DROP TRUE EXIT THEN
+    DUP 95 = IF DROP TRUE EXIT THEN
+    46 = ;
+
+: _UDL-BIND-START?  ( ch -- flag )
+    DUP 97 >= OVER 122 <= AND IF DROP TRUE EXIT THEN
+    95 = ;
+
+: _UDL-CHK-BIND  ( elem -- )
+    DUP UE.BIND-L @ DUP 0= IF 2DROP EXIT THEN   \ no bind → skip
+    SWAP DUP >R UE.BIND-A @                      \ ( len bind-a  R: elem )
+    \ first char must be letter or _
+    OVER C@ _UDL-BIND-START? 0= IF
+        2DROP 3 R> _UDL-VERR-ADD EXIT
+    THEN
+    TRUE _UDL-VF !
+    SWAP 1 ?DO
+        DUP I + C@ _UDL-BIND-CH? 0= IF FALSE _UDL-VF ! THEN
+    LOOP
+    DROP
+    _UDL-VF @ 0= IF 3 R> _UDL-VERR-ADD ELSE R> DROP THEN ;
+
+\ --- Rule 4: Valid when expression (LEL-EVAL + _LEL-ERR check) ---
+
+: _UDL-CHK-WHEN  ( elem -- )
+    DUP UE.ATTR @
+    BEGIN
+        DUP 0<> WHILE
+        DUP UA.NAME-A @ OVER UA.NAME-L @
+        S" when" STR-STR= IF
+            \ found when attr
+            DUP UA.VAL-A @ OVER UA.VAL-L @     \ ( elem attr val-a val-l )
+            DUP 0> IF OVER C@ 61 = IF 1 /STRING THEN THEN
+            LEL-EVAL 2DROP DROP                 \ eval and discard result
+            _LEL-ERR @ IF
+                DROP                            \ drop attr
+                4 SWAP _UDL-VERR-ADD EXIT       \ elem still on stack
+            THEN
+            2DROP EXIT                          \ drop attr + elem, ok
+        THEN
+        UA.NEXT @
+    REPEAT
+    2DROP ;                                     \ drop 0 + elem
+
+\ --- Rule 5: Collection must have template child ---
+
+: _UDL-CHK-COLL  ( elem -- )
+    DUP UE.TYPE @ UIDL-T-COLLECTION <> IF DROP EXIT THEN
+    DUP UIDL-TEMPLATE 0= IF
+        5 SWAP _UDL-VERR-ADD
+    ELSE DROP THEN ;
+
+\ --- Rule 7: Arrange in valid range (0-5) ---
+
+: _UDL-CHK-ARRANGE  ( elem -- )
+    DUP UE.ARRANGE @ DUP 0 >= SWAP 5 <= AND IF
+        DROP EXIT
+    THEN
+    7 SWAP _UDL-VERR-ADD ;
+
+\ --- Rule 8: on-activate and emit mutually exclusive ---
+VARIABLE _UDL-V8A   \ has on-activate
+VARIABLE _UDL-V8E   \ has emit
+
+: _UDL-CHK-EXCL  ( elem -- )
+    0 _UDL-V8A !  0 _UDL-V8E !
+    DUP UE.ATTR @
+    BEGIN
+        DUP 0<> WHILE
+        DUP UA.NAME-A @ OVER UA.NAME-L @
+        2DUP S" on-activate" STR-STR= IF 2DROP 1 _UDL-V8A ! ELSE
+        S" emit" STR-STR= IF 1 _UDL-V8E ! THEN THEN
+        UA.NEXT @
+    REPEAT
+    DROP
+    _UDL-V8A @ _UDL-V8E @ AND IF
+        8 SWAP _UDL-VERR-ADD
+    ELSE DROP THEN ;
+
+\ --- Main validation word ---
+
+: UIDL-VALIDATE  ( -- n-errors )
+    UIDL-ERRORS-CLEAR
+    \ Rule 10: Root must be <uidl>
+    UIDL-ROOT DUP 0= IF
+        DROP 10 0 _UDL-VERR-ADD
+        UIDL-ERROR-COUNT EXIT
+    THEN
+    DUP UE.TYPE @ UIDL-T-UIDL <> IF
+        10 SWAP _UDL-VERR-ADD
+    ELSE DROP THEN
+    \ Scan all elements
+    _UDL-ECNT @ 0 ?DO
+        I _UDL-ELEM-I
+        DUP _UDL-CHK-ID-FMT
+        DUP _UDL-CHK-BIND
+        DUP _UDL-CHK-WHEN
+        DUP _UDL-CHK-COLL
+        DUP _UDL-CHK-ARRANGE
+        _UDL-CHK-EXCL
+    LOOP
+    UIDL-ERROR-COUNT ;
+
+\ =====================================================================
+\  Phase 3 — Gap 3.2: Document Mutation API
+\ =====================================================================
+
+VARIABLE _UDL-MUT-P   \ parent temp for mutations
+
+: UIDL-ADD-ELEM  ( parent type -- new-elem | 0 )
+    SWAP _UDL-MUT-P !
+    _UDL-ALLOC-ELEM
+    DUP 0= IF NIP EXIT THEN
+    SWAP OVER UE.TYPE !
+    _UDL-MUT-P @ OVER UE.PARENT !
+    _UDL-MUT-P @ ?DUP IF
+        OVER _UDL-LINK-CHILD
+    THEN ;
+
+\ Unlink elem from its parent's child chain
+: _UDL-UNLINK  ( elem -- )
+    DUP UE.PREV @ ?DUP IF
+        OVER UE.NEXT @ SWAP UE.NEXT !    \ prev.next = elem.next
+    ELSE
+        \ elem is first child — update parent.fchild
+        DUP UE.PARENT @ ?DUP IF
+            OVER UE.NEXT @ SWAP UE.FCHILD !
+        THEN
+    THEN
+    DUP UE.NEXT @ ?DUP IF
+        OVER UE.PREV @ SWAP UE.PREV !    \ next.prev = elem.prev
+    ELSE
+        \ elem is last child — update parent.lchild
+        DUP UE.PARENT @ ?DUP IF
+            OVER UE.PREV @ SWAP UE.LCHILD !
+        THEN
+    THEN
+    DUP UE.PARENT @ ?DUP IF
+        -1 SWAP UE.NCHILD +!
+    THEN
+    0 OVER UE.NEXT !  0 OVER UE.PREV !
+    0 SWAP UE.PARENT ! ;
+
+: UIDL-REMOVE-ELEM  ( elem -- )
+    \ Recursively remove children first
+    DUP UE.FCHILD @
+    BEGIN DUP 0<> WHILE
+        DUP UE.NEXT @     \ save next before we destroy it
+        SWAP RECURSE
+    REPEAT DROP
+    \ Unlink from parent
+    DUP _UDL-UNLINK
+    \ Zero out the element
+    _UDL-ELEMSZ 0 FILL ;
+
+: UIDL-SET-ATTR  ( elem name-a name-l val-a val-l -- )
+    \ Check if attr already exists
+    4 PICK UE.ATTR @
+    BEGIN
+        DUP 0<> WHILE
+        DUP UA.NAME-A @ OVER UA.NAME-L @
+        6 PICK 6 PICK STR-STR= IF
+            \ Found — overwrite value
+            >R                         \ ( elem na nl va vl  R: attr )
+            2SWAP 2DROP ROT DROP       \ ( va vl  R: attr )
+            _UDL-STR-COPY
+            R@ UA.VAL-L ! R> UA.VAL-A !
+            EXIT
+        THEN
+        UA.NEXT @
+    REPEAT
+    DROP      \ drop the 0 from loop exit
+    \ Not found — store new attr (existing _UDL-STORE-ATTR)
+    _UDL-STORE-ATTR ;
+
+: UIDL-REMOVE-ATTR  ( elem name-a name-l -- )
+    _UDL-SL ! _UDL-SA !
+    DUP UE.ATTR @        \ prev-ptr = 0, cur = first attr
+    0 SWAP                \ ( elem 0 cur )
+    BEGIN
+        DUP 0<> WHILE
+        DUP UA.NAME-A @ OVER UA.NAME-L @
+        _UDL-SA @ _UDL-SL @ STR-STR= IF
+            \ Found it: unlink
+            DUP UA.NEXT @              \ ( elem prev cur next )
+            NIP                        \ ( elem prev next )
+            OVER 0= IF
+                \ cur was first attr — update elem.attr
+                2 PICK UE.ATTR !       \ elem.attr = next
+                DROP                   \ drop prev (0)
+            ELSE
+                SWAP UA.NEXT !         \ prev.next = next
+            THEN
+            DROP EXIT                  \ drop elem
+        THEN
+        NIP DUP UA.NEXT @             \ advance: prev=cur, cur=cur.next
+    REPEAT
+    2DROP DROP ;                       \ not found — clean up
+
+: UIDL-MOVE-ELEM  ( elem new-parent -- )
+    OVER _UDL-UNLINK
+    2DUP SWAP UE.PARENT !
+    _UDL-LINK-CHILD ;
+
+\ =====================================================================
+\  Phase 3 — Gap 3.3: Two-Way Binding Write-Back
+\ =====================================================================
+
+VARIABLE _UDL-BWE   \ bind-write element
+
+: UIDL-BIND-WRITE  ( elem value-a value-l -- )
+    ROT _UDL-BWE !                     \ save elem
+    _UDL-BWE @ UIDL-BIND              \ ( val-a val-l bind-a bind-l flag )
+    0= IF 2DROP 2DROP EXIT THEN        \ no bind → drop 4 remaining items
+    \ stack: ( val-a val-l bind-a bind-l )
+    _UDL-BWE @ UE.TYPE @
+    DUP UIDL-T-TOGGLE = IF
+        DROP
+        2>R                            \ R: bind-l bind-a
+        S" true" STR-STR=
+        2R> ST-SET-PATH-BOOL EXIT
+    THEN
+    DUP UIDL-T-RANGE = IF
+        DROP
+        2>R                            \ R: bind-l bind-a
+        STR>NUM 0= IF DROP 0 THEN
+        2R> ST-SET-PATH-INT EXIT
+    THEN
+    DROP
+    \ Default: string write-back  ( val-a val-l bind-a bind-l )
+    ST-SET-PATH-STR ;
+
+\ =====================================================================
+\  Phase 3 — Gap 3.4: Action Dispatch Helpers
+\ =====================================================================
+
+0 CONSTANT UIDL-ACT-ACTIVATE
+1 CONSTANT UIDL-ACT-EMIT
+2 CONSTANT UIDL-ACT-SET-STATE
+
+: UIDL-DISPATCH  ( elem -- action-type )
+    DUP S" on-activate" UIDL-ATTR IF
+        2DROP DROP UIDL-ACT-ACTIVATE EXIT
+    THEN 2DROP
+    DUP S" emit" UIDL-ATTR IF
+        2DROP DROP UIDL-ACT-EMIT EXIT
+    THEN 2DROP
+    DUP S" set-state" UIDL-ATTR IF
+        2DROP DROP UIDL-ACT-SET-STATE EXIT
+    THEN 2DROP
+    DROP -1 ;
+
+: UIDL-HAS-ACTION?  ( elem -- flag )
+    UIDL-DISPATCH -1 <> ;
+
+: UIDL-ACTION-VALUE  ( elem -- a l flag )
+    DUP S" on-activate" UIDL-ATTR IF
+        >R >R DROP R> R> -1 EXIT
+    THEN 2DROP
+    DUP S" emit" UIDL-ATTR IF
+        >R >R DROP R> R> -1 EXIT
+    THEN 2DROP
+    DUP S" set-state" UIDL-ATTR IF
+        >R >R DROP R> R> -1 EXIT
+    THEN 2DROP
+    DROP 0 0 0 ;
