@@ -17,6 +17,7 @@
 REQUIRE ../utils/string.f
 REQUIRE ../text/utf8.f
 REQUIRE ../utils/toml.f
+REQUIRE ../utils/json.f
 
 PROVIDED akashic-lcf
 
@@ -39,6 +40,65 @@ VARIABLE LCF-ERR
 : LCF-CLEAR-ERR  ( -- )  0 LCF-ERR ! ;
 
 \ =====================================================================
+\  Format dispatch (JSON / TOML auto-detect)
+\ =====================================================================
+
+0 CONSTANT LCF-FMT-TOML
+1 CONSTANT LCF-FMT-JSON
+
+VARIABLE LCF-FORMAT   LCF-FMT-TOML LCF-FORMAT !
+VARIABLE _LCF-FMT     \ per-operation detected format
+
+\ _LCF-IS-JSON? ( doc-a doc-l -- flag )
+\   TRUE if first non-whitespace character is { (JSON object).
+: _LCF-IS-JSON?  ( doc-a doc-l -- flag )
+    BEGIN DUP 0> WHILE
+        OVER C@
+        DUP 32 = OVER 10 = OR OVER 13 = OR OVER 9 = OR
+        IF DROP 1 /STRING
+        ELSE 123 = NIP NIP EXIT THEN
+    REPEAT 2DROP 0 ;
+
+: _LCF-DETECT  ( doc-a doc-l -- )
+    _LCF-IS-JSON? IF LCF-FMT-JSON ELSE LCF-FMT-TOML THEN _LCF-FMT ! ;
+
+: _LCF-IS-J?  ( -- flag ) _LCF-FMT @ LCF-FMT-JSON = ;
+
+\ Dispatch: section lookup (TOML [table] <-> JSON object key)
+: _LF-FIND-TABLE  ( cur-a cur-l name-a name-l -- cur-a' cur-l' )
+    _LCF-IS-J? IF 2>R JSON-ENTER 2R> JSON-KEY JSON-ENTER
+    ELSE TOML-FIND-TABLE THEN ;
+
+: _LF-FIND-TABLE?  ( cur-a cur-l name-a name-l -- cur-a' cur-l' flag )
+    _LCF-IS-J? IF
+        2>R JSON-ENTER 2R> JSON-KEY?
+        IF JSON-ENTER -1 ELSE 0 THEN
+    ELSE TOML-FIND-TABLE? THEN ;
+
+: _LF-KEY  ( cur-a cur-l key-a key-l -- val-a val-l )
+    _LCF-IS-J? IF JSON-KEY ELSE TOML-KEY THEN ;
+
+: _LF-KEY?  ( cur-a cur-l key-a key-l -- val-a val-l flag )
+    _LCF-IS-J? IF JSON-KEY? ELSE TOML-KEY? THEN ;
+
+: _LF-GET-STRING  ( val-a val-l -- str-a str-l )
+    _LCF-IS-J? IF JSON-GET-STRING ELSE TOML-GET-STRING THEN ;
+
+: _LF-GET-BOOL  ( val-a val-l -- flag )
+    _LCF-IS-J? IF JSON-GET-BOOL ELSE TOML-GET-BOOL THEN ;
+
+: _LF-GET-INT  ( val-a val-l -- n )
+    _LCF-IS-J? IF JSON-GET-NUMBER ELSE TOML-GET-INT THEN ;
+
+: _LF-FIND-ATABLE  ( doc-a doc-l name-a name-l n -- body-a body-l )
+    _LCF-IS-J? IF
+        >R 2>R JSON-ENTER 2R> JSON-KEY JSON-ENTER R> JSON-NTH JSON-ENTER
+    ELSE TOML-FIND-ATABLE THEN ;
+
+: _LF-CLEAR-ERR  ( -- )
+    _LCF-IS-J? IF JSON-CLEAR-ERR ELSE TOML-CLEAR-ERR THEN ;
+
+\ =====================================================================
 \  Constants
 \ =====================================================================
 
@@ -51,41 +111,39 @@ VARIABLE LCF-ERR
 \ LCF-ACTION? ( doc-a doc-l -- flag )
 \   Does the message have an [action] table?
 : LCF-ACTION?  ( doc-a doc-l -- flag )
-    S" action" TOML-FIND-TABLE? NIP NIP ;
+    2DUP _LCF-DETECT
+    S" action" _LF-FIND-TABLE? NIP NIP ;
 
 \ LCF-RESULT? ( doc-a doc-l -- flag )
 \   Does the message have a [result] table?
 : LCF-RESULT?  ( doc-a doc-l -- flag )
-    S" result" TOML-FIND-TABLE? NIP NIP ;
+    2DUP _LCF-DETECT
+    S" result" _LF-FIND-TABLE? NIP NIP ;
 
 \ LCF-ACTION-TYPE ( doc-a doc-l -- str-a str-l )
 \   Extract the action type string.
 : LCF-ACTION-TYPE  ( doc-a doc-l -- str-a str-l )
-    S" action" TOML-FIND-TABLE
-    S" type" TOML-KEY TOML-GET-STRING ;
+    2DUP _LCF-DETECT
+    S" action" _LF-FIND-TABLE
+    S" type" _LF-KEY _LF-GET-STRING ;
 
 \ LCF-ACTION-TYPE? ( doc-a doc-l -- str-a str-l flag )
 \   Like LCF-ACTION-TYPE but returns flag.
 : LCF-ACTION-TYPE?  ( doc-a doc-l -- str-a str-l flag )
-    TOML-CLEAR-ERR
-    TOML-ABORT-ON-ERROR @ 0 TOML-ABORT-ON-ERROR !
-    >R >R R> R>
-    S" action" TOML-FIND-TABLE?
+    2DUP _LCF-DETECT
+    S" action" _LF-FIND-TABLE?
     IF
-        S" type" TOML-KEY?
-        IF TOML-GET-STRING -1
-        ELSE 2DROP 0 0 0
-        THEN
-    ELSE
-        2DROP 0 0 0
-    THEN
-    SWAP TOML-ABORT-ON-ERROR ! ;
+        S" type" _LF-KEY?
+        IF _LF-GET-STRING -1
+        ELSE 0 THEN
+    ELSE 0 THEN ;
 
 \ LCF-RESULT-STATUS ( doc-a doc-l -- str-a str-l )
 \   Extract the result status string.
 : LCF-RESULT-STATUS  ( doc-a doc-l -- str-a str-l )
-    S" result" TOML-FIND-TABLE
-    S" status" TOML-KEY TOML-GET-STRING ;
+    2DUP _LCF-DETECT
+    S" result" _LF-FIND-TABLE
+    S" status" _LF-KEY _LF-GET-STRING ;
 
 \ LCF-RESULT-OK? ( doc-a doc-l -- flag )
 \   Is the result status "ok"?
@@ -95,14 +153,16 @@ VARIABLE LCF-ERR
 \ LCF-RESULT-ERROR ( doc-a doc-l -- err-a err-l )
 \   Extract the error string from result.
 : LCF-RESULT-ERROR  ( doc-a doc-l -- err-a err-l )
-    S" result" TOML-FIND-TABLE
-    S" error" TOML-KEY TOML-GET-STRING ;
+    2DUP _LCF-DETECT
+    S" result" _LF-FIND-TABLE
+    S" error" _LF-KEY _LF-GET-STRING ;
 
 \ LCF-RESULT-DETAIL ( doc-a doc-l -- str-a str-l )
 \   Extract the detail string from result.
 : LCF-RESULT-DETAIL  ( doc-a doc-l -- str-a str-l )
-    S" result" TOML-FIND-TABLE
-    S" detail" TOML-KEY TOML-GET-STRING ;
+    2DUP _LCF-DETECT
+    S" result" _LF-FIND-TABLE
+    S" detail" _LF-KEY _LF-GET-STRING ;
 
 \ =====================================================================
 \  Reader — batch access
@@ -111,28 +171,34 @@ VARIABLE LCF-ERR
 \ LCF-BATCH-NTH ( doc-a doc-l n -- body-a body-l )
 \   Get the nth (0-based) [[batch]] entry.
 : LCF-BATCH-NTH  ( doc-a doc-l n -- body-a body-l )
-    >R S" batch" R> TOML-FIND-ATABLE ;
+    >R 2DUP _LCF-DETECT S" batch" R> _LF-FIND-ATABLE ;
 
 \ LCF-BATCH-OP ( body-a body-l -- str-a str-l )
 \   Extract the "op" key from a batch entry body.
 : LCF-BATCH-OP  ( body-a body-l -- str-a str-l )
-    S" op" TOML-KEY TOML-GET-STRING ;
+    S" op" _LF-KEY _LF-GET-STRING ;
 
 \ LCF-BATCH-COUNT ( doc-a doc-l -- n )
 \   Count batch entries by probing index 0, 1, 2...
 \   Simple but correct for typical small batches.
 VARIABLE _LBC-N
 : LCF-BATCH-COUNT  ( doc-a doc-l -- n )
-    0 _LBC-N !
-    BEGIN
-        2DUP S" batch" _LBC-N @ TOML-FIND-ATABLE
-        TOML-OK? 0= IF 2DROP THEN
-        TOML-OK?
-    WHILE
-        1 _LBC-N +!
-        TOML-CLEAR-ERR
-    REPEAT
-    2DROP TOML-CLEAR-ERR _LBC-N @ ;
+    2DUP _LCF-DETECT
+    _LCF-IS-J? IF
+        JSON-ENTER S" batch" JSON-KEY?
+        IF JSON-ENTER JSON-COUNT ELSE 0 THEN
+    ELSE
+        0 _LBC-N !
+        BEGIN
+            2DUP S" batch" _LBC-N @ TOML-FIND-ATABLE
+            TOML-OK? 0= IF 2DROP THEN
+            TOML-OK?
+        WHILE
+            1 _LBC-N +!
+            TOML-CLEAR-ERR
+        REPEAT
+        2DROP TOML-CLEAR-ERR _LBC-N @
+    THEN ;
 
 \ =====================================================================
 \  Reader — action field helpers
@@ -141,12 +207,13 @@ VARIABLE _LBC-N
 \ LCF-ACTION-KEY ( doc-a doc-l key-a key-l -- val-a val-l )
 \   Retrieve a key from the [action] table.
 : LCF-ACTION-KEY  ( doc-a doc-l key-a key-l -- val-a val-l )
-    2>R S" action" TOML-FIND-TABLE 2R> TOML-KEY ;
+    2>R 2DUP _LCF-DETECT
+    S" action" _LF-FIND-TABLE 2R> _LF-KEY ;
 
 \ LCF-ACTION-STRING ( doc-a doc-l key-a key-l -- str-a str-l )
 \   Retrieve a string value from [action].
 : LCF-ACTION-STRING  ( doc-a doc-l key-a key-l -- str-a str-l )
-    LCF-ACTION-KEY TOML-GET-STRING ;
+    LCF-ACTION-KEY _LF-GET-STRING ;
 
 \ LCF-QUERY-METHOD ( doc-a doc-l -- str-a str-l )
 \   Shortcut for [action].method as string.
@@ -165,7 +232,7 @@ VARIABLE _LBC-N
 \ LCF-ENTRY-STRING ( body-a body-l key-a key-l -- str-a str-l )
 \   Retrieve a string key from a batch entry body.
 : LCF-ENTRY-STRING  ( body-a body-l key-a key-l -- str-a str-l )
-    TOML-KEY TOML-GET-STRING ;
+    _LF-KEY _LF-GET-STRING ;
 
 \ =====================================================================
 \  Reader — capabilities
@@ -174,18 +241,21 @@ VARIABLE _LBC-N
 \ LCF-CAP-VERSION ( doc-a doc-l -- str-a str-l )
 \   Extract capabilities.version.
 : LCF-CAP-VERSION  ( doc-a doc-l -- str-a str-l )
-    S" capabilities" TOML-FIND-TABLE
-    S" version" TOML-KEY TOML-GET-STRING ;
+    2DUP _LCF-DETECT
+    S" capabilities" _LF-FIND-TABLE
+    S" version" _LF-KEY _LF-GET-STRING ;
 
 \ LCF-CAP-BOOL ( doc-a doc-l key-a key-l -- flag )
 \   Extract a boolean capability.
 : LCF-CAP-BOOL  ( doc-a doc-l key-a key-l -- flag )
-    2>R S" capabilities" TOML-FIND-TABLE 2R> TOML-KEY TOML-GET-BOOL ;
+    2>R 2DUP _LCF-DETECT
+    S" capabilities" _LF-FIND-TABLE 2R> _LF-KEY _LF-GET-BOOL ;
 
 \ LCF-CAP-INT ( doc-a doc-l key-a key-l -- n )
 \   Extract an integer capability.
 : LCF-CAP-INT  ( doc-a doc-l key-a key-l -- n )
-    2>R S" capabilities" TOML-FIND-TABLE 2R> TOML-KEY TOML-GET-INT ;
+    2>R 2DUP _LCF-DETECT
+    S" capabilities" _LF-FIND-TABLE 2R> _LF-KEY _LF-GET-INT ;
 
 \ =====================================================================
 \  Validation
@@ -214,8 +284,9 @@ VARIABLE _LBC-N
     DUP LCF-MAX-SIZE > IF
         LCF-E-TOO-LARGE LCF-FAIL 2DROP 0 EXIT
     THEN
+    2DUP _LCF-DETECT
     2DUP LCF-ACTION? IF 2DROP -1 EXIT THEN
-    TOML-CLEAR-ERR
+    _LF-CLEAR-ERR
     2DUP LCF-RESULT? IF 2DROP -1 EXIT THEN
     2DROP LCF-E-NO-ACTION LCF-FAIL 0 ;
 
@@ -325,37 +396,290 @@ VARIABLE _LW-VAL
 \ =====================================================================
 
 \ LCF-W-OK ( buf-a buf-max -- len )
-\   Write: [result]\nstatus = "ok"\n
+\   Write: [result] status = "ok" (TOML) or {"result":{"status":"ok"}} (JSON)
 : LCF-W-OK  ( buf-a buf-max -- len )
-    LCF-W-INIT
-    S" result" LCF-W-TABLE
-    S" status" S" ok" LCF-W-KV-STR
-    LCF-W-LEN ;
+    LCF-FORMAT @ LCF-FMT-JSON = IF
+        2DUP LCF-W-INIT
+        JSON-SET-OUTPUT
+        JSON-{
+            S" result" JSON-KEY: JSON-{
+                S" status" S" ok" JSON-KV-STR
+            JSON-}
+        JSON-}
+        JSON-OUTPUT-RESULT NIP DUP _LW-POS !
+    ELSE
+        LCF-W-INIT
+        S" result" LCF-W-TABLE
+        S" status" S" ok" LCF-W-KV-STR
+        LCF-W-LEN
+    THEN ;
 
 \ LCF-W-ERROR ( buf-a buf-max err-a err-l detail-a detail-l -- len )
 \   Write error response with status, error, detail.
 : LCF-W-ERROR  ( buf-a buf-max err-a err-l detail-a detail-l -- len )
-    2>R 2>R LCF-W-INIT
-    S" result" LCF-W-TABLE
-    S" status" S" error" LCF-W-KV-STR
-    2R> S" error" 2SWAP LCF-W-KV-STR
-    2R> S" detail" 2SWAP LCF-W-KV-STR
-    LCF-W-LEN ;
+    LCF-FORMAT @ LCF-FMT-JSON = IF
+        2>R 2>R
+        2DUP LCF-W-INIT
+        JSON-SET-OUTPUT
+        JSON-{
+            S" result" JSON-KEY: JSON-{
+                S" status" S" error" JSON-KV-STR
+                2R> S" error" 2SWAP JSON-KV-STR
+                2R> S" detail" 2SWAP JSON-KV-STR
+            JSON-}
+        JSON-}
+        JSON-OUTPUT-RESULT NIP DUP _LW-POS !
+    ELSE
+        2>R 2>R LCF-W-INIT
+        S" result" LCF-W-TABLE
+        S" status" S" error" LCF-W-KV-STR
+        2R> S" error" 2SWAP LCF-W-KV-STR
+        2R> S" detail" 2SWAP LCF-W-KV-STR
+        LCF-W-LEN
+    THEN ;
 
 \ LCF-W-VALUE-RESULT ( buf-a buf-max val-a val-l -- len )
-\   Write: [result]\nstatus = "ok"\nvalue = "val"\n
+\   Write: [result] status = "ok" value = "val" (TOML or JSON)
 : LCF-W-VALUE-RESULT  ( buf-a buf-max val-a val-l -- len )
-    2>R LCF-W-INIT
-    S" result" LCF-W-TABLE
-    S" status" S" ok" LCF-W-KV-STR
-    S" value" 2R> LCF-W-KV-STR
-    LCF-W-LEN ;
+    LCF-FORMAT @ LCF-FMT-JSON = IF
+        2>R
+        2DUP LCF-W-INIT
+        JSON-SET-OUTPUT
+        JSON-{
+            S" result" JSON-KEY: JSON-{
+                S" status" S" ok" JSON-KV-STR
+                S" value" 2R> JSON-KV-STR
+            JSON-}
+        JSON-}
+        JSON-OUTPUT-RESULT NIP DUP _LW-POS !
+    ELSE
+        2>R LCF-W-INIT
+        S" result" LCF-W-TABLE
+        S" status" S" ok" LCF-W-KV-STR
+        S" value" 2R> LCF-W-KV-STR
+        LCF-W-LEN
+    THEN ;
 
 \ LCF-W-INT-RESULT ( buf-a buf-max n -- len )
-\   Write: [result]\nstatus = "ok"\nvalue = N\n
+\   Write: [result] status = "ok" value = N (TOML or JSON)
 : LCF-W-INT-RESULT  ( buf-a buf-max n -- len )
-    >R LCF-W-INIT
-    S" result" LCF-W-TABLE
-    S" status" S" ok" LCF-W-KV-STR
-    S" value" R> LCF-W-KV-INT
-    LCF-W-LEN ;
+    LCF-FORMAT @ LCF-FMT-JSON = IF
+        >R
+        2DUP LCF-W-INIT
+        JSON-SET-OUTPUT
+        JSON-{
+            S" result" JSON-KEY: JSON-{
+                S" status" S" ok" JSON-KV-STR
+                S" value" R> JSON-KV-NUM
+            JSON-}
+        JSON-}
+        JSON-OUTPUT-RESULT NIP DUP _LW-POS !
+    ELSE
+        >R LCF-W-INIT
+        S" result" LCF-W-TABLE
+        S" status" S" ok" LCF-W-KV-STR
+        S" value" R> LCF-W-KV-INT
+        LCF-W-LEN
+    THEN ;
+
+\ =====================================================================
+\  Notification reader/writer (DCS API spec §6)
+\ =====================================================================
+
+16 CONSTANT LCF-E-NO-NOTIFY
+
+\ LCF-NOTIFICATION? ( doc-a doc-l -- flag )
+\   Does the message have a [notification] table?
+: LCF-NOTIFICATION?  ( doc-a doc-l -- flag )
+    2DUP _LCF-DETECT
+    S" notification" _LF-FIND-TABLE? NIP NIP ;
+
+\ LCF-NOTIFY-TYPE ( doc-a doc-l -- type-a type-l )
+\   Extract the notification type string.
+: LCF-NOTIFY-TYPE  ( doc-a doc-l -- type-a type-l )
+    2DUP _LCF-DETECT
+    S" notification" _LF-FIND-TABLE
+    S" type" _LF-KEY _LF-GET-STRING ;
+
+\ LCF-NOTIFY-PATH ( doc-a doc-l -- path-a path-l )
+\   Extract the notification path string.
+: LCF-NOTIFY-PATH  ( doc-a doc-l -- path-a path-l )
+    2DUP _LCF-DETECT
+    S" notification" _LF-FIND-TABLE
+    S" path" _LF-KEY _LF-GET-STRING ;
+
+\ LCF-NOTIFY-VALUE ( doc-a doc-l -- val-a val-l )
+\   Extract the notification value string.
+: LCF-NOTIFY-VALUE  ( doc-a doc-l -- val-a val-l )
+    2DUP _LCF-DETECT
+    S" notification" _LF-FIND-TABLE
+    S" value" _LF-KEY _LF-GET-STRING ;
+
+\ LCF-W-NOTIFICATION ( buf max type-a type-l path-a path-l val-a val-l -- len )
+\   Write a notification message.
+: LCF-W-NOTIFICATION  ( buf max type-a type-l path-a path-l val-a val-l -- len )
+    LCF-FORMAT @ LCF-FMT-JSON = IF
+        2>R 2>R 2>R
+        2DUP LCF-W-INIT
+        JSON-SET-OUTPUT
+        JSON-{
+            S" notification" JSON-KEY: JSON-{
+                2R> S" type" 2SWAP JSON-KV-STR
+                2R> S" path" 2SWAP JSON-KV-STR
+                2R> S" value" 2SWAP JSON-KV-STR
+            JSON-}
+        JSON-}
+        JSON-OUTPUT-RESULT NIP DUP _LW-POS !
+    ELSE
+        2>R 2>R 2>R LCF-W-INIT
+        S" notification" LCF-W-TABLE
+        2R> S" type" 2SWAP LCF-W-KV-STR
+        2R> S" path" 2SWAP LCF-W-KV-STR
+        2R> S" value" 2SWAP LCF-W-KV-STR
+        LCF-W-LEN
+    THEN ;
+
+\ ── Updated VALIDATE to also accept notification messages ────────────
+\ (Re-defined here because LCF-NOTIFICATION? was not yet available
+\  in the original VALIDATE position.)
+: LCF-VALIDATE  ( doc-a doc-l -- flag )
+    LCF-CLEAR-ERR
+    DUP LCF-MAX-SIZE > IF
+        LCF-E-TOO-LARGE LCF-FAIL 2DROP 0 EXIT
+    THEN
+    2DUP _LCF-DETECT
+    2DUP LCF-ACTION? IF 2DROP -1 EXIT THEN
+    _LF-CLEAR-ERR
+    2DUP LCF-RESULT? IF 2DROP -1 EXIT THEN
+    _LF-CLEAR-ERR
+    2DUP LCF-NOTIFICATION? IF 2DROP -1 EXIT THEN
+    2DROP LCF-E-NO-ACTION LCF-FAIL 0 ;
+
+\ =====================================================================
+\  Handshake / session (DCS API spec §3)
+\ =====================================================================
+
+\ LCF-W-HANDSHAKE ( buf max caps-n ver-a ver-l -- len )
+\   Write a handshake request with capabilities count + version.
+\   caps-n bitmask: bit0=queries, bit1=mutations, bit2=behaviors,
+\   bit3=surfaces.
+VARIABLE _LHW-VA
+VARIABLE _LHW-VL
+VARIABLE _LHW-C
+: LCF-W-HANDSHAKE  ( buf max caps-n ver-a ver-l -- len )
+    _LHW-VL ! _LHW-VA ! _LHW-C !
+    LCF-FORMAT @ LCF-FMT-JSON = IF
+        2DUP LCF-W-INIT
+        JSON-SET-OUTPUT
+        JSON-{
+            S" action" JSON-KEY: JSON-{
+                S" type" S" handshake" JSON-KV-STR
+            JSON-}
+            S" capabilities" JSON-KEY: JSON-{
+                S" version" _LHW-VA @ _LHW-VL @ JSON-KV-STR
+                S" queries"    _LHW-C @ 1 AND 0<> JSON-KV-BOOL
+                S" mutations"  _LHW-C @ 2 AND 0<> JSON-KV-BOOL
+                S" behaviors"  _LHW-C @ 4 AND 0<> JSON-KV-BOOL
+                S" surfaces"   _LHW-C @ 8 AND 0<> JSON-KV-BOOL
+            JSON-}
+        JSON-}
+        JSON-OUTPUT-RESULT NIP DUP _LW-POS !
+    ELSE
+        LCF-W-INIT
+        S" action" LCF-W-TABLE
+        S" type" S" handshake" LCF-W-KV-STR
+        LCF-W-NL
+        S" capabilities" LCF-W-TABLE
+        S" version" _LHW-VA @ _LHW-VL @ LCF-W-KV-STR
+        S" queries"   _LHW-C @ 1 AND 0<> LCF-W-KV-BOOL
+        S" mutations" _LHW-C @ 2 AND 0<> LCF-W-KV-BOOL
+        S" behaviors" _LHW-C @ 4 AND 0<> LCF-W-KV-BOOL
+        S" surfaces"  _LHW-C @ 8 AND 0<> LCF-W-KV-BOOL
+        LCF-W-LEN
+    THEN ;
+
+\ LCF-HANDSHAKE? ( doc-a doc-l -- flag )
+\   Is this message a handshake?
+: LCF-HANDSHAKE?  ( doc-a doc-l -- flag )
+    LCF-ACTION-TYPE?
+    IF S" handshake" STR-STR=
+    ELSE 2DROP 0 THEN ;
+
+\ LCF-SESSION-ID ( doc-a doc-l -- id-a id-l )
+\   Extract session-id from a handshake response.
+: LCF-SESSION-ID  ( doc-a doc-l -- id-a id-l )
+    2DUP _LCF-DETECT
+    S" result" _LF-FIND-TABLE
+    S" session-id" _LF-KEY _LF-GET-STRING ;
+
+\ =====================================================================
+\  Operation vocabulary (spec_v1/05 — 24 named operations)
+\ =====================================================================
+
+\ The 24 standard DCS operations, stored as a sorted string table.
+\ Each entry: counted string (1-byte length + chars), packed back-to-back.
+
+CREATE _LCF-OPS
+  5 C, 99 C, 108 C, 111 C, 115 C, 101 C,                 \ close
+  6 C, 99 C, 114 C, 101 C, 97 C, 116 C, 101 C,           \ create
+  6 C, 100 C, 101 C, 108 C, 101 C, 116 C, 101 C,         \ delete
+  7 C, 100 C, 101 C, 115 C, 116 C, 114 C, 111 C, 121 C,  \ destroy
+  4 C, 101 C, 109 C, 105 C, 116 C,                        \ emit
+  5 C, 102 C, 111 C, 99 C, 117 C, 115 C,                  \ focus
+  9 C, 103 C, 101 C, 116 C, 45 C, 115 C, 116 C, 97 C, 116 C, 101 C, \ get-state
+  4 C, 104 C, 105 C, 100 C, 101 C,                        \ hide
+  4 C, 108 C, 105 C, 115 C, 116 C,                        \ list
+  4 C, 109 C, 111 C, 118 C, 101 C,                        \ move
+  4 C, 111 C, 112 C, 101 C, 110 C,                        \ open
+  5 C, 113 C, 117 C, 101 C, 114 C, 121 C,                 \ query
+  4 C, 114 C, 101 C, 97 C, 100 C,                         \ read
+  7 C, 114 C, 101 C, 102 C, 114 C, 101 C, 115 C, 104 C,  \ refresh
+  8 C, 114 C, 101 C, 103 C, 105 C, 115 C, 116 C, 101 C, 114 C, \ register
+  6 C, 114 C, 101 C, 115 C, 105 C, 122 C, 101 C,         \ resize
+  6 C, 115 C, 99 C, 114 C, 111 C, 108 C, 108 C,          \ scroll
+  13 C, 115 C, 101 C, 116 C, 45 C, 97 C, 116 C, 116 C, 114 C, 105 C, 98 C, 117 C, 116 C, 101 C, \ set-attribute
+  9 C, 115 C, 101 C, 116 C, 45 C, 115 C, 116 C, 97 C, 116 C, 101 C, \ set-state
+  4 C, 115 C, 104 C, 111 C, 119 C,                        \ show
+  9 C, 115 C, 117 C, 98 C, 115 C, 99 C, 114 C, 105 C, 98 C, 101 C, \ subscribe
+  11 C, 117 C, 110 C, 115 C, 117 C, 98 C, 115 C, 99 C, 114 C, 105 C, 98 C, 101 C, \ unsubscribe
+  6 C, 117 C, 112 C, 100 C, 97 C, 116 C, 101 C,          \ update
+  5 C, 119 C, 114 C, 105 C, 116 C, 101 C,                \ write
+  0 C,                                                     \ sentinel
+
+24 CONSTANT LCF-OP-COUNT
+
+\ LCF-OP-VALID? ( name-a name-l -- flag )
+\   Is name a valid DCS operation?
+VARIABLE _LOP-PA
+VARIABLE _LOP-PL
+: LCF-OP-VALID?  ( name-a name-l -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    _LOP-PL ! _LOP-PA !
+    _LCF-OPS
+    BEGIN
+        DUP C@ DUP 0>
+    WHILE
+        \ ( ptr len )
+        SWAP 1+ SWAP                     \ skip length byte → ( str-start len )
+        _LOP-PL @ OVER = IF
+            2DUP _LOP-PA @ _LOP-PL @ STR-STR=
+            IF 2DROP -1 EXIT THEN
+        THEN
+        +                                \ advance past this entry
+    REPEAT
+    2DROP 0 ;
+
+\ LCF-OP-NTH ( n -- name-a name-l flag )
+\   Return the nth operation name (0-based).  flag=-1 if valid index.
+: LCF-OP-NTH  ( n -- name-a name-l flag )
+    >R _LCF-OPS
+    BEGIN
+        R@ 0>
+    WHILE
+        DUP C@ DUP 0= IF DROP R> DROP 0 0 0 EXIT THEN
+        1+ +
+        R> 1- >R
+    REPEAT
+    R> DROP
+    DUP C@ DUP 0= IF 2DROP 0 0 0 EXIT THEN
+    SWAP 1+ SWAP -1 ;
