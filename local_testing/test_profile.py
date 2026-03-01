@@ -308,74 +308,74 @@ def test_metadata():
     """Profile metadata: name, version, description, validation."""
     print("\n── Metadata Tests ──\n")
 
-    check("PP-NAME basic",
+    check("PROF-NAME basic",
           tstr(PROFILE_VISUAL) +
-          [': _T TA PP-NAME TYPE ; _T'],
+          [': _T TA PROF-NAME TYPE ; _T'],
           "lcars-dark")
 
-    check("PP-VERSION basic",
+    check("PROF-VERSION basic",
           tstr(PROFILE_VISUAL) +
-          [': _T TA PP-VERSION TYPE ; _T'],
+          [': _T TA PROF-VERSION TYPE ; _T'],
           "1.0")
 
-    check("PP-DESC? present",
+    check("PROF-DESC? present",
           tstr(PROFILE_VISUAL) +
-          [': _T TA PP-DESC? IF TYPE ELSE 2DROP ." NONE" THEN ; _T'],
+          [': _T TA PROF-DESC? IF TYPE ELSE 2DROP ." NONE" THEN ; _T'],
           "LCARS dark theme")
 
-    check("PP-DESC? absent",
+    check("PROF-DESC? absent",
           tstr(PROFILE_MULTI) +
-          [': _T TA PP-DESC? IF TYPE ELSE 2DROP ." NONE" THEN ; _T'],
+          [': _T TA PROF-DESC? IF TYPE ELSE 2DROP ." NONE" THEN ; _T'],
           "NONE")
 
-    check("PP-VALID? good profile",
+    check("PROF-VALID? good profile",
           tstr(PROFILE_VISUAL) +
-          [': _T TA PP-VALID? . ; _T'],
+          [': _T TA PROF-VALID? . ; _T'],
           "-1")
 
-    check("PP-VALID? bad profile",
+    check("PROF-VALID? bad profile",
           tstr(PROFILE_INVALID) +
-          [': _T TA PP-VALID? . ; _T'],
+          [': _T TA PROF-VALID? . ; _T'],
           "0")
 
-    check("PP-CAPS-COUNT visual",
+    check("PROF-CAPS-COUNT visual",
           tstr(PROFILE_VISUAL) +
-          [': _T TA PP-CAPS-COUNT . ; _T'],
+          [': _T TA PROF-CAPS-COUNT . ; _T'],
           "1")
 
-    check("PP-CAPS-COUNT multi",
+    check("PROF-CAPS-COUNT multi",
           tstr(PROFILE_MULTI) +
-          [': _T TA PP-CAPS-COUNT . ; _T'],
+          [': _T TA PROF-CAPS-COUNT . ; _T'],
           "2")
 
-    check("PP-HAS-CAP? visual yes",
+    check("PROF-HAS-CAP? visual yes",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" visual" PP-HAS-CAP? . ; _T'],
+          [': _T TA S" visual" PROF-HAS-CAP? . ; _T'],
           "-1")
 
-    check("PP-HAS-CAP? auditory no",
+    check("PROF-HAS-CAP? auditory no",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" auditory" PP-HAS-CAP? . ; _T'],
+          [': _T TA S" auditory" PROF-HAS-CAP? . ; _T'],
           "0")
 
-    check("PP-HAS-CAP? multi - visual",
+    check("PROF-HAS-CAP? multi - visual",
           tstr(PROFILE_MULTI) +
-          [': _T TA S" visual" PP-HAS-CAP? . ; _T'],
+          [': _T TA S" visual" PROF-HAS-CAP? . ; _T'],
           "-1")
 
-    check("PP-HAS-CAP? multi - tactile",
+    check("PROF-HAS-CAP? multi - tactile",
           tstr(PROFILE_MULTI) +
-          [': _T TA S" tactile" PP-HAS-CAP? . ; _T'],
+          [': _T TA S" tactile" PROF-HAS-CAP? . ; _T'],
           "-1")
 
-    check("PP-HAS-CAP? multi - auditory",
+    check("PROF-HAS-CAP? multi - auditory",
           tstr(PROFILE_MULTI) +
-          [': _T TA S" auditory" PP-HAS-CAP? . ; _T'],
+          [': _T TA S" auditory" PROF-HAS-CAP? . ; _T'],
           "0")
 
-    check("PP-NAME auditory",
+    check("PROF-NAME auditory",
           tstr(PROFILE_AUDITORY) +
-          [': _T TA PP-NAME TYPE ; _T'],
+          [': _T TA PROF-NAME TYPE ; _T'],
           "standard-auditory")
 
 def test_elem_cat():
@@ -400,59 +400,59 @@ def test_elem_cat():
         ("range",      "interactive"),
         ("separator",  "separator"),
     ]:
-        check(f"PP-ELEM-CAT {etype}",
-              [f': _T S" {etype}" PP-ELEM-CAT TYPE ; _T'],
+        check(f"PROF-ELEM-CAT {etype}",
+              [f': _T S" {etype}" PROF-ELEM-CAT TYPE ; _T'],
               expected_cat)
 
 def test_defaults():
     """Direct default layer access."""
     print("\n── Default Layer Tests ──\n")
 
-    check("PP-DEFAULT content.color",
+    check("PROF-DEFAULT content.color",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" content" S" color" PP-DEFAULT',
+          [': _T TA S" content" S" color" PROF-DEFAULT',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#FF9900")
 
-    check("PP-DEFAULT content.font-size",
+    check("PROF-DEFAULT content.font-size",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" content" S" font-size" PP-DEFAULT',
+          [': _T TA S" content" S" font-size" PROF-DEFAULT',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "18")
 
-    check("PP-DEFAULT container.background",
+    check("PROF-DEFAULT container.background",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" container" S" background" PP-DEFAULT',
+          [': _T TA S" container" S" background" PROF-DEFAULT',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#000000")
 
-    check("PP-DEFAULT container.padding",
+    check("PROF-DEFAULT container.padding",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" container" S" padding" PP-DEFAULT',
+          [': _T TA S" container" S" padding" PROF-DEFAULT',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "12")
 
-    check("PP-DEFAULT interactive.cursor",
+    check("PROF-DEFAULT interactive.cursor",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" interactive" S" cursor" PP-DEFAULT',
+          [': _T TA S" interactive" S" cursor" PROF-DEFAULT',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "pointer")
 
-    check("PP-DEFAULT separator.thickness",
+    check("PROF-DEFAULT separator.thickness",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" separator" S" thickness" PP-DEFAULT',
+          [': _T TA S" separator" S" thickness" PROF-DEFAULT',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "2")
 
-    check("PP-DEFAULT missing category",
+    check("PROF-DEFAULT missing category",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" nonexist" S" color" PP-DEFAULT',
+          [': _T TA S" nonexist" S" color" PROF-DEFAULT',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
-    check("PP-DEFAULT missing prop",
+    check("PROF-DEFAULT missing prop",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" content" S" bogus" PP-DEFAULT',
+          [': _T TA S" content" S" bogus" PROF-DEFAULT',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
@@ -460,39 +460,39 @@ def test_etype():
     """Element-type layer access."""
     print("\n── Element-Type Layer Tests ──\n")
 
-    check("PP-ETYPE label.font-weight",
+    check("PROF-ETYPE label.font-weight",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" label" S" font-weight" PP-ETYPE',
+          [': _T TA S" label" S" font-weight" PROF-ETYPE',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "400")
 
-    check("PP-ETYPE action.background",
+    check("PROF-ETYPE action.background",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" action" S" background" PP-ETYPE',
+          [': _T TA S" action" S" background" PROF-ETYPE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#CC6699")
 
-    check("PP-ETYPE action.font-weight",
+    check("PROF-ETYPE action.font-weight",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" action" S" font-weight" PP-ETYPE',
+          [': _T TA S" action" S" font-weight" PROF-ETYPE',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "700")
 
-    check("PP-ETYPE input.background",
+    check("PROF-ETYPE input.background",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" input" S" background" PP-ETYPE',
+          [': _T TA S" input" S" background" PROF-ETYPE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#1A1A2E")
 
-    check("PP-ETYPE indicator.bar-color",
+    check("PROF-ETYPE indicator.bar-color",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" indicator" S" bar-color" PP-ETYPE',
+          [': _T TA S" indicator" S" bar-color" PROF-ETYPE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#FF9900")
 
-    check("PP-ETYPE missing type",
+    check("PROF-ETYPE missing type",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" toggle" S" color" PP-ETYPE',
+          [': _T TA S" toggle" S" color" PROF-ETYPE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
@@ -500,33 +500,33 @@ def test_roles():
     """Role layer access."""
     print("\n── Role Layer Tests ──\n")
 
-    check("PP-ROLE navigation.background",
+    check("PROF-ROLE navigation.background",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" navigation" S" background" PP-ROLE',
+          [': _T TA S" navigation" S" background" PROF-ROLE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#CC6699")
 
-    check("PP-ROLE alert.color",
+    check("PROF-ROLE alert.color",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" alert" S" color" PP-ROLE',
+          [': _T TA S" alert" S" color" PROF-ROLE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#FF3333")
 
-    check("PP-ROLE alert.font-weight",
+    check("PROF-ROLE alert.font-weight",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" alert" S" font-weight" PP-ROLE',
+          [': _T TA S" alert" S" font-weight" PROF-ROLE',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "700")
 
-    check("PP-ROLE header.font-size",
+    check("PROF-ROLE header.font-size",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" header" S" font-size" PP-ROLE',
+          [': _T TA S" header" S" font-size" PROF-ROLE',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "24")
 
-    check("PP-ROLE missing role",
+    check("PROF-ROLE missing role",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" toolbar" S" color" PP-ROLE',
+          [': _T TA S" toolbar" S" color" PROF-ROLE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
@@ -534,27 +534,27 @@ def test_states():
     """State layer access."""
     print("\n── State Layer Tests ──\n")
 
-    check("PP-STATE attended.outline",
+    check("PROF-STATE attended.outline",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" attended" S" outline" PP-STATE',
+          [': _T TA S" attended" S" outline" PROF-STATE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "2px solid #FFFFFF")
 
-    check("PP-STATE active.background",
+    check("PROF-STATE active.background",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" active" S" background" PP-STATE',
+          [': _T TA S" active" S" background" PROF-STATE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#FF9900")
 
-    check("PP-STATE active.color",
+    check("PROF-STATE active.color",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" active" S" color" PP-STATE',
+          [': _T TA S" active" S" color" PROF-STATE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#000000")
 
-    check("PP-STATE missing state",
+    check("PROF-STATE missing state",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" loading" S" opacity" PP-STATE',
+          [': _T TA S" loading" S" opacity" PROF-STATE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
@@ -562,21 +562,21 @@ def test_importance():
     """Importance layer access."""
     print("\n── Importance Layer Tests ──\n")
 
-    check("PP-IMPORTANCE high.font-weight",
+    check("PROF-IMPORTANCE high.font-weight",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" high" S" font-weight" PP-IMPORTANCE',
+          [': _T TA S" high" S" font-weight" PROF-IMPORTANCE',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "700")
 
-    check("PP-IMPORTANCE low.opacity",
+    check("PROF-IMPORTANCE low.opacity",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" low" S" opacity" PP-IMPORTANCE',
+          [': _T TA S" low" S" opacity" PROF-IMPORTANCE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "0.7")
 
-    check("PP-IMPORTANCE missing level",
+    check("PROF-IMPORTANCE missing level",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" critical" S" color" PP-IMPORTANCE',
+          [': _T TA S" critical" S" color" PROF-IMPORTANCE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
@@ -584,21 +584,21 @@ def test_density():
     """Density variant access."""
     print("\n── Density Tests ──\n")
 
-    check("PP-DENSITY compact.font-size",
+    check("PROF-DENSITY compact.font-size",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" compact" S" font-size" PP-DENSITY',
+          [': _T TA S" compact" S" font-size" PROF-DENSITY',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "14")
 
-    check("PP-DENSITY spacious.font-size",
+    check("PROF-DENSITY spacious.font-size",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" spacious" S" font-size" PP-DENSITY',
+          [': _T TA S" spacious" S" font-size" PROF-DENSITY',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "22")
 
-    check("PP-DENSITY missing variant",
+    check("PROF-DENSITY missing variant",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" normal" S" font-size" PP-DENSITY',
+          [': _T TA S" normal" S" font-size" PROF-DENSITY',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
@@ -606,136 +606,136 @@ def test_high_contrast():
     """High-contrast palette access."""
     print("\n── High-Contrast Tests ──\n")
 
-    check("PP-HIGH-CONTRAST foreground",
+    check("PROF-HIGH-CONTRAST foreground",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" foreground" PP-HIGH-CONTRAST',
+          [': _T TA S" foreground" PROF-HIGH-CONTRAST',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#FFFFFF")
 
-    check("PP-HIGH-CONTRAST background",
+    check("PROF-HIGH-CONTRAST background",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" background" PP-HIGH-CONTRAST',
+          [': _T TA S" background" PROF-HIGH-CONTRAST',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#000000")
 
-    check("PP-HIGH-CONTRAST link",
+    check("PROF-HIGH-CONTRAST link",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" link" PP-HIGH-CONTRAST',
+          [': _T TA S" link" PROF-HIGH-CONTRAST',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#FFFF00")
 
-    check("PP-HIGH-CONTRAST missing key",
+    check("PROF-HIGH-CONTRAST missing key",
           tstr(PROFILE_VISUAL) +
-          [': _T TA S" active" PP-HIGH-CONTRAST',
+          [': _T TA S" active" PROF-HIGH-CONTRAST',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
 def test_cascade():
-    """Cascade resolution via PP-SET-TYPE / PP-SET-ROLE / PP-SET-STATE / PP-SET-IMP / PP-GET."""
+    """Cascade resolution via PROF-SET-TYPE / PROF-SET-ROLE / PROF-SET-STATE / PROF-SET-IMP / PROF-GET."""
     print("\n── Cascade Resolution Tests ──\n")
 
     # Cascade: label with no role/state/imp → defaults.content.color
-    check("PP-GET defaults only (label color)",
+    check("PROF-GET defaults only (label color)",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" label" PP-SET-TYPE',
-           ': _T TA S" color" PP-GET',
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           ': _T TA S" color" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#FF9900")
 
     # Cascade: label with no extra → gets element-type font-weight=400
-    check("PP-GET element-type overrides default (label font-weight)",
+    check("PROF-GET element-type overrides default (label font-weight)",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" label" PP-SET-TYPE',
-           ': _T TA S" font-weight" PP-GET',
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           ': _T TA S" font-weight" PROF-GET',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "400")
 
     # Cascade: action → element-type background="#CC6699"
-    check("PP-GET action background from element-type",
+    check("PROF-GET action background from element-type",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" action" PP-SET-TYPE',
-           ': _T TA S" background" PP-GET',
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE',
+           ': _T TA S" background" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#CC6699")
 
     # Cascade: action + role=navigation → role overrides background
-    check("PP-GET role overrides element-type",
+    check("PROF-GET role overrides element-type",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" action" PP-SET-TYPE S" navigation" PP-SET-ROLE',
-           ': _T TA S" background" PP-GET',
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE S" navigation" PROF-SET-ROLE',
+           ': _T TA S" background" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#CC6699")  # same in this case, nav bg = #CC6699
 
     # Cascade: label + role=alert → role color overrides default
-    check("PP-GET alert role overrides default color",
+    check("PROF-GET alert role overrides default color",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" label" PP-SET-TYPE S" alert" PP-SET-ROLE',
-           ': _T TA S" color" PP-GET',
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE S" alert" PROF-SET-ROLE',
+           ': _T TA S" color" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#FF3333")
 
     # Cascade: label + state=active → state overrides color
-    check("PP-GET state overrides default color",
+    check("PROF-GET state overrides default color",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" label" PP-SET-TYPE S" active" PP-SET-STATE',
-           ': _T TA S" color" PP-GET',
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE S" active" PROF-SET-STATE',
+           ': _T TA S" color" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#000000")
 
     # Cascade: label + role=alert + state=active → state wins over role
-    check("PP-GET state overrides role for color",
+    check("PROF-GET state overrides role for color",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" label" PP-SET-TYPE',
-           'S" alert" PP-SET-ROLE S" active" PP-SET-STATE',
-           ': _T TA S" color" PP-GET',
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           'S" alert" PROF-SET-ROLE S" active" PROF-SET-STATE',
+           ': _T TA S" color" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#000000")
 
     # Cascade: action + imp=high → importance overrides font-weight
-    check("PP-GET importance overrides element-type",
+    check("PROF-GET importance overrides element-type",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" action" PP-SET-TYPE S" high" PP-SET-IMP',
-           ': _T TA S" font-weight" PP-GET',
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE S" high" PROF-SET-IMP',
+           ': _T TA S" font-weight" PROF-GET',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "700")  # both action and high have 700
 
     # Cascade: label + imp=low → importance opacity should be found
-    check("PP-GET importance low opacity",
+    check("PROF-GET importance low opacity",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" label" PP-SET-TYPE S" low" PP-SET-IMP',
-           ': _T TA S" opacity" PP-GET',
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE S" low" PROF-SET-IMP',
+           ': _T TA S" opacity" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "0.7")
 
     # Cascade: region → container defaults
-    check("PP-GET region gets container defaults",
+    check("PROF-GET region gets container defaults",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" region" PP-SET-TYPE',
-           ': _T TA S" background" PP-GET',
+          ['PROF-CLEAR-CTX S" region" PROF-SET-TYPE',
+           ': _T TA S" background" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "#000000")
 
     # Cascade: region → container padding
-    check("PP-GET region gets container padding",
+    check("PROF-GET region gets container padding",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" region" PP-SET-TYPE',
-           ': _T TA S" padding" PP-GET',
+          ['PROF-CLEAR-CTX S" region" PROF-SET-TYPE',
+           ': _T TA S" padding" PROF-GET',
            'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
           "12")
 
     # Cascade: missing property through all layers
-    check("PP-GET not found through cascade",
+    check("PROF-GET not found through cascade",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX S" label" PP-SET-TYPE',
-           ': _T TA S" animation" PP-GET',
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           ': _T TA S" animation" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
     # Cascade: context clear works
-    check("PP-GET after clear context (no type = no defaults)",
+    check("PROF-GET after clear context (no type = no defaults)",
           tstr(PROFILE_VISUAL) +
-          ['PP-CLEAR-CTX',
-           ': _T TA S" color" PP-GET',
+          ['PROF-CLEAR-CTX',
+           ': _T TA S" color" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "MISS")
 
@@ -743,43 +743,381 @@ def test_auditory():
     """Test with auditory profile."""
     print("\n── Auditory Profile Tests ──\n")
 
-    check("Auditory PP-DEFAULT content.voice",
+    check("Auditory PROF-DEFAULT content.voice",
           tstr(PROFILE_AUDITORY) +
-          [': _T TA S" content" S" voice" PP-DEFAULT',
+          [': _T TA S" content" S" voice" PROF-DEFAULT',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "neutral")
 
-    check("Auditory PP-ETYPE action.voice",
+    check("Auditory PROF-ETYPE action.voice",
           tstr(PROFILE_AUDITORY) +
-          [': _T TA S" action" S" voice" PP-ETYPE',
+          [': _T TA S" action" S" voice" PROF-ETYPE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "assertive")
 
-    check("Auditory PP-ROLE alert.voice",
+    check("Auditory PROF-ROLE alert.voice",
           tstr(PROFILE_AUDITORY) +
-          [': _T TA S" alert" S" voice" PP-ROLE',
+          [': _T TA S" alert" S" voice" PROF-ROLE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "urgent")
 
-    check("Auditory PP-STATE attended.earcon",
+    check("Auditory PROF-STATE attended.earcon",
           tstr(PROFILE_AUDITORY) +
-          [': _T TA S" attended" S" earcon" PP-STATE',
+          [': _T TA S" attended" S" earcon" PROF-STATE',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "focus-tone")
 
     check("Auditory cascade: action + alert role",
           tstr(PROFILE_AUDITORY) +
-          ['PP-CLEAR-CTX S" action" PP-SET-TYPE S" alert" PP-SET-ROLE',
-           ': _T TA S" voice" PP-GET',
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE S" alert" PROF-SET-ROLE',
+           ': _T TA S" voice" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "urgent")  # role overrides etype
 
     check("Auditory cascade: action (etype voice)",
           tstr(PROFILE_AUDITORY) +
-          ['PP-CLEAR-CTX S" action" PP-SET-TYPE',
-           ': _T TA S" voice" PP-GET',
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE',
+           ': _T TA S" voice" PROF-GET',
            'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
           "assertive")
+
+# ── Gap 4.6: Property namespace constants ──
+
+def test_property_constants():
+    """Auditory and tactile property namespace constants."""
+    print("\n── Property Namespace Constants ──\n")
+
+    # Auditory constant via cascade lookup
+    check("Auditory constant PROF-VOICE",
+          tstr(PROFILE_AUDITORY) +
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE',
+           ': _T TA PROF-VOICE PROF-GET',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "assertive")
+
+    # Tactile constant lookup (we need a tactile profile)
+    check("Tactile constant PROF-HAPTIC",
+          tstr(PROFILE_TACTILE) +
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE',
+           ': _T TA PROF-HAPTIC PROF-GET',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "pulse")
+
+    # Cascade with auditory constant
+    check("Cascade with PROF-EARCON",
+          tstr(PROFILE_AUDITORY) +
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE S" attended" PROF-SET-STATE',
+           ': _T TA PROF-EARCON PROF-GET',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "focus-tone")  # state overrides
+
+    # Unknown property via constant
+    check("Unknown property via PROF-PIN-FLASH",
+          tstr(PROFILE_AUDITORY) +
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           ': _T TA PROF-PIN-FLASH PROF-GET',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "MISS")
+
+# ── Gap 4.1: Multi-capability profile ──
+
+PROFILE_MULTICAP = (
+    'profile:\n'
+    '  name: multi-sense\n'
+    '  version: "1.0"\n'
+    '  capabilities: [visual, auditory]\n'
+    '\n'
+    'defaults:\n'
+    '  visual:\n'
+    '    color: "#00FF00"\n'
+    '    font-size: 20\n'
+    '  auditory:\n'
+    '    voice: calm\n'
+    '  font-family: "Helvetica"\n'
+)
+
+PROFILE_TACTILE = (
+    'profile:\n'
+    '  name: braille-basic\n'
+    '  version: "1.0"\n'
+    '  capabilities: [tactile]\n'
+    '\n'
+    'defaults:\n'
+    '  content:\n'
+    '    cell-routing: direct\n'
+    '\n'
+    'element-types:\n'
+    '  action:\n'
+    '    haptic: pulse\n'
+)
+
+def test_multicap():
+    """Multi-capability profile scoped lookups."""
+    print("\n── Multi-Cap Profile Tests ──\n")
+
+    check("Multi-cap: read visual property",
+          tstr(PROFILE_MULTICAP) +
+          [': _T TA S" visual" S" color" PROF-CAP-SECTION',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "#00FF00")
+
+    check("Multi-cap: read auditory property",
+          tstr(PROFILE_MULTICAP) +
+          [': _T TA S" auditory" S" voice" PROF-CAP-SECTION',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "calm")
+
+    check("Multi-cap: fallback to unscoped",
+          tstr(PROFILE_MULTICAP) +
+          [': _T TA S" visual" S" font-family" PROF-CAP-SECTION',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "Helvetica")
+
+    check("Single-cap: no cap section graceful",
+          tstr(PROFILE_VISUAL) +
+          [': _T TA S" visual" S" color" PROF-CAP-SECTION',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "MISS")  # PROFILE_VISUAL has no cap subsections under defaults
+
+    check("Missing cap section -> fallback",
+          tstr(PROFILE_MULTICAP) +
+          [': _T TA S" tactile" S" font-family" PROF-CAP-SECTION',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "Helvetica")  # tactile section doesn't exist, falls back to defaults.font-family
+
+# ── Gap 4.4: Profile stacking ──
+
+PROFILE_STACK_A = (
+    'defaults:\n'
+    '  content:\n'
+    '    color: "#111111"\n'
+    '    font-size: 16\n'
+)
+
+PROFILE_STACK_B = (
+    'defaults:\n'
+    '  content:\n'
+    '    color: "#222222"\n'
+    '    background: "#000000"\n'
+)
+
+def test_stacking():
+    """Profile stacking — B overrides A."""
+    print("\n── Profile Stacking Tests ──\n")
+
+    # Disjoint: font-size only in A
+    check("Stack: disjoint property from A",
+          ['CREATE _BA 2048 ALLOT  CREATE _BB 2048 ALLOT',
+           'VARIABLE _LA  VARIABLE _LB'] +
+          tstr(PROFILE_STACK_A) +
+          ['TA DUP _LA ! _BA SWAP MOVE'] +
+          tstr(PROFILE_STACK_B) +
+          ['TA DUP _LB ! _BB SWAP MOVE',
+           'PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           '_BA _LA @ _BB _LB @ PROF-STACK',
+           ': _T S" font-size" PROF-STACK-GET',
+           'IF YAML-GET-INT . ELSE 2DROP ." MISS" THEN ; _T'],
+          "16")
+
+    # Overlapping: color in both, B wins
+    check("Stack: overlapping property B wins",
+          ['CREATE _BA2 2048 ALLOT  CREATE _BB2 2048 ALLOT',
+           'VARIABLE _LA2  VARIABLE _LB2'] +
+          tstr(PROFILE_STACK_A) +
+          ['TA DUP _LA2 ! _BA2 SWAP MOVE'] +
+          tstr(PROFILE_STACK_B) +
+          ['TA DUP _LB2 ! _BB2 SWAP MOVE',
+           'PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           '_BA2 _LA2 @ _BB2 _LB2 @ PROF-STACK',
+           ': _T S" color" PROF-STACK-GET',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "#222222")
+
+    # B has background, A doesn't
+    check("Stack: unique property from B",
+          ['CREATE _BA3 2048 ALLOT  CREATE _BB3 2048 ALLOT',
+           'VARIABLE _LA3  VARIABLE _LB3'] +
+          tstr(PROFILE_STACK_A) +
+          ['TA DUP _LA3 ! _BA3 SWAP MOVE'] +
+          tstr(PROFILE_STACK_B) +
+          ['TA DUP _LB3 ! _BB3 SWAP MOVE',
+           'PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           '_BA3 _LA3 @ _BB3 _LB3 @ PROF-STACK',
+           ': _T S" background" PROF-STACK-GET',
+           'IF YAML-GET-STRING TYPE ELSE 2DROP ." MISS" THEN ; _T'],
+          "#000000")
+
+# ── Gap 4.5: Inline override ──
+
+PROFILE_ELEM_WITH_INLINE = (
+    'present-voice: override-voice\n'
+    'present-color: "#FF0000"\n'
+    'label: hello\n'
+)
+
+def test_inline():
+    """Inline present-* overrides."""
+    print("\n── Inline Override Tests ──\n")
+
+    check("Inline: one override (voice)",
+          tstr(PROFILE_ELEM_WITH_INLINE) +
+          ['TA PROF-SET-ELEM',
+           ': _T S" voice" S" neutral" PROF-INLINE TYPE ; _T'],
+          "override-voice")
+
+    check("Inline: override color",
+          tstr(PROFILE_ELEM_WITH_INLINE) +
+          ['TA PROF-SET-ELEM',
+           ': _T S" color" S" #FFFFFF" PROF-INLINE TYPE ; _T'],
+          "#FF0000")
+
+    check("Inline: no matching present-* keeps original",
+          tstr(PROFILE_ELEM_WITH_INLINE) +
+          ['TA PROF-SET-ELEM',
+           ': _T S" font-size" S" 18" PROF-INLINE TYPE ; _T'],
+          "18")
+
+# ── Gap 4.3: Accommodation ──
+
+ACCOM_LARGE_TEXT = (
+    'large-text: true\n'
+)
+
+ACCOM_REDUCED = (
+    'reduced-motion: true\n'
+)
+
+ACCOM_NONE = (
+    'nothing: here\n'
+)
+
+def test_accommodation():
+    """Accommodation integration."""
+    print("\n── Accommodation Tests ──\n")
+
+    check("Accom: large-text font-size scaled",
+          tstr(ACCOM_LARGE_TEXT) +
+          ['TA PROF-ACCOMMODATE',
+           ': _T 18 S" font-size" PROF-ACCOM-INT . ; _T'],
+          "27")  # 18 * 3 / 2 = 27
+
+    # High-contrast flag — parse YAML directly
+    check("Accom: high-contrast flag set",
+          ['PROF-ACCOM-CLEAR'] +
+          tstr('high-contrast: true\n') +
+          ['TA PROF-ACCOMMODATE',
+           ': _T PROF-ACCOM-HC? . ; _T'],
+          "-1")
+
+    check("Accom: reduced-motion animation 0",
+          tstr(ACCOM_REDUCED) +
+          ['TA PROF-ACCOMMODATE',
+           ': _T 300 S" animation-duration" PROF-ACCOM-INT . ; _T'],
+          "0")
+
+    check("Accom: no accommodations unchanged",
+          tstr(ACCOM_NONE) +
+          ['TA PROF-ACCOMMODATE',
+           ': _T 18 S" font-size" PROF-ACCOM-INT . ; _T'],
+          "18")
+
+# ── Gap 4.2: Profile resolution ──
+
+def test_resolution():
+    """Profile resolution — filter by cap subset, pick most specific."""
+    print("\n── Profile Resolution Tests ──\n")
+
+    # Single profile matching
+    check("Resolve: single matching profile",
+          tstr(PROFILE_VISUAL) +
+          ['VARIABLE _PA1 VARIABLE _PL1',
+           'TA _PL1 ! _PA1 !',
+           'CREATE _ADDRS _PA1 @ ,',
+           'CREATE _LENS  _PL1 @ ,',
+           ': _T 1 _ADDRS _LENS 1 PROF-RESOLVE',
+           'IF PROF-NAME TYPE ELSE 2DROP ." NONE" THEN ; _T'],
+          "lcars-dark")
+
+    # No matching profile
+    check("Resolve: no match returns empty",
+          tstr(PROFILE_VISUAL) +
+          ['VARIABLE _PNA VARIABLE _PNL',
+           'TA _PNL ! _PNA !',
+           'CREATE _AN _PNA @ ,',
+           'CREATE _LN _PNL @ ,',
+           ': _T 2 _AN _LN 1 PROF-RESOLVE',
+           'IF PROF-NAME TYPE ELSE 2DROP ." NONE" THEN ; _T'],
+          "NONE")
+
+    # Capability subset filtering
+    check("Resolve: cap subset filtering",
+          tstr(PROFILE_MULTICAP) +
+          ['VARIABLE _PSA VARIABLE _PSL',
+           'TA _PSL ! _PSA !',
+           'CREATE _AS _PSA @ ,',
+           'CREATE _LS _PSL @ ,',
+           ': _T 3 _AS _LS 1 PROF-RESOLVE',
+           'IF PROF-NAME TYPE ELSE 2DROP ." NONE" THEN ; _T'],
+          "multi-sense")
+
+    # Two profiles with separate buffers — more specific wins
+    check("Resolve: more specific wins",
+          ['CREATE _RB1 2048 ALLOT  CREATE _RB2 2048 ALLOT',
+           'VARIABLE _RL1  VARIABLE _RL2'] +
+          tstr(PROFILE_VISUAL) +
+          ['TA DUP _RL1 ! _RB1 SWAP MOVE'] +
+          tstr(PROFILE_MULTICAP) +
+          ['TA DUP _RL2 ! _RB2 SWAP MOVE',
+           'CREATE _RA2 _RB1 , _RB2 ,',
+           'CREATE _RLL2 _RL1 @ , _RL2 @ ,',
+           ': _T 1 _RA2 _RLL2 2 PROF-RESOLVE',
+           'IF PROF-NAME TYPE ELSE 2DROP ." NONE" THEN ; _T'],
+          "lcars-dark")
+
+    # Three profiles with separate buffers
+    check("Resolve: three profiles best specificity",
+          ['CREATE _RB3A 2048 ALLOT  CREATE _RB3B 2048 ALLOT',
+           'CREATE _RB3C 2048 ALLOT',
+           'VARIABLE _RL3A  VARIABLE _RL3B  VARIABLE _RL3C'] +
+          tstr(PROFILE_VISUAL) +
+          ['TA DUP _RL3A ! _RB3A SWAP MOVE'] +
+          tstr(PROFILE_MULTICAP) +
+          ['TA DUP _RL3B ! _RB3B SWAP MOVE'] +
+          tstr(PROFILE_AUDITORY) +
+          ['TA DUP _RL3C ! _RB3C SWAP MOVE',
+           'CREATE _RA3 _RB3A , _RB3B , _RB3C ,',
+           'CREATE _RLL3 _RL3A @ , _RL3B @ , _RL3C @ ,',
+           ': _T 1 _RA3 _RLL3 3 PROF-RESOLVE',
+           'IF PROF-NAME TYPE ELSE 2DROP ." NONE" THEN ; _T'],
+          "lcars-dark")
+
+# ── Gap 4.7: Profile → CSL ──
+
+def test_to_csl():
+    """Profile to CSL translation."""
+    print("\n── Profile → CSL Tests ──\n")
+
+    # Visual profile CSL
+    check("CSL: visual profile basic",
+          tstr(PROFILE_VISUAL) +
+          ['PROF-CLEAR-CTX S" label" PROF-SET-TYPE',
+           ': _T TA 0 0 PROF-TO-CSL TYPE ; _T'],
+          check_fn=lambda out: "color:" in out and "font-size:" in out)
+
+    # Auditory profile CSL
+    check("CSL: auditory profile",
+          tstr(PROFILE_AUDITORY) +
+          ['PROF-CLEAR-CTX S" action" PROF-SET-TYPE',
+           ': _T TA 0 0 PROF-TO-CSL TYPE ; _T'],
+          check_fn=lambda out: "voice:" in out)
+
+    # Empty profile — no matching keys
+    check("CSL: empty profile",
+          tstr(PROFILE_INVALID) +
+          ['PROF-CLEAR-CTX',
+           ': _T TA 0 0 PROF-TO-CSL DUP . ; _T'],
+          "0")  # length is 0
+
 
 # ── Main entry point ──
 
@@ -797,6 +1135,13 @@ if __name__ == '__main__':
     test_high_contrast()
     test_cascade()
     test_auditory()
+    test_property_constants()
+    test_multicap()
+    test_stacking()
+    test_inline()
+    test_accommodation()
+    test_resolution()
+    test_to_csl()
 
     print(f"\n{'='*60}")
     print(f"  Profile Parser:  {_pass} passed, {_fail} failed")

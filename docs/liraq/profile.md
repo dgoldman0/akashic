@@ -1,6 +1,6 @@
 # Profile — LIRAQ Presentation Profile Parser
 
-**Module:** `akashic-pp`  
+**Module:** `akashic-profile`  
 **File:** `akashic/liraq/profile.f`  
 **Requires:** `akashic-yaml`, `akashic-string`
 
@@ -24,49 +24,49 @@ Profile documents are YAML text (addr len) stored in memory.
 
 ### Metadata
 
-#### PP-NAME
+#### PROF-NAME
 ```forth
-PP-NAME ( p-a p-l -- str-a str-l )
+PROF-NAME ( p-a p-l -- str-a str-l )
 ```
 Extract the profile's name string.  Aborts if `profile.name` is absent.
 
-#### PP-VERSION
+#### PROF-VERSION
 ```forth
-PP-VERSION ( p-a p-l -- str-a str-l )
+PROF-VERSION ( p-a p-l -- str-a str-l )
 ```
 Extract the profile's version string.
 
-#### PP-DESC?
+#### PROF-DESC?
 ```forth
-PP-DESC? ( p-a p-l -- str-a str-l flag )
+PROF-DESC? ( p-a p-l -- str-a str-l flag )
 ```
 Extract the optional description.  Returns `( str-a str-l -1 )` if present,
 `( 0 0 0 )` if absent.
 
-#### PP-VALID?
+#### PROF-VALID?
 ```forth
-PP-VALID? ( p-a p-l -- flag )
+PROF-VALID? ( p-a p-l -- flag )
 ```
 Does this YAML document have a valid profile header with at least
 `name` and `capabilities`?
 
-#### PP-CAPS-COUNT
+#### PROF-CAPS-COUNT
 ```forth
-PP-CAPS-COUNT ( p-a p-l -- n )
+PROF-CAPS-COUNT ( p-a p-l -- n )
 ```
 Number of capabilities declared by the profile.
 
-#### PP-HAS-CAP?
+#### PROF-HAS-CAP?
 ```forth
-PP-HAS-CAP? ( p-a p-l cap-a cap-l -- flag )
+PROF-HAS-CAP? ( p-a p-l cap-a cap-l -- flag )
 ```
 Does the profile's `capabilities` array contain the given string?
 
 ### Element Category Classifier
 
-#### PP-ELEM-CAT
+#### PROF-ELEM-CAT
 ```forth
-PP-ELEM-CAT ( type-a type-l -- cat-a cat-l )
+PROF-ELEM-CAT ( type-a type-l -- cat-a cat-l )
 ```
 Map a UIDL element type name to its default cascade category.  The 16
 standard types map as:
@@ -90,93 +90,93 @@ Where *key* is the subsection name (category, type, role, etc.) and *prop* is
 the property name.  Returns `( val-cursor -1 )` on success, `( 0 0 0 )` on
 not-found.
 
-#### PP-DEFAULT
+#### PROF-DEFAULT
 ```forth
-PP-DEFAULT ( p-a p-l cat-a cat-l prop-a prop-l -- val-a val-l flag )
+PROF-DEFAULT ( p-a p-l cat-a cat-l prop-a prop-l -- val-a val-l flag )
 ```
 Look up `defaults.<category>.<property>`.
 
-#### PP-ETYPE
+#### PROF-ETYPE
 ```forth
-PP-ETYPE ( p-a p-l type-a type-l prop-a prop-l -- val-a val-l flag )
+PROF-ETYPE ( p-a p-l type-a type-l prop-a prop-l -- val-a val-l flag )
 ```
 Look up `element-types.<type>.<property>`.
 
-#### PP-ROLE
+#### PROF-ROLE
 ```forth
-PP-ROLE ( p-a p-l role-a role-l prop-a prop-l -- val-a val-l flag )
+PROF-ROLE ( p-a p-l role-a role-l prop-a prop-l -- val-a val-l flag )
 ```
 Look up `roles.<role>.<property>`.
 
-#### PP-STATE
+#### PROF-STATE
 ```forth
-PP-STATE ( p-a p-l state-a state-l prop-a prop-l -- val-a val-l flag )
+PROF-STATE ( p-a p-l state-a state-l prop-a prop-l -- val-a val-l flag )
 ```
 Look up `states.<state>.<property>`.
 
-#### PP-IMPORTANCE
+#### PROF-IMPORTANCE
 ```forth
-PP-IMPORTANCE ( p-a p-l imp-a imp-l prop-a prop-l -- val-a val-l flag )
+PROF-IMPORTANCE ( p-a p-l imp-a imp-l prop-a prop-l -- val-a val-l flag )
 ```
 Look up `importance.<level>.<property>`.
 
-#### PP-DENSITY
+#### PROF-DENSITY
 ```forth
-PP-DENSITY ( p-a p-l name-a name-l key-a key-l -- val-a val-l flag )
+PROF-DENSITY ( p-a p-l name-a name-l key-a key-l -- val-a val-l flag )
 ```
 Look up `density.<name>.<key>`.
 
-#### PP-HIGH-CONTRAST
+#### PROF-HIGH-CONTRAST
 ```forth
-PP-HIGH-CONTRAST ( p-a p-l key-a key-l -- val-a val-l flag )
+PROF-HIGH-CONTRAST ( p-a p-l key-a key-l -- val-a val-l flag )
 ```
 Look up `high-contrast.<key>`.
 
 ### Cascade Context
 
-Set context once, then call `PP-GET` repeatedly for different properties:
+Set context once, then call `PROF-GET` repeatedly for different properties:
 
 ```forth
-S" label" PP-SET-TYPE
-S" navigation" PP-SET-ROLE
-S" attended" PP-SET-STATE
-prof-a prof-l S" color" PP-GET  ( -- val-a val-l flag )
-prof-a prof-l S" font-size" PP-GET
-PP-CLEAR-CTX
+S" label" PROF-SET-TYPE
+S" navigation" PROF-SET-ROLE
+S" attended" PROF-SET-STATE
+prof-a prof-l S" color" PROF-GET  ( -- val-a val-l flag )
+prof-a prof-l S" font-size" PROF-GET
+PROF-CLEAR-CTX
 ```
 
-#### PP-SET-TYPE
+#### PROF-SET-TYPE
 ```forth
-PP-SET-TYPE ( type-a type-l -- )
+PROF-SET-TYPE ( type-a type-l -- )
 ```
 Set element type for cascade.  Auto-sets the default category via
-`PP-ELEM-CAT`.
+`PROF-ELEM-CAT`.
 
-#### PP-SET-ROLE
+#### PROF-SET-ROLE
 ```forth
-PP-SET-ROLE ( role-a role-l -- )
+PROF-SET-ROLE ( role-a role-l -- )
 ```
 
-#### PP-SET-STATE
+#### PROF-SET-STATE
 ```forth
-PP-SET-STATE ( state-a state-l -- )
+PROF-SET-STATE ( state-a state-l -- )
 ```
 
-#### PP-SET-IMP
+#### PROF-SET-IMP
 ```forth
-PP-SET-IMP ( imp-a imp-l -- )
+PROF-SET-IMP ( imp-a imp-l -- )
 ```
 Set importance level for cascade.
 
-#### PP-CLEAR-CTX
+#### PROF-CLEAR-CTX
 ```forth
-PP-CLEAR-CTX ( -- )
+PROF-CLEAR-CTX ( -- )
 ```
 Clear all cascade context (type, role, state, importance, category).
 
-#### PP-GET
+#### PROF-GET
 ```forth
-PP-GET ( p-a p-l prop-a prop-l -- val-a val-l flag )
+PROF-GET ( p-a p-l prop-a prop-l -- val-a val-l flag )
 ```
 Resolve a property through the full cascade using the current context.
 Checks all five layers in order; later matches override earlier ones.
@@ -185,11 +185,11 @@ Returns the most-specific value found, or `( 0 0 0 )` if not found.
 ### Error Handling
 
 ```forth
-PP-ERR        ( variable )   \ error code, 0 = OK
-PP-OK?        ( -- flag )    \ true if no error
-PP-CLEAR-ERR  ( -- )         \ reset error state
-PP-E-NOT-FOUND  ( constant = 1 )  \ property not found
-PP-E-BAD-PROFILE ( constant = 2 ) \ missing profile header
+PROF-ERR        ( variable )   \ error code, 0 = OK
+PROF-OK?        ( -- flag )    \ true if no error
+PROF-CLEAR-ERR  ( -- )         \ reset error state
+PROF-E-NOT-FOUND  ( constant = 1 )  \ property not found
+PROF-E-BAD-PROFILE ( constant = 2 ) \ missing profile header
 ```
 
 ## Profile YAML Format
