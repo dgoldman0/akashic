@@ -53,10 +53,16 @@
 \   FX-EQ-FREE         ( desc -- )
 \   FX-EQ-BAND!        ( freq gain-db Q band# desc -- )
 \   FX-EQ-PROCESS      ( buf desc -- )
+\
+\   FX-COMP-CREATE     ( thresh ratio attack release rate -- desc )
+\   FX-COMP-FREE       ( desc -- )
+\   FX-COMP-PROCESS    ( buf desc -- )
+\   FX-COMP-LIMIT!     ( desc -- )
 
 REQUIRE audio/pcm.f
 REQUIRE audio/lfo.f
 REQUIRE ../math/trig.f
+REQUIRE ../math/exp.f
 
 PROVIDED akashic-audio-fx
 
@@ -1285,4 +1291,208 @@ VARIABLE _FXQ-BN      \ band address during inner loop
         _FXQ-BUF @
         I _FXQ-DESC @ _FXQ-BAND-ADDR
         _FXQ-PROCESS-BAND
+    LOOP ;
+
+\ #####################################################################
+\  SECTION 7 — FX-COMP (Compressor / Limiter)
+\ #####################################################################
+\
+\  Dynamics processor with envelope follower.
+\
+\  Envelope detection: one-pole LP on |sample|, with separate
+\  attack and release coefficients for fast transient response
+\  and smooth recovery.
+\
+\    if |x| > level: level ← atk × |x| + (1-atk) × level   (attack)
+\    else:           level ← rel × |x| + (1-rel) × level   (release)
+\
+\  Smoothing coefficient computed from time constant:
+\    α = 1 − e^(−1/N)   where N = time_ms × rate / 1000
+\  Uses EXP-EXP from exp.f.  Falls back to α ≈ 1/N for
+\  long time constants where FP16 cancellation would occur.
+\
+\  Gain reduction (exact power formula via EXP-POW from exp.f):
+\    if level < threshold:  G = 1.0
+\    if ratio = 0 (limiter): G = threshold / level
+\    else: G = (threshold / level) ^ (1 − 1/ratio)
+\
+\  Parameters:
+\    threshold — FP16, 0.0–1.0 (above this level, gain reduced)
+\    ratio     — FP16, 1.0 → no compression, higher → more compression
+\                0 = limiter mode (infinite ratio)
+\    attack    — integer, attack time in milliseconds
+\    release   — integer, release time in milliseconds
+\    rate      — integer, sample rate
+
+\ =====================================================================
+\  FX-COMP descriptor layout  (7 cells = 56 bytes)
+\ =====================================================================
+\
+\  +0   threshold  FP16
+\  +8   slope      FP16  precomputed: 1 - 1/ratio  (1.0 for limiter)
+\  +16  atk_coeff  FP16  attack smoothing coefficient
+\  +24  rel_coeff  FP16  release smoothing coefficient
+\  +32  level      FP16  current envelope level (state)
+\  +40  gain       FP16  current applied gain (state)
+\  +48  limiter    integer  1 = limiter mode, 0 = compressor
+
+56 CONSTANT FXK-DESC-SIZE
+
+: FXK.THRESH ( d -- addr )  ;
+: FXK.SLOPE  ( d -- addr )  8 + ;
+: FXK.ATK    ( d -- addr )  16 + ;
+: FXK.REL    ( d -- addr )  24 + ;
+: FXK.LEVEL  ( d -- addr )  32 + ;
+: FXK.GAIN   ( d -- addr )  40 + ;
+: FXK.LIM    ( d -- addr )  48 + ;
+
+VARIABLE _FXK-PTR
+VARIABLE _FXK-BUF
+VARIABLE _FXK-DESC
+VARIABLE _FXK-X
+VARIABLE _FXK-ABS
+VARIABLE _FXK-LVL
+VARIABLE _FXK-G
+VARIABLE _FXK-TMP1
+VARIABLE _FXK-TMP2
+
+\ =====================================================================
+\  _FXK-TIME>COEFF — Convert time in ms + rate to one-pole coefficient
+\ =====================================================================
+\  Exact formula: α = 1 − e^(−1/N) where N = time_ms × rate / 1000.
+\  Uses EXP-EXP from exp.f for short/medium time constants.
+\  Falls back to α ≈ 1/N for N > 500 (long times) to avoid
+\  FP16 catastrophic cancellation in (1.0 − near-1.0).
+\  ( time-ms rate -- coeff )
+
+: _FXK-TIME>COEFF  ( time-ms rate -- coeff )
+    * 1000 /                           ( samples = N )
+    1 MAX
+    DUP 500 > IF
+        \ Long time: α ≈ 1/N (Taylor approx, <0.1% error)
+        INT>FP16 FP16-RECIP
+    ELSE
+        \ Short/medium: exact α = 1 − e^(−1/N)
+        INT>FP16 FP16-RECIP            ( 1/N )
+        FP16-NEG EXP-EXP               ( e^(-1/N) )
+        0x3C00 SWAP FP16-SUB           ( 1 − e^(-1/N) )
+    THEN ;
+
+\ =====================================================================
+\  FX-COMP-CREATE — Allocate compressor
+\ =====================================================================
+\  ( thresh ratio attack release rate -- desc )
+
+: FX-COMP-CREATE  ( thresh ratio attack release rate -- desc )
+    _FXK-TMP1 !                        \ save rate
+
+    FXK-DESC-SIZE ALLOCATE
+    0<> ABORT" FX-COMP-CREATE: alloc failed"
+    _FXK-PTR !                         ( thresh ratio attack release )
+
+    \ Compute release coefficient
+    _FXK-TMP1 @ _FXK-TIME>COEFF       ( thresh ratio attack rel_coeff )
+    _FXK-PTR @ FXK.REL !              ( thresh ratio attack )
+
+    \ Compute attack coefficient
+    _FXK-TMP1 @ _FXK-TIME>COEFF       ( thresh ratio atk_coeff )
+    _FXK-PTR @ FXK.ATK !              ( thresh ratio )
+
+    \ Compute slope = 1 - 1/ratio
+    \ If ratio = 0 → limiter mode → slope = 1.0
+    DUP 0= IF
+        DROP
+        0x3C00 _FXK-PTR @ FXK.SLOPE !
+        1 _FXK-PTR @ FXK.LIM !
+    ELSE
+        0x3C00 SWAP FP16-DIV          ( 1/ratio )
+        0x3C00 SWAP FP16-SUB          ( 1 - 1/ratio )
+        _FXK-PTR @ FXK.SLOPE !
+        0 _FXK-PTR @ FXK.LIM !
+    THEN                               ( thresh )
+
+    _FXK-PTR @ FXK.THRESH !
+
+    \ Init state
+    0 _FXK-PTR @ FXK.LEVEL !
+    0x3C00 _FXK-PTR @ FXK.GAIN !      \ gain starts at 1.0
+
+    _FXK-PTR @ ;
+
+\ =====================================================================
+\  FX-COMP-FREE — Free compressor
+\ =====================================================================
+
+: FX-COMP-FREE  ( desc -- )  FREE ;
+
+\ =====================================================================
+\  FX-COMP-LIMIT! — Set to limiter mode (ratio = infinity)
+\ =====================================================================
+
+: FX-COMP-LIMIT!  ( desc -- )
+    DUP 0x3C00 SWAP FXK.SLOPE !       \ slope = 1.0
+    1 SWAP FXK.LIM ! ;
+
+\ =====================================================================
+\  FX-COMP-PROCESS — Apply compression in-place
+\ =====================================================================
+\  ( buf desc -- )
+
+: FX-COMP-PROCESS  ( buf desc -- )
+    _FXK-DESC !
+    _FXK-BUF !
+
+    _FXK-BUF @ PCM-LEN 0 DO
+        \ Read input
+        I _FXK-BUF @ PCM-FRAME@
+        _FXK-X !
+        _FXK-X @ FP16-ABS _FXK-ABS !
+
+        \ Envelope follower: one-pole LP on |sample|
+        _FXK-DESC @ FXK.LEVEL @ _FXK-LVL !
+
+        _FXK-ABS @  _FXK-LVL @  FP16-GT IF
+            \ Attack: level rising
+            _FXK-DESC @ FXK.ATK @          ( atk )
+            DUP _FXK-ABS @ FP16-MUL       ( atk  atk*|x| )
+            SWAP 0x3C00 SWAP FP16-SUB     ( atk*|x|  1-atk )
+            _FXK-LVL @ FP16-MUL           ( atk*|x|  (1-a)*lvl )
+            FP16-ADD
+        ELSE
+            \ Release: level falling
+            _FXK-DESC @ FXK.REL @          ( rel )
+            DUP _FXK-ABS @ FP16-MUL       ( rel  rel*|x| )
+            SWAP 0x3C00 SWAP FP16-SUB     ( rel*|x|  1-rel )
+            _FXK-LVL @ FP16-MUL           ( rel*|x|  (1-r)*lvl )
+            FP16-ADD
+        THEN
+        DUP _FXK-DESC @ FXK.LEVEL !
+        _FXK-LVL !                         \ updated level
+
+        \ Compute gain
+        _FXK-LVL @ _FXK-DESC @ FXK.THRESH @ FP16-GT IF
+            \ Level exceeds threshold — reduce gain
+            _FXK-DESC @ FXK.LIM @ IF
+                \ Limiter: G = threshold / level
+                _FXK-DESC @ FXK.THRESH @
+                _FXK-LVL @ FP16-DIV
+            ELSE
+                \ Compressor: G = (thresh/level) ^ slope
+                \ where slope = 1 − 1/ratio (precomputed)
+                _FXK-DESC @ FXK.THRESH @
+                _FXK-LVL @ FP16-DIV       ( thresh/level )
+                _FXK-DESC @ FXK.SLOPE @   ( thresh/level slope )
+                EXP-POW                    ( (t/l)^slope )
+            THEN
+            \ Clamp gain to [0, 1]
+            0 0x3C00 FP16-CLAMP
+        ELSE
+            0x3C00                          \ below threshold: G = 1.0
+        THEN
+        _FXK-G !
+
+        \ Apply gain
+        _FXK-X @ _FXK-G @ FP16-MUL
+
+        I _FXK-BUF @ PCM-FRAME!
     LOOP ;

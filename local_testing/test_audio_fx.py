@@ -18,6 +18,7 @@ MATH_DIR   = os.path.join(ROOT_DIR, "akashic", "math")
 FP16_F     = os.path.join(MATH_DIR,  "fp16.f")
 FP16X_F    = os.path.join(MATH_DIR,  "fp16-ext.f")
 TRIG_F     = os.path.join(MATH_DIR,  "trig.f")
+EXP_F      = os.path.join(MATH_DIR,  "exp.f")
 FILTER_F   = os.path.join(MATH_DIR,  "filter.f")
 PCM_F      = os.path.join(AUDIO_DIR, "pcm.f")
 OSC_F      = os.path.join(AUDIO_DIR, "osc.f")
@@ -26,6 +27,7 @@ ENV_F      = os.path.join(AUDIO_DIR, "env.f")
 LFO_F      = os.path.join(AUDIO_DIR, "lfo.f")
 CHAIN_F    = os.path.join(AUDIO_DIR, "chain.f")
 FX_F       = os.path.join(AUDIO_DIR, "fx.f")
+MIX_F      = os.path.join(AUDIO_DIR, "mix.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -104,13 +106,14 @@ def restore_cpu_state(cpu, state):
 def build_snapshot():
     global _snapshot
     if _snapshot: return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + fp16 + trig + pcm + gen + chain + fx ...")
+    print("[*] Building snapshot: BIOS + KDOS + fp16 + trig + exp + pcm + gen + chain + fx + mix ...")
     t0 = time.time()
     bios_code    = _load_bios()
     kdos_lines   = _load_forth_lines(KDOS_PATH)
     fp16_lines   = _load_forth_lines(FP16_F)
     fp16x_lines  = _load_forth_lines(FP16X_F)
     trig_lines   = _load_forth_lines(TRIG_F)
+    exp_lines    = _load_forth_lines(EXP_F)
     pcm_lines    = _load_forth_lines(PCM_F)
     osc_lines    = _load_forth_lines(OSC_F)
     noise_lines  = _load_forth_lines(NOISE_F)
@@ -118,6 +121,7 @@ def build_snapshot():
     lfo_lines    = _load_forth_lines(LFO_F)
     chain_lines  = _load_forth_lines(CHAIN_F)
     fx_lines     = _load_forth_lines(FX_F)
+    mix_lines    = _load_forth_lines(MIX_F)
 
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -125,10 +129,10 @@ def build_snapshot():
     sys_obj.boot()
 
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
-                 + fp16_lines + fp16x_lines + trig_lines
+                 + fp16_lines + fp16x_lines + trig_lines + exp_lines
                  + pcm_lines + osc_lines + noise_lines
                  + env_lines + lfo_lines
-                 + chain_lines + fx_lines)
+                 + chain_lines + fx_lines + mix_lines)
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
     while steps < mx:
@@ -1342,6 +1346,332 @@ def test_osc_reverb():
     ])
 
 # ════════════════════════════════════════════════════════════════════
+#  FX-COMP (Compressor / Limiter) tests
+# ════════════════════════════════════════════════════════════════════
+
+def test_comp_create_free():
+    """FX-COMP-CREATE allocates, FX-COMP-FREE releases without error."""
+    check_no_error("comp_create_free", [
+        ": TMP",
+        "  0x3800 0x4400 10 100 44100 FX-COMP-CREATE",  # thresh=0.5, ratio=4, 10ms/100ms
+        "  FX-COMP-FREE ;",
+        "TMP"
+    ])
+
+def test_comp_below_threshold():
+    """Signal below threshold passes through unmodified."""
+    # thresh=0.5, signal=0.2 (0x3266) — well below threshold
+    check_val("comp_below_thresh", [
+        "VARIABLE _TB",
+        "VARIABLE _TC",
+        ": TMP",
+        "  64 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3266 I _TB @ PCM-FRAME! LOOP",
+        "  0x3800 0x4400 1 50 1000 FX-COMP-CREATE _TC !",  # thresh=0.5, ratio=4
+        "  _TB @ _TC @ FX-COMP-PROCESS",
+        "  32 _TB @ PCM-FRAME@",               # mid-buffer sample
+        "  _TC @ FX-COMP-FREE",
+        "  _TB @ PCM-FREE",
+        "  . ;",
+        "TMP"
+    ], 0x3266)  # should be unchanged
+
+def test_comp_above_threshold():
+    """Loud signal above threshold is attenuated."""
+    # thresh=0.25, ratio=4, constant signal=0.8.
+    # After envelope rises above 0.25, gain < 1.0 → output < 0.8.
+    # Use 512 frames at rate=1000 with fast attack (1ms → α ≈ 1/1 = 1.0)
+    # to ensure envelope rises quickly.
+    check_val_range("comp_above_thresh", [
+        "VARIABLE _TB",
+        "VARIABLE _TC",
+        ": TMP",
+        "  512 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3A66 I _TB @ PCM-FRAME! LOOP",  # 0.8
+        "  0x3400 0x4400 1 50 1000 FX-COMP-CREATE _TC !",  # thresh=0.25, ratio=4
+        "  _TB @ _TC @ FX-COMP-PROCESS",
+        "  500 _TB @ PCM-FRAME@",              # near-end sample
+        "  _TC @ FX-COMP-FREE",
+        "  _TB @ PCM-FREE",
+        "  . ;",
+        "TMP"
+    ], 0x0001, 0x3A65)  # non-zero but less than 0.8 (0x3A66)
+
+def test_comp_limiter():
+    """Limiter mode: FX-COMP-LIMIT! sets ratio to infinity."""
+    # thresh=0.25, limiter mode, signal=0.8.
+    # After envelope rises, G = thresh/level ≈ 0.25/0.8 = 0.3125
+    # output ≈ 0.8 * 0.3125 = 0.25 (the threshold).
+    # Use fast attack so envelope converges quickly.
+    check_val_range("comp_limiter", [
+        "VARIABLE _TB",
+        "VARIABLE _TC",
+        ": TMP",
+        "  512 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3A66 I _TB @ PCM-FRAME! LOOP",  # 0.8
+        "  0x3400 0x4400 1 50 1000 FX-COMP-CREATE _TC !",  # thresh=0.25
+        "  _TC @ FX-COMP-LIMIT!",
+        "  _TB @ _TC @ FX-COMP-PROCESS",
+        "  500 _TB @ PCM-FRAME@",
+        "  _TC @ FX-COMP-FREE",
+        "  _TB @ PCM-FREE",
+        "  . ;",
+        "TMP"
+    ], 0x0001, 0x3800)  # attenuated to ≤0.5
+
+def test_comp_silence():
+    """Compressor on silence produces silence."""
+    check_val("comp_silence", [
+        "VARIABLE _TB",
+        "VARIABLE _TC",
+        ": TMP",
+        "  32 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-CLEAR",
+        "  0x3800 0x4400 5 50 1000 FX-COMP-CREATE _TC !",
+        "  _TB @ _TC @ FX-COMP-PROCESS",
+        "  16 _TB @ PCM-FRAME@",
+        "  _TC @ FX-COMP-FREE",
+        "  _TB @ PCM-FREE",
+        "  . ;",
+        "TMP"
+    ], 0)  # silence in, silence out
+
+def test_comp_ratio_one():
+    """Ratio=1 means no compression (slope=0), signal passes through."""
+    # slope = 1 - 1/1 = 0, so G = (thresh/level)^0 = 1.0 always
+    check_val("comp_ratio_one", [
+        "VARIABLE _TB",
+        "VARIABLE _TC",
+        ": TMP",
+        "  512 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3A66 I _TB @ PCM-FRAME! LOOP",  # 0.8
+        "  0x3400 0x3C00 1 50 1000 FX-COMP-CREATE _TC !",  # ratio=1.0
+        "  _TB @ _TC @ FX-COMP-PROCESS",
+        "  500 _TB @ PCM-FRAME@",
+        "  _TC @ FX-COMP-FREE",
+        "  _TB @ PCM-FREE",
+        "  . ;",
+        "TMP"
+    ], 0x3A66)  # unchanged — no compression at ratio 1
+
+def test_comp_in_chain():
+    """Compressor works in an effect chain slot."""
+    check_no_error("comp_in_chain", [
+        "VARIABLE _TB",
+        "VARIABLE _TN",
+        "VARIABLE _TC",
+        ": TMP",
+        "  64 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3800 I _TB @ PCM-FRAME! LOOP",
+        "  0x3800 0x4000 5 50 1000 FX-COMP-CREATE _TC !",
+        "  1 CHAIN-CREATE _TN !",
+        "  ['] FX-COMP-PROCESS _TC @ 0 _TN @ CHAIN-SET!",
+        "  _TB @ _TN @ CHAIN-PROCESS",
+        "  _TC @ FX-COMP-FREE",
+        "  _TN @ CHAIN-FREE",
+        "  _TB @ PCM-FREE ;",
+        "TMP"
+    ])
+
+# ════════════════════════════════════════════════════════════════════
+#  MIX (N-channel mixer) tests
+# ════════════════════════════════════════════════════════════════════
+
+def test_mix_create_free():
+    """MIX-CREATE allocates, MIX-FREE releases without error."""
+    check_no_error("mix_create_free", [
+        ": TMP",
+        "  4 32 1000 MIX-CREATE MIX-FREE ;",
+        "TMP"
+    ])
+
+def test_mix_silence():
+    """Mixer with no inputs renders silence."""
+    check_vals("mix_silence", [
+        "VARIABLE _TM",
+        ": TMP",
+        "  2 16 1000 MIX-CREATE _TM !",
+        "  _TM @ MIX-RENDER",
+        "  .\" |RESULT|\" CR",
+        "  0 0 _TM @ MIX-MASTER PCM-SAMPLE@ .",   # L
+        "  0 1 _TM @ MIX-MASTER PCM-SAMPLE@ .",   # R
+        "  _TM @ MIX-FREE ;",
+        "TMP"
+    ], [0, 0])
+
+def test_mix_center_pan():
+    """Center pan (0.0) distributes equally to L and R."""
+    # Input: mono buffer with constant 1.0.
+    # Pan=0.0 → L=cos(π/4)≈0.707, R=sin(π/4)≈0.707
+    # FP16 0.707 ≈ 0x39A8 (but trig precision varies)
+    check_vals_range("mix_center_pan", [
+        "VARIABLE _TM",
+        "VARIABLE _TB",
+        ": TMP",
+        "  16 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3C00 I _TB @ PCM-FRAME! LOOP",   # fill with 1.0
+        "  1 16 1000 MIX-CREATE _TM !",
+        "  _TB @ 0 _TM @ MIX-INPUT!",                             # assign buf to ch0
+        "  _TM @ MIX-RENDER",
+        "  .\" |RESULT|\" CR",
+        "  8 0 _TM @ MIX-MASTER PCM-SAMPLE@ .",  # L at frame 8
+        "  8 1 _TM @ MIX-MASTER PCM-SAMPLE@ .",  # R at frame 8
+        "  _TM @ MIX-FREE",
+        "  _TB @ PCM-FREE ;",
+        "TMP"
+    ], [
+        (0x3800, 0x3C00),  # L ≈ 0.707 (between 0.5 and 1.0)
+        (0x3800, 0x3C00),  # R ≈ 0.707
+    ])
+
+def test_mix_hard_left():
+    """Pan = −1.0 sends all signal to left channel."""
+    check_vals_range("mix_hard_left", [
+        "VARIABLE _TM",
+        "VARIABLE _TB",
+        ": TMP",
+        "  16 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3C00 I _TB @ PCM-FRAME! LOOP",
+        "  1 16 1000 MIX-CREATE _TM !",
+        "  _TB @ 0 _TM @ MIX-INPUT!",
+        "  0xBC00 0 _TM @ MIX-PAN!",           # pan = -1.0 (hard left)
+        "  _TM @ MIX-RENDER",
+        "  .\" |RESULT|\" CR",
+        "  8 0 _TM @ MIX-MASTER PCM-SAMPLE@ .",  # L
+        "  8 1 _TM @ MIX-MASTER PCM-SAMPLE@ .",  # R
+        "  _TM @ MIX-FREE",
+        "  _TB @ PCM-FREE ;",
+        "TMP"
+    ], [
+        (0x3A00, 0x3C00),  # L ≈ 1.0  (cos(0) = 1.0)
+        (0x0000, 0x2000),  # R ≈ 0.0  (sin(0) ≈ 0)
+    ])
+
+def test_mix_hard_right():
+    """Pan = +1.0 sends all signal to right channel."""
+    check_vals_range("mix_hard_right", [
+        "VARIABLE _TM",
+        "VARIABLE _TB",
+        ": TMP",
+        "  16 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3C00 I _TB @ PCM-FRAME! LOOP",
+        "  1 16 1000 MIX-CREATE _TM !",
+        "  _TB @ 0 _TM @ MIX-INPUT!",
+        "  0x3C00 0 _TM @ MIX-PAN!",           # pan = +1.0 (hard right)
+        "  _TM @ MIX-RENDER",
+        "  .\" |RESULT|\" CR",
+        "  8 0 _TM @ MIX-MASTER PCM-SAMPLE@ .",  # L
+        "  8 1 _TM @ MIX-MASTER PCM-SAMPLE@ .",  # R
+        "  _TM @ MIX-FREE",
+        "  _TB @ PCM-FREE ;",
+        "TMP"
+    ], [
+        (0x0000, 0x2000),  # L ≈ 0.0  (cos(π/2) ≈ 0)
+        (0x3A00, 0x3C00),  # R ≈ 1.0  (sin(π/2) = 1.0)
+    ])
+
+def test_mix_mute():
+    """Muted channel contributes nothing."""
+    check_vals("mix_mute", [
+        "VARIABLE _TM",
+        "VARIABLE _TB",
+        ": TMP",
+        "  16 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3C00 I _TB @ PCM-FRAME! LOOP",
+        "  1 16 1000 MIX-CREATE _TM !",
+        "  _TB @ 0 _TM @ MIX-INPUT!",
+        "  1 0 _TM @ MIX-MUTE!",               # mute channel 0
+        "  _TM @ MIX-RENDER",
+        "  .\" |RESULT|\" CR",
+        "  8 0 _TM @ MIX-MASTER PCM-SAMPLE@ .",
+        "  8 1 _TM @ MIX-MASTER PCM-SAMPLE@ .",
+        "  _TM @ MIX-FREE",
+        "  _TB @ PCM-FREE ;",
+        "TMP"
+    ], [0, 0])
+
+def test_mix_two_channels():
+    """Two channels with opposite panning sum correctly."""
+    # Ch0: signal=0.5, pan=-1.0 (hard left)  → L ≈ 0.5, R ≈ 0
+    # Ch1: signal=0.5, pan=+1.0 (hard right) → L ≈ 0,   R ≈ 0.5
+    check_vals_range("mix_two_channels", [
+        "VARIABLE _TM",
+        "VARIABLE _TB0",
+        "VARIABLE _TB1",
+        ": TMP",
+        "  16 1000 16 1 PCM-ALLOC _TB0 !",
+        "  _TB0 @ PCM-LEN 0 DO 0x3800 I _TB0 @ PCM-FRAME! LOOP",  # 0.5
+        "  16 1000 16 1 PCM-ALLOC _TB1 !",
+        "  _TB1 @ PCM-LEN 0 DO 0x3800 I _TB1 @ PCM-FRAME! LOOP",  # 0.5
+        "  2 16 1000 MIX-CREATE _TM !",
+        "  _TB0 @ 0 _TM @ MIX-INPUT!",
+        "  _TB1 @ 1 _TM @ MIX-INPUT!",
+        "  0xBC00 0 _TM @ MIX-PAN!",           # ch0 hard left
+        "  0x3C00 1 _TM @ MIX-PAN!",           # ch1 hard right
+        "  _TM @ MIX-RENDER",
+        "  .\" |RESULT|\" CR",
+        "  8 0 _TM @ MIX-MASTER PCM-SAMPLE@ .",  # L
+        "  8 1 _TM @ MIX-MASTER PCM-SAMPLE@ .",  # R
+        "  _TM @ MIX-FREE",
+        "  _TB0 @ PCM-FREE",
+        "  _TB1 @ PCM-FREE ;",
+        "TMP"
+    ], [
+        (0x3400, 0x3C00),  # L ≈ 0.5 (from ch0)
+        (0x3400, 0x3C00),  # R ≈ 0.5 (from ch1)
+    ])
+
+def test_mix_master_gain():
+    """Master gain scales all output."""
+    # Same as center pan test but master gain = 0.5
+    # Expected L ≈ 0.707 * 0.5 = 0.354, R same
+    check_vals_range("mix_master_gain", [
+        "VARIABLE _TM",
+        "VARIABLE _TB",
+        ": TMP",
+        "  16 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3C00 I _TB @ PCM-FRAME! LOOP",
+        "  1 16 1000 MIX-CREATE _TM !",
+        "  _TB @ 0 _TM @ MIX-INPUT!",
+        "  0x3800 _TM @ MIX-MASTER-GAIN!",     # master gain = 0.5
+        "  _TM @ MIX-RENDER",
+        "  .\" |RESULT|\" CR",
+        "  8 0 _TM @ MIX-MASTER PCM-SAMPLE@ .",
+        "  8 1 _TM @ MIX-MASTER PCM-SAMPLE@ .",
+        "  _TM @ MIX-FREE",
+        "  _TB @ PCM-FREE ;",
+        "TMP"
+    ], [
+        (0x2800, 0x3800),  # L ≈ 0.354 (roughly 0.25-0.5 range)
+        (0x2800, 0x3800),  # R ≈ 0.354
+    ])
+
+def test_mix_channel_gain():
+    """Per-channel gain scales channel contribution."""
+    # Input 1.0, channel gain 0.5, center pan
+    # Expected: L ≈ 0.5*0.707 = 0.354, R same
+    check_vals_range("mix_channel_gain", [
+        "VARIABLE _TM",
+        "VARIABLE _TB",
+        ": TMP",
+        "  16 1000 16 1 PCM-ALLOC _TB !",
+        "  _TB @ PCM-LEN 0 DO 0x3C00 I _TB @ PCM-FRAME! LOOP",
+        "  1 16 1000 MIX-CREATE _TM !",
+        "  _TB @ 0 _TM @ MIX-INPUT!",
+        "  0x3800 0 _TM @ MIX-GAIN!",          # channel gain = 0.5
+        "  _TM @ MIX-RENDER",
+        "  .\" |RESULT|\" CR",
+        "  8 0 _TM @ MIX-MASTER PCM-SAMPLE@ .",
+        "  8 1 _TM @ MIX-MASTER PCM-SAMPLE@ .",
+        "  _TM @ MIX-FREE",
+        "  _TB @ PCM-FREE ;",
+        "TMP"
+    ], [
+        (0x2800, 0x3800),  # L ≈ 0.354
+        (0x2800, 0x3800),  # R ≈ 0.354
+    ])
+
+# ════════════════════════════════════════════════════════════════════
 #  Main
 # ════════════════════════════════════════════════════════════════════
 
@@ -1422,6 +1752,26 @@ if __name__ == '__main__':
     print("\n── integration (2b) ──")
     test_full_chain_2b()
     test_osc_reverb()
+
+    print("\n── fx.f — compressor ──")
+    test_comp_create_free()
+    test_comp_below_threshold()
+    test_comp_above_threshold()
+    test_comp_limiter()
+    test_comp_silence()
+    test_comp_ratio_one()
+    test_comp_in_chain()
+
+    print("\n── mix.f — mixer ──")
+    test_mix_create_free()
+    test_mix_silence()
+    test_mix_center_pan()
+    test_mix_hard_left()
+    test_mix_hard_right()
+    test_mix_mute()
+    test_mix_two_channels()
+    test_mix_master_gain()
+    test_mix_channel_gain()
 
     print(f"\n{'='*50}")
     print(f"  {_pass_count} passed, {_fail_count} failed")

@@ -11,13 +11,15 @@ Audio effects that transform PCM buffers in-place.  Each effect has a
 - **FX-REVERB** — Schroeder reverb (4 comb filters + 2 allpass filters)
 - **FX-CHORUS** — LFO-modulated delay chorus
 - **FX-EQ** — Parametric EQ (up to 4 IIR biquad bands)
+- **FX-COMP** — Compressor / Limiter (envelope follower + gain reduction)
 
 ```forth
 REQUIRE audio/fx.f
 ```
 
 `PROVIDED akashic-audio-fx` — safe to include multiple times.
-Depends on `akashic-audio-pcm`, `akashic-audio-lfo`, `akashic-math-trig`.
+Depends on `akashic-audio-pcm`, `akashic-audio-lfo`, `akashic-math-trig`,
+`akashic-exp`.
 
 ---
 
@@ -30,6 +32,7 @@ Depends on `akashic-audio-pcm`, `akashic-audio-lfo`, `akashic-math-trig`.
 - [FX-REVERB — Schroeder Reverb](#fx-reverb--schroeder-reverb)
 - [FX-CHORUS — LFO-Modulated Delay](#fx-chorus--lfo-modulated-delay)
 - [FX-EQ — Parametric Equalizer](#fx-eq--parametric-equalizer)
+- [FX-COMP — Compressor / Limiter](#fx-comp--compressor--limiter)
 - [Quick Reference](#quick-reference)
 - [Cookbook](#cookbook)
 
@@ -471,6 +474,101 @@ calls for continuous streaming.
 
 ---
 
+## FX-COMP — Compressor / Limiter
+
+Dynamics processor with per-sample envelope follower and gain reduction.
+Reduces the dynamic range of signals that exceed a threshold.
+
+### Envelope Follower
+
+One-pole lowpass filter on $|x|$ with separate attack and release
+coefficients for fast transient response and smooth recovery:
+
+$$
+\text{level}_n = \begin{cases}
+\alpha_\text{atk} \cdot |x| + (1 - \alpha_\text{atk}) \cdot \text{level}_{n-1} & \text{if } |x| > \text{level}_{n-1} \\
+\alpha_\text{rel} \cdot |x| + (1 - \alpha_\text{rel}) \cdot \text{level}_{n-1} & \text{otherwise}
+\end{cases}
+$$
+
+Smoothing coefficients are computed from time constants using `EXP-EXP`
+from `exp.f`:  $\alpha = 1 - e^{-1/N}$ where $N = \text{time\_ms} \times \text{rate} / 1000$.
+
+### Gain Reduction
+
+Uses the exact power formula via `EXP-POW` from `exp.f`:
+
+$$
+G = \begin{cases}
+1 & \text{if level} < \text{threshold} \\
+\left(\frac{\text{threshold}}{\text{level}}\right)^{1 - 1/\text{ratio}} & \text{otherwise}
+\end{cases}
+$$
+
+In limiter mode (ratio = $\infty$):  $G = \text{threshold} / \text{level}$.
+
+### Descriptor Layout (56 bytes)
+
+| Offset | Field | Size | Description |
+|--------|-------|------|-------------|
+| +0 | threshold | FP16 | Compression threshold (0.0–1.0) |
+| +8 | slope | FP16 | Precomputed $1 - 1/\text{ratio}$ |
+| +16 | atk_coeff | FP16 | Attack smoothing coefficient |
+| +24 | rel_coeff | FP16 | Release smoothing coefficient |
+| +32 | level | FP16 | Current envelope level (state) |
+| +40 | gain | FP16 | Current applied gain (state) |
+| +48 | limiter | int | 1 = limiter mode, 0 = compressor |
+
+### API
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `FX-COMP-CREATE` | `( thresh ratio attack release rate -- desc )` | Create compressor ($\text{thresh}$: FP16, $\text{ratio}$: FP16, attack/release: ms, rate: Hz) |
+| `FX-COMP-FREE` | `( desc -- )` | Free compressor |
+| `FX-COMP-PROCESS` | `( buf desc -- )` | Apply compression in-place |
+| `FX-COMP-LIMIT!` | `( desc -- )` | Set ratio to $\infty$ (limiter mode) |
+
+### FX-COMP-CREATE
+
+```forth
+FX-COMP-CREATE  ( thresh ratio attack release rate -- desc )
+```
+
+- **thresh** — FP16 threshold (0.0–1.0).  Signals below this level
+  pass through unmodified.
+- **ratio** — FP16 compression ratio.  1.0 = no compression,
+  4.0 = 4∶1, 0 = limiter (infinite ratio).
+- **attack** — Attack time in milliseconds (integer).
+- **release** — Release time in milliseconds (integer).
+- **rate** — Sample rate in Hz (integer).
+
+Returns a heap-allocated descriptor.
+
+### FX-COMP-LIMIT!
+
+```forth
+FX-COMP-LIMIT!  ( desc -- )
+```
+
+Sets the compressor to limiter mode: slope = 1.0 (equivalent to
+ratio = $\infty$).  Gain formula becomes $G = \text{threshold} / \text{level}$,
+hard-capping the output to the threshold level.
+
+### FX-COMP-PROCESS
+
+```forth
+FX-COMP-PROCESS  ( buf desc -- )
+```
+
+Processes a mono PCM buffer in-place.  For each sample:
+1. Compute $|x|$ (absolute value of input)
+2. Update envelope level via one-pole LP (attack or release)
+3. If level > threshold, compute gain via `EXP-POW`
+4. Multiply sample by gain, clamp to [0, 1]
+5. Write back to buffer
+
+---
+
 ## Quick Reference
 
 | Word | Stack | Description |
@@ -497,6 +595,10 @@ calls for continuous streaming.
 | `FX-EQ-FREE` | `( desc -- )` | Free EQ |
 | `FX-EQ-BAND!` | `( freq gain-db Q band# desc -- )` | Configure band |
 | `FX-EQ-PROCESS` | `( buf desc -- )` | Apply EQ |
+| `FX-COMP-CREATE` | `( thresh ratio atk rel rate -- desc )` | Create compressor |
+| `FX-COMP-FREE` | `( desc -- )` | Free compressor |
+| `FX-COMP-PROCESS` | `( buf desc -- )` | Apply compression |
+| `FX-COMP-LIMIT!` | `( desc -- )` | Set to limiter mode |
 
 ---
 
@@ -596,4 +698,23 @@ myeq FX-EQ-FREE
 mychorus FX-CHORUS-FREE
 myverb FX-REVERB-FREE
 mychain CHAIN-FREE
+```
+
+### 4∶1 Compressor
+
+```forth
+\ threshold=0.5, ratio=4, 10ms attack, 100ms release
+0x3800 0x4400 10 100 44100 FX-COMP-CREATE  CONSTANT mycomp
+mybuf mycomp FX-COMP-PROCESS
+mycomp FX-COMP-FREE
+```
+
+### Brick-Wall Limiter
+
+```forth
+\ Threshold = 0.25 (-12 dB), limiter mode
+0x3400 0x3C00 1 50 44100 FX-COMP-CREATE  CONSTANT mylim
+mylim FX-COMP-LIMIT!
+mybuf mylim FX-COMP-PROCESS
+mylim FX-COMP-FREE
 ```
