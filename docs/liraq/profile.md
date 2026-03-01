@@ -192,6 +192,154 @@ PROF-E-NOT-FOUND  ( constant = 1 )  \ property not found
 PROF-E-BAD-PROFILE ( constant = 2 ) \ missing profile header
 ```
 
+### Multi-Capability Scoped Lookup (§7)
+
+For profiles declaring multiple capabilities, properties may be nested under
+capability subsections within `defaults`:
+
+```yaml
+defaults:
+  visual:
+    color: "#00FF00"
+  auditory:
+    voice: calm
+  font-family: "Helvetica"    # unscoped fallback
+```
+
+#### PROF-CAP-SECTION
+```forth
+PROF-CAP-SECTION ( p-a p-l cap-a cap-l prop-a prop-l -- val-a val-l flag )
+```
+Try `defaults.<cap>.<prop>` first; fall back to `defaults.<prop>` if not found.
+
+#### PROF-SET-CAP / PROF-CLEAR-CAP
+```forth
+PROF-SET-CAP   ( cap-a cap-l -- )
+PROF-CLEAR-CAP ( -- )
+```
+Set/clear the active capability for scoped lookups.
+
+### Profile Resolution (§8)
+
+#### Capability Constants
+```forth
+PROF-CAP-VISUAL    ( constant = 1 )
+PROF-CAP-AUDITORY  ( constant = 2 )
+PROF-CAP-TACTILE   ( constant = 4 )
+```
+
+#### PROF-RESOLVE
+```forth
+PROF-RESOLVE ( caps-mask addrs lens count -- best-a best-l flag )
+```
+Filter an array of profiles by capability subset matching.  Returns the
+most-specific profile (fewest capabilities declared) whose caps are a
+subset of `caps-mask`.  `addrs` and `lens` are parallel arrays of cell-sized
+profile addresses and lengths.
+
+### Accommodation (§8.2)
+
+#### PROF-ACCOMMODATE
+```forth
+PROF-ACCOMMODATE ( accom-a accom-l -- )
+```
+Parse a YAML accommodation document and set internal flags.  Recognised
+keys: `large-text`, `high-contrast`, `reduced-motion`.
+
+#### PROF-ACCOM-CLEAR
+```forth
+PROF-ACCOM-CLEAR ( -- )
+```
+Reset all accommodation flags.
+
+#### PROF-ACCOM-LT? / PROF-ACCOM-HC? / PROF-ACCOM-RM?
+```forth
+PROF-ACCOM-LT? ( -- flag )   \ large-text active?
+PROF-ACCOM-HC? ( -- flag )   \ high-contrast active?
+PROF-ACCOM-RM? ( -- flag )   \ reduced-motion active?
+```
+
+#### PROF-ACCOM-INT
+```forth
+PROF-ACCOM-INT ( n prop-a prop-l -- n' )
+```
+Apply accommodation scaling to an integer value:
+- `large-text` + `font-size` → `n * 3 / 2` (150%)
+- `reduced-motion` + `animation-duration` → `0`
+
+### Profile Stacking (§8.3)
+
+#### PROF-STACK
+```forth
+PROF-STACK ( a-a a-l b-a b-l -- )
+```
+Register two profiles for stacked lookup.  Profile B overrides profile A.
+
+#### PROF-STACK-GET
+```forth
+PROF-STACK-GET ( prop-a prop-l -- val-a val-l flag )
+```
+Resolve a property through the stacked pair: tries B first (via `PROF-GET`),
+falls back to A.
+
+### Inline Override (§11)
+
+#### PROF-SET-ELEM
+```forth
+PROF-SET-ELEM ( elem-a elem-l -- )
+```
+Register a YAML element for inline override lookups.
+
+#### PROF-INLINE
+```forth
+PROF-INLINE ( prop-a prop-l val-a val-l -- out-a out-l )
+```
+Check if the registered element has a `present-<prop>` attribute.  If found,
+return its value; otherwise return the original `val-a val-l`.
+
+### Auditory Property Constants (§5)
+
+String constants for auditory profile property keys:
+
+| Constant             | Value              |
+|----------------------|--------------------|
+| `PROF-VOICE`         | `"voice"`          |
+| `PROF-RATE`          | `"rate"`           |
+| `PROF-PITCH`         | `"pitch"`          |
+| `PROF-VOLUME`        | `"volume"`         |
+| `PROF-PAUSE-BEFORE`  | `"pause-before"`   |
+| `PROF-PAUSE-AFTER`   | `"pause-after"`    |
+| `PROF-EARCON`        | `"earcon"`         |
+| `PROF-EARCON-BEFORE` | `"earcon-before"`  |
+| `PROF-EARCON-AFTER`  | `"earcon-after"`   |
+| `PROF-PRIORITY`      | `"priority"`       |
+| `PROF-SONIFICATION`  | `"sonification"`   |
+| `PROF-CUE-SPEECH`    | `"cue-speech"`     |
+
+### Tactile Property Constants (§6)
+
+| Constant                  | Value                |
+|---------------------------|----------------------|
+| `PROF-CELL-ROUTING`       | `"cell-routing"`     |
+| `PROF-CONTRACTED-BRAILLE` | `"contracted-braille"` |
+| `PROF-SEPARATOR`          | `"separator"`        |
+| `PROF-PADDING-CELLS`      | `"padding-cells"`    |
+| `PROF-PREFIX`             | `"prefix"`           |
+| `PROF-HAPTIC`             | `"haptic"`           |
+| `PROF-PIN-FLASH`          | `"pin-flash"`        |
+
+### Profile → CSL Translation
+
+#### PROF-TO-CSL
+```forth
+PROF-TO-CSL ( p-a p-l buf max -- addr len )
+```
+Serialise resolved cascade properties into CSL `key: value\n` text.
+Uses the current cascade context (`PROF-SET-TYPE` etc.) to resolve
+properties.  Tries visual keys (color, font-size, font-family, background,
+font-weight, opacity) and auditory keys (voice, rate, pitch, earcon,
+cue-speech).  Returns the internal CSL buffer address and length.
+
 ## Profile YAML Format
 
 ```yaml
@@ -239,7 +387,7 @@ high-contrast:
 
 ## Test Coverage
 
-82 tests in `local_testing/test_profile.py` covering:
+109 tests in `local_testing/test_profile.py` covering:
 
 - Metadata extraction (name, version, description, validation, capabilities)
 - Element category classification (all 16 types)
@@ -248,3 +396,10 @@ high-contrast:
 - Full cascade resolution (defaults-only, element-type override, role override,
   state override, importance override, region/container defaults)
 - Multi-capability and auditory profile variants
+- Property namespace constants (auditory and tactile)
+- Multi-cap scoped lookups (cap-section, fallback to unscoped)
+- Profile stacking (disjoint merge, B-overrides-A, unique properties)
+- Inline overrides (present-* attribute extraction)
+- Accommodation flags (large-text scaling, high-contrast, reduced-motion)
+- Profile resolution (cap-mask filtering, specificity ranking, multi-profile)
+- CSL translation (visual properties, auditory properties, empty profile)
