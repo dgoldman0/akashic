@@ -33,6 +33,7 @@
 
 REQUIRE fp16-ext.f
 REQUIRE trig.f
+REQUIRE audio/wavetable.f
 REQUIRE audio/pcm.f
 
 PROVIDED akashic-audio-osc
@@ -84,6 +85,8 @@ VARIABLE _OSC-PH       \ current phase (FP16)
 VARIABLE _OSC-VAL      \ computed sample value
 VARIABLE _OSC-BUF      \ target PCM buffer
 VARIABLE _OSC-INC      \ phase increment (FP16)
+VARIABLE _OSC-FPTR     \ raw PCM data pointer (fast path)
+VARIABLE _OSC-FTAB     \ cached wavetable pointer (fast path)
 
 \ =====================================================================
 \  OSC-CREATE — Allocate oscillator descriptor
@@ -101,10 +104,11 @@ VARIABLE _OSC-INC      \ phase increment (FP16)
 
     _OSC-TMP @ O.FREQ !              \ freq (FP16)
     FP16-POS-ZERO _OSC-TMP @ O.PHASE !  \ phase = 0.0
-    R> _OSC-TMP @ O.SHAPE !          \ shape
+    R> DUP _OSC-TMP @ O.SHAPE !      \ shape (keep copy)
     R> _OSC-TMP @ O.RATE  !          \ rate (integer)
     FP16-POS-HALF _OSC-TMP @ O.DUTY  !  \ duty = 0.5 default
-    0 _OSC-TMP @ O.TABLE !           \ no wavetable
+    OSC-SINE = IF WT-SIN-TABLE ELSE 0 THEN
+    _OSC-TMP @ O.TABLE !             \ sine → wavetable, others → 0
 
     _OSC-TMP @ ;
 
@@ -119,7 +123,11 @@ VARIABLE _OSC-INC      \ phase increment (FP16)
 \ =====================================================================
 
 : OSC-FREQ!   ( freq osc -- )  O.FREQ  ! ;
-: OSC-SHAPE!  ( shape osc -- ) O.SHAPE ! ;
+: OSC-SHAPE!  ( shape osc -- )
+    _OSC-TMP !
+    DUP _OSC-TMP @ O.SHAPE !
+    OSC-SINE = IF WT-SIN-TABLE ELSE 0 THEN
+    _OSC-TMP @ O.TABLE ! ;
 : OSC-DUTY!   ( duty osc -- )  O.DUTY  ! ;
 : OSC-TABLE!  ( addr osc -- )  O.TABLE ! ;
 : OSC-RESET   ( osc -- )       FP16-POS-ZERO SWAP O.PHASE ! ;
@@ -191,11 +199,16 @@ VARIABLE _OSC-GEN-DU
     \ Read current phase
     _OSC-TMP @ O.PHASE @  _OSC-PH !
 
-    \ Generate sample from shape + phase
-    _OSC-PH @
-    _OSC-TMP @ O.SHAPE @
-    _OSC-TMP @ O.DUTY @
-    _OSC-GEN-SHAPE
+    \ Generate sample — wavetable fast path or shape dispatch
+    _OSC-TMP @ O.TABLE @ DUP IF
+        _OSC-PH @ SWAP WT-LERP
+    ELSE
+        DROP
+        _OSC-PH @
+        _OSC-TMP @ O.SHAPE @
+        _OSC-TMP @ O.DUTY @
+        _OSC-GEN-SHAPE
+    THEN
     _OSC-VAL !
 
     \ Compute phase increment: freq / rate (both as FP16)
@@ -220,29 +233,112 @@ VARIABLE _OSC-GEN-DU
 \ =====================================================================
 \  ( buf osc -- )
 \  Writes one FP16 sample per frame (mono, channel 0).
+\  Fast path when wavetable is set: hoists freq→inc computation,
+\  uses direct W! instead of PCM-FRAME! (~2× fewer Forth words).
 
 : OSC-FILL  ( buf osc -- )
     _OSC-TMP !
     _OSC-BUF !
 
-    _OSC-BUF @ PCM-LEN 0 DO
-        _OSC-TMP @ OSC-SAMPLE
-        I _OSC-BUF @ PCM-FRAME!
-    LOOP ;
+    _OSC-TMP @ O.TABLE @ DUP IF
+        _OSC-FTAB !
+
+        \ Try block mode: compute integer phase increment
+        _OSC-TMP @ O.FREQ @
+        _OSC-TMP @ O.RATE @
+        WT-BLOCK-INC DUP IF
+            \ ---- Block mode (integer phase, truncating lookup) ----
+            _OSC-INC !   \ integer inc
+            _OSC-TMP @ O.PHASE @ WT-PH>INT   \ convert FP16 phase → int
+            _OSC-INC @
+            _OSC-BUF @ PCM-LEN
+            _OSC-FTAB @
+            _OSC-BUF @ PCM-DATA
+            WT-BLOCK-FILL                     \ → phase'
+            WT-INT>PH                         \ convert back to FP16
+            _OSC-TMP @ O.PHASE !
+        ELSE
+            \ ---- Scalar wavetable fallback (sub-1Hz) ----
+            DROP
+            _OSC-TMP @ O.PHASE @ _OSC-PH !
+            _OSC-TMP @ O.FREQ @
+            _OSC-TMP @ O.RATE @ INT>FP16
+            FP16-DIV _OSC-INC !
+            _OSC-BUF @ PCM-DATA _OSC-FPTR !
+            _OSC-BUF @ PCM-LEN 0 DO
+                _OSC-PH @ _OSC-FTAB @ WT-LERP
+                _OSC-FPTR @ I 2 * + W!
+                _OSC-PH @ _OSC-INC @ FP16-ADD
+                DUP FP16-POS-ONE FP16-GE IF
+                    FP16-POS-ONE FP16-SUB
+                THEN
+                _OSC-PH !
+            LOOP
+            _OSC-PH @ _OSC-TMP @ O.PHASE !
+        THEN
+    ELSE
+        \ ---- Generic per-sample path (non-wavetable shapes) ----
+        DROP
+        _OSC-BUF @ PCM-LEN 0 DO
+            _OSC-TMP @ OSC-SAMPLE
+            I _OSC-BUF @ PCM-FRAME!
+        LOOP
+    THEN ;
 
 \ =====================================================================
 \  OSC-ADD — Add oscillator output to existing PCM buffer
 \ =====================================================================
 \  ( buf osc -- )
 \  Reads existing FP16 sample, adds new sample, writes back.
+\  Fast path with direct W!/W@ when wavetable is set.
 
 : OSC-ADD  ( buf osc -- )
     _OSC-TMP !
     _OSC-BUF !
 
-    _OSC-BUF @ PCM-LEN 0 DO
-        _OSC-TMP @ OSC-SAMPLE     ( new-sample )
-        I _OSC-BUF @ PCM-FRAME@   ( new existing )
-        FP16-ADD
-        I _OSC-BUF @ PCM-FRAME!
-    LOOP ;
+    _OSC-TMP @ O.TABLE @ DUP IF
+        _OSC-FTAB !
+
+        _OSC-TMP @ O.FREQ @
+        _OSC-TMP @ O.RATE @
+        WT-BLOCK-INC DUP IF
+            \ ---- Block mode add (scalar FP16-ADD per sample) ----
+            _OSC-INC !
+            _OSC-TMP @ O.PHASE @ WT-PH>INT
+            _OSC-INC @
+            _OSC-BUF @ PCM-LEN
+            _OSC-FTAB @
+            _OSC-BUF @ PCM-DATA
+            WT-BLOCK-ADD
+            WT-INT>PH
+            _OSC-TMP @ O.PHASE !
+        ELSE
+            \ ---- Scalar wavetable fallback (sub-1Hz) ----
+            DROP
+            _OSC-TMP @ O.PHASE @ _OSC-PH !
+            _OSC-TMP @ O.FREQ @
+            _OSC-TMP @ O.RATE @ INT>FP16
+            FP16-DIV _OSC-INC !
+            _OSC-BUF @ PCM-DATA _OSC-FPTR !
+            _OSC-BUF @ PCM-LEN 0 DO
+                _OSC-PH @ _OSC-FTAB @ WT-LERP
+                _OSC-FPTR @ I 2 * + DUP W@
+                ROT FP16-ADD SWAP W!
+                _OSC-PH @ _OSC-INC @ FP16-ADD
+                DUP FP16-POS-ONE FP16-GE IF
+                    FP16-POS-ONE FP16-SUB
+                THEN
+                _OSC-PH !
+            LOOP
+            _OSC-PH @ _OSC-TMP @ O.PHASE !
+        THEN
+    ELSE
+        \ ---- Generic per-sample path ----
+        DROP
+        _OSC-BUF @ PCM-LEN 0 DO
+            _OSC-TMP @ OSC-SAMPLE
+            I _OSC-BUF @ PCM-FRAME@
+            FP16-ADD
+            I _OSC-BUF @ PCM-FRAME!
+        LOOP
+    THEN ;

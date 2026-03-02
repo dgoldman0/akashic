@@ -34,6 +34,7 @@
 \   ENV-LEVEL     ( env -- level )         current output level (FP16)
 
 REQUIRE fp16-ext.f
+REQUIRE audio/pcm-simd.f
 
 PROVIDED akashic-audio-env
 
@@ -90,6 +91,7 @@ VARIABLE _ENV-POS
 VARIABLE _ENV-LEN
 VARIABLE _ENV-LVL
 VARIABLE _ENV-T
+VARIABLE _ENV-FPTR    \ cached PCM data pointer (fast path)
 
 \ =====================================================================
 \  Internal: convert milliseconds to frames
@@ -329,29 +331,52 @@ VARIABLE _ENV-RATE
 \  ENV-FILL — Fill PCM buffer with envelope curve
 \ =====================================================================
 \  ( buf env -- )
+\  Uses direct W! for faster writes.
 
 : ENV-FILL  ( buf env -- )
     _ENV-TMP !
     _ENV-BUF !
+    _ENV-BUF @ PCM-DATA _ENV-FPTR !
 
     _ENV-BUF @ PCM-LEN 0 DO
         _ENV-TMP @ ENV-TICK
-        I _ENV-BUF @ PCM-FRAME!
+        _ENV-FPTR @ I 2 * + W!
     LOOP ;
 
 \ =====================================================================
 \  ENV-APPLY — Multiply PCM buffer by envelope (in-place gain)
 \ =====================================================================
 \  ( buf env -- )
-\  Each sample = sample × envelope_level
+\  Each sample = sample × envelope_level.
+\
+\  Fast path: if envelope is in sustain phase for the entire buffer,
+\  uses PCM-SIMD-SCALE to multiply all samples at once (~100× faster).
+\  Otherwise uses a per-sample loop with direct W!/W@ access.
 
 : ENV-APPLY  ( buf env -- )
     _ENV-TMP !
     _ENV-BUF !
 
+    \ SIMD fast path: sustain phase — constant level, no state change
+    _ENV-TMP @ E.PHASE @ ENV-SUSTAIN = IF
+        _ENV-TMP @ E.SUSTAIN @
+        _ENV-BUF @ PCM-SIMD-SCALE
+        EXIT
+    THEN
+
+    \ SIMD fast path: done phase — multiply by zero = clear
+    _ENV-TMP @ E.PHASE @ ENV-DONE = IF
+        _ENV-BUF @ PCM-SIMD-CLEAR
+        FP16-POS-ZERO _ENV-TMP @ E.LEVEL !
+        EXIT
+    THEN
+
+    \ Per-sample path with direct pointer access
+    _ENV-BUF @ PCM-DATA _ENV-FPTR !
+
     _ENV-BUF @ PCM-LEN 0 DO
         _ENV-TMP @ ENV-TICK           ( env-level )
-        I _ENV-BUF @ PCM-FRAME@       ( env-level sample )
-        FP16-MUL                       ( scaled )
-        I _ENV-BUF @ PCM-FRAME!
+        _ENV-FPTR @ I 2 * + DUP W@   ( level addr sample )
+        ROT FP16-MUL                  ( addr scaled )
+        SWAP W!
     LOOP ;

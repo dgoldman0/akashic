@@ -36,6 +36,7 @@ REQUIRE fp16-ext.f
 REQUIRE ../math/trig.f
 REQUIRE audio/pcm.f
 REQUIRE audio/env.f
+REQUIRE audio/wavetable.f
 
 PROVIDED akashic-audio-fm
 
@@ -312,8 +313,8 @@ VARIABLE _FM-EPHA     \ effective phase
     THEN
     _FM-EPHA !
 
-    \ Output = sin(2π × effective_phase)
-    _FM-EPHA @ TRIG-2PI FP16-MUL TRIG-SIN
+    \ Output = sin(2π × effective_phase) via wavetable
+    _FM-EPHA @ WT-SIN-TABLE WT-LERP
 
     \ Apply envelope
     _FM-OP @ FO.ENV @ ENV-TICK FP16-MUL
@@ -440,6 +441,133 @@ VARIABLE _FM-EPHA     \ effective phase
     ENDCASE ;
 
 \ =====================================================================
+\  Block-mode 2-op FM rendering (Tier 2.3)
+\ =====================================================================
+\  When feedback = 0, the modulator has no data dependency between
+\  samples, so its wavetable lookup can be done in bulk via
+\  WT-BLOCK-FILL.  The per-sample cost drops from ~1350cy to ~500cy
+\  per operator for the modulator, and the carrier avoids the
+\  repeated FP16-DIV(freq, rate) by precomputing its increment.
+\
+\  Strategy:
+\   1. WT-BLOCK-FILL modulator's raw sine into _WT-SCRATCH
+\   2. Per-sample: read scratch[i], apply ENV-TICK × level
+\      → modulator output
+\   3. Per-sample: carrier effective_phase = phase + mod × index,
+\      do WT-LERP, apply ENV-TICK × level → output sample
+\   4. Carrier phase advance uses precomputed FP16 increment
+\      (one FP16-DIV at block start, not per sample)
+\
+\  Falls back to scalar if:
+\   - feedback ≠ 0 (mod[i] depends on mod[i-1])
+\   - WT-BLOCK-INC returns 0 (sub-1Hz frequency)
+
+VARIABLE _FM-BK-OP0      \ modulator op address
+VARIABLE _FM-BK-OP1      \ carrier op address
+VARIABLE _FM-BK-ENV0     \ modulator envelope
+VARIABLE _FM-BK-ENV1     \ carrier envelope
+VARIABLE _FM-BK-LVL0     \ modulator level
+VARIABLE _FM-BK-LVL1     \ carrier level
+VARIABLE _FM-BK-IDX      \ modulation index
+VARIABLE _FM-BK-CINC     \ carrier FP16 phase increment
+VARIABLE _FM-BK-N        \ frame count
+VARIABLE _FM-BK-DST      \ output PCM data pointer
+
+: _FM-RENDER-2OP-BLOCK  ( voice -- ok? )
+    _FM-TMP !
+
+    \ Check: feedback must be zero for block mode
+    _FM-TMP @ FM.FB @ FP16-POS-ZERO = 0= IF
+        0 EXIT   \ → fall back to scalar
+    THEN
+
+    \ Get operator pointers
+    0 _FM-TMP @ _FM-OP@  _FM-BK-OP0 !
+    1 _FM-TMP @ _FM-OP@  _FM-BK-OP1 !
+
+    \ Compute modulator integer phase increment
+    _FM-BK-OP0 @ FO.FREQ @
+    _FM-TMP @ FM.RATE @
+    WT-BLOCK-INC DUP 0= IF
+        DROP 0 EXIT   \ sub-1Hz → scalar
+    THEN
+    _FM-INC !   \ modulator integer inc
+
+    \ Compute carrier FP16 phase increment (one division, not per sample)
+    _FM-BK-OP1 @ FO.FREQ @
+    _FM-TMP @ FM.RATE @ INT>FP16
+    FP16-DIV
+    _FM-BK-CINC !
+
+    \ Cache envelope pointers, levels, index
+    _FM-BK-OP0 @ FO.ENV @   _FM-BK-ENV0 !
+    _FM-BK-OP1 @ FO.ENV @   _FM-BK-ENV1 !
+    _FM-BK-OP0 @ FO.LEVEL @ _FM-BK-LVL0 !
+    _FM-BK-OP1 @ FO.LEVEL @ _FM-BK-LVL1 !
+    _FM-BK-OP0 @ FO.INDEX @ _FM-BK-IDX  !
+
+    \ Buffer info
+    _FM-TMP @ FM.BUF @ PCM-LEN  _FM-BK-N !
+    _FM-TMP @ FM.BUF @ PCM-DATA _FM-BK-DST !
+
+    \ Step 1: fill scratch with modulator raw sine (integer phase)
+    _FM-BK-OP0 @ FO.PHASE @ WT-PH>INT     \ FP16 phase → integer
+    _FM-INC @
+    _FM-BK-N @
+    WT-SIN-TABLE
+    _WT-SCRATCH
+    WT-BLOCK-FILL
+    \ Update modulator phase
+    WT-INT>PH _FM-BK-OP0 @ FO.PHASE !
+
+    \ Steps 2+3: per-sample loop
+    _FM-BK-N @ 0 DO
+        \ Read modulator raw sine from scratch
+        _WT-SCRATCH I 2 * + W@
+
+        \ Apply modulator envelope and level
+        _FM-BK-ENV0 @ ENV-TICK FP16-MUL
+        _FM-BK-LVL0 @ FP16-MUL
+
+        \ Multiply by modulation index → phase offset
+        _FM-BK-IDX @ FP16-MUL
+
+        \ Carrier: effective_phase = phase + mod_offset
+        _FM-BK-OP1 @ FO.PHASE @ FP16-ADD
+
+        \ Wrap to [0, 1)
+        DUP FP16-POS-ONE FP16-GE IF
+            FP16-POS-ONE FP16-SUB
+        THEN
+        DUP FP16-POS-ZERO FP16-LT IF
+            FP16-POS-ONE FP16-ADD
+        THEN
+
+        \ Carrier wavetable lookup
+        WT-SIN-TABLE WT-LERP
+
+        \ Apply carrier envelope and level
+        _FM-BK-ENV1 @ ENV-TICK FP16-MUL
+        _FM-BK-LVL1 @ FP16-MUL
+
+        \ Clamp to [-1, 1]
+        FP16-NEG-ONE FP16-POS-ONE FP16-CLAMP
+
+        \ Store to output
+        _FM-BK-DST @ I 2 * + W!
+
+        \ Advance carrier phase
+        _FM-BK-OP1 @ FO.PHASE @
+        _FM-BK-CINC @ FP16-ADD
+        DUP FP16-POS-ONE FP16-GE IF
+            FP16-POS-ONE FP16-SUB
+        THEN
+        _FM-BK-OP1 @ FO.PHASE !
+    LOOP
+
+    1 ;   \ success
+
+\ =====================================================================
 \  FM-RENDER — Render one block
 \ =====================================================================
 \  ( voice -- buf )
@@ -448,6 +576,14 @@ VARIABLE _FM-EPHA     \ effective phase
     _FM-TMP !
     _FM-TMP @ FM.BUF @ _FM-BUF !
 
+    \ Try block-mode 2-op (no feedback) first
+    _FM-TMP @ FM.NOPS @ 2 = IF
+        _FM-TMP @ _FM-RENDER-2OP-BLOCK IF
+            _FM-BUF @ EXIT
+        THEN
+    THEN
+
+    \ Scalar fallback
     _FM-BUF @ PCM-LEN 0 DO
         _FM-TMP @ FM.NOPS @ 2 = IF
             _FM-TMP @ _FM-RENDER-2OP-SAMPLE

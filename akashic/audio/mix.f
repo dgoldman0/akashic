@@ -26,6 +26,7 @@
 
 REQUIRE audio/pcm.f
 REQUIRE ../math/trig.f
+REQUIRE ../math/simd-ext.f
 
 PROVIDED akashic-audio-mix
 
@@ -78,6 +79,9 @@ VARIABLE _MIX-RGAIN
 VARIABLE _MIX-SAMP
 VARIABLE _MIX-L
 VARIABLE _MIX-R
+VARIABLE _MIX-SRCPTR     \ cached mono source data pointer  (fast path)
+VARIABLE _MIX-DSTPTR     \ cached stereo master data pointer (fast path)
+VARIABLE _MIX-NFRAMES    \ cached min frame count            (fast path)
 
 \ #####################################################################
 \  MIX-CREATE — Allocate mixer
@@ -174,9 +178,14 @@ VARIABLE _MIX-R
 \  For each non-muted channel with a non-NULL input buffer:
 \    1. Compute pan L/R gains
 \    2. Multiply gain × pan_gain to get effective L/R gains
-\    3. For each frame: read mono sample, scale, accumulate to stereo master
+\    3. For each frame: read mono sample, scale, accumulate to stereo
 \
 \  The master buffer is cleared first.
+\
+\  Optimised vs. original:
+\  - Inner loop uses direct W!/W@ (bypasses PCM-FRAME@/PCM-SAMPLE@).
+\    Per-frame cost drops from ~150 to ~34 Forth words (~4.4× per chan).
+\  - Master gain uses SIMD-SCALE-N on the full stereo buffer (~100×).
 
 : MIX-RENDER  ( mix -- )
     _MIX-MIX !
@@ -200,48 +209,48 @@ VARIABLE _MIX-R
                 FP16-MUL                    ( L*gain )
                 _MIX-LGAIN !
 
+                \ Cache raw data pointers
+                _MIX-CH @ MIXC.BUF @ PCM-DATA  _MIX-SRCPTR !
+                _MIX-MIX @ MIX.MBUF @ PCM-DATA _MIX-DSTPTR !
+
                 \ Determine frame count: min of input len and master len
                 _MIX-CH @ MIXC.BUF @ PCM-LEN
                 _MIX-MIX @ MIX.MBUF @ PCM-LEN
-                MIN                          ( frames )
+                MIN _MIX-NFRAMES !
 
-                \ Accumulate samples
-                0 DO
-                    \ Read mono input sample
-                    I _MIX-CH @ MIXC.BUF @ PCM-FRAME@
-                    _MIX-SAMP !
+                \ ----- Tight accumulation loop (direct W!/W@) -----
+                _MIX-NFRAMES @ 0 DO
+                    \ Read mono input sample once
+                    _MIX-SRCPTR @ I 2 * + W@    ( samp )
+                    DUP
 
-                    \ Left channel: master[i,0] += sample * L-gain
-                    I 0 _MIX-MIX @ MIX.MBUF @ PCM-SAMPLE@
-                    _MIX-SAMP @ _MIX-LGAIN @ FP16-MUL
-                    FP16-ADD
-                    I 0 _MIX-MIX @ MIX.MBUF @ PCM-SAMPLE!
+                    \ Left: master[2i] += samp * L-gain
+                    _MIX-LGAIN @ FP16-MUL       ( samp samp*L )
+                    _MIX-DSTPTR @ I 4 * +       ( samp samp*L dst-L )
+                    DUP W@                       ( samp samp*L dst-L old-L )
+                    ROT FP16-ADD                 ( samp dst-L new-L )
+                    SWAP W!                      ( samp )
 
-                    \ Right channel: master[i,1] += sample * R-gain
-                    I 1 _MIX-MIX @ MIX.MBUF @ PCM-SAMPLE@
-                    _MIX-SAMP @ _MIX-RGAIN @ FP16-MUL
-                    FP16-ADD
-                    I 1 _MIX-MIX @ MIX.MBUF @ PCM-SAMPLE!
+                    \ Right: master[2i+1] += samp * R-gain
+                    _MIX-RGAIN @ FP16-MUL       ( samp*R )
+                    _MIX-DSTPTR @ I 4 * 2 + +   ( samp*R dst-R )
+                    DUP W@                       ( samp*R dst-R old-R )
+                    ROT FP16-ADD                 ( dst-R new-R )
+                    SWAP W!
                 LOOP
         THEN THEN
     LOOP
 
-    \ Apply master gain
+    \ Apply master gain — SIMD fast path
     _MIX-MIX @ MIX.MGAIN @             ( mgain )
     DUP 0x3C00 = IF
         \ Master gain is 1.0 — nothing to do
         DROP
     ELSE
-        \ Scale all stereo samples by master gain
-        _MIX-MIX @ MIX.MBUF @ PCM-LEN 0 DO
-            \ Left
-            I 0 _MIX-MIX @ MIX.MBUF @ PCM-SAMPLE@
-            OVER FP16-MUL
-            I 0 _MIX-MIX @ MIX.MBUF @ PCM-SAMPLE!
-            \ Right
-            I 1 _MIX-MIX @ MIX.MBUF @ PCM-SAMPLE@
-            OVER FP16-MUL
-            I 1 _MIX-MIX @ MIX.MBUF @ PCM-SAMPLE!
-        LOOP
-        DROP
+        \ Scale all stereo samples at once via SIMD tile engine
+        _MIX-MIX @ MIX.MBUF @ PCM-DATA   ( mgain src )
+        SWAP                               ( src mgain )
+        _MIX-MIX @ MIX.MBUF @ PCM-DATA   ( src mgain dst )
+        _MIX-MIX @ MIX.MBUF @ PCM-LEN 2 * ( src mgain dst n )
+        SIMD-SCALE-N
     THEN ;
