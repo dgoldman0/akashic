@@ -9,7 +9,8 @@ REQUIRE audio/mix.f
 ```
 
 `PROVIDED akashic-audio-mix` — safe to include multiple times.
-Depends on `akashic-audio-pcm`, `akashic-math-trig`.
+Depends on `akashic-audio-pcm`, `akashic-math-trig`,
+`akashic-math-simd-ext`.
 
 ---
 
@@ -141,6 +142,15 @@ For each active channel:
 3. Accumulate: `master[i,0] += sample × L`, `master[i,1] += sample × R`
 
 Finally applies master gain if ≠ 1.0.
+
+**Optimisations:**
+- **Direct pointer access** — the inner accumulation loop uses raw
+  `W!`/`W@` with cached data pointers, bypassing `PCM-FRAME@`/
+  `PCM-SAMPLE@`/`PCM-SAMPLE!`.  Per-frame cost drops from ~150 to
+  ~34 Forth words per channel (~4.4× speedup).
+- **SIMD master gain** — when master gain ≠ 1.0, all stereo samples
+  are scaled in one pass via `SIMD-SCALE-N` from the tile engine
+  (~70× vs per-sample scalar loop).
 
 ---
 

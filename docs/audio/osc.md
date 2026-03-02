@@ -9,8 +9,8 @@ REQUIRE audio/osc.f
 ```
 
 `PROVIDED akashic-audio-osc` — safe to include multiple times.
-Depends on `akashic-audio-pcm`, `akashic-fp16`, `akashic-fp16-ext`,
-`akashic-trig`.
+Depends on `akashic-audio-pcm`, `akashic-audio-wavetable`,
+`akashic-fp16`, `akashic-fp16-ext`, `akashic-trig`.
 
 ---
 
@@ -33,10 +33,12 @@ Depends on `akashic-audio-pcm`, `akashic-fp16`, `akashic-fp16-ext`,
 | Principle | Detail |
 |---|---|
 | **FP16 phase accumulator** | Phase is a FP16 value in `[0.0, 1.0)`.  Advances by `freq / rate` each sample. |
-| **Shape dispatch** | `CASE/OF/ENDOF/ENDCASE` switches on shape constant. |
+| **Wavetable fast path** | Sine oscillators automatically use `WT-SIN-TABLE` for lookup instead of `TRIG-SIN`, cutting per-sample cost by ~2×. |
+| **Three-tier dispatch** | `OSC-FILL` / `OSC-ADD` try: (1) block-mode integer phase via `WT-BLOCK-FILL`, (2) scalar wavetable via `WT-LERP`, (3) generic `_OSC-GEN-SHAPE`. |
+| **Shape dispatch** | `CASE/OF/ENDOF/ENDCASE` switches on shape constant (used for non-wavetable shapes). |
 | **Variable-based scratch** | Internal `VARIABLE`s — not re-entrant across words. |
 | **Prefix convention** | Public: `OSC-`.  Internal: `_OSC-`.  Field: `O.xxx`. |
-| **PCM integration** | `OSC-FILL` and `OSC-ADD` write directly into PCM buffer frames via `PCM-FRAME!`. |
+| **PCM integration** | `OSC-FILL` and `OSC-ADD` write directly into PCM buffer frames via direct `W!`/`W@` (fast path) or `PCM-FRAME!` (generic path). |
 
 ---
 
@@ -52,7 +54,7 @@ Offset  Size  Field
 +16     8     rate    — sample rate in Hz (integer)
 +24     8     shape   — waveform index (0–4)
 +32     8     duty    — duty cycle for pulse/square (FP16, default 0.5)
-+40     8     table   — (reserved) wavetable pointer
++40     8     table   — wavetable pointer (auto-set for sine, 0 for others)
 ```
 
 ---
@@ -71,7 +73,9 @@ Allocate and initialise an oscillator.
 - **shape** — one of `OSC-SINE`, `OSC-SQUARE`, `OSC-SAW`, `OSC-TRI`, `OSC-PULSE`
 - **rate** — sample rate in Hz (integer, e.g. `44100`)
 
-Phase starts at 0.0, duty at 0.5.
+Phase starts at 0.0, duty at 0.5.  If the shape is `OSC-SINE`,
+the `table` field is automatically set to `WT-SIN-TABLE` for
+wavetable-accelerated rendering.
 
 ```forth
 440 INT>FP16 OSC-SINE 44100 OSC-CREATE CONSTANT my-sine
@@ -102,10 +106,19 @@ OSC-DUTY   ( osc -- duty )    \ duty cycle (FP16)
 ### Setters
 
 ```forth
-OSC-FREQ!  ( freq osc -- )    \ set frequency (FP16)
-OSC-DUTY!  ( duty osc -- )    \ set duty cycle (FP16)
-OSC-RESET  ( osc -- )         \ reset phase to 0.0
+OSC-FREQ!   ( freq osc -- )    \ set frequency (FP16)
+OSC-SHAPE!  ( shape osc -- )   \ set waveform type (also updates table)
+OSC-DUTY!   ( duty osc -- )    \ set duty cycle (FP16)
+OSC-TABLE!  ( addr osc -- )    \ set wavetable address
+OSC-RESET   ( osc -- )         \ reset phase to 0.0
 ```
+
+`OSC-SHAPE!` updates the `table` field: sine → `WT-SIN-TABLE`,
+all other shapes → 0 (disabling the wavetable fast path).
+
+`OSC-TABLE!` allows assigning a custom wavetable (e.g. from
+`WT-ALLOC`) to any oscillator, enabling wavetable-accelerated
+rendering for arbitrary waveforms.
 
 ---
 
@@ -119,6 +132,9 @@ OSC-SAMPLE  ( osc -- value )
 
 Generate one FP16 sample at the current phase, then advance the
 phase accumulator by `freq / rate`.  Output is in `[−1.0, +1.0]`.
+
+If a wavetable is assigned (non-zero `table` field), uses `WT-LERP`
+for the lookup.  Otherwise falls back to `_OSC-GEN-SHAPE`.
 
 ```forth
 my-sine OSC-SAMPLE .        \ prints FP16 bit pattern
@@ -142,12 +158,21 @@ OSC-FILL  ( buf osc -- )
 ```
 
 Fill every frame of the PCM buffer with consecutive oscillator
-samples.  Uses `PCM-LEN` for the frame count and `PCM-FRAME!` for
-writes.  The oscillator phase advances through the buffer.
+samples.  The oscillator phase advances through the buffer.
+
+**Three-tier dispatch** (when a wavetable is assigned):
+
+1. **Block mode** — `WT-BLOCK-FILL` with integer phase accumulation.
+   ~40 cycles/sample.  Used when `WT-BLOCK-INC` returns a non-zero
+   increment (frequencies ≥ 1 Hz).
+2. **Scalar wavetable** — per-sample `WT-LERP` with direct `W!`.
+   Used for sub-1 Hz frequencies.
+3. **Generic** — per-sample `_OSC-GEN-SHAPE` via `PCM-FRAME!`.
+   Used when no wavetable is assigned (non-sine shapes).
 
 ```forth
 4096 44100 16 1 PCM-ALLOC CONSTANT wav
-wav my-sine OSC-FILL
+wav my-sine OSC-FILL     \ uses block mode internally
 ```
 
 ### OSC-ADD
@@ -157,8 +182,13 @@ OSC-ADD  ( buf osc -- )
 ```
 
 Same as `OSC-FILL` but *adds* each oscillator sample to the
-existing buffer content (`PCM-FRAME@ + FP16-ADD`).  Use for
-additive synthesis.
+existing buffer content.  Use for additive synthesis.
+
+**Three-tier dispatch** (same as `OSC-FILL`):
+
+1. **Block mode** — `WT-BLOCK-ADD` (fill scratch + `SIMD-ADD-N`).
+2. **Scalar wavetable** — per-sample `WT-LERP` + `FP16-ADD` + `W!`.
+3. **Generic** — per-sample `OSC-SAMPLE` + `PCM-FRAME@` + `FP16-ADD`.
 
 ```forth
 wav osc-fundamental OSC-FILL     \ base tone
@@ -174,7 +204,7 @@ wav osc-harmonic3   OSC-ADD      \ add 3rd harmonic
 
 | Constant      | Value | Description |
 |---------------|-------|-------------|
-| `OSC-SINE`    | 0     | Smooth sinusoid via `TRIG-SIN` |
+| `OSC-SINE`    | 0     | Smooth sinusoid via wavetable (`WT-LERP` / `WT-BLOCK-FILL`) |
 | `OSC-SQUARE`  | 1     | Bipolar square (±1.0), threshold at `duty` |
 | `OSC-SAW`     | 2     | Rising sawtooth: `2 × phase − 1` |
 | `OSC-TRI`     | 3     | Triangle: `4 × |phase − 0.5| − 1` |
@@ -206,7 +236,9 @@ OSC-FILL    ( buf osc -- )                  fill PCM buffer
 OSC-ADD     ( buf osc -- )                  add to PCM buffer
 OSC-RESET   ( osc -- )                      reset phase to 0
 OSC-FREQ!   ( freq osc -- )                 set freq (FP16)
+OSC-SHAPE!  ( shape osc -- )                set shape + update table
 OSC-DUTY!   ( duty osc -- )                 set duty (FP16)
+OSC-TABLE!  ( addr osc -- )                 set wavetable address
 OSC-FREQ    ( osc -- freq )                 read freq
 OSC-PHASE   ( osc -- phase )                read phase
 OSC-RATE    ( osc -- rate )                 read rate

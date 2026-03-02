@@ -10,7 +10,7 @@ REQUIRE audio/env.f
 ```
 
 `PROVIDED akashic-audio-env` — safe to include multiple times.
-Depends on `akashic-fp16`, `akashic-fp16-ext`.
+Depends on `akashic-fp16`, `akashic-fp16-ext`, `akashic-audio-pcm-simd`.
 
 ---
 
@@ -229,8 +229,9 @@ ENV-FILL  ( buf env -- )
 ```
 
 Fill a PCM buffer with the envelope curve.  Calls `ENV-TICK` once
-per frame and writes each level via `PCM-FRAME!`.  Useful for
-pre-rendering an envelope curve into a buffer.
+per frame and writes each level via direct `W!` (bypasses
+`PCM-FRAME!` for faster writes).  Useful for pre-rendering an
+envelope curve into a buffer.
 
 ### ENV-APPLY
 
@@ -239,8 +240,18 @@ ENV-APPLY  ( buf env -- )
 ```
 
 Multiply each sample in the PCM buffer by the envelope level.
-For each frame: `sample = sample × ENV-TICK`.  This is the
-standard amplitude shaping operation.
+
+**SIMD fast paths:**
+
+- **Sustain phase** — the envelope level is constant for the entire
+  buffer.  Uses `PCM-SIMD-SCALE` to multiply all samples at once
+  (~70× faster than per-sample).
+- **Done phase** — the envelope has completed.  Uses
+  `PCM-SIMD-CLEAR` to zero all samples in one pass.
+
+**Per-sample path** (attack, decay, release phases): reads each
+sample via `W@`, multiplies by `ENV-TICK`, and writes back via
+`W!` (direct pointer access, no `PCM-FRAME@`/`PCM-FRAME!`).
 
 ```forth
 buf my-sine OSC-FILL          \ fill with sine

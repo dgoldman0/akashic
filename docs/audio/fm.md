@@ -10,7 +10,7 @@ REQUIRE audio/fm.f
 
 `PROVIDED akashic-audio-fm` — safe to include multiple times.
 Depends on `akashic-fp16-ext`, `akashic-math-trig`, `akashic-audio-pcm`,
-`akashic-audio-env`.
+`akashic-audio-env`, `akashic-audio-wavetable`.
 
 ---
 
@@ -20,6 +20,7 @@ Depends on `akashic-fp16-ext`, `akashic-math-trig`, `akashic-audio-pcm`,
 - [Voice Layout](#voice-layout)
 - [Algorithms](#algorithms)
 - [Feedback](#feedback)
+- [Block-Mode Rendering](#block-mode-rendering)
 - [API](#api)
 - [Quick Reference](#quick-reference)
 - [Cookbook](#cookbook)
@@ -101,6 +102,39 @@ feedback values can produce harsh or noise-like output.
 
 ---
 
+## Block-Mode Rendering
+
+For 2-operator voices with **no feedback**, `FM-RENDER` uses an
+optimised block-mode path (`_FM-RENDER-2OP-BLOCK`) that reduces
+per-sample cost from ~1350 to ~500 cycles:
+
+1. **Bulk modulator** — the modulator’s raw sine wave is rendered
+   into `_WT-SCRATCH` via `WT-BLOCK-FILL` (integer phase, ~40 cy/sample).
+2. **Precomputed carrier increment** — `freq / rate` is computed once
+   per block (one `FP16-DIV`) instead of per sample.
+3. **Per-sample carrier** — reads scratch, applies modulator envelope
+   × level × modulation index → phase offset, then `WT-LERP` for
+   carrier lookup, envelope × level → output sample.
+
+**Fallback to scalar:** block mode is bypassed when:
+- Feedback ≠ 0 (mod\[i\] depends on mod\[i−1\])
+- `WT-BLOCK-INC` returns 0 (sub-1 Hz frequency)
+- Voice has 4 operators (not yet block-optimised)
+
+The scalar path uses per-sample `_FM-OP-SAMPLE`, which itself now
+uses `WT-LERP` (wavetable lookup) instead of `TRIG-SIN` (polynomial).
+
+### Performance
+
+| Path | Per-sample cost | Notes |
+|------|----------------|-------|
+| Block-mode modulator | ~40 cy | via `WT-BLOCK-FILL` |
+| Block-mode carrier | ~460 cy | `WT-LERP` + envelope + phase advance |
+| Scalar `_FM-OP-SAMPLE` | ~700 cy | wavetable + `FP16-DIV` per sample |
+| Original (pre-wavetable) | ~1350 cy | `TRIG-SIN` polynomial |
+
+---
+
 ## API
 
 ### FM-CREATE
@@ -148,9 +182,16 @@ Release all operator envelopes (enter release phase).
 FM-RENDER  ( voice -- buf )
 ```
 
-Render one block of FM audio.  Routes operators according to the
-current algorithm, applying per-operator envelopes and modulation.
-Returns the output PCM buffer pointer.
+Render one block of FM audio.  Returns the output PCM buffer pointer.
+
+**Dispatch order:**
+1. If 2-op and feedback = 0: try `_FM-RENDER-2OP-BLOCK` (block mode)
+2. If block mode succeeds: return immediately
+3. Otherwise: per-sample scalar loop via `_FM-RENDER-2OP-SAMPLE`
+   or `_FM-RENDER-4OP-SAMPLE`
+
+Operators are routed according to the current algorithm, with
+per-operator envelopes and modulation applied.
 
 ### FM-RATIO!
 
