@@ -5,12 +5,14 @@
 \ real / imaginary arrays of N FP16 values (N must be power of 2).
 \
 \ Twiddle factors computed on-the-fly via TRIG-SINCOS to avoid
-\ accumulation error in FP16's 10-bit mantissa.
+\ accumulation error in FP16's 10-bit mantissa.  Precomputed-twiddle
+\ variants (*-TW) replace per-butterfly TRIG-SINCOS with table
+\ lookups for a ~3-5× speedup on repeated transforms.
 \
 \ Prefix: FFT-   (public API)
 \         _FFT-  (internal helpers)
 \
-\ Depends on: fp16.f, fp16-ext.f, trig.f
+\ Depends on: fp16.f, fp16-ext.f, trig.f, simd-ext.f
 \
 \ Load with:   REQUIRE fft.f
 \
@@ -21,9 +23,18 @@
 \   FFT-POWER      ( re im pwr n -- )          power spectrum: re²+im²
 \   FFT-CONVOLVE   ( a b dst n -- )            convolution via FFT
 \   FFT-CORRELATE  ( a b dst n -- )            cross-correlation via FFT
+\
+\ === Precomputed-Twiddle API (Tier 3.1) ===
+\   FFT-TWIDDLE-ALLOC  ( n -- addr )           allocate twiddle table
+\   FFT-TWIDDLE-FILL   ( n addr -- )           fill twiddle table (one-time)
+\   FFT-FORWARD-TW     ( re im n tw -- )       FFT with precomputed twiddle
+\   FFT-INVERSE-TW     ( re im n tw -- )       IFFT with precomputed twiddle
+\   FFT-CONVOLVE-TW    ( a b dst n tw -- )     convolution with twiddle
+\   FFT-CORRELATE-TW   ( a b dst n tw -- )     correlation with twiddle
 
 REQUIRE fp16-ext.f
 REQUIRE trig.f
+REQUIRE simd-ext.f
 
 PROVIDED akashic-fft
 
@@ -470,6 +481,415 @@ VARIABLE _FFT-CORR-DST
 
     \ IFFT
     _FFT-CORR-RA @ _FFT-CORR-IA @ _FFT-CORR-N @ FFT-INVERSE
+
+    \ Copy real part to dst
+    0 _FFT-CORR-I !
+    BEGIN _FFT-CORR-I @ _FFT-CORR-N @ < WHILE
+        _FFT-CORR-RA @ _FFT-CORR-I @ 2 * + W@
+        _FFT-CORR-DST @ _FFT-CORR-I @ 2 * + W!
+        _FFT-CORR-I @ 1+ _FFT-CORR-I !
+    REPEAT ;
+
+\ =====================================================================
+\  Precomputed Twiddle Table (Tier 3.1)
+\ =====================================================================
+\  For a fixed FFT size N, precompute cos(2π·k/N) and sin(2π·k/N)
+\  for k = 0 .. N/2−1.  Eliminates per-butterfly TRIG-SINCOS calls.
+\
+\  Memory layout at address tw:
+\    tw + 0   : cos[0..N/2−1]    N bytes  (twiddle cos)
+\    tw + N   : sin[0..N/2−1]    N bytes  (twiddle sin)
+\    tw + 2N  : wr_expanded      N bytes  (SIMD workspace)
+\    tw + 3N  : wi_expanded      N bytes  (SIMD workspace)
+\    tw + 4N  : temp1            N bytes  (SIMD workspace)
+\    tw + 5N  : temp2            N bytes  (SIMD workspace)
+\  Total: 6·N bytes.  For N=2048 this is 12 KB.
+\
+\  Twiddle reuse across stages:
+\    For stage S with half = S/2, stride = N/S.
+\    twiddle[k] = ( cos[k·stride], sin[k·stride] )
+\    All stages index the same table at different strides.
+
+VARIABLE _FFT-TW                     \ twiddle table pointer
+VARIABLE _FFT-TW-STRIDE              \ stride into twiddle table
+VARIABLE _FFT-TW-SIGN                \ 1=forward (negate sin), 0=inverse
+
+\ ── FFT-TWIDDLE-ALLOC ────────────────────────────────────────────────
+\  Allocate twiddle table + SIMD workspace for N-point FFT.
+\  Size = 6·N bytes: 2N twiddle + 4N SIMD workspace.
+
+: FFT-TWIDDLE-ALLOC  ( n -- addr )
+    6 * HBW-ALLOT ;
+
+\ ── FFT-TWIDDLE-FILL ─────────────────────────────────────────────────
+\  Populate twiddle table with cos/sin factors.
+\  cos[k] = cos(2π·k/N), sin[k] = sin(2π·k/N)  for k = 0 .. N/2−1.
+
+VARIABLE _FFT-TWF-N
+VARIABLE _FFT-TWF-ADDR
+
+: FFT-TWIDDLE-FILL  ( n addr -- )
+    _FFT-TWF-ADDR !  _FFT-TWF-N !
+    _FFT-TWF-N @ 2/ 0 DO
+        \ angle = 2π · i / N
+        I INT>FP16 TRIG-2PI FP16-MUL
+        _FFT-TWF-N @ INT>FP16 FP16-DIV   ( angle )
+        TRIG-SINCOS                        ( sin cos )
+        \ cos → addr + i·2
+        _FFT-TWF-ADDR @ I 2 * + W!        ( sin )
+        \ sin → addr + N + i·2
+        _FFT-TWF-ADDR @ _FFT-TWF-N @ + I 2 * + W!  ( )
+    LOOP ;
+
+\ ── _FFT-BFT-SCALAR ───────────────────────────────────────────────────
+\  Scalar butterfly pass using precomputed twiddle table.
+\  Used for small stages (half < 32) where SIMD isn't beneficial.
+
+: _FFT-BFT-SCALAR  ( -- )
+    \ Compute stride and sign for this stage
+    _FFT-N @ _FFT-STAGE @ / _FFT-TW-STRIDE !
+    _FFT-DIR @ FP16-SIGN _FFT-TW-SIGN !
+
+    \ Iterate over groups
+    0 _FFT-GRP !
+    BEGIN _FFT-GRP @ _FFT-N @ < WHILE
+        0 _FFT-K !
+        BEGIN _FFT-K @ _FFT-HALF @ < WHILE
+            _FFT-GRP @ _FFT-K @ + _FFT-U !
+            _FFT-U @ _FFT-HALF @ + _FFT-L !
+
+            \ Look up twiddle: byte offset = k × stride × 2
+            _FFT-K @ _FFT-TW-STRIDE @ * 2 *   ( boff )
+            DUP _FFT-TW @ + W@ _FFT-WR !      ( boff )
+            _FFT-TW @ _FFT-N @ + + W@          ( raw-sin )
+            _FFT-TW-SIGN @ IF FP16-NEG THEN
+            _FFT-WI !
+
+            \ Load lower element
+            _FFT-L @ 2 * _FFT-RE @ + W@
+            _FFT-L @ 2 * _FFT-IM @ + W@
+
+            \ Complex multiply: t = w × lower
+            \ tr = wr·re_lo − wi·im_lo
+            OVER _FFT-WR @ FP16-MUL
+            OVER _FFT-WI @ FP16-MUL
+            FP16-SUB _FFT-TR !
+            \ ti = wr·im_lo + wi·re_lo
+            _FFT-WR @ FP16-MUL
+            SWAP _FFT-WI @ FP16-MUL
+            FP16-ADD _FFT-TI !
+
+            \ Save upper element
+            _FFT-U @ 2 * _FFT-RE @ + W@ _FFT-UR !
+            _FFT-U @ 2 * _FFT-IM @ + W@ _FFT-UI !
+
+            \ upper = old_upper + t
+            _FFT-UR @ _FFT-TR @ FP16-ADD
+            _FFT-U @ 2 * _FFT-RE @ + W!
+            _FFT-UI @ _FFT-TI @ FP16-ADD
+            _FFT-U @ 2 * _FFT-IM @ + W!
+
+            \ lower = old_upper − t
+            _FFT-UR @ _FFT-TR @ FP16-SUB
+            _FFT-L @ 2 * _FFT-RE @ + W!
+            _FFT-UI @ _FFT-TI @ FP16-SUB
+            _FFT-L @ 2 * _FFT-IM @ + W!
+
+            _FFT-K @ 1+ _FFT-K !
+        REPEAT
+        _FFT-GRP @ _FFT-STAGE @ + _FFT-GRP !
+    REPEAT ;
+
+\ ── SIMD FFT Butterfly (Tier 3.2) ────────────────────────────────────
+\  When half ≥ 32, the butterfly inner loop is vectorized using
+\  SIMD-MUL-N, SIMD-ADD-N, SIMD-SUB-N operating on 32-element tiles.
+\
+\  SIMD workspace within twiddle allocation (set up once per FFT call):
+\    _FFT-SIMD-WR  : expanded twiddle cos for current stage (N bytes)
+\    _FFT-SIMD-WI  : expanded twiddle sin (possibly negated)  (N bytes)
+\    _FFT-SIMD-T1  : temp buffer 1                            (N bytes)
+\    _FFT-SIMD-T2  : temp buffer 2                            (N bytes)
+\
+\  Complex butterfly for 'half' consecutive elements:
+\    1. Save upper: t1=re_up, t2=im_up
+\    2. tr = wr*re_lo - wi*im_lo      (4 SIMD-*-N ops)
+\    3. ti = wr*im_lo + wi*re_lo      (3 SIMD-*-N ops)
+\    4. re_up = t1 + tr, re_lo = t1 - tr  (2 ops)
+\    5. im_up = t2 + ti, im_lo = t2 - ti  (2 ops)
+\  Total: 12 SIMD-*-N per group + 1 twiddle expansion per stage.
+
+VARIABLE _FFT-SIMD-WR                \ expanded twiddle cos workspace
+VARIABLE _FFT-SIMD-WI                \ expanded twiddle sin workspace
+VARIABLE _FFT-SIMD-T1                \ temp buffer 1
+VARIABLE _FFT-SIMD-T2                \ temp buffer 2
+VARIABLE _FFT-EXP-K                  \ loop counter for twiddle expand
+
+\ Pointers into re/im arrays for current group
+VARIABLE _FFT-SIMD-REU               \ re[upper] for group
+VARIABLE _FFT-SIMD-REL               \ re[lower] for group
+VARIABLE _FFT-SIMD-IMU               \ im[upper] for group
+VARIABLE _FFT-SIMD-IML               \ im[lower] for group
+
+\ _FFT-TW-EXPAND — expand twiddle table to contiguous workspace
+\  Gathers cos[k*stride] → wr_buf, sin[k*stride] → wi_buf
+\  for k = 0..half-1.  Negates sin for forward direction.
+
+: _FFT-TW-EXPAND  ( -- )
+    _FFT-N @ _FFT-STAGE @ / _FFT-TW-STRIDE !
+    0 _FFT-EXP-K !
+    BEGIN _FFT-EXP-K @ _FFT-HALF @ < WHILE
+        _FFT-EXP-K @ _FFT-TW-STRIDE @ * 2 *   ( boff )
+        DUP _FFT-TW @ + W@
+        _FFT-SIMD-WR @ _FFT-EXP-K @ 2 * + W!  ( boff )
+        _FFT-TW @ _FFT-N @ + + W@
+        _FFT-DIR @ FP16-SIGN IF FP16-NEG THEN
+        _FFT-SIMD-WI @ _FFT-EXP-K @ 2 * + W!
+        _FFT-EXP-K @ 1+ _FFT-EXP-K !
+    REPEAT ;
+
+\ _FFT-BFT-SIMD — SIMD butterfly pass for stages with half ≥ 32
+
+: _FFT-BFT-SIMD  ( -- )
+    _FFT-TW-EXPAND                     \ expand twiddle for this stage
+
+    0 _FFT-GRP !
+    BEGIN _FFT-GRP @ _FFT-N @ < WHILE
+        \ Set up pointers for this group
+        _FFT-RE @ _FFT-GRP @ 2 * +               _FFT-SIMD-REU !
+        _FFT-RE @ _FFT-GRP @ _FFT-HALF @ + 2 * + _FFT-SIMD-REL !
+        _FFT-IM @ _FFT-GRP @ 2 * +               _FFT-SIMD-IMU !
+        _FFT-IM @ _FFT-GRP @ _FFT-HALF @ + 2 * + _FFT-SIMD-IML !
+
+        \ 1. Save upper elements: t1 = re_up, t2 = im_up
+        _FFT-SIMD-REU @ _FFT-SIMD-T1 @ _FFT-HALF @ SIMD-COPY-N
+        _FFT-SIMD-IMU @ _FFT-SIMD-T2 @ _FFT-HALF @ SIMD-COPY-N
+
+        \ 2. tr = wr*re_lo - wi*im_lo → stored in re_up
+        \    re_up = wr * re_lo
+        _FFT-SIMD-WR @ _FFT-SIMD-REL @ _FFT-SIMD-REU @ _FFT-HALF @ SIMD-MUL-N
+        \    im_up = wi * im_lo  (temp)
+        _FFT-SIMD-WI @ _FFT-SIMD-IML @ _FFT-SIMD-IMU @ _FFT-HALF @ SIMD-MUL-N
+        \    re_up = re_up - im_up = tr
+        _FFT-SIMD-REU @ _FFT-SIMD-IMU @ _FFT-SIMD-REU @ _FFT-HALF @ SIMD-SUB-N
+
+        \ 3. ti = wr*im_lo + wi*re_lo → stored in im_up
+        \    im_up = wr * im_lo
+        _FFT-SIMD-WR @ _FFT-SIMD-IML @ _FFT-SIMD-IMU @ _FFT-HALF @ SIMD-MUL-N
+        \    im_lo = wi * re_lo  (overwrite im_lo — original already consumed)
+        _FFT-SIMD-WI @ _FFT-SIMD-REL @ _FFT-SIMD-IML @ _FFT-HALF @ SIMD-MUL-N
+        \    im_up = im_up + im_lo = ti
+        _FFT-SIMD-IMU @ _FFT-SIMD-IML @ _FFT-SIMD-IMU @ _FFT-HALF @ SIMD-ADD-N
+
+        \ 4. re_lo = t1 - tr, re_up = t1 + tr
+        \    (must compute SUB before ADD since ADD overwrites re_up)
+        _FFT-SIMD-T1 @ _FFT-SIMD-REU @ _FFT-SIMD-REL @ _FFT-HALF @ SIMD-SUB-N
+        _FFT-SIMD-T1 @ _FFT-SIMD-REU @ _FFT-SIMD-REU @ _FFT-HALF @ SIMD-ADD-N
+
+        \ 5. im_lo = t2 - ti, im_up = t2 + ti
+        _FFT-SIMD-T2 @ _FFT-SIMD-IMU @ _FFT-SIMD-IML @ _FFT-HALF @ SIMD-SUB-N
+        _FFT-SIMD-T2 @ _FFT-SIMD-IMU @ _FFT-SIMD-IMU @ _FFT-HALF @ SIMD-ADD-N
+
+        _FFT-GRP @ _FFT-STAGE @ + _FFT-GRP !
+    REPEAT ;
+
+\ ── _FFT-BUTTERFLY-TW ────────────────────────────────────────────────
+\  Dispatcher: SIMD path for half ≥ 32, scalar for smaller stages.
+
+: _FFT-BUTTERFLY-TW  ( -- )
+    _FFT-HALF @ 32 >= IF
+        _FFT-BFT-SIMD
+    ELSE
+        _FFT-BFT-SCALAR
+    THEN ;
+
+\ ── FFT-FORWARD-TW ───────────────────────────────────────────────────
+\  In-place forward FFT using precomputed twiddle table.
+\  The twiddle table must have been allocated and filled for the same N.
+
+: FFT-FORWARD-TW  ( re im n tw -- )
+    _FFT-TW !
+    _FFT-N !  _FFT-IM !  _FFT-RE !
+    _FFT-NEG1 _FFT-DIR !
+
+    \ Set up SIMD workspace pointers (within twiddle allocation)
+    _FFT-TW @ _FFT-N @ 2 * + _FFT-SIMD-WR !
+    _FFT-TW @ _FFT-N @ 3 * + _FFT-SIMD-WI !
+    _FFT-TW @ _FFT-N @ 4 * + _FFT-SIMD-T1 !
+    _FFT-TW @ _FFT-N @ 5 * + _FFT-SIMD-T2 !
+
+    _FFT-PERMUTE
+
+    2 _FFT-STAGE !
+    BEGIN _FFT-STAGE @ _FFT-N @ <= WHILE
+        _FFT-STAGE @ 2/ _FFT-HALF !
+        _FFT-BUTTERFLY-TW
+        _FFT-STAGE @ 2* _FFT-STAGE !
+    REPEAT ;
+
+\ ── FFT-INVERSE-TW ───────────────────────────────────────────────────
+\  In-place inverse FFT using precomputed twiddle table.
+\  Includes 1/N scaling.
+
+: FFT-INVERSE-TW  ( re im n tw -- )
+    _FFT-TW !
+    _FFT-N !  _FFT-IM !  _FFT-RE !
+    _FFT-ONE _FFT-DIR !
+
+    \ Set up SIMD workspace pointers (within twiddle allocation)
+    _FFT-TW @ _FFT-N @ 2 * + _FFT-SIMD-WR !
+    _FFT-TW @ _FFT-N @ 3 * + _FFT-SIMD-WI !
+    _FFT-TW @ _FFT-N @ 4 * + _FFT-SIMD-T1 !
+    _FFT-TW @ _FFT-N @ 5 * + _FFT-SIMD-T2 !
+
+    _FFT-PERMUTE
+
+    2 _FFT-STAGE !
+    BEGIN _FFT-STAGE @ _FFT-N @ <= WHILE
+        _FFT-STAGE @ 2/ _FFT-HALF !
+        _FFT-BUTTERFLY-TW
+        _FFT-STAGE @ 2* _FFT-STAGE !
+    REPEAT
+
+    \ Scale by 1/N
+    _FFT-N @ INT>FP16 _FFT-INV-N16 !
+    0 _FFT-INV-I !
+    BEGIN _FFT-INV-I @ _FFT-N @ < WHILE
+        _FFT-RE @ _FFT-INV-I @ 2 * +
+        DUP W@ _FFT-INV-N16 @ FP16-DIV SWAP W!
+        _FFT-IM @ _FFT-INV-I @ 2 * +
+        DUP W@ _FFT-INV-N16 @ FP16-DIV SWAP W!
+        _FFT-INV-I @ 1+ _FFT-INV-I !
+    REPEAT ;
+
+\ ── FFT-CONVOLVE-TW ──────────────────────────────────────────────────
+\  Convolution via FFT using precomputed twiddle table.
+\  Same algorithm as FFT-CONVOLVE but uses *-TW transforms.
+
+VARIABLE _FFTC-TW                    \ twiddle for convolve-TW
+
+: FFT-CONVOLVE-TW  ( a b dst n tw -- )
+    _FFTC-TW !
+    _FFT-CONV-N !
+    _FFT-CONV-DST !
+    _FFT-CONV-B !
+    _FFT-CONV-A !
+
+    \ Allocate temporaries: re_a, im_a, re_b, im_b (each n×2 bytes)
+    _FFT-CONV-N @ 2 * HBW-ALLOT _FFT-CONV-RA !
+    _FFT-CONV-N @ 2 * HBW-ALLOT _FFT-CONV-IA !
+    _FFT-CONV-N @ 2 * HBW-ALLOT _FFT-CONV-RB !
+    _FFT-CONV-N @ 2 * HBW-ALLOT _FFT-CONV-IB !
+
+    \ Copy a→re_a, zero im_a; copy b→re_b, zero im_b
+    0 _FFT-CONV-I !
+    BEGIN _FFT-CONV-I @ _FFT-CONV-N @ < WHILE
+        _FFT-CONV-A @ _FFT-CONV-I @ 2 * + W@
+        _FFT-CONV-RA @ _FFT-CONV-I @ 2 * + W!
+        _FFT-ZERO _FFT-CONV-IA @ _FFT-CONV-I @ 2 * + W!
+        _FFT-CONV-B @ _FFT-CONV-I @ 2 * + W@
+        _FFT-CONV-RB @ _FFT-CONV-I @ 2 * + W!
+        _FFT-ZERO _FFT-CONV-IB @ _FFT-CONV-I @ 2 * + W!
+        _FFT-CONV-I @ 1+ _FFT-CONV-I !
+    REPEAT
+
+    \ FFT both using twiddle table
+    _FFT-CONV-RA @ _FFT-CONV-IA @ _FFT-CONV-N @ _FFTC-TW @ FFT-FORWARD-TW
+    _FFT-CONV-RB @ _FFT-CONV-IB @ _FFT-CONV-N @ _FFTC-TW @ FFT-FORWARD-TW
+
+    \ Pointwise complex multiply: (ra+i·ia)×(rb+i·ib)
+    0 _FFT-CONV-I !
+    BEGIN _FFT-CONV-I @ _FFT-CONV-N @ < WHILE
+        _FFT-CONV-RA @ _FFT-CONV-I @ 2 * + W@ _FFT-UR !
+        _FFT-CONV-IA @ _FFT-CONV-I @ 2 * + W@ _FFT-UI !
+        _FFT-CONV-RB @ _FFT-CONV-I @ 2 * + W@ _FFT-WR !
+        _FFT-CONV-IB @ _FFT-CONV-I @ 2 * + W@ _FFT-WI !
+        \ re_out = ra·rb − ia·ib
+        _FFT-UR @ _FFT-WR @ FP16-MUL
+        _FFT-UI @ _FFT-WI @ FP16-MUL
+        FP16-SUB
+        _FFT-CONV-RA @ _FFT-CONV-I @ 2 * + W!
+        \ im_out = ra·ib + ia·rb
+        _FFT-UR @ _FFT-WI @ FP16-MUL
+        _FFT-UI @ _FFT-WR @ FP16-MUL
+        FP16-ADD
+        _FFT-CONV-IA @ _FFT-CONV-I @ 2 * + W!
+        _FFT-CONV-I @ 1+ _FFT-CONV-I !
+    REPEAT
+
+    \ IFFT using twiddle table
+    _FFT-CONV-RA @ _FFT-CONV-IA @ _FFT-CONV-N @ _FFTC-TW @ FFT-INVERSE-TW
+
+    \ Copy real part to dst
+    0 _FFT-CONV-I !
+    BEGIN _FFT-CONV-I @ _FFT-CONV-N @ < WHILE
+        _FFT-CONV-RA @ _FFT-CONV-I @ 2 * + W@
+        _FFT-CONV-DST @ _FFT-CONV-I @ 2 * + W!
+        _FFT-CONV-I @ 1+ _FFT-CONV-I !
+    REPEAT ;
+
+\ ── FFT-CORRELATE-TW ─────────────────────────────────────────────────
+\  Cross-correlation via FFT using precomputed twiddle table.
+\  Same as FFT-CONVOLVE-TW but conjugates B's FFT before multiply.
+
+VARIABLE _FFTCR-TW                   \ twiddle for correlate-TW
+
+: FFT-CORRELATE-TW  ( a b dst n tw -- )
+    _FFTCR-TW !
+    _FFT-CORR-N !
+    _FFT-CORR-DST !
+    _FFT-CORR-B !
+    _FFT-CORR-A !
+
+    \ Allocate temporaries
+    _FFT-CORR-N @ 2 * HBW-ALLOT _FFT-CORR-RA !
+    _FFT-CORR-N @ 2 * HBW-ALLOT _FFT-CORR-IA !
+    _FFT-CORR-N @ 2 * HBW-ALLOT _FFT-CORR-RB !
+    _FFT-CORR-N @ 2 * HBW-ALLOT _FFT-CORR-IB !
+
+    \ Copy a→re_a, zero im_a; copy b→re_b, zero im_b
+    0 _FFT-CORR-I !
+    BEGIN _FFT-CORR-I @ _FFT-CORR-N @ < WHILE
+        _FFT-CORR-A @ _FFT-CORR-I @ 2 * + W@
+        _FFT-CORR-RA @ _FFT-CORR-I @ 2 * + W!
+        _FFT-ZERO _FFT-CORR-IA @ _FFT-CORR-I @ 2 * + W!
+        _FFT-CORR-B @ _FFT-CORR-I @ 2 * + W@
+        _FFT-CORR-RB @ _FFT-CORR-I @ 2 * + W!
+        _FFT-ZERO _FFT-CORR-IB @ _FFT-CORR-I @ 2 * + W!
+        _FFT-CORR-I @ 1+ _FFT-CORR-I !
+    REPEAT
+
+    \ FFT both using twiddle table
+    _FFT-CORR-RA @ _FFT-CORR-IA @ _FFT-CORR-N @ _FFTCR-TW @ FFT-FORWARD-TW
+    _FFT-CORR-RB @ _FFT-CORR-IB @ _FFT-CORR-N @ _FFTCR-TW @ FFT-FORWARD-TW
+
+    \ Conjugate B: negate im_b
+    0 _FFT-CORR-I !
+    BEGIN _FFT-CORR-I @ _FFT-CORR-N @ < WHILE
+        _FFT-CORR-IB @ _FFT-CORR-I @ 2 * + DUP W@
+        FP16-NEG SWAP W!
+        _FFT-CORR-I @ 1+ _FFT-CORR-I !
+    REPEAT
+
+    \ Pointwise complex multiply
+    0 _FFT-CORR-I !
+    BEGIN _FFT-CORR-I @ _FFT-CORR-N @ < WHILE
+        _FFT-CORR-RA @ _FFT-CORR-I @ 2 * + W@ _FFT-UR !
+        _FFT-CORR-IA @ _FFT-CORR-I @ 2 * + W@ _FFT-UI !
+        _FFT-CORR-RB @ _FFT-CORR-I @ 2 * + W@ _FFT-WR !
+        _FFT-CORR-IB @ _FFT-CORR-I @ 2 * + W@ _FFT-WI !
+        _FFT-UR @ _FFT-WR @ FP16-MUL
+        _FFT-UI @ _FFT-WI @ FP16-MUL
+        FP16-SUB
+        _FFT-CORR-RA @ _FFT-CORR-I @ 2 * + W!
+        _FFT-UR @ _FFT-WI @ FP16-MUL
+        _FFT-UI @ _FFT-WR @ FP16-MUL
+        FP16-ADD
+        _FFT-CORR-IA @ _FFT-CORR-I @ 2 * + W!
+        _FFT-CORR-I @ 1+ _FFT-CORR-I !
+    REPEAT
+
+    \ IFFT using twiddle table
+    _FFT-CORR-RA @ _FFT-CORR-IA @ _FFT-CORR-N @ _FFTCR-TW @ FFT-INVERSE-TW
 
     \ Copy real part to dst
     0 _FFT-CORR-I !

@@ -69,8 +69,10 @@ PROVIDED akashic-trig
 
 VARIABLE _TR-QUAD
 VARIABLE _TR-RED                     \ reduced angle
+VARIABLE _TR-SWAP                    \ 1 if complement applied
 
 : _TR-REDUCE  ( angle -- )
+    0 _TR-SWAP !
     \ Step 1: fold to [0, 2π)
     DUP FP16-SIGN IF                  \ negative angle?
         FP16-NEG                      \ work with |angle|
@@ -101,7 +103,7 @@ VARIABLE _TR-RED                     \ reduced angle
     \ Now angle is in [0, π/2). Further reduce to [0, π/4].
     DUP TRIG-PI/4 FP16-GT IF
         TRIG-PI/2 SWAP FP16-SUB      \ complement: π/2 − angle
-        _TR-QUAD @ 1+ 3 AND _TR-QUAD !  \ shift quadrant
+        1 _TR-SWAP !                  \ mark complement applied
     THEN
     _TR-RED ! ;
 
@@ -138,6 +140,11 @@ VARIABLE _TR-CP
     _TR-REDUCE
     _TR-RED @ _TR-SIN-POLY _TR-SP !
     _TR-RED @ _TR-COS-POLY _TR-CP !
+    \ If complement was applied, swap sin_poly ↔ cos_poly
+    _TR-SWAP @ IF
+        _TR-SP @  _TR-CP @
+        _TR-SP !  _TR-CP !
+    THEN
     _TR-QUAD @ CASE
         0 OF _TR-SP @          _TR-CP @          ENDOF
         1 OF _TR-CP @          _TR-SP @ FP16-NEG ENDOF
