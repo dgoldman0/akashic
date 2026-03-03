@@ -245,16 +245,30 @@ VARIABLE _SP-BE-SUM
 \ =====================================================================
 \  ( buf -- freq-fp16 )
 \  Computes autocorrelation of the signal and finds the first peak
-\  after the origin.  The lag at that peak corresponds to the
-\  fundamental period: freq = rate / lag.
+\  after the initial dip from the origin.  The lag at that peak
+\  corresponds to the fundamental period: freq = rate / lag.
 \
 \  Uses the power spectrum already computed: autocorrelation = IFFT
 \  of power spectrum (Wiener–Khinchin theorem).
 \  We reuse _SP-RE/_SP-IM for this.
+\
+\  Algorithm: "first peak after dip" (standard approach).
+\    Phase 1 — walk from lag 2, looking for autocorrelation to
+\              decline (r[lag] <= r[lag-1]).  This marks the end of
+\              the origin region.
+\    Phase 2 — continue walking, waiting for the first local
+\              maximum: r[lag] > r[lag-1] AND r[lag] > r[lag+1].
+\              That first peak corresponds to the fundamental period.
+\
+\  Why not "largest peak"?  For signals with rich harmonics the
+\  autocorrelation at 2× the period can be nearly equal to the peak
+\  at 1× the period.  FP16 rounding can flip the ordering, causing
+\  the algorithm to report half the true frequency (octave-below
+\  error).  Finding the *first* peak avoids this entirely.
 
-VARIABLE _SP-PT-BEST
 VARIABLE _SP-PT-LAG
 VARIABLE _SP-PT-PREV
+VARIABLE _SP-PT-DIP      \ 0 = still in origin region, 1 = past dip
 
 : PCM-PITCH-ESTIMATE  ( buf -- freq-fp16 )
     _SP-SETUP
@@ -269,32 +283,35 @@ VARIABLE _SP-PT-PREV
 
     _SP-RE @ _SP-IM @ _SP-NFFT FFT-INVERSE
 
-    \ Now RE contains the autocorrelation (IM should be ~0).
-    \ Find the first peak after lag 0.
-    \ Walk from lag=2 (skip 0 and 1 which are always high)
-    \ until we find a sample greater than its neighbors.
-
-    FP16-POS-ZERO _SP-PT-BEST !
+    \ First-peak-after-dip search
     0 _SP-PT-LAG !
+    0 _SP-PT-DIP !
     _SP-RE @ 2 2* + W@ _SP-PT-PREV !    \ r[2]
 
-    \ Search from lag 3 to NFFT/2
-    \ Looking for: r[lag] > r[lag-1] AND r[lag] > r[lag+1]
-    \ and r[lag] is the largest such peak found.
     _SP-NBINS 3 DO
-        _SP-RE @ I 2* + W@              \ r[lag]
-        DUP _SP-PT-PREV @ FP16-GT IF    \ r[lag] > r[lag-1] ?
-            DUP                            ( r[lag] r[lag] )
-            _SP-RE @ I 1+ 2* + W@         ( r[lag] r[lag] r[lag+1] )
-            FP16-GT IF                     \ r[lag] > r[lag+1] ?
-                \ This is a peak. Is it the biggest?
-                DUP _SP-PT-BEST @ FP16-GT IF
-                    DUP _SP-PT-BEST !
-                    I _SP-PT-LAG !
+        _SP-PT-LAG @ 0= IF              \ only if not yet found
+            _SP-RE @ I 2* + W@          ( r[lag] )
+
+            _SP-PT-DIP @ 0= IF
+                \ Phase 1: still in origin region, looking for decline
+                DUP _SP-PT-PREV @
+                FP16-GT 0= IF           \ r[lag] <= r[lag-1] => declining
+                    1 _SP-PT-DIP !
+                THEN
+            ELSE
+                \ Phase 2: past dip, looking for first peak
+                DUP _SP-PT-PREV @
+                FP16-GT IF              \ r[lag] > r[lag-1] ? (ascending)
+                    DUP
+                    _SP-RE @ I 1+ 2* + W@
+                    FP16-GT IF          \ r[lag] > r[lag+1] ? (peak!)
+                        I _SP-PT-LAG !
+                    THEN
                 THEN
             THEN
+
+            _SP-PT-PREV !              \ prev = r[lag]
         THEN
-        _SP-PT-PREV !                    \ prev = r[lag] for next iter
     LOOP
 
     \ freq = rate / lag

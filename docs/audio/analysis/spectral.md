@@ -168,8 +168,12 @@ PCM-PITCH-ESTIMATE  ( buf -- freq-fp16 )
 Autocorrelation-based pitch detection.  Uses the
 Wiener–Khinchin theorem: autocorrelation = IFFT of power
 spectrum.  After computing the power spectrum, copies it into RE,
-zeros IM, runs `FFT-INVERSE`, then searches for the first peak
-in the autocorrelation from lag 3 to NFFT/2.
+zeros IM, runs `FFT-INVERSE`, then searches for the **first peak
+after the initial dip** in the autocorrelation (lag 3 to NFFT/2).
+
+This "first-peak-after-dip" strategy avoids octave-below errors
+that occur with harmonic-rich signals when FP16 rounding makes the
+autocorrelation at 2× the period appear equal to the true period.
 
 $$f_0 = \frac{\text{rate}}{\text{lag}_\text{peak}}$$
 
@@ -185,6 +189,12 @@ Returns 0 if no peak is found (e.g. silence, pure noise).
 
 **Accuracy:** Limited by bin resolution (~31 Hz at 8 kHz).  Best
 for tonal signals with clear periodicity.
+
+**Note:** Only the first 256 samples of the buffer are analysed
+(the FFT window).  For percussive sounds with noise attacks, the
+initial window may not contain the pitched portion.  To get
+accurate pitch for the sustain phase, extract a sub-buffer past
+the transient and analyse that instead.
 
 ```forth
 buf PCM-PITCH-ESTIMATE   \ → ~440 for a 440 Hz sine
