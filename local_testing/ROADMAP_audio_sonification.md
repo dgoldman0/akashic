@@ -1,59 +1,83 @@
-# Audio & Sonification Library — Roadmap
+# Audio, Sound Sources & Sonification — Roadmap (v2)
 
 A general-purpose audio toolkit for KDOS / Megapad-64, covering
-synthesis, effects processing, mixing, analysis, sequencing, I/O, and
-codec support.  Plus a sonification sub-library that bridges the visual
-render pipeline to audio output — data → sound.
+synthesis, effects, mixing, analysis, sequencing, I/O, and codecs,
+extended by three higher-level layers that go all the way from raw
+algorithms to data made audible:
+
+- **Synthesis primitives** (`audio/syn/`) — the raw methods, named by
+  technique.  Modal, membrane, resonant filter bank, additive partial,
+  sustained oscillator bank, granular.  These are algorithms, not
+  instruments.  The same modal engine that produces a bell also produces
+  a steel plate, a Tibetan bowl, a glass harmonica, or something with
+  no physical referent at all.
+
+- **Sound sources** (`audio/src/`) — the large, rich library of
+  algorithmically defined, continuously parameterizable sound objects.
+  Divided into families: acoustic instruments, natural/environmental,
+  electronic/abstract, industrial/mechanical, tonal drones.  Each
+  source is a descriptor whose physical or perceptual parameters can be
+  set to any value, modulated by data, rendered live or pre-rendered
+  into a cache.  Musical instruments are one family here — not the
+  whole thing, not even most of it.
+
+- **Palette system** (`audio/palette/`) — a way to group sound sources
+  into a coherent aesthetic identity, register them by semantic role,
+  and swap the entire aesthetic without changing the code that uses it.
+  What `math/color.f` does for color schemes, palettes do for sound.
+
+- **Sonification** (`audio/sonify/`) — systematic mappings from data
+  dimensions to auditory dimensions.  Native auditory forms — not
+  visual metaphors translated to sound.  Stream, trigger, pulse,
+  texture, ensemble, interval, alert, earcon.  These forms consume a
+  palette; the same code produces completely different sound when the
+  palette changes.
 
 The system is designed as a standalone peer to `render/` and `math/`,
 not tied to any particular UI paradigm.  Games, music tools, media
-players, accessibility engines, creative coding, data sonification —
-all are first-class use cases.
-
-The Megapad-64 platform already provides an unusually rich foundation:
-lock-aware ring buffers, a tile/SIMD engine with FP16/BF16 modes, a
-hardware timer with compare-match IRQ, multicore dispatch with IPI
-messaging, 3 MiB of internal high-bandwidth math RAM, external RAM
-with free-list allocation, a cooperative+preemptive scheduler, and a
-PCM buffer abstraction that mirrors `render/surface.f` for pixels.
+players, accessibility engines, creative coding, scientific
+audification, real-time monitoring — all are first-class use cases.
 
 ---
 
 ## Table of Contents
 
 - [Current State — What We Already Have](#current-state--what-we-already-have)
-  - [KDOS Built-Ins](#kdos-built-ins)
-  - [Akashic Libraries](#akashic-libraries)
-  - [What This Gives Us Already](#what-this-gives-us-already)
-- [What's Missing](#whats-missing)
 - [Architecture Overview](#architecture-overview)
-- [Tier 1 — Generation](#tier-1--generation)
-  - [1.1 audio/osc.f — Oscillators](#11-audiooscf--oscillators)
-  - [1.2 audio/noise.f — Noise Generators](#12-audionoisef--noise-generators)
-  - [1.3 audio/env.f — Envelope Generators](#13-audioenvf--envelope-generators)
-  - [1.4 audio/lfo.f — Low-Frequency Oscillators](#14-audiolfof--low-frequency-oscillators)
-- [Tier 2 — Processing](#tier-2--processing)
-  - [2.1 audio/fx.f — Effects Collection](#21-audiofxf--effects-collection)
-  - [2.2 audio/mix.f — Mixer](#22-audiomixf--mixer)
-  - [2.3 audio/chain.f — Effect Chains](#23-audiochainf--effect-chains)
-- [Tier 3 — Analysis](#tier-3--analysis)
-  - [3.1 audio/analysis.f — Spectral, Pitch, Onset, Metering](#31-audioanalysisf--spectral-pitch-onset-metering)
-- [Tier 4 — Synthesis Engines](#tier-4--synthesis-engines)
-  - [4.1 audio/synth.f — Subtractive Voice](#41-audiosynthf--subtractive-voice)
-  - [4.2 audio/fm.f — FM Synthesis](#42-audiofmf--fm-synthesis)
-  - [4.3 audio/pluck.f — Karplus-Strong](#43-audiopluckf--karplus-strong)
-- [Tier 5 — Sequencing & Format](#tier-5--sequencing--format)
-  - [5.1 audio/wav.f — WAV/RIFF Codec](#51-audiowavf--wavriff-codec)
-  - [5.2 audio/seq.f — Step Sequencer](#52-audioseqf--step-sequencer)
-  - [5.3 audio/midi.f — MIDI Protocol](#53-audiomidif--midi-protocol)
-- [Tier 6 — I/O & Drivers](#tier-6--io--drivers)
-  - [6.1 audio/speaker.f — DAC Output](#61-audiospeakerf--dac-output)
-  - [6.2 audio/mic.f — ADC Capture](#62-audiomicf--adc-capture)
-- [Tier 7 — Sonification](#tier-7--sonification)
-  - [7.1 render/sonification/param-map.f — Parameter Mapping](#71-rendersonificationparam-mapf--parameter-mapping)
-  - [7.2 render/sonification/data2tone.f — Data Series → Melody](#72-rendersonificationdata2tonef--data-series--melody)
-  - [7.3 render/sonification/earcon.f — Notification Sounds](#73-rendersonificationearconf--notification-sounds)
-  - [7.4 render/sonification/scene2audio.f — Scene Graph → Audio](#74-rendersonificationscene2audiof--scene-graph--audio)
+- [Tiers 1–6 — Audio Core (existing)](#tiers-16--audio-core-existing)
+- [Tier 7 — Synthesis Primitives](#tier-7--synthesis-primitives)
+  - [7.1 audio/syn/modal.f — Inharmonic Partial Synthesis](#71-audiosynmodalf--inharmonic-partial-synthesis)
+  - [7.2 audio/syn/membrane.f — Membrane + Noise Model](#72-audiosynmembranef--membrane--noise-model)
+  - [7.3 audio/syn/resonator.f — Resonant Filter Bank](#73-audiosynresonatorf--resonant-filter-bank)
+  - [7.4 audio/syn/additive.f — Harmonic Additive Synthesis](#74-audiosynadditivef--harmonic-additive-synthesis)
+  - [7.5 audio/syn/sustained.f — Sustained Oscillator Bank](#75-audiosynsustained--sustained-oscillator-bank)
+  - [7.6 audio/syn/granular.f — Granular Synthesis](#76-audiosyngranularf--granular-synthesis)
+- [Tier 8 — Sound Sources](#tier-8--sound-sources)
+  - [The Source Contract](#the-source-contract)
+  - [8.1 audio/src/acoustic.f — Acoustic Instruments](#81-audiosrcacousticf--acoustic-instruments)
+  - [8.2 audio/src/natural.f — Natural / Environmental](#82-audiosrcnaturalf--natural--environmental)
+  - [8.3 audio/src/electronic.f — Electronic / Abstract](#83-audiosrcelectronicf--electronic--abstract)
+  - [8.4 audio/src/industrial.f — Industrial / Mechanical](#84-audiosrcindustrialf--industrial--mechanical)
+  - [8.5 audio/src/drones.f — Tonal Drones & Pads](#85-audiosrcdronesf--tonal-drones--pads)
+  - [8.6 audio/src/cache.f — Source Render Cache](#86-audiosrccachef--source-render-cache)
+- [Tier 9 — Palette System](#tier-9--palette-system)
+  - [9.1 audio/palette/palette.f — Palette Definition & Registry](#91-audiopalettepalettef--palette-definition--registry)
+  - [9.2 audio/palette/acoustic.f — Acoustic Palette](#92-audiopaletteacousticf--acoustic-palette)
+  - [9.3 audio/palette/electronic.f — Electronic Palette](#93-audiopaletteelectronicf--electronic-palette)
+  - [9.4 audio/palette/natural.f — Natural Palette](#94-audiopaletttenaturalf--natural-palette)
+  - [9.5 audio/palette/industrial.f — Industrial Palette](#95-audiopaletteindustrialf--industrial-palette)
+- [Tier 10 — Sonification](#tier-10--sonification)
+  - [Why Native Auditory Forms](#why-native-auditory-forms)
+  - [10.1 audio/sonify/param-map.f — Dimension Mapping](#101-audiosonifyparam-mapf--dimension-mapping)
+  - [10.2 audio/sonify/stream.f — Continuous Data → Evolving Sound](#102-audiosonifystreamf--continuous-data--evolving-sound)
+  - [10.3 audio/sonify/trigger.f — Discrete Events → Strikes](#103-audiosonifytriggerf--discrete-events--strikes)
+  - [10.4 audio/sonify/pulse.f — Rate Data → Rhythmic Pulse](#104-audiosonifypulsef--rate-data--rhythmic-pulse)
+  - [10.5 audio/sonify/texture.f — Aggregates → Ambient Soundscape](#105-audiosonifytexturef--aggregates--ambient-soundscape)
+  - [10.6 audio/sonify/ensemble.f — Multi-Variate → Polyphonic Layers](#106-audiosonifyensemblef--multi-variate--polyphonic-layers)
+  - [10.7 audio/sonify/interval.f — Relationships → Harmonic Intervals](#107-audiosonifyintervalf--relationships--harmonic-intervals)
+  - [10.8 audio/sonify/alert.f — Threshold Monitor → Escalating Cues](#108-audiosonifyalertf--threshold-monitor--escalating-cues)
+  - [10.9 audio/sonify/earcon.f — Semantic Audio Tokens](#109-audiosonifyearconf--semantic-audio-tokens)
+  - [10.10 audio/sonify/scene.f — Multi-Form Composition](#1010-audiosonifyscenef--multi-form-composition)
 - [Dependency Graph](#dependency-graph)
 - [Implementation Order](#implementation-order)
 - [Design Decisions](#design-decisions)
@@ -65,89 +89,55 @@ PCM buffer abstraction that mirrors `render/surface.f` for pixels.
 
 ### KDOS Built-Ins
 
-The kernel and BIOS provide the entire low-level runtime for audio.
-No custom ring buffers, no custom locks, no custom timers needed.
-
 | Facility | Words | Audio Relevance |
 |---|---|---|
-| **Ring Buffers (§18)** | `RING`, `RING-PUSH`, `RING-POP`, `RING-PEEK`, `RING-FULL?`, `RING-EMPTY?`, `RING-COUNT` — 56-byte descriptor, spinlock-protected, arbitrary element size | Streaming audio pipeline. `2 1024 RING audio-out` = 1024-slot ring of 16-bit samples. Producer/consumer between synth task and DAC ISR. |
-| **Tile Engine (MEX)** | `TSUM`, `TADD`, `TSUB`, `TMUL`, `TDOT`, `TMIN`, `TMAX`, `TSUMSQ`, `TABS` — 64-byte SIMD tiles, U8/FP16/BF16 modes, FP32 accumulator | Bulk DSP accelerator. 32 FP16 samples per tile = one tile op processes 32 frames. Mix, gain, convolve, sum-of-squares — all tile-accelerated. |
-| **FP16 Buffer Ops** | `F.SUM`, `F.DOT`, `F.SUMSQ`, `F.ADD`, `F.MUL`, `BF.SUM`, `BF.DOT` | Direct SIMD FP16 audio math. Mixing N channels = `F.ADD` per tile. |
-| **HBW Math RAM** | `HBW-ALLOT`, `HBW-TALIGN`, `HBW-RESET` — 3 MiB internal BRAM, bump allocator, tile-aligned | Low-latency hot buffers. Delay lines, wavetables, active PCM data. Internal BRAM = no bus contention, zero-wait tile access. |
-| **External RAM** | `XMEM-ALLOT`, `XMEM-FREE-BLOCK`, `XBUF` — external HyperRAM/SDRAM, free-list allocator | Cold storage. WAV files, long recordings, instrument patch banks, sample libraries. |
-| **Hardware Timer** | `TIMER!`, `TIMER-CTRL!`, `TIMER-ACK` — 32-bit compare-match, auto-reload, IRQ to IVT slot 7 | Sample-accurate timing. Timer ISR at audio rate drains ring buffer to DAC. Proven pattern (scheduler uses same timer for preemption). |
-| **ISR / IVT** | `ISR!` (install Forth XT at IVT slot), `EI!` / `DI!` | Interrupt-driven playback. `' audio-isr 7 ISR!` installs the drain callback. |
-| **Scheduler (§8)** | `TASK`, `SPAWN`, `BG`, `YIELD`, `PREEMPT-ON/OFF` — cooperative + preemptive, 8 task slots | Background audio thread. Synthesis fills ring while main task does UI or computation. |
-| **Multicore (§8.1)** | `CORE-RUN`, `CORE-WAIT`, `BARRIER`, IPI messaging — 4 cores | Dedicated audio core. Core 1 renders audio, Core 0 does UI. Ring buffer bridges cores with spinlock protection already in place. |
-| **Spinlocks** | `LOCK` / `UNLOCK` — 8 hardware MMIO spinlocks; spinlock 4 assigned to ring buffers | Already wired into RING-PUSH/POP. Audio uses rings → gets thread-safe streaming for free. |
-| **Heap** | `ALLOCATE` / `FREE` / `RESIZE` — first-fit with coalescing | Dynamic descriptors: PCM headers, effect chains, voice pools. |
-| **Disk / MP64FS** | `FWRITE`, `FREAD`, `FSEEK`, `OPEN`, DMA disk I/O, named files | Save/load WAV files, instrument patches, sequences to named files. |
-| **Data Ports** | NIC frame ingestion, `POLL`, `INGEST` — Python `AudioSource` already exists | External audio input from host. `AudioSource` generates tone/chord/chirp/square via NIC frames. |
-| **CRC-32** | Hardware CRC via MMIO | WAV file checksums, bundle integrity. |
-| **RTC** | `UPTIME@`, `EPOCH@`, `SEC@`, `MIN@`, `HOUR@` | Timestamping recordings, scheduled playback. |
+| **Ring Buffers (§18)** | `RING`, `RING-PUSH`, `RING-POP`, `RING-PEEK`, `RING-FULL?`, `RING-EMPTY?`, `RING-COUNT` | Streaming pipeline, delay lines, all circular buffers in effects |
+| **Tile Engine (MEX)** | `TSUM`, `TADD`, `TSUB`, `TMUL`, `TDOT`, `TMIN`, `TMAX`, `TSUMSQ`, `TABS` | 32 FP16 samples per op — bulk DSP accelerator |
+| **FP16 Buffer Ops** | `F.SUM`, `F.DOT`, `F.SUMSQ`, `F.ADD`, `F.MUL`, `BF.SUM`, `BF.DOT` | SIMD audio arithmetic |
+| **HBW Math RAM** | `HBW-ALLOT`, `HBW-TALIGN`, `HBW-RESET` — 3 MiB BRAM | Hot buffers: delay lines, wavetables, active PCM |
+| **External RAM** | `XMEM-ALLOT`, `XMEM-FREE-BLOCK`, `XBUF` | Cold storage: WAV files, sample libraries, source cache |
+| **Hardware Timer** | `TIMER!`, `TIMER-CTRL!`, `TIMER-ACK` — 32-bit compare-match IRQ | Sample-accurate ISR-driven playback |
+| **Scheduler (§8)** | `TASK`, `SPAWN`, `BG`, `YIELD`, `PREEMPT-ON/OFF` | Background audio thread |
+| **Multicore (§8.1)** | `CORE-RUN`, `CORE-WAIT`, `BARRIER`, IPI | Dedicated audio core |
+| **Heap** | `ALLOCATE` / `FREE` / `RESIZE` | Dynamic descriptors |
+| **Disk / MP64FS** | `FWRITE`, `FREAD`, `FSEEK`, `OPEN` | WAV files, patch banks |
 
-### Akashic Libraries
+### Akashic Libraries (existing)
 
-| Library | File | Lines | Audio Relevance |
-|---|---|---|---|
-| akashic-audio-pcm | `audio/pcm.f` | 662 | **Done.** PCM buffer abstraction: alloc, accessors, sample I/O, copy, slice, clone, reverse, resample (nearest-neighbor), mono mix-down, normalize, peak scan. The `surface.f` of audio. |
-| akashic-fft | `math/fft.f` | 481 | Radix-2 FFT on FP16 arrays. Magnitude, power spectrum, convolution, cross-correlation. Twiddle factors via `TRIG-SINCOS`. |
-| akashic-filter | `math/filter.f` | 500 | FIR, IIR biquad (direct-form-II transposed), 1D convolution, moving average, median, Hamming-windowed sinc lowpass/highpass. |
-| akashic-timeseries | `math/timeseries.f` | 724 | SMA, EMA, EWMA, autocorrelation, cumulative sum, rolling std, z-score outliers — usable for onset detection, pitch tracking. |
-| akashic-trig | `math/trig.f` | ~200 | `TRIG-SINCOS` — sine/cosine lookup. Directly usable for oscillator sample generation. |
-| akashic-interp | `math/interp.f` | ~200 | Linear and cubic interpolation — usable for high-quality resampling. |
-| akashic-fp16 | `math/fp16.f` + `fp16-ext.f` | ~600 | FP16 arithmetic, conversions, comparisons. The numeric format for all audio processing. |
-| akashic-color | `math/color.f` | 598 | HSL/HSV ↔ RGB. Relevant for param-map.f (mapping data to timbre via spectral analogy). |
-| akashic-channel | `concurrency/channel.f` | ~300 | Go-style bounded channels. Alternative to raw ring buffers for command passing. |
-| akashic-semaphore | `concurrency/semaphore.f` | ~150 | Counting semaphores. Useful for voice pool management. |
-| akashic-event | `concurrency/event.f` | ~150 | Event flags. Trigger-on-beat, sync-to-onset. |
-| akashic-rwlock | `concurrency/rwlock.f` | ~150 | Reader-writer lock. Multiple readers of wavetable + single writer for wavetable swap. |
+| Library | File | Lines |
+|---|---|---|
+| akashic-audio-pcm | `audio/pcm.f` | 662 ✅ |
+| akashic-fft | `math/fft.f` | 481 ✅ |
+| akashic-filter | `math/filter.f` | 500 ✅ |
+| akashic-timeseries | `math/timeseries.f` | 724 ✅ |
+| akashic-trig | `math/trig.f` | ~200 ✅ |
+| akashic-interp | `math/interp.f` | ~200 ✅ |
+| akashic-fp16 | `math/fp16.f` + `fp16-ext.f` | ~600 ✅ |
+| akashic-simd | `math/simd.f` + `simd-ext.f` | ~400 ✅ |
 
-### What This Gives Us Already
+### Audio Core (built, Tiers 1–6)
 
-```
-              PCM buffer (audio/pcm.f)
-                   │
- ┌─────────────────┼─────────────────┐
- │ read/write      │ bulk ops        │ analysis
- │ PCM-SAMPLE@/!   │ PCM-COPY        │ PCM-SCAN-PEAK
- │ PCM-FRAME@/!    │ PCM-CLEAR       │ PCM-NORMALIZE
- │                 │ PCM-FILL        │
- │                 │ PCM-REVERSE     │
- │                 │ PCM-RESAMPLE    │
- │                 │ PCM-TO-MONO     │
- │                 │ PCM-CLONE       │
- │                 │ PCM-SLICE       │
- │                 │                 │
- │  tile engine    │ math library    │ streaming
- │  F.ADD F.MUL    │ FFT-FORWARD     │ RING-PUSH
- │  F.SUM F.DOT    │ FFT-INVERSE     │ RING-POP
- │  TSUM TADD      │ FILT-FIR        │ TIMER! ISR!
- │  TMUL TDOT      │ FILT-IIR-BIQUAD │ TASK SPAWN
- │                 │ FILT-LOWPASS     │ CORE-RUN
- │                 │ TS-AUTOCORR      │
- └─────────────────┴─────────────────┘
-```
-
-### What's Missing (The Gap)
-
-There are no **sound generators** — the step that creates audio content
-(oscillators, noise, envelopes).  There is no **effects pipeline** that
-chains processing stages.  There is no **mixer** to combine voices.
-There are no **synthesis engines** that compose generators + filters +
-envelopes into playable instruments.  There is no **analysis layer**
-tuned for audio (windowed FFT, pitch detection, onset detection, VU
-metering).  There is no **WAV codec**, no **sequencer**, no **MIDI
-support**, no **DAC/ADC driver**, and no **sonification** bridge from
-data to sound.
-
-```
-    ??? ──► oscillator ──► filter ──► envelope ──► mixer ──► ??? speaker
-                                                      ↑
-    ??? ──► noise ────────────────────► reverb ────────┘
-
-    data ──► ??? ──► audio parameters ──► sound
-```
+| Module | File | Lines |
+|---|---|---|
+| PCM buffers | `audio/pcm.f` | ~350 ✅ |
+| Oscillators | `audio/osc.f` | ~420 ✅ |
+| Envelopes | `audio/env.f` | ~300 ✅ |
+| Noise | `audio/noise.f` | ~200 ✅ |
+| LFO | `audio/lfo.f` | ~250 ✅ |
+| Effects | `audio/fx.f` | ~1100 ✅ |
+| Mixer | `audio/mix.f` | ~350 ✅ |
+| Effect chain | `audio/chain.f` | ~200 ✅ |
+| Subtractive synth | `audio/synth.f` | ~450 ✅ |
+| FM synthesis | `audio/fm.f` | ~400 ✅ |
+| Karplus-Strong | `audio/pluck.f` | ~200 ✅ |
+| Polyphony | `audio/poly.f` | ~250 ✅ |
+| Portamento | `audio/porta.f` | ~150 ✅ |
+| WAV codec | `audio/wav.f` | 363 ✅ |
+| Step sequencer | `audio/seq.f` | 352 ✅ |
+| MIDI | `audio/midi.f` | 371 ✅ |
+| Wavetable LUT | `audio/wavetable.f` | ~150 ✅ |
+| PCM SIMD ops | `audio/pcm-simd.f` | ~200 ✅ |
+| FFT reverb | `audio/fft-reverb.f` | ~430 ✅ |
 
 ---
 
@@ -155,1096 +145,1396 @@ data to sound.
 
 ```
 audio/
-├── pcm.f              PCM buffers (DONE)
-├── osc.f              Oscillators (sine, square, saw, tri, pulse, wavetable)
-├── noise.f            Noise generators (white, pink, brown)
-├── env.f              Envelope generators (ADSR, AR, ramp)
-├── lfo.f              Low-frequency oscillators (modulation source)
-├── fx.f               Effects (delay, reverb, chorus, distortion, EQ, compressor)
-├── mix.f              N-channel mixer (gain, pan, mute, master)
-├── chain.f            Serial effect chain (ordered slots, per-slot bypass)
-├── analysis.f         Audio analysis (spectrum, pitch, onset, metering)
-├── synth.f            Subtractive synthesis voice
-├── fm.f               FM synthesis (2-op / 4-op)
-├── pluck.f            Karplus-Strong plucked string
-├── wav.f              WAV/RIFF read + write
-├── seq.f              Step sequencer (BPM, patterns, tracks)
-├── midi.f             MIDI byte protocol (parse + generate)
-├── speaker.f          DAC output driver (timer ISR + ring drain)
-└── mic.f              ADC capture driver (timer ISR + ring fill)
-
-render/sonification/
-├── param-map.f        Numeric range → audio parameter mapping
-├── data2tone.f        Data series → melodic PCM (scale quantization)
-├── earcon.f           Procedural notification sounds
-└── scene2audio.f      Scene graph / DOM → audio description
+├── pcm.f              PCM buffer abstraction (DONE)
+├── osc.f / noise.f / env.f / lfo.f       (DONE — Tier 1)
+├── fx.f / mix.f / chain.f                (DONE — Tier 2)
+├── analysis.f                            (Tier 3)
+├── synth.f / fm.f / pluck.f              (DONE — Tier 4)
+├── poly.f / porta.f                      (DONE — Tier 4b)
+├── wav.f / seq.f / midi.f                (DONE — Tier 5)
+├── speaker.f / mic.f                     (Tier 6)
+│
+├── syn/                       ── Synthesis primitives ── (Tier 7)
+│   ├── modal.f        Inharmonic partial synthesis engine
+│   ├── membrane.f     Membrane model (tone sweep + noise)
+│   ├── resonator.f    Resonant filter bank (noise-excited)
+│   ├── additive.f     Harmonic additive synthesis engine
+│   ├── sustained.f    Sustained oscillator bank (drones, pads)
+│   └── granular.f     Granular synthesis (grain scheduler)
+│
+├── src/                       ── Sound sources ── (Tier 8)
+│   ├── acoustic.f     Acoustic instruments (bell, gong, drum, etc.)
+│   ├── natural.f      Natural/environmental (wind, rain, fire, etc.)
+│   ├── electronic.f   Electronic/abstract (blip, sweep, crunch, etc.)
+│   ├── industrial.f   Industrial/mechanical (click, clank, hiss, etc.)
+│   ├── drones.f       Tonal drones and pads
+│   └── cache.f        Source render cache (LRU, pitch-shift lookup)
+│
+├── palette/                   ── Palette system ── (Tier 9)
+│   ├── palette.f      Palette definition, registry, selection API
+│   ├── acoustic.f     Built-in acoustic palette (bells, wood, etc.)
+│   ├── electronic.f   Built-in electronic palette
+│   ├── natural.f      Built-in natural palette
+│   └── industrial.f   Built-in industrial palette
+│
+└── sonify/                    ── Data → sound ── (Tier 10)
+    ├── param-map.f    Data dimension → auditory dimension
+    ├── stream.f       Ordered data → evolving sound
+    ├── trigger.f      Discrete events → source strikes
+    ├── pulse.f        Rate data → rhythmic pulse
+    ├── texture.f      Statistical aggregates → ambient soundscape
+    ├── ensemble.f     Multi-variate → polyphonic layers
+    ├── interval.f     Value relationships → harmonic intervals
+    ├── alert.f        Threshold monitoring → escalating cues
+    ├── earcon.f       Semantic audio tokens (palette-driven)
+    └── scene.f        Multi-form composition
 ```
 
-Prefix conventions:
+### Prefix Conventions
 
-| Module | Prefix | Internal |
-|---|---|---|
-| pcm.f | `PCM-` | `_PCM-` |
-| osc.f | `OSC-` | `_OSC-` |
-| noise.f | `NOISE-` | `_NOISE-` |
-| env.f | `ENV-` | `_ENV-` |
-| lfo.f | `LFO-` | `_LFO-` |
-| fx.f | `FX-` | `_FX-` |
-| mix.f | `MIX-` | `_MIX-` |
-| chain.f | `CHAIN-` | `_CHAIN-` |
-| analysis.f | `ANA-` | `_ANA-` |
-| synth.f | `SYNTH-` | `_SYNTH-` |
-| fm.f | `FM-` | `_FM-` |
-| pluck.f | `PLUCK-` | `_PLUCK-` |
-| wav.f | `WAV-` | `_WAV-` |
-| seq.f | `SEQ-` | `_SEQ-` |
-| midi.f | `MIDI-` | `_MIDI-` |
-| speaker.f | `SPK-` | `_SPK-` |
-| mic.f | `MIC-` | `_MIC-` |
-| param-map.f | `PMAP-` | `_PMAP-` |
-| data2tone.f | `D2T-` | `_D2T-` |
-| earcon.f | `EAR-` | `_EAR-` |
-| scene2audio.f | `S2A-` | `_S2A-` |
+| Module | Prefix |
+|---|---|
+| syn/modal.f | `MODAL-` |
+| syn/membrane.f | `MEMB-` |
+| syn/resonator.f | `RESON-` |
+| syn/additive.f | `ADD-` |
+| syn/sustained.f | `SUST-` |
+| syn/granular.f | `GRAN-` |
+| src/acoustic.f | `ACOU-` |
+| src/natural.f | `NAT-` |
+| src/electronic.f | `ELEC-` |
+| src/industrial.f | `INDUS-` |
+| src/drones.f | `DRONE-` |
+| src/cache.f | `SCACHE-` |
+| palette/palette.f | `PAL-` |
+| sonify/param-map.f | `PMAP-` |
+| sonify/stream.f | `SSTREAM-` |
+| sonify/trigger.f | `STRIG-` |
+| sonify/pulse.f | `SPULSE-` |
+| sonify/texture.f | `STEX-` |
+| sonify/ensemble.f | `SENS-` |
+| sonify/interval.f | `SINT-` |
+| sonify/alert.f | `SALERT-` |
+| sonify/earcon.f | `EAR-` |
+| sonify/scene.f | `SSCENE-` |
 
 ---
 
-## Tier 1 — Generation
+## Tiers 1–6 — Audio Core (existing)
 
-Everything that creates audio content.  Each generator writes into a
-PCM buffer.  Generators are stateless functions (no hidden globals) —
-state lives in the PCM buffer or an explicit descriptor.
+(See existing roadmap — all of Tiers 1–6 are built and passing tests.
+Tier 3 analysis.f and Tier 6 speaker/mic are the remaining pieces.)
 
-### 1.1 audio/osc.f — Oscillators
+---
+
+## Tier 7 — Synthesis Primitives
+
+The raw methods, named by technique.  Each primitive is a low-level
+engine that produces a PCM buffer given a descriptor.  These are not
+sound sources.  They don't know what a bell is.  They don't know what
+rain is.
+
+The point: a bell uses the modal engine.  So does a steel plate.  So
+does a fictional material with partial ratios that don't correspond to
+any physical object.  The engine is general.  A sound source (Tier 8)
+is a specific set of parameters fed to an engine, plus a physical or
+aesthetic interpretation.
+
+Every synthesis primitive follows the same low-level contract:
+- A descriptor struct holds all engine state
+- `*-CREATE ( ... rate -- desc )` allocates the descriptor
+- `*-FREE ( desc -- )` frees it
+- `*-RENDER ( buf desc -- )` fills a PCM buffer given current parameters
+- Parameters are FP16 fields accessible via setter words
+
+### 7.1 audio/syn/modal.f — Inharmonic Partial Synthesis
 
 ```
-PROVIDED akashic-audio-osc
+PROVIDED akashic-syn-modal
+REQUIRE  akashic-audio-osc
+REQUIRE  akashic-audio-env
 REQUIRE  akashic-audio-pcm
-REQUIRE  akashic-trig          \ TRIG-SINCOS for sine
-REQUIRE  akashic-fp16          \ FP16 arithmetic
-```
-
-Band-limited oscillators that write FP16 samples into a PCM buffer.
-All waveforms are generated at a specified frequency and sample rate.
-Phase is tracked per-oscillator descriptor for continuous output
-across successive calls.
-
-**Data structure** — oscillator descriptor (6 cells = 48 bytes):
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | freq | Frequency in Hz (FP16) |
-| +8 | phase | Current phase accumulator 0.0–1.0 (FP16) |
-| +16 | rate | Sample rate in Hz |
-| +24 | shape | Waveform type (0=sine, 1=square, 2=saw, 3=tri, 4=pulse) |
-| +32 | duty | Pulse duty cycle 0.0–1.0 (FP16, used when shape=4) |
-| +40 | table | Wavetable address or 0 (0 = computed waveform) |
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `OSC-CREATE` | `( freq shape rate -- osc )` | Allocate oscillator descriptor |
-| `OSC-FREE` | `( osc -- )` | Free descriptor |
-| `OSC-FREQ!` | `( freq osc -- )` | Set frequency (Hz, FP16) |
-| `OSC-SHAPE!` | `( shape osc -- )` | Set waveform type |
-| `OSC-DUTY!` | `( duty osc -- )` | Set pulse duty cycle |
-| `OSC-TABLE!` | `( addr osc -- )` | Set wavetable address (0 = analytical) |
-| `OSC-RESET` | `( osc -- )` | Reset phase to 0 |
-| `OSC-FILL` | `( buf osc -- )` | Fill PCM buffer with oscillator output |
-| `OSC-ADD` | `( buf osc -- )` | Add oscillator output to existing buffer (additive mix) |
-| `OSC-SAMPLE` | `( osc -- value )` | Generate single sample, advance phase |
-
-**Waveform generation:**
-
-- **Sine:** `TRIG-SINCOS` lookup on phase × 2π. One lookup per sample.
-- **Square:** Phase < 0.5 → +1.0, else → −1.0. Anti-aliased via
-  polyBLEP correction at transitions.
-- **Saw:** Phase × 2.0 − 1.0. PolyBLEP at the discontinuity.
-- **Triangle:** 2.0 × |2.0 × phase − 1.0| − 1.0.
-- **Pulse:** Phase < duty → +1.0, else → −1.0. PolyBLEP at both
-  edges.
-- **Wavetable:** Linear interpolation between adjacent samples in a
-  user-provided FP16 table. Table size is arbitrary (typically 256 or
-  1024 entries).
-
-**Memory policy:** Oscillator descriptors on heap (48 bytes each).
-Wavetables in HBW for tile-aligned access, or XMEM for large tables.
-
-**Design notes:**
-- PolyBLEP costs ~4 extra FP16 ops per discontinuity per sample.
-  Negligible for typical frame sizes.  Can be disabled for sub-audio
-  LFO use (where aliasing doesn't matter).
-- `OSC-FILL` uses block processing: phase increment computed once,
-  then the loop writes N samples.  For wavetable mode, consecutive
-  samples often fall in the same tile → good cache behavior.
-- Phase accumulator wraps at 1.0 (not 2π) to stay in FP16 safe range.
-
-### 1.2 audio/noise.f — Noise Generators
-
-```
-PROVIDED akashic-audio-noise
-REQUIRE  akashic-audio-pcm
-```
-
-Three noise colors.  Each has a small descriptor holding generator
-state.  Uses BIOS `RANDOM` for initial seed.
-
-**Data structure** — noise descriptor (4 cells = 32 bytes):
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | type | 0=white, 1=pink, 2=brown |
-| +8 | state | LFSR state or accumulator (algorithm-dependent) |
-| +16 | pink-rows | Pink noise: 16 octave-band registers (packed) |
-| +24 | (reserved) | |
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `NOISE-CREATE` | `( type -- desc )` | Allocate noise generator (seeds from RANDOM) |
-| `NOISE-FREE` | `( desc -- )` | Free descriptor |
-| `NOISE-FILL` | `( buf desc -- )` | Fill PCM buffer with noise |
-| `NOISE-ADD` | `( buf desc -- )` | Add noise to existing buffer |
-| `NOISE-SAMPLE` | `( desc -- value )` | Generate single sample |
-
-**Algorithms:**
-
-- **White:** 16-bit LFSR (maximal-length polynomial, e.g., x^16 + x^14
-  + x^13 + x^11 + 1).  Uniform distribution, flat spectrum.
-- **Pink:** Voss-McCartney algorithm.  8 octave-band LFSR rows,
-  selected by trailing zeros of a running counter.  −3 dB/octave
-  roll-off.  16 bytes of state in `pink-rows`.
-- **Brown:** Integrated white noise with leaky accumulator.
-  `state ← state × 0.98 + white × 0.02`.  −6 dB/octave roll-off.
-
-### 1.3 audio/env.f — Envelope Generators
-
-```
-PROVIDED akashic-audio-env
 REQUIRE  akashic-fp16
 ```
 
-Envelope generators produce a time-varying gain curve (FP16 array or
-applied directly to a PCM buffer).  Not tied to any synth — usable for
-amplitude, filter cutoff, pitch bend, or any parameter that evolves
-over time.
+The engine behind any struck or plucked sound where the partials
+don't follow simple integer multiples.  Metals, glasses, ceramics,
+wood slabs, membranes, fictional materials — all live here.
 
-**Data structure** — envelope descriptor (10 cells = 80 bytes):
+**What it computes:** N sinusoidal partials summed together.  Each
+partial has a frequency (expressed as a ratio to a fundamental),
+an amplitude, and a decay rate (expressed in seconds for −60 dB).
+Higher partials typically decay faster; this ratio controls the
+"brightness over time" character of the sound.
 
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | attack | Attack time in frames |
-| +8 | decay | Decay time in frames |
-| +16 | sustain | Sustain level 0.0–1.0 (FP16) |
-| +24 | release | Release time in frames |
-| +32 | phase | Current phase (0=idle, 1=attack, 2=decay, 3=sustain, 4=release, 5=done) |
-| +40 | position | Current position within phase (frame count) |
-| +48 | level | Current output level (FP16) |
-| +56 | curve | Curve type (0=linear, 1=exponential) |
-| +64 | mode | 0=one-shot, 1=looping (loops A→D→S→release→A…), 2=AR (attack-release only) |
-| +72 | rate | Sample rate in Hz (for ms→frames conversion) |
+The initial excitation can optionally include a brief burst of
+band-passed white noise (the "strike transient" — the click at
+the top of a bell hit) that blends into the modal decay.
 
-**API:**
+**Descriptor layout** (variable size — base 10 cells + 3 cells per
+partial):
 
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `ENV-CREATE` | `( a d s r rate -- env )` | Create ADSR envelope (a/d/r in ms, s in FP16 0.0–1.0) |
-| `ENV-CREATE-AR` | `( a r rate -- env )` | Create AR envelope (attack-release, no sustain) |
-| `ENV-FREE` | `( env -- )` | Free descriptor |
-| `ENV-GATE-ON` | `( env -- )` | Trigger attack (note-on) |
-| `ENV-GATE-OFF` | `( env -- )` | Trigger release (note-off) |
-| `ENV-RETRIGGER` | `( env -- )` | Retrigger from current level (legato) |
-| `ENV-RESET` | `( env -- )` | Reset to idle |
-| `ENV-TICK` | `( env -- level )` | Advance one frame, return current FP16 level |
-| `ENV-FILL` | `( buf env -- )` | Fill PCM buffer with envelope curve |
-| `ENV-APPLY` | `( buf env -- )` | Multiply PCM buffer by envelope (in-place gain) |
-| `ENV-DONE?` | `( env -- flag )` | True if envelope has completed |
-
-**Design notes:**
-- Exponential curves use `level ← level × decay_factor` where
-  `decay_factor = (target / start) ^ (1 / frames)`.  Precomputed
-  at gate-on time and stored in the descriptor.
-- `ENV-APPLY` is tile-accelerated: envelope level is broadcast across
-  a tile's worth of samples, then `TMUL` multiplies in-place.
-  32 samples per tile op.
-- `ENV-FILL` writes raw envelope values — useful for applying the
-  same curve as pitch modulation, filter sweep, etc.
-
-### 1.4 audio/lfo.f — Low-Frequency Oscillators
-
-```
-PROVIDED akashic-audio-lfo
-REQUIRE  akashic-audio-osc     \ reuses oscillator shapes
-```
-
-A thin wrapper around `osc.f` configured for sub-audio rates.  Outputs
-a **control signal** (FP16 buffer), not an audio signal.  Typical rates
-0.1–20 Hz.  Used for vibrato, tremolo, filter wobble, auto-pan.
-
-**Data structure** — LFO descriptor (4 cells = 32 bytes):
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | osc | Pointer to underlying oscillator descriptor |
-| +8 | depth | Modulation depth 0.0–1.0 (FP16) |
-| +16 | center | Center value (the "DC offset" of modulation, FP16) |
-| +24 | mode | 0=free-run, 1=key-sync (resets phase on trigger) |
+| Field | Description |
+|-------|-------------|
+| n-partials | Number of partials (1–32 typical) |
+| fundamental | Base frequency Hz (FP16) |
+| brightness | Strike energy in high partials 0.0–1.0 (FP16) |
+| damping | Global decay multiplier 0.0–2.0 (FP16) — >1 = slower |
+| noise-ms | Strike transient noise duration in ms (0 = none) |
+| noise-bw | Strike transient noise bandwidth (FP16) |
+| rate | Sample rate Hz |
+| partials | Array: [freq-ratio, amp, decay-sec] per partial, FP16 |
 
 **API:**
 
 | Word | Signature | Description |
 |------|-----------|-------------|
-| `LFO-CREATE` | `( freq shape depth center rate -- lfo )` | Create LFO |
-| `LFO-FREE` | `( lfo -- )` | Free LFO + underlying oscillator |
-| `LFO-FREQ!` | `( freq lfo -- )` | Set LFO rate (Hz, FP16) |
-| `LFO-DEPTH!` | `( depth lfo -- )` | Set modulation depth |
-| `LFO-SYNC` | `( lfo -- )` | Reset phase (key-sync trigger) |
-| `LFO-FILL` | `( buf lfo -- )` | Fill buffer with control signal: center ± depth × osc |
-| `LFO-TICK` | `( lfo -- value )` | Single control sample |
+| `MODAL-CREATE` | `( n-partials rate -- desc )` | Allocate modal descriptor |
+| `MODAL-FREE` | `( desc -- )` | Free |
+| `MODAL-FUND!` | `( freq desc -- )` | Set fundamental |
+| `MODAL-PARTIAL!` | `( ratio amp decay-sec i desc -- )` | Set partial i |
+| `MODAL-LOAD-TABLE` | `( table n desc -- )` | Load N partials from a packed FP16 table |
+| `MODAL-BRIGHTNESS!` | `( brightness desc -- )` | Set strike energy in high partials |
+| `MODAL-DAMPING!` | `( damping desc -- )` | Set global decay multiplier |
+| `MODAL-NOISE!` | `( ms bw desc -- )` | Set strike transient noise |
+| `MODAL-STRIKE` | `( velocity desc -- buf )` | Render a single strike, return PCM |
+| `MODAL-STRIKE-INTO` | `( buf velocity desc -- )` | Render, add into existing buffer |
+| `MODAL-DURATION` | `( desc -- ms )` | Estimated audible duration at current damping |
+
+**Built-in partial-ratio tables (constants, dictionary-resident):**
+
+| Name | Ratios (first 6) | Character |
+|------|-------------------|-----------|
+| `MODAL-TBL-BRONZE` | 1.0 2.0 2.76 5.40 8.93 11.34 | Warm bell, typical bronze |
+| `MODAL-TBL-STEEL` | 1.0 2.32 3.18 5.87 9.41 13.02 | Bright, hard, metallic bell |
+| `MODAL-TBL-GLASS` | 1.0 2.67 4.18 7.50 12.33 15.80 | Crisp, fast-decaying upper partials |
+| `MODAL-TBL-TUBULAR` | 1.0 2.76 5.40 8.93 13.34 18.64 | Tubular chime — spread spectrum |
+| `MODAL-TBL-CROTALE` | 1.0 3.0 6.0 10.0 15.0 21.0 | Small tuned disc, nearly harmonic |
+| `MODAL-TBL-BOWL` | 1.0 2.63 4.79 7.41 10.49 14.03 | Singing bowl — close spacing |
+| `MODAL-TBL-SLAB` | 1.0 1.58 2.42 3.52 4.88 6.49 | Flat stone or wooden slab |
+| `MODAL-TBL-ABSTRACT-A` | 1.0 1.41 2.24 3.16 4.47 5.62 | No physical referent |
+| `MODAL-TBL-ABSTRACT-B` | 1.0 3.73 7.11 12.2 19.0 27.4 | Spread, bell-like but alien |
+
+Any of these can be scaled, transposed, or morphed.  None of them
+mean "this must be a bell" — they're just FP16 ratio arrays.
+
+### 7.2 audio/syn/membrane.f — Membrane + Noise Model
+
+```
+PROVIDED akashic-syn-membrane
+REQUIRE  akashic-audio-osc
+REQUIRE  akashic-audio-noise
+REQUIRE  akashic-audio-env
+REQUIRE  akashic-audio-pcm
+```
+
+A two-component model: a tonal body (sine sweep — the membrane's
+fundamental mode, initially over-excited and relaxing downward) mixed
+with a noise component (bandpass-filtered stick/mallet impact and
+upper modes).  The balance between tone and noise, the sweep range,
+and the noise filter define the character completely.
+
+This engine is neutral.  It doesn't know about drums.  It produces
+"a sound with a tonal sweep and a noise burst."  A kick drum,
+a war drum, a hand drum, a sci-fi impact, and a deep industrial thump
+are all just different parameters.
+
+**Descriptor layout** (12 cells = 96 bytes):
+
+| Field | Description |
+|-------|-------------|
+| freq-start | Tone sweep start Hz (FP16) |
+| freq-end | Tone sweep end Hz (FP16) |
+| sweep-ms | Duration of sweep in ms |
+| tone-decay-ms | Tonal component decay time |
+| tone-amp | Tone amplitude 0.0–1.0 (FP16) |
+| noise-color | 0=white, 1=pink — noise source |
+| noise-lo | Noise bandpass low Hz (FP16, 0 = lowpass) |
+| noise-hi | Noise bandpass high Hz (FP16, 0 = hipass) |
+| noise-decay-ms | Noise component decay time |
+| noise-amp | Noise amplitude 0.0–1.0 (FP16) |
+| rate | Sample rate Hz |
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `MEMB-CREATE` | `( rate -- desc )` | Allocate membrane descriptor (all params at defaults) |
+| `MEMB-FREE` | `( desc -- )` | Free |
+| `MEMB-TONE!` | `( start-hz end-hz sweep-ms decay-ms desc -- )` | Set tonal component |
+| `MEMB-NOISE!` | `( lo-hz hi-hz decay-ms desc -- )` | Set noise component bandpass + decay |
+| `MEMB-MIX!` | `( tone-amp noise-amp desc -- )` | Set blend |
+| `MEMB-STRIKE` | `( velocity desc -- buf )` | Render a strike |
+| `MEMB-STRIKE-INTO` | `( buf velocity desc -- )` | Render, add into buffer |
+
+### 7.3 audio/syn/resonator.f — Resonant Filter Bank
+
+```
+PROVIDED akashic-syn-resonator
+REQUIRE  akashic-audio-noise
+REQUIRE  akashic-math-filter
+REQUIRE  akashic-audio-pcm
+```
+
+White or pink noise pushed through a bank of resonant bandpass
+filters.  Sustained sound.  The filters set the spectral character;
+the noise provides the excitation.
+
+Makes convincing: wind through structures, breath-driven instruments,
+textured drones, cave ambience, steam, electrical hum, alien tones,
+swarm sounds.  The character shifts completely based on filter
+center frequencies, Q values (sharpness), and whether the noise
+is white or pink.
+
+At the limit of many narrow-Q filters: modal-like pitched behavior.
+At the limit of one broad filter: colored noise.  The range between
+is vast.
+
+**Descriptor layout** (8 cells base + 3 cells per filter pole):
+
+| Field | Description |
+|-------|-------------|
+| n-poles | Number of filter bands (1–16) |
+| noise-color | 0=white, 1=pink, 2=brown |
+| excitation | How noise is applied: 0=continuous, 1=pulsed (blowing model) |
+| intensity | Excitation intensity 0.0–1.0 (FP16) |
+| rate | Sample rate Hz |
+| poles | Array: [center-hz, Q, amp] per pole, FP16 |
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `RESON-CREATE` | `( n-poles rate -- desc )` | Allocate resonator |
+| `RESON-FREE` | `( desc -- )` | Free |
+| `RESON-POLE!` | `( center-hz Q amp i desc -- )` | Set filter pole i |
+| `RESON-NOISE!` | `( color intensity desc -- )` | Set noise color and level |
+| `RESON-EXCITE!` | `( mode desc -- )` | 0=continuous, 1=pulsed |
+| `RESON-RENDER` | `( buf desc -- )` | Fill buffer (call repeatedly for continuous output) |
+| `RESON-BLOW!` | `( intensity desc -- )` | Modulate excitation intensity live |
+
+### 7.4 audio/syn/additive.f — Harmonic Additive Synthesis
+
+```
+PROVIDED akashic-syn-additive
+REQUIRE  akashic-audio-osc
+REQUIRE  akashic-audio-pcm
+REQUIRE  akashic-math-fft      \ for spectral morphing
+```
+
+Like modal, but the partial frequencies are constrained to integer
+multiples of a fundamental (harmonic spectrum).  The amplitude
+envelope of each harmonic can evolve independently over time,
+enabling spectral morphing — the sound changes character while
+sustaining.
+
+Where modal is for struck objects (inharmonic, decaying), additive
+is for sustained sounds whose spectrum you want to control precisely:
+complex tones, evolving pads, voice-like formant synthesis, organ
+tones with independent drawbar-like harmonic levels.
+
+**Descriptor layout** (variable — base 8 cells + 3 cells per harmonic):
+
+| Field | Description |
+|-------|-------------|
+| n-harmonics | Number of harmonics |
+| fundamental | Base frequency Hz (FP16) |
+| rate | Sample rate Hz |
+| harmonics | Array: [amp-start, amp-end, morph-ms] per harmonic |
+
+The morph fields allow each harmonic to independently fade or swell
+over `morph-ms` milliseconds, making spectral animation possible.
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `ADD-CREATE` | `( n-harmonics rate -- desc )` | Allocate |
+| `ADD-FREE` | `( desc -- )` | Free |
+| `ADD-FUND!` | `( freq desc -- )` | Set fundamental |
+| `ADD-HARMONIC!` | `( amp i desc -- )` | Set harmonic i amplitude immediately |
+| `ADD-MORPH!` | `( amp ms i desc -- )` | Set harmonic i to morph to amp over ms |
+| `ADD-PRESET-SAW` | `( desc -- )` | Load sawtooth harmonic series (1/n amplitudes) |
+| `ADD-PRESET-SQUARE` | `( desc -- )` | Load square wave series (odd harmonics, 1/n) |
+| `ADD-PRESET-ORGAN` | `( desc -- )` | Load approximate pipe organ spectrum |
+| `ADD-RENDER` | `( buf desc -- )` | Fill buffer, advance morphs |
+
+### 7.5 audio/syn/sustained.f — Sustained Oscillator Bank
+
+```
+PROVIDED akashic-syn-sustained
+REQUIRE  akashic-audio-osc
+REQUIRE  akashic-audio-noise
+REQUIRE  akashic-audio-lfo
+REQUIRE  akashic-audio-pcm
+REQUIRE  akashic-math-filter
+```
+
+A configurable bank of detuned oscillators run through a filter,
+with optional noise mix and LFO modulation.  Produces everything from
+pure sine drones to thick detuned pads to breathy evolving textures.
+Continuous output — call `SUST-RENDER` in a loop.
+
+Not a specific instrument.  A palette of smooth, sustained sounds
+controlled by five perceptual dimensions:
+
+| Dimension | Range | Auditory effect |
+|-----------|-------|-----------------|
+| brightness | 0.0–1.0 | Filter cutoff — dark velvet to bright glass |
+| warmth | 0.0–1.0 | Harmonic content — pure sine to rich overtones |
+| motion | 0.0–1.0 | LFO depth — static to shimmering/vibrating |
+| density | 0.0–1.0 | Oscillator count + detune — thin to thick choir |
+| breathiness | 0.0–1.0 | Noise mix — clean to airy to rough |
+
+Any of these can be arrived at by data mapping.  A CO₂ reading can
+directly control breathiness.  Temperature can control brightness.
+Signal variance can control motion.
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `SUST-CREATE` | `( freq rate -- desc )` | Allocate bank, all params at neutral |
+| `SUST-FREE` | `( desc -- )` | Free |
+| `SUST-FREQ!` | `( freq desc -- )` | Set pitch (glides smoothly) |
+| `SUST-BRIGHTNESS!` | `( v desc -- )` | Set brightness 0.0–1.0 |
+| `SUST-WARMTH!` | `( v desc -- )` | Set warmth 0.0–1.0 |
+| `SUST-MOTION!` | `( v desc -- )` | Set LFO depth 0.0–1.0 |
+| `SUST-DENSITY!` | `( v desc -- )` | Set oscillator density 0.0–1.0 |
+| `SUST-BREATHINESS!` | `( v desc -- )` | Set noise mix 0.0–1.0 |
+| `SUST-MORPH` | `( target frames desc -- )` | Smoothly interpolate all params toward target descriptor |
+| `SUST-RENDER` | `( buf desc -- )` | Fill buffer — continuous output |
+
+### 7.6 audio/syn/granular.f — Granular Synthesis
+
+```
+PROVIDED akashic-syn-granular
+REQUIRE  akashic-audio-pcm
+REQUIRE  akashic-audio-env
+REQUIRE  akashic-audio-noise
+```
+
+Granular synthesis: rapid-fire micro-events ("grains") drawn from a
+source PCM buffer (or generated from oscillators), each with its own
+position, duration, pitch shift, pan, and amplitude envelope.  The
+perceptual result is determined by the statistical distribution of
+grain parameters — not by any individual grain.
+
+Makes convincing: clouds of sound, swarms, dust, rainfall textures,
+smeared melodic lines, stuttering effects, time-stretch without pitch
+change, pitch shift without time change, textural evolution.
+
+The density of grain scheduling (grains/second) is the primary
+control knob.  Sparse scheduling (1–5/sec) → clearly separated events.
+Dense scheduling (50+/sec) → continuous fused texture.
+
+**Descriptor layout** (16 cells = 128 bytes):
+
+| Field | Description |
+|-------|-------------|
+| source | PCM buffer to draw grains from (or 0 for oscillator grains) |
+| density | Grains per second (FP16) |
+| grain-ms | Grain duration in ms |
+| position | Read position in source 0.0–1.0 (FP16) |
+| pos-scatter | Position randomization 0.0–1.0 |
+| pitch-shift | Pitch ratio 0.5–2.0 (FP16, 1.0 = unchanged) |
+| pitch-scatter | Pitch randomization 0.0–1.0 |
+| pan-scatter | Stereo pan randomization 0.0–1.0 |
+| amp-scatter | Amplitude randomization 0.0–1.0 |
+| envelope | Grain amplitude shape (0=hann, 1=trapezoidal, 2=gaussian) |
+| rate | Sample rate Hz |
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `GRAN-CREATE` | `( source-buf rate -- desc )` | Allocate granular descriptor |
+| `GRAN-FREE` | `( desc -- )` | Free |
+| `GRAN-SOURCE!` | `( buf desc -- )` | Swap source buffer |
+| `GRAN-DENSITY!` | `( grains/sec desc -- )` | Set grain density |
+| `GRAN-GRAIN!` | `( ms desc -- )` | Set grain duration |
+| `GRAN-POSITION!` | `( pos-fp16 desc -- )` | Set read position 0.0–1.0 |
+| `GRAN-PITCH!` | `( ratio desc -- )` | Set pitch shift |
+| `GRAN-SCATTER!` | `( pos pitch pan amp desc -- )` | Set all scatter params |
+| `GRAN-RENDER` | `( buf desc -- )` | Schedule and mix grains into buffer |
 
 ---
 
-## Tier 2 — Processing
+## Tier 8 — Sound Sources
 
-Audio effects and routing.  Every effect operates PCM-in → PCM-out.
-Effects are stateful (delay buffers, filter state) but their state
-lives in explicit descriptors, not globals.
+Sound sources are specific, named, parameterizable kinds of sound.
+They use Tier 7 synthesis primitives — a source is a set of parameters
+plus a physical or aesthetic interpretation plus a name.
 
-### 2.1 audio/fx.f — Effects Collection
+The naming and grouping into families matters because it makes palettes
+(Tier 9) coherent.  A palette doesn't pick "a modal descriptor with
+these partials" — it picks "bronze bell."  The user understands what
+that means without being told.
 
-```
-PROVIDED akashic-audio-fx
-REQUIRE  akashic-audio-pcm
-REQUIRE  akashic-filter         \ math/filter.f — IIR biquad for EQ
-```
+But families don't constrain usage.  Nothing stops you from using a
+"thunder" source (from natural.f) in a data sonification of network
+packet loss.  Nothing stops you from using an "electronic blip" in a
+performance piece alongside "bronze bells."  The families are for
+discoverability and palette-building, not for enforcement.
 
-A single file containing six effect types.  Each effect has a CREATE
-word that allocates its state, a PROCESS word that transforms a PCM
-buffer in-place, and a FREE word.
+### The Source Contract
 
-**2.1.1 Delay / Echo**
+Every sound source — regardless of family — implements the same
+interface.  Sonification forms and palette machinery only know this
+contract, not what's inside.
 
-Uses KDOS `RING` as the delay line.  Delay time in frames, feedback
-gain, wet/dry mix.
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | ring | Pointer to KDOS ring buffer (delay line) |
-| +8 | delay | Delay time in frames |
-| +16 | feedback | Feedback gain 0.0–1.0 (FP16) |
-| +24 | wet | Wet/dry mix 0.0–1.0 (FP16) |
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `FX-DELAY-CREATE` | `( delay-ms rate -- desc )` | Create delay effect with RING as delay line |
-| `FX-DELAY-FREE` | `( desc -- )` | Free delay + ring |
-| `FX-DELAY!` | `( ms desc -- )` | Change delay time |
-| `FX-DELAY-PROCESS` | `( buf desc -- )` | Apply delay in-place |
-
-**Implementation:** For each sample: pop from ring → mix with input →
-push result to ring → write output.  The ring capacity determines max
-delay.  `2 4800 RING` for a 100 ms delay at 48 kHz.
-
-**2.1.2 Reverb (Schroeder)**
-
-Four parallel comb filters + two series allpass filters.  Classic
-Schroeder topology.
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | combs | Pointer to array of 4 comb-filter descriptors |
-| +8 | allpasses | Pointer to array of 2 allpass descriptors |
-| +16 | room | Room size 0.0–1.0 (scales comb times, FP16) |
-| +24 | damp | Damping 0.0–1.0 (LP filter in comb feedback, FP16) |
-| +32 | wet | Wet/dry mix (FP16) |
-
-Each comb/allpass uses a KDOS `RING` for its delay line.
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `FX-REVERB-CREATE` | `( room damp wet rate -- desc )` | Create Schroeder reverb |
-| `FX-REVERB-FREE` | `( desc -- )` | Free reverb + all delay lines |
-| `FX-REVERB-PROCESS` | `( buf desc -- )` | Apply reverb in-place |
-| `FX-REVERB-ROOM!` | `( room desc -- )` | Adjust room size |
-| `FX-REVERB-DAMP!` | `( damp desc -- )` | Adjust damping |
-
-**Comb delay times (at 44100 Hz, Freeverb classic):** 1116, 1188,
-1277, 1356 samples.  Scaled by room parameter.  Each comb includes a
-one-pole LP filter in the feedback path (damp control).
-
-**Allpass delay times:** 556, 441 samples.  Gain = 0.5.
-
-**Memory:** 4 combs × ~1400 samples × 2 bytes + 2 allpasses × ~560
-samples × 2 bytes ≈ 13.4 KiB total.  Fits comfortably in HBW.
-
-**2.1.3 Chorus**
-
-Modulated delay line.  An LFO sweeps the read position of a short
-delay.
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `FX-CHORUS-CREATE` | `( depth rate-hz mix rate -- desc )` | Create chorus (LFO modulates a 20–30 ms delay) |
-| `FX-CHORUS-FREE` | `( desc -- )` | Free chorus |
-| `FX-CHORUS-PROCESS` | `( buf desc -- )` | Apply chorus in-place |
-
-**Implementation:** Delay line + LFO modulating tap position.  Linear
-interpolation between delay samples for sub-sample tap position.
-
-**2.1.4 Distortion / Bitcrusher**
-
-Two modes: soft clipping (tanh-like waveshaping) and bitcrusher
-(bit-depth reduction + sample-rate reduction).
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `FX-DIST-CREATE` | `( drive mode -- desc )` | Create distortion (0=soft, 1=hard, 2=bitcrush) |
-| `FX-DIST-FREE` | `( desc -- )` | Free |
-| `FX-DIST-PROCESS` | `( buf desc -- )` | Apply distortion in-place |
-| `FX-DIST-DRIVE!` | `( drive desc -- )` | Set drive amount |
-
-- **Soft clip:** `out = x × drive / (1 + |x × drive|)` — smooth
-  saturation, no lookup table needed.
-- **Hard clip:** `out = CLAMP(x × drive, -1.0, +1.0)`.
-- **Bitcrush:** Reduce bit depth by masking lower bits; reduce
-  sample rate by holding every Nth sample.
-
-**2.1.5 Parametric EQ**
-
-Wraps `math/filter.f` IIR biquads with audio-friendly parameter
-names.  Up to 4 bands.
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `FX-EQ-CREATE` | `( nbands rate -- desc )` | Create parametric EQ (1–4 bands) |
-| `FX-EQ-FREE` | `( desc -- )` | Free |
-| `FX-EQ-BAND!` | `( freq gain-db Q band# desc -- )` | Configure band (peak, shelf, notch auto-selected by freq) |
-| `FX-EQ-PROCESS` | `( buf desc -- )` | Apply EQ in-place (cascaded biquads) |
-
-Each band stores `FILT-IIR-BIQUAD` coefficients (b0, b1, b2, a1, a2)
-plus a 2-sample delay state.  Coefficients recomputed on `FX-EQ-BAND!`.
-
-**Band types auto-selected:**
-- Freq < 200 Hz → low shelf
-- Freq > rate/4 → high shelf
-- Otherwise → peaking EQ
-
-**2.1.6 Compressor / Limiter**
-
-Dynamics processor.  RMS or peak envelope detection → gain reduction.
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `FX-COMP-CREATE` | `( thresh ratio attack release rate -- desc )` | Create compressor |
-| `FX-COMP-FREE` | `( desc -- )` | Free |
-| `FX-COMP-PROCESS` | `( buf desc -- )` | Apply compression in-place |
-| `FX-COMP-LIMIT!` | `( desc -- )` | Set ratio to infinity (limiter mode) |
-
-**Envelope follower:** Smoothed RMS level via one-pole LP filter.
-`level ← α × |sample| + (1 − α) × level` with separate α for attack
-and release.  Gain computed as:
-$G = \begin{cases} 1 & \text{if level} < \text{threshold} \\ (\text{threshold}/\text{level})^{1 - 1/\text{ratio}} & \text{otherwise} \end{cases}$
-
-**Tile acceleration:** `F.MUL` for applying computed gain across tile-
-width blocks of samples.
-
-### 2.2 audio/mix.f — Mixer
+A **one-shot source** produces a finite PCM buffer from a single
+excitation:
 
 ```
-PROVIDED akashic-audio-mix
+*-CREATE ( ... rate -- src )      Allocate + configure
+*-FREE   ( src -- )               Free all resources
+*-STRIKE ( velocity src -- buf )  Render one event, return PCM buf
+*-PARAM! ( value param-id src -- ) Set named parameter
+*-PARAM@ ( param-id src -- value ) Get named parameter
+```
+
+A **continuous source** renders indefinite output in blocks:
+
+```
+*-CREATE ( ... rate -- src )
+*-FREE   ( src -- )
+*-RENDER ( buf src -- )           Fill buffer, maintain state
+*-PARAM! ( value param-id src -- )
+*-PARAM@ ( param-id src -- value )
+```
+
+One-shot sources CAN be converted to continuous by auto-looping or
+scheduling restrikes.  The cache (§8.6) works with both.
+
+### 8.1 audio/src/acoustic.f — Acoustic Instruments
+
+```
+PROVIDED akashic-src-acoustic
+REQUIRE  akashic-syn-modal
+REQUIRE  akashic-syn-membrane
+REQUIRE  akashic-audio-pluck
 REQUIRE  akashic-audio-pcm
 ```
 
-N-channel mixer.  Each channel has gain, pan, and mute.  Sums to a
-stereo master output buffer.
+Struck, plucked, bowed, and blown instruments.  All acoustically
+motivated — parameter names reference physical properties of real
+instruments.  You know what "damping," "material," and "strike point"
+mean without documentation.
 
-**Data structure** — mixer descriptor:
+All use Tier 7 engines.  All are continuously parameterizable.
 
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | n-chans | Number of input channels (1–16) |
-| +8 | master-gain | Master output gain (FP16) |
-| +16 | master-buf | Pointer to output PCM buffer (stereo) |
-| +24 | chans | Pointer to channel descriptor array |
+**Percussion — struck and ringing:**
 
-**Channel descriptor** (4 cells = 32 bytes per channel):
+| Source | Engine | Physical parameters |
+|--------|--------|---------------------|
+| `ACOU-BELL` | modal | size, material (bronze/steel/glass/ceramic), strike-hardness, damping |
+| `ACOU-GONG` | modal + bloom | size, thickness, strike-position (center/rim), damping |
+| `ACOU-CHIME` | modal (tubular profile) | length, wall-thickness, strike-point |
+| `ACOU-BOWL` | modal (bowl profile) | diameter, wall-thickness, fill-level (water damping) |
+| `ACOU-CROTALE` | modal (crotale profile) | pitch, alloy |
+| `ACOU-TRIANGLE` | modal | side-length, gauge, dampable |
+| `ACOU-CYMBAL` | modal + noise | diameter, thickness, hammering, choke |
+| `ACOU-RIDE` | modal + noise | size, bow/bell/edge strike-position |
 
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | gain | Channel gain 0.0–1.0 (FP16) |
-| +8 | pan | Pan position −1.0 (left) to +1.0 (right) (FP16) |
-| +16 | mute | 0 = active, 1 = muted |
-| +24 | buf | Pointer to input PCM buffer for this channel |
+**Percussion — membrane:**
 
-**API:**
+| Source | Engine | Physical parameters |
+|--------|--------|---------------------|
+| `ACOU-KICK` | membrane | head-diameter, tuning, beater-hardness, porting |
+| `ACOU-SNARE` | membrane | head-size, snare-tension, strike-position, rimshot |
+| `ACOU-TOM` | membrane | diameter, depth, head-tension, resonant-head |
+| `ACOU-HIHAT` | membrane (extreme noise) | hh-mass, foot-pressure (open→closed), chick-accent |
+| `ACOU-CONGA` | membrane | head-size, slap/open/bass-tone modes |
+| `ACOU-FRAME-DRUM` | membrane | diameter, depth, dampening-hand |
+| `ACOU-TIMPANI` | membrane + pedal | head-diameter, tuning (pitch-accurate) |
 
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `MIX-CREATE` | `( n-chans frames rate -- mix )` | Create mixer with N channels, allocate master buf |
-| `MIX-FREE` | `( mix -- )` | Free mixer + master buffer |
-| `MIX-GAIN!` | `( gain chan# mix -- )` | Set channel gain |
-| `MIX-PAN!` | `( pan chan# mix -- )` | Set channel pan |
-| `MIX-MUTE!` | `( flag chan# mix -- )` | Mute/unmute channel |
-| `MIX-MASTER-GAIN!` | `( gain mix -- )` | Set master gain |
-| `MIX-INPUT!` | `( buf chan# mix -- )` | Assign input buffer to channel |
-| `MIX-RENDER` | `( mix -- )` | Sum all active channels → master buffer |
-| `MIX-MASTER` | `( mix -- buf )` | Get master output buffer |
+**Plucked strings:**
 
-**Pan law:** Equal-power panning.
-$L = \cos(\pi/4 \times (1 + \text{pan}))$, $R = \sin(\pi/4 \times (1 + \text{pan}))$.
-Uses `TRIG-SINCOS`.
+| Source | Engine | Physical parameters |
+|--------|--------|---------------------|
+| `ACOU-PLUCK` | Karplus-Strong | string-length→pitch, decay, damping, pick-position |
+| `ACOU-HARP-STRING` | Karplus-Strong + body | string-class, pluck-character |
+| `ACOU-GUITAR-STRING` | Karplus-Strong | wound vs plain, pick-hardness |
 
-**Tile acceleration:** `MIX-RENDER` clears the master buffer, then
-for each non-muted channel: scale by gain (tile `F.MUL`), apply pan
-gains to compute L/R contributions, tile `F.ADD` into master.
+**Blown:**
 
-### 2.3 audio/chain.f — Effect Chains
+| Source | Engine | Physical parameters |
+|--------|--------|---------------------|
+| `ACOU-FLUTE` | resonator (blow-excited) | tube-length→pitch, blow-pressure, embouchure |
+| `ACOU-CLARINET` | resonator + reed | tube-length, reed-stiffness, overblowing |
 
-```
-PROVIDED akashic-audio-chain
-REQUIRE  akashic-audio-pcm
-```
-
-An ordered list of effect processing slots.  Each slot holds a
-process-XT and a descriptor pointer, plus a bypass flag.  The chain
-processes a PCM buffer through each non-bypassed slot in order.
-
-**Data structure** — chain descriptor:
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | n-slots | Number of slots (1–8) |
-| +8 | slots | Pointer to slot array |
-
-**Slot** (3 cells = 24 bytes):
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | process-xt | Execution token of `( buf desc -- )` word |
-| +8 | desc | Effect descriptor pointer |
-| +16 | bypass | 0 = active, 1 = bypassed |
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `CHAIN-CREATE` | `( n-slots -- chain )` | Allocate chain |
-| `CHAIN-FREE` | `( chain -- )` | Free chain (does NOT free effects) |
-| `CHAIN-SET!` | `( xt desc slot# chain -- )` | Install effect at slot |
-| `CHAIN-BYPASS!` | `( flag slot# chain -- )` | Bypass/enable slot |
-| `CHAIN-PROCESS` | `( buf chain -- )` | Run buffer through all active slots |
-| `CHAIN-CLEAR` | `( chain -- )` | Remove all slots |
-
-**Usage example:**
+**API (example — bell):**
 
 ```forth
-3 CHAIN-CREATE CONSTANT my-chain
-  ' FX-EQ-PROCESS      my-eq    0 my-chain CHAIN-SET!
-  ' FX-COMP-PROCESS    my-comp  1 my-chain CHAIN-SET!
-  ' FX-REVERB-PROCESS  my-verb  2 my-chain CHAIN-SET!
+ACOU-BELL-SCRATCH CONSTANT P-BELL-SIZE
+ACOU-BELL-SCRATCH CONSTANT P-BELL-MATERIAL
+ACOU-BELL-SCRATCH CONSTANT P-BELL-STRIKE
+ACOU-BELL-SCRATCH CONSTANT P-BELL-DAMPING
 
-  my-buffer my-chain CHAIN-PROCESS     \ EQ → compressor → reverb
-  1 1 my-chain CHAIN-BYPASS!           \ bypass compressor
-  my-buffer my-chain CHAIN-PROCESS     \ EQ → reverb (comp skipped)
+( rate -- src )
+ACOU-BELL-CREATE
+
+( velocity src -- buf )
+ACOU-BELL-STRIKE
+
+( value param-id src -- )
+ACOU-BELL-PARAM!
 ```
 
----
+All acoustic sources expose their physical parameter IDs as named
+constants (`ACOU-*-SCRATCH`... naming convention TBD for param IDs).
+The `PARAM!` / `PARAM@` interface is how palettes and sonification
+forms modulate sources.
 
-## Tier 3 — Analysis
+**Gong bloom** — unique to `ACOU-GONG`.  After the initial strike, a
+slow spectral redistribution occurs: energy migrates from dominant
+modes to neighboring modes, causing the characteristic swell.
+Controlled by `bloom-rate` and `bloom-amount` parameters.
 
-### 3.1 audio/analysis.f — Spectral, Pitch, Onset, Metering
+### 8.2 audio/src/natural.f — Natural / Environmental
 
 ```
-PROVIDED akashic-audio-analysis
+PROVIDED akashic-src-natural
+REQUIRE  akashic-syn-resonator
+REQUIRE  akashic-syn-granular
+REQUIRE  akashic-syn-membrane
+REQUIRE  akashic-audio-noise
 REQUIRE  akashic-audio-pcm
-REQUIRE  akashic-fft            \ math/fft.f
-REQUIRE  akashic-filter         \ math/filter.f (for pre-filtering)
-REQUIRE  akashic-timeseries     \ math/timeseries.f (autocorrelation)
+```
+
+Sounds drawn from the physical world, not from music.  No instrument
+connotations.  These are the sounds of environments, weather,
+materials under stress, and fluid dynamics.
+
+All are algorithmically generated — no recorded samples.  Parameters
+correspond to physical quantities of the source phenomenon.
+
+**One-shot events:**
+
+| Source | Engine | Physical parameters |
+|--------|--------|---------------------|
+| `NAT-THUNDER` | membrane + modal tail | distance (delays onset), intensity, duration |
+| `NAT-ROCK-IMPACT` | modal + membrane | mass, hardness, surface-type |
+| `NAT-WATER-DRIP` | modal | drop-size, surface-tension, cavity-depth |
+| `NAT-CRACK` | noise burst + reson | material (wood/ice/glass), thickness |
+| `NAT-CRUNCH` | granular | material-coarseness, pressure, step-area |
+| `NAT-GRAVEL-STEP` | granular | stone-size, density, footfall-weight |
+| `NAT-BRANCH-SNAP` | modal + noise | diameter, moisture, bend-rate |
+| `NAT-SPLASH` | granular + noise | volume, drop-height, surface |
+
+**Continuous textures:**
+
+| Source | Engine | Physical parameters |
+|--------|--------|---------------------|
+| `NAT-WIND` | resonator | speed (0=still→1=gale), turbulence, obstruction-type |
+| `NAT-RAIN` | granular | intensity (drizzle→downpour), surface-type, drop-size |
+| `NAT-FIRE` | granular + reson | intensity, fuel-type, crackling-rate |
+| `NAT-STREAM` | granular + reson | flow-rate, turbulence, channel-width |
+| `NAT-OCEAN` | granular + modal | wave-period, intensity, foam-level |
+| `NAT-LEAVES` | granular | wind-speed, leaf-type, density |
+| `NAT-INSECTS` | granular (high-density) | species-mix, density, temperature (pitch) |
+| `NAT-CROWD` | granular | density, engagement-level, pitch-center |
+
+**Parameter examples (NAT-RAIN):**
+
+- `intensity`: 0.0 = inaudible mist, 0.3 = light shower, 0.7 = downpour, 1.0 = storm
+- `surface-type`: 0 = soil, 0.33 = leaves, 0.66 = puddle, 1.0 = tin roof
+- `drop-size`: controls grain duration and impact brightness
+
+A data sonification mapping rainfall rate to `NAT-RAIN intensity` is
+immediately and intuitively legible with zero explanation needed.
+
+### 8.3 audio/src/electronic.f — Electronic / Abstract
+
+```
+PROVIDED akashic-src-electronic
+REQUIRE  akashic-syn-sustained
+REQUIRE  akashic-syn-additive
+REQUIRE  akashic-audio-osc
+REQUIRE  akashic-audio-noise
+REQUIRE  akashic-audio-pcm
+REQUIRE  akashic-math-filter
+```
+
+Sounds that have no acoustic or physical world referent.  Electronic
+and synthetic in character.  The vocabulary of modular synthesis,
+sound design, and electronic music — but parameterized and
+data-drivable.
+
+**One-shot:**
+
+| Source | Engine | Parameters |
+|--------|--------|------------|
+| `ELEC-BLIP` | osc + env | freq, waveform (0=sine→3=pulse), duration, filter-brightness |
+| `ELEC-PING` | osc + env | freq, resonance, decay |
+| `ELEC-CLICK` | noise burst + HP | character (clean/dirty), duration |
+| `ELEC-POP` | noise + LP env | body-freq, snap, decay |
+| `ELEC-SWEEP` | osc + pitch env | start-freq, end-freq, duration, waveform |
+| `ELEC-ZAP` | FM + env | carrier, ratio, index, decay |
+| `ELEC-CHIME` | additive + env | freq, n-harmonics, harmonic-decay |
+| `ELEC-PLUCK` | additive + fast-env | brightness, decay |
+| `ELEC-THUMP` | osc sweep + env | sub-freq, sweep-speed, body |
+| `ELEC-CRUNCH` | distorted noise | drive, filter-cutoff, duration |
+
+**Continuous:**
+
+| Source | Engine | Parameters |
+|--------|--------|------------|
+| `ELEC-DRONE` | sustained | freq, brightness, warmth, motion |
+| `ELEC-HUM` | additive (60/50 Hz) | freq, harmonic-count, buzz-level |
+| `ELEC-STATIC` | filtered noise | bandwidth, center-freq, level |
+| `ELEC-PULSE-TRAIN` | osc | freq, duty, filter |
+| `ELEC-PAD` | sustained (dense) | freq, density, brightness, breathiness |
+| `ELEC-TEXTURE` | granular (synth grains) | density, pitch-scatter, brightness |
+
+### 8.4 audio/src/industrial.f — Industrial / Mechanical
+
+```
+PROVIDED akashic-src-industrial
+REQUIRE  akashic-syn-resonator
+REQUIRE  akashic-syn-membrane
+REQUIRE  akashic-syn-modal
+REQUIRE  akashic-audio-noise
+REQUIRE  akashic-audio-pcm
+```
+
+Machines, mechanisms, materials under stress.  The sounds of physical
+processes: moving parts, pressure, friction, impact.  No "instrument"
+frame — these sound like infrastructure, equipment, and process.
+
+**One-shot:**
+
+| Source | Engine | Parameters |
+|--------|--------|------------|
+| `INDUS-CLICK` | modal (hard contact) | surface-hardness, contact-area |
+| `INDUS-CLANK` | modal (metal impact) | mass, surface, resonance |
+| `INDUS-THUD` | membrane | mass, surface-compliance |
+| `INDUS-RIVET` | impulse + modal | material, speed |
+| `INDUS-BANG` | membrane + modal | pressure, enclosure |
+| `INDUS-VALVE` | noise burst + HP | diameter, pressure |
+| `INDUS-RELAY` | modal + click | contact-material, actuation-speed |
+
+**Continuous:**
+
+| Source | Engine | Parameters |
+|--------|--------|------------|
+| `INDUS-MOTOR` | resonator + periodic | rpm, load, number-of-cylinders |
+| `INDUS-TURBINE` | resonator + granular | rpm, blade-count, load |
+| `INDUS-HVAC` | resonator | flow-rate, duct-resonances |
+| `INDUS-HISS` | HP filtered noise | pressure, aperture |
+| `INDUS-BUZZ` | resonator (electrical) | freq (50/60 Hz), harmonic-content |
+| `INDUS-GRIND` | granular | material-pair, pressure, rpm |
+| `INDUS-SERVO` | additive (modulated) | load, speed, torque |
+
+### 8.5 audio/src/drones.f — Tonal Drones & Pads
+
+```
+PROVIDED akashic-src-drones
+REQUIRE  akashic-syn-sustained
+REQUIRE  akashic-syn-additive
+REQUIRE  akashic-audio-pcm
+```
+
+A focused collection of continuous tonal sounds for use as ambient
+layers, backgrounds, tension, or data streams.  Built primarily from
+`syn/sustained.f` and `syn/additive.f`.  Distinct from `ELEC-DRONE`
+and `ELEC-PAD` in that these are tuned for layering and long-duration
+use — lower CPU overhead, smoother parameter response.
+
+| Source | Character |
+|--------|-----------|
+| `DRONE-PEDAL` | Long, stable, low-register tone — Tibetan overtone bowl feel |
+| `DRONE-FIFTH` | Two-tone perfect-fifth drone — open, spacious |
+| `DRONE-CLUSTER` | Dense semitone cluster — tension, uncertainty |
+| `DRONE-SHIMMER` | Slow spectral modulation — evolving, slightly unsettled |
+| `DRONE-ORGAN` | Pipe-organ inspired additive — regal, stable |
+| `DRONE-PAD` | Warm detuned oscillator pad — lush, enveloping |
+| `DRONE-BREATH` | Breathy, respiratory — animate, alive |
+
+All drones: `DRONE-CREATE ( freq rate -- src )`, `DRONE-RENDER ( buf src -- )`,
+plus `DRONE-FREQ!`, `DRONE-*!` setters for their specific parameters.
+
+### 8.6 audio/src/cache.f — Source Render Cache
+
+```
+PROVIDED akashic-src-cache
+REQUIRE  akashic-audio-pcm
 REQUIRE  akashic-fp16
 ```
 
-Four analysis sections in one file.  All operate on PCM buffers and
-return results via the data stack or output buffers.
-
-**3.1.1 Spectral Analysis**
-
-Windowed FFT with overlap-add for STFT.  Bridges `math/fft.f` with
-audio-tuned defaults.
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `ANA-WINDOW-HANN` | `( buf -- )` | Apply Hann window to FP16 PCM buffer in-place |
-| `ANA-WINDOW-HAMMING` | `( buf -- )` | Apply Hamming window |
-| `ANA-WINDOW-BLACKMAN` | `( buf -- )` | Apply Blackman-Harris window |
-| `ANA-SPECTRUM` | `( buf -- mag-buf )` | Window → FFT → magnitude. Returns new FP16 buffer (N/2+1 bins) |
-| `ANA-POWER` | `( buf -- pow-buf )` | Window → FFT → power spectrum (magnitude²) |
-| `ANA-STFT` | `( buf frame-size hop-size -- result n-frames )` | Short-time FFT. Returns array of spectral frames. |
-| `ANA-BIN>HZ` | `( bin rate n -- hz )` | Convert FFT bin index to frequency |
-| `ANA-HZ>BIN` | `( hz rate n -- bin )` | Convert frequency to nearest bin |
-
-**Window functions:** Precomputed into HBW-resident FP16 buffers on
-first use (256 or 512 entries).  `TRIG-SINCOS` for generation.
-Applied via tile-accelerated `F.MUL`.
-
-**3.1.2 Pitch Detection**
-
-Monophonic fundamental frequency estimation.  Two methods.
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `ANA-PITCH-AUTO` | `( buf rate -- hz )` | Autocorrelation method. Simple, good for voice. Uses `TS-AUTOCORR`. |
-| `ANA-PITCH-YIN` | `( buf rate thresh -- hz )` | YIN algorithm. More accurate for instruments. thresh typically 0.1–0.15. |
-| `ANA-NOTE` | `( hz -- midi-note cents )` | Convert Hz to nearest MIDI note number + cents deviation |
-
-**Autocorrelation method:** Compute autocorrelation of the buffer via
-`TS-AUTOCORR-N`, find first peak after the initial drop.  Period =
-lag at peak.  Hz = rate / period.
-
-**YIN algorithm:** Cumulative mean normalized difference function,
-parabolic interpolation at the first dip below threshold.  More
-robust than raw autocorrelation for noisy signals.
-
-**3.1.3 Onset / Beat Detection**
-
-Detect note onsets and rhythmic beats via spectral flux.
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `ANA-ONSET-DETECT` | `( buf frame-size hop rate -- onset-buf n )` | Returns buffer of onset frame indices |
-| `ANA-SPECTRAL-FLUX` | `( buf frame-size hop -- flux-buf n )` | Compute spectral flux (half-wave rectified difference between consecutive spectra) |
-| `ANA-TEMPO` | `( onset-buf n rate -- bpm )` | Estimate tempo from onset times (autocorrelation of onset function) |
-
-**Algorithm:** STFT → magnitude difference between adjacent frames →
-half-wave rectify (keep only increases) → adaptive threshold (median
-+ constant × MAD) → peaks in flux = onsets.
-
-**3.1.4 Metering**
-
-Real-time level measurement.
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `ANA-RMS` | `( buf -- rms )` | RMS level (FP16). Uses tile-accelerated `F.SUMSQ`. |
-| `ANA-PEAK` | `( buf -- peak )` | Peak absolute sample value |
-| `ANA-PEAK-HOLD` | `( buf desc -- peak )` | Peak with hold/decay state for VU display |
-| `ANA-CREST` | `( buf -- ratio )` | Crest factor = peak / RMS |
-| `ANA-DB` | `( level -- db )` | Convert linear level to dB (FP16): $20 \times \log_{10}(\text{level})$ |
-
-**Peak hold:** Descriptor tracks peak value + decay counter.  Peak
-rises instantly, decays by a fixed rate per call (e.g., −0.5 dB per
-block).  Useful for visual VU meter display.
-
----
-
-## Tier 4 — Synthesis Engines
-
-Higher-level modules that compose Tier 1 + Tier 2 into playable
-instruments.  Each engine is a single-voice module.  Polyphony is
-the caller's responsibility (duplicate voices, manage note allocation).
-
-### 4.1 audio/synth.f — Subtractive Voice
-
-```
-PROVIDED akashic-audio-synth
-REQUIRE  akashic-audio-osc
-REQUIRE  akashic-audio-env
-REQUIRE  akashic-filter         \ math/filter.f for resonant LP/HP
-```
-
-Classic subtractive architecture: oscillator → filter → amplifier →
-output.  One voice per descriptor.
-
-**Data structure** — synth voice descriptor (8 cells = 64 bytes):
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | osc1 | Primary oscillator descriptor |
-| +8 | osc2 | Secondary oscillator (detunable) or 0 |
-| +16 | filt-type | Filter type: 0=LP, 1=HP, 2=BP |
-| +24 | filt-cutoff | Filter cutoff frequency (FP16) |
-| +32 | filt-reso | Filter resonance / Q (FP16) |
-| +40 | amp-env | Amplitude envelope descriptor |
-| +48 | filt-env | Filter envelope descriptor (modulates cutoff) |
-| +56 | work-buf | Pointer to scratch PCM buffer for processing |
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `SYNTH-CREATE` | `( shape1 shape2 rate frames -- voice )` | Create subtractive voice |
-| `SYNTH-FREE` | `( voice -- )` | Free voice + all sub-descriptors |
-| `SYNTH-NOTE-ON` | `( freq vel voice -- )` | Trigger note (set osc freq, gate envelopes) |
-| `SYNTH-NOTE-OFF` | `( voice -- )` | Release note (gate off envelopes) |
-| `SYNTH-RENDER` | `( voice -- buf )` | Render one block: osc → filter → env → output buf |
-| `SYNTH-CUTOFF!` | `( freq voice -- )` | Set filter cutoff |
-| `SYNTH-RESO!` | `( q voice -- )` | Set filter resonance |
-| `SYNTH-DETUNE!` | `( cents voice -- )` | Detune osc2 relative to osc1 |
-
-**Render path:**
-1. `OSC-FILL` osc1 → work-buf
-2. If osc2: `OSC-ADD` osc2 → work-buf (additive layering)
-3. Compute filter cutoff = base_cutoff + filt-env × env-depth
-4. `FILT-IIR-BIQUAD` in-place on work-buf
-5. `ENV-APPLY` amp-env → work-buf
-6. Return work-buf
-
-### 4.2 audio/fm.f — FM Synthesis
-
-```
-PROVIDED akashic-audio-fm
-REQUIRE  akashic-audio-osc
-REQUIRE  akashic-audio-env
-```
-
-2-operator and 4-operator FM.  Each operator is an oscillator + envelope.
-Operators can modulate each other's frequency (phase modulation).
-
-**Data structure** — FM voice descriptor:
-
-| Field | Description |
-|-------|-------------|
-| n-ops | Number of operators (2 or 4) |
-| ops[n] | Array of operator descriptors (osc + env + output-level) |
-| algorithm | Routing: which ops modulate which (4-op has ~8 classic algorithms) |
-| feedback | Self-modulation amount for op1 (FP16) |
-| work-buf | Scratch buffer |
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `FM-CREATE` | `( n-ops algorithm rate frames -- voice )` | Create FM voice |
-| `FM-FREE` | `( voice -- )` | Free |
-| `FM-NOTE-ON` | `( freq vel voice -- )` | Trigger (sets carrier freq, modulator at ratio) |
-| `FM-NOTE-OFF` | `( voice -- )` | Release |
-| `FM-RENDER` | `( voice -- buf )` | Render one block |
-| `FM-RATIO!` | `( ratio op# voice -- )` | Set operator frequency ratio |
-| `FM-INDEX!` | `( index op# voice -- )` | Set modulation index |
-| `FM-ALGO!` | `( algorithm voice -- )` | Set algorithm |
-
-**Algorithms (4-op):**
-
-```
-Algo 0: [1]→[2]→[3]→[4]→out              (serial)
-Algo 1: [1]→[2]→out, [3]→[4]→out         (two parallel pairs)
-Algo 2: [1]→[2]→[3]→out, [4]→out         (3-chain + sine)
-Algo 3: [1+2]→[3]→[4]→out                (parallel-mod into serial)
-```
-
-For 2-op: op1 modulates op2 (carrier).  Simple, covers most useful FM
-timbres (bell, electric piano, bass).
-
-### 4.3 audio/pluck.f — Karplus-Strong
-
-```
-PROVIDED akashic-audio-pluck
-REQUIRE  akashic-audio-pcm
-REQUIRE  akashic-audio-noise    \ initial excitation
-REQUIRE  akashic-filter         \ LP filter in feedback loop
-```
-
-Plucked-string physical model.  Fill a delay line with noise, then
-repeatedly average adjacent samples.  Produces realistic plucked-string
-and metallic sounds.
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `PLUCK` | `( freq decay buf -- )` | Fill buf with plucked-string sound |
-| `PLUCK-CREATE` | `( freq rate -- desc )` | Create persistent pluck state (for re-excitation) |
-| `PLUCK-FREE` | `( desc -- )` | Free |
-| `PLUCK-EXCITE` | `( desc -- )` | Re-excite (fill delay line with noise) |
-| `PLUCK-RENDER` | `( desc -- buf )` | Render one block from current state |
-
-**Implementation:** Delay line length = rate / freq samples.  Uses
-KDOS `RING` as the circular delay buffer.  Feedback filter: simple
-two-point average `(sample[n] + sample[n-1]) / 2` — automatically
-produces the characteristic spectral decay (high frequencies die
-faster than low).  `decay` parameter controls a loss factor in the
-feedback path.
-
-**Memory:** One ring buffer per pluck voice.  At 44100 Hz, lowest
-note A1 (55 Hz) = 802 samples × 2 bytes ≈ 1.6 KiB.
-
----
-
-## Tier 5 — Sequencing & Format
-
-**Status: ✅ COMPLETE** — wav.f (363 lines), seq.f (352 lines), midi.f (371 lines).  39/39 tests passing.
-
-### 5.1 audio/wav.f — WAV/RIFF Codec
-
-```
-PROVIDED akashic-audio-wav
-REQUIRE  akashic-audio-pcm
-REQUIRE  \ MP64FS file I/O (FWRITE, FREAD, FSEEK from KDOS)
-```
-
-Read and write Microsoft WAV files (RIFF container, PCM format chunk).
-The BMP of audio — simplest useful container format.
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `WAV-WRITE` | `( buf filename-addr filename-len -- ior )` | Write PCM buffer to WAV file on disk |
-| `WAV-READ` | `( filename-addr filename-len -- buf ior )` | Read WAV file into new PCM buffer |
-| `WAV-WRITE-FD` | `( buf fd -- ior )` | Write to open file descriptor |
-| `WAV-READ-FD` | `( fd -- buf ior )` | Read from open file descriptor |
-| `WAV-INFO` | `( filename-addr filename-len -- rate bits chans frames ior )` | Read WAV header without loading sample data |
-
-**Format support:**
-- PCM format only (format tag = 1).  No compressed formats.
-- 8-bit unsigned, 16-bit signed, 32-bit signed.
-- Mono and stereo (1–2 channels).
-- Sample rates 8000–96000.
-- Standard RIFF chunk layout: `RIFF`, `fmt `, `data`.
-
-**WAV header (44 bytes):**
-
-```
-Offset  Size  Field
-0       4     "RIFF"
-4       4     file size - 8
-8       4     "WAVE"
-12      4     "fmt "
-16      4     16 (PCM format chunk size)
-20      2     1 (PCM format tag)
-22      2     channels
-24      4     sample rate
-28      4     byte rate (rate × channels × bits/8)
-32      2     block align (channels × bits/8)
-34      2     bits per sample
-36      4     "data"
-40      4     data size in bytes
-44      ...   sample data
-```
-
-### 5.2 audio/seq.f — Step Sequencer
-
-```
-PROVIDED akashic-audio-seq
-REQUIRE  akashic-audio-pcm
-```
-
-A pattern-based step sequencer.  Drives any sound source via a
-callback word (execution token).  Tempo-locked to sample-accurate
-tick boundaries.
-
-**Data structure** — pattern:
-
-| Field | Description |
-|-------|-------------|
-| steps | Number of steps (4–64, typically 16) |
-| data | Array of step entries: (note, velocity, gate-length) triples |
-| loop | 0 = one-shot, 1 = loop |
-| swing | Swing amount 0.0–1.0 (delays even steps, FP16) |
-
-**Data structure** — sequencer:
-
-| Field | Description |
-|-------|-------------|
-| bpm | Tempo in beats per minute |
-| tick-frames | Frames per tick (computed from BPM + rate) |
-| position | Current step index |
-| tick-count | Sub-step frame counter |
-| pattern | Pointer to current pattern |
-| callback | XT called with `( note velocity gate -- )` per step |
-| rate | Sample rate |
-| running | 0 = stopped, 1 = playing |
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `SEQ-CREATE` | `( bpm steps rate -- seq )` | Create sequencer |
-| `SEQ-FREE` | `( seq -- )` | Free |
-| `SEQ-STEP!` | `( note vel gate step# seq -- )` | Set step data |
-| `SEQ-START` | `( seq -- )` | Start playback |
-| `SEQ-STOP` | `( seq -- )` | Stop playback |
-| `SEQ-TICK` | `( frames seq -- )` | Advance by N frames, fire callback on step boundaries |
-| `SEQ-BPM!` | `( bpm seq -- )` | Change tempo |
-| `SEQ-SWING!` | `( swing seq -- )` | Set swing |
-| `SEQ-CALLBACK!` | `( xt seq -- )` | Set note-trigger callback |
-| `SEQ-PATTERN!` | `( pattern seq -- )` | Load pattern |
-| `SEQ-POSITION` | `( seq -- step# )` | Current step |
-
-**Timing:** Tick resolution = frames per 16th note =
-`rate × 60 / (bpm × 4)`.  At 120 BPM, 44100 Hz: 5512.5 frames per
-16th note.  Rounded to integer; cumulative drift tracked and
-compensated every bar.
-
-**Swing:** Even-numbered steps delayed by `swing × half-tick-length`.
-Swing = 0.0 → straight, swing = 0.67 → triplet feel.
-
-### 5.3 audio/midi.f — MIDI Protocol
-
-```
-PROVIDED akashic-audio-midi
-```
-
-Parse and generate MIDI byte messages.  Wire protocol only — no
-instrument maps, no MIDI file (.mid) reader, no device I/O.  Pure
-data format library.
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `MIDI-NOTE-ON` | `( chan note vel -- b1 b2 b3 )` | Generate note-on message bytes |
-| `MIDI-NOTE-OFF` | `( chan note vel -- b1 b2 b3 )` | Generate note-off message bytes |
-| `MIDI-CC` | `( chan cc val -- b1 b2 b3 )` | Generate control change |
-| `MIDI-PITCH-BEND` | `( chan bend -- b1 b2 b3 )` | Generate pitch bend (bend: −8192 to +8191) |
-| `MIDI-PARSE` | `( byte state -- state' type chan data1 data2 flag )` | Streaming parser with running-status state machine |
-| `MIDI-NOTE>HZ` | `( note -- hz )` | MIDI note to frequency (A4 = 440 Hz), FP16 |
-| `MIDI-HZ>NOTE` | `( hz -- note cents )` | Frequency to nearest MIDI note + cents |
-
-**Message types (returned by MIDI-PARSE):**
-- 0 = note-off, 1 = note-on, 2 = polyphonic aftertouch,
-  3 = control change, 4 = program change, 5 = channel aftertouch,
-  6 = pitch bend
-
-**Running status:** The parser maintains state across calls.  If a
-data byte arrives without a new status byte, the previous status is
-reused (standard MIDI running status).  Reduces bandwidth.
-
-**MIDI note → Hz:** $f = 440 \times 2^{(n - 69) / 12}$.  Precomputed
-table for notes 0–127 (128 FP16 entries = 256 bytes) for O(1) lookup.
-
----
-
-## Tier 6 — I/O & Drivers
-
-### 6.1 audio/speaker.f — DAC Output
-
-```
-PROVIDED akashic-audio-speaker
-REQUIRE  akashic-audio-pcm
-\ Uses KDOS: RING, TIMER!, TIMER-CTRL!, ISR!, EI!, DI!
-```
-
-Push PCM samples to the speaker DAC via a timer-driven interrupt
-service routine.  The speaker hardware is MMIO-mapped (address TBD
-by hardware revision — abstracted behind the driver).
+Pre-renders sources at a grid of parameter values.  Any source
+satisfying the one-shot contract (`*-STRIKE`) can be cached.
+
+**Why:** Modal synthesis costs 15–30 ops per sample per partial.  For
+a 12-partial bell at 44100 Hz, that's 7–13 million ops per second for
+one voice.  A 500 ms pre-rendered buffer costs the same compute once
+then plays back for free — the right trade when parameters don't
+change sample-by-sample.
 
 **Architecture:**
 
-```
- App task                 Timer ISR (IVT slot 7)
- ────────                 ──────────────────────
- osc → mix → ring ──PUSH──►  ring ──POP──► DAC MMIO
-              ▲                              │
-              │                              ▼
-         RING-FULL? → YIELD             speaker output
-```
+A cache is a 2D or 3D grid: `pitch × velocity [× third-param]`.
+Each cell holds a PCM buffer pointer or NULL (not yet rendered, or
+evicted).  On lookup:
+
+1. Find the nearest grid cell to requested parameter triple.
+2. If cell is populated and pitch-exact: return directly.
+3. If cell is populated but pitch differs: resample (pitch-shift the
+   cached buffer) — cheaper than full re-synthesis.
+4. If cell is NULL (miss): invoke `*-STRIKE` once, store, return.
+5. Evict LRU cell if XMEM pressure is high.
+
+Hot cells (frequently accessed) promoted to HBW.  Cold cells in XMEM.
 
 **API:**
 
 | Word | Signature | Description |
 |------|-----------|-------------|
-| `SPK-INIT` | `( rate -- )` | Initialize speaker: create ring buffer, configure timer ISR at sample rate |
-| `SPK-START` | `( -- )` | Enable timer, start draining ring to DAC |
-| `SPK-STOP` | `( -- )` | Disable timer, silence output |
-| `SPK-WRITE` | `( buf -- )` | Push PCM buffer's samples into the ring (blocking: YIELDs if ring full) |
-| `SPK-RING` | `( -- ring )` | Access the output ring buffer directly |
-| `SPK-RATE` | `( -- rate )` | Current sample rate |
-| `SPK-UNDERRUN?` | `( -- flag )` | True if the ISR found the ring empty (gap in output) |
-| `SPK-VOLUME!` | `( gain -- )` | Set master output gain (applied in ISR) |
+| `SCACHE-CREATE` | `( n-pitches n-vels strike-xt rate -- cache )` | Create cache.  `strike-xt` is `( vel src -- buf )` |
+| `SCACHE-FREE` | `( cache -- )` | Free all buffers + descriptor |
+| `SCACHE-PRIME` | `( src cache -- )` | Pre-render entire grid now |
+| `SCACHE-PRIME-LAZY` | `( src cache -- )` | Mark all cells for lazy render on first use |
+| `SCACHE-LOOKUP` | `( freq vel cache -- buf )` | Get buffer (render/resample if needed) |
+| `SCACHE-FLUSH` | `( cache -- )` | Evict all cells |
+| `SCACHE-STATS` | `( cache -- hits misses evictions )` | Access counters |
+| `SCACHE-PITCH-RANGE!` | `( lo-hz hi-hz cache -- )` | Define the pitch grid range |
+| `SCACHE-VEL-RANGE!` | `( lo hi cache -- )` | Define the velocity grid range |
 
-**Timer configuration:** Auto-reload compare-match at
-`CPU_CLOCK / sample_rate` cycles.  At 100 MHz CPU, 44100 Hz:
-compare = 2267.  `2267 TIMER! 7 TIMER-CTRL!` (enable + auto-reload +
-IRQ).
+```forth
+\ Pre-cache bronze bell at 12 pitches × 4 velocities
+my-bell
+12 4 ['] ACOU-BELL-STRIKE 44100 SCACHE-CREATE CONSTANT bell-cache
+220.0 FP16>  880.0 FP16>  bell-cache SCACHE-PITCH-RANGE!
+0.2 FP16>    1.0 FP16>    bell-cache SCACHE-VEL-RANGE!
+my-bell bell-cache SCACHE-PRIME
 
-**ISR body (~15 words):**
-1. `TIMER-ACK`
-2. `SPK-RING RING-EMPTY?` → if empty, write silence to DAC, set
-   underrun flag
-3. Else: `SPK-RING RING-POP` → apply volume → write to DAC MMIO
-4. Return from interrupt
-
-**Ring sizing:** At 44100 Hz with 256-sample blocks, a 2048-sample
-ring gives ~46 ms of buffer.  Enough to absorb scheduling jitter.
-`2 2048 RING spk-ring`.
-
-**Memory policy:** Ring buffer in HBW for guaranteed low-latency
-access from the ISR.
-
-### 6.2 audio/mic.f — ADC Capture
-
+\ Instant lookup:
+440.0 FP16>  0.7 FP16>  bell-cache SCACHE-LOOKUP  SPK-WRITE
 ```
-PROVIDED akashic-audio-mic
-REQUIRE  akashic-audio-pcm
-\ Uses KDOS: RING, TIMER!, TIMER-CTRL!, ISR!, EI!, DI!
-```
-
-Capture audio from the microphone ADC via timer ISR.  Mirror of
-`speaker.f` with the data flow reversed.
-
-**API:**
-
-| Word | Signature | Description |
-|------|-----------|-------------|
-| `MIC-INIT` | `( rate -- )` | Initialize mic: create ring, configure timer ISR |
-| `MIC-START` | `( -- )` | Begin capture |
-| `MIC-STOP` | `( -- )` | Stop capture |
-| `MIC-READ` | `( buf -- n )` | Pop samples from ring into PCM buffer, return frame count |
-| `MIC-RING` | `( -- ring )` | Access the capture ring directly |
-| `MIC-OVERRUN?` | `( -- flag )` | True if ISR found ring full (dropped samples) |
-
-**ISR body:** Read ADC MMIO → `RING-PUSH` into mic-ring.  If ring
-full, set overrun flag and drop sample.
 
 ---
 
-## Tier 7 — Sonification
+## Tier 9 — Palette System
 
-A sub-library under `render/sonification/` that bridges the visual
-render pipeline and data processing to audio output.  Consumers of the
-audio library, not part of its core.
+A palette is a named, coherent collection of sound sources — one or
+more sources registered under each of a standard set of **sonic roles**.
+When sonification forms need "the event-marker sound," "the alert
+sound," "the background texture," or "the ambient layer," they ask
+the palette, not a specific source.
 
-### 7.1 render/sonification/param-map.f — Parameter Mapping
+Swap the palette and the entire aesthetic changes.  The sonification
+code doesn't change.  The data-to-sound mapping doesn't change.  Only
+the sound does.
+
+This is the level at which "I want it to sound industrial" vs "I want
+it to sound like a forest" is expressed — not at the sonification form
+level, and not at the individual source level.
+
+### Sonic Roles (standard slots every palette fills)
+
+| Role ID | Name | Used for |
+|---------|------|----------|
+| `PAL-R-MARK` | mark | Discrete data event, neutral significance |
+| `PAL-R-MARK-HI` | mark-hi | Significant discrete event |
+| `PAL-R-MARK-LO` | mark-lo | Minor / background discrete event |
+| `PAL-R-ALERT` | alert | Threshold crossing, requires attention |
+| `PAL-R-CRITICAL` | critical | Critical condition, urgent |
+| `PAL-R-SUCCESS` | success | Completion, positive outcome |
+| `PAL-R-ERROR` | error | Failure, negative outcome |
+| `PAL-R-BG-CALM` | bg-calm | Background texture — calm, stable state |
+| `PAL-R-BG-ACTIVE` | bg-active | Background texture — active, processing state |
+| `PAL-R-BG-TENSE` | bg-tense | Background texture — elevated, tense state |
+| `PAL-R-STREAM-1` | stream-1 | Primary continuous data voice |
+| `PAL-R-STREAM-2` | stream-2 | Secondary continuous data voice |
+| `PAL-R-STREAM-3` | stream-3 | Tertiary continuous data voice |
+| `PAL-R-PULSE` | pulse | Rhythmic rate indicator |
+| `PAL-R-SELECT` | select | UI selection / focus |
+| `PAL-R-ACTION` | action | UI action / click |
+| `PAL-R-NOTIFY` | notify | Notification, lower priority than alert |
+| `PAL-R-PROGRESS` | progress | Completion progress |
+
+### 9.1 audio/palette/palette.f — Palette Definition & Registry
 
 ```
-PROVIDED akashic-sonification-param-map
-REQUIRE  akashic-fp16
+PROVIDED akashic-palette
+REQUIRE  akashic-src-cache
+REQUIRE  akashic-audio-pcm
 ```
 
-Map a numeric value from one range to an audio parameter in another
-range.  The `math/color.f` of audio — converts data space to sound
-space.
+**Core palette struct** (18 slots, one per role):
+
+Each slot holds:
+- A source cache pointer (or 0 if role uses a one-shot source directly)
+- A source pointer (for continuous sources)
+- Default parameters (volume, pitch offset, etc.)
 
 **API:**
 
 | Word | Signature | Description |
 |------|-----------|-------------|
-| `PMAP-LINEAR` | `( value in-lo in-hi out-lo out-hi -- mapped )` | Linear mapping |
-| `PMAP-LOG` | `( value in-lo in-hi out-lo out-hi -- mapped )` | Logarithmic mapping (better for pitch, frequency) |
-| `PMAP-EXP` | `( value in-lo in-hi out-lo out-hi -- mapped )` | Exponential mapping (better for volume, amplitude) |
-| `PMAP-CLAMP` | `( value lo hi -- clamped )` | Clamp to range |
-| `PMAP-NOTE` | `( value in-lo in-hi lo-note hi-note -- midi-note )` | Map to MIDI note range, quantized to nearest semitone |
-| `PMAP-SCALE` | `( midi-note scale -- quantized )` | Quantize MIDI note to nearest note in scale |
+| `PAL-CREATE` | `( name-addr -- pal )` | Allocate palette |
+| `PAL-FREE` | `( pal -- )` | Free palette (does NOT free sources — caller owns them) |
+| `PAL-SET-STRIKE` | `( cache role-id pal -- )` | Assign a source cache to a role (one-shot) |
+| `PAL-SET-CONT` | `( src role-id pal -- )` | Assign a continuous source to a role |
+| `PAL-SET-GAIN` | `( gain role-id pal -- )` | Set default gain for role |
+| `PAL-SET-PITCH` | `( semitones role-id pal -- )` | Set pitch offset for role |
+| `PAL-STRIKE` | `( velocity role-id pal -- buf )` | Strike the source assigned to role |
+| `PAL-RENDER` | `( buf role-id pal -- )` | Render continuous source for role |
+| `PAL-ACTIVE!` | `( pal -- )` | Set as global active palette |
+| `PAL-ACTIVE@` | `( -- pal )` | Get global active palette |
 
-**Predefined scales (stored as byte arrays, 1 = note in scale):**
+**Global convenience words (operate on active palette):**
 
-| Word | Scale | Intervals |
-|------|-------|-----------|
-| `SCALE-CHROMATIC` | Chromatic | All 12 semitones |
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `PAL-MARK` | `( velocity -- buf )` | Fire mark role |
+| `PAL-ALERT` | `( velocity -- buf )` | Fire alert role |
+| `PAL-SUCCESS` | `( velocity -- buf )` | Fire success role |
+| `PAL-ERROR` | `( velocity -- buf )` | Fire error role |
+| `PAL-BG-CALM` | `( buf -- )` | Render background calm |
+| `PAL-BG-ACTIVE` | `( buf -- )` | Render background active |
+| `PAL-BG-TENSE` | `( buf -- )` | Render background tense |
+
+### 9.2 audio/palette/acoustic.f — Acoustic Palette
+
+```
+PROVIDED akashic-palette-acoustic
+REQUIRE  akashic-palette
+REQUIRE  akashic-src-acoustic
+```
+
+The default palette.  Musical acoustic instruments, warm and physical.
+
+| Role | Source | Notes |
+|------|--------|-------|
+| mark | ACOU-BELL (bronze, medium) | Clean, clear, neutral |
+| mark-hi | ACOU-BELL (steel, bright, large) | Commanding |
+| mark-lo | ACOU-WOOD (marimba-type) | Soft, warm |
+| alert | ACOU-GONG (medium, rim-struck) | Attention-getting, not harsh |
+| critical | ACOU-CYMBAL (crash, large) | Urgent, wide-spectrum |
+| success | ACOU-CHIME (ascending triple strike) | Bright, positive |
+| error | ACOU-KICK + ACOU-RIDE (simultaneous) | Heavy + dissonant shimmer |
+| bg-calm | DRONE-PEDAL | Warm, unobtrusive |
+| bg-active | DRONE-BREATH | Animate, alive |
+| bg-tense | DRONE-CLUSTER | Harmonic tension |
+| stream-1 | DRONE-PAD | Smooth continuous voice |
+| stream-2 | DRONE-FIFTH | Open second voice |
+| pulse | ACOU-WOOD (woodblock-type) | Crisp, rhythmic |
+| select | ACOU-CROTALE | Bright, tiny, precise |
+| action | ACOU-CLAVES | Clean click |
+| notify | ACOU-TRIANGLE | Light, friendly |
+| progress | ACOU-BELL (pitch rises with n/total) | |
+
+### 9.3 audio/palette/electronic.f — Electronic Palette
+
+```
+PROVIDED akashic-palette-electronic
+REQUIRE  akashic-palette
+REQUIRE  akashic-src-electronic
+```
+
+Synthetic, abstract.  No acoustic references.  Clean and precise.
+
+| Role | Source |
+|------|--------|
+| mark | ELEC-PING (mid-freq) |
+| mark-hi | ELEC-SWEEP (upward) |
+| mark-lo | ELEC-CLICK (muted) |
+| alert | ELEC-ZAP (bright, fast) |
+| critical | ELEC-CRUNCH (distorted burst) |
+| success | ELEC-CHIME (ascending) |
+| error | ELEC-THUMP + ELEC-STATIC |
+| bg-calm | ELEC-DRONE (warm) |
+| bg-active | ELEC-TEXTURE (mid-density grain) |
+| bg-tense | DRONE-CLUSTER (electronic) |
+| pulse | ELEC-CLICK (metronomic) |
+| select | ELEC-BLIP (sine, short) |
+| action | ELEC-POP |
+
+### 9.4 audio/palette/natural.f — Natural Palette
+
+```
+PROVIDED akashic-palette-natural
+REQUIRE  akashic-palette
+REQUIRE  akashic-src-natural
+```
+
+Environmental, physical world.  No instrument language.
+
+| Role | Source |
+|------|--------|
+| mark | NAT-WATER-DRIP (small) |
+| mark-hi | NAT-ROCK-IMPACT (medium) |
+| mark-lo | NAT-GRAVEL-STEP (light) |
+| alert | NAT-THUNDER (distant) |
+| critical | NAT-CRACK + NAT-THUNDER (close) |
+| success | NAT-WATER-DRIP (resonant, multiple) |
+| error | NAT-BRANCH-SNAP |
+| bg-calm | NAT-WIND (gentle) + NAT-INSECTS (low) |
+| bg-active | NAT-STREAM (moderate) |
+| bg-tense | NAT-WIND (strong) |
+| pulse | NAT-WATER-DRIP (steady rate) |
+| select | NAT-CRACK (light) |
+| action | NAT-CRUNCH (single step) |
+
+### 9.5 audio/palette/industrial.f — Industrial Palette
+
+```
+PROVIDED akashic-palette-industrial
+REQUIRE  akashic-palette
+REQUIRE  akashic-src-industrial
+```
+
+Machines, process, infrastructure.  Data as factory floor.
+
+| Role | Source |
+|------|--------|
+| mark | INDUS-CLICK |
+| mark-hi | INDUS-CLANK |
+| mark-lo | INDUS-RELAY |
+| alert | INDUS-BANG |
+| critical | INDUS-VALVE (max pressure) + INDUS-BANG |
+| success | INDUS-RELAY (double click) |
+| error | INDUS-THUD + INDUS-HISS |
+| bg-calm | INDUS-HVAC (low) + INDUS-MOTOR (idle) |
+| bg-active | INDUS-MOTOR (mid load) |
+| bg-tense | INDUS-TURBINE (high rpm) |
+| pulse | INDUS-RELAY (metronomic) |
+| select | INDUS-CLICK |
+| action | INDUS-VALVE (brief) |
+
+---
+
+## Tier 10 — Sonification
+
+Systematic mappings from data dimensions to auditory dimensions.
+These forms are the auditory equivalent of chart types — repeatable,
+learnable patterns for making data audible, not just auditory
+decoration or aesthetic choice.
+
+Every form takes a **palette** as a parameter.  The form defines how
+data maps to auditory dimensions.  The palette defines what sounds are
+made.  Neither knows about the other's internals.
+
+### Why Native Auditory Forms
+
+Data visualization works because it maps data to properties the visual
+system processes pre-attentively: position, length, area, color,
+orientation.  Those are native capabilities of the eye+brain, not
+cultural conventions.
+
+Sound has its own native capabilities, entirely separate:
+
+| Auditory dimension | Pre-attentive? | Data-affinity |
+|---|---|---|
+| **Pitch** | Yes | Ordered magnitude, direction of change |
+| **Tempo / rhythm** | Yes | Rate, urgency, periodicity |
+| **Loudness** | Yes | Magnitude, proximity |
+| **Timbre / source identity** | Yes | Category, type ("bell" vs "drum") |
+| **Attack character** | Yes | Discreteness, suddenness |
+| **Density** | Yes | Count, concentration, activity |
+| **Harmonic tension** | Yes | Agreement vs divergence |
+| **Spatial placement** | Yes | Grouping, identity |
+| **Register** | Yes | Scale, weight |
+| **Decay length** | Yes | Persistence, stability |
+
+These aren't metaphors borrowed from vision.  Pitch going up meaning
+"more" works cross-culturally.  Dissonance meaning "something disagrees"
+requires no training.  A sudden loud sound meaning "attend now" is
+universal and involuntary.
+
+**Places where sound beats vision:**
+
+- **Temporal resolution** — the ear resolves events ~10× finer than
+  the eye.  A 10 ms deviation in rhythm is immediately audible;
+  invisible on screen.
+- **Peripheral monitoring** — sound doesn't require directed attention.
+  A pulse form can be monitored while doing other work.  Dashboards
+  require you to look at them.
+- **Parallel streams** — humans segregate and track 3–5 simultaneous
+  auditory streams (cocktail party effect).  Five line charts = spaghetti.
+  Five instrument voices = each is individually followable.
+- **Ratio perception** — the cochlea perceives frequency ratios directly.
+  Hardwired, not learned.
+
+### 10.1 audio/sonify/param-map.f — Dimension Mapping
+
+```
+PROVIDED akashic-sonify-param-map
+REQUIRE  akashic-fp16
+```
+
+Maps a data value from its domain into an auditory dimension using the
+perceptually correct transfer function for that dimension.  The
+workhorse primitive used by all other forms.
+
+**Core:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `PMAP-LINEAR` | `( v in-lo in-hi out-lo out-hi -- mapped )` | Linear |
+| `PMAP-LOG` | `( v in-lo in-hi out-lo out-hi -- mapped )` | Log (pitch, frequency) |
+| `PMAP-EXP` | `( v in-lo in-hi out-lo out-hi -- mapped )` | Exp (amplitude, loudness) |
+| `PMAP-CLAMP` | `( v lo hi -- clamped )` | Clamp |
+| `PMAP-INVERT` | `( v in-lo in-hi -- inv )` | Invert within range |
+
+**Dimension-aware (use the correct curve automatically):**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `PMAP-PITCH` | `( v in-lo in-hi lo-hz hi-hz -- freq )` | Log-frequency |
+| `PMAP-NOTE` | `( v in-lo in-hi lo-note hi-note -- note )` | MIDI note number |
+| `PMAP-SCALE` | `( note scale -- quantized )` | Snap to scale |
+| `PMAP-LOUDNESS` | `( v in-lo in-hi -- amp )` | Perceptually uniform loudness |
+| `PMAP-TEMPO` | `( v in-lo in-hi lo-bpm hi-bpm -- bpm )` | Linear |
+| `PMAP-DENSITY` | `( v in-lo in-hi lo-hz hi-hz -- events/s )` | Linear event rate |
+| `PMAP-TENSION` | `( v in-lo in-hi -- ratio )` | Frequency ratio (consonance model) |
+| `PMAP-TIMBRE` | `( v in-lo in-hi -- t )` | 0.0–1.0 instrument parameter |
+| `PMAP-PAN` | `( v in-lo in-hi -- pan )` | −1.0 to +1.0 |
+| `PMAP-ATTACK` | `( v in-lo in-hi -- ms )` | |
+| `PMAP-DECAY` | `( v in-lo in-hi -- ms )` | |
+
+**Scales:**
+
+| Constant | Scale | Semitones |
+|----------|-------|-----------|
+| `SCALE-CHROMATIC` | All 12 | 0–11 |
 | `SCALE-MAJOR` | Major | 0 2 4 5 7 9 11 |
 | `SCALE-MINOR` | Natural minor | 0 2 3 5 7 8 10 |
 | `SCALE-PENTATONIC` | Major pentatonic | 0 2 4 7 9 |
 | `SCALE-BLUES` | Blues | 0 3 5 6 7 10 |
 | `SCALE-WHOLE-TONE` | Whole tone | 0 2 4 6 8 10 |
+| `SCALE-HARMONICS` | Harmonic series | 0 12 19 24 28 31… |
 
-### 7.2 render/sonification/data2tone.f — Data Series → Melody
+**Mapping bundles** — group N data→auditory bindings into one reusable
+object, analogous to a "scale" object in a plotting library binding
+data columns to visual aesthetics:
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `PMAP-BUNDLE-CREATE` | `( n -- bundle )` | Bundle for N dimensions |
+| `PMAP-BUNDLE-BIND` | `( map-xt in-lo in-hi out-lo out-hi dim bundle -- )` | Bind a mapping |
+| `PMAP-BUNDLE-APPLY` | `( value dim bundle -- mapped )` | Apply mapping for dim |
+| `PMAP-BUNDLE-FREE` | `( bundle -- )` | |
+
+### 10.2 audio/sonify/stream.f — Continuous Data → Evolving Sound
 
 ```
-PROVIDED akashic-sonification-data2tone
-REQUIRE  akashic-sonification-param-map
-REQUIRE  akashic-audio-osc
-REQUIRE  akashic-audio-env
+PROVIDED akashic-sonify-stream
+REQUIRE  akashic-sonify-param-map
+REQUIRE  akashic-palette
 REQUIRE  akashic-audio-pcm
 ```
 
-Turn a numeric data array into a melodic PCM buffer.  Each data
-point becomes one note with pitch proportional to value.
+The native auditory form for ordered sequential data.  Data becomes
+continuously evolving sound — pitch tracks the primary variable,
+timbre parameters track secondary variables, loudness tracks a third.
+
+Exploits sound's native multi-channel property: pitch, timbre, and
+loudness evolve simultaneously on one voice, encoding 3+ variables that
+a line chart could only show with separate lines.
+
+**Use cases:** time series, logs of any scalar value over time,
+sequential measurements, any ordered array.
 
 **API:**
 
 | Word | Signature | Description |
 |------|-----------|-------------|
-| `D2T-SONIFY` | `( data-addr n scale note-ms rate -- buf )` | Convert N FP16 values to a PCM melody |
-| `D2T-SONIFY-STEREO` | `( data-addr n scale note-ms rate -- buf )` | Stereo: pan position follows data index (left→right sweep) |
-| `D2T-SHAPE!` | `( shape -- )` | Set oscillator waveform for sonification |
-| `D2T-RANGE!` | `( lo-note hi-note -- )` | Set MIDI note range (default: 48–84, C3–C6) |
-| `D2T-ENV!` | `( attack-ms release-ms -- )` | Set per-note envelope |
-
-**Usage example:**
+| `SSTREAM-CREATE` | `( bundle pal rate -- stream )` | Create stream renderer |
+| `SSTREAM-FREE` | `( stream -- )` | |
+| `SSTREAM-RENDER` | `( data-addr n stream -- buf )` | Render N points |
+| `SSTREAM-RENDER-STEREO` | `( data-addr n stream -- buf )` | Pan tracks index (left→right) |
+| `SSTREAM-SPEED!` | `( ms stream -- )` | Time per data point |
+| `SSTREAM-GLIDE!` | `( flag stream -- )` | Smooth interpolation between points |
+| `SSTREAM-SOURCE!` | `( role stream -- )` | Which palette role to use |
 
 ```forth
-\ Sonify a 64-element temperature time series
-temp-buffer 64 SCALE-PENTATONIC 100 44100 D2T-SONIFY
-\ Returns a PCM buffer of 64 notes × 100 ms = 6.4 seconds
-\ Each temperature value → pitch in pentatonic scale
-my-chain CHAIN-PROCESS            \ apply reverb
-SPK-WRITE                         \ play
+\ Temperature over 200 hours:
+\ pitch = temperature (log, 100–500 Hz)
+\ brightness = rate of change (slow = dark, fast = bright)
+my-bundle  PAL-ACTIVE@  44100  SSTREAM-CREATE CONSTANT s
+200 s SSTREAM-SPEED!
+temp-data 200 s SSTREAM-RENDER SPK-WRITE
 ```
 
-### 7.3 render/sonification/earcon.f — Notification Sounds
+### 10.3 audio/sonify/trigger.f — Discrete Events → Strikes
 
 ```
-PROVIDED akashic-sonification-earcon
-REQUIRE  akashic-audio-osc
-REQUIRE  akashic-audio-env
+PROVIDED akashic-sonify-trigger
+REQUIRE  akashic-sonify-param-map
+REQUIRE  akashic-palette
+REQUIRE  akashic-audio-pcm
+REQUIRE  akashic-audio-mix
+```
+
+The native form for event data.  Each event becomes a palette strike.
+The sound tells you: **what kind** (which palette role = source identity),
+**how significant** (loudness + register), **when** (temporal position).
+
+Humans identify sound sources categorically with near-zero training.
+Assign each event type its own palette role and the ear segregates
+them automatically — no visual attention needed.
+
+**Use cases:** server logs, transactions, sensor firings, packet
+arrivals, any discrete event stream.
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `STRIG-CREATE` | `( n-types pal rate -- trig )` | N event types |
+| `STRIG-FREE` | `( trig -- )` | |
+| `STRIG-ASSIGN` | `( role-id type-id trig -- )` | Map event type → palette role |
+| `STRIG-VEL-MAP!` | `( bundle-dim type-id trig -- )` | Data magnitude → velocity |
+| `STRIG-PITCH-MAP!` | `( bundle-dim type-id trig -- )` | Data value → pitch |
+| `STRIG-FIRE` | `( value type-id trig -- )` | Fire one event |
+| `STRIG-FIRE-AT` | `( value type-id time-ms trig -- )` | Fire at time offset |
+| `STRIG-RENDER` | `( duration-ms trig -- buf )` | Mix all pending events to PCM |
+
+```forth
+3 PAL-ACTIVE@ 44100 STRIG-CREATE CONSTANT srv-trig
+PAL-R-MARK      0 srv-trig STRIG-ASSIGN   \ requests = neutral mark
+PAL-R-ERROR     1 srv-trig STRIG-ASSIGN   \ errors = error role
+PAL-R-MARK-HI   2 srv-trig STRIG-ASSIGN   \ slow reqs = elevated mark
+
+\ On each incoming event:
+response-ms  0 srv-trig STRIG-FIRE
+```
+
+### 10.4 audio/sonify/pulse.f — Rate Data → Rhythmic Pulse
+
+```
+PROVIDED akashic-sonify-pulse
+REQUIRE  akashic-palette
 REQUIRE  akashic-audio-pcm
 ```
 
-Library of short, procedurally-generated notification sounds.  No
-samples needed — everything built from oscillators and envelopes at
-runtime.  Each earcon is ~50–300 ms.
+A rhythmic pulse whose **speed** encodes a quantity.  The Geiger
+counter principle, generalized and aestheticized.
+
+**No visual equivalent.**  Dashboards can't show rhythm because vision
+isn't intrinsically temporal.  Sound is.  A pulse form can monitor
+a rate in the perceptual periphery while the user does other work.
+When the rate deviates, it's noticed without any glance at a screen.
+
+**Use cases:** throughput (req/sec, bytes/sec), heartrate, polling
+rate, event rate, build progress — any ongoing rate quantity.
 
 **API:**
 
 | Word | Signature | Description |
 |------|-----------|-------------|
-| `EAR-SUCCESS` | `( rate -- buf )` | Rising two-tone chime (C5→E5), 200 ms |
-| `EAR-ERROR` | `( rate -- buf )` | Low buzz (80 Hz square, distorted), 300 ms |
-| `EAR-WARNING` | `( rate -- buf )` | Mid-range double beep (A4, A4), 250 ms |
-| `EAR-INFO` | `( rate -- buf )` | Soft single ding (C6 sine, fast decay), 150 ms |
-| `EAR-CLICK` | `( rate -- buf )` | Brief tick (white noise burst), 10 ms |
-| `EAR-SCROLL` | `( rate -- buf )` | Soft tick (filtered noise), 15 ms |
-| `EAR-BOUNDARY` | `( rate -- buf )` | Thud (60 Hz sine, heavy envelope), 100 ms |
-| `EAR-PROGRESS` | `( n total rate -- buf )` | Rising pitch proportional to n/total |
-| `EAR-SELECT` | `( rate -- buf )` | Bright blip (E6→C6 sine glide), 80 ms |
-| `EAR-DESELECT` | `( rate -- buf )` | Descending blip (C6→E5), 80 ms |
-| `EAR-DELETE` | `( rate -- buf )` | Low sweep down (200→60 Hz saw), 200 ms |
-| `EAR-OPEN` | `( rate -- buf )` | Ascending arpeggio (C4 E4 G4), 250 ms |
-| `EAR-CLOSE` | `( rate -- buf )` | Descending arpeggio (G4 E4 C4), 250 ms |
-| `EAR-TYPE` | `( rate -- buf )` | Mechanical click (noise + 2 kHz sine), 5 ms |
-| `EAR-NOTIFY` | `( rate -- buf )` | Gentle two-note chime (G5 C6), 300 ms |
+| `SPULSE-CREATE` | `( role-id pal rate -- pulse )` | Create with palette source |
+| `SPULSE-FREE` | `( pulse -- )` | |
+| `SPULSE-RATE!` | `( events/sec pulse -- )` | Set current rate |
+| `SPULSE-INTENSITY!` | `( amp pulse -- )` | Strike intensity |
+| `SPULSE-JITTER!` | `( j pulse -- )` | Timing irregularity 0.0–1.0 |
+| `SPULSE-RENDER` | `( duration-ms pulse -- buf )` | Render pulse train |
+| `SPULSE-RENDER-LIVE` | `( buf pulse -- )` | Continuous block-mode render |
 
-**Design:** Each earcon is a self-contained word that creates a
-temporary oscillator + envelope, fills a PCM buffer, frees the
-temporaries, and returns the buffer.  Caller owns the returned buffer
-and must `PCM-FREE` it when done.
-
-### 7.4 render/sonification/scene2audio.f — Scene Graph → Audio
+### 10.5 audio/sonify/texture.f — Aggregates → Ambient Soundscape
 
 ```
-PROVIDED akashic-sonification-scene2audio
-REQUIRE  akashic-sonification-param-map
-REQUIRE  akashic-audio-osc
-REQUIRE  akashic-audio-env
-REQUIRE  akashic-audio-mix
-REQUIRE  akashic-dom             \ dom/dom.f
+PROVIDED akashic-sonify-texture
+REQUIRE  akashic-sonify-param-map
+REQUIRE  akashic-palette
+REQUIRE  akashic-audio-pcm
 ```
 
-Walk a DOM tree or box tree and produce an audio description.  The
-generic version of what a non-visual browser's audio encoder would
-consume.
+The native form for statistical / aggregate data.  Encodes
+distribution shape as a continuous auditory texture — you hear the
+*character* of the data, not individual points.
 
-**Mapping rules:**
+**No clean visual equivalent.**  A histogram shows shape but requires
+focused attention.  A texture is always-on, peripheral.
 
-| Visual property | Audio parameter | Mapping |
+**Mappings:**
+
+| Statistic | Auditory dimension | Effect |
 |---|---|---|
-| Tree depth | Pitch | Deeper = higher pitch (log scale) |
-| Element type | Timbre | Headings = sine, text = triangle, links = saw, lists = square |
-| Content length | Note duration | Longer content = longer note (clamped 50–500 ms) |
-| Horizontal position | Stereo pan | Left edge = left channel, right edge = right channel |
-| Font size / heading level | Volume | Larger = louder |
-| Focus / selection | Earcon | `EAR-SELECT` on focus-in, `EAR-DESELECT` on focus-out |
+| Mean | Pitch center | Higher mean = higher pitch |
+| Variance | Roughness via palette `bg-*` transition | High var = bg-tense; low = bg-calm |
+| Skew | Spectral tilt (source timbre param) | Positive skew = brighter |
+| Kurtosis | Grain density / attack character | High kurtosis = spiky; normal = round |
 
 **API:**
 
 | Word | Signature | Description |
 |------|-----------|-------------|
-| `S2A-WALK` | `( dom-root rate -- buf )` | Walk entire DOM, produce audio |
-| `S2A-NODE` | `( node rate -- buf )` | Sonify single node |
-| `S2A-ANNOUNCE` | `( node rate -- buf )` | Short earcon for element type |
-| `S2A-DESCRIBE` | `( node rate -- buf )` | Full audio description: type + content + position |
-| `S2A-DIFF` | `( old-dom new-dom rate -- buf )` | Sonify differences between two DOMs |
+| `STEX-CREATE` | `( pal rate -- tex )` | |
+| `STEX-FREE` | `( tex -- )` | |
+| `STEX-UPDATE` | `( mean var skew kurt tex -- )` | Feed distribution stats |
+| `STEX-RENDER` | `( duration-ms tex -- buf )` | Render texture |
+| `STEX-SENSITIVITY!` | `( s tex -- )` | Responsiveness 0=sluggish, 1=instant |
+
+### 10.6 audio/sonify/ensemble.f — Multi-Variate → Polyphonic Layers
+
+```
+PROVIDED akashic-sonify-ensemble
+REQUIRE  akashic-sonify-stream
+REQUIRE  akashic-audio-mix
+REQUIRE  akashic-audio-pcm
+```
+
+The native form for multi-variate data.  Each variable gets its own
+voice from the palette in a different timbral register.  Correlated
+variables move in consonant intervals.  Diverging variables become
+dissonant.
+
+Exploits auditory stream segregation.  Humans track 3–5 simultaneous
+auditory streams and selectively attend to any one.  Five line charts
+= spaghetti.  Five voices = each followable.
+
+**Use cases:** multi-variate time series, correlated metrics,
+portfolio components, parallel signal comparison.
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `SENS-CREATE` | `( n-voices pal rate -- ens )` | |
+| `SENS-FREE` | `( ens -- )` | |
+| `SENS-VOICE` | `( bundle role-id pan voice-id ens -- )` | Configure voice |
+| `SENS-RENDER` | `( data-matrix n-points ens -- buf )` | Render all voices + mix |
+| `SENS-RENDER-LIVE` | `( data-row ens -- )` | Feed one time step |
+
+### 10.7 audio/sonify/interval.f — Relationships → Harmonic Intervals
+
+```
+PROVIDED akashic-sonify-interval
+REQUIRE  akashic-sonify-param-map
+REQUIRE  akashic-palette
+REQUIRE  akashic-audio-pcm
+```
+
+The native form for **relationships and proportions**.  A/B value ratio
+maps directly to frequency ratio.  1:1 = unison.  2:1 = octave.
+3:2 = fifth.  Irrational = dissonance.  The cochlea does the
+proportional math; no visual encoding or legend needed.
+
+**Use cases:** goal vs actual, budget vs spend, before vs after,
+any pair where the ratio is what matters.
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `SINT-CREATE` | `( base-hz pal rate -- intv )` | |
+| `SINT-FREE` | `( intv -- )` | |
+| `SINT-PAIR` | `( a b intv -- buf )` | Two tones at frequency ratio a:b |
+| `SINT-SERIES` | `( a-data b-data n intv -- buf )` | Evolving ratio over N points |
+
+### 10.8 audio/sonify/alert.f — Threshold Monitor → Escalating Cues
+
+```
+PROVIDED akashic-sonify-alert
+REQUIRE  akashic-palette
+REQUIRE  akashic-audio-pcm
+```
+
+Always-on threshold monitoring that changes sonic character as zones
+are crossed.  No visual attention required.
+
+The palette provides the sound for each zone: `bg-calm`, `bg-active`,
+`bg-tense` for background states; `PAL-R-ALERT` and `PAL-R-CRITICAL`
+for crossings.
+
+**Zone model:**
+
+| Zone | Palette role used | Perceptual target |
+|------|-------------------|-------------------|
+| Normal | bg-calm (continuous) | Calm, unobtrusive — safe |
+| Caution | bg-active (continuous) | Warming — pay loose attention |
+| Warning | bg-tense + alert event | Discomfort — attend soon |
+| Critical | bg-tense + critical event (repeated) | Involuntary attention pull |
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `SALERT-CREATE` | `( pal rate -- alert )` | |
+| `SALERT-FREE` | `( alert -- )` | |
+| `SALERT-ZONE!` | `( threshold zone-id alert -- )` | Define zone boundary |
+| `SALERT-UPDATE` | `( value alert -- )` | Advance state machine |
+| `SALERT-RENDER` | `( duration-ms alert -- buf )` | Render zone sound |
+| `SALERT-HYSTERESIS!` | `( margin alert -- )` | Dead-band at boundaries |
+
+### 10.9 audio/sonify/earcon.f — Semantic Audio Tokens
+
+```
+PROVIDED akashic-sonify-earcon
+REQUIRE  akashic-palette
+REQUIRE  akashic-audio-pcm
+```
+
+Short, semantically meaningful sound events — the interface between
+a palette and user-facing semantic signals.  The distinction from raw
+palette access: earcons carry a meaning ("success," "error," "notify")
+that is stable across palette swaps.  The sound changes; the meaning
+doesn't.
+
+Built entirely from palette roles.  `EAR-SUCCESS` fires the palette's
+`success` role.  Swap to the industrial palette: success now sounds
+like a relay double-click.  Swap to natural: a water drip triplet.
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `EAR-SUCCESS` | `( pal -- buf )` | Positive completion |
+| `EAR-ERROR` | `( pal -- buf )` | Failure |
+| `EAR-WARNING` | `( pal -- buf )` | Elevated concern |
+| `EAR-INFO` | `( pal -- buf )` | Neutral notification |
+| `EAR-CRITICAL` | `( pal -- buf )` | Urgent, requires immediate action |
+| `EAR-CLICK` | `( pal -- buf )` | Momentary action |
+| `EAR-SELECT` | `( pal -- buf )` | Item selection / focus |
+| `EAR-DESELECT` | `( pal -- buf )` | Focus lost |
+| `EAR-NOTIFY` | `( pal -- buf )` | Low-priority notice |
+| `EAR-PROGRESS` | `( n total pal -- buf )` | Completion: pitch rises with n/total |
+| `EAR-SCROLL` | `( pal -- buf )` | Rapid low-intensity action feedback |
+| `EAR-OPEN` | `( pal -- buf )` | Something expanded / opened |
+| `EAR-CLOSE` | `( pal -- buf )` | Something collapsed / closed |
+| `EAR-DELETE` | `( pal -- buf )` | Destructive action |
+
+**Convenience — operate on active palette:**
+
+```forth
+PAL-ACTIVE@ EAR-SUCCESS SPK-WRITE    \ use current palette
+```
+
+### 10.10 audio/sonify/scene.f — Multi-Form Composition
+
+```
+PROVIDED akashic-sonify-scene
+REQUIRE  akashic-audio-mix
+REQUIRE  akashic-audio-pcm
+```
+
+Combine multiple sonification forms into a single layered output.
+The auditory equivalent of a dashboard page with several simultaneous
+charts — each form handles different data, all mixed to stereo.
+
+**API:**
+
+| Word | Signature | Description |
+|------|-----------|-------------|
+| `SSCENE-CREATE` | `( n-layers rate -- scene )` | |
+| `SSCENE-FREE` | `( scene -- )` | |
+| `SSCENE-LAYER` | `( render-xt gain pan layer-id scene -- )` | Assign render XT to layer |
+| `SSCENE-RENDER` | `( duration-ms scene -- buf )` | Mix all layers to stereo |
+| `SSCENE-MUTE` | `( layer-id scene -- )` | |
+| `SSCENE-SOLO` | `( layer-id scene -- )` | |
+
+```forth
+\ Server monitor: pulse (req rate) + stream (latency) + trigger (errors)
+3 44100 SSCENE-CREATE CONSTANT dash
+['] render-req-pulse    0x3800 0x0000  0 dash SSCENE-LAYER  \ center
+['] render-latency-stream 0x3400 0xBC00 1 dash SSCENE-LAYER  \ left
+['] render-error-trig   0x3C00 0x3C00  2 dash SSCENE-LAYER  \ right
+5000 dash SSCENE-RENDER SPK-WRITE
+```
 
 ---
 
@@ -1256,49 +1546,51 @@ consume.
                     ╱     │      ╲
              osc.f    noise.f   env.f    lfo.f
                │         │       │        │
-               │         │       │ ───────┘
-               ▼         ▼       ▼
-           ┌────────── fx.f ──────────┐
-           │      (delay, reverb,     │
-           │  chorus, dist, EQ, comp) │
-           └──────────────────────────┘
-                      │
-              ┌───────┼───────┐
-              ▼       ▼       ▼
-           mix.f   chain.f  analysis.f
-              │               │
-              ▼               │
-    ┌─────────┴────────┐      │
-    ▼         ▼        ▼      │
- synth.f   fm.f    pluck.f    │
-    │         │        │      │
-    ▼         ▼        ▼      ▼
- ┌──────────────────────────────┐
- │     wav.f  seq.f  midi.f    │
- └──────────────────────────────┘
-               │
-       ┌───────┴───────┐
-       ▼               ▼
-   speaker.f        mic.f
-       │
-       ▼
- ┌──────────────────────────────────┐
- │  render/sonification/            │
- │  param-map.f  data2tone.f       │
- │  earcon.f     scene2audio.f     │
- └──────────────────────────────────┘
-
- External dependencies (already exist):
-   math/trig.f ──► osc.f
-   math/fp16.f ──► osc.f, env.f, lfo.f, fx.f, mix.f, analysis.f
-   math/fft.f ──► analysis.f
-   math/filter.f ──► fx.f (EQ, reverb LP), synth.f
-   math/timeseries.f ──► analysis.f (autocorrelation)
-   math/interp.f ──► osc.f (wavetable interp)
-   concurrency/* ──► speaker.f, mic.f (optional higher-level sync)
-   dom/dom.f ──► scene2audio.f
-   KDOS §18 RING ──► fx.f (delay lines), speaker.f, mic.f, pluck.f
-   KDOS §8 TASK/TIMER ──► speaker.f, mic.f, seq.f
+               └─────────┼───────┘────────┘
+                          │
+                    ┌─────▼──────┐
+                    │  fx.f      │
+                    │  mix.f     │
+                    │  chain.f   │
+                    │  analysis.f│
+                    └─────┬──────┘
+                          │
+             ┌────────────┼────────────┐
+             ▼            ▼            ▼
+          synth.f      fm.f        pluck.f
+             │            │            │
+             └────────────┼────────────┘
+                          │
+                  wav.f  seq.f  midi.f
+                  speaker.f  mic.f
+                          │
+          ┌───────────────┴──────────────┐
+          │       audio/syn/              │
+          │  modal  membrane  resonator   │
+          │  additive  sustained  granular│
+          └───────────────┬──────────────┘
+                          │
+          ┌───────────────┴──────────────┐
+          │       audio/src/              │
+          │  acoustic  natural            │
+          │  electronic  industrial       │
+          │  drones  cache                │
+          └───────────────┬──────────────┘
+                          │
+          ┌───────────────┴──────────────┐
+          │       audio/palette/          │
+          │  palette  acoustic            │
+          │  electronic  natural          │
+          │  industrial                   │
+          └───────────────┬──────────────┘
+                          │
+          ┌───────────────┴──────────────┐
+          │       audio/sonify/           │
+          │  param-map  stream  trigger   │
+          │  pulse  texture  ensemble     │
+          │  interval  alert  earcon      │
+          │  scene                        │
+          └──────────────────────────────┘
 ```
 
 ---
@@ -1307,308 +1599,199 @@ consume.
 
 Phased delivery.  Each phase is independently useful.
 
-### Phase 1 — Sound Generation (osc.f, noise.f, env.f, lfo.f)
+### Phase 7 — Synthesis Primitives (~800 lines)
 
-The minimum to make sound.  After this phase:
+| File | ~Lines | Notes |
+|------|--------|-------|
+| `syn/modal.f` | 250 | Most important — needed by all acoustic sources |
+| `syn/membrane.f` | 150 | Needed by drum-family |
+| `syn/resonator.f` | 150 | Needed by natural, industrial, wind |
+| `syn/additive.f` | 150 | Needed by drones, electronic chimes |
+| `syn/sustained.f` | 150 | Needed by drones, stream form |
+| `syn/granular.f` | 200 | Needed by natural (rain, fire, crowd) |
 
-```forth
-REQUIRE audio/osc.f
-REQUIRE audio/env.f
-440 0 44100 OSC-CREATE CONSTANT my-osc      \ 440 Hz sine
-10 50 8000 100 44100 ENV-CREATE CONSTANT my-env
-44100 16 1 4410 PCM-ALLOC CONSTANT my-buf   \ 100 ms buffer
-my-buf my-osc OSC-FILL
-my-buf my-env ENV-APPLY
-\ my-buf now contains a 100 ms sine with ADSR envelope
-```
+### Phase 8 — Sound Sources (~1600 lines)
 
-**Est. ~600 lines Forth.**
+| File | ~Lines | Priority |
+|------|--------|----------|
+| `src/acoustic.f` | 450 | High — fills palette/acoustic |
+| `src/electronic.f` | 300 | High — fills palette/electronic |
+| `src/natural.f` | 350 | Medium |
+| `src/industrial.f` | 250 | Medium |
+| `src/drones.f` | 150 | High — needed by stream + texture forms |
+| `src/cache.f` | 200 | High — needed by all palettes |
 
-### Phase 2 — Effects (fx.f, mix.f, chain.f)
+Build order: cache.f first (no dependents on it), then acoustic.f
+(most commonly needed), then the rest.
 
-After this phase, multi-voice mixing with effects:
+### Phase 9 — Palette System (~600 lines)
 
-```forth
-REQUIRE audio/fx.f
-REQUIRE audio/mix.f
-REQUIRE audio/chain.f
-2 4410 44100 MIX-CREATE CONSTANT my-mix
-osc1-buf 0 my-mix MIX-INPUT!
-osc2-buf 1 my-mix MIX-INPUT!
-my-mix MIX-RENDER
-my-mix MIX-MASTER my-chain CHAIN-PROCESS   \ EQ → reverb
-```
+| File | ~Lines |
+|------|--------|
+| `palette/palette.f` | 200 |
+| `palette/acoustic.f` | 100 |
+| `palette/electronic.f` | 100 |
+| `palette/natural.f` | 100 |
+| `palette/industrial.f` | 100 |
 
-**Est. ~800 lines Forth.**
+### Phase 10 — Sonification (~1400 lines)
 
-### Phase 3 — Analysis (analysis.f)
-
-Essential for interactive audio applications and data sonification:
-
-```forth
-REQUIRE audio/analysis.f
-my-buf ANA-RMS ANA-DB .          \ "-12.3 dB"
-my-buf 44100 ANA-PITCH-AUTO .    \ "440"
-my-buf ANA-SPECTRUM              \ windowed FFT magnitude
-```
-
-**Est. ~400 lines Forth.**
-
-### Phase 4 — Synthesis Engines (synth.f, fm.f, pluck.f)
-
-Playable instruments:
-
-```forth
-REQUIRE audio/synth.f
-0 1 44100 4410 SYNTH-CREATE CONSTANT pad
-261 127 pad SYNTH-NOTE-ON          \ middle C
-pad SYNTH-RENDER SPK-WRITE
-```
-
-**Est. ~500 lines Forth.**
-
-### Phase 4b — Voice Management (poly.f, porta.f)
-
-Polyphonic voice manager and monophonic portamento:
-
-```forth
-REQUIRE audio/poly.f
-REQUIRE audio/porta.f
-
-\ 4-voice polyphonic pad
-4 0 0 44100 256 POLY-CREATE CONSTANT my-poly
-440 INT>FP16 0x3C00 my-poly POLY-NOTE-ON
-523 INT>FP16 0x3C00 my-poly POLY-NOTE-ON
-659 INT>FP16 0x3C00 my-poly POLY-NOTE-ON
-my-poly POLY-RENDER SPK-WRITE
-
-\ Monophonic lead with glide
-my-synth 0x2A66 PORTA-CREATE CONSTANT my-lead
-440 INT>FP16 0x3C00 my-lead PORTA-NOTE-ON
-my-lead PORTA-RENDER SPK-WRITE
-523 INT>FP16 0x3C00 my-lead PORTA-NOTE-ON   \ glides from A4→C5
-my-lead PORTA-RENDER SPK-WRITE
-```
-
-`poly.f` — Polyphonic voice manager with quietest-steal allocation.
-Wraps N identical `synth.f` voices.  Per-voice biquad filter state
-save/restore via `SYNTH-SAVE-FILT` / `SYNTH-LOAD-FILT`.  Master
-output buffer accumulates all voices.
-
-`porta.f` — Monophonic portamento wrapper for any `synth.f` voice.
-Exponential frequency glide between notes.  Snaps to target on
-first note; glides on legato re-triggers.
-
-**Est. ~300 lines Forth.**
-
-### Phase 5 — I/O & Codec (speaker.f, mic.f, wav.f)
-
-Real-time audio and file persistence:
-
-```forth
-REQUIRE audio/speaker.f
-REQUIRE audio/wav.f
-44100 SPK-INIT  SPK-START
-my-buf SPK-WRITE                   \ play buffer
-my-buf S" song.wav" WAV-WRITE      \ save to disk
-S" song.wav" WAV-READ SPK-WRITE    \ load and play
-```
-
-**Est. ~400 lines Forth.**
-
-### Phase 6 — Sequencing (seq.f, midi.f)
-
-Pattern-based composition:
-
-```forth
-REQUIRE audio/seq.f
-REQUIRE audio/midi.f
-120 16 44100 SEQ-CREATE CONSTANT my-seq
-60 100 4  0 my-seq SEQ-STEP!     \ step 0: C4, vel 100, gate 4
-64 100 4  4 my-seq SEQ-STEP!     \ step 4: E4
-67 100 4  8 my-seq SEQ-STEP!     \ step 8: G4
-['] my-note-handler my-seq SEQ-CALLBACK!
-my-seq SEQ-START
-```
-
-**Est. ~350 lines Forth.**
-
-### Phase 7 — Sonification (param-map.f, data2tone.f, earcon.f, scene2audio.f)
-
-Data → sound bridge:
-
-```forth
-REQUIRE render/sonification/earcon.f
-REQUIRE render/sonification/data2tone.f
-44100 EAR-SUCCESS SPK-WRITE       \ play success chime
-sensor-data 64 SCALE-PENTATONIC 100 44100 D2T-SONIFY SPK-WRITE
-```
-
-**Est. ~500 lines Forth.**
+| File | ~Lines |
+|------|--------|
+| `sonify/param-map.f` | 200 |
+| `sonify/stream.f` | 150 |
+| `sonify/trigger.f` | 200 |
+| `sonify/pulse.f` | 100 |
+| `sonify/texture.f` | 200 |
+| `sonify/ensemble.f` | 200 |
+| `sonify/interval.f` | 100 |
+| `sonify/alert.f` | 150 |
+| `sonify/earcon.f` | 50 |
+| `sonify/scene.f` | 100 |
 
 ### Total Estimate
 
-| Phase | Files | Est. Lines |
+| Phase | Files | ~Lines |
 |---|---|---|
-| 0 (done) | pcm.f | 662 |
-| 1 Generation | osc.f, noise.f, env.f, lfo.f | ~600 |
-| 2 Processing | fx.f, mix.f, chain.f | ~800 |
-| 3 Analysis | analysis.f | ~400 |
-| 4 Synthesis | synth.f, fm.f, pluck.f | ~500 |
-| 4b Voice Mgmt | poly.f, porta.f | ~300 |
-| 5 I/O & Codec | speaker.f, mic.f, wav.f | ~400 (wav.f: 363 ✅) |
-| 6 Sequencing | seq.f, midi.f | ~350 (seq: 352, midi: 371 ✅) |
-| 7 Sonification | param-map.f, data2tone.f, earcon.f, scene2audio.f | ~500 |
-| **Total** | **22 files** | **~4,500** |
+| 1–6 (done) | 19 audio core files | ~6,000 ✅ |
+| 7 Synthesis Primitives | 6 files | ~800 |
+| 8 Sound Sources | 6 files | ~1,600 |
+| 9 Palette System | 5 files | ~600 |
+| 10 Sonification | 10 files | ~1,400 |
+| **New total** | **27 new files** | **~4,400** |
+| **Grand total** | **46 files** | **~10,400** |
 
 ---
 
 ## Design Decisions
 
+### Three Distinct Abstraction Layers Above the Core
+
+The core (Tiers 1–6) provides raw audio building blocks.  Tiers 7–10
+form a stack with clear responsibilities:
+
+- **Tier 7 (synthesis primitives):** *How* to make sound.  Algorithms only.
+  No names, no aesthetics, no data.
+- **Tier 8 (sound sources):** *What* kind of sound.  Named, parameterized,
+  grouped into aesthetic families.  No data.
+- **Tier 9 (palettes):** *Which* sources compose a coherent aesthetic.
+  Semantic role assignment.  No data.
+- **Tier 10 (sonification):** *Mapping* from data dimensions to auditory
+  dimensions, mediated by a palette.  No sound design.
+
+Each layer can be used independently.  You can use `syn/modal.f`
+directly to build a synthesis engine that has nothing to do with
+sonification.  You can use `src/acoustic.f` for a game audio system.
+You can define a custom palette without using any built-in sources.
+The sonification forms work with any palette.
+
+### Source Contract Is the Critical Interface
+
+The `*-STRIKE` / `*-RENDER` + `*-PARAM!` / `*-PARAM@` contract is what
+makes everything else palette-agnostic.  Palettes hold pointers to
+source descriptors, not source implementations.  Sonification forms
+call `PAL-STRIKE` which calls through to whatever source is registered
+for that role.  Adding a new source family (e.g., `src/underwater.f`)
+requires no changes to palettes or sonification forms — only a new file
+and new palette configurations that use it.
+
+### Instruments Are One Family, Not the Frame
+
+`audio/src/acoustic.f` is one of five source families.  It contains
+bells, gongs, drums, cymbals, and strings.  It is not the dominant
+concept in the system.  `audio/src/natural.f` (rain, wind, fire) is
+equally present.  `audio/src/electronic.f` (abstract blips, sweeps,
+crunch) is equally present.  The "everything is a musical instrument"
+trap is avoided by structural placement, not by intent.
+
 ### FP16 Throughout
 
-All audio processing uses FP16 (IEEE 754 half-precision).  Rationale:
+All audio processing uses FP16.  All source parameters are FP16.
+Consistent with `math/fft.f`, `math/filter.f`, and the tile engine.
 
-- Consistency with `math/fft.f`, `math/filter.f`, and the tile engine's
-  FP16 mode.  Zero conversion cost between audio and spectral analysis.
-- Tile engine processes 32 FP16 samples per 64-byte tile in one op.
-  This is the SIMD width of the Megapad-64 — designing around it.
-- FP16 range (±65504, 11-bit mantissa) is adequate for audio.
-  Dynamic range ≈ 66 dB.  For mixing headroom, `F.SUM` uses FP32
-  accumulation internally (the tile engine's ACC register is FP32).
-- Where more precision is needed (e.g., phase accumulators, filter
-  state), specific variables use 32-bit or 64-bit integers.
+### Cache Is Opt-In
 
-### Block-Based Processing
+Live synthesis is always available.  Cache is for when you know
+parameters are stable or when compute budget is tight.  The system
+never forces pre-rendering.  You choose it, you control the memory
+trade-off.
 
-All modules process in blocks (one PCM buffer at a time), not
-sample-by-sample.  Typical block = 256 or 512 frames.
+### Palette Swap Does Not Require Any Application Code Change
 
-- **Cache-friendly:** Consecutive memory access, tile-aligned.
-- **Amortizes overhead:** One function call per block, not per sample.
-- **Ring buffer friendly:** Push/pop whole blocks, not single samples.
-- **Exception:** Karplus-Strong (`pluck.f`) uses per-sample feedback
-  internally but exposes a block-level API.
-
-### KDOS Ring Buffers for All Delay Lines
-
-Every delay-based effect (delay, reverb combs, reverb allpasses,
-chorus, Karplus-Strong) uses KDOS `RING` as its circular buffer.
-
-- Already lock-protected (spinlock 4) — safe for ISR access.
-- Already tested and proven in TCP RX buffers and run queues.
-- Element size = 2 bytes (FP16 sample).  `2 N RING` creates an
-  N-sample delay line.
-- No custom circular buffer code in the audio library at all.
-
-### HBW for Hot Path, XMEM for Cold
-
-| Data | Location | Reason |
-|---|---|---|
-| Delay line rings | HBW | ISR accesses these at sample rate.  Must be zero-wait. |
-| Wavetables | HBW | Tile-aligned for `F.MUL` / interpolation. |
-| Active PCM work buffers | HBW | Tile ops read/write these every block. |
-| WAV file data | XMEM | Loaded once, then sliced into work buffers. |
-| Sample libraries | XMEM | Large, infrequently accessed. |
-| MIDI note→Hz table | Dictionary | 256 bytes, read-only, accessed by note-on only. |
-
-### Single-Voice Synth + Voice Management Layer
-
-`synth.f` and `fm.f` are single-voice modules.  `poly.f` provides a
-ready-made polyphonic manager with quietest-steal allocation and
-per-voice biquad state context switching.  `porta.f` adds monophonic
-glide for lead voices.
+A properly written sonification client looks like:
 
 ```forth
-\ Polyphonic: 4 sine voices, quietest-steal
-4 0 0 44100 256 POLY-CREATE CONSTANT pad
-440 INT>FP16 0x3C00 pad POLY-NOTE-ON
-pad POLY-RENDER SPK-WRITE
+PAL-ACTIVE@ EAR-SUCCESS SPK-WRITE
 ```
 
-For custom allocation policies beyond quietest-steal, use the
-single-voice API directly:
+Swapping from acoustic to industrial requires exactly one line:
 
 ```forth
-4 CONSTANT MAX-VOICES
-CREATE voices  MAX-VOICES CELLS ALLOT
-: VOICE-ALLOC  ( -- voice | 0 )   \ find first idle voice
-    MAX-VOICES 0 DO
-        voices I CELLS + @
-        DUP ENV-DONE? IF UNLOOP EXIT THEN DROP
-    LOOP 0 ;
+PAL-ACOUSTIC PAL-ACTIVE!
+\ ... or ...
+PAL-INDUSTRIAL PAL-ACTIVE!
 ```
 
-### Timer ISR Sharing
-
-Speaker and mic both want the timer ISR.  Options:
-
-1. **Single ISR, two jobs:** The ISR pops speaker ring AND pushes mic
-   ring in one interrupt.  Works if both run at the same sample rate.
-2. **Separate timers:** If the hardware has a second timer (or if
-   capture and playback rates differ), use different IVT slots.
-3. **Phase 1 default:** Speaker-only.  Mic shares the same ISR when
-   full-duplex is needed.
+No other application code changes.
 
 ---
 
 ## Testing Strategy
 
-### Unit Tests (per module)
-
-Each module gets a `test_<module>.py` in `local_testing/` using the
-existing emulator test infrastructure (snapshot boot, Forth evaluation,
-memory readback).
+### Tier 7 — Synthesis Primitives
 
 | Module | Test Focus |
 |---|---|
-| osc.f | Waveform shape verification: sine zero-crossings, square duty cycle, saw linearity, wavetable interpolation accuracy |
-| noise.f | Statistical properties: white noise mean ≈ 0, pink spectral slope, no DC offset |
-| env.f | ADSR timing: attack/decay/release durations in frames, sustain level hold, gate on/off transitions, exponential curve shape |
-| lfo.f | Output range = center ± depth, frequency accuracy, key-sync reset |
-| fx.f | Delay: echo appears at correct offset.  Reverb: output longer than input.  Distortion: clipping at expected level.  EQ: frequency response spot-checks. Compressor: gain reduction above threshold |
-| mix.f | N-channel sum correctness, pan law spot-checks (center = equal L/R), mute silences channel, master gain scales output |
-| chain.f | Effects applied in order, bypass skips slot, clear removes all |
-| analysis.f | Known-frequency sine → correct pitch.  Known-tempo click track → correct BPM.  RMS of constant signal = expected value |
-| synth.f | Note-on produces output, note-off decays to silence, filter cutoff affects spectrum |
-| fm.f | Modulation index 0 = pure sine, increasing index adds sidebands |
-| pluck.f | Output decays over time, pitch matches requested frequency |
-| wav.f | Write → read round-trip: PCM data identical, header fields correct |
-| seq.f | Steps fire at correct frame positions, BPM change adjusts timing, swing offsets even steps |
-| midi.f | Encode → parse round-trip, running status, note↔Hz conversion accuracy |
-| speaker.f | Ring fill → ISR drain → DAC writes (verified via emulator device spy) |
-| mic.f | ADC reads → ring fill → user read-back |
-| param-map.f | Linear/log/exp mapping spot-checks, scale quantization |
-| data2tone.f | Output length = n × note_ms, pitch range within specified bounds |
-| earcon.f | Each earcon returns non-silent buffer of expected duration |
-| scene2audio.f | DOM with known structure produces audio with expected duration and pitch ordering |
+| modal.f | N partials produced in output, frequencies at correct ratios, higher partials decay faster, brightness scales high-partial energy, damping extends/shortens duration |
+| membrane.f | Frequency sweep measurable in first N ms, noise component in specified band, tone/noise blend correct at extremes |
+| resonator.f | Output has energy concentrated at pole frequencies, Q controls sharpness, continuous output is steady-state |
+| additive.f | Harmonic N is at N × fundamental, morph changes amplitude smoothly over specified time |
+| sustained.f | Brightness shifts filter spectrum, motion adds periodic spectral variation, density changes oscillator count, continuous output |
+| granular.f | Grain density sets events/sec, scatter randomizes positions, sparse = discrete events, dense = fused texture |
+
+### Tier 8 — Sound Sources
+
+| Module | Test Focus |
+|---|---|
+| acoustic.f | ACOU-BELL uses MODAL-TBL-BRONZE ratios, strike velocity scales amplitude, size parameter shifts fundamental, different materials produce measurably different spectra |
+| acoustic.f | ACOU-KICK has energy below 100 Hz; ACOU-SNARE has noise above 2 kHz; hat is noise-dominant |
+| natural.f | NAT-RAIN at intensity 1.0 is louder than 0.1; surface param shifts grain attack character; density increases grain/sec |
+| electronic.f | ELEC-SWEEP starts at specified freq, ends at specified freq; ELEC-CRUNCH has distortion artifacts |
+| industrial.f | INDUS-MOTOR fundamental = rpm/60; harmonic content matches motor-type |
+| cache.f | Prime fills all cells; lookup on exact pitch returns cached buffer; lookup between pitches returns resampled buffer; flush clears all cells; stats track hits/misses |
+
+### Tier 9 — Palette System
+
+| Test | Focus |
+|------|-------|
+| PAL-SET-STRIKE + PAL-STRIKE | Correct source invoked, velocity passed through |
+| PAL-ACTIVE! + PAL-ACTIVE@ | Global palette round-trip |
+| PAL-ACOUSTIC loaded | All 18 roles populated |
+| Palette swap | Same call produces different spectrum with different palette |
+
+### Tier 10 — Sonification Forms
+
+| Module | Test Focus |
+|---|---|
+| param-map.f | PMAP-LOG: doubling input does not double output; PMAP-PITCH: output is in Hz range; PMAP-SCALE: output is member of specified scale |
+| stream.f | Output length = n × speed-ms; pitch contour monotonically follows monotonic input |
+| trigger.f | N events produce N audible strikes; different types produce different spectra |
+| pulse.f | Higher rate = more strikes per second, measured by onset detector |
+| texture.f | High variance output is measurably noisier; low variance is smoother |
+| ensemble.f | N voices produce N distinguishable streams with different spectral centroids |
+| interval.f | a=b → single frequency; a=2b → octave relationship |
+| alert.f | Crossing threshold changes output; hysteresis prevents rapid toggling |
+| earcon.f | All semantic tokens produce non-silent output; palette swap changes spectrum, not duration |
+| scene.f | N layers mixed; mute silences one layer while others continue |
 
 ### Integration Tests
 
-| Test | What It Validates |
-|---|---|
-| Osc → envelope → speaker | Full playback pipeline: generation → shaping → I/O |
-| Synth → mixer → effects → speaker | Multi-voice with processing chain |
-| WAV read → analysis → data | Load file, extract pitch/tempo |
-| Sequencer → FM synth → speaker | Pattern-driven synthesis |
-| Data array → data2tone → speaker | Sonification end-to-end |
-| DOM → scene2audio → speaker | Render pipeline audio backend |
-
-### Spectral Verification
-
-For waveform and effects tests, compare output FFT magnitude spectrum
-against expected shape:
-
-- Pure sine → single peak at fundamental
-- Square wave → odd harmonics decaying as 1/n
-- Low-pass filter → attenuation above cutoff
-- Reverb → extended decay tail in time domain
-
-Use `math/fft.f` directly in test code for spectral checks.
-
-### Performance Benchmarks
-
-- Block processing throughput: frames/second for each module
-- ISR latency: cycles per interrupt (must be < timer period)
-- Full pipeline: osc + filter + env + mix + reverb + speaker per block
-- Tile engine utilization: tile ops per block vs. scalar fallback
+| Test | Validates |
+|------|-----------|
+| modal → ACOU-BELL → cache → PAL-ACOUSTIC → EAR-SUCCESS | Full source stack works end-to-end |
+| NAT-RAIN → PAL-NATURAL → STEX-UPDATE (variance) → output | Natural texture sonification |
+| data array → SSTREAM → PAL-ELECTRONIC → speaker | Electronic stream form |
+| 3-variate data → SENS → PAL-ACOUSTIC → mix → speaker | Ensemble, multi-voice |
+| threshold crossing → SALERT → PAL-INDUSTRIAL | Industrial alert escalation |
+| 3-layer scene (pulse + stream + trigger) → PAL-ACOUSTIC | Full dashboard composition |
+| PAL-ACOUSTIC → PAL-INDUSTRIAL swap → same earcon call | Palette swap transparency |

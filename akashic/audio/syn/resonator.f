@@ -1,0 +1,439 @@
+\ syn/resonator.f — Resonant filter bank synthesis engine
+\ Part of Akashic audio library for Megapad-64 / KDOS
+\
+\ Pushes white or pink noise through a bank of digital bandpass
+\ filters (resonators).  The filters color the noise continuously;
+\ the result is a steady, sustained sound whose spectral character
+\ is entirely determined by the filter center frequencies, Q values,
+\ and amplitudes.
+\
+\ Sound character by parameter region:
+\   Few wide-Q filters   → colored drone, wind-like
+\   Many narrow-Q filters → pitched tone cluster, vowel-like
+\   Pulsed excitation    → breath-driven instrument, flute-like
+\   Amplitude-modulated  → resonant string, bow-like artifacts
+\   Mixed colors + low Q → steam, bubbles, ambient texture
+\
+\ Each filter pole is a second-order IIR bandpass (direct-form II
+\ transposed).  Biquad coefficients are computed once at RESON-POLE!
+\ time; streaming state (s1, s2) persists across RESON-RENDER calls,
+\ ensuring phase continuity in extended playback.
+\
+\ Output:
+\   RESON-RENDER fills a caller-supplied PCM buffer.
+\   Call repeatedly in a render loop for continuous output.
+\
+\ Prefix: RESON-   (public API)
+\         _RS-     (internals)
+\
+\ Load with:   REQUIRE audio/syn/resonator.f
+
+REQUIRE fp16-ext.f
+REQUIRE trig.f
+REQUIRE audio/noise.f
+REQUIRE audio/pcm.f
+
+PROVIDED akashic-syn-resonator
+
+\ =====================================================================
+\  Descriptor layout  (8 cells = 64 bytes base)
+\ =====================================================================
+\
+\  +0   n-poles        Number of filter bands (integer, 1–16)
+\  +8   noise-color    0=white 1=pink 2=brown (integer)
+\  +16  excitation     0=continuous 1=pulsed (integer)
+\  +24  intensity      Overall excitation level 0.0–1.0 (FP16)
+\  +32  rate           Sample rate Hz (integer)
+\  +40  poles-addr     Pointer to separately allocated pole block
+\  +48  noise-eng      Pointer to persistent noise generator
+\  +56  pulse-ctr      Frame counter for pulsed mode (integer)
+\
+\ Per-pole block: n × 24 bytes (12 FP16 values, 8 bytes padding)
+\  +0   center-hz      Filter center frequency (FP16)
+\  +2   Q              Resonance/sharpness (FP16, typical 1–20)
+\  +4   amp            Pole amplitude 0.0–1.0 (FP16)
+\  +6   b0n            Computed biquad coeff b0 (normalized) (FP16)
+\  +8   neg-a1n        Computed biquad coeff -a1 (normalized) (FP16)
+\  +10  neg-a2n        Computed biquad coeff -a2 (normalized) (FP16)
+\  +12  s1             Biquad streaming state register 1 (FP16)
+\  +14  s2             Biquad streaming state register 2 (FP16)
+\  +16–23 (padding)
+
+64 CONSTANT RESON-DESC-SIZE
+24 CONSTANT _RS-POLE-STRIDE
+
+: RS.NPOLS   ( desc -- addr )  ;
+: RS.NCOL    ( desc -- addr )  8 + ;
+: RS.EXCITE  ( desc -- addr )  16 + ;
+: RS.INTENS  ( desc -- addr )  24 + ;
+: RS.RATE    ( desc -- addr )  32 + ;
+: RS.POLES   ( desc -- addr )  40 + ;
+: RS.NENG    ( desc -- addr )  48 + ;
+: RS.PCTR    ( desc -- addr )  56 + ;
+
+\ Per-pole field accessors ( pole-base -- addr )
+: RP.FCO     ( p -- addr )  ;
+: RP.Q       ( p -- addr )  2 + ;
+: RP.AMP     ( p -- addr )  4 + ;
+: RP.B0N     ( p -- addr )  6 + ;
+: RP.NA1N    ( p -- addr )  8 + ;
+: RP.NA2N    ( p -- addr )  10 + ;
+: RP.S1      ( p -- addr )  12 + ;
+: RP.S2      ( p -- addr )  14 + ;
+
+\ Base address of pole i  ( desc i -- pole-base )
+: _RS-POLE   ( desc i -- pole-base )
+    _RS-POLE-STRIDE * SWAP RS.POLES @ + ;
+
+\ =====================================================================
+\  FP16 constants
+\ =====================================================================
+
+\ π/2 in FP16 ≈ 1.5708 → 0x3E48
+0x3E48 CONSTANT _RS-HALFPI
+
+\ =====================================================================
+\  Scratch variables
+\ =====================================================================
+
+VARIABLE _RS-TMP
+VARIABLE _RS-RATE
+VARIABLE _RS-I
+VARIABLE _RS-X          \ current noise sample (FP16)
+VARIABLE _RS-ACC        \ accumulator per sample (FP16)
+VARIABLE _RS-Y          \ biquad output (FP16)
+VARIABLE _RS-NS1        \ new s1
+VARIABLE _RS-NS2        \ new s2
+VARIABLE _RS-PB         \ current pole base
+VARIABLE _RS-S1V
+VARIABLE _RS-S2V
+
+\ =====================================================================
+\  Internal: compute biquad coefficients for a bandpass at fc, Q
+\ =====================================================================
+\  Stores b0n, neg_a1n, neg_a2n into the pole struct.
+\  Classic RBJ Audio EQ bandpass (constant peak gain):
+\    α   = sin(ω) / (2Q)
+\    b0  = sin(ω) / 2
+\    b1  = 0
+\    b2  = -sin(ω) / 2  = -b0
+\    a0  = 1 + α
+\    a1  = -2·cos(ω)
+\    a2  = 1 - α
+\  Normalized: b0n = b0/a0,  a1n = a1/a0,  a2n = a2/a0
+
+VARIABLE _RS-CC-OMEGA
+VARIABLE _RS-CC-SIN
+VARIABLE _RS-CC-COS
+VARIABLE _RS-CC-ALPHA
+VARIABLE _RS-CC-B0
+VARIABLE _RS-CC-A0
+VARIABLE _RS-CC-A1
+VARIABLE _RS-CC-A2
+
+: _RS-BIQUAD-COEF  ( pole-base -- )
+    _RS-PB !
+
+    \ ω (radians) = 2π × fc / rate
+    _RS-PB @ RP.FCO W@         \ fc FP16
+    _RS-RATE @ INT>FP16 FP16-DIV  \ fc/rate (normalized 0..1)
+    TRIG-2PI FP16-MUL          \ ω in radians
+    _RS-CC-OMEGA !
+
+    \ sin(ω) via TRIG-SIN
+    _RS-CC-OMEGA @ TRIG-SIN  _RS-CC-SIN !
+
+    \ cos(ω) = sin(ω + π/2)
+    _RS-CC-OMEGA @ _RS-HALFPI FP16-ADD TRIG-SIN  _RS-CC-COS !
+
+    \ α = sin(ω) / (2Q)
+    _RS-CC-SIN @
+    _RS-PB @ RP.Q W@           \ Q FP16
+    2 INT>FP16 FP16-MUL FP16-DIV  _RS-CC-ALPHA !
+
+    \ b0 = sin(ω) / 2
+    _RS-CC-SIN @ FP16-POS-HALF FP16-MUL  _RS-CC-B0 !
+
+    \ a0 = 1 + α
+    FP16-POS-ONE _RS-CC-ALPHA @ FP16-ADD  _RS-CC-A0 !
+
+    \ a1 = -2·cos(ω)
+    FP16-POS-ZERO 2 INT>FP16 _RS-CC-COS @ FP16-MUL FP16-SUB
+    _RS-CC-A1 !
+
+    \ a2 = 1 - α
+    FP16-POS-ONE _RS-CC-ALPHA @ FP16-SUB  _RS-CC-A2 !
+
+    \ Store normalized coefficients
+    \ b0n = b0 / a0
+    _RS-CC-B0 @ _RS-CC-A0 @ FP16-DIV
+    _RS-PB @ RP.B0N W!
+
+    \ neg_a1n = -a1/a0 = -(a1/a0)
+    FP16-POS-ZERO _RS-CC-A1 @ _RS-CC-A0 @ FP16-DIV FP16-SUB
+    _RS-PB @ RP.NA1N W!
+
+    \ neg_a2n = -a2/a0
+    FP16-POS-ZERO _RS-CC-A2 @ _RS-CC-A0 @ FP16-DIV FP16-SUB
+    _RS-PB @ RP.NA2N W! ;
+
+\ =====================================================================
+\  RESON-CREATE — Allocate resonator descriptor
+\ =====================================================================
+\  ( n-poles rate -- desc )
+\  Poles initialized to silence; set with RESON-POLE!
+
+VARIABLE _RS-CR-N
+VARIABLE _RS-CR-R
+
+: RESON-CREATE  ( n-poles rate -- desc )
+    _RS-CR-R !  _RS-CR-N !
+
+    RESON-DESC-SIZE ALLOCATE
+    0<> ABORT" RESON-CREATE: desc alloc failed"
+    _RS-TMP !
+
+    _RS-CR-N @ _RS-TMP @ RS.NPOLS !
+    0           _RS-TMP @ RS.NCOL  !
+    0           _RS-TMP @ RS.EXCITE !
+    FP16-POS-ONE _RS-TMP @ RS.INTENS !
+    _RS-CR-R @ _RS-TMP @ RS.RATE  !
+    0           _RS-TMP @ RS.PCTR  !
+    _RS-CR-R @ _RS-RATE !
+
+    \ Allocate pole block (n × 24 bytes), zero-filled
+    _RS-CR-N @ _RS-POLE-STRIDE *
+    ALLOCATE 0<> ABORT" RESON-CREATE: pole alloc failed"
+    DUP _RS-TMP @ RS.POLES !
+    _RS-CR-N @ _RS-POLE-STRIDE * 0 FILL
+
+    \ Create default white noise generator
+    NOISE-WHITE NOISE-CREATE
+    _RS-TMP @ RS.NENG !
+
+    _RS-TMP @ ;
+
+\ =====================================================================
+\  RESON-FREE
+\ =====================================================================
+
+: RESON-FREE  ( desc -- )
+    DUP RS.NENG @ NOISE-FREE
+    DUP RS.POLES @ FREE
+    FREE ;
+
+\ =====================================================================
+\  RESON-POLE! — Set one filter pole
+\ =====================================================================
+\  ( center-hz Q amp i desc -- )
+\  center-hz and Q are FP16.  amp is FP16 0.0–1.0.  i is 0-based integer.
+
+VARIABLE _RS-PO-D
+
+: RESON-POLE!  ( center-hz Q amp i desc -- )
+    _RS-PO-D !
+    _RS-PO-D @ RS.RATE @ _RS-RATE !
+
+    \ Clamp index to [0, n-poles-1], then get pole base
+    _RS-PO-D @ RS.NPOLS @ 1 - MIN 0 MAX   \ ( center Q amp clamped-i )
+    _RS-PO-D @ SWAP _RS-POLE  _RS-PB !    \ ( center Q amp )
+
+    \ Write params
+    _RS-PB @ RP.AMP W!      \ ( center Q )
+    _RS-PB @ RP.Q   W!      \ ( center )
+    _RS-PB @ RP.FCO W!      \ ( )
+
+    \ Clear streaming state
+    FP16-POS-ZERO _RS-PB @ RP.S1 W!
+    FP16-POS-ZERO _RS-PB @ RP.S2 W!
+
+    \ Compute biquad coefficients
+    _RS-PB @ _RS-BIQUAD-COEF ;
+
+\ =====================================================================
+\  RESON-NOISE! — Set noise color and intensity
+\ =====================================================================
+\  ( color intensity desc -- )
+\  color: 0=white, 1=pink, 2=brown
+
+VARIABLE _RS-NO-D
+
+: RESON-NOISE!  ( color intensity desc -- )
+    _RS-NO-D !
+    _RS-NO-D @ RS.INTENS !
+    \ If color changed, free old gen and create new
+    DUP _RS-NO-D @ RS.NCOL @ <> IF
+        _RS-NO-D @ RS.NENG @ NOISE-FREE
+        DUP NOISE-CREATE _RS-NO-D @ RS.NENG !
+        _RS-NO-D @ RS.NCOL !
+    ELSE DROP THEN ;
+
+\ =====================================================================
+\  RESON-EXCITE! — Set excitation mode
+\ =====================================================================
+\  ( mode desc -- )   0=continuous, 1=pulsed
+
+: RESON-EXCITE!  ( mode desc -- )  RS.EXCITE ! ;
+
+\ =====================================================================
+\  RESON-BLOW! — Live intensity modulation
+\ =====================================================================
+
+: RESON-BLOW!  ( intensity desc -- )  RS.INTENS ! ;
+
+\ =====================================================================
+\  Internal: pulsed excitation amplitude
+\ =====================================================================
+\  Returns FP16 0.0→1.0 modulation factor for pulsed mode.
+\  Uses a simple 40 Hz pulse wave (low duty, high peak) to simulate
+\  breath turbulence.  Counter in RS.PCTR.
+
+VARIABLE _RS-PE-PERIOD
+VARIABLE _RS-PE-CTR
+VARIABLE _RS-PA-D
+
+: _RS-PULSE-ENV  ( desc -- fp16 )
+    _RS-PA-D !
+    _RS-PA-D @ RS.RATE @  40 /  _RS-PE-PERIOD !
+
+    _RS-PA-D @ RS.PCTR @
+    DUP _RS-PE-PERIOD @ >= IF
+        DROP 0
+        0 _RS-PA-D @ RS.PCTR !
+    THEN
+    _RS-PA-D @ RS.PCTR @
+    1 + _RS-PA-D @ RS.PCTR !   \ advance counter
+
+    _RS-PE-PERIOD @ 4 / < IF FP16-POS-ONE
+    ELSE 0x2E66 THEN ;
+
+\ =====================================================================
+\  RESON-RENDER — Fill PCM buffer with resonator output
+\ =====================================================================
+\  ( buf desc -- )
+\  Generates noise, routes through all active (non-zero) filter poles,
+\  sums contributions scaled by pole amp and overall intensity.
+
+VARIABLE _RS-RN-D
+VARIABLE _RS-RN-BUF
+VARIABLE _RS-RN-N
+VARIABLE _RS-RN-DPTR
+VARIABLE _RS-RN-LEN
+VARIABLE _RS-RN-INTENS
+VARIABLE _RS-RN-PULSED
+VARIABLE _RS-RN-PB
+VARIABLE _RS-RN-PENV
+
+: RESON-RENDER  ( buf desc -- )
+    _RS-RN-D !  _RS-RN-BUF !
+
+    _RS-RN-D @ RS.RATE  @ _RS-RATE !
+    _RS-RN-D @ RS.NPOLS @ _RS-RN-N !
+    _RS-RN-D @ RS.INTENS @ _RS-RN-INTENS !
+    _RS-RN-D @ RS.EXCITE @ _RS-RN-PULSED !
+
+    _RS-RN-BUF @ PCM-DATA _RS-RN-DPTR !
+    _RS-RN-BUF @ PCM-LEN  _RS-RN-LEN  !
+
+    _RS-RN-LEN @ 0 ?DO
+        \ === Noise sample scaled by intensity ===
+        _RS-RN-D @ RS.NENG @ NOISE-SAMPLE
+        _RS-RN-INTENS @ FP16-MUL
+
+        \ If pulsed, modulate by breath envelope
+        _RS-RN-PULSED @ 0<> IF
+            _RS-RN-D @ _RS-PULSE-ENV FP16-MUL
+        THEN
+        _RS-X !
+
+        \ === Sum through filter bank ===
+        FP16-POS-ZERO _RS-ACC !
+
+        _RS-RN-N @ 0 ?DO
+            _RS-RN-D @ I _RS-POLE  _RS-RN-PB !
+
+            \ Skip silent poles (amp = 0)
+            _RS-RN-PB @ RP.AMP W@  FP16-POS-ZERO FP16-GT IF
+
+                \ Load biquad state
+                _RS-RN-PB @ RP.S1 W@  _RS-S1V !
+                _RS-RN-PB @ RP.S2 W@  _RS-S2V !
+
+                \ y = b0n * x + s1
+                _RS-RN-PB @ RP.B0N W@  _RS-X @ FP16-MUL
+                _RS-S1V @ FP16-ADD  _RS-Y !
+
+                \ new_s1 = neg_a1n * y + s2 + neg_b0n * x
+                \ (neg_b0n * x = -(b0n * x) since b2 = -b0 for bandpass)
+                _RS-RN-PB @ RP.NA1N W@  _RS-Y @ FP16-MUL
+                _RS-S2V @ FP16-ADD
+                FP16-POS-ZERO
+                _RS-RN-PB @ RP.B0N W@  _RS-X @ FP16-MUL
+                FP16-SUB FP16-ADD
+                _RS-NS1 !
+
+                \ new_s2 = neg_a2n * y
+                _RS-RN-PB @ RP.NA2N W@  _RS-Y @ FP16-MUL
+                _RS-NS2 !
+
+                \ Save state
+                _RS-NS1 @  _RS-RN-PB @ RP.S1 W!
+                _RS-NS2 @  _RS-RN-PB @ RP.S2 W!
+
+                \ Accumulate: y * amp
+                _RS-Y @ _RS-RN-PB @ RP.AMP W@ FP16-MUL
+                _RS-ACC @ FP16-ADD  _RS-ACC !
+
+            THEN
+        LOOP
+
+        \ Write sample
+        _RS-ACC @  _RS-RN-DPTR @ I 2* + W!
+
+    LOOP ;
+
+\ =====================================================================
+\  Convenience: set all poles to equal-tempered harmonics
+\ =====================================================================
+\  RESON-HARM-FILL  ( fundamental-hz Q n-poles desc -- )
+\  Fills poles 0..n-1 with harmonics f, 2f, 3f ... at equal amplitude.
+
+VARIABLE _RS-HF-D
+VARIABLE _RS-HF-N
+VARIABLE _RS-HF-FUND
+VARIABLE _RS-HF-Q
+VARIABLE _RS-HF-AQ
+
+: RESON-HARM-FILL  ( fund-hz Q n desc -- )
+    _RS-HF-D !  _RS-HF-N !  _RS-HF-Q !  _RS-HF-FUND !
+
+    \ amp = 1 / (n_poles^0.5) — equal loudness across bank
+    \ Use 1/n as simple approximation (avoids sqrt)
+    FP16-POS-ONE _RS-HF-N @ INT>FP16 FP16-DIV  _RS-HF-AQ !
+
+    _RS-HF-N @ 0 ?DO
+        I 1 + INT>FP16  _RS-HF-FUND @ FP16-MUL  ( (i+1)*fund )
+        _RS-HF-Q @      ( center Q )
+        _RS-HF-AQ @     ( center Q amp )
+        I  _RS-HF-D @  RESON-POLE!
+    LOOP ;
+
+\ =====================================================================
+\  Convenience: set formant-like poles (vowel / voice approximation)
+\ =====================================================================
+\  RESON-VOWEL-FILL  ( desc -- )
+\  Loads 5 formant bands approximating an open vowel 'a'.
+
+VARIABLE _RS-VF-D
+
+: _RS-VOWEL-POLE  ( center-fp16 Q-fp16 amp-fp16 i desc -- )
+    RESON-POLE! ;
+
+: RESON-VOWEL-FILL  ( desc -- )
+    _RS-VF-D !
+    \ F0–F4 of open 'a' vowel in Hz (approximate), Q≈10, equal amp
+    800  INT>FP16  10 INT>FP16  0x3599   0  _RS-VF-D @  RESON-POLE!
+    1200 INT>FP16  8  INT>FP16  0x3599   1  _RS-VF-D @  RESON-POLE!
+    2500 INT>FP16  12 INT>FP16  0x3400   2  _RS-VF-D @  RESON-POLE!
+    3700 INT>FP16  10 INT>FP16  0x3200   3  _RS-VF-D @  RESON-POLE!
+    5000 INT>FP16  6  INT>FP16  0x3000   4  _RS-VF-D @  RESON-POLE! ;

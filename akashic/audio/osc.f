@@ -159,7 +159,7 @@ VARIABLE _OSC-GEN-DU
     SWAP _OSC-GEN-PH !
     CASE
         0 OF  \ sine: sin(phase × 2π)
-            _OSC-GEN-PH @ TRIG-2PI FP16-MUL TRIG-SIN
+            _OSC-GEN-PH @ WT-SIN-TABLE WT-LOOKUP
         ENDOF
         1 OF  \ square: phase < 0.5 → +1, else −1
             _OSC-GEN-PH @ FP16-POS-HALF FP16-LT IF
