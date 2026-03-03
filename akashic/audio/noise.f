@@ -235,8 +235,9 @@ VARIABLE _NZ-PINK-BIT
 \  Internal: brown noise — one sample (leaky integrator)
 \ =====================================================================
 \  accum = accum × 0.98 + white × 0.02
-\  We compute 0.98 and 0.02 at runtime via INT>FP16 division to
-\  guarantee accuracy.  Could precompute but keeping it simple.
+
+0x3BD7 CONSTANT _NZ-BROWN-DECAY   \ FP16 0.98  (98/100)
+0x251F CONSTANT _NZ-BROWN-INPUT   \ FP16 0.02  (2/100)
 
 VARIABLE _NZ-BROWN-W
 
@@ -251,14 +252,9 @@ VARIABLE _NZ-BROWN-W
     _NZ-TMP @ N.ACCUM @
 
     \ accum = accum × 0.98 + white × 0.02
-    \ 0.98 ≈ 49/50 in integer: we'll do FP16 mul
-    \ Use precomputed: 0.98 ≈ FP16 0x3EF3, 0.02 ≈ FP16 0x2148
-    \ Actually let's compute: 98 INT>FP16 / 100 INT>FP16
-    98 INT>FP16 100 INT>FP16 FP16-DIV  ( accum 0.98_fp16 )
-    FP16-MUL                           ( accum×0.98 )
+    _NZ-BROWN-DECAY FP16-MUL           ( accum×0.98 )
     _NZ-BROWN-W @
-    2 INT>FP16 100 INT>FP16 FP16-DIV   ( ax0.98 white 0.02_fp16 )
-    FP16-MUL                           ( ax0.98 white×0.02 )
+    _NZ-BROWN-INPUT FP16-MUL           ( ax0.98 white×0.02 )
     FP16-ADD                           ( new_accum )
 
     \ Clamp to [-1.0, +1.0]

@@ -15,9 +15,12 @@
 \   Mixed colors + low Q → steam, bubbles, ambient texture
 \
 \ Each filter pole is a second-order IIR bandpass (direct-form II
-\ transposed).  Biquad coefficients are computed once at RESON-POLE!
-\ time; streaming state (s1, s2) persists across RESON-RENDER calls,
-\ ensuring phase continuity in extended playback.
+\ transposed).  Biquad coefficients are computed in FP32 for
+\ precision, then converted to Q16.16 fixed-point for a fast
+\ integer inner loop (FX* = 3 primitives vs FP32-MUL ≈ 100).
+\ Audio I/O (noise samples, PCM output) stays FP16.  Coefficients
+\ are computed once at RESON-POLE! time; Q16.16 state (s1, s2)
+\ persists across RESON-RENDER calls for phase continuity.
 \
 \ Output:
 \   RESON-RENDER fills a caller-supplied PCM buffer.
@@ -29,7 +32,9 @@
 \ Load with:   REQUIRE audio/syn/resonator.f
 
 REQUIRE fp16-ext.f
-REQUIRE trig.f
+REQUIRE fp32-trig.f
+REQUIRE fixed.f
+REQUIRE fp-convert.f
 REQUIRE audio/noise.f
 REQUIRE audio/pcm.f
 
@@ -48,19 +53,20 @@ PROVIDED akashic-syn-resonator
 \  +48  noise-eng      Pointer to persistent noise generator
 \  +56  pulse-ctr      Frame counter for pulsed mode (integer)
 \
-\ Per-pole block: n × 24 bytes (12 FP16 values, 8 bytes padding)
-\  +0   center-hz      Filter center frequency (FP16)
-\  +2   Q              Resonance/sharpness (FP16, typical 1–20)
-\  +4   amp            Pole amplitude 0.0–1.0 (FP16)
-\  +6   b0n            Computed biquad coeff b0 (normalized) (FP16)
-\  +8   neg-a1n        Computed biquad coeff -a1 (normalized) (FP16)
-\  +10  neg-a2n        Computed biquad coeff -a2 (normalized) (FP16)
-\  +12  s1             Biquad streaming state register 1 (FP16)
-\  +14  s2             Biquad streaming state register 2 (FP16)
-\  +16–23 (padding)
+\ Per-pole block: n × 56 bytes  (Q16.16 coefficients + state)
+\  +0   center-hz      Filter center frequency (FP16, W@/W!)
+\  +2   Q              Resonance/sharpness (FP16, W@/W!, safe up to ~80)
+\  +4   amp            Pole amplitude 0.0–1.0 (FP16, W@/W!)
+\  +6   (padding)      2 bytes
+\  +8   b0n            Biquad coeff b0 normalized (Q16.16, @/!)
+\  +16  neg-a1n        Biquad coeff -a1 normalized (Q16.16, @/!)
+\  +24  neg-a2n        Biquad coeff -a2 normalized (Q16.16, @/!)
+\  +32  s1             Biquad streaming state register 1 (Q16.16, @/!)
+\  +40  s2             Biquad streaming state register 2 (Q16.16, @/!)
+\  +48  amp-fx         Pole amplitude in Q16.16 (@/!)
 
 64 CONSTANT RESON-DESC-SIZE
-24 CONSTANT _RS-POLE-STRIDE
+56 CONSTANT _RS-POLE-STRIDE
 
 : RS.NPOLS   ( desc -- addr )  ;
 : RS.NCOL    ( desc -- addr )  8 + ;
@@ -75,22 +81,16 @@ PROVIDED akashic-syn-resonator
 : RP.FCO     ( p -- addr )  ;
 : RP.Q       ( p -- addr )  2 + ;
 : RP.AMP     ( p -- addr )  4 + ;
-: RP.B0N     ( p -- addr )  6 + ;
-: RP.NA1N    ( p -- addr )  8 + ;
-: RP.NA2N    ( p -- addr )  10 + ;
-: RP.S1      ( p -- addr )  12 + ;
-: RP.S2      ( p -- addr )  14 + ;
+: RP.B0N     ( p -- addr )  8 + ;
+: RP.NA1N    ( p -- addr )  16 + ;
+: RP.NA2N    ( p -- addr )  24 + ;
+: RP.S1      ( p -- addr )  32 + ;
+: RP.S2      ( p -- addr )  40 + ;
+: RP.AMPFX   ( p -- addr )  48 + ;
 
 \ Base address of pole i  ( desc i -- pole-base )
 : _RS-POLE   ( desc i -- pole-base )
     _RS-POLE-STRIDE * SWAP RS.POLES @ + ;
-
-\ =====================================================================
-\  FP16 constants
-\ =====================================================================
-
-\ π/2 in FP16 ≈ 1.5708 → 0x3E48
-0x3E48 CONSTANT _RS-HALFPI
 
 \ =====================================================================
 \  Scratch variables
@@ -99,14 +99,12 @@ PROVIDED akashic-syn-resonator
 VARIABLE _RS-TMP
 VARIABLE _RS-RATE
 VARIABLE _RS-I
-VARIABLE _RS-X          \ current noise sample (FP16)
-VARIABLE _RS-ACC        \ accumulator per sample (FP16)
-VARIABLE _RS-Y          \ biquad output (FP16)
-VARIABLE _RS-NS1        \ new s1
-VARIABLE _RS-NS2        \ new s2
+VARIABLE _RS-X          \ current noise sample (Q16.16 in render loop)
+VARIABLE _RS-ACC        \ accumulator per sample (Q16.16)
+VARIABLE _RS-Y          \ biquad output (Q16.16)
+VARIABLE _RS-NS1        \ new s1 (Q16.16)
+VARIABLE _RS-NS2        \ new s2 (Q16.16)
 VARIABLE _RS-PB         \ current pole base
-VARIABLE _RS-S1V
-VARIABLE _RS-S2V
 
 \ =====================================================================
 \  Internal: compute biquad coefficients for a bandpass at fc, Q
@@ -134,48 +132,47 @@ VARIABLE _RS-CC-A2
 : _RS-BIQUAD-COEF  ( pole-base -- )
     _RS-PB !
 
-    \ ω (radians) = 2π × fc / rate
-    _RS-PB @ RP.FCO W@         \ fc FP16
-    _RS-RATE @ INT>FP16 FP16-DIV  \ fc/rate (normalized 0..1)
-    TRIG-2PI FP16-MUL          \ ω in radians
+    \ ω (radians) = 2π × fc / rate   — all FP32 for precision
+    _RS-PB @ RP.FCO W@  FP16>FP32    \ fc as FP32
+    _RS-RATE @ INT>FP32 FP32-DIV     \ fc/rate
+    F32T-2PI FP32-MUL                \ ω in radians
     _RS-CC-OMEGA !
 
-    \ sin(ω) via TRIG-SIN
-    _RS-CC-OMEGA @ TRIG-SIN  _RS-CC-SIN !
-
-    \ cos(ω) = sin(ω + π/2)
-    _RS-CC-OMEGA @ _RS-HALFPI FP16-ADD TRIG-SIN  _RS-CC-COS !
+    \ sin(ω) and cos(ω) via FP32 trig
+    _RS-CC-OMEGA @ F32T-SINCOS       \ ( sin cos )
+    _RS-CC-COS !  _RS-CC-SIN !
 
     \ α = sin(ω) / (2Q)
     _RS-CC-SIN @
-    _RS-PB @ RP.Q W@           \ Q FP16
-    2 INT>FP16 FP16-MUL FP16-DIV  _RS-CC-ALPHA !
+    _RS-PB @ RP.Q W@  FP16>FP32     \ Q as FP32
+    FP32-TWO FP32-MUL FP32-DIV      \ sin/(2Q)
+    _RS-CC-ALPHA !
 
     \ b0 = sin(ω) / 2
-    _RS-CC-SIN @ FP16-POS-HALF FP16-MUL  _RS-CC-B0 !
+    _RS-CC-SIN @ FP32-HALF FP32-MUL  _RS-CC-B0 !
 
     \ a0 = 1 + α
-    FP16-POS-ONE _RS-CC-ALPHA @ FP16-ADD  _RS-CC-A0 !
+    FP32-ONE _RS-CC-ALPHA @ FP32-ADD  _RS-CC-A0 !
 
     \ a1 = -2·cos(ω)
-    FP16-POS-ZERO 2 INT>FP16 _RS-CC-COS @ FP16-MUL FP16-SUB
+    FP32-ZERO FP32-TWO _RS-CC-COS @ FP32-MUL FP32-SUB
     _RS-CC-A1 !
 
     \ a2 = 1 - α
-    FP16-POS-ONE _RS-CC-ALPHA @ FP16-SUB  _RS-CC-A2 !
+    FP32-ONE _RS-CC-ALPHA @ FP32-SUB  _RS-CC-A2 !
 
-    \ Store normalized coefficients
+    \ Compute FP32 coefficients, convert to Q16.16 via FP32>FX, store
     \ b0n = b0 / a0
-    _RS-CC-B0 @ _RS-CC-A0 @ FP16-DIV
-    _RS-PB @ RP.B0N W!
+    _RS-CC-B0 @ _RS-CC-A0 @ FP32-DIV
+    FP32>FX _RS-PB @ RP.B0N !
 
-    \ neg_a1n = -a1/a0 = -(a1/a0)
-    FP16-POS-ZERO _RS-CC-A1 @ _RS-CC-A0 @ FP16-DIV FP16-SUB
-    _RS-PB @ RP.NA1N W!
+    \ neg_a1n = -(a1/a0)
+    FP32-ZERO _RS-CC-A1 @ _RS-CC-A0 @ FP32-DIV FP32-SUB
+    FP32>FX _RS-PB @ RP.NA1N !
 
-    \ neg_a2n = -a2/a0
-    FP16-POS-ZERO _RS-CC-A2 @ _RS-CC-A0 @ FP16-DIV FP16-SUB
-    _RS-PB @ RP.NA2N W! ;
+    \ neg_a2n = -(a2/a0)
+    FP32-ZERO _RS-CC-A2 @ _RS-CC-A0 @ FP32-DIV FP32-SUB
+    FP32>FX _RS-PB @ RP.NA2N ! ;
 
 \ =====================================================================
 \  RESON-CREATE — Allocate resonator descriptor
@@ -243,11 +240,14 @@ VARIABLE _RS-PO-D
     _RS-PB @ RP.Q   W!      \ ( center )
     _RS-PB @ RP.FCO W!      \ ( )
 
-    \ Clear streaming state
-    FP16-POS-ZERO _RS-PB @ RP.S1 W!
-    FP16-POS-ZERO _RS-PB @ RP.S2 W!
+    \ Convert amplitude to Q16.16 for inner loop
+    _RS-PB @ RP.AMP W@ FP16>FX  _RS-PB @ RP.AMPFX !
 
-    \ Compute biquad coefficients
+    \ Clear streaming state (Q16.16 zeros)
+    0 _RS-PB @ RP.S1 !
+    0 _RS-PB @ RP.S2 !
+
+    \ Compute biquad coefficients (FP32 then convert to Q16.16)
     _RS-PB @ _RS-BIQUAD-COEF ;
 
 \ =====================================================================
@@ -336,7 +336,7 @@ VARIABLE _RS-RN-PENV
     _RS-RN-BUF @ PCM-LEN  _RS-RN-LEN  !
 
     _RS-RN-LEN @ 0 ?DO
-        \ === Noise sample scaled by intensity ===
+        \ === Noise sample scaled by intensity (FP16) ===
         _RS-RN-D @ RS.NENG @ NOISE-SAMPLE
         _RS-RN-INTENS @ FP16-MUL
 
@@ -344,51 +344,46 @@ VARIABLE _RS-RN-PENV
         _RS-RN-PULSED @ 0<> IF
             _RS-RN-D @ _RS-PULSE-ENV FP16-MUL
         THEN
-        _RS-X !
 
-        \ === Sum through filter bank ===
-        FP16-POS-ZERO _RS-ACC !
+        \ Convert noise sample to Q16.16 for biquad processing
+        FP16>FX _RS-X !
+
+        \ === Sum through filter bank (Q16.16 accumulator) ===
+        0 _RS-ACC !
 
         _RS-RN-N @ 0 ?DO
             _RS-RN-D @ I _RS-POLE  _RS-RN-PB !
 
-            \ Skip silent poles (amp = 0)
-            _RS-RN-PB @ RP.AMP W@  FP16-POS-ZERO FP16-GT IF
+            \ Skip silent poles (amp_fx = 0)
+            _RS-RN-PB @ RP.AMPFX @ 0<> IF
 
-                \ Load biquad state
-                _RS-RN-PB @ RP.S1 W@  _RS-S1V !
-                _RS-RN-PB @ RP.S2 W@  _RS-S2V !
+                \ Precompute b0n * x (reused in y and ns1)
+                _RS-RN-PB @ RP.B0N @  _RS-X @  FX*  _RS-TMP !
 
-                \ y = b0n * x + s1
-                _RS-RN-PB @ RP.B0N W@  _RS-X @ FP16-MUL
-                _RS-S1V @ FP16-ADD  _RS-Y !
+                \ y = b0n * x + s1   (all Q16.16)
+                _RS-TMP @  _RS-RN-PB @ RP.S1 @  +  _RS-Y !
 
-                \ new_s1 = neg_a1n * y + s2 + neg_b0n * x
-                \ (neg_b0n * x = -(b0n * x) since b2 = -b0 for bandpass)
-                _RS-RN-PB @ RP.NA1N W@  _RS-Y @ FP16-MUL
-                _RS-S2V @ FP16-ADD
-                FP16-POS-ZERO
-                _RS-RN-PB @ RP.B0N W@  _RS-X @ FP16-MUL
-                FP16-SUB FP16-ADD
-                _RS-NS1 !
+                \ ns1 = na1n * y + s2 - b0n * x
+                _RS-RN-PB @ RP.NA1N @  _RS-Y @  FX*
+                _RS-RN-PB @ RP.S2 @  +
+                _RS-TMP @  -  _RS-NS1 !
 
-                \ new_s2 = neg_a2n * y
-                _RS-RN-PB @ RP.NA2N W@  _RS-Y @ FP16-MUL
-                _RS-NS2 !
+                \ ns2 = na2n * y
+                _RS-RN-PB @ RP.NA2N @  _RS-Y @  FX*  _RS-NS2 !
 
-                \ Save state
-                _RS-NS1 @  _RS-RN-PB @ RP.S1 W!
-                _RS-NS2 @  _RS-RN-PB @ RP.S2 W!
+                \ Save state (Q16.16)
+                _RS-NS1 @  _RS-RN-PB @ RP.S1 !
+                _RS-NS2 @  _RS-RN-PB @ RP.S2 !
 
-                \ Accumulate: y * amp
-                _RS-Y @ _RS-RN-PB @ RP.AMP W@ FP16-MUL
-                _RS-ACC @ FP16-ADD  _RS-ACC !
+                \ Accumulate: y * amp_fx (Q16.16)
+                _RS-Y @  _RS-RN-PB @ RP.AMPFX @  FX*
+                _RS-ACC @  +  _RS-ACC !
 
             THEN
         LOOP
 
-        \ Write sample
-        _RS-ACC @  _RS-RN-DPTR @ I 2* + W!
+        \ Convert Q16.16 accumulator to FP16 for PCM sample
+        _RS-ACC @ FX>FP16  _RS-RN-DPTR @ I 2* + W!
 
     LOOP ;
 

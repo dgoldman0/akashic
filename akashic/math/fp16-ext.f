@@ -101,8 +101,8 @@ PROVIDED akashic-fp16-ext
 
 : FP16-CLAMP  ( x lo hi -- clamped )
     ROT                                ( lo hi x )
-    OVER FP16-MIN                      ( lo hi min[x,hi] )
-    ROT FP16-MAX ;                     ( max[min[x,hi], lo] )
+    FP16-MIN                           ( lo min[hi,x] )
+    FP16-MAX ;                         ( max[lo, min[hi,x]] )
 
 \ =====================================================================
 \  FP16-RECIP — reciprocal via Newton-Raphson
