@@ -357,8 +357,8 @@ VARIABLE _SP-GAP       \ gap between bars (pixels)
         DUP 0 > IF
             \ Bar X position
             _SP-PX @  I _SP-BARW @ _SP-GAP @ + * +
-            \ Bar Y = bottom - h
-            _SP-PY @ _SP-PH @ + OVER -
+            \ Bar Y = bottom - h  (2 PICK reaches h past x and bottom)
+            _SP-PY @ _SP-PH @ + 2 PICK -
             ( h x y )
             >R >R                      ( h ) ( R: y x )
             _SP-SURF @ R> R>

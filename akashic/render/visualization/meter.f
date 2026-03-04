@@ -222,7 +222,7 @@ VARIABLE _MT-INNER-H
     DUP 0 > IF
         _MT-SURF @
         _MT-INNER-X @ _MT-INNER-Y @
-        ROT _MT-INNER-H @
+        3 ROLL _MT-INNER-H @
         R> DRAW-RECT
     ELSE
         DROP R> DROP
@@ -240,7 +240,7 @@ VARIABLE _MT-INNER-H
     DUP 0 > IF
         _MT-SURF @
         _MT-INNER-X @
-        _MT-INNER-Y @ _MT-INNER-H @ + OVER -   ( surf x y )
+        _MT-INNER-Y @ _MT-INNER-H @ + 3 PICK -   ( surf x y )
         _MT-INNER-W @                            ( surf x y w )
         4 ROLL                                   ( surf x y w h )
         R> DRAW-RECT
