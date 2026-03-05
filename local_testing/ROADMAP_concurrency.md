@@ -674,12 +674,16 @@ Automatically divides work across available cores.
 
 | Word            | Signature                           | Behavior                                    |
 |-----------------|-------------------------------------|---------------------------------------------|
+| `PAR-USE-FULL`  | `( -- )`                            | Use full cores only (default, safe)         |
+| `PAR-USE-ALL`   | `( -- )`                            | Use all cores incl. micro-cores             |
+| `PAR-CORES`     | `( -- n )`                          | Query active core count                     |
 | `PAR-DO`        | `( xt1 xt2 -- )`                   | Run two XTs in parallel, wait for both      |
 | `PAR-MAP`       | `( xt addr count -- )`             | Apply xt to each element across cores       |
 | `PAR-REDUCE`    | `( xt identity addr count -- val)` | Parallel reduction (fold)                   |
 | `PAR-FOR`       | `( xt lo hi -- )`                  | Parallel FOR loop (range divided by cores)  |
 | `PAR-SCATTER`   | `( src-addr chunk count -- )`      | Distribute data chunks to core arenas       |
 | `PAR-GATHER`    | `( dest-addr count -- )`           | Collect results from core arenas            |
+| `PAR-INFO`      | `( -- )`                            | Debug display (shows core types)            |
 
 **Usage example:**
 
@@ -693,13 +697,18 @@ Automatically divides work across available cores.
 
 **Implementation notes:**
 
-- `PAR-MAP` divides the array into `NCORES` chunks, uses `SPAWN-ON`
-  to dispatch each chunk to a core, then `BARRIER`.
+- Core-type aware: defaults to `N-FULL` (full cores only); `PAR-USE-ALL`
+  opts in to micro-cores for scalar-only workloads.
+- `PAR-MAP` divides the array into `PAR-CORES` chunks, dispatches
+  each chunk to a core via `CORE-RUN`, then `BARRIER`.
 - `PAR-REDUCE` does per-core local reductions in parallel, then a
   final sequential reduction of per-core results on core 0.
-- Uses per-core arenas for intermediate storage — no heap contention.
+- Uses static per-core parameter tables — no heap contention.
+- Workers avoid return-stack values across `DO..LOOP` (re-read from
+  per-core tables via `COREID` instead).
+- All loops that may have zero iterations use `?DO` (not `DO`).
 
-**Status:** ☐ Not started
+**Status:** ✅ Done — `akashic/concurrency/par.f` + `par.md` + `test_par.py` (38 tests)
 
 ---
 
@@ -853,7 +862,7 @@ Priority order, highest-impact first:
 | 2  | channel.f    | 2     | Unlocks CSP; makes web server concurrent trivially | ✅     |
 | 3  | future.f     | 3     | Most ergonomic async API (ASYNC/AWAIT)             | ✅     |
 | 4  | semaphore.f  | 1     | Rate-limiting, resource counting                   | ✅     |
-| 5  | par.f        | 3     | Parallel map/reduce for math workloads             | ☐      |
+| 5  | par.f        | 3     | Parallel map/reduce for math workloads             | ✅     |
 | 6  | scope.f      | 4     | Structured concurrency prevents leaks              | ☐      |
 | 7  | cvar.f       | 5     | Atomic variables with change notification          | ☐      |
 | 8  | rwlock.f     | 1     | Read-heavy shared structures                       | ✅     |
