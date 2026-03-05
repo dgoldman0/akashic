@@ -756,7 +756,7 @@ parent-waits-for-children semantics.  Prevents orphaned tasks.
 ;
 ```
 
-**Status:** ☐ Not started
+**Status:** ✅ Done — `akashic/concurrency/scope.f` + `scope.md` + `test_scope.py` (42 tests)
 
 ---
 
@@ -863,7 +863,7 @@ Priority order, highest-impact first:
 | 3  | future.f     | 3     | Most ergonomic async API (ASYNC/AWAIT)             | ✅     |
 | 4  | semaphore.f  | 1     | Rate-limiting, resource counting                   | ✅     |
 | 5  | par.f        | 3     | Parallel map/reduce for math workloads             | ✅     |
-| 6  | scope.f      | 4     | Structured concurrency prevents leaks              | ☐      |
+| 6  | scope.f      | 4     | Structured concurrency prevents leaks              | ✅     |
 | 7  | cvar.f       | 5     | Atomic variables with change notification          | ☐      |
 | 8  | rwlock.f     | 1     | Read-heavy shared structures                       | ✅     |
 | 9  | mailbox.f    | 2     | Actor messaging — deferred (channels subsume)      | ⏭     |
