@@ -600,6 +600,7 @@ def main():
         '0 TESTVAR !',          # reset loaded TESTVAR to 0
         'TEST-SET',             # call the loaded TEST-SET (sets TESTVAR to 42)
         'TEST-GET . CR',        # call loaded TEST-GET, should print 42
+        'TEST-PRINT',           # call loaded TEST-PRINT, should print 42 (import test)
     ]
     load_payload = "\n".join(load_lines) + "\n"
     steps = feed_and_run(sys_obj, load_payload, max_steps=50_000_000)
@@ -964,11 +965,142 @@ def main():
 
     total_passed += p4_passed
     total_failed += p4_failed
+
+    # ── Phase 5: Diagnostics & Hardening ──────────────────────────────
+    print()
+    print("=" * 60)
+    print("  binimg Phase 5 — Diagnostics & Hardening")
+    print("=" * 60)
+    print()
+    p5_passed = 0
+    p5_failed = 0
+
+    # 5.1 IMG-INFO on out.m64 (Phase 1 file)
+    buf.clear()
+    info_lines = ['IMG-INFO out.m64']
+    feed_and_run(sys_obj, "\n".join(info_lines) + "\n", max_steps=50_000_000)
+    info_text = uart_text(buf)
+    print(f"    IMG-INFO output:")
+    for line in info_text.strip().split('\n'):
+        ll = line.strip()
+        if ll and ll != 'ok' and ll != '>':
+            print(f"      {ll}")
+
+    # Test: output contains key fields
+    if 'MF64' in info_text and 'Segment' in info_text and 'Relocs' in info_text:
+        print("    PASS: IMG-INFO prints header fields")
+        p5_passed += 1
+    else:
+        print("    FAIL: IMG-INFO output missing fields")
+        p5_failed += 1
+
+    # Test: IMG-INFO on prov.m64 shows provided token
+    buf.clear()
+    feed_and_run(sys_obj, "IMG-INFO prov.m64\n", max_steps=50_000_000)
+    info_prov_text = uart_text(buf)
+    if 'test-binimg-mod' in info_prov_text:
+        print("    PASS: IMG-INFO shows PROVIDED token")
+        p5_passed += 1
+    else:
+        print(f"    FAIL: IMG-INFO prov.m64 missing token: '{info_prov_text.strip()[:100]}'")
+        p5_failed += 1
+
+    # 5.2 IMG-VERIFY on out.m64
+    buf.clear()
+    feed_and_run(sys_obj, "IMG-VERIFY out.m64 . CR\n", max_steps=50_000_000)
+    verify_text = uart_text(buf)
+    if '0' in [l.strip() for l in verify_text.strip().split('\n')]:
+        print("    PASS: IMG-VERIFY out.m64 returns 0")
+        p5_passed += 1
+    else:
+        print(f"    FAIL: IMG-VERIFY out.m64: '{verify_text.strip()}'")
+        p5_failed += 1
+
+    # IMG-VERIFY on prov.m64 (has exec + provided)
+    buf.clear()
+    feed_and_run(sys_obj, "IMG-VERIFY prov.m64 . CR\n", max_steps=50_000_000)
+    verify_prov_text = uart_text(buf)
+    if '0' in [l.strip() for l in verify_prov_text.strip().split('\n')]:
+        print("    PASS: IMG-VERIFY prov.m64 returns 0")
+        p5_passed += 1
+    else:
+        print(f"    FAIL: IMG-VERIFY prov.m64: '{verify_prov_text.strip()}'")
+        p5_failed += 1
+
+    # IMG-VERIFY on exec2.m64 (exec with entry)
+    buf.clear()
+    feed_and_run(sys_obj, "IMG-VERIFY exec2.m64 . CR\n", max_steps=50_000_000)
+    verify_exec_text = uart_text(buf)
+    if '0' in [l.strip() for l in verify_exec_text.strip().split('\n')]:
+        print("    PASS: IMG-VERIFY exec2.m64 returns 0")
+        p5_passed += 1
+    else:
+        print(f"    FAIL: IMG-VERIFY exec2.m64: '{verify_exec_text.strip()}'")
+        p5_failed += 1
+
+    # 5.4 IMG-CHECKSUM on out.m64 — should return nonzero hash
+    buf.clear()
+    feed_and_run(sys_obj, "IMG-CHECKSUM out.m64 . CR\n", max_steps=50_000_000)
+    cksum_text = uart_text(buf)
+    cksum_nums = []
+    for line in cksum_text.strip().split('\n'):
+        for tok in line.split():
+            if tok in ('ok', '>'): continue
+            try: cksum_nums.append(int(tok)); break
+            except ValueError: continue
+
+    cksum_val = cksum_nums[0] if cksum_nums else None
+    if cksum_val is not None and cksum_val != 0:
+        print(f"    PASS: IMG-CHECKSUM out.m64 = {cksum_val}")
+        p5_passed += 1
+    else:
+        print(f"    FAIL: IMG-CHECKSUM out.m64 = {cksum_val}")
+        p5_failed += 1
+
+    # Reproducibility: same file twice → same checksum
+    buf.clear()
+    feed_and_run(sys_obj, "IMG-CHECKSUM out.m64 . CR\n", max_steps=50_000_000)
+    cksum2_text = uart_text(buf)
+    cksum2_nums = []
+    for line in cksum2_text.strip().split('\n'):
+        for tok in line.split():
+            if tok in ('ok', '>'): continue
+            try: cksum2_nums.append(int(tok)); break
+            except ValueError: continue
+    cksum2_val = cksum2_nums[0] if cksum2_nums else None
+    if cksum_val is not None and cksum2_val == cksum_val:
+        print(f"    PASS: IMG-CHECKSUM reproducible ({cksum_val} == {cksum2_val})")
+        p5_passed += 1
+    else:
+        print(f"    FAIL: IMG-CHECKSUM not reproducible ({cksum_val} vs {cksum2_val})")
+        p5_failed += 1
+
+    # Different files → different checksum
+    buf.clear()
+    feed_and_run(sys_obj, "IMG-CHECKSUM prov.m64 . CR\n", max_steps=50_000_000)
+    cksum_prov_text = uart_text(buf)
+    cksum_prov_nums = []
+    for line in cksum_prov_text.strip().split('\n'):
+        for tok in line.split():
+            if tok in ('ok', '>'): continue
+            try: cksum_prov_nums.append(int(tok)); break
+            except ValueError: continue
+    cksum_prov_val = cksum_prov_nums[0] if cksum_prov_nums else None
+    if cksum_prov_val is not None and cksum_prov_val != cksum_val:
+        print(f"    PASS: different files → different checksums ({cksum_val} vs {cksum_prov_val})")
+        p5_passed += 1
+    else:
+        print(f"    FAIL: different files same checksum ({cksum_val} vs {cksum_prov_val})")
+        p5_failed += 1
+
+    total_passed += p5_passed
+    total_failed += p5_failed
     print()
     print(f"Phase 1: {passed} passed, {failed} failed")
     print(f"Phase 2: {p2_passed} passed, {p2_failed} failed")
     print(f"Phase 3: {p3_passed} passed, {p3_failed} failed")
     print(f"Phase 4: {p4_passed} passed, {p4_failed} failed")
+    print(f"Phase 5: {p5_passed} passed, {p5_failed} failed")
     print(f"Total:   {total_passed} passed, {total_failed} failed")
     if total_failed == 0:
         print("ALL TESTS PASSED")

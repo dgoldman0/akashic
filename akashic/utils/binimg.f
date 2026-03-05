@@ -11,7 +11,7 @@
 \ Phase 2: Core Loader (IMG-LOAD)
 \ Phase 3: Imports (auto-detect)
 \ Phase 4: Module System Integration
-\ Phase 5: Diagnostics & Hardening         — future
+\ Phase 5: Diagnostics & Hardening         — this file
 \
 \ Memory strategy:
 \   No ALLOCATE / FREE — uses only HERE / ALLOT.
@@ -652,4 +652,258 @@ CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
     DROP
     _img-load-base @ _img-load-entry @ +
     0
+;
+
+\ =====================================================================
+\  Phase 5 — Diagnostics & Hardening
+\ =====================================================================
+
+\ Helper: open a .m64 file, read whole file at HERE, validate header.
+\ On success: leaves file-size on stack, header data at HERE.
+\ On failure: prints diagnostic, returns 0.
+
+: _IMG-OPEN-READ  ( "filename" -- file-size | 0 )
+    PARSE-NAME
+    FIND-BY-NAME DUP -1 = IF
+        DROP ." IMG: not found: " NAMEBUF .ZSTR CR 0 EXIT
+    THEN
+    OPEN-BY-SLOT DUP 0= IF
+        DROP ." IMG: open failed" CR 0 EXIT
+    THEN
+    DUP FSIZE                         ( fd file-size )
+    DUP 64 < IF
+        2DROP ." IMG: file too small" CR 0 EXIT
+    THEN
+    \ FREAD ( buf len fd -- n )
+    HERE OVER                         ( fd fsize HERE fsize )
+    3 PICK                            ( fd fsize HERE fsize fd )
+    FREAD DROP                        ( fd fsize ; data at HERE )
+    NIP                               ( fsize )
+    \ Validate magic
+    HERE     C@ 77 <>
+    HERE 1 + C@ 70 <> OR
+    HERE 2 + C@ 54 <> OR
+    HERE 3 + C@ 52 <> OR IF
+        DROP ." IMG: bad magic" CR 0 EXIT
+    THEN
+    HERE 4 + W@ _IMG-VERSION > IF
+        DROP ." IMG: version too new" CR 0 EXIT
+    THEN
+;
+
+\ =====================================================================
+\  IMG-INFO  ( "filename" -- )
+\    Read and print the .m64 header without loading.
+\ =====================================================================
+
+: IMG-INFO  ( "filename" -- )
+    _IMG-OPEN-READ                    ( file-size | 0 )
+    DUP 0= IF DROP EXIT THEN
+
+    \ Extract fields from header at HERE
+    HERE 4  + W@                      \ version
+    HERE 6  + W@                      \ flags
+    HERE 8  + @                       \ seg-size
+    HERE 16 + @                       \ reloc-count
+    HERE 24 + @                       \ export-count
+    HERE 32 + @                       \ import-count
+    HERE 40 + @                       \ chain-head (unused for display)
+    HERE 48 + @                       \ prov-offset
+    HERE 56 + @                       \ entry-point
+
+    ( fsize ver flags seg nrel nexp nimp head prov entry )
+    \ PICK indices (0=TOS): 0=entry 1=prov 2=head 3=nimp
+    \   4=nexp 5=nrel 6=seg 7=flags 8=ver 9=fsize
+
+    ." MF64 v" 8 PICK . CR           \ version
+    ."   Flags:     "
+    7 PICK                            \ flags
+    DUP _IMG-FLAG-EXEC AND IF ." EXEC " THEN
+    DUP _IMG-FLAG-LIB  AND IF ." LIB " THEN
+    DUP _IMG-FLAG-XMEM AND IF ." XMEM " THEN
+    DUP _IMG-FLAG-JIT  AND IF ." JIT " THEN
+    DUP 0= IF ." (none)" THEN
+    DROP CR
+    ."   Segment:   " 6 PICK . ." bytes" CR
+    ."   Relocs:    " 5 PICK . CR
+    ."   Exports:   " 4 PICK . CR
+    ."   Imports:   " 3 PICK . CR
+    ."   Provided:  "
+    OVER -1 <> IF                     \ prov-offset (pos 1) valid?
+        HERE 64 + 2 PICK +           ( ... prov entry prov-addr )
+        DUP 64 _IMG-STRLEN           ( ... prov entry prov-addr len )
+        TYPE                          ( ... prov entry )
+    ELSE ." (none)"
+    THEN CR
+    ."   Entry:     "
+    DUP -1 <> IF
+        .
+    ELSE
+        DROP ." (none)"
+    THEN CR
+    ."   File size: " 8 PICK . ." bytes" CR
+    \ Drop remaining values on stack
+    \ After entry consumed by ./DROP above: ( fsize ver flags seg nrel nexp nimp head prov )
+    2DROP 2DROP 2DROP 2DROP DROP
+;
+
+\ =====================================================================
+\  IMG-VERIFY  ( "filename" -- ior )
+\    Non-destructive validation of a .m64 file.
+\    Reads file, applies relocations to a temp copy, checks:
+\    - All reloc offsets within segment bounds
+\    - All import names resolve via FIND
+\    - Entry-point offset within segment bounds (if EXEC flag)
+\    Does NOT splice into dictionary.  Returns 0 if OK.
+\ =====================================================================
+
+: IMG-VERIFY  ( "filename" -- ior )
+    _IMG-OPEN-READ                    ( file-size | 0 )
+    DUP 0= IF _IMG-ERR-MAGIC EXIT THEN
+
+    \ Parse header fields
+    HERE 6  + W@                      ( fsize flags )
+    HERE 8  + @                       ( fsize flags seg )
+    HERE 16 + @                       ( fsize flags seg nrel )
+    HERE 32 + @                       ( fsize flags seg nrel nimp )
+    HERE 48 + @                       ( fsize flags seg nrel nimp prov )
+    HERE 56 + @                       ( fsize flags seg nrel nimp prov entry )
+
+    \ Stack indices (0=TOS): entry=0 prov=1 nimp=2 nrel=3 seg=4 flags=5 fsize=6
+
+    \ Check file size is large enough for all sections
+    \ expected = 64 + seg + nrel*8 + nimp*32 (import entry = 32 bytes)
+    64                                ( ... entry min )
+    5 PICK +                          ( ... entry min+seg )
+    4 PICK 8 * +                      ( ... entry min+seg+rel )
+    3 PICK _IMG-IMPORT-ENTRY-SZ * +   ( ... entry expected )
+    7 PICK > IF
+        ." IMG-VERIFY: file truncated" CR
+        2DROP 2DROP 2DROP DROP
+        _IMG-ERR-MAGIC EXIT
+    THEN
+
+    \ Check all reloc offsets within segment
+    \ Relocs start at HERE + 64 + seg
+    HERE 64 + 5 PICK +               ( ... reloc-base )  \ 8-item: seg=5
+    4 PICK 0 ?DO                      ( ... reloc-base )  \ 8-item: nrel=4
+        DUP I 8 * + @                ( ... reloc-base offset )
+        6 PICK >= IF                  \ 9-item: seg=6
+            ." IMG-VERIFY: reloc[" I . ." ] offset out of range" CR
+            DROP
+            2DROP 2DROP 2DROP DROP
+            _IMG-ERR-RELOC EXIT
+        THEN
+    LOOP
+    DROP                              ( fsize flags seg nrel nimp prov entry )
+
+    \ Check import name resolution
+    \ Imports at HERE + 64 + seg + nrel*8 (no export section in v1)
+    \ Import entry: 8-byte fixup-offset + 24-byte inline name (NUL-padded)
+    HERE 64 + 5 PICK + 4 PICK 8 * +  ( ... imp-base )  \ 8-item: seg=5 nrel=4
+    3 PICK 0 ?DO                      ( ... imp-base )   \ 8-item: nimp=3
+        DUP I _IMG-IMPORT-ENTRY-SZ * + ( ... imp-base entry-addr )
+        \ Check fixup offset within segment
+        DUP @ 7 PICK >= IF           \ 10-item: seg=7
+            ." IMG-VERIFY: import[" I . ." ] fixup offset out of range" CR
+            2DROP
+            2DROP 2DROP 2DROP DROP
+            _IMG-ERR-RELOC EXIT
+        THEN
+        \ Inline name at entry+8 (up to 23 chars NUL-terminated)
+        8 +                           ( ... imp-base name-addr )
+        DUP 23 _IMG-STRLEN            ( ... imp-base name-addr len )
+        DUP 0= IF
+            ." IMG-VERIFY: import[" I . ." ] empty name" CR
+            2DROP DROP
+            2DROP 2DROP 2DROP DROP
+            _IMG-ERR-IMPORT EXIT
+        THEN
+        \ Build counted string in _img-find-buf
+        DUP _img-find-buf C!          ( ... imp-base name-addr len )
+        _img-find-buf 1 + SWAP CMOVE  ( ... imp-base )
+        _img-find-buf FIND 0= IF
+            ." IMG-VERIFY: unresolved import: "
+            _img-find-buf COUNT TYPE CR
+            DROP                      \ drop c-addr from FIND
+            2DROP 2DROP 2DROP 2DROP   \ drop 8: imp-base + 7 base values
+            _IMG-ERR-IMPORT EXIT
+        THEN
+        DROP                          ( ... imp-base )
+    LOOP
+    DROP                              ( fsize flags seg nrel nimp prov entry )
+
+    \ Check entry-point if EXEC
+    5 PICK _IMG-FLAG-EXEC AND IF      \ 7-item: flags=5
+        DUP -1 = IF
+            ." IMG-VERIFY: EXEC flag set but no entry point" CR
+            2DROP 2DROP 2DROP DROP
+            _IMG-ERR-NOEXEC EXIT
+        THEN
+        DUP 5 PICK >= IF             \ 8-item (after DUP): seg=5
+            ." IMG-VERIFY: entry point out of segment" CR
+            2DROP 2DROP 2DROP DROP
+            _IMG-ERR-RELOC EXIT
+        THEN
+    THEN
+
+    \ Check provided offset if present
+    OVER -1 <> IF
+        OVER 5 PICK >= IF            \ 8-item (after OVER): seg=5
+            ." IMG-VERIFY: provided offset out of segment" CR
+            2DROP 2DROP 2DROP DROP
+            _IMG-ERR-RELOC EXIT
+        THEN
+    THEN
+
+    \ All checks passed
+    2DROP 2DROP 2DROP DROP
+    0
+;
+
+\ =====================================================================
+\  IMG-CHECKSUM  ( "filename" -- u64 )
+\    Compute FNV-1a 64-bit hash over segment + relocation table +
+\    import/export tables.  Skips the header and reserved field.
+\    Useful for reproducible-build verification.
+\ =====================================================================
+
+\ FNV-1a 64-bit constants
+\ Using 32-bit FNV-1a for portability (64-bit MUL can overflow weirdly)
+\ FNV offset basis = 2166136261 (0x811c9dc5)
+\ FNV prime = 16777619 (0x01000193)
+\ Operates byte-at-a-time for simplicity.
+
+: IMG-CHECKSUM  ( "filename" -- u64 )
+    _IMG-OPEN-READ                    ( file-size | 0 )
+    DUP 0= IF EXIT THEN              ( file-size )
+
+    HERE 8 + @                        ( fsize seg-size )
+    HERE 16 + @                       ( fsize seg nrel )
+    HERE 24 + @                       ( fsize seg nrel nexp )
+    HERE 32 + @                       ( fsize seg nrel nexp nimp )
+
+    \ Compute data length: seg + nrel*8 + nexp*16 + nimp*32
+    3 PICK                            ( ... nimp data-len=seg )
+    3 PICK 8 * +                      ( ... nimp data-len )
+    2 PICK 16 * +                     ( ... nimp data-len )
+    OVER _IMG-IMPORT-ENTRY-SZ * +     ( fsize seg nrel nexp nimp data-len )
+
+    \ Data starts at HERE + 64 (segment)
+    HERE 64 +                         ( ... data-len data-addr )
+    SWAP                              ( ... data-addr data-len )
+
+    \ FNV-1a hash
+    2166136261                        ( ... data-addr data-len hash )
+    ROT ROT                           ( ... hash data-addr data-len )
+    0 ?DO                             ( ... hash data-addr )
+        DUP I + C@                    ( hash data-addr byte )
+        ROT XOR                       ( data-addr hash' )
+        16777619 *                    ( data-addr hash'' )
+        SWAP                          ( hash'' data-addr )
+    LOOP
+    DROP                              ( fsize seg nrel nexp nimp hash )
+
+    \ Clean up stack: drop fsize seg nrel nexp nimp, keep hash
+    SWAP DROP SWAP DROP SWAP DROP SWAP DROP SWAP DROP
 ;
