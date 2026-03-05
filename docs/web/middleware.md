@@ -21,7 +21,8 @@ web/middleware.f
 ├── web/response.f   (akashic-web-response)
 ├── web/router.f     (akashic-web-router)
 ├── utils/datetime.f (akashic-datetime)
-└── utils/string.f   (akashic-string)
+├── utils/string.f   (akashic-string)
+└── net/base64.f     (akashic-base64)
 ```
 
 ---
@@ -38,6 +39,9 @@ web/middleware.f
   - [MW-LOG](#mw-log)
   - [MW-CORS](#mw-cors)
   - [MW-JSON-BODY](#mw-json-body)
+- [Layer 2 — Built-in Middleware](#layer-2--built-in-middleware)
+  - [MW-BASIC-AUTH](#mw-basic-auth)
+  - [MW-STATIC](#mw-static)
 - [Integration with server.f](#integration-with-serverf)
 - [Quick Reference](#quick-reference)
 - [Internal Words](#internal-words)
@@ -178,6 +182,113 @@ Content-Type enforcement for JSON endpoints:
 
 ---
 
+## Layer 2 — Built-in Middleware
+
+### MW-BASIC-AUTH
+
+HTTP Basic Authentication (RFC 7617).
+
+#### MW-BASIC-AUTH-SET
+
+```
+MW-BASIC-AUTH-SET ( user-a user-u pass-a pass-u -- )
+```
+
+Store the expected username and password.  Must be called before
+registering `MW-BASIC-AUTH` via `MW-USE`.
+
+```forth
+S" admin" S" secret" MW-BASIC-AUTH-SET
+```
+
+#### MW-BASIC-AUTH
+
+```
+MW-BASIC-AUTH ( next-xt -- )
+```
+
+Validates the `Authorization` header against stored credentials:
+
+| Condition | Action |
+|---|---|
+| No `Authorization` header | 401 Unauthorized + `WWW-Authenticate: Basic realm="Akashic"` |
+| Scheme is not `Basic` | 403 Forbidden |
+| Credentials decode but don't match | 403 Forbidden |
+| Credentials match | Call next (authenticated) |
+
+**Decoding flow:** strips `Basic ` prefix → Base64-decodes →
+splits on `:` → compares username and password via `STR-STR=`.
+
+```forth
+\ Setup
+S" admin" S" secret" MW-BASIC-AUTH-SET
+' MW-BASIC-AUTH MW-USE
+```
+
+**Tip:** Place `MW-CORS` before `MW-BASIC-AUTH` so that `OPTIONS`
+preflight requests bypass authentication:
+
+```forth
+' MW-CORS       MW-USE    \ handles OPTIONS → 204
+' MW-BASIC-AUTH MW-USE    \ checks credentials for other methods
+```
+
+### MW-STATIC
+
+Serve static files from the KDOS filesystem.
+
+#### MW-STATIC-SET
+
+```
+MW-STATIC-SET ( pfx-a pfx-u -- )
+```
+
+Set the URL prefix that triggers static file serving.
+
+```forth
+S" /static/" MW-STATIC-SET
+```
+
+#### MW-STATIC
+
+```
+MW-STATIC ( next-xt -- )
+```
+
+If the request path starts with the configured prefix, strip the
+prefix, look up the remaining filename in the KDOS filesystem,
+detect MIME type from the file extension, and serve the content.
+
+| Condition | Action |
+|---|---|
+| Not configured (`MW-STATIC-SET` not called) | Call next |
+| Path doesn't start with prefix | Call next |
+| Filename empty after stripping prefix | Call next |
+| File not found in FS (or FS not loaded) | Call next |
+| File found | 200 + detected Content-Type + file body |
+
+**MIME type detection** via `_MW-STATIC-MIME`:
+
+| Extension | Content-Type |
+|---|---|
+| `html`, `htm` | `text/html` |
+| `css` | `text/css` |
+| `js` | `application/javascript` |
+| `json` | `application/json` |
+| `txt` | `text/plain` |
+| `png` | `image/png` |
+| Unknown | `application/octet-stream` |
+
+**Requires** `FS-LOAD` to have been called (filesystem mounted).
+Maximum file read per request: 4096 bytes.
+
+```forth
+S" /static/" MW-STATIC-SET
+' MW-STATIC MW-USE
+```
+
+---
+
 ## Integration with server.f
 
 By default, `server.f` dispatches directly to `ROUTE-DISPATCH`.
@@ -219,6 +330,10 @@ SRV-HANDLE
 | `MW-LOG` | `( next-xt -- )` | Timestamped request logging |
 | `MW-CORS` | `( next-xt -- )` | Permissive CORS headers |
 | `MW-JSON-BODY` | `( next-xt -- )` | JSON Content-Type enforcement |
+| `MW-BASIC-AUTH-SET` | `( user-a user-u pass-a pass-u -- )` | Store auth credentials |
+| `MW-BASIC-AUTH` | `( next-xt -- )` | HTTP Basic authentication |
+| `MW-STATIC-SET` | `( pfx-a pfx-u -- )` | Set static-file URL prefix |
+| `MW-STATIC` | `( next-xt -- )` | Serve static files from FS |
 
 ---
 
@@ -235,6 +350,17 @@ SRV-HANDLE
 | `_MW-RUN-FROM-XT` | VARIABLE | Vectored reference to `_MW-RUN-FROM` (breaks forward ref cycle) |
 | `_MW-LOG-T0` | VARIABLE | Start time for `MW-LOG` elapsed calculation |
 | `_MW-CT-JSON` | CREATE 16 | Byte array for `"application/json"` string |
+| `_MW-AUTH-USER-A/U` | VARIABLE × 2 | Expected username (addr, len) |
+| `_MW-AUTH-PASS-A/U` | VARIABLE × 2 | Expected password (addr, len) |
+| `_MW-AUTH-DEC-BUF` | CREATE 256 | Decoded Base64 buffer |
+| `_MW-AUTH-PFX` | CREATE 6 | Byte array `"Basic "` |
+| `_MW-AUTH-REALM` | CREATE 22 | Byte array `Basic realm="Akashic"` |
+| `_MW-AUTH-CHECK` | `( auth-a auth-u -- flag )` | Decode + compare credentials |
+| `_MW-STATIC-PFX-A/U` | VARIABLE × 2 | URL prefix (addr, len) |
+| `_MW-STATIC-READ-BUF` | CREATE 4096 | File read buffer |
+| `_MW-SOPEN` | `( addr len -- fdesc \| 0 )` | Stack-based file open via NAMEBUF |
+| `_MW-STATIC-EXT` | `( path-a path-u -- ext-a ext-u )` | Extract file extension |
+| `_MW-STATIC-MIME` | `( ext-a ext-u -- mime-a mime-u )` | Extension → MIME type |
 
 ---
 
@@ -304,4 +430,51 @@ MW-CLEAR
 
 \ Execution order: LOG → CORS → API-KEY → ROUTE-DISPATCH → handler
 \ Return order:    handler → API-KEY → CORS → LOG (logs status)
+```
+
+### Protected API with Basic auth
+
+```forth
+S" admin" S" secret" MW-BASIC-AUTH-SET
+
+MW-CLEAR
+' MW-LOG        MW-USE
+' MW-CORS       MW-USE    \ OPTIONS preflight bypasses auth
+' MW-BASIC-AUTH MW-USE
+' MW-RUN SRV-SET-DISPATCH
+
+8080 SERVE
+```
+
+### Static files + API routes
+
+```forth
+S" /static/" MW-STATIC-SET
+
+MW-CLEAR
+' MW-LOG    MW-USE
+' MW-CORS   MW-USE
+' MW-STATIC MW-USE    \ serves /static/style.css, /static/app.js, etc.
+' MW-RUN SRV-SET-DISPATCH
+
+\ API routes
+S" GET" S" /api/status" ['] handle-status ROUTE
+8080 SERVE
+```
+
+### Full stack: logging + CORS + auth + static files
+
+```forth
+S" admin" S" secret" MW-BASIC-AUTH-SET
+S" /public/" MW-STATIC-SET
+
+MW-CLEAR
+' MW-LOG        MW-USE    \ outermost: logs every request
+' MW-CORS       MW-USE    \ CORS headers + preflight
+' MW-STATIC     MW-USE    \ /public/* served without auth
+' MW-BASIC-AUTH MW-USE    \ everything else requires auth
+' MW-RUN SRV-SET-DISPATCH
+
+\ Execution order:
+\   LOG → CORS → STATIC → BASIC-AUTH → ROUTE-DISPATCH
 ```
