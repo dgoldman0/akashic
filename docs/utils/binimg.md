@@ -3,7 +3,7 @@
 **Module:** `akashic/utils/binimg.f`
 **Prefix:** `IMG-` (public), `_IMG-` (internal)
 **Provides:** `akashic-binimg`
-**Phase:** 2 — Core Saver + Loader
+**Phase:** 3 — Core Saver + Loader + Imports
 
 ## Overview
 
@@ -16,11 +16,12 @@ of the dictionary, normalizes in-segment absolute addresses to base-0
 offsets, and writes a single `.m64` file.
 
 The **loader** (`IMG-LOAD`) reads a `.m64` file into the dictionary,
-applies relocations to adjust all addresses to the new base, and
-splices the loaded words into the live dictionary chain.
+applies relocations to adjust all addresses to the new base, resolves
+imported external words by name, and splices the loaded words into the
+live dictionary chain.
 
-Future phases will add import/export tables, module-system
-integration, and diagnostics.
+Future phases will add export tables, module-system integration, and
+diagnostics.
 
 ## Quick Start
 
@@ -79,9 +80,14 @@ Steps performed:
    (`_IMG-COLLECT-LINKS`).
 4. Open the target file (via `FIND-BY-NAME` / `OPEN-BY-SLOT`).
 5. Normalize: filter relocs to in-segment references only, convert
-   absolute addresses to base-0 offsets (`_IMG-NORMALIZE`).
-6. Build the `.m64` output at HERE (past the segment and file
-   descriptor) in one contiguous buffer (`_IMG-BUILD-OUTPUT`).
+   absolute addresses to base-0 offsets. Out-of-segment references
+   (external calls) are recorded as import candidates
+   (`_IMG-NORMALIZE`).
+6. Count named imports: for each out-of-segment reloc, attempt
+   reverse lookup via `_IMG-XT>ENTRY` → `_IMG-COUNT-IMPORTS`.
+7. Build the `.m64` output at HERE (past the segment and file
+   descriptor) in one contiguous buffer, including the import table
+   (`_IMG-BUILD-OUTPUT`).
 7. Write the entire buffer with a single `FWRITE` (avoids the
    sector-level DMA overwrite issue).
 8. Flush directory metadata via `FFLUSH`.
@@ -97,12 +103,16 @@ Steps performed:
 1. Open the file (via `FIND-BY-NAME` / `OPEN-BY-SLOT`).
 2. Read the entire file into HERE in one `FREAD` call.
 3. Validate header magic (`MF64`) and version.
-4. Extract segment size, relocation count, and chain-head offset.
+4. Extract segment size, relocation count, import count, and
+   chain-head offset.
 5. Mark `HERE+64` as load-base (segment starts after header).
 6. `ALLOT` header + segment to make the space permanent.
 7. Apply relocations: add load-base to every 8-byte value at the
    offsets listed in the relocation table.
-8. Splice the dictionary chain: set the loaded chain's tail link to
+8. Resolve imports: for each import entry, build a counted string
+   from the name field, call `FIND` to look up the word in the
+   host dictionary, and patch the fixup slot with the resolved XT.
+9. Splice the dictionary chain: set the loaded chain's tail link to
    the current `LATEST`, then set `LATEST` to the loaded chain head.
 
 ## .m64 File Format
@@ -118,8 +128,8 @@ All multi-byte fields are little-endian.
 | 6      | 2     | flags        | Bit flags (see below)              |
 | 8      | 8     | seg_size     | Segment size in bytes              |
 | 16     | 8     | reloc_count  | Number of relocation entries       |
-| 24     | 8     | export_count | Export table entries (Phase 3: 0)  |
-| 32     | 8     | import_count | Import table entries (Phase 3: 0)  |
+| 24     | 8     | export_count | Export table entries (Phase 4: 0)  |
+| 32     | 8     | import_count | Import table entries               |
 | 40     | 8     | chain_head   | Dict chain head offset into segment|
 | 48     | 8     | prov_offset  | PROVIDED string offset (Phase 4: 0)|
 | 56     | 8     | reserved     | Must be 0                          |
@@ -136,12 +146,27 @@ All multi-byte fields are little-endian.
 ### Body
 
 ```
-[header 64B][segment seg_size B][reloc_table reloc_count × 8B]
+[header 64B][segment seg_size B][reloc_table reloc_count × 8B][import_table import_count × 32B]
 ```
 
 Each relocation entry is a `u64` byte-offset into the segment. The
 8-byte value at that offset is a base-0 address that must be adjusted
 by adding the load base address.
+
+### Import Table
+
+Each import entry is 32 bytes:
+
+| Offset | Size | Field        | Description                        |
+|--------|------|-------------|------------------------------------|
+| 0      | 8    | fixup_offset | Segment-relative offset of the slot |
+| 8      | 24   | name         | NUL-padded ASCII word name          |
+
+The fixup offset points to the 8-byte slot in the segment that
+originally held an absolute XT of an external word (outside the
+segment). During save, that slot is zeroed. During load, `FIND`
+resolves the name, and the resulting XT is written to
+`load-base + fixup_offset`.
 
 ## Memory Strategy
 
@@ -179,10 +204,12 @@ Two sources feed the relocation buffer:
    link cell.
 
 During normalization, entries whose target value falls **outside** the
-segment are filtered out. These are references to KDOS/BIOS words
-(e.g., `!`, `@`, `DUP`) and the terminal link field. They will become
-"imports" in Phase 3; for now they remain as absolute addresses in the
-segment.
+segment are recorded as out-of-segment relocs in `_img-ext-pairs`.
+These are references to KDOS/BIOS words (e.g., `!`, `@`, `.`) and the
+terminal link field. For each, `_IMG-XT>ENTRY` attempts a reverse
+lookup by walking the pre-mark dictionary; if found, the reference
+becomes a named import entry in the `.m64` file. The fixup slot is
+zeroed in the output.
 
 ## Error Codes
 
@@ -190,7 +217,8 @@ segment.
 |------|--------------------|------------------------------------|
 | 0    | —                  | Success                            |
 | -1   | `_IMG-ERR-IO`     | File not found or open failed      |
-| -2   | `_IMG-ERR-MAGIC`  | Bad magic (future loader)          |
+| -2   | `_IMG-ERR-MAGIC`  | Bad magic or version too new       |
+| -3   | `_IMG-ERR-IMPORT` | Unresolved import (name not found) |
 | -5   | `_IMG-ERR-RELOC`  | Relocation buffer overflow         |
 
 ## Design Notes
@@ -204,8 +232,21 @@ segment.
   *before* building the output buffer so the fdesc doesn't clobber it.
 
 - **Denormalization**: After saving, `_IMG-DENORMALIZE` restores all
-  normalized values so the live dictionary remains functional. The
-  caller can continue using words compiled in the segment.
+  normalized values — both in-segment relocs and out-of-segment
+  references — so the live dictionary remains functional. The caller
+  can continue using words compiled in the segment.
+
+- **Import auto-detection**: The saver does not require the user to
+  declare imports. Any compiled reference (LDI64 immediate) whose
+  target falls outside the segment is an import candidate.
+  `_IMG-XT>ENTRY` walks the pre-mark dictionary chain to find the
+  entry containing that code-field address, then `ENTRY>NAME`
+  extracts the name for the import table.
+
+- **Pre-mark chain walk**: `_IMG-XT>ENTRY` must walk from
+  `_img-mark-latest` (the pre-mark LATEST), not from current LATEST.
+  During normalization the link fields of in-segment entries are
+  rewritten to base-0 offsets and cannot be followed.
 
 - **No cross-core impact**: The module touches only dictionary space
   (HERE/ALLOT) and the BIOS reloc variables. No heap, no shared
@@ -235,7 +276,7 @@ segment.
 |-------|---------|--------------------------------------|
 | 1     | **Done**| Core saver (IMG-MARK, IMG-SAVE)      |
 | 2     | **Done**| Core loader (IMG-LOAD)               |
-| 3     | Planned | Import/export tables                 |
+| 3     | **Done**| Import table (auto-detect + resolve) |
 | 4     | Planned | Module system integration            |
 | 5     | Planned | Diagnostics & hardening              |
 
