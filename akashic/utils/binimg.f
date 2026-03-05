@@ -190,7 +190,7 @@ VARIABLE _img-fd           \ file descriptor during save
     _RELOC-COUNT @ OVER 16 + !        \ reloc count
     0 OVER 24 + !                     \ exports (Phase 1: 0)
     0 OVER 32 + !                     \ imports (Phase 1: 0)
-    0 OVER 40 + !                     \ entry point
+    LATEST _img-mark-base @ - OVER 40 + !  \ chain head offset
     0 OVER 48 + !                     \ provided offset
     0 OVER 56 + !                     \ reserved
     DROP                              ( buf out-size )
@@ -262,5 +262,138 @@ VARIABLE _img-fd           \ file descriptor during save
     _IMG-DENORMALIZE
 
     \ Done — HERE still points past segment, caller keeps compiling.
+    0
+;
+
+\ =====================================================================
+\  Phase 2 — Core Loader
+\ =====================================================================
+
+\ Loader state
+VARIABLE _img-load-base    \ base address where segment was loaded
+VARIABLE _img-load-fd      \ file descriptor during load
+VARIABLE _img-load-seg     \ loaded segment size
+VARIABLE _img-load-nrel    \ loaded reloc count
+VARIABLE _img-load-head    \ chain-head offset from header
+
+\ =====================================================================
+\  _IMG-RELOCATE  ( reloc-buf count base -- )
+\    Apply relocations: for each u64 offset in reloc-buf, add base
+\    to the 8-byte value at (base + offset).
+\ =====================================================================
+
+: _IMG-RELOCATE  ( reloc-buf count base -- )
+    ROT ROT                           ( base reloc-buf count )
+    0 ?DO
+        DUP I 8 * + @                ( base reloc-buf offset )
+        2 PICK +                      ( base reloc-buf slot-addr )
+        DUP @                         ( base reloc-buf slot-addr val )
+        3 PICK +                      ( base reloc-buf slot-addr relocated )
+        SWAP !                        ( base reloc-buf )
+    LOOP
+    2DROP
+;
+
+\ =====================================================================
+\  _IMG-SPLICE-DICT  ( -- )
+\    Splice the loaded dictionary chain into the live dictionary.
+\    Uses _img-load-base, _img-load-head, _img-load-seg.
+\    Walks from the chain head to find the tail (terminal link),
+\    splices tail→LATEST, sets LATEST to head.
+\ =====================================================================
+
+: _IMG-SPLICE-DICT  ( -- )
+    _img-load-base @ _img-load-head @ +   ( head )
+    DUP                                     ( head cur )
+    BEGIN
+        DUP @                               ( head cur link )
+        DUP _img-load-base @ >=
+        OVER _img-load-base @ _img-load-seg @ + < AND
+    WHILE
+        NIP DUP                             ( head link link )
+    REPEAT
+    DROP                                    ( head tail )
+
+    \ tail.link → current LATEST
+    LATEST SWAP !                           ( head )
+
+    \ Set LATEST to head
+    LATEST!
+;
+
+\ =====================================================================
+\  IMG-LOAD  ( "filename" -- ior )
+\    Load a .m64 file into the dictionary, relocate, and splice
+\    the dictionary chain.  After loading, the words defined in the
+\    file are available for use.
+\
+\    File must exist on disk.  Parses filename from input stream.
+\    Returns 0 on success, negative error code on failure.
+\
+\    Strategy: read the ENTIRE file in one FREAD (avoids the sector-
+\    aligned cursor issue where FREAD advances by whole sectors).
+\    The file lands at HERE.  The segment lives at HERE+64.
+\    We ALLOT header+segment to make it permanent, then use the
+\    reloc data still sitting past the ALLOT (scratch at new HERE).
+\ =====================================================================
+
+: IMG-LOAD  ( "filename" -- ior )
+    \ 1. Open (fdesc at HERE, advances HERE by 56 bytes)
+    PARSE-NAME
+    FIND-BY-NAME DUP -1 = IF
+        DROP
+        ." IMG-LOAD: not found: " NAMEBUF .ZSTR CR
+        _IMG-ERR-IO EXIT
+    THEN
+    OPEN-BY-SLOT DUP 0= IF
+        DROP
+        ." IMG-LOAD: open failed" CR
+        _IMG-ERR-IO EXIT
+    THEN
+    _img-load-fd !
+
+    \ 2. Read entire file into HERE in one FREAD
+    \    FREAD DMA is sector-aligned, cursor advances by sectors.
+    \    One big read avoids the misalignment problem.
+    _img-load-fd @ FSIZE              ( file-size )
+    DUP 64 < IF
+        DROP ." IMG-LOAD: file too small" CR
+        _IMG-ERR-MAGIC EXIT
+    THEN
+    HERE OVER                         ( fsize buf fsize )
+    _img-load-fd @ FREAD DROP         ( fsize )
+
+    \ 3. Validate header at HERE
+    HERE     C@ 77 <> IF DROP ." IMG-LOAD: bad magic" CR _IMG-ERR-MAGIC EXIT THEN
+    HERE 1 + C@ 70 <> IF DROP ." IMG-LOAD: bad magic" CR _IMG-ERR-MAGIC EXIT THEN
+    HERE 2 + C@ 54 <> IF DROP ." IMG-LOAD: bad magic" CR _IMG-ERR-MAGIC EXIT THEN
+    HERE 3 + C@ 52 <> IF DROP ." IMG-LOAD: bad magic" CR _IMG-ERR-MAGIC EXIT THEN
+    HERE 4 + W@ _IMG-VERSION > IF
+        DROP ." IMG-LOAD: version too new" CR _IMG-ERR-MAGIC EXIT
+    THEN
+
+    \ 4. Extract metadata
+    HERE 8  + @ _img-load-seg !
+    HERE 16 + @ _img-load-nrel !
+    HERE 40 + @ _img-load-head !
+    DROP                              \ drop file-size
+
+    \ 5. Segment is at HERE+64 — that's load-base
+    HERE 64 + _img-load-base !
+
+    \ 6. ALLOT header+segment to make them permanent
+    \    After this, new HERE = old_HERE + 64 + seg_size
+    \    The reloc table sits right at new HERE (scratch space)
+    64 _img-load-seg @ + ALLOT
+
+    \ 7. Relocate
+    \    reloc-buf = HERE (just past the segment = old file offset 64+seg)
+    _img-load-nrel @ 0<> IF
+        HERE _img-load-nrel @ _img-load-base @ _IMG-RELOCATE
+    THEN
+
+    \ 8. Splice dictionary chain
+    _IMG-SPLICE-DICT
+
     0
 ;

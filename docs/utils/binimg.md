@@ -3,19 +3,24 @@
 **Module:** `akashic/utils/binimg.f`
 **Prefix:** `IMG-` (public), `_IMG-` (internal)
 **Provides:** `akashic-binimg`
-**Phase:** 1 — Core Saver
+**Phase:** 2 — Core Saver + Loader
 
 ## Overview
 
 Save compiled Forth dictionary regions as `.m64` binary files with
-relocation metadata. The saver snapshots a contiguous segment of the
-dictionary (the code and data compiled between `IMG-MARK` and
-`IMG-SAVE`), normalizes all in-segment absolute addresses to base-0
-offsets, writes the result as a single `.m64` file, then restores the
-live dictionary so compilation can continue.
+relocation metadata, and load them back at any base address without
+re-parsing source text.
 
-Future phases will add a loader (`IMG-LOAD`), import/export tables,
-module-system integration, and diagnostics.
+The **saver** (`IMG-MARK` / `IMG-SAVE`) snapshots a contiguous segment
+of the dictionary, normalizes in-segment absolute addresses to base-0
+offsets, and writes a single `.m64` file.
+
+The **loader** (`IMG-LOAD`) reads a `.m64` file into the dictionary,
+applies relocations to adjust all addresses to the new base, and
+splices the loaded words into the live dictionary chain.
+
+Future phases will add import/export tables, module-system
+integration, and diagnostics.
 
 ## Quick Start
 
@@ -35,6 +40,14 @@ VARIABLE COUNTER
 
 \ 4. Save
 IMG-SAVE mylib.m64    \ ( -- ior )  0 = success
+
+\ --- Later, or in a different session ---
+
+\ Load the saved module
+IMG-LOAD mylib.m64    \ ( -- ior )  0 = success
+
+\ Words are now available
+BUMP GET .   \ prints 1
 ```
 
 ## Public API
@@ -74,6 +87,24 @@ Steps performed:
 8. Flush directory metadata via `FFLUSH`.
 9. Denormalize the live dictionary so compiled words remain usable.
 
+### `IMG-LOAD  ( "filename" -- ior )`
+
+Load a `.m64` file, relocate all addresses, and splice the loaded
+words into the live dictionary. Returns 0 on success, negative on
+error.
+
+Steps performed:
+1. Open the file (via `FIND-BY-NAME` / `OPEN-BY-SLOT`).
+2. Read the entire file into HERE in one `FREAD` call.
+3. Validate header magic (`MF64`) and version.
+4. Extract segment size, relocation count, and chain-head offset.
+5. Mark `HERE+64` as load-base (segment starts after header).
+6. `ALLOT` header + segment to make the space permanent.
+7. Apply relocations: add load-base to every 8-byte value at the
+   offsets listed in the relocation table.
+8. Splice the dictionary chain: set the loaded chain's tail link to
+   the current `LATEST`, then set `LATEST` to the loaded chain head.
+
 ## .m64 File Format
 
 All multi-byte fields are little-endian.
@@ -89,7 +120,7 @@ All multi-byte fields are little-endian.
 | 16     | 8     | reloc_count  | Number of relocation entries       |
 | 24     | 8     | export_count | Export table entries (Phase 3: 0)  |
 | 32     | 8     | import_count | Import table entries (Phase 3: 0)  |
-| 40     | 8     | entry_offset | Entry-point offset (Phase 4: 0)   |
+| 40     | 8     | chain_head   | Dict chain head offset into segment|
 | 48     | 8     | prov_offset  | PROVIDED string offset (Phase 4: 0)|
 | 56     | 8     | reserved     | Must be 0                          |
 
@@ -123,6 +154,10 @@ During compilation (after IMG-MARK):
 
 During IMG-SAVE (temporary):
   [...dict...][reloc-buf][segment][fdesc 56B][output-buf]
+
+During IMG-LOAD:
+  [...dict...][fdesc 56B][header 64B][segment seg_size B][relocs (scratch)]
+                                     ^ load-base         ^ new HERE
 ```
 
 The output buffer is built past the segment and file descriptor,
@@ -176,12 +211,30 @@ segment.
   (HERE/ALLOT) and the BIOS reloc variables. No heap, no shared
   state, no effect on other cores or tasks.
 
+- **Single FREAD for loading**: KDOS `FREAD` advances the cursor by
+  whole sectors (512 bytes), not by the requested byte count.
+  Sequential small reads skip data. The loader reads the entire file
+  in one `FREAD` call, then parses header, segment, and reloc table
+  from the in-memory buffer.
+
+- **Chain-head offset in header**: The saver stores the segment-
+  relative offset of `LATEST` (the dictionary chain head) at header
+  offset 40. The loader uses this to find the chain head directly,
+  avoiding the need to scan or walk the segment.
+
+- **Dictionary chain splice**: After relocation, the loaded chain
+  head's most-recent entry links down to the tail (oldest loaded
+  word). The tail's link still holds the absolute address of the
+  pre-mark `LATEST` from the original save session. The loader
+  replaces it with the current `LATEST`, then sets `LATEST` to the
+  loaded chain head. The loaded words shadow any same-named words.
+
 ## Roadmap
 
 | Phase | Status  | Description                          |
 |-------|---------|--------------------------------------|
 | 1     | **Done**| Core saver (IMG-MARK, IMG-SAVE)      |
-| 2     | Planned | Core loader (IMG-LOAD)               |
+| 2     | **Done**| Core loader (IMG-LOAD)               |
 | 3     | Planned | Import/export tables                 |
 | 4     | Planned | Module system integration            |
 | 5     | Planned | Diagnostics & hardening              |
