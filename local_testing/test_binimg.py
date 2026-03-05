@@ -1208,7 +1208,8 @@ def main():
         p5_failed += 1
 
     # Cleanup second disk image
-    os.unlink(img_path2)
+    if os.path.exists(img_path2):
+        os.unlink(img_path2)
 
     total_passed += p5_passed
     total_failed += p5_failed
@@ -1225,7 +1226,8 @@ def main():
         print("SOME TESTS FAILED")
 
     # Cleanup
-    os.unlink(img_path)
+    if os.path.exists(img_path):
+        os.unlink(img_path)
     print("\nDone.")
     sys.exit(1 if total_failed > 0 else 0)
 

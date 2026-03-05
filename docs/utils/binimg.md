@@ -64,7 +64,7 @@ Internally:
   **adaptive**: 8192 entries (64 KiB) when `ULAND @` is true (userland
   mode, HERE in ext mem), 1024 entries (8 KiB) when in kernel space.
   This avoids clobbering BIOS structures with a large ALLOT in the
-  2 MB base-RAM region.
+  1 MiB system-RAM region.
 - Enables BIOS relocation tracking (`_RELOC-ACTIVE`, `_RELOC-BUF`,
   `_RELOC-COUNT`).
 - Records `HERE` as `_img-mark-base` and `LATEST` as

@@ -39,8 +39,8 @@ PROVIDED akashic-binimg
 1  CONSTANT _IMG-VERSION      \ format version
 
 \ Reloc buffer: adaptive sizing based on available memory.
-\ In kernel space (base 2 MB RAM) a large ALLOT can clobber BIOS
-\ structures, so we keep the buffer small.  When the caller has
+\ In kernel space (1 MiB system RAM) a large ALLOT can clobber
+\ BIOS structures, so we keep the buffer small.  When the caller has
 \ entered userland (HERE in ext mem, 16 MB), the full 8192 slots
 \ are safe.  The check is ULAND @ (currently in userland?) not
 \ XMEM? (hardware present?) because the latter is true even when
