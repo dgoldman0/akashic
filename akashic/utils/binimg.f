@@ -10,7 +10,7 @@
 \ Phase 1: Core Saver (IMG-MARK, IMG-SAVE)
 \ Phase 2: Core Loader (IMG-LOAD)
 \ Phase 3: Imports (auto-detect)
-\ Phase 4: Module System Integration       — future
+\ Phase 4: Module System Integration
 \ Phase 5: Diagnostics & Hardening         — future
 \
 \ Memory strategy:
@@ -50,6 +50,7 @@ PROVIDED akashic-binimg
 -2 CONSTANT _IMG-ERR-MAGIC
 -5 CONSTANT _IMG-ERR-RELOC
 -3 CONSTANT _IMG-ERR-IMPORT    \ unresolved import
+-6 CONSTANT _IMG-ERR-NOEXEC    \ not an executable image
 
 \ Import table
 64 CONSTANT _IMG-MAX-EXT          \ max out-of-segment relocs
@@ -69,6 +70,11 @@ VARIABLE _img-fd           \ file descriptor during save
 VARIABLE _img-ext-count        \ count of all out-of-segment relocs
 VARIABLE _img-import-count     \ count of named imports
 CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
+
+\ Module/entry state (Phase 4)
+VARIABLE _img-flags            \ flag bits for next save
+VARIABLE _img-prov-offset      \ segment-rel offset of PROVIDED string
+VARIABLE _img-entry-offset     \ segment-rel offset of entry point
 
 \ =====================================================================
 \  IMG-MARK  ( -- )
@@ -92,6 +98,48 @@ CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
     \ Snapshot segment start (right after the reloc buffer)
     HERE _img-mark-base !
     LATEST _img-mark-latest !
+
+    \ Phase 4 state
+    0 _img-flags !
+    -1 _img-prov-offset !
+    -1 _img-entry-offset !
+;
+
+\ =====================================================================
+\  IMG-PROVIDED  ( "token" -- )
+\    Store a NUL-terminated module name in the segment.  After save,
+\    the loader will call _MOD-MARK to register it so that REQUIRE
+\    of the source .f file is skipped.
+\ =====================================================================
+
+: IMG-PROVIDED  ( "token" -- )
+    PARSE-NAME                        \ fills NAMEBUF, sets PN-LEN
+    PN-LEN @ DUP 0= IF DROP EXIT THEN ( len )
+    HERE _img-mark-base @ -  _img-prov-offset !  ( len )
+    DUP >R
+    NAMEBUF HERE R@ CMOVE             ( len ; name at HERE )
+    R> ALLOT  0 C,                    ( -- ; NUL-terminated )
+;
+
+\ =====================================================================
+\  IMG-ENTRY  ( xt -- )
+\    Record an entry-point xt for the current segment.  Sets the
+\    EXEC flag.  The xt must belong to a word compiled after IMG-MARK.
+\ =====================================================================
+
+: IMG-ENTRY  ( xt -- )
+    _img-mark-base @ -  _img-entry-offset !
+    _img-flags @ _IMG-FLAG-EXEC OR  _img-flags !
+;
+
+\ =====================================================================
+\  IMG-XMEM  ( -- )
+\    Set the XMEM flag.  When set, the loader allocates the segment
+\    in extended memory via XMEM-ALLOT instead of base-RAM ALLOT.
+\ =====================================================================
+
+: IMG-XMEM  ( -- )
+    _img-flags @ _IMG-FLAG-XMEM OR  _img-flags !
 ;
 
 \ =====================================================================
@@ -164,7 +212,7 @@ CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
 
 : _IMG-COUNT-IMPORTS  ( -- n )
     0
-    _img-ext-count @ 0 DO
+    _img-ext-count @ 0 ?DO
         I 16 * _img-ext-pairs + 8 + @   ( count xt )
         _IMG-XT>ENTRY 0<> IF 1+ THEN
     LOOP
@@ -184,7 +232,7 @@ CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
     \ Out-of-segment references (calls to KDOS/BIOS words, terminal
     \ link) are recorded as ext-pairs and their slots zeroed.
     0  ( j — compacted output index )
-    _RELOC-COUNT @ 0 DO
+    _RELOC-COUNT @ 0 ?DO
         I 8 * _img-reloc-buf @ + @    ( j abs-slot-addr )
         DUP @                           ( j abs val )
         \ Is val in [mark-base, mark-base + seg-size)?
@@ -211,7 +259,7 @@ CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
 \ =====================================================================
 
 : _IMG-DENORMALIZE  ( -- )
-    _RELOC-COUNT @ 0 DO
+    _RELOC-COUNT @ 0 ?DO
         \ Read offset from buffer, convert to absolute address
         I 8 * _img-reloc-buf @ + @   ( offset )
         _img-mark-base @ +           ( abs-slot-addr )
@@ -224,7 +272,7 @@ CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
         SWAP !
     LOOP
     \ Restore out-of-segment slots (imports + terminal link)
-    _img-ext-count @ 0 DO
+    _img-ext-count @ 0 ?DO
         I 16 * _img-ext-pairs +        ( pair )
         DUP @                           ( pair offset )
         _img-mark-base @ +             ( pair abs-slot-addr )
@@ -256,14 +304,14 @@ CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
     54 OVER 2 + C!                    \ '6'
     52 OVER 3 + C!                    \ '4'
     _IMG-VERSION OVER 4 + W!          \ version
-    0 OVER 6 + W!                     \ flags
+    _img-flags @ OVER 6 + W!          \ flags
     _img-seg-size @ OVER 8 + !        \ segment size
     _RELOC-COUNT @ OVER 16 + !        \ reloc count
     0 OVER 24 + !                     \ exports (0 for now)
     _img-import-count @ OVER 32 + !   \ imports
     LATEST _img-mark-base @ - OVER 40 + !  \ chain head offset
-    0 OVER 48 + !                     \ provided offset
-    0 OVER 56 + !                     \ reserved
+    _img-prov-offset @ OVER 48 + !    \ provided offset
+    _img-entry-offset @ OVER 56 + !   \ entry offset
     DROP                              ( buf out-size )
 
     \ ── Segment copy ─────────────────────────────────────────────
@@ -285,7 +333,7 @@ CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
     _img-import-count @ 0<> IF
         OVER _IMG-HDR-SZ + _img-seg-size @ +
         _RELOC-COUNT @ 8 * +             ( buf out-size imp-dest )
-        _img-ext-count @ 0 DO
+        _img-ext-count @ 0 ?DO
             I 16 * _img-ext-pairs + 8 + @   ( ... imp-dest xt )
             _IMG-XT>ENTRY DUP IF
                 \ Write fixup offset at imp-dest+0
@@ -365,6 +413,17 @@ CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
 ;
 
 \ =====================================================================
+\  IMG-SAVE-EXEC  ( xt "filename" -- ior )
+\    Convenience: record entry point then save.  Equivalent to
+\    IMG-ENTRY followed by IMG-SAVE.
+\ =====================================================================
+
+: IMG-SAVE-EXEC  ( xt "filename" -- ior )
+    IMG-ENTRY
+    IMG-SAVE
+;
+
+\ =====================================================================
 \  Phase 2 — Core Loader
 \ =====================================================================
 
@@ -375,6 +434,10 @@ VARIABLE _img-load-seg     \ loaded segment size
 VARIABLE _img-load-nrel    \ loaded reloc count
 VARIABLE _img-load-head    \ chain-head offset from header
 VARIABLE _img-load-nimp    \ loaded import count
+VARIABLE _img-load-flags   \ loaded flags from header
+VARIABLE _img-load-prov    \ loaded provided offset
+VARIABLE _img-load-entry   \ loaded entry offset
+VARIABLE _img-scratch      \ scratch address for reloc/import tables
 
 CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
 
@@ -430,7 +493,7 @@ CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
 
 : _IMG-STRLEN  ( c-addr max -- len )
     SWAP OVER                 ( max c-addr max )
-    0 DO                      ( max c-addr )
+    0 ?DO                     ( max c-addr )
         DUP I + C@            ( max c-addr byte )
         0= IF
             2DROP I UNLOOP EXIT
@@ -523,34 +586,70 @@ CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
     THEN
 
     \ 4. Extract metadata
+    HERE 6  + W@ _img-load-flags !
     HERE 8  + @ _img-load-seg !
     HERE 16 + @ _img-load-nrel !
     HERE 32 + @ _img-load-nimp !
     HERE 40 + @ _img-load-head !
+    HERE 48 + @ _img-load-prov !
+    HERE 56 + @ _img-load-entry !
     DROP                              \ drop file-size
 
-    \ 5. Segment is at HERE+64 — that's load-base
-    HERE 64 + _img-load-base !
-
-    \ 6. ALLOT header+segment to make them permanent
-    \    After this, new HERE = old_HERE + 64 + seg_size
-    \    The reloc table sits right at new HERE (scratch space)
-    64 _img-load-seg @ + ALLOT
-
-    \ 7. Relocate
-    \    reloc-buf = HERE (just past the segment = old file offset 64+seg)
-    _img-load-nrel @ 0<> IF
-        HERE _img-load-nrel @ _img-load-base @ _IMG-RELOCATE
+    \ 5. Allocate segment — XMEM or base-RAM
+    _img-load-flags @ _IMG-FLAG-XMEM AND IF
+        \ XMEM: allocate in ext memory, copy segment there
+        _img-load-seg @ XMEM-ALLOT _img-load-base !
+        HERE 64 + _img-load-base @ _img-load-seg @ CMOVE
+        HERE 64 + _img-load-seg @ + _img-scratch !
+    ELSE
+        \ Normal: segment at HERE+64, ALLOT to make permanent
+        HERE 64 + _img-load-base !
+        64 _img-load-seg @ + ALLOT
+        HERE _img-scratch !
     THEN
 
-    \ 8. Resolve imports
+    \ 6. Relocate
+    _img-load-nrel @ 0<> IF
+        _img-scratch @ _img-load-nrel @ _img-load-base @ _IMG-RELOCATE
+    THEN
+
+    \ 7. Resolve imports
     _img-load-nimp @ 0<> IF
-        HERE _img-load-nrel @ 8 * +    ( import-table-addr )
+        _img-scratch @ _img-load-nrel @ 8 * +
         _img-load-nimp @ _IMG-RESOLVE-IMPORTS
     THEN
 
-    \ 9. Splice dictionary chain
+    \ 8. Splice dictionary chain
     _IMG-SPLICE-DICT
 
+    \ 9. Register PROVIDED token if present  (-1 = none)
+    _img-load-prov @ -1 <> IF
+        NAMEBUF 24 0 FILL
+        _img-load-base @ _img-load-prov @ +   ( str-addr )
+        DUP 23 _IMG-STRLEN 23 MIN             ( str-addr len )
+        NAMEBUF SWAP CMOVE
+        _MOD-MARK
+    THEN
+
+    0
+;
+
+\ =====================================================================
+\  IMG-LOAD-EXEC  ( "filename" -- xt ior )
+\    Load a .m64 file that has the EXEC flag set (bit 2).  Returns
+\    the entry-point xt and 0 on success.  On error, returns dummy
+\    xt=0 and a negative ior.  Returns _IMG-ERR-NOEXEC if the
+\    image is not an executable.
+\ =====================================================================
+
+: IMG-LOAD-EXEC  ( "filename" -- xt ior )
+    IMG-LOAD DUP 0<> IF
+        0 SWAP EXIT               \ error → ( 0 ior )
+    THEN
+    _img-load-flags @ _IMG-FLAG-EXEC AND 0= IF
+        DROP 0 _IMG-ERR-NOEXEC EXIT
+    THEN
+    DROP
+    _img-load-base @ _img-load-entry @ +
     0
 ;

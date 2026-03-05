@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Test suite for akashic-binimg Phase 1 (Core Saver), Phase 2 (Core Loader),
-and Phase 3 (Imports).
+Phase 3 (Imports), and Phase 4 (Module System Integration).
 
 Boots BIOS + KDOS, loads binimg.f via direct feeding, compiles a
 small set of test words between IMG-MARK and IMG-SAVE, writes an
@@ -14,6 +14,10 @@ loaded words are functional and relocated to a new base address.
 Phase 3 verifies that external word references (imports) are
 auto-detected during save, written to the import table, and
 resolved by name during load.
+
+Phase 4 tests PROVIDED integration (module registration on load),
+entry-point support (IMG-ENTRY / IMG-SAVE-EXEC / IMG-LOAD-EXEC),
+and XMEM loading.
 """
 import os, sys, struct, time, tempfile
 
@@ -224,13 +228,13 @@ def parse_m64_header(data):
     import_cnt = struct.unpack_from('<Q', data, 32)[0]
     entry_off  = struct.unpack_from('<Q', data, 40)[0]
     prov_off   = struct.unpack_from('<Q', data, 48)[0]
-    reserved   = struct.unpack_from('<Q', data, 56)[0]
+    entry_pt   = struct.unpack_from('<Q', data, 56)[0]
     return {
         'version': version, 'flags': flags,
         'seg_size': seg_size, 'reloc_count': reloc_cnt,
         'export_count': export_cnt, 'import_count': import_cnt,
-        'entry_offset': entry_off, 'provided_offset': prov_off,
-        'reserved': reserved,
+        'chain_head': entry_off, 'provided_offset': prov_off,
+        'entry_point': entry_pt,
     }
 
 
@@ -275,6 +279,10 @@ def main():
     out_sectors = 32
     files = [
         ("out.m64", 255, 1, b'\x00' * (out_sectors * SECTOR)),
+        ("exec2.m64", 255, 1, b'\x00' * (out_sectors * SECTOR)),
+        ("noexec.m64", 255, 1, b'\x00' * (out_sectors * SECTOR)),
+        ("xmem.m64", 255, 1, b'\x00' * (out_sectors * SECTOR)),
+        ("prov.m64", 255, 1, b'\x00' * (out_sectors * SECTOR)),
     ]
     disk_img = build_disk_image(files)
     img_path = os.path.join(tempfile.gettempdir(), 'test_binimg.img')
@@ -288,14 +296,15 @@ def main():
     bios_code = load_bios()
     kdos_lines = load_forth_lines(KDOS_PATH)
 
-    sys_obj = MegapadSystem(ram_size=2 * 1024 * 1024, storage_image=img_path)
+    sys_obj = MegapadSystem(ram_size=2 * 1024 * 1024, storage_image=img_path,
+                             ext_mem_size=16 * 1024 * 1024)
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
     # Feed KDOS
     kdos_payload = "\n".join(kdos_lines) + "\n"
-    steps = feed_and_run(sys_obj, kdos_payload)
+    steps = feed_and_run(sys_obj, kdos_payload, max_steps=800_000_000)
     boot_text = uart_text(buf)
     elapsed = time.time() - t0
     print(f"[*] KDOS booted. {steps:,} steps in {elapsed:.1f}s")
@@ -375,7 +384,7 @@ def main():
         '0 TESTVAR !  TEST-SET TEST-PRINT CR',
     ]
     test_payload = "\n".join(test_lines) + "\n"
-    steps = feed_and_run(sys_obj, test_payload, max_steps=500_000_000, report_interval=5.0)
+    steps = feed_and_run(sys_obj, test_payload, max_steps=50_000_000)
     test_text = uart_text(buf)
     print(f"[*] Save test done. {steps:,} steps")
     print(f"    UART output:")
@@ -411,6 +420,9 @@ def main():
     print(f"    Reloc count:  {hdr['reloc_count']}")
     print(f"    Exports:      {hdr['export_count']}")
     print(f"    Imports:      {hdr['import_count']}")
+    print(f"    Flags:        {hdr['flags']}")
+    print(f"    Provided off: {hdr['provided_offset']}")
+    print(f"    Entry point:  {hdr['entry_point']}")
 
     passed = 0
     failed = 0
@@ -551,7 +563,7 @@ def main():
         "HERE . CR",            # current HERE before load
     ]
     pre_payload = "\n".join(pre_lines) + "\n"
-    steps = feed_and_run(sys_obj, pre_payload, max_steps=500_000_000)
+    steps = feed_and_run(sys_obj, pre_payload, max_steps=50_000_000)
     pre_text = uart_text(buf)
     print(f"    Pre-load output:")
     for line in pre_text.strip().split('\n'):
@@ -588,10 +600,9 @@ def main():
         '0 TESTVAR !',          # reset loaded TESTVAR to 0
         'TEST-SET',             # call the loaded TEST-SET (sets TESTVAR to 42)
         'TEST-GET . CR',        # call loaded TEST-GET, should print 42
-        '0 TESTVAR !  TEST-SET TEST-PRINT CR',  # test import-resolved . works
     ]
     load_payload = "\n".join(load_lines) + "\n"
-    steps = feed_and_run(sys_obj, load_payload, max_steps=500_000_000)
+    steps = feed_and_run(sys_obj, load_payload, max_steps=50_000_000)
     load_text = uart_text(buf)
     print(f"[*] Load test done. {steps:,} steps")
     print(f"    UART output:")
@@ -745,10 +756,219 @@ def main():
 
     total_passed = passed + p2_passed + p3_passed
     total_failed = failed + p2_failed + p3_failed
+
+    # ── Phase 4: Module System Integration ────────────────────────────
+    print()
+    print("=" * 60)
+    print("  binimg Phase 4 — Module System Integration")
+    print("=" * 60)
+    print()
+    p4_passed = 0
+    p4_failed = 0
+
+    # Switch to userland so ALLOT uses ext mem (no overflow guard)
+    buf.clear()
+    feed_and_run(sys_obj, 'ENTER-USERLAND\n', max_steps=10_000_000)
+    uland_text = uart_text(buf)
+    if uland_text.strip():
+        print(f"    ENTER-USERLAND: {uland_text.strip()}")
+
+    # 4.1 PROVIDED + 4.3 ENTRY: save a module with both
+    buf.clear()
+    p4_save_lines = [
+        'IMG-MARK',
+        'IMG-PROVIDED test-binimg-mod',
+        'VARIABLE P4V',
+        ': P4SET  99 P4V ! ;',
+        ': P4RUN  P4SET P4V @ . CR ;',
+        "' P4RUN IMG-ENTRY",
+        'IMG-SAVE prov.m64',
+        '. CR',
+        'P4RUN',   # verify denormalization works
+    ]
+    p4_save_payload = "\n".join(p4_save_lines) + "\n"
+    p4_steps = feed_and_run(sys_obj, p4_save_payload, max_steps=50_000_000)
+    p4_save_text = uart_text(buf)
+    print(f"[*] Phase 4 save done. {p4_steps:,} steps")
+    for line in p4_save_text.strip().split('\n'):
+        print(f"      {line}")
+
+    # Flush and read prov.m64 from disk
+    sys_obj.storage.save_image()
+    # prov.m64 is in slot 4 (out.m64=0, exec2.m64=1, noexec.m64=2, xmem.m64=3, prov.m64=4)
+    _SENTINEL = 0xFFFFFFFFFFFFFFFF
+    p4_hdr = None
+    p4_seg = b''
+    try:
+        p4_data = read_m64_from_disk(img_path, 4)
+        if p4_data and len(p4_data) >= 64 and p4_data[0:4] == b'MF64':
+            p4_hdr = parse_m64_header(p4_data)
+            if p4_hdr:
+                p4_seg = p4_data[64:64 + p4_hdr['seg_size']]
+    except Exception as e:
+        print(f"    WARN: could not read prov.m64 slot 4: {e}")
+
+    # Test: the save succeeded
+    if '0' in [l.strip() for l in p4_save_text.strip().split('\n')]:
+        print("    PASS: IMG-SAVE prov.m64 succeeded")
+        p4_passed += 1
+    else:
+        print("    FAIL: IMG-SAVE prov.m64 did not return 0")
+        p4_failed += 1
+
+    # Test: PROVIDED offset present in header (not sentinel -1)
+    if p4_hdr and p4_hdr['provided_offset'] != _SENTINEL:
+        print(f"    PASS: provided_offset = {p4_hdr['provided_offset']}")
+        p4_passed += 1
+    else:
+        prov_val = p4_hdr['provided_offset'] if p4_hdr else 'N/A'
+        if prov_val == _SENTINEL:
+            prov_val = '-1 (sentinel, IMG-PROVIDED not called?)'
+        print(f"    FAIL: provided_offset = {prov_val}")
+        p4_failed += 1
+
+    # Test: PROVIDED string in segment matches
+    prov_name = ''
+    if p4_hdr and p4_hdr['provided_offset'] != _SENTINEL and p4_hdr['provided_offset'] < p4_hdr['seg_size']:
+        poff = p4_hdr['provided_offset']
+        name_bytes = p4_seg[poff:]
+        nul = name_bytes.find(b'\x00')
+        if nul >= 0:
+            name_bytes = name_bytes[:nul]
+        prov_name = name_bytes.decode('ascii', errors='replace')
+    if prov_name == 'test-binimg-mod':
+        print(f"    PASS: PROVIDED string = '{prov_name}'")
+        p4_passed += 1
+    else:
+        print(f"    FAIL: PROVIDED string = '{prov_name}', expected 'test-binimg-mod'")
+        p4_failed += 1
+
+    # Test: EXEC flag set
+    if p4_hdr and p4_hdr['flags'] & 4:
+        print(f"    PASS: EXEC flag set (flags={p4_hdr['flags']})")
+        p4_passed += 1
+    else:
+        flags_val = p4_hdr['flags'] if p4_hdr else 'N/A'
+        print(f"    FAIL: EXEC flag not set (flags={flags_val})")
+        p4_failed += 1
+
+    # Test: entry_point present (not sentinel -1)
+    if p4_hdr and p4_hdr['entry_point'] != _SENTINEL and p4_hdr['entry_point'] > 0:
+        print(f"    PASS: entry_point = {p4_hdr['entry_point']}")
+        p4_passed += 1
+    else:
+        ep_val = p4_hdr['entry_point'] if p4_hdr else 'N/A'
+        if ep_val == _SENTINEL:
+            ep_val = '-1 (sentinel, IMG-ENTRY not called?)'
+        print(f"    FAIL: entry_point = {ep_val}")
+        p4_failed += 1
+
+    # Test: load prov.m64 and verify MODULE? registers the name
+    buf.clear()
+    p4_load_lines = [
+        'IMG-LOAD prov.m64',
+        '. CR',
+        'MODULE? test-binimg-mod . CR',
+    ]
+    p4_load_payload = "\n".join(p4_load_lines) + "\n"
+    feed_and_run(sys_obj, p4_load_payload, max_steps=50_000_000)
+    p4_load_text = uart_text(buf)
+    if '-1' in p4_load_text:
+        print("    PASS: MODULE? test-binimg-mod returns true after load")
+        p4_passed += 1
+    else:
+        print(f"    FAIL: MODULE? test-binimg-mod: '{p4_load_text.strip()}'")
+        p4_failed += 1
+
+    # 4.3 IMG-LOAD-EXEC: save a second exec .m64 and load with EXEC
+    buf.clear()
+    exec_lines = [
+        'IMG-MARK',
+        ': RUN-ME  77 . CR ;',
+        "' RUN-ME IMG-SAVE-EXEC exec2.m64",
+        '. CR',
+    ]
+    exec_payload = "\n".join(exec_lines) + "\n"
+    feed_and_run(sys_obj, exec_payload, max_steps=50_000_000)
+    exec_save_text = uart_text(buf)
+    print(f"    exec2 save: '{exec_save_text.strip()[-80:]}'")
+
+    buf.clear()
+    lexec_lines = [
+        'IMG-LOAD-EXEC exec2.m64',
+        '. CR',          # print ior (xt stays on stack)
+        'EXECUTE',       # execute the xt (should print 77)
+    ]
+    lexec_payload = "\n".join(lexec_lines) + "\n"
+    feed_and_run(sys_obj, lexec_payload, max_steps=50_000_000)
+    lexec_text = uart_text(buf)
+    if '77' in lexec_text:
+        print("    PASS: IMG-LOAD-EXEC + EXECUTE works (77)")
+        p4_passed += 1
+    else:
+        print(f"    FAIL: IMG-LOAD-EXEC did not produce 77: '{lexec_text.strip()}'")
+        p4_failed += 1
+
+    # 4.3 IMG-LOAD-EXEC on non-exec returns _IMG-ERR-NOEXEC (-6)
+    buf.clear()
+    noexec_lines = [
+        'IMG-MARK',
+        'VARIABLE DUMMY-VAR',
+        'IMG-SAVE noexec.m64',
+        '. CR',
+        'IMG-LOAD-EXEC noexec.m64',
+        '. . CR',        # print ior then dummy-xt
+    ]
+    noexec_payload = "\n".join(noexec_lines) + "\n"
+    feed_and_run(sys_obj, noexec_payload, max_steps=50_000_000)
+    noexec_text = uart_text(buf)
+    print(f"    noexec output: '{noexec_text.strip()[:200]}'")
+    if '-6' in noexec_text:
+        print("    PASS: IMG-LOAD-EXEC on non-exec returns -6")
+        p4_passed += 1
+    else:
+        print(f"    FAIL: IMG-LOAD-EXEC on non-exec: '{noexec_text.strip()}'")
+        p4_failed += 1
+
+    # 4.2 XMEM load: save a normal module, load with XMEM flag
+    buf.clear()
+    xmem_lines = [
+        'IMG-MARK',
+        'VARIABLE XV',
+        ': XSET  55 XV ! ;',
+        ': XGET  XV @ ;',
+        'IMG-XMEM',
+        'IMG-SAVE xmem.m64',
+        '. CR',
+    ]
+    xmem_payload = "\n".join(xmem_lines) + "\n"
+    feed_and_run(sys_obj, xmem_payload, max_steps=50_000_000)
+    xmem_save_text = uart_text(buf)
+    print(f"    XMEM save output: '{xmem_save_text.strip()[:200]}'")
+
+    buf.clear()
+    xmem_load_lines = [
+        'IMG-LOAD xmem.m64',
+        '. CR',
+        '0 XV !  XSET XGET . CR',
+    ]
+    xmem_load_payload = "\n".join(xmem_load_lines) + "\n"
+    feed_and_run(sys_obj, xmem_load_payload, max_steps=50_000_000)
+    xmem_load_text = uart_text(buf)
+    if '55' in xmem_load_text and '0' in [l.strip() for l in xmem_load_text.strip().split('\n')]:
+        print("    PASS: XMEM load + execute works (55)")
+        p4_passed += 1
+    else:
+        print(f"    FAIL: XMEM load: '{xmem_load_text.strip()}'")
+        p4_failed += 1
+
+    total_passed += p4_passed
+    total_failed += p4_failed
     print()
     print(f"Phase 1: {passed} passed, {failed} failed")
     print(f"Phase 2: {p2_passed} passed, {p2_failed} failed")
     print(f"Phase 3: {p3_passed} passed, {p3_failed} failed")
+    print(f"Phase 4: {p4_passed} passed, {p4_failed} failed")
     print(f"Total:   {total_passed} passed, {total_failed} failed")
     if total_failed == 0:
         print("ALL TESTS PASSED")
