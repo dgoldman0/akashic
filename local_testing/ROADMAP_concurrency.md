@@ -787,7 +787,7 @@ and wait-for-change semantics.
 : bump-count  1 request-count CV-ADD ;
 ```
 
-**Status:** ☐ Not started
+**Status:** ✅ Done — `akashic/concurrency/cvar.f` + `cvar.md` + `test_cvar.py` (35 tests)
 
 ---
 
@@ -810,7 +810,7 @@ buckets).
 | `CMAP-DEL`   | `( key cmap -- flag )`   | Thread-safe delete                   |
 | `CMAP-EACH`  | `( xt cmap -- )`         | Iterate (snapshot semantics)         |
 
-**Status:** ☐ Not started
+**Status:** ✅ Done — `akashic/concurrency/conc-map.f` + `conc-map.md` + `test_conc_map.py` (26 tests)
 
 ---
 
@@ -864,10 +864,10 @@ Priority order, highest-impact first:
 | 4  | semaphore.f  | 1     | Rate-limiting, resource counting                   | ✅     |
 | 5  | par.f        | 3     | Parallel map/reduce for math workloads             | ✅     |
 | 6  | scope.f      | 4     | Structured concurrency prevents leaks              | ✅     |
-| 7  | cvar.f       | 5     | Atomic variables with change notification          | ☐      |
+| 7  | cvar.f       | 5     | Atomic variables with change notification          | ✅     |
 | 8  | rwlock.f     | 1     | Read-heavy shared structures                       | ✅     |
 | 9  | mailbox.f    | 2     | Actor messaging — deferred (channels subsume)      | ⏭     |
-| 10 | conc-map.f   | 5     | Fine-grained concurrent hash map                   | ☐      |
+| 10 | conc-map.f   | 5     | Fine-grained concurrent hash map                   | ✅     |
 
 ---
 
