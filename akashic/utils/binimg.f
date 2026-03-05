@@ -22,7 +22,7 @@
 \   on other modules or cores.
 \
 \   Layout during compilation:
-\     [...dict...][reloc-buf 8K][mark-base ... segment ... HERE]
+\     [...dict...][reloc-buf 8K/64K][mark-base ... segment ... HERE]
 \
 \   Layout during IMG-SAVE (temporary):
 \     [...dict...][reloc-buf][segment][output-buf]
@@ -37,7 +37,16 @@ PROVIDED akashic-binimg
 
 64 CONSTANT _IMG-HDR-SZ       \ .m64 header size (bytes)
 1  CONSTANT _IMG-VERSION      \ format version
-1024 CONSTANT _IMG-MAX-RELOCS \ max relocation entries
+
+\ Reloc buffer: adaptive sizing based on available memory.
+\ In kernel space (base 2 MB RAM) a large ALLOT can clobber BIOS
+\ structures, so we keep the buffer small.  When the caller has
+\ entered userland (HERE in ext mem, 16 MB), the full 8192 slots
+\ are safe.  The check is ULAND @ (currently in userland?) not
+\ XMEM? (hardware present?) because the latter is true even when
+\ HERE still points into base RAM.
+1024 CONSTANT _IMG-RELOCS-SMALL  \ kernel-space cap (8 KB)
+8192 CONSTANT _IMG-RELOCS-LARGE  \ userland cap (64 KB)
 
 \ Flag bits
 1 CONSTANT _IMG-FLAG-JIT
@@ -53,7 +62,6 @@ PROVIDED akashic-binimg
 -6 CONSTANT _IMG-ERR-NOEXEC    \ not an executable image
 
 \ Import table
-64 CONSTANT _IMG-MAX-EXT          \ max out-of-segment relocs
 32 CONSTANT _IMG-IMPORT-ENTRY-SZ  \ bytes per import entry in file
 
 \ =====================================================================
@@ -63,13 +71,15 @@ PROVIDED akashic-binimg
 VARIABLE _img-mark-base    \ HERE at mark time (start of segment)
 VARIABLE _img-mark-latest  \ LATEST at mark time
 VARIABLE _img-reloc-buf    \ address of reloc buffer (below segment)
+VARIABLE _img-reloc-cap    \ runtime reloc capacity (set by IMG-MARK)
 VARIABLE _img-seg-size     \ computed segment size
 VARIABLE _img-fd           \ file descriptor during save
 
-\ Import state (Phase 3)
+\ Import state (Phase 3) — ext-pairs buffer (static, large)
+1024 CONSTANT _IMG-EXT-CAP
 VARIABLE _img-ext-count        \ count of all out-of-segment relocs
 VARIABLE _img-import-count     \ count of named imports
-CREATE _img-ext-pairs  _IMG-MAX-EXT 16 * ALLOT  \ (offset, value) pairs
+CREATE _img-ext-buf  _IMG-EXT-CAP 16 * ALLOT  \ (offset, value) pairs
 
 \ Module/entry state (Phase 4)
 VARIABLE _img-flags            \ flag bits for next save
@@ -86,9 +96,13 @@ VARIABLE _img-entry-offset     \ segment-rel offset of entry point
 \ =====================================================================
 
 : IMG-MARK  ( -- )
+    \ Pick reloc capacity: large if in userland, small otherwise
+    ULAND @ IF _IMG-RELOCS-LARGE ELSE _IMG-RELOCS-SMALL THEN
+    _img-reloc-cap !
+
     \ Park reloc buffer at HERE
     HERE _img-reloc-buf !
-    _IMG-MAX-RELOCS 8 * ALLOT
+    _img-reloc-cap @ 8 * ALLOT
 
     \ Point BIOS at our buffer
     _img-reloc-buf @ _RELOC-BUF !
@@ -156,8 +170,8 @@ VARIABLE _img-entry-offset     \ segment-rel offset of entry point
         DUP _img-mark-latest @ <>     ( entry flag )
     WHILE
         \ Append absolute address of this link field to reloc buf
-        _RELOC-COUNT @ DUP _IMG-MAX-RELOCS >= IF
-            DROP DROP ." IMG: reloc buf full" CR EXIT
+        _RELOC-COUNT @ DUP _img-reloc-cap @ >= IF
+            ABORT" IMG: reloc buffer overflow"
         THEN
         8 * _img-reloc-buf @ +        ( entry buf-slot )
         OVER SWAP !                    ( entry )
@@ -196,8 +210,10 @@ VARIABLE _img-entry-offset     \ segment-rel offset of entry point
 \ =====================================================================
 
 : _IMG-RECORD-EXT  ( abs-slot-addr val -- )
-    _img-ext-count @ _IMG-MAX-EXT >= IF 2DROP EXIT THEN
-    _img-ext-count @ 16 * _img-ext-pairs +  ( abs val pair )
+    _img-ext-count @ _IMG-EXT-CAP >= IF
+        ABORT" IMG-SAVE: ext-pair overflow (>1024 external refs)"
+    THEN
+    _img-ext-count @ 16 * _img-ext-buf +  ( abs val pair )
     ROT _img-mark-base @ -                  ( val pair offset )
     OVER !                                   ( val pair )
     8 + !                                    ( )
@@ -213,7 +229,7 @@ VARIABLE _img-entry-offset     \ segment-rel offset of entry point
 : _IMG-COUNT-IMPORTS  ( -- n )
     0
     _img-ext-count @ 0 ?DO
-        I 16 * _img-ext-pairs + 8 + @   ( count xt )
+        I 16 * _img-ext-buf + 8 + @   ( count xt )
         _IMG-XT>ENTRY 0<> IF 1+ THEN
     LOOP
 ;
@@ -273,7 +289,7 @@ VARIABLE _img-entry-offset     \ segment-rel offset of entry point
     LOOP
     \ Restore out-of-segment slots (imports + terminal link)
     _img-ext-count @ 0 ?DO
-        I 16 * _img-ext-pairs +        ( pair )
+        I 16 * _img-ext-buf +        ( pair )
         DUP @                           ( pair offset )
         _img-mark-base @ +             ( pair abs-slot-addr )
         SWAP 8 + @                      ( abs-slot-addr original-val )
@@ -334,10 +350,10 @@ VARIABLE _img-entry-offset     \ segment-rel offset of entry point
         OVER _IMG-HDR-SZ + _img-seg-size @ +
         _RELOC-COUNT @ 8 * +             ( buf out-size imp-dest )
         _img-ext-count @ 0 ?DO
-            I 16 * _img-ext-pairs + 8 + @   ( ... imp-dest xt )
+            I 16 * _img-ext-buf + 8 + @   ( ... imp-dest xt )
             _IMG-XT>ENTRY DUP IF
                 \ Write fixup offset at imp-dest+0
-                I 16 * _img-ext-pairs + @    ( ... imp-dest entry offset )
+                I 16 * _img-ext-buf + @    ( ... imp-dest entry offset )
                 2 PICK !                      ( ... imp-dest entry )
                 \ Write name at imp-dest+8 (up to 23 chars)
                 ENTRY>NAME 23 MIN            ( ... imp-dest addr len )
@@ -359,7 +375,6 @@ VARIABLE _img-entry-offset     \ segment-rel offset of entry point
 \    Returns 0 on success, negative on error.
 \
 \    After save the live dictionary is restored (denormalized).
-\    No heap allocations.  No side effects on other modules.
 \ =====================================================================
 
 : IMG-SAVE  ( "filename" -- ior )
@@ -438,6 +453,7 @@ VARIABLE _img-load-flags   \ loaded flags from header
 VARIABLE _img-load-prov    \ loaded provided offset
 VARIABLE _img-load-entry   \ loaded entry offset
 VARIABLE _img-scratch      \ scratch address for reloc/import tables
+VARIABLE _img-splice-guard \ countdown guard for chain walk
 
 CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
 
@@ -468,6 +484,8 @@ CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
 \ =====================================================================
 
 : _IMG-SPLICE-DICT  ( -- )
+    \ Guard: max entries = seg-size / 10 (min entry = 8 link + 1 len + 1 char)
+    _img-load-seg @ 10 / 1+ _img-splice-guard !
     _img-load-base @ _img-load-head @ +   ( head )
     DUP                                     ( head cur )
     BEGIN
@@ -476,6 +494,8 @@ CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
         OVER _img-load-base @ _img-load-seg @ + < AND
     WHILE
         NIP DUP                             ( head link link )
+        _img-splice-guard @ 1- DUP _img-splice-guard !
+        0= IF ABORT" IMG-LOAD: corrupt dict chain (loop detected)" THEN
     REPEAT
     DROP                                    ( head tail )
 

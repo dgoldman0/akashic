@@ -193,6 +193,22 @@ def feed_and_run(sys_obj, data, max_steps=400_000_000, report_interval=10.0):
 
 # ─── .m64 Verification ──────────────────────────────────────────────
 
+def read_m64_from_raw(raw, file_entry_index):
+    """Read .m64 from raw disk image bytes by directory entry index."""
+    dir_base = 2 * SECTOR
+    de_off = dir_base + file_entry_index * 48
+    de = raw[de_off:de_off + 48]
+    start_sec = struct.unpack_from('<H', de, 24)[0]
+    used_bytes = struct.unpack_from('<I', de, 28)[0]
+    data_off = start_sec * SECTOR
+    return bytes(raw[data_off:data_off + used_bytes])
+
+
+def read_m64_from_storage(storage, file_entry_index):
+    """Read .m64 from emulator's in-memory Storage device."""
+    return read_m64_from_raw(bytes(storage._image_data), file_entry_index)
+
+
 def read_m64_from_disk(disk_path, file_entry_index):
     """Read the .m64 file data from the disk image by looking up the
     directory entry at the given index."""
@@ -1092,6 +1108,107 @@ def main():
     else:
         print(f"    FAIL: different files same checksum ({cksum_val} vs {cksum_prov_val})")
         p5_failed += 1
+
+    # ── 5.5 Cross-boot Reproducible Builds ────────────────────────────
+    # "save from two separate boots (same BIOS) → byte-identical"
+    # Extract out.m64 from first boot's disk image
+    print()
+    print("    --- Reproducible Builds (cross-boot) ---")
+    m64_data_boot1 = read_m64_from_storage(sys_obj.storage, out_m64_slot)
+    print(f"    [*] Boot 1 out.m64: {len(m64_data_boot1)} bytes")
+
+    # Build a fresh disk image for the second boot
+    disk_img2 = build_disk_image(files)
+    img_path2 = os.path.join(tempfile.gettempdir(), 'test_binimg_boot2.img')
+    with open(img_path2, 'wb') as f:
+        f.write(disk_img2)
+
+    # Boot a fresh emulator
+    print("    [*] Booting second emulator ...")
+    t_repro = time.time()
+    sys_obj2 = MegapadSystem(ram_size=2 * 1024 * 1024, storage_image=img_path2,
+                              ext_mem_size=16 * 1024 * 1024)
+    buf2 = capture_uart(sys_obj2)
+    sys_obj2.load_binary(0, bios_code)
+    sys_obj2.boot()
+
+    # Feed KDOS
+    feed_and_run(sys_obj2, kdos_payload, max_steps=800_000_000)
+    buf2.clear()
+
+    # Feed binimg.f
+    feed_and_run(sys_obj2, binimg_payload, max_steps=400_000_000)
+    buf2.clear()
+
+    # Compile the EXACT same source as first boot's Phase 1 save
+    repro_lines = [
+        'IMG-MARK',
+        'VARIABLE TESTVAR',
+        ': TEST-SET  42 TESTVAR ! ;',
+        ': TEST-GET  TESTVAR @ ;',
+        ': TEST-PRINT  TESTVAR @ . ;',
+        'IMG-SAVE out.m64',
+        '. CR',
+    ]
+    feed_and_run(sys_obj2, "\n".join(repro_lines) + "\n", max_steps=50_000_000)
+    repro_text = uart_text(buf2)
+    elapsed_repro = time.time() - t_repro
+    print(f"    [*] Second boot done. {elapsed_repro:.1f}s")
+
+    # Check save succeeded (output should contain "0")
+    repro_ok = '0' in [l.strip() for l in repro_text.strip().split('\n')]
+    if not repro_ok:
+        print(f"    [!] Second boot save may have failed: '{repro_text.strip()}'")
+
+    # Extract out.m64 from second boot's in-memory storage
+    m64_data_boot2 = read_m64_from_storage(sys_obj2.storage, out_m64_slot)
+    print(f"    [*] Boot 2 out.m64: {len(m64_data_boot2)} bytes")
+
+    # Test: byte-identical .m64 from two separate boots
+    if m64_data_boot1 == m64_data_boot2:
+        print(f"    PASS: cross-boot byte-identical ({len(m64_data_boot1)} bytes)")
+        p5_passed += 1
+    else:
+        # Find and report first difference
+        min_len = min(len(m64_data_boot1), len(m64_data_boot2))
+        diff_at = None
+        for i in range(min_len):
+            if m64_data_boot1[i] != m64_data_boot2[i]:
+                diff_at = i
+                break
+        if diff_at is not None:
+            print(f"    FAIL: cross-boot differs at byte {diff_at}: "
+                  f"0x{m64_data_boot1[diff_at]:02x} vs 0x{m64_data_boot2[diff_at]:02x}")
+            # Show context around the difference
+            ctx_start = max(0, diff_at - 4)
+            ctx_end = min(min_len, diff_at + 8)
+            print(f"      boot1[{ctx_start}:{ctx_end}] = {m64_data_boot1[ctx_start:ctx_end].hex()}")
+            print(f"      boot2[{ctx_start}:{ctx_end}] = {m64_data_boot2[ctx_start:ctx_end].hex()}")
+        else:
+            print(f"    FAIL: cross-boot different lengths: "
+                  f"{len(m64_data_boot1)} vs {len(m64_data_boot2)}")
+        p5_failed += 1
+
+    # Test: cross-boot IMG-CHECKSUM matches
+    buf2.clear()
+    feed_and_run(sys_obj2, "IMG-CHECKSUM out.m64 . CR\n", max_steps=50_000_000)
+    cksum_boot2_text = uart_text(buf2)
+    cksum_boot2_nums = []
+    for line in cksum_boot2_text.strip().split('\n'):
+        for tok in line.split():
+            if tok in ('ok', '>'): continue
+            try: cksum_boot2_nums.append(int(tok)); break
+            except ValueError: continue
+    cksum_boot2_val = cksum_boot2_nums[0] if cksum_boot2_nums else None
+    if cksum_boot2_val is not None and cksum_boot2_val == cksum_val:
+        print(f"    PASS: cross-boot checksum matches ({cksum_val})")
+        p5_passed += 1
+    else:
+        print(f"    FAIL: cross-boot checksum differs ({cksum_val} vs {cksum_boot2_val})")
+        p5_failed += 1
+
+    # Cleanup second disk image
+    os.unlink(img_path2)
 
     total_passed += p5_passed
     total_failed += p5_failed

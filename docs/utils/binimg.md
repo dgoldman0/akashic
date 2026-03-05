@@ -3,7 +3,7 @@
 **Module:** `akashic/utils/binimg.f`
 **Prefix:** `IMG-` (public), `_IMG-` (internal)
 **Provides:** `akashic-binimg`
-**Phase:** 3 — Core Saver + Loader + Imports
+**Phase:** 5 — Core Saver + Loader + Imports + Modules + Hardening
 
 ## Overview
 
@@ -60,8 +60,11 @@ segment. Everything compiled after `IMG-MARK` becomes part of the
 segment.
 
 Internally:
-- Parks a relocation buffer (8 KiB, 1024 entries max) at HERE via
-  `ALLOT`.
+- Parks a relocation buffer at HERE via `ALLOT`.  The buffer size is
+  **adaptive**: 8192 entries (64 KiB) when `ULAND @` is true (userland
+  mode, HERE in ext mem), 1024 entries (8 KiB) when in kernel space.
+  This avoids clobbering BIOS structures with a large ALLOT in the
+  2 MB base-RAM region.
 - Enables BIOS relocation tracking (`_RELOC-ACTIVE`, `_RELOC-BUF`,
   `_RELOC-COUNT`).
 - Records `HERE` as `_img-mark-base` and `LATEST` as
@@ -112,8 +115,48 @@ Steps performed:
 8. Resolve imports: for each import entry, build a counted string
    from the name field, call `FIND` to look up the word in the
    host dictionary, and patch the fixup slot with the resolved XT.
-9. Splice the dictionary chain: set the loaded chain's tail link to
-   the current `LATEST`, then set `LATEST` to the loaded chain head.
+9. Splice the dictionary chain: walk the loaded chain from head to
+   tail (bounded by a splice guard to prevent infinite loops on
+   corrupt chains), set the tail link to the current `LATEST`, then
+   set `LATEST` to the loaded chain head.
+
+### `IMG-LOAD-EXEC  ( "filename" -- xt ior )`
+
+Load a `.m64` file that has the `EXEC` flag (bit 2).  Returns the
+entry-point XT and 0 on success.  Returns `0 _IMG-ERR-NOEXEC` if the
+image is not an executable.
+
+### `IMG-PROVIDED  ( "token" -- )`
+
+Store a NUL-terminated module name in the segment.  After save/load,
+the loader calls `_MOD-MARK` to register it so `REQUIRE` of the
+corresponding `.f` source file is skipped.
+
+### `IMG-ENTRY  ( xt -- )`
+
+Record an entry-point XT for executable images.  Sets the `EXEC` flag
+automatically.
+
+### `IMG-XMEM  ( -- )`
+
+Set the `XMEM` flag.  The segment will be loaded into extended memory
+via `XMEM-ALLOT` instead of base-RAM `ALLOT`.
+
+### `IMG-INFO  ( "filename" -- )`
+
+Print a human-readable summary of a `.m64` file's header: magic,
+version, flags, segment size, reloc/import counts, PROVIDED token,
+and entry-point offset.
+
+### `IMG-VERIFY  ( "filename" -- ior )`
+
+Validate a `.m64` file's structural integrity: magic, version, segment
+size vs file size, reloc offsets within bounds.  Returns 0 on success.
+
+### `IMG-CHECKSUM  ( "filename" -- u )`
+
+Compute a 64-bit hash of the entire `.m64` file contents.  Useful for
+reproducible-build verification.
 
 ## .m64 File Format
 
@@ -175,7 +218,7 @@ No `ALLOCATE` / `FREE`. All buffers live in dictionary space via
 
 ```
 During compilation (after IMG-MARK):
-  [...dict...][reloc-buf 8K][mark-base ... segment ... HERE]
+  [...dict...][reloc-buf 8K/64K][mark-base ... segment ... HERE]
 
 During IMG-SAVE (temporary):
   [...dict...][reloc-buf][segment][fdesc 56B][output-buf]
@@ -204,12 +247,15 @@ Two sources feed the relocation buffer:
    link cell.
 
 During normalization, entries whose target value falls **outside** the
-segment are recorded as out-of-segment relocs in `_img-ext-pairs`.
+segment are recorded as out-of-segment relocs in `_img-ext-buf`.
 These are references to KDOS/BIOS words (e.g., `!`, `@`, `.`) and the
-terminal link field. For each, `_IMG-XT>ENTRY` attempts a reverse
-lookup by walking the pre-mark dictionary; if found, the reference
-becomes a named import entry in the `.m64` file. The fixup slot is
-zeroed in the output.
+terminal link field.  The buffer holds up to 1024 entries
+(`_IMG-EXT-CAP`); overflow aborts with a diagnostic message.  Note
+that each **call site** consumes one slot — calling `EMIT` 10 times
+uses 10 slots, not 1.  For each ext-pair, `_IMG-XT>ENTRY` attempts a
+reverse lookup by walking the pre-mark dictionary; if found, the
+reference becomes a named import entry in the `.m64` file.  The fixup
+slot is zeroed in the output.
 
 ## Error Codes
 
@@ -220,6 +266,7 @@ zeroed in the output.
 | -2   | `_IMG-ERR-MAGIC`  | Bad magic or version too new       |
 | -3   | `_IMG-ERR-IMPORT` | Unresolved import (name not found) |
 | -5   | `_IMG-ERR-RELOC`  | Relocation buffer overflow         |
+| -6   | `_IMG-ERR-NOEXEC` | Not an executable image             |
 
 ## Design Notes
 
@@ -277,8 +324,8 @@ zeroed in the output.
 | 1     | **Done**| Core saver (IMG-MARK, IMG-SAVE)      |
 | 2     | **Done**| Core loader (IMG-LOAD)               |
 | 3     | **Done**| Import table (auto-detect + resolve) |
-| 4     | Planned | Module system integration            |
-| 5     | Planned | Diagnostics & hardening              |
+| 4     | **Done**| Module system (PROVIDED, EXEC, XMEM) |
+| 5     | **Done**| Diagnostics & hardening              |
 
 See `local_testing/ROADMAP_executable.md` for the full phase plan and
 decision log.
