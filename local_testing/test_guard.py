@@ -240,28 +240,31 @@ if __name__ == '__main__':
           "42 ")
 
     # ────────────────────────────────────────────────────────────────
-    print("\n── Re-entry detection ──\n")
+    print("\n── Recursive nesting ──\n")
 
-    check("re-entry on spinning guard throws -257",
+    check("re-entry on spinning guard nests correctly",
           ['GUARD _G9',
-           ': _INNER  _G9 GUARD-ACQUIRE ;',
+           ': _INNER  _G9 GUARD-ACQUIRE  _G9 GUARD-MINE? .  _G9 GUARD-RELEASE ;',
            ': _T',
            '  _G9 GUARD-ACQUIRE',
-           "  ['] _INNER CATCH",
-           '  .',
+           '  _INNER',
+           '  _G9 GUARD-HELD? .',
            '  _G9 GUARD-RELEASE',
+           '  _G9 GUARD-HELD? .',
            '; _T'],
-          "-257 ")
+          "-1 -1 0 ")
 
-    check("re-entry in WITH-GUARD detected",
+    check("nested GUARD-ACQUIRE inside WITH-GUARD succeeds",
           ['GUARD _G10',
-           ': _INNER  _G10 GUARD-ACQUIRE _G10 GUARD-RELEASE ;',
+           ': _INNER  _G10 GUARD-ACQUIRE  _G10 GUARD-RELEASE ;',
            ': _T',
            '  _G10 GUARD-ACQUIRE',
-           "  ['] _INNER CATCH .",
+           '  _INNER',
+           '  _G10 GUARD-HELD? .',
            '  _G10 GUARD-RELEASE',
+           '  _G10 GUARD-HELD? .',
            '; _T'],
-          "-257 ")
+          "-1 0 ")
 
     # ────────────────────────────────────────────────────────────────
     print("\n── GUARD-BLOCKING creation and state ──\n")
@@ -315,16 +318,17 @@ if __name__ == '__main__':
            '; _T'],
           "55 0 ")
 
-    check("re-entry on blocking guard throws -257",
+    check("re-entry on blocking guard nests correctly",
           ['GUARD-BLOCKING _BG6',
-           ': _INNER  _BG6 GUARD-ACQUIRE ;',
+           ': _INNER  _BG6 GUARD-ACQUIRE  _BG6 GUARD-MINE? .  _BG6 GUARD-RELEASE ;',
            ': _T',
            '  _BG6 GUARD-ACQUIRE',
-           "  ['] _INNER CATCH",
-           '  .',
+           '  _INNER',
+           '  _BG6 GUARD-HELD? .',
            '  _BG6 GUARD-RELEASE',
+           '  _BG6 GUARD-HELD? .',
            '; _T'],
-          "-257 ")
+          "-1 -1 0 ")
 
     # ────────────────────────────────────────────────────────────────
     print("\n── Multiple acquires / releases ──\n")

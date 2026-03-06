@@ -120,3 +120,32 @@ VARIABLE _SHA256-DST
     LOOP
     >R 2DROP R>
     0= IF TRUE ELSE FALSE THEN ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _sha256-guard
+
+\ Save original XTs before shadowing
+' SHA256-HASH   CONSTANT _sha256-hash-xt
+' SHA256->HEX   CONSTANT _sha256-hex-xt
+' SHA256-BEGIN   CONSTANT _sha256-begin-xt
+' SHA256-ADD     CONSTANT _sha256-add-xt
+' SHA256-END     CONSTANT _sha256-end-xt
+
+: SHA256-HASH     _sha256-hash-xt     _sha256-guard WITH-GUARD ;
+: SHA256->HEX     _sha256-hex-xt      _sha256-guard WITH-GUARD ;
+
+: SHA256-BEGIN  ( -- )
+    _sha256-guard GUARD-ACQUIRE
+    _sha256-begin-xt CATCH
+    ?DUP IF _sha256-guard GUARD-RELEASE THROW THEN ;
+
+: SHA256-ADD  ( addr len -- )
+    _sha256-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _sha256-add-xt EXECUTE ;
+
+: SHA256-END  ( dst -- )
+    _sha256-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _sha256-end-xt CATCH
+    _sha256-guard GUARD-RELEASE
+    ?DUP IF THROW THEN ;

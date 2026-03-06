@@ -183,3 +183,19 @@ VARIABLE _MK-V-PROOF
         _MK-V-IDX @ 1 RSHIFT  _MK-V-IDX !
     LOOP
     _MK-TMP-HASH R> SHA3-256-COMPARE ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+\ MERKLE-TREE (defining), MERKLE-N, MERKLE-ROOT, MERKLE-LEAF@
+\ are pure struct reads — left unguarded.
+REQUIRE ../concurrency/guard.f
+GUARD _merkle-guard
+
+' MERKLE-BUILD   CONSTANT _mk-build-xt
+' MERKLE-OPEN    CONSTANT _mk-open-xt
+' MERKLE-VERIFY  CONSTANT _mk-verify-xt
+' MERKLE-LEAF!   CONSTANT _mk-leaf-xt
+
+: MERKLE-BUILD   _mk-build-xt   _merkle-guard WITH-GUARD ;
+: MERKLE-OPEN    _mk-open-xt    _merkle-guard WITH-GUARD ;
+: MERKLE-VERIFY  _mk-verify-xt  _merkle-guard WITH-GUARD ;
+: MERKLE-LEAF!   _mk-leaf-xt    _merkle-guard WITH-GUARD ;

@@ -367,3 +367,15 @@ VARIABLE _ED-ENC-DST  VARIABLE _ED-R-HASH  VARIABLE _ED-R-DST
     \ Compare S*B (ENC1) vs R+h*A (PC)
     _ED-PC _ED-ENC2 _ED-ENCODE
     _ED-ENC1 _ED-ENC2 FIELD-EQ? ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _ed25519-guard
+
+' ED25519-KEYGEN  CONSTANT _ed-keygen-xt
+' ED25519-SIGN    CONSTANT _ed-sign-xt
+' ED25519-VERIFY  CONSTANT _ed-verify-xt
+
+: ED25519-KEYGEN  _ed-keygen-xt  _ed25519-guard WITH-GUARD ;
+: ED25519-SIGN    _ed-sign-xt    _ed25519-guard WITH-GUARD ;
+: ED25519-VERIFY  _ed-verify-xt  _ed25519-guard WITH-GUARD ;

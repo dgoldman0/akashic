@@ -298,3 +298,71 @@ VARIABLE _SHA3-HDST
     LOOP
     >R 2DROP R>
     0= IF TRUE ELSE FALSE THEN ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+\ Spinning GUARD serialises all access to the shared Keccak
+\ state and hex-conversion buffer (_SHA3-HDST).
+\ One-shot words: WITH-GUARD (acquire-CATCH-release).
+\ Streaming: BEGIN acquires, END releases, ADD asserts ownership.
+\ Pure read / compare / print words are left unguarded.
+\ Error -258 = operation called without holding the guard.
+
+REQUIRE ../concurrency/guard.f
+GUARD _sha3-guard
+
+\ Save original XTs before shadowing
+' SHA3-256-HASH   CONSTANT _s3-256-hash-xt
+' SHA3-512-HASH   CONSTANT _s3-512-hash-xt
+' SHAKE-128       CONSTANT _shake128-xt
+' SHAKE-256       CONSTANT _shake256-xt
+' SHA3-256-HMAC   CONSTANT _s3-256-hmac-xt
+' SHA3-256->HEX   CONSTANT _s3-256-hex-xt
+' SHA3-512->HEX   CONSTANT _s3-512-hex-xt
+' SHA3-256-BEGIN   CONSTANT _s3-256-begin-xt
+' SHA3-512-BEGIN   CONSTANT _s3-512-begin-xt
+' SHA3-256-ADD     CONSTANT _s3-256-add-xt
+' SHA3-512-ADD     CONSTANT _s3-512-add-xt
+' SHA3-256-END     CONSTANT _s3-256-end-xt
+' SHA3-512-END     CONSTANT _s3-512-end-xt
+
+\ ── one-shot entry points ──
+: SHA3-256-HASH   _s3-256-hash-xt   _sha3-guard WITH-GUARD ;
+: SHA3-512-HASH   _s3-512-hash-xt   _sha3-guard WITH-GUARD ;
+: SHAKE-128       _shake128-xt      _sha3-guard WITH-GUARD ;
+: SHAKE-256       _shake256-xt      _sha3-guard WITH-GUARD ;
+: SHA3-256-HMAC   _s3-256-hmac-xt   _sha3-guard WITH-GUARD ;
+: SHA3-256->HEX   _s3-256-hex-xt    _sha3-guard WITH-GUARD ;
+: SHA3-512->HEX   _s3-512-hex-xt    _sha3-guard WITH-GUARD ;
+
+\ ── streaming BEGIN (acquire guard) ──
+: SHA3-256-BEGIN  ( -- )
+    _sha3-guard GUARD-ACQUIRE
+    _s3-256-begin-xt CATCH
+    ?DUP IF _sha3-guard GUARD-RELEASE THROW THEN ;
+
+: SHA3-512-BEGIN  ( -- )
+    _sha3-guard GUARD-ACQUIRE
+    _s3-512-begin-xt CATCH
+    ?DUP IF _sha3-guard GUARD-RELEASE THROW THEN ;
+
+\ ── streaming ADD (assert ownership) ──
+: SHA3-256-ADD  ( addr len -- )
+    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _s3-256-add-xt EXECUTE ;
+
+: SHA3-512-ADD  ( addr len -- )
+    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _s3-512-add-xt EXECUTE ;
+
+\ ── streaming END (release guard, always) ──
+: SHA3-256-END  ( dst -- )
+    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _s3-256-end-xt CATCH
+    _sha3-guard GUARD-RELEASE
+    ?DUP IF THROW THEN ;
+
+: SHA3-512-END  ( dst -- )
+    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _s3-512-end-xt CATCH
+    _sha3-guard GUARD-RELEASE
+    ?DUP IF THROW THEN ;

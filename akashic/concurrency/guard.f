@@ -102,8 +102,9 @@ PROVIDED akashic-guard
 \ =====================================================================
 
 \ GUARD-ACQUIRE ( guard -- )
-\   Acquire the guard.  If the same task already holds it, ABORT
-\   with a re-entry error (prevents deadlock).
+\   Acquire the guard.  If the same task already holds it, the
+\   nesting depth is incremented (recursive entry) — this allows
+\   higher-level wrappers to call lower-level guarded words safely.
 \
 \   For spinning guards:  busy-wait on the flag cell with YIELD?.
 \   For blocking guards:  SEM-WAIT on the embedded semaphore.
@@ -112,7 +113,8 @@ PROVIDED akashic-guard
     \ Re-entry check: if guard is held AND owner matches current task
     DUP _GRD-FLAG @ IF
         DUP _GRD-OWNER @ CURRENT-TASK @ = IF
-            -257 THROW    \ guard re-entry detected
+            \ Same-task re-entry: increment depth and return
+            _GRD-FLAG DUP @ 1 + SWAP ! EXIT
         THEN
     THEN
     DUP _GRD-MODE @ IF
@@ -124,8 +126,8 @@ PROVIDED akashic-guard
         BEGIN DUP @ WHILE YIELD? REPEAT
         DROP
     THEN
-    \ Claim it
-    -1 OVER _GRD-FLAG !
+    \ Claim it (depth = 1)
+    1 OVER _GRD-FLAG !
     CURRENT-TASK @ SWAP _GRD-OWNER ! ;
 
 \ =====================================================================
@@ -133,10 +135,16 @@ PROVIDED akashic-guard
 \ =====================================================================
 
 \ GUARD-RELEASE ( guard -- )
-\   Release the guard.  Clears the owner and flag.
+\   Release the guard.  If nesting depth > 1, decrements the depth.
+\   If depth == 1, clears owner and flag (full release).
 \   For blocking guards, also signals the embedded semaphore.
 
 : GUARD-RELEASE  ( guard -- )
+    DUP _GRD-FLAG @ 1 > IF
+        \ Nested: decrement depth
+        _GRD-FLAG DUP @ 1 - SWAP ! EXIT
+    THEN
+    \ Depth was 1: full release
     0 OVER _GRD-OWNER !     \ clear owner
     0 OVER _GRD-FLAG !      \ clear flag
     DUP _GRD-MODE @ IF
@@ -211,7 +219,7 @@ PROVIDED akashic-guard
 \
 \  GUARD             ( "name" -- )           Create spinning guard
 \  GUARD-BLOCKING    ( "name" -- )           Create blocking guard
-\  GUARD-ACQUIRE     ( guard -- )            Acquire (aborts on re-entry)
+\  GUARD-ACQUIRE     ( guard -- )            Acquire (recursive nesting OK)
 \  GUARD-RELEASE     ( guard -- )            Release
 \  WITH-GUARD        ( xt guard -- )         RAII execute under guard
 \  GUARD-HELD?       ( guard -- flag )       Is guard held?

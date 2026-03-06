@@ -772,3 +772,17 @@ VARIABLE _SPX-KG-SEC
 : SPX-KEYGEN-RANDOM  ( pub sec -- )
     _SPX-RNG-SEED 48 RNG-BYTES
     >R >R _SPX-RNG-SEED R> R> SPX-KEYGEN ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _spx-guard
+
+' SPX-KEYGEN         CONSTANT _spx-keygen-xt
+' SPX-SIGN           CONSTANT _spx-sign-xt
+' SPX-VERIFY         CONSTANT _spx-verify-xt
+' SPX-KEYGEN-RANDOM  CONSTANT _spx-keygen-rng-xt
+
+: SPX-KEYGEN         _spx-keygen-xt      _spx-guard WITH-GUARD ;
+: SPX-SIGN           _spx-sign-xt        _spx-guard WITH-GUARD ;
+: SPX-VERIFY         _spx-verify-xt      _spx-guard WITH-GUARD ;
+: SPX-KEYGEN-RANDOM  _spx-keygen-rng-xt  _spx-guard WITH-GUARD ;

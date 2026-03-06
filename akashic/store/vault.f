@@ -796,3 +796,80 @@ VARIABLE _VLD-MAX  VARIABLE _VLD-ARENA  VARIABLE _VLD-ULEN
     ." AAD: " DUP _VLT-H-ALEN + _VLT-L@ . CR
     ." PT:  " DUP _VLT-H-PTLEN + _VLT-L@ . CR
     DROP R> DROP DROP ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+\ VAULT-OPEN / VAULT-LOAD acquire the guard.
+\ VAULT-CLOSE releases it.
+\ All other ops assert the guard is held (fail-loud with -258).
+REQUIRE ../concurrency/guard.f
+GUARD _vlt-guard
+
+: _VLT-CHK  _vlt-guard GUARD-MINE? 0= IF -258 THROW THEN ;
+
+' VAULT-OPEN         CONSTANT _vlt-open-xt
+' VAULT-LOAD         CONSTANT _vlt-load-xt
+' VAULT-CLOSE        CONSTANT _vlt-close-xt
+' VAULT-PUT          CONSTANT _vlt-put-xt
+' VAULT-PUT-EMB      CONSTANT _vlt-putemb-xt
+' VAULT-GET          CONSTANT _vlt-get-xt
+' VAULT-GET-AAD      CONSTANT _vlt-getaad-xt
+' VAULT-GET-EMB      CONSTANT _vlt-getemb-xt
+' VAULT-HAS?         CONSTANT _vlt-has-xt
+' VAULT-SIZE         CONSTANT _vlt-size-xt
+' VAULT-DELETE       CONSTANT _vlt-del-xt
+' VAULT-CHECK        CONSTANT _vlt-chk2-xt
+' VAULT-ROOT         CONSTANT _vlt-root-xt
+' VAULT-PROVE        CONSTANT _vlt-prove-xt
+' VAULT-VERIFY       CONSTANT _vlt-vfy-xt
+' VAULT-SEARCH       CONSTANT _vlt-search-xt
+' VAULT-SEARCH-SCORE CONSTANT _vlt-sscore-xt
+' VAULT-COMPACT      CONSTANT _vlt-compact-xt
+' VAULT-SPACE        CONSTANT _vlt-space-xt
+' VAULT-FRAG         CONSTANT _vlt-frag-xt
+' VAULT-SAVE-SIZE    CONSTANT _vlt-savsz-xt
+' VAULT-SAVE         CONSTANT _vlt-save-xt
+' VAULT-COUNT        CONSTANT _vlt-count-xt
+' VAULT-DUMP         CONSTANT _vlt-dump-xt
+' VAULT-BLOB.        CONSTANT _vlt-blob-xt
+
+\ session open (acquire guard)
+: VAULT-OPEN  ( key max-blobs arena-bytes -- flag )
+    _vlt-guard GUARD-ACQUIRE
+    _vlt-open-xt CATCH
+    ?DUP IF _vlt-guard GUARD-RELEASE THROW THEN ;
+
+: VAULT-LOAD  ( key buf len max-blobs arena-bytes -- flag )
+    _vlt-guard GUARD-ACQUIRE
+    _vlt-load-xt CATCH
+    ?DUP IF _vlt-guard GUARD-RELEASE THROW THEN ;
+
+\ session close (release guard, always)
+: VAULT-CLOSE  ( -- )
+    _VLT-CHK
+    _vlt-close-xt CATCH
+    _vlt-guard GUARD-RELEASE
+    ?DUP IF THROW THEN ;
+
+\ all remaining ops — assert guard held
+: VAULT-PUT          _VLT-CHK _vlt-put-xt     EXECUTE ;
+: VAULT-PUT-EMB      _VLT-CHK _vlt-putemb-xt  EXECUTE ;
+: VAULT-GET          _VLT-CHK _vlt-get-xt     EXECUTE ;
+: VAULT-GET-AAD      _VLT-CHK _vlt-getaad-xt  EXECUTE ;
+: VAULT-GET-EMB      _VLT-CHK _vlt-getemb-xt  EXECUTE ;
+: VAULT-HAS?         _VLT-CHK _vlt-has-xt     EXECUTE ;
+: VAULT-SIZE         _VLT-CHK _vlt-size-xt    EXECUTE ;
+: VAULT-DELETE       _VLT-CHK _vlt-del-xt     EXECUTE ;
+: VAULT-CHECK        _VLT-CHK _vlt-chk2-xt    EXECUTE ;
+: VAULT-ROOT         _VLT-CHK _vlt-root-xt    EXECUTE ;
+: VAULT-PROVE        _VLT-CHK _vlt-prove-xt   EXECUTE ;
+: VAULT-VERIFY       _VLT-CHK _vlt-vfy-xt     EXECUTE ;
+: VAULT-SEARCH       _VLT-CHK _vlt-search-xt  EXECUTE ;
+: VAULT-SEARCH-SCORE _VLT-CHK _vlt-sscore-xt  EXECUTE ;
+: VAULT-COMPACT      _VLT-CHK _vlt-compact-xt EXECUTE ;
+: VAULT-SPACE        _VLT-CHK _vlt-space-xt   EXECUTE ;
+: VAULT-FRAG         _VLT-CHK _vlt-frag-xt    EXECUTE ;
+: VAULT-SAVE-SIZE    _VLT-CHK _vlt-savsz-xt   EXECUTE ;
+: VAULT-SAVE         _VLT-CHK _vlt-save-xt    EXECUTE ;
+: VAULT-COUNT        _VLT-CHK _vlt-count-xt   EXECUTE ;
+: VAULT-DUMP         _VLT-CHK _vlt-dump-xt    EXECUTE ;
+: VAULT-BLOB.        _VLT-CHK _vlt-blob-xt    EXECUTE ;

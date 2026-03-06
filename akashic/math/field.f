@@ -226,3 +226,62 @@ CREATE _FLD-CMP  32 ALLOT
         1 -
     REPEAT
     2DROP ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+\ Every public word that touches the shared prime / scratch
+\ is wrapped with WITH-GUARD.  FIELD-BUF (defining word) and
+\ FIELD. (pure read + EMIT) are left unguarded.
+
+REQUIRE ../concurrency/guard.f
+GUARD _fld-guard
+
+' FIELD-USE-25519  CONSTANT _fld-use25519-xt
+' FIELD-USE-SECP   CONSTANT _fld-usesecp-xt
+' FIELD-USE-P256   CONSTANT _fld-usep256-xt
+' FIELD-USE-CUSTOM CONSTANT _fld-usecust-xt
+' FIELD-LOAD-PRIME CONSTANT _fld-loadp-xt
+' FIELD-ZERO       CONSTANT _fld-zero-xt
+' FIELD-ONE        CONSTANT _fld-one-xt
+' FIELD-SET-U64    CONSTANT _fld-setu64-xt
+' FIELD-COPY       CONSTANT _fld-copy-xt
+' FIELD-ADD        CONSTANT _fld-add-xt
+' FIELD-SUB        CONSTANT _fld-sub-xt
+' FIELD-MUL        CONSTANT _fld-mul-xt
+' FIELD-SQR        CONSTANT _fld-sqr-xt
+' FIELD-INV        CONSTANT _fld-inv-xt
+' FIELD-POW        CONSTANT _fld-pow-xt
+' FIELD-NEG        CONSTANT _fld-neg-xt
+' FIELD-MAC        CONSTANT _fld-mac-xt
+' FIELD-MUL-RAW    CONSTANT _fld-mulraw-xt
+' FIELD-MAC-RAW    CONSTANT _fld-macraw-xt
+' FIELD-EQ?        CONSTANT _fld-eq-xt
+' FIELD-ZERO?      CONSTANT _fld-zero?-xt
+
+\ session setup
+: FIELD-USE-25519  _fld-use25519-xt  _fld-guard WITH-GUARD ;
+: FIELD-USE-SECP   _fld-usesecp-xt   _fld-guard WITH-GUARD ;
+: FIELD-USE-P256   _fld-usep256-xt   _fld-guard WITH-GUARD ;
+: FIELD-USE-CUSTOM _fld-usecust-xt   _fld-guard WITH-GUARD ;
+: FIELD-LOAD-PRIME _fld-loadp-xt     _fld-guard WITH-GUARD ;
+
+\ initialisation / copy
+: FIELD-ZERO       _fld-zero-xt      _fld-guard WITH-GUARD ;
+: FIELD-ONE        _fld-one-xt       _fld-guard WITH-GUARD ;
+: FIELD-SET-U64    _fld-setu64-xt    _fld-guard WITH-GUARD ;
+: FIELD-COPY       _fld-copy-xt      _fld-guard WITH-GUARD ;
+
+\ arithmetic
+: FIELD-ADD        _fld-add-xt       _fld-guard WITH-GUARD ;
+: FIELD-SUB        _fld-sub-xt       _fld-guard WITH-GUARD ;
+: FIELD-MUL        _fld-mul-xt       _fld-guard WITH-GUARD ;
+: FIELD-SQR        _fld-sqr-xt       _fld-guard WITH-GUARD ;
+: FIELD-INV        _fld-inv-xt       _fld-guard WITH-GUARD ;
+: FIELD-POW        _fld-pow-xt       _fld-guard WITH-GUARD ;
+: FIELD-NEG        _fld-neg-xt       _fld-guard WITH-GUARD ;
+: FIELD-MAC        _fld-mac-xt       _fld-guard WITH-GUARD ;
+: FIELD-MUL-RAW    _fld-mulraw-xt    _fld-guard WITH-GUARD ;
+: FIELD-MAC-RAW    _fld-macraw-xt    _fld-guard WITH-GUARD ;
+
+\ predicates (use shared _FLD-CMP scratch)
+: FIELD-EQ?        _fld-eq-xt        _fld-guard WITH-GUARD ;
+: FIELD-ZERO?      _fld-zero?-xt     _fld-guard WITH-GUARD ;

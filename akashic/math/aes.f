@@ -220,3 +220,48 @@ VARIABLE _AES-VAAD   VARIABLE _AES-VAADL
     LOOP
     NIP
     0= IF TRUE ELSE FALSE THEN ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _aes-guard
+
+' AES-GCM-USE-256     CONSTANT _aes-use256-xt
+' AES-GCM-USE-128     CONSTANT _aes-use128-xt
+' AES-GCM-ENCRYPT     CONSTANT _aes-enc-xt
+' AES-GCM-DECRYPT     CONSTANT _aes-dec-xt
+' AES-GCM-ENCRYPT-AAD CONSTANT _aes-encaad-xt
+' AES-GCM-DECRYPT-AAD CONSTANT _aes-decaad-xt
+' AES-GCM-BEGIN        CONSTANT _aes-begin-xt
+' AES-GCM-FEED-AAD    CONSTANT _aes-feedaad-xt
+' AES-GCM-FEED-DATA   CONSTANT _aes-feeddat-xt
+' AES-GCM-FINISH      CONSTANT _aes-finish-xt
+
+\ one-shot helpers + mode setters
+: AES-GCM-USE-256     _aes-use256-xt  _aes-guard WITH-GUARD ;
+: AES-GCM-USE-128     _aes-use128-xt  _aes-guard WITH-GUARD ;
+: AES-GCM-ENCRYPT     _aes-enc-xt     _aes-guard WITH-GUARD ;
+: AES-GCM-DECRYPT     _aes-dec-xt     _aes-guard WITH-GUARD ;
+: AES-GCM-ENCRYPT-AAD _aes-encaad-xt  _aes-guard WITH-GUARD ;
+: AES-GCM-DECRYPT-AAD _aes-decaad-xt  _aes-guard WITH-GUARD ;
+
+\ streaming BEGIN (acquire)
+: AES-GCM-BEGIN  ( key iv aadlen datalen dir -- )
+    _aes-guard GUARD-ACQUIRE
+    _aes-begin-xt CATCH
+    ?DUP IF _aes-guard GUARD-RELEASE THROW THEN ;
+
+\ streaming middle (assert ownership)
+: AES-GCM-FEED-AAD  ( addr len -- )
+    _aes-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _aes-feedaad-xt EXECUTE ;
+
+: AES-GCM-FEED-DATA  ( src dst len -- )
+    _aes-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _aes-feeddat-xt EXECUTE ;
+
+\ streaming FINISH (release guard, always)
+: AES-GCM-FINISH  ( -- )
+    _aes-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _aes-finish-xt CATCH
+    _aes-guard GUARD-RELEASE
+    ?DUP IF THROW THEN ;

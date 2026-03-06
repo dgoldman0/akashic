@@ -349,3 +349,31 @@ CREATE _S512-HEX
     LOOP
     >R 2DROP R>
     0= IF TRUE ELSE FALSE THEN ;
+
+\ ── Concurrency Guard ─────────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _sha512-guard
+
+' SHA512-HASH   CONSTANT _sha512-hash-xt
+' SHA512->HEX   CONSTANT _sha512-hex-xt
+' SHA512-BEGIN   CONSTANT _sha512-begin-xt
+' SHA512-ADD     CONSTANT _sha512-add-xt
+' SHA512-END     CONSTANT _sha512-end-xt
+
+: SHA512-HASH     _sha512-hash-xt     _sha512-guard WITH-GUARD ;
+: SHA512->HEX     _sha512-hex-xt      _sha512-guard WITH-GUARD ;
+
+: SHA512-BEGIN  ( -- )
+    _sha512-guard GUARD-ACQUIRE
+    _sha512-begin-xt CATCH
+    ?DUP IF _sha512-guard GUARD-RELEASE THROW THEN ;
+
+: SHA512-ADD  ( addr len -- )
+    _sha512-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _sha512-add-xt EXECUTE ;
+
+: SHA512-END  ( dst -- )
+    _sha512-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _sha512-end-xt CATCH
+    _sha512-guard GUARD-RELEASE
+    ?DUP IF THROW THEN ;
