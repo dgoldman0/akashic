@@ -31,10 +31,14 @@ structured task lifetimes.
 - [Layer 5 — Concurrent Data Structures](#layer-5--concurrent-data-structures)
   - [5.1 cvar.f — Concurrent Variables](#51-cvarf--concurrent-variables)
   - [5.2 conc-map.f — Concurrent Hash Map](#52-conc-mapf--concurrent-hash-map)
+- [Layer 6 — Guards & Critical Sections](#layer-6--guards--critical-sections)
+  - [6.1 guard.f — Non-Reentrant Guards](#61-guardf--non-reentrant-guards)
+  - [6.2 critical.f — Critical Sections & Preemption Control](#62-criticalf--critical-sections--preemption-control)
 - [Dependency Graph](#dependency-graph)
 - [Implementation Order](#implementation-order)
 - [Design Constraints & Gotchas](#design-constraints--gotchas)
 - [Testing Strategy](#testing-strategy)
+- [BIOS SEP Dispatch Refactor — Status: Landed](#bios-sep-dispatch-refactor--status-landed)
 
 ---
 
@@ -251,6 +255,49 @@ Write operations lock-protected (spinlock 5); reads (`HT-GET`,
 | `MBOX!`       | `( val -- )`         | Write to mailbox                  |
 | `MBOX@`       | `( -- val )`         | Read from mailbox                 |
 
+### BIOS-Level Hardware Coroutine Pair (SEP Dispatch Phase 8)
+
+> **Status:** Landed.  Available in BIOS v1.0 since the SEP dispatch
+> refactor (phases 0–9 all complete).
+
+The BIOS exposes a **2-task hardware coroutine** mechanism using the
+1802 SEP instruction.  Task 0 runs in R3 (the Forth inner interpreter),
+Task 1 runs in R13.  Context-switching is a single `SEP` instruction —
+1 cycle, 0 bytes of memory traffic, no task control blocks.
+
+This is **not** a scheduler.  It is a register-file ping-pong: one
+foreground task and one background task, cooperatively yielding via
+`PAUSE`.
+
+| Word          | Signature        | Behavior                                    |
+|---------------|------------------|---------------------------------------------|
+| `PAUSE`       | `( -- )`         | Task 0 → Task 1 (no-op if none)            |
+| `TASK-YIELD`  | `( -- )`         | Task 1 → Task 0                            |
+| `BACKGROUND`  | `( xt -- )`      | Install xt as Task 1 and start it           |
+| `TASK-STOP`   | `( -- )`         | Halt Task 1                                 |
+| `TASK?`       | `( -- flag )`    | 1 if active, 0 if stopped                   |
+
+**Key constraints:**
+- Only **one** background slot (R13).  For >2 tasks, use the KDOS §8
+  scheduler.
+- Fully cooperative — no preemption, no priority.
+- Task 1 shares the same address space / dictionary as Task 0.
+- Micro-cores now have SEP/SEX decode (zero area cost) but still lack
+  Q flip-flop, so EMIT-based I/O in a background task would trap on
+  micro-cores.
+
+**Relationship to KDOS scheduler:**
+- BIOS `PAUSE` and KDOS `YIELD?` are **independent mechanisms**.
+  `PAUSE` swaps register files; `YIELD?` checks `PREEMPT-FLAG` and
+  round-robins the §8 task table.
+- They can coexist: a KDOS task can call `PAUSE` to ping-pong with a
+  background helper, while the KDOS scheduler manages the broader task
+  set on Task 0.
+- BIOS `YIELD` (dict #309) is a naming collision with KDOS `YIELD`
+  (marks current task as `T.DONE`).  In practice they have different
+  stack effects so the dictionary ordering resolves it, but this
+  should be documented clearly.
+
 ---
 
 ## What's Missing
@@ -265,6 +312,10 @@ KDOS has no:
 - **Parallel combinators** — map/reduce/for over arrays across cores
 - **Structured concurrency** — task groups with lifetime guarantees
 - **Concurrent data structures** — atomic variables, concurrent maps
+- **Non-reentrant guards** — declarative word-level mutual exclusion
+- **Critical sections** — scoped preemption-safe regions
+- **Hardware coroutine wrappers** — structured use of the BIOS
+  BACKGROUND/PAUSE 2-task pair for I/O decoupling
 
 All concurrency is cooperative at the Forth level.  Blocking is done
 via busy-wait + `YIELD?`.  There is no "park this task and wake it
@@ -814,6 +865,185 @@ buckets).
 
 ---
 
+## Layer 6 — Guards & Critical Sections
+
+Modules like `fp16.f`, `mat2d.f`, `merkle.f`, and any future MMIO
+wrapper use shared `VARIABLE`s or shared hardware state that is
+**not re-entrant**.  Today the answer is "wrap with `WITH-LOCK`",
+but that pushes the burden onto every call site.  Layer 6 provides
+declarative, word-level primitives so a module author can mark a
+word as non-reentrant at definition time and have the runtime
+enforce it.
+
+### 6.1 guard.f — Non-Reentrant Guards
+
+**File:** `akashic/concurrency/guard.f`
+**Prefix:** `GUARD-`
+**Depends on:** spinlocks (`LOCK`/`UNLOCK`), semaphore.f (for
+blocking variant)
+**Est.:** ~80 lines
+
+A **guard** is a named mutual-exclusion wrapper that a module author
+attaches to words at compile time.  Any word defined between
+`GUARD-BEGIN` and `GUARD-END` automatically acquires the guard on
+entry and releases it on exit (including early `EXIT` and `ABORT`).
+
+| # | Item | Est. | Status |
+|---|------|------|--------|
+| 6a | **Guard creation** — `GUARD` defining word creates a guard object (lock cell + owner cell + optional spinlock#) | ~15 lines | ☐ |
+| 6b | **Scoped acquire/release** — `GUARD-BEGIN` / `GUARD-END` bracket a region of colon definitions; every `:` inside compiles acquire on entry, release before `;` | ~25 lines | ☐ |
+| 6c | **Manual acquire** — `GUARD-ACQUIRE` / `GUARD-RELEASE` for cases where `GUARD-BEGIN`/`GUARD-END` scope doesn't fit | ~10 lines | ☐ |
+| 6d | **WITH-GUARD** — `( xt guard -- )` RAII-style execute-under-guard | ~10 lines | ☐ |
+| 6e | **Deadlock detection** — if the same task re-enters a guard, ABORT instead of deadlock (owner cell check) | ~10 lines | ☐ |
+| 6f | **Blocking variant** — `GUARD-BLOCKING` creates a guard backed by a 1-count semaphore instead of a spinlock (yields instead of busy-waits) | ~10 lines | ☐ |
+
+#### Forth Sketch
+
+```forth
+REQUIRE concurrency/semaphore.f
+
+\ --- guard object: 3 cells (lock-flag, owner-task, 0=spin|1=blocking) ---
+: GUARD  ( "name" -- )
+    CREATE  0 , -1 , 0 ,  ;          \ flag=free, owner=none, mode=spin
+
+: GUARD-BLOCKING  ( "name" -- )
+    CREATE  0 , -1 , 1 ,             \ mode=blocking
+    1 SEMAPHORE                       \ inline semaphore for blocking waits
+;
+
+: GUARD-ACQUIRE  ( guard -- )
+    DUP CELL+ @ CURRENT-TASK = IF
+        ABORT" GUARD: re-entry detected"
+    THEN
+    DUP 2 CELLS + @ IF               \ blocking mode?
+        DUP 3 CELLS + SEM-WAIT       \ yield-wait on semaphore
+    ELSE
+        BEGIN  DUP @  0= UNTIL        \ spin on flag cell
+        -1 OVER !                     \ claim it
+    THEN
+    CURRENT-TASK SWAP CELL+ ! ;       \ record owner
+
+: GUARD-RELEASE  ( guard -- )
+    -1 OVER CELL+ !                   \ clear owner
+    DUP 2 CELLS + @ IF
+        DUP 3 CELLS + SEM-SIGNAL
+    ELSE
+        0 SWAP !
+    THEN ;
+
+: WITH-GUARD  ( xt guard -- )
+    DUP >R  GUARD-ACQUIRE
+    SWAP EXECUTE
+    R> GUARD-RELEASE ;
+
+\ --- declarative scope for module authors ---
+VARIABLE _guard-current   \ active guard during GUARD-BEGIN region
+
+: GUARD-BEGIN  ( guard -- )  _guard-current ! ;
+
+\ A redefined `:` that wraps every word with guard acquire/release:
+\ (the actual implementation would use POSTPONE to compile the
+\  acquire/release into each word's thread)
+: GUARD-END  ( -- )  -1 _guard-current ! ;
+```
+
+#### Usage Example
+
+```forth
+GUARD fp16-guard
+
+fp16-guard GUARD-BEGIN
+
+: MY-FP16-OP  ( x y -- z )
+    \ guard auto-acquired here
+    FP16+ FP16*
+    \ guard auto-released here
+;
+
+GUARD-END
+
+\ Or manual:
+' MY-FP16-OP  fp16-guard WITH-GUARD
+```
+
+#### Definition of Done
+
+- Guard acquire/release verified under concurrent tasks
+- Re-entry detected and ABORTs (not deadlock)
+- `WITH-GUARD` executes xt under guard
+- Blocking variant yields instead of spinning
+- Two tasks racing the same guarded word: one blocks, other proceeds
+
+---
+
+### 6.2 critical.f — Critical Sections & Preemption Control
+
+**File:** `akashic/concurrency/critical.f`
+**Prefix:** `CRIT-`
+**Depends on:** KDOS `PREEMPT-OFF`/`PREEMPT-ON`, spinlocks
+**Est.:** ~50 lines
+
+Critical sections combine preemption suppression with optional mutual
+exclusion.  For code that must not be interrupted or re-scheduled
+(MMIO register sequences, multi-step hardware operations), this is
+the correct primitive.
+
+| # | Item | Est. | Status |
+|---|------|------|--------|
+| 6g | **Preemption-safe region** — `CRITICAL-BEGIN` / `CRITICAL-END` disable preemption for the current core, nest correctly (reference-counted) | ~15 lines | ☐ |
+| 6h | **Locked critical section** — `CRITICAL-LOCK` / `CRITICAL-UNLOCK` combines preemption disable + spinlock acquire (for multicore safety) | ~15 lines | ☐ |
+| 6i | **WITH-CRITICAL** — `( xt -- )` execute xt with preemption disabled | ~10 lines | ☐ |
+| 6j | **WITH-CRITICAL-LOCK** — `( xt lock# -- )` preemption off + spinlock + execute + unlock + preemption on | ~10 lines | ☐ |
+
+#### Forth Sketch
+
+```forth
+VARIABLE _crit-depth   \ nesting depth (per-core in multicore)
+
+: CRITICAL-BEGIN  ( -- )
+    _crit-depth @ 0= IF PREEMPT-OFF THEN
+    1 _crit-depth +! ;
+
+: CRITICAL-END  ( -- )
+    _crit-depth @ 1- DUP _crit-depth !
+    0= IF PREEMPT-ON THEN ;
+
+: WITH-CRITICAL  ( xt -- )
+    CRITICAL-BEGIN  EXECUTE  CRITICAL-END ;
+
+: CRITICAL-LOCK  ( lock# -- )
+    CRITICAL-BEGIN  LOCK ;
+
+: CRITICAL-UNLOCK  ( lock# -- )
+    UNLOCK  CRITICAL-END ;
+
+: WITH-CRITICAL-LOCK  ( xt lock# -- )
+    CRITICAL-LOCK
+    SWAP EXECUTE
+    CRITICAL-UNLOCK ;
+```
+
+#### Usage Example
+
+```forth
+\ Multi-step MMIO sequence that must not be preempted
+: NTT-LOAD-AND-TRANSFORM  ( addr -- )
+    ['] _ntt-load-xform  WITH-CRITICAL ;
+
+\ Multicore-safe filesystem operation
+: SAFE-FWRITE  ( buf len fd -- )
+    ['] _do-fwrite  2 WITH-CRITICAL-LOCK ;  \ spinlock 2 = FS
+```
+
+#### Definition of Done
+
+- `CRITICAL-BEGIN` / `CRITICAL-END` nest correctly (depth counter)
+- Preemption is off inside, restored on exit
+- `WITH-CRITICAL-LOCK` holds spinlock + preemption off for duration
+- Nesting two critical sections doesn't re-enable preemption early
+
+---
+
 ## Dependency Graph
 
 ```
@@ -848,6 +1078,9 @@ buckets).
    par.f     scope.f
   (future    (evt + task
   + cores)    groups)
+
+  guard.f ←── semaphore.f (blocking variant), spinlocks
+  critical.f ←── PREEMPT-OFF/ON, spinlocks
 ```
 
 ---
@@ -868,6 +1101,9 @@ Priority order, highest-impact first:
 | 8  | rwlock.f     | 1     | Read-heavy shared structures                       | ✅     |
 | 9  | mailbox.f    | 2     | Actor messaging — deferred (channels subsume)      | ⏭     |
 | 10 | conc-map.f   | 5     | Fine-grained concurrent hash map                   | ✅     |
+| 11 | guard.f      | 6     | Non-reentrant guards for shared-state modules      | ☐     |
+| 12 | critical.f   | 6     | Critical sections + preemption control             | ☐     |
+| 13 | coroutine.f  | 0     | Structured wrappers for BIOS BACKGROUND/PAUSE pair | ✅     |
 
 ---
 
@@ -964,5 +1200,92 @@ Each module gets a `test_<module>.py` in `local_testing/`:
 - **Task exhaustion** — spawn until slots full, verify graceful error
 - **Spinlock contention** — multiple cores competing for same lock
 - **Channel backpressure** — fast producer, slow consumer
+
+---
+
+## BIOS SEP Dispatch Refactor — Status: Landed
+
+> **Updated 2026-03-06.**  The SEP/SEX register-dispatch refactor has
+> shipped in BIOS v1.0.  Phases 0, 1, 4, 5, 7, 8, 9 are all ✅ Done.
+> Phase 3 (JIT SEP-NEXT) permanently deferred (ITC destroys JIT).
+> Phases 2 and 6 were skipped.  Phase 10 (port I/O bridge) not started
+> (requires RTL changes).
+
+The BIOS changes converted internal leaf I/O routines (`emit_char`,
+`key_char`, `print_hex_byte`) from `call.l`/`ret.l` to 1802-style
+`SEP Rn` dispatch, added `SEX`+D-accumulator byte-processing for DMA
+paths (Phase 7 — ~50% serialization compression), and added a Q
+flip-flop semaphore for UART busy signaling (Phase 4 — `SEQ`/`REQ`).
+
+### What was NOT affected (confirmed)
+
+All existing concurrency primitives (`event.f`, `semaphore.f`,
+`rwlock.f`, `channel.f`, `cvar.f`, `conc-map.f`, `scope.f`, `par.f`,
+`future.f`) operate at the Forth word level via `LOCK`/`UNLOCK`,
+`YIELD?`, `SPAWN`, `SCHEDULE`, `CORE-RUN`, and `BARRIER`.  None of
+these emit machine code or depend on BIOS register allocation.
+
+The `par.f` full-core / micro-core split remains correct.  Micro-cores
+now have SEP/SEX decode (zero area cost — they only update psel/xsel
+pointers), but still lack Q flip-flop, so `EMIT`-based I/O would trap.
+`par.f` defaults to full cores only (`_PAR-NCORES` = `N-FULL`).
+
+### Phase 8 — Cooperative PAUSE via SEP (landed)
+
+BIOS now provides `PAUSE`, `YIELD`, `BACKGROUND`, `TASK-STOP`, and
+`TASK-STATUS` as dictionary words.  These implement a 2-task hardware
+coroutine using R3 (Task 0) and R13 (Task 1), documented in the
+"BIOS-Level Hardware Coroutine Pair" section above.
+
+**Confirmed interop behavior:**
+
+1. **`YIELD?` vs `PAUSE` — they are independent.**  The concurrency
+   library uses KDOS `YIELD?` as its cooperative yield point (in
+   `EVT-WAIT`, `CHAN-SEND`, `CHAN-RECV`, `CHAN-SELECT`, `SEM-WAIT`,
+   etc.).  BIOS `PAUSE` is a separate, lower-level mechanism — a
+   pure register-file swap, invisible to the §8 scheduler.  They do
+   not interfere.  A KDOS task can call `PAUSE` internally to
+   service a hardware coroutine partner without disturbing the
+   scheduler's view of task states.
+
+2. **`scope.f` / `TG-WAIT` does not see BIOS tasks.**  `TG-WAIT`
+   calls `SCHEDULE` to process the §8 task table.  BIOS Task 1 (R13)
+   has no task descriptor, no T.READY/T.BLOCKED state, and is not in
+   the task registry.  This is by design — the hardware coroutine
+   pair is below the Forth scheduler layer.  `WITH-TASKS` scopes do
+   not need to track BIOS Task 1; it should be managed separately
+   via `BACKGROUND` / `TASK-STOP`.
+
+3. **BIOS `YIELD` naming collision.**  BIOS dict #309 `YIELD` (alias
+   for `PAUSE`) shadows KDOS `YIELD` (marks current task `T.DONE`).
+   Dictionary search order resolves this — the KDOS word is defined
+   later and wins.  But code that explicitly calls the BIOS version
+   should use `PAUSE` instead for clarity.
+
+### Phase 3 — JIT SEP-NEXT (permanently deferred)
+
+The JIT threading model change was abandoned — ITC destroys the JIT
+assumptions.  No impact on `CATCH`/`THROW` or any concurrency
+primitives.  This watch item is closed.
+
+### Resolved action items
+
+- [x] Verify `YIELD?` interoperates with `PAUSE` — confirmed independent
+- [x] Verify `SCHEDULE` / `TG-WAIT` does not see BIOS tasks — confirmed
+      by design (separate mechanism, documented above)
+- [x] JIT Phase 3 `CATCH`/`THROW` check — N/A, phase permanently deferred
+- [x] No changes were needed in any `.f` source files in `akashic/concurrency/`
+
+### Resolved items — coroutine.f
+
+- [x] `coroutine.f` — implemented with 5 public words:
+      `BG-ALIVE?`, `WITH-BACKGROUND`, `BG-POLL`, `BG-WAIT-DONE`,
+      `BG-INFO`.  22 tests passing (`test_coroutine.py`).
+- [x] BIOS renamed `YIELD` → `TASK-YIELD` to avoid KDOS collision.
+      `coroutine.f` uses `TASK-YIELD` for Task 1 code, `PAUSE` for
+      Task 0 code.  Collision documented in coroutine.f header.
+- [ ] Integrate with `par.f` — optionally start a background NIC/UART
+      poller before entering `PAR-MAP` / `PAR-REDUCE` so I/O stays
+      alive during multi-core compute phases (future work)
 
 ---

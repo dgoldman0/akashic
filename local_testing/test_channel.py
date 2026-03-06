@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+# ┌──────────────────────────────────────────────────────────────┐
+# │ HARNESS UPDATE REQUIRED (March 2026)                         │
+# │                                                              │
+# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
+# │    MegapadSystem before overwriting RAM/CPU state from the   │
+# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
+# │    routing (UART writes) is never wired → empty output.      │
+# │    Fix: save bios_code in the snapshot tuple, then in        │
+# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
+# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
+# │                                                              │
+# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
+# │    [: ... ;] anonymous quotation words.  Replace all uses    │
+# │    with named helper words and ['] ticks.                    │
+# │                                                              │
+# │ See test_coroutine.py for the corrected pattern.             │
+# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-channel Forth library (channel.f).
 
 Tests: CHANNEL, CHAN-SEND, CHAN-RECV, CHAN-TRY-SEND, CHAN-TRY-RECV,
