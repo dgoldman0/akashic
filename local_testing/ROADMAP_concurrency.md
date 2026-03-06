@@ -990,10 +990,10 @@ the correct primitive.
 
 | # | Item | Est. | Status |
 |---|------|------|--------|
-| 6g | **Preemption-safe region** — `CRITICAL-BEGIN` / `CRITICAL-END` disable preemption for the current core, nest correctly (reference-counted) | ~15 lines | ☐ |
-| 6h | **Locked critical section** — `CRITICAL-LOCK` / `CRITICAL-UNLOCK` combines preemption disable + spinlock acquire (for multicore safety) | ~15 lines | ☐ |
-| 6i | **WITH-CRITICAL** — `( xt -- )` execute xt with preemption disabled | ~10 lines | ☐ |
-| 6j | **WITH-CRITICAL-LOCK** — `( xt lock# -- )` preemption off + spinlock + execute + unlock + preemption on | ~10 lines | ☐ |
+| 6g | **Preemption-safe region** — `CRITICAL-BEGIN` / `CRITICAL-END` disable preemption for the current core, nest correctly (reference-counted) | ~15 lines | ✅ |
+| 6h | **Locked critical section** — `CRITICAL-LOCK` / `CRITICAL-UNLOCK` combines preemption disable + spinlock acquire (for multicore safety) | ~15 lines | ✅ |
+| 6i | **WITH-CRITICAL** — `( xt -- )` execute xt with preemption disabled | ~10 lines | ✅ |
+| 6j | **WITH-CRITICAL-LOCK** — `( xt lock# -- )` preemption off + spinlock + execute + unlock + preemption on | ~10 lines | ✅ |
 
 #### Forth Sketch
 
@@ -1102,7 +1102,7 @@ Priority order, highest-impact first:
 | 9  | mailbox.f    | 2     | Actor messaging — deferred (channels subsume)      | ⏭     |
 | 10 | conc-map.f   | 5     | Fine-grained concurrent hash map                   | ✅     |
 | 11 | guard.f      | 6     | Non-reentrant guards for shared-state modules      | ✅     |
-| 12 | critical.f   | 6     | Critical sections + preemption control             | ☐     |
+| 12 | critical.f   | 6     | Critical sections + preemption control             | ✅     |
 | 13 | coroutine.f  | 0     | Structured wrappers for BIOS BACKGROUND/PAUSE pair | ✅     |
 
 ---
