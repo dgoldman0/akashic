@@ -1,7 +1,7 @@
-# akashic-coroutine — Structured Wrappers for BIOS Hardware Coroutine Pair
+# akashic-coroutine — Structured Wrappers for BIOS Cooperative Multitasking
 
 Structured concurrency wrappers around the Megapad-64 BIOS Phase 8
-hardware coroutine (SEP R13 two-task cooperative switching).  Guarantees
+four-task round-robin cooperative scheduler (SEP R20).  Guarantees
 cleanup, provides polling loops, and normalises the flag convention.
 
 ```forth
@@ -18,9 +18,14 @@ REQUIRE coroutine.f
 - [Hardware Model](#hardware-model)
 - [API](#api)
   - [BG-ALIVE?](#bg-alive)
+  - [BG-ANY?](#bg-any)
   - [WITH-BACKGROUND](#with-background)
+  - [WITH-BG](#with-bg)
   - [BG-POLL](#bg-poll)
+  - [BG-POLL-SLOT](#bg-poll-slot)
   - [BG-WAIT-DONE](#bg-wait-done)
+  - [BG-WAIT-ALL](#bg-wait-all)
+  - [BG-STOP-ALL](#bg-stop-all)
   - [BG-INFO](#bg-info)
 - [Concurrency Model](#concurrency-model)
 - [Constraints](#constraints)
@@ -32,60 +37,71 @@ REQUIRE coroutine.f
 
 | Principle | Implementation |
 |-----------|---------------|
-| **Structured cleanup** | `WITH-BACKGROUND` guarantees `TASK-STOP` even on `THROW`. |
-| **Single background slot** | One Task 1 (R13) at a time — matches the hardware. |
-| **Cooperative only** | No preemption.  Task 0 calls `PAUSE`, Task 1 calls `TASK-YIELD`. |
-| **Zero allocation** | No heap usage.  One `VARIABLE` for `BG-POLL` xt storage. |
-| **Prefix convention** | Public: `BG-` (plus `WITH-BACKGROUND`).  Internal: `_BG-`. |
+| **Structured cleanup** | `WITH-BACKGROUND` / `WITH-BG` guarantee `TASK-STOP` even on `THROW`. |
+| **Three background slots** | Slots 1–3, matching the hardware (4-task round-robin). |
+| **Cooperative only** | No preemption.  Task 0 calls `PAUSE`, background tasks call `TASK-YIELD`. |
+| **Zero allocation** | No heap usage.  Three `VARIABLE`s for `BG-POLL` xt storage. |
+| **Prefix convention** | Public: `BG-` (plus `WITH-BACKGROUND` / `WITH-BG`).  Internal: `_BG-`. |
 | **Building block** | Used by higher-level patterns (NIC polling, background hashing). |
 
 ---
 
 ## Hardware Model
 
-The BIOS Phase 8 cooperative multitasking uses the SEP instruction to
-switch between two hardware tasks:
+The BIOS Phase 8 cooperative multitasking uses the SEP instruction with
+R20 (REX-extended register) to round-robin between up to four tasks:
 
-| Task | PC register | Role | Yield word |
-|------|-------------|------|------------|
-| **Task 0** | R3 | Main Forth interpreter / application | `PAUSE` |
-| **Task 1** | R13 | Single background helper | `TASK-YIELD` |
+| Task | Slot | Role | Yield word |
+|------|------|------|------------|
+| **Task 0** | — | Main Forth interpreter / application (always active) | `PAUSE` |
+| **Task 1** | 1 | Background helper | `TASK-YIELD` |
+| **Task 2** | 2 | Background helper | `TASK-YIELD` |
+| **Task 3** | 3 | Background helper | `TASK-YIELD` |
 
-Context switch is **1 cycle** (a single `SEP` instruction).  There are
-no task queues — just two register-selected execution threads.
+Each background slot gets independent data-stack and return-stack
+regions.  Context switch is a single `SEP R20` instruction.  `PAUSE`
+scans slots 1–3 round-robin, loading the next active task's saved PC
+into R20 before executing SEP.
 
 ### Raw BIOS Words
 
 | Word | Signature | Description |
 |------|-----------|-------------|
-| `PAUSE` | `( -- )` | Task 0 → Task 1 (no-op if no task active) |
-| `TASK-YIELD` | `( -- )` | Task 1 → Task 0 |
-| `BACKGROUND` | `( xt -- )` | Install xt as Task 1, give it fresh stacks |
-| `TASK-STOP` | `( -- )` | Cancel Task 1 (clear saved PC) |
-| `TASK?` | `( -- flag )` | 1 if Task 1 active, 0 otherwise |
+| `PAUSE` | `( -- )` | Task 0 → next active bg task (no-op if none active) |
+| `TASK-YIELD` | `( -- )` | Any bg task → Task 0 |
+| `BACKGROUND` | `( xt -- )` | Start xt in slot 1 with fresh stacks |
+| `BACKGROUND2` | `( xt -- )` | Start xt in slot 2 with fresh stacks |
+| `BACKGROUND3` | `( xt -- )` | Start xt in slot 3 with fresh stacks |
+| `TASK-STOP` | `( n -- )` | Cancel task in slot n (1–3) |
+| `TASK?` | `( n -- flag )` | Is slot n active? (1/0) |
+| `#TASKS` | `( -- n )` | Count of active background tasks (0–3) |
 
 **CRITICAL:** `PAUSE` and `TASK-YIELD` are **not interchangeable**:
 
-- `PAUSE` loads a saved PC into R13.  If called from Task 1 (where R13
-  IS the program counter), it overwrites the live PC → crash.
-- Task 0 code must call `PAUSE`.  Task 1 code must call `TASK-YIELD`.
+- `PAUSE` loads a saved PC into R20.  If called from a background task
+  (where R20 IS the program counter), it overwrites the live PC → crash.
+- Task 0 code must call `PAUSE`.  Background task code must call `TASK-YIELD`.
 
 ### Task Lifecycle
 
 ```
- Task 0                        Task 1
- ──────                        ──────
- ['] bg-xt BACKGROUND          (created, PC saved)
-   ...                           │
- PAUSE ──────────────SEP────→  resumes at bg-xt
+ Task 0                        Slot 1              Slot 2
+ ──────                        ──────              ──────
+ ['] bg1 BACKGROUND            (created)
+ ['] bg2 BACKGROUND2                               (created)
+   ...
+ PAUSE ───SEP R20───────────→  resumes at bg1
    │                           does work
    │    ←────────────SEP────── TASK-YIELD
- resumes                         │
-   ...                           │
- PAUSE ──────────────SEP────→  resumes after TASK-YIELD
-   │                           ... returns from bg-xt ...
-   │    ←────────────SEP────── task1_cleanup (auto)
- resumes                       (TASK? = 0)
+ PAUSE ───SEP R20───────────────────────────────→  resumes at bg2
+   │                                               does work
+   │    ←──────────────────────────────SEP──────── TASK-YIELD
+ resumes
+   ...
+ PAUSE ───SEP R20───────────→  resumes
+   │                           ... returns ...
+   │    ←────────────SEP────── task_cleanup (auto)
+ resumes                       (1 TASK? = 0)
 ```
 
 ---
@@ -95,15 +111,30 @@ no task queues — just two register-selected execution threads.
 ### `BG-ALIVE?`
 
 ```forth
-BG-ALIVE? ( -- flag )
+BG-ALIVE? ( n -- flag )
 ```
 
-Returns TRUE (-1) if a background task is currently active, FALSE (0)
-otherwise.  Thin wrapper around `TASK?` normalised to standard Forth
-flag convention (`0<>`).
+Returns TRUE (-1) if slot n (1–3) has an active background task,
+FALSE (0) otherwise.  Thin wrapper around `TASK?` normalised to
+standard Forth flag convention (`0<>`).
 
 ```forth
-BG-ALIVE? IF ." background running" CR THEN
+1 BG-ALIVE? IF ." slot 1 running" CR THEN
+```
+
+---
+
+### `BG-ANY?`
+
+```forth
+BG-ANY? ( -- flag )
+```
+
+Returns TRUE (-1) if any background task (slots 1–3) is active.
+Uses the BIOS `#TASKS` word.
+
+```forth
+BG-ANY? IF ." at least one task running" CR THEN
 ```
 
 ---
@@ -114,15 +145,15 @@ BG-ALIVE? IF ." background running" CR THEN
 WITH-BACKGROUND ( xt-bg xt-body -- )
 ```
 
-Structured scoped execution:
+Structured scoped execution for **slot 1**:
 
 1. Start `xt-bg` as Task 1 via `BACKGROUND`
 2. Execute `xt-body` on Task 0 under `CATCH`
-3. Unconditionally call `TASK-STOP`
+3. Unconditionally call `1 TASK-STOP`
 4. Re-`THROW` if `xt-body` raised an exception
 
-This guarantees the background task is stopped even if the body
-throws.  Both xts must have signature `( -- )`.
+This guarantees slot 1 is stopped even if the body throws.
+Both xts must have signature `( -- )`.
 
 ```forth
 : my-bg   BEGIN  nic-poll  TASK-YIELD  AGAIN ;
@@ -132,7 +163,7 @@ throws.  Both xts must have signature `( -- )`.
     PAUSE                    \ let bg task run again
 ;
 ['] my-bg  ['] my-body  WITH-BACKGROUND
-\ bg is guaranteed stopped here
+\ slot 1 is guaranteed stopped here
 ```
 
 **Exception safety:**
@@ -140,7 +171,27 @@ throws.  Both xts must have signature `( -- )`.
 ```forth
 : risky-body  99 THROW ;
 ['] my-bg  ['] risky-body
-['] WITH-BACKGROUND CATCH    \ returns 99, bg is still stopped
+['] WITH-BACKGROUND CATCH    \ returns 99, slot 1 is still stopped
+```
+
+---
+
+### `WITH-BG`
+
+```forth
+WITH-BG ( slot xt-bg xt-body -- )
+```
+
+Generic scoped execution for **any slot** (1–3):
+
+1. Start `xt-bg` in the given slot
+2. Execute `xt-body` on Task 0 under `CATCH`
+3. Unconditionally call `slot TASK-STOP`
+4. Re-`THROW` if `xt-body` raised an exception
+
+```forth
+2 ['] my-poller  ['] my-work  WITH-BG
+\ slot 2 is guaranteed stopped here
 ```
 
 ---
@@ -151,55 +202,105 @@ throws.  Both xts must have signature `( -- )`.
 BG-POLL ( xt -- )
 ```
 
-Install `xt` as a background polling loop.  Internally creates an
-infinite loop:
+Install `xt` as a background polling loop in **slot 1**.  Internally
+creates an infinite loop:
 
 ```
 BEGIN  xt EXECUTE  TASK-YIELD  AGAIN
 ```
 
 The word returns immediately to Task 0.  Each `PAUSE` from Task 0
-gives Task 1 a timeslice to execute `xt` once, then Task 1 yields
-back.
+gives slot 1 a timeslice to execute `xt` once, then it yields back.
 
-`xt` must have signature `( -- )`.  Use `TASK-STOP` to cancel, or
-wrap the `PAUSE` calls inside `WITH-BACKGROUND` for auto-cleanup.
+`xt` must have signature `( -- )`.  Use `1 TASK-STOP` to cancel.
 
 ```forth
 : my-poll  nic-poll ;
 ['] my-poll BG-POLL
 PAUSE PAUSE PAUSE       \ poll runs 3 times
-TASK-STOP               \ done polling
+1 TASK-STOP             \ done polling
 ```
 
-**Note:** Because `BG-POLL` internally calls `BACKGROUND`, it cannot
-be called from inside an already-running Task 1.
+---
+
+### `BG-POLL-SLOT`
+
+```forth
+BG-POLL-SLOT ( slot xt -- )
+```
+
+Install `xt` as a background polling loop in **any slot** (1–3).
+
+```forth
+2 ['] my-nic-poll BG-POLL-SLOT
+PAUSE PAUSE PAUSE
+2 TASK-STOP
+```
+
+Multiple slots can run simultaneously:
+
+```forth
+['] poll-nic  BG-POLL               \ slot 1
+2 ['] poll-usb BG-POLL-SLOT         \ slot 2
+3 ['] poll-rtc BG-POLL-SLOT         \ slot 3
+PAUSE PAUSE PAUSE                   \ all three run
+BG-STOP-ALL
+```
 
 ---
 
 ### `BG-WAIT-DONE`
 
 ```forth
-BG-WAIT-DONE ( -- )
+BG-WAIT-DONE ( n -- )
 ```
 
-Busy-wait (calling `PAUSE` each iteration) until the background task
-finishes naturally.  When a one-shot background task's xt returns,
-`task1_cleanup` fires and `TASK?` becomes 0.
+Busy-wait (calling `PAUSE` each iteration) until slot n finishes
+naturally.  When a one-shot background task's xt returns, the cleanup
+handler fires and `n TASK?` becomes 0.
+
+Returns immediately if slot n is not active.
 
 Only useful for **one-shot** tasks.  For infinite-loop tasks (e.g.,
 those installed by `BG-POLL`), this would spin forever — use
-`TASK-STOP` instead.
+`n TASK-STOP` instead.
 
 ```forth
 : bg-hash  buf len SHA-256 result 32 CMOVE ;
 ['] bg-hash BACKGROUND
 do-other-work
-BG-WAIT-DONE             \ wait for hash to finish
+1 BG-WAIT-DONE           \ wait for hash to finish
 \ result buffer is now ready
 ```
 
-Returns immediately if no background task is active.
+---
+
+### `BG-WAIT-ALL`
+
+```forth
+BG-WAIT-ALL ( -- )
+```
+
+Busy-wait until all background tasks (slots 1–3) finish naturally.
+Only useful when all running tasks are one-shot.
+
+```forth
+['] hash-part1 BACKGROUND
+['] hash-part2 BACKGROUND2
+['] hash-part3 BACKGROUND3
+BG-WAIT-ALL               \ wait for all three
+```
+
+---
+
+### `BG-STOP-ALL`
+
+```forth
+BG-STOP-ALL ( -- )
+```
+
+Unconditionally stop all background tasks in slots 1–3.
+Equivalent to `1 TASK-STOP 2 TASK-STOP 3 TASK-STOP`.
 
 ---
 
@@ -212,8 +313,8 @@ BG-INFO ( -- )
 Print background task status for debugging:
 
 ```
-[coroutine bg=ACTIVE]
-[coroutine bg=STOPPED]
+[coroutine 1=ON 2=-- 3=ON n=2]
+[coroutine 1=-- 2=-- 3=-- n=0]
 ```
 
 ---
@@ -222,42 +323,51 @@ Print background task status for debugging:
 
 ### Single-Core Cooperative (Primary Use Case)
 
-The hardware coroutine pair is designed for single-core cooperative
-multitasking.  Task 0 (the main Forth interpreter) and Task 1 (one
-background helper) take turns explicitly:
+The four-task scheduler is designed for single-core cooperative
+multitasking.  Task 0 (the main Forth interpreter) and up to three
+background helpers take turns explicitly:
 
 ```forth
-\ Poll NIC while hashing a large buffer
+\ Poll NIC + USB while hashing a large buffer
 : poll-nic  nic-rx-check ;
-['] poll-nic BG-POLL
+: poll-usb  usb-check ;
+
+['] poll-nic BG-POLL               \ slot 1
+2 ['] poll-usb BG-POLL-SLOT        \ slot 2
 
 : hash-loop
     BEGIN
         buf 4096 SHA-256-UPDATE
-        PAUSE                \ let NIC poll run
+        PAUSE                \ round-robin through active slots
         more-data?
     WHILE REPEAT ;
 
-hash-loop TASK-STOP
+hash-loop
+BG-STOP-ALL
 ```
 
 ### Interaction with KDOS Scheduler
 
-The BIOS hardware coroutine (SEP-based) is orthogonal to the KDOS
-software task scheduler (`SCHEDULE`, `YIELD`, `SPAWN`).  The coroutine
-pair runs within a single KDOS task — both Task 0 and Task 1 share
-the same KDOS task slot.
+The BIOS cooperative scheduler (SEP-based) is orthogonal to the KDOS
+software task scheduler (`SCHEDULE`, `YIELD`, `SPAWN`).  The four
+hardware tasks run within a single KDOS task — Task 0 and slots 1–3
+all share the same KDOS task slot.
 
-- `PAUSE` / `TASK-YIELD` switch between the two hardware threads
+- `PAUSE` / `TASK-YIELD` switch between the hardware threads
 - `YIELD` (KDOS word) marks the current KDOS task as done and lets
   the scheduler pick the next KDOS task
 
 These are different mechanisms and should not be confused.
 
+**Note:** KDOS defines `VARIABLE TASK-COUNT` for its own scheduler
+slot tracking, which is unrelated to the BIOS `#TASKS` word that
+counts active cooperative background tasks.
+
 ### Multicore
 
-The hardware coroutine pair is per-core.  Each core has its own R3/R13
-register pair.  `BACKGROUND` on core 0 only affects core 0's Task 1.
+The cooperative scheduler is per-core.  Each core has its own R20
+trampoline and task PC table.  `BACKGROUND` on core 0 only affects
+core 0's slots.
 
 ---
 
@@ -265,12 +375,13 @@ register pair.  `BACKGROUND` on core 0 only affects core 0's Task 1.
 
 | Constraint | Reason |
 |------------|--------|
-| **One background slot** | Hardware has one R13 register per core. |
-| **No preemption** | SEP is explicit — Task 1 only runs when Task 0 calls `PAUSE`. |
-| **No I/O from Task 1** | Micro-core lacks Q flip-flop; `EMIT` traps. Use shared variables. |
+| **Three background slots** | Hardware has slots 1–3 (Task 0 is always active). |
+| **No preemption** | SEP is explicit — bg tasks only run when Task 0 calls `PAUSE`. |
+| **No I/O from bg tasks** | Micro-core lacks Q flip-flop; `EMIT` traps. Use shared variables. |
 | **PAUSE ≠ TASK-YIELD** | Calling the wrong yield word from the wrong task crashes. |
-| **Shared address space** | Task 1 shares dictionary and memory with Task 0. |
+| **Shared address space** | All tasks share dictionary and memory. |
 | **No `[: ;]` closures** | This BIOS/KDOS does not define anonymous quotations. Use named words with `[']`. |
+| **Round-robin ordering** | `PAUSE` scans slots 1→2→3 round-robin; ordering is deterministic but not adjustable. |
 
 ---
 
@@ -280,20 +391,30 @@ register pair.  `BACKGROUND` on core 0 only affects core 0's Task 1.
 
 | Word | Signature | Behavior |
 |------|-----------|----------|
-| `BG-ALIVE?` | `( -- flag )` | Is Task 1 active? (TRUE/FALSE) |
-| `WITH-BACKGROUND` | `( xt-bg xt-body -- )` | Scoped bg task with auto-stop |
-| `BG-POLL` | `( xt -- )` | Install polling background loop |
-| `BG-WAIT-DONE` | `( -- )` | Wait for one-shot bg task to finish |
+| `BG-ALIVE?` | `( n -- flag )` | Is slot n active? (TRUE/FALSE) |
+| `BG-ANY?` | `( -- flag )` | Any bg task active? |
+| `WITH-BACKGROUND` | `( xt-bg xt-body -- )` | Scoped bg in slot 1 with auto-stop |
+| `WITH-BG` | `( slot xt-bg xt-body -- )` | Scoped bg in any slot with auto-stop |
+| `BG-POLL` | `( xt -- )` | Install polling background loop (slot 1) |
+| `BG-POLL-SLOT` | `( slot xt -- )` | Install polling background loop (any slot) |
+| `BG-WAIT-DONE` | `( n -- )` | Wait for slot n to finish |
+| `BG-WAIT-ALL` | `( -- )` | Wait for all bg tasks to finish |
+| `BG-STOP-ALL` | `( -- )` | Stop all bg tasks |
 | `BG-INFO` | `( -- )` | Debug status display |
 
 ### Internal Words
 
 | Word | Signature | Behavior |
 |------|-----------|----------|
-| `_BG-POLL-XT` | variable | Storage for polling loop xt |
-| `_BG-POLL-LOOP` | `( -- )` | Infinite poll-yield loop (Task 1) |
+| `_BG-START` | `( xt slot -- )` | Dispatch to BACKGROUND/2/3 |
+| `_BG-POLL-XT1` | variable | Polling xt storage for slot 1 |
+| `_BG-POLL-XT2` | variable | Polling xt storage for slot 2 |
+| `_BG-POLL-XT3` | variable | Polling xt storage for slot 3 |
+| `_BG-POLL-LOOP1` | `( -- )` | Infinite poll-yield loop (slot 1) |
+| `_BG-POLL-LOOP2` | `( -- )` | Infinite poll-yield loop (slot 2) |
+| `_BG-POLL-LOOP3` | `( -- )` | Infinite poll-yield loop (slot 3) |
 
 ### Dependencies
 
-None.  All BIOS words (`PAUSE`, `TASK-YIELD`, `BACKGROUND`, `TASK-STOP`,
-`TASK?`) are always available.
+None.  All BIOS words (`PAUSE`, `TASK-YIELD`, `BACKGROUND`, `BACKGROUND2`,
+`BACKGROUND3`, `TASK-STOP`, `TASK?`, `#TASKS`) are always available.
