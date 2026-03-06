@@ -38,7 +38,7 @@
 \  Not reentrant (shares SHA3 device).
 \ =================================================================
 
-REQUIRE akashic/math/sha3.f
+REQUIRE sha3.f
 
 PROVIDED akashic-merkle
 

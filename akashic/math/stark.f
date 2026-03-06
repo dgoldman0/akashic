@@ -22,11 +22,11 @@
 \  Not reentrant.
 \ =================================================================
 
-REQUIRE akashic/math/sha3.f
-REQUIRE akashic/math/ntt.f
-REQUIRE akashic/math/baby-bear.f
-REQUIRE akashic/math/merkle.f
-REQUIRE akashic/math/stark-air.f
+REQUIRE sha3.f
+REQUIRE ntt.f
+REQUIRE baby-bear.f
+REQUIRE merkle.f
+REQUIRE stark-air.f
 
 PROVIDED akashic-stark
 
