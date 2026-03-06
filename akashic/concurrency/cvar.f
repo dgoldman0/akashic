@@ -112,20 +112,24 @@ PROVIDED akashic-cvar
 \
 \   Example:   0 1 my-counter CV-CAS  ( -- flag )
 
-VARIABLE _CV-CAS-CV               \ temp: cvar address
-VARIABLE _CV-CAS-NEW              \ temp: new value
-VARIABLE _CV-CAS-EXP              \ temp: expected value
+\ _CV-CAS-CV, _CV-CAS-NEW, _CV-CAS-EXP removed — CV-CAS now uses
+\ pure stack manipulation under the lock to avoid shared-state
+\ corruption when multiple tasks call CV-CAS concurrently on
+\ different cvars.  (Tier 0e fix)
 
 : CV-CAS  ( expected new cv -- flag )
-    _CV-CAS-CV !  _CV-CAS-NEW !  _CV-CAS-EXP !
-    _CV-CAS-CV @ _CV-LOCK LOCK
-    _CV-CAS-CV @ @ _CV-CAS-EXP @ = IF
-        _CV-CAS-NEW @ _CV-CAS-CV @ !
-        _CV-CAS-CV @ _CV-LOCK UNLOCK
-        _CV-CAS-CV @ _CV-EVT EVT-PULSE
+    >R                                 \ save cv  R: ( cv )
+    R@ _CV-LOCK LOCK                   \ lock under cv's spinlock
+    R@ @ 2 PICK = IF                   \ cv @ = expected?
+        R@ !                           \ store new into cv  ( expected )
+        DROP                           \ drop expected
+        R@ _CV-LOCK UNLOCK
+        R> _CV-EVT EVT-PULSE          \ notify waiters
         -1                             \ success
     ELSE
-        _CV-CAS-CV @ _CV-LOCK UNLOCK
+        R@ _CV-LOCK UNLOCK
+        R> DROP                        \ discard cv from R
+        2DROP                          \ drop new expected
         0                              \ failure
     THEN ;
 

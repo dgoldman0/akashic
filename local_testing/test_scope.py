@@ -33,6 +33,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
 EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
+CRIT_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "critical.f")
 SCOPE_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "scope.f")
 
 sys.path.insert(0, EMU_DIR)
@@ -92,11 +93,12 @@ def restore_cpu_state(cpu, state):
 def build_snapshot():
     global _snapshot
     if _snapshot: return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + event.f + scope.f ...")
+    print("[*] Building snapshot: BIOS + KDOS + event.f + critical.f + scope.f ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
     evt_lines  = _load_forth_lines(EVENT_F)
+    crit_lines = _load_forth_lines(CRIT_F)
     scp_lines  = _load_forth_lines(SCOPE_F)
     helpers = [
         # Side-effect variables for verifying tasks ran
@@ -139,7 +141,7 @@ def build_snapshot():
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
     payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + evt_lines
-                        + scp_lines + helpers) + "\n"
+                        + crit_lines + scp_lines + helpers) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
     while steps < mx:
         if sys_obj.cpu.halted: break
@@ -155,18 +157,25 @@ def build_snapshot():
     for l in text.strip().split('\n'):
         if '?' in l and 'not found' in l.lower():
             print(f"  [!] {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:

@@ -49,6 +49,7 @@
 \ Load with:   REQUIRE scope.f
 
 REQUIRE ../concurrency/event.f
+REQUIRE ../concurrency/critical.f
 
 PROVIDED akashic-scope
 
@@ -341,13 +342,15 @@ VARIABLE THIS-GROUP
 
 : WITH-TASKS  ( xt -- )
     _TG-ALLOC                         \ ( xt tg )
+    CRITICAL-BEGIN                    \ preemption off (Tier 0d fix)
     THIS-GROUP @ >R                   \ save old group  R: ( old-tg )
     DUP THIS-GROUP !                  \ THIS-GROUP = tg  ( xt tg )
     >R                                \ ( xt )  R: ( old-tg tg )
-    EXECUTE                           \ run user xt ( -- )
+    EXECUTE                           \ run user xt (spawns children)
     R>                                \ ( tg )  R: ( old-tg )
     R>                                \ ( tg old-tg )
     THIS-GROUP !                      \ restore THIS-GROUP  ( tg )
+    CRITICAL-END                      \ preemption restored
     TG-WAIT ;                         \ wait for all children
 
 \ =====================================================================

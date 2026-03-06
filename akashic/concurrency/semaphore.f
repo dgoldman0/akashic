@@ -155,21 +155,25 @@ PROVIDED akashic-semaphore
 \
 \   Uses EPOCH@ (BIOS: milliseconds since boot) for timing.
 
-VARIABLE _SEM-DEADLINE
+\ _SEM-DEADLINE removed — deadline now lives on the return stack
+\ inside SEM-WAIT-TIMEOUT to avoid shared-state corruption when
+\ multiple tasks call SEM-WAIT-TIMEOUT concurrently.  (Tier 0b fix)
 
 : SEM-WAIT-TIMEOUT  ( sem ms -- flag )
-    EPOCH@ + _SEM-DEADLINE !
+    EPOCH@ + >R                        \ deadline on R  R: ( deadline )
     BEGIN
         \ Try to decrement under lock
         EVT-LOCK LOCK
         DUP @ 0> IF
             -1 OVER +!
             EVT-LOCK UNLOCK
+            R> DROP                    \ discard deadline
             DROP -1 EXIT               \ acquired
         THEN
         EVT-LOCK UNLOCK
         \ Check timeout
-        EPOCH@ _SEM-DEADLINE @ > IF
+        EPOCH@ R@ > IF
+            R> DROP                    \ discard deadline
             DROP 0 EXIT                \ timed out
         THEN
         \ Wait for signal with remaining time

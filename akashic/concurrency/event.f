@@ -206,13 +206,15 @@ PROVIDED akashic-event
 \
 \   Uses EPOCH@ (BIOS: milliseconds since boot) for timing.
 
-VARIABLE _EVT-DEADLINE
+\ _EVT-DEADLINE removed — deadline now lives on the return stack
+\ inside EVT-WAIT-TIMEOUT to avoid shared-state corruption when
+\ multiple tasks call EVT-WAIT-TIMEOUT concurrently.  (Tier 0a fix)
 
 : EVT-WAIT-TIMEOUT  ( ev ms -- flag )
     \ Fast path: already set
     OVER EVT-SET? IF  2DROP -1 EXIT  THEN
-    \ Compute deadline
-    EPOCH@ + _EVT-DEADLINE !
+    \ Compute deadline → return stack
+    EPOCH@ + >R                       \ R: ( deadline )
     \ Register as waiter
     EVT-LOCK LOCK
     DUP _EVT-ADD-WAITER
@@ -227,14 +229,16 @@ VARIABLE _EVT-DEADLINE
             DUP _EVT-REMOVE-WAITER
             EVT-LOCK UNLOCK
             CURRENT-TASK @ ?DUP IF  T.RUNNING SWAP T.STATUS!  THEN
+            R> DROP                           \ discard deadline
             DROP -1 EXIT
         THEN
-        EPOCH@ _EVT-DEADLINE @ > IF           \ timed out?
+        EPOCH@ R@ > IF                        \ timed out?
             \ Clean up and return FALSE
             EVT-LOCK LOCK
             DUP _EVT-REMOVE-WAITER
             EVT-LOCK UNLOCK
             CURRENT-TASK @ ?DUP IF  T.RUNNING SWAP T.STATUS!  THEN
+            R> DROP                           \ discard deadline
             DROP 0 EXIT
         THEN
         YIELD?

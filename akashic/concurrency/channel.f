@@ -378,44 +378,49 @@ PROVIDED akashic-channel
 \
 \   Example:   ch-a ch-b ch-c 3 CHAN-SELECT  ( -- idx val )
 
-VARIABLE _SEL-VAL
-VARIABLE _SEL-IDX
-VARIABLE _SEL-DEAD
+\ _SEL-VAL, _SEL-IDX, _SEL-DEAD removed — all state now lives on
+\ the data stack inside CHAN-SELECT to avoid shared-state corruption
+\ when multiple tasks call CHAN-SELECT concurrently.  (Tier 0c fix)
 
 : _CHAN-SEL-DROP  ( chan1 ... chanN n -- )
     0 DO DROP LOOP ;
 
 : CHAN-SELECT  ( chan1 chan2 ... chanN n -- idx val )
     BEGIN
-        0 _SEL-DEAD !
-        DUP 0 DO
-            \ Access chan[I]: channels are at stack positions
-            \ (n-I+1) below the DUP'd n that PICK counts from.
-            DUP I - PICK                  \ copy chan[I] to TOS
+        0                             \ dead-count on TOS ( chans n dead )
+        OVER 0 DO
+            \ Access chan[I]: channels sit deeper in the stack.
+            \ Stack below dead: chan1..chanN n
+            \ We need chan[I] — that's at position (n - I) + 1
+            \ counting from 'n', but 'dead' is above 'n', so +2.
+            OVER I - 1+ PICK          \ copy chan[I] to TOS ( chans n dead ch )
 
             \ Track closed+empty channels
             DUP CHAN-CLOSED? IF
                 DUP _CHAN-EMPTY? IF
-                    1 _SEL-DEAD +!
+                    SWAP 1+ SWAP      \ dead++ ( chans n dead' ch )
                 THEN
             THEN
 
-            CHAN-TRY-RECV                 \ ( ... n val flag )
-            IF
-                _SEL-VAL !               \ save val
-                I _SEL-IDX !             \ save index
-                UNLOOP                    \ exit DO
-                _CHAN-SEL-DROP            \ drop all channels + n
-                _SEL-IDX @ _SEL-VAL @    \ push idx val
-                EXIT                      \ return
+            CHAN-TRY-RECV             \ ( chans n dead val flag )
+            IF                        \ got data!
+                \ Stack: chan1..chanN n dead val
+                I >R                  \ save index  R: (..DO.. idx)
+                >R                    \ save val    R: (..DO.. idx val)
+                DROP                  \ drop dead   ( chans n )
+                _CHAN-SEL-DROP        \ drop all N channels ( )
+                R> R>                 \ ( val idx )
+                SWAP                  \ ( idx val )
+                UNLOOP EXIT
             ELSE
-                DROP                      \ drop 0 from failed try
+                DROP                  \ drop 0 from failed try
             THEN
         LOOP
 
         \ All channels checked, none ready.
         \ If every channel is closed+empty, return ( -1 0 ).
-        _SEL-DEAD @ OVER = IF
+        \ Stack: chan1..chanN n dead
+        OVER = IF                     \ dead = n?
             _CHAN-SEL-DROP
             -1 0 EXIT
         THEN
