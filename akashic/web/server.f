@@ -16,6 +16,7 @@ REQUIRE ../web/response.f
 REQUIRE ../web/router.f
 REQUIRE ../utils/datetime.f
 REQUIRE ../utils/string.f
+REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-web-server
 
@@ -327,3 +328,20 @@ VARIABLE _SRV-DISPATCH-XT
         RESP-CLEAR
         500 RESP-ERROR
     THEN ;
+
+\ =====================================================================
+\  Concurrency Guard
+\ =====================================================================
+\
+\ SRV-HANDLE and SRV-HANDLE-BUF touch shared VARIABLEs in request.f,
+\ response.f, router.f, headers.f, and url.f.  A GUARD-BLOCKING
+\ serialises all HTTP handling so a background task cannot corrupt
+\ the pipeline while a request is in flight.
+
+GUARD-BLOCKING _srv-guard
+
+' SRV-HANDLE     CONSTANT _srv-handle-xt
+' SRV-HANDLE-BUF CONSTANT _srv-hbuf-xt
+
+: SRV-HANDLE      ( sd -- )       _srv-handle-xt _srv-guard WITH-GUARD ;
+: SRV-HANDLE-BUF  ( addr len -- ) _srv-hbuf-xt   _srv-guard WITH-GUARD ;

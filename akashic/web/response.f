@@ -371,3 +371,10 @@ CREATE _RESP-TERM-CHUNK 5 ALLOT
 \ RESP-SET-SD ( sd -- )
 \   Set the socket descriptor for sending.  Called by server.f.
 : RESP-SET-SD  ( sd -- )  _RESP-SD ! ;
+
+\ ── Concurrency ──
+\
+\ All public words in this module are NOT reentrant.  They use shared
+\ VARIABLE scratch space that would be corrupted by concurrent access.
+\ Callers must ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

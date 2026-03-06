@@ -9,6 +9,7 @@
 
 REQUIRE url.f
 REQUIRE headers.f
+REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-http
 
@@ -513,3 +514,28 @@ VARIABLE HTTP-FOLLOW?
     HTTP-STATUS @
     DUP 301 = OVER 302 = OR
     OVER 307 = OR SWAP 308 = OR ;
+
+\ =====================================================================
+\  Concurrency Guard
+\ =====================================================================
+\
+\ HTTP-REQUEST, HTTP-GET, HTTP-POST, and HTTP-POST-JSON share module-
+\ level VARIABLEs (connection state, recv buffer, parse state, DNS
+\ cache, session headers).  A GUARD-BLOCKING serialises all outbound
+\ HTTP so a background task cannot corrupt a request in flight.
+
+GUARD-BLOCKING _httpc-guard
+
+' HTTP-REQUEST  CONSTANT _http-req-xt
+' HTTP-GET      CONSTANT _http-get-xt
+' HTTP-POST     CONSTANT _http-post-xt
+' HTTP-POST-JSON CONSTANT _http-pj-xt
+
+: HTTP-REQUEST   ( m-a m-u url-a url-u -- ior )
+    _http-req-xt _httpc-guard WITH-GUARD ;
+: HTTP-GET       ( url-a url-u -- body-a body-u )
+    _http-get-xt _httpc-guard WITH-GUARD ;
+: HTTP-POST      ( url-a url-u body-a body-u ct-a ct-u -- resp-a resp-u )
+    _http-post-xt _httpc-guard WITH-GUARD ;
+: HTTP-POST-JSON ( url-a url-u json-a json-u -- resp-a resp-u )
+    _http-pj-xt _httpc-guard WITH-GUARD ;

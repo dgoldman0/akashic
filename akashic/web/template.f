@@ -240,3 +240,10 @@ VARIABLE _TV-NA  VARIABLE _TV-NU
     REPEAT
     2DROP
     _TPL-OUT-BUF _TPL-OUT-POS @ ;
+
+\ ── Concurrency ──
+\
+\ All public words in this module are NOT reentrant.  They use shared
+\ VARIABLE scratch space that would be corrupted by concurrent access.
+\ Callers must ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

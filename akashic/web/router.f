@@ -241,3 +241,10 @@ VARIABLE _RM-RESULT
     REQ-METHOD REQ-PATH ROUTE-MATCH
     DUP 0= IF DROP RESP-NOT-FOUND EXIT THEN
     EXECUTE ;
+
+\ ── Concurrency ──
+\
+\ All public words in this module are NOT reentrant.  They use shared
+\ VARIABLE scratch space that would be corrupted by concurrent access.
+\ Callers must ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

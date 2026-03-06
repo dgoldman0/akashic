@@ -267,3 +267,10 @@ VARIABLE _HF-SCAN
 \ HDR-SET-COOKIE ( hdr-a hdr-u -- val-a val-u flag )
 : HDR-SET-COOKIE  ( hdr-a hdr-u -- val-a val-u flag )
     S" Set-Cookie" HDR-FIND ;
+
+\ ── Concurrency ──
+\
+\ All public words in this module are NOT reentrant.  They use shared
+\ VARIABLE scratch space that would be corrupted by concurrent access.
+\ Callers must ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

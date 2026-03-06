@@ -49,6 +49,9 @@ RTR_F      = os.path.join(ROOT_DIR, "akashic", "web", "router.f")
 SRV_F      = os.path.join(ROOT_DIR, "akashic", "web", "server.f")
 MW_F       = os.path.join(ROOT_DIR, "akashic", "web", "middleware.f")
 B64_F      = os.path.join(ROOT_DIR, "akashic", "net", "base64.f")
+EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
+SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
+GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -111,6 +114,9 @@ def build_snapshot():
     t0 = time.time()
     bios_code  = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
+    event_lines = _load_forth_lines(EVENT_F)
+    sem_lines   = _load_forth_lines(SEM_F)
+    guard_lines = _load_forth_lines(GUARD_F)
     str_lines  = _load_forth_lines(STR_F)
     url_lines  = _load_forth_lines(URL_F)
     hdr_lines  = _load_forth_lines(HDR_F)
@@ -153,6 +159,7 @@ def build_snapshot():
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
     all_lines = (kdos_lines + ["ENTER-USERLAND"] +
+                 event_lines + sem_lines + guard_lines +
                  str_lines + url_lines + hdr_lines + dt_lines +
                  tbl_lines + b64_lines + req_lines + resp_lines + rtr_lines +
                  srv_lines + mw_lines + helpers)
@@ -173,18 +180,25 @@ def build_snapshot():
     if errs:
         print("[!] Compilation errors:")
         for ln in errs[-10:]: print(f"    {ln}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:

@@ -255,3 +255,10 @@ VARIABLE _UB-POS
         URI-FRAG-A @ URI-FRAG-L @ _UB-APPEND
     THEN
     _UB-POS @ ;
+
+\ ── Concurrency ──
+\
+\ All public words in this module are NOT reentrant.  They use shared
+\ VARIABLE scratch space that would be corrupted by concurrent access.
+\ Callers must ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

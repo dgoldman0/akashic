@@ -217,3 +217,10 @@ VARIABLE _BD-ACC    \ 24-bit accumulator
 \   URL-safe decode — same logic since _B64-VAL handles both alphabets.
 : B64-DECODE-URL  ( src slen dst dmax -- written )
     B64-DECODE ;
+
+\ ── Concurrency ──
+\
+\ All public words in this module are NOT reentrant.  They use shared
+\ VARIABLE scratch space that would be corrupted by concurrent access.
+\ Callers must ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

@@ -434,3 +434,10 @@ VARIABLE _MW-STATIC-FD
     _MW-STATIC-READ-BUF 4096 _MW-STATIC-FD @ FREAD ( actual )
     _MW-STATIC-READ-BUF SWAP RESP-BODY
     RESP-SEND ;
+
+\ ── Concurrency ──
+\
+\ All public words in this module are NOT reentrant.  They use shared
+\ VARIABLE scratch space that would be corrupted by concurrent access.
+\ Callers must ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

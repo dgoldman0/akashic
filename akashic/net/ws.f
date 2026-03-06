@@ -11,6 +11,7 @@
 \ Load with:   REQUIRE ws.f
 
 REQUIRE http.f
+REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-websocket
 
@@ -556,3 +557,32 @@ VARIABLE _WR-FIRST-OP
         DROP
     REPEAT
     _WR-FIRST-OP @ _WR-TOTAL @ ;
+
+\ =====================================================================
+\  Concurrency Guard
+\ =====================================================================
+\
+\ WS-CONNECT, WS-DISCONNECT, WS-SEND-TEXT, WS-SEND-BINARY, and
+\ WS-RECV share module-level VARIABLEs (connection state, SHA-1
+\ scratch, frame staging buffers).  A GUARD-BLOCKING serialises all
+\ WebSocket operations so a background task cannot corrupt an active
+\ session.
+
+GUARD-BLOCKING _wsc-guard
+
+' WS-CONNECT     CONSTANT _wsc-conn-xt
+' WS-DISCONNECT  CONSTANT _wsc-disc-xt
+' WS-SEND-TEXT   CONSTANT _wsc-stxt-xt
+' WS-SEND-BINARY CONSTANT _wsc-sbin-xt
+' WS-RECV        CONSTANT _wsc-recv-xt
+
+: WS-CONNECT     ( url-a url-u -- ctx | 0 )
+    _wsc-conn-xt _wsc-guard WITH-GUARD ;
+: WS-DISCONNECT  ( ctx -- )
+    _wsc-disc-xt _wsc-guard WITH-GUARD ;
+: WS-SEND-TEXT   ( ctx text-a text-u -- )
+    _wsc-stxt-xt _wsc-guard WITH-GUARD ;
+: WS-SEND-BINARY ( ctx data-a data-u -- )
+    _wsc-sbin-xt _wsc-guard WITH-GUARD ;
+: WS-RECV        ( ctx buf max -- opcode len )
+    _wsc-recv-xt _wsc-guard WITH-GUARD ;
