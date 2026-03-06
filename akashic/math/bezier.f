@@ -258,3 +258,9 @@ VARIABLE _CS-GX    VARIABLE _CS-GY     \ mid(E,F) = on-curve
             _BZ-CUBIC-SPLIT-PUSH
         THEN
     REPEAT ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ Bézier words are NOT reentrant.  They use shared VARIABLE
+\ scratch and a work-stack buffer.  Callers must ensure
+\ single-task access via WITH-GUARD, WITH-CRITICAL, or by
+\ running with preemption disabled.

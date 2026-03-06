@@ -360,3 +360,9 @@ VARIABLE _IP-H-T3
     _IP-H-T3 @ _IP-H-T2 @ FP16-SUB
     _IP-H-M1 @ FP16-MUL               ( sum h11·m1 )
     FP16-ADD ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ Interpolation words are NOT reentrant.  They use shared
+\ VARIABLE scratch for intermediate results.  Callers must
+\ ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

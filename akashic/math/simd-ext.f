@@ -467,3 +467,9 @@ VARIABLE _SIMX-Y-PTR
         SIMD-CLAMP
         _SIMX-PD @ _SIMX-DST @ _SIMX-REM @ _SIMX-STORE-PARTIAL
     THEN ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ SIMD-ext words are NOT reentrant.  They use shared
+\ VARIABLE scratch for intermediate results.  Callers must
+\ ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

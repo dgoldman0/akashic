@@ -898,3 +898,33 @@ VARIABLE _FFTCR-TW                   \ twiddle for correlate-TW
         _FFT-CORR-DST @ _FFT-CORR-I @ 2 * + W!
         _FFT-CORR-I @ 1+ _FFT-CORR-I !
     REPEAT ;
+
+\ ── Concurrency Guard ───────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _fft-guard
+
+' FFT-FORWARD       CONSTANT _fft-fwd-xt
+' FFT-INVERSE       CONSTANT _fft-inv-xt
+' FFT-MAGNITUDE     CONSTANT _fft-mag-xt
+' FFT-POWER         CONSTANT _fft-pow-xt
+' FFT-CONVOLVE      CONSTANT _fft-conv-xt
+' FFT-CORRELATE     CONSTANT _fft-corr-xt
+' FFT-TWIDDLE-ALLOC CONSTANT _fft-twalloc-xt
+' FFT-TWIDDLE-FILL  CONSTANT _fft-twfill-xt
+' FFT-FORWARD-TW    CONSTANT _fft-fwdtw-xt
+' FFT-INVERSE-TW    CONSTANT _fft-invtw-xt
+' FFT-CONVOLVE-TW   CONSTANT _fft-convtw-xt
+' FFT-CORRELATE-TW  CONSTANT _fft-corrtw-xt
+
+: FFT-FORWARD       _fft-fwd-xt     _fft-guard WITH-GUARD ;
+: FFT-INVERSE       _fft-inv-xt     _fft-guard WITH-GUARD ;
+: FFT-MAGNITUDE     _fft-mag-xt     _fft-guard WITH-GUARD ;
+: FFT-POWER         _fft-pow-xt     _fft-guard WITH-GUARD ;
+: FFT-CONVOLVE      _fft-conv-xt    _fft-guard WITH-GUARD ;
+: FFT-CORRELATE     _fft-corr-xt    _fft-guard WITH-GUARD ;
+: FFT-TWIDDLE-ALLOC _fft-twalloc-xt _fft-guard WITH-GUARD ;
+: FFT-TWIDDLE-FILL  _fft-twfill-xt  _fft-guard WITH-GUARD ;
+: FFT-FORWARD-TW    _fft-fwdtw-xt   _fft-guard WITH-GUARD ;
+: FFT-INVERSE-TW    _fft-invtw-xt   _fft-guard WITH-GUARD ;
+: FFT-CONVOLVE-TW   _fft-convtw-xt  _fft-guard WITH-GUARD ;
+: FFT-CORRELATE-TW  _fft-corrtw-xt  _fft-guard WITH-GUARD ;

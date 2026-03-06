@@ -579,3 +579,31 @@ VARIABLE _AN-NTOT               \ total N
         _AS-DST @ _STAT-SCR1 I 8 * + @   \ original index
         2 * + W!
     LOOP ;
+
+\ ── Concurrency Guard ───────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _advs-guard
+
+' PROB-T-CDF          CONSTANT _advs-tcdf-xt
+' ADVS-F-CDF          CONSTANT _advs-fcdf-xt
+' PROB-CI-PROPORTION  CONSTANT _advs-ciprop-xt
+' PROB-CI-DIFF-MEANS  CONSTANT _advs-cidm-xt
+' ADVS-COHENS-D       CONSTANT _advs-cohen-xt
+' ADVS-HEDGES-G       CONSTANT _advs-hedges-xt
+' ADVS-MANN-WHITNEY   CONSTANT _advs-mw-xt
+' ADVS-WILCOXON       CONSTANT _advs-wilcox-xt
+' ADVS-ANOVA-1        CONSTANT _advs-anova-xt
+' ADVS-BONFERRONI     CONSTANT _advs-bonf-xt
+' ADVS-HOLM           CONSTANT _advs-holm-xt
+
+: PROB-T-CDF          _advs-tcdf-xt   _advs-guard WITH-GUARD ;
+: ADVS-F-CDF          _advs-fcdf-xt   _advs-guard WITH-GUARD ;
+: PROB-CI-PROPORTION  _advs-ciprop-xt _advs-guard WITH-GUARD ;
+: PROB-CI-DIFF-MEANS  _advs-cidm-xt   _advs-guard WITH-GUARD ;
+: ADVS-COHENS-D       _advs-cohen-xt  _advs-guard WITH-GUARD ;
+: ADVS-HEDGES-G       _advs-hedges-xt _advs-guard WITH-GUARD ;
+: ADVS-MANN-WHITNEY   _advs-mw-xt     _advs-guard WITH-GUARD ;
+: ADVS-WILCOXON       _advs-wilcox-xt _advs-guard WITH-GUARD ;
+: ADVS-ANOVA-1        _advs-anova-xt  _advs-guard WITH-GUARD ;
+: ADVS-BONFERRONI     _advs-bonf-xt   _advs-guard WITH-GUARD ;
+: ADVS-HOLM           _advs-holm-xt   _advs-guard WITH-GUARD ;

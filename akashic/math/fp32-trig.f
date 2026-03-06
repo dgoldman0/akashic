@@ -309,3 +309,9 @@ VARIABLE _F3T-A2X
 
 : F32T-DEG>RAD  ( deg -- rad )   F32T-DEG2RAD FP32-MUL ;
 : F32T-RAD>DEG  ( rad -- deg )   F32T-RAD2DEG FP32-MUL ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ FP32-trig words are NOT reentrant.  They use shared
+\ VARIABLE scratch for intermediate results.  Callers must
+\ ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

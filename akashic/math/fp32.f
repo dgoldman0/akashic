@@ -731,3 +731,9 @@ VARIABLE _I2F-MSB
 
 : ACC>FP32  ( -- fp32 )
     ACC@ _FP32-MASK AND ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ FP32 arithmetic words are NOT reentrant.  They use shared
+\ VARIABLE scratch for intermediate results.  Callers must
+\ ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

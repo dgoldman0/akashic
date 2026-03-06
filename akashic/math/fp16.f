@@ -281,3 +281,9 @@ VARIABLE _FI-MANT
         _FI-MANT @ 10 _FI-EXP @ - RSHIFT
     THEN
     _FI-SIGN @ IF NEGATE THEN ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ FP16 arithmetic words are NOT reentrant.  They use shared
+\ VARIABLE scratch for intermediate results.  Callers must
+\ ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

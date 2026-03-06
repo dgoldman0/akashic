@@ -240,3 +240,9 @@ VARIABLE _VR-COS
     _V2-A @ _V2-C @ FP16-EQ
     _V2-B @ _V2-D @ FP16-EQ
     AND ;                              ( flag )
+
+\ ── Concurrency ──────────────────────────────────────────
+\ Vec2 words are NOT reentrant.  They use shared VARIABLE
+\ scratch for intermediate results.  Callers must ensure
+\ single-task access via WITH-GUARD, WITH-CRITICAL, or by
+\ running with preemption disabled.

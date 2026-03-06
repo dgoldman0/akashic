@@ -303,3 +303,23 @@ VARIABLE _SR-J
 
         _SR-J @ 1+ _SR-I !
     REPEAT ;
+
+\ ── Concurrency Guard ───────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _sort-guard
+
+' SORT-IS-SORTED? CONSTANT _sort-issorted-xt
+' SORT-REVERSE     CONSTANT _sort-reverse-xt
+' SORT-FP16        CONSTANT _sort-fp16-xt
+' SORT-FP16-DESC   CONSTANT _sort-fp16desc-xt
+' SORT-NTH         CONSTANT _sort-nth-xt
+' SORT-ARGSORT     CONSTANT _sort-argsort-xt
+' SORT-RANK        CONSTANT _sort-rank-xt
+
+: SORT-IS-SORTED? _sort-issorted-xt _sort-guard WITH-GUARD ;
+: SORT-REVERSE    _sort-reverse-xt  _sort-guard WITH-GUARD ;
+: SORT-FP16       _sort-fp16-xt     _sort-guard WITH-GUARD ;
+: SORT-FP16-DESC  _sort-fp16desc-xt _sort-guard WITH-GUARD ;
+: SORT-NTH        _sort-nth-xt      _sort-guard WITH-GUARD ;
+: SORT-ARGSORT    _sort-argsort-xt  _sort-guard WITH-GUARD ;
+: SORT-RANK       _sort-rank-xt     _sort-guard WITH-GUARD ;

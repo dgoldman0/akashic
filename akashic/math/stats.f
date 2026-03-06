@@ -604,3 +604,77 @@ VARIABLE _SOM-NNEW
     _SOM-NNEW @ R@ _SOL-N !
 
     R> DROP 2DROP ;
+
+\ ── Concurrency Guard ───────────────────────────────────
+\ All batch and online stats words are guarded (one-shot).
+\ Online words pass a ctx struct on the stack but still use
+\ shared VARIABLE scratch (_SOL-CTX, _SOL-X32, _SOL-DELTA,
+\ _SPN-*, _SOM-*, _STAT-SCR0/1, _STAT-SRC/N, etc.).
+REQUIRE ../concurrency/guard.f
+GUARD _stat-guard
+
+\ Save original XTs
+' STAT-MEAN          CONSTANT _stat-mean-xt
+' STAT-MEDIAN        CONSTANT _stat-median-xt
+' STAT-VARIANCE      CONSTANT _stat-var-xt
+' STAT-VARIANCE-S    CONSTANT _stat-vars-xt
+' STAT-STDDEV        CONSTANT _stat-sd-xt
+' STAT-STDDEV-S      CONSTANT _stat-sds-xt
+' STAT-SEM           CONSTANT _stat-sem-xt
+' STAT-MIN           CONSTANT _stat-min-xt
+' STAT-MAX           CONSTANT _stat-max-xt
+' STAT-RANGE         CONSTANT _stat-range-xt
+' STAT-ARGMIN        CONSTANT _stat-argmin-xt
+' STAT-ARGMAX        CONSTANT _stat-argmax-xt
+' STAT-PERCENTILE    CONSTANT _stat-pct-xt
+' STAT-QUARTILES     CONSTANT _stat-q-xt
+' STAT-FIVE-NUM      CONSTANT _stat-5n-xt
+' STAT-COVARIANCE    CONSTANT _stat-cov-xt
+' STAT-CORRELATION   CONSTANT _stat-corr-xt
+' STAT-COSINE-SIM    CONSTANT _stat-cos-xt
+' STAT-EUCLIDEAN     CONSTANT _stat-euc-xt
+' STAT-ONLINE-INIT   CONSTANT _stat-oi-xt
+' STAT-ONLINE-RESET  CONSTANT _stat-or-xt
+' STAT-ONLINE-COUNT  CONSTANT _stat-oc-xt
+' STAT-ONLINE-MEAN   CONSTANT _stat-om-xt
+' STAT-ONLINE-MIN    CONSTANT _stat-omin-xt
+' STAT-ONLINE-MAX    CONSTANT _stat-omax-xt
+' STAT-ONLINE-VARIANCE CONSTANT _stat-ov-xt
+' STAT-ONLINE-STDDEV CONSTANT _stat-osd-xt
+' STAT-ONLINE-PUSH   CONSTANT _stat-op-xt
+' STAT-ONLINE-PUSH-N CONSTANT _stat-opn-xt
+' STAT-ONLINE-MERGE  CONSTANT _stat-omrg-xt
+
+\ Batch one-shot
+: STAT-MEAN          _stat-mean-xt   _stat-guard WITH-GUARD ;
+: STAT-MEDIAN        _stat-median-xt _stat-guard WITH-GUARD ;
+: STAT-VARIANCE      _stat-var-xt    _stat-guard WITH-GUARD ;
+: STAT-VARIANCE-S    _stat-vars-xt   _stat-guard WITH-GUARD ;
+: STAT-STDDEV        _stat-sd-xt     _stat-guard WITH-GUARD ;
+: STAT-STDDEV-S      _stat-sds-xt    _stat-guard WITH-GUARD ;
+: STAT-SEM           _stat-sem-xt    _stat-guard WITH-GUARD ;
+: STAT-MIN           _stat-min-xt    _stat-guard WITH-GUARD ;
+: STAT-MAX           _stat-max-xt    _stat-guard WITH-GUARD ;
+: STAT-RANGE         _stat-range-xt  _stat-guard WITH-GUARD ;
+: STAT-ARGMIN        _stat-argmin-xt _stat-guard WITH-GUARD ;
+: STAT-ARGMAX        _stat-argmax-xt _stat-guard WITH-GUARD ;
+: STAT-PERCENTILE    _stat-pct-xt    _stat-guard WITH-GUARD ;
+: STAT-QUARTILES     _stat-q-xt      _stat-guard WITH-GUARD ;
+: STAT-FIVE-NUM      _stat-5n-xt     _stat-guard WITH-GUARD ;
+: STAT-COVARIANCE    _stat-cov-xt    _stat-guard WITH-GUARD ;
+: STAT-CORRELATION   _stat-corr-xt   _stat-guard WITH-GUARD ;
+: STAT-COSINE-SIM    _stat-cos-xt    _stat-guard WITH-GUARD ;
+: STAT-EUCLIDEAN     _stat-euc-xt    _stat-guard WITH-GUARD ;
+
+\ Online one-shot (each call acquires+releases the guard)
+: STAT-ONLINE-INIT     _stat-oi-xt   _stat-guard WITH-GUARD ;
+: STAT-ONLINE-RESET    _stat-or-xt   _stat-guard WITH-GUARD ;
+: STAT-ONLINE-COUNT    _stat-oc-xt   _stat-guard WITH-GUARD ;
+: STAT-ONLINE-MEAN     _stat-om-xt   _stat-guard WITH-GUARD ;
+: STAT-ONLINE-MIN      _stat-omin-xt _stat-guard WITH-GUARD ;
+: STAT-ONLINE-MAX      _stat-omax-xt _stat-guard WITH-GUARD ;
+: STAT-ONLINE-VARIANCE _stat-ov-xt   _stat-guard WITH-GUARD ;
+: STAT-ONLINE-STDDEV   _stat-osd-xt  _stat-guard WITH-GUARD ;
+: STAT-ONLINE-PUSH     _stat-op-xt   _stat-guard WITH-GUARD ;
+: STAT-ONLINE-PUSH-N   _stat-opn-xt  _stat-guard WITH-GUARD ;
+: STAT-ONLINE-MERGE    _stat-omrg-xt _stat-guard WITH-GUARD ;

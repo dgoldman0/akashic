@@ -497,3 +497,23 @@ VARIABLE _HP-CENTRE
     \ Apply as FIR
     _HP-IN @ _HP-KERN @ _FILT-LP-TAPS _HP-DST @ _HP-N @ FILT-FIR ;
 
+\ ── Concurrency Guard ───────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _filt-guard
+
+' FILT-FIR        CONSTANT _filt-fir-xt
+' FILT-IIR-BIQUAD CONSTANT _filt-iir-xt
+' FILT-CONV1D     CONSTANT _filt-conv1d-xt
+' FILT-MA         CONSTANT _filt-ma-xt
+' FILT-MEDIAN     CONSTANT _filt-median-xt
+' FILT-LOWPASS    CONSTANT _filt-lp-xt
+' FILT-HIGHPASS   CONSTANT _filt-hp-xt
+
+: FILT-FIR        _filt-fir-xt    _filt-guard WITH-GUARD ;
+: FILT-IIR-BIQUAD _filt-iir-xt    _filt-guard WITH-GUARD ;
+: FILT-CONV1D     _filt-conv1d-xt _filt-guard WITH-GUARD ;
+: FILT-MA         _filt-ma-xt     _filt-guard WITH-GUARD ;
+: FILT-MEDIAN     _filt-median-xt _filt-guard WITH-GUARD ;
+: FILT-LOWPASS    _filt-lp-xt     _filt-guard WITH-GUARD ;
+: FILT-HIGHPASS   _filt-hp-xt     _filt-guard WITH-GUARD ;
+

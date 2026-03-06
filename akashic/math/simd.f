@@ -551,3 +551,9 @@ VARIABLE _SIMD-I
         OVER I 8 * +  OVER  SWAP !
     LOOP
     2DROP ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ SIMD tile operations are NOT reentrant.  They use shared
+\ tile registers and VARIABLE scratch.  Callers must ensure
+\ single-task access via WITH-GUARD, WITH-CRITICAL, or by
+\ running with preemption disabled.

@@ -596,3 +596,9 @@ VARIABLE _CL-HP-LEN
         _CL-ZERO _CL-ZERO _CL-ZERO FALSE
     ENDCASE
     ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ Color words are NOT reentrant.  They use shared VARIABLE
+\ scratch for intermediate results.  Callers must ensure
+\ single-task access via WITH-GUARD, WITH-CRITICAL, or by
+\ running with preemption disabled.

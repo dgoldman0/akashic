@@ -361,3 +361,9 @@ VARIABLE _MC-COS
     \ ty
          _M-TY @  SWAP _M2D-TY _M2D!
     ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ Mat2D words are NOT reentrant.  They use shared VARIABLE
+\ scratch for intermediate results.  Callers must ensure
+\ single-task access via WITH-GUARD, WITH-CRITICAL, or by
+\ running with preemption disabled.

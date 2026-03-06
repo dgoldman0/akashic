@@ -264,3 +264,9 @@ VARIABLE _TR-A2X
 
 : TRIG-DEG>RAD  ( deg -- rad )   TRIG-DEG2RAD FP16-MUL ;
 : TRIG-RAD>DEG  ( rad -- deg )   TRIG-RAD2DEG FP16-MUL ;
+
+\ ── Concurrency ──────────────────────────────────────────
+\ Trigonometric words are NOT reentrant.  They use shared
+\ VARIABLE scratch for intermediate results.  Callers must
+\ ensure single-task access via WITH-GUARD, WITH-CRITICAL,
+\ or by running with preemption disabled.

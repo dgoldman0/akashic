@@ -721,3 +721,55 @@ CREATE _TS-REG-CTX REG-CTX-SIZE ALLOT
         _TS-I @ 1 + _TS-I !
     REPEAT
     _TS-J @ ;
+
+\ ── Concurrency Guard ───────────────────────────────────
+REQUIRE ../concurrency/guard.f
+GUARD _ts-guard
+
+' TS-SMA            CONSTANT _ts-sma-xt
+' TS-EMA            CONSTANT _ts-ema-xt
+' TS-EWMA           CONSTANT _ts-ewma-xt
+' TS-WMA            CONSTANT _ts-wma-xt
+' TS-MEDIAN-FILTER  CONSTANT _ts-medfilt-xt
+' TS-DIFF           CONSTANT _ts-diff-xt
+' TS-DIFF-K         CONSTANT _ts-diffk-xt
+' TS-PCT-CHANGE     CONSTANT _ts-pctchg-xt
+' TS-LOG-RETURN     CONSTANT _ts-logret-xt
+' TS-CUMSUM         CONSTANT _ts-cumsum-xt
+' TS-CUMMIN         CONSTANT _ts-cummin-xt
+' TS-CUMMAX         CONSTANT _ts-cummax-xt
+' TS-DETREND        CONSTANT _ts-detrend-xt
+' TS-DETREND-MEAN   CONSTANT _ts-detmean-xt
+' TS-AUTOCORR       CONSTANT _ts-autocorr-xt
+' TS-AUTOCORR-N     CONSTANT _ts-autocorrn-xt
+' TS-LAG            CONSTANT _ts-lag-xt
+' TS-ROLLING-STD    CONSTANT _ts-rollstd-xt
+' TS-DRAWDOWN       CONSTANT _ts-drawdown-xt
+' TS-MAX-DRAWDOWN   CONSTANT _ts-maxdd-xt
+' TS-ZSCORE         CONSTANT _ts-zscore-xt
+' TS-OUTLIERS-IQR   CONSTANT _ts-outiqr-xt
+' TS-OUTLIERS-Z     CONSTANT _ts-outz-xt
+
+: TS-SMA            _ts-sma-xt       _ts-guard WITH-GUARD ;
+: TS-EMA            _ts-ema-xt       _ts-guard WITH-GUARD ;
+: TS-EWMA           _ts-ewma-xt      _ts-guard WITH-GUARD ;
+: TS-WMA            _ts-wma-xt       _ts-guard WITH-GUARD ;
+: TS-MEDIAN-FILTER  _ts-medfilt-xt   _ts-guard WITH-GUARD ;
+: TS-DIFF           _ts-diff-xt      _ts-guard WITH-GUARD ;
+: TS-DIFF-K         _ts-diffk-xt     _ts-guard WITH-GUARD ;
+: TS-PCT-CHANGE     _ts-pctchg-xt    _ts-guard WITH-GUARD ;
+: TS-LOG-RETURN     _ts-logret-xt    _ts-guard WITH-GUARD ;
+: TS-CUMSUM         _ts-cumsum-xt    _ts-guard WITH-GUARD ;
+: TS-CUMMIN         _ts-cummin-xt    _ts-guard WITH-GUARD ;
+: TS-CUMMAX         _ts-cummax-xt    _ts-guard WITH-GUARD ;
+: TS-DETREND        _ts-detrend-xt   _ts-guard WITH-GUARD ;
+: TS-DETREND-MEAN   _ts-detmean-xt   _ts-guard WITH-GUARD ;
+: TS-AUTOCORR       _ts-autocorr-xt  _ts-guard WITH-GUARD ;
+: TS-AUTOCORR-N     _ts-autocorrn-xt _ts-guard WITH-GUARD ;
+: TS-LAG            _ts-lag-xt       _ts-guard WITH-GUARD ;
+: TS-ROLLING-STD    _ts-rollstd-xt   _ts-guard WITH-GUARD ;
+: TS-DRAWDOWN       _ts-drawdown-xt  _ts-guard WITH-GUARD ;
+: TS-MAX-DRAWDOWN   _ts-maxdd-xt     _ts-guard WITH-GUARD ;
+: TS-ZSCORE         _ts-zscore-xt    _ts-guard WITH-GUARD ;
+: TS-OUTLIERS-IQR   _ts-outiqr-xt    _ts-guard WITH-GUARD ;
+: TS-OUTLIERS-Z     _ts-outz-xt      _ts-guard WITH-GUARD ;
