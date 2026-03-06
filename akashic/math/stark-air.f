@@ -44,7 +44,7 @@
 \  Not reentrant.
 \ =================================================================
 
-REQUIRE akashic-baby-bear  akashic/math/baby-bear.f
+REQUIRE akashic/math/baby-bear.f
 
 PROVIDED akashic-stark-air
 
