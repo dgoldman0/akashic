@@ -1101,7 +1101,7 @@ Priority order, highest-impact first:
 | 8  | rwlock.f     | 1     | Read-heavy shared structures                       | ✅     |
 | 9  | mailbox.f    | 2     | Actor messaging — deferred (channels subsume)      | ⏭     |
 | 10 | conc-map.f   | 5     | Fine-grained concurrent hash map                   | ✅     |
-| 11 | guard.f      | 6     | Non-reentrant guards for shared-state modules      | ☐     |
+| 11 | guard.f      | 6     | Non-reentrant guards for shared-state modules      | ✅     |
 | 12 | critical.f   | 6     | Critical sections + preemption control             | ☐     |
 | 13 | coroutine.f  | 0     | Structured wrappers for BIOS BACKGROUND/PAUSE pair | ✅     |
 
