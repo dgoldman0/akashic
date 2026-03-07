@@ -511,30 +511,41 @@ not encoded in CBOR — wire size stays compact (~410 bytes).
 ## Phase 3 — state.f: World State
 
 **Prefix:** `ST-`
-**Depends on:** merkle.f, sha3.f
-**Estimated size:** ~250 lines
+**Depends on:** merkle.f, sha3.f, tx.f, fmt.f
+**Size:** ~290 lines
 **Difficulty:** Medium
+**Status:** ✅ Implemented + tested (43 tests)
 
 ### State Model
 
-Account-based.  Each account is identified by a 32-byte public key
-(the address) and stores:
+Account-based.  Each account is identified by a 32-byte address
+(SHA3-256 of the Ed25519 public key) and stores:
 
 ```
-Account entry (48 bytes):
-  +0   32 bytes   address (SHA3-256 of public key)
-  +32  8 bytes    balance (u64)
-  +40  8 bytes    nonce (u64, incremented on each send)
+Account entry (72 bytes):
+  +0   32 bytes   address      (SHA3-256 of Ed25519 public key)
+  +32   8 bytes   balance      (u64)
+  +40   8 bytes   nonce        (u64, incremented on each send)
+  +48   8 bytes   staked-amt   (reserved — Phase 5 PoS, zeroed)
+  +56   8 bytes   unstake-ht   (reserved — Phase 5 PoS, zeroed)
+  +64   8 bytes   last-blk     (reserved — Phase 5 PoS, zeroed)
 ```
+
+The 72-byte entry size is fixed from day one — staking fields
+are allocated but zeroed until Phase 5 adds PoS logic.  This
+avoids a structural migration when PoS lands (Merkle roots
+stay compatible).
 
 ### Storage
 
 Fixed-size account table: up to 256 accounts (matches Merkle leaf
-count and STARK trace size).  Sorted by address for binary search.
+count and STARK trace size).  Sorted by address for O(log n)
+binary-search lookup.
 
 A 256-leaf Merkle tree commits to the state — each leaf is
-SHA3-256 of the account entry.  The state root goes into the
-block header.
+SHA3-256 of the 72-byte account entry.  The state root goes into
+the block header.  Tree is rebuilt on `ST-ROOT` (once per block
+finalization, not per transaction).
 
 ### API
 
@@ -542,12 +553,16 @@ block header.
 |------|-------|-------------|
 | `ST-INIT` | `( -- )` | Zero all accounts, reset Merkle tree |
 | `ST-LOOKUP` | `( addr -- entry\|0 )` | Find account by address |
-| `ST-CREATE` | `( addr balance -- flag )` | Create new account |
+| `ST-CREATE` | `( addr balance -- flag )` | Create new account (sorted insert) |
 | `ST-BALANCE@` | `( addr -- balance )` | Read balance (0 if not found) |
 | `ST-NONCE@` | `( addr -- nonce )` | Read nonce (0 if not found) |
 | `ST-APPLY-TX` | `( tx -- flag )` | Apply transaction: check sig, nonce, balance; update state |
-| `ST-ROOT` | `( -- hash-addr )` | Compute and return state Merkle root |
+| `ST-ROOT` | `( -- hash-addr )` | Rebuild tree + return 32-byte Merkle root |
 | `ST-VERIFY-TX` | `( tx -- flag )` | Validate tx without applying (dry run) |
+| `ST-ADDR-FROM-KEY` | `( pubkey addr -- )` | SHA3-256 hash pubkey → account address |
+| `ST-COUNT` | `( -- n )` | Number of active accounts |
+| `ST-ENTRY` | `( idx -- addr )` | Raw entry by index |
+| `ST-PRINT` | `( -- )` | Debug dump |
 
 ### State Transition Integrity
 
@@ -557,9 +572,18 @@ block header.
 3. Nonce matches sender's current nonce
 4. Balance ≥ amount
 5. Recipient exists (auto-create if not)
+6. Credit overflow check (recipient balance + amount must not wrap)
 
 On success: debit sender, credit recipient, increment sender nonce.
 On failure: no state change.
+
+Self-transfers (sender = recipient) are handled: amount cancels out,
+nonce is bumped.
+
+The pointer-invalidation problem (inserting a new recipient can shift
+the sender's table position) is handled by working with indices and
+adjusting the sender index when the recipient insertion point
+precedes it.
 
 ---
 
@@ -1684,7 +1708,7 @@ as a separate library — it does not modify the custom chain modules.
 | Transaction buffer | 8,296 B | Single tx (hybrid mode, worst case) |
 | Mempool (Ed25519 mode) | ~102 KB | 256 × ~408 bytes |
 | Mempool (hybrid mode) | ~2.1 MB | 256 × ~8,296 bytes |
-| Account table | ~12 KB | 256 × 48 bytes |
+| Account table | ~18 KB | 256 × 72 bytes (includes reserved staking fields) |
 | State Merkle tree | ~16 KB | 256-leaf SHA3-256 tree |
 | Block buffer (Ed25519) | ~105 KB | Header + 256 txs |
 | Block buffer (hybrid) | ~2.1 MB | Header + 256 txs (PQ sigs) |
