@@ -33,6 +33,8 @@
 \   ST-COUNT         ( -- n )                 number of active accounts
 \   ST-ENTRY         ( idx -- addr )          raw entry by index
 \   ST-PRINT         ( -- )                   debug dump
+\   ST-SNAPSHOT      ( dst -- )               copy table+count to buffer
+\   ST-RESTORE       ( src -- )               restore table+count from buffer
 \
 \  Constants:
 \   ST-MAX-ACCOUNTS  ( -- 256 )
@@ -425,7 +427,27 @@ VARIABLE _ST-AT-RBAL         \ recipient old balance (overflow check)
     LOOP ;
 
 \ =====================================================================
-\  17. Concurrency guard
+\  17. ST-SNAPSHOT / ST-RESTORE — for non-destructive block validation
+\ =====================================================================
+\  Snapshot = full account table (256 x 72 = 18,432 bytes) + count cell.
+\  Total snapshot size: 18,440 bytes.
+\  Used by BLK-VERIFY to apply txs tentatively, check state root,
+\  then restore the original state.
+
+18440 CONSTANT ST-SNAPSHOT-SIZE
+
+: ST-SNAPSHOT  ( dst -- )
+    DUP _ST-TABLE SWAP ST-MAX-ACCOUNTS ST-ENTRY-SIZE * CMOVE
+    ST-MAX-ACCOUNTS ST-ENTRY-SIZE * +      \ point past table data
+    _ST-COUNT @ SWAP ! ;
+
+: ST-RESTORE  ( src -- )
+    DUP _ST-TABLE ST-MAX-ACCOUNTS ST-ENTRY-SIZE * CMOVE
+    ST-MAX-ACCOUNTS ST-ENTRY-SIZE * +      \ point past table data
+    @ _ST-COUNT ! ;
+
+\ =====================================================================
+\  18. Concurrency guard
 \ =====================================================================
 
 REQUIRE ../concurrency/guard.f
@@ -440,6 +462,8 @@ GUARD _st-guard
 ' ST-VERIFY-TX      CONSTANT _st-verify-xt
 ' ST-ROOT           CONSTANT _st-root-xt
 ' ST-ADDR-FROM-KEY  CONSTANT _st-afk-xt
+' ST-SNAPSHOT       CONSTANT _st-snap-xt
+' ST-RESTORE        CONSTANT _st-rest-xt
 
 : ST-INIT           _st-init-xt    _st-guard WITH-GUARD ;
 : ST-LOOKUP         _st-lookup-xt  _st-guard WITH-GUARD ;
@@ -450,6 +474,8 @@ GUARD _st-guard
 : ST-VERIFY-TX      _st-verify-xt  _st-guard WITH-GUARD ;
 : ST-ROOT           _st-root-xt    _st-guard WITH-GUARD ;
 : ST-ADDR-FROM-KEY  _st-afk-xt    _st-guard WITH-GUARD ;
+: ST-SNAPSHOT       _st-snap-xt    _st-guard WITH-GUARD ;
+: ST-RESTORE        _st-rest-xt    _st-guard WITH-GUARD ;
 
 \ =====================================================================
 \  Done.

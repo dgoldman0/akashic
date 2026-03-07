@@ -587,69 +587,109 @@ precedes it.
 
 ---
 
-## Phase 4 — block.f: Block Structure & Chain
+## Phase 4 — block.f: Block Structure & Chain ✅
 
-**Prefix:** `BLK-`
-**Depends on:** tx.f, state.f, merkle.f, sha3.f, cbor.f
-**Estimated size:** ~200 lines
+**Status:** Implemented — `akashic/store/block.f` (775 lines),
+52 tests in `test_block.py` (all pass).
+
+**Prefix:** `BLK-` (block) / `CHAIN-` (chain)
+**Depends on:** tx.f, state.f, merkle.f, sha3.f, cbor.f, fmt.f, guard.f
+**Actual size:** 775 lines
 **Difficulty:** Medium
 
 ### Block Format
 
 ```
-Block Header (CBOR map):
-  "version"    : u8        (protocol version, initially 1)
-  "height"     : u64       (block number, 0 = genesis)
-  "prev_hash"  : 32 bytes  (SHA3-256 of previous block header)
-  "state_root" : 32 bytes  (Merkle root of world state after applying txs)
-  "tx_root"    : 32 bytes  (Merkle root of transaction hashes)
-  "timestamp"  : u64       (Unix seconds)
-  "proof"      : bytes     (consensus-specific: PoW nonce, STARK proof ref, or PoA sig)
+Block Header (248 bytes, 8-byte aligned):
+  +0     1 byte    version      (u8, protocol version, initially 1)
+  +1     8 bytes   height       (u64, block number, 0 = genesis)
+  +9    32 bytes   prev_hash    (SHA3-256 of previous block header)
+  +41   32 bytes   state_root   (Merkle root of state after applying txs)
+  +73   32 bytes   tx_root      (Merkle root of transaction hashes)
+  +105   8 bytes   timestamp    (u64, Unix seconds)
+  +113   1 byte    proof_len    (u8, 0..128)
+  +114 128 bytes   proof        (consensus-specific, fixed-size slot)
+  --- 248 bytes total (padded for alignment) ---
 
-Block Body:
-  "txs"        : array of up to 256 encoded transactions
+Block Body (stored separately in struct, not in header):
+  +248   8 bytes   tx_count     (cell)
+  +256  2048 bytes tx_pointers  (256 × 8-byte cells → tx buffers)
+  --- 2304 bytes total struct size ---
 ```
 
-Block hash = SHA3-256 of CBOR-encoded header.
+Block hash = SHA3-256 of CBOR-encoded header (7-field map in
+DAG-CBOR canonical key order).
 
-### API
+### Design Decisions
+
+- **Separate header + pointer array:** The 248-byte header is self-contained
+  for hashing and chain storage; tx data lives in separate `TX-BUF-SIZE`
+  buffers referenced by pointers.  Avoids 2 MB inline buffer.
+- **128-byte fixed proof slot:** Length-prefixed (`proof_len` byte at +113).
+  Accommodates PoW nonce (8 bytes), PoA signature (64 bytes), or a
+  STARK proof reference.  No variable-length allocation needed.
+- **Snapshot-and-restore validation:** `BLK-VERIFY` uses `ST-SNAPSHOT` /
+  `ST-RESTORE` (18,440 bytes) to tentatively apply txs, check the state
+  root, then restore original state — fully non-destructive.  This is the
+  industry-standard pattern (Ethereum's copy-on-write overlay, Bitcoin's
+  CCoinsViewCache, Cosmos SDK's cache-wrapped state).
+- **Single mutation point:** Only `CHAIN-APPEND` permanently applies txs
+  to global state.  `BLK-VERIFY` and `BLK-FINALIZE` (producer path) have
+  clearly separated roles.
+- **Consensus callback:** `_BLK-CON-CHECK-XT` variable holds the XT of
+  the consensus proof validator.  Defaults to always-TRUE.  `consensus.f`
+  (Phase 5) patches this at load time.
+- **64-block circular history:** `CHAIN-HISTORY = 64`.  Easy to bump
+  (single constant change).  Headers only in ring buffer (248 bytes each
+  = 15.5 KB total).  Tx data is ephemeral.
+
+### API (block)
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `BLK-INIT` | `( blk -- )` | Initialize empty block |
+| `BLK-INIT` | `( blk -- )` | Zero struct, set version |
 | `BLK-SET-PREV` | `( hash blk -- )` | Set previous block hash |
-| `BLK-ADD-TX` | `( tx blk -- flag )` | Append transaction (fail if full) |
-| `BLK-FINALIZE` | `( blk -- )` | Compute tx Merkle root, apply txs to state, store state root |
-| `BLK-HASH` | `( blk hash -- )` | Compute block hash |
-| `BLK-VERIFY` | `( blk prev-hash -- flag )` | Full block validation |
-| `BLK-ENCODE` | `( blk buf -- len )` | Serialize to CBOR |
-| `BLK-DECODE` | `( buf len blk -- flag )` | Deserialize from CBOR |
-| `BLK-HEIGHT@` | `( blk -- n )` | Read block height |
-| `BLK-TX-COUNT@` | `( blk -- n )` | Number of transactions in block |
+| `BLK-SET-HEIGHT` | `( n blk -- )` | Set block height |
+| `BLK-SET-TIME` | `( t blk -- )` | Set timestamp |
+| `BLK-SET-PROOF` | `( addr len blk -- )` | Set consensus proof (≤128 bytes) |
+| `BLK-ADD-TX` | `( tx blk -- flag )` | Append tx pointer (fail if full) |
+| `BLK-FINALIZE` | `( blk -- )` | Compute tx root, apply txs, store state root |
+| `BLK-HASH` | `( blk hash -- )` | SHA3-256 of CBOR-encoded header |
+| `BLK-VERIFY` | `( blk prev-hash -- flag )` | Full non-destructive validation |
+| `BLK-ENCODE` | `( blk buf max -- len )` | Full CBOR serialization (header + txs) |
+| `BLK-DECODE` | `( buf len blk -- flag )` | Deserialize header from CBOR |
+| `BLK-HEIGHT@` | `( blk -- n )` | Read height |
+| `BLK-TX-COUNT@` | `( blk -- n )` | Read tx count |
+| `BLK-VERSION@` | `( blk -- n )` | Read version |
+| `BLK-TIME@` | `( blk -- n )` | Read timestamp |
+| `BLK-PREV-HASH@` | `( blk -- addr )` | Pointer to prev_hash |
+| `BLK-STATE-ROOT@` | `( blk -- addr )` | Pointer to state_root |
+| `BLK-TX-ROOT@` | `( blk -- addr )` | Pointer to tx_root |
+| `BLK-PROOF@` | `( blk -- addr len )` | Proof data + length |
+| `BLK-TX@` | `( idx blk -- tx )` | Get tx pointer by index |
+| `BLK-PRINT` | `( blk -- )` | Debug dump |
 
-### Chain Management
+### API (chain)
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `CHAIN-INIT` | `( -- )` | Initialize chain with genesis block |
-| `CHAIN-HEAD` | `( -- blk )` | Current chain tip |
-| `CHAIN-APPEND` | `( blk -- flag )` | Validate and append block |
+| `CHAIN-INIT` | `( -- )` | Init chain with genesis block |
+| `CHAIN-HEAD` | `( -- blk )` | Current chain tip header |
+| `CHAIN-APPEND` | `( blk -- flag )` | Validate + apply + append |
 | `CHAIN-HEIGHT` | `( -- n )` | Current chain height |
-| `CHAIN-BLOCK@` | `( n -- blk )` | Retrieve block by height |
-
-Storage: circular buffer of recent blocks (last 64 or 256),
-older blocks described by hash only.
+| `CHAIN-BLOCK@` | `( n -- blk \| 0 )` | Header by height (recent only) |
 
 ### Block Validation (`BLK-VERIFY`)
 
-1. `prev_hash` matches hash of previous block
-2. Height = previous height + 1
-3. Timestamp ≥ previous timestamp
-4. All transactions valid (`TX-VERIFY`)
-5. No duplicate nonces within block
-6. Transaction Merkle root matches
-7. State root matches after applying all txs in order
-8. Consensus proof valid (delegated to consensus.f)
+1. `prev_hash` matches supplied previous hash
+2. Timestamp non-zero for non-genesis blocks
+3. All transactions valid (`TX-VERIFY` signature check)
+4. No duplicate (sender, nonce) pairs within block
+5. Transaction Merkle root matches (recomputed)
+6. State root matches (snapshot → apply → compare → restore)
+7. Consensus proof valid (via `_BLK-CON-CHECK-XT` callback)
+
+All concurrency-sensitive words wrapped with `GUARD`/`WITH-GUARD`.
 
 ---
 
@@ -1669,8 +1709,8 @@ alongside the custom chain for bridging.
 | 1 | ed25519.f | — | ~500 | ~30 |
 | 1b | sphincs-plus.f | sha3 | ~600 | ~25 |
 | 2 | tx.f | ed25519, sphincs-plus | ~200 | ~25 |
-| 3 | state.f | — | ~250 | ~25 |
-| 4 | block.f | tx, state | ~200 | ~25 |
+| 3 | state.f | — | ~480 | ~43 |
+| 4 | block.f | tx, state | ~775 | ~52 |
 | 5 | consensus.f | block, state, stark, random | ~380 | ~35 |
 | 6a | mempool.f | tx, sort | ~100 | ~15 |
 | 6b | gossip.f | ws, cbor, tx, block | ~200 | ~15 |
