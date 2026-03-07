@@ -563,12 +563,12 @@ VARIABLE _SPX-KG-SEC
         _SPX-CUR-FIDX @ _SPX-FORS-BASE @ + _SPX-ADRS-INDEX!
         _SPX-V-FSIG-OUT @ I _SPX-FORS-ENTRY * + _SPX-PRF
         \ Auth path: a levels
-        _SPX-A 0 DO                  \ J = auth level (0..11)
-            _SPX-CUR-FIDX @ J RSHIFT 1 XOR
-            1 J LSHIFT *
+        _SPX-A 0 DO                  \ I = auth level (0..11), J = tree#
+            _SPX-CUR-FIDX @ I RSHIFT 1 XOR
+            1 I LSHIFT *
             _SPX-FORS-BASE @ +
-            J
-            _SPX-V-FSIG-OUT @ I _SPX-FORS-ENTRY * + SPX-N + J SPX-N * +
+            I
+            _SPX-V-FSIG-OUT @ J _SPX-FORS-ENTRY * + SPX-N + I SPX-N * +
             _SPX-FORS-NODE
         LOOP
     LOOP ;
@@ -587,14 +587,14 @@ VARIABLE _SPX-KG-SEC
         DUP I _SPX-FORS-ENTRY * +    \ &sig_secret
         _SPX-NODE _SPX-T1
         \ Walk auth path
-        _SPX-A 0 DO                  \ J = auth level (0..11)
+        _SPX-A 0 DO                  \ I = auth level (0..11), J = tree#
             _SPX-T-FORS-TREE _SPX-ADRS-TYPE!
             _SPX-FORS-KP @ _SPX-ADRS-KP!
-            J 1+ _SPX-ADRS-HEIGHT!
+            I 1+ _SPX-ADRS-HEIGHT!
             _SPX-CUR-FIDX @ _SPX-FORS-BASE @ +
-            J 1+ RSHIFT _SPX-ADRS-INDEX!
-            OVER I _SPX-FORS-ENTRY * + SPX-N + J SPX-N * +  \ auth[J]
-            _SPX-CUR-FIDX @ J RSHIFT 1 AND IF
+            I 1+ RSHIFT _SPX-ADRS-INDEX!
+            OVER J _SPX-FORS-ENTRY * + SPX-N + I SPX-N * +  \ auth[I]
+            _SPX-CUR-FIDX @ I RSHIFT 1 AND IF
                 _SPX-NODE _SPX-NODE2 _SPX-T2
             ELSE
                 _SPX-NODE SWAP _SPX-NODE2 _SPX-T2

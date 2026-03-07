@@ -105,6 +105,18 @@ CREATE _ST-LEAF    32 ALLOT       \ Merkle leaf hash scratch
 : _ST-NONCE-AT  ( idx -- addr )
     _ST-ENTRY _ST-OFF-NONCE + ;
 
+\ _ST-STAKED-AT ( idx -- addr )  Staked-amount field address.
+: _ST-STAKED-AT  ( idx -- addr )
+    _ST-ENTRY _ST-OFF-STAKED + ;
+
+\ _ST-UNSTAKE-AT ( idx -- addr )  Unstake-height field address.
+: _ST-UNSTAKE-AT  ( idx -- addr )
+    _ST-ENTRY _ST-OFF-UNSTAKE-H + ;
+
+\ _ST-LASTBLK-AT ( idx -- addr )  Last-block field address.
+: _ST-LASTBLK-AT  ( idx -- addr )
+    _ST-ENTRY _ST-OFF-LAST-BLK + ;
+
 \ =====================================================================
 \  4. Address comparison
 \ =====================================================================
@@ -282,6 +294,14 @@ VARIABLE _ST-CR-IDX
     ST-LOOKUP DUP 0= IF EXIT THEN
     _ST-OFF-NONCE + @ ;
 
+: ST-STAKED@  ( addr -- amount )
+    ST-LOOKUP DUP 0= IF EXIT THEN
+    _ST-OFF-STAKED + @ ;
+
+: ST-UNSTAKE-H@  ( addr -- height )
+    ST-LOOKUP DUP 0= IF EXIT THEN
+    _ST-OFF-UNSTAKE-H + @ ;
+
 \ =====================================================================
 \  13. ST-ROOT — compute and return 32-byte Merkle root
 \ =====================================================================
@@ -319,7 +339,34 @@ VARIABLE _ST-VT-SE
     -1 ;
 
 \ =====================================================================
-\  15. ST-APPLY-TX — validate and apply transaction to state
+\  15. Staking extension hook + height tracking
+\ =====================================================================
+\  _ST-TX-EXT-XT: Extension handler for non-transfer tx types.
+\    Signature: ( tx sender-idx -- flag )
+\    Called when data_len >= 1 and data[0] >= 3.
+\    If handler returns TRUE, caller bumps nonce.
+\
+\  _ST-CUR-HEIGHT: Current block height (set by BLK-FINALIZE or
+\    consensus before tx application).  Used by unstaking to compute
+\    lock expiry.
+\
+\  _ST-LOCK-PERIOD: Number of blocks before unstaking completes.
+\    Default 64; consensus.f may overwrite at load time.
+
+: _ST-TX-EXT-STUB  ( tx sender-idx -- flag )  2DROP 0 ;
+VARIABLE _ST-TX-EXT-XT
+' _ST-TX-EXT-STUB _ST-TX-EXT-XT !
+
+VARIABLE _ST-CUR-HEIGHT
+0 _ST-CUR-HEIGHT !
+
+VARIABLE _ST-LOCK-PERIOD
+64 _ST-LOCK-PERIOD !
+
+: ST-SET-HEIGHT  ( h -- )  _ST-CUR-HEIGHT ! ;
+
+\ =====================================================================
+\  16. ST-APPLY-TX — validate and apply transaction to state
 \ =====================================================================
 \  Full validation followed by state mutation.
 \  On success: sender debited, recipient credited, nonce bumped.
@@ -355,6 +402,19 @@ VARIABLE _ST-AT-RBAL         \ recipient old balance (overflow check)
     \ 4. Nonce must match
     _ST-AT-TX @ TX-NONCE@
     _ST-AT-S-IDX @ _ST-NONCE-AT @ <> IF 0 EXIT THEN
+
+    \ 4b. Extension dispatch for staking tx types
+    \     If data_len >= 1 and data[0] >= 3, call extension handler.
+    \     Handler returns flag; if TRUE we bump nonce and return.
+    _ST-AT-TX @ TX-DATA-LEN@ 1 >= IF
+        _ST-AT-TX @ TX-DATA@ C@ 3 >= IF
+            _ST-AT-TX @ _ST-AT-S-IDX @ _ST-TX-EXT-XT @ EXECUTE
+            DUP IF
+                _ST-AT-S-IDX @ _ST-NONCE-AT DUP @ 1+ SWAP !
+            THEN
+            EXIT
+        THEN
+    THEN
 
     \ 5. Balance >= amount
     _ST-AT-TX @ TX-AMOUNT@ _ST-AT-AMT !
@@ -458,10 +518,13 @@ GUARD _st-guard
 ' ST-CREATE         CONSTANT _st-create-xt
 ' ST-BALANCE@       CONSTANT _st-bal-xt
 ' ST-NONCE@         CONSTANT _st-nonce-xt
+' ST-STAKED@        CONSTANT _st-stk-xt
+' ST-UNSTAKE-H@     CONSTANT _st-ush-xt
 ' ST-APPLY-TX       CONSTANT _st-apply-xt
 ' ST-VERIFY-TX      CONSTANT _st-verify-xt
 ' ST-ROOT           CONSTANT _st-root-xt
 ' ST-ADDR-FROM-KEY  CONSTANT _st-afk-xt
+' ST-SET-HEIGHT     CONSTANT _st-seth-xt
 ' ST-SNAPSHOT       CONSTANT _st-snap-xt
 ' ST-RESTORE        CONSTANT _st-rest-xt
 
@@ -470,10 +533,13 @@ GUARD _st-guard
 : ST-CREATE         _st-create-xt  _st-guard WITH-GUARD ;
 : ST-BALANCE@       _st-bal-xt     _st-guard WITH-GUARD ;
 : ST-NONCE@         _st-nonce-xt   _st-guard WITH-GUARD ;
+: ST-STAKED@        _st-stk-xt    _st-guard WITH-GUARD ;
+: ST-UNSTAKE-H@     _st-ush-xt    _st-guard WITH-GUARD ;
 : ST-APPLY-TX       _st-apply-xt   _st-guard WITH-GUARD ;
 : ST-VERIFY-TX      _st-verify-xt  _st-guard WITH-GUARD ;
 : ST-ROOT           _st-root-xt    _st-guard WITH-GUARD ;
 : ST-ADDR-FROM-KEY  _st-afk-xt    _st-guard WITH-GUARD ;
+: ST-SET-HEIGHT     _st-seth-xt   _st-guard WITH-GUARD ;
 : ST-SNAPSHOT       _st-snap-xt    _st-guard WITH-GUARD ;
 : ST-RESTORE        _st-rest-xt    _st-guard WITH-GUARD ;
 

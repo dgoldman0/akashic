@@ -337,6 +337,8 @@ Shows the first 8 bytes of `from` and `to` keys in hex.
 | `TX-SIG-SPHINCS` | 1 | Signature mode: SPHINCS+ only |
 | `TX-SIG-HYBRID` | 2 | Signature mode: hybrid (both) |
 | `TX-MAX-DATA` | 256 | Maximum data payload bytes |
+| `TX-STAKE` | 3 | Transaction type: stake (in `data[0]`) |
+| `TX-UNSTAKE` | 4 | Transaction type: unstake (in `data[0]`) |
 
 ---
 

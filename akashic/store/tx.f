@@ -56,6 +56,10 @@ PROVIDED akashic-tx
 
 256 CONSTANT TX-MAX-DATA
 
+\ Transaction types (encoded in data[0]; data_len=0 ⇒ transfer)
+3 CONSTANT TX-STAKE           \ move balance → staked-amount
+4 CONSTANT TX-UNSTAKE         \ initiate unstaking (lock period)
+
 \ =====================================================================
 \  2. Transaction Buffer Layout
 \ =====================================================================
