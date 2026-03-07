@@ -1,6 +1,6 @@
 # Akashic
 
-**A standard library for KDOS / Megapad-64, written entirely in Forth.**
+**A standard library for KDOS / [Megapad-64 Forth Machine](https://github.com/dgoldman0/megapad/), written entirely in Forth.**
 
 Akashic is roughly 46,000 lines of Forth spread across 100 source files and 16 module directories. It provides a self-contained software stack for building applications on the 64-bit KDOS environment: numeric primitives, audio synthesis, 2D rendering with font rasterization, an HTTP client and server, a document object model, a CSS engine, a reactive UI framework, concurrency primitives, and a Bluesky (AT Protocol) client — all without leaving Forth.
 
