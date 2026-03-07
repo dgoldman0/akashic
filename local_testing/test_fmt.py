@@ -289,6 +289,71 @@ def test_hexdump_multiline():
              lambda out: "DONE" in out and "00000010" in out,
              "second line starts with offset 00000010")
 
+
+def test_c_to_nib():
+    """FMT-C>NIB converts ASCII hex chars to nibble values."""
+    print("\n=== FMT-C>NIB ===")
+    check("char '0' -> 0",  ['[CHAR] 0 FMT-C>NIB .'], "0")
+    check("char '9' -> 9",  ['[CHAR] 9 FMT-C>NIB .'], "9")
+    check("char 'a' -> 10", ['97 FMT-C>NIB .'], "10")
+    check("char 'f' -> 15", ['102 FMT-C>NIB .'], "15")
+    check("char 'A' -> 10", ['65 FMT-C>NIB .'], "10")
+    check("char 'F' -> 15", ['70 FMT-C>NIB .'], "15")
+    check("invalid -> 0",   ['[CHAR] G FMT-C>NIB .'], "0")
+
+
+def test_hex_decode():
+    """FMT-HEX-DECODE converts hex string to binary bytes."""
+    print("\n=== FMT-HEX-DECODE ===")
+
+    # Basic: "deadbeef" -> 4 bytes DE AD BE EF
+    lines = [
+        'CREATE _RAW 16 ALLOT',
+        ': _T  S" deadbeef" _RAW FMT-HEX-DECODE . ;',
+        '_T',
+    ]
+    check("returns 4 for 8 hex chars", lines, "4")
+
+    # Verify decoded bytes
+    lines2 = [
+        'CREATE _R2 16 ALLOT',
+        ': _T2  S" deadbeef" _R2 FMT-HEX-DECODE DROP',
+        '  _R2 C@ FMT-.BYTE',
+        '  _R2 1+ C@ FMT-.BYTE',
+        '  _R2 2 + C@ FMT-.BYTE',
+        '  _R2 3 + C@ FMT-.BYTE ; _T2',
+    ]
+    check("deadbeef bytes correct", lines2, "deadbeef")
+
+    # Round-trip: encode -> decode -> encode must match
+    lines3 = [
+        'CREATE _SRC 4 ALLOT',
+        '0xCA _SRC C!  0xFE _SRC 1+ C!  0x01 _SRC 2 + C!  0xBA _SRC 3 + C!',
+        'CREATE _HEX 8 ALLOT',
+        'CREATE _DST 4 ALLOT',
+        '_SRC 4 _HEX FMT->HEX DROP',          # encode -> _HEX: "cafe01ba"
+        '_HEX 8 _DST FMT-HEX-DECODE DROP',     # decode -> _DST: CA FE 01 BA
+        '_DST 4 FMT-.HEX',                      # re-encode for display
+    ]
+    check("round-trip cafe01ba", lines3, "cafe01ba")
+
+    # Uppercase input
+    lines4 = [
+        'CREATE _R4 4 ALLOT',
+        ': _T4  S" AABB" _R4 FMT-HEX-DECODE DROP',
+        '  _R4 C@ . _R4 1+ C@ . ; _T4',
+    ]
+    check_fn("uppercase AABB", lines4,
+             lambda out: "170" in out and "187" in out,
+             "0xAA=170, 0xBB=187")
+
+    # Empty string
+    lines5 = [
+        'CREATE _R5 4 ALLOT',
+        ': _T5  S" " _R5 FMT-HEX-DECODE . ; _T5',
+    ]
+    check("empty string returns 0", lines5, "0")
+
 # ── Main ──
 
 if __name__ == "__main__":
@@ -304,6 +369,8 @@ if __name__ == "__main__":
     test_u_dot_h4()
     test_hexdump_basic()
     test_hexdump_multiline()
+    test_c_to_nib()
+    test_hex_decode()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")

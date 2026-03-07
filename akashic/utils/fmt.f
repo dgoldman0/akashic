@@ -148,5 +148,33 @@ VARIABLE _FMT-HD-COL    \ column within line
     REPEAT ;
 
 \ =====================================================================
+\  7. Hex decoding (hex string → binary bytes)
+\ =====================================================================
+
+VARIABLE _FMT-SRC
+
+\ FMT-C>NIB ( c -- n )  ASCII hex char to nibble value (0-15).
+\   Returns 0 for invalid chars.
+: FMT-C>NIB  ( c -- n )
+    DUP [CHAR] 0 >= OVER [CHAR] 9 <= AND IF [CHAR] 0 - EXIT THEN
+    DUP [CHAR] a >= OVER [CHAR] f <= AND IF [CHAR] a - 10 + EXIT THEN
+    DUP [CHAR] A >= OVER [CHAR] F <= AND IF [CHAR] A - 10 + EXIT THEN
+    DROP 0 ;
+
+\ FMT-HEX-DECODE ( hex-a hex-u dst -- n )  Decode hex string to binary.
+\   hex-a/hex-u = source hex string, dst = destination buffer.
+\   Returns number of bytes decoded (hex-u / 2).
+: FMT-HEX-DECODE  ( hex-a hex-u dst -- n )
+    ROT _FMT-SRC !                     ( hex-u dst )
+    SWAP 2 / DUP >R                    ( dst n-bytes  R: n-bytes )
+    0 ?DO
+        _FMT-SRC @ C@ FMT-C>NIB 4 LSHIFT
+        _FMT-SRC @ 1+ C@ FMT-C>NIB OR
+        OVER I + C!
+        2 _FMT-SRC +!
+    LOOP
+    DROP R> ;
+
+\ =====================================================================
 \  Done.
 \ =====================================================================

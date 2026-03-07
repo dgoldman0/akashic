@@ -18,6 +18,7 @@ REQUIRE ../utils/fmt.f
 - [Nibble / Byte Primitives](#nibble--byte-primitives)
 - [Multi-byte Hex Display](#multi-byte-hex-display)
 - [Hex String Builder](#hex-string-builder)
+- [Hex Decoding](#hex-decoding)
 - [Cell-as-Hex Display](#cell-as-hex-display)
 - [Hex Dump](#hex-dump)
 - [Usage Examples](#usage-examples)
@@ -34,6 +35,7 @@ REQUIRE ../utils/fmt.f
 | **Zero dependencies** | Works with bare KDOS — no crypto, no string library needed |
 | **Lookup table** | Nibble-to-char uses a 16-byte table, not branching arithmetic |
 | **Both emit and buffer** | `FMT-.HEX` emits to UART; `FMT->HEX` writes to a memory buffer |
+| **Bidirectional** | `FMT->HEX` encodes binary→hex; `FMT-HEX-DECODE` decodes hex→binary |
 | **Not reentrant** | Uses module-level VARIABLEs for scratch state |
 
 ---
@@ -105,6 +107,41 @@ CREATE hex-str 64 ALLOT
 my-hash 32 hex-str FMT->HEX   ( -- 64 )
 hex-str 64 TYPE                \ prints the hex string
 ```
+
+---
+
+## Hex Decoding
+
+### FMT-C>NIB
+
+```forth
+FMT-C>NIB  ( c -- n )
+```
+
+Convert an ASCII hex character (`0`–`9`, `a`–`f`, `A`–`F`) to its
+nibble value (0–15).  Returns 0 for invalid characters.
+
+```forth
+[CHAR] a FMT-C>NIB .   \ prints 10
+[CHAR] F FMT-C>NIB .   \ prints 15
+```
+
+### FMT-HEX-DECODE
+
+```forth
+FMT-HEX-DECODE  ( hex-a hex-u dst -- n )
+```
+
+Decode a hex string into binary bytes.  Reads `hex-u` characters from
+`hex-a` (must be even), writes `hex-u / 2` bytes to `dst`.  Returns
+the number of bytes decoded.
+
+```forth
+CREATE raw 32 ALLOT
+S" deadbeef" raw FMT-HEX-DECODE   ( -- 4 )  \ raw contains DE AD BE EF
+```
+
+This is the inverse of `FMT->HEX`.
 
 ---
 
@@ -196,6 +233,8 @@ FMT-.HEX        ( addr n -- )         emit n bytes as hex
 FMT->HEX        ( src n dst -- n*2 )  write n bytes as hex to buffer
 FMT-U.H         ( u -- )              emit cell as 16 hex chars
 FMT-U.H4        ( u -- )              emit low 32 bits as 8 hex chars
+FMT-C>NIB       ( c -- n )            hex char → nibble (0-15)
+FMT-HEX-DECODE  ( hex-a hex-u dst -- n ) hex string → binary bytes
 FMT-.HEXDUMP    ( addr n -- )         16-byte/line hex dump + ASCII
 ```
 
@@ -226,5 +265,6 @@ should use fmt.f from the start.
 ### Not Reentrant
 
 `FMT->HEX` uses `_FMT-DST` (a VARIABLE) for the output pointer.
+`FMT-HEX-DECODE` uses `_FMT-SRC` for the input pointer.
 `FMT-.HEXDUMP` uses four VARIABLEs for base, length, offset, and
 column.  Do not call these from interrupt context.
