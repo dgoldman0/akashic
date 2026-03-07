@@ -607,5 +607,30 @@ CREATE _TX-H2  32 ALLOT
         ."  mode=" _TX-SIG-MODE C@ . ." }" CR ;
 
 \ =====================================================================
+\  20. Concurrency guard
+\ =====================================================================
+
+REQUIRE ../concurrency/guard.f
+GUARD _tx-guard
+
+' TX-HASH           CONSTANT _tx-hash-xt
+' TX-SIGN           CONSTANT _tx-sign-xt
+' TX-SIGN-PQ        CONSTANT _tx-sign-pq-xt
+' TX-SIGN-HYBRID    CONSTANT _tx-sign-hybrid-xt
+' TX-VERIFY         CONSTANT _tx-verify-xt
+' TX-ENCODE         CONSTANT _tx-encode-xt
+' TX-DECODE         CONSTANT _tx-decode-xt
+' TX-HASH=          CONSTANT _tx-hasheq-xt
+
+: TX-HASH           _tx-hash-xt        _tx-guard WITH-GUARD ;
+: TX-SIGN           _tx-sign-xt        _tx-guard WITH-GUARD ;
+: TX-SIGN-PQ        _tx-sign-pq-xt     _tx-guard WITH-GUARD ;
+: TX-SIGN-HYBRID    _tx-sign-hybrid-xt _tx-guard WITH-GUARD ;
+: TX-VERIFY         _tx-verify-xt      _tx-guard WITH-GUARD ;
+: TX-ENCODE         _tx-encode-xt      _tx-guard WITH-GUARD ;
+: TX-DECODE         _tx-decode-xt      _tx-guard WITH-GUARD ;
+: TX-HASH=          _tx-hasheq-xt      _tx-guard WITH-GUARD ;
+
+\ =====================================================================
 \  Done.
 \ =====================================================================
