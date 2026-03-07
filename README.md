@@ -8,6 +8,12 @@ Everything targets the Megapad-64 cell size (8 bytes), uses the KDOS memory mode
 
 ---
 
+## Status
+
+Assume everything is rough draft, both in this project and in the megapad project. 
+
+Feel free top drop by and discuss this project in the Tinkerers Guild channel of the Barayin-Adamah server: https://discord.gg/AnrXxhs3b2
+
 ## Architecture at a Glance
 
 The modules form a layered dependency graph. Nothing is circular; higher layers pull in what they need via `REQUIRE` and never touch modules above them.
