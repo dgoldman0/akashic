@@ -97,6 +97,7 @@ These are detailed inline below as `⚠ REVISED` blocks.
 - [**Phase 6.5 — Production Infrastructure (NEW)**](#phase-65--production-infrastructure-new)
 - [Phase 7 — contract-vm.f: Sandboxed Forth VM](#phase-7--contract-vmf-sandboxed-forth-vm)
 - [Phase 8 — ethereum/: Standard Blockchain Interop](#phase-8--ethereum-standard-blockchain-interop)
+- [Fork in the Road Options](#fork-in-the-road-options)
 - [Dependency Graph](#dependency-graph)
 - [Implementation Order (REVISED)](#implementation-order)
 - [Design Constraints](#design-constraints)
@@ -2609,9 +2610,69 @@ alongside the custom chain for bridging.
 
 ---
 
+## Fork in the Road Options
+
+These are not phases on the critical path.  They are **independent
+enhancement tracks** that become relevant under specific deployment
+scenarios.  Each can be adopted when the need arises without
+blocking the core roadmap (Phases 7 → 7.5 → 8).
+
+### Option A — STARK LDE + ZK Hardening (`stark.f` v3)
+
+**Trigger:** Opening block production to anonymous permissionless
+validators (pure PoS without an authority gate), or requiring
+transaction privacy (ZK masking hides execution traces).
+
+**What it adds:**
+- **Low-Degree Extension (4×/8× blowup):** Evaluation domain
+  grows from 256 to 1024+ points.  Provides proper Reed-Solomon
+  proximity testing with 128-bit cryptographic soundness.  Without
+  this, FRI soundness is weaker — acceptable when validators are
+  identified and staked (PoSA), but insufficient when an anonymous
+  adversary has unlimited proof-forgery attempts.
+- **ZK masking:** Adds a random polynomial so the execution trace
+  is not recoverable from the proof.  Required for private
+  computation, ML inference proofs, or any scenario where
+  transaction details should not be visible to proof observers.
+
+**Why it's not needed now:** On a PoSA consortium chain, a forged
+STARK proof also requires a valid PoSA signature from a staked
+authority — double barrier.  Current v2.5 soundness is more than
+adequate.  The federation model (hundreds of consortium chains)
+scales to hundreds of millions of users without touching this.
+
+**Estimated cost:** ~700 lines, ~50 tests.  Main engineering
+challenge: multi-pass NTT (4 × 256-point hardware NTT to cover
+1024-point evaluation domain).  Full spec in
+[STARK-design.md](STARK-design.md) Phase 5.
+
+### Option B — Permissionless PoS (Remove Authority Gate)
+
+**Trigger:** Transitioning from consortium to fully public chain
+where anyone can stake and produce blocks.
+
+**What it adds:** Remove the `authorities` list requirement from
+PoSA.  Any account meeting `min_stake` can validate.  Requires
+Option A (STARK hardening) because the proof becomes the
+primary defense against malicious block producers.
+
+**Depends on:** Option A.
+
+### Option C — Transaction Privacy
+
+**Trigger:** Use cases requiring hidden balances, amounts, or
+contract state (e.g., private DeFi, confidential supply chain).
+
+**What it adds:** ZK masking from Option A, plus potentially
+encrypted transaction payloads and commitment schemes.
+
+**Depends on:** Option A (ZK masking component).
+
+---
+
 ## Dependency Graph
 
-> ⚠ **REVISED — includes new Phases 3b, 5b, 6.5a, 6.5b**
+> ⚠ **REVISED — includes Phases 3b, 5b, 6.5a, 6.5b, 7.5**
 
 ```
               ┌──────────┐     ┌──────────┐
@@ -2691,16 +2752,31 @@ alongside the custom chain for bridging.
            └────────┬──────────┘
                     ▼
               ┌────────────┐
-              │ contract-  │ ◄── Phase 7
-              │    vm      │     (blocked until 3b+5b+6.5
-              │ (sandboxed │      are complete)
+              │ contract-  │ ◄── Phase 7 🟡 NEXT
+              │    vm      │     All prerequisites done
+              │ (sandboxed │
               │  Forth)    │
               └─────┬──────┘
+                    │
+              ┌─────▼────────┐
+              │  xchain.f   │ ◄── Phase 7.5
+              │ (cross-chain │     Federation mesh
+              │  STARK verify│
+              └─────┬────────┘
                     │
               ┌─────▼────────┐
               │  ethereum/   │ ◄── Phase 8
               │  (interop)   │
               └──────────────┘
+
+                              ╔═══════════════════════╗
+                              ║  Fork Options         ║
+                              ║  (independent tracks) ║
+                              ╠═══════════════════════╣
+                              ║  A: STARK LDE+ZK v3   ║
+                              ║  B: Permissionless PoS ║
+                              ║  C: Tx Privacy         ║
+                              ╚═══════════════════════╝
 ```
 
   Existing modules used throughout:
@@ -2740,10 +2816,10 @@ alongside the custom chain for bridging.
 | 6f | node.f | all Phase 6 modules + consensus | 190 | 7 | ✅ done |
 | **6.5a** | **persist.f rewrite** | **state.f, block, KDOS I/O** | **284** | **9** | **✅ done** |
 | **6.5b** | **light.f** | **rpc.f, state.f, block.f, merkle.f** | **159** | **12** | **✅ done** |
-| 7 | contract-vm.f | state, consensus, tx, stark-air, node, persist | ~400–600 | ~25 | blocked on 5b |
+| 7 | contract-vm.f | state, consensus, tx, stark-air, node, persist | ~400–600 | ~25 | 🟡 next |
 | **7.5** | **xchain.f** | **contract-vm, light.f, stark.f, merkle.f** | **~150–250** | **~15** | 🔴 future |
 | | **Subtotal (custom chain, actual)** | | **~8,000+** | **~280+** | |
-| 8 | ethereum/ (secp256k1, keccak, rlp, eth-tx, eth-abi, eth-rpc, eth-wallet) | Phases 1–7.5 complete | ~2,000–3,000 | ~100+ | blocked |
+| 8 | ethereum/ (secp256k1, keccak, rlp, eth-tx, eth-abi, eth-rpc, eth-wallet) | Phases 1–7.5 complete | ~2,000–3,000 | ~100+ | 🔴 future |
 | | **Grand total** | | **~10,000+** | **~380+** | |
 
 ### Revised Critical Path
@@ -2801,8 +2877,37 @@ state.  consensus.f sits on top.  mempool.f is independent after tx.f.
 **Phases 1–5 = chain data structures.  Phase 3b ✅ + 5b ✅ = hardening
 the foundation.  Phase 6 = running node.  Phase 6.5a ✅ + 6.5b ✅ =
 production infrastructure (real I/O + light client).  Phase 7 = smart
-contracts via sandboxed Forth VM.  Phase 8 = Ethereum/standard
-blockchain interop.**  All foundation phases complete — Phase 7 can proceed.
+contracts via sandboxed Forth VM.  Phase 7.5 = cross-chain federation.
+Phase 8 = Ethereum/standard blockchain interop.**
+
+All foundation phases complete — **Phase 7 is next.**
+
+### Federation Scaling Model
+
+The architecture is production-ready for **PoSA consortium chains**
+and naturally extends to a **federated mesh** via Phase 7.5
+cross-chain verification:
+
+| Scope | Capacity | How |
+|-------|----------|-----|
+| Single chain (accounts) | ~1M (`_ST-MAX-PAGES` × 256 accts/page) | Bump `_ST-MAX-PAGES` — an XMEM sizing knob, not a protocol change |
+| Single chain (throughput) | 256 TPS @ 1 s blocks | PoSA near-instant finality; sub-second blocks possible |
+| Single chain (validators) | Dozens (authorized + staked) | Practical PoSA consortium |
+| 100-chain federation | ~100M accounts, ~25K TPS aggregate | Peer STARK verification (Phase 7.5) — no hub, no L1 |
+| 1,000-chain federation | ~1B accounts, ~256K TPS aggregate | Same mechanism, linear scaling |
+
+Each chain is a self-contained PoSA consortium with its own
+validator set, genesis config, and state tree.  Cross-chain
+state verification uses STARK proofs (math-based, not
+trust-based) — chain A verifies chain B's state transitions
+without trusting chain B's validators.
+
+This means dozens to hundreds of organizations and hundreds of
+millions of users are reachable **without any changes to the
+current proof system.**  STARK Phase 5 (LDE + ZK hardening)
+becomes relevant only if a single chain opens block production to
+anonymous permissionless validators, or if transaction privacy is
+required.  See [Fork in the Road Options](#fork-in-the-road-options).
 
 
 

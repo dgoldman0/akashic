@@ -25,7 +25,7 @@ library that serves purposes beyond STARKs.
 - [Phase 3 — stark.f v2: Succinct Proofs](#phase-3--starkf-v2-succinct-proofs)
 - [Phase 4 — air.f: General Constraint Compiler](#phase-4--airf-general-constraint-compiler)
 - [Phase 4.5 — stark.f v2.5: Multi-Column Traces](#phase-45--starkf-v25-multi-column-traces-new)
-- [Phase 5 — stark.f v3: LDE + ZK + Hardening](#phase-5--starkf-v3-lde--zk--hardening)
+- [Fork Option A — stark.f v3: LDE + ZK + Hardening](#fork-option-a--starkf-v3-lde--zk--hardening)
 - [Dependency Graph](#dependency-graph)
 - [Design Constraints](#design-constraints)
 
@@ -89,7 +89,7 @@ With 256 leaves and SHA3-256:
 
 **Small-trace paradox:** for 256 leaves the succinct proof is
 *larger* than just shipping the full polynomial.  Merkle trees
-pay off at ≥ 1024 leaves, which requires Phase 5 (LDE blowup).
+pay off at ≥ 1024 leaves, which requires Fork Option A (LDE blowup).
 Building merkle.f now gives us:
 - The reusable library for the vault, content-addressed storage, etc.
 - The infrastructure ready for when LDE expands the evaluation domain
@@ -130,7 +130,7 @@ The MVP evaluates on a 256-point coset (same size as the trace).
 Production STARKs use a low-degree extension (LDE) to a larger
 domain (typically 4× or 8× blowup) for Reed-Solomon soundness.
 
-**Solution:** Phase 5, which can use multiple NTT passes to handle
+**Solution:** Fork Option A, which can use multiple NTT passes to handle
 1024+ evaluation points.
 
 ---
@@ -392,9 +392,9 @@ With λ bits of security and ρ = 1/4 proximity parameter:
 For 256 evaluations with 64 queries, the "succinct" proof will
 actually be *larger* than shipping the full polynomial.  This is
 expected — **succinct proofs only win for large evaluation domains**
-(≥ 1024 points, i.e., after LDE in Phase 5).
+(≥ 1024 points, i.e., after LDE in Fork Option A).
 
-**Phase 3 value:** builds the correct protocol structure so Phase 5
+**Phase 3 value:** builds the correct protocol structure so Fork Option A
 only needs to increase the domain size, not restructure the proof.
 
 ### API (unchanged from MVP)
@@ -536,7 +536,7 @@ This is a prerequisite for the consensus STARK overlay (Phase 5b in
 ROADMAP_blockchain.md), which needs columns for old_bal, new_bal,
 amount, nonce_old, nonce_new — minimum 5 columns.
 
-Multi-column is **not** an optimization or a Phase 5 luxury.  It is
+Multi-column is **not** an optimization or a Fork Option A luxury.  It is
 the minimum functionality for any real AIR beyond Fibonacci.
 
 ### What Changes
@@ -636,9 +636,18 @@ Single-column usage still works.  If `STARK-SET-COLS` is not called
 
 ---
 
-## Phase 5 — `stark.f` v3: LDE + ZK + Hardening
+## Fork Option A — `stark.f` v3: LDE + ZK + Hardening
 
-**File:** `akashic/math/stark.f` (replace v2)
+> **Not on the critical path.**  This is a fork-in-the-road
+> enhancement, not a required build phase.  The current v2.5
+> prover/verifier is production-adequate for PoSA consortium chains
+> (known, staked validators — proof forgery requires both a forged
+> STARK *and* a valid PoSA signature).  This option becomes relevant
+> when opening block production to anonymous permissionless validators
+> (pure PoS without an authority gate) or when transaction privacy
+> is required.  See `ROADMAP_blockchain.md` §Fork in the Road Options.
+
+**File:** `akashic/math/stark.f` (replace v2.5)
 **Prefix:** `STARK-`
 **Depends on:** `sha3.f`, `ntt.f`, `merkle.f`, `batch.f`, `air.f`
 **Est.:** ~700 lines
@@ -776,8 +785,8 @@ Phase 4.5 ─→ stark.f v2.5 ←── stark.f v2, air.f
               ├── consensus STARK overlay (ROADMAP_blockchain Phase 5b)
               └── any real AIR beyond single-column Fibonacci
 
-Phase 5 ─→ stark.f v3 ←── merkle.f, batch.f, air.f, sha3.f ✅, ntt.f ✅
-              │
+Fork A ─→ stark.f v3 ←── merkle.f, batch.f, air.f, sha3.f ✅, ntt.f ✅
+              │                    (Fork Option A — not on critical path)
               ├── verifiable ML inference (crypto-SIMD-hardened.md Phase 3c)
               └── private computation proofs
 ```
@@ -788,7 +797,7 @@ Phase 5 ─→ stark.f v3 ←── merkle.f, batch.f, air.f, sha3.f ✅, ntt.f 
 
 1. **256-point hardware NTT.** Cannot be changed.  Larger domains
    require multi-pass decomposition (4 × 256 = 1024, etc.).
-   This is the main engineering challenge in Phase 5.
+   This is the main engineering challenge in Fork Option A.
 
 2. **32-bit NTT coefficients.** Baby Bear fits cleanly.  Larger
    primes (Goldilocks 2^64 − 2^32 + 1) would need software NTT.
@@ -827,7 +836,7 @@ Same snapshot-based pattern as all other modules.
 | 3 | stark.f v2 | ~35 | 93 |
 | 4 | air.f | ~15 | 108 |
 | 4.5 | stark.f v2.5 (multi-col) | ~20 | 128 |
-| 5 | stark.f v3 | ~50 | 178 |
+| Fork A | stark.f v3 | ~50 | 178 |
 
 ### Key test categories per phase
 
@@ -854,7 +863,7 @@ Same snapshot-based pattern as all other modules.
 - Multi-column AIR evaluates correctly
 - Invalid trace → constraint evaluator returns nonzero
 
-**stark.f v3:**
+**stark.f v3 (Fork Option A):**
 - 4× blowup: 1024-point evaluation domain
 - ZK: two proofs of same trace differ
 - General AIR: Fibonacci + non-Fibonacci
