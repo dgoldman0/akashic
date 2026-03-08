@@ -6,7 +6,7 @@ most of the hard work is already done — SHA3, CBOR, Merkle trees,
 STARK proofs, WebSocket networking, HTTP/JSON-RPC, and concurrency
 primitives all exist.  What remains is digital signatures (Ed25519 +
 SPHINCS+), chain structural modules (transactions, state, blocks),
-pluggable consensus (PoW, PoA, PoS — with optional STARK validity
+pluggable consensus (PoW, PoA, PoS, PoSA — with optional STARK validity
 overlays), node infrastructure (mempool, gossip, RPC, sync,
 persistence), and a sandboxed Forth VM for on-chain smart contracts.
 
@@ -21,12 +21,65 @@ library layer that coexists with — but does not replace — the custom
 chain.
 
 **Date:** 2026-03-07
-**Status:** Living document
+**Status:** Living document — **under revision** (see assessment below)
+
+---
+
+## Critical Assessment (2026-03-07)
+
+> **Honest framing:** This is a vertically integrated research
+> prototype — impressive in scope, clean in architecture, but the
+> plan as written presents a progression toward production when the
+> foundation has hard limits that require *architectural redesign*
+> (not parameter tuning) to overcome.  The notes below are scattered
+> throughout the document as `⚠ REVISED` blocks.  This section
+> summarises the systemic issues.
+
+### What works today
+
+- **Single-node demo / proof of concept.**  One node, PoA mode, a
+  handful of accounts, creating blocks in a loop.  The tested modules
+  (tx, state, block, consensus, mempool, persist, node) actually do
+  what they claim.
+- **Closed consortium of 2–5 nodes** (PoA, Ed25519-only, <50
+  accounts).  This is real and functional within the constraints.
+- **Research artifact.**  "A blockchain in ~3,500 lines of Forth with
+  STARK validity proofs" is a genuinely interesting demonstration.
+  The STARK trace integration is the novel contribution.
+
+### What doesn't work (systemic issues)
+
+| Issue | Root cause | Impact | Fix category |
+|-------|-----------|--------|-------------|
+| **256-account ceiling** | Account count = Merkle leaf count = STARK trace width.  Load-bearing architectural coupling. | Cannot run a public chain or even a mid-size consortium. | **Redesign** — decouple state size from proof geometry |
+| **"Persistence" is an in-memory append buffer** | `persist.f` uses XMEM, not file I/O.  1 MB cap ≈ 9 classical blocks. | Power cycle = total data loss.  Not persistence. | **New module** — real disk I/O layer |
+| **No light client protocol** | No Merkle-proof-of-inclusion RPC responses.  Every participant must be a full node. | Cannot serve mobile wallets, browser dApps, or bandwidth-constrained nodes. | **New protocol + RPC methods** |
+| **Consensus mode is a runtime `VARIABLE`** | Nothing in the protocol enforces node agreement on consensus mode. | Misconfiguration is silent — nodes produce incompatible blocks. | **Genesis-block config** — bake mode into chain ID / genesis |
+| **PoS leader grinding** | Seed = `SHA3(prev_hash \|\| height)`.  Block producer influences next seed via tx selection. | Validators can bias leader election. | **Commit-reveal or VDF** |
+| **No deep reorg support** | Max 1-block reorg.  64-block header ring = no deep history. | PoW with network partitions trivially forks deeper than 1. | **Acceptable for PoA/PoS** — but PoW mode should warn or be removed |
+| **Serialized consensus path (not single-threaded)** | Blockchain modules serialize through `WITH-GUARD` for STARK determinism. | Consensus + execution are serial by design; I/O (gossip, RPC) and tx validation can be parallelized via `PAR-MAP`, `WITH-BACKGROUND`, and KDOS multi-core dispatch (up to 16 cores). | **Evolve** — parallelize tx validation (per-core crypto scratch), pipeline STARK proofs on background core, serve RPC on BIOS coroutine |
+| **SPHINCS+ bandwidth explosion** | 7,856 B/sig × 256 txs = 2.1 MB/block.  A thousand hybrid blocks = 2 GB. | Impractical for high-throughput or bandwidth-constrained networks. | **Accept** — hybrid mode is opt-in.  Default to Ed25519-only. |
+| **Software sandbox on flat address space** | No MMU, no process isolation.  One bounds-check bug = full compromise. | Adversarial public contracts are high-risk. | **Two-tier approach**: (1) capability-based isolation via .m64 import whitelisting + bounds-checked memory (trusted consortium deployers), (2) full shadow-dictionary ITC interpreter for adversarial deployments.  Extensive fuzzing either way. |
+| **256-tx-per-block cap is proof-geometric** | Tied to STARK trace width, not a tunable parameter. | Can't increase per-block throughput without redesigning the proof system. | **Mitigate** — throughput = txs/block × blocks/time.  Shorten block time (PoA is near-instant), parallelize tx validation via `PAR-MAP`, pipeline proof generation (prove block N on background core while producing N+1), batch STARK proofs every K blocks.  Realistic target: hundreds of TPS. |
+
+### Revised strategy
+
+**Do not proceed to Phase 7 (Forth VM) or Phase 8 (Ethereum interop)
+until the foundation is production-grade.**  The new priority order:
+
+1. **Phase 6.5 — Real persistence** (file I/O, crash recovery)
+2. **Phase 3b — Scalable state** (decouple accounts from trace width)
+3. **Phase 5b — Consensus hardening** (genesis config, anti-grinding)
+4. **Phase 6.5b — Light client protocol** (Merkle proof RPC)
+5. *Then* Phase 7 (Forth VM) and Phase 8 (Ethereum interop)
+
+These are detailed inline below as `⚠ REVISED` blocks.
 
 ---
 
 ## Table of Contents
 
+- [Critical Assessment](#critical-assessment-2026-03-07)
 - [Current State — What Already Exists](#current-state--what-already-exists)
 - [Gap Analysis](#gap-analysis)
 - [Architecture Principles](#architecture-principles)
@@ -35,13 +88,16 @@ chain.
 - [Phase 1b — sphincs-plus.f: Post-Quantum Signatures](#phase-1b--sphincs-plusf-post-quantum-signatures)
 - [Phase 2 — tx.f: Transaction Structure](#phase-2--txf-transaction-structure)
 - [Phase 3 — state.f: World State](#phase-3--statef-world-state)
+- [**Phase 3b — Scalable State (NEW)**](#phase-3b--scalable-state-new)
 - [Phase 4 — block.f: Block Structure & Chain](#phase-4--blockf-block-structure--chain)
 - [Phase 5 — consensus.f: Consensus Mechanism](#phase-5--consensusf-consensus-mechanism)
+- [**Phase 5b — Consensus Hardening (NEW)**](#phase-5b--consensus-hardening-new)
 - [Phase 6 — Node Infrastructure](#phase-6--node-infrastructure)
+- [**Phase 6.5 — Production Infrastructure (NEW)**](#phase-65--production-infrastructure-new)
 - [Phase 7 — contract-vm.f: Sandboxed Forth VM](#phase-7--contract-vmf-sandboxed-forth-vm)
 - [Phase 8 — ethereum/: Standard Blockchain Interop](#phase-8--ethereum-standard-blockchain-interop)
 - [Dependency Graph](#dependency-graph)
-- [Implementation Order](#implementation-order)
+- [Implementation Order (REVISED)](#implementation-order)
 - [Design Constraints](#design-constraints)
 - [Testing Strategy](#testing-strategy)
 
@@ -129,6 +185,22 @@ The two signature modules (ed25519.f + sphincs-plus.f) account for
 roughly a third of that.  Phase 8 (Ethereum interop) adds another
 ~2,000–3,000 lines.
 
+> **⚠ REVISED — Gap analysis is incomplete.**  The original gap
+> analysis lists only *feature* gaps (no signatures, no tx format,
+> etc.).  The real gaps that block production readiness are
+> *architectural*:
+>
+> | Gap (new) | Impact | Complexity |
+> |-----------|--------|------------|
+> | No real disk I/O | "Persistence" is in-memory.  Node restart = data loss. | Medium (~200–300 lines) |
+> | Account cap = STARK trace width | 256 accounts is structural, not tunable. | Hard (proof system redesign) |
+> | No light client protocol | Every participant must run a full node. | Medium (~200 lines + RPC) |
+> | No genesis-block config | Consensus mode is a runtime variable, not protocol-enforced. | Easy (~50 lines) |
+> | No anti-grinding for PoS | Leader election seed is manipulable by block producer. | Medium (~100 lines) |
+> | Persist log cap: 1 MB ≈ 9 blocks | Chain can’t store meaningful history. | Easy (constant bump + real I/O) |
+>
+> These need to be addressed *before* Phase 7 (Forth VM).
+
 ---
 
 ## Architecture Principles
@@ -142,10 +214,34 @@ roughly a third of that.  Phase 8 (Ethereum interop) adds another
 | **State model** | Account-based (not UTXO) — simpler for a 256-entry world, maps cleanly to a Merkle tree |
 | **Block size** | 256 transactions max per block — matches STARK trace size for provability |
 | **Consensus** | Pluggable — three leader-election modes (PoW, PoA, PoS) × orthogonal STARK validity overlay flag.  PoW for bootstrap/dev, PoA for consortium, PoS for production.  Any mode can optionally attach STARK proofs; PoS+STARK is the production endgame. |
-| **Not re-entrant** | Same as all Akashic modules — single-threaded per core |
+| **Not re-entrant** | Same as all Akashic modules — serialized per guard for STARK determinism, but parallelizable for I/O and tx validation via KDOS multi-core |
 | **No floating point** | All values are integers (Baby Bear field elements or 64-bit) |
 | **Post-quantum ready** | SPHINCS+ (hash-based, FIPS 205) uses only SHA3/SHAKE — leverages the existing hardware accelerator.  No new algebraic structures needed. |
 | **Custom chain first** | Phases 1–7 are a self-contained, purpose-built chain with smart contracts and full node infrastructure.  Not Ethereum/Bitcoin compatible by design.  Standard chain interop is deferred to Phase 8 (`ethereum/` library). |
+
+> **⚠ REVISED — Architecture Principles annotations.**
+>
+> - **State model: "simpler for a 256-entry world"** — This is the
+>   core problem.  The 256-entry world is a *prototype constraint*,
+>   not a design principle.  It needs to be stated as a limitation
+>   with a concrete upgrade path.  See Phase 3b below.
+> - **Block size: 256 txs = STARK trace size** — This couples
+>   throughput to proof geometry.  Any throughput increase requires
+>   proof system changes.  Alternatives: batch multiple 256-tx
+>   sub-proofs, recursive proof composition, or variable-width
+>   traces.  Must be addressed before production.
+> - **Not re-entrant** — Fine for Megapad-64 (single-core).  Should
+>   be explicitly stated as "by hardware constraint" not "by choice."
+>   On multi-core hardware this serializes everything.
+> - **Consensus mode as variable** — Must be replaced with
+>   genesis-block configuration.  A chain where nodes can disagree
+>   on the consensus mechanism by setting a different variable is
+>   not a real protocol.  See Phase 5b.
+> - **Missing principle: Chain ID / genesis config** — There is no
+>   chain identifier.  Two independent deployments with different
+>   parameters are indistinguishable at the protocol level.  Needs
+>   a genesis block that encodes: chain ID, consensus mode, STARK
+>   overlay flag, epoch length, min stake, lock period.
 
 ---
 
@@ -209,6 +305,40 @@ Ed25519.  Impact:
 All well within even the 16 MiB test environment (production
 extended memory can be significantly larger).  The tradeoff is
 acceptable for a system that values long-term security over bandwidth.
+
+> **⚠ REVISED — Bandwidth reality check.**
+>
+> "All well within 16 MiB" is true for *one block in memory*.
+> But a *running chain* accumulates:
+> - 2.1 MB/block × 1 block/minute × 60 min = 126 MB/hour in
+>   hybrid mode.  The 1 MB persist log fills after ~0.5 blocks.
+> - Gossip bandwidth: broadcasting a 2.1 MB block to 16 peers =
+>   33.6 MB of outbound traffic per block.
+> - Mempool: 256 pending hybrid txs = 2.1 MB.  A second wave
+>   arriving before the first drains needs 4.2 MB.
+>
+> **Recommendation:** Default to Ed25519-only for all node
+> operations.  Hybrid/SPHINCS+ should be opt-in per transaction
+> by sender choice, not a network-wide mode.  The `TX-SIG-MODE`
+> variable should be per-tx (it already is in the tx format), but
+> the *node default* and *documentation* should strongly recommend
+> classical-only unless the user has a specific PQ threat model.
+>
+> **PQ Transition Path:** When quantum computing matures enough to
+> threaten Ed25519, the chain can migrate to pure PQ cleanly:
+> 1. Genesis config already includes `sig_mode` — new chains can
+>    launch PQ-only from day one.
+> 2. Existing chains: a hard fork at block height N sets
+>    `sig_mode: 1` (PQ-only).  Transactions after height N carry
+>    only SPHINCS+ signatures.  Accounts created before the fork
+>    already have PQ keys (hybrid mode stores both).
+> 3. Grace period: accept both modes for M blocks after the fork,
+>    then reject classical-only transactions.
+> 4. No key migration needed — hybrid accounts already have SPHINCS+
+>    keys registered.  Ed25519-only accounts must re-register with
+>    a PQ keypair during the grace period.
+>
+> This is a genesis parameter + one fork, not a protocol redesign.
 
 ---
 
@@ -547,6 +677,22 @@ SHA3-256 of the 72-byte account entry.  The state root goes into
 the block header.  Tree is rebuilt on `ST-ROOT` (once per block
 finalization, not per transaction).
 
+> **⚠ REVISED — This is the single biggest production blocker.**
+>
+> The 256-account limit is *not* a tunable constant.  It’s coupled to:
+> - Merkle leaf count (hardwired in `merkle.f`)
+> - STARK trace width (256 rows = proof geometry)
+> - Memory budget (256 × 72 = 18 KB for the flat sorted table)
+> - `BLK-MAX-TXS` (256 = one tx per account = trace alignment)
+>
+> Changing `ST-MAX-ACCOUNTS` to 4096 (as Phase 7 proposes) breaks
+> the STARK trace alignment and requires a new Merkle tree size.
+> This is the right direction but needs to be done *carefully*
+> as a standalone phase, not buried in a TX-MAX-DATA bump.
+>
+> **See Phase 3b below** for the concrete upgrade path:
+> sparse Merkle tree + paged state + decoupled proof batching.
+
 ### API
 
 | Word | Stack | Description |
@@ -584,6 +730,93 @@ The pointer-invalidation problem (inserting a new recipient can shift
 the sender's table position) is handled by working with indices and
 adjusting the sender index when the recipient insertion point
 precedes it.
+
+---
+
+## Phase 3b — Scalable State (NEW)
+
+**Location:** `akashic/store/state.f` (rewrite) + `akashic/store/smt.f` (new)
+**Prefix:** `ST-` (same public API, new internals)
+**Depends on:** sha3.f, merkle.f, tx.f
+**Estimated size:** ~400–500 lines (smt.f) + ~100 lines (state.f delta)
+**Difficulty:** Hard
+**Status:** Not started
+**Priority:** **Critical** — must precede Phase 7
+
+### Problem
+
+The current 256-account cap is welded to three things:
+1. The flat sorted array (256 × 72 = 18 KB)
+2. The 256-leaf Merkle tree
+3. The 256-row STARK trace width
+
+Changing `ST-MAX-ACCOUNTS` alone accomplishes nothing — the Merkle
+tree, STARK trace, and memory budget all need to move together.
+
+### Solution: Sparse Merkle Tree + Paged State
+
+**Step 1: Sparse Merkle Tree (smt.f)**
+
+Replace the dense 256-leaf Merkle tree with a **sparse Merkle tree**
+(SMT) of depth 256 (one bit per address byte).  An SMT can hold
+$2^{256}$ theoretical leaves but only stores populated branches.
+Storage is proportional to active accounts, not the address space.
+
+The existing `merkle.f` can be extended (or a new `smt.f` built)
+with:
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `SMT-INIT` | `( tree -- )` | Empty tree (root = zero hash) |
+| `SMT-INSERT` | `( key val tree -- )` | Insert/update leaf by 32-byte key |
+| `SMT-LOOKUP` | `( key tree -- val flag )` | Get leaf value |
+| `SMT-ROOT` | `( tree -- hash )` | Current root hash |
+| `SMT-PROVE` | `( key tree proof -- len )` | Generate Merkle inclusion proof |
+| `SMT-VERIFY` | `( key val proof len root -- flag )` | Verify inclusion proof (for light clients) |
+
+Memory: ~32 bytes per active leaf × path length.  For 4,096
+accounts: ~400 KB (much more than 18 KB, but manageable in XMEM).
+
+**Step 2: Paged state table**
+
+Replace the flat 256-entry sorted array with a paged structure.
+Each page holds 256 entries (preserving STARK trace alignment).
+Pages are allocated from XMEM on demand.  Binary search works
+within and across pages.
+
+This lets `ST-MAX-ACCOUNTS` grow to 4,096+ without a single
+contiguous 300 KB allocation.
+
+**Step 3: Decouple STARK trace from state size**
+
+The key insight: the STARK trace doesn't need to cover *all*
+accounts — it needs to cover *all transactions in one block*.
+With 256 txs/block, each block touches at most 512 accounts
+(256 senders + 256 recipients).  The trace proves the *touched
+subset* is correct, and the SMT root proves the rest is unchanged.
+
+This means:
+- STARK trace stays 256 rows (one per tx)
+- State can grow to any size
+- Each trace row includes the SMT Merkle path for the touched
+  accounts (proving they were correctly read and updated)
+
+This is exactly how Starknet and zkSync work: the proof covers
+the *delta*, not the full state.
+
+### Migration
+
+The public `ST-` API stays the same.  Internals change.
+All downstream modules (block.f, consensus.f, node.f) should
+need zero or minimal changes if they use the public API.
+
+### Testing
+
+- Existing 43 state tests must pass unchanged (API compatibility)
+- SMT: insert/lookup/prove/verify for 1, 256, 1024, 4096 entries
+- SMT proof verification matches root (positive + negative)
+- Paged table: binary search across page boundaries
+- STARK trace: prove block with accounts > 256, verify
 
 ---
 
@@ -887,6 +1120,8 @@ overlay flag.
 | PoA+STARK | Authorized set | Math proof | ✓ | Minimal | Trusted committee | Immediate | ~40+60 |
 | PoS | Stake-weighted random | Re-execute txs | optional | Minimal | Trustless | ~epoch | ~200 |
 | **PoS+STARK** | **Stake-weighted random** | **Math proof** | **✓** | **Minimal** | **Trustless** | **Immediate** | **~200+60** |
+| PoSA | Authorized set + stake | Signature | optional | Minimal | Identified + staked | Immediate | ~120 |
+| **PoSA+STARK** | **Authorized set + stake** | **Math proof** | **✓** | **Minimal** | **Identified + staked** | **Immediate** | **~120+60** |
 
 STARK overlay adds ~60 lines of shared glue regardless of mode.
 
@@ -894,10 +1129,146 @@ STARK overlay adds ~60 lines of shared glue regardless of mode.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `CON-MODE` | variable | 0=PoW, 1=PoA, 2=PoS |
+| `CON-MODE` | variable | 0=PoW, 1=PoA, 2=PoS, 3=PoSA |
 | `CON-STARK?` | variable | TRUE = attach STARK validity proof to blocks (any mode) |
 | `CON-SEAL` | `( blk -- )` | Apply leader election + optional STARK proof |
 | `CON-CHECK` | `( blk -- flag )` | Verify leader election + STARK proof (if present) |
+
+> **⚠ REVISED — Consensus issues that must be fixed before production.**
+>
+> 1. **`CON-MODE` is a runtime variable, not a genesis parameter.**
+>    Nothing in the protocol enforces that all nodes agree on the
+>    consensus mode.  If one node runs PoW and another PoA, they
+>    produce incompatible blocks and neither will know why.  This
+>    must be baked into the genesis block / chain config.  See
+>    Phase 5b.
+>
+> 2. **`CON-SEAL` leaks its abstraction for PoA and PoS.**  The
+>    unified interface is `( blk -- )` but PoA/PoS need
+>    `( blk priv pub -- )`.  The source literally says "PoA seal
+>    is a no-op; use CON-POA-SIGN directly."  Either fix the
+>    interface (pass keys via a context variable) or document
+>    that `CON-SEAL` is PoW-only.
+>
+> 3. **PoS leader election is grindable.**  Seed = `SHA3(prev_hash
+>    || height)`.  The block producer influences `prev_hash` by
+>    choosing which transactions to include (different txs →
+>    different state root → different block hash).  Standard
+>    mitigation: RANDAO (commit-reveal) or VDF.  At minimum,
+>    use `SHA3(prev_hash || height)` where `prev_hash` is the
+>    *parent's parent* hash (2-block lookback), not the current
+>    parent.  See Phase 5b.
+>
+> 4. **PoS validator set shares the 256-account table with users.**
+>    A 100-validator network leaves 156 user accounts.  This is
+>    downstream of the account ceiling (Phase 3b), but also
+>    means the validator set should probably be a *separate*
+>    data structure, not overloaded onto account entries.
+>
+> 5. **`VM-VERIFY-SPHINCS` is missing from the contract whitelist.**
+>    SPHINCS+ verify at 50M steps would consume 5× the default
+>    10,000 gas limit.  Contracts cannot verify PQ signatures.
+>    Either add it with proportional gas cost (~50,000 gas) or
+>    document that on-chain PQ signature verification is not
+>    supported.
+
+---
+
+## Phase 5b — Consensus Hardening (NEW)
+
+**Location:** `akashic/consensus/consensus.f` (modify) + `akashic/store/genesis.f` (new)
+**Prefix:** `GEN-` (genesis), `CON-` (consensus amendments)
+**Depends on:** consensus.f, block.f, state.f
+**Estimated size:** ~200–300 lines
+**Difficulty:** Medium
+**Status:** Not started
+**Priority:** **Critical** — must precede production multi-node deployment
+
+### 5b.1 Genesis Block Configuration
+
+Create `genesis.f` that encodes chain parameters into the genesis
+block's `data` field (CBOR map):
+
+```
+Genesis config (CBOR map in block 0 data):
+  "chain_id"     : u64       distinguishes networks
+  "con_mode"     : u8        0=PoW, 1=PoA, 2=PoS, 3=PoSA
+  "stark"        : bool      STARK overlay required?
+  "epoch_len"    : u64       blocks per epoch (PoS)
+  "min_stake"    : u64       minimum stake (PoS)
+  "lock_period"  : u64       unstake lock blocks (PoS)
+  "max_accounts" : u64       state table capacity
+  "max_txs"      : u64       transactions per block
+  "authorities"  : [pubkey]  initial PoA signers (if PoA)
+  "balances"     : {addr:u64} initial account balances
+```
+
+`NODE-INIT` reads the genesis block and sets all `CON-*` variables
+from it.  Nodes that connect to a chain with a different genesis
+hash are rejected during `STATUS` handshake.
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `GEN-CREATE` | `( config blk -- )` | Build genesis block from config |
+| `GEN-LOAD` | `( blk -- )` | Extract config from genesis, set globals |
+| `GEN-HASH` | `( -- hash )` | Genesis block hash (= chain identity) |
+| `GEN-CHAIN-ID` | `( -- id )` | Chain ID from genesis |
+
+### 5b.2 Anti-Grinding for PoS Leader Election
+
+Replace the current `SHA3(prev_hash || height)` seed with a
+**2-block lookback** scheme:
+
+```
+seed = SHA3( block[height-2].hash || height )
+```
+
+The block producer at height H cannot influence the seed for
+height H+1, because the seed depends on block H-1's hash
+(which was finalized before the producer was elected).
+
+For stronger guarantees, add a **RANDAO** accumulator:
+- Each block producer commits `SHA3(secret)` in their first
+  epoch block, reveals `secret` when producing.
+- The epoch seed = XOR of all reveals.
+- Withholding a reveal = forfeiting the block reward.
+
+RANDAO is ~50 lines and a well-understood pattern (Ethereum
+Beacon Chain uses it).
+
+### 5b.3 Fix CON-SEAL Abstraction Leak
+
+Add a **signing context** variable that holds the block producer's
+key material:
+
+```forth
+CREATE _CON-SIGN-PRIV 64 ALLOT
+CREATE _CON-SIGN-PUB  32 ALLOT
+
+: CON-SET-KEYS ( priv pub -- )
+    _CON-SIGN-PUB 32 CMOVE
+    _CON-SIGN-PRIV 64 CMOVE ;
+```
+
+Then `CON-SEAL ( blk -- )` works uniformly for all modes:
+- PoW: mine (no keys needed)
+- PoA: `CON-POA-SIGN blk _CON-SIGN-PRIV _CON-SIGN-PUB`
+- PoS: `CON-POS-SIGN blk _CON-SIGN-PRIV _CON-SIGN-PUB`
+
+Caller sets keys once at startup via `CON-SET-KEYS`.
+
+### 5b.4 PoW "Testing Only" Label
+
+PoW mode with 1-block max reorg is fundamentally broken for real
+networks.  Either:
+- Implement a proper longest-chain rule with configurable reorg
+  depth (complex, ~200 lines), or
+- Label PoW as `CON-POW-DEV` and restrict it to single-node
+  testing (simple, just documentation + a warning on multi-node
+  init).
+
+Recommendation: the latter.  PoW on a small network of identical
+hardware provides no meaningful Sybil resistance anyway.
 
 ---
 
@@ -1072,6 +1443,28 @@ Reorgs deeper than 1 block are rejected — the chain does not
 support deep reorganization.  A 1-block reorg replays the
 alternate block's transactions against the parent state.
 
+> **⚠ REVISED — Reorg and light client gaps.**
+>
+> - **1-block reorg limit is fine for PoA/PoS** (fast finality)
+>   but **incompatible with PoW mode**.  Under PoW with low
+>   difficulty (bootstrap), network partitions trivially produce
+>   2+ block forks.  Either: (a) remove PoW as a "real" mode
+>   and label it "local testing only," or (b) implement a
+>   longest-chain rule with configurable reorg depth.
+>
+> - **No light client protocol.**  The RPC interface has
+>   `chain_getBalance` but returns a bare `u64` — no Merkle
+>   proof.  A client must trust the RPC server or run a full
+>   node.  The STARK overlay *could* enable trust-minimized
+>   light clients (verify proof + state root, check a single
+>   account inclusion), but the protocol for this doesn’t exist.
+>
+> - **No Merkle proof-of-inclusion RPC.**  Standard blockchains
+>   serve `eth_getProof` (Ethereum) or SPV proofs (Bitcoin).
+>   We need `chain_getProof ( address -- balance nonce proof )`
+>   returning the Merkle path from the account leaf to the
+>   state root.  See Phase 6.5b.
+
 ### 6e — persist.f: Chain Persistence
 
 **Prefix:** `PST-`
@@ -1111,6 +1504,24 @@ Total file sizes are modest: the full state is ~12 KB, and 1000
 blocks in classical mode total ~100 MB.  Hybrid mode (SPHINCS+
 signatures) grows to ~2 GB for 1000 blocks — still manageable
 on any storage device.
+
+> **⚠ REVISED — persist.f is not persistence.  It’s an in-memory
+> append buffer.**
+>
+> The *roadmap* describes `chain.dat` / `state.snap` files.  The
+> *implementation* (`persist.f`) uses `XMEM-ALLOT` with a 1 MB
+> cap.  There is no file I/O.  A power cycle loses everything.
+>
+> At ~105 KB per classical block, the 1 MB log holds **~9 blocks**
+> before it’s full.  The Phase 7 bump to 4 MB buys ~36 blocks.
+> Neither constitutes a usable chain history.
+>
+> The roadmap’s file sizes ("1000 blocks = 100 MB") assume a
+> filesystem that doesn’t exist yet.
+>
+> **This is the #1 priority fix.**  See Phase 6.5 below for the
+> real persistence layer: file I/O words, WAL (write-ahead log),
+> and crash recovery.
 
 ### 6f — node.f: Node Daemon
 
@@ -1181,6 +1592,130 @@ CREATE NODE-CFG 256 ALLOT
 
 ---
 
+## Phase 6.5 — Production Infrastructure (NEW)
+
+**Priority:** **Critical** — prerequisite for any real deployment.
+Split into two sub-phases that can proceed in parallel.
+
+### Phase 6.5a — Real Persistence
+
+**Location:** `akashic/store/persist.f` (rewrite)
+**Prefix:** `PST-`
+**Depends on:** KDOS file I/O primitives (§7.5–7.6 in kdos.f), block.f, state.f
+**Estimated size:** ~200–300 lines
+**Difficulty:** Medium
+
+The current `persist.f` is an in-memory append buffer using
+`XMEM-ALLOT` with a 1 MB cap.  This section replaces it with
+real disk persistence.
+
+#### KDOS File I/O Primitives (no wrapper needed)
+
+KDOS (§7.5 raw file I/O, §7.6 MP64FS named filesystem) provides
+a complete file I/O stack.  No separate `fileio.f` wrapper layer
+is needed — we use the KDOS words directly:
+
+| Need | KDOS word | Stack effect |
+|------|-----------|-------------|
+| Create file | `MKFILE` | `( nsectors type "name" -- )` |
+| Open file | `OPEN` | `( "name" -- fdesc \| 0 )` |
+| Read bytes | `FREAD` | `( addr len fdesc -- actual )` |
+| Write bytes | `FWRITE` | `( addr len fdesc -- )` |
+| Seek | `FSEEK` | `( pos fdesc -- )` |
+| Rewind | `FREWIND` | `( fdesc -- )` |
+| File size | `FSIZE` | `( fdesc -- n )` |
+| Flush metadata | `FFLUSH` | `( fdesc -- )` |
+| Close | `FCLOSE` | `( fdesc -- )` |
+| Delete | `RMFILE` | `( "name" -- )` |
+
+**Quirks to handle:**
+- `MKFILE` pre-allocates a fixed sector count (contiguous).
+  Files cannot be resized — over-allocate and track used bytes.
+- `FREAD` / `FWRITE` operate via DMA (whole sectors).  The
+  FREAD bug (return-stack corruption in FR-HEAD) is fixed as of
+  megapad commit c574899.
+- `FFLUSH` syncs the `used_bytes` metadata to the on-disk
+  directory; content is written directly to disk sectors by
+  `FWRITE` (DMA).
+- FD pool is 16 slots — persist.f needs at most 3 (chain.dat,
+  state.snap, wal.dat).
+
+**Future migration:** When Akashic's higher-level filesystem
+libraries are built (see `ROADMAP_filesystem.md`), rewrite this
+module against those abstractions.  The API (`PST-INIT`,
+`PST-SAVE-BLOCK`, etc.) stays the same — only the internals change.
+
+#### Rewrite persist.f
+
+Replace the XMEM append buffer with real file storage:
+
+```
+chain.dat: [length-prefixed CBOR blocks, append-only]
+  [8B len][CBOR block 0][8B len][CBOR block 1] ...
+
+state.snap: [periodic state snapshots]
+  [8B height][8B count][count × 72B accounts][32B state root]
+
+wal.dat: [write-ahead log for crash recovery]
+  [8B seq][8B len][CBOR block][8B checksum]
+```
+
+Write-ahead log ensures atomicity: write the block to WAL first,
+fsync, then append to chain.dat and update state.snap.  On
+startup, replay any incomplete WAL entries.
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `PST-INIT` | `( path len -- flag )` | Open/create chain files |
+| `PST-SAVE-BLOCK` | `( blk -- flag )` | WAL → append → fsync |
+| `PST-LOAD-BLOCK` | `( idx blk -- flag )` | Read block by index |
+| `PST-SAVE-STATE` | `( -- flag )` | Write state snapshot |
+| `PST-LOAD-STATE` | `( -- flag height )` | Load state snapshot |
+| `PST-REPLAY-WAL` | `( -- n )` | Recovery: replay uncommitted blocks |
+| `PST-BLOCK-COUNT` | `( -- n )` | Total blocks on disk |
+| `PST-CLOSE` | `( -- )` | Flush + close all files |
+
+No more arbitrary size cap.  Chain grows until disk is full.
+
+### Phase 6.5b — Light Client Protocol
+
+**Location:** `akashic/web/rpc.f` (extend) + `akashic/store/smt.f` (from Phase 3b)
+**Prefix:** `RPC-` (extensions)
+**Depends on:** Phase 3b (SMT with proofs), rpc.f
+**Estimated size:** ~100–150 lines
+**Difficulty:** Easy (once SMT exists)
+
+#### New RPC Methods
+
+| Method | Params | Result | Description |
+|--------|--------|--------|-------------|
+| `chain_getProof` | address | `{balance, nonce, proof: [hashes]}` | Merkle inclusion proof |
+| `chain_getBlockProof` | height, tx_index | `{tx_hash, proof: [hashes]}` | Tx inclusion in block |
+| `chain_getStateRoot` | height | `{state_root, block_hash}` | State root at height |
+| `chain_verifyProof` | address, proof, root | `{valid: bool}` | Server-side proof check |
+
+#### Light Client Verification Flow
+
+```
+1. Client requests chain_getProof(address)
+2. Server returns {balance, nonce, merkle_path, state_root}
+3. Client verifies: SMT-VERIFY(address, leaf, path, state_root)
+4. Client trusts state_root because:
+   a. STARK mode: verify block's STARK proof (math guarantee)
+   b. Non-STARK: trust the RPC server (same as Ethereum pre-Verkle)
+```
+
+With STARK overlay enabled, a light client can verify:
+- The state root is committed in the block header
+- The block's STARK proof validates all state transitions
+- The Merkle path proves the specific account in that state root
+
+This gives **trust-minimized light client verification** — the
+client only needs the block header, STARK proof, and Merkle path.
+No re-execution, no trusting the RPC server.
+
+---
+
 ## Phase 7 — contract-vm.f: Sandboxed Forth VM
 
 **Location:** `akashic/store/contract-vm.f`
@@ -1194,8 +1729,75 @@ Phases 1–6 deliver a working chain that transfers value between
 accounts.  Phase 7 adds **programmable smart contracts** by sandboxing
 the Forth interpreter itself.  This is the natural choice: the entire
 Akashic stack is Forth, the Megapad-64 *is* a Forth machine, and Forth
-source is its own bytecode.  There is no need to design a secondary
-instruction set.
+compiles to threaded code natively.  There is no need to design a
+secondary instruction set — the host's own compilation machinery
+(scoped to a sandbox) produces the on-chain executable format.
+
+> **⚠ REVISED — Phase 7 is blocked on foundation work.**
+>
+> The Forth VM design is sound and the security analysis is
+> unusually thorough.  But building it on the current foundation
+> means contracts run on a chain that can hold 256 accounts, has
+> no real persistence, no light clients, and no protocol-enforced
+> consensus.  A contract ecosystem on that foundation is a
+> demo, not a product.
+>
+> **New ordering:** Complete Phase 3b (scalable state), Phase 5b
+> (consensus hardening), and Phase 6.5 (real persistence) first.
+> Then the VM has a solid foundation.
+>
+> The VM design itself is good.  The `TX-MAX-DATA` bump should use
+> the gas-limited approach (no hard byte cap — remove the constant,
+> let data size be bounded by gas at 1 gas/byte).  This matches
+> EVM calldata semantics and avoids layout-breaking constant
+> changes every time capacity needs increase.
+
+> **⚠ REVISED — Two-Tier Sandbox Architecture (from JIT/binimg analysis)**
+>
+> The existing `binimg.f` / `.m64` binary image system provides a
+> natural capability-based sandbox that the original ITC-only design
+> overlooks.  The JIT compiler in `bios.asm` (3-tier: primitive
+> inlining, literal folding, bigram fusion) is a real compiler that
+> produces optimized native STC.  The `.m64` loader's
+> `_IMG-RESOLVE-IMPORTS` is the single chokepoint where a loaded
+> image gains access to host words — by name, from an import table.
+>
+> **Tier 1 — .m64 Sandbox (for trusted/consortium deployers):**
+> Contracts are compiled as normal Forth (with JIT), saved as `.m64`,
+> and loaded via a modified `IMG-LOAD` that:
+> - Resolves imports against a **~60-word whitelist** (not `FIND`
+>   against the full dictionary)
+> - Maps `@`/`!` to bounds-checked `VM-@`/`VM-!`
+> - Strips `EXECUTE` or maps it to a validated trampoline
+> - Skips `_IMG-SPLICE-DICT` — contract is callable only through
+>   its declared entry point
+> - Rejects images importing unlisted words
+>
+> This gives **JIT-native speed** with capability-based isolation.
+> ~100 lines of Forth to add (whitelist resolver, bounded accessors,
+> `EXECUTE` guard).  The import manifest also enables pre-deployment
+> audit: inspect exactly what a contract will call before loading.
+>
+> **Tier 2 — ITC Shadow Interpreter (for adversarial deployments):**
+> The full shadow-dictionary ITC design (described below) for
+> environments where deployers are not trusted.  Slower but with
+> deeper isolation: separate return stack, scoped `HERE`, no native
+> code execution.
+>
+> **STARK proof model — State-transition proofs (both tiers):**
+> Instead of tracing every instruction (which forces ITC and kills
+> JIT performance), prove *state transitions*: the contract's
+> reads, writes, and final state root.  The STARK proves "given
+> these inputs, the contract produced these outputs and these state
+> changes."  This is how Starknet and zkSync work — prove the
+> syscall trace, not every instruction.  It permits Tier 1 (JIT)
+> contracts to run at full native speed while remaining
+> validity-proven at the state level.
+>
+> **Recommendation:** Start with Tier 1 (.m64 sandbox) for the
+> consortium use case.  The infrastructure already exists in
+> `binimg.f`.  Tier 2 (full ITC) can be added later if/when
+> adversarial public deployment becomes a requirement.
 
 ### Why Forth VM, Not EVM
 
@@ -1204,7 +1806,7 @@ instruction set.
 | Word size | 256-bit (alien to Megapad-64's 64-bit cells) | Native 64-bit cells |
 | STARK provability | Painful — 256-bit ALU ops explode trace width | Natural — each primitive = 1–2 trace rows in Baby Bear field |
 | Implementation cost | ~5,000+ lines (256-bit ALU, gas, memory model, precompiles) | ~400–600 lines (sandbox existing interpreter) |
-| Contract language | Solidity → bytecode (need external compiler) | Forth source **is** the program — no separate compilation step |
+| Contract language | Solidity → bytecode (need external compiler) | Forth source compiled at deploy → ITC stored on-chain |
 | Ecosystem integration | Foreign stack — cannot call `SHA3`, `MERKLE-ROOT` directly | Contracts call any whitelisted Akashic word natively |
 | Gas metering | Per-opcode table (256 opcodes) | Per-word decrement — trivial, ~5 lines |
 | Determinism | Complex (JUMPDEST analysis, memory expansion rules) | Inherent — no floating point, no I/O in sandbox |
@@ -1215,10 +1817,25 @@ STARK-proving those operations means each EVM instruction maps to
 dozens of trace rows — destroying the compact proofs that make the
 custom chain valuable.  The Forth VM avoids all of this.
 
-### Architecture
+### Architecture: Compile-at-Deploy, Execute-on-Call
 
-A contract is a Forth source blob stored on-chain (CBOR-encoded in
-the state tree).  Execution proceeds in an **isolated sandbox**:
+Contracts follow a **two-phase lifecycle**: deployment compiles Forth
+source into indirect-threaded code (ITC) inside a sandbox; the
+compiled image is stored on-chain (CBOR-encoded in the state tree).
+Subsequent calls load the compiled image and execute directly — no
+re-parsing, no re-compilation.
+
+```
+  DEPLOY:  source text ──► sandbox compiler ──► ITC image ──► state tree
+  CALL:    state tree ──► load ITC image ──► execute in sandbox
+```
+
+This eliminates the parse-every-call overhead, shrinks on-chain
+storage (~2–4× smaller than source), keeps STARK traces clean (no
+parser rows), and confines the parser attack surface (S12) to deploy
+transactions only.
+
+#### Sandbox Execution Environment
 
 1. **Isolated memory** — each contract gets its own XMEM arena.
    No access to the host dictionary, data space, or other contracts'
@@ -1237,6 +1854,34 @@ the state tree).  Execution proceeds in an **isolated sandbox**:
    (opcode tag, stack top, gas remaining, state delta).  The block
    producer feeds this trace to `STARK-PROVE` alongside the value
    transfer trace from Phase 5.
+
+#### ITC Image Format
+
+The compiled image stored on-chain is a relocatable ITC blob:
+
+```
+Offset  Content
+------  -------
+  0     [2 B]  magic (0x4654 = "FT" — Forth Threaded)
+  2     [2 B]  version (0x0001)
+  4     [2 B]  entry count (number of exported entry points)
+  6     [2 B]  image size (bytes, excluding this 8-byte header)
+  8     [N B]  entry table: [name-len][name-chars...][2 B offset] × count
+  8+E   [M B]  ITC body: sequence of cell-sized XTs (indices into
+               the sandbox whitelist table, not host addresses)
+```
+
+XTs in the image are **whitelist indices** (0..N), not raw host
+addresses.  On load, the sandbox maps each index to the
+corresponding sandbox-local XT — a fast table lookup, no relocation
+patching needed.  Literal values and branch offsets are stored inline
+as cells between the XT indices, tagged with a `LIT` pseudo-opcode
+(index 0) or `BRANCH`/`0BRANCH` opcodes.
+
+This keeps the image position-independent, deterministic across
+validators, and compact (a whitelist of ~60 words needs only 6 bits
+per opcode, but cell-aligned storage simplifies the inner
+interpreter).
 
 ### Whitelisted Word Set
 
@@ -1263,7 +1908,7 @@ raw MMIO / XMEM / OS primitives.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `VM-INIT` | `( gas arena-sz -- ctx )` | Create isolated execution context |
-| `VM-DEPLOY` | `( src len ctx -- addr )` | Compile contract source, store in state tree, return address |
+| `VM-DEPLOY` | `( src len ctx -- addr )` | Compile source → ITC image, store in state tree, return address |
 | `VM-CALL` | `( entry-xt ctx -- )` | Execute contract entry point in sandbox |
 | `VM-DELEGATECALL` | `( addr entry-xt ctx -- )` | Call another contract in caller's state context |
 | `VM-GAS` | `( ctx -- remaining )` | Gas remaining after execution |
@@ -1272,24 +1917,52 @@ raw MMIO / XMEM / OS primitives.
 | `VM-TRACE` | `( ctx trace -- rows )` | Export execution trace for STARK proof |
 | `VM-DESTROY` | `( ctx -- )` | Free all sandbox resources |
 
+### Pre-requisite: TX-MAX-DATA Bump
+
+`TX-MAX-DATA` is currently 256 bytes — a testing placeholder.  Real
+contracts need room for source text (deploy) and CBOR-encoded call
+arguments.  **Phase 7 Step 0** bumps the size limits:
+
+| Constant | Current | Phase 7 | Rationale |
+|---|---|---|---|
+| `TX-MAX-DATA` | 256 B | **8,192 B** (8 KB) | ITC is cell-sized (8 B/XT), not as dense as bytecode — source needs room |
+| `TX-BUF-SIZE` | 8,296 B | **16,232 B** | +7,936 B from data field growth |
+| `ST-MAX-ACCOUNTS` | 256 | **4,096** | Practical address space for contracts + users |
+| `_PST-LOG-MAX` | 1 MB | **4 MB** | Larger txs → larger blocks → more log space |
+
+This is a **layout-breaking change** to tx.f — all offsets after byte
+114 shift, and every module that allocates `TX-BUF-SIZE` buffers
+(mempool, gossip, rpc, node) must be retested.  We do this as Phase
+7's first step so the entire pipeline is retested once before the VM
+is built on top.
+
 ### Transaction Integration
 
-The `TX-SET-DATA` field (up to 256 bytes, expandable) carries:
-- **Deploy transactions:** contract source (Forth text)
+The `TX-SET-DATA` field (up to 8,192 bytes after the Phase 7 bump)
+carries:
+- **Deploy transactions:** contract source (Forth text), compiled
+  at block-processing time into an ITC image stored in the state
+  tree.  Source is not stored on-chain — only the compiled image.
 - **Call transactions:** target contract address + entry word name +
   arguments (CBOR-encoded)
 
 The block producer, when applying transactions in `BLK-FINALIZE`:
 1. Detects data-bearing txs (non-zero `TX-DATA-LEN`)
 2. Decodes the payload (deploy vs. call)
-3. Invokes `VM-DEPLOY` or `VM-CALL` in a sandbox
-4. Collects the execution trace via `VM-TRACE`
-5. Merges the VM trace with the value-transfer trace
-6. Feeds the combined trace to `CON-STARK-PROVE`
+3. **Deploy:** invokes `VM-DEPLOY` — compiles source in sandbox,
+   stores resulting ITC image in state tree at the contract address
+4. **Call:** loads the ITC image from state tree, invokes `VM-CALL`
+   — direct execution, no parsing
+5. Collects the execution trace via `VM-TRACE`
+6. Merges the VM trace with the value-transfer trace
+7. Feeds the combined trace to `CON-STARK-PROVE`
 
 ### Gas Model
 
-Simple per-word decrement — no variable-cost opcode table:
+Simple per-word decrement — no variable-cost opcode table.
+
+**Deploy transactions** pay gas for compilation *and* storage.
+**Call transactions** pay gas only for execution — no parsing overhead.
 
 | Operation | Gas cost | Rationale |
 |-----------|---------|----------|
@@ -1300,6 +1973,8 @@ Simple per-word decrement — no variable-cost opcode table:
 | `VM-VERIFY-ED25519` | 500 | Signature verification |
 | `VM-MERKLE-ROOT` | 100 | Tree recomputation |
 | Loop iteration (`LOOP` / `+LOOP`) | 1 | Prevents infinite loops |
+| **Deploy: compilation** | 2 per source word | Parsing + compile to ITC |
+| **Deploy: storage** | 1 per byte stored | ITC image persisted to state tree |
 
 Default gas limit per transaction: 10,000.  Configurable via
 `VM-GAS-LIMIT` variable.
@@ -1309,11 +1984,12 @@ Default gas limit per transaction: 10,000.  Configurable via
 | Item | Size | Notes |
 |------|-----:|-------|
 | Sandbox arena (default) | 4 KB | Per-contract isolated data space |
-| Sandbox dictionary | 2 KB | Compiled words within contract |
+| Sandbox dictionary / ITC | 4 KB | Loaded ITC image (deploy: scratch compile area) |
 | Return buffer | 256 B | Output data from contract |
 | Gas counter | 1 cell | 64-bit decrement counter |
 | Trace buffer | ~8 KB | 256 trace rows × 32 bytes |
-| **Per-invocation total** | ~14.3 KB | Freed on `VM-DESTROY` |
+| Whitelist XT table | ~512 B | ~64 entries × 8 bytes (index→XT mapping) |
+| **Per-invocation total** | ~16.8 KB | Freed on `VM-DESTROY` |
 
 ### STARK Integration
 
@@ -1496,15 +2172,20 @@ Guaranteed by construction:
 
 **M10 — Parser hardening (→ S12)**
 
+The source parser runs **only during deploy** — not on every call.
+This confines the entire S12 attack surface to deploy transactions.
+
 The sandbox compiler imposes limits on contract source:
 - Maximum token length: 64 characters (longer → parse fault)
 - Maximum nesting depth (control structures): 16 levels
-- Maximum source size: bounded by `TX-MAX-DATA` (currently 256 B,
-  expandable but always finite)
+- Maximum source size: bounded by `TX-MAX-DATA` (8,192 B after
+  Phase 7 bump — always finite)
 - Unterminated `S"` or `."` → parse fault at end of source
 - No `\` (backslash comments) or `(` (paren comments) that could
   mask malicious code in unexpected ways — comments are stripped
   before sandbox compilation
+- Deploy gas covers compilation cost — a complex source that takes
+  too many steps to compile exhausts gas and aborts
 
 #### Security Summary
 
@@ -1521,7 +2202,7 @@ The sandbox compiler imposes limits on contract source:
 | Stale memory | Arena zeroed on init | One `XMEM-ZERO` call |
 | Gas DoS | Proportional costs + stack bounds | Negligible |
 | Non-determinism | Eliminated by construction | Zero |
-| Parser attacks | Length/depth limits | Negligible |
+| Parser attacks | Deploy-only parsing + length/depth limits | Negligible |
 
 **Design principle:** the sandbox is a *whitelist interpreter*, not
 a blacklist filter.  It does not try to "remove dangerous words from
@@ -1529,6 +2210,141 @@ Forth" — it builds a **new, minimal interpreter** that only knows
 safe words.  The host interpreter is never invoked by contract code.
 This is the only tenable approach on a flat-address-space machine
 with no hardware memory protection.
+
+### Cross-Contract Call Performance
+
+Per-invocation arena setup is the most expensive recurring cost in
+a multi-contract system.  A naive implementation pays the full price
+on every cross-contract call: allocate arena, zero it, load contract
+code from the state tree, rebuild dictionary headers, set bounds
+registers, execute, tear down.  In a chatty call chain (e.g.,
+DEX → Token → Lending), this multiplies quickly.
+
+For comparison: an EVM `CALL` pushes a call frame and adjusts a
+memory pointer.  The callee's code is already cached.  Base cost is
+~2,600 gas — microseconds on modern hardware.  A naive Leviathan
+cross-contract call could be 10–100× heavier due to code reload
+and arena zeroing.
+
+Three optimizations reduce per-call overhead to the same order of
+magnitude as an EVM `CALL`:
+
+#### 7.A — Contract Code Cache
+
+The contract's compiled ITC image (or .m64 binary for Tier 1) is
+**read-only** — it never changes between calls within the same
+block.  There is no reason to reload it from the Merkle-backed
+state tree on every invocation.
+
+| Item | Description |
+|------|-------------|
+| Structure | LRU cache of recently-loaded contract images in XMEM |
+| Key | Contract address (32 bytes) |
+| Value | Pointer to loaded ITC/STC image + whitelist XT table |
+| Capacity | 8–16 contracts (configurable via `VM-CODE-CACHE-MAX`) |
+| Lifetime | Per-block — flushed at block boundary (state tree may have changed) |
+| Sharing | Safe — code segment is read-only, shared across invocations |
+| Eviction | LRU.  On miss: load from state tree, insert, evict oldest |
+
+The code cache means the second and subsequent calls to the same
+contract within a block skip the state tree lookup, CBOR decode,
+and dictionary rebuild entirely.  Only the data arena needs to be
+fresh.
+
+Additionally, because the manifest declares which contracts a given
+contract *can* call (static call graph), the node can **pre-warm**
+the cache when a contract is first invoked.  If DEX's manifest
+lists Token as a dependency, Token's image is loaded into the cache
+before DEX's first `VM-DELEGATECALL`.  EVM cannot do this — call
+targets are runtime-computed addresses.
+
+#### 7.B — Arena Pool
+
+Instead of allocating and freeing an XMEM region per invocation,
+pre-allocate a pool of arena slots at block start and reuse them
+round-robin.
+
+| Item | Description |
+|------|-------------|
+| Pool size | `VM-MAX-DEPTH` arenas (default 4 — matches max call depth) |
+| Slot size | `VM-ARENA-SIZE` (default 4 KB data + 2 KB dictionary, per Memory Budget) |
+| Allocation | At `BLK-FINALIZE` start: `VM-MAX-DEPTH` × slot size from XMEM, once |
+| Per-call cost | Assign next slot, reset watermark (see 7.C), swap bounds registers |
+| Teardown | Reset slot index.  No `XMEM-FREE` per call |
+| Block-level cleanup | Free entire pool at block end |
+
+This turns arena "allocation" into a pointer bump — O(1), a handful
+of cycles.  The pool also improves cache locality: the arenas are
+contiguous in XMEM, so the CPU (or emulator) doesn't chase scattered
+allocations.
+
+#### 7.C — Lazy Arena Zeroing
+
+Zeroing a 4 KB arena (512 stores) on every cross-contract call is
+wasteful when most contracts touch only a fraction of their arena.
+Instead, track a **high-water mark** per arena slot:
+
+```forth
+VARIABLE _VM-ARENA-HWM   \ highest address written in this invocation
+
+: VM-@  ( addr -- val )
+    DUP _vm-bounds-check            \ existing bounds check
+    DUP _VM-ARENA-HWM @ >= IF       \ above watermark?
+        DROP 0 EXIT                  \ never written → return 0
+    THEN
+    @ ;
+
+: VM-!  ( val addr -- )
+    DUP _vm-bounds-check            \ existing bounds check
+    DUP _VM-ARENA-HWM @ >= IF
+        DUP CELL+ _VM-ARENA-HWM !   \ advance watermark
+    THEN
+    ! ;
+```
+
+On invocation start, `_VM-ARENA-HWM` is set to the arena base.
+Reads above the watermark return zero (as if the memory were
+zeroed).  Writes advance the watermark.  The actual memory below
+the watermark from a previous invocation is overwritten naturally
+by the new contract's stores.
+
+| Scenario | Naive zero cost | Lazy zero cost |
+|----------|----------------|----------------|
+| Contract touches 64 bytes | 512 stores (4 KB) | 0 stores |
+| Contract touches 2 KB | 512 stores (4 KB) | 0 stores |
+| Contract touches full 4 KB | 512 stores (4 KB) | 0 stores |
+
+The security guarantee is identical: no contract ever reads another
+contract's residual data.  The cost shifts from a flat memset to
+one additional comparison per `VM-@`, which is already doing a
+bounds check anyway — the watermark check can be folded into the
+same branch.
+
+> **Note on M1 interaction:** The lazy zeroing watermark check
+> folds into the existing bounds check (M1).  The new `VM-@`
+> effectively checks `arena_base <= addr < min(arena_end, hwm)` for
+> real reads and returns 0 for `hwm <= addr < arena_end`.  One
+> branch, not two, when implemented as a single comparison against
+> the watermark (which is always ≤ arena_end).
+
+#### Combined Effect
+
+With all three optimizations, a cross-contract call (e.g., DEX
+calling Token for the second time in the same block) costs:
+
+| Step | Naive | Optimized |
+|------|-------|-----------|
+| Arena allocation | XMEM alloc (~50 cycles) | Bump pool index (~5 cycles) |
+| Arena zeroing | 512 stores (~4K cycles) | Reset watermark (~2 cycles) |
+| Code loading | State tree lookup + CBOR decode (~100K+ cycles) | Cache hit: pointer lookup (~10 cycles) |
+| Bounds register setup | 2 stores | 2 stores |
+| Per-access overhead | 1 bounds check | 1 bounds check (watermark folded in) |
+| Teardown | XMEM free (~20 cycles) | Reset pool slot (~2 cycles) |
+| **Total setup** | **~105K cycles** | **~20 cycles** |
+
+The 5,000× reduction means cross-contract calls stop being an
+architectural bottleneck and become comparable to EVM `CALL` overhead
+relative to actual contract execution cost.
 
 ### Testing
 
@@ -1554,15 +2370,167 @@ with no hardware memory protection.
 - **Cross-contract call:** A calls B via `VM-DELEGATECALL`, verify
   state consistency
 - **Roundtrip:** deploy (CBOR) → call → verify return data → prove
+- **ITC image correctness:** deploy contract, dump stored ITC,
+  verify it matches expected threaded code sequence
+- **ITC reload:** deploy → call once → restart sandbox → reload ITC
+  from state tree → call again → same result (deterministic)
 - **Parser hardening (S12):** submit source with 65-char token,
-  unterminated string, 17-deep nesting → parse faults
+  unterminated string, 17-deep nesting → parse faults (deploy only)
+- **Code cache hit:** deploy Token, call Token 4× in one block →
+  state tree lookup count = 1 (first call), cache hits = 3
+- **Code cache eviction:** deploy 20 contracts, call in round-robin
+  → LRU evictions occur, correctness preserved
+- **Code cache flush:** call Token in block N, mutate Token's code
+  in block N+1 → block N+1 loads fresh image (cache flushed at
+  block boundary)
+- **Arena pool reuse:** A calls B calls C (depth 3) → 3 pool slots
+  assigned, no XMEM alloc/free during call chain
+- **Lazy zero correctness:** contract reads address it never wrote →
+  returns 0.  Contract reads address after writing → returns written
+  value.  Second invocation in same pool slot reads address previous
+  contract wrote but new contract didn't → returns 0
+- **Manifest pre-warm:** DEX manifest lists Token → Token image
+  loaded into cache before DEX's first `VM-DELEGATECALL` to Token
+
+---
+
+## Phase 7.5 — Cross-Chain Verification
+
+**Location:** `akashic/net/xchain.f` + standard contract patterns
+**Prefix:** `XCH-`
+**Depends on:** Phase 7 (contract VM), Phase 6.5b (light client), stark.f, merkle.f
+**Estimated size:** ~150–250 lines (relay + verifier contract pattern)
+**Difficulty:** Medium
+**Status:** Not started
+
+Every Leviathan chain already has a STARK verifier and a Merkle
+verifier in its dictionary.  Phase 7.5 composes them into a
+cross-chain verification path: chain A can verify chain B's state
+transitions without trusting chain B's validators, without an
+intermediary hub, and without a bridge contract with a challenge
+window.
+
+This is peer verification, not hierarchical settlement.  Neither
+chain is "above" the other.  Neither chain's security depends on
+the other's liveness.
+
+### Why This Is Cheap
+
+On EVM chains, cross-L2 proof verification is prohibitively
+expensive: STARK verification costs millions of gas, contracts are
+capped at 24 KB, and there are no precompiles for FRI-based math.
+So cross-chain interaction routes through L1 as a hub.
+
+On Leviathan, the STARK verifier is a dictionary word that runs at
+native speed with deterministic cycle cost.  Every chain has it.
+If two chains use the same field (Baby Bear), same hash (SHA3), and
+same proof format, any chain can verify any other chain's proof as
+a normal computation.
+
+### Components
+
+**1. Proof relay (xchain.f, ~80–120 lines)**
+
+A relay mechanism for delivering chain B's block proofs to chain A.
+Two options, implement whichever lands first:
+
+- **Manual submission:** A transaction on chain A includes chain B's
+  block proof + Merkle inclusion proof as payload.  The contract
+  parses and verifies.  No new networking — someone submits the
+  bytes.
+
+- **Relay node:** A node that sits on both chains, listens for
+  finalized blocks on chain B, and submits proofs to chain A as
+  transactions.  Reuses existing gossip infrastructure with a
+  second peer table pointed at chain B's network.
+
+**2. Verifier contract pattern (~40–60 lines of Forth)**
+
+A standard contract (or approved word set) on chain A that:
+
+- Accepts a blob: chain B's STARK proof + a Merkle inclusion proof
+  for a specific account or state entry
+- Calls `STARK-VERIFY` on the block proof
+- Calls the Merkle verifier on the inclusion proof against the
+  state root committed in the proven block
+- Emits the verified result (account state, balance, nonce, etc.)
+
+This is composition of existing words, not new cryptography.  The
+verifier word and Merkle verifier are already in the dictionary.
+
+**3. AIR compatibility registry (~30 lines)**
+
+A configuration word or on-chain record that identifies which AIR
+version a foreign proof targets.  For chains running the same
+Leviathan software version, the AIR is identical and this is a
+no-op check.  For chains with different contract vocabularies, the
+registry records the mapping so the verifier knows what the proof
+means.
+
+### What This Enables
+
+- **Peer-to-peer chain composition:** Chain A verifies chain B's
+  state.  Chain B verifies chain A's state.  Symmetric.  No hub.
+- **Multi-chain mesh:** Chain C verifies both A and B.  The
+  topology is a mesh, not a tree.
+- **No stacked trust assumptions:** Each chain's proof proves its
+  own correctness against its own AIR.  Verifying a foreign proof
+  does not require trusting the foreign chain's validators.
+- **No compounding finality latency:** Verification is a
+  computation in the verifying chain's normal block execution.
+  Chain A's finality is chain A's business.
+- **No bridge in the EVM sense:** No "lock assets and wait for a
+  challenge window."  Verify the proof, verify the Merkle path,
+  act on the result.
+
+### Comparison to Existing Cross-Chain Models
+
+| Model | Trust basis | Latency | Hub required |
+|-------|-----------|---------|-------------|
+| EVM L2 → L1 → L2 | L1 as judge | 7+ days (optimistic) | Yes (L1) |
+| Cosmos IBC | Validator sigs (light client) | Minutes | No |
+| Leviathan cross-chain | STARK proof (math) | One block on verifying chain | No |
+
+IBC is the closest analog — peer-to-peer light client verification
+without a hub.  The difference: IBC verifies *consensus signatures*
+("the validators signed it").  Leviathan cross-chain verifies
+*execution proofs* ("this computation happened correctly").
+
+### Caveats
+
+- Cross-chain asset transfers (lock/mint/burn) require additional
+  contract logic beyond proof verification.  Phase 7.5 provides the
+  verification primitive; asset bridging is application-level.
+- "Same field, same hash, same proof format" is an assumption.  If
+  two chains diverge on proof parameters, the verifier word still
+  runs but the caller must know which AIR the proof targets.
+- StarkNet's Cairo can also verify STARK proofs natively.  This
+  capability is not unique in principle.  What's different is that
+  the verifier is a first-class dictionary word, not a contract
+  someone has to write, deploy, and pay gas for.
+
+### Testing
+
+- **Proof roundtrip:** Generate a block on chain B, extract STARK
+  proof + Merkle inclusion proof, submit to chain A's verifier
+  contract → verified TRUE
+- **Tampered proof:** Flip one bit in chain B's STARK proof →
+  verifier returns FALSE
+- **Tampered Merkle path:** Valid STARK proof but bogus inclusion
+  proof → verifier returns FALSE
+- **Wrong AIR version:** Proof from a chain with different contract
+  vocabulary → AIR registry check fails
+- **Relay latency:** Measure end-to-end time from chain B block
+  finalization to verified state on chain A
+- **Symmetric verification:** Chain A verifies B *and* B verifies
+  A in the same test run
 
 ---
 
 ## Phase 8 — ethereum/: Standard Blockchain Interop
 
 **Location:** `akashic/ethereum/`  (separate from `store/`)
-**Depends on:** Phases 1–7 complete (functional custom chain with smart contracts)
+**Depends on:** Phases 1–7.5 complete (functional custom chain with smart contracts + cross-chain)
 **Estimated size:** ~2,000–3,000 lines across 5+ modules
 **Difficulty:** Hard
 **Status:** Future — not started
@@ -1622,6 +2590,8 @@ alongside the custom chain for bridging.
 
 ## Dependency Graph
 
+> ⚠ **REVISED — includes new Phases 3b, 5b, 6.5a, 6.5b**
+
 ```
               ┌──────────┐     ┌──────────┐
               │  sha512  │     │   sha3   │
@@ -1642,6 +2612,14 @@ alongside the custom chain for bridging.
          │  sigs)  │  │          │
          └────┬────┘  └────┬─────┘
               │    Phase 2  │  Phase 3
+              │             │
+              │        ┌────▼──────────┐
+              │        │  smt.f +      │ ◄── Phase 3b (NEW)
+              │        │  state.f      │     Sparse Merkle Tree
+              │        │  (reworked,   │     + paged state
+              │        │   >256 accts) │     + decoupled STARK
+              │        └────┬──────────┘
+              │             │
               └──────┬──────┘
                      ▼
                ┌───────────┐
@@ -1659,9 +2637,12 @@ alongside the custom chain for bridging.
                       ┌──────┘
                       ▼
                [STARK overlay]
-               (optional, any
-                mode — endgame
-                = PoS+STARK)
+                     │
+               ┌─────▼────────┐
+               │ consensus.f  │ ◄── Phase 5b (NEW)
+               │  (hardened)  │     Genesis config,
+               │ (hardened)   │     anti-grinding,
+               └─────┬────────┘     CON-SEAL fix
                      │
      ┌───────────────┼────────────────┐
      ▼               ▼                ▼
@@ -1676,6 +2657,30 @@ alongside the custom chain for bridging.
     │  sync    │ │ persist │ │  node    │
     │  (6d)    │ │  (6e)   │ │  (6f)    │
     └──────────┘ └─────────┘ └──────────┘
+                     │
+          ┌──────────┼──────────┐
+          ▼                     ▼
+    ┌─────────────┐      ┌────────────┐
+    │  fileio.f + │      │  light.f   │ ◄── Phase 6.5 (NEW)
+    │  persist.f  │      │  (light    │     Real persistence
+    │ (rewritten) │      │   client   │     + Light client
+    │  (6.5a)     │      │   proto)   │
+    │  WAL-based  │      │  (6.5b)    │
+    └──────┬──────┘      └─────┬──────┘
+           └────────┬──────────┘
+                    ▼
+              ┌────────────┐
+              │ contract-  │ ◄── Phase 7
+              │    vm      │     (blocked until 3b+5b+6.5
+              │ (sandboxed │      are complete)
+              │  Forth)    │
+              └─────┬──────┘
+                    │
+              ┌─────▼────────┐
+              │  ethereum/   │ ◄── Phase 8
+              │  (interop)   │
+              └──────────────┘
+```
 
   Existing modules used throughout:
     sha3  merkle  cbor  dag-cbor  sort  datetime  json
@@ -1684,44 +2689,88 @@ alongside the custom chain for bridging.
   Quantum-safe path:  sha3 → sphincs-plus → tx (PQ mode) → block
   Classical path:     sha512 → ed25519 → tx (classical mode) → block
 
-               ┌────────────┐
-               │ contract-  │ ◄── Phase 7
-               │    vm      │
-               │ (sandboxed │
-               │  Forth)    │
-               └─────┬──────┘
-                     │  depends on:
-                     │  state, consensus,
-                     │  tx, stark-air, node
-                     ▼
-              ┌──────────────┐
-              │  ethereum/   │ ◄── Phase 8
-              │  (interop)   │
-              └──────────────┘
-```
-
 ---
 
 ## Implementation Order
 
-| Order | Module | Depends on (new) | Lines | Tests |
-|------:|--------|------------------|------:|------:|
-| 1 | ed25519.f | — | ~500 | ~30 |
-| 1b | sphincs-plus.f | sha3 | ~600 | ~25 |
-| 2 | tx.f | ed25519, sphincs-plus | ~200 | ~25 |
-| 3 | state.f | — | ~480 | ~43 |
-| 4 | block.f | tx, state | ~775 | ~52 |
-| 5 | consensus.f | block, state, stark, random | ~380 | ~35 |
-| 6a | mempool.f | tx, sort | ~100 | ~15 |
-| 6b | gossip.f | ws, cbor, tx, block | ~200 | ~15 |
-| 6c | rpc.f | server, router, json, mempool, state, block | ~150–200 | ~20 |
-| 6d | sync.f | gossip, block, state, consensus | ~100–150 | ~15 |
-| 6e | persist.f | state, block, cbor | ~80–100 | ~10 |
-| 6f | node.f | all Phase 6 modules + consensus | ~100–150 | ~10 |
-| 7 | contract-vm.f | state, consensus, tx, stark-air, node | ~400–600 | ~25 |
-| | **Subtotal (custom chain)** | | **~3,160–3,780** | **~240** |
-| 8 | ethereum/ (secp256k1, keccak, rlp, eth-tx, eth-abi, eth-rpc, eth-wallet) | Phases 1–7 complete | ~2,000–3,000 | ~100+ |
-| | **Grand total** | | **~5,160–6,780** | **~340+** |
+> ⚠ **REVISED — Production-First Ordering**
+>
+> The original plan treated Phase 7 (Forth VM) and Phase 8 (Ethereum
+> interop) as the finish line.  The revised plan inserts three new
+> foundation phases — **3b, 5b, 6.5** — that must land before any
+> smart-contract or interop work begins.  *Do not proceed to Phase 7
+> until the chain can persist state across restarts, survive reorgs
+> deeper than 1 block, and support >256 accounts.*
+
+| Order | Module | Depends on (new) | Lines | Tests | Status |
+|------:|--------|------------------|------:|------:|--------|
+| 1 | ed25519.f | — | ~500 | ~30 | ✅ done |
+| 1b | sphincs-plus.f | sha3 | ~600 | ~25 | ✅ done |
+| 2 | tx.f | ed25519, sphincs-plus | ~200 | ~25 | ✅ done |
+| 3 | state.f | — | ~480 | ~43 | ✅ done |
+| **3b** | **smt.f + state.f rework** | **state.f, merkle.f, sha3** | **~500** | **~40** | 🔴 NEW |
+| 4 | block.f | tx, state | ~775 | ~52 | ✅ done |
+| 5 | consensus.f | block, state, stark, random | ~380 | ~35 | ✅ done |
+| **5b** | **consensus.f harden** | **consensus.f, block.f** | **~250** | **~20** | 🔴 NEW |
+| 6a | mempool.f | tx, sort | ~100 | ~15 | ✅ done |
+| 6b | gossip.f | ws, cbor, tx, block | ~200 | ~15 | ✅ done |
+| 6c | rpc.f | server, router, json, mempool, state, block | ~150–200 | ~20 | ✅ done |
+| 6d | sync.f | gossip, block, state, consensus | ~100–150 | ~15 | ✅ done |
+| 6e | persist.f | state, block, cbor | ~80–100 | ~10 | ⚠ in-memory only |
+| 6f | node.f | all Phase 6 modules + consensus | ~100–150 | ~10 | ✅ done |
+| **6.5a** | **fileio.f + persist.f rewrite** | **state.f, block, cbor** | **~250** | **~15** | 🔴 NEW |
+| **6.5b** | **light.f** | **rpc.f, smt.f, sync.f** | **~150** | **~10** | 🔴 NEW |
+| 7 | contract-vm.f | state, consensus, tx, stark-air, node, persist | ~400–600 | ~25 | blocked |
+| **7.5** | **xchain.f** | **contract-vm, light.f, stark.f, merkle.f** | **~150–250** | **~15** | 🔴 NEW |
+| | **Subtotal (custom chain)** | | **~4,460–5,180** | **~355** | |
+| 8 | ethereum/ (secp256k1, keccak, rlp, eth-tx, eth-abi, eth-rpc, eth-wallet) | Phases 1–7.5 complete | ~2,000–3,000 | ~100+ | blocked |
+| | **Grand total** | | **~6,460–8,180** | **~455+** | |
+
+### Revised Critical Path
+
+```
+Ed25519 ──┐
+           ├── tx.f ──┐
+SPHINCS+ ──┘          │
+                      ├── block.f ──── consensus.f ──── consensus harden (5b)
+state.f ── smt.f (3b) ┘                                       │
+                                                               ▼
+mempool ─── gossip ─── rpc ─── sync ─── persist ─── node ─── 6.5a (fileio+persist)
+                                 │                                    │
+                                 └──────── 6.5b (light client) ──────┘
+                                                                      │
+                                                                      ▼
+                                                              7 (Forth VM)
+                                                                      │
+                                                                      ▼
+                                                           7.5 (Cross-chain)
+                                                                      │
+                                                                      ▼
+                                                              8 (Ethereum)
+```
+
+### What Changed
+
+- **Phase 3b (Scalable State)** removes the 256-account ceiling.  Every
+  downstream module (block, consensus, mempool, STARK) benefits.
+  Must land before Phase 7 because a Forth VM deploying contracts
+  will create accounts — potentially many.
+- **Phase 5b (Consensus Hardening)** fixes the runtime-variable mode
+  selector, PoS grinding, and CON-SEAL leak.  Must land before
+  Phase 6.5 because persistence + light-client assume consensus is
+  trustworthy.
+- **Phase 6.5a (Real Persistence)** replaces the XMEM stub.  Must
+  land before Phase 7 because smart-contract state must survive
+  restarts.
+- **Phase 6.5b (Light Client)** adds Merkle-proof RPC methods.
+  Must land before Phase 7.5 because cross-chain verification
+  depends on Merkle inclusion proofs.
+- **Phase 7.5 (Cross-Chain Verification)** composes the STARK
+  verifier and Merkle verifier into a peer-to-peer proof
+  verification path between Leviathan chains.  ~150–250 lines
+  of relay plumbing + standard verifier contract pattern.
+  Must land before Phase 8 because Ethereum interop is a
+  special case of cross-chain, not the other way around.
 
 Ed25519 first because it unblocks the classical signing path.
 SPHINCS+ can proceed in parallel (independent dependency: sha3 only).
@@ -1729,11 +2778,12 @@ tx.f waits for both signature modules.  state.f can proceed in
 parallel with everything after Phase 1.  block.f integrates tx +
 state.  consensus.f sits on top.  mempool.f is independent after tx.f.
 
-**Phases 1–5 = chain data structures.  Phase 6 = running node
-(mempool, gossip, RPC, sync, persistence, daemon).  Phase 7 adds
-smart contracts via sandboxed Forth VM.  Phases 1–7 = complete
-custom chain.**  Phase 8 adds Ethereum/standard blockchain interop
-as a separate library — it does not modify the custom chain modules.
+**Phases 1–5 = chain data structures.  Phase 3b + 5b = hardening
+the foundation.  Phase 6 = running node.  Phase 6.5 = production
+infrastructure (real I/O + light client).  Phase 7 = smart contracts
+via sandboxed Forth VM.  Phase 8 = Ethereum/standard blockchain
+interop.**  Do not proceed to Phase 7 until all prior phases are
+complete and tested.
 
 ---
 
@@ -1756,6 +2806,25 @@ as a separate library — it does not modify the custom chain modules.
 | **Total new (classical)** | **~248 KB** | Same as before |
 | **Total new (hybrid)** | **~4.3 MB** | Well within 16 MiB test env; production XMEM can be much larger |
 
+> ⚠ **REVISED — Phase 3b Memory Impact**
+>
+> The table above reflects the original 256-account flat-table design.
+> After Phase 3b (Sparse Merkle Tree + paged state), the memory budget
+> changes significantly:
+>
+> | Item (Phase 3b) | Size | Notes |
+> |-----------------|-----:|-------|
+> | SMT hot cache (4096 accts) | ~400 KB | 4096 × 104 bytes (72-byte entry + 32-byte hash) |
+> | SMT node pages (warm) | ~128 KB | Internal tree nodes, paged in/out |
+> | Page table metadata | ~16 KB | Page directory for disk-backed pages |
+> | WAL write buffer (6.5a) | ~64 KB | Ring buffer for write-ahead log |
+> | **Phase 3b+6.5a delta** | **~608 KB** | On top of existing budget |
+>
+> This brings total classical to ~856 KB, total hybrid to ~4.9 MB.
+> Still well within 16 MiB test environment, but the paging system in
+> Phase 3b must be designed to spill cold accounts to disk (via
+> Phase 6.5a fileio.f) when the hot set exceeds the budget.
+
 ### Gotchas (Megapad-64 / Forth)
 
 - `>R` / `R@` inside `DO..LOOP` — use `VARIABLE` (learned the hard way)
@@ -1768,6 +2837,36 @@ as a separate library — it does not modify the custom chain modules.
 - CBOR encoding must be deterministic (sorted map keys) for
   reproducible hashes — dag-cbor.f already enforces this.
 - Not re-entrant: one proof, one block build at a time.
+
+> ⚠ **REVISED — Additional Gotchas from Production Analysis**
+>
+> - **File I/O latency:** KDOS file I/O is synchronous. The WAL
+>   (Phase 6.5a) must batch writes to avoid blocking block production.
+>   Consider a "flush every N blocks" strategy rather than per-block.
+> - **No MMU / no process isolation:** The Forth VM (Phase 7) runs
+>   in the same address space as the node.  A malicious contract can
+>   overwrite node state.  Phase 7 *must* include bounds-checked
+>   memory access words (`VM-LOAD`, `VM-STORE`) that confine the
+>   contract to its own XMEM region.
+> - **Serialized consensus (not single-threaded):** KDOS provides
+>   up to 16 cores, 8 tasks/core, BIOS coroutines, `PAR-MAP`,
+>   channels, and structured concurrency.  The blockchain modules
+>   serialize through `WITH-GUARD` to preserve STARK determinism,
+>   but this is a *choice*, not a platform limit.  Concrete
+>   parallelism opportunities:
+>   - RPC serving on a BIOS background coroutine (`BG-POLL`)
+>   - Parallel tx signature verification via `PAR-MAP` across
+>     cores (requires per-core crypto scratch — ~32 KB each)
+>   - STARK proof generation on a background core while block
+>     N+1 is produced on the foreground
+>   - Gossip polling on a separate task via `WITH-BACKGROUND`
+>   These require per-core scratch buffers for crypto modules
+>   (tracked in the concurrency hardening roadmap) but no
+>   architectural changes.
+> - **Chain ID:** There is no chain ID anywhere in the protocol.
+>   tx.f should include a chain-id field in the signing payload to
+>   prevent cross-chain replay attacks.  Add in Phase 3b alongside
+>   the state model rework.
 
 ### What We Don't Need to Build
 
@@ -1785,6 +2884,11 @@ as a separate library — it does not modify the custom chain modules.
 | Sorting | sort.f |
 | Concurrent data structures | conc-map.f, channel.f |
 | Content addressing | dag-cbor.f + sha3.f |
+| JIT compilation | bios.asm (3-tier: inline, literal fold, bigram fusion) |
+| Binary image save/load + relocation | binimg.f (.m64 format — import manifest = capability gate for sandbox) |
+| Parallel combinators | par.f (PAR-MAP, PAR-DO, PAR-REDUCE) |
+| Structured concurrency | scope.f (TASK-GROUP, TG-SPAWN, TG-WAIT) |
+| Multi-core dispatch | KDOS §8 (CORE-RUN, BARRIER, work stealing, IPI) |
 
 ---
 

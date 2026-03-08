@@ -1,7 +1,8 @@
 # akashic-persist — Chain Persistence for KDOS / Megapad-64
 
-Append-only block log in extended memory (XMEM) with state snapshot
-support.  On restart, replay saved blocks to rebuild chain state.
+Disk-backed persistence using KDOS file I/O primitives.  Block log and
+state snapshots are stored in two files on the MP64FS filesystem:
+`chain.dat` (append-only block log) and `state.snap` (periodic snapshot).
 
 ```forth
 REQUIRE persist.f
@@ -15,13 +16,15 @@ REQUIRE persist.f
 ## Table of Contents
 
 - [Design Principles](#design-principles)
-- [Block Log Format](#block-log-format)
+- [Disk Layout](#disk-layout)
 - [Initialization](#initialization)
 - [Saving Blocks](#saving-blocks)
 - [Loading Blocks](#loading-blocks)
 - [State Snapshots](#state-snapshots)
 - [Queries](#queries)
+- [Shutdown](#shutdown)
 - [Concurrency](#concurrency)
+- [KDOS Constraints](#kdos-constraints)
 - [Quick Reference](#quick-reference)
 
 ---
@@ -31,16 +34,19 @@ REQUIRE persist.f
 | Principle | Detail |
 |---|---|
 | **Append-only** | Block log grows monotonically — no in-place edits |
-| **XMEM-backed** | 1 MB region in extended memory (16 MB address space) |
-| **Length-prefixed** | Each log entry: `[cell: cbor_len][cbor_len bytes]` |
+| **Disk-backed** | Two files on MP64FS: `chain.dat`, `state.snap` |
+| **Length-prefixed** | Each log entry: `[8B cbor_len][cbor_len bytes]` |
 | **Linear scan** | `PST-LOAD-BLOCK` walks entries sequentially — acceptable for small chains |
-| **Guard-wrapped** | `PST-INIT`, `PST-SAVE-BLOCK`, `PST-LOAD-BLOCK`, `PST-CLEAR` serialized |
+| **Auto-create** | `PST-INIT` creates files via MKFILE if they don't exist |
+| **Guard-wrapped** | All public words serialized via `WITH-GUARD` |
 
 ---
 
-## Block Log Format
+## Disk Layout
 
-The block log is a contiguous region in XMEM:
+### chain.dat  (~512 KB, 1024 sectors)
+
+Append-only block log. Each entry is length-prefixed:
 
 ```
 Offset  Content
@@ -52,8 +58,16 @@ Offset  Content
   ...
 ```
 
-Each entry is 8 + `cbor_len` bytes.  The write cursor (`_PST-LOG-POS`)
-tracks the next available offset.
+A length of 0 or a short read marks end-of-data.
+
+### state.snap  (~20 KB, 40 sectors)
+
+Periodic state snapshot. Fixed layout:
+
+```
+[ST-SNAPSHOT-SIZE bytes]  — account table + count
+[8 bytes]                 — chain height at snapshot time
+```
 
 ---
 
@@ -62,11 +76,15 @@ tracks the next available offset.
 ### PST-INIT
 
 ```forth
-PST-INIT  ( -- )
+PST-INIT  ( -- flag )
 ```
 
-Allocate a 1 MB region in XMEM for the block log.  Reset write
-position and block count to 0.
+Open (or create) `chain.dat` and `state.snap` on disk.  Walks
+the existing chain log to count saved blocks.  Returns `-1` on
+success, `0` if the filesystem couldn't be loaded or file I/O failed.
+
+Calls `FS-ENSURE` internally — the filesystem is loaded from disk
+automatically if not already mounted.
 
 ---
 
@@ -78,9 +96,12 @@ position and block count to 0.
 PST-SAVE-BLOCK  ( blk -- flag )
 ```
 
-Encode the block via `BLK-ENCODE`, then append the length-prefixed
-entry to the log.  Returns `-1` on success, `0` if the block couldn't
-be encoded or the log is full.
+Encode the block via `BLK-ENCODE` into an internal 16 KB scratch
+buffer, seek to end of `chain.dat`, then write the 8-byte length
+prefix followed by the CBOR data.  Flushes immediately.
+
+Returns `-1` on success, `0` if `PST-INIT` hasn't been called or
+the block couldn't be encoded.
 
 ---
 
@@ -92,9 +113,12 @@ be encoded or the log is full.
 PST-LOAD-BLOCK  ( idx blk -- flag )
 ```
 
-Walk the log to entry *idx*, decode the CBOR data into *blk* via
-`BLK-DECODE`.  Returns `-1` on success, `0` if the index is out of
-range or decoding fails.
+Rewind `chain.dat`, walk to entry *idx* by reading and skipping
+each preceding entry's 8-byte length + data.  Read the target entry
+and decode via `BLK-DECODE`.
+
+Returns `-1` on success, `0` if the index is out of range, `PST-INIT`
+hasn't been called, or decoding fails.
 
 ---
 
@@ -103,25 +127,22 @@ range or decoding fails.
 ### PST-SAVE-STATE
 
 ```forth
-PST-SAVE-STATE  ( dst -- )
+PST-SAVE-STATE  ( -- flag )
 ```
 
-Copy the full state snapshot (`ST-SNAPSHOT`) plus the chain height
-into a caller-supplied buffer.  Layout:
-
-```
-[ST-SNAPSHOT-SIZE bytes]  [8-byte chain height]
-```
-
-Total size: `ST-SNAPSHOT-SIZE + 8` bytes.
+Snapshot the full state tree (`ST-SNAPSHOT`) into the internal
+scratch buffer, then write it plus the 8-byte chain height to
+`state.snap`.  Flushes immediately.  Returns `-1` on success.
 
 ### PST-LOAD-STATE
 
 ```forth
-PST-LOAD-STATE  ( src -- )
+PST-LOAD-STATE  ( -- flag )
 ```
 
-Restore state from a buffer previously written by `PST-SAVE-STATE`.
+Read `state.snap` into the internal scratch buffer, restore via
+`ST-RESTORE`.  Returns `-1` on success, `0` if the file is empty
+or a short read occurs.
 
 ---
 
@@ -133,7 +154,8 @@ Restore state from a buffer previously written by `PST-SAVE-STATE`.
 PST-BLOCK-COUNT  ( -- n )
 ```
 
-Number of blocks currently in the log.
+Number of blocks currently in the log.  Computed once at `PST-INIT`
+and incremented by each `PST-SAVE-BLOCK`.
 
 ### PST-CLEAR
 
@@ -141,14 +163,42 @@ Number of blocks currently in the log.
 PST-CLEAR  ( -- )
 ```
 
-Reset the log — discard all saved blocks.  Does not free XMEM.
+Rewind `chain.dat` and write a zero-length marker at offset 0.
+Resets block count to 0.  The file itself is not deleted.
+
+---
+
+## Shutdown
+
+### PST-CLOSE
+
+```forth
+PST-CLOSE  ( -- )
+```
+
+Flush and close both file descriptors (`chain.dat` and `state.snap`).
+Resets internal state.  A subsequent `PST-INIT` will reopen the
+files and re-scan the block log.
 
 ---
 
 ## Concurrency
 
-`PST-INIT`, `PST-SAVE-BLOCK`, `PST-LOAD-BLOCK`, and `PST-CLEAR` are
-wrapped with `_pst-guard` via `WITH-GUARD`.
+All seven public words are wrapped with `_pst-guard` via `WITH-GUARD`:
+`PST-INIT`, `PST-SAVE-BLOCK`, `PST-LOAD-BLOCK`, `PST-CLEAR`,
+`PST-SAVE-STATE`, `PST-LOAD-STATE`, `PST-CLOSE`.
+
+---
+
+## KDOS Constraints
+
+| Constraint | Impact |
+|---|---|
+| MP64FS contiguous allocation | Files pre-allocated at fixed sector counts (1024 chain, 40 state) |
+| Files cannot be resized | Over-allocate at creation; `chain.dat` caps at ~512 KB |
+| FD pool is 16 slots | persist uses at most 2; 14 remain for application use |
+| FREAD/FWRITE use DMA | All I/O goes through the 16 KB `_PST-BUF` scratch buffer |
+| OPEN/MKFILE parse from input | Handled via `S" OPEN chain.dat" EVALUATE` |
 
 ---
 
@@ -156,10 +206,11 @@ wrapped with `_pst-guard` via `WITH-GUARD`.
 
 | Word | Stack Effect | Description |
 |---|---|---|
-| `PST-INIT` | `( -- )` | Allocate XMEM, reset log |
-| `PST-SAVE-BLOCK` | `( blk -- flag )` | Encode + append block |
-| `PST-LOAD-BLOCK` | `( idx blk -- flag )` | Decode block N from log |
+| `PST-INIT` | `( -- flag )` | Open/create files, count existing blocks |
+| `PST-SAVE-BLOCK` | `( blk -- flag )` | Encode + append to chain.dat |
+| `PST-LOAD-BLOCK` | `( idx blk -- flag )` | Decode block N from chain.dat |
 | `PST-BLOCK-COUNT` | `( -- n )` | Number of saved blocks |
-| `PST-CLEAR` | `( -- )` | Discard all blocks |
-| `PST-SAVE-STATE` | `( dst -- )` | Snapshot state + height |
-| `PST-LOAD-STATE` | `( src -- )` | Restore state + height |
+| `PST-CLEAR` | `( -- )` | Reset log (write zero marker) |
+| `PST-SAVE-STATE` | `( -- flag )` | Snapshot state to state.snap |
+| `PST-LOAD-STATE` | `( -- flag )` | Restore state from state.snap |
+| `PST-CLOSE` | `( -- )` | Flush + close all files |

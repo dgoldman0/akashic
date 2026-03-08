@@ -565,6 +565,9 @@ CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
 \
 \    Strategy: read the ENTIRE file in one FREAD (avoids the sector-
 \    aligned cursor issue where FREAD advances by whole sectors).
+\    NOTE: megapad c574899 fixes FREAD/FWRITE return-stack corruption
+\    in FR-HEAD/FW-HEAD.  With that fix, byte-level reads should work
+\    correctly.  The one-big-read strategy still works and is simpler.
 \    The file lands at HERE.  The segment lives at HERE+64.
 \    We ALLOT header+segment to make it permanent, then use the
 \    reloc data still sitting past the ALLOT (scratch at new HERE).
