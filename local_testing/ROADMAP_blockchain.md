@@ -51,9 +51,9 @@ chain.
 
 | Issue | Root cause | Impact | Fix category |
 |-------|-----------|--------|-------------|
-| **256-account ceiling** | Account count = Merkle leaf count = STARK trace width.  Load-bearing architectural coupling. | Cannot run a public chain or even a mid-size consortium. | **Redesign** — decouple state size from proof geometry |
-| **"Persistence" is an in-memory append buffer** | `persist.f` uses XMEM, not file I/O.  1 MB cap ≈ 9 classical blocks. | Power cycle = total data loss.  Not persistence. | **New module** — real disk I/O layer |
-| **No light client protocol** | No Merkle-proof-of-inclusion RPC responses.  Every participant must be a full node. | Cannot serve mobile wallets, browser dApps, or bandwidth-constrained nodes. | **New protocol + RPC methods** |
+| ~~**256-account ceiling**~~ | ✅ **Resolved by Phase 3b.** Paged state + SMT decouple account count from proof geometry. `_ST-MAX-PAGES` is an emulator testing value (16); production scales to 256+ pages (65K+ accounts). | — | Done |
+| ~~**"Persistence" is an in-memory append buffer**~~ | ✅ **Resolved by Phase 6.5a.** `persist.f` rewritten with real KDOS file I/O (`OPEN`, `FREAD`, `FWRITE`, `FFLUSH`). `chain.dat` (append-only block log) + `state.snap` (periodic snapshots). | — | Done |
+| ~~**No light client protocol**~~ | ✅ **Resolved.** `light.f` (160 lines) provides `LC-STATE-PROOF`, `LC-STATE-LEAF`, `LC-VERIFY-STATE`.  Four new RPC methods (`chain_getProof`, `chain_getBlockProof`, `chain_getStateRoot`, `chain_verifyProof`) are wired in `rpc.f`.  19/19 tests passing. | — | Done — see Phase 6.5b |
 | **Consensus mode is a runtime `VARIABLE`** | Nothing in the protocol enforces node agreement on consensus mode. | Misconfiguration is silent — nodes produce incompatible blocks. | **Genesis-block config** — bake mode into chain ID / genesis |
 | **PoS leader grinding** | Seed = `SHA3(prev_hash \|\| height)`.  Block producer influences next seed via tx selection. | Validators can bias leader election. | **Commit-reveal or VDF** |
 | **No deep reorg support** | Max 1-block reorg.  64-block header ring = no deep history. | PoW with network partitions trivially forks deeper than 1. | **Acceptable for PoA/PoS** — but PoW mode should warn or be removed |
@@ -61,16 +61,17 @@ chain.
 | **SPHINCS+ bandwidth explosion** | 7,856 B/sig × 256 txs = 2.1 MB/block.  A thousand hybrid blocks = 2 GB. | Impractical for high-throughput or bandwidth-constrained networks. | **Accept** — hybrid mode is opt-in.  Default to Ed25519-only. |
 | **Software sandbox on flat address space** | No MMU, no process isolation.  One bounds-check bug = full compromise. | Adversarial public contracts are high-risk. | **Two-tier approach**: (1) capability-based isolation via .m64 import whitelisting + bounds-checked memory (trusted consortium deployers), (2) full shadow-dictionary ITC interpreter for adversarial deployments.  Extensive fuzzing either way. |
 | **256-tx-per-block cap is proof-geometric** | Tied to STARK trace width, not a tunable parameter. | Can't increase per-block throughput without redesigning the proof system. | **Mitigate** — throughput = txs/block × blocks/time.  Shorten block time (PoA is near-instant), parallelize tx validation via `PAR-MAP`, pipeline proof generation (prove block N on background core while producing N+1), batch STARK proofs every K blocks.  Realistic target: hundreds of TPS. |
+| **PoSA (Mode 3) not implemented** | Planned production consensus mode (authorized set + stake weight) is absent from consensus.f.  Only modes 0–2 (PoW/PoA/PoS) exist. | Cannot deploy in the intended production configuration. | **Implement** — add Mode 3 to consensus.f as part of Phase 5b.  ~120 lines. |
 
 ### Revised strategy
 
 **Do not proceed to Phase 7 (Forth VM) or Phase 8 (Ethereum interop)
 until the foundation is production-grade.**  The new priority order:
 
-1. **Phase 6.5 — Real persistence** (file I/O, crash recovery)
-2. **Phase 3b — Scalable state** (decouple accounts from trace width)
-3. **Phase 5b — Consensus hardening** (genesis config, anti-grinding)
-4. **Phase 6.5b — Light client protocol** (Merkle proof RPC)
+1. ~~**Phase 6.5a — Real persistence** (file I/O, crash recovery)~~ ✅ **Done** (commit 3f9ca41)
+2. ~~**Phase 3b — Scalable state** (decouple accounts from trace width)~~ ✅ **Done** (commits 35a8e8c, b9e1c97, d713801)
+3. **Phase 5b — Consensus hardening** (genesis config, anti-grinding, **PoSA mode**) ← **NEXT**
+4. ~~**Phase 6.5b — Light client protocol** (Merkle proof RPC)~~ ✅ **Done** (commit bcdaf21)
 5. *Then* Phase 7 (Forth VM) and Phase 8 (Ethereum interop)
 
 These are detailed inline below as `⚠ REVISED` blocks.
@@ -192,12 +193,13 @@ roughly a third of that.  Phase 8 (Ethereum interop) adds another
 >
 > | Gap (new) | Impact | Complexity |
 > |-----------|--------|------------|
-> | No real disk I/O | "Persistence" is in-memory.  Node restart = data loss. | Medium (~200–300 lines) |
+> | ~~No real disk I/O~~ | ✅ **Resolved by Phase 6.5a.** `persist.f` rewrite (commit 3f9ca41) adds sector-based file I/O via KDOS words.  Crash recovery with journal replay. | Done |
+> | **No PoSA consensus mode** | **Production deployment plans require Proof-of-Staked-Authority (Mode 3).** `consensus.f` only implements PoW (0), PoA (1), PoS (2).  PoSA — the hybrid that combines staked validators with authority rotation — is not yet coded. | Medium-High (~200–300 lines) |
 > | ~~Account cap = STARK trace width~~ | ✅ **Resolved by Phase 3b.** Paged state + SMT decouple account count from proof geometry. `_ST-MAX-PAGES` is a single constant (16 for emulator testing, crank up for production). | Done |
-> | No light client protocol | Every participant must run a full node. | Medium (~200 lines + RPC) |
+> | ~~No light client protocol~~ | ✅ **Resolved by Phase 6.5b.** `light.f` + `rpc.f` extensions deliver SMT proof generation/verification and four new RPC methods.  Light clients can verify account state against the state root without running a full node. | Done |
 > | No genesis-block config | Consensus mode is a runtime variable, not protocol-enforced. | Easy (~50 lines) |
 > | No anti-grinding for PoS | Leader election seed is manipulable by block producer. | Medium (~100 lines) |
-> | Persist log cap: 1 MB ≈ 9 blocks | Chain can’t store meaningful history. | Easy (constant bump + real I/O) |
+> | ~~Persist log cap~~ | ✅ **Resolved by Phase 6.5a.** Sector-based persistence replaced the fixed in-memory append buffer.  Capacity scales with available storage. | Done |
 >
 > These need to be addressed *before* Phase 7 (Forth VM).
 
@@ -211,9 +213,9 @@ roughly a third of that.  Phase 8 (Ethereum interop) adds another
 | **Serialization** | CBOR everywhere — transactions, blocks, state entries.  DAG-CBOR for content addressing |
 | **Hashing** | SHA3-256 for all chain hashing (block hash, address, Merkle).  Consistent with STARK internals |
 | **Proof system** | STARK validity proofs optional per block — prover can attach proof that all state transitions are valid |
-| **State model** | Account-based (not UTXO) — simpler for a 256-entry world, maps cleanly to a Merkle tree |
+| **State model** | Account-based (not UTXO) — paged state tree (Phase 3b) with SMT, scales to arbitrary account counts.  `_ST-MAX-PAGES` is an emulator testing constant; production cranks it up. |
 | **Block size** | 256 transactions max per block — matches STARK trace size for provability |
-| **Consensus** | Pluggable — three leader-election modes (PoW, PoA, PoS) × orthogonal STARK validity overlay flag.  PoW for bootstrap/dev, PoA for consortium, PoS for production.  Any mode can optionally attach STARK proofs; PoS+STARK is the production endgame. |
+| **Consensus** | Pluggable — four leader-election modes: PoW (0), PoA (1), PoS (2), **PoSA (3, planned)** × orthogonal STARK validity overlay flag.  PoW for bootstrap/dev, PoA for consortium, PoS for staked networks, PoSA for production.  Any mode can optionally attach STARK proofs; PoSA+STARK is the production endgame. |
 | **Not re-entrant** | Same as all Akashic modules — serialized per guard for STARK determinism, but parallelizable for I/O and tx validation via KDOS multi-core |
 | **No floating point** | All values are integers (Baby Bear field elements or 64-bit) |
 | **Post-quantum ready** | SPHINCS+ (hash-based, FIPS 205) uses only SHA3/SHAKE — leverages the existing hardware accelerator.  No new algebraic structures needed. |
@@ -644,9 +646,9 @@ not encoded in CBOR — wire size stays compact (~410 bytes).
 
 **Prefix:** `ST-`
 **Depends on:** merkle.f, sha3.f, tx.f, fmt.f
-**Size:** ~290 lines
+**Size:** ~640 lines (after Phase 3b rewrite)
 **Difficulty:** Medium
-**Status:** ✅ Implemented + tested (43 tests)
+**Status:** ✅ Implemented + tested; rewritten in Phase 3b (paged state + SMT)
 
 ### State Model
 
@@ -735,11 +737,11 @@ precedes it.
 **Location:** `akashic/store/state.f` (rewrite) + `akashic/store/smt.f` (new) + `akashic/store/witness.f` (new)
 **Prefix:** `ST-` (same public API, new internals) / `SMT-` / `WIT-`
 **Depends on:** sha3.f, merkle.f, tx.f
-**Estimated size:** ~400–500 lines (smt.f) + ~100 lines (state.f delta) + ~310 lines (witness.f)
+**Actual size:** smt.f = 717 lines, state.f = 640 lines, witness.f = 467 lines
 **Difficulty:** Hard
-**Status:** ✅ Complete — smt.f (27 tests), state.f paged rewrite (44 tests), witness.f (32 tests). 121 total tests.
+**Status:** ✅ Complete — smt.f (25 tests), state.f (14 + 21 state_tree tests), witness.f (22 tests).
 **Priority:** **Critical** — must precede Phase 7
-**Commits:** smt.f (c84e8ac), state.f (b9e1c97), witness.f (d713801)
+**Commits:** smt.f (35a8e8c), state.f (b9e1c97), witness.f (d713801)
 
 ### Problem
 
@@ -930,19 +932,20 @@ All concurrency-sensitive words wrapped with `GUARD`/`WITH-GUARD`.
 
 **Prefix:** `CON-`
 **Depends on:** block.f, state.f, stark.f (optional), ed25519.f, random.f
-**Estimated size:** ~380 lines
+**Actual size:** 677 lines
 **Difficulty:** Medium
+**Status:** ✅ Implemented (modes 0–2); **Mode 3 (PoSA) planned for Phase 5b**
 
-### Three Leader-Election Modes + STARK Overlay
+### Four Leader-Election Modes + STARK Overlay
 
 The consensus module separates two orthogonal concerns:
 
 1. **Leader election** — who produces the next block.  Selected by
-   `CON-MODE` (0=PoW, 1=PoA, 2=PoS).
+   `CON-MODE` (0=PoW, 1=PoA, 2=PoS, 3=PoSA — **Mode 3 not yet implemented**).
 2. **Validity proving** — whether the block carries a STARK proof.
    Toggled by `CON-STARK?` (boolean flag, independent of mode).
 
-This gives 6 combinations (3 modes × STARK on/off).  All share the
+This gives 8 combinations (4 modes × STARK on/off).  All share the
 same `CON-SEAL` / `CON-CHECK` interface.
 
 #### 5.1 Proof of Work
@@ -999,7 +1002,7 @@ validity flag).
 
 **Not a standalone mode:** STARK proves *what* is in the block, but
 does not decide *who* produces it.  It always pairs with one of the
-three leader-election modes (PoW, PoA, or PoS).
+three leader-election modes (PoW, PoA, PoS) — or PoSA once Mode 3 is implemented.
 
 #### 5.3 Proof of Authority
 
@@ -1083,13 +1086,15 @@ Two new transaction types (encoded in `TX-SET-DATA`):
 ~200 lines.  Depends on: state.f (validator fields), random.f
 (deterministic leader selection), ed25519.f (block signing).
 
-#### 5.5 Production Endgame: PoS + STARK
+#### 5.5 Production Endgame: PoSA + STARK
 
-The recommended production configuration: `CON-MODE=2` (PoS) +
-`CON-STARK?=TRUE`.  This is what the cutting edge (Starknet, zkSync)
-is converging on:
+The planned production configuration: `CON-MODE=3` (PoSA) +
+`CON-STARK?=TRUE`.  PoSA combines an authorized validator set with
+stake weighting — giving the trust assumptions of PoA with the
+economic incentives of PoS.  Adding STARK brings mathematical
+validity proofs on top:
 
-- **PoS decides who** produces the block (leader election by stake)
+- **PoSA decides who** produces the block (authorized + stake-weighted leader election)
 - **STARK proves the block is valid** (no re-execution by validators)
 
 Validators don't re-run 256 transactions.  They verify:
@@ -1129,7 +1134,7 @@ STARK overlay adds ~60 lines of shared glue regardless of mode.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `CON-MODE` | variable | 0=PoW, 1=PoA, 2=PoS, 3=PoSA |
+| `CON-MODE` | `CON-MODE@` / `CON-MODE!` | 0=PoW, 1=PoA, 2=PoS, 3=PoSA (**Mode 3 not yet implemented**) |
 | `CON-STARK?` | variable | TRUE = attach STARK validity proof to blocks (any mode) |
 | `CON-SEAL` | `( blk -- )` | Apply leader election + optional STARK proof |
 | `CON-CHECK` | `( blk -- flag )` | Verify leader election + STARK proof (if present) |
@@ -1159,11 +1164,11 @@ STARK overlay adds ~60 lines of shared glue regardless of mode.
 >    *parent's parent* hash (2-block lookback), not the current
 >    parent.  See Phase 5b.
 >
-> 4. **PoS validator set shares the 256-account table with users.**
->    A 100-validator network leaves 156 user accounts.  This is
->    downstream of the account ceiling (Phase 3b), but also
->    means the validator set should probably be a *separate*
->    data structure, not overloaded onto account entries.
+> 4. ~~**PoS validator set shares the 256-account table with users.**~~
+>    ✅ Partially resolved by Phase 3b — account count is no longer
+>    capped at 256.  However, the validator set may still benefit
+>    from being a *separate* data structure rather than overloaded
+>    onto account entries (performance optimization, not a blocker).
 >
 > 5. **`VM-VERIFY-SPHINCS` is missing from the contract whitelist.**
 >    SPHINCS+ verify at 50M steps would consume 5× the default
@@ -1278,11 +1283,36 @@ networks.  Either:
 Recommendation: the latter.  PoW on a small network of identical
 hardware provides no meaningful Sybil resistance anyway.
 
+### 5b.5 PoSA Mode (Mode 3) — Production Consensus
+
+**This is the planned production mode.**  PoSA (Proof-of-Staked-Authority)
+combines an authorized validator set (like PoA) with stake weighting
+(like PoS).  Validators must both be in the authorized set *and* stake
+tokens, preventing participation without skin in the game.
+
+Key design points:
+- Authority set stored in genesis config (`"authorities"` key)
+- Each authority must also have a stake above `min_stake`
+- Leader rotation: round-robin among staked authorities, weighted
+  by stake for tie-breaking / priority
+- Slashing: double-sign → slash stake (reuse PoS slashing logic)
+- Epoch transitions: authority set + stakes re-evaluated per epoch
+
+Estimated ~120 lines on top of existing PoA + PoS infrastructure.
+Reuses `CON-POA-AUTH*` for the authority list and `CON-POS-STAKE*`
+for stake queries.  New words:
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `CON-POSA-CHECK` | `( blk -- flag )` | Verify: in authority set AND staked |
+| `CON-POSA-ELECT` | `( height -- pubkey )` | Stake-weighted round-robin leader |
+| `CON-POSA-SIGN` | `( blk priv pub -- )` | Produce PoSA seal |
+
 ---
 
 ## Phase 6 — Node Infrastructure
 
-**Location:** `akashic/store/` (mempool, persistence) + `akashic/net/` (gossip, RPC)
+**Location:** `akashic/store/` (mempool, persistence) + `akashic/web/` (gossip, RPC) + `akashic/net/` (sync)
 **Depends on:** tx.f, block.f, consensus.f, state.f, web/ modules
 **Estimated size:** ~600–800 lines across 5 modules
 **Difficulty:** Medium
@@ -1416,8 +1446,8 @@ needs to catch up.
 
 #### Strategy
 
-For a 256-account chain with small state, a simple sequential sync
-is sufficient:
+For a chain with modest state (especially during early deployment),
+a simple sequential sync is sufficient:
 
 1. **Handshake:** on `GSP-CONNECT`, exchange `STATUS` messages
    (head hash + height)
@@ -1460,24 +1490,23 @@ alternate block's transactions against the parent state.
 >   and label it "local testing only," or (b) implement a
 >   longest-chain rule with configurable reorg depth.
 >
-> - **No light client protocol.**  The RPC interface has
->   `chain_getBalance` but returns a bare `u64` — no Merkle
->   proof.  A client must trust the RPC server or run a full
->   node.  The STARK overlay *could* enable trust-minimized
->   light clients (verify proof + state root, check a single
->   account inclusion), but the protocol for this doesn’t exist.
+> - ~~**No light client protocol.**~~  ✅ **Resolved by Phase 6.5b.**
+>   `light.f` + `rpc.f` extensions deliver proof-based light client support.
 >
-> - **No Merkle proof-of-inclusion RPC.**  Standard blockchains
->   serve `eth_getProof` (Ethereum) or SPV proofs (Bitcoin).
->   We need `chain_getProof ( address -- balance nonce proof )`
->   returning the Merkle path from the account leaf to the
->   state root.  See Phase 6.5b.
+> - ~~**No Merkle proof-of-inclusion RPC.**~~  ✅ **Resolved by Phase 6.5b.**
+>   `chain_getProof`, `chain_getBlockProof`, `chain_getStateRoot`,
+>   `chain_verifyProof` all implemented and tested.
 
-### 6e — persist.f: Chain Persistence
+### 6e — persist.f: Chain Persistence *(superseded by Phase 6.5a)*
 
 **Prefix:** `PST-`
 **Depends on:** state.f, block.f, cbor.f
-**Estimated size:** ~80–100 lines
+**Original estimated size:** ~80–100 lines
+**Status:** ~~Superseded~~ — Phase 6.5a (commit 3f9ca41) rewrote persist.f with real KDOS file I/O (284 lines, 9 tests).
+
+> The original 6e design described below was an in-memory append buffer.
+> It has been completely replaced by Phase 6.5a's sector-based persistence.
+> This section is retained for historical reference.
 
 The chain state must survive node restarts.
 
@@ -1513,23 +1542,12 @@ blocks in classical mode total ~100 MB.  Hybrid mode (SPHINCS+
 signatures) grows to ~2 GB for 1000 blocks — still manageable
 on any storage device.
 
-> **⚠ REVISED — persist.f is not persistence.  It’s an in-memory
-> append buffer.**
+> ~~**⚠ REVISED — persist.f is not persistence.  It’s an in-memory**~~
 >
-> The *roadmap* describes `chain.dat` / `state.snap` files.  The
-> *implementation* (`persist.f`) uses `XMEM-ALLOT` with a 1 MB
-> cap.  There is no file I/O.  A power cycle loses everything.
->
-> At ~105 KB per classical block, the 1 MB log holds **~9 blocks**
-> before it’s full.  The Phase 7 bump to 4 MB buys ~36 blocks.
-> Neither constitutes a usable chain history.
->
-> The roadmap’s file sizes ("1000 blocks = 100 MB") assume a
-> filesystem that doesn’t exist yet.
->
-> **This is the #1 priority fix.**  See Phase 6.5 below for the
-> real persistence layer: file I/O words, WAL (write-ahead log),
-> and crash recovery.
+> ✅ **Resolved by Phase 6.5a** (commit 3f9ca41).  `persist.f` was
+> rewritten with sector-based file I/O via KDOS words.  Chain data
+> and state snapshots persist to disk.  Crash recovery via journal
+> replay.  The 1 MB cap and XMEM-only storage are gone.
 
 ### 6f — node.f: Node Daemon
 
@@ -1593,7 +1611,7 @@ CREATE NODE-CFG 256 ALLOT
 \   seed-peers   ( list of addr:port )
 \   chain-id     ( u64 — distinguishes testnets )
 \   producer?    ( flag — should this node mine/sign blocks? )
-\   consensus    ( 0=PoW, 1=PoA, 2=PoS )
+\   consensus    ( 0=PoW, 1=PoA, 2=PoS, 3=PoSA )
 \   stark?       ( flag — attach STARK validity proofs )
 \   data-dir     ( path to chain.dat / state.snap )
 ```
@@ -1605,17 +1623,19 @@ CREATE NODE-CFG 256 ALLOT
 **Priority:** **Critical** — prerequisite for any real deployment.
 Split into two sub-phases that can proceed in parallel.
 
-### Phase 6.5a — Real Persistence
+### Phase 6.5a — Real Persistence ✅
 
 **Location:** `akashic/store/persist.f` (rewrite)
 **Prefix:** `PST-`
-**Depends on:** KDOS file I/O primitives (§7.5–7.6 in kdos.f), block.f, state.f
-**Estimated size:** ~200–300 lines
+**Depends on:** KDOS file I/O primitives, block.f, state.f
+**Actual size:** 284 lines
 **Difficulty:** Medium
+**Status:** ✅ Complete (commit 3f9ca41) — 9 tests
+**Commit:** 3f9ca41
 
-The current `persist.f` is an in-memory append buffer using
-`XMEM-ALLOT` with a 1 MB cap.  This section replaces it with
-real disk persistence.
+The original `persist.f` was an in-memory append buffer using
+`XMEM-ALLOT` with a 1 MB cap.  The rewrite replaced it with
+real sector-based disk persistence via KDOS file I/O words.
 
 #### KDOS File I/O Primitives (no wrapper needed)
 
@@ -1744,18 +1764,20 @@ compiles to threaded code natively.  There is no need to design a
 secondary instruction set — the host's own compilation machinery
 (scoped to a sandbox) produces the on-chain executable format.
 
-> **⚠ REVISED — Phase 7 is blocked on foundation work.**
+> **⚠ REVISED — Phase 7 is blocked on Phase 5b.**
 >
 > The Forth VM design is sound and the security analysis is
-> unusually thorough.  But building it on the current foundation
-> means contracts run on a chain that can hold 256 accounts, has
-> no real persistence, no light clients, and no protocol-enforced
-> consensus.  A contract ecosystem on that foundation is a
-> demo, not a product.
+> unusually thorough.  Foundation blockers resolved so far:
+> - ~~256-account cap~~ ✅ Phase 3b (paged state + SMT)
+> - ~~No real persistence~~ ✅ Phase 6.5a (sector-based file I/O)
+> - ~~No light client protocol~~ ✅ Phase 6.5b (Merkle proof RPC)
 >
-> **New ordering:** Complete Phase 3b (scalable state), Phase 5b
-> (consensus hardening), and Phase 6.5 (real persistence) first.
-> Then the VM has a solid foundation.
+> **Remaining blocker:** Phase 5b (consensus hardening + **PoSA mode**).
+> Without genesis-enforced consensus, multi-node deployment is
+> fragile.  PoSA (Mode 3) is the planned production mode.
+>
+> **New ordering:** Complete Phase 5b first, then the VM has a
+> solid foundation.
 >
 > The VM design itself is good.  The `TX-MAX-DATA` bump should use
 > the gas-limited approach (no hard byte cap — remove the constant,
@@ -2672,11 +2694,11 @@ alongside the custom chain for bridging.
           ┌──────────┼──────────┐
           ▼                     ▼
     ┌─────────────┐      ┌────────────┐
-    │  fileio.f + │      │  light.f   │ ◄── Phase 6.5 (NEW)
-    │  persist.f  │      │  (light    │     Real persistence
-    │ (rewritten) │      │   client   │     + Light client
-    │  (6.5a)     │      │   proto)   │
-    │  WAL-based  │      │  (6.5b)    │
+    │  persist.f  │      │  light.f   │ ◄── Phase 6.5 ✅
+    │ (rewritten, │      │  (light    │     Real persistence
+    │  KDOS I/O)  │      │   client   │     + Light client
+    │  (6.5a) ✅  │      │   proto)   │
+    │  sector I/O │      │  (6.5b) ✅ │
     └──────┬──────┘      └─────┬──────┘
            └────────┬──────────┘
                     ▼
@@ -2707,35 +2729,35 @@ alongside the custom chain for bridging.
 > ⚠ **REVISED — Production-First Ordering**
 >
 > The original plan treated Phase 7 (Forth VM) and Phase 8 (Ethereum
-> interop) as the finish line.  The revised plan inserts three new
-> foundation phases — **3b, 5b, 6.5** — that must land before any
-> smart-contract or interop work begins.  *Do not proceed to Phase 7
-> until the chain can persist state across restarts, survive reorgs
-> deeper than 1 block, and support >256 accounts.*
+> interop) as the finish line.  The revised plan inserted foundation
+> phases — **3b, 5b, 6.5** — that must land before any smart-contract
+> or interop work begins.  **3b and 6.5 are now complete.**
+> *Do not proceed to Phase 7 until Phase 5b (consensus hardening +
+> PoSA) is done.*
 
 | Order | Module | Depends on (new) | Lines | Tests | Status |
 |------:|--------|------------------|------:|------:|--------|
-| 1 | ed25519.f | — | ~500 | ~30 | ✅ done |
-| 1b | sphincs-plus.f | sha3 | ~600 | ~25 | ✅ done |
-| 2 | tx.f | ed25519, sphincs-plus | ~200 | ~25 | ✅ done |
-| 3 | state.f | — | ~480 | ~43 | ✅ done |
-| **3b** | **smt.f + state.f rework** | **state.f, merkle.f, sha3** | **~500** | **~40** | 🔴 NEW |
-| 4 | block.f | tx, state | ~775 | ~52 | ✅ done |
-| 5 | consensus.f | block, state, stark, random | ~380 | ~35 | ✅ done |
-| **5b** | **consensus.f harden** | **consensus.f, block.f** | **~250** | **~20** | 🔴 NEW |
-| 6a | mempool.f | tx, sort | ~100 | ~15 | ✅ done |
-| 6b | gossip.f | ws, cbor, tx, block | ~200 | ~15 | ✅ done |
-| 6c | rpc.f | server, router, json, mempool, state, block | ~150–200 | ~20 | ✅ done |
-| 6d | sync.f | gossip, block, state, consensus | ~100–150 | ~15 | ✅ done |
-| 6e | persist.f | state, block, cbor | ~80–100 | ~10 | ⚠ in-memory only |
-| 6f | node.f | all Phase 6 modules + consensus | ~100–150 | ~10 | ✅ done |
-| **6.5a** | **fileio.f + persist.f rewrite** | **state.f, block, cbor** | **~250** | **~15** | ✅ done |
-| **6.5b** | **light.f** | **rpc.f, state.f, block.f, merkle.f** | **~180** | **~19** | ✅ done |
-| 7 | contract-vm.f | state, consensus, tx, stark-air, node, persist | ~400–600 | ~25 | blocked |
-| **7.5** | **xchain.f** | **contract-vm, light.f, stark.f, merkle.f** | **~150–250** | **~15** | 🔴 NEW |
-| | **Subtotal (custom chain)** | | **~4,460–5,180** | **~355** | |
+| 1 | ed25519.f | — | 381 | 11 | ✅ done |
+| 1b | sphincs-plus.f | sha3 | 788 | 15 | ✅ done |
+| 2 | tx.f | ed25519, sphincs-plus | 640 | 19 | ✅ done |
+| 3 | state.f | — | 640 | 14+21 | ✅ done (rewritten in 3b) |
+| **3b** | **smt.f + state.f rework + witness.f** | **state.f, merkle.f, sha3** | **1824** | **25+14+21+22** | **✅ done** |
+| 4 | block.f | tx, state | 779 | 19 | ✅ done |
+| 5 | consensus.f | block, state, stark, random | 677 | 19 | ✅ done |
+| **5b** | **consensus.f harden + PoSA** | **consensus.f, block.f** | **~300** | **~20** | **🔴 NEXT** |
+| 6a | mempool.f | tx, sort | 369 | 16 | ✅ done |
+| 6b | gossip.f | ws, cbor, tx, block | 360 | 15 | ✅ done |
+| 6c | rpc.f | server, router, json, mempool, state, block | 490 | 10 | ✅ done |
+| 6d | sync.f | gossip, block, state, consensus | 190 | 10 | ✅ done |
+| 6e | persist.f (original) | state, block, cbor | — | — | ~~superseded by 6.5a~~ |
+| 6f | node.f | all Phase 6 modules + consensus | 190 | 7 | ✅ done |
+| **6.5a** | **persist.f rewrite** | **state.f, block, KDOS I/O** | **284** | **9** | **✅ done** |
+| **6.5b** | **light.f** | **rpc.f, state.f, block.f, merkle.f** | **159** | **12** | **✅ done** |
+| 7 | contract-vm.f | state, consensus, tx, stark-air, node, persist | ~400–600 | ~25 | blocked on 5b |
+| **7.5** | **xchain.f** | **contract-vm, light.f, stark.f, merkle.f** | **~150–250** | **~15** | 🔴 future |
+| | **Subtotal (custom chain, actual)** | | **~8,000+** | **~280+** | |
 | 8 | ethereum/ (secp256k1, keccak, rlp, eth-tx, eth-abi, eth-rpc, eth-wallet) | Phases 1–7.5 complete | ~2,000–3,000 | ~100+ | blocked |
-| | **Grand total** | | **~6,460–8,180** | **~455+** | |
+| | **Grand total** | | **~10,000+** | **~380+** | |
 
 ### Revised Critical Path
 
@@ -2762,20 +2784,18 @@ mempool ─── gossip ─── rpc ─── sync ─── persist ──�
 
 ### What Changed
 
-- **Phase 3b (Scalable State)** removes the 256-account ceiling.  Every
-  downstream module (block, consensus, mempool, STARK) benefits.
-  Must land before Phase 7 because a Forth VM deploying contracts
-  will create accounts — potentially many.
-- **Phase 5b (Consensus Hardening)** fixes the runtime-variable mode
-  selector, PoS grinding, and CON-SEAL leak.  Must land before
-  Phase 6.5 because persistence + light-client assume consensus is
-  trustworthy.
-- **Phase 6.5a (Real Persistence)** replaces the XMEM stub.  Must
-  land before Phase 7 because smart-contract state must survive
-  restarts.
-- **Phase 6.5b (Light Client)** adds Merkle-proof RPC methods.
-  Must land before Phase 7.5 because cross-chain verification
-  depends on Merkle inclusion proofs.
+- **Phase 3b (Scalable State)** ✅ **Done.** Removed the 256-account
+  ceiling.  Paged state + SMT decouple account count from proof
+  geometry.  smt.f (717 lines), state.f rewrite (640 lines),
+  witness.f (467 lines).
+- **Phase 5b (Consensus Hardening + PoSA)** 🔴 **NEXT.** Fixes the
+  runtime-variable mode selector, PoS grinding, and CON-SEAL leak.
+  Also implements PoSA (Mode 3) — the planned production consensus.
+- **Phase 6.5a (Real Persistence)** ✅ **Done.** `persist.f` rewritten
+  with sector-based KDOS file I/O. 284 lines, 9 tests.
+- **Phase 6.5b (Light Client)** ✅ **Done.** `light.f` + `rpc.f`
+  extensions.  Cross-chain verification (Phase 7.5) can proceed
+  as soon as Phase 7 is complete.
 - **Phase 7.5 (Cross-Chain Verification)** composes the STARK
   verifier and Merkle verifier into a peer-to-peer proof
   verification path between Leviathan chains.  ~150–250 lines
@@ -2789,12 +2809,12 @@ tx.f waits for both signature modules.  state.f can proceed in
 parallel with everything after Phase 1.  block.f integrates tx +
 state.  consensus.f sits on top.  mempool.f is independent after tx.f.
 
-**Phases 1–5 = chain data structures.  Phase 3b + 5b = hardening
-the foundation.  Phase 6 = running node.  Phase 6.5 = production
-infrastructure (real I/O + light client).  Phase 7 = smart contracts
-via sandboxed Forth VM.  Phase 8 = Ethereum/standard blockchain
-interop.**  Do not proceed to Phase 7 until all prior phases are
-complete and tested.
+**Phases 1–5 = chain data structures.  Phase 3b ✅ + 5b 🔴 = hardening
+the foundation.  Phase 6 = running node.  Phase 6.5a ✅ + 6.5b ✅ =
+production infrastructure (real I/O + light client).  Phase 7 = smart
+contracts via sandboxed Forth VM.  Phase 8 = Ethereum/standard
+blockchain interop.**  Only Phase 5b (consensus hardening + PoSA)
+remains before Phase 7 can proceed.
 
 ---
 
@@ -2817,24 +2837,27 @@ complete and tested.
 | **Total new (classical)** | **~248 KB** | Same as before |
 | **Total new (hybrid)** | **~4.3 MB** | Well within 16 MiB test env; production XMEM can be much larger |
 
-> ⚠ **REVISED — Phase 3b Memory Impact**
+> ⚠ **REVISED — Phase 3b Memory Impact (Actual)**
 >
 > The table above reflects the original 256-account flat-table design.
-> After Phase 3b (Sparse Merkle Tree + paged state), the memory budget
-> changes significantly:
+> After Phase 3b (Sparse Merkle Tree + paged state) and Phase 6.5a
+> (real persistence), the memory budget changes significantly.
+> `_ST-MAX-PAGES` controls resident page count (16 for emulator
+> testing — production cranks this up based on available SDRAM):
 >
-> | Item (Phase 3b) | Size | Notes |
-> |-----------------|-----:|-------|
-> | SMT hot cache (4096 accts) | ~400 KB | 4096 × 104 bytes (72-byte entry + 32-byte hash) |
+> | Item (Phase 3b + 6.5a) | Size | Notes |
+> |------------------------|-----:|-------|
+> | SMT hot cache (pages × entries) | ~400 KB | Depends on `_ST-MAX-PAGES`; 16 pages emulator default |
 > | SMT node pages (warm) | ~128 KB | Internal tree nodes, paged in/out |
 > | Page table metadata | ~16 KB | Page directory for disk-backed pages |
 > | WAL write buffer (6.5a) | ~64 KB | Ring buffer for write-ahead log |
 > | **Phase 3b+6.5a delta** | **~608 KB** | On top of existing budget |
 >
 > This brings total classical to ~856 KB, total hybrid to ~4.9 MB.
-> Still well within 16 MiB test environment, but the paging system in
-> Phase 3b must be designed to spill cold accounts to disk (via
-> Phase 6.5a fileio.f) when the hot set exceeds the budget.
+> Still well within 16 MiB test environment.  The paging system
+> spills cold accounts to disk via KDOS file I/O (persist.f) when
+> the hot set exceeds the budget.  Production XMEM pool can be
+> much larger — 16 MiB is just the emulator testing value.
 
 ### Gotchas (Megapad-64 / Forth)
 
