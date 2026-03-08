@@ -33,6 +33,7 @@ CBOR_F     = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
 FMT_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
 MERKLE_F   = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
 TX_F       = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
+SMT_F      = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
 STATE_F    = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
 BLOCK_F    = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
 CONSENSUS_F = os.path.join(ROOT_DIR, "akashic", "consensus", "consensus.f")
@@ -105,7 +106,7 @@ def build_snapshot():
     for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
                  SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
                  ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
-                 MERKLE_F, TX_F, STATE_F, BLOCK_F,
+                 MERKLE_F, TX_F, SMT_F, STATE_F, BLOCK_F,
                  CONSENSUS_F]:
         dep_lines += _load_forth_lines(path)
 

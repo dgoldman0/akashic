@@ -733,15 +733,16 @@ precedes it.
 
 ---
 
-## Phase 3b — Scalable State (NEW)
+## Phase 3b — Scalable State ✅
 
-**Location:** `akashic/store/state.f` (rewrite) + `akashic/store/smt.f` (new)
-**Prefix:** `ST-` (same public API, new internals)
+**Location:** `akashic/store/state.f` (rewrite) + `akashic/store/smt.f` (new) + `akashic/store/witness.f` (new)
+**Prefix:** `ST-` (same public API, new internals) / `SMT-` / `WIT-`
 **Depends on:** sha3.f, merkle.f, tx.f
-**Estimated size:** ~400–500 lines (smt.f) + ~100 lines (state.f delta)
+**Estimated size:** ~400–500 lines (smt.f) + ~100 lines (state.f delta) + ~310 lines (witness.f)
 **Difficulty:** Hard
-**Status:** Not started
+**Status:** ✅ Complete — smt.f (27 tests), state.f paged rewrite (44 tests), witness.f (32 tests). 121 total tests.
 **Priority:** **Critical** — must precede Phase 7
+**Commits:** smt.f (c84e8ac), state.f (b9e1c97), witness.f (d713801)
 
 ### Problem
 
@@ -1178,11 +1179,19 @@ STARK overlay adds ~60 lines of shared glue regardless of mode.
 
 **Location:** `akashic/consensus/consensus.f` (modify) + `akashic/store/genesis.f` (new)
 **Prefix:** `GEN-` (genesis), `CON-` (consensus amendments)
-**Depends on:** consensus.f, block.f, state.f
+**Depends on:** consensus.f, block.f, state.f, **stark.f multi-column (Phase 4.5 in STARK-design.md)**
 **Estimated size:** ~200–300 lines
 **Difficulty:** Medium
 **Status:** Not started
 **Priority:** **Critical** — must precede production multi-node deployment
+
+> **⚠ PREREQUISITE DISCOVERED:** The STARK validity overlay (§5.2)
+> needs multi-column traces (one column per field: old_bal, new_bal,
+> amount, nonce_old, nonce_new).  The current stark.f v2 only has a
+> single NTT polynomial trace, while stark-air.f already supports
+> multi-column AIR descriptors.  **Phase 4.5 (multi-column traces in
+> stark.f) must be completed before wiring the STARK overlay.**
+> See STARK-design.md Phase 4.5 for the spec.
 
 ### 5b.1 Genesis Block Configuration
 
