@@ -1,1 +1,21 @@
-local_testing/
+local_testing/*
+# Major / integration tests exposed to git
+!local_testing/test_live_web.py
+!local_testing/test_live_multi_conn.py
+!local_testing/test_consensus.py
+!local_testing/test_gossip.py
+!local_testing/test_concurrency_integration.py
+!local_testing/test_block.py
+!local_testing/test_mempool.py
+!local_testing/test_state.py
+!local_testing/test_state_tree.py
+!local_testing/test_smt.py
+!local_testing/test_tx.py
+!local_testing/test_stark.py
+!local_testing/test_stark_air.py
+!local_testing/test_sphincs.py
+!local_testing/test_web_server.py
+!local_testing/test_http.py
+!local_testing/test_ws.py
+!local_testing/test_rpc.py
+!local_testing/test_xrpc_session_repo.py
