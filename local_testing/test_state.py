@@ -291,6 +291,7 @@ def test_constants():
     check("ST-MAX-ACCOUNTS",  ['ST-MAX-ACCOUNTS .'],  "4096")
     check("ST-ENTRY-SIZE",    ['ST-ENTRY-SIZE .'],     "72")
     check("ST-ADDR-LEN",     ['ST-ADDR-LEN .'],       "32")
+    check("ST-PAGE-ENTRIES",  ['ST-PAGE-ENTRIES .'],    "256")
 
 def test_compile():
     print("\n=== Compile check ===")
