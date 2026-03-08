@@ -5,38 +5,54 @@
 \  Depends on: block.f state.f ed25519.f sha3.f guard.f
 \              random.f (Stage B: PoS leader selection)
 \
-\  Three leader-election modes + orthogonal STARK overlay:
-\    Mode 0 (PoW) — Proof of Work (nonce mining)
+\  Four leader-election modes + orthogonal STARK overlay:
+\    Mode 0 (PoW) — Proof of Work  (testing/bootstrap ONLY)
 \    Mode 1 (PoA) — Proof of Authority (authorized signers)
 \    Mode 2 (PoS) — Proof of Stake (validator election)
+\    Mode 3 (PoSA)— Proof of Staked Authority (production mode)
 \    STARK flag   — orthogonal validity proof overlay
+\
+\  PoSA (Mode 3) — the planned production consensus:
+\    Combines PoA authority set with PoS staking requirement.
+\    Leader election: round-robin among staked authorities, weighted
+\    by stake.  Only authorities with stake >= min_stake may seal.
+\    Proof format: identical to PoA/PoS (pubkey + Ed25519 sig).
 \
 \  Proof field layout per mode (inside 128-byte BLK-PROOF slot):
 \    PoW:  [0..7] = nonce (u64 LE)                proof_len = 8
 \    PoA:  [0..31] = signer pubkey, [32..95] = sig proof_len = 96
 \    PoS:  [0..31] = signer pubkey, [32..95] = sig proof_len = 96
+\    PoSA: [0..31] = signer pubkey, [32..95] = sig proof_len = 96
 \
 \  Key design: Two distinct hashes per block.
 \    Signatory hash — header hashed with proof_len=0 (message for sig)
 \    Block hash     — BLK-HASH with proof included (chain linkage)
-\    PoA/PoS sign the signatory hash; PoW compares block hash < target.
+\    PoA/PoS/PoSA sign the signatory hash; PoW compares block hash < target.
+\
+\  Signing context: CON-SET-KEYS stores the node's private/public key
+\  pair so that CON-SEAL can produce signatures for PoA/PoS/PoSA
+\  without requiring (priv pub) on the stack.
+\
+\  Anti-grinding (Phase 5b): PoS/PoSA leader seed uses block[height-2]
+\  hash instead of prev_hash, making the seed immutable at seal time.
 \
 \  Patches _BLK-CON-CHECK-XT at load time so BLK-VERIFY calls
 \  CON-CHECK automatically.  Keep sealing explicit — node (Phase 6)
 \  calls CON-SEAL, consensus only validates.
 \
 \  Public API — mode selection:
-\   CON-MODE!        ( mode -- )          set consensus mode (0/1/2)
+\   CON-MODE!        ( mode -- )          set consensus mode (0/1/2/3)
 \   CON-MODE@        ( -- mode )          get consensus mode
 \   CON-STARK!       ( flag -- )          enable/disable STARK overlay
 \   CON-STARK?       ( -- flag )          query STARK overlay state
 \
 \  Public API — unified:
+\   CON-SET-KEYS     ( priv pub -- )      store node signing keys
 \   CON-SEAL         ( blk -- )           produce consensus proof
 \   CON-CHECK        ( blk -- flag )      validate consensus proof
 \   CON-SIG-HASH     ( blk hash -- )      hash header with empty proof
 \
-\  Public API — Proof of Work:
+\  Public API — Proof of Work (testing/bootstrap only):
 \   CON-POW-MINE     ( blk -- )           brute-force nonce search
 \   CON-POW-CHECK    ( blk -- flag )      verify nonce meets target
 \   CON-POW-TARGET!  ( target -- )        set PoW difficulty target
@@ -50,10 +66,16 @@
 \   CON-POA-CHECK    ( blk -- flag )      verify authority signature
 \   CON-POA-COUNT    ( -- n )             number of authorities
 \
+\  Public API — Proof of Staked Authority:
+\   CON-POSA-CHECK   ( blk -- flag )      verify PoSA block
+\   CON-POSA-ELECT   ( blk -- addr )      compute leader for block
+\   CON-POSA-COUNT   ( -- n )             staked authorities count
+\
 \  Constants:
 \   CON-POW          ( -- 0 )
 \   CON-POA          ( -- 1 )
 \   CON-POS          ( -- 2 )
+\   CON-POSA         ( -- 3 )
 \
 \  Not reentrant.
 \ =================================================================
@@ -71,9 +93,27 @@ PROVIDED akashic-consensus
 0 CONSTANT CON-POW
 1 CONSTANT CON-POA
 2 CONSTANT CON-POS
+3 CONSTANT CON-POSA
 
-96 CONSTANT _CON-SIG-PROOF-LEN    \ pubkey(32) + sig(64) for PoA/PoS
+96 CONSTANT _CON-SIG-PROOF-LEN    \ pubkey(32) + sig(64) for PoA/PoS/PoSA
  8 CONSTANT _CON-POW-PROOF-LEN    \ nonce(8) for PoW
+
+\ =====================================================================
+\  1b. Signing context — node's private + public key pair
+\ =====================================================================
+\  Stored once via CON-SET-KEYS.  Used by CON-SEAL for PoA/PoS/PoSA
+\  so that the unified dispatch can produce signatures without
+\  requiring (priv pub) on the caller's stack.
+
+CREATE _CON-SIGN-PRIV  64 ALLOT    \ Ed25519 private key (64 bytes)
+CREATE _CON-SIGN-PUB   32 ALLOT    \ Ed25519 public key  (32 bytes)
+VARIABLE _CON-KEYS-SET              \ flag: keys loaded?
+0 _CON-KEYS-SET !
+
+: CON-SET-KEYS  ( priv pub -- )
+    _CON-SIGN-PUB 32 CMOVE
+    _CON-SIGN-PRIV 64 CMOVE
+    -1 _CON-KEYS-SET ! ;
 
 \ =====================================================================
 \  2. Mode selection
@@ -116,8 +156,13 @@ VARIABLE _CON-SH-DST
     _CON-SH-BLK @ _BLK-PLEN C! ;
 
 \ =====================================================================
-\  4. Proof of Work
+\  4. Proof of Work — TESTING / BOOTSTRAP ONLY
 \ =====================================================================
+\  PoW is provided for single-node testing and initial bootstrap.
+\  It is NOT suitable for production consortium deployment — use
+\  PoSA (Mode 3) for production.  PoW has no sybil resistance in
+\  a permissioned consortium and wastes CPU cycles.
+\
 \  Nonce is a u64 stored LE at proof[0..7], proof_len=8.
 \  Mining: vary nonce until SHA3-256(CBOR-header) < target.
 \  Target stored as module variable — protocol parameter set by node.
@@ -126,6 +171,8 @@ VARIABLE _CON-SH-DST
 \  Why big-endian: SHA3 byte 0 is most significant; difficulty
 \  matters in the leading bytes.  "hash < target" = harder target
 \  requires smaller hash value.
+
+-1 CONSTANT _CON-POW-TESTING-ONLY  \ compile-time flag: PoW is test-only
 
 VARIABLE _CON-POW-TARGET
 0 1 INVERT _CON-POW-TARGET !       \ default: easiest (all bits set)
@@ -322,6 +369,14 @@ VARIABLE _CON-POS-CHECK-XT
 ' _CON-POS-SEAL-STUB _CON-POS-SEAL-XT !
 ' _CON-POS-CHECK-STUB _CON-POS-CHECK-XT !
 
+\ Forward declarations for PoSA (Stage D stubs)
+: _CON-POSA-SEAL-STUB  ( blk -- )  DROP ;
+: _CON-POSA-CHECK-STUB  ( blk -- flag )  DROP 0 ;
+VARIABLE _CON-POSA-SEAL-XT
+VARIABLE _CON-POSA-CHECK-XT
+' _CON-POSA-SEAL-STUB _CON-POSA-SEAL-XT !
+' _CON-POSA-CHECK-STUB _CON-POSA-CHECK-XT !
+
 \ Forward declarations for STARK (Stage C stubs)
 : _CON-STARK-PROVE-STUB  ( blk -- )  DROP ;
 : _CON-STARK-CHECK-STUB  ( blk -- flag )  DROP -1 ;
@@ -337,11 +392,14 @@ VARIABLE _CON-SEAL-BLK
     _CON-MODE @ CON-POW = IF
         _CON-SEAL-BLK @ CON-POW-MINE
     ELSE _CON-MODE @ CON-POA = IF
-        \ PoA seal requires priv+pub on stack — caller must use CON-POA-SIGN directly
-        \ CON-SEAL for PoA is a no-op; use CON-POA-SIGN instead
+        \ PoA: use stored signing keys
+        _CON-KEYS-SET @ 0= IF EXIT THEN
+        _CON-SEAL-BLK @ _CON-SIGN-PRIV _CON-SIGN-PUB CON-POA-SIGN
     ELSE _CON-MODE @ CON-POS = IF
         _CON-SEAL-BLK @ _CON-POS-SEAL-XT @ EXECUTE
-    THEN THEN THEN
+    ELSE _CON-MODE @ CON-POSA = IF
+        _CON-SEAL-BLK @ _CON-POSA-SEAL-XT @ EXECUTE
+    THEN THEN THEN THEN
     \ STARK overlay (if enabled)
     _CON-STARK-FLAG @ IF
         _CON-SEAL-BLK @ _CON-STARK-PROVE-XT @ EXECUTE
@@ -358,9 +416,11 @@ VARIABLE _CON-CHK-BLK
         _CON-CHK-BLK @ CON-POA-CHECK
     ELSE _CON-MODE @ CON-POS = IF
         _CON-CHK-BLK @ _CON-POS-CHECK-XT @ EXECUTE
+    ELSE _CON-MODE @ CON-POSA = IF
+        _CON-CHK-BLK @ _CON-POSA-CHECK-XT @ EXECUTE
     ELSE
         0 EXIT                          \ unknown mode
-    THEN THEN THEN
+    THEN THEN THEN THEN
     \ Mode check failed?
     0= IF 0 EXIT THEN
     \ STARK overlay (if enabled)
@@ -544,23 +604,44 @@ VARIABLE _CON-EP-TSTAKE            \ temp stake for insertion sort
     THEN ;
 
 \ ─── B6. CON-POS-LEADER — deterministic leader selection ───
-\  Derives leader from block's prev_hash and height.
-\  seed = SHA3-256( prev_hash || height-as-LE-u64 )
+\  Anti-grinding (Phase 5b): seed uses block[height-2].hash instead of
+\  prev_hash.  The block at height-2 is already committed when height-1
+\  is produced, so the current block producer cannot influence the seed.
+\  For height < 2, falls back to prev_hash (genesis/block-1 are fixed).
+\
+\  seed = SHA3-256( anchor_hash || height-as-LE-u64 )
 \  target = first 8 bytes of seed (LE u64) MOD total_stake
 \  Walk cumulative stakes to find leader.
 
-CREATE _CON-SEED-BUF   40 ALLOT    \ prev_hash(32) + height(8)
+CREATE _CON-SEED-BUF   40 ALLOT    \ anchor_hash(32) + height(8)
 CREATE _CON-SEED-HASH   32 ALLOT    \ SHA3-256 of seed
+CREATE _CON-ANCHOR-HASH 32 ALLOT    \ hash of block[height-2]
 
 VARIABLE _CON-LDR-BLK
 VARIABLE _CON-LDR-TARGET
+
+: _CON-ANCHOR-HASH!  ( blk -- )
+    \ Compute anchor hash for anti-grinding.
+    \ Use block[height-2] hash if available, else prev_hash.
+    DUP BLK-HEIGHT@ 2 < IF
+        \ height 0 or 1: use prev_hash directly (immutable anyway)
+        _BLK-PREV _CON-ANCHOR-HASH 32 CMOVE
+    ELSE
+        BLK-HEIGHT@ 2 - CHAIN-BLOCK@ DUP IF
+            _CON-ANCHOR-HASH BLK-HASH
+        ELSE
+            \ Block evicted from ring buffer — fall back to prev_hash
+            DROP _CON-LDR-BLK @ _BLK-PREV _CON-ANCHOR-HASH 32 CMOVE
+        THEN
+    THEN ;
 
 : CON-POS-LEADER  ( blk -- addr )
     _CON-LDR-BLK !
     \ Ensure epoch is current
     _CON-LDR-BLK @ BLK-HEIGHT@ _CON-POS-ENSURE-EPOCH
-    \ Build seed: prev_hash || height
-    _CON-LDR-BLK @ _BLK-PREV _CON-SEED-BUF 32 CMOVE
+    \ Build seed: anchor_hash || height (anti-grinding)
+    _CON-LDR-BLK @ _CON-ANCHOR-HASH!
+    _CON-ANCHOR-HASH _CON-SEED-BUF 32 CMOVE
     _CON-LDR-BLK @ BLK-HEIGHT@ _CON-SEED-BUF 32 + !
     \ Hash seed
     _CON-SEED-BUF 40 _CON-SEED-HASH SHA3-256-HASH
@@ -584,9 +665,15 @@ VARIABLE _CON-LDR-TARGET
 \ ─── B7. CON-POS-SIGN — sign block as elected leader ───
 \  Same proof layout as PoA (pubkey + sig in proof field).
 \  Caller is responsible for being the designated leader.
+\  Explicit form takes (blk priv pub); CON-SEAL uses stored keys.
 
 : CON-POS-SIGN  ( blk priv pub -- )
     CON-POA-SIGN ;               \ identical binary format
+
+: _CON-POS-SEAL  ( blk -- )
+    \ Seal using stored signing keys (called from CON-SEAL dispatch)
+    _CON-KEYS-SET @ 0= IF DROP EXIT THEN
+    _CON-SIGN-PRIV _CON-SIGN-PUB CON-POA-SIGN ;
 
 \ ─── B8. CON-POS-CHECK — verify PoS block ───
 \  1. Extract signer pubkey from proof[0..31]
@@ -634,11 +721,181 @@ VARIABLE _CON-PCHK-BLK
 : CON-POS-VAL-STAKE   ( idx -- stake ) CELLS _CON-VAL-STAKES + @ ;
 
 \ ─── B10. Wire up PoS dispatch ───
-\  CON-POS-SIGN takes (blk priv pub) not (blk), so cannot be used
-\  as seal XT.  Caller must use CON-POS-SIGN directly (like PoA).
-\  Only the CHECK side is wired into unified dispatch.
+\  _CON-POS-SEAL uses stored keys via CON-SET-KEYS.
+\  CON-POS-CHECK validates leader + sig.
 
+' _CON-POS-SEAL  _CON-POS-SEAL-XT !
 ' CON-POS-CHECK _CON-POS-CHECK-XT !
+
+\ =====================================================================
+\  Stage D — Proof of Staked Authority (PoSA, Mode 3)
+\ =====================================================================
+\  PoSA is the planned production consensus mode.  It combines PoA's
+\  permissioned authority set with PoS's stake requirement:
+\    - Authority must be in the PoA key table (CON-POA-ADD)
+\    - Authority must have stake >= CON-POS-MIN-STAKE
+\    - Leader elected by stake-weighted round-robin among qualified
+\    - Proof format: identical to PoA/PoS (pubkey[32] + sig[64])
+\
+\  PoSA reuses:
+\    - _CON-POA-KEYS / _CON-POA-COUNT for the authority whitelist
+\    - State staking fields for stake amounts
+\    - CON-POS-LEADER for stake-weighted leader election
+\    - CON-POA-SIGN / Ed25519 for signing
+\
+\  The staked-authority set = intersection(PoA authorities, stakers).
+\  Validator epoch rebuild (CON-POS-EPOCH) already collects stakers.
+\  PoSA-ELECT filters the epoch validator set against PoA authorities.
+
+\ ─── D1. Staked-authority set ───
+\  Built lazily at each election.  Stores indices into _CON-VAL-KEYS
+\  for validators that are also in the PoA authority table.
+
+CREATE _CON-SA-IDX  256 ALLOT      \ up to 256 staked-authority indices
+VARIABLE _CON-SA-COUNT              \ count of staked authorities
+0 _CON-SA-COUNT !
+VARIABLE _CON-SA-TOTAL              \ total stake of staked authorities
+0 _CON-SA-TOTAL !
+
+\ _CON-SA-BUILD — rebuild staked-authority set from current epoch
+\  Walk PoS validator set, keep only those whose key is in PoA table.
+\  Uses address comparison: validator keys are addresses (from state),
+\  PoA keys are pubkeys.  We need to hash PoA pubkeys to addresses.
+\  ACTUALLY: _CON-POA-KEYS stores raw pubkeys (32 bytes), and
+\  _CON-VAL-KEYS stores addresses (SHA3(pubkey) from state.f).
+\  So we hash each authority pubkey and compare against validator addrs.
+
+CREATE _CON-SA-AHASH  32 ALLOT     \ temp: SHA3 of authority pubkey
+VARIABLE _CON-SA-VDX              \ current validator index for build
+
+\ _CON-SA-MATCH? ( -- flag )  Compare _CON-SA-AHASH with validator key.
+: _CON-SA-MATCH?  ( -- flag )
+    0
+    32 0 ?DO
+        _CON-SA-AHASH I + C@
+        _CON-SA-VDX @ 32 * _CON-VAL-KEYS + I + C@ XOR OR
+    LOOP
+    0= ;
+
+: _CON-SA-BUILD  ( -- )
+    0 _CON-SA-COUNT !
+    0 _CON-SA-TOTAL !
+    _CON-VAL-COUNT @ 0 ?DO
+        I _CON-SA-VDX !
+        \ For each validator, check if their address matches any authority
+        _CON-POA-COUNT @ 0 ?DO
+            \ Hash authority pubkey -> address
+            I 32 * _CON-POA-KEYS + 32 _CON-SA-AHASH SHA3-256-HASH
+            \ Compare with validator key (address)
+            _CON-SA-MATCH? IF
+                \ Record this validator index as staked authority
+                _CON-SA-COUNT @ 256 < IF
+                    _CON-SA-VDX @ _CON-SA-COUNT @ _CON-SA-IDX + C!
+                    _CON-SA-VDX @ CELLS _CON-VAL-STAKES + @ _CON-SA-TOTAL +!
+                    1 _CON-SA-COUNT +!
+                THEN
+                LEAVE                      \ found, stop inner loop
+            THEN
+        LOOP
+    LOOP ;
+
+\ ─── D2. CON-POSA-ELECT — leader election among staked authorities ───
+\  Uses same anti-grinding seed as PoS leader selection.
+\  Selects among staked-authority subset using stake-weighted walk.
+
+VARIABLE _CON-PA-BLK
+VARIABLE _CON-PA-TARGET
+
+: CON-POSA-ELECT  ( blk -- addr )
+    _CON-PA-BLK !
+    \ Ensure epoch is current + rebuild staked-authority set
+    _CON-PA-BLK @ BLK-HEIGHT@ _CON-POS-ENSURE-EPOCH
+    _CON-SA-BUILD
+    \ No staked authorities?  Fail gracefully.
+    _CON-SA-COUNT @ 0= IF
+        _CON-SEED-BUF EXIT    \ return junk addr — will fail check
+    THEN
+    \ Build seed: anchor_hash || height (same anti-grinding as PoS)
+    _CON-PA-BLK @ _CON-ANCHOR-HASH!
+    _CON-ANCHOR-HASH _CON-SEED-BUF 32 CMOVE
+    _CON-PA-BLK @ BLK-HEIGHT@ _CON-SEED-BUF 32 + !
+    \ Hash seed
+    _CON-SEED-BUF 40 _CON-SEED-HASH SHA3-256-HASH
+    \ target = seed_u64 MOD total_staked_authority_stake
+    _CON-SEED-HASH @ _CON-SA-TOTAL @ MOD
+    _CON-PA-TARGET !
+    \ Walk cumulative stakes of staked authorities
+    0                              ( accum )
+    _CON-SA-COUNT @ 0 ?DO
+        I _CON-SA-IDX + C@        ( accum val-idx )
+        DUP CELLS _CON-VAL-STAKES + @ ( accum val-idx stake )
+        ROT + SWAP                 ( accum' val-idx )
+        OVER _CON-PA-TARGET @ > IF
+            32 * _CON-VAL-KEYS +
+            UNLOOP EXIT
+        THEN
+        DROP
+    LOOP
+    \ Fallback — last staked authority
+    DROP
+    _CON-SA-COUNT @ 1- _CON-SA-IDX + C@
+    32 * _CON-VAL-KEYS + ;
+
+\ ─── D3. CON-POSA-CHECK — verify PoSA block ───
+\  1. Proof must be 96 bytes (pubkey + sig)
+\  2. Extract signer pubkey from proof[0..31]
+\  3. Compute expected leader via CON-POSA-ELECT
+\  4. Compare SHA3(signer_pubkey) == leader address
+\  5. Verify signer is in PoA authority table
+\  6. Verify Ed25519 signature
+
+CREATE _CON-PACHK-PUB  32 ALLOT    \ extracted signer pubkey
+CREATE _CON-PACHK-LDR  32 ALLOT    \ expected leader address
+CREATE _CON-PACHK-HASH 32 ALLOT    \ signatory hash + temp
+VARIABLE _CON-PACHK-BLK
+
+: CON-POSA-CHECK  ( blk -- flag )
+    _CON-PACHK-BLK !
+    \ 1. proof_len must be 96
+    _CON-PACHK-BLK @ _BLK-PLEN C@ _CON-SIG-PROOF-LEN <> IF
+        0 EXIT
+    THEN
+    \ 2. Extract signer pubkey
+    _CON-PACHK-BLK @ _BLK-PROOF _CON-PACHK-PUB 32 CMOVE
+    \ 3. Compute expected leader
+    _CON-PACHK-BLK @ CON-POSA-ELECT _CON-PACHK-LDR 32 CMOVE
+    \ 4. Hash signer pubkey → address, compare with leader
+    _CON-PACHK-PUB 32 _CON-PACHK-HASH SHA3-256-HASH
+    0
+    32 0 ?DO
+        _CON-PACHK-HASH I + C@ _CON-PACHK-LDR I + C@ XOR OR
+    LOOP
+    0<> IF 0 EXIT THEN
+    \ 5. Verify signer is in PoA authority table
+    _CON-PACHK-PUB _CON-POA-FIND -1 = IF
+        0 EXIT                         \ not an authorized signer
+    THEN
+    DROP                               \ drop index from find
+    \ 6. Verify Ed25519 signature
+    _CON-PACHK-BLK @ _CON-PACHK-HASH CON-SIG-HASH
+    _CON-PACHK-HASH 32 _CON-PACHK-PUB _CON-PACHK-BLK @ _BLK-PROOF 32 +
+    ED25519-VERIFY ;
+
+\ ─── D4. CON-POSA-SEAL — seal block as staked authority ───
+\  Uses stored signing keys.  Identical format to PoA/PoS seal.
+
+: _CON-POSA-SEAL  ( blk -- )
+    _CON-KEYS-SET @ 0= IF DROP EXIT THEN
+    _CON-SIGN-PRIV _CON-SIGN-PUB CON-POA-SIGN ;
+
+\ ─── D5. Public API ───
+
+: CON-POSA-COUNT  ( -- n )  _CON-SA-COUNT @ ;
+
+\ ─── D6. Wire up PoSA dispatch ───
+
+' _CON-POSA-SEAL  _CON-POSA-SEAL-XT !
+' CON-POSA-CHECK  _CON-POSA-CHECK-XT !
 
 \ =====================================================================
 \  8. Concurrency guard
@@ -649,6 +906,7 @@ GUARD _con-guard
 
 ' CON-MODE!       CONSTANT _con-mode-set-xt
 ' CON-STARK!      CONSTANT _con-stark-set-xt
+' CON-SET-KEYS    CONSTANT _con-setkeys-xt
 ' CON-POW-MINE    CONSTANT _con-pw-mine-xt
 ' CON-POW-TARGET! CONSTANT _con-pw-tset-xt
 ' CON-POW-ADJUST  CONSTANT _con-pw-adj-xt
@@ -658,9 +916,11 @@ GUARD _con-guard
 ' CON-SEAL        CONSTANT _con-seal-xt
 ' CON-POS-SIGN    CONSTANT _con-ps-sign-xt
 ' CON-POS-EPOCH   CONSTANT _con-ps-epoch-xt
+' CON-POSA-ELECT  CONSTANT _con-pa-elect-xt
 
 : CON-MODE!       _con-mode-set-xt  _con-guard WITH-GUARD ;
 : CON-STARK!      _con-stark-set-xt _con-guard WITH-GUARD ;
+: CON-SET-KEYS    _con-setkeys-xt   _con-guard WITH-GUARD ;
 : CON-POW-MINE    _con-pw-mine-xt   _con-guard WITH-GUARD ;
 : CON-POW-TARGET! _con-pw-tset-xt   _con-guard WITH-GUARD ;
 : CON-POW-ADJUST  _con-pw-adj-xt    _con-guard WITH-GUARD ;
@@ -670,8 +930,9 @@ GUARD _con-guard
 : CON-SEAL        _con-seal-xt      _con-guard WITH-GUARD ;
 : CON-POS-SIGN    _con-ps-sign-xt   _con-guard WITH-GUARD ;
 : CON-POS-EPOCH   _con-ps-epoch-xt  _con-guard WITH-GUARD ;
+: CON-POSA-ELECT  _con-pa-elect-xt  _con-guard WITH-GUARD ;
 
 \ =====================================================================
-\  Done — Stage A (PoW + PoA) + Stage B (Staking + PoS).
+\  Done — Stage A (PoW + PoA) + Stage B (PoS) + Stage D (PoSA).
 \  Stage C will add STARK glue and patch _CON-STARK-*-XT.
 \ =====================================================================

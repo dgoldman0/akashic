@@ -3,6 +3,7 @@ local_testing/*
 !local_testing/test_live_web.py
 !local_testing/test_live_multi_conn.py
 !local_testing/test_consensus.py
+!local_testing/test_consensus_5b.py
 !local_testing/test_gossip.py
 !local_testing/test_concurrency_integration.py
 !local_testing/test_block.py
