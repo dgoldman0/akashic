@@ -1,33 +1,35 @@
-# stark.f — STARK Prover / Verifier
+# stark.f — STARK Prover / Verifier v2.5
 
 **Module:** `akashic/math/stark.f`
 **Prefix:** `STARK-`
 **Depends on:** `sha3.f`, `ntt.f`, `baby-bear.f`, `merkle.f`, `stark-air.f`
 **Provided:** `akashic-stark`
-**Tests:** 32/32
+**Tests:** 42/42 (32 regression + 10 multi-column)
 
 ## Overview
 
 STARK prover and verifier over the Baby Bear field
-($q = 2013265921$), with 256-point traces, coefficient-space FRI
-folding, and SHA3-256 Merkle commitments.  Accepts any AIR
-descriptor built with `stark-air.f`, making the prover/verifier
-generic over arbitrary transition and boundary constraints.
+($q = 2013265921$), with 256-point traces, up to 8 columns,
+coefficient-space FRI folding, and SHA3-256 Merkle commitments.
+Accepts any AIR descriptor built with `stark-air.f`, making the
+prover/verifier generic over arbitrary transition and boundary
+constraints with multi-column traces.
 
 ## Design Principles
 
 | Principle | Decision |
 |-----------|----------|
 | **Field** | Baby Bear ($q = 15 \times 2^{27} + 1$) via `baby-bear.f` |
-| **Trace size** | Fixed 256 entries (single column) |
+| **Trace size** | Fixed 256 entries per column, up to 8 columns |
 | **Domain** | $\omega$ = primitive 256th root of unity, extracted via NTT trick |
 | **Coset** | Generator $k = 3$ (or 5 if $3^{256} = 1$), ensures disjoint evaluation domain |
 | **Interpolation** | Inverse NTT for trace → coefficients; NTT for coset evaluation |
-| **Commitments** | SHA3-256 Merkle trees (256 leaves each) for trace and quotient polynomials |
-| **Fiat-Shamir** | Hash-based transcript: absorb Merkle roots, squeeze challenges via SHA3-256 |
-| **Quotient** | Combined transition + boundary quotients with random linear combination |
+| **Commitments** | N separate SHA3-256 Merkle trees (one per column, 256 leaves each) |
+| **Combined root** | SHA3-256 hash of concatenated per-column Merkle roots |
+| **Fiat-Shamir** | Hash-based transcript: absorb combined root, per-boundary challenges |
+| **Quotient** | Combined transition + boundary quotients with per-boundary random scaling |
 | **FRI** | 8 rounds of coefficient-space folding ($256 \to 1$), each round committed |
-| **Verifier** | Exhaustive: rebuilds Merkle trees, checks all AIR constraints, replays FRI |
+| **Verifier** | Exhaustive: rebuilds all Merkle trees, checks all AIR constraints, replays FRI |
 | **Variables over return stack** | All loop state uses `VARIABLE` — `>R`/`R@` inside `DO..LOOP` is unsafe |
 | **Not re-entrant** | Shared buffers, Merkle trees, and MMIO devices |
 
@@ -35,24 +37,29 @@ generic over arbitrary transition and boundary constraints.
 
 ### Prover (`STARK-PROVE`)
 
-1. **Interpolate** — NTT-inverse the trace to get coefficients
-2. **Coset-evaluate** — twist coefficients by $k^i$, then NTT-forward
-3. **Commit trace** — hash each coefficient as a Merkle leaf, build tree
-4. **Fiat-Shamir** — absorb trace root, squeeze $\alpha$, $\beta$ challenges
-5. **Build denominators** — transition zerofier $\prod_j (x_i - \omega^{256-\text{maxoff}+j})$ and boundary zerofiers $(x_i - \omega^{\text{row}})$, batch-invert via `BB-BATCH-INV`
-6. **Combined quotient** — for each coset point: transition residual / transition denom + $\alpha \cdot$ boundary₀ quotient + $\beta \cdot$ boundary₁ quotient
-7. **Inverse coset** — un-twist quotient back to coefficient space
-8. **Commit quotient** — Merkle tree over quotient coefficients
-9. **FRI** — 8 rounds of folding with Fiat-Shamir challenges, final constant stored
+1. **Per-column interpolation and commitment** — For each column $c$:
+   - NTT-inverse trace[c] to get coefficients tcoeff[c]
+   - Coset-evaluate tcoeff[c] → ceval[c] (twist by $k^i$, NTT-forward)
+   - Copy ceval[c] with 4-entry wrap for AIR offset lookups
+   - Merkle-commit tcoeff[c] → merkle_tree[c], copy root to troots[c]
+   - Set `_SK-COLS[c]` = address of ceval[c]
+2. **Combined trace root** — `SHA3(troots[0] || ... || troots[N-1])`
+3. **Fiat-Shamir** — Absorb combined trace root, derive per-boundary challenges
+4. **Build denominators** — Transition zerofier $\prod_j (x_i - \omega^{256-\text{maxoff}+j})$ and per-boundary zerofiers $(x_i - \omega^{\text{row}})$, batch-invert via `BB-BATCH-INV`
+5. **Combined quotient** — For each coset point: transition residual / transition denom + $\sum_j$ challenge$_j \cdot$ (P$_{\text{col}_j}$(x$_i$) - val$_j$) / boundary denom$_j$
+6. **Inverse coset** — Un-twist quotient back to coefficient space
+7. **Commit quotient** — Merkle tree over quotient coefficients
+8. **FRI** — 8 rounds of folding with Fiat-Shamir challenges, final constant stored
 
 ### Verifier (`STARK-VERIFY`)
 
-1. Rebuild trace Merkle commitment, compare root
-2. Re-derive Fiat-Shamir challenges from stored trace root
-3. NTT trace coefficients to evaluation form, check all AIR transitions and boundaries
-4. Rebuild quotient Merkle commitment, compare root
-5. Replay all 8 FRI rounds: re-hash, re-fold, compare byte-for-byte
-6. Verify FRI final constant
+1. Rebuild per-column Merkle commitments, compare each root
+2. Re-derive combined trace root, compare
+3. Re-derive Fiat-Shamir challenges (per-boundary)
+4. NTT each column's coefficients to evaluation form, check all AIR transitions and boundaries
+5. Rebuild quotient Merkle commitment, compare root
+6. Replay all 8 FRI rounds: re-hash, re-fold, compare byte-for-byte
+7. Verify FRI final constant
 
 Returns `TRUE` (-1) if all checks pass, `FALSE` (0) otherwise.
 
@@ -62,16 +69,17 @@ Returns `TRUE` (-1) if all checks pass, `FALSE` (0) otherwise.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `STARK-INIT` | `( -- )` | Compute domain parameters ($\omega$, $k$, $k^{256}$, $z^{-1}$), initialize FRI offset table |
+| `STARK-INIT` | `( -- )` | Compute domain parameters, initialize per-column Merkle tree headers, default 1 column |
+| `STARK-SET-COLS` | `( n -- )` | Set active column count (clamped to 1..8) |
 | `STARK-SET-AIR` | `( air -- )` | Set the AIR descriptor for proving/verifying |
 
 ### Trace Management
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `STARK-TRACE!` | `( val idx -- )` | Store value at trace index (0–255) |
-| `STARK-TRACE@` | `( idx -- val )` | Read value at trace index |
-| `STARK-TRACE-ZERO` | `( -- )` | Zero the entire 256-entry trace |
+| `STARK-TRACE!` | `( val col idx -- )` | Store value at trace column/index |
+| `STARK-TRACE@` | `( col idx -- val )` | Read value at trace column/index |
+| `STARK-TRACE-ZERO` | `( -- )` | Zero all active trace columns |
 
 ### Proving and Verifying
 
@@ -98,15 +106,31 @@ Returns `TRUE` (-1) if all checks pass, `FALSE` (0) otherwise.
 
 | Buffer | Size | Purpose |
 |--------|------|---------|
-| `_SK-TRACE` | 1024 B | Raw trace values (NTT-POLY format) |
-| `_SK-TCOEFF` | 1024 B | Trace polynomial coefficients |
+| `_SK-TRACES` | 8192 B | Per-column raw trace values (8 × 1024) |
+| `_SK-TCOEFFS` | 8192 B | Per-column trace coefficients (8 × 1024) |
+| `_SK-CEVALS` | 8320 B | Per-column extended coset evals (8 × 1040) |
+| `_SK-COLS` | 64 B | Cell array of ceval base addresses (8 cells) |
+| `_SK-MTREES` | 130880 B | Per-column Merkle trees (8 × 16360) |
+| `_SK-TROOTS` | 256 B | Per-column Merkle roots (8 × 32) |
+| `_SK-TROOT` | 32 B | Combined trace root |
 | `_SK-TMP1`, `_SK-TMP2` | 1024 B each | Scratch polynomials |
 | `_SK-QCOEFF` | 1024 B | Quotient polynomial coefficients |
-| `_SK-CEVAL` | 1040 B | Extended coset evaluations (260 entries for wraparound) |
-| `_SK-DENOM`, `_SK-DINV` | 4096 B each | Zerofier denominators and their batch inverses |
-| `_SK-FRI-BUF` | 2048 B | FRI round data (256+128+64+...+2 = 510 entries) |
+| `_SK-DENOM`, `_SK-DINV` | 18432 B each | Zerofier denominators and batch inverses (up to 16 boundaries) |
+| `_SK-BCHAL` | 128 B | Per-boundary Fiat-Shamir challenges (up to 16 boundaries) |
+| `_SK-FRI-BUF` | 2048 B | FRI round data |
 | `_SK-FRI-HASH` | 256 B | FRI round commitments (8 × 32 bytes) |
-| `_SK-MTRACE`, `_SK-MQUO` | 256-leaf Merkle trees | Trace and quotient commitments |
+| `_SK-MQUO` | 16360 B | Quotient Merkle tree (256-leaf) |
+
+**Total static buffers: ~215 KB** (fits in 2 MB RAM with KDOS overhead).
+
+## Address Helpers
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `_SK-TRACE-ADDR` | `( col -- addr )` | Address of trace polynomial for column |
+| `_SK-TCOEFF-ADDR` | `( col -- addr )` | Address of coefficient buffer for column |
+| `_SK-CEVAL-ADDR` | `( col -- addr )` | Address of coset eval buffer for column |
+| `_SK-MTREE-ADDR` | `( col -- addr )` | Address of Merkle tree for column |
 
 ## FRI Folding
 
@@ -128,14 +152,11 @@ Each round: hash data → absorb into Fiat-Shamir → squeeze challenge
 → fold pairs $(c_{2i}, c_{2i+1}) \mapsto c_{2i} + r \cdot c_{2i+1}$.
 Round 7 produces the final constant stored in `_SK-FRI-FINAL`.
 
-## Usage Example
+## Usage Example — Single Column (Backward Compatible)
 
 ```forth
-\ Fibonacci STARK: trace[i+2] = trace[i] + trace[i+1]
-
 STARK-INIT
 
-\ Define AIR
 1 AIR-BEGIN
   AIR-ADD 0 0  0 1  0 2  AIR-TRANS
   0 0 1 AIR-BOUNDARY
@@ -144,40 +165,74 @@ AIR-END CONSTANT FIB-AIR
 
 FIB-AIR STARK-SET-AIR
 
-\ Fill trace
 STARK-TRACE-ZERO
-1 0 STARK-TRACE!
-1 1 STARK-TRACE!
+1 0 0 STARK-TRACE!
+1 0 1 STARK-TRACE!
 254 0 DO
-  I STARK-TRACE@ I 1 + STARK-TRACE@ BB+
-  I 2 + STARK-TRACE!
+  0 I STARK-TRACE@ 0 I 1 + STARK-TRACE@ BB+
+  0 I 2 + STARK-TRACE!
 LOOP
 
-\ Prove
 STARK-PROVE
+STARK-VERIFY IF ." Valid" ELSE ." Invalid" THEN
+```
 
-\ Verify
-STARK-VERIFY IF ." Valid proof" ELSE ." Invalid proof" THEN
+## Usage Example — Multi-Column (2-Column Fibonacci + Running Sum)
+
+```forth
+STARK-INIT
+2 STARK-SET-COLS
+
+2 AIR-BEGIN
+  AIR-ADD 0 0  0 1  0 2  AIR-TRANS     \ col0[i] + col0[i+1] = col0[i+2]
+  AIR-ADD 1 0  0 0  1 1  AIR-TRANS     \ col1[i] + col0[i] = col1[i+1]
+  0 0 1 AIR-BOUNDARY                    \ col0[0] = 1
+  0 1 1 AIR-BOUNDARY                    \ col0[1] = 1
+  1 0 0 AIR-BOUNDARY                    \ col1[0] = 0
+AIR-END CONSTANT MC-AIR
+
+MC-AIR STARK-SET-AIR
+
+\ Fill col0: Fibonacci
+STARK-TRACE-ZERO
+1 0 0 STARK-TRACE!   1 0 1 STARK-TRACE!
+254 0 DO
+  0 I STARK-TRACE@ 0 I 1 + STARK-TRACE@ BB+
+  0 I 2 + STARK-TRACE!
+LOOP
+
+\ Fill col1: running sum of col0
+0 1 0 STARK-TRACE!
+255 0 DO
+  1 I STARK-TRACE@ 0 I STARK-TRACE@ BB+
+  1 I 1 + STARK-TRACE!
+LOOP
+
+STARK-PROVE
+STARK-VERIFY IF ." Valid" ELSE ." Invalid" THEN
 ```
 
 ## Tamper Detection
 
 The verifier detects any of the following modifications after proving:
 
-- Trace value changes (`STARK-TRACE!` after `STARK-PROVE`)
-- Coefficient corruption (`_SK-TCOEFF`, `_SK-QCOEFF`)
-- Merkle root tampering (`_SK-TROOT`, `_SK-QROOT`)
+- Trace value changes on any column (`STARK-TRACE!` after `STARK-PROVE`)
+- Coefficient corruption (`_SK-TCOEFFS`, `_SK-QCOEFF`)
+- Per-column Merkle root tampering (`_SK-TROOTS`)
+- Combined trace root tampering (`_SK-TROOT`)
+- Quotient root tampering (`_SK-QROOT`)
 - FRI buffer corruption (`_SK-FRI-BUF`)
 - FRI final value changes (`_SK-FRI-FINAL`)
-- Wrong boundary values in the AIR descriptor
+- Wrong boundary values in the AIR descriptor (any column)
 
 ## Quick Reference
 
 ```
 STARK-INIT          ( -- )
+STARK-SET-COLS      ( n -- )
 STARK-SET-AIR       ( air -- )
-STARK-TRACE!        ( val idx -- )
-STARK-TRACE@        ( idx -- val )
+STARK-TRACE!        ( val col idx -- )
+STARK-TRACE@        ( col idx -- val )
 STARK-TRACE-ZERO    ( -- )
 STARK-PROVE         ( -- )
 STARK-VERIFY        ( -- flag )

@@ -16,10 +16,10 @@
 # │                                                              │
 # │ See test_coroutine.py for the corrected pattern.             │
 # └──────────────────────────────────────────────────────────────┘
-"""Test suite for Akashic STARK prover/verifier v2 (akashic/math/stark.f).
+"""Test suite for Akashic STARK prover/verifier v2.5 (akashic/math/stark.f).
 
-Tests STARK-INIT, STARK-SET-AIR, STARK-TRACE!/TRACE@, STARK-PROVE,
-STARK-VERIFY, and STARK-FRI-FINAL@ with Fibonacci AIR.
+Tests STARK-INIT, STARK-SET-COLS, STARK-SET-AIR, STARK-TRACE!/TRACE@,
+STARK-PROVE, STARK-VERIFY, and STARK-FRI-FINAL@ with Fibonacci AIR.
 
 Depends on: sha3.f ntt.f baby-bear.f merkle.f stark-air.f stark.f
 """
@@ -35,6 +35,9 @@ BB_F       = os.path.join(ROOT_DIR, "akashic", "math", "baby-bear.f")
 MERKLE_F   = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
 AIR_F      = os.path.join(ROOT_DIR, "akashic", "math", "stark-air.f")
 STARK_F    = os.path.join(ROOT_DIR, "akashic", "math", "stark.f")
+GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
+SEMA_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
+EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -97,10 +100,13 @@ def restore_cpu_state(cpu, state):
 def build_snapshot():
     global _snapshot
     if _snapshot: return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + sha3 + ntt + baby-bear + merkle + stark-air + stark ...")
+    print("[*] Building snapshot: BIOS + KDOS + guard + sha3 + ntt + baby-bear + merkle + stark-air + stark ...")
     t0 = time.time()
     bios_code  = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
+    event_lines = _load_forth_lines(EVENT_F)
+    sema_lines = _load_forth_lines(SEMA_F)
+    guard_lines = _load_forth_lines(GUARD_F)
     sha3_lines = _load_forth_lines(SHA3_F)
     ntt_lines  = _load_forth_lines(NTT_F)
     bb_lines   = _load_forth_lines(BB_F)
@@ -108,12 +114,13 @@ def build_snapshot():
     air_lines  = _load_forth_lines(AIR_F)
     stark_lines = _load_forth_lines(STARK_F)
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=2*1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
+                 + event_lines + sema_lines + guard_lines
                  + sha3_lines + ntt_lines + bb_lines
                  + mk_lines + air_lines + stark_lines)
     payload = "\n".join(all_lines) + "\n"
@@ -138,18 +145,25 @@ def build_snapshot():
         print(f"  [FATAL] {len(errors)} 'not found' errors!")
         print(f"  Aborting — stark.f failed to compile cleanly.")
         sys.exit(1)
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=800_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    sys_obj = MegapadSystem(ram_size=2*1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -211,11 +225,11 @@ FIB_AIR_SETUP = [
 FIB_TRACE_FILL = [
     ': _fill-fib-trace',
     '  STARK-TRACE-ZERO',
-    '  1 0 STARK-TRACE!',
-    '  1 1 STARK-TRACE!',
+    '  1 0 0 STARK-TRACE!',
+    '  1 0 1 STARK-TRACE!',
     '  254 0 DO',
-    '    I STARK-TRACE@ I 1 + STARK-TRACE@ BB+',
-    '    I 2 + STARK-TRACE!',
+    '    0 I STARK-TRACE@ 0 I 1 + STARK-TRACE@ BB+',
+    '    0 I 2 + STARK-TRACE!',
     '  LOOP ;',
 ]
 
@@ -249,28 +263,28 @@ def test_trace_write_read():
     """STARK-TRACE!/STARK-TRACE@ roundtrip"""
     check("trace-rw", [
         'STARK-INIT',
-        '42 7 STARK-TRACE!',
-        '7 STARK-TRACE@ . CR',
+        '42 0 7 STARK-TRACE!',
+        '0 7 STARK-TRACE@ . CR',
     ], "42")
 
 def test_trace_zero():
     """STARK-TRACE-ZERO clears trace"""
     check("trace-zero", [
         'STARK-INIT',
-        '123 5 STARK-TRACE!',
+        '123 0 5 STARK-TRACE!',
         'STARK-TRACE-ZERO',
-        '5 STARK-TRACE@ . CR',
+        '0 5 STARK-TRACE@ . CR',
     ], "0")
 
 def test_fib_trace_fill():
     """Fibonacci trace fills correctly"""
     # fib(0)=1, fib(1)=1, fib(2)=2, fib(3)=3, fib(4)=5
     lines = STARK_INIT_LINES + [
-        '0 STARK-TRACE@ . CR',
-        '1 STARK-TRACE@ . CR',
-        '2 STARK-TRACE@ . CR',
-        '3 STARK-TRACE@ . CR',
-        '4 STARK-TRACE@ . CR',
+        '0 0 STARK-TRACE@ . CR',
+        '0 1 STARK-TRACE@ . CR',
+        '0 2 STARK-TRACE@ . CR',
+        '0 3 STARK-TRACE@ . CR',
+        '0 4 STARK-TRACE@ . CR',
     ]
     def pred(out):
         nums = [l.strip() for l in out.strip().split('\n') if l.strip().isdigit()]
@@ -312,7 +326,7 @@ def test_tamper_trace_reject():
     """Tampering with trace after prove causes verify to fail"""
     lines = STARK_INIT_LINES + [
         'STARK-PROVE',
-        '999 10 STARK-TRACE!',
+        '999 0 10 STARK-TRACE!',
         'STARK-VERIFY',
         'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
     ]
@@ -323,7 +337,7 @@ def test_tamper_coeff_reject():
     lines = STARK_INIT_LINES + [
         'STARK-PROVE',
         # Corrupt a coefficient byte directly
-        '0 5 _SK-TCOEFF NTT-COEFF!',
+        '0 5  0 _SK-TCOEFF-ADDR  NTT-COEFF!',
         'STARK-VERIFY',
         'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
     ]
@@ -449,12 +463,12 @@ def test_different_fib_seeds():
         'AIR-END CONSTANT _FIB23-AIR',
         '_FIB23-AIR STARK-SET-AIR',
         'STARK-TRACE-ZERO',
-        '2 0 STARK-TRACE!',
-        '3 1 STARK-TRACE!',
+        '2 0 0 STARK-TRACE!',
+        '3 0 1 STARK-TRACE!',
         ': _fill23',
         '  254 0 DO',
-        '    I STARK-TRACE@ I 1 + STARK-TRACE@ BB+',
-        '    I 2 + STARK-TRACE!',
+        '    0 I STARK-TRACE@ 0 I 1 + STARK-TRACE@ BB+',
+        '    0 I 2 + STARK-TRACE!',
         '  LOOP ;',
         '_fill23',
         'STARK-PROVE',
@@ -474,12 +488,12 @@ def test_large_fib_seeds():
         'AIR-END CONSTANT _FIGLG-AIR',
         '_FIGLG-AIR STARK-SET-AIR',
         'STARK-TRACE-ZERO',
-        '2013265900 0 STARK-TRACE!',
-        '2013265910 1 STARK-TRACE!',
+        '2013265900 0 0 STARK-TRACE!',
+        '2013265910 0 1 STARK-TRACE!',
         ': _filllg',
         '  254 0 DO',
-        '    I STARK-TRACE@ I 1 + STARK-TRACE@ BB+',
-        '    I 2 + STARK-TRACE!',
+        '    0 I STARK-TRACE@ 0 I 1 + STARK-TRACE@ BB+',
+        '    0 I 2 + STARK-TRACE!',
         '  LOOP ;',
         '_filllg',
         'STARK-PROVE',
@@ -499,12 +513,12 @@ def test_large_seeds_tamper_reject():
         'AIR-END CONSTANT _FIGTMP-AIR',
         '_FIGTMP-AIR STARK-SET-AIR',
         'STARK-TRACE-ZERO',
-        '2013265900 0 STARK-TRACE!',
-        '2013265910 1 STARK-TRACE!',
+        '2013265900 0 0 STARK-TRACE!',
+        '2013265910 0 1 STARK-TRACE!',
         ': _filltmp',
         '  254 0 DO',
-        '    I STARK-TRACE@ I 1 + STARK-TRACE@ BB+',
-        '    I 2 + STARK-TRACE!',
+        '    0 I STARK-TRACE@ 0 I 1 + STARK-TRACE@ BB+',
+        '    0 I 2 + STARK-TRACE!',
         '  LOOP ;',
         '_filltmp',
         'STARK-PROVE',
@@ -545,12 +559,12 @@ def test_coset_eval_roundtrip():
     lines = STARK_INIT_LINES + [
         'VARIABLE _T-SAVED',
         # Interpolate trace to coefficients
-        '_SK-TRACE _SK-TCOEFF NTT-POLY-COPY',
-        '_SK-TCOEFF NTT-INVERSE',
+        '0 _SK-TRACE-ADDR 0 _SK-TCOEFF-ADDR NTT-POLY-COPY',
+        '0 _SK-TCOEFF-ADDR NTT-INVERSE',
         # Save coeff[5] before roundtrip
-        '5 _SK-TCOEFF NTT-COEFF@ _T-SAVED !',
+        '5 0 _SK-TCOEFF-ADDR NTT-COEFF@ _T-SAVED !',
         # Roundtrip: coset eval then inv
-        '_SK-TCOEFF _SK-TMP1 _SK-COSET-EVAL',
+        '0 _SK-TCOEFF-ADDR _SK-TMP1 _SK-COSET-EVAL',
         '_SK-TMP1 _SK-COSET-INV',
         # Compare coeff[5]
         '5 _SK-TMP1 NTT-COEFF@ _T-SAVED @ = IF ." RT-OK" ELSE ." RT-FAIL" THEN CR',
@@ -560,14 +574,14 @@ def test_coset_eval_roundtrip():
 def test_merkle_trace_root_stable():
     """Merkle trace root is deterministic across two commits"""
     lines = STARK_INIT_LINES + [
-        '_SK-TRACE _SK-TCOEFF NTT-POLY-COPY',
-        '_SK-TCOEFF NTT-INVERSE',
-        '_SK-TCOEFF _SK-MTRACE _SK-MERKLE-COMMIT',
+        '0 _SK-TRACE-ADDR 0 _SK-TCOEFF-ADDR NTT-POLY-COPY',
+        '0 _SK-TCOEFF-ADDR NTT-INVERSE',
+        '0 _SK-TCOEFF-ADDR 0 _SK-MTREE-ADDR _SK-MERKLE-COMMIT',
         'CREATE _r1 32 ALLOT',
-        '_SK-MTRACE MERKLE-ROOT _r1 32 CMOVE',
+        '0 _SK-MTREE-ADDR MERKLE-ROOT _r1 32 CMOVE',
         # Recommit
-        '_SK-TCOEFF _SK-MTRACE _SK-MERKLE-COMMIT',
-        '_SK-MTRACE MERKLE-ROOT _r1 SHA3-256-COMPARE',
+        '0 _SK-TCOEFF-ADDR 0 _SK-MTREE-ADDR _SK-MERKLE-COMMIT',
+        '0 _SK-MTREE-ADDR MERKLE-ROOT _r1 SHA3-256-COMPARE',
         'IF .\" ROOT-STABLE\" ELSE .\" ROOT-CHANGED\" THEN CR',
     ]
     check("merkle-root-stable", lines, "ROOT-STABLE")
@@ -576,9 +590,9 @@ def test_transition_constraint_row0():
     """AIR-EVAL-TRANS returns 0 on honest Fibonacci trace row 0"""
     lines = STARK_INIT_LINES + [
         # Set up ceval from raw trace (not coset)
-        '_SK-TRACE _SK-CEVAL 1024 CMOVE',
-        '_SK-CEVAL _SK-CEVAL 1024 + 16 CMOVE',
-        '_SK-CEVAL _SK-COLS !',
+        '0 _SK-TRACE-ADDR 0 _SK-CEVAL-ADDR 1024 CMOVE',
+        '0 _SK-CEVAL-ADDR DUP 1024 + 16 CMOVE',
+        '0 _SK-CEVAL-ADDR _SK-COLS !',
         '_TEST-FIB-AIR _SK-COLS 0 AIR-EVAL-TRANS . CR',
     ]
     check("trans-row0-zero", lines, "0")
@@ -586,9 +600,9 @@ def test_transition_constraint_row0():
 def test_transition_constraint_row100():
     """AIR-EVAL-TRANS returns 0 on honest trace row 100"""
     lines = STARK_INIT_LINES + [
-        '_SK-TRACE _SK-CEVAL 1024 CMOVE',
-        '_SK-CEVAL _SK-CEVAL 1024 + 16 CMOVE',
-        '_SK-CEVAL _SK-COLS !',
+        '0 _SK-TRACE-ADDR 0 _SK-CEVAL-ADDR 1024 CMOVE',
+        '0 _SK-CEVAL-ADDR DUP 1024 + 16 CMOVE',
+        '0 _SK-CEVAL-ADDR _SK-COLS !',
         '_TEST-FIB-AIR _SK-COLS 100 AIR-EVAL-TRANS . CR',
     ]
     check("trans-row100-zero", lines, "0")
@@ -596,8 +610,8 @@ def test_transition_constraint_row100():
 def test_boundary_check_honest():
     """AIR-CHECK-BOUND returns TRUE on honest trace"""
     lines = STARK_INIT_LINES + [
-        '_SK-TRACE _SK-CEVAL 1024 CMOVE',
-        '_SK-CEVAL _SK-COLS !',
+        '0 _SK-TRACE-ADDR 0 _SK-CEVAL-ADDR 1024 CMOVE',
+        '0 _SK-CEVAL-ADDR _SK-COLS !',
         '_TEST-FIB-AIR _SK-COLS AIR-CHECK-BOUND',
         'IF .\" BOUND-OK\" ELSE .\" BOUND-FAIL\" THEN CR',
     ]
@@ -608,9 +622,9 @@ def test_fiat_shamir_deterministic():
     lines = STARK_INIT_LINES + [
         'VARIABLE _T-A1  VARIABLE _T-B1',
         'STARK-PROVE',
-        '_SK-ALPHA @ _T-A1 !  _SK-BETA @ _T-B1 !',
+        '_SK-BCHAL @ _T-A1 !  _SK-BCHAL 8 + @ _T-B1 !',
         '_fill-fib-trace STARK-PROVE',
-        '_SK-ALPHA @ _T-A1 @ =  _SK-BETA @ _T-B1 @ =  AND',
+        '_SK-BCHAL @ _T-A1 @ =  _SK-BCHAL 8 + @ _T-B1 @ =  AND',
         'IF .\" FS-DET\" ELSE .\" FS-DIFF\" THEN CR',
     ]
     check("fiat-shamir-det", lines, "FS-DET")
@@ -625,6 +639,167 @@ def test_verify_idempotent():
         'IF .\" IDEMP-OK\" ELSE .\" IDEMP-FAIL\" THEN CR',
     ]
     check("verify-idempotent", lines, "IDEMP-OK")
+
+# =====================================================================
+#  Multi-column tests (Phase 4.5)
+# =====================================================================
+
+def test_set_cols():
+    """STARK-SET-COLS stores column count"""
+    check("set-cols", [
+        'STARK-INIT',
+        '3 STARK-SET-COLS',
+        '_SK-NCOLS @ . CR',
+    ], "3")
+
+def test_set_cols_clamp_low():
+    """STARK-SET-COLS clamps 0 to 1"""
+    check("set-cols-clamp-lo", [
+        'STARK-INIT',
+        '0 STARK-SET-COLS',
+        '_SK-NCOLS @ . CR',
+    ], "1")
+
+def test_set_cols_clamp_high():
+    """STARK-SET-COLS clamps 99 to 8"""
+    check("set-cols-clamp-hi", [
+        'STARK-INIT',
+        '99 STARK-SET-COLS',
+        '_SK-NCOLS @ . CR',
+    ], "8")
+
+def test_multicol_trace_rw():
+    """Write/read from different columns"""
+    lines = [
+        'STARK-INIT',
+        '2 STARK-SET-COLS',
+        '42 0 5 STARK-TRACE!',
+        '99 1 5 STARK-TRACE!',
+        '0 5 STARK-TRACE@ . CR',
+        '1 5 STARK-TRACE@ . CR',
+    ]
+    def pred(out):
+        nums = [l.strip() for l in out.strip().split('\n') if l.strip().isdigit()]
+        return '42' in nums and '99' in nums
+    check_fn("multicol-trace-rw", lines, pred, "expected 42 and 99")
+
+def test_multicol_trace_zero():
+    """STARK-TRACE-ZERO clears all active columns"""
+    lines = [
+        'STARK-INIT',
+        '2 STARK-SET-COLS',
+        '42 0 5 STARK-TRACE!',
+        '99 1 5 STARK-TRACE!',
+        'STARK-TRACE-ZERO',
+        '0 5 STARK-TRACE@ . CR',
+        '1 5 STARK-TRACE@ . CR',
+    ]
+    def pred(out):
+        nums = [l.strip() for l in out.strip().split('\n') if l.strip() == '0']
+        return len(nums) >= 2
+    check_fn("multicol-trace-zero", lines, pred, "both cols should be 0")
+
+TWO_COL_AIR_SETUP = [
+    '2 AIR-BEGIN',
+    # col0: Fibonacci  col0[i] + col0[i+1] = col0[i+2]
+    '  AIR-ADD 0 0  0 1  0 2  AIR-TRANS',
+    # col1: running sum  col1[i] + col0[i] = col1[i+1]
+    '  AIR-ADD 1 0  0 0  1 1  AIR-TRANS',
+    # Boundaries: col0[0]=1, col0[1]=1, col1[0]=0
+    '  0 0 1 AIR-BOUNDARY',
+    '  0 1 1 AIR-BOUNDARY',
+    '  1 0 0 AIR-BOUNDARY',
+    'AIR-END CONSTANT _2COL-AIR',
+]
+
+TWO_COL_TRACE_FILL = [
+    ': _fill-2col',
+    '  STARK-TRACE-ZERO',
+    # Col 0: Fibonacci
+    '  1 0 0 STARK-TRACE!',
+    '  1 0 1 STARK-TRACE!',
+    '  254 0 DO',
+    '    0 I STARK-TRACE@ 0 I 1 + STARK-TRACE@ BB+',
+    '    0 I 2 + STARK-TRACE!',
+    '  LOOP',
+    # Col 1: running sum  col1[i+1] = col1[i] + col0[i]
+    '  0 1 0 STARK-TRACE!',
+    '  255 0 DO',
+    '    1 I STARK-TRACE@ 0 I STARK-TRACE@ BB+',
+    '    1 I 1 + STARK-TRACE!',
+    '  LOOP ;',
+]
+
+TWO_COL_INIT = [
+    'STARK-INIT',
+    '2 STARK-SET-COLS',
+] + TWO_COL_AIR_SETUP + [
+    '_2COL-AIR STARK-SET-AIR',
+] + TWO_COL_TRACE_FILL + [
+    '_fill-2col',
+]
+
+def test_2col_prove_verify():
+    """2-column Fibonacci+RunningSum proves and verifies"""
+    lines = TWO_COL_INIT + [
+        'STARK-PROVE',
+        'STARK-VERIFY',
+        'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
+    ]
+    check("2col-prove-verify", lines, "VERIFY-TRUE")
+
+def test_2col_tamper_col0_reject():
+    """Tampering col0 after prove → reject"""
+    lines = TWO_COL_INIT + [
+        'STARK-PROVE',
+        '999 0 10 STARK-TRACE!',
+        'STARK-VERIFY',
+        'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
+    ]
+    check("2col-tamper-col0", lines, "VERIFY-FALSE")
+
+def test_2col_tamper_col1_reject():
+    """Tampering col1 after prove → reject"""
+    lines = TWO_COL_INIT + [
+        'STARK-PROVE',
+        '999 1 10 STARK-TRACE!',
+        'STARK-VERIFY',
+        'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
+    ]
+    check("2col-tamper-col1", lines, "VERIFY-FALSE")
+
+def test_2col_wrong_col1_boundary():
+    """Wrong boundary on col1 → reject"""
+    lines = [
+        'STARK-INIT',
+        '2 STARK-SET-COLS',
+        '2 AIR-BEGIN',
+        '  AIR-ADD 0 0  0 1  0 2  AIR-TRANS',
+        '  AIR-ADD 1 0  0 0  1 1  AIR-TRANS',
+        '  0 0 1 AIR-BOUNDARY',
+        '  0 1 1 AIR-BOUNDARY',
+        '  1 0 999 AIR-BOUNDARY',     # wrong: col1[0] should be 0
+        'AIR-END CONSTANT _2COL-BAD',
+        '_2COL-BAD STARK-SET-AIR',
+    ] + TWO_COL_TRACE_FILL + [
+        '_fill-2col',
+        'STARK-PROVE',
+        'STARK-VERIFY',
+        'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
+    ]
+    check("2col-wrong-bound", lines, "VERIFY-FALSE")
+
+def test_2col_deterministic():
+    """2-column proof is deterministic"""
+    lines = TWO_COL_INIT + [
+        'VARIABLE _T-V2COL',
+        'STARK-PROVE',
+        'STARK-FRI-FINAL@ _T-V2COL !',
+        '_fill-2col',
+        'STARK-PROVE',
+        'STARK-FRI-FINAL@ _T-V2COL @ = IF .\" DET-OK\" ELSE .\" DET-FAIL\" THEN CR',
+    ]
+    check("2col-deterministic", lines, "DET-OK")
 
 # =====================================================================
 #  Main
@@ -670,6 +845,17 @@ if __name__ == "__main__":
         test_boundary_check_honest,
         test_fiat_shamir_deterministic,
         test_verify_idempotent,
+        # Multi-column (Phase 4.5)
+        test_set_cols,
+        test_set_cols_clamp_low,
+        test_set_cols_clamp_high,
+        test_multicol_trace_rw,
+        test_multicol_trace_zero,
+        test_2col_prove_verify,
+        test_2col_tamper_col0_reject,
+        test_2col_tamper_col1_reject,
+        test_2col_wrong_col1_boundary,
+        test_2col_deterministic,
     ]
 
     print(f"\nRunning {len(tests)} tests...\n")

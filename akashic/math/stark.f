@@ -1,18 +1,20 @@
 \ =================================================================
-\  stark.f  —  STARK Prover / Verifier  v2
+\  stark.f  —  STARK Prover / Verifier  v2.5 (Multi-Column)
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: STARK-
 \  Depends on: sha3.f ntt.f baby-bear.f merkle.f stark-air.f
 \
 \  STARK prover & verifier over Baby Bear (q = 2013265921),
 \  256-point trace, coefficient-space FRI with Merkle commitments.
+\  Supports up to 8 trace columns for multi-column AIR.
 \
 \  Public API:
 \   STARK-INIT        ( -- )               compute domain parameters
+\   STARK-SET-COLS    ( n -- )             set active column count (1..8)
 \   STARK-SET-AIR     ( air -- )           set AIR descriptor
-\   STARK-TRACE!      ( val idx -- )       write trace entry
-\   STARK-TRACE@      ( idx -- val )       read trace entry
-\   STARK-TRACE-ZERO  ( -- )              zero entire trace
+\   STARK-TRACE!      ( val col idx -- )   write trace entry
+\   STARK-TRACE@      ( col idx -- val )   read trace entry
+\   STARK-TRACE-ZERO  ( -- )              zero all active trace columns
 \   STARK-PROVE       ( -- )              generate proof
 \   STARK-VERIFY      ( -- f )            verify proof (TRUE/FALSE)
 \   STARK-FRI-FINAL@  ( -- val )          read FRI final constant
@@ -31,6 +33,12 @@ REQUIRE stark-air.f
 PROVIDED akashic-stark
 
 \ =====================================================================
+\  Constants
+\ =====================================================================
+
+8 CONSTANT STARK-MAX-COLS
+
+\ =====================================================================
 \  Domain parameters (computed by STARK-INIT)
 \ =====================================================================
 
@@ -42,37 +50,68 @@ VARIABLE _SK-K256
 VARIABLE _SK-ZINV
 
 \ =====================================================================
-\  AIR descriptor pointer
+\  AIR descriptor pointer + column count
 \ =====================================================================
 
 VARIABLE _SK-AIR
+VARIABLE _SK-NCOLS
 
 \ =====================================================================
-\  Polynomial / proof buffers
+\  Per-column polynomial buffers (8 columns max)
+\ =====================================================================
+\  Trace:  8 x 1024 bytes (NTT-POLY each)
+\  Coeff:  8 x 1024 bytes (NTT-POLY each)
+\  Ceval:  8 x 1040 bytes (260 entries x 4)
+
+CREATE _SK-TRACES   8192 ALLOT
+CREATE _SK-TCOEFFS  8192 ALLOT
+CREATE _SK-CEVALS   8320 ALLOT
+
+\ Cols array for AIR-EVAL-TRANS (8 cells = 64 bytes)
+CREATE _SK-COLS  64 ALLOT
+
+\ =====================================================================
+\  Per-column address helpers
 \ =====================================================================
 
-NTT-POLY _SK-TRACE
-NTT-POLY _SK-TCOEFF
+: _SK-TRACE-ADDR   ( col -- addr )  NTT-BYTES * _SK-TRACES + ;
+: _SK-TCOEFF-ADDR  ( col -- addr )  NTT-BYTES * _SK-TCOEFFS + ;
+: _SK-CEVAL-ADDR   ( col -- addr )  1040 * _SK-CEVALS + ;
+
+\ =====================================================================
+\  Per-column Merkle trees (8 x 16360 bytes)
+\ =====================================================================
+\  Each tree: 1 cell (n=256) + (2*256-1)*32 = 8 + 16352 = 16360 bytes.
+\  Must init each tree's first cell to 256 before use.
+
+16360 CONSTANT _SK-MTREE-SZ
+
+CREATE _SK-MTREES  _SK-MTREE-SZ 8 * ALLOT
+
+: _SK-MTREE-ADDR  ( col -- tree-addr )  _SK-MTREE-SZ * _SK-MTREES + ;
+
+\ Per-column roots (8 x 32 = 256 bytes)
+CREATE _SK-TROOTS  256 ALLOT
+
+\ Combined trace root (32 bytes)
+CREATE _SK-TROOT  32 ALLOT
+
+\ =====================================================================
+\  Shared scratch / single-use buffers
+\ =====================================================================
+
 NTT-POLY _SK-TMP1
 NTT-POLY _SK-TMP2
 NTT-POLY _SK-QCOEFF
 
-\ Extended coset buffer: 260 entries x 4 = 1040 bytes
-CREATE _SK-CEVAL  1040 ALLOT
-
-\ Cols array for AIR-EVAL-TRANS (1 cell)
-CREATE _SK-COLS  8 ALLOT
-
-\ Merkle trees: 256-leaf each
-256 MERKLE-TREE _SK-MTRACE
+\ Quotient Merkle tree (single, 256-leaf)
 256 MERKLE-TREE _SK-MQUO
 
 \ Scratch for leaf hashing
 CREATE _SK-LBUF 4 ALLOT
 CREATE _SK-LHASH 32 ALLOT
 
-\ Merkle roots stored in proof
-CREATE _SK-TROOT 32 ALLOT
+\ Quotient root
 CREATE _SK-QROOT 32 ALLOT
 
 \ FRI storage: 8 rounds, 2048 bytes
@@ -85,9 +124,15 @@ VARIABLE _SK-FRI-FINAL
 
 \ Denominator + inverse buffers
 \ Layout: 0..1023 = transition denoms (256 x 4)
-\         1024+   = boundary denoms (n_bound x 256 x 4)
-CREATE _SK-DENOM  4096 ALLOT
-CREATE _SK-DINV   4096 ALLOT
+\         1024+   = boundary denoms (up to 16 boundaries x 256 x 4)
+CREATE _SK-DENOM  18432 ALLOT
+CREATE _SK-DINV   18432 ALLOT
+
+\ Per-boundary Fiat-Shamir challenges (up to 16 boundaries)
+CREATE _SK-BCHAL  128 ALLOT
+
+\ Scratch for combined root hashing
+CREATE _SK-RBUF  256 ALLOT
 
 \ =====================================================================
 \  FRI round offset table
@@ -133,6 +178,15 @@ CREATE _SK-FS2 64 ALLOT
 \  STARK-INIT
 \ =====================================================================
 
+VARIABLE _SK-INIT-I
+
+: _SK-INIT-MTREES  ( -- )
+    0 _SK-INIT-I !
+    BEGIN _SK-INIT-I @ STARK-MAX-COLS < WHILE
+        256 _SK-INIT-I @ _SK-MTREE-ADDR !
+        _SK-INIT-I @ 1 + _SK-INIT-I !
+    REPEAT ;
+
 : STARK-INIT  ( -- )
     _SK-INIT-FRI-TBL
     NTT-Q-STARK NTT-SET-MOD
@@ -151,8 +205,21 @@ CREATE _SK-FS2 64 ALLOT
     THEN
     _SK-K @ BB-INV _SK-K-INV !
     _SK-K256 @ 1 BB- BB-INV _SK-ZINV !
-    \ Set cols array
-    _SK-CEVAL _SK-COLS ! ;
+    \ Init column count
+    1 _SK-NCOLS !
+    \ Init per-column Merkle tree headers
+    _SK-INIT-MTREES
+    \ Set default cols pointer (col 0 ceval)
+    _SK-CEVALS _SK-COLS ! ;
+
+\ =====================================================================
+\  Column management
+\ =====================================================================
+
+: STARK-SET-COLS  ( n -- )
+    DUP 1 < IF DROP 1 THEN
+    DUP STARK-MAX-COLS > IF DROP STARK-MAX-COLS THEN
+    _SK-NCOLS ! ;
 
 \ =====================================================================
 \  AIR management
@@ -161,12 +228,23 @@ CREATE _SK-FS2 64 ALLOT
 : STARK-SET-AIR  ( air -- )  _SK-AIR ! ;
 
 \ =====================================================================
-\  Trace management
+\  Trace management (multi-column)
 \ =====================================================================
 
-: STARK-TRACE!      ( val idx -- )  _SK-TRACE NTT-COEFF! ;
-: STARK-TRACE@      ( idx -- val )  _SK-TRACE NTT-COEFF@ ;
-: STARK-TRACE-ZERO  ( -- )  _SK-TRACE NTT-POLY-ZERO ;
+: STARK-TRACE!  ( val col idx -- )
+    SWAP _SK-TRACE-ADDR NTT-COEFF! ;
+
+: STARK-TRACE@  ( col idx -- val )
+    SWAP _SK-TRACE-ADDR NTT-COEFF@ ;
+
+VARIABLE _SK-ZI
+
+: STARK-TRACE-ZERO  ( -- )
+    0 _SK-ZI !
+    BEGIN _SK-ZI @ _SK-NCOLS @ < WHILE
+        _SK-ZI @ _SK-TRACE-ADDR NTT-POLY-ZERO
+        _SK-ZI @ 1 + _SK-ZI !
+    REPEAT ;
 
 \ =====================================================================
 \  Coset evaluation
@@ -194,7 +272,7 @@ VARIABLE _SK-KI
     LOOP DROP ;
 
 \ =====================================================================
-\  Merkle commitment helper
+\  Single-polynomial Merkle commitment (for quotient)
 \ =====================================================================
 
 VARIABLE _MC-POLY
@@ -245,35 +323,73 @@ VARIABLE _SK-PI
 VARIABLE _SK-PJ
 VARIABLE _SK-OMROW
 VARIABLE _SK-FRICH
+VARIABLE _SK-PC
+VARIABLE _SK-BCOL
+
+: _SK-PROVE-PER-COL  ( -- )
+    \ For each column: interpolate, coset-eval, Merkle-commit
+    0 _SK-PC !
+    BEGIN _SK-PC @ _SK-NCOLS @ < WHILE
+        \ Copy trace[c] -> tcoeff[c], inverse NTT
+        _SK-PC @ _SK-TRACE-ADDR
+        _SK-PC @ _SK-TCOEFF-ADDR
+        NTT-POLY-COPY
+        _SK-PC @ _SK-TCOEFF-ADDR NTT-INVERSE
+
+        \ Coset-evaluate tcoeff[c] -> TMP1
+        _SK-PC @ _SK-TCOEFF-ADDR _SK-TMP1 _SK-COSET-EVAL
+
+        \ Copy coset evals to per-column extended buffer + wrap
+        _SK-TMP1  _SK-PC @ _SK-CEVAL-ADDR  NTT-BYTES CMOVE
+        _SK-PC @ _SK-CEVAL-ADDR
+        _SK-PC @ _SK-CEVAL-ADDR 1024 +
+        16 CMOVE
+
+        \ Set cols pointer for this column
+        _SK-PC @ _SK-CEVAL-ADDR
+        _SK-PC @ 8 * _SK-COLS +  !
+
+        \ Merkle-commit tcoeff[c]
+        _SK-PC @ _SK-TCOEFF-ADDR
+        _SK-PC @ _SK-MTREE-ADDR
+        _SK-MERKLE-COMMIT
+
+        \ Copy root to troots[c]
+        _SK-PC @ _SK-MTREE-ADDR MERKLE-ROOT
+        _SK-PC @ 32 * _SK-TROOTS +
+        32 CMOVE
+
+        _SK-PC @ 1 + _SK-PC !
+    REPEAT ;
+
+: _SK-COMBINE-TROOTS  ( -- )
+    \ Combined trace root = SHA3( troots[0] || ... || troots[N-1] )
+    _SK-TROOTS  _SK-NCOLS @ 32 *  _SK-TROOT  SHA3-256-HASH ;
+
+: _SK-DERIVE-BCHAL  ( -- )
+    \ Generate one Fiat-Shamir challenge per boundary constraint
+    _SK-NB @ 0 ?DO
+        _SK-FS-CHALLENGE
+        I 8 * _SK-BCHAL + !
+    LOOP ;
 
 : STARK-PROVE  ( -- )
-    \ Step 1: interpolate trace -> coefficients
-    _SK-TRACE _SK-TCOEFF NTT-POLY-COPY
-    _SK-TCOEFF NTT-INVERSE
+    \ Step 1-4: per-column interpolation, coset-eval, Merkle commit
+    _SK-PROVE-PER-COL
 
-    \ Step 2: coset-evaluate trace
-    _SK-TCOEFF _SK-TMP1 _SK-COSET-EVAL
-
-    \ Step 3: copy coset evals to extended buffer + wrap
-    _SK-TMP1 _SK-CEVAL NTT-BYTES CMOVE
-    _SK-CEVAL _SK-CEVAL 1024 + 16 CMOVE
-
-    \ Step 4: commit trace via Merkle
-    _SK-TCOEFF _SK-MTRACE _SK-MERKLE-COMMIT
-    _SK-MTRACE MERKLE-ROOT _SK-TROOT 32 CMOVE
-
-    \ Step 5: Fiat-Shamir -> alpha, beta
+    \ Step 5: combined trace root + Fiat-Shamir
+    _SK-COMBINE-TROOTS
     _SK-FS-INIT
     _SK-TROOT _SK-FS-ABSORB32
-    _SK-FS-CHALLENGE _SK-ALPHA !
-    _SK-FS-CHALLENGE _SK-BETA !
+
+    \ Get boundary count, derive per-boundary challenges
+    _SK-AIR @ AIR-N-BOUND _SK-NB !
+    _SK-DERIVE-BCHAL
 
     \ Step 6: build denominators
     _SK-AIR @ AIR-MAX-OFF _SK-MAXOFF !
-    _SK-AIR @ AIR-N-BOUND _SK-NB !
 
     \ --- Transition zerofier denominators ---
-    \ denom_trans[i] = product_{j=0}^{maxoff-1} (x_i - omega^(256-maxoff+j))
     _SK-K @ _SK-KI !
     256 0 DO
         1 _SK-DVAL !
@@ -320,21 +436,28 @@ VARIABLE _SK-FRICH
         _SK-ZINV @ BB*
         _SK-QVAL !
 
-        \ Boundary quotients
+        \ Boundary quotients (per-boundary, column-aware)
         0 _SK-PJ !
         BEGIN _SK-PJ @ _SK-NB @ < WHILE
+            \ Get boundary column index
+            _SK-AIR @ AIR-N-TRANS _SK-PJ @ + 8 * 8 +
+            _SK-AIR @ + C@  _SK-BCOL !
+
             \ Get boundary expected value
             _SK-AIR @ AIR-N-TRANS _SK-PJ @ + 8 * 8 +
             _SK-AIR @ + 4 + BB-W32@  _SK-BVAL !
-            \ P(x_i) - val
-            _SK-PI @ 4 * _SK-CEVAL + BB-W32@
+
+            \ P_col(x_i) - val  (read from column's ceval buffer)
+            _SK-PI @ 4 *  _SK-BCOL @ _SK-CEVAL-ADDR  + BB-W32@
             _SK-BVAL @ BB-
+
             \ / (x_i - omega^row)
             _SK-PJ @ 256 * _SK-PI @ + 4 * _SK-DINV 1024 + + BB-W32@
             BB*
-            \ Scale by challenge
-            _SK-PJ @ 0 = IF _SK-ALPHA @ BB* THEN
-            _SK-PJ @ 1 = IF _SK-BETA @ BB* THEN
+
+            \ Scale by per-boundary challenge
+            _SK-PJ @ 8 * _SK-BCHAL + @  BB*
+
             _SK-QVAL @ BB+ _SK-QVAL !
             _SK-PJ @ 1 + _SK-PJ !
         REPEAT
@@ -384,7 +507,7 @@ VARIABLE _SK-FRICH
     LOOP ;
 
 \ =====================================================================
-\  STARK-VERIFY — exhaustive
+\  STARK-VERIFY — exhaustive (multi-column)
 \ =====================================================================
 
 VARIABLE _SK-V-OK
@@ -396,44 +519,85 @@ VARIABLE _SK-V-OK
         OVER I + C@ OVER I + C@ <> IF 2DROP 0 UNLOOP EXIT THEN
     LOOP 2DROP -1 ;
 
+: _SK-VERIFY-PER-COL  ( -- )
+    \ For each column: re-commit coefficients, verify Merkle root
+    0 _SK-PC !
+    BEGIN _SK-PC @ _SK-NCOLS @ < WHILE
+        \ Re-commit tcoeff[c] -> mtree[c]
+        _SK-PC @ _SK-TCOEFF-ADDR
+        _SK-PC @ _SK-MTREE-ADDR
+        _SK-MERKLE-COMMIT
+
+        \ Compare root vs stored troots[c]
+        _SK-PC @ _SK-MTREE-ADDR MERKLE-ROOT
+        _SK-PC @ 32 * _SK-TROOTS +
+        _SK-CMP32
+        0= IF _SK-V-FAIL THEN
+
+        _SK-PC @ 1 + _SK-PC !
+    REPEAT ;
+
+: _SK-VERIFY-COMBINED-ROOT  ( -- )
+    \ Re-derive combined trace root, compare vs _SK-TROOT
+    _SK-TROOTS _SK-NCOLS @ 32 * _SK-RBUF SHA3-256-HASH
+    _SK-RBUF _SK-TROOT _SK-CMP32
+    0= IF _SK-V-FAIL THEN ;
+
+: _SK-VERIFY-TRACE-EVALS  ( -- )
+    \ For each column: NTT-forward tcoeff[c] to get evals,
+    \ copy to ceval[c] with wrap, set cols pointer
+    0 _SK-PC !
+    BEGIN _SK-PC @ _SK-NCOLS @ < WHILE
+        _SK-PC @ _SK-TCOEFF-ADDR _SK-TMP1 NTT-POLY-COPY
+        _SK-TMP1 NTT-FORWARD
+        \ Copy evals to ceval[c] + wrap
+        _SK-TMP1  _SK-PC @ _SK-CEVAL-ADDR  NTT-BYTES CMOVE
+        _SK-PC @ _SK-CEVAL-ADDR
+        _SK-PC @ _SK-CEVAL-ADDR 1024 +
+        16 CMOVE
+        \ Set cols pointer
+        _SK-PC @ _SK-CEVAL-ADDR
+        _SK-PC @ 8 * _SK-COLS +  !
+
+        _SK-PC @ 1 + _SK-PC !
+    REPEAT ;
+
 : STARK-VERIFY  ( -- flag )
     -1 _SK-V-OK !
 
-    \ 1. Verify trace Merkle commitment
-    _SK-TCOEFF _SK-MTRACE _SK-MERKLE-COMMIT
-    _SK-MTRACE MERKLE-ROOT _SK-TROOT _SK-CMP32
-    0= IF _SK-V-FAIL THEN
+    \ 1. Verify per-column Merkle commitments
+    _SK-VERIFY-PER-COL
 
-    \ 2. Re-derive Fiat-Shamir
+    \ 2. Verify combined trace root
+    _SK-VERIFY-COMBINED-ROOT
+
+    \ 3. Re-derive Fiat-Shamir challenges
     _SK-FS-INIT
     _SK-TROOT _SK-FS-ABSORB32
-    _SK-FS-CHALLENGE _SK-ALPHA !
-    _SK-FS-CHALLENGE _SK-BETA !
 
-    \ 3. Check AIR on original trace
-    _SK-TCOEFF _SK-TMP1 NTT-POLY-COPY
-    _SK-TMP1 NTT-FORWARD
-    \ TMP1 = trace evals at omega^i
-    _SK-TMP1 _SK-CEVAL NTT-BYTES CMOVE
-    _SK-CEVAL _SK-CEVAL 1024 + 16 CMOVE
+    _SK-AIR @ AIR-N-BOUND _SK-NB !
+    _SK-DERIVE-BCHAL
 
-    \ Check boundaries
+    \ 4. Get trace evals for AIR checking
+    _SK-VERIFY-TRACE-EVALS
+
+    \ 5. Check AIR boundaries
     _SK-AIR @ _SK-COLS AIR-CHECK-BOUND
     0= IF _SK-V-FAIL THEN
 
-    \ Check transitions
+    \ 6. Check AIR transitions
     _SK-AIR @ AIR-MAX-OFF _SK-MAXOFF !
     256 _SK-MAXOFF @ - 0 DO
         _SK-AIR @ _SK-COLS I AIR-EVAL-TRANS
         0 <> IF _SK-V-FAIL THEN
     LOOP
 
-    \ 4. Verify quotient Merkle commitment
+    \ 7. Verify quotient Merkle commitment
     _SK-QCOEFF _SK-MQUO _SK-MERKLE-COMMIT
     _SK-MQUO MERKLE-ROOT _SK-QROOT _SK-CMP32
     0= IF _SK-V-FAIL THEN
 
-    \ 5. FRI verification
+    \ 8. FRI verification
     _SK-QROOT _SK-FS-ABSORB32
 
     \ Round 0 == quotient coefficients

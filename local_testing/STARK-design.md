@@ -518,9 +518,9 @@ AIR-END  CONSTANT RANGE-AIR
 
 **File:** `akashic/math/stark.f` (extend v2)
 **Prefix:** `STARK-`
-**Depends on:** `sha3.f`, `ntt.f`, `merkle.f`, `batch.f`, `air.f`
-**Est.:** ~600 lines (replaces current ~487)
-**Status:** Not started
+**Depends on:** `sha3.f`, `ntt.f`, `merkle.f`, `baby-bear.f`, `stark-air.f`
+**Est.:** ~650 lines (replaces previous ~487)
+**Status:** **Done** — stark.f v2.5 committed, 42/42 tests pass (32 regression + 10 multi-column)
 **Priority:** **Critical** — prerequisite for any real AIR beyond single-column Fibonacci
 
 ### The Problem
