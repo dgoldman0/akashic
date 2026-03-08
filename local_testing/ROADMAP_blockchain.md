@@ -1679,11 +1679,14 @@ No more arbitrary size cap.  Chain grows until disk is full.
 
 ### Phase 6.5b — Light Client Protocol
 
-**Location:** `akashic/web/rpc.f` (extend) + `akashic/store/smt.f` (from Phase 3b)
-**Prefix:** `RPC-` (extensions)
-**Depends on:** Phase 3b (SMT with proofs), rpc.f
-**Estimated size:** ~100–150 lines
-**Difficulty:** Easy (once SMT exists)
+**Location:** `akashic/store/light.f` (new) + `akashic/web/rpc.f` (extended)
+**Prefix:** `LC-` / `_LC-` (light.f), `RPC-` (rpc.f extensions)
+**Depends on:** state.f, block.f, merkle.f (uses existing 256-leaf dense Merkle tree)
+**Actual size:** ~177 lines (light.f) + ~200 lines (rpc.f additions) = ~377 total
+**Difficulty:** Easy
+**Status:** ✅ Done — 19/19 tests passing
+**Tests:** `local_testing/test_light.py`
+**Docs:** `docs/store/light.md`
 
 #### New RPC Methods
 
@@ -2718,8 +2721,8 @@ alongside the custom chain for bridging.
 | 6d | sync.f | gossip, block, state, consensus | ~100–150 | ~15 | ✅ done |
 | 6e | persist.f | state, block, cbor | ~80–100 | ~10 | ⚠ in-memory only |
 | 6f | node.f | all Phase 6 modules + consensus | ~100–150 | ~10 | ✅ done |
-| **6.5a** | **fileio.f + persist.f rewrite** | **state.f, block, cbor** | **~250** | **~15** | 🔴 NEW |
-| **6.5b** | **light.f** | **rpc.f, smt.f, sync.f** | **~150** | **~10** | 🔴 NEW |
+| **6.5a** | **fileio.f + persist.f rewrite** | **state.f, block, cbor** | **~250** | **~15** | ✅ done |
+| **6.5b** | **light.f** | **rpc.f, state.f, block.f, merkle.f** | **~180** | **~19** | ✅ done |
 | 7 | contract-vm.f | state, consensus, tx, stark-air, node, persist | ~400–600 | ~25 | blocked |
 | **7.5** | **xchain.f** | **contract-vm, light.f, stark.f, merkle.f** | **~150–250** | **~15** | 🔴 NEW |
 | | **Subtotal (custom chain)** | | **~4,460–5,180** | **~355** | |

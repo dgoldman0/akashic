@@ -1,8 +1,8 @@
 # akashic-node — Node Daemon for KDOS / Megapad-64
 
 Full blockchain node that ties all sub-systems together: gossip,
-sync, mempool, persistence, RPC, and the HTTP server.  Provides a
-single main loop with optional block production.
+sync, mempool, persistence, RPC, light client proofs, and the HTTP
+server.  Provides a single main loop with optional block production.
 
 ```forth
 REQUIRE node.f
@@ -66,7 +66,7 @@ Initializes all sub-systems in order:
 4. `SYNC-INIT` — block sync (wires gossip callbacks)
 5. `PST-INIT` — persistence
 6. `ROUTE-CLEAR` — HTTP router
-7. `RPC-INIT` — JSON-RPC route
+7. `RPC-INIT` — JSON-RPC route (includes light client proof endpoints)
 8. `SRV-INIT` — HTTP server on given port
 
 After init, `NODE-STATUS` returns `NODE-STOPPED`.\

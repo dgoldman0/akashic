@@ -18,6 +18,10 @@
 \   chain_blockNumber      ( →  u64 )
 \   mempool_status         ( →  {count: n} )
 \   node_info              ( →  {height, peers, mempool} )
+\   chain_getProof         ( params: [addr-hex] → proof+account )
+\   chain_getBlockProof    ( params: [height]   → header fields )
+\   chain_getStateRoot     ( params: [height]?  → root hex )
+\   chain_verifyProof      ( params: [leaf,idx,proof,depth,root] → bool )
 \ =================================================================
 
 REQUIRE ../web/server.f
@@ -27,6 +31,7 @@ REQUIRE ../store/state.f
 REQUIRE ../store/block.f
 REQUIRE ../utils/fmt.f
 REQUIRE ../net/gossip.f
+REQUIRE ../store/light.f
 
 PROVIDED akashic-rpc
 
@@ -61,6 +66,9 @@ CREATE _RPC-ATMP 32 ALLOT             \ address scratch
 CREATE _RPC-HEX  128 ALLOT            \ hex-encoded output scratch
 CREATE _RPC-RAW  TX-BUF-SIZE ALLOT    \ raw CBOR buffer (sendTx)
 CREATE _RPC-TX   TX-BUF-SIZE ALLOT    \ tx struct (sendTx)
+CREATE _RPC-PROOF 256 ALLOT           \ Merkle proof buffer (8 × 32)
+CREATE _RPC-LEAF  32 ALLOT            \ leaf hash scratch
+CREATE _RPC-ROOT  32 ALLOT            \ root hash scratch
 
 \ =====================================================================
 \  3. JSON response helpers
@@ -189,7 +197,202 @@ CREATE _RPC-TX   TX-BUF-SIZE ALLOT    \ tx struct (sendTx)
     _RPC-SEND ;
 
 \ =====================================================================
-\  9. Method dispatch table
+\  9. Method: chain_getProof — account inclusion proof
+\ =====================================================================
+
+\ params: [addr-hex]
+\ Returns { stateRoot, index, depth, balance, nonce, proof: [hex...] }
+
+VARIABLE _RPC-GP-IDX
+VARIABLE _RPC-GP-DEPTH
+
+: _RPC-M-GET-PROOF  ( -- )
+    \ Parse address from params
+    _RPC-PARAMS _RPC-PARAMS-LEN @
+    JSON-ENTER
+    JSON-GET-STRING                    ( hex-a hex-u )
+    DUP 64 <> IF
+        2DROP
+        _RPC-RESP-BEGIN
+        RPC-E-PARAMS S" address must be 64 hex chars" _RPC-RESP-ERROR
+        _RPC-SEND EXIT
+    THEN
+    _RPC-ATMP FMT-HEX-DECODE DROP     \ 32 bytes at _RPC-ATMP
+    \ Generate proof
+    _RPC-ATMP _RPC-PROOF LC-STATE-PROOF
+    DUP 0= IF
+        DROP
+        _RPC-RESP-BEGIN
+        RPC-E-INTERNAL S" account not found" _RPC-RESP-ERROR
+        _RPC-SEND EXIT
+    THEN
+    _RPC-GP-DEPTH !
+    \ Get leaf index + leaf hash
+    _RPC-ATMP _RPC-LEAF LC-STATE-LEAF  _RPC-GP-IDX !
+    \ Get current state root
+    ST-ROOT _RPC-ROOT 32 CMOVE
+    \ Build response
+    _RPC-RESP-BEGIN
+    S" result" JSON-KEY:
+    JSON-{
+    \ stateRoot (hex)
+    _RPC-ROOT 32 _RPC-HEX FMT->HEX DROP
+    S" stateRoot" _RPC-HEX 64 JSON-KV-STR
+    \ index
+    S" index" _RPC-GP-IDX @ JSON-KV-NUM
+    \ depth
+    S" depth" _RPC-GP-DEPTH @ JSON-KV-NUM
+    \ balance
+    S" balance" _RPC-ATMP ST-BALANCE@ JSON-KV-NUM
+    \ nonce
+    S" nonce" _RPC-ATMP ST-NONCE@ JSON-KV-NUM
+    \ proof array — depth × 32-byte siblings as hex strings
+    S" proof" JSON-KEY:  JSON-[
+    _RPC-GP-DEPTH @ 0 ?DO
+        _RPC-PROOF I 32 * +  32 _RPC-HEX FMT->HEX DROP
+        _RPC-HEX 64 JSON-STR
+    LOOP
+    JSON-]
+    JSON-}
+    JSON-}
+    _RPC-SEND ;
+
+\ =====================================================================
+\  10. Method: chain_getBlockProof — block header fields at height
+\ =====================================================================
+
+\ params: [height]
+\ Returns { height, prevHash, stateRoot, txRoot, timestamp }
+
+: _RPC-M-GET-BLOCK-PROOF  ( -- )
+    \ Parse height from params
+    _RPC-PARAMS _RPC-PARAMS-LEN @
+    JSON-ENTER
+    JSON-GET-NUMBER                    ( height )
+    \ Look up block
+    DUP CHAIN-BLOCK@ DUP 0= IF
+        2DROP
+        _RPC-RESP-BEGIN
+        RPC-E-INTERNAL S" block not found" _RPC-RESP-ERROR
+        _RPC-SEND EXIT
+    THEN
+    SWAP DROP                          ( blk )
+    \ Build response
+    _RPC-RESP-BEGIN
+    S" result" JSON-KEY:
+    JSON-{
+    \ height
+    S" height" OVER BLK-HEIGHT@ JSON-KV-NUM
+    \ prevHash
+    OVER BLK-PREV-HASH@ 32 _RPC-HEX FMT->HEX DROP
+    S" prevHash" _RPC-HEX 64 JSON-KV-STR
+    \ stateRoot
+    OVER BLK-STATE-ROOT@ 32 _RPC-HEX FMT->HEX DROP
+    S" stateRoot" _RPC-HEX 64 JSON-KV-STR
+    \ txRoot
+    OVER BLK-TX-ROOT@ 32 _RPC-HEX FMT->HEX DROP
+    S" txRoot" _RPC-HEX 64 JSON-KV-STR
+    \ timestamp
+    S" timestamp" SWAP BLK-TIME@ JSON-KV-NUM
+    JSON-}
+    JSON-}
+    _RPC-SEND ;
+
+\ =====================================================================
+\  11. Method: chain_getStateRoot — state root at height
+\ =====================================================================
+
+\ params: [height] or []
+\ Returns hex string of 32-byte state root.
+
+: _RPC-M-GET-STATE-ROOT  ( -- )
+    \ Check if params has a height argument
+    _RPC-PARAMS _RPC-PARAMS-LEN @
+    JSON-ENTER
+    DUP 0= IF
+        \ No params — return current state root
+        2DROP
+        ST-ROOT _RPC-ROOT 32 CMOVE
+    ELSE
+        \ Parse height
+        JSON-GET-NUMBER                ( height )
+        LC-STATE-ROOT-AT DUP 0= IF
+            DROP
+            _RPC-RESP-BEGIN
+            RPC-E-INTERNAL S" block not found" _RPC-RESP-ERROR
+            _RPC-SEND EXIT
+        THEN
+        _RPC-ROOT 32 CMOVE
+    THEN
+    \ Encode root as hex and return
+    _RPC-ROOT 32 _RPC-HEX FMT->HEX DROP
+    _RPC-RESP-BEGIN
+    S" result" _RPC-HEX 64 JSON-KV-STR
+    JSON-}
+    _RPC-SEND ;
+
+\ =====================================================================
+\  12. Method: chain_verifyProof — server-side proof verification
+\ =====================================================================
+
+\ params: [leaf-hex, index, proof-hex, depth, root-hex]
+\   leaf-hex  = 64 hex chars (32 bytes)
+\   index     = leaf index (number)
+\   proof-hex = concatenated sibling hashes (depth × 64 hex chars)
+\   depth     = proof depth (number)
+\   root-hex  = 64 hex chars (32 bytes)
+\ Returns boolean.
+
+VARIABLE _RPC-VP-IDX
+VARIABLE _RPC-VP-DEPTH
+
+: _RPC-M-VERIFY-PROOF  ( -- )
+    _RPC-PARAMS _RPC-PARAMS-LEN @
+    JSON-ENTER
+    \ 1. leaf-hex (64 chars → 32 bytes)
+    JSON-GET-STRING                    ( hex-a hex-u )
+    DUP 64 <> IF
+        2DROP
+        _RPC-RESP-BEGIN
+        RPC-E-PARAMS S" leaf must be 64 hex chars" _RPC-RESP-ERROR
+        _RPC-SEND EXIT
+    THEN
+    _RPC-LEAF FMT-HEX-DECODE DROP
+    \ 2. index (number)
+    JSON-NEXT-VALUE
+    JSON-GET-NUMBER  _RPC-VP-IDX !
+    \ 3. proof-hex (depth × 64 hex chars → depth × 32 bytes)
+    JSON-GET-STRING                    ( hex-a hex-u )
+    DUP 2 / 256 > IF
+        2DROP
+        _RPC-RESP-BEGIN
+        RPC-E-PARAMS S" proof too large" _RPC-RESP-ERROR
+        _RPC-SEND EXIT
+    THEN
+    _RPC-PROOF FMT-HEX-DECODE DROP
+    \ 4. depth (number)
+    JSON-NEXT-VALUE
+    JSON-GET-NUMBER  _RPC-VP-DEPTH !
+    \ 5. root-hex (64 chars → 32 bytes)
+    JSON-GET-STRING                    ( hex-a hex-u )
+    DUP 64 <> IF
+        2DROP
+        _RPC-RESP-BEGIN
+        RPC-E-PARAMS S" root must be 64 hex chars" _RPC-RESP-ERROR
+        _RPC-SEND EXIT
+    THEN
+    _RPC-ROOT FMT-HEX-DECODE DROP
+    \ Verify
+    _RPC-LEAF _RPC-VP-IDX @ _RPC-PROOF _RPC-VP-DEPTH @ _RPC-ROOT
+    LC-VERIFY-STATE                    ( flag )
+    \ Return boolean result
+    _RPC-RESP-BEGIN
+    S" result" JSON-KEY:  JSON-BOOL
+    JSON-}
+    _RPC-SEND ;
+
+\ =====================================================================
+\  13. Method dispatch table
 \ =====================================================================
 
 \ Helper: compare extracted method name with literal
@@ -201,7 +404,11 @@ CREATE _RPC-TX   TX-BUF-SIZE ALLOT    \ tx struct (sendTx)
     S" chain_blockNumber"      _RPC-METHOD= IF _RPC-M-BLOCK-NUMBER  EXIT THEN
     S" chain_sendTransaction"  _RPC-METHOD= IF _RPC-M-SEND-TX       EXIT THEN
     S" mempool_status"         _RPC-METHOD= IF _RPC-M-MEMPOOL-STATUS EXIT THEN
-    S" node_info"              _RPC-METHOD= IF _RPC-M-NODE-INFO     EXIT THEN
+    S" node_info"              _RPC-METHOD= IF _RPC-M-NODE-INFO      EXIT THEN
+    S" chain_getProof"        _RPC-METHOD= IF _RPC-M-GET-PROOF      EXIT THEN
+    S" chain_getBlockProof"   _RPC-METHOD= IF _RPC-M-GET-BLOCK-PROOF EXIT THEN
+    S" chain_getStateRoot"    _RPC-METHOD= IF _RPC-M-GET-STATE-ROOT EXIT THEN
+    S" chain_verifyProof"     _RPC-METHOD= IF _RPC-M-VERIFY-PROOF   EXIT THEN
     \ Unknown method
     _RPC-RESP-BEGIN
     RPC-E-METHOD S" method not found" _RPC-RESP-ERROR
