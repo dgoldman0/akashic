@@ -498,7 +498,11 @@ VARIABLE _BLK-CON-CHECK-XT
 \
 \  Returns -1 (TRUE) if valid, 0 (FALSE) if invalid.
 
-CREATE _BLK-V-SNAP   ST-SNAPSHOT-SIZE ALLOT    \ state snapshot buffer
+VARIABLE _BLK-V-SNAP-PTR                       \ XMEM snapshot buffer (lazy)
+0 _BLK-V-SNAP-PTR !
+: _BLK-V-SNAP  ( -- addr )
+    _BLK-V-SNAP-PTR @ ?DUP IF EXIT THEN
+    ST-SNAPSHOT-SIZE XMEM-ALLOT DUP _BLK-V-SNAP-PTR ! ;
 CREATE _BLK-V-HASH   32 ALLOT                  \ scratch for hashes
 CREATE _BLK-V-ROOT   32 ALLOT                  \ computed state root
 CREATE _BLK-V-TXROOT 32 ALLOT                  \ computed tx root

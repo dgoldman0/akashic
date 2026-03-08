@@ -35,6 +35,7 @@ SPHINCS_F  = os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f")
 CBOR_F     = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
 FMT_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
 MERKLE_F   = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
+SMT_F      = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
 TX_F       = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
 STATE_F    = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
 
@@ -103,12 +104,12 @@ def build_snapshot():
     kdos_lines  = _load_forth_lines(KDOS_PATH)
 
     # Load all deps in correct topological order
-    # state.f needs: sha3, merkle, tx (which needs ed25519, sphincs, cbor, fmt)
+    # state.f needs: sha3, smt (which needs sha3), tx (which needs ed25519, sphincs, cbor, fmt)
     dep_lines = []
     for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
                  SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
                  ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
-                 MERKLE_F, TX_F, STATE_F]:
+                 MERKLE_F, SMT_F, TX_F, STATE_F]:
         dep_lines += _load_forth_lines(path)
 
     helpers = [
@@ -266,7 +267,7 @@ def _keygen_preamble():
         'CREATE _ADDR3 32 ALLOT',
         '_PUB3 _ADDR3 ST-ADDR-FROM-KEY',
         # Init state
-        'ST-INIT',
+        'ST-INIT DROP',
     ]
     return lines
 
@@ -287,7 +288,7 @@ def _make_tx(sender_pub, sender_priv, recip_pub, amount, nonce):
 
 def test_constants():
     print("\n=== Constants ===")
-    check("ST-MAX-ACCOUNTS",  ['ST-MAX-ACCOUNTS .'],  "256")
+    check("ST-MAX-ACCOUNTS",  ['ST-MAX-ACCOUNTS .'],  "4096")
     check("ST-ENTRY-SIZE",    ['ST-ENTRY-SIZE .'],     "72")
     check("ST-ADDR-LEN",     ['ST-ADDR-LEN .'],       "32")
 
@@ -298,7 +299,7 @@ def test_compile():
 def test_init():
     print("\n=== ST-INIT ===")
     check("Count is zero after init",
-          ['ST-INIT ST-COUNT .'], "0")
+          ['ST-INIT DROP ST-COUNT .'], "0")
 
 def test_addr_from_key():
     """ST-ADDR-FROM-KEY produces a 32-byte hash different from the raw key."""
@@ -621,7 +622,7 @@ def test_merkle_root():
         '_ADDR1 1000 ST-CREATE DROP',
         'ST-ROOT _R1 32 CMOVE',
         # Re-init and recreate same account
-        'ST-INIT',
+        'ST-INIT DROP',
         '_ADDR1 1000 ST-CREATE DROP',
         'ST-ROOT _R2 32 CMOVE',
         '_R1 _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP',

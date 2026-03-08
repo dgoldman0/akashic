@@ -2,11 +2,13 @@
 \  state.f  —  Blockchain World State
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: ST-  / _ST-
-\  Depends on: sha3.f merkle.f tx.f fmt.f
+\  Depends on: sha3.f smt.f tx.f fmt.f
 \
-\  Account-based world state with 256-leaf SHA3-256 Merkle
-\  commitment.  Accounts are sorted by address (SHA3-256 of the
-\  Ed25519 public key) for O(log n) binary-search lookup.
+\  Account-based world state with Sparse Merkle Tree commitment.
+\  Accounts are stored in a contiguous XMEM-backed table sorted
+\  by address (SHA3-256 of the Ed25519 public key) for O(log n)
+\  binary-search lookup.  State root is computed via the compact
+\  Patricia SMT from smt.f.
 \
 \  Account entry layout (72 bytes):
 \    +0   32 bytes   address      (SHA3-256 of Ed25519 public key)
@@ -21,14 +23,17 @@
 \  logic.  This avoids a structural migration when PoS lands.
 \
 \  Public API:
-\   ST-INIT          ( -- )                  zero state, rebuild tree
+\   ST-INIT          ( -- flag )             allocate XMEM, init SMT
+\   ST-DESTROY       ( -- )                  free XMEM + SMT
 \   ST-LOOKUP        ( addr -- entry | 0 )   find account by address
 \   ST-CREATE        ( addr balance -- flag ) create new account
 \   ST-BALANCE@      ( addr -- balance )      read balance (0 if missing)
 \   ST-NONCE@        ( addr -- nonce )        read nonce (0 if missing)
 \   ST-APPLY-TX      ( tx -- flag )           validate + apply tx
 \   ST-VERIFY-TX     ( tx -- flag )           validate without applying
-\   ST-ROOT          ( -- addr )              compute Merkle root
+\   ST-ROOT          ( -- addr )              compute SMT root
+\   ST-PROVE         ( addr proof -- len )    generate SMT inclusion proof
+\   ST-VERIFY-PROOF  ( key leaf proof len root -- flag )  verify proof
 \   ST-ADDR-FROM-KEY ( pubkey addr -- )       SHA3-256 hash pubkey
 \   ST-COUNT         ( -- n )                 number of active accounts
 \   ST-ENTRY         ( idx -- addr )          raw entry by index
@@ -37,7 +42,7 @@
 \   ST-RESTORE       ( src -- )               restore table+count from buffer
 \
 \  Constants:
-\   ST-MAX-ACCOUNTS  ( -- 256 )
+\   ST-MAX-ACCOUNTS  ( -- 4096 )
 \   ST-ENTRY-SIZE    ( -- 72 )
 \   ST-ADDR-LEN      ( -- 32 )
 \
@@ -45,7 +50,7 @@
 \ =================================================================
 
 REQUIRE sha3.f
-REQUIRE merkle.f
+REQUIRE smt.f
 REQUIRE tx.f
 REQUIRE fmt.f
 
@@ -55,9 +60,9 @@ PROVIDED akashic-state
 \  1. Constants
 \ =====================================================================
 
-256 CONSTANT ST-MAX-ACCOUNTS
- 72 CONSTANT ST-ENTRY-SIZE
- 32 CONSTANT ST-ADDR-LEN
+4096 CONSTANT ST-MAX-ACCOUNTS
+  72 CONSTANT ST-ENTRY-SIZE
+  32 CONSTANT ST-ADDR-LEN
 
 \ Field offsets within account entry (72 bytes)
  0 CONSTANT _ST-OFF-ADDR
@@ -71,19 +76,19 @@ PROVIDED akashic-state
 \  2. Storage
 \ =====================================================================
 
-\ Account table: 256 x 72 = 18,432 bytes, sorted by address
-CREATE _ST-TABLE  ST-MAX-ACCOUNTS ST-ENTRY-SIZE * ALLOT
+\ Account table: XMEM-backed, 4096 × 72 = 294,912 bytes, sorted by addr
+VARIABLE _ST-TBASE                 \ XMEM pointer to table
 
 \ Number of active accounts
 VARIABLE _ST-COUNT
 
-\ 256-leaf Merkle tree for state commitment
-256 MERKLE-TREE _ST-TREE
+\ SMT tree descriptor (64 bytes)
+CREATE _ST-SMT 64 ALLOT
 
 \ Scratch buffers
 CREATE _ST-HASH-A  32 ALLOT       \ sender address scratch
 CREATE _ST-HASH-B  32 ALLOT       \ recipient address scratch
-CREATE _ST-LEAF    32 ALLOT       \ Merkle leaf hash scratch
+CREATE _ST-LEAF    32 ALLOT       \ SMT value scratch (hash of entry)
 
 \ =====================================================================
 \  3. Internal helpers — entry field access
@@ -91,7 +96,7 @@ CREATE _ST-LEAF    32 ALLOT       \ Merkle leaf hash scratch
 
 \ _ST-ENTRY ( idx -- addr )  Base address of entry at index.
 : _ST-ENTRY  ( idx -- addr )
-    ST-ENTRY-SIZE * _ST-TABLE + ;
+    ST-ENTRY-SIZE * _ST-TBASE @ + ;
 
 \ _ST-ADDR-AT ( idx -- addr )  Address field (offset 0).
 : _ST-ADDR-AT  ( idx -- addr )
@@ -194,32 +199,42 @@ VARIABLE _ST-SH-IDX
     REPEAT ;
 
 \ =====================================================================
-\  7. Merkle tree rebuild
+\  7. SMT rebuild
 \ =====================================================================
-\  Hash each active account entry into its Merkle leaf slot.
-\  Unused slots get a zero hash (consistent empty commitment).
+\  Hash each active account entry and insert into the SMT.
+\  Called by ST-ROOT before returning the state root.
+\  For n accounts: O(n log n) — called once per block, not per tx.
 
 : _ST-REBUILD-TREE  ( -- )
-    \ Zero all 256 leaves
-    _ST-LEAF 32 0 FILL
-    ST-MAX-ACCOUNTS 0 ?DO
-        _ST-LEAF I _ST-TREE MERKLE-LEAF!
-    LOOP
-    \ Hash active entries into their leaf slots
+    _ST-SMT SMT-DESTROY
+    _ST-SMT SMT-INIT DROP
     _ST-COUNT @ 0 ?DO
         I _ST-ENTRY ST-ENTRY-SIZE _ST-LEAF SHA3-256-HASH
-        _ST-LEAF I _ST-TREE MERKLE-LEAF!
-    LOOP
-    _ST-TREE MERKLE-BUILD ;
+        I _ST-ADDR-AT _ST-LEAF _ST-SMT SMT-INSERT DROP
+    LOOP ;
 
 \ =====================================================================
-\  8. ST-INIT — zero all accounts, rebuild Merkle tree
+\  8. ST-INIT — allocate XMEM table + SMT, zero state
 \ =====================================================================
 
-: ST-INIT  ( -- )
-    _ST-TABLE ST-MAX-ACCOUNTS ST-ENTRY-SIZE * 0 FILL
+: ST-INIT  ( -- flag )
+    \ Allocate XMEM for table (4096 x 72 = 294912 bytes)
+    ST-MAX-ACCOUNTS ST-ENTRY-SIZE * XMEM-ALLOT
+    DUP 0= IF 0 EXIT THEN
+    _ST-TBASE !
+    _ST-TBASE @ ST-MAX-ACCOUNTS ST-ENTRY-SIZE * 0 FILL
     0 _ST-COUNT !
-    _ST-REBUILD-TREE ;
+    \ Init SMT (allocates its own XMEM pool)
+    _ST-SMT SMT-INIT ;
+
+\ ST-DESTROY — free XMEM table + SMT
+: ST-DESTROY  ( -- )
+    _ST-TBASE @ ?DUP IF
+        ST-MAX-ACCOUNTS ST-ENTRY-SIZE * XMEM-FREE-BLOCK
+        0 _ST-TBASE !
+    THEN
+    _ST-SMT SMT-DESTROY
+    0 _ST-COUNT ! ;
 
 \ =====================================================================
 \  9. ST-LOOKUP — find account by address
@@ -303,14 +318,14 @@ VARIABLE _ST-CR-IDX
     _ST-OFF-UNSTAKE-H + @ ;
 
 \ =====================================================================
-\  13. ST-ROOT — compute and return 32-byte Merkle root
+\  13. ST-ROOT — compute and return 32-byte SMT root
 \ =====================================================================
-\  Rebuilds the full tree from current state.  Call once per block
+\  Rebuilds the full SMT from current state.  Call once per block
 \  finalization, not after every transaction.
 
 : ST-ROOT  ( -- addr )
     _ST-REBUILD-TREE
-    _ST-TREE MERKLE-ROOT ;
+    _ST-SMT SMT-ROOT ;
 
 \ =====================================================================
 \  14. ST-VERIFY-TX — validate transaction against current state
@@ -489,31 +504,64 @@ VARIABLE _ST-AT-RBAL         \ recipient old balance (overflow check)
 \ =====================================================================
 \  17. ST-SNAPSHOT / ST-RESTORE — for non-destructive block validation
 \ =====================================================================
-\  Snapshot = full account table (256 x 72 = 18,432 bytes) + count cell.
-\  Total snapshot size: 18,440 bytes.
+\  Snapshot = full account table (4096 x 72 = 294,912 bytes) + count.
+\  Total snapshot size: 294,920 bytes.  Buffer MUST be in XMEM.
 \  Used by BLK-VERIFY to apply txs tentatively, check state root,
 \  then restore the original state.
 
-18440 CONSTANT ST-SNAPSHOT-SIZE
+294920 CONSTANT ST-SNAPSHOT-SIZE
+
+VARIABLE _st-snap-dst
 
 : ST-SNAPSHOT  ( dst -- )
-    DUP _ST-TABLE SWAP ST-MAX-ACCOUNTS ST-ENTRY-SIZE * CMOVE
-    ST-MAX-ACCOUNTS ST-ENTRY-SIZE * +      \ point past table data
-    _ST-COUNT @ SWAP ! ;
+    _st-snap-dst !
+    _ST-TBASE @ _st-snap-dst @ ST-MAX-ACCOUNTS ST-ENTRY-SIZE * CMOVE
+    _ST-COUNT @ _st-snap-dst @ ST-MAX-ACCOUNTS ST-ENTRY-SIZE * + ! ;
+
+VARIABLE _st-snap-src
 
 : ST-RESTORE  ( src -- )
-    DUP _ST-TABLE ST-MAX-ACCOUNTS ST-ENTRY-SIZE * CMOVE
-    ST-MAX-ACCOUNTS ST-ENTRY-SIZE * +      \ point past table data
-    @ _ST-COUNT ! ;
+    _st-snap-src !
+    _st-snap-src @ _ST-TBASE @ ST-MAX-ACCOUNTS ST-ENTRY-SIZE * CMOVE
+    _st-snap-src @ ST-MAX-ACCOUNTS ST-ENTRY-SIZE * + @ _ST-COUNT ! ;
 
 \ =====================================================================
-\  18. Concurrency guard
+\  18. ST-PROVE — generate SMT inclusion proof for account
+\ =====================================================================
+\  ( addr proof -- len | 0 )
+\  addr  = 32-byte account address
+\  proof = buffer for proof data (>= 10240 bytes recommended)
+\  Rebuilds SMT, then generates proof via SMT-PROVE.
+\  Returns number of proof entries, or 0 if account not found.
+
+: ST-PROVE  ( addr proof -- len )
+    >R
+    _ST-REBUILD-TREE
+    R> _ST-SMT SWAP SMT-PROVE ;
+
+\ =====================================================================
+\  19. ST-VERIFY-PROOF — verify SMT inclusion proof
+\ =====================================================================
+\  ( key leaf proof len root -- flag )
+\  key   = 32-byte account address
+\  leaf  = 32-byte entry hash (SHA3-256 of 72-byte entry)
+\  proof = proof data from ST-PROVE
+\  len   = number of proof entries
+\  root  = 32-byte expected root
+\  Thin wrapper around SMT-VERIFY.
+
+: ST-VERIFY-PROOF  ( key leaf proof len root -- flag )
+    SMT-VERIFY ;
+
+\ =====================================================================
+\  20. Concurrency guard
 \ =====================================================================
 
 REQUIRE ../concurrency/guard.f
 GUARD _st-guard
 
 ' ST-INIT           CONSTANT _st-init-xt
+' ST-DESTROY        CONSTANT _st-dest-xt
 ' ST-LOOKUP         CONSTANT _st-lookup-xt
 ' ST-CREATE         CONSTANT _st-create-xt
 ' ST-BALANCE@       CONSTANT _st-bal-xt
@@ -523,12 +571,15 @@ GUARD _st-guard
 ' ST-APPLY-TX       CONSTANT _st-apply-xt
 ' ST-VERIFY-TX      CONSTANT _st-verify-xt
 ' ST-ROOT           CONSTANT _st-root-xt
+' ST-PROVE          CONSTANT _st-prove-xt
+' ST-VERIFY-PROOF   CONSTANT _st-vfyp-xt
 ' ST-ADDR-FROM-KEY  CONSTANT _st-afk-xt
 ' ST-SET-HEIGHT     CONSTANT _st-seth-xt
 ' ST-SNAPSHOT       CONSTANT _st-snap-xt
 ' ST-RESTORE        CONSTANT _st-rest-xt
 
 : ST-INIT           _st-init-xt    _st-guard WITH-GUARD ;
+: ST-DESTROY        _st-dest-xt   _st-guard WITH-GUARD ;
 : ST-LOOKUP         _st-lookup-xt  _st-guard WITH-GUARD ;
 : ST-CREATE         _st-create-xt  _st-guard WITH-GUARD ;
 : ST-BALANCE@       _st-bal-xt     _st-guard WITH-GUARD ;
@@ -538,6 +589,8 @@ GUARD _st-guard
 : ST-APPLY-TX       _st-apply-xt   _st-guard WITH-GUARD ;
 : ST-VERIFY-TX      _st-verify-xt  _st-guard WITH-GUARD ;
 : ST-ROOT           _st-root-xt    _st-guard WITH-GUARD ;
+: ST-PROVE          _st-prove-xt   _st-guard WITH-GUARD ;
+: ST-VERIFY-PROOF   _st-vfyp-xt   _st-guard WITH-GUARD ;
 : ST-ADDR-FROM-KEY  _st-afk-xt    _st-guard WITH-GUARD ;
 : ST-SET-HEIGHT     _st-seth-xt   _st-guard WITH-GUARD ;
 : ST-SNAPSHOT       _st-snap-xt    _st-guard WITH-GUARD ;

@@ -98,8 +98,10 @@ CREATE _SMT-TM2  32 ALLOT         \ second temp (empty root)
 \ =====================================================================
 \  4. SMT-INIT — allocate XMEM pool, build free list
 \ =====================================================================
+VARIABLE _smt-init-tree   \ temp — holds tree addr during DO LOOP
 
 : _SMT-INIT  ( tree -- flag )
+    DUP _smt-init-tree !
     DUP >R
     _SMT-MAX-NODES _SMT-NODE-SZ * XMEM-ALLOT
     DUP 0= IF DROP R> DROP 0 EXIT THEN
@@ -113,10 +115,12 @@ CREATE _SMT-TM2  32 ALLOT         \ second temp (empty root)
     \ Zero entire pool
     R@ _SD-POOL + @ _SMT-MAX-NODES _SMT-NODE-SZ * 0 FILL
     \ Build free list: chain 1→2→3→...→max→0
+    \ NOTE: R@ inside DO LOOP returns loop index, not tree.
+    \       Use _smt-init-tree @ instead.
     _SMT-MAX-NODES 1+ 1 DO
-        _SMT-FREE I R@ _SMT-NODE _SN-TYPE + !
+        _SMT-FREE I _smt-init-tree @ _SMT-NODE _SN-TYPE + !
         I _SMT-MAX-NODES < IF I 1+ ELSE 0 THEN
-        I R@ _SMT-NODE _SN-X2 + !
+        I _smt-init-tree @ _SMT-NODE _SN-X2 + !
     LOOP
     1 R> _SD-FREE + !
     -1 ;
@@ -488,7 +492,10 @@ VARIABLE _smt-lk-tree
     DUP _SD-ROOT + @ DUP 0= IF
         2DROP _SMT-TM2 32 0 FILL _SMT-TM2 EXIT
     THEN
-    SWAP _SMT-NODE-HASH ;
+    SWAP _SMT-NODE-HASH
+    \ Always copy to _SMT-TM2 so caller gets a stable pointer
+    \ (_SMT-NODE-HASH may return _SMT-TMP which is volatile).
+    DUP _SMT-TM2 32 CMOVE DROP _SMT-TM2 ;
 
 : SMT-ROOT   _SMT-ROOT ;
 : SMT-COUNT  ( tree -- n )    _SD-LCNT + @ ;
