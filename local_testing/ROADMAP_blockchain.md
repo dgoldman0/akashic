@@ -61,7 +61,7 @@ chain.
 | **SPHINCS+ bandwidth explosion** | 7,856 B/sig × 256 txs = 2.1 MB/block.  A thousand hybrid blocks = 2 GB. | Impractical for high-throughput or bandwidth-constrained networks. | **Accept** — hybrid mode is opt-in.  Default to Ed25519-only. |
 | **Software sandbox on flat address space** | No MMU, no process isolation.  One bounds-check bug = full compromise. | Adversarial public contracts are high-risk. | **Two-tier approach**: (1) capability-based isolation via .m64 import whitelisting + bounds-checked memory (trusted consortium deployers), (2) full shadow-dictionary ITC interpreter for adversarial deployments.  Extensive fuzzing either way. |
 | **256-tx-per-block cap is proof-geometric** | Tied to STARK trace width, not a tunable parameter. | Can't increase per-block throughput without redesigning the proof system. | **Mitigate** — throughput = txs/block × blocks/time.  Shorten block time (PoA is near-instant), parallelize tx validation via `PAR-MAP`, pipeline proof generation (prove block N on background core while producing N+1), batch STARK proofs every K blocks.  Realistic target: hundreds of TPS. |
-| **PoSA (Mode 3) not implemented** | Planned production consensus mode (authorized set + stake weight) is absent from consensus.f.  Only modes 0–2 (PoW/PoA/PoS) exist. | Cannot deploy in the intended production configuration. | **Implement** — add Mode 3 to consensus.f as part of Phase 5b.  ~120 lines. |
+| ~~**PoSA (Mode 3) not implemented**~~ | ✅ **Resolved by Phase 5b.** `consensus.f` Stage D implements PoSA (Mode 3) with staked-authority election, unified `CON-SEAL`/`CON-CHECK` dispatch, and `CON-SET-KEYS` signing context.  `genesis.f` encodes chain config in block 0. | — | Done |
 
 ### Revised strategy
 
@@ -70,7 +70,7 @@ until the foundation is production-grade.**  The new priority order:
 
 1. ~~**Phase 6.5a — Real persistence** (file I/O, crash recovery)~~ ✅ **Done** (commit 3f9ca41)
 2. ~~**Phase 3b — Scalable state** (decouple accounts from trace width)~~ ✅ **Done** (commits 35a8e8c, b9e1c97, d713801)
-3. **Phase 5b — Consensus hardening** (genesis config, anti-grinding, **PoSA mode**) ← **NEXT**
+3. ~~**Phase 5b — Consensus hardening** (genesis config, anti-grinding, **PoSA mode**)~~ ✅ **Done** (commit 63bc062)
 4. ~~**Phase 6.5b — Light client protocol** (Merkle proof RPC)~~ ✅ **Done** (commit bcdaf21)
 5. *Then* Phase 7 (Forth VM) and Phase 8 (Ethereum interop)
 
@@ -194,11 +194,11 @@ roughly a third of that.  Phase 8 (Ethereum interop) adds another
 > | Gap (new) | Impact | Complexity |
 > |-----------|--------|------------|
 > | ~~No real disk I/O~~ | ✅ **Resolved by Phase 6.5a.** `persist.f` rewrite (commit 3f9ca41) adds sector-based file I/O via KDOS words.  Crash recovery with journal replay. | Done |
-> | **No PoSA consensus mode** | **Production deployment plans require Proof-of-Staked-Authority (Mode 3).** `consensus.f` only implements PoW (0), PoA (1), PoS (2).  PoSA — the hybrid that combines staked validators with authority rotation — is not yet coded. | Medium-High (~200–300 lines) |
+> | ~~**No PoSA consensus mode**~~ | ✅ **Resolved by Phase 5b.** `consensus.f` Stage D adds PoSA (Mode 3) with staked-authority election.  `CON-SET-KEYS` fixes the CON-SEAL abstraction leak.  Commit 63bc062. | Done |
 > | ~~Account cap = STARK trace width~~ | ✅ **Resolved by Phase 3b.** Paged state + SMT decouple account count from proof geometry. `_ST-MAX-PAGES` is a single constant (16 for emulator testing, crank up for production). | Done |
 > | ~~No light client protocol~~ | ✅ **Resolved by Phase 6.5b.** `light.f` + `rpc.f` extensions deliver SMT proof generation/verification and four new RPC methods.  Light clients can verify account state against the state root without running a full node. | Done |
-> | No genesis-block config | Consensus mode is a runtime variable, not protocol-enforced. | Easy (~50 lines) |
-> | No anti-grinding for PoS | Leader election seed is manipulable by block producer. | Medium (~100 lines) |
+> | ~~No genesis-block config~~ | ✅ **Resolved by Phase 5b.** `genesis.f` (207 lines) encodes chain parameters (consensus mode, epoch length, authorities, balances) as CBOR in block 0.  Commit 63bc062. | Done |
+> | ~~No anti-grinding for PoS~~ | ✅ **Resolved by Phase 5b.** Leader seed uses 2-block lookback (`block[height-2].hash`).  Shared by PoS and PoSA.  Commit 63bc062. | Done |
 > | ~~Persist log cap~~ | ✅ **Resolved by Phase 6.5a.** Sector-based persistence replaced the fixed in-memory append buffer.  Capacity scales with available storage. | Done |
 >
 > These need to be addressed *before* Phase 7 (Forth VM).
@@ -215,7 +215,7 @@ roughly a third of that.  Phase 8 (Ethereum interop) adds another
 | **Proof system** | STARK validity proofs optional per block — prover can attach proof that all state transitions are valid |
 | **State model** | Account-based (not UTXO) — paged state tree (Phase 3b) with SMT, scales to arbitrary account counts.  `_ST-MAX-PAGES` is an emulator testing constant; production cranks it up. |
 | **Block size** | 256 transactions max per block — matches STARK trace size for provability |
-| **Consensus** | Pluggable — four leader-election modes: PoW (0), PoA (1), PoS (2), **PoSA (3, planned)** × orthogonal STARK validity overlay flag.  PoW for bootstrap/dev, PoA for consortium, PoS for staked networks, PoSA for production.  Any mode can optionally attach STARK proofs; PoSA+STARK is the production endgame. |
+| **Consensus** | Pluggable — four leader-election modes: PoW (0), PoA (1), PoS (2), **PoSA (3)** × orthogonal STARK validity overlay flag.  PoW for bootstrap/dev, PoA for consortium, PoS for staked networks, PoSA for production.  Any mode can optionally attach STARK proofs; PoSA+STARK is the production endgame. |
 | **Not re-entrant** | Same as all Akashic modules — serialized per guard for STARK determinism, but parallelizable for I/O and tx validation via KDOS multi-core |
 | **No floating point** | All values are integers (Baby Bear field elements or 64-bit) |
 | **Post-quantum ready** | SPHINCS+ (hash-based, FIPS 205) uses only SHA3/SHAKE — leverages the existing hardware accelerator.  No new algebraic structures needed. |
@@ -237,15 +237,13 @@ roughly a third of that.  Phase 8 (Ethereum interop) adds another
 >   On multi-core hardware this serializes everything.
 >   However concurrency libraries are built and we can scale up somewhat.
 >   It would require some refactoring and bumping gossip peer count.
-> - **Consensus mode as variable** — Must be replaced with
->   genesis-block configuration.  A chain where nodes can disagree
->   on the consensus mechanism by setting a different variable is
->   not a real protocol.  See Phase 5b.
-> - **Missing principle: Chain ID / genesis config** — There is no
->   chain identifier.  Two independent deployments with different
->   parameters are indistinguishable at the protocol level.  Needs
->   a genesis block that encodes: chain ID, consensus mode, STARK
->   overlay flag, epoch length, min stake, lock period.
+ > - ~~**Consensus mode as variable**~~ **Resolved by Phase 5b.**
+>   `genesis.f` encodes consensus mode in block 0 CBOR config.
+>   `GEN-LOAD` sets `CON-MODE!` from the genesis payload at startup.
+> - ~~**Missing principle: Chain ID / genesis config**~~ **Resolved by
+>   Phase 5b.** `genesis.f` encodes chain ID, consensus mode, STARK
+>   overlay flag, epoch length, min stake, lock period, authorities,
+>   and initial balances.  Genesis block hash = chain identity.
 
 ---
 
@@ -932,16 +930,16 @@ All concurrency-sensitive words wrapped with `GUARD`/`WITH-GUARD`.
 
 **Prefix:** `CON-`
 **Depends on:** block.f, state.f, stark.f (optional), ed25519.f, random.f
-**Actual size:** 677 lines
+**Actual size:** 939 lines (677 Stage A+B, 262 Stage D PoSA + signing context + anti-grinding)
 **Difficulty:** Medium
-**Status:** ✅ Implemented (modes 0–2); **Mode 3 (PoSA) planned for Phase 5b**
+**Status:** ✅ Implemented (modes 0–3) — PoSA added by Phase 5b (commit 63bc062)
 
 ### Four Leader-Election Modes + STARK Overlay
 
 The consensus module separates two orthogonal concerns:
 
 1. **Leader election** — who produces the next block.  Selected by
-   `CON-MODE` (0=PoW, 1=PoA, 2=PoS, 3=PoSA — **Mode 3 not yet implemented**).
+   `CON-MODE` (0=PoW, 1=PoA, 2=PoS, 3=PoSA).
 2. **Validity proving** — whether the block carries a STARK proof.
    Toggled by `CON-STARK?` (boolean flag, independent of mode).
 
@@ -1002,7 +1000,7 @@ validity flag).
 
 **Not a standalone mode:** STARK proves *what* is in the block, but
 does not decide *who* produces it.  It always pairs with one of the
-three leader-election modes (PoW, PoA, PoS) — or PoSA once Mode 3 is implemented.
+four leader-election modes (PoW, PoA, PoS, PoSA).
 
 #### 5.3 Proof of Authority
 
@@ -1134,35 +1132,24 @@ STARK overlay adds ~60 lines of shared glue regardless of mode.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `CON-MODE` | `CON-MODE@` / `CON-MODE!` | 0=PoW, 1=PoA, 2=PoS, 3=PoSA (**Mode 3 not yet implemented**) |
+| `CON-MODE` | `CON-MODE@` / `CON-MODE!` | 0=PoW, 1=PoA, 2=PoS, 3=PoSA |
 | `CON-STARK?` | variable | TRUE = attach STARK validity proof to blocks (any mode) |
 | `CON-SEAL` | `( blk -- )` | Apply leader election + optional STARK proof |
 | `CON-CHECK` | `( blk -- flag )` | Verify leader election + STARK proof (if present) |
 
 > **⚠ REVISED — Consensus issues that must be fixed before production.**
 >
-> 1. **`CON-MODE` is a runtime variable, not a genesis parameter.**
->    Nothing in the protocol enforces that all nodes agree on the
->    consensus mode.  If one node runs PoW and another PoA, they
->    produce incompatible blocks and neither will know why.  This
->    must be baked into the genesis block / chain config.  See
->    Phase 5b.
+> 1. ~~**`CON-MODE` is a runtime variable, not a genesis parameter.**~~
+>    **Resolved by Phase 5b.** `genesis.f` encodes consensus mode in
+>    block 0 CBOR payload.  `GEN-LOAD` sets `CON-MODE!` at startup.
 >
-> 2. **`CON-SEAL` leaks its abstraction for PoA and PoS.**  The
->    unified interface is `( blk -- )` but PoA/PoS need
->    `( blk priv pub -- )`.  The source literally says "PoA seal
->    is a no-op; use CON-POA-SIGN directly."  Either fix the
->    interface (pass keys via a context variable) or document
->    that `CON-SEAL` is PoW-only.
+> 2. ~~**`CON-SEAL` leaks its abstraction for PoA and PoS.**~~
+>    **Resolved by Phase 5b.** `CON-SET-KEYS ( priv pub -- )` stores
+>    the node's signing keys.  `CON-SEAL` uses them for all modes.
 >
-> 3. **PoS leader election is grindable.**  Seed = `SHA3(prev_hash
->    || height)`.  The block producer influences `prev_hash` by
->    choosing which transactions to include (different txs →
->    different state root → different block hash).  Standard
->    mitigation: RANDAO (commit-reveal) or VDF.  At minimum,
->    use `SHA3(prev_hash || height)` where `prev_hash` is the
->    *parent's parent* hash (2-block lookback), not the current
->    parent.  See Phase 5b.
+> 3. ~~**PoS leader election is grindable.**~~
+>    **Resolved by Phase 5b.** Seed now uses 2-block lookback:
+>    `SHA3(block[height-2].hash || height)`.  Shared by PoS and PoSA.
 >
 > 4. ~~**PoS validator set shares the 256-account table with users.**~~
 >    ✅ Partially resolved by Phase 3b — account count is no longer
@@ -1181,12 +1168,12 @@ STARK overlay adds ~60 lines of shared glue regardless of mode.
 
 ## Phase 5b — Consensus Hardening (NEW)
 
-**Location:** `akashic/consensus/consensus.f` (modify) + `akashic/store/genesis.f` (new)
+**Location:** `akashic/consensus/consensus.f` (modified) + `akashic/store/genesis.f` (new)
 **Prefix:** `GEN-` (genesis), `CON-` (consensus amendments)
 **Depends on:** consensus.f, block.f, state.f, **stark.f multi-column (Phase 4.5 in STARK-design.md)**
-**Estimated size:** ~200–300 lines
+**Actual size:** consensus.f +262 lines (677 → 939), genesis.f 207 lines new = **469 lines total**
 **Difficulty:** Medium
-**Status:** Not started
+**Status:** ✅ **Complete** (commit 63bc062) — 13/13 Phase 5b tests + 31/31 Stage A regression tests passing
 **Priority:** **Critical** — must precede production multi-node deployment
 
 > **⚠ PREREQUISITE DISCOVERED:** The STARK validity overlay (§5.2)
@@ -1772,11 +1759,12 @@ secondary instruction set — the host's own compilation machinery
 > - ~~No real persistence~~ ✅ Phase 6.5a (sector-based file I/O)
 > - ~~No light client protocol~~ ✅ Phase 6.5b (Merkle proof RPC)
 >
-> **Remaining blocker:** Phase 5b (consensus hardening + **PoSA mode**).
-> Without genesis-enforced consensus, multi-node deployment is
-> fragile.  PoSA (Mode 3) is the planned production mode.
+> **~~Remaining blocker:~~** ~~Phase 5b (consensus hardening + **PoSA mode**).~~
+> ✅ **Resolved.** Phase 5b complete (commit 63bc062).
+> Genesis-enforced consensus, anti-grinding, CON-SET-KEYS, and PoSA
+> (Mode 3) are all implemented.
 >
-> **New ordering:** Complete Phase 5b first, then the VM has a
+> **New ordering:** Phase 5b is done.  The VM has a
 > solid foundation.
 >
 > The VM design itself is good.  The `TX-MAX-DATA` bump should use
@@ -2731,9 +2719,8 @@ alongside the custom chain for bridging.
 > The original plan treated Phase 7 (Forth VM) and Phase 8 (Ethereum
 > interop) as the finish line.  The revised plan inserted foundation
 > phases — **3b, 5b, 6.5** — that must land before any smart-contract
-> or interop work begins.  **3b and 6.5 are now complete.**
-> *Do not proceed to Phase 7 until Phase 5b (consensus hardening +
-> PoSA) is done.*
+> or interop work begins.  **All foundation phases are now complete.**
+> Phase 7 (Forth VM) can proceed.
 
 | Order | Module | Depends on (new) | Lines | Tests | Status |
 |------:|--------|------------------|------:|------:|--------|
@@ -2744,7 +2731,7 @@ alongside the custom chain for bridging.
 | **3b** | **smt.f + state.f rework + witness.f** | **state.f, merkle.f, sha3** | **1824** | **25+14+21+22** | **✅ done** |
 | 4 | block.f | tx, state | 779 | 19 | ✅ done |
 | 5 | consensus.f | block, state, stark, random | 677 | 19 | ✅ done |
-| **5b** | **consensus.f harden + PoSA** | **consensus.f, block.f** | **~300** | **~20** | **🔴 NEXT** |
+| **5b** | **consensus.f harden + genesis.f + PoSA** | **consensus.f, block.f, state.f, cbor.f** | **469** | **13+31** | **✅ done** |
 | 6a | mempool.f | tx, sort | 369 | 16 | ✅ done |
 | 6b | gossip.f | ws, cbor, tx, block | 360 | 15 | ✅ done |
 | 6c | rpc.f | server, router, json, mempool, state, block | 490 | 10 | ✅ done |
@@ -2788,9 +2775,11 @@ mempool ─── gossip ─── rpc ─── sync ─── persist ──�
   ceiling.  Paged state + SMT decouple account count from proof
   geometry.  smt.f (717 lines), state.f rewrite (640 lines),
   witness.f (467 lines).
-- **Phase 5b (Consensus Hardening + PoSA)** 🔴 **NEXT.** Fixes the
-  runtime-variable mode selector, PoS grinding, and CON-SEAL leak.
-  Also implements PoSA (Mode 3) — the planned production consensus.
+- **Phase 5b (Consensus Hardening + PoSA)** ✅ **Done.** Genesis config,
+  anti-grinding (2-block lookback), CON-SET-KEYS signing context, PoW
+  testing-only flag, PoSA Mode 3.  consensus.f 939 lines, genesis.f
+  207 lines.  13+31 tests.  Commit 63bc062.
+
 - **Phase 6.5a (Real Persistence)** ✅ **Done.** `persist.f` rewritten
   with sector-based KDOS file I/O. 284 lines, 9 tests.
 - **Phase 6.5b (Light Client)** ✅ **Done.** `light.f` + `rpc.f`
@@ -2809,12 +2798,13 @@ tx.f waits for both signature modules.  state.f can proceed in
 parallel with everything after Phase 1.  block.f integrates tx +
 state.  consensus.f sits on top.  mempool.f is independent after tx.f.
 
-**Phases 1–5 = chain data structures.  Phase 3b ✅ + 5b 🔴 = hardening
+**Phases 1–5 = chain data structures.  Phase 3b ✅ + 5b ✅ = hardening
 the foundation.  Phase 6 = running node.  Phase 6.5a ✅ + 6.5b ✅ =
 production infrastructure (real I/O + light client).  Phase 7 = smart
 contracts via sandboxed Forth VM.  Phase 8 = Ethereum/standard
-blockchain interop.**  Only Phase 5b (consensus hardening + PoSA)
-remains before Phase 7 can proceed.
+blockchain interop.**  All foundation phases complete — Phase 7 can proceed.
+
+
 
 ---
 
