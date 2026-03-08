@@ -41,7 +41,7 @@ REQUIRE consensus.f
 | **Anti-grinding** | PoS/PoSA leader seed uses 2-block lookback (`block[height-2].hash`) to prevent producer manipulation |
 | **Callback patching** | `CON-CHECK` auto-wired into `BLK-VERIFY` via `_BLK-CON-CHECK-XT` |
 | **Extension dispatch** | Staking tx handler wired into `state.f` via `_ST-TX-EXT-XT` |
-| **STARK-ready** | Orthogonal overlay stubs (`_CON-STARK-*-XT`) for Stage C |
+| **STARK-ready** | Orthogonal overlay stubs (`_CON-STARK-*-XT`) for Stage C.  Multi-column backend (`stark.f` v2.5) is complete. |
 | **Concurrency-safe** | Public API wrapped with `WITH-GUARD` |
 
 ---
@@ -415,6 +415,9 @@ This word is automatically wired into `BLK-VERIFY` at load time.
 Stage C (not yet implemented).  The overlay is orthogonal to the
 leader-election mode — when enabled, every block carries an additional
 validity proof.
+
+The multi-column trace backend (`stark.f` v2.5, Phase 4.5) is now
+complete, making Stage C wiring possible.
 
 Stubs are in place:
 - `_CON-STARK-PROVE-XT` — called by `CON-SEAL` (currently a no-op)

@@ -9,7 +9,8 @@ opening.
 REQUIRE merkle.f
 ```
 
-`PROVIDED akashic-merkle` — depends on `akashic-sha3`.
+`PROVIDED akashic-merkle` — depends on `akashic-sha3` and
+`akashic-guard` (from `../concurrency/guard.f`).
 
 ---
 
@@ -23,6 +24,7 @@ REQUIRE merkle.f
 - [Opening (Authentication Path)](#opening-authentication-path)
 - [Verification](#verification)
 - [Usage Example](#usage-example)
+- [Concurrency](#concurrency)
 - [Quick Reference](#quick-reference)
 - [Tree Layout](#tree-layout)
 
@@ -38,7 +40,7 @@ REQUIRE merkle.f
 | **1-indexed flat array** | Nodes numbered 1..2n−1. Node 1 = root, nodes n..2n−1 = leaves. Standard heap layout: parent = i/2, children = 2i, 2i+1. |
 | **Bottom-up build** | `MERKLE-BUILD` iterates from node n−1 down to 1, computing each parent from its two children. |
 | **Variable-based state** | All loop state uses `VARIABLE` words instead of return-stack tricks — `>R`/`R@` inside `DO..LOOP` reads the loop index, not the stashed value. |
-| **Not re-entrant** | Shares the SHA3 MMIO device and internal scratch buffers. |
+| **Concurrency-safe** | Mutating words are wrapped with a guard (see [Concurrency](#concurrency)).  Pure read accessors are left unguarded. |
 
 ---
 
@@ -222,6 +224,22 @@ mt MERKLE-ROOT SHA3-256-.  CR
 2 mt MERKLE-LEAF@  2  proof  depth @  mt MERKLE-ROOT  MERKLE-VERIFY
 \ → TRUE (-1)
 ```
+
+---
+
+## Concurrency
+
+`merkle.f` creates a guard (`GUARD _merkle-guard`) and wraps every
+word that mutates tree state with `WITH-GUARD`:
+
+**Guarded:** `MERKLE-BUILD`, `MERKLE-OPEN`, `MERKLE-VERIFY`,
+`MERKLE-LEAF!`.
+
+**Unguarded (pure reads):** `MERKLE-TREE`, `MERKLE-N`,
+`MERKLE-ROOT`, `MERKLE-LEAF@`.
+
+Because `WITH-GUARD` uses `CATCH` internally, the guard is always
+released even if the wrapped word throws.
 
 ---
 

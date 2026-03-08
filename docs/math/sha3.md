@@ -8,7 +8,8 @@ computation to the BIOS SHA-3 / Keccak coprocessor at MMIO
 REQUIRE sha3.f
 ```
 
-`PROVIDED akashic-sha3` — no additional dependencies.
+`PROVIDED akashic-sha3` — depends on `akashic-guard` (from
+`../concurrency/guard.f`).
 
 ---
 
@@ -22,6 +23,7 @@ REQUIRE sha3.f
 - [HMAC-SHA3-256](#hmac-sha3-256)
 - [Hex Conversion & Display](#hex-conversion--display)
 - [Comparison](#comparison)
+- [Concurrency](#concurrency)
 - [Quick Reference](#quick-reference)
 
 ---
@@ -37,7 +39,7 @@ REQUIRE sha3.f
 | **HMAC** | `SHA3-256-HMAC` implements HMAC-SHA3-256 (RFC 2104, block size = 136). |
 | **Constant-time comparison** | `SHA3-256-COMPARE` / `SHA3-512-COMPARE` use OR-accumulation with no early exit. |
 | **Mode safety** | SHA3-512, SHAKE-128, and SHAKE-256 words restore SHA3-256-MODE before returning. |
-| **Not re-entrant** | Module-scoped VARIABLEs for HMAC pads and hex pointer.  One hash at a time. |
+| **Concurrency-safe** | Public words are wrapped with a concurrency guard (see [Concurrency](#concurrency)).  Module-scoped VARIABLEs are still single-instance, but serialised access makes multi-task use safe. |
 
 ---
 
@@ -272,6 +274,35 @@ The BIOS SHA-3 / Keccak coprocessor lives at MMIO base
 
 BIOS words used: `SHA3-INIT`, `SHA3-UPDATE`, `SHA3-FINAL`,
 `SHA3-MODE!`, `SHA3-MODE@`, `SHA3-DOUT@`, `SHA3-SQUEEZE-NEXT`.
+
+---
+
+## Concurrency
+
+`sha3.f` creates a guard (`GUARD _sha3-guard`) and wraps every
+public word that touches shared state.
+
+### One-shot words (WITH-GUARD)
+
+Each call acquires the guard, runs the original implementation inside
+`CATCH` (releasing on any throw), then releases:
+
+`SHA3-256-HASH`, `SHA3-512-HASH`, `SHAKE-128`, `SHAKE-256`,
+`SHA3-256-HMAC`, `SHA3-256->HEX`, `SHA3-512->HEX`.
+
+### Streaming words
+
+| Word | Guard action |
+|---|---|
+| `SHA3-256-BEGIN` / `SHA3-512-BEGIN` | **Acquire** the guard (blocking). |
+| `SHA3-256-ADD` / `SHA3-512-ADD` | **Assert** ownership (`GUARD-MINE?`). Throws **-258** if the caller does not hold the guard. |
+| `SHA3-256-END` / `SHA3-512-END` | Assert ownership, run original via `CATCH`, then **release** (always, even on error). |
+
+### Unguarded words
+
+Pure reads and display helpers that do not touch shared buffers are
+left unguarded: `SHA3-256-COMPARE`, `SHA3-512-COMPARE`,
+`SHA3-256-.`, `SHA3-512-.`, and all `*-LEN` / `*-HEX-LEN` constants.
 
 ---
 
