@@ -79,8 +79,11 @@ PROVIDED akashic-state
 ST-PAGE-ENTRIES ST-ENTRY-SIZE * CONSTANT _ST-PAGE-BYTES
 
 \ Maximum pages.  Each page = 256 accounts.
-\ 16 pages = 4096 accounts (backwards compatible).
-\ Increase for larger networks.
+\ **EMULATOR TESTING VALUE ONLY.**  16 pages = 4096 accounts is
+\ sized for the 16 MiB XMEM emulator.  Production MUST increase
+\ this to match available SDRAM — e.g. 256 pages = 65536 accounts
+\ (~4.6 MB XMEM), 1024 pages = 262144 accounts (~18 MB XMEM).
+\ The paging system handles any value; XMEM-ALLOT returns 0 if full.
   16 CONSTANT _ST-MAX-PAGES
 
 _ST-MAX-PAGES ST-PAGE-ENTRIES * CONSTANT ST-MAX-ACCOUNTS
@@ -536,9 +539,10 @@ VARIABLE _ST-AT-RBAL
 \      if allocated → _ST-PAGE-BYTES of page data
 \      if not allocated → skipped
 \
-\  Fixed max size:
+\  Fixed max size (scales with _ST-MAX-PAGES):
 \    16 + _ST-MAX-PAGES×8 + _ST-MAX-PAGES×_ST-PAGE-BYTES
-\  = 16 + 128 + 16 × 18432 = 295,056 bytes
+\  Current emulator value (16 pages): 295,056 bytes.
+\  Production example  (256 pages): 4,718,736 bytes (~4.5 MB).
 
 16 _ST-MAX-PAGES CELLS + _ST-MAX-PAGES _ST-PAGE-BYTES * + CONSTANT ST-SNAPSHOT-SIZE
 

@@ -246,8 +246,9 @@ transaction.
 ST-SNAPSHOT  ( dst -- )
 ```
 
-Copy the full account table + count to a buffer.
-Total size: 18,440 bytes (256 × 72 + 8).
+Copy the full paged account table + count to a buffer.
+Total size: ST-SNAPSHOT-SIZE (scales with `_ST-MAX-PAGES`;
+currently 295,056 bytes at 16 pages / emulator default).
 
 ### ST-RESTORE
 
@@ -262,7 +263,7 @@ transactions tentatively, check state root, then restore).
 ### ST-SNAPSHOT-SIZE
 
 ```forth
-ST-SNAPSHOT-SIZE  ( -- 18440 )
+ST-SNAPSHOT-SIZE  ( -- n )
 ```
 
 Size of a snapshot buffer in bytes.
@@ -273,10 +274,12 @@ Size of a snapshot buffer in bytes.
 
 | Constant | Value | Description |
 |---|---|---|
-| `ST-MAX-ACCOUNTS` | 256 | Maximum accounts in the table |
+| `ST-MAX-ACCOUNTS` | `_ST-MAX-PAGES` × 256 | Maximum accounts (scales with page count) |
+| `_ST-MAX-PAGES` | 16 (emulator) | Page count — **must be increased for production** |
+| `ST-PAGE-ENTRIES` | 256 | Accounts per page (STARK trace aligned) |
 | `ST-ENTRY-SIZE` | 72 | Bytes per account entry |
 | `ST-ADDR-LEN` | 32 | Account address length (SHA3-256 hash) |
-| `ST-SNAPSHOT-SIZE` | 18440 | Snapshot buffer size |
+| `ST-SNAPSHOT-SIZE` | 295,056 (at 16 pages) | Snapshot buffer size (scales with `_ST-MAX-PAGES`) |
 
 ---
 

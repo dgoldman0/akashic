@@ -193,7 +193,7 @@ roughly a third of that.  Phase 8 (Ethereum interop) adds another
 > | Gap (new) | Impact | Complexity |
 > |-----------|--------|------------|
 > | No real disk I/O | "Persistence" is in-memory.  Node restart = data loss. | Medium (~200–300 lines) |
-> | Account cap = STARK trace width | 256 accounts is structural, not tunable. | Hard (proof system redesign) |
+> | ~~Account cap = STARK trace width~~ | ✅ **Resolved by Phase 3b.** Paged state + SMT decouple account count from proof geometry. `_ST-MAX-PAGES` is a single constant (16 for emulator testing, crank up for production). | Done |
 > | No light client protocol | Every participant must run a full node. | Medium (~200 lines + RPC) |
 > | No genesis-block config | Consensus mode is a runtime variable, not protocol-enforced. | Easy (~50 lines) |
 > | No anti-grinding for PoS | Leader election seed is manipulable by block producer. | Medium (~100 lines) |
@@ -233,6 +233,8 @@ roughly a third of that.  Phase 8 (Ethereum interop) adds another
 > - **Not re-entrant** — Fine for Megapad-64 (single-core).  Should
 >   be explicitly stated as "by hardware constraint" not "by choice."
 >   On multi-core hardware this serializes everything.
+>   However concurrency libraries are built and we can scale up somewhat.
+>   It would require some refactoring and bumping gossip peer count.
 > - **Consensus mode as variable** — Must be replaced with
 >   genesis-block configuration.  A chain where nodes can disagree
 >   on the consensus mechanism by setting a different variable is
@@ -668,30 +670,25 @@ stay compatible).
 
 ### Storage
 
-Fixed-size account table: up to 256 accounts (matches Merkle leaf
-count and STARK trace size).  Sorted by address for O(log n)
-binary-search lookup.
+Paged XMEM-backed account table, sorted by address for O(log n)
+binary-search lookup.  Each page holds 256 entries (STARK trace
+aligned).  Pages allocated on demand.
 
-A 256-leaf Merkle tree commits to the state — each leaf is
-SHA3-256 of the 72-byte account entry.  The state root goes into
-the block header.  Tree is rebuilt on `ST-ROOT` (once per block
-finalization, not per transaction).
+State commitment via Sparse Merkle Tree (smt.f) — depth 256,
+storage proportional to active accounts, not address space.
+The state root goes into the block header.  Tree is rebuilt on
+`ST-ROOT` (once per block finalization, not per transaction).
 
-> **⚠ REVISED — This is the single biggest production blocker.**
+> **✅ RESOLVED by Phase 3b.**
 >
-> The 256-account limit is *not* a tunable constant.  It’s coupled to:
-> - Merkle leaf count (hardwired in `merkle.f`)
-> - STARK trace width (256 rows = proof geometry)
-> - Memory budget (256 × 72 = 18 KB for the flat sorted table)
-> - `BLK-MAX-TXS` (256 = one tx per account = trace alignment)
+> The old 256-account hardcoded cap is gone.  State is now:
+> - **Paged**: 256 accounts/page, pages allocated on demand from XMEM.
+> - **SMT-committed**: Sparse Merkle Tree replaces the dense 256-leaf tree.
+> - **STARK-decoupled**: trace proves the *touched subset* per block, not all accounts.
 >
-> Changing `ST-MAX-ACCOUNTS` to 4096 (as Phase 7 proposes) breaks
-> the STARK trace alignment and requires a new Merkle tree size.
-> This is the right direction but needs to be done *carefully*
-> as a standalone phase, not buried in a TX-MAX-DATA bump.
->
-> **See Phase 3b below** for the concrete upgrade path:
-> sparse Merkle tree + paged state + decoupled proof batching.
+> `_ST-MAX-PAGES` (currently 16 = 4096 accounts) is an **emulator
+> testing value only**.  Production: bump to 256+ (65K+ accounts).
+> The paging system, SMT, and snapshot code all scale automatically.
 
 ### API
 
@@ -746,13 +743,15 @@ precedes it.
 
 ### Problem
 
-The current 256-account cap is welded to three things:
+The *original* 256-account cap was welded to three things:
 1. The flat sorted array (256 × 72 = 18 KB)
 2. The 256-leaf Merkle tree
 3. The 256-row STARK trace width
 
-Changing `ST-MAX-ACCOUNTS` alone accomplishes nothing — the Merkle
-tree, STARK trace, and memory budget all need to move together.
+All three constraints were eliminated by Phase 3b.  The paged
+state + SMT design decouples account count from proof geometry.
+`_ST-MAX-PAGES` is now the only knob (set to 16 for emulator
+testing; crank up for production).
 
 ### Solution: Sparse Merkle Tree + Paged State
 
@@ -1939,7 +1938,7 @@ arguments.  **Phase 7 Step 0** bumps the size limits:
 |---|---|---|---|
 | `TX-MAX-DATA` | 256 B | **8,192 B** (8 KB) | ITC is cell-sized (8 B/XT), not as dense as bytecode — source needs room |
 | `TX-BUF-SIZE` | 8,296 B | **16,232 B** | +7,936 B from data field growth |
-| `ST-MAX-ACCOUNTS` | 256 | **4,096** | Practical address space for contracts + users |
+| `_ST-MAX-PAGES` | 16 (emulator) | **256+** | Production page count — scales account capacity (256 accts/page). Not a protocol change, just an XMEM sizing knob. |
 | `_PST-LOG-MAX` | 1 MB | **4 MB** | Larger txs → larger blocks → more log space |
 
 This is a **layout-breaking change** to tx.f — all offsets after byte

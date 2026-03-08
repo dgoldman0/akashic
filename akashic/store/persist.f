@@ -50,6 +50,9 @@ PROVIDED akashic-persist
 16384 CONSTANT _PST-ENC-SZ             \ per-block encode buffer
 1024  CONSTANT _PST-CHAIN-SECTORS      \ pre-allocate ~512 KB for chain
 40    CONSTANT _PST-STATE-SECTORS      \ pre-allocate ~20 KB for state
+\ *** _PST-STATE-SECTORS is sized for _ST-MAX-PAGES=16 (emulator).
+\ *** Production: scale to ST-SNAPSHOT-SIZE / 512 + margin.
+\ *** E.g. 256 pages → ~4.5 MB snapshot → 9216 sectors.
 
 \ =====================================================================
 \  2. Storage
