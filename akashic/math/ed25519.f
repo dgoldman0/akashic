@@ -34,6 +34,9 @@ CREATE _ED-L  32 ALLOT  _ED-L 32 0 FILL
 0x0000000000000000 _ED-L 16 + !
 0x1000000000000000 _ED-L 24 + !
 
+\ Montgomery p_inv for subgroup order L.  Zero signals
+\ "compute Montgomery inverse on demand" inside FIELD-LOAD-PRIME.
+\ If profiling shows _ED-USE-L is hot, precompute the real value here.
 CREATE _ED-PINV0  32 ALLOT  _ED-PINV0 32 0 FILL
 
 CREATE _ED-R256  32 ALLOT  _ED-R256 32 0 FILL
@@ -74,6 +77,13 @@ CREATE _ED-EXP38  32 ALLOT  _ED-EXP38 32 0 FILL
 
 CREATE _ED-ONE  32 ALLOT  _ED-ONE 32 0 FILL
 0x0000000000000001 _ED-ONE !
+
+\ Curve25519 prime p = 2^255 - 19  (32-byte LE)
+CREATE _ED-P  32 ALLOT  _ED-P 32 0 FILL
+0xFFFFFFFFFFFFFFED _ED-P !
+0xFFFFFFFFFFFFFFFF _ED-P 8 + !
+0xFFFFFFFFFFFFFFFF _ED-P 16 + !
+0x7FFFFFFFFFFFFFFF _ED-P 24 + !
 
 \ -----------------------------------------------------------------
 \  Scratch buffers
@@ -178,9 +188,29 @@ VARIABLE _ED-ENC-DST  VARIABLE _ED-R-HASH  VARIABLE _ED-R-DST
     _ED-T5 _ED-T8 _ED-RR @ 96 + FIELD-MUL ;        \ T3 = E*H
 
 \ -----------------------------------------------------------------
+\  Constant-time conditional copy (CMOV pattern)
+\  Copies len bytes from src to dst when bit=1; no-op when bit=0.
+\  Branchless: uses arithmetic mask (AND/XOR), no IF/THEN.
+\ -----------------------------------------------------------------
+
+VARIABLE _ED-CT-MSK
+
+: _ED-CT-SELECT  ( dst src len bit -- )
+    NEGATE _ED-CT-MSK !               \ bit=1 -> mask=-1, bit=0 -> 0
+    0 ?DO                              \ ( dst src )
+        OVER I + C@                    \ dst[I]         ( dst src d )
+        OVER I + C@                    \ src[I]         ( dst src d s )
+        OVER XOR _ED-CT-MSK @ AND     \ (s^d) & mask   ( dst src d masked )
+        XOR                            \ d ^ masked     ( dst src result )
+        2 PICK I + C!                  \ dst[I]=result  ( dst src )
+    LOOP
+    2DROP ;
+
+\ -----------------------------------------------------------------
 \  Scalar multiply:  result in _ED-PA
 \  ( scalar-addr point-addr -- )
-\  Iterates bits MSB-first, double-and-add.
+\  Constant-time double-and-always-add with CMOV selection.
+\  No secret-dependent branches — immune to timing/power analysis.
 \ -----------------------------------------------------------------
 
 : _ED-SMUL  ( scalar point -- )
@@ -189,15 +219,16 @@ VARIABLE _ED-ENC-DST  VARIABLE _ED-R-HASH  VARIABLE _ED-R-DST
     32 0 DO
         _ED-SA @ 31 I - + C@ _ED-BVAL !
         8 0 DO
-            \ Double: PB = 2*PA
+            \ Double: PB = 2*PA (always)
             _ED-PA _ED-PP !  _ED-PB _ED-RR !  _ED-DBL
             _ED-PB _ED-PA 128 CMOVE
-            \ Conditional add
-            _ED-BVAL @ 7 I - RSHIFT 1 AND IF
-                _ED-PA _ED-PP !  _ED-QQ @ _ED-QQ !  _ED-PB _ED-RR !
-                _ED-ADD
-                _ED-PB _ED-PA 128 CMOVE
-            THEN
+            \ Add: PB = PA + Q (always compute)
+            _ED-PA _ED-PP !  _ED-QQ @ _ED-QQ !  _ED-PB _ED-RR !
+            _ED-ADD
+            \ Constant-time select: PA = bit ? PB : PA
+            _ED-BVAL @ 7 I - RSHIFT 1 AND   ( bit: 0 or 1 )
+            >R
+            _ED-PA _ED-PB 128 R> _ED-CT-SELECT
         LOOP
     LOOP ;
 
@@ -217,7 +248,34 @@ VARIABLE _ED-ENC-DST  VARIABLE _ED-R-HASH  VARIABLE _ED-R-DST
     THEN ;
 
 \ -----------------------------------------------------------------
+\  32-byte unsigned comparison (LE): TRUE if a >= b
+\ -----------------------------------------------------------------
+
+: _ED-BYTES-GTE?  ( a b -- flag )
+    31
+    BEGIN
+        DUP 0>= WHILE
+        DUP >R
+        2 PICK R@ + C@                 \ a[i]
+        2 PICK R> + C@                 \ b[i]
+        2DUP <> IF
+            > NIP NIP NIP EXIT
+        THEN
+        2DROP
+        1-
+    REPEAT
+    DROP 2DROP TRUE ;           \ a == b => a >= b => TRUE
+
+\ -----------------------------------------------------------------
+\  32-byte unsigned comparison (LE): TRUE if a < b
+\ -----------------------------------------------------------------
+
+: _ED-BYTES-LT?  ( a b -- flag )
+    _ED-BYTES-GTE? 0= ;
+
+\ -----------------------------------------------------------------
 \  Point decode: 32 bytes -> extended point, returns flag
+\  Rejects non-canonical y (y >= p) per RFC 8032 §5.1.3.
 \ -----------------------------------------------------------------
 
 : _ED-DECODE  ( buf pt -- flag )
@@ -226,6 +284,8 @@ VARIABLE _ED-ENC-DST  VARIABLE _ED-R-HASH  VARIABLE _ED-R-DST
     _ED-PP @ 31 + C@ 7 RSHIFT _ED-DEC-SIGN !
     _ED-PP @ _ED-RR @ 32 + 32 CMOVE
     _ED-RR @ 32 + 31 + DUP C@ 0x7F AND SWAP C!
+    \ ── P04: reject non-canonical y (y >= p) ──
+    _ED-RR @ 32 + _ED-P _ED-BYTES-GTE? IF FALSE EXIT THEN
     _ED-RR @ 64 + FIELD-ONE
     _ED-RR @ 32 + _ED-T1 FIELD-SQR                 \ y^2
     _ED-T1 _FLD-ONE _ED-T2 FIELD-SUB               \ u = y^2-1
@@ -333,7 +393,14 @@ VARIABLE _ED-ENC-DST  VARIABLE _ED-R-HASH  VARIABLE _ED-R-DST
     _ED-USE-L
     _ED-SC2 _ED-SG-PRIV @ _ED-SC3 FIELD-MUL     \ h*a mod L
     _ED-SC1 _ED-SC3 _ED-SC3 FIELD-ADD             \ r + h*a mod L
-    _ED-SC3 _ED-SG-SIG @ 32 + 32 CMOVE ;
+    _ED-SC3 _ED-SG-SIG @ 32 + 32 CMOVE
+    \ ── P05: zeroize secret-derived material ──
+    _ED-H64 64 0 FILL
+    _ED-SC1 32 0 FILL
+    _ED-SC2 32 0 FILL
+    _ED-SC3 32 0 FILL
+    _ED-PA  128 0 FILL
+    _ED-PB  128 0 FILL ;
 
 \ -----------------------------------------------------------------
 \  ED25519-VERIFY  ( msg len pub sig -- flag )
@@ -347,6 +414,8 @@ VARIABLE _ED-ENC-DST  VARIABLE _ED-R-HASH  VARIABLE _ED-R-DST
     _ED-VF-PUB @ _ED-PC _ED-DECODE 0= IF FALSE EXIT THEN
     \ Decode R
     _ED-VF-SIG @ _ED-PD _ED-DECODE 0= IF FALSE EXIT THEN
+    \ ── P02: reject malleable signatures (S >= L) ──
+    _ED-VF-SIG @ 32 + _ED-L _ED-BYTES-GTE? IF FALSE EXIT THEN
     \ h = SHA-512(R||pub||msg) mod L
     SHA512-BEGIN
     _ED-VF-SIG @ 32 SHA512-ADD
@@ -366,7 +435,10 @@ VARIABLE _ED-ENC-DST  VARIABLE _ED-R-HASH  VARIABLE _ED-R-DST
     _ED-ADD
     \ Compare S*B (ENC1) vs R+h*A (PC)
     _ED-PC _ED-ENC2 _ED-ENCODE
-    _ED-ENC1 _ED-ENC2 FIELD-EQ? ;
+    _ED-ENC1 _ED-ENC2 FIELD-EQ?
+    \ ── P05: zeroize scratch after verify ──
+    _ED-H64 64 0 FILL
+    _ED-SC1 32 0 FILL ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
 REQUIRE ../concurrency/guard.f
