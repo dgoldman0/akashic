@@ -12,7 +12,7 @@
 \   SPX-KEYGEN        ( seed pub sec -- )   keypair from 48-byte seed
 \   SPX-KEYGEN-RANDOM ( pub sec -- )        keypair from system RNG
 \   SPX-SIGN          ( msg len sec sig -- ) sign -> 7856-byte sig
-\   SPX-VERIFY        ( msg len pub sig -- flag ) verify signature
+\   SPX-VERIFY        ( msg len pub sig sig-len -- flag ) verify signature
 \
 \  Constants:
 \   SPX-N             ( -- 16 )     security parameter (bytes)
@@ -322,7 +322,10 @@ VARIABLE _SPX-KG-SEC
     _SPX-LEN1 0 DO
         15 _SPX-WOTS-MSG I + C@ - +
     LOOP
-    4 LSHIFT                          \ shift left by 4 per spec
+    \ Nibble extraction: 3 base-16 digits from raw checksum.
+    \ Max csum = 32*15 = 480 = 0x1E0, fits in 12 bits (3 nibbles).
+    \ NOTE: no left-shift — we extract directly from the integer
+    \ at shifts 8/4/0 rather than going through byte encoding.
     DUP  8 RSHIFT 15 AND _SPX-WOTS-MSG 32 + C!
     DUP  4 RSHIFT 15 AND _SPX-WOTS-MSG 33 + C!
     15 AND                _SPX-WOTS-MSG 34 + C! ;
@@ -744,8 +747,9 @@ VARIABLE _SPX-KG-SEC
     _SPX-NODE _SPX-HT-TREE @ _SPX-HT-LEAF @
     _SPX-SIG-PTR @ _SPX-SIG-FORS + _SPX-SIG-FORS-SZ + _SPX-HT-SIGN ;
 
-\ SPX-VERIFY ( msg len pub sig -- flag )
-: SPX-VERIFY  ( msg len pub sig -- flag )
+\ SPX-VERIFY ( msg len pub sig sig-len -- flag )
+: SPX-VERIFY  ( msg len pub sig sig-len -- flag )
+    SPX-SIG-LEN <> IF 2DROP 2DROP FALSE EXIT THEN
     _SPX-SIG-PTR !
     DUP _SPX-PK-SEED !
     SPX-N + _SPX-PK-ROOT !
@@ -769,9 +773,11 @@ VARIABLE _SPX-KG-SEC
     _SPX-HT-VERIFY ;
 
 \ SPX-KEYGEN-RANDOM ( pub sec -- )
+\ ── P07: zeroize seed buffer after random keygen ──
 : SPX-KEYGEN-RANDOM  ( pub sec -- )
     _SPX-RNG-SEED 48 RNG-BYTES
-    >R >R _SPX-RNG-SEED R> R> SPX-KEYGEN ;
+    >R >R _SPX-RNG-SEED R> R> SPX-KEYGEN
+    _SPX-RNG-SEED 48 0 FILL ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
 REQUIRE ../concurrency/guard.f

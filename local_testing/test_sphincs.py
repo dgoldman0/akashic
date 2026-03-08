@@ -364,13 +364,13 @@ def test_base_w():
 
 def test_wots_checksum():
     print("\n=== WOTS+ Checksum ===")
-    # All zeros -> checksum = 32*15 = 480, shifted left 4 = 7680 = 0x1E00
-    # Nibbles: (7680>>8)&15=14, (7680>>4)&15=0, 7680&15=0
+    # All zeros -> checksum = 32*15 = 480 = 0x1E0
+    # Nibbles: (480>>8)&15=1, (480>>4)&15=14, 480&15=0
     check("T18 checksum-all-zeros",
           ['_TBUF 16 0 FILL',
            '_TBUF _SPX-WOTS-ENCODE',
            '_SPX-WOTS-MSG 32 + C@ . _SPX-WOTS-MSG 33 + C@ . _SPX-WOTS-MSG 34 + C@ . CR'],
-          "14 0 0")
+          "1 14 0")
 
     # All 0xFF -> each nibble is 15, checksum = 32*0 = 0, shifted = 0
     check("T19 checksum-all-ff",
@@ -653,7 +653,7 @@ def test_full_roundtrip():
             # Sign (msg, len, sec, sig)
             '_TMSG 2 _TSK _TSIG SPX-SIGN',
             # Verify (msg, len, pub, sig)
-            '_TMSG 2 _TPK _TSIG SPX-VERIFY',
+            '_TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY',
             'IF .\" SPX-VERIFY-OK\" ELSE .\" SPX-VERIFY-FAIL\" THEN CR',
         ],
         lambda out: "SPX-VERIFY-OK" in out,
@@ -674,12 +674,81 @@ def test_verify_rejects_bad_sig():
             '_TMSG 2 _TSK _TSIG SPX-SIGN',
             # Flip one byte in signature
             '_TSIG 100 + C@ 255 XOR _TSIG 100 + C!',
-            '_TMSG 2 _TPK _TSIG SPX-VERIFY',
+            '_TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY',
             'IF .\" SPX-VERIFY-OK\" ELSE .\" SPX-VERIFY-FAIL\" THEN CR',
         ],
         lambda out: "SPX-VERIFY-FAIL" in out,
         "should reject flipped sig",
         max_steps=50_000_000_000)
+
+
+# ── Tests: Hardening (P06, P07, P08) ─────────────────────────────────
+
+def test_p06_checksum_correctness():
+    """P06: Verify checksum nibble extraction is correct for several inputs."""
+    print("\n=== P06: Checksum Nibble Extraction ===")
+    # All zeros: csum = 480 = 0x1E0 -> nibbles [1, 14, 0]
+    # (covered by T18, but let's add an independent check)
+    check("P06 csum-all-zero = [1,14,0]",
+          ['_TBUF 16 0 FILL',
+           '_TBUF _SPX-WOTS-ENCODE',
+           '_SPX-WOTS-MSG 32 + C@ . _SPX-WOTS-MSG 33 + C@ . _SPX-WOTS-MSG 34 + C@ . CR'],
+          "1 14 0")
+
+    # All 0x77 (each nibble=7): csum = 32*8 = 256 = 0x100 -> nibbles [1, 0, 0]
+    check("P06 csum-all-7 = [1,0,0]",
+          ['_TBUF 16 0x77 FILL',
+           '_TBUF _SPX-WOTS-ENCODE',
+           '_SPX-WOTS-MSG 32 + C@ . _SPX-WOTS-MSG 33 + C@ . _SPX-WOTS-MSG 34 + C@ . CR'],
+          "1 0 0")
+
+    # All 0x11 (each nibble=1): csum = 32*14 = 448 = 0x1C0 -> nibbles [1, 12, 0]
+    check("P06 csum-all-1 = [1,12,0]",
+          ['_TBUF 16 0x11 FILL',
+           '_TBUF _SPX-WOTS-ENCODE',
+           '_SPX-WOTS-MSG 32 + C@ . _SPX-WOTS-MSG 33 + C@ . _SPX-WOTS-MSG 34 + C@ . CR'],
+          "1 12 0")
+
+    # All 0xFF (each nibble=15): csum = 0 -> nibbles [0, 0, 0]
+    check("P06 csum-all-F = [0,0,0]",
+          ['_TBUF 16 0xFF FILL',
+           '_TBUF _SPX-WOTS-ENCODE',
+           '_SPX-WOTS-MSG 32 + C@ . _SPX-WOTS-MSG 33 + C@ . _SPX-WOTS-MSG 34 + C@ . CR'],
+          "0 0 0")
+
+
+def test_p07_keygen_zeroization():
+    """P07: _SPX-RNG-SEED is zeroed after SPX-KEYGEN-RANDOM."""
+    print("\n=== P07: Keygen Seed Zeroization ===")
+    check_fn("P07 _SPX-RNG-SEED zeroed",
+        [
+            '_TPK _TSK SPX-KEYGEN-RANDOM',
+            '0',
+            '48 0 DO _SPX-RNG-SEED I + C@ OR LOOP',
+            '0= IF .\" ZEROED\" ELSE .\" NOT-ZEROED\" THEN CR',
+        ],
+        lambda out: "ZEROED" in out and "NOT-ZEROED" not in out,
+        "_SPX-RNG-SEED should be all zeros after keygen",
+        max_steps=50_000_000_000)
+
+
+def test_p08_siglen_validation():
+    """P08: SPX-VERIFY rejects wrong sig-len."""
+    print("\n=== P08: Sig-Len Validation ===")
+    # Wrong length (0) -> immediate rejection
+    check("P08 sig-len=0 rejected",
+          ['_TMSG 2 _TPK _TSIG 0 SPX-VERIFY . CR'],
+          "0")
+
+    # Wrong length (7855 = SIG-LEN - 1) -> rejected
+    check("P08 sig-len=7855 rejected",
+          ['_TMSG 2 _TPK _TSIG 7855 SPX-VERIFY . CR'],
+          "0")
+
+    # Wrong length (7857 = SIG-LEN + 1) -> rejected
+    check("P08 sig-len=7857 rejected",
+          ['_TMSG 2 _TPK _TSIG 7857 SPX-VERIFY . CR'],
+          "0")
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -705,10 +774,15 @@ if __name__ == '__main__':
     # Medium tests
     test_wots_roundtrip()
 
+    # Hardening tests (fast)
+    test_p06_checksum_correctness()
+    test_p08_siglen_validation()
+
     # Slow integration tests (only run if --full flag)
     if '--full' in sys.argv:
         test_full_roundtrip()
         test_verify_rejects_bad_sig()
+        test_p07_keygen_zeroization()
     else:
         print("\n  [SKIP] Full roundtrip tests (use --full to enable)")
 

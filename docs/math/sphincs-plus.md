@@ -37,6 +37,8 @@ REQUIRE sphincs-plus.f
 | **Stateless** | "s" variant — small signatures (7856 bytes), no state to manage |
 | **Concurrency-safe** | Public API words wrapped with `WITH-GUARD` (not reentrant internally) |
 | **Variable-free loops** | All `DO..LOOP` parameter passing uses VARIABLEs (not `>R`/`R@`) to avoid return-stack conflicts |
+| **Secret zeroization** | `SPX-KEYGEN-RANDOM` zeroes internal seed buffer after use |
+| **Length-validated** | `SPX-VERIFY` rejects signatures with wrong length before parsing |
 
 ---
 
@@ -105,7 +107,8 @@ SPX-KEYGEN-RANDOM  ( pub sec -- )
 ```
 
 Generate a keypair from the system RNG (`RANDOM8`).  Fills a 48-byte
-seed from hardware randomness, then calls `SPX-KEYGEN`.
+seed from hardware randomness, then calls `SPX-KEYGEN`.  Zeroizes the
+internal seed buffer (`_SPX-RNG-SEED`) on completion.
 
 ---
 
@@ -152,10 +155,11 @@ When `SPX-MODE-RANDOM` (default), the randomizer R is derived from
 ### SPX-VERIFY
 
 ```forth
-SPX-VERIFY  ( msg len pub sig -- flag )
+SPX-VERIFY  ( msg len pub sig sig-len -- flag )
 ```
 
 Verify a signature.  Returns TRUE (-1) on success, FALSE (0) on failure.
+Rejects immediately if `sig-len ≠ SPX-SIG-LEN` (7856).
 
 | Parameter | Description |
 |---|---|
@@ -163,6 +167,7 @@ Verify a signature.  Returns TRUE (-1) on success, FALSE (0) on failure.
 | `len` | Message length in bytes |
 | `pub` | 32-byte public key |
 | `sig` | 7856-byte signature |
+| `sig-len` | Byte length of `sig` buffer (must be exactly `SPX-SIG-LEN`) |
 
 **Algorithm:**
 1. Extract randomizer R from sig
@@ -226,7 +231,7 @@ CREATE my-sig  SPX-SIG-LEN ALLOT
 my-msg 5 my-sec my-sig SPX-SIGN
 
 \ -- Verify --
-my-msg 5 my-pub my-sig SPX-VERIFY   \ -> TRUE (-1)
+my-msg 5 my-pub my-sig SPX-SIG-LEN SPX-VERIFY   \ -> TRUE (-1)
 ```
 
 ---
@@ -288,7 +293,7 @@ All hash operations use SHAKE-256 via the SHA3 MMIO engine:
 | `SPX-KEYGEN` | `( seed pub sec -- )` | Keypair from 48-byte seed |
 | `SPX-KEYGEN-RANDOM` | `( pub sec -- )` | Keypair from system RNG |
 | `SPX-SIGN` | `( msg len sec sig -- )` | Sign message → 7856-byte sig |
-| `SPX-VERIFY` | `( msg len pub sig -- flag )` | Verify signature |
+| `SPX-VERIFY` | `( msg len pub sig sig-len -- flag )` | Verify signature |
 | `SPX-N` | `( -- 16 )` | Security parameter |
 | `SPX-SIG-LEN` | `( -- 7856 )` | Signature size |
 | `SPX-PK-LEN` | `( -- 32 )` | Public key size |

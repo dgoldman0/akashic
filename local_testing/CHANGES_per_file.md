@@ -30,15 +30,15 @@ Legend:
 
 ---
 
-### File 2: `math/sphincs-plus.f`
+### ~~File 2: `math/sphincs-plus.f`~~ ✅ DONE
 
-| # | ID | Severity | Change | Lines | Summary |
-|---|-----|----------|--------|-------|---------|
-| 6 | P06 | **CRIT** | WOTS+ checksum nibble extraction | L320–328 | Change extraction shifts from `8/4/0` to `12/8/4` (or remove `4 LSHIFT` and keep `8/4/0`). Current code loses top nibble for all non-trivial checksums. |
-| 7 | P08 | **MED** | SPX-VERIFY length validation | entry of `SPX-VERIFY` | Add `sig-len` parameter; reject if `sig-len <> SPX-SIG-LEN`. (API change — update all call sites.) |
-| 8 | P07 | **MED** | Secret zeroization after keygen | end of `SPX-KEYGEN` | Add `_SPX-WIPE-KEYGEN` — zero-fill `_SPX-RNG-SEED(48)`. |
+| # | ID | Severity | Change | Lines | Status |
+|---|-----|----------|--------|-------|--------|
+| 6 | P06 | **CRIT** | ~~WOTS+ checksum nibble extraction~~ | L328 | ✅ Removed `4 LSHIFT`; shifts 8/4/0 now correct |
+| 7 | P08 | **MED** | ~~SPX-VERIFY length validation~~ | L749–750 | ✅ Added `sig-len` param; `<> IF FALSE EXIT` |
+| 8 | P07 | **MED** | ~~Secret zeroization after keygen~~ | L774 | ✅ `_SPX-RNG-SEED 48 0 FILL` in KEYGEN-RANDOM |
 
-**Tests:** Known-answer checksum test (csum=480 → nibbles [1,14,0]), pyspx interop (sign↔verify both directions), truncated sig rejection.
+**Tests:** 39/39 pass — 32 original + 4 P06 checksum + 3 P08 sig-len.  P07 zeroization test under `--full` flag.
 
 ---
 
