@@ -72,7 +72,8 @@ until the foundation is production-grade.**  The new priority order:
 2. ~~**Phase 3b — Scalable state** (decouple accounts from trace width)~~ ✅ **Done** (commits 35a8e8c, b9e1c97, d713801)
 3. ~~**Phase 5b — Consensus hardening** (genesis config, anti-grinding, **PoSA mode**)~~ ✅ **Done** (commit 63bc062)
 4. ~~**Phase 6.5b — Light client protocol** (Merkle proof RPC)~~ ✅ **Done** (commit bcdaf21)
-5. *Then* Phase 7 (Forth VM) and Phase 8 (Ethereum interop)
+5. **Phase 6.6 — Code hardening** (fix all critical/high issues found in code review)
+6. *Then* Phase 7 (Forth VM) and Phase 8 (Ethereum interop)
 
 These are detailed inline below as `⚠ REVISED` blocks.
 
@@ -95,6 +96,7 @@ These are detailed inline below as `⚠ REVISED` blocks.
 - [**Phase 5b — Consensus Hardening (NEW)**](#phase-5b--consensus-hardening-new)
 - [Phase 6 — Node Infrastructure](#phase-6--node-infrastructure)
 - [**Phase 6.5 — Production Infrastructure (NEW)**](#phase-65--production-infrastructure-new)
+- [**Phase 6.6 — Code Hardening (NEW)**](#phase-66--code-hardening-new)
 - [Phase 7 — contract-vm.f: Sandboxed Forth VM](#phase-7--contract-vmf-sandboxed-forth-vm)
 - [Phase 8 — ethereum/: Standard Blockchain Interop](#phase-8--ethereum-standard-blockchain-interop)
 - [Fork in the Road Options](#fork-in-the-road-options)
@@ -1735,6 +1737,93 @@ No re-execution, no trusting the RPC server.
 
 ---
 
+## Phase 6.6 — Code Hardening (NEW)
+
+**Depends on:** All Phase 1–6.5b modules
+**Priority:** **Critical** — must precede Phase 7
+**Status:** Not started
+
+A full code review of Phases 1–6.5b uncovered **11 critical, 9 high,
+and 10 medium** production-readiness issues across 15 modules (~6,300
+lines).  None of these are design problems — the architecture is sound.
+They are implementation gaps: timing leaks, off-by-one bugs, capacity
+mismatches, dead code paths, missing bounds checks, and stub logic
+that was never wired up.  All must be fixed before Phase 7.
+
+### 6.6a — Crypto Hardening (ed25519.f, sphincs-plus.f)
+
+| # | Severity | File | Issue | Fix |
+|---|----------|------|-------|-----|
+| 1 | **CRITICAL** | ed25519.f | `_ED-SMUL` branches on secret scalar bits — timing side-channel leaks private key | Constant-time conditional swap (CMOV pattern) |
+| 2 | **CRITICAL** | ed25519.f | Missing `S < L` check in `ED25519-VERIFY` — signature malleability (RFC 8032 §5.1.7) | Add scalar range check before accepting signature |
+| 3 | **HIGH** | ed25519.f | `_ED-PINV0` zeroed and never initialized — may break all scalar mod-L arithmetic | Verify initialization or compute on first use |
+| 4 | **HIGH** | ed25519.f | `_ED-DECODE` doesn't reject `y ≥ p` — non-canonical encoding (RFC 8032 §5.1.3) | Add canonical check |
+| 5 | **MEDIUM** | ed25519.f | Secret material (`_ED-H64`, `_ED-SC1`, `_ED-SC3`) never zeroed after use | Add explicit zeroization |
+| 6 | **CRITICAL** | sphincs-plus.f | WOTS+ checksum extraction: `4 LSHIFT` before nibble extraction — off-by-one nibble breaks FIPS 205 interop | Remove the `4 LSHIFT` |
+| 7 | **MEDIUM** | sphincs-plus.f | Secret seed `_SPX-RNG-SEED` (48 bytes) never zeroed after keygen | Add explicit zeroization |
+| 8 | **MEDIUM** | sphincs-plus.f | No signature length validation in `SPX-VERIFY` — truncated sig causes OOB reads | Validate length before parse |
+
+### 6.6b — Transaction & State Hardening (tx.f, state.f, smt.f)
+
+| # | Severity | File | Issue | Fix |
+|---|----------|------|-------|-----|
+| 9 | **CRITICAL** | tx.f | Hybrid verify uses `OR` not `AND` — accepts tx if *either* sig valid, defeats defense-in-depth | Change `OR` → `AND` |
+| 10 | **MEDIUM** | tx.f | `TX-SET-AMOUNT` accepts negative/zero amounts | Add validation |
+| 11 | **MEDIUM** | tx.f | No CBOR output bounds check in `_TX-ENCODE-UNSIGNED` | Add buffer-length guard |
+| 12 | **CRITICAL** | state.f / smt.f | SMT capacity mismatch — state allows 4096 accounts (`_ST-MAX-PAGES=16`) but `SMT-MAX-LEAVES=2048` | Align both to same value |
+| 13 | **HIGH** | state.f | `_ST-REBUILD-TREE` drops `SMT-INSERT` return flag — ignores insertion failures | Check and propagate error |
+| 14 | **MEDIUM** | state.f | Full SMT rebuild on every `ST-ROOT`/`ST-PROVE` — O(n log n) per call | Cache / incremental update |
+| 15 | **MEDIUM** | state.f | Staking extension is stub — `TX-STAKE`/`TX-UNSTAKE` unconditionally fail | Implement or clearly gate behind feature flag |
+| 16 | **HIGH** | smt.f | `_SMT-NODE(0)` causes memory underflow — `(0-1) * 96` wraps to massive offset | Guard node-0 access |
+| 17 | **MEDIUM** | smt.f | `_SMT-PROVE` writes `40 × depth` bytes with no buffer size check | Add bounds check |
+
+### 6.6c — Block & Consensus Hardening (block.f, consensus.f, genesis.f)
+
+| # | Severity | File | Issue | Fix |
+|---|----------|------|-------|-----|
+| 18 | **CRITICAL** | consensus.f | STARK stubs always return TRUE (`_CON-STARK-CHECK-STUB`) — if STARK overlay enabled, all proofs auto-pass | Wire real STARK verify or make stub return FALSE (fail-closed) |
+| 19 | **CRITICAL** | consensus.f | `CON-POS-LEADER` division by zero when total stake = 0 | Guard with zero-stake check |
+| 20 | **CRITICAL** | consensus.f | `CON-POS-LEADER` fallback: `(-1) * 32` underflow when validator count = 0 | Guard with zero-validator check |
+| 21 | **MEDIUM** | consensus.f | `CON-POW-MINE` infinite loop with no timeout/escape | Add iteration cap or yield |
+| 22 | **HIGH** | block.f | `BLK-FINALIZE` and `CHAIN-APPEND` silently drop `ST-APPLY-TX` return value | Check and abort on failure |
+| 23 | **MEDIUM** | genesis.f | Positional CBOR parse — no key-name validation, schema changes break silently | Validate key names |
+| 24 | **MEDIUM** | genesis.f | `GEN-HASH` doesn't incorporate state/tx roots — different states produce same genesis hash | Include roots in hash preimage |
+| 25 | **HIGH** | genesis.f | Stack corruption — `2DROP` on authority key length mismatch when stack has only 1 item | Fix stack discipline |
+
+### 6.6d — Node Infrastructure Hardening (gossip.f, rpc.f, persist.f, node.f)
+
+| # | Severity | File | Issue | Fix |
+|---|----------|------|-------|-----|
+| 26 | **HIGH** | gossip.f | No peer-id bounds check — id ≥ 16 causes OOB write/read | Bounds-check in `GSP-CONNECT`/`GSP-DISCONNECT` |
+| 27 | **MEDIUM** | gossip.f | Seen-hash ring only 256 entries — trivially exhausted by flooding peer | Increase ring or add per-peer rate limit |
+| 28 | **HIGH** | rpc.f | `chain_sendTransaction` never broadcasts tx to network after mempool add | Add `GSP-BROADCAST-TX` call |
+| 29 | **HIGH** | rpc.f | `_RPC-RESP-ERROR` stack imbalance — extra `DROP` corrupts stack on every error response | Fix stack effect |
+| 30 | **MEDIUM** | rpc.f | No rate limiting on POST /rpc — DoS vector | Add simple rate limiter |
+| 31 | **HIGH** | persist.f | `_PST-STATE-SECTORS=40` / `_PST-CHAIN-SECTORS=1024` — emulator-sized, chain.dat can't grow | Make sector counts configurable or auto-grow |
+| 32 | **CRITICAL** | node.f | `MP-DRAIN` writes tx pointers into block struct address — buffer overwrite | Use separate CELLS array |
+| 33 | **CRITICAL** | node.f | `NODE-STEP` never calls `SRV-STEP` — HTTP/RPC is dead at runtime | Add `SRV-STEP` to main loop |
+| 34 | **CRITICAL** | node.f | Timestamp hardcoded to `1` (TODO acknowledged) — breaks all time-dependent logic | Read RTC or KDOS timer |
+| 35 | **HIGH** | node.f | `_NODE-PERSIST-TICK` never called in `NODE-STEP` — blocks never persisted during normal operation | Wire into main loop |
+| 36 | **MEDIUM** | node.f | `NODE-RUN` is a busy loop — 100% CPU, no sleep/yield | Add yield/sleep |
+| 37 | **MEDIUM** | node.f | `NODE-STOP` doesn't flush state, close persistence, or drain mempool | Add graceful shutdown sequence |
+
+### Summary
+
+| Sub-phase | Files touched | Critical | High | Medium |
+|-----------|---------------|----------|------|--------|
+| 6.6a — Crypto | ed25519.f, sphincs-plus.f | 3 | 2 | 3 |
+| 6.6b — Tx/State | tx.f, state.f, smt.f | 2 | 2 | 5 |
+| 6.6c — Block/Consensus | block.f, consensus.f, genesis.f | 3 | 2 | 3 |
+| 6.6d — Node Infra | gossip.f, rpc.f, persist.f, node.f | 3 | 5 | 4 |
+| **Total** | **12 files** | **11** | **11** | **15** |
+
+Each sub-phase is independently testable.  Existing test suites
+(~280 tests) must continue to pass after each fix — regressions
+are the primary risk.  New tests should be added for each fix
+(estimated +30–50 tests).
+
+---
+
 ## Phase 7 — contract-vm.f: Sandboxed Forth VM
 
 **Location:** `akashic/store/contract-vm.f`
@@ -2751,9 +2840,15 @@ encrypted transaction payloads and commitment schemes.
     └──────┬──────┘      └─────┬──────┘
            └────────┬──────────┘
                     ▼
+              ┌────────────────┐
+              │  code harden   │ ◄── Phase 6.6 🟡 NEXT
+              │  (12 files,    │     11 critical + 11 high
+              │   37 issues)   │     fixes across all modules
+              └──────┬─────────┘
+                     ▼
               ┌────────────┐
-              │ contract-  │ ◄── Phase 7 🟡 NEXT
-              │    vm      │     All prerequisites done
+              │ contract-  │ ◄── Phase 7 (blocked on 6.6)
+              │    vm      │
               │ (sandboxed │
               │  Forth)    │
               └─────┬──────┘
@@ -2816,7 +2911,8 @@ encrypted transaction payloads and commitment schemes.
 | 6f | node.f | all Phase 6 modules + consensus | 190 | 7 | ✅ done |
 | **6.5a** | **persist.f rewrite** | **state.f, block, KDOS I/O** | **284** | **9** | **✅ done** |
 | **6.5b** | **light.f** | **rpc.f, state.f, block.f, merkle.f** | **159** | **12** | **✅ done** |
-| 7 | contract-vm.f | state, consensus, tx, stark-air, node, persist | ~400–600 | ~25 | 🟡 next |
+| **6.6** | **Code hardening (12 files)** | **all Phase 1–6.5b modules** | **~delta** | **+30–50** | **🟡 next** |
+| 7 | contract-vm.f | state, consensus, tx, stark-air, node, persist | ~400–600 | ~25 | 🔴 blocked on 6.6 |
 | **7.5** | **xchain.f** | **contract-vm, light.f, stark.f, merkle.f** | **~150–250** | **~15** | 🔴 future |
 | | **Subtotal (custom chain, actual)** | | **~8,000+** | **~280+** | |
 | 8 | ethereum/ (secp256k1, keccak, rlp, eth-tx, eth-abi, eth-rpc, eth-wallet) | Phases 1–7.5 complete | ~2,000–3,000 | ~100+ | 🔴 future |
@@ -2834,6 +2930,9 @@ state.f ── smt.f (3b) ┘                                       │
 mempool ─── gossip ─── rpc ─── sync ─── persist ─── node ─── 6.5a (fileio+persist)
                                  │                                    │
                                  └──────── 6.5b (light client) ──────┘
+                                                                      │
+                                                                      ▼
+                                                        6.6 (code hardening)
                                                                       │
                                                                       ▼
                                                               7 (Forth VM)
@@ -2876,11 +2975,13 @@ state.  consensus.f sits on top.  mempool.f is independent after tx.f.
 
 **Phases 1–5 = chain data structures.  Phase 3b ✅ + 5b ✅ = hardening
 the foundation.  Phase 6 = running node.  Phase 6.5a ✅ + 6.5b ✅ =
-production infrastructure (real I/O + light client).  Phase 7 = smart
+production infrastructure (real I/O + light client).  Phase 6.6 = code
+hardening (11 critical + 11 high issues across 12 files).  Phase 7 = smart
 contracts via sandboxed Forth VM.  Phase 7.5 = cross-chain federation.
 Phase 8 = Ethereum/standard blockchain interop.**
 
-All foundation phases complete — **Phase 7 is next.**
+**Phase 6.6 (code hardening) is next.**  Phase 7 is blocked until all
+critical and high issues are resolved.
 
 ### Federation Scaling Model
 
