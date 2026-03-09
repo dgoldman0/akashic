@@ -64,7 +64,7 @@ CBOR-RESET  ( dst max -- )
 ```
 
 Set the output buffer.  Must be called before any encoding words.
-Resets the write position to 0.
+Resets the write position to 0 and clears the overflow flag.
 
 ### Data Items
 
@@ -93,6 +93,16 @@ CBOR-RESULT  ( -- addr len )
 
 Return the encoded bytes so far.  `addr` is the buffer start, `len`
 is the bytes written.
+
+### Overflow Check
+
+```forth
+CBOR-OK?  ( -- flag )
+```
+
+Return `TRUE` (-1) if no bytes were dropped during encoding.
+`FALSE` (0) if the output buffer overflowed and data was silently
+discarded.  Check after encoding to detect truncation.
 
 ### Argument Encoding
 
@@ -201,6 +211,7 @@ Returns `-1` if valid, `0` if invalid.
 | `CBOR-FALSE` | `( -- )` | Encode false |
 | `CBOR-NULL` | `( -- )` | Encode null |
 | `CBOR-RESULT` | `( -- addr len )` | Get encoded bytes |
+| `CBOR-OK?` | `( -- flag )` | Check for overflow |
 
 ### Decoder
 
@@ -285,6 +296,7 @@ DCBOR-SORT-MAP .         \ → -1 (keys are sorted) or 0 (not sorted)
 
 Encoder variables prefixed `_CB-`:
 - `_CB-DST` / `_CB-MAX` / `_CB-POS` — output buffer state
+- `_CB-OVF` — overflow flag (set by `_CB-EMIT` when buffer is full)
 - `_CB-MT` — scratch for major type in `_CB-ARG`
 
 Decoder variables prefixed `_CB-`:

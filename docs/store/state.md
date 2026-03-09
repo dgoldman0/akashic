@@ -244,6 +244,34 @@ no mutations have occurred since the last call.
 
 ---
 
+## Prove / Verify
+
+### ST-PROVE
+
+```forth
+ST-PROVE  ( addr proof buf-len -- proof-len flag )
+```
+
+Generate an SMT inclusion proof for the account at `addr`.  Writes the
+proof into `proof` (up to `buf-len` bytes).  Returns the proof length
+and a success flag.  Returns `0 0` if the account is not found, the
+SMT rebuild fails, or the buffer is too small.
+Concurrency-safe (wrapped with `WITH-GUARD`).
+
+### ST-VERIFY-PROOF
+
+```forth
+ST-VERIFY-PROOF  ( key leaf proof len root -- flag )
+```
+
+Verify an SMT inclusion proof.  `key` is the 32-byte account address,
+`leaf` is the expected leaf hash, `proof` / `len` are the proof bytes,
+and `root` is the 32-byte expected root.  Returns `TRUE` if the proof
+is valid.  Delegates to `SMT-VERIFY`.
+Concurrency-safe (wrapped with `WITH-GUARD`).
+
+---
+
 ## Snapshot / Restore
 
 ### ST-SNAPSHOT
@@ -329,5 +357,7 @@ ST-ROOT DROP                \ -> 32-byte root address (drop flag)
 | `ST-COUNT` | `( -- n )` | Number of active accounts |
 | `ST-ENTRY` | `( idx -- addr )` | Raw entry by index |
 | `ST-SET-HEIGHT` | `( h -- )` | Set current block height |
+| `ST-PROVE` | `( addr proof buf-len -- proof-len flag )` | Generate SMT inclusion proof |
+| `ST-VERIFY-PROOF` | `( key leaf proof len root -- flag )` | Verify inclusion proof |
 | `ST-SNAPSHOT` | `( dst -- )` | Save state to buffer |
 | `ST-RESTORE` | `( src -- )` | Restore state from buffer |

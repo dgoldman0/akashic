@@ -360,8 +360,8 @@ CON-POSA-ELECT  ( blk -- addr )
 Compute the expected leader for a PoSA block:
 1. Ensure the PoS epoch is current, rebuild staked-authority set
 2. Compute anti-grinding seed (`anchor_hash || height`)
-3. `target = LE_u64(SHA3-256(seed)[0..7]) MOD total_staked_authority_stake`
-   (uses big-endian extraction like PoS leader)
+3. `target = BE_u64(SHA3-256(seed)[0..7]) MOD total_staked_authority_stake`
+   (big-endian extraction for portable entropy)
 4. Walk cumulative stakes of staked authorities to find the leader
 
 Returns the 32-byte validator address.  If no staked authorities

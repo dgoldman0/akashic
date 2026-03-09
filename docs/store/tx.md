@@ -199,14 +199,18 @@ TX-HASH  ( tx hash -- )
 ```
 
 Compute the SHA3-256 hash of the unsigned transaction fields.  The hash
-covers a DAG-CBOR-encoded map of six fields in canonical key order:
+covers a DAG-CBOR-encoded map of nine unsigned fields in canonical
+key order:
 
 1. `"to"` (32-byte bstr)
-2. `"data"` (data payload bstr)
-3. `"from"` (32-byte bstr)
-4. `"nonce"` (uint)
-5. `"amount"` (uint)
-6. `"from_pq"` (32-byte bstr)
+2. `"fee"` (uint)
+3. `"data"` (data payload bstr)
+4. `"from"` (32-byte bstr)
+5. `"nonce"` (uint)
+6. `"amount"` (uint)
+7. `"from_pq"` (32-byte bstr)
+8. `"chain_id"` (uint)
+9. `"valid_until"` (uint)
 
 Writes 32 bytes to `hash`.
 
@@ -283,20 +287,25 @@ Serialise the transaction to DAG-CBOR into `buf` (up to `max` bytes).
 Returns the number of bytes written.  Returns 0 if the buffer is too
 small.
 
-The CBOR map contains 9 keys in DAG-CBOR canonical order (shorter
-keys first, then lexicographic within the same length):
+The CBOR map contains up to 12 keys in DAG-CBOR canonical order
+(shorter keys first, then lexicographic within the same length).
+Map entry counts: Ed25519 = 11, SPHINCS+ = 11, Hybrid = 12,
+unsigned = 10.
 
 | Order | Key | Length | Type |
 |---|---|---|---|
 | 1 | `"to"` | 2 | bstr (32) |
-| 2 | `"sig"` | 3 | bstr (64) |
-| 3 | `"data"` | 4 | bstr (data_len) |
-| 4 | `"from"` | 4 | bstr (32) |
-| 5 | `"nonce"` | 5 | uint |
-| 6 | `"amount"` | 6 | uint |
-| 7 | `"sig_pq"` | 6 | bstr (7856) |
-| 8 | `"from_pq"` | 7 | bstr (32) |
-| 9 | `"sig_mode"` | 8 | uint |
+| 2 | `"fee"` | 3 | uint |
+| 3 | `"sig"` | 3 | bstr (64) — conditional |
+| 4 | `"data"` | 4 | bstr (data_len) |
+| 5 | `"from"` | 4 | bstr (32) |
+| 6 | `"nonce"` | 5 | uint |
+| 7 | `"amount"` | 6 | uint |
+| 8 | `"sig_pq"` | 6 | bstr (7856) — conditional |
+| 9 | `"from_pq"` | 7 | bstr (32) |
+| 10 | `"chain_id"` | 8 | uint |
+| 11 | `"sig_mode"` | 8 | uint |
+| 12 | `"valid_until"` | 11 | uint |
 
 ### TX-DECODE
 
@@ -308,7 +317,8 @@ Deserialize CBOR bytes into a transaction buffer.  Calls `TX-INIT` on
 `tx` first.  Returns `TRUE` on success, `FALSE` on parse error or
 unexpected data.
 
-**All 9 keys must be present.**  Unknown keys cause failure.
+**All 12 keys must be present** (10 for unsigned transactions).
+Unknown keys are silently skipped.
 
 ---
 
@@ -425,7 +435,7 @@ recip   my-tx TX-SET-TO
 \ Sign with both schemes
 my-tx ed-priv ed-pub spx-sec TX-SIGN-HYBRID
 
-\ Verify — returns TRUE if either signature is valid
+\ Verify — returns TRUE only if both signatures are valid
 my-tx TX-VERIFY  ( -- TRUE )
 ```
 
