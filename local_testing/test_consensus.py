@@ -265,7 +265,7 @@ def _keygen_preamble():
 def _make_tx_lines(tx_var, sender_pub, sender_priv, recip_pub, amount, nonce):
     """Return Forth lines that CREATE, init, populate, and sign a tx buffer."""
     return [
-        f'CREATE {tx_var} 8296 ALLOT',
+        f'CREATE {tx_var} 8320 ALLOT',
         f'{tx_var} TX-INIT',
         f'{sender_pub} {tx_var} TX-SET-FROM',
         f'{recip_pub} {tx_var} TX-SET-TO',
@@ -362,7 +362,7 @@ def test_pow_mine_and_check():
         # Set very easy PoW target and mine
         '0x00FFFFFFFFFFFFFF CON-POW-TARGET!',
         'CON-POW CON-MODE!',
-        '_BK CON-POW-MINE',
+        '_BK CON-POW-MINE DROP',
         # Check: should pass
         '_BK CON-POW-CHECK .  ." check-ok"',
     ]
@@ -514,7 +514,7 @@ def test_con_check_dispatch_pow():
         '_BK BLK-FINALIZE',
         '0x00FFFFFFFFFFFFFF CON-POW-TARGET!',
         'CON-POW CON-MODE!',
-        '_BK CON-POW-MINE',
+        '_BK CON-POW-MINE DROP',
         # Use unified CON-CHECK
         '_BK CON-CHECK .  ." dispatch-ok"',
     ]
@@ -551,7 +551,7 @@ def test_blk_verify_pow_integration():
         '_SS ST-RESTORE',
         '0x00FFFFFFFFFFFFFF CON-POW-TARGET!',
         'CON-POW CON-MODE!',
-        '_BK CON-POW-MINE',
+        '_BK CON-POW-MINE DROP',
         # BLK-VERIFY should pass (consensus check routed through CON-CHECK)
         '_BK _PHASH BLK-VERIFY .  ." verify-pow"',
     ]
@@ -643,6 +643,122 @@ def test_sig_hash_differs_from_blk_hash():
 
 
 # =================================================================
+#  New tests — Phase 6.6 batch 4
+# =================================================================
+
+def test_pow_mine_flag():
+    """CON-POW-MINE returns TRUE (-1) on success."""
+    print("\n=== PoW mine returns flag ===")
+    lines = _funded_blk_with_tx() + [
+        'CHAIN-INIT',
+        'CREATE _PHASH 32 ALLOT',
+        'CHAIN-HEAD _PHASH BLK-HASH',
+        '_PHASH _BK BLK-SET-PREV',
+        '_BK BLK-FINALIZE',
+        '0x00FFFFFFFFFFFFFF CON-POW-TARGET!',
+        'CON-POW CON-MODE!',
+        '_BK CON-POW-MINE .  ." mine-flag"',
+    ]
+    check("POW-MINE returns -1 on success", lines, "-1 mine-flag")
+
+
+def test_pow_mine_timeout():
+    """CON-POW-MINE returns FALSE (0) when iter cap exhausted."""
+    print("\n=== PoW mine timeout ===")
+    lines = _funded_blk_with_tx() + [
+        'CHAIN-INIT',
+        'CREATE _PHASH 32 ALLOT',
+        'CHAIN-HEAD _PHASH BLK-HASH',
+        '_PHASH _BK BLK-SET-PREV',
+        '_BK BLK-FINALIZE',
+        # Set impossible target: MIN_INT (most negative signed value)
+        # No hash can be < MIN_INT with signed comparison
+        '1 63 LSHIFT CON-POW-TARGET!',
+        # Set tiny iteration cap so test completes quickly
+        '10 _CON-POW-MAX-ITER !',
+        'CON-POW CON-MODE!',
+        '_BK CON-POW-MINE .  ." mine-timeout"',
+        # restore defaults
+        '1000000 _CON-POW-MAX-ITER !',
+    ]
+    check("POW-MINE returns 0 on timeout", lines, "0 mine-timeout")
+
+
+def test_clear_keys():
+    """CON-CLEAR-KEYS zeros signing key buffer."""
+    print("\n=== Clear keys ===")
+    lines = _keygen_preamble() + [
+        '_PRIV1 _PUB1 CON-SET-KEYS',
+        # Read first byte of priv — should be nonzero
+        '_CON-SIGN-PRIV C@ 0<> IF ." set-ok" THEN',
+        'CON-CLEAR-KEYS',
+        # After clear, all 64 bytes should be zero
+        '0  64 0 DO _CON-SIGN-PRIV I + C@ OR LOOP',
+        '0= IF ." clear-ok" THEN',
+    ]
+    check("CLEAR-KEYS zeros priv", lines, "clear-ok")
+
+
+def test_pos_constants_variable():
+    """CON-POS-EPOCH-LEN, MIN-STAKE, LOCK-PERIOD are VARIABLEs."""
+    print("\n=== PoS constants are variables ===")
+    check("EPOCH-LEN default",
+          ['CON-POS-EPOCH-LEN @ .'], "32")
+    check("MIN-STAKE default",
+          ['CON-POS-MIN-STAKE @ .'], "100")
+    check("LOCK-PERIOD default",
+          ['CON-POS-LOCK-PERIOD @ .'], "64")
+    # Test mutability
+    check("EPOCH-LEN mutable",
+          ['16 CON-POS-EPOCH-LEN !  CON-POS-EPOCH-LEN @ .'], "16")
+
+
+def test_stark_stub_fail_closed():
+    """STARK check stub returns FALSE (fail-closed, P18)."""
+    print("\n=== STARK stub fail-closed ===")
+    lines = _funded_blk_with_tx() + [
+        'CHAIN-INIT',
+        'CREATE _PHASH 32 ALLOT',
+        'CHAIN-HEAD _PHASH BLK-HASH',
+        '_PHASH _BK BLK-SET-PREV',
+        '_BK BLK-FINALIZE',
+        '_PUB1 CON-POA-ADD',
+        'CON-POA CON-MODE!',
+        '_BK _PRIV1 _PUB1 CON-POA-SIGN',
+        # Without STARK, check passes
+        '_BK CON-CHECK .  ." no-stark"',
+        # Enable STARK — stub now rejects
+        '-1 CON-STARK!',
+        '_BK CON-CHECK .  ." with-stark"',
+        '0 CON-STARK!',  # reset
+    ]
+    check_fn("STARK off passes, STARK on rejects", lines,
+             lambda o: "-1 no-stark" in o and "0 with-stark" in o,
+             "expected -1 no-stark and 0 with-stark")
+
+
+def test_pos_leader_empty_guard():
+    """CON-POS-LEADER returns sentinel when no validators (P19+P20)."""
+    print("\n=== PoS leader empty guard ===")
+    lines = _funded_blk_with_tx() + [
+        'CHAIN-INIT',
+        'CREATE _PHASH 32 ALLOT',
+        'CHAIN-HEAD _PHASH BLK-HASH',
+        '_PHASH _BK BLK-SET-PREV',
+        '_BK BLK-FINALIZE',
+        'CON-POS CON-MODE!',
+        # No staking done — validator set empty
+        'CON-POS-EPOCH',
+        'CON-POS-VALIDATORS .  ." val-count"',
+        # Leader should return without crashing
+        '_BK CON-POS-LEADER DROP ." survived"',
+    ]
+    check_fn("empty validator set returns sentinel", lines,
+             lambda o: "0 val-count" in o and "survived" in o,
+             "expected 0 val-count and survived")
+
+
+# =================================================================
 #  Main
 # =================================================================
 
@@ -668,6 +784,13 @@ if __name__ == "__main__":
     test_blk_verify_pow_bad()
     test_blk_verify_poa_unauthorized_integration()
     test_sig_hash_differs_from_blk_hash()
+
+    test_pow_mine_flag()
+    test_pow_mine_timeout()
+    test_clear_keys()
+    test_pos_constants_variable()
+    test_stark_stub_fail_closed()
+    test_pos_leader_empty_guard()
 
     print(f"\n{'='*60}")
     print(f"  TOTAL: {_pass_count + _fail_count}  "

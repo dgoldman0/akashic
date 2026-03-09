@@ -115,6 +115,11 @@ VARIABLE _CON-KEYS-SET              \ flag: keys loaded?
     _CON-SIGN-PRIV 64 CMOVE
     -1 _CON-KEYS-SET ! ;
 
+: CON-CLEAR-KEYS  ( -- )
+    _CON-SIGN-PRIV 64 0 FILL
+    _CON-SIGN-PUB 32 0 FILL
+    0 _CON-KEYS-SET ! ;
+
 \ =====================================================================
 \  2. Mode selection
 \ =====================================================================
@@ -193,25 +198,29 @@ VARIABLE _CON-PW-NONCE
         _CON-PW-HASH I + C@ OR
     LOOP ;
 
-\ CON-POW-MINE ( blk -- )
+\ CON-POW-MINE ( blk -- flag )
 \   Brute-force nonce search.  Sets proof_len=8, increments nonce
 \   until BLK-HASH as BE u64 < _CON-POW-TARGET.
-\   Uses internal accessors for speed (inner loop).
-: CON-POW-MINE  ( blk -- )
+\   Returns TRUE on success, FALSE if iteration cap exhausted.
+VARIABLE _CON-POW-MAX-ITER
+1000000 _CON-POW-MAX-ITER !
+
+: CON-POW-MINE  ( blk -- flag )
     _CON-PW-BLK !
     0 _CON-PW-NONCE !
     _CON-POW-PROOF-LEN _CON-PW-BLK @ _BLK-PLEN C!   \ proof_len = 8
-    BEGIN
+    _CON-POW-MAX-ITER @ 0 DO
         \ Write nonce to proof[0..7] as LE u64
         _CON-PW-NONCE @ _CON-PW-BLK @ _BLK-PROOF !
         \ Hash the block
         _CON-PW-BLK @ _CON-PW-HASH BLK-HASH
         \ Compare: hash < target?
         _CON-HASH>U64 _CON-POW-TARGET @ < IF
-            EXIT    \ found valid nonce
+            -1 UNLOOP EXIT    \ found valid nonce -> TRUE
         THEN
         _CON-PW-NONCE @ 1+ _CON-PW-NONCE !
-    AGAIN ;
+    LOOP
+    0 ;                            \ exhausted -> FALSE
 
 \ CON-POW-CHECK ( blk -- flag )
 \   Verify the nonce in proof produces a hash < target.
@@ -379,7 +388,7 @@ VARIABLE _CON-POSA-CHECK-XT
 
 \ Forward declarations for STARK (Stage C stubs)
 : _CON-STARK-PROVE-STUB  ( blk -- )  DROP ;
-: _CON-STARK-CHECK-STUB  ( blk -- flag )  DROP -1 ;
+: _CON-STARK-CHECK-STUB  ( blk -- flag )  DROP 0 ;   \ fail-closed: reject until real STARK wired
 VARIABLE _CON-STARK-PROVE-XT
 VARIABLE _CON-STARK-CHECK-XT
 ' _CON-STARK-PROVE-STUB _CON-STARK-PROVE-XT !
@@ -390,7 +399,7 @@ VARIABLE _CON-SEAL-BLK
 : CON-SEAL  ( blk -- )
     _CON-SEAL-BLK !
     _CON-MODE @ CON-POW = IF
-        _CON-SEAL-BLK @ CON-POW-MINE
+        _CON-SEAL-BLK @ CON-POW-MINE DROP
     ELSE _CON-MODE @ CON-POA = IF
         \ PoA: use stored signing keys
         _CON-KEYS-SET @ 0= IF EXIT THEN
@@ -455,12 +464,15 @@ REQUIRE ../math/random.f
 
 \ ─── B1. PoS constants ───
 
- 32 CONSTANT CON-POS-EPOCH-LEN     \ blocks per epoch
-100 CONSTANT CON-POS-MIN-STAKE     \ minimum stake to qualify
- 64 CONSTANT CON-POS-LOCK-PERIOD   \ blocks before unstake completes
+VARIABLE CON-POS-EPOCH-LEN          \ blocks per epoch
+32 CON-POS-EPOCH-LEN !
+VARIABLE CON-POS-MIN-STAKE          \ minimum stake to qualify
+100 CON-POS-MIN-STAKE !
+VARIABLE CON-POS-LOCK-PERIOD        \ blocks before unstake completes
+64 CON-POS-LOCK-PERIOD !
 
 \ Overwrite state.f default at load time
-CON-POS-LOCK-PERIOD _ST-LOCK-PERIOD !
+CON-POS-LOCK-PERIOD @ _ST-LOCK-PERIOD !
 
 \ ─── B2. Validator set storage ───
 \  Up to 256 validators (matching ST-MAX-ACCOUNTS), sorted by stake desc.
@@ -541,7 +553,7 @@ VARIABLE _CON-EP-TSTAKE            \ temp stake for insertion sort
     \ Pass 1: collect qualified validators
     ST-COUNT 0 ?DO
         I _ST-ENTRY _ST-OFF-STAKED + @  ( staked )
-        DUP CON-POS-MIN-STAKE >= IF
+        DUP CON-POS-MIN-STAKE @ >= IF
             I _ST-ENTRY _ST-OFF-UNSTAKE-H + @ 0= IF
                 \ Qualified — append to validator set
                 _CON-VAL-COUNT @ 256 < IF
@@ -564,7 +576,8 @@ VARIABLE _CON-EP-TSTAKE            \ temp stake for insertion sort
             DROP
         THEN
     LOOP
-    \ Pass 2: insertion sort by stake descending
+    \ Pass 2: insertion sort by stake descending (skip if 0 or 1 entries)
+    _CON-VAL-COUNT @ 1 > IF
     _CON-VAL-COUNT @ 1 ?DO
         \ Save entry[i]
         I CELLS _CON-VAL-STAKES + @ _CON-EP-TSTAKE !
@@ -590,15 +603,16 @@ VARIABLE _CON-EP-TSTAKE            \ temp stake for insertion sort
         _CON-EP-TSTAKE @ _CON-EP-J @ CELLS _CON-VAL-STAKES + !
         _CON-EP-TKEY _CON-EP-J @ 32 * _CON-VAL-KEYS + 32 CMOVE
     LOOP
+    THEN
     \ Update epoch number
     _ST-CUR-HEIGHT @
-    CON-POS-EPOCH-LEN /
+    CON-POS-EPOCH-LEN @ /
     _CON-VAL-EPOCH ! ;
 
 \ ─── B5. Lazy epoch rebuild ───
 
 : _CON-POS-ENSURE-EPOCH  ( height -- )
-    CON-POS-EPOCH-LEN /            ( current-epoch# )
+    CON-POS-EPOCH-LEN @ /          ( current-epoch# )
     _CON-VAL-EPOCH @ <> IF
         CON-POS-EPOCH
     THEN ;
@@ -610,12 +624,16 @@ VARIABLE _CON-EP-TSTAKE            \ temp stake for insertion sort
 \  For height < 2, falls back to prev_hash (genesis/block-1 are fixed).
 \
 \  seed = SHA3-256( anchor_hash || height-as-LE-u64 )
-\  target = first 8 bytes of seed (LE u64) MOD total_stake
+\  target = first 8 bytes of seed (BE u64) MOD total_stake
 \  Walk cumulative stakes to find leader.
 
 CREATE _CON-SEED-BUF   40 ALLOT    \ anchor_hash(32) + height(8)
 CREATE _CON-SEED-HASH   32 ALLOT    \ SHA3-256 of seed
 CREATE _CON-ANCHOR-HASH 32 ALLOT    \ hash of block[height-2]
+
+\ _CON-SEED>U64 — extract first 8 bytes of _CON-SEED-HASH as big-endian u64
+: _CON-SEED>U64  ( -- u64 )
+    0  8 0 DO  8 LSHIFT  _CON-SEED-HASH I + C@ OR  LOOP ;
 
 VARIABLE _CON-LDR-BLK
 VARIABLE _CON-LDR-TARGET
@@ -639,14 +657,18 @@ VARIABLE _CON-LDR-TARGET
     _CON-LDR-BLK !
     \ Ensure epoch is current
     _CON-LDR-BLK @ BLK-HEIGHT@ _CON-POS-ENSURE-EPOCH
+    \ P19+P20: Guard against empty validator set (div-by-zero / underflow)
+    _CON-VAL-COUNT @ 0= IF
+        _CON-SEED-BUF EXIT         \ no validators — return sentinel
+    THEN
     \ Build seed: anchor_hash || height (anti-grinding)
     _CON-LDR-BLK @ _CON-ANCHOR-HASH!
     _CON-ANCHOR-HASH _CON-SEED-BUF 32 CMOVE
     _CON-LDR-BLK @ BLK-HEIGHT@ _CON-SEED-BUF 32 + !
     \ Hash seed
     _CON-SEED-BUF 40 _CON-SEED-HASH SHA3-256-HASH
-    \ seed_u64 = first 8 bytes LE
-    _CON-SEED-HASH @ _CON-VAL-TOTAL @ MOD
+    \ seed_u64 = first 8 bytes as big-endian u64 (C12: portable extraction)
+    _CON-SEED>U64 _CON-VAL-TOTAL @ MOD
     _CON-LDR-TARGET !
     \ Walk cumulative stakes
     0                              ( accum )
@@ -751,7 +773,7 @@ VARIABLE _CON-PCHK-BLK
 \  Built lazily at each election.  Stores indices into _CON-VAL-KEYS
 \  for validators that are also in the PoA authority table.
 
-CREATE _CON-SA-IDX  256 ALLOT      \ up to 256 staked-authority indices
+CREATE _CON-SA-IDX  256 CELLS ALLOT \ up to 256 staked-authority indices (cell-sized)
 VARIABLE _CON-SA-COUNT              \ count of staked authorities
 0 _CON-SA-COUNT !
 VARIABLE _CON-SA-TOTAL              \ total stake of staked authorities
@@ -790,7 +812,7 @@ VARIABLE _CON-SA-VDX              \ current validator index for build
             _CON-SA-MATCH? IF
                 \ Record this validator index as staked authority
                 _CON-SA-COUNT @ 256 < IF
-                    _CON-SA-VDX @ _CON-SA-COUNT @ _CON-SA-IDX + C!
+                    _CON-SA-VDX @ _CON-SA-COUNT @ CELLS _CON-SA-IDX + !
                     _CON-SA-VDX @ CELLS _CON-VAL-STAKES + @ _CON-SA-TOTAL +!
                     1 _CON-SA-COUNT +!
                 THEN
@@ -821,13 +843,13 @@ VARIABLE _CON-PA-TARGET
     _CON-PA-BLK @ BLK-HEIGHT@ _CON-SEED-BUF 32 + !
     \ Hash seed
     _CON-SEED-BUF 40 _CON-SEED-HASH SHA3-256-HASH
-    \ target = seed_u64 MOD total_staked_authority_stake
-    _CON-SEED-HASH @ _CON-SA-TOTAL @ MOD
+    \ target = seed_u64 MOD total_staked_authority_stake (C12: BE extraction)
+    _CON-SEED>U64 _CON-SA-TOTAL @ MOD
     _CON-PA-TARGET !
     \ Walk cumulative stakes of staked authorities
     0                              ( accum )
     _CON-SA-COUNT @ 0 ?DO
-        I _CON-SA-IDX + C@        ( accum val-idx )
+        I CELLS _CON-SA-IDX + @   ( accum val-idx )  \ C08: cell-sized index
         DUP CELLS _CON-VAL-STAKES + @ ( accum val-idx stake )
         ROT + SWAP                 ( accum' val-idx )
         OVER _CON-PA-TARGET @ > IF
@@ -838,7 +860,7 @@ VARIABLE _CON-PA-TARGET
     LOOP
     \ Fallback — last staked authority
     DROP
-    _CON-SA-COUNT @ 1- _CON-SA-IDX + C@
+    _CON-SA-COUNT @ 1- CELLS _CON-SA-IDX + @
     32 * _CON-VAL-KEYS + ;
 
 \ ─── D3. CON-POSA-CHECK — verify PoSA block ───
@@ -906,6 +928,7 @@ GUARD _con-guard
 
 ' CON-MODE!       CONSTANT _con-mode-set-xt
 ' CON-STARK!      CONSTANT _con-stark-set-xt
+' CON-CLEAR-KEYS  CONSTANT _con-clearkeys-xt
 ' CON-SET-KEYS    CONSTANT _con-setkeys-xt
 ' CON-POW-MINE    CONSTANT _con-pw-mine-xt
 ' CON-POW-TARGET! CONSTANT _con-pw-tset-xt
@@ -920,6 +943,7 @@ GUARD _con-guard
 
 : CON-MODE!       _con-mode-set-xt  _con-guard WITH-GUARD ;
 : CON-STARK!      _con-stark-set-xt _con-guard WITH-GUARD ;
+: CON-CLEAR-KEYS  _con-clearkeys-xt _con-guard WITH-GUARD ;
 : CON-SET-KEYS    _con-setkeys-xt   _con-guard WITH-GUARD ;
 : CON-POW-MINE    _con-pw-mine-xt   _con-guard WITH-GUARD ;
 : CON-POW-TARGET! _con-pw-tset-xt   _con-guard WITH-GUARD ;

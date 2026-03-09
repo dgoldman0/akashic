@@ -36,12 +36,12 @@ REQUIRE consensus.f
 | Principle | Realisation |
 |---|---|
 | **Four modes** | PoW (mode 0), PoA (mode 1), PoS (mode 2), PoSA (mode 3) — switchable at runtime |
-| **Unified signing** | `CON-SET-KEYS ( priv pub -- )` stores node keys once; `CON-SEAL` uses them for all modes |
+| **Unified signing** | `CON-SET-KEYS ( priv pub -- )` stores node keys once; `CON-CLEAR-KEYS` zeros them on shutdown |
 | **Two hashes per block** | Signatory hash (header with empty proof) for signing; block hash (with proof) for chain linkage |
 | **Anti-grinding** | PoS/PoSA leader seed uses 2-block lookback (`block[height-2].hash`) to prevent producer manipulation |
 | **Callback patching** | `CON-CHECK` auto-wired into `BLK-VERIFY` via `_BLK-CON-CHECK-XT` |
 | **Extension dispatch** | Staking tx handler wired into `state.f` via `_ST-TX-EXT-XT` |
-| **STARK-ready** | Orthogonal overlay stubs (`_CON-STARK-*-XT`) for Stage C.  Multi-column backend (`stark.f` v2.5) is complete. |
+| **STARK-ready** | Orthogonal overlay stubs (`_CON-STARK-*-XT`) for Stage C.  **Fail-closed**: stub rejects until real prover wired. |
 | **Concurrency-safe** | Public API wrapped with `WITH-GUARD` |
 
 ---
@@ -100,6 +100,16 @@ does not require keys.
 
 Concurrency-safe (wrapped with `WITH-GUARD`).
 
+### CON-CLEAR-KEYS
+
+```forth
+CON-CLEAR-KEYS  ( -- )
+```
+
+Zero the stored signing keys (private and public).  Call on node
+shutdown or consensus-mode transitions to prevent key material
+from persisting in memory.
+
 ---
 
 ## Signatory Hash
@@ -131,10 +141,12 @@ a big-endian u64 is less than the target.
 ### CON-POW-MINE
 
 ```forth
-CON-POW-MINE  ( blk -- )
+CON-POW-MINE  ( blk -- flag )
 ```
 
-Brute-force nonce search.  Blocks until a valid nonce is found.
+Brute-force nonce search.  Returns TRUE if a valid nonce is found,
+FALSE if the iteration cap (`_CON-POW-MAX-ITER`, default 1,000,000)
+is exhausted.
 
 ### CON-POW-CHECK
 
@@ -238,8 +250,12 @@ Two transaction types are dispatched via the `state.f` extension hook:
 | Stake | 3 | `TX-STAKE` | Move `amount` from balance → staked-amt |
 | Unstake | 4 | `TX-UNSTAKE` | Move all staked back to balance after lock period |
 
-**Lock period:** `CON-POS-LOCK-PERIOD` (64 blocks).  Unstaking is
+**Lock period:** `CON-POS-LOCK-PERIOD` (default 64 blocks).  Unstaking is
 rejected if `current_height < last_block + lock_period`.
+
+> **Note:** `CON-POS-EPOCH-LEN`, `CON-POS-MIN-STAKE`, and
+> `CON-POS-LOCK-PERIOD` are VARIABLEs (not CONSTANTs) so they can be
+> set from genesis CBOR.  Access with `@` / `!`.
 
 ### CON-POS-EPOCH
 
@@ -261,9 +277,10 @@ CON-POS-LEADER  ( blk -- addr )
 ```
 
 Deterministic leader selection for a given block:
-1. `seed = SHA3-256(anchor_hash || height)` where `anchor_hash = block[height-2].hash` (anti-grinding; see [Anti-Grinding](#anti-grinding))
-2. `target = LE_u64(seed[0..7]) MOD total_stake`
-3. Walk cumulative stakes to find the selected validator
+1. Guard: if no validators exist, returns a null sentinel address
+2. `seed = SHA3-256(anchor_hash || height)` where `anchor_hash = block[height-2].hash` (anti-grinding; see [Anti-Grinding](#anti-grinding))
+3. `target = BE_u64(seed[0..7]) MOD total_stake` (big-endian extraction for portable entropy)
+4. Walk cumulative stakes to find the selected validator
 
 Returns the 32-byte validator address (account address, not raw pubkey).
 
@@ -344,6 +361,7 @@ Compute the expected leader for a PoSA block:
 1. Ensure the PoS epoch is current, rebuild staked-authority set
 2. Compute anti-grinding seed (`anchor_hash || height`)
 3. `target = LE_u64(SHA3-256(seed)[0..7]) MOD total_staked_authority_stake`
+   (uses big-endian extraction like PoS leader)
 4. Walk cumulative stakes of staked authorities to find the leader
 
 Returns the 32-byte validator address.  If no staked authorities
@@ -421,7 +439,7 @@ complete, making Stage C wiring possible.
 
 Stubs are in place:
 - `_CON-STARK-PROVE-XT` — called by `CON-SEAL` (currently a no-op)
-- `_CON-STARK-CHECK-XT` — called by `CON-CHECK` (currently returns TRUE)
+- `_CON-STARK-CHECK-XT` — called by `CON-CHECK` (currently returns FALSE — fail-closed)
 
 ---
 
@@ -433,9 +451,10 @@ Stubs are in place:
 | `CON-POA` | 1 | Proof of Authority mode |
 | `CON-POS` | 2 | Proof of Stake mode |
 | `CON-POSA` | 3 | Proof of Staked Authority mode (production) |
-| `CON-POS-EPOCH-LEN` | 32 | Blocks per epoch |
-| `CON-POS-MIN-STAKE` | 100 | Minimum stake to qualify as validator |
-| `CON-POS-LOCK-PERIOD` | 64 | Blocks before unstake completes |
+| `CON-POS-EPOCH-LEN` | 32 (default) | Blocks per epoch (VARIABLE) |
+| `CON-POS-MIN-STAKE` | 100 (default) | Minimum stake to qualify (VARIABLE) |
+| `CON-POS-LOCK-PERIOD` | 64 (default) | Blocks before unstake completes (VARIABLE) |
+| `_CON-POW-MAX-ITER` | 1,000,000 (default) | PoW mining iteration cap (VARIABLE) |
 
 ---
 
@@ -450,7 +469,7 @@ CON-POW CON-MODE!
 0x00FFFFFFFFFFFFFF CON-POW-TARGET!
 
 \ Mine block
-my-block CON-POW-MINE
+my-block CON-POW-MINE DROP   \ returns flag; check if mining succeeded
 
 \ Verify
 my-block CON-POW-CHECK   \ -> TRUE
@@ -527,10 +546,11 @@ CON-POSA-COUNT             \ -> n
 | `CON-STARK!` | `( flag -- )` | Enable/disable STARK overlay |
 | `CON-STARK?` | `( -- flag )` | Query STARK overlay |
 | `CON-SET-KEYS` | `( priv pub -- )` | Store node signing keys |
+| `CON-CLEAR-KEYS` | `( -- )` | Zero signing keys |
 | `CON-SIG-HASH` | `( blk hash -- )` | Signatory hash |
 | `CON-SEAL` | `( blk -- )` | Unified seal dispatch |
 | `CON-CHECK` | `( blk -- flag )` | Unified check dispatch |
-| `CON-POW-MINE` | `( blk -- )` | PoW nonce search |
+| `CON-POW-MINE` | `( blk -- flag )` | PoW nonce search (capped) |
 | `CON-POW-CHECK` | `( blk -- flag )` | PoW verify |
 | `CON-POW-TARGET!` | `( target -- )` | Set PoW difficulty |
 | `CON-POW-TARGET@` | `( -- target )` | Get PoW difficulty |

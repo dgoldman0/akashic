@@ -258,7 +258,7 @@ VARIABLE _BLK-FIN-BLK
         I _BLK-FIN-BLK @ BLK-TX@ ST-APPLY-TX DROP
     LOOP
     \ 3. Compute and store state root
-    ST-ROOT _BLK-FIN-BLK @ _BLK-SROOT 32 CMOVE ;
+    ST-ROOT DROP _BLK-FIN-BLK @ _BLK-SROOT 32 CMOVE ;
 
 \ =====================================================================
 \  11. BLK-HASH — SHA3-256 of CBOR-encoded header
@@ -600,7 +600,7 @@ CREATE _BLK-DN-B 32 ALLOT
         THEN
     LOOP
     \ Compute state root and compare
-    ST-ROOT _BLK-V-ROOT 32 CMOVE
+    ST-ROOT DROP _BLK-V-ROOT 32 CMOVE
     _BLK-V-SNAP ST-RESTORE               \ restore original state
     _BLK-V-BLK @ _BLK-SROOT _BLK-V-ROOT 32
     0
@@ -670,7 +670,7 @@ CREATE _CH-ZERO-HASH  32 ALLOT
     _CH-ZERO-HASH _CH-GENESIS BLK-SET-PREV
     0 _CH-GENESIS BLK-SET-TIME
     \ Compute state root from current state for genesis
-    ST-ROOT _CH-GENESIS _BLK-SROOT 32 CMOVE
+    ST-ROOT DROP _CH-GENESIS _BLK-SROOT 32 CMOVE
     \ Tx root = empty tree root
     _CH-GENESIS _BLK-COMPUTE-TX-ROOT
 

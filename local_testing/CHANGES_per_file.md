@@ -93,18 +93,22 @@ Legend:
 
 ## Priority 4 — Block & consensus (builds on correct state + tx)
 
-### File 6: `consensus/consensus.f`
+### File 6: `consensus/consensus.f` — ✅ DONE (batch 4, 40/40 tests)
 
-| # | ID | Severity | Change | Lines | Summary |
-|---|-----|----------|--------|-------|---------|
-| 23 | P18 | **CRIT** | STARK stub fail-closed | L333–337 | Change `_CON-STARK-CHECK-STUB` from `DROP TRUE` → `DROP FALSE`. |
-| 24 | P19 | **CRIT** | PoS leader div-by-zero | ~L654 | Guard `_CON-VAL-TOTAL @ 0=` before `MOD`. Return null sentinel key. Caller must handle. |
-| 25 | P20 | **CRIT** | PoS leader underflow | ~L672 | Guard `_CON-VAL-COUNT @ 0=` before `1-`. Return null sentinel key. |
-| 26 | A05 | **CRIT** | Zeroize `_CON-SIGN-PRIV` on shutdown | L108 | Add `_CON-SIGN-PRIV 64 0 FILL` to shutdown path. Also zeroize on consensus-mode change. |
-| 27 | B04 | **HIGH** | Consensus constants → VARIABLEs from genesis | ~L136–144 | Convert `CON-POS-EPOCH-LEN`, `CON-POS-MIN-STAKE`, `CON-POS-LOCK-PERIOD` from `CONSTANT` to `VARIABLE`. Set from genesis CBOR in `GEN-LOAD`. Different compile = different values = consensus fork without this. |
-| 28 | C08 | **MED** | 256-validator byte-index cap | ~L140,546,570 | Enlarge `_CON-POA-KEYS` / `_CON-VAL-KEYS` buffers. Replace `C!`/`C@` byte-indexed authority lookup with cell-sized index to support >255 validators. |
-| 29 | C12 | **MED** | Leader entropy truncation | `CON-POS-LEADER` | `_CON-SEED-HASH @` reads only 8 bytes (one cell). Use `_CON-SEED-HASH 8 +` or full 32-byte modular reduction for proper entropy. |
-| 30 | P21 | **MED** | PoW mine timeout | `CON-POW-MINE` | Add `_CON-POW-MAX-ITER = 1000000` iteration cap. Return FALSE on exhaustion. |
+| # | ID | Severity | Change | Lines | Summary | Status |
+|---|-----|----------|--------|-------|---------|--------|
+| 23 | P18 | **CRIT** | STARK stub fail-closed | L390 | `_CON-STARK-CHECK-STUB`: `DROP -1` → `DROP 0` (fail-closed). | ✅ |
+| 24 | P19 | **CRIT** | PoS leader div-by-zero | ~L651 | Guard `_CON-VAL-COUNT @ 0=` before `MOD`. Returns `_CON-SEED-BUF` sentinel. | ✅ |
+| 25 | P20 | **CRIT** | PoS leader underflow | ~L651 | Combined with P19 guard. | ✅ |
+| 26 | A05 | **CRIT** | Zeroize signing keys | L118 | `CON-CLEAR-KEYS`: zeros priv(64)+pub(32), clears flag. Guard-wrapped. | ✅ |
+| 27 | B04 | **HIGH** | Constants → VARIABLEs | L458-461 | `CON-POS-EPOCH-LEN`, `MIN-STAKE`, `LOCK-PERIOD` → VARIABLEs (defaults 32/100/64). All refs updated to use `@`. | ✅ |
+| 28 | C08 | **MED** | Cell-sized SA indices | L756,790,825 | `_CON-SA-IDX` → `256 CELLS ALLOT`; `C!`/`C@` → `!`/`@` with CELLS offset. | ✅ |
+| 29 | C12 | **MED** | Portable seed extraction | L627-630 | New `_CON-SEED>U64` reads 8 bytes BE. Replaces raw `@` in leader+elect. | ✅ |
+| 30 | P21 | **MED** | PoW mine iteration cap | L197,207 | `_CON-POW-MAX-ITER` VARIABLE (1M default). `CON-POW-MINE ( blk -- flag )`. `CON-SEAL` drops flag. | ✅ |
+
+**Extra fixes found during testing:**
+- Pre-existing bug: `CON-POS-EPOCH` insertion sort `0 1 ?DO` loops ~2^64 when val_count=0. Fixed with `_CON-VAL-COUNT @ 1 > IF ... THEN` guard.
+- Forward-fix for batch 3 `ST-ROOT` API change: added `DROP` after `ST-ROOT` in `store/block.f` at lines 261, 603, 673 (`BLK-FINALIZE`, `BLK-VERIFY`, `CHAIN-INIT`).
 
 ### File 7: `store/block.f`
 
