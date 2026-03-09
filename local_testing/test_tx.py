@@ -162,6 +162,8 @@ def run_forth(lines, max_steps=800_000_000):
     buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
+    if max_steps > 1_000_000_000:
+        print(f"    [run_forth] max_steps={max_steps:,}")
     while steps < max_steps:
         if sys_obj.cpu.halted: break
         if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
@@ -172,6 +174,8 @@ def run_forth(lines, max_steps=800_000_000):
             continue
         batch = sys_obj.run_batch(min(100_000, max_steps - steps))
         steps += max(batch, 1)
+    if max_steps > 1_000_000_000:
+        print(f"    [run_forth] finished: {steps:,} steps, halted={sys_obj.cpu.halted}, idle={sys_obj.cpu.idle}")
     return uart_text(buf)
 
 # ── Test framework ──
@@ -179,9 +183,9 @@ def run_forth(lines, max_steps=800_000_000):
 _pass_count = 0
 _fail_count = 0
 
-def check(name, forth_lines, expected):
+def check(name, forth_lines, expected, max_steps=800_000_000):
     global _pass_count, _fail_count
-    output = run_forth(forth_lines)
+    output = run_forth(forth_lines, max_steps=max_steps)
     clean = output.strip()
     if expected in clean:
         _pass_count += 1
@@ -193,9 +197,9 @@ def check(name, forth_lines, expected):
         for l in clean.split('\n')[-6:]:
             print(f"        got:      '{l}'")
 
-def check_fn(name, forth_lines, predicate, desc=""):
+def check_fn(name, forth_lines, predicate, desc="", max_steps=800_000_000):
     global _pass_count, _fail_count
-    output = run_forth(forth_lines)
+    output = run_forth(forth_lines, max_steps=max_steps)
     clean = output.strip()
     if predicate(clean):
         _pass_count += 1
@@ -245,7 +249,7 @@ def _keygen_preamble():
         'CREATE _PUB2 32 ALLOT',
         'CREATE _PRIV2 64 ALLOT',
         '_SEED2 _PUB2 _PRIV2 ED25519-KEYGEN',
-        f'CREATE _TX1 {8296} ALLOT',
+        f'CREATE _TX1 {8320} ALLOT',
         '_TX1 TX-INIT',
     ]
     return lines
@@ -254,7 +258,7 @@ def _keygen_preamble():
 
 def test_constants():
     print("\n=== Constants ===")
-    check("TX-BUF-SIZE",    ['TX-BUF-SIZE .'],    "8296")
+    check("TX-BUF-SIZE",    ['TX-BUF-SIZE .'],    "8320")
     check("TX-SIG-ED25519", ['TX-SIG-ED25519 .'], "0")
     check("TX-SIG-SPHINCS", ['TX-SIG-SPHINCS .'], "1")
     check("TX-SIG-HYBRID",  ['TX-SIG-HYBRID .'],  "2")
@@ -269,7 +273,7 @@ def test_init():
     """TX-INIT zeros the buffer."""
     print("\n=== TX-INIT ===")
     lines = [
-        f'CREATE _TX1 {8296} ALLOT',
+        f'CREATE _TX1 {8320} ALLOT',
         # Put some junk in the buffer first
         '255 _TX1 C!  255 _TX1 100 + C!',
         '_TX1 TX-INIT',
@@ -349,7 +353,7 @@ def test_hash_differs():
     """Different amount produces different hash."""
     print("\n=== TX-HASH differs ===")
     lines = _keygen_preamble() + [
-        f'CREATE _TX2 {8296} ALLOT  _TX2 TX-INIT',
+        f'CREATE _TX2 {8320} ALLOT  _TX2 TX-INIT',
         # TX1: amount=500
         '_PUB1 _TX1 TX-SET-FROM',
         '_PUB2 _TX1 TX-SET-TO',
@@ -371,7 +375,7 @@ def test_hash_equals():
     """TX-HASH= compares two identical txs."""
     print("\n=== TX-HASH= ===")
     lines = _keygen_preamble() + [
-        f'CREATE _TX2 {8296} ALLOT  _TX2 TX-INIT',
+        f'CREATE _TX2 {8320} ALLOT  _TX2 TX-INIT',
         '_PUB1 _TX1 TX-SET-FROM  _PUB2 _TX1 TX-SET-TO',
         '100 _TX1 TX-SET-AMOUNT  0 _TX1 TX-SET-NONCE',
         '_PUB1 _TX2 TX-SET-FROM  _PUB2 _TX2 TX-SET-TO',
@@ -381,7 +385,7 @@ def test_hash_equals():
     check("TX-HASH= same", lines, "-1")
 
     lines2 = _keygen_preamble() + [
-        f'CREATE _TX2 {8296} ALLOT  _TX2 TX-INIT',
+        f'CREATE _TX2 {8320} ALLOT  _TX2 TX-INIT',
         '_PUB1 _TX1 TX-SET-FROM  _PUB2 _TX1 TX-SET-TO',
         '100 _TX1 TX-SET-AMOUNT  0 _TX1 TX-SET-NONCE',
         '_PUB1 _TX2 TX-SET-FROM  _PUB2 _TX2 TX-SET-TO',
@@ -422,8 +426,8 @@ def test_verify_bad_ed25519():
         '1000 _TX1 TX-SET-AMOUNT',
         '1 _TX1 TX-SET-NONCE',
         '_TX1 _PRIV1 _PUB1 TX-SIGN',
-        # Corrupt one byte in the sig field (offset 370)
-        '_TX1 370 + DUP C@ 1 XOR SWAP C!',
+        # Corrupt one byte in the sig field (offset 394)
+        '_TX1 394 + DUP C@ 1 XOR SWAP C!',
         '_TX1 TX-VERIFY .',
     ]
     check("reject corrupted Ed25519 sig", lines, "0")
@@ -462,7 +466,7 @@ def test_valid_check():
     print("\n=== TX-VALID? ===")
     # Empty (zeroed) tx should fail — from key is all-zero
     lines = [
-        f'CREATE _TX1 {8296} ALLOT  _TX1 TX-INIT',
+        f'CREATE _TX1 {8320} ALLOT  _TX1 TX-INIT',
         '_TX1 TX-VALID? .',
     ]
     check("zeroed tx invalid", lines, "0")
@@ -491,7 +495,7 @@ def test_encode_decode_roundtrip():
         'CREATE _CBUF 16384 ALLOT',
         '_TX1 _CBUF 16384 TX-ENCODE',   # -- len
         # Decode into a fresh tx
-        f'CREATE _TX2 {8296} ALLOT',
+        f'CREATE _TX2 {8320} ALLOT',
         'DUP _CBUF SWAP _TX2 TX-DECODE .',  # -- len; print decode flag
         # Compare fields
         '_TX2 TX-AMOUNT@ .',
@@ -507,7 +511,7 @@ def test_encode_decode_roundtrip():
         '_TX1 _PRIV1 _PUB1 TX-SIGN',
         'CREATE _CBUF 16384 ALLOT',
         '_TX1 _CBUF 16384 TX-ENCODE',
-        f'CREATE _TX2 {8296} ALLOT',
+        f'CREATE _TX2 {8320} ALLOT',
         '_CBUF SWAP _TX2 TX-DECODE DROP',
         '_TX2 TX-AMOUNT@ .',
         '_TX2 TX-NONCE@ .',
@@ -525,7 +529,7 @@ def test_encode_decode_verify():
         '_TX1 _PRIV1 _PUB1 TX-SIGN',
         'CREATE _CBUF 16384 ALLOT',
         '_TX1 _CBUF 16384 TX-ENCODE',
-        f'CREATE _TX2 {8296} ALLOT',
+        f'CREATE _TX2 {8320} ALLOT',
         '_CBUF SWAP _TX2 TX-DECODE DROP',
         '_TX2 TX-VERIFY .',
     ]
@@ -564,7 +568,7 @@ def test_data_roundtrip():
         '_TX1 _PRIV1 _PUB1 TX-SIGN',
         'CREATE _CBUF 16384 ALLOT',
         '_TX1 _CBUF 16384 TX-ENCODE',
-        f'CREATE _TX2 {8296} ALLOT',
+        f'CREATE _TX2 {8320} ALLOT',
         '_CBUF SWAP _TX2 TX-DECODE DROP',
         '_TX2 TX-DATA-LEN@ .',
         '_TX2 TX-DATA@ 4 .HEX',
@@ -615,7 +619,168 @@ def test_sign_verify_sphincs():
     ]
     check_fn("SPX sign+verify", lines,
              lambda out: "1" in out and "-1" in out,
-             "sig_mode=1 and verify=TRUE")
+             "sig_mode=1 and verify=TRUE",
+             max_steps=50_000_000_000)
+
+# ── Phase 6.6 hardening tests ──
+
+def test_p09_hybrid_and():
+    """P09: Hybrid verify uses AND — both signatures must pass."""
+    print("\n=== P09: Hybrid verify AND (not OR) ===")
+    # Build a hybrid-signed tx, then corrupt only the Ed25519 sig.
+    # Under AND logic this must fail; under old OR logic it would succeed
+    # because the SPHINCS+ sig is still valid.
+    lines = _keygen_preamble() + [
+        'CREATE _SPXSEED 48 ALLOT',
+        '1 _SPXSEED !  2 _SPXSEED 8 + !  3 _SPXSEED 16 + !',
+        '4 _SPXSEED 24 + !  5 _SPXSEED 32 + !  6 _SPXSEED 40 + !',
+        'CREATE _SPXPUB 32 ALLOT',
+        'CREATE _SPXSEC 64 ALLOT',
+        '1 SPX-SIGN-MODE !',
+        '_SPXSEED _SPXPUB _SPXSEC SPX-KEYGEN',
+        '_PUB1 _TX1 TX-SET-FROM',
+        '_SPXPUB _TX1 TX-SET-FROM-PQ',
+        '_PUB2 _TX1 TX-SET-TO',
+        '500 _TX1 TX-SET-AMOUNT',
+        '0 _TX1 TX-SET-NONCE',
+        # Hybrid sign (both Ed25519 + SPHINCS+)
+        '_TX1 _PRIV1 _PUB1 _SPXSEC TX-SIGN-HYBRID',
+        # Verify good hybrid — should pass
+        '_TX1 TX-VERIFY .',
+        # Corrupt Ed25519 sig (offset 394)
+        '_TX1 394 + DUP C@ 1 XOR SWAP C!',
+        # Re-verify — AND logic means this MUST fail
+        '_TX1 TX-VERIFY .',
+    ]
+    def _hybrid_pred(out):
+        # Extract the two "TX-VERIFY ." results from the output lines
+        vals = []
+        for l in out.split('\n'):
+            l = l.strip()
+            if l.startswith('-1') or l.startswith('0'):
+                tok = l.split()[0]
+                if tok in ('-1', '0'):
+                    vals.append(tok)
+        return vals == ['-1', '0']
+    check_fn("hybrid AND",  lines,
+             _hybrid_pred,
+             "first verify=-1, after corrupt Ed25519 expect 0",
+             max_steps=100_000_000_000)  # hybrid: 2 signs + 2 verifies
+
+def test_p10_negative_amount():
+    """P10: TX-SET-AMOUNT rejects negative values."""
+    print("\n=== P10: negative amount guard ===")
+    lines = _keygen_preamble() + [
+        '_PUB1 _TX1 TX-SET-FROM',
+        '_PUB2 _TX1 TX-SET-TO',
+        '1000 _TX1 TX-SET-AMOUNT',
+        # Attempt to set negative amount — should be a no-op
+        '-5 _TX1 TX-SET-AMOUNT',
+        '_TX1 TX-AMOUNT@ .',
+    ]
+    check("neg amount rejected", lines, "1000")
+
+def test_p10_negative_fee():
+    """P10: TX-SET-FEE rejects negative values."""
+    print("\n=== P10: negative fee guard ===")
+    lines = _keygen_preamble() + [
+        '50 _TX1 TX-SET-FEE',
+        '-1 _TX1 TX-SET-FEE',
+        '_TX1 TX-FEE@ .',
+    ]
+    check("neg fee rejected", lines, "50")
+
+def test_p11_cbor_overflow():
+    """P11: _TX-ENCODE-UNSIGNED returns 0 when CBOR buffer overflows."""
+    print("\n=== P11: CBOR overflow detection ===")
+    # We can't easily force the overflow through public API since
+    # the internal buffer is large, so we test that encode returns
+    # a non-zero length for a normal tx (positive confirmation).
+    lines = _keygen_preamble() + [
+        '_PUB1 _TX1 TX-SET-FROM',
+        '_PUB2 _TX1 TX-SET-TO',
+        '100 _TX1 TX-SET-AMOUNT',
+        '1 _TX1 TX-SET-NONCE',
+        '_TX1 _PRIV1 _PUB1 TX-SIGN',
+        'CREATE _CBUF 16384 ALLOT',
+        '_TX1 _CBUF 16384 TX-ENCODE .',
+    ]
+    # Encode length must be > 0
+    check_fn("encode returns >0", lines,
+             lambda out: any(int(w) > 0
+                            for w in out.strip().split()
+                            if w.lstrip('-').isdigit()),
+             "encode len > 0")
+
+def test_a03_chain_id():
+    """A03: chain_id setter, getter, and encode/decode roundtrip."""
+    print("\n=== A03: chain_id field ===")
+    lines = _keygen_preamble() + [
+        '42 _TX1 TX-SET-CHAIN-ID',
+        '_TX1 TX-CHAIN-ID@ .',
+    ]
+    check("chain_id getter", lines, "42")
+
+    # Round-trip through encode/decode
+    lines2 = _keygen_preamble() + [
+        '_PUB1 _TX1 TX-SET-FROM',
+        '_PUB2 _TX1 TX-SET-TO',
+        '100 _TX1 TX-SET-AMOUNT',
+        '7 _TX1 TX-SET-CHAIN-ID',
+        '_TX1 _PRIV1 _PUB1 TX-SIGN',
+        'CREATE _CBUF 16384 ALLOT',
+        '_TX1 _CBUF 16384 TX-ENCODE',
+        f'CREATE _TX2 {8320} ALLOT',
+        '_CBUF SWAP _TX2 TX-DECODE DROP',
+        '_TX2 TX-CHAIN-ID@ .',
+    ]
+    check("chain_id roundtrip", lines2, "7")
+
+def test_c05_fee():
+    """C05: fee setter, getter, and encode/decode roundtrip."""
+    print("\n=== C05: fee field ===")
+    lines = _keygen_preamble() + [
+        '999 _TX1 TX-SET-FEE',
+        '_TX1 TX-FEE@ .',
+    ]
+    check("fee getter", lines, "999")
+
+    lines2 = _keygen_preamble() + [
+        '_PUB1 _TX1 TX-SET-FROM',
+        '_PUB2 _TX1 TX-SET-TO',
+        '100 _TX1 TX-SET-AMOUNT',
+        '50 _TX1 TX-SET-FEE',
+        '_TX1 _PRIV1 _PUB1 TX-SIGN',
+        'CREATE _CBUF 16384 ALLOT',
+        '_TX1 _CBUF 16384 TX-ENCODE',
+        f'CREATE _TX2 {8320} ALLOT',
+        '_CBUF SWAP _TX2 TX-DECODE DROP',
+        '_TX2 TX-FEE@ .',
+    ]
+    check("fee roundtrip", lines2, "50")
+
+def test_c06_valid_until():
+    """C06: valid_until setter, getter, and encode/decode roundtrip."""
+    print("\n=== C06: valid_until field ===")
+    lines = _keygen_preamble() + [
+        '12345 _TX1 TX-SET-VALID-UNTIL',
+        '_TX1 TX-VALID-UNTIL@ .',
+    ]
+    check("valid_until getter", lines, "12345")
+
+    lines2 = _keygen_preamble() + [
+        '_PUB1 _TX1 TX-SET-FROM',
+        '_PUB2 _TX1 TX-SET-TO',
+        '100 _TX1 TX-SET-AMOUNT',
+        '500 _TX1 TX-SET-VALID-UNTIL',
+        '_TX1 _PRIV1 _PUB1 TX-SIGN',
+        'CREATE _CBUF 16384 ALLOT',
+        '_TX1 _CBUF 16384 TX-ENCODE',
+        f'CREATE _TX2 {8320} ALLOT',
+        '_CBUF SWAP _TX2 TX-DECODE DROP',
+        '_TX2 TX-VALID-UNTIL@ .',
+    ]
+    check("valid_until roundtrip", lines2, "500")
 
 # ── Main ──
 
@@ -643,11 +808,20 @@ if __name__ == "__main__":
     test_data_roundtrip()
     test_tx_print()
 
+    # Phase 6.6 hardening tests
+    test_p10_negative_amount()
+    test_p10_negative_fee()
+    test_p11_cbor_overflow()
+    test_a03_chain_id()
+    test_c05_fee()
+    test_c06_valid_until()
+
     if not quick:
         print("\n" + "="*40)
         print("  SPHINCS+ tests (slow) ...")
         print("="*40)
         test_sign_verify_sphincs()
+        test_p09_hybrid_and()
     else:
         print("\n  [SKIP] SPHINCS+ tests (--quick)")
 

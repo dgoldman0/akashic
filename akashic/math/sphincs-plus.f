@@ -91,9 +91,11 @@ SPX-MODE-RANDOM SPX-SIGN-MODE !
 CREATE _SPX-ADRS     32 ALLOT   _SPX-ADRS  32 0 FILL
 CREATE _SPX-HASH-BUF 32 ALLOT
 CREATE _SPX-DIGEST   32 ALLOT
+
 CREATE _SPX-WOTS-MSG 40 ALLOT
 CREATE _SPX-NODE     16 ALLOT
 CREATE _SPX-NODE2    16 ALLOT
+CREATE _SPX-HT-MSG   16 ALLOT
 CREATE _SPX-FORS-RTS 224 ALLOT
 CREATE _SPX-WOTS-BUF 560 ALLOT
 CREATE _SPX-OPT-RAND 16 ALLOT
@@ -136,6 +138,7 @@ VARIABLE _SPX-V-XNODE-HT
 VARIABLE _SPX-V-XSIG-OUT
 VARIABLE _SPX-V-FNODE-HT
 VARIABLE _SPX-V-FSIG-OUT
+VARIABLE _SPX-V-FPKSIG
 VARIABLE _SPX-V-HTSIG-OUT
 VARIABLE _SPX-V-HTVER-ROOT
 
@@ -356,7 +359,7 @@ VARIABLE _SPX-KG-SEC
 : _SPX-WOTS-SK-I  ( i dst -- )
     >R
     _SPX-T-WOTS-PRF _SPX-ADRS-TYPE!
-    DUP _SPX-ADRS-CHAIN!
+    _SPX-ADRS-CHAIN!
     0 _SPX-ADRS-HASH!
     R> _SPX-PRF
     _SPX-T-WOTS-HASH _SPX-ADRS-TYPE! ;
@@ -450,6 +453,7 @@ VARIABLE _SPX-KG-SEC
             OVER _SPX-V-XNODE-HT @ < AND
         WHILE
             _SPX-T-TREE _SPX-ADRS-TYPE!
+            0 _SPX-ADRS-KP!
             DUP 1+ _SPX-ADRS-HEIGHT!
             I OVER 1+ RSHIFT _SPX-ADRS-INDEX!
             _SPX-TH-POP _SPX-NODE _SPX-NODE2 _SPX-T2
@@ -491,6 +495,7 @@ VARIABLE _SPX-KG-SEC
     \ Walk Merkle tree using auth path
     _SPX-HP 0 DO
         _SPX-T-TREE _SPX-ADRS-TYPE!
+        0 _SPX-ADRS-KP!
         I 1+ _SPX-ADRS-HEIGHT!
         _SPX-XMSS-IDX @ I 1+ RSHIFT _SPX-ADRS-INDEX!
         DUP _SPX-WLEN + I SPX-N * +  \ auth[I]
@@ -579,6 +584,7 @@ VARIABLE _SPX-KG-SEC
 \ FORS pk from sig -> dst.
 : _SPX-FORS-PK-FROM-SIG  ( sig-in dst -- )
     >R
+    _SPX-V-FPKSIG !
     _SPX-K 0 DO                      \ I = tree# (0..13)
         I _SPX-FORS-IDX _SPX-CUR-FIDX !
         I 1 _SPX-A LSHIFT * _SPX-FORS-BASE !
@@ -587,7 +593,7 @@ VARIABLE _SPX-KG-SEC
         _SPX-FORS-KP @ _SPX-ADRS-KP!
         0 _SPX-ADRS-HEIGHT!
         _SPX-CUR-FIDX @ _SPX-FORS-BASE @ + _SPX-ADRS-INDEX!
-        DUP I _SPX-FORS-ENTRY * +    \ &sig_secret
+        _SPX-V-FPKSIG @ I _SPX-FORS-ENTRY * +    \ &sig_secret
         _SPX-NODE _SPX-T1
         \ Walk auth path
         _SPX-A 0 DO                  \ I = auth level (0..11), J = tree#
@@ -596,7 +602,7 @@ VARIABLE _SPX-KG-SEC
             I 1+ _SPX-ADRS-HEIGHT!
             _SPX-CUR-FIDX @ _SPX-FORS-BASE @ +
             I 1+ RSHIFT _SPX-ADRS-INDEX!
-            OVER J _SPX-FORS-ENTRY * + SPX-N + I SPX-N * +  \ auth[I]
+            _SPX-V-FPKSIG @ J _SPX-FORS-ENTRY * + SPX-N + I SPX-N * +  \ auth[I]
             _SPX-CUR-FIDX @ I RSHIFT 1 AND IF
                 _SPX-NODE _SPX-NODE2 _SPX-T2
             ELSE
@@ -606,7 +612,6 @@ VARIABLE _SPX-KG-SEC
         LOOP
         _SPX-NODE _SPX-FORS-RTS I SPX-N * + SPX-N CMOVE
     LOOP
-    DROP
     _SPX-T-FORS-ROOTS _SPX-ADRS-TYPE!
     _SPX-FORS-KP @ _SPX-ADRS-KP!
     _SPX-FORS-RTS R> _SPX-T-K ;
@@ -626,9 +631,11 @@ VARIABLE _SPX-KG-SEC
     _SPX-ADRS-ZERO
     0 _SPX-ADRS-LAYER!
     _SPX-HT-TREE @ _SPX-ADRS-TREE!
-    _SPX-CUR-MSG @ _SPX-HT-LEAF @ _SPX-V-HTSIG-OUT @ _SPX-XMSS-SIGN
+    \ Save msg before XMSS-SIGN clobbers _SPX-NODE
+    _SPX-CUR-MSG @ _SPX-HT-MSG SPX-N CMOVE
+    _SPX-HT-MSG _SPX-HT-LEAF @ _SPX-V-HTSIG-OUT @ _SPX-XMSS-SIGN
     \ Compute root of layer 0 for next layer
-    _SPX-CUR-MSG @ _SPX-HT-LEAF @ _SPX-V-HTSIG-OUT @
+    _SPX-HT-MSG _SPX-HT-LEAF @ _SPX-V-HTSIG-OUT @
     _SPX-NODE _SPX-XMSS-ROOT
     \ Layers 1..d-1
     _SPX-D 1 DO
@@ -636,11 +643,13 @@ VARIABLE _SPX-KG-SEC
         _SPX-HT-TREE @ 9 RSHIFT _SPX-HT-TREE !
         I _SPX-ADRS-LAYER!
         _SPX-HT-TREE @ _SPX-ADRS-TREE!
-        _SPX-NODE _SPX-HT-LEAF @
+        \ Save msg before XMSS-SIGN clobbers _SPX-NODE
+        _SPX-NODE _SPX-HT-MSG SPX-N CMOVE
+        _SPX-HT-MSG _SPX-HT-LEAF @
         _SPX-V-HTSIG-OUT @ I _SPX-HT-LAYER-SZ * + _SPX-XMSS-SIGN
         \ Compute root for next layer (skip on last)
         I _SPX-D 1- < IF
-            _SPX-NODE _SPX-HT-LEAF @
+            _SPX-HT-MSG _SPX-HT-LEAF @
             _SPX-V-HTSIG-OUT @ I _SPX-HT-LAYER-SZ * +
             _SPX-NODE2 _SPX-XMSS-ROOT
             _SPX-NODE2 _SPX-NODE SPX-N CMOVE
@@ -669,7 +678,7 @@ VARIABLE _SPX-KG-SEC
         I _SPX-ADRS-LAYER!
         _SPX-HT-TREE @ _SPX-ADRS-TREE!
         _SPX-NODE _SPX-HT-LEAF @
-        OVER I _SPX-HT-LAYER-SZ * +
+        2 PICK I _SPX-HT-LAYER-SZ * +
         _SPX-NODE2 _SPX-XMSS-ROOT
         _SPX-NODE2 _SPX-NODE SPX-N CMOVE
     LOOP

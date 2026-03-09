@@ -31,18 +31,22 @@ PROVIDED akashic-cbor
 VARIABLE _CB-DST       \ output buffer address
 VARIABLE _CB-MAX       \ output buffer capacity
 VARIABLE _CB-POS       \ current write position
+VARIABLE _CB-OVF       \ overflow flag (TRUE if bytes dropped)
 
 \ CBOR-RESET ( dst max -- )
 \   Set output buffer for encoding.
 : CBOR-RESET  ( dst max -- )
-    _CB-MAX ! _CB-DST ! 0 _CB-POS ! ;
+    _CB-MAX ! _CB-DST ! 0 _CB-POS ! 0 _CB-OVF ! ;
 
 \ _CB-EMIT ( byte -- )  Write one byte.
 : _CB-EMIT  ( byte -- )
     _CB-POS @ _CB-MAX @ < IF
         _CB-DST @ _CB-POS @ + C!
         1 _CB-POS +!
-    ELSE DROP THEN ;
+    ELSE DROP -1 _CB-OVF ! THEN ;
+
+\ CBOR-OK? ( -- flag )  TRUE if no bytes were dropped during encoding.
+: CBOR-OK?  ( -- flag )  _CB-OVF @ 0= ;
 
 \ _CB-EMIT2 ( n -- )  Write 2 bytes big-endian.
 : _CB-EMIT2  ( n -- )

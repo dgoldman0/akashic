@@ -14,6 +14,9 @@
 \   TX-SET-TO        ( pubkey tx -- )          set recipient Ed25519 key
 \   TX-SET-AMOUNT    ( amount tx -- )          set transfer amount
 \   TX-SET-NONCE     ( nonce tx -- )           set sequence number
+\   TX-SET-CHAIN-ID  ( chain-id tx -- )        set chain identifier
+\   TX-SET-FEE       ( fee tx -- )             set transaction fee
+\   TX-SET-VALID-UNTIL ( slot tx -- )          set expiry slot
 \   TX-SET-DATA      ( addr len tx -- )        set optional payload
 \   TX-HASH          ( tx hash -- )            SHA3-256 of unsigned fields
 \   TX-SIGN          ( tx ed-priv ed-pub -- )  sign with Ed25519
@@ -24,9 +27,12 @@
 \   TX-DECODE        ( buf len tx -- flag )    deserialize from CBOR
 \   TX-VALID?        ( tx -- flag )            structural validity check
 \   TX-HASH=         ( tx1 tx2 -- flag )       compare tx hashes
+\   TX-CHAIN-ID@     ( tx -- chain-id )        read chain identifier
+\   TX-FEE@          ( tx -- fee )             read transaction fee
+\   TX-VALID-UNTIL@  ( tx -- slot )            read expiry slot
 \
 \  Constants:
-\   TX-BUF-SIZE      ( -- 8296 )    buffer size per transaction
+\   TX-BUF-SIZE      ( -- 8320 )    buffer size per transaction
 \   TX-SIG-ED25519   ( -- 0 )       sig mode: Ed25519 only
 \   TX-SIG-SPHINCS   ( -- 1 )       sig mode: SPHINCS+ only
 \   TX-SIG-HYBRID    ( -- 2 )       sig mode: both
@@ -47,7 +53,7 @@ PROVIDED akashic-tx
 \  1. Constants
 \ =====================================================================
 
-8296 CONSTANT TX-BUF-SIZE
+8320 CONSTANT TX-BUF-SIZE
 
 \ Signature modes
 0 CONSTANT TX-SIG-ED25519
@@ -71,15 +77,18 @@ PROVIDED akashic-tx
 \   64     32      to         (recipient public key)
 \   96      8      amount     (u64 transfer value)
 \  104      8      nonce      (u64 sender sequence number)
-\  112      2      data_len   (u16 payload length, 0..256)
-\  114    256      data       (optional payload bytes)
-\  370     64      sig        (Ed25519 signature)
-\  434   7856      sig_pq     (SPHINCS+ signature)
-\ 8290      1      sig_mode   (0=Ed25519, 1=SPHINCS+, 2=hybrid)
-\ 8291      1      _flags     (internal: bit 0 = signed, bit 1 = PQ-signed)
-\ 8292      4      _pad       (alignment padding)
+\  112      8      chain_id   (u64 chain identifier — A03)
+\  120      8      fee        (u64 transaction fee — C05)
+\  128      8      valid_until (u64 TTL block height — C06)
+\  136      2      data_len   (u16 payload length, 0..256)
+\  138    256      data       (optional payload bytes)
+\  394     64      sig        (Ed25519 signature)
+\  458   7856      sig_pq     (SPHINCS+ signature)
+\ 8314      1      sig_mode   (0=Ed25519, 1=SPHINCS+, 2=hybrid)
+\ 8315      1      _flags     (internal: bit 0 = signed, bit 1 = PQ-signed)
+\ 8316      4      _pad       (alignment padding)
 \ ------
-\ 8296 total (8-byte aligned)
+\ 8320 total (8-byte aligned)
 \
 
 0    CONSTANT _TX-OFF-FROM
@@ -87,12 +96,15 @@ PROVIDED akashic-tx
 64   CONSTANT _TX-OFF-TO
 96   CONSTANT _TX-OFF-AMOUNT
 104  CONSTANT _TX-OFF-NONCE
-112  CONSTANT _TX-OFF-DLEN
-114  CONSTANT _TX-OFF-DATA
-370  CONSTANT _TX-OFF-SIG
-434  CONSTANT _TX-OFF-SIG-PQ
-8290 CONSTANT _TX-OFF-SIG-MODE
-8291 CONSTANT _TX-OFF-FLAGS
+112  CONSTANT _TX-OFF-CHAIN-ID
+120  CONSTANT _TX-OFF-FEE
+128  CONSTANT _TX-OFF-VALID-UNTIL
+136  CONSTANT _TX-OFF-DLEN
+138  CONSTANT _TX-OFF-DATA
+394  CONSTANT _TX-OFF-SIG
+458  CONSTANT _TX-OFF-SIG-PQ
+8314 CONSTANT _TX-OFF-SIG-MODE
+8315 CONSTANT _TX-OFF-FLAGS
 
 \ Internal flag bits
 1 CONSTANT _TX-FL-SIGNED      \ Ed25519 signature present
@@ -122,6 +134,9 @@ CREATE _TX-HASH-TMP  32 ALLOT
 : _TX-TO        ( tx -- addr )  _TX-OFF-TO + ;
 : _TX-AMOUNT    ( tx -- addr )  _TX-OFF-AMOUNT + ;
 : _TX-NONCE     ( tx -- addr )  _TX-OFF-NONCE + ;
+: _TX-CHAIN-ID  ( tx -- addr )  _TX-OFF-CHAIN-ID + ;
+: _TX-FEE       ( tx -- addr )  _TX-OFF-FEE + ;
+: _TX-VALID-UNT ( tx -- addr )  _TX-OFF-VALID-UNTIL + ;
 : _TX-DLEN      ( tx -- addr )  _TX-OFF-DLEN + ;
 : _TX-DATA      ( tx -- addr )  _TX-OFF-DATA + ;
 : _TX-SIG       ( tx -- addr )  _TX-OFF-SIG + ;
@@ -149,11 +164,23 @@ CREATE _TX-HASH-TMP  32 ALLOT
 : TX-SET-TO  ( pubkey tx -- )
     _TX-TO  ED25519-KEY-LEN CMOVE ;
 
+\ ── P10: reject negative amounts; zero is allowed (Phase 7 contracts) ──
 : TX-SET-AMOUNT  ( amount tx -- )
+    OVER 0< IF 2DROP EXIT THEN
     _TX-AMOUNT ! ;
 
 : TX-SET-NONCE  ( nonce tx -- )
     _TX-NONCE ! ;
+
+: TX-SET-CHAIN-ID  ( id tx -- )
+    _TX-CHAIN-ID ! ;
+
+: TX-SET-FEE  ( fee tx -- )
+    OVER 0< IF 2DROP EXIT THEN
+    _TX-FEE ! ;
+
+: TX-SET-VALID-UNTIL  ( block# tx -- )
+    _TX-VALID-UNT ! ;
 
 VARIABLE _TX-SD-LEN
 VARIABLE _TX-SD-TX
@@ -175,6 +202,9 @@ VARIABLE _TX-SD-TX
 : TX-TO@        ( tx -- addr )   _TX-TO ;
 : TX-AMOUNT@    ( tx -- n )      _TX-AMOUNT @ ;
 : TX-NONCE@     ( tx -- n )      _TX-NONCE @ ;
+: TX-CHAIN-ID@  ( tx -- n )      _TX-CHAIN-ID @ ;
+: TX-FEE@       ( tx -- n )      _TX-FEE @ ;
+: TX-VALID-UNTIL@ ( tx -- n )    _TX-VALID-UNT @ ;
 : TX-DATA-LEN@  ( tx -- n )     _TX-DLEN _TX-W@ ;
 : TX-DATA@      ( tx -- addr )   _TX-DATA ;
 : TX-SIG-MODE@  ( tx -- n )     _TX-SIG-MODE C@ ;
@@ -183,11 +213,13 @@ VARIABLE _TX-SD-TX
 \  8. CBOR key string constants (DAG-CBOR canonical order: by length
 \     then lexicographic).
 \
-\     Sorted keys:  "to" < "data" < "from" < "nonce" <
-\                   "amount" < "from_pq" < "sig" < "sig_mode" < "sig_pq"
+\     Sorted keys:  "to" < "fee" < "sig" < "data" < "from" < "nonce" <
+\                   "amount" < "sig_pq" < "from_pq" < "chain_id" <
+\                   "sig_mode" < "valid_until"
 \
-\     For the unsigned hash we use the first 6 keys (to, data, from,
-\     nonce, amount, from_pq).  For encoded form we use all 9.
+\     For the unsigned hash we use 9 keys (to, fee, data, from,
+\     nonce, amount, from_pq, chain_id, valid_until).
+\     For encoded form we use all 12 (incl sig, sig_pq, sig_mode).
 \
 \     We store keys as counted strings in CREATE/ALLOT buffers since
 \     S" inside : definitions is transient in some Forth systems.
@@ -197,14 +229,17 @@ VARIABLE _TX-SD-TX
 
 \ Manually create key strings as byte sequences
 CREATE _TXK-TO       2 C, 116 C, 111 C,                           \ "to"
+CREATE _TXK-FEE      3 C, 102 C, 101 C, 101 C,                    \ "fee"
+CREATE _TXK-SIG      3 C, 115 C, 105 C, 103 C,                    \ "sig"
 CREATE _TXK-DATA     4 C, 100 C,  97 C, 116 C,  97 C,            \ "data"
 CREATE _TXK-FROM     4 C, 102 C, 114 C, 111 C, 109 C,            \ "from"
 CREATE _TXK-NONCE    5 C, 110 C, 111 C, 110 C,  99 C, 101 C,     \ "nonce"
 CREATE _TXK-AMOUNT   6 C,  97 C, 109 C, 111 C, 117 C, 110 C, 116 C, \ "amount"
-CREATE _TXK-FROMPQ   7 C, 102 C, 114 C, 111 C, 109 C,  95 C, 112 C, 113 C, \ "from_pq"
-CREATE _TXK-SIG      3 C, 115 C, 105 C, 103 C,                    \ "sig"
-CREATE _TXK-SIGMODE  8 C, 115 C, 105 C, 103 C,  95 C, 109 C, 111 C, 100 C, 101 C, \ "sig_mode"
 CREATE _TXK-SIGPQ    6 C, 115 C, 105 C, 103 C,  95 C, 112 C, 113 C,  \ "sig_pq"
+CREATE _TXK-FROMPQ   7 C, 102 C, 114 C, 111 C, 109 C,  95 C, 112 C, 113 C, \ "from_pq"
+CREATE _TXK-CHAINID  8 C,  99 C, 104 C,  97 C, 105 C, 110 C,  95 C, 105 C, 100 C, \ "chain_id"
+CREATE _TXK-SIGMODE  8 C, 115 C, 105 C, 103 C,  95 C, 109 C, 111 C, 100 C, 101 C, \ "sig_mode"
+CREATE _TXK-VU      11 C, 118 C,  97 C, 108 C, 105 C, 100 C,  95 C, 117 C, 110 C, 116 C, 105 C, 108 C, \ "valid_until"
 
 \ Helper: push counted string as ( addr len )
 : _TXK>  ( cstr -- addr len )  DUP 1+ SWAP C@ ;
@@ -214,7 +249,8 @@ CREATE _TXK-SIGPQ    6 C, 115 C, 105 C, 103 C,  95 C, 112 C, 113 C,  \ "sig_pq"
 \     (excludes sig, sig_pq, sig_mode)
 \
 \     Keys in DAG-CBOR canonical order (shorter first, then lex):
-\       "to"  "data"  "from"  "nonce"  "amount"  "from_pq"
+\       "to"  "fee"  "data"  "from"  "nonce"  "amount"  "from_pq"
+\       "chain_id"  "valid_until"
 \ =====================================================================
 
 VARIABLE _TX-ENC-TX
@@ -223,11 +259,15 @@ VARIABLE _TX-ENC-TX
     CBOR-RESET
     _TX-ENC-TX !                         \ save tx* in variable
 
-    6 CBOR-MAP                           \ 6-entry map
+    9 CBOR-MAP                           \ 9-entry map
 
     \ Key: "to" (2 bytes)
     _TXK-TO _TXK>  CBOR-TSTR
     _TX-ENC-TX @ _TX-TO  ED25519-KEY-LEN  CBOR-BSTR
+
+    \ Key: "fee" (3 bytes)
+    _TXK-FEE _TXK> CBOR-TSTR
+    _TX-ENC-TX @ TX-FEE@  CBOR-UINT
 
     \ Key: "data" (4 bytes)
     _TXK-DATA _TXK> CBOR-TSTR
@@ -250,6 +290,16 @@ VARIABLE _TX-ENC-TX
     _TXK-FROMPQ _TXK> CBOR-TSTR
     _TX-ENC-TX @ _TX-FROM-PQ  SPX-PK-LEN  CBOR-BSTR
 
+    \ Key: "chain_id" (8 bytes)
+    _TXK-CHAINID _TXK> CBOR-TSTR
+    _TX-ENC-TX @ TX-CHAIN-ID@  CBOR-UINT
+
+    \ Key: "valid_until" (11 bytes)
+    _TXK-VU _TXK> CBOR-TSTR
+    _TX-ENC-TX @ TX-VALID-UNTIL@  CBOR-UINT
+
+    \ ── P11: check CBOR overflow ──
+    CBOR-OK? 0= IF 0 EXIT THEN
     CBOR-RESULT NIP ;                    \ -- len
 
 \ =====================================================================
@@ -353,6 +403,7 @@ VARIABLE _TX-SH-SSEC
 \ =====================================================================
 
 VARIABLE _TX-VER-TX
+VARIABLE _TX-HYB-TX
 
 \ _TX-VERIFY-ED ( tx -- flag )  verify Ed25519 signature
 : _TX-VERIFY-ED  ( tx -- flag )
@@ -381,11 +432,10 @@ VARIABLE _TX-VER-TX
         DROP _TX-VERIFY-PQ EXIT
     THEN
     TX-SIG-HYBRID = IF
-        \ Hybrid mode: accept if EITHER signature is valid
-        DUP _TX-VERIFY-ED IF
-            DROP -1 EXIT
-        THEN
-        _TX-VERIFY-PQ EXIT
+        \ ── P09: Hybrid mode requires BOTH signatures valid ──
+        DUP _TX-HYB-TX !              \ save tx (stack survives CATCH)
+        _TX-VERIFY-ED 0= IF 0 EXIT THEN
+        _TX-HYB-TX @ _TX-VERIFY-PQ EXIT
     THEN
     \ Unknown sig_mode — reject
     DROP 0 ;
@@ -425,71 +475,82 @@ VARIABLE _TX-E-TX
     _TX-E-TX !                           \ save tx (buf/max already in CBOR state)
 
     \ Determine number of map entries based on sig_mode
-    \ Base: to, data, from, nonce, amount = 5
-    \ + from_pq if PQ or hybrid
+    \ Base: to, fee, data, from, nonce, amount, from_pq, chain_id, sig_mode,
+    \       valid_until = 10
     \ + sig if Ed25519 or hybrid
     \ + sig_pq if SPHINCS+ or hybrid
-    \ + sig_mode always
-    \ = 6 base + conditional sig fields
 
     \ Count map entries based on sig_mode
     _TX-E-TX @ _TX-SIG-MODE C@
     DUP TX-SIG-ED25519 = IF
-        DROP 8 CBOR-MAP                  \ to,sig,data,from,nonce,amount,from_pq,sig_mode
+        DROP 11 CBOR-MAP                 \ base + sig
     ELSE DUP TX-SIG-SPHINCS = IF
-        DROP 8 CBOR-MAP                  \ to,data,from,nonce,amount,sig_pq,from_pq,sig_mode
+        DROP 11 CBOR-MAP                 \ base + sig_pq
     ELSE TX-SIG-HYBRID = IF
-        9 CBOR-MAP                       \ all fields
+        12 CBOR-MAP                      \ base + sig + sig_pq
     ELSE
-        7 CBOR-MAP                       \ unsigned: to,data,from,nonce,amount,from_pq,sig_mode
+        10 CBOR-MAP                      \ base only (unsigned)
     THEN THEN THEN
 
     \ Keys in DAG-CBOR canonical order:
-    \   "to"(2) "sig"(3) "data"(4) "from"(4) "nonce"(5)
-    \   "amount"(6) "sig_pq"(6) "from_pq"(7) "sig_mode"(8)
+    \   "to"(2) "fee"(3) "sig"(3) "data"(4) "from"(4) "nonce"(5)
+    \   "amount"(6) "sig_pq"(6) "from_pq"(7) "chain_id"(8)
+    \   "sig_mode"(8) "valid_until"(11)
 
     \ 1. "to" (2 bytes)
     _TXK-TO _TXK>  CBOR-TSTR
     _TX-E-TX @ _TX-TO  ED25519-KEY-LEN  CBOR-BSTR
 
-    \ 2. "sig" (3 bytes) — present if Ed25519 or hybrid
+    \ 2. "fee" (3 bytes)
+    _TXK-FEE _TXK> CBOR-TSTR
+    _TX-E-TX @ TX-FEE@  CBOR-UINT
+
+    \ 3. "sig" (3 bytes) — present if Ed25519 or hybrid
     _TX-E-TX @ _TX-SIG-MODE C@
     DUP TX-SIG-ED25519 = SWAP TX-SIG-HYBRID = OR IF
         _TXK-SIG _TXK> CBOR-TSTR
         _TX-E-TX @ _TX-SIG  ED25519-SIG-LEN  CBOR-BSTR
     THEN
 
-    \ 3. "data" (4 bytes)
+    \ 4. "data" (4 bytes)
     _TXK-DATA _TXK> CBOR-TSTR
     _TX-E-TX @ _TX-DATA
     _TX-E-TX @ TX-DATA-LEN@  CBOR-BSTR
 
-    \ 4. "from" (4 bytes)
+    \ 5. "from" (4 bytes)
     _TXK-FROM _TXK> CBOR-TSTR
     _TX-E-TX @ _TX-FROM  ED25519-KEY-LEN  CBOR-BSTR
 
-    \ 5. "nonce" (5 bytes)
+    \ 6. "nonce" (5 bytes)
     _TXK-NONCE _TXK> CBOR-TSTR
     _TX-E-TX @ TX-NONCE@  CBOR-UINT
 
-    \ 6. "amount" (6 bytes)
+    \ 7. "amount" (6 bytes)
     _TXK-AMOUNT _TXK> CBOR-TSTR
     _TX-E-TX @ TX-AMOUNT@  CBOR-UINT
 
-    \ 7. "sig_pq" (6 bytes) — present if SPHINCS+ or hybrid
+    \ 8. "sig_pq" (6 bytes) — present if SPHINCS+ or hybrid
     _TX-E-TX @ _TX-SIG-MODE C@
     DUP TX-SIG-SPHINCS = SWAP TX-SIG-HYBRID = OR IF
         _TXK-SIGPQ _TXK> CBOR-TSTR
         _TX-E-TX @ _TX-SIG-PQ  SPX-SIG-LEN  CBOR-BSTR
     THEN
 
-    \ 8. "from_pq" (7 bytes)
+    \ 9. "from_pq" (7 bytes)
     _TXK-FROMPQ _TXK> CBOR-TSTR
     _TX-E-TX @ _TX-FROM-PQ  SPX-PK-LEN  CBOR-BSTR
 
-    \ 9. "sig_mode" (8 bytes)
+    \ 10. "chain_id" (8 bytes)
+    _TXK-CHAINID _TXK> CBOR-TSTR
+    _TX-E-TX @ TX-CHAIN-ID@  CBOR-UINT
+
+    \ 11. "sig_mode" (8 bytes)
     _TXK-SIGMODE _TXK> CBOR-TSTR
     _TX-E-TX @ _TX-SIG-MODE C@  CBOR-UINT
+
+    \ 12. "valid_until" (11 bytes)
+    _TXK-VU _TXK> CBOR-TSTR
+    _TX-E-TX @ TX-VALID-UNTIL@  CBOR-UINT
 
     CBOR-RESULT NIP ;                    \ -- len
 
@@ -576,10 +637,19 @@ VARIABLE _TX-D-VL
             _TX-D-VL @ SPX-SIG-LEN <> IF 0 UNLOOP EXIT THEN
             _TX-D-VA @ _TX-D-TX @ _TX-SIG-PQ SPX-SIG-LEN CMOVE
             _TX-D-TX @ _TX-FLAGS DUP C@ _TX-FL-PQ-SIGNED OR SWAP C!
+        ELSE _TX-D-KA @ _TX-D-KL @
+        _TXK-CHAINID _TXK> _TX-STREQ IF
+            CBOR-NEXT-UINT _TX-D-TX @ _TX-CHAIN-ID !
+        ELSE _TX-D-KA @ _TX-D-KL @
+        _TXK-FEE _TXK> _TX-STREQ IF
+            CBOR-NEXT-UINT _TX-D-TX @ _TX-FEE !
+        ELSE _TX-D-KA @ _TX-D-KL @
+        _TXK-VU _TXK> _TX-STREQ IF
+            CBOR-NEXT-UINT _TX-D-TX @ _TX-VALID-UNT !
         ELSE
             \ Unknown key — skip the value
             CBOR-SKIP
-        THEN THEN THEN THEN THEN THEN THEN THEN THEN
+        THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN
     LOOP
 
     -1 ;                                 \ success

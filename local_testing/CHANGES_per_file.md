@@ -44,18 +44,18 @@ Legend:
 
 ## Priority 2 — Transaction structure (feeds into everything downstream)
 
-### File 3: `store/tx.f`
+### ~~File 3: `store/tx.f`~~ ✅
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 9 | P09 | **CRIT** | Hybrid verify: AND not OR | L383–389 | Change `TX-VERIFY` hybrid path: if Ed25519 fails → reject immediately; return SPHINCS+ result. Both must pass. |
-| 10 | A03 | **CRIT** | Add `chain_id` to TX structure | struct definition | Add 8-byte `chain_id` field. Include in signing payload and `TX-ENCODE`. **Layout-breaking** — all offsets after the insertion point shift. Every module touching TX buffers must be retested. |
-| 11 | C05 | **MED** | Add fee/gas field to TX structure | struct definition | Add 8-byte `fee` (or `gas_limit` + `gas_price`). Without fees, zero economic cost to spam. Do together with chain_id since it's already a layout break. |
-| 12 | C06 | **MED** | Add TTL / valid-until-block field | struct definition | Add 8-byte `valid_until` field. Prevents eternal replay of leaked txs and post-fork nonce-reset replay. Combine with chain_id + fee (single layout break). |
-| 13 | P10 | **MED** | TX-SET-AMOUNT: reject negative only | ~L143 | Change `0<=` guard to `0<` — allow zero-amount (Phase 7 contract calls). |
-| 14 | P11 | **MED** | CBOR encode bounds check | ~L200–230 | Add overflow check at end of `_TX-ENCODE-UNSIGNED` using `CBOR-RESULT NIP`. |
+| ~~9~~ | ~~P09~~ | ~~**CRIT**~~ | ~~Hybrid verify: AND not OR~~ | ~~L383–389~~ | ✅ Changed `TX-VERIFY` hybrid path: Ed25519 fail → reject immediately; return SPHINCS+ result. Both must pass. |
+| ~~10~~ | ~~A03~~ | ~~**CRIT**~~ | ~~Add `chain_id` to TX structure~~ | ~~struct~~ | ✅ Added 8-byte `chain_id` (offset 112). Layout updated, all offsets shifted, encode/decode updated. |
+| ~~11~~ | ~~C05~~ | ~~**MED**~~ | ~~Add fee/gas field to TX structure~~ | ~~struct~~ | ✅ Added 8-byte `fee` (offset 120). TX-SET-FEE rejects negative. |
+| ~~12~~ | ~~C06~~ | ~~**MED**~~ | ~~Add TTL / valid-until-block field~~ | ~~struct~~ | ✅ Added 8-byte `valid_until` (offset 128). Combined with chain_id + fee as single layout break. TX-BUF-SIZE 8296→8320. |
+| ~~13~~ | ~~P10~~ | ~~**MED**~~ | ~~TX-SET-AMOUNT: reject negative only~~ | ~~~L143~~ | ✅ Added `0<` guard — zero-amount allowed, negative rejected. |
+| ~~14~~ | ~~P11~~ | ~~**MED**~~ | ~~CBOR encode bounds check~~ | ~~~L200–230~~ | ✅ Added `CBOR-OK?` overflow flag to cbor.f; `_TX-ENCODE-UNSIGNED` checks before returning. |
 
-**Design note on A03+C05+C06:** These three add ~24 bytes to the TX struct and are all layout-breaking. Do them as a single atomic change. Update `TX-BUF-SIZE`, `TX-ENCODE`, `TX-DECODE`, `TX-VERIFY` (sign over chain_id), and every module that allocates TX buffers (mempool, gossip, rpc, node).
+**Design note on A03+C05+C06:** All three done as single atomic layout break. TX-BUF-SIZE=8320, 3 new 8-byte fields (chain_id, fee, valid_until), all offsets shifted +24 from data_len onward. _TX-ENCODE-UNSIGNED: 6→9 keys. TX-ENCODE: map counts +3. TX-DECODE: 3 new key matchers. 38/38 tests (quick), PQ tests require extended step limits.
 
 ---
 

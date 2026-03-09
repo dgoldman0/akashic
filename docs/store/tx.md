@@ -37,7 +37,7 @@ REQUIRE ../store/tx.f
 
 | Principle | Realisation |
 |---|---|
-| **Self-contained** | Every transaction is a flat 8296-byte buffer — no heap allocations, no pointers |
+| **Self-contained** | Every transaction is a flat 8320-byte buffer — no heap allocations, no pointers |
 | **Hybrid signatures** | Ed25519 for speed, SPHINCS+ for post-quantum safety, or both for defence-in-depth |
 | **Deterministic hashing** | `TX-HASH` serialises unsigned fields to DAG-CBOR (canonical key ordering), then SHA3-256 hashes the result |
 | **CBOR wire format** | `TX-ENCODE` / `TX-DECODE` use DAG-CBOR for compact, standards-based serialisation |
@@ -55,15 +55,18 @@ Offset  Size    Field
  64     32      to         — recipient Ed25519 public key
  96      8      amount     — u64 transfer value
 104      8      nonce      — u64 sender sequence number
-112      2      data_len   — u16 payload length (0..256)
-114    256      data       — optional payload bytes
-370     64      sig        — Ed25519 signature
-434   7856      sig_pq     — SPHINCS+ signature
-8290     1      sig_mode   — 0 = Ed25519, 1 = SPHINCS+, 2 = hybrid
-8291     1      _flags     — internal (bit 0 = signed, bit 1 = PQ-signed)
-8292     4      _pad       — alignment padding
+112      8      chain_id   — u64 chain identifier
+120      8      fee        — u64 transaction fee
+128      8      valid_until — u64 expiry slot
+136      2      data_len   — u16 payload length (0..256)
+138    256      data       — optional payload bytes
+394     64      sig        — Ed25519 signature
+458   7856      sig_pq     — SPHINCS+ signature
+8314     1      sig_mode   — 0 = Ed25519, 1 = SPHINCS+, 2 = hybrid
+8315     1      _flags     — internal (bit 0 = signed, bit 1 = PQ-signed)
+8316     4      _pad       — alignment padding
 ------
-8296 total (8-byte aligned)
+8320 total (8-byte aligned)
 ```
 
 The `data_len` field is stored as little-endian 16-bit using internal
@@ -79,7 +82,7 @@ The `data_len` field is stored as little-endian 16-bit using internal
 TX-INIT  ( tx -- )
 ```
 
-Zero the entire 8296-byte transaction buffer.  Must be called before
+Zero the entire 8320-byte transaction buffer.  Must be called before
 setting any fields.
 
 ```forth
@@ -122,7 +125,8 @@ Copy 32-byte Ed25519 public key into the `to` field.
 TX-SET-AMOUNT  ( amount tx -- )
 ```
 
-Store 64-bit unsigned transfer amount.
+Store 64-bit unsigned transfer amount.  **Negative values are
+silently rejected** (the amount is unchanged).
 
 ### TX-SET-NONCE
 
@@ -131,6 +135,31 @@ TX-SET-NONCE  ( nonce tx -- )
 ```
 
 Store 64-bit sender sequence number.
+
+### TX-SET-CHAIN-ID
+
+```forth
+TX-SET-CHAIN-ID  ( chain-id tx -- )
+```
+
+Store 64-bit chain identifier.
+
+### TX-SET-FEE
+
+```forth
+TX-SET-FEE  ( fee tx -- )
+```
+
+Store 64-bit transaction fee.  **Negative values are silently
+rejected** (the fee is unchanged).
+
+### TX-SET-VALID-UNTIL
+
+```forth
+TX-SET-VALID-UNTIL  ( slot tx -- )
+```
+
+Store 64-bit expiry slot number.
 
 ### TX-SET-DATA
 
@@ -152,6 +181,9 @@ Copy `len` bytes from `addr` into the data payload.  If `len` exceeds
 | `TX-TO@` | `( tx -- addr )` | Address of 32-byte `to` field |
 | `TX-AMOUNT@` | `( tx -- n )` | 64-bit amount |
 | `TX-NONCE@` | `( tx -- n )` | 64-bit nonce |
+| `TX-CHAIN-ID@` | `( tx -- n )` | 64-bit chain identifier |
+| `TX-FEE@` | `( tx -- n )` | 64-bit transaction fee |
+| `TX-VALID-UNTIL@` | `( tx -- n )` | 64-bit expiry slot |
 | `TX-DATA-LEN@` | `( tx -- n )` | 16-bit data payload length |
 | `TX-DATA@` | `( tx -- addr )` | Address of data payload |
 | `TX-SIG-MODE@` | `( tx -- n )` | Signature mode (0/1/2) |
@@ -230,7 +262,7 @@ Verify the transaction signature(s).  Dispatches by `sig_mode`:
 |---|---|
 | 0 (Ed25519) | Ed25519 sig against `from` key |
 | 1 (SPHINCS+) | SPHINCS+ sig against `from_pq` key |
-| 2 (Hybrid) | Both sigs; returns `TRUE` if **either** verifies |
+| 2 (Hybrid) | Both sigs; returns `TRUE` only if **both** verify (AND logic) |
 
 Returns `TRUE` (-1) on success, `FALSE` (0) on failure.
 
@@ -332,7 +364,7 @@ Shows the first 8 bytes of `from` and `to` keys in hex.
 
 | Constant | Value | Description |
 |---|---|---|
-| `TX-BUF-SIZE` | 8296 | Size of one transaction buffer |
+| `TX-BUF-SIZE` | 8320 | Size of one transaction buffer |
 | `TX-SIG-ED25519` | 0 | Signature mode: Ed25519 only |
 | `TX-SIG-SPHINCS` | 1 | Signature mode: SPHINCS+ only |
 | `TX-SIG-HYBRID` | 2 | Signature mode: hybrid (both) |
@@ -408,12 +440,18 @@ TX-SET-FROM-PQ   ( pq-pubkey tx -- )
 TX-SET-TO        ( pubkey tx -- )
 TX-SET-AMOUNT    ( amount tx -- )
 TX-SET-NONCE     ( nonce tx -- )
+TX-SET-CHAIN-ID  ( chain-id tx -- )
+TX-SET-FEE       ( fee tx -- )
+TX-SET-VALID-UNTIL ( slot tx -- )
 TX-SET-DATA      ( addr len tx -- )
 TX-FROM@         ( tx -- addr )
 TX-FROM-PQ@      ( tx -- addr )
 TX-TO@           ( tx -- addr )
 TX-AMOUNT@       ( tx -- n )
 TX-NONCE@        ( tx -- n )
+TX-CHAIN-ID@     ( tx -- n )
+TX-FEE@          ( tx -- n )
+TX-VALID-UNTIL@  ( tx -- n )
 TX-DATA-LEN@     ( tx -- n )
 TX-DATA@         ( tx -- addr )
 TX-SIG-MODE@     ( tx -- n )
@@ -451,21 +489,25 @@ little-endian 16-bit store and fetch:
 
 ### Hashing Strategy
 
-`TX-HASH` encodes the six unsigned fields (from, from_pq, to, amount,
-nonce, data) as a CBOR map in DAG-CBOR canonical key order, then
-applies SHA3-256.  This is the message that gets signed.  Signatures
-and sig_mode are excluded from the hash to prevent circular
-dependencies.
+`TX-HASH` encodes the nine unsigned fields (from, from_pq, to, amount,
+nonce, chain_id, fee, valid_until, data) as a CBOR map in DAG-CBOR
+canonical key order, then applies SHA3-256.  This is the message that
+gets signed.  Signatures and sig_mode are excluded from the hash to
+prevent circular dependencies.
 
 ### Hybrid Verification
 
 In hybrid mode (sig_mode = 2), `TX-VERIFY` checks **both** signatures
-and returns `TRUE` if **either** verifies.  This provides graceful
-degradation — if one scheme is later broken, the other still protects.
+and returns `TRUE` only if **both** verify.  This provides
+defence-in-depth — an attacker must break both Ed25519 and SPHINCS+
+to forge a transaction.
 
 ### CBOR Key Ordering
 
-All CBOR maps (both the 6-key unsigned map and the 9-key full map)
+All CBOR maps (both the 9-key unsigned map and the 12-key full map)
 follow DAG-CBOR canonical ordering: keys sorted by length first, then
 lexicographically within the same length.  Keys are compiled as inline
 constants using `C,`.
+
+The encoder checks for CBOR buffer overflow via `CBOR-OK?` and returns
+0 length when the internal buffer is exceeded.

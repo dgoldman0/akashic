@@ -284,6 +284,24 @@ All hash operations use SHAKE-256 via the SHA3 MMIO engine:
 - All parameter passing to internal words uses module-level VARIABLEs
   (e.g., `_SPX-PK-SEED`, `_SPX-SK-SEED`), not stack parameters.
 
+### Bug Fixes (Phase 6.6 Hardening)
+
+1. **HT-SIGN buffer clobber** — `_SPX-XMSS-SIGN` internally overwrites
+   `_SPX-NODE`, which was also used to pass msg to `_SPX-XMSS-ROOT`.
+   Fix: save msg to dedicated `_SPX-HT-MSG` buffer before signing.
+2. **HT-VERIFY wrong stack pick** — `OVER` picked `_SPX-NODE` instead
+   of `sig-in` in the layer loop.  Fix: changed to `2 PICK`.
+3. **XMSS tree-hash ADRS residual** — When TYPE switches to TREE for
+   Merkle combines, the KP field (bytes 20-23) retained stale values
+   from WOTS operations, causing hash mismatches between keygen and
+   verify.  Fix: added `0 _SPX-ADRS-KP!` after setting TREE type.
+4. **FORS-PK-FROM-SIG stack underflow** — Inner loop used `OVER`/`DUP`
+   to reach `sig-in`, but after consuming stack items only 1 remained.
+   `OVER` needs 2 items, so it read stale memory.  Fix: save `sig-in`
+   to `_SPX-V-FPKSIG` variable at entry, use `_SPX-V-FPKSIG @`.
+5. **WOTS-SK-I spurious DUP** — Stack leak in secret key derivation.
+   Fix: removed the extra `DUP`.
+
 ---
 
 ## Quick Reference

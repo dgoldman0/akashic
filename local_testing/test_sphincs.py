@@ -620,11 +620,8 @@ def test_wots_roundtrip():
             '0 _SPX-ADRS-TYPE!',
             '_TBUF 48 + _TBUF 64 +  _TBUF 624 + _SPX-WOTS-PK-FROM-SIG',
             # Compare: _TBUF+32 (16 bytes) vs _TBUF+624 (16 bytes)
-            '0',
-            '16 0 DO',
-            '  _TBUF 32 + I + C@ _TBUF 624 + I + C@ XOR OR',
-            'LOOP',
-            '0= IF .\" WOTS-MATCH\" ELSE .\" WOTS-MISMATCH\" THEN CR',
+            ': _T32  0 16 0 DO _TBUF 32 + I + C@ _TBUF 624 + I + C@ XOR OR LOOP 0= IF ." WOTS-MATCH" ELSE ." WOTS-MISMATCH" THEN CR ;',
+            '_T32',
         ],
         lambda out: "WOTS-MATCH" in out,
         "WOTS pk should match",
@@ -640,25 +637,21 @@ def test_full_roundtrip():
     print("\n=== Full Roundtrip (SLOW) ===")
     check_fn("T33 keygen-sign-verify",
         [
-            # Use deterministic signing for reproducibility
             'SPX-MODE-DETERMINISTIC SPX-SIGN-MODE !',
-            # Fill seed with known pattern
-            '_TSEED 48 0 FILL',
-            '48 0 DO I _TSEED I + C! LOOP',
-            # Keygen
-            '_TSEED _TPK _TSK SPX-KEYGEN',
-            # Prepare message
-            '_TMSG 32 0 FILL',
-            '0xDE _TMSG C! 0xAD _TMSG 1+ C!',
-            # Sign (msg, len, sec, sig)
-            '_TMSG 2 _TSK _TSIG SPX-SIGN',
-            # Verify (msg, len, pub, sig)
-            '_TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY',
-            'IF .\" SPX-VERIFY-OK\" ELSE .\" SPX-VERIFY-FAIL\" THEN CR',
+            # Entire test body compiled (DO/LOOP/I/IF/THEN are compile-only)
+            ': _T33',
+            '  48 0 DO I _TSEED I + C! LOOP',
+            '  _TSEED _TPK _TSK SPX-KEYGEN',
+            '  _TMSG 32 0 FILL  0xDE _TMSG C!  0xAD _TMSG 1+ C!',
+            '  _TMSG 2 _TSK _TSIG SPX-SIGN',
+            '  _TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY',
+            '  IF ." SPX-VERIFY-OK" ELSE ." SPX-VERIFY-FAIL" THEN CR',
+            ';',
+            '_T33',
         ],
-        lambda out: "SPX-VERIFY-OK" in out,
+        lambda out: any(l.strip() == "SPX-VERIFY-OK" for l in out.split('\n')),
         "sign/verify roundtrip",
-        max_steps=50_000_000_000)  # 50B steps — this will be SLOW
+        max_steps=50_000_000_000)
 
 
 def test_verify_rejects_bad_sig():
@@ -667,17 +660,19 @@ def test_verify_rejects_bad_sig():
     check_fn("T34 verify-reject-bad-sig",
         [
             'SPX-MODE-DETERMINISTIC SPX-SIGN-MODE !',
-            '_TSEED 48 0 FILL',
-            '48 0 DO I _TSEED I + C! LOOP',
-            '_TSEED _TPK _TSK SPX-KEYGEN',
-            '_TMSG 2 0 FILL  0xDE _TMSG C! 0xAD _TMSG 1+ C!',
-            '_TMSG 2 _TSK _TSIG SPX-SIGN',
-            # Flip one byte in signature
-            '_TSIG 100 + C@ 255 XOR _TSIG 100 + C!',
-            '_TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY',
-            'IF .\" SPX-VERIFY-OK\" ELSE .\" SPX-VERIFY-FAIL\" THEN CR',
+            # Entire test body compiled (DO/LOOP/I/IF/THEN are compile-only)
+            ': _T34',
+            '  48 0 DO I _TSEED I + C! LOOP',
+            '  _TSEED _TPK _TSK SPX-KEYGEN',
+            '  _TMSG 2 0 FILL  0xDE _TMSG C!  0xAD _TMSG 1+ C!',
+            '  _TMSG 2 _TSK _TSIG SPX-SIGN',
+            '  _TSIG 100 + C@ 255 XOR _TSIG 100 + C!',
+            '  _TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY',
+            '  IF ." SPX-VERIFY-OK" ELSE ." SPX-VERIFY-FAIL" THEN CR',
+            ';',
+            '_T34',
         ],
-        lambda out: "SPX-VERIFY-FAIL" in out,
+        lambda out: any(l.strip() == "SPX-VERIFY-FAIL" for l in out.split('\n')),
         "should reject flipped sig",
         max_steps=50_000_000_000)
 
@@ -723,11 +718,10 @@ def test_p07_keygen_zeroization():
     check_fn("P07 _SPX-RNG-SEED zeroed",
         [
             '_TPK _TSK SPX-KEYGEN-RANDOM',
-            '0',
-            '48 0 DO _SPX-RNG-SEED I + C@ OR LOOP',
-            '0= IF .\" ZEROED\" ELSE .\" NOT-ZEROED\" THEN CR',
+            ': _T07  0 48 0 DO _SPX-RNG-SEED I + C@ OR LOOP 0= IF .\" ZEROED\" ELSE .\" NOT-ZEROED\" THEN CR ;',
+            '_T07',
         ],
-        lambda out: "ZEROED" in out and "NOT-ZEROED" not in out,
+        lambda out: any(line.strip() == "ZEROED" for line in out.split('\n')),
         "_SPX-RNG-SEED should be all zeros after keygen",
         max_steps=50_000_000_000)
 
