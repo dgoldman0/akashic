@@ -93,33 +93,38 @@ Legend:
 
 ## Priority 4 — Block & consensus (builds on correct state + tx)
 
-### File 6: `consensus/consensus.f` — ✅ DONE (batch 4, 40/40 tests)
+### ~~File 6: `consensus/consensus.f`~~ ✅ DONE (batch 4, 40/40 tests)
 
 | # | ID | Severity | Change | Lines | Summary | Status |
 |---|-----|----------|--------|-------|---------|--------|
-| 23 | P18 | **CRIT** | STARK stub fail-closed | L390 | `_CON-STARK-CHECK-STUB`: `DROP -1` → `DROP 0` (fail-closed). | ✅ |
-| 24 | P19 | **CRIT** | PoS leader div-by-zero | ~L651 | Guard `_CON-VAL-COUNT @ 0=` before `MOD`. Returns `_CON-SEED-BUF` sentinel. | ✅ |
-| 25 | P20 | **CRIT** | PoS leader underflow | ~L651 | Combined with P19 guard. | ✅ |
-| 26 | A05 | **CRIT** | Zeroize signing keys | L118 | `CON-CLEAR-KEYS`: zeros priv(64)+pub(32), clears flag. Guard-wrapped. | ✅ |
-| 27 | B04 | **HIGH** | Constants → VARIABLEs | L458-461 | `CON-POS-EPOCH-LEN`, `MIN-STAKE`, `LOCK-PERIOD` → VARIABLEs (defaults 32/100/64). All refs updated to use `@`. | ✅ |
-| 28 | C08 | **MED** | Cell-sized SA indices | L756,790,825 | `_CON-SA-IDX` → `256 CELLS ALLOT`; `C!`/`C@` → `!`/`@` with CELLS offset. | ✅ |
-| 29 | C12 | **MED** | Portable seed extraction | L627-630 | New `_CON-SEED>U64` reads 8 bytes BE. Replaces raw `@` in leader+elect. | ✅ |
-| 30 | P21 | **MED** | PoW mine iteration cap | L197,207 | `_CON-POW-MAX-ITER` VARIABLE (1M default). `CON-POW-MINE ( blk -- flag )`. `CON-SEAL` drops flag. | ✅ |
+| ~~23~~ | ~~P18~~ | ~~**CRIT**~~ | ~~STARK stub fail-closed~~ | ~~L390~~ | ~~`_CON-STARK-CHECK-STUB`: `DROP -1` → `DROP 0` (fail-closed).~~ | ✅ |
+| ~~24~~ | ~~P19~~ | ~~**CRIT**~~ | ~~PoS leader div-by-zero~~ | ~~L651~~ | ~~Guard `_CON-VAL-COUNT @ 0=` before `MOD`. Returns `_CON-SEED-BUF` sentinel.~~ | ✅ |
+| ~~25~~ | ~~P20~~ | ~~**CRIT**~~ | ~~PoS leader underflow~~ | ~~L651~~ | ~~Combined with P19 guard.~~ | ✅ |
+| ~~26~~ | ~~A05~~ | ~~**CRIT**~~ | ~~Zeroize signing keys~~ | ~~L118~~ | ~~`CON-CLEAR-KEYS`: zeros priv(64)+pub(32), clears flag. Guard-wrapped.~~ | ✅ |
+| ~~27~~ | ~~B04~~ | ~~**HIGH**~~ | ~~Constants → VARIABLEs~~ | ~~L458-461~~ | ~~`CON-POS-EPOCH-LEN`, `MIN-STAKE`, `LOCK-PERIOD` → VARIABLEs (defaults 32/100/64). All refs updated to use `@`.~~ | ✅ |
+| ~~28~~ | ~~C08~~ | ~~**MED**~~ | ~~Cell-sized SA indices~~ | ~~L756,790,825~~ | ~~`_CON-SA-IDX` → `256 CELLS ALLOT`; `C!`/`C@` → `!`/`@` with CELLS offset.~~ | ✅ |
+| ~~29~~ | ~~C12~~ | ~~**MED**~~ | ~~Portable seed extraction~~ | ~~L627-630~~ | ~~New `_CON-SEED>U64` reads 8 bytes BE. Replaces raw `@` in leader+elect.~~ | ✅ |
+| ~~30~~ | ~~P21~~ | ~~**MED**~~ | ~~PoW mine iteration cap~~ | ~~L197,207~~ | ~~`_CON-POW-MAX-ITER` VARIABLE (1M default). `CON-POW-MINE ( blk -- flag )`. `CON-SEAL` drops flag.~~ | ✅ |
 
 **Extra fixes found during testing:**
 - Pre-existing bug: `CON-POS-EPOCH` insertion sort `0 1 ?DO` loops ~2^64 when val_count=0. Fixed with `_CON-VAL-COUNT @ 1 > IF ... THEN` guard.
 - Forward-fix for batch 3 `ST-ROOT` API change: added `DROP` after `ST-ROOT` in `store/block.f` at lines 261, 603, 673 (`BLK-FINALIZE`, `BLK-VERIFY`, `CHAIN-INIT`).
 
-### File 7: `store/block.f`
+### ~~File 7: `store/block.f`~~ ✅ DONE (batch 5, 65/65 tests)
 
-| # | ID | Severity | Change | Lines | Summary |
-|---|-----|----------|--------|-------|---------|
-| 31 | P22 | **HIGH** | `BLK-FINALIZE` truncate on tx failure | L256 | Replace `ST-APPLY-TX DROP` with failure check. On fail, truncate block to valid prefix (`I` → `_BLK-TXCNT C!`, `LEAVE`). |
-| 32 | A02 | **CRIT** | `CHAIN-APPEND` drops `ST-APPLY-TX` failure | L727–729 | Same bug as P22 but in the receive path. Apply identical truncate-on-failure fix. This is the canonical entry for all externally-received blocks. |
-| 33 | B06 | **HIGH** | `BLK-DECODE` skips transaction bodies | `BLK-DECODE` | Implement tx-body parsing in `BLK-DECODE`. Currently only decodes header; comment says "Caller can re-parse" but nobody does. Without this, sync (B05), persist-load, and RPC all see `BLK-TX-COUNT@ = 0`. |
-| 34 | B09 | **HIGH** | `CHAIN-HISTORY = 64` too small | ~L62 | Raise to at least `256` (8 epochs). Needed for epoch transitions, slashing evidence, light-client proof for older blocks. |
-| 35 | C07 | **MED** | `BLK-DECODE` validate `_BLK-VERSION` | `BLK-DECODE` | Read version byte and reject if `<> 1`. Prevents silent misparse on future format changes. |
-| 36 | D07 | **LOW** | `_BLK-CBUF = 1024` too small for future proofs | header encode | Raise to 2048+ or dynamically size. Currently barely fits; STARK proofs will overflow. |
+| # | ID | Severity | Change | Lines | Summary | Status |
+|---|-----|----------|--------|-------|---------|--------|
+| ~~31~~ | ~~P22~~ | ~~**HIGH**~~ | ~~`BLK-FINALIZE` truncate on tx failure~~ | L256 | Replace `ST-APPLY-TX DROP` with failure check. On fail, truncate block to valid prefix (`I` → `_BLK-TXCNT !`, `LEAVE`). | ✅ |
+| ~~32~~ | ~~A02~~ | ~~**CRIT**~~ | ~~`CHAIN-APPEND` drops `ST-APPLY-TX` failure~~ | L727–729 | Same bug as P22 but in the receive path. Apply identical truncate-on-failure fix. | ✅ |
+| ~~33~~ | ~~B06~~ | ~~**HIGH**~~ | ~~`BLK-DECODE` skips transaction bodies~~ | `BLK-DECODE` | Full tx body decode: CBOR bstr → `HERE TX-BUF-SIZE ALLOT` → `TX-INIT` → `TX-DECODE` → `BLK-ADD-TX`. | ✅ |
+| ~~34~~ | ~~B09~~ | ~~**HIGH**~~ | ~~`CHAIN-HISTORY = 64` too small~~ | ~L62 | Raised to `256` (8 epochs). Ring buffer now 256 × 248 = 63,488 bytes. | ✅ |
+| ~~35~~ | ~~C07~~ | ~~**MED**~~ | ~~`BLK-DECODE` validate `_BLK-VERSION`~~ | `BLK-DECODE` | Version byte check after header decode; rejects if `<> _BLK-VERSION`. | ✅ |
+| ~~36~~ | ~~D07~~ | ~~**LOW**~~ | ~~`_BLK-CBUF = 1024` too small for future proofs~~ | header encode | `_BLK-CBUF` and `_BLK-CBUF-SZ` raised to 2048. | ✅ |
+
+**Test infrastructure fixes (required for batch 5):**
+- `_make_tx_lines`: hardcoded 8296 → `TX-BUF-SIZE` (8320 after batch 2 added chain_id/fee/valid_until).
+- All snapshot allocations: `CREATE _SNAP 18440 ALLOT` → `ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP` (ST-SNAPSHOT-SIZE grew to ~4.7 MB after batch 3's `_ST-MAX-PAGES` 16→256; dictionary space overflowed).
+- Block struct allocations: hardcoded `2304` → `BLK-STRUCT-SIZE` for consistency.
 
 ### File 8: `store/genesis.f`
 
@@ -267,7 +272,7 @@ a per-file fix.
 | **2** | tx.f (struct change: chain_id + fee + TTL + hybrid fix) | 1 day | Layout break — ripples into every downstream module |
 | **3** | smt.f, state.f | 1–2 days | SMT capacity, error prop, staking. All state tests pass. |
 | **4** | consensus.f | 1 day | STARK stub, PoS guards, constants→variables, key zeroize |
-| **5** | block.f, genesis.f | 1 day | Finalize/append error handling, decode txs, genesis fixes |
+| ~~**5**~~ | ~~block.f~~, genesis.f | ~~1 day~~ | block.f ✅ (65/65); genesis.f pending |
 | **6** | mempool.f | 0.5 day | Sig verify on admit, capacity raise |
 | **7** | gossip.f, sync.f, ws.f | 1–2 days | Bounds, capacity, msg validation, full-block sync |
 | **8** | rpc.f, server.f | 1 day | Proof buffer, broadcast, rate limit |

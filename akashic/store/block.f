@@ -77,7 +77,7 @@ PROVIDED akashic-block
 
 256 CONSTANT BLK-MAX-TXS
 128 CONSTANT BLK-PROOF-MAX
- 64 CONSTANT CHAIN-HISTORY
+256 CONSTANT CHAIN-HISTORY           \ B09: raised from 64 (8 epochs)
   1 CONSTANT _BLK-VERSION           \ protocol version
 
 \ =====================================================================
@@ -253,9 +253,12 @@ VARIABLE _BLK-FIN-BLK
     _BLK-FIN-BLK !
     \ 1. Compute tx Merkle root
     _BLK-FIN-BLK @ _BLK-COMPUTE-TX-ROOT
-    \ 2. Apply all txs to state
+    \ 2. Apply txs to state — truncate block on first failure (P22)
     _BLK-FIN-BLK @ BLK-TX-COUNT@ 0 ?DO
-        I _BLK-FIN-BLK @ BLK-TX@ ST-APPLY-TX DROP
+        I _BLK-FIN-BLK @ BLK-TX@ ST-APPLY-TX 0= IF
+            I _BLK-FIN-BLK @ _BLK-TXCNT !   \ truncate to valid prefix
+            LEAVE
+        THEN
     LOOP
     \ 3. Compute and store state root
     ST-ROOT DROP _BLK-FIN-BLK @ _BLK-SROOT 32 CMOVE ;
@@ -267,8 +270,8 @@ VARIABLE _BLK-FIN-BLK
 \  We CBOR-encode the header fields into a scratch buffer, then
 \  SHA3-256 hash the encoded bytes to produce the 32-byte block hash.
 
-CREATE _BLK-CBUF  1024 ALLOT
-1024 CONSTANT _BLK-CBUF-SZ
+CREATE _BLK-CBUF  2048 ALLOT         \ D07: raised from 1024 for STARK proofs
+2048 CONSTANT _BLK-CBUF-SZ
 CREATE _BLK-HASH-SCRATCH  32 ALLOT
 
 \ CBOR key strings for block header (DAG-CBOR canonical: shorter first, then lex)
@@ -408,6 +411,7 @@ VARIABLE _BLK-D-BLK
 VARIABLE _BLK-D-PAIRS
 VARIABLE _BLK-D-KA
 VARIABLE _BLK-D-KL
+VARIABLE _BLK-D-TX
 
 \ Helper: compare two byte sequences
 : _BLK-STREQ  ( a1 l1 a2 l2 -- flag )
@@ -467,10 +471,28 @@ VARIABLE _BLK-D-KL
         THEN THEN THEN THEN THEN THEN THEN
     LOOP
 
-    \ Second element: txs array — skip for now (header-only decode)
-    \ Caller can re-parse the buffer to extract txs if needed.
-    CBOR-SKIP
+    \ ── C07: reject unknown version ──
+    _BLK-D-BLK @ BLK-VERSION@ _BLK-VERSION <> IF 0 EXIT THEN
 
+    \ ── B06: decode tx bodies ──
+    \ Second element: txs array
+    CBOR-TYPE 4 <> IF
+        -1 EXIT                        \ no txs array — header-only OK
+    THEN
+    CBOR-NEXT-ARRAY                    \ -- n-txs
+    DUP BLK-MAX-TXS > IF DROP 0 EXIT THEN
+    0 ?DO
+        CBOR-TYPE 2 <> IF 0 UNLOOP EXIT THEN   \ expect bstr
+        CBOR-NEXT-BSTR                 \ -- addr len
+        \ Allocate a tx buffer
+        HERE TX-BUF-SIZE ALLOT         \ -- addr len tx-buf
+        _BLK-D-TX !                    \ -- addr len  ; save tx-buf
+        _BLK-D-TX @ TX-INIT            \ -- addr len
+        _BLK-D-TX @ TX-DECODE          \ -- flag  (buf len tx -- flag)
+        0= IF 0 UNLOOP EXIT THEN
+        _BLK-D-TX @ _BLK-D-BLK @ BLK-ADD-TX
+        0= IF 0 UNLOOP EXIT THEN      \ block full
+    LOOP
     -1 ;
 
 \ =====================================================================
@@ -721,9 +743,12 @@ VARIABLE _CH-APP-BLK
     _CH-APP-BLK @ _CH-HEAD-HASH BLK-VERIFY
     0= IF 0 EXIT THEN
 
-    \ Apply all txs to state (permanent mutation)
+    \ Apply txs to state — truncate on first failure (A02)
     _CH-APP-BLK @ BLK-TX-COUNT@ 0 ?DO
-        I _CH-APP-BLK @ BLK-TX@ ST-APPLY-TX DROP
+        I _CH-APP-BLK @ BLK-TX@ ST-APPLY-TX 0= IF
+            I _CH-APP-BLK @ _BLK-TXCNT !   \ truncate to valid prefix
+            LEAVE
+        THEN
     LOOP
 
     \ Copy header into ring buffer

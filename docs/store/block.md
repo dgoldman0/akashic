@@ -44,9 +44,10 @@ management for the Akashic ledger, built on Megapad-64.
 |---|---|---|
 | `BLK-MAX-TXS` | 256 | Maximum transactions per block |
 | `BLK-PROOF-MAX` | 128 | Maximum consensus proof bytes |
-| `CHAIN-HISTORY` | 64 | Recent block headers kept in ring buffer |
+| `CHAIN-HISTORY` | 256 | Recent block headers kept in ring buffer |
 | `BLK-HDR-SIZE` | 248 | Block header size (8-byte aligned) |
 | `BLK-STRUCT-SIZE` | 2304 | Total block struct size (header + count + pointer array) |
+| `_BLK-CBUF-SZ` | 2048 | Internal CBOR encode/hash buffer (sized for future STARK proofs) |
 
 ---
 
@@ -146,10 +147,13 @@ BLK-FINALIZE  ( blk -- )
 
 Block producer finalization path:
 1. Compute the Merkle root of all transaction hashes → `tx_root`
-2. Apply every transaction to global state via `ST-APPLY-TX`
+2. Apply transactions to global state via `ST-APPLY-TX`; on the first
+   failure, truncate `tx_count` to the valid prefix and stop (P22)
 3. Compute the state Merkle root via `ST-ROOT` → `state_root`
 
 **Mutates global state.**  Only the block producer should call this.
+Failing transactions are silently dropped — the block contains only the
+leading run of valid transactions.
 
 ---
 
@@ -188,9 +192,11 @@ string via `TX-ENCODE`.  Returns encoded length.
 BLK-DECODE  ( buf len blk -- flag )
 ```
 
-Deserialize a block from CBOR (**header-only**).  Decodes the 7 header
-fields from the map; skips the tx array (caller must handle tx buffer
-allocation separately).  Returns `TRUE` on success, `FALSE` on parse
+Deserialize a full block from CBOR.  Decodes the 7 header fields from
+the map, validates the version byte (must equal `_BLK-VERSION`, currently
+1), then decodes all transaction bodies — each tx is allocated via
+`HERE TX-BUF-SIZE ALLOT`, decoded with `TX-DECODE`, and added with
+`BLK-ADD-TX`.  Returns `TRUE` on success, `FALSE` on parse or version
 error.
 
 ---
@@ -277,7 +283,8 @@ CHAIN-APPEND  ( blk -- flag )
 The **single mutation point** for the chain and global state:
 1. Check that `height = chain_height + 1`
 2. Run `BLK-VERIFY` against the current head hash
-3. Apply all transactions permanently via `ST-APPLY-TX`
+3. Apply transactions permanently via `ST-APPLY-TX`; on the first
+   failure, truncate `tx_count` to the valid prefix (A02)
 4. Copy the header into the ring buffer
 5. Update height and head hash
 
@@ -320,7 +327,7 @@ of prev_hash, state_root, and tx_root in hex.
 | `BLK-FINALIZE` | `( blk -- )` | Compute roots, apply state |
 | `BLK-HASH` | `( blk hash -- )` | SHA3-256 of header CBOR |
 | `BLK-ENCODE` | `( blk buf max -- len )` | Serialize full block |
-| `BLK-DECODE` | `( buf len blk -- flag )` | Deserialize header |
+| `BLK-DECODE` | `( buf len blk -- flag )` | Deserialize full block |
 | `BLK-VERIFY` | `( blk prev-hash -- flag )` | Full validation |
 | `BLK-PRINT` | `( blk -- )` | Debug print |
 | `CHAIN-INIT` | `( -- )` | Build genesis, zero ring |
