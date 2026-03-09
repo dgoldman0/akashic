@@ -37,8 +37,13 @@ Legend:
 | 6 | P06 | **CRIT** | ~~WOTS+ checksum nibble extraction~~ | L328 | ✅ Removed `4 LSHIFT`; shifts 8/4/0 now correct |
 | 7 | P08 | **MED** | ~~SPX-VERIFY length validation~~ | L749–750 | ✅ Added `sig-len` param; `<> IF FALSE EXIT` |
 | 8 | P07 | **MED** | ~~Secret zeroization after keygen~~ | L774 | ✅ `_SPX-RNG-SEED 48 0 FILL` in KEYGEN-RANDOM |
+| — | BUG1 | **CRIT** | ~~HT-SIGN buffer clobber~~ | L508 | ✅ Save msg to `_SPX-HT-MSG` before XMSS-SIGN |
+| — | BUG2 | **HIGH** | ~~HT-VERIFY wrong OVER~~ | L558 | ✅ Changed `OVER` → `2 PICK` for sig-in |
+| — | BUG3 | **HIGH** | ~~XMSS tree-hash ADRS KP residual~~ | L437,L477 | ✅ Added `0 _SPX-ADRS-KP!` after TREE type set |
+| — | BUG4 | **HIGH** | ~~FORS-PK-FROM-SIG OVER underflow~~ | L582–617 | ✅ Save sig-in to `_SPX-V-FPKSIG` variable |
+| — | BUG5 | **MED** | ~~WOTS-SK-I spurious DUP~~ | L286 | ✅ Removed stack-leaking DUP |
 
-**Tests:** 39/39 pass — 32 original + 4 P06 checksum + 3 P08 sig-len.  P07 zeroization test under `--full` flag.
+**Tests:** 42/42 pass — 32 original + 4 P06 checksum + 3 P08 sig-len + T33 sign-verify + T34 reject-bad-sig + P07 zeroization.
 
 ---
 
@@ -52,10 +57,11 @@ Legend:
 | ~~10~~ | ~~A03~~ | ~~**CRIT**~~ | ~~Add `chain_id` to TX structure~~ | ~~struct~~ | ✅ Added 8-byte `chain_id` (offset 112). Layout updated, all offsets shifted, encode/decode updated. |
 | ~~11~~ | ~~C05~~ | ~~**MED**~~ | ~~Add fee/gas field to TX structure~~ | ~~struct~~ | ✅ Added 8-byte `fee` (offset 120). TX-SET-FEE rejects negative. |
 | ~~12~~ | ~~C06~~ | ~~**MED**~~ | ~~Add TTL / valid-until-block field~~ | ~~struct~~ | ✅ Added 8-byte `valid_until` (offset 128). Combined with chain_id + fee as single layout break. TX-BUF-SIZE 8296→8320. |
-| ~~13~~ | ~~P10~~ | ~~**MED**~~ | ~~TX-SET-AMOUNT: reject negative only~~ | ~~~L143~~ | ✅ Added `0<` guard — zero-amount allowed, negative rejected. |
+| ~~13~~ | ~~P10~~ | ~~**MED**~~ | ~~TX-SET-AMOUNT: reject negative only~~ | ~~~L143~~ | ✅ Added `0<` guard — zero-amount allowed, negative rejected. TX-SET-FEE also guarded. |
 | ~~14~~ | ~~P11~~ | ~~**MED**~~ | ~~CBOR encode bounds check~~ | ~~~L200–230~~ | ✅ Added `CBOR-OK?` overflow flag to cbor.f; `_TX-ENCODE-UNSIGNED` checks before returning. |
+| — | BUG6 | **HIGH** | ~~Hybrid verify stack clobber~~ | L437–441 | ✅ Save tx to `_TX-HYB-TX` across `_TX-VERIFY-ED` (CATCH clobbers stack cell below return value). |
 
-**Design note on A03+C05+C06:** All three done as single atomic layout break. TX-BUF-SIZE=8320, 3 new 8-byte fields (chain_id, fee, valid_until), all offsets shifted +24 from data_len onward. _TX-ENCODE-UNSIGNED: 6→9 keys. TX-ENCODE: map counts +3. TX-DECODE: 3 new key matchers. 38/38 tests (quick), PQ tests require extended step limits.
+**Tests:** 40/40 pass.  38 quick + SPX sign-verify + P09 hybrid AND. Test predicate for P09 fixed (line-exact parsing, not full-output split).
 
 ---
 
