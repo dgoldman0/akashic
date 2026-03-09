@@ -275,7 +275,7 @@ def _make_tx(sender_pub, sender_priv, recip_pub, amount, nonce):
     """Return Forth lines that build, sign, and leave a tx buffer.
     Uses _TXBUF as the tx buffer name."""
     return [
-        f'CREATE _TXBUF {8296} ALLOT',
+        f'CREATE _TXBUF {8320} ALLOT',
         '_TXBUF TX-INIT',
         f'{sender_pub} _TXBUF TX-SET-FROM',
         f'{recip_pub} _TXBUF TX-SET-TO',
@@ -288,7 +288,7 @@ def _make_tx(sender_pub, sender_priv, recip_pub, amount, nonce):
 
 def test_constants():
     print("\n=== Constants ===")
-    check("ST-MAX-ACCOUNTS",  ['ST-MAX-ACCOUNTS .'],  "4096")
+    check("ST-MAX-ACCOUNTS",  ['ST-MAX-ACCOUNTS .'],  "65536")
     check("ST-ENTRY-SIZE",    ['ST-ENTRY-SIZE .'],     "72")
     check("ST-ADDR-LEN",     ['ST-ADDR-LEN .'],       "32")
     check("ST-PAGE-ENTRIES",  ['ST-PAGE-ENTRIES .'],    "256")
@@ -538,7 +538,7 @@ def test_apply_sequence():
         '_ADDR1 1000 ST-CREATE DROP',
         '_ADDR2 0 ST-CREATE DROP',
         # TX 1: send 100, nonce 0
-        f'CREATE _TX1 {8296} ALLOT',
+        f'CREATE _TX1 {8320} ALLOT',
         '_TX1 TX-INIT',
         '_PUB1 _TX1 TX-SET-FROM',
         '_PUB2 _TX1 TX-SET-TO',
@@ -547,7 +547,7 @@ def test_apply_sequence():
         '_TX1 _PRIV1 _PUB1 TX-SIGN',
         '_TX1 ST-APPLY-TX IF ." T1OK" ELSE ." T1FAIL" THEN',
         # TX 2: send 200, nonce 1
-        f'CREATE _TX2 {8296} ALLOT',
+        f'CREATE _TX2 {8320} ALLOT',
         '_TX2 TX-INIT',
         '_PUB1 _TX2 TX-SET-FROM',
         '_PUB2 _TX2 TX-SET-TO',
@@ -599,19 +599,19 @@ def test_apply_rejects():
 def test_merkle_root():
     """ST-ROOT returns a 32-byte Merkle root that changes on state mutation."""
     print("\n=== ST-ROOT ===")
-    # Root is not all zeroes even for empty state (Merkle of zero-hashes)
+    # Root is all zeroes for empty state (no accounts → empty SMT)
     lines = _keygen_preamble() + [
-        'ST-ROOT 32 0 DO DUP I + C@ OR LOOP NIP',
-        '0<> IF ." NONZERO" ELSE ." ZERO" THEN',
+        'ST-ROOT DROP 32 0 DO DUP I + C@ OR LOOP NIP',
+        '0= IF ." ZERO" ELSE ." NONZERO" THEN',
     ]
-    check("empty root is non-zero", lines, "NONZERO")
+    check("empty root is zero", lines, "ZERO")
 
     # Root changes after creating an account
     lines2 = _keygen_preamble() + [
         'CREATE _R1 32 ALLOT  CREATE _R2 32 ALLOT',
-        'ST-ROOT _R1 32 CMOVE',
+        'ST-ROOT DROP _R1 32 CMOVE',
         '_ADDR1 1000 ST-CREATE DROP',
-        'ST-ROOT _R2 32 CMOVE',
+        'ST-ROOT DROP _R2 32 CMOVE',
         '_R1 _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP',
         '0<> IF ." CHANGED" ELSE ." SAME" THEN',
     ]
@@ -621,15 +621,111 @@ def test_merkle_root():
     lines3 = _keygen_preamble() + [
         'CREATE _R1 32 ALLOT  CREATE _R2 32 ALLOT',
         '_ADDR1 1000 ST-CREATE DROP',
-        'ST-ROOT _R1 32 CMOVE',
+        'ST-ROOT DROP _R1 32 CMOVE',
         # Re-init and recreate same account
         'ST-INIT DROP',
         '_ADDR1 1000 ST-CREATE DROP',
-        'ST-ROOT _R2 32 CMOVE',
+        'ST-ROOT DROP _R2 32 CMOVE',
         '_R1 _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP',
         '0= IF ." DETERMINISTIC" ELSE ." NONDETERMINISTIC" THEN',
     ]
     check("root is deterministic", lines3, "DETERMINISTIC")
+
+def _make_staking_tx(sender_pub, sender_priv, recip_pub, amount, nonce, stake_type, buf_name):
+    """Create a staking tx (type 3=stake, 4=unstake).
+    Sets data[0] = stake_type."""
+    dname = f'{buf_name}_D'
+    return [
+        f'CREATE {buf_name} {8320} ALLOT',
+        f'{buf_name} TX-INIT',
+        f'{sender_pub} {buf_name} TX-SET-FROM',
+        f'{recip_pub} {buf_name} TX-SET-TO',
+        f'{amount} {buf_name} TX-SET-AMOUNT',
+        f'{nonce} {buf_name} TX-SET-NONCE',
+        f'CREATE {dname} 1 ALLOT  {stake_type} {dname} C!',
+        f'{dname} 1 {buf_name} TX-SET-DATA',
+        f'{buf_name} {sender_priv} {sender_pub} TX-SIGN',
+    ]
+
+def test_staking():
+    """Test P15 staking extension: stake and unstake."""
+    print("\n=== Staking extension (P15) ===")
+
+    # Stake: create account with 1000 bal, stake 300
+    lines = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        '10 ST-SET-HEIGHT',
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 300, 0, 3, '_STX1') + [
+        '_STX1 ST-APPLY-TX',
+        'IF ." STAKE-OK" ELSE ." STAKE-FAIL" THEN',
+    ]
+    check("stake tx succeeds", lines, "STAKE-OK")
+
+    # After stake: balance=700, staked=300
+    lines2 = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        '10 ST-SET-HEIGHT',
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 300, 0, 3, '_STX2') + [
+        '_STX2 ST-APPLY-TX DROP',
+        '_ADDR1 ST-BALANCE@ 700 = IF ." BAL700" ELSE ." BALBAD" THEN',
+        '_ADDR1 ST-STAKED@ 300 = IF ." STK300" ELSE ." STKBAD" THEN',
+    ]
+    check_fn("stake debits balance, credits staked", lines2,
+             lambda o: "BAL700" in o and "STK300" in o,
+             "expected BAL700 STK300")
+
+    # Stake more than balance fails
+    lines3 = _keygen_preamble() + [
+        '_ADDR1 100 ST-CREATE DROP',
+        '10 ST-SET-HEIGHT',
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 200, 0, 3, '_STX3') + [
+        '_STX3 ST-APPLY-TX',
+        'IF ." STAKE-OK" ELSE ." STAKE-REJECTED" THEN',
+    ]
+    check("stake > balance rejected", lines3, "STAKE-REJECTED")
+
+    # Unstake after lock period
+    lines4 = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        '10 ST-SET-HEIGHT',
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 500, 0, 3, '_STX4') + [
+        '_STX4 ST-APPLY-TX DROP',
+        # Lock period = 64, staked at height 10 -> unstake height = 74
+        '80 ST-SET-HEIGHT',
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 0, 1, 4, '_UTX4') + [
+        '_UTX4 ST-APPLY-TX',
+        'IF ." UNSTAKE-OK" ELSE ." UNSTAKE-FAIL" THEN',
+    ]
+    check("unstake after lock period", lines4, "UNSTAKE-OK")
+
+    # Unstake restores balance
+    lines5 = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        '10 ST-SET-HEIGHT',
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 500, 0, 3, '_STX5') + [
+        '_STX5 ST-APPLY-TX DROP',
+        '80 ST-SET-HEIGHT',
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 0, 1, 4, '_UTX5') + [
+        '_UTX5 ST-APPLY-TX DROP',
+        '_ADDR1 ST-BALANCE@ 1000 = IF ." BAL1K" ELSE ." BALBAD" THEN',
+        '_ADDR1 ST-STAKED@ 0= IF ." STK0" ELSE ." STKBAD" THEN',
+    ]
+    check_fn("unstake restores balance", lines5,
+             lambda o: "BAL1K" in o and "STK0" in o,
+             "expected BAL1K STK0")
+
+    # Unstake before lock period fails
+    lines6 = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        '10 ST-SET-HEIGHT',
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 500, 0, 3, '_STX6') + [
+        '_STX6 ST-APPLY-TX DROP',
+        '20 ST-SET-HEIGHT',   # only 20, lock until 74
+    ] + _make_staking_tx('_PUB1', '_PRIV1', '_PUB1', 0, 1, 4, '_UTX6') + [
+        '_UTX6 ST-APPLY-TX',
+        'IF ." EARLY-OK" ELSE ." EARLY-REJECTED" THEN',
+    ]
+    check("unstake before lock rejected", lines6, "EARLY-REJECTED")
 
 # ── Main ──
 
@@ -651,6 +747,7 @@ def main():
     test_apply_sequence()
     test_apply_rejects()
     test_merkle_root()
+    test_staking()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")

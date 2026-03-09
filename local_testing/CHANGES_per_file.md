@@ -67,23 +67,27 @@ Legend:
 
 ## Priority 3 — State tree integrity (state and SMT are co-dependent)
 
-### File 4: `store/smt.f`
+### ~~File 4: `store/smt.f`~~ ✅ DONE
 
-| # | ID | Severity | Change | Lines | Summary |
-|---|-----|----------|--------|-------|---------|
-| 15 | P12 | **CRIT** | Raise SMT-MAX-LEAVES to match state | L55 | `SMT-MAX-LEAVES = 4096` (or derive from `_ST-MAX-PAGES`). Raise `_SMT-MAX-NODES = 8191`. |
-| 16 | P16 | **HIGH** | Node-0 guard in `_SMT-NODE` | L97 | If `idx=0`, return NULL (0) instead of computing wrapped offset. Audit all callers. |
-| 17 | P17 | **HIGH** | `SMT-PROVE` add buf-len parameter | ~L460–488 | Add `buf-len` to API: `( key buf buf-len tree -- proof-len flag )`. Reject if `depth*40 > buf-len`. Update `SMT-VERIFY` similarly. |
-| 18 | B11 | **HIGH** | `SMT-INSERT` check node count | `SMT-INSERT` | Add `_SD-NCNT @ _SD-MAX >=` guard alongside existing leaf-count check. Prevents node-array overflow on pathological key distributions. |
+| # | ID | Severity | Change | Lines | Status |
+|---|-----|----------|--------|-------|--------|
+| ~~15~~ | ~~P12~~ | ~~**CRIT**~~ | ~~Raise SMT-MAX-LEAVES to match state~~ | ~~L55~~ | ✅ `SMT-MAX-LEAVES = 4096`, `_SMT-MAX-NODES = 8191`. |
+| ~~16~~ | ~~P16~~ | ~~**HIGH**~~ | ~~Node-0 guard in `_SMT-NODE`~~ | ~~L97~~ | ✅ Returns 0 (NULL) if idx=0 before computing offset. |
+| ~~17~~ | ~~P17~~ | ~~**HIGH**~~ | ~~`SMT-PROVE` add buf-len parameter~~ | ~~L518~~ | ✅ New API: `( key buf buf-len tree -- proof-len flag )`. Overflow check added. `SMT-VERIFY` depth>256 guard added. |
+| ~~18~~ | ~~B11~~ | ~~**HIGH**~~ | ~~`SMT-INSERT` check node count~~ | ~~L303~~ | ✅ Dual capacity guards: leaf count + node count (`ncnt+2 > max`) in both empty-tree and keys-differ paths. |
 
-### File 5: `store/state.f`
+**Tests:** 27/27 pass — 23 original + 4 new (P12 max-leaves, P16 node-0, P17 prove overflow, B11 insert capacity).
 
-| # | ID | Severity | Change | Lines | Summary |
-|---|-----|----------|--------|-------|---------|
-| 19 | B01 | **HIGH** | Raise `_ST-MAX-PAGES` | L82–85 | Change from `16` to `256` (production minimum). Comment says "EMULATOR TESTING VALUE ONLY." Scales capacity from 4,096 → 65,536 accounts. Coordinate with SMT capacity (P12). |
-| 20 | P13 | **HIGH** | `_ST-REBUILD-TREE` error propagation | ~L296 | Return `FALSE` if any `SMT-INSERT` fails. Change callers (`ST-ROOT`, `ST-PROVE`) to check flag. |
-| 21 | P14 | **MED** | Incremental SMT root (dirty flag) | `ST-ROOT` | Add `_ST-DIRTY` variable. Only call `_ST-REBUILD-TREE` when dirty. Mark dirty in `ST-APPLY-TX`. |
-| 22 | P15 | **HIGH** | Implement staking extension | ~L423 | Replace stub `_ST-TX-EXT-STUB` with real `_ST-TX-EXT-STAKE` / `_ST-TX-EXT-UNSTAKE`. Transfer between balance ↔ staked fields. Record unstake height. Critical for PoSA validator-set building. |
+### ~~File 5: `store/state.f`~~ ✅ DONE
+
+| # | ID | Severity | Change | Lines | Status |
+|---|-----|----------|--------|-------|--------|
+| ~~19~~ | ~~B01~~ | ~~**HIGH**~~ | ~~Raise `_ST-MAX-PAGES`~~ | ~~L87~~ | ✅ Changed 16→256 (production minimum). 65,536 max accounts. SMT capacity matched (P12). |
+| ~~20~~ | ~~P13~~ | ~~**HIGH**~~ | ~~`_ST-REBUILD-TREE` error propagation~~ | ~~L271~~ | ✅ Returns flag; `ST-ROOT` now `( -- addr flag )`. Zero buffer + 0 on failure. |
+| ~~21~~ | ~~P14~~ | ~~**MED**~~ | ~~Incremental SMT root (dirty flag)~~ | ~~L112~~ | ✅ `_ST-DIRTY` variable. `_ST-REBUILD-TREE` skips if clean. Set dirty in `ST-INIT`, `ST-CREATE`, `ST-APPLY-TX`. |
+| ~~22~~ | ~~P15~~ | ~~**HIGH**~~ | ~~Implement staking extension~~ | ~~L420–480~~ | ✅ Real `_ST-TX-EXT`: type 3=stake (debit balance→staked, set unstake height), type 4=unstake (credit balance, zero staking fields if lock elapsed). Forward refs fixed. |
+
+**Tests:** 50/50 pass — 44 existing + 6 new staking tests (stake, unstake, premature unstake reject, insufficient balance, already staked, nothing staked).
 
 ---
 

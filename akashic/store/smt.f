@@ -34,7 +34,7 @@
 \   SMT-LOOKUP    ( key tree -- val-a flag )
 \   SMT-DELETE    ( key tree -- flag )
 \   SMT-ROOT      ( tree -- addr )
-\   SMT-PROVE     ( key tree proof -- len )
+\   SMT-PROVE     ( key buf buf-len tree -- proof-len flag )
 \   SMT-VERIFY    ( key val proof len root -- flag )
 \   SMT-COUNT     ( tree -- n )
 \   SMT-EMPTY?    ( tree -- flag )
@@ -51,8 +51,8 @@ PROVIDED akashic-smt
 \  1. Constants
 \ =====================================================================
 
-2048 CONSTANT SMT-MAX-LEAVES
-4095 CONSTANT _SMT-MAX-NODES      \ 2 * SMT-MAX-LEAVES - 1
+4096 CONSTANT SMT-MAX-LEAVES
+8191 CONSTANT _SMT-MAX-NODES      \ 2 * SMT-MAX-LEAVES - 1
   96 CONSTANT _SMT-NODE-SZ        \ bytes per node
 
 \ Node types
@@ -92,7 +92,9 @@ CREATE _SMT-TM2  32 ALLOT         \ second temp (empty root)
 
 \ _SMT-NODE ( idx tree -- addr )
 \   Node index is 1-based. Index 0 means "empty".
+\   Guard: if idx=0, return 0 (NULL) — prevents wrapped addressing.
 : _SMT-NODE  ( idx tree -- addr )
+    OVER 0= IF 2DROP 0 EXIT THEN
     _SD-POOL + @ SWAP 1 - _SMT-NODE-SZ * + ;
 
 \ =====================================================================
@@ -304,6 +306,10 @@ VARIABLE _smt-i-val
 
     \ ---- Empty tree ----
     _smt-i-tree @ _SD-ROOT + @ 0= IF
+        \ Capacity guards
+        _smt-i-tree @ _SD-LCNT + @ _smt-i-tree @ _SD-MAXL + @ >= IF
+            0 EXIT
+        THEN
         _smt-i-key @ _smt-i-val @ _smt-i-tree @ _SMT-MAKE-LEAF
         DUP 0= IF EXIT THEN
         _smt-i-tree @ _SD-ROOT + !
@@ -343,6 +349,15 @@ VARIABLE _smt-i-val
     DUP _smt-i-tree @ _SMT-NODE _SN-FA +
     _smt-i-key @ SWAP
     _SMT-FIRST-DIFF-BIT           ( leaf-idx diff-bit )
+
+    \ ---- Capacity guards (B11) ----
+    \ New leaf insertion needs 2 nodes (leaf + branch).
+    _smt-i-tree @ _SD-LCNT + @ _smt-i-tree @ _SD-MAXL + @ >= IF
+        2DROP 0 EXIT
+    THEN
+    _smt-i-tree @ _SD-NCNT + @ 2 + _smt-i-tree @ _SD-MAX + @ > IF
+        2DROP 0 EXIT
+    THEN
 
     \ ---- Create new leaf ----
     _smt-i-key @ _smt-i-val @ _smt-i-tree @ _SMT-MAKE-LEAF
@@ -507,24 +522,31 @@ VARIABLE _smt-lk-tree
 \ =====================================================================
 
 \ Proof: len × 40-byte entries (8B bit-pos + 32B sibling hash).
-\ Entries ordered root-to-leaf. Returns len, or 0 if key not found.
+\ Entries ordered root-to-leaf. Returns proof-len + flag.
+\ Flag is FALSE if key not found or buf-len too small.
 
 VARIABLE _smt-pv-tree
 VARIABLE _smt-pv-proof
 VARIABLE _smt-pv-len
+VARIABLE _smt-pv-blen
 
-: _SMT-PROVE  ( key tree proof -- len )
-    _smt-pv-proof !
+: _SMT-PROVE  ( key buf buf-len tree -- proof-len flag )
     _smt-pv-tree !
+    _smt-pv-blen !
+    _smt-pv-proof !
     0 _smt-pv-len !
     _smt-pv-tree @ _SD-ROOT + @ DUP 0= IF
-        NIP 0 EXIT
+        NIP 0 0 EXIT
     THEN
     \ Walk down, collecting siblings
     BEGIN
         DUP _smt-pv-tree @ _SMT-NODE _SN-TYPE + @
         _SMT-BRANCH =
     WHILE
+        \ Overflow check: (len+1)*40 > buf-len?
+        _smt-pv-len @ 1+ 40 * _smt-pv-blen @ > IF
+            2DROP 0 0 EXIT
+        THEN
         \ Store bit-pos
         DUP _smt-pv-tree @ _SMT-NODE _SN-X0 + @
         _smt-pv-len @ 40 * _smt-pv-proof @ + !
@@ -550,9 +572,9 @@ VARIABLE _smt-pv-len
     \ At leaf — verify key match
     DUP _smt-pv-tree @ _SMT-NODE _SN-FA +
     ROT >R 32 R> 32 COMPARE 0= IF
-        DROP _smt-pv-len @
+        DROP _smt-pv-len @ -1
     ELSE
-        DROP 0
+        DROP 0 0
     THEN ;
 
 : SMT-PROVE  _SMT-PROVE ;
@@ -566,6 +588,8 @@ VARIABLE _smt-pv-len
 VARIABLE _smt-vf-key
 
 : _SMT-VERIFY  ( key val proof len root -- flag )
+    \ Sanity: reject if len > 256 (max tree depth for 256-bit keys)
+    OVER 256 > IF 2DROP 2DROP DROP 0 EXIT THEN
     >R >R >R                       ( key val  R: root len proof )
     \ Compute leaf hash: SHA3-256(0x00 || key || value)
     SWAP _smt-vf-key !

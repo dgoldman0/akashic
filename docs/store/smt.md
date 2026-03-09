@@ -75,12 +75,12 @@ The tree descriptor is a 64-byte record in base RAM:
 Offset  Size    Field      Description
 ------  ------  ---------  -----------
   0       8     pool       XMEM pool base address
-  8       8     max        max nodes (4095)
+  8       8     max        max nodes (8191)
  16       8     root       root node index (0 = empty)
  24       8     lcnt       leaf count
  32       8     ncnt       total allocated node count
  40       8     free       free list head index
- 48       8     maxl       max leaves (2048)
+ 48       8     maxl       max leaves (4096)
  56       8     (reserved)
 ------
  64 total
@@ -126,7 +126,7 @@ passed to `SMT-VERIFY`. A length of 0 means the key was not found.
 SMT-INIT  ( tree -- flag )
 ```
 
-Allocate an XMEM pool for up to 4095 nodes. Build the internal free
+Allocate an XMEM pool for up to 8191 nodes. Build the internal free
 list. Returns true (−1) on success, false (0) if XMEM allocation
 fails. The tree descriptor must be a 64-byte buffer in base RAM.
 
@@ -150,8 +150,9 @@ SMT-INSERT  ( key val tree -- flag )
 ```
 
 Insert or update a leaf. `key` and `val` are addresses of 32-byte
-buffers. Returns true on success, false if the node pool is
-exhausted.
+buffers. Returns true on success, false if the leaf capacity or
+node pool is exhausted. Both leaf count and node count are checked
+before allocation (B11 hardening).
 
 **Algorithm:**
 
@@ -218,13 +219,14 @@ a pointer to an all-zero buffer.
 ### SMT-PROVE
 
 ```forth
-SMT-PROVE  ( key tree proof -- len )
+SMT-PROVE  ( key buf buf-len tree -- proof-len flag )
 ```
 
-Generate an inclusion proof for `key`. `proof` must be a buffer
-large enough for the tree depth × 40 bytes (10240 bytes is safe for
-2048 leaves). Returns the number of proof entries, or 0 if the key
-is not in the tree.
+Generate an inclusion proof for `key`. `buf` is the proof buffer;
+`buf-len` is its capacity in bytes. Returns the number of proof
+entries and a success flag. Returns `0 0` if the key is not in the
+tree, or if `buf-len` is too small to hold the proof
+(needs `depth × 40` bytes; 10240 bytes is safe for up to 256 levels).
 
 ### SMT-VERIFY
 
@@ -234,13 +236,15 @@ SMT-VERIFY  ( key val proof len root -- flag )
 
 Verify an inclusion proof. `root` is the address of the expected
 32-byte root hash. Returns true if the reconstructed root matches.
+Rejects proofs with `len > 256` (max depth for 256-bit keys).
 
 **Stack setup after SMT-PROVE:**
 
 ```forth
-\ After: key tree proof SMT-PROVE  →  ( len )
-\ Use >R to save len, then push VERIFY args:
->R key val proof R> tree SMT-ROOT SMT-VERIFY
+\ After: key buf buf-len tree SMT-PROVE  →  ( proof-len flag )
+DROP  \ drop flag (or check it)
+\ proof-len is in hand; push VERIFY args:
+key val buf proof-len tree SMT-ROOT SMT-VERIFY
 ```
 
 ---
@@ -250,7 +254,7 @@ Verify an inclusion proof. `root` is the address of the expected
 ```forth
 SMT-COUNT  ( tree -- n )      \ Number of leaves
 SMT-EMPTY? ( tree -- flag )   \ True if no leaves
-SMT-MAX    ( tree -- n )      \ Maximum leaf capacity (2048)
+SMT-MAX    ( tree -- n )      \ Maximum leaf capacity (4096)
 ```
 
 ---
@@ -272,8 +276,8 @@ for recursive state.
 
 | Name | Value | Description |
 |---|---|---|
-| `SMT-MAX-LEAVES` | 2048 | Maximum number of leaves |
-| `_SMT-MAX-NODES` | 4095 | Maximum nodes (2n − 1) |
+| `SMT-MAX-LEAVES` | 4096 | Maximum number of leaves |
+| `_SMT-MAX-NODES` | 8191 | Maximum nodes (2n − 1) |
 | `_SMT-NODE-SZ` | 96 | Bytes per node |
 | `_SMT-FREE` | 0 | Node type: free |
 | `_SMT-BRANCH` | 1 | Node type: branch |
@@ -309,8 +313,9 @@ THEN
 my-tree SMT-ROOT   \ -- addr of 32-byte hash
 
 \ Prove + verify round-trip
-my-key my-tree my-proof SMT-PROVE   \ -- len
->R my-key my-val my-proof R> my-tree SMT-ROOT SMT-VERIFY
+my-key my-proof 10240 my-tree SMT-PROVE  \ -- proof-len flag
+DROP  \ drop flag
+my-key my-val my-proof ROT my-tree SMT-ROOT SMT-VERIFY
 IF  ." Valid proof" CR  THEN
 
 \ Delete
@@ -332,8 +337,8 @@ my-tree SMT-DESTROY
 | `SMT-LOOKUP` | `( key tree -- val-a flag )` | Search for key |
 | `SMT-DELETE` | `( key tree -- flag )` | Remove leaf |
 | `SMT-ROOT` | `( tree -- addr )` | 32-byte root hash address |
-| `SMT-PROVE` | `( key tree proof -- len )` | Generate inclusion proof |
+| `SMT-PROVE` | `( key buf buf-len tree -- proof-len flag )` | Generate inclusion proof |
 | `SMT-VERIFY` | `( key val proof len root -- flag )` | Verify inclusion proof |
 | `SMT-COUNT` | `( tree -- n )` | Leaf count |
 | `SMT-EMPTY?` | `( tree -- flag )` | True if empty |
-| `SMT-MAX` | `( tree -- n )` | Max leaves (2048) |
+| `SMT-MAX` | `( tree -- n )` | Max leaves (4096) |

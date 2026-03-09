@@ -1,13 +1,14 @@
 # akashic-state — Blockchain World State
 
-Account-based world state with 256-leaf SHA3-256 Merkle commitment.
-Accounts are sorted by address for O(log n) binary-search lookup.
+Account-based world state with Sparse Merkle Tree commitment.
+Accounts are stored in paged XMEM tables sorted by address for
+O(log n) binary-search lookup.
 
 ```forth
 REQUIRE state.f
 ```
 
-`PROVIDED akashic-state` — depends on `akashic-sha3`, `akashic-merkle`,
+`PROVIDED akashic-state` — depends on `akashic-sha3`, `akashic-smt`,
 `akashic-tx`, `akashic-fmt`.
 
 ---
@@ -35,9 +36,11 @@ REQUIRE state.f
 | Principle | Realisation |
 |---|---|
 | **Sorted table** | Accounts sorted by 32-byte address (SHA3-256 of public key) for binary search |
-| **Fixed-size entries** | 72 bytes per account — includes Phase 5 staking fields from day one |
-| **Merkle commitment** | 256-leaf SHA3-256 Merkle tree rebuilt per block for state root |
-| **Extension dispatch** | Pluggable `_ST-TX-EXT-XT` callback for staking and future tx types |
+| **Paged XMEM storage** | 256 pages × 256 entries = 65,536 max accounts; pages allocated on demand |
+| **Fixed-size entries** | 72 bytes per account — includes staking fields from day one |
+| **SMT commitment** | Compact Patricia Sparse Merkle Tree rebuilt per block for state root |
+| **Dirty-flag optimization** | State root only rebuilds SMT when state has actually changed |
+| **Extension dispatch** | Pluggable `_ST-TX-EXT-XT` callback for staking tx types (3=stake, 4=unstake) |
 | **Concurrency-safe** | Public API wrapped with `WITH-GUARD` |
 | **Not reentrant** | Module-level VARIABLEs for scratch state |
 
@@ -108,8 +111,9 @@ ST-CREATE  ( addr balance -- flag )
 ```
 
 Create a new account with the given address and initial balance.
-Returns TRUE on success, FALSE if the table is full (256 max) or the
-address already exists.  Maintains sorted order via shift-right insertion.
+Returns TRUE on success, FALSE if the table is full (65,536 max accounts)
+or the address already exists.  Maintains sorted order via shift-right
+insertion.
 
 ---
 
@@ -211,13 +215,13 @@ transactions so that lock-period logic has the correct height.
 
 ## Staking Extension
 
-The staking extension hook (`_ST-TX-EXT-XT`) is wired up by
-`consensus.f` at load time.  It handles two transaction types:
+The staking extension hook (`_ST-TX-EXT-XT`) is fully implemented.
+It handles two transaction types:
 
-| Type | `data[0]` | Constant | Effect |
-|---|---|---|---|
-| Stake | 3 | `TX-STAKE` | Move `amount` from balance → staked-amt; record height |
-| Unstake | 4 | `TX-UNSTAKE` | Move all staked back to balance (if lock period expired) |
+| Type | `data[0]` | Effect |
+|---|---|---|
+| Stake | 3 | Move `amount` from balance → staked-amt; record unstake height = current + lock period; record last-blk |
+| Unstake | 4 | Move all staked-amt back to balance if lock period has elapsed (current height ≥ unstake height); zero staking fields |
 
 The lock period defaults to 64 blocks (`_ST-LOCK-PERIOD`), overridden
 by `consensus.f` to `CON-POS-LOCK-PERIOD` (also 64) at load time.
@@ -229,12 +233,14 @@ by `consensus.f` to `CON-POS-LOCK-PERIOD` (also 64) at load time.
 ### ST-ROOT
 
 ```forth
-ST-ROOT  ( -- addr )
+ST-ROOT  ( -- addr flag )
 ```
 
-Rebuild the 256-leaf Merkle tree from current state and return the
-32-byte root address.  Call once per block finalization, not per
-transaction.
+Rebuild the SMT from current state (if dirty) and return the
+32-byte root address and a success flag.  Returns `0 0` if the
+SMT rebuild fails.  Call once per block finalization, not per
+transaction.  The dirty-flag optimization skips rebuild when
+no mutations have occurred since the last call.
 
 ---
 
@@ -248,7 +254,7 @@ ST-SNAPSHOT  ( dst -- )
 
 Copy the full paged account table + count to a buffer.
 Total size: ST-SNAPSHOT-SIZE (scales with `_ST-MAX-PAGES`;
-currently 295,056 bytes at 16 pages / emulator default).
+currently 4,718,736 bytes at 256 pages).
 
 ### ST-RESTORE
 
@@ -274,12 +280,12 @@ Size of a snapshot buffer in bytes.
 
 | Constant | Value | Description |
 |---|---|---|
-| `ST-MAX-ACCOUNTS` | `_ST-MAX-PAGES` × 256 | Maximum accounts (scales with page count) |
-| `_ST-MAX-PAGES` | 16 (emulator) | Page count — **must be increased for production** |
+| `ST-MAX-ACCOUNTS` | 65,536 | Maximum accounts (256 pages × 256) |
+| `_ST-MAX-PAGES` | 256 | Page count (production minimum) |
 | `ST-PAGE-ENTRIES` | 256 | Accounts per page (STARK trace aligned) |
 | `ST-ENTRY-SIZE` | 72 | Bytes per account entry |
 | `ST-ADDR-LEN` | 32 | Account address length (SHA3-256 hash) |
-| `ST-SNAPSHOT-SIZE` | 295,056 (at 16 pages) | Snapshot buffer size (scales with `_ST-MAX-PAGES`) |
+| `ST-SNAPSHOT-SIZE` | 4,718,736 | Snapshot buffer size (at 256 pages) |
 
 ---
 
@@ -300,7 +306,7 @@ alice-addr ST-BALANCE@      \ -> 1000
 alice-addr ST-NONCE@        \ -> 0
 
 \ Merkle commitment
-ST-ROOT                     \ -> 32-byte root address
+ST-ROOT DROP                \ -> 32-byte root address (drop flag)
 ```
 
 ---
@@ -318,7 +324,7 @@ ST-ROOT                     \ -> 32-byte root address
 | `ST-UNSTAKE-H@` | `( addr -- height )` | Read unstake height |
 | `ST-APPLY-TX` | `( tx -- flag )` | Validate + apply transaction |
 | `ST-VERIFY-TX` | `( tx -- flag )` | Validate without applying |
-| `ST-ROOT` | `( -- addr )` | Compute Merkle root |
+| `ST-ROOT` | `( -- addr flag )` | Compute SMT root |
 | `ST-ADDR-FROM-KEY` | `( pubkey addr -- )` | Hash pubkey → address |
 | `ST-COUNT` | `( -- n )` | Number of active accounts |
 | `ST-ENTRY` | `( idx -- addr )` | Raw entry by index |

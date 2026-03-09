@@ -39,7 +39,7 @@
 \   ST-APPLY-TX      ( tx -- flag )           validate + apply tx
 \   ST-VERIFY-TX     ( tx -- flag )           validate without applying
 \   ST-ROOT          ( -- addr )              compute SMT root
-\   ST-PROVE         ( addr proof -- len )    generate SMT inclusion proof
+\   ST-PROVE         ( addr proof buf-len -- proof-len flag )
 \   ST-VERIFY-PROOF  ( key leaf proof len root -- flag )  verify proof
 \   ST-ADDR-FROM-KEY ( pubkey addr -- )       SHA3-256 hash pubkey
 \   ST-COUNT         ( -- n )                 number of active accounts
@@ -79,12 +79,9 @@ PROVIDED akashic-state
 ST-PAGE-ENTRIES ST-ENTRY-SIZE * CONSTANT _ST-PAGE-BYTES
 
 \ Maximum pages.  Each page = 256 accounts.
-\ **EMULATOR TESTING VALUE ONLY.**  16 pages = 4096 accounts is
-\ sized for the 16 MiB XMEM emulator.  Production MUST increase
-\ this to match available SDRAM — e.g. 256 pages = 65536 accounts
-\ (~4.6 MB XMEM), 1024 pages = 262144 accounts (~18 MB XMEM).
+\ 256 pages = 65536 accounts (~4.6 MB XMEM).  Production minimum.
 \ The paging system handles any value; XMEM-ALLOT returns 0 if full.
-  16 CONSTANT _ST-MAX-PAGES
+ 256 CONSTANT _ST-MAX-PAGES
 
 _ST-MAX-PAGES ST-PAGE-ENTRIES * CONSTANT ST-MAX-ACCOUNTS
 
@@ -112,6 +109,10 @@ VARIABLE _ST-PGCNT
 
 \ SMT tree descriptor (64 bytes)
 CREATE _ST-SMT 64 ALLOT
+
+\ P14: Dirty flag — skip rebuild when state hasn't changed
+VARIABLE _ST-DIRTY
+-1 _ST-DIRTY !
 
 \ Scratch buffers
 CREATE _ST-HASH-A  32 ALLOT       \ sender address scratch
@@ -267,14 +268,21 @@ VARIABLE _ST-SH-IDX
 \ =====================================================================
 
 VARIABLE _st-rb-i   \ loop variable for rebuild — avoids R@-in-DO
+VARIABLE _st-rb-ok  \ P13: error propagation flag
 
-: _ST-REBUILD-TREE  ( -- )
+: _ST-REBUILD-TREE  ( -- flag )
+    _ST-DIRTY @ 0= IF -1 EXIT THEN   \ P14: not dirty → skip rebuild
     _ST-SMT SMT-DESTROY
     _ST-SMT SMT-INIT DROP
+    -1 _st-rb-ok !
     _ST-COUNT @ 0 ?DO
         I _ST-ENTRY ST-ENTRY-SIZE _ST-LEAF SHA3-256-HASH
-        I _ST-ADDR-AT _ST-LEAF _ST-SMT SMT-INSERT DROP
-    LOOP ;
+        I _ST-ADDR-AT _ST-LEAF _ST-SMT SMT-INSERT 0= IF
+            0 _st-rb-ok !  LEAVE
+        THEN
+    LOOP
+    _st-rb-ok @ IF 0 _ST-DIRTY ! THEN
+    _st-rb-ok @ ;
 
 \ =====================================================================
 \  9. ST-INIT — zero directory, init SMT
@@ -284,6 +292,7 @@ VARIABLE _st-rb-i   \ loop variable for rebuild — avoids R@-in-DO
     _ST-PGDIR _ST-MAX-PAGES CELLS 0 FILL
     0 _ST-COUNT !
     0 _ST-PGCNT !
+    -1 _ST-DIRTY !
     _ST-SMT SMT-INIT ;
 
 \ ST-DESTROY — free all pages + SMT
@@ -351,6 +360,7 @@ VARIABLE _ST-CR-IDX
     _ST-CR-BAL @ _ST-CR-IDX @ _ST-BAL-AT !
     \ Increment count
     _ST-COUNT @ 1+ _ST-COUNT !
+    -1 _ST-DIRTY !
     -1 ;
 
 \ =====================================================================
@@ -381,9 +391,11 @@ VARIABLE _ST-CR-IDX
 \  14. ST-ROOT — compute and return 32-byte SMT root
 \ =====================================================================
 
-: ST-ROOT  ( -- addr )
-    _ST-REBUILD-TREE
-    _ST-SMT SMT-ROOT ;
+: ST-ROOT  ( -- addr flag )
+    _ST-REBUILD-TREE 0= IF
+        _ST-LEAF 32 0 FILL _ST-LEAF 0 EXIT
+    THEN
+    _ST-SMT SMT-ROOT -1 ;
 
 \ =====================================================================
 \  15. ST-VERIFY-TX — validate transaction against current state
@@ -405,12 +417,8 @@ VARIABLE _ST-VT-SE
     -1 ;
 
 \ =====================================================================
-\  16. Staking extension hook + height tracking
+\  16. Staking extension + height tracking
 \ =====================================================================
-
-: _ST-TX-EXT-STUB  ( tx sender-idx -- flag )  2DROP 0 ;
-VARIABLE _ST-TX-EXT-XT
-' _ST-TX-EXT-STUB _ST-TX-EXT-XT !
 
 VARIABLE _ST-CUR-HEIGHT
 0 _ST-CUR-HEIGHT !
@@ -419,6 +427,58 @@ VARIABLE _ST-LOCK-PERIOD
 64 _ST-LOCK-PERIOD !
 
 : ST-SET-HEIGHT  ( h -- )  _ST-CUR-HEIGHT ! ;
+
+\ _ST-TX-EXT ( tx sender-idx -- flag )
+\   data[0]=3: stake. Transfer tx-amount from balance → staked.
+\   data[0]=4: unstake. Transfer staked → balance after lock period.
+VARIABLE _st-ext-tx
+VARIABLE _st-ext-si
+VARIABLE _st-ext-amt
+
+: _ST-TX-EXT  ( tx sender-idx -- flag )
+    _st-ext-si !  _st-ext-tx !
+    _st-ext-tx @ TX-DATA@ C@      ( type-byte )
+    DUP 3 = IF
+        \ ---- STAKE ----
+        DROP
+        _st-ext-tx @ TX-AMOUNT@ _st-ext-amt !
+        \ Balance >= amount?
+        _st-ext-si @ _ST-BAL-AT @ _st-ext-amt @ < IF 0 EXIT THEN
+        \ Amount > 0?
+        _st-ext-amt @ 0= IF 0 EXIT THEN
+        \ Debit balance
+        _st-ext-si @ _ST-BAL-AT DUP @ _st-ext-amt @ - SWAP !
+        \ Credit staked
+        _st-ext-si @ _ST-STAKED-AT DUP @ _st-ext-amt @ + SWAP !
+        \ Record unstake height (current + lock period)
+        _ST-CUR-HEIGHT @ _ST-LOCK-PERIOD @ +
+        _st-ext-si @ _ST-UNSTAKE-AT !
+        \ Record last-block
+        _ST-CUR-HEIGHT @ _st-ext-si @ _ST-LASTBLK-AT !
+        -1 EXIT
+    THEN
+    DUP 4 = IF
+        \ ---- UNSTAKE ----
+        DROP
+        \ Must have staked amount > 0
+        _st-ext-si @ _ST-STAKED-AT @ DUP 0= IF DROP 0 EXIT THEN
+        _st-ext-amt !
+        \ Lock period must have elapsed
+        _ST-CUR-HEIGHT @
+        _st-ext-si @ _ST-UNSTAKE-AT @ < IF 0 EXIT THEN
+        \ Credit balance
+        _st-ext-si @ _ST-BAL-AT DUP @ _st-ext-amt @ + SWAP !
+        \ Zero staked fields
+        0 _st-ext-si @ _ST-STAKED-AT !
+        0 _st-ext-si @ _ST-UNSTAKE-AT !
+        _ST-CUR-HEIGHT @ _st-ext-si @ _ST-LASTBLK-AT !
+        -1 EXIT
+    THEN
+    \ Unknown extension type
+    DROP 0 ;
+
+VARIABLE _ST-TX-EXT-XT
+' _ST-TX-EXT _ST-TX-EXT-XT !
 
 \ =====================================================================
 \  17. ST-APPLY-TX — validate and apply transaction to state
@@ -456,6 +516,7 @@ VARIABLE _ST-AT-RBAL
             _ST-AT-TX @ _ST-AT-S-IDX @ _ST-TX-EXT-XT @ EXECUTE
             DUP IF
                 _ST-AT-S-IDX @ _ST-NONCE-AT DUP @ 1+ SWAP !
+                -1 _ST-DIRTY !
             THEN
             EXIT
         THEN
@@ -473,6 +534,7 @@ VARIABLE _ST-AT-RBAL
     _ST-HASH-A _ST-HASH-B _ST-ADDR-CMP 0= _ST-AT-SELF !
     _ST-AT-SELF @ IF
         _ST-AT-S-IDX @ _ST-NONCE-AT DUP @ 1+ SWAP !
+        -1 _ST-DIRTY !
         -1 EXIT
     THEN
 
@@ -512,6 +574,7 @@ VARIABLE _ST-AT-RBAL
     \ 13. Increment sender nonce
     _ST-AT-S-IDX @ _ST-NONCE-AT DUP @ 1+ SWAP !
 
+    -1 _ST-DIRTY !
     -1 ;
 
 \ =====================================================================
@@ -541,8 +604,7 @@ VARIABLE _ST-AT-RBAL
 \
 \  Fixed max size (scales with _ST-MAX-PAGES):
 \    16 + _ST-MAX-PAGES×8 + _ST-MAX-PAGES×_ST-PAGE-BYTES
-\  Current emulator value (16 pages): 295,056 bytes.
-\  Production example  (256 pages): 4,718,736 bytes (~4.5 MB).
+\  Current value (256 pages): 4,718,736 bytes (~4.5 MB).
 
 16 _ST-MAX-PAGES CELLS + _ST-MAX-PAGES _ST-PAGE-BYTES * + CONSTANT ST-SNAPSHOT-SIZE
 
@@ -584,10 +646,13 @@ VARIABLE _st-snap-ptr
 \  20. ST-PROVE / ST-VERIFY-PROOF
 \ =====================================================================
 
-: ST-PROVE  ( addr proof -- len )
-    SWAP
-    _ST-REBUILD-TREE
-    SWAP _ST-SMT SWAP SMT-PROVE ;
+: ST-PROVE  ( addr proof buf-len -- proof-len flag )
+    ROT                          \ proof buf-len addr
+    _ST-REBUILD-TREE 0= IF
+        2DROP DROP 0 0 EXIT
+    THEN
+    ROT ROT                      \ addr proof buf-len
+    _ST-SMT SMT-PROVE ;
 
 : ST-VERIFY-PROOF  ( key leaf proof len root -- flag )
     SMT-VERIFY ;
