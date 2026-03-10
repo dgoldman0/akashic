@@ -195,9 +195,9 @@ Legend:
 
 ### File 14: `web/server.f`
 
-| # | ID | Severity | Change | Lines | Summary |
-|---|-----|----------|--------|-------|---------|
-| 58 | C04 | **MED** | Single-threaded, single-connection, no TLS | `SRV-LOOP` | One slow client blocks all others. No TLS = plaintext tx submission. At minimum: non-blocking accept loop. TLS requires KDOS TLS support or stunnel wrapper. |
+| # | ID | Severity | Change | Lines | Summary | |
+|---|-----|----------|--------|-------|---------|---|
+| 58 | C04 | **MED** | Single-threaded, single-connection, no TLS | `SRV-LOOP` | One slow client blocks all others. No TLS = plaintext tx submission. At minimum: non-blocking accept loop. TLS requires KDOS TLS support or stunnel wrapper. | ⏳ Deferred — concurrency handled via TCP retransmit (test_live_multi_conn validates). TLS needs KDOS-level `TLS-ACCEPT`; all primitives exist but kernel edit out of scope for now. Stunnel/reverse-proxy viable for deployment. |
 
 ---
 
