@@ -50,10 +50,10 @@ VARIABLE _GEN-CHAIN-ID
 \ =====================================================================
 \  2. Genesis CBOR encoding buffer
 \ =====================================================================
-\  4 KB buffer for genesis payload.  Generous for up to ~100 initial
-\  accounts + 256 authority keys.
+\  16 KB buffer for genesis payload.  Supports up to ~400 initial
+\  accounts + 256 authority keys without overflow.
 
-4096 CONSTANT _GEN-BUF-SIZE
+16384 CONSTANT _GEN-BUF-SIZE
 CREATE _GEN-BUF  _GEN-BUF-SIZE ALLOT
 
 \ String constants (stored as counted-string-like inline data)
@@ -139,51 +139,66 @@ VARIABLE _GEN-NKEYS
 VARIABLE _GEN-NBAL
 CREATE _GEN-TKEY 32 ALLOT          \ temp key buffer for decode
 
+\ _GEN-STR= ( addr1 len1 addr2 len2 -- flag )
+\   Compare two byte strings for equality.
+: _GEN-STR=  ( addr1 len1 addr2 len2 -- flag )
+    ROT OVER <> IF 2DROP DROP 0 EXIT THEN  \ lengths differ
+    0 ?DO
+        OVER I + C@  OVER I + C@  <> IF 2DROP 0 UNLOOP EXIT THEN
+    LOOP
+    2DROP -1 ;
+
+\ _GEN-EXPECT-KEY ( counted-str -- flag )
+\   Read next CBOR text string and validate it matches the expected
+\   key name.  Returns -1 on match, 0 on mismatch.
+: _GEN-EXPECT-KEY  ( counted-str -- flag )
+    DUP 1+ SWAP C@                 ( str-body len )
+    CBOR-NEXT-TSTR                 ( str-body len cbor-addr cbor-len )
+    _GEN-STR= ;
+
 : GEN-LOAD  ( genesis-data len -- flag )
     CBOR-PARSE DROP
     \ Expect map with 8 entries
     CBOR-NEXT-MAP 8 <> IF 0 EXIT THEN
     \ 1. chain_id
-    CBOR-NEXT-TSTR 2DROP           \ skip key string
+    _GEN-S-CID _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
     CBOR-NEXT-UINT _GEN-CHAIN-ID !
     \ 2. con_mode
-    CBOR-NEXT-TSTR 2DROP
+    _GEN-S-CMOD _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
     CBOR-NEXT-UINT CON-MODE!
     \ 3. stark
-    CBOR-NEXT-TSTR 2DROP
+    _GEN-S-STARK _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
     CBOR-NEXT-UINT 0<> CON-STARK!
-    \ 4. epoch_len  (compile-time constant — validate only)
-    CBOR-NEXT-TSTR 2DROP
-    CBOR-NEXT-UINT CON-POS-EPOCH-LEN <> IF
-        \ Mismatch with compiled constant — warn but continue
-    THEN
-    \ 5. min_stake  (compile-time constant — validate only)
-    CBOR-NEXT-TSTR 2DROP
-    CBOR-NEXT-UINT DROP            \ TODO: make configurable
+    \ 4. epoch_len — apply from genesis (runtime-configurable)
+    _GEN-S-EPOCH _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
+    CBOR-NEXT-UINT CON-POS-EPOCH-LEN !
+    \ 5. min_stake — apply from genesis (runtime-configurable)
+    _GEN-S-MSTK _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
+    CBOR-NEXT-UINT CON-POS-MIN-STAKE !
     \ 6. lock_period
-    CBOR-NEXT-TSTR 2DROP
+    _GEN-S-LOCK _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
     CBOR-NEXT-UINT _ST-LOCK-PERIOD !
     \ 7. authorities
-    CBOR-NEXT-TSTR 2DROP
+    _GEN-S-AUTH _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
     CBOR-NEXT-ARRAY _GEN-NKEYS !
     _GEN-NKEYS @ 0 ?DO
         CBOR-NEXT-BSTR             ( addr len )
-        32 <> IF 2DROP 0 EXIT THEN \ bad key length
+        32 <> IF DROP 0 UNLOOP EXIT THEN  \ bad key length
         _GEN-TKEY 32 CMOVE
         _GEN-TKEY CON-POA-ADD
     LOOP
     \ 8. balances
-    CBOR-NEXT-TSTR 2DROP
+    _GEN-S-BAL _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
     CBOR-NEXT-ARRAY _GEN-NBAL !
     _GEN-NBAL @ 0 ?DO
-        CBOR-NEXT-ARRAY 2 <> IF 0 EXIT THEN
+        CBOR-NEXT-ARRAY 2 <> IF 0 UNLOOP EXIT THEN
         CBOR-NEXT-BSTR             ( addr len )
-        32 <> IF 2DROP 0 EXIT THEN
+        32 <> IF DROP 0 UNLOOP EXIT THEN
         _GEN-TKEY 32 CMOVE
         CBOR-NEXT-UINT             ( amount )
         \ Create account with initial balance
         _GEN-TKEY SWAP ST-CREATE
-        0= IF 0 EXIT THEN         \ account creation failed
+        0= IF 0 UNLOOP EXIT THEN  \ account creation failed
     LOOP
     -1 ;
 
@@ -199,6 +214,13 @@ CREATE _GEN-BLK  BLK-STRUCT-SIZE ALLOT
     0 _GEN-BLK BLK-SET-HEIGHT
     \ prev_hash = all zeros (already zero from BLK-INIT)
     0 _GEN-BLK BLK-SET-TIME
+    \ Include state root — two chains with different initial balances
+    \ must produce different genesis hashes.  (Fix P24)
+    ST-ROOT IF
+        _GEN-BLK BLK-STATE-ROOT@ 32 CMOVE
+    ELSE
+        DROP  \ ST-ROOT returned 0 (empty state, no root)
+    THEN
     _GEN-BLK R> BLK-HASH ;
 
 \ =====================================================================

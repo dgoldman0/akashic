@@ -598,15 +598,18 @@ All implemented via SHAKE-256 (hardware-accelerated).
 
 ```
 Transaction (CBOR map):
-  "from"      : 32 bytes  (sender public key — Ed25519)
-  "from_pq"   : 32 bytes  (sender PQ public key — SPHINCS+, optional)
-  "to"        : 32 bytes  (recipient public key)
-  "amount"    : u64       (transfer amount)
-  "nonce"     : u64       (sender's sequence number)
-  "data"      : bytes     (optional payload, 0–256 bytes)
-  "sig"       : 64 bytes  (Ed25519 signature, present if mode includes classical)
-  "sig_pq"    : 7856 bytes (SPHINCS+ signature, present if mode includes PQ)
-  "sig_mode"  : u8        (0=Ed25519, 1=SPHINCS+, 2=hybrid)
+  "from"        : 32 bytes  (sender public key — Ed25519)
+  "from_pq"     : 32 bytes  (sender PQ public key — SPHINCS+, optional)
+  "to"          : 32 bytes  (recipient public key)
+  "amount"      : u64       (transfer amount)
+  "nonce"       : u64       (sender's sequence number)
+  "chain_id"    : u64       (chain identifier — prevents cross-chain replay)
+  "fee"         : u64       (transaction fee — see Fee Model below)
+  "valid_until" : u64       (TTL block height — tx rejected after this height)
+  "data"        : bytes     (optional payload, 0–256 bytes)
+  "sig"         : 64 bytes  (Ed25519 signature, present if mode includes classical)
+  "sig_pq"      : 7856 bytes (SPHINCS+ signature, present if mode includes PQ)
+  "sig_mode"    : u8        (0=Ed25519, 1=SPHINCS+, 2=hybrid)
 ```
 
 Transaction hash = SHA3-256 of CBOR-encoded fields (excluding sig, sig_pq, sig_mode).
@@ -621,25 +624,63 @@ Transaction hash = SHA3-256 of CBOR-encoded fields (excluding sig, sig_pq, sig_m
 | `TX-SET-TO` | `( pubkey tx -- )` | Set recipient |
 | `TX-SET-AMOUNT` | `( amount tx -- )` | Set transfer amount |
 | `TX-SET-NONCE` | `( nonce tx -- )` | Set sequence number |
+| `TX-SET-CHAIN-ID` | `( chain-id tx -- )` | Set chain identifier (replay protection) |
+| `TX-SET-FEE` | `( fee tx -- )` | Set transaction fee |
+| `TX-SET-VALID-UNTIL` | `( slot tx -- )` | Set TTL block height |
 | `TX-SET-DATA` | `( addr len tx -- )` | Set optional payload |
 | `TX-HASH` | `( tx hash -- )` | Compute SHA3-256 of unsigned fields |
 | `TX-SIGN` | `( tx ed-priv ed-pub -- )` | Sign with Ed25519 |
 | `TX-SIGN-PQ` | `( tx spx-sec -- )` | Sign with SPHINCS+ |
 | `TX-SIGN-HYBRID` | `( tx ed-priv ed-pub spx-sec -- )` | Sign with both |
 | `TX-VERIFY` | `( tx -- flag )` | Verify signature(s) per sig_mode |
-| `TX-ENCODE` | `( tx buf -- len )` | Serialize to CBOR |
+| `TX-ENCODE` | `( tx buf max -- len )` | Serialize to CBOR |
 | `TX-DECODE` | `( buf len tx -- flag )` | Deserialize from CBOR |
+| `TX-VALID?` | `( tx -- flag )` | Structural validity check |
+| `TX-HASH=` | `( tx1 tx2 -- flag )` | Compare transaction hashes |
+| `TX-CHAIN-ID@` | `( tx -- chain-id )` | Read chain identifier |
+| `TX-FEE@` | `( tx -- fee )` | Read transaction fee |
+| `TX-VALID-UNTIL@` | `( tx -- slot )` | Read TTL block height |
+| `TX-AMOUNT@` | `( tx -- amount )` | Read transfer amount |
 | `TX-SIG-MODE` | variable | 0=Ed25519, 1=SPHINCS+, 2=hybrid |
 
 ### Size Budget
 
 Transaction buffer: 32 (from) + 32 (from_pq) + 32 (to) + 8 (amount)
-+ 8 (nonce) + 2 (data-len) + 256 (data) + 64 (sig) + 7856 (sig_pq)
-+ 1 (sig_mode) = 8,291 bytes.  Round to 8,296 (8-byte aligned).
-`CREATE TX-BUF 8296 ALLOT`.
++ 8 (nonce) + 8 (chain_id) + 8 (fee) + 8 (valid_until)
++ 2 (data-len) + 256 (data) + 64 (sig) + 7856 (sig_pq)
++ 1 (sig_mode) + 1 (flags) + 4 (pad) = 8,320 bytes (8-byte aligned).
+`CREATE TX-BUF 8320 ALLOT`.
 
 For Ed25519-only mode, the sig_pq field is zeroed and
-not encoded in CBOR — wire size stays compact (~410 bytes).
+not encoded in CBOR — wire size stays compact (~430 bytes).
+
+### Fee Model
+
+The `fee` field exists in the transaction format and is signed
+over in the transaction hash, but **`ST-APPLY-TX` currently
+ignores it.**  On consortium PoSA chains this is intentional:
+validators are authorized parties with external incentives (SLA,
+business agreements, governance).  They process transactions
+because that's their role in the consortium, not because they earn
+fees.  Users make transactions, sign them with Ed25519 or SPHINCS+,
+and the protocol validates and applies them at no on-chain cost.
+This is the same model as Hyperledger Fabric, Quorum, and most
+permissioned chains.
+
+The fee field is present so the wire format doesn't need a
+breaking change when fee enforcement is needed.  To activate fees,
+two things must change:
+
+1. **`ST-APPLY-TX` check:** `balance ≥ amount + fee` instead of
+   `balance ≥ amount`.  Deduct fee from sender alongside amount.
+2. **Fee distribution:** credit the block producer's account
+   (coinbase) with the collected fee, or burn it (reduce total
+   supply), or split (EIP-1559 style: base burn + priority tip).
+
+Neither change is structurally difficult — it's ~20 lines in
+state.f and ~10 in block.f.  It's deferred because it's irrelevant
+to consortium deployment and would add unnecessary friction for
+the target use case.
 
 ---
 
@@ -722,6 +763,13 @@ The state root goes into the block header.  Tree is rebuilt on
 
 On success: debit sender, credit recipient, increment sender nonce.
 On failure: no state change.
+
+> **Note:** The `fee` and `valid_until` fields present in the tx
+> format are **not currently enforced** by `ST-APPLY-TX`.  On
+> consortium PoSA chains, transactions are processed at no on-chain
+> cost — see *Fee Model* in Phase 2.  When fee enforcement is
+> activated, step 4 becomes `balance ≥ amount + fee` and a new
+> step 7 distributes the fee to the block producer.
 
 Self-transfers (sender = recipient) are handled: amount cancels out,
 nonce is bumped.
@@ -1160,12 +1208,10 @@ STARK overlay adds ~60 lines of shared glue regardless of mode.
 >    from being a *separate* data structure rather than overloaded
 >    onto account entries (performance optimization, not a blocker).
 >
-> 5. **`VM-VERIFY-SPHINCS` is missing from the contract whitelist.**
->    SPHINCS+ verify at 50M steps would consume 5× the default
->    10,000 gas limit.  Contracts cannot verify PQ signatures.
->    Either add it with proportional gas cost (~50,000 gas) or
->    document that on-chain PQ signature verification is not
->    supported.
+> 5. ~~**`VM-VERIFY-SPHINCS` is missing from the contract whitelist.**~~
+>    ✅ Resolved.  `VM-VERIFY-SPX` is in the Core whitelist (Appendix
+>    A.1) at gas cost 5,000.  The revised 1M gas limit makes PQ
+>    signature verification routine (0.5% of budget).
 
 ---
 
@@ -1910,6 +1956,37 @@ secondary instruction set — the host's own compilation machinery
 > `binimg.f`.  Tier 2 (full ITC) can be added later if/when
 > adversarial public deployment becomes a requirement.
 
+> **⚠ REVISED — Account Abstraction & Call Depth (from composability analysis)**
+>
+> The original `VM-MAX-DEPTH` of 4 was designed around reentrancy
+> prevention.  This is insufficient for real-world use:
+>
+> - **Smart wallets** (account abstraction) consume depth 1 before
+>   any application logic runs.  Wallet → DEX → Router → Pair →
+>   Token is depth 5 — already over the old limit.
+> - **Institutional key management** (the primary consortium use
+>   case) practically requires smart wallets for multisig, social
+>   recovery, session keys, and gas sponsorship.
+> - **Composable DeFi** (if applicable) routinely hits depth 6–8.
+>
+> **Revised design:**
+> - `VM-MAX-DEPTH` raised to **32** (resource bound only — memory
+>   is not a constraint at 256 MiB+ XMEM).
+> - Reentrancy is handled by a **per-contract recursion counter**
+>   (max 2 appearances of the same address on the call stack),
+>   decoupled from chain depth.  See M6.
+> - Gas limit raised to **1,000,000** (1M) — this bounds
+>   computation, not transaction cost.  On consortium chains with
+>   PoSA, gas price can be zero.
+> - Cross-contract call gas uses **warm/cold distinction** (EIP-2929
+>   model): 2,500 cold / 100 warm, per-transaction access tracking.
+>
+> **Account abstraction is first-class:** the VM assumes every
+> transaction may originate from a contract wallet (depth ≥ 1).
+> `VM-ORIGIN` provides the original external signer for audit
+> trails; `VM-CALLER` provides the immediate caller for
+> authorization.  Both are in the Core whitelist.
+
 ### Why Forth VM, Not EVM
 
 | Factor | EVM | Forth VM |
@@ -2000,6 +2077,7 @@ interpreter).
 |----------|-------|
 | Stack | `DUP` `DROP` `SWAP` `OVER` `ROT` `NIP` `TUCK` `2DUP` `2DROP` `2SWAP` `>R` `R>` `R@` |
 | Arithmetic | `+` `-` `*` `/` `MOD` `/MOD` `NEGATE` `ABS` `MIN` `MAX` |
+| Checked Arithmetic | `+?` `-?` `*?` `/?` | Revert-on-overflow variants |
 | Logic | `AND` `OR` `XOR` `INVERT` `LSHIFT` `RSHIFT` |
 | Comparison | `=` `<>` `<` `>` `<=` `>=` `0=` `0<` `0>` |
 | Control | `IF` `ELSE` `THEN` `BEGIN` `WHILE` `REPEAT` `UNTIL` `DO` `LOOP` `+LOOP` `?DO` `LEAVE` `EXIT` |
@@ -2009,6 +2087,26 @@ interpreter).
 | State | `VM-ST-GET` `VM-ST-PUT` `VM-ST-HAS?` `VM-BALANCE` `VM-CALLER` `VM-SELF` `VM-BLOCK#` |
 | Crypto | `VM-SHA3` `VM-VERIFY-ED25519` `VM-MERKLE-ROOT` |
 | Output | `VM-EMIT` `VM-RETURN` (write to return buffer, not console) |
+
+> **Note on checked arithmetic.**  It is probably wise to make the
+> checked variants (`+?` `-?` `*?` `/?`) the default recommendation
+> — or even the *only* arithmetic available in the contract sandbox.
+> Virtually every real-world smart contract exploit involving
+> arithmetic (integer overflow in `batchOverflow`, the BEC token bug,
+> etc.) would have been prevented by checked-by-default semantics.
+> Solidity adopted this stance in 0.8.0 by making overflow revert
+> unconditionally, requiring an explicit `unchecked { }` block to
+> opt out.  On the EVM, this was a hard trade-off: every checked add
+> compiles to `ADD DUP2 LT PUSH JUMPI` — four extra opcodes per
+> operation, bloating bytecode and burning gas.  Here, this is a
+> non-issue.  Words are words.  There's no bytecode to cram things
+> into, no opcode budget, no instruction-encoding pressure.
+> Including *both* `+` and `+?` costs nothing at the platform level
+> — it's one extra entry in the whitelist.  A consortium could
+> reasonably choose to whitelist only the checked variants and omit
+> the unchecked ones entirely, making overflow-free arithmetic the
+> structural default rather than a convention that every contract
+> author must remember to follow.
 
 Words **not** available: `REQUIRE` `INCLUDED` `REFILL` `ACCEPT`
 `KEY` `OPEN-FILE` `READ-FILE` `WRITE-FILE` `BYE` `SYSTEM` and all
@@ -2070,7 +2168,8 @@ The block producer, when applying transactions in `BLK-FINALIZE`:
 
 ### Gas Model
 
-Simple per-word decrement — no variable-cost opcode table.
+Simple per-word decrement with a warm/cold distinction for
+cross-contract calls (following EIP-2929 semantics).
 
 **Deploy transactions** pay gas for compilation *and* storage.
 **Call transactions** pay gas only for execution — no parsing overhead.
@@ -2079,16 +2178,49 @@ Simple per-word decrement — no variable-cost opcode table.
 |-----------|---------|----------|
 | Any stack/arithmetic/logic word | 1 | One inner-interpreter cycle |
 | `@` / `!` (arena memory) | 2 | Memory access |
-| `VM-ST-GET` / `VM-ST-PUT` | 10 | State tree lookup (Merkle path) |
+| `VM-ST-GET` / `VM-ST-PUT` | 10 / 20 | State tree lookup / lookup+update |
 | `VM-SHA3` | 50 | Hash computation |
+| `VM-SHA256` | 40 | SHA-256 computation |
 | `VM-VERIFY-ED25519` | 500 | Signature verification |
-| `VM-MERKLE-ROOT` | 100 | Tree recomputation |
+| `VM-VERIFY-SPX` | 5,000 | SPHINCS+ PQ signature verification |
+| `VM-MERKLE-VERIFY` / `VM-SMT-VERIFY` | 100 / 150 | Proof verification |
+| `VM-CALL` / `VM-DELEGATECALL` (cold) | 2,500 | First access to callee in this tx |
+| `VM-CALL` / `VM-DELEGATECALL` (warm) | 100 | Callee already accessed in this tx |
+| `VM-STATICCALL` (cold / warm) | 2,500 / 100 | Read-only call (same cost structure) |
+| `VM-TRANSFER` | 20 | Value send (+ 9,000 if creating new account) |
 | Loop iteration (`LOOP` / `+LOOP`) | 1 | Prevents infinite loops |
 | **Deploy: compilation** | 2 per source word | Parsing + compile to ITC |
 | **Deploy: storage** | 1 per byte stored | ITC image persisted to state tree |
 
-Default gas limit per transaction: 10,000.  Configurable via
-`VM-GAS-LIMIT` variable.
+Warm/cold tracking is **per-transaction**, not per-block.  Each
+transaction starts with an empty access set.  The first call to a
+given contract address in the transaction pays the cold cost (2,500);
+subsequent calls to the same address pay warm (100).  The code cache
+(§7.A) still benefits execution *speed* at the block level, but gas
+accounting is per-transaction for fairness — no user subsidizes
+another's cold loads.
+
+Default gas limit per transaction: **1,000,000** (1M).  Configurable
+via `VM-GAS-LIMIT` variable.
+
+> **Relationship between gas and fees.**  Gas and fees are
+> orthogonal.  Gas is a **computation meter** — it bounds execution
+> time and prevents infinite loops regardless of whether anyone
+> pays for it.  Fees are an **economic mechanism** — they
+> compensate validators and create spam resistance.  On consortium
+> PoSA chains, gas metering is active (contracts that exceed the
+> gas limit are halted) but the fee is zero — validators are
+> authorized parties with external incentives, and spam resistance
+> comes from the permissioned validator set, not from transaction
+> cost.  The tx format already carries a `fee` field (see Phase 2,
+> *Fee Model*); when a chain transitions to public operation, fee
+> enforcement can be activated without a format change.
+
+> **Note on VM-VERIFY-SPX gas cost:** At 5,000 gas, a SPHINCS+
+> verification consumes 0.5% of the default 1M gas budget — well
+> within reach of any transaction.  The previous 10,000 gas limit
+> made PQ verification impossible; the revised limit resolves issue
+> #5 from the Phase 5 assessment.
 
 ### Memory Budget
 
@@ -2230,24 +2362,51 @@ dictionary region.  The host dictionary is untouched.
 
 **M6 — Reentrancy guard (→ S7)**
 
-`VM-DELEGATECALL` sets a per-contract **call-depth counter**.
-The maximum call depth is 4 (configurable via `VM-MAX-DEPTH`).
-Additionally, state mutations from `VM-ST-PUT` within a
-`VM-DELEGATECALL` frame are **journaled** — they are not committed
-to the state tree until the outermost call frame returns
-successfully.  If any nested call faults, all journaled mutations
-for the entire call chain are rolled back (similar to Ethereum's
-revert semantics, but simpler because there's no gas refund
-complexity).
+Reentrancy is handled by two independent mechanisms: a
+**per-contract recursion counter** and **journaled state mutations**.
+These are decoupled from the call-chain depth limit, which exists
+for resource bounding (not security).
+
+**Per-contract recursion counter:** The VM tracks how many times
+each contract address appears on the current call stack.  If a
+contract would appear more than `VM-MAX-REENTRY` times (default: 2),
+the call faults.  This directly targets reentrancy (A → B → A) without
+restricting legitimate deep call chains (A → B → C → D → E → ...).
+A value of 2 allows a single re-entrant callback (needed for some
+legitimate patterns like ERC-777 token hooks) while blocking
+runaway re-entrant loops.
+
+**Journaled state mutations:** All `VM-ST-PUT` calls within any
+call frame are journaled — they are not committed to the state tree
+until the outermost call frame returns successfully.  If any nested
+call faults, all journaled mutations for the entire call chain are
+rolled back (similar to Ethereum's revert semantics, but simpler
+because there's no gas refund complexity).
 
 ```
-Call chain:  A → B → A  (reentrant)
+Call chain:  A → B → A  (reentrant, depth 3)
   - A's first ST-PUT is journaled, not committed
-  - B calls back into A — call depth = 2
+  - B calls back into A — A's recursion counter = 2 (allowed)
   - A's second ST-PUT is journaled separately
   - If B or A faults: ALL journals rolled back
   - If all succeed: journals committed in order
+  - If B tried to call A again: recursion counter = 3 → fault
 ```
+
+**Call-chain depth limit:** `VM-MAX-DEPTH` (default: 32) bounds
+the total depth of the call stack for resource sizing (arena pool
+allocation).  This is not a security mechanism — it's a memory
+budget knob.  At 32 depth with ~16.8 KB per frame, the arena pool
+consumes ~538 KB, which is trivial relative to XMEM capacity.
+Smart wallets + deep DeFi composition (wallet → DEX → router →
+pair → token → oracle) require depth 6–8 as a baseline; 32 leaves
+ample headroom.
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `VM-MAX-DEPTH` | 32 | Max call-chain depth (resource bound) |
+| `VM-MAX-REENTRY` | 2 | Max times one contract can appear on stack (reentrancy guard) |
+| Journal depth | `VM-MAX-DEPTH` | One journal frame per call level |
 
 **M7 — Checked balance arithmetic (→ S8)**
 
@@ -2308,7 +2467,7 @@ The sandbox compiler imposes limits on contract source:
 | Interpreter injection | No `EVALUATE`, shadow `FIND` only | Zero |
 | Stack overflow | Depth-limited data + return stacks | 1 check per push/pop |
 | `CREATE`/`ALLOT` escape | Scoped `_VM-HERE` | 1 bounds check |
-| Reentrancy | Journal + call-depth limit | Journal commit on return |
+| Reentrancy | Journal + per-contract recursion counter | Journal commit on return |
 | Balance overflow | Checked arithmetic in state ops | 1 overflow check |
 | Stale memory | Arena zeroed on init | One `XMEM-ZERO` call |
 | Gas DoS | Proportional costs + stack bounds | Negligible |
@@ -2377,9 +2536,9 @@ round-robin.
 
 | Item | Description |
 |------|-------------|
-| Pool size | `VM-MAX-DEPTH` arenas (default 4 — matches max call depth) |
+| Pool size | `VM-MAX-DEPTH` arenas (default 32 — matches max call depth) |
 | Slot size | `VM-ARENA-SIZE` (default 4 KB data + 2 KB dictionary, per Memory Budget) |
-| Allocation | At `BLK-FINALIZE` start: `VM-MAX-DEPTH` × slot size from XMEM, once |
+| Allocation | At `BLK-FINALIZE` start: `VM-MAX-DEPTH` × slot size (~538 KB) from XMEM, once |
 | Per-call cost | Assign next slot, reset watermark (see 7.C), swap bounds registers |
 | Teardown | Reset slot index.  No `XMEM-FREE` per call |
 | Block-level cleanup | Free entire pool at block end |
@@ -2469,8 +2628,9 @@ relative to actual contract execution cost.
   `EXIT` → sandbox R-stack, host R untouched, fault on bad jump
 - **Stack overflow (S5):** `BEGIN DUP AGAIN` → stack depth limit
   hit, `_VM-FAULT-STACK`
-- **Reentrancy (S7):** A calls B calls A → depth limit or journal
-  rollback on fault
+- **Reentrancy (S7):** A calls B calls A → recursion counter = 2
+  (allowed); A calls B calls A calls B calls A → counter = 3, fault.
+  Journal rollback on fault
 - **Integer overflow (S8):** transfer that would overflow balance →
   `_VM-FAULT-OVERFLOW`
 - **Gas exhaustion:** infinite loop → aborts with `VM-FAILED? TRUE`
@@ -3177,3 +3337,1121 @@ pattern: snapshot BIOS+KDOS+dependencies, `run_forth()` per test,
 | STARK proof (256 txs) | < 800M steps | Already measured: ~300M for Fibonacci |
 | Block verify (PoW) | < 1M steps | Single hash + comparison |
 | Block verify (STARK) | < 800M steps | STARK-VERIFY |
+
+---
+
+## Appendix A — Smart Contract Word Vocabulary
+
+This appendix defines the full word set that a Leviathan consortium
+chain would expose to smart contracts through the Phase 7 whitelist.
+Every word listed here already exists as working, par-tested Forth code
+in the Akashic library.  Exposing one to contracts means adding its
+name to the whitelist array and assigning a gas cost — nothing else.
+
+The vocabulary is organized into tiers: **Core** words that any
+reasonable deployment would include, and **Extended** words that are
+worth considering depending on the chain's application domain.  Gas
+costs assume the Megapad-64's deterministic cycle counts; the values
+below are conservative starting points to be refined by profiling.
+
+### A.1 — Core Vocabulary (included by every consortium)
+
+These words constitute the minimum viable smart contract language.
+A contract that can manipulate the stack, do arithmetic, branch,
+access its own memory, read and write chain state, hash data, and
+verify signatures can express any financial or governance logic
+that matters.  There is no reason to omit any of these.
+
+#### Stack manipulation
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `DUP` | `( x -- x x )` | 1 | |
+| `DROP` | `( x -- )` | 1 | |
+| `SWAP` | `( x y -- y x )` | 1 | |
+| `OVER` | `( x y -- x y x )` | 1 | |
+| `ROT` | `( x y z -- y z x )` | 1 | |
+| `NIP` | `( x y -- y )` | 1 | |
+| `TUCK` | `( x y -- y x y )` | 1 | |
+| `2DUP` | `( x y -- x y x y )` | 1 | |
+| `2DROP` | `( x y -- )` | 1 | |
+| `2SWAP` | `( a b c d -- c d a b )` | 1 | |
+| `2OVER` | `( a b c d -- a b c d a b )` | 1 | |
+| `?DUP` | `( x -- x x \| 0 )` | 1 | DUP if nonzero |
+| `DEPTH` | `( -- n )` | 1 | Stack depth — useful for variadic helpers |
+| `>R` | `( x -- ) ( R: -- x )` | 1 | Push to return stack |
+| `R>` | `( -- x ) ( R: x -- )` | 1 | Pop from return stack |
+| `R@` | `( -- x ) ( R: x -- x )` | 1 | Copy return stack top |
+
+**16 words.** One inner-interpreter cycle each.  These are the atoms
+of Forth.  Removing any of them cripples basic expression.
+
+#### Integer arithmetic
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `+` | `( a b -- a+b )` | 1 | |
+| `-` | `( a b -- a-b )` | 1 | |
+| `*` | `( a b -- a*b )` | 1 | |
+| `/` | `( a b -- a/b )` | 1 | Floored division |
+| `MOD` | `( a b -- a%b )` | 1 | |
+| `/MOD` | `( a b -- rem quot )` | 1 | |
+| `*/` | `( a b c -- a*b/c )` | 2 | Intermediate double-width — overflow-safe |
+| `*/MOD` | `( a b c -- rem a*b/c )` | 2 | |
+| `NEGATE` | `( n -- -n )` | 1 | |
+| `ABS` | `( n -- |n| )` | 1 | |
+| `MIN` | `( a b -- min )` | 1 | |
+| `MAX` | `( a b -- max )` | 1 | |
+| `1+` | `( n -- n+1 )` | 1 | |
+| `1-` | `( n -- n-1 )` | 1 | |
+| `2*` | `( n -- n*2 )` | 1 | Left shift by 1 |
+| `2/` | `( n -- n/2 )` | 1 | Arithmetic right shift by 1 |
+
+**16 words.** `*/` and `*/MOD` cost 2 because they use an
+intermediate 128-bit product, but on Megapad-64 this is a single
+MUL+DIV pair, so the cost is still trivial.  The inclusion of `*/`
+is important: it lets contracts do proportional calculations
+(e.g., fee = amount × rate / 10000) without precision loss from
+intermediate overflow, which is the single most common source of
+financial bugs in EVM contracts that lack native `mulDiv`.
+
+#### Bitwise logic
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `AND` | `( a b -- a&b )` | 1 | |
+| `OR` | `( a b -- a\|b )` | 1 | |
+| `XOR` | `( a b -- a^b )` | 1 | |
+| `INVERT` | `( x -- ~x )` | 1 | Bitwise NOT |
+| `LSHIFT` | `( x n -- x<<n )` | 1 | |
+| `RSHIFT` | `( x n -- x>>n )` | 1 | Logical right shift |
+
+**6 words.** Bit manipulation is essential for flag packing,
+permission masks, and compact state encoding — the same reasons
+every chain includes them.
+
+#### Comparison and boolean
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `=` | `( a b -- flag )` | 1 | |
+| `<>` | `( a b -- flag )` | 1 | |
+| `<` | `( a b -- flag )` | 1 | Signed |
+| `>` | `( a b -- flag )` | 1 | Signed |
+| `<=` | `( a b -- flag )` | 1 | |
+| `>=` | `( a b -- flag )` | 1 | |
+| `0=` | `( x -- flag )` | 1 | |
+| `0<` | `( x -- flag )` | 1 | |
+| `0>` | `( x -- flag )` | 1 | |
+| `0<>` | `( x -- flag )` | 1 | Nonzero test |
+| `U<` | `( u1 u2 -- flag )` | 1 | Unsigned comparison |
+| `U>` | `( u1 u2 -- flag )` | 1 | Unsigned comparison |
+| `TRUE` | `( -- -1 )` | 1 | Constant |
+| `FALSE` | `( -- 0 )` | 1 | Constant |
+
+**14 words.** The unsigned comparisons (`U<`, `U>`) matter because
+addresses and balances are naturally unsigned quantities; signed
+comparison would misinterpret values with the high bit set.
+
+#### Control flow
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `IF` | `( flag -- )` | 1 | Compile-time: emits `0BRANCH` |
+| `ELSE` | `( -- )` | 1 | |
+| `THEN` | `( -- )` | 1 | |
+| `BEGIN` | `( -- )` | 1 | |
+| `WHILE` | `( flag -- )` | 1 | |
+| `REPEAT` | `( -- )` | 1 | |
+| `UNTIL` | `( flag -- )` | 1 | |
+| `DO` | `( limit index -- )` | 1 | |
+| `?DO` | `( limit index -- )` | 1 | Skip if limit=index |
+| `LOOP` | `( -- )` | 1 | Gas charged per iteration |
+| `+LOOP` | `( n -- )` | 1 | Gas charged per iteration |
+| `I` | `( -- index )` | 1 | Current loop index |
+| `J` | `( -- index )` | 1 | Outer loop index |
+| `LEAVE` | `( -- )` | 1 | Exit innermost loop |
+| `UNLOOP` | `( -- )` | 1 | Clean up loop before `EXIT` |
+| `EXIT` | `( -- )` | 1 | Return from current word |
+| `RECURSE` | `( -- )` | 1 | Self-call |
+
+**17 words.** `LOOP` and `+LOOP` cost 1 gas per iteration, which is
+the entire gas-metering mechanism for loops — no special analysis
+needed, no JUMPDEST scanning.  `?DO` prevents the off-by-one trap
+where `DO` executes once even when limit equals index.
+
+#### Arena memory
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `@` | `( addr -- val )` | 2 | Resolved to `VM-@` — bounds-checked |
+| `!` | `( val addr -- )` | 2 | Resolved to `VM-!` — bounds-checked |
+| `C@` | `( addr -- byte )` | 2 | Resolved to `VM-C@` |
+| `C!` | `( byte addr -- )` | 2 | Resolved to `VM-C!` |
+| `CELLS` | `( n -- n*8 )` | 1 | Cell size conversion |
+| `CELL+` | `( addr -- addr+8 )` | 1 | |
+| `CHARS` | `( n -- n )` | 1 | Identity on byte-addressed machines |
+| `CHAR+` | `( addr -- addr+1 )` | 1 | |
+| `+!` | `( n addr -- )` | 2 | Resolved to bounds-checked variant |
+| `FILL` | `( addr len byte -- )` | 2+len/8 | Bounded bulk fill |
+| `MOVE` | `( src dst len -- )` | 2+len/8 | Bounded bulk copy |
+| `CMOVE` | `( src dst len -- )` | 2+len/8 | Low-to-high copy |
+
+**12 words.** The contract source writes plain `@` and `!`.  The
+sandbox compiler silently resolves these to `VM-@` / `VM-!`, which
+check that the address falls within the contract's XMEM arena on
+every access.  This is the M1 mitigation from the security analysis.
+Gas cost 2 reflects the bounds check.  `FILL` and `MOVE` cost
+scales linearly with length to prevent free bulk writes.
+
+#### Definitions and arena allocation
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VARIABLE` | `( "name" -- )` | 3 | Allocates 1 cell in arena |
+| `CONSTANT` | `( x "name" -- )` | 1 | Compile-time only |
+| `CREATE` | `( "name" -- )` | 3 | Arena-scoped `HERE` |
+| `ALLOT` | `( n -- )` | 2 | Advance arena pointer |
+| `,` (comma) | `( x -- )` | 2 | Compile cell to arena |
+| `C,` | `( byte -- )` | 2 | Compile byte to arena |
+| `HERE` | `( -- addr )` | 1 | Current arena pointer |
+| `:` | `( "name" -- )` | 3 | Begin colon definition |
+| `;` | `( -- )` | 1 | End colon definition |
+| `LITERAL` | `( x -- )` | 1 | Compile-time literal |
+| `[']` | `( "name" -- )` | 1 | Compile-time tick |
+| `EXECUTE` | `( xt -- )` | 2 | Guarded trampoline — validated XT only |
+| `POSTPONE` | `( "name" -- )` | 2 | Compile-time word compilation |
+
+**13 words.** `CREATE` / `ALLOT` are scoped to the arena — `HERE`
+never advances past the arena ceiling.  `EXECUTE` is mapped to a
+validated trampoline that only accepts XTs within the contract's
+own compiled image; attempting to execute an arbitrary address faults.
+
+#### Chain state access
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-BALANCE` | `( addr -- amount )` | 10 | Read account balance |
+| `VM-NONCE` | `( addr -- nonce )` | 10 | Read account nonce |
+| `VM-CALLER` | `( -- addr )` | 1 | Transaction sender |
+| `VM-SELF` | `( -- addr )` | 1 | Contract's own address |
+| `VM-BLOCK#` | `( -- height )` | 1 | Current block height |
+| `VM-BLOCK-TIME` | `( -- epoch )` | 1 | Current block timestamp |
+| `VM-CHAIN-ID` | `( -- id )` | 1 | Chain identifier |
+| `VM-TX-HASH` | `( -- addr )` | 1 | Calling transaction's hash |
+| `VM-GAS-LEFT` | `( -- n )` | 1 | Remaining gas |
+| `VM-ST-GET` | `( key -- val flag )` | 10 | Read contract storage slot |
+| `VM-ST-PUT` | `( val key -- )` | 20 | Write contract storage slot |
+| `VM-ST-HAS?` | `( key -- flag )` | 10 | Check slot existence |
+| `VM-ST-DELETE` | `( key -- )` | 10 | Remove storage slot |
+| `VM-TRANSFER` | `( amount to -- flag )` | 20 | Send value to address |
+| `VM-LOG` | `( data len topic -- )` | 5+len/8 | Emit event (for indexers) |
+
+**15 words.** Every state read costs 10 (Merkle path lookup), every
+write costs 20 (lookup + tree update + witness logging).
+`VM-TRANSFER` is the primitive for sending value; it debits the
+contract and credits the target atomically within the state
+transition.  `VM-LOG` emits an event that external indexers can
+consume — it doesn't affect state, but its data is committed to
+the block's receipt trie.  The `flag` return on `VM-ST-GET` tells
+the contract whether the slot existed (FALSE = default zero value).
+
+#### Inter-contract calling
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-CALL` | `( addr entry-len entry gas -- flag )` | 2500/100 | Call contract entry point (cold/warm) |
+| `VM-DELEGATECALL` | `( addr entry-len entry gas -- flag )` | 2500/100 | Call in caller's storage context (cold/warm) |
+| `VM-STATICCALL` | `( addr entry-len entry gas -- flag )` | 2500/100 | Read-only call (cold/warm) |
+| `VM-CALL-RESULT` | `( -- addr len )` | 1 | Retrieve callee's return data |
+| `VM-CALL-VALUE` | `( amount -- )` | 1 | Attach value to next `VM-CALL` |
+| `VM-ORIGIN` | `( -- addr )` | 1 | Original external caller (top of call chain) |
+| `VM-DEPTH` | `( -- n )` | 1 | Current call-chain depth |
+
+**7 words.** These are the words that make composability possible —
+without them, every contract is an island.
+
+**How inter-contract calling works:** When Contract A executes
+`VM-CALL`, the VM:
+
+1. **Deducts the base gas cost** (2,500 cold / 100 warm) from A's
+   remaining gas.  Cold = first access to B's address in this
+   transaction; warm = B already accessed earlier in this tx.
+2. **Allocates a child gas budget** — the `gas` argument on the
+   stack, capped at min(gas, caller's remaining gas × 63/64).
+   The 63/64 rule (borrowed from EIP-150) ensures the caller
+   always retains enough gas to handle the callee's return.
+3. **Loads Contract B's ITC image** from the state tree (or the
+   code cache if already warm — see §7.A).
+4. **Allocates a fresh arena** from the arena pool (§7.B) and
+   zeroes it.
+5. **Pushes a call frame:** saves A's arena bounds, `HERE`
+   pointer, storage context, `VM-CALLER` value, and gas counter.
+6. **Enters B's sandbox:** sets arena bounds to B's arena,
+   `VM-CALLER` to A's address, `VM-SELF` to B's address,
+   resolves `entry` (a counted string naming the entry point)
+   against B's export table.
+7. **Executes B** until it returns, reverts, or exhausts gas.
+8. **On success:** commits B's state mutations, returns unused
+   gas to A, sets the return data buffer, pushes TRUE.
+9. **On failure:** rolls back B's state mutations (journal
+   discard), returns remaining gas minus the gas consumed,
+   pushes FALSE.  A can inspect the revert reason via
+   `VM-CALL-RESULT`.
+
+The caller always gets control back.  A failed callee never
+crashes the caller — it just returns FALSE, like a Forth flag.
+
+**`VM-DELEGATECALL`** is the same mechanism except B executes in
+A's storage context: `VM-SELF` remains A's address, `VM-ST-GET` /
+`VM-ST-PUT` read and write A's storage slots, not B's.  This is
+the primitive for upgradeable contracts and shared libraries —
+Contract A delegates logic to Contract B while keeping its own
+state.  The reentrancy guard (M6) applies: a per-contract
+recursion counter limits how many times the same address can appear
+on the call stack (default: 2), and all state mutations within
+the delegate frame are journaled until the outermost frame returns.
+
+**`VM-STATICCALL`** is a read-only call.  The callee cannot execute
+`VM-ST-PUT`, `VM-ST-DELETE`, `VM-TRANSFER`, `VM-LOG`, or
+`VM-CALL-VALUE`.  Any attempt to mutate state faults immediately.
+This is the safe default for querying another contract's view
+functions — the caller is guaranteed no side effects.
+
+**`VM-ORIGIN`** returns the address of the original external
+transaction sender, regardless of how deep the call chain is.
+`VM-CALLER` changes at each call boundary (it's always the
+immediate caller); `VM-ORIGIN` doesn't.  Both are needed:
+`VM-CALLER` for authorization ("who called me?"), `VM-ORIGIN`
+for audit trails ("who initiated this chain of calls?").
+
+**Gas forwarding:** The caller explicitly specifies how much gas
+to give the callee.  This is a deliberate design choice over the
+EVM's "forward all gas" default (which was the root cause of the
+DAO reentrancy bug — the callee had enough gas to call back).
+The 63/64 retention rule provides a backstop, but explicit gas
+budgeting gives the caller fine-grained control.
+
+#### Cryptographic hashing
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-SHA3` | `( src len dst -- )` | 50 | SHA3-256, chain's canonical hash |
+| `VM-SHA3-512` | `( src len dst -- )` | 60 | SHA3-512 |
+| `VM-SHA256` | `( src len dst -- )` | 40 | SHA-256, for external compatibility |
+| `VM-SHAKE256` | `( src len dst dlen -- )` | 50+dlen/32 | Extendable-output function |
+
+**4 words.** `VM-SHA3` is the one contracts will use most — it's the
+same hash the chain uses for addresses, Merkle trees, and block
+headers.  `VM-SHA256` exists because the outside world (Bitcoin,
+TLS certificates, HMAC-SHA256 APIs) speaks SHA-256, and contracts
+that verify external data need it.  `VM-SHAKE256` gives
+variable-length output for key derivation and domain separation.
+All four are hardware-accelerated on the Megapad-64.
+
+#### Signature verification
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-VERIFY-ED25519` | `( msg len pub sig -- flag )` | 500 | RFC 8032 with all hardening |
+| `VM-VERIFY-SPX` | `( msg len pub sig slen -- flag )` | 5000 | SPHINCS+ (FIPS 205) post-quantum |
+
+**2 words.** `VM-VERIFY-ED25519` is the workhorse — it lets
+contracts implement multisig, delegated authorization, off-chain
+message validation, and oracle attestation.  `VM-VERIFY-SPX` is
+expensive (hash-based signature, 7856-byte sig) but provides
+post-quantum verification on-chain, which no other production
+chain offers as a native smart contract operation.  A contract can
+choose its own security posture: use Ed25519 for speed, SPHINCS+
+for quantum resistance, or require both.
+
+#### Merkle proof verification
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-MERKLE-VERIFY` | `( leaf idx proof depth root -- flag )` | 100 | Binary Merkle tree |
+| `VM-SMT-VERIFY` | `( key val proof len root -- flag )` | 150 | Sparse Merkle Tree |
+
+**2 words.** These are the foundation of trustless cross-contract
+and cross-chain verification.  A contract that holds a known state
+root can verify any claim about the state that produced it — "account
+X had balance Y at block N" — without trusting an oracle, just by
+checking the Merkle path.  `VM-SMT-VERIFY` uses the same compact
+Patricia-compressed SMT format that the chain's own state commitment
+uses, so state proofs produced by the light client (`LC-STATE-PROOF`)
+are directly consumable by contracts.
+
+#### Output
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-RETURN` | `( addr len -- )` | 2 | Set return data buffer |
+| `VM-REVERT` | `( addr len -- )` | 2 | Abort + set revert reason |
+| `VM-EMIT` | `( char -- )` | 1 | Append byte to return buffer |
+
+**3 words.** `VM-RETURN` writes to the return data buffer, which the
+caller retrieves via `VM-RESULT`.  `VM-REVERT` aborts execution,
+rolls back all state changes, and provides a reason string.
+`VM-EMIT` appends a single byte to the return buffer for
+incremental output construction.
+
+#### String and comparison utilities
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `S"` | `( "text" -- addr len )` | 1 | String literal |
+| `COUNT` | `( c-addr -- addr len )` | 1 | Counted string to addr+len |
+| `TYPE` | `( addr len -- )` | 1+len/8 | Append to return buffer (not console) |
+| `COMPARE` | `( a1 len1 a2 len2 -- n )` | 2 | Lexicographic, returns -1/0/+1 |
+
+**4 words.** `TYPE` in the sandbox doesn't print to a terminal — it
+appends to the return buffer, same as `VM-EMIT` but for bulk text.
+`COMPARE` is the standard ANS Forth string comparison.
+
+---
+
+**Core total: 129 words.**  This is a complete programming language.
+A contract written against this vocabulary can express token
+transfers, multisig wallets, voting, auctions, escrow, vesting
+schedules, oracle verification, Merkle proof checking, cross-chain
+state validation, and composable multi-contract protocols.
+Everything here is deterministic, all memory access is
+bounds-checked, and gas metering is per-word with no special cases.
+
+---
+
+### A.2 — Extended Vocabulary (recommended additions)
+
+These words are not strictly necessary for basic contract logic, but
+they dramatically expand what contracts can do without increasing the
+security surface in any meaningful way.  Each one already exists as
+tested Forth code.  A consortium should adopt them unless there is a
+specific reason to keep the whitelist minimal.
+
+#### Serialization — CBOR
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `CBOR-RESET` | `( -- )` | 2 | Reset encoder state |
+| `CBOR-UINT` | `( u -- )` | 3 | Encode unsigned integer |
+| `CBOR-NINT` | `( n -- )` | 3 | Encode negative integer |
+| `CBOR-BSTR` | `( addr len -- )` | 3+len/8 | Encode byte string |
+| `CBOR-TSTR` | `( addr len -- )` | 3+len/8 | Encode text string |
+| `CBOR-ARRAY` | `( n -- )` | 3 | Begin fixed-length array |
+| `CBOR-MAP` | `( n -- )` | 3 | Begin fixed-length map |
+| `CBOR-TAG` | `( tag -- )` | 3 | CBOR semantic tag |
+| `CBOR-TRUE` | `( -- )` | 2 | |
+| `CBOR-FALSE` | `( -- )` | 2 | |
+| `CBOR-NULL` | `( -- )` | 2 | |
+| `CBOR-RESULT` | `( -- addr len )` | 2 | Get encoded output |
+| `CBOR-OK?` | `( -- flag )` | 1 | Encoder status |
+| `CBOR-PARSE` | `( addr len -- flag )` | 5 | Initialize decoder |
+| `CBOR-TYPE` | `( -- type )` | 1 | Current item type |
+| `CBOR-DONE?` | `( -- flag )` | 1 | End of input? |
+| `CBOR-NEXT-UINT` | `( -- u )` | 3 | Decode unsigned |
+| `CBOR-NEXT-NINT` | `( -- n )` | 3 | Decode negative |
+| `CBOR-NEXT-BSTR` | `( -- addr len )` | 3 | Decode byte string |
+| `CBOR-NEXT-TSTR` | `( -- addr len )` | 3 | Decode text string |
+| `CBOR-NEXT-ARRAY` | `( -- n )` | 3 | Decode array header |
+| `CBOR-NEXT-MAP` | `( -- n )` | 3 | Decode map header |
+| `CBOR-NEXT-TAG` | `( -- tag )` | 3 | Decode tag |
+| `CBOR-NEXT-BOOL` | `( -- flag )` | 2 | Decode boolean |
+| `CBOR-SKIP` | `( -- )` | 3 | Skip current item |
+
+**25 words.** CBOR is the chain's canonical wire format.  Without it,
+contracts cannot decode their own call arguments or encode return
+data in a structured way.  This is the difference between contracts
+that process raw byte offsets and contracts that speak a real
+serialization protocol.  Every transaction's data field is
+CBOR-encoded; giving contracts the decoder means they can
+self-describe their ABI without an external schema compiler.
+The entire encoder+decoder is 314 lines of pure Forth with no
+I/O dependencies.
+
+**Rationale for inclusion by default:** On EVM chains, ABI encoding
+is handled by Solidity's compiler generating inline pack/unpack
+code.  Leviathan contracts don't have a compiler intermediary — the
+Forth source *is* the contract.  CBOR gives them what ABI encoding
+gives Solidity, but as a runtime library rather than generated code.
+
+#### Hashing — extended
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-SHA3-HMAC` | `( key klen data dlen dst -- )` | 80 | HMAC-SHA3-256 |
+| `VM-SHA512` | `( src len dst -- )` | 60 | SHA-512 |
+
+**2 words.** HMAC is the standard construction for keyed message
+authentication.  A contract that verifies oracle data, checks webhook
+signatures, or implements a commit-reveal scheme needs HMAC, not raw
+hashing.  `VM-SHA512` exists because Ed25519 internally uses SHA-512,
+and contracts that do manual Ed25519 domain separation or construct
+challenge-response protocols need access to the same hash.
+
+#### Checksums
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-CRC32` | `( data len -- crc )` | 10 | CRC-32 (ISO 3309) |
+| `VM-CRC32C` | `( data len -- crc )` | 10 | CRC-32C (Castagnoli) |
+
+**2 words.** Hardware-accelerated.  Cheap integrity checks for
+data-heavy contracts (supply chain, document management, IoT
+telemetry).  Not cryptographic, but useful when collision
+resistance isn't the goal — just detecting accidental corruption.
+
+#### Content addressing
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-DCBOR-CID` | `( data len -- cid-addr cid-len )` | 60 | IPLD CID (SHA3-256 + multicodec) |
+
+**1 word.** Computes a self-describing content identifier compatible
+with IPFS/IPLD.  Contracts that reference off-chain data (documents,
+media, large datasets) can store CIDs on-chain and verify them later
+when the data is presented.  This is one word wrapping DAG-CBOR
+canonicalization + SHA3-256, and it connects contracts directly to
+the content-addressed web.
+
+#### Fixed-point arithmetic
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `INT>FX` | `( n -- fx )` | 1 | Integer to 16.16 fixed-point |
+| `FX>INT` | `( fx -- n )` | 1 | Truncate to integer |
+| `FX*` | `( a b -- a*b )` | 2 | Fixed-point multiply |
+| `FX/` | `( a b -- a/b )` | 2 | Fixed-point divide |
+| `FX-ABS` | `( fx -- |fx| )` | 1 | |
+| `FX-NEG` | `( fx -- -fx )` | 1 | |
+| `FX-FLOOR` | `( fx -- fx' )` | 1 | |
+| `FX-CEIL` | `( fx -- fx' )` | 1 | |
+| `FX-ROUND` | `( fx -- fx' )` | 1 | |
+| `FX-MIN` | `( a b -- min )` | 1 | |
+| `FX-MAX` | `( a b -- max )` | 1 | |
+| `FX-CLAMP` | `( fx lo hi -- fx' )` | 1 | |
+| `FX-LERP` | `( a b t -- fx )` | 3 | Linear interpolation |
+| `FX-FRAC` | `( fx -- fx' )` | 1 | Fractional part |
+| `FX-SIGN` | `( fx -- -1\|0\|1 )` | 1 | |
+
+**15 words.** 16.16 fixed-point is **fully deterministic** — no
+IEEE 754 rounding modes, no denormals, no NaN, no platform-dependent
+behavior.  This gives contracts fractional arithmetic for interest
+rates, fee percentages, price ratios, and vesting curves.  Integer
+arithmetic alone forces contracts into awkward "multiply by 10000
+then divide" patterns; fixed-point makes intent legible.
+
+The inclusion of `FX-LERP` is deliberate: linear interpolation
+between two values parameterized by *t* is the building block of
+vesting schedules, bonding curves, and time-weighted averages.
+
+#### 256-bit field arithmetic
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `FIELD-USE-25519` | `( -- )` | 5 | Select Curve25519 prime |
+| `FIELD-USE-SECP` | `( -- )` | 5 | Select secp256k1 prime |
+| `FIELD-USE-P256` | `( -- )` | 5 | Select NIST P-256 prime |
+| `FIELD-LOAD-PRIME` | `( p pinv -- )` | 10 | Load custom prime |
+| `FIELD-ADD` | `( a b dst -- )` | 5 | Modular addition |
+| `FIELD-SUB` | `( a b dst -- )` | 5 | Modular subtraction |
+| `FIELD-MUL` | `( a b dst -- )` | 10 | Montgomery multiplication |
+| `FIELD-SQR` | `( a dst -- )` | 8 | Montgomery squaring |
+| `FIELD-INV` | `( a dst -- )` | 200 | Modular inverse (Fermat) |
+| `FIELD-POW` | `( base exp dst -- )` | 500 | Modular exponentiation |
+| `FIELD-NEG` | `( a dst -- )` | 5 | Additive inverse |
+| `FIELD-EQ?` | `( a b -- flag )` | 3 | Constant-time equality |
+| `FIELD-ZERO?` | `( a -- flag )` | 2 | Zero test |
+| `FIELD-COPY` | `( src dst -- )` | 2 | Copy 256-bit value |
+| `FIELD-ZERO` | `( dst -- )` | 2 | Set to zero |
+| `FIELD-ONE` | `( dst -- )` | 2 | Set to multiplicative identity |
+| `FIELD-BUF` | `( "name" -- )` | 3 | Allocate 32-byte arena buffer |
+
+**17 words.** This is where Leviathan contracts become genuinely
+different from contracts on other chains.  MMIO-hardware-accelerated
+256-bit modular arithmetic over any prime — Curve25519 for Ed25519
+domain math, secp256k1 for Bitcoin/Ethereum compatibility,
+P-256 for TLS/WebAuthn interop, or a custom prime for
+application-specific ZK constructions.
+
+On EVM, modular exponentiation (`MODEXP`) is a single precompile
+that Solidity calls through a low-level CALL interface.  On
+Leviathan, the full field is a vocabulary — add, subtract, multiply,
+square, invert, exponentiate — all as ordinary words that compose
+naturally.  A contract can implement a full elliptic curve verifier,
+a BLS signature checker, or a custom ZK relation without leaving
+Forth.
+
+**This is the vocabulary that justifies the "any deterministic word
+is a smart contract operation" claim better than anything else.** On
+Ethereum, exposing secp256k1 verification required EIP-196/197,
+years of specification, and a hard fork.  Here the arithmetic already
+exists as Forth words with known gas costs.
+
+#### Baby Bear field (STARK-native arithmetic)
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `BB+` | `( a b -- r )` | 1 | Add mod 2013265921 |
+| `BB-` | `( a b -- r )` | 1 | Subtract mod p |
+| `BB*` | `( a b -- r )` | 1 | Multiply mod p |
+| `BB-INV` | `( a -- r )` | 50 | Inverse mod p |
+| `BB-POW` | `( base exp -- r )` | 100 | Power mod p |
+
+**5 words.** Baby Bear (p = 2^31 − 2^27 + 1) is the field the STARK
+prover and verifier operate in.  Exposing it to contracts means a
+contract can construct and verify custom STARK proofs over
+application-specific computations — "prove that this batch of
+private inputs satisfies constraint system X without revealing
+them."  This is the on-ramp to arbitrary zero-knowledge logic within
+the contract layer.
+
+#### String and data inspection
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `STR-EQ` | `( a1 l1 a2 l2 -- flag )` | 2 | Case-sensitive equality |
+| `STRI-EQ` | `( a1 l1 a2 l2 -- flag )` | 3 | Case-insensitive |
+| `STR-STARTS?` | `( str slen prefix plen -- flag )` | 2 | Prefix test |
+| `STR-ENDS?` | `( str slen suffix slen -- flag )` | 2 | Suffix test |
+| `STR-INDEX` | `( str slen sub sublen -- idx \| -1 )` | 3 | Substring search |
+| `STR-CONTAINS` | `( str slen sub sublen -- flag )` | 3 | Containment test |
+| `STR-TOLOWER` | `( str len dst -- )` | 2+len/8 | ASCII lowercase |
+| `STR-TOUPPER` | `( str len dst -- )` | 2+len/8 | ASCII uppercase |
+| `STR-TRIM` | `( str len -- str' len' )` | 2 | Strip whitespace |
+| `NUM>STR` | `( n buf -- addr len )` | 3 | Integer to decimal string |
+| `STR>NUM` | `( addr len -- n flag )` | 3 | Parse decimal integer |
+
+**11 words.** Contracts that handle human-readable names, parse
+configuration strings, or format return messages need basic string
+operations.  `NUM>STR` and `STR>NUM` bridge between numeric values
+and their text representation.  All are deterministic and
+arena-bounded.
+
+#### Date and time (deterministic subset)
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `DT-EPOCH>YMD` | `( epoch -- y m d )` | 5 | Unix epoch to date parts |
+| `DT-EPOCH>HMS` | `( epoch -- h m s )` | 5 | Unix epoch to time parts |
+| `DT-YMD>EPOCH` | `( y m d -- epoch )` | 5 | Date parts to epoch |
+| `DT-LEAP?` | `( year -- flag )` | 1 | Leap year test |
+| `DT-ISO8601` | `( epoch buf -- addr len )` | 8 | Format as ISO 8601 string |
+| `DT-PARSE-ISO` | `( addr len -- epoch flag )` | 8 | Parse ISO 8601 |
+
+**6 words.** `DT-NOW` is explicitly excluded (non-deterministic).
+Contracts get the block timestamp from `VM-BLOCK-TIME` and then use
+these words to decompose it into calendar components.  Vesting
+contracts ("unlock 10% per month"), expiry logic ("valid until
+2027-01-01"), and time-locked governance all need date arithmetic.
+
+#### Hex formatting
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `FMT->HEX` | `( src len dst -- n )` | 3+len/4 | Binary to hex string |
+| `FMT-HEX>` | `( src len dst -- n )` | 3+len/4 | Hex string to binary |
+
+**2 words.** Converting between raw bytes and hex representation
+is mundane but constantly needed — for address display in return
+data, for parsing hex-encoded inputs, for log formatting.
+
+#### Base64
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `VM-B64-ENCODE` | `( src slen dst dmax -- written )` | 5+slen/8 | Standard Base64 |
+| `VM-B64-DECODE` | `( src slen dst dmax -- written )` | 5+slen/8 | Standard Base64 |
+| `VM-B64-ENCODE-URL` | `( src slen dst dmax -- written )` | 5+slen/8 | URL-safe Base64 |
+| `VM-B64-DECODE-URL` | `( src slen dst dmax -- written )` | 5+slen/8 | URL-safe Base64 |
+
+**4 words.** Contracts that interact with JWT tokens, embed data in
+URIs, or decode externally-produced attestations need Base64.  The
+URL-safe variants are required for JWK and JWT compatibility.
+
+#### UTF-8
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `UTF8-VALID?` | `( addr len -- flag )` | 2+len/8 | Validate UTF-8 encoding |
+| `UTF8-LEN` | `( addr len -- n )` | 2+len/8 | Codepoint count |
+
+**2 words.** `UTF8-VALID?` is the gatekeeper for any contract that
+accepts human-readable text.  Without it, a contract storing names,
+descriptions, or metadata has no way to reject malformed input.
+
+#### JSON (read-only subset)
+
+| Word | Stack effect | Gas | Notes |
+|------|-------------|----:|-------|
+| `JSON-TYPE?` | `( addr len -- type )` | 5 | Identify value type |
+| `JSON-KEY` | `( obj len key klen -- val vlen )` | 10 | Object field access |
+| `JSON-PATH` | `( obj len path plen -- val vlen )` | 15 | Deep path access |
+| `JSON-NTH` | `( arr len n -- val vlen )` | 10 | Array element access |
+| `JSON-COUNT` | `( arr len -- n )` | 8 | Array length |
+| `JSON-GET-STRING` | `( val len -- str slen )` | 5 | Extract string value |
+| `JSON-GET-NUMBER` | `( val len -- n flag )` | 5 | Extract integer value |
+| `JSON-GET-BOOL` | `( val len -- flag )` | 3 | Extract boolean |
+
+**8 words.** The JSON parser (873 lines, fully deterministic) gives
+contracts the ability to decode oracle payloads, RPC responses, and
+external API data submitted on-chain.  This is the read-only subset —
+the builder words are omitted because contracts return data via CBOR,
+not JSON.  But for *consuming* external data, JSON is the lingua
+franca of web APIs, and a contract that can parse it natively
+doesn't need an off-chain intermediary to translate.
+
+---
+
+**Extended total: 100 words.**
+
+**Combined total: 229 words** — enough to be a real language for
+real applications, small enough that the entire whitelist fits in
+a single printed page and can be audited by reading it.
+
+---
+
+### A.3 — Possible Future Additions (not yet recommended)
+
+These are words that exist in the codebase and are deterministic, but
+whose inclusion in the contract vocabulary should be a deliberate
+governance decision rather than a default.  Each comes with tradeoffs
+worth discussing.
+
+| Word / group | Source | Gas (est.) | Rationale for caution |
+|-------------|--------|---:|----------------------|
+| `AES-GCM-ENCRYPT` / `DECRYPT` | aes.f | 100 | Symmetric encryption on-chain is an anti-pattern (where do you store the key?), but valid for commit-reveal schemes and on-chain sealed-bid auctions.  The existence of `AES-GCM-TAG-EQ?` for tag verification is the useful part. |
+| `STARK-VERIFY` | stark.f | 5000 | Enormously powerful — a contract that verifies a STARK proof can delegate arbitrary computation off-chain and accept only proven results.  But the gas cost is high and the trace format coupling is non-trivial.  Worth including for chains that want on-chain proof verification; overkill for simple token chains. |
+| `AIR-EVAL-TRANS` / `AIR-CHECK-BOUND` | stark-air.f | 200 | Useful only in conjunction with `STARK-VERIFY` — lets a contract define custom AIR constraints for application-specific proofs. |
+| `NTT-POLY-MUL` | ntt.f | 300 | Polynomial multiplication in the Baby Bear field.  Relevant for STARK proof construction or advanced ZK protocols.  Niche. |
+| `FP32-*` / `FP16-*` | fp32.f, fp16.f | 1–5 | IEEE 754 floats are deterministic *on this hardware* (Megapad-64 has no speculative execution and uses MMIO FP units with defined rounding), but floating-point has a reputation risk: developers from other chains will assume non-determinism.  If included, the documentation must be explicit about why it's safe here. |
+| `SORT-*` | sort.f | 5+n*log(n) | In-place sorting within the arena.  Useful for contracts that need to canonicalize data.  The FP16-based comparison function is deterministic but unusual. |
+| `STATS-MEAN` / `STATS-VARIANCE` / `STATS-MEDIAN` | stats.f | 10–50 | Online accumulators for oracle aggregation.  If a contract ingests multiple price feeds and needs to compute the median, these are ready.  Niche but powerful for DeFi oracle designs. |
+| `YAML-*` / `TOML-*` | yaml.f, toml.f | varies | Full deterministic parsers, but large (1716 and 1011 lines respectively).  Hard to justify on-chain when CBOR and JSON cover structured data.  Useful only if the chain serves a specific config-management use case. |
+| `TABLE-*` | table.f | 3–10 | In-arena key-value hash table (separate from state storage).  Useful for contracts that need a transient dictionary during execution. |
+| `FIELD-USE-CUSTOM` + `FIELD-LOAD-PRIME` | field.f | 10 | Already in the extended set, but *custom* primes open the door to exotic curves.  A consortium might restrict to the three built-in primes and require governance approval for custom ones. |
+| ECC point operations | (not yet factored out of ed25519.f) | 200–1000 | Scalar multiply, point add, point double over Edwards or Weierstrass curves.  Currently internal to ed25519.f.  If factored into a public API (`EC-MUL`, `EC-ADD`, `EC-ON-CURVE?`), contracts could implement arbitrary signature schemes, threshold signatures, and ECDH key agreement.  This is the highest-leverage future addition. |
+
+### A.4 — What This Means in Practice
+
+To install the full Core + Extended vocabulary in `contract-vm.f`:
+
+```forth
+\ --- Whitelist table (222 entries) ---
+CREATE _VM-WHITELIST
+  \ Each entry: counted name string + gas cost byte
+  \ Stack (16 words)
+  3 C, CHAR D C, CHAR U C, CHAR P C,  1 C,
+  4 C, CHAR D C, CHAR R C, CHAR O C, CHAR P C,  1 C,
+  \ ... (mechanically generated from the tables above)
+222 CONSTANT _VM-WHITELIST-COUNT
+```
+
+That is the entire sandbox definition.  When `_IMG-RESOLVE-IMPORTS`
+encounters a contract's import manifest, it looks each imported name
+up in this table.  Present → resolve to the host XT + gas cost.
+Absent → reject the contract at deploy time.  No ambiguity, no
+runtime penalty, no backdoor.
+
+Adding a new word later — say, `VM-KECCAK256` for Ethereum
+compatibility — is:
+
+```forth
+\ Append to _VM-WHITELIST:
+  12 C, CHAR V C, CHAR M C, CHAR - C, ... CHAR 6 C,  50 C,
+\ Bump _VM-WHITELIST-COUNT to 223.
+```
+
+Two lines.  One governance vote.  One coordinated validator upgrade.
+The word itself (`KECCAK256-HASH`) already exists in the codebase.
+
+The point is not that adding a word is *easy* — any chain can add an
+opcode.  The point is that the word already exists as first-class
+Forth before it's ever considered for the whitelist, it already has
+tests, it already has deterministic behavior, and its gas cost can be
+measured empirically on the same hardware that will execute it.
+There is no "implement it in C++ for geth, then again in Rust for
+reth, then again in Go for Nethermind, then specify it in the Yellow
+Paper, then wait for Solidity to emit it" pipeline.  The word is the
+implementation, the whitelist entry is the policy decision, and
+nothing else needs to happen.
+
+---
+
+### A.5 — Reference Token Contract
+
+A complete fungible token written against the Core + Extended
+vocabulary.  This contract is the Leviathan equivalent of ERC-20:
+it supports named tokens with a fixed supply, balance tracking,
+transfers, approvals, delegated transfers (transferFrom), and
+event logging.  Every feature a modern ERC-20 has, this has.
+
+The contract uses only whitelisted words.  It compiles at deploy
+time into ITC and is stored on-chain.  Subsequent calls load the
+compiled image and dispatch to the requested entry point — no
+parsing, no recompilation.
+
+```forth
+\ ================================================================
+\ LEV-20: Fungible Token Standard
+\ ================================================================
+\ Leviathan equivalent of ERC-20.  Deploys as a single contract
+\ with named entry points.  Storage layout uses VM-ST-GET /
+\ VM-ST-PUT with composite keys (hashed via VM-SHA3).
+\
+\ Storage key scheme:
+\   balance(addr)         = SHA3("bal" || addr)
+\   allowance(owner,spdr) = SHA3("alw" || owner || spdr)
+\   total-supply          = key 0
+\   name                  = key 1
+\   symbol                = key 2
+\   decimals              = key 3
+\   owner (deployer)      = key 4
+\
+\ Gas estimate for a transfer: ~180 gas
+\   2 × VM-ST-GET (20) + 2 × VM-ST-PUT (40) + VM-SHA3 (50)
+\   + VM-CALLER (1) + ~50 stack/arithmetic/logic ops (50)
+\   + VM-LOG (10) ≈ 180
+
+\ ----------------------------------------------------------------
+\ Arena layout — scratch buffers for key hashing
+\ ----------------------------------------------------------------
+CREATE _key-buf  72 ALLOT    \ scratch: 3-byte prefix + 32 + 32 + pad
+CREATE _log-buf  96 ALLOT    \ scratch: event data encoding
+CREATE _ret-buf  64 ALLOT    \ scratch: return data
+
+\ ----------------------------------------------------------------
+\ Internal: composite storage key construction
+\ ----------------------------------------------------------------
+
+\ Balance key: SHA3("bal" || addr)
+: _bal-key  ( addr -- key-addr )
+    _key-buf 3 + !                     \ store addr at offset 3
+    66 _key-buf C!  97 _key-buf 1+ C!  108 _key-buf 2 + C!  \ "bal"
+    _key-buf 11 _key-buf 40 + VM-SHA3  \ hash into buf+40
+    _key-buf 40 + ;                    \ return pointer to 32-byte key
+
+\ Allowance key: SHA3("alw" || owner || spender)
+: _alw-key  ( owner spender -- key-addr )
+    _key-buf 11 + !                    \ spender at offset 11
+    _key-buf 3 + !                     \ owner at offset 3
+    97 _key-buf C!  108 _key-buf 1+ C!  119 _key-buf 2 + C!  \ "alw"
+    _key-buf 19 _key-buf 40 + VM-SHA3
+    _key-buf 40 + ;
+
+\ ----------------------------------------------------------------
+\ Internal: checked arithmetic
+\ ----------------------------------------------------------------
+: _safe-add  ( a b -- a+b )
+    2DUP + DUP ROT < IF               \ overflow: sum < either operand
+        VM-CALLER 0                    \ revert data: caller, 0
+        S" overflow" VM-REVERT
+    THEN NIP ;
+
+: _safe-sub  ( a b -- a-b )
+    2DUP < IF
+        S" underflow" VM-REVERT
+    THEN - ;
+
+\ ----------------------------------------------------------------
+\ Internal: event emission
+\ ----------------------------------------------------------------
+
+\ Transfer event: topic = SHA3("Transfer"), data = from|to|amount
+: _emit-transfer  ( from to amount -- )
+    _log-buf 16 + !                    \ amount at offset 16
+    _log-buf 8 + !                     \ to at offset 8
+    _log-buf !                         \ from at offset 0
+    _log-buf 24                        \ data addr + len
+    S" Transfer" DROP 8 _key-buf VM-SHA3  \ topic = hash of event name
+    _key-buf VM-LOG ;
+
+\ Approval event: topic = SHA3("Approval"), data = owner|spender|amount
+: _emit-approval  ( owner spender amount -- )
+    _log-buf 16 + !
+    _log-buf 8 + !
+    _log-buf !
+    _log-buf 24
+    S" Approval" DROP 8 _key-buf VM-SHA3
+    _key-buf VM-LOG ;
+
+\ ----------------------------------------------------------------
+\ Query entry points (read-only, callable via VM-STATICCALL)
+\ ----------------------------------------------------------------
+
+\ name ( -- ) → returns token name string
+: name
+    1 VM-ST-GET DROP                   \ key 1 = name (packed addr)
+    DUP 0= IF DROP S" " THEN          \ default empty
+    VM-RETURN ;
+
+\ symbol ( -- ) → returns token symbol string
+: symbol
+    2 VM-ST-GET DROP
+    DUP 0= IF DROP S" " THEN
+    VM-RETURN ;
+
+\ decimals ( -- ) → returns decimals count in return buffer
+: decimals
+    3 VM-ST-GET DROP                   \ key 3 = decimals
+    _ret-buf !                         \ store as cell
+    _ret-buf 8 VM-RETURN ;
+
+\ totalSupply ( -- ) → returns total supply
+: totalSupply
+    0 VM-ST-GET DROP                   \ key 0 = total supply
+    _ret-buf !
+    _ret-buf 8 VM-RETURN ;
+
+\ balanceOf ( addr -- ) → addr is passed in arena as call argument
+\   Call convention: first cell of call data = address to query
+: balanceOf
+    @                                  \ read addr from call data
+    _bal-key VM-ST-GET                 \ look up balance
+    0= IF DROP 0 THEN                 \ default 0 if not found
+    _ret-buf !
+    _ret-buf 8 VM-RETURN ;
+
+\ allowance ( owner spender -- ) → two cells of call data
+: allowance
+    DUP @                              \ owner
+    SWAP CELL+ @                       \ spender
+    _alw-key VM-ST-GET
+    0= IF DROP 0 THEN
+    _ret-buf !
+    _ret-buf 8 VM-RETURN ;
+
+\ ----------------------------------------------------------------
+\ State-mutating entry points
+\ ----------------------------------------------------------------
+
+\ initialize ( name-addr name-len symbol-addr symbol-len
+\              decimals initial-supply -- )
+\   Called once by deployer.  Sets metadata + mints total supply
+\   to caller's balance.
+: initialize
+    \ Only callable once — check if already initialized
+    4 VM-ST-HAS? IF
+        S" already initialized" VM-REVERT
+    THEN
+
+    \ Store deployer as owner
+    VM-CALLER 4 VM-ST-PUT
+
+    \ Read arguments from call data in arena:
+    \   [0] name-ptr  [8] name-len  [16] symbol-ptr  [24] symbol-len
+    \   [32] decimals  [40] initial-supply
+    \ For simplicity, name and symbol are stored as packed cells.
+    \ A production version would use CBOR for structured metadata.
+
+    \ Store decimals
+    32 + @ 3 VM-ST-PUT
+
+    \ Store initial supply as total supply
+    40 + @ DUP 0 VM-ST-PUT
+
+    \ Mint entire supply to caller
+    DUP VM-CALLER _bal-key VM-ST-PUT
+
+    \ Emit Transfer from address 0 (mint)
+    0 VM-CALLER ROT _emit-transfer ;
+
+\ transfer ( to amount -- )
+\   Call data: [0] to-address  [8] amount
+: transfer
+    DUP CELL+ @                        \ amount
+    SWAP @                             \ to
+
+    \ Checks
+    DUP 0= IF S" zero address" VM-REVERT THEN
+    OVER 0= IF S" zero amount" VM-REVERT THEN
+
+    \ Load sender balance
+    VM-CALLER _bal-key                 \ sender key
+    DUP VM-ST-GET                      \ ( to amount key bal flag )
+    0= IF DROP 0 THEN                 \ default 0
+
+    \ Subtract amount from sender
+    2 PICK _safe-sub                   \ ( to amount key new-bal )
+    SWAP VM-ST-PUT                     \ store new sender balance
+
+    \ Add amount to recipient
+    2DUP DROP _bal-key                 \ recipient key
+    DUP VM-ST-GET
+    0= IF DROP 0 THEN                 \ default 0
+    ROT _safe-add                      \ new recipient balance
+    SWAP VM-ST-PUT                     \ store
+
+    \ Emit event
+    SWAP VM-CALLER -ROT _emit-transfer
+
+    \ Return TRUE
+    TRUE _ret-buf !  _ret-buf 8 VM-RETURN ;
+
+\ approve ( spender amount -- )
+\   Call data: [0] spender-address  [8] amount
+: approve
+    DUP CELL+ @                        \ amount
+    SWAP @                             \ spender
+
+    DUP 0= IF S" zero address" VM-REVERT THEN
+
+    \ Store allowance
+    VM-CALLER OVER _alw-key            \ key = alw(caller, spender)
+    2 PICK SWAP VM-ST-PUT              \ store amount at key
+
+    \ Emit Approval event
+    VM-CALLER -ROT _emit-approval
+
+    TRUE _ret-buf !  _ret-buf 8 VM-RETURN ;
+
+\ transferFrom ( from to amount -- )
+\   Call data: [0] from  [8] to  [16] amount
+: transferFrom
+    DUP 16 + @                         \ amount
+    OVER 8 + @                         \ to
+    ROT @                              \ from
+
+    \ Checks
+    OVER 0= IF S" zero address" VM-REVERT THEN
+    DUP 0= IF S" zero amount" VM-REVERT THEN
+
+    \ Check and decrement allowance
+    2 PICK VM-CALLER _alw-key          \ alw(from, caller)
+    DUP VM-ST-GET
+    0= IF DROP 0 THEN                 \ default 0
+    3 PICK _safe-sub                   \ new allowance (reverts if insufficient)
+    SWAP VM-ST-PUT                     \ store decremented allowance
+
+    \ Debit sender (from)
+    2 PICK _bal-key
+    DUP VM-ST-GET
+    0= IF DROP 0 THEN
+    3 PICK _safe-sub
+    SWAP VM-ST-PUT
+
+    \ Credit recipient (to)
+    OVER _bal-key
+    DUP VM-ST-GET
+    0= IF DROP 0 THEN
+    3 PICK _safe-add
+    SWAP VM-ST-PUT
+
+    \ Emit Transfer event
+    ROT ROT OVER _emit-transfer
+    DROP
+
+    TRUE _ret-buf !  _ret-buf 8 VM-RETURN ;
+
+\ increaseAllowance ( spender addedValue -- )
+\   Call data: [0] spender  [8] addedValue
+: increaseAllowance
+    DUP CELL+ @                        \ addedValue
+    SWAP @                             \ spender
+
+    VM-CALLER OVER _alw-key            \ alw(caller, spender)
+    DUP VM-ST-GET
+    0= IF DROP 0 THEN
+    ROT _safe-add
+    SWAP VM-ST-PUT
+
+    VM-CALLER -ROT DUP >R
+    VM-CALLER R> _alw-key VM-ST-GET DROP
+    _emit-approval
+
+    TRUE _ret-buf !  _ret-buf 8 VM-RETURN ;
+
+\ decreaseAllowance ( spender subtractedValue -- )
+\   Call data: [0] spender  [8] subtractedValue
+: decreaseAllowance
+    DUP CELL+ @                        \ subtractedValue
+    SWAP @                             \ spender
+
+    VM-CALLER OVER _alw-key
+    DUP VM-ST-GET
+    0= IF DROP 0 THEN
+    ROT _safe-sub                      \ reverts if underflow
+    SWAP VM-ST-PUT
+
+    VM-CALLER -ROT DUP >R
+    VM-CALLER R> _alw-key VM-ST-GET DROP
+    _emit-approval
+
+    TRUE _ret-buf !  _ret-buf 8 VM-RETURN ;
+```
+
+#### Feature parity with ERC-20
+
+| ERC-20 function | LEV-20 word | Notes |
+|----------------|------------|-------|
+| `name()` | `name` | Returns token name |
+| `symbol()` | `symbol` | Returns token symbol |
+| `decimals()` | `decimals` | Returns decimal places |
+| `totalSupply()` | `totalSupply` | Returns total supply |
+| `balanceOf(addr)` | `balanceOf` | Balance query |
+| `allowance(owner,spender)` | `allowance` | Approval query |
+| `transfer(to,amount)` | `transfer` | Direct transfer with checked arithmetic |
+| `approve(spender,amount)` | `approve` | Set allowance |
+| `transferFrom(from,to,amount)` | `transferFrom` | Delegated transfer with allowance decrement |
+| `increaseAllowance(spender,value)` | `increaseAllowance` | Safe allowance increase (not in ERC-20 standard but universal in practice — OpenZeppelin, Solmate, etc.) |
+| `decreaseAllowance(spender,value)` | `decreaseAllowance` | Safe allowance decrease |
+| `Transfer` event | `_emit-transfer` | Emitted on transfer, transferFrom, and mint |
+| `Approval` event | `_emit-approval` | Emitted on approve, increaseAllowance, decreaseAllowance |
+
+#### What this contract uses from the whitelist
+
+| Category | Words used |
+|----------|-----------|
+| Stack | `DUP` `DROP` `SWAP` `OVER` `ROT` `NIP` `2DUP` `2PICK` `3PICK` `>R` `R>` |
+| Arithmetic | `+` `-` `<` `=` `0=` |
+| Logic | `IF` `THEN` `THEN` |
+| Memory | `@` `!` `C!` `CELL+` `ALLOT` |
+| Definitions | `CREATE` `:` `;` `CONSTANT` `VARIABLE` |
+| State | `VM-ST-GET` `VM-ST-PUT` `VM-ST-HAS?` `VM-CALLER` |
+| Crypto | `VM-SHA3` |
+| Output | `VM-RETURN` `VM-REVERT` `VM-LOG` |
+| Strings | `S"` |
+
+**29 words** out of the 229-word whitelist.  The contract doesn't
+touch inter-contract calling, field arithmetic, CBOR, signatures,
+Merkle proofs, or any extended vocabulary.  It's a pure state-machine
+operating on composite storage keys with checked arithmetic.
+
+#### Gas costs for typical operations
+
+| Operation | Estimated gas | Breakdown |
+|-----------|-------------:|-----------|
+| `balanceOf` | ~65 | SHA3(50) + ST-GET(10) + stack(5) |
+| `transfer` | ~185 | 2×SHA3(100) + 2×ST-GET(20) + 2×ST-PUT(40) + LOG(10) + stack(15) |
+| `approve` | ~95 | SHA3(50) + ST-PUT(20) + LOG(10) + stack(15) |
+| `transferFrom` | ~280 | 3×SHA3(150) + 3×ST-GET(30) + 3×ST-PUT(60) + LOG(10) + stack(30) |
+| `totalSupply` | ~15 | ST-GET(10) + stack(5) |
+
+A `transfer` costs ~185 gas out of a 1,000,000 gas budget — **0.019%
+of the transaction limit.**  A single transaction could execute
+~5,400 independent transfers before hitting the gas ceiling.  For
+comparison, an ERC-20 `transfer` costs ~65,000 gas on Ethereum out
+of a 30M block limit — 0.22% of the block budget.  The Leviathan
+token is proportionally cheaper by an order of magnitude, because
+the Forth VM doesn't pay for 256-bit ALU overhead, ABI
+encoding/decoding, SSTORE cold-access penalties, or EVM memory
+expansion costs.
+
+#### Deployment
+
+The contract source (everything between the ```` markers above) is
+submitted as the `TX-DATA` field of a deploy transaction.  The VM
+compiles it into ITC at block processing time, stores the compiled
+image in the state tree, and the contract is live.  No external
+compiler, no bytecode artifact, no ABI JSON file.  The source *is*
+the contract.
+
+To call `transfer`, a subsequent transaction sets:
+- `TX-DATA[0..31]`: contract address
+- `TX-DATA[32..39]`: entry point name length (8) + "transfer"
+- `TX-DATA[40..47]`: recipient address
+- `TX-DATA[48..55]`: amount
+
+The VM looks up the contract, finds the `transfer` entry point
+in its export table, points the arena at the call data, and
+executes.  Total overhead before the first Forth word runs:
+~20 cycles (warm call with code cache + arena pool).

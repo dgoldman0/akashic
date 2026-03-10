@@ -97,14 +97,14 @@ Legend:
 
 | # | ID | Severity | Change | Lines | Summary | Status |
 |---|-----|----------|--------|-------|---------|--------|
-| ~~23~~ | ~~P18~~ | ~~**CRIT**~~ | ~~STARK stub fail-closed~~ | ~~L390~~ | ~~`_CON-STARK-CHECK-STUB`: `DROP -1` → `DROP 0` (fail-closed).~~ | ✅ |
-| ~~24~~ | ~~P19~~ | ~~**CRIT**~~ | ~~PoS leader div-by-zero~~ | ~~L651~~ | ~~Guard `_CON-VAL-COUNT @ 0=` before `MOD`. Returns `_CON-SEED-BUF` sentinel.~~ | ✅ |
-| ~~25~~ | ~~P20~~ | ~~**CRIT**~~ | ~~PoS leader underflow~~ | ~~L651~~ | ~~Combined with P19 guard.~~ | ✅ |
-| ~~26~~ | ~~A05~~ | ~~**CRIT**~~ | ~~Zeroize signing keys~~ | ~~L118~~ | ~~`CON-CLEAR-KEYS`: zeros priv(64)+pub(32), clears flag. Guard-wrapped.~~ | ✅ |
-| ~~27~~ | ~~B04~~ | ~~**HIGH**~~ | ~~Constants → VARIABLEs~~ | ~~L458-461~~ | ~~`CON-POS-EPOCH-LEN`, `MIN-STAKE`, `LOCK-PERIOD` → VARIABLEs (defaults 32/100/64). All refs updated to use `@`.~~ | ✅ |
-| ~~28~~ | ~~C08~~ | ~~**MED**~~ | ~~Cell-sized SA indices~~ | ~~L756,790,825~~ | ~~`_CON-SA-IDX` → `256 CELLS ALLOT`; `C!`/`C@` → `!`/`@` with CELLS offset.~~ | ✅ |
-| ~~29~~ | ~~C12~~ | ~~**MED**~~ | ~~Portable seed extraction~~ | ~~L627-630~~ | ~~New `_CON-SEED>U64` reads 8 bytes BE. Replaces raw `@` in leader+elect.~~ | ✅ |
-| ~~30~~ | ~~P21~~ | ~~**MED**~~ | ~~PoW mine iteration cap~~ | ~~L197,207~~ | ~~`_CON-POW-MAX-ITER` VARIABLE (1M default). `CON-POW-MINE ( blk -- flag )`. `CON-SEAL` drops flag.~~ | ✅ |
+| ~~23~~ | ~~P18~~ | ~~**CRIT**~~ | ~~STARK stub fail-closed~~ | L390 | `_CON-STARK-CHECK-STUB`: `DROP -1` → `DROP 0` (fail-closed). | ✅ |
+| ~~24~~ | ~~P19~~ | ~~**CRIT**~~ | ~~PoS leader div-by-zero~~ | L651 | Guard `_CON-VAL-COUNT @ 0=` before `MOD`. Returns `_CON-SEED-BUF` sentinel. | ✅ |
+| ~~25~~ | ~~P20~~ | ~~**CRIT**~~ | ~~PoS leader underflow~~ | L651 | Combined with P19 guard. | ✅ |
+| ~~26~~ | ~~A05~~ | ~~**CRIT**~~ | ~~Zeroize signing keys~~ | L118 | `CON-CLEAR-KEYS`: zeros priv(64)+pub(32), clears flag. Guard-wrapped. | ✅ |
+| ~~27~~ | ~~B04~~ | ~~**HIGH**~~ | ~~Constants → VARIABLEs~~ | L458-461 | `CON-POS-EPOCH-LEN`, `MIN-STAKE`, `LOCK-PERIOD` → VARIABLEs (defaults 32/100/64). All refs updated to use `@`. | ✅ |
+| ~~28~~ | ~~C08~~ | ~~**MED**~~ | ~~Cell-sized SA indices~~ | L756,790,825 | `_CON-SA-IDX` → `256 CELLS ALLOT`; `C!`/`C@` → `!`/`@` with CELLS offset. | ✅ |
+| ~~29~~ | ~~C12~~ | ~~**MED**~~ | ~~Portable seed extraction~~ | L627-630 | New `_CON-SEED>U64` reads 8 bytes BE. Replaces raw `@` in leader+elect. | ✅ |
+| ~~30~~ | ~~P21~~ | ~~**MED**~~ | ~~PoW mine iteration cap~~ | L197,207 | `_CON-POW-MAX-ITER` VARIABLE (1M default). `CON-POW-MINE ( blk -- flag )`. `CON-SEAL` drops flag. | ✅ |
 
 **Extra fixes found during testing:**
 - Pre-existing bug: `CON-POS-EPOCH` insertion sort `0 1 ?DO` loops ~2^64 when val_count=0. Fixed with `_CON-VAL-COUNT @ 1 > IF ... THEN` guard.
@@ -126,14 +126,18 @@ Legend:
 - All snapshot allocations: `CREATE _SNAP 18440 ALLOT` → `ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP` (ST-SNAPSHOT-SIZE grew to ~4.7 MB after batch 3's `_ST-MAX-PAGES` 16→256; dictionary space overflowed).
 - Block struct allocations: hardcoded `2304` → `BLK-STRUCT-SIZE` for consistency.
 
-### File 8: `store/genesis.f`
+### ~~File 8: `store/genesis.f`~~ ✅ DONE (19/19 tests)
 
 | # | ID | Severity | Change | Lines | Summary |
-|---|-----|----------|--------|-------|---------|
-| 37 | P25 | **HIGH** | Stack discipline in auth key parsing | ~L173 | Fix `2DROP` on `len <> 32` path — should be `DROP` (only `addr` left after `<>` consumes `len`). Stack corruption on any malformed genesis. |
-| 38 | P23 | **MED** | CBOR key validation | L137–148 | Add `_GEN-EXPECT-KEY` — validate key strings (`"chain_id"`, `"con_mode"`, etc.) instead of positional parsing. |
-| 39 | P24 | **MED** | `GEN-HASH` include state root | L197–203 | After `GEN-LOAD` populates state, copy `ST-ROOT` into block before hashing. Two chains with different balances must produce different genesis hashes. |
-| 40 | D09 | **LOW** | `_GEN-BUF-SIZE = 4096` too small | const | Raise to 16384. Large authority lists or many pre-funded accounts overflow 4 KB. |
+|---|-----|----------|--------|-------|--------|
+| ~~37~~ | ~~P25~~ | ~~**HIGH**~~ | ~~Stack discipline in auth key parsing~~ | ~L173 | ✅ `2DROP` → `DROP` on bad key length (5 instances). Added `UNLOOP` before all `EXIT` inside `?DO...LOOP`. |
+| ~~38~~ | ~~P23~~ | ~~**MED**~~ | ~~CBOR key validation~~ | L137–148 | ✅ Added `_GEN-STR=` + `_GEN-EXPECT-KEY` — validates each key name; rejects misordered/misnamed CBOR. |
+| ~~39~~ | ~~P24~~ | ~~**MED**~~ | ~~`GEN-HASH` include state root~~ | L197–203 | ✅ Calls `ST-ROOT`, copies into block before `BLK-HASH`. Different balances → different genesis hash. |
+| ~~40~~ | ~~D09~~ | ~~**LOW**~~ | ~~`_GEN-BUF-SIZE = 4096` too small~~ | const | ✅ Raised to 16384. |
+
+**Extra fixes:**
+- `epoch_len` now applied from genesis via `CON-POS-EPOCH-LEN !` (was validate-only, comparing address vs value).
+- `min_stake` now applied from genesis via `CON-POS-MIN-STAKE !` (was `DROP`'d with TODO comment).
 
 ---
 
@@ -272,7 +276,7 @@ a per-file fix.
 | **2** | tx.f (struct change: chain_id + fee + TTL + hybrid fix) | 1 day | Layout break — ripples into every downstream module |
 | **3** | smt.f, state.f | 1–2 days | SMT capacity, error prop, staking. All state tests pass. |
 | **4** | consensus.f | 1 day | STARK stub, PoS guards, constants→variables, key zeroize |
-| ~~**5**~~ | ~~block.f~~, genesis.f | ~~1 day~~ | block.f ✅ (65/65); genesis.f pending |
+| ~~**5**~~ | ~~block.f, genesis.f~~ | ~~1 day~~ | ✅ block.f (65/65); genesis.f (19/19) |
 | **6** | mempool.f | 0.5 day | Sig verify on admit, capacity raise |
 | **7** | gossip.f, sync.f, ws.f | 1–2 days | Bounds, capacity, msg validation, full-block sync |
 | **8** | rpc.f, server.f | 1 day | Proof buffer, broadcast, rate limit |
