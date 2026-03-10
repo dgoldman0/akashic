@@ -243,17 +243,27 @@ Legend:
 
 ---
 
-## Cross-cutting concern: `C11 — Shared static buffers`
+## ~~Cross-cutting concern: `C11 — Shared static buffers`~~
 
-Not file-local. Affects `_GSP-RBUF` (gossip.f), `_BLK-CBUF` (block.f),
+~~Not file-local. Affects `_GSP-RBUF` (gossip.f), `_BLK-CBUF` (block.f),
 `_RPC-RAW` / `_RPC-PROOF` (rpc.f), `_PST-ENC-SZ` (persist.f).  A call
 chain crossing modules (RPC → state → SMT → block) can re-enter a buffer
-the outer frame is still using.  Guards are per-word, not per-buffer.
+the outer frame is still using.  Guards are per-word, not per-buffer.~~
 
-**Resolution:** Audit all cross-module call chains after individual file
-fixes land.  Add per-buffer guards or allocate per-call-frame copies for
-the hot paths (RPC → proof is the main one).  This is a sweep task, not
-a per-file fix.
+**Resolution:** ✅ Audit complete — no remaining re-entrancy risk.
+Per-module `WITH-GUARD` wrappers (added in P1–P9 fixes) serialize all
+public entry points.  Trace of every cross-module call chain confirms no
+buffer is live across a call that could re-enter it:
+- `_GSP-RBUF`: consumed before callback dispatch; callbacks (MP-ADD,
+  sync) never re-enter gossip receive.
+- `_BLK-CBUF`: used only by `_BLK-ENCODE-HEADER` (via `BLK-HASH`);
+  `BLK-ENCODE` uses caller buffer + `_BLK-TX-SCRATCH`, not `_BLK-CBUF`.
+- `_RPC-RAW`/`_RPC-PROOF`: each handler is a complete transaction
+  (parse→work→respond→send); downstream calls (LC-STATE-PROOF →
+  state → SMT) never touch RPC buffers.
+- `_PST-BUF`: all persist ops are sequential in `NODE-STEP`; no
+  cross-module path re-enters persist.
+No per-buffer guards or per-call-frame copies needed.
 
 ---
 
@@ -282,7 +292,7 @@ a per-file fix.
 | **8** | rpc.f, server.f | 1 day | Proof buffer, broadcast, rate limit |
 | **9** | persist.f, witness.f, light.f | 1 day | Sector sizing, block index, filenames, witness overflow |
 | **10** | node.f | 1 day | MP-DRAIN, SRV-STEP, timestamps, persist tick, shutdown |
-| **11** | Cross-cutting buffer audit | 0.5 day | C11 shared-buffer re-entrancy sweep |
+| ~~**11**~~ | ~~Cross-cutting buffer audit~~ | ~~0.5 day~~ | ✅ Audit complete — no re-entrancy risk; per-module guards sufficient. |
 
 **Total estimated:** ~10–13 working days
 
