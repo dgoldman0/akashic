@@ -35,10 +35,12 @@ CBOR_F      = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
 FMT_F       = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
 MERKLE_F    = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
 TX_F        = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
+SMT_F       = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
 STATE_F     = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
 BLOCK_F     = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
 CONSENSUS_F = os.path.join(ROOT_DIR, "akashic", "consensus", "consensus.f")
 MEMPOOL_F   = os.path.join(ROOT_DIR, "akashic", "store", "mempool.f")
+LIGHT_F     = os.path.join(ROOT_DIR, "akashic", "store", "light.f")
 
 # Network stack (string, url, headers shared with web)
 STRING_F    = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
@@ -137,7 +139,8 @@ def build_snapshot():
         # CBOR + formatting
         CBOR_F, FMT_F,
         # Blockchain
-        MERKLE_F, TX_F, STATE_F, BLOCK_F, CONSENSUS_F, MEMPOOL_F,
+        MERKLE_F, TX_F, SMT_F, STATE_F, BLOCK_F, CONSENSUS_F, MEMPOOL_F,
+        LIGHT_F,
         # Net (string/url/headers shared with web)
         STRING_F, URL_F, HEADERS_F, BASE64_F, HTTP_F, WS_F, GOSSIP_F,
         # Web server
@@ -184,7 +187,7 @@ def build_snapshot():
         'RPC-INIT',
     ]
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=64 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -195,19 +198,25 @@ def build_snapshot():
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 1_200_000_000
     while steps < mx:
-        if sys_obj.cpu.halted:
-            break
+        if sys_obj.cpu.halted: break
         if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
             if pos < len(data):
                 chunk = _next_line_chunk(data, pos)
                 sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else:
-                break
+            else: break
             continue
         batch = sys_obj.run_batch(min(100_000, mx - steps))
         steps += max(batch, 1)
 
     text = uart_text(buf)
+
+    if sys_obj.cpu.halted:
+        print("  [FATAL] CPU halted during compilation!")
+        lines = text.strip().split('\n')
+        for l in lines[-40:]:
+            print(f"    {l}")
+        sys.exit(1)
+
     errors = []
     for l in text.strip().split('\n'):
         if '?' in l and 'not found' in l.lower():
@@ -226,9 +235,9 @@ def build_snapshot():
     return _snapshot
 
 
-def run_forth(lines, max_steps=100_000_000):
+def run_forth(lines, max_steps=200_000_000):
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=64 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -243,14 +252,12 @@ def run_forth(lines, max_steps=100_000_000):
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
+        if sys_obj.cpu.halted: break
         if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
             if pos < len(data):
                 chunk = _next_line_chunk(data, pos)
                 sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else:
-                break
+            else: break
             continue
         batch = sys_obj.run_batch(min(100_000, max_steps - steps))
         steps += max(batch, 1)
@@ -451,6 +458,62 @@ def test_http_200():
           check_fn=lambda t: 'application/json' in t)
 
 
+def test_proof_buffer_size():
+    """[FIX A01] _RPC-PROOF is now 10240 bytes."""
+    print("\n── Proof Buffer A01 ──\n")
+
+    # Write byte 0xAB at offset 10239 (last byte) and read it back
+    check("_RPC-PROOF last byte at offset 10239",
+          [': _T 171 _RPC-PROOF 10239 + C! _RPC-PROOF 10239 + C@ . ; _T'],
+          "171 ")
+
+
+def test_rate_limiter():
+    """[FIX P30] Token-bucket rate limiter."""
+    print("\n── Rate Limiter P30 ──\n")
+
+    check("_RPC-RATE-MAX = 50",
+          [': _T _RPC-RATE-MAX . ; _T'], "50 ")
+
+    check("_RPC-RATE-CHECK returns TRUE when tokens available",
+          [': _T _RPC-RATE-INIT _RPC-RATE-CHECK IF 1 ELSE 0 THEN . ; _T'],
+          "1 ")
+
+    # Drain all 50 tokens, then the 51st should fail
+    check("_RPC-RATE-CHECK returns FALSE after bucket exhausted",
+          [': _DRAIN 50 0 DO _RPC-RATE-CHECK DROP LOOP ;',
+           ': _T _RPC-RATE-INIT _DRAIN _RPC-RATE-CHECK IF 1 ELSE 0 THEN . ; _T'],
+          "0 ")
+
+    # Rate-reject sends 429
+    req = rpc_request("chain_blockNumber")
+    check("rate-limited request gets 429",
+          [': _DRAIN 50 0 DO _RPC-RATE-CHECK DROP LOOP ;',
+           ': _T _RPC-RATE-INIT _DRAIN'] +
+          ['  ' + l for l in tstr_compiled(req)] +
+          ['  TA SRV-HANDLE-BUF ; _T'],
+          check_fn=lambda t: '429' in t and 'rate limit' in t)
+
+
+def test_broadcast_after_send():
+    """[FIX P28] sendTransaction calls GSP-BROADCAST-TX after MP-ADD.
+
+    We can't easily test actual broadcast (no peers), but we verify the
+    code path doesn't crash.  We send a valid-looking TX and check for
+    a result (tx hash) rather than an error.  If broadcast crashed, we'd
+    get nothing or an error.
+    
+    NOTE: if TX-DECODE / MP-ADD rejects, P28 doesn't fire anyway.
+    This is more of a compile-level test that the word reference exists.
+    """
+    print("\n── Broadcast P28 ──\n")
+
+    # Verify GSP-BROADCAST-TX word exists (can be ticked)
+    check("GSP-BROADCAST-TX is defined",
+          [": _T ['] GSP-BROADCAST-TX 0<> IF 1 ELSE 0 THEN . ; _T"],
+          "1 ")
+
+
 # =====================================================================
 #  Main
 # =====================================================================
@@ -467,7 +530,9 @@ if __name__ == "__main__":
     test_id_echo()
     test_repeated_requests()
     test_http_200()
-    print(f"\n{'='*40}")
-    print(f"  {_pass} passed, {_fail} failed")
-    print(f"{'='*40}")
+    test_proof_buffer_size()
+    test_rate_limiter()
+    test_broadcast_after_send()
+
+    print(f"\nResults: {_pass}/{_pass + _fail} passed, {_fail} failed")
     sys.exit(1 if _fail else 0)

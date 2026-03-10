@@ -186,11 +186,11 @@ Legend:
 
 ### File 13: `web/rpc.f`
 
-| # | ID | Severity | Change | Lines | Summary |
-|---|-----|----------|--------|-------|---------|
-| 54 | A01 | **CRIT** | `_RPC-PROOF` buffer overflow (256 → 10240+) | L69 | Change `CREATE _RPC-PROOF 256 ALLOT` to `10240 ALLOT` (or derive from SMT max depth). Current allocation corrupts dictionary on every `chain_getProof` call for any non-trivial tree. **One-line fix, prevents memory corruption now.** |
-| 55 | P28 | **HIGH** | `sendTransaction` never broadcasts | L154–168 | Add `GSP-BROADCAST-TX` call after successful `MP-ADD`. Currently tx stays local forever. |
-| 56 | P30 | **MED** | Rate limiting | top of `RPC-DISPATCH` | Add token-bucket (`_RPC-RATE-CHECK`). Use `DT-NOW-S` from datetime.f. Return HTTP 429 when exhausted. |
+| # | ID | Severity | Change | Lines | Summary | |
+|---|-----|----------|--------|-------|---------|---|
+| ~~54~~ | ~~A01~~ | ~~**CRIT**~~ | ~~`_RPC-PROOF` buffer overflow (256 → 10240+)~~ | ~~L69~~ | ~~Change `CREATE _RPC-PROOF 256 ALLOT` to `10240 ALLOT`. Current allocation corrupts dictionary on every `chain_getProof` call for any non-trivial tree.~~ | ✅ `10240 ALLOT`; `verifyProof` size guard updated to match. |
+| ~~55~~ | ~~P28~~ | ~~**HIGH**~~ | ~~`sendTransaction` never broadcasts~~ | ~~L154–168~~ | ~~Add `GSP-BROADCAST-TX` call after successful `MP-ADD`. Currently tx stays local forever.~~ | ✅ `_RPC-TX GSP-BROADCAST-TX` after `MP-ADD`. |
+| ~~56~~ | ~~P30~~ | ~~**MED**~~ | ~~Rate limiting~~ | ~~top of `RPC-DISPATCH`~~ | ~~Add token-bucket (`_RPC-RATE-CHECK`). Use `DT-NOW-S` from datetime.f. Return HTTP 429 when exhausted.~~ | ✅ Full token-bucket: `_RPC-RATE-MAX=50`, `_RPC-RATE-TPS=1`, `_RPC-RATE-CHECK`/`_RPC-RATE-REJECT`. `RPC-DISPATCH` gates on check. |
 | 57 | D02 | **LOW** | No RPC auth/authorization | `_RPC-DISPATCH-METHOD` | All methods open to any client. Add API key or session middleware. Lower priority for consortium (trusted node operators). |
 
 ### File 14: `web/server.f`

@@ -305,6 +305,7 @@ skip complete nested structures in one pass.
 | Word | Stack | Description |
 |---|---|---|
 | `JSON-NEXT` | `( addr len -- addr' len' flag )` | Advance past the current value to the next element. Returns `-1` if another element exists, `0` at end. |
+| `JSON-NEXT-VALUE` | `( addr len -- addr' len' )` | Like `JSON-NEXT` but drops the flag. Use when the caller knows more elements exist (e.g. parsing a fixed-layout array sequentially). |
 | `JSON-NTH` | `( addr len n -- addr' len' )` | Jump to the *n*th element (0-based). Cursor must be inside the array (past `[`). Calls `JSON-FAIL` if *n* is out of range. |
 | `JSON-COUNT` | `( addr len -- n )` | Count elements in an array (or keys in an object). Cursor must be inside (past `[` or `{`). Non-destructive scan. |
 
@@ -335,6 +336,27 @@ WHILE REPEAT
 ```forth
 my-json JSON-ENTER JSON-COUNT .    \ prints number of elements
 ```
+
+### Example — Sequential Fixed-Layout Array (JSON-NEXT-VALUE)
+
+When parsing an array with a known layout (e.g. `["leaf", 42, "proof", 3, "root"]`),
+`JSON-NEXT-VALUE` lets you step through elements without tracking indices:
+
+```forth
+my-json JSON-ENTER
+JSON-GET-STRING  leaf-buf FMT-HEX-DECODE DROP   \ element 0
+JSON-NEXT-VALUE
+JSON-GET-NUMBER  idx !                            \ element 1
+JSON-NEXT-VALUE
+JSON-GET-STRING  proof-buf FMT-HEX-DECODE DROP   \ element 2
+JSON-NEXT-VALUE
+JSON-GET-NUMBER  depth !                          \ element 3
+JSON-NEXT-VALUE
+JSON-GET-STRING  root-buf FMT-HEX-DECODE DROP    \ element 4
+```
+
+> Unlike `JSON-NEXT`, `JSON-NEXT-VALUE` does not return a flag —
+> use it only when you are certain the next element exists.
 
 ---
 
@@ -651,6 +673,7 @@ JSON-KEY               ( a u ka ku -- va vu )     find key (fail)
 JSON-KEY?              ( a u ka ku -- va vu f )   find key (flag)
 JSON-HAS?              ( a u ka ku -- f )         test key exists
 JSON-NEXT              ( a u -- a' u' f )         next element
+JSON-NEXT-VALUE        ( a u -- a' u' )           next (no flag)
 JSON-NTH               ( a u n -- a' u' )         nth element
 JSON-COUNT             ( a u -- n )               count elements
 JSON-PATH              ( a u pa pu -- a' u' )     dot-path (fail)

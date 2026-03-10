@@ -32,6 +32,7 @@ REQUIRE ../store/block.f
 REQUIRE ../utils/fmt.f
 REQUIRE ../net/gossip.f
 REQUIRE ../store/light.f
+REQUIRE ../utils/datetime.f
 
 PROVIDED akashic-rpc
 
@@ -66,7 +67,9 @@ CREATE _RPC-ATMP 32 ALLOT             \ address scratch
 CREATE _RPC-HEX  128 ALLOT            \ hex-encoded output scratch
 CREATE _RPC-RAW  TX-BUF-SIZE ALLOT    \ raw CBOR buffer (sendTx)
 CREATE _RPC-TX   TX-BUF-SIZE ALLOT    \ tx struct (sendTx)
-CREATE _RPC-PROOF 256 ALLOT           \ Merkle proof buffer (8 × 32)
+\ [FIX A01] Raised from 256 to 10240 (320 × 32-byte siblings).
+\ 256 bytes = only 8 siblings which overflows on any non-trivial tree.
+CREATE _RPC-PROOF 10240 ALLOT          \ Merkle proof buffer
 CREATE _RPC-LEAF  32 ALLOT            \ leaf hash scratch
 CREATE _RPC-ROOT  32 ALLOT            \ root hash scratch
 
@@ -160,6 +163,8 @@ CREATE _RPC-ROOT  32 ALLOT            \ root hash scratch
         RPC-E-INTERNAL S" tx rejected by mempool" _RPC-RESP-ERROR
         _RPC-SEND EXIT
     THEN
+    \ [FIX P28] Broadcast to peers so tx propagates network-wide.
+    _RPC-TX GSP-BROADCAST-TX
     \ Compute hash and return as hex
     _RPC-TX _RPC-HTMP TX-HASH
     _RPC-HTMP 32 _RPC-HEX FMT->HEX DROP \ 64 hex chars in _RPC-HEX
@@ -362,8 +367,9 @@ VARIABLE _RPC-VP-DEPTH
     JSON-NEXT-VALUE
     JSON-GET-NUMBER  _RPC-VP-IDX !
     \ 3. proof-hex (depth × 64 hex chars → depth × 32 bytes)
+    JSON-NEXT-VALUE
     JSON-GET-STRING                    ( hex-a hex-u )
-    DUP 2 / 256 > IF
+    DUP 2 / 10240 > IF                 \ [FIX A01] match raised buffer size
         2DROP
         _RPC-RESP-BEGIN
         RPC-E-PARAMS S" proof too large" _RPC-RESP-ERROR
@@ -374,6 +380,7 @@ VARIABLE _RPC-VP-DEPTH
     JSON-NEXT-VALUE
     JSON-GET-NUMBER  _RPC-VP-DEPTH !
     \ 5. root-hex (64 chars → 32 bytes)
+    JSON-NEXT-VALUE
     JSON-GET-STRING                    ( hex-a hex-u )
     DUP 64 <> IF
         2DROP
@@ -415,10 +422,58 @@ VARIABLE _RPC-VP-DEPTH
     _RPC-SEND ;
 
 \ =====================================================================
-\  10. RPC-DISPATCH — main entry point (called by router on POST /rpc)
+\  10. Rate limiter — token-bucket  [FIX P30]
+\ =====================================================================
+
+50  CONSTANT _RPC-RATE-MAX             \ bucket capacity (requests)
+1   CONSTANT _RPC-RATE-TPS             \ tokens added per second
+VARIABLE _RPC-RATE-TOKENS              \ current token count
+VARIABLE _RPC-RATE-LAST                \ epoch-seconds of last refill
+
+: _RPC-RATE-INIT  ( -- )
+    _RPC-RATE-MAX _RPC-RATE-TOKENS !
+    DT-NOW-S _RPC-RATE-LAST ! ;
+
+\ Refill tokens based on elapsed time, cap at _RPC-RATE-MAX.
+: _RPC-RATE-REFILL  ( -- )
+    DT-NOW-S DUP _RPC-RATE-LAST @ -   ( now elapsed )
+    DUP 1 < IF 2DROP EXIT THEN
+    _RPC-RATE-TPS *                    ( now tokens-to-add )
+    _RPC-RATE-TOKENS @ +
+    _RPC-RATE-MAX MIN
+    _RPC-RATE-TOKENS !
+    _RPC-RATE-LAST ! ;
+
+\ Try to consume one token.  Returns TRUE if allowed, FALSE if exhausted.
+: _RPC-RATE-CHECK  ( -- flag )
+    _RPC-RATE-REFILL
+    _RPC-RATE-TOKENS @ 0> IF
+        -1 _RPC-RATE-TOKENS +!
+        -1
+    ELSE
+        0
+    THEN ;
+
+\ Send HTTP 429 Too Many Requests as JSON-RPC error.
+: _RPC-RATE-REJECT  ( -- )
+    429 RESP-STATUS
+    _RPC-OBUF _RPC-BUF-SZ JSON-SET-OUTPUT
+    JSON-{
+    S" jsonrpc" S" 2.0" JSON-KV-STR
+    S" error" JSON-KEY: JSON-{
+    S" code" -32000 JSON-KV-NUM
+    S" message" S" rate limit exceeded" JSON-KV-STR
+    JSON-} JSON-}
+    JSON-OUTPUT-RESULT RESP-JSON
+    RESP-SEND ;
+
+\ =====================================================================
+\  11. RPC-DISPATCH — main entry point (called by router on POST /rpc)
 \ =====================================================================
 
 : RPC-DISPATCH  ( -- )
+    \ [FIX P30] Check rate limit before processing
+    _RPC-RATE-CHECK 0= IF _RPC-RATE-REJECT EXIT THEN
     \ Get request body (JSON-RPC envelope)
     REQ-BODY                           ( body-a body-u )
     DUP 2 < IF
@@ -470,6 +525,7 @@ VARIABLE _RPC-VP-DEPTH
 \ =====================================================================
 
 : RPC-INIT  ( -- )
+    _RPC-RATE-INIT
     S" /rpc" ['] RPC-DISPATCH ROUTE-POST ;
 
 \ =====================================================================

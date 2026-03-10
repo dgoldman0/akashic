@@ -428,6 +428,14 @@ VARIABLE _JH-SAVE-ABORT
     OVER C@ 125 = IF 0 EXIT THEN         \ } after comma
     -1 ;
 
+\ JSON-NEXT-VALUE ( addr len -- addr' len' )
+\   Like JSON-NEXT but unconditional — skip the current value and
+\   advance to the next element, discarding the end-of-collection flag.
+\   Useful when the caller knows more elements exist (e.g. parsing a
+\   fixed-layout array sequentially).
+: JSON-NEXT-VALUE  ( addr len -- addr' len' )
+    JSON-NEXT DROP ;
+
 \ JSON-NTH ( addr len n -- addr' len' )
 \   Jump to the nth element (0-based) in an array.
 \   Cursor must be inside the array (past [).
