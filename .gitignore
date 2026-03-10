@@ -18,5 +18,6 @@ local_testing/*
 !local_testing/test_web_server.py
 !local_testing/test_http.py
 !local_testing/test_ws.py
+!local_testing/test_sync.py
 !local_testing/test_rpc.py
 !local_testing/test_xrpc_session_repo.py

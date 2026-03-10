@@ -503,6 +503,21 @@ def test_validate():
           "0 ")
 
 
+def test_buffer_size():
+    """[FIX D08] _WS-RBUF raised from 4096 to 16384."""
+    print("\n── Buffer Size (D08) ──\n")
+
+    # Write 0xAB at the last byte (offset 16383) and read it back
+    check("_WS-RBUF last byte at offset 16383",
+          [': _T 171 _WS-RBUF 16383 + C!  _WS-RBUF 16383 + C@ . ; _T'],
+          "171 ")
+
+    # _WS-RBUF-LEN should default to 0
+    check("_WS-RBUF-LEN initially 0",
+          [': _T _WS-RBUF-LEN @ . ; _T'],
+          "0 ")
+
+
 def test_sha1_rotl():
     print("\n── SHA-1 Rotate Left ──\n")
 
@@ -533,6 +548,7 @@ if __name__ == "__main__":
     test_error_constants()
     test_opcodes()
     test_state_defaults()
+    test_buffer_size()
     test_sha1_rotl()
     test_sha1_be()
     test_sha1()

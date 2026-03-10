@@ -292,7 +292,8 @@ VARIABLE _WS-MKEY-TMP
     >R >R WS-OP-PONG R> R> WS-FRAME-SEND ;
 
 \ Frame receive state
-CREATE _WS-RBUF 4096 ALLOT      \ raw receive staging
+\ [FIX D08] Raised from 4096 to 16384 to match gossip _GSP-BUF-SZ.
+CREATE _WS-RBUF 16384 ALLOT     \ raw receive staging
 VARIABLE _WS-RBUF-LEN
 VARIABLE _WS-RX-OP              \ received opcode
 VARIABLE _WS-RX-FIN             \ FIN flag

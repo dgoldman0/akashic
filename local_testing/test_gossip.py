@@ -34,6 +34,7 @@ CBOR_F      = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
 FMT_F       = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
 MERKLE_F    = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
 TX_F        = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
+SMT_F       = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
 STATE_F     = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
 BLOCK_F     = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
 CONSENSUS_F = os.path.join(ROOT_DIR, "akashic", "consensus", "consensus.f")
@@ -116,7 +117,7 @@ def build_snapshot():
     for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
                  SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
                  ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
-                 MERKLE_F, TX_F, STATE_F, BLOCK_F,
+                 MERKLE_F, TX_F, SMT_F, STATE_F, BLOCK_F,
                  CONSENSUS_F, MEMPOOL_F,
                  STRING_F, URL_F, HEADERS_F, BASE64_F,
                  HTTP_F, WS_F, GOSSIP_F]:
@@ -307,7 +308,7 @@ def test_constants():
     check("GSP-MSG-BLK-REQ=3", ['GSP-MSG-BLK-REQ . CR'], "3")
     check("GSP-MSG-BLK-RSP=4", ['GSP-MSG-BLK-RSP . CR'], "4")
     check("GSP-MSG-STATUS=6",  ['GSP-MSG-STATUS . CR'],   "6")
-    check("GSP-MAX-PEERS=16",  ['GSP-MAX-PEERS . CR'],    "16")
+    check("GSP-MAX-PEERS=64",  ['GSP-MAX-PEERS . CR'],    "64")
 
 def test_init_peer_count():
     """GSP-INIT → peer count = 0."""
@@ -465,49 +466,36 @@ def test_on_msg_empty():
     check("ON-MSG empty → no crash", lines, "1")
 
 def test_seen_ring_wrap():
-    """Seen-hash ring buffer should wrap at 256 entries."""
-    # Add 257 distinct hashes; the first should be evicted.
+    """Seen-hash ring buffer should wrap at 1024 entries (FIX P27)."""
     lines = _keygen_preamble() + [
-        # We'll add 257 hashes by creating txs with different nonces
-        # and calling GSP-ON-MSG for each. Then check that the first
-        # is no longer seen but the last still is.
-        # Actually, creating 257 txs is expensive. Instead, directly
-        # test the internal _GSP-SEEN-ADD and GSP-SEEN? logic by
-        # writing hashes manually.
-        # _GSP-SEEN-ADD is internal but we can access it from the
-        # snapshot since it was compiled before the guard redefs.
-        # However, the guard redefines the public words but _GSP-SEEN-ADD
-        # is never redefined (only GSP-* words are). Let me verify...
-        # Actually _GSP-SEEN-ADD is a private word with _ prefix.
-        # It's still in the dictionary — we can call it.
         'CREATE _RH 32 ALLOT',
-        # Fill 256 entries with hash byte = i (0..255)
-        '256 0 DO',
+        # Fill 1024 entries
+        '1024 0 DO',
         '  _RH 32 0 FILL',
-        '  I _RH C!',
+        '  I _RH !',
         '  _RH _GSP-SEEN-ADD',
         'LOOP',
-        # Entry 0 (byte=0) should still be present (256 entries exactly)
-        '_RH 32 0 FILL  0 _RH C!',
+        # Entry 0 should still be present (exactly 1024)
+        '_RH 32 0 FILL  0 _RH !',
         '_RH GSP-SEEN? . CR',
     ]
-    check("seen ring 256 entries → first still present", lines, "-1")
+    check("seen ring 1024 entries → first still present", lines, "-1")
 
 def test_seen_ring_evict():
-    """After 257 inserts, entry 0 should be evicted."""
+    """After 1025 inserts, entry 0 should be evicted (FIX P27)."""
     lines = _keygen_preamble() + [
         'CREATE _RH 32 ALLOT',
-        # Fill 257 entries — entry 0 should be overwritten by entry 256
-        '257 0 DO',
+        # Fill 1025 entries — entry 0 should be overwritten
+        '1025 0 DO',
         '  _RH 32 0 FILL',
-        '  I _RH C!',
+        '  I _RH !',
         '  _RH _GSP-SEEN-ADD',
         'LOOP',
-        # Check entry 0 (byte=0): should be evicted
-        '_RH 32 0 FILL  0 _RH C!',
+        # Check entry 0: should be evicted
+        '_RH 32 0 FILL  0 _RH !',
         '_RH GSP-SEEN? . CR',
     ]
-    check("seen ring 257 entries → first evicted", lines, "0")
+    check("seen ring 1025 entries → first evicted", lines, "0")
 
 def test_on_msg_invalid_tx():
     """GSP-ON-MSG with an invalid TX should not add to mempool."""
@@ -520,6 +508,63 @@ def test_on_msg_invalid_tx():
         'MP-COUNT . CR',
     ]
     check("ON-MSG invalid TX → mempool empty", lines, "0")
+
+
+def test_disconnect_oob_no_crash():
+    """GSP-DISCONNECT with out-of-bounds peer-id should not crash (FIX P26)."""
+    lines = _keygen_preamble() + [
+        # Try disconnecting with various invalid IDs
+        '999 GSP-DISCONNECT',
+        '-1 GSP-DISCONNECT',
+        '64 GSP-DISCONNECT',
+        'GSP-PEER-COUNT . CR',
+    ]
+    check("GSP-DISCONNECT OOB → no crash, peers=0", lines, "0")
+
+
+def test_valid_id_check():
+    """_GSP-VALID-ID? should accept 0..63 and reject everything else (FIX P26)."""
+    lines = _keygen_preamble() + [
+        '0 _GSP-VALID-ID? . 63 _GSP-VALID-ID? . 64 _GSP-VALID-ID? . -1 _GSP-VALID-ID? . CR',
+    ]
+    check("_GSP-VALID-ID? bounds", lines, "-1 -1 0 0")
+
+
+def test_on_msg_oversized_rejected():
+    """GSP-ON-MSG should reject messages larger than _GSP-BUF-SZ (FIX B10)."""
+    lines = _keygen_preamble() + [
+        # Build a STATUS message but claim len > 16384
+        'CREATE _OMSG 4 ALLOT',
+        '6 _OMSG C!',
+        # Set up callback to detect if anything fires
+        'VARIABLE _OS-FIRED',
+        '0 _OS-FIRED !',
+        ': _OS-CB  ( height peer -- ) 2DROP  1 _OS-FIRED ! ;',
+        "' _OS-CB GSP-ON-STATUS-XT !",
+        # Feed msg with len = 16385 (> 16384 buf size)
+        '_OMSG 16385 0 GSP-ON-MSG',
+        '_OS-FIRED @ . CR',
+    ]
+    check("ON-MSG oversized → rejected (callback not fired)", lines, "0")
+
+
+def test_unknown_msg_counter():
+    """Unknown message types should increment GSP-UNKNOWN-COUNT (FIX D01)."""
+    lines = _keygen_preamble() + [
+        'CREATE _UMSG 4 ALLOT',
+        'GSP-UNKNOWN-COUNT VARIABLE _PRE  _PRE !',
+        # Send 3 unknown message types
+        '255 _UMSG C!  _UMSG 2 0 GSP-ON-MSG',
+        '200 _UMSG C!  _UMSG 2 0 GSP-ON-MSG',
+        '100 _UMSG C!  _UMSG 2 0 GSP-ON-MSG',
+        '_PRE @ . GSP-UNKNOWN-COUNT . CR',
+    ]
+    check("unknown msg counter 0 → 3", lines, "0 3")
+
+
+def test_seen_cap_constant():
+    """_GSP-SEEN-CAP should be 1024 (FIX P27)."""
+    check("_GSP-SEEN-CAP=1024", ['_GSP-SEEN-CAP . CR'], "1024")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -546,6 +591,12 @@ if __name__ == "__main__":
     test_seen_ring_wrap()
     test_seen_ring_evict()
     test_on_msg_invalid_tx()
+    # New tests for fixes P26, B02, B10, P27, D01
+    test_disconnect_oob_no_crash()
+    test_valid_id_check()
+    test_on_msg_oversized_rejected()
+    test_unknown_msg_counter()
+    test_seen_cap_constant()
 
     print()
     total = _pass_count + _fail_count

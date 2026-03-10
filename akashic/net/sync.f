@@ -6,6 +6,8 @@
 \
 \  Gap-driven sequential sync.  Detects when the local chain is
 \  behind a peer, then requests missing blocks one at a time.
+\  Full block bodies (header + txs) are decoded via BLK-DECODE
+\  which includes B06 tx parsing.  [FIX B05: resolved by B06.]
 \
 \  Design:
 \   - Callbacks from gossip (announcement / response / status)
@@ -42,7 +44,8 @@ PROVIDED akashic-sync
 1 CONSTANT SYNC-ACTIVE
 2 CONSTANT SYNC-STALLED
 
-5 CONSTANT _SYNC-MAX-RETRY             \ retry limit before stall
+5 CONSTANT _SYNC-MAX-RETRY             \ retry limit per peer
+3 CONSTANT _SYNC-MAX-FALLBACK          \ max peer changes  [FIX C03]
 
 \ =====================================================================
 \  2. Storage
@@ -53,8 +56,32 @@ VARIABLE _SYNC-TARGET                   \ peer-reported chain height
 VARIABLE _SYNC-PEER                     \ peer id we're syncing from
 VARIABLE _SYNC-RETRIES
 VARIABLE _SYNC-NEED-REQ                 \ deferred-request flag
+VARIABLE _SYNC-FALLBACKS                \ [FIX C03] peer changes so far
 
 CREATE _SYNC-BLK BLK-STRUCT-SIZE ALLOT \ temp block struct for decode
+
+\ [FIX C03] Find next active peer after current one (round-robin).
+\ Returns peer-id or -1 if none found.
+: _SYNC-NEXT-PEER  ( -- id | -1 )
+    GSP-MAX-PEERS 0 ?DO
+        _SYNC-PEER @ 1+ I + GSP-MAX-PEERS MOD
+        DUP _GSP-ACTIVE + C@ IF
+            UNLOOP EXIT
+        THEN
+        DROP
+    LOOP
+    -1 ;
+
+\ [FIX C03] Try switching to a fallback peer instead of stalling.
+\ Returns TRUE if we found an alternate peer, FALSE if no peers left.
+: _SYNC-TRY-FALLBACK  ( -- flag )
+    _SYNC-FALLBACKS @ _SYNC-MAX-FALLBACK >= IF 0 EXIT THEN
+    _SYNC-NEXT-PEER DUP -1 = IF DROP 0 EXIT THEN
+    _SYNC-PEER !
+    0 _SYNC-RETRIES !
+    1 _SYNC-FALLBACKS +!
+    -1 _SYNC-NEED-REQ !
+    -1 ;
 
 \ =====================================================================
 \  3. SYNC-STEP — deferred block request (main-loop safe)
@@ -81,10 +108,12 @@ CREATE _SYNC-BLK BLK-STRUCT-SIZE ALLOT \ temp block struct for decode
     _SYNC-BLK BLK-INIT
     _SYNC-BLK BLK-DECODE               ( flag )
     0= IF
-        \ Decode failed — retry or stall
+        \ Decode failed — retry or try fallback  [FIX C03]
         1 _SYNC-RETRIES +!
         _SYNC-RETRIES @ _SYNC-MAX-RETRY >= IF
-            SYNC-STALLED _SYNC-STATE !
+            _SYNC-TRY-FALLBACK 0= IF
+                SYNC-STALLED _SYNC-STATE !
+            THEN
         ELSE
             -1 _SYNC-NEED-REQ !
         THEN
@@ -101,10 +130,12 @@ CREATE _SYNC-BLK BLK-STRUCT-SIZE ALLOT \ temp block struct for decode
             -1 _SYNC-NEED-REQ !        \ request next block
         THEN
     ELSE
-        \ Append failed — retry or stall
+        \ Append failed — retry or try fallback  [FIX C03]
         1 _SYNC-RETRIES +!
         _SYNC-RETRIES @ _SYNC-MAX-RETRY >= IF
-            SYNC-STALLED _SYNC-STATE !
+            _SYNC-TRY-FALLBACK 0= IF
+                SYNC-STALLED _SYNC-STATE !
+            THEN
         ELSE
             -1 _SYNC-NEED-REQ !
         THEN
@@ -129,6 +160,7 @@ CREATE _SYNC-BLK BLK-STRUCT-SIZE ALLOT \ temp block struct for decode
     \ Start syncing
     _SYNC-PEER ! _SYNC-TARGET !
     0 _SYNC-RETRIES !
+    0 _SYNC-FALLBACKS !                  \ [FIX C03]
     SYNC-ACTIVE _SYNC-STATE !
     -1 _SYNC-NEED-REQ ! ;
 
@@ -149,6 +181,7 @@ CREATE _SYNC-BLK BLK-STRUCT-SIZE ALLOT \ temp block struct for decode
     -1         _SYNC-PEER !
     0          _SYNC-RETRIES !
     0          _SYNC-NEED-REQ !
+    0          _SYNC-FALLBACKS !       \ [FIX C03]
     ['] _SYNC-ON-ANN    GSP-ON-BLK-ANN-XT !
     ['] _SYNC-ON-RSP    GSP-ON-BLK-RSP-XT !
     ['] _SYNC-ON-STATUS GSP-ON-STATUS-XT ! ;
@@ -160,7 +193,8 @@ CREATE _SYNC-BLK BLK-STRUCT-SIZE ALLOT \ temp block struct for decode
 : SYNC-RESET  ( -- )
     SYNC-IDLE _SYNC-STATE !
     0 _SYNC-RETRIES !
-    0 _SYNC-NEED-REQ ! ;
+    0 _SYNC-NEED-REQ !
+    0 _SYNC-FALLBACKS ! ;             \ [FIX C03]
 
 \ =====================================================================
 \  9. Public queries

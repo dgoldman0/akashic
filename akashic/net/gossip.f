@@ -19,9 +19,10 @@
 \   GSP-ON-MSG        ( buf len peer -- )   dispatch incoming message
 \   GSP-POLL          ( -- )                poll all peers for messages
 \   GSP-SEEN?         ( hash -- flag )      check seen-hash cache
+\   GSP-UNKNOWN-COUNT ( -- n )              unknown msg type counter
 \
 \  Constants:
-\   GSP-MAX-PEERS     ( -- 16 )
+\   GSP-MAX-PEERS     ( -- 64 )
 \
 \  Callbacks (set by node.f via !):
 \   GSP-ON-TX-XT      — ( tx -- )          valid tx received
@@ -42,8 +43,8 @@ PROVIDED akashic-gossip
 \  1. Constants
 \ =====================================================================
 
-16 CONSTANT GSP-MAX-PEERS
-256 CONSTANT _GSP-SEEN-CAP
+64 CONSTANT GSP-MAX-PEERS             \ [FIX B02] was 16
+1024 CONSTANT _GSP-SEEN-CAP            \ [FIX P27] was 256
 
 \ Message types (first byte of binary frame)
 1 CONSTANT GSP-MSG-TX
@@ -61,7 +62,7 @@ PROVIDED akashic-gossip
 CREATE _GSP-CTX    GSP-MAX-PEERS CELLS ALLOT   \ WS context per slot
 CREATE _GSP-ACTIVE GSP-MAX-PEERS ALLOT         \ 0=free 1=active
 
-\ Seen-hash ring buffer (256 × 32 bytes)
+\ Seen-hash ring buffer (1024 × 32 bytes)  [FIX P27]
 CREATE _GSP-SEEN   _GSP-SEEN-CAP 32 * ALLOT
 VARIABLE _GSP-SEEN-POS
 
@@ -81,6 +82,9 @@ VARIABLE GSP-ON-BLK-ANN-XT
 VARIABLE GSP-ON-BLK-RSP-XT
 VARIABLE GSP-ON-STATUS-XT
 
+\ [FIX D01] Unknown message type counter
+VARIABLE _GSP-UNK-COUNT
+
 \ =====================================================================
 \  3. GSP-INIT
 \ =====================================================================
@@ -93,7 +97,8 @@ VARIABLE GSP-ON-STATUS-XT
     0 GSP-ON-TX-XT !
     0 GSP-ON-BLK-ANN-XT !
     0 GSP-ON-BLK-RSP-XT !
-    0 GSP-ON-STATUS-XT ! ;
+    0 GSP-ON-STATUS-XT !
+    0 _GSP-UNK-COUNT ! ;
 
 \ =====================================================================
 \  4. Seen-hash dedup
@@ -122,6 +127,11 @@ VARIABLE GSP-ON-STATUS-XT
 \  5. Peer management
 \ =====================================================================
 
+\ [FIX P26] Bounds-check peer-id before any table access.
+: _GSP-VALID-ID?  ( id -- flag )
+    DUP 0< IF DROP 0 EXIT THEN
+    GSP-MAX-PEERS < ;
+
 : GSP-CONNECT  ( url-a url-u -- peer-id | -1 )
     \ Find free slot
     -1 GSP-MAX-PEERS 0 ?DO
@@ -136,6 +146,7 @@ VARIABLE GSP-ON-STATUS-XT
     R> ;
 
 : GSP-DISCONNECT  ( peer-id -- )
+    DUP _GSP-VALID-ID? 0= IF DROP EXIT THEN   \ [FIX P26]
     DUP _GSP-ACTIVE + C@ 0= IF DROP EXIT THEN
     DUP CELLS _GSP-CTX + @ WS-DISCONNECT
     0 SWAP _GSP-ACTIVE + C! ;
@@ -153,6 +164,7 @@ VARIABLE _GSP-SND-LEN
 
 \ Send buffer contents to one peer
 : _GSP-SEND1  ( peer-id -- )
+    DUP _GSP-VALID-ID? 0= IF DROP EXIT THEN    \ [FIX P26]
     DUP _GSP-ACTIVE + C@ 0= IF DROP EXIT THEN
     CELLS _GSP-CTX + @
     _GSP-SBUF _GSP-SND-LEN @
@@ -292,15 +304,21 @@ VARIABLE _GSP-RX-PEER
 \  12. GSP-ON-MSG — dispatch incoming binary frame
 \ =====================================================================
 
+\ [FIX D01] Unknown message counter accessor
+: GSP-UNKNOWN-COUNT  ( -- n )  _GSP-UNK-COUNT @ ;
+
 : GSP-ON-MSG  ( buf len peer -- )
     _GSP-RX-PEER ! _GSP-RX-LEN ! _GSP-RX-BUF !
     _GSP-RX-LEN @ 1 < IF EXIT THEN
+    \ [FIX B10] Reject messages exceeding receive buffer size
+    _GSP-RX-LEN @ _GSP-BUF-SZ > IF EXIT THEN
     _GSP-RX-BUF @ C@                  ( tag )
     DUP GSP-MSG-TX      = IF DROP _GSP-H-TX      EXIT THEN
     DUP GSP-MSG-BLK-ANN = IF DROP _GSP-H-BLK-ANN EXIT THEN
     DUP GSP-MSG-BLK-RSP = IF DROP _GSP-H-BLK-RSP EXIT THEN
     DUP GSP-MSG-STATUS  = IF DROP _GSP-H-STATUS  EXIT THEN
-    DROP ;                             \ unknown type — ignore
+    DROP                               \ [FIX D01] unknown type — count it
+    1 _GSP-UNK-COUNT +! ;
 
 \ =====================================================================
 \  13. GSP-POLL — poll all peers for incoming messages
@@ -344,6 +362,7 @@ GUARD _gsp-guard
 ' GSP-SEND-STATUS   CONSTANT _gsp-stat-xt
 ' GSP-ON-MSG        CONSTANT _gsp-onmg-xt
 ' GSP-POLL          CONSTANT _gsp-poll-xt
+' GSP-UNKNOWN-COUNT CONSTANT _gsp-unk-xt
 
 : GSP-INIT          _gsp-init-xt _gsp-guard WITH-GUARD ;
 : GSP-CONNECT       _gsp-conn-xt _gsp-guard WITH-GUARD ;
@@ -354,6 +373,7 @@ GUARD _gsp-guard
 : GSP-SEND-STATUS   _gsp-stat-xt _gsp-guard WITH-GUARD ;
 : GSP-ON-MSG        _gsp-onmg-xt _gsp-guard WITH-GUARD ;
 : GSP-POLL          _gsp-poll-xt _gsp-guard WITH-GUARD ;
+: GSP-UNKNOWN-COUNT _gsp-unk-xt  _gsp-guard WITH-GUARD ;
 
 \ =================================================================
 \  Done.

@@ -159,26 +159,26 @@ Legend:
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 44 | P26 | **HIGH** | Peer-id bounds check | L131, L139 | Add `_GSP-VALID-ID? ( id -- flag )` guard to `GSP-CONNECT` / `GSP-DISCONNECT`. Prevents OOB write when `peer-id >= GSP-MAX-PEERS`. |
-| 45 | B02 | **HIGH** | Raise `GSP-MAX-PEERS` from 16 | ~L48 | Raise to 64+ for federation scale (dozens of consortium members). 16 is insufficient for partition resistance. |
-| 46 | B10 | **HIGH** | Message size validation before CBOR-PARSE | `GSP-ON-MSG` | Check `_GSP-RLEN <= _GSP-BUF-SZ` before passing to `CBOR-PARSE`. Reject oversized messages. |
-| 47 | P27 | **MED** | Seen-hash ring size 256 → 1024 | L48 | 256 entries exhausted in 1 second at flood rate. Raise to 1024. |
+| ~~44~~ | ~~P26~~ | ~~**HIGH**~~ | ~~Peer-id bounds check~~ | L131, L139 | ✅ `_GSP-VALID-ID?` guard added to `GSP-DISCONNECT` and `_GSP-SEND1`. OOB writes prevented. |
+| ~~45~~ | ~~B02~~ | ~~**HIGH**~~ | ~~Raise `GSP-MAX-PEERS` from 16~~ | ~L48 | ✅ Raised to 64. |
+| ~~46~~ | ~~B10~~ | ~~**HIGH**~~ | ~~Message size validation before CBOR-PARSE~~ | `GSP-ON-MSG` | ✅ `_GSP-RX-LEN @ _GSP-BUF-SZ >` check added. Oversized messages rejected before dispatch. |
+| ~~47~~ | ~~P27~~ | ~~**MED**~~ | ~~Seen-hash ring size 256 → 1024~~ | L48 | ✅ `_GSP-SEEN-CAP` raised to 1024. |
 | 48 | C01 | **MED** | Protocol versioning in wire format | message format | Add 2-byte magic + 1-byte version to wire format. Reject incompatible peers. |
 | 49 | C02 | **MED** | Peer authentication (challenge-response) | `GSP-CONNECT` | Add Ed25519 handshake after WS-CONNECT. Without this, eclipse attacks are trivial (16 sybil nodes fill all slots). |
-| 50 | D01 | **LOW** | Log unknown message types | `GSP-ON-MSG` ~L320 | Add counter + optional log line for unknown tags. Currently silently drops. |
+| ~~50~~ | ~~D01~~ | ~~**LOW**~~ | ~~Log unknown message types~~ | `GSP-ON-MSG` ~L320 | ✅ `_GSP-UNK-COUNT` variable + `GSP-UNKNOWN-COUNT` accessor. Increments on unknown tag. |
 
 ### File 11: `net/sync.f`
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 51 | B05 | **HIGH** | Sync fetches headers only — no tx bodies | entire file | Sync must request full blocks (header + txs). Currently produces a headerchain with no state. Depends on B06 (`BLK-DECODE` tx parsing). |
-| 52 | C03 | **MED** | Single-peer sequential sync | `_SYNC-PEER` | Add fallback peer selection after retry exhaustion. Currently stalls permanently in `SYNC-STALLED` if chosen peer fails. |
+| ~~51~~ | ~~B05~~ | ~~**HIGH**~~ | ~~Sync fetches headers only — no tx bodies~~ | entire file | ✅ Resolved by B06 (`BLK-DECODE` now parses tx bodies). Sync receives full blocks. |
+| ~~52~~ | ~~C03~~ | ~~**MED**~~ | ~~Single-peer sequential sync~~ | `_SYNC-PEER` | ✅ `_SYNC-NEXT-PEER` + `_SYNC-TRY-FALLBACK` added. Tries up to 3 alternate peers before stalling. |
 
 ### File 12: `net/ws.f`
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 53 | D08 | **LOW** | `_WS-RBUF = 4096` vs gossip 16384 | L295 | Raise WS receive buffer to match gossip's `_GSP-BUF-SZ = 16384`. Messages >4 KB may truncate or mis-reassemble. |
+| ~~53~~ | ~~D08~~ | ~~**LOW**~~ | ~~`_WS-RBUF = 4096` vs gossip 16384~~ | L295 | ✅ Raised `_WS-RBUF` to 16384. |
 
 ---
 
@@ -278,7 +278,7 @@ a per-file fix.
 | **4** | consensus.f | 1 day | STARK stub, PoS guards, constants→variables, key zeroize |
 | ~~**5**~~ | ~~block.f, genesis.f~~ | ~~1 day~~ | ✅ block.f (65/65); genesis.f (19/19) |
 | ~~**6**~~ | ~~mempool.f~~ | ~~0.5 day~~ | ✅ 21/21 tests — sig verify, 4096 capacity, fee eviction |
-| **7** | gossip.f, sync.f, ws.f | 1–2 days | Bounds, capacity, msg validation, full-block sync |
+| ~~**7**~~ | ~~gossip.f, sync.f, ws.f~~ | ~~1–2 days~~ | ✅ gossip 25/25; sync 30/30; ws 39/39. C01+C02 deferred (design-level). |
 | **8** | rpc.f, server.f | 1 day | Proof buffer, broadcast, rate limit |
 | **9** | persist.f, witness.f, light.f | 1 day | Sector sizing, block index, filenames, witness overflow |
 | **10** | node.f | 1 day | MP-DRAIN, SRV-STEP, timestamps, persist tick, shutdown |
