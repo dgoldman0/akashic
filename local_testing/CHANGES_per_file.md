@@ -207,23 +207,23 @@ Legend:
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 59 | P31 | **HIGH** | Sector sizing: make configurable | L52–56 | Convert `_PST-CHAIN-SECTORS` / `_PST-STATE-SECTORS` to VARIABLEs. Add `PST-SET-CAPACITY`. Add auto-grow via `FTRUNCATE`. |
-| 60 | B07 | **HIGH** | No block index — O(n) loading | `PST-LOAD-BLOCK` | Add sector-offset index (in-memory array or index file). Loading block N currently parses 0..N-1. |
-| 61 | B08 | **HIGH** | Hardcoded filenames — single chain per node | string literals | Replace `S" chain.dat"` / `S" state.snap"` with chain-id-derived filenames. Federation requires multiple chains per node. |
-| 62 | D06 | **LOW** | `_PST-ENC-SZ = 16384` too small | const | A full block (256 txs × 8 KB) = ~2 MB CBOR. 16 KB buffer will truncate. Raise or stream-encode. |
+| ~~59~~ | ~~P31~~ | ~~**HIGH**~~ | ~~Sector sizing: make configurable~~ | ~~L52–56~~ | ~~Convert `_PST-CHAIN-SECTORS` / `_PST-STATE-SECTORS` to VARIABLEs. Add `PST-SET-CAPACITY`. Add auto-grow via `FTRUNCATE`.~~ |
+| ~~60~~ | ~~B07~~ | ~~**HIGH**~~ | ~~No block index — O(n) loading~~ | ~~`PST-LOAD-BLOCK`~~ | ~~Add sector-offset index (in-memory array or index file). Loading block N currently parses 0..N-1.~~ |
+| ~~61~~ | ~~B08~~ | ~~**HIGH**~~ | ~~Hardcoded filenames — single chain per node~~ | ~~string literals~~ | ~~Replace `S" chain.dat"` / `S" state.snap"` with chain-id-derived filenames. Federation requires multiple chains per node.~~ |
+| ~~62~~ | ~~D06~~ | ~~**LOW**~~ | ~~`_PST-ENC-SZ = 16384` too small~~ | ~~const~~ | ~~A full block (256 txs × 8 KB) = ~2 MB CBOR. 16 KB buffer will truncate. Raise or stream-encode.~~ |
 
 ### File 16: `store/witness.f`
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 63 | C09 | **MED** | `WIT-MAX-ENTRIES = 512` silent drop | `_WIT-RECORD` | Return error flag on overflow instead of silent no-op. STARK proof over witness set will be incomplete if entries are dropped. |
-| 64 | D05 | **LOW** | Linear scan for address lookup | `_WIT-FIND` | O(n) × 32-byte compare. Tolerable at 512 but degrades with larger blocks. Index or hash later. |
+| ~~63~~ | ~~C09~~ | ~~**MED**~~ | ~~`WIT-MAX-ENTRIES = 512` silent drop~~ | ~~`_WIT-RECORD`~~ | ~~Return error flag on overflow instead of silent no-op. STARK proof over witness set will be incomplete if entries are dropped.~~ |
+| ~~64~~ | ~~D05~~ | ~~**LOW**~~ | ~~Linear scan for address lookup~~ | ~~`_WIT-FIND`~~ | ~~O(n) × 32-byte compare. Tolerable at 512 but degrades with larger blocks. Index or hash later.~~ *(skipped — LOW, tolerable at current cap)* |
 
 ### File 17: `store/light.f`
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 65 | C10 | **MED** | `LC-STATE-PROOF` calls full rebuild every time | ~L95 | Uses `_ST-REBUILD-TREE` directly, bypassing dirty-flag optimization from P14. After P14 lands, route through `ST-ROOT` first, then call `SMT-PROVE` on the cached tree. |
+| ~~65~~ | ~~C10~~ | ~~**MED**~~ | ~~`LC-STATE-PROOF` calls full rebuild every time~~ | ~~\~L95~~ | ~~Already resolved — P14 dirty-flag in `_ST-REBUILD-TREE` means `ST-ROOT` call in `LC-STATE-PROOF` already benefits from caching.~~ |
 
 ---
 

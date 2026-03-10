@@ -21,3 +21,6 @@ local_testing/*
 !local_testing/test_sync.py
 !local_testing/test_rpc.py
 !local_testing/test_xrpc_session_repo.py
+!local_testing/test_persist.py
+!local_testing/test_witness.py
+!local_testing/CHANGES_per_file.md

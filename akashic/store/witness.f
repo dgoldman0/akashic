@@ -215,15 +215,16 @@ VARIABLE _WIT-REC-NONCE
 VARIABLE _WIT-REC-NEW
 VARIABLE _WIT-REC-ENT
 
-: _WIT-RECORD  ( addr pre-bal pre-nonce created? -- )
+\ [FIX C09] Returns flag: -1=ok, 0=overflow (was silent EXIT).
+: _WIT-RECORD  ( addr pre-bal pre-nonce created? -- flag )
     _WIT-REC-NEW !
     _WIT-REC-NONCE !
     _WIT-REC-BAL !
     _WIT-REC-ADDR !
-    \ Check if already tracked
-    _WIT-REC-ADDR @ _WIT-FIND -1 <> IF EXIT THEN
-    \ Check capacity
-    _WIT-COUNT @ WIT-MAX-ENTRIES >= IF EXIT THEN
+    \ Check if already tracked — not an error, just a no-op
+    _WIT-REC-ADDR @ _WIT-FIND -1 <> IF -1 EXIT THEN
+    \ Check capacity — this is the overflow error
+    _WIT-COUNT @ WIT-MAX-ENTRIES >= IF 0 EXIT THEN
     \ Append new entry
     _WIT-COUNT @ _WIT-ENTRY-ADDR _WIT-REC-ENT !
     _WIT-REC-ENT @ WIT-ENTRY-SIZE 0 FILL
@@ -241,7 +242,8 @@ VARIABLE _WIT-REC-ENT
     ELSE
         0 _WIT-REC-ENT @ _WIT-OFF-FLAGS + !
     THEN
-    _WIT-COUNT @ 1+ _WIT-COUNT ! ;
+    _WIT-COUNT @ 1+ _WIT-COUNT !
+    -1 ;
 
 \ =====================================================================
 \  8. _WIT-UPDATE-POST — refresh post-values from current state
@@ -295,6 +297,7 @@ VARIABLE _WIT-TX
     \ === Success — commit witness entries ===
     \ 6. Record sender (existing account, created?=0)
     _WIT-HASH-S _WIT-S-BAL @ _WIT-S-NONCE @ 0 _WIT-RECORD
+    0= IF 0 EXIT THEN                 \ [FIX C09] overflow
     \ 7. Check for self-transfer (sender = recipient)
     _WIT-HASH-S _WIT-HASH-R _WIT-CMP32 IF
         \ Self-transfer: only sender entry needed, update post
@@ -303,6 +306,7 @@ VARIABLE _WIT-TX
     THEN
     \ 8. Record recipient
     _WIT-HASH-R _WIT-R-BAL @ _WIT-R-NONCE @ _WIT-R-NEW @ _WIT-RECORD
+    0= IF 0 EXIT THEN                 \ [FIX C09] overflow
     \ 9. Update post-values from current state
     _WIT-HASH-S _WIT-UPDATE-POST
     _WIT-HASH-R _WIT-UPDATE-POST

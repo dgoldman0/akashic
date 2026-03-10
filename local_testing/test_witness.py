@@ -131,7 +131,7 @@ def build_snapshot():
         'VARIABLE _PL',
     ]
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=64 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -170,7 +170,7 @@ def build_snapshot():
 
 def run_forth(lines, max_steps=800_000_000):
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=64 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -716,6 +716,32 @@ def test_multi_tx_verify():
     check("multi-tx block verifies", lines, "VALID")
 
 
+def test_overflow_flag():
+    """[FIX C09] WIT-APPLY-TX returns 0 when witness table overflows."""
+    print("\n=== Overflow flag (C09) ===")
+    # WIT-MAX-ENTRIES is 512.  Each non-self tx records 2 entries
+    # (sender + recipient).  After filling 512 entries, the next
+    # tx should return 0 from WIT-APPLY-TX.
+    #
+    # Strategy: We'll fill the table by recording many unique addresses,
+    # then verify the next WIT-APPLY-TX returns 0.
+    # Since we can't easily create 256 keypairs, we'll manually fill
+    # _WIT-COUNT to near capacity and test a tx at the boundary.
+    lines = _keygen_preamble() + [
+        '_ADDR1 999999 ST-CREATE DROP',
+        'WIT-BEGIN',
+        # Manually set _WIT-COUNT to 511 (1 slot left)
+        '511 _WIT-COUNT !',
+        # Now apply a tx — needs 2 slots (sender + recipient) but only 1 left
+        # The first _WIT-RECORD (sender) succeeds (slot 511)
+        # The second _WIT-RECORD (recipient) fails (slot 512 = WIT-MAX-ENTRIES)
+    ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
+        '_TXBUF WIT-APPLY-TX',
+        'IF ." OK" ELSE ." OVERFLOW" THEN',
+    ]
+    check("overflow returns 0 from WIT-APPLY-TX", lines, "OVERFLOW")
+
+
 # ── Main ──
 
 def main():
@@ -744,6 +770,7 @@ def main():
     test_empty_block()
     test_multi_tx_block()
     test_multi_tx_verify()
+    test_overflow_flag()
 
     total = _pass_count + _fail_count
     print(f"\n{'='*50}")
