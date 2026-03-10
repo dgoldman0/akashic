@@ -16,7 +16,7 @@
 \  Public API:
 \   NODE-INIT   ( port -- )  initialise all sub-systems
 \   NODE-RUN    ( -- )       main loop (runs until NODE-STOP)
-\   NODE-STOP   ( -- )       signal main loop to exit
+\   NODE-STOP   ( -- )       signal main loop to exit + cleanup
 \   NODE-STEP   ( -- )       one iteration (for testing)
 \   NODE-STATUS ( -- state ) 0=stopped 1=running 2=syncing
 \ =================================================================
@@ -49,13 +49,16 @@ PROVIDED akashic-node
 VARIABLE _NODE-STATE                    \ daemon state
 VARIABLE _NODE-PORT                     \ HTTP port
 
-\ Block production
+\ Block production  [FIX D03] time-based interval
 VARIABLE _NODE-PRODUCE?                 \ -1 = produce blocks, 0 = relay only
-VARIABLE _NODE-BLK-INTERVAL             \ blocks between production ticks
-VARIABLE _NODE-TICK                     \ step counter
+VARIABLE _NODE-BLK-INTERVAL             \ seconds between block production
+VARIABLE _NODE-LAST-PRODUCE-T           \ epoch of last production attempt
 
 \ Persistence
 VARIABLE _NODE-LAST-SAVED               \ last persisted chain height
+
+\ [FIX P32] TX pointer buffer for MP-DRAIN → BLK-ADD-TX
+CREATE _NODE-TX-PTRS  BLK-MAX-TXS CELLS ALLOT
 
 \ =====================================================================
 \  3. NODE-INIT — initialise all sub-systems
@@ -67,7 +70,7 @@ VARIABLE _NODE-LAST-SAVED               \ last persisted chain height
     NODE-STOPPED _NODE-STATE !
     0  _NODE-PRODUCE? !
     10 _NODE-BLK-INTERVAL !
-    0  _NODE-TICK !
+    0  _NODE-LAST-PRODUCE-T !
     0  _NODE-LAST-SAVED !
     \ Sub-systems
     ST-INIT
@@ -99,13 +102,15 @@ CREATE _NODE-HTMP 32 ALLOT
     CHAIN-HEIGHT 1+ _NODE-BLK BLK-SET-HEIGHT
     CHAIN-HEAD _NODE-HTMP BLK-HASH
     _NODE-HTMP _NODE-BLK BLK-SET-PREV
-    \ TODO: real timestamp from RTC
-    1 _NODE-BLK BLK-SET-TIME
-    \ Drain mempool into block (max BLK-MAX-TXS or available)
+    \ [FIX P34] Real timestamp from RTC
+    DT-NOW-S _NODE-BLK BLK-SET-TIME
+    \ [FIX P32] Drain mempool into temp buffer, then BLK-ADD-TX each
     MP-COUNT BLK-MAX-TXS MIN           ( n-to-drain )
-    DUP >R
-    _NODE-BLK BLK-MAX-TXS MP-DRAIN    ( actual )
-    DROP R>
+    _NODE-TX-PTRS MP-DRAIN             ( actual )
+    0 ?DO
+        _NODE-TX-PTRS I CELLS + @      ( tx-ptr )
+        _NODE-BLK BLK-ADD-TX DROP
+    LOOP
     \ Finalize: compute roots, apply txs to state
     _NODE-BLK BLK-FINALIZE
     \ Seal with consensus proof
@@ -119,7 +124,7 @@ CREATE _NODE-HTMP 32 ALLOT
     THEN ;
 
 \ =====================================================================
-\  5. Persistence tick
+\  5. Persistence tick  [FIX P35] wired into NODE-STEP
 \ =====================================================================
 
 : _NODE-PERSIST-TICK  ( -- )
@@ -135,22 +140,47 @@ CREATE _NODE-HTMP 32 ALLOT
 : NODE-STEP  ( -- )
     GSP-POLL                           \ receive gossip
     SYNC-STEP                          \ deferred block requests
-    \ Block production (every N steps)
-    1 _NODE-TICK +!
-    _NODE-TICK @ _NODE-BLK-INTERVAL @ MOD 0= IF
+    SRV-STEP                           \ [FIX P33] accept HTTP connection
+    _NODE-PERSIST-TICK                 \ [FIX P35] save new blocks
+    \ [FIX D03] Time-based block production
+    DT-NOW-S DUP _NODE-LAST-PRODUCE-T @ -
+    _NODE-BLK-INTERVAL @ >= IF
+        _NODE-LAST-PRODUCE-T !
         _NODE-PRODUCE-BLOCK
+    ELSE
+        DROP
     THEN ;
 
 \ =====================================================================
-\  7. NODE-RUN / NODE-STOP
+\  7. Yield helper  [FIX P36]
+\ =====================================================================
+\  Busy-wait for at least ms milliseconds using DT-NOW-MS.
+\  Prevents the main loop from consuming 100% CPU.
+
+: _NODE-YIELD  ( ms -- )
+    DT-NOW-MS +                        ( deadline )
+    BEGIN DUP DT-NOW-MS > WHILE REPEAT DROP ;
+
+\ =====================================================================
+\  8. NODE-RUN / NODE-STOP
 \ =====================================================================
 
 : NODE-STOP  ( -- )
     NODE-STOPPED _NODE-STATE !
+    \ [FIX P37] Graceful shutdown
+    PST-SAVE-STATE DROP                \ flush state snapshot
+    PST-CLOSE                          \ close persistence files
+    \ Disconnect all gossip peers
+    GSP-MAX-PEERS 0 ?DO
+        I GSP-DISCONNECT
+    LOOP
+    \ Zeroize signing key  [A05]
+    _CON-SIGN-PRIV 64 0 FILL
     SERVE-STOP ;
 
 : NODE-RUN  ( -- )
     NODE-RUNNING _NODE-STATE !
+    DT-NOW-S _NODE-LAST-PRODUCE-T !   \ [FIX D03] seed production timer
     BEGIN
         _NODE-STATE @ NODE-STOPPED <>
     WHILE
@@ -163,16 +193,17 @@ CREATE _NODE-HTMP 32 ALLOT
             THEN
         THEN
         NODE-STEP
+        1 _NODE-YIELD                 \ [FIX P36] ~1 ms yield
     REPEAT ;
 
 \ =====================================================================
-\  8. Public queries
+\  9. Public queries
 \ =====================================================================
 
 : NODE-STATUS  ( -- state )  _NODE-STATE @ ;
 
 \ =====================================================================
-\  9. Concurrency guard
+\  10. Concurrency guard
 \ =====================================================================
 
 GUARD _node-guard

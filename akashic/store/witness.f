@@ -107,6 +107,16 @@ VARIABLE _WIT-R-NEW
 \ Scratch for XMEM→RAM address copy (prove/verify)
 CREATE _WIT-PRV-ADDR 32 ALLOT
 
+\ [FIX D05] Hash table for O(1) address lookup
+\ 1024 buckets, open-addressed, linear probing.
+\ Each bucket holds an entry index (0..511) or -1 (empty).
+1024 CONSTANT _WIT-HT-SIZE
+_WIT-HT-SIZE 1- CONSTANT _WIT-HT-MASK
+CREATE _WIT-HT  _WIT-HT-SIZE CELLS ALLOT
+
+: _WIT-HT-CLEAR  ( -- )
+    _WIT-HT _WIT-HT-SIZE CELLS 255 FILL ;
+
 \ =====================================================================
 \  3. WIT-INIT / WIT-DESTROY
 \ =====================================================================
@@ -124,6 +134,7 @@ CREATE _WIT-PRV-ADDR 32 ALLOT
     THEN
     0 _WIT-COUNT !
     0 _WIT-ACTIVE !
+    _WIT-HT-CLEAR
     _WIT-PRE-ROOT 32 0 FILL
     _WIT-POST-ROOT 32 0 FILL
     -1 ;
@@ -150,6 +161,7 @@ CREATE _WIT-PRV-ADDR 32 ALLOT
 
 : WIT-BEGIN  ( -- )
     0 _WIT-COUNT !
+    _WIT-HT-CLEAR
     _WIT-BUF-PTR @ _WIT-BUF-SIZE 0 FILL
     \ Capture pre-state snapshot
     _WIT-PRE-SNAP-PTR @ ST-SNAPSHOT
@@ -172,15 +184,13 @@ CREATE _WIT-PRV-ADDR 32 ALLOT
     WIT-ENTRY-SIZE * _WIT-BUF-PTR @ + ;
 
 \ =====================================================================
-\  6. _WIT-FIND — linear scan for address in entries
+\  6. _WIT-FIND — O(1) hash-table lookup  [FIX D05]
 \ =====================================================================
 \  ( addr -- idx | -1 )
-\  Compares 32-byte address against each entry's address field.
-\  Returns index if found, -1 if not.
+\  Hashes first 8 bytes of the 32-byte address, probes the
+\  1024-bucket open-addressed table.  Falls back to -1 on miss.
 
 VARIABLE _WIT-FIND-ADDR
-VARIABLE _WIT-FIND-I
-VARIABLE _WIT-FIND-RESULT
 
 : _WIT-CMP32  ( a b -- flag )
     32 0 DO
@@ -190,17 +200,39 @@ VARIABLE _WIT-FIND-RESULT
     LOOP
     2DROP -1 ;
 
+\ Hash: read first cell of 32-byte address, mask to bucket index.
+: _WIT-HT-HASH  ( addr -- bucket )
+    @ _WIT-HT-MASK AND ;
+
 : _WIT-FIND  ( addr -- idx | -1 )
     _WIT-FIND-ADDR !
-    -1 _WIT-FIND-RESULT !
-    _WIT-COUNT @ 0 ?DO
-        I _WIT-ENTRY-ADDR _WIT-PRV-ADDR 32 CMOVE
-        _WIT-FIND-ADDR @ _WIT-PRV-ADDR _WIT-CMP32 IF
-            I _WIT-FIND-RESULT !
-            LEAVE
+    _WIT-FIND-ADDR @ _WIT-HT-HASH      ( bucket )
+    _WIT-HT-SIZE 0 DO
+        DUP CELLS _WIT-HT + @           ( bucket idx-or-neg1 )
+        DUP -1 = IF                      \ empty slot → not found
+            NIP UNLOOP EXIT              ( -1 )
         THEN
+        \ Compare entry's address against query
+        DUP _WIT-ENTRY-ADDR _WIT-PRV-ADDR 32 CMOVE
+        _WIT-FIND-ADDR @ _WIT-PRV-ADDR _WIT-CMP32 IF
+            NIP UNLOOP EXIT              ( idx )
+        THEN
+        DROP
+        1+ _WIT-HT-MASK AND             \ wrap to next bucket
     LOOP
-    _WIT-FIND-RESULT @ ;
+    DROP -1 ;
+
+\ Insert entry idx into hash table.  addr is the 32-byte key in RAM.
+: _WIT-HT-INSERT  ( idx addr -- )
+    _WIT-HT-HASH                         ( idx bucket )
+    _WIT-HT-SIZE 0 DO
+        DUP CELLS _WIT-HT + @ -1 = IF
+            CELLS _WIT-HT + !            ( -- )
+            UNLOOP EXIT
+        THEN
+        1+ _WIT-HT-MASK AND
+    LOOP
+    2DROP ;                              \ table full — should never happen
 
 \ =====================================================================
 \  7. _WIT-RECORD — add or skip entry
@@ -242,6 +274,8 @@ VARIABLE _WIT-REC-ENT
     ELSE
         0 _WIT-REC-ENT @ _WIT-OFF-FLAGS + !
     THEN
+    \ [FIX D05] Insert into hash table
+    _WIT-COUNT @  _WIT-REC-ADDR @  _WIT-HT-INSERT
     _WIT-COUNT @ 1+ _WIT-COUNT !
     -1 ;
 

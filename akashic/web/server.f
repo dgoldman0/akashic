@@ -330,6 +330,26 @@ VARIABLE _SRV-DISPATCH-XT
     THEN ;
 
 \ =====================================================================
+\  Layer 7 — Non-blocking step (for daemon main loop)
+\ =====================================================================
+\
+\  SRV-STEP ( -- )
+\    Try to accept one connection (non-blocking).  If a client is
+\    waiting, handle it and return.  If not, return immediately.
+\    Suitable for calling once per NODE-STEP iteration.
+
+: SRV-STEP  ( -- )
+    SRV-OK? 0= IF EXIT THEN
+    _SRV-RUNNING @ 0= IF EXIT THEN
+    _SRV-POLL
+    _SRV-SD @ _SRV-ACCEPT             ( new-sd | -1 )
+    DUP -1 <> IF
+        SRV-HANDLE
+    ELSE
+        DROP
+    THEN ;
+
+\ =====================================================================
 \  Concurrency Guard
 \ =====================================================================
 \
@@ -342,6 +362,8 @@ GUARD-BLOCKING _srv-guard
 
 ' SRV-HANDLE     CONSTANT _srv-handle-xt
 ' SRV-HANDLE-BUF CONSTANT _srv-hbuf-xt
+' SRV-STEP       CONSTANT _srv-step-xt
 
 : SRV-HANDLE      ( sd -- )       _srv-handle-xt _srv-guard WITH-GUARD ;
 : SRV-HANDLE-BUF  ( addr len -- ) _srv-hbuf-xt   _srv-guard WITH-GUARD ;
+: SRV-STEP        ( -- )          _srv-step-xt   _srv-guard WITH-GUARD ;

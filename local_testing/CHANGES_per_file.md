@@ -217,7 +217,7 @@ Legend:
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
 | ~~63~~ | ~~C09~~ | ~~**MED**~~ | ~~`WIT-MAX-ENTRIES = 512` silent drop~~ | ~~`_WIT-RECORD`~~ | ~~Return error flag on overflow instead of silent no-op. STARK proof over witness set will be incomplete if entries are dropped.~~ |
-| ~~64~~ | ~~D05~~ | ~~**LOW**~~ | ~~Linear scan for address lookup~~ | ~~`_WIT-FIND`~~ | ~~O(n) × 32-byte compare. Tolerable at 512 but degrades with larger blocks. Index or hash later.~~ *(skipped — LOW, tolerable at current cap)* |
+| ~~64~~ | ~~D05~~ | ~~**LOW**~~ | ~~Linear scan for address lookup~~ | ~~`_WIT-FIND`~~ | ~~O(n) × 32-byte compare. Replaced with 1024-bucket open-addressed hash table. O(1) avg lookup via first-cell hash of 32-byte address.~~ |
 
 ### File 17: `store/light.f`
 
@@ -233,13 +233,13 @@ Legend:
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 66 | P32 | **CRIT** | `MP-DRAIN` overwrites block header | L104 | Allocate `_NODE-TX-PTRS` buffer (2048 bytes). Drain mempool into temp buffer, then call `BLK-ADD-TX` per entry. |
-| 67 | P33 | **CRIT** | Wire `SRV-STEP` into `NODE-STEP` | L137–143 | Add `SRV-STEP` call at top of `NODE-STEP`. Without this, RPC server accepts connections but never processes requests. |
-| 68 | P34 | **CRIT** | Real timestamps (`DT-NOW-S`) | L100 | `REQUIRE datetime.f`. Replace `1 _NODE-BLK BLK-SET-TIME` with `DT-NOW-S _NODE-BLK BLK-SET-TIME`. |
-| 69 | P35 | **HIGH** | Wire `_NODE-PERSIST-TICK` into `NODE-STEP` | defined but never called | Add `_NODE-PERSIST-TICK` call in `NODE-STEP` after `SYNC-STEP`. |
-| 70 | P37 | **MED** | Graceful shutdown | L137–139 | Add to `NODE-STOP`: `PST-SAVE-STATE`, `PST-CLOSE`, disconnect all gossip peers, `_CON-SIGN-PRIV 64 0 FILL` (ties into A05). |
-| 71 | P36 | **MED** | Busy loop yield | `NODE-RUN` | Add `_NODE-YIELD ( ms -- )` using `DT-NOW-MS` busy-wait. Call `1 _NODE-YIELD` after each `NODE-STEP`. Limits to ~1000 iter/sec. |
-| 72 | D03 | **LOW** | `_NODE-BLK-INTERVAL` is step-based, not time-based | const | Block production rate depends on hardware speed. Switch to wall-clock interval using `DT-NOW-S`. |
+| ~~66~~ | ~~P32~~ | ~~**CRIT**~~ | ~~`MP-DRAIN` overwrites block header~~ | ~~L104~~ | ~~Allocate `_NODE-TX-PTRS` buffer (2048 bytes). Drain mempool into temp buffer, then call `BLK-ADD-TX` per entry.~~ |
+| ~~67~~ | ~~P33~~ | ~~**CRIT**~~ | ~~Wire `SRV-STEP` into `NODE-STEP`~~ | ~~L137–143~~ | ~~Add `SRV-STEP` call at top of `NODE-STEP`. New non-blocking `SRV-STEP` added to server.f (Layer 7).~~ |
+| ~~68~~ | ~~P34~~ | ~~**CRIT**~~ | ~~Real timestamps (`DT-NOW-S`)~~ | ~~L100~~ | ~~Replace `1 _NODE-BLK BLK-SET-TIME` with `DT-NOW-S _NODE-BLK BLK-SET-TIME`.~~ |
+| ~~69~~ | ~~P35~~ | ~~**HIGH**~~ | ~~Wire `_NODE-PERSIST-TICK` into `NODE-STEP`~~ | ~~defined but never called~~ | ~~Add `_NODE-PERSIST-TICK` call in `NODE-STEP` after `SYNC-STEP`.~~ |
+| ~~70~~ | ~~P37~~ | ~~**MED**~~ | ~~Graceful shutdown~~ | ~~L137–139~~ | ~~`NODE-STOP`: `PST-SAVE-STATE`, `PST-CLOSE`, disconnect all gossip peers, `_CON-SIGN-PRIV 64 0 FILL`.~~ |
+| ~~71~~ | ~~P36~~ | ~~**MED**~~ | ~~Busy loop yield~~ | ~~`NODE-RUN`~~ | ~~`_NODE-YIELD ( ms -- )` busy-wait via `DT-NOW-MS`. `1 _NODE-YIELD` after each `NODE-STEP`.~~ |
+| ~~72~~ | ~~D03~~ | ~~**LOW**~~ | ~~`_NODE-BLK-INTERVAL` is step-based, not time-based~~ | ~~const~~ | ~~Replaced `_NODE-TICK` with `_NODE-LAST-PRODUCE-T` + `DT-NOW-S`. Wall-clock interval in seconds.~~ |
 
 ---
 
