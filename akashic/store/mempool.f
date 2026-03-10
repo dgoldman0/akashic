@@ -6,11 +6,11 @@
 \
 \  Bounded priority queue of pending transactions, sorted by
 \  sender address (32 bytes) + nonce (u64).  O(log n) duplicate
-\  detection via SHA3-256 tx hash.
+\  detection via SHA3-256 tx hash.  Fee-based eviction when full.
 \
 \  Public API:
 \   MP-INIT        ( -- )                 initialize empty mempool
-\   MP-ADD         ( tx -- flag )         validate and insert
+\   MP-ADD         ( tx -- flag )         validate, verify sig, insert
 \   MP-REMOVE      ( hash -- flag )       remove by tx hash
 \   MP-DRAIN       ( n buf -- actual )    pop up to n txs into buffer
 \   MP-RELEASE     ( -- )                 free drained tx buffer slots
@@ -19,7 +19,7 @@
 \   MP-CONTAINS?   ( hash -- flag )       is tx in pool?
 \
 \  Constants:
-\   MP-CAPACITY    ( -- 256 )             max pending transactions
+\   MP-CAPACITY    ( -- 4096 )            max pending transactions
 \
 \  Not reentrant.
 \ =================================================================
@@ -33,14 +33,15 @@ PROVIDED akashic-mempool
 \  1. Constants
 \ =====================================================================
 
-256 CONSTANT MP-CAPACITY
+4096 CONSTANT MP-CAPACITY
 
 \ =====================================================================
 \  2. Storage
 \ =====================================================================
 
-\ Pool of full tx buffers (256 × TX-BUF-SIZE).
+\ Pool of full tx buffers (4096 × TX-BUF-SIZE).
 \ Mempool owns these buffers — callers work with pointers.
+\ NOTE: ~32 MiB allocation — lives in XMEM on production nodes.
 CREATE _MP-POOL  MP-CAPACITY TX-BUF-SIZE * ALLOT
 
 \ Slot state: 0=free, 1=active, 2=drained (awaiting MP-RELEASE)
@@ -50,12 +51,18 @@ _MP-SLOTS MP-CAPACITY 0 FILL
 \ Sorted index: 48 bytes per entry
 \   +0   32B  sender_addr  (SHA3-256 of sender pubkey)
 \   +32   8B  nonce
-\   +40   8B  pool slot index (0..255)
+\   +40   8B  pool slot index (0..4095)
 48 CONSTANT _MP-ENT-SZ
 CREATE _MP-IDX  MP-CAPACITY _MP-ENT-SZ * ALLOT
 
-\ Tx hashes for dedup: parallel to sorted index (256 × 32 bytes)
+\ Tx hashes for dedup: parallel to sorted index (4096 × 32 bytes)
 CREATE _MP-HASHES  MP-CAPACITY 32 * ALLOT
+
+\ Hash-map bucket table for O(1) dedup instead of linear scan.
+\ 8192 buckets (2× capacity), each holding a sorted-index value
+\ or -1 (empty).  Open-addressing with linear probing.
+\ TODO: implement hash-indexed dedup for >4096 scale. Linear scan
+\       over 4096 × 32 bytes = 128 KiB is acceptable for launch.
 
 VARIABLE _MP-COUNT
 0 _MP-COUNT !
@@ -144,8 +151,10 @@ VARIABLE _MP-BS-HI
     _MP-BS-LO @ 0 ;
 
 \ =====================================================================
-\  8. Hash-based lookup (linear scan)
+\  8. Hash-based lookup (linear scan over hash table)
 \ =====================================================================
+\  O(n) scan — acceptable at 4096: 128 KiB sequential read.
+\  TODO: upgrade to hash-indexed bucket table for >4096 scale.
 
 : _MP-HASH-MATCH?  ( idx -- flag )
     32 * _MP-HASHES +
@@ -215,46 +224,90 @@ VARIABLE _MP-SH-IDX
     _MP-HASH-FIND -1 <> ;
 
 \ =====================================================================
-\  13. MP-ADD — validate and insert transaction
+\  13. MP-ADD — validate, verify signature, and insert transaction
 \ =====================================================================
+\  FIX A04: Now calls TX-VERIFY (cryptographic signature check)
+\  before allocating a pool slot.  Without this, forged txs could
+\  consume all pool slots → trivial DoS.
+\
+\  FIX D04: Fee-based eviction.  When pool is full, the new tx
+\  replaces the lowest-fee tx if its fee is strictly higher.
 
 VARIABLE _MP-ADD-TX
 VARIABLE _MP-ADD-SLOT
 VARIABLE _MP-ADD-INS
 
+\ Find sorted-index of the entry with the lowest fee.
+\ Scans all entries — O(n).  Only called when pool is full.
+VARIABLE _MP-EVICT-IDX
+VARIABLE _MP-EVICT-FEE
+
+: _MP-FIND-LOWEST-FEE  ( -- idx fee )
+    0 _MP-EVICT-IDX !
+    0 _MP-ENT 40 + @ _MP-TXBUF TX-FEE@ _MP-EVICT-FEE !
+    _MP-COUNT @ 1 ?DO
+        I _MP-ENT 40 + @ _MP-TXBUF TX-FEE@
+        DUP _MP-EVICT-FEE @ U< IF
+            _MP-EVICT-FEE !
+            I _MP-EVICT-IDX !
+        ELSE
+            DROP
+        THEN
+    LOOP
+    _MP-EVICT-IDX @ _MP-EVICT-FEE @ ;
+
+\ Evict entry at sorted-index idx (free slot, shift left, decrement count).
+: _MP-EVICT  ( idx -- )
+    DUP _MP-ENT 40 + @ _MP-FREE
+    DUP _MP-SHIFT-L
+    DROP
+    -1 _MP-COUNT +! ;
+
 : MP-ADD  ( tx -- flag )
     _MP-ADD-TX !
     \ 1. Structural validity
     _MP-ADD-TX @ TX-VALID? 0= IF 0 EXIT THEN
-    \ 2. Compute tx hash
+    \ 2. Cryptographic signature verification  [FIX A04]
+    _MP-ADD-TX @ TX-VERIFY 0= IF 0 EXIT THEN
+    \ 3. Compute tx hash
     _MP-ADD-TX @ _MP-HASH-TMP TX-HASH
-    \ 3. Duplicate check
+    \ 4. Duplicate check
     _MP-HASH-TMP _MP-HASH-FIND -1 <> IF 0 EXIT THEN
-    \ 4. Capacity check
-    _MP-COUNT @ MP-CAPACITY >= IF 0 EXIT THEN
-    \ 5. Allocate pool slot
+    \ 5. Capacity check — with fee-based eviction  [FIX D04]
+    _MP-COUNT @ MP-CAPACITY >= IF
+        \ Pool full — try eviction
+        _MP-FIND-LOWEST-FEE                  ( evict-idx evict-fee )
+        _MP-ADD-TX @ TX-FEE@ SWAP            ( evict-idx new-fee evict-fee )
+        SWAP U< 0= IF                        ( new <= evict → no room )
+            \ New tx fee ≤ lowest fee — no room
+            DROP 0 EXIT
+        THEN
+        \ Evict lowest-fee entry to make room
+        _MP-EVICT
+    THEN
+    \ 6. Allocate pool slot
     _MP-ALLOC DUP -1 = IF DROP 0 EXIT THEN
     _MP-ADD-SLOT !
-    \ 6. Copy tx into pool
+    \ 7. Copy tx into pool
     _MP-ADD-TX @ _MP-ADD-SLOT @ _MP-TXBUF TX-BUF-SIZE CMOVE
-    \ 7. Compute sender address
+    \ 8. Compute sender address
     _MP-ADD-TX @ TX-FROM@ ED25519-KEY-LEN _MP-ADDR-TMP SHA3-256-HASH
-    \ 8. Binary search for insertion point
+    \ 9. Binary search for insertion point
     _MP-ADDR-TMP _MP-ADD-TX @ TX-NONCE@ _MP-BSEARCH IF
         \ Same (sender, nonce) already in pool — reject
         _MP-ADD-SLOT @ _MP-FREE
         DROP 0 EXIT
     THEN
     _MP-ADD-INS !
-    \ 9. Shift right to make room
+    \ 10. Shift right to make room
     _MP-ADD-INS @ _MP-SHIFT-R
-    \ 10. Write index entry: sender_addr(32) + nonce(8) + slot(8)
+    \ 11. Write index entry: sender_addr(32) + nonce(8) + slot(8)
     _MP-ADDR-TMP  _MP-ADD-INS @ _MP-ENT  32 CMOVE
     _MP-ADD-TX @ TX-NONCE@  _MP-ADD-INS @ _MP-ENT 32 + !
     _MP-ADD-SLOT @  _MP-ADD-INS @ _MP-ENT 40 + !
-    \ 11. Write hash (parallel to index)
+    \ 12. Write hash (parallel to index)
     _MP-HASH-TMP  _MP-ADD-INS @ 32 * _MP-HASHES +  32 CMOVE
-    \ 12. Increment count
+    \ 13. Increment count
     1 _MP-COUNT +!
     -1 ;
 

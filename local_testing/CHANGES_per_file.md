@@ -143,13 +143,13 @@ Legend:
 
 ## Priority 5 — Mempool (gatekeeper for tx admission)
 
-### File 9: `store/mempool.f`
+### ~~File 9: `store/mempool.f`~~ ✅ DONE (21/21 tests)
 
 | # | ID | Severity | Change | Lines | Summary |
 |---|-----|----------|--------|-------|---------|
-| 41 | A04 | **CRIT** | Verify signatures on admission | ~L228 | Add `TX-VERIFY` call in `MP-ADD` (after `TX-VALID?`, before slot allocation). Without this, forged txs consume all 256 slots → trivial DoS. |
-| 42 | B03 | **HIGH** | Raise `MP-CAPACITY` from 256 | ~L36 | Raise to 4096+. Memory: 4096 × TX-BUF-SIZE ≈ 32 MB (acceptable). Current 256 = one block's worth. |
-| 43 | D04 | **LOW** | Linear scan + no eviction + no priority | `_MP-HASH-FIND`, `_MP-ALLOC` | Tolerable at 256, bottleneck at 4096+. Add fee-based eviction when capacity is raised. Hash-index lookup. Lower priority — works for launch. |
+| ~~41~~ | ~~A04~~ | ~~**CRIT**~~ | ~~Verify signatures on admission~~ | ~L228 | ✅ `TX-VERIFY` call added in `MP-ADD` after `TX-VALID?`, before slot allocation. Forged/wrong-key txs now rejected. |
+| ~~42~~ | ~~B03~~ | ~~**HIGH**~~ | ~~Raise `MP-CAPACITY` from 256~~ | ~L36 | ✅ Raised to 4096. ~32 MiB in XMEM. |
+| ~~43~~ | ~~D04~~ | ~~**LOW**~~ | ~~Linear scan + no eviction + no priority~~ | `_MP-HASH-FIND`, `_MP-ALLOC` | ✅ Fee-based eviction added (`_MP-FIND-LOWEST-FEE` + `_MP-EVICT`). Linear hash scan kept (128 KiB at 4096 = acceptable for launch). |
 
 ---
 
@@ -277,7 +277,7 @@ a per-file fix.
 | **3** | smt.f, state.f | 1–2 days | SMT capacity, error prop, staking. All state tests pass. |
 | **4** | consensus.f | 1 day | STARK stub, PoS guards, constants→variables, key zeroize |
 | ~~**5**~~ | ~~block.f, genesis.f~~ | ~~1 day~~ | ✅ block.f (65/65); genesis.f (19/19) |
-| **6** | mempool.f | 0.5 day | Sig verify on admit, capacity raise |
+| ~~**6**~~ | ~~mempool.f~~ | ~~0.5 day~~ | ✅ 21/21 tests — sig verify, 4096 capacity, fee eviction |
 | **7** | gossip.f, sync.f, ws.f | 1–2 days | Bounds, capacity, msg validation, full-block sync |
 | **8** | rpc.f, server.f | 1 day | Proof buffer, broadcast, rate limit |
 | **9** | persist.f, witness.f, light.f | 1 day | Sector sizing, block index, filenames, witness overflow |

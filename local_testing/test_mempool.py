@@ -34,6 +34,7 @@ CBOR_F     = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
 FMT_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
 MERKLE_F   = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
 TX_F       = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
+SMT_F      = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
 STATE_F    = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
 BLOCK_F    = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
 CONSENSUS_F = os.path.join(ROOT_DIR, "akashic", "consensus", "consensus.f")
@@ -107,7 +108,7 @@ def build_snapshot():
     for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
                  SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
                  ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
-                 MERKLE_F, TX_F, STATE_F, BLOCK_F,
+                 MERKLE_F, TX_F, SMT_F, STATE_F, BLOCK_F,
                  CONSENSUS_F, MEMPOOL_F]:
         dep_lines += _load_forth_lines(path)
 
@@ -493,6 +494,105 @@ def test_multi_sender_interleaved():
           ], "4")
 
 
+def test_capacity_constant():
+    """MP-CAPACITY should be 4096 (FIX B03)."""
+    check("MP-CAPACITY = 4096",
+          _keygen_preamble() + [
+              'MP-CAPACITY . CR',
+          ], "4096")
+
+
+def test_reject_forged_sig():
+    """MP-ADD must reject a tx with valid structure but invalid signature (FIX A04).
+    This is the critical DoS fix: forged txs must not consume pool slots."""
+    check("MP-ADD forged sig → FALSE",
+          _keygen_preamble()
+          + [
+              # Create a structurally valid tx but do NOT sign it (sig = zeros)
+              'CREATE _FORGED TX-BUF-SIZE ALLOT',
+              '_FORGED TX-INIT',
+              '_PUB1 _FORGED TX-SET-FROM',
+              '_PUB2 _FORGED TX-SET-TO',
+              '999 _FORGED TX-SET-AMOUNT',
+              '0 _FORGED TX-SET-NONCE',
+              # TX-VALID? would pass (has from, to, valid sig_mode default)
+              # but TX-VERIFY fails (sig is all zeros)
+              '_FORGED MP-ADD . MP-COUNT . CR',
+          ], "0 0")
+
+
+def test_reject_wrong_sig():
+    """MP-ADD must reject a tx signed with wrong private key (FIX A04)."""
+    check("MP-ADD wrong-key sig → FALSE",
+          _keygen_preamble()
+          + [
+              'CREATE _WRONG TX-BUF-SIZE ALLOT',
+              '_WRONG TX-INIT',
+              '_PUB1 _WRONG TX-SET-FROM',   # from = key1
+              '_PUB2 _WRONG TX-SET-TO',
+              '500 _WRONG TX-SET-AMOUNT',
+              '0 _WRONG TX-SET-NONCE',
+              '_WRONG _PRIV2 _PUB1 TX-SIGN',  # sign with key2's privkey
+              '_WRONG MP-ADD . MP-COUNT . CR',
+          ], "0 0")
+
+
+def test_fee_eviction():
+    """Fee-based eviction components: _MP-FIND-LOWEST-FEE and _MP-EVICT (FIX D04).
+    Full integration (MP-ADD on a full 4096 pool) is impractical in emulator;
+    we test the eviction machinery directly with a small pool."""
+    # Add 3 txs with fees 0, 50, 100 and verify _MP-FIND-LOWEST-FEE finds fee=0
+    check("_MP-FIND-LOWEST-FEE finds lowest",
+          _keygen_preamble()
+          + _make_tx(1, 2, 100, 0, '_TXA')
+          + [
+              '0 _TXA TX-SET-FEE',
+              '_TXA _PRIV1 _PUB1 TX-SIGN',
+              '_TXA MP-ADD DROP',
+          ]
+          + _make_tx(1, 2, 200, 1, '_TXB')
+          + [
+              '50 _TXB TX-SET-FEE',
+              '_TXB _PRIV1 _PUB1 TX-SIGN',
+              '_TXB MP-ADD DROP',
+          ]
+          + _make_tx(2, 1, 300, 0, '_TXC')
+          + [
+              '100 _TXC TX-SET-FEE',
+              '_TXC _PRIV2 _PUB2 TX-SIGN',
+              '_TXC MP-ADD DROP',
+              'MP-COUNT .',                    # 3
+              '_MP-FIND-LOWEST-FEE . . CR',    # fee=0, idx (order: fee idx)
+          ], "3 0")  # count=3, lowest fee=0
+
+def test_evict_removes_entry():
+    """_MP-EVICT should remove an entry and decrement count."""
+    check("_MP-EVICT removes entry",
+          _keygen_preamble()
+          + _make_tx(1, 2, 100, 0, '_TXA')
+          + [
+              '0 _TXA TX-SET-FEE',
+              '_TXA _PRIV1 _PUB1 TX-SIGN',
+              '_TXA MP-ADD DROP',
+          ]
+          + _make_tx(1, 2, 200, 1, '_TXB')
+          + [
+              '50 _TXB TX-SET-FEE',
+              '_TXB _PRIV1 _PUB1 TX-SIGN',
+              '_TXB MP-ADD DROP',
+          ]
+          + _make_tx(2, 1, 300, 0, '_TXC')
+          + [
+              '100 _TXC TX-SET-FEE',
+              '_TXC _PRIV2 _PUB2 TX-SIGN',
+              '_TXC MP-ADD DROP',
+              'MP-COUNT .',                    # 3
+              '_MP-FIND-LOWEST-FEE DROP',      # leave idx on stack
+              '_MP-EVICT',                     # evict lowest-fee entry
+              'MP-COUNT . CR',                 # 2
+          ], "3 2")
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════
@@ -518,6 +618,12 @@ if __name__ == "__main__":
     test_nonce_order_same_sender()
     test_add_invalid()
     test_multi_sender_interleaved()
+    # New tests for fixes A04, B03, D04
+    test_capacity_constant()
+    test_reject_forged_sig()
+    test_reject_wrong_sig()
+    test_fee_eviction()
+    test_evict_removes_entry()
 
     print()
     total = _pass_count + _fail_count
