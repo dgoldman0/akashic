@@ -287,6 +287,7 @@ VARIABLE _smt-i-val
     0 R@ _SN-X0 + !
     0 R@ _SN-X1 + !
     0 R@ _SN-X2 + !
+    ROT ROT                        ( idx key val  R: tree node )
     R@ _SN-FB + 32 CMOVE          \ value → fb
     R> _SN-FA + 32 CMOVE          ( idx )  \ key → fa
     R> DROP ;
