@@ -676,15 +676,16 @@ VARIABLE _ITC-IMG-BLEN    \ body-len  scratch for ITC-SAVE-IMAGE
 : ITC-LOAD-IMAGE  ( image-addr image-len -- body-addr body-len entry-count | 0 )
     OVER @ _ITC-IMG-MAGIC <> IF 2DROP 0 EXIT THEN
     OVER CELL+ @ _ITC-IMG-VERSION <> IF 2DROP 0 EXIT THEN
-    OVER 2 CELLS + @                ( img len entry-count )
-    >R
     OVER 3 CELLS + @                ( img len body-len )
+    >R
+    OVER 2 CELLS + @                ( img len entry-count )
     >R
     \ Skip header (5 cells) + entry table
     DROP                            ( img )
     5 CELLS +
     R@ _ITC-IMG-ENT-SZ * +          ( body-addr  — past header + entries )
-    R> R>                           ( body-addr body-len entry-count )
+    R> R>                           ( body-addr entry-count body-len )
+    SWAP                            ( body-addr body-len entry-count )
     ;
 
 \ =====================================================================
