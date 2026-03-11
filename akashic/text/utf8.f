@@ -187,3 +187,20 @@ VARIABLE _UN-IDX
     REPEAT
     2DROP R> DROP
     UTF8-REPLACEMENT ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+GUARD _utf8-guard
+
+' UTF8-DECODE     CONSTANT _utf8-decode-xt
+' UTF8-ENCODE     CONSTANT _utf8-encode-xt
+' UTF8-LEN        CONSTANT _utf8-len-xt
+' UTF8-VALID?     CONSTANT _utf8-valid-q-xt
+' UTF8-NTH        CONSTANT _utf8-nth-xt
+
+: UTF8-DECODE     _utf8-decode-xt _utf8-guard WITH-GUARD ;
+: UTF8-ENCODE     _utf8-encode-xt _utf8-guard WITH-GUARD ;
+: UTF8-LEN        _utf8-len-xt _utf8-guard WITH-GUARD ;
+: UTF8-VALID?     _utf8-valid-q-xt _utf8-guard WITH-GUARD ;
+: UTF8-NTH        _utf8-nth-xt _utf8-guard WITH-GUARD ;
+[THEN] [THEN]

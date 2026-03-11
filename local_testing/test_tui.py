@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test suite for akashic-tui Layer 0: ansi.f + keys.f.
+"""Test suite for akashic-tui Layer 0 + Layer 1.
 
 Tests ANSI escape sequence emission (ansi.f) and terminal input
 decoding (keys.f) against the Megapad-64 emulator.
@@ -17,6 +17,8 @@ EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
 ANSI_F     = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
 KEYS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "keys.f")
 UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
+CELL_F     = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
+SCREEN_F   = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -78,13 +80,15 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8.f + ansi.f + keys.f ...")
+    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
     utf8_lines = _load_forth_lines(UTF8_F)
     ansi_lines = _load_forth_lines(ANSI_F)
     keys_lines = _load_forth_lines(KEYS_F)
+    cell_lines = _load_forth_lines(CELL_F)
+    screen_lines = _load_forth_lines(SCREEN_F)
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -96,7 +100,8 @@ def build_snapshot():
 
     payload = "\n".join(
         kdos_lines + ["ENTER-USERLAND"] +
-        utf8_lines + ansi_lines + keys_lines + helpers
+        utf8_lines + ansi_lines + keys_lines +
+        cell_lines + screen_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -517,6 +522,268 @@ def test_keys_accessors():
 
 
 # =====================================================================
+#  CELL.F TESTS — Character Cell Type
+# =====================================================================
+
+def test_cell_pack_unpack():
+    print("\n── CELL pack / unpack round-trip ──")
+    # Pack: cp=65('A'), fg=7, bg=0, attrs=0  →  unpack all fields
+    check("cp round-trip",    ['65 7 0 0 CELL-MAKE CELL-CP@ .'], "65")
+    check("fg round-trip",    ['65 7 0 0 CELL-MAKE CELL-FG@ .'], "7")
+    check("bg round-trip",    ['65 7 0 0 CELL-MAKE CELL-BG@ .'], "0")
+    check("attrs round-trip", ['65 7 0 0 CELL-MAKE CELL-ATTRS@ .'], "0")
+    # Non-zero bg/attrs
+    check("bg=42 round-trip", ['88 14 42 0 CELL-MAKE CELL-BG@ .'], "42")
+    check("attrs=3 round-trip", ['88 14 42 3 CELL-MAKE CELL-ATTRS@ .'], "3")
+    # All fields at once
+    check("full round-trip",
+        ['9999 200 100 5 CELL-MAKE',
+         'DUP CELL-CP@ .',
+         'DUP CELL-FG@ .',
+         'DUP CELL-BG@ .',
+         'CELL-ATTRS@ .'], "9999 200 100 5")
+
+
+def test_cell_setters():
+    print("\n── CELL field setters ──")
+    check("FG! replace",
+        ['65 7 0 0 CELL-MAKE 200 SWAP CELL-FG!',
+         'DUP CELL-FG@ . CELL-CP@ .'], "200 65")
+    check("BG! replace",
+        ['65 7 0 0 CELL-MAKE 128 SWAP CELL-BG!',
+         'DUP CELL-BG@ . CELL-FG@ .'], "128 7")
+    check("ATTRS! replace",
+        ['65 7 0 0 CELL-MAKE 15 SWAP CELL-ATTRS!',
+         'DUP CELL-ATTRS@ . CELL-CP@ .'], "15 65")
+    check("CP! replace",
+        ['65 7 0 0 CELL-MAKE 90 SWAP CELL-CP!',
+         'DUP CELL-CP@ . CELL-FG@ .'], "90 7")
+
+
+def test_cell_blank():
+    print("\n── CELL blank and predicates ──")
+    check("CELL-BLANK cp=32",   ['CELL-BLANK CELL-CP@ .'], "32")
+    check("CELL-BLANK fg=7",    ['CELL-BLANK CELL-FG@ .'], "7")
+    check("CELL-BLANK bg=0",    ['CELL-BLANK CELL-BG@ .'], "0")
+    check("CELL-BLANK attrs=0", ['CELL-BLANK CELL-ATTRS@ .'], "0")
+
+
+def test_cell_predicates():
+    print("\n── CELL predicates ──")
+    check("EQUAL? same",   ['CELL-BLANK CELL-BLANK CELL-EQUAL? .'], "-1")
+    check("EQUAL? diff",   ['CELL-BLANK 65 7 0 0 CELL-MAKE CELL-EQUAL? .'], "0")
+    check("EMPTY? blank",  ['CELL-BLANK CELL-EMPTY? .'], "-1")
+    check("EMPTY? cp=0",   ['0 7 0 0 CELL-MAKE CELL-EMPTY? .'], "-1")
+    check("EMPTY? letter", ['65 7 0 0 CELL-MAKE CELL-EMPTY? .'], "0")
+    check("EMPTY? fg≠7",   ['32 14 0 0 CELL-MAKE CELL-EMPTY? .'], "0")
+    check("EMPTY? attrs",  ['32 7 0 3 CELL-MAKE CELL-EMPTY? .'], "0")
+
+
+def test_cell_has_attr():
+    print("\n── CELL attribute flag testing ──")
+    check("HAS-ATTR? bold true",
+        ['65 7 0 CELL-A-BOLD CELL-MAKE',
+         'CELL-A-BOLD SWAP CELL-HAS-ATTR? .'], "-1")
+    check("HAS-ATTR? bold false",
+        ['65 7 0 0 CELL-MAKE',
+         'CELL-A-BOLD SWAP CELL-HAS-ATTR? .'], "0")
+    check("HAS-ATTR? multi",
+        ['65 7 0 CELL-A-BOLD CELL-A-ITALIC OR CELL-MAKE  DUP CELL-A-BOLD SWAP CELL-HAS-ATTR? .  CELL-A-ITALIC SWAP CELL-HAS-ATTR? .'], "-1 -1")
+
+
+def test_cell_edge_cases():
+    print("\n── CELL edge cases ──")
+    check("cp=0 empty", ['0 7 0 0 CELL-MAKE CELL-CP@ .'], "0")
+    check("fg=255",     ['65 255 0 0 CELL-MAKE CELL-FG@ .'], "255")
+    check("bg=255",     ['65 0 255 0 CELL-MAKE CELL-BG@ .'], "255")
+    check("max attrs",  ['65 7 0 65535 CELL-MAKE CELL-ATTRS@ .'], "65535")
+    check("wide flag",
+        ['65 7 0 CELL-A-WIDE CELL-MAKE',
+         'CELL-A-WIDE SWAP CELL-HAS-ATTR? .'], "-1")
+    check("cont flag",
+        ['65 7 0 CELL-A-CONT CELL-MAKE',
+         'CELL-A-CONT SWAP CELL-HAS-ATTR? .'], "-1")
+
+
+# =====================================================================
+#  SCREEN.F TESTS — Virtual Screen Buffer
+# =====================================================================
+
+def test_scr_create():
+    print("\n── SCREEN create / size ──")
+    check("SCR-NEW non-zero",
+        ['80 24 SCR-NEW DUP 0<> . SCR-FREE'], "-1")
+    check("SCR-W",
+        ['40 12 SCR-NEW DUP SCR-USE SCR-W . SCR-FREE'], "40")
+    check("SCR-H",
+        ['40 12 SCR-NEW DUP SCR-USE SCR-H . SCR-FREE'], "12")
+
+
+def test_scr_set_get():
+    print("\n── SCREEN set / get ──")
+    check("set/get round-trip",
+        ['4 3 SCR-NEW DUP SCR-USE',
+         '65 7 0 0 CELL-MAKE 1 2 SCR-SET',
+         '1 2 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "65")
+    check("set/get at 0,0",
+        ['4 3 SCR-NEW DUP SCR-USE',
+         '88 14 42 0 CELL-MAKE 0 0 SCR-SET',
+         '0 0 SCR-GET DUP CELL-CP@ . CELL-FG@ .',
+         'SCR-FREE'], "88 14")
+    check("set/get corner",
+        ['10 5 SCR-NEW DUP SCR-USE',
+         '90 1 2 0 CELL-MAKE 4 9 SCR-SET',
+         '4 9 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "90")
+
+
+def test_scr_clear_fill():
+    print("\n── SCREEN clear / fill ──")
+    check("clear → blank",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         'SCR-CLEAR',
+         '0 0 SCR-GET CELL-BLANK CELL-EQUAL? .',
+         'SCR-FREE'], "-1")
+    check("fill custom cell",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '88 14 42 0 CELL-MAKE SCR-FILL',
+         '0 0 SCR-GET CELL-CP@ .',
+         '1 3 SCR-GET CELL-FG@ .',
+         'SCR-FREE'], "88 14")
+
+
+def test_scr_cursor():
+    print("\n── SCREEN cursor ──")
+    # Cursor position tracked in descriptor
+    check("cursor-at",
+        ['4 3 SCR-NEW DUP SCR-USE',
+         '5 10 SCR-CURSOR-AT',
+         # Read descriptor directly to verify
+         'DUP 32 + @ . DUP 40 + @ .',
+         'SCR-FREE'], "5 10")
+
+
+def test_scr_flush_basic():
+    """Test that flush emits ANSI sequences for changed cells."""
+    print("\n── SCREEN flush basics ──")
+    # Force + flush a 4x2 screen with one 'X' at (0,0), rest blank
+    # Expect: ESC[?25l (cursor off), ESC[1;1H (position), 'X' char
+    check_raw_suffix("flush emits cursor-off",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '88 7 0 0 CELL-MAKE 0 0 SCR-SET',
+         'SCR-FORCE SCR-FLUSH'],
+        b'\x1b[?25l')
+    check_raw_suffix("flush emits ANSI-AT 1;1",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '88 7 0 0 CELL-MAKE 0 0 SCR-SET',
+         'SCR-FORCE SCR-FLUSH'],
+        b'\x1b[1;1H')
+    check_raw_suffix("flush emits character X",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '88 7 0 0 CELL-MAKE 0 0 SCR-SET',
+         'SCR-FORCE SCR-FLUSH'],
+        b'X')
+    check_raw_suffix("flush emits reset at end",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '88 7 0 0 CELL-MAKE 0 0 SCR-SET',
+         'SCR-FORCE SCR-FLUSH'],
+        b'\x1b[0m')
+
+
+def test_scr_flush_skip_unchanged():
+    """After flushing, flushing again with no changes should be minimal."""
+    print("\n── SCREEN flush skip unchanged ──")
+    # Flush once (force), then flush again. Second flush should only have
+    # cursor-off, reset, and possibly cursor restore — no cell data
+    global _pass_count, _fail_count
+    raw = run_forth_raw(
+        ['4 2 SCR-NEW DUP SCR-USE',
+         'SCR-FORCE SCR-FLUSH',
+         '42 EMIT',   # marker byte '*' = 42
+         'SCR-FLUSH']
+    )
+    # Find marker byte position, check output after it
+    marker_pos = raw.rfind(ord('*'))
+    if marker_pos >= 0:
+        after = raw[marker_pos+1:]
+        # Second flush should NOT contain ESC[1;1H (no cell positioning needed)
+        if b'\x1b[1;1H' not in after:
+            _pass_count += 1
+            print("  PASS  second flush skips unchanged cells")
+        else:
+            _fail_count += 1
+            print("  FAIL  second flush skips unchanged cells")
+            print(f"        second flush still positions cursor: got {list(after[:60])}")
+    else:
+        _fail_count += 1
+        print("  FAIL  second flush skips unchanged cells (no marker found)")
+
+
+def test_scr_flush_attrs():
+    """Flush emits SGR codes for bold cells."""
+    print("\n── SCREEN flush with attributes ──")
+    check_raw_suffix("flush bold emits SGR 1",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '65 7 0 CELL-A-BOLD CELL-MAKE 0 0 SCR-SET',
+         'SCR-FORCE SCR-FLUSH'],
+        b'\x1b[1m')
+
+
+def test_scr_flush_color():
+    """Flush emits FG256/BG256 for colored cells."""
+    print("\n── SCREEN flush with colors ──")
+    check_raw_suffix("flush fg=14",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '65 14 0 0 CELL-MAKE 0 0 SCR-SET',
+         'SCR-FORCE SCR-FLUSH'],
+        b'\x1b[38;5;14m')
+    check_raw_suffix("flush bg=42",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '65 7 42 0 CELL-MAKE 0 0 SCR-SET',
+         'SCR-FORCE SCR-FLUSH'],
+        b'\x1b[48;5;42m')
+
+
+def test_scr_flush_cursor_show():
+    """Flush shows cursor at specified position when cursor-vis is on."""
+    print("\n── SCREEN flush cursor show ──")
+    check_raw_suffix("flush shows cursor",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         'SCR-CURSOR-ON 0 1 SCR-CURSOR-AT',
+         'SCR-FORCE SCR-FLUSH'],
+        b'\x1b[?25h')
+    # The cursor position should be at row=1,col=2 (0-based→1-based)
+    check_raw_suffix("flush cursor at 1,2",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         'SCR-CURSOR-ON 0 1 SCR-CURSOR-AT',
+         'SCR-FORCE SCR-FLUSH'],
+        b'\x1b[1;2H')
+
+
+def test_scr_resize():
+    print("\n── SCREEN resize ──")
+    check("resize width",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '88 7 0 0 CELL-MAKE 0 0 SCR-SET',
+         '8 4 SCR-RESIZE',
+         'SCR-W . SCR-H .',
+         'SCR-FREE'], "8 4")
+    check("resize preserves content",
+        ['4 2 SCR-NEW DUP SCR-USE',
+         '88 7 0 0 CELL-MAKE 0 0 SCR-SET',
+         '8 4 SCR-RESIZE',
+         '0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "88")
+    check("resize shrink preserves overlap",
+        ['4 4 SCR-NEW DUP SCR-USE',
+         '90 7 0 0 CELL-MAKE 1 1 SCR-SET',
+         '2 2 SCR-RESIZE',
+         '1 1 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "90")
+
+
+# =====================================================================
 #  Main
 # =====================================================================
 
@@ -546,6 +813,26 @@ if __name__ == "__main__":
     test_keys_shift_tab()
     test_keys_modifiers()
     test_keys_accessors()
+
+    # Cell tests (Layer 1)
+    test_cell_pack_unpack()
+    test_cell_setters()
+    test_cell_blank()
+    test_cell_predicates()
+    test_cell_has_attr()
+    test_cell_edge_cases()
+
+    # Screen tests (Layer 1)
+    test_scr_create()
+    test_scr_set_get()
+    test_scr_clear_fill()
+    test_scr_cursor()
+    test_scr_flush_basic()
+    test_scr_flush_skip_unchanged()
+    test_scr_flush_attrs()
+    test_scr_flush_color()
+    test_scr_flush_cursor_show()
+    test_scr_resize()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")
