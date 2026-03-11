@@ -688,5 +688,38 @@ VARIABLE _ITC-IMG-BLEN    \ body-len  scratch for ITC-SAVE-IMAGE
     ;
 
 \ =====================================================================
+\  13. Concurrency Guard
+\ =====================================================================
+\
+\ All public ITC- words are serialized via _itc-guard.  The module
+\ uses shared scratch state (_ITC-CP, _ITC-IP, symbol/entry tables,
+\ etc.) so concurrent access would corrupt compilation or execution.
+
+REQUIRE ../concurrency/guard.f
+GUARD _itc-guard
+
+' ITC-WL-ADD     CONSTANT _itc-wl-add-xt
+' ITC-WL-FIND    CONSTANT _itc-wl-find-xt
+' ITC-WL-XT@     CONSTANT _itc-wl-xt-xt
+' ITC-WL-IMM?    CONSTANT _itc-wl-imm-xt
+' ITC-WL-RESET   CONSTANT _itc-wl-reset-xt
+' ITC-COMPILE    CONSTANT _itc-compile-xt
+' ITC-EXECUTE    CONSTANT _itc-execute-xt
+' ITC-ENTRY@     CONSTANT _itc-entry-xt
+' ITC-SAVE-IMAGE CONSTANT _itc-save-xt
+' ITC-LOAD-IMAGE CONSTANT _itc-load-xt
+
+: ITC-WL-ADD     _itc-wl-add-xt   _itc-guard WITH-GUARD ;
+: ITC-WL-FIND    _itc-wl-find-xt  _itc-guard WITH-GUARD ;
+: ITC-WL-XT@     _itc-wl-xt-xt    _itc-guard WITH-GUARD ;
+: ITC-WL-IMM?    _itc-wl-imm-xt   _itc-guard WITH-GUARD ;
+: ITC-WL-RESET   _itc-wl-reset-xt _itc-guard WITH-GUARD ;
+: ITC-COMPILE    _itc-compile-xt  _itc-guard WITH-GUARD ;
+: ITC-EXECUTE    _itc-execute-xt  _itc-guard WITH-GUARD ;
+: ITC-ENTRY@     _itc-entry-xt    _itc-guard WITH-GUARD ;
+: ITC-SAVE-IMAGE _itc-save-xt     _itc-guard WITH-GUARD ;
+: ITC-LOAD-IMAGE _itc-load-xt     _itc-guard WITH-GUARD ;
+
+\ =====================================================================
 \  Done.
 \ =====================================================================

@@ -12,7 +12,7 @@ contracts, browser plugins, embedded scripting, REPL sandboxes.
 REQUIRE utils/itc.f
 ```
 
-Depends on: `string.f` (STR>NUM, STR-PARSE-TOKEN).
+Depends on: `string.f` (STR>NUM, STR-PARSE-TOKEN), `guard.f` (concurrency).
 
 ---
 
@@ -174,6 +174,19 @@ Portable, position-independent serialization:
 | 32 | 1 cell | Data size (reserved) |
 | 40 | N | Entry table: 32B name-slot + 8B offset each |
 | 40+N | M | ITC body |
+
+---
+
+## Concurrency
+
+All public `ITC-` words are serialized via `_itc-guard` (a `GUARD`
+from `guard.f`).  The guard is automatically acquired on entry and
+released on exit (including on exception via `CATCH`).
+
+The module is **not reentrant** — it uses shared compiler state
+(`_ITC-CP`, `_ITC-IP`, `_ITC-STATE`, symbol/entry tables, etc.) and
+module-level `VARIABLE`s for both compilation and execution. Concurrent
+calls without the guard would corrupt internal state.
 
 ---
 

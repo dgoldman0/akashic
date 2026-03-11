@@ -11,6 +11,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
 
+EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
+SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
+GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 STRING_F   = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
 ITC_F      = os.path.join(ROOT_DIR, "akashic", "utils", "itc.f")
 
@@ -71,10 +74,13 @@ def restore_cpu_state(cpu, state):
 def build_snapshot():
     global _snapshot
     if _snapshot: return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + string.f + itc.f ...")
+    print("[*] Building snapshot: BIOS + KDOS + concurrency + string.f + itc.f ...")
     t0 = time.time()
     bios_code  = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
+    evt_lines  = _load_forth_lines(EVENT_F)
+    sem_lines  = _load_forth_lines(SEM_F)
+    grd_lines  = _load_forth_lines(GUARD_F)
     str_lines  = _load_forth_lines(STRING_F)
     itc_lines  = _load_forth_lines(ITC_F)
 
@@ -113,7 +119,7 @@ def build_snapshot():
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
-    all_lines = kdos_lines + ["ENTER-USERLAND"] + str_lines + itc_lines + helpers
+    all_lines = kdos_lines + ["ENTER-USERLAND"] + evt_lines + sem_lines + grd_lines + str_lines + itc_lines + helpers
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
     while steps < mx:
