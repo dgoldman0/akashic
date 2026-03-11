@@ -51,7 +51,7 @@ VARIABLE _UD-L                         \ buffer length
 : UTF8-DECODE  ( addr len -- cp addr' len' )
     DUP 0= IF UTF8-REPLACEMENT -ROT EXIT THEN
     2DUP _UD-L ! _UD-A !              ( addr len )
-    DROP                               ( )
+    2DROP                              ( )
     _UD-A @ C@                         ( b0 )
     DUP _UTF8-SEQLEN                   ( b0 seqlen )
     DUP 0= IF                         \ bad leading byte → skip 1
