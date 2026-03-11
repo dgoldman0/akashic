@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test suite for akashic-tui Layer 0 + Layer 1.
+"""Test suite for akashic-tui Layer 0 + Layer 1 + Layer 2.
 
 Tests ANSI escape sequence emission (ansi.f) and terminal input
 decoding (keys.f) against the Megapad-64 emulator.
@@ -19,6 +19,8 @@ KEYS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "keys.f")
 UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
 CELL_F     = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
 SCREEN_F   = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
+DRAW_F     = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
+BOX_F      = os.path.join(ROOT_DIR, "akashic", "tui", "box.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -80,7 +82,7 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen ...")
+    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
@@ -89,6 +91,8 @@ def build_snapshot():
     keys_lines = _load_forth_lines(KEYS_F)
     cell_lines = _load_forth_lines(CELL_F)
     screen_lines = _load_forth_lines(SCREEN_F)
+    draw_lines = _load_forth_lines(DRAW_F)
+    box_lines  = _load_forth_lines(BOX_F)
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -101,7 +105,8 @@ def build_snapshot():
     payload = "\n".join(
         kdos_lines + ["ENTER-USERLAND"] +
         utf8_lines + ansi_lines + keys_lines +
-        cell_lines + screen_lines + helpers
+        cell_lines + screen_lines +
+        draw_lines + box_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -784,6 +789,311 @@ def test_scr_resize():
 
 
 # =====================================================================
+#  DRAW.F TESTS — Cell-Level Drawing Primitives
+# =====================================================================
+
+def test_draw_style():
+    print("\n── DRAW style state ──")
+    check("default fg=7",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         'DRW-STYLE-RESET',
+         '65 0 0 DRW-CHAR',
+         '0 0 SCR-GET CELL-FG@ .',
+         'SCR-FREE'], "7")
+    check("set fg=14",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '14 DRW-FG!',
+         '65 0 0 DRW-CHAR',
+         '0 0 SCR-GET CELL-FG@ .',
+         'SCR-FREE'], "14")
+    check("set bg=42",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '42 DRW-BG!',
+         '65 0 0 DRW-CHAR',
+         '0 0 SCR-GET CELL-BG@ .',
+         'SCR-FREE'], "42")
+    check("set attrs=bold",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         'CELL-A-BOLD DRW-ATTR!',
+         '65 0 0 DRW-CHAR',
+         '0 0 SCR-GET CELL-ATTRS@ .',
+         'SCR-FREE'], "1")
+    check("STYLE! sets all three",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '14 42 3 DRW-STYLE!',
+         '65 0 0 DRW-CHAR',
+         '0 0 SCR-GET DUP CELL-FG@ . DUP CELL-BG@ . CELL-ATTRS@ .',
+         'SCR-FREE'], "14 42 3")
+    check("STYLE-RESET restores defaults",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '14 42 3 DRW-STYLE!',
+         'DRW-STYLE-RESET',
+         '65 0 0 DRW-CHAR',
+         '0 0 SCR-GET DUP CELL-FG@ . DUP CELL-BG@ . CELL-ATTRS@ .',
+         'SCR-FREE'], "7 0 0")
+
+
+def test_draw_char():
+    print("\n── DRAW char placement ──")
+    check("char at 2,3",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '88 2 3 DRW-CHAR',
+         '2 3 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "88")
+    check("char clip negative row",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '88 -1 0 DRW-CHAR',
+         '0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "32")   # should remain blank (space=32)
+    check("char clip beyond width",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '88 0 10 DRW-CHAR',
+         '0 9 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "32")   # out-of-bounds, last cell still blank
+    check("char clip beyond height",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '88 5 0 DRW-CHAR',
+         '4 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "32")
+
+
+def test_draw_hline():
+    print("\n── DRAW horizontal line ──")
+    check("hline 5 chars",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '45 1 2 5 DRW-HLINE',
+         '1 2 SCR-GET CELL-CP@ . 1 6 SCR-GET CELL-CP@ . 1 7 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "45 45 32")
+    check("hline len=0 no-op",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '45 0 0 0 DRW-HLINE',
+         '0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "32")
+
+
+def test_draw_vline():
+    print("\n── DRAW vertical line ──")
+    check("vline 3 chars",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '124 1 4 3 DRW-VLINE',
+         '1 4 SCR-GET CELL-CP@ . 3 4 SCR-GET CELL-CP@ . 4 4 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "124 124 32")
+
+
+def test_draw_fill_rect():
+    print("\n── DRAW fill rectangle ──")
+    check("fill 3x4 rect",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '35 1 2 3 4 DRW-FILL-RECT',
+         '1 2 SCR-GET CELL-CP@ . 3 5 SCR-GET CELL-CP@ . 0 2 SCR-GET CELL-CP@ . 1 6 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "35 35 32 32")
+
+
+def test_draw_clear_rect():
+    print("\n── DRAW clear rectangle ──")
+    check("clear rect restores blanks",
+        ['10 5 SCR-NEW DUP SCR-USE',
+         '88 7 0 0 CELL-MAKE SCR-FILL',
+         'DRW-STYLE-RESET',
+         '1 1 2 3 DRW-CLEAR-RECT',
+         '1 1 SCR-GET CELL-CP@ . 0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "32 88")
+
+
+def test_draw_text():
+    print("\n── DRAW text placement ──")
+    check("text at row 0 col 0",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'S" Hi" 0 0 DRW-TEXT',
+         '0 0 SCR-GET CELL-CP@ . 0 1 SCR-GET CELL-CP@ . 0 2 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "72 105 32")  # 'H'=72, 'i'=105, blank after
+    check("text row 3 col 2",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'S" AB" 3 2 DRW-TEXT',
+         '3 2 SCR-GET CELL-CP@ . 3 3 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "65 66")
+
+
+def test_draw_text_center():
+    print("\n── DRAW text center ──")
+    # "AB" (2 chars) in field of width 6 → pad 2 left → starts at col 2+2=4
+    check("center AB in width 6",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'S" AB" 0 2 6 DRW-TEXT-CENTER',
+         '0 4 SCR-GET CELL-CP@ . 0 5 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "65 66")
+
+
+def test_draw_text_right():
+    print("\n── DRAW text right-align ──")
+    # "AB" (2 chars) in field of width 6 → pad 4 right → starts at col 2+4=6
+    check("right AB in width 6",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'S" AB" 0 2 6 DRW-TEXT-RIGHT',
+         '0 6 SCR-GET CELL-CP@ . 0 7 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "65 66")
+
+
+def test_draw_zero_area():
+    print("\n── DRAW zero/edge area ──")
+    check("fill 0-height rect",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '35 0 0 0 5 DRW-FILL-RECT',
+         '0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "32")
+    check("fill 0-width rect",
+        ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '35 0 0 5 0 DRW-FILL-RECT',
+         '0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "32")
+
+
+# =====================================================================
+#  BOX.F TESTS — Box Drawing & Borders
+# =====================================================================
+
+def test_box_single():
+    print("\n── BOX single-line border ──")
+    # Draw a 4x6 single box at (0,0)
+    # Top-left = ┌ (0x250C = 9484), Top-right = ┐ (0x2510 = 9488)
+    # Bot-left = └ (0x2514 = 9492), Bot-right = ┘ (0x2518 = 9496)
+    # Horiz = ─ (0x2500 = 9472), Vert = │ (0x2502 = 9474)
+    check("single TL corner",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 4 6 BOX-DRAW',
+         '0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9484")
+    check("single TR corner",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 4 6 BOX-DRAW',
+         '0 5 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9488")
+    check("single BL corner",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 4 6 BOX-DRAW',
+         '3 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9492")
+    check("single BR corner",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 4 6 BOX-DRAW',
+         '3 5 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9496")
+    check("single top horiz",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 4 6 BOX-DRAW',
+         '0 1 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9472")
+    check("single left vert",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 4 6 BOX-DRAW',
+         '1 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9474")
+    check("single interior blank",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 4 6 BOX-DRAW',
+         '1 1 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "32")
+
+
+def test_box_double():
+    print("\n── BOX double-line border ──")
+    # ╔ = 0x2554 = 9556
+    check("double TL corner",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-DOUBLE 1 1 3 4 BOX-DRAW',
+         '1 1 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9556")
+    # ═ = 0x2550 = 9552
+    check("double horiz",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-DOUBLE 1 1 3 4 BOX-DRAW',
+         '1 2 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9552")
+
+
+def test_box_ascii():
+    print("\n── BOX ASCII fallback ──")
+    check("ascii TL = +",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-ASCII 0 0 3 5 BOX-DRAW',
+         '0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "43")
+    check("ascii horiz = -",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-ASCII 0 0 3 5 BOX-DRAW',
+         '0 1 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "45")
+    check("ascii vert = |",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-ASCII 0 0 3 5 BOX-DRAW',
+         '1 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "124")
+
+
+def test_box_min_size():
+    print("\n── BOX minimum size ──")
+    # 2x2 box: just corners, no edges
+    check("2x2 TL corner",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 2 2 BOX-DRAW',
+         '0 0 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9484")
+    check("2x2 BR corner",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 0 0 2 2 BOX-DRAW',
+         '1 1 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9496")
+
+
+def test_box_titled():
+    print("\n── BOX titled border ──")
+    # Title "Hi" at col+2 on top row
+    check("titled box title chars",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE S" Hi" 0 0 5 10 BOX-DRAW-TITLED',
+         '0 2 SCR-GET CELL-CP@ . 0 3 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "72 105")
+    check("titled box corners intact",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE S" Hi" 0 0 5 10 BOX-DRAW-TITLED',
+         '0 0 SCR-GET CELL-CP@ . 0 9 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9484 9488")
+
+
+def test_box_hline_vline():
+    print("\n── BOX hline / vline helpers ──")
+    check("BOX-HLINE uses style horiz",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 2 1 5 BOX-HLINE',
+         '2 1 SCR-GET CELL-CP@ . 2 5 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9472 9472")
+    check("BOX-VLINE uses style vert",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         'BOX-SINGLE 1 3 4 BOX-VLINE',
+         '1 3 SCR-GET CELL-CP@ . 4 3 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9474 9474")
+
+
+def test_box_shadow():
+    print("\n── BOX shadow ──")
+    # Shadow at right edge and bottom edge
+    # For a box at row=0 col=0 h=3 w=5:
+    #   right shadow: col=5, rows 1..3  (vline)
+    #   bottom shadow: row=3, cols 1..5  (hline)
+    # Shadow char = ░ = 0x2591 = 9617
+    check("shadow right edge",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 3 5 BOX-SHADOW',
+         '1 5 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9617")
+    check("shadow bottom edge",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 3 5 BOX-SHADOW',
+         '3 1 SCR-GET CELL-CP@ .',
+         'SCR-FREE'], "9617")
+
+
+# =====================================================================
 #  Main
 # =====================================================================
 
@@ -833,6 +1143,27 @@ if __name__ == "__main__":
     test_scr_flush_color()
     test_scr_flush_cursor_show()
     test_scr_resize()
+
+    # Draw tests (Layer 2)
+    test_draw_style()
+    test_draw_char()
+    test_draw_hline()
+    test_draw_vline()
+    test_draw_fill_rect()
+    test_draw_clear_rect()
+    test_draw_text()
+    test_draw_text_center()
+    test_draw_text_right()
+    test_draw_zero_area()
+
+    # Box tests (Layer 2)
+    test_box_single()
+    test_box_double()
+    test_box_ascii()
+    test_box_min_size()
+    test_box_titled()
+    test_box_hline_vline()
+    test_box_shadow()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")

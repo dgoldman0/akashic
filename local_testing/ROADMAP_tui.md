@@ -1989,8 +1989,8 @@ of raw character placement.
 | 2 | tui/keys.f | 0 | utf8.f | 654 | ✅ Done |
 | 3 | tui/cell.f | 1 | — | 182 | ✅ Done |
 | 4 | tui/screen.f | 1 | cell, ansi, utf8 | 442 | ✅ Done |
-| 5 | tui/draw.f | 2 | screen, utf8 | ~200 | ❌ Not started |
-| 6 | tui/box.f | 2 | draw | ~180 | ❌ Not started |
+| 5 | tui/draw.f | 2 | screen, utf8 | 291 | ✅ Done |
+| 6 | tui/box.f | 2 | draw | 275 | ✅ Done |
 | 7 | tui/region.f | 3 | screen | ~150 | ❌ Not started |
 | 8 | tui/layout.f | 3 | region | ~250 | ❌ Not started |
 | 9 | tui/label.f | 4 | draw, region | ~100 | ❌ Not started |
