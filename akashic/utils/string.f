@@ -330,3 +330,46 @@ VARIABLE _S2N-NEG
     REPEAT
     _S2N-NEG @ IF _S2N-ACC @ NEGATE ELSE _S2N-ACC @ THEN
     -1 ;
+
+\ =====================================================================
+\  Buffer Tokenizer
+\ =====================================================================
+\
+\ Parse whitespace-delimited tokens from an arbitrary (addr len) buffer
+\ rather than from the BIOS input stream (TIB).
+\
+\   STR-SKIP-BL   ( addr len -- addr' len' )
+\     Advance past leading spaces/tabs/newlines.
+\
+\   STR-PARSE-TOKEN ( addr len -- tok tlen rest rlen )
+\     Extract next whitespace-delimited token from buffer.
+\     tok/tlen = the token.  rest/rlen = remaining buffer after token.
+\     If buffer is empty (or all whitespace), tlen = 0.
+
+: _STR-IS-BL  ( addr len -- addr len flag )
+    DUP 0> IF
+        OVER C@ DUP 32 = OVER 9 = OR OVER 10 = OR SWAP 13 = OR
+    ELSE
+        0
+    THEN ;
+
+: _STR-NOT-BL  ( addr len -- addr len flag )
+    DUP 0> IF
+        OVER C@ DUP 32 = OVER 9 = OR OVER 10 = OR SWAP 13 = OR 0=
+    ELSE
+        0
+    THEN ;
+
+: STR-SKIP-BL  ( addr len -- addr' len' )
+    BEGIN _STR-IS-BL WHILE 1 /STRING REPEAT ;
+
+: STR-PARSE-TOKEN  ( addr len -- tok tlen rest rlen )
+    STR-SKIP-BL
+    DUP 0= IF EXIT THEN        \ empty → tok=addr, tlen=0, rest=addr, rlen=0
+    2DUP                        ( addr len addr0 len0 )
+    BEGIN _STR-NOT-BL WHILE 1 /STRING REPEAT
+    \ Stack: ( addr len addr' len' ) — addr'=past token, len'=remaining
+    2SWAP                       ( addr' len' addr len )
+    DROP                        ( addr' len' addr )
+    2 PICK OVER -               ( addr' len' addr tlen )
+    2SWAP ;                     ( tok tlen rest rlen )

@@ -36,6 +36,8 @@ All words use the standard `( addr len )` string model.
 | `STR-TRIM-R` | `( addr len -- addr' len' )` | Trim trailing whitespace |
 | `NUM>STR` | `( n -- addr len )` | Signed integer to decimal string |
 | `STR>NUM` | `( addr len -- n flag )` | Decimal string to signed integer |
+| `STR-SKIP-BL` | `( addr len -- addr' len' )` | Skip leading blanks (space/tab) |
+| `STR-PARSE-TOKEN` | `( addr len -- tok-addr tok-len rest-addr rest-len )` | Extract next whitespace-delimited token |
 
 Flags: `-1` = true, `0` = false.
 
@@ -181,6 +183,30 @@ S" 1234" STR>NUM   \ → 1234 -1
 S" -99"  STR>NUM   \ → -99  -1
 S" abc"  STR>NUM   \ → 0    0
 ```
+
+---
+
+## Tokenizer
+
+### `STR-SKIP-BL`
+
+Skip leading blanks (ASCII 32 and 9/tab) from a string. Returns
+adjusted `addr len` pointing past the whitespace.
+
+### `STR-PARSE-TOKEN`
+
+Extract the next whitespace-delimited token from a string. Returns
+the token (addr len) and the remainder of the input string.
+
+```forth
+S"   hello world" STR-PARSE-TOKEN
+\ → tok-addr 5 rest-addr 5   (tok="hello", rest="world")
+```
+
+If the input is empty or all blanks, returns `0 0` for the token and
+the remaining (empty) string.
+
+Used by `utils/itc.f` for tokenizing ITC source text.
 
 ---
 
