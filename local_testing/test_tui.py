@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test suite for akashic-tui Layer 0 + Layer 1 + Layer 2.
+"""Test suite for akashic-tui Layer 0 + Layer 1 + Layer 2 + Layer 3.
 
 Tests ANSI escape sequence emission (ansi.f) and terminal input
 decoding (keys.f) against the Megapad-64 emulator.
@@ -21,6 +21,8 @@ CELL_F     = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
 SCREEN_F   = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
 DRAW_F     = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
 BOX_F      = os.path.join(ROOT_DIR, "akashic", "tui", "box.f")
+REGION_F   = os.path.join(ROOT_DIR, "akashic", "tui", "region.f")
+LAYOUT_F   = os.path.join(ROOT_DIR, "akashic", "tui", "layout.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -82,7 +84,7 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box ...")
+    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
@@ -93,6 +95,8 @@ def build_snapshot():
     screen_lines = _load_forth_lines(SCREEN_F)
     draw_lines = _load_forth_lines(DRAW_F)
     box_lines  = _load_forth_lines(BOX_F)
+    region_lines = _load_forth_lines(REGION_F)
+    layout_lines = _load_forth_lines(LAYOUT_F)
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -106,7 +110,8 @@ def build_snapshot():
         kdos_lines + ["ENTER-USERLAND"] +
         utf8_lines + ansi_lines + keys_lines +
         cell_lines + screen_lines +
-        draw_lines + box_lines + helpers
+        draw_lines + box_lines +
+        region_lines + layout_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -1094,6 +1099,390 @@ def test_box_shadow():
 
 
 # =====================================================================
+#  REGION.F TESTS — Rectangular Clipping Regions (Layer 3)
+# =====================================================================
+
+def test_rgn_create():
+    """Root region creation and accessors."""
+    print("\n── REGION create ──")
+    check("new region row",
+        ['2 5 10 20 RGN-NEW DUP RGN-ROW . RGN-FREE'], "2")
+    check("new region col",
+        ['2 5 10 20 RGN-NEW DUP RGN-COL . RGN-FREE'], "5")
+    check("new region h",
+        ['2 5 10 20 RGN-NEW DUP RGN-H . RGN-FREE'], "10")
+    check("new region w",
+        ['2 5 10 20 RGN-NEW DUP RGN-W . RGN-FREE'], "20")
+
+
+def test_rgn_use_draw():
+    """RGN-USE makes DRW-CHAR translate+clip."""
+    print("\n── REGION use+draw ──")
+    # Draw at (0,0) in region at (2,5) → screen cell (2,5)
+    check("char at region origin",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 10 20 RGN-NEW DUP RGN-USE',
+         '65 0 0 DRW-CHAR',
+         '2 5 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "65")  # 'A'=65
+    # Draw at (1,3) in region at (2,5) → screen cell (3,8)
+    check("char at region offset",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 10 20 RGN-NEW DUP RGN-USE',
+         '66 1 3 DRW-CHAR',
+         '3 8 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "66")  # 'B'=66
+    # Draw outside region bounds → clipped (silent discard)
+    check("char clipped beyond region w",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 3 4 RGN-NEW DUP RGN-USE',
+         '88 0 4 DRW-CHAR',
+         '2 9 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "32")  # stays blank
+    check("char clipped beyond region h",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 3 4 RGN-NEW DUP RGN-USE',
+         '88 3 0 DRW-CHAR',
+         '5 5 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "32")  # stays blank
+    check("char clipped negative",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 3 4 RGN-NEW DUP RGN-USE',
+         '88 -1 0 DRW-CHAR',
+         '1 5 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "32")  # stays blank
+
+
+def test_rgn_root():
+    """RGN-ROOT resets to full-screen drawing."""
+    print("\n── REGION root reset ──")
+    check("root draws at screen coords",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 3 4 RGN-NEW',
+         'DUP RGN-USE',
+         'RGN-ROOT',
+         '65 0 0 DRW-CHAR',
+         '0 0 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "65")
+
+
+def test_rgn_sub():
+    """Sub-region creation and parent clipping."""
+    print("\n── REGION sub-region ──")
+    # Sub-region at (1,2) relative to parent at (5,10) → absolute (6,12)
+    check("sub row",
+        ['5 10 20 30 RGN-NEW',
+         'DUP 1 2 5 8 RGN-SUB',
+         'DUP RGN-ROW . RGN-FREE RGN-FREE'], "6")
+    check("sub col",
+        ['5 10 20 30 RGN-NEW',
+         'DUP 1 2 5 8 RGN-SUB',
+         'DUP RGN-COL . RGN-FREE RGN-FREE'], "12")
+    check("sub h",
+        ['5 10 20 30 RGN-NEW',
+         'DUP 1 2 5 8 RGN-SUB',
+         'DUP RGN-H . RGN-FREE RGN-FREE'], "5")
+    check("sub w",
+        ['5 10 20 30 RGN-NEW',
+         'DUP 1 2 5 8 RGN-SUB',
+         'DUP RGN-W . RGN-FREE RGN-FREE'], "8")
+    # Sub-region clipped to parent: parent h=10, sub at row 8 with h=5 → clipped to 2
+    check("sub clipped height",
+        ['0 0 10 20 RGN-NEW',
+         'DUP 8 0 5 10 RGN-SUB',
+         'DUP RGN-H . RGN-FREE RGN-FREE'], "2")
+    # Sub-region clipped width: parent w=20, sub at col 15 with w=10 → clipped to 5
+    check("sub clipped width",
+        ['0 0 10 20 RGN-NEW',
+         'DUP 0 15 5 10 RGN-SUB',
+         'DUP RGN-W . RGN-FREE RGN-FREE'], "5")
+
+
+def test_rgn_contains():
+    """Point containment testing."""
+    print("\n── REGION contains ──")
+    check("inside region",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '2 5 10 20 RGN-NEW DUP RGN-USE',
+         '3 7 RGN-CONTAINS? .',
+         'RGN-FREE SCR-FREE'], "-1")  # TRUE
+    check("outside region (col too large)",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '2 5 10 20 RGN-NEW DUP RGN-USE',
+         '3 20 RGN-CONTAINS? .',
+         'RGN-FREE SCR-FREE'], "0")
+    check("outside region (row too large)",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '2 5 10 20 RGN-NEW DUP RGN-USE',
+         '10 5 RGN-CONTAINS? .',
+         'RGN-FREE SCR-FREE'], "0")
+
+
+def test_rgn_clip():
+    """RGN-CLIP translates and tests."""
+    print("\n── REGION clip ──")
+    check("clip inside: abs coords + flag",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '2 5 10 20 RGN-NEW DUP RGN-USE',
+         '3 7 RGN-CLIP . . .',
+         'RGN-FREE SCR-FREE'], "-1 12 5")  # flag row' col' (printed in reverse: col', row', flag from stack)
+    check("clip outside: flag=0",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '2 5 10 20 RGN-NEW DUP RGN-USE',
+         '10 25 RGN-CLIP . . .',
+         'RGN-FREE SCR-FREE'], "0 30 12")
+
+
+def test_rgn_zero_size():
+    """Zero-size region clips everything."""
+    print("\n── REGION zero size ──")
+    check("zero-h region clips all",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 0 10 RGN-NEW DUP RGN-USE',
+         '65 0 0 DRW-CHAR',
+         'RGN-ROOT 0 0 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "32")
+    check("zero-w region clips all",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 10 0 RGN-NEW DUP RGN-USE',
+         '65 0 0 DRW-CHAR',
+         'RGN-ROOT 0 0 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "32")
+
+
+def test_rgn_draw_at_edges():
+    """Drawing at the very edges of a region."""
+    print("\n── REGION edge drawing ──")
+    # Region is 3h x 4w at (1,2). Last valid cell is (2,3) → screen (3,5)
+    check("draw at last valid cell",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '1 2 3 4 RGN-NEW DUP RGN-USE',
+         '90 2 3 DRW-CHAR',
+         '3 5 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "90")  # 'Z'=90
+    # Just beyond last valid → clipped
+    check("draw just past last col",
+        ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '1 2 3 4 RGN-NEW DUP RGN-USE',
+         '90 2 4 DRW-CHAR',
+         'RGN-ROOT 3 6 SCR-GET CELL-CP@ .',
+         'RGN-FREE SCR-FREE'], "32")
+
+
+# =====================================================================
+#  LAYOUT.F TESTS — Container Layout Engine (Layer 3)
+# =====================================================================
+
+def test_lay_create():
+    """Layout creation and accessors."""
+    print("\n── LAYOUT create ──")
+    check("new layout count=0",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP LAY-COUNT . 8888 .',
+         'LAY-FREE RGN-FREE'], "0 8888")
+
+
+def test_lay_add():
+    """LAY-ADD creates children."""
+    print("\n── LAYOUT add children ──")
+    check("add 1 child",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP 8 2 LAY-ADD DROP',
+         'DUP LAY-COUNT . 8888 .',
+         'LAY-FREE RGN-FREE'], "1 8888")
+    check("add 3 children",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP 8 2 LAY-ADD DROP',
+         'DUP 6 2 LAY-ADD DROP',
+         'DUP 4 2 LAY-ADD DROP',
+         'DUP LAY-COUNT . 8888 .',
+         'LAY-FREE RGN-FREE'], "3 8888")
+
+
+def test_lay_vertical_fixed():
+    """Vertical layout with fixed-size children."""
+    print("\n── LAYOUT vertical fixed ──")
+    # Parent: 24h x 50w at (0,0). Two children: 8 rows and 6 rows.
+    check("vert child0 row=0 h=8",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP 8 2 LAY-ADD DROP DUP 6 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 0 LAY-CHILD DUP RGN-ROW . RGN-H . 8888 .',
+         'LAY-FREE RGN-FREE'], "0 8 8888")
+    check("vert child1 row=8 h=6",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP 8 2 LAY-ADD DROP DUP 6 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 1 LAY-CHILD DUP RGN-ROW . RGN-H . 8888 .',
+         'LAY-FREE RGN-FREE'], "8 6 8888")
+    # Width should == parent width
+    check("vert child0 w=50",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP 8 2 LAY-ADD DROP DUP 6 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 0 LAY-CHILD RGN-W . 8888 .',
+         'LAY-FREE RGN-FREE'], "50 8888")
+
+
+def test_lay_vertical_gap():
+    """Vertical layout with gaps."""
+    print("\n── LAYOUT vertical gap ──")
+    # Parent 24h, gap=2, two children of 7 rows each
+    # child0: row=0, h=7; child1: row=7+2=9, h=7
+    check("vert gap child1 row=9",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 2 LAY-NEW',
+         'DUP 7 2 LAY-ADD DROP DUP 7 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 1 LAY-CHILD RGN-ROW . 8888 .',
+         'LAY-FREE RGN-FREE'], "9 8888")
+
+
+def test_lay_vertical_expand():
+    """Vertical layout with expand — auto children split remaining."""
+    print("\n── LAYOUT vertical expand ──")
+    # Parent 24h, one fixed 6h child + two expand children. gap=0.
+    # Remaining = 24 - 6 = 18.  Two auto → 9 each.
+    check("expand child1 h=9",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'LAY-F-EXPAND OVER LAY-FLAGS!',
+         'DUP 6 2 LAY-ADD DROP DUP 0 0 LAY-ADD DROP DUP 0 0 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 1 LAY-CHILD RGN-H . 8888 .',
+         'LAY-FREE RGN-FREE'], "9 8888")
+    check("expand child2 row=15 h=9",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'LAY-F-EXPAND OVER LAY-FLAGS!',
+         'DUP 6 2 LAY-ADD DROP DUP 0 0 LAY-ADD DROP DUP 0 0 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 2 LAY-CHILD DUP RGN-ROW . RGN-H . 8888 .',
+         'LAY-FREE RGN-FREE'], "15 9 8888")
+
+
+def test_lay_horizontal_fixed():
+    """Horizontal layout with fixed-size children."""
+    print("\n── LAYOUT horizontal fixed ──")
+    # Parent 12h x 50w at (0,0). Two children: 18w and 14w.
+    check("horiz child0 col=0 w=18",
+        ['0 0 12 50 RGN-NEW',
+         'DUP LAY-HORIZONTAL 0 LAY-NEW',
+         'DUP 18 2 LAY-ADD DROP DUP 14 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 0 LAY-CHILD DUP RGN-COL . RGN-W . 8888 .',
+         'LAY-FREE RGN-FREE'], "0 18 8888")
+    check("horiz child1 col=18 w=14",
+        ['0 0 12 50 RGN-NEW',
+         'DUP LAY-HORIZONTAL 0 LAY-NEW',
+         'DUP 18 2 LAY-ADD DROP DUP 14 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 1 LAY-CHILD DUP RGN-COL . RGN-W . 8888 .',
+         'LAY-FREE RGN-FREE'], "18 14 8888")
+    # Height should == parent height
+    check("horiz child0 h=12",
+        ['0 0 12 50 RGN-NEW',
+         'DUP LAY-HORIZONTAL 0 LAY-NEW',
+         'DUP 18 2 LAY-ADD DROP DUP 14 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 0 LAY-CHILD RGN-H . 8888 .',
+         'LAY-FREE RGN-FREE'], "12 8888")
+
+
+def test_lay_horizontal_gap():
+    """Horizontal layout with gaps."""
+    print("\n── LAYOUT horizontal gap ──")
+    # 16w + gap3 + 14w
+    check("horiz gap child1 col=19 w=14",
+        ['0 0 12 50 RGN-NEW',
+         'DUP LAY-HORIZONTAL 3 LAY-NEW',
+         'DUP 16 2 LAY-ADD DROP DUP 14 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 1 LAY-CHILD DUP RGN-COL . RGN-W . 8888 .',
+         'LAY-FREE RGN-FREE'], "19 14 8888")
+
+
+def test_lay_horizontal_expand():
+    """Horizontal layout with expand."""
+    print("\n── LAYOUT horizontal expand ──")
+    # Parent 50w, fixed 16w + expand. gap=0.  expand gets 50-16=34.
+    check("horiz expand child1 w=34",
+        ['0 0 12 50 RGN-NEW',
+         'DUP LAY-HORIZONTAL 0 LAY-NEW',
+         'LAY-F-EXPAND OVER LAY-FLAGS!',
+         'DUP 16 2 LAY-ADD DROP DUP 0 0 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 1 LAY-CHILD DUP RGN-COL . RGN-W . 8888 .',
+         'LAY-FREE RGN-FREE'], "16 34 8888")
+
+
+def test_lay_min_size():
+    """Min-size enforcement."""
+    print("\n── LAYOUT min-size ──")
+    # Parent 24h. hint=0, expand, min=8. auto=24/1=24. 24>=8 → child=24
+    check("min-size not clamped",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'LAY-F-EXPAND OVER LAY-FLAGS!',
+         'DUP 0 8 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 0 LAY-CHILD RGN-H . 8888 .',
+         'LAY-FREE RGN-FREE'], "24 8888")
+    # Fixed hint=3 but min=7 → child gets 7
+    check("min-size clamps up",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP 3 7 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 0 LAY-CHILD RGN-H . 8888 .',
+         'LAY-FREE RGN-FREE'], "7 8888")
+
+
+def test_lay_offset_parent():
+    """Layout with non-zero-origin parent region."""
+    print("\n── LAYOUT offset parent ──")
+    # Parent at (7, 13). Vertical, child 8h.
+    check("child inherits parent origin",
+        ['7 13 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP 8 2 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 0 LAY-CHILD DUP RGN-ROW . RGN-COL . 8888 .',
+         'LAY-FREE RGN-FREE'], "7 13 8888")
+
+
+def test_lay_recompute():
+    """Recompute after changing parent region."""
+    print("\n── LAYOUT recompute ──")
+    # Parent 24h. Two expand children. 24/2=12 each.
+    check("recompute redistributes",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'LAY-F-EXPAND OVER LAY-FLAGS!',
+         'DUP 0 0 LAY-ADD DROP DUP 0 0 LAY-ADD DROP',
+         'DUP LAY-COMPUTE',
+         'DUP 0 LAY-CHILD RGN-H . 8888 .',
+         'LAY-FREE RGN-FREE'], "12 8888")
+
+
+def test_lay_empty():
+    """LAY-COMPUTE on empty layout is a no-op."""
+    print("\n── LAYOUT empty ──")
+    check("compute empty layout",
+        ['0 0 24 50 RGN-NEW',
+         'DUP LAY-VERTICAL 0 LAY-NEW',
+         'DUP LAY-COMPUTE',
+         'DUP LAY-COUNT . 8888 .',
+         'LAY-FREE RGN-FREE'], "0 8888")
+
+
+# =====================================================================
 #  Main
 # =====================================================================
 
@@ -1164,6 +1553,30 @@ if __name__ == "__main__":
     test_box_titled()
     test_box_hline_vline()
     test_box_shadow()
+
+    # Region tests (Layer 3)
+    test_rgn_create()
+    test_rgn_use_draw()
+    test_rgn_root()
+    test_rgn_sub()
+    test_rgn_contains()
+    test_rgn_clip()
+    test_rgn_zero_size()
+    test_rgn_draw_at_edges()
+
+    # Layout tests (Layer 3)
+    test_lay_create()
+    test_lay_add()
+    test_lay_vertical_fixed()
+    test_lay_vertical_gap()
+    test_lay_vertical_expand()
+    test_lay_horizontal_fixed()
+    test_lay_horizontal_gap()
+    test_lay_horizontal_expand()
+    test_lay_min_size()
+    test_lay_offset_parent()
+    test_lay_recompute()
+    test_lay_empty()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")

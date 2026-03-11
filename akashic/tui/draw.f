@@ -60,14 +60,28 @@ VARIABLE _DRW-ATTRS  0 _DRW-ATTRS !   \ default no attributes
     _DRW-FG @ _DRW-BG @ _DRW-ATTRS @ CELL-MAKE ;
 
 \ =====================================================================
-\ 2. Clipping helpers
+\ 2. Clipping helpers (region-aware)
 \ =====================================================================
+\
+\  The clip variables define the current drawing bounds and origin.
+\  When no region is active, offset is (0,0) and h/w are 0, meaning
+\  "use the full screen".  region.f sets these when RGN-USE is called.
+
+VARIABLE _DRW-CLIP-ROW  0 _DRW-CLIP-ROW !   \ origin row offset
+VARIABLE _DRW-CLIP-COL  0 _DRW-CLIP-COL !   \ origin col offset
+VARIABLE _DRW-CLIP-H    0 _DRW-CLIP-H !     \ clip height (0 = SCR-H)
+VARIABLE _DRW-CLIP-W    0 _DRW-CLIP-W !     \ clip width  (0 = SCR-W)
+VARIABLE _DRW-CLIP-ON   0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
+
+\ Effective clip dimensions — when clip is off, use screen size.
+: _DRW-CLIP-ROWS  ( -- n )  _DRW-CLIP-ON @ IF _DRW-CLIP-H @ ELSE SCR-H THEN ;
+: _DRW-CLIP-COLS  ( -- n )  _DRW-CLIP-ON @ IF _DRW-CLIP-W @ ELSE SCR-W THEN ;
 
 \ _DRW-IN-BOUNDS? ( row col -- flag )
-\   True if (row, col) is within the current screen.
+\   True if (row, col) is within the current clip region.
 : _DRW-IN-BOUNDS?  ( row col -- flag )
-    SWAP 0 SCR-H WITHIN                \ 0 <= row < h ?
-    SWAP 0 SCR-W WITHIN                \ 0 <= col < w ?
+    SWAP 0 _DRW-CLIP-ROWS WITHIN       \ 0 <= row < clip-h ?
+    SWAP 0 _DRW-CLIP-COLS WITHIN       \ 0 <= col < clip-w ?
     AND ;
 
 \ WITHIN ( n lo hi -- flag ) is standard: true if lo <= n < hi.
@@ -79,9 +93,13 @@ VARIABLE _DRW-ATTRS  0 _DRW-ATTRS !   \ default no attributes
 
 \ DRW-CHAR ( cp row col -- )
 \   Place one character at (row, col) using current style.
+\   Coordinates are relative to the current clip region.
 \   Silently clipped if out of bounds.
 : DRW-CHAR  ( cp row col -- )
     2DUP _DRW-IN-BOUNDS? IF
+        _DRW-CLIP-ON @ IF
+            SWAP _DRW-CLIP-ROW @ + SWAP _DRW-CLIP-COL @ +
+        THEN
         ROT _DRW-MAKE-CELL -ROT SCR-SET
     ELSE
         DROP DROP DROP
