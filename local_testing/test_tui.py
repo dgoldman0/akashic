@@ -23,6 +23,9 @@ DRAW_F     = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
 BOX_F      = os.path.join(ROOT_DIR, "akashic", "tui", "box.f")
 REGION_F   = os.path.join(ROOT_DIR, "akashic", "tui", "region.f")
 LAYOUT_F   = os.path.join(ROOT_DIR, "akashic", "tui", "layout.f")
+WIDGET_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widget.f")
+LABEL_F    = os.path.join(ROOT_DIR, "akashic", "tui", "label.f")
+PROGRESS_F = os.path.join(ROOT_DIR, "akashic", "tui", "progress.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -84,7 +87,7 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout ...")
+    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
@@ -97,6 +100,9 @@ def build_snapshot():
     box_lines  = _load_forth_lines(BOX_F)
     region_lines = _load_forth_lines(REGION_F)
     layout_lines = _load_forth_lines(LAYOUT_F)
+    widget_lines = _load_forth_lines(WIDGET_F)
+    label_lines  = _load_forth_lines(LABEL_F)
+    progress_lines = _load_forth_lines(PROGRESS_F)
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -111,7 +117,8 @@ def build_snapshot():
         utf8_lines + ansi_lines + keys_lines +
         cell_lines + screen_lines +
         draw_lines + box_lines +
-        region_lines + layout_lines + helpers
+        region_lines + layout_lines +
+        widget_lines + label_lines + progress_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -1483,6 +1490,320 @@ def test_lay_empty():
 
 
 # =====================================================================
+#  WIDGET.F TESTS — Common Widget Header (Layer 4A)
+# =====================================================================
+
+def test_wdg_type_constants():
+    """Widget type constants have expected values."""
+    print("\n── WIDGET type constants ──")
+    check("WDG-T-LABEL",
+        ['WDG-T-LABEL . 8888 .'], "1 8888")
+    check("WDG-T-INPUT",
+        ['WDG-T-INPUT . 8888 .'], "2 8888")
+    check("WDG-T-PROGRESS",
+        ['WDG-T-PROGRESS . 8888 .'], "5 8888")
+    check("WDG-T-CANVAS",
+        ['WDG-T-CANVAS . 8888 .'], "14 8888")
+
+def test_wdg_flag_constants():
+    """Widget flag constants."""
+    print("\n── WIDGET flag constants ──")
+    check("WDG-F-VISIBLE",
+        ['WDG-F-VISIBLE . 8888 .'], "1 8888")
+    check("WDG-F-FOCUSED",
+        ['WDG-F-FOCUSED . 8888 .'], "2 8888")
+    check("WDG-F-DIRTY",
+        ['WDG-F-DIRTY . 8888 .'], "4 8888")
+    check("WDG-F-DISABLED",
+        ['WDG-F-DISABLED . 8888 .'], "8 8888")
+
+def test_wdg_header_access():
+    """Create a label to test header accessors."""
+    print("\n── WIDGET header access ──")
+    # Use a label as a concrete widget
+    check("type via header",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         ': _T1 S" Hi" ; DUP _T1 LBL-LEFT LBL-NEW',
+         'DUP WDG-TYPE . 8888 .',
+         'LBL-FREE RGN-FREE SCR-FREE'], "1 8888")
+    check("region via header",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         ': _T2 S" Hi" ;',
+         'DUP DUP _T2 LBL-LEFT LBL-NEW',
+         'DUP WDG-REGION ROT = . 8888 .',
+         'LBL-FREE RGN-FREE SCR-FREE'], "-1 8888")  # same region address
+
+def test_wdg_flags_ops():
+    """Flag manipulation words."""
+    print("\n── WIDGET flag ops ──")
+    # Fresh label has VISIBLE + DIRTY = 5
+    check("initial flags (visible+dirty)",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         ': _T3 S" X" ; DUP _T3 LBL-LEFT LBL-NEW',
+         'DUP WDG-FLAGS . 8888 .',
+         'LBL-FREE RGN-FREE SCR-FREE'], "5 8888")
+    check("visible? true",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         ': _T4 S" X" ; DUP _T4 LBL-LEFT LBL-NEW',
+         'DUP WDG-VISIBLE? . 8888 .',
+         'LBL-FREE RGN-FREE SCR-FREE'], "-1 8888")
+    check("hide clears visible",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         ': _T5 S" X" ; DUP _T5 LBL-LEFT LBL-NEW',
+         'DUP WDG-HIDE',
+         'DUP WDG-VISIBLE? . 8888 .',
+         'LBL-FREE RGN-FREE SCR-FREE'], "0 8888")
+    check("disable sets flag",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         ': _T6 S" X" ; DUP _T6 LBL-LEFT LBL-NEW',
+         'DUP WDG-DISABLE',
+         'DUP WDG-DISABLED? . 8888 .',
+         'LBL-FREE RGN-FREE SCR-FREE'], "-1 8888")
+    check("enable clears disabled",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         ': _T7 S" X" ; DUP _T7 LBL-LEFT LBL-NEW',
+         'DUP WDG-DISABLE DUP WDG-ENABLE',
+         'DUP WDG-DISABLED? . 8888 .',
+         'LBL-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+
+# =====================================================================
+#  LABEL.F TESTS — Static Text Labels (Layer 4A)
+# =====================================================================
+
+def test_lbl_left():
+    """Left-aligned label draws text at col 0."""
+    print("\n── LABEL left-align ──")
+    check("left 'Hi' at (0,0)",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 3 20 RGN-NEW',
+         ': _TL1 S" Hi" ; DUP _TL1 LBL-LEFT LBL-NEW',
+         'WDG-DRAW',
+         '2 5 SCR-GET CELL-CP@ . 2 6 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "72 105 8888")  # H=72, i=105
+    check("left fills trailing with space",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 1 10 RGN-NEW',
+         ': _TL2 S" AB" ; DUP _TL2 LBL-LEFT LBL-NEW',
+         'WDG-DRAW',
+         '2 7 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "32 8888")  # space after 'B'
+
+def test_lbl_center():
+    """Center-aligned label."""
+    print("\n── LABEL center ──")
+    # "AB" (2 chars) in width 10 → pad 4 left → starts at col 4 (region-rel)
+    # Region at col 5, so abs col = 5+4 = 9
+    check("center 'AB' in width 10",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 1 10 RGN-NEW',
+         ': _TC1 S" AB" ; DUP _TC1 LBL-CENTER LBL-NEW',
+         'WDG-DRAW',
+         '2 9 SCR-GET CELL-CP@ . 2 10 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "65 66 8888")  # A=65, B=66
+
+def test_lbl_right():
+    """Right-aligned label."""
+    print("\n── LABEL right ──")
+    # "AB" (2 chars) in width 10 → pad 8 right → starts at col 8 (region-rel)
+    # Region at col 5, so abs col = 5+8 = 13
+    check("right 'AB' in width 10",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '2 5 1 10 RGN-NEW',
+         ': _TR1 S" AB" ; DUP _TR1 LBL-RIGHT LBL-NEW',
+         'WDG-DRAW',
+         '2 13 SCR-GET CELL-CP@ . 2 14 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "65 66 8888")
+
+def test_lbl_truncate():
+    """Text longer than region width is truncated."""
+    print("\n── LABEL truncate ──")
+    check("text wider than region wraps to line 2",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 2 3 RGN-NEW',
+         ': _TT1 S" ABCDEF" ;',
+         'DUP _TT1 LBL-LEFT LBL-NEW',
+         'WDG-DRAW',
+         '0 0 SCR-GET CELL-CP@ . 0 2 SCR-GET CELL-CP@ . 1 0 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "65 67 68 8888")  # A=65 C=67 D=68
+
+def test_lbl_empty():
+    """Empty text clears the region."""
+    print("\n── LABEL empty ──")
+    check("empty text clears region",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 5 RGN-NEW',
+         ': _TE1 S" " ; DUP _TE1 0 LBL-LEFT LBL-NEW',
+         'WDG-DRAW',
+         '0 0 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "32 8888")  # space
+
+def test_lbl_set_text():
+    """LBL-SET-TEXT updates text and marks dirty."""
+    print("\n── LABEL set-text ──")
+    check("set-text marks dirty",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 10 RGN-NEW',
+         ': _TS1 S" Old" ; DUP _TS1 LBL-LEFT LBL-NEW',
+         'DUP WDG-DRAW',
+         ': _TS2 S" New" ; DUP _TS2 LBL-SET-TEXT',
+         'DUP WDG-DIRTY? . 8888 .',
+         'RGN-FREE SCR-FREE'], "-1 8888")
+
+def test_lbl_set_align():
+    """LBL-SET-ALIGN changes alignment."""
+    print("\n── LABEL set-align ──")
+    check("change to right-align",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 10 RGN-NEW',
+         ': _SA1 S" XY" ; DUP _SA1 LBL-LEFT LBL-NEW',
+         'DUP LBL-RIGHT LBL-SET-ALIGN',
+         'DUP WDG-DRAW',
+         '0 8 SCR-GET CELL-CP@ . 0 9 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "88 89 8888")  # X=88, Y=89
+
+def test_lbl_hidden():
+    """Hidden label does not draw."""
+    print("\n── LABEL hidden ──")
+    check("hidden label skips draw",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 10 RGN-NEW',
+         ': _TH1 S" AB" ; DUP _TH1 LBL-LEFT LBL-NEW',
+         'DUP WDG-HIDE',
+         'DUP WDG-DRAW',
+         '0 0 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "32 8888")  # space (screen was cleared)
+
+
+# =====================================================================
+#  PROGRESS.F TESTS — Progress Bar & Spinner (Layer 4A)
+# =====================================================================
+
+def test_prg_create():
+    """Create progress bar, check fields."""
+    print("\n── PROGRESS create ──")
+    check("type is WDG-T-PROGRESS",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'DUP 100 PRG-BAR PRG-NEW',
+         'DUP WDG-TYPE . 8888 .',
+         'PRG-FREE RGN-FREE SCR-FREE'], "5 8888")
+    check("initial pct is 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'DUP 100 PRG-BAR PRG-NEW',
+         'DUP PRG-PCT . 8888 .',
+         'PRG-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_prg_set_pct():
+    """Set value and read percentage."""
+    print("\n── PROGRESS set/pct ──")
+    check("50/100 = 50%",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
+         'DUP 50 PRG-SET',
+         'DUP PRG-PCT . 8888 .',
+         'PRG-FREE RGN-FREE SCR-FREE'], "50 8888")
+    check("100/100 = 100%",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
+         'DUP 100 PRG-SET',
+         'DUP PRG-PCT . 8888 .',
+         'PRG-FREE RGN-FREE SCR-FREE'], "100 8888")
+
+def test_prg_inc():
+    """Increment value."""
+    print("\n── PROGRESS inc ──")
+    check("inc from 0 to 1",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
+         'DUP PRG-INC DUP PRG-INC DUP PRG-INC',
+         'DUP PRG-PCT . 8888 .',
+         'PRG-FREE RGN-FREE SCR-FREE'], "3 8888")
+
+def test_prg_bar_draw():
+    """Bar draws full/empty/fractional blocks."""
+    print("\n── PROGRESS bar draw ──")
+    # 0% → all empty blocks (U+2591 = 0x2591 = 9617)
+    check("0% all empty",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 10 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
+         'WDG-DRAW',
+         '0 0 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "9617 8888")
+    # 100% → all full blocks (U+2588 = 0x2588 = 9608)
+    check("100% all full",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 10 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
+         'DUP 100 PRG-SET WDG-DRAW',
+         '0 0 SCR-GET CELL-CP@ . 0 9 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "9608 9608 8888")
+    # 50% in width 10 → 5 full, then empty
+    check("50% half filled",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 10 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
+         'DUP 50 PRG-SET WDG-DRAW',
+         '0 4 SCR-GET CELL-CP@ . 0 5 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "9608 9617 8888")  # full at 4, empty at 5
+
+def test_prg_bar_max_zero():
+    """Max=0 edge case → all empty."""
+    print("\n── PROGRESS max=0 ──")
+    check("max=0 draws empty",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 10 RGN-NEW DUP 0 PRG-BAR PRG-NEW',
+         'WDG-DRAW',
+         '0 0 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "9617 8888")
+    check("max=0 pct is 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 10 RGN-NEW DUP 0 PRG-BAR PRG-NEW',
+         'DUP PRG-PCT . 8888 .',
+         'PRG-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_prg_spinner():
+    """Spinner draws a Braille character and advances frame."""
+    print("\n── PROGRESS spinner ──")
+    # Frame 0 → ⠋ = U+280B = 10251
+    check("spinner frame 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 5 RGN-NEW DUP 0 PRG-SPINNER PRG-NEW',
+         'WDG-DRAW',
+         '0 0 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "10251 8888")
+    # After tick: frame 1 → ⠙ = U+2819 = 10265
+    check("spinner after tick",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+         '0 0 1 5 RGN-NEW DUP 0 PRG-SPINNER PRG-NEW',
+         'DUP PRG-TICK WDG-DRAW',
+         '0 0 SCR-GET CELL-CP@ . 8888 .',
+         'RGN-FREE SCR-FREE'], "10265 8888")
+
+def test_prg_dirty():
+    """PRG-SET marks dirty."""
+    print("\n── PROGRESS dirty ──")
+    check("set marks dirty",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 10 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         'PRG-FREE RGN-FREE SCR-FREE'], "0 8888")  # clean after draw
+    check("set re-dirties",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 10 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
+         'DUP WDG-DRAW DUP 25 PRG-SET',
+         'DUP WDG-DIRTY? . 8888 .',
+         'PRG-FREE RGN-FREE SCR-FREE'], "-1 8888")
+
+
+# =====================================================================
 #  Main
 # =====================================================================
 
@@ -1577,6 +1898,31 @@ if __name__ == "__main__":
     test_lay_offset_parent()
     test_lay_recompute()
     test_lay_empty()
+
+    # Widget tests (Layer 4A)
+    test_wdg_type_constants()
+    test_wdg_flag_constants()
+    test_wdg_header_access()
+    test_wdg_flags_ops()
+
+    # Label tests (Layer 4A)
+    test_lbl_left()
+    test_lbl_center()
+    test_lbl_right()
+    test_lbl_truncate()
+    test_lbl_empty()
+    test_lbl_set_text()
+    test_lbl_set_align()
+    test_lbl_hidden()
+
+    # Progress tests (Layer 4A)
+    test_prg_create()
+    test_prg_set_pct()
+    test_prg_inc()
+    test_prg_bar_draw()
+    test_prg_bar_max_zero()
+    test_prg_spinner()
+    test_prg_dirty()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")

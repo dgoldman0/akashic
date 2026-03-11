@@ -71,7 +71,7 @@ VARIABLE _RGN-CUR      0 _RGN-CUR !   \ 0 = no region (full screen)
 \ RGN-FREE ( rgn -- )
 \   Free a region descriptor.
 : RGN-FREE  ( rgn -- )
-    FREE DROP ;
+    FREE ;
 
 \ =====================================================================
 \ 4. Accessors

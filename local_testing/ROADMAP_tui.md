@@ -928,6 +928,14 @@ ratios, no wrap, no alignment.  Sufficient for 95% of terminal UIs.
 
 ## Layer 4 — Widgets
 
+> **Build plan:** Layer 4 is split into three implementation sets:
+>
+> - **4A** — `widget.f` (shared header, constants, common words) + `label.f` + `progress.f` (~220 lines, simple foundation)
+> - **4B** — `input.f` + `list.f` + `tabs.f` (~630 lines, interactive widgets)
+> - **4C** — `menu.f` + `table.f` + `dialog.f` (~730 lines, complex composites)
+>
+> Each set gets its own commit checkpoint.
+
 All widgets follow a uniform protocol.  A widget descriptor starts
 with a common 5-cell header:
 
@@ -1993,23 +2001,24 @@ of raw character placement.
 | 6 | tui/box.f | 2 | draw | 275 | ✅ Done |
 | 7 | tui/region.f | 3 | screen, draw | 210 | ✅ Done |
 | 8 | tui/layout.f | 3 | region | 365 | ✅ Done |
-| 9 | tui/label.f | 4 | draw, region | ~100 | ❌ Not started |
-| 10 | tui/input.f | 4 | draw, region, utf8 | ~250 | ❌ Not started |
-| 11 | tui/list.f | 4 | draw, region | ~200 | ❌ Not started |
-| 12 | tui/progress.f | 4 | draw, region | ~120 | ❌ Not started |
-| 13 | tui/table.f | 4 | draw, box, region | ~300 | ❌ Not started |
-| 14 | tui/menu.f | 4 | draw, box, region | ~250 | ❌ Not started |
-| 15 | tui/dialog.f | 4 | draw, box, region, label | ~180 | ❌ Not started |
-| 16 | tui/tabs.f | 4 | draw, box, region | ~180 | ❌ Not started |
-| 17 | tui/focus.f | 5 | keys | ~150 | ❌ Not started |
-| 18 | tui/event.f | 5 | keys, screen, focus | ~200 | ❌ Not started |
-| 19 | tui/app.f | 5 | ansi, screen, event, focus | ~120 | ❌ Not started |
-| 20 | tui/split.f | 6 | region, draw | ~150 | ❌ Not started |
-| 21 | tui/scroll.f | 6 | region, draw | ~180 | ❌ Not started |
-| 22 | tui/status.f | 6 | draw, region | ~100 | ❌ Not started |
-| 23 | tui/toast.f | 6 | draw, box, region | ~120 | ❌ Not started |
-| 24 | tui/tree.f | 6 | draw, region, scroll | ~250 | ❌ Not started |
-| 25 | tui/canvas.f | 6 | draw, region | ~200 | ❌ Not started |
+| 9 | tui/widget.f | 4 | region | 234 | ✅ Done |
+| 10 | tui/label.f | 4 | widget, draw | 209 | ✅ Done |
+| 11 | tui/input.f | 4 | draw, region, utf8 | ~250 | ❌ Not started |
+| 12 | tui/list.f | 4 | draw, region | ~200 | ❌ Not started |
+| 13 | tui/progress.f | 4 | widget, draw | 263 | ✅ Done |
+| 14 | tui/table.f | 4 | draw, box, region | ~300 | ❌ Not started |
+| 15 | tui/menu.f | 4 | draw, box, region | ~250 | ❌ Not started |
+| 16 | tui/dialog.f | 4 | draw, box, region, label | ~180 | ❌ Not started |
+| 17 | tui/tabs.f | 4 | draw, box, region | ~180 | ❌ Not started |
+| 18 | tui/focus.f | 5 | keys | ~150 | ❌ Not started |
+| 19 | tui/event.f | 5 | keys, screen, focus | ~200 | ❌ Not started |
+| 20 | tui/app.f | 5 | ansi, screen, event, focus | ~120 | ❌ Not started |
+| 21 | tui/split.f | 6 | region, draw | ~150 | ❌ Not started |
+| 22 | tui/scroll.f | 6 | region, draw | ~180 | ❌ Not started |
+| 23 | tui/status.f | 6 | draw, region | ~100 | ❌ Not started |
+| 24 | tui/toast.f | 6 | draw, box, region | ~120 | ❌ Not started |
+| 25 | tui/tree.f | 6 | draw, region, scroll | ~250 | ❌ Not started |
+| 26 | tui/canvas.f | 6 | draw, region | ~200 | ❌ Not started |
 | | **Total** | | | **~4,750** | |
 
 Build from bottom up: Layer 0 first (ansi + keys), then Layer 1

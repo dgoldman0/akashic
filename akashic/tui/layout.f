@@ -100,9 +100,9 @@ VARIABLE _LAY-FREE-CARR
         _LAY-FREE-I @ 1+ _LAY-FREE-I !
     REPEAT
     \ Free the children array
-    _LAY-FREE-CARR @ DUP 0<> IF FREE DROP ELSE DROP THEN
+    _LAY-FREE-CARR @ DUP 0<> IF FREE ELSE DROP THEN
     \ Free the layout descriptor
-    _LAY-FREE-LAY @ FREE DROP ;
+    _LAY-FREE-LAY @ FREE ;
 
 \ =====================================================================
 \ 4. Accessors
