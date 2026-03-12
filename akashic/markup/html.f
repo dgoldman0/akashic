@@ -626,3 +626,61 @@ VARIABLE _HB-BUF   VARIABLE _HB-MAX   VARIABLE _HB-POS
     32 _HTML-EMIT
     45 _HTML-EMIT 45 _HTML-EMIT
     62 _HTML-EMIT ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _html-guard
+
+' HTML-VOID?      CONSTANT _html-void-q-xt
+' HTML-ENTER      CONSTANT _html-enter-xt
+' HTML-TEXT       CONSTANT _html-text-xt
+' HTML-INNER      CONSTANT _html-inner-xt
+' HTML-CHILD      CONSTANT _html-child-xt
+' HTML-CHILD?     CONSTANT _html-child-q-xt
+' HTML-ATTR       CONSTANT _html-attr-xt
+' HTML-ATTR?      CONSTANT _html-attr-q-xt
+' HTML-ID         CONSTANT _html-id-xt
+' HTML-CLASS-HAS? CONSTANT _html-class-has-q-xt
+' HTML-EACH-CHILD CONSTANT _html-each-child-xt
+' HTML-DECODE-ENTITY CONSTANT _html-decode-entity-xt
+' HTML-SET-OUTPUT CONSTANT _html-set-output-xt
+' HTML-OUTPUT-RESET CONSTANT _html-output-reset-xt
+' HTML-OUTPUT-RESULT CONSTANT _html-output-result-xt
+' HTML-DOCTYPE    CONSTANT _html-doctype-xt
+' HTML-<          CONSTANT _html-from-xt
+' HTML->          CONSTANT _html-to-xt
+' HTML-/>         CONSTANT _html-div-to-xt
+' HTML-</         CONSTANT _html-from-div-xt
+' HTML-ATTR!      CONSTANT _html-attr-s-xt
+' HTML-BARE-ATTR! CONSTANT _html-bare-attr-s-xt
+' HTML-TEXT!      CONSTANT _html-text-s-xt
+' HTML-RAW!       CONSTANT _html-raw-s-xt
+' HTML-COMMENT!   CONSTANT _html-comment-s-xt
+
+: HTML-VOID?      _html-void-q-xt _html-guard WITH-GUARD ;
+: HTML-ENTER      _html-enter-xt _html-guard WITH-GUARD ;
+: HTML-TEXT       _html-text-xt _html-guard WITH-GUARD ;
+: HTML-INNER      _html-inner-xt _html-guard WITH-GUARD ;
+: HTML-CHILD      _html-child-xt _html-guard WITH-GUARD ;
+: HTML-CHILD?     _html-child-q-xt _html-guard WITH-GUARD ;
+: HTML-ATTR       _html-attr-xt _html-guard WITH-GUARD ;
+: HTML-ATTR?      _html-attr-q-xt _html-guard WITH-GUARD ;
+: HTML-ID         _html-id-xt _html-guard WITH-GUARD ;
+: HTML-CLASS-HAS? _html-class-has-q-xt _html-guard WITH-GUARD ;
+: HTML-EACH-CHILD _html-each-child-xt _html-guard WITH-GUARD ;
+: HTML-DECODE-ENTITY _html-decode-entity-xt _html-guard WITH-GUARD ;
+: HTML-SET-OUTPUT _html-set-output-xt _html-guard WITH-GUARD ;
+: HTML-OUTPUT-RESET _html-output-reset-xt _html-guard WITH-GUARD ;
+: HTML-OUTPUT-RESULT _html-output-result-xt _html-guard WITH-GUARD ;
+: HTML-DOCTYPE    _html-doctype-xt _html-guard WITH-GUARD ;
+: HTML-<          _html-from-xt _html-guard WITH-GUARD ;
+: HTML->          _html-to-xt _html-guard WITH-GUARD ;
+: HTML-/>         _html-div-to-xt _html-guard WITH-GUARD ;
+: HTML-</         _html-from-div-xt _html-guard WITH-GUARD ;
+: HTML-ATTR!      _html-attr-s-xt _html-guard WITH-GUARD ;
+: HTML-BARE-ATTR! _html-bare-attr-s-xt _html-guard WITH-GUARD ;
+: HTML-TEXT!      _html-text-s-xt _html-guard WITH-GUARD ;
+: HTML-RAW!       _html-raw-s-xt _html-guard WITH-GUARD ;
+: HTML-COMMENT!   _html-comment-s-xt _html-guard WITH-GUARD ;
+[THEN] [THEN]

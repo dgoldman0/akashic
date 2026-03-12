@@ -851,3 +851,73 @@ VARIABLE _MFT-TA  VARIABLE _MFT-TL
         THEN THEN THEN THEN
     REPEAT
     0 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _mkcore-guard
+
+' MU-FAIL         CONSTANT _mu-fail-xt
+' MU-OK?          CONSTANT _mu-ok-q-xt
+' MU-CLEAR-ERR    CONSTANT _mu-clear-err-xt
+' MU-SKIP-WS      CONSTANT _mu-skip-ws-xt
+' MU-SKIP-UNTIL-CH CONSTANT _mu-skip-until-ch-xt
+' MU-SKIP-PAST-CH CONSTANT _mu-skip-past-ch-xt
+' MU-SKIP-NAME    CONSTANT _mu-skip-name-xt
+' MU-GET-NAME     CONSTANT _mu-get-name-xt
+' MU-SKIP-QUOTED  CONSTANT _mu-skip-quoted-xt
+' MU-GET-QUOTED   CONSTANT _mu-get-quoted-xt
+' MU-AT-TAG?      CONSTANT _mu-at-tag-q-xt
+' MU-TAG-TYPE     CONSTANT _mu-tag-type-xt
+' MU-SKIP-TAG     CONSTANT _mu-skip-tag-xt
+' MU-SKIP-COMMENT CONSTANT _mu-skip-comment-xt
+' MU-SKIP-PI      CONSTANT _mu-skip-pi-xt
+' MU-SKIP-CDATA   CONSTANT _mu-skip-cdata-xt
+' MU-SKIP-TO-TAG  CONSTANT _mu-skip-to-tag-xt
+' MU-GET-TEXT     CONSTANT _mu-get-text-xt
+' MU-GET-TAG-NAME CONSTANT _mu-get-tag-name-xt
+' MU-GET-TAG-BODY CONSTANT _mu-get-tag-body-xt
+' MU-ATTR-NEXT    CONSTANT _mu-attr-next-xt
+' MU-ATTR-FIND    CONSTANT _mu-attr-find-xt
+' MU-ATTR-HAS?    CONSTANT _mu-attr-has-q-xt
+' MU-DECODE-ENTITY CONSTANT _mu-decode-entity-xt
+' MU-UNESCAPE     CONSTANT _mu-unescape-xt
+' MU-ENTER        CONSTANT _mu-enter-xt
+' MU-SKIP-ELEMENT CONSTANT _mu-skip-element-xt
+' MU-FIND-CLOSE   CONSTANT _mu-find-close-xt
+' MU-INNER        CONSTANT _mu-inner-xt
+' MU-NEXT-SIBLING CONSTANT _mu-next-sibling-xt
+' MU-FIND-TAG     CONSTANT _mu-find-tag-xt
+
+: MU-FAIL         _mu-fail-xt _mkcore-guard WITH-GUARD ;
+: MU-OK?          _mu-ok-q-xt _mkcore-guard WITH-GUARD ;
+: MU-CLEAR-ERR    _mu-clear-err-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-WS      _mu-skip-ws-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-UNTIL-CH _mu-skip-until-ch-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-PAST-CH _mu-skip-past-ch-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-NAME    _mu-skip-name-xt _mkcore-guard WITH-GUARD ;
+: MU-GET-NAME     _mu-get-name-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-QUOTED  _mu-skip-quoted-xt _mkcore-guard WITH-GUARD ;
+: MU-GET-QUOTED   _mu-get-quoted-xt _mkcore-guard WITH-GUARD ;
+: MU-AT-TAG?      _mu-at-tag-q-xt _mkcore-guard WITH-GUARD ;
+: MU-TAG-TYPE     _mu-tag-type-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-TAG     _mu-skip-tag-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-COMMENT _mu-skip-comment-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-PI      _mu-skip-pi-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-CDATA   _mu-skip-cdata-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-TO-TAG  _mu-skip-to-tag-xt _mkcore-guard WITH-GUARD ;
+: MU-GET-TEXT     _mu-get-text-xt _mkcore-guard WITH-GUARD ;
+: MU-GET-TAG-NAME _mu-get-tag-name-xt _mkcore-guard WITH-GUARD ;
+: MU-GET-TAG-BODY _mu-get-tag-body-xt _mkcore-guard WITH-GUARD ;
+: MU-ATTR-NEXT    _mu-attr-next-xt _mkcore-guard WITH-GUARD ;
+: MU-ATTR-FIND    _mu-attr-find-xt _mkcore-guard WITH-GUARD ;
+: MU-ATTR-HAS?    _mu-attr-has-q-xt _mkcore-guard WITH-GUARD ;
+: MU-DECODE-ENTITY _mu-decode-entity-xt _mkcore-guard WITH-GUARD ;
+: MU-UNESCAPE     _mu-unescape-xt _mkcore-guard WITH-GUARD ;
+: MU-ENTER        _mu-enter-xt _mkcore-guard WITH-GUARD ;
+: MU-SKIP-ELEMENT _mu-skip-element-xt _mkcore-guard WITH-GUARD ;
+: MU-FIND-CLOSE   _mu-find-close-xt _mkcore-guard WITH-GUARD ;
+: MU-INNER        _mu-inner-xt _mkcore-guard WITH-GUARD ;
+: MU-NEXT-SIBLING _mu-next-sibling-xt _mkcore-guard WITH-GUARD ;
+: MU-FIND-TAG     _mu-find-tag-xt _mkcore-guard WITH-GUARD ;
+[THEN] [THEN]

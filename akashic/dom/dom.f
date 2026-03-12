@@ -248,9 +248,16 @@ VARIABLE _DA-TY
 
 \ _DOM-FREE ( node -- )
 \   Release strings, zero node, push onto free-list.
+\   N.AUX is only released if it falls within the string pool
+\   (external code such as dom-tui.f may store non-string pointers).
 : _DOM-FREE  ( node -- )
     DUP N.NAME @ _DOM-STR-RELEASE
-    DUP N.AUX @ _DOM-STR-RELEASE
+    DUP N.AUX @ DUP IF
+        DUP DOM-DOC D.STR-BASE @ >=
+        OVER DOM-DOC D.STR-END @ < AND IF
+            _DOM-STR-RELEASE
+        ELSE DROP THEN
+    ELSE DROP THEN
     DUP _DOM-ZERO-NODE
     DOM-DOC D.NODE-FREE @  OVER !    \ node.+0 = old head
     DOM-DOC D.NODE-FREE ! ;          \ head = node

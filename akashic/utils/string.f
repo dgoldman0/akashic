@@ -373,3 +373,49 @@ VARIABLE _S2N-NEG
     DROP                        ( addr' len' addr )
     2 PICK OVER -               ( addr' len' addr tlen )
     2SWAP ;                     ( tok tlen rest rlen )
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _ustr-guard
+
+' STR-TOLOWER     CONSTANT _str-tolower-xt
+' STR-TOUPPER     CONSTANT _str-toupper-xt
+' STR-STR=        CONSTANT _str-str=-xt
+' STR-STRI=       CONSTANT _str-stri=-xt
+' STR-STARTS?     CONSTANT _str-starts-q-xt
+' STR-STARTSI?    CONSTANT _str-startsi-q-xt
+' STR-ENDS?       CONSTANT _str-ends-q-xt
+' STR-INDEX       CONSTANT _str-index-xt
+' STR-RINDEX      CONSTANT _str-rindex-xt
+' STR-STR-CONTAINS CONSTANT _str-str-contains-xt
+' STR-STRI-CONTAINS CONSTANT _str-stri-contains-xt
+' STR-SPLIT       CONSTANT _str-split-xt
+' STR-TRIM-L      CONSTANT _str-trim-l-xt
+' STR-TRIM-R      CONSTANT _str-trim-r-xt
+' STR-TRIM        CONSTANT _str-trim-xt
+' NUM>STR         CONSTANT _num-to-str-xt
+' STR>NUM         CONSTANT _str-to-num-xt
+' STR-SKIP-BL     CONSTANT _str-skip-bl-xt
+' STR-PARSE-TOKEN CONSTANT _str-parse-token-xt
+
+: STR-TOLOWER     _str-tolower-xt _ustr-guard WITH-GUARD ;
+: STR-TOUPPER     _str-toupper-xt _ustr-guard WITH-GUARD ;
+: STR-STR=        _str-str=-xt _ustr-guard WITH-GUARD ;
+: STR-STRI=       _str-stri=-xt _ustr-guard WITH-GUARD ;
+: STR-STARTS?     _str-starts-q-xt _ustr-guard WITH-GUARD ;
+: STR-STARTSI?    _str-startsi-q-xt _ustr-guard WITH-GUARD ;
+: STR-ENDS?       _str-ends-q-xt _ustr-guard WITH-GUARD ;
+: STR-INDEX       _str-index-xt _ustr-guard WITH-GUARD ;
+: STR-RINDEX      _str-rindex-xt _ustr-guard WITH-GUARD ;
+: STR-STR-CONTAINS _str-str-contains-xt _ustr-guard WITH-GUARD ;
+: STR-STRI-CONTAINS _str-stri-contains-xt _ustr-guard WITH-GUARD ;
+: STR-SPLIT       _str-split-xt _ustr-guard WITH-GUARD ;
+: STR-TRIM-L      _str-trim-l-xt _ustr-guard WITH-GUARD ;
+: STR-TRIM-R      _str-trim-r-xt _ustr-guard WITH-GUARD ;
+: STR-TRIM        _str-trim-xt _ustr-guard WITH-GUARD ;
+: NUM>STR         _num-to-str-xt _ustr-guard WITH-GUARD ;
+: STR>NUM         _str-to-num-xt _ustr-guard WITH-GUARD ;
+: STR-SKIP-BL     _str-skip-bl-xt _ustr-guard WITH-GUARD ;
+: STR-PARSE-TOKEN _str-parse-token-xt _ustr-guard WITH-GUARD ;
+[THEN] [THEN]

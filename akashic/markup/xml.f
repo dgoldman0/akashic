@@ -276,3 +276,59 @@ VARIABLE _XB-BUF   VARIABLE _XB-MAX   VARIABLE _XB-POS
     32 _XML-EMIT                     \ space
     2R> _XML-TYPE                    \ data
     63 _XML-EMIT 62 _XML-EMIT ;     \ '?>'
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _xml-guard
+
+' XML-ENTER       CONSTANT _xml-enter-xt
+' XML-TEXT        CONSTANT _xml-text-xt
+' XML-INNER       CONSTANT _xml-inner-xt
+' XML-CHILD       CONSTANT _xml-child-xt
+' XML-CHILD?      CONSTANT _xml-child-q-xt
+' XML-ATTR        CONSTANT _xml-attr-xt
+' XML-ATTR?       CONSTANT _xml-attr-q-xt
+' XML-SKIP-PI     CONSTANT _xml-skip-pi-xt
+' XML-SKIP-CDATA  CONSTANT _xml-skip-cdata-xt
+' XML-GET-CDATA   CONSTANT _xml-get-cdata-xt
+' XML-PATH        CONSTANT _xml-path-xt
+' XML-EACH-CHILD  CONSTANT _xml-each-child-xt
+' XML-SET-OUTPUT  CONSTANT _xml-set-output-xt
+' XML-OUTPUT-RESET CONSTANT _xml-output-reset-xt
+' XML-OUTPUT-RESULT CONSTANT _xml-output-result-xt
+' XML-<           CONSTANT _xml-from-xt
+' XML->           CONSTANT _xml-to-xt
+' XML-/>          CONSTANT _xml-div-to-xt
+' XML-</          CONSTANT _xml-from-div-xt
+' XML-ATTR!       CONSTANT _xml-attr-s-xt
+' XML-TEXT!       CONSTANT _xml-text-s-xt
+' XML-RAW!        CONSTANT _xml-raw-s-xt
+' XML-COMMENT!    CONSTANT _xml-comment-s-xt
+' XML-PI!         CONSTANT _xml-pi-s-xt
+
+: XML-ENTER       _xml-enter-xt _xml-guard WITH-GUARD ;
+: XML-TEXT        _xml-text-xt _xml-guard WITH-GUARD ;
+: XML-INNER       _xml-inner-xt _xml-guard WITH-GUARD ;
+: XML-CHILD       _xml-child-xt _xml-guard WITH-GUARD ;
+: XML-CHILD?      _xml-child-q-xt _xml-guard WITH-GUARD ;
+: XML-ATTR        _xml-attr-xt _xml-guard WITH-GUARD ;
+: XML-ATTR?       _xml-attr-q-xt _xml-guard WITH-GUARD ;
+: XML-SKIP-PI     _xml-skip-pi-xt _xml-guard WITH-GUARD ;
+: XML-SKIP-CDATA  _xml-skip-cdata-xt _xml-guard WITH-GUARD ;
+: XML-GET-CDATA   _xml-get-cdata-xt _xml-guard WITH-GUARD ;
+: XML-PATH        _xml-path-xt _xml-guard WITH-GUARD ;
+: XML-EACH-CHILD  _xml-each-child-xt _xml-guard WITH-GUARD ;
+: XML-SET-OUTPUT  _xml-set-output-xt _xml-guard WITH-GUARD ;
+: XML-OUTPUT-RESET _xml-output-reset-xt _xml-guard WITH-GUARD ;
+: XML-OUTPUT-RESULT _xml-output-result-xt _xml-guard WITH-GUARD ;
+: XML-<           _xml-from-xt _xml-guard WITH-GUARD ;
+: XML->           _xml-to-xt _xml-guard WITH-GUARD ;
+: XML-/>          _xml-div-to-xt _xml-guard WITH-GUARD ;
+: XML-</          _xml-from-div-xt _xml-guard WITH-GUARD ;
+: XML-ATTR!       _xml-attr-s-xt _xml-guard WITH-GUARD ;
+: XML-TEXT!       _xml-text-s-xt _xml-guard WITH-GUARD ;
+: XML-RAW!        _xml-raw-s-xt _xml-guard WITH-GUARD ;
+: XML-COMMENT!    _xml-comment-s-xt _xml-guard WITH-GUARD ;
+: XML-PI!         _xml-pi-s-xt _xml-guard WITH-GUARD ;
+[THEN] [THEN]

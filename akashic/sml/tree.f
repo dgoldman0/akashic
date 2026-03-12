@@ -986,3 +986,105 @@ VARIABLE _SMJ-SC
     SML-TREE-CREATE  -ROT
     SML-TREE  SML-LOAD
     SML-TREE  _SOM-INIT-CURSOR ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _smltree-guard
+
+' SX.CURRENT      CONSTANT _sx-dotcurrent-xt
+' SX.SCOPE        CONSTANT _sx-dotscope-xt
+' SX.POSITION     CONSTANT _sx-dotposition-xt
+' SX.AT-BOUND     CONSTANT _sx-dotat-bound-xt
+' SX.FS-DEPTH     CONSTANT _sx-dotfs-depth-xt
+' SX.FS-FRAMES    CONSTANT _sx-dotfs-frames-xt
+' SX.CTX-STATE    CONSTANT _sx-dotctx-state-xt
+' SX.CTX-TARGET   CONSTANT _sx-dotctx-target-xt
+' SX.CTX-VALUE    CONSTANT _sx-dotctx-value-xt
+' SF.SCOPE        CONSTANT _sf-dotscope-xt
+' SF.SAVED-POS    CONSTANT _sf-dotsaved-pos-xt
+' SF.RESUME       CONSTANT _sf-dotresume-xt
+' T.DOC           CONSTANT _t-dotdoc-xt
+' T.EXT           CONSTANT _t-dotext-xt
+' SML-TREE-USE    CONSTANT _sml-tree-use-xt
+' SML-TREE        CONSTANT _sml-tree-xt
+' SML-NODE-TYPE@  CONSTANT _sml-node-type-at-xt
+' SML-TREE-CREATE CONSTANT _sml-tree-create-xt
+' SML-TREE-DESTROY CONSTANT _sml-tree-destroy-xt
+' SML-LOAD        CONSTANT _sml-load-xt
+' SML-NODE@       CONSTANT _sml-node-at-xt
+' SML-FIRST       CONSTANT _sml-first-xt
+' SML-LAST        CONSTANT _sml-last-xt
+' SML-NEXT        CONSTANT _sml-next-xt
+' SML-PREV        CONSTANT _sml-prev-xt
+' SML-JUMP?       CONSTANT _sml-jump-q-xt
+' SML-CHILDREN    CONSTANT _sml-children-xt
+' SML-NODE-ADD    CONSTANT _sml-node-add-xt
+' SML-NODE-REMOVE CONSTANT _sml-node-remove-xt
+' SOM-FS-DEPTH    CONSTANT _som-fs-depth-xt
+' SOM-CURRENT     CONSTANT _som-current-xt
+' SOM-SCOPE       CONSTANT _som-scope-xt
+' SOM-POSITION    CONSTANT _som-position-xt
+' SOM-AT-BOUNDARY CONSTANT _som-at-boundary-xt
+' SOM-NEXT        CONSTANT _som-next-xt
+' SOM-PREV        CONSTANT _som-prev-xt
+' SOM-ENTER       CONSTANT _som-enter-xt
+' SOM-BACK        CONSTANT _som-back-xt
+' SOM-JUMP        CONSTANT _som-jump-xt
+' SOM-CTX@        CONSTANT _som-ctx-at-xt
+' SOM-CTX-ENTER   CONSTANT _som-ctx-enter-xt
+' SOM-CTX-EXIT    CONSTANT _som-ctx-exit-xt
+' SOM-CTX-TARGET  CONSTANT _som-ctx-target-xt
+' SOM-CTX-VALUE   CONSTANT _som-ctx-value-xt
+' SOM-CTX-SET-VALUE CONSTANT _som-ctx-set-value-xt
+' SML-PATCH       CONSTANT _sml-patch-xt
+' SML-INIT        CONSTANT _sml-init-xt
+
+: SX.CURRENT      _sx-dotcurrent-xt _smltree-guard WITH-GUARD ;
+: SX.SCOPE        _sx-dotscope-xt _smltree-guard WITH-GUARD ;
+: SX.POSITION     _sx-dotposition-xt _smltree-guard WITH-GUARD ;
+: SX.AT-BOUND     _sx-dotat-bound-xt _smltree-guard WITH-GUARD ;
+: SX.FS-DEPTH     _sx-dotfs-depth-xt _smltree-guard WITH-GUARD ;
+: SX.FS-FRAMES    _sx-dotfs-frames-xt _smltree-guard WITH-GUARD ;
+: SX.CTX-STATE    _sx-dotctx-state-xt _smltree-guard WITH-GUARD ;
+: SX.CTX-TARGET   _sx-dotctx-target-xt _smltree-guard WITH-GUARD ;
+: SX.CTX-VALUE    _sx-dotctx-value-xt _smltree-guard WITH-GUARD ;
+: SF.SCOPE        _sf-dotscope-xt _smltree-guard WITH-GUARD ;
+: SF.SAVED-POS    _sf-dotsaved-pos-xt _smltree-guard WITH-GUARD ;
+: SF.RESUME       _sf-dotresume-xt _smltree-guard WITH-GUARD ;
+: T.DOC           _t-dotdoc-xt _smltree-guard WITH-GUARD ;
+: T.EXT           _t-dotext-xt _smltree-guard WITH-GUARD ;
+: SML-TREE-USE    _sml-tree-use-xt _smltree-guard WITH-GUARD ;
+: SML-TREE        _sml-tree-xt _smltree-guard WITH-GUARD ;
+: SML-NODE-TYPE@  _sml-node-type-at-xt _smltree-guard WITH-GUARD ;
+: SML-TREE-CREATE _sml-tree-create-xt _smltree-guard WITH-GUARD ;
+: SML-TREE-DESTROY _sml-tree-destroy-xt _smltree-guard WITH-GUARD ;
+: SML-LOAD        _sml-load-xt _smltree-guard WITH-GUARD ;
+: SML-NODE@       _sml-node-at-xt _smltree-guard WITH-GUARD ;
+: SML-FIRST       _sml-first-xt _smltree-guard WITH-GUARD ;
+: SML-LAST        _sml-last-xt _smltree-guard WITH-GUARD ;
+: SML-NEXT        _sml-next-xt _smltree-guard WITH-GUARD ;
+: SML-PREV        _sml-prev-xt _smltree-guard WITH-GUARD ;
+: SML-JUMP?       _sml-jump-q-xt _smltree-guard WITH-GUARD ;
+: SML-CHILDREN    _sml-children-xt _smltree-guard WITH-GUARD ;
+: SML-NODE-ADD    _sml-node-add-xt _smltree-guard WITH-GUARD ;
+: SML-NODE-REMOVE _sml-node-remove-xt _smltree-guard WITH-GUARD ;
+: SOM-FS-DEPTH    _som-fs-depth-xt _smltree-guard WITH-GUARD ;
+: SOM-CURRENT     _som-current-xt _smltree-guard WITH-GUARD ;
+: SOM-SCOPE       _som-scope-xt _smltree-guard WITH-GUARD ;
+: SOM-POSITION    _som-position-xt _smltree-guard WITH-GUARD ;
+: SOM-AT-BOUNDARY _som-at-boundary-xt _smltree-guard WITH-GUARD ;
+: SOM-NEXT        _som-next-xt _smltree-guard WITH-GUARD ;
+: SOM-PREV        _som-prev-xt _smltree-guard WITH-GUARD ;
+: SOM-ENTER       _som-enter-xt _smltree-guard WITH-GUARD ;
+: SOM-BACK        _som-back-xt _smltree-guard WITH-GUARD ;
+: SOM-JUMP        _som-jump-xt _smltree-guard WITH-GUARD ;
+: SOM-CTX@        _som-ctx-at-xt _smltree-guard WITH-GUARD ;
+: SOM-CTX-ENTER   _som-ctx-enter-xt _smltree-guard WITH-GUARD ;
+: SOM-CTX-EXIT    _som-ctx-exit-xt _smltree-guard WITH-GUARD ;
+: SOM-CTX-TARGET  _som-ctx-target-xt _smltree-guard WITH-GUARD ;
+: SOM-CTX-VALUE   _som-ctx-value-xt _smltree-guard WITH-GUARD ;
+: SOM-CTX-SET-VALUE _som-ctx-set-value-xt _smltree-guard WITH-GUARD ;
+: SML-PATCH       _sml-patch-xt _smltree-guard WITH-GUARD ;
+: SML-INIT        _sml-init-xt _smltree-guard WITH-GUARD ;
+[THEN] [THEN]

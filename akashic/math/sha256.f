@@ -122,6 +122,7 @@ VARIABLE _SHA256-DST
     0= IF TRUE ELSE FALSE THEN ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _sha256-guard
 
@@ -149,3 +150,5 @@ GUARD _sha256-guard
     _sha256-end-xt CATCH
     _sha256-guard GUARD-RELEASE
     ?DUP IF THROW THEN ;
+
+[THEN] [THEN]

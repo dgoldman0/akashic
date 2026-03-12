@@ -505,3 +505,65 @@ VARIABLE _STB-NA  VARIABLE _STB-NL
 \ validation, and attribute extraction that tree.f builds upon.
 \
 \ See: REQUIRE sml/tree.f   for SML-PARSE, SML-TREE-CREATE, etc.
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _smlcore-guard
+
+' SML-FAIL        CONSTANT _sml-fail-xt
+' SML-OK?         CONSTANT _sml-ok-q-xt
+' SML-CLEAR-ERR   CONSTANT _sml-clear-err-xt
+' SML-TYPE?       CONSTANT _sml-type-q-xt
+' SML-ENVELOPE?   CONSTANT _sml-envelope-q-xt
+' SML-META?       CONSTANT _sml-meta-q-xt
+' SML-SCOPE?      CONSTANT _sml-scope-q-xt
+' SML-POSITION?   CONSTANT _sml-position-q-xt
+' SML-STRUCT?     CONSTANT _sml-struct-q-xt
+' SML-COMPOSE?    CONSTANT _sml-compose-q-xt
+' SML-NAVIGABLE?  CONSTANT _sml-navigable-q-xt
+' SML-CONTAINER?  CONSTANT _sml-container-q-xt
+' SML-ATTR        CONSTANT _sml-attr-xt
+' SML-ATTR-ID     CONSTANT _sml-attr-id-xt
+' SML-ATTR-LABEL  CONSTANT _sml-attr-label-xt
+' SML-ATTR-KIND   CONSTANT _sml-attr-kind-xt
+' SML-VALID-CHILD? CONSTANT _sml-valid-child-q-xt
+' SML-ELEM-NTH    CONSTANT _sml-elem-nth-xt
+' SML-SEQ?        CONSTANT _sml-seq-q-xt
+' SML-RING?       CONSTANT _sml-ring-q-xt
+' SML-GATE?       CONSTANT _sml-gate-q-xt
+' SML-TRAP?       CONSTANT _sml-trap-q-xt
+' SML-VALID-VAL-KIND? CONSTANT _sml-valid-val-kind-q-xt
+' SML-PICK-COUNT  CONSTANT _sml-pick-count-xt
+' SML-VALID?      CONSTANT _sml-valid-q-xt
+' SML-COUNT-CHILDREN CONSTANT _sml-count-children-xt
+' SML-TAG-BODY    CONSTANT _sml-tag-body-xt
+
+: SML-FAIL        _sml-fail-xt _smlcore-guard WITH-GUARD ;
+: SML-OK?         _sml-ok-q-xt _smlcore-guard WITH-GUARD ;
+: SML-CLEAR-ERR   _sml-clear-err-xt _smlcore-guard WITH-GUARD ;
+: SML-TYPE?       _sml-type-q-xt _smlcore-guard WITH-GUARD ;
+: SML-ENVELOPE?   _sml-envelope-q-xt _smlcore-guard WITH-GUARD ;
+: SML-META?       _sml-meta-q-xt _smlcore-guard WITH-GUARD ;
+: SML-SCOPE?      _sml-scope-q-xt _smlcore-guard WITH-GUARD ;
+: SML-POSITION?   _sml-position-q-xt _smlcore-guard WITH-GUARD ;
+: SML-STRUCT?     _sml-struct-q-xt _smlcore-guard WITH-GUARD ;
+: SML-COMPOSE?    _sml-compose-q-xt _smlcore-guard WITH-GUARD ;
+: SML-NAVIGABLE?  _sml-navigable-q-xt _smlcore-guard WITH-GUARD ;
+: SML-CONTAINER?  _sml-container-q-xt _smlcore-guard WITH-GUARD ;
+: SML-ATTR        _sml-attr-xt _smlcore-guard WITH-GUARD ;
+: SML-ATTR-ID     _sml-attr-id-xt _smlcore-guard WITH-GUARD ;
+: SML-ATTR-LABEL  _sml-attr-label-xt _smlcore-guard WITH-GUARD ;
+: SML-ATTR-KIND   _sml-attr-kind-xt _smlcore-guard WITH-GUARD ;
+: SML-VALID-CHILD? _sml-valid-child-q-xt _smlcore-guard WITH-GUARD ;
+: SML-ELEM-NTH    _sml-elem-nth-xt _smlcore-guard WITH-GUARD ;
+: SML-SEQ?        _sml-seq-q-xt _smlcore-guard WITH-GUARD ;
+: SML-RING?       _sml-ring-q-xt _smlcore-guard WITH-GUARD ;
+: SML-GATE?       _sml-gate-q-xt _smlcore-guard WITH-GUARD ;
+: SML-TRAP?       _sml-trap-q-xt _smlcore-guard WITH-GUARD ;
+: SML-VALID-VAL-KIND? _sml-valid-val-kind-q-xt _smlcore-guard WITH-GUARD ;
+: SML-PICK-COUNT  _sml-pick-count-xt _smlcore-guard WITH-GUARD ;
+: SML-VALID?      _sml-valid-q-xt _smlcore-guard WITH-GUARD ;
+: SML-COUNT-CHILDREN _sml-count-children-xt _smlcore-guard WITH-GUARD ;
+: SML-TAG-BODY    _sml-tag-body-xt _smlcore-guard WITH-GUARD ;
+[THEN] [THEN]

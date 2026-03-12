@@ -543,6 +543,7 @@ VARIABLE _MNU-IC-MENU
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _mnu-guard
 
 ' MNU-NEW          CONSTANT _mnu-new-xt

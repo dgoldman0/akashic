@@ -1717,3 +1717,119 @@ VARIABLE _CCF-P
         R> 4 + _CCF-P +!            \ advance past entry
     REPEAT
     DROP 2DROP 0 0 0 0 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _css-guard
+
+' CSS-FAIL        CONSTANT _css-fail-xt
+' CSS-OK?         CONSTANT _css-ok-q-xt
+' CSS-CLEAR-ERR   CONSTANT _css-clear-err-xt
+' CSS-SKIP-COMMENT CONSTANT _css-skip-comment-xt
+' CSS-SKIP-WS     CONSTANT _css-skip-ws-xt
+' CSS-SKIP-STRING CONSTANT _css-skip-string-xt
+' CSS-SKIP-IDENT  CONSTANT _css-skip-ident-xt
+' CSS-GET-IDENT   CONSTANT _css-get-ident-xt
+' CSS-SKIP-BLOCK  CONSTANT _css-skip-block-xt
+' CSS-SKIP-PARENS CONSTANT _css-skip-parens-xt
+' CSS-SKIP-UNTIL  CONSTANT _css-skip-until-xt
+' CSS-DECL-NEXT   CONSTANT _css-decl-next-xt
+' CSS-DECL-FIND   CONSTANT _css-decl-find-xt
+' CSS-DECL-HAS?   CONSTANT _css-decl-has-q-xt
+' CSS-IMPORTANT?  CONSTANT _css-important-q-xt
+' CSS-STRIP-IMPORTANT CONSTANT _css-strip-important-xt
+' CSS-AT-RULE?    CONSTANT _css-at-rule-q-xt
+' CSS-AT-RULE-NAME CONSTANT _css-at-rule-name-xt
+' CSS-SKIP-AT-RULE CONSTANT _css-skip-at-rule-xt
+' CSS-RULE-NEXT   CONSTANT _css-rule-next-xt
+' CSS-SEL-NEXT-SIMPLE CONSTANT _css-sel-next-simple-xt
+' CSS-SEL-COMBINATOR CONSTANT _css-sel-combinator-xt
+' CSS-SEL-GROUP-NEXT CONSTANT _css-sel-group-next-xt
+' CSS-MATCH-TYPE  CONSTANT _css-match-type-xt
+' CSS-MATCH-ID    CONSTANT _css-match-id-xt
+' CSS-MATCH-CLASS CONSTANT _css-match-class-xt
+' CSS-MATCH-SET   CONSTANT _css-match-set-xt
+' CSS-MATCH-SIMPLE CONSTANT _css-match-simple-xt
+' CSS-SPECIFICITY CONSTANT _css-specificity-xt
+' CSS-SPEC-COMPARE CONSTANT _css-spec-compare-xt
+' CSS-SPEC-PACK   CONSTANT _css-spec-pack-xt
+' CSS-PARSE-INT   CONSTANT _css-parse-int-xt
+' CSS-PARSE-NUMBER CONSTANT _css-parse-number-xt
+' CSS-SKIP-NUMBER CONSTANT _css-skip-number-xt
+' CSS-PARSE-UNIT  CONSTANT _css-parse-unit-xt
+' CSS-PARSE-HEX-COLOR CONSTANT _css-parse-hex-color-xt
+' CSS-PARSE-RGB   CONSTANT _css-parse-rgb-xt
+' CSS-SKIP-VALUE  CONSTANT _css-skip-value-xt
+' CSS-NEXT-VALUE  CONSTANT _css-next-value-xt
+' CSS-EXPAND-TRBL CONSTANT _css-expand-trbl-xt
+' CSS-MEDIA-QUERY CONSTANT _css-media-query-xt
+' CSS-IMPORT-URL  CONSTANT _css-import-url-xt
+' CSS-KEYFRAMES   CONSTANT _css-keyframes-xt
+' CSS-SET-OUTPUT  CONSTANT _css-set-output-xt
+' CSS-OUTPUT-RESET CONSTANT _css-output-reset-xt
+' CSS-OUTPUT-RESULT CONSTANT _css-output-result-xt
+' CSS-RULE-START  CONSTANT _css-rule-start-xt
+' CSS-RULE-END    CONSTANT _css-rule-end-xt
+' CSS-PROP!       CONSTANT _css-prop-s-xt
+' CSS-COMMENT!    CONSTANT _css-comment-s-xt
+' CSS-MEDIA-START CONSTANT _css-media-start-xt
+' CSS-MEDIA-END   CONSTANT _css-media-end-xt
+' CSS-IMPORT!     CONSTANT _css-import-s-xt
+' CSS-COLOR-FIND  CONSTANT _css-color-find-xt
+
+: CSS-FAIL        _css-fail-xt _css-guard WITH-GUARD ;
+: CSS-OK?         _css-ok-q-xt _css-guard WITH-GUARD ;
+: CSS-CLEAR-ERR   _css-clear-err-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-COMMENT _css-skip-comment-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-WS     _css-skip-ws-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-STRING _css-skip-string-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-IDENT  _css-skip-ident-xt _css-guard WITH-GUARD ;
+: CSS-GET-IDENT   _css-get-ident-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-BLOCK  _css-skip-block-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-PARENS _css-skip-parens-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-UNTIL  _css-skip-until-xt _css-guard WITH-GUARD ;
+: CSS-DECL-NEXT   _css-decl-next-xt _css-guard WITH-GUARD ;
+: CSS-DECL-FIND   _css-decl-find-xt _css-guard WITH-GUARD ;
+: CSS-DECL-HAS?   _css-decl-has-q-xt _css-guard WITH-GUARD ;
+: CSS-IMPORTANT?  _css-important-q-xt _css-guard WITH-GUARD ;
+: CSS-STRIP-IMPORTANT _css-strip-important-xt _css-guard WITH-GUARD ;
+: CSS-AT-RULE?    _css-at-rule-q-xt _css-guard WITH-GUARD ;
+: CSS-AT-RULE-NAME _css-at-rule-name-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-AT-RULE _css-skip-at-rule-xt _css-guard WITH-GUARD ;
+: CSS-RULE-NEXT   _css-rule-next-xt _css-guard WITH-GUARD ;
+: CSS-SEL-NEXT-SIMPLE _css-sel-next-simple-xt _css-guard WITH-GUARD ;
+: CSS-SEL-COMBINATOR _css-sel-combinator-xt _css-guard WITH-GUARD ;
+: CSS-SEL-GROUP-NEXT _css-sel-group-next-xt _css-guard WITH-GUARD ;
+: CSS-MATCH-TYPE  _css-match-type-xt _css-guard WITH-GUARD ;
+: CSS-MATCH-ID    _css-match-id-xt _css-guard WITH-GUARD ;
+: CSS-MATCH-CLASS _css-match-class-xt _css-guard WITH-GUARD ;
+: CSS-MATCH-SET   _css-match-set-xt _css-guard WITH-GUARD ;
+: CSS-MATCH-SIMPLE _css-match-simple-xt _css-guard WITH-GUARD ;
+: CSS-SPECIFICITY _css-specificity-xt _css-guard WITH-GUARD ;
+: CSS-SPEC-COMPARE _css-spec-compare-xt _css-guard WITH-GUARD ;
+: CSS-SPEC-PACK   _css-spec-pack-xt _css-guard WITH-GUARD ;
+: CSS-PARSE-INT   _css-parse-int-xt _css-guard WITH-GUARD ;
+: CSS-PARSE-NUMBER _css-parse-number-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-NUMBER _css-skip-number-xt _css-guard WITH-GUARD ;
+: CSS-PARSE-UNIT  _css-parse-unit-xt _css-guard WITH-GUARD ;
+: CSS-PARSE-HEX-COLOR _css-parse-hex-color-xt _css-guard WITH-GUARD ;
+: CSS-PARSE-RGB   _css-parse-rgb-xt _css-guard WITH-GUARD ;
+: CSS-SKIP-VALUE  _css-skip-value-xt _css-guard WITH-GUARD ;
+: CSS-NEXT-VALUE  _css-next-value-xt _css-guard WITH-GUARD ;
+: CSS-EXPAND-TRBL _css-expand-trbl-xt _css-guard WITH-GUARD ;
+: CSS-MEDIA-QUERY _css-media-query-xt _css-guard WITH-GUARD ;
+: CSS-IMPORT-URL  _css-import-url-xt _css-guard WITH-GUARD ;
+: CSS-KEYFRAMES   _css-keyframes-xt _css-guard WITH-GUARD ;
+: CSS-SET-OUTPUT  _css-set-output-xt _css-guard WITH-GUARD ;
+: CSS-OUTPUT-RESET _css-output-reset-xt _css-guard WITH-GUARD ;
+: CSS-OUTPUT-RESULT _css-output-result-xt _css-guard WITH-GUARD ;
+: CSS-RULE-START  _css-rule-start-xt _css-guard WITH-GUARD ;
+: CSS-RULE-END    _css-rule-end-xt _css-guard WITH-GUARD ;
+: CSS-PROP!       _css-prop-s-xt _css-guard WITH-GUARD ;
+: CSS-COMMENT!    _css-comment-s-xt _css-guard WITH-GUARD ;
+: CSS-MEDIA-START _css-media-start-xt _css-guard WITH-GUARD ;
+: CSS-MEDIA-END   _css-media-end-xt _css-guard WITH-GUARD ;
+: CSS-IMPORT!     _css-import-s-xt _css-guard WITH-GUARD ;
+: CSS-COLOR-FIND  _css-color-find-xt _css-guard WITH-GUARD ;
+[THEN] [THEN]

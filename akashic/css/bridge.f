@@ -187,3 +187,19 @@ VARIABLE _CAI-HA   VARIABLE _CAI-HL
         ELSE 2DROP THEN
     ELSE 2DROP THEN
     _CGS-BL @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _cssbr-guard
+
+' CSSB-MATCH-SELECTOR CONSTANT _cssb-match-selector-xt
+' CSSB-MATCH-ELEMENT CONSTANT _cssb-match-element-xt
+' CSSB-GET-STYLES CONSTANT _cssb-get-styles-xt
+' CSSB-APPLY-INLINE CONSTANT _cssb-apply-inline-xt
+
+: CSSB-MATCH-SELECTOR _cssb-match-selector-xt _cssbr-guard WITH-GUARD ;
+: CSSB-MATCH-ELEMENT _cssb-match-element-xt _cssbr-guard WITH-GUARD ;
+: CSSB-GET-STYLES _cssb-get-styles-xt _cssbr-guard WITH-GUARD ;
+: CSSB-APPLY-INLINE _cssb-apply-inline-xt _cssbr-guard WITH-GUARD ;
+[THEN] [THEN]

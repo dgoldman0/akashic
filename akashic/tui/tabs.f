@@ -260,6 +260,7 @@ VARIABLE _TAB-HND-W   \ widget saved during handle
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _tab-guard
 
 ' TAB-NEW         CONSTANT _tab-new-xt
