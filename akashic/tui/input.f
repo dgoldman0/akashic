@@ -122,20 +122,18 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     > IF DROP EXIT THEN                     \ would overflow — reject
     \ Shift bytes right from cursor to make room
     DUP >R                                  \ R: widget
-    DUP _INP-O-BUF-A + @                   \ buf-a
-    OVER _INP-O-CURSOR + @                  \ cursor byte offset
-    +                                       \ ( widget src=buf+cursor )
+    R@ _INP-O-BUF-A + @
+    R@ _INP-O-CURSOR + @ +                 \ src = buf + cursor
     DUP _INP-INS-TMP @ +                   \ dst = src + encoded-bytes
     R@ _INP-O-BUF-LEN + @
     R@ _INP-O-CURSOR + @ -                 \ count = len - cursor
     DUP 0 > IF
-        >R OVER R>                          \ ( widget src dst count )
-        \ CMOVE is ( src dst u -- ) in KDOS
-        CMOVE                               \ shift right
+        \ CMOVE> ( src dst u -- ) copies high-to-low for rightward shift
+        CMOVE>                              \ shift right safely
     ELSE
         DROP 2DROP                          \ nothing to shift
     THEN
-    DROP                                    \ drop widget from above shift
+    DROP                                    \ drop widget copy
     \ Copy encoded bytes into gap
     _INP-INS-BUF
     R@ _INP-O-BUF-A + @
@@ -255,87 +253,87 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
 
 VARIABLE _INP-DRW-A      \ current byte address during draw
 VARIABLE _INP-DRW-L      \ remaining bytes during draw
+VARIABLE _INP-DRW-W      \ widget pointer during draw
+VARIABLE _INP-DRW-RW     \ region width during draw
+
+\ _INP-DRAW-CURSOR ( -- )
+\   Draw cursor indicator if widget is focused.  Uses _INP-DRW-W / _INP-DRW-RW.
+: _INP-DRAW-CURSOR  ( -- )
+    _INP-DRW-W @ WDG-FOCUSED? 0= IF EXIT THEN
+    _INP-DRW-W @ _INP-O-BUF-A + @
+    _INP-DRW-W @ _INP-O-CURSOR + @
+    _INP-BYTE-TO-COL                        \ cursor column (codepoints)
+    _INP-DRW-W @ _INP-O-SCROLL + @ -       \ visible column
+    DUP 0 >= OVER _INP-DRW-RW @ < AND IF
+        CELL-A-REVERSE DRW-ATTR!
+        _INP-DRW-W @ _INP-O-CURSOR + @
+        _INP-DRW-W @ _INP-O-BUF-LEN + @ < IF
+            \ Character under cursor — decode it
+            _INP-DRW-W @ _INP-O-BUF-A + @
+            _INP-DRW-W @ _INP-O-CURSOR + @ +
+            DUP C@ _UTF8-SEQLEN
+            DUP 0= IF DROP 1 THEN           \ ( viscol addr seqlen )
+            0 3 PICK DRW-TEXT                \ DRW-TEXT( addr len row col )
+            DROP                             \ drop viscol
+        ELSE
+            \ Cursor past end — draw space
+            32 0 ROT DRW-CHAR               \ DRW-CHAR( cp=32 row=0 col=viscol )
+        THEN
+        0 DRW-ATTR!
+    ELSE
+        DROP                                 \ drop viscol
+    THEN ;
 
 \ _INP-DRAW ( widget -- )
 : _INP-DRAW  ( widget -- )
     DUP _INP-SCROLL-ADJ
-    DUP WDG-REGION RGN-W                  \ ( widget rgnw )
+    DUP _INP-DRW-W !
+    DUP WDG-REGION RGN-W _INP-DRW-RW !
     \ Clear row 0
-    32 0 0 2 PICK DRW-HLINE               \ fill row with spaces
-    OVER _INP-O-BUF-LEN + @ 0= IF
+    32 0 0 _INP-DRW-RW @ DRW-HLINE
+    DUP _INP-O-BUF-LEN + @ 0= IF
         \ Show placeholder if empty
-        OVER _INP-O-PH-U + @ 0 > IF
-            OVER _INP-O-PH-A + @
-            2 PICK _INP-O-PH-U + @
+        DUP _INP-O-PH-U + @ 0 > IF
+            DUP _INP-O-PH-A + @
+            OVER _INP-O-PH-U + @
             0 0 DRW-TEXT
         THEN
-        2DROP EXIT
+        DROP _INP-DRAW-CURSOR EXIT
     THEN
-    \ Content is not empty — draw visible portion
-    OVER _INP-O-BUF-A + @
-    OVER _INP-O-BUF-LEN + @
-    _INP-DRW-L ! _INP-DRW-A !
+    \ Content is not empty — set up draw pointers
+    DUP _INP-O-BUF-A + @ _INP-DRW-A !
+    DUP _INP-O-BUF-LEN + @ _INP-DRW-L !
     \ Skip `scroll` codepoints
-    DUP _INP-O-SCROLL + @                 \ ( widget rgnw scroll )
+    DUP _INP-O-SCROLL + @
     DUP 0 > IF
         0 ?DO
             _INP-DRW-L @ 0= IF LEAVE THEN
             _INP-DRW-A @ _INP-DRW-L @
-            UTF8-DECODE                     \ ( cp addr' len' )
+            UTF8-DECODE
             _INP-DRW-L ! _INP-DRW-A !
-            DROP                            \ drop cp
+            DROP
         LOOP
     ELSE
         DROP
     THEN
-    \ Draw up to `width` codepoints
-    _INP-DRW-A @                            \ start address of visible text
-    0                                       \ columns drawn
+    DROP                                    \ drop widget, using vars now
+    \ Draw up to `width` codepoints — stack: ( col )
+    0
     BEGIN
-        DUP 2 PICK <                        \ cols < width
-        _INP-DRW-L @ 0 >                   \ bytes remain
+        DUP _INP-DRW-RW @ <                \ col < width?
+        _INP-DRW-L @ 0 >                   \ bytes remain?
         AND
     WHILE
         _INP-DRW-A @ _INP-DRW-L @
         UTF8-DECODE
-        _INP-DRW-L ! _INP-DRW-A !          \ ( widget rgnw startaddr col cp )
-        ROT OVER                            \ ( widget rgnw col cp startaddr cp )
-        0 2 PICK DRW-CHAR                  \ draw at (0, col)
-        DROP                                \ drop extra cp
-        SWAP                                \ ( widget rgnw startaddr col )
-        1+
+        _INP-DRW-L ! _INP-DRW-A !          \ ( col cp )
+        OVER                                \ ( col cp col )
+        0 SWAP                              \ ( col cp 0 col )
+        DRW-CHAR                            \ DRW-CHAR( cp row col )
+        1+                                  \ col++
     REPEAT
-    2DROP 2DROP
-    \ Draw cursor indicator: if focused, set reverse on cursor col
-    DUP WDG-FOCUSED? IF
-        DUP _INP-O-BUF-A + @
-        OVER _INP-O-CURSOR + @
-        _INP-BYTE-TO-COL                   \ cursor column
-        OVER _INP-O-SCROLL + @ -           \ visible column
-        DUP 0 >= OVER 4 PICK < AND IF
-            CELL-A-REVERSE DRW-ATTR!
-            \ Read what's at cursor col, redraw with reverse
-            DUP OVER _INP-O-CURSOR + @     \ ( widget viscol cursor )
-            2 PICK _INP-O-BUF-LEN + @ < IF
-                \ Character under cursor
-                2 PICK _INP-O-BUF-A + @
-                2 PICK _INP-O-CURSOR + @ +
-                DUP C@ _UTF8-SEQLEN
-                DUP 0= IF DROP 1 THEN
-                OVER SWAP                   \ ( widget viscol addr len )
-                0 3 PICK DRW-TEXT
-                2DROP
-            ELSE
-                \ Cursor past end — draw space
-                32 0 OVER DRW-CHAR
-                DROP
-            THEN
-            0 DRW-ATTR!
-        ELSE
-            DROP
-        THEN
-    THEN
-    DROP ;
+    DROP                                    \ drop col
+    _INP-DRAW-CURSOR ;
 
 \ =====================================================================
 \ 6. Internal handle
@@ -370,10 +368,10 @@ VARIABLE _INP-DRW-L      \ remaining bytes during draw
     OVER @ KEY-T-CHAR = IF
         OVER 8 + @                          \ codepoint
         DUP 32 >= IF                        \ printable?
-            SWAP DROP _INP-INSERT -1 EXIT
+            ROT DROP SWAP _INP-INSERT -1 EXIT
         THEN
         DUP 8 = IF                          \ Ctrl-H = backspace
-            2DROP NIP _INP-BACKSPACE -1 EXIT
+            DROP NIP _INP-BACKSPACE -1 EXIT
         THEN
         DROP
     THEN
@@ -463,6 +461,7 @@ VARIABLE _INP-DRW-L      \ remaining bytes during draw
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _inp-guard
 
 ' INP-NEW             CONSTANT _inp-new-xt

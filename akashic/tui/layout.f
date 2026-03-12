@@ -345,6 +345,7 @@ VARIABLE _LC-CADDR       \ current child descriptor addr
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _lay-guard
 
 ' LAY-NEW       CONSTANT _lay-new-xt

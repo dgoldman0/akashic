@@ -196,6 +196,7 @@ REQUIRE region.f
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _wdg-guard
 
 ' WDG-TYPE        CONSTANT _wdg-type-xt

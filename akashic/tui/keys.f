@@ -445,11 +445,10 @@ VARIABLE _KEY-CSI-FINAL    \ final (terminator) byte
 
 VARIABLE _KEY-B0             \ first raw byte
 
-: _KEY-READ-RAW  ( ev -- flag )
-    \ --- Get first byte ---
-    KEY? 0= IF DROP 0 EXIT THEN       \ nothing available
-    KEY _KEY-B0 !
-
+\ _KEY-DECODE-B0 ( ev -- flag )
+\   Decode a complete key event assuming _KEY-B0 already holds the
+\   first raw byte.  Shared by both polling and blocking paths.
+: _KEY-DECODE-B0  ( ev -- flag )
     _KEY-B0 @ CASE
 
         \ ---- ESC (27) — start of escape sequence ----
@@ -461,12 +460,12 @@ VARIABLE _KEY-B0             \ first raw byte
                     DROP _KEY-BUF-RESET
                     \ Read bytes until we get a final byte (@ through ~)
                     BEGIN
-                        KEY? IF
-                            KEY DUP _KEY-BUF-ADD
+                        _KEY-TIMEOUT @ _KEY-TIMED? IF
+                            DUP _KEY-BUF-ADD
                             DUP 64 >= OVER 126 <= AND  \ final byte?
                             NIP                        \ drop byte, keep flag
                         ELSE
-                            -1                         \ timeout → exit
+                            DROP -1                    \ timeout → exit
                         THEN
                     UNTIL                              ( ev )
                     _KEY-DECODE-CSI
@@ -579,6 +578,13 @@ VARIABLE _KEY-B0             \ first raw byte
     KEY-T-CHAR _KEY-B0 @ 0 _KEY-SET-EV
     -1 ;
 
+\ _KEY-READ-RAW ( ev -- flag )
+\   Non-blocking: check KEY?, read first byte, then decode.
+: _KEY-READ-RAW  ( ev -- flag )
+    KEY? 0= IF DROP 0 EXIT THEN
+    KEY _KEY-B0 !
+    _KEY-DECODE-B0 ;
+
 \ =====================================================================
 \ 17. Public API: KEY-READ, KEY-POLL, KEY-WAIT
 \ =====================================================================
@@ -591,10 +597,12 @@ VARIABLE _KEY-B0             \ first raw byte
 
 \ KEY-READ ( ev -- flag )
 \   Blocking read: wait for one complete key event.
-\   Returns TRUE (always, unless there's a system error).
+\   Uses blocking KEY for the first byte (triggers IDL on the CPU,
+\   allowing the host / emulator to yield properly), then decodes.
+\   Returns TRUE always.
 : KEY-READ  ( ev -- flag )
-    BEGIN DUP KEY-POLL UNTIL
-    DROP -1 ;
+    KEY _KEY-B0 !
+    _KEY-DECODE-B0 ;
 
 \ KEY-WAIT ( ev ms -- flag )
 \   Blocking read with timeout.  Returns TRUE if event received,
@@ -619,6 +627,7 @@ VARIABLE _KEY-B0             \ first raw byte
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _keys-guard
 
 ' KEY-READ            CONSTANT _keys-read-xt

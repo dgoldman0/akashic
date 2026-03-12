@@ -190,6 +190,7 @@ VARIABLE _UN-IDX
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _utf8-guard
 
 ' UTF8-DECODE     CONSTANT _utf8-decode-xt

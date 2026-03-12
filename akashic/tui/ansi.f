@@ -441,6 +441,7 @@ CREATE _ANSI-NBUF  12 ALLOT   \ enough for max 64-bit decimal
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _ansi-guard
 
 ' ANSI-AT             CONSTANT _ansi-at-xt

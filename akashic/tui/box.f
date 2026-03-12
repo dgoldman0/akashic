@@ -259,6 +259,7 @@ VARIABLE _BOX-SH-W
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _box-guard
 
 ' BOX-DRAW            CONSTANT _box-draw-xt

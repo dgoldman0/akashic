@@ -152,6 +152,7 @@ HEX FFFF000000000000 INVERT CONSTANT _CELL-ATTRS-CLR DECIMAL
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _cell-guard
 
 ' CELL-MAKE           CONSTANT _cell-make-xt

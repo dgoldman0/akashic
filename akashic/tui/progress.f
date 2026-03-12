@@ -245,6 +245,7 @@ VARIABLE _PRG-DB-COL     \ current column
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _prg-guard
 
 ' PRG-NEW         CONSTANT _prg-new-xt

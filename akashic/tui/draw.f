@@ -275,6 +275,7 @@ VARIABLE _DRW-TR-W
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _draw-guard
 
 ' DRW-FG!             CONSTANT _drw-fgset-xt

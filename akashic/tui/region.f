@@ -182,6 +182,7 @@ VARIABLE _RGN-SUB-W
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _rgn-guard
 
 ' RGN-NEW         CONSTANT _rgn-new-xt

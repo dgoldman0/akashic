@@ -83,41 +83,47 @@ REQUIRE keys.f
 
 \ _LST-DRAW ( widget -- )
 \   Draw visible items in the region.
+\   Selected item rendered with REVERSE attribute.
+VARIABLE _LST-DRW-W      \ saved widget during draw
+VARIABLE _LST-DRW-RW     \ region width
+VARIABLE _LST-DRW-RH     \ region height
+
 : _LST-DRAW  ( widget -- )
-    DUP WDG-REGION RGN-W                  \ ( widget rgnw )
-    OVER WDG-REGION RGN-H                 \ ( widget rgnw rgnh )
+    DUP _LST-DRW-W !
+    DUP WDG-REGION RGN-W _LST-DRW-RW !
+    WDG-REGION RGN-H _LST-DRW-RH !
     \ Clear entire region
-    32 0 0 2 PICK 3 PICK DRW-FILL-RECT
+    0 DRW-ATTR!
+    32 0 0 _LST-DRW-RH @ _LST-DRW-RW @ DRW-FILL-RECT
     \ Loop visible rows
-    OVER _LST-O-SCROLL + @                \ ( widget rgnw rgnh scroll )
-    OVER 0 ?DO
-        \ row i: item index = scroll + i
-        DUP I +                             \ ( widget rgnw rgnh scroll itemidx )
-        DUP 4 PICK _LST-O-COUNT + @ >= IF
+    _LST-DRW-W @ _LST-O-SCROLL + @        \ ( scroll )
+    _LST-DRW-RH @ 0 ?DO
+        DUP I +                             \ ( scroll itemidx )
+        DUP _LST-DRW-W @ _LST-O-COUNT + @ >= IF
             DROP LEAVE                      \ past end of items
         THEN
-        \ Check if this item is selected
-        DUP 4 PICK _LST-O-SEL + @ = IF
+        \ Set REVERSE for selected item, normal for others
+        DUP _LST-DRW-W @ _LST-O-SEL + @ = IF
             CELL-A-REVERSE DRW-ATTR!
-        THEN
-        \ Check for custom renderer
-        4 PICK _LST-O-ITEM-XT + @ DUP 0<> IF
-            \ Custom: ( index widget -- )
-            OVER 5 PICK SWAP EXECUTE
         ELSE
-            DROP
-            \ Default: draw item text at row I
-            4 PICK _LST-O-ITEMS + @        \ items array
-            OVER _LST-ITEM-ADDR            \ ( ... itemidx addr len )
-            I 0 DRW-TEXT
-        THEN
-        \ Reset attr if was selected
-        DUP 4 PICK _LST-O-SEL + @ = IF
             0 DRW-ATTR!
         THEN
+        \ Check for custom renderer
+        _LST-DRW-W @ _LST-O-ITEM-XT + @ DUP 0<> IF
+            \ Custom: ( index widget -- )
+            OVER _LST-DRW-W @ SWAP EXECUTE
+        ELSE
+            DROP
+            \ Default: draw item text at row I col 0
+            _LST-DRW-W @ _LST-O-ITEMS + @
+            OVER _LST-ITEM-ADDR             \ ( scroll itemidx addr len )
+            I 0 DRW-TEXT
+        THEN
+        \ Reset attr
+        0 DRW-ATTR!
         DROP                                \ drop itemidx
     LOOP
-    DROP 2DROP ;
+    DROP ;                                  \ drop scroll
 
 \ =====================================================================
 \ 4. Internal handle
@@ -258,6 +264,7 @@ VARIABLE _LST-HND-W   \ widget saved during handle
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _lst-guard
 
 ' LST-NEW         CONSTANT _lst-new-xt

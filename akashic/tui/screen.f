@@ -408,6 +408,7 @@ VARIABLE _SCR-COPY-H
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _scr-guard
 
 ' SCR-NEW             CONSTANT _scr-new-xt

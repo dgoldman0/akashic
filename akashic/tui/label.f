@@ -195,6 +195,7 @@ VARIABLE _LBL-CON-BLEN
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _lbl-guard
 
 ' LBL-NEW         CONSTANT _lbl-new-xt
