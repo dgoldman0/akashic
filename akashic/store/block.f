@@ -768,6 +768,7 @@ VARIABLE _CH-APP-BLK
 \  21. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _blk-guard
 
@@ -798,6 +799,7 @@ GUARD _blk-guard
 : BLK-DECODE        _blk-dec-xt   _blk-guard WITH-GUARD ;
 : CHAIN-INIT        _ch-init-xt   _blk-guard WITH-GUARD ;
 : CHAIN-APPEND      _ch-app-xt    _blk-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =====================================================================
 \  Done.

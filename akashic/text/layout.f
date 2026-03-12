@@ -199,3 +199,36 @@ VARIABLE _LAY-CP     \ current codepoint
     _LAY-SL @ _LAY-WR-L !
     DUP 0 > IF -1 ELSE DROP 0 0 THEN ;
 
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _txtlay-guard
+
+' LAY-SCALE!      CONSTANT _lay-scale-s-xt
+' LAY-CHAR-WIDTH  CONSTANT _lay-char-width-xt
+' LAY-TEXT-WIDTH  CONSTANT _lay-text-width-xt
+' LAY-ASCENDER    CONSTANT _lay-ascender-xt
+' LAY-DESCENDER   CONSTANT _lay-descender-xt
+' LAY-LINE-HEIGHT CONSTANT _lay-line-height-xt
+' LAY-CURSOR-INIT CONSTANT _lay-cursor-init-xt
+' LAY-CURSOR@     CONSTANT _lay-cursor-at-xt
+' LAY-CURSOR-ADV  CONSTANT _lay-cursor-adv-xt
+' LAY-CURSOR-NL   CONSTANT _lay-cursor-nl-xt
+' LAY-WRAP-WIDTH! CONSTANT _lay-wrap-width-s-xt
+' LAY-WRAP-INIT   CONSTANT _lay-wrap-init-xt
+' LAY-WRAP-LINE   CONSTANT _lay-wrap-line-xt
+
+: LAY-SCALE!      _lay-scale-s-xt _txtlay-guard WITH-GUARD ;
+: LAY-CHAR-WIDTH  _lay-char-width-xt _txtlay-guard WITH-GUARD ;
+: LAY-TEXT-WIDTH  _lay-text-width-xt _txtlay-guard WITH-GUARD ;
+: LAY-ASCENDER    _lay-ascender-xt _txtlay-guard WITH-GUARD ;
+: LAY-DESCENDER   _lay-descender-xt _txtlay-guard WITH-GUARD ;
+: LAY-LINE-HEIGHT _lay-line-height-xt _txtlay-guard WITH-GUARD ;
+: LAY-CURSOR-INIT _lay-cursor-init-xt _txtlay-guard WITH-GUARD ;
+: LAY-CURSOR@     _lay-cursor-at-xt _txtlay-guard WITH-GUARD ;
+: LAY-CURSOR-ADV  _lay-cursor-adv-xt _txtlay-guard WITH-GUARD ;
+: LAY-CURSOR-NL   _lay-cursor-nl-xt _txtlay-guard WITH-GUARD ;
+: LAY-WRAP-WIDTH! _lay-wrap-width-s-xt _txtlay-guard WITH-GUARD ;
+: LAY-WRAP-INIT   _lay-wrap-init-xt _txtlay-guard WITH-GUARD ;
+: LAY-WRAP-LINE   _lay-wrap-line-xt _txtlay-guard WITH-GUARD ;
+[THEN] [THEN]

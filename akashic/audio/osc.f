@@ -342,3 +342,53 @@ VARIABLE _OSC-GEN-DU
             I _OSC-BUF @ PCM-FRAME!
         LOOP
     THEN ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _osc-guard
+
+' O.FREQ          CONSTANT _o-dotfreq-xt
+' O.PHASE         CONSTANT _o-dotphase-xt
+' O.RATE          CONSTANT _o-dotrate-xt
+' O.SHAPE         CONSTANT _o-dotshape-xt
+' O.DUTY          CONSTANT _o-dotduty-xt
+' O.TABLE         CONSTANT _o-dottable-xt
+' OSC-CREATE      CONSTANT _osc-create-xt
+' OSC-FREE        CONSTANT _osc-free-xt
+' OSC-FREQ!       CONSTANT _osc-freq-s-xt
+' OSC-SHAPE!      CONSTANT _osc-shape-s-xt
+' OSC-DUTY!       CONSTANT _osc-duty-s-xt
+' OSC-TABLE!      CONSTANT _osc-table-s-xt
+' OSC-RESET       CONSTANT _osc-reset-xt
+' OSC-FREQ        CONSTANT _osc-freq-xt
+' OSC-PHASE       CONSTANT _osc-phase-xt
+' OSC-RATE        CONSTANT _osc-rate-xt
+' OSC-SHAPE       CONSTANT _osc-shape-xt
+' OSC-DUTY        CONSTANT _osc-duty-xt
+' OSC-SAMPLE      CONSTANT _osc-sample-xt
+' OSC-FILL        CONSTANT _osc-fill-xt
+' OSC-ADD         CONSTANT _osc-add-xt
+
+: O.FREQ          _o-dotfreq-xt _osc-guard WITH-GUARD ;
+: O.PHASE         _o-dotphase-xt _osc-guard WITH-GUARD ;
+: O.RATE          _o-dotrate-xt _osc-guard WITH-GUARD ;
+: O.SHAPE         _o-dotshape-xt _osc-guard WITH-GUARD ;
+: O.DUTY          _o-dotduty-xt _osc-guard WITH-GUARD ;
+: O.TABLE         _o-dottable-xt _osc-guard WITH-GUARD ;
+: OSC-CREATE      _osc-create-xt _osc-guard WITH-GUARD ;
+: OSC-FREE        _osc-free-xt _osc-guard WITH-GUARD ;
+: OSC-FREQ!       _osc-freq-s-xt _osc-guard WITH-GUARD ;
+: OSC-SHAPE!      _osc-shape-s-xt _osc-guard WITH-GUARD ;
+: OSC-DUTY!       _osc-duty-s-xt _osc-guard WITH-GUARD ;
+: OSC-TABLE!      _osc-table-s-xt _osc-guard WITH-GUARD ;
+: OSC-RESET       _osc-reset-xt _osc-guard WITH-GUARD ;
+: OSC-FREQ        _osc-freq-xt _osc-guard WITH-GUARD ;
+: OSC-PHASE       _osc-phase-xt _osc-guard WITH-GUARD ;
+: OSC-RATE        _osc-rate-xt _osc-guard WITH-GUARD ;
+: OSC-SHAPE       _osc-shape-xt _osc-guard WITH-GUARD ;
+: OSC-DUTY        _osc-duty-xt _osc-guard WITH-GUARD ;
+: OSC-SAMPLE      _osc-sample-xt _osc-guard WITH-GUARD ;
+: OSC-FILL        _osc-fill-xt _osc-guard WITH-GUARD ;
+: OSC-ADD         _osc-add-xt _osc-guard WITH-GUARD ;
+[THEN] [THEN]

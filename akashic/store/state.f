@@ -661,6 +661,7 @@ VARIABLE _st-snap-ptr
 \  21. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _st-guard
 
@@ -699,6 +700,7 @@ GUARD _st-guard
 : ST-SET-HEIGHT     _st-seth-xt   _st-guard WITH-GUARD ;
 : ST-SNAPSHOT       _st-snap-xt    _st-guard WITH-GUARD ;
 : ST-RESTORE        _st-rest-xt    _st-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =====================================================================
 \  Done.

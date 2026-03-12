@@ -232,6 +232,7 @@ CREATE _FLD-CMP  32 ALLOT
 \ is wrapped with WITH-GUARD.  FIELD-BUF (defining word) and
 \ FIELD. (pure read + EMIT) are left unguarded.
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _fld-guard
 
@@ -285,3 +286,4 @@ GUARD _fld-guard
 \ predicates (use shared _FLD-CMP scratch)
 : FIELD-EQ?        _fld-eq-xt        _fld-guard WITH-GUARD ;
 : FIELD-ZERO?      _fld-zero?-xt     _fld-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -446,3 +446,49 @@ VARIABLE _MB-STI-LEN
     LOOP
 
     PCM-FREE ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _smemb-guard
+
+' MB.FSTART       CONSTANT _mb-dotfstart-xt
+' MB.FEND         CONSTANT _mb-dotfend-xt
+' MB.SWP-MS       CONSTANT _mb-dotswp-ms-xt
+' MB.TDK-MS       CONSTANT _mb-dottdk-ms-xt
+' MB.TAMP         CONSTANT _mb-dottamp-xt
+' MB.NCOL         CONSTANT _mb-dotncol-xt
+' MB.NLO          CONSTANT _mb-dotnlo-xt
+' MB.NHI          CONSTANT _mb-dotnhi-xt
+' MB.NDK-MS       CONSTANT _mb-dotndk-ms-xt
+' MB.NAMP         CONSTANT _mb-dotnamp-xt
+' MB.RATE         CONSTANT _mb-dotrate-xt
+' MEMB-CREATE     CONSTANT _memb-create-xt
+' MEMB-FREE       CONSTANT _memb-free-xt
+' MEMB-TONE!      CONSTANT _memb-tone-s-xt
+' MEMB-NOISE!     CONSTANT _memb-noise-s-xt
+' MEMB-MIX!       CONSTANT _memb-mix-s-xt
+' MEMB-COLOR!     CONSTANT _memb-color-s-xt
+' MEMB-STRIKE     CONSTANT _memb-strike-xt
+' MEMB-STRIKE-INTO CONSTANT _memb-strike-into-xt
+
+: MB.FSTART       _mb-dotfstart-xt _smemb-guard WITH-GUARD ;
+: MB.FEND         _mb-dotfend-xt _smemb-guard WITH-GUARD ;
+: MB.SWP-MS       _mb-dotswp-ms-xt _smemb-guard WITH-GUARD ;
+: MB.TDK-MS       _mb-dottdk-ms-xt _smemb-guard WITH-GUARD ;
+: MB.TAMP         _mb-dottamp-xt _smemb-guard WITH-GUARD ;
+: MB.NCOL         _mb-dotncol-xt _smemb-guard WITH-GUARD ;
+: MB.NLO          _mb-dotnlo-xt _smemb-guard WITH-GUARD ;
+: MB.NHI          _mb-dotnhi-xt _smemb-guard WITH-GUARD ;
+: MB.NDK-MS       _mb-dotndk-ms-xt _smemb-guard WITH-GUARD ;
+: MB.NAMP         _mb-dotnamp-xt _smemb-guard WITH-GUARD ;
+: MB.RATE         _mb-dotrate-xt _smemb-guard WITH-GUARD ;
+: MEMB-CREATE     _memb-create-xt _smemb-guard WITH-GUARD ;
+: MEMB-FREE       _memb-free-xt _smemb-guard WITH-GUARD ;
+: MEMB-TONE!      _memb-tone-s-xt _smemb-guard WITH-GUARD ;
+: MEMB-NOISE!     _memb-noise-s-xt _smemb-guard WITH-GUARD ;
+: MEMB-MIX!       _memb-mix-s-xt _smemb-guard WITH-GUARD ;
+: MEMB-COLOR!     _memb-color-s-xt _smemb-guard WITH-GUARD ;
+: MEMB-STRIKE     _memb-strike-xt _smemb-guard WITH-GUARD ;
+: MEMB-STRIKE-INTO _memb-strike-into-xt _smemb-guard WITH-GUARD ;
+[THEN] [THEN]

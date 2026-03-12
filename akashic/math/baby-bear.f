@@ -143,3 +143,27 @@ VARIABLE _BI-TMP
     REPEAT
     \ dst[0] = inv  (which is now src[0]^{-1})
     _BI-INV @  _BI-DST @ BB-W32! ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _bb-guard
+
+' BB+             CONSTANT _bb-add-xt
+' BB-             CONSTANT _bb-xt
+' BB*             CONSTANT _bb-mul-xt
+' BB-POW          CONSTANT _bb-pow-xt
+' BB-INV          CONSTANT _bb-inv-xt
+' BB-W32!         CONSTANT _bb-w32-s-xt
+' BB-W32@         CONSTANT _bb-w32-at-xt
+' BB-BATCH-INV    CONSTANT _bb-batch-inv-xt
+
+: BB+             _bb-add-xt _bb-guard WITH-GUARD ;
+: BB-             _bb-xt _bb-guard WITH-GUARD ;
+: BB*             _bb-mul-xt _bb-guard WITH-GUARD ;
+: BB-POW          _bb-pow-xt _bb-guard WITH-GUARD ;
+: BB-INV          _bb-inv-xt _bb-guard WITH-GUARD ;
+: BB-W32!         _bb-w32-s-xt _bb-guard WITH-GUARD ;
+: BB-W32@         _bb-w32-at-xt _bb-guard WITH-GUARD ;
+: BB-BATCH-INV    _bb-batch-inv-xt _bb-guard WITH-GUARD ;
+[THEN] [THEN]

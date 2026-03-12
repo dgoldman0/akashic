@@ -173,3 +173,35 @@ PROVIDED akashic-ntt
         DUP I 4 * + @ 0xFFFFFFFF AND .
     LOOP
     DROP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _ntt-guard
+
+' NTT-SET-MOD     CONSTANT _ntt-set-mod-xt
+' NTT-POLY        CONSTANT _ntt-poly-xt
+' NTT-POLY-ZERO   CONSTANT _ntt-poly-zero-xt
+' NTT-POLY-COPY   CONSTANT _ntt-poly-copy-xt
+' NTT-COEFF@      CONSTANT _ntt-coeff-at-xt
+' NTT-COEFF!      CONSTANT _ntt-coeff-s-xt
+' NTT-FORWARD     CONSTANT _ntt-forward-xt
+' NTT-INVERSE     CONSTANT _ntt-inverse-xt
+' NTT-POLY-MUL    CONSTANT _ntt-poly-mul-xt
+' NTT-POINTWISE-MUL CONSTANT _ntt-pointwise-mul-xt
+' NTT-POINTWISE-ADD CONSTANT _ntt-pointwise-add-xt
+' NTT-POLY.       CONSTANT _ntt-poly-dot-xt
+
+: NTT-SET-MOD     _ntt-set-mod-xt _ntt-guard WITH-GUARD ;
+: NTT-POLY        _ntt-poly-xt _ntt-guard WITH-GUARD ;
+: NTT-POLY-ZERO   _ntt-poly-zero-xt _ntt-guard WITH-GUARD ;
+: NTT-POLY-COPY   _ntt-poly-copy-xt _ntt-guard WITH-GUARD ;
+: NTT-COEFF@      _ntt-coeff-at-xt _ntt-guard WITH-GUARD ;
+: NTT-COEFF!      _ntt-coeff-s-xt _ntt-guard WITH-GUARD ;
+: NTT-FORWARD     _ntt-forward-xt _ntt-guard WITH-GUARD ;
+: NTT-INVERSE     _ntt-inverse-xt _ntt-guard WITH-GUARD ;
+: NTT-POLY-MUL    _ntt-poly-mul-xt _ntt-guard WITH-GUARD ;
+: NTT-POINTWISE-MUL _ntt-pointwise-mul-xt _ntt-guard WITH-GUARD ;
+: NTT-POINTWISE-ADD _ntt-pointwise-add-xt _ntt-guard WITH-GUARD ;
+: NTT-POLY.       _ntt-poly-dot-xt _ntt-guard WITH-GUARD ;
+[THEN] [THEN]

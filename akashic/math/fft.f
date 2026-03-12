@@ -900,6 +900,7 @@ VARIABLE _FFTCR-TW                   \ twiddle for correlate-TW
     REPEAT ;
 
 \ ── Concurrency Guard ───────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _fft-guard
 
@@ -928,3 +929,4 @@ GUARD _fft-guard
 : FFT-INVERSE-TW    _fft-invtw-xt   _fft-guard WITH-GUARD ;
 : FFT-CONVOLVE-TW   _fft-convtw-xt  _fft-guard WITH-GUARD ;
 : FFT-CORRELATE-TW  _fft-corrtw-xt  _fft-guard WITH-GUARD ;
+[THEN] [THEN]

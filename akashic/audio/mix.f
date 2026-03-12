@@ -254,3 +254,45 @@ VARIABLE _MIX-NFRAMES    \ cached min frame count            (fast path)
         _MIX-MIX @ MIX.MBUF @ PCM-LEN 2 * ( src mgain dst n )
         SIMD-SCALE-N
     THEN ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _mix-guard
+
+' MIX.NCHANS      CONSTANT _mix-dotnchans-xt
+' MIX.MGAIN       CONSTANT _mix-dotmgain-xt
+' MIX.MBUF        CONSTANT _mix-dotmbuf-xt
+' MIX.CHANS       CONSTANT _mix-dotchans-xt
+' MIXC.GAIN       CONSTANT _mixc-dotgain-xt
+' MIXC.PAN        CONSTANT _mixc-dotpan-xt
+' MIXC.MUTE       CONSTANT _mixc-dotmute-xt
+' MIXC.BUF        CONSTANT _mixc-dotbuf-xt
+' MIX-CREATE      CONSTANT _mix-create-xt
+' MIX-FREE        CONSTANT _mix-free-xt
+' MIX-GAIN!       CONSTANT _mix-gain-s-xt
+' MIX-PAN!        CONSTANT _mix-pan-s-xt
+' MIX-MUTE!       CONSTANT _mix-mute-s-xt
+' MIX-INPUT!      CONSTANT _mix-input-s-xt
+' MIX-MASTER-GAIN! CONSTANT _mix-master-gain-s-xt
+' MIX-MASTER      CONSTANT _mix-master-xt
+' MIX-RENDER      CONSTANT _mix-render-xt
+
+: MIX.NCHANS      _mix-dotnchans-xt _mix-guard WITH-GUARD ;
+: MIX.MGAIN       _mix-dotmgain-xt _mix-guard WITH-GUARD ;
+: MIX.MBUF        _mix-dotmbuf-xt _mix-guard WITH-GUARD ;
+: MIX.CHANS       _mix-dotchans-xt _mix-guard WITH-GUARD ;
+: MIXC.GAIN       _mixc-dotgain-xt _mix-guard WITH-GUARD ;
+: MIXC.PAN        _mixc-dotpan-xt _mix-guard WITH-GUARD ;
+: MIXC.MUTE       _mixc-dotmute-xt _mix-guard WITH-GUARD ;
+: MIXC.BUF        _mixc-dotbuf-xt _mix-guard WITH-GUARD ;
+: MIX-CREATE      _mix-create-xt _mix-guard WITH-GUARD ;
+: MIX-FREE        _mix-free-xt _mix-guard WITH-GUARD ;
+: MIX-GAIN!       _mix-gain-s-xt _mix-guard WITH-GUARD ;
+: MIX-PAN!        _mix-pan-s-xt _mix-guard WITH-GUARD ;
+: MIX-MUTE!       _mix-mute-s-xt _mix-guard WITH-GUARD ;
+: MIX-INPUT!      _mix-input-s-xt _mix-guard WITH-GUARD ;
+: MIX-MASTER-GAIN! _mix-master-gain-s-xt _mix-guard WITH-GUARD ;
+: MIX-MASTER      _mix-master-xt _mix-guard WITH-GUARD ;
+: MIX-RENDER      _mix-render-xt _mix-guard WITH-GUARD ;
+[THEN] [THEN]

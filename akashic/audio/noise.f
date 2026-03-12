@@ -308,3 +308,31 @@ VARIABLE _NZ-BROWN-W
         FP16-ADD
         I _NZ-BUF @ PCM-FRAME!
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _noise-guard
+
+' N.TYPE          CONSTANT _n-dottype-xt
+' N.STATE         CONSTANT _n-dotstate-xt
+' N.ACCUM         CONSTANT _n-dotaccum-xt
+' N.COUNTER       CONSTANT _n-dotcounter-xt
+' N.ROWS          CONSTANT _n-dotrows-xt
+' NOISE-CREATE    CONSTANT _noise-create-xt
+' NOISE-FREE      CONSTANT _noise-free-xt
+' NOISE-SAMPLE    CONSTANT _noise-sample-xt
+' NOISE-FILL      CONSTANT _noise-fill-xt
+' NOISE-ADD       CONSTANT _noise-add-xt
+
+: N.TYPE          _n-dottype-xt _noise-guard WITH-GUARD ;
+: N.STATE         _n-dotstate-xt _noise-guard WITH-GUARD ;
+: N.ACCUM         _n-dotaccum-xt _noise-guard WITH-GUARD ;
+: N.COUNTER       _n-dotcounter-xt _noise-guard WITH-GUARD ;
+: N.ROWS          _n-dotrows-xt _noise-guard WITH-GUARD ;
+: NOISE-CREATE    _noise-create-xt _noise-guard WITH-GUARD ;
+: NOISE-FREE      _noise-free-xt _noise-guard WITH-GUARD ;
+: NOISE-SAMPLE    _noise-sample-xt _noise-guard WITH-GUARD ;
+: NOISE-FILL      _noise-fill-xt _noise-guard WITH-GUARD ;
+: NOISE-ADD       _noise-add-xt _noise-guard WITH-GUARD ;
+[THEN] [THEN]

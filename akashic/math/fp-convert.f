@@ -127,3 +127,19 @@ VARIABLE _FPC-SH
 
 : FX>FP16  ( fx -- fp16 )
     FX>FP32 FP32>FP16 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _fpcvt-guard
+
+' FP32>FX         CONSTANT _fp32-to-fx-xt
+' FP16>FX         CONSTANT _fp16-to-fx-xt
+' FX>FP32         CONSTANT _fx-to-fp32-xt
+' FX>FP16         CONSTANT _fx-to-fp16-xt
+
+: FP32>FX         _fp32-to-fx-xt _fpcvt-guard WITH-GUARD ;
+: FP16>FX         _fp16-to-fx-xt _fpcvt-guard WITH-GUARD ;
+: FX>FP32         _fx-to-fp32-xt _fpcvt-guard WITH-GUARD ;
+: FX>FP16         _fx-to-fp16-xt _fpcvt-guard WITH-GUARD ;
+[THEN] [THEN]

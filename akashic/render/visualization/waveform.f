@@ -457,3 +457,25 @@ VARIABLE _WV-ENV-MAX
 
 : WAVE-FLAGS!  ( flags cfg -- )
     WC.FLAGS + ! ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _vwave-guard
+
+' WAVE-CONFIG-CREATE CONSTANT _wave-config-create-xt
+' WAVE-CONFIG-FREE CONSTANT _wave-config-free-xt
+' WAVE-DRAW       CONSTANT _wave-draw-xt
+' WAVE-RENDER     CONSTANT _wave-render-xt
+' WAVE-ZOOM       CONSTANT _wave-zoom-xt
+' WAVE-AMPLITUDE! CONSTANT _wave-amplitude-s-xt
+' WAVE-FLAGS!     CONSTANT _wave-flags-s-xt
+
+: WAVE-CONFIG-CREATE _wave-config-create-xt _vwave-guard WITH-GUARD ;
+: WAVE-CONFIG-FREE _wave-config-free-xt _vwave-guard WITH-GUARD ;
+: WAVE-DRAW       _wave-draw-xt _vwave-guard WITH-GUARD ;
+: WAVE-RENDER     _wave-render-xt _vwave-guard WITH-GUARD ;
+: WAVE-ZOOM       _wave-zoom-xt _vwave-guard WITH-GUARD ;
+: WAVE-AMPLITUDE! _wave-amplitude-s-xt _vwave-guard WITH-GUARD ;
+: WAVE-FLAGS!     _wave-flags-s-xt _vwave-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -616,3 +616,125 @@ VARIABLE _PRF-TK-A  VARIABLE _PRF-TK-L   \ temp key
     2DROP
     \ Copy to caller's buffer — but we return internal buf + len
     _PRF-CBUF _PRF-CLEN @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _lprof-guard
+
+' PROF-FAIL       CONSTANT _prof-fail-xt
+' PROF-OK?        CONSTANT _prof-ok-q-xt
+' PROF-CLEAR-ERR  CONSTANT _prof-clear-err-xt
+' PROF-NAME       CONSTANT _prof-name-xt
+' PROF-VERSION    CONSTANT _prof-version-xt
+' PROF-DESC?      CONSTANT _prof-desc-q-xt
+' PROF-CAPS-COUNT CONSTANT _prof-caps-count-xt
+' PROF-HAS-CAP?   CONSTANT _prof-has-cap-q-xt
+' PROF-VALID?     CONSTANT _prof-valid-q-xt
+' PROF-ELEM-CAT   CONSTANT _prof-elem-cat-xt
+' PROF-DEFAULT    CONSTANT _prof-default-xt
+' PROF-ETYPE      CONSTANT _prof-etype-xt
+' PROF-ROLE       CONSTANT _prof-role-xt
+' PROF-STATE      CONSTANT _prof-state-xt
+' PROF-IMPORTANCE CONSTANT _prof-importance-xt
+' PROF-DENSITY    CONSTANT _prof-density-xt
+' PROF-HIGH-CONTRAST CONSTANT _prof-high-contrast-xt
+' PROF-CLEAR-CTX  CONSTANT _prof-clear-ctx-xt
+' PROF-SET-TYPE   CONSTANT _prof-set-type-xt
+' PROF-SET-ROLE   CONSTANT _prof-set-role-xt
+' PROF-SET-STATE  CONSTANT _prof-set-state-xt
+' PROF-SET-IMP    CONSTANT _prof-set-imp-xt
+' PROF-GET        CONSTANT _prof-get-xt
+' PROF-VOICE      CONSTANT _prof-voice-xt
+' PROF-RATE       CONSTANT _prof-rate-xt
+' PROF-PITCH      CONSTANT _prof-pitch-xt
+' PROF-VOLUME     CONSTANT _prof-volume-xt
+' PROF-PAUSE-BEFORE CONSTANT _prof-pause-before-xt
+' PROF-PAUSE-AFTER CONSTANT _prof-pause-after-xt
+' PROF-EARCON     CONSTANT _prof-earcon-xt
+' PROF-EARCON-BEFORE CONSTANT _prof-earcon-before-xt
+' PROF-EARCON-AFTER CONSTANT _prof-earcon-after-xt
+' PROF-PRIORITY   CONSTANT _prof-priority-xt
+' PROF-SONIFICATION CONSTANT _prof-sonification-xt
+' PROF-CUE-SPEECH CONSTANT _prof-cue-speech-xt
+' PROF-CELL-ROUTING CONSTANT _prof-cell-routing-xt
+' PROF-CONTRACTED-BRAILLE CONSTANT _prof-contracted-braille-xt
+' PROF-SEPARATOR  CONSTANT _prof-separator-xt
+' PROF-PADDING-CELLS CONSTANT _prof-padding-cells-xt
+' PROF-PREFIX     CONSTANT _prof-prefix-xt
+' PROF-HAPTIC     CONSTANT _prof-haptic-xt
+' PROF-PIN-FLASH  CONSTANT _prof-pin-flash-xt
+' PROF-SET-CAP    CONSTANT _prof-set-cap-xt
+' PROF-CLEAR-CAP  CONSTANT _prof-clear-cap-xt
+' PROF-CAP-SECTION CONSTANT _prof-cap-section-xt
+' PROF-STACK      CONSTANT _prof-stack-xt
+' PROF-STACK-GET  CONSTANT _prof-stack-get-xt
+' PROF-SET-ELEM   CONSTANT _prof-set-elem-xt
+' PROF-INLINE     CONSTANT _prof-inline-xt
+' PROF-ACCOMMODATE CONSTANT _prof-accommodate-xt
+' PROF-ACCOM-CLEAR CONSTANT _prof-accom-clear-xt
+' PROF-ACCOM-LT?  CONSTANT _prof-accom-lt-q-xt
+' PROF-ACCOM-HC?  CONSTANT _prof-accom-hc-q-xt
+' PROF-ACCOM-RM?  CONSTANT _prof-accom-rm-q-xt
+' PROF-ACCOM-INT  CONSTANT _prof-accom-int-xt
+' PROF-RESOLVE    CONSTANT _prof-resolve-xt
+' PROF-TO-CSL     CONSTANT _prof-to-csl-xt
+
+: PROF-FAIL       _prof-fail-xt _lprof-guard WITH-GUARD ;
+: PROF-OK?        _prof-ok-q-xt _lprof-guard WITH-GUARD ;
+: PROF-CLEAR-ERR  _prof-clear-err-xt _lprof-guard WITH-GUARD ;
+: PROF-NAME       _prof-name-xt _lprof-guard WITH-GUARD ;
+: PROF-VERSION    _prof-version-xt _lprof-guard WITH-GUARD ;
+: PROF-DESC?      _prof-desc-q-xt _lprof-guard WITH-GUARD ;
+: PROF-CAPS-COUNT _prof-caps-count-xt _lprof-guard WITH-GUARD ;
+: PROF-HAS-CAP?   _prof-has-cap-q-xt _lprof-guard WITH-GUARD ;
+: PROF-VALID?     _prof-valid-q-xt _lprof-guard WITH-GUARD ;
+: PROF-ELEM-CAT   _prof-elem-cat-xt _lprof-guard WITH-GUARD ;
+: PROF-DEFAULT    _prof-default-xt _lprof-guard WITH-GUARD ;
+: PROF-ETYPE      _prof-etype-xt _lprof-guard WITH-GUARD ;
+: PROF-ROLE       _prof-role-xt _lprof-guard WITH-GUARD ;
+: PROF-STATE      _prof-state-xt _lprof-guard WITH-GUARD ;
+: PROF-IMPORTANCE _prof-importance-xt _lprof-guard WITH-GUARD ;
+: PROF-DENSITY    _prof-density-xt _lprof-guard WITH-GUARD ;
+: PROF-HIGH-CONTRAST _prof-high-contrast-xt _lprof-guard WITH-GUARD ;
+: PROF-CLEAR-CTX  _prof-clear-ctx-xt _lprof-guard WITH-GUARD ;
+: PROF-SET-TYPE   _prof-set-type-xt _lprof-guard WITH-GUARD ;
+: PROF-SET-ROLE   _prof-set-role-xt _lprof-guard WITH-GUARD ;
+: PROF-SET-STATE  _prof-set-state-xt _lprof-guard WITH-GUARD ;
+: PROF-SET-IMP    _prof-set-imp-xt _lprof-guard WITH-GUARD ;
+: PROF-GET        _prof-get-xt _lprof-guard WITH-GUARD ;
+: PROF-VOICE      _prof-voice-xt _lprof-guard WITH-GUARD ;
+: PROF-RATE       _prof-rate-xt _lprof-guard WITH-GUARD ;
+: PROF-PITCH      _prof-pitch-xt _lprof-guard WITH-GUARD ;
+: PROF-VOLUME     _prof-volume-xt _lprof-guard WITH-GUARD ;
+: PROF-PAUSE-BEFORE _prof-pause-before-xt _lprof-guard WITH-GUARD ;
+: PROF-PAUSE-AFTER _prof-pause-after-xt _lprof-guard WITH-GUARD ;
+: PROF-EARCON     _prof-earcon-xt _lprof-guard WITH-GUARD ;
+: PROF-EARCON-BEFORE _prof-earcon-before-xt _lprof-guard WITH-GUARD ;
+: PROF-EARCON-AFTER _prof-earcon-after-xt _lprof-guard WITH-GUARD ;
+: PROF-PRIORITY   _prof-priority-xt _lprof-guard WITH-GUARD ;
+: PROF-SONIFICATION _prof-sonification-xt _lprof-guard WITH-GUARD ;
+: PROF-CUE-SPEECH _prof-cue-speech-xt _lprof-guard WITH-GUARD ;
+: PROF-CELL-ROUTING _prof-cell-routing-xt _lprof-guard WITH-GUARD ;
+: PROF-CONTRACTED-BRAILLE _prof-contracted-braille-xt _lprof-guard WITH-GUARD ;
+: PROF-SEPARATOR  _prof-separator-xt _lprof-guard WITH-GUARD ;
+: PROF-PADDING-CELLS _prof-padding-cells-xt _lprof-guard WITH-GUARD ;
+: PROF-PREFIX     _prof-prefix-xt _lprof-guard WITH-GUARD ;
+: PROF-HAPTIC     _prof-haptic-xt _lprof-guard WITH-GUARD ;
+: PROF-PIN-FLASH  _prof-pin-flash-xt _lprof-guard WITH-GUARD ;
+: PROF-SET-CAP    _prof-set-cap-xt _lprof-guard WITH-GUARD ;
+: PROF-CLEAR-CAP  _prof-clear-cap-xt _lprof-guard WITH-GUARD ;
+: PROF-CAP-SECTION _prof-cap-section-xt _lprof-guard WITH-GUARD ;
+: PROF-STACK      _prof-stack-xt _lprof-guard WITH-GUARD ;
+: PROF-STACK-GET  _prof-stack-get-xt _lprof-guard WITH-GUARD ;
+: PROF-SET-ELEM   _prof-set-elem-xt _lprof-guard WITH-GUARD ;
+: PROF-INLINE     _prof-inline-xt _lprof-guard WITH-GUARD ;
+: PROF-ACCOMMODATE _prof-accommodate-xt _lprof-guard WITH-GUARD ;
+: PROF-ACCOM-CLEAR _prof-accom-clear-xt _lprof-guard WITH-GUARD ;
+: PROF-ACCOM-LT?  _prof-accom-lt-q-xt _lprof-guard WITH-GUARD ;
+: PROF-ACCOM-HC?  _prof-accom-hc-q-xt _lprof-guard WITH-GUARD ;
+: PROF-ACCOM-RM?  _prof-accom-rm-q-xt _lprof-guard WITH-GUARD ;
+: PROF-ACCOM-INT  _prof-accom-int-xt _lprof-guard WITH-GUARD ;
+: PROF-RESOLVE    _prof-resolve-xt _lprof-guard WITH-GUARD ;
+: PROF-TO-CSL     _prof-to-csl-xt _lprof-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -492,3 +492,27 @@ VARIABLE _MT-EC-GAP
 
 : METER-STEREO-DRAW  ( cfg-l cfg-r -- )
     METER-DRAW METER-DRAW ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _vmeter-guard
+
+' METER-CONFIG-CREATE CONSTANT _meter-config-create-xt
+' METER-CONFIG-FREE CONSTANT _meter-config-free-xt
+' METER-DRAW      CONSTANT _meter-draw-xt
+' METER-SET-LEVELS CONSTANT _meter-set-levels-xt
+' METER-ANALYZE   CONSTANT _meter-analyze-xt
+' METER-ORIENT!   CONSTANT _meter-orient-s-xt
+' METER-ENERGY-CHART CONSTANT _meter-energy-chart-xt
+' METER-STEREO-DRAW CONSTANT _meter-stereo-draw-xt
+
+: METER-CONFIG-CREATE _meter-config-create-xt _vmeter-guard WITH-GUARD ;
+: METER-CONFIG-FREE _meter-config-free-xt _vmeter-guard WITH-GUARD ;
+: METER-DRAW      _meter-draw-xt _vmeter-guard WITH-GUARD ;
+: METER-SET-LEVELS _meter-set-levels-xt _vmeter-guard WITH-GUARD ;
+: METER-ANALYZE   _meter-analyze-xt _vmeter-guard WITH-GUARD ;
+: METER-ORIENT!   _meter-orient-s-xt _vmeter-guard WITH-GUARD ;
+: METER-ENERGY-CHART _meter-energy-chart-xt _vmeter-guard WITH-GUARD ;
+: METER-STEREO-DRAW _meter-stereo-draw-xt _vmeter-guard WITH-GUARD ;
+[THEN] [THEN]

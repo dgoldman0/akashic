@@ -153,3 +153,15 @@ VARIABLE _ATU-CO-L
         _ATU-RK-A @ _ATU-RK-L @ _ATU-BWRITE   \ rkey
     THEN
     _ATU-BPOS @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _aturi-guard
+
+' ATURI-PARSE     CONSTANT _aturi-parse-xt
+' ATURI-BUILD     CONSTANT _aturi-build-xt
+
+: ATURI-PARSE     _aturi-parse-xt _aturi-guard WITH-GUARD ;
+: ATURI-BUILD     _aturi-build-xt _aturi-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -298,3 +298,41 @@ VARIABLE _PO-VEL     \ vel for note-on / temp for setters
     _PO-TMP @ PO.NV @ 0 DO
         _PO-VEL @ _PO-TMP @ PO.VOICES @ I CELLS + @ SYNTH-RESO!
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _apoly-guard
+
+' PO.NV           CONSTANT _po-dotnv-xt
+' PO.VOICES       CONSTANT _po-dotvoices-xt
+' PO.STATES       CONSTANT _po-dotstates-xt
+' PO.MASTER       CONSTANT _po-dotmaster-xt
+' PO.FRAMES       CONSTANT _po-dotframes-xt
+' PO.RATE         CONSTANT _po-dotrate-xt
+' POLY-CREATE     CONSTANT _poly-create-xt
+' POLY-FREE       CONSTANT _poly-free-xt
+' POLY-VOICE      CONSTANT _poly-voice-xt
+' POLY-COUNT      CONSTANT _poly-count-xt
+' POLY-NOTE-ON    CONSTANT _poly-note-on-xt
+' POLY-NOTE-OFF-ALL CONSTANT _poly-note-off-all-xt
+' POLY-RENDER     CONSTANT _poly-render-xt
+' POLY-CUTOFF!    CONSTANT _poly-cutoff-s-xt
+' POLY-RESO!      CONSTANT _poly-reso-s-xt
+
+: PO.NV           _po-dotnv-xt _apoly-guard WITH-GUARD ;
+: PO.VOICES       _po-dotvoices-xt _apoly-guard WITH-GUARD ;
+: PO.STATES       _po-dotstates-xt _apoly-guard WITH-GUARD ;
+: PO.MASTER       _po-dotmaster-xt _apoly-guard WITH-GUARD ;
+: PO.FRAMES       _po-dotframes-xt _apoly-guard WITH-GUARD ;
+: PO.RATE         _po-dotrate-xt _apoly-guard WITH-GUARD ;
+: POLY-CREATE     _poly-create-xt _apoly-guard WITH-GUARD ;
+: POLY-FREE       _poly-free-xt _apoly-guard WITH-GUARD ;
+: POLY-VOICE      _poly-voice-xt _apoly-guard WITH-GUARD ;
+: POLY-COUNT      _poly-count-xt _apoly-guard WITH-GUARD ;
+: POLY-NOTE-ON    _poly-note-on-xt _apoly-guard WITH-GUARD ;
+: POLY-NOTE-OFF-ALL _poly-note-off-all-xt _apoly-guard WITH-GUARD ;
+: POLY-RENDER     _poly-render-xt _apoly-guard WITH-GUARD ;
+: POLY-CUTOFF!    _poly-cutoff-s-xt _apoly-guard WITH-GUARD ;
+: POLY-RESO!      _poly-reso-s-xt _apoly-guard WITH-GUARD ;
+[THEN] [THEN]

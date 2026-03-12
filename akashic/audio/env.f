@@ -380,3 +380,57 @@ VARIABLE _ENV-RATE
         ROT FP16-MUL                  ( addr scaled )
         SWAP W!
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _aenv-guard
+
+' E.ATTACK        CONSTANT _e-dotattack-xt
+' E.DECAY         CONSTANT _e-dotdecay-xt
+' E.SUSTAIN       CONSTANT _e-dotsustain-xt
+' E.RELEASE       CONSTANT _e-dotrelease-xt
+' E.PHASE         CONSTANT _e-dotphase-xt
+' E.POS           CONSTANT _e-dotpos-xt
+' E.LEVEL         CONSTANT _e-dotlevel-xt
+' E.CURVE         CONSTANT _e-dotcurve-xt
+' E.MODE          CONSTANT _e-dotmode-xt
+' E.RATE          CONSTANT _e-dotrate-xt
+' E.RELLEV        CONSTANT _e-dotrellev-xt
+' ENV-CREATE      CONSTANT _env-create-xt
+' ENV-CREATE-AR   CONSTANT _env-create-ar-xt
+' ENV-FREE        CONSTANT _env-free-xt
+' ENV-GATE-ON     CONSTANT _env-gate-on-xt
+' ENV-GATE-OFF    CONSTANT _env-gate-off-xt
+' ENV-RETRIGGER   CONSTANT _env-retrigger-xt
+' ENV-RESET       CONSTANT _env-reset-xt
+' ENV-DONE?       CONSTANT _env-done-q-xt
+' ENV-LEVEL       CONSTANT _env-level-xt
+' ENV-TICK        CONSTANT _env-tick-xt
+' ENV-FILL        CONSTANT _env-fill-xt
+' ENV-APPLY       CONSTANT _env-apply-xt
+
+: E.ATTACK        _e-dotattack-xt _aenv-guard WITH-GUARD ;
+: E.DECAY         _e-dotdecay-xt _aenv-guard WITH-GUARD ;
+: E.SUSTAIN       _e-dotsustain-xt _aenv-guard WITH-GUARD ;
+: E.RELEASE       _e-dotrelease-xt _aenv-guard WITH-GUARD ;
+: E.PHASE         _e-dotphase-xt _aenv-guard WITH-GUARD ;
+: E.POS           _e-dotpos-xt _aenv-guard WITH-GUARD ;
+: E.LEVEL         _e-dotlevel-xt _aenv-guard WITH-GUARD ;
+: E.CURVE         _e-dotcurve-xt _aenv-guard WITH-GUARD ;
+: E.MODE          _e-dotmode-xt _aenv-guard WITH-GUARD ;
+: E.RATE          _e-dotrate-xt _aenv-guard WITH-GUARD ;
+: E.RELLEV        _e-dotrellev-xt _aenv-guard WITH-GUARD ;
+: ENV-CREATE      _env-create-xt _aenv-guard WITH-GUARD ;
+: ENV-CREATE-AR   _env-create-ar-xt _aenv-guard WITH-GUARD ;
+: ENV-FREE        _env-free-xt _aenv-guard WITH-GUARD ;
+: ENV-GATE-ON     _env-gate-on-xt _aenv-guard WITH-GUARD ;
+: ENV-GATE-OFF    _env-gate-off-xt _aenv-guard WITH-GUARD ;
+: ENV-RETRIGGER   _env-retrigger-xt _aenv-guard WITH-GUARD ;
+: ENV-RESET       _env-reset-xt _aenv-guard WITH-GUARD ;
+: ENV-DONE?       _env-done-q-xt _aenv-guard WITH-GUARD ;
+: ENV-LEVEL       _env-level-xt _aenv-guard WITH-GUARD ;
+: ENV-TICK        _env-tick-xt _aenv-guard WITH-GUARD ;
+: ENV-FILL        _env-fill-xt _aenv-guard WITH-GUARD ;
+: ENV-APPLY       _env-apply-xt _aenv-guard WITH-GUARD ;
+[THEN] [THEN]

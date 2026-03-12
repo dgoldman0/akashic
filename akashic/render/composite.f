@@ -485,3 +485,41 @@ VARIABLE _COMP-MBA-DST
             THEN
         LOOP
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _comp-guard
+
+' COMP-OVER       CONSTANT _comp-over-xt
+' COMP-IN         CONSTANT _comp-in-xt
+' COMP-OUT        CONSTANT _comp-out-xt
+' COMP-ATOP       CONSTANT _comp-atop-xt
+' COMP-XOR        CONSTANT _comp-xor-xt
+' COMP-MULTIPLY   CONSTANT _comp-multiply-xt
+' COMP-SCREEN     CONSTANT _comp-screen-xt
+' COMP-OVERLAY    CONSTANT _comp-overlay-xt
+' COMP-DARKEN     CONSTANT _comp-darken-xt
+' COMP-LIGHTEN    CONSTANT _comp-lighten-xt
+' COMP-OPACITY    CONSTANT _comp-opacity-xt
+' COMP-SCANLINE-COPY CONSTANT _comp-scanline-copy-xt
+' COMP-SCANLINE-OVER CONSTANT _comp-scanline-over-xt
+' COMP-BLIT-MONO  CONSTANT _comp-blit-mono-xt
+' COMP-BLIT-MONO-ALPHA CONSTANT _comp-blit-mono-alpha-xt
+
+: COMP-OVER       _comp-over-xt _comp-guard WITH-GUARD ;
+: COMP-IN         _comp-in-xt _comp-guard WITH-GUARD ;
+: COMP-OUT        _comp-out-xt _comp-guard WITH-GUARD ;
+: COMP-ATOP       _comp-atop-xt _comp-guard WITH-GUARD ;
+: COMP-XOR        _comp-xor-xt _comp-guard WITH-GUARD ;
+: COMP-MULTIPLY   _comp-multiply-xt _comp-guard WITH-GUARD ;
+: COMP-SCREEN     _comp-screen-xt _comp-guard WITH-GUARD ;
+: COMP-OVERLAY    _comp-overlay-xt _comp-guard WITH-GUARD ;
+: COMP-DARKEN     _comp-darken-xt _comp-guard WITH-GUARD ;
+: COMP-LIGHTEN    _comp-lighten-xt _comp-guard WITH-GUARD ;
+: COMP-OPACITY    _comp-opacity-xt _comp-guard WITH-GUARD ;
+: COMP-SCANLINE-COPY _comp-scanline-copy-xt _comp-guard WITH-GUARD ;
+: COMP-SCANLINE-OVER _comp-scanline-over-xt _comp-guard WITH-GUARD ;
+: COMP-BLIT-MONO  _comp-blit-mono-xt _comp-guard WITH-GUARD ;
+: COMP-BLIT-MONO-ALPHA _comp-blit-mono-alpha-xt _comp-guard WITH-GUARD ;
+[THEN] [THEN]

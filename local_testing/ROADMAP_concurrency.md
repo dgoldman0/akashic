@@ -38,6 +38,15 @@ structured task lifetimes.
 - [Implementation Order](#implementation-order)
 - [Design Constraints & Gotchas](#design-constraints--gotchas)
 - [Testing Strategy](#testing-strategy)
+- [Hardening — Making Akashic Libraries Concurrency-Safe](#hardening--making-akashic-libraries-concurrency-safe)
+  - [The Problem](#the-problem)
+  - [Execution Context Analysis](#execution-context-analysis)
+  - [Strategy — Layered Approach](#strategy--layered-approach)
+  - [New Defining Words — core-local.f](#new-defining-words--core-localf)
+  - [Module Classification](#module-classification)
+  - [Transformation Recipe](#transformation-recipe)
+  - [Invariants & Constraints](#invariants--constraints)
+  - [Hardening Implementation Order](#hardening-implementation-order)
 - [BIOS SEP Dispatch Refactor — Status: Landed](#bios-sep-dispatch-refactor--status-landed)
 
 ---
@@ -1200,6 +1209,523 @@ Each module gets a `test_<module>.py` in `local_testing/`:
 - **Task exhaustion** — spawn until slots full, verify graceful error
 - **Spinlock contention** — multiple cores competing for same lock
 - **Channel backpressure** — fast producer, slow consumer
+
+---
+
+## Hardening — Making Akashic Libraries Concurrency-Safe
+
+### The Problem
+
+Akashic library modules use global `VARIABLE`s for intermediate scratch
+state — this is the standard Forth convention on this platform (limited
+return stack, no locals).  Examples:
+
+| Module     | Scratch vars                                         |
+|------------|------------------------------------------------------|
+| vec2.f     | `_V2-A`, `_V2-B`, `_V2-C`, `_V2-D`, `_V2L-T`, etc. |
+| trig.f     | `_TR-QUAD`, `_TR-RED`, `_TR-SWAP`, `_TR-X2`         |
+| fp32.f     | `_FP32-` temporaries for add/sub/mul/div             |
+| mat2d.f    | `_M-A` through `_M-F` matrix element scratch         |
+| string.f   | `_SS-SA`, `_SS-SL`, `_SS-PA`, `_SS-PL`, etc.        |
+| sha3.f     | `_SHA3-IPAD` (136 B), `_SHA3-OPAD` (136 B) buffers  |
+| field.f    | `_FLD-TMP` (32 B), `_FLD-CMP` (32 B) buffers        |
+| aes.f      | `_AES-TAG-BUF` (16 B), `_AES-PAD` (16 B)           |
+| ed25519.f  | `_ED-L` (32 B), `_ED-PINV0` (32 B), etc.           |
+
+If two execution contexts call the same module word concurrently,
+they trample each other's scratch variables.
+
+Some modules already have guard wrappers at the bottom of the file
+(mempool, rpc, xchain, sync, sha256, fft, itc).  These serialize all
+access through a single `GUARD` — safe but zero parallelism per module.
+Many modules have no protection at all.
+
+### Execution Context Analysis
+
+There are three sources of concurrent execution on this platform.
+Each has different characteristics that affect which hardening strategy
+is appropriate:
+
+**1. Multi-core dispatch** (`CORE-RUN`, `SPAWN-ON`, `SCHED-ALL`, PAR-*)
+
+Real hardware parallelism.  Up to 16 cores executing simultaneously.
+Each core has a unique `COREID`.  This is the primary source of
+scratch variable conflicts.
+
+**2. BIOS cooperative background tasks** (`BACKGROUND`/`PAUSE`/`TASK-YIELD`)
+
+Up to 4 tasks round-robin on the same core via register-file swap.
+Tasks share `COREID`.  Interleaving occurs only at explicit yield
+points (`PAUSE` from Task 0, `TASK-YIELD` from background tasks).
+Background tasks are typically polling loops (NIC, UART) installed
+via `BG-POLL`.
+
+**3. KDOS scheduled tasks** (`SPAWN`/`SCHEDULE`, `ASYNC`, `TG-SPAWN`)
+
+Cooperative run-to-completion.  `SCHEDULE` picks the next READY task,
+calls `T.XT EXECUTE`, marks DONE when it returns, then loops.  **Tasks
+do not interleave** — Task A runs its entire xt to completion before
+Task B starts.  The only exception is if a task's xt calls `SCHEDULE`
+recursively, or spins in `YIELD?` (which marks the task DONE, not
+READY — it exits, not context-switches).
+
+**Conclusion:**
+
+| Context          | Truly concurrent? | Identity            | Per-ID storage safe? |
+|------------------|--------------------|---------------------|----------------------|
+| Multi-core       | Yes                | `COREID` (0–15)     | Yes                  |
+| BIOS background  | Yes (at yields)    | Slot 0–3 (implicit) | No (`COREID` shared) |
+| KDOS scheduler   | No (run-to-completion) | `CURRENT-TASK`  | N/A — no conflict    |
+
+KDOS tasks don't need hardening — they never overlap.  Multi-core
+needs per-core isolation.  BIOS background needs guards (or avoidance).
+
+### Strategy — Layered Approach
+
+Three layers, applied per-module based on its usage profile:
+
+**Layer A: Guards (universal safety net) — all modules with mutable scratch**
+
+Add the standard guard-wrapper footer to every unguarded module.
+This is correct under ALL execution models.  Mechanical 3-line
+addition per module.  Cost: full serialization (only one caller at
+a time per module).
+
+```forth
+\ --- Bottom of module ---
+REQUIRE ../concurrency/guard.f
+GUARD _prefix-guard
+' PUBLIC-WORD-1  CONSTANT _pw1-xt
+' PUBLIC-WORD-2  CONSTANT _pw2-xt
+: PUBLIC-WORD-1  _pw1-xt _prefix-guard WITH-GUARD ;
+: PUBLIC-WORD-2  _pw2-xt _prefix-guard WITH-GUARD ;
+```
+
+This is the baseline.  Every module should have this as a minimum.
+It can be the only layer for modules that are not performance-critical
+or not called from PAR-* worker contexts.
+
+**Layer B: Per-core scratch (`CORE-VARIABLE` / `CORE-BUFFER`) — PAR-hot modules**
+
+For modules called from `PAR-MAP`/`PAR-FOR`/`CORE-RUN` workers,
+guards defeat the purpose of multi-core dispatch.  Convert scratch
+from global `VARIABLE` / `CREATE` to per-core allocations indexed by
+`COREID`.
+
+Per-core scratch eliminates cross-core conflicts without any locking.
+Combined with a guard, it also handles the BIOS interleaving case:
+the guard only fires for same-core contention (rare — background
+pollers rarely call math words), while PAR workers on different cores
+proceed in parallel without contention.
+
+**Layer C: No action needed — KDOS-only modules**
+
+Modules that are only ever called from KDOS-scheduled task contexts
+(run-to-completion) don't need hardening beyond what the scheduler
+already provides.  Examples: modules called only from `TG-SPAWN`
+or `ASYNC` bodies, where `SCHEDULE` runs tasks sequentially.
+
+In practice, it's hard to *guarantee* a module will never be called
+from a PAR worker or BIOS background, so Layer A (guards) should be
+applied even to these modules as a safety net.
+
+### New Defining Words — core-local.f
+
+A new utility file `concurrency/core-local.f` provides drop-in
+replacements for `VARIABLE` and `CREATE ... ALLOT` that allocate
+per-core storage:
+
+```forth
+\ CORE-VARIABLE ( "name" -- )
+\   Like VARIABLE, but allocates 16 slots (one per core).
+\   DOES> returns the per-core address — existing @ and ! work unchanged.
+\
+\   VARIABLE _V2-A        →  CORE-VARIABLE _V2-A
+\   _V2-A @ _V2-C @ ...   →  _V2-A @ _V2-C @ ...   (no change)
+
+: CORE-VARIABLE  ( "name" -- )
+    CREATE 16 CELLS ALLOT
+    DOES> COREID CELLS + ;
+
+\ CORE-BUFFER ( size "name" -- )
+\   Like CREATE name <size> ALLOT, but allocates 16 copies.
+\   DOES> returns the per-core buffer address.
+\
+\   CREATE _FLD-TMP 32 ALLOT  →  32 CORE-BUFFER _FLD-TMP
+\   _FLD-TMP 32 0 FILL        →  _FLD-TMP 32 0 FILL  (no change)
+
+: CORE-BUFFER  ( size "name" -- )
+    CREATE DUP , 16 * ALLOT
+    DOES> DUP @ COREID * + CELL+ ;
+
+\ CORE-XMEM ( size "name" -- )
+\   Per-core XMEM blob allocation.  Each core gets its own
+\   XMEM region of the specified size.
+\   DOES> returns the per-core XMEM address.
+\
+\   For modules that use XMEM for large scratch buffers
+\   (e.g., STARK proof work areas).
+
+: CORE-XMEM  ( size "name" -- )
+    CREATE DUP , 16 0 DO DUP XMEM-ALLOC , LOOP DROP
+    DOES> CELL+ COREID CELLS + @ ;
+```
+
+Memory cost per defining word:
+
+| Word            | Per-instance cost | Example                 | Total  |
+|-----------------|-------------------|-------------------------|--------|
+| `CORE-VARIABLE` | 128 B (16 cells)  | vec2.f has 8 vars       | 1 KB   |
+| `CORE-BUFFER`   | 16 × buffer size  | `_FLD-TMP` 32 B         | 512 B  |
+| `CORE-BUFFER`   | 16 × buffer size  | `_SHA3-IPAD` 136 B      | 2.1 KB |
+| `CORE-BUFFER`   | 16 × buffer size  | `_AIR-BUF` 1024 B       | 16 KB  |
+| `CORE-XMEM`     | 16 pointers + XMEM| Large proof buffers     | 128 B + XMEM |
+
+### Module Classification
+
+> **Not comprehensive** — representative examples per area.  Every
+> module with mutable scratch (`VARIABLE` or `CREATE ... ALLOT`) needs
+> to be audited individually.  As of this writing, **97 of 160 `.f`
+> files (61%) have no guard protection.**
+
+**Guard coverage by area:**
+
+| Area            | Files | Guarded | Coverage | Notes                                |
+|-----------------|-------|---------|----------|--------------------------------------|
+| net/            | 9     | 9       | 100%     | HTTP, WebSocket, gossip, xchain, etc.|
+| web/            | 7     | 7       | 100%     | Server, router, RPC, middleware      |
+| store/          | 11    | 10      | 91%      | Block, state, mempool, VM, vault     |
+| node/           | 1     | 1       | 100%     | Node runtime                         |
+| consensus/      | 1     | 1       | 100%     | Consensus protocol                   |
+| math/           | 38    | 24      | 63%      | Some guarded, crypto/STARK gaps      |
+| utils/          | 9     | 5       | 56%      | string, table, fmt, datetime exposed |
+| concurrency/    | 12    | 4       | 33%      | Primitives self-protect; wrappers don't |
+| **audio/**      | **32**| **1**   | **3%**   | **Massive gap — 560+ VARs unguarded**|
+| **render/**     | **13**| **0**   | **0%**   | **389 VARs, draw.f alone has 88**    |
+| **dom/**        | **1** | **0**   | **0%**   | **69 VARs + 6 buffers**              |
+| **css/**        | **2** | **0**   | **0%**   | **51+ VARs for CSS parser**          |
+| **markup/**     | **3** | **0**   | **0%**   | **HTML parser: 21 VARs + 35 buffers**|
+| **font/**       | **3** | **0**   | **0%**   | **Rasterizer: 44 VARs + 3 buffers**  |
+| **liraq/**      | **5** | **0**   | **0%**   | **State tree, LEL, profile — 157 VARs**|
+| **sml/**        | **2** | **0**   | **0%**   | **SOM tree: 55 VARs**                |
+| **atproto/**    | **6** | **0**   | **0%**   | **Session, repo, XRPC — all exposed**|
+| **cbor/**       | **2** | **0**   | **0%**   | **DAG-CBOR codec — AT Proto depends on this**|
+| **text/**       | **2** | **0**   | **0%**   | **UTF-8 codec, text layout**         |
+| **knowledge/**  | **1** | **0**   | **0%**   | **Taxonomy engine**                  |
+
+**Key problem areas:**
+
+- **Audio** (32 files, 3% coverage): The largest library by file
+  count.  FM/additive/granular/modal synthesis, effects, mixing,
+  sequencing — all rely on heavy scratch state.  Concurrent audio
+  rendering (e.g., PAR-MAP across voices) is a natural use case
+  and currently unsafe.
+
+- **Rendering pipeline** (render + dom + css + font + markup + text):
+  The entire HTML→CSS→layout→paint→BMP pipeline is completely
+  unguarded.  `render/draw.f` alone has 88 VARIABLEs.  This is a
+  problem if you want to render multiple pages concurrently or
+  parallelize layout across subtrees.
+
+- **Networking** (net/, web/): Already 100% guarded, but serialized.
+  A concurrent web server handling multiple requests needs parallel
+  request parsing, header building, response construction.  These are
+  currently guard-serialized — one request at a time through each
+  module.  For throughput, the networking stack would benefit from
+  per-core scratch (Category 2/3) so multiple cores can handle
+  requests simultaneously.
+
+- **AT Protocol** (atproto/ + cbor/): Completely unguarded.  Session
+  management, XRPC, repo ops, DID validation, DAG-CBOR — all have
+  scratch VARIABLEs and no protection.  Any concurrent use (multiple
+  AT Proto sessions, parallel feed fetches) will corrupt state.
+
+- **LIRAQ / SML** (liraq/ + sml/): The UI framework layer.
+  State tree (50 VARs), LEL expression evaluator (43 VARs), SOM tree
+  (55 VARs) — all unguarded.  Concurrent UI updates or parallel
+  layout would corrupt.
+
+- **Crypto / STARK** (math/stark.f, math/baby-bear.f, etc.):
+  The ZK proof system has large scratch buffers and is a prime
+  candidate for parallelization.  `stark.f` is unguarded (33 VARs +
+  19 buffers).  Parallel proof generation is currently unsafe.
+
+- **Store** (91% covered): Mostly guarded.  Only `genesis.f` is
+  missing a guard.  But the guards serialize — parallel block
+  validation or concurrent state reads would benefit from rwlock or
+  per-core upgrades.
+
+**Category summary (not comprehensive — examples only):**
+
+**Category 1: Guard-only (not PAR-hot)**
+
+Application-level modules where serialization is acceptable.  A guard
+is sufficient and simplest.
+
+Examples: store/*, web/*, net/*, utils/string.f, utils/json.f,
+atproto/*, cbor/*, dom/*, css/*, markup/*, text/*, font/*,
+liraq/*, sml/*, knowledge/*, node/*.
+
+Many of these already have guards (net, web, store).  The rest
+(rendering pipeline, audio, AT Proto, LIRAQ, etc.) need guards added.
+
+**Category 2: Per-core scratch + per-core guard (PAR-hot, VARIABLE only)**
+
+Inner-loop compute modules dispatched to secondary cores via PAR-*.
+Need per-core scratch for parallelism + per-core guard for BIOS safety.
+
+Examples: math/fp16.f, math/fp32.f, math/trig.f, math/vec2.f,
+math/mat2d.f, math/interp.f, math/sort.f, math/filter.f, math/stats.f,
+audio synthesis voices (if parallel voice rendering is needed).
+
+**Category 3: Per-core scratch + per-core guard (PAR-hot, with buffers)**
+
+Compute modules with `CREATE ... ALLOT` byte buffers in addition to
+`VARIABLE` scratch.  Need `CORE-BUFFER` for the buffers.
+
+Examples: math/sha256.f, math/sha3.f, math/sha512.f, math/field.f,
+math/ed25519.f, math/aes.f, math/fft.f, math/stark.f, math/baby-bear.f,
+render/draw.f (if parallel tile rendering).
+
+### Transformation Recipe
+
+For each module:
+
+**Step 1: Audit scratch variables.**
+
+Classify every `VARIABLE _PREFIX-*` and `CREATE _PREFIX-* N ALLOT` as:
+
+- **Scratch** — only used within a single public word's execution;
+  no state persists between calls.  → `CORE-VARIABLE` or `CORE-BUFFER`
+- **Shared mutable** — module-level state that persists across calls
+  (counts, config, capacity).  → Keep as `VARIABLE`, protect with
+  guard or `CVAR`.
+- **Read-only** — initialized once at load time, never mutated.
+  → No change needed.
+
+**Step 2: Replace scratch defining words (Category 2/3 only).**
+
+```forth
+\ Before:
+VARIABLE _V2-A
+VARIABLE _V2-B
+CREATE _FLD-TMP 32 ALLOT
+
+\ After:
+REQUIRE ../concurrency/core-local.f
+CORE-VARIABLE _V2-A
+CORE-VARIABLE _V2-B
+32 CORE-BUFFER _FLD-TMP
+```
+
+No other code changes needed — `CORE-VARIABLE` `DOES>` returns an
+address that works with `@` and `!` unchanged.  `CORE-BUFFER` `DOES>`
+returns a buffer address that works with `CMOVE`, `FILL`, `C@`, `C!`.
+
+**Step 3: Add guard wrapper (all categories).**
+
+```forth
+\ --- Bottom of module ---
+REQUIRE ../concurrency/guard.f
+GUARD _prefix-guard
+' PUBLIC-WORD CONSTANT _pw-xt
+: PUBLIC-WORD  _pw-xt _prefix-guard WITH-GUARD ;
+```
+
+For Category 2/3 modules (per-core scratch + guard), the guard
+provides BIOS interleaving safety.  For PAR-* dispatch on different
+cores, the per-core scratch means the guard is never contended —
+each core's `GUARD-ACQUIRE` sees a free guard because they're
+accessing different scratch slots.
+
+Wait — that's wrong.  The guard is a **single shared object**, not
+per-core.  If core 0 holds `_v2-guard`, core 1 will spin on it even
+though their scratch is separate.
+
+**Correction: per-core scratch makes the guard unnecessary for
+cross-core safety.**  The guard is only needed for same-core BIOS
+interleaving.  Two options:
+
+**(a) Accept the guard serialization.**  Simple, correct.  PAR-*
+workers will serialize on the guard — defeating the per-core scratch
+benefit.  Only useful if you want BIOS safety and don't use PAR.
+
+**(b) Use a per-core guard.**  Create 16 guards (one per core),
+index by `COREID`:
+
+```forth
+CREATE _prefix-guards  16 _GRD-SIZE-SPIN * ALLOT
+: _prefix-my-guard  ( -- guard )
+    COREID _GRD-SIZE-SPIN * _prefix-guards + ;
+
+: PUBLIC-WORD  _pw-xt _prefix-my-guard WITH-GUARD ;
+```
+
+Now each core has its own guard.  Cross-core: no contention (different
+guards).  Same-core BIOS interleaving: the per-core guard serializes
+tasks on the same core.  PAR-* workers: zero contention, full speed.
+
+Memory cost: 16 × 24 bytes = 384 bytes per module.  Trivial.
+
+**This is the recommended pattern for Category 2/3 modules.**
+
+**Step 4: Handle multi-step APIs.**
+
+For modules with BEGIN/ADD/END patterns (sha256, sha3), the guard
+must span multiple calls.  Use explicit `GUARD-ACQUIRE`/`GUARD-RELEASE`
+as sha256.f already does:
+
+```forth
+: SHA256-BEGIN  _sha256-guard GUARD-ACQUIRE  ... ;
+: SHA256-ADD    _sha256-guard GUARD-MINE? 0= IF -258 THROW THEN  ... ;
+: SHA256-END    ...  _sha256-guard GUARD-RELEASE ;
+```
+
+With per-core guards, this becomes:
+
+```forth
+: SHA256-BEGIN  _sha256-my-guard GUARD-ACQUIRE  ... ;
+: SHA256-ADD    _sha256-my-guard GUARD-MINE? 0= IF -258 THROW THEN ... ;
+: SHA256-END    ...  _sha256-my-guard GUARD-RELEASE ;
+```
+
+### Invariants & Constraints
+
+**1. `CORE-VARIABLE` / `CORE-BUFFER` are only safe for scratch.**
+
+Per-core storage must not be used for shared mutable state.  If two
+cores need to see the same counter or config, use a regular `VARIABLE`
+with a guard, or a `CVAR` for atomic access.
+
+**2. PAR-* worker code must not call `PAUSE`.**
+
+Secondary cores dispatched via `CORE-RUN` run a single word to
+completion.  They do not participate in BIOS cooperative scheduling.
+If a PAR worker called `PAUSE`, behavior is undefined (there's no
+R13 background task on secondary cores).  This is already the case
+today — PAR workers are straight-line compute.  Document the
+invariant explicitly: `\ YIELD-FREE — PAR-worker safe`.
+
+**3. BIOS background tasks that call library code need guards.**
+
+A background polling loop installed via `BG-POLL` that happens to
+call a library module (e.g., SHA256 for packet verification) will
+interleave with Task 0 on the same core at yield points.  Per-core
+guards handle this correctly.
+
+**4. Read-only tables are free.**
+
+`CREATE _TABLE ... , , ,` tables initialized at load time and never
+mutated don't need per-core duplication or guards.  This includes
+twiddle factor tables (fft.f), hex-digit tables (sha256.f), and
+constant arrays.
+
+**5. Zero-initialization.**
+
+`CORE-BUFFER` allocates via `ALLOT` which does not zero memory.
+Modules that assume zero-init after `CREATE ... ALLOT ... 0 FILL`
+must call `FILL` on the per-core buffer after `CORE-BUFFER`.  The
+`DOES>` body returns the correct per-core address, so
+`_BUF 32 0 FILL` at init time only zeros core 0's copy.  Either
+zero all 16 copies at load time, or zero on first use.
+
+**6. `CORE-XMEM` slots are allocated once at load time.**
+
+Each core gets a permanent XMEM blob.  XMEM is not garbage-collected
+on this platform, so these allocations are lifetime-permanent.  Only
+use `CORE-XMEM` for modules that genuinely need large per-core scratch
+(STARK proofs, contract-VM arenas).
+
+### Hardening Implementation Order
+
+**Phase 1: Guards everywhere (quick baseline) — 97 unguarded modules**
+
+Add guard wrappers to all unguarded modules.  No per-core conversion.
+Correct under all execution models.  Mechanical 3-5 lines per module.
+
+Priority tiers (by dependency depth and risk):
+
+1. **Foundation math** — everything else depends on these:
+   `math/exp.f`, `math/fp16-ext.f`, `math/fp-convert.f`,
+   `math/rect.f`, `math/accum.f`, remaining unguarded math
+
+2. **Utils** — string, table, fmt, datetime (used by parsers, web)
+
+3. **Rendering pipeline** — render/ (13 files), dom/, css/, font/,
+   markup/, text/ — the entire HTML→BMP path is 0% covered
+
+4. **Audio** — 31 unguarded files.  Synthesis, effects, mixing,
+   sequencing, analysis — all need guards before any concurrent
+   audio work
+
+5. **AT Protocol + CBOR** — atproto/ (6 files) + cbor/ (2 files).
+   Any concurrent session handling requires these
+
+6. **LIRAQ / SML** — UI framework layer (7 files, 0% coverage)
+
+7. **Knowledge, store/genesis.f** — lower priority, fewer callers
+
+8. **Crypto / STARK** — math/stark.f, math/baby-bear.f,
+   math/ntt.f — guarding is the quick fix, per-core is Phase 4
+
+**Phase 2: core-local.f defining words**
+
+Implement `CORE-VARIABLE`, `CORE-BUFFER`, `CORE-XMEM` in a new file
+`concurrency/core-local.f`.  Test with the emulator.
+
+**Phase 3: Per-core scratch for PAR-hot math modules**
+
+Convert Category 2 modules (fp16, fp32, trig, vec2, mat2d) to
+per-core scratch + per-core guards.  Verify with PAR-MAP/PAR-REDUCE
+tests that parallel execution produces correct results.
+
+Priority order:
+1. `math/fp16.f` + `math/fp16-ext.f` — foundation for all FP16 math
+2. `math/trig.f` — used by vec2 rotate
+3. `math/vec2.f` — primary PAR-MAP target (geometry transforms)
+4. `math/fp32.f` — PAR-REDUCE target (statistics)
+5. `math/mat2d.f` — PAR-MAP target (affine transforms)
+
+**Phase 4: Per-core buffers for crypto/DSP**
+
+Convert Category 3 modules where parallelism is critical:
+1. `math/sha256.f` — parallel block hashing (Merkle tree construction)
+2. `math/field.f` — STARK proof arithmetic
+3. `math/fft.f` — signal processing (already guarded, upgrade to per-core)
+
+Defer `baby-bear.f` (64 KB per-core cost) and `stark-air.f` (16 KB)
+unless profiling shows guard serialization is the bottleneck.
+
+**Phase 5: Per-core for networking (concurrent request handling)**
+
+The net/ and web/ layers are fully guarded but serialized.  For a
+concurrent web server handling requests on multiple cores:
+1. `web/request.f` — parallel request parsing
+2. `web/response.f` — parallel response building
+3. `net/headers.f` — parallel header parsing
+4. `net/http.f` — parallel HTTP client operations
+
+This is only needed if the application dispatches request handling
+to multiple cores via `SPAWN-ON` or PAR-*.
+
+**Phase 6: Per-core for audio (parallel voice rendering)**
+
+If parallel audio rendering is needed (PAR-MAP across polyphonic
+voices, parallel effects chains):
+1. `audio/osc.f`, `audio/env.f` — oscillator + envelope per voice
+2. `audio/synth.f`, `audio/fm.f` — synthesis engines
+3. `audio/fx.f` — effects (60 VARs — large per-core cost)
+4. `audio/mix.f` — mixer (needs careful shared-vs-scratch audit)
+
+**Phase 7: Audit and stress test**
+
+- Run all existing tests under multi-core emulation
+- Add concurrent stress tests: multiple PAR-MAP calls using the same
+  module from different cores
+- Test BIOS background + main task using same guarded module
+- Test concurrent web request handling (multiple cores parsing/building)
+- Test parallel audio voice rendering
+- Verify no scratch corruption under load
 
 ---
 

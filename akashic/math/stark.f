@@ -648,3 +648,44 @@ VARIABLE _SK-V-OK
 \ =====================================================================
 
 : STARK-FRI-FINAL@  ( -- val )  _SK-FRI-FINAL @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _stark-guard
+
+' STARK-INIT      CONSTANT _stark-init-xt
+' STARK-SET-COLS  CONSTANT _stark-set-cols-xt
+' STARK-SET-AIR   CONSTANT _stark-set-air-xt
+' STARK-TRACE!    CONSTANT _stark-trace-s-xt
+' STARK-TRACE@    CONSTANT _stark-trace-at-xt
+' STARK-TRACE-ZERO CONSTANT _stark-trace-zero-xt
+' STARK-PROVE     CONSTANT _stark-prove-xt
+' STARK-VERIFY    CONSTANT _stark-verify-xt
+' STARK-FRI-FINAL@ CONSTANT _stark-fri-final-at-xt
+
+: STARK-VERIFY    _stark-verify-xt _stark-guard WITH-GUARD ;
+: STARK-FRI-FINAL@ _stark-fri-final-at-xt _stark-guard WITH-GUARD ;
+: STARK-INIT
+  _stark-guard GUARD-ACQUIRE
+  _stark-init-xt CATCH IF _stark-guard GUARD-RELEASE THROW THEN ;
+: STARK-SET-COLS
+  _stark-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _stark-set-cols-xt EXECUTE ;
+: STARK-SET-AIR
+  _stark-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _stark-set-air-xt EXECUTE ;
+: STARK-TRACE!
+  _stark-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _stark-trace-s-xt EXECUTE ;
+: STARK-TRACE@
+  _stark-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _stark-trace-at-xt EXECUTE ;
+: STARK-TRACE-ZERO
+  _stark-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _stark-trace-zero-xt EXECUTE ;
+: STARK-PROVE
+  _stark-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _stark-prove-xt CATCH _stark-guard GUARD-RELEASE
+  IF THROW THEN ;
+[THEN] [THEN]

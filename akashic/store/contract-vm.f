@@ -16,7 +16,6 @@ REQUIRE ../store/block.f
 REQUIRE ../consensus/consensus.f
 REQUIRE ../store/tx.f
 REQUIRE ../math/sha3.f
-REQUIRE ../concurrency/guard.f
 PROVIDED akashic-contract-vm
 
 \ =====================================================================
@@ -615,6 +614,8 @@ VARIABLE _VM-INITIALIZED
 \  12. Concurrency Guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _vm-guard
 
 ' VM-INIT        CONSTANT _vm-init-xt
@@ -632,6 +633,7 @@ GUARD _vm-guard
 : VM-GAS-USED    _vm-gas-used-xt   _vm-guard WITH-GUARD ;
 : VM-RETURN-DATA _vm-ret-data-xt   _vm-guard WITH-GUARD ;
 : VM-CODE-COUNT  _vm-code-count-xt _vm-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =====================================================================
 \  Done.

@@ -381,3 +381,55 @@ VARIABLE _SU-RN-DPHASE \ double-phase for warmth
         \ Write filtered output
         _SU-RN-DPTR @ I 2* + W!
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _ssust-guard
+
+' SU.FUND         CONSTANT _su-dotfund-xt
+' SU.RATE         CONSTANT _su-dotrate-xt
+' SU.BRITE        CONSTANT _su-dotbrite-xt
+' SU.WARM         CONSTANT _su-dotwarm-xt
+' SU.MOTION       CONSTANT _su-dotmotion-xt
+' SU.DENSE        CONSTANT _su-dotdense-xt
+' SU.BREATH       CONSTANT _su-dotbreath-xt
+' SU.NACT         CONSTANT _su-dotnact-xt
+' SU.NENG         CONSTANT _su-dotneng-xt
+' SU.LFO          CONSTANT _su-dotlfo-xt
+' SU.LPST         CONSTANT _su-dotlpst-xt
+' SU.LPALF        CONSTANT _su-dotlpalf-xt
+' SUST-CREATE     CONSTANT _sust-create-xt
+' SUST-FREE       CONSTANT _sust-free-xt
+' SUST-FREQ!      CONSTANT _sust-freq-s-xt
+' SUST-BRIGHTNESS! CONSTANT _sust-brightness-s-xt
+' SUST-WARMTH!    CONSTANT _sust-warmth-s-xt
+' SUST-MOTION!    CONSTANT _sust-motion-s-xt
+' SUST-DENSITY!   CONSTANT _sust-density-s-xt
+' SUST-BREATHINESS! CONSTANT _sust-breathiness-s-xt
+' SUST-MORPH      CONSTANT _sust-morph-xt
+' SUST-RENDER     CONSTANT _sust-render-xt
+
+: SU.FUND         _su-dotfund-xt _ssust-guard WITH-GUARD ;
+: SU.RATE         _su-dotrate-xt _ssust-guard WITH-GUARD ;
+: SU.BRITE        _su-dotbrite-xt _ssust-guard WITH-GUARD ;
+: SU.WARM         _su-dotwarm-xt _ssust-guard WITH-GUARD ;
+: SU.MOTION       _su-dotmotion-xt _ssust-guard WITH-GUARD ;
+: SU.DENSE        _su-dotdense-xt _ssust-guard WITH-GUARD ;
+: SU.BREATH       _su-dotbreath-xt _ssust-guard WITH-GUARD ;
+: SU.NACT         _su-dotnact-xt _ssust-guard WITH-GUARD ;
+: SU.NENG         _su-dotneng-xt _ssust-guard WITH-GUARD ;
+: SU.LFO          _su-dotlfo-xt _ssust-guard WITH-GUARD ;
+: SU.LPST         _su-dotlpst-xt _ssust-guard WITH-GUARD ;
+: SU.LPALF        _su-dotlpalf-xt _ssust-guard WITH-GUARD ;
+: SUST-CREATE     _sust-create-xt _ssust-guard WITH-GUARD ;
+: SUST-FREE       _sust-free-xt _ssust-guard WITH-GUARD ;
+: SUST-FREQ!      _sust-freq-s-xt _ssust-guard WITH-GUARD ;
+: SUST-BRIGHTNESS! _sust-brightness-s-xt _ssust-guard WITH-GUARD ;
+: SUST-WARMTH!    _sust-warmth-s-xt _ssust-guard WITH-GUARD ;
+: SUST-MOTION!    _sust-motion-s-xt _ssust-guard WITH-GUARD ;
+: SUST-DENSITY!   _sust-density-s-xt _ssust-guard WITH-GUARD ;
+: SUST-BREATHINESS! _sust-breathiness-s-xt _ssust-guard WITH-GUARD ;
+: SUST-MORPH      _sust-morph-xt _ssust-guard WITH-GUARD ;
+: SUST-RENDER     _sust-render-xt _ssust-guard WITH-GUARD ;
+[THEN] [THEN]

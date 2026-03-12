@@ -428,3 +428,56 @@ VARIABLE _ST-CHD-DESC
     1347 INT>FP16 _ST-VAL @  5  _ST-CHD-DESC @  STR-VOICE!
     ;
 
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _sstr-guard
+
+' ST.NV           CONSTANT _st-dotnv-xt
+' ST.RATE         CONSTANT _st-dotrate-xt
+' ST.VOICES       CONSTANT _st-dotvoices-xt
+' ST.BALPHA       CONSTANT _st-dotbalpha-xt
+' ST.BSTATE       CONSTANT _st-dotbstate-xt
+' ST.STRUM        CONSTANT _st-dotstrum-xt
+' ST.AMP          CONSTANT _st-dotamp-xt
+' STR-CREATE      CONSTANT _str-create-xt
+' STR-FREE        CONSTANT _str-free-xt
+' STR-VOICE!      CONSTANT _str-voice-s-xt
+' STR-FREQ!       CONSTANT _str-freq-s-xt
+' STR-DECAY!      CONSTANT _str-decay-s-xt
+' STR-BODY!       CONSTANT _str-body-s-xt
+' STR-AMP!        CONSTANT _str-amp-s-xt
+' STR-STRUM!      CONSTANT _str-strum-s-xt
+' STR-EXCITE      CONSTANT _str-excite-xt
+' STR-DAMP        CONSTANT _str-damp-xt
+' STR-RENDER      CONSTANT _str-render-xt
+' STR-STRIKE      CONSTANT _str-strike-xt
+' STR-CHORD       CONSTANT _str-chord-xt
+' STR-PRESET-BASS CONSTANT _str-preset-bass-xt
+' STR-PRESET-HARP CONSTANT _str-preset-harp-xt
+' STR-PRESET-METAL CONSTANT _str-preset-metal-xt
+
+: ST.NV           _st-dotnv-xt _sstr-guard WITH-GUARD ;
+: ST.RATE         _st-dotrate-xt _sstr-guard WITH-GUARD ;
+: ST.VOICES       _st-dotvoices-xt _sstr-guard WITH-GUARD ;
+: ST.BALPHA       _st-dotbalpha-xt _sstr-guard WITH-GUARD ;
+: ST.BSTATE       _st-dotbstate-xt _sstr-guard WITH-GUARD ;
+: ST.STRUM        _st-dotstrum-xt _sstr-guard WITH-GUARD ;
+: ST.AMP          _st-dotamp-xt _sstr-guard WITH-GUARD ;
+: STR-CREATE      _str-create-xt _sstr-guard WITH-GUARD ;
+: STR-FREE        _str-free-xt _sstr-guard WITH-GUARD ;
+: STR-VOICE!      _str-voice-s-xt _sstr-guard WITH-GUARD ;
+: STR-FREQ!       _str-freq-s-xt _sstr-guard WITH-GUARD ;
+: STR-DECAY!      _str-decay-s-xt _sstr-guard WITH-GUARD ;
+: STR-BODY!       _str-body-s-xt _sstr-guard WITH-GUARD ;
+: STR-AMP!        _str-amp-s-xt _sstr-guard WITH-GUARD ;
+: STR-STRUM!      _str-strum-s-xt _sstr-guard WITH-GUARD ;
+: STR-EXCITE      _str-excite-xt _sstr-guard WITH-GUARD ;
+: STR-DAMP        _str-damp-xt _sstr-guard WITH-GUARD ;
+: STR-RENDER      _str-render-xt _sstr-guard WITH-GUARD ;
+: STR-STRIKE      _str-strike-xt _sstr-guard WITH-GUARD ;
+: STR-CHORD       _str-chord-xt _sstr-guard WITH-GUARD ;
+: STR-PRESET-BASS _str-preset-bass-xt _sstr-guard WITH-GUARD ;
+: STR-PRESET-HARP _str-preset-harp-xt _sstr-guard WITH-GUARD ;
+: STR-PRESET-METAL _str-preset-metal-xt _sstr-guard WITH-GUARD ;
+[THEN] [THEN]

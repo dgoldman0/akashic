@@ -441,3 +441,71 @@ VARIABLE _GR-RN-W
         THEN
 
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _sgran-guard
+
+' GS.SPOS         CONSTANT _gs-dotspos-xt
+' GS.STEP         CONSTANT _gs-dotstep-xt
+' GS.EPH          CONSTANT _gs-doteph-xt
+' GS.ESTEP        CONSTANT _gs-dotestep-xt
+' GS.AMP          CONSTANT _gs-dotamp-xt
+' GS.ACT          CONSTANT _gs-dotact-xt
+' GS.ETYPE        CONSTANT _gs-dotetype-xt
+' GD.SRC          CONSTANT _gd-dotsrc-xt
+' GD.DENS         CONSTANT _gd-dotdens-xt
+' GD.GMS          CONSTANT _gd-dotgms-xt
+' GD.POS          CONSTANT _gd-dotpos-xt
+' GD.PSCTR        CONSTANT _gd-dotpsctr-xt
+' GD.PITCH        CONSTANT _gd-dotpitch-xt
+' GD.PTSCTR       CONSTANT _gd-dotptsctr-xt
+' GD.ASCTR        CONSTANT _gd-dotasctr-xt
+' GD.ENV          CONSTANT _gd-dotenv-xt
+' GD.RATE         CONSTANT _gd-dotrate-xt
+' GD.POOL         CONSTANT _gd-dotpool-xt
+' GD.SCTR         CONSTANT _gd-dotsctr-xt
+' GD.NENG         CONSTANT _gd-dotneng-xt
+' GD.SPER         CONSTANT _gd-dotsper-xt
+' GRAN-CREATE     CONSTANT _gran-create-xt
+' GRAN-FREE       CONSTANT _gran-free-xt
+' GRAN-SOURCE!    CONSTANT _gran-source-s-xt
+' GRAN-GRAIN!     CONSTANT _gran-grain-s-xt
+' GRAN-POSITION!  CONSTANT _gran-position-s-xt
+' GRAN-PITCH!     CONSTANT _gran-pitch-s-xt
+' GRAN-DENSITY!   CONSTANT _gran-density-s-xt
+' GRAN-SCATTER!   CONSTANT _gran-scatter-s-xt
+' GRAN-RENDER     CONSTANT _gran-render-xt
+
+: GS.SPOS         _gs-dotspos-xt _sgran-guard WITH-GUARD ;
+: GS.STEP         _gs-dotstep-xt _sgran-guard WITH-GUARD ;
+: GS.EPH          _gs-doteph-xt _sgran-guard WITH-GUARD ;
+: GS.ESTEP        _gs-dotestep-xt _sgran-guard WITH-GUARD ;
+: GS.AMP          _gs-dotamp-xt _sgran-guard WITH-GUARD ;
+: GS.ACT          _gs-dotact-xt _sgran-guard WITH-GUARD ;
+: GS.ETYPE        _gs-dotetype-xt _sgran-guard WITH-GUARD ;
+: GD.SRC          _gd-dotsrc-xt _sgran-guard WITH-GUARD ;
+: GD.DENS         _gd-dotdens-xt _sgran-guard WITH-GUARD ;
+: GD.GMS          _gd-dotgms-xt _sgran-guard WITH-GUARD ;
+: GD.POS          _gd-dotpos-xt _sgran-guard WITH-GUARD ;
+: GD.PSCTR        _gd-dotpsctr-xt _sgran-guard WITH-GUARD ;
+: GD.PITCH        _gd-dotpitch-xt _sgran-guard WITH-GUARD ;
+: GD.PTSCTR       _gd-dotptsctr-xt _sgran-guard WITH-GUARD ;
+: GD.ASCTR        _gd-dotasctr-xt _sgran-guard WITH-GUARD ;
+: GD.ENV          _gd-dotenv-xt _sgran-guard WITH-GUARD ;
+: GD.RATE         _gd-dotrate-xt _sgran-guard WITH-GUARD ;
+: GD.POOL         _gd-dotpool-xt _sgran-guard WITH-GUARD ;
+: GD.SCTR         _gd-dotsctr-xt _sgran-guard WITH-GUARD ;
+: GD.NENG         _gd-dotneng-xt _sgran-guard WITH-GUARD ;
+: GD.SPER         _gd-dotsper-xt _sgran-guard WITH-GUARD ;
+: GRAN-CREATE     _gran-create-xt _sgran-guard WITH-GUARD ;
+: GRAN-FREE       _gran-free-xt _sgran-guard WITH-GUARD ;
+: GRAN-SOURCE!    _gran-source-s-xt _sgran-guard WITH-GUARD ;
+: GRAN-GRAIN!     _gran-grain-s-xt _sgran-guard WITH-GUARD ;
+: GRAN-POSITION!  _gran-position-s-xt _sgran-guard WITH-GUARD ;
+: GRAN-PITCH!     _gran-pitch-s-xt _sgran-guard WITH-GUARD ;
+: GRAN-DENSITY!   _gran-density-s-xt _sgran-guard WITH-GUARD ;
+: GRAN-SCATTER!   _gran-scatter-s-xt _sgran-guard WITH-GUARD ;
+: GRAN-RENDER     _gran-render-xt _sgran-guard WITH-GUARD ;
+[THEN] [THEN]

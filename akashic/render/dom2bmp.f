@@ -148,3 +148,15 @@ VARIABLE _D2B-STC    \ current style node
     \ 6. Clean up surface
     _D2B-SURF @ SURF-DESTROY
 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _d2b-guard
+
+' DOM2BMP-SIZE    CONSTANT _dom2bmp-size-xt
+' DOM2BMP-RENDER  CONSTANT _dom2bmp-render-xt
+
+: DOM2BMP-SIZE    _dom2bmp-size-xt _d2b-guard WITH-GUARD ;
+: DOM2BMP-RENDER  _dom2bmp-render-xt _d2b-guard WITH-GUARD ;
+[THEN] [THEN]

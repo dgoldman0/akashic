@@ -139,6 +139,7 @@ VARIABLE _LC-SL-LEAF
 \  We need our own guard to ensure atomicity of the whole sequence:
 \  rebuild + prove must not interleave with state mutations.
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _lc-guard
 
@@ -153,6 +154,7 @@ GUARD _lc-guard
 : LC-VERIFY-STATE  _lc-vs-xt   _lc-guard WITH-GUARD ;
 : LC-STATE-ROOT-AT _lc-sra-xt  _lc-guard WITH-GUARD ;
 : LC-BLOCK-HEADER  _lc-bh-xt   _lc-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =================================================================
 \  Done.

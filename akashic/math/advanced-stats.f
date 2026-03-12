@@ -581,6 +581,7 @@ VARIABLE _AN-NTOT               \ total N
     LOOP ;
 
 \ ── Concurrency Guard ───────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _advs-guard
 
@@ -607,3 +608,4 @@ GUARD _advs-guard
 : ADVS-ANOVA-1        _advs-anova-xt  _advs-guard WITH-GUARD ;
 : ADVS-BONFERRONI     _advs-bonf-xt   _advs-guard WITH-GUARD ;
 : ADVS-HOLM           _advs-holm-xt   _advs-guard WITH-GUARD ;
+[THEN] [THEN]

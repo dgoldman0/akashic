@@ -205,3 +205,31 @@ VARIABLE _CB-M       \ modulus
     SWAP COMB-LOG-FACTORIAL          \ -- ln[n!] ln[n-k!] ln[k!]
     FP16-ADD                         \ -- ln[n!] sum
     FP16-SUB ;                       \ -- result
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _comb-guard
+
+' COMB-FACTORIAL  CONSTANT _comb-factorial-xt
+' COMB-PERMUTE    CONSTANT _comb-permute-xt
+' COMB-CHOOSE     CONSTANT _comb-choose-xt
+' COMB-GCD        CONSTANT _comb-gcd-xt
+' COMB-LCM        CONSTANT _comb-lcm-xt
+' COMB-POWER-MOD  CONSTANT _comb-power-mod-xt
+' COMB-IS-PRIME?  CONSTANT _comb-is-prime-q-xt
+' COMB-NEXT-PRIME CONSTANT _comb-next-prime-xt
+' COMB-LOG-FACTORIAL CONSTANT _comb-log-factorial-xt
+' COMB-LOG-CHOOSE CONSTANT _comb-log-choose-xt
+
+: COMB-FACTORIAL  _comb-factorial-xt _comb-guard WITH-GUARD ;
+: COMB-PERMUTE    _comb-permute-xt _comb-guard WITH-GUARD ;
+: COMB-CHOOSE     _comb-choose-xt _comb-guard WITH-GUARD ;
+: COMB-GCD        _comb-gcd-xt _comb-guard WITH-GUARD ;
+: COMB-LCM        _comb-lcm-xt _comb-guard WITH-GUARD ;
+: COMB-POWER-MOD  _comb-power-mod-xt _comb-guard WITH-GUARD ;
+: COMB-IS-PRIME?  _comb-is-prime-q-xt _comb-guard WITH-GUARD ;
+: COMB-NEXT-PRIME _comb-next-prime-xt _comb-guard WITH-GUARD ;
+: COMB-LOG-FACTORIAL _comb-log-factorial-xt _comb-guard WITH-GUARD ;
+: COMB-LOG-CHOOSE _comb-log-choose-xt _comb-guard WITH-GUARD ;
+[THEN] [THEN]

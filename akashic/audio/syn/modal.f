@@ -856,3 +856,49 @@ VARIABLE _MD-STI-LEN
         _MD-STI-DPTR @ I 2* + W!
     LOOP
     PCM-FREE ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _smodl-guard
+
+' MD.N            CONSTANT _md-dotn-xt
+' MD.FUND         CONSTANT _md-dotfund-xt
+' MD.BRI          CONSTANT _md-dotbri-xt
+' MD.DAMP         CONSTANT _md-dotdamp-xt
+' MD.NMS          CONSTANT _md-dotnms-xt
+' MD.NBW          CONSTANT _md-dotnbw-xt
+' MD.RATE         CONSTANT _md-dotrate-xt
+' MD.PDATA        CONSTANT _md-dotpdata-xt
+' MODAL-CREATE    CONSTANT _modal-create-xt
+' MODAL-FREE      CONSTANT _modal-free-xt
+' MODAL-FUND!     CONSTANT _modal-fund-s-xt
+' MODAL-BRIGHTNESS! CONSTANT _modal-brightness-s-xt
+' MODAL-DAMPING!  CONSTANT _modal-damping-s-xt
+' MODAL-NOISE!    CONSTANT _modal-noise-s-xt
+' MODAL-PARTIAL!  CONSTANT _modal-partial-s-xt
+' MODAL-LOAD-TABLE CONSTANT _modal-load-table-xt
+' MODAL-DURATION  CONSTANT _modal-duration-xt
+' MODAL-STRIKE    CONSTANT _modal-strike-xt
+' MODAL-STRIKE-INTO CONSTANT _modal-strike-into-xt
+
+: MD.N            _md-dotn-xt _smodl-guard WITH-GUARD ;
+: MD.FUND         _md-dotfund-xt _smodl-guard WITH-GUARD ;
+: MD.BRI          _md-dotbri-xt _smodl-guard WITH-GUARD ;
+: MD.DAMP         _md-dotdamp-xt _smodl-guard WITH-GUARD ;
+: MD.NMS          _md-dotnms-xt _smodl-guard WITH-GUARD ;
+: MD.NBW          _md-dotnbw-xt _smodl-guard WITH-GUARD ;
+: MD.RATE         _md-dotrate-xt _smodl-guard WITH-GUARD ;
+: MD.PDATA        _md-dotpdata-xt _smodl-guard WITH-GUARD ;
+: MODAL-CREATE    _modal-create-xt _smodl-guard WITH-GUARD ;
+: MODAL-FREE      _modal-free-xt _smodl-guard WITH-GUARD ;
+: MODAL-FUND!     _modal-fund-s-xt _smodl-guard WITH-GUARD ;
+: MODAL-BRIGHTNESS! _modal-brightness-s-xt _smodl-guard WITH-GUARD ;
+: MODAL-DAMPING!  _modal-damping-s-xt _smodl-guard WITH-GUARD ;
+: MODAL-NOISE!    _modal-noise-s-xt _smodl-guard WITH-GUARD ;
+: MODAL-PARTIAL!  _modal-partial-s-xt _smodl-guard WITH-GUARD ;
+: MODAL-LOAD-TABLE _modal-load-table-xt _smodl-guard WITH-GUARD ;
+: MODAL-DURATION  _modal-duration-xt _smodl-guard WITH-GUARD ;
+: MODAL-STRIKE    _modal-strike-xt _smodl-guard WITH-GUARD ;
+: MODAL-STRIKE-INTO _modal-strike-into-xt _smodl-guard WITH-GUARD ;
+[THEN] [THEN]

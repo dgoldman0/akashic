@@ -305,3 +305,41 @@ VARIABLE _PL-ONE-DESC
 
     \ Free voice
     _PL-ONE-DESC @ PLUCK-FREE ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _pluck-guard
+
+' PL.DATA         CONSTANT _pl-dotdata-xt
+' PL.LEN          CONSTANT _pl-dotlen-xt
+' PL.WPTR         CONSTANT _pl-dotwptr-xt
+' PL.RATE         CONSTANT _pl-dotrate-xt
+' PL.FREQ         CONSTANT _pl-dotfreq-xt
+' PL.DECAY        CONSTANT _pl-dotdecay-xt
+' PL.BUF          CONSTANT _pl-dotbuf-xt
+' PLUCK-CREATE    CONSTANT _pluck-create-xt
+' PLUCK-FREE      CONSTANT _pluck-free-xt
+' PLUCK-EXCITE    CONSTANT _pluck-excite-xt
+' PLUCK-DECAY!    CONSTANT _pluck-decay-s-xt
+' PLUCK-FREQ      CONSTANT _pluck-freq-xt
+' PLUCK-LEN       CONSTANT _pluck-len-xt
+' PLUCK-RENDER    CONSTANT _pluck-render-xt
+' PLUCK           CONSTANT _pluck-xt
+
+: PL.DATA         _pl-dotdata-xt _pluck-guard WITH-GUARD ;
+: PL.LEN          _pl-dotlen-xt _pluck-guard WITH-GUARD ;
+: PL.WPTR         _pl-dotwptr-xt _pluck-guard WITH-GUARD ;
+: PL.RATE         _pl-dotrate-xt _pluck-guard WITH-GUARD ;
+: PL.FREQ         _pl-dotfreq-xt _pluck-guard WITH-GUARD ;
+: PL.DECAY        _pl-dotdecay-xt _pluck-guard WITH-GUARD ;
+: PL.BUF          _pl-dotbuf-xt _pluck-guard WITH-GUARD ;
+: PLUCK-CREATE    _pluck-create-xt _pluck-guard WITH-GUARD ;
+: PLUCK-FREE      _pluck-free-xt _pluck-guard WITH-GUARD ;
+: PLUCK-EXCITE    _pluck-excite-xt _pluck-guard WITH-GUARD ;
+: PLUCK-DECAY!    _pluck-decay-s-xt _pluck-guard WITH-GUARD ;
+: PLUCK-FREQ      _pluck-freq-xt _pluck-guard WITH-GUARD ;
+: PLUCK-LEN       _pluck-len-xt _pluck-guard WITH-GUARD ;
+: PLUCK-RENDER    _pluck-render-xt _pluck-guard WITH-GUARD ;
+: PLUCK           _pluck-xt _pluck-guard WITH-GUARD ;
+[THEN] [THEN]

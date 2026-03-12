@@ -285,3 +285,41 @@ VARIABLE _XF-EXP
     _XF-EXP @ 10 LSHIFT OR            ( fp16_unsigned )
     _XF-SIGN @ IF 0x8000 OR THEN
     0xFFFF AND ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _fp16e-guard
+
+' FP16-LT         CONSTANT _fp16-lt-xt
+' FP16-GT         CONSTANT _fp16-gt-xt
+' FP16-LE         CONSTANT _fp16-le-xt
+' FP16-GE         CONSTANT _fp16-ge-xt
+' FP16-EQ         CONSTANT _fp16-eq-xt
+' FP16-LERP       CONSTANT _fp16-lerp-xt
+' FP16-CLAMP      CONSTANT _fp16-clamp-xt
+' FP16-RECIP      CONSTANT _fp16-recip-xt
+' FP16-DIV        CONSTANT _fp16-div-xt
+' FP16-SQRT       CONSTANT _fp16-sqrt-xt
+' FP16-FLOOR      CONSTANT _fp16-floor-xt
+' FP16-FRAC       CONSTANT _fp16-frac-xt
+' FP16-ROUND      CONSTANT _fp16-round-xt
+' FP16>FX         CONSTANT _fp16-to-fx-xt
+' FX>FP16         CONSTANT _fx-to-fp16-xt
+
+: FP16-LT         _fp16-lt-xt _fp16e-guard WITH-GUARD ;
+: FP16-GT         _fp16-gt-xt _fp16e-guard WITH-GUARD ;
+: FP16-LE         _fp16-le-xt _fp16e-guard WITH-GUARD ;
+: FP16-GE         _fp16-ge-xt _fp16e-guard WITH-GUARD ;
+: FP16-EQ         _fp16-eq-xt _fp16e-guard WITH-GUARD ;
+: FP16-LERP       _fp16-lerp-xt _fp16e-guard WITH-GUARD ;
+: FP16-CLAMP      _fp16-clamp-xt _fp16e-guard WITH-GUARD ;
+: FP16-RECIP      _fp16-recip-xt _fp16e-guard WITH-GUARD ;
+: FP16-DIV        _fp16-div-xt _fp16e-guard WITH-GUARD ;
+: FP16-SQRT       _fp16-sqrt-xt _fp16e-guard WITH-GUARD ;
+: FP16-FLOOR      _fp16-floor-xt _fp16e-guard WITH-GUARD ;
+: FP16-FRAC       _fp16-frac-xt _fp16e-guard WITH-GUARD ;
+: FP16-ROUND      _fp16-round-xt _fp16e-guard WITH-GUARD ;
+: FP16>FX         _fp16-to-fx-xt _fp16e-guard WITH-GUARD ;
+: FX>FP16         _fx-to-fp16-xt _fp16e-guard WITH-GUARD ;
+[THEN] [THEN]

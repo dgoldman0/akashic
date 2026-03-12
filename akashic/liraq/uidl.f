@@ -980,3 +980,141 @@ VARIABLE _UDL-BWE   \ bind-write element
         >R >R DROP R> R> -1 EXIT
     THEN 2DROP
     DROP 0 0 0 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _uidl-guard
+
+' UIDL-ERR        CONSTANT _uidl-err-xt
+' UE.TYPE         CONSTANT _ue-dottype-xt
+' UE.FLAGS        CONSTANT _ue-dotflags-xt
+' UE.PARENT       CONSTANT _ue-dotparent-xt
+' UE.NEXT         CONSTANT _ue-dotnext-xt
+' UE.PREV         CONSTANT _ue-dotprev-xt
+' UE.FCHILD       CONSTANT _ue-dotfchild-xt
+' UE.LCHILD       CONSTANT _ue-dotlchild-xt
+' UE.NCHILD       CONSTANT _ue-dotnchild-xt
+' UE.ID-A         CONSTANT _ue-dotid-a-xt
+' UE.ID-L         CONSTANT _ue-dotid-l-xt
+' UE.ROLE-A       CONSTANT _ue-dotrole-a-xt
+' UE.ROLE-L       CONSTANT _ue-dotrole-l-xt
+' UE.ARRANGE      CONSTANT _ue-dotarrange-xt
+' UE.ATTR         CONSTANT _ue-dotattr-xt
+' UE.BIND-A       CONSTANT _ue-dotbind-a-xt
+' UE.BIND-L       CONSTANT _ue-dotbind-l-xt
+' UA.NEXT         CONSTANT _ua-dotnext-xt
+' UA.NAME-A       CONSTANT _ua-dotname-a-xt
+' UA.NAME-L       CONSTANT _ua-dotname-l-xt
+' UA.VAL-A        CONSTANT _ua-dotval-a-xt
+' UA.VAL-L        CONSTANT _ua-dotval-l-xt
+' UIDL-RESET      CONSTANT _uidl-reset-xt
+' UIDL-TYPE-NAME  CONSTANT _uidl-type-name-xt
+' UIDL-PARSE      CONSTANT _uidl-parse-xt
+' UIDL-ROOT       CONSTANT _uidl-root-xt
+' UIDL-ELEM-COUNT CONSTANT _uidl-elem-count-xt
+' UIDL-TYPE       CONSTANT _uidl-type-xt
+' UIDL-ID         CONSTANT _uidl-id-xt
+' UIDL-ROLE       CONSTANT _uidl-role-xt
+' UIDL-ARRANGE    CONSTANT _uidl-arrange-xt
+' UIDL-FLAGS      CONSTANT _uidl-flags-xt
+' UIDL-PARENT     CONSTANT _uidl-parent-xt
+' UIDL-FIRST-CHILD CONSTANT _uidl-first-child-xt
+' UIDL-LAST-CHILD CONSTANT _uidl-last-child-xt
+' UIDL-NEXT-SIB   CONSTANT _uidl-next-sib-xt
+' UIDL-PREV-SIB   CONSTANT _uidl-prev-sib-xt
+' UIDL-NCHILDREN  CONSTANT _uidl-nchildren-xt
+' UIDL-BIND       CONSTANT _uidl-bind-xt
+' UIDL-WHEN       CONSTANT _uidl-when-xt
+' UIDL-ATTR       CONSTANT _uidl-attr-xt
+' UIDL-ATTR-FIRST CONSTANT _uidl-attr-first-xt
+' UIDL-ATTR-NEXT  CONSTANT _uidl-attr-next-xt
+' UIDL-ATTR-NAME  CONSTANT _uidl-attr-name-xt
+' UIDL-ATTR-VAL   CONSTANT _uidl-attr-val-xt
+' UIDL-BY-ID      CONSTANT _uidl-by-id-xt
+' UIDL-BIND-EVAL  CONSTANT _uidl-bind-eval-xt
+' UIDL-EVAL-WHEN  CONSTANT _uidl-eval-when-xt
+' UIDL-TEMPLATE   CONSTANT _uidl-template-xt
+' UIDL-EMPTY-CHILD CONSTANT _uidl-empty-child-xt
+' UIDL-REP-COUNT  CONSTANT _uidl-rep-count-xt
+' UIDL-REP-BY-MOD CONSTANT _uidl-rep-by-mod-xt
+' UIDL-ERROR-COUNT CONSTANT _uidl-error-count-xt
+' UIDL-ERRORS-CLEAR CONSTANT _uidl-errors-clear-xt
+' UIDL-ERROR-NTH  CONSTANT _uidl-error-nth-xt
+' UIDL-VALIDATE   CONSTANT _uidl-validate-xt
+' UIDL-ADD-ELEM   CONSTANT _uidl-add-elem-xt
+' UIDL-REMOVE-ELEM CONSTANT _uidl-remove-elem-xt
+' UIDL-SET-ATTR   CONSTANT _uidl-set-attr-xt
+' UIDL-REMOVE-ATTR CONSTANT _uidl-remove-attr-xt
+' UIDL-MOVE-ELEM  CONSTANT _uidl-move-elem-xt
+' UIDL-BIND-WRITE CONSTANT _uidl-bind-write-xt
+' UIDL-DISPATCH   CONSTANT _uidl-dispatch-xt
+' UIDL-HAS-ACTION? CONSTANT _uidl-has-action-q-xt
+' UIDL-ACTION-VALUE CONSTANT _uidl-action-value-xt
+
+: UIDL-ERR        _uidl-err-xt _uidl-guard WITH-GUARD ;
+: UE.TYPE         _ue-dottype-xt _uidl-guard WITH-GUARD ;
+: UE.FLAGS        _ue-dotflags-xt _uidl-guard WITH-GUARD ;
+: UE.PARENT       _ue-dotparent-xt _uidl-guard WITH-GUARD ;
+: UE.NEXT         _ue-dotnext-xt _uidl-guard WITH-GUARD ;
+: UE.PREV         _ue-dotprev-xt _uidl-guard WITH-GUARD ;
+: UE.FCHILD       _ue-dotfchild-xt _uidl-guard WITH-GUARD ;
+: UE.LCHILD       _ue-dotlchild-xt _uidl-guard WITH-GUARD ;
+: UE.NCHILD       _ue-dotnchild-xt _uidl-guard WITH-GUARD ;
+: UE.ID-A         _ue-dotid-a-xt _uidl-guard WITH-GUARD ;
+: UE.ID-L         _ue-dotid-l-xt _uidl-guard WITH-GUARD ;
+: UE.ROLE-A       _ue-dotrole-a-xt _uidl-guard WITH-GUARD ;
+: UE.ROLE-L       _ue-dotrole-l-xt _uidl-guard WITH-GUARD ;
+: UE.ARRANGE      _ue-dotarrange-xt _uidl-guard WITH-GUARD ;
+: UE.ATTR         _ue-dotattr-xt _uidl-guard WITH-GUARD ;
+: UE.BIND-A       _ue-dotbind-a-xt _uidl-guard WITH-GUARD ;
+: UE.BIND-L       _ue-dotbind-l-xt _uidl-guard WITH-GUARD ;
+: UA.NEXT         _ua-dotnext-xt _uidl-guard WITH-GUARD ;
+: UA.NAME-A       _ua-dotname-a-xt _uidl-guard WITH-GUARD ;
+: UA.NAME-L       _ua-dotname-l-xt _uidl-guard WITH-GUARD ;
+: UA.VAL-A        _ua-dotval-a-xt _uidl-guard WITH-GUARD ;
+: UA.VAL-L        _ua-dotval-l-xt _uidl-guard WITH-GUARD ;
+: UIDL-RESET      _uidl-reset-xt _uidl-guard WITH-GUARD ;
+: UIDL-TYPE-NAME  _uidl-type-name-xt _uidl-guard WITH-GUARD ;
+: UIDL-PARSE      _uidl-parse-xt _uidl-guard WITH-GUARD ;
+: UIDL-ROOT       _uidl-root-xt _uidl-guard WITH-GUARD ;
+: UIDL-ELEM-COUNT _uidl-elem-count-xt _uidl-guard WITH-GUARD ;
+: UIDL-TYPE       _uidl-type-xt _uidl-guard WITH-GUARD ;
+: UIDL-ID         _uidl-id-xt _uidl-guard WITH-GUARD ;
+: UIDL-ROLE       _uidl-role-xt _uidl-guard WITH-GUARD ;
+: UIDL-ARRANGE    _uidl-arrange-xt _uidl-guard WITH-GUARD ;
+: UIDL-FLAGS      _uidl-flags-xt _uidl-guard WITH-GUARD ;
+: UIDL-PARENT     _uidl-parent-xt _uidl-guard WITH-GUARD ;
+: UIDL-FIRST-CHILD _uidl-first-child-xt _uidl-guard WITH-GUARD ;
+: UIDL-LAST-CHILD _uidl-last-child-xt _uidl-guard WITH-GUARD ;
+: UIDL-NEXT-SIB   _uidl-next-sib-xt _uidl-guard WITH-GUARD ;
+: UIDL-PREV-SIB   _uidl-prev-sib-xt _uidl-guard WITH-GUARD ;
+: UIDL-NCHILDREN  _uidl-nchildren-xt _uidl-guard WITH-GUARD ;
+: UIDL-BIND       _uidl-bind-xt _uidl-guard WITH-GUARD ;
+: UIDL-WHEN       _uidl-when-xt _uidl-guard WITH-GUARD ;
+: UIDL-ATTR       _uidl-attr-xt _uidl-guard WITH-GUARD ;
+: UIDL-ATTR-FIRST _uidl-attr-first-xt _uidl-guard WITH-GUARD ;
+: UIDL-ATTR-NEXT  _uidl-attr-next-xt _uidl-guard WITH-GUARD ;
+: UIDL-ATTR-NAME  _uidl-attr-name-xt _uidl-guard WITH-GUARD ;
+: UIDL-ATTR-VAL   _uidl-attr-val-xt _uidl-guard WITH-GUARD ;
+: UIDL-BY-ID      _uidl-by-id-xt _uidl-guard WITH-GUARD ;
+: UIDL-BIND-EVAL  _uidl-bind-eval-xt _uidl-guard WITH-GUARD ;
+: UIDL-EVAL-WHEN  _uidl-eval-when-xt _uidl-guard WITH-GUARD ;
+: UIDL-TEMPLATE   _uidl-template-xt _uidl-guard WITH-GUARD ;
+: UIDL-EMPTY-CHILD _uidl-empty-child-xt _uidl-guard WITH-GUARD ;
+: UIDL-REP-COUNT  _uidl-rep-count-xt _uidl-guard WITH-GUARD ;
+: UIDL-REP-BY-MOD _uidl-rep-by-mod-xt _uidl-guard WITH-GUARD ;
+: UIDL-ERROR-COUNT _uidl-error-count-xt _uidl-guard WITH-GUARD ;
+: UIDL-ERRORS-CLEAR _uidl-errors-clear-xt _uidl-guard WITH-GUARD ;
+: UIDL-ERROR-NTH  _uidl-error-nth-xt _uidl-guard WITH-GUARD ;
+: UIDL-VALIDATE   _uidl-validate-xt _uidl-guard WITH-GUARD ;
+: UIDL-ADD-ELEM   _uidl-add-elem-xt _uidl-guard WITH-GUARD ;
+: UIDL-REMOVE-ELEM _uidl-remove-elem-xt _uidl-guard WITH-GUARD ;
+: UIDL-SET-ATTR   _uidl-set-attr-xt _uidl-guard WITH-GUARD ;
+: UIDL-REMOVE-ATTR _uidl-remove-attr-xt _uidl-guard WITH-GUARD ;
+: UIDL-MOVE-ELEM  _uidl-move-elem-xt _uidl-guard WITH-GUARD ;
+: UIDL-BIND-WRITE _uidl-bind-write-xt _uidl-guard WITH-GUARD ;
+: UIDL-DISPATCH   _uidl-dispatch-xt _uidl-guard WITH-GUARD ;
+: UIDL-HAS-ACTION? _uidl-has-action-q-xt _uidl-guard WITH-GUARD ;
+: UIDL-ACTION-VALUE _uidl-action-value-xt _uidl-guard WITH-GUARD ;
+[THEN] [THEN]

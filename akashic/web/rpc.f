@@ -532,6 +532,7 @@ VARIABLE _RPC-RATE-LAST                \ epoch-seconds of last refill
 \  12. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _rpc-guard
 
@@ -540,6 +541,7 @@ GUARD _rpc-guard
 
 : RPC-INIT      _rpc-init-xt  _rpc-guard WITH-GUARD ;
 : RPC-DISPATCH  _rpc-disp-xt  _rpc-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =================================================================
 \  Done.

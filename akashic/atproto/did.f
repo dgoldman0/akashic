@@ -74,3 +74,15 @@ VARIABLE _DM-I
             _DM-LEN @ 4 - -1     \ no colon — rest is method
         THEN
     UNTIL ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _did-guard
+
+' DID-VALID?      CONSTANT _did-valid-q-xt
+' DID-METHOD      CONSTANT _did-method-xt
+
+: DID-VALID?      _did-valid-q-xt _did-guard WITH-GUARD ;
+: DID-METHOD      _did-method-xt _did-guard WITH-GUARD ;
+[THEN] [THEN]

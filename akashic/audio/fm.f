@@ -596,3 +596,59 @@ VARIABLE _FM-BK-DST      \ output PCM data pointer
     LOOP
 
     _FM-BUF @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _fm-guard
+
+' FO.RATIO        CONSTANT _fo-dotratio-xt
+' FO.INDEX        CONSTANT _fo-dotindex-xt
+' FO.LEVEL        CONSTANT _fo-dotlevel-xt
+' FO.ENV          CONSTANT _fo-dotenv-xt
+' FO.PHASE        CONSTANT _fo-dotphase-xt
+' FO.FREQ         CONSTANT _fo-dotfreq-xt
+' FM.NOPS         CONSTANT _fm-dotnops-xt
+' FM.ALGO         CONSTANT _fm-dotalgo-xt
+' FM.FB           CONSTANT _fm-dotfb-xt
+' FM.OPS          CONSTANT _fm-dotops-xt
+' FM.BUF          CONSTANT _fm-dotbuf-xt
+' FM.RATE         CONSTANT _fm-dotrate-xt
+' FM.FBPREV       CONSTANT _fm-dotfbprev-xt
+' FM-CREATE       CONSTANT _fm-create-xt
+' FM-FREE         CONSTANT _fm-free-xt
+' FM-RATIO!       CONSTANT _fm-ratio-s-xt
+' FM-INDEX!       CONSTANT _fm-index-s-xt
+' FM-LEVEL!       CONSTANT _fm-level-s-xt
+' FM-ALGO!        CONSTANT _fm-algo-s-xt
+' FM-FEEDBACK!    CONSTANT _fm-feedback-s-xt
+' FM-ENV!         CONSTANT _fm-env-s-xt
+' FM-NOTE-ON      CONSTANT _fm-note-on-xt
+' FM-NOTE-OFF     CONSTANT _fm-note-off-xt
+' FM-RENDER       CONSTANT _fm-render-xt
+
+: FO.RATIO        _fo-dotratio-xt _fm-guard WITH-GUARD ;
+: FO.INDEX        _fo-dotindex-xt _fm-guard WITH-GUARD ;
+: FO.LEVEL        _fo-dotlevel-xt _fm-guard WITH-GUARD ;
+: FO.ENV          _fo-dotenv-xt _fm-guard WITH-GUARD ;
+: FO.PHASE        _fo-dotphase-xt _fm-guard WITH-GUARD ;
+: FO.FREQ         _fo-dotfreq-xt _fm-guard WITH-GUARD ;
+: FM.NOPS         _fm-dotnops-xt _fm-guard WITH-GUARD ;
+: FM.ALGO         _fm-dotalgo-xt _fm-guard WITH-GUARD ;
+: FM.FB           _fm-dotfb-xt _fm-guard WITH-GUARD ;
+: FM.OPS          _fm-dotops-xt _fm-guard WITH-GUARD ;
+: FM.BUF          _fm-dotbuf-xt _fm-guard WITH-GUARD ;
+: FM.RATE         _fm-dotrate-xt _fm-guard WITH-GUARD ;
+: FM.FBPREV       _fm-dotfbprev-xt _fm-guard WITH-GUARD ;
+: FM-CREATE       _fm-create-xt _fm-guard WITH-GUARD ;
+: FM-FREE         _fm-free-xt _fm-guard WITH-GUARD ;
+: FM-RATIO!       _fm-ratio-s-xt _fm-guard WITH-GUARD ;
+: FM-INDEX!       _fm-index-s-xt _fm-guard WITH-GUARD ;
+: FM-LEVEL!       _fm-level-s-xt _fm-guard WITH-GUARD ;
+: FM-ALGO!        _fm-algo-s-xt _fm-guard WITH-GUARD ;
+: FM-FEEDBACK!    _fm-feedback-s-xt _fm-guard WITH-GUARD ;
+: FM-ENV!         _fm-env-s-xt _fm-guard WITH-GUARD ;
+: FM-NOTE-ON      _fm-note-on-xt _fm-guard WITH-GUARD ;
+: FM-NOTE-OFF     _fm-note-off-xt _fm-guard WITH-GUARD ;
+: FM-RENDER       _fm-render-xt _fm-guard WITH-GUARD ;
+[THEN] [THEN]

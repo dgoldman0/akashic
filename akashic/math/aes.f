@@ -222,6 +222,7 @@ VARIABLE _AES-VAAD   VARIABLE _AES-VAADL
     0= IF TRUE ELSE FALSE THEN ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _aes-guard
 
@@ -265,3 +266,5 @@ GUARD _aes-guard
     _aes-finish-xt CATCH
     _aes-guard GUARD-RELEASE
     ?DUP IF THROW THEN ;
+
+[THEN] [THEN]

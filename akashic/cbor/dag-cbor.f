@@ -107,3 +107,15 @@ VARIABLE _DCB-OK
         _DCB-CUR-L @ _DCB-PREV-L !
     LOOP
     _DCB-OK @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _dcbor-guard
+
+' DCBOR-CID       CONSTANT _dcbor-cid-xt
+' DCBOR-SORT-MAP  CONSTANT _dcbor-sort-map-xt
+
+: DCBOR-CID       _dcbor-cid-xt _dcbor-guard WITH-GUARD ;
+: DCBOR-SORT-MAP  _dcbor-sort-map-xt _dcbor-guard WITH-GUARD ;
+[THEN] [THEN]

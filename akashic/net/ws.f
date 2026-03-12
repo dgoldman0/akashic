@@ -11,7 +11,6 @@
 \ Load with:   REQUIRE ws.f
 
 REQUIRE http.f
-REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-websocket
 
@@ -569,6 +568,8 @@ VARIABLE _WR-FIRST-OP
 \ WebSocket operations so a background task cannot corrupt an active
 \ session.
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD-BLOCKING _wsc-guard
 
 ' WS-CONNECT     CONSTANT _wsc-conn-xt
@@ -587,3 +588,5 @@ GUARD-BLOCKING _wsc-guard
     _wsc-sbin-xt _wsc-guard WITH-GUARD ;
 : WS-RECV        ( ctx buf max -- opcode len )
     _wsc-recv-xt _wsc-guard WITH-GUARD ;
+
+[THEN] [THEN]

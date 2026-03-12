@@ -478,3 +478,17 @@ VARIABLE _QOI-B1          \ first byte of chunk
     \ Return surface
     _QOI-DST @
 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _qoi-guard
+
+' QOI-FILE-SIZE   CONSTANT _qoi-file-size-xt
+' QOI-ENCODE      CONSTANT _qoi-encode-xt
+' QOI-DECODE      CONSTANT _qoi-decode-xt
+
+: QOI-FILE-SIZE   _qoi-file-size-xt _qoi-guard WITH-GUARD ;
+: QOI-ENCODE      _qoi-encode-xt _qoi-guard WITH-GUARD ;
+: QOI-DECODE      _qoi-decode-xt _qoi-guard WITH-GUARD ;
+[THEN] [THEN]

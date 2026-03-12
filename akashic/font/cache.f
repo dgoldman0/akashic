@@ -181,3 +181,19 @@ VARIABLE _GC-ST-BMP   VARIABLE _GC-ST-SLOT
         DROP 2DROP
         GC-STORE
     THEN ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _fcache-guard
+
+' GC-FLUSH        CONSTANT _gc-flush-xt
+' GC-LOOKUP       CONSTANT _gc-lookup-xt
+' GC-STORE        CONSTANT _gc-store-xt
+' GC-GET          CONSTANT _gc-get-xt
+
+: GC-FLUSH        _gc-flush-xt _fcache-guard WITH-GUARD ;
+: GC-LOOKUP       _gc-lookup-xt _fcache-guard WITH-GUARD ;
+: GC-STORE        _gc-store-xt _fcache-guard WITH-GUARD ;
+: GC-GET          _gc-get-xt _fcache-guard WITH-GUARD ;
+[THEN] [THEN]

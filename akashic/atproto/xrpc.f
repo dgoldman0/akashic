@@ -143,3 +143,25 @@ XRPC-CLEAR-CURSOR
   2SWAP                                  ( url-a url-u body-a body-u )
   HTTP-POST-JSON                         ( resp-a resp-u )
   DUP 0= IF  HTTP-ERR @  ELSE  0  THEN ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _xrpc-guard
+
+' XRPC-SET-HOST   CONSTANT _xrpc-set-host-xt
+' XRPC-CLEAR-CURSOR CONSTANT _xrpc-clear-cursor-xt
+' XRPC-SET-CURSOR CONSTANT _xrpc-set-cursor-xt
+' XRPC-HAS-CURSOR? CONSTANT _xrpc-has-cursor-q-xt
+' XRPC-EXTRACT-CURSOR CONSTANT _xrpc-extract-cursor-xt
+' XRPC-QUERY      CONSTANT _xrpc-query-xt
+' XRPC-PROCEDURE  CONSTANT _xrpc-procedure-xt
+
+: XRPC-SET-HOST   _xrpc-set-host-xt _xrpc-guard WITH-GUARD ;
+: XRPC-CLEAR-CURSOR _xrpc-clear-cursor-xt _xrpc-guard WITH-GUARD ;
+: XRPC-SET-CURSOR _xrpc-set-cursor-xt _xrpc-guard WITH-GUARD ;
+: XRPC-HAS-CURSOR? _xrpc-has-cursor-q-xt _xrpc-guard WITH-GUARD ;
+: XRPC-EXTRACT-CURSOR _xrpc-extract-cursor-xt _xrpc-guard WITH-GUARD ;
+: XRPC-QUERY      _xrpc-query-xt _xrpc-guard WITH-GUARD ;
+: XRPC-PROCEDURE  _xrpc-procedure-xt _xrpc-guard WITH-GUARD ;
+[THEN] [THEN]

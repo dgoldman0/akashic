@@ -242,3 +242,29 @@ VARIABLE _WT-BA-INC
     DUP                        \ dst is both src1 and output
     _WT-BA-N @
     SIMD-ADD-N ;               \ phase' remains on stack
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _wt-guard
+
+' WT-ALLOC        CONSTANT _wt-alloc-xt
+' WT-FILL-SIN     CONSTANT _wt-fill-sin-xt
+' WT-LOOKUP       CONSTANT _wt-lookup-xt
+' WT-LERP         CONSTANT _wt-lerp-xt
+' WT-BLOCK-INC    CONSTANT _wt-block-inc-xt
+' WT-PH>INT       CONSTANT _wt-ph-to-int-xt
+' WT-INT>PH       CONSTANT _wt-int-to-ph-xt
+' WT-BLOCK-FILL   CONSTANT _wt-block-fill-xt
+' WT-BLOCK-ADD    CONSTANT _wt-block-add-xt
+
+: WT-ALLOC        _wt-alloc-xt _wt-guard WITH-GUARD ;
+: WT-FILL-SIN     _wt-fill-sin-xt _wt-guard WITH-GUARD ;
+: WT-LOOKUP       _wt-lookup-xt _wt-guard WITH-GUARD ;
+: WT-LERP         _wt-lerp-xt _wt-guard WITH-GUARD ;
+: WT-BLOCK-INC    _wt-block-inc-xt _wt-guard WITH-GUARD ;
+: WT-PH>INT       _wt-ph-to-int-xt _wt-guard WITH-GUARD ;
+: WT-INT>PH       _wt-int-to-ph-xt _wt-guard WITH-GUARD ;
+: WT-BLOCK-FILL   _wt-block-fill-xt _wt-guard WITH-GUARD ;
+: WT-BLOCK-ADD    _wt-block-add-xt _wt-guard WITH-GUARD ;
+[THEN] [THEN]

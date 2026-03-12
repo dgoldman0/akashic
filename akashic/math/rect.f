@@ -253,3 +253,27 @@ VARIABLE _RI-RX   VARIABLE _RI-RY
     _R-H1 @ FP16-ADD
     R> _RECT-H _RECT!
     ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _rect-guard
+
+' RECT-AREA       CONSTANT _rect-area-xt
+' RECT-EMPTY?     CONSTANT _rect-empty-q-xt
+' RECT-CENTER     CONSTANT _rect-center-xt
+' RECT-CONTAINS?  CONSTANT _rect-contains-q-xt
+' RECT-INTERSECT? CONSTANT _rect-intersect-q-xt
+' RECT-INTERSECT  CONSTANT _rect-intersect-xt
+' RECT-UNION      CONSTANT _rect-union-xt
+' RECT-EXPAND     CONSTANT _rect-expand-xt
+
+: RECT-AREA       _rect-area-xt _rect-guard WITH-GUARD ;
+: RECT-EMPTY?     _rect-empty-q-xt _rect-guard WITH-GUARD ;
+: RECT-CENTER     _rect-center-xt _rect-guard WITH-GUARD ;
+: RECT-CONTAINS?  _rect-contains-q-xt _rect-guard WITH-GUARD ;
+: RECT-INTERSECT? _rect-intersect-q-xt _rect-guard WITH-GUARD ;
+: RECT-INTERSECT  _rect-intersect-xt _rect-guard WITH-GUARD ;
+: RECT-UNION      _rect-union-xt _rect-guard WITH-GUARD ;
+: RECT-EXPAND     _rect-expand-xt _rect-guard WITH-GUARD ;
+[THEN] [THEN]

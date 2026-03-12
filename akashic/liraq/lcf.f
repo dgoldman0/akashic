@@ -683,3 +683,107 @@ VARIABLE _LOP-PL
     R> DROP
     DUP C@ DUP 0= IF 2DROP 0 0 0 EXIT THEN
     SWAP 1+ SWAP -1 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _lcf-guard
+
+' LCF-FAIL        CONSTANT _lcf-fail-xt
+' LCF-OK?         CONSTANT _lcf-ok-q-xt
+' LCF-CLEAR-ERR   CONSTANT _lcf-clear-err-xt
+' LCF-ACTION?     CONSTANT _lcf-action-q-xt
+' LCF-RESULT?     CONSTANT _lcf-result-q-xt
+' LCF-ACTION-TYPE CONSTANT _lcf-action-type-xt
+' LCF-ACTION-TYPE? CONSTANT _lcf-action-type-q-xt
+' LCF-RESULT-STATUS CONSTANT _lcf-result-status-xt
+' LCF-RESULT-OK?  CONSTANT _lcf-result-ok-q-xt
+' LCF-RESULT-ERROR CONSTANT _lcf-result-error-xt
+' LCF-RESULT-DETAIL CONSTANT _lcf-result-detail-xt
+' LCF-BATCH-NTH   CONSTANT _lcf-batch-nth-xt
+' LCF-BATCH-OP    CONSTANT _lcf-batch-op-xt
+' LCF-BATCH-COUNT CONSTANT _lcf-batch-count-xt
+' LCF-ACTION-KEY  CONSTANT _lcf-action-key-xt
+' LCF-ACTION-STRING CONSTANT _lcf-action-string-xt
+' LCF-QUERY-METHOD CONSTANT _lcf-query-method-xt
+' LCF-QUERY-PATH  CONSTANT _lcf-query-path-xt
+' LCF-ENTRY-STRING CONSTANT _lcf-entry-string-xt
+' LCF-CAP-VERSION CONSTANT _lcf-cap-version-xt
+' LCF-CAP-BOOL    CONSTANT _lcf-cap-bool-xt
+' LCF-CAP-INT     CONSTANT _lcf-cap-int-xt
+' LCF-VALID-KEY?  CONSTANT _lcf-valid-key-q-xt
+' LCF-VALIDATE    CONSTANT _lcf-validate-xt
+' LCF-W-INIT      CONSTANT _lcf-w-init-xt
+' LCF-W-LEN       CONSTANT _lcf-w-len-xt
+' LCF-W-STR       CONSTANT _lcf-w-str-xt
+' LCF-W-TABLE     CONSTANT _lcf-w-table-xt
+' LCF-W-ATABLE    CONSTANT _lcf-w-atable-xt
+' LCF-W-KV-STR    CONSTANT _lcf-w-kv-str-xt
+' LCF-W-KV-INT    CONSTANT _lcf-w-kv-int-xt
+' LCF-W-KV-BOOL   CONSTANT _lcf-w-kv-bool-xt
+' LCF-W-NL        CONSTANT _lcf-w-nl-xt
+' LCF-W-OK        CONSTANT _lcf-w-ok-xt
+' LCF-W-ERROR     CONSTANT _lcf-w-error-xt
+' LCF-W-VALUE-RESULT CONSTANT _lcf-w-value-result-xt
+' LCF-W-INT-RESULT CONSTANT _lcf-w-int-result-xt
+' LCF-NOTIFICATION? CONSTANT _lcf-notification-q-xt
+' LCF-NOTIFY-TYPE CONSTANT _lcf-notify-type-xt
+' LCF-NOTIFY-PATH CONSTANT _lcf-notify-path-xt
+' LCF-NOTIFY-VALUE CONSTANT _lcf-notify-value-xt
+' LCF-W-NOTIFICATION CONSTANT _lcf-w-notification-xt
+' LCF-VALIDATE    CONSTANT _lcf-validate-xt
+' LCF-W-HANDSHAKE CONSTANT _lcf-w-handshake-xt
+' LCF-HANDSHAKE?  CONSTANT _lcf-handshake-q-xt
+' LCF-SESSION-ID  CONSTANT _lcf-session-id-xt
+' LCF-OP-VALID?   CONSTANT _lcf-op-valid-q-xt
+' LCF-OP-NTH      CONSTANT _lcf-op-nth-xt
+
+: LCF-FAIL        _lcf-fail-xt _lcf-guard WITH-GUARD ;
+: LCF-OK?         _lcf-ok-q-xt _lcf-guard WITH-GUARD ;
+: LCF-CLEAR-ERR   _lcf-clear-err-xt _lcf-guard WITH-GUARD ;
+: LCF-ACTION?     _lcf-action-q-xt _lcf-guard WITH-GUARD ;
+: LCF-RESULT?     _lcf-result-q-xt _lcf-guard WITH-GUARD ;
+: LCF-ACTION-TYPE _lcf-action-type-xt _lcf-guard WITH-GUARD ;
+: LCF-ACTION-TYPE? _lcf-action-type-q-xt _lcf-guard WITH-GUARD ;
+: LCF-RESULT-STATUS _lcf-result-status-xt _lcf-guard WITH-GUARD ;
+: LCF-RESULT-OK?  _lcf-result-ok-q-xt _lcf-guard WITH-GUARD ;
+: LCF-RESULT-ERROR _lcf-result-error-xt _lcf-guard WITH-GUARD ;
+: LCF-RESULT-DETAIL _lcf-result-detail-xt _lcf-guard WITH-GUARD ;
+: LCF-BATCH-NTH   _lcf-batch-nth-xt _lcf-guard WITH-GUARD ;
+: LCF-BATCH-OP    _lcf-batch-op-xt _lcf-guard WITH-GUARD ;
+: LCF-BATCH-COUNT _lcf-batch-count-xt _lcf-guard WITH-GUARD ;
+: LCF-ACTION-KEY  _lcf-action-key-xt _lcf-guard WITH-GUARD ;
+: LCF-ACTION-STRING _lcf-action-string-xt _lcf-guard WITH-GUARD ;
+: LCF-QUERY-METHOD _lcf-query-method-xt _lcf-guard WITH-GUARD ;
+: LCF-QUERY-PATH  _lcf-query-path-xt _lcf-guard WITH-GUARD ;
+: LCF-ENTRY-STRING _lcf-entry-string-xt _lcf-guard WITH-GUARD ;
+: LCF-CAP-VERSION _lcf-cap-version-xt _lcf-guard WITH-GUARD ;
+: LCF-CAP-BOOL    _lcf-cap-bool-xt _lcf-guard WITH-GUARD ;
+: LCF-CAP-INT     _lcf-cap-int-xt _lcf-guard WITH-GUARD ;
+: LCF-VALID-KEY?  _lcf-valid-key-q-xt _lcf-guard WITH-GUARD ;
+: LCF-VALIDATE    _lcf-validate-xt _lcf-guard WITH-GUARD ;
+: LCF-W-INIT      _lcf-w-init-xt _lcf-guard WITH-GUARD ;
+: LCF-W-LEN       _lcf-w-len-xt _lcf-guard WITH-GUARD ;
+: LCF-W-STR       _lcf-w-str-xt _lcf-guard WITH-GUARD ;
+: LCF-W-TABLE     _lcf-w-table-xt _lcf-guard WITH-GUARD ;
+: LCF-W-ATABLE    _lcf-w-atable-xt _lcf-guard WITH-GUARD ;
+: LCF-W-KV-STR    _lcf-w-kv-str-xt _lcf-guard WITH-GUARD ;
+: LCF-W-KV-INT    _lcf-w-kv-int-xt _lcf-guard WITH-GUARD ;
+: LCF-W-KV-BOOL   _lcf-w-kv-bool-xt _lcf-guard WITH-GUARD ;
+: LCF-W-NL        _lcf-w-nl-xt _lcf-guard WITH-GUARD ;
+: LCF-W-OK        _lcf-w-ok-xt _lcf-guard WITH-GUARD ;
+: LCF-W-ERROR     _lcf-w-error-xt _lcf-guard WITH-GUARD ;
+: LCF-W-VALUE-RESULT _lcf-w-value-result-xt _lcf-guard WITH-GUARD ;
+: LCF-W-INT-RESULT _lcf-w-int-result-xt _lcf-guard WITH-GUARD ;
+: LCF-NOTIFICATION? _lcf-notification-q-xt _lcf-guard WITH-GUARD ;
+: LCF-NOTIFY-TYPE _lcf-notify-type-xt _lcf-guard WITH-GUARD ;
+: LCF-NOTIFY-PATH _lcf-notify-path-xt _lcf-guard WITH-GUARD ;
+: LCF-NOTIFY-VALUE _lcf-notify-value-xt _lcf-guard WITH-GUARD ;
+: LCF-W-NOTIFICATION _lcf-w-notification-xt _lcf-guard WITH-GUARD ;
+: LCF-VALIDATE    _lcf-validate-xt _lcf-guard WITH-GUARD ;
+: LCF-W-HANDSHAKE _lcf-w-handshake-xt _lcf-guard WITH-GUARD ;
+: LCF-HANDSHAKE?  _lcf-handshake-q-xt _lcf-guard WITH-GUARD ;
+: LCF-SESSION-ID  _lcf-session-id-xt _lcf-guard WITH-GUARD ;
+: LCF-OP-VALID?   _lcf-op-valid-q-xt _lcf-guard WITH-GUARD ;
+: LCF-OP-NTH      _lcf-op-nth-xt _lcf-guard WITH-GUARD ;
+[THEN] [THEN]

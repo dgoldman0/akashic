@@ -157,3 +157,39 @@ VARIABLE _LFO-RATE
         _LFO-TMP @ LFO-TICK
         I _LFO-BUF @ PCM-FRAME!
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _lfo-guard
+
+' L.OSC           CONSTANT _l-dotosc-xt
+' L.DEPTH         CONSTANT _l-dotdepth-xt
+' L.CENTER        CONSTANT _l-dotcenter-xt
+' L.MODE          CONSTANT _l-dotmode-xt
+' LFO-CREATE      CONSTANT _lfo-create-xt
+' LFO-FREE        CONSTANT _lfo-free-xt
+' LFO-FREQ!       CONSTANT _lfo-freq-s-xt
+' LFO-DEPTH!      CONSTANT _lfo-depth-s-xt
+' LFO-CENTER!     CONSTANT _lfo-center-s-xt
+' LFO-SYNC        CONSTANT _lfo-sync-xt
+' LFO-DEPTH       CONSTANT _lfo-depth-xt
+' LFO-CENTER      CONSTANT _lfo-center-xt
+' LFO-TICK        CONSTANT _lfo-tick-xt
+' LFO-FILL        CONSTANT _lfo-fill-xt
+
+: L.OSC           _l-dotosc-xt _lfo-guard WITH-GUARD ;
+: L.DEPTH         _l-dotdepth-xt _lfo-guard WITH-GUARD ;
+: L.CENTER        _l-dotcenter-xt _lfo-guard WITH-GUARD ;
+: L.MODE          _l-dotmode-xt _lfo-guard WITH-GUARD ;
+: LFO-CREATE      _lfo-create-xt _lfo-guard WITH-GUARD ;
+: LFO-FREE        _lfo-free-xt _lfo-guard WITH-GUARD ;
+: LFO-FREQ!       _lfo-freq-s-xt _lfo-guard WITH-GUARD ;
+: LFO-DEPTH!      _lfo-depth-s-xt _lfo-guard WITH-GUARD ;
+: LFO-CENTER!     _lfo-center-s-xt _lfo-guard WITH-GUARD ;
+: LFO-SYNC        _lfo-sync-xt _lfo-guard WITH-GUARD ;
+: LFO-DEPTH       _lfo-depth-xt _lfo-guard WITH-GUARD ;
+: LFO-CENTER      _lfo-center-xt _lfo-guard WITH-GUARD ;
+: LFO-TICK        _lfo-tick-xt _lfo-guard WITH-GUARD ;
+: LFO-FILL        _lfo-fill-xt _lfo-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -1063,3 +1063,53 @@ VARIABLE _DRAW-TXT-GID
         \ Advance cursor
         _DRAW-TXT-CP @ LAY-CHAR-WIDTH  _DRAW-TXT-X +!
     REPEAT ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _draw-guard
+
+' DRAW-RECT       CONSTANT _draw-rect-xt
+' DRAW-HLINE      CONSTANT _draw-hline-xt
+' DRAW-VLINE      CONSTANT _draw-vline-xt
+' DRAW-RECT-OUTLINE CONSTANT _draw-rect-outline-xt
+' DRAW-LINE       CONSTANT _draw-line-xt
+' DRAW-CIRCLE     CONSTANT _draw-circle-xt
+' DRAW-CIRCLE-OUTLINE CONSTANT _draw-circle-outline-xt
+' DRAW-ELLIPSE    CONSTANT _draw-ellipse-xt
+' DRAW-TRIANGLE   CONSTANT _draw-triangle-xt
+' DRAW-BEZIER-QUAD CONSTANT _draw-bezier-quad-xt
+' DRAW-BEZIER-CUBIC CONSTANT _draw-bezier-cubic-xt
+' DRAW-PATH-BEGIN CONSTANT _draw-path-begin-xt
+' DRAW-PATH-MOVE  CONSTANT _draw-path-move-xt
+' DRAW-PATH-LINE  CONSTANT _draw-path-line-xt
+' DRAW-PATH-CLOSE CONSTANT _draw-path-close-xt
+' DRAW-PATH-QUAD  CONSTANT _draw-path-quad-xt
+' DRAW-PATH-CUBIC CONSTANT _draw-path-cubic-xt
+' DRAW-PATH-FILL  CONSTANT _draw-path-fill-xt
+' DRAW-PATH-STROKE CONSTANT _draw-path-stroke-xt
+' DRAW-GLYPH      CONSTANT _draw-glyph-xt
+' DRAW-TEXT       CONSTANT _draw-text-xt
+
+: DRAW-RECT       _draw-rect-xt _draw-guard WITH-GUARD ;
+: DRAW-HLINE      _draw-hline-xt _draw-guard WITH-GUARD ;
+: DRAW-VLINE      _draw-vline-xt _draw-guard WITH-GUARD ;
+: DRAW-RECT-OUTLINE _draw-rect-outline-xt _draw-guard WITH-GUARD ;
+: DRAW-LINE       _draw-line-xt _draw-guard WITH-GUARD ;
+: DRAW-CIRCLE     _draw-circle-xt _draw-guard WITH-GUARD ;
+: DRAW-CIRCLE-OUTLINE _draw-circle-outline-xt _draw-guard WITH-GUARD ;
+: DRAW-ELLIPSE    _draw-ellipse-xt _draw-guard WITH-GUARD ;
+: DRAW-TRIANGLE   _draw-triangle-xt _draw-guard WITH-GUARD ;
+: DRAW-BEZIER-QUAD _draw-bezier-quad-xt _draw-guard WITH-GUARD ;
+: DRAW-BEZIER-CUBIC _draw-bezier-cubic-xt _draw-guard WITH-GUARD ;
+: DRAW-PATH-BEGIN _draw-path-begin-xt _draw-guard WITH-GUARD ;
+: DRAW-PATH-MOVE  _draw-path-move-xt _draw-guard WITH-GUARD ;
+: DRAW-PATH-LINE  _draw-path-line-xt _draw-guard WITH-GUARD ;
+: DRAW-PATH-CLOSE _draw-path-close-xt _draw-guard WITH-GUARD ;
+: DRAW-PATH-QUAD  _draw-path-quad-xt _draw-guard WITH-GUARD ;
+: DRAW-PATH-CUBIC _draw-path-cubic-xt _draw-guard WITH-GUARD ;
+: DRAW-PATH-FILL  _draw-path-fill-xt _draw-guard WITH-GUARD ;
+: DRAW-PATH-STROKE _draw-path-stroke-xt _draw-guard WITH-GUARD ;
+: DRAW-GLYPH      _draw-glyph-xt _draw-guard WITH-GUARD ;
+: DRAW-TEXT       _draw-text-xt _draw-guard WITH-GUARD ;
+[THEN] [THEN]

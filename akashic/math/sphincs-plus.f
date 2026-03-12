@@ -789,6 +789,7 @@ VARIABLE _SPX-KG-SEC
     _SPX-RNG-SEED 48 0 FILL ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _spx-guard
 
@@ -801,3 +802,4 @@ GUARD _spx-guard
 : SPX-SIGN           _spx-sign-xt        _spx-guard WITH-GUARD ;
 : SPX-VERIFY         _spx-verify-xt      _spx-guard WITH-GUARD ;
 : SPX-KEYGEN-RANDOM  _spx-keygen-rng-xt  _spx-guard WITH-GUARD ;
+[THEN] [THEN]

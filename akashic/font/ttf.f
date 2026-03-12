@@ -509,3 +509,85 @@ VARIABLE _CM-PID   VARIABLE _CM-EID
         THEN
     LOOP
     DROP 0 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _ttf-guard
+
+' BE-W@           CONSTANT _be-w-at-xt
+' BE-L@           CONSTANT _be-l-at-xt
+' BE-SW@          CONSTANT _be-sw-at-xt
+' BE-SL@          CONSTANT _be-sl-at-xt
+' TTF-BASE!       CONSTANT _ttf-base-s-xt
+' TTF-BASE@       CONSTANT _ttf-base-at-xt
+' TTF-NUM-TABLES  CONSTANT _ttf-num-tables-xt
+' TTF-TAG         CONSTANT _ttf-tag-xt
+' TTF-FIND-TABLE  CONSTANT _ttf-find-table-xt
+' TTF-PARSE-HEAD  CONSTANT _ttf-parse-head-xt
+' TTF-PARSE-MAXP  CONSTANT _ttf-parse-maxp-xt
+' TTF-UPEM        CONSTANT _ttf-upem-xt
+' TTF-LOCA-FMT    CONSTANT _ttf-loca-fmt-xt
+' TTF-NGLYPHS     CONSTANT _ttf-nglyphs-xt
+' TTF-PARSE-HHEA  CONSTANT _ttf-parse-hhea-xt
+' TTF-PARSE-HMTX  CONSTANT _ttf-parse-hmtx-xt
+' TTF-ADVANCE     CONSTANT _ttf-advance-xt
+' TTF-LSB         CONSTANT _ttf-lsb-xt
+' TTF-ASCENDER    CONSTANT _ttf-ascender-xt
+' TTF-DESCENDER   CONSTANT _ttf-descender-xt
+' TTF-LINEGAP     CONSTANT _ttf-linegap-xt
+' TTF-PARSE-LOCA  CONSTANT _ttf-parse-loca-xt
+' TTF-PARSE-GLYF  CONSTANT _ttf-parse-glyf-xt
+' TTF-GLYPH-DATA  CONSTANT _ttf-glyph-data-xt
+' TTF-GLYPH-NCONTOURS CONSTANT _ttf-glyph-ncontours-xt
+' TTF-GLYPH-XMIN  CONSTANT _ttf-glyph-xmin-xt
+' TTF-GLYPH-YMIN  CONSTANT _ttf-glyph-ymin-xt
+' TTF-GLYPH-XMAX  CONSTANT _ttf-glyph-xmax-xt
+' TTF-GLYPH-YMAX  CONSTANT _ttf-glyph-ymax-xt
+' TTF-DECODE-GLYPH CONSTANT _ttf-decode-glyph-xt
+' TTF-PT-X        CONSTANT _ttf-pt-x-xt
+' TTF-PT-Y        CONSTANT _ttf-pt-y-xt
+' TTF-PT-FLAG     CONSTANT _ttf-pt-flag-xt
+' TTF-PT-ONCURVE? CONSTANT _ttf-pt-oncurve-q-xt
+' TTF-CONT-END    CONSTANT _ttf-cont-end-xt
+' TTF-PARSE-CMAP  CONSTANT _ttf-parse-cmap-xt
+' TTF-CMAP-LOOKUP CONSTANT _ttf-cmap-lookup-xt
+
+: BE-W@           _be-w-at-xt _ttf-guard WITH-GUARD ;
+: BE-L@           _be-l-at-xt _ttf-guard WITH-GUARD ;
+: BE-SW@          _be-sw-at-xt _ttf-guard WITH-GUARD ;
+: BE-SL@          _be-sl-at-xt _ttf-guard WITH-GUARD ;
+: TTF-BASE!       _ttf-base-s-xt _ttf-guard WITH-GUARD ;
+: TTF-BASE@       _ttf-base-at-xt _ttf-guard WITH-GUARD ;
+: TTF-NUM-TABLES  _ttf-num-tables-xt _ttf-guard WITH-GUARD ;
+: TTF-TAG         _ttf-tag-xt _ttf-guard WITH-GUARD ;
+: TTF-FIND-TABLE  _ttf-find-table-xt _ttf-guard WITH-GUARD ;
+: TTF-PARSE-HEAD  _ttf-parse-head-xt _ttf-guard WITH-GUARD ;
+: TTF-PARSE-MAXP  _ttf-parse-maxp-xt _ttf-guard WITH-GUARD ;
+: TTF-UPEM        _ttf-upem-xt _ttf-guard WITH-GUARD ;
+: TTF-LOCA-FMT    _ttf-loca-fmt-xt _ttf-guard WITH-GUARD ;
+: TTF-NGLYPHS     _ttf-nglyphs-xt _ttf-guard WITH-GUARD ;
+: TTF-PARSE-HHEA  _ttf-parse-hhea-xt _ttf-guard WITH-GUARD ;
+: TTF-PARSE-HMTX  _ttf-parse-hmtx-xt _ttf-guard WITH-GUARD ;
+: TTF-ADVANCE     _ttf-advance-xt _ttf-guard WITH-GUARD ;
+: TTF-LSB         _ttf-lsb-xt _ttf-guard WITH-GUARD ;
+: TTF-ASCENDER    _ttf-ascender-xt _ttf-guard WITH-GUARD ;
+: TTF-DESCENDER   _ttf-descender-xt _ttf-guard WITH-GUARD ;
+: TTF-LINEGAP     _ttf-linegap-xt _ttf-guard WITH-GUARD ;
+: TTF-PARSE-LOCA  _ttf-parse-loca-xt _ttf-guard WITH-GUARD ;
+: TTF-PARSE-GLYF  _ttf-parse-glyf-xt _ttf-guard WITH-GUARD ;
+: TTF-GLYPH-DATA  _ttf-glyph-data-xt _ttf-guard WITH-GUARD ;
+: TTF-GLYPH-NCONTOURS _ttf-glyph-ncontours-xt _ttf-guard WITH-GUARD ;
+: TTF-GLYPH-XMIN  _ttf-glyph-xmin-xt _ttf-guard WITH-GUARD ;
+: TTF-GLYPH-YMIN  _ttf-glyph-ymin-xt _ttf-guard WITH-GUARD ;
+: TTF-GLYPH-XMAX  _ttf-glyph-xmax-xt _ttf-guard WITH-GUARD ;
+: TTF-GLYPH-YMAX  _ttf-glyph-ymax-xt _ttf-guard WITH-GUARD ;
+: TTF-DECODE-GLYPH _ttf-decode-glyph-xt _ttf-guard WITH-GUARD ;
+: TTF-PT-X        _ttf-pt-x-xt _ttf-guard WITH-GUARD ;
+: TTF-PT-Y        _ttf-pt-y-xt _ttf-guard WITH-GUARD ;
+: TTF-PT-FLAG     _ttf-pt-flag-xt _ttf-guard WITH-GUARD ;
+: TTF-PT-ONCURVE? _ttf-pt-oncurve-q-xt _ttf-guard WITH-GUARD ;
+: TTF-CONT-END    _ttf-cont-end-xt _ttf-guard WITH-GUARD ;
+: TTF-PARSE-CMAP  _ttf-parse-cmap-xt _ttf-guard WITH-GUARD ;
+: TTF-CMAP-LOOKUP _ttf-cmap-lookup-xt _ttf-guard WITH-GUARD ;
+[THEN] [THEN]

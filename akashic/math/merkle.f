@@ -187,6 +187,7 @@ VARIABLE _MK-V-PROOF
 \ ── Concurrency Guard ─────────────────────────────────────
 \ MERKLE-TREE (defining), MERKLE-N, MERKLE-ROOT, MERKLE-LEAF@
 \ are pure struct reads — left unguarded.
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _merkle-guard
 
@@ -199,3 +200,4 @@ GUARD _merkle-guard
 : MERKLE-OPEN    _mk-open-xt    _merkle-guard WITH-GUARD ;
 : MERKLE-VERIFY  _mk-verify-xt  _merkle-guard WITH-GUARD ;
 : MERKLE-LEAF!   _mk-leaf-xt    _merkle-guard WITH-GUARD ;
+[THEN] [THEN]

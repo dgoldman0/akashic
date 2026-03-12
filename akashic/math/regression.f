@@ -263,3 +263,37 @@ VARIABLE _RG-SYY     \ Syy as FP32
     \ Mean = sum / n
     _STAT-SCR1 _RG-NN @ SIMD-SUM-N
     _RG-NN @ INT>FP32 FP32-DIV FP32>FP16 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _reg-guard
+
+' REG-OLS         CONSTANT _reg-ols-xt
+' REG-SLOPE       CONSTANT _reg-slope-xt
+' REG-INTERCEPT   CONSTANT _reg-intercept-xt
+' REG-R-SQUARED   CONSTANT _reg-r-squared-xt
+' REG-SSE         CONSTANT _reg-sse-xt
+' REG-SST         CONSTANT _reg-sst-xt
+' REG-SSR         CONSTANT _reg-ssr-xt
+' REG-ADJ-R-SQUARED CONSTANT _reg-adj-r-squared-xt
+' REG-RMSE        CONSTANT _reg-rmse-xt
+' REG-PREDICT     CONSTANT _reg-predict-xt
+' REG-PREDICT-N   CONSTANT _reg-predict-n-xt
+' REG-RESIDUALS   CONSTANT _reg-residuals-xt
+' REG-MAE         CONSTANT _reg-mae-xt
+
+: REG-OLS         _reg-ols-xt _reg-guard WITH-GUARD ;
+: REG-SLOPE       _reg-slope-xt _reg-guard WITH-GUARD ;
+: REG-INTERCEPT   _reg-intercept-xt _reg-guard WITH-GUARD ;
+: REG-R-SQUARED   _reg-r-squared-xt _reg-guard WITH-GUARD ;
+: REG-SSE         _reg-sse-xt _reg-guard WITH-GUARD ;
+: REG-SST         _reg-sst-xt _reg-guard WITH-GUARD ;
+: REG-SSR         _reg-ssr-xt _reg-guard WITH-GUARD ;
+: REG-ADJ-R-SQUARED _reg-adj-r-squared-xt _reg-guard WITH-GUARD ;
+: REG-RMSE        _reg-rmse-xt _reg-guard WITH-GUARD ;
+: REG-PREDICT     _reg-predict-xt _reg-guard WITH-GUARD ;
+: REG-PREDICT-N   _reg-predict-n-xt _reg-guard WITH-GUARD ;
+: REG-RESIDUALS   _reg-residuals-xt _reg-guard WITH-GUARD ;
+: REG-MAE         _reg-mae-xt _reg-guard WITH-GUARD ;
+[THEN] [THEN]

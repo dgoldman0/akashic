@@ -368,3 +368,27 @@ VARIABLE _MI-HI
         100 INT>FP16 FP16-MUL         \ × 100
         FP16>INT                       \ integer cents
     THEN ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _midi-guard
+
+' MIDI-NOTE-ON    CONSTANT _midi-note-on-xt
+' MIDI-NOTE-OFF   CONSTANT _midi-note-off-xt
+' MIDI-CC         CONSTANT _midi-cc-xt
+' MIDI-PITCH-BEND CONSTANT _midi-pitch-bend-xt
+' MIDI-PROG       CONSTANT _midi-prog-xt
+' MIDI-PARSE      CONSTANT _midi-parse-xt
+' MIDI-NOTE>HZ    CONSTANT _midi-note-to-hz-xt
+' MIDI-HZ>NOTE    CONSTANT _midi-hz-to-note-xt
+
+: MIDI-NOTE-ON    _midi-note-on-xt _midi-guard WITH-GUARD ;
+: MIDI-NOTE-OFF   _midi-note-off-xt _midi-guard WITH-GUARD ;
+: MIDI-CC         _midi-cc-xt _midi-guard WITH-GUARD ;
+: MIDI-PITCH-BEND _midi-pitch-bend-xt _midi-guard WITH-GUARD ;
+: MIDI-PROG       _midi-prog-xt _midi-guard WITH-GUARD ;
+: MIDI-PARSE      _midi-parse-xt _midi-guard WITH-GUARD ;
+: MIDI-NOTE>HZ    _midi-note-to-hz-xt _midi-guard WITH-GUARD ;
+: MIDI-HZ>NOTE    _midi-hz-to-note-xt _midi-guard WITH-GUARD ;
+[THEN] [THEN]

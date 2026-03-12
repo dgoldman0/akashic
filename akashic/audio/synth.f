@@ -446,3 +446,51 @@ VARIABLE _SY-FREQ
 
 : SYNTH-SAVE-FILT  ( -- s1 s2 )  _SY-FS1 @ _SY-FS2 @ ;
 : SYNTH-LOAD-FILT  ( s1 s2 -- )  _SY-FS2 ! _SY-FS1 ! ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _synth-guard
+
+' SY.OSC1         CONSTANT _sy-dotosc1-xt
+' SY.OSC2         CONSTANT _sy-dotosc2-xt
+' SY.FTYPE        CONSTANT _sy-dotftype-xt
+' SY.FCUT         CONSTANT _sy-dotfcut-xt
+' SY.FRESO        CONSTANT _sy-dotfreso-xt
+' SY.AENV         CONSTANT _sy-dotaenv-xt
+' SY.FENV         CONSTANT _sy-dotfenv-xt
+' SY.BUF          CONSTANT _sy-dotbuf-xt
+' SY.DETUNE       CONSTANT _sy-dotdetune-xt
+' SYNTH-CREATE    CONSTANT _synth-create-xt
+' SYNTH-FREE      CONSTANT _synth-free-xt
+' SYNTH-CUTOFF!   CONSTANT _synth-cutoff-s-xt
+' SYNTH-RESO!     CONSTANT _synth-reso-s-xt
+' SYNTH-FILT-TYPE! CONSTANT _synth-filt-type-s-xt
+' SYNTH-DETUNE!   CONSTANT _synth-detune-s-xt
+' SYNTH-NOTE-ON   CONSTANT _synth-note-on-xt
+' SYNTH-NOTE-OFF  CONSTANT _synth-note-off-xt
+' SYNTH-RENDER    CONSTANT _synth-render-xt
+' SYNTH-SAVE-FILT CONSTANT _synth-save-filt-xt
+' SYNTH-LOAD-FILT CONSTANT _synth-load-filt-xt
+
+: SY.OSC1         _sy-dotosc1-xt _synth-guard WITH-GUARD ;
+: SY.OSC2         _sy-dotosc2-xt _synth-guard WITH-GUARD ;
+: SY.FTYPE        _sy-dotftype-xt _synth-guard WITH-GUARD ;
+: SY.FCUT         _sy-dotfcut-xt _synth-guard WITH-GUARD ;
+: SY.FRESO        _sy-dotfreso-xt _synth-guard WITH-GUARD ;
+: SY.AENV         _sy-dotaenv-xt _synth-guard WITH-GUARD ;
+: SY.FENV         _sy-dotfenv-xt _synth-guard WITH-GUARD ;
+: SY.BUF          _sy-dotbuf-xt _synth-guard WITH-GUARD ;
+: SY.DETUNE       _sy-dotdetune-xt _synth-guard WITH-GUARD ;
+: SYNTH-CREATE    _synth-create-xt _synth-guard WITH-GUARD ;
+: SYNTH-FREE      _synth-free-xt _synth-guard WITH-GUARD ;
+: SYNTH-CUTOFF!   _synth-cutoff-s-xt _synth-guard WITH-GUARD ;
+: SYNTH-RESO!     _synth-reso-s-xt _synth-guard WITH-GUARD ;
+: SYNTH-FILT-TYPE! _synth-filt-type-s-xt _synth-guard WITH-GUARD ;
+: SYNTH-DETUNE!   _synth-detune-s-xt _synth-guard WITH-GUARD ;
+: SYNTH-NOTE-ON   _synth-note-on-xt _synth-guard WITH-GUARD ;
+: SYNTH-NOTE-OFF  _synth-note-off-xt _synth-guard WITH-GUARD ;
+: SYNTH-RENDER    _synth-render-xt _synth-guard WITH-GUARD ;
+: SYNTH-SAVE-FILT _synth-save-filt-xt _synth-guard WITH-GUARD ;
+: SYNTH-LOAD-FILT _synth-load-filt-xt _synth-guard WITH-GUARD ;
+[THEN] [THEN]

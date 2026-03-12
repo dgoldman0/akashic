@@ -367,3 +367,17 @@ VARIABLE _PP-SF-CNT
     FP16-POS-ONE FP16-ADD                 ( 2^n 2^frac-approx )
     SWAP INT>FP16 FP16-MUL               ( 2^|x|-approx )
     FP16-RECIP ;                           ( 2^(-|x|) = flatness )
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _aperc-guard
+
+' PCM-A-WEIGHTED-RMS CONSTANT _pcm-a-weighted-rms-xt
+' PCM-BRIGHTNESS  CONSTANT _pcm-brightness-xt
+' PCM-SPECTRAL-FLATNESS CONSTANT _pcm-spectral-flatness-xt
+
+: PCM-A-WEIGHTED-RMS _pcm-a-weighted-rms-xt _aperc-guard WITH-GUARD ;
+: PCM-BRIGHTNESS  _pcm-brightness-xt _aperc-guard WITH-GUARD ;
+: PCM-SPECTRAL-FLATNESS _pcm-spectral-flatness-xt _aperc-guard WITH-GUARD ;
+[THEN] [THEN]

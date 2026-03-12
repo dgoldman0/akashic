@@ -16,7 +16,6 @@ REQUIRE ../web/response.f
 REQUIRE ../web/router.f
 REQUIRE ../utils/datetime.f
 REQUIRE ../utils/string.f
-REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-web-server
 
@@ -358,6 +357,8 @@ VARIABLE _SRV-DISPATCH-XT
 \ serialises all HTTP handling so a background task cannot corrupt
 \ the pipeline while a request is in flight.
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD-BLOCKING _srv-guard
 
 ' SRV-HANDLE     CONSTANT _srv-handle-xt
@@ -367,3 +368,4 @@ GUARD-BLOCKING _srv-guard
 : SRV-HANDLE      ( sd -- )       _srv-handle-xt _srv-guard WITH-GUARD ;
 : SRV-HANDLE-BUF  ( addr len -- ) _srv-hbuf-xt   _srv-guard WITH-GUARD ;
 : SRV-STEP        ( -- )          _srv-step-xt   _srv-guard WITH-GUARD ;
+[THEN] [THEN]

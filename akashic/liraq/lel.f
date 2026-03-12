@@ -1636,3 +1636,17 @@ VARIABLE _LEL-LED-TOK   \ save operator token
     LEL-EVAL ;
 
 ' _ST-LEL-COMPUTE _ST-COMPUTE-XT !
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _lel-guard
+
+' LEL-EVAL        CONSTANT _lel-eval-xt
+' LEL-SET-CONTEXT CONSTANT _lel-set-context-xt
+' LEL-CLEAR-CONTEXT CONSTANT _lel-clear-context-xt
+
+: LEL-EVAL        _lel-eval-xt _lel-guard WITH-GUARD ;
+: LEL-SET-CONTEXT _lel-set-context-xt _lel-guard WITH-GUARD ;
+: LEL-CLEAR-CONTEXT _lel-clear-context-xt _lel-guard WITH-GUARD ;
+[THEN] [THEN]

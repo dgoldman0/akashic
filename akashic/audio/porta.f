@@ -179,3 +179,37 @@ VARIABLE _PT-VL      \ vel temp
 : PORTA-RENDER  ( porta -- buf )
     DUP PORTA-TICK
     PT.VOICE @ SYNTH-RENDER ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _porta-guard
+
+' PT.VOICE        CONSTANT _pt-dotvoice-xt
+' PT.CURR         CONSTANT _pt-dotcurr-xt
+' PT.TARG         CONSTANT _pt-dottarg-xt
+' PT.SPEED        CONSTANT _pt-dotspeed-xt
+' PT.PLAY         CONSTANT _pt-dotplay-xt
+' PORTA-CREATE    CONSTANT _porta-create-xt
+' PORTA-FREE      CONSTANT _porta-free-xt
+' PORTA-SPEED!    CONSTANT _porta-speed-s-xt
+' PORTA-FREQ      CONSTANT _porta-freq-xt
+' PORTA-NOTE-ON   CONSTANT _porta-note-on-xt
+' PORTA-NOTE-OFF  CONSTANT _porta-note-off-xt
+' PORTA-TICK      CONSTANT _porta-tick-xt
+' PORTA-RENDER    CONSTANT _porta-render-xt
+
+: PT.VOICE        _pt-dotvoice-xt _porta-guard WITH-GUARD ;
+: PT.CURR         _pt-dotcurr-xt _porta-guard WITH-GUARD ;
+: PT.TARG         _pt-dottarg-xt _porta-guard WITH-GUARD ;
+: PT.SPEED        _pt-dotspeed-xt _porta-guard WITH-GUARD ;
+: PT.PLAY         _pt-dotplay-xt _porta-guard WITH-GUARD ;
+: PORTA-CREATE    _porta-create-xt _porta-guard WITH-GUARD ;
+: PORTA-FREE      _porta-free-xt _porta-guard WITH-GUARD ;
+: PORTA-SPEED!    _porta-speed-s-xt _porta-guard WITH-GUARD ;
+: PORTA-FREQ      _porta-freq-xt _porta-guard WITH-GUARD ;
+: PORTA-NOTE-ON   _porta-note-on-xt _porta-guard WITH-GUARD ;
+: PORTA-NOTE-OFF  _porta-note-off-xt _porta-guard WITH-GUARD ;
+: PORTA-TICK      _porta-tick-xt _porta-guard WITH-GUARD ;
+: PORTA-RENDER    _porta-render-xt _porta-guard WITH-GUARD ;
+[THEN] [THEN]

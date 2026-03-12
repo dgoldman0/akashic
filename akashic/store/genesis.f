@@ -226,3 +226,23 @@ CREATE _GEN-BLK  BLK-STRUCT-SIZE ALLOT
 \ =====================================================================
 \  Done — genesis configuration for chain bootstrapping.
 \ =====================================================================
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _gen-guard
+
+' GEN-CHAIN-ID!   CONSTANT _gen-chain-id-s-xt
+' GEN-CHAIN-ID@   CONSTANT _gen-chain-id-at-xt
+' GEN-CREATE      CONSTANT _gen-create-xt
+' GEN-RESULT      CONSTANT _gen-result-xt
+' GEN-LOAD        CONSTANT _gen-load-xt
+' GEN-HASH        CONSTANT _gen-hash-xt
+
+: GEN-CHAIN-ID!   _gen-chain-id-s-xt _gen-guard WITH-GUARD ;
+: GEN-CHAIN-ID@   _gen-chain-id-at-xt _gen-guard WITH-GUARD ;
+: GEN-CREATE      _gen-create-xt _gen-guard WITH-GUARD ;
+: GEN-RESULT      _gen-result-xt _gen-guard WITH-GUARD ;
+: GEN-LOAD        _gen-load-xt _gen-guard WITH-GUARD ;
+: GEN-HASH        _gen-hash-xt _gen-guard WITH-GUARD ;
+[THEN] [THEN]

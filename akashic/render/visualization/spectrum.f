@@ -486,3 +486,23 @@ VARIABLE _SP-PREV-Y2
 
 : SPEC-FFT-SIZE@  ( cfg -- n )
     SC.FFTSIZE + @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _vspec-guard
+
+' SPEC-CONFIG-CREATE CONSTANT _spec-config-create-xt
+' SPEC-CONFIG-FREE CONSTANT _spec-config-free-xt
+' SPEC-DRAW       CONSTANT _spec-draw-xt
+' SPEC-RENDER     CONSTANT _spec-render-xt
+' SPEC-WINDOW!    CONSTANT _spec-window-s-xt
+' SPEC-FFT-SIZE@  CONSTANT _spec-fft-size-at-xt
+
+: SPEC-CONFIG-CREATE _spec-config-create-xt _vspec-guard WITH-GUARD ;
+: SPEC-CONFIG-FREE _spec-config-free-xt _vspec-guard WITH-GUARD ;
+: SPEC-DRAW       _spec-draw-xt _vspec-guard WITH-GUARD ;
+: SPEC-RENDER     _spec-render-xt _vspec-guard WITH-GUARD ;
+: SPEC-WINDOW!    _spec-window-s-xt _vspec-guard WITH-GUARD ;
+: SPEC-FFT-SIZE@  _spec-fft-size-at-xt _vspec-guard WITH-GUARD ;
+[THEN] [THEN]

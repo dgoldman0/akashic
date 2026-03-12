@@ -304,3 +304,32 @@ VARIABLE _DTP-OK       \ parse success flag
 : DT-NOW  ( -- epoch )
     DT-NOW-S ;
 
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _datetime-guard
+
+' DT-LEAP?        CONSTANT _dt-leap-q-xt
+' DT-EPOCH>HMS    CONSTANT _dt-epoch-to-hms-xt
+' DT-EPOCH>YMD    CONSTANT _dt-epoch-to-ymd-xt
+' DT-YMD>EPOCH    CONSTANT _dt-ymd-to-epoch-xt
+' DT-DATE         CONSTANT _dt-date-xt
+' DT-TIME         CONSTANT _dt-time-xt
+' DT-ISO8601      CONSTANT _dt-iso8601-xt
+' DT-PARSE-ISO    CONSTANT _dt-parse-iso-xt
+' DT-NOW-MS       CONSTANT _dt-now-ms-xt
+' DT-NOW-S        CONSTANT _dt-now-s-xt
+' DT-NOW          CONSTANT _dt-now-xt
+
+: DT-LEAP?        _dt-leap-q-xt _datetime-guard WITH-GUARD ;
+: DT-EPOCH>HMS    _dt-epoch-to-hms-xt _datetime-guard WITH-GUARD ;
+: DT-EPOCH>YMD    _dt-epoch-to-ymd-xt _datetime-guard WITH-GUARD ;
+: DT-YMD>EPOCH    _dt-ymd-to-epoch-xt _datetime-guard WITH-GUARD ;
+: DT-DATE         _dt-date-xt _datetime-guard WITH-GUARD ;
+: DT-TIME         _dt-time-xt _datetime-guard WITH-GUARD ;
+: DT-ISO8601      _dt-iso8601-xt _datetime-guard WITH-GUARD ;
+: DT-PARSE-ISO    _dt-parse-iso-xt _datetime-guard WITH-GUARD ;
+: DT-NOW-MS       _dt-now-ms-xt _datetime-guard WITH-GUARD ;
+: DT-NOW-S        _dt-now-s-xt _datetime-guard WITH-GUARD ;
+: DT-NOW          _dt-now-xt _datetime-guard WITH-GUARD ;
+[THEN] [THEN]

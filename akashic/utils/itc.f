@@ -696,6 +696,7 @@ VARIABLE _ITC-IMG-BLEN    \ body-len  scratch for ITC-SAVE-IMAGE
 \ uses shared scratch state (_ITC-CP, _ITC-IP, symbol/entry tables,
 \ etc.) so concurrent access would corrupt compilation or execution.
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _itc-guard
 
@@ -720,6 +721,7 @@ GUARD _itc-guard
 : ITC-ENTRY@     _itc-entry-xt    _itc-guard WITH-GUARD ;
 : ITC-SAVE-IMAGE _itc-save-xt     _itc-guard WITH-GUARD ;
 : ITC-LOAD-IMAGE _itc-load-xt     _itc-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =====================================================================
 \  Done.

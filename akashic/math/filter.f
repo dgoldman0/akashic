@@ -498,6 +498,7 @@ VARIABLE _HP-CENTRE
     _HP-IN @ _HP-KERN @ _FILT-LP-TAPS _HP-DST @ _HP-N @ FILT-FIR ;
 
 \ ── Concurrency Guard ───────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _filt-guard
 
@@ -516,4 +517,5 @@ GUARD _filt-guard
 : FILT-MEDIAN     _filt-median-xt _filt-guard WITH-GUARD ;
 : FILT-LOWPASS    _filt-lp-xt     _filt-guard WITH-GUARD ;
 : FILT-HIGHPASS   _filt-hp-xt     _filt-guard WITH-GUARD ;
+[THEN] [THEN]
 

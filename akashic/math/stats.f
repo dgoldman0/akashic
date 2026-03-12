@@ -610,6 +610,7 @@ VARIABLE _SOM-NNEW
 \ Online words pass a ctx struct on the stack but still use
 \ shared VARIABLE scratch (_SOL-CTX, _SOL-X32, _SOL-DELTA,
 \ _SPN-*, _SOM-*, _STAT-SCR0/1, _STAT-SRC/N, etc.).
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _stat-guard
 
@@ -678,3 +679,4 @@ GUARD _stat-guard
 : STAT-ONLINE-PUSH     _stat-op-xt   _stat-guard WITH-GUARD ;
 : STAT-ONLINE-PUSH-N   _stat-opn-xt  _stat-guard WITH-GUARD ;
 : STAT-ONLINE-MERGE    _stat-omrg-xt _stat-guard WITH-GUARD ;
+[THEN] [THEN]

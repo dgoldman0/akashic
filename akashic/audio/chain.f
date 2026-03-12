@@ -184,3 +184,29 @@ VARIABLE _CH-CHAIN  \ chain pointer during PROCESS / CLEAR
             DROP                          \ empty slot, drop 0
         THEN
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _achain-guard
+
+' CH.N            CONSTANT _ch-dotn-xt
+' CH.SLOTS        CONSTANT _ch-dotslots-xt
+' CHAIN-CREATE    CONSTANT _chain-create-xt
+' CHAIN-FREE      CONSTANT _chain-free-xt
+' CHAIN-N         CONSTANT _chain-n-xt
+' CHAIN-SET!      CONSTANT _chain-set-s-xt
+' CHAIN-BYPASS!   CONSTANT _chain-bypass-s-xt
+' CHAIN-CLEAR     CONSTANT _chain-clear-xt
+' CHAIN-PROCESS   CONSTANT _chain-process-xt
+
+: CH.N            _ch-dotn-xt _achain-guard WITH-GUARD ;
+: CH.SLOTS        _ch-dotslots-xt _achain-guard WITH-GUARD ;
+: CHAIN-CREATE    _chain-create-xt _achain-guard WITH-GUARD ;
+: CHAIN-FREE      _chain-free-xt _achain-guard WITH-GUARD ;
+: CHAIN-N         _chain-n-xt _achain-guard WITH-GUARD ;
+: CHAIN-SET!      _chain-set-s-xt _achain-guard WITH-GUARD ;
+: CHAIN-BYPASS!   _chain-bypass-s-xt _achain-guard WITH-GUARD ;
+: CHAIN-CLEAR     _chain-clear-xt _achain-guard WITH-GUARD ;
+: CHAIN-PROCESS   _chain-process-xt _achain-guard WITH-GUARD ;
+[THEN] [THEN]

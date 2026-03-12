@@ -513,3 +513,41 @@ VARIABLE _PR-SRC2    \ second source pointer
 
     \ hi = mean + margin
     _PR-A @ _PR-D @ FP32-ADD FP32>FP16 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _prob-guard
+
+' PROB-STANDARD-PDF CONSTANT _prob-standard-pdf-xt
+' PROB-STANDARD-CDF CONSTANT _prob-standard-cdf-xt
+' PROB-NORMAL-PDF CONSTANT _prob-normal-pdf-xt
+' PROB-NORMAL-CDF CONSTANT _prob-normal-cdf-xt
+' PROB-NORMAL-INV CONSTANT _prob-normal-inv-xt
+' PROB-UNIFORM-PDF CONSTANT _prob-uniform-pdf-xt
+' PROB-UNIFORM-CDF CONSTANT _prob-uniform-cdf-xt
+' PROB-EXPONENTIAL-CDF CONSTANT _prob-exponential-cdf-xt
+' PROB-POISSON-PMF CONSTANT _prob-poisson-pmf-xt
+' PROB-BINOMIAL-PMF CONSTANT _prob-binomial-pmf-xt
+' PROB-T-TEST-1   CONSTANT _prob-t-test-1-xt
+' PROB-T-TEST-2   CONSTANT _prob-t-test-2-xt
+' PROB-T-TEST-PAIRED CONSTANT _prob-t-test-paired-xt
+' PROB-CHI2-GOF   CONSTANT _prob-chi2-gof-xt
+' PROB-CI-MEAN    CONSTANT _prob-ci-mean-xt
+
+: PROB-STANDARD-PDF _prob-standard-pdf-xt _prob-guard WITH-GUARD ;
+: PROB-STANDARD-CDF _prob-standard-cdf-xt _prob-guard WITH-GUARD ;
+: PROB-NORMAL-PDF _prob-normal-pdf-xt _prob-guard WITH-GUARD ;
+: PROB-NORMAL-CDF _prob-normal-cdf-xt _prob-guard WITH-GUARD ;
+: PROB-NORMAL-INV _prob-normal-inv-xt _prob-guard WITH-GUARD ;
+: PROB-UNIFORM-PDF _prob-uniform-pdf-xt _prob-guard WITH-GUARD ;
+: PROB-UNIFORM-CDF _prob-uniform-cdf-xt _prob-guard WITH-GUARD ;
+: PROB-EXPONENTIAL-CDF _prob-exponential-cdf-xt _prob-guard WITH-GUARD ;
+: PROB-POISSON-PMF _prob-poisson-pmf-xt _prob-guard WITH-GUARD ;
+: PROB-BINOMIAL-PMF _prob-binomial-pmf-xt _prob-guard WITH-GUARD ;
+: PROB-T-TEST-1   _prob-t-test-1-xt _prob-guard WITH-GUARD ;
+: PROB-T-TEST-2   _prob-t-test-2-xt _prob-guard WITH-GUARD ;
+: PROB-T-TEST-PAIRED _prob-t-test-paired-xt _prob-guard WITH-GUARD ;
+: PROB-CHI2-GOF   _prob-chi2-gof-xt _prob-guard WITH-GUARD ;
+: PROB-CI-MEAN    _prob-ci-mean-xt _prob-guard WITH-GUARD ;
+[THEN] [THEN]

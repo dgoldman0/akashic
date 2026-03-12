@@ -349,3 +349,57 @@ VARIABLE _SQ-SIDX
     REPEAT
 
     _SQ-FIRE @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _seq-guard
+
+' SQ.BPM          CONSTANT _sq-dotbpm-xt
+' SQ.STEPS        CONSTANT _sq-dotsteps-xt
+' SQ.RATE         CONSTANT _sq-dotrate-xt
+' SQ.TICKF        CONSTANT _sq-dottickf-xt
+' SQ.POS          CONSTANT _sq-dotpos-xt
+' SQ.TCNT         CONSTANT _sq-dottcnt-xt
+' SQ.CB           CONSTANT _sq-dotcb-xt
+' SQ.RUN          CONSTANT _sq-dotrun-xt
+' SQ.LOOP         CONSTANT _sq-dotloop-xt
+' SQ.SWING        CONSTANT _sq-dotswing-xt
+' SEQ-CREATE      CONSTANT _seq-create-xt
+' SEQ-FREE        CONSTANT _seq-free-xt
+' SEQ-STEP!       CONSTANT _seq-step-s-xt
+' SEQ-STEP@       CONSTANT _seq-step-at-xt
+' SEQ-START       CONSTANT _seq-start-xt
+' SEQ-STOP        CONSTANT _seq-stop-xt
+' SEQ-BPM!        CONSTANT _seq-bpm-s-xt
+' SEQ-SWING!      CONSTANT _seq-swing-s-xt
+' SEQ-CALLBACK!   CONSTANT _seq-callback-s-xt
+' SEQ-POSITION    CONSTANT _seq-position-xt
+' SEQ-RUNNING?    CONSTANT _seq-running-q-xt
+' SEQ-LOOP!       CONSTANT _seq-loop-s-xt
+' SEQ-TICK        CONSTANT _seq-tick-xt
+
+: SQ.BPM          _sq-dotbpm-xt _seq-guard WITH-GUARD ;
+: SQ.STEPS        _sq-dotsteps-xt _seq-guard WITH-GUARD ;
+: SQ.RATE         _sq-dotrate-xt _seq-guard WITH-GUARD ;
+: SQ.TICKF        _sq-dottickf-xt _seq-guard WITH-GUARD ;
+: SQ.POS          _sq-dotpos-xt _seq-guard WITH-GUARD ;
+: SQ.TCNT         _sq-dottcnt-xt _seq-guard WITH-GUARD ;
+: SQ.CB           _sq-dotcb-xt _seq-guard WITH-GUARD ;
+: SQ.RUN          _sq-dotrun-xt _seq-guard WITH-GUARD ;
+: SQ.LOOP         _sq-dotloop-xt _seq-guard WITH-GUARD ;
+: SQ.SWING        _sq-dotswing-xt _seq-guard WITH-GUARD ;
+: SEQ-CREATE      _seq-create-xt _seq-guard WITH-GUARD ;
+: SEQ-FREE        _seq-free-xt _seq-guard WITH-GUARD ;
+: SEQ-STEP!       _seq-step-s-xt _seq-guard WITH-GUARD ;
+: SEQ-STEP@       _seq-step-at-xt _seq-guard WITH-GUARD ;
+: SEQ-START       _seq-start-xt _seq-guard WITH-GUARD ;
+: SEQ-STOP        _seq-stop-xt _seq-guard WITH-GUARD ;
+: SEQ-BPM!        _seq-bpm-s-xt _seq-guard WITH-GUARD ;
+: SEQ-SWING!      _seq-swing-s-xt _seq-guard WITH-GUARD ;
+: SEQ-CALLBACK!   _seq-callback-s-xt _seq-guard WITH-GUARD ;
+: SEQ-POSITION    _seq-position-xt _seq-guard WITH-GUARD ;
+: SEQ-RUNNING?    _seq-running-q-xt _seq-guard WITH-GUARD ;
+: SEQ-LOOP!       _seq-loop-s-xt _seq-guard WITH-GUARD ;
+: SEQ-TICK        _seq-tick-xt _seq-guard WITH-GUARD ;
+[THEN] [THEN]

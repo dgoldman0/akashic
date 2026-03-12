@@ -30,7 +30,6 @@ REQUIRE ../store/block.f
 REQUIRE ../consensus/consensus.f
 REQUIRE ../store/state.f
 REQUIRE ../web/server.f
-REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-node
 
@@ -206,6 +205,8 @@ CREATE _NODE-HTMP 32 ALLOT
 \  10. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _node-guard
 
 ' NODE-INIT CONSTANT _node-init-xt
@@ -215,6 +216,7 @@ GUARD _node-guard
 : NODE-INIT _node-init-xt _node-guard WITH-GUARD ;
 : NODE-STEP _node-step-xt _node-guard WITH-GUARD ;
 : NODE-STOP _node-stop-xt _node-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =================================================================
 \  Done.

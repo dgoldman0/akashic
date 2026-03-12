@@ -477,6 +477,7 @@ VARIABLE _WIT-VF-ST
 \  13. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _wit-guard
 
@@ -499,6 +500,7 @@ GUARD _wit-guard
 : WIT-PROVE         _wit-pv-xt     _wit-guard WITH-GUARD ;
 : WIT-PROVE-END     _wit-pe-xt     _wit-guard WITH-GUARD ;
 : WIT-VERIFY        _wit-vfy-xt    _wit-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =====================================================================
 \  Done.

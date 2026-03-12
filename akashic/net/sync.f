@@ -32,7 +32,6 @@
 
 REQUIRE ../store/block.f
 REQUIRE ../net/gossip.f
-REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-sync
 
@@ -209,6 +208,8 @@ CREATE _SYNC-BLK BLK-STRUCT-SIZE ALLOT \ temp block struct for decode
 \  10. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _sync-guard
 
 ' SYNC-INIT  CONSTANT _sync-init-xt
@@ -218,6 +219,7 @@ GUARD _sync-guard
 : SYNC-INIT  _sync-init-xt  _sync-guard WITH-GUARD ;
 : SYNC-STEP  _sync-step-xt  _sync-guard WITH-GUARD ;
 : SYNC-RESET _sync-reset-xt _sync-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =================================================================
 \  Done.

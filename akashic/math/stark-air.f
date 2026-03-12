@@ -253,3 +253,40 @@ VARIABLE _ACB-ENT
         _ACB-J @ 1 + _ACB-J !
     REPEAT
     _ACB-OK @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _air-guard
+
+' AIR-BEGIN       CONSTANT _air-begin-xt
+' AIR-TRANS       CONSTANT _air-trans-xt
+' AIR-BOUNDARY    CONSTANT _air-boundary-xt
+' AIR-END         CONSTANT _air-end-xt
+' AIR-N-COLS      CONSTANT _air-n-cols-xt
+' AIR-N-TRANS     CONSTANT _air-n-trans-xt
+' AIR-N-BOUND     CONSTANT _air-n-bound-xt
+' AIR-MAX-OFF     CONSTANT _air-max-off-xt
+' AIR-EVAL-TRANS  CONSTANT _air-eval-trans-xt
+' AIR-CHECK-BOUND CONSTANT _air-check-bound-xt
+
+: AIR-N-COLS      _air-n-cols-xt _air-guard WITH-GUARD ;
+: AIR-N-TRANS     _air-n-trans-xt _air-guard WITH-GUARD ;
+: AIR-N-BOUND     _air-n-bound-xt _air-guard WITH-GUARD ;
+: AIR-MAX-OFF     _air-max-off-xt _air-guard WITH-GUARD ;
+: AIR-EVAL-TRANS  _air-eval-trans-xt _air-guard WITH-GUARD ;
+: AIR-CHECK-BOUND _air-check-bound-xt _air-guard WITH-GUARD ;
+: AIR-BEGIN
+  _air-guard GUARD-ACQUIRE
+  _air-begin-xt CATCH IF _air-guard GUARD-RELEASE THROW THEN ;
+: AIR-TRANS
+  _air-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _air-trans-xt EXECUTE ;
+: AIR-BOUNDARY
+  _air-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _air-boundary-xt EXECUTE ;
+: AIR-END
+  _air-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _air-end-xt CATCH _air-guard GUARD-RELEASE
+  IF THROW THEN ;
+[THEN] [THEN]

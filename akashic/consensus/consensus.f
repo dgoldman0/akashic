@@ -451,11 +451,6 @@ VARIABLE _CON-CHK-BLK
 \  8. Concurrency guard
 \ =====================================================================
 
-REQUIRE ../concurrency/guard.f
-GUARD _con-guard
-
-' CON-MODE!       CONSTANT _con-mode-set-xt
-' CON-STARK!      CONSTANT _con-stark-set-xt
 \ =====================================================================
 \  Stage B — Proof of Stake: Staking + Epoch + Leader + Sign/Check
 \ =====================================================================
@@ -923,6 +918,7 @@ VARIABLE _CON-PACHK-BLK
 \  8. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _con-guard
 
@@ -955,6 +951,7 @@ GUARD _con-guard
 : CON-POS-SIGN    _con-ps-sign-xt   _con-guard WITH-GUARD ;
 : CON-POS-EPOCH   _con-ps-epoch-xt  _con-guard WITH-GUARD ;
 : CON-POSA-ELECT  _con-pa-elect-xt  _con-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =====================================================================
 \  Done — Stage A (PoW + PoA) + Stage B (PoS) + Stage D (PoSA).

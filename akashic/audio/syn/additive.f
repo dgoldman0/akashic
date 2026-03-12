@@ -342,3 +342,51 @@ CREATE _AD-ORGAN-AMPS
         _AD-ORGAN-AMPS I 2* + W@
         I _AD-PO-D @  ADD-HARMONIC!
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _sadd-guard
+
+' AD.NHARM        CONSTANT _ad-dotnharm-xt
+' AD.FUND         CONSTANT _ad-dotfund-xt
+' AD.RATE         CONSTANT _ad-dotrate-xt
+' AD.HPTR         CONSTANT _ad-dothptr-xt
+' AH.ACUR         CONSTANT _ah-dotacur-xt
+' AH.ATGT         CONSTANT _ah-dotatgt-xt
+' AH.ASTART       CONSTANT _ah-dotastart-xt
+' AH.MREM         CONSTANT _ah-dotmrem-xt
+' AH.PHASE        CONSTANT _ah-dotphase-xt
+' AH.PINC         CONSTANT _ah-dotpinc-xt
+' AH.MTOT         CONSTANT _ah-dotmtot-xt
+' ADD-CREATE      CONSTANT _add-create-xt
+' ADD-FREE        CONSTANT _add-free-xt
+' ADD-FUND!       CONSTANT _add-fund-s-xt
+' ADD-HARMONIC!   CONSTANT _add-harmonic-s-xt
+' ADD-MORPH!      CONSTANT _add-morph-s-xt
+' ADD-RENDER      CONSTANT _add-render-xt
+' ADD-PRESET-SAW  CONSTANT _add-preset-saw-xt
+' ADD-PRESET-SQUARE CONSTANT _add-preset-square-xt
+' ADD-PRESET-ORGAN CONSTANT _add-preset-organ-xt
+
+: AD.NHARM        _ad-dotnharm-xt _sadd-guard WITH-GUARD ;
+: AD.FUND         _ad-dotfund-xt _sadd-guard WITH-GUARD ;
+: AD.RATE         _ad-dotrate-xt _sadd-guard WITH-GUARD ;
+: AD.HPTR         _ad-dothptr-xt _sadd-guard WITH-GUARD ;
+: AH.ACUR         _ah-dotacur-xt _sadd-guard WITH-GUARD ;
+: AH.ATGT         _ah-dotatgt-xt _sadd-guard WITH-GUARD ;
+: AH.ASTART       _ah-dotastart-xt _sadd-guard WITH-GUARD ;
+: AH.MREM         _ah-dotmrem-xt _sadd-guard WITH-GUARD ;
+: AH.PHASE        _ah-dotphase-xt _sadd-guard WITH-GUARD ;
+: AH.PINC         _ah-dotpinc-xt _sadd-guard WITH-GUARD ;
+: AH.MTOT         _ah-dotmtot-xt _sadd-guard WITH-GUARD ;
+: ADD-CREATE      _add-create-xt _sadd-guard WITH-GUARD ;
+: ADD-FREE        _add-free-xt _sadd-guard WITH-GUARD ;
+: ADD-FUND!       _add-fund-s-xt _sadd-guard WITH-GUARD ;
+: ADD-HARMONIC!   _add-harmonic-s-xt _sadd-guard WITH-GUARD ;
+: ADD-MORPH!      _add-morph-s-xt _sadd-guard WITH-GUARD ;
+: ADD-RENDER      _add-render-xt _sadd-guard WITH-GUARD ;
+: ADD-PRESET-SAW  _add-preset-saw-xt _sadd-guard WITH-GUARD ;
+: ADD-PRESET-SQUARE _add-preset-square-xt _sadd-guard WITH-GUARD ;
+: ADD-PRESET-ORGAN _add-preset-organ-xt _sadd-guard WITH-GUARD ;
+[THEN] [THEN]

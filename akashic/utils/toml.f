@@ -1009,3 +1009,107 @@ VARIABLE _TIK-KL
 
 : TOML-EXPECT-INLINE-TABLE  ( addr len -- addr len )
     2DUP TOML-INLINE-TABLE? 0= IF TOML-E-WRONG-TYPE TOML-FAIL THEN ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _toml-guard
+
+' TOML-FAIL       CONSTANT _toml-fail-xt
+' TOML-OK?        CONSTANT _toml-ok-q-xt
+' TOML-CLEAR-ERR  CONSTANT _toml-clear-err-xt
+' TOML-SKIP-WS    CONSTANT _toml-skip-ws-xt
+' TOML-SKIP-COMMENT CONSTANT _toml-skip-comment-xt
+' TOML-SKIP-EOL   CONSTANT _toml-skip-eol-xt
+' TOML-SKIP-LINE  CONSTANT _toml-skip-line-xt
+' TOML-SKIP-NL    CONSTANT _toml-skip-nl-xt
+' TOML-SKIP-BASIC-STRING CONSTANT _toml-skip-basic-string-xt
+' TOML-SKIP-LITERAL-STRING CONSTANT _toml-skip-literal-string-xt
+' TOML-SKIP-ML-BASIC CONSTANT _toml-skip-ml-basic-xt
+' TOML-SKIP-ML-LITERAL CONSTANT _toml-skip-ml-literal-xt
+' TOML-SKIP-STRING CONSTANT _toml-skip-string-xt
+' TOML-SKIP-VALUE CONSTANT _toml-skip-value-xt
+' TOML-TYPE?      CONSTANT _toml-type-q-xt
+' TOML-STRING?    CONSTANT _toml-string-q-xt
+' TOML-INTEGER?   CONSTANT _toml-integer-q-xt
+' TOML-FLOAT?     CONSTANT _toml-float-q-xt
+' TOML-BOOL?      CONSTANT _toml-bool-q-xt
+' TOML-DATETIME?  CONSTANT _toml-datetime-q-xt
+' TOML-ARRAY?     CONSTANT _toml-array-q-xt
+' TOML-INLINE-TABLE? CONSTANT _toml-inline-table-q-xt
+' TOML-GET-STRING CONSTANT _toml-get-string-xt
+' TOML-UNESCAPE   CONSTANT _toml-unescape-xt
+' TOML-GET-INT    CONSTANT _toml-get-int-xt
+' TOML-GET-BOOL   CONSTANT _toml-get-bool-xt
+' TOML-GET-FLOAT-STR CONSTANT _toml-get-float-str-xt
+' TOML-GET-DATETIME-STR CONSTANT _toml-get-datetime-str-xt
+' TOML-FIND-TABLE CONSTANT _toml-find-table-xt
+' TOML-FIND-TABLE? CONSTANT _toml-find-table-q-xt
+' TOML-FIND-ATABLE CONSTANT _toml-find-atable-xt
+' TOML-KEY        CONSTANT _toml-key-xt
+' TOML-KEY?       CONSTANT _toml-key-q-xt
+' TOML-PATH       CONSTANT _toml-path-xt
+' TOML-PATH?      CONSTANT _toml-path-q-xt
+' TOML-ENTER      CONSTANT _toml-enter-xt
+' TOML-NEXT       CONSTANT _toml-next-xt
+' TOML-NTH        CONSTANT _toml-nth-xt
+' TOML-COUNT      CONSTANT _toml-count-xt
+' TOML-EACH-KEY   CONSTANT _toml-each-key-xt
+' TOML-IKEY       CONSTANT _toml-ikey-xt
+' TOML-STRING=    CONSTANT _toml-string=-xt
+' TOML-INT=       CONSTANT _toml-int=-xt
+' TOML-EXPECT-STRING CONSTANT _toml-expect-string-xt
+' TOML-EXPECT-INTEGER CONSTANT _toml-expect-integer-xt
+' TOML-EXPECT-BOOL CONSTANT _toml-expect-bool-xt
+' TOML-EXPECT-ARRAY CONSTANT _toml-expect-array-xt
+' TOML-EXPECT-INLINE-TABLE CONSTANT _toml-expect-inline-table-xt
+
+: TOML-FAIL       _toml-fail-xt _toml-guard WITH-GUARD ;
+: TOML-OK?        _toml-ok-q-xt _toml-guard WITH-GUARD ;
+: TOML-CLEAR-ERR  _toml-clear-err-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-WS    _toml-skip-ws-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-COMMENT _toml-skip-comment-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-EOL   _toml-skip-eol-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-LINE  _toml-skip-line-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-NL    _toml-skip-nl-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-BASIC-STRING _toml-skip-basic-string-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-LITERAL-STRING _toml-skip-literal-string-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-ML-BASIC _toml-skip-ml-basic-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-ML-LITERAL _toml-skip-ml-literal-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-STRING _toml-skip-string-xt _toml-guard WITH-GUARD ;
+: TOML-SKIP-VALUE _toml-skip-value-xt _toml-guard WITH-GUARD ;
+: TOML-TYPE?      _toml-type-q-xt _toml-guard WITH-GUARD ;
+: TOML-STRING?    _toml-string-q-xt _toml-guard WITH-GUARD ;
+: TOML-INTEGER?   _toml-integer-q-xt _toml-guard WITH-GUARD ;
+: TOML-FLOAT?     _toml-float-q-xt _toml-guard WITH-GUARD ;
+: TOML-BOOL?      _toml-bool-q-xt _toml-guard WITH-GUARD ;
+: TOML-DATETIME?  _toml-datetime-q-xt _toml-guard WITH-GUARD ;
+: TOML-ARRAY?     _toml-array-q-xt _toml-guard WITH-GUARD ;
+: TOML-INLINE-TABLE? _toml-inline-table-q-xt _toml-guard WITH-GUARD ;
+: TOML-GET-STRING _toml-get-string-xt _toml-guard WITH-GUARD ;
+: TOML-UNESCAPE   _toml-unescape-xt _toml-guard WITH-GUARD ;
+: TOML-GET-INT    _toml-get-int-xt _toml-guard WITH-GUARD ;
+: TOML-GET-BOOL   _toml-get-bool-xt _toml-guard WITH-GUARD ;
+: TOML-GET-FLOAT-STR _toml-get-float-str-xt _toml-guard WITH-GUARD ;
+: TOML-GET-DATETIME-STR _toml-get-datetime-str-xt _toml-guard WITH-GUARD ;
+: TOML-FIND-TABLE _toml-find-table-xt _toml-guard WITH-GUARD ;
+: TOML-FIND-TABLE? _toml-find-table-q-xt _toml-guard WITH-GUARD ;
+: TOML-FIND-ATABLE _toml-find-atable-xt _toml-guard WITH-GUARD ;
+: TOML-KEY        _toml-key-xt _toml-guard WITH-GUARD ;
+: TOML-KEY?       _toml-key-q-xt _toml-guard WITH-GUARD ;
+: TOML-PATH       _toml-path-xt _toml-guard WITH-GUARD ;
+: TOML-PATH?      _toml-path-q-xt _toml-guard WITH-GUARD ;
+: TOML-ENTER      _toml-enter-xt _toml-guard WITH-GUARD ;
+: TOML-NEXT       _toml-next-xt _toml-guard WITH-GUARD ;
+: TOML-NTH        _toml-nth-xt _toml-guard WITH-GUARD ;
+: TOML-COUNT      _toml-count-xt _toml-guard WITH-GUARD ;
+: TOML-EACH-KEY   _toml-each-key-xt _toml-guard WITH-GUARD ;
+: TOML-IKEY       _toml-ikey-xt _toml-guard WITH-GUARD ;
+: TOML-STRING=    _toml-string=-xt _toml-guard WITH-GUARD ;
+: TOML-INT=       _toml-int=-xt _toml-guard WITH-GUARD ;
+: TOML-EXPECT-STRING _toml-expect-string-xt _toml-guard WITH-GUARD ;
+: TOML-EXPECT-INTEGER _toml-expect-integer-xt _toml-guard WITH-GUARD ;
+: TOML-EXPECT-BOOL _toml-expect-bool-xt _toml-guard WITH-GUARD ;
+: TOML-EXPECT-ARRAY _toml-expect-array-xt _toml-guard WITH-GUARD ;
+: TOML-EXPECT-INLINE-TABLE _toml-expect-inline-table-xt _toml-guard WITH-GUARD ;
+[THEN] [THEN]

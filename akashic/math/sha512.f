@@ -351,6 +351,7 @@ CREATE _S512-HEX
     0= IF TRUE ELSE FALSE THEN ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _sha512-guard
 
@@ -377,3 +378,5 @@ GUARD _sha512-guard
     _sha512-end-xt CATCH
     _sha512-guard GUARD-RELEASE
     ?DUP IF THROW THEN ;
+
+[THEN] [THEN]

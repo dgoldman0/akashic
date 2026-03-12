@@ -565,3 +565,65 @@ VARIABLE _SURF-AB-B     \ dest address
     \ Create via CREATE-FROM (not owned)
     _SURF-PTR @  _SURF-W2 @  _SURF-H2 @  _SURF-TMP @ SURF-STRIDE
     SURF-CREATE-FROM ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _surf-guard
+
+' S.BUF           CONSTANT _s-dotbuf-xt
+' S.W             CONSTANT _s-dotw-xt
+' S.H             CONSTANT _s-doth-xt
+' S.STRIDE        CONSTANT _s-dotstride-xt
+' S.CLIP-X        CONSTANT _s-dotclip-x-xt
+' S.CLIP-Y        CONSTANT _s-dotclip-y-xt
+' S.CLIP-W        CONSTANT _s-dotclip-w-xt
+' S.CLIP-H        CONSTANT _s-dotclip-h-xt
+' S.FLAGS         CONSTANT _s-dotflags-xt
+' SURF-BUF        CONSTANT _surf-buf-xt
+' SURF-W          CONSTANT _surf-w-xt
+' SURF-H          CONSTANT _surf-h-xt
+' SURF-STRIDE     CONSTANT _surf-stride-xt
+' SURF-CREATE     CONSTANT _surf-create-xt
+' SURF-CREATE-FROM CONSTANT _surf-create-from-xt
+' SURF-DESTROY    CONSTANT _surf-destroy-xt
+' SURF-CLIP!      CONSTANT _surf-clip-s-xt
+' SURF-CLIP-RESET CONSTANT _surf-clip-reset-xt
+' SURF-PIXEL@     CONSTANT _surf-pixel-at-xt
+' SURF-PIXEL!     CONSTANT _surf-pixel-s-xt
+' SURF-HLINE      CONSTANT _surf-hline-xt
+' SURF-FILL-RECT  CONSTANT _surf-fill-rect-xt
+' SURF-CLEAR-REGION CONSTANT _surf-clear-region-xt
+' SURF-CLEAR      CONSTANT _surf-clear-xt
+' SURF-BLIT       CONSTANT _surf-blit-xt
+' SURF-BLIT-ALPHA CONSTANT _surf-blit-alpha-xt
+' SURF-SUB        CONSTANT _surf-sub-xt
+
+: S.BUF           _s-dotbuf-xt _surf-guard WITH-GUARD ;
+: S.W             _s-dotw-xt _surf-guard WITH-GUARD ;
+: S.H             _s-doth-xt _surf-guard WITH-GUARD ;
+: S.STRIDE        _s-dotstride-xt _surf-guard WITH-GUARD ;
+: S.CLIP-X        _s-dotclip-x-xt _surf-guard WITH-GUARD ;
+: S.CLIP-Y        _s-dotclip-y-xt _surf-guard WITH-GUARD ;
+: S.CLIP-W        _s-dotclip-w-xt _surf-guard WITH-GUARD ;
+: S.CLIP-H        _s-dotclip-h-xt _surf-guard WITH-GUARD ;
+: S.FLAGS         _s-dotflags-xt _surf-guard WITH-GUARD ;
+: SURF-BUF        _surf-buf-xt _surf-guard WITH-GUARD ;
+: SURF-W          _surf-w-xt _surf-guard WITH-GUARD ;
+: SURF-H          _surf-h-xt _surf-guard WITH-GUARD ;
+: SURF-STRIDE     _surf-stride-xt _surf-guard WITH-GUARD ;
+: SURF-CREATE     _surf-create-xt _surf-guard WITH-GUARD ;
+: SURF-CREATE-FROM _surf-create-from-xt _surf-guard WITH-GUARD ;
+: SURF-DESTROY    _surf-destroy-xt _surf-guard WITH-GUARD ;
+: SURF-CLIP!      _surf-clip-s-xt _surf-guard WITH-GUARD ;
+: SURF-CLIP-RESET _surf-clip-reset-xt _surf-guard WITH-GUARD ;
+: SURF-PIXEL@     _surf-pixel-at-xt _surf-guard WITH-GUARD ;
+: SURF-PIXEL!     _surf-pixel-s-xt _surf-guard WITH-GUARD ;
+: SURF-HLINE      _surf-hline-xt _surf-guard WITH-GUARD ;
+: SURF-FILL-RECT  _surf-fill-rect-xt _surf-guard WITH-GUARD ;
+: SURF-CLEAR-REGION _surf-clear-region-xt _surf-guard WITH-GUARD ;
+: SURF-CLEAR      _surf-clear-xt _surf-guard WITH-GUARD ;
+: SURF-BLIT       _surf-blit-xt _surf-guard WITH-GUARD ;
+: SURF-BLIT-ALPHA _surf-blit-alpha-xt _surf-guard WITH-GUARD ;
+: SURF-SUB        _surf-sub-xt _surf-guard WITH-GUARD ;
+[THEN] [THEN]

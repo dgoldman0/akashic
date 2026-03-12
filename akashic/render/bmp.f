@@ -166,3 +166,15 @@ VARIABLE _BMP-PIX
     _BMP-WRITE-PIXELS
     R>                                 \ return byte count
 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _bmp-guard
+
+' BMP-FILE-SIZE   CONSTANT _bmp-file-size-xt
+' BMP-ENCODE      CONSTANT _bmp-encode-xt
+
+: BMP-FILE-SIZE   _bmp-file-size-xt _bmp-guard WITH-GUARD ;
+: BMP-ENCODE      _bmp-encode-xt _bmp-guard WITH-GUARD ;
+[THEN] [THEN]

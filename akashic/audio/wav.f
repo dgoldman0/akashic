@@ -360,3 +360,19 @@ VARIABLE _WAV-J         \ inner loop counter
     LOOP
 
     _WAV-SRC @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _wav-guard
+
+' WAV-FILE-SIZE   CONSTANT _wav-file-size-xt
+' WAV-ENCODE      CONSTANT _wav-encode-xt
+' WAV-INFO        CONSTANT _wav-info-xt
+' WAV-DECODE      CONSTANT _wav-decode-xt
+
+: WAV-FILE-SIZE   _wav-file-size-xt _wav-guard WITH-GUARD ;
+: WAV-ENCODE      _wav-encode-xt _wav-guard WITH-GUARD ;
+: WAV-INFO        _wav-info-xt _wav-guard WITH-GUARD ;
+: WAV-DECODE      _wav-decode-xt _wav-guard WITH-GUARD ;
+[THEN] [THEN]

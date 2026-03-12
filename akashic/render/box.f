@@ -806,3 +806,142 @@ VARIABLE _BUL-PREV
 
     _BBT-ROOT @ ;
 
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _box-guard
+
+' B.DOM           CONSTANT _b-dotdom-xt
+' B.PARENT        CONSTANT _b-dotparent-xt
+' B.CHILD         CONSTANT _b-dotchild-xt
+' B.NEXT          CONSTANT _b-dotnext-xt
+' B.DISPLAY       CONSTANT _b-dotdisplay-xt
+' B.X             CONSTANT _b-dotx-xt
+' B.Y             CONSTANT _b-doty-xt
+' B.W             CONSTANT _b-dotw-xt
+' B.H             CONSTANT _b-doth-xt
+' B.MT            CONSTANT _b-dotmt-xt
+' B.MR            CONSTANT _b-dotmr-xt
+' B.MB            CONSTANT _b-dotmb-xt
+' B.ML            CONSTANT _b-dotml-xt
+' B.PT            CONSTANT _b-dotpt-xt
+' B.PR            CONSTANT _b-dotpr-xt
+' B.PB            CONSTANT _b-dotpb-xt
+' B.PL            CONSTANT _b-dotpl-xt
+' B.BT            CONSTANT _b-dotbt-xt
+' B.BR            CONSTANT _b-dotbr-xt
+' B.BB            CONSTANT _b-dotbb-xt
+' B.BL            CONSTANT _b-dotbl-xt
+' B.FLAGS         CONSTANT _b-dotflags-xt
+' B.FRAGS         CONSTANT _b-dotfrags-xt
+' B.MINW          CONSTANT _b-dotminw-xt
+' B.MAXW          CONSTANT _b-dotmaxw-xt
+' B.MINH          CONSTANT _b-dotminh-xt
+' B.MAXH          CONSTANT _b-dotmaxh-xt
+' BOX-DOM         CONSTANT _box-dom-xt
+' BOX-PARENT      CONSTANT _box-parent-xt
+' BOX-FIRST-CHILD CONSTANT _box-first-child-xt
+' BOX-NEXT        CONSTANT _box-next-xt
+' BOX-DISPLAY     CONSTANT _box-display-xt
+' BOX-X           CONSTANT _box-x-xt
+' BOX-Y           CONSTANT _box-y-xt
+' BOX-W           CONSTANT _box-w-xt
+' BOX-H           CONSTANT _box-h-xt
+' BOX-MARGIN-T    CONSTANT _box-margin-t-xt
+' BOX-MARGIN-R    CONSTANT _box-margin-r-xt
+' BOX-MARGIN-B    CONSTANT _box-margin-b-xt
+' BOX-MARGIN-L    CONSTANT _box-margin-l-xt
+' BOX-PADDING-T   CONSTANT _box-padding-t-xt
+' BOX-PADDING-R   CONSTANT _box-padding-r-xt
+' BOX-PADDING-B   CONSTANT _box-padding-b-xt
+' BOX-PADDING-L   CONSTANT _box-padding-l-xt
+' BOX-BORDER-T    CONSTANT _box-border-t-xt
+' BOX-BORDER-R    CONSTANT _box-border-r-xt
+' BOX-BORDER-B    CONSTANT _box-border-b-xt
+' BOX-BORDER-L    CONSTANT _box-border-l-xt
+' BOX-FRAGS       CONSTANT _box-frags-xt
+' BOX-MIN-W       CONSTANT _box-min-w-xt
+' BOX-MAX-W       CONSTANT _box-max-w-xt
+' BOX-MIN-H       CONSTANT _box-min-h-xt
+' BOX-MAX-H       CONSTANT _box-max-h-xt
+' BOX-X!          CONSTANT _box-x-s-xt
+' BOX-Y!          CONSTANT _box-y-s-xt
+' BOX-W!          CONSTANT _box-w-s-xt
+' BOX-H!          CONSTANT _box-h-s-xt
+' BOX-CREATE      CONSTANT _box-create-xt
+' BOX-DESTROY     CONSTANT _box-destroy-xt
+' BOX-FREE-TREE   CONSTANT _box-free-tree-xt
+' BOX-RESOLVE-STYLE CONSTANT _box-resolve-style-xt
+' BOX-CONTENT-RECT CONSTANT _box-content-rect-xt
+' BOX-PADDING-RECT CONSTANT _box-padding-rect-xt
+' BOX-BORDER-RECT CONSTANT _box-border-rect-xt
+' BOX-MARGIN-RECT CONSTANT _box-margin-rect-xt
+' BOX-BUILD-TREE  CONSTANT _box-build-tree-xt
+
+: B.DOM           _b-dotdom-xt _box-guard WITH-GUARD ;
+: B.PARENT        _b-dotparent-xt _box-guard WITH-GUARD ;
+: B.CHILD         _b-dotchild-xt _box-guard WITH-GUARD ;
+: B.NEXT          _b-dotnext-xt _box-guard WITH-GUARD ;
+: B.DISPLAY       _b-dotdisplay-xt _box-guard WITH-GUARD ;
+: B.X             _b-dotx-xt _box-guard WITH-GUARD ;
+: B.Y             _b-doty-xt _box-guard WITH-GUARD ;
+: B.W             _b-dotw-xt _box-guard WITH-GUARD ;
+: B.H             _b-doth-xt _box-guard WITH-GUARD ;
+: B.MT            _b-dotmt-xt _box-guard WITH-GUARD ;
+: B.MR            _b-dotmr-xt _box-guard WITH-GUARD ;
+: B.MB            _b-dotmb-xt _box-guard WITH-GUARD ;
+: B.ML            _b-dotml-xt _box-guard WITH-GUARD ;
+: B.PT            _b-dotpt-xt _box-guard WITH-GUARD ;
+: B.PR            _b-dotpr-xt _box-guard WITH-GUARD ;
+: B.PB            _b-dotpb-xt _box-guard WITH-GUARD ;
+: B.PL            _b-dotpl-xt _box-guard WITH-GUARD ;
+: B.BT            _b-dotbt-xt _box-guard WITH-GUARD ;
+: B.BR            _b-dotbr-xt _box-guard WITH-GUARD ;
+: B.BB            _b-dotbb-xt _box-guard WITH-GUARD ;
+: B.BL            _b-dotbl-xt _box-guard WITH-GUARD ;
+: B.FLAGS         _b-dotflags-xt _box-guard WITH-GUARD ;
+: B.FRAGS         _b-dotfrags-xt _box-guard WITH-GUARD ;
+: B.MINW          _b-dotminw-xt _box-guard WITH-GUARD ;
+: B.MAXW          _b-dotmaxw-xt _box-guard WITH-GUARD ;
+: B.MINH          _b-dotminh-xt _box-guard WITH-GUARD ;
+: B.MAXH          _b-dotmaxh-xt _box-guard WITH-GUARD ;
+: BOX-DOM         _box-dom-xt _box-guard WITH-GUARD ;
+: BOX-PARENT      _box-parent-xt _box-guard WITH-GUARD ;
+: BOX-FIRST-CHILD _box-first-child-xt _box-guard WITH-GUARD ;
+: BOX-NEXT        _box-next-xt _box-guard WITH-GUARD ;
+: BOX-DISPLAY     _box-display-xt _box-guard WITH-GUARD ;
+: BOX-X           _box-x-xt _box-guard WITH-GUARD ;
+: BOX-Y           _box-y-xt _box-guard WITH-GUARD ;
+: BOX-W           _box-w-xt _box-guard WITH-GUARD ;
+: BOX-H           _box-h-xt _box-guard WITH-GUARD ;
+: BOX-MARGIN-T    _box-margin-t-xt _box-guard WITH-GUARD ;
+: BOX-MARGIN-R    _box-margin-r-xt _box-guard WITH-GUARD ;
+: BOX-MARGIN-B    _box-margin-b-xt _box-guard WITH-GUARD ;
+: BOX-MARGIN-L    _box-margin-l-xt _box-guard WITH-GUARD ;
+: BOX-PADDING-T   _box-padding-t-xt _box-guard WITH-GUARD ;
+: BOX-PADDING-R   _box-padding-r-xt _box-guard WITH-GUARD ;
+: BOX-PADDING-B   _box-padding-b-xt _box-guard WITH-GUARD ;
+: BOX-PADDING-L   _box-padding-l-xt _box-guard WITH-GUARD ;
+: BOX-BORDER-T    _box-border-t-xt _box-guard WITH-GUARD ;
+: BOX-BORDER-R    _box-border-r-xt _box-guard WITH-GUARD ;
+: BOX-BORDER-B    _box-border-b-xt _box-guard WITH-GUARD ;
+: BOX-BORDER-L    _box-border-l-xt _box-guard WITH-GUARD ;
+: BOX-FRAGS       _box-frags-xt _box-guard WITH-GUARD ;
+: BOX-MIN-W       _box-min-w-xt _box-guard WITH-GUARD ;
+: BOX-MAX-W       _box-max-w-xt _box-guard WITH-GUARD ;
+: BOX-MIN-H       _box-min-h-xt _box-guard WITH-GUARD ;
+: BOX-MAX-H       _box-max-h-xt _box-guard WITH-GUARD ;
+: BOX-X!          _box-x-s-xt _box-guard WITH-GUARD ;
+: BOX-Y!          _box-y-s-xt _box-guard WITH-GUARD ;
+: BOX-W!          _box-w-s-xt _box-guard WITH-GUARD ;
+: BOX-H!          _box-h-s-xt _box-guard WITH-GUARD ;
+: BOX-CREATE      _box-create-xt _box-guard WITH-GUARD ;
+: BOX-DESTROY     _box-destroy-xt _box-guard WITH-GUARD ;
+: BOX-FREE-TREE   _box-free-tree-xt _box-guard WITH-GUARD ;
+: BOX-RESOLVE-STYLE _box-resolve-style-xt _box-guard WITH-GUARD ;
+: BOX-CONTENT-RECT _box-content-rect-xt _box-guard WITH-GUARD ;
+: BOX-PADDING-RECT _box-padding-rect-xt _box-guard WITH-GUARD ;
+: BOX-BORDER-RECT _box-border-rect-xt _box-guard WITH-GUARD ;
+: BOX-MARGIN-RECT _box-margin-rect-xt _box-guard WITH-GUARD ;
+: BOX-BUILD-TREE  _box-build-tree-xt _box-guard WITH-GUARD ;
+[THEN] [THEN]

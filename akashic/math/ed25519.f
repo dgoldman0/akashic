@@ -441,6 +441,7 @@ VARIABLE _ED-CT-MSK
     _ED-SC1 32 0 FILL ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _ed25519-guard
 
@@ -451,3 +452,4 @@ GUARD _ed25519-guard
 : ED25519-KEYGEN  _ed-keygen-xt  _ed25519-guard WITH-GUARD ;
 : ED25519-SIGN    _ed-sign-xt    _ed25519-guard WITH-GUARD ;
 : ED25519-VERIFY  _ed-verify-xt  _ed25519-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -45,17 +45,22 @@ and no circular imports.
   - [4.6 tui/table.f — Tabular Data Display](#46-tuitablef--tabular-data-display)
   - [4.7 tui/dialog.f — Modal Dialog Boxes](#47-tuidialogyf--modal-dialog-boxes)
   - [4.8 tui/tabs.f — Tabbed Panels](#48-tuitabsf--tabbed-panels)
-- [Layer 5 — Application Shell](#layer-5--application-shell)
-  - [5.1 tui/event.f — Event Loop & Dispatch](#51-tuieventf--event-loop--dispatch)
-  - [5.2 tui/focus.f — Focus Manager](#52-tuifocusf--focus-manager)
-  - [5.3 tui/app.f — Application Lifecycle](#53-tuiappf--application-lifecycle)
-- [Layer 6 — Extended Components](#layer-6--extended-components)
-  - [6.1 tui/split.f — Split Panes](#61-tuisplitf--split-panes)
-  - [6.2 tui/scroll.f — Scrollable Viewport](#62-tuiscrollf--scrollable-viewport)
-  - [6.3 tui/tree.f — Tree View](#63-tuitreef--tree-view)
-  - [6.4 tui/status.f — Status Bar](#64-tuistatusf--status-bar)
-  - [6.5 tui/toast.f — Transient Notifications](#65-tuitoastf--transient-notifications)
-  - [6.6 tui/canvas.f — Character-Mode Canvas](#66-tuicanvasf--character-mode-canvas)
+- [Layer 5 — DOM-TUI Bridge](#layer-5--dom-tui-bridge)
+  - [5.0 dom/event.f — DOM Event System](#50-domeventf--dom-event-system)
+  - [5.1 tui/dom-tui.f — DOM-to-TUI Node Mapping](#51-tuidom-tuif--dom-to-tui-node-mapping)
+  - [5.2 tui/dom-render.f — DOM Tree Layout & Paint](#52-tuidom-renderf--dom-tree-layout--paint)
+  - [5.3 tui/dom-event.f — DOM Event Routing](#53-tuidom-eventf--dom-event-routing)
+- [Layer 6 — Application Shell](#layer-6--application-shell)
+  - [6.1 tui/event.f — Event Loop & Dispatch](#61-tuieventf--event-loop--dispatch)
+  - [6.2 tui/focus.f — Focus Manager](#62-tuifocusf--focus-manager)
+  - [6.3 tui/app.f — Application Lifecycle](#63-tuiappf--application-lifecycle)
+- [Layer 7 — Extended Components](#layer-7--extended-components)
+  - [7.1 tui/split.f — Split Panes](#71-tuisplitf--split-panes)
+  - [7.2 tui/scroll.f — Scrollable Viewport](#72-tuiscrollf--scrollable-viewport)
+  - [7.3 tui/tree.f — Tree View](#73-tuitreef--tree-view)
+  - [7.4 tui/status.f — Status Bar](#74-tuistatusf--status-bar)
+  - [7.5 tui/toast.f — Transient Notifications](#75-tuitoastf--transient-notifications)
+  - [7.6 tui/canvas.f — Character-Mode Canvas](#76-tuicanvasf--character-mode-canvas)
 - [Dependency Graph](#dependency-graph)
 - [Implementation Order](#implementation-order)
 - [Memory Budget](#memory-budget)
@@ -192,6 +197,10 @@ column.
    - `tui/status.f`   → `SBAR-`
    - `tui/toast.f`    → `TST-`
    - `tui/canvas.f`   → `CVS-`
+   - `dom/event.f`    → `DOME-`
+   - `tui/dom-tui.f`  → `DTUI-`
+   - `tui/dom-render.f`→ `DREN-`
+   - `tui/dom-event.f` → `DEVT-`
 
    Internal words use `_`-prefix: `_ANSI-`, `_SCR-`, etc.
 
@@ -209,11 +218,15 @@ column.
 ┌──────────────────────────────────────────────────────────────┐
 │                       Application                            │
 ├──────────────────────────────────────────────────────────────┤
-│  Layer 6: Extended Components                                │
+│  Layer 7: Extended Components                                │
 │  split.f │ scroll.f │ tree.f │ status.f │ toast.f │ canvas.f │
 ├──────────────────────────────────────────────────────────────┤
-│  Layer 5: Application Shell                                  │
+│  Layer 6: Application Shell                                  │
 │  event.f (loop) │ focus.f (focus chain) │ app.f (lifecycle)  │
+├──────────────────────────────────────────────────────────────┤
+│  Layer 5: DOM-TUI Bridge                                     │
+│  dom-tui.f (node mapping) │ dom-render.f │ dom-event.f       │
+│  ▲ consumes: dom/dom.f, css/css.f, css/bridge.f             │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 4: Widgets                                            │
 │  label │ input │ list │ menu │ progress │ table │ dialog│tabs│
@@ -233,6 +246,7 @@ column.
 │  KDOS BIOS: EMIT │ KEY │ KEY? │ TYPE │ CR                    │
 ├──────────────────────────────────────────────────────────────┤
 │  Existing Akashic: string.f │ utf8.f │ fmt.f │ event.f       │
+│  dom/dom.f │ css/css.f │ css/bridge.f                        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -1474,9 +1488,573 @@ Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`
 
 ---
 
-## Layer 5 — Application Shell
+## Layer 5 — DOM-TUI Bridge
 
-### 5.1 tui/event.f — Event Loop & Dispatch
+The DOM/CSS subsystem (dom/dom.f, css/css.f, css/bridge.f) already
+provides a full tree with attributes, mutation, query, traversal,
+and style resolution including CSS cascade, specificity, and
+inheritance.  Rather than building a parallel scene-graph, this
+layer re-uses the existing DOM as the tree structure and adds a
+thin adapter that maps DOM nodes + resolved CSS properties into
+TUI character-cell geometry.
+
+The DOM `aux` field (offset +72 in each 80-byte node) is the hook:
+it points to a small TUI-specific sidecar descriptor that carries
+character-cell layout results, resolved fg/bg colors, border style,
+dirty flags, and draw/event execution tokens.
+
+This layer sits between the core widgets (Layer 4) and the
+application shell (Layer 6).  It is **optional** — pure-widget TUI
+apps that don't need HTML/CSS skip this layer entirely.  But for
+applications that want declarative UI via HTML markup with CSS
+styling rendered to the terminal, this is the bridge.
+
+### 5.0 dom/event.f — DOM Event System
+
+**Goal:** A full, general-purpose DOM event system implementing the
+W3C DOM Events model.  Provides event object creation, listener
+registration/removal, and three-phase dispatch (capture → target →
+bubble) with `stopPropagation`, `stopImmediatePropagation`, and
+`preventDefault`.  This module lives in the DOM subsystem (`dom/`),
+not in `tui/` — it is renderer-agnostic and usable by the pixel
+pipeline, the TUI bridge, or any other DOM consumer.
+
+File: `dom/event.f`
+Prefix: `DOME-` (public), `_DOME-` (internal)
+Provider: `PROVIDED akashic-dom-event`
+Dependencies: `REQUIRE dom/dom.f`
+
+~450 lines
+
+#### Event Object (10 cells = 80 bytes)
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0 | type | Event type identifier (interned string handle) |
+| +8 | target | Node where the event originated |
+| +16 | current-target | Node whose listener is currently executing |
+| +24 | phase | `DOME-PHASE-CAPTURE` (1), `DOME-PHASE-TARGET` (2), or `DOME-PHASE-BUBBLE` (3) |
+| +32 | flags | Bit 0: bubbles, Bit 1: cancelable, Bit 2: stopped, Bit 3: immediate-stopped, Bit 4: default-prevented |
+| +40 | timestamp | Tick count at creation (via `TIMER@`) |
+| +48 | detail | Generic payload cell (event-type-specific data) |
+| +56 | detail2 | Second payload cell (e.g., coordinates for mouse events) |
+| +64 | detail3 | Third payload cell (e.g., modifiers) |
+| +72 | related | Related node (e.g., `relatedTarget` for focus events) |
+
+Event objects are stack-allocated or taken from a small recycling
+pool (8 slots).  Most events are transient — created, dispatched,
+and discarded within a single call.
+
+#### Event Type Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `DOME-T-CLICK` | (interned) | Mouse click |
+| `DOME-T-DBLCLICK` | (interned) | Double click |
+| `DOME-T-MOUSEDOWN` | (interned) | Mouse button pressed |
+| `DOME-T-MOUSEUP` | (interned) | Mouse button released |
+| `DOME-T-MOUSEMOVE` | (interned) | Mouse movement |
+| `DOME-T-KEYDOWN` | (interned) | Key pressed |
+| `DOME-T-KEYUP` | (interned) | Key released |
+| `DOME-T-KEYPRESS` | (interned) | Character input |
+| `DOME-T-FOCUS` | (interned) | Element gained focus |
+| `DOME-T-BLUR` | (interned) | Element lost focus |
+| `DOME-T-INPUT` | (interned) | Input value changed |
+| `DOME-T-CHANGE` | (interned) | Value committed |
+| `DOME-T-SUBMIT` | (interned) | Form submission |
+| `DOME-T-SCROLL` | (interned) | Scroll position changed |
+| `DOME-T-RESIZE` | (interned) | Container resized |
+| `DOME-T-CUSTOM` | (interned) | User-defined custom event |
+
+Type identifiers are interned string handles allocated from the
+DOM document's string pool.  `DOME-INTERN-TYPE` converts a string
+to a type ID; comparison is by handle equality (O(1)).
+
+#### Listener Storage
+
+Each DOM node can have zero or more event listeners.  Listeners
+are stored in a per-node linked list, allocated from a dedicated
+listener pool in the document descriptor.
+
+##### Listener Entry (5 cells = 40 bytes)
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0 | type | Event type handle (must match event.type) |
+| +8 | xt | Execution token: `( event node -- )` |
+| +16 | flags | Bit 0: capture phase, Bit 1: once (auto-remove after first call) |
+| +24 | next | Next listener in this node's list (0 = end) |
+| +32 | node | Back-pointer to owning node |
+
+The document descriptor is extended with two new fields:
+- `lst-base` / `lst-max` / `lst-free`: Listener pool (free-list,
+  same pattern as the node and attribute pools in `dom.f`).
+
+##### Pool Sizing
+
+Default: 256 listener slots = 256 × 40 = 10,240 bytes.  Sufficient
+for a typical interactive UI (50 elements × ~5 listeners each).
+Configurable at document creation time.
+
+#### Words — Event Object
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DOME-EVENT-NEW` | `( type bubbles? cancelable? -- event )` | Allocate event object, set type and flags |
+| `DOME-EVENT-FREE` | `( event -- )` | Return event to pool |
+| `DOME-EVENT-TYPE` | `( event -- type )` | Get type handle |
+| `DOME-EVENT-TARGET` | `( event -- node )` | Get target node |
+| `DOME-EVENT-CURRENT` | `( event -- node )` | Get current-target node |
+| `DOME-EVENT-PHASE` | `( event -- phase )` | Get dispatch phase |
+| `DOME-EVENT-DETAIL` | `( event -- detail )` | Get detail payload |
+| `DOME-EVENT-DETAIL!` | `( event detail -- )` | Set detail payload |
+| `DOME-EVENT-DETAIL2` | `( event -- detail2 )` | Get second payload |
+| `DOME-EVENT-DETAIL2!` | `( event detail2 -- )` | Set second payload |
+| `DOME-EVENT-DETAIL3` | `( event -- detail3 )` | Get third payload |
+| `DOME-EVENT-DETAIL3!` | `( event detail3 -- )` | Set third payload |
+| `DOME-EVENT-RELATED` | `( event -- node | 0 )` | Get related target |
+| `DOME-EVENT-RELATED!` | `( event node -- )` | Set related target |
+| `DOME-STOP` | `( event -- )` | Stop propagation (remaining ancestors won't see it) |
+| `DOME-STOP-IMMEDIATE` | `( event -- )` | Stop immediately (remaining listeners on *this* node also skipped) |
+| `DOME-PREVENT` | `( event -- )` | Prevent default action |
+| `DOME-STOPPED?` | `( event -- flag )` | Has propagation been stopped? |
+| `DOME-PREVENTED?` | `( event -- flag )` | Has default been prevented? |
+
+#### Words — Listener Registration
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DOME-LISTEN` | `( node type xt -- )` | Add bubble-phase listener |
+| `DOME-LISTEN-CAPTURE` | `( node type xt -- )` | Add capture-phase listener |
+| `DOME-LISTEN-ONCE` | `( node type xt -- )` | Add one-shot bubble listener (auto-removed after first fire) |
+| `DOME-UNLISTEN` | `( node type xt -- )` | Remove a specific listener (matched by type + xt + phase) |
+| `DOME-UNLISTEN-ALL` | `( node -- )` | Remove all listeners from a node |
+| `DOME-UNLISTEN-TYPE` | `( node type -- )` | Remove all listeners for a specific type |
+| `DOME-HAS-LISTENER?` | `( node type -- flag )` | Does this node have any listener for this type? |
+
+#### Words — Dispatch
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DOME-DISPATCH` | `( doc node event -- prevented? )` | Full three-phase dispatch; returns TRUE if `preventDefault` was called |
+| `DOME-FIRE` | `( doc node type detail -- prevented? )` | Convenience: create event, dispatch, free; for simple cases |
+
+#### Words — Type Interning
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DOME-INTERN-TYPE` | `( doc addr len -- type-handle )` | Intern an event type name, return handle |
+| `DOME-TYPE-NAME` | `( doc type-handle -- addr len )` | Get string for a type handle |
+
+#### Three-Phase Dispatch Algorithm
+
+```forth
+: DOME-DISPATCH ( doc node event -- prevented? )
+  >R                          \ R: event
+  \ 1. Build ancestor path (node → parent → ... → root)
+  SWAP _DOME-BUILD-PATH       ( doc path-addr path-count ) ( R: event )
+  \ 2. CAPTURE phase: walk root → parent → ... → node.parent
+  R@ DOME-PHASE-CAPTURE _DOME-SET-PHASE
+  DUP 1- 0 ?DO                \ for each ancestor, root-first
+    I OVER + @ DUP            ( ... ancestor ancestor )
+    R@ SWAP _DOME-SET-CURRENT
+    R@ SWAP _DOME-FIRE-LISTENERS-CAPTURE
+    R@ DOME-STOPPED? IF UNLOOP _DOME-FINISH EXIT THEN
+  LOOP
+  \ 3. TARGET phase: fire on the target node itself
+  R@ DOME-PHASE-TARGET _DOME-SET-PHASE
+  R@ node _DOME-SET-CURRENT
+  R@ node _DOME-FIRE-LISTENERS-ALL  \ both capture + bubble listeners
+  R@ DOME-STOPPED? IF _DOME-FINISH EXIT THEN
+  \ 4. BUBBLE phase: walk node.parent → ... → root
+  R@ +flags @ 1 AND IF        \ only if event.bubbles
+    R@ DOME-PHASE-BUBBLE _DOME-SET-PHASE
+    path-count 2 - 0 MAX 0 ?DO  \ reverse order
+      ...
+      R@ DOME-STOPPED? IF UNLOOP _DOME-FINISH EXIT THEN
+    LOOP
+  THEN
+  _DOME-FINISH                \ returns prevented?
+;
+```
+
+The ancestor path is built by walking `DOM-PARENT` from target to
+root and storing pointers in a small stack-allocated array (max
+depth 64 — sufficient for any practical DOM tree).
+
+#### Usage Example
+
+```forth
+REQUIRE dom/dom.f
+REQUIRE dom/event.f
+
+S" <div id='app'><button id='ok'>OK</button></div>"
+DOM-PARSE-HTML CONSTANT my-doc
+
+\ Intern event types
+my-doc S" click" DOME-INTERN-TYPE CONSTANT click-type
+
+\ Get the button node
+my-doc S" ok" DOM-GET-BY-ID CONSTANT btn
+
+\ Register a bubble-phase listener
+btn click-type ['] my-click-handler DOME-LISTEN
+
+\ Fire an event
+: my-click-handler ( event node -- )
+  DROP DOME-EVENT-DETAIL  \ extract detail
+  ." Button clicked! Detail: " . CR ;
+
+\ Dispatch
+my-doc btn click-type 42 DOME-FIRE  ( -- prevented? )
+DROP
+```
+
+#### Design Notes
+
+1. **Renderer-agnostic.** This module knows nothing about TUI cells,
+   pixel surfaces, or any rendering backend.  It operates purely on
+   the DOM tree structure.  The TUI bridge (`tui/dom-event.f`) and
+   the pixel pipeline can both feed events into this system.
+
+2. **W3C-compatible semantics.** Capture → target → bubble matches
+   the browser model.  `stopPropagation` prevents further phase
+   traversal.  `stopImmediatePropagation` prevents remaining
+   listeners on the current node.  `preventDefault` signals the
+   caller that the default action should be suppressed.
+
+3. **No built-in default actions.** This module dispatches events
+   and reports whether `preventDefault` was called.  It is the
+   caller's responsibility to implement default actions (e.g., form
+   submission, link navigation) based on the return value.
+
+4. **Listener pool.** Reuses the same free-list pool pattern as
+   DOM nodes and attributes.  O(1) alloc/free, no heap fragmentation.
+
+5. **Type interning.** Event type names are stored once in the
+   document's string pool.  All comparisons are pointer-equality on
+   handles — O(1) matching during dispatch.
+
+6. **Execution token convention.** All listener callbacks receive
+   `( event node -- )`.  The node is `currentTarget` — the node
+   the listener is registered on (not necessarily the target).
+
+#### Test targets: ~30 tests
+
+- Create event, verify fields
+- Listen + dispatch, listener fires
+- Capture phase fires before bubble
+- Bubble phase fires after target
+- `stopPropagation` prevents further ancestors
+- `stopImmediatePropagation` prevents remaining listeners on same node
+- `preventDefault` reported in return value
+- `once` listener auto-removed after first fire
+- `DOME-UNLISTEN` removes specific listener
+- `DOME-UNLISTEN-ALL` clears all listeners
+- Multiple listeners on same node/type, all fire in registration order
+- Event with `bubbles: false` skips bubble phase
+- Dispatch on leaf node (no ancestors to capture/bubble through)
+- Dispatch on root node (target only, no capture/bubble)
+- Type interning: same string → same handle
+- Listener pool exhaustion (graceful error)
+- Free event returns to pool
+- Nested dispatch (listener dispatches another event)
+- Related-target round-trip
+- Detail fields round-trip (detail, detail2, detail3)
+
+---
+
+### 5.1 tui/dom-tui.f — DOM-to-TUI Node Mapping
+
+**Goal:** Map DOM element nodes to TUI sidecar descriptors.  Walk
+the DOM tree, allocate a TUI descriptor for each visible element,
+and resolve CSS properties into character-cell attributes (fg/bg
+color, border style, text-align, display mode, visibility).
+
+File: `tui/dom-tui.f`
+Prefix: `DTUI-` (public), `_DTUI-` (internal)
+Provider: `PROVIDED akashic-tui-dom-tui`
+Dependencies: `REQUIRE dom/dom.f`, `REQUIRE css/css.f`,
+`REQUIRE css/bridge.f`, `REQUIRE tui/cell.f`, `REQUIRE tui/region.f`
+
+~350 lines
+
+#### TUI Sidecar Descriptor (8 cells = 64 bytes)
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0 | node | Back-pointer to DOM node |
+| +8 | flags | Dirty, visible, focusable, block/inline |
+| +16 | row | Computed row in screen coordinates |
+| +24 | col | Computed column in screen coordinates |
+| +32 | width | Computed width (character cells) |
+| +40 | height | Computed height (character cells) |
+| +48 | style | Packed: fg(8) bg(8) attrs(8) border-style(8) |
+| +56 | draw-xt | Custom draw hook (0 = default) |
+
+The `aux` cell of the DOM node points to this sidecar.
+Total overhead: 64 bytes per visible element.
+
+#### CSS → TUI Property Mapping
+
+| CSS Property | TUI Effect |
+|-------------|------------|
+| `color` | fg color → nearest 256-palette index |
+| `background-color` | bg color → nearest 256-palette index |
+| `display: none` | Skip node and subtree entirely |
+| `display: block` | Starts new row, fills available width |
+| `display: inline` | Flows left-to-right within current row |
+| `visibility: hidden` | Allocate space but don't paint |
+| `border-style` | Box-drawing characters (none/solid/double/dashed) |
+| `text-align` | Left/center/right padding of text content |
+| `font-weight: bold` | ANSI bold attribute |
+| `font-style: italic` | ANSI italic attribute |
+| `text-decoration: underline` | ANSI underline attribute |
+| `text-decoration: line-through` | ANSI strikethrough attribute |
+| `width` / `height` | Explicit character-cell dimensions |
+| `min-width` / `min-height` | Floor constraints |
+| `max-width` / `max-height` | Ceiling constraints |
+| `padding` | Character-cell inset (top/right/bottom/left) |
+| `margin` | Character-cell outset |
+
+#### Color Resolution
+
+`_DTUI-RESOLVE-COLOR` maps a CSS color value (as parsed by
+`CSS-PARSE-HEX-COLOR` or `CSS-COLOR-FIND`) to the nearest
+256-palette index.  For the 16 standard ANSI colors, this is a
+direct lookup.  For arbitrary RGB, it finds the nearest entry in
+the 6×6×6 color cube (indices 16–231) or the 24-step grayscale
+ramp (indices 232–255) by Euclidean distance in RGB space.
+
+#### Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DTUI-ATTACH` | `( doc -- )` | Walk DOM tree, allocate sidecars for all visible elements, store in `aux` |
+| `DTUI-DETACH` | `( doc -- )` | Free all sidecars, clear `aux` fields |
+| `DTUI-REFRESH` | `( doc -- )` | Re-resolve CSS styles into existing sidecars (after style/class change) |
+| `DTUI-SIDECAR` | `( node -- sidecar | 0 )` | Get sidecar for a DOM node (reads `aux`) |
+| `DTUI-VISIBLE?` | `( node -- flag )` | Is this node visible (display≠none, visibility≠hidden)? |
+| `DTUI-STYLE!` | `( node fg bg attrs -- )` | Override resolved style for one node |
+| `DTUI-RESOLVE-COLOR` | `( r g b -- idx )` | Map 24-bit RGB → 256-palette index |
+| `DTUI-CLASS-ADD` | `( node addr len -- )` | Add CSS class + trigger sidecar refresh |
+| `DTUI-CLASS-REMOVE` | `( node addr len -- )` | Remove CSS class + trigger sidecar refresh |
+
+#### Algorithm — DTUI-ATTACH
+
+```forth
+: DTUI-ATTACH ( doc -- )
+  DUP DOM-ROOT  ( doc root )
+  BEGIN ?DUP WHILE
+    DUP DOM-TYPE@ DOM-ELEMENT = IF
+      DUP _DTUI-ALLOC-SIDECAR  ( node sidecar )
+      2DUP SWAP DOM-AUX!       \ store sidecar in node.aux
+      OVER _DTUI-RESOLVE-NODE  \ resolve CSS → sidecar fields
+    THEN
+    DOM-WALK-NEXT              \ iterative DFS — next node
+  REPEAT
+  DROP ;
+```
+
+#### Test targets: ~20 tests
+
+- Attach to simple DOM (div > p > span), verify sidecars allocated
+- display:none elements get no sidecar
+- Color resolution: #FF0000 → palette red, #808080 → gray
+- Bold/italic/underline CSS → ANSI attribute bits
+- border-style: solid → BOX-SINGLE, double → BOX-DOUBLE
+- Detach frees all sidecars
+- Refresh after class change updates colors
+- Back-pointer integrity (sidecar.node → original node)
+
+---
+
+### 5.2 tui/dom-render.f — DOM Tree Layout & Paint
+
+**Goal:** Walk the DOM tree with attached sidecars, compute
+character-cell layout (block/inline flow), and paint the result
+into the TUI screen buffer using the existing draw/box primitives.
+
+File: `tui/dom-render.f`
+Prefix: `DREN-` (public), `_DREN-` (internal)
+Provider: `PROVIDED akashic-tui-dom-render`
+Dependencies: `REQUIRE tui/dom-tui.f`, `REQUIRE tui/draw.f`,
+`REQUIRE tui/box.f`, `REQUIRE tui/region.f`, `REQUIRE tui/screen.f`
+
+~400 lines
+
+#### Layout Algorithm
+
+A simplified block/inline flow model operating in character cells:
+
+1. **Block elements** start on a new row, extend to `available-width`
+   (or explicit `width` if set), and stack vertically.
+2. **Inline elements** flow left-to-right within the current row,
+   wrapping to the next row when the line is full.
+3. **Padding/margin** add character-cell offsets before/after the
+   content box.
+4. **Border** consumes 1 character cell per side (if present).
+5. **Text nodes** contribute their character length (with UTF-8
+   awareness via `akashic-utf8`) to inline flow.
+
+This is intentionally simpler than the pixel-pipeline `render/layout.f`
+(which implements full CSS 2.1 block/inline flow at sub-pixel
+precision).  Character cells impose a coarse grid — fractional
+positions are meaningless, so the algorithm rounds eagerly.
+
+#### Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DREN-LAYOUT` | `( doc rgn -- )` | Compute character-cell layout for entire DOM tree within region |
+| `DREN-PAINT` | `( doc -- )` | Paint laid-out tree into the screen back buffer |
+| `DREN-RENDER` | `( doc rgn -- )` | Layout + paint in one call |
+| `DREN-RELAYOUT` | `( doc rgn -- )` | Re-layout (after mutation or resize) |
+| `DREN-DIRTY?` | `( doc -- flag )` | Any sidecar marked dirty? |
+| `DREN-PAINT-NODE` | `( node -- )` | Paint a single node (for partial updates) |
+
+#### Paint Order
+
+1. For each node in DFS order:
+   a. If `visibility: hidden`, skip paint (but children still reserve space).
+   b. Paint background: `DRW-FILL` the content box with bg color.
+   c. Paint border: `BOX-DRAW` with resolved border style (single/double/etc).
+   d. Paint text content: `DRW-TEXT` with fg color + attributes.
+   e. Recurse into children.
+
+#### Usage Example
+
+```forth
+REQUIRE dom/dom.f
+REQUIRE css/css.f
+REQUIRE css/bridge.f
+REQUIRE tui/dom-tui.f
+REQUIRE tui/dom-render.f
+REQUIRE tui/screen.f
+
+80 24 SCR-CREATE CONSTANT my-scr
+my-scr SCR-USE
+
+S" <div style='color:red; border:solid'><p>Hello DOM-TUI!</p></div>"
+DOM-PARSE-HTML CONSTANT my-doc
+
+my-doc DTUI-ATTACH
+my-doc  0 0 80 24 RGN-SET  DREN-RENDER
+SCR-FLUSH
+```
+
+#### Test targets: ~18 tests
+
+- Single block element: fills width, 1 row
+- Nested blocks: vertical stacking
+- Inline elements: horizontal flow, wrap at boundary
+- Text node rendering with correct fg/bg
+- Border: box-drawing characters at correct positions
+- Padding: content inset by correct amount
+- Margin: gap between sibling blocks
+- display:none skips entirely (no space reserved)
+- visibility:hidden reserves space but no paint
+- text-align center/right
+- Re-layout after DOM mutation
+- Partial paint (single dirty node)
+
+---
+
+### 5.3 tui/dom-event.f — DOM Event Routing
+
+**Goal:** TUI-specific adapter that feeds keyboard and mouse events
+from the TUI input system into the general-purpose DOM event system
+(`dom/event.f`).  Translates `KEY-READ` events into `DOME-T-KEYDOWN`
+/ `DOME-T-KEYPRESS` DOM events, mouse reports into `DOME-T-CLICK` /
+`DOME-T-MOUSEDOWN` / `DOME-T-MOUSEUP`, and manages DOM-level focus
+(Tab cycling through focusable elements).
+
+This module does **not** re-implement dispatch logic — it delegates
+entirely to `DOME-DISPATCH` for three-phase capture/target/bubble
+propagation.  Its job is translation and focus management.
+
+File: `tui/dom-event.f`
+Prefix: `DEVT-` (public), `_DEVT-` (internal)
+Provider: `PROVIDED akashic-tui-dom-event`
+Dependencies: `REQUIRE dom/event.f`, `REQUIRE tui/dom-tui.f`, `REQUIRE tui/keys.f`
+
+~200 lines
+
+#### Event Flow
+
+```
+  KEY-READ / mouse report
+      │
+      ▼
+  DEVT-TRANSLATE           ← convert TUI input → DOM event object
+      │
+      ▼
+  DOME-DISPATCH            ← full W3C three-phase dispatch
+      │                       (capture → target → bubble)
+      ├─► listeners fire via dom/event.f
+      │
+      └─► returns prevented?
+```
+
+#### Focus Model
+
+The DOM-TUI focus is a single DOM node pointer.  Elements are
+focusable if they have the `tabindex` attribute or are inherently
+interactive (input, button, select, textarea — matched by tag name).
+`DEVT-FOCUS-NEXT` / `DEVT-FOCUS-PREV` cycle through focusable
+elements in DOM tree order.
+
+#### Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DEVT-DISPATCH` | `( doc key-event-addr -- prevented? )` | Translate TUI key event → DOM event, dispatch via `DOME-DISPATCH` |
+| `DEVT-DISPATCH-MOUSE` | `( doc row col button -- prevented? )` | Translate mouse click → DOM click event, hit-test, dispatch |
+| `DEVT-FOCUS` | `( doc -- node | 0 )` | Get currently focused DOM element |
+| `DEVT-FOCUS!` | `( doc node -- )` | Set focus to specific element (fires `DOME-T-BLUR` / `DOME-T-FOCUS`) |
+| `DEVT-FOCUS-NEXT` | `( doc -- )` | Move focus to next focusable element (Tab order) |
+| `DEVT-FOCUS-PREV` | `( doc -- )` | Move focus to previous focusable element (Shift-Tab) |
+| `DEVT-TRANSLATE` | `( key-event-addr -- dome-event )` | Convert TUI key event to DOM event object |
+| `DEVT-HIT-TEST` | `( doc row col -- node | 0 )` | Find deepest visible element at screen position |
+
+#### Handler Storage
+
+Event handlers are now registered through the DOM event system:
+`DOME-LISTEN`, `DOME-LISTEN-CAPTURE`, `DOME-LISTEN-ONCE`, and
+removed via `DOME-UNLISTEN`.  The `DEVT-ON-KEY!` / `DEVT-ON-CLICK!`
+convenience words from the earlier design are replaced by direct
+calls to `DOME-LISTEN` with the appropriate type constant
+(`DOME-T-KEYDOWN`, `DOME-T-CLICK`, etc.).
+
+All listener callbacks follow the DOM event convention:
+`( event node -- )` where `event` is a full DOM event object with
+phase, propagation control, and payload fields.
+
+#### Hit Testing
+
+`DEVT-HIT-TEST` walks the DOM tree (reverse paint order for
+correct z-order) and checks whether `(row, col)` falls within
+each sidecar's layout rectangle.  Returns the deepest (most
+specific) match.
+
+#### Test targets: ~15 tests
+
+- Key event translated to DOME-T-KEYDOWN + dispatched
+- Mouse click translated to DOME-T-CLICK + dispatched via hit-test
+- Focus change fires DOME-T-BLUR on old + DOME-T-FOCUS on new
+- Focus-next cycles through tabindex elements
+- Focus-prev cycles backward
+- Hit-test returns correct element
+- Hit-test returns 0 for empty area
+- preventDefault on keydown suppresses default
+- Capture-phase listener on ancestor fires before target
+- Mouse button mapping (left/right/middle)
+
+---
+
+## Layer 6 — Application Shell
+
+### 6.1 tui/event.f — Event Loop & Dispatch
 
 **Goal:** The main event loop that ties input, rendering, and timers
 together.  Poll for input via `KEY-READ`, dispatch events through
@@ -1560,7 +2138,7 @@ handlers (avoids re-entrant mutation).
 
 ---
 
-### 5.2 tui/focus.f — Focus Manager
+### 6.2 tui/focus.f — Focus Manager
 
 **Goal:** Manage which widget receives keyboard input.  Maintains
 a focus chain (ordered list of focusable widgets).  Tab/Shift-Tab
@@ -1610,7 +2188,7 @@ manager doesn't need special-case Tab handling.
 
 ---
 
-### 5.3 tui/app.f — Application Lifecycle
+### 6.3 tui/app.f — Application Lifecycle
 
 **Goal:** One-call application setup and teardown.  Enters alternate
 screen, hides cursor, configures terminal, runs the event loop,
@@ -1661,9 +2239,9 @@ main
 
 ---
 
-## Layer 6 — Extended Components
+## Layer 7 — Extended Components
 
-### 6.1 tui/split.f — Split Panes
+### 7.1 tui/split.f — Split Panes
 
 **Goal:** Divide a region into two panes (horizontal or vertical
 split), with an optional draggable divider.
@@ -1705,7 +2283,7 @@ Dependencies: `REQUIRE region.f`, `REQUIRE draw.f`
 
 ---
 
-### 6.2 tui/scroll.f — Scrollable Viewport
+### 7.2 tui/scroll.f — Scrollable Viewport
 
 **Goal:** A generic scrollable viewport — wraps any content that
 is larger than its visible region.  Provides vertical and
@@ -1751,7 +2329,7 @@ Dependencies: `REQUIRE region.f`, `REQUIRE draw.f`
 
 ---
 
-### 6.3 tui/tree.f — Tree View
+### 7.3 tui/tree.f — Tree View
 
 **Goal:** Collapsible tree display for hierarchical data.  Nodes
 can be expanded/collapsed.  Arrow keys navigate, Enter toggles
@@ -1803,7 +2381,7 @@ The tree view uses box-drawing characters for the tree guides:
 
 ---
 
-### 6.4 tui/status.f — Status Bar
+### 7.4 tui/status.f — Status Bar
 
 **Goal:** A single-row bar for persistent status information
 (filename, mode, cursor position, etc.).  Typically placed at the
@@ -1838,7 +2416,7 @@ Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
 
 ---
 
-### 6.5 tui/toast.f — Transient Notifications
+### 7.5 tui/toast.f — Transient Notifications
 
 **Goal:** Brief popup messages that auto-dismiss after a timeout.
 Displayed at a fixed position (typically bottom-right).
@@ -1863,7 +2441,7 @@ Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`
 
 ---
 
-### 6.6 tui/canvas.f — Character-Mode Canvas
+### 7.6 tui/canvas.f — Character-Mode Canvas
 
 **Goal:** A free-form drawing surface for character graphics —
 Braille patterns, block characters, plot points.  Provides
@@ -2010,20 +2588,27 @@ of raw character placement.
 | 15 | tui/menu.f | 4 | draw, box, region | ~280 | ✅ Done |
 | 16 | tui/dialog.f | 4 | keys, screen, widget, draw, box, region | ~340 | ✅ Done |
 | 17 | tui/tabs.f | 4 | widget, draw, box, region, keys | 282 | ✅ Done |
-| 18 | tui/focus.f | 5 | keys | ~150 | ❌ Not started |
-| 19 | tui/event.f | 5 | keys, screen, focus | ~200 | ❌ Not started |
-| 20 | tui/app.f | 5 | ansi, screen, event, focus | ~120 | ❌ Not started |
-| 21 | tui/split.f | 6 | region, draw | ~150 | ❌ Not started |
-| 22 | tui/scroll.f | 6 | region, draw | ~180 | ❌ Not started |
-| 23 | tui/status.f | 6 | draw, region | ~100 | ❌ Not started |
-| 24 | tui/toast.f | 6 | draw, box, region | ~120 | ❌ Not started |
-| 25 | tui/tree.f | 6 | draw, region, scroll | ~250 | ❌ Not started |
-| 26 | tui/canvas.f | 6 | draw, region | ~200 | ❌ Not started |
-| | **Total** | | | **~4,750** | |
+| 18 | dom/event.f | 5 | dom.f | ~450 | ❌ Not started |
+| 19 | tui/dom-tui.f | 5 | dom.f, css.f, bridge.f, cell, region | ~350 | ❌ Not started |
+| 20 | tui/dom-render.f | 5 | dom-tui, draw, box, region, screen | ~400 | ❌ Not started |
+| 21 | tui/dom-event.f | 5 | dom/event.f, dom-tui, keys | ~200 | ❌ Not started |
+| 22 | tui/focus.f | 6 | keys | ~150 | ❌ Not started |
+| 23 | tui/event.f | 6 | keys, screen, focus | ~200 | ❌ Not started |
+| 24 | tui/app.f | 6 | ansi, screen, event, focus | ~120 | ❌ Not started |
+| 25 | tui/split.f | 7 | region, draw | ~150 | ❌ Not started |
+| 26 | tui/scroll.f | 7 | region, draw | ~180 | ❌ Not started |
+| 27 | tui/status.f | 7 | draw, region | ~100 | ❌ Not started |
+| 28 | tui/toast.f | 7 | draw, box, region | ~120 | ❌ Not started |
+| 29 | tui/tree.f | 7 | draw, region, scroll | ~250 | ❌ Not started |
+| 30 | tui/canvas.f | 7 | draw, region | ~200 | ❌ Not started |
+| | **Total** | | | **~6,150** | |
 
 Build from bottom up: Layer 0 first (ansi + keys), then Layer 1
 (cell + screen), and so on.  Within each layer, files are independent
-and can be implemented in any order.
+and can be implemented in any order.  Layer 5 (DOM-TUI bridge) is
+optional — pure-widget apps can skip it, but it must be built before
+the application shell (Layer 6) or extended components (Layer 7)
+so that DOM-driven apps can participate in the event loop.
 
 ---
 
@@ -2041,11 +2626,18 @@ and can be implemented in any order.
 | Region descriptors (30) | 30 × 40 | 1,200 | 1,200 |
 | Layout descriptors (10) | 10 × 48 | 480 | 480 |
 | Canvas dot buffer (80×24) | (W×2 × H×4) / 8 | 1,920 | 6,600 |
-| **Total** | | **~36,840** | **~116,400** |
+| DOM document (100 nodes) | 80 + 100×80 + 200×24 + 4K str | 16,880 | 16,880 |
+| DOM-TUI sidecars (100 nodes) | 100 × 64 | 6,400 | 6,400 |
+| DOM event listener pool (256 slots) | 256 × 40 | 10,240 | 10,240 |
+| DOM event object pool (8 slots) | 8 × 80 | 640 | 640 |
+| **Total** | | **~71,000** | **~150,520** |
 
 All fits in XMEM (16 MiB) with room to spare.  Even the largest
-terminal (200×60) uses under 200 KiB.  Dictionary footprint for
-the code itself: ~4,750 lines × ~12 bytes/line ≈ ~57 KiB.
+terminal (200×60) uses under 300 KiB.  The DOM event system adds
+~11 KiB for its listener and event pools — shared across all event
+types and all nodes.  Applications that don't use the DOM-TUI
+bridge incur none of the DOM-related costs.  Dictionary footprint
+for the code itself: ~6,150 lines × ~12 bytes/line ≈ ~74 KiB.
 
 ---
 

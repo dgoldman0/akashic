@@ -157,3 +157,25 @@ VARIABLE _EX-LMANT
     EXP-SIGMOID                        \ sigma(2x)
     _EX-TWO FP16-MUL                  \ 2*sigma(2x)
     _EX-ONE FP16-SUB ;               \ 2*sigma(2x) - 1
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _exp-guard
+
+' EXP-EXP2        CONSTANT _exp-exp2-xt
+' EXP-EXP         CONSTANT _exp-exp-xt
+' EXP-LOG2        CONSTANT _exp-log2-xt
+' EXP-LN          CONSTANT _exp-ln-xt
+' EXP-POW         CONSTANT _exp-pow-xt
+' EXP-SIGMOID     CONSTANT _exp-sigmoid-xt
+' EXP-TANH        CONSTANT _exp-tanh-xt
+
+: EXP-EXP2        _exp-exp2-xt _exp-guard WITH-GUARD ;
+: EXP-EXP         _exp-exp-xt _exp-guard WITH-GUARD ;
+: EXP-LOG2        _exp-log2-xt _exp-guard WITH-GUARD ;
+: EXP-LN          _exp-ln-xt _exp-guard WITH-GUARD ;
+: EXP-POW         _exp-pow-xt _exp-guard WITH-GUARD ;
+: EXP-SIGMOID     _exp-sigmoid-xt _exp-guard WITH-GUARD ;
+: EXP-TANH        _exp-tanh-xt _exp-guard WITH-GUARD ;
+[THEN] [THEN]

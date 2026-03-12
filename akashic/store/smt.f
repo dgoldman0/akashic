@@ -716,6 +716,7 @@ VARIABLE _smt-d-tree
 \  15. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _smt-guard
 
@@ -736,6 +737,7 @@ GUARD _smt-guard
 : SMT-ROOT     _smt-root-xt   _smt-guard WITH-GUARD ;
 : SMT-PROVE    _smt-pv-xt     _smt-guard WITH-GUARD ;
 : SMT-VERIFY   _smt-vfy-xt    _smt-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =================================================================
 \  Done.

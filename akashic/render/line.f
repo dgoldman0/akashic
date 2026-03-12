@@ -374,3 +374,57 @@ VARIABLE _LF-RNXT
         _LF-LINE @ FREE
         _LF-NEXT @ _LF-LINE !
     REPEAT ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _line-guard
+
+' LINE-RUN-TYPE   CONSTANT _line-run-type-xt
+' LINE-RUN-W      CONSTANT _line-run-w-xt
+' LINE-RUN-H      CONSTANT _line-run-h-xt
+' LINE-RUN-ASC    CONSTANT _line-run-asc-xt
+' LINE-RUN-X      CONSTANT _line-run-x-xt
+' LINE-RUN-NEXT   CONSTANT _line-run-next-xt
+' LINE-RUN-DATA   CONSTANT _line-run-data-xt
+' LINE-RUN-DLEN   CONSTANT _line-run-dlen-xt
+' LINE-RUN-SRCBOX CONSTANT _line-run-srcbox-xt
+' LINE-Y          CONSTANT _line-y-xt
+' LINE-HEIGHT     CONSTANT _line-height-xt
+' LINE-BASELINE   CONSTANT _line-baseline-xt
+' LINE-FIRST-RUN  CONSTANT _line-first-run-xt
+' LINE-W          CONSTANT _line-w-xt
+' LINE-NEXT       CONSTANT _line-next-xt
+' LINE-Y!         CONSTANT _line-y-s-xt
+' LINE-RUN-TEXT   CONSTANT _line-run-text-xt
+' LINE-RUN-BOX    CONSTANT _line-run-box-xt
+' LINE-RUN-FREE   CONSTANT _line-run-free-xt
+' LINE-RUN-APPEND CONSTANT _line-run-append-xt
+' LINE-BREAK      CONSTANT _line-break-xt
+' LINE-ALIGN      CONSTANT _line-align-xt
+' LINE-FREE       CONSTANT _line-free-xt
+
+: LINE-RUN-TYPE   _line-run-type-xt _line-guard WITH-GUARD ;
+: LINE-RUN-W      _line-run-w-xt _line-guard WITH-GUARD ;
+: LINE-RUN-H      _line-run-h-xt _line-guard WITH-GUARD ;
+: LINE-RUN-ASC    _line-run-asc-xt _line-guard WITH-GUARD ;
+: LINE-RUN-X      _line-run-x-xt _line-guard WITH-GUARD ;
+: LINE-RUN-NEXT   _line-run-next-xt _line-guard WITH-GUARD ;
+: LINE-RUN-DATA   _line-run-data-xt _line-guard WITH-GUARD ;
+: LINE-RUN-DLEN   _line-run-dlen-xt _line-guard WITH-GUARD ;
+: LINE-RUN-SRCBOX _line-run-srcbox-xt _line-guard WITH-GUARD ;
+: LINE-Y          _line-y-xt _line-guard WITH-GUARD ;
+: LINE-HEIGHT     _line-height-xt _line-guard WITH-GUARD ;
+: LINE-BASELINE   _line-baseline-xt _line-guard WITH-GUARD ;
+: LINE-FIRST-RUN  _line-first-run-xt _line-guard WITH-GUARD ;
+: LINE-W          _line-w-xt _line-guard WITH-GUARD ;
+: LINE-NEXT       _line-next-xt _line-guard WITH-GUARD ;
+: LINE-Y!         _line-y-s-xt _line-guard WITH-GUARD ;
+: LINE-RUN-TEXT   _line-run-text-xt _line-guard WITH-GUARD ;
+: LINE-RUN-BOX    _line-run-box-xt _line-guard WITH-GUARD ;
+: LINE-RUN-FREE   _line-run-free-xt _line-guard WITH-GUARD ;
+: LINE-RUN-APPEND _line-run-append-xt _line-guard WITH-GUARD ;
+: LINE-BREAK      _line-break-xt _line-guard WITH-GUARD ;
+: LINE-ALIGN      _line-align-xt _line-guard WITH-GUARD ;
+: LINE-FREE       _line-free-xt _line-guard WITH-GUARD ;
+[THEN] [THEN]

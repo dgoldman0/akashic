@@ -311,3 +311,61 @@ VARIABLE _CB-SKIP-N
         EXIT
     THEN
     _CB-GET DROP ;              \ unknown — skip initial byte
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _cbor-guard
+
+' CBOR-RESET      CONSTANT _cbor-reset-xt
+' CBOR-OK?        CONSTANT _cbor-ok-q-xt
+' CBOR-UINT       CONSTANT _cbor-uint-xt
+' CBOR-NINT       CONSTANT _cbor-nint-xt
+' CBOR-BSTR       CONSTANT _cbor-bstr-xt
+' CBOR-TSTR       CONSTANT _cbor-tstr-xt
+' CBOR-ARRAY      CONSTANT _cbor-array-xt
+' CBOR-MAP        CONSTANT _cbor-map-xt
+' CBOR-TAG        CONSTANT _cbor-tag-xt
+' CBOR-TRUE       CONSTANT _cbor-true-xt
+' CBOR-FALSE      CONSTANT _cbor-false-xt
+' CBOR-NULL       CONSTANT _cbor-null-xt
+' CBOR-RESULT     CONSTANT _cbor-result-xt
+' CBOR-PARSE      CONSTANT _cbor-parse-xt
+' CBOR-TYPE       CONSTANT _cbor-type-xt
+' CBOR-DONE?      CONSTANT _cbor-done-q-xt
+' CBOR-NEXT-UINT  CONSTANT _cbor-next-uint-xt
+' CBOR-NEXT-NINT  CONSTANT _cbor-next-nint-xt
+' CBOR-NEXT-BSTR  CONSTANT _cbor-next-bstr-xt
+' CBOR-NEXT-TSTR  CONSTANT _cbor-next-tstr-xt
+' CBOR-NEXT-ARRAY CONSTANT _cbor-next-array-xt
+' CBOR-NEXT-MAP   CONSTANT _cbor-next-map-xt
+' CBOR-NEXT-TAG   CONSTANT _cbor-next-tag-xt
+' CBOR-NEXT-BOOL  CONSTANT _cbor-next-bool-xt
+' CBOR-SKIP       CONSTANT _cbor-skip-xt
+
+: CBOR-RESET      _cbor-reset-xt _cbor-guard WITH-GUARD ;
+: CBOR-OK?        _cbor-ok-q-xt _cbor-guard WITH-GUARD ;
+: CBOR-UINT       _cbor-uint-xt _cbor-guard WITH-GUARD ;
+: CBOR-NINT       _cbor-nint-xt _cbor-guard WITH-GUARD ;
+: CBOR-BSTR       _cbor-bstr-xt _cbor-guard WITH-GUARD ;
+: CBOR-TSTR       _cbor-tstr-xt _cbor-guard WITH-GUARD ;
+: CBOR-ARRAY      _cbor-array-xt _cbor-guard WITH-GUARD ;
+: CBOR-MAP        _cbor-map-xt _cbor-guard WITH-GUARD ;
+: CBOR-TAG        _cbor-tag-xt _cbor-guard WITH-GUARD ;
+: CBOR-TRUE       _cbor-true-xt _cbor-guard WITH-GUARD ;
+: CBOR-FALSE      _cbor-false-xt _cbor-guard WITH-GUARD ;
+: CBOR-NULL       _cbor-null-xt _cbor-guard WITH-GUARD ;
+: CBOR-RESULT     _cbor-result-xt _cbor-guard WITH-GUARD ;
+: CBOR-PARSE      _cbor-parse-xt _cbor-guard WITH-GUARD ;
+: CBOR-TYPE       _cbor-type-xt _cbor-guard WITH-GUARD ;
+: CBOR-DONE?      _cbor-done-q-xt _cbor-guard WITH-GUARD ;
+: CBOR-NEXT-UINT  _cbor-next-uint-xt _cbor-guard WITH-GUARD ;
+: CBOR-NEXT-NINT  _cbor-next-nint-xt _cbor-guard WITH-GUARD ;
+: CBOR-NEXT-BSTR  _cbor-next-bstr-xt _cbor-guard WITH-GUARD ;
+: CBOR-NEXT-TSTR  _cbor-next-tstr-xt _cbor-guard WITH-GUARD ;
+: CBOR-NEXT-ARRAY _cbor-next-array-xt _cbor-guard WITH-GUARD ;
+: CBOR-NEXT-MAP   _cbor-next-map-xt _cbor-guard WITH-GUARD ;
+: CBOR-NEXT-TAG   _cbor-next-tag-xt _cbor-guard WITH-GUARD ;
+: CBOR-NEXT-BOOL  _cbor-next-bool-xt _cbor-guard WITH-GUARD ;
+: CBOR-SKIP       _cbor-skip-xt _cbor-guard WITH-GUARD ;
+[THEN] [THEN]

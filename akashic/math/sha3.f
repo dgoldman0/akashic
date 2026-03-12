@@ -307,6 +307,7 @@ VARIABLE _SHA3-HDST
 \ Pure read / compare / print words are left unguarded.
 \ Error -258 = operation called without holding the guard.
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _sha3-guard
 
@@ -366,3 +367,5 @@ GUARD _sha3-guard
     _s3-512-end-xt CATCH
     _sha3-guard GUARD-RELEASE
     ?DUP IF THROW THEN ;
+
+[THEN] [THEN]

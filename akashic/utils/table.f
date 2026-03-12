@@ -160,3 +160,27 @@ VARIABLE _TBL-XT
         0 SWAP C!
     LOOP
     0 SWAP 16 + ! ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _table-guard
+
+' TBL-CREATE      CONSTANT _tbl-create-xt
+' TBL-ALLOC       CONSTANT _tbl-alloc-xt
+' TBL-FREE        CONSTANT _tbl-free-xt
+' TBL-COUNT       CONSTANT _tbl-count-xt
+' TBL-SLOT        CONSTANT _tbl-slot-xt
+' TBL-EACH        CONSTANT _tbl-each-xt
+' TBL-FIND        CONSTANT _tbl-find-xt
+' TBL-FLUSH       CONSTANT _tbl-flush-xt
+
+: TBL-CREATE      _tbl-create-xt _table-guard WITH-GUARD ;
+: TBL-ALLOC       _tbl-alloc-xt _table-guard WITH-GUARD ;
+: TBL-FREE        _tbl-free-xt _table-guard WITH-GUARD ;
+: TBL-COUNT       _tbl-count-xt _table-guard WITH-GUARD ;
+: TBL-SLOT        _tbl-slot-xt _table-guard WITH-GUARD ;
+: TBL-EACH        _tbl-each-xt _table-guard WITH-GUARD ;
+: TBL-FIND        _tbl-find-xt _table-guard WITH-GUARD ;
+: TBL-FLUSH       _tbl-flush-xt _table-guard WITH-GUARD ;
+[THEN] [THEN]

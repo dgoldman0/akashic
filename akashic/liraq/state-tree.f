@@ -1028,3 +1028,173 @@ VARIABLE _ST-SUB-CNT
         ELSE DROP THEN
     LOOP
     DROP 2DROP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _ltree-guard
+
+' SN.TYPE         CONSTANT _sn-dottype-xt
+' SN.FLAGS        CONSTANT _sn-dotflags-xt
+' SN.PARENT       CONSTANT _sn-dotparent-xt
+' SN.NEXT         CONSTANT _sn-dotnext-xt
+' SN.PREV         CONSTANT _sn-dotprev-xt
+' SN.FCHILD       CONSTANT _sn-dotfchild-xt
+' SN.LCHILD       CONSTANT _sn-dotlchild-xt
+' SN.NCHILD       CONSTANT _sn-dotnchild-xt
+' SN.NAMEA        CONSTANT _sn-dotnamea-xt
+' SN.NAMEL        CONSTANT _sn-dotnamel-xt
+' SN.VAL1         CONSTANT _sn-dotval1-xt
+' SN.VAL2         CONSTANT _sn-dotval2-xt
+' SD.ARENA        CONSTANT _sd-dotarena-xt
+' SD.NODE-BASE    CONSTANT _sd-dotnode-base-xt
+' SD.NODE-MAX     CONSTANT _sd-dotnode-max-xt
+' SD.NODE-FREE    CONSTANT _sd-dotnode-free-xt
+' SD.NODE-USED    CONSTANT _sd-dotnode-used-xt
+' SD.STR-BASE     CONSTANT _sd-dotstr-base-xt
+' SD.STR-PTR      CONSTANT _sd-dotstr-ptr-xt
+' SD.STR-END      CONSTANT _sd-dotstr-end-xt
+' SD.ROOT         CONSTANT _sd-dotroot-xt
+' SD.JRNL-BASE    CONSTANT _sd-dotjrnl-base-xt
+' SD.JRNL-MAX     CONSTANT _sd-dotjrnl-max-xt
+' SD.JRNL-POS     CONSTANT _sd-dotjrnl-pos-xt
+' SD.JRNL-SEQ     CONSTANT _sd-dotjrnl-seq-xt
+' SD.JRNL-CNT     CONSTANT _sd-dotjrnl-cnt-xt
+' SD.JRNL-SRC     CONSTANT _sd-dotjrnl-src-xt
+' SD.ERR          CONSTANT _sd-doterr-xt
+' ST-USE          CONSTANT _st-use-xt
+' ST-DOC          CONSTANT _st-doc-xt
+' ST-ERR          CONSTANT _st-err-xt
+' ST-FAIL         CONSTANT _st-fail-xt
+' ST-OK?          CONSTANT _st-ok-q-xt
+' ST-CLEAR-ERR    CONSTANT _st-clear-err-xt
+' ST-DOC-NEW      CONSTANT _st-doc-new-xt
+' ST-ROOT         CONSTANT _st-root-xt
+' ST-NODE-COUNT   CONSTANT _st-node-count-xt
+' ST-NAVIGATE     CONSTANT _st-navigate-xt
+' ST-ENSURE-PATH  CONSTANT _st-ensure-path-xt
+' ST-GET-TYPE     CONSTANT _st-get-type-xt
+' ST-GET-INT      CONSTANT _st-get-int-xt
+' ST-GET-BOOL     CONSTANT _st-get-bool-xt
+' ST-GET-STR      CONSTANT _st-get-str-xt
+' ST-GET-FLOAT    CONSTANT _st-get-float-xt
+' ST-NULL?        CONSTANT _st-null-q-xt
+' ST-SET-INT      CONSTANT _st-set-int-xt
+' ST-SET-BOOL     CONSTANT _st-set-bool-xt
+' ST-SET-STR      CONSTANT _st-set-str-xt
+' ST-SET-FLOAT    CONSTANT _st-set-float-xt
+' ST-SET-NULL     CONSTANT _st-set-null-xt
+' ST-MAKE-OBJECT  CONSTANT _st-make-object-xt
+' ST-MAKE-ARRAY   CONSTANT _st-make-array-xt
+' ST-SET-PATH-INT CONSTANT _st-set-path-int-xt
+' ST-SET-PATH-BOOL CONSTANT _st-set-path-bool-xt
+' ST-SET-PATH-STR CONSTANT _st-set-path-str-xt
+' ST-SET-PATH-FLOAT CONSTANT _st-set-path-float-xt
+' ST-SET-PATH-NULL CONSTANT _st-set-path-null-xt
+' ST-GET-PATH     CONSTANT _st-get-path-xt
+' ST-DELETE-PATH  CONSTANT _st-delete-path-xt
+' ST-ENSURE-ARRAY CONSTANT _st-ensure-array-xt
+' ST-ARRAY-APPEND-INT CONSTANT _st-array-append-int-xt
+' ST-ARRAY-APPEND-STR CONSTANT _st-array-append-str-xt
+' ST-ARRAY-COUNT  CONSTANT _st-array-count-xt
+' ST-ARRAY-NTH    CONSTANT _st-array-nth-xt
+' ST-ARRAY-REMOVE CONSTANT _st-array-remove-xt
+' ST-PROTECTED?   CONSTANT _st-protected-q-xt
+' ST-JOURNAL-ADD  CONSTANT _st-journal-add-xt
+' ST-JOURNAL-SEQ  CONSTANT _st-journal-seq-xt
+' ST-JOURNAL-COUNT CONSTANT _st-journal-count-xt
+' ST-JOURNAL-NTH  CONSTANT _st-journal-nth-xt
+' ST-MERGE        CONSTANT _st-merge-xt
+' ST-ARRAY-INSERT-INT CONSTANT _st-array-insert-int-xt
+' ST-ARRAY-INSERT-STR CONSTANT _st-array-insert-str-xt
+' ST-JRNL-SIZE!   CONSTANT _st-jrnl-size-s-xt
+' ST-VALIDATE     CONSTANT _st-validate-xt
+' ST-SNAPSHOT     CONSTANT _st-snapshot-xt
+' ST-RESTORE      CONSTANT _st-restore-xt
+' ST-COMPUTED?    CONSTANT _st-computed-q-xt
+' ST-COMPUTED!    CONSTANT _st-computed-s-xt
+' ST-SUBSCRIBE    CONSTANT _st-subscribe-xt
+' ST-UNSUBSCRIBE  CONSTANT _st-unsubscribe-xt
+
+: SN.TYPE         _sn-dottype-xt _ltree-guard WITH-GUARD ;
+: SN.FLAGS        _sn-dotflags-xt _ltree-guard WITH-GUARD ;
+: SN.PARENT       _sn-dotparent-xt _ltree-guard WITH-GUARD ;
+: SN.NEXT         _sn-dotnext-xt _ltree-guard WITH-GUARD ;
+: SN.PREV         _sn-dotprev-xt _ltree-guard WITH-GUARD ;
+: SN.FCHILD       _sn-dotfchild-xt _ltree-guard WITH-GUARD ;
+: SN.LCHILD       _sn-dotlchild-xt _ltree-guard WITH-GUARD ;
+: SN.NCHILD       _sn-dotnchild-xt _ltree-guard WITH-GUARD ;
+: SN.NAMEA        _sn-dotnamea-xt _ltree-guard WITH-GUARD ;
+: SN.NAMEL        _sn-dotnamel-xt _ltree-guard WITH-GUARD ;
+: SN.VAL1         _sn-dotval1-xt _ltree-guard WITH-GUARD ;
+: SN.VAL2         _sn-dotval2-xt _ltree-guard WITH-GUARD ;
+: SD.ARENA        _sd-dotarena-xt _ltree-guard WITH-GUARD ;
+: SD.NODE-BASE    _sd-dotnode-base-xt _ltree-guard WITH-GUARD ;
+: SD.NODE-MAX     _sd-dotnode-max-xt _ltree-guard WITH-GUARD ;
+: SD.NODE-FREE    _sd-dotnode-free-xt _ltree-guard WITH-GUARD ;
+: SD.NODE-USED    _sd-dotnode-used-xt _ltree-guard WITH-GUARD ;
+: SD.STR-BASE     _sd-dotstr-base-xt _ltree-guard WITH-GUARD ;
+: SD.STR-PTR      _sd-dotstr-ptr-xt _ltree-guard WITH-GUARD ;
+: SD.STR-END      _sd-dotstr-end-xt _ltree-guard WITH-GUARD ;
+: SD.ROOT         _sd-dotroot-xt _ltree-guard WITH-GUARD ;
+: SD.JRNL-BASE    _sd-dotjrnl-base-xt _ltree-guard WITH-GUARD ;
+: SD.JRNL-MAX     _sd-dotjrnl-max-xt _ltree-guard WITH-GUARD ;
+: SD.JRNL-POS     _sd-dotjrnl-pos-xt _ltree-guard WITH-GUARD ;
+: SD.JRNL-SEQ     _sd-dotjrnl-seq-xt _ltree-guard WITH-GUARD ;
+: SD.JRNL-CNT     _sd-dotjrnl-cnt-xt _ltree-guard WITH-GUARD ;
+: SD.JRNL-SRC     _sd-dotjrnl-src-xt _ltree-guard WITH-GUARD ;
+: SD.ERR          _sd-doterr-xt _ltree-guard WITH-GUARD ;
+: ST-USE          _st-use-xt _ltree-guard WITH-GUARD ;
+: ST-DOC          _st-doc-xt _ltree-guard WITH-GUARD ;
+: ST-ERR          _st-err-xt _ltree-guard WITH-GUARD ;
+: ST-FAIL         _st-fail-xt _ltree-guard WITH-GUARD ;
+: ST-OK?          _st-ok-q-xt _ltree-guard WITH-GUARD ;
+: ST-CLEAR-ERR    _st-clear-err-xt _ltree-guard WITH-GUARD ;
+: ST-DOC-NEW      _st-doc-new-xt _ltree-guard WITH-GUARD ;
+: ST-ROOT         _st-root-xt _ltree-guard WITH-GUARD ;
+: ST-NODE-COUNT   _st-node-count-xt _ltree-guard WITH-GUARD ;
+: ST-NAVIGATE     _st-navigate-xt _ltree-guard WITH-GUARD ;
+: ST-ENSURE-PATH  _st-ensure-path-xt _ltree-guard WITH-GUARD ;
+: ST-GET-TYPE     _st-get-type-xt _ltree-guard WITH-GUARD ;
+: ST-GET-INT      _st-get-int-xt _ltree-guard WITH-GUARD ;
+: ST-GET-BOOL     _st-get-bool-xt _ltree-guard WITH-GUARD ;
+: ST-GET-STR      _st-get-str-xt _ltree-guard WITH-GUARD ;
+: ST-GET-FLOAT    _st-get-float-xt _ltree-guard WITH-GUARD ;
+: ST-NULL?        _st-null-q-xt _ltree-guard WITH-GUARD ;
+: ST-SET-INT      _st-set-int-xt _ltree-guard WITH-GUARD ;
+: ST-SET-BOOL     _st-set-bool-xt _ltree-guard WITH-GUARD ;
+: ST-SET-STR      _st-set-str-xt _ltree-guard WITH-GUARD ;
+: ST-SET-FLOAT    _st-set-float-xt _ltree-guard WITH-GUARD ;
+: ST-SET-NULL     _st-set-null-xt _ltree-guard WITH-GUARD ;
+: ST-MAKE-OBJECT  _st-make-object-xt _ltree-guard WITH-GUARD ;
+: ST-MAKE-ARRAY   _st-make-array-xt _ltree-guard WITH-GUARD ;
+: ST-SET-PATH-INT _st-set-path-int-xt _ltree-guard WITH-GUARD ;
+: ST-SET-PATH-BOOL _st-set-path-bool-xt _ltree-guard WITH-GUARD ;
+: ST-SET-PATH-STR _st-set-path-str-xt _ltree-guard WITH-GUARD ;
+: ST-SET-PATH-FLOAT _st-set-path-float-xt _ltree-guard WITH-GUARD ;
+: ST-SET-PATH-NULL _st-set-path-null-xt _ltree-guard WITH-GUARD ;
+: ST-GET-PATH     _st-get-path-xt _ltree-guard WITH-GUARD ;
+: ST-DELETE-PATH  _st-delete-path-xt _ltree-guard WITH-GUARD ;
+: ST-ENSURE-ARRAY _st-ensure-array-xt _ltree-guard WITH-GUARD ;
+: ST-ARRAY-APPEND-INT _st-array-append-int-xt _ltree-guard WITH-GUARD ;
+: ST-ARRAY-APPEND-STR _st-array-append-str-xt _ltree-guard WITH-GUARD ;
+: ST-ARRAY-COUNT  _st-array-count-xt _ltree-guard WITH-GUARD ;
+: ST-ARRAY-NTH    _st-array-nth-xt _ltree-guard WITH-GUARD ;
+: ST-ARRAY-REMOVE _st-array-remove-xt _ltree-guard WITH-GUARD ;
+: ST-PROTECTED?   _st-protected-q-xt _ltree-guard WITH-GUARD ;
+: ST-JOURNAL-ADD  _st-journal-add-xt _ltree-guard WITH-GUARD ;
+: ST-JOURNAL-SEQ  _st-journal-seq-xt _ltree-guard WITH-GUARD ;
+: ST-JOURNAL-COUNT _st-journal-count-xt _ltree-guard WITH-GUARD ;
+: ST-JOURNAL-NTH  _st-journal-nth-xt _ltree-guard WITH-GUARD ;
+: ST-MERGE        _st-merge-xt _ltree-guard WITH-GUARD ;
+: ST-ARRAY-INSERT-INT _st-array-insert-int-xt _ltree-guard WITH-GUARD ;
+: ST-ARRAY-INSERT-STR _st-array-insert-str-xt _ltree-guard WITH-GUARD ;
+: ST-JRNL-SIZE!   _st-jrnl-size-s-xt _ltree-guard WITH-GUARD ;
+: ST-VALIDATE     _st-validate-xt _ltree-guard WITH-GUARD ;
+: ST-SNAPSHOT     _st-snapshot-xt _ltree-guard WITH-GUARD ;
+: ST-RESTORE      _st-restore-xt _ltree-guard WITH-GUARD ;
+: ST-COMPUTED?    _st-computed-q-xt _ltree-guard WITH-GUARD ;
+: ST-COMPUTED!    _st-computed-s-xt _ltree-guard WITH-GUARD ;
+: ST-SUBSCRIBE    _st-subscribe-xt _ltree-guard WITH-GUARD ;
+: ST-UNSUBSCRIBE  _st-unsubscribe-xt _ltree-guard WITH-GUARD ;
+[THEN] [THEN]

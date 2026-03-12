@@ -9,7 +9,6 @@
 
 REQUIRE url.f
 REQUIRE headers.f
-REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-http
 
@@ -524,6 +523,8 @@ VARIABLE HTTP-FOLLOW?
 \ cache, session headers).  A GUARD-BLOCKING serialises all outbound
 \ HTTP so a background task cannot corrupt a request in flight.
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD-BLOCKING _httpc-guard
 
 ' HTTP-REQUEST  CONSTANT _http-req-xt
@@ -539,3 +540,5 @@ GUARD-BLOCKING _httpc-guard
     _http-post-xt _httpc-guard WITH-GUARD ;
 : HTTP-POST-JSON ( url-a url-u json-a json-u -- resp-a resp-u )
     _http-pj-xt _httpc-guard WITH-GUARD ;
+
+[THEN] [THEN]

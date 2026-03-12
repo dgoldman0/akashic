@@ -29,7 +29,6 @@ REQUIRE ../store/block.f
 REQUIRE ../math/ed25519.f
 REQUIRE ../store/smt.f
 REQUIRE ../math/sha3.f
-REQUIRE ../concurrency/guard.f
 
 \ ====================================================================
 \  1. Constants
@@ -295,6 +294,8 @@ VARIABLE _XCH-CA-E
 \  9. Concurrency Guard
 \ ====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _xch-guard
 
 ' XCH-INIT           CONSTANT _xch-init-xt
@@ -320,3 +321,4 @@ GUARD _xch-guard
 : XCH-HEIGHT         _xch-hgt-xt   _xch-guard WITH-GUARD ;
 : XCH-STATE-ROOT     _xch-sr-xt    _xch-guard WITH-GUARD ;
 : XCH-CHAIN-INFO     _xch-ci-xt    _xch-guard WITH-GUARD ;
+[THEN] [THEN]

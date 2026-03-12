@@ -801,6 +801,7 @@ VARIABLE _VLD-MAX  VARIABLE _VLD-ARENA  VARIABLE _VLD-ULEN
 \ VAULT-OPEN / VAULT-LOAD acquire the guard.
 \ VAULT-CLOSE releases it.
 \ All other ops assert the guard is held (fail-loud with -258).
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _vlt-guard
 
@@ -873,3 +874,4 @@ GUARD _vlt-guard
 : VAULT-COUNT        _VLT-CHK _vlt-count-xt   EXECUTE ;
 : VAULT-DUMP         _VLT-CHK _vlt-dump-xt    EXECUTE ;
 : VAULT-BLOB.        _VLT-CHK _vlt-blob-xt    EXECUTE ;
+[THEN] [THEN]

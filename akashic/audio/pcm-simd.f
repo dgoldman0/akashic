@@ -130,3 +130,23 @@ VARIABLE _PSIMD-N
 
 : PCM-SIMD-CLEAR  ( buf -- )
     DUP PCM-DATA SWAP _PSIMD-SAMPLES 2 * 0 FILL ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _pcmsimd-guard
+
+' PCM-SIMD-ADD    CONSTANT _pcm-simd-add-xt
+' PCM-SIMD-SCALE  CONSTANT _pcm-simd-scale-xt
+' PCM-SIMD-MIX    CONSTANT _pcm-simd-mix-xt
+' PCM-SIMD-MUL    CONSTANT _pcm-simd-mul-xt
+' PCM-SIMD-FILL   CONSTANT _pcm-simd-fill-xt
+' PCM-SIMD-CLEAR  CONSTANT _pcm-simd-clear-xt
+
+: PCM-SIMD-ADD    _pcm-simd-add-xt _pcmsimd-guard WITH-GUARD ;
+: PCM-SIMD-SCALE  _pcm-simd-scale-xt _pcmsimd-guard WITH-GUARD ;
+: PCM-SIMD-MIX    _pcm-simd-mix-xt _pcmsimd-guard WITH-GUARD ;
+: PCM-SIMD-MUL    _pcm-simd-mul-xt _pcmsimd-guard WITH-GUARD ;
+: PCM-SIMD-FILL   _pcm-simd-fill-xt _pcmsimd-guard WITH-GUARD ;
+: PCM-SIMD-CLEAR  _pcm-simd-clear-xt _pcmsimd-guard WITH-GUARD ;
+[THEN] [THEN]

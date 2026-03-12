@@ -398,6 +398,7 @@ VARIABLE _MP-DR-BUF
 \  18. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _mp-guard
 
@@ -416,6 +417,7 @@ GUARD _mp-guard
 : MP-RELEASE    _mp-rel-xt    _mp-guard WITH-GUARD ;
 : MP-PRUNE      _mp-prune-xt  _mp-guard WITH-GUARD ;
 : MP-CONTAINS?  _mp-has-xt    _mp-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =====================================================================
 \  Done.

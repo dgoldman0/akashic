@@ -21,7 +21,6 @@
 \  Not reentrant (scratch VARIABLEs).
 \ =================================================================
 
-REQUIRE fmt.f
 PROVIDED akashic-fmt
 
 \ =====================================================================
@@ -178,3 +177,31 @@ VARIABLE _FMT-SRC
 \ =====================================================================
 \  Done.
 \ =====================================================================
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _fmt-guard
+
+' FMT-NIB>C       CONSTANT _fmt-nib-to-c-xt
+' FMT-.NIB        CONSTANT _fmt-dotnib-xt
+' FMT-.BYTE       CONSTANT _fmt-dotbyte-xt
+' FMT-.HEX        CONSTANT _fmt-dothex-xt
+' FMT->HEX        CONSTANT _fmt-to-hex-xt
+' FMT-U.H         CONSTANT _fmt-u-doth-xt
+' FMT-U.H4        CONSTANT _fmt-u-doth4-xt
+' FMT-.HEXDUMP    CONSTANT _fmt-dothexdump-xt
+' FMT-C>NIB       CONSTANT _fmt-c-to-nib-xt
+' FMT-HEX-DECODE  CONSTANT _fmt-hex-decode-xt
+
+: FMT-NIB>C       _fmt-nib-to-c-xt _fmt-guard WITH-GUARD ;
+: FMT-.NIB        _fmt-dotnib-xt _fmt-guard WITH-GUARD ;
+: FMT-.BYTE       _fmt-dotbyte-xt _fmt-guard WITH-GUARD ;
+: FMT-.HEX        _fmt-dothex-xt _fmt-guard WITH-GUARD ;
+: FMT->HEX        _fmt-to-hex-xt _fmt-guard WITH-GUARD ;
+: FMT-U.H         _fmt-u-doth-xt _fmt-guard WITH-GUARD ;
+: FMT-U.H4        _fmt-u-doth4-xt _fmt-guard WITH-GUARD ;
+: FMT-.HEXDUMP    _fmt-dothexdump-xt _fmt-guard WITH-GUARD ;
+: FMT-C>NIB       _fmt-c-to-nib-xt _fmt-guard WITH-GUARD ;
+: FMT-HEX-DECODE  _fmt-hex-decode-xt _fmt-guard WITH-GUARD ;
+[THEN] [THEN]

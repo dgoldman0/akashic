@@ -723,6 +723,7 @@ CREATE _TS-REG-CTX REG-CTX-SIZE ALLOT
     _TS-J @ ;
 
 \ ── Concurrency Guard ───────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _ts-guard
 
@@ -773,3 +774,4 @@ GUARD _ts-guard
 : TS-ZSCORE         _ts-zscore-xt    _ts-guard WITH-GUARD ;
 : TS-OUTLIERS-IQR   _ts-outiqr-xt    _ts-guard WITH-GUARD ;
 : TS-OUTLIERS-Z     _ts-outz-xt      _ts-guard WITH-GUARD ;
+[THEN] [THEN]

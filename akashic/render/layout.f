@@ -747,3 +747,25 @@ VARIABLE _LL-BOX
     \ Lay out as block
     _LL-BOX @ LAYO-BLOCK
 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _rlay-guard
+
+' LAYO-CONTAINING-W CONSTANT _layo-containing-w-xt
+' LAYO-COLLAPSE-MARGINS CONSTANT _layo-collapse-margins-xt
+' LAYO-RESOLVE-WIDTH CONSTANT _layo-resolve-width-xt
+' LAYO-RESOLVE-HEIGHT CONSTANT _layo-resolve-height-xt
+' LAYO-INLINE-CONTEXT CONSTANT _layo-inline-context-xt
+' LAYO-BLOCK      CONSTANT _layo-block-xt
+' LAYO-LAYOUT     CONSTANT _layo-layout-xt
+
+: LAYO-CONTAINING-W _layo-containing-w-xt _rlay-guard WITH-GUARD ;
+: LAYO-COLLAPSE-MARGINS _layo-collapse-margins-xt _rlay-guard WITH-GUARD ;
+: LAYO-RESOLVE-WIDTH _layo-resolve-width-xt _rlay-guard WITH-GUARD ;
+: LAYO-RESOLVE-HEIGHT _layo-resolve-height-xt _rlay-guard WITH-GUARD ;
+: LAYO-INLINE-CONTEXT _layo-inline-context-xt _rlay-guard WITH-GUARD ;
+: LAYO-BLOCK      _layo-block-xt _rlay-guard WITH-GUARD ;
+: LAYO-LAYOUT     _layo-layout-xt _rlay-guard WITH-GUARD ;
+[THEN] [THEN]

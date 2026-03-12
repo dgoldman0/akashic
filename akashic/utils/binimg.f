@@ -930,3 +930,33 @@ CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
     \ Clean up stack: drop fsize seg nrel nexp nimp, keep hash
     SWAP DROP SWAP DROP SWAP DROP SWAP DROP SWAP DROP
 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _binimg-guard
+
+' IMG-MARK        CONSTANT _img-mark-xt
+' IMG-PROVIDED    CONSTANT _img-provided-xt
+' IMG-ENTRY       CONSTANT _img-entry-xt
+' IMG-XMEM        CONSTANT _img-xmem-xt
+' IMG-SAVE        CONSTANT _img-save-xt
+' IMG-SAVE-EXEC   CONSTANT _img-save-exec-xt
+' IMG-LOAD        CONSTANT _img-load-xt
+' IMG-LOAD-EXEC   CONSTANT _img-load-exec-xt
+' IMG-INFO        CONSTANT _img-info-xt
+' IMG-VERIFY      CONSTANT _img-verify-xt
+' IMG-CHECKSUM    CONSTANT _img-checksum-xt
+
+: IMG-MARK        _img-mark-xt _binimg-guard WITH-GUARD ;
+: IMG-PROVIDED    _img-provided-xt _binimg-guard WITH-GUARD ;
+: IMG-ENTRY       _img-entry-xt _binimg-guard WITH-GUARD ;
+: IMG-XMEM        _img-xmem-xt _binimg-guard WITH-GUARD ;
+: IMG-SAVE        _img-save-xt _binimg-guard WITH-GUARD ;
+: IMG-SAVE-EXEC   _img-save-exec-xt _binimg-guard WITH-GUARD ;
+: IMG-LOAD        _img-load-xt _binimg-guard WITH-GUARD ;
+: IMG-LOAD-EXEC   _img-load-exec-xt _binimg-guard WITH-GUARD ;
+: IMG-INFO        _img-info-xt _binimg-guard WITH-GUARD ;
+: IMG-VERIFY      _img-verify-xt _binimg-guard WITH-GUARD ;
+: IMG-CHECKSUM    _img-checksum-xt _binimg-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -41,7 +41,6 @@
 
 REQUIRE ../store/block.f
 REQUIRE ../store/state.f
-REQUIRE ../concurrency/guard.f
 
 PROVIDED akashic-persist
 
@@ -430,6 +429,8 @@ VARIABLE _PST-SS
 \  11. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _pst-guard
 
 ' PST-INIT       CONSTANT _pst-init-xt
@@ -447,6 +448,7 @@ GUARD _pst-guard
 : PST-SAVE-STATE _pst-sv-st-xt _pst-guard WITH-GUARD ;
 : PST-LOAD-STATE _pst-ld-st-xt _pst-guard WITH-GUARD ;
 : PST-CLOSE      _pst-close-xt _pst-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =================================================================
 \  Done.

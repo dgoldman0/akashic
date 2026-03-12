@@ -144,3 +144,29 @@ CREATE _RNG-HEX
         0x0F AND _RNG-NIB>C EMIT
     LOOP
     DROP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _rng-guard
+
+' RNG-U64         CONSTANT _rng-u64-xt
+' RNG-U32         CONSTANT _rng-u32-xt
+' RNG-BYTE        CONSTANT _rng-byte-xt
+' RNG-BYTES       CONSTANT _rng-bytes-xt
+' RNG-RANGE       CONSTANT _rng-range-xt
+' RNG-BOOL        CONSTANT _rng-bool-xt
+' RNG-SEED        CONSTANT _rng-seed-xt
+' RNG-FP16        CONSTANT _rng-fp16-xt
+' RNG-BYTES-.     CONSTANT _rng-bytes-dot-xt
+
+: RNG-U64         _rng-u64-xt _rng-guard WITH-GUARD ;
+: RNG-U32         _rng-u32-xt _rng-guard WITH-GUARD ;
+: RNG-BYTE        _rng-byte-xt _rng-guard WITH-GUARD ;
+: RNG-BYTES       _rng-bytes-xt _rng-guard WITH-GUARD ;
+: RNG-RANGE       _rng-range-xt _rng-guard WITH-GUARD ;
+: RNG-BOOL        _rng-bool-xt _rng-guard WITH-GUARD ;
+: RNG-SEED        _rng-seed-xt _rng-guard WITH-GUARD ;
+: RNG-FP16        _rng-fp16-xt _rng-guard WITH-GUARD ;
+: RNG-BYTES-.     _rng-bytes-dot-xt _rng-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -659,3 +659,93 @@ VARIABLE _PCM-NORM-TGT  \ target for PCM-NORMALIZE (survives SCAN-PEAK)
     LOOP
 
     _PCM-DST @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _pcm-guard
+
+' P.DATA          CONSTANT _p-dotdata-xt
+' P.LEN           CONSTANT _p-dotlen-xt
+' P.RATE          CONSTANT _p-dotrate-xt
+' P.BITS          CONSTANT _p-dotbits-xt
+' P.CHANS         CONSTANT _p-dotchans-xt
+' P.FLAGS         CONSTANT _p-dotflags-xt
+' P.OFFSET        CONSTANT _p-dotoffset-xt
+' P.PEAK          CONSTANT _p-dotpeak-xt
+' P.USER          CONSTANT _p-dotuser-xt
+' PCM-DATA        CONSTANT _pcm-data-xt
+' PCM-LEN         CONSTANT _pcm-len-xt
+' PCM-RATE        CONSTANT _pcm-rate-xt
+' PCM-BITS        CONSTANT _pcm-bits-xt
+' PCM-CHANS       CONSTANT _pcm-chans-xt
+' PCM-FLAGS       CONSTANT _pcm-flags-xt
+' PCM-OFFSET      CONSTANT _pcm-offset-xt
+' PCM-PEAK        CONSTANT _pcm-peak-xt
+' PCM-USER        CONSTANT _pcm-user-xt
+' PCM-FRAME-BYTES CONSTANT _pcm-frame-bytes-xt
+' PCM-DATA-BYTES  CONSTANT _pcm-data-bytes-xt
+' PCM-DURATION-MS CONSTANT _pcm-duration-ms-xt
+' PCM-ALLOC       CONSTANT _pcm-alloc-xt
+' PCM-ALLOC-MS    CONSTANT _pcm-alloc-ms-xt
+' PCM-FREE        CONSTANT _pcm-free-xt
+' PCM-CREATE-FROM CONSTANT _pcm-create-from-xt
+' PCM-SAMPLE!     CONSTANT _pcm-sample-s-xt
+' PCM-SAMPLE@     CONSTANT _pcm-sample-at-xt
+' PCM-FRAME!      CONSTANT _pcm-frame-s-xt
+' PCM-FRAME@      CONSTANT _pcm-frame-at-xt
+' PCM-CLEAR       CONSTANT _pcm-clear-xt
+' PCM-FILL        CONSTANT _pcm-fill-xt
+' PCM-COPY        CONSTANT _pcm-copy-xt
+' PCM-SLICE       CONSTANT _pcm-slice-xt
+' PCM-CLONE       CONSTANT _pcm-clone-xt
+' PCM-REVERSE     CONSTANT _pcm-reverse-xt
+' PCM-MS>FRAMES   CONSTANT _pcm-ms-to-frames-xt
+' PCM-FRAMES>MS   CONSTANT _pcm-frames-to-ms-xt
+' PCM-SCAN-PEAK   CONSTANT _pcm-scan-peak-xt
+' PCM-NORMALIZE   CONSTANT _pcm-normalize-xt
+' PCM-RESAMPLE    CONSTANT _pcm-resample-xt
+' PCM-TO-MONO     CONSTANT _pcm-to-mono-xt
+
+: P.DATA          _p-dotdata-xt _pcm-guard WITH-GUARD ;
+: P.LEN           _p-dotlen-xt _pcm-guard WITH-GUARD ;
+: P.RATE          _p-dotrate-xt _pcm-guard WITH-GUARD ;
+: P.BITS          _p-dotbits-xt _pcm-guard WITH-GUARD ;
+: P.CHANS         _p-dotchans-xt _pcm-guard WITH-GUARD ;
+: P.FLAGS         _p-dotflags-xt _pcm-guard WITH-GUARD ;
+: P.OFFSET        _p-dotoffset-xt _pcm-guard WITH-GUARD ;
+: P.PEAK          _p-dotpeak-xt _pcm-guard WITH-GUARD ;
+: P.USER          _p-dotuser-xt _pcm-guard WITH-GUARD ;
+: PCM-DATA        _pcm-data-xt _pcm-guard WITH-GUARD ;
+: PCM-LEN         _pcm-len-xt _pcm-guard WITH-GUARD ;
+: PCM-RATE        _pcm-rate-xt _pcm-guard WITH-GUARD ;
+: PCM-BITS        _pcm-bits-xt _pcm-guard WITH-GUARD ;
+: PCM-CHANS       _pcm-chans-xt _pcm-guard WITH-GUARD ;
+: PCM-FLAGS       _pcm-flags-xt _pcm-guard WITH-GUARD ;
+: PCM-OFFSET      _pcm-offset-xt _pcm-guard WITH-GUARD ;
+: PCM-PEAK        _pcm-peak-xt _pcm-guard WITH-GUARD ;
+: PCM-USER        _pcm-user-xt _pcm-guard WITH-GUARD ;
+: PCM-FRAME-BYTES _pcm-frame-bytes-xt _pcm-guard WITH-GUARD ;
+: PCM-DATA-BYTES  _pcm-data-bytes-xt _pcm-guard WITH-GUARD ;
+: PCM-DURATION-MS _pcm-duration-ms-xt _pcm-guard WITH-GUARD ;
+: PCM-ALLOC       _pcm-alloc-xt _pcm-guard WITH-GUARD ;
+: PCM-ALLOC-MS    _pcm-alloc-ms-xt _pcm-guard WITH-GUARD ;
+: PCM-FREE        _pcm-free-xt _pcm-guard WITH-GUARD ;
+: PCM-CREATE-FROM _pcm-create-from-xt _pcm-guard WITH-GUARD ;
+: PCM-SAMPLE!     _pcm-sample-s-xt _pcm-guard WITH-GUARD ;
+: PCM-SAMPLE@     _pcm-sample-at-xt _pcm-guard WITH-GUARD ;
+: PCM-FRAME!      _pcm-frame-s-xt _pcm-guard WITH-GUARD ;
+: PCM-FRAME@      _pcm-frame-at-xt _pcm-guard WITH-GUARD ;
+: PCM-CLEAR       _pcm-clear-xt _pcm-guard WITH-GUARD ;
+: PCM-FILL        _pcm-fill-xt _pcm-guard WITH-GUARD ;
+: PCM-COPY        _pcm-copy-xt _pcm-guard WITH-GUARD ;
+: PCM-SLICE       _pcm-slice-xt _pcm-guard WITH-GUARD ;
+: PCM-CLONE       _pcm-clone-xt _pcm-guard WITH-GUARD ;
+: PCM-REVERSE     _pcm-reverse-xt _pcm-guard WITH-GUARD ;
+: PCM-MS>FRAMES   _pcm-ms-to-frames-xt _pcm-guard WITH-GUARD ;
+: PCM-FRAMES>MS   _pcm-frames-to-ms-xt _pcm-guard WITH-GUARD ;
+: PCM-SCAN-PEAK   _pcm-scan-peak-xt _pcm-guard WITH-GUARD ;
+: PCM-NORMALIZE   _pcm-normalize-xt _pcm-guard WITH-GUARD ;
+: PCM-RESAMPLE    _pcm-resample-xt _pcm-guard WITH-GUARD ;
+: PCM-TO-MONO     _pcm-to-mono-xt _pcm-guard WITH-GUARD ;
+[THEN] [THEN]

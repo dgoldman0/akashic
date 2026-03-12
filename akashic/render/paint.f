@@ -720,3 +720,27 @@ VARIABLE _PR-PX  VARIABLE _PR-PY  VARIABLE _PR-PW  VARIABLE _PR-PH
     _PR-CLIP @ IF
         _PR-SURF @ _PR-RESTORE-CLIP
     THEN ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _paint-guard
+
+' PAINT-CSS-COLOR CONSTANT _paint-css-color-xt
+' PAINT-BG-COLOR  CONSTANT _paint-bg-color-xt
+' PAINT-BORDERS   CONSTANT _paint-borders-xt
+' PAINT-TEXT      CONSTANT _paint-text-xt
+' PAINT-BOX       CONSTANT _paint-box-xt
+' PAINT-HR        CONSTANT _paint-hr-xt
+' PAINT-LIST-MARKER CONSTANT _paint-list-marker-xt
+' PAINT-RENDER    CONSTANT _paint-render-xt
+
+: PAINT-CSS-COLOR _paint-css-color-xt _paint-guard WITH-GUARD ;
+: PAINT-BG-COLOR  _paint-bg-color-xt _paint-guard WITH-GUARD ;
+: PAINT-BORDERS   _paint-borders-xt _paint-guard WITH-GUARD ;
+: PAINT-TEXT      _paint-text-xt _paint-guard WITH-GUARD ;
+: PAINT-BOX       _paint-box-xt _paint-guard WITH-GUARD ;
+: PAINT-HR        _paint-hr-xt _paint-guard WITH-GUARD ;
+: PAINT-LIST-MARKER _paint-list-marker-xt _paint-guard WITH-GUARD ;
+: PAINT-RENDER    _paint-render-xt _paint-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -731,3 +731,47 @@ VARIABLE _RST-G-BUF  VARIABLE _RST-G-W  VARIABLE _RST-G-H
     2DROP
     _RST-G-BUF @ _RST-G-W @ _RST-G-H @ _RST-DO-FILL
     TRUE ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _rast-guard
+
+' RAST-RESET      CONSTANT _rast-reset-xt
+' RAST-NEDGES     CONSTANT _rast-nedges-xt
+' RAST-EDGE       CONSTANT _rast-edge-xt
+' RAST-FILL       CONSTANT _rast-fill-xt
+' RAST-AA!        CONSTANT _rast-aa-s-xt
+' RAST-AA@        CONSTANT _rast-aa-at-xt
+' RAST-FILL-AA    CONSTANT _rast-fill-aa-xt
+' RAST-GAMMA!     CONSTANT _rast-gamma-s-xt
+' RAST-GAMMA@     CONSTANT _rast-gamma-at-xt
+' RAST-FILL-ANALYTIC CONSTANT _rast-fill-analytic-xt
+' RAST-MODE!      CONSTANT _rast-mode-s-xt
+' RAST-MODE@      CONSTANT _rast-mode-at-xt
+' RAST-SCALE!     CONSTANT _rast-scale-s-xt
+' HINT-ON!        CONSTANT _hint-on-s-xt
+' HINT-OFF!       CONSTANT _hint-off-s-xt
+' HINT-ON?        CONSTANT _hint-on-q-xt
+' HINT-GLYPH      CONSTANT _hint-glyph-xt
+' RAST-GLYPH      CONSTANT _rast-glyph-xt
+
+: RAST-RESET      _rast-reset-xt _rast-guard WITH-GUARD ;
+: RAST-NEDGES     _rast-nedges-xt _rast-guard WITH-GUARD ;
+: RAST-EDGE       _rast-edge-xt _rast-guard WITH-GUARD ;
+: RAST-FILL       _rast-fill-xt _rast-guard WITH-GUARD ;
+: RAST-AA!        _rast-aa-s-xt _rast-guard WITH-GUARD ;
+: RAST-AA@        _rast-aa-at-xt _rast-guard WITH-GUARD ;
+: RAST-FILL-AA    _rast-fill-aa-xt _rast-guard WITH-GUARD ;
+: RAST-GAMMA!     _rast-gamma-s-xt _rast-guard WITH-GUARD ;
+: RAST-GAMMA@     _rast-gamma-at-xt _rast-guard WITH-GUARD ;
+: RAST-FILL-ANALYTIC _rast-fill-analytic-xt _rast-guard WITH-GUARD ;
+: RAST-MODE!      _rast-mode-s-xt _rast-guard WITH-GUARD ;
+: RAST-MODE@      _rast-mode-at-xt _rast-guard WITH-GUARD ;
+: RAST-SCALE!     _rast-scale-s-xt _rast-guard WITH-GUARD ;
+: HINT-ON!        _hint-on-s-xt _rast-guard WITH-GUARD ;
+: HINT-OFF!       _hint-off-s-xt _rast-guard WITH-GUARD ;
+: HINT-ON?        _hint-on-q-xt _rast-guard WITH-GUARD ;
+: HINT-GLYPH      _hint-glyph-xt _rast-guard WITH-GUARD ;
+: RAST-GLYPH      _rast-glyph-xt _rast-guard WITH-GUARD ;
+[THEN] [THEN]

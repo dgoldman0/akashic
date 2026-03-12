@@ -456,3 +456,19 @@ VARIABLE _FFTREV-DRY
     _FFTREV-DESC @ _FFTREV.RIDX @ 1+
     _FFTREV-DESC @ _FFTREV.NP @ MOD
     _FFTREV-DESC @ _FFTREV.RIDX ! ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _fftrv-guard
+
+' FFTREV-CREATE   CONSTANT _fftrev-create-xt
+' FFTREV-FREE     CONSTANT _fftrev-free-xt
+' FFTREV-WET!     CONSTANT _fftrev-wet-s-xt
+' FFTREV-PROCESS  CONSTANT _fftrev-process-xt
+
+: FFTREV-CREATE   _fftrev-create-xt _fftrv-guard WITH-GUARD ;
+: FFTREV-FREE     _fftrev-free-xt _fftrv-guard WITH-GUARD ;
+: FFTREV-WET!     _fftrev-wet-s-xt _fftrv-guard WITH-GUARD ;
+: FFTREV-PROCESS  _fftrev-process-xt _fftrv-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -1496,3 +1496,141 @@ VARIABLE _FXK-TMP2
 
         I _FXK-BUF @ PCM-FRAME!
     LOOP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _fx-guard
+
+' DL.CAP          CONSTANT _dl-dotcap-xt
+' DL.WPTR         CONSTANT _dl-dotwptr-xt
+' DL.DATA         CONSTANT _dl-dotdata-xt
+' FXD.DL          CONSTANT _fxd-dotdl-xt
+' FXD.DLY         CONSTANT _fxd-dotdly-xt
+' FXD.FB          CONSTANT _fxd-dotfb-xt
+' FXD.WET         CONSTANT _fxd-dotwet-xt
+' FXD.RATE        CONSTANT _fxd-dotrate-xt
+' FX-DELAY-CREATE CONSTANT _fx-delay-create-xt
+' FX-DELAY-FREE   CONSTANT _fx-delay-free-xt
+' FX-DELAY!       CONSTANT _fx-delay-s-xt
+' FX-DELAY-FB!    CONSTANT _fx-delay-fb-s-xt
+' FX-DELAY-WET!   CONSTANT _fx-delay-wet-s-xt
+' FX-DELAY-PROCESS CONSTANT _fx-delay-process-xt
+' FXS.DRV         CONSTANT _fxs-dotdrv-xt
+' FXS.MODE        CONSTANT _fxs-dotmode-xt
+' FXS.HOLD        CONSTANT _fxs-dothold-xt
+' FXS.CNT         CONSTANT _fxs-dotcnt-xt
+' FX-DIST-CREATE  CONSTANT _fx-dist-create-xt
+' FX-DIST-FREE    CONSTANT _fx-dist-free-xt
+' FX-DIST-DRIVE!  CONSTANT _fx-dist-drive-s-xt
+' FX-DIST-PROCESS CONSTANT _fx-dist-process-xt
+' FXR.C0          CONSTANT _fxr-dotc0-xt
+' FXR.C1          CONSTANT _fxr-dotc1-xt
+' FXR.C2          CONSTANT _fxr-dotc2-xt
+' FXR.C3          CONSTANT _fxr-dotc3-xt
+' FXR.A0          CONSTANT _fxr-dota0-xt
+' FXR.A1          CONSTANT _fxr-dota1-xt
+' FXR.F0          CONSTANT _fxr-dotf0-xt
+' FXR.F1          CONSTANT _fxr-dotf1-xt
+' FXR.F2          CONSTANT _fxr-dotf2-xt
+' FXR.F3          CONSTANT _fxr-dotf3-xt
+' FXR.ROOM        CONSTANT _fxr-dotroom-xt
+' FXR.DAMP        CONSTANT _fxr-dotdamp-xt
+' FXR.WET         CONSTANT _fxr-dotwet-xt
+' FX-REVERB-CREATE CONSTANT _fx-reverb-create-xt
+' FX-REVERB-FREE  CONSTANT _fx-reverb-free-xt
+' FX-REVERB-ROOM! CONSTANT _fx-reverb-room-s-xt
+' FX-REVERB-DAMP! CONSTANT _fx-reverb-damp-s-xt
+' FX-REVERB-PROCESS CONSTANT _fx-reverb-process-xt
+' FXC.DL          CONSTANT _fxc-dotdl-xt
+' FXC.LFO         CONSTANT _fxc-dotlfo-xt
+' FXC.MIX         CONSTANT _fxc-dotmix-xt
+' FXC.CTR         CONSTANT _fxc-dotctr-xt
+' FX-CHORUS-CREATE CONSTANT _fx-chorus-create-xt
+' FX-CHORUS-FREE  CONSTANT _fx-chorus-free-xt
+' FX-CHORUS-PROCESS CONSTANT _fx-chorus-process-xt
+' FXQ.N           CONSTANT _fxq-dotn-xt
+' FXQ.RATE        CONSTANT _fxq-dotrate-xt
+' FXQ.BANDS       CONSTANT _fxq-dotbands-xt
+' FX-EQ-CREATE    CONSTANT _fx-eq-create-xt
+' FX-EQ-FREE      CONSTANT _fx-eq-free-xt
+' FX-EQ-BAND!     CONSTANT _fx-eq-band-s-xt
+' FX-EQ-PROCESS   CONSTANT _fx-eq-process-xt
+' FXK.THRESH      CONSTANT _fxk-dotthresh-xt
+' FXK.SLOPE       CONSTANT _fxk-dotslope-xt
+' FXK.ATK         CONSTANT _fxk-dotatk-xt
+' FXK.REL         CONSTANT _fxk-dotrel-xt
+' FXK.LEVEL       CONSTANT _fxk-dotlevel-xt
+' FXK.GAIN        CONSTANT _fxk-dotgain-xt
+' FXK.LIM         CONSTANT _fxk-dotlim-xt
+' FX-COMP-CREATE  CONSTANT _fx-comp-create-xt
+' FX-COMP-FREE    CONSTANT _fx-comp-free-xt
+' FX-COMP-LIMIT!  CONSTANT _fx-comp-limit-s-xt
+' FX-COMP-PROCESS CONSTANT _fx-comp-process-xt
+
+: DL.CAP          _dl-dotcap-xt _fx-guard WITH-GUARD ;
+: DL.WPTR         _dl-dotwptr-xt _fx-guard WITH-GUARD ;
+: DL.DATA         _dl-dotdata-xt _fx-guard WITH-GUARD ;
+: FXD.DL          _fxd-dotdl-xt _fx-guard WITH-GUARD ;
+: FXD.DLY         _fxd-dotdly-xt _fx-guard WITH-GUARD ;
+: FXD.FB          _fxd-dotfb-xt _fx-guard WITH-GUARD ;
+: FXD.WET         _fxd-dotwet-xt _fx-guard WITH-GUARD ;
+: FXD.RATE        _fxd-dotrate-xt _fx-guard WITH-GUARD ;
+: FX-DELAY-CREATE _fx-delay-create-xt _fx-guard WITH-GUARD ;
+: FX-DELAY-FREE   _fx-delay-free-xt _fx-guard WITH-GUARD ;
+: FX-DELAY!       _fx-delay-s-xt _fx-guard WITH-GUARD ;
+: FX-DELAY-FB!    _fx-delay-fb-s-xt _fx-guard WITH-GUARD ;
+: FX-DELAY-WET!   _fx-delay-wet-s-xt _fx-guard WITH-GUARD ;
+: FX-DELAY-PROCESS _fx-delay-process-xt _fx-guard WITH-GUARD ;
+: FXS.DRV         _fxs-dotdrv-xt _fx-guard WITH-GUARD ;
+: FXS.MODE        _fxs-dotmode-xt _fx-guard WITH-GUARD ;
+: FXS.HOLD        _fxs-dothold-xt _fx-guard WITH-GUARD ;
+: FXS.CNT         _fxs-dotcnt-xt _fx-guard WITH-GUARD ;
+: FX-DIST-CREATE  _fx-dist-create-xt _fx-guard WITH-GUARD ;
+: FX-DIST-FREE    _fx-dist-free-xt _fx-guard WITH-GUARD ;
+: FX-DIST-DRIVE!  _fx-dist-drive-s-xt _fx-guard WITH-GUARD ;
+: FX-DIST-PROCESS _fx-dist-process-xt _fx-guard WITH-GUARD ;
+: FXR.C0          _fxr-dotc0-xt _fx-guard WITH-GUARD ;
+: FXR.C1          _fxr-dotc1-xt _fx-guard WITH-GUARD ;
+: FXR.C2          _fxr-dotc2-xt _fx-guard WITH-GUARD ;
+: FXR.C3          _fxr-dotc3-xt _fx-guard WITH-GUARD ;
+: FXR.A0          _fxr-dota0-xt _fx-guard WITH-GUARD ;
+: FXR.A1          _fxr-dota1-xt _fx-guard WITH-GUARD ;
+: FXR.F0          _fxr-dotf0-xt _fx-guard WITH-GUARD ;
+: FXR.F1          _fxr-dotf1-xt _fx-guard WITH-GUARD ;
+: FXR.F2          _fxr-dotf2-xt _fx-guard WITH-GUARD ;
+: FXR.F3          _fxr-dotf3-xt _fx-guard WITH-GUARD ;
+: FXR.ROOM        _fxr-dotroom-xt _fx-guard WITH-GUARD ;
+: FXR.DAMP        _fxr-dotdamp-xt _fx-guard WITH-GUARD ;
+: FXR.WET         _fxr-dotwet-xt _fx-guard WITH-GUARD ;
+: FX-REVERB-CREATE _fx-reverb-create-xt _fx-guard WITH-GUARD ;
+: FX-REVERB-FREE  _fx-reverb-free-xt _fx-guard WITH-GUARD ;
+: FX-REVERB-ROOM! _fx-reverb-room-s-xt _fx-guard WITH-GUARD ;
+: FX-REVERB-DAMP! _fx-reverb-damp-s-xt _fx-guard WITH-GUARD ;
+: FX-REVERB-PROCESS _fx-reverb-process-xt _fx-guard WITH-GUARD ;
+: FXC.DL          _fxc-dotdl-xt _fx-guard WITH-GUARD ;
+: FXC.LFO         _fxc-dotlfo-xt _fx-guard WITH-GUARD ;
+: FXC.MIX         _fxc-dotmix-xt _fx-guard WITH-GUARD ;
+: FXC.CTR         _fxc-dotctr-xt _fx-guard WITH-GUARD ;
+: FX-CHORUS-CREATE _fx-chorus-create-xt _fx-guard WITH-GUARD ;
+: FX-CHORUS-FREE  _fx-chorus-free-xt _fx-guard WITH-GUARD ;
+: FX-CHORUS-PROCESS _fx-chorus-process-xt _fx-guard WITH-GUARD ;
+: FXQ.N           _fxq-dotn-xt _fx-guard WITH-GUARD ;
+: FXQ.RATE        _fxq-dotrate-xt _fx-guard WITH-GUARD ;
+: FXQ.BANDS       _fxq-dotbands-xt _fx-guard WITH-GUARD ;
+: FX-EQ-CREATE    _fx-eq-create-xt _fx-guard WITH-GUARD ;
+: FX-EQ-FREE      _fx-eq-free-xt _fx-guard WITH-GUARD ;
+: FX-EQ-BAND!     _fx-eq-band-s-xt _fx-guard WITH-GUARD ;
+: FX-EQ-PROCESS   _fx-eq-process-xt _fx-guard WITH-GUARD ;
+: FXK.THRESH      _fxk-dotthresh-xt _fx-guard WITH-GUARD ;
+: FXK.SLOPE       _fxk-dotslope-xt _fx-guard WITH-GUARD ;
+: FXK.ATK         _fxk-dotatk-xt _fx-guard WITH-GUARD ;
+: FXK.REL         _fxk-dotrel-xt _fx-guard WITH-GUARD ;
+: FXK.LEVEL       _fxk-dotlevel-xt _fx-guard WITH-GUARD ;
+: FXK.GAIN        _fxk-dotgain-xt _fx-guard WITH-GUARD ;
+: FXK.LIM         _fxk-dotlim-xt _fx-guard WITH-GUARD ;
+: FX-COMP-CREATE  _fx-comp-create-xt _fx-guard WITH-GUARD ;
+: FX-COMP-FREE    _fx-comp-free-xt _fx-guard WITH-GUARD ;
+: FX-COMP-LIMIT!  _fx-comp-limit-s-xt _fx-guard WITH-GUARD ;
+: FX-COMP-PROCESS _fx-comp-process-xt _fx-guard WITH-GUARD ;
+[THEN] [THEN]

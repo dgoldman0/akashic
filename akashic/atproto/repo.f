@@ -203,3 +203,19 @@ VARIABLE _REP-V2A   VARIABLE _REP-V2L   \ stash slot 2
   XRPC-PROCEDURE                         ( resp-a resp-u ior )
   DUP 0<> IF  DROP 2DROP -1 EXIT  THEN
   DROP 2DROP 0 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _repo-guard
+
+' REPO-GET        CONSTANT _repo-get-xt
+' REPO-CREATE     CONSTANT _repo-create-xt
+' REPO-PUT        CONSTANT _repo-put-xt
+' REPO-DELETE     CONSTANT _repo-delete-xt
+
+: REPO-GET        _repo-get-xt _repo-guard WITH-GUARD ;
+: REPO-CREATE     _repo-create-xt _repo-guard WITH-GUARD ;
+: REPO-PUT        _repo-put-xt _repo-guard WITH-GUARD ;
+: REPO-DELETE     _repo-delete-xt _repo-guard WITH-GUARD ;
+[THEN] [THEN]

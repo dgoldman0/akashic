@@ -432,3 +432,63 @@ VARIABLE _RS-VF-D
     2500 INT>FP16  12 INT>FP16  0x3400   2  _RS-VF-D @  RESON-POLE!
     3700 INT>FP16  10 INT>FP16  0x3200   3  _RS-VF-D @  RESON-POLE!
     5000 INT>FP16  6  INT>FP16  0x3000   4  _RS-VF-D @  RESON-POLE! ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _sreso-guard
+
+' RS.NPOLS        CONSTANT _rs-dotnpols-xt
+' RS.NCOL         CONSTANT _rs-dotncol-xt
+' RS.EXCITE       CONSTANT _rs-dotexcite-xt
+' RS.INTENS       CONSTANT _rs-dotintens-xt
+' RS.RATE         CONSTANT _rs-dotrate-xt
+' RS.POLES        CONSTANT _rs-dotpoles-xt
+' RS.NENG         CONSTANT _rs-dotneng-xt
+' RS.PCTR         CONSTANT _rs-dotpctr-xt
+' RP.FCO          CONSTANT _rp-dotfco-xt
+' RP.Q            CONSTANT _rp-dotq-xt
+' RP.AMP          CONSTANT _rp-dotamp-xt
+' RP.B0N          CONSTANT _rp-dotb0n-xt
+' RP.NA1N         CONSTANT _rp-dotna1n-xt
+' RP.NA2N         CONSTANT _rp-dotna2n-xt
+' RP.S1           CONSTANT _rp-dots1-xt
+' RP.S2           CONSTANT _rp-dots2-xt
+' RP.AMPFX        CONSTANT _rp-dotampfx-xt
+' RESON-CREATE    CONSTANT _reson-create-xt
+' RESON-FREE      CONSTANT _reson-free-xt
+' RESON-POLE!     CONSTANT _reson-pole-s-xt
+' RESON-NOISE!    CONSTANT _reson-noise-s-xt
+' RESON-EXCITE!   CONSTANT _reson-excite-s-xt
+' RESON-BLOW!     CONSTANT _reson-blow-s-xt
+' RESON-RENDER    CONSTANT _reson-render-xt
+' RESON-HARM-FILL CONSTANT _reson-harm-fill-xt
+' RESON-VOWEL-FILL CONSTANT _reson-vowel-fill-xt
+
+: RS.NPOLS        _rs-dotnpols-xt _sreso-guard WITH-GUARD ;
+: RS.NCOL         _rs-dotncol-xt _sreso-guard WITH-GUARD ;
+: RS.EXCITE       _rs-dotexcite-xt _sreso-guard WITH-GUARD ;
+: RS.INTENS       _rs-dotintens-xt _sreso-guard WITH-GUARD ;
+: RS.RATE         _rs-dotrate-xt _sreso-guard WITH-GUARD ;
+: RS.POLES        _rs-dotpoles-xt _sreso-guard WITH-GUARD ;
+: RS.NENG         _rs-dotneng-xt _sreso-guard WITH-GUARD ;
+: RS.PCTR         _rs-dotpctr-xt _sreso-guard WITH-GUARD ;
+: RP.FCO          _rp-dotfco-xt _sreso-guard WITH-GUARD ;
+: RP.Q            _rp-dotq-xt _sreso-guard WITH-GUARD ;
+: RP.AMP          _rp-dotamp-xt _sreso-guard WITH-GUARD ;
+: RP.B0N          _rp-dotb0n-xt _sreso-guard WITH-GUARD ;
+: RP.NA1N         _rp-dotna1n-xt _sreso-guard WITH-GUARD ;
+: RP.NA2N         _rp-dotna2n-xt _sreso-guard WITH-GUARD ;
+: RP.S1           _rp-dots1-xt _sreso-guard WITH-GUARD ;
+: RP.S2           _rp-dots2-xt _sreso-guard WITH-GUARD ;
+: RP.AMPFX        _rp-dotampfx-xt _sreso-guard WITH-GUARD ;
+: RESON-CREATE    _reson-create-xt _sreso-guard WITH-GUARD ;
+: RESON-FREE      _reson-free-xt _sreso-guard WITH-GUARD ;
+: RESON-POLE!     _reson-pole-s-xt _sreso-guard WITH-GUARD ;
+: RESON-NOISE!    _reson-noise-s-xt _sreso-guard WITH-GUARD ;
+: RESON-EXCITE!   _reson-excite-s-xt _sreso-guard WITH-GUARD ;
+: RESON-BLOW!     _reson-blow-s-xt _sreso-guard WITH-GUARD ;
+: RESON-RENDER    _reson-render-xt _sreso-guard WITH-GUARD ;
+: RESON-HARM-FILL _reson-harm-fill-xt _sreso-guard WITH-GUARD ;
+: RESON-VOWEL-FILL _reson-vowel-fill-xt _sreso-guard WITH-GUARD ;
+[THEN] [THEN]

@@ -1097,3 +1097,155 @@ VARIABLE _TXN-AR
 : TAX-STATS  ( -- concepts links )
     TAX-TX TD.CON-USED @
     TAX-TX TD.LINK-USED @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _taxon-guard
+
+' TAX-FAIL        CONSTANT _tax-fail-xt
+' TAX-OK?         CONSTANT _tax-ok-q-xt
+' TAX-CLEAR-ERR   CONSTANT _tax-clear-err-xt
+' TC.ID           CONSTANT _tc-dotid-xt
+' TC.PARENT       CONSTANT _tc-dotparent-xt
+' TC.FCHILD       CONSTANT _tc-dotfchild-xt
+' TC.LCHILD       CONSTANT _tc-dotlchild-xt
+' TC.NEXT-SIB     CONSTANT _tc-dotnext-sib-xt
+' TC.PREV-SIB     CONSTANT _tc-dotprev-sib-xt
+' TC.LABEL-A      CONSTANT _tc-dotlabel-a-xt
+' TC.LABEL-L      CONSTANT _tc-dotlabel-l-xt
+' TC.FACETS       CONSTANT _tc-dotfacets-xt
+' TC.SYN-NEXT     CONSTANT _tc-dotsyn-next-xt
+' TL.ITEM         CONSTANT _tl-dotitem-xt
+' TL.CONCEPT      CONSTANT _tl-dotconcept-xt
+' TL.NEXT         CONSTANT _tl-dotnext-xt
+' TD.ARENA        CONSTANT _td-dotarena-xt
+' TD.CON-BASE     CONSTANT _td-dotcon-base-xt
+' TD.CON-MAX      CONSTANT _td-dotcon-max-xt
+' TD.CON-FREE     CONSTANT _td-dotcon-free-xt
+' TD.CON-USED     CONSTANT _td-dotcon-used-xt
+' TD.LINK-BASE    CONSTANT _td-dotlink-base-xt
+' TD.LINK-MAX     CONSTANT _td-dotlink-max-xt
+' TD.LINK-FREE    CONSTANT _td-dotlink-free-xt
+' TD.LINK-USED    CONSTANT _td-dotlink-used-xt
+' TD.STR-BASE     CONSTANT _td-dotstr-base-xt
+' TD.STR-PTR      CONSTANT _td-dotstr-ptr-xt
+' TD.STR-END      CONSTANT _td-dotstr-end-xt
+' TD.NEXT-ID      CONSTANT _td-dotnext-id-xt
+' TD.ROOT-LIST    CONSTANT _td-dotroot-list-xt
+' TD.ROOT-LAST    CONSTANT _td-dotroot-last-xt
+' TD.ITEM-HASH    CONSTANT _td-dotitem-hash-xt
+' TAX-USE         CONSTANT _tax-use-xt
+' TAX-TX          CONSTANT _tax-tx-xt
+' TAX-CREATE      CONSTANT _tax-create-xt
+' TAX-DESTROY     CONSTANT _tax-destroy-xt
+' TAX-ADD         CONSTANT _tax-add-xt
+' TAX-ADD-UNDER   CONSTANT _tax-add-under-xt
+' TAX-REMOVE      CONSTANT _tax-remove-xt
+' TAX-MOVE        CONSTANT _tax-move-xt
+' TAX-RENAME      CONSTANT _tax-rename-xt
+' TAX-ID          CONSTANT _tax-id-xt
+' TAX-LABEL       CONSTANT _tax-label-xt
+' TAX-PARENT      CONSTANT _tax-parent-xt
+' TAX-FACETS@     CONSTANT _tax-facets-at-xt
+' TAX-COUNT       CONSTANT _tax-count-xt
+' TAX-ADD-SYNONYM CONSTANT _tax-add-synonym-xt
+' TAX-REMOVE-SYNONYM CONSTANT _tax-remove-synonym-xt
+' TAX-SYNONYMS    CONSTANT _tax-synonyms-xt
+' TAX-SET-FACET   CONSTANT _tax-set-facet-xt
+' TAX-CLEAR-FACET CONSTANT _tax-clear-facet-xt
+' TAX-HAS-FACET?  CONSTANT _tax-has-facet-q-xt
+' TAX-FILTER-FACET CONSTANT _tax-filter-facet-xt
+' TAX-CHILDREN    CONSTANT _tax-children-xt
+' TAX-ROOTS       CONSTANT _tax-roots-xt
+' TAX-ANCESTORS   CONSTANT _tax-ancestors-xt
+' TAX-DEPTH       CONSTANT _tax-depth-xt
+' TAX-DESCENDANTS CONSTANT _tax-descendants-xt
+' TAX-DESCENDANTS CONSTANT _tax-descendants-xt
+' TAX-FIND        CONSTANT _tax-find-xt
+' TAX-FIND-PREFIX CONSTANT _tax-find-prefix-xt
+' TAX-FIND-SYNONYM CONSTANT _tax-find-synonym-xt
+' TAX-CLASSIFY    CONSTANT _tax-classify-xt
+' TAX-UNCLASSIFY  CONSTANT _tax-unclassify-xt
+' TAX-ITEMS       CONSTANT _tax-items-xt
+' TAX-ITEMS-DEEP  CONSTANT _tax-items-deep-xt
+' TAX-CATEGORIES  CONSTANT _tax-categories-xt
+' TAX-EACH-CHILD  CONSTANT _tax-each-child-xt
+' TAX-EACH-ROOT   CONSTANT _tax-each-root-xt
+' TAX-DFS         CONSTANT _tax-dfs-xt
+' TAX-DFS-ALL     CONSTANT _tax-dfs-all-xt
+' TAX-STATS       CONSTANT _tax-stats-xt
+
+: TAX-FAIL        _tax-fail-xt _taxon-guard WITH-GUARD ;
+: TAX-OK?         _tax-ok-q-xt _taxon-guard WITH-GUARD ;
+: TAX-CLEAR-ERR   _tax-clear-err-xt _taxon-guard WITH-GUARD ;
+: TC.ID           _tc-dotid-xt _taxon-guard WITH-GUARD ;
+: TC.PARENT       _tc-dotparent-xt _taxon-guard WITH-GUARD ;
+: TC.FCHILD       _tc-dotfchild-xt _taxon-guard WITH-GUARD ;
+: TC.LCHILD       _tc-dotlchild-xt _taxon-guard WITH-GUARD ;
+: TC.NEXT-SIB     _tc-dotnext-sib-xt _taxon-guard WITH-GUARD ;
+: TC.PREV-SIB     _tc-dotprev-sib-xt _taxon-guard WITH-GUARD ;
+: TC.LABEL-A      _tc-dotlabel-a-xt _taxon-guard WITH-GUARD ;
+: TC.LABEL-L      _tc-dotlabel-l-xt _taxon-guard WITH-GUARD ;
+: TC.FACETS       _tc-dotfacets-xt _taxon-guard WITH-GUARD ;
+: TC.SYN-NEXT     _tc-dotsyn-next-xt _taxon-guard WITH-GUARD ;
+: TL.ITEM         _tl-dotitem-xt _taxon-guard WITH-GUARD ;
+: TL.CONCEPT      _tl-dotconcept-xt _taxon-guard WITH-GUARD ;
+: TL.NEXT         _tl-dotnext-xt _taxon-guard WITH-GUARD ;
+: TD.ARENA        _td-dotarena-xt _taxon-guard WITH-GUARD ;
+: TD.CON-BASE     _td-dotcon-base-xt _taxon-guard WITH-GUARD ;
+: TD.CON-MAX      _td-dotcon-max-xt _taxon-guard WITH-GUARD ;
+: TD.CON-FREE     _td-dotcon-free-xt _taxon-guard WITH-GUARD ;
+: TD.CON-USED     _td-dotcon-used-xt _taxon-guard WITH-GUARD ;
+: TD.LINK-BASE    _td-dotlink-base-xt _taxon-guard WITH-GUARD ;
+: TD.LINK-MAX     _td-dotlink-max-xt _taxon-guard WITH-GUARD ;
+: TD.LINK-FREE    _td-dotlink-free-xt _taxon-guard WITH-GUARD ;
+: TD.LINK-USED    _td-dotlink-used-xt _taxon-guard WITH-GUARD ;
+: TD.STR-BASE     _td-dotstr-base-xt _taxon-guard WITH-GUARD ;
+: TD.STR-PTR      _td-dotstr-ptr-xt _taxon-guard WITH-GUARD ;
+: TD.STR-END      _td-dotstr-end-xt _taxon-guard WITH-GUARD ;
+: TD.NEXT-ID      _td-dotnext-id-xt _taxon-guard WITH-GUARD ;
+: TD.ROOT-LIST    _td-dotroot-list-xt _taxon-guard WITH-GUARD ;
+: TD.ROOT-LAST    _td-dotroot-last-xt _taxon-guard WITH-GUARD ;
+: TD.ITEM-HASH    _td-dotitem-hash-xt _taxon-guard WITH-GUARD ;
+: TAX-USE         _tax-use-xt _taxon-guard WITH-GUARD ;
+: TAX-TX          _tax-tx-xt _taxon-guard WITH-GUARD ;
+: TAX-CREATE      _tax-create-xt _taxon-guard WITH-GUARD ;
+: TAX-DESTROY     _tax-destroy-xt _taxon-guard WITH-GUARD ;
+: TAX-ADD         _tax-add-xt _taxon-guard WITH-GUARD ;
+: TAX-ADD-UNDER   _tax-add-under-xt _taxon-guard WITH-GUARD ;
+: TAX-REMOVE      _tax-remove-xt _taxon-guard WITH-GUARD ;
+: TAX-MOVE        _tax-move-xt _taxon-guard WITH-GUARD ;
+: TAX-RENAME      _tax-rename-xt _taxon-guard WITH-GUARD ;
+: TAX-ID          _tax-id-xt _taxon-guard WITH-GUARD ;
+: TAX-LABEL       _tax-label-xt _taxon-guard WITH-GUARD ;
+: TAX-PARENT      _tax-parent-xt _taxon-guard WITH-GUARD ;
+: TAX-FACETS@     _tax-facets-at-xt _taxon-guard WITH-GUARD ;
+: TAX-COUNT       _tax-count-xt _taxon-guard WITH-GUARD ;
+: TAX-ADD-SYNONYM _tax-add-synonym-xt _taxon-guard WITH-GUARD ;
+: TAX-REMOVE-SYNONYM _tax-remove-synonym-xt _taxon-guard WITH-GUARD ;
+: TAX-SYNONYMS    _tax-synonyms-xt _taxon-guard WITH-GUARD ;
+: TAX-SET-FACET   _tax-set-facet-xt _taxon-guard WITH-GUARD ;
+: TAX-CLEAR-FACET _tax-clear-facet-xt _taxon-guard WITH-GUARD ;
+: TAX-HAS-FACET?  _tax-has-facet-q-xt _taxon-guard WITH-GUARD ;
+: TAX-FILTER-FACET _tax-filter-facet-xt _taxon-guard WITH-GUARD ;
+: TAX-CHILDREN    _tax-children-xt _taxon-guard WITH-GUARD ;
+: TAX-ROOTS       _tax-roots-xt _taxon-guard WITH-GUARD ;
+: TAX-ANCESTORS   _tax-ancestors-xt _taxon-guard WITH-GUARD ;
+: TAX-DEPTH       _tax-depth-xt _taxon-guard WITH-GUARD ;
+: TAX-DESCENDANTS _tax-descendants-xt _taxon-guard WITH-GUARD ;
+: TAX-DESCENDANTS _tax-descendants-xt _taxon-guard WITH-GUARD ;
+: TAX-FIND        _tax-find-xt _taxon-guard WITH-GUARD ;
+: TAX-FIND-PREFIX _tax-find-prefix-xt _taxon-guard WITH-GUARD ;
+: TAX-FIND-SYNONYM _tax-find-synonym-xt _taxon-guard WITH-GUARD ;
+: TAX-CLASSIFY    _tax-classify-xt _taxon-guard WITH-GUARD ;
+: TAX-UNCLASSIFY  _tax-unclassify-xt _taxon-guard WITH-GUARD ;
+: TAX-ITEMS       _tax-items-xt _taxon-guard WITH-GUARD ;
+: TAX-ITEMS-DEEP  _tax-items-deep-xt _taxon-guard WITH-GUARD ;
+: TAX-CATEGORIES  _tax-categories-xt _taxon-guard WITH-GUARD ;
+: TAX-EACH-CHILD  _tax-each-child-xt _taxon-guard WITH-GUARD ;
+: TAX-EACH-ROOT   _tax-each-root-xt _taxon-guard WITH-GUARD ;
+: TAX-DFS         _tax-dfs-xt _taxon-guard WITH-GUARD ;
+: TAX-DFS-ALL     _tax-dfs-all-xt _taxon-guard WITH-GUARD ;
+: TAX-STATS       _tax-stats-xt _taxon-guard WITH-GUARD ;
+[THEN] [THEN]

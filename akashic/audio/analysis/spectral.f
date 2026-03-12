@@ -460,3 +460,23 @@ VARIABLE _SP-FL-PTOT         \ FP32: total power (for normalization)
     ELSE
         FP16-POS-ZERO
     THEN ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _aspec-guard
+
+' PCM-SPECTRAL-CENTROID CONSTANT _pcm-spectral-centroid-xt
+' PCM-SPECTRAL-SPREAD CONSTANT _pcm-spectral-spread-xt
+' PCM-BAND-ENERGY CONSTANT _pcm-band-energy-xt
+' PCM-PITCH-ESTIMATE CONSTANT _pcm-pitch-estimate-xt
+' PCM-SPECTRAL-ROLLOFF CONSTANT _pcm-spectral-rolloff-xt
+' PCM-SPECTRAL-FLUX CONSTANT _pcm-spectral-flux-xt
+
+: PCM-SPECTRAL-CENTROID _pcm-spectral-centroid-xt _aspec-guard WITH-GUARD ;
+: PCM-SPECTRAL-SPREAD _pcm-spectral-spread-xt _aspec-guard WITH-GUARD ;
+: PCM-BAND-ENERGY _pcm-band-energy-xt _aspec-guard WITH-GUARD ;
+: PCM-PITCH-ESTIMATE _pcm-pitch-estimate-xt _aspec-guard WITH-GUARD ;
+: PCM-SPECTRAL-ROLLOFF _pcm-spectral-rolloff-xt _aspec-guard WITH-GUARD ;
+: PCM-SPECTRAL-FLUX _pcm-spectral-flux-xt _aspec-guard WITH-GUARD ;
+[THEN] [THEN]

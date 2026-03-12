@@ -337,3 +337,70 @@ VARIABLE _CRC-HDST
         0x0F AND _CRC-NIB>C EMIT
     LOOP
     DROP ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _crc-guard
+
+' CRC32           CONSTANT _crc32-xt
+' CRC32C          CONSTANT _crc32c-xt
+' CRC64           CONSTANT _crc64-xt
+' CRC32-BEGIN     CONSTANT _crc32-begin-xt
+' CRC32-ADD       CONSTANT _crc32-add-xt
+' CRC32-END       CONSTANT _crc32-end-xt
+' CRC32C-BEGIN    CONSTANT _crc32c-begin-xt
+' CRC32C-ADD      CONSTANT _crc32c-add-xt
+' CRC32C-END      CONSTANT _crc32c-end-xt
+' CRC64-BEGIN     CONSTANT _crc64-begin-xt
+' CRC64-ADD       CONSTANT _crc64-add-xt
+' CRC64-END       CONSTANT _crc64-end-xt
+' CRC32-UPDATE    CONSTANT _crc32-update-xt
+' CRC32C-UPDATE   CONSTANT _crc32c-update-xt
+' CRC64-UPDATE    CONSTANT _crc64-update-xt
+' CRC32->HEX      CONSTANT _crc32-to-hex-xt
+' CRC64->HEX      CONSTANT _crc64-to-hex-xt
+' CRC32-.         CONSTANT _crc32-dot-xt
+' CRC64-.         CONSTANT _crc64-dot-xt
+
+: CRC32           _crc32-xt _crc-guard WITH-GUARD ;
+: CRC32C          _crc32c-xt _crc-guard WITH-GUARD ;
+: CRC64           _crc64-xt _crc-guard WITH-GUARD ;
+: CRC32-UPDATE    _crc32-update-xt _crc-guard WITH-GUARD ;
+: CRC32C-UPDATE   _crc32c-update-xt _crc-guard WITH-GUARD ;
+: CRC64-UPDATE    _crc64-update-xt _crc-guard WITH-GUARD ;
+: CRC32->HEX      _crc32-to-hex-xt _crc-guard WITH-GUARD ;
+: CRC64->HEX      _crc64-to-hex-xt _crc-guard WITH-GUARD ;
+: CRC32-.         _crc32-dot-xt _crc-guard WITH-GUARD ;
+: CRC64-.         _crc64-dot-xt _crc-guard WITH-GUARD ;
+: CRC32-BEGIN
+  _crc-guard GUARD-ACQUIRE
+  _crc32-begin-xt CATCH IF _crc-guard GUARD-RELEASE THROW THEN ;
+: CRC32C-BEGIN
+  _crc-guard GUARD-ACQUIRE
+  _crc32c-begin-xt CATCH IF _crc-guard GUARD-RELEASE THROW THEN ;
+: CRC64-BEGIN
+  _crc-guard GUARD-ACQUIRE
+  _crc64-begin-xt CATCH IF _crc-guard GUARD-RELEASE THROW THEN ;
+: CRC32-ADD
+  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _crc32-add-xt EXECUTE ;
+: CRC32C-ADD
+  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _crc32c-add-xt EXECUTE ;
+: CRC64-ADD
+  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _crc64-add-xt EXECUTE ;
+: CRC32-END
+  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _crc32-end-xt CATCH _crc-guard GUARD-RELEASE
+  IF THROW THEN ;
+: CRC32C-END
+  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _crc32c-end-xt CATCH _crc-guard GUARD-RELEASE
+  IF THROW THEN ;
+: CRC64-END
+  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
+  _crc64-end-xt CATCH _crc-guard GUARD-RELEASE
+  IF THROW THEN ;
+[THEN] [THEN]

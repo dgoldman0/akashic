@@ -321,3 +321,23 @@ VARIABLE _EN-ED-STEP
     DROP
 
     ENV-OTHER ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _aenvl-guard
+
+' PCM-ATTACK-TIME CONSTANT _pcm-attack-time-xt
+' PCM-DECAY-TIME  CONSTANT _pcm-decay-time-xt
+' PCM-SUSTAIN-LEVEL CONSTANT _pcm-sustain-level-xt
+' PCM-SILENCE-RATIO CONSTANT _pcm-silence-ratio-xt
+' PCM-ENVELOPE-DUMP CONSTANT _pcm-envelope-dump-xt
+' PCM-ENVELOPE-CLASS CONSTANT _pcm-envelope-class-xt
+
+: PCM-ATTACK-TIME _pcm-attack-time-xt _aenvl-guard WITH-GUARD ;
+: PCM-DECAY-TIME  _pcm-decay-time-xt _aenvl-guard WITH-GUARD ;
+: PCM-SUSTAIN-LEVEL _pcm-sustain-level-xt _aenvl-guard WITH-GUARD ;
+: PCM-SILENCE-RATIO _pcm-silence-ratio-xt _aenvl-guard WITH-GUARD ;
+: PCM-ENVELOPE-DUMP _pcm-envelope-dump-xt _aenvl-guard WITH-GUARD ;
+: PCM-ENVELOPE-CLASS _pcm-envelope-class-xt _aenvl-guard WITH-GUARD ;
+[THEN] [THEN]

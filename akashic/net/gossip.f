@@ -350,6 +350,7 @@ VARIABLE _GSP-RX-PEER
 \  14. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _gsp-guard
 
@@ -374,6 +375,7 @@ GUARD _gsp-guard
 : GSP-ON-MSG        _gsp-onmg-xt _gsp-guard WITH-GUARD ;
 : GSP-POLL          _gsp-poll-xt _gsp-guard WITH-GUARD ;
 : GSP-UNKNOWN-COUNT _gsp-unk-xt  _gsp-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =================================================================
 \  Done.

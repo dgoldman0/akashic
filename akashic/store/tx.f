@@ -684,6 +684,7 @@ CREATE _TX-H2  32 ALLOT
 \  20. Concurrency guard
 \ =====================================================================
 
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _tx-guard
 
@@ -704,6 +705,7 @@ GUARD _tx-guard
 : TX-ENCODE         _tx-encode-xt      _tx-guard WITH-GUARD ;
 : TX-DECODE         _tx-decode-xt      _tx-guard WITH-GUARD ;
 : TX-HASH=          _tx-hasheq-xt      _tx-guard WITH-GUARD ;
+[THEN] [THEN]
 
 \ =====================================================================
 \  Done.

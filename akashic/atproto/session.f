@@ -140,3 +140,19 @@ VARIABLE _SES-PL
 
 : SESS-ACTIVE?  ( -- flag )
   _SES-ACCESS-LEN @ 0<> ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _sess-guard
+
+' SESS-LOGIN      CONSTANT _sess-login-xt
+' SESS-REFRESH    CONSTANT _sess-refresh-xt
+' SESS-DID        CONSTANT _sess-did-xt
+' SESS-ACTIVE?    CONSTANT _sess-active-q-xt
+
+: SESS-LOGIN      _sess-login-xt _sess-guard WITH-GUARD ;
+: SESS-REFRESH    _sess-refresh-xt _sess-guard WITH-GUARD ;
+: SESS-DID        _sess-did-xt _sess-guard WITH-GUARD ;
+: SESS-ACTIVE?    _sess-active-q-xt _sess-guard WITH-GUARD ;
+[THEN] [THEN]

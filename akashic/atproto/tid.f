@@ -89,3 +89,15 @@ VARIABLE _TID-CLK      \ clock ID counter (0-1023)
         >       IF       2DROP  1 UNLOOP EXIT THEN
     LOOP
     2DROP 0 ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _tid-guard
+
+' TID-NOW         CONSTANT _tid-now-xt
+' TID-COMPARE     CONSTANT _tid-compare-xt
+
+: TID-NOW         _tid-now-xt _tid-guard WITH-GUARD ;
+: TID-COMPARE     _tid-compare-xt _tid-guard WITH-GUARD ;
+[THEN] [THEN]

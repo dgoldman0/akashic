@@ -292,3 +292,25 @@ VARIABLE _PM-ER-DBASE
     LOOP
 
     _PM-ER-SUB @ FREE ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _ametr-guard
+
+' PCM-PEAK        CONSTANT _pcm-peak-xt
+' PCM-ZERO-CROSSINGS CONSTANT _pcm-zero-crossings-xt
+' PCM-RMS         CONSTANT _pcm-rms-xt
+' PCM-DC-OFFSET   CONSTANT _pcm-dc-offset-xt
+' PCM-CLIP-COUNT  CONSTANT _pcm-clip-count-xt
+' PCM-CREST-FACTOR CONSTANT _pcm-crest-factor-xt
+' PCM-ENERGY-REGIONS CONSTANT _pcm-energy-regions-xt
+
+: PCM-PEAK        _pcm-peak-xt _ametr-guard WITH-GUARD ;
+: PCM-ZERO-CROSSINGS _pcm-zero-crossings-xt _ametr-guard WITH-GUARD ;
+: PCM-RMS         _pcm-rms-xt _ametr-guard WITH-GUARD ;
+: PCM-DC-OFFSET   _pcm-dc-offset-xt _ametr-guard WITH-GUARD ;
+: PCM-CLIP-COUNT  _pcm-clip-count-xt _ametr-guard WITH-GUARD ;
+: PCM-CREST-FACTOR _pcm-crest-factor-xt _ametr-guard WITH-GUARD ;
+: PCM-ENERGY-REGIONS _pcm-energy-regions-xt _ametr-guard WITH-GUARD ;
+[THEN] [THEN]

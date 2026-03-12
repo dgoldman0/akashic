@@ -1714,3 +1714,200 @@ VARIABLE _YFC-NEED
     REPEAT
     0 ;
 
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _yaml-guard
+
+' YAML-FAIL       CONSTANT _yaml-fail-xt
+' YAML-OK?        CONSTANT _yaml-ok-q-xt
+' YAML-CLEAR-ERR  CONSTANT _yaml-clear-err-xt
+' YAML-SKIP-WS    CONSTANT _yaml-skip-ws-xt
+' YAML-SKIP-COMMENT CONSTANT _yaml-skip-comment-xt
+' YAML-SKIP-EOL   CONSTANT _yaml-skip-eol-xt
+' YAML-SKIP-LINE  CONSTANT _yaml-skip-line-xt
+' YAML-SKIP-NL    CONSTANT _yaml-skip-nl-xt
+' YAML-INDENT     CONSTANT _yaml-indent-xt
+' YAML-SKIP-DOC-START CONSTANT _yaml-skip-doc-start-xt
+' YAML-SKIP-DOC-END CONSTANT _yaml-skip-doc-end-xt
+' YAML-SKIP-DQ-STRING CONSTANT _yaml-skip-dq-string-xt
+' YAML-SKIP-SQ-STRING CONSTANT _yaml-skip-sq-string-xt
+' YAML-SKIP-FLOW  CONSTANT _yaml-skip-flow-xt
+' YAML-SKIP-BLOCK-SCALAR CONSTANT _yaml-skip-block-scalar-xt
+' YAML-SKIP-VALUE CONSTANT _yaml-skip-value-xt
+' YAML-TYPE?      CONSTANT _yaml-type-q-xt
+' YAML-STRING?    CONSTANT _yaml-string-q-xt
+' YAML-INTEGER?   CONSTANT _yaml-integer-q-xt
+' YAML-BOOL?      CONSTANT _yaml-bool-q-xt
+' YAML-NULL?      CONSTANT _yaml-null-q-xt
+' YAML-MAPPING?   CONSTANT _yaml-mapping-q-xt
+' YAML-SEQUENCE?  CONSTANT _yaml-sequence-q-xt
+' YAML-FLOAT?     CONSTANT _yaml-float-q-xt
+' YAML-GET-DQ-STRING CONSTANT _yaml-get-dq-string-xt
+' YAML-GET-SQ-STRING CONSTANT _yaml-get-sq-string-xt
+' YAML-GET-PLAIN  CONSTANT _yaml-get-plain-xt
+' YAML-GET-STRING CONSTANT _yaml-get-string-xt
+' YAML-UNESCAPE   CONSTANT _yaml-unescape-xt
+' YAML-GET-INT    CONSTANT _yaml-get-int-xt
+' YAML-GET-BOOL   CONSTANT _yaml-get-bool-xt
+' YAML-GET-FLOAT-STR CONSTANT _yaml-get-float-str-xt
+' YAML-GET-BLOCK-SCALAR CONSTANT _yaml-get-block-scalar-xt
+' YAML-KEY        CONSTANT _yaml-key-xt
+' YAML-KEY?       CONSTANT _yaml-key-q-xt
+' YAML-HAS?       CONSTANT _yaml-has-q-xt
+' YAML-ENTER      CONSTANT _yaml-enter-xt
+' YAML-FLOW-NEXT  CONSTANT _yaml-flow-next-xt
+' YAML-BLOCK-NEXT CONSTANT _yaml-block-next-xt
+' YAML-SEQ-INIT   CONSTANT _yaml-seq-init-xt
+' YAML-NTH        CONSTANT _yaml-nth-xt
+' YAML-COUNT      CONSTANT _yaml-count-xt
+' YAML-FLOW-COUNT CONSTANT _yaml-flow-count-xt
+' YAML-PATH       CONSTANT _yaml-path-xt
+' YAML-PATH?      CONSTANT _yaml-path-q-xt
+' YAML-EACH-KEY   CONSTANT _yaml-each-key-xt
+' YAML-EACH-RESET CONSTANT _yaml-each-reset-xt
+' YAML-STRING=    CONSTANT _yaml-string=-xt
+' YAML-INT=       CONSTANT _yaml-int=-xt
+' YAML-EXPECT-STRING CONSTANT _yaml-expect-string-xt
+' YAML-EXPECT-INTEGER CONSTANT _yaml-expect-integer-xt
+' YAML-EXPECT-BOOL CONSTANT _yaml-expect-bool-xt
+' YAML-EXPECT-NULL CONSTANT _yaml-expect-null-xt
+' YAML-EXPECT-MAPPING CONSTANT _yaml-expect-mapping-xt
+' YAML-EXPECT-SEQUENCE CONSTANT _yaml-expect-sequence-xt
+' YAML-FKEY       CONSTANT _yaml-fkey-xt
+' YAML-EMIT       CONSTANT _yaml-emit-xt
+' YAML-TYPE       CONSTANT _yaml-type-xt
+' YAML-SET-OUTPUT CONSTANT _yaml-set-output-xt
+' YAML-OUTPUT-RESULT CONSTANT _yaml-output-result-xt
+' YAML-OUTPUT-RESET CONSTANT _yaml-output-reset-xt
+' YAML-BUILD-RESET CONSTANT _yaml-build-reset-xt
+' YAML-SET-INDENT CONSTANT _yaml-set-indent-xt
+' YAML-DOC-START  CONSTANT _yaml-doc-start-xt
+' YAML-DOC-END    CONSTANT _yaml-doc-end-xt
+' YAML-KEY:       CONSTANT _yaml-key-c-xt
+' YAML-MAP-OPEN   CONSTANT _yaml-map-open-xt
+' YAML-MAP-CLOSE  CONSTANT _yaml-map-close-xt
+' YAML-SEQ-ITEM   CONSTANT _yaml-seq-item-xt
+' YAML-STR        CONSTANT _yaml-str-xt
+' YAML-DQ-STR     CONSTANT _yaml-dq-str-xt
+' YAML-ESTR       CONSTANT _yaml-estr-xt
+' YAML-INT        CONSTANT _yaml-int-xt
+' YAML-TRUE       CONSTANT _yaml-true-xt
+' YAML-FALSE      CONSTANT _yaml-false-xt
+' YAML-NULL       CONSTANT _yaml-null-xt
+' YAML-BOOL       CONSTANT _yaml-bool-xt
+' YAML-NUM        CONSTANT _yaml-num-xt
+' YAML-KV-STR     CONSTANT _yaml-kv-str-xt
+' YAML-KV-DQ      CONSTANT _yaml-kv-dq-xt
+' YAML-KV-ESTR    CONSTANT _yaml-kv-estr-xt
+' YAML-KV-INT     CONSTANT _yaml-kv-int-xt
+' YAML-KV-BOOL    CONSTANT _yaml-kv-bool-xt
+' YAML-KV-NULL    CONSTANT _yaml-kv-null-xt
+' YAML-F{         CONSTANT _yaml-f-ob-xt
+' YAML-F}         CONSTANT _yaml-f-cb-xt
+' YAML-F[         CONSTANT _yaml-f-os-xt
+' YAML-F]         CONSTANT _yaml-f-cs-xt
+' YAML-FKEY:      CONSTANT _yaml-fkey-c-xt
+' YAML-FVAL-STR   CONSTANT _yaml-fval-str-xt
+' YAML-FVAL-DQ    CONSTANT _yaml-fval-dq-xt
+' YAML-FVAL-INT   CONSTANT _yaml-fval-int-xt
+' YAML-FVAL-BOOL  CONSTANT _yaml-fval-bool-xt
+' YAML-FVAL-NULL  CONSTANT _yaml-fval-null-xt
+' YAML-NEXT-DOC   CONSTANT _yaml-next-doc-xt
+
+: YAML-FAIL       _yaml-fail-xt _yaml-guard WITH-GUARD ;
+: YAML-OK?        _yaml-ok-q-xt _yaml-guard WITH-GUARD ;
+: YAML-CLEAR-ERR  _yaml-clear-err-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-WS    _yaml-skip-ws-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-COMMENT _yaml-skip-comment-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-EOL   _yaml-skip-eol-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-LINE  _yaml-skip-line-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-NL    _yaml-skip-nl-xt _yaml-guard WITH-GUARD ;
+: YAML-INDENT     _yaml-indent-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-DOC-START _yaml-skip-doc-start-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-DOC-END _yaml-skip-doc-end-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-DQ-STRING _yaml-skip-dq-string-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-SQ-STRING _yaml-skip-sq-string-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-FLOW  _yaml-skip-flow-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-BLOCK-SCALAR _yaml-skip-block-scalar-xt _yaml-guard WITH-GUARD ;
+: YAML-SKIP-VALUE _yaml-skip-value-xt _yaml-guard WITH-GUARD ;
+: YAML-TYPE?      _yaml-type-q-xt _yaml-guard WITH-GUARD ;
+: YAML-STRING?    _yaml-string-q-xt _yaml-guard WITH-GUARD ;
+: YAML-INTEGER?   _yaml-integer-q-xt _yaml-guard WITH-GUARD ;
+: YAML-BOOL?      _yaml-bool-q-xt _yaml-guard WITH-GUARD ;
+: YAML-NULL?      _yaml-null-q-xt _yaml-guard WITH-GUARD ;
+: YAML-MAPPING?   _yaml-mapping-q-xt _yaml-guard WITH-GUARD ;
+: YAML-SEQUENCE?  _yaml-sequence-q-xt _yaml-guard WITH-GUARD ;
+: YAML-FLOAT?     _yaml-float-q-xt _yaml-guard WITH-GUARD ;
+: YAML-GET-DQ-STRING _yaml-get-dq-string-xt _yaml-guard WITH-GUARD ;
+: YAML-GET-SQ-STRING _yaml-get-sq-string-xt _yaml-guard WITH-GUARD ;
+: YAML-GET-PLAIN  _yaml-get-plain-xt _yaml-guard WITH-GUARD ;
+: YAML-GET-STRING _yaml-get-string-xt _yaml-guard WITH-GUARD ;
+: YAML-UNESCAPE   _yaml-unescape-xt _yaml-guard WITH-GUARD ;
+: YAML-GET-INT    _yaml-get-int-xt _yaml-guard WITH-GUARD ;
+: YAML-GET-BOOL   _yaml-get-bool-xt _yaml-guard WITH-GUARD ;
+: YAML-GET-FLOAT-STR _yaml-get-float-str-xt _yaml-guard WITH-GUARD ;
+: YAML-GET-BLOCK-SCALAR _yaml-get-block-scalar-xt _yaml-guard WITH-GUARD ;
+: YAML-KEY        _yaml-key-xt _yaml-guard WITH-GUARD ;
+: YAML-KEY?       _yaml-key-q-xt _yaml-guard WITH-GUARD ;
+: YAML-HAS?       _yaml-has-q-xt _yaml-guard WITH-GUARD ;
+: YAML-ENTER      _yaml-enter-xt _yaml-guard WITH-GUARD ;
+: YAML-FLOW-NEXT  _yaml-flow-next-xt _yaml-guard WITH-GUARD ;
+: YAML-BLOCK-NEXT _yaml-block-next-xt _yaml-guard WITH-GUARD ;
+: YAML-SEQ-INIT   _yaml-seq-init-xt _yaml-guard WITH-GUARD ;
+: YAML-NTH        _yaml-nth-xt _yaml-guard WITH-GUARD ;
+: YAML-COUNT      _yaml-count-xt _yaml-guard WITH-GUARD ;
+: YAML-FLOW-COUNT _yaml-flow-count-xt _yaml-guard WITH-GUARD ;
+: YAML-PATH       _yaml-path-xt _yaml-guard WITH-GUARD ;
+: YAML-PATH?      _yaml-path-q-xt _yaml-guard WITH-GUARD ;
+: YAML-EACH-KEY   _yaml-each-key-xt _yaml-guard WITH-GUARD ;
+: YAML-EACH-RESET _yaml-each-reset-xt _yaml-guard WITH-GUARD ;
+: YAML-STRING=    _yaml-string=-xt _yaml-guard WITH-GUARD ;
+: YAML-INT=       _yaml-int=-xt _yaml-guard WITH-GUARD ;
+: YAML-EXPECT-STRING _yaml-expect-string-xt _yaml-guard WITH-GUARD ;
+: YAML-EXPECT-INTEGER _yaml-expect-integer-xt _yaml-guard WITH-GUARD ;
+: YAML-EXPECT-BOOL _yaml-expect-bool-xt _yaml-guard WITH-GUARD ;
+: YAML-EXPECT-NULL _yaml-expect-null-xt _yaml-guard WITH-GUARD ;
+: YAML-EXPECT-MAPPING _yaml-expect-mapping-xt _yaml-guard WITH-GUARD ;
+: YAML-EXPECT-SEQUENCE _yaml-expect-sequence-xt _yaml-guard WITH-GUARD ;
+: YAML-FKEY       _yaml-fkey-xt _yaml-guard WITH-GUARD ;
+: YAML-EMIT       _yaml-emit-xt _yaml-guard WITH-GUARD ;
+: YAML-TYPE       _yaml-type-xt _yaml-guard WITH-GUARD ;
+: YAML-SET-OUTPUT _yaml-set-output-xt _yaml-guard WITH-GUARD ;
+: YAML-OUTPUT-RESULT _yaml-output-result-xt _yaml-guard WITH-GUARD ;
+: YAML-OUTPUT-RESET _yaml-output-reset-xt _yaml-guard WITH-GUARD ;
+: YAML-BUILD-RESET _yaml-build-reset-xt _yaml-guard WITH-GUARD ;
+: YAML-SET-INDENT _yaml-set-indent-xt _yaml-guard WITH-GUARD ;
+: YAML-DOC-START  _yaml-doc-start-xt _yaml-guard WITH-GUARD ;
+: YAML-DOC-END    _yaml-doc-end-xt _yaml-guard WITH-GUARD ;
+: YAML-KEY:       _yaml-key-c-xt _yaml-guard WITH-GUARD ;
+: YAML-MAP-OPEN   _yaml-map-open-xt _yaml-guard WITH-GUARD ;
+: YAML-MAP-CLOSE  _yaml-map-close-xt _yaml-guard WITH-GUARD ;
+: YAML-SEQ-ITEM   _yaml-seq-item-xt _yaml-guard WITH-GUARD ;
+: YAML-STR        _yaml-str-xt _yaml-guard WITH-GUARD ;
+: YAML-DQ-STR     _yaml-dq-str-xt _yaml-guard WITH-GUARD ;
+: YAML-ESTR       _yaml-estr-xt _yaml-guard WITH-GUARD ;
+: YAML-INT        _yaml-int-xt _yaml-guard WITH-GUARD ;
+: YAML-TRUE       _yaml-true-xt _yaml-guard WITH-GUARD ;
+: YAML-FALSE      _yaml-false-xt _yaml-guard WITH-GUARD ;
+: YAML-NULL       _yaml-null-xt _yaml-guard WITH-GUARD ;
+: YAML-BOOL       _yaml-bool-xt _yaml-guard WITH-GUARD ;
+: YAML-NUM        _yaml-num-xt _yaml-guard WITH-GUARD ;
+: YAML-KV-STR     _yaml-kv-str-xt _yaml-guard WITH-GUARD ;
+: YAML-KV-DQ      _yaml-kv-dq-xt _yaml-guard WITH-GUARD ;
+: YAML-KV-ESTR    _yaml-kv-estr-xt _yaml-guard WITH-GUARD ;
+: YAML-KV-INT     _yaml-kv-int-xt _yaml-guard WITH-GUARD ;
+: YAML-KV-BOOL    _yaml-kv-bool-xt _yaml-guard WITH-GUARD ;
+: YAML-KV-NULL    _yaml-kv-null-xt _yaml-guard WITH-GUARD ;
+: YAML-F{         _yaml-f-ob-xt _yaml-guard WITH-GUARD ;
+: YAML-F}         _yaml-f-cb-xt _yaml-guard WITH-GUARD ;
+: YAML-F[         _yaml-f-os-xt _yaml-guard WITH-GUARD ;
+: YAML-F]         _yaml-f-cs-xt _yaml-guard WITH-GUARD ;
+: YAML-FKEY:      _yaml-fkey-c-xt _yaml-guard WITH-GUARD ;
+: YAML-FVAL-STR   _yaml-fval-str-xt _yaml-guard WITH-GUARD ;
+: YAML-FVAL-DQ    _yaml-fval-dq-xt _yaml-guard WITH-GUARD ;
+: YAML-FVAL-INT   _yaml-fval-int-xt _yaml-guard WITH-GUARD ;
+: YAML-FVAL-BOOL  _yaml-fval-bool-xt _yaml-guard WITH-GUARD ;
+: YAML-FVAL-NULL  _yaml-fval-null-xt _yaml-guard WITH-GUARD ;
+: YAML-NEXT-DOC   _yaml-next-doc-xt _yaml-guard WITH-GUARD ;
+[THEN] [THEN]

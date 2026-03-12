@@ -197,3 +197,31 @@ VARIABLE _AC-F-MSB
 
 : ACCUM-GET-INT  ( ctx -- n )
     @ 16 RSHIFT ;                      \ drop 16 fractional bits
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _accum-guard
+
+' ACCUM-INIT      CONSTANT _accum-init-xt
+' ACCUM-RESET     CONSTANT _accum-reset-xt
+' ACCUM-ADD-FP32  CONSTANT _accum-add-fp32-xt
+' ACCUM-SUB-FP32  CONSTANT _accum-sub-fp32-xt
+' ACCUM-ADD-TILE  CONSTANT _accum-add-tile-xt
+' ACCUM-ADD-TILE1 CONSTANT _accum-add-tile1-xt
+' ACCUM-GET-RAW   CONSTANT _accum-get-raw-xt
+' ACCUM-GET-FP32  CONSTANT _accum-get-fp32-xt
+' ACCUM-GET-FP16  CONSTANT _accum-get-fp16-xt
+' ACCUM-GET-INT   CONSTANT _accum-get-int-xt
+
+: ACCUM-INIT      _accum-init-xt _accum-guard WITH-GUARD ;
+: ACCUM-RESET     _accum-reset-xt _accum-guard WITH-GUARD ;
+: ACCUM-ADD-FP32  _accum-add-fp32-xt _accum-guard WITH-GUARD ;
+: ACCUM-SUB-FP32  _accum-sub-fp32-xt _accum-guard WITH-GUARD ;
+: ACCUM-ADD-TILE  _accum-add-tile-xt _accum-guard WITH-GUARD ;
+: ACCUM-ADD-TILE1 _accum-add-tile1-xt _accum-guard WITH-GUARD ;
+: ACCUM-GET-RAW   _accum-get-raw-xt _accum-guard WITH-GUARD ;
+: ACCUM-GET-FP32  _accum-get-fp32-xt _accum-guard WITH-GUARD ;
+: ACCUM-GET-FP16  _accum-get-fp16-xt _accum-guard WITH-GUARD ;
+: ACCUM-GET-INT   _accum-get-int-xt _accum-guard WITH-GUARD ;
+[THEN] [THEN]

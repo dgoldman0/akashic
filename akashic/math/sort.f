@@ -305,6 +305,7 @@ VARIABLE _SR-J
     REPEAT ;
 
 \ ── Concurrency Guard ───────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _sort-guard
 
@@ -323,3 +324,4 @@ GUARD _sort-guard
 : SORT-NTH        _sort-nth-xt      _sort-guard WITH-GUARD ;
 : SORT-ARGSORT    _sort-argsort-xt  _sort-guard WITH-GUARD ;
 : SORT-RANK       _sort-rank-xt     _sort-guard WITH-GUARD ;
+[THEN] [THEN]
