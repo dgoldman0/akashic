@@ -30,6 +30,7 @@ INPUT_F    = os.path.join(ROOT_DIR, "akashic", "tui", "input.f")
 LIST_F     = os.path.join(ROOT_DIR, "akashic", "tui", "list.f")
 TABS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "tabs.f")
 MENU_F     = os.path.join(ROOT_DIR, "akashic", "tui", "menu.f")
+DIALOG_F   = os.path.join(ROOT_DIR, "akashic", "tui", "dialog.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -91,7 +92,7 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress + input + list + tabs + menu ...")
+    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress + input + list + tabs + menu + dialog ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
@@ -111,6 +112,7 @@ def build_snapshot():
     list_lines     = _load_forth_lines(LIST_F)
     tabs_lines     = _load_forth_lines(TABS_F)
     menu_lines     = _load_forth_lines(MENU_F)
+    dialog_lines   = _load_forth_lines(DIALOG_F)
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -127,7 +129,8 @@ def build_snapshot():
         draw_lines + box_lines +
         region_lines + layout_lines +
         widget_lines + label_lines + progress_lines +
-        input_lines + list_lines + tabs_lines + menu_lines + helpers
+        input_lines + list_lines + tabs_lines + menu_lines +
+        dialog_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -321,6 +324,97 @@ def check_keys(name, inject_bytes, expected, fields="type-code-mods"):
     line = f': _KT  BEGIN _EV KEY-POLL UNTIL  {body} ; _KT'
     text = run_keys_test(line, inject_bytes)
     clean = text.strip()
+    if expected in clean:
+        _pass_count += 1
+        print(f"  PASS  {name}")
+    else:
+        _fail_count += 1
+        print(f"  FAIL  {name}")
+        print(f"        expected: '{expected}'")
+        for l in clean.split('\n')[-4:]:
+            print(f"        got:      '{l}'")
+
+
+def run_forth_with_keys(setup_lines, modal_line, inject_bytes, max_steps=80_000_000):
+    """Send setup Forth lines, start a KEY-POLL modal word, inject keys.
+
+    setup_lines:   Forth lines compiled/executed before the modal word.
+    modal_line:    A single Forth line that enters a KEY-POLL modal loop.
+    inject_bytes:  Raw bytes to inject once the busy-loop is spinning.
+
+    Returns printable text from UART output.
+    """
+    sys_obj = _make_system()
+    buf = capture_uart(sys_obj)
+
+    # Phase 1: Send setup lines and wait for compilation
+    if setup_lines:
+        payload = "\n".join(setup_lines) + "\n"
+        data = payload.encode()
+        pos = 0
+        steps = 0
+        while steps < max_steps:
+            if sys_obj.cpu.halted:
+                break
+            if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+                if pos < len(data):
+                    chunk = _next_line_chunk(data, pos)
+                    sys_obj.uart.inject_input(chunk)
+                    pos += len(chunk)
+                else:
+                    break
+                continue
+            batch = sys_obj.run_batch(min(100_000, max_steps - steps))
+            steps += max(batch, 1)
+    else:
+        steps = 0
+
+    # Phase 2: Send modal line (starts KEY-POLL busy-loop)
+    sys_obj.uart.inject_input((modal_line + "\n").encode())
+
+    # Phase 3: Wait for the busy-loop to start spinning
+    for _ in range(500):
+        if sys_obj.cpu.halted:
+            break
+        batch = sys_obj.run_batch(10_000)
+        steps += max(batch, 1)
+        if not sys_obj.uart.has_rx_data and not sys_obj.cpu.idle:
+            break
+
+    # Phase 4: Inject key bytes
+    sys_obj.uart.inject_input(inject_bytes)
+
+    # Phase 5: Let modal loop process keys and complete
+    for _ in range(8000):
+        if sys_obj.cpu.halted:
+            break
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
+        steps += max(batch, 1)
+        if steps >= max_steps:
+            break
+
+    # Phase 6: Feed BYE to halt
+    sys_obj.uart.inject_input(b"BYE\n")
+    for _ in range(2000):
+        if sys_obj.cpu.halted:
+            break
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
+        steps += max(batch, 1)
+        if steps >= max_steps:
+            break
+
+    return uart_text(buf)
+
+
+def check_modal(name, setup_lines, modal_line, inject_bytes, expected):
+    """Check a modal dialog test with key injection."""
+    global _pass_count, _fail_count
+    output = run_forth_with_keys(setup_lines, modal_line, inject_bytes)
+    clean = output.strip()
     if expected in clean:
         _pass_count += 1
         print(f"  PASS  {name}")
@@ -2536,6 +2630,200 @@ def test_mnu_no_consume_when_closed():
          '_EV OVER WDG-HANDLE . 8888 .',
          _MNU_CLEANUP], "0 8888")
 
+
+# ================================================================
+# Dialog tests (Layer 4C)
+# ================================================================
+
+_DLG_SETUP = [
+    '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+    'CREATE _BT 32 ALLOT',
+    'S" OK" _BT 8 + ! _BT !',
+    'S" Cancel" _BT 24 + ! _BT 16 + !',
+    'VARIABLE _RGN',
+    '0 0 10 30 RGN-NEW _RGN !',
+    'S" Title" S" Hello world" _BT 2 DLG-NEW',
+    '_RGN @ OVER DLG-SET-REGION',
+]
+_DLG_CLEANUP = 'DLG-FREE _RGN @ RGN-FREE SCR-FREE'
+
+
+def test_dlg_create():
+    """DLG-NEW creates a dialog widget."""
+    print("\n── DIALOG create ──")
+    check("type is WDG-T-DIALOG",
+        _DLG_SETUP + [
+         'DUP WDG-TYPE . 8888 .',
+         _DLG_CLEANUP], "7 8888")
+
+
+def test_dlg_accessors():
+    """DLG-SELECTED, DLG-BTN-COUNT, DLG-RESULT accessors."""
+    print("\n── DIALOG accessors ──")
+    check("selected = 0",
+        _DLG_SETUP + [
+         'DUP DLG-SELECTED . 8888 .',
+         _DLG_CLEANUP], "0 8888")
+    check("btn-count = 2",
+        _DLG_SETUP + [
+         'DUP DLG-BTN-COUNT . 8888 .',
+         _DLG_CLEANUP], "2 8888")
+    check("result = -1 initially",
+        _DLG_SETUP + [
+         'DUP DLG-RESULT . 8888 .',
+         _DLG_CLEANUP], "-1 8888")
+
+
+def test_dlg_draw():
+    """Draw does not crash."""
+    print("\n── DIALOG draw ──")
+    check("draw clears dirty",
+        _DLG_SETUP + [
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         _DLG_CLEANUP], "0 8888")
+
+
+def test_dlg_nav_left_right():
+    """Arrow keys navigate buttons."""
+    print("\n── DIALOG left/right ──")
+    check("right moves to button 1",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-RIGHT _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP DLG-SELECTED . 8888 .',
+         _DLG_CLEANUP], "1 8888")
+    check("left clamps at 0",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-LEFT _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP DLG-SELECTED . 8888 .',
+         _DLG_CLEANUP], "0 8888")
+    check("right then left → 0",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-RIGHT _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'KEY-T-SPECIAL _EV ! KEY-LEFT _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP DLG-SELECTED . 8888 .',
+         _DLG_CLEANUP], "0 8888")
+
+
+def test_dlg_nav_tab():
+    """Tab cycles buttons."""
+    print("\n── DIALOG tab ──")
+    check("tab → button 1",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP DLG-SELECTED . 8888 .',
+         _DLG_CLEANUP], "1 8888")
+    check("tab tab wraps → 0",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP DLG-SELECTED . 8888 .',
+         _DLG_CLEANUP], "0 8888")
+
+
+def test_dlg_enter():
+    """Enter sets result to selected button."""
+    print("\n── DIALOG enter ──")
+    check("enter sets result to 0",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP DLG-RESULT . 8888 .',
+         _DLG_CLEANUP], "0 8888")
+    check("tab then enter sets result to 1",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP DLG-RESULT . 8888 .',
+         _DLG_CLEANUP], "1 8888")
+
+
+def test_dlg_escape():
+    """Escape sets result to last button index."""
+    print("\n── DIALOG escape ──")
+    check("escape sets result to last btn (1)",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-ESC _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP DLG-RESULT . 8888 .',
+         _DLG_CLEANUP], "1 8888")
+
+
+def test_dlg_consumed():
+    """Handle returns correct consumed flag."""
+    print("\n── DIALOG consumed ──")
+    check("enter consumed",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE . 8888 .',
+         _DLG_CLEANUP], "-1 8888")
+    check("unknown key not consumed",
+        _DLG_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE . 8888 .',
+         _DLG_CLEANUP], "0 8888")
+
+
+def test_dlg_modal_enter():
+    """DLG-SHOW modal loop — Enter selects button 0."""
+    print("\n── DIALOG modal enter ──")
+    check_modal("DLG-SHOW enter → btn 0",
+        ['VARIABLE _SCR',
+         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
+         'CREATE _MB 16 ALLOT',
+         'S" OK" _MB 8 + ! _MB !',
+        ],
+        'S" Test" S" Hello" _MB 1 DLG-NEW DUP DLG-SHOW . 8888 . DLG-FREE _SCR @ SCR-FREE',
+        b'\x0d',   # Enter (CR)
+        "0 8888")
+
+
+def test_dlg_modal_tab_enter():
+    """DLG-SHOW modal loop — Tab + Enter selects button 1."""
+    print("\n── DIALOG modal tab+enter ──")
+    check_modal("DLG-SHOW tab+enter → btn 1",
+        ['VARIABLE _SCR',
+         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
+         'CREATE _MB 32 ALLOT',
+         'S" Yes" _MB 8 + ! _MB !',
+         'S" No" _MB 24 + ! _MB 16 + !',
+        ],
+        'S" Pick" S" Choose" _MB 2 DLG-NEW DUP DLG-SHOW . 8888 . DLG-FREE _SCR @ SCR-FREE',
+        b'\x09\x0d',   # Tab then Enter
+        "1 8888")
+
+
+def test_dlg_modal_arrow_enter():
+    """DLG-SHOW modal loop — Right arrow + Enter selects button 1."""
+    print("\n── DIALOG modal arrow+enter ──")
+    check_modal("DLG-SHOW arrow+enter → btn 1",
+        ['VARIABLE _SCR',
+         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
+         'CREATE _MB 32 ALLOT',
+         'S" Yes" _MB 8 + ! _MB !',
+         'S" No" _MB 24 + ! _MB 16 + !',
+        ],
+        'S" Pick" S" Choose" _MB 2 DLG-NEW DUP DLG-SHOW . 8888 . DLG-FREE _SCR @ SCR-FREE',
+        b'\x1b[C\x0d',   # Right arrow then Enter
+        "1 8888")
+
+
+def test_dlg_free():
+    """DLG-FREE does not crash."""
+    print("\n── DIALOG free ──")
+    check("free does not crash",
+        _DLG_SETUP + [_DLG_CLEANUP, '8888 .'], "8888")
+
+
 if __name__ == "__main__":
     build_snapshot()
 
@@ -2700,6 +2988,20 @@ if __name__ == "__main__":
     test_mnu_separator()
     test_mnu_draw_separator()
     test_mnu_no_consume_when_closed()
+
+    # Dialog tests (Layer 4C)
+    test_dlg_create()
+    test_dlg_accessors()
+    test_dlg_draw()
+    test_dlg_nav_left_right()
+    test_dlg_nav_tab()
+    test_dlg_enter()
+    test_dlg_escape()
+    test_dlg_consumed()
+    test_dlg_modal_enter()
+    test_dlg_modal_tab_enter()
+    test_dlg_modal_arrow_enter()
+    test_dlg_free()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")
