@@ -76,25 +76,43 @@ A document is created with `DOM-DOC-NEW` which allots three regions
 from the arena:
 
 ```
-┌─────────────────────────────────┐
-│  Document Descriptor (80 bytes) │
-├─────────────────────────────────┤
-│  Node Slab (80 × max-nodes)     │  fixed-size, free-list managed
-├─────────────────────────────────┤
-│  Attr Slab (24 × max-attrs)     │  fixed-size, free-list managed
-├─────────────────────────────────┤
-│  String Region (remaining)      │  bump-allocated, refcounted
-└─────────────────────────────────┘
+┌──────────────────────────────────┐
+│  Document Descriptor (104 bytes) │
+├──────────────────────────────────┤
+│  Node Slab (80 × max-nodes)      │  fixed-size, free-list managed
+├──────────────────────────────────┤
+│  Attr Slab (24 × max-attrs)      │  fixed-size, free-list managed
+├──────────────────────────────────┤
+│  String Region (remaining)       │  bump-allocated, refcounted
+└──────────────────────────────────┘
 ```
 
 ### Memory Budget
 
 | Component | Formula | Example (64 nodes, 64 attrs) |
 |---|---|---|
-| Doc descriptor | 80 B | 80 B |
+| Doc descriptor | 104 B | 104 B |
 | Node slab | 80 × N | 5,120 B |
 | Attr slab | 24 × A | 1,536 B |
 | String region | remainder | ~517 KiB (in 524,288 arena) |
+
+### Descriptor Layout (104 bytes = 13 cells)
+
+| Offset | Field | Purpose |
+|---|---|---|
+| +0 | `D.ARENA` | KDOS arena handle |
+| +8 | `D.STR-BASE` | String region start |
+| +16 | `D.STR-PTR` | String bump pointer |
+| +24 | `D.STR-END` | String region end |
+| +32 | `D.NODE-BASE` | Node pool start |
+| +40 | `D.NODE-MAX` | Max nodes |
+| +48 | `D.NODE-FREE` | Node free-list head (0 = empty) |
+| +56 | `D.ATTR-BASE` | Attr pool start |
+| +64 | `D.ATTR-MAX` | Max attrs |
+| +72 | `D.ATTR-FREE` | Attr free-list head (0 = empty) |
+| +80 | `D.HTML` | `<html>` element (0 = not set; see `html5.f`) |
+| +88 | `D.HEAD` | `<head>` element (0 = not set; see `html5.f`) |
+| +96 | `D.BODY` | `<body>` element (0 = not set; see `html5.f`) |
 
 ### Node Layout (80 bytes = 10 cells)
 
@@ -125,7 +143,7 @@ from the arena:
 
 | Word | Stack | Description |
 |---|---|---|
-| `DOM-DOC-NEW` | `( arena max-nodes max-attrs -- doc )` | Create a new document in the given arena.  Allots descriptor, node slab, attr slab, and string region.  Builds free-lists.  Calls `DOM-USE` on the new doc. |
+| `DOM-DOC-NEW` | `( arena max-nodes max-attrs -- doc )` | Create a new document in the given arena.  Allots descriptor (104 B), node slab, attr slab, and string region.  Builds free-lists.  Zeroes `D.HTML`/`D.HEAD`/`D.BODY`.  Calls `DOM-USE` on the new doc. |
 | `DOM-USE` | `( doc -- )` | Set `doc` as the current document for all subsequent DOM operations. |
 | `DOM-DOC` | `( -- doc )` | Return the current document handle. |
 
@@ -160,6 +178,7 @@ once (nodes, attrs, strings, descriptor).
 |---|---|---|
 | `DOM-NODE-SIZE` | 80 | Bytes per node |
 | `DOM-ATTR-SIZE` | 24 | Bytes per attribute |
+| `DOM-DESC-SIZE` | 104 | Bytes per document descriptor |
 
 ---
 
@@ -757,3 +776,12 @@ el out 4096 DOM-INNER-HTML
 out SWAP TYPE CR
 \ <span>One</span><span>Two</span>
 ```
+
+---
+
+## See Also
+
+- [event.md](event.md) — W3C-style DOM event system (three-phase
+  dispatch, listener registration, type interning).
+- [html5.md](html5.md) — HTML5 document model layer (`DOM-HTML-INIT`,
+  structural getters, element sugar words).

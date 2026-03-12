@@ -27,7 +27,7 @@ REQUIRE ../text/utf8.f
 24 CONSTANT DOM-ATTR-SIZE     \ 3 cells per attribute
 
 \ =====================================================================
-\  Document Descriptor Layout (10 cells = 80 bytes)
+\  Document Descriptor Layout (13 cells = 104 bytes)
 \ =====================================================================
 \
 \  +0   arena       KDOS arena handle
@@ -40,6 +40,11 @@ REQUIRE ../text/utf8.f
 \ +56   attr-base   attr pool start
 \ +64   attr-max    max attrs
 \ +72   attr-free   attr free-list head (0 = empty)
+\ +80   html-node   <html> element (0 = not set)
+\ +88   head-node   <head> element (0 = not set)
+\ +96   body-node   <body> element (0 = not set)
+
+104 CONSTANT DOM-DESC-SIZE   \ 13 cells
 
 : D.ARENA     ;            \ +0
 : D.STR-BASE  8 + ;        \ +8
@@ -51,6 +56,9 @@ REQUIRE ../text/utf8.f
 : D.ATTR-BASE 56 + ;       \ +56
 : D.ATTR-MAX  64 + ;       \ +64
 : D.ATTR-FREE 72 + ;       \ +72
+: D.HTML      80 + ;       \ +80
+: D.HEAD      88 + ;       \ +88
+: D.BODY      96 + ;       \ +96
 
 \ =====================================================================
 \  Current Document
@@ -128,8 +136,8 @@ VARIABLE _DDN-DOC    \ doc descriptor address
 
 : DOM-DOC-NEW  ( arena max-nodes max-attrs -- doc )
     _DDN-NA !  _DDN-NN !  _DDN-AR !
-    \ Allot descriptor (80 bytes) from arena
-    _DDN-AR @  80 ARENA-ALLOT  _DDN-DOC !
+    \ Allot descriptor (104 bytes = 13 cells) from arena
+    _DDN-AR @  DOM-DESC-SIZE ARENA-ALLOT  _DDN-DOC !
     \ Store arena handle in descriptor
     _DDN-AR @  _DDN-DOC @ D.ARENA !
     \ Allot node pool slab
@@ -151,6 +159,10 @@ VARIABLE _DDN-DOC    \ doc descriptor address
     \ Claim remaining arena space (advance ptr to end)
     _DDN-DOC @ D.STR-END @  _DDN-AR @ A.PTR !
     \ Build node and attr free-lists
+    \ HTML5 structural slots (0 = not yet initialised)
+    0  _DDN-DOC @ D.HTML !
+    0  _DDN-DOC @ D.HEAD !
+    0  _DDN-DOC @ D.BODY !
     _DDN-DOC @  DOM-USE
     _DOM-NODE-INIT-FREE
     _DOM-ATTR-INIT-FREE
@@ -220,7 +232,7 @@ VARIABLE _DSA-ESZ    \ entry size
 \ _DOM-ZERO-NODE ( node -- )
 \   Zero all 10 cells of a node record.
 : _DOM-ZERO-NODE  ( node -- )
-    80 0 FILL ;
+    DOM-NODE-SIZE 0 FILL ;
 
 \ _DOM-ALLOC ( type -- node )
 \   Allocate a node from the current doc's free-list.
@@ -1215,3 +1227,122 @@ VARIABLE _PH-RESULT
     DOM-CREATE-FRAGMENT _PH-RESULT !
     _PH-RESULT @ DOM-PARSE-FRAGMENT
     _PH-RESULT @ ;
+
+\ ── guard ────────────────────────────────────────────────
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _dom-guard
+
+\ -- Only guard functions that touch shared state.
+\ -- Field accessors (D.* N.* A.*) are pure offset arithmetic — no guard.
+
+' DOM-USE         CONSTANT _dom-use-xt
+' DOM-DOC         CONSTANT _dom-doc-xt
+' DOM-DOC-NEW     CONSTANT _dom-doc-new-xt
+' DOM-TYPE@       CONSTANT _dom-type-at-xt
+' DOM-FLAGS@      CONSTANT _dom-flags-at-xt
+' DOM-FLAGS!      CONSTANT _dom-flags-s-xt
+' DOM-PARENT      CONSTANT _dom-parent-xt
+' DOM-FIRST-CHILD CONSTANT _dom-first-child-xt
+' DOM-LAST-CHILD  CONSTANT _dom-last-child-xt
+' DOM-NEXT        CONSTANT _dom-next-xt
+' DOM-PREV        CONSTANT _dom-prev-xt
+' DOM-APPEND      CONSTANT _dom-append-xt
+' DOM-PREPEND     CONSTANT _dom-prepend-xt
+' DOM-DETACH      CONSTANT _dom-detach-xt
+' DOM-INSERT-BEFORE CONSTANT _dom-insert-before-xt
+' DOM-CHILD-COUNT CONSTANT _dom-child-count-xt
+' DOM-ATTR@       CONSTANT _dom-attr-at-xt
+' DOM-ATTR!       CONSTANT _dom-attr-s-xt
+' DOM-ATTR-DEL    CONSTANT _dom-attr-del-xt
+' DOM-ATTR-HAS?   CONSTANT _dom-attr-has-q-xt
+' DOM-ATTR-COUNT  CONSTANT _dom-attr-count-xt
+' DOM-ATTR-FIRST  CONSTANT _dom-attr-first-xt
+' DOM-ATTR-NEXTATTR CONSTANT _dom-attr-nextattr-xt
+' DOM-ATTR-NAME@  CONSTANT _dom-attr-name-at-xt
+' DOM-ATTR-VAL@   CONSTANT _dom-attr-val-at-xt
+' DOM-ID          CONSTANT _dom-id-xt
+' DOM-CLASS       CONSTANT _dom-class-xt
+' DOM-CREATE-ELEMENT CONSTANT _dom-create-element-xt
+' DOM-CREATE-TEXT CONSTANT _dom-create-text-xt
+' DOM-CREATE-COMMENT CONSTANT _dom-create-comment-xt
+' DOM-CREATE-FRAGMENT CONSTANT _dom-create-fragment-xt
+' DOM-TAG-NAME    CONSTANT _dom-tag-name-xt
+' DOM-TEXT        CONSTANT _dom-text-xt
+' DOM-SET-TEXT    CONSTANT _dom-set-text-xt
+' DOM-REMOVE      CONSTANT _dom-remove-xt
+' DOM-SET-STYLESHEET CONSTANT _dom-set-stylesheet-xt
+' DOM-COMPUTE-STYLE CONSTANT _dom-compute-style-xt
+' DOM-STYLE@      CONSTANT _dom-style-at-xt
+' DOM-STYLE-INHERIT@ CONSTANT _dom-style-inherit-at-xt
+' DOM-STYLE-CACHED? CONSTANT _dom-style-cached-q-xt
+' DOM-INVALIDATE-STYLE CONSTANT _dom-invalidate-style-xt
+' DOM-MATCHES?    CONSTANT _dom-matches-q-xt
+' DOM-QUERY       CONSTANT _dom-query-xt
+' DOM-QUERY-ALL   CONSTANT _dom-query-all-xt
+' DOM-GET-BY-ID   CONSTANT _dom-get-by-id-xt
+' DOM-GET-BY-TAG  CONSTANT _dom-get-by-tag-xt
+' DOM-GET-BY-CLASS CONSTANT _dom-get-by-class-xt
+' DOM-WALK-DEPTH  CONSTANT _dom-walk-depth-xt
+' DOM-NTH-CHILD   CONSTANT _dom-nth-child-xt
+' DOM-TO-HTML     CONSTANT _dom-to-html-xt
+' DOM-OUTER-HTML  CONSTANT _dom-outer-html-xt
+' DOM-INNER-HTML  CONSTANT _dom-inner-html-xt
+' DOM-PARSE-FRAGMENT CONSTANT _dom-parse-fragment-xt
+' DOM-PARSE-HTML  CONSTANT _dom-parse-html-xt
+
+: DOM-USE         _dom-use-xt _dom-guard WITH-GUARD ;
+: DOM-DOC         _dom-doc-xt _dom-guard WITH-GUARD ;
+: DOM-DOC-NEW     _dom-doc-new-xt _dom-guard WITH-GUARD ;
+: DOM-TYPE@       _dom-type-at-xt _dom-guard WITH-GUARD ;
+: DOM-FLAGS@      _dom-flags-at-xt _dom-guard WITH-GUARD ;
+: DOM-FLAGS!      _dom-flags-s-xt _dom-guard WITH-GUARD ;
+: DOM-PARENT      _dom-parent-xt _dom-guard WITH-GUARD ;
+: DOM-FIRST-CHILD _dom-first-child-xt _dom-guard WITH-GUARD ;
+: DOM-LAST-CHILD  _dom-last-child-xt _dom-guard WITH-GUARD ;
+: DOM-NEXT        _dom-next-xt _dom-guard WITH-GUARD ;
+: DOM-PREV        _dom-prev-xt _dom-guard WITH-GUARD ;
+: DOM-APPEND      _dom-append-xt _dom-guard WITH-GUARD ;
+: DOM-PREPEND     _dom-prepend-xt _dom-guard WITH-GUARD ;
+: DOM-DETACH      _dom-detach-xt _dom-guard WITH-GUARD ;
+: DOM-INSERT-BEFORE _dom-insert-before-xt _dom-guard WITH-GUARD ;
+: DOM-CHILD-COUNT _dom-child-count-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR@       _dom-attr-at-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR!       _dom-attr-s-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR-DEL    _dom-attr-del-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR-HAS?   _dom-attr-has-q-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR-COUNT  _dom-attr-count-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR-FIRST  _dom-attr-first-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR-NEXTATTR _dom-attr-nextattr-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR-NAME@  _dom-attr-name-at-xt _dom-guard WITH-GUARD ;
+: DOM-ATTR-VAL@   _dom-attr-val-at-xt _dom-guard WITH-GUARD ;
+: DOM-ID          _dom-id-xt _dom-guard WITH-GUARD ;
+: DOM-CLASS       _dom-class-xt _dom-guard WITH-GUARD ;
+: DOM-CREATE-ELEMENT _dom-create-element-xt _dom-guard WITH-GUARD ;
+: DOM-CREATE-TEXT _dom-create-text-xt _dom-guard WITH-GUARD ;
+: DOM-CREATE-COMMENT _dom-create-comment-xt _dom-guard WITH-GUARD ;
+: DOM-CREATE-FRAGMENT _dom-create-fragment-xt _dom-guard WITH-GUARD ;
+: DOM-TAG-NAME    _dom-tag-name-xt _dom-guard WITH-GUARD ;
+: DOM-TEXT        _dom-text-xt _dom-guard WITH-GUARD ;
+: DOM-SET-TEXT    _dom-set-text-xt _dom-guard WITH-GUARD ;
+: DOM-REMOVE      _dom-remove-xt _dom-guard WITH-GUARD ;
+: DOM-SET-STYLESHEET _dom-set-stylesheet-xt _dom-guard WITH-GUARD ;
+: DOM-COMPUTE-STYLE _dom-compute-style-xt _dom-guard WITH-GUARD ;
+: DOM-STYLE@      _dom-style-at-xt _dom-guard WITH-GUARD ;
+: DOM-STYLE-INHERIT@ _dom-style-inherit-at-xt _dom-guard WITH-GUARD ;
+: DOM-STYLE-CACHED? _dom-style-cached-q-xt _dom-guard WITH-GUARD ;
+: DOM-INVALIDATE-STYLE _dom-invalidate-style-xt _dom-guard WITH-GUARD ;
+: DOM-MATCHES?    _dom-matches-q-xt _dom-guard WITH-GUARD ;
+: DOM-QUERY       _dom-query-xt _dom-guard WITH-GUARD ;
+: DOM-QUERY-ALL   _dom-query-all-xt _dom-guard WITH-GUARD ;
+: DOM-GET-BY-ID   _dom-get-by-id-xt _dom-guard WITH-GUARD ;
+: DOM-GET-BY-TAG  _dom-get-by-tag-xt _dom-guard WITH-GUARD ;
+: DOM-GET-BY-CLASS _dom-get-by-class-xt _dom-guard WITH-GUARD ;
+: DOM-WALK-DEPTH  _dom-walk-depth-xt _dom-guard WITH-GUARD ;
+: DOM-NTH-CHILD   _dom-nth-child-xt _dom-guard WITH-GUARD ;
+: DOM-TO-HTML     _dom-to-html-xt _dom-guard WITH-GUARD ;
+: DOM-OUTER-HTML  _dom-outer-html-xt _dom-guard WITH-GUARD ;
+: DOM-INNER-HTML  _dom-inner-html-xt _dom-guard WITH-GUARD ;
+: DOM-PARSE-FRAGMENT _dom-parse-fragment-xt _dom-guard WITH-GUARD ;
+: DOM-PARSE-HTML  _dom-parse-html-xt _dom-guard WITH-GUARD ;
+[THEN] [THEN]
