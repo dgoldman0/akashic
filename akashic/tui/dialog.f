@@ -389,11 +389,10 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
 
     \ ---- Modal event loop ----
     BEGIN
-        _DLG-EV KEY-POLL IF
-            _DLG-EV _DLG-SH-W @ WDG-HANDLE DROP
-            _DLG-SH-W @ WDG-DRAW          \ redraws only when dirty
-            SCR-FLUSH
-        THEN
+        _DLG-EV KEY-READ DROP
+        _DLG-EV _DLG-SH-W @ WDG-HANDLE DROP
+        _DLG-SH-W @ WDG-DRAW              \ redraws only when dirty
+        SCR-FLUSH
         _DLG-SH-W @ _DLG-O-RESULT + @ -1 <>
     UNTIL
 
@@ -402,8 +401,12 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
     _DLG-SH-RGN @ RGN-FREE ;
 
 \ =====================================================================
-\ 9. Convenience wrappers — DLG-INFO, DLG-CONFIRM
+\ 9. DLG-FREE, Convenience wrappers — DLG-INFO, DLG-CONFIRM
 \ =====================================================================
+
+\ DLG-FREE ( widget -- )
+: DLG-FREE  ( widget -- )
+    FREE ;
 
 CREATE _DLG-OK-BTN 16 ALLOT
 
@@ -426,15 +429,12 @@ CREATE _DLG-YN-BTNS 32 ALLOT
     DUP DLG-SHOW
     0= SWAP DLG-FREE ;
 
-\ DLG-FREE ( widget -- )
-: DLG-FREE  ( widget -- )
-    FREE ;
-
 \ =====================================================================
 \ 10. Guard
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
 GUARD _dlg-guard
 
 ' DLG-NEW         CONSTANT _dlg-new-xt
