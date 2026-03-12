@@ -26,6 +26,9 @@ LAYOUT_F   = os.path.join(ROOT_DIR, "akashic", "tui", "layout.f")
 WIDGET_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widget.f")
 LABEL_F    = os.path.join(ROOT_DIR, "akashic", "tui", "label.f")
 PROGRESS_F = os.path.join(ROOT_DIR, "akashic", "tui", "progress.f")
+INPUT_F    = os.path.join(ROOT_DIR, "akashic", "tui", "input.f")
+LIST_F     = os.path.join(ROOT_DIR, "akashic", "tui", "list.f")
+TABS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "tabs.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -87,7 +90,7 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress ...")
+    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress + input + list + tabs ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
@@ -103,6 +106,9 @@ def build_snapshot():
     widget_lines = _load_forth_lines(WIDGET_F)
     label_lines  = _load_forth_lines(LABEL_F)
     progress_lines = _load_forth_lines(PROGRESS_F)
+    input_lines    = _load_forth_lines(INPUT_F)
+    list_lines     = _load_forth_lines(LIST_F)
+    tabs_lines     = _load_forth_lines(TABS_F)
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -118,7 +124,8 @@ def build_snapshot():
         cell_lines + screen_lines +
         draw_lines + box_lines +
         region_lines + layout_lines +
-        widget_lines + label_lines + progress_lines + helpers
+        widget_lines + label_lines + progress_lines +
+        input_lines + list_lines + tabs_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -1804,6 +1811,434 @@ def test_prg_dirty():
 
 
 # =====================================================================
+#  Input tests (Layer 4B)
+# =====================================================================
+
+def test_inp_create():
+    """INP-NEW creates an input widget with correct type and empty buffer."""
+    print("\n── INPUT create ──")
+    check("type is WDG-T-INPUT",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'DUP WDG-TYPE . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "2 8888")
+    check("initial buf-len is 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'DUP INP-GET-TEXT NIP . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_inp_set_get_text():
+    """INP-SET-TEXT / INP-GET-TEXT round-trip."""
+    print("\n── INPUT set/get text ──")
+    check("set then get length",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" Hello" 2 PICK INP-SET-TEXT',
+         'DUP INP-GET-TEXT NIP . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "5 8888")
+    check("cursor at end after set",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" Hey" 2 PICK INP-SET-TEXT',
+         'DUP INP-CURSOR-POS . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "3 8888")
+
+def test_inp_insert_chars():
+    """Insert characters via internal _INP-INSERT."""
+    print("\n── INPUT insert chars ──")
+    check("insert 3 chars, len=3",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         '65 OVER _INP-INSERT 66 OVER _INP-INSERT 67 OVER _INP-INSERT',
+         'DUP INP-GET-TEXT NIP . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "3 8888")
+    check("insert A B C, first byte = 65",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         '65 OVER _INP-INSERT 66 OVER _INP-INSERT 67 OVER _INP-INSERT',
+         'DUP INP-GET-TEXT DROP C@ . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "65 8888")
+
+def test_inp_backspace():
+    """Backspace removes character before cursor."""
+    print("\n── INPUT backspace ──")
+    check("insert ABC, backspace → len=2",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" ABC" 2 PICK INP-SET-TEXT',
+         'DUP _INP-BACKSPACE',
+         'DUP INP-GET-TEXT NIP . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "2 8888")
+    check("backspace at pos 0 does nothing",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" AB" 2 PICK INP-SET-TEXT',
+         'DUP _INP-HOME',
+         'DUP _INP-BACKSPACE',
+         'DUP INP-GET-TEXT NIP . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "2 8888")
+
+def test_inp_delete():
+    """Forward delete removes character at cursor."""
+    print("\n── INPUT delete ──")
+    check("home then delete → removes first char",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" XYZ" 2 PICK INP-SET-TEXT',
+         'DUP _INP-HOME DUP _INP-DELETE',
+         'DUP INP-GET-TEXT NIP . DUP INP-GET-TEXT DROP C@ . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "2 89 8888")
+    check("delete at end does nothing",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" AB" 2 PICK INP-SET-TEXT',
+         'DUP _INP-DELETE',
+         'DUP INP-GET-TEXT NIP . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "2 8888")
+
+def test_inp_cursor_move():
+    """Left/right cursor movement."""
+    print("\n── INPUT cursor move ──")
+    check("right from home is col 1",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" ABCD" 2 PICK INP-SET-TEXT',
+         'DUP _INP-HOME DUP _INP-RIGHT',
+         'DUP INP-CURSOR-POS . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "1 8888")
+    check("left from end is col 3",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" ABCD" 2 PICK INP-SET-TEXT',
+         'DUP _INP-LEFT',
+         'DUP INP-CURSOR-POS . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "3 8888")
+
+def test_inp_home_end():
+    """Home and End cursor movement."""
+    print("\n── INPUT home/end ──")
+    check("home sets cursor to 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" ABCD" 2 PICK INP-SET-TEXT',
+         'DUP _INP-HOME',
+         'DUP INP-CURSOR-POS . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "0 8888")
+    check("end after home goes to len",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" ABCD" 2 PICK INP-SET-TEXT',
+         'DUP _INP-HOME DUP _INP-END',
+         'DUP INP-CURSOR-POS . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "4 8888")
+
+def test_inp_cursor_pos():
+    """INP-CURSOR-POS returns codepoint position."""
+    print("\n── INPUT cursor pos ──")
+    check("cursor at end = char count",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" test" 2 PICK INP-SET-TEXT',
+         'DUP INP-CURSOR-POS . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "4 8888")
+
+def test_inp_clear():
+    """INP-CLEAR resets buffer."""
+    print("\n── INPUT clear ──")
+    check("clear sets length to 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" hello" 2 PICK INP-SET-TEXT',
+         'DUP INP-CLEAR',
+         'DUP INP-GET-TEXT NIP . DUP INP-CURSOR-POS . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "0 0 8888")
+
+def test_inp_capacity():
+    """Insertion rejected when buffer is full."""
+    print("\n── INPUT capacity ──")
+    check("cap=3, insert 4th rejected",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 4 ALLOT',
+         'DUP _IBUF 3 INP-NEW',
+         '65 OVER _INP-INSERT 66 OVER _INP-INSERT 67 OVER _INP-INSERT',
+         '68 OVER _INP-INSERT',
+         'DUP INP-GET-TEXT NIP . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "3 8888")
+
+def test_inp_placeholder():
+    """Placeholder shown when buffer is empty."""
+    print("\n── INPUT placeholder ──")
+    check("placeholder set",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 1 20 RGN-NEW',
+         'CREATE _IBUF 64 ALLOT',
+         'DUP _IBUF 64 INP-NEW',
+         'S" Type here" 2 PICK INP-SET-PLACEHOLDER',
+         'DUP WDG-DRAW',
+         'DUP INP-GET-TEXT NIP . 8888 .',
+         'INP-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+
+# =====================================================================
+#  List tests (Layer 4B)
+# =====================================================================
+
+def test_lst_create():
+    """LST-NEW creates a list widget."""
+    print("\n── LIST create ──")
+    check("type is WDG-T-LIST",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 5 20 RGN-NEW',
+         'CREATE _LITEMS 48 ALLOT',                  # 3 items × 2 cells = 48 bytes
+         'S" Alpha" _LITEMS ! _LITEMS 8 + !',        # item 0 (reversed: len then addr)
+         'S" Beta"  _LITEMS 16 + ! _LITEMS 24 + !',  # item 1
+         'S" Gamma" _LITEMS 32 + ! _LITEMS 40 + !',  # item 2
+         'DUP _LITEMS 3 LST-NEW',
+         'DUP WDG-TYPE . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "3 8888")
+
+def test_lst_select():
+    """LST-SELECT and LST-SELECTED work."""
+    print("\n── LIST select ──")
+    # Items stored as (addr, len) pairs. S" leaves ( addr len ) on stack.
+    # We need to store them properly: _LITEMS[0] = addr, _LITEMS[8] = len
+    check("initial selection is 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 5 20 RGN-NEW',
+         'CREATE _LITEMS 32 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'DUP _LITEMS 2 LST-NEW',
+         'DUP LST-SELECTED . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+    check("select index 1",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 5 20 RGN-NEW',
+         'CREATE _LITEMS 32 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'DUP _LITEMS 2 LST-NEW',
+         '1 OVER LST-SELECT',
+         'DUP LST-SELECTED . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "1 8888")
+
+def test_lst_draw():
+    """LST-NEW widget draws items."""
+    print("\n── LIST draw ──")
+    check("draw does not crash",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         'CREATE _LITEMS 32 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'DUP _LITEMS 2 LST-NEW',
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_lst_nav_down_up():
+    """Navigate list with simulated up/down events."""
+    print("\n── LIST nav down/up ──")
+    # Simulate KEY-T-SPECIAL(1) KEY-DOWN(2) in event struct _EV
+    check("down moves selection to 1",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 5 20 RGN-NEW',
+         'CREATE _LITEMS 32 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'DUP _LITEMS 2 LST-NEW',
+         'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP LST-SELECTED . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "1 8888")
+    check("up from 1 → 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 5 20 RGN-NEW',
+         'CREATE _LITEMS 32 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'DUP _LITEMS 2 LST-NEW',
+         '1 OVER LST-SELECT',
+         'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP LST-SELECTED . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_lst_scroll():
+    """List scrolls when selection moves past visible area."""
+    print("\n── LIST scroll ──")
+    # 2-row visible region, 3 items: navigating to item 2 should scroll
+    check("select 2 in 2-row region scrolls",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 2 20 RGN-NEW',
+         'CREATE _LITEMS 48 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'S" CC" _LITEMS 40 + ! _LITEMS 32 + !',
+         'DUP _LITEMS 3 LST-NEW',
+         '2 OVER LST-SELECT',
+         'DUP LST-SELECTED . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "2 8888")
+
+def test_lst_set_items():
+    """LST-SET-ITEMS replaces the item list."""
+    print("\n── LIST set items ──")
+    check("set new items resets selection",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 5 20 RGN-NEW',
+         'CREATE _LITEMS 32 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'DUP _LITEMS 2 LST-NEW',
+         '1 OVER LST-SELECT',
+         'CREATE _LITEMS2 16 ALLOT',
+         'S" XX" _LITEMS2 8 + ! _LITEMS2 !',
+         '_LITEMS2 1 2 PICK LST-SET-ITEMS',
+         'DUP LST-SELECTED . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_lst_home_end():
+    """Home/End keys move to first/last item."""
+    print("\n── LIST home/end ──")
+    check("end goes to last item",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 5 20 RGN-NEW',
+         'CREATE _LITEMS 48 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'S" CC" _LITEMS 40 + ! _LITEMS 32 + !',
+         'DUP _LITEMS 3 LST-NEW',
+         'KEY-T-SPECIAL _EV ! KEY-END _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP LST-SELECTED . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "2 8888")
+    check("home goes to first item",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 5 20 RGN-NEW',
+         'CREATE _LITEMS 48 ALLOT',
+         'S" AA" _LITEMS 8 + ! _LITEMS !',
+         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
+         'S" CC" _LITEMS 40 + ! _LITEMS 32 + !',
+         'DUP _LITEMS 3 LST-NEW',
+         '2 OVER LST-SELECT',
+         'KEY-T-SPECIAL _EV ! KEY-HOME _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP LST-SELECTED . 8888 .',
+         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_lst_empty():
+    """Empty list doesn't crash on draw or handle."""
+    print("\n── LIST empty ──")
+    check("draw empty list",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 3 20 RGN-NEW',
+         '0 0 0 LST-NEW DROP',
+         '8888 .'], "8888")
+
+
+# =====================================================================
+#  Tabs tests (Layer 4B)
+# =====================================================================
+
+def test_tab_create():
+    """TAB-NEW creates an empty tab container."""
+    print("\n── TABS create ──")
+    check("type is WDG-T-TABS",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'DUP WDG-TYPE . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "8 8888")
+
+def test_tab_add():
+    """TAB-ADD increases count."""
+    print("\n── TABS add ──")
+    check("add 2 tabs, count=2",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" Tab1" 2 PICK TAB-ADD DROP',
+         'S" Tab2" 2 PICK TAB-ADD DROP',
+         'DUP TAB-COUNT . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "2 8888")
+
+def test_tab_select():
+    """TAB-SELECT switches active tab."""
+    print("\n── TABS select ──")
+    check("select tab 1",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" Tab1" 2 PICK TAB-ADD DROP',
+         'S" Tab2" 2 PICK TAB-ADD DROP',
+         '1 OVER TAB-SELECT',
+         'DUP TAB-ACTIVE . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "1 8888")
+
+def test_tab_draw():
+    """TAB drawing does not crash."""
+    print("\n── TABS draw ──")
+    check("draw with 2 tabs",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" One" 2 PICK TAB-ADD DROP',
+         'S" Two" 2 PICK TAB-ADD DROP',
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_tab_content():
+    """TAB-CONTENT returns valid region."""
+    print("\n── TABS content ──")
+    check("content region is non-zero",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" Tab1" 2 PICK TAB-ADD DROP',
+         '0 OVER TAB-CONTENT 0<> . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "-1 8888")
+
+def test_tab_count():
+    """TAB-COUNT returns 0 for empty and correct count after adds."""
+    print("\n── TABS count ──")
+    check("empty tab count = 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'DUP TAB-COUNT . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+
+# =====================================================================
 #  Main
 # =====================================================================
 
@@ -1923,6 +2358,37 @@ if __name__ == "__main__":
     test_prg_bar_max_zero()
     test_prg_spinner()
     test_prg_dirty()
+
+    # Input tests (Layer 4B)
+    test_inp_create()
+    test_inp_set_get_text()
+    test_inp_insert_chars()
+    test_inp_backspace()
+    test_inp_delete()
+    test_inp_cursor_move()
+    test_inp_home_end()
+    test_inp_cursor_pos()
+    test_inp_clear()
+    test_inp_capacity()
+    test_inp_placeholder()
+
+    # List tests (Layer 4B)
+    test_lst_create()
+    test_lst_select()
+    test_lst_draw()
+    test_lst_nav_down_up()
+    test_lst_scroll()
+    test_lst_set_items()
+    test_lst_home_end()
+    test_lst_empty()
+
+    # Tabs tests (Layer 4B)
+    test_tab_create()
+    test_tab_add()
+    test_tab_select()
+    test_tab_draw()
+    test_tab_content()
+    test_tab_count()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")

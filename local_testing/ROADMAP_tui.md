@@ -210,7 +210,7 @@ column.
 │                       Application                            │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 6: Extended Components                                │
-│  split.f │ scroll.f │ tree.f │ status.f │ toast.f │ canvas.f│
+│  split.f │ scroll.f │ tree.f │ status.f │ toast.f │ canvas.f │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 5: Application Shell                                  │
 │  event.f (loop) │ focus.f (focus chain) │ app.f (lifecycle)  │
@@ -2003,13 +2003,13 @@ of raw character placement.
 | 8 | tui/layout.f | 3 | region | 365 | ✅ Done |
 | 9 | tui/widget.f | 4 | region | 234 | ✅ Done |
 | 10 | tui/label.f | 4 | widget, draw | 209 | ✅ Done |
-| 11 | tui/input.f | 4 | draw, region, utf8 | ~250 | ❌ Not started |
-| 12 | tui/list.f | 4 | draw, region | ~200 | ❌ Not started |
+| 11 | tui/input.f | 4 | widget, draw, keys | 485 | ✅ Done |
+| 12 | tui/list.f | 4 | widget, draw, keys | 280 | ✅ Done |
 | 13 | tui/progress.f | 4 | widget, draw | 263 | ✅ Done |
 | 14 | tui/table.f | 4 | draw, box, region | ~300 | ❌ Not started |
 | 15 | tui/menu.f | 4 | draw, box, region | ~250 | ❌ Not started |
 | 16 | tui/dialog.f | 4 | draw, box, region, label | ~180 | ❌ Not started |
-| 17 | tui/tabs.f | 4 | draw, box, region | ~180 | ❌ Not started |
+| 17 | tui/tabs.f | 4 | widget, draw, box, region, keys | 282 | ✅ Done |
 | 18 | tui/focus.f | 5 | keys | ~150 | ❌ Not started |
 | 19 | tui/event.f | 5 | keys, screen, focus | ~200 | ❌ Not started |
 | 20 | tui/app.f | 5 | ansi, screen, event, focus | ~120 | ❌ Not started |
