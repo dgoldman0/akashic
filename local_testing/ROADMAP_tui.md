@@ -2007,7 +2007,7 @@ of raw character placement.
 | 12 | tui/list.f | 4 | widget, draw, keys | 280 | ✅ Done |
 | 13 | tui/progress.f | 4 | widget, draw | 263 | ✅ Done |
 | 14 | tui/table.f | 4 | draw, box, region | ~300 | ❌ Not started |
-| 15 | tui/menu.f | 4 | draw, box, region | ~250 | ❌ Not started |
+| 15 | tui/menu.f | 4 | draw, box, region | ~280 | ✅ Done |
 | 16 | tui/dialog.f | 4 | draw, box, region, label | ~180 | ❌ Not started |
 | 17 | tui/tabs.f | 4 | widget, draw, box, region, keys | 282 | ✅ Done |
 | 18 | tui/focus.f | 5 | keys | ~150 | ❌ Not started |

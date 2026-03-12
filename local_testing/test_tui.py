@@ -29,6 +29,7 @@ PROGRESS_F = os.path.join(ROOT_DIR, "akashic", "tui", "progress.f")
 INPUT_F    = os.path.join(ROOT_DIR, "akashic", "tui", "input.f")
 LIST_F     = os.path.join(ROOT_DIR, "akashic", "tui", "list.f")
 TABS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "tabs.f")
+MENU_F     = os.path.join(ROOT_DIR, "akashic", "tui", "menu.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -90,7 +91,7 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress + input + list + tabs ...")
+    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress + input + list + tabs + menu ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
@@ -109,6 +110,7 @@ def build_snapshot():
     input_lines    = _load_forth_lines(INPUT_F)
     list_lines     = _load_forth_lines(LIST_F)
     tabs_lines     = _load_forth_lines(TABS_F)
+    menu_lines     = _load_forth_lines(MENU_F)
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -125,7 +127,7 @@ def build_snapshot():
         draw_lines + box_lines +
         region_lines + layout_lines +
         widget_lines + label_lines + progress_lines +
-        input_lines + list_lines + tabs_lines + helpers
+        input_lines + list_lines + tabs_lines + menu_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -2239,8 +2241,300 @@ def test_tab_count():
 
 
 # =====================================================================
-#  Main
+#  Menu tests (Layer 4C)
 # =====================================================================
+
+# Helper: common setup code for menu tests.
+# Creates: screen, region(0 0 15 40), 2 menus, MNU-NEW widget on stack.
+# Menu 0 "File" has 2 items: "New" (action _MNP), "Exit" (action _MNP)
+# Menu 1 "Edit" has 2 items: "Cut" (action _MNP), "Paste" (action _MNP)
+
+_MNU_SETUP = [
+    '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+    ': _MNP ;',    # no-op action
+    # File menu items (2 × 32 = 64 bytes)
+    'CREATE _MI0 64 ALLOT',
+    'S" New"  _MI0 8 + ! _MI0 !',
+    "' _MNP _MI0 16 + !  0 _MI0 24 + !",
+    'S" Exit" _MI0 40 + ! _MI0 32 + !',
+    "' _MNP _MI0 48 + !  0 _MI0 56 + !",
+    # Edit menu items (2 × 32 = 64 bytes)
+    'CREATE _MI1 64 ALLOT',
+    'S" Cut"   _MI1 8 + ! _MI1 !',
+    "' _MNP _MI1 16 + !  0 _MI1 24 + !",
+    'S" Paste" _MI1 40 + ! _MI1 32 + !',
+    "' _MNP _MI1 48 + !  0 _MI1 56 + !",
+    # Top-level menus (2 × 32 = 64 bytes)
+    'CREATE _MENUS 64 ALLOT',
+    'S" File" _MENUS 8 + ! _MENUS !',
+    '_MI0 _MENUS 16 + !  2 _MENUS 24 + !',
+    'S" Edit" _MENUS 40 + ! _MENUS 32 + !',
+    '_MI1 _MENUS 48 + !  2 _MENUS 56 + !',
+    # Region and widget
+    '0 0 15 40 RGN-NEW',
+    'DUP _MENUS 2 MNU-NEW',
+]
+
+_MNU_CLEANUP = 'MNU-FREE RGN-FREE SCR-FREE'
+
+
+def test_mnu_create():
+    """MNU-NEW creates a menu widget."""
+    print("\n── MENU create ──")
+    check("type is WDG-T-MENU",
+        _MNU_SETUP + [
+         'DUP WDG-TYPE . 8888 .',
+         _MNU_CLEANUP], "4 8888")
+
+def test_mnu_initial_state():
+    """Active menu is -1, active item is 0."""
+    print("\n── MENU initial state ──")
+    check("active menu = -1",
+        _MNU_SETUP + [
+         'DUP MNU-ACTIVE . 8888 .',
+         _MNU_CLEANUP], "-1 8888")
+    check("active item = 0",
+        _MNU_SETUP + [
+         'DUP MNU-ACTIVE-ITEM . 8888 .',
+         _MNU_CLEANUP], "0 8888")
+
+def test_mnu_open_close():
+    """MNU-OPEN opens, MNU-CLOSE closes."""
+    print("\n── MENU open/close ──")
+    check("open menu 0",
+        _MNU_SETUP + [
+         '0 OVER MNU-OPEN',
+         'DUP MNU-ACTIVE . 8888 .',
+         _MNU_CLEANUP], "0 8888")
+    check("close after open",
+        _MNU_SETUP + [
+         '0 OVER MNU-OPEN',
+         'DUP MNU-CLOSE',
+         'DUP MNU-ACTIVE . 8888 .',
+         _MNU_CLEANUP], "-1 8888")
+
+def test_mnu_draw():
+    """Draw does not crash."""
+    print("\n── MENU draw ──")
+    check("draw bar (no dropdown)",
+        _MNU_SETUP + [
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         _MNU_CLEANUP], "0 8888")
+    check("draw with dropdown open",
+        _MNU_SETUP + [
+         '0 OVER MNU-OPEN',
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         _MNU_CLEANUP], "0 8888")
+
+def test_mnu_key_down_opens():
+    """DOWN key opens first menu when none is open."""
+    print("\n── MENU DOWN opens ──")
+    check("down opens menu 0",
+        _MNU_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE . DUP MNU-ACTIVE . 8888 .',
+         _MNU_CLEANUP], "-1 0 8888")
+
+def test_mnu_nav_items():
+    """DOWN/UP navigate items in open dropdown."""
+    print("\n── MENU nav items ──")
+    check("down from item 0 → 1",
+        _MNU_SETUP + [
+         '0 OVER MNU-OPEN',
+         'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP MNU-ACTIVE-ITEM . 8888 .',
+         _MNU_CLEANUP], "1 8888")
+    check("up from item 1 → 0",
+        _MNU_SETUP + [
+         '0 OVER MNU-OPEN',
+         # Move down first
+         'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         # Now move up
+         'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP MNU-ACTIVE-ITEM . 8888 .',
+         _MNU_CLEANUP], "0 8888")
+
+def test_mnu_enter_fires():
+    """ENTER fires action and closes menu."""
+    print("\n── MENU ENTER fires ──")
+    check("enter fires action, closes menu",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         'VARIABLE _ACTED  0 _ACTED !',
+         ': _MACT  1 _ACTED ! ;',
+         ': _MNP ;',
+         # 2 items: action item + noop
+         'CREATE _MI0 64 ALLOT',
+         'S" Do" _MI0 8 + ! _MI0 !',
+         "' _MACT _MI0 16 + !  0 _MI0 24 + !",
+         'S" No" _MI0 40 + ! _MI0 32 + !',
+         "' _MNP _MI0 48 + !  0 _MI0 56 + !",
+         'CREATE _MENUS 32 ALLOT',
+         'S" Act" _MENUS 8 + ! _MENUS !',
+         '_MI0 _MENUS 16 + !  2 _MENUS 24 + !',
+         '0 0 10 40 RGN-NEW',
+         'DUP _MENUS 1 MNU-NEW',
+         '0 OVER MNU-OPEN',
+         'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         '_ACTED @ . DUP MNU-ACTIVE . 8888 .',
+         'MNU-FREE RGN-FREE SCR-FREE'], "1 -1 8888")
+
+def test_mnu_esc_closes():
+    """ESC closes open dropdown."""
+    print("\n── MENU ESC closes ──")
+    check("escape closes menu",
+        _MNU_SETUP + [
+         '0 OVER MNU-OPEN',
+         'KEY-T-SPECIAL _EV ! KEY-ESC _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP MNU-ACTIVE . 8888 .',
+         _MNU_CLEANUP], "-1 8888")
+
+def test_mnu_left_right():
+    """LEFT/RIGHT switch between menus."""
+    print("\n── MENU LEFT/RIGHT ──")
+    check("right from menu 0 → 1",
+        _MNU_SETUP + [
+         '0 OVER MNU-OPEN',
+         'KEY-T-SPECIAL _EV ! KEY-RIGHT _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP MNU-ACTIVE . 8888 .',
+         _MNU_CLEANUP], "1 8888")
+    check("left from menu 1 → 0",
+        _MNU_SETUP + [
+         '1 OVER MNU-OPEN',
+         'KEY-T-SPECIAL _EV ! KEY-LEFT _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP MNU-ACTIVE . 8888 .',
+         _MNU_CLEANUP], "0 8888")
+
+def test_mnu_item_disable():
+    """MNU-ITEM-DISABLE / MNU-ITEM-ENABLE toggle item disabled flag."""
+    print("\n── MENU item disable ──")
+    check("disable item, skips during nav",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         ': _MNP ;',
+         # 3 items: item0 (disabled), item1, item2
+         'CREATE _MI0 96 ALLOT',
+         'S" AA" _MI0 8 + ! _MI0 !',
+         "' _MNP _MI0 16 + !  0 _MI0 24 + !",
+         'S" BB" _MI0 40 + ! _MI0 32 + !',
+         "' _MNP _MI0 48 + !  0 _MI0 56 + !",
+         'S" CC" _MI0 72 + ! _MI0 64 + !',
+         "' _MNP _MI0 80 + !  0 _MI0 88 + !",
+         'CREATE _MENUS 32 ALLOT',
+         'S" Menu" _MENUS 8 + ! _MENUS !',
+         '_MI0 _MENUS 16 + !  3 _MENUS 24 + !',
+         '0 0 10 40 RGN-NEW',
+         'DUP _MENUS 1 MNU-NEW',
+         # Disable item 0
+         'DUP 0 0 MNU-ITEM-DISABLE',
+         '0 OVER MNU-OPEN',
+         # Active item should skip item 0 → land on 1
+         'DUP MNU-ACTIVE-ITEM . 8888 .',
+         'MNU-FREE RGN-FREE SCR-FREE'], "1 8888")
+
+def test_mnu_item_enable():
+    """MNU-ITEM-ENABLE re-enables a disabled item."""
+    print("\n── MENU item enable ──")
+    check("enable re-enables item",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         ': _MNP ;',
+         'CREATE _MI0 64 ALLOT',
+         'S" AA" _MI0 8 + ! _MI0 !',
+         "' _MNP _MI0 16 + !  2 _MI0 24 + !",   # flags=2 (disabled)
+         'S" BB" _MI0 40 + ! _MI0 32 + !',
+         "' _MNP _MI0 48 + !  0 _MI0 56 + !",
+         'CREATE _MENUS 32 ALLOT',
+         'S" Menu" _MENUS 8 + ! _MENUS !',
+         '_MI0 _MENUS 16 + !  2 _MENUS 24 + !',
+         '0 0 10 40 RGN-NEW',
+         'DUP _MENUS 1 MNU-NEW',
+         # Re-enable item 0
+         'DUP 0 0 MNU-ITEM-ENABLE',
+         '0 OVER MNU-OPEN',
+         # Now item 0 should be selectable
+         'DUP MNU-ACTIVE-ITEM . 8888 .',
+         'MNU-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_mnu_item_check():
+    """MNU-ITEM-CHECK sets checked flag."""
+    print("\n── MENU item check ──")
+    check("check and draw does not crash",
+        _MNU_SETUP + [
+         'DUP 0 0 -1 MNU-ITEM-CHECK',
+         '0 OVER MNU-OPEN',
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         _MNU_CLEANUP], "0 8888")
+
+def test_mnu_separator():
+    """Separator items are skipped during navigation."""
+    print("\n── MENU separator ──")
+    check("nav skips separator",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         ': _MNP ;',
+         # 3 items: item0, separator, item2
+         'CREATE _MI0 96 ALLOT',
+         'S" AA" _MI0 8 + ! _MI0 !',
+         "' _MNP _MI0 16 + !  0 _MI0 24 + !",
+         'S" --" _MI0 40 + ! _MI0 32 + !',
+         "' _MNP _MI0 48 + !  1 _MI0 56 + !",     # flags=1 (separator)
+         'S" BB" _MI0 72 + ! _MI0 64 + !',
+         "' _MNP _MI0 80 + !  0 _MI0 88 + !",
+         'CREATE _MENUS 32 ALLOT',
+         'S" Menu" _MENUS 8 + ! _MENUS !',
+         '_MI0 _MENUS 16 + !  3 _MENUS 24 + !',
+         '0 0 10 40 RGN-NEW',
+         'DUP _MENUS 1 MNU-NEW',
+         '0 OVER MNU-OPEN',
+         # Down from item 0 → should skip separator → land on item 2
+         'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP',
+         'DUP MNU-ACTIVE-ITEM . 8888 .',
+         'MNU-FREE RGN-FREE SCR-FREE'], "2 8888")
+
+def test_mnu_draw_separator():
+    """Drawing a menu with separator does not crash."""
+    print("\n── MENU draw separator ──")
+    check("draw with separator",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         ': _MNP ;',
+         'CREATE _MI0 96 ALLOT',
+         'S" AA" _MI0 8 + ! _MI0 !',
+         "' _MNP _MI0 16 + !  0 _MI0 24 + !",
+         'S" --" _MI0 40 + ! _MI0 32 + !',
+         "' _MNP _MI0 48 + !  1 _MI0 56 + !",
+         'S" BB" _MI0 72 + ! _MI0 64 + !',
+         "' _MNP _MI0 80 + !  0 _MI0 88 + !",
+         'CREATE _MENUS 32 ALLOT',
+         'S" Menu" _MENUS 8 + ! _MENUS !',
+         '_MI0 _MENUS 16 + !  3 _MENUS 24 + !',
+         '0 0 10 40 RGN-NEW',
+         'DUP _MENUS 1 MNU-NEW',
+         '0 OVER MNU-OPEN',
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         'MNU-FREE RGN-FREE SCR-FREE'], "0 8888")
+
+def test_mnu_no_consume_when_closed():
+    """Keys are not consumed when no menu is open."""
+    print("\n── MENU no consume when closed ──")
+    check("left not consumed when closed",
+        _MNU_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-LEFT _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE . 8888 .',
+         _MNU_CLEANUP], "0 8888")
+    check("esc not consumed when closed",
+        _MNU_SETUP + [
+         'KEY-T-SPECIAL _EV ! KEY-ESC _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE . 8888 .',
+         _MNU_CLEANUP], "0 8888")
 
 if __name__ == "__main__":
     build_snapshot()
@@ -2389,6 +2683,23 @@ if __name__ == "__main__":
     test_tab_draw()
     test_tab_content()
     test_tab_count()
+
+    # Menu tests (Layer 4C)
+    test_mnu_create()
+    test_mnu_initial_state()
+    test_mnu_open_close()
+    test_mnu_draw()
+    test_mnu_key_down_opens()
+    test_mnu_nav_items()
+    test_mnu_enter_fires()
+    test_mnu_esc_closes()
+    test_mnu_left_right()
+    test_mnu_item_disable()
+    test_mnu_item_enable()
+    test_mnu_item_check()
+    test_mnu_separator()
+    test_mnu_draw_separator()
+    test_mnu_no_consume_when_closed()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")
