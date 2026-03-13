@@ -54,14 +54,15 @@ REQUIRE box.f
 REQUIRE region.f
 REQUIRE layout.f
 REQUIRE keys.f
+REQUIRE widgets/tree.f
 
 \ =====================================================================
-\  §1 — TUI Sidecar (per-element, 48 bytes)
+\  §1 — TUI Sidecar (per-element, 56 bytes)
 \ =====================================================================
 \
 \  Parallel array indexed by element pool index:
 \    elem-index = (elem – _UDL-ELEMS) / _UDL-ELEMSZ
-\    sidecar    = elem-index × 48 + _UTUI-SIDECARS
+\    sidecar    = elem-index × 56 + _UTUI-SIDECARS
 \
 \  Fields:
 \    +0  row     Computed row in screen coordinates (cell)
@@ -70,8 +71,9 @@ REQUIRE keys.f
 \   +24  height  Computed height (cells)
 \   +32  style   Packed: fg(8) bg(8) attrs(8) border(8)
 \   +40  flags   Bit 0=has-sidecar, 1=visible, 2=focused
+\   +48  wptr    Widget struct pointer (0 = none)
 
-48 CONSTANT _UTUI-SC-SZ
+56 CONSTANT _UTUI-SC-SZ
 256 CONSTANT _UTUI-MAX-ELEMS
 CREATE _UTUI-SIDECARS  _UTUI-MAX-ELEMS _UTUI-SC-SZ * ALLOT
 
@@ -82,6 +84,7 @@ CREATE _UTUI-SIDECARS  _UTUI-MAX-ELEMS _UTUI-SC-SZ * ALLOT
 24 CONSTANT _UTUI-SC-O-H
 32 CONSTANT _UTUI-SC-O-STYLE
 40 CONSTANT _UTUI-SC-O-FLAGS
+48 CONSTANT _UTUI-SC-O-WPTR
 
 \ Sidecar flag bits
 1 CONSTANT _UTUI-SCF-HAS     \ sidecar allocated
@@ -114,6 +117,8 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : _UTUI-SC-H!     ( n sc -- ) _UTUI-SC-O-H     + ! ;
 : _UTUI-SC-STYLE! ( s sc -- ) _UTUI-SC-O-STYLE + ! ;
 : _UTUI-SC-FLAGS! ( f sc -- ) _UTUI-SC-O-FLAGS + ! ;
+: _UTUI-SC-WPTR@  ( sc -- p ) _UTUI-SC-O-WPTR  + @ ;
+: _UTUI-SC-WPTR!  ( p sc -- ) _UTUI-SC-O-WPTR  + ! ;
 
 \ Visibility predicate
 : _UTUI-SC-VIS?  ( sc -- flag )
@@ -138,6 +143,36 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 \ Clear all sidecars
 : _UTUI-SC-CLEAR-ALL  ( -- )
     _UTUI-SIDECARS _UTUI-MAX-ELEMS _UTUI-SC-SZ * 0 FILL ;
+
+\ =====================================================================
+\  §1b — Proxy Region (shared by all materialized widgets)
+\ =====================================================================
+\
+\  A single static region (40 bytes) synced from the current sidecar
+\  before each widget _*-DRAW or _*-HANDLE call.  Safe because the
+\  TUI is single-threaded.
+
+CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
+
+: _UTUI-SYNC-PROXY  ( sc -- )
+    DUP _UTUI-SC-ROW@ _UTUI-PROXY-RGN _RGN-O-ROW + !
+    DUP _UTUI-SC-COL@ _UTUI-PROXY-RGN _RGN-O-COL + !
+    DUP _UTUI-SC-H@   _UTUI-PROXY-RGN _RGN-O-H   + !
+        _UTUI-SC-W@   _UTUI-PROXY-RGN _RGN-O-W   + ! ;
+
+\ =====================================================================
+\  §1c — UIDL ↔ Widget Callbacks
+\ =====================================================================
+\
+\  Tree walk callbacks — UIDL element tokens serve as tree node tokens.
+
+: _UTUI-TREE-CHILD  ( node -- child | 0 )  UIDL-FIRST-CHILD ;
+: _UTUI-TREE-NEXT   ( node -- sib  | 0 )  UIDL-NEXT-SIB ;
+: _UTUI-TREE-LABEL  ( node -- a l )
+    DUP S" label" UIDL-ATTR IF ROT DROP EXIT THEN
+    2DROP S" text" UIDL-ATTR IF EXIT THEN
+    2DROP S" ?" ;
+: _UTUI-TREE-LEAF?  ( node -- flag )  UIDL-FIRST-CHILD 0= ;
 
 \ =====================================================================
 \  §2 — Global State
@@ -437,11 +472,33 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     REPEAT
     DROP ;
 
-\ --- Status bar ---
+\ --- Status bar: first child left, last child right ---
+VARIABLE _UST-FIRST
+
 : _UTUI-RENDER-STATUS  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    DROP
-    32 _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-FILL-RECT ;
+    32 _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-FILL-RECT
+    _UR-ELEM !
+    \ Left text: first child's display text
+    _UR-ELEM @ UIDL-FIRST-CHILD ?DUP IF
+        DUP _UST-FIRST !
+        _UTUI-DISPLAY-TEXT
+        DUP 0<> IF
+            _UR-W @ 2 - MIN
+            _UR-ROW @ _UR-COL @ 1+ DRW-TEXT
+        ELSE 2DROP THEN
+    ELSE 0 _UST-FIRST ! THEN
+    \ Right text: last child (if different from first)
+    _UR-ELEM @ UIDL-LAST-CHILD ?DUP IF
+        DUP _UST-FIRST @ <> IF
+            _UTUI-DISPLAY-TEXT
+            DUP 0<> IF
+                DUP _UR-W @ SWAP - 1- 0 MAX
+                _UR-COL @ + >R
+                _UR-ROW @ R> DRW-TEXT
+            ELSE 2DROP THEN
+        ELSE DROP THEN
+    THEN ;
 
 \ --- Toolbar ---
 : _UTUI-RENDER-TOOLBAR  ( elem -- )
@@ -458,14 +515,50 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     \ Border
     BOX-ROUND _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @ BOX-DRAW ;
 
-\ --- Split (invisible; divider drawn by layout) ---
-: _UTUI-RENDER-SPLIT  ( elem -- ) DROP ;
+\ --- Split: draw vertical divider at ratio= position ---
+: _UTUI-RENDER-SPLIT  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    \ Read ratio= (default 50)
+    S" ratio" UIDL-ATTR IF
+        STR>NUM 0= IF DROP 50 THEN
+    ELSE 2DROP 50 THEN                 ( ratio )
+    \ Divider col offset = w * ratio / 100
+    _UR-W @ * 100 /
+    _UR-COL @ +                        ( abs-col )
+    9474 _UR-ROW @ ROT _UR-H @ DRW-VLINE ;
 
-\ --- Tabs header ---
+\ --- Tabs header: draw labels + active highlight + underline ---
+VARIABLE _UT-TAB-COL
+
 : _UTUI-RENDER-TABS  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    DROP
-    32 _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-FILL-RECT ;
+    _UTUI-FILL-BG
+    \ Active tab index from wptr state (default 0)
+    DUP _UTUI-SIDECAR _UTUI-SC-WPTR@
+    DUP IF @ ELSE DROP 0 THEN
+    _UR-ELEM !                         \ active index
+    _UR-COL @ 1+ _UT-TAB-COL !
+    0 _UR-TMP !                        \ child index counter
+    UIDL-FIRST-CHILD                   ( child | 0 )
+    BEGIN DUP 0<> WHILE
+        DUP S" label" UIDL-ATTR IF    ( child la ll )
+            \ Reverse highlight for active tab
+            _UR-TMP @ _UR-ELEM @ = IF
+                _DRW-BG @ _DRW-FG @ DRW-BG! DRW-FG!
+            THEN
+            2DUP _UR-ROW @ _UT-TAB-COL @ DRW-TEXT
+            _UR-TMP @ _UR-ELEM @ = IF
+                _DRW-BG @ _DRW-FG @ DRW-BG! DRW-FG!
+            THEN
+            NIP 2 + _UT-TAB-COL +!    ( child )
+        ELSE 2DROP THEN
+        1 _UR-TMP +!
+        UIDL-NEXT-SIB
+    REPEAT DROP
+    \ Underline on row 1 if h >= 2
+    _UR-H @ 2 >= IF
+        9472 _UR-ROW @ 1+ _UR-COL @ _UR-W @ DRW-HLINE
+    THEN ;
 
 \ --- Progress bar ---
 : _UTUI-RENDER-PROGRESS  ( elem -- )
@@ -493,14 +586,26 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
 : _UTUI-RENDER-INDICATOR  ( elem -- )
     _UTUI-RENDER-LABEL ;
 
-\ --- List / collection: background fill ---
+\ --- List / collection: background fill + child rows ---
 : _UTUI-RENDER-LIST  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     DROP _UTUI-FILL-BG ;
 
-\ --- Tree ---
+\ --- Tree: delegate to materialized TREE widget ---
 : _UTUI-RENDER-TREE  ( elem -- )
-    _UTUI-RENDER-LIST ;
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    _UTUI-FILL-BG
+    DUP _UTUI-SIDECAR _UTUI-SC-WPTR@  ( elem wptr )
+    DUP 0= IF 2DROP EXIT THEN
+    NIP                                ( wptr )
+    \ Sync proxy region from cached sidecar geometry
+    _UR-ROW @ _UTUI-PROXY-RGN _RGN-O-ROW + !
+    _UR-COL @ _UTUI-PROXY-RGN _RGN-O-COL + !
+    _UR-H @   _UTUI-PROXY-RGN _RGN-O-H   + !
+    _UR-W @   _UTUI-PROXY-RGN _RGN-O-W   + !
+    _UTUI-PROXY-RGN RGN-USE
+    _TREE-DRAW
+    RGN-ROOT ;
 
 \ --- Textarea ---
 : _UTUI-RENDER-TEXTAREA  ( elem -- )
@@ -512,9 +617,10 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     DROP _UTUI-FILL-BG ;
 
-\ --- Scroll ---
+\ --- Scroll: background fill (scroll indicators TODO) ---
 : _UTUI-RENDER-SCROLL  ( elem -- )
-    _UTUI-RENDER-REGION ;
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    DROP _UTUI-FILL-BG ;
 
 \ --- NOP ---
 : _UTUI-RENDER-NOP  ( elem -- ) DROP ;
@@ -567,10 +673,43 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
 : _UTUI-H-MENU     ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-TEXTAREA ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-LIST     ( elem key-ev -- handled? ) 2DROP 0 ;
-: _UTUI-H-TREE     ( elem key-ev -- handled? ) 2DROP 0 ;
-: _UTUI-H-TABS     ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-DIALOG   ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-CANVAS   ( elem key-ev -- handled? ) 2DROP 0 ;
+
+\ Tree: delegate to materialized TREE widget's _TREE-HANDLE
+: _UTUI-H-TREE  ( elem key-ev -- handled? )
+    OVER _UTUI-SIDECAR                    ( elem ev sc )
+    DUP _UTUI-SC-WPTR@                    ( elem ev sc wptr )
+    DUP 0= IF DROP DROP 2DROP 0 EXIT THEN
+    >R _UTUI-SYNC-PROXY                   ( elem ev   R: wptr )
+    NIP R>                                 ( ev wptr )
+    _TREE-HANDLE ;
+
+\ Tabs: Left/Right to switch active tab
+: _UTUI-H-TABS  ( elem key-ev -- handled? )
+    KEY-CODE@                              ( elem code )
+    OVER _UTUI-SIDECAR _UTUI-SC-WPTR@     ( elem code state )
+    DUP 0= IF DROP 2DROP 0 EXIT THEN
+    >R                                      ( elem code  R: state )
+    DUP KEY-LEFT = IF
+        DROP
+        R@ @ 0> IF
+            R@ @ 1- R@ !
+            UIDL-DIRTY! R> DROP -1 EXIT
+        THEN
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP KEY-RIGHT = IF
+        DROP
+        R@ @ 1+                            ( elem next )
+        OVER UIDL-NCHILDREN                ( elem next nch )
+        < IF
+            R@ @ 1+ R@ !
+            UIDL-DIRTY! R> DROP -1 EXIT
+        THEN
+        DROP R> DROP 0 EXIT
+    THEN
+    DROP DROP R> DROP 0 ;
 
 \ =====================================================================
 \  §7 — Layout Words (layout-xt implementations)
@@ -677,8 +816,47 @@ VARIABLE _UL-CW   \ child width for flex
 : _UTUI-LAYOUT-STATUS  ( elem -- ) _UTUI-LAYOUT-FLEX ;
 : _UTUI-LAYOUT-TOOLBAR ( elem -- ) _UTUI-LAYOUT-FLEX ;
 
-\ --- Tabs: children stack vertically ---
-: _UTUI-LAYOUT-TABS  ( elem -- ) _UTUI-LAYOUT-STACK ;
+\ --- Tabs: 2-row header, only active tab child visible ---
+: _UTUI-LAYOUT-TABS  ( elem -- )
+    _UL-ELEM !
+    _UL-ELEM @ _UTUI-SIDECAR _UL-SC !
+    _UL-SC @ _UTUI-SC-ROW@ _UL-ROW !
+    _UL-SC @ _UTUI-SC-COL@ _UL-COL !
+    _UL-SC @ _UTUI-SC-W@   _UL-W !
+    _UL-SC @ _UTUI-SC-H@   _UL-H !
+
+    \ Get active tab index from wptr state (default 0)
+    _UL-SC @ _UTUI-SC-WPTR@
+    DUP IF @ ELSE DROP 0 THEN
+    _UL-POS !                          \ reuse _UL-POS as active idx
+
+    0 _UL-ELEM @ UIDL-FIRST-CHILD     ( idx child )
+    BEGIN DUP 0<> WHILE
+        DUP _UTUI-SIDECAR             ( idx child csc )
+        OVER UIDL-EVAL-WHEN IF
+            _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+            2 PICK _UL-POS @ = IF
+                \ Active tab: content area below header (row+2, col, w, h-2)
+                _UL-ROW @ 2 + OVER _UTUI-SC-ROW!
+                _UL-COL @     OVER _UTUI-SC-COL!
+                _UL-W @       OVER _UTUI-SC-W!
+                _UL-H @ 2 - 0 MAX OVER _UTUI-SC-H!
+            ELSE
+                \ Inactive: zero dimensions (effectively hidden)
+                0 OVER _UTUI-SC-ROW!
+                0 OVER _UTUI-SC-COL!
+                0 OVER _UTUI-SC-W!
+                0 OVER _UTUI-SC-H!
+            THEN
+            _UL-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
+        ELSE
+            _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+        THEN
+        DROP                           ( idx child )
+        UIDL-NEXT-SIB
+        SWAP 1+ SWAP                   ( idx+1 next )
+    REPEAT
+    DROP DROP ;
 
 \ --- Split layout: divide by ratio= ---
 VARIABLE _USP-ELEM  VARIABLE _USP-SC
@@ -1161,6 +1339,73 @@ VARIABLE _UDH-SC   \ temp for dialog hide
     THEN ;
 
 \ =====================================================================
+\  §16a — Widget Materialization
+\ =====================================================================
+\
+\  Walk the UIDL tree after layout; for elements that need widget
+\  state (tree, tabs), allocate a widget struct or mini state block
+\  and store the pointer in the sidecar's wptr cell (+48).
+
+: _UTUI-MATERIALIZE  ( -- )
+    UIDL-ROOT ?DUP 0= IF EXIT THEN
+    BEGIN
+        DUP UIDL-TYPE                  ( elem type )
+        DUP UIDL-T-TREE = IF
+            DROP
+            DUP _UTUI-SIDECAR _UTUI-SYNC-PROXY
+            _UTUI-PROXY-RGN OVER
+            ['] _UTUI-TREE-CHILD ['] _UTUI-TREE-NEXT
+            ['] _UTUI-TREE-LABEL ['] _UTUI-TREE-LEAF?
+            TREE-NEW                   ( elem widget )
+            OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
+        ELSE
+            UIDL-T-TABS = IF
+                8 ALLOCATE 0<> ABORT" tabs-state"
+                DUP 0 SWAP !           ( elem state )
+                OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
+            THEN
+        THEN
+        \ DFS advance
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                ELSE
+                    UIDL-PARENT DUP IF FALSE
+                    ELSE 0 TRUE THEN
+                THEN
+            UNTIL
+            DUP 0= IF DROP EXIT THEN
+        THEN
+    AGAIN ;
+
+: _UTUI-DEMATERIALIZE  ( -- )
+    UIDL-ROOT ?DUP 0= IF EXIT THEN
+    BEGIN
+        DUP _UTUI-SIDECAR _UTUI-SC-WPTR@  ( elem wptr )
+        ?DUP IF
+            OVER UIDL-TYPE UIDL-T-TREE = IF
+                TREE-FREE
+            ELSE
+                FREE DROP              \ tabs state, etc.
+            THEN
+            0 OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
+        THEN
+        \ DFS advance
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                ELSE
+                    UIDL-PARENT DUP IF FALSE
+                    ELSE 0 TRUE THEN
+                THEN
+            UNTIL
+            DUP 0= IF DROP EXIT THEN
+        THEN
+    AGAIN ;
+
+\ =====================================================================
 \  §17 — UTUI-LOAD
 \ =====================================================================
 
@@ -1186,6 +1431,8 @@ VARIABLE _UDH-SC   \ temp for dialog hide
 
     UTUI-RELAYOUT
 
+    _UTUI-MATERIALIZE
+
     _UTUI-WIRE-SUBS
 
     0 _UTUI-FOCUS-P !
@@ -1199,6 +1446,7 @@ VARIABLE _UDH-SC   \ temp for dialog hide
 \ =====================================================================
 
 : UTUI-DETACH  ( -- )
+    _UTUI-DEMATERIALIZE
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
     _UTUI-SHORT-CLEAR

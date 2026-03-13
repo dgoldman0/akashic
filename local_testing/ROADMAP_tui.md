@@ -3393,6 +3393,136 @@ of raw character placement.
 - draw (no crash), handle (returns 0)
 - free (no crash)
 
+### 7.7 UIDL-TUI Widget Wiring — Sidecar State Blocks
+
+**Goal:** Replace placeholder render/event stubs in `uidl-tui.f` with
+real widget drawing and interaction by extending the per-element
+sidecar with a widget-pointer cell and allocating lightweight widget
+structs for complex element types at load time.
+
+#### Background
+
+The UIDL-TUI backend operates directly on the UIDL element tree with
+no DOM intermediary.  Simple elements (label, action, input, toggle,
+separator, progress) already have complete render and event words.
+Complex elements (tree, list, tabs, split, scroll, status) were left
+as stubs — typically just a background fill and `2DROP 0` event
+handlers — because they need **per-instance mutable state** (cursor
+position, scroll offset, expand bitmap, active tab index) that
+neither the 128-byte UIDL element pool slot nor the 48-byte sidecar
+can carry.
+
+The DOM path solves this via `N.AUX` (a generic pointer cell per DOM
+node) which stores a 64-byte TUI sidecar allocated by `DTUI-ATTACH`.
+The UIDL path has no equivalent extension point — until now.
+
+#### Design: Sidecar Extension + Widget Struct Reuse
+
+**Sidecar grows from 48 → 56 bytes** (7 cells instead of 6):
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0 | row | Screen row |
+| +8 | col | Screen column |
+| +16 | width | Width in cells |
+| +24 | height | Height in cells |
+| +32 | style | Packed fg/bg/attrs/border |
+| +40 | flags | has/vis/foc bits |
+| **+48** | **wptr** | **Widget struct pointer (0 = none)** |
+
+The `wptr` cell at +48 points to a heap-allocated widget descriptor
+(the same structs created by `TREE-NEW`, `LST-NEW`, `TAB-NEW`, etc.)
+for element types that need interactive state.  For simple elements
+(labels, buttons, separators), wptr stays 0.
+
+**Why reuse full widget structs** rather than just the payload:
+- Widget `_*-DRAW` and `_*-HANDLE` words read from the struct header
+  (specifically `WDG-REGION` at +8) and invoke callbacks by field offset.
+  Removing the header would require rewriting every internal word.
+- The 40-byte header overhead is negligible (6 stateful elements max
+  per typical UIDL document × 40 bytes = 240 bytes).
+- Widget constructors (`*-NEW`) handle sub-allocations (expand bitmap
+  for tree, tab entry array for tabs) — reusing them avoids duplicating
+  that logic.
+
+**Proxy region bridge:** Each materialized widget needs a valid
+`WDG-REGION` pointer.  Rather than allocating one region per widget,
+a single **proxy region** (40 bytes, `CREATE`'d in dictionary) is
+synced from the sidecar geometry before each `_*-DRAW` or
+`_*-HANDLE` call.  This is safe because the TUI is single-threaded.
+
+#### Lifecycle
+
+**Load time** (`UTUI-LOAD`, after `UTUI-RELAYOUT`):
+1. Walk the element tree.
+2. For each element whose type is tree/list/tabs/split/scroll:
+   - Read sidecar geometry → sync proxy region → call `*-NEW`.
+   - Store returned widget pointer in sidecar +48.
+   - For tree/list: wire UIDL children as data source via callbacks.
+   - For tabs: call `TAB-ADD` for each `<tab>` child element.
+3. Leave wptr=0 for all other element types.
+
+**Render time** (`_UTUI-RENDER-TREE` etc.):
+1. `_UTUI-STASH-SC` as before (visibility check, style, geometry).
+2. Read wptr from sidecar +48.  If 0, fall back to bg fill.
+3. Sync proxy region from sidecar geometry.
+4. Update widget's `WDG-REGION` to proxy region.
+5. Call `_*-DRAW` on the widget.
+
+**Event time** (`_UTUI-H-TREE` etc.):
+1. Read wptr from sidecar +48.  If 0, return 0.
+2. Sync proxy region.
+3. Call `_*-HANDLE ( event widget -- consumed? )`.
+
+**Detach time** (`UTUI-DETACH`):
+1. Walk all sidecars.  For each with wptr≠0, call `*-FREE` (or
+   `FREE` for simple structs) then zero the cell.
+
+#### Elements Getting Widget Structs
+
+| UIDL type | Widget | Struct size | State carried |
+|-----------|--------|------------|---------------|
+| `<tree>` | `TREE-NEW` | 112 B | cursor, scroll, expand bitmap, walk callbacks |
+| `<collection>` / `<list>` | `LST-NEW` | 88 B | items, count, selected, scroll, select-xt |
+| `<tabs>` | `TAB-NEW` | 80 B | tab entries, count, active, switch-xt |
+| `<split>` | `SPL-NEW` | 80 B | mode, ratio, pane regions, divider char |
+| `<scroll>` | `SCRL-NEW` | 88 B | content dims, offsets, draw-xt, indicators |
+| `<status>` | — | 0 B | Text from UIDL children; no extra state needed |
+| `<canvas>` | — | 0 B | Already wired; app-level CVS-* drawing |
+| `<toast>` | — | 0 B | Singleton; overlay hooks in paint loop |
+
+Status keeps its current approach (render from child labels).  Canvas
+is already correct.  Toast is an overlay, not a tree-resident widget.
+
+#### Memory Budget
+
+Worst case (all 6 types present): 6 × 112 = 672 bytes of widget
+structs + 1 proxy region (40 bytes) + sidecar growth (256 × 8 = 2048
+bytes).  Total overhead: ~2.7 KiB — well within the 12 KiB sidecar
+array budget.
+
+#### Test Plan
+
+Existing TUI tests (22 canvas + 18 tree) must continue to pass
+unchanged — they test standalone widget operation, not UIDL wiring.
+New tests will be added in a follow-up for UIDL-driven tree/list/tabs
+rendering once the wiring is verified manually.
+
+#### Status
+
+- [ ] Extend sidecar to 56 bytes (add `_UTUI-SC-O-WPTR`)
+- [ ] Add proxy region and sync word
+- [ ] Wire `_UTUI-RENDER-TREE` adapter
+- [ ] Wire `_UTUI-H-TREE` adapter
+- [ ] Wire `_UTUI-RENDER-LIST` / `_UTUI-H-LIST` adapters
+- [ ] Wire `_UTUI-RENDER-TABS` / `_UTUI-H-TABS` / `_UTUI-LAYOUT-TABS`
+- [ ] Wire `_UTUI-RENDER-SPLIT` adapter
+- [ ] Wire `_UTUI-RENDER-SCROLL` / `_UTUI-H-SCROLL` adapters
+- [ ] Wire `_UTUI-RENDER-STATUS` adapter
+- [ ] Allocate widget structs in `UTUI-LOAD`
+- [ ] Free widget structs in `UTUI-DETACH`
+- [ ] All existing tests pass
+
 ---
 
 ## Layer 8 — Application Packaging (optional)
