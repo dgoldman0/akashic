@@ -60,10 +60,10 @@ and no circular imports.
 - [Layer 7 — Extended Components](#layer-7--extended-components)
   - [7.1 tui/widgets/split.f — Split Panes](#71-tuisplitf--split-panes)
   - [7.2 tui/widgets/scroll.f — Scrollable Viewport](#72-tuiscrollf--scrollable-viewport)
-  - [7.3 tui/widgets/tree.f — Tree View](#73-tuitreef--tree-view)
+  - [7.3 tui/widgets/tree.f — Tree View ✅](#73-tuitreef--tree-view-)
   - [7.4 tui/widgets/status.f — Status Bar](#74-tuistatusf--status-bar)
   - [7.5 tui/widgets/toast.f — Transient Notifications](#75-tuitoastf--transient-notifications)
-  - [7.6 tui/widgets/canvas.f — Character-Mode Canvas](#76-tuicanvasf--character-mode-canvas)
+  - [7.6 tui/widgets/canvas.f — Character-Mode Canvas ✅](#76-tuicanvasf--character-mode-canvas-)
 - [Layer 8 — Application Packaging (optional)](#layer-8--application-packaging-optional)
   - [8.1 tui/app-image.f — Binary Image Wrapper](#81-tuiapp-imagef--binary-image-wrapper)
   - [8.2 tui/app-manifest.f — Application Manifest](#82-tuiapp-manifestf--application-manifest)
@@ -3204,7 +3204,9 @@ Dependencies: `REQUIRE region.f`, `REQUIRE draw.f`
 
 ---
 
-### 7.3 tui/widgets/tree.f — Tree View
+### 7.3 tui/widgets/tree.f — Tree View ✅
+
+**Status: Done** — 485 lines, 18 tests in `test_tui.py`
 
 **Goal:** Collapsible tree display for hierarchical data.  Nodes
 can be expanded/collapsed.  Arrow keys navigate, Enter toggles
@@ -3213,9 +3215,9 @@ expansion.
 File: `tui/widgets/tree.f`
 Prefix: `TREE-` (public), `_TREE-` (internal)
 Provider: `PROVIDED akashic-tui-tree`
-Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`, `REQUIRE scroll.f`
+Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`, `REQUIRE keys.f`
 
-~250 lines
+485 lines
 
 #### Tree Node Interface
 
@@ -3245,14 +3247,15 @@ discover the tree structure:
 The tree view uses box-drawing characters for the tree guides:
 `├──`, `│  `, `└──` with proper indentation per depth level.
 
-#### Test targets: ~15 tests
+#### Test results: 18 / 18 pass
 
-- Render flat tree (single level)
-- Expand/collapse
-- Deep nesting (5+ levels)
-- Navigate with arrows
-- Selection callback
-- Refresh after data change
+- create (type, cursor)
+- draw (no crash)
+- expand / collapse / toggle / expand-all / expand-leaf
+- nav: up, down, enter, right-expand, left-collapse, clamp
+- selected node lookup
+- on-select callback
+- visible count
 
 ---
 
@@ -3316,7 +3319,9 @@ Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`
 
 ---
 
-### 7.6 tui/widgets/canvas.f — Character-Mode Canvas
+### 7.6 tui/widgets/canvas.f — Character-Mode Canvas ✅
+
+**Status: Done** — 443 lines, 22 tests in `test_tui.py`
 
 **Goal:** A free-form drawing surface for character graphics —
 Braille patterns, block characters, plot points.  Provides
@@ -3329,7 +3334,7 @@ Prefix: `CVS-` (public), `_CVS-` (internal)
 Provider: `PROVIDED akashic-tui-canvas`
 Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
 
-~200 lines
+443 lines
 
 #### Canvas Descriptor (header + 5 cells = 80 bytes)
 
@@ -3377,15 +3382,16 @@ This provides terminal-mode charting — sparklines, waveforms,
 scatter plots — at 2× the horizontal and 4× the vertical resolution
 of raw character placement.
 
-#### Test targets: ~15 tests
+#### Test results: 22 / 22 pass
 
-- Set/clear/test individual dots
-- Braille encoding correctness
-- Line drawing
-- Rectangle and circle
-- Plot from data array
-- Full-canvas clear
-- Edge dots at boundaries
+- create (type, dot-w, dot-h)
+- set / get / clr / oob
+- pen colour, stamp, CVS-COLOR!
+- clear (dots + colour)
+- line (horiz, diagonal)
+- rect, fill-rect, circle (3 checks)
+- draw (no crash), handle (returns 0)
+- free (no crash)
 
 ---
 

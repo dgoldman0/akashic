@@ -31,6 +31,8 @@ LIST_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "list.f")
 TABS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "tabs.f")
 MENU_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "menu.f")
 DIALOG_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "dialog.f")
+CANVAS_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "canvas.f")
+TREE_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "tree.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -92,7 +94,7 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress + input + list + tabs + menu + dialog ...")
+    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress + input + list + tabs + menu + dialog + canvas + tree ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
@@ -113,6 +115,8 @@ def build_snapshot():
     tabs_lines     = _load_forth_lines(TABS_F)
     menu_lines     = _load_forth_lines(MENU_F)
     dialog_lines   = _load_forth_lines(DIALOG_F)
+    canvas_lines   = _load_forth_lines(CANVAS_F)
+    tree_lines     = _load_forth_lines(TREE_F)
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -130,7 +134,7 @@ def build_snapshot():
         region_lines + layout_lines +
         widget_lines + label_lines + progress_lines +
         input_lines + list_lines + tabs_lines + menu_lines +
-        dialog_lines + helpers
+        dialog_lines + canvas_lines + tree_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -2824,6 +2828,516 @@ def test_dlg_free():
         _DLG_SETUP + [_DLG_CLEANUP, '8888 .'], "8888")
 
 
+# =====================================================================
+#  Canvas tests (Layer 7 — Braille canvas with per-cell colour)
+# =====================================================================
+
+# Setup: create a 10×5 cell region → 20×20 dot canvas
+_CVS_SETUP = [
+    '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+    '0 0 5 10 RGN-NEW',
+    'DUP CVS-NEW',
+]
+_CVS_CLEANUP = 'CVS-FREE RGN-FREE SCR-FREE'
+
+
+def test_cvs_create():
+    """CVS-NEW creates a canvas widget with type WDG-T-CANVAS."""
+    print("\n── CANVAS create ──")
+    check("type is WDG-T-CANVAS (14)",
+        _CVS_SETUP + [
+            'DUP WDG-TYPE . 8888 .',
+            _CVS_CLEANUP], "14 8888")
+    check("dot-w = region-w * 2 = 20",
+        _CVS_SETUP + [
+            'DUP 48 + @ . 8888 .',  # _CVS-O-DW = 48
+            _CVS_CLEANUP], "20 8888")
+    check("dot-h = region-h * 4 = 20",
+        _CVS_SETUP + [
+            'DUP 56 + @ . 8888 .',  # _CVS-O-DH = 56
+            _CVS_CLEANUP], "20 8888")
+
+
+def test_cvs_set_get():
+    """CVS-SET / CVS-GET set and read individual dots."""
+    print("\n── CANVAS set/get ──")
+    check("set then get returns true",
+        _CVS_SETUP + [
+            'DUP 3 4 CVS-SET',
+            'DUP 3 4 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "-1 8888")
+    check("unset dot returns false",
+        _CVS_SETUP + [
+            'DUP 3 4 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "0 8888")
+
+
+def test_cvs_clr():
+    """CVS-CLR clears a previously set dot."""
+    print("\n── CANVAS clr ──")
+    check("set then clear then get",
+        _CVS_SETUP + [
+            'DUP 5 2 CVS-SET',
+            'DUP 5 2 CVS-CLR',
+            'DUP 5 2 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "0 8888")
+
+
+def test_cvs_oob():
+    """Out-of-bounds dots are silently ignored."""
+    print("\n── CANVAS out-of-bounds ──")
+    check("set oob does not crash",
+        _CVS_SETUP + [
+            'DUP 99 99 CVS-SET',
+            'DUP 99 99 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "0 8888")
+
+
+def test_cvs_pen():
+    """CVS-PEN! sets pen colour stored in descriptor."""
+    print("\n── CANVAS pen ──")
+    # After CVS-PEN! with fg=3 bg=1, read them back from descriptor
+    check("pen fg/bg stored",
+        _CVS_SETUP + [
+            'DUP 3 1 CVS-PEN!',
+            'DUP 72 + @ .  DUP 80 + @ . 8888 .',  # +72=pen-fg, +80=pen-bg
+            _CVS_CLEANUP], "3 1 8888")
+
+
+def test_cvs_stamp():
+    """Setting a dot stamps pen colour into the colour map cell."""
+    print("\n── CANVAS stamp ──")
+    # col-buf at +64.  Cell (0,0) is first 2 bytes: fg, bg.
+    # Default pen is fg=7, bg=0.  Change pen to (2,5) then set dot (0,0).
+    check("stamp writes pen to col-buf",
+        _CVS_SETUP + [
+            'DUP 2 5 CVS-PEN!',
+            'DUP 0 0 CVS-SET',                      # stamps cell (0,0)
+            'DUP 64 + @  DUP C@ . 1+ C@ . 8888 .',  # read col-buf[0]: fg bg
+            _CVS_CLEANUP], "2 5 8888")
+
+
+def test_cvs_color_direct():
+    """CVS-COLOR! sets cell colour directly."""
+    print("\n── CANVAS color! ──")
+    # CVS-COLOR! ( w col row fg bg -- )
+    # Set cell (2, 1) to fg=4, bg=6.  col-buf addr = base + (1*cw + 2)*2
+    # cw = 10, so offset = (10 + 2)*2 = 24 bytes into col-buf.
+    check("direct colour set",
+        _CVS_SETUP + [
+            'DUP 2 1 4 6 CVS-COLOR!',
+            'DUP 64 + @ 24 +  DUP C@ . 1+ C@ . 8888 .',
+            _CVS_CLEANUP], "4 6 8888")
+
+
+def test_cvs_clear():
+    """CVS-CLEAR zeroes all dots and resets colour map to pen."""
+    print("\n── CANVAS clear ──")
+    check("clear zeroes dots",
+        _CVS_SETUP + [
+            'DUP 3 3 CVS-SET',
+            'DUP CVS-CLEAR',
+            'DUP 3 3 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "0 8888")
+    # After clear, colour map should use current pen
+    check("clear resets colours to pen",
+        _CVS_SETUP + [
+            'DUP 4 2 CVS-PEN!',
+            'DUP CVS-CLEAR',
+            'DUP 64 + @  DUP C@ . 1+ C@ . 8888 .',   # cell (0,0): fg bg
+            _CVS_CLEANUP], "4 2 8888")
+
+
+def test_cvs_line():
+    """CVS-LINE draws a horizontal line (all dots on the line are set)."""
+    print("\n── CANVAS line ──")
+    check("horizontal line sets dots",
+        _CVS_SETUP + [
+            'DUP 0 0 5 0 CVS-LINE',
+            'DUP 0 0 CVS-GET . DUP 3 0 CVS-GET . DUP 5 0 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "-1 -1 -1 8888")
+    check("diagonal line sets start and end",
+        _CVS_SETUP + [
+            'DUP 0 0 4 4 CVS-LINE',
+            'DUP 0 0 CVS-GET . DUP 4 4 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "-1 -1 8888")
+
+
+def test_cvs_rect():
+    """CVS-RECT draws an outline rectangle."""
+    print("\n── CANVAS rect ──")
+    # 4×4 rect at (1,1): corners should be set, center should not
+    check("rect corners set, center not",
+        _CVS_SETUP + [
+            'DUP 1 1 4 4 CVS-RECT',
+            'DUP 1 1 CVS-GET . DUP 4 4 CVS-GET . DUP 2 2 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "-1 -1 0 8888")
+
+
+def test_cvs_fill_rect():
+    """CVS-FILL-RECT fills the entire rectangle."""
+    print("\n── CANVAS fill-rect ──")
+    check("fill-rect sets interior",
+        _CVS_SETUP + [
+            'DUP 0 0 3 3 CVS-FILL-RECT',
+            'DUP 0 0 CVS-GET . DUP 1 1 CVS-GET . DUP 2 2 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "-1 -1 -1 8888")
+
+
+def test_cvs_circle():
+    """CVS-CIRCLE draws a circle (center+radius)."""
+    print("\n── CANVAS circle ──")
+    # Draw circle at center (8,8) radius 5.
+    # Rightmost point = (13,8) must be set (initial octant point).
+    check("circle sets rightmost point",
+        _CVS_SETUP + [
+            'DUP 8 8 5 CVS-CIRCLE',
+            'DUP 13 8 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "-1 8888")
+    # Top point = (8,3) should also be set.
+    check("circle sets top point",
+        _CVS_SETUP + [
+            'DUP 8 8 5 CVS-CIRCLE',
+            'DUP 8 3 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "-1 8888")
+    # Center should NOT be set.
+    check("circle center not set",
+        _CVS_SETUP + [
+            'DUP 8 8 5 CVS-CIRCLE',
+            'DUP 8 8 CVS-GET . 8888 .',
+            _CVS_CLEANUP], "0 8888")
+
+
+def test_cvs_draw():
+    """WDG-DRAW on canvas does not crash."""
+    print("\n── CANVAS draw ──")
+    check("draw does not crash",
+        _CVS_SETUP + [
+            'DUP 3 5 CVS-SET',
+            'DUP WDG-DRAW',
+            '8888 .',
+            _CVS_CLEANUP], "8888")
+
+
+def test_cvs_handle():
+    """Canvas event handler returns 0 (does not consume events)."""
+    print("\n── CANVAS handle ──")
+    check("handle returns 0",
+        _CVS_SETUP + [
+            'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE . 8888 .',
+            _CVS_CLEANUP], "0 8888")
+
+
+def test_cvs_free():
+    """CVS-FREE does not crash."""
+    print("\n── CANVAS free ──")
+    check("free does not crash",
+        _CVS_SETUP + [
+            _CVS_CLEANUP,
+            '8888 .'], "8888")
+
+
+# =====================================================================
+#  Tree tests (Layer 7 — Tree View widget)
+# =====================================================================
+
+# Build a simple in-memory tree with 4 nodes:
+#   Root (1)
+#   ├── Child A (2)  -- leaf
+#   └── Child B (3)  -- has child
+#       └── Grandchild (4) -- leaf
+#
+# Each node is 4 cells:
+#   +0  first-child (or 0)
+#   +8  next-sibling (or 0)
+#   +16 label-addr
+#   +24 label-len
+#
+# Callback definitions:
+#   children-xt ( node -- child|0 )  =  @
+#   next-xt     ( node -- sib|0 )    =  8 + @
+#   label-xt    ( node -- addr len ) =  DUP 16 + @ SWAP 24 + @
+#   leaf?-xt    ( node -- flag )     =  @ 0=
+
+_TREE_SETUP = [
+    '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+    '0 0 10 40 RGN-NEW',
+    # Allocate 4 nodes × 4 cells each = 128 bytes
+    'CREATE _TN 128 ALLOT',
+    # Label strings
+    ': _TL-ROOT S" Root" ;',
+    ': _TL-A    S" ChildA" ;',
+    ': _TL-B    S" ChildB" ;',
+    ': _TL-GC   S" Grandchild" ;',
+    # Node 1 (Root) at _TN + 0:  child=Node2, next=0, label=Root
+    '_TN 32 + _TN !',                            # child → Node2
+    '0 _TN 8 + !',                                # next → 0
+    '_TL-ROOT _TN 24 + ! _TN 16 + !',            # label (addr, len)
+    # Node 2 (ChildA) at _TN + 32:  child=0, next=Node3, label=ChildA
+    '0 _TN 32 + !',                               # child → 0 (leaf)
+    '_TN 64 + _TN 32 + 8 + !',                    # next → Node3
+    '_TL-A _TN 32 + 24 + ! _TN 32 + 16 + !',     # label
+    # Node 3 (ChildB) at _TN + 64:  child=Node4, next=0, label=ChildB
+    '_TN 96 + _TN 64 + !',                        # child → Node4
+    '0 _TN 64 + 8 + !',                           # next → 0
+    '_TL-B _TN 64 + 24 + ! _TN 64 + 16 + !',     # label
+    # Node 4 (Grandchild) at _TN + 96:  child=0, next=0, label=Grandchild
+    '0 _TN 96 + !',                               # child → 0 (leaf)
+    '0 _TN 96 + 8 + !',                           # next → 0
+    '_TL-GC _TN 96 + 24 + ! _TN 96 + 16 + !',    # label
+    # Callbacks
+    ': _TC  @ ;',                                  # children-xt
+    ': _TN-NEXT  8 + @ ;',                        # next-xt (avoid reuse of _TN)
+    ': _TLB DUP 16 + @ SWAP 24 + @ ;',            # label-xt
+    ': _TLF @ 0= ;',                              # leaf?-xt
+    # Create tree widget
+    "DUP _TN  ' _TC  ' _TN-NEXT  ' _TLB  ' _TLF  TREE-NEW",
+]
+_TREE_CLEANUP = 'TREE-FREE RGN-FREE SCR-FREE'
+
+
+def test_tree_create():
+    """TREE-NEW creates a tree widget with type WDG-T-TREE."""
+    print("\n── TREE create ──")
+    check("type is WDG-T-TREE (11)",
+        _TREE_SETUP + [
+            'DUP WDG-TYPE . 8888 .',
+            _TREE_CLEANUP], "11 8888")
+    check("cursor starts at 0",
+        _TREE_SETUP + [
+            'DUP 80 + @ . 8888 .',  # _TREE-O-CURSOR = +80
+            _TREE_CLEANUP], "0 8888")
+
+
+def test_tree_vis_count():
+    """Initially only root is visible (children not expanded)."""
+    print("\n── TREE visible-count ──")
+    # Only root is visible at start (nothing expanded)
+    check("initial visible count = 1",
+        _TREE_SETUP + [
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "1 8888")
+
+
+def test_tree_expand():
+    """TREE-EXPAND expands a non-leaf node, revealing children."""
+    print("\n── TREE expand ──")
+    # Expand root → should show Root + ChildA + ChildB = 3 rows
+    check("expand root → 3 visible",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "3 8888")
+    # Expand root + expand ChildB → should show 4 rows
+    check("expand root + ChildB → 4 visible",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'DUP _TN 64 + TREE-EXPAND',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "4 8888")
+
+
+def test_tree_collapse():
+    """TREE-COLLAPSE hides children."""
+    print("\n── TREE collapse ──")
+    check("expand then collapse root → 1 visible",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'DUP _TN TREE-COLLAPSE',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "1 8888")
+
+
+def test_tree_toggle():
+    """TREE-TOGGLE flips expanded state."""
+    print("\n── TREE toggle ──")
+    check("toggle root (expand) → 3 visible",
+        _TREE_SETUP + [
+            'DUP _TN TREE-TOGGLE',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "3 8888")
+    check("toggle twice (expand then collapse) → 1 visible",
+        _TREE_SETUP + [
+            'DUP _TN TREE-TOGGLE',
+            'DUP _TN TREE-TOGGLE',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "1 8888")
+
+
+def test_tree_expand_leaf():
+    """TREE-EXPAND on a leaf is a no-op (does not crash)."""
+    print("\n── TREE expand-leaf ──")
+    # Expand root first to make ChildA visible, then try expanding ChildA (leaf)
+    check("expand leaf no-op",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'DUP _TN 32 + TREE-EXPAND',   # ChildA is a leaf
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "3 8888")  # still 3, not more
+
+
+def test_tree_expand_all():
+    """TREE-EXPAND-ALL expands everything."""
+    print("\n── TREE expand-all ──")
+    check("expand-all → 4 visible",
+        _TREE_SETUP + [
+            'DUP TREE-EXPAND-ALL',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "4 8888")
+
+
+def test_tree_nav_down():
+    """Down key moves cursor."""
+    print("\n── TREE nav-down ──")
+    # Expand root to have 3 rows, then press down
+    check("down moves cursor to 1",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP 80 + @ . 8888 .',   # cursor
+            _TREE_CLEANUP], "1 8888")
+    check("two downs → cursor 2",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP 80 + @ . 8888 .',
+            _TREE_CLEANUP], "2 8888")
+
+
+def test_tree_nav_up():
+    """Up key moves cursor."""
+    print("\n── TREE nav-up ──")
+    check("up from 0 stays at 0",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP 80 + @ . 8888 .',
+            _TREE_CLEANUP], "0 8888")
+    check("down then up back to 0",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP 80 + @ . 8888 .',
+            _TREE_CLEANUP], "0 8888")
+
+
+def test_tree_nav_clamp():
+    """Down key clamps cursor to last visible row."""
+    print("\n── TREE nav-clamp ──")
+    # Only 1 visible row (root collapsed), down should stay at 0
+    check("clamp at single row",
+        _TREE_SETUP + [
+            'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP 80 + @ . 8888 .',
+            _TREE_CLEANUP], "0 8888")
+
+
+def test_tree_nav_expand_key():
+    """Right key expands node at cursor."""
+    print("\n── TREE nav-right-expand ──")
+    # Cursor is at row 0 (Root).  Right should expand root.
+    check("right key expands root",
+        _TREE_SETUP + [
+            'KEY-T-SPECIAL _EV ! KEY-RIGHT _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "3 8888")
+
+
+def test_tree_nav_collapse_key():
+    """Left key collapses node at cursor."""
+    print("\n── TREE nav-left-collapse ──")
+    check("left key collapses root",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'KEY-T-SPECIAL _EV ! KEY-LEFT _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "1 8888")
+
+
+def test_tree_nav_enter():
+    """Enter key toggles expand and fires selection callback."""
+    print("\n── TREE nav-enter ──")
+    check("enter toggles root expand",
+        _TREE_SETUP + [
+            'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "3 8888")
+
+
+def test_tree_selected():
+    """TREE-SELECTED returns the node at cursor."""
+    print("\n── TREE selected ──")
+    # Root at cursor 0
+    check("selected at cursor 0 is root",
+        _TREE_SETUP + [
+            'DUP TREE-SELECTED _TN = . 8888 .',
+            _TREE_CLEANUP], "-1 8888")
+    # Expand, move down to cursor 1 → should be ChildA (at _TN + 32)
+    check("selected at cursor 1 is ChildA",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            'DUP TREE-SELECTED _TN 32 + = . 8888 .',
+            _TREE_CLEANUP], "-1 8888")
+
+
+def test_tree_on_select():
+    """Selection callback is invoked on Enter."""
+    print("\n── TREE on-select ──")
+    check("on-select callback fires",
+        _TREE_SETUP + [
+            'VARIABLE _SEL-FIRED  0 _SEL-FIRED !',
+            ": _ONSF  DROP -1 _SEL-FIRED ! ;",
+            "DUP ' _ONSF TREE-ON-SELECT",
+            'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            '_SEL-FIRED @ . 8888 .',
+            _TREE_CLEANUP], "-1 8888")
+
+
+def test_tree_draw():
+    """WDG-DRAW on tree does not crash."""
+    print("\n── TREE draw ──")
+    check("draw does not crash",
+        _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
+            'DUP WDG-DRAW',
+            '8888 .',
+            _TREE_CLEANUP], "8888")
+
+
+def test_tree_handle_unrelated():
+    """Unrelated key is not consumed (returns 0)."""
+    print("\n── TREE unrelated key ──")
+    check("printable key not consumed",
+        _TREE_SETUP + [
+            '65 _EV ! 0 _EV 8 + ! 0 _EV 16 + !',   # 'A', not special
+            '_EV OVER WDG-HANDLE . 8888 .',
+            _TREE_CLEANUP], "0 8888")
+
+
+def test_tree_free():
+    """TREE-FREE does not crash."""
+    print("\n── TREE free ──")
+    check("free does not crash",
+        _TREE_SETUP + [
+            _TREE_CLEANUP,
+            '8888 .'], "8888")
+
+
 if __name__ == "__main__":
     build_snapshot()
 
@@ -3002,6 +3516,43 @@ if __name__ == "__main__":
     test_dlg_modal_tab_enter()
     test_dlg_modal_arrow_enter()
     test_dlg_free()
+
+    # Canvas tests (Layer 7)
+    test_cvs_create()
+    test_cvs_set_get()
+    test_cvs_clr()
+    test_cvs_oob()
+    test_cvs_pen()
+    test_cvs_stamp()
+    test_cvs_color_direct()
+    test_cvs_clear()
+    test_cvs_line()
+    test_cvs_rect()
+    test_cvs_fill_rect()
+    test_cvs_circle()
+    test_cvs_draw()
+    test_cvs_handle()
+    test_cvs_free()
+
+    # Tree tests (Layer 7)
+    test_tree_create()
+    test_tree_vis_count()
+    test_tree_expand()
+    test_tree_collapse()
+    test_tree_toggle()
+    test_tree_expand_leaf()
+    test_tree_expand_all()
+    test_tree_nav_down()
+    test_tree_nav_up()
+    test_tree_nav_clamp()
+    test_tree_nav_expand_key()
+    test_tree_nav_collapse_key()
+    test_tree_nav_enter()
+    test_tree_selected()
+    test_tree_on_select()
+    test_tree_draw()
+    test_tree_handle_unrelated()
+    test_tree_free()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")
