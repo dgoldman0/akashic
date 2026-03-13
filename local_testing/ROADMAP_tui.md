@@ -3670,10 +3670,10 @@ Estimated size: ~200 lines
 | 31 | tui/toast.f | 7 | draw, box, region | ~120 | ❌ Not started |
 | 32 | tui/tree.f | 7 | draw, region, scroll | ~250 | ❌ Not started |
 | 33 | tui/canvas.f | 7 | draw, region | ~200 | ❌ Not started |
-| 34 | tui/app-image.f | 8 | app, binimg | ~80 | ❌ Not started |
-| 35 | tui/app-manifest.f | 8 | lcf | ~120 | ❌ Not started |
+| 34 | tui/app-image.f | 8 | app, binimg | 115 | ✅ Done |
+| 35 | tui/app-manifest.f | 8 | toml | 256 | ✅ Done |
 | 36 | tui/app-launcher.f | 8 | app, app-image, app-manifest, list, draw, box, label | ~200 | ❌ Not started |
-| | **Total** | | | **~7,570** | |
+| | **Total** | | | **~7,740** | |
 
 Build from bottom up: Layer 0 first (ansi + keys), then Layer 1
 (cell + screen), and so on.  Within each layer, files are independent
