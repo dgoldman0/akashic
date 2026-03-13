@@ -28,6 +28,7 @@ PROVIDED akashic-tui-event
 REQUIRE keys.f
 REQUIRE screen.f
 REQUIRE focus.f
+REQUIRE ../utils/term.f
 
 \ =====================================================================
 \  §1 — State Variables
@@ -176,6 +177,18 @@ VARIABLE _TUI-EVT-TMP
         ELSE DROP THEN
     ELSE DROP THEN ;
 
+\ _TUI-EVT-CHECK-HW-RESIZE ( -- )
+\   Poll the UART geometry RESIZED? flag.  If set, read the new
+\   dimensions from the hardware and invoke the resize callback.
+\   This complements the ANSI-escape-based KEY-T-RESIZE path.
+: _TUI-EVT-CHECK-HW-RESIZE  ( -- )
+    TERM-RESIZED? IF
+        _TUI-EVT-ON-RESIZE-XT @ ?DUP IF
+            TERM-SIZE           \ ( xt w h )
+            ROT EXECUTE
+        THEN
+    THEN ;
+
 \ =====================================================================
 \  §8 — Main Event Loop
 \ =====================================================================
@@ -199,15 +212,17 @@ VARIABLE _TUI-EVT-TMP
                 _TUI-EVT-KEY-BUF FOC-DISPATCH
             THEN
         THEN
-        \ 4. Run deferred actions
+        \ 4. Hardware resize poll
+        _TUI-EVT-CHECK-HW-RESIZE
+        \ 5. Run deferred actions
         _TUI-EVT-DRAIN-POSTED
-        \ 5. Timer tick
+        \ 6. Timer tick
         _TUI-EVT-CHECK-TICK
-        \ 6. Draw dirty widgets
+        \ 7. Draw dirty widgets
         _TUI-EVT-DRAW-DIRTY
-        \ 7. Flush screen
+        \ 8. Flush screen
         SCR-FLUSH
-        \ 8. Cooperative yield
+        \ 9. Cooperative yield
         YIELD?
     REPEAT ;
 

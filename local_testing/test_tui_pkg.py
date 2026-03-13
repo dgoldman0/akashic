@@ -54,6 +54,7 @@ _IMG_DEPS = [
     os.path.join(AK, "tui",   "layout.f"),
     os.path.join(AK, "tui",   "widget.f"),
     os.path.join(AK, "tui",   "focus.f"),
+    os.path.join(AK, "utils", "term.f"),
     os.path.join(AK, "tui",   "event.f"),
     os.path.join(AK, "tui",   "app.f"),
     os.path.join(AK, "utils", "binimg.f"),

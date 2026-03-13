@@ -1,10 +1,10 @@
 # akashic/tui/app.f — TUI Application Lifecycle
 
 **Layer:** 6  
-**Lines:** ~140  
+**Lines:** 155  
 **Prefix:** `APP-` (public), `_APP-` (internal)  
 **Provider:** `akashic-tui-app`  
-**Dependencies:** `ansi.f`, `screen.f`, `event.f`, `focus.f`
+**Dependencies:** `ansi.f`, `screen.f`, `event.f`, `focus.f`, `utils/term.f`
 
 ## Overview
 
@@ -25,7 +25,7 @@ Not reentrant.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `APP-INIT` | `( w h -- )` | Enter alternate screen, hide cursor, clear screen, create `w×h` screen buffer, set as current, clear focus chain. Idempotent — second call is a no-op. |
+| `APP-INIT` | `( w h -- )` | Enter alternate screen, hide cursor, clear screen, create `w×h` screen buffer, set as current, clear focus chain. Idempotent — second call is a no-op. **Auto-size:** if both w and h are 0, reads hardware terminal dimensions via `TERM-SIZE`. |
 | `APP-RUN` | `( -- )` | Enter `TUI-EVT-LOOP`. Blocks until `TUI-EVT-QUIT`. |
 | `APP-SHUTDOWN` | `( -- )` | Free screen, clear focus chain, reset attributes, show cursor, leave alternate screen. Safe to call without prior `APP-INIT` (no-op). |
 | `APP-RUN-FULL` | `( init-xt w h -- )` | Convenience: `APP-INIT`, execute `init-xt`, `APP-RUN`, `APP-SHUTDOWN`. Uses `CATCH` for cleanup on `THROW`. |

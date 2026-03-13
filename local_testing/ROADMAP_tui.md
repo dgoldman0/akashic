@@ -3662,8 +3662,9 @@ Estimated size: ~200 lines
 | 24 | tui/uidl-tui.f | 5a | uidl.f, uidl-chrome.f, liraq/*, Layers 0–4 | ~500 | ❌ Not started |
 | 25 | tui/focus.f | 6 | keys, widget | 280 | ✅ Done |
 | 25b | tui/focus-2d.f | 6 | focus, keys, widget, region | 216 | ✅ Done |
-| 26 | tui/event.f | 6 | keys, screen, focus | 240 | ✅ Done |
-| 27 | tui/app.f | 6 | ansi, screen, event, focus | 140 | ✅ Done |
+| 25c | utils/term.f | — | BIOS only | 170 | ✅ Done |
+| 26 | tui/event.f | 6 | keys, screen, focus, term | 254 | ✅ Done |
+| 27 | tui/app.f | 6 | ansi, screen, event, focus, term | 155 | ✅ Done |
 | 28 | tui/split.f | 7 | region, draw | ~150 | ❌ Not started |
 | 29 | tui/scroll.f | 7 | region, draw | ~180 | ❌ Not started |
 | 30 | tui/status.f | 7 | draw, region | ~100 | ❌ Not started |
@@ -3673,7 +3674,7 @@ Estimated size: ~200 lines
 | 34 | tui/app-image.f | 8 | app, binimg | 115 | ✅ Done |
 | 35 | tui/app-manifest.f | 8 | toml | 256 | ✅ Done |
 | 36 | tui/app-launcher.f | 8 | app, app-image, app-manifest, list, draw, box, label | ~200 | ❌ Not started |
-| | **Total** | | | **~7,740** | |
+| | **Total** | | | **~7,939** | |
 
 Build from bottom up: Layer 0 first (ansi + keys), then Layer 1
 (cell + screen), and so on.  Within each layer, files are independent

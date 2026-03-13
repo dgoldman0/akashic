@@ -27,6 +27,7 @@ REQUIRE ansi.f
 REQUIRE screen.f
 REQUIRE event.f
 REQUIRE focus.f
+REQUIRE ../utils/term.f
 
 \ =====================================================================
 \  §1 — State
@@ -51,6 +52,10 @@ VARIABLE _APP-INITED       \ TRUE after APP-INIT, FALSE after SHUTDOWN
 
 : APP-INIT  ( w h -- )
     _APP-INITED @ IF 2DROP EXIT THEN   \ idempotent
+    \ Auto-size: if both dimensions are 0, use hardware terminal size.
+    OVER 0= OVER 0= AND IF
+        2DROP TERM-SIZE
+    THEN
     ANSI-ALT-ON
     ANSI-CURSOR-OFF
     ANSI-RESET

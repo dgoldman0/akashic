@@ -1,10 +1,10 @@
 # akashic/tui/event.f — TUI Event Loop & Dispatch
 
 **Layer:** 6  
-**Lines:** 240  
+**Lines:** 254  
 **Prefix:** `TUI-EVT-` (public), `_TUI-EVT-` (internal)  
 **Provider:** `akashic-tui-event`  
-**Dependencies:** `keys.f`, `screen.f`, `focus.f`
+**Dependencies:** `keys.f`, `screen.f`, `focus.f`, `utils/term.f`
 
 ## Overview
 
@@ -28,13 +28,16 @@ Each iteration of the loop performs the following steps in order:
    A true return consumes the event.
 4. **Focus dispatch** — if the event was not consumed, forward it to
    the focused widget via `FOC-DISPATCH`.
-5. **Drain posted actions** — execute all queued deferred actions (FIFO).
-6. **Timer tick** — if enough time has elapsed since the last tick,
+5. **Hardware resize poll** — `TERM-RESIZED?` checks the UART
+   geometry RESIZED flag.  If set, reads `TERM-SIZE` and invokes
+   the resize callback.  Complements the ANSI-based path.
+6. **Drain posted actions** — execute all queued deferred actions (FIFO).
+7. **Timer tick** — if enough time has elapsed since the last tick,
    invoke the tick callback.
-7. **Draw dirty widgets** — walk the focus chain via `FOC-EACH` and
+8. **Draw dirty widgets** — walk the focus chain via `FOC-EACH` and
    redraw any widget with its dirty flag set.
-8. **Flush screen** — `SCR-FLUSH` pushes the back-buffer to the terminal.
-9. **Cooperative yield** — `YIELD?` returns the CPU slice to KDOS.
+9. **Flush screen** — `SCR-FLUSH` pushes the back-buffer to the terminal.
+10. **Cooperative yield** — `YIELD?` returns the CPU slice to KDOS.
 
 ## API Reference
 
