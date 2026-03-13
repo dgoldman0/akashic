@@ -507,6 +507,11 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     DROP _UTUI-FILL-BG ;
 
+\ --- Canvas: fill background (actual CVS-* drawing is app-level) ---
+: _UTUI-RENDER-CANVAS  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    DROP _UTUI-FILL-BG ;
+
 \ --- Scroll ---
 : _UTUI-RENDER-SCROLL  ( elem -- )
     _UTUI-RENDER-REGION ;
@@ -565,6 +570,7 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
 : _UTUI-H-TREE     ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-TABS     ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-DIALOG   ( elem key-ev -- handled? ) 2DROP 0 ;
+: _UTUI-H-CANVAS   ( elem key-ev -- handled? ) 2DROP 0 ;
 
 \ =====================================================================
 \  §7 — Layout Words (layout-xt implementations)
@@ -796,6 +802,7 @@ VARIABLE _UDL-DLG-SC
     ['] _UTUI-RENDER-TREE      S" tree"       _UTUI-INST-R
     ['] _UTUI-RENDER-TEXTAREA  S" textarea"   _UTUI-INST-R
     ['] _UTUI-RENDER-SCROLL    S" scroll"     _UTUI-INST-R
+    ['] _UTUI-RENDER-CANVAS    S" canvas"     _UTUI-INST-R
     ['] _UTUI-RENDER-NOP       S" template"   _UTUI-INST-R
     ['] _UTUI-RENDER-NOP       S" empty"      _UTUI-INST-R
     ['] _UTUI-RENDER-NOP       S" rep"        _UTUI-INST-R
@@ -813,6 +820,7 @@ VARIABLE _UDL-DLG-SC
     ['] _UTUI-H-TREE           S" tree"       _UTUI-INST-E
     ['] _UTUI-H-TABS           S" tabs"       _UTUI-INST-E
     ['] _UTUI-H-DIALOG         S" dialog"     _UTUI-INST-E
+    ['] _UTUI-H-CANVAS         S" canvas"     _UTUI-INST-E
 
     \ --- Layout XTs ---
     ['] _UTUI-LAYOUT-DISPATCH  S" region"     _UTUI-INST-L
