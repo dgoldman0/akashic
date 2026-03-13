@@ -1,4 +1,4 @@
-# akashic/tui/menu.f — Menu Bar & Dropdown Menus
+# akashic/tui/widgets/menu.f — Menu Bar & Dropdown Menus
 
 **Layer:** 4C  
 **Lines:** ~280  

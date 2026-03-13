@@ -32,10 +32,10 @@
 
 PROVIDED akashic-tui-input
 
-REQUIRE widget.f
-REQUIRE draw.f
-REQUIRE ../text/utf8.f
-REQUIRE keys.f
+REQUIRE ../widget.f
+REQUIRE ../draw.f
+REQUIRE ../../text/utf8.f
+REQUIRE ../keys.f
 
 \ =====================================================================
 \ 1. Descriptor layout
@@ -461,7 +461,7 @@ VARIABLE _INP-DRW-RW     \ region width during draw
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _inp-guard
 
 ' INP-NEW             CONSTANT _inp-new-xt

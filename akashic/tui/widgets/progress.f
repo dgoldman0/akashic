@@ -26,8 +26,8 @@
 
 PROVIDED akashic-tui-progress
 
-REQUIRE widget.f
-REQUIRE draw.f
+REQUIRE ../widget.f
+REQUIRE ../draw.f
 
 \ =====================================================================
 \ 1. Descriptor layout
@@ -245,7 +245,7 @@ VARIABLE _PRG-DB-COL     \ current column
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _prg-guard
 
 ' PRG-NEW         CONSTANT _prg-new-xt

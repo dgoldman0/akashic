@@ -1,4 +1,4 @@
-# akashic/tui/tabs.f — Tabbed Panel Widget
+# akashic/tui/widgets/tabs.f — Tabbed Panel Widget
 
 **Layer:** 4B  
 **Lines:** 282  

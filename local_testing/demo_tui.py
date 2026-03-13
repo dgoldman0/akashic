@@ -51,13 +51,13 @@ from diskutil import MP64FS, FTYPE_FORTH      # noqa: E402
 #    /tui/region.f    — TUI layer 3
 #    /tui/layout.f    — TUI layer 3
 #    /tui/widget.f    — TUI layer 4
-#    /tui/label.f     — TUI layer 4
-#    /tui/progress.f  — TUI layer 4
-#    /tui/input.f     — TUI layer 4
-#    /tui/list.f      — TUI layer 4
-#    /tui/tabs.f      — TUI layer 4
-#    /tui/menu.f      — TUI layer 4
-#    /tui/dialog.f    — TUI layer 4
+#    /tui/widgets/label.f     — TUI layer 4
+#    /tui/widgets/progress.f  — TUI layer 4
+#    /tui/widgets/input.f     — TUI layer 4
+#    /tui/widgets/list.f      — TUI layer 4
+#    /tui/widgets/tabs.f      — TUI layer 4
+#    /tui/widgets/menu.f      — TUI layer 4
+#    /tui/widgets/dialog.f    — TUI layer 4
 #    /test_tui.f      — demo application
 # ---------------------------------------------------------------------------
 
@@ -73,13 +73,13 @@ TUI_DISK_FILES = [
     ("region.f",   "/tui",  os.path.join(TUI_DIR, "region.f")),
     ("layout.f",   "/tui",  os.path.join(TUI_DIR, "layout.f")),
     ("widget.f",   "/tui",  os.path.join(TUI_DIR, "widget.f")),
-    ("label.f",    "/tui",  os.path.join(TUI_DIR, "label.f")),
-    ("progress.f", "/tui",  os.path.join(TUI_DIR, "progress.f")),
-    ("input.f",    "/tui",  os.path.join(TUI_DIR, "input.f")),
-    ("list.f",     "/tui",  os.path.join(TUI_DIR, "list.f")),
-    ("tabs.f",     "/tui",  os.path.join(TUI_DIR, "tabs.f")),
-    ("menu.f",     "/tui",  os.path.join(TUI_DIR, "menu.f")),
-    ("dialog.f",   "/tui",  os.path.join(TUI_DIR, "dialog.f")),
+    ("label.f",    "/tui/widgets",  os.path.join(TUI_DIR, "widgets", "label.f")),
+    ("progress.f", "/tui/widgets",  os.path.join(TUI_DIR, "widgets", "progress.f")),
+    ("input.f",    "/tui/widgets",  os.path.join(TUI_DIR, "widgets", "input.f")),
+    ("list.f",     "/tui/widgets",  os.path.join(TUI_DIR, "widgets", "list.f")),
+    ("tabs.f",     "/tui/widgets",  os.path.join(TUI_DIR, "widgets", "tabs.f")),
+    ("menu.f",     "/tui/widgets",  os.path.join(TUI_DIR, "widgets", "menu.f")),
+    ("dialog.f",   "/tui/widgets",  os.path.join(TUI_DIR, "widgets", "dialog.f")),
 ]
 
 # ---------------------------------------------------------------------------
@@ -91,13 +91,13 @@ TEST_TUI_F = r"""\ test_tui.f — Akashic TUI Dashboard Demo
 \ Requires the full TUI stack.
 
 REQUIRE tui/layout.f
-REQUIRE tui/label.f
-REQUIRE tui/progress.f
-REQUIRE tui/input.f
-REQUIRE tui/list.f
-REQUIRE tui/tabs.f
-REQUIRE tui/menu.f
-REQUIRE tui/dialog.f
+REQUIRE tui/widgets/label.f
+REQUIRE tui/widgets/progress.f
+REQUIRE tui/widgets/input.f
+REQUIRE tui/widgets/list.f
+REQUIRE tui/widgets/tabs.f
+REQUIRE tui/widgets/menu.f
+REQUIRE tui/widgets/dialog.f
 
 \ --- Helper: copy transient S" string to ALLOCATEd buffer ---
 VARIABLE _sd-src   VARIABLE _sd-len   VARIABLE _sd-dst

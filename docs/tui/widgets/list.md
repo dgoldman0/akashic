@@ -1,4 +1,4 @@
-# akashic/tui/list.f — Scrollable List Widget
+# akashic/tui/widgets/list.f — Scrollable List Widget
 
 **Layer:** 4B  
 **Lines:** 280  

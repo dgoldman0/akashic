@@ -27,9 +27,9 @@
 
 PROVIDED akashic-tui-list
 
-REQUIRE widget.f
-REQUIRE draw.f
-REQUIRE keys.f
+REQUIRE ../widget.f
+REQUIRE ../draw.f
+REQUIRE ../keys.f
 
 \ =====================================================================
 \ 1. Descriptor layout
@@ -264,7 +264,7 @@ VARIABLE _LST-HND-W   \ widget saved during handle
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _lst-guard
 
 ' LST-NEW         CONSTANT _lst-new-xt

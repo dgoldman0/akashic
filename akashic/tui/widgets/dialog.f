@@ -27,12 +27,12 @@
 
 PROVIDED akashic-tui-dialog
 
-REQUIRE keys.f
-REQUIRE screen.f
-REQUIRE widget.f
-REQUIRE draw.f
-REQUIRE box.f
-REQUIRE region.f
+REQUIRE ../keys.f
+REQUIRE ../screen.f
+REQUIRE ../widget.f
+REQUIRE ../draw.f
+REQUIRE ../box.f
+REQUIRE ../region.f
 
 \ =====================================================================
 \ 1. Descriptor layout
@@ -434,7 +434,7 @@ CREATE _DLG-YN-BTNS 32 ALLOT
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _dlg-guard
 
 ' DLG-NEW         CONSTANT _dlg-new-xt

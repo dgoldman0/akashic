@@ -1,4 +1,4 @@
-# akashic/tui/progress.f — Progress Bar & Spinner Widget
+# akashic/tui/widgets/progress.f — Progress Bar & Spinner Widget
 
 **Layer:** 4A  
 **Lines:** 263  

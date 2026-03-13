@@ -18,8 +18,8 @@
 
 PROVIDED akashic-tui-label
 
-REQUIRE widget.f
-REQUIRE draw.f
+REQUIRE ../widget.f
+REQUIRE ../draw.f
 
 \ =====================================================================
 \ 1. Descriptor layout
@@ -195,7 +195,7 @@ VARIABLE _LBL-CON-BLEN
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _lbl-guard
 
 ' LBL-NEW         CONSTANT _lbl-new-xt

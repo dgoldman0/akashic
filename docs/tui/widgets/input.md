@@ -1,4 +1,4 @@
-# akashic/tui/input.f — Text Input Widget
+# akashic/tui/widgets/input.f — Text Input Widget
 
 **Layer:** 4B  
 **Lines:** 485  

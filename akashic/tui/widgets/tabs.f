@@ -28,11 +28,11 @@
 
 PROVIDED akashic-tui-tabs
 
-REQUIRE widget.f
-REQUIRE draw.f
-REQUIRE box.f
-REQUIRE region.f
-REQUIRE keys.f
+REQUIRE ../widget.f
+REQUIRE ../draw.f
+REQUIRE ../box.f
+REQUIRE ../region.f
+REQUIRE ../keys.f
 
 \ =====================================================================
 \ 1. Descriptor layout
@@ -260,7 +260,7 @@ VARIABLE _TAB-HND-W   \ widget saved during handle
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _tab-guard
 
 ' TAB-NEW         CONSTANT _tab-new-xt

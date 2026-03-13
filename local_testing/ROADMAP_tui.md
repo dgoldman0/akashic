@@ -37,14 +37,14 @@ and no circular imports.
   - [3.1 tui/region.f — Rectangular Regions](#31-tuiregionf--rectangular-regions)
   - [3.2 tui/layout.f — Container Layout](#32-tuilayoutf--container-layout)
 - [Layer 4 — Widgets](#layer-4--widgets)
-  - [4.1 tui/label.f — Static Text Labels](#41-tuilabelf--static-text-labels)
-  - [4.2 tui/input.f — Text Input Field](#42-tuiinputf--text-input-field)
-  - [4.3 tui/list.f — Scrollable List](#43-tuilistf--scrollable-list)
-  - [4.4 tui/menu.f — Menu Bar & Dropdown Menus](#44-tuimenuf--menu-bar--dropdown-menus)
-  - [4.5 tui/progress.f — Progress Bar & Spinner](#45-tuiprogressf--progress-bar--spinner)
+  - [4.1 tui/widgets/label.f — Static Text Labels](#41-tuilabelf--static-text-labels)
+  - [4.2 tui/widgets/input.f — Text Input Field](#42-tuiinputf--text-input-field)
+  - [4.3 tui/widgets/list.f — Scrollable List](#43-tuilistf--scrollable-list)
+  - [4.4 tui/widgets/menu.f — Menu Bar & Dropdown Menus](#44-tuimenuf--menu-bar--dropdown-menus)
+  - [4.5 tui/widgets/progress.f — Progress Bar & Spinner](#45-tuiprogressf--progress-bar--spinner)
   - [4.6 tui/table.f — Tabular Data Display](#46-tuitablef--tabular-data-display)
-  - [4.7 tui/dialog.f — Modal Dialog Boxes](#47-tuidialogyf--modal-dialog-boxes)
-  - [4.8 tui/tabs.f — Tabbed Panels](#48-tuitabsf--tabbed-panels)
+  - [4.7 tui/widgets/dialog.f — Modal Dialog Boxes](#47-tuidialogyf--modal-dialog-boxes)
+  - [4.8 tui/widgets/tabs.f — Tabbed Panels](#48-tuitabsf--tabbed-panels)
 - [Layer 5 — DOM-TUI Bridge](#layer-5--dom-tui-bridge)
   - [5.0 dom/event.f — DOM Event System](#50-domeventf--dom-event-system)
   - [5.1 tui/dom-tui.f — DOM-to-TUI Node Mapping](#51-tuidom-tuif--dom-to-tui-node-mapping)
@@ -58,12 +58,12 @@ and no circular imports.
   - [6.2b tui/focus-2d.f — Spatial Focus Navigation](#62b-tuifocus-2df--spatial-focus-navigation)
   - [6.3 tui/app.f — Application Lifecycle](#63-tuiappf--application-lifecycle)
 - [Layer 7 — Extended Components](#layer-7--extended-components)
-  - [7.1 tui/split.f — Split Panes](#71-tuisplitf--split-panes)
-  - [7.2 tui/scroll.f — Scrollable Viewport](#72-tuiscrollf--scrollable-viewport)
-  - [7.3 tui/tree.f — Tree View](#73-tuitreef--tree-view)
-  - [7.4 tui/status.f — Status Bar](#74-tuistatusf--status-bar)
-  - [7.5 tui/toast.f — Transient Notifications](#75-tuitoastf--transient-notifications)
-  - [7.6 tui/canvas.f — Character-Mode Canvas](#76-tuicanvasf--character-mode-canvas)
+  - [7.1 tui/widgets/split.f — Split Panes](#71-tuisplitf--split-panes)
+  - [7.2 tui/widgets/scroll.f — Scrollable Viewport](#72-tuiscrollf--scrollable-viewport)
+  - [7.3 tui/widgets/tree.f — Tree View](#73-tuitreef--tree-view)
+  - [7.4 tui/widgets/status.f — Status Bar](#74-tuistatusf--status-bar)
+  - [7.5 tui/widgets/toast.f — Transient Notifications](#75-tuitoastf--transient-notifications)
+  - [7.6 tui/widgets/canvas.f — Character-Mode Canvas](#76-tuicanvasf--character-mode-canvas)
 - [Layer 8 — Application Packaging (optional)](#layer-8--application-packaging-optional)
   - [8.1 tui/app-image.f — Binary Image Wrapper](#81-tuiapp-imagef--binary-image-wrapper)
   - [8.2 tui/app-manifest.f — Application Manifest](#82-tuiapp-manifestf--application-manifest)
@@ -187,24 +187,24 @@ column.
    - `tui/box.f`      → `BOX-`
    - `tui/region.f`   → `RGN-`
    - `tui/layout.f`   → `LAY-`
-   - `tui/label.f`    → `LBL-`
-   - `tui/input.f`    → `INP-`
-   - `tui/list.f`     → `LST-`
-   - `tui/menu.f`     → `MNU-`
-   - `tui/progress.f` → `PRG-`
+   - `tui/widgets/label.f`    → `LBL-`
+   - `tui/widgets/input.f`    → `INP-`
+   - `tui/widgets/list.f`     → `LST-`
+   - `tui/widgets/menu.f`     → `MNU-`
+   - `tui/widgets/progress.f` → `PRG-`
    - `tui/table.f`    → `TBL-`
-   - `tui/dialog.f`   → `DLG-`
-   - `tui/tabs.f`     → `TAB-`
+   - `tui/widgets/dialog.f`   → `DLG-`
+   - `tui/widgets/tabs.f`     → `TAB-`
    - `tui/event.f`    → `TUI-EVT-`
    - `tui/focus.f`    → `FOC-`
    - `tui/focus-2d.f` → `F2D-`
    - `tui/app.f`      → `APP-`
-   - `tui/split.f`    → `SPL-`
-   - `tui/scroll.f`   → `SCRL-`
-   - `tui/tree.f`     → `TREE-`
-   - `tui/status.f`   → `SBAR-`
-   - `tui/toast.f`    → `TST-`
-   - `tui/canvas.f`   → `CVS-`
+   - `tui/widgets/split.f`    → `SPL-`
+   - `tui/widgets/scroll.f`   → `SCRL-`
+   - `tui/widgets/tree.f`     → `TREE-`
+   - `tui/widgets/status.f`   → `SBAR-`
+   - `tui/widgets/toast.f`    → `TST-`
+   - `tui/widgets/canvas.f`   → `CVS-`
    - `tui/app-image.f`→ `APPI-`
    - `tui/app-manifest.f`→ `MFT-`
    - `tui/app-launcher.f`→ `LAUNCH-`
@@ -261,7 +261,7 @@ primitives.  Both converge on the screen buffer.
 │  ▲ consumes: liraq/,    │                                    │
 │    markup/, Layers 0–4  │                                    │
 ├─────────────────────────┴────────────────────────────────────┤
-│  Layer 4: Widgets                                            │
+│  Layer 4: Widgets  (tui/widgets/)                            │
 │  label │ input │ list │ menu │ progress │ table │ dialog│tabs│
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 3: Layout Engine                                      │
@@ -1043,13 +1043,13 @@ These apply to **any** widget via the common header:
 
 ---
 
-### 4.1 tui/label.f — Static Text Labels
+### 4.1 tui/widgets/label.f — Static Text Labels
 
 **Goal:** Display a fixed text string within a region.  Supports
 single-line and multi-line text, with left/center/right alignment.
 Labels are non-interactive (handle-xt is a no-op).
 
-File: `tui/label.f`
+File: `tui/widgets/label.f`
 Prefix: `LBL-` (public)
 Provider: `PROVIDED akashic-tui-label`
 Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
@@ -1083,13 +1083,13 @@ Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
 
 ---
 
-### 4.2 tui/input.f — Text Input Field
+### 4.2 tui/widgets/input.f — Text Input Field
 
 **Goal:** Single-line editable text field with cursor.  Supports
 character insertion, deletion, cursor movement, and a submit
 callback.
 
-File: `tui/input.f`
+File: `tui/widgets/input.f`
 Prefix: `INP-` (public), `_INP-` (internal)
 Provider: `PROVIDED akashic-tui-input`
 Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`, `REQUIRE ../text/utf8.f`
@@ -1165,13 +1165,13 @@ with at least 3 columns of context.
 
 ---
 
-### 4.3 tui/list.f — Scrollable List
+### 4.3 tui/widgets/list.f — Scrollable List
 
 **Goal:** Vertically scrollable list of selectable items.  Supports
 keyboard navigation (up/down/pgup/pgdn), selection highlight,
 and a selection-changed callback.
 
-File: `tui/list.f`
+File: `tui/widgets/list.f`
 Prefix: `LST-` (public), `_LST-` (internal)
 Provider: `PROVIDED akashic-tui-list`
 Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
@@ -1234,13 +1234,13 @@ resets the search buffer.
 
 ---
 
-### 4.4 tui/menu.f — Menu Bar & Dropdown Menus
+### 4.4 tui/widgets/menu.f — Menu Bar & Dropdown Menus
 
 **Goal:** Horizontal menu bar with dropdown menus.  Each menu
 contains a list of items with labels, optional shortcuts, and
 action callbacks.  Escape or click-away dismisses.
 
-File: `tui/menu.f`
+File: `tui/widgets/menu.f`
 Prefix: `MNU-` (public), `_MNU-` (internal)
 Provider: `PROVIDED akashic-tui-menu`
 Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`
@@ -1292,13 +1292,13 @@ Each top-level menu entry: `( label-a label-u items-addr item-count )` — 4 cel
 
 ---
 
-### 4.5 tui/progress.f — Progress Bar & Spinner
+### 4.5 tui/widgets/progress.f — Progress Bar & Spinner
 
 **Goal:** Visual progress indicators.  A progress bar shows a
 filled/empty ratio.  A spinner shows animated indeterminate
 progress (requires periodic redraws from the event loop).
 
-File: `tui/progress.f`
+File: `tui/widgets/progress.f`
 Prefix: `PRG-` (public), `_PRG-` (internal)
 Provider: `PROVIDED akashic-tui-progress`
 Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
@@ -1412,13 +1412,13 @@ performance) and picks the widest value or header length.
 
 ---
 
-### 4.7 tui/dialog.f — Modal Dialog Boxes
+### 4.7 tui/widgets/dialog.f — Modal Dialog Boxes
 
 **Goal:** Modal popup dialog with a message and buttons.  Blocks
 input to other widgets while visible.  Returns which button was
 pressed.
 
-File: `tui/dialog.f`
+File: `tui/widgets/dialog.f`
 Prefix: `DLG-` (public), `_DLG-` (internal)
 Provider: `PROVIDED akashic-tui-dialog`
 Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`, `REQUIRE label.f`
@@ -1469,13 +1469,13 @@ count, centered within the current screen.
 
 ---
 
-### 4.8 tui/tabs.f — Tabbed Panels
+### 4.8 tui/widgets/tabs.f — Tabbed Panels
 
 **Goal:** A row of tab headers with a content area below.  Each tab
 has a label and a child region.  Switching tabs shows the
 corresponding content region and hides others.
 
-File: `tui/tabs.f`
+File: `tui/widgets/tabs.f`
 Prefix: `TAB-` (public), `_TAB-` (internal)
 Provider: `PROVIDED akashic-tui-tabs`
 Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`
@@ -3116,12 +3116,12 @@ main
 
 ## Layer 7 — Extended Components
 
-### 7.1 tui/split.f — Split Panes
+### 7.1 tui/widgets/split.f — Split Panes
 
 **Goal:** Divide a region into two panes (horizontal or vertical
 split), with an optional draggable divider.
 
-File: `tui/split.f`
+File: `tui/widgets/split.f`
 Prefix: `SPL-` (public)
 Provider: `PROVIDED akashic-tui-split`
 Dependencies: `REQUIRE region.f`, `REQUIRE draw.f`
@@ -3158,13 +3158,13 @@ Dependencies: `REQUIRE region.f`, `REQUIRE draw.f`
 
 ---
 
-### 7.2 tui/scroll.f — Scrollable Viewport
+### 7.2 tui/widgets/scroll.f — Scrollable Viewport
 
 **Goal:** A generic scrollable viewport — wraps any content that
 is larger than its visible region.  Provides vertical and
 horizontal scrolling with optional scroll indicators.
 
-File: `tui/scroll.f`
+File: `tui/widgets/scroll.f`
 Prefix: `SCRL-` (public), `_SCRL-` (internal)
 Provider: `PROVIDED akashic-tui-scroll`
 Dependencies: `REQUIRE region.f`, `REQUIRE draw.f`
@@ -3204,13 +3204,13 @@ Dependencies: `REQUIRE region.f`, `REQUIRE draw.f`
 
 ---
 
-### 7.3 tui/tree.f — Tree View
+### 7.3 tui/widgets/tree.f — Tree View
 
 **Goal:** Collapsible tree display for hierarchical data.  Nodes
 can be expanded/collapsed.  Arrow keys navigate, Enter toggles
 expansion.
 
-File: `tui/tree.f`
+File: `tui/widgets/tree.f`
 Prefix: `TREE-` (public), `_TREE-` (internal)
 Provider: `PROVIDED akashic-tui-tree`
 Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`, `REQUIRE scroll.f`
@@ -3256,13 +3256,13 @@ The tree view uses box-drawing characters for the tree guides:
 
 ---
 
-### 7.4 tui/status.f — Status Bar
+### 7.4 tui/widgets/status.f — Status Bar
 
 **Goal:** A single-row bar for persistent status information
 (filename, mode, cursor position, etc.).  Typically placed at the
 top or bottom of the screen.
 
-File: `tui/status.f`
+File: `tui/widgets/status.f`
 Prefix: `SBAR-` (public)
 Provider: `PROVIDED akashic-tui-status`
 Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
@@ -3291,12 +3291,12 @@ Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
 
 ---
 
-### 7.5 tui/toast.f — Transient Notifications
+### 7.5 tui/widgets/toast.f — Transient Notifications
 
 **Goal:** Brief popup messages that auto-dismiss after a timeout.
 Displayed at a fixed position (typically bottom-right).
 
-File: `tui/toast.f`
+File: `tui/widgets/toast.f`
 Prefix: `TST-` (public)
 Provider: `PROVIDED akashic-tui-toast`
 Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`
@@ -3316,7 +3316,7 @@ Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`
 
 ---
 
-### 7.6 tui/canvas.f — Character-Mode Canvas
+### 7.6 tui/widgets/canvas.f — Character-Mode Canvas
 
 **Goal:** A free-form drawing surface for character graphics —
 Braille patterns, block characters, plot points.  Provides
@@ -3324,7 +3324,7 @@ a coordinate system for sub-cell "pixel" drawing using Unicode
 Braille characters (2×4 dots per cell = 2× horizontal and 4×
 vertical resolution).
 
-File: `tui/canvas.f`
+File: `tui/widgets/canvas.f`
 Prefix: `CVS-` (public), `_CVS-` (internal)
 Provider: `PROVIDED akashic-tui-canvas`
 Dependencies: `REQUIRE draw.f`, `REQUIRE region.f`
@@ -3645,14 +3645,14 @@ Estimated size: ~200 lines
 | 7 | tui/region.f | 3 | screen, draw | 210 | ✅ Done |
 | 8 | tui/layout.f | 3 | region | 365 | ✅ Done |
 | 9 | tui/widget.f | 4 | region | 234 | ✅ Done |
-| 10 | tui/label.f | 4 | widget, draw | 209 | ✅ Done |
-| 11 | tui/input.f | 4 | widget, draw, keys | 485 | ✅ Done |
-| 12 | tui/list.f | 4 | widget, draw, keys | 280 | ✅ Done |
-| 13 | tui/progress.f | 4 | widget, draw | 263 | ✅ Done |
+| 10 | tui/widgets/label.f | 4 | widget, draw | 209 | ✅ Done |
+| 11 | tui/widgets/input.f | 4 | widget, draw, keys | 485 | ✅ Done |
+| 12 | tui/widgets/list.f | 4 | widget, draw, keys | 280 | ✅ Done |
+| 13 | tui/widgets/progress.f | 4 | widget, draw | 263 | ✅ Done |
 | 14 | tui/table.f | 4 | draw, box, region | ~300 | ❌ Not started |
-| 15 | tui/menu.f | 4 | draw, box, region | ~280 | ✅ Done |
-| 16 | tui/dialog.f | 4 | keys, screen, widget, draw, box, region | ~340 | ✅ Done |
-| 17 | tui/tabs.f | 4 | widget, draw, box, region, keys | 282 | ✅ Done |
+| 15 | tui/widgets/menu.f | 4 | draw, box, region | ~280 | ✅ Done |
+| 16 | tui/widgets/dialog.f | 4 | keys, screen, widget, draw, box, region | ~340 | ✅ Done |
+| 17 | tui/widgets/tabs.f | 4 | widget, draw, box, region, keys | 282 | ✅ Done |
 | 18 | dom/event.f | 5b | dom.f | ~450 | ❌ Not started |
 | 19 | tui/dom-tui.f | 5b | dom.f, css.f, bridge.f, cell, region | ~350 | ❌ Not started |
 | 20 | tui/dom-render.f | 5b | dom-tui, draw, box, region, screen | ~400 | ❌ Not started |
@@ -3665,12 +3665,12 @@ Estimated size: ~200 lines
 | 25c | utils/term.f | — | BIOS only | 170 | ✅ Done |
 | 26 | tui/event.f | 6 | keys, screen, focus, term | 254 | ✅ Done |
 | 27 | tui/app.f | 6 | ansi, screen, event, focus, term | 155 | ✅ Done |
-| 28 | tui/split.f | 7 | region, draw | ~150 | ❌ Not started |
-| 29 | tui/scroll.f | 7 | region, draw | ~180 | ❌ Not started |
-| 30 | tui/status.f | 7 | draw, region | ~100 | ❌ Not started |
-| 31 | tui/toast.f | 7 | draw, box, region | ~120 | ❌ Not started |
-| 32 | tui/tree.f | 7 | draw, region, scroll | ~250 | ❌ Not started |
-| 33 | tui/canvas.f | 7 | draw, region | ~200 | ❌ Not started |
+| 28 | tui/widgets/split.f | 7 | region, draw | ~150 | ❌ Not started |
+| 29 | tui/widgets/scroll.f | 7 | region, draw | ~180 | ❌ Not started |
+| 30 | tui/widgets/status.f | 7 | draw, region | ~100 | ❌ Not started |
+| 31 | tui/widgets/toast.f | 7 | draw, box, region | ~120 | ❌ Not started |
+| 32 | tui/widgets/tree.f | 7 | draw, region, scroll | ~250 | ❌ Not started |
+| 33 | tui/widgets/canvas.f | 7 | draw, region | ~200 | ❌ Not started |
 | 34 | tui/app-image.f | 8 | app, binimg | 115 | ✅ Done |
 | 35 | tui/app-manifest.f | 8 | toml | 256 | ✅ Done |
 | 36 | tui/app-launcher.f | 8 | app, app-image, app-manifest, list, draw, box, label | ~200 | ❌ Not started |

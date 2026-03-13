@@ -1,4 +1,4 @@
-# akashic/tui/label.f — Static Text Label Widget
+# akashic/tui/widgets/label.f — Static Text Label Widget
 
 **Layer:** 4A  
 **Lines:** 209  

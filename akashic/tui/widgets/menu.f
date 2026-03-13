@@ -32,10 +32,10 @@
 
 PROVIDED akashic-tui-menu
 
-REQUIRE widget.f
-REQUIRE draw.f
-REQUIRE box.f
-REQUIRE region.f
+REQUIRE ../widget.f
+REQUIRE ../draw.f
+REQUIRE ../box.f
+REQUIRE ../region.f
 
 \ =====================================================================
 \ 1. Descriptor layout
@@ -543,7 +543,7 @@ VARIABLE _MNU-IC-MENU
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _mnu-guard
 
 ' MNU-NEW          CONSTANT _mnu-new-xt

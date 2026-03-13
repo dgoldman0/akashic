@@ -1,4 +1,4 @@
-# akashic/tui/dialog.f — Modal Dialog Boxes
+# akashic/tui/widgets/dialog.f — Modal Dialog Boxes
 
 **Layer:** 4C  
 **Lines:** ~340  
