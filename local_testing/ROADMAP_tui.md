@@ -3051,7 +3051,9 @@ center, write `KEY-MOUSE-X/Y`, and call `WDG-HANDLE` directly.
 
 ---
 
-### 6.3 tui/app.f — Application Lifecycle
+### 6.3 tui/app.f — Application Lifecycle ✅
+
+**Status: Done** — ~140 lines, 18 tests in `test_tui_app.py`
 
 **Goal:** One-call application setup and teardown.  Enters alternate
 screen, hides cursor, configures terminal, runs the event loop,
@@ -3476,7 +3478,7 @@ of raw character placement.
 | 25 | tui/focus.f | 6 | keys, widget | 280 | ✅ Done |
 | 25b | tui/focus-2d.f | 6 | focus, keys, widget, region | 216 | ✅ Done |
 | 26 | tui/event.f | 6 | keys, screen, focus | 240 | ✅ Done |
-| 27 | tui/app.f | 6 | ansi, screen, event, focus | ~120 | ❌ Not started |
+| 27 | tui/app.f | 6 | ansi, screen, event, focus | 140 | ✅ Done |
 | 28 | tui/split.f | 7 | region, draw | ~150 | ❌ Not started |
 | 29 | tui/scroll.f | 7 | region, draw | ~180 | ❌ Not started |
 | 30 | tui/status.f | 7 | draw, region | ~100 | ❌ Not started |
