@@ -85,10 +85,31 @@ Insertion is rejected when the buffer is full.
 | `_INP-DRAW` | `( widget -- )` | Draw visible text or placeholder |
 | `_INP-HANDLE` | `( event widget -- consumed? )` | Key dispatch |
 
+## UIDL-TUI Integration
+
+When a UIDL `<input>` element is materialized by the UIDL-TUI
+backend (`uidl-tui.f`), the following happens:
+
+1. **Materialization** (`_UTUI-MAT-INPUT`): Allocates a 256-byte
+   buffer; calls `INP-NEW`; sets initial text from `text=` and
+   placeholder from `placeholder=` attributes; stores the widget
+   pointer in the element's sidecar `wptr` cell.
+
+2. **Render** (`_UTUI-RENDER-INPUT`): Syncs the proxy region from
+   `_UR-*` layout vars, propagates focus state from sidecar to
+   widget flags, delegates to `_INP-DRAW`.
+
+3. **Events** (`_UTUI-H-INPUT`): Syncs proxy region and focus
+   from sidecar, delegates to `_INP-HANDLE`.
+
+4. **Dematerialization**: Frees the buffer (read from widget+40),
+   then frees the widget descriptor via `INP-FREE`.
+
 ## Design Notes
 
 - **Buffer is caller-owned.** The descriptor stores a pointer to the
-  caller's buffer. The caller must keep the buffer alive.
+  caller's buffer. The caller must keep the buffer alive. When used
+  through UIDL-TUI, both are freed during dematerialization.
 - **UTF-8 aware.** Cursor movement, insertion, and deletion operate
   on codepoint boundaries using `_UTF8-SEQLEN` and `_INP-PREV-CP`.
 - **Horizontal scroll.** When the cursor moves past the visible

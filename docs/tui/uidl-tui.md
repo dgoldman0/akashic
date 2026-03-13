@@ -400,7 +400,31 @@ Pure inline adapter — reads child element `text=` attributes.
 
 Scroll indicators are planned but not yet implemented.
 
-### Collection, Dialog, Menu, Toast, Textarea
+### Input (`UIDL-T-INPUT`)
+
+| Phase | Adapter | Behaviour |
+|-------|---------|----------|
+| Render | `_UTUI-RENDER-INPUT` | Fills bg, syncs proxy region + focus, delegates to `_INP-DRAW` via wptr |
+| Event | `_UTUI-H-INPUT` | Syncs proxy + focus, delegates to `_INP-HANDLE` via wptr |
+| Layout | (stack) | Standard stack layout |
+
+Materialized via `_UTUI-MAT-INPUT`: allocates a 256-byte buffer,
+calls `INP-NEW`, sets `text=` and `placeholder=` from UIDL attrs.
+Dematerialization frees the buffer (widget+40) then the descriptor.
+
+### Textarea (`UIDL-T-TEXTAREA`)
+
+| Phase | Adapter | Behaviour |
+|-------|---------|----------|
+| Render | `_UTUI-RENDER-TEXTAREA` | Fills bg, syncs proxy region + focus, delegates to `_TXTA-DRAW` via wptr |
+| Event | `_UTUI-H-TEXTAREA` | Syncs proxy + focus, delegates to `_TXTA-HANDLE` via wptr |
+| Layout | (stack) | Standard stack layout |
+
+Materialized via `_UTUI-MAT-TXTA`: allocates a 4096-byte buffer,
+calls `TXTA-NEW`, sets `text=` from UIDL attrs.
+Dematerialization frees the buffer (widget+40) then the descriptor.
+
+### Collection, Dialog, Menu, Toast
 
 These remain stub adapters (background fill for render, no-op for
 events) pending future implementation.
