@@ -55,6 +55,7 @@ and no circular imports.
 - [Layer 6 — Application Shell](#layer-6--application-shell)
   - [6.1 tui/event.f — Event Loop & Dispatch](#61-tuieventf--event-loop--dispatch)
   - [6.2 tui/focus.f — Focus Manager](#62-tuifocusf--focus-manager)
+  - [6.2b tui/focus-2d.f — Spatial Focus Navigation](#62b-tuifocus-2df--spatial-focus-navigation)
   - [6.3 tui/app.f — Application Lifecycle](#63-tuiappf--application-lifecycle)
 - [Layer 7 — Extended Components](#layer-7--extended-components)
   - [7.1 tui/split.f — Split Panes](#71-tuisplitf--split-panes)
@@ -192,6 +193,7 @@ column.
    - `tui/tabs.f`     → `TAB-`
    - `tui/event.f`    → `TUI-EVT-`
    - `tui/focus.f`    → `FOC-`
+   - `tui/focus-2d.f` → `F2D-`
    - `tui/app.f`      → `APP-`
    - `tui/split.f`    → `SPL-`
    - `tui/scroll.f`   → `SCRL-`
@@ -232,7 +234,7 @@ primitives.  Both converge on the screen buffer.
 │  split.f │ scroll.f │ tree.f │ status.f │ toast.f │ canvas.f │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 6: Application Shell                                  │
-│  event.f (loop) │ focus.f (focus chain) │ app.f (lifecycle)  │
+│  event.f (loop) │ focus.f + focus-2d.f  │ app.f (lifecycle)  │
 ├─────────────────────────┬────────────────────────────────────┤
 │  Layer 5a: UIDL Path    │  Layer 5b: DOM Path (HTML/CSS)     │
 │  (primary — direct)     │  (optional — web content)          │
@@ -2935,53 +2937,115 @@ handlers (avoids re-entrant mutation).
 
 ---
 
-### 6.2 tui/focus.f — Focus Manager
+### 6.2 tui/focus.f — Focus Manager ✅
 
 **Goal:** Manage which widget receives keyboard input.  Maintains
 a focus chain (ordered list of focusable widgets).  Tab/Shift-Tab
 cycles focus.
 
+**Status: Done** — 280 lines, 19 tests in `test_focus.py`
+
 File: `tui/focus.f`
 Prefix: `FOC-` (public), `_FOC-` (internal)
 Provider: `PROVIDED akashic-tui-focus`
-Dependencies: `REQUIRE keys.f`
+Dependencies: `REQUIRE keys.f`, `REQUIRE widget.f`
 
-~150 lines
+280 lines
 
 #### Words
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `FOC-ADD` | `( widget -- )` | Add widget to focus chain |
-| `FOC-REMOVE` | `( widget -- )` | Remove widget from focus chain |
-| `FOC-NEXT` | `( -- )` | Move focus to next widget |
-| `FOC-PREV` | `( -- )` | Move focus to previous widget |
-| `FOC-SET` | `( widget -- )` | Explicitly set focus |
-| `FOC-GET` | `( -- widget | 0 )` | Get currently focused widget |
+| `FOC-ADD` | `( widget -- )` | Add widget after current in ring (duplicates ignored) |
+| `FOC-REMOVE` | `( widget -- )` | Remove widget from chain; focus moves to next |
+| `FOC-NEXT` | `( -- )` | Move focus to next widget in ring |
+| `FOC-PREV` | `( -- )` | Move focus to previous widget in ring |
+| `FOC-SET` | `( widget -- )` | Explicitly set focus (ignored if not in chain) |
+| `FOC-GET` | `( -- widget \| 0 )` | Get currently focused widget |
 | `FOC-DISPATCH` | `( event-addr -- )` | Send key event to focused widget's handle-xt |
 | `FOC-CLEAR` | `( -- )` | Clear focus chain (teardown) |
 | `FOC-COUNT` | `( -- n )` | Number of focusable widgets |
+| `FOC-EACH` | `( xt -- )` | Call xt once per chain entry: xt ( widget -- ) |
 
 #### Design
 
-Focus chain is a circular singly-linked list.  Each widget has a
-`_foc-next` field (stored outside the widget header, in a small
-parallel array managed by focus.f — max 32 entries).  This avoids
-adding fields to every widget descriptor.
+Focus chain is a circular singly-linked list.  Widget addresses and
+next-indices are stored in fixed-size parallel arrays (max 32 entries),
+avoiding modifications to the widget header.
 
-`FOC-DISPATCH` calls `WDG-HANDLE` on the focused widget.  If the
-widget returns FALSE (not consumed), the event is dropped.  The
-event loop handles Tab/Shift-Tab before dispatching so the focus
-manager doesn't need special-case Tab handling.
+`FOC-ADD` inserts **after current**, so adding A→B→C yields ring
+order A→C→B→A.  `FOC-EACH` scans all slots (not ring-order) and is
+used by `focus-2d.f` for spatial navigation.
 
-#### Test targets: ~12 tests
+`FOC-DISPATCH` calls `WDG-HANDLE` on the focused widget.  The event
+loop handles Tab/Shift-Tab before dispatching so the focus manager
+doesn't need special-case Tab handling.
 
-- Add widgets, Tab cycles forward
-- Shift-Tab cycles backward
-- Remove focused widget (focus moves)
-- Explicit set
-- Dispatch reaches correct widget
-- Empty chain (no crash)
+#### Tests: 19 (in test_focus.py, shared with focus-2d\.f — 34 total)
+
+- FOC-ADD / FOC-GET / FOC-COUNT (4 tests)
+- FOC-NEXT / FOC-PREV ring cycling (4 tests)
+- FOC-SET explicit focus + flags (3 tests)
+- FOC-REMOVE middle / focused / last (3 tests)
+- FOC-CLEAR (1 test)
+- FOC-DISPATCH + empty (2 tests)
+- FOC-EACH + empty (2 tests)
+
+---
+
+### 6.2b tui/focus-2d.f — Spatial Focus Navigation ✅
+
+**Goal:** Plug-in for focus.f that adds 2D directional focus movement
+via Manhattan distance scoring, plus keyboard-driven mouse emulation.
+
+**Status: Done** — 216 lines, 15 tests in `test_focus.py`
+
+File: `tui/focus-2d.f`
+Prefix: `F2D-` (public), `_F2D-` (internal)
+Provider: `PROVIDED akashic-tui-focus-2d`
+Dependencies: `REQUIRE focus.f`, `REQUIRE keys.f`, `REQUIRE widget.f`, `REQUIRE region.f`
+
+216 lines
+
+#### Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `F2D-UP` | `( -- )` | Move focus to nearest widget above |
+| `F2D-DOWN` | `( -- )` | Move focus to nearest widget below |
+| `F2D-LEFT` | `( -- )` | Move focus to nearest widget left |
+| `F2D-RIGHT` | `( -- )` | Move focus to nearest widget right |
+| `F2D-CLICK-L` | `( -- )` | Synthetic left click on focused widget |
+| `F2D-CLICK-M` | `( -- )` | Synthetic middle click on focused widget |
+| `F2D-CLICK-R` | `( -- )` | Synthetic right click on focused widget |
+| `F2D-DISPATCH` | `( ev -- flag )` | Handle Alt+Arrow/click combos; 0 if not ours |
+
+#### Key Bindings
+
+| Key Combo | Action |
+|-----------|--------|
+| Alt + ↑/↓/←/→ | Spatial focus navigation |
+| Alt + Delete | Left click on focused widget |
+| Alt + End | Middle click |
+| Alt + PgDn | Right click |
+
+#### Design
+
+Scans the focus chain via `FOC-EACH`.  For each visible, non-self
+widget, computes center-point from `WDG-REGION`, applies direction
+predicate (above/below/left/right), scores with biased Manhattan
+distance (2× cross-axis penalty), tracks best.  If found, `FOC-SET`
+moves focus.
+
+Synthetic clicks build a `KEY-T-MOUSE` event at the focused widget's
+center, write `KEY-MOUSE-X/Y`, and call `WDG-HANDLE` directly.
+
+#### Tests: 15 (in test_focus.py, shared with focus\.f — 34 total)
+
+- Directional navigation: down/up/left/right/diagonal-bias/no-candidate/empty (7 tests)
+- Synthetic clicks: left click + empty safety (2 tests)
+- F2D-DISPATCH: Alt+Down, Alt+Right, non-Alt passthrough, char passthrough, Alt+Delete (5 tests)
+- Compilation clean (1 test)
 
 ---
 
@@ -3407,7 +3471,8 @@ of raw character placement.
 | 22 | liraq/uidl.f refactor | **5a-P0** | liraq/uidl.f (existing) | ~+200 | ❌ **Phase 0** |
 | 23 | liraq/uidl-chrome.f | **5a-P0** | uidl.f (refactored) | ~120 | ❌ **Phase 0** |
 | 24 | tui/uidl-tui.f | 5a | uidl.f, uidl-chrome.f, liraq/*, Layers 0–4 | ~500 | ❌ Not started |
-| 25 | tui/focus.f | 6 | keys | ~150 | ❌ Not started |
+| 25 | tui/focus.f | 6 | keys, widget | 280 | ✅ Done |
+| 25b | tui/focus-2d.f | 6 | focus, keys, widget, region | 216 | ✅ Done |
 | 26 | tui/event.f | 6 | keys, screen, focus | ~200 | ❌ Not started |
 | 27 | tui/app.f | 6 | ansi, screen, event, focus | ~120 | ❌ Not started |
 | 28 | tui/split.f | 7 | region, draw | ~150 | ❌ Not started |
@@ -3580,3 +3645,1602 @@ work:
   escape sequences accordingly.
 - **Accessibility bridge** — Expose widget state to screen readers
   via the 1D UI / Inceptor path.
+---
+
+## Appendix A — Complete Application Example: Akashic Pad
+
+This appendix presents a **fully functional text editor** ("Akashic
+Pad") built entirely on the UIDL/TUI stack.  It shows every piece a
+real application needs: state-tree schema, UIDL document, action
+handlers, file I/O, undo/redo, dirty tracking, dialogs, keyboard
+shortcuts, and the application lifecycle — approximately 450 lines of
+Forth.  Nothing is hand-waved; every `do=` action has a real handler.
+
+### A.1 Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│           UIDL Document (markup)             │
+│  menubar · split · tree · tabs · textarea    │
+│  toolbar · status · dialogs                  │
+└────────────────────┬─────────────────────────┘
+                     │ bind= / do=
+         ┌───────────┴───────────┐
+         │     State-Tree (ST)   │   Single source of truth
+         │  fs.*  editor.*  ui.* │
+         └───────────┬───────────┘
+                     │ ST-SET-* / ST-GET-*
+         ┌───────────┴───────────┐
+         │   Action Handlers     │   Forth words registered
+         │   (UTUI-DO!)          │   via named do= bindings
+         └───────────┬───────────┘
+                     │
+         ┌───────────┴───────────┐
+         │  Platform Services    │   KDOS file I/O, TIMER@,
+         │  (BLK I/O, UART)     │   EMIT/KEY/TYPE
+         └───────────────────────┘
+```
+
+**Key principle:** Action handlers never touch the screen directly.
+They mutate the state-tree.  The subscription system marks bound
+elements dirty.  `UTUI-PAINT` + `SCR-FLUSH` handles the rest.
+
+### A.2 State-Tree Schema
+
+```forth
+\ ── File: akashic-pad.f ──────────────────────────────────
+\ A complete text editor application for Akashic TUI.
+
+REQUIRE liraq/state-tree.f
+REQUIRE liraq/uidl-chrome.f
+REQUIRE tui/uidl-tui.f
+REQUIRE tui/app.f
+
+\ ════════════════════════════════════════════════════════
+\ §1  STATE-TREE SCHEMA
+\ ════════════════════════════════════════════════════════
+\ All application state lives here.  The UI is a pure
+\ function of this tree — mutate it and the screen updates.
+\
+\ fs.entries[]       — array of {name, content, dirty}
+\ fs.current         — index of currently open file (-1 = none)
+\ fs.count           — number of files in the workspace
+\
+\ editor.content     — string: text of active buffer
+\ editor.cursor.ln   — int: cursor line (1-based)
+\ editor.cursor.col  — int: cursor column (1-based)
+\ editor.cursor.text — string: "Ln 1, Col 1" for status bar
+\ editor.mode        — string: "INSERT" | "OVERWRITE"
+\ editor.selection   — string: "" or "Ln 3-7" (selection range)
+\ editor.dirty       — bool: unsaved changes?
+\ editor.undo[]      — array of snapshot strings (undo stack)
+\ editor.redo[]      — array of snapshot strings (redo stack)
+\
+\ find.query         — string: current search term
+\ find.visible       — bool: find dialog open?
+\ find.match-count   — int: number of matches
+\ find.match-idx     — int: current match index
+\
+\ ui.title           — string: window title
+\ ui.filter          — string: file tree filter text
+\ ui.sidebar         — bool: sidebar visible?
+\ ui.status          — string: status bar message
+\ ui.confirm-quit    — bool: quit dialog visible?
+\
+\ build.progress     — int: 0–100 (for progress bar demo)
+
+\ Create state-tree (arena = HERE, 256 max nodes)
+HERE 256 ST-DOC-NEW CONSTANT pad-st
+pad-st ST-USE
+
+\ ── File System ──
+S" (scratch)" S" fs.entries.0.name"    ST-SET-PATH-STR
+S" "          S" fs.entries.0.content" ST-SET-PATH-STR
+FALSE         S" fs.entries.0.dirty"   ST-SET-PATH-BOOL
+0             S" fs.current"           ST-SET-PATH-INT
+1             S" fs.count"             ST-SET-PATH-INT
+
+\ ── Editor ──
+S" "          S" editor.content"       ST-SET-PATH-STR
+1             S" editor.cursor.ln"     ST-SET-PATH-INT
+1             S" editor.cursor.col"    ST-SET-PATH-INT
+S" Ln 1, Col 1" S" editor.cursor.text" ST-SET-PATH-STR
+S" INSERT"    S" editor.mode"          ST-SET-PATH-STR
+S" "          S" editor.selection"     ST-SET-PATH-STR
+FALSE         S" editor.dirty"         ST-SET-PATH-BOOL
+
+\ ── Find ──
+S" "          S" find.query"           ST-SET-PATH-STR
+FALSE         S" find.visible"         ST-SET-PATH-BOOL
+0             S" find.match-count"     ST-SET-PATH-INT
+0             S" find.match-idx"       ST-SET-PATH-INT
+
+\ ── UI ──
+S" Akashic Pad" S" ui.title"          ST-SET-PATH-STR
+S" "          S" ui.filter"            ST-SET-PATH-STR
+TRUE          S" ui.sidebar"           ST-SET-PATH-BOOL
+S" Ready"     S" ui.status"            ST-SET-PATH-STR
+FALSE         S" ui.confirm-quit"      ST-SET-PATH-BOOL
+
+\ ── Build (demo) ──
+0             S" build.progress"       ST-SET-PATH-INT
+
+pad-st UTUI-BIND-STATE
+```
+
+### A.3 UIDL Document
+
+```forth
+\ ════════════════════════════════════════════════════════
+\ §2  UIDL MARKUP
+\ ════════════════════════════════════════════════════════
+\ Every element either binds to a state-tree path or wires
+\ a do= action to a named handler.  when= controls visibility.
+
+: pad-uidl  ( -- addr len )
+  S" <uidl cols='80' rows='24' title='Akashic Pad'>"
+
+  \ ── Menu Bar ──────────────────────────────────────────
+  S" <menubar>" S+
+  S"   <menu label='File'>" S+
+  S"     <item do='new'     key='Ctrl+N'>New</item>" S+
+  S"     <item do='open'    key='Ctrl+O'>Open...</item>" S+
+  S"     <item do='save'    key='Ctrl+S'>Save</item>" S+
+  S"     <item do='save-as' key='Ctrl+Shift+S'>Save As...</item>" S+
+  S"     <item do='close'   key='Ctrl+W'>Close</item>" S+
+  S"     <item do='quit'    key='Ctrl+Q'>Quit</item>" S+
+  S"   </menu>" S+
+  S"   <menu label='Edit'>" S+
+  S"     <item do='undo'       key='Ctrl+Z'>Undo</item>" S+
+  S"     <item do='redo'       key='Ctrl+Y'>Redo</item>" S+
+  S"     <item do='select-all' key='Ctrl+A'>Select All</item>" S+
+  S"     <item do='cut'        key='Ctrl+X'>Cut</item>" S+
+  S"     <item do='copy'       key='Ctrl+C'>Copy</item>" S+
+  S"     <item do='paste'      key='Ctrl+V'>Paste</item>" S+
+  S"   </menu>" S+
+  S"   <menu label='Search'>" S+
+  S"     <item do='find'       key='Ctrl+F'>Find...</item>" S+
+  S"     <item do='find-next'  key='F3'>Find Next</item>" S+
+  S"     <item do='find-prev'  key='Shift+F3'>Find Previous</item>" S+
+  S"     <item do='goto-line'  key='Ctrl+G'>Go to Line...</item>" S+
+  S"   </menu>" S+
+  S"   <menu label='View'>" S+
+  S"     <item do='toggle-sidebar'>Toggle Sidebar</item>" S+
+  S"     <item do='toggle-mode'>Toggle Insert/Overwrite</item>" S+
+  S"   </menu>" S+
+  S" </menubar>" S+
+
+  \ ── Main Body: sidebar + editor ───────────────────────
+  S" <split id='main-split' ratio='20' mode='h'>" S+
+
+  \   Left pane: file list
+  S"   <region id='sidebar' arrange='stack' when='ui.sidebar'>" S+
+  S"     <label style='bold'>Files</label>" S+
+  S"     <input id='filter' bind='ui.filter'" S+
+  S"            placeholder='Filter...' />" S+
+  S"     <list id='file-list' bind='fs.entries'" S+
+  S"           display='name' on-select='open-idx' />" S+
+  S"   </region>" S+
+
+  \   Right pane: editor area
+  S"   <region id='editor-pane' arrange='stack'>" S+
+  S"     <textarea id='editor'" S+
+  S"               bind='editor.content'" S+
+  S"               on-change='on-edit'" S+
+  S"               on-cursor='on-cursor-move'" S+
+  S"               wrap='off' />" S+
+  S"   </region>" S+
+
+  S" </split>" S+
+
+  \ ── Toolbar ───────────────────────────────────────────
+  S" <toolbar>" S+
+  S"   <action do='run'  key='F5'>▶ Run</action>" S+
+  S"   <action do='stop' key='F6'>■ Stop</action>" S+
+  S"   <progress id='prog' bind='build.progress' />" S+
+  S"   <label bind='editor.selection' />" S+
+  S" </toolbar>" S+
+
+  \ ── Status Bar ────────────────────────────────────────
+  S" <status>" S+
+  S"   <label bind='ui.status' />" S+
+  S"   <label bind='editor.cursor.text' />" S+
+  S"   <label bind='editor.mode' />" S+
+  S" </status>" S+
+
+  \ ── Dialogs (hidden until triggered) ──────────────────
+
+  \   Find & Replace
+  S" <dialog id='find-dlg' title='Find'" S+
+  S"         when='find.visible'>" S+
+  S"   <region arrange='stack'>" S+
+  S"     <label>Search for:</label>" S+
+  S"     <input id='find-input' bind='find.query'" S+
+  S"            on-change='on-find-change' />" S+
+  S"     <region arrange='flex'>" S+
+  S"       <action do='find-prev'>◀ Prev</action>" S+
+  S"       <action do='find-next'>Next ▶</action>" S+
+  S"       <action do='find-close'>Close</action>" S+
+  S"     </region>" S+
+  S"     <label bind='find.status' />" S+
+  S"   </region>" S+
+  S" </dialog>" S+
+
+  \   Go-to-Line
+  S" <dialog id='goto-dlg' title='Go to Line'" S+
+  S"         when='ui.goto-visible'>" S+
+  S"   <input id='goto-input' bind='ui.goto-line'" S+
+  S"          placeholder='Line number...' />" S+
+  S"   <region arrange='flex'>" S+
+  S"     <action do='goto-exec'>Go</action>" S+
+  S"     <action do='goto-cancel'>Cancel</action>" S+
+  S"   </region>" S+
+  S" </dialog>" S+
+
+  \   Quit Confirmation
+  S" <dialog id='quit-dlg' title='Unsaved Changes'" S+
+  S"         when='ui.confirm-quit'>" S+
+  S"   <label>You have unsaved changes.</label>" S+
+  S"   <region arrange='flex'>" S+
+  S"     <action do='save-quit'>Save &amp; Quit</action>" S+
+  S"     <action do='force-quit'>Discard</action>" S+
+  S"     <action do='cancel-quit'>Cancel</action>" S+
+  S"   </region>" S+
+  S" </dialog>" S+
+
+  S" </uidl>" S+
+;
+```
+
+### A.4 Helper Words
+
+```forth
+\ ════════════════════════════════════════════════════════
+\ §3  HELPERS
+\ ════════════════════════════════════════════════════════
+
+\ ── Scratch buffers ──
+256 CONSTANT PAD-NAME-MAX
+CREATE _pad-name-buf  PAD-NAME-MAX ALLOT
+VARIABLE _pad-name-len
+
+8192 CONSTANT PAD-BUF-MAX          \ max file content
+CREATE _pad-file-buf  PAD-BUF-MAX ALLOT
+
+CREATE _pad-num-buf 24 ALLOT       \ number→string scratch
+
+\ ── Number → string conversion ──
+: pad-u>s  ( u -- addr len )
+  _pad-num-buf 24 + SWAP           \ end-ptr  u
+  BEGIN
+    10 /MOD SWAP                   \ quot rem
+    [CHAR] 0 + OVER 1- C!         \ store digit
+    SWAP 1- SWAP                   \ dec ptr
+    DUP 0=
+  UNTIL DROP
+  DUP _pad-num-buf 24 + OVER - ;  \ addr len
+
+\ ── Format cursor position for status bar ──
+: pad-cursor-text  ( ln col -- addr len )
+  SWAP pad-u>s                     \ "42"
+  S" Ln " 2SWAP S+                 \ "Ln 42"
+  S" , Col " S+                    \ "Ln 42, Col "
+  SWAP pad-u>s S+                  \ "Ln 42, Col 7"
+;
+
+\ ── Push current content onto undo stack ──
+: pad-undo-push  ( -- )
+  S" editor.content" ST-GET-PATH ?DUP IF
+    ST-GET-STR
+    S" editor.undo" ST-ARRAY-APPEND-STR
+  THEN
+  \ Clear redo on new edit
+  S" editor.redo" ST-DELETE-PATH
+;
+
+\ ── Update status bar ──
+: pad-status!  ( addr len -- )
+  S" ui.status" ST-SET-PATH-STR ;
+
+\ ── Mark buffer dirty ──
+: pad-mark-dirty  ( -- )
+  TRUE S" editor.dirty" ST-SET-PATH-BOOL
+  S" Modified" pad-status! ;
+
+\ ── Mark buffer clean ──
+: pad-mark-clean  ( -- )
+  FALSE S" editor.dirty" ST-SET-PATH-BOOL
+  S" Saved" pad-status! ;
+
+\ ── Get current file index ──
+: pad-cur-idx  ( -- n )
+  S" fs.current" ST-GET-PATH ?DUP IF ST-GET-INT ELSE -1 THEN ;
+
+\ ── Get file name by index ──
+: pad-file-name  ( idx -- addr len )
+  pad-u>s S" fs.entries." 2SWAP S+ S" .name" S+
+  ST-GET-PATH ?DUP IF ST-GET-STR ELSE S" (unknown)" THEN ;
+
+\ ── Save content into the fs.entries array ──
+: pad-save-to-entry  ( idx -- )
+  DUP pad-u>s S" fs.entries." 2SWAP S+ S" .content" S+
+  S" editor.content" ST-GET-PATH ?DUP IF
+    ST-GET-STR ROT ST-SET-PATH-STR
+  ELSE 2DROP THEN
+  pad-u>s S" fs.entries." 2SWAP S+ S" .dirty" S+
+  FALSE SWAP ST-SET-PATH-BOOL ;
+
+\ ── Load content from an fs.entries element ──
+: pad-load-from-entry  ( idx -- )
+  DUP S" fs.current" ST-SET-PATH-INT
+  pad-u>s S" fs.entries." 2SWAP S+ S" .content" S+
+  ST-GET-PATH ?DUP IF
+    ST-GET-STR S" editor.content" ST-SET-PATH-STR
+  ELSE S" " S" editor.content" ST-SET-PATH-STR THEN
+  pad-mark-clean
+  1 S" editor.cursor.ln"  ST-SET-PATH-INT
+  1 S" editor.cursor.col" ST-SET-PATH-INT
+  1 1 pad-cursor-text S" editor.cursor.text" ST-SET-PATH-STR
+;
+```
+
+### A.5 Action Handlers
+
+```forth
+\ ════════════════════════════════════════════════════════
+\ §4  ACTION HANDLERS
+\ ════════════════════════════════════════════════════════
+\ Every do="name" in the UIDL gets a Forth word registered
+\ via UTUI-DO!.  The handler signature is always ( elem -- ).
+\ The elem is the UIDL element that fired the action.
+\ Handlers mutate the state-tree; the UI updates reactively.
+
+\ ──────────────────────────────────────────────
+\ File actions
+\ ──────────────────────────────────────────────
+
+: on-new  ( elem -- )
+  DROP
+  \ Save current if dirty
+  S" editor.dirty" ST-GET-PATH ?DUP IF
+    ST-GET-BOOL IF pad-cur-idx pad-save-to-entry THEN
+  THEN
+  \ Append new entry
+  S" fs.count" ST-GET-PATH ?DUP IF
+    DUP ST-GET-INT DUP 1+          \ old-count new-count
+    ROT ST-SET-INT                  \ update count
+    \ Name it "(new N)"
+    DUP pad-u>s S" (new " 2SWAP S+ S" )" S+
+    OVER pad-u>s S" fs.entries." 2SWAP S+ S" .name" S+
+    ST-SET-PATH-STR
+    \ Empty content
+    S" " OVER pad-u>s S" fs.entries." 2SWAP S+ S" .content" S+
+    ST-SET-PATH-STR
+    \ Load it
+    pad-load-from-entry
+  ELSE DROP THEN
+  S" New file created" pad-status!
+;
+
+: on-save  ( elem -- )
+  DROP
+  pad-cur-idx DUP 0< IF
+    DROP S" Nothing to save" pad-status!
+  ELSE
+    DUP pad-save-to-entry
+    pad-mark-clean
+    pad-file-name S" Saved: " 2SWAP S+
+    pad-status!
+  THEN
+;
+
+: on-save-as  ( elem -- )
+  DROP
+  \ In a real system this would open a name input dialog.
+  \ For now, duplicate current entry under a new name.
+  on-new                           \ fake: create new file
+  S" (Use rename to set name)" pad-status!
+;
+
+: on-close  ( elem -- )
+  DROP
+  pad-cur-idx DUP 0< IF DROP EXIT THEN
+  \ If dirty, prompt save? For now, just discard.
+  \ Remove from entries array
+  pad-u>s S" fs.entries." 2SWAP S+ ST-DELETE-PATH
+  S" fs.count" ST-GET-PATH ?DUP IF
+    DUP ST-GET-INT 1- 0 MAX SWAP ST-SET-INT
+  THEN
+  \ Open previous or clear
+  S" fs.count" ST-GET-PATH ?DUP IF
+    ST-GET-INT DUP 0> IF
+      1- pad-load-from-entry
+    ELSE
+      DROP
+      -1 S" fs.current" ST-SET-PATH-INT
+      S" " S" editor.content" ST-SET-PATH-STR
+    THEN
+  THEN
+  S" File closed" pad-status!
+;
+
+: on-quit  ( elem -- )
+  DROP
+  S" editor.dirty" ST-GET-PATH ?DUP IF
+    ST-GET-BOOL IF
+      \ Dirty → show confirmation dialog
+      TRUE S" ui.confirm-quit" ST-SET-PATH-BOOL
+      EXIT
+    THEN
+  THEN
+  TUI-EVT-QUIT                    \ clean → quit directly
+;
+
+: on-save-quit  ( elem -- )
+  DROP
+  pad-cur-idx DUP 0>= IF pad-save-to-entry ELSE DROP THEN
+  FALSE S" ui.confirm-quit" ST-SET-PATH-BOOL
+  TUI-EVT-QUIT
+;
+
+: on-force-quit  ( elem -- )
+  DROP
+  FALSE S" ui.confirm-quit" ST-SET-PATH-BOOL
+  TUI-EVT-QUIT
+;
+
+: on-cancel-quit  ( elem -- )
+  DROP
+  FALSE S" ui.confirm-quit" ST-SET-PATH-BOOL
+;
+
+: on-open  ( elem -- )
+  DROP
+  \ Placeholder: in production, this would present a file
+  \ browser dialog populated from KDOS directory listing.
+  \ For this demo, create a sample file with content.
+  S" fs.count" ST-GET-PATH ?DUP IF
+    DUP ST-GET-INT DUP 1+
+    ROT ST-SET-INT
+    DUP pad-u>s S" fs.entries." 2SWAP S+ S" .name" S+
+    S" example.f" SWAP ST-SET-PATH-STR
+    DUP pad-u>s S" fs.entries." 2SWAP S+ S" .content" S+
+    S" : hello  .\" Hello from Akashic Pad!\" CR ;\nhello\n"
+    SWAP ST-SET-PATH-STR
+    pad-load-from-entry
+    S" Opened example.f" pad-status!
+  ELSE DROP THEN
+;
+
+\ Open a file by index (from the file list on-select)
+: on-open-idx  ( elem -- )
+  \ The list widget puts the selected index in the element's
+  \ sidecar.  Retrieve it via UIDL-BIND-EVAL.
+  UIDL-BIND-EVAL DROP             \ type v1 v2 → value is index
+  DROP                             \ drop v2 (unused for int)
+  DUP 0>= IF
+    \ Save current first
+    S" editor.dirty" ST-GET-PATH ?DUP IF
+      ST-GET-BOOL IF pad-cur-idx pad-save-to-entry THEN
+    THEN
+    pad-load-from-entry
+  ELSE DROP THEN
+;
+
+\ ──────────────────────────────────────────────
+\ Edit actions
+\ ──────────────────────────────────────────────
+
+: on-undo  ( elem -- )
+  DROP
+  S" editor.undo" ST-ARRAY-COUNT ?DUP IF
+    1-                             \ index of last entry
+    DUP S" editor.undo" ST-ARRAY-NTH ?DUP IF
+      \ Push current to redo before restoring
+      S" editor.content" ST-GET-PATH ?DUP IF
+        ST-GET-STR S" editor.redo" ST-ARRAY-APPEND-STR
+      THEN
+      \ Restore from undo
+      ST-GET-STR S" editor.content" ST-SET-PATH-STR
+      \ Remove consumed entry
+      S" editor.undo" ST-ARRAY-REMOVE
+      S" Undo" pad-status!
+    ELSE DROP THEN
+  ELSE S" Nothing to undo" pad-status! THEN
+;
+
+: on-redo  ( elem -- )
+  DROP
+  S" editor.redo" ST-ARRAY-COUNT ?DUP IF
+    1-
+    DUP S" editor.redo" ST-ARRAY-NTH ?DUP IF
+      \ Push current to undo
+      S" editor.content" ST-GET-PATH ?DUP IF
+        ST-GET-STR S" editor.undo" ST-ARRAY-APPEND-STR
+      THEN
+      ST-GET-STR S" editor.content" ST-SET-PATH-STR
+      S" editor.redo" ST-ARRAY-REMOVE
+      S" Redo" pad-status!
+    ELSE DROP THEN
+  ELSE S" Nothing to redo" pad-status! THEN
+;
+
+: on-select-all  ( elem -- )
+  DROP
+  S" Ln 1-end" S" editor.selection" ST-SET-PATH-STR
+  S" All selected" pad-status!
+;
+
+\ Cut/Copy/Paste use a clipboard buffer
+4096 CONSTANT PAD-CLIP-MAX
+CREATE _pad-clipboard  PAD-CLIP-MAX ALLOT
+VARIABLE _pad-clip-len  0 _pad-clip-len !
+
+: on-copy  ( elem -- )
+  DROP
+  \ Copy editor content to clipboard (full buffer for demo;
+  \ real impl would copy selection only)
+  S" editor.content" ST-GET-PATH ?DUP IF
+    ST-GET-STR DUP PAD-CLIP-MAX MIN
+    DUP _pad-clip-len !
+    _pad-clipboard SWAP CMOVE
+    S" Copied" pad-status!
+  ELSE S" Nothing to copy" pad-status! THEN
+;
+
+: on-cut  ( elem -- )
+  DUP on-copy
+  DROP                            \ consume elem from on-copy
+  pad-undo-push
+  S" " S" editor.content" ST-SET-PATH-STR
+  pad-mark-dirty
+;
+
+: on-paste  ( elem -- )
+  DROP
+  _pad-clip-len @ ?DUP IF
+    pad-undo-push
+    _pad-clipboard SWAP
+    S" editor.content" ST-SET-PATH-STR
+    pad-mark-dirty
+    S" Pasted" pad-status!
+  ELSE
+    S" Clipboard empty" pad-status!
+  THEN
+;
+
+\ ──────────────────────────────────────────────
+\ Editor callbacks (from textarea on-change/on-cursor)
+\ ──────────────────────────────────────────────
+
+: on-edit  ( elem -- )
+  \ Fired on every keystroke in the textarea.
+  \ The textarea has already updated editor.content via
+  \ bind-write.  We just need to mark dirty & push undo.
+  DROP
+  pad-undo-push
+  pad-mark-dirty
+;
+
+: on-cursor-move  ( elem -- )
+  \ Textarea fires this when cursor position changes.
+  \ Read cursor pos from element sidecar → update status.
+  DROP
+  S" editor.cursor.ln"  ST-GET-PATH ?DUP IF ST-GET-INT ELSE 1 THEN
+  S" editor.cursor.col" ST-GET-PATH ?DUP IF ST-GET-INT ELSE 1 THEN
+  2DUP pad-cursor-text S" editor.cursor.text" ST-SET-PATH-STR
+;
+
+\ ──────────────────────────────────────────────
+\ Search actions
+\ ──────────────────────────────────────────────
+
+: on-find  ( elem -- )
+  DROP
+  TRUE S" find.visible" ST-SET-PATH-BOOL
+  S" find-input" UTUI-BY-ID ?DUP IF UTUI-FOCUS! THEN
+;
+
+: on-find-close  ( elem -- )
+  DROP
+  FALSE S" find.visible" ST-SET-PATH-BOOL
+  S" editor" UTUI-BY-ID ?DUP IF UTUI-FOCUS! THEN
+;
+
+: on-find-change  ( elem -- )
+  \ Live search: user typed in find input → count matches.
+  \ Full implementation would scan editor.content for
+  \ find.query and update find.match-count.
+  DROP
+  S" find.query" ST-GET-PATH ?DUP IF
+    ST-GET-STR NIP                 \ query-len
+    DUP 0> IF
+      DROP                         \ placeholder: actual search
+      S" (searching...)" S" ui.status" ST-SET-PATH-STR
+    ELSE
+      DROP 0 S" find.match-count" ST-SET-PATH-INT
+    THEN
+  THEN
+;
+
+: on-find-next  ( elem -- )
+  DROP
+  S" find.match-idx" ST-GET-PATH ?DUP IF
+    DUP ST-GET-INT 1+ SWAP ST-SET-INT
+  THEN
+  S" Find next" pad-status!
+;
+
+: on-find-prev  ( elem -- )
+  DROP
+  S" find.match-idx" ST-GET-PATH ?DUP IF
+    DUP ST-GET-INT 1- 0 MAX SWAP ST-SET-INT
+  THEN
+  S" Find previous" pad-status!
+;
+
+: on-goto-line  ( elem -- )
+  DROP
+  TRUE S" ui.goto-visible" ST-SET-PATH-BOOL
+;
+
+: on-goto-exec  ( elem -- )
+  DROP
+  S" ui.goto-line" ST-GET-PATH ?DUP IF
+    ST-GET-INT                     \ target line
+    DUP S" editor.cursor.ln" ST-SET-PATH-INT
+    1 pad-cursor-text S" editor.cursor.text" ST-SET-PATH-STR
+  THEN
+  FALSE S" ui.goto-visible" ST-SET-PATH-BOOL
+  S" editor" UTUI-BY-ID ?DUP IF UTUI-FOCUS! THEN
+;
+
+: on-goto-cancel  ( elem -- )
+  DROP
+  FALSE S" ui.goto-visible" ST-SET-PATH-BOOL
+;
+
+\ ──────────────────────────────────────────────
+\ View actions
+\ ──────────────────────────────────────────────
+
+: on-toggle-sidebar  ( elem -- )
+  DROP
+  S" ui.sidebar" ST-GET-PATH ?DUP IF
+    DUP ST-GET-BOOL INVERT SWAP ST-SET-BOOL
+    UTUI-RELAYOUT                 \ recompute split pane sizes
+  THEN
+;
+
+: on-toggle-mode  ( elem -- )
+  DROP
+  S" editor.mode" ST-GET-PATH ?DUP IF
+    DUP ST-GET-STR S" INSERT" COMPARE 0= IF
+      S" OVERWRITE" SWAP ST-SET-STR
+    ELSE
+      S" INSERT" SWAP ST-SET-STR
+    THEN
+  THEN
+;
+
+\ ──────────────────────────────────────────────
+\ Build / Run actions (demo / placeholder)
+\ ──────────────────────────────────────────────
+
+VARIABLE _pad-running  FALSE _pad-running !
+
+: on-run  ( elem -- )
+  DROP
+  _pad-running @ IF
+    S" Already running" pad-status! EXIT
+  THEN
+  TRUE _pad-running !
+  0 S" build.progress" ST-SET-PATH-INT
+  S" Running..." pad-status!
+  \ In production: fork a KDOS task that executes the buffer
+  \ content via EVALUATE and updates build.progress.
+  \ For demo, the tick handler increments progress.
+;
+
+: on-stop  ( elem -- )
+  DROP
+  _pad-running @ INVERT IF
+    S" Not running" pad-status! EXIT
+  THEN
+  FALSE _pad-running !
+  0 S" build.progress" ST-SET-PATH-INT
+  S" Stopped" pad-status!
+;
+```
+
+### A.6 Registration & Lifecycle
+
+```forth
+\ ════════════════════════════════════════════════════════
+\ §5  REGISTER ALL ACTIONS + LIFECYCLE
+\ ════════════════════════════════════════════════════════
+
+: pad-register-actions  ( -- )
+  \ File
+  S" new"            ' on-new          UTUI-DO!
+  S" open"           ' on-open         UTUI-DO!
+  S" save"           ' on-save         UTUI-DO!
+  S" save-as"        ' on-save-as      UTUI-DO!
+  S" close"          ' on-close        UTUI-DO!
+  S" quit"           ' on-quit         UTUI-DO!
+  S" save-quit"      ' on-save-quit    UTUI-DO!
+  S" force-quit"     ' on-force-quit   UTUI-DO!
+  S" cancel-quit"    ' on-cancel-quit  UTUI-DO!
+
+  \ Edit
+  S" undo"           ' on-undo         UTUI-DO!
+  S" redo"           ' on-redo         UTUI-DO!
+  S" select-all"     ' on-select-all   UTUI-DO!
+  S" cut"            ' on-cut          UTUI-DO!
+  S" copy"           ' on-copy         UTUI-DO!
+  S" paste"          ' on-paste        UTUI-DO!
+
+  \ Search
+  S" find"           ' on-find         UTUI-DO!
+  S" find-next"      ' on-find-next    UTUI-DO!
+  S" find-prev"      ' on-find-prev    UTUI-DO!
+  S" find-close"     ' on-find-close   UTUI-DO!
+  S" goto-line"      ' on-goto-line    UTUI-DO!
+  S" goto-exec"      ' on-goto-exec    UTUI-DO!
+  S" goto-cancel"    ' on-goto-cancel  UTUI-DO!
+
+  \ Editor callbacks
+  S" on-edit"        ' on-edit         UTUI-DO!
+  S" on-cursor-move" ' on-cursor-move  UTUI-DO!
+  S" open-idx"       ' on-open-idx     UTUI-DO!
+
+  \ View
+  S" toggle-sidebar" ' on-toggle-sidebar UTUI-DO!
+  S" toggle-mode"    ' on-toggle-mode    UTUI-DO!
+
+  \ Build
+  S" run"            ' on-run          UTUI-DO!
+  S" stop"           ' on-stop         UTUI-DO!
+
+  \ Find change (live search)
+  S" on-find-change" ' on-find-change  UTUI-DO!
+;
+
+\ ── Tick handler: animate build progress ──
+: pad-on-tick  ( -- )
+  _pad-running @ IF
+    S" build.progress" ST-GET-PATH ?DUP IF
+      DUP ST-GET-INT 5 +
+      DUP 100 > IF
+        DROP
+        FALSE _pad-running !
+        100 S" build.progress" ST-SET-PATH-INT
+        S" Build complete" pad-status!
+      ELSE
+        SWAP ST-SET-INT
+      THEN
+    THEN
+  THEN
+;
+
+\ ── Global key handler (intercepts before focus) ──
+: pad-global-key  ( event -- consumed? )
+  \ Handle Escape to close any open dialog
+  DUP KEY-CODE@ KEY-ESC = IF
+    DROP
+    S" find.visible" ST-GET-PATH ?DUP IF
+      ST-GET-BOOL IF
+        FALSE S" find.visible" ST-SET-PATH-BOOL
+        TRUE EXIT
+      THEN
+    THEN
+    S" ui.confirm-quit" ST-GET-PATH ?DUP IF
+      ST-GET-BOOL IF
+        FALSE S" ui.confirm-quit" ST-SET-PATH-BOOL
+        TRUE EXIT
+      THEN
+    THEN
+    S" ui.goto-visible" ST-GET-PATH ?DUP IF
+      ST-GET-BOOL IF
+        FALSE S" ui.goto-visible" ST-SET-PATH-BOOL
+        TRUE EXIT
+      THEN
+    THEN
+    FALSE                          \ Escape not consumed
+  ELSE DROP FALSE THEN             \ not Escape → not consumed
+;
+
+\ ════════════════════════════════════════════════════════
+\ §6  MAIN
+\ ════════════════════════════════════════════════════════
+
+: pad-setup  ( -- )
+  APP-SCREEN SCR-USE
+  0 0 80 24 RGN-SET CONSTANT pad-rgn
+
+  \ Parse UIDL + allocate sidecars + layout + wire XTs
+  pad-uidl pad-rgn UTUI-LOAD INVERT IF
+    ." UIDL parse failed" CR EXIT
+  THEN
+
+  \ Register all do= action handlers
+  pad-register-actions
+
+  \ Wire tick + global key handlers
+  ['] pad-on-tick  TUI-EVT-ON-TICK
+  ['] pad-global-key TUI-EVT-ON-KEY
+  500 TUI-EVT-TICK-MS!             \ tick every 500 ms
+
+  \ Set title
+  S" Akashic Pad" APP-TITLE!
+
+  \ Initial paint
+  UTUI-PAINT
+
+  S" Akashic Pad ready" pad-status!
+;
+
+: pad-main
+  ['] pad-setup 80 24 APP-RUN-FULL
+;
+
+pad-main
+```
+
+### A.7 What This Demonstrates
+
+| Capability | Where |
+|-----------|-------|
+| **Menu bar** with 4 menus, 16 items | `<menubar>` + `<menu>` + `<item>` |
+| **Global keyboard shortcuts** | `key='Ctrl+S'` etc. → shortcut table |
+| **Split pane** sidebar + editor | `<split ratio='20' mode='h'>` |
+| **Collapsible sidebar** | `when='ui.sidebar'` + `on-toggle-sidebar` |
+| **File list** with filter | `<list bind='fs.entries'>` + `<input bind='ui.filter'>` |
+| **Multi-file editing** | `fs.entries[]` array, `on-open-idx`, `on-close` |
+| **Full textarea** | `<textarea bind='editor.content'>` |
+| **Reactive data binding** | Cursor position → status bar, dirty flag → title |
+| **Undo/Redo** | `editor.undo[]` / `editor.redo[]` stacks via `ST-ARRAY-*` |
+| **Cut/Copy/Paste** | Clipboard buffer + state-tree mutations |
+| **Find dialog** (Ctrl+F) | `when='find.visible'` → `<dialog>` with live search |
+| **Go-to-Line dialog** (Ctrl+G) | `when='ui.goto-visible'` → input + action |
+| **Quit with save prompt** | `on-quit` checks `editor.dirty` → `<dialog>` |
+| **Insert/Overwrite toggle** | `editor.mode` ↔ status bar |
+| **Progress bar** | `<progress bind='build.progress'>` + tick handler |
+| **Toolbar** | `<toolbar>` with Run/Stop + progress |
+| **Status bar** | `<status>` with 3 reactive labels |
+| **Escape closes dialogs** | `pad-global-key` intercept |
+| **Tick timer** | `TUI-EVT-ON-TICK` for build progress animation |
+| **Application lifecycle** | `APP-RUN-FULL` for clean init/run/shutdown |
+
+### A.8 What Application Code Does vs. What the Framework Does
+
+**Application code (~450 lines)** is responsible for:
+- Defining the state-tree schema (what data exists)
+- Writing the UIDL markup (what the UI looks like)
+- Implementing action handlers (what happens when the user acts)
+- Registering actions (`UTUI-DO!`)
+
+**The framework (~15,000 lines across 28 files) handles:**
+- Parsing UIDL markup into an element tree
+- Allocating TUI sidecars and computing layout
+- Rendering elements to the double-buffered screen
+- Differential flush (only changed cells emitted)
+- Key decoding (raw bytes → structured key events)
+- Shortcut matching (`key='Ctrl+S'` → call `on-save`)
+- Focus management (Tab/Shift-Tab cycling)
+- Event dispatch (capture/target/bubble on UIDL tree)
+- Hit testing (mouse → element mapping)
+- Subscription-driven dirty propagation
+- LEL expression evaluation for `bind=` and `when=`
+- Box drawing, borders, colors, Unicode
+- Dialog overlay and focus trapping
+- Terminal enter/exit alternate screen, cursor, title
+- Cooperative event loop with timer ticks and `YIELD?`
+
+The ratio is roughly **30:1** — 450 lines of application for 15,000
+lines of framework.  That's the payoff for the layer stack.
+
+### A.9 Stylesheet — Making It Pretty
+
+Akashic has a **full CSS parser** (`css/css.f`, 1836 lines) with rule
+iteration, selector matching (type, class, id, compound, groups),
+specificity calculation, `!important`, hex/rgb()/named color parsing,
+and declaration lookup — plus a bridge (`css/bridge.f`) that collects
+matching rules for an element.  The DOM-TUI path already uses it.
+
+The UIDL path can use the exact same CSS engine.  `uidl-tui.f` adds
+a thin resolution layer: parse the stylesheet once at load time, then
+for each UIDL element, match CSS rules by element type (`label`,
+`action`, `input`, etc.), `id=`, and `class=` attributes, resolve
+colors to 256-palette indices via `DTUI-RESOLVE-COLOR`, and pack the
+result into the sidecar `style` field.
+
+#### How It Works
+
+```
+CSS text
+  │
+  ▼  CSS-RULE-NEXT (iterate rules)
+  ├─ selector: "menubar"
+  │  body: "color: #DADADA; background: #444; font-weight: bold"
+  ├─ selector: "#editor"
+  │  body: "color: #DADADA; background: #303030"
+  ├─ ...
+  │
+  ▼  For each UIDL element:
+  CSS-MATCH-SET ( tag-a tag-u id-a id-u class-a class-u -- )
+  │               ↑ element type   ↑ id=          ↑ class=
+  │
+  ▼  CSS-MATCH-SIMPLE for each rule's selector → collect matching decls
+  │
+  ▼  CSS-DECL-FIND "color" → CSS-PARSE-HEX-COLOR → DTUI-RESOLVE-COLOR → fg index
+  ▼  CSS-DECL-FIND "background" → ... → bg index
+  ▼  CSS-DECL-FIND "font-weight" → "bold" → CELL-A-BOLD
+  ▼  CSS-DECL-FIND "border-style" → "rounded" → border byte
+  │
+  ▼  Pack → sidecar +32: fg(8) bg(8) attrs(8) border(8)
+```
+
+#### The Akashic Pad Stylesheet
+
+Real CSS, parsed by `CSS-RULE-NEXT` + `CSS-DECL-FIND` + color
+resolution.  Uses the subset of CSS properties that map to TUI cells:
+
+```forth
+\ ════════════════════════════════════════════════════════
+\ §7  STYLESHEET — "Akashic Dark"
+\ ════════════════════════════════════════════════════════
+\ Parsed at load time by the CSS engine (css/css.f).
+\ Colors are standard CSS (#hex, rgb(), named).
+\ Properties map to TUI attributes per dom-tui.f §5.1.
+
+: pad-css  ( -- addr len )
+  S" /* ── Akashic Dark Theme ────────────────────── */" S+
+
+  \ --- Root / global defaults ---
+  S" uidl {" S+
+  S"   color: #DADADA;" S+               \ 253 — light gray text
+  S"   background: #303030;" S+           \ 236 — dark gray bg
+  S" }" S+
+
+  \ --- Menu bar ---
+  S" menubar {" S+
+  S"   color: white;" S+                  \ 15 — bright white
+  S"   background: #444444;" S+           \ 238
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" menu {" S+
+  S"   color: #DADADA;" S+
+  S"   background: #262626;" S+           \ 235
+  S" }" S+
+
+  S" item {" S+
+  S"   color: #DADADA;" S+
+  S"   background: #262626;" S+
+  S" }" S+
+
+  S" item:focus {" S+                     \ focused menu item
+  S"   color: black;" S+
+  S"   background: #5FAFFF;" S+           \ 75 — accent blue
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  \ --- Sidebar ---
+  S" #sidebar {" S+
+  S"   color: #BCBCBC;" S+                \ 250
+  S"   background: #262626;" S+           \ 235
+  S"   border-style: solid;" S+
+  S" }" S+
+
+  S" #sidebar > label {" S+              \ "FILES" heading
+  S"   color: #5FAFFF;" S+               \ accent blue
+  S"   font-weight: bold;" S+
+  S"   text-decoration: underline;" S+
+  S" }" S+
+
+  S" #filter {" S+
+  S"   color: #DADADA;" S+
+  S"   background: #444444;" S+
+  S" }" S+
+
+  S" list {" S+
+  S"   color: #BCBCBC;" S+
+  S"   background: #262626;" S+
+  S" }" S+
+
+  S" list:focus {" S+
+  S"   color: white;" S+
+  S"   background: #5FAFFF;" S+
+  S" }" S+
+
+  \ --- Editor area ---
+  S" #editor-pane {" S+
+  S"   background: #303030;" S+
+  S" }" S+
+
+  S" textarea {" S+
+  S"   color: #DADADA;" S+
+  S"   background: #303030;" S+
+  S" }" S+
+
+  S" textarea:focus {" S+
+  S"   background: #303030;" S+           \ cursor line via render-xt
+  S" }" S+
+
+  \ --- Toolbar ---
+  S" toolbar {" S+
+  S"   color: #DADADA;" S+
+  S"   background: #444444;" S+
+  S" }" S+
+
+  S" toolbar > action.run {" S+
+  S"   color: black;" S+
+  S"   background: #87D787;" S+           \ 114 — green
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" toolbar > action.stop {" S+
+  S"   color: black;" S+
+  S"   background: #FF8787;" S+           \ 210 — red-pink
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" progress {" S+
+  S"   color: #FFD787;" S+                \ 222 — gold fill
+  S"   background: #444444;" S+           \ dark track
+  S" }" S+
+
+  \ --- Status bar ---
+  S" status {" S+
+  S"   color: #A8A8A8;" S+                \ 248
+  S"   background: #262626;" S+           \ 235
+  S" }" S+
+
+  S" status > label.cursor {" S+
+  S"   color: #5FAFFF;" S+               \ accent blue
+  S" }" S+
+
+  S" status > label.mode {" S+
+  S"   color: #FFD787;" S+               \ gold
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" status > label.message {" S+
+  S"   color: #87D787;" S+               \ green
+  S" }" S+
+
+  \ --- Dialogs (shared) ---
+  S" dialog {" S+
+  S"   color: white;" S+
+  S"   background: #262626;" S+
+  S"   border-style: rounded;" S+
+  S" }" S+
+
+  S" dialog > label {" S+
+  S"   color: #DADADA;" S+
+  S" }" S+
+
+  S" dialog input {" S+
+  S"   color: white;" S+
+  S"   background: #444444;" S+
+  S" }" S+
+
+  \ --- Action buttons (by class) ---
+  S" action {" S+                         \ default action
+  S"   color: #DADADA;" S+
+  S"   background: #444444;" S+
+  S" }" S+
+
+  S" action:focus {" S+
+  S"   color: black;" S+
+  S"   background: #5FAFFF;" S+           \ accent blue
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" action.primary {" S+
+  S"   color: black;" S+
+  S"   background: #5FAFFF;" S+
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" action.success {" S+
+  S"   color: black;" S+
+  S"   background: #87D787;" S+
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" action.danger {" S+
+  S"   color: black;" S+
+  S"   background: #FF8787;" S+
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" action.muted {" S+
+  S"   color: #DADADA;" S+
+  S"   background: #585858;" S+           \ 240 — gray
+  S" }" S+
+
+  \ --- Tabs ---
+  S" tabs {" S+
+  S"   color: #585858;" S+                \ inactive tab text
+  S"   background: #444444;" S+           \ tab bar bg
+  S" }" S+
+
+  S" tab {" S+                            \ inactive tab
+  S"   color: #585858;" S+
+  S"   background: #444444;" S+
+  S" }" S+
+
+  S" tab:focus {" S+                      \ active tab
+  S"   color: white;" S+
+  S"   background: #303030;" S+           \ matches editor bg
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  \ --- Split divider ---
+  S" split {" S+
+  S"   color: #585858;" S+                \ divider color
+  S"   background: #303030;" S+
+  S" }" S+
+
+  \ --- Tree (file explorer) ---
+  S" tree {" S+
+  S"   color: #BCBCBC;" S+
+  S"   background: #262626;" S+
+  S" }" S+
+
+  \ --- Quit confirm dialog (override) ---
+  S" #quit-dlg {" S+
+  S"   border-style: double;" S+          \ double border = serious
+  S" }" S+
+
+  S" #quit-dlg > label {" S+
+  S"   color: #FF8787;" S+               \ warning red
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  \ --- Find dialog ---
+  S" #find-dlg label.heading {" S+
+  S"   color: #5FAFFF;" S+
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" #find-dlg label.status {" S+
+  S"   color: #D7AFFF;" S+               \ 183 — lavender
+  S"   font-style: italic;" S+
+  S" }" S+
+
+  \ --- Search highlight (applied dynamically) ---
+  S" .search-match {" S+
+  S"   color: black;" S+
+  S"   background: #FFD787;" S+           \ gold highlight
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  \ --- Scrollbar ---
+  S" scroll {" S+
+  S"   color: #585858;" S+               \ thumb color
+  S"   background: #303030;" S+           \ track color
+  S" }" S+
+
+  S" /* ── end theme ─────────────────────────────── */" S+
+;
+```
+
+#### Loading the Stylesheet
+
+The stylesheet is loaded once during `UTUI-LOAD`.  The resolution
+process uses the existing CSS engine APIs:
+
+```forth
+REQUIRE css/css.f
+
+2048 CONSTANT _UTUI-CSS-BUF-MAX
+CREATE _UTUI-CSS-BUF  _UTUI-CSS-BUF-MAX ALLOT
+
+VARIABLE _UTUI-CSS-A   VARIABLE _UTUI-CSS-L
+
+\ Store the stylesheet for later re-resolution
+: UTUI-SET-CSS  ( css-a css-l -- )
+    _UTUI-CSS-L !  _UTUI-CSS-A ! ;
+
+\ Resolve one UIDL element's style from the CSS rules
+: _UTUI-CSS-RESOLVE-ELEM  ( elem -- )
+    \ Set up CSS match context: type, id, class
+    DUP UIDL-TYPE UIDL-TYPE-NAME           \ → tag-a tag-u
+    2 PICK UIDL-ID                         \ → id-a id-u
+    4 PICK S" class" UIDL-ATTR IF          \ → cls-a cls-u
+    ELSE 0 0 THEN
+    CSS-MATCH-SET                          \ configure matcher
+
+    \ Iterate rules, collect matching declarations
+    _UTUI-CSS-A @ _UTUI-CSS-L @            \ stylesheet cursor
+    _UTUI-CSS-BUF _UTUI-CSS-BUF-MAX       \ output buffer
+    CSSB-GET-STYLES                        \ → n (bytes collected)
+    DUP 0= IF DROP DROP EXIT THEN
+
+    \ ── Extract color property ──
+    _UTUI-CSS-BUF OVER                     \ decls-a decls-len
+    S" color" CSS-DECL-FIND IF             \ → val-a val-u  (e.g. "#DADADA")
+      _UTUI-PARSE-CSS-COLOR                \ → r g b
+      DTUI-RESOLVE-COLOR                   \ → 256-palette index
+    ELSE TH-FG THEN                        \ fallback
+
+    \ ── Extract background property ──
+    _UTUI-CSS-BUF OVER
+    S" background" CSS-DECL-FIND INVERT IF
+      _UTUI-CSS-BUF OVER
+      S" background-color" CSS-DECL-FIND
+    THEN
+    IF
+      _UTUI-PARSE-CSS-COLOR
+      DTUI-RESOLVE-COLOR
+    ELSE TH-BG THEN
+
+    \ ── Extract font-weight ──
+    _UTUI-CSS-BUF OVER
+    S" font-weight" CSS-DECL-FIND IF
+      S" bold" COMPARE 0= IF CELL-A-BOLD ELSE 0 THEN
+    ELSE 0 THEN
+
+    \ ── Extract text-decoration ──
+    _UTUI-CSS-BUF OVER
+    S" text-decoration" CSS-DECL-FIND IF
+      S" underline" COMPARE 0= IF CELL-A-UNDERLINE OR THEN
+    THEN
+
+    \ ── Extract font-style ──
+    _UTUI-CSS-BUF OVER
+    S" font-style" CSS-DECL-FIND IF
+      S" italic" COMPARE 0= IF CELL-A-ITALIC OR THEN
+    THEN
+
+    \ ── Extract border-style ──
+    _UTUI-CSS-BUF OVER
+    S" border-style" CSS-DECL-FIND IF
+      _UTUI-PARSE-BORDER                  \ → border-byte
+    ELSE 0 THEN
+
+    \ ── Pack into sidecar style field ──
+    \ fg(8) bg(8) attrs(8) border(8)
+    >R                                     \ save border
+    >R                                     \ save attrs
+    8 LSHIFT OR                            \ pack fg|bg
+    R> 16 LSHIFT OR                        \ pack fg|bg|attrs
+    R> 24 LSHIFT OR                        \ pack fg|bg|attrs|border
+
+    SWAP _UTUI-SIDECAR _UTUI-SC-STYLE!    \ store in sidecar
+;
+
+\ Parse a CSS color value (hex, rgb(), or named)
+: _UTUI-PARSE-CSS-COLOR  ( val-a val-u -- r g b )
+    2DUP 0> IF
+      OVER C@ [CHAR] # = IF
+        CSS-PARSE-HEX-COLOR IF EXIT THEN 2DROP
+      THEN
+      2DUP S" rgb" STR-STARTS? IF
+        CSS-PARSE-RGB IF EXIT THEN 2DROP
+      THEN
+      CSS-COLOR-FIND IF EXIT THEN
+    THEN
+    2DROP 218 218 218                      \ fallback: #DADADA
+;
+
+\ Resolve all elements in tree
+: UTUI-RESOLVE-CSS  ( -- )
+    UIDL-ROOT ?DUP IF
+      BEGIN
+        DUP _UTUI-CSS-RESOLVE-ELEM
+        DUP UIDL-FIRST-CHILD ?DUP IF
+          NIP                              \ descend to child
+        ELSE
+          BEGIN
+            DUP UIDL-NEXT-SIB ?DUP IF
+              NIP TRUE                     \ move to sibling
+            ELSE
+              UIDL-PARENT ?DUP IF
+                UIDL-NEXT-SIB ?DUP IF
+                  TRUE                     \ uncle
+                ELSE FALSE THEN
+              ELSE 0 FALSE THEN
+            THEN
+          UNTIL
+          ?DUP 0= IF EXIT THEN
+        THEN
+      AGAIN
+    THEN
+;
+
+\ Re-resolve after theme switch
+: UTUI-RESTYLE  ( -- )
+    UTUI-RESOLVE-CSS                       \ re-resolve all sidecars
+    UIDL-ROOT ?DUP IF                      \ mark everything dirty
+      BEGIN
+        DUP UIDL-DIRTY!
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+          BEGIN
+            DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+            ELSE UIDL-PARENT DUP IF UIDL-NEXT-SIB DUP 0<> ELSE FALSE THEN THEN
+          UNTIL
+          ?DUP 0= IF EXIT THEN
+        THEN
+      AGAIN
+    THEN
+;
+```
+
+#### Updated UIDL Markup (with `class=`)
+
+With a real stylesheet, the UIDL markup is clean — no inline
+`style=` needed.  Elements are styled by **type selector** (e.g.
+`menubar`, `textarea`, `dialog`), **id selector** (`#sidebar`,
+`#find-dlg`, `#quit-dlg`), and **class selector** (`.run`, `.stop`,
+`.primary`, `.success`, `.danger`, `.muted`):
+
+```forth
+: pad-uidl-styled  ( -- addr len )
+  S" <uidl cols='80' rows='24' title='Akashic Pad'>"
+
+  \ ── Menu Bar ──────────────────────────────────────────
+  S" <menubar>" S+
+  S"   <menu label='File'>" S+
+  S"     <item do='new'     key='Ctrl+N'>New</item>" S+
+  S"     <item do='open'    key='Ctrl+O'>Open...</item>" S+
+  S"     <item do='save'    key='Ctrl+S'>Save</item>" S+
+  S"     <item do='save-as' key='Ctrl+Shift+S'>Save As...</item>" S+
+  S"     <item do='close'   key='Ctrl+W'>Close</item>" S+
+  S"     <item do='quit'    key='Ctrl+Q'>Quit</item>" S+
+  S"   </menu>" S+
+  S"   <menu label='Edit'>" S+
+  S"     <item do='undo' key='Ctrl+Z'>Undo</item>" S+
+  S"     <item do='redo' key='Ctrl+Y'>Redo</item>" S+
+  S"     <item do='select-all' key='Ctrl+A'>Select All</item>" S+
+  S"     <item do='cut'  key='Ctrl+X'>Cut</item>" S+
+  S"     <item do='copy' key='Ctrl+C'>Copy</item>" S+
+  S"     <item do='paste' key='Ctrl+V'>Paste</item>" S+
+  S"   </menu>" S+
+  S"   <menu label='Search'>" S+
+  S"     <item do='find'       key='Ctrl+F'>Find...</item>" S+
+  S"     <item do='find-next'  key='F3'>Find Next</item>" S+
+  S"     <item do='find-prev'  key='Shift+F3'>Find Previous</item>" S+
+  S"     <item do='goto-line'  key='Ctrl+G'>Go to Line...</item>" S+
+  S"   </menu>" S+
+  S"   <menu label='View'>" S+
+  S"     <item do='toggle-sidebar'>Toggle Sidebar</item>" S+
+  S"     <item do='toggle-mode'>Insert/Overwrite</item>" S+
+  S"   </menu>" S+
+  S" </menubar>" S+
+
+  \ ── Main Body ─────────────────────────────────────────
+  S" <split id='main-split' ratio='20' mode='h'>" S+
+
+  \   Left pane: file explorer
+  S"   <region id='sidebar' arrange='stack'" S+
+  S"           when='ui.sidebar'>" S+
+  S"     <label>  FILES</label>" S+
+  S"     <input id='filter' bind='ui.filter'" S+
+  S"            placeholder='🔍 Filter...' />" S+
+  S"     <list id='file-list' bind='fs.entries'" S+
+  S"           display='name' on-select='open-idx' />" S+
+  S"   </region>" S+
+
+  \   Right pane: editor
+  S"   <region id='editor-pane' arrange='stack'>" S+
+  S"     <textarea id='editor'" S+
+  S"               bind='editor.content'" S+
+  S"               on-change='on-edit'" S+
+  S"               on-cursor='on-cursor-move'" S+
+  S"               wrap='off' />" S+
+  S"   </region>" S+
+
+  S" </split>" S+
+
+  \ ── Toolbar ───────────────────────────────────────────
+  S" <toolbar>" S+
+  S"   <action class='run success' do='run' key='F5'>" S+
+  S"     ▶ Run</action>" S+
+  S"   <action class='stop danger' do='stop' key='F6'>" S+
+  S"     ■ Stop</action>" S+
+  S"   <progress id='prog' bind='build.progress' />" S+
+  S"   <label bind='editor.selection' />" S+
+  S" </toolbar>" S+
+
+  \ ── Status Bar ────────────────────────────────────────
+  S" <status>" S+
+  S"   <label class='message' bind='ui.status' />" S+
+  S"   <label class='cursor' bind='editor.cursor.text' />" S+
+  S"   <label class='mode' bind='editor.mode' />" S+
+  S" </status>" S+
+
+  \ ── Find Dialog ───────────────────────────────────────
+  S" <dialog id='find-dlg' title='🔍 Find'" S+
+  S"         when='find.visible'>" S+
+  S"   <region arrange='stack'>" S+
+  S"     <label class='heading'>Search for:</label>" S+
+  S"     <input id='find-input' bind='find.query'" S+
+  S"            on-change='on-find-change' />" S+
+  S"     <region arrange='flex'>" S+
+  S"       <action class='primary' do='find-prev'>◀ Prev</action>" S+
+  S"       <action class='primary' do='find-next'>Next ▶</action>" S+
+  S"       <action class='muted' do='find-close'>Close</action>" S+
+  S"     </region>" S+
+  S"     <label class='status' bind='find.status' />" S+
+  S"   </region>" S+
+  S" </dialog>" S+
+
+  \ ── Go-to-Line Dialog ─────────────────────────────────
+  S" <dialog id='goto-dlg' title='Go to Line'" S+
+  S"         when='ui.goto-visible'>" S+
+  S"   <input id='goto-input' bind='ui.goto-line'" S+
+  S"          placeholder='Line number...' />" S+
+  S"   <region arrange='flex'>" S+
+  S"     <action class='success' do='goto-exec'>Go</action>" S+
+  S"     <action class='muted' do='goto-cancel'>Cancel</action>" S+
+  S"   </region>" S+
+  S" </dialog>" S+
+
+  \ ── Quit Confirmation ─────────────────────────────────
+  S" <dialog id='quit-dlg' title='⚠ Unsaved Changes'" S+
+  S"         when='ui.confirm-quit'>" S+
+  S"   <label>You have unsaved changes.</label>" S+
+  S"   <region arrange='flex'>" S+
+  S"     <action class='success' do='save-quit'>" S+
+  S"       Save &amp; Quit</action>" S+
+  S"     <action class='danger' do='force-quit'>" S+
+  S"       Discard</action>" S+
+  S"     <action class='muted' do='cancel-quit'>" S+
+  S"       Cancel</action>" S+
+  S"   </region>" S+
+  S" </dialog>" S+
+
+  S" </uidl>" S+
+;
+```
+
+Notice: **zero inline `style=` attributes**.  All styling comes from
+the CSS rules matched by type (`menubar`, `dialog`, `action`), id
+(`#sidebar`, `#find-dlg`, `#quit-dlg`), and class (`.success`,
+`.danger`, `.primary`, `.muted`, `.cursor`, `.mode`, `.message`).
+
+#### Wiring CSS into the Load Sequence
+
+```forth
+: pad-setup  ( -- )
+  APP-SCREEN SCR-USE
+  0 0 80 24 RGN-SET CONSTANT pad-rgn
+
+  \ Load stylesheet into CSS resolver
+  pad-css UTUI-SET-CSS
+
+  \ Parse UIDL + allocate sidecars + layout + wire XTs
+  pad-uidl-styled pad-rgn UTUI-LOAD INVERT IF
+    ." UIDL parse failed" CR EXIT
+  THEN
+
+  \ Resolve CSS rules → sidecar styles for every element
+  UTUI-RESOLVE-CSS
+
+  \ Register actions, tick handler, global key handler
+  pad-register-actions
+  ['] pad-on-tick  TUI-EVT-ON-TICK
+  ['] pad-global-key TUI-EVT-ON-KEY
+  500 TUI-EVT-TICK-MS!
+
+  S" Akashic Pad" APP-TITLE!
+  UTUI-PAINT
+  S" Akashic Pad ready" pad-status!
+;
+```
+
+#### Runtime Theme Switching via CSS
+
+Swapping themes = swapping stylesheets:
+
+```forth
+: pad-css-light  ( -- addr len )
+  S" /* Akashic Light Theme */"
+
+  S" uidl {" S+
+  S"   color: #1C1C1C; background: #FFFFFF;" S+
+  S" }" S+
+
+  S" menubar {" S+
+  S"   color: #1C1C1C; background: #E4E4E4;" S+
+  S"   font-weight: bold;" S+
+  S" }" S+
+
+  S" menu { color: #1C1C1C; background: #F5F5F5; }" S+
+  S" item { color: #1C1C1C; background: #F5F5F5; }" S+
+  S" item:focus { color: white; background: #0087FF; font-weight: bold; }" S+
+
+  S" #sidebar { color: #4E4E4E; background: #F5F5F5; border-style: solid; }" S+
+  S" #sidebar > label { color: #0087FF; font-weight: bold; text-decoration: underline; }" S+
+  S" #filter { color: #1C1C1C; background: #E4E4E4; }" S+
+  S" list { color: #4E4E4E; background: #F5F5F5; }" S+
+
+  S" textarea { color: #1C1C1C; background: #FFFFFF; }" S+
+  S" toolbar { color: #1C1C1C; background: #E4E4E4; }" S+
+  S" status { color: #6C6C6C; background: #E4E4E4; }" S+
+  S" status > label.cursor { color: #0087FF; }" S+
+  S" status > label.mode { color: #AF8700; font-weight: bold; }" S+
+  S" status > label.message { color: #5F8700; }" S+
+
+  S" dialog { color: #1C1C1C; background: #F5F5F5; border-style: rounded; }" S+
+  S" dialog input { color: #1C1C1C; background: #E4E4E4; }" S+
+
+  S" action { color: #1C1C1C; background: #D7D7D7; }" S+
+  S" action:focus { color: white; background: #0087FF; font-weight: bold; }" S+
+  S" action.success { color: white; background: #5F8700; font-weight: bold; }" S+
+  S" action.danger { color: white; background: #D70000; font-weight: bold; }" S+
+  S" action.primary { color: white; background: #0087FF; font-weight: bold; }" S+
+  S" action.muted { color: #4E4E4E; background: #D7D7D7; }" S+
+
+  S" tab { color: #6C6C6C; background: #E4E4E4; }" S+
+  S" tab:focus { color: #1C1C1C; background: #FFFFFF; font-weight: bold; }" S+
+
+  S" progress { color: #AF8700; background: #D7D7D7; }" S+
+  S" split { color: #D7D7D7; background: #FFFFFF; }" S+
+  S" #quit-dlg { border-style: double; }" S+
+  S" #quit-dlg > label { color: #D70000; font-weight: bold; }" S+
+  S" .search-match { color: black; background: #FFD787; font-weight: bold; }" S+
+;
+
+\ Switch to light
+: on-theme-light  ( elem -- )
+  DROP
+  pad-css-light UTUI-SET-CSS
+  UTUI-RESTYLE                    \ re-resolve all + mark dirty
+  UTUI-PAINT  SCR-FLUSH
+  S" Light theme applied" pad-status!
+;
+
+\ Switch to dark
+: on-theme-dark  ( elem -- )
+  DROP
+  pad-css UTUI-SET-CSS
+  UTUI-RESTYLE
+  UTUI-PAINT  SCR-FLUSH
+  S" Dark theme applied" pad-status!
+;
+```
+
+#### CSS Properties Supported in TUI Resolution
+
+| CSS Property | TUI Mapping | Example |
+|-------------|------------|---------|
+| `color` | Foreground → 256-palette via `DTUI-RESOLVE-COLOR` | `color: #5FAFFF` → index 75 |
+| `background` / `background-color` | Background → 256-palette | `background: #303030` → index 236 |
+| `font-weight: bold` | `CELL-A-BOLD` (bit 0) | Bold text |
+| `font-style: italic` | `CELL-A-ITALIC` (bit 2) | Italic text |
+| `text-decoration: underline` | `CELL-A-UNDERLINE` (bit 3) | Underlined text |
+| `text-decoration: line-through` | `CELL-A-STRIKE` (bit 6) | Strikethrough |
+| `border-style` | Box-drawing characters | `solid` → `│─┐└`, `double` → `║═╗╚`, `rounded` → `│─╮╰` |
+| `visibility: hidden` | Sidecar visible flag cleared | Space allocated but not painted |
+| `display: none` | Skip element + subtree | No space, no paint |
+
+Color formats recognized by the parser:
+- **Hex**: `#RGB`, `#RRGGBB` → `CSS-PARSE-HEX-COLOR`
+- **RGB function**: `rgb(218, 218, 218)` → `CSS-PARSE-RGB`
+- **Named**: all 148 CSS named colors → `CSS-COLOR-FIND` (includes `red`, `blue`, `dodgerblue`, `coral`, `whitesmoke`, etc.)
+
+All three produce `( r g b )` which `DTUI-RESOLVE-COLOR` maps to the
+nearest 256-palette index via Euclidean distance in RGB space.
+
+#### Style Cascade Order
+
+When `uidl-tui.f` computes an element's final sidecar style:
+
+1. **Inherited** — parent's resolved fg/bg propagate to children
+2. **CSS rules by specificity** — type < class < id < compound (standard CSS cascade via `CSS-SPECIFICITY` + `CSS-SPEC-COMPARE`)
+3. **Inline `style=`** — highest specificity, if present (via `CSSB-APPLY-INLINE`)
+4. **`:focus` pseudo-class** — `uidl-tui.f` re-resolves with `:focus` appended when element has focus
+5. **`!important`** — detected by `CSS-IMPORTANT?`, overrides all non-important declarations
+6. **Dynamic class changes** — `UTUI-CLASS-ADD` / `UTUI-CLASS-REMOVE` trigger re-resolution for that element (e.g., adding `.search-match` to highlight search results)
+
+This is the **real CSS cascade** — same engine, same specificity math,
+same `!important` handling.  The only limitation is the output: instead
+of thousands of visual properties, it resolves to the TUI's `fg(8)
+bg(8) attrs(8) border(8)` — which is all a character-cell terminal
+can express.
