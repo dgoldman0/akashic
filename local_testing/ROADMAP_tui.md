@@ -64,6 +64,10 @@ and no circular imports.
   - [7.4 tui/status.f — Status Bar](#74-tuistatusf--status-bar)
   - [7.5 tui/toast.f — Transient Notifications](#75-tuitoastf--transient-notifications)
   - [7.6 tui/canvas.f — Character-Mode Canvas](#76-tuicanvasf--character-mode-canvas)
+- [Layer 8 — Application Packaging (optional)](#layer-8--application-packaging-optional)
+  - [8.1 tui/app-image.f — Binary Image Wrapper](#81-tuiapp-imagef--binary-image-wrapper)
+  - [8.2 tui/app-manifest.f — Application Manifest](#82-tuiapp-manifestf--application-manifest)
+  - [8.3 tui/app-launcher.f — TUI Launcher](#83-tuiapp-launcherf--tui-launcher)
 - [Dependency Graph](#dependency-graph)
 - [Implementation Order](#implementation-order)
 - [Memory Budget](#memory-budget)
@@ -201,6 +205,9 @@ column.
    - `tui/status.f`   → `SBAR-`
    - `tui/toast.f`    → `TST-`
    - `tui/canvas.f`   → `CVS-`
+   - `tui/app-image.f`→ `APPI-`
+   - `tui/app-manifest.f`→ `MFT-`
+   - `tui/app-launcher.f`→ `LAUNCH-`
    - `dom/event.f`    → `DOME-`
    - `tui/dom-tui.f`  → `DTUI-`
    - `tui/dom-render.f`→ `DREN-`
@@ -229,6 +236,9 @@ primitives.  Both converge on the screen buffer.
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                       Application                            │
+├──────────────────────────────────────────────────────────────┤
+│  Layer 8: Application Packaging (optional)                   │
+│  app-image.f │ app-manifest.f │ app-launcher.f               │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 7: Extended Components                                │
 │  split.f │ scroll.f │ tree.f │ status.f │ toast.f │ canvas.f │
@@ -3379,6 +3389,181 @@ of raw character placement.
 
 ---
 
+## Layer 8 — Application Packaging (optional)
+
+This layer wraps the application lifecycle with binary-image
+save/load, a manifest file reader, and a minimal launcher app.
+All three files are **optional** — applications can run perfectly
+well with just `app.f` and never touch Layer 8.
+
+### 8.1 tui/app-image.f — Binary Image Wrapper
+
+**Goal:** Convenience words that integrate `app.f` with `binimg.f`
+so a compiled TUI application can be frozen to a `.m64` image and
+reloaded later.
+
+File: `tui/app-image.f`
+Prefix: `APPI-` (public), `_APPI-` (internal)
+Depends on: `app.f`, `store/binimg.f`
+Estimated size: ~80 lines
+
+#### Public API
+
+| Word | Stack | Purpose |
+|------|-------|---------|
+| `APPI-MARK` | `( -- )` | Calls `IMG-MARK` to snapshot the dictionary pointer |
+| `APPI-ENTRY` | `( xt -- )` | Register XT as the app entry point via `IMG-ENTRY` |
+| `APPI-SAVE` | `( addr len -- )` | Save everything since `APPI-MARK` as a `.m64` image |
+| `APPI-LOAD` | `( addr len -- xt )` | Load a `.m64` image, return its entry XT |
+| `APPI-RUN` | `( addr len -- )` | Load + `APP-RUN-FULL` in one step |
+
+#### Workflow
+
+```forth
+APPI-MARK
+\ ... compile application words ...
+' my-app APPI-ENTRY
+S" my-app.m64" APPI-SAVE
+```
+
+Later:
+
+```forth
+S" my-app.m64" APPI-RUN
+```
+
+#### Test targets: ~8 tests
+
+- APPI-MARK sets marker
+- APPI-ENTRY stores XT
+- APPI-SAVE produces image file
+- APPI-LOAD returns entry XT
+- APPI-RUN calls APP-RUN-FULL with loaded XT
+- Round-trip: mark → compile → save → load → verify entry
+- Double-save overwrites cleanly
+- Load of missing file returns error
+
+---
+
+### 8.2 tui/app-manifest.f — Application Manifest
+
+**Goal:** Read a small LCF (TOML-subset) manifest describing an
+application's metadata: name, version, title, dimensions, entry
+word, and dependencies.
+
+File: `tui/app-manifest.f`
+Prefix: `MFT-` (public), `_MFT-` (internal)
+Depends on: `liraq/lcf.f`
+Estimated size: ~120 lines
+
+#### Manifest format
+
+```toml
+[app]
+name  = "akashic-pad"
+title = "Akashic Pad"
+version = "0.1.0"
+width  = 80
+height = 24
+entry  = "pad-main"
+
+[deps]
+uidl = true
+css  = true
+```
+
+#### Public API
+
+| Word | Stack | Purpose |
+|------|-------|---------|
+| `MFT-LOAD` | `( addr len -- mft )` | Parse manifest file, return descriptor address |
+| `MFT-FREE` | `( mft -- )` | Release descriptor memory |
+| `MFT-NAME` | `( mft -- addr len )` | Get app name string |
+| `MFT-TITLE` | `( mft -- addr len )` | Get app title string |
+| `MFT-VERSION` | `( mft -- addr len )` | Get version string |
+| `MFT-WIDTH` | `( mft -- n )` | Get preferred width (0 = auto) |
+| `MFT-HEIGHT` | `( mft -- n )` | Get preferred height (0 = auto) |
+| `MFT-ENTRY` | `( mft -- addr len )` | Get entry word name |
+| `MFT-DEP?` | `( mft addr len -- flag )` | Check if named dep is required |
+
+#### Descriptor layout (10 cells = 80 bytes)
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0 | name-addr | Pointer to name string |
+| +8 | name-len | Name length |
+| +16 | title-addr | Pointer to title string |
+| +24 | title-len | Title length |
+| +32 | version-addr | Pointer to version string |
+| +40 | version-len | Version length |
+| +48 | width | Preferred width |
+| +56 | height | Preferred height |
+| +64 | entry-addr | Pointer to entry word name |
+| +72 | entry-len | Entry word name length |
+
+#### Test targets: ~10 tests
+
+- Parse minimal manifest
+- Read each field
+- Default width/height = 0 when omitted
+- Dependency check (present + absent)
+- Missing [app] section → error
+- Empty manifest → error
+- MFT-FREE releases memory
+- Round-trip: write manifest string → load → verify all fields
+- Extra unknown keys ignored
+- Duplicate keys: last wins
+
+---
+
+### 8.3 tui/app-launcher.f — TUI Launcher
+
+**Goal:** A simple TUI application that scans a directory for
+`.m64` images with companion manifests, displays them in a
+selectable list, and launches the chosen app.
+
+File: `tui/app-launcher.f`
+Prefix: `LAUNCH-` (public), `_LAUNCH-` (internal)
+Depends on: `app.f`, `app-image.f`, `app-manifest.f`, `list.f`,
+`draw.f`, `box.f`, `label.f`
+Estimated size: ~200 lines
+
+#### Public API
+
+| Word | Stack | Purpose |
+|------|-------|---------|
+| `LAUNCH-SCAN` | `( addr len -- n )` | Scan directory for manifests, return count |
+| `LAUNCH-RUN` | `( -- )` | Show launcher UI, run selected app |
+| `LAUNCH-ENTRY` | `( -- )` | Top-level entry (scan default path + run) |
+
+#### Behaviour
+
+1. `LAUNCH-SCAN` reads `*.lcf` files from the given directory,
+   parses each with `MFT-LOAD`, and stores descriptors in an
+   internal array (max 32 apps).
+2. `LAUNCH-RUN` creates a full-screen app via `APP-INIT`, draws a
+   bordered list of app names using `LST-` widgets, and enters
+   the event loop.  On Enter, it shuts down the launcher,
+   calls `APPI-RUN` with the selected image path, then returns
+   to the launcher when the child app exits.
+3. `LAUNCH-ENTRY` calls `LAUNCH-SCAN` with `S" /apps/"` (or
+   a configurable path), then `LAUNCH-RUN`.
+
+#### Test targets: ~10 tests
+
+- Scan empty directory → 0 apps
+- Scan directory with 1 manifest → 1 app listed
+- Scan directory with 3 manifests → sorted list
+- Launcher draws bordered app list
+- Up/Down navigation selects entries
+- Enter launches selected app
+- Q quits launcher
+- Return to launcher after child exits
+- Max 32 apps enforced
+- Missing image file → error shown in status line
+
+---
+
 ## Dependency Graph
 
 ```
@@ -3485,7 +3670,10 @@ of raw character placement.
 | 31 | tui/toast.f | 7 | draw, box, region | ~120 | ❌ Not started |
 | 32 | tui/tree.f | 7 | draw, region, scroll | ~250 | ❌ Not started |
 | 33 | tui/canvas.f | 7 | draw, region | ~200 | ❌ Not started |
-| | **Total** | | | **~7,170** | |
+| 34 | tui/app-image.f | 8 | app, binimg | ~80 | ❌ Not started |
+| 35 | tui/app-manifest.f | 8 | lcf | ~120 | ❌ Not started |
+| 36 | tui/app-launcher.f | 8 | app, app-image, app-manifest, list, draw, box, label | ~200 | ❌ Not started |
+| | **Total** | | | **~7,570** | |
 
 Build from bottom up: Layer 0 first (ansi + keys), then Layer 1
 (cell + screen), and so on.  Within each layer, files are independent
