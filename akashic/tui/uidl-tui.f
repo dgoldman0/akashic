@@ -55,6 +55,8 @@ REQUIRE region.f
 REQUIRE layout.f
 REQUIRE keys.f
 REQUIRE widgets/tree.f
+REQUIRE widgets/input.f
+REQUIRE widgets/textarea.f
 
 \ =====================================================================
 \  §1 — TUI Sidecar (per-element, 56 bytes)
@@ -173,6 +175,29 @@ CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
     2DROP S" text" UIDL-ATTR IF EXIT THEN
     2DROP S" ?" ;
 : _UTUI-TREE-LEAF?  ( node -- flag )  UIDL-FIRST-CHILD 0= ;
+
+\ =====================================================================
+\  §1d — Render / Event Helpers
+\ =====================================================================
+
+\ Write _UR-* temp vars into the shared proxy region.
+: _UTUI-PROXY-FROM-UR  ( -- )
+    _UR-ROW @ _UTUI-PROXY-RGN _RGN-O-ROW + !
+    _UR-COL @ _UTUI-PROXY-RGN _RGN-O-COL + !
+    _UR-H @   _UTUI-PROXY-RGN _RGN-O-H   + !
+    _UR-W @   _UTUI-PROXY-RGN _RGN-O-W   + ! ;
+
+\ Sync sidecar focus state into a widget's WDG-F-FOCUSED flag.
+: _UTUI-SYNC-WFOCUS  ( sc wptr -- )
+    >R
+    _UTUI-SC-FLAGS@ _UTUI-SCF-FOC AND
+    R@ _WDG-O-FLAGS + @
+    WDG-F-FOCUSED INVERT AND
+    SWAP IF WDG-F-FOCUSED OR THEN
+    R> _WDG-O-FLAGS + ! ;
+
+\ Temp var for materialization.
+VARIABLE _UTUI-MAT-W
 
 \ =====================================================================
 \  §2 — Global State
@@ -436,13 +461,19 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     _UTUI-DISPLAY-TEXT                 ( a l )
     _UR-ROW @ _UR-COL @ _UR-W @ DRW-TEXT-CENTER ;
 
-\ --- Input ---
+\ --- Input: delegate to materialized INP widget ---
 : _UTUI-RENDER-INPUT  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     _UTUI-FILL-BG
-    _UTUI-DISPLAY-TEXT                 ( a l )
-    _UR-W @ MIN
-    _UR-ROW @ _UR-COL @ DRW-TEXT ;
+    DUP _UTUI-SIDECAR                  ( elem sc )
+    DUP _UTUI-SC-WPTR@                 ( elem sc wptr )
+    DUP 0= IF DROP 2DROP EXIT THEN
+    SWAP OVER _UTUI-SYNC-WFOCUS       ( elem wptr )
+    NIP                                ( wptr )
+    _UTUI-PROXY-FROM-UR
+    _UTUI-PROXY-RGN RGN-USE
+    _INP-DRAW
+    RGN-ROOT ;
 
 \ --- Separator ---
 : _UTUI-RENDER-SEP  ( elem -- )
@@ -607,10 +638,19 @@ VARIABLE _UT-TAB-COL
     _TREE-DRAW
     RGN-ROOT ;
 
-\ --- Textarea ---
+\ --- Textarea: delegate to materialized TXTA widget ---
 : _UTUI-RENDER-TEXTAREA  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    DROP _UTUI-FILL-BG ;
+    _UTUI-FILL-BG
+    DUP _UTUI-SIDECAR                  ( elem sc )
+    DUP _UTUI-SC-WPTR@                 ( elem sc wptr )
+    DUP 0= IF DROP 2DROP EXIT THEN
+    SWAP OVER _UTUI-SYNC-WFOCUS       ( elem wptr )
+    NIP                                ( wptr )
+    _UTUI-PROXY-FROM-UR
+    _UTUI-PROXY-RGN RGN-USE
+    _TXTA-DRAW
+    RGN-ROOT ;
 
 \ --- Canvas: fill background (actual CVS-* drawing is app-level) ---
 : _UTUI-RENDER-CANVAS  ( elem -- )
@@ -643,18 +683,16 @@ VARIABLE _UT-TAB-COL
     THEN
     2DROP 0 ;
 
-\ Input: printable chars, backspace
+\ Input: delegate to materialized INP widget
 : _UTUI-H-INPUT  ( elem key-ev -- handled? )
-    DUP KEY-IS-CHAR? IF
-        KEY-CODE@                      ( elem char )
-        2DROP                          \ TODO: insert into bound value
-        -1 EXIT
-    THEN
-    DUP KEY-CODE@ KEY-BACKSPACE = IF
-        2DROP                          \ drop ev, elem
-        -1 EXIT
-    THEN
-    2DROP 0 ;
+    OVER _UTUI-SIDECAR                    ( elem ev sc )
+    DUP _UTUI-SC-WPTR@                    ( elem ev sc wptr )
+    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    >R                                     ( elem ev sc  R: wptr )
+    DUP R@ _UTUI-SYNC-WFOCUS
+    _UTUI-SYNC-PROXY
+    NIP R>                                 ( ev wptr )
+    _INP-HANDLE ;
 
 \ Toggle: Enter/Space toggles
 : _UTUI-H-TOGGLE  ( elem key-ev -- handled? )
@@ -671,7 +709,16 @@ VARIABLE _UT-TAB-COL
 
 \ Stubs for complex handlers — TODO
 : _UTUI-H-MENU     ( elem key-ev -- handled? ) 2DROP 0 ;
-: _UTUI-H-TEXTAREA ( elem key-ev -- handled? ) 2DROP 0 ;
+\ Textarea: delegate to materialized TXTA widget
+: _UTUI-H-TEXTAREA  ( elem key-ev -- handled? )
+    OVER _UTUI-SIDECAR                    ( elem ev sc )
+    DUP _UTUI-SC-WPTR@                    ( elem ev sc wptr )
+    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    >R                                     ( elem ev sc  R: wptr )
+    DUP R@ _UTUI-SYNC-WFOCUS
+    _UTUI-SYNC-PROXY
+    NIP R>                                 ( ev wptr )
+    _TXTA-HANDLE ;
 : _UTUI-H-LIST     ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-DIALOG   ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-CANVAS   ( elem key-ev -- handled? ) 2DROP 0 ;
@@ -1346,6 +1393,37 @@ VARIABLE _UDH-SC   \ temp for dialog hide
 \  state (tree, tabs), allocate a widget struct or mini state block
 \  and store the pointer in the sidecar's wptr cell (+48).
 
+\ --- Input materialization helper ---
+: _UTUI-MAT-INPUT  ( elem -- )
+    >R
+    R@ _UTUI-SIDECAR _UTUI-SYNC-PROXY
+    256 ALLOCATE 0<> ABORT" inp-buf"
+    _UTUI-PROXY-RGN OVER 256 INP-NEW
+    DUP _UTUI-MAT-W !
+    R@ _UTUI-SIDECAR _UTUI-SC-WPTR!
+    DROP
+    R@ S" text" UIDL-ATTR IF
+        _UTUI-MAT-W @ INP-SET-TEXT
+    ELSE 2DROP THEN
+    R@ S" placeholder" UIDL-ATTR IF
+        _UTUI-MAT-W @ INP-SET-PLACEHOLDER
+    ELSE 2DROP THEN
+    R> DROP ;
+
+\ --- Textarea materialization helper ---
+: _UTUI-MAT-TXTA  ( elem -- )
+    >R
+    R@ _UTUI-SIDECAR _UTUI-SYNC-PROXY
+    4096 ALLOCATE 0<> ABORT" txta-buf"
+    _UTUI-PROXY-RGN OVER 4096 TXTA-NEW
+    DUP _UTUI-MAT-W !
+    R@ _UTUI-SIDECAR _UTUI-SC-WPTR!
+    DROP
+    R@ S" text" UIDL-ATTR IF
+        _UTUI-MAT-W @ TXTA-SET-TEXT
+    ELSE 2DROP THEN
+    R> DROP ;
+
 : _UTUI-MATERIALIZE  ( -- )
     UIDL-ROOT ?DUP 0= IF EXIT THEN
     BEGIN
@@ -1358,13 +1436,18 @@ VARIABLE _UDH-SC   \ temp for dialog hide
             ['] _UTUI-TREE-LABEL ['] _UTUI-TREE-LEAF?
             TREE-NEW                   ( elem widget )
             OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
+        ELSE DUP UIDL-T-TABS = IF
+            DROP
+            8 ALLOCATE 0<> ABORT" tabs-state"
+            DUP 0 SWAP !               ( elem state )
+            OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
+        ELSE DUP UIDL-T-INPUT = IF
+            DROP DUP _UTUI-MAT-INPUT
+        ELSE DUP UIDL-T-TEXTAREA = IF
+            DROP DUP _UTUI-MAT-TXTA
         ELSE
-            UIDL-T-TABS = IF
-                8 ALLOCATE 0<> ABORT" tabs-state"
-                DUP 0 SWAP !           ( elem state )
-                OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
-            THEN
-        THEN
+            DROP                       \ unmatched type
+        THEN THEN THEN THEN
         \ DFS advance
         DUP UIDL-FIRST-CHILD ?DUP IF NIP
         ELSE
@@ -1384,11 +1467,20 @@ VARIABLE _UDH-SC   \ temp for dialog hide
     BEGIN
         DUP _UTUI-SIDECAR _UTUI-SC-WPTR@  ( elem wptr )
         ?DUP IF
-            OVER UIDL-TYPE UIDL-T-TREE = IF
-                TREE-FREE
+            OVER UIDL-TYPE             ( elem wptr type )
+            DUP UIDL-T-TREE = IF
+                DROP TREE-FREE
+            ELSE DUP UIDL-T-INPUT = IF
+                DROP
+                DUP _INP-O-BUF-A + @ FREE
+                FREE
+            ELSE DUP UIDL-T-TEXTAREA = IF
+                DROP
+                DUP _TXTA-O-BUF-A + @ FREE
+                FREE
             ELSE
-                FREE DROP              \ tabs state, etc.
-            THEN
+                DROP FREE              \ tabs state, etc.
+            THEN THEN THEN
             0 OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
         THEN
         \ DFS advance
