@@ -54,32 +54,208 @@ REQUIRE state-tree.f
 
 PROVIDED akashic-uidl
 
+\ Ensure NOOP exists (needed for registry default execution tokens)
+[DEFINED] NOOP [IF] [ELSE] : NOOP ; [THEN]
+
 \ =====================================================================
-\  Element Type Constants (1-16 semantic, 17-20 pseudo)
+\  Error Codes
 \ =====================================================================
 
-0  CONSTANT UIDL-T-NONE
-1  CONSTANT UIDL-T-REGION
-2  CONSTANT UIDL-T-GROUP
-3  CONSTANT UIDL-T-SEPARATOR
-4  CONSTANT UIDL-T-META
-5  CONSTANT UIDL-T-LABEL
-6  CONSTANT UIDL-T-MEDIA
-7  CONSTANT UIDL-T-SYMBOL
-8  CONSTANT UIDL-T-CANVAS
-9  CONSTANT UIDL-T-ACTION
-10 CONSTANT UIDL-T-INPUT
-11 CONSTANT UIDL-T-SELECTOR
-12 CONSTANT UIDL-T-TOGGLE
-13 CONSTANT UIDL-T-RANGE
-14 CONSTANT UIDL-T-COLLECTION
-15 CONSTANT UIDL-T-TABLE
-16 CONSTANT UIDL-T-INDICATOR
+0 CONSTANT UIDL-E-OK
+1 CONSTANT UIDL-E-NO-ROOT
+2 CONSTANT UIDL-E-DUP-ID
+3 CONSTANT UIDL-E-BAD-TAG
+4 CONSTANT UIDL-E-FULL
+5 CONSTANT UIDL-E-STR-FULL
+6 CONSTANT UIDL-E-ATTR-FULL
+7 CONSTANT UIDL-E-REG-FULL
 
-17 CONSTANT UIDL-T-UIDL
-18 CONSTANT UIDL-T-TEMPLATE
-19 CONSTANT UIDL-T-EMPTY
-20 CONSTANT UIDL-T-REP
+VARIABLE _UDL-ERR
+: UIDL-ERR  ( -- code )  _UDL-ERR @ ;
+
+\ =====================================================================
+\  Element Registry — Extensible Type System
+\ =====================================================================
+\
+\ Replaces the old fixed type-enum with an open hash-table registry.
+\ Any code can call DEFINE-ELEMENT to register a new element type
+\ with its tag name, render/event/layout execution tokens, content
+\ model, and category — making the UIDL markup language extensible
+\ in the Forth tradition.
+
+\ --- Element Definition Flag Constants ---
+\ Bits 0-2: Content model
+0 CONSTANT EL-LEAF           \ leaf, no children
+1 CONSTANT EL-CONTAINER      \ arbitrary children
+2 CONSTANT EL-COLLECTION     \ requires <template> + optional <empty>
+3 CONSTANT EL-SELECTOR       \ contains <option> children
+4 CONSTANT EL-FIXED-2        \ exactly 2 children (split)
+5 CONSTANT EL-FIXED-1        \ exactly 1 child (scroll)
+\ Bits 3-4: Category
+0  CONSTANT EL-CAT-ENVELOPE  \ 0 << 3
+8  CONSTANT EL-CAT-DATA      \ 1 << 3
+16 CONSTANT EL-CAT-CHROME    \ 2 << 3
+24 CONSTANT EL-CAT-BINDING   \ 3 << 3
+\ Bit 5-7: Special flags
+32  CONSTANT EL-F-FOCUS       \ inherently interactive / focusable
+64  CONSTANT EL-F-SELF        \ self-closing allowed
+128 CONSTANT EL-F-TWOWAY      \ two-way binding element
+
+\ --- Flag Composition Helpers ---
+: OR-DATA    ( fl -- fl' ) EL-CAT-DATA    OR ;
+: OR-CHROME  ( fl -- fl' ) EL-CAT-CHROME  OR ;
+: OR-BINDING ( fl -- fl' ) EL-CAT-BINDING OR ;
+: OR-FOCUS   ( fl -- fl' ) EL-F-FOCUS     OR ;
+: OR-SELF    ( fl -- fl' ) EL-F-SELF      OR ;
+: OR-TWOWAY  ( fl -- fl' ) EL-F-TWOWAY    OR ;
+
+\ --- Flag Query Words ---
+: EL-CONTENT-MODEL ( fl -- model ) 7 AND ;
+: EL-CATEGORY      ( fl -- cat )   3 RSHIFT 3 AND ;
+: EL-FOCUSABLE?    ( fl -- flag )  EL-F-FOCUS  AND 0<> ;
+: EL-SELF-CLOSE?   ( fl -- flag )  EL-F-SELF   AND 0<> ;
+: EL-TWOWAY?       ( fl -- flag )  EL-F-TWOWAY AND 0<> ;
+
+\ --- Element Definition Record (64 bytes, 8 cells) ---
+: ED.TYPE      ( def -- a )         ;  \ +0  type-id
+: ED.NAME-A    ( def -- a ) 8  + ;     \ +8  tag name string address
+: ED.NAME-L    ( def -- a ) 16 + ;     \ +16 tag name string length
+: ED.FLAGS     ( def -- a ) 24 + ;     \ +24 content model + category bits
+: ED.RENDER-XT ( def -- a ) 32 + ;     \ +32 ( elem -- ) rendering hook
+: ED.EVENT-XT  ( def -- a ) 40 + ;     \ +40 ( elem evt -- handled? )
+: ED.LAYOUT-XT ( def -- a ) 48 + ;     \ +48 ( elem -- ) layout hook
+: ED.NEXT      ( def -- a ) 56 + ;     \ +56 reserved / hash chain
+
+\ --- Registry Storage ---
+64 CONSTANT _EL-REG-SZ
+CREATE _EL-REGISTRY  _EL-REG-SZ 64 * ALLOT   \ 64 slots × 64 bytes = 4096
+VARIABLE _EL-REG-CNT
+CREATE _EL-DEFS  _EL-REG-SZ CELLS ALLOT      \ type-id → def pointer index
+\ --- Registry String Pool (persistent, not reset on UIDL-RESET) ---
+CREATE _EL-REG-STRS  512 ALLOT
+VARIABLE _EL-REG-SPOS
+
+: _EL-STR-COPY  ( src len -- pool-a pool-l )
+    DUP 0= IF EXIT THEN
+    _EL-REG-SPOS @ OVER + 512 > IF 2DROP 0 0 EXIT THEN
+    _EL-REG-STRS _EL-REG-SPOS @ + ( src len dest )
+    SWAP DUP >R CMOVE
+    _EL-REG-STRS _EL-REG-SPOS @ + R>
+    DUP _EL-REG-SPOS +! ;
+
+\ --- Registry Hash Function (FNV-1a, 64-slot) ---
+: _EL-HASH-FN  ( addr len -- idx )
+    2166136261
+    SWAP 0 ?DO
+        OVER I + C@ XOR
+        16777619 *
+    LOOP
+    NIP 63 AND ;
+
+\ --- Registry Lookup ---
+VARIABLE _ER-SA  VARIABLE _ER-SL
+
+: EL-LOOKUP  ( name-a name-l -- def | 0 )
+    _ER-SL ! _ER-SA !
+    _ER-SA @ _ER-SL @ _EL-HASH-FN        ( idx )
+    _EL-REG-SZ 0 DO
+        DUP 64 * _EL-REGISTRY +           ( idx def )
+        DUP ED.NAME-L @ 0= IF
+            2DROP 0 UNLOOP EXIT            \ empty slot — not found
+        THEN
+        DUP ED.NAME-A @ OVER ED.NAME-L @  ( idx def da dl )
+        _ER-SA @ _ER-SL @ STR-STR= IF
+            NIP UNLOOP EXIT                \ found — return def
+        THEN
+        DROP                               ( idx )
+        1+ 63 AND
+    LOOP
+    DROP 0 ;
+
+\ --- Lookup by Type ID ---
+: EL-DEF-BY-TYPE  ( type-id -- def | 0 )
+    DUP 1 < OVER _EL-REG-SZ > OR IF DROP 0 EXIT THEN
+    CELLS _EL-DEFS + @ ;
+
+\ --- Register Element (internal) ---
+VARIABLE _ER-RXT  VARIABLE _ER-EXT  VARIABLE _ER-LXT  VARIABLE _ER-FL
+VARIABLE _ER-NA   VARIABLE _ER-NL   VARIABLE _ER-TID
+
+: _UDL-REG-ELEM  ( render-xt event-xt layout-xt flags name-a name-l -- type-id )
+    _ER-NL ! _ER-NA !
+    _ER-FL ! _ER-LXT ! _ER-EXT ! _ER-RXT !
+    \ Check capacity
+    _EL-REG-CNT @ _EL-REG-SZ >= IF
+        UIDL-E-REG-FULL _UDL-ERR ! 0 EXIT
+    THEN
+    \ Check for duplicate name
+    _ER-NA @ _ER-NL @ EL-LOOKUP IF
+        DROP 0 EXIT
+    THEN
+    \ Copy name to persistent pool
+    _ER-NA @ _ER-NL @ _EL-STR-COPY _ER-NL ! _ER-NA !
+    \ Assign type-id
+    _EL-REG-CNT @ 1+ _ER-TID !
+    \ Find empty hash slot and fill it
+    _ER-NA @ _ER-NL @ _EL-HASH-FN    ( idx )
+    _EL-REG-SZ 0 DO
+        DUP 64 * _EL-REGISTRY +       ( idx def )
+        DUP ED.NAME-L @ 0= IF
+            \ Found empty slot — fill definition record
+            _ER-TID @   OVER ED.TYPE !
+            _ER-NA @    OVER ED.NAME-A !
+            _ER-NL @    OVER ED.NAME-L !
+            _ER-FL @    OVER ED.FLAGS !
+            _ER-RXT @   OVER ED.RENDER-XT !
+            _ER-EXT @   OVER ED.EVENT-XT !
+            _ER-LXT @   OVER ED.LAYOUT-XT !
+            0           OVER ED.NEXT !
+            \ Update by-type index
+            DUP _ER-TID @ CELLS _EL-DEFS + !
+            DROP DROP                  \ drop def, idx
+            1 _EL-REG-CNT +!
+            _ER-TID @
+            UNLOOP EXIT
+        THEN
+        DROP                           ( idx )
+        1+ 63 AND
+    LOOP
+    DROP 0 ;
+
+\ --- Public Registration Word ---
+: DEFINE-ELEMENT  ( render-xt event-xt layout-xt flags "name" -- type-id )
+    PARSE-NAME NAMEBUF PN-LEN @ _UDL-REG-ELEM ;
+
+\ =====================================================================
+\  Built-in Element Registrations (20 core + option)
+\ =====================================================================
+\ Registration order preserves backward-compatible type-ids:
+\   1=region, 2=group, ..., 17=uidl, 18=template, 19=empty, 20=rep, 21=option
+\ All render/event/layout XTs are NOOP — backends patch them later.
+
+' NOOP ' NOOP ' NOOP EL-CONTAINER OR-DATA                S" region"     _UDL-REG-ELEM CONSTANT UIDL-T-REGION
+' NOOP ' NOOP ' NOOP EL-CONTAINER OR-DATA                S" group"      _UDL-REG-ELEM CONSTANT UIDL-T-GROUP
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-SELF             S" separator"  _UDL-REG-ELEM CONSTANT UIDL-T-SEPARATOR
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-SELF             S" meta"       _UDL-REG-ELEM CONSTANT UIDL-T-META
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA                     S" label"      _UDL-REG-ELEM CONSTANT UIDL-T-LABEL
+' NOOP ' NOOP ' NOOP EL-CONTAINER OR-DATA                S" media"      _UDL-REG-ELEM CONSTANT UIDL-T-MEDIA
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-SELF             S" symbol"     _UDL-REG-ELEM CONSTANT UIDL-T-SYMBOL
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-FOCUS            S" canvas"     _UDL-REG-ELEM CONSTANT UIDL-T-CANVAS
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-FOCUS            S" action"     _UDL-REG-ELEM CONSTANT UIDL-T-ACTION
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-FOCUS OR-SELF OR-TWOWAY S" input" _UDL-REG-ELEM CONSTANT UIDL-T-INPUT
+' NOOP ' NOOP ' NOOP EL-SELECTOR OR-DATA OR-FOCUS OR-TWOWAY S" selector" _UDL-REG-ELEM CONSTANT UIDL-T-SELECTOR
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-FOCUS OR-SELF OR-TWOWAY S" toggle" _UDL-REG-ELEM CONSTANT UIDL-T-TOGGLE
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-FOCUS OR-SELF OR-TWOWAY S" range" _UDL-REG-ELEM CONSTANT UIDL-T-RANGE
+' NOOP ' NOOP ' NOOP EL-COLLECTION OR-DATA               S" collection" _UDL-REG-ELEM CONSTANT UIDL-T-COLLECTION
+' NOOP ' NOOP ' NOOP EL-CONTAINER OR-DATA OR-FOCUS       S" table"      _UDL-REG-ELEM CONSTANT UIDL-T-TABLE
+' NOOP ' NOOP ' NOOP EL-LEAF OR-DATA OR-SELF             S" indicator"  _UDL-REG-ELEM CONSTANT UIDL-T-INDICATOR
+' NOOP ' NOOP ' NOOP EL-CONTAINER                        S" uidl"       _UDL-REG-ELEM CONSTANT UIDL-T-UIDL
+' NOOP ' NOOP ' NOOP EL-CONTAINER OR-BINDING             S" template"   _UDL-REG-ELEM CONSTANT UIDL-T-TEMPLATE
+' NOOP ' NOOP ' NOOP EL-CONTAINER OR-BINDING             S" empty"      _UDL-REG-ELEM CONSTANT UIDL-T-EMPTY
+' NOOP ' NOOP ' NOOP EL-LEAF OR-BINDING OR-SELF          S" rep"        _UDL-REG-ELEM CONSTANT UIDL-T-REP
+' NOOP ' NOOP ' NOOP EL-LEAF OR-BINDING OR-SELF          S" option"     _UDL-REG-ELEM CONSTANT UIDL-T-OPTION
+
+0 CONSTANT UIDL-T-NONE   \ sentinel: "unknown tag"
 
 \ =====================================================================
 \  Arrangement Modes
@@ -98,21 +274,7 @@ PROVIDED akashic-uidl
 
 1 CONSTANT UIDL-F-SELFCLOSE
 2 CONSTANT UIDL-F-TWOWAY
-
-\ =====================================================================
-\  Error Codes
-\ =====================================================================
-
-0 CONSTANT UIDL-E-OK
-1 CONSTANT UIDL-E-NO-ROOT
-2 CONSTANT UIDL-E-DUP-ID
-3 CONSTANT UIDL-E-BAD-TAG
-4 CONSTANT UIDL-E-FULL
-5 CONSTANT UIDL-E-STR-FULL
-6 CONSTANT UIDL-E-ATTR-FULL
-
-VARIABLE _UDL-ERR
-: UIDL-ERR  ( -- code )  _UDL-ERR @ ;
+4 CONSTANT UIDL-F-DIRTY
 
 \ =====================================================================
 \  Pool Sizes & Layout
@@ -165,6 +327,11 @@ VARIABLE _UDL-ACNT
 VARIABLE _UDL-SPOS
 VARIABLE _UDL-ROOT
 
+\ Subscription table storage (code in subscription section below)
+128 CONSTANT _UDL-MAX-SUBS
+CREATE _UDL-SUBS  _UDL-MAX-SUBS 24 * ALLOT  \ 128 × 24 = 3,072 bytes
+VARIABLE _UDL-SUB-CNT
+
 \ Temp vars for search-by-name (avoids broken 2R@)
 VARIABLE _UDL-SA   VARIABLE _UDL-SL
 VARIABLE _UDL-RMA  VARIABLE _UDL-RML
@@ -179,7 +346,9 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
     _UDL-ELEMS _UDL-MAX-ELEMS _UDL-ELEMSZ * 0 FILL
     _UDL-ATTRS _UDL-MAX-ATTRS _UDL-ATTRSZ * 0 FILL
     _UDL-HASH  _UDL-HASH-SZ CELLS 0 FILL
-    _UDL-HIDS  _UDL-HASH-SZ 2 * CELLS 0 FILL ;
+    _UDL-HIDS  _UDL-HASH-SZ 2 * CELLS 0 FILL
+    0 _UDL-SUB-CNT !
+    _UDL-SUBS _UDL-MAX-SUBS 24 * 0 FILL ;
 
 \ =====================================================================
 \  String Pool
@@ -284,27 +453,7 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
 \ =====================================================================
 
 : _UDL-MAP-TAG  ( name-a name-l -- type )
-    2DUP S" uidl"       STR-STR= IF 2DROP UIDL-T-UIDL       EXIT THEN
-    2DUP S" region"     STR-STR= IF 2DROP UIDL-T-REGION     EXIT THEN
-    2DUP S" group"      STR-STR= IF 2DROP UIDL-T-GROUP      EXIT THEN
-    2DUP S" separator"  STR-STR= IF 2DROP UIDL-T-SEPARATOR  EXIT THEN
-    2DUP S" meta"       STR-STR= IF 2DROP UIDL-T-META       EXIT THEN
-    2DUP S" label"      STR-STR= IF 2DROP UIDL-T-LABEL      EXIT THEN
-    2DUP S" media"      STR-STR= IF 2DROP UIDL-T-MEDIA      EXIT THEN
-    2DUP S" symbol"     STR-STR= IF 2DROP UIDL-T-SYMBOL     EXIT THEN
-    2DUP S" canvas"     STR-STR= IF 2DROP UIDL-T-CANVAS     EXIT THEN
-    2DUP S" action"     STR-STR= IF 2DROP UIDL-T-ACTION     EXIT THEN
-    2DUP S" input"      STR-STR= IF 2DROP UIDL-T-INPUT      EXIT THEN
-    2DUP S" selector"   STR-STR= IF 2DROP UIDL-T-SELECTOR   EXIT THEN
-    2DUP S" toggle"     STR-STR= IF 2DROP UIDL-T-TOGGLE     EXIT THEN
-    2DUP S" range"      STR-STR= IF 2DROP UIDL-T-RANGE      EXIT THEN
-    2DUP S" collection" STR-STR= IF 2DROP UIDL-T-COLLECTION EXIT THEN
-    2DUP S" table"      STR-STR= IF 2DROP UIDL-T-TABLE      EXIT THEN
-    2DUP S" indicator"  STR-STR= IF 2DROP UIDL-T-INDICATOR  EXIT THEN
-    2DUP S" template"   STR-STR= IF 2DROP UIDL-T-TEMPLATE   EXIT THEN
-    2DUP S" empty"      STR-STR= IF 2DROP UIDL-T-EMPTY      EXIT THEN
-    2DUP S" rep"        STR-STR= IF 2DROP UIDL-T-REP        EXIT THEN
-    2DROP UIDL-T-NONE ;
+    EL-LOOKUP DUP IF ED.TYPE @ ELSE DROP 0 THEN ;
 
 \ =====================================================================
 \  Arrange String → Mode
@@ -324,28 +473,10 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
 \ =====================================================================
 
 : UIDL-TYPE-NAME  ( type -- a l )
-    DUP  0 = IF DROP S" none"       EXIT THEN
-    DUP  1 = IF DROP S" region"     EXIT THEN
-    DUP  2 = IF DROP S" group"      EXIT THEN
-    DUP  3 = IF DROP S" separator"  EXIT THEN
-    DUP  4 = IF DROP S" meta"       EXIT THEN
-    DUP  5 = IF DROP S" label"      EXIT THEN
-    DUP  6 = IF DROP S" media"      EXIT THEN
-    DUP  7 = IF DROP S" symbol"     EXIT THEN
-    DUP  8 = IF DROP S" canvas"     EXIT THEN
-    DUP  9 = IF DROP S" action"     EXIT THEN
-    DUP 10 = IF DROP S" input"      EXIT THEN
-    DUP 11 = IF DROP S" selector"   EXIT THEN
-    DUP 12 = IF DROP S" toggle"     EXIT THEN
-    DUP 13 = IF DROP S" range"      EXIT THEN
-    DUP 14 = IF DROP S" collection" EXIT THEN
-    DUP 15 = IF DROP S" table"      EXIT THEN
-    DUP 16 = IF DROP S" indicator"  EXIT THEN
-    DUP 17 = IF DROP S" uidl"       EXIT THEN
-    DUP 18 = IF DROP S" template"   EXIT THEN
-    DUP 19 = IF DROP S" empty"      EXIT THEN
-    DUP 20 = IF DROP S" rep"        EXIT THEN
-    DROP S" unknown" ;
+    DUP 0= IF DROP S" none" EXIT THEN
+    EL-DEF-BY-TYPE DUP IF
+        DUP ED.NAME-A @ SWAP ED.NAME-L @
+    ELSE DROP S" unknown" THEN ;
 
 \ =====================================================================
 \  Tree Linking
@@ -452,13 +583,12 @@ VARIABLE _UPA-VA  VARIABLE _UPA-VL
     R> OVER UE.TYPE !                  ( xa xl elem  R: parent )
     R> OVER UE.PARENT !               ( xa xl elem )
 
-    \ two-way flag
-    DUP UE.TYPE @
-    DUP UIDL-T-INPUT    =
-    OVER UIDL-T-SELECTOR = OR
-    OVER UIDL-T-TOGGLE   = OR
-    SWAP UIDL-T-RANGE    = OR
-    IF UIDL-F-TWOWAY OVER UE.FLAGS ! THEN
+    \ two-way flag from registry
+    DUP UE.TYPE @ EL-DEF-BY-TYPE ?DUP IF
+        ED.FLAGS @ EL-F-TWOWAY AND IF
+            UIDL-F-TWOWAY OVER UE.FLAGS !
+        THEN
+    THEN
 
     \ detect self-closing
     >R 2DUP MU-TAG-TYPE               ( xa xl tt  R: elem )
@@ -981,6 +1111,54 @@ VARIABLE _UDL-BWE   \ bind-write element
     THEN 2DROP
     DROP 0 0 0 ;
 
+\ =====================================================================
+\  Subscription Table — Reactive Binding
+\ =====================================================================
+\
+\ Maps state-tree paths (by hash) to subscribed elements.
+\ When a path changes, UIDL-NOTIFY marks all subscribers dirty.
+\ The paint cycle only redraws dirty elements.
+\ Storage: _UDL-SUBS, _UDL-SUB-CNT, _UDL-MAX-SUBS declared in pools section.
+
+\ Path hash (raw FNV-1a, no masking — for exact match)
+: _UDL-PATH-HASH  ( addr len -- hash )
+    2166136261
+    SWAP 0 ?DO
+        OVER I + C@ XOR
+        16777619 *
+    LOOP
+    NIP ;
+
+: UIDL-RESET-SUBS  ( -- )
+    0 _UDL-SUB-CNT !
+    _UDL-SUBS _UDL-MAX-SUBS 24 * 0 FILL ;
+
+: UIDL-SUBSCRIBE  ( elem bind-a bind-l -- )
+    _UDL-SUB-CNT @ _UDL-MAX-SUBS >= IF 2DROP DROP EXIT THEN
+    _UDL-PATH-HASH                        ( elem hash )
+    _UDL-SUB-CNT @ 24 * _UDL-SUBS +      ( elem hash entry )
+    SWAP OVER !                            ( elem entry ) \ entry+0 = hash
+    8 + !                                  ( )            \ entry+8 = elem
+    1 _UDL-SUB-CNT +! ;
+
+: UIDL-NOTIFY  ( path-a path-l -- )
+    _UDL-PATH-HASH                         ( hash )
+    _UDL-SUB-CNT @ 0 ?DO
+        I 24 * _UDL-SUBS +                ( hash entry )
+        DUP @ 2 PICK = IF
+            8 + @                          ( hash elem )
+            DUP UE.FLAGS @ UIDL-F-DIRTY OR SWAP UE.FLAGS !
+        ELSE
+            DROP
+        THEN
+    LOOP
+    DROP ;
+
+\ --- Dirty Flag Helpers ---
+: UIDL-DIRTY?  ( elem -- flag )  UE.FLAGS @ UIDL-F-DIRTY AND 0<> ;
+: UIDL-DIRTY!  ( elem -- )  DUP UE.FLAGS @ UIDL-F-DIRTY OR SWAP UE.FLAGS ! ;
+: UIDL-CLEAN!  ( elem -- )  DUP UE.FLAGS @ UIDL-F-DIRTY INVERT AND SWAP UE.FLAGS ! ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
@@ -1051,6 +1229,28 @@ GUARD _uidl-guard
 ' UIDL-DISPATCH   CONSTANT _uidl-dispatch-xt
 ' UIDL-HAS-ACTION? CONSTANT _uidl-has-action-q-xt
 ' UIDL-ACTION-VALUE CONSTANT _uidl-action-value-xt
+\ --- registry / subscription / dirty guards ---
+' DEFINE-ELEMENT   CONSTANT _define-element-xt
+' EL-LOOKUP        CONSTANT _el-lookup-xt
+' EL-DEF-BY-TYPE   CONSTANT _el-def-by-type-xt
+' ED.TYPE          CONSTANT _ed-dottype-xt
+' ED.NAME-A        CONSTANT _ed-dotname-a-xt
+' ED.NAME-L        CONSTANT _ed-dotname-l-xt
+' ED.FLAGS         CONSTANT _ed-dotflags-xt
+' ED.RENDER-XT     CONSTANT _ed-dotrender-xt-xt
+' ED.EVENT-XT      CONSTANT _ed-dotevent-xt-xt
+' ED.LAYOUT-XT     CONSTANT _ed-dotlayout-xt-xt
+' EL-CONTENT-MODEL CONSTANT _el-content-model-xt
+' EL-CATEGORY      CONSTANT _el-category-xt
+' EL-FOCUSABLE?    CONSTANT _el-focusable-q-xt
+' EL-SELF-CLOSE?   CONSTANT _el-self-close-q-xt
+' EL-TWOWAY?       CONSTANT _el-twoway-q-xt
+' UIDL-SUBSCRIBE   CONSTANT _uidl-subscribe-xt
+' UIDL-NOTIFY      CONSTANT _uidl-notify-xt
+' UIDL-RESET-SUBS  CONSTANT _uidl-reset-subs-xt
+' UIDL-DIRTY?      CONSTANT _uidl-dirty-q-xt
+' UIDL-DIRTY!      CONSTANT _uidl-dirty-s-xt
+' UIDL-CLEAN!      CONSTANT _uidl-clean-s-xt
 
 : UIDL-ERR        _uidl-err-xt _uidl-guard WITH-GUARD ;
 : UE.TYPE         _ue-dottype-xt _uidl-guard WITH-GUARD ;
@@ -1117,4 +1317,26 @@ GUARD _uidl-guard
 : UIDL-DISPATCH   _uidl-dispatch-xt _uidl-guard WITH-GUARD ;
 : UIDL-HAS-ACTION? _uidl-has-action-q-xt _uidl-guard WITH-GUARD ;
 : UIDL-ACTION-VALUE _uidl-action-value-xt _uidl-guard WITH-GUARD ;
+\ --- registry / subscription / dirty guarded ---
+: DEFINE-ELEMENT   _define-element-xt _uidl-guard WITH-GUARD ;
+: EL-LOOKUP        _el-lookup-xt _uidl-guard WITH-GUARD ;
+: EL-DEF-BY-TYPE   _el-def-by-type-xt _uidl-guard WITH-GUARD ;
+: ED.TYPE          _ed-dottype-xt _uidl-guard WITH-GUARD ;
+: ED.NAME-A        _ed-dotname-a-xt _uidl-guard WITH-GUARD ;
+: ED.NAME-L        _ed-dotname-l-xt _uidl-guard WITH-GUARD ;
+: ED.FLAGS         _ed-dotflags-xt _uidl-guard WITH-GUARD ;
+: ED.RENDER-XT     _ed-dotrender-xt-xt _uidl-guard WITH-GUARD ;
+: ED.EVENT-XT      _ed-dotevent-xt-xt _uidl-guard WITH-GUARD ;
+: ED.LAYOUT-XT     _ed-dotlayout-xt-xt _uidl-guard WITH-GUARD ;
+: EL-CONTENT-MODEL _el-content-model-xt _uidl-guard WITH-GUARD ;
+: EL-CATEGORY      _el-category-xt _uidl-guard WITH-GUARD ;
+: EL-FOCUSABLE?    _el-focusable-q-xt _uidl-guard WITH-GUARD ;
+: EL-SELF-CLOSE?   _el-self-close-q-xt _uidl-guard WITH-GUARD ;
+: EL-TWOWAY?       _el-twoway-q-xt _uidl-guard WITH-GUARD ;
+: UIDL-SUBSCRIBE   _uidl-subscribe-xt _uidl-guard WITH-GUARD ;
+: UIDL-NOTIFY      _uidl-notify-xt _uidl-guard WITH-GUARD ;
+: UIDL-RESET-SUBS  _uidl-reset-subs-xt _uidl-guard WITH-GUARD ;
+: UIDL-DIRTY?      _uidl-dirty-q-xt _uidl-guard WITH-GUARD ;
+: UIDL-DIRTY!      _uidl-dirty-s-xt _uidl-guard WITH-GUARD ;
+: UIDL-CLEAN!      _uidl-clean-s-xt _uidl-guard WITH-GUARD ;
 [THEN] [THEN]

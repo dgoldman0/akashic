@@ -2,6 +2,7 @@
 
 **Module:** `akashic-uidl`  
 **File:** `akashic/liraq/uidl.f`  
+**Companion:** `akashic/liraq/uidl-chrome.f` (chrome element registrations)  
 **Requires:** `akashic-string`, `akashic-markup-core`, `akashic-xml`, `akashic-lel`, `akashic-state-tree`
 
 ## Overview
@@ -14,14 +15,21 @@ typed, attributed elements with no visual or auditory bias.
 The parser accepts UIDL XML text (addr len), validates it, and builds an
 in-memory tree of element nodes with:
 
-- **16 semantic element types** — structural, content, interactive, and
-  collection primitives
-- **4 pseudo-types** — uidl (root), template, empty, rep
+- **Extensible Element Registry** — open hash-table of element definitions;
+  any code can register new element types at load time via `DEFINE-ELEMENT`
+- **21 built-in element types** — structural, content, interactive,
+  collection, and pseudo-type primitives (type-ids 1–21)
+- **21 chrome elements** registered by `uidl-chrome.f` — menubar, tabs,
+  dialog, toast, textarea, dropdown, toolbar, etc.
 - **6 arrangement modes** — none, dock, flex, stack, flow, grid
 - **Per-element attribute linked lists** — generic key/value pairs
 - **FNV-1a hashed ID registry** — O(1) element lookup by ID
 - **Data binding and conditional display** — `bind` and `when` expressions
   evaluated via LEL against the state tree
+- **Subscription table** — maps state-tree paths to elements; `UIDL-NOTIFY`
+  marks subscribers dirty for incremental repaint
+- **Dirty flag tracking** — per-element `UIDL-F-DIRTY` bit for efficient
+  change propagation
 
 All string data (IDs, roles, attribute names/values) is copied into a
 dedicated string pool.  Element and attribute nodes are allocated from
@@ -369,39 +377,212 @@ UIDL-ACTION-VALUE ( elem -- a l flag )
 Return the value of the element's action attribute (same priority as
 `UIDL-DISPATCH`).  Returns `( a l -1 )` if found, `( 0 0 0 )` if none.
 
-## Element Types
+### Element Registry
 
-### Semantic Types (1–16)
+The Element Registry replaces the old fixed type enum with an open
+hash-table of element definitions.  Any code can register new element
+types at load time.
 
-| Constant | Value | Category | Description |
-|----------|-------|----------|-------------|
-| `UIDL-T-REGION` | 1 | Structural | Major layout region |
-| `UIDL-T-GROUP` | 2 | Structural | Grouping container |
-| `UIDL-T-SEPARATOR` | 3 | Structural | Visual/logical separator |
-| `UIDL-T-META` | 4 | Structural | Key/value metadata |
-| `UIDL-T-LABEL` | 5 | Content | Text label |
-| `UIDL-T-MEDIA` | 6 | Content | Multi-representation media |
-| `UIDL-T-SYMBOL` | 7 | Content | Named symbol/icon |
-| `UIDL-T-CANVAS` | 8 | Content | Drawing surface |
-| `UIDL-T-ACTION` | 9 | Interactive | Button/command trigger |
-| `UIDL-T-INPUT` | 10 | Interactive | Text entry (two-way) |
-| `UIDL-T-SELECTOR` | 11 | Interactive | Choice selector (two-way) |
-| `UIDL-T-TOGGLE` | 12 | Interactive | Boolean toggle (two-way) |
-| `UIDL-T-RANGE` | 13 | Interactive | Numeric slider (two-way) |
-| `UIDL-T-COLLECTION` | 14 | Collection | Data-driven list |
-| `UIDL-T-TABLE` | 15 | Collection | Tabular data |
-| `UIDL-T-INDICATOR` | 16 | Content | Progress/status display |
+#### DEFINE-ELEMENT
+```forth
+DEFINE-ELEMENT ( render-xt event-xt layout-xt flags "name" -- type-id )
+```
+Parse the next word from input as the tag name and register a new
+element type.  Returns the assigned type-id (1-based, sequential).
+Registry entries are persistent — they survive `UIDL-RESET`.
 
-### Pseudo-Types (17–20)
+Flag constants are composed with `OR`:
+```forth
+' my-render ' my-event ' my-layout  EL-CONTAINER OR-CHROME OR-FOCUS
+DEFINE-ELEMENT my-widget  CONSTANT UIDL-T-MY-WIDGET
+```
+
+#### EL-LOOKUP
+```forth
+EL-LOOKUP ( name-a name-l -- def | 0 )
+```
+Look up an element definition by tag name string.  Returns the
+definition record address, or 0 if not found.
+
+#### EL-DEF-BY-TYPE
+```forth
+EL-DEF-BY-TYPE ( type-id -- def | 0 )
+```
+Look up a definition by its numeric type-id.  O(1) via index table.
+
+#### Definition Record Accessors
+
+Each definition record is 64 bytes with these field accessors:
+
+| Word | Offset | Description |
+|------|--------|-------------|
+| `ED.TYPE` | +0 | Type-id (integer) |
+| `ED.NAME-A` | +8 | Tag name string address |
+| `ED.NAME-L` | +16 | Tag name string length |
+| `ED.FLAGS` | +24 | Content model + category + special flags |
+| `ED.RENDER-XT` | +32 | `( elem -- )` rendering hook |
+| `ED.EVENT-XT` | +40 | `( elem evt -- handled? )` event hook |
+| `ED.LAYOUT-XT` | +48 | `( elem -- )` layout hook |
+| `ED.NEXT` | +56 | Reserved / hash chain |
+
+### Element Definition Flags
+
+#### Content Model (bits 0–2)
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `UIDL-T-UIDL` | 17 | Root document element |
-| `UIDL-T-TEMPLATE` | 18 | Collection item template |
-| `UIDL-T-EMPTY` | 19 | Collection empty-state template |
-| `UIDL-T-REP` | 20 | Media representation variant |
+| `EL-LEAF` | 0 | No children allowed |
+| `EL-CONTAINER` | 1 | Arbitrary children |
+| `EL-COLLECTION` | 2 | Requires `<template>` + optional `<empty>` |
+| `EL-SELECTOR` | 3 | Contains `<option>` children |
+| `EL-FIXED-2` | 4 | Exactly 2 children (e.g. split) |
+| `EL-FIXED-1` | 5 | Exactly 1 child (e.g. scroll) |
+
+#### Category (bits 3–4)
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `EL-CAT-ENVELOPE` | 0 | Structural envelope |
+| `EL-CAT-DATA` | 8 | Data / content element |
+| `EL-CAT-CHROME` | 16 | Chrome / UI decoration |
+| `EL-CAT-BINDING` | 24 | Binding infrastructure |
+
+#### Special Flags (bits 5–7)
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `EL-F-FOCUS` | 32 | Inherently focusable |
+| `EL-F-SELF` | 64 | Self-closing allowed |
+| `EL-F-TWOWAY` | 128 | Two-way binding element |
+
+#### Composition Helpers
+
+| Word | Effect |
+|------|--------|
+| `OR-DATA` | Set data category |
+| `OR-CHROME` | Set chrome category |
+| `OR-BINDING` | Set binding category |
+| `OR-FOCUS` | Set focusable flag |
+| `OR-SELF` | Set self-closing flag |
+| `OR-TWOWAY` | Set two-way flag |
+
+#### Query Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `EL-CONTENT-MODEL` | `( fl -- model )` | Extract content model (bits 0–2) |
+| `EL-CATEGORY` | `( fl -- cat )` | Extract category (0–3) |
+| `EL-FOCUSABLE?` | `( fl -- flag )` | Test focusable bit |
+| `EL-SELF-CLOSE?` | `( fl -- flag )` | Test self-closing bit |
+| `EL-TWOWAY?` | `( fl -- flag )` | Test two-way bit |
+
+### Subscription Table
+
+The subscription table provides reactive binding between state-tree
+paths and UIDL elements.  When a state-tree path changes, calling
+`UIDL-NOTIFY` marks all subscribed elements dirty so the paint cycle
+can limit itself to changed subtrees.
+
+#### UIDL-SUBSCRIBE
+```forth
+UIDL-SUBSCRIBE ( elem bind-a bind-l -- )
+```
+Register an element as a subscriber to the given bind path.
+The path is hashed (FNV-1a) for O(1) matching.  No-op if the
+subscription table is full (128 entries).
+
+#### UIDL-NOTIFY
+```forth
+UIDL-NOTIFY ( path-a path-l -- )
+```
+Hash the path and scan all subscriptions.  For each match, set the
+`UIDL-F-DIRTY` flag on the subscribed element.
+
+#### UIDL-RESET-SUBS
+```forth
+UIDL-RESET-SUBS ( -- )
+```
+Clear all subscriptions and zero the table.
+
+### Dirty Flag Helpers
+
+#### UIDL-DIRTY?
+```forth
+UIDL-DIRTY? ( elem -- flag )
+```
+Test the `UIDL-F-DIRTY` bit on an element's flags.
+
+#### UIDL-DIRTY!
+```forth
+UIDL-DIRTY! ( elem -- )
+```
+Set the `UIDL-F-DIRTY` bit on an element.
+
+#### UIDL-CLEAN!
+```forth
+UIDL-CLEAN! ( elem -- )
+```
+Clear the `UIDL-F-DIRTY` bit on an element.
+
+## Element Types
+
+All built-in types are registered via the Element Registry at load time.
+Type-ids are assigned sequentially (1-based) in registration order,
+preserving backward compatibility.
+
+### Core Types (1–21, registered by uidl.f)
+
+| Constant | Value | Model | Category | Description |
+|----------|-------|-------|----------|-------------|
+| `UIDL-T-REGION` | 1 | container | data | Major layout region |
+| `UIDL-T-GROUP` | 2 | container | data | Grouping container |
+| `UIDL-T-SEPARATOR` | 3 | leaf | data | Visual/logical separator |
+| `UIDL-T-META` | 4 | leaf | data | Key/value metadata |
+| `UIDL-T-LABEL` | 5 | leaf | data | Text label |
+| `UIDL-T-MEDIA` | 6 | container | data | Multi-representation media |
+| `UIDL-T-SYMBOL` | 7 | leaf | data | Named symbol/icon |
+| `UIDL-T-CANVAS` | 8 | leaf | data | Drawing surface |
+| `UIDL-T-ACTION` | 9 | leaf | data | Button/command trigger |
+| `UIDL-T-INPUT` | 10 | leaf | data | Text entry (two-way) |
+| `UIDL-T-SELECTOR` | 11 | selector | data | Choice selector (two-way) |
+| `UIDL-T-TOGGLE` | 12 | leaf | data | Boolean toggle (two-way) |
+| `UIDL-T-RANGE` | 13 | leaf | data | Numeric slider (two-way) |
+| `UIDL-T-COLLECTION` | 14 | collection | data | Data-driven list |
+| `UIDL-T-TABLE` | 15 | container | data | Tabular data |
+| `UIDL-T-INDICATOR` | 16 | leaf | data | Progress/status display |
+| `UIDL-T-UIDL` | 17 | container | envelope | Root document element |
+| `UIDL-T-TEMPLATE` | 18 | container | binding | Collection item template |
+| `UIDL-T-EMPTY` | 19 | container | binding | Collection empty-state |
+| `UIDL-T-REP` | 20 | leaf | binding | Media representation variant |
+| `UIDL-T-OPTION` | 21 | leaf | binding | Selector option |
 
 `UIDL-T-NONE` (0) indicates an unknown/unmapped tag.
+
+### Chrome Types (22–42, registered by uidl-chrome.f)
+
+| Constant | Value | Model | Category | Description |
+|----------|-------|-------|----------|-------------|
+| `UIDL-T-MENUBAR` | 22 | container | chrome | Menu bar |
+| `UIDL-T-MENU` | 23 | container | chrome | Pull-down menu |
+| `UIDL-T-ITEM` | 24 | leaf | chrome | Menu item |
+| `UIDL-T-TABS` | 25 | container | chrome | Tab container |
+| `UIDL-T-TAB` | 26 | container | chrome | Tab panel |
+| `UIDL-T-SPLIT` | 27 | fixed-2 | chrome | Split pane |
+| `UIDL-T-SCROLL` | 28 | fixed-1 | chrome | Scroll wrapper |
+| `UIDL-T-TREE` | 29 | container | chrome | Tree widget |
+| `UIDL-T-STATUS` | 30 | container | chrome | Status bar |
+| `UIDL-T-DIALOG` | 31 | container | chrome | Dialog box |
+| `UIDL-T-TOAST` | 32 | leaf | chrome | Toast notification |
+| `UIDL-T-TEXTAREA` | 33 | leaf | data | Multi-line text (two-way) |
+| `UIDL-T-DROPDOWN` | 34 | container | data | Dropdown selector |
+| `UIDL-T-RADIOGROUP` | 35 | container | data | Radio button group |
+| `UIDL-T-RADIO` | 36 | leaf | data | Radio button (two-way) |
+| `UIDL-T-TOOLBAR` | 37 | container | chrome | Tool bar |
+| `UIDL-T-LOG` | 38 | container | data | Log/output display |
+| `UIDL-T-CODE` | 39 | leaf | data | Code block |
+| `UIDL-T-ACCORDION` | 40 | container | data | Collapsible sections |
+| `UIDL-T-PASSWORD` | 41 | leaf | data | Password input (two-way) |
+| `UIDL-T-CONTEXTMENU` | 42 | container | chrome | Context menu |
 
 ## Arrangement Modes
 
@@ -414,12 +595,16 @@ Return the value of the element's action attribute (same priority as
 | `UIDL-A-FLOW` | 4 | Wrapping flow layout |
 | `UIDL-A-GRID` | 5 | Grid layout |
 
-## Element Flags
+## Element Instance Flags
+
+These are per-instance flags stored in the element's `UE.FLAGS` field,
+separate from the definition flags in the registry.
 
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `UIDL-F-SELFCLOSE` | 1 | Element was self-closing (`<tag />`) |
 | `UIDL-F-TWOWAY` | 2 | Auto-set on input, selector, toggle, range |
+| `UIDL-F-DIRTY` | 4 | Element needs repaint (set by `UIDL-NOTIFY`) |
 
 ## Error Codes
 
@@ -432,6 +617,7 @@ Return the value of the element's action attribute (same priority as
 | `UIDL-E-FULL` | 4 | Element pool exhausted |
 | `UIDL-E-STR-FULL` | 5 | String pool exhausted |
 | `UIDL-E-ATTR-FULL` | 6 | Attribute pool exhausted |
+| `UIDL-E-REG-FULL` | 7 | Element registry full (max 64 types) |
 
 ## Internal Layout
 
@@ -474,6 +660,15 @@ Return the value of the element's action attribute (same priority as
 | Attributes | 512 × 40 bytes = 20 KB |
 | Strings | 12 KB |
 | ID hash table | 256 buckets (linear probing) |
+| Subscriptions | 128 × 24 bytes = 3 KB |
+
+### Element Registry Storage
+
+| Pool | Capacity |
+|------|----------|
+| Registry slots | 64 × 64 bytes = 4 KB |
+| Registry strings | 512 bytes (persistent, not reset) |
+| Type index | 64 cells |
 
 ## UIDL Document Format
 
@@ -521,6 +716,23 @@ generic attribute list:
 
 All other attributes (e.g. `label`, `on-activate`, `emit`, `src`, `when`,
 `mode`, `min`, `max`) are stored in the generic attribute linked list.
+
+## uidl-chrome.f — Chrome Element Registrations
+
+**Module:** `akashic-uidl-chrome`  
+**File:** `akashic/liraq/uidl-chrome.f`  
+**Requires:** `akashic-uidl`
+
+Registers 21 additional element types for chrome, must-have, and
+nice-to-have UI widgets.  All render/event/layout execution tokens
+start as `NOOP` — the TUI backend patches them when loaded.
+
+Load after `uidl.f`, before any backend:
+```forth
+REQUIRE uidl-chrome.f
+```
+
+See the Chrome Types table above for the full list.
 
 ## Test Coverage
 

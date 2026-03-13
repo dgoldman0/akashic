@@ -50,6 +50,8 @@ and no circular imports.
   - [5.1 tui/dom-tui.f — DOM-to-TUI Node Mapping](#51-tuidom-tuif--dom-to-tui-node-mapping)
   - [5.2 tui/dom-render.f — DOM Tree Layout & Paint](#52-tuidom-renderf--dom-tree-layout--paint)
   - [5.3 tui/dom-event.f — DOM Event Routing](#53-tuidom-eventf--dom-event-routing)
+  - [5.4 liraq/uidl.f Hardening — Element Registry & Five Protocols (Phase 0)](#54-liraquidlf-hardening--element-registry--five-protocols-phase-0)
+  - [5.5 tui/uidl-tui.f — UIDL TUI Backend](#55-tuiuidl-tuif--uidl-tui-backend)
 - [Layer 6 — Application Shell](#layer-6--application-shell)
   - [6.1 tui/event.f — Event Loop & Dispatch](#61-tuieventf--event-loop--dispatch)
   - [6.2 tui/focus.f — Focus Manager](#62-tuifocusf--focus-manager)
@@ -201,6 +203,8 @@ column.
    - `tui/dom-tui.f`  → `DTUI-`
    - `tui/dom-render.f`→ `DREN-`
    - `tui/dom-event.f` → `DEVT-`
+   - `liraq/uidl-chrome.f` → `UIDL-T-` (chrome type constants)
+   - `tui/uidl-tui.f`  → `UTUI-`
 
    Internal words use `_`-prefix: `_ANSI-`, `_SCR-`, etc.
 
@@ -214,6 +218,12 @@ column.
 
 ## Architecture Overview
 
+Two rendering paths share Layers 0–4.  The **UIDL path** (primary)
+uses the UIDL tree as the runtime, with the Element Registry
+providing extensible draw/event/layout dispatch.  The **DOM path**
+(web/HTML) maps DOM nodes through sidecars into the same TUI
+primitives.  Both converge on the screen buffer.
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                       Application                            │
@@ -223,11 +233,22 @@ column.
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 6: Application Shell                                  │
 │  event.f (loop) │ focus.f (focus chain) │ app.f (lifecycle)  │
-├──────────────────────────────────────────────────────────────┤
-│  Layer 5: DOM-TUI Bridge                                     │
-│  dom-tui.f (node mapping) │ dom-render.f │ dom-event.f       │
-│  ▲ consumes: dom/dom.f, css/css.f, css/bridge.f             │
-├──────────────────────────────────────────────────────────────┤
+├─────────────────────────┬────────────────────────────────────┤
+│  Layer 5a: UIDL Path    │  Layer 5b: DOM Path (HTML/CSS)     │
+│  (primary — direct)     │  (optional — web content)          │
+│                         │                                    │
+│  liraq/uidl.f           │  dom/event.f  (W3C events)         │
+│    Element Registry     │  tui/dom-tui.f  (sidecars)        │
+│    Five Protocols       │  tui/dom-render.f  (layout+paint)  │
+│    Subscription Table   │  tui/dom-event.f  (key/mouse)      │
+│  liraq/uidl-chrome.f    │                                    │
+│    (chrome elements)    │  ▲ consumes: dom/, css/,           │
+│  tui/uidl-tui.f         │    liraq/lel.f, state-tree.f       │
+│    (TUI backend)        │                                    │
+│                         │                                    │
+│  ▲ consumes: liraq/,    │                                    │
+│    markup/, Layers 0–4  │                                    │
+├─────────────────────────┴────────────────────────────────────┤
 │  Layer 4: Widgets                                            │
 │  label │ input │ list │ menu │ progress │ table │ dialog│tabs│
 ├──────────────────────────────────────────────────────────────┤
@@ -246,7 +267,8 @@ column.
 │  KDOS BIOS: EMIT │ KEY │ KEY? │ TYPE │ CR                    │
 ├──────────────────────────────────────────────────────────────┤
 │  Existing Akashic: string.f │ utf8.f │ fmt.f │ event.f       │
-│  dom/dom.f │ css/css.f │ css/bridge.f                        │
+│  dom/dom.f │ css/css.f │ css/bridge.f │ markup/core.f        │
+│  liraq/uidl.f │ liraq/lel.f │ liraq/state-tree.f            │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -1488,26 +1510,28 @@ Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`
 
 ---
 
-## Layer 5 — DOM-TUI Bridge
+## Layer 5 — Declarative UI
 
-The DOM/CSS subsystem (dom/dom.f, css/css.f, css/bridge.f) already
-provides a full tree with attributes, mutation, query, traversal,
-and style resolution including CSS cascade, specificity, and
-inheritance.  Rather than building a parallel scene-graph, this
-layer re-uses the existing DOM as the tree structure and adds a
-thin adapter that maps DOM nodes + resolved CSS properties into
-TUI character-cell geometry.
+Layer 5 has two independent paths.  Both are optional — pure-widget
+TUI apps (Layers 0–4) skip this layer entirely.
 
-The DOM `aux` field (offset +72 in each 80-byte node) is the hook:
-it points to a small TUI-specific sidecar descriptor that carries
-character-cell layout results, resolved fg/bg colors, border style,
-dirty flags, and draw/event execution tokens.
+**Path 5a — UIDL (primary).**  The UIDL tree is the runtime.
+Elements participate in five declarative protocols (Data, Visibility,
+Layout, Action, Content) via an open Element Registry.  New elements
+are defined at any time with `DEFINE-ELEMENT`, making the "markup
+language" extensible in the Forth tradition — every component is just
+a word.  `tui/uidl-tui.f` provides render-xt, event-xt, and layout-xt
+implementations that write directly to the screen buffer.  No DOM
+intermediary.  Reactive binding, focus management, and dirty-rect
+repaint all operate on the UIDL tree.
 
-This layer sits between the core widgets (Layer 4) and the
-application shell (Layer 6).  It is **optional** — pure-widget TUI
-apps that don't need HTML/CSS skip this layer entirely.  But for
-applications that want declarative UI via HTML markup with CSS
-styling rendered to the terminal, this is the bridge.
+**Path 5b — DOM (web/HTML).**  For rendering HTML content with CSS
+to the terminal, this path maps DOM nodes to TUI sidecars via
+`dom-tui.f`, paints through `dom-render.f`, and routes input through
+`dom-event.f`.  This reuses the existing `dom/dom.f` + `css/` stack.
+
+Sections 5.0–5.3 describe the DOM path (unchanged).
+Sections 5.4–5.5 describe the UIDL path.
 
 ### 5.0 dom/event.f — DOM Event System
 
@@ -2052,6 +2076,779 @@ specific) match.
 
 ---
 
+### 5.4 liraq/uidl.f Hardening — Element Registry & Five Protocols (Phase 0)
+
+**Goal:** Refactor `liraq/uidl.f` from a fixed-vocabulary parser
+into an extensible runtime anchored by an **Element Registry** and
+**Five Protocols**.  After this phase, any code can call
+`DEFINE-ELEMENT` to register a new element type — with its tag name,
+draw/event/layout execution tokens, content model, and category —
+making the "markup language" as extensible as the Forth dictionary
+itself.  This is Phase 0: it touches only `liraq/uidl.f` and adds
+one new file `liraq/uidl-chrome.f`.
+
+#### What Changes in uidl.f
+
+| Section | Lines | Change |
+|---------|-------|--------|
+| Type enum (20 constants) | 58–83 | **Replaced** — auto-assigned by `DEFINE-ELEMENT` |
+| `_UDL-MAP-TAG` (20 if-branches) | 286–312 | **Replaced** — single registry hash lookup |
+| `UIDL-TYPE-NAME` (20 if-branches) | 326–348 | **Replaced** — reads name from registry definition |
+| Two-way flag hardcode | 462–466 | **Replaced** — flag from registry definition record |
+| Everything else | ~850 lines | **Unchanged** — pools, tree, hash, attrs, validation, mutation, dispatch |
+
+Net effect: ~100 lines removed, ~200 lines added → uidl.f grows
+from 1121 to ~1220 lines.
+
+#### Element Definition Record (64 bytes, 8 cells)
+
+| Offset | Field | Accessor | Description |
+|--------|-------|----------|-------------|
+| +0 | type-id | `ED.TYPE` | Auto-assigned integer (1, 2, 3, …) |
+| +8 | name-a | `ED.NAME-A` | Tag name string address |
+| +16 | name-l | `ED.NAME-L` | Tag name string length |
+| +24 | flags | `ED.FLAGS` | Content model + category bits (see below) |
+| +32 | render-xt | `ED.RENDER-XT` | `( elem -- )` — rendering hook |
+| +40 | event-xt | `ED.EVENT-XT` | `( elem evt -- handled? )` — input hook |
+| +48 | layout-xt | `ED.LAYOUT-XT` | `( elem -- )` — child-positioning hook |
+| +56 | next | `ED.NEXT` | Hash chain link |
+
+#### Element Flags Word
+
+```
+Bits 0–2:  Content model
+  0 = EL-LEAF           leaf, no children
+  1 = EL-CONTAINER      arbitrary children
+  2 = EL-COLLECTION     requires <template> + optional <empty>
+  3 = EL-SELECTOR       contains <option> children
+  4 = EL-FIXED-2        exactly 2 children (split)
+  5 = EL-FIXED-1        exactly 1 child (scroll)
+
+Bits 3–4:  Category
+  0 = EL-CAT-ENVELOPE
+  1 = EL-CAT-DATA
+  2 = EL-CAT-CHROME
+  3 = EL-CAT-BINDING
+
+Bit 5:     Focusable (inherently interactive)
+Bit 6:     Self-closing allowed
+Bit 7:     Two-way binding (input/toggle/range/selector)
+```
+
+#### Element Registry (hash table)
+
+64-slot open-addressing hash table keyed by tag name (FNV-1a,
+same hash function already in uidl.f).  Max 64 element types —
+sufficient for UIDL's 20 + chrome 11 + must-haves 5 + nice-to-haves 5
++ user headroom.
+
+```forth
+64 CONSTANT _EL-REG-SZ
+CREATE _EL-REGISTRY  _EL-REG-SZ 64 * ALLOT   \ 64 × 64 = 4,096 bytes
+VARIABLE _EL-REG-CNT                           \ number registered
+```
+
+#### DEFINE-ELEMENT
+
+```forth
+: DEFINE-ELEMENT  ( render-xt event-xt layout-xt flags "name" -- )
+    PARSE-NAME                          \ ( draw evt lay flags name-a name-l )
+    \ hash-lookup slot, store definition
+    \ auto-assign type-id = _EL-REG-CNT @ 1+
+    \ copy name into string pool
+    \ store all fields in registry slot
+    ... ;
+```
+
+After this word executes, the tag name is known to the parser, the
+type-id is assigned, and all five protocol hooks are stored.  The
+existing `UIDL-T-*` constants are replaced by:
+
+```forth
+\ Built-in registrations (called at load time, after registry init)
+' noop  ' noop  ' noop   EL-LEAF       DEFINE-ELEMENT none
+' noop  ' noop  ' noop   EL-CONTAINER  DEFINE-ELEMENT region
+' noop  ' noop  ' noop   EL-CONTAINER  DEFINE-ELEMENT group
+...
+```
+
+Each one returns a CONSTANT-like type-id:
+```forth
+DEFINE-ELEMENT region   \ defines UIDL-T-REGION = (auto-id)
+```
+
+#### Registry Lookup
+
+```forth
+: EL-LOOKUP  ( name-a name-l -- def | 0 )
+    \ FNV-1a hash → scan registry slots → match name → return def
+    ... ;
+
+: EL-DEF-BY-TYPE  ( type-id -- def | 0 )
+    \ Linear search (small table) or parallel index array
+    ... ;
+```
+
+The parser's `_UDL-MAP-TAG` becomes:
+```forth
+: _UDL-MAP-TAG  ( name-a name-l -- type )
+    EL-LOOKUP DUP IF ED.TYPE @ ELSE DROP 0 THEN ;
+```
+
+And `UIDL-TYPE-NAME` becomes:
+```forth
+: UIDL-TYPE-NAME  ( type -- a l )
+    EL-DEF-BY-TYPE DUP IF
+        DUP ED.NAME-A @ SWAP ED.NAME-L @
+    ELSE DROP S" unknown" THEN ;
+```
+
+#### Five Protocols
+
+Every element — built-in or user-defined — participates in these
+five declarative protocols automatically by virtue of being in the
+registry:
+
+**1. Data Protocol (`bind=`)**
+Every element can carry `bind=expr`.  The system evaluates the LEL
+expression against the state-tree, delivers the resolved value to
+the element's `render-xt`, and (for two-way elements, flagged
+`EL-F-TWOWAY`) routes user input back via `UIDL-BIND-WRITE`.
+No user wiring required.
+
+**2. Visibility Protocol (`when=`)**
+Every element can carry `when=predicate`.  The system evaluates it
+before calling `render-xt`.  If false, the element and its subtree
+are skipped entirely.  State changes re-evaluate the predicate.
+
+**3. Layout Protocol (`arrange=`)**
+Every container element has an `arrange=` mode (stack/flex/flow/
+grid/dock/none).  The system calls the element's `layout-xt`,
+which receives the element's bounds and positions children according
+to the declared mode.  New modes can be registered.
+
+**4. Action Protocol (`on-activate=` / `emit=` / `set-state=`)**
+Interactive elements declare actions.  The event system dispatches
+them without user code — they become state-tree mutations or named
+signals.  The `UIDL-DISPATCH` / `UIDL-ACTION-VALUE` words (already
+in uidl.f) implement this.
+
+**5. Content Protocol (via registry flags)**
+Each element declares its content model via `ED.FLAGS` bits 0–2.
+The parser enforces the model: a `COLLECTION` must have a
+`<template>` child, a `SPLIT` must have exactly 2 children, a
+`SELECTOR` must contain `<option>`s, etc.  `UIDL-VALIDATE` checks
+these rules using the registry's content-model field instead of
+hardcoded type comparisons.
+
+#### Subscription Table (new)
+
+A path→element subscription table that makes reactive binding
+truly reactive:
+
+```forth
+128 CONSTANT _UDL-MAX-SUBS
+CREATE _UDL-SUBS  _UDL-MAX-SUBS 24 * ALLOT  \ 128 × 24 = 3,072 bytes
+VARIABLE _UDL-SUB-CNT
+
+\ Each subscription: ( path-hash 8 | elem-ptr 8 | next 8 ) = 24 bytes
+
+: UIDL-SUBSCRIBE  ( elem bind-a bind-l -- )
+    \ Hash the bind path, store elem in subscription chain
+    ... ;
+
+: UIDL-NOTIFY  ( path-a path-l -- )
+    \ Hash path, walk the chain, mark each subscribed elem dirty
+    ... ;
+```
+
+When the state-tree changes a path, it calls `UIDL-NOTIFY`.  Every
+element bound to that path gets its dirty flag set.  The paint cycle
+only redraws dirty elements.  This replaces the "rescan everything"
+approach.
+
+#### New File: liraq/uidl-chrome.f (~120 lines)
+
+Registers the chrome + must-have + nice-to-have elements into the
+Element Registry.  Loaded after `uidl.f`, before any backend.
+
+```forth
+\ liraq/uidl-chrome.f — Chrome Element Registrations
+REQUIRE uidl.f
+PROVIDED akashic-uidl-chrome
+
+\ --- Chrome elements ---
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME             DEFINE-ELEMENT menubar
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME OR-FOCUS    DEFINE-ELEMENT menu
+' noop ' noop ' noop  EL-LEAF OR-CHROME OR-FOCUS OR-SELF DEFINE-ELEMENT item
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME             DEFINE-ELEMENT tabs
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME OR-FOCUS    DEFINE-ELEMENT tab
+' noop ' noop ' noop  EL-FIXED-2 OR-CHROME               DEFINE-ELEMENT split
+' noop ' noop ' noop  EL-FIXED-1 OR-CHROME               DEFINE-ELEMENT scroll
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME OR-FOCUS    DEFINE-ELEMENT tree
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME             DEFINE-ELEMENT status
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME             DEFINE-ELEMENT dialog
+' noop ' noop ' noop  EL-LEAF OR-CHROME                  DEFINE-ELEMENT toast
+
+\ --- Must-have additions ---
+' noop ' noop ' noop  EL-LEAF OR-DATA OR-FOCUS OR-TWOWAY DEFINE-ELEMENT textarea
+' noop ' noop ' noop  EL-CONTAINER OR-DATA OR-FOCUS      DEFINE-ELEMENT dropdown
+' noop ' noop ' noop  EL-CONTAINER OR-DATA                DEFINE-ELEMENT radiogroup
+' noop ' noop ' noop  EL-LEAF OR-DATA OR-FOCUS OR-TWOWAY DEFINE-ELEMENT radio
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME              DEFINE-ELEMENT toolbar
+
+\ --- Nice-to-have additions ---
+' noop ' noop ' noop  EL-CONTAINER OR-DATA               DEFINE-ELEMENT log
+' noop ' noop ' noop  EL-LEAF OR-DATA                    DEFINE-ELEMENT code
+' noop ' noop ' noop  EL-CONTAINER OR-DATA               DEFINE-ELEMENT accordion
+' noop ' noop ' noop  EL-LEAF OR-DATA OR-FOCUS OR-TWOWAY DEFINE-ELEMENT password
+' noop ' noop ' noop  EL-CONTAINER OR-CHROME             DEFINE-ELEMENT contextmenu
+```
+
+All render-xt / event-xt / layout-xt are `noop` at registration time.
+The TUI backend (`tui/uidl-tui.f`) patches them with real
+implementations when loaded.
+
+#### Chrome-Specific Attributes
+
+| Attribute | Used on | Type | Description |
+|-----------|---------|------|-------------|
+| `title` | `uidl`, `tab`, `dialog` | string | Window/tab/dialog title |
+| `label` | `menu`, `tab`, `item` | string | Display label |
+| `key` | `item`, `action` | string | Keyboard shortcut (`C-n`, `F5`, etc.) |
+| `do` | `item`, `action` | string | Action name to emit |
+| `dir` | `split`, `separator` | `h` \| `v` | Direction |
+| `ratio` | `split` | int | Left/top pane percentage (0–100) |
+| `multiline` | `input` | bool | Multi-line mode (or use `<textarea>`) |
+| `timeout` | `toast` | int | Auto-dismiss ms (0 = manual) |
+| `modal` | `dialog` | bool | Focus-trapping (default: true) |
+| `expanded` | `tree` node | bool | Initially expanded |
+| `checked` | `toggle`, `radio` | bool | Initial state |
+| `min`, `max`, `step` | `range` | int | Slider bounds |
+| `placeholder` | `input`, `textarea`, `password` | string | Placeholder text |
+| `cols`, `rows` | `uidl` | int | Terminal dimensions |
+
+All these work through `UIDL-ATTR` — the generic attribute API
+already in uidl.f.  No parser changes needed.
+
+#### Content Model Rules (via registry flags)
+
+| Parent | Flag | Allowed children |
+|--------|------|------------------|
+| `uidl` | `EL-CONTAINER` | menubar, toolbar, tabs, split, scroll, status, dialog, toast, any Data |
+| `menubar` | `EL-CONTAINER` | `menu` only |
+| `menu` | `EL-CONTAINER` | `item`, `separator` |
+| `tabs` | `EL-CONTAINER` | `tab` only |
+| `tab` | `EL-CONTAINER` | any Data or Chrome (except uidl, menubar, tab) |
+| `split` | `EL-FIXED-2` | exactly 2 children |
+| `scroll` | `EL-FIXED-1` | exactly 1 child |
+| `dialog` | `EL-CONTAINER` | any Data or Chrome (except uidl) |
+| `collection` | `EL-COLLECTION` | `template`, `empty` |
+| `selector` | `EL-SELECTOR` | `option` |
+
+#### Example Document
+
+```xml
+<uidl cols="80" rows="24" title="My App">
+  <menubar>
+    <menu label="File">
+      <item label="New"  key="C-n" do="file-new" />
+      <item label="Open" key="C-o" do="file-open" />
+      <separator />
+      <item label="Quit" key="C-q" do="quit" />
+    </menu>
+  </menubar>
+
+  <toolbar>
+    <action do="file-new">New</action>
+    <action do="undo">Undo</action>
+  </toolbar>
+
+  <tabs id="main">
+    <tab label="Editor">
+      <split dir="h" ratio="25">
+        <scroll>
+          <tree id="files" bind="fs.tree" />
+        </scroll>
+        <scroll>
+          <textarea id="editor" bind="fs.content"
+                    placeholder="Start typing..." />
+        </scroll>
+      </split>
+    </tab>
+    <tab label="Settings">
+      <region arrange="stack">
+        <label>Theme:</label>
+        <dropdown id="theme" bind="prefs.theme">
+          <option>Dark</option>
+          <option>Light</option>
+          <option>High Contrast</option>
+        </dropdown>
+        <separator />
+        <toggle id="wordwrap" bind="prefs.wordwrap">Word Wrap</toggle>
+        <label>Font Size:</label>
+        <range id="fontsize" bind="prefs.fontsize" min="8" max="24" step="1" />
+      </region>
+    </tab>
+  </tabs>
+
+  <status bind="app.statusline" />
+
+  <dialog id="confirm" title="Confirm" when="confirm.visible" modal="true">
+    <label bind="confirm.message" />
+    <group arrange="flex">
+      <action id="confirm-yes" do="confirm-yes">Yes</action>
+      <action id="confirm-no"  do="confirm-no">No</action>
+    </group>
+  </dialog>
+
+  <toast timeout="3000" when="toast.visible" bind="toast.message" />
+</uidl>
+```
+
+Note: the root element is `<uidl>`, not `<tui>`.  There is no
+separate "TUIDL language" — there is UIDL with a larger registry.
+
+#### Full Element Type Table
+
+| # | Element | Category | Content | Focus? | Self-close? | Two-way? |
+|---|---------|----------|---------|--------|-------------|----------|
+| 1 | `uidl` | Envelope | container | — | No | — |
+| 2 | `region` | Data | container | No | No | — |
+| 3 | `group` | Data | container | No | No | — |
+| 4 | `separator` | Data | leaf | No | Yes | — |
+| 5 | `meta` | Data | leaf | No | Yes | — |
+| 6 | `label` | Data | leaf | No | No | — |
+| 7 | `media` | Data | leaf | No | No | — |
+| 8 | `symbol` | Data | leaf | No | Yes | — |
+| 9 | `canvas` | Data | leaf | Yes | No | — |
+| 10 | `action` | Data | leaf | Yes | No | — |
+| 11 | `input` | Data | leaf | Yes | Yes | Yes |
+| 12 | `selector` | Data | selector | Yes | No | Yes |
+| 13 | `toggle` | Data | leaf | Yes | Yes | Yes |
+| 14 | `range` | Data | leaf | Yes | Yes | Yes |
+| 15 | `collection` | Data | collection | No | No | — |
+| 16 | `table` | Data | container | Yes | No | — |
+| 17 | `indicator` | Data | leaf | No | Yes | — |
+| 18 | `template` | Binding | container | — | No | — |
+| 19 | `empty` | Binding | container | — | No | — |
+| 20 | `rep` | Binding | container | — | No | — |
+| 21 | `option` | Binding | leaf | — | Yes | — |
+| 22 | `menubar` | Chrome | container | No | No | — |
+| 23 | `menu` | Chrome | container | Yes | No | — |
+| 24 | `item` | Chrome | leaf | Yes | Yes | — |
+| 25 | `tabs` | Chrome | container | No | No | — |
+| 26 | `tab` | Chrome | container | Yes | No | — |
+| 27 | `split` | Chrome | fixed-2 | No | No | — |
+| 28 | `scroll` | Chrome | fixed-1 | No | No | — |
+| 29 | `tree` | Chrome | container | Yes | No | — |
+| 30 | `status` | Chrome | container | No | No | — |
+| 31 | `dialog` | Chrome | container | No | No | — |
+| 32 | `toast` | Chrome | leaf | No | No | — |
+| 33 | `textarea` | Data | leaf | Yes | No | Yes |
+| 34 | `dropdown` | Data | container | Yes | No | Yes |
+| 35 | `radiogroup` | Data | container | No | No | — |
+| 36 | `radio` | Data | leaf | Yes | Yes | Yes |
+| 37 | `toolbar` | Chrome | container | No | No | — |
+| 38 | `log` | Data | container | No | No | — |
+| 39 | `code` | Data | leaf | No | No | — |
+| 40 | `accordion` | Data | container | No | No | — |
+| 41 | `password` | Data | leaf | Yes | Yes | Yes |
+| 42 | `contextmenu` | Chrome | container | No | No | — |
+
+42 elements total.  The registry has room for 64, leaving 22 slots
+for user-defined components.
+
+#### Test Targets: ~25 tests
+
+- Registry init: 20 built-in elements have correct type-ids
+- `DEFINE-ELEMENT` for a new tag → lookup finds it
+- `DEFINE-ELEMENT` duplicate name → error
+- `EL-LOOKUP` unknown name → 0
+- `EL-DEF-BY-TYPE` valid → returns definition
+- `EL-DEF-BY-TYPE` invalid → 0
+- `UIDL-TYPE-NAME` round-trips through registry
+- `_UDL-MAP-TAG` uses registry (existing parser tests still pass)
+- Two-way flag from registry matches old hardcode
+- Chrome elements registered by uidl-chrome.f
+- Content model: `EL-FIXED-2` rejects 0 or 3 children
+- Content model: `EL-FIXED-1` rejects 2+ children
+- Content model: `EL-COLLECTION` requires template
+- Content model: `EL-SELECTOR` requires option
+- Subscription: `UIDL-SUBSCRIBE` + `UIDL-NOTIFY` marks elem dirty
+- Subscription: multiple elems on same path all marked
+- Subscription: unrelated path does not mark
+- All existing uidl.f tests pass unchanged (backward compat)
+- Registry at capacity (64) → next `DEFINE-ELEMENT` errors gracefully
+- `ED.RENDER-XT` / `ED.EVENT-XT` / `ED.LAYOUT-XT` stored and retrievable
+- Flag accessors: `EL-FOCUSABLE?`, `EL-SELF-CLOSE?`, `EL-TWOWAY?`
+- Category accessor: `EL-CATEGORY`
+- Content model accessor: `EL-CONTENT-MODEL`
+- Parse document with chrome elements → correct types
+- Parse document with user-defined element → correct type
+
+---
+
+### 5.5 tui/uidl-tui.f — UIDL TUI Backend
+
+**Goal:** The TUI rendering backend for UIDL.  Installs real
+render-xt, event-xt, and layout-xt implementations into the Element
+Registry for all built-in + chrome elements, then provides focus
+management, hit-testing, dirty-rect repaint, event dispatch
+(bubble/capture on the UIDL tree), and the subscription-driven
+reactive loop — all operating directly on the UIDL element tree
+with no DOM intermediary.
+
+File: `tui/uidl-tui.f`
+Prefix: `UTUI-` (public), `_UTUI-` (internal)
+Provider: `PROVIDED akashic-tui-uidl-tui`
+Dependencies:
+  `REQUIRE liraq/uidl.f`, `REQUIRE liraq/uidl-chrome.f`,
+  `REQUIRE liraq/state-tree.f`, `REQUIRE liraq/lel.f`,
+  `REQUIRE tui/screen.f`, `REQUIRE tui/draw.f`, `REQUIRE tui/box.f`,
+  `REQUIRE tui/region.f`, `REQUIRE tui/layout.f`, `REQUIRE tui/keys.f`
+
+~500 lines
+
+#### Design Overview
+
+The UIDL tree **is** the runtime.  No DOM is created.  Each UIDL
+element node already carries: type-id, parent/child/sibling pointers,
+attributes, bind expression, when predicate, arrangement mode, and ID.
+The Element Registry adds: render-xt, event-xt, layout-xt.
+This module connects the two.
+
+```
+State-tree change
+    │
+    ▼
+UIDL-NOTIFY ( path )
+    │
+    ▼
+Mark bound elements dirty
+    │
+    ▼
+UTUI-PAINT (dirty-rect pass)
+    │
+    ▼
+For each dirty element:
+    LEL evaluate bind → new value
+    Call render-xt → writes to screen buffer
+    │
+    ▼
+SCR-FLUSH → terminal
+```
+
+#### TUI Sidecar (per-element, 48 bytes)
+
+Each visible UIDL element gets a small TUI sidecar allocated from
+a static pool.  Stored in a parallel array indexed by element pool
+index (no pointer chase — `elem-index × 48 + sidecar-base`).
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0 | row | Computed row in screen coordinates |
+| +8 | col | Computed column |
+| +16 | width | Computed width (cells) |
+| +24 | height | Computed height (cells) |
+| +32 | style | Packed: fg(8) bg(8) attrs(8) border(8) |
+| +40 | flags | Dirty, visible, focused, has-sidecar |
+
+```forth
+48 CONSTANT _UTUI-SC-SZ
+CREATE _UTUI-SIDECARS  256 _UTUI-SC-SZ * ALLOT  \ 12,288 bytes
+```
+
+#### XT Installation
+
+At load time, `uidl-tui.f` patches every registered element's
+render-xt, event-xt, and layout-xt with TUI-specific implementations:
+
+```forth
+: UTUI-INSTALL-XTS  ( -- )
+    S" label"   EL-LOOKUP DUP IF ' _UTUI-RENDER-LABEL  SWAP ED.RENDER-XT ! THEN
+    S" action"  EL-LOOKUP DUP IF ' _UTUI-RENDER-ACTION SWAP ED.RENDER-XT ! THEN
+    S" action"  EL-LOOKUP DUP IF ' _UTUI-H-ACTION      SWAP ED.EVENT-XT  ! THEN
+    S" input"   EL-LOOKUP DUP IF ' _UTUI-RENDER-INPUT  SWAP ED.RENDER-XT ! THEN
+    S" input"   EL-LOOKUP DUP IF ' _UTUI-H-INPUT       SWAP ED.EVENT-XT  ! THEN
+    \ ... all 42 elements ...
+    S" menubar" EL-LOOKUP DUP IF ' _UTUI-RENDER-MBAR   SWAP ED.RENDER-XT ! THEN
+    S" tabs"    EL-LOOKUP DUP IF ' _UTUI-RENDER-TABS   SWAP ED.RENDER-XT ! THEN
+    S" dialog"  EL-LOOKUP DUP IF ' _UTUI-RENDER-DLG    SWAP ED.RENDER-XT ! THEN
+    \ etc.
+;
+UTUI-INSTALL-XTS   \ runs at load time
+```
+
+#### Event Dispatch (bubble/capture on UIDL tree)
+
+Same algorithm as `dom/event.f` but walking UIDL parent/child:
+
+```forth
+: UTUI-DISPATCH  ( elem evt-type detail -- handled? )
+    \ 1. Build ancestor path: elem → UIDL-PARENT → ... → root
+    \ 2. CAPTURE: walk root→parent, call each event-xt
+    \ 3. TARGET: call elem's event-xt
+    \ 4. BUBBLE: walk parent→root, call each event-xt
+    \ Check stopped? flag at each step
+    ... ;
+```
+
+Event objects are stack-allocated (same 80-byte layout as
+`dom/event.f`), keeping the event protocol consistent.
+
+#### Focus Management
+
+Single focused-element pointer + Tab/Shift-Tab cycling through
+elements whose registry definition has `EL-F-FOCUS` set:
+
+```forth
+VARIABLE _UTUI-FOCUS
+
+: UTUI-FOCUS     ( -- elem | 0 )  _UTUI-FOCUS @ ;
+: UTUI-FOCUS!    ( elem -- )
+    \ Fire blur on old, focus on new, update pointer
+    ... ;
+: UTUI-FOCUS-NEXT  ( -- )
+    \ Walk UIDL tree DFS from current, find next focusable
+    ... ;
+: UTUI-FOCUS-PREV  ( -- )
+    \ Walk reverse
+    ... ;
+```
+
+#### Hit Testing
+
+```forth
+: UTUI-HIT-TEST  ( row col -- elem | 0 )
+    \ Walk UIDL tree reverse DFS (back-to-front z-order)
+    \ Check sidecar bounds for each visible element
+    \ Return deepest match
+    ... ;
+```
+
+#### Layout Engine
+
+Each element's `layout-xt` receives the element and computes its
+children's sidecar positions based on `arrange=` mode:
+
+```forth
+: _UTUI-LAYOUT-STACK  ( elem -- )    \ vertical stack
+    ... ;
+: _UTUI-LAYOUT-FLEX   ( elem -- )    \ horizontal distribute
+    ... ;
+: _UTUI-LAYOUT-FLOW   ( elem -- )    \ inline wrapping
+    ... ;
+: _UTUI-LAYOUT-GRID   ( elem -- )    \ equal-width columns
+    ... ;
+: _UTUI-LAYOUT-DOCK   ( elem -- )    \ first child fills remainder
+    ... ;
+```
+
+Chrome layout is also done via layout-xt:
+- `menubar` layout-xt → claims row 0, full width
+- `status` layout-xt → claims last row, full width
+- `tabs` layout-xt → tab header row + content region below
+- `split` layout-xt → divide by `ratio=`, draw divider
+- `scroll` layout-xt → clip child, add scrollbar
+- `dialog` layout-xt → centered overlay, computed size
+
+#### Dirty-Rect Repaint
+
+```forth
+: UTUI-PAINT  ( -- )
+    \ Walk UIDL tree.  For each element:
+    \   If when= evaluates false → skip subtree, clear sidecar region
+    \   If dirty flag set:
+    \     LEL evaluate bind= → new value
+    \     Call render-xt with elem + resolved value
+    \     Clear dirty flag
+    ... ;
+```
+
+Only dirty nodes repaint.  Subscriptions mark individual elements
+dirty when their bound state-tree path changes.  Full relayout
+(`UTUI-RELAYOUT`) marks everything dirty.
+
+#### Shortcut Registration
+
+`key=` attributes on `<item>` and `<action>` elements are parsed
+into key descriptors and stored in a global shortcut table:
+
+```forth
+64 CONSTANT _UTUI-MAX-SHORTS
+CREATE _UTUI-SHORTS  _UTUI-MAX-SHORTS 24 * ALLOT
+VARIABLE _UTUI-SHORT-CNT
+
+: _UTUI-REG-SHORTCUT  ( elem -- )
+    DUP S" key" UIDL-ATTR IF
+        _UTUI-PARSE-KEY-DESC    \ → key-code mod-mask
+        DUP S" do" UIDL-ATTR IF \ → action name
+            _UTUI-SHORT-ADD
+        ELSE 2DROP THEN
+    ELSE 2DROP THEN DROP ;
+```
+
+#### Action Dispatch
+
+```forth
+64 CONSTANT _UTUI-MAX-ACTIONS
+CREATE _UTUI-ACTIONS  _UTUI-MAX-ACTIONS 24 * ALLOT
+VARIABLE _UTUI-ACT-CNT
+
+: UTUI-DO!  ( do-name-a do-name-u xt -- )
+    \ Register handler for named action
+    ... ;
+
+: _UTUI-DISPATCH-ACTION  ( elem -- )
+    UIDL-DISPATCH
+    DUP UIDL-ACT-ACTIVATE = IF DROP UIDL-ACTION-VALUE IF _UTUI-FIRE-DO THEN EXIT THEN
+    DUP UIDL-ACT-EMIT     = IF DROP UIDL-ACTION-VALUE IF _UTUI-FIRE-DO THEN EXIT THEN
+    DUP UIDL-ACT-SET-STATE = IF DROP UIDL-ACTION-VALUE IF _UTUI-DO-SET-STATE THEN EXIT THEN
+    DROP ;
+```
+
+#### Words — Public API
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `UTUI-LOAD` | `( xml-a xml-u rgn -- flag )` | Parse UIDL, allocate sidecars, layout, install XTs.  One-call setup. |
+| `UTUI-BIND-STATE` | `( st -- )` | Bind a state-tree to the document. |
+| `UTUI-PAINT` | `( -- )` | Repaint dirty elements. |
+| `UTUI-RELAYOUT` | `( rgn -- )` | Full relayout + mark all dirty. |
+| `UTUI-DISPATCH-KEY` | `( key-event -- handled? )` | Translate key → dispatch to focused element. |
+| `UTUI-DISPATCH-MOUSE` | `( row col button -- handled? )` | Hit-test → dispatch to element. |
+| `UTUI-FOCUS` | `( -- elem \| 0 )` | Get focused element. |
+| `UTUI-FOCUS!` | `( elem -- )` | Set focus (fires blur/focus). |
+| `UTUI-FOCUS-NEXT` | `( -- )` | Tab to next focusable. |
+| `UTUI-FOCUS-PREV` | `( -- )` | Shift-Tab to previous focusable. |
+| `UTUI-BY-ID` | `( id-a id-u -- elem \| 0 )` | Shortcut for `UIDL-BY-ID`. |
+| `UTUI-DO!` | `( do-name-a do-name-u xt -- )` | Register `do=` action handler.  Callback: `( elem -- )`. |
+| `UTUI-SHOW-DIALOG` | `( id-a id-u -- )` | Show dialog by id. |
+| `UTUI-HIDE-DIALOG` | `( id-a id-u -- )` | Hide dialog by id. |
+| `UTUI-SHOW-TOAST` | `( msg-a msg-u -- )` | Display transient toast. |
+| `UTUI-HIT-TEST` | `( row col -- elem \| 0 )` | Find element at screen position. |
+| `UTUI-DETACH` | `( -- )` | Full teardown. |
+
+#### Data Binding Flow (subscription-driven)
+
+```
+UIDL element:  <label bind="state.count" />
+        │
+        ▼  (load time)
+    LEL compile: bind expression → bytecode
+    UIDL-SUBSCRIBE: path="count" → elem in subscription table
+        │
+        ▼  (runtime: state-tree change)
+    ST-SET-* calls UIDL-NOTIFY( "count" )
+        │
+        ▼
+    Subscription table → mark elem dirty
+        │
+        ▼
+    UTUI-PAINT → LEL evaluate → render-xt → screen buffer
+        │
+        ▼
+    SCR-FLUSH → terminal
+```
+
+Two-way: `event-xt` calls `UIDL-BIND-WRITE` → state-tree update →
+`UIDL-NOTIFY` → other bound elements marked dirty → repaint.
+
+#### Usage Example
+
+```forth
+REQUIRE liraq/state-tree.f
+REQUIRE liraq/uidl-chrome.f
+REQUIRE tui/uidl-tui.f
+
+\ State
+ST-NEW CONSTANT my-st
+my-st S" app.statusline" S" Ready" ST-SET-STR
+
+my-st UTUI-BIND-STATE
+
+80 24 SCR-CREATE CONSTANT my-scr
+my-scr SCR-USE
+0 0 80 24 RGN-SET CONSTANT my-rgn
+
+S" <uidl cols='80' rows='24' title='Demo'>"
+S"   <region arrange='stack'>"
+S"     <label>Hello extensible UIDL!</label>"
+S"     <action id='go' do='go'>Go</action>"
+S"   </region>"
+S"   <status bind='app.statusline' />"
+S" </uidl>"
+my-rgn UTUI-LOAD  .  \ → -1 (true)
+
+: on-go ( elem -- ) DROP ." Go!" CR ;
+S" go" ' on-go UTUI-DO!
+
+UTUI-PAINT
+SCR-FLUSH
+```
+
+No DOM.  No bridge.  No sidecar-to-node cross-referencing.
+The UIDL tree is the single source of truth.
+
+#### Dependency Chain
+
+```
+tui/uidl-tui.f
+├── liraq/uidl.f        (extensible UIDL with Element Registry)
+├── liraq/uidl-chrome.f (chrome + must-have + nice-to-have registrations)
+├── liraq/state-tree.f  (reactive key-value store, 1200 lines)
+├── liraq/lel.f         (expression evaluator, 1652 lines)
+├── tui/screen.f        (double-buffered screen)
+├── tui/draw.f          (cell-level drawing)
+├── tui/box.f           (box drawing & borders)
+├── tui/region.f        (clip rectangles)
+├── tui/layout.f        (container layout)
+└── tui/keys.f          (input decoder)
+```
+
+No dependency on `dom/`, `css/`, `html5.f`, or `bridge.f`.
+
+#### Test targets: ~35 tests
+
+- `UTUI-LOAD` minimal `<uidl>` document → sidecars allocated
+- `<label>` draws text at correct position
+- `<action>` Enter fires → handler called via `UTUI-DO!`
+- `<input>` keystroke → sidecar updates, cursor moves
+- `<toggle>` Space → toggles `[✓]`/`[ ]`, bind-write fires
+- `<range>` Left/Right → value changes, bar redraws
+- `<selector>` Up/Down/Enter → selection + bind-write
+- `<textarea>` multi-line editing, scroll within bounds
+- `<dropdown>` opens/closes, selection writes back
+- `<radio>` / `<radiogroup>` mutual exclusion
+- `<password>` masks input with `•`
+- `<menubar>` row 0, F10 opens
+- `<menu>` dropdown, Up/Down/Enter
+- `<item>` `key=` shortcut fires action globally
+- `<tabs>` tab bar + switch + show/hide content
+- `<toolbar>` horizontal actions bar
+- `<split>` divides by ratio, children sized correctly
+- `<scroll>` clips child, scrollbar, Up/Down scrolls
+- `<tree>` expand/collapse, indent, bind to array
+- `<status>` bottom row, full width
+- `<dialog>` overlay, focus trap, show/hide
+- `<toast>` bottom-right, auto-dismiss
+- `<contextmenu>` right-click → popup
+- Focus: Tab cycles focusable elements in tree order
+- Focus: Shift-Tab reverses
+- Hit-test: click at (row,col) → correct element
+- Hit-test: empty area → 0
+- `bind=` → label updates when state changes (subscription-driven)
+- `when="false"` → element hidden
+- Two-way: input edit → state-tree path updated
+- `UTUI-SHOW-DIALOG` / `UTUI-HIDE-DIALOG`
+- `UTUI-SHOW-TOAST` displays message
+- `UTUI-DETACH` cleans up
+- Dirty-rect: only changed elements repaint (verify via SCR writes)
+- User-defined element: `DEFINE-ELEMENT` + custom render-xt renders
+
+---
+
 ## Layer 6 — Application Shell
 
 ### 6.1 tui/event.f — Event Loop & Dispatch
@@ -2520,49 +3317,64 @@ of raw character placement.
                         app.f
                        ╱  │  ╲
                       ╱   │   ╲
-                event.f  focus.f  (Layer 5 shell)
+                event.f  focus.f  (Layer 6 shell)
                   │    ╲  │
                   │     ╲ │
-    ┌─────────────┼──────┼──────────────────────────┐
-    │   Layer 4   │      │   Widgets                 │
-    │  label  input  list  menu  progress  table     │
-    │  dialog  tabs                                  │
-    ├─────────────┼──────┼──────────────────────────┤
-    │   Layer 6   │      │   Extended                │
-    │  split  scroll  tree  status  toast  canvas    │
-    └─────────────┼──────┼──────────────────────────┘
-                  │      │
-            ┌─────┴──────┴─────┐
-            │   Layout Engine   │
-            │  region.f         │
-            │  layout.f         │ (Layer 3)
-            └────────┬─────────┘
-                     │
-            ┌────────┴─────────┐
-            │ Drawing Prims     │
-            │  draw.f  box.f   │ (Layer 2)
-            └────────┬─────────┘
-                     │
-            ┌────────┴─────────┐
-            │ Screen Abstraction│
-            │  cell.f screen.f │ (Layer 1)
-            └────────┬─────────┘
-                     │
-            ┌────────┴─────────┐
-            │ Terminal Escapes  │
-            │  ansi.f  keys.f  │ (Layer 0)
-            └────────┬─────────┘
-                     │
-            ┌────────┴─────────┐
-            │ KDOS BIOS        │
-            │ EMIT KEY TYPE CR │
-            └────────┬─────────┘
-                     │
-            ┌────────┴─────────┐
-            │ Akashic           │
-            │ string.f utf8.f  │
-            │ fmt.f event.f    │
-            └──────────────────┘
+        ┌─────────┴──────┴──────────────────────────────┐
+        │  Layer 5a: UIDL Path    │  Layer 5b: DOM Path  │
+        │                         │                      │
+        │  uidl-tui.f             │  dom-tui.f           │
+        │    ▲                    │  dom-render.f        │
+        │    │                    │  dom-event.f         │
+        │  uidl.f (registry)     │  dom/event.f         │
+        │  uidl-chrome.f         │    ▲                  │
+        │    ▲                    │    │                  │
+        │    │                    │  dom.f css.f          │
+        │  lel.f state-tree.f    │  bridge.f             │
+        └────────┬───────────────┴──────────┬───────────┘
+                 │                          │
+    ┌────────────┼──────────────────────────┘
+    │   Layer 4  │  Widgets
+    │  label input list menu progress table dialog tabs
+    ├────────────┼──────────────────────────┐
+    │   Layer 7  │  Extended                │
+    │  split scroll tree status toast canvas│
+    └────────────┼──────────────────────────┘
+                 │
+           ┌─────┴──────┐
+           │ Layout (3)  │
+           │ region.f    │
+           │ layout.f    │
+           └──────┬──────┘
+                  │
+           ┌──────┴──────┐
+           │ Drawing (2)  │
+           │ draw.f box.f │
+           └──────┬──────┘
+                  │
+           ┌──────┴──────┐
+           │ Screen (1)   │
+           │ cell.f       │
+           │ screen.f     │
+           └──────┬──────┘
+                  │
+           ┌──────┴──────┐
+           │ Terminal (0)  │
+           │ ansi.f keys.f│
+           └──────┬──────┘
+                  │
+           ┌──────┴──────┐
+           │ KDOS BIOS    │
+           │ EMIT KEY CR  │
+           └──────┬──────┘
+                  │
+           ┌──────┴──────┐
+           │ Akashic       │
+           │ string.f      │
+           │ utf8.f fmt.f  │
+           │ markup/core.f │
+           │ liraq/*.f     │
+           └──────────────┘
 ```
 
 ---
@@ -2588,27 +3400,37 @@ of raw character placement.
 | 15 | tui/menu.f | 4 | draw, box, region | ~280 | ✅ Done |
 | 16 | tui/dialog.f | 4 | keys, screen, widget, draw, box, region | ~340 | ✅ Done |
 | 17 | tui/tabs.f | 4 | widget, draw, box, region, keys | 282 | ✅ Done |
-| 18 | dom/event.f | 5 | dom.f | ~450 | ❌ Not started |
-| 19 | tui/dom-tui.f | 5 | dom.f, css.f, bridge.f, cell, region | ~350 | ❌ Not started |
-| 20 | tui/dom-render.f | 5 | dom-tui, draw, box, region, screen | ~400 | ❌ Not started |
-| 21 | tui/dom-event.f | 5 | dom/event.f, dom-tui, keys | ~200 | ❌ Not started |
-| 22 | tui/focus.f | 6 | keys | ~150 | ❌ Not started |
-| 23 | tui/event.f | 6 | keys, screen, focus | ~200 | ❌ Not started |
-| 24 | tui/app.f | 6 | ansi, screen, event, focus | ~120 | ❌ Not started |
-| 25 | tui/split.f | 7 | region, draw | ~150 | ❌ Not started |
-| 26 | tui/scroll.f | 7 | region, draw | ~180 | ❌ Not started |
-| 27 | tui/status.f | 7 | draw, region | ~100 | ❌ Not started |
-| 28 | tui/toast.f | 7 | draw, box, region | ~120 | ❌ Not started |
-| 29 | tui/tree.f | 7 | draw, region, scroll | ~250 | ❌ Not started |
-| 30 | tui/canvas.f | 7 | draw, region | ~200 | ❌ Not started |
-| | **Total** | | | **~6,150** | |
+| 18 | dom/event.f | 5b | dom.f | ~450 | ❌ Not started |
+| 19 | tui/dom-tui.f | 5b | dom.f, css.f, bridge.f, cell, region | ~350 | ❌ Not started |
+| 20 | tui/dom-render.f | 5b | dom-tui, draw, box, region, screen | ~400 | ❌ Not started |
+| 21 | tui/dom-event.f | 5b | dom/event.f, dom-tui, keys | ~200 | ❌ Not started |
+| 22 | liraq/uidl.f refactor | **5a-P0** | liraq/uidl.f (existing) | ~+200 | ❌ **Phase 0** |
+| 23 | liraq/uidl-chrome.f | **5a-P0** | uidl.f (refactored) | ~120 | ❌ **Phase 0** |
+| 24 | tui/uidl-tui.f | 5a | uidl.f, uidl-chrome.f, liraq/*, Layers 0–4 | ~500 | ❌ Not started |
+| 25 | tui/focus.f | 6 | keys | ~150 | ❌ Not started |
+| 26 | tui/event.f | 6 | keys, screen, focus | ~200 | ❌ Not started |
+| 27 | tui/app.f | 6 | ansi, screen, event, focus | ~120 | ❌ Not started |
+| 28 | tui/split.f | 7 | region, draw | ~150 | ❌ Not started |
+| 29 | tui/scroll.f | 7 | region, draw | ~180 | ❌ Not started |
+| 30 | tui/status.f | 7 | draw, region | ~100 | ❌ Not started |
+| 31 | tui/toast.f | 7 | draw, box, region | ~120 | ❌ Not started |
+| 32 | tui/tree.f | 7 | draw, region, scroll | ~250 | ❌ Not started |
+| 33 | tui/canvas.f | 7 | draw, region | ~200 | ❌ Not started |
+| | **Total** | | | **~7,170** | |
 
 Build from bottom up: Layer 0 first (ansi + keys), then Layer 1
 (cell + screen), and so on.  Within each layer, files are independent
-and can be implemented in any order.  Layer 5 (DOM-TUI bridge) is
-optional — pure-widget apps can skip it, but it must be built before
-the application shell (Layer 6) or extended components (Layer 7)
-so that DOM-driven apps can participate in the event loop.
+and can be implemented in any order.
+
+**Phase 0** (rows 22–23) is the prerequisite for the UIDL TUI path:
+refactor `liraq/uidl.f` to add the Element Registry, Five Protocols,
+and subscription table, then create `liraq/uidl-chrome.f` to register
+chrome + must-have + nice-to-have elements.  This touches only
+`liraq/` — no TUI code.  All existing uidl.f tests must still pass.
+
+Layer 5b (DOM path, rows 18–21) is independent of Layer 5a (UIDL
+path, rows 22–24).  Either can be built first.  The UIDL path has
+no dependency on `dom/`, `css/`, or `bridge.f`.
 
 ---
 
