@@ -2853,7 +2853,9 @@ No dependency on `dom/`, `css/`, `html5.f`, or `bridge.f`.
 
 ## Layer 6 — Application Shell
 
-### 6.1 tui/event.f — Event Loop & Dispatch
+### 6.1 tui/event.f — Event Loop & Dispatch ✅
+
+**Status: Done** — 240 lines, 28 tests in `test_tui_event.py`
 
 **Goal:** The main event loop that ties input, rendering, and timers
 together.  Poll for input via `KEY-READ`, dispatch events through
@@ -3473,7 +3475,7 @@ of raw character placement.
 | 24 | tui/uidl-tui.f | 5a | uidl.f, uidl-chrome.f, liraq/*, Layers 0–4 | ~500 | ❌ Not started |
 | 25 | tui/focus.f | 6 | keys, widget | 280 | ✅ Done |
 | 25b | tui/focus-2d.f | 6 | focus, keys, widget, region | 216 | ✅ Done |
-| 26 | tui/event.f | 6 | keys, screen, focus | ~200 | ❌ Not started |
+| 26 | tui/event.f | 6 | keys, screen, focus | 240 | ✅ Done |
 | 27 | tui/app.f | 6 | ansi, screen, event, focus | ~120 | ❌ Not started |
 | 28 | tui/split.f | 7 | region, draw | ~150 | ❌ Not started |
 | 29 | tui/scroll.f | 7 | region, draw | ~180 | ❌ Not started |
