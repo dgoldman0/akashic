@@ -119,6 +119,30 @@ Uses `DUP 0> IF 1- THEN` instead of `1- 0 MAX` because `MAX` in
 KDOS is an unsigned comparison (defined in `bios.asm`), so
 `0 1- 0 MAX` yields UINT64_MAX rather than 0.
 
+## UIDL-TUI Integration
+
+When a `<tree>` element appears in a UIDL document, the UIDL-TUI
+backend (`uidl-tui.f`) fully materializes a `TREE-NEW` widget and
+stores it in the sidecar's `wptr` cell (+48).  Four adapter callbacks
+bridge UIDL tree traversal to the widget's callback protocol:
+
+| Callback | Implementation |
+|----------|----------------|
+| `children-xt` | `_UTUI-TREE-CHILD` → `UIDL-FIRST-CHILD` |
+| `next-xt` | `_UTUI-TREE-NEXT` → `UIDL-NEXT-SIB` |
+| `label-xt` | `_UTUI-TREE-LABEL` → `label=` attr, fallback `text=`, fallback `"?"` |
+| `leaf?-xt` | `_UTUI-TREE-LEAF?` → `UIDL-FIRST-CHILD 0=` |
+
+The widget's region is the shared proxy region (`_UTUI-PROXY-RGN`),
+synced from sidecar geometry before each draw/handle call.  The render
+adapter calls `RGN-USE` before `_TREE-DRAW` and `RGN-ROOT` after, so
+the widget draws in region-relative coordinates.
+
+Lifecycle: `TREE-NEW` at `_UTUI-MATERIALIZE` (during `UTUI-LOAD`),
+`TREE-FREE` at `_UTUI-DEMATERIALIZE` (during `UTUI-DETACH`).
+
+See [uidl-tui.md](../uidl-tui.md) for the full backend design.
+
 ## Design Notes
 
 - **Callback-driven.** The tree widget never owns node data.

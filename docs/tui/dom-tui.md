@@ -372,6 +372,7 @@ my-doc DTUI-DETACH
 - [dom.md](../dom/dom.md) — DOM core (nodes, attributes, tree walk)
 - [html5.md](../dom/html5.md) — `DOM-HTML-INIT` skeleton
 - [event.md](../dom/event.md) — W3C event dispatch
+- [uidl-tui.md](uidl-tui.md) — UIDL-TUI backend (alternative path, no DOM)
 - [cell.md](cell.md) — Cell attribute flags (`CELL-A-*`)
 - [screen.md](screen.md) — Screen abstraction
 - [region.md](region.md) — Region primitives

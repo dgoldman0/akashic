@@ -82,6 +82,15 @@ with `SCRL-INDICATORS`.
 | Page Up | Scroll up by half viewport height |
 | Page Down | Scroll down by half viewport height |
 
+## UIDL-TUI Integration
+
+When a `<scroll>` element appears in a UIDL document, the UIDL-TUI
+backend currently uses a minimal inline adapter that fills the
+background.  Scroll indicators and viewport delegation are planned
+but not yet implemented.  No `SCRL-NEW` widget is created.
+
+See [uidl-tui.md](../uidl-tui.md) for the full backend design.
+
 ## Design Notes
 
 - **Offset clamping.** `_SCRL-CLAMP-Y` and `_SCRL-CLAMP-X` ensure

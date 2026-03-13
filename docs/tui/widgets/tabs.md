@@ -77,6 +77,28 @@ bar, row 1 for an underline, and rows 2..h-1 for tab content regions
 | Left | Switch to previous tab |
 | Right | Switch to next tab |
 
+## UIDL-TUI Integration
+
+When a `<tabs>` element appears in a UIDL document, the UIDL-TUI
+backend does **not** create a `TAB-NEW` widget.  Instead it uses an
+inline adapter with a minimal 8-byte state block (one cell: active
+tab index, 0-based) stored in the sidecar's `wptr` cell (+48).
+
+| Phase | Adapter | Behaviour |
+|-------|---------|-----------|  
+| Render | `_UTUI-RENDER-TABS` | Fills bg, draws `label=` per child tab with reverse-highlight on active, underline on row 1 |
+| Event | `_UTUI-H-TABS` | Left/Right keys switch active index |
+| Layout | `_UTUI-LAYOUT-TABS` | 2-row header; active tab child gets content area (row+2, col, w, h-2); inactive children get 0×0 dimensions |
+
+Inactive tab children are given 0×0 sidecar dimensions rather than
+having their VIS flag cleared, because the layout recursion would
+otherwise re-mark them visible.
+
+Lifecycle: `ALLOCATE` 8 bytes at `_UTUI-MATERIALIZE`, `FREE` at
+`_UTUI-DEMATERIALIZE`.
+
+See [uidl-tui.md](../uidl-tui.md) for the full backend design.
+
 ## Design Notes
 
 - **VARIABLE-based draw.** `_TAB-DRAW` stores widget, region width,

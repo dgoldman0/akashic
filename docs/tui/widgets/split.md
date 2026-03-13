@@ -68,6 +68,16 @@ and marks the widget clean.  After a resize or ratio change, call
 The split pane does not consume any keys — `_SPL-HANDLE` always
 returns 0.  Child widgets should be given focus independently.
 
+## UIDL-TUI Integration
+
+When a `<split>` element appears in a UIDL document, the UIDL-TUI
+backend uses a pure inline adapter — no `SPL-NEW` widget is created.
+The adapter reads the `ratio=` attribute (default 50) and draws a
+vertical divider (`│`, U+2502) at `col + w * ratio / 100`.  Child
+panes are laid out by the standard stack layout.
+
+See [uidl-tui.md](../uidl-tui.md) for the full backend design.
+
 ## Design Notes
 
 - **Default dividers.** Horizontal splits use `─` (U+2500); vertical

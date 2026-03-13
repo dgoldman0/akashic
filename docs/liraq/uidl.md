@@ -759,3 +759,8 @@ See the Chrome Types table above for the full list.
 - Document mutation (8 tests — add, remove, set/overwrite/remove attr, move)
 - Bind write-back (4 tests — string, bool, int, no-bind no-op)
 - Action dispatch (9 tests — types, priority, has-action, action-value)
+
+## See Also
+
+- [uidl-tui.md](../tui/uidl-tui.md) — UIDL-TUI backend (renders UIDL to character cells)
+- [dom-tui.md](../tui/dom-tui.md) — DOM-TUI backend (alternative rendering path via DOM)

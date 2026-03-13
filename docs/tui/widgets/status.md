@@ -54,6 +54,16 @@ The widget does not handle key events (always returns 0).
 The status bar does not consume any keys — `_SBAR-HANDLE` always
 returns 0.
 
+## UIDL-TUI Integration
+
+When a `<status>` element appears in a UIDL document, the UIDL-TUI
+backend uses a pure inline adapter — no `SBAR-NEW` widget is created.
+The adapter fills a 1-row background, then draws the first child's
+`text=` attribute left-aligned and the last child's `text=`
+right-aligned.
+
+See [uidl-tui.md](../uidl-tui.md) for the full backend design.
+
 ## Design Notes
 
 - **Packed style.** `fg | (bg << 8) | (attrs << 16)` stored in a
