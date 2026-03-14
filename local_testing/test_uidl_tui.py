@@ -46,6 +46,10 @@ _DEP_PATHS = [
     os.path.join(AK, "tui",         "region.f"),
     os.path.join(AK, "tui",         "layout.f"),
     os.path.join(AK, "tui",         "keys.f"),
+    os.path.join(AK, "tui",         "widget.f"),
+    os.path.join(AK, "tui",         "widgets", "tree.f"),
+    os.path.join(AK, "tui",         "widgets", "input.f"),
+    os.path.join(AK, "tui",         "widgets", "textarea.f"),
     os.path.join(AK, "tui",         "uidl-tui.f"),
 ]
 
@@ -472,18 +476,34 @@ def test_shortcut_parse_single():
     ], check_fn=lambda o: str(ord('S')) in o and "0" in o)
 
 def test_shortcut_parse_ctrl():
-    """_UTUI-PARSE-KEY-DESC parses Ctrl+S."""
+    """_UTUI-PARSE-KEY-DESC parses Ctrl+S → lowercase key-code 115."""
     check("shortcut-parse-ctrl", [
         'S" Ctrl+S" _UTUI-PARSE-KEY-DESC',
-        '. . CR',
-    ], check_fn=lambda o: "4" in o)  # KEY-MOD-CTRL = 4
+        'SWAP . . CR',
+    ], check_fn=lambda o: "115" in o and "4" in o)  # 's'=115, KEY-MOD-CTRL=4
 
 def test_shortcut_parse_ctrl_shift():
-    """_UTUI-PARSE-KEY-DESC parses Ctrl+Shift+S."""
+    """_UTUI-PARSE-KEY-DESC parses Ctrl+Shift+S → lowercase 115, mods 5."""
     check("shortcut-parse-ctrl-shift", [
         'S" Ctrl+Shift+S" _UTUI-PARSE-KEY-DESC',
-        '. . CR',
-    ], check_fn=lambda o: "5" in o)  # KEY-MOD-CTRL(4) | KEY-MOD-SHIFT(1) = 5
+        'SWAP . . CR',
+    ], check_fn=lambda o: "115" in o and "5" in o)  # 's'=115, CTRL|SHIFT=5
+
+
+def test_shortcut_dispatch_fires():
+    """Ctrl+S key event dispatches through UTUI-DISPATCH-KEY to fire action."""
+    check("shortcut-dispatch-fire", _xml_lines(_XML_SHORTCUT, extra_before=[
+        'VARIABLE _SAVE-HIT',
+        ': _ON-SAVE  DROP 1 _SAVE-HIT ! ;',
+        "S\" on-save\" ['] _ON-SAVE UTUI-DO!",
+    ], extra_after=[
+        'DROP',
+        # Build a synthetic key event: type=KEY-T-CHAR(0), code=115('s'), mods=KEY-MOD-CTRL(4)
+        'CREATE _TEV 24 ALLOT',
+        'KEY-T-CHAR _TEV !  115 _TEV 8 + !  KEY-MOD-CTRL _TEV 16 + !',
+        '_TEV UTUI-DISPATCH-KEY DROP',
+        '_SAVE-HIT @ . CR',
+    ]), "1")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -695,10 +715,11 @@ def main():
     print()
 
     # §F Shortcuts
-    print("[F] Shortcut Parsing")
+    print("[F] Shortcut Parsing & Dispatch")
     test_shortcut_parse_single()
     test_shortcut_parse_ctrl()
     test_shortcut_parse_ctrl_shift()
+    test_shortcut_dispatch_fires()
     print()
 
     # §G Layout

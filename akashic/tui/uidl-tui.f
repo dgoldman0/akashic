@@ -180,6 +180,13 @@ CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
 \  §1d — Render / Event Helpers
 \ =====================================================================
 
+\ --- Shared temp vars for render/layout (KDOS pattern) ---
+\ (Must be declared before _UTUI-PROXY-FROM-UR which references them.)
+VARIABLE _UR-ROW   VARIABLE _UR-COL
+VARIABLE _UR-W     VARIABLE _UR-H
+VARIABLE _UR-TMP   VARIABLE _UR-ELEM
+VARIABLE _UR-EV    \ saved event pointer
+
 \ Write _UR-* temp vars into the shared proxy region.
 : _UTUI-PROXY-FROM-UR  ( -- )
     _UR-ROW @ _UTUI-PROXY-RGN _RGN-O-ROW + !
@@ -215,12 +222,6 @@ VARIABLE _UTUI-FOCUS-P    \ currently focused element (0 = none)
 
 \ Default style: light gray on dark gray, no attrs
 253 236 0 _UTUI-PACK-STYLE CONSTANT _UTUI-DEFAULT-STYLE
-
-\ --- Shared temp vars for render/layout (KDOS pattern) ---
-VARIABLE _UR-ROW   VARIABLE _UR-COL
-VARIABLE _UR-W     VARIABLE _UR-H
-VARIABLE _UR-TMP   VARIABLE _UR-ELEM
-VARIABLE _UR-EV    \ saved event pointer
 
 \ =====================================================================
 \  §3 — Action Dispatch Table
@@ -318,7 +319,12 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
 
     \ Remaining = key name
     _UKP-L @ 1 = IF
-        _UKP-A @ C@ _UKP-MOD @ EXIT
+        _UKP-A @ C@
+        \ keys.f decodes Ctrl+letter to lowercase codes; normalise A-Z
+        _UKP-MOD @ KEY-MOD-CTRL AND IF
+            DUP [CHAR] A >= OVER [CHAR] Z <= AND IF 32 OR THEN
+        THEN
+        _UKP-MOD @ EXIT
     THEN
     _UKP-A @ _UKP-L @
     2DUP S" F1"  STR-STR= IF 2DROP KEY-F1  _UKP-MOD @ EXIT THEN
@@ -367,7 +373,7 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
         I 32 * _UTUI-SHORTS +
         DUP 24 + @ IF                 \ used?
             DUP @ 3 PICK = IF         \ key-code match?
-                DUP 8 + @ 3 PICK = IF \ mod-mask match?
+                DUP 8 + @ 2 PICK = IF \ mod-mask match?
                     16 + @
                     >R 2DROP R>
                     UNLOOP EXIT
@@ -508,28 +514,9 @@ VARIABLE _UST-FIRST
 
 : _UTUI-RENDER-STATUS  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    32 _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-FILL-RECT
-    _UR-ELEM !
-    \ Left text: first child's display text
-    _UR-ELEM @ UIDL-FIRST-CHILD ?DUP IF
-        DUP _UST-FIRST !
-        _UTUI-DISPLAY-TEXT
-        DUP 0<> IF
-            _UR-W @ 2 - MIN
-            _UR-ROW @ _UR-COL @ 1+ DRW-TEXT
-        ELSE 2DROP THEN
-    ELSE 0 _UST-FIRST ! THEN
-    \ Right text: last child (if different from first)
-    _UR-ELEM @ UIDL-LAST-CHILD ?DUP IF
-        DUP _UST-FIRST @ <> IF
-            _UTUI-DISPLAY-TEXT
-            DUP 0<> IF
-                DUP _UR-W @ SWAP - 1- 0 MAX
-                _UR-COL @ + >R
-                _UR-ROW @ R> DRW-TEXT
-            ELSE 2DROP THEN
-        ELSE DROP THEN
-    THEN ;
+    DROP
+    \ Just fill the status bar background — child labels render themselves.
+    32 _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-FILL-RECT ;
 
 \ --- Toolbar ---
 : _UTUI-RENDER-TOOLBAR  ( elem -- )
@@ -600,7 +587,7 @@ VARIABLE _UT-TAB-COL
     _UTUI-BIND-TEXT                    ( a l )
     DUP 0= IF 2DROP EXIT THEN
     STR>NUM 0= IF DROP EXIT THEN      ( n )
-    _UR-W @ * 100 / 0 MAX _UR-W @ MIN  ( fill-w )
+    _UR-W @ * 100 / DUP 0< IF DROP 0 THEN _UR-W @ MIN  ( fill-w )
     DUP 0= IF DROP EXIT THEN
     _UR-TMP !
     9608 _UR-ROW @ _UR-COL @ _UR-TMP @ DRW-HLINE ;
@@ -772,8 +759,31 @@ VARIABLE _UL-COL
 VARIABLE _UL-W
 VARIABLE _UL-H
 VARIABLE _UL-POS
+VARIABLE _UL-LEAF-ROWS   \ pre-counted leaf row total
+
+\ Helper: should this element get height=1 in stack layout?
+\ Fixed-height (leaf) → -1;  expandable → 0.
+\ status/toolbar:  always 1-row (leaf-like).
+\ textarea/canvas: always expandable (need vertical space).
+\ action:          invisible → treated as leaf (1-row).
+\ Everything else: containers expand, leaves get 1 row.
+: _UL-IS-LEAF?  ( elem -- flag )
+    DUP UIDL-TYPE DUP UIDL-T-STATUS = SWAP UIDL-T-TOOLBAR = OR
+    IF DROP -1 EXIT THEN
+    DUP UIDL-TYPE UIDL-T-TEXTAREA = IF DROP 0 EXIT THEN
+    DUP UIDL-TYPE UIDL-T-CANVAS   = IF DROP 0 EXIT THEN
+    UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
+        ED.FLAGS @ EL-CONTENT-MODEL
+        DUP EL-CONTAINER = OVER EL-FIXED-2 = OR
+        OVER EL-COLLECTION = OR IF DROP 0 ELSE DROP -1 THEN
+    ELSE -1 THEN ;
+
+\ Helper: action elements are invisible layout-wise (key bindings).
+: _UL-SKIP-LAYOUT?  ( elem -- flag )
+    UIDL-TYPE UIDL-T-ACTION = ;
 
 \ --- Stack layout (vertical) ---
+\  Two-pass: first count leaf rows, then give containers the remainder.
 : _UTUI-LAYOUT-STACK  ( elem -- )
     _UL-ELEM !
     _UL-ELEM @ _UTUI-SIDECAR _UL-SC !
@@ -783,30 +793,49 @@ VARIABLE _UL-POS
     _UL-SC @ _UTUI-SC-H@   _UL-H !
     _UL-ROW @ _UL-POS !
 
+    \ Pass 1: count rows consumed by leaf children (skip actions)
+    0 _UL-ELEM @ UIDL-FIRST-CHILD
+    BEGIN DUP 0<> WHILE
+        DUP UIDL-EVAL-WHEN IF
+            DUP _UL-SKIP-LAYOUT? 0= IF
+                DUP _UL-IS-LEAF? IF SWAP 1+ SWAP THEN
+            THEN
+        THEN
+        UIDL-NEXT-SIB
+    REPEAT DROP
+    _UL-LEAF-ROWS !
+
+    \ Pass 2: assign positions (actions get 0-height)
     _UL-ELEM @ UIDL-FIRST-CHILD
     BEGIN DUP 0<> WHILE
         DUP _UTUI-SIDECAR             ( child csc )
-        OVER UIDL-EVAL-WHEN IF        \ UIDL-EVAL-WHEN takes elem (OVER), not sidecar
-            _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
-            _UL-POS @ OVER _UTUI-SC-ROW!
-            _UL-COL @ OVER _UTUI-SC-COL!
-            _UL-W @   OVER _UTUI-SC-W!
-            \ Height: 1 for leaf, remaining space for containers
-            OVER UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
-                ED.FLAGS @ EL-CONTENT-MODEL
-                DUP EL-CONTAINER = OVER EL-FIXED-2 = OR
-                OVER EL-COLLECTION = OR IF
-                    DROP
-                    _UL-H @ _UL-POS @ _UL-ROW @ - -
-                    DUP 0< IF DROP 1 THEN
+        OVER UIDL-EVAL-WHEN IF
+            OVER _UL-SKIP-LAYOUT? IF
+                \ Action: give it sidecar flags but 0 height
+                _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+                _UL-POS @ OVER _UTUI-SC-ROW!
+                _UL-COL @ OVER _UTUI-SC-COL!
+                0 OVER _UTUI-SC-W!
+                0 OVER _UTUI-SC-H!
+                DROP
+            ELSE
+                _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+                _UL-POS @ OVER _UTUI-SC-ROW!
+                _UL-COL @ OVER _UTUI-SC-COL!
+                _UL-W @   OVER _UTUI-SC-W!
+                \ Height: 1 for leaf, remaining (minus leaf rows) for containers
+                OVER _UL-IS-LEAF? IF
+                    1
                 ELSE
-                    DROP 1
+                    _UL-H @ _UL-LEAF-ROWS @ -
+                    _UL-POS @ _UL-ROW @ - -
+                    DUP 1 < IF DROP 1 THEN
                 THEN
-            ELSE 1 THEN
-            OVER _UTUI-SC-H!
-            _UL-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
-            DROP                       ( child )
-            DUP _UTUI-SIDECAR _UTUI-SC-H@ _UL-POS +!
+                OVER _UTUI-SC-H!
+                _UL-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
+                DROP                       ( child )
+                DUP _UTUI-SIDECAR _UTUI-SC-H@ _UL-POS +!
+            THEN
         ELSE
             _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
             DROP                       ( child )
@@ -887,7 +916,7 @@ VARIABLE _UL-CW   \ child width for flex
                 _UL-ROW @ 2 + OVER _UTUI-SC-ROW!
                 _UL-COL @     OVER _UTUI-SC-COL!
                 _UL-W @       OVER _UTUI-SC-W!
-                _UL-H @ 2 - 0 MAX OVER _UTUI-SC-H!
+                _UL-H @ 2 - DUP 0< IF DROP 0 THEN OVER _UTUI-SC-H!
             ELSE
                 \ Inactive: zero dimensions (effectively hidden)
                 0 OVER _UTUI-SC-ROW!
@@ -972,10 +1001,10 @@ VARIABLE _UDL-DLG-SC
     DUP UIDL-NCHILDREN 4 + 5 MAX 20 MIN
     _UDL-DLG-SC @ _UTUI-SC-H!
     \ Center in root region
-    _UTUI-RGN @ RGN-H _UDL-DLG-SC @ _UTUI-SC-H@ - 2/ 0 MAX
+    _UTUI-RGN @ RGN-H _UDL-DLG-SC @ _UTUI-SC-H@ - 2/ DUP 0< IF DROP 0 THEN
     _UTUI-RGN @ RGN-ROW +
     _UDL-DLG-SC @ _UTUI-SC-ROW!
-    _UTUI-RGN @ RGN-W _UDL-DLG-SC @ _UTUI-SC-W@ - 2/ 0 MAX
+    _UTUI-RGN @ RGN-W _UDL-DLG-SC @ _UTUI-SC-W@ - 2/ DUP 0< IF DROP 0 THEN
     _UTUI-RGN @ RGN-COL +
     _UDL-DLG-SC @ _UTUI-SC-COL!
     \ Layout children inside dialog (stack)
@@ -1337,7 +1366,9 @@ VARIABLE _UTUI-PAINT-DLG
                 >R                     ( elem   R: xt )
                 _UR-EV @               ( elem ev   R: xt )
                 R>                     ( elem ev xt )
-                EXECUTE EXIT           \ xt( elem ev -- handled? )
+                EXECUTE                ( handled? )
+                DUP IF UTUI-FOCUS ?DUP IF UIDL-DIRTY! THEN THEN
+                EXIT
             ELSE DROP THEN
         THEN
         DROP 0 EXIT
@@ -1503,6 +1534,11 @@ VARIABLE _UDH-SC   \ temp for dialog hide
 
 : UTUI-BY-ID  ( id-a id-l -- elem | 0 )  UIDL-BY-ID ;
 
+\ UTUI-WIDGET@ ( elem -- wptr | 0 )
+\   Return the widget pointer associated with a UIDL element, or 0.
+: UTUI-WIDGET@  ( elem -- wptr | 0 )
+    _UTUI-SIDECAR _UTUI-SC-WPTR@ ;
+
 : UTUI-BIND-STATE  ( st -- )
     DUP _UTUI-STATE !
     ST-USE ;
@@ -1566,6 +1602,7 @@ GUARD _utui-guard
 ' UTUI-FOCUS-NEXT     CONSTANT _utui-focus-next-xt
 ' UTUI-FOCUS-PREV     CONSTANT _utui-focus-prev-xt
 ' UTUI-BY-ID          CONSTANT _utui-by-id-xt
+' UTUI-WIDGET@        CONSTANT _utui-widget-at-xt
 ' UTUI-DO!            CONSTANT _utui-do-s-xt
 ' UTUI-SHOW-DIALOG    CONSTANT _utui-show-dialog-xt
 ' UTUI-HIDE-DIALOG    CONSTANT _utui-hide-dialog-xt
@@ -1584,6 +1621,7 @@ GUARD _utui-guard
 : UTUI-FOCUS-NEXT     _utui-focus-next-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS-PREV     _utui-focus-prev-xt     _utui-guard WITH-GUARD ;
 : UTUI-BY-ID          _utui-by-id-xt          _utui-guard WITH-GUARD ;
+: UTUI-WIDGET@        _utui-widget-at-xt      _utui-guard WITH-GUARD ;
 : UTUI-DO!            _utui-do-s-xt           _utui-guard WITH-GUARD ;
 : UTUI-SHOW-DIALOG    _utui-show-dialog-xt    _utui-guard WITH-GUARD ;
 : UTUI-HIDE-DIALOG    _utui-hide-dialog-xt    _utui-guard WITH-GUARD ;

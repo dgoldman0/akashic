@@ -271,7 +271,7 @@ VARIABLE _TXTA-INS-SZ
     <= IF
         \ Cursor at or below viewport bottom — scroll down
         _TXTA-W @ WDG-REGION RGN-H - 1+
-        0 MAX
+        DUP 0< IF DROP 0 THEN
         _TXTA-W @ _TXTA-O-SCROLL-Y + !
         EXIT
     THEN
@@ -286,6 +286,7 @@ VARIABLE _TXTA-DRW-L      \ remaining bytes
 VARIABLE _TXTA-DRW-RW     \ region width
 VARIABLE _TXTA-DRW-COL    \ current column during line draw
 VARIABLE _TXTA-DRW-ROW    \ current row
+VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
 
 \ _TXTA-DRAW-LINE ( row -- )
 \   Draw one text line at the given viewport row.
@@ -302,11 +303,13 @@ VARIABLE _TXTA-DRW-ROW    \ current row
         _TXTA-DRW-A @ C@ 10 <> AND
     WHILE
         \ Cursor highlight
+        _TXTA-DRW-CDONE @ 0= IF
         _TXTA-BUF-LEN _TXTA-DRW-L @ -
         _TXTA-CURSOR =
         _TXTA-W @ WDG-FOCUSED? AND IF
             CELL-A-REVERSE DRW-ATTR!
-        THEN
+            -1 _TXTA-DRW-CDONE !
+        THEN THEN
         \ Decode one codepoint
         _TXTA-DRW-A @ _TXTA-DRW-L @
         UTF8-DECODE
@@ -316,6 +319,7 @@ VARIABLE _TXTA-DRW-ROW    \ current row
         1 _TXTA-DRW-COL +!
     REPEAT
     \ Cursor at end of line (or on the \n)
+    _TXTA-DRW-CDONE @ 0= IF
     _TXTA-BUF-LEN _TXTA-DRW-L @ -
     _TXTA-CURSOR =
     _TXTA-W @ WDG-FOCUSED? AND IF
@@ -323,8 +327,9 @@ VARIABLE _TXTA-DRW-ROW    \ current row
             CELL-A-REVERSE DRW-ATTR!
             32 _TXTA-DRW-ROW @ _TXTA-DRW-COL @ DRW-CHAR
             0 DRW-ATTR!
+            -1 _TXTA-DRW-CDONE !
         THEN
-    THEN
+    THEN THEN
     \ Skip past newline
     _TXTA-DRW-L @ 0 > IF
         _TXTA-DRW-A @ C@ 10 = IF
@@ -344,6 +349,7 @@ VARIABLE _TXTA-DRW-ROW    \ current row
     _TXTA-BUF-A OVER + _TXTA-DRW-A !
     _TXTA-BUF-LEN SWAP - _TXTA-DRW-L !
     \ Draw visible rows
+    0 _TXTA-DRW-CDONE !
     0 ?DO
         I _TXTA-DRAW-LINE
     LOOP ;
@@ -440,6 +446,16 @@ VARIABLE _TXTA-DRW-ROW    \ current row
 : TXTA-FREE  ( widget -- )
     FREE ;
 
+\ TXTA-CURSOR-LINE ( widget -- line )
+\   Return 0-based cursor line number.
+: TXTA-CURSOR-LINE  ( widget -- line )
+    DUP _TXTA-W ! _TXTA-CURSOR-LINE ;
+
+\ TXTA-CURSOR-COL ( widget -- col )
+\   Return 0-based cursor column (codepoint count from SOL).
+: TXTA-CURSOR-COL  ( widget -- col )
+    DUP _TXTA-W ! _TXTA-CURSOR-COL ;
+
 \ =====================================================================
 \  10. Guard
 \ =====================================================================
@@ -454,6 +470,8 @@ GUARD _txta-guard
 ' TXTA-ON-CHANGE CONSTANT _txta-onch-xt
 ' TXTA-CLEAR     CONSTANT _txta-clear-xt
 ' TXTA-FREE      CONSTANT _txta-free-xt
+' TXTA-CURSOR-LINE CONSTANT _txta-curline-xt
+' TXTA-CURSOR-COL  CONSTANT _txta-curcol-xt
 
 : TXTA-NEW       _txta-new-xt     _txta-guard WITH-GUARD ;
 : TXTA-SET-TEXT  _txta-settext-xt _txta-guard WITH-GUARD ;
@@ -461,4 +479,6 @@ GUARD _txta-guard
 : TXTA-ON-CHANGE _txta-onch-xt   _txta-guard WITH-GUARD ;
 : TXTA-CLEAR     _txta-clear-xt  _txta-guard WITH-GUARD ;
 : TXTA-FREE      _txta-free-xt   _txta-guard WITH-GUARD ;
+: TXTA-CURSOR-LINE _txta-curline-xt _txta-guard WITH-GUARD ;
+: TXTA-CURSOR-COL  _txta-curcol-xt  _txta-guard WITH-GUARD ;
 [THEN] [THEN]

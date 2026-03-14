@@ -168,7 +168,7 @@ VARIABLE _LST-HND-W   \ widget saved during handle
             KEY-PGUP OF
                 _LST-HND-W @ _LST-O-SEL + @
                 _LST-HND-W @ WDG-REGION RGN-H -
-                0 MAX
+                DUP 0< IF DROP 0 THEN
                 _LST-HND-W @ _LST-SELECT!
                 -1
             ENDOF

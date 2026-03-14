@@ -361,9 +361,16 @@ Default: **50 ms**.  Lower values make ESC more responsive but risk
 misinterpreting slow-arriving sequences.  Higher values are more
 reliable over high-latency serial links.
 
+This timeout is also used by the CR handler, which waits up to
+`_KEY-TIMEOUT` milliseconds for an optional LF byte after receiving
+CR (13).  On systems that only send bare CR for Enter (e.g. the
+Megapad emulator), this adds a per-Enter delay equal to the timeout.
+Set `1 KEY-TIMEOUT!` to eliminate the overhead when LF is never sent.
+
 ```forth
 100 KEY-TIMEOUT!    \ 100 ms — conservative for slow links
 20  KEY-TIMEOUT!    \ 20 ms  — snappy for local terminal
+1   KEY-TIMEOUT!    \ 1 ms   — emulator with bare CR (no CR+LF)
 ```
 
 ---
@@ -445,7 +452,7 @@ The second numeric CSI parameter encodes modifiers as `1 + bitmask`.
 | `KEY-HAS-CTRL?` | `( ev -- flag )` | Ctrl held? |
 | `KEY-HAS-ALT?` | `( ev -- flag )` | Alt held? |
 | `KEY-HAS-SHIFT?` | `( ev -- flag )` | Shift held? |
-| `KEY-TIMEOUT!` | `( ms -- )` | Set ESC disambiguation timeout |
+| `KEY-TIMEOUT!` | `( ms -- )` | Set ESC / CR→LF disambiguation timeout |
 | `KEY-MOUSE-X` | `( -- addr )` | Last mouse column |
 | `KEY-MOUSE-Y` | `( -- addr )` | Last mouse row |
 | `KEY-RESIZE-W` | `( -- addr )` | Terminal width from last resize |

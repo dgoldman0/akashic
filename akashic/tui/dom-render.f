@@ -103,7 +103,7 @@ VARIABLE _DREN-TXTLEN
 \ _DREN-NEWLINE ( -- )
 \   Move cursor to next row.  Advance by _DREN-LINE-H (minimum 1).
 : _DREN-NEWLINE  ( -- )
-    _DREN-LINE-H @ 1 MAX  _DREN-ROW +!
+    _DREN-LINE-H @ DUP 1 < IF DROP 1 THEN  _DREN-ROW +!
     _DREN-LMAR @ _DREN-COL !
     1 _DREN-LINE-H ! ;
 
@@ -195,7 +195,7 @@ VARIABLE _DREN-LAYOUT-CHILDREN-XT
     _DREN-SC @ DTUI-SC-STYLE DTUI-UNPACK-BORDER IF
         _DREN-ROW @ 1+  _DREN-ROW !
         _DREN-COL @ 1+  _DREN-COL !
-        _DREN-SC @ DTUI-SC-W 2 -  0 MAX  _DREN-VW !
+        _DREN-SC @ DTUI-SC-W 2 -  DUP 0< IF DROP 0 THEN  _DREN-VW !
     ELSE
         _DREN-SC @ DTUI-SC-W  _DREN-VW !
     THEN

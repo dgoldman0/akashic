@@ -1,7 +1,7 @@
 # akashic/tui/widgets/textarea.f — Multi-line Text Area Widget
 
 **Layer:** 4B  
-**Lines:** ~465  
+**Lines:** ~484  
 **Prefix:** `TXTA-` (public), `_TXTA-` (internal)  
 **Provider:** `akashic-tui-textarea`  
 **Dependencies:** `widget.f`, `draw.f`, `keys.f`, `utf8.f`
@@ -45,6 +45,13 @@ Insertion is rejected when the buffer is full.
 | `TXTA-SET-TEXT` | `( text-a text-u widget -- )` | Set text; clamps to capacity; cursor at end |
 | `TXTA-GET-TEXT` | `( widget -- addr len )` | Get buffer address and current length |
 | `TXTA-CLEAR` | `( widget -- )` | Clear buffer, reset cursor and scroll |
+
+### Cursor Queries
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `TXTA-CURSOR-LINE` | `( widget -- n )` | 0-based line number of cursor position |
+| `TXTA-CURSOR-COL` | `( widget -- n )` | 0-based column (codepoint count from start of line) |
 
 ### Callback
 
@@ -125,8 +132,9 @@ backend (`uidl-tui.f`), the following happens:
   buffer is scanned from the start to find line boundaries — no
   separate line table is maintained.
 - **Module VARIABLE pattern.** Internal words use `_TXTA-W` to avoid
-  passing the widget pointer on every call. `_TXTA-DRAW` and
-  `_TXTA-HANDLE` set it at entry.
+  passing the widget pointer on every call. `_TXTA-DRAW`,
+  `_TXTA-HANDLE`, `TXTA-CURSOR-LINE`, and `TXTA-CURSOR-COL` set it
+  at entry.
 - **KDOS CMOVE note.** Uses `CMOVE ( src dst u -- )` with non-standard
   argument order per KDOS convention.
 - **KDOS FREE note.** `TXTA-FREE` uses `FREE` without `DROP` (KDOS

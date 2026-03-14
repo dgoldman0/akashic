@@ -92,7 +92,7 @@ VARIABLE _DLG-DRW-BROW    \ button row
 \   Layout: row 0 = box top, row 1 = blank, row 2..h-4 = message,
 \   row h-3 = blank, row h-2 = buttons, row h-1 = box bottom.
 : _DLG-MSG-ROWS  ( -- n )
-    _DLG-DRW-RH @ 5 - 1 MAX ;
+    _DLG-DRW-RH @ 5 - DUP 1 < IF DROP 1 THEN ;
 
 \ --- Draw message text (line-wrap at column width) ---
 
@@ -107,7 +107,7 @@ VARIABLE _DLG-MSG-MW      \ message width (region width - 4)
     _DLG-DRW-MU @ _DLG-MSG-LEN !
     2 _DLG-MSG-ROW !                     \ start at row 2 (after top + blank)
     _DLG-MSG-ROWS _DLG-MSG-MAXR !
-    _DLG-DRW-RW @ 4 - 1 MAX _DLG-MSG-MW !
+    _DLG-DRW-RW @ 4 - DUP 1 < IF DROP 1 THEN _DLG-MSG-MW !
     BEGIN
         _DLG-MSG-LEN @ 0>
         _DLG-MSG-MAXR @ 0>
@@ -368,15 +368,15 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
     _DLG-SH-WD !
 
     _DLG-SH-W @ _DLG-O-MSG-U + @
-    _DLG-SH-WD @ 4 - 1 MAX /         \ msg-u / inner-width
-    1 MAX
+    _DLG-SH-WD @ 4 - DUP 1 < IF DROP 1 THEN /         \ msg-u / inner-width
+    DUP 1 < IF DROP 1 THEN
     _DLG-SH-MR !
 
     _DLG-SH-MR @ 5 + _DLG-SH-HT !
 
     \ ---- Centre on 24×80 screen ----
-    24 _DLG-SH-HT @ - 2 / 0 MAX
-    80 _DLG-SH-WD @ - 2 / 0 MAX
+    24 _DLG-SH-HT @ - 2 / DUP 0< IF DROP 0 THEN
+    80 _DLG-SH-WD @ - 2 / DUP 0< IF DROP 0 THEN
     _DLG-SH-HT @
     _DLG-SH-WD @
     RGN-NEW _DLG-SH-RGN !

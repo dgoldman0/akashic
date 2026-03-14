@@ -43,6 +43,11 @@ REQUIRE ../region.f
 REQUIRE ../draw.f
 REQUIRE ../keys.f
 
+\ 3DROP is used below but not part of ANS Forth — define if absent.
+[UNDEFINED] 3DROP [IF]
+: 3DROP  ( a b c -- )  DROP 2DROP ;
+[THEN]
+
 \ =====================================================================
 \  §1 — Layout constants
 \ =====================================================================
@@ -287,7 +292,7 @@ VARIABLE _TREE-VH
     DUP 0= IF 2DROP EXIT THEN
     1-
     OVER _TREE-O-CURSOR + @
-    OVER MIN 0 MAX
+    OVER MIN DUP 0< IF DROP 0 THEN
     NIP SWAP _TREE-O-CURSOR + ! ;
 
 VARIABLE _TSC-CUR  VARIABLE _TSC-SCR  VARIABLE _TSC-VH
@@ -300,7 +305,7 @@ VARIABLE _TSC-CUR  VARIABLE _TSC-SCR  VARIABLE _TSC-VH
         _TSC-CUR @ SWAP _TREE-O-SCROLL + ! EXIT
     THEN
     _TSC-CUR @ _TSC-SCR @ _TSC-VH @ + >= IF  \ cursor below viewport
-        _TSC-CUR @ _TSC-VH @ - 1+ 0 MAX
+        _TSC-CUR @ _TSC-VH @ - 1+ DUP 0< IF DROP 0 THEN
         SWAP _TREE-O-SCROLL + ! EXIT
     THEN
     DROP ;

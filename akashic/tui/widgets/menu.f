@@ -351,7 +351,7 @@ VARIABLE _MNU-SU-ITEMS
                     0 EXIT
                 THEN
                 \ Move to previous menu
-                _MNU-HND-AMENU @ 1- 0 MAX
+                _MNU-HND-AMENU @ 1- DUP 0< IF DROP 0 THEN
                 _MNU-HND-W @ _MNU-O-ACTIVE + !
                 0 _MNU-HND-W @ _MNU-O-ITEM + !
                 _MNU-HND-W @ _MNU-SKIP-DISABLED-DOWN

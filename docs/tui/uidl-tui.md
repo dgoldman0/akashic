@@ -1,7 +1,7 @@
 # akashic/tui/uidl-tui.f — UIDL TUI Backend
 
 **Layer:** 8  
-**Lines:** 1501  
+**Lines:** ~1630  
 **Prefix:** `UTUI-` (public), `_UTUI-` (internal)  
 **Provider:** `akashic-tui-uidl-tui`  
 **Dependencies:** `uidl.f`, `uidl-chrome.f`, `state-tree.f`, `lel.f`,
@@ -259,6 +259,17 @@ Write render/event/layout execution tokens into the Element Registry
 for all chrome types (tabs, split, status, tree, scroll, dialog,
 menu, toast, etc.).  Called once at load time.
 
+### UTUI-WIDGET@ — `( elem -- wptr | 0 )`
+
+Return the widget struct pointer stored in the element's sidecar
+`wptr` cell (+48).  Returns 0 if the element has no materialized
+widget.  Useful for accessing widget-specific state (e.g. obtaining
+a textarea's cursor position via `TXTA-CURSOR-LINE`).
+
+> **Note:** Widget pointers are only valid after the first
+> `UTUI-PAINT` call, which triggers materialization.  Calling
+> `UTUI-WIDGET@` before painting returns 0.
+
 ---
 
 ## Focus Management
@@ -461,6 +472,7 @@ UTUI-FOCUS-NEXT        ( -- )                        Advance focus (DFS)
 UTUI-FOCUS-PREV        ( -- )                        Retreat focus (DFS)
 UTUI-HIT-TEST          ( row col -- elem | 0 )       Deepest element at screen pos
 UTUI-BY-ID             ( id-a id-l -- elem | 0 )     Look up element by ID
+UTUI-WIDGET@           ( elem -- wptr | 0 )          Get widget pointer from element sidecar
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW-DIALOG       ( id-a id-l -- )              Show dialog by ID
 UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID
