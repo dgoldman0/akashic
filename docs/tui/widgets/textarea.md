@@ -1,7 +1,7 @@
 # akashic/tui/widgets/textarea.f — Multi-line Text Area Widget
 
 **Layer:** 4B  
-**Lines:** ~484  
+**Lines:** ~591  
 **Prefix:** `TXTA-` (public), `_TXTA-` (internal)  
 **Provider:** `akashic-tui-textarea`  
 **Dependencies:** `widget.f`, `draw.f`, `keys.f`, `utf8.f`
@@ -9,8 +9,10 @@
 ## Overview
 
 A multi-line text editor widget with vertical scrolling, cursor
-movement (left/right/up/down/home/end), text insertion, deletion
-(backspace and forward-delete), and Enter for newline insertion.
+movement (left/right/up/down/home/end/page-up/page-down), word-level
+movement (Ctrl+Left / Ctrl+Right), text insertion, deletion
+(backspace and forward-delete), Enter for newline insertion, and an
+on-change callback that fires after every edit operation.
 
 The widget stores text in a caller-provided fixed-size buffer as
 a flat byte array with `0x0A` (newline) as the line separator.
@@ -71,6 +73,10 @@ Insertion is rejected when the buffer is full.
 | Home | Move cursor to start of line |
 | End | Move cursor to end of line |
 | Enter / CR | Insert newline (`0x0A`) |
+| Page Up | Move cursor up by viewport-height lines (clamp to top) |
+| Page Down | Move cursor down by viewport-height lines (clamp to last line) |
+| Ctrl+Left | Move cursor left to start of previous word |
+| Ctrl+Right | Move cursor right to end of next word |
 
 ## Internal Words
 
@@ -92,6 +98,12 @@ Insertion is rejected when the buffer is full.
 | `_TXTA-END` | `( -- )` | Move cursor to end of current line |
 | `_TXTA-UP` | `( -- )` | Move cursor to same column on previous line |
 | `_TXTA-DOWN` | `( -- )` | Move cursor to same column on next line |
+| `_TXTA-PGUP` | `( -- )` | Move cursor up by viewport-height lines |
+| `_TXTA-PGDN` | `( -- )` | Move cursor down by viewport-height lines |
+| `_TXTA-IS-WORD-CHAR` | `( byte -- flag )` | True if byte is alphanumeric or underscore |
+| `_TXTA-WORD-LEFT` | `( -- )` | Move cursor to start of previous word |
+| `_TXTA-WORD-RIGHT` | `( -- )` | Move cursor past end of next word |
+| `_TXTA-FIRE-CHANGE` | `( -- )` | Invoke on-change callback if set |
 | `_TXTA-SCROLL-ADJ` | `( -- )` | Ensure cursor line is visible (clamp scroll-y) |
 | `_TXTA-DRAW-LINE` | `( row -- )` | Draw one visible line at terminal row |
 | `_TXTA-DRAW` | `( widget -- )` | Full draw: scroll-adjust, draw all visible rows |
@@ -139,6 +151,16 @@ backend (`uidl-tui.f`), the following happens:
   argument order per KDOS convention.
 - **KDOS FREE note.** `TXTA-FREE` uses `FREE` without `DROP` (KDOS
   FREE is `( addr -- )`, not standard `( addr -- ior )`).
+- **On-change callback.** `_TXTA-FIRE-CHANGE` is called at the end
+  of `_TXTA-INSERT`, `_TXTA-DELETE`, and `_TXTA-BACKSPACE`. The
+  callback receives the widget pointer: `( widget -- )`. It is safe
+  to not set a callback (xt = 0 means no call).
+- **Word movement.** `_TXTA-WORD-LEFT` and `_TXTA-WORD-RIGHT` use a
+  two-phase skip: first skip non-word characters, then skip word
+  characters (or vice-versa). Word characters are `a-z`, `A-Z`,
+  `0-9`, and `_`.
+- **Page movement.** Page Up/Down move by the widget region height
+  (`WDG-REGION RGN-H`) lines, clamped to the document bounds.
 
 ## See Also
 

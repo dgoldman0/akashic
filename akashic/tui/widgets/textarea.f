@@ -150,6 +150,13 @@ VARIABLE _TXTA-TCOL    \ temp for _TXTA-COL-OFF
 CREATE _TXTA-INS-BUF 4 ALLOT
 VARIABLE _TXTA-INS-SZ
 
+\ _TXTA-FIRE-CHANGE ( -- )
+\   Invoke the on-change callback if registered.
+: _TXTA-FIRE-CHANGE  ( -- )
+    _TXTA-W @ _TXTA-O-ON-CHANGE + @ ?DUP IF
+        _TXTA-W @ SWAP EXECUTE
+    THEN ;
+
 \ _TXTA-INSERT ( cp -- )
 \   Insert a codepoint at cursor.  Rejects if buffer would overflow.
 : _TXTA-INSERT  ( cp -- )
@@ -171,6 +178,7 @@ VARIABLE _TXTA-INS-SZ
     _TXTA-W @ _TXTA-O-BUF-LEN + !
     _TXTA-INS-SZ @ _TXTA-W @ _TXTA-O-CURSOR + @ +
     _TXTA-W @ _TXTA-O-CURSOR + !
+    _TXTA-FIRE-CHANGE
     _TXTA-W @ WDG-DIRTY ;
 
 \ _TXTA-DELETE ( -- )
@@ -187,6 +195,7 @@ VARIABLE _TXTA-INS-SZ
     DUP 0> IF CMOVE ELSE DROP 2DROP THEN
     _TXTA-W @ _TXTA-O-BUF-LEN + @
     R> - _TXTA-W @ _TXTA-O-BUF-LEN + !
+    _TXTA-FIRE-CHANGE
     _TXTA-W @ WDG-DIRTY ;
 
 \ _TXTA-BACKSPACE ( -- )
@@ -200,7 +209,8 @@ VARIABLE _TXTA-INS-SZ
         ELSE 0 THEN
     WHILE 1- REPEAT
     _TXTA-W @ _TXTA-O-CURSOR + !
-    _TXTA-DELETE ;
+    _TXTA-DELETE
+    _TXTA-FIRE-CHANGE ;
 
 \ =====================================================================
 \  5. Cursor movement
@@ -250,6 +260,86 @@ VARIABLE _TXTA-INS-SZ
     _TXTA-CURSOR-COL                    ( cline ccol )
     SWAP 1+ _TXTA-LINE-OFF             ( ccol target-line-off )
     SWAP _TXTA-COL-OFF                  ( byte-off )
+    _TXTA-W @ _TXTA-O-CURSOR + !
+    _TXTA-W @ WDG-DIRTY ;
+
+\ _TXTA-PGUP ( -- )
+\   Move cursor up by viewport height lines.
+: _TXTA-PGUP  ( -- )
+    _TXTA-CURSOR-LINE                   ( cline )
+    DUP 0= IF DROP EXIT THEN
+    _TXTA-CURSOR-COL                    ( cline ccol )
+    SWAP
+    _TXTA-W @ WDG-REGION RGN-H -       ( ccol target-line )
+    DUP 0< IF DROP 0 THEN
+    _TXTA-LINE-OFF                      ( ccol target-off )
+    SWAP _TXTA-COL-OFF
+    _TXTA-W @ _TXTA-O-CURSOR + !
+    _TXTA-W @ WDG-DIRTY ;
+
+\ _TXTA-PGDN ( -- )
+\   Move cursor down by viewport height lines.
+: _TXTA-PGDN  ( -- )
+    _TXTA-CURSOR-LINE                   ( cline )
+    DUP 1+ _TXTA-LINE-COUNT >= IF DROP EXIT THEN
+    _TXTA-CURSOR-COL                    ( cline ccol )
+    SWAP
+    _TXTA-W @ WDG-REGION RGN-H +       ( ccol target-line )
+    _TXTA-LINE-COUNT 1- MIN             ( ccol clamped )
+    _TXTA-LINE-OFF                      ( ccol target-off )
+    SWAP _TXTA-COL-OFF
+    _TXTA-W @ _TXTA-O-CURSOR + !
+    _TXTA-W @ WDG-DIRTY ;
+
+\ =====================================================================
+\  5b. Word-level movement (Ctrl+Left / Ctrl+Right)
+\ =====================================================================
+
+\ _TXTA-IS-WORD-CHAR ( byte -- flag )
+\   True if the byte is a word character (alphanumeric or underscore).
+: _TXTA-IS-WORD-CHAR  ( b -- flag )
+    DUP [CHAR] a >= OVER [CHAR] z <= AND IF DROP -1 EXIT THEN
+    DUP [CHAR] A >= OVER [CHAR] Z <= AND IF DROP -1 EXIT THEN
+    DUP [CHAR] 0 >= OVER [CHAR] 9 <= AND IF DROP -1 EXIT THEN
+    [CHAR] _ = ;
+
+\ _TXTA-WORD-LEFT ( -- )
+\   Move cursor left to the start of the previous word.
+: _TXTA-WORD-LEFT  ( -- )
+    _TXTA-CURSOR 0= IF EXIT THEN
+    _TXTA-CURSOR
+    \ Phase 1: skip non-word chars going left
+    BEGIN
+        DUP 0 > IF
+            DUP 1- _TXTA-BUF-A + C@ _TXTA-IS-WORD-CHAR 0=
+        ELSE 0 THEN
+    WHILE 1- REPEAT
+    \ Phase 2: skip word chars going left
+    BEGIN
+        DUP 0 > IF
+            DUP 1- _TXTA-BUF-A + C@ _TXTA-IS-WORD-CHAR
+        ELSE 0 THEN
+    WHILE 1- REPEAT
+    _TXTA-W @ _TXTA-O-CURSOR + !
+    _TXTA-W @ WDG-DIRTY ;
+
+\ _TXTA-WORD-RIGHT ( -- )
+\   Move cursor right to the start of the next word.
+: _TXTA-WORD-RIGHT  ( -- )
+    _TXTA-CURSOR _TXTA-BUF-LEN >= IF EXIT THEN
+    _TXTA-CURSOR
+    \ Phase 1: skip word chars going right
+    BEGIN
+        DUP _TXTA-BUF-LEN < IF
+            DUP _TXTA-BUF-A + C@ _TXTA-IS-WORD-CHAR
+        ELSE 0 THEN
+    WHILE 1+ REPEAT
+    \ Phase 2: skip non-word chars going right
+    BEGIN
+        DUP _TXTA-BUF-LEN < IF
+            DUP _TXTA-BUF-A + C@ _TXTA-IS-WORD-CHAR 0=
+        ELSE 0 THEN
+    WHILE 1+ REPEAT
     _TXTA-W @ _TXTA-O-CURSOR + !
     _TXTA-W @ WDG-DIRTY ;
 
@@ -358,10 +448,24 @@ VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
 \  8. Internal handle
 \ =====================================================================
 
+VARIABLE _TXTA-HND-EV   \ saved event for modifier checks
+
 : _TXTA-HANDLE  ( event widget -- consumed? )
     _TXTA-W !                           ( event )
+    DUP _TXTA-HND-EV !                 \ save for modifier checks
     DUP @ KEY-T-SPECIAL = IF
-        8 + @                           ( code )
+        DUP 16 + @                      ( ev mods )
+        SWAP 8 + @                      ( mods code )
+        \ Ctrl+Left / Ctrl+Right = word movement
+        OVER KEY-MOD-CTRL AND IF
+            DUP KEY-LEFT = IF
+                2DROP _TXTA-WORD-LEFT -1 EXIT
+            THEN
+            DUP KEY-RIGHT = IF
+                2DROP _TXTA-WORD-RIGHT -1 EXIT
+            THEN
+        THEN
+        NIP                             ( code )
         CASE
             KEY-LEFT      OF _TXTA-LEFT      -1 ENDOF
             KEY-RIGHT     OF _TXTA-RIGHT     -1 ENDOF
@@ -369,6 +473,8 @@ VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
             KEY-DOWN      OF _TXTA-DOWN      -1 ENDOF
             KEY-HOME      OF _TXTA-HOME      -1 ENDOF
             KEY-END       OF _TXTA-END       -1 ENDOF
+            KEY-PGUP      OF _TXTA-PGUP      -1 ENDOF
+            KEY-PGDN      OF _TXTA-PGDN      -1 ENDOF
             KEY-DEL       OF _TXTA-DELETE    -1 ENDOF
             KEY-BACKSPACE OF _TXTA-BACKSPACE -1 ENDOF
             KEY-ENTER     OF 10 _TXTA-INSERT -1 ENDOF

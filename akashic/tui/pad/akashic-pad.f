@@ -81,6 +81,9 @@ S" quit" ' _PAD-ACT-QUIT UTUI-DO!
 VARIABLE _pad-editor-w     \ textarea widget pointer
 VARIABLE _pad-stpos-elem   \ st-pos UIDL element
 VARIABLE _pad-stpos-attr   \ st-pos 'text' attr node
+VARIABLE _pad-stmsg-elem   \ st-msg UIDL element
+VARIABLE _pad-stmsg-attr   \ st-msg 'text' attr node
+VARIABLE _pad-dirty        \ buffer modified flag
 
 \ Walk attrs of an element to find the 'text' attr node.
 : _pad-find-text-attr  ( elem -- attr-node | 0 )
@@ -107,7 +110,12 @@ VARIABLE _pad-pos-len
     S" st-pos" UTUI-BY-ID DUP 0= ABORT" [pad] st-pos not found"
     DUP _pad-stpos-elem !
     _pad-find-text-attr DUP 0= ABORT" [pad] st-pos text attr not found"
-    _pad-stpos-attr ! ;
+    _pad-stpos-attr !
+    S" st-msg" UTUI-BY-ID DUP 0= ABORT" [pad] st-msg not found"
+    DUP _pad-stmsg-elem !
+    _pad-find-text-attr DUP 0= ABORT" [pad] st-msg text attr not found"
+    _pad-stmsg-attr !
+    0 _pad-dirty ! ;
 
 \ _PAD-UPDATE-POS ( -- )  Recompute "Ln N, Col M" and poke attr.
 : _PAD-UPDATE-POS  ( -- )
@@ -122,6 +130,16 @@ VARIABLE _pad-pos-len
     _pad-pos-len @ _pad-stpos-attr @ 32 + ! \ UA.VAL-L
     \ Mark the label dirty so it repaints
     _pad-stpos-elem @ UIDL-DIRTY! ;
+
+\ _PAD-ON-CHANGE ( widget -- )  Callback from textarea on any edit.
+: _PAD-ON-CHANGE  ( widget -- )
+    DROP
+    _pad-dirty @ IF EXIT THEN          \ already dirty
+    -1 _pad-dirty !
+    \ Poke "Modified" into st-msg label
+    S" Modified" DROP _pad-stmsg-attr @ 24 + !
+    8                _pad-stmsg-attr @ 32 + !
+    _pad-stmsg-elem @ UIDL-DIRTY! ;
 
 \ ============================================================
 \  §5 — Event Loop
@@ -140,6 +158,8 @@ CREATE _pad-ev 24 ALLOT
 
     \ Now that widgets exist, resolve cached pointers
     _PAD-INIT-POS
+    \ Wire up on-change callback for dirty indicator
+    ['] _PAD-ON-CHANGE _pad-editor-w @ TXTA-ON-CHANGE
     _PAD-UPDATE-POS
     UTUI-PAINT  SCR-FLUSH
 
