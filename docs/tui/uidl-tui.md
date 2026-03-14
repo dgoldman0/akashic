@@ -6,7 +6,7 @@
 **Provider:** `akashic-tui-uidl-tui`  
 **Dependencies:** `uidl.f`, `uidl-chrome.f`, `state-tree.f`, `lel.f`,
 `screen.f`, `draw.f`, `box.f`, `region.f`, `layout.f`, `keys.f`,
-`widgets/tree.f`
+`widgets/tree.f`, `css/css.f`, `color.f`
 
 ## Overview
 
@@ -40,6 +40,7 @@ REQUIRE tui/uidl-tui.f
 - [Event Dispatch](#event-dispatch)
 - [Dialog Management](#dialog-management)
 - [Actions & Shortcuts](#actions--shortcuts)
+- [CSS Style Attributes](#css-style-attributes)
 - [Element-Specific Rendering](#element-specific-rendering)
 - [Guard Wrappers](#guard-wrappers)
 - [Quick Reference](#quick-reference)
@@ -352,6 +353,81 @@ Register a named action.  When an element with a matching
 
 ---
 
+## CSS Style Attributes
+
+When an element carries a `style="…"` attribute in the UIDL markup,
+`UTUI-LOAD` resolves the inline CSS declarations into the element's
+sidecar after the layout pass completes.  Resolution is a depth-first
+walk of the full element tree (`_UTUI-RESOLVE-STYLES-REC`), so
+parent styles are applied before children.
+
+### Supported Properties
+
+| CSS Property | Sidecar Effect | Value Syntax |
+|--------------|---------------|--------------|
+| `color` | FG byte (bits 0–7) of packed style | `#RGB`, `#RRGGBB`, named colour |
+| `background-color` | BG byte (bits 8–15) of packed style | `#RGB`, `#RRGGBB`, named colour |
+| `font-weight` | Bold bit (bit 16) in attrs | `bold` (case-insensitive) |
+| `width` | Sidecar W field | Integer (cells) or `N%` of parent W |
+| `height` | Sidecar H field | Integer (cells) or `N%` of parent H |
+
+Colours are parsed by `TUI-PARSE-COLOR` from [color.f](color.md) —
+all 148 CSS named colours and `#RRGGBB` / `#RGB` hex notation are
+accepted.  Percentage dimensions are resolved against the parent
+element's already-computed sidecar size (`width: 50%` on a child
+whose parent has W = 80 → child W = 40).
+
+### Resolution Flow
+
+```
+UTUI-LOAD
+  ├── Parse UIDL markup
+  ├── Allocate sidecars
+  ├── UTUI-RELAYOUT          ← geometry pass
+  └── _UTUI-RESOLVE-STYLES   ← CSS style= pass (post-layout)
+        └── depth-first walk
+              └── _UTUI-RESOLVE-ELEM-STYLE per element
+                    ├── UIDL-ATTR "style" → val-a val-u
+                    ├── CSS-DECL-FIND "color"            → TUI-PARSE-COLOR → fg
+                    ├── CSS-DECL-FIND "background-color" → TUI-PARSE-COLOR → bg
+                    ├── CSS-DECL-FIND "font-weight"      → bold bit
+                    ├── CSS-DECL-FIND "width"             → CSS-PARSE-NUMBER → sidecar W
+                    └── CSS-DECL-FIND "height"            → CSS-PARSE-NUMBER → sidecar H
+```
+
+### UIDL Example
+
+```xml
+<panel id="status" style="color:#5fafff; background-color:#1c1c1c; font-weight:bold">
+  <label style="width:50%">Left half</label>
+  <label style="color:white">Right text</label>
+</panel>
+```
+
+After `UTUI-LOAD`, the status panel's sidecar has:
+
+- FG = palette index of `#5fafff` (75)
+- BG = palette index of `#1c1c1c` (234)
+- Bold bit set
+
+The first label inherits parent dimensions via layout, then
+`width: 50%` halves the sidecar W field.  The second label
+overrides only FG to white (231).
+
+### Internal Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `_UTUI-RESOLVE-STYLES` | `( -- )` | Entry point: walk from `UIDL-ROOT` |
+| `_UTUI-RESOLVE-STYLES-REC` | `( elem -- )` | Recursive depth-first walker |
+| `_UTUI-RESOLVE-ELEM-STYLE` | `( elem -- )` | Read `style=`, apply each CSS declaration |
+| `_UTUI-CSS-SET-FG` | `( val-a val-u -- )` | Parse colour → FG bits |
+| `_UTUI-CSS-SET-BG` | `( val-a val-u -- )` | Parse colour → BG bits |
+| `_UTUI-CSS-SET-BOLD` | `( val-a val-u -- )` | Check for `bold` → attrs bit 16 |
+| `_UTUI-CSS-SET-DIM` | `( val-a val-u pdim off -- )` | Parse number+unit → sidecar W or H |
+
+---
+
 ## Element-Specific Rendering
 
 Each chrome element type has dedicated render, event, and layout
@@ -544,6 +620,7 @@ my-rgn RGN-FREE
 ## See Also
 
 - [uidl.md](../liraq/uidl.md) — UIDL document model and element registry
+- [color.md](color.md) — Shared RGB → xterm-256 color resolution
 - [dom-tui.md](dom-tui.md) — DOM-to-TUI backend (alternative path)
 - [widget.md](widget.md) — Widget common header
 - [region.md](region.md) — Region primitives

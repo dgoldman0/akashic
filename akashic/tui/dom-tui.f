@@ -134,10 +134,6 @@ REQUIRE color.f
 \ (shared by dom-tui.f and uidl-tui.f).  color.f provides:
 \   TUI-RESOLVE-COLOR   ( r g b -- index )
 \   TUI-PARSE-COLOR     ( val-a val-u -- index found? )
-\   DTUI-RESOLVE-COLOR   ( r g b -- index )   backward-compat alias
-
-\ Internal alias for backward compatibility within this file.
-: _DTUI-PARSE-COLOR  ( val-a val-u -- index found? )  TUI-PARSE-COLOR ;
 
 \ =====================================================================
 \  §6 — Sidecar Pool (carved from DOM string pool)
@@ -209,7 +205,7 @@ VARIABLE _DRN-FL    \ flags accumulator
 \ _DTUI-RESOLVE-FG ( node -- fg-index )
 : _DTUI-RESOLVE-FG  ( node -- fg-index )
     S" color" DOM-STYLE@  IF
-        _DTUI-PARSE-COLOR IF EXIT THEN
+        TUI-PARSE-COLOR IF EXIT THEN
         2DROP
     ELSE 2DROP THEN
     _DTUI-DEFAULT-FG ;
@@ -217,7 +213,7 @@ VARIABLE _DRN-FL    \ flags accumulator
 \ _DTUI-RESOLVE-BG ( node -- bg-index )
 : _DTUI-RESOLVE-BG  ( node -- bg-index )
     S" background-color" DOM-STYLE@  IF
-        _DTUI-PARSE-COLOR IF EXIT THEN
+        TUI-PARSE-COLOR IF EXIT THEN
         2DROP
     ELSE 2DROP THEN
     _DTUI-DEFAULT-BG ;
@@ -573,7 +569,6 @@ GUARD _dtui-guard
 ' DTUI-SIDECAR        CONSTANT _dtui-sidecar-xt
 ' DTUI-VISIBLE?       CONSTANT _dtui-visible-xt
 ' DTUI-STYLE!         CONSTANT _dtui-style-xt
-' DTUI-RESOLVE-COLOR  CONSTANT _dtui-resolve-color-xt
 ' DTUI-CLASS-ADD      CONSTANT _dtui-class-add-xt
 ' DTUI-CLASS-REMOVE   CONSTANT _dtui-class-remove-xt
 ' DTUI-PACK-STYLE     CONSTANT _dtui-pack-style-xt
@@ -595,7 +590,6 @@ GUARD _dtui-guard
 : DTUI-SIDECAR         _dtui-sidecar-xt       _dtui-guard WITH-GUARD ;
 : DTUI-VISIBLE?        _dtui-visible-xt       _dtui-guard WITH-GUARD ;
 : DTUI-STYLE!          _dtui-style-xt         _dtui-guard WITH-GUARD ;
-: DTUI-RESOLVE-COLOR   _dtui-resolve-color-xt _dtui-guard WITH-GUARD ;
 : DTUI-CLASS-ADD       _dtui-class-add-xt     _dtui-guard WITH-GUARD ;
 : DTUI-CLASS-REMOVE    _dtui-class-remove-xt  _dtui-guard WITH-GUARD ;
 : DTUI-PACK-STYLE      _dtui-pack-style-xt    _dtui-guard WITH-GUARD ;

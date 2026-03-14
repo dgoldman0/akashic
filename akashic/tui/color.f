@@ -131,11 +131,3 @@ VARIABLE _TPC-R   VARIABLE _TPC-G   VARIABLE _TPC-B
     THEN
     0 ;
 
-\ =====================================================================
-\  §3 — Backward Compatibility Aliases
-\ =====================================================================
-\
-\ dom-tui.f historically used DTUI-RESOLVE-COLOR.  Provide aliases
-\ so existing code continues to compile without changes.
-
-: DTUI-RESOLVE-COLOR  ( r g b -- index )  TUI-RESOLVE-COLOR ;

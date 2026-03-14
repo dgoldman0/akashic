@@ -191,12 +191,11 @@ Extract border style index (bits 32–39).
 
 ## Color Resolution
 
-### `DTUI-RESOLVE-COLOR` — `( r g b -- palette-index )`
-
-Map an RGB triplet (each 0–255) to the nearest xterm-256 palette
-entry.  Searches both the 6×6×6 colour cube (indices 16–231) and the
-24-step grayscale ramp (indices 232–255), returning whichever is
-closest by sum-of-absolute-differences.
+RGB→256 palette mapping and CSS colour parsing are provided by the
+shared module [color.f](color.md).  `dom-tui.f` calls
+`TUI-PARSE-COLOR` directly inside `_DTUI-RESOLVE-FG` /
+`_DTUI-RESOLVE-BG` to map CSS colour values to xterm-256 palette
+indices.
 
 ---
 
@@ -324,7 +323,7 @@ is a mutual-exclusion lock from `concurrency/guard.f`.
 
 Protected words: `DTUI-ATTACH`, `DTUI-DETACH`, `DTUI-REFRESH`,
 `DTUI-SIDECAR`, `DTUI-VISIBLE?`, `DTUI-STYLE!`,
-`DTUI-RESOLVE-COLOR`, `DTUI-CLASS-ADD`, `DTUI-CLASS-REMOVE`,
+`DTUI-CLASS-ADD`, `DTUI-CLASS-REMOVE`,
 `DTUI-PACK-STYLE`, `DTUI-UNPACK-FG`, `DTUI-UNPACK-BG`,
 `DTUI-UNPACK-ATTRS`, `DTUI-UNPACK-BORDER`,
 `DTUI-MARK-DIRTY`, `DTUI-MARK-GEOM-DIRTY`,
@@ -363,7 +362,6 @@ DTUI-REFRESH       ( doc -- )              Re-resolve CSS into existing sidecars
 DTUI-SIDECAR       ( node -- sc|0 )        Get sidecar for node
 DTUI-VISIBLE?      ( node -- flag )        Sidecar has VISIBLE flag?
 DTUI-STYLE!        ( node fg bg a -- )     Override fg/bg/attrs in sidecar
-DTUI-RESOLVE-COLOR ( r g b -- idx )        RGB → xterm-256 palette index
 DTUI-PACK-STYLE    ( fg bg a b -- p )      Pack style into one cell
 DTUI-UNPACK-FG     ( p -- fg )             Extract FG from packed
 DTUI-UNPACK-BG     ( p -- bg )             Extract BG from packed
