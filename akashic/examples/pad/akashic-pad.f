@@ -9,6 +9,7 @@
 \ ============================================================
 
 REQUIRE tui/uidl-tui.f
+REQUIRE utils/clipboard.f
 
 \ ============================================================
 \  §1 — UIDL Document (built in a static buffer)
@@ -79,6 +80,7 @@ S" quit" ' _PAD-ACT-QUIT UTUI-DO!
 \ so we resolve pointers lazily inside PAD-RUN, not at load time.
 
 VARIABLE _pad-editor-w     \ textarea widget pointer
+VARIABLE _pad-editor-elem  \ editor UIDL element (for UIDL-DIRTY!)
 VARIABLE _pad-stpos-elem   \ st-pos UIDL element
 VARIABLE _pad-stpos-attr   \ st-pos 'text' attr node
 VARIABLE _pad-stmsg-elem   \ st-msg UIDL element
@@ -105,6 +107,7 @@ VARIABLE _pad-pos-len
 \ _PAD-INIT-POS ( -- )  Resolve cached pointers (call after first paint).
 : _PAD-INIT-POS  ( -- )
     S" editor" UTUI-BY-ID DUP 0= ABORT" [pad] editor not found"
+    DUP _pad-editor-elem !
     UTUI-WIDGET@ DUP 0= ABORT" [pad] editor widget not found"
     _pad-editor-w !
     S" st-pos" UTUI-BY-ID DUP 0= ABORT" [pad] st-pos not found"
@@ -142,6 +145,41 @@ VARIABLE _pad-pos-len
     _pad-stmsg-elem @ UIDL-DIRTY! ;
 
 \ ============================================================
+\  §4b — Clipboard (Ctrl+C / Ctrl+X / Ctrl+V)
+\ ============================================================
+
+\ _PAD-COPY ( -- )  Copy selection to system clipboard.
+: _PAD-COPY  ( -- )
+    _pad-editor-w @ TXTA-GET-SEL   ( addr len | 0 0 )
+    DUP 0= IF 2DROP EXIT THEN
+    CLIP-COPY DROP ;
+
+\ _PAD-CUT ( -- )  Copy selection then delete it.
+: _PAD-CUT  ( -- )
+    _pad-editor-w @ TXTA-GET-SEL
+    DUP 0= IF 2DROP EXIT THEN
+    CLIP-COPY DROP
+    _pad-editor-w @ TXTA-DEL-SEL DROP
+    _pad-editor-elem @ UIDL-DIRTY! ;
+
+\ _PAD-PASTE ( -- )  Paste most recent clipboard entry at cursor.
+: _PAD-PASTE  ( -- )
+    CLIP-PASTE                        ( addr len )
+    DUP 0= IF 2DROP EXIT THEN
+    _pad-editor-w @ TXTA-INS-STR
+    _pad-editor-elem @ UIDL-DIRTY! ;
+
+\ _PAD-CLIPBOARD? ( ev -- flag )  If Ctrl+C/X/V, handle and return TRUE.
+: _PAD-CLIPBOARD?  ( ev -- flag )
+    DUP @ KEY-T-CHAR <> IF DROP 0 EXIT THEN
+    DUP 16 + @ KEY-MOD-CTRL AND 0= IF DROP 0 EXIT THEN
+    8 + @
+    DUP [CHAR] c = IF DROP _PAD-COPY  -1 EXIT THEN
+    DUP [CHAR] x = IF DROP _PAD-CUT   -1 EXIT THEN
+    DUP [CHAR] v = IF DROP _PAD-PASTE -1 EXIT THEN
+    DROP 0 ;
+
+\ ============================================================
 \  §5 — Event Loop
 \ ============================================================
 
@@ -165,7 +203,9 @@ CREATE _pad-ev 24 ALLOT
 
     BEGIN
         _pad-ev KEY-READ DROP
-        _pad-ev UTUI-DISPATCH-KEY DROP
+        _pad-ev UTUI-DISPATCH-KEY 0= IF
+            _pad-ev _PAD-CLIPBOARD? DROP
+        THEN
         _PAD-UPDATE-POS
         UTUI-PAINT
         SCR-FLUSH

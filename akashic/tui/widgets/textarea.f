@@ -17,7 +17,7 @@
 \    +64      cursor          Cursor byte offset
 \    +72      scroll-y        First visible line (0-based)
 \    +80      on-change-xt    Callback ( widget -- ) or 0
-\    +88      (reserved)
+\    +88      sel-anchor      Selection anchor byte offset (-1 = none)
 \
 \  Prefix: TXTA- (public), _TXTA- (internal)
 \  Provider: akashic-tui-textarea
@@ -42,7 +42,7 @@ REQUIRE ../keys.f
 64 CONSTANT _TXTA-O-CURSOR
 72 CONSTANT _TXTA-O-SCROLL-Y
 80 CONSTANT _TXTA-O-ON-CHANGE
-88 CONSTANT _TXTA-O-RESERVED
+88 CONSTANT _TXTA-O-SEL-ANCHOR
 
 96 CONSTANT _TXTA-DESC-SIZE
 
@@ -58,6 +58,34 @@ VARIABLE _TXTA-W     \ current widget pointer for all internal words
 : _TXTA-BUF-CAP ( -- n )    _TXTA-W @ _TXTA-O-BUF-CAP + @ ;
 : _TXTA-CURSOR  ( -- n )    _TXTA-W @ _TXTA-O-CURSOR  + @ ;
 : _TXTA-SCROLL  ( -- n )    _TXTA-W @ _TXTA-O-SCROLL-Y + @ ;
+: _TXTA-SEL-ANCHOR ( -- n ) _TXTA-W @ _TXTA-O-SEL-ANCHOR + @ ;
+
+\ =====================================================================
+\  2b. Selection helpers
+\ =====================================================================
+
+\ _TXTA-HAS-SEL? ( -- flag )
+\   True if a selection is active (anchor != -1).
+: _TXTA-HAS-SEL?  ( -- flag )
+    _TXTA-SEL-ANCHOR -1 <> ;
+
+\ _TXTA-SEL-CLEAR ( -- )
+\   Deactivate selection.
+: _TXTA-SEL-CLEAR  ( -- )
+    -1 _TXTA-W @ _TXTA-O-SEL-ANCHOR + ! ;
+
+\ _TXTA-SEL-START! ( -- )
+\   If no selection is active, set anchor to current cursor position.
+: _TXTA-SEL-START!  ( -- )
+    _TXTA-HAS-SEL? IF EXIT THEN
+    _TXTA-CURSOR _TXTA-W @ _TXTA-O-SEL-ANCHOR + ! ;
+
+\ _TXTA-SEL-RANGE ( -- start end )
+\   Return the ordered byte range of the selection.
+\   Undefined if no selection — caller must check _TXTA-HAS-SEL? first.
+: _TXTA-SEL-RANGE  ( -- start end )
+    _TXTA-SEL-ANCHOR _TXTA-CURSOR
+    2DUP > IF SWAP THEN ;
 
 \ =====================================================================
 \  3. Line utilities
@@ -157,9 +185,59 @@ VARIABLE _TXTA-INS-SZ
         _TXTA-W @ SWAP EXECUTE
     THEN ;
 
+\ _TXTA-DEL-RANGE ( start len -- )
+\   Delete len bytes starting at byte offset start.  Low-level:
+\   shifts tail left, updates buf-len.  Does NOT fire change or dirty.
+VARIABLE _TXTA-DR-START
+VARIABLE _TXTA-DR-LEN
+: _TXTA-DEL-RANGE  ( start len -- )
+    DUP 0= IF 2DROP EXIT THEN
+    _TXTA-DR-LEN !  _TXTA-DR-START !
+    _TXTA-BUF-A _TXTA-DR-START @ + _TXTA-DR-LEN @ +   \ src
+    _TXTA-BUF-A _TXTA-DR-START @ +                     \ dst
+    _TXTA-BUF-LEN _TXTA-DR-START @ - _TXTA-DR-LEN @ - \ count
+    DUP 0> IF CMOVE ELSE DROP 2DROP THEN
+    _TXTA-W @ _TXTA-O-BUF-LEN + @
+    _TXTA-DR-LEN @ - _TXTA-W @ _TXTA-O-BUF-LEN + ! ;
+
+\ _TXTA-DEL-SEL ( -- deleted? )
+\   If a selection is active, delete it, place cursor at start,
+\   clear selection, return TRUE.  Otherwise return FALSE.
+: _TXTA-DEL-SEL  ( -- flag )
+    _TXTA-HAS-SEL? 0= IF 0 EXIT THEN
+    _TXTA-SEL-RANGE                  ( start end )
+    OVER -                           ( start len )
+    2DUP _TXTA-DEL-RANGE
+    DROP                             ( start )
+    _TXTA-W @ _TXTA-O-CURSOR + !
+    _TXTA-SEL-CLEAR
+    -1 ;
+
+\ _TXTA-INS-STR ( addr len -- )
+\   Insert a string of bytes at cursor.  Used by paste.
+\   Assumes selection already handled.  Rejects if buffer would overflow.
+: _TXTA-INS-STR  ( addr len -- )
+    DUP _TXTA-BUF-LEN + _TXTA-BUF-CAP > IF 2DROP EXIT THEN
+    DUP >R                                  ( addr len  R: len )
+    \ Shift tail right by len
+    _TXTA-BUF-A _TXTA-CURSOR +              \ src
+    DUP R@ +                                \ dst
+    _TXTA-BUF-LEN _TXTA-CURSOR -            \ count
+    DUP 0 > IF CMOVE> ELSE DROP 2DROP THEN
+    \ Copy string into gap              ( addr len  R: len )
+    DROP                                ( addr  R: len )
+    _TXTA-BUF-A _TXTA-CURSOR +  R@ CMOVE
+    \ Update len + cursor
+    R@ _TXTA-W @ _TXTA-O-BUF-LEN + @ +
+    _TXTA-W @ _TXTA-O-BUF-LEN + !
+    R> _TXTA-W @ _TXTA-O-CURSOR + @ +
+    _TXTA-W @ _TXTA-O-CURSOR + ! ;
+
 \ _TXTA-INSERT ( cp -- )
-\   Insert a codepoint at cursor.  Rejects if buffer would overflow.
+\   Insert a codepoint at cursor.  If a selection is active, deletes
+\   it first (replacing selection).  Rejects if buffer would overflow.
 : _TXTA-INSERT  ( cp -- )
+    _TXTA-DEL-SEL DROP
     _TXTA-INS-BUF UTF8-ENCODE
     _TXTA-INS-BUF - _TXTA-INS-SZ !
     _TXTA-BUF-LEN _TXTA-INS-SZ @ +
@@ -183,7 +261,11 @@ VARIABLE _TXTA-INS-SZ
 
 \ _TXTA-DELETE ( -- )
 \   Delete character at cursor (forward delete).
+\   If selection active, deletes selection instead.
 : _TXTA-DELETE  ( -- )
+    _TXTA-DEL-SEL IF
+        _TXTA-FIRE-CHANGE _TXTA-W @ WDG-DIRTY EXIT
+    THEN
     _TXTA-CURSOR _TXTA-BUF-LEN >= IF EXIT THEN
     _TXTA-BUF-A _TXTA-CURSOR +             ( addr )
     DUP C@ _UTF8-SEQLEN
@@ -199,7 +281,12 @@ VARIABLE _TXTA-INS-SZ
     _TXTA-W @ WDG-DIRTY ;
 
 \ _TXTA-BACKSPACE ( -- )
+\   If selection active, delete selection.  Otherwise delete one
+\   codepoint before cursor.
 : _TXTA-BACKSPACE  ( -- )
+    _TXTA-DEL-SEL IF
+        _TXTA-FIRE-CHANGE _TXTA-W @ WDG-DIRTY EXIT
+    THEN
     _TXTA-CURSOR 0= IF EXIT THEN
     \ Move cursor back one codepoint
     _TXTA-CURSOR 1-
@@ -377,6 +464,20 @@ VARIABLE _TXTA-DRW-RW     \ region width
 VARIABLE _TXTA-DRW-COL    \ current column during line draw
 VARIABLE _TXTA-DRW-ROW    \ current row
 VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
+VARIABLE _TXTA-DRW-SELS   \ selection start byte offset (or -1)
+VARIABLE _TXTA-DRW-SELE   \ selection end byte offset
+
+\ _TXTA-DRW-BYTEOFF ( -- off )
+\   Current byte offset into buffer during draw (buf-len - remaining).
+: _TXTA-DRW-BYTEOFF  ( -- off )
+    _TXTA-BUF-LEN _TXTA-DRW-L @ - ;
+
+\ _TXTA-DRW-IN-SEL? ( -- flag )
+\   True if current draw byte offset is inside the selection range.
+: _TXTA-DRW-IN-SEL?  ( -- flag )
+    _TXTA-DRW-SELS @ -1 = IF 0 EXIT THEN
+    _TXTA-DRW-BYTEOFF
+    DUP _TXTA-DRW-SELS @ >= SWAP _TXTA-DRW-SELE @ < AND ;
 
 \ _TXTA-DRAW-LINE ( row -- )
 \   Draw one text line at the given viewport row.
@@ -392,9 +493,13 @@ VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
         _TXTA-DRW-L @ 0 > AND
         _TXTA-DRW-A @ C@ 10 <> AND
     WHILE
-        \ Cursor highlight
+        \ Selection highlight
+        _TXTA-DRW-IN-SEL? IF
+            CELL-A-REVERSE DRW-ATTR!
+        THEN
+        \ Cursor highlight (overrides selection attr — both use reverse)
         _TXTA-DRW-CDONE @ 0= IF
-        _TXTA-BUF-LEN _TXTA-DRW-L @ -
+        _TXTA-DRW-BYTEOFF
         _TXTA-CURSOR =
         _TXTA-W @ WDG-FOCUSED? AND IF
             CELL-A-REVERSE DRW-ATTR!
@@ -410,7 +515,7 @@ VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
     REPEAT
     \ Cursor at end of line (or on the \n)
     _TXTA-DRW-CDONE @ 0= IF
-    _TXTA-BUF-LEN _TXTA-DRW-L @ -
+    _TXTA-DRW-BYTEOFF
     _TXTA-CURSOR =
     _TXTA-W @ WDG-FOCUSED? AND IF
         _TXTA-DRW-COL @ _TXTA-DRW-RW @ < IF
@@ -432,6 +537,12 @@ VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
 : _TXTA-DRAW  ( widget -- )
     DUP _TXTA-W !
     _TXTA-SCROLL-ADJ
+    \ Compute selection range for draw pass
+    _TXTA-HAS-SEL? IF
+        _TXTA-SEL-RANGE _TXTA-DRW-SELE ! _TXTA-DRW-SELS !
+    ELSE
+        -1 _TXTA-DRW-SELS !
+    THEN
     DUP WDG-REGION RGN-W _TXTA-DRW-RW !
     WDG-REGION RGN-H                    ( vh )
     \ Set up buffer pointers starting at scroll-y line
@@ -448,33 +559,47 @@ VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
 \  8. Internal handle
 \ =====================================================================
 
-VARIABLE _TXTA-HND-EV   \ saved event for modifier checks
+VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
+
+\ _TXTA-MOV-PRE -- call before every cursor-movement dispatch.
+\ If Shift held, anchors selection (start if no sel yet); otherwise clears.
+: _TXTA-MOV-PRE  ( -- )
+    _TXTA-HND-MODS @ KEY-MOD-SHIFT AND IF
+        _TXTA-HAS-SEL? 0= IF _TXTA-SEL-START! THEN
+    ELSE
+        _TXTA-SEL-CLEAR
+    THEN ;
+
+\ _TXTA-SELECT-ALL -- select entire buffer
+: _TXTA-SELECT-ALL  ( -- )
+    0 _TXTA-W @ _TXTA-O-SEL-ANCHOR + !
+    _TXTA-BUF-LEN _TXTA-W @ _TXTA-O-CURSOR + ! ;
 
 : _TXTA-HANDLE  ( event widget -- consumed? )
     _TXTA-W !                           ( event )
-    DUP _TXTA-HND-EV !                 \ save for modifier checks
+    DUP 16 + @ _TXTA-HND-MODS !        \ cache modifiers
     DUP @ KEY-T-SPECIAL = IF
         DUP 16 + @                      ( ev mods )
         SWAP 8 + @                      ( mods code )
-        \ Ctrl+Left / Ctrl+Right = word movement
+        \ Ctrl+Left / Ctrl+Right = word movement (shift-aware)
         OVER KEY-MOD-CTRL AND IF
             DUP KEY-LEFT = IF
-                2DROP _TXTA-WORD-LEFT -1 EXIT
+                2DROP _TXTA-MOV-PRE _TXTA-WORD-LEFT -1 EXIT
             THEN
             DUP KEY-RIGHT = IF
-                2DROP _TXTA-WORD-RIGHT -1 EXIT
+                2DROP _TXTA-MOV-PRE _TXTA-WORD-RIGHT -1 EXIT
             THEN
         THEN
         NIP                             ( code )
         CASE
-            KEY-LEFT      OF _TXTA-LEFT      -1 ENDOF
-            KEY-RIGHT     OF _TXTA-RIGHT     -1 ENDOF
-            KEY-UP        OF _TXTA-UP        -1 ENDOF
-            KEY-DOWN      OF _TXTA-DOWN      -1 ENDOF
-            KEY-HOME      OF _TXTA-HOME      -1 ENDOF
-            KEY-END       OF _TXTA-END       -1 ENDOF
-            KEY-PGUP      OF _TXTA-PGUP      -1 ENDOF
-            KEY-PGDN      OF _TXTA-PGDN      -1 ENDOF
+            KEY-LEFT      OF _TXTA-MOV-PRE _TXTA-LEFT      -1 ENDOF
+            KEY-RIGHT     OF _TXTA-MOV-PRE _TXTA-RIGHT     -1 ENDOF
+            KEY-UP        OF _TXTA-MOV-PRE _TXTA-UP        -1 ENDOF
+            KEY-DOWN      OF _TXTA-MOV-PRE _TXTA-DOWN      -1 ENDOF
+            KEY-HOME      OF _TXTA-MOV-PRE _TXTA-HOME      -1 ENDOF
+            KEY-END       OF _TXTA-MOV-PRE _TXTA-END       -1 ENDOF
+            KEY-PGUP      OF _TXTA-MOV-PRE _TXTA-PGUP      -1 ENDOF
+            KEY-PGDN      OF _TXTA-MOV-PRE _TXTA-PGDN      -1 ENDOF
             KEY-DEL       OF _TXTA-DELETE    -1 ENDOF
             KEY-BACKSPACE OF _TXTA-BACKSPACE -1 ENDOF
             KEY-ENTER     OF 10 _TXTA-INSERT -1 ENDOF
@@ -483,6 +608,17 @@ VARIABLE _TXTA-HND-EV   \ saved event for modifier checks
         EXIT
     THEN
     DUP @ KEY-T-CHAR = IF
+        DUP 16 + @ KEY-MOD-CTRL AND IF
+            8 + @                       ( code -- Ctrl+letter )
+            DUP [CHAR] a = IF          \ Ctrl+A → select all
+                DROP _TXTA-SELECT-ALL -1 EXIT
+            THEN
+            \ Ctrl+C / Ctrl+X / Ctrl+V → not consumed (app layer)
+            DUP [CHAR] c = IF DROP 0 EXIT THEN
+            DUP [CHAR] x = IF DROP 0 EXIT THEN
+            DUP [CHAR] v = IF DROP 0 EXIT THEN
+            DROP 0 EXIT
+        THEN
         8 + @                           ( codepoint )
         DUP 32 >= IF
             _TXTA-INSERT -1 EXIT
@@ -519,7 +655,8 @@ VARIABLE _TXTA-HND-EV   \ saved event for modifier checks
     0              OVER _TXTA-O-BUF-LEN   + !
     0              OVER _TXTA-O-CURSOR    + !
     0              OVER _TXTA-O-SCROLL-Y  + !
-    0              OVER _TXTA-O-ON-CHANGE + ! ;
+    0              OVER _TXTA-O-ON-CHANGE + !
+    -1             OVER _TXTA-O-SEL-ANCHOR + ! ;
 
 \ TXTA-SET-TEXT ( text-a text-u widget -- )
 : TXTA-SET-TEXT  ( text-a text-u widget -- )
@@ -530,6 +667,7 @@ VARIABLE _TXTA-HND-EV   \ saved event for modifier checks
     R@ _TXTA-O-BUF-LEN + @
     R@ _TXTA-O-CURSOR + !
     0 R@ _TXTA-O-SCROLL-Y + !
+    -1 R@ _TXTA-O-SEL-ANCHOR + !
     R> WDG-DIRTY ;
 
 \ TXTA-GET-TEXT ( widget -- addr len )
@@ -546,6 +684,7 @@ VARIABLE _TXTA-HND-EV   \ saved event for modifier checks
     0 OVER _TXTA-O-BUF-LEN + !
     0 OVER _TXTA-O-CURSOR + !
     0 OVER _TXTA-O-SCROLL-Y + !
+    -1 OVER _TXTA-O-SEL-ANCHOR + !
     WDG-DIRTY ;
 
 \ TXTA-FREE ( widget -- )
@@ -561,6 +700,39 @@ VARIABLE _TXTA-HND-EV   \ saved event for modifier checks
 \   Return 0-based cursor column (codepoint count from SOL).
 : TXTA-CURSOR-COL  ( widget -- col )
     DUP _TXTA-W ! _TXTA-CURSOR-COL ;
+
+\ TXTA-GET-SEL ( widget -- addr len | 0 0 )
+\   Return the selected text range.  Returns 0 0 if no selection.
+: TXTA-GET-SEL  ( widget -- addr len | 0 0 )
+    DUP _TXTA-W !
+    _TXTA-HAS-SEL? 0= IF DROP 0 0 EXIT THEN
+    _TXTA-SEL-RANGE              ( start end )
+    OVER -                       ( start len )
+    SWAP _TXTA-BUF-A +           ( len addr )  \ addr = buf + start
+    SWAP ;
+
+\ TXTA-DEL-SEL ( widget -- flag )
+\   Delete the selected text.  Returns TRUE if a selection existed.
+: TXTA-DEL-SEL  ( widget -- flag )
+    DUP _TXTA-W !
+    _TXTA-DEL-SEL DUP IF
+        _TXTA-FIRE-CHANGE
+        _TXTA-W @ WDG-DIRTY
+    THEN ;
+
+\ TXTA-INS-STR ( addr len widget -- )
+\   Insert a string at cursor.  Deletes any active selection first.
+: TXTA-INS-STR  ( addr len widget -- )
+    DUP _TXTA-W !
+    _TXTA-DEL-SEL DROP
+    ROT ROT _TXTA-INS-STR
+    _TXTA-FIRE-CHANGE
+    _TXTA-W @ WDG-DIRTY ;
+
+\ TXTA-SELECT-ALL ( widget -- )
+\   Select the entire buffer.
+: TXTA-SELECT-ALL  ( widget -- )
+    DUP _TXTA-W ! _TXTA-SELECT-ALL ;
 
 \ =====================================================================
 \  10. Guard
@@ -578,6 +750,10 @@ GUARD _txta-guard
 ' TXTA-FREE      CONSTANT _txta-free-xt
 ' TXTA-CURSOR-LINE CONSTANT _txta-curline-xt
 ' TXTA-CURSOR-COL  CONSTANT _txta-curcol-xt
+' TXTA-GET-SEL   CONSTANT _txta-getsel-xt
+' TXTA-DEL-SEL   CONSTANT _txta-delsel-xt
+' TXTA-INS-STR   CONSTANT _txta-insstr-xt
+' TXTA-SELECT-ALL CONSTANT _txta-selall-xt
 
 : TXTA-NEW       _txta-new-xt     _txta-guard WITH-GUARD ;
 : TXTA-SET-TEXT  _txta-settext-xt _txta-guard WITH-GUARD ;
@@ -587,4 +763,8 @@ GUARD _txta-guard
 : TXTA-FREE      _txta-free-xt   _txta-guard WITH-GUARD ;
 : TXTA-CURSOR-LINE _txta-curline-xt _txta-guard WITH-GUARD ;
 : TXTA-CURSOR-COL  _txta-curcol-xt  _txta-guard WITH-GUARD ;
+: TXTA-GET-SEL   _txta-getsel-xt  _txta-guard WITH-GUARD ;
+: TXTA-DEL-SEL   _txta-delsel-xt  _txta-guard WITH-GUARD ;
+: TXTA-INS-STR   _txta-insstr-xt  _txta-guard WITH-GUARD ;
+: TXTA-SELECT-ALL _txta-selall-xt _txta-guard WITH-GUARD ;
 [THEN] [THEN]
