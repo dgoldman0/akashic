@@ -22,6 +22,7 @@ REQUIRE ../css/bridge.f
 REQUIRE ../utils/string.f
 REQUIRE cell.f
 REQUIRE region.f
+REQUIRE color.f
 
 \ =====================================================================
 \  §1 — Constants
@@ -126,122 +127,17 @@ REQUIRE region.f
     32 RSHIFT 255 AND ;
 
 \ =====================================================================
-\  §4 — RGB → 256-Palette Color Resolution
+\  §4 — Color Resolution (delegated to color.f)
 \ =====================================================================
 \
-\ Maps 24-bit RGB to the nearest xterm-256 palette index.
-\
-\ Strategy:
-\   1. Check the 16 standard ANSI colors (exact match on common names).
-\   2. Try the 6×6×6 color cube (indices 16–231).
-\   3. Try the 24-step grayscale ramp (indices 232–255).
-\   4. Return whichever has the smallest Euclidean distance².
+\ RGB→256 palette mapping and CSS color parsing now live in color.f
+\ (shared by dom-tui.f and uidl-tui.f).  color.f provides:
+\   TUI-RESOLVE-COLOR   ( r g b -- index )
+\   TUI-PARSE-COLOR     ( val-a val-u -- index found? )
+\   DTUI-RESOLVE-COLOR   ( r g b -- index )   backward-compat alias
 
-\ -- 6×6×6 cube quantiser --
-\ Cube levels: 0, 95, 135, 175, 215, 255.  Map component → nearest level.
-
-CREATE _DTUI-CUBE-LEVELS  0 C, 95 C, 135 C, 175 C, 215 C, 255 C,
-
-VARIABLE _DRC-R   VARIABLE _DRC-G   VARIABLE _DRC-B
-VARIABLE _DRC-BEST-IDX   VARIABLE _DRC-BEST-DIST
-
-\ _DTUI-CUBE-SNAP ( component -- level index )
-\   Snap one 0-255 component to nearest cube level.
-VARIABLE _DCS-V   VARIABLE _DCS-BEST   VARIABLE _DCS-BD
-
-: _DTUI-CUBE-SNAP  ( component -- level index )
-    _DCS-V !  0 _DCS-BEST !  999 _DCS-BD !
-    6 0 DO
-        _DTUI-CUBE-LEVELS I + C@
-        _DCS-V @ -  DUP *        \ distance²
-        DUP _DCS-BD @ < IF
-            _DCS-BD !
-            I _DCS-BEST !
-        ELSE DROP THEN
-    LOOP
-    _DTUI-CUBE-LEVELS _DCS-BEST @ + C@  _DCS-BEST @ ;
-
-VARIABLE _DCC-RI   VARIABLE _DCC-GI   VARIABLE _DCC-BI
-VARIABLE _DCC-RL   VARIABLE _DCC-GL   VARIABLE _DCC-BL
-
-\ _DTUI-CUBE-DIST ( r g b -- dist index )
-\   Compute distance² and palette index for best cube match.
-: _DTUI-CUBE-DIST  ( r g b -- dist index )
-    _DTUI-CUBE-SNAP _DCC-BI !  _DCC-BL !
-    _DTUI-CUBE-SNAP _DCC-GI !  _DCC-GL !
-    _DTUI-CUBE-SNAP _DCC-RI !  _DCC-RL !
-    \ distance²
-    _DRC-R @ _DCC-RL @ -  DUP *
-    _DRC-G @ _DCC-GL @ -  DUP *  +
-    _DRC-B @ _DCC-BL @ -  DUP *  +
-    \ index = 16 + 36*ri + 6*gi + bi
-    16  _DCC-RI @ 36 * +  _DCC-GI @ 6 * +  _DCC-BI @ + ;
-
-\ _DTUI-GRAY-DIST ( r g b -- dist index )
-\   Find nearest grayscale ramp entry (232–255).
-\   Ramp: index i → gray = 8 + 10*i, i=0..23.
-VARIABLE _DGD-AVG   VARIABLE _DGD-BEST   VARIABLE _DGD-BD
-
-: _DTUI-GRAY-DIST  ( r g b -- dist index )
-    + + 3 /  _DGD-AVG !         \ average → target gray
-    0 _DGD-BEST !  999999 _DGD-BD !
-    24 0 DO
-        I 10 * 8 +              \ gray level for index 232+i
-        _DGD-AVG @ -  DUP *     \ distance² from avg
-        DUP _DGD-BD @ < IF
-            _DGD-BD !  I _DGD-BEST !
-        ELSE DROP THEN
-    LOOP
-    \ Actual distance² from R,G,B to uniform gray
-    _DGD-BEST @ 10 * 8 +        \ chosen gray level
-    DUP _DRC-R @ -  DUP *
-    OVER _DRC-G @ -  DUP *  +
-    SWAP _DRC-B @ -  DUP *  +
-    _DGD-BEST @ 232 + ;
-
-\ DTUI-RESOLVE-COLOR ( r g b -- index )
-\   Map 24-bit RGB → nearest xterm-256 palette index.
-: DTUI-RESOLVE-COLOR  ( r g b -- index )
-    _DRC-B !  _DRC-G !  _DRC-R !
-    \ Try cube
-    _DRC-R @ _DRC-G @ _DRC-B @  _DTUI-CUBE-DIST
-    _DRC-BEST-IDX !  _DRC-BEST-DIST !
-    \ Try grayscale
-    _DRC-R @ _DRC-G @ _DRC-B @  _DTUI-GRAY-DIST
-    \ ( gray-dist gray-idx ) — compare gray-dist with cube-dist
-    SWAP  _DRC-BEST-DIST @ <= IF   \ ( gray-idx )  gray closer
-        \ return gray-idx
-    ELSE
-        DROP  _DRC-BEST-IDX @      \ cube closer
-    THEN ;
-
-\ =====================================================================
-\  §5 — CSS Value → Color Index
-\ =====================================================================
-\
-\ _DTUI-PARSE-COLOR ( val-a val-u -- index found? )
-\   Parse a CSS color value string (hex or named) to palette index.
-
-VARIABLE _DPC-R   VARIABLE _DPC-G   VARIABLE _DPC-B
-
-: _DTUI-PARSE-COLOR  ( val-a val-u -- index found? )
-    DUP 0= IF 2DROP 0 0 EXIT THEN
-    OVER C@ [CHAR] # = IF
-        \ Starts with # — try hex parse
-        2DUP CSS-PARSE-HEX-COLOR IF
-            _DPC-B !  _DPC-G !  _DPC-R !  2DROP
-            _DPC-R @ _DPC-G @ _DPC-B @  DTUI-RESOLVE-COLOR
-            -1 EXIT
-        THEN
-        2DROP
-    THEN
-    \ Try named color
-    CSS-COLOR-FIND IF
-        _DPC-B !  _DPC-G !  _DPC-R !
-        _DPC-R @ _DPC-G @ _DPC-B @  DTUI-RESOLVE-COLOR
-        -1 EXIT
-    THEN
-    0 ;
+\ Internal alias for backward compatibility within this file.
+: _DTUI-PARSE-COLOR  ( val-a val-u -- index found? )  TUI-PARSE-COLOR ;
 
 \ =====================================================================
 \  §6 — Sidecar Pool (carved from DOM string pool)

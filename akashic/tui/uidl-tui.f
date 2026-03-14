@@ -57,6 +57,8 @@ REQUIRE keys.f
 REQUIRE widgets/tree.f
 REQUIRE widgets/input.f
 REQUIRE widgets/textarea.f
+REQUIRE ../css/css.f
+REQUIRE color.f
 
 \ =====================================================================
 \  §1 — TUI Sidecar (per-element, 56 bytes)
@@ -1529,6 +1531,141 @@ VARIABLE _UDH-SC   \ temp for dialog hide
     AGAIN ;
 
 \ =====================================================================
+\  §16b — CSS style= Attribute Resolution
+\ =====================================================================
+\
+\ After layout, walk the element tree and resolve inline `style=`
+\ attributes.  CSS properties supported:
+\   color            → fg byte in packed sidecar style
+\   background-color → bg byte
+\   font-weight:bold → bold bit (bit 16) in attrs
+\   width            → sidecar W (absolute or % of parent)
+\   height           → sidecar H (absolute or % of parent)
+
+VARIABLE _URES-VA    VARIABLE _URES-VL   \ style= value string
+VARIABLE _URES-SC                         \ current sidecar
+VARIABLE _URES-STYLE                      \ accumulating packed style
+
+\ _UTUI-CSS-SET-FG ( val-a val-u -- )
+\   Parse a CSS color value and set fg bits (0-7) of the current style.
+: _UTUI-CSS-SET-FG  ( val-a val-u -- )
+    TUI-PARSE-COLOR IF
+        _URES-STYLE @  0xFFFFFF00 AND  OR  _URES-STYLE !
+    ELSE DROP THEN ;
+
+\ _UTUI-CSS-SET-BG ( val-a val-u -- )
+\   Parse a CSS color value and set bg bits (8-15) of the current style.
+: _UTUI-CSS-SET-BG  ( val-a val-u -- )
+    TUI-PARSE-COLOR IF
+        8 LSHIFT
+        _URES-STYLE @  0xFFFF00FF AND  OR  _URES-STYLE !
+    ELSE DROP THEN ;
+
+\ _UTUI-CSS-SET-BOLD ( val-a val-u -- )
+\   If value is "bold", set bold bit (bit 16).
+: _UTUI-CSS-SET-BOLD  ( val-a val-u -- )
+    S" bold" STR-STRI= IF
+        _URES-STYLE @  0x10000 OR  _URES-STYLE !
+    THEN ;
+
+\ _UTUI-CSS-SET-DIM ( val-a val-u parent-dim offset -- )
+\   Parse a CSS dimension value.  If it has a % unit, resolve against
+\   parent-dim.  Otherwise treat as absolute integer cells.
+\   Store result at sidecar + offset.
+VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
+
+: _UTUI-CSS-SET-DIM  ( val-a val-u parent-dim offset -- )
+    _UCD-OFF !  _UCD-PDIM !
+    CSS-PARSE-NUMBER 0= IF 2DROP EXIT THEN
+    \ ( a' u' int frac frac-digits )
+    2DROP                        \ discard frac, frac-digits
+    -ROT                         \ ( int a' u' )
+    CSS-PARSE-UNIT               \ ( int a'' u'' unit-a unit-u )
+    2SWAP 2DROP                  \ ( int unit-a unit-u )
+    DUP 1 = IF
+        OVER C@ 37 = IF          \ '%'
+            2DROP
+            _UCD-PDIM @ * 100 /  \ resolve percentage
+            DUP 0 <= IF DROP 1 THEN   \ minimum 1 cell
+            _URES-SC @  _UCD-OFF @ +  !
+            EXIT
+        THEN
+    THEN
+    2DROP                        \ drop unit
+    \ Absolute value (integer cells)
+    DUP 0 <= IF DROP 1 THEN
+    _URES-SC @  _UCD-OFF @ +  ! ;
+
+\ _UTUI-RESOLVE-ELEM-STYLE ( elem -- )
+\   Read style= attribute, parse CSS declarations, apply to sidecar.
+: _UTUI-RESOLVE-ELEM-STYLE  ( elem -- )
+    DUP S" style" UIDL-ATTR 0= IF 2DROP DROP EXIT THEN
+    \ ( elem val-a val-u ) — inline CSS declarations
+    ROT _UTUI-SIDECAR _URES-SC !
+    _URES-SC @ _UTUI-SC-STYLE@ _URES-STYLE !
+    _URES-VL !  _URES-VA !
+
+    \ -- color (fg) --
+    _URES-VA @ _URES-VL @
+    S" color" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-FG
+    ELSE 2DROP THEN
+
+    \ -- background-color (bg) --
+    _URES-VA @ _URES-VL @
+    S" background-color" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-BG
+    ELSE 2DROP THEN
+
+    \ -- font-weight --
+    _URES-VA @ _URES-VL @
+    S" font-weight" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-BOLD
+    ELSE 2DROP THEN
+
+    \ -- width --
+    _URES-VA @ _URES-VL @
+    S" width" CSS-DECL-FIND IF
+        _URES-SC @ _UTUI-SC-W@               \ parent-dim fallback = own W
+        _UTUI-SC-O-W  _UTUI-CSS-SET-DIM
+    ELSE 2DROP THEN
+
+    \ -- height --
+    _URES-VA @ _URES-VL @
+    S" height" CSS-DECL-FIND IF
+        _URES-SC @ _UTUI-SC-H@               \ parent-dim fallback = own H
+        _UTUI-SC-O-H  _UTUI-CSS-SET-DIM
+    ELSE 2DROP THEN
+
+    \ Write back accumulated style
+    _URES-STYLE @ _URES-SC @ _UTUI-SC-STYLE! ;
+
+\ _UTUI-RESOLVE-STYLES-REC ( elem -- )
+\   Recursively walk element tree, resolve style= on each node.
+\   For width/height %, we read the parent sidecar dims before
+\   entering each child.
+: _UTUI-RESOLVE-STYLES-REC  ( elem -- )
+    DUP _UTUI-RESOLVE-ELEM-STYLE
+    DUP UIDL-FIRST-CHILD
+    BEGIN DUP 0<> WHILE
+        \ For percentage dims, child needs parent's resolved W/H.
+        \ The parent sidecar is already computed (layout pass done),
+        \ and _UTUI-CSS-SET-DIM reads the sidecar's own W/H as
+        \ parent-dim (which was inherited from actual parent during
+        \ layout).  This is correct because the layout pass already
+        \ set child W/H = parent W/H for containers.
+        DUP _UTUI-RESOLVE-STYLES-REC
+        UIDL-NEXT-SIB
+    REPEAT
+    2DROP ;
+
+\ _UTUI-RESOLVE-STYLES ( -- )
+\   Walk the entire UIDL tree and resolve all style= attributes.
+: _UTUI-RESOLVE-STYLES  ( -- )
+    UIDL-ROOT ?DUP 0= IF EXIT THEN
+    _UTUI-RESOLVE-STYLES-REC ;
+
+\ =====================================================================
 \  §17 — UTUI-LOAD
 \ =====================================================================
 
@@ -1558,6 +1695,8 @@ VARIABLE _UDH-SC   \ temp for dialog hide
     _UTUI-ACT-CLEAR
 
     UTUI-RELAYOUT
+
+    _UTUI-RESOLVE-STYLES
 
     _UTUI-MATERIALIZE
 
