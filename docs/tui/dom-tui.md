@@ -11,7 +11,8 @@ REQUIRE dom-tui.f
 
 `PROVIDED akashic-tui-dom-tui` — safe to include multiple times.
 Automatically loads `akashic-dom`, `akashic-dom-html5`,
-`akashic-css`, `akashic-css-bridge`, `cell.f`, and `region.f`.
+`akashic-css`, `akashic-css-bridge`, `akashic-utils-string`,
+`cell.f`, and `region.f`.
 
 ---
 
@@ -27,6 +28,8 @@ Automatically loads `akashic-dom`, `akashic-dom-html5`,
 - [Lifecycle — Attach / Detach / Refresh](#lifecycle)
 - [Query Words](#query-words)
 - [Style Override](#style-override)
+- [Dirty Marking](#dirty-marking)
+- [Convenience Wrappers](#convenience-wrappers)
 - [Class Helpers](#class-helpers)
 - [Guard Wrappers](#guard-wrappers)
 - [Internal Words](#internal-words)
@@ -39,7 +42,7 @@ Automatically loads `akashic-dom`, `akashic-dom-html5`,
 
 | Principle | Detail |
 |---|---|
-| **One sidecar per element** | Every DOM element (type 1) receives a 64-byte sidecar during `DTUI-ATTACH`. Non-element nodes (text, document) are skipped. |
+| **One sidecar per element** | Every DOM element (type 1) receives a 72-byte sidecar during `DTUI-ATTACH`. Non-element nodes (text, document) are skipped. |
 | **N.AUX storage** | Sidecar pointer is stored in the DOM node's `N.AUX` field. `DTUI-DETACH` zeroes all `N.AUX` fields. |
 | **CSS resolution** | Inline styles are read via `DOM-STYLE@` → `DOM-COMPUTE-STYLE`. Properties resolved: `display`, `visibility`, `color`, `background-color`, `font-weight`, `font-style`, `text-decoration`, `border-style`, `width`, `height`. |
 | **Packed style word** | FG (8 bits) + BG (8 bits) + cell attributes (16 bits) + border index (8 bits) packed into a single 64-bit cell. |
@@ -56,6 +59,7 @@ dom-tui.f
 ├── dom/html5.f      (DOM-HTML-INIT — HTML/HEAD/BODY skeleton)
 ├── css/css.f        (CSS tokeniser / property constants)
 ├── css/bridge.f     (CSSB-APPLY-INLINE — inline style parsing)
+├── utils/string.f   (STR-PARSE-TOKEN, STR-STR= — class helpers)
 ├── tui/cell.f       (CELL-A-* attribute flags)
 └── tui/region.f     (screen region primitives)
 ```
@@ -64,18 +68,19 @@ dom-tui.f
 
 ## Sidecar Layout
 
-Each sidecar is 64 bytes (8 cells of 8 bytes):
+Each sidecar is 72 bytes (9 cells of 8 bytes):
 
 | Offset | Field | Description |
 |--------|-------|-------------|
 | +0 | `node` | Back-pointer to the DOM element node |
-| +8 | `flags` | Bitfield: DIRTY / VISIBLE / BLOCK / HIDDEN / FOCUSABLE |
+| +8 | `flags` | Bitfield: DIRTY / VISIBLE / BLOCK / HIDDEN / FOCUSABLE / GEOM-DIRTY |
 | +16 | `row` | Computed screen row (set by layout engine) |
 | +24 | `col` | Computed screen column |
 | +32 | `width` | Width in character cells (from CSS `width` property) |
 | +40 | `height` | Height in character cells (from CSS `height` property) |
 | +48 | `style` | Packed style word (see [Style Packing](#style-packing)) |
 | +56 | `draw-xt` | Custom draw execution token (0 = use default) |
+| +64 | `udata` | User-defined data cell (application payload) |
 
 ---
 
@@ -85,7 +90,7 @@ Each sidecar is 64 bytes (8 cells of 8 bytes):
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `DTUI-SC-SIZE` | 64 | Sidecar descriptor size in bytes |
+| `DTUI-SC-SIZE` | 72 | Sidecar descriptor size in bytes |
 
 ### Flag Bits
 
@@ -96,6 +101,7 @@ Each sidecar is 64 bytes (8 cells of 8 bytes):
 | `DTUI-F-BLOCK` | 4 | `display:block` (else inline) |
 | `DTUI-F-HIDDEN` | 8 | `visibility:hidden` (space reserved, not painted) |
 | `DTUI-F-FOCUSABLE` | 16 | Can receive keyboard focus |
+| `DTUI-F-GEOM-DIRTY` | 32 | Geometry changed — needs relayout |
 
 ### Border Style Indices
 
@@ -132,6 +138,7 @@ All accessors take a sidecar address.
 | `DTUI-SC-H` | height (cells) |
 | `DTUI-SC-STYLE` | packed style word |
 | `DTUI-SC-DRAW` | draw xt or 0 |
+| `DTUI-SC-UDATA` | user data cell |
 
 ### Setters — `( value sc -- )`
 
@@ -144,6 +151,7 @@ All accessors take a sidecar address.
 | `DTUI-SC-H!` | height |
 | `DTUI-SC-STYLE!` | packed style word |
 | `DTUI-SC-DRAW!` | draw xt |
+| `DTUI-SC-UDATA!` | user data cell |
 
 ---
 
@@ -200,7 +208,7 @@ Walk the DOM tree depth-first starting from `D.HTML` (or
 `DOM-FIRST-CHILD` of the document node if `D.HTML` is 0).
 For every element node:
 
-1. Carve a 64-byte sidecar from the string pool.
+1. Carve a 72-byte sidecar from the string pool.
 2. Resolve CSS properties into sidecar fields.
 3. Store sidecar address in `N.AUX`.
 
@@ -241,17 +249,70 @@ if the node has no sidecar (e.g. `display:none`).
 
 ---
 
+## Dirty Marking
+
+Dirty marking is explicit — the application (or convenience wrappers)
+must mark nodes dirty after mutation.  The paint engine checks and
+clears the flag.
+
+### `DTUI-MARK-DIRTY` — `( node -- )`
+
+Set `DTUI-F-DIRTY` on the node's sidecar.  Does nothing if the node
+has no sidecar.
+
+### `DTUI-MARK-GEOM-DIRTY` — `( node -- )`
+
+Set both `DTUI-F-DIRTY` and `DTUI-F-GEOM-DIRTY`.  Use when a
+mutation affects position or size (e.g. width, height, display change).
+
+### `DTUI-CLEAR-DIRTY` — `( sc -- )`
+
+Clear the `DTUI-F-DIRTY` flag on a sidecar.  Called automatically by
+the paint engine after painting a node.
+
+### `DTUI-CLEAR-GEOM-DIRTY` — `( sc -- )`
+
+Clear the `DTUI-F-GEOM-DIRTY` flag.  Called automatically by
+`DREN-RELAYOUT` after a full relayout.
+
+---
+
+## Convenience Wrappers
+
+These combine a DOM mutation with automatic dirty marking in one call.
+
+### `DTUI-SET-TEXT!` — `( node txt-a txt-u -- )`
+
+Call `DOM-SET-TEXT` then `DTUI-MARK-DIRTY`.  Use for updating text
+content without forgetting to dirty the node.
+
+### `DTUI-ATTR!` — `( node name-a name-u val-a val-u -- )`
+
+Call `DOM-ATTR!` then `DTUI-MARK-DIRTY`.  Use for setting any DOM
+attribute with auto-dirty.
+
+### `DTUI-ATTR-DEL!` — `( node name-a name-u -- )`
+
+Call `DOM-ATTR-DEL` then `DTUI-MARK-DIRTY`.
+
+---
+
 ## Class Helpers
 
 ### `DTUI-CLASS-ADD` — `( node addr len -- )`
 
-Set the `class` attribute on a node and re-resolve its sidecar.
-Currently overwrites any existing class value (no concatenation).
+Append a CSS class to the node's existing `class` attribute
+(space-separated) and re-resolve its sidecar.  If no class attribute
+exists yet, simply sets it.  Does not check for duplicates.
+Overflow beyond 256 bytes is silently ignored.
 
 ### `DTUI-CLASS-REMOVE` — `( node addr len -- )`
 
-Remove the `class` attribute entirely and re-resolve.  A proper
-substring-removal implementation is planned.
+Remove a single CSS class from the node's space-separated `class`
+attribute.  Walks the existing class string token by token using
+`STR-PARSE-TOKEN`, skips tokens matching the target (via `STR-STR=`),
+and rebuilds the result.  Deletes the `class` attribute entirely if
+the result is empty.  Re-resolves the sidecar afterwards.
 
 ---
 
@@ -265,7 +326,10 @@ Protected words: `DTUI-ATTACH`, `DTUI-DETACH`, `DTUI-REFRESH`,
 `DTUI-SIDECAR`, `DTUI-VISIBLE?`, `DTUI-STYLE!`,
 `DTUI-RESOLVE-COLOR`, `DTUI-CLASS-ADD`, `DTUI-CLASS-REMOVE`,
 `DTUI-PACK-STYLE`, `DTUI-UNPACK-FG`, `DTUI-UNPACK-BG`,
-`DTUI-UNPACK-ATTRS`, `DTUI-UNPACK-BORDER`.
+`DTUI-UNPACK-ATTRS`, `DTUI-UNPACK-BORDER`,
+`DTUI-MARK-DIRTY`, `DTUI-MARK-GEOM-DIRTY`,
+`DTUI-SET-TEXT!`, `DTUI-ATTR!`, `DTUI-ATTR-DEL!`,
+`DTUI-SC-UDATA`, `DTUI-SC-UDATA!`.
 
 ---
 
@@ -293,28 +357,37 @@ Protected words: `DTUI-ATTACH`, `DTUI-DETACH`, `DTUI-REFRESH`,
 ## Quick Reference
 
 ```
-DTUI-ATTACH      ( doc -- )           Walk tree, allocate sidecars
-DTUI-DETACH      ( doc -- )           Clear all N.AUX fields
-DTUI-REFRESH     ( doc -- )           Re-resolve CSS into existing sidecars
-DTUI-SIDECAR     ( node -- sc|0 )     Get sidecar for node
-DTUI-VISIBLE?    ( node -- flag )     Sidecar has VISIBLE flag?
-DTUI-STYLE!      ( node fg bg a -- )  Override fg/bg/attrs in sidecar
-DTUI-RESOLVE-COLOR ( r g b -- idx )   RGB → xterm-256 palette index
-DTUI-PACK-STYLE  ( fg bg a b -- p )   Pack style into one cell
-DTUI-UNPACK-FG   ( p -- fg )          Extract FG from packed
-DTUI-UNPACK-BG   ( p -- bg )          Extract BG from packed
-DTUI-UNPACK-ATTRS  ( p -- attrs )     Extract attrs from packed
-DTUI-UNPACK-BORDER ( p -- border )    Extract border index from packed
-DTUI-CLASS-ADD   ( n a u -- )         Set class + re-resolve
-DTUI-CLASS-REMOVE ( n a u -- )        Remove class + re-resolve
-DTUI-SC-NODE     ( sc -- node )       Read back-pointer
-DTUI-SC-FLAGS    ( sc -- fl )         Read flags
-DTUI-SC-ROW      ( sc -- row )        Read row
-DTUI-SC-COL      ( sc -- col )        Read col
-DTUI-SC-W        ( sc -- w )          Read width
-DTUI-SC-H        ( sc -- h )          Read height
-DTUI-SC-STYLE    ( sc -- packed )     Read packed style
-DTUI-SC-DRAW     ( sc -- xt|0 )       Read draw hook
+DTUI-ATTACH        ( doc -- )              Walk tree, allocate sidecars
+DTUI-DETACH        ( doc -- )              Clear all N.AUX fields
+DTUI-REFRESH       ( doc -- )              Re-resolve CSS into existing sidecars
+DTUI-SIDECAR       ( node -- sc|0 )        Get sidecar for node
+DTUI-VISIBLE?      ( node -- flag )        Sidecar has VISIBLE flag?
+DTUI-STYLE!        ( node fg bg a -- )     Override fg/bg/attrs in sidecar
+DTUI-RESOLVE-COLOR ( r g b -- idx )        RGB → xterm-256 palette index
+DTUI-PACK-STYLE    ( fg bg a b -- p )      Pack style into one cell
+DTUI-UNPACK-FG     ( p -- fg )             Extract FG from packed
+DTUI-UNPACK-BG     ( p -- bg )             Extract BG from packed
+DTUI-UNPACK-ATTRS  ( p -- attrs )          Extract attrs from packed
+DTUI-UNPACK-BORDER ( p -- border )         Extract border index from packed
+DTUI-MARK-DIRTY    ( node -- )             Set DIRTY on sidecar
+DTUI-MARK-GEOM-DIRTY ( node -- )           Set DIRTY + GEOM-DIRTY
+DTUI-CLEAR-DIRTY   ( sc -- )               Clear DIRTY flag
+DTUI-CLEAR-GEOM-DIRTY ( sc -- )            Clear GEOM-DIRTY flag
+DTUI-SET-TEXT!     ( node txt-a u -- )     DOM-SET-TEXT + mark dirty
+DTUI-ATTR!         ( node na nu va vu -- ) DOM-ATTR! + mark dirty
+DTUI-ATTR-DEL!     ( node na nu -- )       DOM-ATTR-DEL + mark dirty
+DTUI-CLASS-ADD     ( node a u -- )         Append class + re-resolve
+DTUI-CLASS-REMOVE  ( node a u -- )         Remove class token + re-resolve
+DTUI-SC-NODE       ( sc -- node )          Read back-pointer
+DTUI-SC-FLAGS      ( sc -- fl )            Read flags
+DTUI-SC-ROW        ( sc -- row )           Read row
+DTUI-SC-COL        ( sc -- col )           Read col
+DTUI-SC-W          ( sc -- w )             Read width
+DTUI-SC-H          ( sc -- h )             Read height
+DTUI-SC-STYLE      ( sc -- packed )        Read packed style
+DTUI-SC-DRAW       ( sc -- xt|0 )          Read draw hook
+DTUI-SC-UDATA      ( sc -- udata )         Read user data cell
+DTUI-SC-UDATA!     ( val sc -- )           Write user data cell
 ```
 
 ---
@@ -357,6 +430,27 @@ my-div 196 21 CELL-A-BOLD  DTUI-STYLE!   \ red FG, blue BG, bold
 my-div S" style" S" color:green" DOM-ATTR!
 my-doc DTUI-REFRESH
 my-div DTUI-SIDECAR DTUI-SC-STYLE DTUI-UNPACK-FG .   \ new FG index
+```
+
+### Mark dirty and repaint
+
+```forth
+\ After changing text content:
+my-div S" New text" DTUI-SET-TEXT!    \ mutate + auto-dirty
+
+\ Or manually:
+my-div S" style" S" color:blue" DOM-ATTR!
+my-div DTUI-MARK-DIRTY
+
+\ For geometry changes (width/height):
+my-div DTUI-MARK-GEOM-DIRTY
+```
+
+### Store application data in sidecar
+
+```forth
+my-div DTUI-SIDECAR  42 SWAP DTUI-SC-UDATA!   \ store 42
+my-div DTUI-SIDECAR  DTUI-SC-UDATA .           \ prints 42
 ```
 
 ### Clean up before destroying DOM

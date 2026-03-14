@@ -31,7 +31,15 @@ ANSI_F    = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
 SCREEN_F  = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
 DRAW_F    = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
 REGION_F  = os.path.join(ROOT_DIR, "akashic", "tui", "region.f")
-DOMTUI_F  = os.path.join(ROOT_DIR, "akashic", "tui", "dom-tui.f")
+DOMTUI_F  = os.path.join(ROOT_DIR, "akashic", "tui",         "dom-tui.f")
+BOX_F     = os.path.join(ROOT_DIR, "akashic", "tui",         "box.f")
+KEYS_F    = os.path.join(ROOT_DIR, "akashic", "tui",         "keys.f")
+DOMREN_F  = os.path.join(ROOT_DIR, "akashic", "tui",         "dom-render.f")
+DOMEVT_F  = os.path.join(ROOT_DIR, "akashic", "tui",         "dom-event.f")
+DOMEV_F   = os.path.join(ROOT_DIR, "akashic", "dom",         "event.f")
+GUARD_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
+SEMA_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
+CEVT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
 
 sys.path.insert(0, EMU_DIR)
 
@@ -251,6 +259,24 @@ def build_snapshot():
         ("region.f",  13, 1, read_file_bytes(REGION_F)),
         # idx 19: tui/dom-tui.f
         ("dom-tui.f", 13, 1, read_file_bytes(DOMTUI_F)),
+        # idx 20: tui/box.f
+        ("box.f",     13, 1, read_file_bytes(BOX_F)),
+        # idx 21: tui/keys.f
+        ("keys.f",    13, 1, read_file_bytes(KEYS_F)),
+        # idx 22: tui/dom-render.f
+        ("dom-render.f", 13, 1, read_file_bytes(DOMREN_F)),
+        # idx 23: tui/dom-event.f
+        ("dom-event.f", 13, 1, read_file_bytes(DOMEVT_F)),
+        # idx 24: dom/event.f
+        ("event.f",    6, 1, read_file_bytes(DOMEV_F)),
+        # dir idx 25: concurrency/
+        ("concurrency", 255, 8, b''),
+        # idx 26: concurrency/event.f
+        ("event.f",   25, 1, read_file_bytes(CEVT_F)),
+        # idx 27: concurrency/semaphore.f
+        ("semaphore.f", 25, 1, read_file_bytes(SEMA_F)),
+        # idx 28: concurrency/guard.f
+        ("guard.f",   25, 1, read_file_bytes(GUARD_F)),
     ]
 
     image = build_disk_image(disk_files)
@@ -276,14 +302,14 @@ def build_snapshot():
     elapsed = time.time() - t0
     print(f"    KDOS ready — {steps:,} steps, {elapsed:.1f}s")
 
-    print("[*] REQUIRE dom-tui.f from disk ...")
+    print("[*] REQUIRE dom-event.f from disk ...")
     buf.clear()
     t0 = time.time()
 
     load_lines = [
         'ENTER-USERLAND',
         'CD tui',
-        'REQUIRE dom-tui.f',
+        'REQUIRE dom-event.f',
         'CD /',
         # String-builder helpers
         'CREATE _TB 512 ALLOT  VARIABLE _TL',
@@ -304,6 +330,10 @@ def build_snapshot():
         '524288 A-XMEM ARENA-NEW DROP CONSTANT _TARN',
         '_TARN 64 64 DOM-DOC-NEW CONSTANT _TDOC',
         'DOM-HTML-INIT',
+        # Screen + region for render tests
+        '80 24 SCR-NEW CONSTANT _TSCR',
+        '_TSCR SCR-USE',
+        '0 0 24 80 RGN-NEW CONSTANT _TRGN',
     ]
 
     steps = _feed_and_run(sys_obj, buf, load_lines, 2_000_000_000)
@@ -739,6 +769,385 @@ def run_tests():
          '  1 AND 0<>',
          '  CR ." [D=" . ." ]" ; t'],
         '[D=-1 ]')
+
+    # ==================================================================
+    #  §NEW-1 — Sidecar User Data (DTUI-SC-UDATA / DTUI-SC-UDATA!)
+    # ==================================================================
+    print("\n=== Sidecar User Data ===")
+
+    check("DTUI-SC-UDATA default is 0",
+        ['S" div" DOM-CREATE-ELEMENT DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  DOM-BODY DOM-FIRST-CHILD DTUI-SIDECAR DTUI-SC-UDATA',
+         '  CR ." [U=" . ." ]" ; t'],
+        '[U=0 ]')
+
+    check("DTUI-SC-UDATA! / DTUI-SC-UDATA round-trip",
+        ['S" div" DOM-CREATE-ELEMENT DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  DOM-BODY DOM-FIRST-CHILD DTUI-SIDECAR',
+         '  12345 OVER DTUI-SC-UDATA!',
+         '  DTUI-SC-UDATA',
+         '  CR ." [U=" . ." ]" ; t'],
+        '[U=12345 ]')
+
+    # ==================================================================
+    #  §NEW-2 — DTUI-SC-DRAW default
+    # ==================================================================
+    print("\n=== Sidecar Draw XT ===")
+
+    check("DTUI-SC-DRAW default is 0",
+        ['S" div" DOM-CREATE-ELEMENT DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  DOM-BODY DOM-FIRST-CHILD DTUI-SIDECAR DTUI-SC-DRAW',
+         '  CR ." [X=" . ." ]" ; t'],
+        '[X=0 ]')
+
+    # ==================================================================
+    #  §NEW-3 — Flag Constants
+    # ==================================================================
+    print("\n=== Flag Constants ===")
+
+    check("DTUI-F-GEOM-DIRTY = 32",
+        [': t  DTUI-F-GEOM-DIRTY',
+         '  CR ." [G=" . ." ]" ; t'],
+        '[G=32 ]')
+
+    check("All flag values",
+        [': t  DTUI-F-DIRTY DTUI-F-VISIBLE DTUI-F-BLOCK',
+         '  DTUI-F-HIDDEN DTUI-F-FOCUSABLE DTUI-F-GEOM-DIRTY',
+         '  CR ." [" . . . . . . ." ]" ; t'],
+        '[32 16 8 4 2 1 ]')
+
+    # ==================================================================
+    #  §NEW-4 — Dirty Marking
+    # ==================================================================
+    print("\n=== Dirty Marking ===")
+
+    check("DTUI-MARK-DIRTY sets DIRTY flag",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _DM',
+         '_DM DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_DM DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         ': t  _DM DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  _DM DTUI-MARK-DIRTY',
+         '  _DM DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  CR ." [A=" . ." B=" . ." ]" ; t'],
+        '[A=1 B=0 ]')
+
+    check("DTUI-MARK-GEOM-DIRTY sets DIRTY + GEOM-DIRTY",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _DG',
+         '_DG DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         # Clear both flags
+         '_DG DTUI-SIDECAR DUP DTUI-SC-FLAGS 1 INVERT AND 32 INVERT AND SWAP DTUI-SC-FLAGS!',
+         ': t  _DG DTUI-MARK-GEOM-DIRTY',
+         '  _DG DTUI-SIDECAR DTUI-SC-FLAGS',
+         '  DUP 1 AND 0<>',
+         '  SWAP 32 AND 0<>',
+         '  CR ." [D=" . ." G=" . ." ]" ; t'],
+        '[D=-1 G=-1 ]')
+
+    check("DTUI-CLEAR-DIRTY clears DIRTY flag",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _DC',
+         '_DC DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_DC DTUI-MARK-DIRTY',
+         ': t  _DC DTUI-SIDECAR DUP DTUI-SC-FLAGS 1 AND',
+         '  SWAP DTUI-CLEAR-DIRTY',
+         '  _DC DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  CR ." [A=" . ." B=" . ." ]" ; t'],
+        '[A=0 B=1 ]')
+
+    check("DTUI-CLEAR-GEOM-DIRTY clears only GEOM-DIRTY",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _CG',
+         '_CG DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_CG DTUI-MARK-GEOM-DIRTY',
+         ': t  _CG DTUI-SIDECAR DTUI-CLEAR-GEOM-DIRTY',
+         '  _CG DTUI-SIDECAR DTUI-SC-FLAGS',
+         '  DUP 1 AND 0<>',     # DIRTY still set
+         '  SWAP 32 AND',        # GEOM-DIRTY cleared
+         '  CR ." [G=" . ." D=" . ." ]" ; t'],
+        '[G=0 D=-1 ]')
+
+    # ==================================================================
+    #  §NEW-5 — Convenience Wrappers (auto-dirty)
+    # ==================================================================
+    print("\n=== Convenience Wrappers (auto-dirty) ===")
+
+    check("DTUI-SET-TEXT! marks dirty",
+        ['S" span" DOM-CREATE-ELEMENT CONSTANT _ST',
+         'S" hello" DOM-CREATE-TEXT _ST DOM-APPEND',
+         '_ST DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_ST DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         ': t  _ST S" world" DTUI-SET-TEXT!',
+         '  _ST DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  CR ." [D=" . ." ]" ; t'],
+        '[D=1 ]')
+
+    check("DTUI-ATTR! marks dirty",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _DA',
+         '_DA DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_DA DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         ': t  _DA S" id" S" foo" DTUI-ATTR!',
+         '  _DA DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  CR ." [D=" . ." ]" ; t'],
+        '[D=1 ]')
+
+    check("DTUI-ATTR-DEL! marks dirty",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _DD',
+         '_DD S" id" S" bar" DOM-ATTR!',
+         '_DD DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_DD DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         ': t  _DD S" id" DTUI-ATTR-DEL!',
+         '  _DD DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  CR ." [D=" . ." ]" ; t'],
+        '[D=1 ]')
+
+    # ==================================================================
+    #  §NEW-6 — Class Helpers (token ops)
+    # ==================================================================
+    print("\n=== Class Helpers ===")
+
+    check("DTUI-CLASS-ADD on empty class",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _CA',
+         '_CA DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  _CA S" fancy" DTUI-CLASS-ADD',
+         '  _CA DOM-CLASS',
+         '  CR ." [C=" TYPE ." ]" ; t'],
+        '[C=fancy]')
+
+    check("DTUI-CLASS-ADD appends to existing",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _CB',
+         # Use _UB to build "class" attr name, _TB for value
+         'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+         '_CB TA S" foo" DOM-ATTR!',
+         '_CB DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  _CB S" bar" DTUI-CLASS-ADD',
+         '  _CB DOM-CLASS',
+         '  CR ." [C=" TYPE ." ]" ; t'],
+        '[C=foo bar]')
+
+    check("DTUI-CLASS-REMOVE middle token",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _CR',
+         'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+         '_CR TA S" aaa bbb ccc" DOM-ATTR!',
+         '_CR DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  _CR S" bbb" DTUI-CLASS-REMOVE',
+         '  _CR DOM-CLASS',
+         '  CR ." [C=" TYPE ." ]" ; t'],
+        '[C=aaa ccc]')
+
+    check("DTUI-CLASS-REMOVE first token",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _CF',
+         'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+         '_CF TA S" xxx yyy" DOM-ATTR!',
+         '_CF DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  _CF S" xxx" DTUI-CLASS-REMOVE',
+         '  _CF DOM-CLASS',
+         '  CR ." [C=" TYPE ." ]" ; t'],
+        '[C=yyy]')
+
+    check("DTUI-CLASS-REMOVE last token",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _CL',
+         'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+         '_CL TA S" aaa bbb" DOM-ATTR!',
+         '_CL DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  _CL S" bbb" DTUI-CLASS-REMOVE',
+         '  _CL DOM-CLASS',
+         '  CR ." [C=" TYPE ." ]" ; t'],
+        '[C=aaa]')
+
+    check("DTUI-CLASS-REMOVE sole class → empty",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _CS',
+         'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+         '_CS TA S" alone" DOM-ATTR!',
+         '_CS DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  _CS S" alone" DTUI-CLASS-REMOVE',
+         '  _CS DOM-CLASS NIP',
+         '  CR ." [L=" . ." ]" ; t'],
+        '[L=0 ]')
+
+    check("DTUI-CLASS-REMOVE non-existent → unchanged",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _CN',
+         'TR 99 TC 108 TC 97 TC 115 TC 115 TC',
+         '_CN TA S" alpha beta" DOM-ATTR!',
+         '_CN DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         ': t  _CN S" gamma" DTUI-CLASS-REMOVE',
+         '  _CN DOM-CLASS',
+         '  CR ." [C=" TYPE ." ]" ; t'],
+        '[C=alpha beta]')
+
+    # ==================================================================
+    #  §NEW-7 — DREN-DIRTY?
+    # ==================================================================
+    print("\n=== DREN-DIRTY? ===")
+
+    check("DREN-DIRTY? false when all clean",
+        ['S" div" DOM-CREATE-ELEMENT DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         # Clear all dirty flags on all nodes
+         'DOM-BODY DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         'DOM-BODY DOM-FIRST-CHILD DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         # Also clear html node
+         'DOM-HTML DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         ': t  _TDOC DREN-DIRTY?',
+         '  CR ." [D=" . ." ]" ; t'],
+        '[D=0 ]')
+
+    check("DREN-DIRTY? true when one node dirty",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _DD2',
+         '_DD2 DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         # Clear all, then dirty one
+         'DOM-HTML DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         'DOM-BODY DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         '_DD2 DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         '_DD2 DTUI-MARK-DIRTY',
+         ': t  _TDOC DREN-DIRTY?',
+         '  CR ." [D=" . ." ]" ; t'],
+        '[D=-1 ]')
+
+    # ==================================================================
+    #  §NEW-8 — Layout + Render Pipeline
+    # ==================================================================
+    print("\n=== Layout + Render ===")
+
+    check("DREN-LAYOUT sets row/col",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _DL',
+         '_DL S" display:block;width:10;height:3" SET-STYLE',
+         '_DL DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_TDOC _TRGN DREN-LAYOUT',
+         ': t  _DL DTUI-SIDECAR',
+         '  DUP DTUI-SC-ROW',
+         '  OVER DTUI-SC-COL',
+         '  2 PICK DTUI-SC-W',
+         '  3 PICK DTUI-SC-H',
+         '  CR ." [" . . . . ." ]" DROP ; t'],
+        check_fn=lambda out: '[' in out and ']' in out)
+
+    check("DREN-RENDER completes without crash",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _DR',
+         'S" Hello" DOM-CREATE-TEXT _DR DOM-APPEND',
+         '_DR S" display:block;width:20;height:1" SET-STYLE',
+         '_DR DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_TDOC _TRGN DREN-RENDER',
+         'CR ." [OK]"'],
+        '[OK]')
+
+    check("Two block divs stack vertically",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _D1',
+         '_D1 S" display:block;width:20;height:3" SET-STYLE',
+         'S" div" DOM-CREATE-ELEMENT CONSTANT _D2',
+         '_D2 S" display:block;width:20;height:2" SET-STYLE',
+         '_D1 DOM-BODY DOM-APPEND',
+         '_D2 DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_TDOC _TRGN DREN-LAYOUT',
+         ': t  _D1 DTUI-SIDECAR DTUI-SC-ROW',
+         '  _D2 DTUI-SIDECAR DTUI-SC-ROW',
+         '  CR ." [R1=" . ." R2=" . ." ]" ; t'],
+        check_fn=lambda out: re.search(r'\[R1=\d+ R2=\d+', out) is not None)
+
+    # ==================================================================
+    #  §NEW-9 — DREN-PAINT-DIRTY (dirty-only repaint)
+    # ==================================================================
+    print("\n=== DREN-PAINT-DIRTY ===")
+
+    check("DREN-PAINT-DIRTY clears dirty flags",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _PD1',
+         '_PD1 S" display:block;width:10;height:1" SET-STYLE',
+         'S" div" DOM-CREATE-ELEMENT CONSTANT _PD2',
+         '_PD2 S" display:block;width:10;height:1" SET-STYLE',
+         '_PD1 DOM-BODY DOM-APPEND',
+         '_PD2 DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_TDOC _TRGN DREN-LAYOUT',
+         # Clear all dirty
+         'DOM-HTML DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         'DOM-BODY DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         '_PD1 DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         '_PD2 DTUI-SIDECAR DTUI-CLEAR-DIRTY',
+         # Mark only PD1 dirty
+         '_PD1 DTUI-MARK-DIRTY',
+         '_TDOC DREN-PAINT-DIRTY',
+         ': t  _PD1 DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  _PD2 DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  CR ." [D1=" . ." D2=" . ." ]" ; t'],
+        '[D1=0 D2=0 ]')
+
+    # ==================================================================
+    #  §NEW-10 — Smart DREN-RELAYOUT
+    # ==================================================================
+    print("\n=== Smart DREN-RELAYOUT ===")
+
+    check("DREN-RELAYOUT skips when no GEOM-DIRTY",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _RL1',
+         '_RL1 S" display:block;width:10;height:1" SET-STYLE',
+         '_RL1 DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_TDOC _TRGN DREN-LAYOUT',
+         # Clear geom-dirty
+         'DOM-HTML DTUI-SIDECAR DTUI-CLEAR-GEOM-DIRTY',
+         'DOM-BODY DTUI-SIDECAR DTUI-CLEAR-GEOM-DIRTY',
+         '_RL1 DTUI-SIDECAR DTUI-CLEAR-GEOM-DIRTY',
+         '_TDOC _TRGN DREN-RELAYOUT',
+         'CR ." [OK]"'],
+        '[OK]')
+
+    check("DREN-RELAYOUT clears GEOM-DIRTY after run",
+        ['S" div" DOM-CREATE-ELEMENT CONSTANT _RL2',
+         '_RL2 S" display:block;width:10;height:1" SET-STYLE',
+         '_RL2 DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         '_TDOC _TRGN DREN-LAYOUT',
+         '_RL2 DTUI-MARK-GEOM-DIRTY',
+         '_TDOC _TRGN DREN-RELAYOUT',
+         ': t  _RL2 DTUI-SIDECAR DTUI-SC-FLAGS 32 AND',
+         '  CR ." [G=" . ." ]" ; t'],
+        '[G=0 ]')
+
+    # ==================================================================
+    #  §NEW-11 — Custom draw-xt dispatch
+    # ==================================================================
+    print("\n=== Custom Draw Callback ===")
+
+    check("Custom draw-xt is called during paint",
+        ['VARIABLE _MYCALLED  0 _MYCALLED !',
+         ': _MYDRAW  ( node sc rgn -- ) DROP 2DROP -1 _MYCALLED ! ;',
+         'S" div" DOM-CREATE-ELEMENT CONSTANT _CX',
+         '_CX S" display:block;width:10;height:3" SET-STYLE',
+         '_CX DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         "' _MYDRAW _CX DTUI-SIDECAR DTUI-SC-DRAW!",
+         '_TDOC _TRGN DREN-RENDER',
+         'CR ." [C=" _MYCALLED @ . ." ]"'],
+        '[C=-1 ]')
+
+    check("Custom draw-xt no crash with noop",
+        [': _NOOP  ( node sc rgn -- ) DROP 2DROP ;',
+         'S" div" DOM-CREATE-ELEMENT CONSTANT _CN2',
+         '_CN2 S" display:block;width:10;height:3;border-style:solid" SET-STYLE',
+         'S" text inside" DOM-CREATE-TEXT _CN2 DOM-APPEND',
+         '_CN2 DOM-BODY DOM-APPEND',
+         '_TDOC DTUI-ATTACH',
+         "' _NOOP _CN2 DTUI-SIDECAR DTUI-SC-DRAW!",
+         '_TDOC _TRGN DREN-RENDER',
+         'CR ." [OK]"'],
+        '[OK]')
 
     # ==================================================================
     print(f"\n{'='*50}")

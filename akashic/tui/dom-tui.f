@@ -19,6 +19,7 @@ REQUIRE ../dom/dom.f
 REQUIRE ../dom/html5.f
 REQUIRE ../css/css.f
 REQUIRE ../css/bridge.f
+REQUIRE ../utils/string.f
 REQUIRE cell.f
 REQUIRE region.f
 
@@ -26,8 +27,8 @@ REQUIRE region.f
 \  §1 — Constants
 \ =====================================================================
 
-\ Sidecar descriptor size (8 cells = 64 bytes)
-64 CONSTANT DTUI-SC-SIZE
+\ Sidecar descriptor size (9 cells = 72 bytes)
+72 CONSTANT DTUI-SC-SIZE
 
 \ --- Sidecar field offsets ---
 \  +0   node           back-pointer to DOM node
@@ -37,7 +38,8 @@ REQUIRE region.f
 \ +32   width          computed width (character cells)
 \ +40   height         computed height (character cells)
 \ +48   style          packed: fg(8) bg(8) attrs(16) border-idx(8)
-\ +56   draw-xt        custom draw hook (0 = default)
+\ +56   draw-xt        custom draw hook ( node sc rgn -- ), 0 = default
+\ +64   userdata       app-defined payload (widget ptr, etc.)
 
  0 CONSTANT _SC-NODE
  8 CONSTANT _SC-FLAGS
@@ -47,6 +49,7 @@ REQUIRE region.f
 40 CONSTANT _SC-H
 48 CONSTANT _SC-STYLE
 56 CONSTANT _SC-DRAW
+64 CONSTANT _SC-UDATA
 
 \ --- Sidecar flag bits ---
 1  CONSTANT DTUI-F-DIRTY       \ needs repaint
@@ -54,6 +57,7 @@ REQUIRE region.f
 4  CONSTANT DTUI-F-BLOCK       \ display: block (else inline)
 8  CONSTANT DTUI-F-HIDDEN      \ visibility: hidden (space reserved, no paint)
 16 CONSTANT DTUI-F-FOCUSABLE   \ can receive focus
+32 CONSTANT DTUI-F-GEOM-DIRTY  \ layout geometry changed, needs relayout
 
 \ --- Style packing ---
 \ bits  0-7:  fg color index  (0-255)
@@ -83,6 +87,7 @@ REQUIRE region.f
 : DTUI-SC-H      ( sc -- h )       _SC-H     + @ ;
 : DTUI-SC-STYLE  ( sc -- packed )  _SC-STYLE + @ ;
 : DTUI-SC-DRAW   ( sc -- xt|0 )   _SC-DRAW  + @ ;
+: DTUI-SC-UDATA  ( sc -- udata )   _SC-UDATA + @ ;
 
 : DTUI-SC-FLAGS! ( fl sc -- )      _SC-FLAGS + ! ;
 : DTUI-SC-ROW!   ( r sc -- )       _SC-ROW   + ! ;
@@ -91,6 +96,7 @@ REQUIRE region.f
 : DTUI-SC-H!     ( h sc -- )       _SC-H     + ! ;
 : DTUI-SC-STYLE! ( s sc -- )       _SC-STYLE + ! ;
 : DTUI-SC-DRAW!  ( xt sc -- )      _SC-DRAW  + ! ;
+: DTUI-SC-UDATA! ( u sc -- )       _SC-UDATA + ! ;
 
 \ =====================================================================
 \  §3 — Style Pack / Unpack
@@ -502,6 +508,57 @@ VARIABLE _DST-FG  VARIABLE _DST-BG  VARIABLE _DST-AT
     DTUI-PACK-STYLE
     SWAP DTUI-SC-STYLE! ;
 
+\ =====================================================================
+\  §8a — Dirty Marking (explicit primitives + convenience wrappers)
+\ =====================================================================
+
+\ DTUI-MARK-DIRTY ( node -- )
+\   Set DTUI-F-DIRTY on the node's sidecar for repaint.
+: DTUI-MARK-DIRTY  ( node -- )
+    DTUI-SIDECAR DUP 0= IF DROP EXIT THEN
+    DUP DTUI-SC-FLAGS DTUI-F-DIRTY OR  SWAP DTUI-SC-FLAGS! ;
+
+\ DTUI-MARK-GEOM-DIRTY ( node -- )
+\   Set both DTUI-F-GEOM-DIRTY and DTUI-F-DIRTY.
+: DTUI-MARK-GEOM-DIRTY  ( node -- )
+    DTUI-SIDECAR DUP 0= IF DROP EXIT THEN
+    DUP DTUI-SC-FLAGS
+    DTUI-F-DIRTY OR DTUI-F-GEOM-DIRTY OR
+    SWAP DTUI-SC-FLAGS! ;
+
+\ DTUI-CLEAR-DIRTY ( sc -- )
+\   Clear the DTUI-F-DIRTY flag on a sidecar.
+: DTUI-CLEAR-DIRTY  ( sc -- )
+    DUP DTUI-SC-FLAGS DTUI-F-DIRTY INVERT AND
+    SWAP DTUI-SC-FLAGS! ;
+
+\ DTUI-CLEAR-GEOM-DIRTY ( sc -- )
+\   Clear the DTUI-F-GEOM-DIRTY flag on a sidecar.
+: DTUI-CLEAR-GEOM-DIRTY  ( sc -- )
+    DUP DTUI-SC-FLAGS DTUI-F-GEOM-DIRTY INVERT AND
+    SWAP DTUI-SC-FLAGS! ;
+
+\ --- Convenience wrappers: DOM mutation + auto-dirty ---
+
+\ DTUI-SET-TEXT! ( node txt-a txt-u -- )
+\   DOM-SET-TEXT then mark dirty.
+: DTUI-SET-TEXT!  ( node txt-a txt-u -- )
+    ROT DUP >R -ROT  DOM-SET-TEXT
+    R> DTUI-MARK-DIRTY ;
+
+\ DTUI-ATTR! ( node name-a name-u val-a val-u -- )
+\   DOM-ATTR! then mark dirty.
+: DTUI-ATTR!  ( node name-a name-u val-a val-u -- )
+    4 PICK >R           \ save node for later
+    DOM-ATTR!            \ consumes all 5 args
+    R> DTUI-MARK-DIRTY ;
+
+\ DTUI-ATTR-DEL! ( node name-a name-u -- )
+\   DOM-ATTR-DEL then mark dirty.
+: DTUI-ATTR-DEL!  ( node name-a name-u -- )
+    ROT DUP >R -ROT  DOM-ATTR-DEL
+    R> DTUI-MARK-DIRTY ;
+
 \ DTUI-REFRESH ( doc -- )
 \   Re-resolve CSS into existing sidecars (after style/class change).
 
@@ -529,24 +586,81 @@ VARIABLE _DRF-SC
 \ DTUI-CLASS-ADD ( node addr len -- )
 \   Add a CSS class to the node's class attribute and refresh its
 \   sidecar.  Does not check for duplicates.
+CREATE _DCA-BUF 256 ALLOT
+VARIABLE _DCA-LEN
+VARIABLE _DCA-NA   VARIABLE _DCA-NL
+
 : DTUI-CLASS-ADD  ( node addr len -- )
     ROT >R
-    R@ DOM-CLASS  DUP 0= IF
-        2DROP R@ -ROT DOM-ATTR!  \ no existing class — just set
+    _DCA-NL ! _DCA-NA !            \ save new class
+    R@ DOM-CLASS                    \ ( old-a old-u )
+    DUP 0= IF
+        \ No existing class — just set it
+        2DROP
+        R@ S" class" _DCA-NA @ _DCA-NL @ DOM-ATTR!
     ELSE
-        \ Append " " + new class — would need string concat.
-        \ For now: simple set (overwrite).
-        2DROP R@ S" class" ROT ROT DOM-ATTR!
+        \ Overflow check: old-u + 1 + new-u must fit in 256
+        DUP 1+ _DCA-NL @ + 256 > IF
+            2DROP                   \ silently skip on overflow
+        ELSE
+            \ Copy old class to buffer
+            DUP _DCA-LEN !
+            _DCA-BUF SWAP MOVE
+            \ Append space
+            BL _DCA-BUF _DCA-LEN @ + C!
+            1 _DCA-LEN +!
+            \ Append new class
+            _DCA-NA @ _DCA-BUF _DCA-LEN @ + _DCA-NL @ MOVE
+            _DCA-NL @ _DCA-LEN +!
+            \ Set combined attribute
+            R@ S" class" _DCA-BUF _DCA-LEN @ DOM-ATTR!
+        THEN
     THEN
     R> DUP N.AUX @  DUP 0= IF 2DROP EXIT THEN
     _DTUI-RESOLVE-NODE ;
 
 \ DTUI-CLASS-REMOVE ( node addr len -- )
-\   Stub — removes class attr entirely.  TODO: proper substring removal.
+\   Remove a single class from the node's space-separated class
+\   attribute.  Rebuilds the class string without the target token.
+\   Deletes the class attribute entirely if the result is empty.
+CREATE _DCR-BUF 256 ALLOT
+VARIABLE _DCR-LEN
+VARIABLE _DCR-TA   VARIABLE _DCR-TL
+
 : DTUI-CLASS-REMOVE  ( node addr len -- )
-    DROP DROP
-    DUP S" class" DOM-ATTR-DEL
-    DUP N.AUX @  DUP 0= IF 2DROP EXIT THEN
+    ROT >R
+    _DCR-TL ! _DCR-TA !
+    0 _DCR-LEN !
+    R@ DOM-CLASS                    \ ( cls-a cls-u )
+    DUP 0= IF 2DROP R> DROP EXIT THEN
+    \ Walk tokens, skip matching, rebuild in _DCR-BUF
+    BEGIN
+        STR-SKIP-BL                 \ skip leading whitespace
+        DUP 0> WHILE                \ while input remains
+        STR-PARSE-TOKEN             \ ( tok tlen rest rlen )
+        2SWAP                       \ ( rest rlen tok tlen )
+        2DUP _DCR-TA @ _DCR-TL @ STR-STR= IF
+            2DROP                   \ skip matching token
+        ELSE
+            \ Add space separator if buffer non-empty
+            _DCR-LEN @ IF
+                BL _DCR-BUF _DCR-LEN @ + C!
+                1 _DCR-LEN +!
+            THEN
+            \ Append token to buffer
+            DUP >R
+            _DCR-BUF _DCR-LEN @ + SWAP MOVE
+            R> _DCR-LEN +!
+        THEN
+    REPEAT
+    2DROP                           \ drop leftover ( addr 0 )
+    \ Update the attribute
+    _DCR-LEN @ 0= IF
+        R@ S" class" DOM-ATTR-DEL
+    ELSE
+        R@ S" class" _DCR-BUF _DCR-LEN @ DOM-ATTR!
+    THEN
+    R> DUP N.AUX @  DUP 0= IF 2DROP EXIT THEN
     _DTUI-RESOLVE-NODE ;
 
 \ =====================================================================
@@ -571,19 +685,33 @@ GUARD _dtui-guard
 ' DTUI-UNPACK-BG      CONSTANT _dtui-unpack-bg-xt
 ' DTUI-UNPACK-ATTRS   CONSTANT _dtui-unpack-attrs-xt
 ' DTUI-UNPACK-BORDER  CONSTANT _dtui-unpack-border-xt
+' DTUI-MARK-DIRTY     CONSTANT _dtui-mark-dirty-xt
+' DTUI-MARK-GEOM-DIRTY CONSTANT _dtui-mark-gdirty-xt
+' DTUI-SET-TEXT!      CONSTANT _dtui-set-text-xt
+' DTUI-ATTR!          CONSTANT _dtui-attr-bang-xt
+' DTUI-ATTR-DEL!      CONSTANT _dtui-attr-del-xt
+' DTUI-SC-UDATA       CONSTANT _dtui-sc-udata-xt
+' DTUI-SC-UDATA!      CONSTANT _dtui-sc-udata-bang-xt
 
-: DTUI-ATTACH        _dtui-attach-xt        _dtui-guard WITH-GUARD ;
-: DTUI-DETACH        _dtui-detach-xt        _dtui-guard WITH-GUARD ;
-: DTUI-REFRESH       _dtui-refresh-xt       _dtui-guard WITH-GUARD ;
-: DTUI-SIDECAR       _dtui-sidecar-xt       _dtui-guard WITH-GUARD ;
-: DTUI-VISIBLE?      _dtui-visible-xt       _dtui-guard WITH-GUARD ;
-: DTUI-STYLE!        _dtui-style-xt         _dtui-guard WITH-GUARD ;
-: DTUI-RESOLVE-COLOR _dtui-resolve-color-xt _dtui-guard WITH-GUARD ;
-: DTUI-CLASS-ADD     _dtui-class-add-xt     _dtui-guard WITH-GUARD ;
-: DTUI-CLASS-REMOVE  _dtui-class-remove-xt  _dtui-guard WITH-GUARD ;
-: DTUI-PACK-STYLE    _dtui-pack-style-xt    _dtui-guard WITH-GUARD ;
-: DTUI-UNPACK-FG     _dtui-unpack-fg-xt     _dtui-guard WITH-GUARD ;
-: DTUI-UNPACK-BG     _dtui-unpack-bg-xt     _dtui-guard WITH-GUARD ;
-: DTUI-UNPACK-ATTRS  _dtui-unpack-attrs-xt  _dtui-guard WITH-GUARD ;
-: DTUI-UNPACK-BORDER _dtui-unpack-border-xt _dtui-guard WITH-GUARD ;
+: DTUI-ATTACH          _dtui-attach-xt        _dtui-guard WITH-GUARD ;
+: DTUI-DETACH          _dtui-detach-xt        _dtui-guard WITH-GUARD ;
+: DTUI-REFRESH         _dtui-refresh-xt       _dtui-guard WITH-GUARD ;
+: DTUI-SIDECAR         _dtui-sidecar-xt       _dtui-guard WITH-GUARD ;
+: DTUI-VISIBLE?        _dtui-visible-xt       _dtui-guard WITH-GUARD ;
+: DTUI-STYLE!          _dtui-style-xt         _dtui-guard WITH-GUARD ;
+: DTUI-RESOLVE-COLOR   _dtui-resolve-color-xt _dtui-guard WITH-GUARD ;
+: DTUI-CLASS-ADD       _dtui-class-add-xt     _dtui-guard WITH-GUARD ;
+: DTUI-CLASS-REMOVE    _dtui-class-remove-xt  _dtui-guard WITH-GUARD ;
+: DTUI-PACK-STYLE      _dtui-pack-style-xt    _dtui-guard WITH-GUARD ;
+: DTUI-UNPACK-FG       _dtui-unpack-fg-xt     _dtui-guard WITH-GUARD ;
+: DTUI-UNPACK-BG       _dtui-unpack-bg-xt     _dtui-guard WITH-GUARD ;
+: DTUI-UNPACK-ATTRS    _dtui-unpack-attrs-xt  _dtui-guard WITH-GUARD ;
+: DTUI-UNPACK-BORDER   _dtui-unpack-border-xt _dtui-guard WITH-GUARD ;
+: DTUI-MARK-DIRTY      _dtui-mark-dirty-xt    _dtui-guard WITH-GUARD ;
+: DTUI-MARK-GEOM-DIRTY _dtui-mark-gdirty-xt   _dtui-guard WITH-GUARD ;
+: DTUI-SET-TEXT!        _dtui-set-text-xt      _dtui-guard WITH-GUARD ;
+: DTUI-ATTR!            _dtui-attr-bang-xt     _dtui-guard WITH-GUARD ;
+: DTUI-ATTR-DEL!        _dtui-attr-del-xt      _dtui-guard WITH-GUARD ;
+: DTUI-SC-UDATA         _dtui-sc-udata-xt      _dtui-guard WITH-GUARD ;
+: DTUI-SC-UDATA!        _dtui-sc-udata-bang-xt _dtui-guard WITH-GUARD ;
 [THEN] [THEN]

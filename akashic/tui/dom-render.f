@@ -295,7 +295,13 @@ VARIABLE _DREN-DOC
     DRW-TEXT ;
 
 \ _DREN-PAINT-NODE ( node -- )
-\   Paint one element node: bg → border → text → recurse children.
+\   Paint one element node.  If the sidecar has a custom draw-xt,
+\   call it as ( node sidecar region -- ) and skip default paint.
+\   Otherwise: bg → border → text → recurse children.
+\   Clears DTUI-F-DIRTY after painting.
+
+VARIABLE _DREN-TMP-RGN    \ per-node scratch region
+
 : _DREN-PAINT-NODE  ( node -- )
     DUP DOM-TYPE@ DOM-T-ELEMENT <> IF DROP EXIT THEN
     DUP N.AUX @ DUP 0= IF 2DROP EXIT THEN
@@ -304,6 +310,27 @@ VARIABLE _DREN-DOC
 
     \ visibility:hidden — reserve space but don't paint
     DUP DTUI-SC-FLAGS DTUI-F-HIDDEN AND IF 2DROP EXIT THEN
+
+    \ Clear dirty flag
+    DUP DTUI-CLEAR-DIRTY
+
+    \ Custom draw callback?
+    DUP DTUI-SC-DRAW DUP IF
+        \ Build a sub-region for this node
+        >R  \ save draw-xt
+        DUP DTUI-SC-ROW OVER DTUI-SC-COL
+        2 PICK DTUI-SC-H  3 PICK DTUI-SC-W
+        RGN-NEW _DREN-TMP-RGN !
+        R>      \ restore draw-xt
+        \ Stack: node sc draw-xt
+        >R 2DUP R>
+        _DREN-TMP-RGN @    \ ( node sc draw-xt rgn )
+        SWAP EXECUTE        \ ( node sc rgn draw-xt -- ) calls draw-xt
+        _DREN-TMP-RGN @ RGN-FREE
+        2DROP               \ drop node sc
+        EXIT
+    THEN
+    DROP    \ drop 0 from DTUI-SC-DRAW
 
     \ Paint background
     DUP _DREN-PAINT-BG
@@ -375,6 +402,40 @@ VARIABLE _DREN-DOC
     \ Unclip
     RGN-ROOT ;
 
+\ DREN-PAINT-DIRTY ( doc -- )
+\   Repaint only nodes with DTUI-F-DIRTY set.  Much cheaper than
+\   a full DREN-PAINT when only a few nodes changed.
+\   DREN-LAYOUT must have been called first (to set _DREN-RGN).
+
+: _DREN-PAINT-DIRTY-WALK  ( node -- )
+    DUP DOM-TYPE@ DOM-T-ELEMENT <> IF DROP EXIT THEN
+    DUP N.AUX @ DUP 0= IF 2DROP EXIT THEN
+    \ Stack: node sc
+    DTUI-SC-FLAGS DTUI-F-DIRTY AND IF
+        \ Dirty — paint this node (which clears the flag)
+        _DREN-PAINT-NODE
+    ELSE
+        \ Not dirty — still recurse children (a child may be dirty)
+        DOM-FIRST-CHILD
+        BEGIN DUP WHILE
+            DUP _DREN-PAINT-DIRTY-WALK
+            DOM-NEXT
+        REPEAT
+        DROP
+    THEN ;
+
+: DREN-PAINT-DIRTY  ( doc -- )
+    DUP DOM-USE
+    _DREN-DOC !
+
+    _DREN-RGN @ RGN-USE
+    DRW-STYLE-RESET
+
+    _DREN-DOC @ D.BODY @  DUP 0= IF DROP RGN-ROOT EXIT THEN
+    _DREN-PAINT-DIRTY-WALK
+
+    RGN-ROOT ;
+
 \ DREN-RENDER ( doc rgn -- )
 \   Layout + paint in one call.
 : DREN-RENDER  ( doc rgn -- )
@@ -382,9 +443,35 @@ VARIABLE _DREN-DOC
     DROP  DREN-PAINT ;
 
 \ DREN-RELAYOUT ( doc rgn -- )
-\   Re-layout after mutation or resize.  Same as DREN-LAYOUT.
+\   Re-layout only if any sidecar has DTUI-F-GEOM-DIRTY set.
+\   If no geometry changed, returns immediately.  Otherwise does a
+\   full DREN-LAYOUT and clears all GEOM-DIRTY flags.
+VARIABLE _DRL-GEO
+
+: _DREN-CHECK-GEOM-DIRTY  ( node -- )
+    DUP DOM-TYPE@ DOM-T-ELEMENT <> IF DROP EXIT THEN
+    N.AUX @  DUP 0= IF DROP EXIT THEN
+    DTUI-SC-FLAGS  DTUI-F-GEOM-DIRTY AND IF
+        -1 _DRL-GEO !
+    THEN ;
+
+: _DREN-CLEAR-GEOM-DIRTY  ( node -- )
+    DUP DOM-TYPE@ DOM-T-ELEMENT <> IF DROP EXIT THEN
+    N.AUX @  DUP 0= IF DROP EXIT THEN
+    DTUI-CLEAR-GEOM-DIRTY ;
+
 : DREN-RELAYOUT  ( doc rgn -- )
-    DREN-LAYOUT ;
+    OVER DOM-USE
+    0 _DRL-GEO !
+    OVER D.BODY @  DUP 0= IF DROP 2DROP EXIT THEN
+    ['] _DREN-CHECK-GEOM-DIRTY DOM-WALK-DEPTH
+    _DRL-GEO @ 0= IF 2DROP EXIT THEN  \ nothing changed — skip
+    \ Geometry changed — full relayout
+    2DUP DREN-LAYOUT
+    \ Clear all geom-dirty flags
+    DROP DUP DOM-USE
+    D.BODY @  DUP 0= IF DROP EXIT THEN
+    ['] _DREN-CLEAR-GEOM-DIRTY DOM-WALK-DEPTH ;
 
 \ DREN-DIRTY? ( doc -- flag )
 \   True if any sidecar has DTUI-F-DIRTY set.
@@ -420,15 +507,17 @@ GUARD _dren-guard
 
 ' DREN-LAYOUT       CONSTANT _dren-layout-xt
 ' DREN-PAINT        CONSTANT _dren-paint-xt
+' DREN-PAINT-DIRTY  CONSTANT _dren-paintdirty-xt
 ' DREN-RENDER       CONSTANT _dren-render-xt
 ' DREN-RELAYOUT     CONSTANT _dren-relayout-xt
 ' DREN-DIRTY?       CONSTANT _dren-dirty-xt
 ' DREN-PAINT-NODE   CONSTANT _dren-paintnode-xt
 
-: DREN-LAYOUT       _dren-layout-xt    _dren-guard WITH-GUARD ;
-: DREN-PAINT        _dren-paint-xt     _dren-guard WITH-GUARD ;
-: DREN-RENDER       _dren-render-xt    _dren-guard WITH-GUARD ;
-: DREN-RELAYOUT     _dren-relayout-xt  _dren-guard WITH-GUARD ;
-: DREN-DIRTY?       _dren-dirty-xt     _dren-guard WITH-GUARD ;
-: DREN-PAINT-NODE   _dren-paintnode-xt _dren-guard WITH-GUARD ;
+: DREN-LAYOUT       _dren-layout-xt     _dren-guard WITH-GUARD ;
+: DREN-PAINT        _dren-paint-xt      _dren-guard WITH-GUARD ;
+: DREN-PAINT-DIRTY  _dren-paintdirty-xt _dren-guard WITH-GUARD ;
+: DREN-RENDER       _dren-render-xt     _dren-guard WITH-GUARD ;
+: DREN-RELAYOUT     _dren-relayout-xt   _dren-guard WITH-GUARD ;
+: DREN-DIRTY?       _dren-dirty-xt      _dren-guard WITH-GUARD ;
+: DREN-PAINT-NODE   _dren-paintnode-xt  _dren-guard WITH-GUARD ;
 [THEN] [THEN]

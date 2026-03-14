@@ -37,7 +37,9 @@ Automatically loads `akashic-tui-dom-tui`, `draw.f`, `box.f`,
 | **Sidecar-driven** | Layout reads CSS-resolved values from DTUI sidecars (width, height, border, display mode, visibility) and writes computed row/col/W/H back. |
 | **Block / inline flow** | Block elements stack vertically; inline elements flow side-by-side on the current line. Mixed flow triggers automatic line breaks. |
 | **Region-scoped** | All positions are relative to a TUI region (`RGN-NEW`). Layout respects region width/height. |
-| **DFS paint order** | Paint walks depth-first: background → border → text → children. Later siblings overdraw earlier ones. |
+| **DFS paint order** | Paint walks depth-first: background → border → text → children.  If a sidecar has a custom `draw-xt`, it is called instead of the default paint path. Later siblings overdraw earlier ones. |
+| **Dirty-aware paint** | `DREN-PAINT-DIRTY` skips clean nodes, only repainting those with `DTUI-F-DIRTY` set.  The dirty flag is cleared automatically after each node paints. |
+| **Smart relayout** | `DREN-RELAYOUT` checks for `DTUI-F-GEOM-DIRTY` — if no sidecar has geometry changes, the full layout pass is skipped entirely. |
 | **R-stack recursion** | 8 global layout variables are saved/restored on the return stack during child recursion, making nested layout safe without dynamic allocation. |
 | **One-pass layout** | A single depth-first traversal computes all positions. No second pass. |
 
@@ -125,6 +127,18 @@ text → children.
 
 `DREN-LAYOUT` must have been called first.
 
+### `DREN-PAINT-DIRTY` — `( doc -- )`
+
+Repaint only nodes with `DTUI-F-DIRTY` set.  Much cheaper than a
+full `DREN-PAINT` when only a few nodes changed (e.g. a status bar
+update).  Walks the tree depth-first from BODY:
+
+- If a node is dirty, paints it (which clears the flag).
+- If a node is clean, skips its paint but still recurses into its
+  children (a child may be dirty even if the parent is not).
+
+`DREN-LAYOUT` must have been called first.
+
 ### `DREN-RENDER` — `( doc rgn -- )`
 
 Layout + paint in one call.  Equivalent to:
@@ -135,8 +149,13 @@ Layout + paint in one call.  Equivalent to:
 
 ### `DREN-RELAYOUT` — `( doc rgn -- )`
 
-Re-layout after DOM mutation or viewport resize.  Same as
-`DREN-LAYOUT` — recomputes all positions from scratch.
+Smart re-layout after DOM mutation.  Walks the tree checking for
+`DTUI-F-GEOM-DIRTY` — if no sidecar has the flag set, returns
+immediately (no work).  If any geometry changed, performs a full
+`DREN-LAYOUT` and clears all `DTUI-F-GEOM-DIRTY` flags.
+
+Use `DTUI-MARK-GEOM-DIRTY` on nodes whose width/height/display
+changed, then call `DREN-RELAYOUT` once.
 
 ### `DREN-DIRTY?` — `( doc -- flag )`
 
@@ -153,7 +172,8 @@ have activated the appropriate region with `RGN-USE` first.
 ## Internal State
 
 Layout uses 8 global VARIABLEs, all saved/restored per recursion
-level via the return stack:
+level via the return stack.  One additional variable is used by the
+paint engine for custom draw-xt regions:
 
 | Variable | Purpose |
 |----------|---------|
@@ -167,6 +187,7 @@ level via the return stack:
 | `_DREN-ND` | Current node being laid out |
 | `_DREN-SC` | Current sidecar address |
 | `_DREN-FL` | Cached sidecar flags |
+| `_DREN-TMP-RGN` | Scratch region for custom draw-xt callbacks |
 
 ---
 
@@ -208,8 +229,8 @@ Delegates to `UTF8-LEN`.
 When `GUARDED` is defined and a guard module is loaded, all public
 words are wrapped with `WITH-GUARD` for concurrency safety:
 
-- `DREN-LAYOUT`, `DREN-PAINT`, `DREN-RENDER`, `DREN-RELAYOUT`,
-  `DREN-DIRTY?`, `DREN-PAINT-NODE`
+- `DREN-LAYOUT`, `DREN-PAINT`, `DREN-PAINT-DIRTY`, `DREN-RENDER`,
+  `DREN-RELAYOUT`, `DREN-DIRTY?`, `DREN-PAINT-NODE`
 
 ---
 
@@ -219,8 +240,9 @@ words are wrapped with `WITH-GUARD` for concurrency safety:
 |------|-------|-------------|
 | `DREN-LAYOUT` | `( doc rgn -- )` | Compute layout for entire tree |
 | `DREN-PAINT` | `( doc -- )` | Paint tree into back buffer |
+| `DREN-PAINT-DIRTY` | `( doc -- )` | Repaint only dirty nodes |
 | `DREN-RENDER` | `( doc rgn -- )` | Layout + paint in one call |
-| `DREN-RELAYOUT` | `( doc rgn -- )` | Re-layout (same as DREN-LAYOUT) |
+| `DREN-RELAYOUT` | `( doc rgn -- )` | Smart re-layout (skips if no geom changes) |
 | `DREN-DIRTY?` | `( doc -- flag )` | Any sidecar dirty? |
 | `DREN-PAINT-NODE` | `( node -- )` | Paint single node subtree |
 
@@ -260,25 +282,57 @@ SCR-FLUSH
 ```forth
 \ After adding / removing DOM nodes:
 my-doc DTUI-REFRESH     \ re-resolve CSS on changed nodes
-my-doc my-rgn DREN-RELAYOUT
+my-doc my-rgn DREN-RELAYOUT   \ skips if no GEOM-DIRTY
 my-doc DREN-PAINT
 SCR-FLUSH
 ```
 
-### Check if Repaint Needed
+### Efficient Dirty Repaint
 
 ```forth
+\ After text/style mutation (no geometry change):
+my-div S" Updated" DTUI-SET-TEXT!    \ marks dirty automatically
+
 my-doc DREN-DIRTY? IF
-    my-doc my-rgn DREN-RENDER
+    my-doc DREN-PAINT-DIRTY    \ only repaints dirty nodes
     SCR-FLUSH
 THEN
 ```
 
-### Partial Update
+### Smart Relayout + Dirty Paint
 
 ```forth
-my-rgn RGN-USE
-my-div DREN-PAINT-NODE
-RGN-ROOT
+\ After a geometry mutation (width/height change):
+my-div DTUI-MARK-GEOM-DIRTY
+
+my-doc my-rgn DREN-RELAYOUT    \ only relayouts if GEOM-DIRTY found
+my-doc DREN-PAINT-DIRTY         \ only repaints dirty nodes
 SCR-FLUSH
 ```
+
+### Custom Draw Callback
+
+```forth
+\ Define a custom draw function:
+\ Signature: ( node sidecar region -- )
+: my-draw  ( node sc rgn -- )
+    RGN-USE              \ activate the region for clipping
+    DROP                 \ don't need sc for this example
+    _MY-COLLECT-TEXT     \ example: get text from node
+    0 0 DRW-TEXT         \ draw at region-relative 0,0
+    RGN-ROOT ;
+
+\ Install on a node:
+['] my-draw my-div DTUI-SIDECAR DTUI-SC-DRAW!
+```
+
+When `DREN-PAINT` or `DREN-PAINT-DIRTY` encounters a node with a
+non-zero `draw-xt`, it builds a per-node sub-region from the
+sidecar's row/col/W/H and calls:
+
+```forth
+( node sidecar region ) draw-xt EXECUTE
+```
+
+The default paint path (background → border → text → children)
+is skipped entirely for that node.

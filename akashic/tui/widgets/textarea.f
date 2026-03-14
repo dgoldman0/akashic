@@ -613,10 +613,12 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
             DUP [CHAR] a = IF          \ Ctrl+A → select all
                 DROP _TXTA-SELECT-ALL -1 EXIT
             THEN
-            \ Ctrl+C / Ctrl+X / Ctrl+V → not consumed (app layer)
+            \ Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+S / Ctrl+O → not consumed (app layer)
             DUP [CHAR] c = IF DROP 0 EXIT THEN
             DUP [CHAR] x = IF DROP 0 EXIT THEN
             DUP [CHAR] v = IF DROP 0 EXIT THEN
+            DUP [CHAR] s = IF DROP 0 EXIT THEN
+            DUP [CHAR] o = IF DROP 0 EXIT THEN
             DROP 0 EXIT
         THEN
         8 + @                           ( codepoint )

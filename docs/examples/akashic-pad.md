@@ -34,6 +34,9 @@ The BIOS loads `kdos.f`, KDOS runs `autoexec.f`, which loads
 | Ctrl+C | Copy selection to clipboard |
 | Ctrl+X | Cut selection to clipboard |
 | Ctrl+V | Paste from clipboard |
+| Ctrl+S | Save file |
+| Ctrl+Shift+S | Save as (prompt for filename) |
+| Ctrl+O | Open file (prompt for filename) |
 | Ctrl+Q | Quit |
 
 ## Architecture
@@ -81,6 +84,45 @@ The widget exposes small primitives (`TXTA-GET-SEL`, `TXTA-DEL-SEL`,
 After cut/paste the app marks the UIDL element dirty
 (`UIDL-DIRTY!`) so `UTUI-PAINT` repaints in the same cycle.
 
+### File I/O
+
+File operations use the KDOS filesystem primitives directly.
+The editor stores a current filename in `_pad-fname` (max 24 chars)
+and uses stack-based wrappers around the KDOS internals to avoid
+the parse-from-input-stream limitation of `OPEN` and `MKFILE`.
+
+| Word | Purpose |
+|------|---------|
+| `_PAD-NAME!` | Copy (addr len) → `NAMEBUF`, zero-pad |
+| `_PAD-FOPEN` | Populate NAMEBUF, `FIND-BY-NAME`, `FD-ALLOC` + `FD-FILL` |
+| `_PAD-FCREATE` | `FIND-FREE-SLOT`, `FIND-FREE`, build dir entry, `FS-SYNC` |
+| `_PAD-DO-SAVE` | Save textarea buffer to disk (truncate, write, flush) |
+| `_PAD-DO-OPEN` | Read file from disk into textarea buffer |
+
+**Save flow** (Ctrl+S / Ctrl+Shift+S):
+
+1. If no filename is stored, fall through to save-as.
+2. Save-as prompts on the status bar for a filename.
+3. Open or create the file (`_PAD-FOPEN` / `_PAD-FCREATE`).
+4. `FTRUNCATE(0)` to handle files that shrank, then `FWRITE` the
+   textarea buffer, `FTRUNCATE(len)` to set exact size, `FFLUSH`,
+   `FCLOSE`.
+5. Clear the dirty flag, update the status bar to show the filename.
+
+**Open flow** (Ctrl+O):
+
+1. Prompt for a filename on the status bar.
+2. `_PAD-FOPEN` — returns 0 on failure (status bar shows error).
+3. `FSIZE` → `FREAD` into a 4 KB I/O buffer, then `TXTA-SET-TEXT`.
+4. Store the filename, clear dirty, update status bar.
+
+**Status-bar prompt** (`_PAD-PROMPT`):
+
+A modal mini-input drawn directly on row 23 (bypassing UIDL).
+Uses `RGN-ROOT` + `DRW-CLEAR-RECT` + `DRW-TEXT` for rendering and
+`KEY-READ` in a blocking loop.  Enter accepts, Escape cancels.
+Returns the typed text (addr len) or (0 0) on cancel.
+
 ### Selection model
 
 Selection is an *anchor + cursor* range stored in the textarea
@@ -102,17 +144,17 @@ The bottom row shows three labels:
 
 | Label | Content |
 |-------|---------|
-| `st-msg` | "Ready" (clean) or "Modified" (dirty) |
+| `st-msg` | Filename (with `*` if dirty), or "Ready" / "Modified" when unnamed |
 | `st-pos` | "Ln N, Col M" (1-based, updated every cycle) |
 | `st-mode` | "INSERT" (placeholder for future overwrite mode) |
 
-`_PAD-ON-CHANGE` is wired as the textarea's change callback.  On the
-first edit it pokes "Modified" into the `st-msg` attribute.
+`_PAD-ON-CHANGE` is wired as the textarea's change callback.
+`_PAD-UPDATE-MSG` builds smart status messages: the filename alone
+when clean, the filename with ` *` when dirty, "Ready" when unnamed
+and clean, or "Modified" when unnamed and dirty.
 
 ## Limitations (current state)
 
-- **No file I/O.**  There is no save/load — the buffer exists only
-  in memory.  File system integration is planned for a future phase.
 - **No undo/redo.**  The clipboard ring keeps recent copies but
   there is no edit history.
 - **Single buffer.**  Only one document at a time.
@@ -122,6 +164,8 @@ first edit it pokes "Modified" into the `st-msg` attribute.
   the gutter does not display line numbers.
 - **No syntax highlighting.**
 - **No find/replace.**
+- **4 KB file limit.**  Files are limited to 8 sectors (4096 bytes)
+  matching the textarea buffer size.
 - **Shift+Arrow in some terminals.**  Shift+Arrow sequences
   (`ESC[1;2A` etc.) work correctly in raw-mode terminals, but some
   terminal emulators (notably VS Code's integrated terminal) may
@@ -149,7 +193,10 @@ chain.
 # Widget-level tests (textarea mechanics):
 python local_testing/test_tui_app.py      # 29 tests — core textarea
 python local_testing/diag_batch_a.py      # 13 tests — PgUp/PgDn, word nav, dirty
-python local_testing/diag_batch_b.py      # 38 tests — selection, clipboard, Shift+Arrow
+python local_testing/diag_batch_b.py      # 40 tests — selection, clipboard, Shift+Arrow
+
+# File I/O tests (requires formatted disk image):
+python local_testing/diag_file_io.py      # 16 tests — save/open, status messages
 
 # Interactive:
 python local_testing/boot_editor.py       # boots the full editor
