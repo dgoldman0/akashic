@@ -126,14 +126,23 @@ VARIABLE _pad-fname-len
     -1 _pad-dirty ! ;
 
 \ ============================================================
-\  §6 — Status Bar Drawing
+\  §6 — Color Palette
 \ ============================================================
 
-\ Palette indices
+\ Title bar
+54  CONSTANT _TB-BG       \ #5f0087 — dark purple
+231 CONSTANT _TB-FG       \ #ffffff — white
+
+\ Editor area
+188 CONSTANT _ED-FG       \ #d7d7d7 — light grey
+235 CONSTANT _ED-BG       \ #262626 — dark charcoal
+
+\ Status bar
 24  CONSTANT _SB-BG       \ #005f87 — dark blue
 188 CONSTANT _SB-FG       \ #d7d7d7 — light grey
 73  CONSTANT _SB-SEP-FG   \ #5fafaf — muted teal (separators)
 
+0 0 1 80 RGN-NEW CONSTANT _pad-tb-rgn
 23 0 1 80 RGN-NEW CONSTANT _pad-sb-rgn
 
 \ --- Message buffer (filename + dirty indicator) ---
@@ -172,6 +181,15 @@ VARIABLE _pad-pos-len
     _pad-editor-w TXTA-CURSOR-LINE 1+ NUM>STR _PAD-APPEND
     S" , Col " _PAD-APPEND
     _pad-editor-w TXTA-CURSOR-COL 1+ NUM>STR _PAD-APPEND ;
+
+\ --- Draw the title bar ---
+: _PAD-DRAW-TITLE  ( -- )
+    _pad-tb-rgn RGN-USE
+    _TB-FG DRW-FG!  _TB-BG DRW-BG!  CELL-A-BOLD DRW-ATTR!
+    32 0 0 1 80 DRW-FILL-RECT
+    S"  Akashic Pad" 0 0 DRW-TEXT
+    0 DRW-ATTR!
+    RGN-ROOT ;
 
 \ --- Draw the entire status bar ---
 : _PAD-DRAW-STATUS  ( -- )
@@ -347,12 +365,26 @@ VARIABLE _pad-pr-u
     _PAD-DO-SAVE DROP
     _PAD-SHOW-FNAME ;
 
+CREATE _pad-open-tmp 24 ALLOT
+VARIABLE _pad-open-tmp-len
+
 : _PAD-FILE-OPEN  ( -- )
     S" Open: " _PAD-PROMPT
     DUP 0= IF 2DROP EXIT THEN
-    23 MIN  2DUP _pad-fname SWAP CMOVE  _pad-fname-len !  DROP
-    _PAD-DO-OPEN DROP
-    _PAD-SHOW-FNAME ;
+    23 MIN
+    \ Save the candidate name temporarily
+    2DUP _pad-open-tmp SWAP DUP >R CMOVE R> _pad-open-tmp-len !
+    DROP
+    \ Set filename for _PAD-DO-OPEN
+    _pad-open-tmp _pad-open-tmp-len @ 2DUP
+    _pad-fname SWAP CMOVE  _pad-fname-len !
+    _PAD-DO-OPEN IF
+        \ Open failed — clear filename, show error
+        0 _pad-fname-len !
+        0 _pad-dirty !
+    ELSE
+        _PAD-SHOW-FNAME
+    THEN ;
 
 \ ============================================================
 \  §10 — Clipboard
@@ -404,8 +436,10 @@ VARIABLE _pad-pr-u
     \ Wire on-change callback
     ['] _PAD-ON-CHANGE _pad-editor-w TXTA-ON-CHANGE
 
-    \ Initial paint (title bar already in back buffer from §3)
+    \ Initial paint
     _PAD-UPDATE-MSG  _PAD-UPDATE-POS
+    _PAD-DRAW-TITLE
+    _ED-FG DRW-FG!  _ED-BG DRW-BG!  0 DRW-ATTR!
     _pad-editor-w WDG-DIRTY  _pad-editor-w WDG-DRAW
     _PAD-DRAW-STATUS
     SCR-FLUSH
@@ -431,7 +465,9 @@ VARIABLE _pad-pr-u
             \ Update status bar content
             _PAD-UPDATE-MSG  _PAD-UPDATE-POS
 
-            \ Repaint editor + status bar
+            \ Repaint title + editor + status bar
+            _PAD-DRAW-TITLE
+            _ED-FG DRW-FG!  _ED-BG DRW-BG!  0 DRW-ATTR!
             _pad-editor-w WDG-DIRTY  _pad-editor-w WDG-DRAW
             _PAD-DRAW-STATUS
             SCR-FLUSH

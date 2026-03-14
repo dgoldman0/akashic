@@ -159,6 +159,10 @@ def main():
         idx = pos + 1
     results.append(("Title bar rendered", all_found))
 
+    # Test 3b: Title bar uses purple bg (palette 54)
+    has_title_bg = b'\x1b[48;5;54m' in raw_bytes
+    results.append(("Title bar purple bg", has_title_bg))
+
     # Test 4: Check output contains "Ready"
     has_ready = "Ready" in output
     results.append(("Status shows Ready", has_ready))
@@ -175,11 +179,18 @@ def main():
     buf.clear()
     inject_text(sys_emu, "X")
     run_steps(sys_emu, 500_000_000)
+    raw_bytes2 = bytes(buf)
     output2 = uart_text(buf)
     # After typing 'X', the screen should repaint with X visible
     # and cursor position should change to Col 2
     has_x = "X" in output2
     results.append(("Typing echoes to editor", has_x))
+
+    # Test 7b: Editor uses dark bg (palette 235), not blue (24) or purple (54)
+    has_editor_bg = b'\x1b[48;5;235m' in raw_bytes2
+    has_blue_flood = (b'\x1b[48;5;24m' in raw_bytes2 and
+                      raw_bytes2.count(b'\x1b[48;5;24m') > 5)
+    results.append(("Editor dark bg (no blue flood)", has_editor_bg and not has_blue_flood))
 
     # Test 8: Ctrl+Q should trigger exit
     buf.clear()
