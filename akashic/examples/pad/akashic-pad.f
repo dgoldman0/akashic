@@ -6,7 +6,7 @@
 \ Features:
 \   - Split layout: explorer sidebar (20%) + editor area (80%)
 \   - Multi-tab editing (up to 8 tabs)
-\   - VFS-based file I/O (ramdisk)
+\   - VFS-based file I/O (MP64FS disk)
 \   - CSS styled title bar, status bar, editor
 \   - Toast notifications for save/open feedback
 \   - Clipboard (copy/cut/paste/select-all)
@@ -22,6 +22,7 @@ REQUIRE tui/widgets/tabs.f
 REQUIRE tui/widgets/explorer.f
 REQUIRE utils/clipboard.f
 REQUIRE utils/string.f
+REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 \ ============================================================
 \  §1 — UIDL Document (built in a static buffer)
@@ -954,11 +955,13 @@ VARIABLE _pad-pr-u
         ." [pad] VFS arena alloc failed" CR EXIT
     THEN
     _pad-arena !
-    _pad-arena @ VFS-RAM-VTABLE VFS-NEW
+    \ Mount the boot disk (MP64FS) as the editor's filesystem
+    _pad-arena @ VMP-NEW
     DUP _pad-vfs !
     VFS-USE
-    \ Create a sample welcome file so explorer has content
-    S" welcome.txt" _pad-vfs @ VFS-MKFILE DROP ;
+    _pad-vfs @ VMP-INIT IF
+        ." [pad] disk mount failed" CR EXIT
+    THEN ;
 
 \ ============================================================
 \  §18 — Init: APP-INIT, UTUI-LOAD, create widgets, register
