@@ -1,7 +1,7 @@
 # akashic/tui/widgets/tabs.f — Tabbed Panel Widget
 
 **Layer:** 4B  
-**Lines:** 282  
+**Lines:** 350  
 **Prefix:** `TAB-` (public), `_TAB-` (internal)  
 **Provider:** `akashic-tui-tabs`  
 **Dependencies:** `widget.f`, `draw.f`, `box.f`, `region.f`, `keys.f`
@@ -44,11 +44,12 @@ bar, row 1 for an underline, and rows 2..h-1 for tab content regions
 | `TAB-NEW` | `( rgn -- widget )` | Create empty tab container |
 | `TAB-FREE` | `( widget -- )` | Free entry array and descriptor |
 
-### Adding Tabs
+### Adding / Removing Tabs
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `TAB-ADD` | `( label-a label-u widget -- content-rgn )` | Add tab; returns content region |
+| `TAB-REMOVE` | `( index widget -- )` | Remove tab at index; shifts entries, adjusts active |
 
 ### Selection
 
@@ -56,6 +57,13 @@ bar, row 1 for an underline, and rows 2..h-1 for tab content regions
 |------|-------|-------------|
 | `TAB-SELECT` | `( index widget -- )` | Switch to tab at index |
 | `TAB-ACTIVE` | `( widget -- index )` | Get active tab index |
+
+### Labels
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `TAB-LABEL!` | `( label-a label-u index widget -- )` | Update label of existing tab |
+| `TAB-LABEL@` | `( index widget -- label-a label-u )` | Get label string of tab |
 
 ### Content
 
@@ -114,3 +122,11 @@ See [uidl-tui.md](../uidl-tui.md) for the full backend design.
   `CELL-A-REVERSE` attribute; inactive tabs use normal attributes.
 - **Tab separator.** A vertical line (`│`, U+2502) separates adjacent
   tab labels; an underline (`─`, U+2500) runs across row 1.
+- **TAB-REMOVE active adjustment.** When removing a tab before the
+  active one, `active` is decremented so it continues to track the
+  same content.  When removing the active tab itself (or when active
+  overshoots after the removal), it is clamped to `count-1`.
+- **Label pointers are not copied.** `TAB-ADD` and `TAB-LABEL!` store
+  the label address directly; they do **not** copy the string.
+  Callers must ensure the label storage outlives the tab (e.g.
+  dictionary strings via `CREATE`, not transient `S"` buffers).

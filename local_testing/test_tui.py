@@ -2337,6 +2337,139 @@ def test_tab_count():
          'DUP TAB-COUNT . 8888 .',
          'TAB-FREE RGN-FREE SCR-FREE'], "0 8888")
 
+def test_tab_remove_last():
+    """TAB-REMOVE on last tab leaves count=2, active clamped."""
+    print("\n── TABS remove last ──")
+    check("remove tab 2 (last), count→2, active clamped to 1",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" A" 2 PICK TAB-ADD DROP',
+         'S" B" 2 PICK TAB-ADD DROP',
+         'S" C" 2 PICK TAB-ADD DROP',
+         '2 OVER TAB-SELECT',
+         '2 OVER TAB-REMOVE',
+         'DUP TAB-COUNT . DUP TAB-ACTIVE . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "2 1 8888")
+
+def test_tab_remove_first():
+    """TAB-REMOVE on first tab shifts entries down."""
+    print("\n── TABS remove first ──")
+    check("remove tab 0, count→2, active→0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" A" 2 PICK TAB-ADD DROP',
+         'S" B" 2 PICK TAB-ADD DROP',
+         'S" C" 2 PICK TAB-ADD DROP',
+         '1 OVER TAB-SELECT',
+         '0 OVER TAB-REMOVE',
+         'DUP TAB-COUNT . DUP TAB-ACTIVE . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "2 0 8888")
+
+def test_tab_remove_middle():
+    """TAB-REMOVE on middle tab shifts entries, clamps active."""
+    print("\n── TABS remove middle ──")
+    check("remove tab 1 of 3, count→2",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" A" 2 PICK TAB-ADD DROP',
+         'S" B" 2 PICK TAB-ADD DROP',
+         'S" C" 2 PICK TAB-ADD DROP',
+         '2 OVER TAB-SELECT',
+         '1 OVER TAB-REMOVE',
+         'DUP TAB-COUNT . DUP TAB-ACTIVE . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "2 1 8888")
+
+def test_tab_remove_active_is_removed():
+    """TAB-REMOVE on active tab clamps active down."""
+    print("\n── TABS remove active ──")
+    check("active=1, remove 1, active clamps to 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" A" 2 PICK TAB-ADD DROP',
+         'S" B" 2 PICK TAB-ADD DROP',
+         '1 OVER TAB-SELECT',
+         '1 OVER TAB-REMOVE',
+         'DUP TAB-COUNT . DUP TAB-ACTIVE . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "1 0 8888")
+
+def test_tab_remove_all():
+    """TAB-REMOVE all tabs leaves count=0, active=0."""
+    print("\n── TABS remove all ──")
+    check("remove both tabs",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" A" 2 PICK TAB-ADD DROP',
+         'S" B" 2 PICK TAB-ADD DROP',
+         '0 OVER TAB-REMOVE',
+         '0 OVER TAB-REMOVE',
+         'DUP TAB-COUNT . DUP TAB-ACTIVE . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "0 0 8888")
+
+def test_tab_remove_oob():
+    """TAB-REMOVE with out-of-bounds index is a no-op."""
+    print("\n── TABS remove OOB ──")
+    check("remove index=5 of 2 tabs, count stays 2",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" A" 2 PICK TAB-ADD DROP',
+         'S" B" 2 PICK TAB-ADD DROP',
+         '5 OVER TAB-REMOVE',
+         'DUP TAB-COUNT . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "2 8888")
+
+def test_tab_label_set():
+    """TAB-LABEL! updates the label string."""
+    print("\n── TABS label set ──")
+    check("set label of tab 0 to 'New'",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" Old" 2 PICK TAB-ADD DROP',
+         'S" New" 0 3 PICK TAB-LABEL!',
+         '0 OVER TAB-LABEL@ TYPE 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "New8888")
+
+def test_tab_label_get():
+    """TAB-LABEL@ reads back the label string."""
+    print("\n── TABS label get ──")
+    check("read label of tab 1",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" Alpha" 2 PICK TAB-ADD DROP',
+         'S" Beta"  2 PICK TAB-ADD DROP',
+         '1 OVER TAB-LABEL@ TYPE 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "Beta8888")
+
+def test_tab_remove_preserves_labels():
+    """After TAB-REMOVE, remaining tab labels are correct."""
+    print("\n── TABS remove preserves labels ──")
+    # Use CREATE for stable string storage (S" is transient in KDOS)
+    check("remove tab 0, tab 'B' becomes index 0",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'CREATE _sa 65 C,',
+         'CREATE _sb 66 C,',
+         'CREATE _sc 67 C,',
+         '_sa 1 2 PICK TAB-ADD DROP',
+         '_sb 1 2 PICK TAB-ADD DROP',
+         '_sc 1 2 PICK TAB-ADD DROP',
+         '0 OVER TAB-REMOVE',
+         '0 OVER TAB-LABEL@ TYPE 1 OVER TAB-LABEL@ TYPE 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "BC8888")
+
+def test_tab_draw_after_remove():
+    """Drawing after TAB-REMOVE does not crash."""
+    print("\n── TABS draw after remove ──")
+    check("add 3, remove 1, draw",
+        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+         '0 0 10 40 RGN-NEW DUP TAB-NEW',
+         'S" A" 2 PICK TAB-ADD DROP',
+         'S" B" 2 PICK TAB-ADD DROP',
+         'S" C" 2 PICK TAB-ADD DROP',
+         '1 OVER TAB-REMOVE',
+         'DUP WDG-DRAW',
+         'DUP WDG-DIRTY? . 8888 .',
+         'TAB-FREE RGN-FREE SCR-FREE'], "0 8888")
+
 
 # =====================================================================
 #  Menu tests (Layer 4C)
@@ -3485,6 +3618,16 @@ if __name__ == "__main__":
     test_tab_draw()
     test_tab_content()
     test_tab_count()
+    test_tab_remove_last()
+    test_tab_remove_first()
+    test_tab_remove_middle()
+    test_tab_remove_active_is_removed()
+    test_tab_remove_all()
+    test_tab_remove_oob()
+    test_tab_label_set()
+    test_tab_label_get()
+    test_tab_remove_preserves_labels()
+    test_tab_draw_after_remove()
 
     # Menu tests (Layer 4C)
     test_mnu_create()

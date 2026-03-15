@@ -249,6 +249,66 @@ VARIABLE _TAB-HND-W   \ widget saved during handle
 : TAB-COUNT  ( widget -- n )
     _TAB-O-COUNT + @ ;
 
+\ TAB-REMOVE ( index widget -- )
+\   Remove tab at index.  Shifts entries above down by one slot.
+\   Adjusts active index: if removed < active → active-1,
+\   if removed == active or active >= count → clamp.
+\   Does NOT free content region or child widgets.
+VARIABLE _TAB-RM-W
+VARIABLE _TAB-RM-I
+: TAB-REMOVE  ( index widget -- )
+    _TAB-RM-W !
+    \ Bounds check
+    DUP _TAB-RM-W @ _TAB-O-COUNT + @ >= IF DROP EXIT THEN
+    DUP 0< IF DROP EXIT THEN
+    _TAB-RM-I !                                \ save index
+    \ How many entries above this one need shifting?
+    _TAB-RM-W @ _TAB-O-COUNT + @ 1-  _TAB-RM-I @ -   \ ( entries-above )
+    DUP 0> IF
+        \ Shift: src = entry[idx+1], dst = entry[idx], cnt = entries * 24
+        _TAB-RM-I @ 1+ _TAB-RM-W @ SWAP _TAB-ENTRY   \ ( n src )
+        _TAB-RM-I @    _TAB-RM-W @ SWAP _TAB-ENTRY   \ ( n src dst )
+        ROT _TAB-ENTRY-SIZE *                  \ ( src dst cnt )
+        CMOVE                                  \ KDOS: ( src dst cnt )
+    ELSE
+        DROP                                   \ no shift needed (was last)
+    THEN
+    \ Decrement count
+    _TAB-RM-W @ _TAB-O-COUNT + @  1-
+    _TAB-RM-W @ _TAB-O-COUNT + !
+    \ Adjust active index
+    _TAB-RM-W @ _TAB-O-COUNT + @ 0= IF
+        0 _TAB-RM-W @ _TAB-O-ACTIVE + !       \ no tabs left
+    ELSE
+        _TAB-RM-I @ _TAB-RM-W @ _TAB-O-ACTIVE + @ < IF
+            \ removed tab was before active → shift active down
+            _TAB-RM-W @ _TAB-O-ACTIVE + @  1-
+            _TAB-RM-W @ _TAB-O-ACTIVE + !
+        ELSE
+            _TAB-RM-W @ _TAB-O-ACTIVE + @
+            _TAB-RM-W @ _TAB-O-COUNT + @ >= IF
+                _TAB-RM-W @ _TAB-O-COUNT + @ 1-
+                _TAB-RM-W @ _TAB-O-ACTIVE + ! \ clamp to last
+            THEN
+        THEN
+    THEN
+    _TAB-RM-W @ WDG-DIRTY ;
+
+\ TAB-LABEL! ( label-a label-u index widget -- )
+\   Update the label of an existing tab.  Marks widget dirty.
+: TAB-LABEL!  ( label-a label-u index widget -- )
+    DUP >R SWAP _TAB-ENTRY                    \ ( la lu entry  R: widget )
+    ROT OVER _TAB-E-LABEL-A + !               \ ( lu entry )
+    SWAP OVER _TAB-E-LABEL-U + !              \ ( entry )
+    DROP R> WDG-DIRTY ;
+
+\ TAB-LABEL@ ( index widget -- label-a label-u )
+\   Read the label of tab at index.
+: TAB-LABEL@  ( index widget -- label-a label-u )
+    SWAP _TAB-ENTRY
+    DUP _TAB-E-LABEL-A + @
+    SWAP _TAB-E-LABEL-U + @ ;
+
 \ TAB-FREE ( widget -- )
 \   Free the tab entry array and descriptor.
 : TAB-FREE  ( widget -- )
@@ -265,19 +325,25 @@ GUARD _tab-guard
 
 ' TAB-NEW         CONSTANT _tab-new-xt
 ' TAB-ADD         CONSTANT _tab-add-xt
+' TAB-REMOVE      CONSTANT _tab-remove-xt
 ' TAB-SELECT      CONSTANT _tab-select-xt
 ' TAB-ACTIVE      CONSTANT _tab-active-xt
 ' TAB-ON-SWITCH   CONSTANT _tab-onswitch-xt
 ' TAB-CONTENT     CONSTANT _tab-content-xt
 ' TAB-COUNT       CONSTANT _tab-count-xt
+' TAB-LABEL!      CONSTANT _tab-label-s-xt
+' TAB-LABEL@      CONSTANT _tab-label-g-xt
 ' TAB-FREE        CONSTANT _tab-free-xt
 
 : TAB-NEW         _tab-new-xt       _tab-guard WITH-GUARD ;
 : TAB-ADD         _tab-add-xt       _tab-guard WITH-GUARD ;
+: TAB-REMOVE      _tab-remove-xt    _tab-guard WITH-GUARD ;
 : TAB-SELECT      _tab-select-xt    _tab-guard WITH-GUARD ;
 : TAB-ACTIVE      _tab-active-xt    _tab-guard WITH-GUARD ;
 : TAB-ON-SWITCH   _tab-onswitch-xt  _tab-guard WITH-GUARD ;
 : TAB-CONTENT     _tab-content-xt   _tab-guard WITH-GUARD ;
 : TAB-COUNT       _tab-count-xt     _tab-guard WITH-GUARD ;
+: TAB-LABEL!      _tab-label-s-xt   _tab-guard WITH-GUARD ;
+: TAB-LABEL@      _tab-label-g-xt   _tab-guard WITH-GUARD ;
 : TAB-FREE        _tab-free-xt      _tab-guard WITH-GUARD ;
 [THEN] [THEN]
