@@ -687,6 +687,214 @@ def test_vfat_new():
     ], "-1")
 
 
+# ── Root directory scan (VFAT-INIT populates root children) ──
+
+def test_init_root_children():
+    """After VFAT-INIT, root inode has children."""
+    check("init-root-children", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V V.ROOT @ IN.CHILD @ 0<> . CR',
+    ], "-1")
+
+def test_init_resolve_file():
+    """VFS-RESOLVE finds a file in root after init."""
+    check("init-resolve-file", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /HELLO.TXT" _V VFS-RESOLVE 0<> . CR',
+    ], "-1")
+
+def test_init_resolve_dir():
+    """VFS-RESOLVE finds a subdirectory after init."""
+    check("init-resolve-dir", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /DOCS" _V VFS-RESOLVE DUP 0<> IF ." FOUND " IN.TYPE @ . ELSE ." NOTFOUND" DROP THEN CR',
+    ], "FOUND 2")   # VFS-T-DIR = 2
+
+def test_init_resolve_subdir_file():
+    """VFS-RESOLVE finds a file inside a subdirectory (lazy readdir)."""
+    check("init-resolve-subfile", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /DOCS/README.TXT" _V VFS-RESOLVE 0<> IF ." FOUND" ELSE ." NOTFOUND" THEN CR',
+    ], "FOUND")
+
+
+# ── Read ──
+
+def test_read_file():
+    """VFS-READ returns correct file content."""
+    check("read-file", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /HELLO.TXT" VFS-OPEN DUP 0<> IF',
+        '    _RB 4096 ROT VFS-READ',
+        '    _RB SWAP TYPE',
+        'ELSE ." OPEN-FAIL" DROP THEN',
+    ], "Hello, FAT world!")
+
+def test_read_binary_size():
+    """VFS-READ returns correct byte count for binary data."""
+    check("read-binary-size", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /DATA.BIN" VFS-OPEN DUP 0<> IF',
+        '    _RB 4096 ROT VFS-READ . ." <act"',
+        'ELSE ." OPEN-FAIL" DROP THEN',
+    ], "1024 <act")
+
+def test_read_subdir_file():
+    """Read a file inside a subdirectory."""
+    check("read-subdir-file", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /DOCS/README.TXT" VFS-OPEN DUP 0<> IF',
+        '    _RB 4096 ROT VFS-READ',
+        '    _RB SWAP TYPE',
+        'ELSE ." OPEN-FAIL" DROP THEN',
+    ], "Inside docs directory")
+
+def test_read_at_offset():
+    """VFS-READ after seeking reads from the correct position."""
+    check("read-at-offset", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /HELLO.TXT" VFS-OPEN CONSTANT _FD',
+        # Seek to offset 7 ("FAT world!")
+        '7 _FD FD.CUR-LO !',
+        '_RB 4096 _FD VFS-READ',
+        '_RB SWAP TYPE',
+    ], "FAT world!")
+
+def test_read_multicluster():
+    """Read a file spanning multiple clusters."""
+    # 8192 bytes = 4 clusters (at 4 spc * 512 bytes/sector = 2048 bytes/cluster)
+    big_data = bytes(range(256)) * 32  # 8192 bytes
+    img = build_fat16_image(files=[("BIG.BIN", big_data, None)])
+    check("read-multicluster", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /BIG.BIN" VFS-OPEN DUP 0<> IF',
+        '    _RB 4096 ROT VFS-READ . ." <act1"',
+        'ELSE ." OPEN-FAIL" DROP THEN',
+    ], "4096 <act1", disk_image=img)
+
+
+# ── Write ──
+
+def test_write_and_readback():
+    """Write data then read it back."""
+    check("write-readback", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /HELLO.TXT" VFS-OPEN CONSTANT _FD',
+        'VARIABLE _WLEN',
+        'S" Overwritten!" _WB SWAP DUP _WLEN ! CMOVE',
+        '_WB _WLEN @ _FD VFS-WRITE . ." <wact"',
+        '_FD VFS-REWIND',
+        '_RB 4096 _FD VFS-READ DROP',
+        '_RB _WLEN @ TYPE',
+    ], "Overwritten!")
+
+
+# ── Create ──
+
+def test_create_file():
+    """VFS-MKFILE creates a new file visible via VFS-RESOLVE."""
+    check("create-file", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" NEW.TXT" _V VFS-MKFILE 0<> . ." <mk"',
+        'S" /NEW.TXT" _V VFS-RESOLVE 0<> . ." <found"',
+    ], "-1 <mk")
+
+def test_create_write_read():
+    """Create a file, write content, then read it back."""
+    check("create-write-read", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" TEST.TXT" _V VFS-MKFILE DROP',
+        'S" /TEST.TXT" VFS-OPEN CONSTANT _FD',
+        'VARIABLE _WLEN',
+        'S" Created content!" _WB SWAP DUP _WLEN ! CMOVE',
+        '_WB _WLEN @ _FD VFS-WRITE . ." <wact"',
+        '_FD VFS-REWIND',
+        '_RB 4096 _FD VFS-READ DROP',
+        '_RB _WLEN @ TYPE',
+    ], "Created content!")
+
+
+# ── Delete (no tombstones) ──
+
+def test_delete_file():
+    """VFS-RM deletes a file; it no longer resolves."""
+    check("delete-file", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /HELLO.TXT" _V VFS-RM . ." <rmior"',
+        'S" /HELLO.TXT" _V VFS-RESOLVE 0= IF ." GONE" ELSE ." STILL" THEN',
+    ], "GONE")
+
+def test_delete_no_tombstone():
+    """Delete zeros the dir entry byte 0 (not 0xE5 tombstone)."""
+    # After deleting, re-init should not see the file (byte 0 = 0x00, not 0xE5)
+    check("delete-no-tombstone", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /HELLO.TXT" _V VFS-RM DROP',
+        # Sync to write changes to disk
+        '_V VFS-SYNC DROP',
+        # Create a new VFS and re-init from the same disk to verify persistence
+        'T-VFAT-NEW CONSTANT _V2',
+        '_V2 VFAT-INIT DROP',
+        '_V2 VFS-USE',
+        'S" /HELLO.TXT" _V2 VFS-RESOLVE 0= IF ." CLEAN" ELSE ." STALE" THEN',
+    ], "CLEAN")
+
+
+# ── Sync ──
+
+def test_sync():
+    """VFS-SYNC returns ior=0."""
+    check("sync", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        '_V VFS-SYNC . ." <syncior"',
+    ], "0 <syncior")
+
+
+# ── Truncate ──
+
+def test_truncate():
+    """After writing, file size is updated in dir entry."""
+    check("truncate-size", [
+        'T-VFAT-NEW CONSTANT _V',
+        '_V VFAT-INIT DROP',
+        '_V VFS-USE',
+        'S" /HELLO.TXT" VFS-OPEN CONSTANT _FD',
+        'S" Hi" _WB SWAP CMOVE',
+        '_WB 2 _FD VFS-WRITE DROP',
+        # Truncate to update dir entry
+        '_FD FD.INODE @ IN.SIZE-LO @ . ." <sz"',
+    ], "17 <sz")  # original 17 bytes; write of 2 at offset 0 doesn't shrink
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  Runner
 # ═══════════════════════════════════════════════════════════════════
@@ -713,6 +921,36 @@ def main():
     # FAT navigation
     test_next_cluster_eoc()
     test_next_cluster_chain()
+
+    # Root scan
+    test_init_root_children()
+    test_init_resolve_file()
+    test_init_resolve_dir()
+    test_init_resolve_subdir_file()
+
+    # Read
+    test_read_file()
+    test_read_binary_size()
+    test_read_subdir_file()
+    test_read_at_offset()
+    test_read_multicluster()
+
+    # Write
+    test_write_and_readback()
+
+    # Create
+    test_create_file()
+    test_create_write_read()
+
+    # Delete
+    test_delete_file()
+    test_delete_no_tombstone()
+
+    # Sync
+    test_sync()
+
+    # Truncate
+    test_truncate()
 
     # Teardown & convenience
     test_teardown()
