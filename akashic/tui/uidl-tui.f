@@ -61,23 +61,28 @@ REQUIRE ../css/css.f
 REQUIRE color.f
 
 \ =====================================================================
-\  §1 — TUI Sidecar (per-element, 56 bytes)
+\  §1 — TUI Sidecar (per-element, 80 bytes)
 \ =====================================================================
 \
 \  Parallel array indexed by element pool index:
 \    elem-index = (elem – _UDL-ELEMS) / _UDL-ELEMSZ
-\    sidecar    = elem-index × 56 + _UTUI-SIDECARS
+\    sidecar    = elem-index × 80 + _UTUI-SIDECARS
 \
 \  Fields:
 \    +0  row     Computed row in screen coordinates (cell)
 \    +8  col     Computed column (cell)
 \   +16  width   Computed width (cells)
 \   +24  height  Computed height (cells)
-\   +32  style   Packed: fg(8) bg(8) attrs(8) border(8)
-\   +40  flags   Bit 0=has-sidecar, 1=visible, 2=focused
+\   +32  style   Packed: fg(8) bg(8) attrs(8) text-align(2) position(2)
+\                        z-index(8) reserved(22)
+\   +40  flags   Bit 0=has, 1=visible, 2=focused, 3=display-none,
+\                    4=overflow-clip
 \   +48  wptr    Widget struct pointer (0 = none)
+\   +56  padding Packed: PT(8) PR(8) PB(8) PL(8) in bits 0–31
+\   +64  offsets Packed: top(16s) right(16s) bottom(16s) left(16s)
+\   +72  margin  Packed: MT(8) MR(8) MB(8) ML(8) in bits 0–31
 
-56 CONSTANT _UTUI-SC-SZ
+80 CONSTANT _UTUI-SC-SZ
 256 CONSTANT _UTUI-MAX-ELEMS
 CREATE _UTUI-SIDECARS  _UTUI-MAX-ELEMS _UTUI-SC-SZ * ALLOT
 
@@ -89,11 +94,15 @@ CREATE _UTUI-SIDECARS  _UTUI-MAX-ELEMS _UTUI-SC-SZ * ALLOT
 32 CONSTANT _UTUI-SC-O-STYLE
 40 CONSTANT _UTUI-SC-O-FLAGS
 48 CONSTANT _UTUI-SC-O-WPTR
+56 CONSTANT _UTUI-SC-O-PAD
+64 CONSTANT _UTUI-SC-O-OFFS
+72 CONSTANT _UTUI-SC-O-MARGIN
 
 \ Sidecar flag bits
 1 CONSTANT _UTUI-SCF-HAS     \ sidecar allocated
 2 CONSTANT _UTUI-SCF-VIS     \ visible
 4 CONSTANT _UTUI-SCF-FOC     \ focused
+8 CONSTANT _UTUI-SCF-HIDE    \ display:none
 
 \ =====================================================================
 \  §1a — Element → Sidecar mapping
@@ -124,9 +133,63 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : _UTUI-SC-WPTR@  ( sc -- p ) _UTUI-SC-O-WPTR  + @ ;
 : _UTUI-SC-WPTR!  ( p sc -- ) _UTUI-SC-O-WPTR  + ! ;
 
-\ Visibility predicate
+\ New sidecar field accessors (padding, offsets, margin)
+: _UTUI-SC-PAD@    ( sc -- n ) _UTUI-SC-O-PAD    + @ ;
+: _UTUI-SC-PAD!    ( n sc -- ) _UTUI-SC-O-PAD    + ! ;
+: _UTUI-SC-OFFS@   ( sc -- n ) _UTUI-SC-O-OFFS   + @ ;
+: _UTUI-SC-OFFS!   ( n sc -- ) _UTUI-SC-O-OFFS   + ! ;
+: _UTUI-SC-MARGIN@ ( sc -- n ) _UTUI-SC-O-MARGIN + @ ;
+: _UTUI-SC-MARGIN! ( n sc -- ) _UTUI-SC-O-MARGIN + ! ;
+
+\ Visibility predicate — also checks display:none (HIDE flag)
 : _UTUI-SC-VIS?  ( sc -- flag )
-    _UTUI-SC-FLAGS@ _UTUI-SCF-VIS AND 0<> ;
+    _UTUI-SC-FLAGS@
+    DUP _UTUI-SCF-VIS AND 0<>
+    SWAP _UTUI-SCF-HIDE AND 0= AND ;
+
+\ Style-field extended accessors (bits 24+ in the style cell)
+\ text-align: bits 24-25  (0=left, 1=center, 2=right)
+: _UTUI-SC-TALIGN@ ( sc -- align )
+    _UTUI-SC-STYLE@ 24 RSHIFT 3 AND ;
+\ position:   bits 26-27  (0=static, 1=absolute, 2=fixed)
+: _UTUI-SC-POS@    ( sc -- pos )
+    _UTUI-SC-STYLE@ 26 RSHIFT 3 AND ;
+\ z-index:    bits 28-35  (unsigned 0-255)
+: _UTUI-SC-ZIDX@   ( sc -- z )
+    _UTUI-SC-STYLE@ 28 RSHIFT 255 AND ;
+
+\ Pack/unpack 4 unsigned bytes (T R B L) for padding / margin
+\   Packing: top in bits 0-7, right in bits 8-15,
+\            bottom in bits 16-23, left in bits 24-31
+: _UTUI-PACK-TRBL  ( t r b l -- packed )
+    24 LSHIFT SWAP 16 LSHIFT OR SWAP 8 LSHIFT OR SWAP OR ;
+
+: _UTUI-UNPACK-TRBL  ( packed -- t r b l )
+    DUP 255 AND                     \ top
+    OVER 8 RSHIFT 255 AND          \ right
+    2 PICK 16 RSHIFT 255 AND       \ bottom
+    3 PICK 24 RSHIFT 255 AND       \ left
+    >R >R >R NIP R> R> R> ;        \ clean the original, leave t r b l
+
+\ Pack/unpack 4 signed 16-bit offsets for position offsets
+\   Packing: top bits 0-15, right bits 16-31,
+\            bottom bits 32-47, left bits 48-63
+: _UTUI-PACK-OFFS  ( top right bottom left -- packed )
+    0xFFFF AND 48 LSHIFT
+    SWAP 0xFFFF AND 32 LSHIFT OR
+    SWAP 0xFFFF AND 16 LSHIFT OR
+    SWAP 0xFFFF AND OR ;
+
+\ Sign-extend a 16-bit value to cell
+: _UTUI-SEXT16  ( u16 -- signed )
+    DUP 0x8000 AND IF 0xFFFFFFFFFFFF0000 OR THEN ;
+
+: _UTUI-UNPACK-OFFS  ( packed -- top right bottom left )
+    DUP 0xFFFF AND _UTUI-SEXT16                  \ top
+    OVER 16 RSHIFT 0xFFFF AND _UTUI-SEXT16       \ right
+    2 PICK 32 RSHIFT 0xFFFF AND _UTUI-SEXT16     \ bottom
+    3 PICK 48 RSHIFT 0xFFFF AND _UTUI-SEXT16     \ left
+    >R >R >R NIP R> R> R> ;
 
 \ Unpack style → fg bg attrs
 : _UTUI-UNPACK-STYLE  ( style -- fg bg attrs )
@@ -458,9 +521,14 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
 \ --- Label ---
 : _UTUI-RENDER-LABEL  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    _UTUI-DISPLAY-TEXT                 ( a l )
-    _UR-W @ MIN                        \ clip to width
-    _UR-ROW @ _UR-COL @ DRW-TEXT ;
+    _UTUI-FILL-BG                              \ fill full rect with bg color
+    DUP _UTUI-SIDECAR _UTUI-SC-TALIGN@    ( elem align )
+    SWAP _UTUI-DISPLAY-TEXT                ( align a l )
+    _UR-W @ MIN                            \ clip to width
+    ROT                                    ( a l' align )
+    DUP 1 = IF DROP _UR-ROW @ _UR-COL @ _UR-W @ DRW-TEXT-CENTER EXIT THEN
+    DUP 2 = IF DROP _UR-ROW @ _UR-COL @ _UR-W @ DRW-TEXT-RIGHT  EXIT THEN
+    DROP _UR-ROW @ _UR-COL @ DRW-TEXT ;
 
 \ --- Action button ---
 : _UTUI-RENDER-ACTION  ( elem -- )
@@ -781,8 +849,39 @@ VARIABLE _UL-LEAF-ROWS   \ pre-counted leaf row total
     ELSE -1 THEN ;
 
 \ Helper: action elements are invisible layout-wise (key bindings).
+\   Also skips positioned elements (absolute/fixed) pulled out of flow
+\   and display:none elements (HIDE flag set by pre-layout style pass).
 : _UL-SKIP-LAYOUT?  ( elem -- flag )
-    UIDL-TYPE UIDL-T-ACTION = ;
+    DUP UIDL-TYPE UIDL-T-ACTION = IF DROP -1 EXIT THEN
+    DUP _UTUI-SIDECAR _UTUI-SC-FLAGS@ _UTUI-SCF-HIDE AND IF DROP -1 EXIT THEN
+    _UTUI-SIDECAR _UTUI-SC-POS@ 0<> ;
+
+\ Helper: adjust _UL-ROW/COL/W/H content area by parent padding.
+\   Call after loading _UL-ROW/COL/W/H from parent sidecar.
+\   Does nothing when padding is 0 (fast path).
+VARIABLE _ULP-T  VARIABLE _ULP-R  VARIABLE _ULP-B  VARIABLE _ULP-L
+
+: _UL-APPLY-PAD  ( -- )
+    _UL-SC @ _UTUI-SC-PAD@            ( packed )
+    DUP 0= IF DROP EXIT THEN          \ fast path: no padding
+    _UTUI-UNPACK-TRBL                  ( pt pr pb pl )
+    _ULP-L !  _ULP-B !  _ULP-R !  _ULP-T !
+    _ULP-T @  _UL-ROW +!              \ row += padding-top
+    _ULP-L @  _UL-COL +!              \ col += padding-left
+    _UL-W @  _ULP-L @ -  _ULP-R @ -  DUP 0< IF DROP 0 THEN  _UL-W !
+    _UL-H @  _ULP-T @ -  _ULP-B @ -  DUP 0< IF DROP 0 THEN  _UL-H ! ;
+
+\ Temp vars for child margin during layout
+VARIABLE _ULM-T  VARIABLE _ULM-R  VARIABLE _ULM-B  VARIABLE _ULM-L
+
+\ Helper: read child sidecar margin into _ULM-* vars. Zero if none.
+: _UL-READ-CHILD-MARGIN  ( csc -- )
+    _UTUI-SC-MARGIN@
+    DUP 0= IF DROP
+        0 _ULM-T !  0 _ULM-R !  0 _ULM-B !  0 _ULM-L !
+    ELSE
+        _UTUI-UNPACK-TRBL  _ULM-L !  _ULM-B !  _ULM-R !  _ULM-T !
+    THEN ;
 
 \ --- Stack layout (vertical) ---
 \  Two-pass: first count leaf rows, then give containers the remainder.
@@ -793,6 +892,7 @@ VARIABLE _UL-LEAF-ROWS   \ pre-counted leaf row total
     _UL-SC @ _UTUI-SC-COL@ _UL-COL !
     _UL-SC @ _UTUI-SC-W@   _UL-W !
     _UL-SC @ _UTUI-SC-H@   _UL-H !
+    _UL-APPLY-PAD                      \ adjust content area for padding
     _UL-ROW @ _UL-POS !
 
     \ Pass 1: count rows consumed by leaf children (skip actions)
@@ -813,7 +913,7 @@ VARIABLE _UL-LEAF-ROWS   \ pre-counted leaf row total
         DUP _UTUI-SIDECAR             ( child csc )
         OVER UIDL-EVAL-WHEN IF
             OVER _UL-SKIP-LAYOUT? IF
-                \ Action: give it sidecar flags but 0 height
+                \ Action/positioned: give it sidecar flags but 0 height
                 _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
                 _UL-POS @ OVER _UTUI-SC-ROW!
                 _UL-COL @ OVER _UTUI-SC-COL!
@@ -821,10 +921,15 @@ VARIABLE _UL-LEAF-ROWS   \ pre-counted leaf row total
                 0 OVER _UTUI-SC-H!
                 DROP
             ELSE
+                DUP _UL-READ-CHILD-MARGIN
+                _ULM-T @ _UL-POS +!       \ advance pos by margin-top
+
                 _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
                 _UL-POS @ OVER _UTUI-SC-ROW!
-                _UL-COL @ OVER _UTUI-SC-COL!
-                _UL-W @   OVER _UTUI-SC-W!
+                _UL-COL @ _ULM-L @ + OVER _UTUI-SC-COL!
+                _UL-W @ _ULM-L @ - _ULM-R @ -
+                DUP 0< IF DROP 0 THEN
+                OVER _UTUI-SC-W!
                 \ Height: 1 for leaf, remaining (minus leaf rows) for containers
                 OVER _UL-IS-LEAF? IF
                     1
@@ -837,6 +942,7 @@ VARIABLE _UL-LEAF-ROWS   \ pre-counted leaf row total
                 _UL-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
                 DROP                       ( child )
                 DUP _UTUI-SIDECAR _UTUI-SC-H@ _UL-POS +!
+                _ULM-B @ _UL-POS +!       \ advance pos by margin-bottom
             THEN
         ELSE
             _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
@@ -856,6 +962,7 @@ VARIABLE _UL-CW   \ child width for flex
     _UL-SC @ _UTUI-SC-COL@ _UL-COL !
     _UL-SC @ _UTUI-SC-W@   _UL-W !
     _UL-SC @ _UTUI-SC-H@   _UL-H !
+    _UL-APPLY-PAD                      \ adjust content area for padding
     _UL-COL @ _UL-POS !
 
     \ Count visible children
@@ -871,14 +978,21 @@ VARIABLE _UL-CW   \ child width for flex
     BEGIN DUP 0<> WHILE
         DUP _UTUI-SIDECAR             ( child csc )
         OVER UIDL-EVAL-WHEN IF
+            DUP _UL-READ-CHILD-MARGIN
+            _ULM-L @ _UL-POS +!       \ advance pos by margin-left
+
             _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
-            _UL-ROW @ OVER _UTUI-SC-ROW!
+            _UL-ROW @ _ULM-T @ + OVER _UTUI-SC-ROW!
             _UL-POS @ OVER _UTUI-SC-COL!
-            _UL-CW @  OVER _UTUI-SC-W!
-            _UL-H @   OVER _UTUI-SC-H!
+            _UL-CW @ _ULM-L @ - _ULM-R @ -
+            DUP 0< IF DROP 0 THEN
+            OVER _UTUI-SC-W!
+            _UL-H @ _ULM-T @ - _ULM-B @ -
+            DUP 0< IF DROP 0 THEN
+            OVER _UTUI-SC-H!
             _UL-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
             DROP                       ( child )
-            _UL-CW @ _UL-POS +!
+            _UL-CW @ _ULM-R @ + _UL-POS +!  \ advance by width + margin-right
         ELSE
             _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
             DROP                       ( child )
@@ -902,6 +1016,7 @@ VARIABLE _UL-CW   \ child width for flex
     _UL-SC @ _UTUI-SC-COL@ _UL-COL !
     _UL-SC @ _UTUI-SC-W@   _UL-W !
     _UL-SC @ _UTUI-SC-H@   _UL-H !
+    _UL-APPLY-PAD                      \ adjust content area for padding
 
     \ Get active tab index from wptr state (default 0)
     _UL-SC @ _UTUI-SC-WPTR@
@@ -939,11 +1054,27 @@ VARIABLE _UL-CW   \ child width for flex
 \ --- Split layout: divide by ratio= ---
 VARIABLE _USP-ELEM  VARIABLE _USP-SC
 VARIABLE _USP-RATIO VARIABLE _USP-LW  VARIABLE _USP-RW
+VARIABLE _USP-ROW   VARIABLE _USP-COL  VARIABLE _USP-SW  VARIABLE _USP-SH
+
+\ Helper: read split parent sidecar dims + apply padding
+: _USP-READ-PAD  ( -- )
+    _USP-SC @ _UTUI-SC-ROW@ _USP-ROW !
+    _USP-SC @ _UTUI-SC-COL@ _USP-COL !
+    _USP-SC @ _UTUI-SC-W@   _USP-SW !
+    _USP-SC @ _UTUI-SC-H@   _USP-SH !
+    _USP-SC @ _UTUI-SC-PAD@
+    DUP 0= IF DROP EXIT THEN
+    _UTUI-UNPACK-TRBL  _ULP-L !  _ULP-B !  _ULP-R !  _ULP-T !
+    _ULP-T @  _USP-ROW +!
+    _ULP-L @  _USP-COL +!
+    _USP-SW @  _ULP-L @ -  _ULP-R @ -  DUP 0< IF DROP 0 THEN  _USP-SW !
+    _USP-SH @  _ULP-T @ -  _ULP-B @ -  DUP 0< IF DROP 0 THEN  _USP-SH ! ;
 
 : _UTUI-LAYOUT-SPLIT  ( elem -- )
     _USP-ELEM !
     _USP-ELEM @ _UTUI-SIDECAR _USP-SC !
     _USP-SC @ _UTUI-SC-VIS? 0= IF EXIT THEN
+    _USP-READ-PAD
 
     \ Read ratio= (default 50)
     _USP-ELEM @ S" ratio" UIDL-ATTR IF
@@ -952,7 +1083,7 @@ VARIABLE _USP-RATIO VARIABLE _USP-LW  VARIABLE _USP-RW
     _USP-RATIO !
 
     \ Compute left/right widths
-    _USP-SC @ _UTUI-SC-W@
+    _USP-SW @
     DUP _USP-RATIO @ * 100 / _USP-LW !
     _USP-LW @ - 1 -
     DUP 0< IF DROP 0 THEN
@@ -964,10 +1095,10 @@ VARIABLE _USP-RATIO VARIABLE _USP-LW  VARIABLE _USP-RW
     DUP _UTUI-SIDECAR                 ( child1 sc1 )
     OVER UIDL-EVAL-WHEN IF            \ OVER gets child1 (elem), not sc1
         _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
-        _USP-SC @ _UTUI-SC-ROW@ OVER _UTUI-SC-ROW!
-        _USP-SC @ _UTUI-SC-COL@ OVER _UTUI-SC-COL!
+        _USP-ROW @ OVER _UTUI-SC-ROW!
+        _USP-COL @ OVER _UTUI-SC-COL!
         _USP-LW @              OVER _UTUI-SC-W!
-        _USP-SC @ _UTUI-SC-H@  OVER _UTUI-SC-H!
+        _USP-SH @              OVER _UTUI-SC-H!
         _USP-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
     ELSE
         _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
@@ -980,10 +1111,10 @@ VARIABLE _USP-RATIO VARIABLE _USP-LW  VARIABLE _USP-RW
     DUP _UTUI-SIDECAR                 ( child2 sc2 )
     OVER UIDL-EVAL-WHEN IF
         _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
-        _USP-SC @ _UTUI-SC-ROW@                      OVER _UTUI-SC-ROW!
-        _USP-SC @ _UTUI-SC-COL@ _USP-LW @ + 1 +     OVER _UTUI-SC-COL!
+        _USP-ROW @                                    OVER _UTUI-SC-ROW!
+        _USP-COL @ _USP-LW @ + 1 +                   OVER _UTUI-SC-COL!
         _USP-RW @                                     OVER _UTUI-SC-W!
-        _USP-SC @ _UTUI-SC-H@                        OVER _UTUI-SC-H!
+        _USP-SH @                                     OVER _UTUI-SC-H!
         _USP-SC @ _UTUI-SC-STYLE@                    OVER _UTUI-SC-STYLE!
     ELSE
         _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
@@ -1024,6 +1155,95 @@ VARIABLE _UDL-DLG-SC
     DUP UIDL-A-FLOW  = IF DROP _UTUI-LAYOUT-FLEX  EXIT THEN
     DUP UIDL-A-GRID  = IF DROP _UTUI-LAYOUT-FLEX  EXIT THEN
     DROP _UTUI-LAYOUT-STACK ;
+
+\ =====================================================================
+\  §7b — Positioned Element Resolution
+\ =====================================================================
+\
+\  After layout + style resolution, resolve absolute/fixed positioned
+\  elements.  These were skipped during flow layout (§7).
+\  - absolute: row/col relative to parent sidecar + offsets
+\  - fixed:    row/col relative to root region + offsets
+\  Width/height default to parent's content area if not explicitly set.
+
+VARIABLE _UPO-SC    VARIABLE _UPO-PSC
+VARIABLE _UPO-POS   VARIABLE _UPO-W   VARIABLE _UPO-H
+VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
+
+: _UTUI-RESOLVE-POS-ELEM  ( elem -- )
+    DUP _UTUI-SIDECAR DUP _UTUI-SC-POS@      ( elem sc pos )
+    DUP 0= IF 2DROP DROP EXIT THEN            \ static → skip
+    _UPO-POS !  _UPO-SC !                     ( elem )
+
+    \ Mark as visible (positioned elements were skipped in flow layout)
+    _UPO-SC @ _UTUI-SC-FLAGS@
+    _UTUI-SCF-HAS _UTUI-SCF-VIS OR OR
+    _UPO-SC @ _UTUI-SC-FLAGS!
+
+    \ Determine reference frame
+    _UPO-POS @ 2 = IF                         \ fixed → root region
+        _UTUI-RGN @ RGN-ROW  _UPO-SC @ _UTUI-SC-ROW!
+        _UTUI-RGN @ RGN-COL  _UPO-SC @ _UTUI-SC-COL!
+        _UTUI-RGN @ RGN-W    _UPO-W !
+        _UTUI-RGN @ RGN-H    _UPO-H !
+    ELSE                                      \ absolute → parent sidecar
+        DUP UIDL-PARENT ?DUP IF
+            _UTUI-SIDECAR _UPO-PSC !
+            _UPO-PSC @ _UTUI-SC-ROW@ _UPO-SC @ _UTUI-SC-ROW!
+            _UPO-PSC @ _UTUI-SC-COL@ _UPO-SC @ _UTUI-SC-COL!
+            _UPO-PSC @ _UTUI-SC-W@   _UPO-W !
+            _UPO-PSC @ _UTUI-SC-H@   _UPO-H !
+        ELSE
+            _UTUI-RGN @ RGN-ROW  _UPO-SC @ _UTUI-SC-ROW!
+            _UTUI-RGN @ RGN-COL  _UPO-SC @ _UTUI-SC-COL!
+            _UTUI-RGN @ RGN-W    _UPO-W !
+            _UTUI-RGN @ RGN-H    _UPO-H !
+        THEN
+    THEN
+    DROP                                      \ drop elem
+
+    \ Unpack offsets
+    _UPO-SC @ _UTUI-SC-OFFS@ _UTUI-UNPACK-OFFS
+    _UPO-OL !  _UPO-OB !  _UPO-OR !  _UPO-OT !
+
+    \ Row = base-row + top offset
+    _UPO-OT @ _UPO-SC @ _UTUI-SC-ROW@ + _UPO-SC @ _UTUI-SC-ROW!
+
+    \ Col = base-col + left offset
+    _UPO-OL @ _UPO-SC @ _UTUI-SC-COL@ + _UPO-SC @ _UTUI-SC-COL!
+
+    \ Width: use CSS width if set, else compute from left+right or parent
+    _UPO-SC @ _UTUI-SC-W@ 0= IF
+        _UPO-W @ _UPO-OL @ - _UPO-OR @ -
+        DUP 1 < IF DROP 1 THEN
+        _UPO-SC @ _UTUI-SC-W!
+    THEN
+
+    \ Height: use CSS height if set, else compute from top+bottom or parent
+    _UPO-SC @ _UTUI-SC-H@ 0= IF
+        _UPO-H @ _UPO-OT @ - _UPO-OB @ -
+        DUP 1 < IF DROP 1 THEN
+        _UPO-SC @ _UTUI-SC-H!
+    THEN ;
+
+\ Walk all elements and resolve positioned ones
+: _UTUI-RESOLVE-POSITIONED  ( -- )
+    UIDL-ROOT ?DUP 0= IF EXIT THEN
+    BEGIN
+        DUP _UTUI-RESOLVE-POS-ELEM
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                ELSE
+                    UIDL-PARENT DUP IF
+                        FALSE
+                    ELSE 0 TRUE THEN
+                THEN
+            UNTIL
+            DUP 0= IF DROP EXIT THEN
+        THEN
+    AGAIN ;
 
 \ =====================================================================
 \  §8 — XT Installation
@@ -1284,20 +1504,28 @@ VARIABLE _UHT-SC
     AGAIN ;
 
 \ =====================================================================
-\  §13 — Paint (Dirty-Rect Repaint)
+\  §13 — Paint (Z-Ordered Repaint)
 \ =====================================================================
+\
+\  Two-pass paint:
+\    Pass 1: Paint all normal-flow elements (z-index == 0 and not dialog).
+\            Defer elements with z-index > 0 or type=dialog to overlay buf.
+\    Pass 2: Sort overlay buffer by z-index ascending, paint each.
 
-VARIABLE _UTUI-PAINT-DLG
+32 CONSTANT _UTUI-MAX-OVERLAYS
+CREATE _UTUI-OVERLAY-BUF  _UTUI-MAX-OVERLAYS 2 * CELLS ALLOT  \ pairs: (elem, z-index)
+VARIABLE _UTUI-OVERLAY-CNT
 
-: _UTUI-PAINT-ELEM  ( elem -- )
-    DUP UIDL-DIRTY? 0= IF DROP EXIT THEN
-    DUP _UTUI-SIDECAR _UTUI-SC-VIS? 0= IF
-        UIDL-CLEAN! EXIT
-    THEN
-    DUP UIDL-TYPE UIDL-T-DIALOG = IF
-        _UTUI-PAINT-DLG !
-        EXIT
-    THEN
+\ Add element to overlay buffer for deferred painting
+: _UTUI-DEFER-OVERLAY  ( elem z-index -- )
+    _UTUI-OVERLAY-CNT @ _UTUI-MAX-OVERLAYS >= IF 2DROP EXIT THEN
+    _UTUI-OVERLAY-CNT @ 2 * CELLS _UTUI-OVERLAY-BUF +
+    SWAP OVER 8 + !                    \ store z-index at +8
+    !                                  \ store elem at +0
+    1 _UTUI-OVERLAY-CNT +! ;
+
+\ Paint a single element (calls its render-xt)
+: _UTUI-RENDER-ONE  ( elem -- )
     DUP UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
         ED.RENDER-XT @ DUP ['] NOOP <> IF
             OVER SWAP EXECUTE
@@ -1305,10 +1533,58 @@ VARIABLE _UTUI-PAINT-DLG
     THEN
     UIDL-CLEAN! ;
 
+: _UTUI-PAINT-ELEM  ( elem -- )
+    DUP UIDL-DIRTY? 0= IF DROP EXIT THEN
+    DUP _UTUI-SIDECAR _UTUI-SC-VIS? 0= IF
+        UIDL-CLEAN! EXIT
+    THEN
+    \ Defer dialogs (always painted on top)
+    DUP UIDL-TYPE UIDL-T-DIALOG = IF
+        DUP _UTUI-SIDECAR _UTUI-SC-ZIDX@
+        DUP 0= IF DROP 255 THEN         \ dialogs default to z-index 255
+        _UTUI-DEFER-OVERLAY
+        EXIT
+    THEN
+    \ Defer elements with z-index > 0
+    DUP _UTUI-SIDECAR _UTUI-SC-ZIDX@ DUP 0<> IF
+        _UTUI-DEFER-OVERLAY
+        EXIT
+    THEN DROP
+    _UTUI-RENDER-ONE ;
+
+\ Simple insertion-sort overlay buffer by z-index (ascending)
+: _UTUI-SORT-OVERLAYS  ( -- )
+    _UTUI-OVERLAY-CNT @ 2 < IF EXIT THEN
+    _UTUI-OVERLAY-CNT @ 1 DO
+        I 2 * CELLS _UTUI-OVERLAY-BUF +
+        DUP @ SWAP 8 + @              ( elem-i zi-i )
+        I 1 - BEGIN
+            DUP 0>= IF
+                DUP 2 * CELLS _UTUI-OVERLAY-BUF + 8 + @
+                2 PICK > IF            \ prev z > current z → shift right
+                    DUP 2 * CELLS _UTUI-OVERLAY-BUF +    ( elem zi j entry-j )
+                    DUP @  SWAP 8 + @                      ( elem zi j ej zj )
+                    3 PICK 1+  2 * CELLS _UTUI-OVERLAY-BUF +
+                    SWAP OVER 8 + ! !                      \ copy j → j+1
+                    1-
+                    -1                 \ continue
+                ELSE
+                    0                  \ stop
+                THEN
+            ELSE 0 THEN
+        UNTIL                          ( elem zi j )
+        1+ 2 * CELLS _UTUI-OVERLAY-BUF +
+        SWAP OVER 8 + ! !             \ store elem, zi in final position
+    LOOP ;
+
 : UTUI-PAINT  ( -- )
     _UTUI-DOC-LOADED @ 0= IF EXIT THEN
-    0 _UTUI-PAINT-DLG !
+    \ Reset to full-screen clip — render words use absolute sidecar
+    \ coordinates, so there must be no region offset active.
+    RGN-ROOT
+    0 _UTUI-OVERLAY-CNT !
     UIDL-ROOT ?DUP 0= IF EXIT THEN
+    \ Pass 1: normal flow elements
     BEGIN
         DUP _UTUI-PAINT-ELEM
         DUP UIDL-FIRST-CHILD ?DUP IF NIP
@@ -1322,14 +1598,13 @@ VARIABLE _UTUI-PAINT-DLG
                 THEN
             UNTIL
             DUP 0= IF DROP
-                \ Deferred dialog render
-                _UTUI-PAINT-DLG @ ?DUP IF
-                    DUP UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
-                        ED.RENDER-XT @ DUP ['] NOOP <> IF
-                            OVER SWAP EXECUTE
-                        ELSE DROP THEN
-                    THEN
-                    UIDL-CLEAN!
+                \ Pass 2: paint deferred overlays in z-order
+                _UTUI-OVERLAY-CNT @ 0> IF
+                    _UTUI-SORT-OVERLAYS
+                    _UTUI-OVERLAY-CNT @ 0 DO
+                        I 2 * CELLS _UTUI-OVERLAY-BUF + @
+                        _UTUI-RENDER-ONE
+                    LOOP
                 THEN
                 EXIT
             THEN
@@ -1530,8 +1805,107 @@ VARIABLE _UDH-SC   \ temp for dialog hide
         THEN
     AGAIN ;
 
+\ _UTUI-CSS-INT ( a u -- n flag )
+\   Parse a simple integer from a CSS value string.
+\   Returns n and -1 if successful, 0 0 otherwise.
+: _UTUI-CSS-INT  ( a u -- n flag )
+    CSS-PARSE-NUMBER 0= IF 2DROP 0 0 EXIT THEN
+    2DROP                        \ discard frac, frac-digits
+    -ROT 2DROP                   \ discard remaining string
+    -1 ;
+
 \ =====================================================================
-\  §16b — CSS style= Attribute Resolution
+\  §16c — Pre-Layout Style Pass
+\ =====================================================================
+\
+\  Before layout, extract layout-affecting CSS properties from style=:
+\    position         → style bits 26-27 (affects flow skip)
+\    display: none    → flags bit 3 (HIDE — affects visibility/flow)
+\    padding          → sidecar +56 (affects content area)
+\    margin           → sidecar +72 (affects spacing)
+\
+\  These must be resolved before layout because the layout engine
+\  needs them to compute positions.  Full visual properties (color,
+\  text-align, z-index, width/height) are resolved post-layout in §16b.
+
+VARIABLE _UPRE-VA  VARIABLE _UPRE-VL  VARIABLE _UPRE-SC  VARIABLE _UPRE-STY
+
+: _UTUI-PRELAYOUT-ELEM  ( elem -- )
+    DUP S" style" UIDL-ATTR 0= IF 2DROP DROP EXIT THEN
+    ROT _UTUI-SIDECAR _UPRE-SC !
+    _UPRE-VL !  _UPRE-VA !
+    _UPRE-SC @ _UTUI-SC-STYLE@  _UPRE-STY !
+
+    \ -- position --
+    _UPRE-VA @ _UPRE-VL @
+    S" position" CSS-DECL-FIND IF
+        2DUP S" absolute" STR-STRI= IF
+            2DROP
+            _UPRE-STY @  0x0C000000 INVERT AND  0x04000000 OR  _UPRE-STY !
+        ELSE 2DUP S" fixed" STR-STRI= IF
+            2DROP
+            _UPRE-STY @  0x0C000000 INVERT AND  0x08000000 OR  _UPRE-STY !
+        ELSE 2DROP THEN THEN
+    ELSE 2DROP THEN
+
+    \ -- display --
+    _UPRE-VA @ _UPRE-VL @
+    S" display" CSS-DECL-FIND IF
+        S" none" STR-STRI= IF
+            _UPRE-SC @ _UTUI-SC-FLAGS@
+            _UTUI-SCF-HIDE OR
+            _UPRE-SC @ _UTUI-SC-FLAGS!
+        THEN
+    ELSE 2DROP THEN
+
+    \ -- padding (shorthand) --
+    _UPRE-VA @ _UPRE-VL @
+    S" padding" CSS-DECL-FIND IF
+        CSS-EXPAND-TRBL DROP             ( t-a t-u r-a r-u b-a b-u l-a l-u )
+        _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ left
+        _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ bottom
+        _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ right
+        _UTUI-CSS-INT IF ELSE DROP 0 THEN         \ top
+        R> R> R>                                    \ top right bottom left
+        _UTUI-PACK-TRBL  _UPRE-SC @ _UTUI-SC-PAD!
+    ELSE 2DROP THEN
+
+    \ -- margin (shorthand) --
+    _UPRE-VA @ _UPRE-VL @
+    S" margin" CSS-DECL-FIND IF
+        CSS-EXPAND-TRBL DROP             ( t-a t-u r-a r-u b-a b-u l-a l-u )
+        _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ left
+        _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ bottom
+        _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ right
+        _UTUI-CSS-INT IF ELSE DROP 0 THEN         \ top
+        R> R> R>                                    \ top right bottom left
+        _UTUI-PACK-TRBL  _UPRE-SC @ _UTUI-SC-MARGIN!
+    ELSE 2DROP THEN
+
+    \ Write back style (position bits)
+    _UPRE-STY @ _UPRE-SC @ _UTUI-SC-STYLE! ;
+
+\ DFS walk: pre-layout style pass
+: _UTUI-PRELAYOUT-STYLES  ( -- )
+    UIDL-ROOT ?DUP 0= IF EXIT THEN
+    BEGIN
+        DUP _UTUI-PRELAYOUT-ELEM
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                ELSE
+                    UIDL-PARENT DUP IF
+                        FALSE
+                    ELSE 0 TRUE THEN
+                THEN
+            UNTIL
+            DUP 0= IF DROP EXIT THEN
+        THEN
+    AGAIN ;
+
+\ =====================================================================
+\  §16b — CSS style= Attribute Resolution (Post-Layout)
 \ =====================================================================
 \
 \ After layout, walk the element tree and resolve inline `style=`
@@ -1541,6 +1915,10 @@ VARIABLE _UDH-SC   \ temp for dialog hide
 \   font-weight:bold → bold bit (bit 16) in attrs
 \   width            → sidecar W (absolute or % of parent)
 \   height           → sidecar H (absolute or % of parent)
+\   text-align       → bits 24-25 in style
+\   z-index          → bits 28-35 in style
+\   position offsets → sidecar +64 (top/right/bottom/left)
+\ Note: position, display, padding, margin are resolved pre-layout (§16c).
 
 VARIABLE _URES-VA    VARIABLE _URES-VL   \ style= value string
 VARIABLE _URES-SC                         \ current sidecar
@@ -1596,6 +1974,88 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     DUP 0 <= IF DROP 1 THEN
     _URES-SC @  _UCD-OFF @ +  ! ;
 
+\ _UTUI-CSS-SET-ALIGN ( val-a val-u -- )
+\   Parse text-align value and set bits 24-25 of style.
+: _UTUI-CSS-SET-ALIGN  ( val-a val-u -- )
+    2DUP S" center" STR-STRI= IF
+        2DROP
+        _URES-STYLE @  0x03000000 INVERT AND  0x01000000 OR  _URES-STYLE !
+        EXIT
+    THEN
+    2DUP S" right" STR-STRI= IF
+        2DROP
+        _URES-STYLE @  0x03000000 INVERT AND  0x02000000 OR  _URES-STYLE !
+        EXIT
+    THEN
+    2DROP ;   \ "left" or unknown → 0 (default)
+
+\ _UTUI-CSS-SET-POSITION ( val-a val-u -- )
+\   Parse position value and set bits 26-27 of style.
+: _UTUI-CSS-SET-POSITION  ( val-a val-u -- )
+    2DUP S" absolute" STR-STRI= IF
+        2DROP
+        _URES-STYLE @  0x0C000000 INVERT AND  0x04000000 OR  _URES-STYLE !
+        EXIT
+    THEN
+    2DUP S" fixed" STR-STRI= IF
+        2DROP
+        _URES-STYLE @  0x0C000000 INVERT AND  0x08000000 OR  _URES-STYLE !
+        EXIT
+    THEN
+    2DROP ;   \ "static" or unknown → 0 (default)
+
+\ _UTUI-CSS-SET-ZINDEX ( val-a val-u -- )
+\   Parse z-index integer (0-255) and set bits 28-35 of style.
+: _UTUI-CSS-SET-ZINDEX  ( val-a val-u -- )
+    _UTUI-CSS-INT 0= IF DROP EXIT THEN
+    DUP 0 < IF DROP 0 THEN
+    255 MIN
+    28 LSHIFT
+    _URES-STYLE @  0xFF0000000 INVERT AND  OR  _URES-STYLE ! ;
+
+\ _UTUI-CSS-SET-PAD ( val-a val-u -- )
+\   Parse padding shorthand (1-4 values) and store in sidecar.
+: _UTUI-CSS-SET-PAD  ( val-a val-u -- )
+    CSS-EXPAND-TRBL DROP             ( t-a t-u r-a r-u b-a b-u l-a l-u )
+    _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ left
+    _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ bottom
+    _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ right
+    _UTUI-CSS-INT IF ELSE DROP 0 THEN         \ top
+    R> R> R>                                    \ top right bottom left
+    _UTUI-PACK-TRBL  _URES-SC @ _UTUI-SC-PAD! ;
+
+\ _UTUI-CSS-SET-MARGIN ( val-a val-u -- )
+\   Parse margin shorthand (1-4 values) and store in sidecar.
+: _UTUI-CSS-SET-MARGIN  ( val-a val-u -- )
+    CSS-EXPAND-TRBL DROP             ( t-a t-u r-a r-u b-a b-u l-a l-u )
+    _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ left
+    _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ bottom
+    _UTUI-CSS-INT IF ELSE DROP 0 THEN >R      \ right
+    _UTUI-CSS-INT IF ELSE DROP 0 THEN         \ top
+    R> R> R>                                    \ top right bottom left
+    _UTUI-PACK-TRBL  _URES-SC @ _UTUI-SC-MARGIN! ;
+
+\ _UTUI-CSS-SET-OFFSET ( val-a val-u shift -- )
+\   Parse a position offset (top/right/bottom/left) and merge into
+\   the offsets cell at the given 16-bit shift position.
+: _UTUI-CSS-SET-OFFSET  ( val-a val-u shift -- )
+    >R
+    _UTUI-CSS-INT 0= IF DROP R> DROP EXIT THEN
+    0xFFFF AND R@ LSHIFT                       \ value in position
+    _URES-SC @ _UTUI-SC-OFFS@
+    0xFFFF R> LSHIFT INVERT AND                \ clear that slot
+    OR
+    _URES-SC @ _UTUI-SC-OFFS! ;
+
+\ _UTUI-CSS-SET-DISPLAY ( val-a val-u -- )
+\   Parse display property.  "none" sets HIDE flag.
+: _UTUI-CSS-SET-DISPLAY  ( val-a val-u -- )
+    S" none" STR-STRI= IF
+        _URES-SC @ _UTUI-SC-FLAGS@
+        _UTUI-SCF-HIDE OR
+        _URES-SC @ _UTUI-SC-FLAGS!
+    THEN ;
+
 \ _UTUI-RESOLVE-ELEM-STYLE ( elem -- )
 \   Read style= attribute, parse CSS declarations, apply to sidecar.
 : _UTUI-RESOLVE-ELEM-STYLE  ( elem -- )
@@ -1635,6 +2095,63 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     S" height" CSS-DECL-FIND IF
         _URES-SC @ _UTUI-SC-H@               \ parent-dim fallback = own H
         _UTUI-SC-O-H  _UTUI-CSS-SET-DIM
+    ELSE 2DROP THEN
+
+    \ -- text-align --
+    _URES-VA @ _URES-VL @
+    S" text-align" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-ALIGN
+    ELSE 2DROP THEN
+
+    \ -- position --
+    _URES-VA @ _URES-VL @
+    S" position" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-POSITION
+    ELSE 2DROP THEN
+
+    \ -- z-index --
+    _URES-VA @ _URES-VL @
+    S" z-index" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-ZINDEX
+    ELSE 2DROP THEN
+
+    \ -- display --
+    _URES-VA @ _URES-VL @
+    S" display" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-DISPLAY
+    ELSE 2DROP THEN
+
+    \ -- padding (shorthand) --
+    _URES-VA @ _URES-VL @
+    S" padding" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-PAD
+    ELSE 2DROP THEN
+
+    \ -- margin (shorthand) --
+    _URES-VA @ _URES-VL @
+    S" margin" CSS-DECL-FIND IF
+        _UTUI-CSS-SET-MARGIN
+    ELSE 2DROP THEN
+
+    \ -- position offsets: top, right, bottom, left --
+    _URES-VA @ _URES-VL @
+    S" top" CSS-DECL-FIND IF
+        0 _UTUI-CSS-SET-OFFSET
+    ELSE 2DROP THEN
+
+    _URES-VA @ _URES-VL @
+    S" right" CSS-DECL-FIND IF
+        16 _UTUI-CSS-SET-OFFSET
+    ELSE 2DROP THEN
+
+    _URES-VA @ _URES-VL @
+    S" bottom" CSS-DECL-FIND IF
+        32 _UTUI-CSS-SET-OFFSET
+    ELSE 2DROP THEN
+
+    _URES-VA @ _URES-VL @
+    S" left" CSS-DECL-FIND IF
+        48 _UTUI-CSS-SET-OFFSET
     ELSE 2DROP THEN
 
     \ Write back accumulated style
@@ -1694,9 +2211,13 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
 
+    _UTUI-PRELAYOUT-STYLES             \ §16c: position, display, padding, margin
+
     UTUI-RELAYOUT
 
-    _UTUI-RESOLVE-STYLES
+    _UTUI-RESOLVE-STYLES               \ §16b: colors, text-align, z-index, dims, offsets
+
+    _UTUI-RESOLVE-POSITIONED           \ §7b: place absolute/fixed elements
 
     _UTUI-MATERIALIZE
 

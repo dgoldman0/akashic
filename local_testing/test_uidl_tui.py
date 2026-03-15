@@ -672,6 +672,255 @@ def test_hit_test_root():
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  §O — CSS Property Tests (text-align, padding, margin, position,
+#        z-index, display:none)
+# ═══════════════════════════════════════════════════════════════════
+
+# XML with text-align
+_XML_ALIGN = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <label id="lc" text="Center" style="text-align:center"/>'
+    '  <label id="lr" text="Right"  style="text-align:right"/>'
+    '  <label id="ll" text="Left"   style="text-align:left"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# XML with padding on region
+_XML_PADDING = (
+    '<uidl>'
+    '<region arrange="stack" style="padding:2">'
+    '  <label id="p1" text="Padded"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# XML with 4-value padding
+_XML_PADDING4 = (
+    '<uidl>'
+    '<region arrange="stack" style="padding:1 2 3 4">'
+    '  <label id="p4" text="Padded4"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# XML with margin
+_XML_MARGIN = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <label id="m0" text="No margin"/>'
+    '  <label id="m1" text="With margin" style="margin:2"/>'
+    '  <label id="m2" text="After margin"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# XML with position:absolute + offsets
+_XML_POSITION = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <label id="sta" text="Static"/>'
+    '  <label id="abs" text="Abs" style="position:absolute;top:5;left:10;width:20;height:3"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# XML with z-index
+_XML_ZINDEX = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <label id="z0" text="Back"/>'
+    '  <label id="z5" text="Front" style="z-index:5"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# XML with display:none
+_XML_DISPLAY_NONE = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <label id="vis" text="Visible"/>'
+    '  <label id="hid" text="Hidden" style="display:none"/>'
+    '  <label id="aft" text="After"/>'
+    '</region>'
+    '</uidl>'
+)
+
+
+def test_css_text_align_center():
+    """text-align:center sets sidecar align bits to 1."""
+    check("css-text-align-center", _xml_lines(_XML_ALIGN, extra_after=[
+        'DROP',
+        'S" lc" UTUI-BY-ID ?DUP IF',
+        '  _UTUI-SIDECAR _UTUI-SC-TALIGN@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "1")
+
+def test_css_text_align_right():
+    """text-align:right sets sidecar align bits to 2."""
+    check("css-text-align-right", _xml_lines(_XML_ALIGN, extra_after=[
+        'DROP',
+        'S" lr" UTUI-BY-ID ?DUP IF',
+        '  _UTUI-SIDECAR _UTUI-SC-TALIGN@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "2")
+
+def test_css_text_align_left():
+    """text-align:left keeps sidecar align bits at 0."""
+    check("css-text-align-left", _xml_lines(_XML_ALIGN, extra_after=[
+        'DROP',
+        'S" ll" UTUI-BY-ID ?DUP IF',
+        '  _UTUI-SIDECAR _UTUI-SC-TALIGN@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "0")
+
+def test_css_padding_uniform():
+    """padding:2 stores packed TRBL (2,2,2,2) in sidecar pad field."""
+    check("css-padding-uniform", _xml_lines(_XML_PADDING, extra_after=[
+        'DROP',
+        'UIDL-ROOT UIDL-FIRST-CHILD _UTUI-SIDECAR _UTUI-SC-PAD@',
+        '_UTUI-UNPACK-TRBL',
+        '. ." |" . ." |" . ." |" . CR',      # prints l | b | r | t
+    ]), check_fn=lambda o: "2|2|2|2" in o.replace(" ", ""))
+
+def test_css_padding_4value():
+    """padding:1 2 3 4 stores (T=1, R=2, B=3, L=4)."""
+    check("css-padding-4value", _xml_lines(_XML_PADDING4, extra_after=[
+        'DROP',
+        'UIDL-ROOT UIDL-FIRST-CHILD _UTUI-SIDECAR _UTUI-SC-PAD@',
+        '_UTUI-UNPACK-TRBL',
+        '. ." |" . ." |" . ." |" . CR',      # l | b | r | t
+    ]), check_fn=lambda o: "4|3|2|1" in o.replace(" ", ""))
+
+def test_css_padding_layout_effect():
+    """padding:2 on region pushes child label inward (row=2, col=2)."""
+    check("css-padding-layout-effect", _xml_lines(_XML_PADDING, extra_after=[
+        'DROP',
+        'S" p1" UTUI-BY-ID ?DUP IF',
+        '  _UTUI-SIDECAR',
+        '  ." ROW=" DUP _UTUI-SC-ROW@ . CR',
+        '  ." COL=" DUP _UTUI-SC-COL@ . CR',
+        '  ." W=" DUP _UTUI-SC-W@ . CR',
+        '  DROP',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), check_fn=lambda o: "ROW=2" in o and "W=76" in o)
+
+def test_css_margin_stack_spacing():
+    """margin:2 adds spacing between stack children."""
+    check("css-margin-stack-spacing", _xml_lines(_XML_MARGIN, extra_after=[
+        'DROP',
+        # m0 should be at row 0 (no margin)
+        '." M0=" S" m0" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
+        # m1 has margin:2 so margin-top=2 → row should be 0+1+2=3
+        '." M1=" S" m1" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
+        # m2 should be after m1 + margin-bottom of m1 (2)
+        '." M2=" S" m2" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
+    ]), check_fn=lambda o: (
+        "M0=0" in o
+        and "M1=3" in o
+        and "M2=6" in o
+    ))
+
+def test_css_margin_sidecar_value():
+    """margin:2 stores packed (2,2,2,2) in sidecar margin field."""
+    check("css-margin-sidecar-value", _xml_lines(_XML_MARGIN, extra_after=[
+        'DROP',
+        'S" m1" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-MARGIN@',
+        '_UTUI-UNPACK-TRBL',
+        '. ." |" . ." |" . ." |" . CR',
+    ]), check_fn=lambda o: "2|2|2|2" in o.replace(" ", ""))
+
+def test_css_position_absolute():
+    """position:absolute sets pos bits to 1 and uses offsets."""
+    check("css-position-absolute", _xml_lines(_XML_POSITION, extra_after=[
+        'DROP',
+        'S" abs" UTUI-BY-ID ?DUP IF',
+        '  _UTUI-SIDECAR',
+        '  ." POS=" DUP _UTUI-SC-POS@ . CR',
+        '  ." ROW=" DUP _UTUI-SC-ROW@ . CR',
+        '  ." COL=" DUP _UTUI-SC-COL@ . CR',
+        '  ." W=" DUP _UTUI-SC-W@ . CR',
+        '  ." H=" DUP _UTUI-SC-H@ . CR',
+        '  DROP',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), check_fn=lambda o: (
+        "POS=1" in o       # position:absolute = 1
+        and "ROW=5" in o   # row = top offset = 5
+        and "COL=10" in o  # col = left offset = 10
+        and "W=20" in o    # width = 20
+        and "H=3" in o     # height = 3
+    ))
+
+def test_css_position_not_in_flow():
+    """position:absolute element is skipped in stack flow layout."""
+    check("css-position-not-in-flow", _xml_lines(_XML_POSITION, extra_after=[
+        'DROP',
+        # Static label should be at row 0 — absolute elem doesn't push it
+        'S" sta" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
+    ]), "0")
+
+def test_css_zindex_sidecar():
+    """z-index:5 stores value 5 in sidecar z-index bits."""
+    check("css-zindex-sidecar", _xml_lines(_XML_ZINDEX, extra_after=[
+        'DROP',
+        'S" z5" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ZIDX@ . CR',
+    ]), "5")
+
+def test_css_zindex_zero_default():
+    """Elements without z-index have z-index=0."""
+    check("css-zindex-zero-default", _xml_lines(_XML_ZINDEX, extra_after=[
+        'DROP',
+        'S" z0" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ZIDX@ . CR',
+    ]), "0")
+
+def test_css_display_none_hides():
+    """display:none sets HIDE flag, element is not visible."""
+    check("css-display-none-hides", _xml_lines(_XML_DISPLAY_NONE, extra_after=[
+        'DROP',
+        'S" hid" UTUI-BY-ID _UTUI-SIDECAR',
+        'DUP _UTUI-SC-VIS? IF ." VIS" ELSE ." HIDDEN" THEN CR',
+        '_UTUI-SC-FLAGS@ 8 AND 0<> IF ." HIDE-SET" ELSE ." NO-HIDE" THEN CR',
+    ]), check_fn=lambda o: "HIDDEN" in o and "HIDE-SET" in o)
+
+def test_css_display_none_flow():
+    """display:none skips element in flow — next element takes its row."""
+    check("css-display-none-flow", _xml_lines(_XML_DISPLAY_NONE, extra_after=[
+        'DROP',
+        '." VIS=" S" vis" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
+        # "aft" should be at row 1, not row 2, because "hid" is display:none
+        '." AFT=" S" aft" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
+    ]), check_fn=lambda o: (
+        "VIS=0" in o
+        and "AFT=1" in o
+    ))
+
+def test_css_paint_with_zindex():
+    """UTUI-PAINT works with z-indexed elements without crash."""
+    check("css-paint-zindex-no-crash", _xml_lines(_XML_ZINDEX, extra_after=[
+        'DROP',
+        'UTUI-PAINT',
+        '." PAINT-OK" CR',
+    ]), "PAINT-OK")
+
+def test_css_paint_with_position():
+    """UTUI-PAINT works with positioned elements without crash."""
+    check("css-paint-pos-no-crash", _xml_lines(_XML_POSITION, extra_after=[
+        'DROP',
+        'UTUI-PAINT',
+        '." PAINT-OK" CR',
+    ]), "PAINT-OK")
+
+def test_css_paint_display_none():
+    """UTUI-PAINT skips display:none elements without crash."""
+    check("css-paint-display-none", _xml_lines(_XML_DISPLAY_NONE, extra_after=[
+        'DROP',
+        'UTUI-PAINT',
+        '." PAINT-OK" CR',
+    ]), "PAINT-OK")
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════
 
@@ -768,6 +1017,27 @@ def main():
     # §N Hit Test
     print("[N] Hit Test")
     test_hit_test_root()
+    print()
+
+    # §O CSS Properties
+    print("[O] CSS Properties")
+    test_css_text_align_center()
+    test_css_text_align_right()
+    test_css_text_align_left()
+    test_css_padding_uniform()
+    test_css_padding_4value()
+    test_css_padding_layout_effect()
+    test_css_margin_stack_spacing()
+    test_css_margin_sidecar_value()
+    test_css_position_absolute()
+    test_css_position_not_in_flow()
+    test_css_zindex_sidecar()
+    test_css_zindex_zero_default()
+    test_css_display_none_hides()
+    test_css_display_none_flow()
+    test_css_paint_with_zindex()
+    test_css_paint_with_position()
+    test_css_paint_display_none()
     print()
 
     # Summary
