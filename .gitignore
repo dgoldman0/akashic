@@ -35,3 +35,6 @@ local_testing/*
 !local_testing/test_vfs_mp64fs.py
 !local_testing/test_vfs_fat.py
 !local_testing/test_explorer.py
+!local_testing/test_app_shell.py
+!local_testing/test_app_compositor.py
+!local_testing/ROADMAP-tui-apps.md
