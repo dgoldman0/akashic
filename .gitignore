@@ -28,4 +28,7 @@ local_testing/*
 !local_testing/test_uidl_tui.py
 !local_testing/test_focus.py
 !local_testing/ROADMAP_tui.md
+!local_testing/ROADMAP_filesystem.md
 !local_testing/CHANGES_per_file.md
+!local_testing/test_vfs.py
+!local_testing/test_vfs_mount.py
