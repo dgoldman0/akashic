@@ -64,6 +64,8 @@ and no circular imports.
   - [7.4 tui/widgets/status.f — Status Bar](#74-tuistatusf--status-bar)
   - [7.5 tui/widgets/toast.f — Transient Notifications](#75-tuitoastf--transient-notifications)
   - [7.6 tui/widgets/canvas.f — Character-Mode Canvas ✅](#76-tuicanvasf--character-mode-canvas-)
+  - [7.8 tui/widgets/fileselector.f — File Selector Dialog](#78-tuiwidgetsfileselectorf--file-selector-dialog)
+  - [7.9 tui/widgets/explorer.f — File Explorer ✅](#79-tuiwidgetsexplorerf--file-explorer-)
 - [Layer 8 — Application Packaging (optional)](#layer-8--application-packaging-optional)
   - [8.1 tui/app-image.f — Binary Image Wrapper](#81-tuiapp-imagef--binary-image-wrapper)
   - [8.2 tui/app-manifest.f — Application Manifest](#82-tuiapp-manifestf--application-manifest)
@@ -1022,6 +1024,8 @@ No `DEFER/IS` needed — function pointers in descriptors.
 | `WDG-T-STATUS` | 12 |
 | `WDG-T-TOAST` | 13 |
 | `WDG-T-CANVAS` | 14 |
+| `WDG-T-FSEL` | 15 |
+| `WDG-T-EXPLORER` | 16 |
 
 #### Common Widget Words
 
@@ -3522,6 +3526,542 @@ rendering once the wiring is verified manually.
 - [ ] Allocate widget structs in `UTUI-LOAD`
 - [ ] Free widget structs in `UTUI-DETACH`
 - [ ] All existing tests pass
+
+---
+
+### 7.8 tui/widgets/fileselector.f — File Selector Dialog
+
+**Goal:** A modal file-selection popup that lets the user browse the
+VFS filesystem, navigate directories, and pick (or name) a file.
+Used for Open, Save-As, and Import workflows.  Built as a composite
+widget that orchestrates `dialog.f`, `list.f`, and `input.f`.
+
+File: `tui/widgets/fileselector.f`
+Prefix: `FSEL-` (public), `_FSEL-` (internal)
+Provider: `PROVIDED akashic-tui-fileselector`
+Dependencies: `REQUIRE dialog.f`, `REQUIRE list.f`, `REQUIRE input.f`,
+`REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`, `REQUIRE keys.f`,
+`REQUIRE ../../utils/fs/vfs.f`
+
+~400 lines (estimated)
+
+#### Design Rationale
+
+A file selector is the most common compound dialog in any UI
+toolkit, yet it is too application-specific for `dialog.f` alone.
+It requires:
+
+1. **Directory listing** — walking the VFS inode child→sibling
+   linked list, filtering, sorting folders-first.
+2. **Navigation** — entering subdirectories, going up via
+   `IN.PARENT`, displaying the current path.
+3. **Filename input** — a text field for Save-As mode where the
+   user can type a new name.
+4. **Filtering** — optional wildcard/extension filter
+   (e.g., `*.f`, `*.md`).
+5. **Modal lifecycle** — blocks the calling application, returns
+   a result, then cleans up.
+
+Rather than bolting all this onto `DLG-SHOW`, the file selector
+is its own widget type with a dedicated struct and modal loop.
+
+#### VFS Integration
+
+The file selector operates on the Akashic VFS layer (`utils/fs/vfs.f`),
+not raw KDOS DIRENT tables.  The VFS provides:
+
+- **Inode tree** — each inode has `IN.CHILD` (first child) and
+  `IN.SIBLING` (next sibling), forming a linked list per directory.
+- **Typed nodes** — `IN.TYPE` is `VFS-T-DIR` or `VFS-T-FILE`.
+- **Name access** — `IN.NAME @ _VFS-STR-GET ( -- addr len )`.
+- **Lazy loading** — `_VFS-ENSURE-CHILDREN` populates a directory's
+  children from the backing store on first access.
+- **Path resolution** — `VFS-RESOLVE` walks `/`-delimited paths.
+- **Mutations** — `VFS-MKFILE`, `VFS-MKDIR`, `VFS-RM`.
+
+The file selector takes a VFS instance pointer at creation time.
+All operations go through the VFS API — the widget is agnostic to
+the backing store (MP64FS, FAT, ramdisk, etc.).
+
+#### Directory Scan
+
+Because VFS directories are already linked lists of inodes, scanning
+is a simple child→sibling walk — no slot iteration or filtering by
+parent needed:
+
+```forth
+: _FSEL-SCAN  ( fsel -- )
+  DUP _FSEL-CLEAR-ENTRIES
+  \ Add ".." unless cwd is root
+  DUP _FSEL-CWD @ IN.PARENT @ ?DUP IF
+    OVER S" .." ROT FSEL-ENTRY-DIR _FSEL-ADD-ENTRY
+  THEN
+  \ Ensure children are loaded from backing store
+  DUP _FSEL-CWD @  OVER _FSEL-VFS @  _VFS-ENSURE-CHILDREN
+  \ Walk child → sibling chain
+  DUP _FSEL-CWD @ IN.CHILD @    ( fsel first-child )
+  BEGIN  DUP 0<>  WHILE
+    DUP IN.TYPE @ VFS-T-DIR = IF
+      \ Directory entry
+      DUP IN.NAME @ _VFS-STR-GET  ( fsel inode addr len )
+      3 PICK -ROT 2 PICK FSEL-ENTRY-DIR _FSEL-ADD-ENTRY
+    ELSE
+      \ File entry — apply filter
+      DUP IN.NAME @ _VFS-STR-GET  ( fsel inode addr len )
+      2DUP 4 PICK _FSEL-FILTER-MATCH? IF
+        3 PICK -ROT 2 PICK FSEL-ENTRY-FILE _FSEL-ADD-ENTRY
+      ELSE 2DROP THEN
+    THEN
+    IN.SIBLING @                  ( fsel next )
+  REPEAT
+  DROP
+  DUP _FSEL-SORT-ENTRIES
+  DUP _FSEL-SYNC-LIST
+;
+```
+
+#### Entry Descriptor (4 cells = 32 bytes)
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0 | name-a | Filename string address (from VFS string pool via `_VFS-STR-GET`) |
+| +8 | name-u | Filename string length |
+| +16 | inode | VFS inode pointer (or 0 for `..`) |
+| +24 | flags | Bit 0: is-directory.  Bit 1: is-hidden. |
+
+Maximum entries: 128 (configurable via `FSEL-MAX-ENTRIES`).
+Buffer: 128 × 32 = 4096 bytes, heap-allocated.
+
+#### File Selector Descriptor (header + 15 cells = 160 bytes)
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0..+32 | (widget header) | type=`WDG-T-FSEL`, draw-xt=`_FSEL-DRAW`, handle-xt=`_FSEL-HANDLE` |
+| +40 | mode | `FSEL-OPEN` (0) or `FSEL-SAVE` (1) |
+| +48 | vfs | VFS instance pointer (`VFS-CUR` or explicit) |
+| +56 | cwd | Current directory inode pointer |
+| +64 | entries | Address of entry buffer (128 × 32 bytes) |
+| +72 | entry-count | Number of scanned entries |
+| +80 | list-widget | Embedded `LST-*` widget for the listing |
+| +88 | input-widget | Embedded `INP-*` widget for filename (Save mode) |
+| +96 | path-buf | Address of path display buffer (256 bytes) |
+| +104 | path-len | Current path string length |
+| +112 | filter-a | Filter pattern address (e.g., `*.f`) or 0 |
+| +120 | filter-u | Filter pattern length |
+| +128 | result-a | Selected filename address (0 if cancelled) |
+| +136 | result-u | Selected filename length |
+| +144 | title-a | Dialog title string address |
+| +152 | title-u | Dialog title string length |
+
+#### Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `FSEL-NEW` | `( vfs mode -- widget )` | Create file selector bound to a VFS instance |
+| `FSEL-TITLE!` | `( widget title-a title-u -- )` | Set dialog title |
+| `FSEL-FILTER!` | `( widget pattern-a pattern-u -- )` | Set extension filter (e.g., `S" *.f"`) |
+| `FSEL-DIR!` | `( widget inode -- )` | Set initial directory (VFS inode) |
+| `FSEL-SHOW` | `( widget -- result-a result-u flag )` | Run modal loop; returns `( addr len true )` on selection, `( 0 0 false )` on cancel |
+| `FSEL-FREE` | `( widget -- )` | Free all sub-widgets and buffers |
+| `FSEL-OPEN-FILE` | `( vfs -- addr len flag )` | Quick: create Open dialog, run, free — returns result |
+| `FSEL-SAVE-FILE` | `( vfs -- addr len flag )` | Quick: create Save-As dialog, run, free — returns result |
+
+#### Modal Loop (`FSEL-SHOW`)
+
+```
+FSEL-SHOW:
+  1. Save screen state (like DLG-SHOW).
+  2. Compute dialog region: centered, 60 cols × 20 rows
+     (or screen-proportional).
+  3. Draw titled box border with current path in title bar.
+  4. _FSEL-SCAN — walk cwd inode's child→sibling list via VFS.
+  5. If FSEL-SAVE mode: draw input widget at bottom row.
+  6. Enter event sub-loop:
+     a. KEY → dispatch to list-widget or input-widget.
+     b. Up/Down/PgUp/PgDn/Home/End → list navigation.
+     c. Enter on directory entry → set cwd to entry's inode,
+        _VFS-ENSURE-CHILDREN, _FSEL-SCAN, redraw.
+     d. Enter on ".." → set cwd to IN.PARENT, _FSEL-SCAN, redraw.
+     e. Enter on file entry (Open mode) → set result, exit loop.
+     f. Enter on input field (Save mode) → set result from input, exit.
+     g. Tab → cycle focus between list and input (Save mode).
+     h. Escape → cancel (result = 0 0 false), exit loop.
+     i. F5 → refresh (_FSEL-SCAN + redraw).
+  7. Restore screen state.
+  8. Return result.
+```
+
+#### Path Reconstruction
+
+Building the path string for the title bar walks `IN.PARENT`
+from cwd to root, collecting name segments, then reverses:
+
+```forth
+: _FSEL-BUILD-PATH  ( fsel -- )
+  DUP _FSEL-PATH-BUF @  0       ( fsel buf 0=len )
+  2 PICK _FSEL-CWD @             ( fsel buf len inode )
+  BEGIN  DUP 0<>  WHILE
+    DUP IN.NAME @ _VFS-STR-GET   ( fsel buf len inode addr u )
+    \ prepend "/" + name to path (built in reverse, reversed later)
+    ...
+    IN.PARENT @
+  REPEAT
+  DROP
+  \ Reverse segments to get /root/sub/dir order
+  ...
+;
+```
+
+#### Visual Layout
+
+```
+┌─ Open File ── /demos/forth/ ─────────────────┐
+│                                               │
+│  [D] ..                                       │
+│  [D] examples/                                │
+│  [D] lib/                                     │
+│ > hello.f                            128 B    │
+│    mandelbrot.f                     2.1 KB    │
+│    snake.f                           892 B    │
+│                                               │
+│  [ Filter: *.f         ]                      │
+│                                               │
+│           [ OK ]    [ Cancel ]                │
+└───────────────────────────────────────────────┘
+```
+
+In Save mode, an input field appears above the buttons:
+
+```
+┌─ Save As ── /projects/ ──────────────────────┐
+│                                               │
+│  [D] ..                                       │
+│  [D] backup/                                  │
+│      notes.md                        340 B    │
+│      todo.f                         1.2 KB    │
+│                                               │
+│  Filename: [my-program.f           ]          │
+│  [ Filter: *            ]                     │
+│                                               │
+│           [ Save ]   [ Cancel ]               │
+└───────────────────────────────────────────────┘
+```
+
+Directory indicators: `[D]` for directories, `   ` (spaces) for
+files.  Selection cursor: `>` in column 0.  File sizes are shown
+right-aligned when the region is wide enough (≥50 cols), read
+from `IN.SIZE-LO @`.
+
+#### Filter Matching
+
+`_FSEL-FILTER-MATCH?` implements simple glob matching:
+
+- `*` matches any sequence of characters.
+- `?` matches exactly one character.
+- All comparisons are case-insensitive.
+- Multiple patterns separated by `;` (e.g., `*.f;*.fth`).
+- Empty filter or `*` matches everything.
+
+This is intentionally simple — no regex, no character classes.
+Covers 99% of practical file-selection use cases.
+
+#### Memory Budget
+
+| Component | Size |
+|-----------|------|
+| File selector struct | 160 B |
+| Entry buffer (128 × 32) | 4,096 B |
+| Path display buffer | 256 B |
+| Embedded list widget | 88 B |
+| Embedded input widget | 104 B |
+| Screen save buffer (60×20×8) | 9,600 B |
+| **Total** | **~14.3 KiB** |
+
+Allocated on open, freed on close.  No persistent memory cost.
+The VFS inode tree is not duplicated — entries point directly
+into VFS inode memory.
+
+#### Test Targets: ~25 tests
+
+- Create in Open mode with VFS, verify type and mode
+- Create in Save mode, verify input widget present
+- Scan empty directory → only ".." entry
+- Scan directory with files and subdirs → correct count
+- Directories sorted before files
+- Alphabetical sort within each group
+- Enter directory → cwd inode changes, `_VFS-ENSURE-CHILDREN` called, rescan
+- Enter ".." → cwd = `IN.PARENT`, rescan
+- Select file (Open mode) → result contains inode's name
+- Type filename (Save mode) → correct result
+- Cancel → returns false
+- Filter `*.f` → only `.f` files shown
+- Filter `*` → all files shown
+- Filter with `;` separator → multiple patterns
+- Quick helpers `FSEL-OPEN-FILE` / `FSEL-SAVE-FILE`
+- Path display walks `IN.PARENT` chain correctly
+- File size display from `IN.SIZE-LO`
+- Root inode (no parent) → no ".." entry
+- Maximum entries (128) → overflow safely capped
+- Tab focus cycling in Save mode
+- F5 refresh re-scans via VFS
+- Escape from nested directory returns to caller
+- Free releases all sub-widgets and buffers
+- Edge: empty filename in Save mode → rejected
+- Edge: filename with illegal characters → rejected
+
+---
+
+### 7.9 tui/widgets/explorer.f — File Explorer ✅
+
+**Status: Done** — 659 lines, 31 tests in `test_explorer.py`
+
+**Goal:** A persistent, non-modal file-system browser in the style
+of VS Code's Explorer panel.  Shows a tree of directories and files
+rooted at a configurable VFS inode.  Supports expand/collapse,
+selection, inline rename, and context actions.  Designed to live in
+a side panel of a larger application.
+
+File: `tui/widgets/explorer.f`
+Prefix: `EXPL-` (public), `_EXPL-` (internal)
+Provider: `PROVIDED akashic-tui-explorer`
+Dependencies: `REQUIRE tree.f`, `REQUIRE draw.f`, `REQUIRE box.f`,
+`REQUIRE region.f`, `REQUIRE keys.f`, `REQUIRE input.f`,
+`REQUIRE dialog.f`,
+`REQUIRE ../../utils/fs/vfs.f`
+
+#### Design Rationale
+
+The file selector (7.8) is modal — it pops up, the user picks a
+file, it closes.  The file explorer is the opposite: it stays
+visible for the application's lifetime, shows the full directory
+tree, and supports richer interactions (rename, delete, create).
+
+While `tree.f` provides the core tree-view rendering and navigation,
+it is data-agnostic.  The explorer widget **bridges `tree.f` to the
+Akashic VFS**, providing:
+
+1. **Tree data callbacks** that map directly to VFS inode
+   traversal — no translation layer needed.
+2. **Lazy directory loading** via `_VFS-ENSURE-CHILDREN` — the
+   VFS loads children from the backing store on first expand.
+3. **Inline editing** (rename) by temporarily replacing a tree
+   node's label area with an `INP-*` input widget.
+4. **Action dispatch** (create, delete) via `VFS-MKFILE`,
+   `VFS-MKDIR`, `VFS-RM` with confirmation dialogs.
+5. **Backing-store agnostic** — works with any VFS binding
+   (MP64FS, FAT, ramdisk).
+
+#### VFS ↔ Tree Callback Mapping
+
+The VFS inode tree IS the tree structure that `tree.f` navigates.
+Each "node" passed to tree callbacks is simply the **VFS inode
+pointer** itself — no indirection, no cache, no mapping table:
+
+```forth
+\ Tree callback: get first child of a directory node
+: _EXPL-CHILDREN  ( inode -- first-child | 0 )
+  DUP IN.TYPE @ VFS-T-DIR <> IF  DROP 0 EXIT  THEN
+  \ Lazy-load: ensure backing store has populated children
+  DUP _EXPL-VFS @  _VFS-ENSURE-CHILDREN
+  IN.CHILD @                     \ first child inode (or 0)
+;
+
+\ Tree callback: get next sibling
+: _EXPL-NEXT  ( inode -- sibling | 0 )
+  IN.SIBLING @                   \ next sibling inode (or 0)
+;
+
+\ Tree callback: get node label
+: _EXPL-LABEL  ( inode -- addr len )
+  DUP IN.TYPE @ VFS-T-DIR = IF
+    IN.NAME @ _VFS-STR-GET       ( addr len )
+    S" [D] " _EXPL-PREPEND       \ prefix for directories
+  ELSE
+    IN.NAME @ _VFS-STR-GET       ( addr len )
+    S"     " _EXPL-PREPEND       \ indent for files
+  THEN
+;
+
+\ Tree callback: is this a leaf (file, not directory)?
+: _EXPL-LEAF?  ( inode -- flag )
+  IN.TYPE @ VFS-T-DIR <>
+;
+```
+
+**This is the key architectural win of using the VFS**: the inode
+child→sibling linked list matches the `tree.f` children/next
+callback model exactly.  No node cache, no O(n) slot scanning,
+no mapping arrays.  Each callback is 1–3 lines.
+
+#### Explorer Descriptor (header + 8 cells = 104 bytes)
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0..+32 | (widget header) | type=`WDG-T-EXPLORER`, draw-xt=`_EXPL-DRAW`, handle-xt=`_EXPL-HANDLE` |
+| +40 | tree-widget | Embedded `TREE-*` widget pointer |
+| +48 | vfs | VFS instance pointer |
+| +56 | root-inode | Root directory inode for this explorer view |
+| +64 | on-open-xt | Callback: `( inode explorer -- )` — file opened |
+| +72 | on-select-xt | Callback: `( inode explorer -- )` — selection changed |
+| +80 | rename-input | `INP-*` widget for inline rename (0 when not active) |
+| +88 | flags2 | Bit 0: show-hidden.  Bit 1: rename-active. |
+| +96 | rename-buf | 256-byte buffer for inline rename text |
+
+Note: no node cache, no order array.  The VFS inode linked-list
+structure provides O(1) child/sibling access natively.
+
+#### Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `EXPL-NEW` | `( rgn vfs root-inode -- widget )` | Create explorer bound to a VFS, rooted at inode |
+| `EXPL-REFRESH` | `( widget -- )` | Mark tree dirty, re-trigger `_VFS-ENSURE-CHILDREN` on redraw |
+| `EXPL-ROOT!` | `( inode widget -- )` | Change root directory inode, rebuild tree, refresh |
+| `EXPL-SELECTED` | `( widget -- inode )` | Get inode of selected node (via `TREE-SELECTED NIP`) |
+| `EXPL-ON-OPEN` | `( xt widget -- )` | Set file-opened callback `( inode explorer -- )` |
+| `EXPL-ON-SELECT` | `( xt widget -- )` | Set selection-changed callback `( inode explorer -- )` |
+| `EXPL-EXPAND-ALL` | `( widget -- )` | Expand entire tree (delegates to `TREE-EXPAND-ALL`) |
+| `EXPL-COLLAPSE-ALL` | `( widget -- )` | Collapse to root children only |
+| `EXPL-SHOW-HIDDEN!` | `( flag widget -- )` | Show/hide hidden files (names starting with `.`) |
+| `EXPL-SHOW-HIDDEN?` | `( widget -- flag )` | Query hidden-files flag |
+| `EXPL-VFS` | `( widget -- vfs )` | Get VFS instance |
+| `EXPL-TREE` | `( widget -- tree-widget )` | Get embedded tree widget |
+| `EXPL-RENAME` | `( widget -- )` | Start inline rename of selected entry |
+| `EXPL-DELETE` | `( widget -- )` | Delete selected entry via `VFS-RM` (with `DLG-CONFIRM`) |
+| `EXPL-NEW-FILE` | `( widget -- )` | Create "newfile" in selected dir via `VFS-MKFILE` |
+| `EXPL-NEW-DIR` | `( widget -- )` | Create "newfolder" subdirectory via `VFS-MKDIR` |
+| `EXPL-FREE` | `( widget -- )` | Free rename input/buffer, tree widget, descriptor |
+
+**Deferred (not yet implemented):**
+
+| `EXPL-REVEAL` | `( widget inode -- )` | Walk `IN.PARENT` chain, expand ancestors, scroll into view |
+| `EXPL-CONTEXT-MENU` | `( widget -- )` | Show context action menu for selected entry |
+
+#### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| Up / Down | Navigate tree (delegated to `TREE-*`) |
+| Left | Collapse directory / go to parent |
+| Right | Expand directory (triggers `_VFS-ENSURE-CHILDREN`) |
+| Enter | Open file (fires `on-open-xt`) or toggle directory |
+| F2 | Inline rename |
+| Delete | Delete with confirmation |
+| Ctrl+N | New file in current directory |
+| Ctrl+Shift+N | New subdirectory |
+| Ctrl+R / F5 | Refresh (re-populate from backing store) |
+| Ctrl+H | Toggle hidden files |
+| Space | Context menu |
+| Escape | Cancel rename / close context menu |
+
+#### Inline Rename Flow
+
+1. User presses F2 on a selected entry.
+2. Explorer reads `TREE-SELECTED` → gets inode pointer.
+3. Creates a temporary `INP-*` widget at the tree node's row,
+   pre-filled with `IN.NAME @ _VFS-STR-GET`.
+4. `_EXPL-HANDLE` routes all keys to the input widget while
+   rename is active.
+5. On Enter: validate new name (no `/`, check for duplicate via
+   `_VFS-FIND-CHILD` on parent), allocate new string in VFS string
+   pool, update `IN.NAME`, mark inode dirty (`VFS-IF-DIRTY`),
+   call `TREE-REFRESH`, dismiss input.
+6. On Escape: dismiss input, no change.
+
+#### Context Menu Actions
+
+| Menu Item | VFS Operation | Guard |
+|-----------|--------------|-------|
+| Open | (fires on-open-xt) | File only |
+| Rename | (starts inline rename) | Any |
+| Delete | `VFS-RM` | Confirm dialog; dirs must be empty |
+| New File | `VFS-MKFILE` + inline name input | Directory only |
+| New Folder | `VFS-MKDIR` + inline name input | Directory only |
+| Refresh | `EXPL-REFRESH` | Always |
+
+All mutations go through the VFS API.  After each mutation,
+`VFS-SYNC` is called (if the VFS has a binding) to persist changes
+to the backing store.
+
+#### Visual Layout
+
+```
+┌─ Explorer ───────────────┐
+│ ▾ [D] projects/          │
+│   ▾ [D] akashic/         │
+│     ▸ [D] tui/           │
+│     ▸ [D] utils/         │
+│            README.md     │
+│            build.f       │
+│   ▸ [D] demos/           │
+│          notes.txt       │
+│          todo.md         │
+│ ▸ [D] system/            │
+│        boot.f            │
+│        config.f          │
+│                          │
+│                          │
+│                          │
+└──────────────────────────┘
+```
+
+Tree guides use box-drawing characters (delegated to `tree.f`):
+`├──`, `│  `, `└──` with proper indentation per depth level.
+Directory indicators: `▾` expanded, `▸` collapsed (from tree.f).
+`[D]` prefix for directories, spaces for files (from `_EXPL-LABEL`).
+
+#### Memory Budget
+
+| Component | Size |
+|-----------|------|
+| Explorer struct | 104 B |
+| Embedded tree widget | 112 B |
+| Rename buffer (persistent) | 256 B |
+| Inline rename input (temporary) | 104 B |
+| **Total (persistent)** | **472 B** |
+| **Total (peak, with rename active)** | **~576 B** |
+
+**No node cache.  No order array.**  The VFS inode linked-list
+structure provides O(1) child/sibling access, eliminating the
+12+ KiB of cache memory that a raw-DIRENT approach would need.
+The tree widget's own expand bitmap (512 bits = 64 bytes) is
+the only per-node overhead.
+
+#### Test Results: 31/31 pass (`test_explorer.py`)
+
+- ✅ Create explorer with VFS and root inode → type = `WDG-T-EXPLORER` (16)
+- ✅ Embedded tree widget is non-zero, type = `WDG-T-TREE` (11)
+- ✅ `EXPL-VFS` returns stored VFS instance
+- ✅ `EXPL-SELECTED` initially returns root inode
+- ✅ `_EXPL-LEAF?`: root (dir) → false, file → true
+- ✅ `_EXPL-CHILDREN`: root → non-zero first child
+- ✅ `_EXPL-NEXT`: first child → has sibling
+- ✅ `_EXPL-LABEL`: root label starts with `[D]`
+- ✅ Expand root → 5 visible nodes (root + 4 children)
+- ✅ `EXPL-EXPAND-ALL` → 6 visible (root + docs + readme + src + hello.f + notes.txt)
+- ✅ Down arrow moves cursor to 1
+- ✅ Down then Up → cursor back to 0
+- ✅ Enter on root (dir) → toggles expand (5 visible)
+- ✅ Enter on file → fires `on-open-xt` with correct inode (type = VFS-T-FILE)
+- ✅ Down arrow → fires `on-select` callback
+- ✅ `EXPL-NEW-FILE` → "newfile" appears in root (verified via `VFS-RESOLVE`)
+- ✅ `EXPL-NEW-DIR` → "newfolder" appears in root
+- ✅ `EXPL-NEW-FILE` in subdir → "newfile" in src/ (verified via `VFS-RESOLVE`)
+- ✅ `EXPL-REFRESH` marks widget dirty
+- ✅ `EXPL-SHOW-HIDDEN?` initially false; `EXPL-SHOW-HIDDEN!` sets to true
+- ✅ `EXPL-RENAME` sets rename-active flag (flags2 bit 1)
+- ✅ `EXPL-RENAME` creates input widget (rename-input field non-zero)
+- ✅ F5 key → consumed (returns -1)
+- ✅ F2 key → activates rename mode
+- ✅ ESC during rename → cancels (rename flag cleared)
+- ✅ Unrelated char key → not consumed (returns 0)
+- ✅ `EXPL-COLLAPSE-ALL` → 1 visible node
+- ✅ `EXPL-FREE` completes without crash
+
+**Deferred tests** (for future `EXPL-REVEAL` and `EXPL-CONTEXT-MENU`):
+- Reveal specific inode → walk `IN.PARENT`, expand ancestors
+- Context menu appears on Space
+- Context menu: correct items for file vs directory
 
 ---
 

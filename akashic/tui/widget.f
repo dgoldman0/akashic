@@ -59,6 +59,8 @@ REQUIRE region.f
 12 CONSTANT WDG-T-STATUS
 13 CONSTANT WDG-T-TOAST
 14 CONSTANT WDG-T-CANVAS
+15 CONSTANT WDG-T-FSEL
+16 CONSTANT WDG-T-EXPLORER
 
 \ =====================================================================
 \ 3. Flag constants
