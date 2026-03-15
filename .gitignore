@@ -32,3 +32,4 @@ local_testing/*
 !local_testing/CHANGES_per_file.md
 !local_testing/test_vfs.py
 !local_testing/test_vfs_mount.py
+!local_testing/test_vfs_mp64fs.py

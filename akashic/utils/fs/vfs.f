@@ -564,8 +564,8 @@ VARIABLE _VFS-EVICT-XT   \ filled once _VFS-EVICT exists
 \ -- Helper: ensure children are loaded --
 : _VFS-ENSURE-CHILDREN  ( dir-inode vfs -- )
     OVER IN.FLAGS @  VFS-IF-CHILDREN AND IF  2DROP EXIT  THEN
-    2DUP VFS-VT-READDIR SWAP _VFS-XT EXECUTE
-    VFS-IF-CHILDREN  SWAP IN.FLAGS DUP @ ROT OR SWAP ! ;
+    2DUP VFS-VT-READDIR OVER _VFS-XT EXECUTE
+    DROP IN.FLAGS DUP @ VFS-IF-CHILDREN OR SWAP ! ;
 
 \ -- Helper: find child by name in a directory inode --
 \    Walks first-child → sibling chain comparing name handles.
@@ -888,9 +888,9 @@ VARIABLE _VRM-IN
 
 : VFS-DIR  ( vfs -- )
     DUP V.CWD @                  ( vfs cwd )
-    OVER SWAP                    ( vfs vfs cwd )
-    2DUP _VFS-ENSURE-CHILDREN   ( vfs vfs cwd )
-    DROP DROP                    ( vfs )
+    SWAP                         ( cwd vfs )
+    2DUP _VFS-ENSURE-CHILDREN   ( cwd vfs )
+    NIP                          ( vfs )
     V.CWD @ IN.CHILD @          ( first-child )
     BEGIN
         DUP 0<> WHILE

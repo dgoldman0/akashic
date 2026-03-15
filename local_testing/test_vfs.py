@@ -617,16 +617,15 @@ def test_destroy():
 
 def test_two_instances():
     """Two VFS instances coexist with separate roots."""
+    # Use a colon definition to emit all markers on one line.
     check("two VFS instances", [
         'VARIABLE _V1  VARIABLE _V2',
         '131072 A-XMEM ARENA-NEW  IF -1 THROW THEN  VFS-RAM-VTABLE VFS-NEW _V1 !',
         '131072 A-XMEM ARENA-NEW  IF -1 THROW THEN  VFS-RAM-VTABLE VFS-NEW _V2 !',
         'S" a.txt" _V1 @ VFS-MKFILE DROP',
         'S" b.txt" _V2 @ VFS-MKFILE DROP',
-        'S" a.txt" _V1 @ VFS-RESOLVE 0<> IF ." V1-A " THEN',
-        'S" a.txt" _V2 @ VFS-RESOLVE 0= IF ." V2-NO-A " THEN',
-        'S" b.txt" _V2 @ VFS-RESOLVE 0<> IF ." V2-B " THEN',
-        'S" b.txt" _V1 @ VFS-RESOLVE 0= IF ." V1-NO-B" THEN CR',
+        ': T-2V  S" a.txt" _V1 @ VFS-RESOLVE 0<> IF ." V1-A " THEN  S" a.txt" _V2 @ VFS-RESOLVE 0= IF ." V2-NO-A " THEN  S" b.txt" _V2 @ VFS-RESOLVE 0<> IF ." V2-B " THEN  S" b.txt" _V1 @ VFS-RESOLVE 0= IF ." V1-NO-B" THEN ;',
+        'T-2V',
     ], "V1-A V2-NO-A V2-B V1-NO-B")
 
 # ── Larger write/read ──

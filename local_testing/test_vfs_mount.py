@@ -303,10 +303,8 @@ def test_resolve_exact_prefix():
     check("VMNT-RESOLVE exact prefix", [
         'T-VFS-NEW CONSTANT _V1',
         '_V1 S" /sd" VMNT-MOUNT DROP',
-        'S" /sd" VMNT-RESOLVE',
-        'ROT 0<> IF ." OK" ELSE ." NOPE" THEN',
-        # remainder should be empty (len=0)
-        'SWAP DROP . CR',
+        ': T-RE  S" /sd" VMNT-RESOLVE ROT 0<> IF ." OK " THEN SWAP DROP . ;',
+        'T-RE',
     ], "OK 0")
 
 # ── VMNT-OPEN ──
@@ -347,8 +345,8 @@ def test_multiple_mounts():
         'T-VFS-NEW CONSTANT _V2',
         '_V1 S" /alpha" VMNT-MOUNT DROP',
         '_V2 S" /beta" VMNT-MOUNT DROP',
-        'S" /alpha/x" VMNT-RESOLVE ROT _V1 = IF ." A-OK " THEN 2DROP',
-        'S" /beta/y" VMNT-RESOLVE ROT _V2 = IF ." B-OK" THEN 2DROP CR',
+        ': T-MM  S" /alpha/x" VMNT-RESOLVE ROT _V1 = IF ." A-OK " THEN 2DROP  S" /beta/y" VMNT-RESOLVE ROT _V2 = IF ." B-OK" THEN 2DROP ;',
+        'T-MM',
     ], "A-OK B-OK")
 
 # ── Mount/unmount/resolve cycle ──
