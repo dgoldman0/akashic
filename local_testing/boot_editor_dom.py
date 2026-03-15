@@ -2,8 +2,8 @@
 """Build a bootable disk image for the DOM-based Akashic Pad editor
 and optionally boot it in the emulator with an interactive terminal.
 
-Uses the DOM-TUI rendering stack (dom-render.f / dom-tui.f) instead
-of the UIDL-TUI layer.  The BIOS auto-loads kdos.f, KDOS runs
+Uses the UIDL-TUI rendering stack (uidl-tui.f + CSS style=) instead
+of the legacy DOM-TUI layer.  The BIOS auto-loads kdos.f, KDOS runs
 autoexec.f which loads akashic-pad-dom.f.
 
 Usage:
@@ -34,81 +34,126 @@ from system import MegapadSystem              # noqa: E402
 from diskutil import MP64FS, FTYPE_FORTH      # noqa: E402
 
 # ---------------------------------------------------------------------------
-#  Disk layout — DOM-TUI dependency chain + editor app
+#  Disk layout — UIDL-TUI dependency chain + editor app
 #
 #  /kdos.f                  — auto-loaded by BIOS
 #  /autoexec.f              — auto-run by KDOS
-#  /markup/core.f
-#  /markup/html.f
-#  /css/css.f
-#  /css/bridge.f
-#  /dom/dom.f
-#  /dom/html5.f
+#  /concurrency/event.f
+#  /concurrency/semaphore.f
+#  /concurrency/guard.f
+#  /math/fp32.f
+#  /math/fixed.f
 #  /utils/string.f
+#  /utils/term.f
 #  /utils/clipboard.f
 #  /text/utf8.f
+#  /css/css.f
+#  /markup/core.f
+#  /markup/xml.f
+#  /liraq/state-tree.f
+#  /liraq/lel.f
+#  /liraq/uidl.f
+#  /liraq/uidl-chrome.f
 #  /tui/cell.f
 #  /tui/ansi.f
 #  /tui/screen.f
 #  /tui/draw.f
+#  /tui/color.f
 #  /tui/box.f
 #  /tui/region.f
+#  /tui/layout.f
 #  /tui/keys.f
 #  /tui/widget.f
-#  /tui/dom-tui.f
-#  /tui/dom-render.f
+#  /tui/focus.f
+#  /tui/event.f
+#  /tui/app.f
+#  /tui/widgets/tree.f
+#  /tui/widgets/input.f
 #  /tui/widgets/textarea.f
+#  /tui/widgets/toast.f
+#  /tui/uidl-tui.f
 #  /akashic-pad-dom.f       — editor application
 # ---------------------------------------------------------------------------
 
 DISK_FILES = [
-    # markup
-    ("core.f",       "/markup",
-     os.path.join(AK_DIR, "markup", "core.f")),
-    ("html.f",       "/markup",
-     os.path.join(AK_DIR, "markup", "html.f")),
-    # css
-    ("css.f",        "/css",
-     os.path.join(AK_DIR, "css", "css.f")),
-    ("bridge.f",     "/css",
-     os.path.join(AK_DIR, "css", "bridge.f")),
-    # dom
-    ("dom.f",        "/dom",
-     os.path.join(AK_DIR, "dom", "dom.f")),
-    ("html5.f",      "/dom",
-     os.path.join(AK_DIR, "dom", "html5.f")),
+    # concurrency
+    ("event.f",        "/concurrency",
+     os.path.join(AK_DIR, "concurrency", "event.f")),
+    ("semaphore.f",    "/concurrency",
+     os.path.join(AK_DIR, "concurrency", "semaphore.f")),
+    ("guard.f",        "/concurrency",
+     os.path.join(AK_DIR, "concurrency", "guard.f")),
+    # math
+    ("fp32.f",         "/math",
+     os.path.join(AK_DIR, "math", "fp32.f")),
+    ("fixed.f",        "/math",
+     os.path.join(AK_DIR, "math", "fixed.f")),
     # utils
-    ("string.f",     "/utils",
+    ("string.f",       "/utils",
      os.path.join(AK_DIR, "utils", "string.f")),
-    ("clipboard.f",  "/utils",
+    ("term.f",         "/utils",
+     os.path.join(AK_DIR, "utils", "term.f")),
+    ("clipboard.f",    "/utils",
      os.path.join(AK_DIR, "utils", "clipboard.f")),
     # text
-    ("utf8.f",       "/text",
+    ("utf8.f",         "/text",
      os.path.join(AK_DIR, "text", "utf8.f")),
+    # css
+    ("css.f",          "/css",
+     os.path.join(AK_DIR, "css", "css.f")),
+    # markup
+    ("core.f",         "/markup",
+     os.path.join(AK_DIR, "markup", "core.f")),
+    ("xml.f",          "/markup",
+     os.path.join(AK_DIR, "markup", "xml.f")),
+    # liraq
+    ("state-tree.f",   "/liraq",
+     os.path.join(AK_DIR, "liraq", "state-tree.f")),
+    ("lel.f",          "/liraq",
+     os.path.join(AK_DIR, "liraq", "lel.f")),
+    ("uidl.f",         "/liraq",
+     os.path.join(AK_DIR, "liraq", "uidl.f")),
+    ("uidl-chrome.f",  "/liraq",
+     os.path.join(AK_DIR, "liraq", "uidl-chrome.f")),
     # tui core
-    ("cell.f",       "/tui",
+    ("cell.f",         "/tui",
      os.path.join(AK_DIR, "tui", "cell.f")),
-    ("ansi.f",       "/tui",
+    ("ansi.f",         "/tui",
      os.path.join(AK_DIR, "tui", "ansi.f")),
-    ("screen.f",     "/tui",
+    ("screen.f",       "/tui",
      os.path.join(AK_DIR, "tui", "screen.f")),
-    ("draw.f",       "/tui",
+    ("draw.f",         "/tui",
      os.path.join(AK_DIR, "tui", "draw.f")),
-    ("box.f",        "/tui",
+    ("color.f",        "/tui",
+     os.path.join(AK_DIR, "tui", "color.f")),
+    ("box.f",          "/tui",
      os.path.join(AK_DIR, "tui", "box.f")),
-    ("region.f",     "/tui",
+    ("region.f",       "/tui",
      os.path.join(AK_DIR, "tui", "region.f")),
-    ("keys.f",       "/tui",
+    ("layout.f",       "/tui",
+     os.path.join(AK_DIR, "tui", "layout.f")),
+    ("keys.f",         "/tui",
      os.path.join(AK_DIR, "tui", "keys.f")),
-    ("widget.f",     "/tui",
+    ("widget.f",       "/tui",
      os.path.join(AK_DIR, "tui", "widget.f")),
-    ("dom-tui.f",    "/tui",
-     os.path.join(AK_DIR, "tui", "dom-tui.f")),
-    ("dom-render.f", "/tui",
-     os.path.join(AK_DIR, "tui", "dom-render.f")),
+    ("focus.f",        "/tui",
+     os.path.join(AK_DIR, "tui", "focus.f")),
+    ("event.f",        "/tui",
+     os.path.join(AK_DIR, "tui", "event.f")),
+    ("app.f",          "/tui",
+     os.path.join(AK_DIR, "tui", "app.f")),
     # tui widgets
-    ("textarea.f",   "/tui/widgets",
+    ("tree.f",         "/tui/widgets",
+     os.path.join(AK_DIR, "tui", "widgets", "tree.f")),
+    ("input.f",        "/tui/widgets",
+     os.path.join(AK_DIR, "tui", "widgets", "input.f")),
+    ("textarea.f",     "/tui/widgets",
      os.path.join(AK_DIR, "tui", "widgets", "textarea.f")),
+    ("toast.f",        "/tui/widgets",
+     os.path.join(AK_DIR, "tui", "widgets", "toast.f")),
+    # uidl-tui (must come after all its deps)
+    ("uidl-tui.f",     "/tui",
+     os.path.join(AK_DIR, "tui", "uidl-tui.f")),
 ]
 
 EDITOR_PATH = os.path.join(AK_DIR, "examples", "pad", "akashic-pad-dom.f")
@@ -135,15 +180,17 @@ def build_disk_image(img_path: str):
     print(f"  kdos.f ({len(kdos_src):,} bytes)")
 
     # 2. Create directories
-    fs.mkdir("markup")
-    fs.mkdir("css")
-    fs.mkdir("dom")
+    fs.mkdir("concurrency")
+    fs.mkdir("math")
     fs.mkdir("utils")
     fs.mkdir("text")
+    fs.mkdir("css")
+    fs.mkdir("markup")
+    fs.mkdir("liraq")
     fs.mkdir("tui")
     fs.mkdir("tui/widgets")
 
-    # 3. Library source files (DOM-TUI dependency chain)
+    # 3. Library source files (UIDL-TUI dependency chain)
     for name, disk_dir, host_path in DISK_FILES:
         src = open(host_path, "rb").read()
         fs.inject_file(name, src, ftype=FTYPE_FORTH, path=disk_dir)
