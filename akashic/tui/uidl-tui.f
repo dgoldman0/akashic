@@ -1517,7 +1517,9 @@ VARIABLE _UHT-SC
 \  Two-pass paint:
 \    Pass 1: Paint all normal-flow elements (z-index == 0 and not dialog).
 \            Defer elements with z-index > 0 or type=dialog to overlay buf.
-\    Pass 2: Sort overlay buffer by z-index ascending, paint each.
+\            Skip entire subtree of deferred elements.
+\    Pass 2: Sort overlay buffer by z-index ascending, paint each as a
+\            full subtree (element + all descendants in tree order).
 
 32 CONSTANT _UTUI-MAX-OVERLAYS
 CREATE _UTUI-OVERLAY-BUF  _UTUI-MAX-OVERLAYS 2 * CELLS ALLOT  \ pairs: (elem, z-index)
@@ -1540,7 +1542,42 @@ VARIABLE _UTUI-OVERLAY-CNT
     THEN
     UIDL-CLEAN! ;
 
+\ --- Paint entire subtree (element + all descendants) ---
+\ Used in Pass 2 for overlay elements that were deferred from Pass 1.
+\ Does NOT re-defer elements — all descendants paint unconditionally.
+VARIABLE _UPST-ROOT
+
+: _UTUI-PAINT-SUBTREE  ( elem -- )
+    DUP _UPST-ROOT !
+    BEGIN
+        DUP _UTUI-SIDECAR _UTUI-SC-VIS? IF
+            DUP _UTUI-RENDER-ONE
+        ELSE DUP UIDL-CLEAN! THEN
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP _UPST-ROOT @ = IF DROP 0 TRUE
+                ELSE
+                    DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                    ELSE
+                        UIDL-PARENT
+                        DUP _UPST-ROOT @ = IF DROP 0 TRUE
+                        ELSE DUP 0= IF TRUE ELSE FALSE THEN
+                        THEN
+                    THEN
+                THEN
+            UNTIL
+            DUP 0= IF DROP EXIT THEN
+        THEN
+    AGAIN ;
+
+\ --- Skip-children flag ---
+\ Set by _UTUI-PAINT-ELEM when an element is deferred to the overlay
+\ buffer; tells the Pass 1 DFS to skip the element's subtree.
+VARIABLE _UTUI-SKIP-CHILDREN
+
 : _UTUI-PAINT-ELEM  ( elem -- )
+    0 _UTUI-SKIP-CHILDREN !
     DUP UIDL-DIRTY? 0= IF DROP EXIT THEN
     DUP _UTUI-SIDECAR _UTUI-SC-VIS? 0= IF
         UIDL-CLEAN! EXIT
@@ -1550,14 +1587,25 @@ VARIABLE _UTUI-OVERLAY-CNT
         DUP _UTUI-SIDECAR _UTUI-SC-ZIDX@
         DUP 0= IF DROP 255 THEN         \ dialogs default to z-index 255
         _UTUI-DEFER-OVERLAY
+        -1 _UTUI-SKIP-CHILDREN !
         EXIT
     THEN
     \ Defer elements with z-index > 0
     DUP _UTUI-SIDECAR _UTUI-SC-ZIDX@ DUP 0<> IF
         _UTUI-DEFER-OVERLAY
+        -1 _UTUI-SKIP-CHILDREN !
         EXIT
     THEN DROP
     _UTUI-RENDER-ONE ;
+
+\ --- DFS advance past subtree ---
+\ Advance to the next sibling (or ancestor's sibling), skipping all
+\ descendants.  Returns 0 when the tree is exhausted.
+: _UTUI-SKIP-SUBTREE  ( elem -- next | 0 )
+    BEGIN
+        DUP UIDL-NEXT-SIB ?DUP IF NIP EXIT THEN
+        UIDL-PARENT DUP 0=
+    UNTIL ;
 
 \ Simple insertion-sort overlay buffer by z-index (ascending)
 : _UTUI-SORT-OVERLAYS  ( -- )
@@ -1591,29 +1639,45 @@ VARIABLE _UTUI-OVERLAY-CNT
     RGN-ROOT
     0 _UTUI-OVERLAY-CNT !
     UIDL-ROOT ?DUP 0= IF EXIT THEN
-    \ Pass 1: normal flow elements
+    \ Pass 1: normal flow elements (skip subtrees of deferred overlays)
     BEGIN
         DUP _UTUI-PAINT-ELEM
-        DUP UIDL-FIRST-CHILD ?DUP IF NIP
-        ELSE
-            BEGIN
-                DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
-                ELSE
-                    UIDL-PARENT DUP IF
-                        FALSE
-                    ELSE 0 TRUE THEN
-                THEN
-            UNTIL
+        _UTUI-SKIP-CHILDREN @ IF
+            \ Deferred element — skip its entire subtree
+            _UTUI-SKIP-SUBTREE
             DUP 0= IF DROP
-                \ Pass 2: paint deferred overlays in z-order
+                \ Tree exhausted — fall through to Pass 2
                 _UTUI-OVERLAY-CNT @ 0> IF
                     _UTUI-SORT-OVERLAYS
                     _UTUI-OVERLAY-CNT @ 0 DO
                         I 2 * CELLS _UTUI-OVERLAY-BUF + @
-                        _UTUI-RENDER-ONE
+                        _UTUI-PAINT-SUBTREE
                     LOOP
                 THEN
                 EXIT
+            THEN
+        ELSE
+            DUP UIDL-FIRST-CHILD ?DUP IF NIP
+            ELSE
+                BEGIN
+                    DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                    ELSE
+                        UIDL-PARENT DUP IF
+                            FALSE
+                        ELSE 0 TRUE THEN
+                    THEN
+                UNTIL
+                DUP 0= IF DROP
+                    \ Pass 2: paint deferred overlays in z-order
+                    _UTUI-OVERLAY-CNT @ 0> IF
+                        _UTUI-SORT-OVERLAYS
+                        _UTUI-OVERLAY-CNT @ 0 DO
+                            I 2 * CELLS _UTUI-OVERLAY-BUF + @
+                            _UTUI-PAINT-SUBTREE
+                        LOOP
+                    THEN
+                    EXIT
+                THEN
             THEN
         THEN
     AGAIN ;
@@ -1673,32 +1737,168 @@ VARIABLE _UTUI-OVERLAY-CNT
     _UTUI-FIRE-DO -1 ;
 
 \ =====================================================================
-\  §16 — Dialog Show / Hide
+\  §16 — Overlay Show / Hide
 \ =====================================================================
+\
+\  Generic show/hide for any element (group, dialog, etc.).
+\  UTUI-SHOW sets visible + dirties the subtree.
+\  UTUI-HIDE clears visible, clears the rect, and dirties elements
+\  underneath so they repaint.
+\
+\  Focus capture: UTUI-SHOW saves focus and moves it to the first
+\  focusable element inside the overlay. UTUI-HIDE restores the
+\  saved focus.
 
-: UTUI-SHOW-DIALOG  ( id-a id-l -- )
-    UIDL-BY-ID ?DUP IF
+\ --- Dirty helpers ---
+
+\ Mark element and all descendants dirty.
+VARIABLE _UDST-ROOT
+
+: _UTUI-DIRTY-SUBTREE  ( elem -- )
+    DUP _UDST-ROOT !
+    BEGIN
+        DUP UIDL-DIRTY!
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP _UDST-ROOT @ = IF DROP 0 TRUE
+                ELSE
+                    DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                    ELSE
+                        UIDL-PARENT
+                        DUP _UDST-ROOT @ = IF DROP 0 TRUE
+                        ELSE DUP 0= IF TRUE ELSE FALSE THEN
+                        THEN
+                    THEN
+                THEN
+            UNTIL
+            DUP 0= IF DROP EXIT THEN
+        THEN
+    AGAIN ;
+
+\ Mark all visible base-layer elements overlapping a rectangle dirty.
+\ Used after hiding an overlay to repaint what was underneath.
+VARIABLE _UDR-R1   VARIABLE _UDR-C1
+VARIABLE _UDR-R2   VARIABLE _UDR-C2
+VARIABLE _UDR-SC
+
+: _UTUI-DIRTY-RECT  ( row col h w -- )
+    \ Compute exclusive bottom-right
+    >R >R                              ( row col  R: w h )
+    OVER R> + _UDR-R2 !                 \ r2 = row + h
+    DUP  R> + _UDR-C2 !                 \ c2 = col + w
+    _UDR-C1 !  _UDR-R1 !               \ r1 = row, c1 = col
+    UIDL-ROOT ?DUP 0= IF EXIT THEN
+    BEGIN
+        DUP _UTUI-SIDECAR _UDR-SC !
+        _UDR-SC @ _UTUI-SC-FLAGS@ _UTUI-SCF-HAS AND IF
+            _UDR-SC @ _UTUI-SC-VIS? IF
+                \ Overlap iff: er < r2  AND  er+eh > r1  AND  ec < c2  AND  ec+ew > c1
+                _UDR-SC @ _UTUI-SC-ROW@  _UDR-R2 @ <
+                _UDR-SC @ _UTUI-SC-ROW@ _UDR-SC @ _UTUI-SC-H@ + _UDR-R1 @ >  AND
+                _UDR-SC @ _UTUI-SC-COL@  _UDR-C2 @ <  AND
+                _UDR-SC @ _UTUI-SC-COL@ _UDR-SC @ _UTUI-SC-W@ + _UDR-C1 @ >  AND
+                IF DUP UIDL-DIRTY! THEN
+            THEN
+        THEN
+        \ DFS advance
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                ELSE
+                    UIDL-PARENT DUP 0=
+                THEN
+            UNTIL
+            DUP 0= IF DROP EXIT THEN
+        THEN
+    AGAIN ;
+
+\ --- Focus save / restore ---
+VARIABLE _UTUI-SAVED-FOCUS     \ stashed focus elem for overlay hide
+
+\ --- Show / hide by element pointer ---
+
+: _UTUI-VIS-SUBTREE!  ( flag elem -- )
+    \ Set or clear VIS on elem + all descendants.
+    SWAP >R
+    DUP _UDST-ROOT !
+    BEGIN
         DUP _UTUI-SIDECAR
-        DUP _UTUI-SC-FLAGS@ _UTUI-SCF-VIS OR SWAP _UTUI-SC-FLAGS!
-        UIDL-DIRTY!
+        DUP _UTUI-SC-FLAGS@
+        R@ IF _UTUI-SCF-VIS OR ELSE _UTUI-SCF-VIS INVERT AND THEN
+        SWAP _UTUI-SC-FLAGS!
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP _UDST-ROOT @ = IF DROP 0 TRUE
+                ELSE
+                    DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                    ELSE
+                        UIDL-PARENT
+                        DUP _UDST-ROOT @ = IF DROP 0 TRUE
+                        ELSE DUP 0= IF TRUE ELSE FALSE THEN
+                        THEN
+                    THEN
+                THEN
+            UNTIL
+            DUP 0= IF R> DROP DROP EXIT THEN
+        THEN
+    AGAIN ;
+
+VARIABLE _USH-SC    \ temp sidecar for show/hide
+VARIABLE _USH-ROW  VARIABLE _USH-COL
+VARIABLE _USH-H    VARIABLE _USH-W
+
+: _UTUI-SHOW-ELEM  ( elem -- )
+    \ Save current focus
+    UTUI-FOCUS _UTUI-SAVED-FOCUS !
+    \ Set VIS on entire subtree + dirty
+    DUP -1 SWAP _UTUI-VIS-SUBTREE!
+    DUP _UTUI-DIRTY-SUBTREE
+    \ Focus first focusable child (if any)
+    DUP >R
+    BEGIN
+        _UTUI-DFS-NEXT
+        DUP 0= IF DROP R> DROP EXIT THEN
+        DUP R@ = IF DROP R> DROP EXIT THEN
+        DUP _UTUI-FOCUSABLE? IF
+            UTUI-FOCUS! R> DROP EXIT
+        THEN
+    AGAIN ;
+
+: _UTUI-HIDE-ELEM  ( elem -- )
+    DUP _UTUI-SIDECAR _USH-SC !
+    \ Snapshot bounding rect before hiding
+    _USH-SC @ _UTUI-SC-ROW@  _USH-ROW !
+    _USH-SC @ _UTUI-SC-COL@  _USH-COL !
+    _USH-SC @ _UTUI-SC-H@    _USH-H !
+    _USH-SC @ _UTUI-SC-W@    _USH-W !
+    \ Clear VIS on entire subtree
+    DUP 0 SWAP _UTUI-VIS-SUBTREE!
+    \ Dirty underlying elements that overlap
+    _USH-ROW @ _USH-COL @ _USH-H @ _USH-W @ _UTUI-DIRTY-RECT
+    \ Clear the overlay area
+    _USH-ROW @ _USH-COL @ _USH-H @ _USH-W @ DRW-CLEAR-RECT
+    \ Restore saved focus
+    _UTUI-SAVED-FOCUS @ ?DUP IF
+        DUP _UTUI-SIDECAR _UTUI-SC-VIS? IF
+            UTUI-FOCUS!
+        ELSE DROP THEN
     THEN ;
 
-VARIABLE _UDH-SC   \ temp for dialog hide
+\ --- Public by-ID wrappers ---
 
-: UTUI-HIDE-DIALOG  ( id-a id-l -- )
-    UIDL-BY-ID ?DUP IF
-        DUP _UTUI-SIDECAR _UDH-SC !
-        _UDH-SC @ _UTUI-SC-FLAGS@ _UTUI-SCF-VIS INVERT AND
-        _UDH-SC @ _UTUI-SC-FLAGS!
-        \ Clear dialog area
-        _UDH-SC @ _UTUI-SC-ROW@
-        _UDH-SC @ _UTUI-SC-COL@
-        _UDH-SC @ _UTUI-SC-H@
-        _UDH-SC @ _UTUI-SC-W@
-        DRW-CLEAR-RECT
-        \ Re-dirty underlying elements
-        UIDL-ROOT ?DUP IF UIDL-DIRTY! THEN
-    THEN ;
+: UTUI-SHOW  ( id-a id-l -- )
+    UIDL-BY-ID ?DUP IF _UTUI-SHOW-ELEM THEN ;
+
+: UTUI-HIDE  ( id-a id-l -- )
+    UIDL-BY-ID ?DUP IF _UTUI-HIDE-ELEM THEN ;
+
+\ --- Legacy dialog wrappers (delegate to generic show/hide) ---
+
+: UTUI-SHOW-DIALOG  ( id-a id-l -- )  UTUI-SHOW ;
+: UTUI-HIDE-DIALOG  ( id-a id-l -- )  UTUI-HIDE ;
 
 \ =====================================================================
 \  §16a — Widget Materialization

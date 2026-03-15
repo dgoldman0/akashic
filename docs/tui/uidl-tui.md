@@ -377,9 +377,90 @@ elements with custom layout words.
 ## Dialog Management
 
 | Word | Stack | Description |
-|------|-------|-------------|
-| `UTUI-SHOW-DIALOG` | `( id-a id-l -- )` | Look up dialog by ID, mark visible, set focus |
-| `UTUI-HIDE-DIALOG` | `( id-a id-l -- )` | Look up dialog by ID, hide, restore previous focus |
+|------|-------|---------|
+| `UTUI-SHOW-DIALOG` | `( id-a id-l -- )` | Legacy wrapper — delegates to `UTUI-SHOW` |
+| `UTUI-HIDE-DIALOG` | `( id-a id-l -- )` | Legacy wrapper — delegates to `UTUI-HIDE` |
+
+---
+
+## Overlay System
+
+Any UIDL element with `z-index > 0` or type `<dialog>` is treated
+as an overlay.  Overlays are managed via `UTUI-SHOW` / `UTUI-HIDE`
+(generic versions, not dialog-specific).
+
+### UTUI-SHOW — `( id-a id-l -- )`
+
+Show an overlay element by string ID:
+
+1. Save current focus to `_UTUI-SAVED-FOCUS`
+2. Set `VIS` flag on the element and all its descendants
+3. Mark the entire subtree dirty for repaint
+4. Move focus to the first focusable descendant (if any)
+
+### UTUI-HIDE — `( id-a id-l -- )`
+
+Hide an overlay element by string ID:
+
+1. Snapshot the overlay's bounding rectangle
+2. Clear `VIS` flag on the element and all its descendants
+3. Dirty-rect scan: mark all visible base-layer elements whose
+   bounding rect overlaps the overlay as dirty
+4. Clear the overlay's screen area (`DRW-CLEAR-RECT`)
+5. Restore focus to the saved element (if it's still visible)
+
+### How Overlay Paint Works
+
+The paint cycle (`UTUI-PAINT`) uses a two-pass approach:
+
+- **Pass 1**: DFS walk paints normal-flow elements (z-index 0).
+  When an overlay is encountered (z-index > 0 or dialog), the
+  element is deferred to the overlay buffer and its **entire
+  subtree is skipped** in Pass 1.
+- **Pass 2**: Deferred overlays are sorted by z-index (ascending)
+  and painted as **complete subtrees** (element + all descendants
+  in tree order).
+
+This ensures:
+- Overlay children don't paint under base content in Pass 1
+- Overlay backgrounds don't overwrite children painted too early
+- Higher z-index overlays draw on top of lower ones
+
+### Internal Words
+
+| Word | Stack | Description |
+|------|-------|---------|
+| `_UTUI-SHOW-ELEM` | `( elem -- )` | Show by element pointer |
+| `_UTUI-HIDE-ELEM` | `( elem -- )` | Hide by element pointer |
+| `_UTUI-VIS-SUBTREE!` | `( flag elem -- )` | Set/clear VIS on elem + descendants |
+| `_UTUI-DIRTY-SUBTREE` | `( elem -- )` | Mark elem + descendants dirty |
+| `_UTUI-DIRTY-RECT` | `( row col h w -- )` | Dirty all visible elements overlapping rect |
+| `_UTUI-PAINT-SUBTREE` | `( elem -- )` | DFS paint of elem + descendants (Pass 2) |
+| `_UTUI-SKIP-SUBTREE` | `( elem -- next\|0 )` | Advance DFS past all descendants |
+| `_UTUI-SKIP-CHILDREN` | `( -- addr )` | Variable: flag for Pass 1 subtree skip |
+| `_UTUI-SAVED-FOCUS` | `( -- addr )` | Variable: stashed focus for overlay |
+
+### Usage Example
+
+```xml
+<uidl>
+<region arrange="stack">
+  <label text="Main content"/>
+  <group id="popup" style="z-index:10; color:1; background-color:4">
+    <label text="Popup message!"/>
+    <action id="close" text="OK" do="close"/>
+  </group>
+</region>
+</uidl>
+```
+
+```forth
+\ Show the popup — it paints on top, focus jumps inside
+S" popup" UTUI-SHOW
+
+\ Later, hide it — base content repaints automatically
+S" popup" UTUI-HIDE
+```
 
 ---
 
@@ -595,7 +676,7 @@ single guard (`_utui-guard`) for thread-safe access:
 `UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, `UTUI-FOCUS`,
 `UTUI-FOCUS!`, `UTUI-FOCUS-NEXT`, `UTUI-FOCUS-PREV`,
 `UTUI-HIT-TEST`, `UTUI-BY-ID`, `UTUI-DETACH`, `UTUI-DO!`,
-`UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`.
+`UTUI-SHOW`, `UTUI-HIDE`, `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`.
 
 ---
 
@@ -618,8 +699,10 @@ UTUI-HIT-TEST          ( row col -- elem | 0 )       Deepest element at screen p
 UTUI-BY-ID             ( id-a id-l -- elem | 0 )     Look up element by ID
 UTUI-WIDGET@           ( elem -- wptr | 0 )          Get widget pointer from element sidecar
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
-UTUI-SHOW-DIALOG       ( id-a id-l -- )              Show dialog by ID
-UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID
+UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)
+UTUI-HIDE              ( id-a id-l -- )              Hide overlay (clear VIS, dirty-rect, restore focus)
+UTUI-SHOW-DIALOG       ( id-a id-l -- )              Show dialog by ID (legacy wrapper)
+UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy wrapper)
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
@@ -670,13 +753,21 @@ AGAIN
 S" save" ['] my-save UTUI-DO!
 ```
 
-### Show/hide a dialog
+### Show/hide an overlay
+
+```forth
+\ Any element with z-index or type=dialog
+S" popup" UTUI-SHOW    \ shows, dirties, captures focus
+S" popup" UTUI-HIDE    \ hides, clear-rects, restores focus
+```
+
+### Show/hide a dialog (legacy)
 
 ```forth
 \ In UIDL: <dialog id="help-dlg"> ... </dialog>
-S" help-dlg" UTUI-SHOW-DIALOG
+S" help-dlg" UTUI-SHOW-DIALOG   \ delegates to UTUI-SHOW
 \ later:
-S" help-dlg" UTUI-HIDE-DIALOG
+S" help-dlg" UTUI-HIDE-DIALOG   \ delegates to UTUI-HIDE
 ```
 
 ### Clean up

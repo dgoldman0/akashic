@@ -1121,6 +1121,198 @@ def test_inherit_multi():
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  §Q — Overlay Show / Hide Tests
+# ═══════════════════════════════════════════════════════════════════
+
+# Overlay doc: a base label + a group overlay with z-index
+_XML_OVERLAY = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <label id="base" text="Background"/>'
+    '  <group id="popup" style="z-index:10; color:1; background-color:0">'
+    '    <label id="popup-msg" text="Popup!"/>'
+    '    <action id="popup-ok" text="OK" do="close-popup"/>'
+    '  </group>'
+    '</region>'
+    '</uidl>'
+)
+
+# Overlay doc with a dialog element (uses default z-index 255)
+_XML_OVERLAY_DIALOG = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <label id="main" text="Main"/>'
+    '  <dialog id="dlg1">'
+    '    <label id="dlg-body" text="Dialog Body"/>'
+    '    <action id="dlg-ok" text="OK" do="close-dlg"/>'
+    '  </dialog>'
+    '</region>'
+    '</uidl>'
+)
+
+# Overlay doc with nested focusable elements
+_XML_OVERLAY_FOCUS = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <action id="btn-a" text="A" do="a"/>'
+    '  <action id="btn-b" text="B" do="b"/>'
+    '  <group id="menu" style="z-index:50">'
+    '    <action id="m1" text="Menu1" do="m1"/>'
+    '    <action id="m2" text="Menu2" do="m2"/>'
+    '  </group>'
+    '</region>'
+    '</uidl>'
+)
+
+
+def test_overlay_show_vis():
+    """UTUI-SHOW sets VIS flag on overlay element."""
+    check("overlay-show-vis", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        # First hide, then show
+        'S" popup" UTUI-HIDE',
+        'S" popup" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-FLAGS@',
+        '_UTUI-SCF-VIS AND 0= IF ." HIDDEN" ELSE ." VIS" THEN CR',
+        'S" popup" UTUI-SHOW',
+        'S" popup" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-FLAGS@',
+        '_UTUI-SCF-VIS AND 0<> IF ." VISIBLE" ELSE ." INVIS" THEN CR',
+    ]), check_fn=lambda o: "HIDDEN" in o and "VISIBLE" in o)
+
+
+def test_overlay_hide_vis():
+    """UTUI-HIDE clears VIS flag on overlay element."""
+    check("overlay-hide-vis", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        'S" popup" UTUI-HIDE',
+        'S" popup" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-FLAGS@',
+        '_UTUI-SCF-VIS AND 0= IF ." HIDDEN-OK" ELSE ." STILL-VIS" THEN CR',
+    ]), "HIDDEN-OK")
+
+
+def test_overlay_hide_children_vis():
+    """UTUI-HIDE clears VIS on all children of overlay."""
+    check("overlay-hide-children", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        'S" popup" UTUI-HIDE',
+        'S" popup-msg" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-FLAGS@',
+        '_UTUI-SCF-VIS AND 0= IF ." CHILD-HIDDEN" ELSE ." CHILD-VIS" THEN CR',
+    ]), "CHILD-HIDDEN")
+
+
+def test_overlay_show_children_vis():
+    """UTUI-SHOW sets VIS on all children of overlay."""
+    check("overlay-show-children", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        'S" popup" UTUI-HIDE',
+        'S" popup" UTUI-SHOW',
+        'S" popup-msg" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-FLAGS@',
+        '_UTUI-SCF-VIS AND 0<> IF ." CHILD-VIS" ELSE ." CHILD-HIDDEN" THEN CR',
+    ]), "CHILD-VIS")
+
+
+def test_overlay_dirty_subtree():
+    """UTUI-SHOW marks overlay subtree dirty for repaint."""
+    check("overlay-dirty-subtree", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        'S" popup" UTUI-HIDE',
+        # Clean the popup
+        'S" popup-msg" UTUI-BY-ID UIDL-CLEAN!',
+        # Now show — should dirty
+        'S" popup" UTUI-SHOW',
+        'S" popup-msg" UTUI-BY-ID UIDL-DIRTY?',
+        'IF ." DIRTY-OK" ELSE ." CLEAN" THEN CR',
+    ]), "DIRTY-OK")
+
+
+def test_overlay_hide_dirties_base():
+    """UTUI-HIDE marks underlying elements dirty (dirty-rect)."""
+    check("overlay-hide-dirties-base", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        # Clean the base element
+        'S" base" UTUI-BY-ID UIDL-CLEAN!',
+        # Hide popup — should dirty base (same region)
+        'S" popup" UTUI-HIDE',
+        'S" base" UTUI-BY-ID UIDL-DIRTY?',
+        'IF ." BASE-DIRTY" ELSE ." BASE-CLEAN" THEN CR',
+    ]), "BASE-DIRTY")
+
+
+def test_overlay_paint_no_crash():
+    """UTUI-PAINT with z-indexed overlay doesn't crash."""
+    check("overlay-paint-no-crash", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        'UIDL-ROOT UIDL-DIRTY!',
+        'UTUI-PAINT',
+        '." PAINT-OK" CR',
+    ]), "PAINT-OK")
+
+
+def test_overlay_dialog_show_hide():
+    """UTUI-SHOW-DIALOG / UTUI-HIDE-DIALOG work as legacy wrappers."""
+    check("overlay-dialog-legacy", _xml_lines(_XML_OVERLAY_DIALOG, extra_after=[
+        'DROP',
+        'S" dlg1" UTUI-HIDE-DIALOG',
+        'S" dlg1" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-FLAGS@',
+        '_UTUI-SCF-VIS AND 0= IF ." D-HIDDEN" ELSE ." D-VIS" THEN CR',
+        'S" dlg1" UTUI-SHOW-DIALOG',
+        'S" dlg1" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-FLAGS@',
+        '_UTUI-SCF-VIS AND 0<> IF ." D-VISIBLE" ELSE ." D-INVIS" THEN CR',
+    ]), check_fn=lambda o: "D-HIDDEN" in o and "D-VISIBLE" in o)
+
+
+def test_overlay_focus_capture():
+    """UTUI-SHOW captures focus to first focusable in overlay."""
+    check("overlay-focus-capture", _xml_lines(_XML_OVERLAY_FOCUS, extra_after=[
+        'DROP',
+        'S" btn-a" UTUI-BY-ID UTUI-FOCUS!',
+        'S" menu" UTUI-HIDE',
+        'S" menu" UTUI-SHOW',
+        'UTUI-FOCUS S" m1" UTUI-BY-ID =',
+        'IF ." FOC-M1" ELSE ." FOC-OTHER" THEN CR',
+    ]), "FOC-M1")
+
+
+def test_overlay_focus_restore():
+    """UTUI-HIDE restores focus to saved element."""
+    check("overlay-focus-restore", _xml_lines(_XML_OVERLAY_FOCUS, extra_after=[
+        'DROP',
+        'S" btn-b" UTUI-BY-ID UTUI-FOCUS!',
+        'S" menu" UTUI-HIDE',
+        'S" menu" UTUI-SHOW',
+        'S" menu" UTUI-HIDE',
+        'UTUI-FOCUS S" btn-b" UTUI-BY-ID =',
+        'IF ." FOC-B" ELSE ." FOC-OTHER" THEN CR',
+    ]), "FOC-B")
+
+
+def test_overlay_subtree_paint():
+    """Pass 2 paints overlay subtree (children dirty → clean after paint)."""
+    check("overlay-subtree-paint", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        # Dirty everything and paint
+        'S" popup" UTUI-BY-ID _UTUI-DIRTY-SUBTREE',
+        'UIDL-ROOT UIDL-DIRTY!',
+        'UTUI-PAINT',
+        # After paint, popup child should be clean
+        'S" popup-msg" UTUI-BY-ID UIDL-DIRTY?',
+        'IF ." STILL-DIRTY" ELSE ." CLEAN-OK" THEN CR',
+    ]), "CLEAN-OK")
+
+
+def test_overlay_skip_children_pass1():
+    """During Pass 1, children of deferred overlay are NOT painted."""
+    # Regression guard: verify overlay children don't have their dirty
+    # flag cleared during Pass 1 (they should only paint in Pass 2).
+    check("overlay-skip-pass1", _xml_lines(_XML_OVERLAY, extra_after=[
+        'DROP',
+        # Dirty everything
+        'UIDL-ROOT ?DUP IF _UTUI-DIRTY-SUBTREE THEN',
+        'UTUI-PAINT',
+        '." PASS-OK" CR',
+    ]), "PASS-OK")
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════
 
@@ -1253,6 +1445,22 @@ def main():
     test_inherit_default_bg()
     test_inherit_text_align()
     test_inherit_multi()
+    print()
+
+    # §Q Overlays
+    print("[Q] Overlays")
+    test_overlay_show_vis()
+    test_overlay_hide_vis()
+    test_overlay_hide_children_vis()
+    test_overlay_show_children_vis()
+    test_overlay_dirty_subtree()
+    test_overlay_hide_dirties_base()
+    test_overlay_paint_no_crash()
+    test_overlay_dialog_show_hide()
+    test_overlay_focus_capture()
+    test_overlay_focus_restore()
+    test_overlay_subtree_paint()
+    test_overlay_skip_children_pass1()
     print()
 
     # Summary
