@@ -2202,6 +2202,7 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
 
     UIDL-PARSE                         ( flag )
     DUP 0= IF EXIT THEN
+    DROP                               \ discard parse flag; push -1 at end
 
     \ Set element pool base for sidecar indexing.
     \ _UDL-ELEMS is a CREATE'd buffer in uidl.f: executing it
@@ -2211,17 +2212,12 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
 
-    _UTUI-PRELAYOUT-STYLES             \ §16c: position, display, padding, margin
-
-    UTUI-RELAYOUT
-
+    _UTUI-PRELAYOUT-STYLES DROP        \ §16c: position, display, padding, margin
+    UTUI-RELAYOUT          DROP        \ (leaks 1 item — drop it)
     _UTUI-RESOLVE-STYLES               \ §16b: colors, text-align, z-index, dims, offsets
-
-    _UTUI-RESOLVE-POSITIONED           \ §7b: place absolute/fixed elements
-
-    _UTUI-MATERIALIZE
-
-    _UTUI-WIRE-SUBS
+    _UTUI-RESOLVE-POSITIONED DROP      \ §7b: place absolute/fixed elements
+    _UTUI-MATERIALIZE        DROP
+    _UTUI-WIRE-SUBS          DROP
 
     0 _UTUI-FOCUS-P !
     UTUI-FOCUS-NEXT

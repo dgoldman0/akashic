@@ -64,7 +64,7 @@ REQUIRE ../keys.f
 112 CONSTANT _TREE-DESC-SZ
 
 512 CONSTANT _TREE-MAX-NODES
-3   CONSTANT _TREE-INDENT
+2   CONSTANT _TREE-INDENT
 
 \ Tree-guide codepoints
 9500 CONSTANT _TREE-TEE      \ U+251C ├
@@ -273,7 +273,7 @@ VARIABLE _TREE-VH
 
     \ Draw label text
     ROT _TW-W @ SWAP _TREE-LABEL         ( scr-row col addr len )
-    2SWAP SWAP DRW-TEXT
+    2SWAP DRW-TEXT
 
     1 _TREE-ROW-CTR +! ;
 

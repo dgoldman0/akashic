@@ -96,23 +96,11 @@ VARIABLE _EXL-PA     \ prefix addr
 VARIABLE _EXL-PU     \ prefix len
 
 \ _EXPL-LABEL ( inode -- addr len )
-\   Tree callback: get node label text.  Prepends [D] for dirs
-\   or 4 spaces for files.
+\   Tree callback: get node label text.
+\   Directories are already distinguished by their expand/collapse
+\   indicator (▼/▶) in the tree widget, so no prefix is needed.
 : _EXPL-LABEL  ( inode -- addr len )
-    DUP IN.NAME @ _VFS-STR-GET     ( inode str-a str-u )
-    _EXL-SU !  _EXL-SA !           ( inode )
-    IN.TYPE @ VFS-T-DIR = IF
-        S" [D] "
-    ELSE
-        S"     "
-    THEN
-    _EXL-PU !  _EXL-PA !
-    \ Copy prefix to label buffer  (KDOS CMOVE: src dst cnt)
-    _EXL-PA @  _EXPL-LABEL-BUF  _EXL-PU @  CMOVE
-    \ Copy name after prefix
-    _EXL-SA @  _EXPL-LABEL-BUF _EXL-PU @ +  _EXL-SU @  CMOVE
-    \ Return buffer and total length
-    _EXPL-LABEL-BUF  _EXL-PU @ _EXL-SU @ + ;
+    IN.NAME @ _VFS-STR-GET ;
 
 \ _EXPL-LEAF? ( inode -- flag )
 \   Tree callback: true if the node is not a directory.

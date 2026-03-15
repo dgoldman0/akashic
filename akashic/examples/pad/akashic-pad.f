@@ -678,11 +678,11 @@ VARIABLE _pad-sav-fd
 : _PAD-AFTER-PROMPT  ( -- )
     _PAD-DIRTY-STATUS
     _PAD-ACTIVE-SLOT DUP 0>= IF
-        _PAD-SLOT-TXTA@ ?DUP IF WDG-DIRTY THEN
+        _PAD-SLOT-TXTA@ ?DUP IF DUP WDG-DIRTY WDG-DRAW THEN
     ELSE DROP THEN
-    _pad-expl-w @ ?DUP IF WDG-DIRTY THEN
-    _pad-tab-w @ ?DUP IF WDG-DIRTY THEN
-    UTUI-PAINT SCR-FLUSH ;
+    _pad-expl-w @ ?DUP IF DUP WDG-DIRTY WDG-DRAW THEN
+    _pad-tab-w @ ?DUP IF DUP WDG-DIRTY WDG-DRAW THEN
+    RGN-ROOT UTUI-PAINT SCR-FLUSH ;
 
 CREATE _pad-pr-buf 64 ALLOT
 VARIABLE _pad-pr-len
@@ -701,35 +701,29 @@ VARIABLE _pad-pr-u
     0 _pad-pr-len !
     _PAD-PR-REDRAW
     BEGIN
-        _pad-ev KEY-READ DROP
-        _pad-ev @ KEY-T-SPECIAL = IF
-            _pad-ev 8 + @
-            DUP KEY-ENTER = IF
-                DROP _PAD-AFTER-PROMPT
-                _pad-pr-buf _pad-pr-len @ EXIT
+        KEY                                \ raw byte — no timeout ambiguity
+        DUP 27 = IF                        \ ESC → cancel
+            DROP _PAD-AFTER-PROMPT
+            0 0 EXIT
+        THEN
+        DUP 13 = IF                        \ Enter → submit
+            DROP _PAD-AFTER-PROMPT
+            _pad-pr-buf _pad-pr-len @ EXIT
+        THEN
+        DUP 127 = OVER 8 = OR IF           \ DEL or BS → backspace
+            DROP
+            _pad-pr-len @ 0> IF
+                -1 _pad-pr-len +!
+                _PAD-PR-REDRAW
             THEN
-            DUP KEY-ESC = IF
-                DROP _PAD-AFTER-PROMPT
-                0 0 EXIT
-            THEN
-            DUP KEY-BACKSPACE = IF
-                DROP
-                _pad-pr-len @ 0> IF
-                    -1 _pad-pr-len +!
-                    _PAD-PR-REDRAW
-                THEN
-            ELSE DROP THEN
         ELSE
-            _pad-ev @ KEY-T-CHAR = IF
-                _pad-ev 8 + @
-                DUP 32 >= OVER 127 < AND IF
-                    _pad-pr-len @ 60 < IF
-                        _pad-pr-buf _pad-pr-len @ + C!
-                        1 _pad-pr-len +!
-                        _PAD-PR-REDRAW
-                    ELSE DROP THEN
+            DUP 32 >= OVER 127 < AND IF    \ printable → append
+                _pad-pr-len @ 60 < IF
+                    _pad-pr-buf _pad-pr-len @ + C!
+                    1 _pad-pr-len +!
+                    _PAD-PR-REDRAW
                 ELSE DROP THEN
-            THEN
+            ELSE DROP THEN
         THEN
     AGAIN ;
 
@@ -926,6 +920,11 @@ VARIABLE _pad-pr-u
         WDG-HANDLE
     THEN ;
 
+: _PAD-DISPATCH-TAIL  ( ev -- )
+    DUP UTUI-DISPATCH-KEY 0= IF
+        _PAD-DISPATCH-PANEL DROP
+    ELSE DROP THEN ;
+
 \ ============================================================
 \  §16 — Draw Helpers
 \ ============================================================
@@ -998,6 +997,9 @@ VARIABLE _pad-pr-u
     _pad-vfs @ V.ROOT @
     EXPL-NEW _pad-expl-w !
 
+    \ Expand the tree so files are visible on boot
+    _pad-expl-w @ EXPL-EXPAND-ALL
+
     \ Wire explorer callbacks
     ['] _PAD-ON-EXPL-OPEN  _pad-expl-w @ EXPL-ON-OPEN
     ['] _PAD-ON-EXPL-SELECT _pad-expl-w @ EXPL-ON-SELECT
@@ -1065,10 +1067,15 @@ VARIABLE _pad-pr-u
     BEGIN
         _pad-ev KEY-READ DROP
 
-        \ 1. Try UTUI-DISPATCH-KEY (shortcuts → actions)
-        _pad-ev UTUI-DISPATCH-KEY 0= IF
-            \ 2. If not consumed, route to focused panel
-            _pad-ev _PAD-DISPATCH-PANEL DROP
+        \ 0. Tab / Shift-Tab → cycle focus between panels
+        _pad-ev KEY-IS-SPECIAL? IF
+            _pad-ev KEY-CODE@ KEY-TAB = IF
+                _PAD-ACT-FOCUS-SWAP
+            ELSE
+                _pad-ev _PAD-DISPATCH-TAIL
+            THEN
+        ELSE
+            _pad-ev _PAD-DISPATCH-TAIL
         THEN
 
         \ 3. Update status bar
