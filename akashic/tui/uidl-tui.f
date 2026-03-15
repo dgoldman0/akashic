@@ -211,6 +211,12 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : _UTUI-SC-CLEAR-ALL  ( -- )
     _UTUI-SIDECARS _UTUI-MAX-ELEMS _UTUI-SC-SZ * 0 FILL ;
 
+\ Public style readers — extract fg/bg/attrs from an element's resolved
+\ sidecar style.  These are available after UTUI-LOAD returns.
+: UTUI-SC-FG@    ( elem -- fg )    _UTUI-SIDECAR _UTUI-SC-STYLE@ 255 AND ;
+: UTUI-SC-BG@    ( elem -- bg )    _UTUI-SIDECAR _UTUI-SC-STYLE@ 8 RSHIFT 255 AND ;
+: UTUI-SC-ATTRS@ ( elem -- attrs ) _UTUI-SIDECAR _UTUI-SC-STYLE@ 16 RSHIFT 255 AND ;
+
 \ =====================================================================
 \  §1b — Proxy Region (shared by all materialized widgets)
 \ =====================================================================
@@ -287,6 +293,11 @@ VARIABLE _UTUI-FOCUS-P    \ currently focused element (0 = none)
 
 \ Default style: light gray on dark gray, no attrs
 253 236 0 _UTUI-PACK-STYLE CONSTANT _UTUI-DEFAULT-STYLE
+
+\ Mask for CSS-inheritable properties:
+\   fg(0-7), bg(8-15), attrs(16-23), text-align(24-25)
+\ Non-inheritable (position 26-27, z-index 28-35) are excluded.
+0x03FFFFFF CONSTANT _UTUI-INHERIT-MASK
 
 \ =====================================================================
 \  §3 — Action Dispatch Table
@@ -466,6 +477,7 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     DUP _UTUI-SIDECAR                 ( elem sc )
     DUP _UTUI-SC-VIS? 0= IF DROP 0 EXIT THEN
     DUP _UTUI-APPLY-STYLE
+    DRW-STYLE-SAVE                     \ widgets use DRW-STYLE-RESTORE
     DUP _UTUI-SC-ROW@ _UR-ROW !
     DUP _UTUI-SC-COL@ _UR-COL !
     DUP _UTUI-SC-W@   _UR-W !
@@ -939,7 +951,6 @@ VARIABLE _ULM-T  VARIABLE _ULM-R  VARIABLE _ULM-B  VARIABLE _ULM-L
                     DUP 1 < IF DROP 1 THEN
                 THEN
                 OVER _UTUI-SC-H!
-                _UL-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
                 DROP                       ( child )
                 DUP _UTUI-SIDECAR _UTUI-SC-H@ _UL-POS +!
                 _ULM-B @ _UL-POS +!       \ advance pos by margin-bottom
@@ -990,7 +1001,6 @@ VARIABLE _UL-CW   \ child width for flex
             _UL-H @ _ULM-T @ - _ULM-B @ -
             DUP 0< IF DROP 0 THEN
             OVER _UTUI-SC-H!
-            _UL-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
             DROP                       ( child )
             _UL-CW @ _ULM-R @ + _UL-POS +!  \ advance by width + margin-right
         ELSE
@@ -1041,7 +1051,6 @@ VARIABLE _UL-CW   \ child width for flex
                 0 OVER _UTUI-SC-W!
                 0 OVER _UTUI-SC-H!
             THEN
-            _UL-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
         ELSE
             _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
         THEN
@@ -1099,7 +1108,6 @@ VARIABLE _USP-ROW   VARIABLE _USP-COL  VARIABLE _USP-SW  VARIABLE _USP-SH
         _USP-COL @ OVER _UTUI-SC-COL!
         _USP-LW @              OVER _UTUI-SC-W!
         _USP-SH @              OVER _UTUI-SC-H!
-        _USP-SC @ _UTUI-SC-STYLE@ OVER _UTUI-SC-STYLE!
     ELSE
         _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
     THEN
@@ -1115,7 +1123,6 @@ VARIABLE _USP-ROW   VARIABLE _USP-COL  VARIABLE _USP-SW  VARIABLE _USP-SH
         _USP-COL @ _USP-LW @ + 1 +                   OVER _UTUI-SC-COL!
         _USP-RW @                                     OVER _UTUI-SC-W!
         _USP-SH @                                     OVER _UTUI-SC-H!
-        _USP-SC @ _UTUI-SC-STYLE@                    OVER _UTUI-SC-STYLE!
     ELSE
         _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
     THEN
@@ -2159,18 +2166,23 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
 
 \ _UTUI-RESOLVE-STYLES-REC ( elem -- )
 \   Recursively walk element tree, resolve style= on each node.
-\   For width/height %, we read the parent sidecar dims before
-\   entering each child.
+\   After resolving this element's own style, propagate inheritable
+\   properties (fg, bg, attrs, text-align) to each child's sidecar
+\   BEFORE resolving the child's style=, achieving CSS inheritance.
 : _UTUI-RESOLVE-STYLES-REC  ( elem -- )
     DUP _UTUI-RESOLVE-ELEM-STYLE
-    DUP UIDL-FIRST-CHILD
+    \ Extract inheritable bits from this (now-resolved) element
+    DUP _UTUI-SIDECAR _UTUI-SC-STYLE@
+    _UTUI-INHERIT-MASK AND             ( elem inherit )
+    SWAP UIDL-FIRST-CHILD              ( inherit child|0 )
     BEGIN DUP 0<> WHILE
-        \ For percentage dims, child needs parent's resolved W/H.
-        \ The parent sidecar is already computed (layout pass done),
-        \ and _UTUI-CSS-SET-DIM reads the sidecar's own W/H as
-        \ parent-dim (which was inherited from actual parent during
-        \ layout).  This is correct because the layout pass already
-        \ set child W/H = parent W/H for containers.
+        \ Seed child with parent's inheritable bits (preserve child's
+        \ non-inheritable bits like position from prelayout)
+        DUP _UTUI-SIDECAR              ( inherit child csc )
+        DUP _UTUI-SC-STYLE@            ( inherit child csc cstyle )
+        _UTUI-INHERIT-MASK INVERT AND  ( inherit child csc non-inherit )
+        3 PICK OR                       ( inherit child csc merged )
+        SWAP _UTUI-SC-STYLE!           ( inherit child )
         DUP _UTUI-RESOLVE-STYLES-REC
         UIDL-NEXT-SIB
     REPEAT

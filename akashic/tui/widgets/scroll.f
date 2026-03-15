@@ -99,7 +99,7 @@ REQUIRE ../keys.f
 : _SCRL-DRAW-INDICATORS  ( widget -- )
     DUP _SCRL-O-INDICATORS + @ 0= IF DROP EXIT THEN
 
-    7 DRW-FG! 0 DRW-BG! 0 DRW-ATTR!
+    DRW-STYLE-RESTORE
 
     \ Vertical indicator (right edge)
     DUP _SCRL-O-CONTENT-H + @            ( w ch )

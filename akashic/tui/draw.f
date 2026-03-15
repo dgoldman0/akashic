@@ -54,6 +54,22 @@ VARIABLE _DRW-ATTRS  0 _DRW-ATTRS !   \ default no attributes
     0 _DRW-BG !
     0 _DRW-ATTRS ! ;
 
+\ Save / Restore — widgets call DRW-STYLE-RESTORE to return to
+\ the "normal" style after drawing a highlight (selected/cursor).
+\ The UIDL paint path calls DRW-STYLE-SAVE after applying the
+\ sidecar style so widgets inherit theme colours.
+VARIABLE _DRW-SAVED-FG  VARIABLE _DRW-SAVED-BG  VARIABLE _DRW-SAVED-A
+
+: DRW-STYLE-SAVE  ( -- )
+    _DRW-FG @ _DRW-SAVED-FG !
+    _DRW-BG @ _DRW-SAVED-BG !
+    _DRW-ATTRS @ _DRW-SAVED-A ! ;
+
+: DRW-STYLE-RESTORE  ( -- )
+    _DRW-SAVED-FG @ _DRW-FG !
+    _DRW-SAVED-BG @ _DRW-BG !
+    _DRW-SAVED-A @ _DRW-ATTRS ! ;
+
 \ _DRW-MAKE-CELL ( cp -- cell )
 \   Build a cell from codepoint cp using current style.
 : _DRW-MAKE-CELL  ( cp -- cell )

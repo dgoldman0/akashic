@@ -93,7 +93,7 @@ VARIABLE _LST-DRW-RH     \ region height
     DUP WDG-REGION RGN-W _LST-DRW-RW !
     WDG-REGION RGN-H _LST-DRW-RH !
     \ Clear entire region
-    0 DRW-ATTR!
+    DRW-STYLE-RESTORE
     32 0 0 _LST-DRW-RH @ _LST-DRW-RW @ DRW-FILL-RECT
     \ Loop visible rows
     _LST-DRW-W @ _LST-O-SCROLL + @        \ ( scroll )
@@ -106,7 +106,7 @@ VARIABLE _LST-DRW-RH     \ region height
         DUP _LST-DRW-W @ _LST-O-SEL + @ = IF
             CELL-A-REVERSE DRW-ATTR!
         ELSE
-            0 DRW-ATTR!
+            DRW-STYLE-RESTORE
         THEN
         \ Check for custom renderer
         _LST-DRW-W @ _LST-O-ITEM-XT + @ DUP 0<> IF
@@ -120,7 +120,7 @@ VARIABLE _LST-DRW-RH     \ region height
             I 0 DRW-TEXT
         THEN
         \ Reset attr
-        0 DRW-ATTR!
+        DRW-STYLE-RESTORE
         DROP                                \ drop itemidx
     LOOP
     DROP ;                                  \ drop scroll

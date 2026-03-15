@@ -245,7 +245,7 @@ VARIABLE _TREE-VH
     _TREE-ROW-CTR @ _TW-W @ _TREE-O-CURSOR + @ = IF
         0 DRW-FG! 7 DRW-BG! 0 DRW-ATTR!
     ELSE
-        7 DRW-FG! 0 DRW-BG! 0 DRW-ATTR!
+        DRW-STYLE-RESTORE
     THEN
 
     \ Fill row with spaces (background)

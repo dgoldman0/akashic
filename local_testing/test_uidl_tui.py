@@ -232,9 +232,10 @@ def run_forth(lines, max_steps=80_000_000):
 _pass_count = 0
 _fail_count = 0
 
-def check(name, forth_lines, expected=None, check_fn=None, not_expected=None):
+def check(name, forth_lines, expected=None, check_fn=None, not_expected=None,
+          max_steps=80_000_000):
     global _pass_count, _fail_count
-    output = run_forth(forth_lines)
+    output = run_forth(forth_lines, max_steps=max_steps)
     clean = output.strip()
 
     if check_fn:
@@ -921,6 +922,205 @@ def test_css_paint_display_none():
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  §P — CSS Inheritance Tests
+# ═══════════════════════════════════════════════════════════════════
+
+# Parent sets fg color → child should inherit it
+_XML_INHERIT_FG = (
+    '<uidl>'
+    '<region arrange="stack" style="color:7">'
+    '  <label id="ch" text="Child"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# Parent sets bg color → child should inherit it
+_XML_INHERIT_BG = (
+    '<uidl>'
+    '<region arrange="stack" style="background-color:4">'
+    '  <label id="ch" text="Child"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# Parent sets bold → child should inherit attrs
+_XML_INHERIT_BOLD = (
+    '<uidl>'
+    '<region arrange="stack" style="font-weight:bold">'
+    '  <label id="ch" text="Child"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# Child overrides parent fg
+_XML_INHERIT_OVERRIDE = (
+    '<uidl>'
+    '<region arrange="stack" style="color:7">'
+    '  <label id="ch" text="Child" style="color:1"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# Deep nesting: grandparent → parent → child (fg=10)
+_XML_INHERIT_DEEP = (
+    '<uidl>'
+    '<region arrange="stack" style="color:10">'
+    '  <region arrange="stack" id="mid">'
+    '    <label id="leaf" text="Deep"/>'
+    '  </region>'
+    '</region>'
+    '</uidl>'
+)
+
+# Parent has position:absolute → child should NOT inherit it
+_XML_NO_INHERIT_POS = (
+    '<uidl>'
+    '<region arrange="stack" style="position:absolute;top:0;left:0;width:80;height:24">'
+    '  <label id="ch" text="Child"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# Parent has z-index:5 → child should NOT inherit it
+_XML_NO_INHERIT_ZIDX = (
+    '<uidl>'
+    '<region arrange="stack" style="z-index:5">'
+    '  <label id="ch" text="Child"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# No explicit style → children should inherit default (fg=253, bg=236)
+_XML_INHERIT_DEFAULT = (
+    '<uidl>'
+    '<region arrange="stack">'
+    '  <label id="ch" text="Child"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# text-align inherits
+_XML_INHERIT_ALIGN = (
+    '<uidl>'
+    '<region arrange="stack" style="text-align:center">'
+    '  <label id="ch" text="Child"/>'
+    '</region>'
+    '</uidl>'
+)
+
+# Multi-property inheritance: fg + bg + bold
+_XML_INHERIT_MULTI = (
+    '<uidl>'
+    '<region arrange="stack" style="color:15;background-color:1;font-weight:bold">'
+    '  <label id="ch" text="Child"/>'
+    '</region>'
+    '</uidl>'
+)
+
+
+def test_inherit_fg():
+    """Child inherits fg color from parent."""
+    check("inherit-fg", _xml_lines(_XML_INHERIT_FG, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  UTUI-SC-FG@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "7")
+
+def test_inherit_bg():
+    """Child inherits bg color from parent."""
+    check("inherit-bg", _xml_lines(_XML_INHERIT_BG, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  UTUI-SC-BG@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "4")
+
+def test_inherit_bold():
+    """Child inherits bold (attrs bit 0) from parent."""
+    check("inherit-bold", _xml_lines(_XML_INHERIT_BOLD, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  UTUI-SC-ATTRS@ 1 AND . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "1")
+
+def test_inherit_override():
+    """Child's explicit color overrides inherited fg."""
+    check("inherit-override", _xml_lines(_XML_INHERIT_OVERRIDE, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  UTUI-SC-FG@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "1")
+
+def test_inherit_deep():
+    """fg propagates through multiple levels (grandparent → leaf)."""
+    check("inherit-deep", _xml_lines(_XML_INHERIT_DEEP, extra_after=[
+        'DROP',
+        'S" leaf" UTUI-BY-ID ?DUP IF',
+        '  UTUI-SC-FG@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "10")
+
+def test_no_inherit_position():
+    """position (non-inheritable) does NOT propagate to child."""
+    check("no-inherit-position", _xml_lines(_XML_NO_INHERIT_POS, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  _UTUI-SIDECAR _UTUI-SC-POS@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "0")
+
+def test_no_inherit_zindex():
+    """z-index (non-inheritable) does NOT propagate to child."""
+    check("no-inherit-zindex", _xml_lines(_XML_NO_INHERIT_ZIDX, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  _UTUI-SIDECAR _UTUI-SC-ZIDX@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "0")
+
+def test_inherit_default_fg():
+    """Without explicit style, child inherits default fg=253."""
+    check("inherit-default-fg", _xml_lines(_XML_INHERIT_DEFAULT, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  UTUI-SC-FG@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "253")
+
+def test_inherit_default_bg():
+    """Without explicit style, child inherits default bg=236."""
+    check("inherit-default-bg", _xml_lines(_XML_INHERIT_DEFAULT, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  UTUI-SC-BG@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "236")
+
+def test_inherit_text_align():
+    """text-align inherits from parent."""
+    check("inherit-text-align", _xml_lines(_XML_INHERIT_ALIGN, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  _UTUI-SIDECAR _UTUI-SC-TALIGN@ . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "1")
+
+def test_inherit_multi():
+    """Multiple properties (fg + bg + bold) inherit together."""
+    check("inherit-multi", _xml_lines(_XML_INHERIT_MULTI, extra_after=[
+        'DROP',
+        'S" ch" UTUI-BY-ID ?DUP IF',
+        '  DUP UTUI-SC-FG@ .',
+        '  DUP UTUI-SC-BG@ .',
+        '  UTUI-SC-ATTRS@ 1 AND . CR',
+        'ELSE ." NOT-FOUND" CR THEN',
+    ]), "15 1 1", max_steps=200_000_000)
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════
 
@@ -1038,6 +1238,21 @@ def main():
     test_css_paint_with_zindex()
     test_css_paint_with_position()
     test_css_paint_display_none()
+    print()
+
+    # §P CSS Inheritance
+    print("[P] CSS Inheritance")
+    test_inherit_fg()
+    test_inherit_bg()
+    test_inherit_bold()
+    test_inherit_override()
+    test_inherit_deep()
+    test_no_inherit_position()
+    test_no_inherit_zindex()
+    test_inherit_default_fg()
+    test_inherit_default_bg()
+    test_inherit_text_align()
+    test_inherit_multi()
     print()
 
     # Summary

@@ -101,6 +101,40 @@ Set foreground, background, and attributes in a single call.
 14 4 CELL-A-BOLD DRW-STYLE!   \ yellow on blue, bold
 ```
 
+### DRW-STYLE-SAVE
+
+```
+( -- )
+```
+
+Save the current foreground, background, and attributes to
+internal scratch variables. The UIDL paint path calls this
+automatically after applying the sidecar style, so widgets
+can call `DRW-STYLE-RESTORE` to return to the inherited
+theme colours after drawing a selection or cursor highlight.
+
+```forth
+14 4 CELL-A-BOLD DRW-STYLE!   \ set a theme style
+DRW-STYLE-SAVE                 \ save it
+CELL-A-REVERSE DRW-ATTR!       \ temporary highlight
+\ ... draw highlighted content ...
+DRW-STYLE-RESTORE              \ back to theme style
+```
+
+### DRW-STYLE-RESTORE
+
+```
+( -- )
+```
+
+Restore the foreground, background, and attributes previously
+saved by `DRW-STYLE-SAVE`. Used by widgets to return to the
+inherited sidecar style after drawing highlights.
+
+```forth
+DRW-STYLE-RESTORE   \ back to saved theme colours
+```
+
 ### DRW-STYLE-RESET
 
 ```
@@ -269,6 +303,8 @@ advancing horizontally.  Synonym for `DRW-HLINE`.
 | `DRW-BG!` | `( bg -- )` | Set background |
 | `DRW-ATTR!` | `( attrs -- )` | Set attributes |
 | `DRW-STYLE!` | `( fg bg attrs -- )` | Set all style |
+| `DRW-STYLE-SAVE` | `( -- )` | Save current fg/bg/attrs |
+| `DRW-STYLE-RESTORE` | `( -- )` | Restore saved fg/bg/attrs |
 | `DRW-STYLE-RESET` | `( -- )` | Reset to defaults |
 | `DRW-CHAR` | `( cp row col -- )` | Draw one char |
 | `DRW-HLINE` | `( cp row col len -- )` | Horizontal line |

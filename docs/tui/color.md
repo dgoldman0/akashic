@@ -33,7 +33,7 @@ REQUIRE tui/color.f
 |-----------|---------------|
 | **Shared module** | Used by both `dom-tui.f` and `uidl-tui.f` — extracted to avoid duplication. |
 | **Pure computation** | No allocation, no I/O, no global state beyond scratch variables. |
-| **CSS-aware** | Accepts both `#RRGGBB` / `#RGB` hex colours and all 148 CSS named colours. |
+| **CSS-aware** | Accepts `#RRGGBB` / `#RGB` hex colours, all 148 CSS named colours, and raw integer palette indices (0-255). |
 | **Prefix convention** | Public: `TUI-`. Internal: `_TC-`. |
 
 ---
@@ -78,22 +78,30 @@ Supports:
   `CSS-PARSE-HEX-COLOR`)
 - **Named colours**: all 148 CSS named colours (`white`, `red`,
   `darkgreen`, `cornflowerblue`, etc.) via `CSS-COLOR-FIND`
+- **Raw integer indices**: `0`–`255` (direct xterm-256 palette index,
+  parsed via `CSS-PARSE-INT`)
 
-Returns `( index -1 )` on success, `( 0 )` on failure.
+Returns `( index -1 )` on success, `( 0 0 )` on failure.
 
 ```forth
 S" #5f0087" TUI-PARSE-COLOR  .  .  \ -1 54  (deep purple)
 S" white"   TUI-PARSE-COLOR  .  .  \ -1 231 (bright white)
-S" bogus"   TUI-PARSE-COLOR  .     \ 0      (not found)
+S" 7"       TUI-PARSE-COLOR  .  .  \ -1 7   (white, palette 7)
+S" 236"     TUI-PARSE-COLOR  .  .  \ -1 236 (dark gray)
+S" bogus"   TUI-PARSE-COLOR  . .   \ 0 0    (not found)
 ```
+
+> **Note:** The failure return is `( 0 0 )` — two values, not one.
+> This was a stack-balance bug in earlier versions (fixed).
 
 ---
 
 ## Quick Reference
 
 ```
-TUI-RESOLVE-COLOR   ( r g b -- index )          RGB → xterm-256 palette index
-TUI-PARSE-COLOR     ( val-a val-u -- idx flag )  CSS color string → palette index
+TUI-RESOLVE-COLOR   ( r g b -- index )              RGB → xterm-256 palette index
+TUI-PARSE-COLOR     ( val-a val-u -- idx flag )      CSS color string → palette index
+                                                     Hex (#RGB, #RRGGBB), named, or integer 0-255
 ```
 
 ---

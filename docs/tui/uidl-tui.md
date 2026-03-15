@@ -58,7 +58,8 @@ REQUIRE tui/uidl-tui.f
 | **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree` and `tabs` allocate real widget state. |
 | **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget) or mini state block (tabs active index). Zero means "no widget state". |
 | **Proxy region** | A single static 40-byte region (`_UTUI-PROXY-RGN`) is synced from sidecar geometry before calling widget `_*-DRAW` / `_*-HANDLE`. Safe because the TUI is single-threaded. |
-| **Packed style** | FG (8 bits) + BG (8 bits) + attrs (8 bits) packed into one cell at `+32`. |
+| **Packed style** | FG (8 bits) + BG (8 bits) + attrs (8 bits) + text-align (2 bits) + position (2 bits) + z-index (8 bits) packed into one cell at `+32`. |
+| **CSS inheritance** | `_UTUI-RESOLVE-STYLES-REC` propagates inheritable properties (fg, bg, attrs, text-align — bits 0-25) from parent to child before resolving the child's `style=`. Non-inheritable properties (position, z-index) are preserved from prelayout. |
 | **Registry patching** | `UTUI-INSTALL-XTS` writes render/event/layout XTs into Element Registry definitions. Each chrome element type gets its own adapter. |
 | **Guard safety** | When `GUARDED` is defined, all public words are serialized through `_utui-guard`. |
 
@@ -136,21 +137,59 @@ All take a sidecar address.
 
 ## Style Packing
 
-A single cell encodes foreground, background, and attributes:
+A single cell encodes foreground, background, attributes, and
+layout-affecting properties:
 
 ```
 bits  0– 7:  FG colour index   (0–255)
 bits  8–15:  BG colour index   (0–255)
 bits 16–23:  Cell attributes    (bold, italic, etc.)
+bits 24–25:  text-align         (0=left, 1=center, 2=right)
+bits 26–27:  position           (0=static, 1=absolute, 2=fixed)
+bits 28–35:  z-index            (unsigned 0–255)
 ```
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `_UTUI-PACK-STYLE` | `( fg bg attrs -- packed )` | Pack three values |
-| `_UTUI-UNPACK-STYLE` | `( packed -- fg bg attrs )` | Extract all three |
+| `_UTUI-PACK-STYLE` | `( fg bg attrs -- packed )` | Pack three values (bits 0-23) |
+| `_UTUI-UNPACK-STYLE` | `( packed -- fg bg attrs )` | Extract fg, bg, attrs |
 | `_UTUI-APPLY-STYLE` | `( sc -- )` | Read sidecar style and call `DRW-STYLE!` |
+| `_UTUI-INHERIT-MASK` | `( -- mask )` | Constant `0x03FFFFFF` — inheritable bits |
 
 Default style: `253 236 0` (light gray on dark gray, no attributes).
+
+### CSS Inheritance
+
+`_UTUI-RESOLVE-STYLES-REC` performs a preorder depth-first walk.
+After resolving a parent's own `style=`, the inheritable bits
+(fg, bg, attrs, text-align — bits 0-25) are copied into each
+child's sidecar *before* resolving the child's `style=`.
+Non-inheritable properties (position bits 26-27, z-index bits 28-35)
+are preserved from the prelayout pass.
+
+This means:
+- A child with no `style=` inherits its parent's fg/bg/attrs/text-align
+- A child with `style="color:1"` overrides only fg; bg and attrs inherit
+- Inheritance flows through arbitrary depth
+- The root element receives `_UTUI-DEFAULT-STYLE` (fg=253, bg=236, no attrs)
+
+### Public Style Accessors
+
+Convenience words to read the resolved style from an element
+(available after `UTUI-LOAD` returns):
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `UTUI-SC-FG@` | `( elem -- fg )` | Computed foreground colour (0-255) |
+| `UTUI-SC-BG@` | `( elem -- bg )` | Computed background colour (0-255) |
+| `UTUI-SC-ATTRS@` | `( elem -- attrs )` | Computed attributes (bold, etc.) |
+
+```forth
+S" status" UTUI-BY-ID ?DUP IF
+    DUP UTUI-SC-FG@ .    \ e.g. 75
+    UTUI-SC-BG@ .        \ e.g. 234
+THEN
+```
 
 ---
 
@@ -365,17 +404,34 @@ parent styles are applied before children.
 
 | CSS Property | Sidecar Effect | Value Syntax |
 |--------------|---------------|--------------|
-| `color` | FG byte (bits 0–7) of packed style | `#RGB`, `#RRGGBB`, named colour |
-| `background-color` | BG byte (bits 8–15) of packed style | `#RGB`, `#RRGGBB`, named colour |
+| `color` | FG byte (bits 0–7) of packed style | `#RGB`, `#RRGGBB`, named colour, integer 0-255 |
+| `background-color` | BG byte (bits 8–15) of packed style | `#RGB`, `#RRGGBB`, named colour, integer 0-255 |
 | `font-weight` | Bold bit (bit 16) in attrs | `bold` (case-insensitive) |
+| `text-align` | Bits 24-25 of packed style | `left`, `center`, `right` |
 | `width` | Sidecar W field | Integer (cells) or `N%` of parent W |
 | `height` | Sidecar H field | Integer (cells) or `N%` of parent H |
+| `position` | Bits 26-27 of style (prelayout) | `static`, `absolute`, `fixed` |
+| `z-index` | Bits 28-35 of style (prelayout) | Integer 0-255 |
+| `display` | HIDE flag in sidecar flags (prelayout) | `none` |
+| `padding` | Sidecar padding field (prelayout) | 1-4 integer values |
+| `margin` | Sidecar margin field (prelayout) | 1-4 integer values |
 
 Colours are parsed by `TUI-PARSE-COLOR` from [color.f](color.md) —
-all 148 CSS named colours and `#RRGGBB` / `#RGB` hex notation are
-accepted.  Percentage dimensions are resolved against the parent
-element's already-computed sidecar size (`width: 50%` on a child
-whose parent has W = 80 → child W = 40).
+all 148 CSS named colours, `#RRGGBB` / `#RGB` hex notation, and
+raw integer palette indices (0-255) are accepted.  Percentage
+dimensions are resolved against the parent element's already-computed
+sidecar size (`width: 50%` on a child whose parent has W = 80 →
+child W = 40).
+
+Properties marked **(prelayout)** are resolved before the layout pass;
+all others are resolved after layout.
+
+**Inheritable properties**: `color`, `background-color`, `font-weight`,
+`text-align`.  These propagate from parent to child automatically.
+
+**Non-inheritable properties**: `position`, `z-index`, `display`,
+`padding`, `margin`, `width`, `height`.  These apply only to the
+element that declares them.
 
 ### Resolution Flow
 
@@ -383,16 +439,21 @@ whose parent has W = 80 → child W = 40).
 UTUI-LOAD
   ├── Parse UIDL markup
   ├── Allocate sidecars
-  ├── UTUI-RELAYOUT          ← geometry pass
-  └── _UTUI-RESOLVE-STYLES   ← CSS style= pass (post-layout)
-        └── depth-first walk
-              └── _UTUI-RESOLVE-ELEM-STYLE per element
-                    ├── UIDL-ATTR "style" → val-a val-u
-                    ├── CSS-DECL-FIND "color"            → TUI-PARSE-COLOR → fg
-                    ├── CSS-DECL-FIND "background-color" → TUI-PARSE-COLOR → bg
-                    ├── CSS-DECL-FIND "font-weight"      → bold bit
-                    ├── CSS-DECL-FIND "width"             → CSS-PARSE-NUMBER → sidecar W
-                    └── CSS-DECL-FIND "height"            → CSS-PARSE-NUMBER → sidecar H
+  ├── _UTUI-PRELAYOUT-STYLES  ← position, display, padding, margin
+  ├── UTUI-RELAYOUT           ← geometry pass (row/col/w/h)
+  └── _UTUI-RESOLVE-STYLES    ← CSS style= pass (post-layout, with inheritance)
+        └── _UTUI-RESOLVE-STYLES-REC (preorder DFS)
+              ├── _UTUI-RESOLVE-ELEM-STYLE on parent
+              │     ├── CSS-DECL-FIND "color"            → TUI-PARSE-COLOR → fg
+              │     ├── CSS-DECL-FIND "background-color" → TUI-PARSE-COLOR → bg
+              │     ├── CSS-DECL-FIND "font-weight"      → bold bit
+              │     ├── CSS-DECL-FIND "text-align"       → align bits
+              │     ├── CSS-DECL-FIND "width"            → CSS-PARSE-NUMBER → sidecar W
+              │     └── CSS-DECL-FIND "height"           → CSS-PARSE-NUMBER → sidecar H
+              ├── Extract inheritable bits (mask 0x03FFFFFF)
+              └── For each child:
+                    ├── Seed child sidecar with parent's inheritable bits
+                    └── Recurse (_UTUI-RESOLVE-STYLES-REC on child)
 ```
 
 ### UIDL Example
@@ -410,21 +471,28 @@ After `UTUI-LOAD`, the status panel's sidecar has:
 - BG = palette index of `#1c1c1c` (234)
 - Bold bit set
 
-The first label inherits parent dimensions via layout, then
-`width: 50%` halves the sidecar W field.  The second label
-overrides only FG to white (231).
+Both child labels **inherit** the panel's FG, BG, and bold via
+CSS inheritance.  The first label then has `width: 50%` which
+halves its sidecar W field.  The second label overrides only FG
+to white (231) — BG and bold are still inherited from the parent.
 
 ### Internal Words
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `_UTUI-RESOLVE-STYLES` | `( -- )` | Entry point: walk from `UIDL-ROOT` |
-| `_UTUI-RESOLVE-STYLES-REC` | `( elem -- )` | Recursive depth-first walker |
+| `_UTUI-RESOLVE-STYLES-REC` | `( elem -- )` | Recursive DFS — inherits, resolves, recurses |
 | `_UTUI-RESOLVE-ELEM-STYLE` | `( elem -- )` | Read `style=`, apply each CSS declaration |
 | `_UTUI-CSS-SET-FG` | `( val-a val-u -- )` | Parse colour → FG bits |
 | `_UTUI-CSS-SET-BG` | `( val-a val-u -- )` | Parse colour → BG bits |
 | `_UTUI-CSS-SET-BOLD` | `( val-a val-u -- )` | Check for `bold` → attrs bit 16 |
+| `_UTUI-CSS-SET-ALIGN` | `( val-a val-u -- )` | Parse text-align → bits 24-25 |
+| `_UTUI-CSS-SET-POSITION` | `( val-a val-u -- )` | Parse position → bits 26-27 |
+| `_UTUI-CSS-SET-ZINDEX` | `( val-a val-u -- )` | Parse z-index → bits 28-35 |
+| `_UTUI-CSS-SET-DISPLAY` | `( val-a val-u -- )` | Parse display:none → HIDE flag |
 | `_UTUI-CSS-SET-DIM` | `( val-a val-u pdim off -- )` | Parse number+unit → sidecar W or H |
+| `_UTUI-CSS-SET-PAD` | `( val-a val-u -- )` | Parse padding shorthand → sidecar |
+| `_UTUI-CSS-SET-MARGIN` | `( val-a val-u -- )` | Parse margin shorthand → sidecar |
 
 ---
 
@@ -552,6 +620,9 @@ UTUI-WIDGET@           ( elem -- wptr | 0 )          Get widget pointer from ele
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW-DIALOG       ( id-a id-l -- )              Show dialog by ID
 UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID
+UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
+UTUI-SC-BG@            ( elem -- bg )                Computed background colour
+UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
 ```
 
 ---

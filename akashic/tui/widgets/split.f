@@ -153,14 +153,14 @@ REQUIRE ../draw.f
     _SPL-O-MODE + @                      ( ratio cp mode )
     SPL-H = IF
         \ Horizontal divider: DRW-HLINE ( cp row col len -- )
-        7 DRW-FG! 0 DRW-BG! 0 DRW-ATTR!
+        DRW-STYLE-RESTORE
         SWAP                              ( cp ratio )
         0                                 ( cp ratio 0 )
         R@ WDG-REGION RGN-W              ( cp ratio 0 len )
         DRW-HLINE
     ELSE
         \ Vertical divider: DRW-VLINE ( cp row col len -- )
-        7 DRW-FG! 0 DRW-BG! 0 DRW-ATTR!
+        DRW-STYLE-RESTORE
         SWAP                              ( cp ratio=col )
         0 SWAP                            ( cp 0 col )
         R@ WDG-REGION RGN-H              ( cp 0 col len )

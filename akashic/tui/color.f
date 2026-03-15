@@ -109,25 +109,50 @@ VARIABLE _TGD-AVG   VARIABLE _TGD-BEST   VARIABLE _TGD-BD
 \ =====================================================================
 
 VARIABLE _TPC-R   VARIABLE _TPC-G   VARIABLE _TPC-B
+VARIABLE _TPC-VA  VARIABLE _TPC-VU  \ saved input for integer fallback
 
 \ TUI-PARSE-COLOR ( val-a val-u -- index found? )
-\   Parse CSS color value (hex #RGB/#RRGGBB or named) → palette index.
+\   Parse CSS color value → palette index.
+\   Supported formats:
+\     #RGB / #RRGGBB        (hex)
+\     Named CSS colors      (red, blue, ...)
+\     Raw integer 0-255     (palette index)
 : TUI-PARSE-COLOR  ( val-a val-u -- index found? )
     DUP 0= IF 2DROP 0 0 EXIT THEN
+    2DUP _TPC-VU ! _TPC-VA !           \ save for integer fallback
     OVER C@ [CHAR] # = IF
         \ Starts with # — try hex parse
-        2DUP CSS-PARSE-HEX-COLOR IF
-            _TPC-B !  _TPC-G !  _TPC-R !  2DROP
+        2DUP CSS-PARSE-HEX-COLOR IF     \ ( o-a o-u a' u' r g b )
+            _TPC-B !  _TPC-G !  _TPC-R !
+            2DROP 2DROP                  \ drop a' u' AND 2DUP copies
             _TPC-R @ _TPC-G @ _TPC-B @  TUI-RESOLVE-COLOR
             -1 EXIT
         THEN
-        2DROP
+        \ Hex parse failed: ( o-a o-u a' u' 0 0 0 )
+        DROP DROP DROP 2DROP            \ clean all 5 residuals
     THEN
     \ Try named color (148 CSS named colors)
-    CSS-COLOR-FIND IF
+    CSS-COLOR-FIND IF                    \ ( r g b )
         _TPC-B !  _TPC-G !  _TPC-R !
         _TPC-R @ _TPC-G @ _TPC-B @  TUI-RESOLVE-COLOR
         -1 EXIT
     THEN
-    0 ;
+    DROP DROP DROP                       \ clean COLOR-FIND residual (0 0 0)
+    \ Try raw integer palette index (0-255)
+    _TPC-VA @ _TPC-VU @
+    CSS-PARSE-INT IF                     \ ( a' u' n )
+        -ROT                             \ ( n a' u' )
+        DUP 0= IF                       \ entire string consumed?
+            2DROP                        \ ( n )
+            DUP 0 >= OVER 255 <= AND IF
+                -1 EXIT                  \ ( n -1 ) — success
+            THEN
+            DROP                         \ n out of range
+        ELSE
+            2DROP DROP                   \ trailing chars — not an integer
+        THEN
+    ELSE
+        DROP 2DROP                       \ CSS-PARSE-INT failure cleanup
+    THEN
+    0 0 ;
 
