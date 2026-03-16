@@ -1,14 +1,24 @@
 \ =================================================================
-\  app-shell.f — TUI Application Shell Runtime
+\  app-shell.f — Applet Host Runtime
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: ASHELL- / _ASHELL-
-\  Depends on: akashic-tui-app, akashic-tui-keys, akashic-tui-screen,
-\              akashic-tui-region, akashic-tui-draw,
-\              akashic-tui-uidl-tui, akashic-tui-focus
+\  Depends on: akashic-tui-term-init, akashic-tui-keys,
+\              akashic-tui-screen, akashic-tui-region,
+\              akashic-tui-draw, akashic-tui-uidl-tui,
+\              akashic-tui-focus
 \
-\  Headless runtime that owns the terminal, event loop, paint
-\  cycle, and UIDL integration.  Apps provide callbacks via an
-\  APP-DESC descriptor.  The shell has no UI of its own.
+\  Runtime host for APPLETS (app-desc.f descriptors).  Owns the
+\  terminal, event loop, paint cycle, and UIDL integration.
+\  Applets provide passive callbacks; the shell drives everything.
+\
+\  This is the applet-side counterpart to app.f (standalone apps).
+\  Standalone apps own their own terminal via app.f → APP-RUN.
+\  Applets are hosted here — one at a time via ASHELL-RUN, or
+\  many at a time via desk.f which is itself an applet.
+\
+\  Both paths share terminal primitives from term-init.f
+\  (APP-INIT / APP-SHUTDOWN / APP-TITLE!), but this file does
+\  NOT depend on app.f.
 \
 \  Lifecycle:
 \    1. Terminal init (APP-INIT)
@@ -40,7 +50,7 @@
 
 PROVIDED akashic-tui-app-shell
 
-REQUIRE app.f
+REQUIRE cogs/term-init.f
 REQUIRE keys.f
 REQUIRE screen.f
 REQUIRE region.f

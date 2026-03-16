@@ -1,10 +1,10 @@
 # akashic/tui/app-shell.f — TUI Application Shell Runtime
 
-**Layer:** 7 (above app.f)  
-**Lines:** ~435  
+**Layer:** 7 (above term-init.f)  
+**Lines:** ~449  
 **Prefix:** `ASHELL-` (public), `_ASHELL-` (internal)  
 **Provider:** `akashic-tui-app-shell`  
-**Dependencies:** `app-desc.f`, `app.f`, `keys.f`, `screen.f`, `region.f`, `draw.f`,
+**Dependencies:** `app-desc.f`, [`cogs/term-init.f`](cogs/term-init.md), `keys.f`, `screen.f`, `region.f`, `draw.f`,
 `focus.f`, `uidl-tui.f`, `utils/term.f`
 
 ## Overview
@@ -13,10 +13,22 @@ Headless runtime that owns the terminal, event loop, paint cycle, and
 UIDL integration.  Apps provide callbacks via an **APP-DESC** descriptor;
 the shell has no UI of its own.
 
+Terminal management (alternate screen, screen buffer, cursor) comes
+from [`cogs/term-init.f`](cogs/term-init.md) — the same cog that
+`app.f` uses for standalone apps.  This means app-shell.f does **not**
+depend on `app.f`; the standalone and applet paths are fully
+independent.
+
 `ASHELL-RUN` blocks until the app calls `ASHELL-QUIT` or a callback
 throws.  Terminal state is always restored via `CATCH`-guarded teardown.
 
 Not reentrant.  One app at a time.
+
+> **Standalone vs Applet.**  Standalone TUI apps use [`app.f`](app.md)
+> directly (they own the event loop via `APP-RUN`).  Applets are hosted
+> here — one at a time via `ASHELL-RUN`, or composited by
+> [`desk.f`](applets/desk/desk.md).  Both paths share terminal init from
+> [`cogs/term-init.f`](cogs/term-init.md).
 
 ## APP-DESC — Application Descriptor
 
@@ -97,7 +109,7 @@ that field within the descriptor, suitable for `@` or `!`.
 ASHELL-RUN
   ├── _ASHELL-SETUP (via CATCH)
   │     1. Store descriptor
-  │     2. APP-INIT (terminal, screen buffer)
+  │     2. APP-INIT (terminal + screen buffer, from term-init.f)
   │     3. Set terminal title (if provided)
   │     4. Create root region (full screen)
   │     5. UTUI-LOAD UIDL document (if provided)
@@ -120,7 +132,7 @@ ASHELL-RUN
         1. APP.SHUTDOWN-XT callback
         2. UTUI-DETACH (if UIDL loaded)
         3. RGN-FREE root region
-        4. APP-SHUTDOWN (terminal restore)
+        4. APP-SHUTDOWN (terminal restore, from term-init.f)
         5. Reset all shell state
 ```
 

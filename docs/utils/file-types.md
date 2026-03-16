@@ -233,7 +233,7 @@ my-pad-desc  S" test.f" FT-LOOKUP  FT-SET-HANDLER
 
 ## Consumers
 
-- `tui/desk.f` — file browser / launcher (planned)
+- `tui/applets/desk/desk.f` — file browser / launcher (planned)
 - Akashic Pad — maps `FT-LANG-*` → `SYN-LANG-*` for syntax highlighting
 
 ## Internal State

@@ -1,41 +1,46 @@
-# akashic/tui/desk.f — TUI Multi-App Desktop
+# akashic/tui/applets/desk/desk.f — TUI Multi-App Desktop
 
-**Lines:** ~640  
+**Lines:** ~911  
 **Prefix:** `DESK-` (public), `_DESK-` (internal)  
 **Provider:** `akashic-tui-desk`  
-**Dependencies:** `app-shell.f`, `app-desc.f`, `uidl-tui.f`, `screen.f`,
-`region.f`, `draw.f`, `keys.f`, `liraq/uidl.f`
+**Location:** `akashic/tui/applets/desk/desk.f`  
+**Dependencies:** [`app-shell.f`](../../app-shell.md), [`app-desc.f`](../../app-desc.md),
+[`uidl-tui.f`](../../uidl-tui.md), [`screen.f`](../../screen.md),
+[`region.f`](../../region.md), [`draw.f`](../../draw.md),
+[`keys.f`](../../keys.md), `liraq/uidl.f`
+
+## Why `applets/`?
+
+Most Akashic TUI modules are standalone composable components — each
+one provides a self-contained service.  Modules in `applets/` are
+*applets*: APP-DESC applications hosted by
+[`app-shell.f`](../../app-shell.md) (or by the desk itself).  They
+are not independently composable components but complete applications
+that depend on the shell lifecycle.
 
 ## Overview
 
-Multi-app desktop with dynamic tiling.  Runs as a **normal APP-DESC app**
-inside `app-shell.f` — no private event loop.  Replaces `app-compositor.f`.
+Multi-app desktop with dynamic tiling.  Runs as a **normal APP-DESC
+applet** inside [`app-shell.f`](../../app-shell.md) — no private
+event loop.
 
-The compositor had its own event loop, tick system, paint system, and resize
-handler — all duplicating `app-shell.f`.  The DESK delegates to the shell:
-
-| Concern | Compositor (old) | DESK (new) |
-|---------|------------------|------------|
-| Event loop | `_COMP-LOOP` (private) | Shell's `_ASHELL-LOOP` |
-| Paint cycle | `COMP-PAINT-ALL` | Shell calls `DESK-PAINT-CB` |
-| Tick dispatch | `COMP-TICK-ALL` (private timer) | Shell calls `DESK-TICK-CB` |
-| Terminal init | `APP-INIT` / `APP-SHUTDOWN` | Shell owns terminal |
-| Quit | `COMP-QUIT` | `ASHELL-QUIT` shuts down shell |
-
-Sub-apps are isolated via per-app **UIDL context** buffers (~97 KiB each),
-which save/restore the 15 UIDL scalar variables and 10 pool arrays.
+The desk delegates all terminal ownership, event dispatch, paint
+cycling, and tick timing to the shell:
 
 ## Architecture
 
 ```
-  app-shell.f         (event loop, terminal, paint cycle)
-    └── DESK-DESC     (APP-DESC callbacks)
+  app-shell.f           (terminal via term-init.f, event loop, paint cycle)
+    └── DESK-DESC       (APP-DESC callbacks)
+          ├── DESK-INIT-CB     → reset state
           ├── DESK-EVENT-CB    → shortcuts, route to focused sub-app
           ├── DESK-TICK-CB     → tick all alive sub-apps
           ├── DESK-PAINT-CB    → paint tiles, dividers, taskbar
-          ├── DESK-INIT-CB     → reset state
           └── DESK-SHUTDOWN-CB → close all sub-apps
 ```
+
+Sub-apps are isolated via per-app **UIDL context** buffers (~97 KiB each),
+which save/restore the 15 UIDL scalar variables and 10 pool arrays.
 
 ## Tiling Algorithm
 

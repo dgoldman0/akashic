@@ -36,14 +36,14 @@
 
 PROVIDED akashic-tui-desk
 
-REQUIRE app-shell.f
-REQUIRE app-desc.f
-REQUIRE uidl-tui.f
-REQUIRE screen.f
-REQUIRE region.f
-REQUIRE draw.f
-REQUIRE keys.f
-REQUIRE ../liraq/uidl.f
+REQUIRE ../../app-shell.f
+REQUIRE ../../app-desc.f
+REQUIRE ../../uidl-tui.f
+REQUIRE ../../screen.f
+REQUIRE ../../region.f
+REQUIRE ../../draw.f
+REQUIRE ../../keys.f
+REQUIRE ../../../liraq/uidl.f
 
 \ =====================================================================
 \  §1 — UIDL Context Save / Restore
@@ -881,7 +881,7 @@ CREATE DESK-DESC  APP-DESC ALLOT
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../../concurrency/guard.f
 GUARD _desk-guard
 
 ' DESK-LAUNCH       CONSTANT _desk-launch-xt

@@ -12,7 +12,7 @@ Pure data-layout file defining the 96-byte **APP-DESC** application
 descriptor struct.  No I/O, no terminal, no UIDL dependency.
 
 Extracted from `app-shell.f` so that code needing only the struct
-layout (e.g. `desk.f`, compositor, app launchers) can
+layout (e.g. `applets/desk/desk.f`, app launchers) can
 `REQUIRE app-desc.f` without pulling in the full shell runtime.
 
 ```forth
@@ -67,4 +67,4 @@ my-desc APP-DESC-INIT
 ## See Also
 
 - [app-shell.md](app-shell.md) — Shell runtime that executes APP-DESC apps
-- [desk.md](desk.md) — Multi-app desktop (APP-DESC app, replaces compositor)
+- [desk.md](applets/desk/desk.md) — Multi-app desktop (APP-DESC applet)

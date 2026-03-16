@@ -1,12 +1,28 @@
 \ =================================================================
-\  app-desc.f — APP-DESC Application Descriptor
+\  app-desc.f — Applet Descriptor (Shell-Hosted Applications)
 \ =================================================================
 \  Megapad-64 / KDOS Forth
 \  Pure data layout.  No I/O, no terminal, no UIDL dependency.
 \
-\  12 cells = 96 bytes.  The app allocates (CREATE ... APP-DESC ALLOT)
-\  and fills in whichever fields it needs.  Unused callback fields
-\  must be 0 (the shell skips them).
+\  APPLET model: data-only descriptor for applications that run
+\  inside the shell (app-shell.f) or the desktop (desk.f).  An
+\  applet does NOT own the terminal or run its own event loop —
+\  it provides passive callbacks that the host invokes.
+\
+\  Two application models exist in Akashic TUI:
+\
+\    Standalone (app.f)      Applet (app-desc.f + app-shell.f)
+\    ─────────────────────   ─────────────────────────────────
+\    Owns the terminal       Host owns the terminal
+\    Runs own event loop     Passive callbacks only
+\    One app at a time       Multiple via desk.f tiling
+\    Direct APP-INIT/RUN     ASHELL-RUN or DESK-LAUNCH
+\    Full screen control     Region-clipped by host
+\
+\  12 cells = 96 bytes.  The applet allocates
+\  (CREATE ... APP-DESC ALLOT) and fills in whichever fields
+\  it needs.  Unused callback fields must be 0 (the shell/desk
+\  skips them).
 \ =================================================================
 
 PROVIDED akashic-tui-app-desc
