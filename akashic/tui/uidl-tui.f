@@ -217,6 +217,57 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : UTUI-SC-BG@    ( elem -- bg )    _UTUI-SIDECAR _UTUI-SC-STYLE@ 8 RSHIFT 255 AND ;
 : UTUI-SC-ATTRS@ ( elem -- attrs ) _UTUI-SIDECAR _UTUI-SC-STYLE@ 16 RSHIFT 255 AND ;
 
+\ Public geometry reader — returns element's layout rectangle.
+: UTUI-ELEM-RGN  ( elem -- row col h w )
+    _UTUI-SIDECAR >R
+    R@ _UTUI-SC-ROW@
+    R@ _UTUI-SC-COL@
+    R@ _UTUI-SC-H@
+    R> _UTUI-SC-W@ ;
+
+\ =====================================================================
+\  §1c — Dynamic Sidecar Helpers
+\ =====================================================================
+
+\ _UTUI-SC-ALLOC ( elem -- )
+\   Zero-fill the sidecar for elem and set the HAS flag.
+\   The sidecar pool is pre-allocated to _UTUI-MAX-ELEMS, matching
+\   the element pool size, so no growth is needed.
+: _UTUI-SC-ALLOC  ( elem -- )
+    _UTUI-SIDECAR
+    DUP _UTUI-SC-SZ 0 FILL
+    _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS@ OR SWAP _UTUI-SC-FLAGS! ;
+
+\ _UTUI-SC-FREE ( elem -- )
+\   Zero-fill the sidecar, clearing the HAS flag.
+: _UTUI-SC-FREE  ( elem -- )
+    _UTUI-SIDECAR _UTUI-SC-SZ 0 FILL ;
+
+\ _UTUI-INHERIT-PARENT-STYLE ( elem -- )
+\   Seed this element's sidecar with parent's inheritable style bits.
+: _UTUI-INHERIT-PARENT-STYLE  ( elem -- )
+    DUP UIDL-PARENT ?DUP IF
+        _UTUI-SIDECAR _UTUI-SC-STYLE@
+        _UTUI-INHERIT-MASK AND         ( elem inherit )
+        SWAP _UTUI-SIDECAR             ( inherit sc )
+        DUP _UTUI-SC-STYLE@            ( inherit sc cstyle )
+        _UTUI-INHERIT-MASK INVERT AND  ( inherit sc non-inh )
+        ROT OR SWAP _UTUI-SC-STYLE!
+    ELSE
+        \ No parent — seed with default style
+        _UTUI-DEFAULT-STYLE SWAP _UTUI-SIDECAR _UTUI-SC-STYLE!
+    THEN ;
+
+\ _UTUI-MATERIALIZE-ONE ( elem -- )
+\   Materialize a single element if it's a widget type.
+\   (forward reference — defined after _UTUI-MAT-* helpers exist)
+DEFER _UTUI-MATERIALIZE-ONE
+
+\ _UTUI-DEMATERIALIZE-ONE ( elem -- )
+\   Free the widget (if any) attached to a single element.
+\   (forward reference — defined after type constants are available)
+DEFER _UTUI-DEMATERIALIZE-ONE
+
 \ =====================================================================
 \  §1b — Proxy Region (shared by all materialized widgets)
 \ =====================================================================
@@ -285,11 +336,16 @@ VARIABLE _UTUI-RGN        \ root region for the document
 VARIABLE _UTUI-DOC-LOADED \ flag: document loaded?
 VARIABLE _UTUI-STATE      \ bound state-tree
 VARIABLE _UTUI-FOCUS-P    \ currently focused element (0 = none)
+VARIABLE _UTUI-NEEDS-PAINT \ global: any UIDL/widget change needs repaint
 
 0 _UTUI-RGN !
 0 _UTUI-DOC-LOADED !
 0 _UTUI-STATE !
 0 _UTUI-FOCUS-P !
+0 _UTUI-NEEDS-PAINT !
+
+\ Wire UIDL-DIRTY! hook so any element dirtying auto-signals repaint
+:NONAME  ( -- ) _UTUI-NEEDS-PAINT ON ;  _UDL-DIRTY-HOOK !
 
 \ Default style: light gray on dark gray, no attrs
 253 236 0 _UTUI-PACK-STYLE CONSTANT _UTUI-DEFAULT-STYLE
@@ -569,10 +625,18 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     DROP
     9472 _UR-ROW @ _UR-COL @ _UR-W @ DRW-HLINE ;
 
-\ --- Region / container: fill background ---
+\ --- Region / container: fill bg, draw mounted widget if any ---
 : _UTUI-RENDER-REGION  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    DROP _UTUI-FILL-BG ;
+    \ Stack: ( elem )
+    _UTUI-FILL-BG
+    \ If a widget was attached via UTUI-WIDGET-SET, draw it
+    _UTUI-SIDECAR _UTUI-SC-WPTR@ ?DUP IF  ( wptr )
+        _UTUI-PROXY-FROM-UR
+        _UTUI-PROXY-RGN RGN-USE
+        DUP _WDG-O-DRAW-XT + @ EXECUTE
+        RGN-ROOT
+    THEN ;
 
 \ --- Menubar ---
 : _UTUI-RENDER-MBAR  ( elem -- )
@@ -2012,6 +2076,55 @@ VARIABLE _USH-H    VARIABLE _USH-W
         THEN
     AGAIN ;
 
+\ --- Single-element materialize (resolves DEFER from §1c) ---
+:NONAME  ( elem -- )
+    DUP UIDL-TYPE                      ( elem type )
+    DUP UIDL-T-TREE = IF
+        DROP
+        DUP _UTUI-SIDECAR _UTUI-SYNC-PROXY
+        _UTUI-PROXY-RGN OVER
+        ['] _UTUI-TREE-CHILD ['] _UTUI-TREE-NEXT
+        ['] _UTUI-TREE-LABEL ['] _UTUI-TREE-LEAF?
+        TREE-NEW                       ( elem widget )
+        OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
+    ELSE DUP UIDL-T-INPUT = IF
+        DROP DUP _UTUI-MAT-INPUT
+    ELSE DUP UIDL-T-TEXTAREA = IF
+        DROP DUP _UTUI-MAT-TXTA
+    ELSE DUP UIDL-T-TABS = IF
+        DROP
+        8 ALLOCATE 0<> ABORT" tabs-state"
+        DUP 0 SWAP !
+        OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
+    ELSE
+        DROP
+    THEN THEN THEN THEN
+    DROP ;
+IS _UTUI-MATERIALIZE-ONE
+
+\ --- Single-element dematerialize (resolves DEFER from §1c) ---
+:NONAME  ( elem -- )
+    DUP _UTUI-SIDECAR _UTUI-SC-WPTR@  ( elem wptr )
+    ?DUP IF
+        OVER UIDL-TYPE                 ( elem wptr type )
+        DUP UIDL-T-TREE = IF
+            DROP TREE-FREE
+        ELSE DUP UIDL-T-INPUT = IF
+            DROP
+            DUP _INP-O-BUF-A + @ FREE
+            FREE
+        ELSE DUP UIDL-T-TEXTAREA = IF
+            DROP
+            DUP _TXTA-O-BUF-A + @ FREE
+            FREE
+        ELSE
+            DROP FREE
+        THEN THEN THEN
+        0 OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
+    THEN
+    DROP ;
+IS _UTUI-DEMATERIALIZE-ONE
+
 \ _UTUI-CSS-INT ( a u -- n flag )
 \   Parse a simple integer from a CSS value string.
 \   Returns n and -1 if successful, 0 0 otherwise.
@@ -2405,6 +2518,54 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
 : UTUI-WIDGET@  ( elem -- wptr | 0 )
     _UTUI-SIDECAR _UTUI-SC-WPTR@ ;
 
+\ =====================================================================
+\  §17a — Dynamic DOM Mutation (TUI-aware wrappers)
+\ =====================================================================
+
+\ UTUI-ADD-ELEM ( parent type -- elem | 0 )
+\   Create a new UIDL element, allocate sidecar, resolve style,
+\   materialize if widget type.  Marks parent dirty + signals repaint.
+: UTUI-ADD-ELEM  ( parent type -- elem | 0 )
+    UIDL-ADD-ELEM                      ( elem | 0 )
+    DUP 0= IF EXIT THEN
+    DUP _UTUI-SC-ALLOC
+    DUP _UTUI-INHERIT-PARENT-STYLE
+    DUP _UTUI-RESOLVE-ELEM-STYLE
+    DUP _UTUI-MATERIALIZE-ONE
+    DUP _UTUI-SIDECAR
+    DUP _UTUI-SC-FLAGS@ _UTUI-SCF-VIS OR SWAP _UTUI-SC-FLAGS!
+    DUP UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN
+    _UTUI-NEEDS-PAINT ON ;
+
+\ UTUI-REMOVE-ELEM ( elem -- )
+\   Dematerialize, free sidecar, unlink from tree.  Marks parent
+\   dirty + signals repaint.
+: UTUI-REMOVE-ELEM  ( elem -- )
+    DUP _UTUI-DEMATERIALIZE-ONE
+    DUP UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN
+    DUP _UTUI-SC-FREE
+    UIDL-REMOVE-ELEM
+    _UTUI-NEEDS-PAINT ON ;
+
+\ UTUI-SET-ATTR ( elem na nl va vl -- )
+\   Set attribute + auto-dirty the element and signal repaint.
+\   UIDL-SET-ATTR doesn't call UIDL-DIRTY! itself, so we keep
+\   elem on stack and dirty it after the attribute is written.
+: UTUI-SET-ATTR  ( elem na nl va vl -- )
+    4 PICK >R
+    UIDL-SET-ATTR
+    R> UIDL-DIRTY! ;
+
+\ UTUI-WIDGET-SET ( wptr elem -- )
+\   Attach a manually created widget to a UIDL element.
+\   The widget is drawn automatically by UTUI-PAINT when it
+\   visits this element.  Pass 0 as wptr to detach.
+: UTUI-WIDGET-SET  ( wptr elem -- )
+    DUP >R
+    _UTUI-SIDECAR _UTUI-SC-WPTR!
+    R> UIDL-DIRTY!
+    _UTUI-NEEDS-PAINT ON ;
+
 : UTUI-BIND-STATE  ( st -- )
     DUP _UTUI-STATE !
     ST-USE ;
@@ -2477,6 +2638,11 @@ GUARD _utui-guard
 ' UTUI-HIT-TEST       CONSTANT _utui-hit-test-xt
 ' UTUI-DETACH         CONSTANT _utui-detach-xt
 ' UTUI-INSTALL-XTS    CONSTANT _utui-install-xts-xt
+' UTUI-ADD-ELEM       CONSTANT _utui-add-elem-xt
+' UTUI-REMOVE-ELEM    CONSTANT _utui-remove-elem-xt
+' UTUI-SET-ATTR       CONSTANT _utui-set-attr-xt
+' UTUI-WIDGET-SET     CONSTANT _utui-widget-set-xt
+' UTUI-ELEM-RGN       CONSTANT _utui-elem-rgn-xt
 
 : UTUI-LOAD           _utui-load-xt           _utui-guard WITH-GUARD ;
 : UTUI-BIND-STATE     _utui-bind-state-xt     _utui-guard WITH-GUARD ;
@@ -2496,4 +2662,9 @@ GUARD _utui-guard
 : UTUI-HIT-TEST       _utui-hit-test-xt       _utui-guard WITH-GUARD ;
 : UTUI-DETACH         _utui-detach-xt         _utui-guard WITH-GUARD ;
 : UTUI-INSTALL-XTS    _utui-install-xts-xt    _utui-guard WITH-GUARD ;
+: UTUI-ADD-ELEM       _utui-add-elem-xt       _utui-guard WITH-GUARD ;
+: UTUI-REMOVE-ELEM    _utui-remove-elem-xt    _utui-guard WITH-GUARD ;
+: UTUI-SET-ATTR       _utui-set-attr-xt       _utui-guard WITH-GUARD ;
+: UTUI-WIDGET-SET     _utui-widget-set-xt     _utui-guard WITH-GUARD ;
+: UTUI-ELEM-RGN       _utui-elem-rgn-xt       _utui-guard WITH-GUARD ;
 [THEN] [THEN]

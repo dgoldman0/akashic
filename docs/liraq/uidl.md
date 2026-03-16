@@ -516,7 +516,19 @@ Test the `UIDL-F-DIRTY` bit on an element's flags.
 ```forth
 UIDL-DIRTY! ( elem -- )
 ```
-Set the `UIDL-F-DIRTY` bit on an element.
+Set the `UIDL-F-DIRTY` bit on an element.  After setting the flag,
+calls the notification hook `_UDL-DIRTY-HOOK` (if non-zero).  The
+TUI backend uses this hook to set `_UTUI-NEEDS-PAINT`, enabling
+automatic repaint without apps calling `ASHELL-DIRTY!`.
+
+#### `_UDL-DIRTY-HOOK`
+
+```forth
+VARIABLE _UDL-DIRTY-HOOK   \ xt called by UIDL-DIRTY! (0 = none)
+```
+
+Backends install a notification callback here.  The xt receives no
+arguments and should be fast (typically just sets a flag).
 
 #### UIDL-CLEAN!
 ```forth

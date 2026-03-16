@@ -1,7 +1,7 @@
 # akashic/tui/uidl-tui.f — UIDL TUI Backend
 
 **Layer:** 8  
-**Lines:** ~1630  
+**Lines:** ~2660  
 **Prefix:** `UTUI-` (public), `_UTUI-` (internal)  
 **Provider:** `akashic-tui-uidl-tui`  
 **Dependencies:** `uidl.f`, `uidl-chrome.f`, `state-tree.f`, `lel.f`,
@@ -40,6 +40,11 @@ REQUIRE tui/uidl-tui.f
 - [Event Dispatch](#event-dispatch)
 - [Dialog Management](#dialog-management)
 - [Actions & Shortcuts](#actions--shortcuts)
+- [Dynamic DOM Mutation](#dynamic-dom-mutation)
+- [Attribute Mutation](#attribute-mutation)
+- [Widget Attachment](#widget-attachment)
+- [Element Region Accessor](#element-region-accessor)
+- [Automatic Dirty Propagation](#automatic-dirty-propagation)
 - [CSS Style Attributes](#css-style-attributes)
 - [Element-Specific Rendering](#element-specific-rendering)
 - [Guard Wrappers](#guard-wrappers)
@@ -56,8 +61,10 @@ REQUIRE tui/uidl-tui.f
 | **One sidecar per element** | Every UIDL element receives a 56-byte sidecar in a parallel array, indexed by pool position. |
 | **No DOM intermediary** | Unlike `dom-tui.f`, this backend reads UIDL elements directly — no N.AUX, no DOM node walk. |
 | **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree` and `tabs` allocate real widget state. |
-| **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget) or mini state block (tabs active index). Zero means "no widget state". |
+| **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget, input, textarea, manually attached widget) or mini state block (tabs active index). Zero means "no widget state". |
 | **Proxy region** | A single static 40-byte region (`_UTUI-PROXY-RGN`) is synced from sidecar geometry before calling widget `_*-DRAW` / `_*-HANDLE`. Safe because the TUI is single-threaded. |
+| **Dynamic DOM** | `UTUI-ADD-ELEM` and `UTUI-REMOVE-ELEM` wrap the base UIDL tree operations with sidecar allocation, style resolution, materialization, and dirty propagation. Apps manipulate the tree like JavaScript's `appendChild` / `removeChild`. |
+| **Auto-dirty** | `_UTUI-NEEDS-PAINT` flag is set by any DOM / widget mutation. The shell converts this to `ASHELL-DIRTY!` at tick and paint time — apps never call `ASHELL-DIRTY!`. |
 | **Packed style** | FG (8 bits) + BG (8 bits) + attrs (8 bits) + text-align (2 bits) + position (2 bits) + z-index (8 bits) packed into one cell at `+32`. |
 | **CSS inheritance** | `_UTUI-RESOLVE-STYLES-REC` propagates inheritable properties (fg, bg, attrs, text-align — bits 0-25) from parent to child before resolving the child's `style=`. Non-inheritable properties (position, z-index) are preserved from prelayout. |
 | **Registry patching** | `UTUI-INSTALL-XTS` writes render/event/layout XTs into Element Registry definitions. Each chrome element type gets its own adapter. |
@@ -225,9 +232,38 @@ sidecar:
 |---------|---------------|------|-----------|
 | `<tree>` | Full `TREE-NEW` widget struct | 112 bytes | `TREE-NEW` at load, `TREE-FREE` at detach |
 | `<tabs>` | 8-byte state block (1 cell: active index) | 8 bytes | `ALLOCATE` at load, `FREE` at detach |
+| `<input>` | `INP-NEW` widget struct + 256-byte buffer | varies | `INP-NEW` at load/add, free buffer+struct at detach/remove |
+| `<textarea>` | `TXTA-NEW` widget struct + 4096-byte buffer | varies | `TXTA-NEW` at load/add, free buffer+struct at detach/remove |
+| `<region>` (manual) | Any widget attached via `UTUI-WIDGET-SET` | varies | App manages creation; `_UTUI-DEMATERIALIZE-ONE` frees by type |
 
 All other element types (status, split, scroll, dialog, etc.) use
 inline adapters that read UIDL attributes directly — `wptr` stays 0.
+
+### _UTUI-MATERIALIZE-ONE — `( elem -- )`
+
+Materialize a single element by type dispatch.  Used by both the bulk
+`_UTUI-MATERIALIZE` walk and the dynamic `UTUI-ADD-ELEM`.
+
+| Type | Action |
+|------|--------|
+| tree | Sync proxy region, `TREE-NEW` with 4 UIDL callbacks, store at wptr |
+| input | Allocate 256-byte buffer, `INP-NEW`, set text=/placeholder= attrs |
+| textarea | Allocate 4096-byte buffer, `TXTA-NEW`, set text= attr |
+| tabs | Allocate 8 bytes, zero (active = 0) |
+| other | No-op |
+
+### _UTUI-DEMATERIALIZE-ONE — `( elem -- )`
+
+Free the widget attached to a single element.  Used by both the bulk
+`_UTUI-DEMATERIALIZE` and `UTUI-REMOVE-ELEM`.
+
+| Type | Action |
+|------|--------|
+| tree | `TREE-FREE` |
+| input / textarea | `FREE` buffer (widget+40), `FREE` descriptor |
+| other | `FREE` (generic heap block) |
+
+Always zeroes the wptr cell after freeing.
 
 ### _UTUI-MATERIALIZE — `( -- )`
 
@@ -473,6 +509,145 @@ Register a named action.  When an element with a matching
 
 ---
 
+## Dynamic DOM Mutation
+
+The base `uidl.f` has `UIDL-ADD-ELEM` and `UIDL-REMOVE-ELEM`, but
+they only manipulate the element tree (nodes, pointers, attributes).
+The TUI backend is unaware of raw additions — no sidecar, no style,
+no materialization, no paint.
+
+The TUI-aware wrappers handle the full lifecycle:
+
+### UTUI-ADD-ELEM — `( parent type -- elem | 0 )`
+
+Create a new child element under *parent* with element type *type*.
+Returns the new element address, or 0 if the element pool is full.
+
+Steps performed:
+1. `UIDL-ADD-ELEM` — allocate node in tree
+2. `_UTUI-SC-ALLOC` — zero-fill sidecar, set HAS flag
+3. `_UTUI-INHERIT-PARENT-STYLE` — seed inheritable CSS bits from parent
+4. `_UTUI-RESOLVE-STYLE` — run CSS cascade for the element
+5. `_UTUI-MATERIALIZE-ONE` — create widget if needed
+6. Set VIS flag in sidecar
+7. `UIDL-DIRTY!` on parent — triggers relayout
+8. `_UTUI-NEEDS-PAINT ON` — framework auto-repaints
+
+```forth
+\ Add a label child dynamically
+S" my-group" UTUI-BY-ID  UIDL-T-LABEL  UTUI-ADD-ELEM
+DUP S" text" S" New item" UTUI-SET-ATTR
+```
+
+### UTUI-REMOVE-ELEM — `( elem -- )`
+
+Remove an element from the tree and free all associated resources.
+
+Steps performed:
+1. `_UTUI-DEMATERIALIZE-ONE` — free widget if any
+2. `UIDL-DIRTY!` on parent — triggers relayout
+3. `_UTUI-SC-FREE` — zero sidecar
+4. `UIDL-REMOVE-ELEM` — unlink and zero node
+5. `_UTUI-NEEDS-PAINT ON`
+
+---
+
+## Attribute Mutation
+
+### UTUI-SET-ATTR — `( elem name-a name-l val-a val-l -- )`
+
+Set an attribute on an element with automatic dirty propagation.
+Wraps `UIDL-SET-ATTR` and then calls `UIDL-DIRTY!` on the element.
+
+Apps should always use `UTUI-SET-ATTR` instead of raw `UIDL-SET-ATTR`
+to ensure the framework knows about the change and repaints.
+
+```forth
+S" title" UTUI-BY-ID  S" text" S" Hello World"  UTUI-SET-ATTR
+```
+
+This is the Forth equivalent of JavaScript's `element.setAttribute()`
+— it modifies the DOM and the engine notices.
+
+---
+
+## Widget Attachment
+
+### UTUI-WIDGET-SET — `( wptr elem -- )`
+
+Attach an app-created widget to a `<region>` element.  The widget
+pointer is stored in the element's sidecar `wptr` field.  On the
+next paint, `_UTUI-RENDER-REGION` automatically detects the attached
+widget, syncs a proxy region from the sidecar geometry, and calls
+the widget's `draw-xt` — the app never paints.
+
+Pass 0 as *wptr* to detach a widget from an element.
+
+```forth
+\ In app init callback:
+EXPL-NEW _pad-expl-w !
+_pad-expl-w @  S" sb-tree" UTUI-BY-ID  UTUI-WIDGET-SET
+
+\ Detach later:
+0  S" sb-tree" UTUI-BY-ID  UTUI-WIDGET-SET
+```
+
+### Paint Integration for Attached Widgets
+
+When `_UTUI-RENDER-REGION` encounters an element with a non-zero
+wptr, it:
+
+1. Fills the background
+2. Syncs `_UTUI-PROXY-RGN` from the `_UR-*` temp vars
+3. Calls `RGN-USE` on the proxy
+4. Calls the widget's `draw-xt` (via `_WDG-O-DRAW-XT`)
+5. Resets to `RGN-ROOT`
+
+The app never needs a `PAINT-XT` callback.  Widget state changes
+propagate automatically through `UIDL-DIRTY!` → `_UTUI-NEEDS-PAINT`
+→ `ASHELL-DIRTY!`.
+
+---
+
+## Element Region Accessor
+
+### UTUI-ELEM-RGN — `( elem -- row col h w )`
+
+Return the computed screen geometry of an element from its sidecar.
+Useful for positioning popups, cursors, or other elements relative
+to a UIDL element without reaching into sidecar internals.
+
+```forth
+S" sidebar" UTUI-BY-ID UTUI-ELEM-RGN   \ ( row col h w )
+```
+
+---
+
+## Automatic Dirty Propagation
+
+`_UTUI-NEEDS-PAINT` is a global flag in `uidl-tui.f`.  It is set
+whenever any UIDL element is dirtied, via a hook variable
+(`_UDL-DIRTY-HOOK`) installed in `UIDL-DIRTY!`.
+
+The flag is also set explicitly by:
+- `UTUI-ADD-ELEM`
+- `UTUI-REMOVE-ELEM`
+- `UTUI-WIDGET-SET`
+
+The shell checks `_UTUI-NEEDS-PAINT` after `TICK-XT` and at the
+start of `_ASHELL-PAINT`, converting it to `ASHELL-DIRTY!`.  Apps
+never need to call `ASHELL-DIRTY!` themselves.
+
+### Internal Helpers (Sidecar Management)
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `_UTUI-SC-ALLOC` | `( elem -- )` | Zero-fill sidecar slot, set HAS flag |
+| `_UTUI-SC-FREE` | `( elem -- )` | Zero-fill sidecar slot |
+| `_UTUI-INHERIT-PARENT-STYLE` | `( elem -- )` | Seed sidecar with parent's inheritable CSS bits |
+
+---
+
 ## CSS Style Attributes
 
 When an element carries a `style="…"` attribute in the UIDL markup,
@@ -676,7 +851,9 @@ single guard (`_utui-guard`) for thread-safe access:
 `UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, `UTUI-FOCUS`,
 `UTUI-FOCUS!`, `UTUI-FOCUS-NEXT`, `UTUI-FOCUS-PREV`,
 `UTUI-HIT-TEST`, `UTUI-BY-ID`, `UTUI-DETACH`, `UTUI-DO!`,
-`UTUI-SHOW`, `UTUI-HIDE`, `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`.
+`UTUI-SHOW`, `UTUI-HIDE`, `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`,
+`UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`,
+`UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`.
 
 ---
 
@@ -698,6 +875,11 @@ UTUI-FOCUS-PREV        ( -- )                        Retreat focus (DFS)
 UTUI-HIT-TEST          ( row col -- elem | 0 )       Deepest element at screen pos
 UTUI-BY-ID             ( id-a id-l -- elem | 0 )     Look up element by ID
 UTUI-WIDGET@           ( elem -- wptr | 0 )          Get widget pointer from element sidecar
+UTUI-ADD-ELEM          ( parent type -- elem | 0 )    Create child with sidecar + style + materialize
+UTUI-REMOVE-ELEM       ( elem -- )                    Dematerialize + free sidecar + unlink
+UTUI-SET-ATTR          ( elem na nl va vl -- )         Set attribute with auto-dirty
+UTUI-WIDGET-SET        ( wptr elem -- )                Attach/detach widget to region element
+UTUI-ELEM-RGN          ( elem -- row col h w )         Computed screen geometry from sidecar
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)
 UTUI-HIDE              ( id-a id-l -- )              Hide overlay (clear VIS, dirty-rect, restore focus)

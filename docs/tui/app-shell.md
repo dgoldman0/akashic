@@ -1,10 +1,10 @@
 # akashic/tui/app-shell.f — TUI Application Shell Runtime
 
 **Layer:** 7 (above app.f)  
-**Lines:** 411  
+**Lines:** ~435  
 **Prefix:** `ASHELL-` (public), `_ASHELL-` (internal)  
 **Provider:** `akashic-tui-app-shell`  
-**Dependencies:** `app.f`, `keys.f`, `screen.f`, `region.f`, `draw.f`,
+**Dependencies:** `app-desc.f`, `app.f`, `keys.f`, `screen.f`, `region.f`, `draw.f`,
 `focus.f`, `uidl-tui.f`, `utils/term.f`
 
 ## Overview
@@ -19,6 +19,9 @@ throws.  Terminal state is always restored via `CATCH`-guarded teardown.
 Not reentrant.  One app at a time.
 
 ## APP-DESC — Application Descriptor
+
+The 96-byte APP-DESC struct is defined in
+[app-desc.f](app-desc.md) and pulled in via `REQUIRE app-desc.f`.
 
 96 bytes (12 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
 zero-fill with `APP-DESC-INIT`.  Unused callback fields must be 0
@@ -65,6 +68,13 @@ that field within the descriptor, suitable for `@` or `!`.
 |------|-------|-------------|
 | `ASHELL-DIRTY!` | `( -- )` | Request repaint next frame. |
 | `ASHELL-TICK-MS!` | `( ms -- )` | Set tick interval (default 50 ms). |
+
+### Toast
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `ASHELL-TOAST` | `( addr u ms -- )` | Show a toast message for *ms* milliseconds. Auto-dismisses. |
+| `ASHELL-TOAST-VISIBLE?` | `( -- flag )` | True if a toast is currently showing. |
 
 ### Deferred Actions
 
@@ -133,8 +143,9 @@ For each key event:
 1. `RGN-ROOT` — reset region to full screen
 2. `UTUI-PAINT` — UIDL elements (if loaded)
 3. `APP.PAINT-XT` — app's custom widget drawing (on top of UIDL)
-4. `RGN-ROOT` — reset region
-5. `SCR-FLUSH` — diff and emit to terminal
+4. Toast overlay — `_ASHELL-DRAW-TOAST` (if visible)
+5. `RGN-ROOT` — reset region
+6. `SCR-FLUSH` — diff and emit to terminal
 
 ### Resize Handling
 
@@ -148,7 +159,39 @@ Two resize detection paths:
 Both call `_ASHELL-ON-RESIZE`, which: resizes the screen buffer,
 recreates the root region, relayouts UIDL (if loaded), marks dirty.
 
-### Cooperative Multitasking
+### Automatic Dirty Propagation
+
+Apps following the browser model never call `ASHELL-DIRTY!` directly.
+Instead, the framework detects changes automatically:
+
+- **`_UTUI-NEEDS-PAINT` flag** — set by the `UIDL-DIRTY!` hook
+  (in `uidl.f`) whenever any element is dirtied.  Also set by
+  `UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`, and
+  `UTUI-WIDGET-SET`.
+- **After TICK-XT** — `_ASHELL-CHECK-TICK` checks
+  `_UTUI-NEEDS-PAINT` and converts it to `ASHELL-DIRTY!`.
+- **At paint start** — `_ASHELL-PAINT` also checks the flag, so
+  changes made outside the tick cycle are still caught.
+
+This means: modify the DOM or widget state, and the framework repaints.
+No manual dirty signalling needed.
+
+## Toast Facility
+
+`ASHELL-TOAST` provides a shell-level toast overlay.  The app passes
+a message string and a duration in milliseconds.  The shell handles
+all rendering and timing.
+
+```forth
+S" Saved!" 2000 ASHELL-TOAST    \ toast appears for 2 seconds
+```
+
+The toast is drawn last in the paint cycle (on top of everything).
+Expiry is checked in `_ASHELL-CHECK-TICK` — when the toast expires,
+the shell auto-dirties to clear it.  No timer or paint code in the
+app.
+
+## Cooperative Multitasking
 
 One `YIELD?` per loop iteration.  `YIELD?` checks the per-core KDOS
 preemption flag (set by the timer ISR at the `TIME-SLICE` interval).
@@ -168,8 +211,13 @@ tick/paint.  Use for work that shouldn't run inside a callback
 ## Concurrency Guards
 
 When `GUARDED` is defined at compile time, all public words are
-wrapped with `WITH-GUARD` for thread safety.  Currently `GUARDED`
-is not defined, so guards are inactive.
+wrapped with `WITH-GUARD` for thread safety:
+
+`ASHELL-RUN`, `ASHELL-QUIT`, `ASHELL-DIRTY!`, `ASHELL-REGION`,
+`ASHELL-TICK-MS!`, `ASHELL-POST`, `ASHELL-UIDL?`, `ASHELL-DESC`,
+`ASHELL-TOAST`, `ASHELL-TOAST-VISIBLE?`.
+
+Currently `GUARDED` is not defined, so guards are inactive.
 
 ## Usage Examples
 
@@ -238,5 +286,9 @@ This works because the RUNNING flag is set *before* the init callback.
 | `_ASHELL-LAST-TICK` | 0 | `MS@` of last tick |
 | `_ASHELL-EV` | — | 24-byte key event buffer |
 | `_ASHELL-POST-Q` | — | 16-slot deferred action FIFO |
+
+| `_ASHELL-TOAST-MSG` | 0 0 | Toast message addr + len (2 cells) |
+| `_ASHELL-TOAST-EXPIRY` | 0 | Toast `MS@` deadline |
+| `_ASHELL-TOAST-WAS-VIS` | 0 | Was-visible flag for expiry detection |
 
 All state is reset to defaults by `_ASHELL-TEARDOWN`.

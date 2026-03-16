@@ -1156,7 +1156,14 @@ VARIABLE _UDL-BWE   \ bind-write element
 
 \ --- Dirty Flag Helpers ---
 : UIDL-DIRTY?  ( elem -- flag )  UE.FLAGS @ UIDL-F-DIRTY AND 0<> ;
-: UIDL-DIRTY!  ( elem -- )  DUP UE.FLAGS @ UIDL-F-DIRTY OR SWAP UE.FLAGS ! ;
+
+VARIABLE _UDL-DIRTY-HOOK   \ ( -- ) optional hook called after UIDL-DIRTY!
+0 _UDL-DIRTY-HOOK !
+
+: UIDL-DIRTY!  ( elem -- )
+    DUP UE.FLAGS @ UIDL-F-DIRTY OR SWAP UE.FLAGS !
+    _UDL-DIRTY-HOOK @ ?DUP IF EXECUTE THEN ;
+
 : UIDL-CLEAN!  ( elem -- )  DUP UE.FLAGS @ UIDL-F-DIRTY INVERT AND SWAP UE.FLAGS ! ;
 
 \ ── guard ────────────────────────────────────────────────

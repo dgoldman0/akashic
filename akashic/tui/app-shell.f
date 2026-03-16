@@ -48,48 +48,7 @@ REQUIRE draw.f
 REQUIRE focus.f
 REQUIRE uidl-tui.f
 REQUIRE ../utils/term.f
-
-\ =====================================================================
-\  §1 — App Descriptor Layout
-\ =====================================================================
-\
-\  12 cells = 96 bytes.  The app allocates (CREATE ... APP-DESC ALLOT)
-\  and fills in whichever fields it needs.  Unused callback fields
-\  must be 0 (the shell skips them).
-
- 0 CONSTANT _AD-INIT        \ ( -- )         app init callback
- 8 CONSTANT _AD-EVENT       \ ( ev -- flag ) key/mouse handler
-16 CONSTANT _AD-TICK        \ ( -- )         periodic tick
-24 CONSTANT _AD-PAINT       \ ( -- )         custom widget paint
-32 CONSTANT _AD-SHUTDOWN    \ ( -- )         cleanup
-40 CONSTANT _AD-UIDL-A      \ UIDL XML addr (0 = no UIDL)
-48 CONSTANT _AD-UIDL-U      \ UIDL XML len
-56 CONSTANT _AD-WIDTH       \ preferred width  (0 = auto)
-64 CONSTANT _AD-HEIGHT      \ preferred height (0 = auto)
-72 CONSTANT _AD-TITLE-A     \ terminal title addr (0 = none)
-80 CONSTANT _AD-TITLE-U     \ terminal title len
-88 CONSTANT _AD-FLAGS       \ reserved (0)
-
-96 CONSTANT APP-DESC         \ total size in bytes
-
-\ --- Field accessors ---
-
-: APP.INIT-XT      ( desc -- addr )  _AD-INIT     + ;
-: APP.EVENT-XT     ( desc -- addr )  _AD-EVENT    + ;
-: APP.TICK-XT      ( desc -- addr )  _AD-TICK     + ;
-: APP.PAINT-XT     ( desc -- addr )  _AD-PAINT    + ;
-: APP.SHUTDOWN-XT  ( desc -- addr )  _AD-SHUTDOWN + ;
-: APP.UIDL-A       ( desc -- addr )  _AD-UIDL-A   + ;
-: APP.UIDL-U       ( desc -- addr )  _AD-UIDL-U   + ;
-: APP.WIDTH        ( desc -- addr )  _AD-WIDTH    + ;
-: APP.HEIGHT       ( desc -- addr )  _AD-HEIGHT   + ;
-: APP.TITLE-A      ( desc -- addr )  _AD-TITLE-A  + ;
-: APP.TITLE-U      ( desc -- addr )  _AD-TITLE-U  + ;
-: APP.FLAGS        ( desc -- addr )  _AD-FLAGS    + ;
-
-\ --- Convenience: zero-fill a descriptor ---
-: APP-DESC-INIT  ( desc -- )
-    APP-DESC 0 FILL ;
+REQUIRE app-desc.f
 
 \ =====================================================================
 \  §2 — Shell State
@@ -115,6 +74,17 @@ VARIABLE _ASHELL-TICK-MS      \ Tick interval in milliseconds
 
 VARIABLE _ASHELL-LAST-TICK    \ MS@ snapshot of last tick
 0 _ASHELL-LAST-TICK !
+
+\ --- Toast state ---
+CREATE _ASHELL-TOAST-MSG  2 CELLS ALLOT   \ addr + len
+0 _ASHELL-TOAST-MSG !
+0 _ASHELL-TOAST-MSG CELL+ !
+
+VARIABLE _ASHELL-TOAST-EXPIRY             \ MS@ deadline
+0 _ASHELL-TOAST-EXPIRY !
+
+VARIABLE _ASHELL-TOAST-WAS-VIS            \ was-visible flag
+0 _ASHELL-TOAST-WAS-VIS !
 
 \ =====================================================================
 \  §3 — Deferred Action Queue (FIFO, max 16 entries)
@@ -180,6 +150,39 @@ VARIABLE _ASHELL-POST-TAIL
 \   The currently running app descriptor (0 if not running).
 : ASHELL-DESC  ( -- desc )
     _ASHELL-DESC @ ;
+
+\ ASHELL-TOAST-VISIBLE? ( -- flag )
+\   True if toast message is currently showing.
+: ASHELL-TOAST-VISIBLE?  ( -- flag )
+    _ASHELL-TOAST-EXPIRY @ MS@ > ;
+
+\ ASHELL-TOAST ( addr u ms -- )
+\   Show a toast message for ms milliseconds.
+: ASHELL-TOAST  ( addr u ms -- )
+    MS@ + _ASHELL-TOAST-EXPIRY !
+    _ASHELL-TOAST-MSG 2!
+    -1 _ASHELL-TOAST-WAS-VIS !
+    ASHELL-DIRTY! ;
+
+\ _ASHELL-DRAW-TOAST ( -- )
+\   Render toast overlay centred on bottom row.
+: _ASHELL-DRAW-TOAST  ( -- )
+    RGN-ROOT
+    253 DRW-FG!  236 DRW-BG!  0 DRW-ATTR!
+    _ASHELL-TOAST-MSG 2@               ( a u )
+    DUP 4 +                            ( a u tw )
+    \ Fill background bar:  ( cp row col h w -- )
+    32
+    SCR-H 1-
+    SCR-W 3 PICK - 2/                 ( a u tw 32 row col )
+    1  4 PICK
+    DRW-FILL-RECT                      ( a u tw )
+    \ Centre text:  ( addr len row col w -- )
+    SCR-H 1-
+    SCR-W 2 PICK - 2/                 ( a u tw row col )
+    ROT                                ( a u row col tw )
+    DRW-TEXT-CENTER
+    DRW-STYLE-RESET ;
 
 \ =====================================================================
 \  §5 — Key Event Buffer
@@ -251,6 +254,18 @@ VARIABLE _ASHELL-TICK-TMP
     _ASHELL-TICK-MS @ >= IF
         _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK !
         _ASHELL-DESC @ APP.TICK-XT @ EXECUTE
+        \ If tick caused any UIDL/widget changes, auto-dirty
+        _UTUI-NEEDS-PAINT @ IF
+            0 _UTUI-NEEDS-PAINT !
+            ASHELL-DIRTY!
+        THEN
+    THEN
+    \ Toast expiry: if toast just expired, trigger repaint to clear it
+    ASHELL-TOAST-VISIBLE? 0= IF
+        _ASHELL-TOAST-WAS-VIS @ IF
+            0 _ASHELL-TOAST-WAS-VIS !
+            ASHELL-DIRTY!
+        THEN
     THEN ;
 
 \ =====================================================================
@@ -258,6 +273,11 @@ VARIABLE _ASHELL-TICK-TMP
 \ =====================================================================
 
 : _ASHELL-PAINT  ( -- )
+    \ Check UIDL needs-paint flag (set by UIDL-DIRTY! hook)
+    _UTUI-NEEDS-PAINT @ IF
+        0 _UTUI-NEEDS-PAINT !
+        ASHELL-DIRTY!
+    THEN
     _ASHELL-DIRTY @ 0= IF EXIT THEN
     0 _ASHELL-DIRTY !
     RGN-ROOT
@@ -268,6 +288,10 @@ VARIABLE _ASHELL-TICK-TMP
     \ App's custom widget painting (on top of UIDL)
     _ASHELL-DESC @ APP.PAINT-XT @ ?DUP IF
         EXECUTE
+    THEN
+    \ Toast overlay (drawn last, on top of everything)
+    ASHELL-TOAST-VISIBLE? IF
+        _ASHELL-DRAW-TOAST
     THEN
     RGN-ROOT
     SCR-FLUSH ;
@@ -398,6 +422,8 @@ GUARD _ashell-guard
 ' ASHELL-POST    CONSTANT _ashell-post-xt
 ' ASHELL-UIDL?   CONSTANT _ashell-uidl-xt
 ' ASHELL-DESC    CONSTANT _ashell-desc-xt
+' ASHELL-TOAST   CONSTANT _ashell-toast-xt
+' ASHELL-TOAST-VISIBLE? CONSTANT _ashell-toast-vis-xt
 
 : ASHELL-RUN      _ashell-run-xt      _ashell-guard WITH-GUARD ;
 : ASHELL-QUIT     _ashell-quit-xt     _ashell-guard WITH-GUARD ;
@@ -407,4 +433,6 @@ GUARD _ashell-guard
 : ASHELL-POST     _ashell-post-xt     _ashell-guard WITH-GUARD ;
 : ASHELL-UIDL?    _ashell-uidl-xt     _ashell-guard WITH-GUARD ;
 : ASHELL-DESC     _ashell-desc-xt     _ashell-guard WITH-GUARD ;
+: ASHELL-TOAST    _ashell-toast-xt    _ashell-guard WITH-GUARD ;
+: ASHELL-TOAST-VISIBLE? _ashell-toast-vis-xt _ashell-guard WITH-GUARD ;
 [THEN] [THEN]
