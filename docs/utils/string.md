@@ -219,6 +219,9 @@ None. `string.f` is a leaf library with no `REQUIRE` directives.
 - `utils/css/css.f` — replaces `_CSS-STR=`, `_CSS-STRI=`, `_CSS-TOLOWER`
 - `utils/markup/core.f` — replaces `_MU-STR=`, `_MU-STRI=`, `_MU-TOLOWER`
 - `utils/net/headers.f` — replaces `_CI-LOWER`, `_CI-EQ`, `_CI-PREFIX`
+- `utils/file-types.f` — `STR-RINDEX`, `STR-STRI=` for extension lookup
+- `text/search.f` — `_STR-LC` for case-insensitive byte matching
+- `text/syntax.f` — `STR-STRI=` for keyword matching, `_STR-LC` for hex prefix
 
 ## Internal State
 

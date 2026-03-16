@@ -195,3 +195,10 @@ Error conditions:
 | `UTF8-VALID?` | `( addr len -- flag )` | Check validity |
 | `UTF8-NTH` | `( addr len n -- cp )` | Get nth codepoint |
 | `UTF8-REPLACEMENT` | `( -- 65533 )` | U+FFFD constant |
+
+---
+
+## Consumers
+
+- `text/cell-width.f` — `UTF8-DECODE` for string width calculation
+- `text/gap-buf.f` — `UTF8-ENCODE`, `_UTF8-SEQLEN`, `_UTF8-CONT?` for codepoint insert/delete

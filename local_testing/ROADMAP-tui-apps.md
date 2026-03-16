@@ -43,21 +43,36 @@ plumbing and the same bugs.
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  APP-SHELL  (Task 0 — owns screen + input)       │
+│  APP-SHELL  (the browser engine)                 │
+│  Owns: terminal, screen buffer, event loop,      │
+│        YIELD?, paint cycle, UIDL integration     │
 │                                                  │
-│  ┌── event loop (KEY-POLL + tick) ──────────┐    │
-│  │  1. poll input                           │    │
-│  │  2. route to focused app                 │    │
-│  │  3. each app: APP.EVENT-XT               │    │
-│  │  4. each app: APP.PAINT-XT if dirty      │    │
-│  │  5. composite → SCR-FLUSH                │    │
-│  │  6. YIELD?                               │    │
+│  ┌── ONE event loop ────────────────────────┐    │
+│  │  1. KEY-POLL                             │    │
+│  │  2. app EVENT-XT (first crack)           │    │
+│  │  3. UIDL dispatch (shortcuts, focus)     │    │
+│  │  4. drain deferred actions               │    │
+│  │  5. app TICK-XT                          │    │
+│  │  6. UTUI-PAINT + app PAINT-XT → FLUSH    │    │
+│  │  7. YIELD?  (KDOS cooperative sched)     │    │
 │  └──────────────────────────────────────────┘    │
 │                                                  │
-│  ┌── App A ───────┐  ┌── App B ───────────┐     │
-│  │  UIDL document  │  │  UIDL document     │     │
-│  │  screen region  │  │  screen region     │     │
-│  │  APP-DESC       │  │  APP-DESC          │     │
+│  Runs exactly ONE app at a time via APP-DESC.    │
+│  That app can be a simple single-document app    │
+│  or the DESK (which manages sub-apps internally).│
+│                                                  │
+│  ┌── Single app ──┐   ┌── DESK (multi-app) ─┐   │
+│  │  APP-DESC       │   │  APP-DESC            │   │
+│  │  UIDL doc       │   │  manages N sub-apps  │   │
+│  │  callbacks      │   │  tiling, taskbar     │   │
+│  └─────────────────┘   │  ctx-swap per tile   │   │
+│         OR             └──────────────────────┘   │
+│                                                  │
+│  ┌── Inside DESK ─────────────────────────────┐  │
+│  │  ┌─ App A ─────┐  ┌─ App B ─────────┐     │  │
+│  │  │ APP-DESC     │  │ APP-DESC        │     │  │
+│  │  │ UIDL context │  │ UIDL context    │     │  │
+│  │  │ screen region│  │ screen region   │     │  │
 │  │  channel ←→     │  │  channel ←→        │     │
 │  └─────────────────┘  └────────────────────┘     │
 └──────────────────────────────────────────────────┘
@@ -246,14 +261,79 @@ that delegate to the generic `UTUI-SHOW` / `UTUI-HIDE`.
 **Files**: `tui/uidl-tui.f`.
 **Tests**: `local_testing/test_uidl_tui.py` (12 new overlay tests).
 
-### Stage 4 — Multi-App Compositor
+### Stage 4 — TUI Desktop (DESK)
 
-**Goal**: Unlimited apps share the screen, each in its own region with
-its own UIDL context.  An always-on taskbar occupies the last row.
-All sizes are dynamic — derived from `SCR-W` / `SCR-H` at runtime,
-recomputed on every resize.
+> Renamed from "compositor".  The old `app-compositor.f` had its own
+> event loop — a copy of the shell's loop.  That was wrong.  The shell
+> is the browser engine; the DESK is a regular APP-DESC app that
+> happens to manage sub-apps, just as a browser tab manager is JS
+> running inside the engine, not a second engine.
 
-**Design decisions** (finalized):
+**Goal**: Multiple apps share the screen, each in its own tiled
+region with its own UIDL context.  An always-on taskbar occupies
+the last row.  All sizes are dynamic — derived from
+`ASHELL-REGION` at runtime, recomputed on every resize.
+
+**Key architectural rule**: The DESK has **no event loop**.
+It is an APP-DESC.  The shell calls its 5 callbacks.
+`YIELD?` is the shell's concern.  `KEY-POLL` is the shell's concern.
+The DESK never touches either.
+
+#### How it works
+
+The DESK is launched with `ASHELL-RUN` like any other app:
+
+```forth
+DESK-DESC-SETUP
+DESK-DESC ASHELL-RUN      \ blocks until ASHELL-QUIT
+```
+
+The shell's single event loop calls the DESK's callbacks:
+
+| Shell calls | DESK does |
+|-------------|----------|
+| `DESK.INIT-XT` | Allocate slot list, paint taskbar template |
+| `DESK.EVENT-XT ( ev -- flag )` | Intercept desk shortcuts (Alt+Tab, Alt+W, …); if not a shortcut, ctx-switch to focused sub-app, call its EVENT-XT, ctx-switch back; return consumed flag |
+| `DESK.TICK-XT` | Walk all live slots, ctx-switch to each, call its TICK-XT, ctx-switch back |
+| `DESK.PAINT-XT` | Walk visible slots, ctx-switch + RGN-USE each, call UTUI-PAINT + PAINT-XT, ctx-switch back; draw dividers; draw taskbar |
+| `DESK.SHUTDOWN-XT` | Walk all slots, call each sub-app's SHUTDOWN-XT, free UIDL contexts, free slot list |
+
+The shell handles everything else: terminal init/shutdown, `YIELD?`,
+`KEY-POLL`, `SCR-FLUSH`, dirty-flag gating, resize (`_ASHELL-ON-RESIZE`
+calls `UTUI-RELAYOUT` — the DESK's own EVENT-XT can listen for a
+resize pseudo-event or re-tile in PAINT-XT when dimensions change).
+
+#### No duplicate loop
+
+The old `app-compositor.f` had `_COMP-LOOP` which was a near-identical
+copy of `_ASHELL-LOOP`: poll → dispatch → tick → paint → flush → yield.
+This is eliminated.  There is exactly **one** loop: the shell's.
+
+Comparison:
+
+```
+OLD (wrong):                         NEW (correct):
+
+app-shell.f  _ASHELL-LOOP            app-shell.f  _ASHELL-LOOP
+  KEY-POLL                             KEY-POLL
+  app EVENT-XT                         app EVENT-XT  ← DESK's
+  UTUI dispatch                        UTUI dispatch ← DESK's doc
+  tick                                 tick          ← DESK's
+  paint if dirty                       paint if dirty← DESK's
+  SCR-FLUSH                            SCR-FLUSH
+  YIELD?                               YIELD?
+
+app-compositor.f  _COMP-LOOP         (deleted — no second loop)
+  KEY-POLL
+  compositor shortcuts
+  route to slot
+  tick all
+  paint all
+  SCR-FLUSH
+  YIELD?
+```
+
+#### Design decisions
 
 1. **Divider lines** — 1-cell dividers between tiled panes.
 2. **Auto-tiling** — grid dimensions chosen automatically by visible
@@ -261,19 +341,18 @@ recomputed on every resize.
 3. **App launcher** — overlay (Stage 3 dialog system).
 4. **Full-frame override** — other visible apps hidden from paint but
    still ticked; they are NOT minimized.
-5. **All-Task-0 execution** — every app callback (init, event, tick,
-   paint, shutdown) runs cooperatively in the shell's task.
-   Channels / BG-SLOT deferred to Stage 5.
-6. **No artificial slot limit** — the only limits are memory
-   (~97 KiB per UIDL context) and usable screen space.
-   A linked-list or dynamically-sized slot array replaces the old
-   fixed-3 `CREATE` table.
+5. **All-Task-0 execution** — every sub-app callback runs
+   cooperatively inside the DESK's own callbacks, which themselves
+   run inside the shell's single Task 0 loop.
+6. **No artificial slot limit** — heap-allocated linked list.
+   Practical limits: memory (~97 KiB per UIDL context) and usable
+   screen space.
 
 #### Screen Budget
 
-Screen size comes from `SCR-W` / `SCR-H` (updated by `SCR-RESIZE`
-on terminal resize).  The last row (`SCR-H - 1`) is reserved for the
-taskbar → **`SCR-W × (SCR-H - 1)` usable** for app tiles.
+The DESK receives its region from `ASHELL-REGION`.  It reserves
+the last row for the taskbar → usable area is
+`region-W × (region-H - 1)` for app tiles.
 
 Nothing is hardcoded to 80×24.
 
@@ -283,137 +362,184 @@ Nothing is hardcoded to 80×24.
 [1:Pad*] [2:Explore~] [3:--]  ...            HH:MM
 ```
 
-- One label per live slot.  Scrolls if labels overflow `SCR-W`.
+- One label per live slot.  Scrolls if labels overflow width.
 - `*` = focused, `~` = minimized, no suffix = running.
 - Right-aligned: optional clock / status.
-- Shell-owned, painted via direct `DRW-*` calls (no UIDL).
-- Painted last every frame, after all app panes.
+- Painted by `DESK.PAINT-XT` via direct `DRW-*` calls.
 
 #### Dynamic Tiling Algorithm
 
-Given **N** visible (non-minimized) apps and usable area
-**W × H** (`SCR-W × (SCR-H - 1)`):
+Given **N** visible (non-minimized) sub-apps and usable area
+**W × H** (from `ASHELL-REGION`, minus taskbar row):
 
 1. **Pick grid dimensions `(rows, cols)`.**
    Choose the smallest grid where `rows × cols ≥ N`:
-   - Default preference `_COMP-VH = 0` (vertical-first):
+   - Default preference `_DESK-VH = 0` (vertical-first):
      `cols = ceil(sqrt(N))`, `rows = ceil(N / cols)`.
-   - Preference `_COMP-VH = 1` (horizontal-first):
+   - Preference `_DESK-VH = 1` (horizontal-first):
      `rows = ceil(sqrt(N))`, `cols = ceil(N / rows)`.
 
 2. **Compute base tile size.**
    Account for 1-cell dividers between adjacent tiles:
    - `tile-w = (W - (cols - 1)) / cols`
    - `tile-h = (H - (rows - 1)) / rows`
-   - Remainder pixels go to the *last* column / row:
-     `last-w = W - (cols - 1) - tile-w * (cols - 1)`,
-     `last-h = H - (rows - 1) - tile-h * (rows - 1)`.
+   - Remainder goes to the last column / row.
 
 3. **Assign regions.**
    Walk visible slots left-to-right, top-to-bottom.  Each gets
-   `RGN-NEW ( row col h w )` with the computed position and size.
-   The last row of the grid may be partially filled (empty cells on
-   the right are unused).
+   `RGN-NEW ( row col h w )`.  Last grid row may be partial.
 
 4. **Draw dividers.**
-   Vertical divider columns: `col = x × (tile-w + 1) - 1` for each
-   split.  Horizontal divider rows: `row = y × (tile-h + 1) - 1`.
-   Use `DRW-VLINE` / `DRW-HLINE` with box-drawing characters.
+   `DRW-VLINE` / `DRW-HLINE` with box-drawing characters.
 
 **Example** — 4 apps on 80×24 (usable 80×23):
-- Grid: 2×2. tile-w = (80-1)/2 = 39, tile-h = (23-1)/2 = 11.
+- Grid: 2×2. tile-w = 39, tile-h = 11.
 - Regions: (0,0,11,39), (0,40,11,40), (12,0,11,39), (12,40,11,40).
-- Dividers: col 39 vertical full-height, row 11 horizontal full-width.
-
-**Example** — 5 apps on 120×40 (usable 120×39):
-- Grid: 3×2 (cols=3, rows=2). tile-w = (120-2)/3 = 39, tile-h = (39-1)/2 = 19.
-- Row 0: slots at (0,0,19,39), (0,40,19,39), (0,80,19,40).
-- Row 1: slots at (20,0,19,39), (20,40,19,39).  Third cell empty.
-
-This scales to any screen size and any number of apps.
 
 #### Minimize & Full-Frame
 
-- **Minimize**: app stays alive, not painted, no key events routed,
-  ticks still called.  Taskbar shows `~`.  Remaining visible apps
-  re-tile via the algorithm above.
-- **Full-frame** (`Alt+F`): focused app gets the full usable area;
-  other visible apps hidden from paint, still ticked.
+- **Minimize**: sub-app stays alive, not painted, no key events
+  routed, ticks still called.  Taskbar shows `~`.
+- **Full-frame** (`Alt+F`): focused sub-app gets the full usable
+  area; others hidden from paint, still ticked.
 
 #### Slot Management
 
-No fixed-size table.  Slots are heap-allocated via `ALLOCATE`:
+Heap-allocated via `ALLOCATE`.  Prefix: `_DESK-` (was `_COMP-`).
 
 ```forth
 \ Per-slot struct (7 cells = 56 bytes)
- 0 CONSTANT _SLOT-O-DESC       \ APP-DESC pointer
- 8 CONSTANT _SLOT-O-RGN        \ region handle (0 if minimized)
-16 CONSTANT _SLOT-O-STATE      \ 0=empty 1=running 2=minimized 3=focused
-24 CONSTANT _SLOT-O-UCTX       \ UIDL context pointer (0 = no UIDL)
-32 CONSTANT _SLOT-O-HAS-UIDL   \ flag
-40 CONSTANT _SLOT-O-NEXT       \ → next slot (linked list) or 0
-48 CONSTANT _SLOT-O-ID         \ unique slot ID (monotonic counter)
-56 CONSTANT _SLOT-SZ
+ 0 CONSTANT _SL-O-DESC        \ sub-app APP-DESC pointer
+ 8 CONSTANT _SL-O-RGN         \ sub-region (0 if minimized)
+16 CONSTANT _SL-O-STATE       \ 0=empty 1=running 2=min 3=focused
+24 CONSTANT _SL-O-UCTX        \ UIDL context buffer (~97 KiB)
+32 CONSTANT _SL-O-HAS-UIDL    \ flag
+40 CONSTANT _SL-O-NEXT        \ → next slot or 0
+48 CONSTANT _SL-O-ID          \ unique monotonic ID
+56 CONSTANT _SL-SZ
 ```
 
-A singly-linked list (`_COMP-SLOT-HEAD`) holds all live slots.
-`COMP-LAUNCH` allocates and links; `COMP-CLOSE` unlinks and frees.
-Slot IDs are assigned from a monotonic counter so keyboard shortcuts
-can address them by number (Alt+1 = ID 1, etc.).
+Linked list `_DESK-HEAD`.  `DESK-LAUNCH ( desc -- id )` allocates
+and links.  `DESK-CLOSE ( id -- )` calls sub-app SHUTDOWN-XT,
+unlinks, frees.
 
-#### Keyboard Shortcuts (shell-intercepted)
+#### Keyboard Shortcuts (DESK-intercepted in EVENT-XT)
 
 | Key | Action |
 |-----|--------|
 | `Alt+<digit>` | Focus slot with that ID (1-9) |
 | `Alt+Tab` | Cycle focus forward through live slots |
-| `Alt+M` | Minimize focused app |
+| `Alt+M` | Minimize focused sub-app |
 | `Alt+R` | Restore most-recently-minimized |
-| `Alt+F` | Toggle full-frame for focused app |
+| `Alt+F` | Toggle full-frame for focused sub-app |
 | `Alt+L` | Toggle V/H tiling preference |
-| `Alt+W` | Close focused app (shutdown) |
+| `Alt+W` | Close focused sub-app (shutdown) |
 | `Alt+N` | Open app launcher overlay |
+
+These are checked in `_DESK-EVENT-CB` **before** forwarding to the
+focused sub-app.  If a shortcut matches, the DESK handles it
+internally and returns `consumed = true` to the shell.
 
 #### UIDL Multi-Instance (Context Swap)
 
-Each app with a UIDL document gets a context buffer (~97 KiB)
-holding all 15 UIDL/UTUI scalar globals + 10 pool arrays.
+Each sub-app with a UIDL document gets a context buffer (~97 KiB)
+holding all UIDL/UTUI scalar globals + pool arrays.
 `UCTX-SAVE` / `UCTX-RESTORE` copy between live globals and the
-buffer.  `_COMP-CTX-SWITCH ( slot -- )` saves the outgoing app's
-context and restores the incoming app's.
+buffer.  `_DESK-CTX-SWITCH ( slot -- )` saves the outgoing context
+and restores the incoming one.
 
-Since everything runs in Task 0 there are no races.  Memory cost
-is ~97 KiB × N\_apps.  For 8 apps ≈ 776 KiB — well within budget
-on a 64-bit system.
+Since everything runs in Task 0 (the shell's single loop) there
+are no races.  Memory cost: ~97 KiB × N sub-apps.
 
-#### Event Loop (sketch)
+#### App Descriptor (DESK itself)
+
+The DESK is just an APP-DESC:
 
 ```forth
-: _COMP-LOOP  ( -- )
-  BEGIN  _COMP-RUNNING @  WHILE
-    KEY-POLL IF
-      _COMP-EV COMP-SHORTCUT? 0= IF
-        _COMP-EV COMP-ROUTE-KEY
-      THEN
-    THEN
-    TERM-RESIZED? IF TERM-SIZE _COMP-ON-RESIZE THEN
-    COMP-TICK-ALL
-    COMP-PAINT-ALL      \ ctx-swap + RGN-USE per visible app
-    _COMP-PAINT-TASKBAR  \ last row
-    SCR-FLUSH
-    YIELD?
-  REPEAT ;
+CREATE DESK-DESC  APP-DESC ALLOT
+
+: DESK-DESC-SETUP  ( -- )
+    DESK-DESC APP-DESC-INIT
+    ['] _DESK-INIT-CB      DESK-DESC APP.INIT-XT !
+    ['] _DESK-EVENT-CB     DESK-DESC APP.EVENT-XT !
+    ['] _DESK-TICK-CB      DESK-DESC APP.TICK-XT !
+    ['] _DESK-PAINT-CB     DESK-DESC APP.PAINT-XT !
+    ['] _DESK-SHUTDOWN-CB  DESK-DESC APP.SHUTDOWN-XT !
+    S" KDOS Desktop"       DESK-DESC APP.TITLE-A !
+                           DESK-DESC APP.TITLE-U !
+    \ No UIDL doc for the DESK itself (it manages sub-app docs)
+    0 DESK-DESC APP.UIDL-A ! ;
+```
+
+The 5 callbacks:
+
+```forth
+: _DESK-INIT-CB  ( -- )
+    0 _DESK-HEAD !
+    1 _DESK-NEXT-ID !
+    0 _DESK-VH !
+    0 _DESK-FULLFRAME ! ;
+
+: _DESK-EVENT-CB  ( ev -- flag )
+    DUP _DESK-SHORTCUT? IF DROP -1 EXIT THEN
+    \ Forward to focused sub-app
+    _DESK-FOCUS-SLOT @ ?DUP IF
+        DUP _DESK-CTX-SWITCH
+        _SL-O-DESC + @ APP.EVENT-XT @ ?DUP IF
+            SWAP EXECUTE
+        ELSE DROP 0 THEN
+        _DESK-CTX-SAVE
+    ELSE DROP 0 THEN ;
+
+: _DESK-TICK-CB  ( -- )
+    \ Tick ALL live sub-apps (even minimized)
+    _DESK-HEAD @ BEGIN ?DUP WHILE
+        DUP _DESK-CTX-SWITCH
+        DUP _SL-O-DESC + @ APP.TICK-XT @ ?DUP IF EXECUTE THEN
+        _DESK-CTX-SAVE
+        _SL-O-NEXT + @
+    REPEAT ;
+
+: _DESK-PAINT-CB  ( -- )
+    \ Paint visible sub-apps into their regions
+    _DESK-HEAD @ BEGIN ?DUP WHILE
+        DUP _SL-O-STATE + @ _ST-RUNNING >= IF
+            DUP _DESK-CTX-SWITCH
+            DUP _SL-O-RGN + @ RGN-USE
+            DUP _SL-O-HAS-UIDL + @ IF UTUI-PAINT THEN
+            DUP _SL-O-DESC + @ APP.PAINT-XT @ ?DUP IF EXECUTE THEN
+            _DESK-CTX-SAVE
+        THEN
+        _SL-O-NEXT + @
+    REPEAT
+    _DESK-PAINT-DIVIDERS
+    _DESK-PAINT-TASKBAR ;
+
+: _DESK-SHUTDOWN-CB  ( -- )
+    BEGIN _DESK-HEAD @ ?DUP WHILE
+        DUP _SL-O-ID + @ DESK-CLOSE
+    REPEAT ;
 ```
 
 #### Resize Handling
 
-`_COMP-ON-RESIZE ( w h -- )` calls `SCR-RESIZE`, then
-`COMP-RELAYOUT` which recomputes the grid and reassigns regions
-from the new `SCR-W` / `SCR-H`.  Each UIDL-bearing app's layout
-tree is re-laid-out via `UTUI-RELAYOUT` in its context.
+The shell's `_ASHELL-ON-RESIZE` rebuilds the root region and calls
+`UTUI-RELAYOUT`.  Since the DESK has no UIDL document, the shell's
+resize is a no-op for the DESK's own layout.  The DESK detects the
+new dimensions in its next `PAINT-XT` call (or via a resize
+pseudo-event forwarded by the shell) and calls `DESK-RELAYOUT`
+which recomputes the grid, reassigns sub-regions, and for each
+UIDL-bearing sub-app ctx-switches and calls `UTUI-RELAYOUT`.
 
-**Files**: `tui/app-compositor.f` (layout engine, taskbar, key
-routing, slot list, UIDL context swap, event loop).
+#### What replaces `app-compositor.f`
+
+`tui/desk.f` — Prefix: `DESK-` / `_DESK-`.  Requires: `app-desc.f`
+(Phase 0), `app-shell.f` (for `ASHELL-REGION`, `ASHELL-QUIT`).
+**No** `KEY-POLL`, **no** `YIELD?`, **no** `SCR-FLUSH`, **no**
+`BEGIN...REPEAT` loop.
+
+**Files**: `tui/desk.f` (slot list, tiling, taskbar, context swap,
+5 APP-DESC callbacks).  The old `tui/app-compositor.f` is retired.
 
 ### Stage 5 — Shared Services & Environment
 
@@ -501,8 +627,11 @@ eventually `tui/app-config.f`.
 - **Dynamic screen size.** Use `SCR-W` / `SCR-H`; never hardcode 80×24.
 - **UIDL single-instance.** One document per `UTUI-LOAD`. Multi-app
   solved by per-app UIDL context swap (~97 KiB each).
-- **No artificial app limit.** Compositor uses heap-allocated linked
-  list.  Practical limits: memory and usable tile size.
+- **No artificial app limit.** DESK uses heap-allocated linked list.
+  Practical limits: memory and usable tile size.
+- **One event loop.** The shell owns the only `BEGIN...REPEAT` loop.
+  The DESK and all apps are passive callbacks — no app ever calls
+  `KEY-POLL`, `SCR-FLUSH`, or `YIELD?`.
 
 ---
 
@@ -511,7 +640,7 @@ eventually `tui/app-config.f`.
 **Stage 1** ✅ — App lifecycle protocol delivered.
 **Stage 2** ✅ — Style inheritance for widgets delivered.
 **Stage 3** ✅ — Overlays (prompts, menus, tooltips) delivered.
-**Stage 4** — Multi-app compositor (next).
+**Stage 4** — TUI Desktop / DESK (next).
 **Stage 5** — Shared services (clipboard, mounted VFS, IPC, config).
 
 Each stage is independently valuable and shippable.

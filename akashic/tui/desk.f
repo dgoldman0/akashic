@@ -10,10 +10,6 @@
 \  Multi-app desktop with dynamic tiling.  Runs as a normal
 \  APP-DESC app inside app-shell.f — no private event loop.
 \
-\  Replaces app-compositor.f.  The compositor had its own event
-\  loop, tick system, paint system, and resize handler — all
-\  duplicating app-shell.f.  The DESK delegates all of that to
-\  the shell via standard callbacks.
 \
 \  Tiling algorithm:
 \    Given N visible apps and usable area W × H:
