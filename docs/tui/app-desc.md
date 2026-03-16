@@ -67,4 +67,4 @@ my-desc APP-DESC-INIT
 ## See Also
 
 - [app-shell.md](app-shell.md) — Shell runtime that executes APP-DESC apps
-- [app-compositor.md](app-compositor.md) — Multi-app compositor (uses APP-DESC)
+- [desk.md](desk.md) — Multi-app desktop (APP-DESC app, replaces compositor)
