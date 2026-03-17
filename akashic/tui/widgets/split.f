@@ -77,7 +77,7 @@ REQUIRE ../draw.f
         WDG-REGION RGN-W                 ( ratio w )
     THEN
     1-                                    ( ratio avail )  \ minus divider
-    DUP 0<= IF 2DROP 0 EXIT THEN         ( ratio avail )
+    DUP 1 < IF 2DROP 0 EXIT THEN          ( ratio avail )
     MIN                                   ( clamped )
     DUP 0< IF DROP 0 THEN ;
 
