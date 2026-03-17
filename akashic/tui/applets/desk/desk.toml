@@ -1,0 +1,45 @@
+# =========================================================
+#  desk.toml — Desk configuration template
+# =========================================================
+#  Place this file alongside desk.f or point _DESK-CFG-A/L
+#  at its contents before calling DESK-RUN.
+
+# ---------------------------------------------------------
+#  Theme colours
+# ---------------------------------------------------------
+#  Values: CSS named colours, "#RRGGBB", "#RGB", or a raw
+#  xterm-256 palette index (0–255).
+
+[desk.theme]
+taskbar-fg   = "white"
+taskbar-bg   = "#000057"       # dark blue
+active-fg    = "black"
+active-bg    = "#5f87ff"       # bright blue
+minimized-fg = "gray"
+minimized-bg = "#000057"
+pinned-fg    = "#808080"
+pinned-bg    = "black"
+divider-fg   = "#c0c0c0"
+divider-bg   = "black"
+clock-fg     = "cyan"
+clock-bg     = "#000057"
+
+# ---------------------------------------------------------
+#  Hotbar — pinned apps shown in the taskbar
+# ---------------------------------------------------------
+#  Each [[desk.hotbar]] entry defines a pinned shortcut.
+#  Fields:
+#    label  — text shown in the taskbar  (required)
+#    file   — .f file to INCLUDE on launch  (required)
+#    desc   — Forth word that returns the APP-DESC addr
+#             (required for launch)
+
+# [[desk.hotbar]]
+# label = "Pad"
+# file  = "tui/applets/pad/pad.f"
+# desc  = "PAD-DESC"
+
+# [[desk.hotbar]]
+# label = "Explorer"
+# file  = "tui/applets/fexplorer/fexplorer.f"
+# desc  = "FILES-DESC"

@@ -243,6 +243,14 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : _UTUI-SC-FREE  ( elem -- )
     _UTUI-SIDECAR _UTUI-SC-SZ 0 FILL ;
 
+\ Default style: light gray on dark gray, no attrs
+253 236 0 _UTUI-PACK-STYLE CONSTANT _UTUI-DEFAULT-STYLE
+
+\ Mask for CSS-inheritable properties:
+\   fg(0-7), bg(8-15), attrs(16-23), text-align(24-25)
+\ Non-inheritable (position 26-27, z-index 28-35) are excluded.
+0x03FFFFFF CONSTANT _UTUI-INHERIT-MASK
+
 \ _UTUI-INHERIT-PARENT-STYLE ( elem -- )
 \   Seed this element's sidecar with parent's inheritable style bits.
 : _UTUI-INHERIT-PARENT-STYLE  ( elem -- )
@@ -345,15 +353,8 @@ VARIABLE _UTUI-NEEDS-PAINT \ global: any UIDL/widget change needs repaint
 0 _UTUI-NEEDS-PAINT !
 
 \ Wire UIDL-DIRTY! hook so any element dirtying auto-signals repaint
-:NONAME  ( -- ) _UTUI-NEEDS-PAINT ON ;  _UDL-DIRTY-HOOK !
-
-\ Default style: light gray on dark gray, no attrs
-253 236 0 _UTUI-PACK-STYLE CONSTANT _UTUI-DEFAULT-STYLE
-
-\ Mask for CSS-inheritable properties:
-\   fg(0-7), bg(8-15), attrs(16-23), text-align(24-25)
-\ Non-inheritable (position 26-27, z-index 28-35) are excluded.
-0x03FFFFFF CONSTANT _UTUI-INHERIT-MASK
+: _UTUI-DIRTY-HOOK  ( -- ) _UTUI-NEEDS-PAINT ON ;
+' _UTUI-DIRTY-HOOK  _UDL-DIRTY-HOOK !
 
 \ =====================================================================
 \  §3 — Action Dispatch Table
@@ -2077,7 +2078,7 @@ VARIABLE _USH-H    VARIABLE _USH-W
     AGAIN ;
 
 \ --- Single-element materialize (resolves DEFER from §1c) ---
-:NONAME  ( elem -- )
+: _UTUI-DO-MATERIALIZE  ( elem -- )
     DUP UIDL-TYPE                      ( elem type )
     DUP UIDL-T-TREE = IF
         DROP
@@ -2100,10 +2101,10 @@ VARIABLE _USH-H    VARIABLE _USH-W
         DROP
     THEN THEN THEN THEN
     DROP ;
-IS _UTUI-MATERIALIZE-ONE
+' _UTUI-DO-MATERIALIZE IS _UTUI-MATERIALIZE-ONE
 
 \ --- Single-element dematerialize (resolves DEFER from §1c) ---
-:NONAME  ( elem -- )
+: _UTUI-DO-DEMATERIALIZE  ( elem -- )
     DUP _UTUI-SIDECAR _UTUI-SC-WPTR@  ( elem wptr )
     ?DUP IF
         OVER UIDL-TYPE                 ( elem wptr type )
@@ -2123,7 +2124,7 @@ IS _UTUI-MATERIALIZE-ONE
         0 OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
     THEN
     DROP ;
-IS _UTUI-DEMATERIALIZE-ONE
+' _UTUI-DO-DEMATERIALIZE IS _UTUI-DEMATERIALIZE-ONE
 
 \ _UTUI-CSS-INT ( a u -- n flag )
 \   Parse a simple integer from a CSS value string.

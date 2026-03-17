@@ -1,13 +1,15 @@
 # akashic/tui/applets/desk/desk.f — TUI Multi-App Desktop
 
-**Lines:** ~911  
-**Prefix:** `DESK-` (public), `_DESK-` (internal)  
+**Lines:** ~1131  
+**Prefix:** `DESK-` (public), `_DESK-` / `_DTH-` / `_HB-` / `_DHBAR-` (internal)  
 **Provider:** `akashic-tui-desk`  
 **Location:** `akashic/tui/applets/desk/desk.f`  
 **Dependencies:** [`app-shell.f`](../../app-shell.md), [`app-desc.f`](../../app-desc.md),
 [`uidl-tui.f`](../../uidl-tui.md), [`screen.f`](../../screen.md),
 [`region.f`](../../region.md), [`draw.f`](../../draw.md),
-[`keys.f`](../../keys.md), `liraq/uidl.f`
+[`keys.f`](../../keys.md), [`color.f`](../../color.md),
+[`toml.f`](../../../../utils/toml.md), [`binimg.f`](../../../../utils/binimg.md),
+`liraq/uidl.f`
 
 ## Why `applets/`?
 
@@ -81,6 +83,79 @@ When a sub-app calls `ASHELL-QUIT` (sets `_ASHELL-RUNNING` to 0),
 
 This means sub-app quit closes a tile, not the whole desktop.
 
+## Theme System
+
+The desk has 14 colour slot variables (`_DTH-*`) controlling the
+taskbar, active/minimized/pinned entries, dividers, and clock.
+`_DESK-THEME-DEFAULTS` sets a dark-blue palette.  All slots can be
+overridden via a TOML config file under `[desk.theme]`.
+
+| TOML Key | Slot | Default |
+|----------|------|---------|
+| `taskbar-fg` | Normal taskbar text | 15 (white) |
+| `taskbar-bg` | Taskbar background | 17 (dark blue) |
+| `active-fg` | Focused slot label | 0 (black) |
+| `active-bg` | Focused slot background | 12 (bright blue) |
+| `minimized-fg` | Minimized slot label | 8 (dark gray) |
+| `minimized-bg` | Minimized slot background | 17 |
+| `pinned-fg` | Hotbar pinned entry text | 244 (medium gray) |
+| `pinned-bg` | Hotbar pinned background | 0 (black) |
+| `divider-fg` | Tile divider lines | 240 (bright gray) |
+| `divider-bg` | Divider background | 0 |
+| `clock-fg` | Clock text | 14 (cyan) |
+| `clock-bg` | Clock background | 17 |
+
+Colour values are parsed by `TUI-PARSE-COLOR`: CSS named colours,
+`#RRGGBB`, `#RGB`, or raw 0–255 xterm-256 indices.
+
+## Hotbar (Pinned Apps)
+
+The hotbar is a row of up to 12 pinned application shortcuts rendered
+in the taskbar after the running-app entries.  Each entry is defined
+by a `[[desk.hotbar]]` array-of-tables section in the TOML config:
+
+```toml
+[[desk.hotbar]]
+label = "Pad"
+file  = "pad.m64"
+desc  = "PAD-DESC"
+```
+
+Entries start as **pinned** (not launched) and appear in a dimmed
+`<Label>` style.  When launched (via `Alt+H`), the desk loads
+the `.m64` binary via `IMG-LOAD-EXEC` (using an `EVALUATE` trick
+to inject the filename), then `EVALUATE`s the `desc` word to obtain
+an APP-DESC address, and calls `DESK-LAUNCH`.  The entry then shows
+as `[Label]` in normal taskbar style.
+
+> **Note:** KDOS does not have `INCLUDED`.  All applet code is loaded
+> as pre-compiled `.m64` binary images.  See
+> [app-loader.md](../../app-loader.md) for the full packaging pipeline.
+
+Hotbar entry structure (7 cells = 56 bytes):
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0 | label-a | Label string address (zero-copy into TOML buffer) |
+| +8 | label-u | Label string length |
+| +16 | file-a | File path address |
+| +24 | file-u | File path length |
+| +32 | desc-a | Descriptor word name address |
+| +40 | desc-u | Descriptor word name length |
+| +48 | slot-id | Desk slot ID (0 = not launched) |
+
+## Config Loading
+
+`DESK-LOAD-CONFIG ( addr len -- )` takes a TOML buffer and loads
+both the theme (`_DESK-LOAD-THEME`) and hotbar (`_DESK-LOAD-HOTBAR`).
+
+To supply a config before `DESK-RUN`, store the buffer address/length
+in `_DESK-CFG-A` / `_DESK-CFG-L`.  `DESK-INIT-CB` will call
+`DESK-LOAD-CONFIG` automatically if these are non-zero.
+
+A sample config template is provided in
+[desk.toml](../../../../akashic/tui/applets/desk/desk.toml).
+
 ## API Reference
 
 ### Sub-App Management
@@ -108,6 +183,12 @@ This means sub-app quit closes a tile, not the whole desktop.
 | `DESK-SLOT-COUNT` | `( -- n )` | Number of live slots (all states). |
 | `DESK-VCOUNT` | `( -- n )` | Number of visible (non-minimized) slots. |
 
+### Configuration
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DESK-LOAD-CONFIG` | `( addr len -- )` | Load TOML buffer — applies theme and hotbar. |
+
 ### Entry Point
 
 | Word | Stack | Description |
@@ -127,6 +208,7 @@ All shortcuts require **Alt** modifier:
 | Alt+F | Toggle full-frame mode |
 | Alt+L | Toggle V/H tiling preference |
 | Alt+W | Close focused slot |
+| Alt+H | Launch next unlaunched hotbar entry |
 
 ## UIDL Context System
 
@@ -153,13 +235,16 @@ live at a time.
 | 1 | UIDL Context Save/Restore | `UCTX-*` words, variable/pool tables |
 | 2 | Slot Struct | 56-byte linked-list node, state enum |
 | 3 | DESK Global State | Head, focus, ID counter, layout prefs |
+| 3b | Theme | 14 colour slot variables, defaults, TOML loader |
+| 3c | Hotbar | Pinned-app entry array, TOML loader, painting |
+| 3d | Config Loader | `DESK-LOAD-CONFIG` master loader |
 | 4 | Linked-List Helpers | Find, unlink, append, count |
 | 5 | Visible Collection Buffer | Up to 64 visible slots |
 | 6 | Tiling Layout Engine | Grid, tile sizes, region assignment, dividers |
 | 7 | Context Switching | Save/restore/switch helpers |
 | 8 | Launch & Close | `DESK-LAUNCH`, `DESK-CLOSE-ID` |
 | 9 | Focus/Minimize/Restore | State transitions, auto-focus |
-| 10 | Taskbar Painter | Bottom-row status bar |
+| 10 | Taskbar Painter | Per-item styled painting + hotbar + divider |
 | 11 | APP-DESC Callbacks | Init, event, tick, paint, shutdown |
 | 12 | Descriptor & Entry | `DESK-DESC`, `_DESK-FILL-DESC`, `DESK-RUN` |
 | 13 | Guard | `WITH-GUARD` wrappers for concurrency safety |

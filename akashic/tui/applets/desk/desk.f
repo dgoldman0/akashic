@@ -43,7 +43,10 @@ REQUIRE ../../screen.f
 REQUIRE ../../region.f
 REQUIRE ../../draw.f
 REQUIRE ../../keys.f
+REQUIRE ../../color.f
+REQUIRE ../../../utils/toml.f
 REQUIRE ../../../liraq/uidl.f
+REQUIRE ../../../utils/binimg.f
 
 \ =====================================================================
 \  §1 — UIDL Context Save / Restore
@@ -260,6 +263,170 @@ VARIABLE _DESK-LAST-MIN-SA  \ last minimized slot (for restore)
 VARIABLE _DESK-ACTIVE-CTX-SA
 0 _DESK-ACTIVE-CTX-SA !
 
+\ Config TOML buffer (kept alive so zero-copy strings remain valid).
+VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
+0 _DESK-CFG-A !  0 _DESK-CFG-L !
+
+\ =====================================================================
+\  §3b — Theme
+\ =====================================================================
+\  14 colour slots used by the taskbar, dividers, hotbar, and clock.
+\  _DESK-THEME-DEFAULTS sets a dark-blue palette.  _DESK-LOAD-THEME
+\  overrides any slot that appears in [desk.theme] of a TOML config.
+
+VARIABLE _DTH-TBAR-FG    VARIABLE _DTH-TBAR-BG    VARIABLE _DTH-TBAR-ATTR
+VARIABLE _DTH-ACT-FG     VARIABLE _DTH-ACT-BG     VARIABLE _DTH-ACT-ATTR
+VARIABLE _DTH-MIN-FG     VARIABLE _DTH-MIN-BG
+VARIABLE _DTH-PIN-FG     VARIABLE _DTH-PIN-BG
+VARIABLE _DTH-DIV-FG     VARIABLE _DTH-DIV-BG
+VARIABLE _DTH-CLOCK-FG   VARIABLE _DTH-CLOCK-BG
+
+: _DESK-THEME-DEFAULTS  ( -- )
+    15 _DTH-TBAR-FG !   17 _DTH-TBAR-BG !   0 _DTH-TBAR-ATTR !
+     0 _DTH-ACT-FG  !   12 _DTH-ACT-BG  !   1 _DTH-ACT-ATTR  !
+     8 _DTH-MIN-FG  !   17 _DTH-MIN-BG  !
+   244 _DTH-PIN-FG  !    0 _DTH-PIN-BG  !
+   240 _DTH-DIV-FG  !    0 _DTH-DIV-BG  !
+    14 _DTH-CLOCK-FG !  17 _DTH-CLOCK-BG ! ;
+_DESK-THEME-DEFAULTS
+
+\ Helper: try to load a colour key from a TOML table into a variable.
+: _DTH-TRY  ( tbl-a tbl-l key-a key-l var -- )
+    >R TOML-KEY?
+    IF   TOML-GET-STRING TUI-PARSE-COLOR
+         IF R> ! EXIT THEN DROP
+    ELSE 2DROP
+    THEN R> DROP ;
+
+: _DESK-LOAD-THEME  ( toml-a toml-l -- )
+    S" desk.theme" TOML-FIND-TABLE?
+    0= IF 2DROP EXIT THEN
+    2DUP S" taskbar-fg"     _DTH-TBAR-FG   _DTH-TRY
+    2DUP S" taskbar-bg"     _DTH-TBAR-BG   _DTH-TRY
+    2DUP S" active-fg"      _DTH-ACT-FG    _DTH-TRY
+    2DUP S" active-bg"      _DTH-ACT-BG    _DTH-TRY
+    2DUP S" minimized-fg"   _DTH-MIN-FG    _DTH-TRY
+    2DUP S" minimized-bg"   _DTH-MIN-BG    _DTH-TRY
+    2DUP S" pinned-fg"      _DTH-PIN-FG    _DTH-TRY
+    2DUP S" pinned-bg"      _DTH-PIN-BG    _DTH-TRY
+    2DUP S" divider-fg"     _DTH-DIV-FG    _DTH-TRY
+    2DUP S" divider-bg"     _DTH-DIV-BG    _DTH-TRY
+    2DUP S" clock-fg"       _DTH-CLOCK-FG  _DTH-TRY
+         S" clock-bg"       _DTH-CLOCK-BG  _DTH-TRY ;
+
+\ =====================================================================
+\  §3c — Hotbar (Pinned App Entries)
+\ =====================================================================
+\  Each entry: label string, file path, descriptor word name, slot-id.
+\  Strings are zero-copy pointers into the TOML buffer.
+\  slot-id = 0 means not yet launched; >0 = active desk slot.
+
+ 0 CONSTANT _HB-LBL-A   8 CONSTANT _HB-LBL-U
+16 CONSTANT _HB-FILE-A  24 CONSTANT _HB-FILE-U
+32 CONSTANT _HB-DESC-A  40 CONSTANT _HB-DESC-U
+48 CONSTANT _HB-SLOT
+56 CONSTANT _HB-SZ
+12 CONSTANT _HB-MAX
+
+CREATE _HB-ENTRIES  _HB-SZ _HB-MAX * ALLOT
+VARIABLE _DHBAR-COUNT
+0 _DHBAR-COUNT !
+
+: _HB-ENTRY  ( idx -- addr )  _HB-SZ * _HB-ENTRIES + ;
+
+: _DESK-HOTBAR-CLEAR  ( -- )
+    _HB-ENTRIES _HB-SZ _HB-MAX * 0 FILL
+    0 _DHBAR-COUNT ! ;
+
+: _DESK-HOTBAR-ADD  ( lbl-a lbl-u file-a file-u desc-a desc-u -- )
+    _DHBAR-COUNT @ _HB-MAX >= IF 2DROP 2DROP 2DROP EXIT THEN
+    _DHBAR-COUNT @ _HB-ENTRY >R
+    R@ _HB-DESC-U + !   R@ _HB-DESC-A + !
+    R@ _HB-FILE-U + !   R@ _HB-FILE-A + !
+    R@ _HB-LBL-U + !    R@ _HB-LBL-A + !
+    0 R> _HB-SLOT + !
+    1 _DHBAR-COUNT +! ;
+
+: _DESK-HOTBAR-MARK  ( idx slot-id -- )
+    SWAP _HB-ENTRY _HB-SLOT + ! ;
+
+: _DESK-HOTBAR-SLOT-CLOSED  ( slot-id -- )
+    _DHBAR-COUNT @ 0 DO
+        I _HB-ENTRY _HB-SLOT + @
+        OVER = IF 0 I _HB-ENTRY _HB-SLOT + ! THEN
+    LOOP DROP ;
+
+\ Non-aborting wrapper for TOML array-of-tables lookup.
+VARIABLE _DHBA-SAVED
+: _DHBAR-ATABLE?  ( toml-a toml-l n -- body-a body-l flag )
+    >R
+    TOML-ABORT-ON-ERROR @ _DHBA-SAVED !
+    TOML-CLEAR-ERR  0 TOML-ABORT-ON-ERROR !
+    S" desk.hotbar" R> TOML-FIND-ATABLE
+    _DHBA-SAVED @ TOML-ABORT-ON-ERROR !
+    TOML-OK? DUP 0= IF >R 2DROP 0 0 R> THEN ;
+
+VARIABLE _DHBL-BA  VARIABLE _DHBL-BL
+
+: _DESK-LOAD-HOTBAR  ( toml-a toml-l -- )
+    _DESK-HOTBAR-CLEAR
+    _HB-MAX 0 DO
+        2DUP I _DHBAR-ATABLE?
+        0= IF 2DROP LEAVE THEN
+        _DHBL-BL ! _DHBL-BA !
+        _DHBL-BA @ _DHBL-BL @  S" label" TOML-KEY?
+        0= IF 2DROP ELSE
+            TOML-GET-STRING
+            _DHBL-BA @ _DHBL-BL @  S" file" TOML-KEY?
+            0= IF 2DROP 2DROP ELSE
+                TOML-GET-STRING
+                _DHBL-BA @ _DHBL-BL @  S" desc" TOML-KEY?
+                IF TOML-GET-STRING ELSE 2DROP S" " THEN
+                _DESK-HOTBAR-ADD
+            THEN
+        THEN
+    LOOP
+    2DROP ;
+
+\ Paint hotbar entries.  Called from the taskbar painter.
+VARIABLE _DHBP-COL
+
+: _DESK-PAINT-HOTBAR  ( row col -- )
+    _DHBP-COL !
+    _DHBAR-COUNT @ 0 ?DO
+        I _HB-ENTRY >R
+        R@ _HB-SLOT + @ IF
+            _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
+            91                         \ '['
+        ELSE
+            _DTH-PIN-FG @ _DTH-PIN-BG @ 0 DRW-STYLE!
+            60                         \ '<'
+        THEN
+        OVER _DHBP-COL @ DRW-CHAR  1 _DHBP-COL +!
+        R@ _HB-LBL-A + @  R@ _HB-LBL-U + @
+        2 PICK _DHBP-COL @ DRW-TEXT
+        R@ _HB-LBL-U + @ _DHBP-COL +!
+        R@ _HB-SLOT + @ IF 93 ELSE 62 THEN
+        OVER _DHBP-COL @ DRW-CHAR  1 _DHBP-COL +!
+        32 OVER _DHBP-COL @ DRW-CHAR  1 _DHBP-COL +!
+        R> DROP
+    LOOP
+    DROP ;
+
+\ Find first unlaunched hotbar entry, or -1.
+: _DESK-HOTBAR-NEXT  ( -- idx | -1 )
+    _DHBAR-COUNT @ 0 DO
+        I _HB-ENTRY _HB-SLOT + @ 0= IF I UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ =====================================================================
+\  §3d — Config Loader
+\ =====================================================================
+
+: DESK-LOAD-CONFIG  ( addr len -- )
+    2DUP _DESK-LOAD-THEME
+    _DESK-LOAD-HOTBAR ;
+
 \ =====================================================================
 \  §4 — Linked-List Helpers
 \ =====================================================================
@@ -433,7 +600,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 \ Draw dividers between tiles.
 : _DESK-DRAW-DIVIDERS  ( -- )
     DRW-STYLE-SAVE
-    240 0 0 DRW-STYLE!
+    _DTH-DIV-FG @ _DTH-DIV-BG @ 0 DRW-STYLE!
     _DL-COLS @ 1 > IF
         _DL-COLS @ 1- 0 DO
             I 1+ _DL-TW @ * I +
@@ -449,6 +616,22 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
         LOOP
     THEN
     DRW-STYLE-RESTORE ;
+
+\ =====================================================================
+\  §7 — UIDL Context Switching
+\ =====================================================================
+
+: _DESK-CTX-SAVE  ( sa -- )
+    _SL-UCTX @ ?DUP IF UCTX-SAVE THEN ;
+
+: _DESK-CTX-RESTORE  ( sa -- )
+    _SL-UCTX @ ?DUP IF UCTX-RESTORE THEN ;
+
+: _DESK-CTX-SWITCH  ( sa -- )
+    DUP _DESK-ACTIVE-CTX-SA @ = IF DROP EXIT THEN
+    _DESK-ACTIVE-CTX-SA @ ?DUP IF _DESK-CTX-SAVE THEN
+    DUP _DESK-CTX-RESTORE
+    _DESK-ACTIVE-CTX-SA ! ;
 
 \ Master relayout.
 : DESK-RELAYOUT  ( -- )
@@ -469,22 +652,6 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
         DROP
     LOOP
     ASHELL-DIRTY! ;
-
-\ =====================================================================
-\  §7 — UIDL Context Switching
-\ =====================================================================
-
-: _DESK-CTX-SAVE  ( sa -- )
-    _SL-UCTX @ ?DUP IF UCTX-SAVE THEN ;
-
-: _DESK-CTX-RESTORE  ( sa -- )
-    _SL-UCTX @ ?DUP IF UCTX-RESTORE THEN ;
-
-: _DESK-CTX-SWITCH  ( sa -- )
-    DUP _DESK-ACTIVE-CTX-SA @ = IF DROP EXIT THEN
-    _DESK-ACTIVE-CTX-SA @ ?DUP IF _DESK-CTX-SAVE THEN
-    DUP _DESK-CTX-RESTORE
-    _DESK-ACTIVE-CTX-SA ! ;
 
 \ =====================================================================
 \  §8 — App Launch & Close
@@ -555,6 +722,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     R@ _DESK-LAST-MIN-SA @ = IF
         0 _DESK-LAST-MIN-SA !
     THEN
+    R@ _SL-ID @ _DESK-HOTBAR-SLOT-CLOSED
     R@ _DESK-UNLINK
     R> FREE
     \ Auto-focus next visible slot if focus was lost
@@ -653,14 +821,28 @@ VARIABLE _DESK-TB-POS
     DUP 10 / 10 MOD 48 + _DTB-CH
     10 MOD 48 + _DTB-CH ;
 
+VARIABLE _DTB-COL
+VARIABLE _DTB-ROW
+
 : _DESK-PAINT-TASKBAR  ( -- )
     DRW-STYLE-SAVE
-    255 17 0 DRW-STYLE!
-    SCR-H 1-
-    32 OVER 0 1 SCR-W DRW-FILL-RECT
-    0 _DESK-TB-POS !
+    _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
+    SCR-H 1- _DTB-ROW !
+    32 _DTB-ROW @ 0 1 SCR-W DRW-FILL-RECT
+    0 _DTB-COL !
+    \ ---- running slot entries ----
     _DESK-HEAD @
     BEGIN ?DUP WHILE
+        \ Per-slot style
+        DUP _SL-STATE @ _ST-FOCUSED = IF
+            _DTH-ACT-FG @ _DTH-ACT-BG @ _DTH-ACT-ATTR @ DRW-STYLE!
+        ELSE DUP _SL-STATE @ _ST-MINIMIZED = IF
+            _DTH-MIN-FG @ _DTH-MIN-BG @ 0 DRW-STYLE!
+        ELSE
+            _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
+        THEN THEN
+        \ Build label: [id:title*] or [id:title~]
+        0 _DESK-TB-POS !
         91 _DTB-CH
         DUP _SL-ID @ _DTB-DIGIT
         58 _DTB-CH
@@ -669,21 +851,28 @@ VARIABLE _DESK-TB-POS
                 OVER _SL-DESC @ APP.TITLE-U @
                 DUP 10 > IF DROP 10 THEN
                 _DTB-STR
-            ELSE
-                S" App" _DTB-STR
-            THEN
-        ELSE
-            S" App" _DTB-STR
-        THEN
+            ELSE S" App" _DTB-STR THEN
+        ELSE S" App" _DTB-STR THEN
         DUP _SL-STATE @ _ST-FOCUSED = IF 42 _DTB-CH THEN
         DUP _SL-STATE @ _ST-MINIMIZED = IF 126 _DTB-CH THEN
         93 _DTB-CH
-        32 _DTB-CH
+        _DESK-TB-BUF _DESK-TB-POS @
+        _DTB-ROW @ _DTB-COL @ DRW-TEXT
+        _DESK-TB-POS @ _DTB-COL +!
+        \ space separator
+        32 _DTB-ROW @ _DTB-COL @ DRW-CHAR
+        1 _DTB-COL +!
         _SL-NEXT @
     REPEAT
-    _DESK-TB-BUF _DESK-TB-POS @
-    DUP SCR-W > IF DROP SCR-W THEN
-    ROT 0 DRW-TEXT
+    \ ---- hotbar entries ----
+    _DHBAR-COUNT @ IF
+        _DTH-DIV-FG @ _DTH-DIV-BG @ 0 DRW-STYLE!
+        124 _DTB-ROW @ _DTB-COL @ DRW-CHAR    \ '|'
+        1 _DTB-COL +!
+        32 _DTB-ROW @ _DTB-COL @ DRW-CHAR
+        1 _DTB-COL +!
+        _DTB-ROW @ _DTB-COL @ _DESK-PAINT-HOTBAR
+    THEN
     DRW-STYLE-RESTORE ;
 
 \ =====================================================================
@@ -701,7 +890,11 @@ VARIABLE _DESK-TB-POS
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
     0 _DESK-LAST-MIN-SA !
-    0 _DESK-ACTIVE-CTX-SA ! ;
+    0 _DESK-ACTIVE-CTX-SA !
+    _DESK-THEME-DEFAULTS
+    _DESK-HOTBAR-CLEAR
+    \ Load config if a buffer was supplied before DESK-RUN
+    _DESK-CFG-A @ ?DUP IF _DESK-CFG-L @ DESK-LOAD-CONFIG THEN ;
 
 \ --- Shortcuts ---
 CREATE _DESK-EV  24 ALLOT
@@ -734,6 +927,32 @@ CREATE _DESK-EV  24 ALLOT
         _SL-NEXT @
     REPEAT ;
 
+\ Scratch buffer for building EVALUATE strings
+CREATE _DESK-EVAL-BUF 80 ALLOT
+
+\ Launch the first unlaunched hotbar entry.
+\ file field = .m64 binary path, desc field = entry word name.
+: _DESK-HOTBAR-LAUNCH-NEXT  ( -- )
+    _DESK-HOTBAR-NEXT DUP 0< IF DROP EXIT THEN
+    DUP _HB-ENTRY                 ( idx entry )
+    DUP _HB-FILE-U + @ 0= IF 2DROP EXIT THEN
+    \ Build "IMG-LOAD-EXEC <filename>" and EVALUATE it
+    \ "IMG-LOAD-EXEC " = 14 chars (13 letters + 1 trailing space)
+    S" IMG-LOAD-EXEC " _DESK-EVAL-BUF SWAP CMOVE
+    DUP _HB-FILE-A + @            ( idx entry file-a )
+    OVER _HB-FILE-U + @           ( idx entry file-a file-u )
+    _DESK-EVAL-BUF 14 + SWAP DUP >R CMOVE
+    _DESK-EVAL-BUF  14 R> +       ( idx entry buf total-len )
+    EVALUATE                       ( idx entry xt ior )
+    ?DUP IF DROP 2DROP EXIT THEN   ( idx entry xt )
+    DROP                           ( idx entry )
+    \ Now entry word is in dictionary — EVALUATE the desc name
+    DUP _HB-DESC-U + @ 0= IF 2DROP EXIT THEN
+    DUP _HB-DESC-A + @ SWAP _HB-DESC-U + @
+    EVALUATE                      ( idx desc-addr )
+    DESK-LAUNCH                   ( idx slot-id )
+    _DESK-HOTBAR-MARK ;
+
 : _DESK-SHORTCUT?  ( ev -- flag )
     DUP _DESK-EV-TYPE KEY-T-CHAR <> IF DROP 0 EXIT THEN
     DUP _DESK-EV-MODS KEY-MOD-ALT AND IF
@@ -756,6 +975,8 @@ CREATE _DESK-EV  24 ALLOT
         DROP _DESK-FOCUS-SA @ ?DUP IF
             _SL-ID @ DESK-CLOSE-ID
         THEN -1 EXIT THEN
+    DUP 104 _DESK-ALT? IF
+        DROP _DESK-HOTBAR-LAUNCH-NEXT -1 EXIT THEN
     DROP 0 ;
 
 \ --- Event ---

@@ -17,6 +17,8 @@
 \    width   = 80
 \    height  = 24
 \    entry   = "my-main"
+\    binary  = "my-app.m64"
+\    uidl-file = "my-app.xml"
 \
 \    [deps]
 \    uidl = true
@@ -31,6 +33,8 @@
 \   MFT-WIDTH      ( mft -- n )                  Preferred width  (0=auto)
 \   MFT-HEIGHT     ( mft -- n )                  Preferred height (0=auto)
 \   MFT-ENTRY      ( mft -- addr len )           Entry word name
+\   MFT-BINARY     ( mft -- addr len )           Binary .m64 filename
+\   MFT-UIDL-FILE  ( mft -- addr len )           UIDL XML filename
 \   MFT-DEP?       ( mft key-a key-l -- flag )   Is dependency required?
 \ =================================================================
 
@@ -47,7 +51,7 @@ REQUIRE ../utils/toml.f
 -112 CONSTANT MFT-E-NO-ENTRY   \ Missing entry key
 
 \ =====================================================================
-\  §2 — Descriptor layout  (12 cells = 96 bytes)
+\  §2 — Descriptor layout  (16 cells = 128 bytes)
 \ =====================================================================
 \
 \  Offset  Field        Description
@@ -61,24 +65,32 @@ REQUIRE ../utils/toml.f
 \  +56     height       Preferred height (0 = auto)
 \  +64     entry-addr   Pointer to entry word name
 \  +72     entry-len    Entry word name length
-\  +80     doc-addr     Original TOML document address (for lazy deps)
-\  +88     doc-len      Original TOML document length
+\  +80     binary-addr  Pointer to .m64 filename string
+\  +88     binary-len   Binary filename length
+\  +96     uidlf-addr   Pointer to UIDL XML filename string
+\  +104    uidlf-len    UIDL XML filename length
+\  +112    doc-addr     Original TOML document address (for lazy deps)
+\  +120    doc-len      Original TOML document length
 
-96 CONSTANT _MFT-SIZE
+128 CONSTANT _MFT-SIZE
 
 \ Field offsets
- 0 CONSTANT _MFT-O-NAME-A
- 8 CONSTANT _MFT-O-NAME-L
-16 CONSTANT _MFT-O-TITLE-A
-24 CONSTANT _MFT-O-TITLE-L
-32 CONSTANT _MFT-O-VER-A
-40 CONSTANT _MFT-O-VER-L
-48 CONSTANT _MFT-O-WIDTH
-56 CONSTANT _MFT-O-HEIGHT
-64 CONSTANT _MFT-O-ENTRY-A
-72 CONSTANT _MFT-O-ENTRY-L
-80 CONSTANT _MFT-O-DOC-A
-88 CONSTANT _MFT-O-DOC-L
+  0 CONSTANT _MFT-O-NAME-A
+  8 CONSTANT _MFT-O-NAME-L
+ 16 CONSTANT _MFT-O-TITLE-A
+ 24 CONSTANT _MFT-O-TITLE-L
+ 32 CONSTANT _MFT-O-VER-A
+ 40 CONSTANT _MFT-O-VER-L
+ 48 CONSTANT _MFT-O-WIDTH
+ 56 CONSTANT _MFT-O-HEIGHT
+ 64 CONSTANT _MFT-O-ENTRY-A
+ 72 CONSTANT _MFT-O-ENTRY-L
+ 80 CONSTANT _MFT-O-BIN-A
+ 88 CONSTANT _MFT-O-BIN-L
+ 96 CONSTANT _MFT-O-UIDLF-A
+104 CONSTANT _MFT-O-UIDLF-L
+112 CONSTANT _MFT-O-DOC-A
+120 CONSTANT _MFT-O-DOC-L
 
 \ =====================================================================
 \  §3 — Internal helpers
@@ -170,6 +182,20 @@ REQUIRE ../utils/toml.f
     IF   TOML-GET-INT  R@ _MFT-O-HEIGHT + !
     ELSE 2DROP THEN
 
+    \ --- binary (optional — .m64 filename) ---
+    2DUP S" binary" TOML-KEY?
+    IF
+        TOML-GET-STRING
+        R@ _MFT-O-BIN-A _MFT-SET-STR
+    ELSE 2DROP THEN
+
+    \ --- uidl-file (optional — UIDL XML filename) ---
+    2DUP S" uidl-file" TOML-KEY?
+    IF
+        TOML-GET-STRING
+        R@ _MFT-O-UIDLF-A _MFT-SET-STR
+    ELSE 2DROP THEN
+
     2DROP 2DROP                      ( -- )
     R>                               ( mft )
 ;
@@ -181,9 +207,11 @@ REQUIRE ../utils/toml.f
 : MFT-NAME     ( mft -- addr len )  _MFT-O-NAME-A  _MFT-GET-STR ;
 : MFT-TITLE    ( mft -- addr len )  _MFT-O-TITLE-A _MFT-GET-STR ;
 : MFT-VERSION  ( mft -- addr len )  _MFT-O-VER-A   _MFT-GET-STR ;
-: MFT-ENTRY    ( mft -- addr len )  _MFT-O-ENTRY-A _MFT-GET-STR ;
-: MFT-WIDTH    ( mft -- n )         _MFT-O-WIDTH  + @ ;
-: MFT-HEIGHT   ( mft -- n )         _MFT-O-HEIGHT + @ ;
+: MFT-ENTRY     ( mft -- addr len )  _MFT-O-ENTRY-A _MFT-GET-STR ;
+: MFT-BINARY    ( mft -- addr len )  _MFT-O-BIN-A   _MFT-GET-STR ;
+: MFT-UIDL-FILE ( mft -- addr len )  _MFT-O-UIDLF-A _MFT-GET-STR ;
+: MFT-WIDTH     ( mft -- n )         _MFT-O-WIDTH  + @ ;
+: MFT-HEIGHT    ( mft -- n )         _MFT-O-HEIGHT + @ ;
 
 \ =====================================================================
 \  §6 — MFT-DEP?  ( mft key-a key-l -- flag )
@@ -240,8 +268,10 @@ GUARD _mft-guard
 ' MFT-VERSION CONSTANT _mft-version-xt
 ' MFT-WIDTH   CONSTANT _mft-width-xt
 ' MFT-HEIGHT  CONSTANT _mft-height-xt
-' MFT-ENTRY   CONSTANT _mft-entry-xt
-' MFT-DEP?    CONSTANT _mft-dep-xt
+' MFT-ENTRY     CONSTANT _mft-entry-xt
+' MFT-BINARY    CONSTANT _mft-binary-xt
+' MFT-UIDL-FILE CONSTANT _mft-uidlf-xt
+' MFT-DEP?      CONSTANT _mft-dep-xt
 
 : MFT-PARSE   _mft-parse-xt   _mft-guard WITH-GUARD ;
 : MFT-FREE    _mft-free-xt    _mft-guard WITH-GUARD ;
@@ -250,6 +280,8 @@ GUARD _mft-guard
 : MFT-VERSION _mft-version-xt _mft-guard WITH-GUARD ;
 : MFT-WIDTH   _mft-width-xt   _mft-guard WITH-GUARD ;
 : MFT-HEIGHT  _mft-height-xt  _mft-guard WITH-GUARD ;
-: MFT-ENTRY   _mft-entry-xt   _mft-guard WITH-GUARD ;
-: MFT-DEP?    _mft-dep-xt     _mft-guard WITH-GUARD ;
+: MFT-ENTRY     _mft-entry-xt   _mft-guard WITH-GUARD ;
+: MFT-BINARY    _mft-binary-xt  _mft-guard WITH-GUARD ;
+: MFT-UIDL-FILE _mft-uidlf-xt   _mft-guard WITH-GUARD ;
+: MFT-DEP?      _mft-dep-xt     _mft-guard WITH-GUARD ;
 [THEN] [THEN]

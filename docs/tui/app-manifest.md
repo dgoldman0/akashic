@@ -1,7 +1,7 @@
 # akashic/tui/app-manifest.f — Application Manifest Reader
 
 **Layer:** 8  
-**Lines:** 256  
+**Lines:** ~288  
 **Prefix:** `MFT-` (public), `_MFT-` (internal)  
 **Provider:** `akashic-tui-app-manifest`  
 **Dependencies:** `utils/toml.f` (which requires `utils/string.f`, `utils/utf8.f`)
@@ -10,7 +10,7 @@
 
 Reads a TOML manifest describing a TUI application's metadata.
 The caller provides an `(addr len)` pair pointing to the TOML text
-already in memory.  `MFT-PARSE` allocates a 96-byte descriptor at
+already in memory.  `MFT-PARSE` allocates a 128-byte descriptor at
 `HERE` and populates it from the `[app]` section.
 
 Returned string pointers reference slices of the original document
@@ -21,12 +21,14 @@ alive for as long as the descriptor is in use.
 
 ```toml
 [app]
-name    = "my-app"
-title   = "My Application"
-version = "0.1.0"
-width   = 80
-height  = 24
-entry   = "my-main"
+name      = "my-app"
+title     = "My Application"
+version   = "0.1.0"
+width     = 80
+height    = 24
+entry     = "my-main"
+binary    = "my-app.m64"
+uidl-file = "my-app.xml"
 
 [deps]
 uidl = true
@@ -35,7 +37,8 @@ css  = true
 
 **Required keys:** `name`, `entry`.  
 **Optional keys:** `title` (defaults to `name`), `version`, `width`
-(default 0 = auto), `height` (default 0 = auto).  
+(default 0 = auto), `height` (default 0 = auto), `binary` (`.m64`
+filename), `uidl-file` (UIDL XML filename).  
 **Optional section:** `[deps]` — queried lazily via `MFT-DEP?`.
 
 ## API Reference
@@ -57,6 +60,8 @@ css  = true
 | `MFT-WIDTH` | `( mft -- n )` | Preferred terminal width. 0 = auto. |
 | `MFT-HEIGHT` | `( mft -- n )` | Preferred terminal height. 0 = auto. |
 | `MFT-ENTRY` | `( mft -- addr len )` | Entry word name (required). |
+| `MFT-BINARY` | `( mft -- addr len )` | Binary `.m64` filename. `( 0 0 )` if not specified. |
+| `MFT-UIDL-FILE` | `( mft -- addr len )` | UIDL XML filename. `( 0 0 )` if not specified. |
 
 ### Dependency Query
 
@@ -78,7 +83,7 @@ css  = true
 
 ## Descriptor Layout
 
-The descriptor is a flat 96-byte (12-cell) structure `ALLOT`ed at
+The descriptor is a flat 128-byte (16-cell) structure `ALLOT`ed at
 `HERE`:
 
 | Offset | Field | Type | Description |
@@ -93,8 +98,12 @@ The descriptor is a flat 96-byte (12-cell) structure `ALLOT`ed at
 | +56 | height | cell | Preferred height (0 = auto) |
 | +64 | entry-addr | cell | Pointer into source doc |
 | +72 | entry-len | cell | Entry word name length |
-| +80 | doc-addr | cell | Original TOML text address |
-| +88 | doc-len | cell | Original TOML text length |
+| +80 | binary-addr | cell | Pointer to `.m64` filename string |
+| +88 | binary-len | cell | Binary filename length |
+| +96 | uidlf-addr | cell | Pointer to UIDL XML filename string |
+| +104 | uidlf-len | cell | UIDL XML filename length |
+| +112 | doc-addr | cell | Original TOML text address |
+| +120 | doc-len | cell | Original TOML text length |
 
 ## Internal Words
 
@@ -108,8 +117,9 @@ The descriptor is a flat 96-byte (12-cell) structure `ALLOT`ed at
 
 When `GUARDED` is defined, all public words (`MFT-PARSE`,
 `MFT-FREE`, `MFT-NAME`, `MFT-TITLE`, `MFT-VERSION`, `MFT-WIDTH`,
-`MFT-HEIGHT`, `MFT-ENTRY`, `MFT-DEP?`) are wrapped with
-`_mft-guard WITH-GUARD` for thread-safety.
+`MFT-HEIGHT`, `MFT-ENTRY`, `MFT-BINARY`, `MFT-UIDL-FILE`,
+`MFT-DEP?`) are wrapped with `_mft-guard WITH-GUARD` for
+thread-safety.
 
 ## Design Notes
 
@@ -120,7 +130,7 @@ When `GUARDED` is defined, all public words (`MFT-PARSE`,
   original document.  No heap allocation, no copying — but the source
   text must stay alive.
 - **Lazy dependency lookup.** `MFT-DEP?` stores the original
-  `(doc-addr doc-len)` at offsets +80/+88 and re-parses the `[deps]`
+  `(doc-addr doc-len)` at offsets +112/+120 and re-parses the `[deps]`
   table on each call.  This avoids pre-loading dependency data that
   may never be queried.
 - **Dictionary allocation.** The descriptor lives at `HERE` via
