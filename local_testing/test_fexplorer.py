@@ -55,6 +55,9 @@ _BASE_DEPS = [
 _EXTRA_DEPS = [
     os.path.join(AK, "tui", "widgets", "split.f"),
     os.path.join(AK, "tui", "widgets", "status.f"),
+    os.path.join(AK, "text", "gap-buf.f"),
+    os.path.join(AK, "text", "undo.f"),
+    os.path.join(AK, "text", "cell-width.f"),
     os.path.join(AK, "tui", "widgets", "textarea.f"),
     os.path.join(AK, "tui", "app-desc.f"),
 ]

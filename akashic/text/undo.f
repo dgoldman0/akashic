@@ -78,7 +78,7 @@ VARIABLE _UE-A   VARIABLE _UE-B   VARIABLE _UE-C   VARIABLE _UE-D
 : _UE-NEW  ( type pos addr u -- entry )
     _UE-D !  _UE-C !  _UE-B !  _UE-A !
     _UE-SZ ALLOCATE 0<> ABORT" _UE-NEW"
-    DUP >R
+    >R
     _UE-A @ R@ _UE-O-TYPE + !
     _UE-B @ R@ _UE-O-POS  + !
     _UE-D @ R@ _UE-O-LEN  + !
@@ -120,16 +120,16 @@ VARIABLE _UE-A   VARIABLE _UE-B   VARIABLE _UE-C   VARIABLE _UE-D
         _UD-T @ _UD-O-USTK + @ @ _UE-FREE
         _UD-T @ _UD-O-USTK + @  DUP CELL+  SWAP
         _UD-T @ _UD-O-UCNT + @ 1- CELLS  CMOVE
-        -1 _UD-T @ _UD-O-UCNT +!
+        -1 _UD-T @ _UD-O-UCNT + +!
     THEN
     _UD-T @ _UD-O-USTK + @
     _UD-T @ _UD-O-UCNT + @ CELLS +  !
-    1 _UD-T @ _UD-O-UCNT +! ;
+    1 _UD-T @ _UD-O-UCNT + +! ;
 
 \ _UD-UPOP ( -- entry | 0 )
 : _UD-UPOP  ( -- entry | 0 )
     _UD-T @ _UD-O-UCNT + @ 0= IF 0 EXIT THEN
-    -1 _UD-T @ _UD-O-UCNT +!
+    -1 _UD-T @ _UD-O-UCNT + +!
     _UD-T @ _UD-O-USTK + @
     _UD-T @ _UD-O-UCNT + @ CELLS + @ ;
 
@@ -157,16 +157,16 @@ VARIABLE _UE-A   VARIABLE _UE-B   VARIABLE _UE-C   VARIABLE _UE-D
         _UD-T @ _UD-O-RSTK + @ @ _UE-FREE
         _UD-T @ _UD-O-RSTK + @  DUP CELL+  SWAP
         _UD-T @ _UD-O-RCNT + @ 1- CELLS  CMOVE
-        -1 _UD-T @ _UD-O-RCNT +!
+        -1 _UD-T @ _UD-O-RCNT + +!
     THEN
     _UD-T @ _UD-O-RSTK + @
     _UD-T @ _UD-O-RCNT + @ CELLS +  !
-    1 _UD-T @ _UD-O-RCNT +! ;
+    1 _UD-T @ _UD-O-RCNT + +! ;
 
 \ _UD-RPOP ( -- entry | 0 )
 : _UD-RPOP  ( -- entry | 0 )
     _UD-T @ _UD-O-RCNT + @ 0= IF 0 EXIT THEN
-    -1 _UD-T @ _UD-O-RCNT +!
+    -1 _UD-T @ _UD-O-RCNT + +!
     _UD-T @ _UD-O-RSTK + @
     _UD-T @ _UD-O-RCNT + @ CELLS + @ ;
 
@@ -214,7 +214,7 @@ VARIABLE _UC-E      \ top undo entry being checked
         _UC-ADDR @
         _UC-E @ _UE-O-DATA + @  _UC-E @ _UE-O-LEN + @  +
         _UC-LEN @  CMOVE
-        _UC-LEN @  _UC-E @ _UE-O-LEN +!
+        _UC-LEN @  _UC-E @ _UE-O-LEN + +!
         -1 EXIT
     THEN
 
@@ -228,7 +228,7 @@ VARIABLE _UC-E      \ top undo entry being checked
         _UC-E @ _UE-O-LEN + @   CMOVE>
         _UC-ADDR @  _UC-E @ _UE-O-DATA + @  _UC-LEN @  CMOVE
         _UC-POS @  _UC-E @ _UE-O-POS + !
-        _UC-LEN @  _UC-E @ _UE-O-LEN +!
+        _UC-LEN @  _UC-E @ _UE-O-LEN + +!
         -1 EXIT
     THEN
 
@@ -239,7 +239,7 @@ VARIABLE _UC-E      \ top undo entry being checked
         _UC-ADDR @
         _UC-E @ _UE-O-DATA + @  _UC-E @ _UE-O-LEN + @  +
         _UC-LEN @  CMOVE
-        _UC-LEN @  _UC-E @ _UE-O-LEN +!
+        _UC-LEN @  _UC-E @ _UE-O-LEN + +!
         -1 EXIT
     THEN
 

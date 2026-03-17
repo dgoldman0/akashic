@@ -185,7 +185,7 @@ VARIABLE _GB-D           \ delta for move / grow
     _GB-T @ _GB-O-CAP + @  _GB-T @ _GB-O-GE + @  -   ( nc src dst count )
     DUP 0> IF CMOVE> ELSE DROP 2DROP THEN              ( nc )
     \ Update ge and cap
-    _GB-D @ _GB-T @ _GB-O-GE +!
+    _GB-D @ _GB-T @ _GB-O-GE + +!
     _GB-T @ _GB-O-CAP + ! ;
 
 \ =====================================================================
@@ -204,7 +204,7 @@ VARIABLE _GB-D           \ delta for move / grow
             I 1+
             _GB-T @ _GB-O-LIDX + @
             _GB-T @ _GB-O-LCNT + @ CELLS + !
-            1 _GB-T @ _GB-O-LCNT +!
+            1 _GB-T @ _GB-O-LCNT + +!
         THEN
     LOOP
     \ --- post-gap: physical [ge..cap), logical = phys - ge + gs ---
@@ -216,7 +216,7 @@ VARIABLE _GB-D           \ delta for move / grow
             _GB-T @ _GB-O-GS + @ +  1+
             _GB-T @ _GB-O-LIDX + @
             _GB-T @ _GB-O-LCNT + @ CELLS + !
-            1 _GB-T @ _GB-O-LCNT +!
+            1 _GB-T @ _GB-O-LCNT + +!
         THEN
     LOOP ;
 
@@ -239,7 +239,7 @@ VARIABLE _GB-D           \ delta for move / grow
         _GB-T @ _GB-O-GE + @ _GB-D @ -  _GB-T @ _GB-O-BUF + @ + \ dst
         _GB-D @  CMOVE>                                          ( pos )
         _GB-T @ _GB-O-GS + !           \ gs = pos
-        _GB-D @ NEGATE _GB-T @ _GB-O-GE +!   \ ge -= delta
+        _GB-D @ NEGATE _GB-T @ _GB-O-GE + +!   \ ge -= delta
     ELSE
         \ --- move right ---
         \ delta = pos - gs
@@ -249,7 +249,7 @@ VARIABLE _GB-D           \ delta for move / grow
         _GB-T @ _GB-O-BUF + @ _GB-T @ _GB-O-GS + @ +    \ dst
         _GB-D @  CMOVE                                     ( pos )
         _GB-T @ _GB-O-GS + !           \ gs = pos
-        _GB-D @ _GB-T @ _GB-O-GE +!    \ ge += delta
+        _GB-D @ _GB-T @ _GB-O-GE + +!    \ ge += delta
     THEN ;
 
 \ =====================================================================
@@ -269,7 +269,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     _GB-T @ _GB-O-GS + @ +             ( addr u dest )
     SWAP >R                             ( addr dest  R: u )
     R@ CMOVE                            ( R: u )
-    R> _GB-T @ _GB-O-GS +!             \ gs += u
+    R> _GB-T @ _GB-O-GS + +!             \ gs += u
     _GB-T @ _GB-REBUILD-LINES ;
 
 \ GB-INS-CP ( cp gb -- )
@@ -298,7 +298,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     _GB-T @ _GB-O-BUF + @  _GB-T @ _GB-O-GE + @  +  ( n del-addr )
     SWAP DUP >R                            ( del-addr n  R: n )
     \ Expand gap forward: ge += n
-    _GB-T @ _GB-O-GE +!
+    _GB-T @ _GB-O-GE + +!
     _GB-T @ _GB-REBUILD-LINES
     R> ;                                  ( del-addr del-u )
 
@@ -313,7 +313,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     THEN
     DUP >R                                ( n  R: n )
     \ Deleted bytes at buf+(gs-n) -- will be inside gap after
-    NEGATE _GB-T @ _GB-O-GS +!           \ gs -= n
+    NEGATE _GB-T @ _GB-O-GS + +!           \ gs -= n
     _GB-T @ _GB-O-BUF + @
     _GB-T @ _GB-O-GS + @ +               ( del-addr )
     _GB-T @ _GB-REBUILD-LINES
