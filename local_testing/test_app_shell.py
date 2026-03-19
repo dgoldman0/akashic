@@ -300,10 +300,10 @@ def check(name, forth_lines, expected=None, check_fn=None, not_expected=None):
 # ═══════════════════════════════════════════════════════════════════
 
 def test_desc_size():
-    """APP-DESC constant should be 96 (12 cells)."""
+    """APP-DESC constant should be 112 (14 cells)."""
     check("desc-size", [
         'APP-DESC .',
-    ], expected='96')
+    ], expected='112')
 
 def test_desc_init():
     """APP-DESC-INIT should zero-fill the descriptor."""
@@ -311,7 +311,7 @@ def test_desc_init():
         'CREATE _D APP-DESC ALLOT',
         '99 _D !',
         '_D APP-DESC-INIT',
-        '_D @ .  _D 88 + @ .',
+        '_D @ .  _D 104 + @ .',
     ], expected='0 0')
 
 def test_field_offsets():
@@ -322,11 +322,13 @@ def test_field_offsets():
         '333 _D APP.TICK-XT !  444 _D APP.PAINT-XT !',
         '555 _D APP.SHUTDOWN-XT !  666 _D APP.UIDL-A !',
         '777 _D APP.UIDL-U !  80 _D APP.WIDTH !  24 _D APP.HEIGHT !',
+        '888 _D APP.UIDL-FILE-A !  999 _D APP.UIDL-FILE-U !',
         '_D APP.INIT-XT @ .  _D APP.EVENT-XT @ .  _D APP.TICK-XT @ .',
         '_D APP.PAINT-XT @ .  _D APP.SHUTDOWN-XT @ .',
         '_D APP.UIDL-A @ .  _D APP.UIDL-U @ .',
         '_D APP.WIDTH @ .  _D APP.HEIGHT @ .',
-    ], expected='111 222 333 444 555 666 777 80 24')
+        '_D APP.UIDL-FILE-A @ .  _D APP.UIDL-FILE-U @ .',
+    ], expected='111 222 333 444 555 666 777 80 24 888 999')
 
 
 # ═══════════════════════════════════════════════════════════════════

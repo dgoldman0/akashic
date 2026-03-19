@@ -1101,6 +1101,49 @@ VARIABLE _VEV-EVICTED \ evicted so far
 \   Adjust the eviction high-water mark.
 : VFS-SET-HWM  ( n vfs -- )  V.IHWM ! ;
 
+\ VFS-INODE-PATH ( inode buf cap -- len )
+\   Walk parent chain building "/a/b/c" into buf.
+\   Returns actual length written (capped at cap).
+16 CONSTANT _VIP-DEPTH
+CREATE _VIP-ADDRS _VIP-DEPTH CELLS ALLOT
+CREATE _VIP-LENS  _VIP-DEPTH CELLS ALLOT
+VARIABLE _VIP-D  VARIABLE _VIP-BUF  VARIABLE _VIP-CAP  VARIABLE _VIP-POS
+
+: VFS-INODE-PATH  ( inode buf cap -- len )
+    _VIP-CAP !  _VIP-BUF !  0 _VIP-D !  0 _VIP-POS !
+    \ Collect ancestor names
+    BEGIN
+        DUP IN.PARENT @ 0<>
+        _VIP-D @ _VIP-DEPTH < AND
+    WHILE
+        DUP IN.NAME @ _VFS-STR-GET
+        _VIP-D @ CELLS _VIP-LENS + !
+        _VIP-D @ CELLS _VIP-ADDRS + !
+        1 _VIP-D +!
+        IN.PARENT @
+    REPEAT
+    DROP
+    _VIP-D @ 0= IF
+        47 _VIP-BUF @ C!                    \ '/'
+        1 EXIT
+    THEN
+    \ Write segments deepest-first → "/a/b/c"
+    _VIP-D @ 1- 0 SWAP
+    DO
+        _VIP-POS @ _VIP-CAP @ >= IF LEAVE THEN
+        47 _VIP-BUF @ _VIP-POS @ + C!     \ '/'
+        1 _VIP-POS +!
+        I CELLS _VIP-ADDRS + @
+        I CELLS _VIP-LENS + @
+        DUP _VIP-POS @ + _VIP-CAP @ > IF
+            _VIP-CAP @ _VIP-POS @ - MIN
+        THEN
+        DUP >R
+        _VIP-BUF @ _VIP-POS @ + SWAP CMOVE
+        R> _VIP-POS +!
+    -1 +LOOP
+    _VIP-POS @ ;
+
 \ -- Patch forward reference now that _VFS-EVICT is defined --
 ' _VFS-EVICT  _VFS-EVICT-XT !
 
@@ -1137,6 +1180,7 @@ GUARD _vfs-guard
 ' VFS-STAT         CONSTANT _vfs-stat-xt
 ' VFS-SYNC         CONSTANT _vfs-sync-xt
 ' VFS-SET-HWM      CONSTANT _vfs-set-hwm-xt
+' VFS-INODE-PATH   CONSTANT _vfs-inode-path-xt
 
 : VFS-USE          _vfs-use-xt      _vfs-guard WITH-GUARD ;
 : VFS-CUR          _vfs-cur-xt      _vfs-guard WITH-GUARD ;
@@ -1159,5 +1203,6 @@ GUARD _vfs-guard
 : VFS-STAT         _vfs-stat-xt     _vfs-guard WITH-GUARD ;
 : VFS-SYNC         _vfs-sync-xt     _vfs-guard WITH-GUARD ;
 : VFS-SET-HWM      _vfs-set-hwm-xt  _vfs-guard WITH-GUARD ;
+: VFS-INODE-PATH   _vfs-inode-path-xt _vfs-guard WITH-GUARD ;
 
 [THEN] [THEN]

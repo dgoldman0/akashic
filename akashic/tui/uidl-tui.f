@@ -203,9 +203,12 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
     SWAP 8 LSHIFT OR            \ bg << 8
     SWAP OR ;                   \ fg
 
-\ Apply sidecar style to draw engine
+\ Apply sidecar style to draw engine; add reverse-video when focused
 : _UTUI-APPLY-STYLE  ( sc -- )
-    _UTUI-SC-STYLE@ _UTUI-UNPACK-STYLE DRW-STYLE! ;
+    DUP _UTUI-SC-FLAGS@ _UTUI-SCF-FOC AND >R
+    _UTUI-SC-STYLE@ _UTUI-UNPACK-STYLE   ( fg bg attrs )
+    R> IF CELL-A-REVERSE OR THEN
+    DRW-STYLE! ;
 
 \ Clear all sidecars
 : _UTUI-SC-CLEAR-ALL  ( -- )
@@ -640,16 +643,29 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     THEN ;
 
 \ --- Menubar ---
+\ Does elem or any descendant of elem hold focus?
+: _UTUI-HAS-FOCUS?  ( elem -- flag )
+    _UTUI-FOCUS-P @ DUP 0= IF NIP EXIT THEN  ( elem foc )
+    BEGIN
+        2DUP = IF 2DROP -1 EXIT THEN
+        UIDL-PARENT DUP 0=
+    UNTIL NIP ;
+
 : _UTUI-RENDER-MBAR  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     \ Fill bar background (1 row)
     32 _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-FILL-RECT
-    \ Draw each menu child's label
+    \ Draw each menu child's label.
+    \ Highlight when the menu (or any item inside it) holds focus.
     _UR-COL @ 1+ _UR-TMP !            \ column cursor
     UIDL-FIRST-CHILD                   ( child | 0 )
     BEGIN DUP 0<> WHILE
         DUP S" label" UIDL-ATTR IF    ( child la ll )
+            2 PICK _UTUI-HAS-FOCUS? IF
+                _DRW-ATTRS @ CELL-A-REVERSE OR _DRW-ATTRS !
+            THEN
             2DUP _UR-ROW @ _UR-TMP @ DRW-TEXT
+            DRW-STYLE-RESTORE
             NIP 2 + _UR-TMP +!        ( child )
         ELSE 2DROP THEN
         UIDL-NEXT-SIB
@@ -856,6 +872,17 @@ VARIABLE _UT-TAB-COL
 : _UTUI-H-LIST     ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-DIALOG   ( elem key-ev -- handled? ) 2DROP 0 ;
 : _UTUI-H-CANVAS   ( elem key-ev -- handled? ) 2DROP 0 ;
+
+\ Region / group: delegate to mounted widget via generic WDG-HANDLE
+: _UTUI-H-REGION  ( elem key-ev -- handled? )
+    OVER _UTUI-SIDECAR                    ( elem ev sc )
+    DUP _UTUI-SC-WPTR@                    ( elem ev sc wptr )
+    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    >R                                     ( elem ev sc  R: wptr )
+    DUP R@ _UTUI-SYNC-WFOCUS
+    _UTUI-SYNC-PROXY
+    NIP R>                                 ( ev wptr )
+    WDG-HANDLE ;
 
 \ Tree: delegate to materialized TREE widget's _TREE-HANDLE
 : _UTUI-H-TREE  ( elem key-ev -- handled? )
@@ -1310,7 +1337,7 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
                 ELSE
                     UIDL-PARENT DUP IF
                         FALSE
-                    ELSE 0 TRUE THEN
+                    ELSE DROP 0 TRUE THEN
                 THEN
             UNTIL
             DUP 0= IF DROP EXIT THEN
@@ -1369,6 +1396,8 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-H-TABS           S" tabs"       _UTUI-INST-E
     ['] _UTUI-H-DIALOG         S" dialog"     _UTUI-INST-E
     ['] _UTUI-H-CANVAS         S" canvas"     _UTUI-INST-E
+    ['] _UTUI-H-REGION         S" region"     _UTUI-INST-E
+    ['] _UTUI-H-REGION         S" group"      _UTUI-INST-E
 
     \ --- Layout XTs ---
     ['] _UTUI-LAYOUT-DISPATCH  S" region"     _UTUI-INST-L
@@ -1391,19 +1420,33 @@ UTUI-INSTALL-XTS
 
 : UTUI-FOCUS  ( -- elem | 0 )  _UTUI-FOCUS-P @ ;
 
+\ Dirty element, and walk up to the nearest ancestor that owns a
+\ real render-xt.  Container renders like _UTUI-RENDER-MBAR paint
+\ children on their behalf, so they must re-render when a child's
+\ visual state (e.g. focus) changes.
+: _UTUI-FOCUS-DIRTY  ( elem -- )
+    BEGIN
+        DUP UIDL-DIRTY!
+        DUP UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
+            ED.RENDER-XT @ ['] NOOP <>
+        ELSE 0 THEN
+        IF DROP EXIT THEN              \ has own render — stop
+        UIDL-PARENT DUP 0=
+    UNTIL DROP ;
+
 : UTUI-FOCUS!  ( elem -- )
     \ Clear old focus
     _UTUI-FOCUS-P @ ?DUP IF
         DUP _UTUI-SIDECAR
         DUP _UTUI-SC-FLAGS@ _UTUI-SCF-FOC INVERT AND SWAP _UTUI-SC-FLAGS!
-        UIDL-DIRTY!
+        _UTUI-FOCUS-DIRTY
     THEN
     \ Set new
     DUP _UTUI-FOCUS-P !
     ?DUP IF
         DUP _UTUI-SIDECAR
         DUP _UTUI-SC-FLAGS@ _UTUI-SCF-FOC OR SWAP _UTUI-SC-FLAGS!
-        UIDL-DIRTY!
+        _UTUI-FOCUS-DIRTY
     THEN ;
 
 : _UTUI-DFS-NEXT  ( elem -- next | 0 )
@@ -1424,7 +1467,12 @@ UTUI-INSTALL-XTS
     DUP UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
         ED.FLAGS @ EL-FOCUSABLE? IF
             _UTUI-SIDECAR _UTUI-SC-VIS?
-        ELSE DROP 0 THEN
+        ELSE
+            \ Not inherently focusable — but a mounted widget makes it so
+            _UTUI-SIDECAR DUP _UTUI-SC-WPTR@ IF
+                _UTUI-SC-VIS?
+            ELSE DROP 0 THEN
+        THEN
     ELSE DROP 0 THEN ;
 
 VARIABLE _UF-START
@@ -1493,7 +1541,7 @@ VARIABLE _UHT-SC
                 ELSE
                     UIDL-PARENT DUP IF
                         FALSE          \ continue to check parent's next-sib
-                    ELSE 0 TRUE THEN   \ no parent → done, push sentinel
+                    ELSE DROP 0 TRUE THEN   \ no parent → done, push sentinel
                 THEN
             UNTIL
             DUP 0= IF DROP _UHT-BEST @ EXIT THEN
@@ -1568,7 +1616,7 @@ VARIABLE _UHT-SC
                 ELSE
                     UIDL-PARENT DUP IF
                         FALSE
-                    ELSE 0 TRUE THEN
+                    ELSE DROP 0 TRUE THEN
                 THEN
             UNTIL
             DUP 0= IF DROP EXIT THEN
@@ -1697,6 +1745,28 @@ VARIABLE _UTUI-SKIP-CHILDREN
         SWAP OVER 8 + ! !             \ store elem, zi in final position
     LOOP ;
 
+\ Helper: paint Pass 2 overlay elements if any were deferred.
+: _UTUI-PAINT-PASS2  ( -- )
+    _UTUI-OVERLAY-CNT @ 0> IF
+        _UTUI-SORT-OVERLAYS
+        _UTUI-OVERLAY-CNT @ 0 DO
+            I 2 * CELLS _UTUI-OVERLAY-BUF + @
+            _UTUI-PAINT-SUBTREE
+        LOOP
+    THEN ;
+
+\ Helper: walk up from elem to the next sibling of an ancestor.
+\ Returns the next DFS node, or 0 if the tree is exhausted.
+: _UTUI-PAINT-WALK-UP  ( elem -- next|0 )
+    BEGIN
+        DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+        ELSE
+            UIDL-PARENT DUP IF
+                FALSE
+            ELSE DROP 0 TRUE THEN
+        THEN
+    UNTIL ;
+
 : UTUI-PAINT  ( -- )
     _UTUI-DOC-LOADED @ 0= IF EXIT THEN
     \ Reset to full-screen clip — render words use absolute sidecar
@@ -1710,39 +1780,12 @@ VARIABLE _UTUI-SKIP-CHILDREN
         _UTUI-SKIP-CHILDREN @ IF
             \ Deferred element — skip its entire subtree
             _UTUI-SKIP-SUBTREE
-            DUP 0= IF DROP
-                \ Tree exhausted — fall through to Pass 2
-                _UTUI-OVERLAY-CNT @ 0> IF
-                    _UTUI-SORT-OVERLAYS
-                    _UTUI-OVERLAY-CNT @ 0 DO
-                        I 2 * CELLS _UTUI-OVERLAY-BUF + @
-                        _UTUI-PAINT-SUBTREE
-                    LOOP
-                THEN
-                EXIT
-            THEN
+            DUP 0= IF DROP _UTUI-PAINT-PASS2 EXIT THEN
         ELSE
             DUP UIDL-FIRST-CHILD ?DUP IF NIP
             ELSE
-                BEGIN
-                    DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
-                    ELSE
-                        UIDL-PARENT DUP IF
-                            FALSE
-                        ELSE 0 TRUE THEN
-                    THEN
-                UNTIL
-                DUP 0= IF DROP
-                    \ Pass 2: paint deferred overlays in z-order
-                    _UTUI-OVERLAY-CNT @ 0> IF
-                        _UTUI-SORT-OVERLAYS
-                        _UTUI-OVERLAY-CNT @ 0 DO
-                            I 2 * CELLS _UTUI-OVERLAY-BUF + @
-                            _UTUI-PAINT-SUBTREE
-                        LOOP
-                    THEN
-                    EXIT
-                THEN
+                _UTUI-PAINT-WALK-UP
+                DUP 0= IF DROP _UTUI-PAINT-PASS2 EXIT THEN
             THEN
         THEN
     AGAIN ;
@@ -1764,6 +1807,16 @@ VARIABLE _UTUI-SKIP-CHILDREN
         THEN
     THEN
 
+    \ Down / Right → next focusable; Up / Left → prev focusable
+    OVER KEY-DOWN = OVER 0= AND IF
+        2DROP UTUI-FOCUS-NEXT -1 EXIT THEN
+    OVER KEY-RIGHT = OVER 0= AND IF
+        2DROP UTUI-FOCUS-NEXT -1 EXIT THEN
+    OVER KEY-UP = OVER 0= AND IF
+        2DROP UTUI-FOCUS-PREV -1 EXIT THEN
+    OVER KEY-LEFT = OVER 0= AND IF
+        2DROP UTUI-FOCUS-PREV -1 EXIT THEN
+
     \ Shortcut table
     2DUP _UTUI-SHORT-MATCH            ( code mods elem|0 )
     ?DUP IF
@@ -1783,6 +1836,11 @@ VARIABLE _UTUI-SKIP-CHILDREN
                 DUP IF UTUI-FOCUS ?DUP IF UIDL-DIRTY! THEN THEN
                 EXIT
             ELSE DROP THEN
+        THEN
+        \ Enter / Space on focusable elem → fire do= action
+        _UR-EV @ KEY-CODE@
+        DUP KEY-ENTER = SWAP 32 = OR IF
+            _UTUI-FIRE-DO -1 EXIT
         THEN
         DROP 0 EXIT
     THEN
@@ -2035,7 +2093,7 @@ VARIABLE _USH-H    VARIABLE _USH-W
                 DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
                 ELSE
                     UIDL-PARENT DUP IF FALSE
-                    ELSE 0 TRUE THEN
+                    ELSE DROP 0 TRUE THEN
                 THEN
             UNTIL
             DUP 0= IF DROP EXIT THEN
@@ -2070,7 +2128,7 @@ VARIABLE _USH-H    VARIABLE _USH-W
                 DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
                 ELSE
                     UIDL-PARENT DUP IF FALSE
-                    ELSE 0 TRUE THEN
+                    ELSE DROP 0 TRUE THEN
                 THEN
             UNTIL
             DUP 0= IF DROP EXIT THEN
@@ -2218,7 +2276,7 @@ VARIABLE _UPRE-VA  VARIABLE _UPRE-VL  VARIABLE _UPRE-SC  VARIABLE _UPRE-STY
                 ELSE
                     UIDL-PARENT DUP IF
                         FALSE
-                    ELSE 0 TRUE THEN
+                    ELSE DROP 0 TRUE THEN
                 THEN
             UNTIL
             DUP 0= IF DROP EXIT THEN
@@ -2586,12 +2644,12 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
 
-    _UTUI-PRELAYOUT-STYLES DROP        \ §16c: position, display, padding, margin
+    _UTUI-PRELAYOUT-STYLES             \ §16c: position, display, padding, margin
     UTUI-RELAYOUT          DROP        \ (leaks 1 item — drop it)
     _UTUI-RESOLVE-STYLES               \ §16b: colors, text-align, z-index, dims, offsets
-    _UTUI-RESOLVE-POSITIONED DROP      \ §7b: place absolute/fixed elements
-    _UTUI-MATERIALIZE        DROP
-    _UTUI-WIRE-SUBS          DROP
+    _UTUI-RESOLVE-POSITIONED           \ §7b: place absolute/fixed elements
+    _UTUI-MATERIALIZE
+    _UTUI-WIRE-SUBS
 
     0 _UTUI-FOCUS-P !
     UTUI-FOCUS-NEXT

@@ -374,6 +374,57 @@ VARIABLE _S2N-NEG
     2 PICK OVER -               ( addr' len' addr tlen )
     2SWAP ;                     ( tok tlen rest rlen )
 
+\ =====================================================================
+\  Case-insensitive String Compare (ordering)
+\ =====================================================================
+
+\ STR-ICMP ( s1 l1 s2 l2 -- n )
+\   Case-insensitive lexicographic compare.
+\   Returns -1 (s1 < s2), 0 (equal), +1 (s1 > s2).
+VARIABLE _SIC-A1  VARIABLE _SIC-L1
+VARIABLE _SIC-A2  VARIABLE _SIC-L2
+
+: STR-ICMP  ( s1 l1 s2 l2 -- n )
+    _SIC-L2 !  _SIC-A2 !  _SIC-L1 !  _SIC-A1 !
+    _SIC-L1 @ _SIC-L2 @ MIN 0
+    ?DO
+        _SIC-A1 @ I + C@ _STR-UC
+        _SIC-A2 @ I + C@ _STR-UC
+        - DUP 0<> IF
+            0< IF -1 ELSE 1 THEN
+            UNLOOP EXIT
+        THEN
+        DROP
+    LOOP
+    _SIC-L1 @ _SIC-L2 @ - DUP 0= IF EXIT THEN
+    0< IF -1 ELSE 1 THEN ;
+
+\ =====================================================================
+\  Human-Readable Byte-Size Formatter
+\ =====================================================================
+
+\ SIZE-FMT ( u -- addr len )
+\   Format an unsigned byte count as a human-readable string.
+\   <1K → decimal bytes, <1M → "NNK", else → "NNM".
+\   Uses a static buffer — NOT re-entrant.
+CREATE _SFM-BUF 24 ALLOT
+
+: SIZE-FMT  ( u -- addr len )
+    DUP 1024 < IF
+        NUM>STR EXIT
+    THEN
+    DUP 1048576 < IF
+        1024 / NUM>STR
+        DUP >R _SFM-BUF SWAP CMOVE
+        75 _SFM-BUF R@ + C!          \ 'K'
+        _SFM-BUF R> 1+
+    ELSE
+        1048576 / NUM>STR
+        DUP >R _SFM-BUF SWAP CMOVE
+        77 _SFM-BUF R@ + C!          \ 'M'
+        _SFM-BUF R> 1+
+    THEN ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
@@ -398,6 +449,8 @@ GUARD _ustr-guard
 ' STR>NUM         CONSTANT _str-to-num-xt
 ' STR-SKIP-BL     CONSTANT _str-skip-bl-xt
 ' STR-PARSE-TOKEN CONSTANT _str-parse-token-xt
+' STR-ICMP        CONSTANT _str-icmp-xt
+' SIZE-FMT        CONSTANT _size-fmt-xt
 
 : STR-TOLOWER     _str-tolower-xt _ustr-guard WITH-GUARD ;
 : STR-TOUPPER     _str-toupper-xt _ustr-guard WITH-GUARD ;
@@ -418,4 +471,6 @@ GUARD _ustr-guard
 : STR>NUM         _str-to-num-xt _ustr-guard WITH-GUARD ;
 : STR-SKIP-BL     _str-skip-bl-xt _ustr-guard WITH-GUARD ;
 : STR-PARSE-TOKEN _str-parse-token-xt _ustr-guard WITH-GUARD ;
+: STR-ICMP        _str-icmp-xt _ustr-guard WITH-GUARD ;
+: SIZE-FMT        _size-fmt-xt _ustr-guard WITH-GUARD ;
 [THEN] [THEN]

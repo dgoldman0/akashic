@@ -32,15 +32,17 @@ PROVIDED akashic-tui-app-desc
 16 CONSTANT _AD-TICK        \ ( -- )         periodic tick
 24 CONSTANT _AD-PAINT       \ ( -- )         custom widget paint
 32 CONSTANT _AD-SHUTDOWN    \ ( -- )         cleanup
-40 CONSTANT _AD-UIDL-A      \ UIDL XML addr (0 = no UIDL)
+40 CONSTANT _AD-UIDL-A      \ UIDL XML addr (0 = no inline UIDL)
 48 CONSTANT _AD-UIDL-U      \ UIDL XML len
 56 CONSTANT _AD-WIDTH       \ preferred width  (0 = auto)
 64 CONSTANT _AD-HEIGHT      \ preferred height (0 = auto)
 72 CONSTANT _AD-TITLE-A     \ terminal title addr (0 = none)
 80 CONSTANT _AD-TITLE-U     \ terminal title len
 88 CONSTANT _AD-FLAGS       \ reserved (0)
+96 CONSTANT _AD-UIDL-FILE-A \ UIDL file VFS path addr (0 = none)
+104 CONSTANT _AD-UIDL-FILE-U \ UIDL file VFS path len
 
-96 CONSTANT APP-DESC         \ total size in bytes
+112 CONSTANT APP-DESC        \ total size in bytes
 
 \ --- Field accessors ---
 
@@ -56,6 +58,8 @@ PROVIDED akashic-tui-app-desc
 : APP.TITLE-A      ( desc -- addr )  _AD-TITLE-A  + ;
 : APP.TITLE-U      ( desc -- addr )  _AD-TITLE-U  + ;
 : APP.FLAGS        ( desc -- addr )  _AD-FLAGS    + ;
+: APP.UIDL-FILE-A  ( desc -- addr )  _AD-UIDL-FILE-A + ;
+: APP.UIDL-FILE-U  ( desc -- addr )  _AD-UIDL-FILE-U + ;
 
 \ --- Convenience: zero-fill a descriptor ---
 : APP-DESC-INIT  ( desc -- )

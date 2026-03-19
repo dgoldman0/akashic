@@ -1,0 +1,56 @@
+<uidl arrange=stack>
+<menubar>
+<menu label=File>
+<item text=New_File do=new-file/>
+<item text=New_Folder do=new-dir/>
+<separator/>
+<item text=Delete do=delete/>
+<item text=Rename do=rename/>
+<separator/>
+<item text=Refresh do=refresh/>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+<menu label=Edit>
+<item text=Copy do=copy key=Ctrl+C/>
+<item text=Cut do=cut key=Ctrl+X/>
+<item text=Paste do=paste key=Ctrl+V/>
+</menu>
+<menu label=View>
+<item text=Show_Hidden do=toggle-hidden key=Ctrl+H/>
+<separator/>
+<item text=Sort:_Name do=sort-name/>
+<item text=Sort:_Size do=sort-size/>
+<item text=Sort:_Type do=sort-type/>
+<separator/>
+<item text=Expand_All do=expand-all/>
+<item text=Collapse_All do=collapse-all/>
+</menu>
+<menu label=Tools>
+<item text=Go_to_Path do=goto key=Ctrl+G/>
+<item text=Properties do=props key=Ctrl+I/>
+</menu>
+</menubar>
+<split ratio=30>
+<region id=sidebar/>
+<tabs id=tabs>
+<tab label=Details>
+<region id=detail/>
+</tab>
+<tab label=Preview>
+<textarea id=preview readonly=true/>
+</tab>
+</tabs>
+</split>
+<status id=sbar style=color:white;background-color:blue>
+<label id=sbar-left text=0_items/>
+<label id=sbar-right text=//>
+</status>
+<action do=goto key=Ctrl+G/>
+<action do=props key=Ctrl+I/>
+<action do=quit key=Ctrl+Q/>
+<action do=copy key=Ctrl+C/>
+<action do=cut key=Ctrl+X/>
+<action do=paste key=Ctrl+V/>
+<action do=toggle-hidden key=Ctrl+H/>
+<action do=parent-dir key=Backspace/>
+</uidl>

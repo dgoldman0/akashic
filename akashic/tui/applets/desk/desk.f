@@ -31,6 +31,7 @@
 \    DESK-RELAYOUT     ( -- )          Recompute tile grid
 \    DESK-SLOT-COUNT   ( -- n )        Number of live slots
 \    DESK-VCOUNT       ( -- n )        Number of visible slots
+\    DESK-QUEUE-LAUNCH ( desc -- )     Set startup applet (before DESK-RUN)
 \    DESK-RUN          ( -- )          Fill desc, call ASHELL-RUN
 \ =================================================================
 
@@ -49,148 +50,8 @@ REQUIRE ../../../liraq/uidl.f
 REQUIRE ../../../utils/binimg.f
 
 \ =====================================================================
-\  §1 — UIDL Context Save / Restore
+\  §1 — (UCTX system now lives in app-shell.f §1b)
 \ =====================================================================
-\
-\  Per sub-app UIDL context buffer holding 15 scalar variables and
-\  10 pool arrays.  Total ~99,448 bytes (~97 KiB).
-\
-\  Recycled from app-compositor.f §1.
-
-15 CONSTANT _UCTX-NVAR
-120 CONSTANT _UCTX-VAR-SZ       \ 15 × 8
-
-\ Pool sizes (must match module declarations)
-32768 CONSTANT _UCTX-ELEMS-SZ   \ 256 × 128
-20480 CONSTANT _UCTX-ATTRS-SZ   \ 512 × 40
-12288 CONSTANT _UCTX-STRS-SZ
- 2048 CONSTANT _UCTX-HASH-SZ    \ 256 × 8
- 4096 CONSTANT _UCTX-HIDS-SZ    \ 256 × 16
- 3072 CONSTANT _UCTX-SUBS-SZ    \ 128 × 24
-20480 CONSTANT _UCTX-SC-SZ      \ 256 × 80
- 1536 CONSTANT _UCTX-ACTS-SZ    \ 64 × 24
- 2048 CONSTANT _UCTX-SHORTS-SZ  \ 64 × 32
-  512 CONSTANT _UCTX-OVBUF-SZ   \ 32 × 16
-
-\ Offsets into context buffer
-_UCTX-VAR-SZ                                       CONSTANT _UCTX-O-ELEMS
-_UCTX-O-ELEMS  _UCTX-ELEMS-SZ  +                   CONSTANT _UCTX-O-ATTRS
-_UCTX-O-ATTRS  _UCTX-ATTRS-SZ  +                   CONSTANT _UCTX-O-STRS
-_UCTX-O-STRS   _UCTX-STRS-SZ   +                   CONSTANT _UCTX-O-HASH
-_UCTX-O-HASH   _UCTX-HASH-SZ   +                   CONSTANT _UCTX-O-HIDS
-_UCTX-O-HIDS   _UCTX-HIDS-SZ   +                   CONSTANT _UCTX-O-SUBS
-_UCTX-O-SUBS   _UCTX-SUBS-SZ   +                   CONSTANT _UCTX-O-SC
-_UCTX-O-SC     _UCTX-SC-SZ     +                   CONSTANT _UCTX-O-ACTS
-_UCTX-O-ACTS   _UCTX-ACTS-SZ   +                   CONSTANT _UCTX-O-SHORTS
-_UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
-_UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT _UCTX-TOTAL
-
-\ --- Variable table: maps index → global VARIABLE address ---
-CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
-
-: _UCTX-INIT-VARS  ( -- )
-    _UDL-ECNT           _UCTX-VARS  0 CELLS + !
-    _UDL-ACNT           _UCTX-VARS  1 CELLS + !
-    _UDL-SPOS           _UCTX-VARS  2 CELLS + !
-    _UDL-ROOT           _UCTX-VARS  3 CELLS + !
-    _UDL-SUB-CNT        _UCTX-VARS  4 CELLS + !
-    _UTUI-ELEM-BASE     _UCTX-VARS  5 CELLS + !
-    _UTUI-DOC-LOADED    _UCTX-VARS  6 CELLS + !
-    _UTUI-STATE         _UCTX-VARS  7 CELLS + !
-    _UTUI-FOCUS-P       _UCTX-VARS  8 CELLS + !
-    _UTUI-ACT-CNT       _UCTX-VARS  9 CELLS + !
-    _UTUI-SHORT-CNT     _UCTX-VARS 10 CELLS + !
-    _UTUI-OVERLAY-CNT   _UCTX-VARS 11 CELLS + !
-    _UTUI-SAVED-FOCUS   _UCTX-VARS 12 CELLS + !
-    _UTUI-SKIP-CHILDREN _UCTX-VARS 13 CELLS + !
-    _UTUI-RGN           _UCTX-VARS 14 CELLS + ! ;
-_UCTX-INIT-VARS
-
-\ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
-10 CONSTANT _UCTX-NPOOL
-CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
-
-: _UCTX-INIT-POOLS  ( -- )
-    _UDL-ELEMS        _UCTX-POOLS   0 + !
-    _UCTX-O-ELEMS     _UCTX-POOLS   8 + !
-    _UCTX-ELEMS-SZ    _UCTX-POOLS  16 + !
-    _UDL-ATTRS        _UCTX-POOLS  24 + !
-    _UCTX-O-ATTRS     _UCTX-POOLS  32 + !
-    _UCTX-ATTRS-SZ    _UCTX-POOLS  40 + !
-    _UDL-STRS         _UCTX-POOLS  48 + !
-    _UCTX-O-STRS      _UCTX-POOLS  56 + !
-    _UCTX-STRS-SZ     _UCTX-POOLS  64 + !
-    _UDL-HASH         _UCTX-POOLS  72 + !
-    _UCTX-O-HASH      _UCTX-POOLS  80 + !
-    _UCTX-HASH-SZ     _UCTX-POOLS  88 + !
-    _UDL-HIDS         _UCTX-POOLS  96 + !
-    _UCTX-O-HIDS      _UCTX-POOLS 104 + !
-    _UCTX-HIDS-SZ     _UCTX-POOLS 112 + !
-    _UDL-SUBS         _UCTX-POOLS 120 + !
-    _UCTX-O-SUBS      _UCTX-POOLS 128 + !
-    _UCTX-SUBS-SZ     _UCTX-POOLS 136 + !
-    _UTUI-SIDECARS    _UCTX-POOLS 144 + !
-    _UCTX-O-SC        _UCTX-POOLS 152 + !
-    _UCTX-SC-SZ       _UCTX-POOLS 160 + !
-    _UTUI-ACTS        _UCTX-POOLS 168 + !
-    _UCTX-O-ACTS      _UCTX-POOLS 176 + !
-    _UCTX-ACTS-SZ     _UCTX-POOLS 184 + !
-    _UTUI-SHORTS      _UCTX-POOLS 192 + !
-    _UCTX-O-SHORTS    _UCTX-POOLS 200 + !
-    _UCTX-SHORTS-SZ   _UCTX-POOLS 208 + !
-    _UTUI-OVERLAY-BUF _UCTX-POOLS 216 + !
-    _UCTX-O-OVBUF     _UCTX-POOLS 224 + !
-    _UCTX-OVBUF-SZ    _UCTX-POOLS 232 + ! ;
-_UCTX-INIT-POOLS
-
-\ --- UCTX-ALLOC / FREE / SAVE / RESTORE / CLEAR ---
-
-: UCTX-ALLOC  ( -- ctx | 0 )
-    _UCTX-TOTAL ALLOCATE IF DROP 0 THEN ;
-
-: UCTX-FREE  ( ctx -- )  FREE ;
-
-\ Pool copy helper variables
-VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
-
-: UCTX-SAVE  ( ctx -- )
-    DUP 0= IF DROP EXIT THEN
-    \ Save scalars: ctx[i] = *var
-    _UCTX-NVAR 0 DO
-        I CELLS _UCTX-VARS + @   \ global var addr
-        @ OVER I CELLS + !
-    LOOP
-    \ Save pools: global → ctx
-    _UCTX-NPOOL 0 DO
-        I 3 * CELLS _UCTX-POOLS +
-        DUP @       _UCP-SRC !
-        DUP 16 + @  _UCP-SZ  !
-        8 + @ OVER + _UCP-DST !
-        _UCP-SRC @ _UCP-DST @ _UCP-SZ @ CMOVE
-    LOOP
-    DROP ;
-
-: UCTX-RESTORE  ( ctx -- )
-    DUP 0= IF DROP EXIT THEN
-    \ Restore scalars: *var = ctx[i]
-    _UCTX-NVAR 0 DO
-        DUP I CELLS + @           \ value from ctx
-        I CELLS _UCTX-VARS + @   \ global var addr
-        !
-    LOOP
-    \ Restore pools: ctx → global
-    _UCTX-NPOOL 0 DO
-        I 3 * CELLS _UCTX-POOLS +
-        DUP @       _UCP-DST !
-        DUP 16 + @  _UCP-SZ  !
-        8 + @ OVER + _UCP-SRC !
-        _UCP-SRC @ _UCP-DST @ _UCP-SZ @ CMOVE
-    LOOP
-    DROP ;
-
-: UCTX-CLEAR  ( ctx -- )
-    DUP 0= IF DROP EXIT THEN
-    _UCTX-TOTAL 0 FILL ;
 
 \ =====================================================================
 \  §2 — Slot Struct (linked list, heap-allocated)
@@ -212,7 +73,8 @@ VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
 32 CONSTANT _SLOT-O-HAS-UIDL   \ flag: app has UIDL?
 40 CONSTANT _SLOT-O-NEXT       \ → next slot in list (0 = tail)
 48 CONSTANT _SLOT-O-ID         \ unique ID (monotonic)
-56 CONSTANT _SLOT-SZ
+56 CONSTANT _SLOT-O-UIDL-BUF   \ shell-loaded UIDL file buffer (0 = none)
+64 CONSTANT _SLOT-SZ
 
 0 CONSTANT _ST-EMPTY
 1 CONSTANT _ST-RUNNING
@@ -227,6 +89,7 @@ VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
 : _SL-HAS-UIDL ( sa -- a )  _SLOT-O-HAS-UIDL + ;
 : _SL-NEXT     ( sa -- a )  _SLOT-O-NEXT     + ;
 : _SL-ID       ( sa -- a )  _SLOT-O-ID       + ;
+: _SL-UIDL-BUF ( sa -- a )  _SLOT-O-UIDL-BUF + ;
 
 : _SL-VISIBLE?  ( sa -- flag )
     _SL-STATE @ DUP _ST-RUNNING = SWAP _ST-FOCUSED = OR ;
@@ -259,13 +122,17 @@ VARIABLE _DESK-FULLFRAME  \ flag: full-frame mode active
 VARIABLE _DESK-LAST-MIN-SA  \ last minimized slot (for restore)
 0 _DESK-LAST-MIN-SA !
 
-\ Active UIDL context: slot address whose ctx is live, or 0.
-VARIABLE _DESK-ACTIVE-CTX-SA
-0 _DESK-ACTIVE-CTX-SA !
+\ Active UIDL context tracking now lives in the shell
+\ (_ASHELL-ACTIVE-CTX).  Desk delegates via ASHELL-CTX-SWITCH.
 
 \ Config TOML buffer (kept alive so zero-copy strings remain valid).
 VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
 0 _DESK-CFG-A !  0 _DESK-CFG-L !
+
+\ Startup applet: set via DESK-QUEUE-LAUNCH before DESK-RUN.
+\ DESK-INIT-CB launches this after the screen & region are ready.
+VARIABLE _DESK-PENDING
+0 _DESK-PENDING !
 
 \ =====================================================================
 \  §3b — Theme
@@ -622,16 +489,10 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 \ =====================================================================
 
 : _DESK-CTX-SAVE  ( sa -- )
-    _SL-UCTX @ ?DUP IF UCTX-SAVE THEN ;
-
-: _DESK-CTX-RESTORE  ( sa -- )
-    _SL-UCTX @ ?DUP IF UCTX-RESTORE THEN ;
+    _SL-UCTX @ ASHELL-CTX-SAVE ;
 
 : _DESK-CTX-SWITCH  ( sa -- )
-    DUP _DESK-ACTIVE-CTX-SA @ = IF DROP EXIT THEN
-    _DESK-ACTIVE-CTX-SA @ ?DUP IF _DESK-CTX-SAVE THEN
-    DUP _DESK-CTX-RESTORE
-    _DESK-ACTIVE-CTX-SA ! ;
+    _SL-UCTX @ ASHELL-CTX-SWITCH ;
 
 \ Master relayout.
 : DESK-RELAYOUT  ( -- )
@@ -661,6 +522,33 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 \  owns the terminal.  Sub-app INIT-XT is called, but terminal
 \  setup is not the sub-app's job.
 
+\ _DESK-LOAD-UIDL-FILE ( path-a path-u rgn -- buf|0 )
+\   Open a VFS file, read its contents into a heap buffer, then
+\   feed the content to UTUI-LOAD.  Returns the heap buffer address
+\   (caller must FREE) or 0 on failure.
+8192 CONSTANT _DESK-UIDL-FILE-MAX
+
+VARIABLE _DLUF-RGN
+VARIABLE _DLUF-FD
+VARIABLE _DLUF-BUF
+
+: _DESK-LOAD-UIDL-FILE  ( path-a path-u rgn -- buf|0 )
+    _DLUF-RGN !
+    VFS-OPEN                          ( fd|0 )
+    DUP 0= IF EXIT THEN
+    _DLUF-FD !
+    _DESK-UIDL-FILE-MAX ALLOCATE IF
+        _DLUF-FD @ VFS-CLOSE  0 EXIT
+    THEN
+    _DLUF-BUF !
+    \ Read file into buffer
+    _DLUF-BUF @  _DESK-UIDL-FILE-MAX  _DLUF-FD @ VFS-READ  ( actual )
+    _DLUF-FD @ VFS-CLOSE
+    \ Feed to UTUI-LOAD
+    _DLUF-BUF @ SWAP  _DLUF-RGN @    ( buf-a actual rgn )
+    UTUI-LOAD DROP
+    _DLUF-BUF @ ;
+
 : DESK-LAUNCH  ( desc -- id )
     _SLOT-SZ ALLOCATE IF DROP -1 EXIT THEN
     >R
@@ -669,8 +557,8 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     _ST-RUNNING R@ _SL-STATE !
     _DESK-NEXT-ID @ R@ _SL-ID !
     1 _DESK-NEXT-ID +!
-    \ Allocate UIDL context if app declares UIDL
-    DUP APP.UIDL-A @ IF
+    \ Allocate UIDL context if app declares UIDL (inline or file)
+    DUP APP.UIDL-A @ OVER APP.UIDL-FILE-A @ OR IF
         UCTX-ALLOC DUP IF DUP UCTX-CLEAR THEN
         R@ _SL-UCTX !
         -1 R@ _SL-HAS-UIDL !
@@ -688,14 +576,26 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     \ Load UIDL document into sub-app context
     R@ _SL-HAS-UIDL @ IF
         R@ _DESK-CTX-SWITCH
-        DUP APP.UIDL-A @
-        OVER APP.UIDL-U @
-        R@ _SL-RGN @
-        UTUI-LOAD DROP
-        R@ _DESK-CTX-SAVE
+        DUP APP.UIDL-A @ IF
+            \ --- inline UIDL ---
+            DUP APP.UIDL-A @
+            OVER APP.UIDL-U @
+            R@ _SL-RGN @
+            UTUI-LOAD DROP
+        ELSE DUP APP.UIDL-FILE-A @ IF
+            \ --- file-based UIDL (loaded by desk) ---
+            DUP APP.UIDL-FILE-A @
+            OVER APP.UIDL-FILE-U @  ( desc path-a path-u )
+            R@ _SL-RGN @           ( desc path-a path-u rgn )
+            _DESK-LOAD-UIDL-FILE   ( desc buf|0 )
+            R@ _SL-UIDL-BUF !
+        THEN THEN
     THEN
-    \ Call sub-app init callback
+    \ Call sub-app init callback while context is live so that
+    \ UTUI-BY-ID, UTUI-WIDGET-SET, UTUI-DO! etc. persist.
     DUP APP.INIT-XT @ ?DUP IF EXECUTE THEN
+    \ Save context AFTER init — widget mounts & actions are now captured
+    R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
     DROP
     R> _SL-ID @ ;
 
@@ -710,9 +610,10 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     R@ _SL-HAS-UIDL @ IF
         R@ _DESK-CTX-SWITCH
         UTUI-DETACH
-        0 _DESK-ACTIVE-CTX-SA !
+        0 ASHELL-CTX-SWITCH
     THEN
     \ Free resources
+    R@ _SL-UIDL-BUF @ ?DUP IF FREE DROP THEN
     R@ _SL-UCTX @ ?DUP IF UCTX-FREE THEN
     R@ _SL-RGN @ ?DUP IF RGN-FREE THEN
     \ Fixup focus / last-minimized pointers
@@ -890,11 +791,13 @@ VARIABLE _DTB-ROW
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
     0 _DESK-LAST-MIN-SA !
-    0 _DESK-ACTIVE-CTX-SA !
+    0 ASHELL-CTX-SWITCH
     _DESK-THEME-DEFAULTS
     _DESK-HOTBAR-CLEAR
     \ Load config if a buffer was supplied before DESK-RUN
-    _DESK-CFG-A @ ?DUP IF _DESK-CFG-L @ DESK-LOAD-CONFIG THEN ;
+    _DESK-CFG-A @ ?DUP IF _DESK-CFG-L @ DESK-LOAD-CONFIG THEN
+    \ Launch queued startup applet if one was set
+    _DESK-PENDING @ ?DUP IF 0 _DESK-PENDING ! DESK-LAUNCH DROP THEN ;
 
 \ --- Shortcuts ---
 CREATE _DESK-EV  24 ALLOT
@@ -1049,15 +952,12 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
                 0
             THEN
             0= IF
-                DUP _SL-RGN @ ?DUP IF
-                    RGN-USE
-                    OVER _SL-HAS-UIDL @ IF
-                        OVER _DESK-CTX-SWITCH
-                        UTUI-PAINT
-                    THEN
-                    OVER _SL-DESC @ ?DUP IF
-                        APP.PAINT-XT @ ?DUP IF EXECUTE THEN
-                    THEN
+                DUP _SL-RGN @ IF
+                    DUP _SL-UCTX @
+                    OVER _SL-RGN @
+                    2 PICK _SL-HAS-UIDL @
+                    3 PICK _SL-DESC @
+                    ASHELL-PAINT-CHILD
                 THEN
             THEN
         THEN
@@ -1090,8 +990,14 @@ CREATE DESK-DESC  APP-DESC ALLOT
     0                    DESK-DESC APP.UIDL-U !
     0                    DESK-DESC APP.WIDTH !
     0                    DESK-DESC APP.HEIGHT !
-    S" DESK"  DESK-DESC APP.TITLE-A !
-              DESK-DESC APP.TITLE-U ! ;
+    S" DESK"  DESK-DESC APP.TITLE-U !
+              DESK-DESC APP.TITLE-A ! ;
+
+\ DESK-QUEUE-LAUNCH ( desc -- )
+\   Set the applet to auto-launch at desk startup.
+\   Must be called BEFORE DESK-RUN.
+: DESK-QUEUE-LAUNCH  ( desc -- )
+    _DESK-PENDING ! ;
 
 : DESK-RUN  ( -- )
     _DESK-FILL-DESC
