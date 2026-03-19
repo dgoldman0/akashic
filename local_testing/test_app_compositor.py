@@ -318,9 +318,9 @@ def nums(s):
 # ═══════════════════════════════════════════════════════════════════
 
 def test_uctx_total():
-    """_UCTX-TOTAL should be 99448."""
+    """UCTX-TOTAL should be 99448."""
     check("uctx-total", [
-        '_UCTX-TOTAL .',
+        'UCTX-TOTAL .',
     ], expected='99448')
 
 def test_slot_sz():

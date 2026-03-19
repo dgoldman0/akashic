@@ -50,11 +50,7 @@ REQUIRE ../../../liraq/uidl.f
 REQUIRE ../../../utils/binimg.f
 
 \ =====================================================================
-\  §1 — (UCTX system now lives in app-shell.f §1b)
-\ =====================================================================
-
-\ =====================================================================
-\  §2 — Slot Struct (linked list, heap-allocated)
+\  §1 — Slot Struct (linked list, heap-allocated)
 \ =====================================================================
 \
 \  Same struct as compositor.  Each slot is ALLOCATE'd and linked
@@ -98,7 +94,7 @@ REQUIRE ../../../utils/binimg.f
     _SL-STATE @ _ST-EMPTY <> ;
 
 \ =====================================================================
-\  §3 — DESK Global State
+\  §2 — DESK Global State
 \ =====================================================================
 \
 \  Simplified from compositor: no _COMP-RUNNING, _COMP-DIRTY,
@@ -122,8 +118,8 @@ VARIABLE _DESK-FULLFRAME  \ flag: full-frame mode active
 VARIABLE _DESK-LAST-MIN-SA  \ last minimized slot (for restore)
 0 _DESK-LAST-MIN-SA !
 
-\ Active UIDL context tracking now lives in the shell
-\ (_ASHELL-ACTIVE-CTX).  Desk delegates via ASHELL-CTX-SWITCH.
+\ Active UIDL context tracking lives in the shell.
+\ Desk delegates via ASHELL-CTX-SWITCH.
 
 \ Config TOML buffer (kept alive so zero-copy strings remain valid).
 VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
@@ -135,7 +131,7 @@ VARIABLE _DESK-PENDING
 0 _DESK-PENDING !
 
 \ =====================================================================
-\  §3b — Theme
+\  §2b — Theme
 \ =====================================================================
 \  14 colour slots used by the taskbar, dividers, hotbar, and clock.
 \  _DESK-THEME-DEFAULTS sets a dark-blue palette.  _DESK-LOAD-THEME
@@ -182,7 +178,7 @@ _DESK-THEME-DEFAULTS
          S" clock-bg"       _DTH-CLOCK-BG  _DTH-TRY ;
 
 \ =====================================================================
-\  §3c — Hotbar (Pinned App Entries)
+\  §2c — Hotbar (Pinned App Entries)
 \ =====================================================================
 \  Each entry: label string, file path, descriptor word name, slot-id.
 \  Strings are zero-copy pointers into the TOML buffer.
@@ -287,7 +283,7 @@ VARIABLE _DHBP-COL
     LOOP -1 ;
 
 \ =====================================================================
-\  §3d — Config Loader
+\  §2d — Config Loader
 \ =====================================================================
 
 : DESK-LOAD-CONFIG  ( addr len -- )
@@ -295,7 +291,7 @@ VARIABLE _DHBP-COL
     _DESK-LOAD-HOTBAR ;
 
 \ =====================================================================
-\  §4 — Linked-List Helpers
+\  §3 — Linked-List Helpers
 \ =====================================================================
 
 \ Count all live slots.
@@ -350,7 +346,7 @@ VARIABLE _DUL-PREV   VARIABLE _DUL-SA
     _SL-NEXT ! ;
 
 \ =====================================================================
-\  §5 — Visible Slot Collection Buffer
+\  §4 — Visible Slot Collection Buffer
 \ =====================================================================
 
 64 CONSTANT _DESK-MAX-VIS
@@ -371,7 +367,7 @@ VARIABLE _DESK-VIS-N
     REPEAT ;
 
 \ =====================================================================
-\  §6 — Dynamic Tiling Layout Engine
+\  §5 — Dynamic Tiling Layout Engine
 \ =====================================================================
 \
 \  Uses SCR-W and SCR-H at call time.
@@ -485,7 +481,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     DRW-STYLE-RESTORE ;
 
 \ =====================================================================
-\  §7 — UIDL Context Switching
+\  §6 — UIDL Context Switching
 \ =====================================================================
 
 : _DESK-CTX-SAVE  ( sa -- )
@@ -515,7 +511,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     ASHELL-DIRTY! ;
 
 \ =====================================================================
-\  §8 — App Launch & Close
+\  §7 — App Launch & Close
 \ =====================================================================
 \
 \  Key difference from compositor: no APP-INIT calls.  The shell
@@ -615,7 +611,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     DESK-RELAYOUT ;
 
 \ =====================================================================
-\  §9 — Focus, Minimize, Restore
+\  §8 — Focus, Minimize, Restore
 \ =====================================================================
 
 : DESK-FOCUS-ID  ( id -- )
@@ -672,7 +668,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     DESK-RELAYOUT ;
 
 \ =====================================================================
-\  §10 — Taskbar Painter
+\  §9 — Taskbar Painter
 \ =====================================================================
 
 CREATE _DESK-TB-BUF  256 ALLOT
@@ -750,7 +746,7 @@ VARIABLE _DTB-ROW
     DRW-STYLE-RESTORE ;
 
 \ =====================================================================
-\  §11 — APP-DESC Callbacks
+\  §10 — APP-DESC Callbacks
 \ =====================================================================
 \
 \  The DESK is a normal APP-DESC app.  The shell calls these
@@ -948,7 +944,7 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
     REPEAT ;
 
 \ =====================================================================
-\  §12 — DESK Descriptor & Entry Point
+\  §11 — DESK Descriptor & Entry Point
 \ =====================================================================
 
 CREATE DESK-DESC  APP-DESC ALLOT
@@ -978,7 +974,7 @@ CREATE DESK-DESC  APP-DESC ALLOT
     DESK-DESC ASHELL-RUN ;
 
 \ =====================================================================
-\  §13 — Guard (Concurrency Safety)
+\  §12 — Guard (Concurrency Safety)
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]

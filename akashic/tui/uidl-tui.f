@@ -229,7 +229,7 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
     R> _UTUI-SC-W@ ;
 
 \ =====================================================================
-\  §1c — Dynamic Sidecar Helpers
+\  §1b — Dynamic Sidecar Helpers
 \ =====================================================================
 
 \ _UTUI-SC-ALLOC ( elem -- )
@@ -280,7 +280,7 @@ DEFER _UTUI-MATERIALIZE-ONE
 DEFER _UTUI-DEMATERIALIZE-ONE
 
 \ =====================================================================
-\  §1b — Proxy Region (shared by all materialized widgets)
+\  §1c — Proxy Region (shared by all materialized widgets)
 \ =====================================================================
 \
 \  A single static region (40 bytes) synced from the current sidecar
@@ -296,7 +296,7 @@ CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
         _UTUI-SC-W@   _UTUI-PROXY-RGN _RGN-O-W   + ! ;
 
 \ =====================================================================
-\  §1c — UIDL ↔ Widget Callbacks
+\  §1d — UIDL ↔ Widget Callbacks
 \ =====================================================================
 \
 \  Tree walk callbacks — UIDL element tokens serve as tree node tokens.

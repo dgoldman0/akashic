@@ -62,17 +62,12 @@ REQUIRE app-desc.f
 REQUIRE ../utils/fs/drivers/vfs-mp64fs.f
 
 \ =====================================================================
-\  §1b — UIDL Context (UCTX) — now provided by uidl-tui.f §18b
+\  §1 — Context Switch & Child Painting  (browser API)
 \ =====================================================================
 \
-\  The UCTX serialisation tables, size constants, and UCTX-ALLOC /
-\  UCTX-FREE / UCTX-SAVE / UCTX-RESTORE / UCTX-CLEAR / UCTX-TOTAL
-\  are defined in uidl-tui.f (which owns the private variables they
-\  enumerate).  The shell uses only the public API.
-
-\ =====================================================================
-\  §1c — Context Switch & Child Painting  (browser API)
-\ =====================================================================
+\  UCTX-ALLOC / UCTX-FREE / UCTX-SAVE / UCTX-RESTORE / UCTX-CLEAR
+\  are defined in uidl-tui.f §18b (which owns the private variables
+\  they serialise).  The shell uses only the public API.
 
 VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
 0 _ASHELL-ACTIVE-CTX !

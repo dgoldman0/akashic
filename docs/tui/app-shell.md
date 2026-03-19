@@ -1,7 +1,7 @@
 # akashic/tui/app-shell.f — TUI Application Shell Runtime
 
 **Layer:** 7 (above term-init.f)  
-**Lines:** ~449  
+**Lines:** ~580  
 **Prefix:** `ASHELL-` (public), `_ASHELL-` (internal)  
 **Provider:** `akashic-tui-app-shell`  
 **Dependencies:** `app-desc.f`, [`cogs/term-init.f`](cogs/term-init.md), `keys.f`, `screen.f`, `region.f`, `draw.f`,
@@ -65,6 +65,16 @@ that field within the descriptor, suitable for `@` or `!`.
 |------|-------|-------------|
 | `ASHELL-RUN` | `( desc -- )` | Run app.  Blocks until quit or throw.  Always restores terminal. |
 | `ASHELL-QUIT` | `( -- )` | Signal the event loop to exit after the current iteration. Safe to call from any callback, including init. |
+| `ASHELL-QUIT-PENDING?` | `( -- flag )` | True if a sub-app has called `ASHELL-QUIT` but the host hasn't processed it yet. |
+| `ASHELL-CANCEL-QUIT` | `( -- )` | Cancel a pending quit (re-arm the event loop).  Used by desk to intercept sub-app quit. |
+
+### Context Switch & Child Painting
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `ASHELL-CTX-SWITCH` | `( uctx -- )` | Save the current UIDL context (if any), then restore `uctx`.  Pass 0 to deactivate without loading a new context.  No-op if `uctx` is already active. |
+| `ASHELL-CTX-SAVE` | `( uctx -- )` | Force-save the current globals into `uctx`.  Used when a sub-app event handler has mutated state and the caller wants to persist changes (no switch happens). |
+| `ASHELL-PAINT-CHILD` | `( uctx rgn has-uidl desc -- )` | Per-child paint primitive.  Context-switches to `uctx`, sets the region, calls `UTUI-PAINT` (if `has-uidl`), then calls the descriptor's `PAINT-XT` (if any). |
 
 ### State Queries
 
@@ -80,6 +90,12 @@ that field within the descriptor, suitable for `@` or `!`.
 |------|-------|-------------|
 | `ASHELL-DIRTY!` | `( -- )` | Request repaint next frame. |
 | `ASHELL-TICK-MS!` | `( ms -- )` | Set tick interval (default 50 ms). |
+
+### UIDL File Loading
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `ASHELL-LOAD-UIDL` | `( path-a path-u rgn -- buf \| 0 )` | Open a VFS file, parse as UIDL into `rgn`.  Returns heap buffer (caller must FREE) or 0. |
 
 ### Toast
 
@@ -228,6 +244,10 @@ wrapped with `WITH-GUARD` for thread safety:
 `ASHELL-RUN`, `ASHELL-QUIT`, `ASHELL-DIRTY!`, `ASHELL-REGION`,
 `ASHELL-TICK-MS!`, `ASHELL-POST`, `ASHELL-UIDL?`, `ASHELL-DESC`,
 `ASHELL-TOAST`, `ASHELL-TOAST-VISIBLE?`.
+
+`ASHELL-QUIT-PENDING?`, `ASHELL-CANCEL-QUIT`, and `ASHELL-LOAD-UIDL`
+are **not** guarded — they are lightweight accessors / helpers that
+do not touch shared mutable state.
 
 Currently `GUARDED` is not defined, so guards are inactive.
 

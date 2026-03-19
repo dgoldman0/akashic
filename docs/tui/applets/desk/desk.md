@@ -1,6 +1,6 @@
 # akashic/tui/applets/desk/desk.f — TUI Multi-App Desktop
 
-**Lines:** ~1131  
+**Lines:** ~1007  
 **Prefix:** `DESK-` (public), `_DESK-` / `_DTH-` / `_HB-` / `_DHBAR-` (internal)  
 **Provider:** `akashic-tui-desk`  
 **Location:** `akashic/tui/applets/desk/desk.f`  
@@ -59,7 +59,7 @@ only the focused app and hides dividers.
 
 ## Slot Structure
 
-Each sub-app occupies a heap-allocated 56-byte slot, linked in a singly
+Each sub-app occupies a heap-allocated 64-byte slot, linked in a singly
 linked list.  Slot IDs are monotonic (1, 2, 3, …).
 
 | Offset | Field | Description |
@@ -71,15 +71,17 @@ linked list.  Slot IDs are monotonic (1, 2, 3, …).
 | +32 | `HAS-UIDL` | Flag: app has UIDL? |
 | +40 | `NEXT` | → next slot in list (0 = tail) |
 | +48 | `ID` | Unique slot ID |
+| +56 | `UIDL-BUF` | Shell-loaded UIDL file buffer (0 = none) |
 
 ## ASHELL-QUIT Interception
 
-When a sub-app calls `ASHELL-QUIT` (sets `_ASHELL-RUNNING` to 0),
-`DESK-EVENT-CB` intercepts it:
+When a sub-app calls `ASHELL-QUIT`, `DESK-EVENT-CB` intercepts it
+via the public API:
 
-1. Re-sets `_ASHELL-RUNNING` to −1 (keeps shell alive)
-2. Calls `DESK-CLOSE-ID` for that sub-app's slot
-3. Returns −1 (consumed) to the shell
+1. Checks `ASHELL-QUIT-PENDING?` (returns true when quit is pending)
+2. Calls `ASHELL-CANCEL-QUIT` (re-arms the event loop)
+3. Calls `DESK-CLOSE-ID` for that sub-app's slot
+4. Returns −1 (consumed) to the shell
 
 This means sub-app quit closes a tile, not the whole desktop.
 
@@ -189,10 +191,11 @@ A sample config template is provided in
 |------|-------|-------------|
 | `DESK-LOAD-CONFIG` | `( addr len -- )` | Load TOML buffer — applies theme and hotbar. |
 
-### Entry Point
+### Startup
 
 | Word | Stack | Description |
 |------|-------|-------------|
+| `DESK-QUEUE-LAUNCH` | `( desc -- )` | Set a startup applet to launch automatically when the desktop initialises.  Call before `DESK-RUN`. |
 | `DESK-RUN` | `( -- )` | Fill `DESK-DESC`, call `ASHELL-RUN`.  Blocks until shell exits. |
 
 ## Keyboard Shortcuts
@@ -224,30 +227,34 @@ captures:
   sidecars (20 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay
   buffer (0.5 KiB).
 
+The UCTX system (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-SAVE`, `UCTX-RESTORE`,
+`UCTX-CLEAR`, `UCTX-TOTAL`) is defined in `uidl-tui.f` §18b, which owns
+the private variables being serialised.
+
 Context switch (`_DESK-CTX-SWITCH`) saves the current sub-app's globals
 via `CMOVE` and restores the target's.  Only one sub-app's context is
-live at a time.
+live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
+`ASHELL-CTX-SAVE` — it never calls `UCTX-SAVE`/`UCTX-RESTORE` directly.
 
 ## Internal Sections
 
 | § | Title | Description |
 |---|-------|-------------|
-| 1 | UIDL Context Save/Restore | `UCTX-*` words, variable/pool tables |
-| 2 | Slot Struct | 56-byte linked-list node, state enum |
-| 3 | DESK Global State | Head, focus, ID counter, layout prefs |
-| 3b | Theme | 14 colour slot variables, defaults, TOML loader |
-| 3c | Hotbar | Pinned-app entry array, TOML loader, painting |
-| 3d | Config Loader | `DESK-LOAD-CONFIG` master loader |
-| 4 | Linked-List Helpers | Find, unlink, append, count |
-| 5 | Visible Collection Buffer | Up to 64 visible slots |
-| 6 | Tiling Layout Engine | Grid, tile sizes, region assignment, dividers |
-| 7 | Context Switching | Save/restore/switch helpers |
-| 8 | Launch & Close | `DESK-LAUNCH`, `DESK-CLOSE-ID` |
-| 9 | Focus/Minimize/Restore | State transitions, auto-focus |
-| 10 | Taskbar Painter | Per-item styled painting + hotbar + divider |
-| 11 | APP-DESC Callbacks | Init, event, tick, paint, shutdown |
-| 12 | Descriptor & Entry | `DESK-DESC`, `_DESK-FILL-DESC`, `DESK-RUN` |
-| 13 | Guard | `WITH-GUARD` wrappers for concurrency safety |
+| 1 | Slot Struct | 64-byte linked-list node, state enum |
+| 2 | DESK Global State | Head, focus, ID counter, layout prefs |
+| 2b | Theme | 14 colour slot variables, defaults, TOML loader |
+| 2c | Hotbar | Pinned-app entry array, TOML loader, painting |
+| 2d | Config Loader | `DESK-LOAD-CONFIG` master loader |
+| 3 | Linked-List Helpers | Find, unlink, append, count |
+| 4 | Visible Collection Buffer | Up to 64 visible slots |
+| 5 | Tiling Layout Engine | Grid, tile sizes, region assignment, dividers |
+| 6 | Context Switching | Save/restore/switch helpers (delegates to shell) |
+| 7 | Launch & Close | `DESK-LAUNCH`, `DESK-CLOSE-ID` |
+| 8 | Focus/Minimize/Restore | State transitions, auto-focus |
+| 9 | Taskbar Painter | Per-item styled painting + hotbar + divider |
+| 10 | APP-DESC Callbacks | Init, event, tick, paint, shutdown |
+| 11 | Descriptor & Entry | `DESK-DESC`, `_DESK-FILL-DESC`, `DESK-RUN` |
+| 12 | Guard | `WITH-GUARD` wrappers for concurrency safety |
 
 ## Guard-Protected Words
 

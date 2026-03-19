@@ -1,7 +1,7 @@
 # akashic/tui/uidl-tui.f — UIDL TUI Backend
 
 **Layer:** 8  
-**Lines:** ~2660  
+**Lines:** ~2875  
 **Prefix:** `UTUI-` (public), `_UTUI-` (internal)  
 **Provider:** `akashic-tui-uidl-tui`  
 **Dependencies:** `uidl.f`, `uidl-chrome.f`, `state-tree.f`, `lel.f`,
@@ -58,7 +58,7 @@ REQUIRE tui/uidl-tui.f
 
 | Principle | Detail |
 |---|---|
-| **One sidecar per element** | Every UIDL element receives a 56-byte sidecar in a parallel array, indexed by pool position. |
+| **One sidecar per element** | Every UIDL element receives an 80-byte sidecar in a parallel array, indexed by pool position. |
 | **No DOM intermediary** | Unlike `dom-tui.f`, this backend reads UIDL elements directly — no N.AUX, no DOM node walk. |
 | **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree` and `tabs` allocate real widget state. |
 | **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget, input, textarea, manually attached widget) or mini state block (tabs active index). Zero means "no widget state". |
@@ -74,7 +74,7 @@ REQUIRE tui/uidl-tui.f
 
 ## Sidecar Layout
 
-Each sidecar is 56 bytes (7 cells), stored in the parallel array
+Each sidecar is 80 bytes (10 cells), stored in the parallel array
 `_UTUI-SIDECARS` (capacity: 256 elements).
 
 | Offset | Field | Type | Description |
@@ -83,9 +83,12 @@ Each sidecar is 56 bytes (7 cells), stored in the parallel array
 | +8 | `col` | u | Computed screen column |
 | +16 | `width` | u | Width in character cells |
 | +24 | `height` | u | Height in character cells |
-| +32 | `style` | packed | FG(8), BG(8), attrs(8) |
-| +40 | `flags` | bitfield | HAS / VIS / FOC |
+| +32 | `style` | packed | FG(8), BG(8), attrs(8), text-align(2), position(2), z-index(8) |
+| +40 | `flags` | bitfield | HAS / VIS / FOC / HIDE / overflow-clip |
 | +48 | `wptr` | address | Widget struct pointer or mini state block (0 = none) |
+| +56 | `padding` | packed | PT(8), PR(8), PB(8), PL(8) in bits 0-31 |
+| +64 | `offsets` | packed | top(16s), right(16s), bottom(16s), left(16s) |
+| +72 | `margin` | packed | MT(8), MR(8), MB(8), ML(8) in bits 0-31 |
 
 ### Sidecar Flag Bits
 
@@ -94,12 +97,13 @@ Each sidecar is 56 bytes (7 cells), stored in the parallel array
 | `_UTUI-SCF-HAS` | 1 | Sidecar allocated |
 | `_UTUI-SCF-VIS` | 2 | Visible |
 | `_UTUI-SCF-FOC` | 4 | Focused |
+| `_UTUI-SCF-HIDE` | 8 | display:none |
 
 ### Element → Sidecar Mapping
 
 ```forth
 _UTUI-SC-IDX   ( elem -- idx )   \ (elem - _UDL-ELEMS) / _UDL-ELEMSZ
-_UTUI-SIDECAR  ( elem -- sc )    \ idx * 56 + _UTUI-SIDECARS
+_UTUI-SIDECAR  ( elem -- sc )    \ idx * 80 + _UTUI-SIDECARS
 ```
 
 `_UTUI-ELEM-BASE` is set to `_UDL-ELEMS` during `UTUI-LOAD`.
@@ -842,6 +846,35 @@ events) pending future implementation.
 
 ---
 
+## UIDL Context (UCTX) System
+
+Defined in §18b of `uidl-tui.f`.  Provides per-app serialisation of
+the 15 global UIDL/UTUI variables and 10 pool arrays (~97 KiB per
+context).  This lives in `uidl-tui.f` because it must enumerate every
+private `_UDL-*` and `_UTUI-*` variable.
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `UCTX-ALLOC` | `( -- ctx \| 0 )` | Heap-allocate a context buffer.  Returns 0 on failure. |
+| `UCTX-FREE` | `( ctx -- )` | Free a context buffer. |
+| `UCTX-SAVE` | `( ctx -- )` | Copy all 15 globals + 10 pools into `ctx`. |
+| `UCTX-RESTORE` | `( ctx -- )` | Restore all 15 globals + 10 pools from `ctx`. |
+| `UCTX-CLEAR` | `( ctx -- )` | Zero-fill entire context buffer. |
+| `UCTX-TOTAL` | `( -- n )` | Total byte size of one context (~99,448). |
+
+Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`)
+and by `desk.f` (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-CLEAR`).
+
+---
+
+## Region Setter
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `UTUI-RGN!` | `( rgn -- )` | Set the root region for the current UIDL document.  Used by desk when reassigning tile regions. |
+
+---
+
 ## Guard Wrappers
 
 When `GUARDED` is defined, all public words are wrapped with a
@@ -851,9 +884,14 @@ single guard (`_utui-guard`) for thread-safe access:
 `UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, `UTUI-FOCUS`,
 `UTUI-FOCUS!`, `UTUI-FOCUS-NEXT`, `UTUI-FOCUS-PREV`,
 `UTUI-HIT-TEST`, `UTUI-BY-ID`, `UTUI-DETACH`, `UTUI-DO!`,
-`UTUI-SHOW`, `UTUI-HIDE`, `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`,
+`UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`,
 `UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`,
-`UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`.
+`UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`, `UTUI-WIDGET@`,
+`UTUI-INSTALL-XTS`.
+
+`UTUI-SHOW` and `UTUI-HIDE` are **not** guarded — they are thin
+wrappers that delegate to the guarded `UTUI-SHOW-DIALOG` and
+`UTUI-HIDE-DIALOG`.
 
 ---
 
@@ -866,6 +904,7 @@ UTUI-BIND-STATE        ( st -- )                     Bind state-tree for express
 UTUI-INSTALL-XTS       ( -- )                        Patch Element Registry with TUI adapters
 UTUI-PAINT             ( -- )                        Full repaint
 UTUI-RELAYOUT          ( -- )                        Recompute all geometry
+UTUI-RGN!             ( rgn -- )                     Set root region
 UTUI-DISPATCH-KEY      ( ev -- handled? )            Dispatch keyboard event
 UTUI-DISPATCH-MOUSE    ( row col btn -- handled? )   Dispatch mouse event
 UTUI-FOCUS             ( -- elem | 0 )               Get focused element
@@ -888,6 +927,12 @@ UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy w
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
+UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (~97 KiB)
+UCTX-FREE              ( ctx -- )                    Free context buffer
+UCTX-SAVE              ( ctx -- )                    Save globals + pools into ctx
+UCTX-RESTORE           ( ctx -- )                    Restore globals + pools from ctx
+UCTX-CLEAR             ( ctx -- )                    Zero-fill context buffer
+UCTX-TOTAL             ( -- n )                      Context buffer byte size (99448)
 ```
 
 ---
