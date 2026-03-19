@@ -355,6 +355,9 @@ VARIABLE _UTUI-NEEDS-PAINT \ global: any UIDL/widget change needs repaint
 0 _UTUI-FOCUS-P !
 0 _UTUI-NEEDS-PAINT !
 
+\ Public setter for the root region (used by desk to re-assign tiles)
+: UTUI-RGN!  ( rgn -- )  _UTUI-RGN ! ;
+
 \ Wire UIDL-DIRTY! hook so any element dirtying auto-signals repaint
 : _UTUI-DIRTY-HOOK  ( -- ) _UTUI-NEEDS-PAINT ON ;
 ' _UTUI-DIRTY-HOOK  _UDL-DIRTY-HOOK !
@@ -2670,6 +2673,149 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     0 _UTUI-FOCUS-P !
     0 _UTUI-DOC-LOADED !
     0 _UTUI-RGN ! ;
+
+\ =====================================================================
+\  §18b — UIDL Context Save / Restore  (UCTX)
+\ =====================================================================
+\
+\  Per sub-app UIDL context buffer holding 15 scalar variables and
+\  10 pool arrays.  Total ~99,448 bytes (~97 KiB).
+\
+\  This section lives in uidl-tui.f because it must enumerate every
+\  private _UDL-* and _UTUI-* variable and pool.  The shell (browser)
+\  calls only the public API: UCTX-ALLOC, UCTX-FREE, UCTX-SAVE,
+\  UCTX-RESTORE, UCTX-CLEAR, UCTX-TOTAL.
+
+15 CONSTANT _UCTX-NVAR
+120 CONSTANT _UCTX-VAR-SZ       \ 15 × 8
+
+\ Pool sizes (must match module declarations)
+32768 CONSTANT _UCTX-ELEMS-SZ   \ 256 × 128
+20480 CONSTANT _UCTX-ATTRS-SZ   \ 512 × 40
+12288 CONSTANT _UCTX-STRS-SZ
+ 2048 CONSTANT _UCTX-HASH-SZ    \ 256 × 8
+ 4096 CONSTANT _UCTX-HIDS-SZ    \ 256 × 16
+ 3072 CONSTANT _UCTX-SUBS-SZ    \ 128 × 24
+20480 CONSTANT _UCTX-SC-SZ      \ 256 × 80
+ 1536 CONSTANT _UCTX-ACTS-SZ    \ 64 × 24
+ 2048 CONSTANT _UCTX-SHORTS-SZ  \ 64 × 32
+  512 CONSTANT _UCTX-OVBUF-SZ   \ 32 × 16
+
+\ Offsets into context buffer
+_UCTX-VAR-SZ                                       CONSTANT _UCTX-O-ELEMS
+_UCTX-O-ELEMS  _UCTX-ELEMS-SZ  +                   CONSTANT _UCTX-O-ATTRS
+_UCTX-O-ATTRS  _UCTX-ATTRS-SZ  +                   CONSTANT _UCTX-O-STRS
+_UCTX-O-STRS   _UCTX-STRS-SZ   +                   CONSTANT _UCTX-O-HASH
+_UCTX-O-HASH   _UCTX-HASH-SZ   +                   CONSTANT _UCTX-O-HIDS
+_UCTX-O-HIDS   _UCTX-HIDS-SZ   +                   CONSTANT _UCTX-O-SUBS
+_UCTX-O-SUBS   _UCTX-SUBS-SZ   +                   CONSTANT _UCTX-O-SC
+_UCTX-O-SC     _UCTX-SC-SZ     +                   CONSTANT _UCTX-O-ACTS
+_UCTX-O-ACTS   _UCTX-ACTS-SZ   +                   CONSTANT _UCTX-O-SHORTS
+_UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
+_UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT UCTX-TOTAL
+
+\ --- Variable table: maps index → global VARIABLE address ---
+CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
+
+: _UCTX-INIT-VARS  ( -- )
+    _UDL-ECNT           _UCTX-VARS  0 CELLS + !
+    _UDL-ACNT           _UCTX-VARS  1 CELLS + !
+    _UDL-SPOS           _UCTX-VARS  2 CELLS + !
+    _UDL-ROOT           _UCTX-VARS  3 CELLS + !
+    _UDL-SUB-CNT        _UCTX-VARS  4 CELLS + !
+    _UTUI-ELEM-BASE     _UCTX-VARS  5 CELLS + !
+    _UTUI-DOC-LOADED    _UCTX-VARS  6 CELLS + !
+    _UTUI-STATE         _UCTX-VARS  7 CELLS + !
+    _UTUI-FOCUS-P       _UCTX-VARS  8 CELLS + !
+    _UTUI-ACT-CNT       _UCTX-VARS  9 CELLS + !
+    _UTUI-SHORT-CNT     _UCTX-VARS 10 CELLS + !
+    _UTUI-OVERLAY-CNT   _UCTX-VARS 11 CELLS + !
+    _UTUI-SAVED-FOCUS   _UCTX-VARS 12 CELLS + !
+    _UTUI-SKIP-CHILDREN _UCTX-VARS 13 CELLS + !
+    _UTUI-RGN           _UCTX-VARS 14 CELLS + ! ;
+_UCTX-INIT-VARS
+
+\ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
+10 CONSTANT _UCTX-NPOOL
+CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
+
+: _UCTX-INIT-POOLS  ( -- )
+    _UDL-ELEMS        _UCTX-POOLS   0 + !
+    _UCTX-O-ELEMS     _UCTX-POOLS   8 + !
+    _UCTX-ELEMS-SZ    _UCTX-POOLS  16 + !
+    _UDL-ATTRS        _UCTX-POOLS  24 + !
+    _UCTX-O-ATTRS     _UCTX-POOLS  32 + !
+    _UCTX-ATTRS-SZ    _UCTX-POOLS  40 + !
+    _UDL-STRS         _UCTX-POOLS  48 + !
+    _UCTX-O-STRS      _UCTX-POOLS  56 + !
+    _UCTX-STRS-SZ     _UCTX-POOLS  64 + !
+    _UDL-HASH         _UCTX-POOLS  72 + !
+    _UCTX-O-HASH      _UCTX-POOLS  80 + !
+    _UCTX-HASH-SZ     _UCTX-POOLS  88 + !
+    _UDL-HIDS         _UCTX-POOLS  96 + !
+    _UCTX-O-HIDS      _UCTX-POOLS 104 + !
+    _UCTX-HIDS-SZ     _UCTX-POOLS 112 + !
+    _UDL-SUBS         _UCTX-POOLS 120 + !
+    _UCTX-O-SUBS      _UCTX-POOLS 128 + !
+    _UCTX-SUBS-SZ     _UCTX-POOLS 136 + !
+    _UTUI-SIDECARS    _UCTX-POOLS 144 + !
+    _UCTX-O-SC        _UCTX-POOLS 152 + !
+    _UCTX-SC-SZ       _UCTX-POOLS 160 + !
+    _UTUI-ACTS        _UCTX-POOLS 168 + !
+    _UCTX-O-ACTS      _UCTX-POOLS 176 + !
+    _UCTX-ACTS-SZ     _UCTX-POOLS 184 + !
+    _UTUI-SHORTS      _UCTX-POOLS 192 + !
+    _UCTX-O-SHORTS    _UCTX-POOLS 200 + !
+    _UCTX-SHORTS-SZ   _UCTX-POOLS 208 + !
+    _UTUI-OVERLAY-BUF _UCTX-POOLS 216 + !
+    _UCTX-O-OVBUF     _UCTX-POOLS 224 + !
+    _UCTX-OVBUF-SZ    _UCTX-POOLS 232 + ! ;
+_UCTX-INIT-POOLS
+
+\ --- Public API ---
+
+: UCTX-ALLOC  ( -- ctx | 0 )
+    UCTX-TOTAL ALLOCATE IF DROP 0 THEN ;
+
+: UCTX-FREE  ( ctx -- )  FREE ;
+
+\ Pool copy helper variables
+VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
+
+: UCTX-SAVE  ( ctx -- )
+    DUP 0= IF DROP EXIT THEN
+    _UCTX-NVAR 0 DO
+        I CELLS _UCTX-VARS + @
+        @ OVER I CELLS + !
+    LOOP
+    _UCTX-NPOOL 0 DO
+        I 3 * CELLS _UCTX-POOLS +
+        DUP @       _UCP-SRC !
+        DUP 16 + @  _UCP-SZ  !
+        8 + @ OVER + _UCP-DST !
+        _UCP-SRC @ _UCP-DST @ _UCP-SZ @ CMOVE
+    LOOP
+    DROP ;
+
+: UCTX-RESTORE  ( ctx -- )
+    DUP 0= IF DROP EXIT THEN
+    _UCTX-NVAR 0 DO
+        DUP I CELLS + @
+        I CELLS _UCTX-VARS + @
+        !
+    LOOP
+    _UCTX-NPOOL 0 DO
+        I 3 * CELLS _UCTX-POOLS +
+        DUP @       _UCP-DST !
+        DUP 16 + @  _UCP-SZ  !
+        8 + @ OVER + _UCP-SRC !
+        _UCP-SRC @ _UCP-DST @ _UCP-SZ @ CMOVE
+    LOOP
+    DROP ;
+
+: UCTX-CLEAR  ( ctx -- )
+    DUP 0= IF DROP EXIT THEN
+    UCTX-TOTAL 0 FILL ;
 
 \ =====================================================================
 \  §19 — Guard Section

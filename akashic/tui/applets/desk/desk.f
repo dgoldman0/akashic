@@ -507,7 +507,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
         I CELLS _DESK-VIS-BUF + @          ( sa )
         DUP _SL-HAS-UIDL @ IF
             DUP _DESK-CTX-SWITCH
-            DUP _SL-RGN @ _UTUI-RGN !
+            DUP _SL-RGN @ UTUI-RGN!
             UTUI-RELAYOUT
         THEN
         DROP
@@ -521,33 +521,6 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 \  Key difference from compositor: no APP-INIT calls.  The shell
 \  owns the terminal.  Sub-app INIT-XT is called, but terminal
 \  setup is not the sub-app's job.
-
-\ _DESK-LOAD-UIDL-FILE ( path-a path-u rgn -- buf|0 )
-\   Open a VFS file, read its contents into a heap buffer, then
-\   feed the content to UTUI-LOAD.  Returns the heap buffer address
-\   (caller must FREE) or 0 on failure.
-8192 CONSTANT _DESK-UIDL-FILE-MAX
-
-VARIABLE _DLUF-RGN
-VARIABLE _DLUF-FD
-VARIABLE _DLUF-BUF
-
-: _DESK-LOAD-UIDL-FILE  ( path-a path-u rgn -- buf|0 )
-    _DLUF-RGN !
-    VFS-OPEN                          ( fd|0 )
-    DUP 0= IF EXIT THEN
-    _DLUF-FD !
-    _DESK-UIDL-FILE-MAX ALLOCATE IF
-        _DLUF-FD @ VFS-CLOSE  0 EXIT
-    THEN
-    _DLUF-BUF !
-    \ Read file into buffer
-    _DLUF-BUF @  _DESK-UIDL-FILE-MAX  _DLUF-FD @ VFS-READ  ( actual )
-    _DLUF-FD @ VFS-CLOSE
-    \ Feed to UTUI-LOAD
-    _DLUF-BUF @ SWAP  _DLUF-RGN @    ( buf-a actual rgn )
-    UTUI-LOAD DROP
-    _DLUF-BUF @ ;
 
 : DESK-LAUNCH  ( desc -- id )
     _SLOT-SZ ALLOCATE IF DROP -1 EXIT THEN
@@ -583,11 +556,11 @@ VARIABLE _DLUF-BUF
             R@ _SL-RGN @
             UTUI-LOAD DROP
         ELSE DUP APP.UIDL-FILE-A @ IF
-            \ --- file-based UIDL (loaded by desk) ---
+            \ --- file-based UIDL (loaded via shared loader) ---
             DUP APP.UIDL-FILE-A @
             OVER APP.UIDL-FILE-U @  ( desc path-a path-u )
             R@ _SL-RGN @           ( desc path-a path-u rgn )
-            _DESK-LOAD-UIDL-FILE   ( desc buf|0 )
+            ASHELL-LOAD-UIDL       ( desc buf|0 )
             R@ _SL-UIDL-BUF !
         THEN THEN
     THEN
@@ -885,8 +858,9 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
 \ --- Event ---
 \
 \  Routes events to the focused sub-app.  If the sub-app calls
-\  ASHELL-QUIT, we intercept it: re-set _ASHELL-RUNNING to -1
-\  and close that tile instead of shutting down the whole shell.
+\  ASHELL-QUIT, we intercept it via ASHELL-QUIT-PENDING? /
+\  ASHELL-CANCEL-QUIT, and close that tile instead of shutting
+\  down the whole shell.
 : DESK-EVENT-CB  ( ev -- flag )
     \ 1. Route to focused sub-app
     _DESK-FOCUS-SA @ ?DUP IF
@@ -903,8 +877,8 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
             APP.EVENT-XT @ ?DUP IF
                 2 PICK SWAP EXECUTE       ( ev consumed? )
                 \ Intercept sub-app ASHELL-QUIT
-                _ASHELL-RUNNING @ 0= IF
-                    -1 _ASHELL-RUNNING !
+                ASHELL-QUIT-PENDING? IF
+                    ASHELL-CANCEL-QUIT
                     R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
                     R@ _SL-ID @ DESK-CLOSE-ID
                     R> DROP

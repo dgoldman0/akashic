@@ -62,147 +62,13 @@ REQUIRE app-desc.f
 REQUIRE ../utils/fs/drivers/vfs-mp64fs.f
 
 \ =====================================================================
-\  §1b — UIDL Context Save / Restore  (browser-owned)
+\  §1b — UIDL Context (UCTX) — now provided by uidl-tui.f §18b
 \ =====================================================================
 \
-\  Per sub-app UIDL context buffer holding 15 scalar variables and
-\  10 pool arrays.  Total ~99,448 bytes (~97 KiB).
-\
-\  The shell (browser) owns context management because it orchestrates
-\  painting and event dispatch across multiple sub-apps.  Desk and
-\  other multi-app hosts call ASHELL-CTX-SWITCH; they never touch
-\  UCTX-SAVE / UCTX-RESTORE directly.
-
-15 CONSTANT _UCTX-NVAR
-120 CONSTANT _UCTX-VAR-SZ       \ 15 × 8
-
-\ Pool sizes (must match module declarations)
-32768 CONSTANT _UCTX-ELEMS-SZ   \ 256 × 128
-20480 CONSTANT _UCTX-ATTRS-SZ   \ 512 × 40
-12288 CONSTANT _UCTX-STRS-SZ
- 2048 CONSTANT _UCTX-HASH-SZ    \ 256 × 8
- 4096 CONSTANT _UCTX-HIDS-SZ    \ 256 × 16
- 3072 CONSTANT _UCTX-SUBS-SZ    \ 128 × 24
-20480 CONSTANT _UCTX-SC-SZ      \ 256 × 80
- 1536 CONSTANT _UCTX-ACTS-SZ    \ 64 × 24
- 2048 CONSTANT _UCTX-SHORTS-SZ  \ 64 × 32
-  512 CONSTANT _UCTX-OVBUF-SZ   \ 32 × 16
-
-\ Offsets into context buffer
-_UCTX-VAR-SZ                                       CONSTANT _UCTX-O-ELEMS
-_UCTX-O-ELEMS  _UCTX-ELEMS-SZ  +                   CONSTANT _UCTX-O-ATTRS
-_UCTX-O-ATTRS  _UCTX-ATTRS-SZ  +                   CONSTANT _UCTX-O-STRS
-_UCTX-O-STRS   _UCTX-STRS-SZ   +                   CONSTANT _UCTX-O-HASH
-_UCTX-O-HASH   _UCTX-HASH-SZ   +                   CONSTANT _UCTX-O-HIDS
-_UCTX-O-HIDS   _UCTX-HIDS-SZ   +                   CONSTANT _UCTX-O-SUBS
-_UCTX-O-SUBS   _UCTX-SUBS-SZ   +                   CONSTANT _UCTX-O-SC
-_UCTX-O-SC     _UCTX-SC-SZ     +                   CONSTANT _UCTX-O-ACTS
-_UCTX-O-ACTS   _UCTX-ACTS-SZ   +                   CONSTANT _UCTX-O-SHORTS
-_UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
-_UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT _UCTX-TOTAL
-
-\ --- Variable table: maps index → global VARIABLE address ---
-CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
-
-: _UCTX-INIT-VARS  ( -- )
-    _UDL-ECNT           _UCTX-VARS  0 CELLS + !
-    _UDL-ACNT           _UCTX-VARS  1 CELLS + !
-    _UDL-SPOS           _UCTX-VARS  2 CELLS + !
-    _UDL-ROOT           _UCTX-VARS  3 CELLS + !
-    _UDL-SUB-CNT        _UCTX-VARS  4 CELLS + !
-    _UTUI-ELEM-BASE     _UCTX-VARS  5 CELLS + !
-    _UTUI-DOC-LOADED    _UCTX-VARS  6 CELLS + !
-    _UTUI-STATE         _UCTX-VARS  7 CELLS + !
-    _UTUI-FOCUS-P       _UCTX-VARS  8 CELLS + !
-    _UTUI-ACT-CNT       _UCTX-VARS  9 CELLS + !
-    _UTUI-SHORT-CNT     _UCTX-VARS 10 CELLS + !
-    _UTUI-OVERLAY-CNT   _UCTX-VARS 11 CELLS + !
-    _UTUI-SAVED-FOCUS   _UCTX-VARS 12 CELLS + !
-    _UTUI-SKIP-CHILDREN _UCTX-VARS 13 CELLS + !
-    _UTUI-RGN           _UCTX-VARS 14 CELLS + ! ;
-_UCTX-INIT-VARS
-
-\ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
-10 CONSTANT _UCTX-NPOOL
-CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
-
-: _UCTX-INIT-POOLS  ( -- )
-    _UDL-ELEMS        _UCTX-POOLS   0 + !
-    _UCTX-O-ELEMS     _UCTX-POOLS   8 + !
-    _UCTX-ELEMS-SZ    _UCTX-POOLS  16 + !
-    _UDL-ATTRS        _UCTX-POOLS  24 + !
-    _UCTX-O-ATTRS     _UCTX-POOLS  32 + !
-    _UCTX-ATTRS-SZ    _UCTX-POOLS  40 + !
-    _UDL-STRS         _UCTX-POOLS  48 + !
-    _UCTX-O-STRS      _UCTX-POOLS  56 + !
-    _UCTX-STRS-SZ     _UCTX-POOLS  64 + !
-    _UDL-HASH         _UCTX-POOLS  72 + !
-    _UCTX-O-HASH      _UCTX-POOLS  80 + !
-    _UCTX-HASH-SZ     _UCTX-POOLS  88 + !
-    _UDL-HIDS         _UCTX-POOLS  96 + !
-    _UCTX-O-HIDS      _UCTX-POOLS 104 + !
-    _UCTX-HIDS-SZ     _UCTX-POOLS 112 + !
-    _UDL-SUBS         _UCTX-POOLS 120 + !
-    _UCTX-O-SUBS      _UCTX-POOLS 128 + !
-    _UCTX-SUBS-SZ     _UCTX-POOLS 136 + !
-    _UTUI-SIDECARS    _UCTX-POOLS 144 + !
-    _UCTX-O-SC        _UCTX-POOLS 152 + !
-    _UCTX-SC-SZ       _UCTX-POOLS 160 + !
-    _UTUI-ACTS        _UCTX-POOLS 168 + !
-    _UCTX-O-ACTS      _UCTX-POOLS 176 + !
-    _UCTX-ACTS-SZ     _UCTX-POOLS 184 + !
-    _UTUI-SHORTS      _UCTX-POOLS 192 + !
-    _UCTX-O-SHORTS    _UCTX-POOLS 200 + !
-    _UCTX-SHORTS-SZ   _UCTX-POOLS 208 + !
-    _UTUI-OVERLAY-BUF _UCTX-POOLS 216 + !
-    _UCTX-O-OVBUF     _UCTX-POOLS 224 + !
-    _UCTX-OVBUF-SZ    _UCTX-POOLS 232 + ! ;
-_UCTX-INIT-POOLS
-
-\ --- UCTX-ALLOC / FREE / SAVE / RESTORE / CLEAR ---
-
-: UCTX-ALLOC  ( -- ctx | 0 )
-    _UCTX-TOTAL ALLOCATE IF DROP 0 THEN ;
-
-: UCTX-FREE  ( ctx -- )  FREE ;
-
-\ Pool copy helper variables
-VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
-
-: UCTX-SAVE  ( ctx -- )
-    DUP 0= IF DROP EXIT THEN
-    _UCTX-NVAR 0 DO
-        I CELLS _UCTX-VARS + @
-        @ OVER I CELLS + !
-    LOOP
-    _UCTX-NPOOL 0 DO
-        I 3 * CELLS _UCTX-POOLS +
-        DUP @       _UCP-SRC !
-        DUP 16 + @  _UCP-SZ  !
-        8 + @ OVER + _UCP-DST !
-        _UCP-SRC @ _UCP-DST @ _UCP-SZ @ CMOVE
-    LOOP
-    DROP ;
-
-: UCTX-RESTORE  ( ctx -- )
-    DUP 0= IF DROP EXIT THEN
-    _UCTX-NVAR 0 DO
-        DUP I CELLS + @
-        I CELLS _UCTX-VARS + @
-        !
-    LOOP
-    _UCTX-NPOOL 0 DO
-        I 3 * CELLS _UCTX-POOLS +
-        DUP @       _UCP-DST !
-        DUP 16 + @  _UCP-SZ  !
-        8 + @ OVER + _UCP-SRC !
-        _UCP-SRC @ _UCP-DST @ _UCP-SZ @ CMOVE
-    LOOP
-    DROP ;
-
-: UCTX-CLEAR  ( ctx -- )
-    DUP 0= IF DROP EXIT THEN
-    _UCTX-TOTAL 0 FILL ;
+\  The UCTX serialisation tables, size constants, and UCTX-ALLOC /
+\  UCTX-FREE / UCTX-SAVE / UCTX-RESTORE / UCTX-CLEAR / UCTX-TOTAL
+\  are defined in uidl-tui.f (which owns the private variables they
+\  enumerate).  The shell uses only the public API.
 
 \ =====================================================================
 \  §1c — Context Switch & Child Painting  (browser API)
@@ -263,9 +129,6 @@ VARIABLE _ASHELL-HAS-UIDL     \ UIDL document loaded flag
 VARIABLE _ASHELL-UIDL-BUF     \ Shell-loaded UIDL file buffer (0 = not ours)
 0 _ASHELL-UIDL-BUF !
 
-VARIABLE _ASHELL-UIDL-BUF-LEN \ Byte count read from UIDL file
-0 _ASHELL-UIDL-BUF-LEN !
-
 VARIABLE _ASHELL-TICK-MS      \ Tick interval in milliseconds
 50 _ASHELL-TICK-MS !
 
@@ -323,6 +186,18 @@ VARIABLE _ASHELL-POST-TAIL
 : ASHELL-QUIT  ( -- )
     0 _ASHELL-RUNNING ! ;
 
+\ ASHELL-QUIT-PENDING? ( -- flag )
+\   True if a sub-app has called ASHELL-QUIT but the host hasn't
+\   processed it yet.
+: ASHELL-QUIT-PENDING?  ( -- flag )
+    _ASHELL-RUNNING @ 0= ;
+
+\ ASHELL-CANCEL-QUIT ( -- )
+\   Cancel a pending quit (re-arm the event loop).  Used by desk
+\   to intercept sub-app ASHELL-QUIT and close only that slot.
+: ASHELL-CANCEL-QUIT  ( -- )
+    -1 _ASHELL-RUNNING ! ;
+
 \ ASHELL-DIRTY! ( -- )
 \   Mark the screen as needing repaint.
 : ASHELL-DIRTY!  ( -- )
@@ -332,6 +207,33 @@ VARIABLE _ASHELL-POST-TAIL
 \   The root region that covers the full screen.
 : ASHELL-REGION  ( -- rgn )
     _ASHELL-RGN @ ;
+
+\ ASHELL-LOAD-UIDL ( path-a path-u rgn -- buf | 0 )
+\   Open a VFS file, read its contents into a heap buffer, then
+\   feed the content to UTUI-LOAD.  Returns the heap buffer address
+\   (caller must FREE) or 0 on failure.
+8192 CONSTANT _ASHELL-UIDL-FILE-MAX
+
+VARIABLE _ALUF-RGN
+VARIABLE _ALUF-FD
+VARIABLE _ALUF-BUF
+
+: ASHELL-LOAD-UIDL  ( path-a path-u rgn -- buf | 0 )
+    _ALUF-RGN !
+    VFS-OPEN                          ( fd | 0 )
+    DUP 0= IF EXIT THEN
+    _ALUF-FD !
+    _ASHELL-UIDL-FILE-MAX ALLOCATE IF
+        _ALUF-FD @ VFS-CLOSE  0 EXIT
+    THEN
+    _ALUF-BUF !
+    \ Read file into buffer
+    _ALUF-BUF @  _ASHELL-UIDL-FILE-MAX  _ALUF-FD @ VFS-READ  ( actual )
+    _ALUF-FD @ VFS-CLOSE
+    \ Feed to UTUI-LOAD
+    _ALUF-BUF @ SWAP  _ALUF-RGN @    ( buf-a actual rgn )
+    UTUI-LOAD DROP
+    _ALUF-BUF @ ;
 
 \ ASHELL-TICK-MS! ( ms -- )
 \   Set the tick callback interval.
@@ -522,30 +424,12 @@ VARIABLE _ASHELL-TICK-TMP
 _ASHELL-VFS-INIT
 
 \ _ASHELL-LOAD-UIDL-FILE ( path-a path-u -- flag )
-\   Open a VFS file, read its contents into a heap buffer, then
-\   feed the content to UTUI-LOAD using the current root region.
-\   Stores the buffer in _ASHELL-UIDL-BUF so _ASHELL-TEARDOWN
-\   can FREE it.  Returns -1 on success, 0 on failure.
-8192 CONSTANT _ASHELL-UIDL-FILE-MAX
-
+\   Thin wrapper around ASHELL-LOAD-UIDL that uses the shell's root
+\   region and stashes the buffer for _ASHELL-TEARDOWN to FREE.
 : _ASHELL-LOAD-UIDL-FILE  ( path-a path-u -- flag )
-    VFS-OPEN                          ( fd | 0 )
-    DUP 0= IF EXIT THEN              ( fd )  \ not found → 0
-    >R
-    \ Allocate heap buffer
-    _ASHELL-UIDL-FILE-MAX ALLOCATE IF
-        R> VFS-CLOSE  0 EXIT         \ alloc failed → 0
-    THEN                              ( buf  R: fd )
+    _ASHELL-RGN @ ASHELL-LOAD-UIDL    ( buf | 0 )
     DUP _ASHELL-UIDL-BUF !
-    \ Read file content
-    _ASHELL-UIDL-FILE-MAX R@ VFS-READ ( actual )
-    DUP _ASHELL-UIDL-BUF-LEN !
-    R> VFS-CLOSE                      ( actual )
-    \ Feed to UTUI-LOAD
-    _ASHELL-UIDL-BUF @  SWAP         ( buf-a actual )
-    _ASHELL-RGN @                     ( buf-a actual rgn )
-    UTUI-LOAD                         ( flag )
-    IF -1 ELSE 0 THEN ;
+    0<> ;
 
 : _ASHELL-SETUP  ( desc -- )
     DUP _ASHELL-DESC !
@@ -606,7 +490,6 @@ _ASHELL-VFS-INIT
     _ASHELL-UIDL-BUF @ ?DUP IF
         FREE DROP
         0 _ASHELL-UIDL-BUF !
-        0 _ASHELL-UIDL-BUF-LEN !
     THEN
     \ Free region
     _ASHELL-RGN @ ?DUP IF
