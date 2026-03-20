@@ -672,6 +672,52 @@ def test_tile_hit_test():
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  §12 — Menubar Layout
+# ═══════════════════════════════════════════════════════════════════
+
+def test_menubar_layout():
+    """_UTUI-LAYOUT-MBAR should assign sidecar coords to menu children."""
+    print("\n── §12: Menubar Layout ──")
+
+    # Launch a sub-app whose inline UIDL contains a menubar with
+    # two menus.  The sub-app init callback reads sidecar coordinates
+    # while the context is still live.
+    check("mbar-child-coords", [
+        'VARIABLE _ML-W1  VARIABLE _ML-W2',
+        'VARIABLE _ML-C1  VARIABLE _ML-C2',
+        'VARIABLE _ML-H1',
+        # Sub-app descriptor with inline UIDL
+        'CREATE _ML-SUB APP-DESC ALLOT  _ML-SUB APP-DESC-INIT',
+        'S" TST" _ML-SUB APP.TITLE-U !  _ML-SUB APP.TITLE-A !',
+        ': _ML-UIDL S" <uidl><menubar><menu label=File></menu>'
+        '<menu label=Edit></menu></menubar></uidl>" ;',
+        '_ML-UIDL NIP _ML-SUB APP.UIDL-U !',
+        '_ML-UIDL DROP _ML-SUB APP.UIDL-A !',
+        # Sub-app init: read sidecar coords while UIDL context is live
+        ': _ML-SUBINIT',
+        '    UIDL-ROOT UIDL-FIRST-CHILD',    # → menubar
+        '    UIDL-FIRST-CHILD',               # → File menu
+        '    DUP _UTUI-SIDECAR',
+        '    DUP _UTUI-SC-COL@ _ML-C1 !',
+        '    DUP _UTUI-SC-W@   _ML-W1 !',
+        '    _UTUI-SC-H@       _ML-H1 !',
+        '    UIDL-NEXT-SIB',                  # → Edit menu
+        '    _UTUI-SIDECAR',
+        '    DUP _UTUI-SC-COL@ _ML-C2 !',
+        '    _UTUI-SC-W@       _ML-W2 ! ;',
+        "' _ML-SUBINIT _ML-SUB APP.INIT-XT !",
+        # Desk init: launch the sub-app then quit
+        ': _ML-INIT _ML-SUB DESK-LAUNCH DROP ASHELL-QUIT ;',
+        '_DESK-FILL-DESC',
+        "' _ML-INIT DESK-DESC APP.INIT-XT !",
+        'DESK-DESC ASHELL-RUN',
+        # File: col=1, w=6 ("File"=4 + 2 gap), h=1
+        # Edit: col=7, w=6 ("Edit"=4 + 2 gap)
+        '_ML-C1 @ .  _ML-W1 @ .  _ML-H1 @ .  _ML-C2 @ .  _ML-W2 @ .',
+    ], expected='1 6 1 7 6', max_steps=80_000_000)
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Runner
 # ═══════════════════════════════════════════════════════════════════
 
@@ -693,6 +739,7 @@ def main():
         test_hotbar_slot_tracking,
         test_config_auto_load,
         test_tile_hit_test,
+        test_menubar_layout,
     ]
 
     for test in tests:

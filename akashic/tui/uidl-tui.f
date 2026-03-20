@@ -1106,8 +1106,34 @@ VARIABLE _UL-CW   \ child width for flex
     REPEAT
     DROP ;
 
-\ --- Menubar layout ---
-: _UTUI-LAYOUT-MBAR  ( elem -- ) DROP ;
+\ --- Menubar layout: assign sidecar coords matching the renderer ---
+\ Each <menu> child occupies 1 row, its width = label-length + 2
+\ (matching the 2-char gap the renderer advances by).
+: _UTUI-LAYOUT-MBAR  ( elem -- )
+    _UL-ELEM !
+    _UL-ELEM @ _UTUI-SIDECAR _UL-SC !
+    _UL-SC @ _UTUI-SC-ROW@ _UL-ROW !
+    _UL-SC @ _UTUI-SC-COL@ _UL-COL !
+    _UL-COL @ 1+ _UL-POS !            \ column cursor (matches renderer)
+    _UL-ELEM @ UIDL-FIRST-CHILD       ( child | 0 )
+    BEGIN DUP 0<> WHILE
+        DUP _UTUI-SIDECAR             ( child csc )
+        OVER S" label" UIDL-ATTR IF   ( child csc la ll )
+            NIP _UL-CW !              ( child csc )
+            _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+            _UL-ROW @ OVER _UTUI-SC-ROW!
+            _UL-POS @ OVER _UTUI-SC-COL!
+            _UL-CW @ 2 + OVER _UTUI-SC-W!
+            1 OVER _UTUI-SC-H!
+            _UL-CW @ 2 + _UL-POS +!
+            DROP                       ( child )
+        ELSE                           ( child csc )
+            _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+            DROP                       ( child )
+        THEN
+        UIDL-NEXT-SIB
+    REPEAT
+    DROP ;
 
 \ --- Status / toolbar: lay out children horizontally ---
 : _UTUI-LAYOUT-STATUS  ( elem -- ) _UTUI-LAYOUT-FLEX ;
