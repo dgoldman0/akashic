@@ -42,6 +42,7 @@ _DEP_PATHS = [
     os.path.join(AK, "tui",         "ansi.f"),
     os.path.join(AK, "tui",         "screen.f"),
     os.path.join(AK, "tui",         "draw.f"),
+    os.path.join(AK, "tui",         "tui-sidecar.f"),
     os.path.join(AK, "tui",         "box.f"),
     os.path.join(AK, "tui",         "region.f"),
     os.path.join(AK, "tui",         "layout.f"),

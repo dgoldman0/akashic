@@ -20,52 +20,43 @@ REQUIRE ../dom/html5.f
 REQUIRE ../css/css.f
 REQUIRE ../css/bridge.f
 REQUIRE ../utils/string.f
-REQUIRE cell.f
+REQUIRE tui-sidecar.f
 REQUIRE region.f
 REQUIRE color.f
 
 \ =====================================================================
-\  §1 — Constants
+\  §1 — Constants (delegated to tui-sidecar.f)
 \ =====================================================================
 
-\ Sidecar descriptor size (9 cells = 72 bytes)
-72 CONSTANT DTUI-SC-SIZE
+\ Sidecar record uses the shared TSC layout (96 bytes = 12 cells).
+\ See tui-sidecar.f for the full field map.
+TSC-SIZE CONSTANT DTUI-SC-SIZE
 
-\ --- Sidecar field offsets ---
-\  +0   node           back-pointer to DOM node
-\  +8   flags          see DTUI-F-* below
-\ +16   row            computed row in screen coordinates
-\ +24   col            computed column in screen coordinates
-\ +32   width          computed width (character cells)
-\ +40   height         computed height (character cells)
-\ +48   style          packed: fg(8) bg(8) attrs(16) border-idx(8)
-\ +56   draw-xt        custom draw hook ( node sc rgn -- ), 0 = default
-\ +64   userdata       app-defined payload (widget ptr, etc.)
+\ --- DOM-specific field offset aliases ---
+\ Common fields map directly to TSC-O-* offsets.
+\ DOM-only fields use the AUX slots:
+\   node    → AUX1 (+48)
+\   draw-xt → AUX2 (+56)
+\   userdata→ AUX3 (+64)
+TSC-O-AUX1  CONSTANT _SC-NODE
+TSC-O-FLAGS CONSTANT _SC-FLAGS
+TSC-O-ROW   CONSTANT _SC-ROW
+TSC-O-COL   CONSTANT _SC-COL
+TSC-O-W     CONSTANT _SC-W
+TSC-O-H     CONSTANT _SC-H
+TSC-O-STYLE CONSTANT _SC-STYLE
+TSC-O-AUX2  CONSTANT _SC-DRAW
+TSC-O-AUX3  CONSTANT _SC-UDATA
 
- 0 CONSTANT _SC-NODE
- 8 CONSTANT _SC-FLAGS
-16 CONSTANT _SC-ROW
-24 CONSTANT _SC-COL
-32 CONSTANT _SC-W
-40 CONSTANT _SC-H
-48 CONSTANT _SC-STYLE
-56 CONSTANT _SC-DRAW
-64 CONSTANT _SC-UDATA
+\ --- Sidecar flag aliases (from tui-sidecar.f) ---
+TSC-F-DIRTY      CONSTANT DTUI-F-DIRTY
+TSC-F-VISIBLE    CONSTANT DTUI-F-VISIBLE
+TSC-F-BLOCK      CONSTANT DTUI-F-BLOCK
+TSC-F-HIDDEN     CONSTANT DTUI-F-HIDDEN
+TSC-F-FOCUSABLE  CONSTANT DTUI-F-FOCUSABLE
+TSC-F-GEOM-DIRTY CONSTANT DTUI-F-GEOM-DIRTY
 
-\ --- Sidecar flag bits ---
-1  CONSTANT DTUI-F-DIRTY       \ needs repaint
-2  CONSTANT DTUI-F-VISIBLE     \ visible (not display:none)
-4  CONSTANT DTUI-F-BLOCK       \ display: block (else inline)
-8  CONSTANT DTUI-F-HIDDEN      \ visibility: hidden (space reserved, no paint)
-16 CONSTANT DTUI-F-FOCUSABLE   \ can receive focus
-32 CONSTANT DTUI-F-GEOM-DIRTY  \ layout geometry changed, needs relayout
-
-\ --- Style packing ---
-\ bits  0-7:  fg color index  (0-255)
-\ bits  8-15: bg color index  (0-255)
-\ bits 16-31: CELL-A-* attribute flags
-\ bits 32-39: border style index (0=none,1=single,2=double,3=rounded,4=heavy)
-
+\ --- Border index constants (unchanged) ---
 0 CONSTANT DTUI-BORDER-NONE
 1 CONSTANT DTUI-BORDER-SINGLE
 2 CONSTANT DTUI-BORDER-DOUBLE
@@ -77,54 +68,51 @@ REQUIRE color.f
 0  CONSTANT _DTUI-DEFAULT-BG    \ black
 
 \ =====================================================================
-\  §2 — Sidecar Field Accessors
+\  §2 — Sidecar Field Accessors (thin wrappers on TSC-*)
 \ =====================================================================
 
-: DTUI-SC-NODE   ( sc -- node )    _SC-NODE  + @ ;
-: DTUI-SC-FLAGS  ( sc -- flags )   _SC-FLAGS + @ ;
-: DTUI-SC-ROW    ( sc -- row )     _SC-ROW   + @ ;
-: DTUI-SC-COL    ( sc -- col )     _SC-COL   + @ ;
-: DTUI-SC-W      ( sc -- w )       _SC-W     + @ ;
-: DTUI-SC-H      ( sc -- h )       _SC-H     + @ ;
-: DTUI-SC-STYLE  ( sc -- packed )  _SC-STYLE + @ ;
-: DTUI-SC-DRAW   ( sc -- xt|0 )   _SC-DRAW  + @ ;
-: DTUI-SC-UDATA  ( sc -- udata )   _SC-UDATA + @ ;
+: DTUI-SC-NODE   ( sc -- node )    TSC-AUX1@ ;
+: DTUI-SC-FLAGS  ( sc -- flags )   TSC-FLAGS@ ;
+: DTUI-SC-ROW    ( sc -- row )     TSC-ROW@ ;
+: DTUI-SC-COL    ( sc -- col )     TSC-COL@ ;
+: DTUI-SC-W      ( sc -- w )       TSC-W@ ;
+: DTUI-SC-H      ( sc -- h )       TSC-H@ ;
+: DTUI-SC-STYLE  ( sc -- packed )  TSC-STYLE@ ;
+: DTUI-SC-DRAW   ( sc -- xt|0 )   TSC-AUX2@ ;
+: DTUI-SC-UDATA  ( sc -- udata )   TSC-AUX3@ ;
 
-: DTUI-SC-FLAGS! ( fl sc -- )      _SC-FLAGS + ! ;
-: DTUI-SC-ROW!   ( r sc -- )       _SC-ROW   + ! ;
-: DTUI-SC-COL!   ( c sc -- )       _SC-COL   + ! ;
-: DTUI-SC-W!     ( w sc -- )       _SC-W     + ! ;
-: DTUI-SC-H!     ( h sc -- )       _SC-H     + ! ;
-: DTUI-SC-STYLE! ( s sc -- )       _SC-STYLE + ! ;
-: DTUI-SC-DRAW!  ( xt sc -- )      _SC-DRAW  + ! ;
-: DTUI-SC-UDATA! ( u sc -- )       _SC-UDATA + ! ;
+: DTUI-SC-FLAGS! ( fl sc -- )      TSC-FLAGS! ;
+: DTUI-SC-ROW!   ( r sc -- )       TSC-ROW! ;
+: DTUI-SC-COL!   ( c sc -- )       TSC-COL! ;
+: DTUI-SC-W!     ( w sc -- )       TSC-W! ;
+: DTUI-SC-H!     ( h sc -- )       TSC-H! ;
+: DTUI-SC-STYLE! ( s sc -- )       TSC-STYLE! ;
+: DTUI-SC-DRAW!  ( xt sc -- )      TSC-AUX2! ;
+: DTUI-SC-UDATA! ( u sc -- )       TSC-AUX3! ;
 
 \ =====================================================================
-\  §3 — Style Pack / Unpack
+\  §3 — Style Pack / Unpack (delegated to tui-sidecar.f)
 \ =====================================================================
 
 \ DTUI-PACK-STYLE ( fg bg attrs border -- packed )
 : DTUI-PACK-STYLE  ( fg bg attrs border -- packed )
-    32 LSHIFT >R
-    16 LSHIFT >R
-     8 LSHIFT >R
-    R> OR R> OR R> OR ;
+    TSC-PACK-BORDER ;
 
 \ DTUI-UNPACK-FG ( packed -- fg )
 : DTUI-UNPACK-FG  ( packed -- fg )
-    255 AND ;
+    TSC-UNPACK-FG ;
 
 \ DTUI-UNPACK-BG ( packed -- bg )
 : DTUI-UNPACK-BG  ( packed -- bg )
-    8 RSHIFT 255 AND ;
+    TSC-UNPACK-BG ;
 
 \ DTUI-UNPACK-ATTRS ( packed -- attrs )
 : DTUI-UNPACK-ATTRS  ( packed -- attrs )
-    16 RSHIFT 65535 AND ;
+    TSC-UNPACK-ATTRS ;
 
 \ DTUI-UNPACK-BORDER ( packed -- border-idx )
 : DTUI-UNPACK-BORDER  ( packed -- border-idx )
-    32 RSHIFT 255 AND ;
+    TSC-UNPACK-BORDER ;
 
 \ =====================================================================
 \  §4 — Color Resolution (delegated to color.f)
@@ -162,7 +150,7 @@ VARIABLE _DTUI-COUNT    \ allocated count
 : _DTUI-SC-ALLOC  ( -- sidecar )
     _DTUI-COUNT @ _DTUI-MAX @ >= ABORT" DTUI: sidecar pool full"
     _DTUI-BASE @  _DTUI-COUNT @ DTUI-SC-SIZE * +
-    DUP DTUI-SC-SIZE 0 FILL
+    DUP TSC-CLEAR
     _DTUI-COUNT @ 1+  _DTUI-COUNT ! ;
 
 \ =====================================================================
@@ -421,14 +409,12 @@ VARIABLE _DST-FG  VARIABLE _DST-BG  VARIABLE _DST-AT
 \ DTUI-CLEAR-DIRTY ( sc -- )
 \   Clear the DTUI-F-DIRTY flag on a sidecar.
 : DTUI-CLEAR-DIRTY  ( sc -- )
-    DUP DTUI-SC-FLAGS DTUI-F-DIRTY INVERT AND
-    SWAP DTUI-SC-FLAGS! ;
+    TSC-CLEAR-DIRTY ;
 
 \ DTUI-CLEAR-GEOM-DIRTY ( sc -- )
 \   Clear the DTUI-F-GEOM-DIRTY flag on a sidecar.
 : DTUI-CLEAR-GEOM-DIRTY  ( sc -- )
-    DUP DTUI-SC-FLAGS DTUI-F-GEOM-DIRTY INVERT AND
-    SWAP DTUI-SC-FLAGS! ;
+    TSC-CLEAR-GEOM-DIRTY ;
 
 \ --- Convenience wrappers: DOM mutation + auto-dirty ---
 

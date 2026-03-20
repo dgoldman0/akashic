@@ -14,7 +14,7 @@
 taskbar-fg   = "white"
 taskbar-bg   = "#000057"       # dark blue
 active-fg    = "black"
-active-bg    = "#5f87ff"       # bright blue
+active-bg    = "#5fffac"       # bright blue
 minimized-fg = "gray"
 minimized-bg = "#000057"
 pinned-fg    = "#808080"

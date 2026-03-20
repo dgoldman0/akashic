@@ -49,7 +49,7 @@ REQUIRE ../liraq/uidl-chrome.f
 REQUIRE ../liraq/state-tree.f
 REQUIRE ../liraq/lel.f
 REQUIRE screen.f
-REQUIRE draw.f
+REQUIRE tui-sidecar.f
 REQUIRE box.f
 REQUIRE region.f
 REQUIRE layout.f
@@ -61,48 +61,43 @@ REQUIRE ../css/css.f
 REQUIRE color.f
 
 \ =====================================================================
-\  §1 — TUI Sidecar (per-element, 80 bytes)
+\  §1 — TUI Sidecar (shared layout from tui-sidecar.f)
 \ =====================================================================
 \
 \  Parallel array indexed by element pool index:
 \    elem-index = (elem – _UDL-ELEMS) / _UDL-ELEMSZ
-\    sidecar    = elem-index × 80 + _UTUI-SIDECARS
+\    sidecar    = elem-index × TSC-SIZE + _UTUI-SIDECARS
 \
-\  Fields:
-\    +0  row     Computed row in screen coordinates (cell)
-\    +8  col     Computed column (cell)
-\   +16  width   Computed width (cells)
-\   +24  height  Computed height (cells)
-\   +32  style   Packed: fg(8) bg(8) attrs(8) text-align(2) position(2)
-\                        z-index(8) reserved(22)
-\   +40  flags   Bit 0=has, 1=visible, 2=focused, 3=display-none,
-\                    4=overflow-clip
-\   +48  wptr    Widget struct pointer (0 = none)
-\   +56  padding Packed: PT(8) PR(8) PB(8) PL(8) in bits 0–31
-\   +64  offsets Packed: top(16s) right(16s) bottom(16s) left(16s)
-\   +72  margin  Packed: MT(8) MR(8) MB(8) ML(8) in bits 0–31
+\  Uses the unified TSC record (96 bytes = 12 cells).
+\  See tui-sidecar.f for full field map.
+\
+\  UIDL-specific field mapping:
+\    AUX1 (+48)  = wptr       Widget struct pointer
+\    AUX2 (+56)  = padding    Packed TRBL
+\    AUX3 (+64)  = offsets    4×16-bit signed
+\    AUX4 (+72)  = margin     Packed TRBL
 
-80 CONSTANT _UTUI-SC-SZ
+TSC-SIZE CONSTANT _UTUI-SC-SZ
 256 CONSTANT _UTUI-MAX-ELEMS
 CREATE _UTUI-SIDECARS  _UTUI-MAX-ELEMS _UTUI-SC-SZ * ALLOT
 
-\ Sidecar field offsets
- 0 CONSTANT _UTUI-SC-O-ROW
- 8 CONSTANT _UTUI-SC-O-COL
-16 CONSTANT _UTUI-SC-O-W
-24 CONSTANT _UTUI-SC-O-H
-32 CONSTANT _UTUI-SC-O-STYLE
-40 CONSTANT _UTUI-SC-O-FLAGS
-48 CONSTANT _UTUI-SC-O-WPTR
-56 CONSTANT _UTUI-SC-O-PAD
-64 CONSTANT _UTUI-SC-O-OFFS
-72 CONSTANT _UTUI-SC-O-MARGIN
+\ Sidecar field offset aliases (all delegate to TSC-O-*)
+TSC-O-ROW   CONSTANT _UTUI-SC-O-ROW
+TSC-O-COL   CONSTANT _UTUI-SC-O-COL
+TSC-O-W     CONSTANT _UTUI-SC-O-W
+TSC-O-H     CONSTANT _UTUI-SC-O-H
+TSC-O-STYLE CONSTANT _UTUI-SC-O-STYLE
+TSC-O-FLAGS CONSTANT _UTUI-SC-O-FLAGS
+TSC-O-AUX1  CONSTANT _UTUI-SC-O-WPTR
+TSC-O-AUX2  CONSTANT _UTUI-SC-O-PAD
+TSC-O-AUX3  CONSTANT _UTUI-SC-O-OFFS
+TSC-O-AUX4  CONSTANT _UTUI-SC-O-MARGIN
 
-\ Sidecar flag bits
-1 CONSTANT _UTUI-SCF-HAS     \ sidecar allocated
-2 CONSTANT _UTUI-SCF-VIS     \ visible
-4 CONSTANT _UTUI-SCF-FOC     \ focused
-8 CONSTANT _UTUI-SCF-HIDE    \ display:none
+\ Sidecar flag aliases (all delegate to TSC-F-*)
+TSC-F-HAS       CONSTANT _UTUI-SCF-HAS
+TSC-F-VISIBLE   CONSTANT _UTUI-SCF-VIS
+TSC-F-FOCUSABLE CONSTANT _UTUI-SCF-FOC
+TSC-F-HIDE      CONSTANT _UTUI-SCF-HIDE
 
 \ =====================================================================
 \  §1a — Element → Sidecar mapping
@@ -116,99 +111,66 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : _UTUI-SIDECAR  ( elem -- sc )
     _UTUI-SC-IDX _UTUI-SC-SZ * _UTUI-SIDECARS + ;
 
-\ Field accessors
-: _UTUI-SC-ROW@   ( sc -- n ) _UTUI-SC-O-ROW   + @ ;
-: _UTUI-SC-COL@   ( sc -- n ) _UTUI-SC-O-COL   + @ ;
-: _UTUI-SC-W@     ( sc -- n ) _UTUI-SC-O-W     + @ ;
-: _UTUI-SC-H@     ( sc -- n ) _UTUI-SC-O-H     + @ ;
-: _UTUI-SC-STYLE@ ( sc -- s ) _UTUI-SC-O-STYLE + @ ;
-: _UTUI-SC-FLAGS@ ( sc -- f ) _UTUI-SC-O-FLAGS + @ ;
+\ Field accessors (thin wrappers on TSC-*)
+: _UTUI-SC-ROW@   ( sc -- n ) TSC-ROW@ ;
+: _UTUI-SC-COL@   ( sc -- n ) TSC-COL@ ;
+: _UTUI-SC-W@     ( sc -- n ) TSC-W@ ;
+: _UTUI-SC-H@     ( sc -- n ) TSC-H@ ;
+: _UTUI-SC-STYLE@ ( sc -- s ) TSC-STYLE@ ;
+: _UTUI-SC-FLAGS@ ( sc -- f ) TSC-FLAGS@ ;
 
-: _UTUI-SC-ROW!   ( n sc -- ) _UTUI-SC-O-ROW   + ! ;
-: _UTUI-SC-COL!   ( n sc -- ) _UTUI-SC-O-COL   + ! ;
-: _UTUI-SC-W!     ( n sc -- ) _UTUI-SC-O-W     + ! ;
-: _UTUI-SC-H!     ( n sc -- ) _UTUI-SC-O-H     + ! ;
-: _UTUI-SC-STYLE! ( s sc -- ) _UTUI-SC-O-STYLE + ! ;
-: _UTUI-SC-FLAGS! ( f sc -- ) _UTUI-SC-O-FLAGS + ! ;
-: _UTUI-SC-WPTR@  ( sc -- p ) _UTUI-SC-O-WPTR  + @ ;
-: _UTUI-SC-WPTR!  ( p sc -- ) _UTUI-SC-O-WPTR  + ! ;
+: _UTUI-SC-ROW!   ( n sc -- ) TSC-ROW! ;
+: _UTUI-SC-COL!   ( n sc -- ) TSC-COL! ;
+: _UTUI-SC-W!     ( n sc -- ) TSC-W! ;
+: _UTUI-SC-H!     ( n sc -- ) TSC-H! ;
+: _UTUI-SC-STYLE! ( s sc -- ) TSC-STYLE! ;
+: _UTUI-SC-FLAGS! ( f sc -- ) TSC-FLAGS! ;
+: _UTUI-SC-WPTR@  ( sc -- p ) TSC-AUX1@ ;
+: _UTUI-SC-WPTR!  ( p sc -- ) TSC-AUX1! ;
 
-\ New sidecar field accessors (padding, offsets, margin)
-: _UTUI-SC-PAD@    ( sc -- n ) _UTUI-SC-O-PAD    + @ ;
-: _UTUI-SC-PAD!    ( n sc -- ) _UTUI-SC-O-PAD    + ! ;
-: _UTUI-SC-OFFS@   ( sc -- n ) _UTUI-SC-O-OFFS   + @ ;
-: _UTUI-SC-OFFS!   ( n sc -- ) _UTUI-SC-O-OFFS   + ! ;
-: _UTUI-SC-MARGIN@ ( sc -- n ) _UTUI-SC-O-MARGIN + @ ;
-: _UTUI-SC-MARGIN! ( n sc -- ) _UTUI-SC-O-MARGIN + ! ;
+\ Padding, offsets, margin accessors (via TSC AUX slots)
+: _UTUI-SC-PAD@    ( sc -- n ) TSC-AUX2@ ;
+: _UTUI-SC-PAD!    ( n sc -- ) TSC-AUX2! ;
+: _UTUI-SC-OFFS@   ( sc -- n ) TSC-AUX3@ ;
+: _UTUI-SC-OFFS!   ( n sc -- ) TSC-AUX3! ;
+: _UTUI-SC-MARGIN@ ( sc -- n ) TSC-AUX4@ ;
+: _UTUI-SC-MARGIN! ( n sc -- ) TSC-AUX4! ;
 
-\ Visibility predicate — also checks display:none (HIDE flag)
+\ Visibility predicate — delegates to TSC-VIS?
 : _UTUI-SC-VIS?  ( sc -- flag )
-    _UTUI-SC-FLAGS@
-    DUP _UTUI-SCF-VIS AND 0<>
-    SWAP _UTUI-SCF-HIDE AND 0= AND ;
+    TSC-VIS? ;
 
-\ Style-field extended accessors (bits 24+ in the style cell)
-\ text-align: bits 24-25  (0=left, 1=center, 2=right)
+\ Style-field extended accessors (delegates to TSC-UNPACK-*)
 : _UTUI-SC-TALIGN@ ( sc -- align )
-    _UTUI-SC-STYLE@ 24 RSHIFT 3 AND ;
-\ position:   bits 26-27  (0=static, 1=absolute, 2=fixed)
+    TSC-STYLE@ TSC-UNPACK-TALIGN ;
 : _UTUI-SC-POS@    ( sc -- pos )
-    _UTUI-SC-STYLE@ 26 RSHIFT 3 AND ;
-\ z-index:    bits 28-35  (unsigned 0-255)
+    TSC-STYLE@ TSC-UNPACK-POS ;
 : _UTUI-SC-ZIDX@   ( sc -- z )
-    _UTUI-SC-STYLE@ 28 RSHIFT 255 AND ;
+    TSC-STYLE@ TSC-UNPACK-ZIDX ;
 
-\ Pack/unpack 4 unsigned bytes (T R B L) for padding / margin
-\   Packing: top in bits 0-7, right in bits 8-15,
-\            bottom in bits 16-23, left in bits 24-31
-: _UTUI-PACK-TRBL  ( t r b l -- packed )
-    24 LSHIFT SWAP 16 LSHIFT OR SWAP 8 LSHIFT OR SWAP OR ;
+\ TRBL pack/unpack (delegated to tui-sidecar.f)
+: _UTUI-PACK-TRBL   ( t r b l -- packed )  TSC-PACK-TRBL ;
+: _UTUI-UNPACK-TRBL ( packed -- t r b l )  TSC-UNPACK-TRBL ;
 
-: _UTUI-UNPACK-TRBL  ( packed -- t r b l )
-    DUP 255 AND                     \ top
-    OVER 8 RSHIFT 255 AND          \ right
-    2 PICK 16 RSHIFT 255 AND       \ bottom
-    3 PICK 24 RSHIFT 255 AND       \ left
-    >R >R >R NIP R> R> R> ;        \ clean the original, leave t r b l
+\ Offset pack/unpack (delegated to tui-sidecar.f)
+: _UTUI-PACK-OFFS   ( top right bottom left -- packed )  TSC-PACK-OFFS ;
+: _UTUI-SEXT16      ( u16 -- signed )  TSC-SEXT16 ;
+: _UTUI-UNPACK-OFFS ( packed -- top right bottom left )  TSC-UNPACK-OFFS ;
 
-\ Pack/unpack 4 signed 16-bit offsets for position offsets
-\   Packing: top bits 0-15, right bits 16-31,
-\            bottom bits 32-47, left bits 48-63
-: _UTUI-PACK-OFFS  ( top right bottom left -- packed )
-    0xFFFF AND 48 LSHIFT
-    SWAP 0xFFFF AND 32 LSHIFT OR
-    SWAP 0xFFFF AND 16 LSHIFT OR
-    SWAP 0xFFFF AND OR ;
-
-\ Sign-extend a 16-bit value to cell
-: _UTUI-SEXT16  ( u16 -- signed )
-    DUP 0x8000 AND IF 0xFFFFFFFFFFFF0000 OR THEN ;
-
-: _UTUI-UNPACK-OFFS  ( packed -- top right bottom left )
-    DUP 0xFFFF AND _UTUI-SEXT16                  \ top
-    OVER 16 RSHIFT 0xFFFF AND _UTUI-SEXT16       \ right
-    2 PICK 32 RSHIFT 0xFFFF AND _UTUI-SEXT16     \ bottom
-    3 PICK 48 RSHIFT 0xFFFF AND _UTUI-SEXT16     \ left
-    >R >R >R NIP R> R> R> ;
-
-\ Unpack style → fg bg attrs
+\ Unpack style → fg bg attrs (delegated to TSC)
 : _UTUI-UNPACK-STYLE  ( style -- fg bg attrs )
-    DUP 255 AND                 \ fg  (bits 0–7)
-    OVER 8 RSHIFT 255 AND      \ bg  (bits 8–15)
-    ROT 16 RSHIFT 255 AND ;    \ attrs (bits 16–23)
+    DUP TSC-UNPACK-FG
+    OVER TSC-UNPACK-BG
+    ROT TSC-UNPACK-ATTRS ;
 
-\ Pack fg bg attrs → style
+\ Pack fg bg attrs → style (delegated to TSC)
 : _UTUI-PACK-STYLE  ( fg bg attrs -- style )
-    16 LSHIFT                   \ attrs << 16
-    SWAP 8 LSHIFT OR            \ bg << 8
-    SWAP OR ;                   \ fg
+    TSC-PACK-STYLE ;
 
 \ Apply sidecar style to draw engine; add reverse-video when focused
 : _UTUI-APPLY-STYLE  ( sc -- )
-    DUP _UTUI-SC-FLAGS@ _UTUI-SCF-FOC AND >R
-    _UTUI-SC-STYLE@ _UTUI-UNPACK-STYLE   ( fg bg attrs )
-    R> IF CELL-A-REVERSE OR THEN
-    DRW-STYLE! ;
+    DUP TSC-FLAGS@ _UTUI-SCF-FOC AND 0<>
+    TSC-APPLY-STYLE-FOC ;
 
 \ Clear all sidecars
 : _UTUI-SC-CLEAR-ALL  ( -- )
@@ -216,9 +178,9 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 
 \ Public style readers — extract fg/bg/attrs from an element's resolved
 \ sidecar style.  These are available after UTUI-LOAD returns.
-: UTUI-SC-FG@    ( elem -- fg )    _UTUI-SIDECAR _UTUI-SC-STYLE@ 255 AND ;
-: UTUI-SC-BG@    ( elem -- bg )    _UTUI-SIDECAR _UTUI-SC-STYLE@ 8 RSHIFT 255 AND ;
-: UTUI-SC-ATTRS@ ( elem -- attrs ) _UTUI-SIDECAR _UTUI-SC-STYLE@ 16 RSHIFT 255 AND ;
+: UTUI-SC-FG@    ( elem -- fg )    _UTUI-SIDECAR TSC-STYLE@ TSC-UNPACK-FG ;
+: UTUI-SC-BG@    ( elem -- bg )    _UTUI-SIDECAR TSC-STYLE@ TSC-UNPACK-BG ;
+: UTUI-SC-ATTRS@ ( elem -- attrs ) _UTUI-SIDECAR TSC-STYLE@ TSC-UNPACK-ATTRS ;
 
 \ Public geometry reader — returns element's layout rectangle.
 : UTUI-ELEM-RGN  ( elem -- row col h w )
@@ -238,21 +200,21 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 \   the element pool size, so no growth is needed.
 : _UTUI-SC-ALLOC  ( elem -- )
     _UTUI-SIDECAR
-    DUP _UTUI-SC-SZ 0 FILL
-    _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS@ OR SWAP _UTUI-SC-FLAGS! ;
+    DUP TSC-CLEAR
+    _UTUI-SCF-HAS OVER TSC-FLAGS@ OR SWAP TSC-FLAGS! ;
 
 \ _UTUI-SC-FREE ( elem -- )
 \   Zero-fill the sidecar, clearing the HAS flag.
 : _UTUI-SC-FREE  ( elem -- )
-    _UTUI-SIDECAR _UTUI-SC-SZ 0 FILL ;
+    _UTUI-SIDECAR TSC-CLEAR ;
 
 \ Default style: light gray on dark gray, no attrs
 253 236 0 _UTUI-PACK-STYLE CONSTANT _UTUI-DEFAULT-STYLE
 
 \ Mask for CSS-inheritable properties:
-\   fg(0-7), bg(8-15), attrs(16-23), text-align(24-25)
-\ Non-inheritable (position 26-27, z-index 28-35) are excluded.
-0x03FFFFFF CONSTANT _UTUI-INHERIT-MASK
+\   fg(0-7), bg(8-15), attrs(16-31), text-align(32-33)
+\ Non-inheritable (position 34-35, z-index 36-43, border 44-51) excluded.
+0x3FFFFFFFF CONSTANT _UTUI-INHERIT-MASK
 
 \ _UTUI-INHERIT-PARENT-STYLE ( elem -- )
 \   Seed this element's sidecar with parent's inheritable style bits.
@@ -645,6 +607,10 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
         RGN-ROOT
     THEN ;
 
+\ --- Menu dropdown state ---
+VARIABLE _UTUI-MENU-OPEN       \ currently-open <menu> elem (0 = none)
+VARIABLE _UTUI-MENU-SAVED-FOC  \ focus before menu opened
+
 \ --- Menubar ---
 \ Does elem or any descendant of elem hold focus?
 : _UTUI-HAS-FOCUS?  ( elem -- flag )
@@ -675,6 +641,55 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     REPEAT
     DROP ;
 
+\ --- Menu dropdown rendering ---
+\
+\  Each element renders itself.  <menu> draws the border box when
+\  open; each <item> draws its own background + text + highlight.
+\  Opening a menu sets z-index > 0 so the paint walker defers it
+\  to the Pass 2 overlay buffer, and _UTUI-PAINT-SUBTREE walks
+\  the entire subtree unconditionally.
+
+VARIABLE _UMD-COL      \ dropdown left column
+VARIABLE _UMD-MAXW     \ widest item text length
+VARIABLE _UMD-ICNT     \ item count
+VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
+
+\ Measure: count items + find widest text= label
+: _UTUI-MENU-MEASURE  ( menu-elem -- )
+    0 _UMD-MAXW !   0 _UMD-ICNT !
+    UIDL-FIRST-CHILD
+    BEGIN DUP 0<> WHILE
+        1 _UMD-ICNT +!
+        DUP S" text" UIDL-ATTR IF
+            NIP _UMD-MAXW @ MAX _UMD-MAXW !
+        ELSE 2DROP THEN
+        UIDL-NEXT-SIB
+    REPEAT DROP ;
+
+\ Render <menu>: draw border box when this menu is the open dropdown.
+\ Geometry already covers the dropdown area (set by _UTUI-MENU-OPEN!).
+: _UTUI-RENDER-MENU  ( elem -- )
+    DUP _UTUI-MENU-OPEN @ <> IF DROP EXIT THEN
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    DROP
+    \ Fill interior with bg color
+    _UTUI-FILL-BG
+    \ Draw single-line border
+    BOX-SINGLE _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @ BOX-DRAW ;
+
+\ Render <item>: self-rendering — bg fill + text + reverse highlight
+: _UTUI-RENDER-ITEM  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    \ Highlight if this item is focused
+    DUP _UTUI-FOCUS-P @ = IF
+        _DRW-ATTRS @ CELL-A-REVERSE OR _DRW-ATTRS !
+    THEN
+    _UTUI-FILL-BG
+    DUP S" text" UIDL-ATTR IF
+        _UR-ROW @ _UR-COL @ 1+ DRW-TEXT
+    ELSE 2DROP THEN
+    DROP ;
+
 \ --- Status bar: first child left, last child right ---
 VARIABLE _UST-FIRST
 
@@ -702,6 +717,8 @@ VARIABLE _UST-FIRST
 \ --- Split: draw vertical divider at ratio= position ---
 : _UTUI-RENDER-SPLIT  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    \ Fill background so overlay-close repaint produces correct bg
+    _UTUI-FILL-BG
     \ Read ratio= (default 50)
     S" ratio" UIDL-ATTR IF
         STR>NUM 0= IF DROP 50 THEN
@@ -818,6 +835,12 @@ VARIABLE _UT-TAB-COL
 \ --- NOP ---
 : _UTUI-RENDER-NOP  ( elem -- ) DROP ;
 
+\ Root <uidl> render — fill bg so overlay-close repaint clears stale cells.
+: _UTUI-RENDER-ROOT  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    DROP
+    _UTUI-FILL-BG ;
+
 \ =====================================================================
 \  §6 — Event Handler Words (event-xt implementations)
 \ =====================================================================
@@ -860,8 +883,214 @@ VARIABLE _UT-TAB-COL
     THEN
     2DROP 0 ;
 
-\ Stubs for complex handlers — TODO
-: _UTUI-H-MENU     ( elem key-ev -- handled? ) 2DROP 0 ;
+\ --- Menu event handler ---
+\
+\ Forward-declared words from later sections needed by the menu impl.
+DEFER _UTUI-LAYOUT-MENU-D  ( elem -- )
+' DROP IS _UTUI-LAYOUT-MENU-D
+
+DEFER _UTUI-FOCUS-D  ( -- elem | 0 )
+' NOOP IS _UTUI-FOCUS-D
+
+DEFER _UTUI-FOCUS!-D  ( elem -- )
+' DROP IS _UTUI-FOCUS!-D
+
+DEFER _UTUI-FOCUS-NEXT-D  ( -- )
+' NOOP IS _UTUI-FOCUS-NEXT-D
+
+DEFER _UTUI-FOCUS-PREV-D  ( -- )
+' NOOP IS _UTUI-FOCUS-PREV-D
+
+DEFER _UTUI-DIRTY-SUBTREE-D  ( elem -- )
+' DROP IS _UTUI-DIRTY-SUBTREE-D
+
+DEFER _UTUI-DIRTY-RECT-D  ( row col h w -- )
+: _udr-drop4  2DROP 2DROP ;
+' _udr-drop4 IS _UTUI-DIRTY-RECT-D
+
+\ Saved original sidecar geometry (1-row label from menubar layout)
+VARIABLE _UTUI-MENU-SAVE-ROW
+VARIABLE _UTUI-MENU-SAVE-H
+VARIABLE _UTUI-MENU-SAVE-W
+
+\ Close the currently-open menu dropdown.
+: _UTUI-MENU-CLOSE  ( -- )
+    _UTUI-MENU-OPEN @ DUP 0= IF DROP EXIT THEN
+    DUP _UTUI-MENU-MEASURE
+    \ Hide item sidecars (clear VIS before dirty-rect walk)
+    DUP UIDL-FIRST-CHILD
+    BEGIN DUP 0<> WHILE
+        DUP _UTUI-SIDECAR
+        DUP _UTUI-SC-FLAGS@ _UTUI-SCF-VIS INVERT AND SWAP _UTUI-SC-FLAGS!
+        UIDL-NEXT-SIB
+    REPEAT DROP
+    \ Dirty the dropdown rectangle — overlapping elements will repaint
+    \ themselves (every container fills its own bg, per DOM model).
+    _UMD-ICNT @ 0<> IF
+        DUP _UTUI-SIDECAR _UTUI-SC-ROW@
+        OVER _UTUI-SIDECAR _UTUI-SC-COL@
+        _UMD-ICNT @ 2 +  _UMD-MAXW @ 4 +
+        _UTUI-DIRTY-RECT-D
+    THEN
+    \ Restore original 1-row geometry + clear z-index
+    DUP _UTUI-SIDECAR
+    _UTUI-MENU-SAVE-ROW @ OVER _UTUI-SC-ROW!
+    _UTUI-MENU-SAVE-H @   OVER _UTUI-SC-H!
+    _UTUI-MENU-SAVE-W @   OVER _UTUI-SC-W!
+    0 SWAP TSC-SET-ZIDX!
+    \ Dirty the menubar so the highlight updates
+    UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN
+    0 _UTUI-MENU-OPEN !
+    \ Restore saved focus
+    _UTUI-MENU-SAVED-FOC @ ?DUP IF
+        DUP _UTUI-SIDECAR _UTUI-SC-VIS? IF _UTUI-FOCUS!-D
+        ELSE DROP THEN
+    THEN
+    0 _UTUI-MENU-SAVED-FOC ! ;
+
+\ Open a menu dropdown.
+: _UTUI-MENU-OPEN!  ( menu-elem -- )
+    _UTUI-MENU-OPEN @ IF _UTUI-MENU-CLOSE THEN
+    _UTUI-FOCUS-D _UTUI-MENU-SAVED-FOC !
+    DUP _UTUI-MENU-OPEN !
+    \ Save original sidecar geometry (1-row label from menubar layout)
+    DUP _UTUI-SIDECAR _UTUI-SC-ROW@ _UTUI-MENU-SAVE-ROW !
+    DUP _UTUI-SIDECAR _UTUI-SC-H@   _UTUI-MENU-SAVE-H !
+    DUP _UTUI-SIDECAR _UTUI-SC-W@   _UTUI-MENU-SAVE-W !
+    \ Measure to get item count + max width
+    DUP _UTUI-MENU-MEASURE
+    \ Expand menu sidecar geometry to cover the entire dropdown box
+    \ (row stays from menubar; col stays; h = items+2; w = maxw+4)
+    DUP _UTUI-SIDECAR _UTUI-SC-ROW@ 1+ OVER _UTUI-SIDECAR _UTUI-SC-ROW!
+    _UMD-ICNT @ 2 + OVER _UTUI-SIDECAR _UTUI-SC-H!
+    _UMD-MAXW @ 4 + OVER _UTUI-SIDECAR _UTUI-SC-W!
+    \ Set z-index so Pass 1 defers this to the overlay buffer
+    200 OVER _UTUI-SIDECAR TSC-SET-ZIDX!
+    \ Set VIS on item children
+    DUP UIDL-FIRST-CHILD
+    BEGIN DUP 0<> WHILE
+        DUP _UTUI-SIDECAR
+        DUP _UTUI-SC-FLAGS@ _UTUI-SCF-HAS OR _UTUI-SCF-VIS OR
+        SWAP _UTUI-SC-FLAGS!
+        UIDL-NEXT-SIB
+    REPEAT DROP
+    \ Run layout for the open menu (assigns item positions)
+    DUP _UTUI-LAYOUT-MENU-D
+    \ Dirty everything so the dropdown paints
+    DUP _UTUI-DIRTY-SUBTREE-D
+    DUP UIDL-DIRTY!
+    UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN ;
+
+\ Toggle: click same menu closes, different opens
+: _UTUI-MENU-TOGGLE  ( menu-elem -- )
+    DUP _UTUI-MENU-OPEN @ = IF
+        DROP _UTUI-MENU-CLOSE
+    ELSE
+        _UTUI-MENU-OPEN!
+    THEN ;
+
+\ Find first <item> child of an open menu
+: _UTUI-MENU-FIRST-ITEM  ( -- item | 0 )
+    _UTUI-MENU-OPEN @ ?DUP IF UIDL-FIRST-CHILD ELSE 0 THEN ;
+
+\ Find last <item> child of an open menu
+: _UTUI-MENU-LAST-ITEM  ( -- item | 0 )
+    _UTUI-MENU-OPEN @ ?DUP IF UIDL-LAST-CHILD ELSE 0 THEN ;
+
+\ Move to next/prev sibling within the open dropdown
+: _UTUI-MENU-ITEM-NEXT  ( -- )
+    _UTUI-FOCUS-D DUP 0= IF DROP EXIT THEN
+    UIDL-NEXT-SIB ?DUP IF _UTUI-FOCUS!-D EXIT THEN
+    \ Wrap to first item
+    _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN ;
+
+: _UTUI-MENU-ITEM-PREV  ( -- )
+    _UTUI-FOCUS-D DUP 0= IF DROP EXIT THEN
+    UIDL-PREV-SIB ?DUP IF _UTUI-FOCUS!-D EXIT THEN
+    \ Wrap to last item
+    _UTUI-MENU-LAST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN ;
+
+\ Switch to the next/prev <menu> in the bar
+: _UTUI-MENU-SWITCH-NEXT  ( -- )
+    _UTUI-MENU-OPEN @ ?DUP 0= IF EXIT THEN
+    UIDL-NEXT-SIB ?DUP IF
+        _UTUI-MENU-OPEN!
+        _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
+    THEN ;
+
+: _UTUI-MENU-SWITCH-PREV  ( -- )
+    _UTUI-MENU-OPEN @ ?DUP 0= IF EXIT THEN
+    UIDL-PREV-SIB ?DUP IF
+        _UTUI-MENU-OPEN!
+        _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
+    THEN ;
+
+\ <menu> key handler: Enter/Space/Down opens; Esc closes; arrows navigate
+: _UTUI-H-MENU  ( elem key-ev -- handled? )
+    KEY-CODE@                          ( elem code )
+    DUP KEY-ENTER = OVER 32 = OR IF
+        DROP
+        DUP _UTUI-MENU-OPEN @ = IF
+            DROP _UTUI-MENU-CLOSE
+        ELSE
+            _UTUI-MENU-OPEN!
+            _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
+        THEN
+        -1 EXIT
+    THEN
+    DUP KEY-DOWN = IF
+        2DROP
+        _UTUI-MENU-OPEN @ 0= IF EXIT THEN
+        _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
+        -1 EXIT
+    THEN
+    DUP KEY-ESC = IF
+        2DROP _UTUI-MENU-CLOSE -1 EXIT
+    THEN
+    DUP KEY-RIGHT = IF
+        2DROP
+        _UTUI-MENU-OPEN @ IF
+            _UTUI-MENU-SWITCH-NEXT
+        ELSE
+            _UTUI-FOCUS-NEXT-D
+        THEN
+        -1 EXIT
+    THEN
+    DUP KEY-LEFT = IF
+        2DROP
+        _UTUI-MENU-OPEN @ IF
+            _UTUI-MENU-SWITCH-PREV
+        ELSE
+            _UTUI-FOCUS-PREV-D
+        THEN
+        -1 EXIT
+    THEN
+    2DROP 0 ;
+
+\ <item> key handler: Enter/Space fires do=; arrows navigate
+: _UTUI-H-ITEM  ( elem key-ev -- handled? )
+    KEY-CODE@                          ( elem code )
+    DUP KEY-ENTER = OVER 32 = OR IF
+        DROP _UTUI-FIRE-DO
+        _UTUI-MENU-CLOSE -1 EXIT
+    THEN
+    DUP KEY-DOWN = IF
+        2DROP _UTUI-MENU-ITEM-NEXT -1 EXIT
+    THEN
+    DUP KEY-UP = IF
+        2DROP _UTUI-MENU-ITEM-PREV -1 EXIT
+    THEN
+    DUP KEY-ESC = IF
+        2DROP _UTUI-MENU-CLOSE -1 EXIT
+    THEN
+    DUP KEY-RIGHT = IF
+        2DROP _UTUI-MENU-SWITCH-NEXT -1 EXIT
+    THEN
+    DUP KEY-LEFT = IF
+        2DROP _UTUI-MENU-SWITCH-PREV -1 EXIT
+    THEN
+    2DROP 0 ;
+
 \ Textarea: delegate to materialized TXTA widget
 : _UTUI-H-TEXTAREA  ( elem key-ev -- handled? )
     OVER _UTUI-SIDECAR                    ( elem ev sc )
@@ -1135,6 +1364,35 @@ VARIABLE _UL-CW   \ child width for flex
     REPEAT
     DROP ;
 
+\ --- Menu layout: assign sidecar coords to <item> children ---
+\ When the menu is NOT open, bail out — the paint walker skips
+\ children of closed menus.  When open, assign item positions.
+: _UTUI-LAYOUT-MENU  ( elem -- )
+    DUP _UTUI-MENU-OPEN @ <> IF DROP EXIT THEN
+    DUP _UTUI-SIDECAR _UTUI-SC-COL@ _UMD-COL !
+    DUP _UTUI-SIDECAR _UTUI-SC-ROW@ _UMD-ROW !
+    DUP _UTUI-MENU-MEASURE
+    _UMD-MAXW @ 2 +                    ( elem item-w )
+    0                                  ( elem item-w idx )
+    2 PICK UIDL-FIRST-CHILD            ( elem item-w idx child )
+    BEGIN DUP 0<> WHILE
+        DUP _UTUI-SIDECAR             ( ... child sc )
+        _UTUI-SCF-HAS _UTUI-SCF-VIS OR _UTUI-SCF-FOC OR
+            OVER _UTUI-SC-FLAGS!
+        _UMD-ROW @ 3 PICK 1+ +
+            OVER _UTUI-SC-ROW!         \ row = dropdown_top+1+idx
+        _UMD-COL @ 1+
+            OVER _UTUI-SC-COL!         \ col = dropdown_col+1
+        3 PICK OVER _UTUI-SC-W!        \ w = item-w
+        1 OVER _UTUI-SC-H!             \ h = 1
+        DROP                           ( elem item-w idx child )
+        UIDL-NEXT-SIB  SWAP 1+ SWAP   ( elem item-w idx+1 next )
+    REPEAT
+    DROP DROP DROP DROP ;
+
+\ Resolve forward-declared deferred word
+' _UTUI-LAYOUT-MENU IS _UTUI-LAYOUT-MENU-D
+
 \ --- Status / toolbar: lay out children horizontally ---
 : _UTUI-LAYOUT-STATUS  ( elem -- ) _UTUI-LAYOUT-FLEX ;
 : _UTUI-LAYOUT-TOOLBAR ( elem -- ) _UTUI-LAYOUT-FLEX ;
@@ -1391,6 +1649,8 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-RENDER-REGION    UIDL-T-REGION     EL-SET-RENDER
     ['] _UTUI-RENDER-REGION    UIDL-T-GROUP      EL-SET-RENDER
     ['] _UTUI-RENDER-MBAR      UIDL-T-MENUBAR    EL-SET-RENDER
+    ['] _UTUI-RENDER-MENU      UIDL-T-MENU       EL-SET-RENDER
+    ['] _UTUI-RENDER-ITEM      UIDL-T-ITEM       EL-SET-RENDER
     ['] _UTUI-RENDER-STATUS    UIDL-T-STATUS     EL-SET-RENDER
     ['] _UTUI-RENDER-TOOLBAR   UIDL-T-TOOLBAR    EL-SET-RENDER
     ['] _UTUI-RENDER-DLG       UIDL-T-DIALOG     EL-SET-RENDER
@@ -1408,13 +1668,14 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-RENDER-NOP       UIDL-T-REP        EL-SET-RENDER
     ['] _UTUI-RENDER-NOP       UIDL-T-OPTION     EL-SET-RENDER
     ['] _UTUI-RENDER-NOP       UIDL-T-META       EL-SET-RENDER
-    ['] _UTUI-RENDER-NOP       UIDL-T-UIDL       EL-SET-RENDER
+    ['] _UTUI-RENDER-ROOT      UIDL-T-UIDL       EL-SET-RENDER
 
     \ --- Event XTs ---
     ['] _UTUI-H-ACTION         UIDL-T-ACTION     EL-SET-EVENT
     ['] _UTUI-H-INPUT          UIDL-T-INPUT      EL-SET-EVENT
     ['] _UTUI-H-TOGGLE         UIDL-T-TOGGLE     EL-SET-EVENT
     ['] _UTUI-H-MENU           UIDL-T-MENU       EL-SET-EVENT
+    ['] _UTUI-H-ITEM           UIDL-T-ITEM       EL-SET-EVENT
     ['] _UTUI-H-TEXTAREA       UIDL-T-TEXTAREA   EL-SET-EVENT
     ['] _UTUI-H-LIST           UIDL-T-COLLECTION EL-SET-EVENT
     ['] _UTUI-H-TREE           UIDL-T-TREE       EL-SET-EVENT
@@ -1428,6 +1689,7 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-LAYOUT-DISPATCH  UIDL-T-REGION     EL-SET-LAYOUT
     ['] _UTUI-LAYOUT-DISPATCH  UIDL-T-GROUP      EL-SET-LAYOUT
     ['] _UTUI-LAYOUT-MBAR      UIDL-T-MENUBAR    EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-MENU      UIDL-T-MENU       EL-SET-LAYOUT
     ['] _UTUI-LAYOUT-STATUS    UIDL-T-STATUS     EL-SET-LAYOUT
     ['] _UTUI-LAYOUT-TOOLBAR   UIDL-T-TOOLBAR    EL-SET-LAYOUT
     ['] _UTUI-LAYOUT-DLG       UIDL-T-DIALOG     EL-SET-LAYOUT
@@ -1716,6 +1978,14 @@ VARIABLE _UTUI-SKIP-CHILDREN
 
 : _UTUI-PAINT-ELEM  ( elem -- )
     0 _UTUI-SKIP-CHILDREN !
+    \ Always skip children of non-open <menu> elements — their items
+    \ have no valid coordinates.  Open menus have z-index>0 and will
+    \ be deferred+skipped by the z-index check below anyway.
+    DUP UIDL-TYPE UIDL-T-MENU = IF
+        DUP _UTUI-MENU-OPEN @ <> IF
+            -1 _UTUI-SKIP-CHILDREN !
+        THEN
+    THEN
     DUP UIDL-DIRTY? 0= IF DROP EXIT THEN
     DUP _UTUI-SIDECAR _UTUI-SC-VIS? 0= IF
         UIDL-CLEAN! EXIT
@@ -1876,9 +2146,38 @@ VARIABLE _UTUI-SKIP-CHILDREN
 \ =====================================================================
 
 : UTUI-DISPATCH-MOUSE  ( row col btn -- handled? )
+    \ Ignore mouse release events — only act on press
+    DUP KEY-MOUSE-RELEASE = IF
+        DROP 2DROP 0 EXIT
+    THEN
     DROP                                \ btn unused for now
     UTUI-HIT-TEST                      ( elem | 0 )
-    DUP 0= IF EXIT THEN
+    DUP 0= IF
+        \ Clicked empty space — close any open menu
+        _UTUI-MENU-OPEN @ IF _UTUI-MENU-CLOSE THEN
+        EXIT
+    THEN
+    \ Check if we clicked a <menu> element
+    DUP UIDL-TYPE UIDL-T-MENU = IF
+        DUP _UTUI-MENU-OPEN @ = IF
+            DROP _UTUI-MENU-CLOSE
+        ELSE
+            DUP UTUI-FOCUS!
+            _UTUI-MENU-OPEN!
+            _UTUI-MENU-FIRST-ITEM ?DUP IF UTUI-FOCUS! THEN
+        THEN
+        -1 EXIT
+    THEN
+    \ Check if we clicked an <item> inside the open menu
+    DUP UIDL-TYPE UIDL-T-ITEM = IF
+        DUP UIDL-PARENT _UTUI-MENU-OPEN @ = IF
+            DUP UTUI-FOCUS!
+            _UTUI-FIRE-DO
+            _UTUI-MENU-CLOSE -1 EXIT
+        THEN
+    THEN
+    \ Anything else: close menu first, then normal dispatch
+    _UTUI-MENU-OPEN @ IF _UTUI-MENU-CLOSE THEN
     DUP _UTUI-FOCUSABLE? IF
         DUP UTUI-FOCUS!
     THEN
@@ -1961,6 +2260,14 @@ VARIABLE _UDR-SC
             DUP 0= IF DROP EXIT THEN
         THEN
     AGAIN ;
+
+\ Resolve menu forward-declared deferred words now that all deps exist
+' UTUI-FOCUS          IS _UTUI-FOCUS-D
+' UTUI-FOCUS!         IS _UTUI-FOCUS!-D
+' UTUI-FOCUS-NEXT     IS _UTUI-FOCUS-NEXT-D
+' UTUI-FOCUS-PREV     IS _UTUI-FOCUS-PREV-D
+' _UTUI-DIRTY-SUBTREE IS _UTUI-DIRTY-SUBTREE-D
+' _UTUI-DIRTY-RECT    IS _UTUI-DIRTY-RECT-D
 
 \ --- Focus save / restore ---
 VARIABLE _UTUI-SAVED-FOCUS     \ stashed focus elem for overlay hide
@@ -2245,10 +2552,10 @@ VARIABLE _UPRE-VA  VARIABLE _UPRE-VL  VARIABLE _UPRE-SC  VARIABLE _UPRE-STY
     S" position" CSS-DECL-FIND IF
         2DUP S" absolute" STR-STRI= IF
             2DROP
-            _UPRE-STY @  0x0C000000 INVERT AND  0x04000000 OR  _UPRE-STY !
+            _UPRE-STY @  0xC00000000 INVERT AND  0x400000000 OR  _UPRE-STY !
         ELSE 2DUP S" fixed" STR-STRI= IF
             2DROP
-            _UPRE-STY @  0x0C000000 INVERT AND  0x08000000 OR  _UPRE-STY !
+            _UPRE-STY @  0xC00000000 INVERT AND  0x800000000 OR  _UPRE-STY !
         ELSE 2DROP THEN THEN
     ELSE 2DROP THEN
 
@@ -2379,43 +2686,43 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     _URES-SC @  _UCD-OFF @ +  ! ;
 
 \ _UTUI-CSS-SET-ALIGN ( val-a val-u -- )
-\   Parse text-align value and set bits 24-25 of style.
+\   Parse text-align value and set bits 32-33 of style.
 : _UTUI-CSS-SET-ALIGN  ( val-a val-u -- )
     2DUP S" center" STR-STRI= IF
         2DROP
-        _URES-STYLE @  0x03000000 INVERT AND  0x01000000 OR  _URES-STYLE !
+        _URES-STYLE @  0x300000000 INVERT AND  0x100000000 OR  _URES-STYLE !
         EXIT
     THEN
     2DUP S" right" STR-STRI= IF
         2DROP
-        _URES-STYLE @  0x03000000 INVERT AND  0x02000000 OR  _URES-STYLE !
+        _URES-STYLE @  0x300000000 INVERT AND  0x200000000 OR  _URES-STYLE !
         EXIT
     THEN
     2DROP ;   \ "left" or unknown → 0 (default)
 
 \ _UTUI-CSS-SET-POSITION ( val-a val-u -- )
-\   Parse position value and set bits 26-27 of style.
+\   Parse position value and set bits 34-35 of style.
 : _UTUI-CSS-SET-POSITION  ( val-a val-u -- )
     2DUP S" absolute" STR-STRI= IF
         2DROP
-        _URES-STYLE @  0x0C000000 INVERT AND  0x04000000 OR  _URES-STYLE !
+        _URES-STYLE @  0xC00000000 INVERT AND  0x400000000 OR  _URES-STYLE !
         EXIT
     THEN
     2DUP S" fixed" STR-STRI= IF
         2DROP
-        _URES-STYLE @  0x0C000000 INVERT AND  0x08000000 OR  _URES-STYLE !
+        _URES-STYLE @  0xC00000000 INVERT AND  0x800000000 OR  _URES-STYLE !
         EXIT
     THEN
     2DROP ;   \ "static" or unknown → 0 (default)
 
 \ _UTUI-CSS-SET-ZINDEX ( val-a val-u -- )
-\   Parse z-index integer (0-255) and set bits 28-35 of style.
+\   Parse z-index integer (0-255) and set bits 36-43 of style.
 : _UTUI-CSS-SET-ZINDEX  ( val-a val-u -- )
     _UTUI-CSS-INT 0= IF DROP EXIT THEN
     DUP 0 < IF DROP 0 THEN
     255 MIN
-    28 LSHIFT
-    _URES-STYLE @  0xFF0000000 INVERT AND  OR  _URES-STYLE ! ;
+    36 LSHIFT
+    _URES-STYLE @  0xFF000000000 INVERT AND  OR  _URES-STYLE ! ;
 
 \ _UTUI-CSS-SET-PAD ( val-a val-u -- )
 \   Parse padding shorthand (1-4 values) and store in sidecar.

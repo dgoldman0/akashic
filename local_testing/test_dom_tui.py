@@ -30,6 +30,7 @@ CELL_F    = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
 ANSI_F    = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
 SCREEN_F  = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
 DRAW_F    = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
+SIDECAR_F = os.path.join(ROOT_DIR, "akashic", "tui", "tui-sidecar.f")
 REGION_F  = os.path.join(ROOT_DIR, "akashic", "tui", "region.f")
 DOMTUI_F  = os.path.join(ROOT_DIR, "akashic", "tui",         "dom-tui.f")
 BOX_F     = os.path.join(ROOT_DIR, "akashic", "tui",         "box.f")
@@ -255,6 +256,8 @@ def build_snapshot():
         ("screen.f",  13, 1, read_file_bytes(SCREEN_F)),
         # idx 17: tui/draw.f
         ("draw.f",    13, 1, read_file_bytes(DRAW_F)),
+        # tui/tui-sidecar.f
+        ("tui-sidecar.f", 13, 1, read_file_bytes(SIDECAR_F)),
         # idx 18: tui/region.f
         ("region.f",  13, 1, read_file_bytes(REGION_F)),
         # idx 19: tui/dom-tui.f
@@ -548,7 +551,7 @@ def run_tests():
          '_DB DOM-BODY DOM-APPEND',
          '_TDOC DTUI-ATTACH',
          ': t  _DB DTUI-SIDECAR DTUI-SC-FLAGS',
-         '  4 AND 0<>',
+         '  16 AND 0<>',
          '  CR ." [B=" . ." ]" ; t'],
         '[B=-1 ]')
 
@@ -672,7 +675,7 @@ def run_tests():
         ['S" input" DOM-CREATE-ELEMENT DOM-BODY DOM-APPEND',
          '_TDOC DTUI-ATTACH',
          ': t  DOM-BODY DOM-FIRST-CHILD DTUI-SIDECAR DTUI-SC-FLAGS',
-         '  16 AND 0<>',
+         '  4 AND 0<>',
          '  CR ." [F=" . ." ]" ; t'],
         '[F=-1 ]')
 
@@ -680,7 +683,7 @@ def run_tests():
         ['S" button" DOM-CREATE-ELEMENT DOM-BODY DOM-APPEND',
          '_TDOC DTUI-ATTACH',
          ': t  DOM-BODY DOM-FIRST-CHILD DTUI-SIDECAR DTUI-SC-FLAGS',
-         '  16 AND 0<>',
+         '  4 AND 0<>',
          '  CR ." [F=" . ." ]" ; t'],
         '[F=-1 ]')
 
@@ -688,7 +691,7 @@ def run_tests():
         ['S" div" DOM-CREATE-ELEMENT DOM-BODY DOM-APPEND',
          '_TDOC DTUI-ATTACH',
          ': t  DOM-BODY DOM-FIRST-CHILD DTUI-SIDECAR DTUI-SC-FLAGS',
-         '  16 AND 0=',
+         '  4 AND 0=',
          '  CR ." [F=" . ." ]" ; t'],
         '[F=-1 ]')
 
@@ -766,7 +769,7 @@ def run_tests():
         ['S" div" DOM-CREATE-ELEMENT DOM-BODY DOM-APPEND',
          '_TDOC DTUI-ATTACH',
          ': t  DOM-BODY DOM-FIRST-CHILD DTUI-SIDECAR DTUI-SC-FLAGS',
-         '  1 AND 0<>',
+         '  32 AND 0<>',
          '  CR ." [D=" . ." ]" ; t'],
         '[D=-1 ]')
 
@@ -808,16 +811,16 @@ def run_tests():
     # ==================================================================
     print("\n=== Flag Constants ===")
 
-    check("DTUI-F-GEOM-DIRTY = 32",
+    check("DTUI-F-GEOM-DIRTY = 64",
         [': t  DTUI-F-GEOM-DIRTY',
          '  CR ." [G=" . ." ]" ; t'],
-        '[G=32 ]')
+        '[G=64 ]')
 
     check("All flag values",
         [': t  DTUI-F-DIRTY DTUI-F-VISIBLE DTUI-F-BLOCK',
          '  DTUI-F-HIDDEN DTUI-F-FOCUSABLE DTUI-F-GEOM-DIRTY',
          '  CR ." [" . . . . . . ." ]" ; t'],
-        '[32 16 8 4 2 1 ]')
+        '[64 4 8 16 2 32 ]')
 
     # ==================================================================
     #  §NEW-4 — Dirty Marking
@@ -829,22 +832,22 @@ def run_tests():
          '_DM DOM-BODY DOM-APPEND',
          '_TDOC DTUI-ATTACH',
          '_DM DTUI-SIDECAR DTUI-CLEAR-DIRTY',
-         ': t  _DM DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         ': t  _DM DTUI-SIDECAR DTUI-SC-FLAGS 32 AND',
          '  _DM DTUI-MARK-DIRTY',
-         '  _DM DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  _DM DTUI-SIDECAR DTUI-SC-FLAGS 32 AND',
          '  CR ." [A=" . ." B=" . ." ]" ; t'],
-        '[A=1 B=0 ]')
+        '[A=32 B=0 ]')
 
     check("DTUI-MARK-GEOM-DIRTY sets DIRTY + GEOM-DIRTY",
         ['S" div" DOM-CREATE-ELEMENT CONSTANT _DG',
          '_DG DOM-BODY DOM-APPEND',
          '_TDOC DTUI-ATTACH',
          # Clear both flags
-         '_DG DTUI-SIDECAR DUP DTUI-SC-FLAGS 1 INVERT AND 32 INVERT AND SWAP DTUI-SC-FLAGS!',
+         '_DG DTUI-SIDECAR DUP DTUI-SC-FLAGS 32 INVERT AND 64 INVERT AND SWAP DTUI-SC-FLAGS!',
          ': t  _DG DTUI-MARK-GEOM-DIRTY',
          '  _DG DTUI-SIDECAR DTUI-SC-FLAGS',
-         '  DUP 1 AND 0<>',
-         '  SWAP 32 AND 0<>',
+         '  DUP 32 AND 0<>',
+         '  SWAP 64 AND 0<>',
          '  CR ." [D=" . ." G=" . ." ]" ; t'],
         '[D=-1 G=-1 ]')
 
@@ -853,11 +856,11 @@ def run_tests():
          '_DC DOM-BODY DOM-APPEND',
          '_TDOC DTUI-ATTACH',
          '_DC DTUI-MARK-DIRTY',
-         ': t  _DC DTUI-SIDECAR DUP DTUI-SC-FLAGS 1 AND',
+         ': t  _DC DTUI-SIDECAR DUP DTUI-SC-FLAGS 32 AND',
          '  SWAP DTUI-CLEAR-DIRTY',
-         '  _DC DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  _DC DTUI-SIDECAR DTUI-SC-FLAGS 32 AND',
          '  CR ." [A=" . ." B=" . ." ]" ; t'],
-        '[A=0 B=1 ]')
+        '[A=0 B=32 ]')
 
     check("DTUI-CLEAR-GEOM-DIRTY clears only GEOM-DIRTY",
         ['S" div" DOM-CREATE-ELEMENT CONSTANT _CG',
@@ -866,8 +869,8 @@ def run_tests():
          '_CG DTUI-MARK-GEOM-DIRTY',
          ': t  _CG DTUI-SIDECAR DTUI-CLEAR-GEOM-DIRTY',
          '  _CG DTUI-SIDECAR DTUI-SC-FLAGS',
-         '  DUP 1 AND 0<>',     # DIRTY still set
-         '  SWAP 32 AND',        # GEOM-DIRTY cleared
+         '  DUP 32 AND 0<>',    # DIRTY still set
+         '  SWAP 64 AND',        # GEOM-DIRTY cleared
          '  CR ." [G=" . ." D=" . ." ]" ; t'],
         '[G=0 D=-1 ]')
 
@@ -883,9 +886,9 @@ def run_tests():
          '_TDOC DTUI-ATTACH',
          '_ST DTUI-SIDECAR DTUI-CLEAR-DIRTY',
          ': t  _ST S" world" DTUI-SET-TEXT!',
-         '  _ST DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  _ST DTUI-SIDECAR DTUI-SC-FLAGS 32 AND',
          '  CR ." [D=" . ." ]" ; t'],
-        '[D=1 ]')
+        '[D=32 ]')
 
     check("DTUI-ATTR! marks dirty",
         ['S" div" DOM-CREATE-ELEMENT CONSTANT _DA',
@@ -893,9 +896,9 @@ def run_tests():
          '_TDOC DTUI-ATTACH',
          '_DA DTUI-SIDECAR DTUI-CLEAR-DIRTY',
          ': t  _DA S" id" S" foo" DTUI-ATTR!',
-         '  _DA DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  _DA DTUI-SIDECAR DTUI-SC-FLAGS 32 AND',
          '  CR ." [D=" . ." ]" ; t'],
-        '[D=1 ]')
+        '[D=32 ]')
 
     check("DTUI-ATTR-DEL! marks dirty",
         ['S" div" DOM-CREATE-ELEMENT CONSTANT _DD',
@@ -904,9 +907,9 @@ def run_tests():
          '_TDOC DTUI-ATTACH',
          '_DD DTUI-SIDECAR DTUI-CLEAR-DIRTY',
          ': t  _DD S" id" DTUI-ATTR-DEL!',
-         '  _DD DTUI-SIDECAR DTUI-SC-FLAGS 1 AND',
+         '  _DD DTUI-SIDECAR DTUI-SC-FLAGS 32 AND',
          '  CR ." [D=" . ." ]" ; t'],
-        '[D=1 ]')
+        '[D=32 ]')
 
     # ==================================================================
     #  §NEW-6 — Class Helpers (token ops)

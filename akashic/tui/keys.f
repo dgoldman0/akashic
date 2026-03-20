@@ -360,7 +360,10 @@ VARIABLE _KEY-CSI-FINAL    \ final (terminator) byte
                 _KEY-PARSE-NUM KEY-MOUSE-X !
                 _KEY-SKIP-SEP
                 _KEY-PARSE-NUM KEY-MOUSE-Y !
-                KEY-T-MOUSE R> R> DROP 0 _KEY-SET-EV EXIT
+                \ Pack 0-based row/col into mods: (row-1)<<16 | (col-1)
+                KEY-T-MOUSE R> R> DROP
+                KEY-MOUSE-Y @ 1- 16 LSHIFT KEY-MOUSE-X @ 1- OR
+                _KEY-SET-EV EXIT
             ELSE
                 \ Normal mouse mode (not SGR) — legacy X10
                 \ param1 = button, but encoded differently.
@@ -377,7 +380,10 @@ VARIABLE _KEY-CSI-FINAL    \ final (terminator) byte
                 _KEY-PARSE-NUM KEY-MOUSE-X !
                 _KEY-SKIP-SEP
                 _KEY-PARSE-NUM KEY-MOUSE-Y !
-                KEY-T-MOUSE KEY-MOUSE-RELEASE R> _KEY-SET-EV EXIT
+                \ Pack 0-based row/col into mods: (row-1)<<16 | (col-1)
+                KEY-T-MOUSE KEY-MOUSE-RELEASE R> DROP
+                KEY-MOUSE-Y @ 1- 16 LSHIFT KEY-MOUSE-X @ 1- OR
+                _KEY-SET-EV EXIT
             ELSE
                 KEY-T-CHAR [CHAR] m R> _KEY-SET-EV EXIT
             THEN

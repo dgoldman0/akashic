@@ -31,6 +31,7 @@ CELL_F    = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
 ANSI_F    = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
 SCREEN_F  = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
 DRAW_F    = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
+SIDECAR_F = os.path.join(ROOT_DIR, "akashic", "tui", "tui-sidecar.f")
 REGION_F  = os.path.join(ROOT_DIR, "akashic", "tui", "region.f")
 BOX_F     = os.path.join(ROOT_DIR, "akashic", "tui", "box.f")
 DOMTUI_F  = os.path.join(ROOT_DIR, "akashic", "tui", "dom-tui.f")
@@ -254,6 +255,8 @@ def build_snapshot():
         ("screen.f",  14, 1, read_file_bytes(SCREEN_F)),
         # idx 18: tui/draw.f
         ("draw.f",    14, 1, read_file_bytes(DRAW_F)),
+        # tui/tui-sidecar.f
+        ("tui-sidecar.f", 14, 1, read_file_bytes(SIDECAR_F)),
         # idx 19: tui/region.f
         ("region.f",  14, 1, read_file_bytes(REGION_F)),
         # idx 20: tui/box.f
