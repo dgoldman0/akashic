@@ -141,6 +141,22 @@ VARIABLE _ASHELL-TOAST-EXPIRY             \ MS@ deadline
 VARIABLE _ASHELL-TOAST-WAS-VIS            \ was-visible flag
 0 _ASHELL-TOAST-WAS-VIS !
 
+\ --- Shell cursor state ---
+\  A keyboard-driven pointer activated by Alt+Arrow.
+\  Visible only while Alt-modified keys are being pressed.
+VARIABLE _ASHELL-CUR-ROW
+VARIABLE _ASHELL-CUR-COL
+VARIABLE _ASHELL-CUR-VIS        \ 0 = hidden, -1 = visible
+
+0 _ASHELL-CUR-ROW !
+0 _ASHELL-CUR-COL !
+0 _ASHELL-CUR-VIS !
+
+\ Button constants for ASHELL-CUR-CLICK / UTUI-DISPATCH-MOUSE
+0 CONSTANT ASHELL-BTN-LEFT
+1 CONSTANT ASHELL-BTN-MIDDLE
+2 CONSTANT ASHELL-BTN-RIGHT
+
 \ =====================================================================
 \  §3 — Deferred Action Queue (FIFO, max 16 entries)
 \ =====================================================================
@@ -202,6 +218,13 @@ VARIABLE _ASHELL-POST-TAIL
 \   The root region that covers the full screen.
 : ASHELL-REGION  ( -- rgn )
     _ASHELL-RGN @ ;
+
+\ --- Mouse event helpers ---
+\ Extract fields from a synthetic mouse event (type=KEY-T-MOUSE).
+: ASHELL-MOUSE-ROW  ( ev -- row )  16 + @ 16 RSHIFT ;
+: ASHELL-MOUSE-COL  ( ev -- col )  16 + @ 0xFFFF AND ;
+: ASHELL-MOUSE-BTN  ( ev -- btn )  8 + @ ;
+: ASHELL-MOUSE?     ( ev -- flag ) @ KEY-T-MOUSE = ;
 
 \ ASHELL-LOAD-UIDL ( path-a path-u rgn -- buf | 0 )
 \   Open a VFS file, read its contents into a heap buffer, then
@@ -285,6 +308,92 @@ VARIABLE _ALUF-BUF
 CREATE _ASHELL-EV  24 ALLOT     \ 3-cell key event descriptor
 
 \ =====================================================================
+\  §5b — Shell Cursor (keyboard-driven pointer)
+\ =====================================================================
+\
+\  Alt+Arrow moves a one-cell cursor (⊹ U+22B9).  Visible only while
+\  Alt-modified keys are pressed — any non-Alt key hides it.
+\  Alt+Del/End/PgDn synthesise left/middle/right clicks via
+\  UTUI-DISPATCH-MOUSE (or the app's event handler for routing).
+
+\ _ASHELL-CUR-CLAMP ( -- )
+\   Clamp cursor position to valid screen coordinates.
+: _ASHELL-CUR-CLAMP  ( -- )
+    _ASHELL-CUR-ROW @ 0 MAX SCR-H 1- MIN _ASHELL-CUR-ROW !
+    _ASHELL-CUR-COL @ 0 MAX SCR-W 1- MIN _ASHELL-CUR-COL ! ;
+
+\ _ASHELL-CUR-INIT ( -- )
+\   Centre the cursor on the screen.
+: _ASHELL-CUR-INIT  ( -- )
+    SCR-H 2/ _ASHELL-CUR-ROW !
+    SCR-W 2/ _ASHELL-CUR-COL !
+    0 _ASHELL-CUR-VIS ! ;
+
+\ Forward reference — resolved in §7 after _ASHELL-DISPATCH-MOUSE
+\   is defined.
+DEFER _ASHELL-DISPATCH-MOUSE
+
+\ _ASHELL-CUR-MOVE ( drow dcol -- )
+\   Shift cursor position by delta, clamp, show, and dirty.
+: _ASHELL-CUR-MOVE  ( drow dcol -- )
+    _ASHELL-CUR-COL +!
+    _ASHELL-CUR-ROW +!
+    _ASHELL-CUR-CLAMP
+    -1 _ASHELL-CUR-VIS !
+    ASHELL-DIRTY! ;
+
+\ ASHELL-CUR-CLICK ( btn -- )
+\   Synthesise a click at the cursor position.  Builds a synthetic
+\   mouse event (type=KEY-T-MOUSE, code=btn, mods=row<<16|col) and
+\   routes it through the normal dispatch chain.  This way the app's
+\   EVENT-XT (e.g. DESK-EVENT-CB) sees it and can do tile routing.
+\   If the app doesn't consume it, UIDL mouse dispatch runs.
+: ASHELL-CUR-CLICK  ( btn -- )
+    \ Build synthetic mouse event in _ASHELL-EV
+    KEY-T-MOUSE _ASHELL-EV !           \ type = mouse
+    _ASHELL-EV 8 + !                   \ code = btn
+    _ASHELL-CUR-ROW @ 16 LSHIFT
+    _ASHELL-CUR-COL @ OR
+    _ASHELL-EV 16 + !                  \ mods = row<<16 | col
+    _ASHELL-EV _ASHELL-DISPATCH-MOUSE ;
+
+\ _ASHELL-CUR-KEY? ( ev -- flag )
+\   Check if the event is an Alt+Arrow/Alt+Del/Alt+End/Alt+PgDn.
+\   If so, handle it and return TRUE.  Otherwise return FALSE.
+VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
+
+: _ASHELL-CUR-KEY?  ( ev -- flag )
+    DUP @ KEY-T-SPECIAL <> IF DROP 0 EXIT THEN
+    DUP 16 + @ _ACK-MODS !
+    8 + @ _ACK-CODE !
+    _ACK-MODS @ KEY-MOD-ALT AND 0= IF 0 EXIT THEN
+    \ Alt+Arrow → move
+    _ACK-CODE @
+    DUP KEY-UP    = IF DROP -1  0 _ASHELL-CUR-MOVE -1 EXIT THEN
+    DUP KEY-DOWN  = IF DROP  1  0 _ASHELL-CUR-MOVE -1 EXIT THEN
+    DUP KEY-LEFT  = IF DROP  0 -1 _ASHELL-CUR-MOVE -1 EXIT THEN
+    DUP KEY-RIGHT = IF DROP  0  1 _ASHELL-CUR-MOVE -1 EXIT THEN
+    \ Alt+Del → left click
+    DUP KEY-DEL   = IF DROP ASHELL-BTN-LEFT   ASHELL-CUR-CLICK -1 EXIT THEN
+    \ Alt+End → middle click
+    DUP KEY-END   = IF DROP ASHELL-BTN-MIDDLE ASHELL-CUR-CLICK -1 EXIT THEN
+    \ Alt+PgDn → right click
+    DUP KEY-PGDN  = IF DROP ASHELL-BTN-RIGHT  ASHELL-CUR-CLICK -1 EXIT THEN
+    DROP 0 ;
+
+\ _ASHELL-DRAW-CURSOR ( -- )
+\   Draw cursor glyph ⊹ (U+22B9) at the cursor position.
+\   Uses bright white on the cell's existing background.
+: _ASHELL-DRAW-CURSOR  ( -- )
+    RGN-ROOT
+    15 DRW-FG!  0 DRW-BG!  1 DRW-ATTR!   \ bright white, bold
+    0x22B9
+    _ASHELL-CUR-ROW @
+    _ASHELL-CUR-COL @
+    DRW-CHAR
+    DRW-STYLE-RESET ;
+
+\ =====================================================================
 \  §6 — Resize Handling
 \ =====================================================================
 
@@ -293,6 +402,8 @@ CREATE _ASHELL-EV  24 ALLOT     \ 3-cell key event descriptor
     \ Rebuild root region from new screen dimensions
     _ASHELL-RGN @ ?DUP IF RGN-FREE THEN
     0 0 SCR-H SCR-W RGN-NEW _ASHELL-RGN !
+    \ Clamp cursor to new dimensions
+    _ASHELL-CUR-CLAMP
     \ Re-layout UIDL tree if loaded
     _ASHELL-HAS-UIDL @ IF
         UTUI-RELAYOUT
@@ -304,8 +415,16 @@ CREATE _ASHELL-EV  24 ALLOT     \ 3-cell key event descriptor
 \ =====================================================================
 
 \ _ASHELL-DISPATCH-KEY ( ev -- )
-\   Route a key event through the app's handler, then UIDL dispatch.
+\   Route a key event through cursor handling, then the app's handler,
+\   then UIDL dispatch.
 : _ASHELL-DISPATCH-KEY  ( ev -- )
+    \ 0. Shell cursor intercepts Alt+Arrow / Alt+Click keys first
+    DUP _ASHELL-CUR-KEY? IF DROP EXIT THEN
+    \ Any non-cursor key hides the cursor (Alt was not an arrow/click)
+    _ASHELL-CUR-VIS @ IF
+        0 _ASHELL-CUR-VIS !
+        ASHELL-DIRTY!
+    THEN
     \ 1. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
         OVER SWAP EXECUTE            ( ev consumed? )
@@ -317,6 +436,25 @@ CREATE _ASHELL-EV  24 ALLOT     \ 3-cell key event descriptor
         IF ASHELL-DIRTY! THEN
     THEN
     DROP ;
+
+\ _ASHELL-DISPATCH-MOUSE-IMPL ( ev -- )
+\   Route a mouse event through the app's handler, then UIDL dispatch.
+\   ev layout: +0=KEY-T-MOUSE, +8=btn, +16=row<<16|col
+: _ASHELL-DISPATCH-MOUSE-IMPL  ( ev -- )
+    \ 1. App's event handler gets first crack
+    _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
+        OVER SWAP EXECUTE            ( ev consumed? )
+        IF DROP ASHELL-DIRTY! EXIT THEN
+    THEN
+    \ 2. UIDL mouse dispatch
+    _ASHELL-HAS-UIDL @ IF
+        DUP 16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND   ( ev row col )
+        2 PICK 8 + @                                 ( ev row col btn )
+        UTUI-DISPATCH-MOUSE          ( ev handled? )
+        IF ASHELL-DIRTY! THEN
+    THEN
+    DROP ;
+' _ASHELL-DISPATCH-MOUSE-IMPL IS _ASHELL-DISPATCH-MOUSE
 
 \ _ASHELL-CHECK-RESIZE ( ev -- )
 \   If the event is a resize, handle it.
@@ -387,6 +525,10 @@ VARIABLE _ASHELL-TICK-TMP
     ASHELL-TOAST-VISIBLE? IF
         _ASHELL-DRAW-TOAST
     THEN
+    \ Shell cursor (drawn above toast)
+    _ASHELL-CUR-VIS @ IF
+        _ASHELL-DRAW-CURSOR
+    THEN
     RGN-ROOT
     SCR-FLUSH ;
 
@@ -438,6 +580,8 @@ _ASHELL-VFS-INIT
     THEN
     \ 3. Root region (full screen)
     0 0 SCR-H SCR-W RGN-NEW _ASHELL-RGN !
+    \ 3b. Centre shell cursor
+    _ASHELL-CUR-INIT
     \ 4. UIDL document
     \   Priority: inline UIDL-A > file UIDL-FILE-A > none
     DUP APP.UIDL-A @ ?DUP IF
@@ -498,7 +642,8 @@ _ASHELL-VFS-INIT
     0 _ASHELL-RUNNING !
     0 _ASHELL-DIRTY !
     0 _ASHELL-POST-HEAD !
-    0 _ASHELL-POST-TAIL ! ;
+    0 _ASHELL-POST-TAIL !
+    0 _ASHELL-CUR-VIS ! ;
 
 \ =====================================================================
 \  §12 — Event Loop

@@ -213,6 +213,26 @@ All shortcuts require **Alt** modifier:
 | Alt+W | Close focused slot |
 | Alt+H | Launch next unlaunched hotbar entry |
 
+Alt+Arrow, Alt+Del, Alt+End, and Alt+PgDn are reserved by&nbsp;the shell
+cursor and never reach desk’s event handler.
+
+## Mouse Dispatch
+
+When the shell cursor synthesises a click (or a real mouse event
+arrives), `DESK-EVENT-CB` detects the `KEY-T-MOUSE` type via
+`ASHELL-MOUSE?` and routes to `_DESK-DISPATCH-MOUSE` before any
+keyboard handling.
+
+**Tile hit-test** — `_DESK-TILE-AT ( row col -- slot | 0 )` walks the
+linked-list of visible slots and checks whether `(row, col)` falls
+within each tile’s `RGN-ROW`/`RGN-COL`/`RGN-H`/`RGN-W` bounds.
+Returns the first matching slot, or 0 on miss.
+
+**Dispatch** — `_DESK-DISPATCH-MOUSE` extracts row, col, and button
+from the event, hits-tests tiles, context-switches to the winning
+slot, then calls `UTUI-DISPATCH-MOUSE` with coordinates local to
+that sub-app’s UIDL tree.  If no tile is hit, the event is dropped.
+
 ## UIDL Context System
 
 Each sub-app with a UIDL document gets a ~97 KiB context buffer that
@@ -253,6 +273,7 @@ live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
 | 8 | Focus/Minimize/Restore | State transitions, auto-focus |
 | 9 | Taskbar Painter | Per-item styled painting + hotbar + divider |
 | 10 | APP-DESC Callbacks | Init, event, tick, paint, shutdown |
+| 10b | Mouse Dispatch | Tile hit-test + per-tile UTUI-DISPATCH-MOUSE routing |
 | 11 | Descriptor & Entry | `DESK-DESC`, `_DESK-FILL-DESC`, `DESK-RUN` |
 | 12 | Guard | `WITH-GUARD` wrappers for concurrency safety |
 

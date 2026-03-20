@@ -851,6 +851,50 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
         DROP _DESK-HOTBAR-LAUNCH-NEXT -1 EXIT THEN
     DROP 0 ;
 
+\ _DESK-TILE-AT ( row col -- slot | 0 )
+\   Find the visible slot whose region contains (row, col).
+\   Walks the slot list; returns the first match or 0.
+VARIABLE _DTA-ROW  VARIABLE _DTA-COL
+
+: _DESK-TILE-AT  ( row col -- slot | 0 )
+    _DTA-COL !  _DTA-ROW !
+    _DESK-HEAD @
+    BEGIN ?DUP WHILE
+        DUP _SL-VISIBLE? IF
+            DUP _SL-RGN @ ?DUP IF        ( slot rgn )
+                DUP RGN-ROW _DTA-ROW @ <=
+                OVER RGN-COL _DTA-COL @ <= AND
+                OVER RGN-ROW OVER RGN-H + _DTA-ROW @ > AND
+                SWAP RGN-COL SWAP RGN-W + _DTA-COL @ > AND
+                IF EXIT THEN              ( slot — match )
+            THEN
+        THEN
+        _SL-NEXT @
+    REPEAT
+    0 ;
+
+\ _DESK-DISPATCH-MOUSE ( ev -- flag )
+\   Handle a synthetic mouse event from the shell cursor.
+\   Hit-test tiles, context-switch, and forward to UTUI-DISPATCH-MOUSE.
+: _DESK-DISPATCH-MOUSE  ( ev -- flag )
+    DUP ASHELL-MOUSE-ROW OVER ASHELL-MOUSE-COL   ( ev row col )
+    2DUP _DESK-TILE-AT                             ( ev row col slot|0 )
+    DUP 0= IF DROP 2DROP DROP 0 EXIT THEN
+    >R                                             ( ev row col  R: slot )
+    R@ _SL-HAS-UIDL @ IF
+        R@ _DESK-CTX-SWITCH
+        3 PICK ASHELL-MOUSE-BTN        ( ev row col btn )
+        UTUI-DISPATCH-MOUSE            ( ev handled? )
+        IF
+            R@ _DESK-CTX-SAVE
+            R> DROP
+            DROP -1 EXIT
+        THEN
+    THEN
+    R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
+    R> DROP
+    DROP 0 ;
+
 \ --- Event ---
 \
 \  Routes events to the focused sub-app.  If the sub-app calls
@@ -858,6 +902,10 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
 \  ASHELL-CANCEL-QUIT, and close that tile instead of shutting
 \  down the whole shell.
 : DESK-EVENT-CB  ( ev -- flag )
+    \ 0. Mouse events → tile hit-test routing
+    DUP ASHELL-MOUSE? IF
+        _DESK-DISPATCH-MOUSE EXIT
+    THEN
     \ 1. Route to focused sub-app
     _DESK-FOCUS-SA @ ?DUP IF
         >R

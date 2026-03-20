@@ -37,6 +37,8 @@ REQUIRE tui/uidl-tui.f
 - [Focus Management](#focus-management)
 - [Hit Testing](#hit-testing)
 - [Paint & Layout](#paint--layout)
+- [Positioned Element Resolution](#positioned-element-resolution)
+- [Subscription Wiring](#subscription-wiring)
 - [Event Dispatch](#event-dispatch)
 - [Dialog Management](#dialog-management)
 - [Actions & Shortcuts](#actions--shortcuts)
@@ -398,7 +400,88 @@ elements with custom layout words.
 
 ---
 
-## Event Dispatch
+## Positioned Element Resolution
+
+After flow layout (§7/§11) and style resolution (§16b), positioned
+elements are resolved in a second pass by `_UTUI-RESOLVE-POSITIONED`
+(§7b).  During flow layout, elements with `position: absolute` or
+`position: fixed` are skipped — they don't participate in normal
+flow.  This pass places them after all static geometry is known.
+
+### Coordinate Frames
+
+| Position | Reference Frame |
+|----------|----------------|
+| `absolute` (1) | Parent sidecar row/col.  Falls back to root region if no parent. |
+| `fixed` (2) | Root region row/col (screen-relative). |
+
+### Offset Application
+
+The four CSS offsets (`top`, `right`, `bottom`, `left`) are stored as
+signed 16-bit values packed into the sidecar `+64` cell.  After
+determining the reference frame:
+
+- **Row** = base-row + top-offset
+- **Col** = base-col + left-offset
+- **Width**: explicit CSS width if set, else `parent-width − left − right` (min 1)
+- **Height**: explicit CSS height if set, else `parent-height − top − bottom` (min 1)
+
+### Internal Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `_UTUI-RESOLVE-POS-ELEM` | `( elem -- )` | Resolve one element.  No-op for `position: static`. |
+| `_UTUI-RESOLVE-POSITIONED` | `( -- )` | DFS walk; call `_UTUI-RESOLVE-POS-ELEM` on every element. |
+
+Called once during `UTUI-LOAD`, after `_UTUI-RESOLVE-STYLES` and
+before `_UTUI-MATERIALIZE`.
+
+---
+
+## Subscription Wiring
+
+`_UTUI-WIRE-SUBS` (§12) performs a depth-first walk of the entire
+UIDL tree, registering two things per element:
+
+1. **Reactive bindings** — if the element has a `bind=` attribute,
+   `UIDL-SUBSCRIBE` is called so the element re-evaluates when the
+   bound state-tree key changes.
+2. **Keyboard shortcuts** — if the element has a `key=` attribute,
+   `_UTUI-REG-SHORTCUT` parses the key descriptor (e.g.
+   `"Ctrl+S"`, `"Alt+F1"`) and adds the element to the shortcut
+   table.
+
+Both the subscription pool and shortcut table are cleared at the
+start of the walk (`UIDL-RESET-SUBS`, `_UTUI-SHORT-CLEAR`), so
+wiring is idempotent and safe to re-run.
+
+### Key Descriptor Format
+
+The `key=` attribute accepts descriptors like:
+
+```
+key="Ctrl+S"        → Ctrl modifier + 's'
+key="Alt+F1"        → Alt modifier + F1
+key="Enter"         → Enter, no modifier
+key="Ctrl+Shift+Z" → Ctrl+Shift + 'z'
+```
+
+Modifier prefixes (`Ctrl+`, `Alt+`, `Shift+`) are stripped and
+ORed into a modifier mask.  The remainder is matched against named
+keys (`F1`–`F12`, `Tab`, `Enter`, `Escape`, `Delete`, `Insert`,
+`Home`, `End`, `PageUp`, `PageDown`, arrow keys) or taken as a
+literal character code.
+
+### Internal Words
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `_UTUI-WIRE-SUBS` | `( -- )` | DFS walk: subscribe bindings + register shortcuts. |
+| `_UTUI-REG-SHORTCUT` | `( elem -- )` | Parse `key=` attr and add to shortcut table (max 64). |
+| `_UTUI-SHORT-MATCH` | `( key-code mod-mask -- elem \| 0 )` | Look up a shortcut match. |
+| `_UTUI-SHORT-CLEAR` | `( -- )` | Zero-fill the shortcut table. |
+
+Called once during `UTUI-LOAD`, after materialization.
 
 ### UTUI-DISPATCH-KEY — `( ev -- handled? )`
 

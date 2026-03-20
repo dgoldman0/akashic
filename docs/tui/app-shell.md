@@ -160,11 +160,21 @@ is re-raised.  The terminal is always left clean.
 
 For each key event:
 
+0. **Shell cursor** — `_ASHELL-CUR-KEY?` intercepts Alt+Arrow (move),
+   Alt+Del/End/PgDn (click).  The shell owns these before any app sees
+   them.  Any non-Alt key hides the cursor.
 1. **App handler** — `APP.EVENT-XT` gets first crack.  If it returns
    true, the event is consumed and the screen is marked dirty.
 2. **UIDL dispatch** — `UTUI-DISPATCH-KEY` routes to shortcuts and
    focused elements.  If it returns true, the screen is marked dirty.
 3. **Drop** — unhandled events are discarded.
+
+For mouse events (synthesised by cursor clicks):
+
+1. **App handler** — `APP.EVENT-XT` gets first crack (e.g.
+   `DESK-EVENT-CB` routes to the tile under the cursor).
+2. **UIDL dispatch** — `UTUI-DISPATCH-MOUSE` hit-tests the element
+   tree, focuses, and fires `do=`.  Only runs if the app didn't consume.
 
 ### Paint Order
 
@@ -172,7 +182,8 @@ For each key event:
 2. `UTUI-PAINT` — UIDL elements (if loaded)
 3. `APP.PAINT-XT` — app's custom widget drawing (on top of UIDL)
 4. Toast overlay — `_ASHELL-DRAW-TOAST` (if visible)
-5. `RGN-ROOT` — reset region
+5. Cursor overlay — `_ASHELL-DRAW-CURSOR` (if `_ASHELL-CUR-VIS`)
+6. `RGN-ROOT` — reset region
 6. `SCR-FLUSH` — diff and emit to terminal
 
 ### Resize Handling
@@ -218,6 +229,63 @@ The toast is drawn last in the paint cycle (on top of everything).
 Expiry is checked in `_ASHELL-CHECK-TICK` — when the toast expires,
 the shell auto-dirties to clear it.  No timer or paint code in the
 app.
+
+## Shell Cursor
+
+The shell provides a keyboard-driven pointer for mouse-less
+environments.  The cursor is a single-cell glyph (⊹ U+22B9)
+that moves with **Alt+Arrows** and synthesises click events with
+**Alt+Del** (left), **Alt+End** (middle), **Alt+PgDn** (right).
+
+The cursor is only visible while Alt-modified keys are being pressed.
+Any non-Alt key event hides it immediately.  This makes the cursor a
+transient overlay that never interferes with normal editing.
+
+### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| Alt+↑/↓/←/→ | Move cursor one cell |
+| Alt+Del | Left click at cursor position |
+| Alt+End | Middle click at cursor position |
+| Alt+PgDn | Right click at cursor position |
+
+### Click Synthesis
+
+`ASHELL-CUR-CLICK` builds a synthetic mouse event in the shell's
+event buffer (`_ASHELL-EV`) and routes it through
+`_ASHELL-DISPATCH-MOUSE`.  The event format matches real mouse
+input:
+
+| Offset | Field | Value |
+|--------|-------|-------|
+| +0 | type | `KEY-T-MOUSE` |
+| +8 | code | button (0=left, 1=middle, 2=right) |
+| +16 | mods | `row << 16 \| col` |
+
+The dispatch chain is: app event handler first (so desk can do
+tile routing), then UIDL `UTUI-DISPATCH-MOUSE` (hit-test → focus →
+fire `do=`).
+
+### Mouse Event Helpers
+
+| Word | Stack | Purpose |
+|------|-------|---------|
+| `ASHELL-MOUSE?` | `( ev -- flag )` | True if event type = `KEY-T-MOUSE` |
+| `ASHELL-MOUSE-ROW` | `( ev -- row )` | Extract row from mods field |
+| `ASHELL-MOUSE-COL` | `( ev -- col )` | Extract col from mods field |
+| `ASHELL-MOUSE-BTN` | `( ev -- btn )` | Extract button from code field |
+
+### Internal Words
+
+| Word | Stack | Purpose |
+|------|-------|---------|
+| `_ASHELL-CUR-CLAMP` | `( -- )` | Clamp cursor to screen bounds |
+| `_ASHELL-CUR-INIT` | `( -- )` | Centre cursor, clear visibility |
+| `_ASHELL-CUR-MOVE` | `( drow dcol -- )` | Move + clamp + show + dirty |
+| `_ASHELL-CUR-KEY?` | `( ev -- flag )` | Handle cursor keys, return consumed? |
+| `_ASHELL-DRAW-CURSOR` | `( -- )` | Draw ⊹ glyph at cursor pos |
+| `_ASHELL-DISPATCH-MOUSE-IMPL` | `( ev -- )` | Mouse event routing (resolves DEFER) |
 
 ## Cooperative Multitasking
 
@@ -322,5 +390,8 @@ This works because the RUNNING flag is set *before* the init callback.
 | `_ASHELL-TOAST-MSG` | 0 0 | Toast message addr + len (2 cells) |
 | `_ASHELL-TOAST-EXPIRY` | 0 | Toast `MS@` deadline |
 | `_ASHELL-TOAST-WAS-VIS` | 0 | Was-visible flag for expiry detection |
+| `_ASHELL-CUR-ROW` | mid | Cursor row position |
+| `_ASHELL-CUR-COL` | mid | Cursor column position |
+| `_ASHELL-CUR-VIS` | 0 | Cursor visible flag |
 
 All state is reset to defaults by `_ASHELL-TEARDOWN`.
