@@ -233,13 +233,17 @@ keyboard handling.
 
 **Tile hit-test** — `_DESK-TILE-AT ( row col -- slot | 0 )` walks the
 linked-list of visible slots and checks whether `(row, col)` falls
-within each tile’s `RGN-ROW`/`RGN-COL`/`RGN-H`/`RGN-W` bounds.
+within each tile's region bounds.  Saves the region's row, col, h, w
+into private variables (`_DTA-RR`/`RC`/`RH`/`RW`) to avoid stack
+juggling, then performs four comparisons:
+`rr <= row`, `rc <= col`, `rr+rh > row`, `rc+rw > col`.
 Returns the first matching slot, or 0 on miss.
 
-**Dispatch** — `_DESK-DISPATCH-MOUSE` extracts row, col, and button
-from the event, hits-tests tiles, context-switches to the winning
-slot, then calls `UTUI-DISPATCH-MOUSE` with coordinates local to
-that sub-app’s UIDL tree.  If no tile is hit, the event is dropped.
+**Dispatch** — `_DESK-DISPATCH-MOUSE` saves the event pointer in
+`_DDM-EV`, extracts row/col for hit-testing, then drops the
+intermediate values.  On a hit, it context-switches to the winning
+slot and calls `UTUI-DISPATCH-MOUSE` (re-extracting row, col, btn
+from `_DDM-EV`).  If no tile is hit, the event is dropped.
 
 ## UIDL Context System
 

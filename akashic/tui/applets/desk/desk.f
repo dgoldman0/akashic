@@ -862,6 +862,8 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
 \   Find the visible slot whose region contains (row, col).
 \   Walks the slot list; returns the first match or 0.
 VARIABLE _DTA-ROW  VARIABLE _DTA-COL
+VARIABLE _DTA-RR   VARIABLE _DTA-RC
+VARIABLE _DTA-RH   VARIABLE _DTA-RW
 
 : _DESK-TILE-AT  ( row col -- slot | 0 )
     _DTA-COL !  _DTA-ROW !
@@ -869,10 +871,14 @@ VARIABLE _DTA-ROW  VARIABLE _DTA-COL
     BEGIN ?DUP WHILE
         DUP _SL-VISIBLE? IF
             DUP _SL-RGN @ ?DUP IF        ( slot rgn )
-                DUP RGN-ROW _DTA-ROW @ <=
-                OVER RGN-COL _DTA-COL @ <= AND
-                OVER RGN-ROW OVER RGN-H + _DTA-ROW @ > AND
-                SWAP RGN-COL SWAP RGN-W + _DTA-COL @ > AND
+                DUP RGN-ROW _DTA-RR !
+                DUP RGN-COL _DTA-RC !
+                DUP RGN-H   _DTA-RH !
+                    RGN-W   _DTA-RW !     ( slot )
+                _DTA-RR @ _DTA-ROW @ <=
+                _DTA-RC @ _DTA-COL @ <= AND
+                _DTA-RR @ _DTA-RH @ + _DTA-ROW @ > AND
+                _DTA-RC @ _DTA-RW @ + _DTA-COL @ > AND
                 IF EXIT THEN              ( slot — match )
             THEN
         THEN
@@ -883,24 +889,29 @@ VARIABLE _DTA-ROW  VARIABLE _DTA-COL
 \ _DESK-DISPATCH-MOUSE ( ev -- flag )
 \   Handle a synthetic mouse event from the shell cursor.
 \   Hit-test tiles, context-switch, and forward to UTUI-DISPATCH-MOUSE.
+VARIABLE _DDM-EV
+
 : _DESK-DISPATCH-MOUSE  ( ev -- flag )
+    DUP _DDM-EV !
     DUP ASHELL-MOUSE-ROW OVER ASHELL-MOUSE-COL   ( ev row col )
     2DUP _DESK-TILE-AT                             ( ev row col slot|0 )
     DUP 0= IF DROP 2DROP DROP 0 EXIT THEN
-    >R                                             ( ev row col  R: slot )
+    >R 2DROP DROP                                  ( R: slot )
     R@ _SL-HAS-UIDL @ IF
         R@ _DESK-CTX-SWITCH
-        3 PICK ASHELL-MOUSE-BTN        ( ev row col btn )
-        UTUI-DISPATCH-MOUSE            ( ev handled? )
+        _DDM-EV @ ASHELL-MOUSE-ROW
+        _DDM-EV @ ASHELL-MOUSE-COL
+        _DDM-EV @ ASHELL-MOUSE-BTN        ( row col btn )
+        UTUI-DISPATCH-MOUSE               ( handled? )
         IF
             R@ _DESK-CTX-SAVE
             R> DROP
-            DROP -1 EXIT
+            -1 EXIT
         THEN
     THEN
     R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
     R> DROP
-    DROP 0 ;
+    0 ;
 
 \ --- Event ---
 \

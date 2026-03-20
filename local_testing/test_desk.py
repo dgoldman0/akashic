@@ -624,6 +624,54 @@ def test_config_auto_load():
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  §11 — Tile Hit-Test (_DESK-TILE-AT)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_tile_hit_test():
+    """_DESK-TILE-AT should find a visible slot by screen coordinate."""
+    print("\n── §11: Tile Hit-Test ──")
+
+    # Launch a sub-app, relayout, then hit-test inside and outside its
+    # tile region.  _DESK-TILE-AT returns the slot address or 0.
+    check("tile-at-hit", [
+        'CREATE _TH-SUB APP-DESC ALLOT  _TH-SUB APP-DESC-INIT',
+        'VARIABLE _TH-HIT1  VARIABLE _TH-HIT2  VARIABLE _TH-HIT3',
+        ': _TH-INIT',
+        '    _TH-SUB DESK-LAUNCH DROP',
+        '    DESK-RELAYOUT',
+        # The tile occupies row 0..SCR-H-2, col 0..SCR-W-1 (full width
+        # minus taskbar).  Hit-test at (0, 0) should match.
+        '    0 0 _DESK-TILE-AT _TH-HIT1 !',
+        # Hit-test at taskbar row should miss (no tile there).
+        '    SCR-H 1- 0 _DESK-TILE-AT _TH-HIT2 !',
+        # Hit-test at far outside should miss.
+        '    999 999 _DESK-TILE-AT _TH-HIT3 !',
+        '    ASHELL-QUIT ;',
+        '_DESK-FILL-DESC',
+        "' _TH-INIT DESK-DESC APP.INIT-XT !",
+        'DESK-DESC ASHELL-RUN',
+        '_TH-HIT1 @ 0<> .  _TH-HIT2 @ .  _TH-HIT3 @ .',
+    ], expected='-1 0 0', max_steps=80_000_000)
+
+    # Verify stack is clean after hit-test (no leak).
+    check("tile-at-stack-clean", [
+        'CREATE _TS-SUB APP-DESC ALLOT  _TS-SUB APP-DESC-INIT',
+        'VARIABLE _TS-SP1  VARIABLE _TS-SP2',
+        ': _TS-INIT',
+        '    _TS-SUB DESK-LAUNCH DROP',
+        '    DESK-RELAYOUT',
+        '    DEPTH _TS-SP1 !',
+        '    0 0 _DESK-TILE-AT DROP',
+        '    DEPTH _TS-SP2 !',
+        '    ASHELL-QUIT ;',
+        '_DESK-FILL-DESC',
+        "' _TS-INIT DESK-DESC APP.INIT-XT !",
+        'DESK-DESC ASHELL-RUN',
+        '_TS-SP1 @ _TS-SP2 @ = .',
+    ], expected='-1', max_steps=80_000_000)
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Runner
 # ═══════════════════════════════════════════════════════════════════
 
@@ -644,6 +692,7 @@ def main():
         test_slot_management,
         test_hotbar_slot_tracking,
         test_config_auto_load,
+        test_tile_hit_test,
     ]
 
     for test in tests:
