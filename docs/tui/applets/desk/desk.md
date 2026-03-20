@@ -37,9 +37,16 @@ cycling, and tick timing to the shell:
           ├── DESK-INIT-CB     → reset state
           ├── DESK-EVENT-CB    → shortcuts, route to focused sub-app
           ├── DESK-TICK-CB     → tick all alive sub-apps
-          ├── DESK-PAINT-CB    → paint tiles, dividers, taskbar
+          ├── DESK-PAINT-CB    → bg fill*, paint tiles, dividers, taskbar
           └── DESK-SHUTDOWN-CB → close all sub-apps
 ```
+
+\* Background fill only runs when `_DESK-BG-DIRTY` is set (init,
+relayout, resize).  `UTUI-PAINT` only redraws dirty UIDL elements, so an
+unconditional fill would wipe content that clean elements wouldn't
+repaint.  The flag ensures: fill runs → all elements are dirty (from
+relayout) → full repaint over the fill.  Normal paint cycles skip
+the fill entirely.
 
 Sub-apps are isolated via per-app **UIDL context** buffers (~97 KiB each),
 which save/restore the 15 UIDL scalar variables and 10 pool arrays.
@@ -87,10 +94,10 @@ This means sub-app quit closes a tile, not the whole desktop.
 
 ## Theme System
 
-The desk has 14 colour slot variables (`_DTH-*`) controlling the
-taskbar, active/minimized/pinned entries, dividers, and clock.
-`_DESK-THEME-DEFAULTS` sets a dark-blue palette.  All slots can be
-overridden via a TOML config file under `[desk.theme]`.
+The desk has 15 colour slot variables (`_DTH-*`) controlling the
+desktop background, taskbar, active/minimized/pinned entries, dividers,
+and clock.  `_DESK-THEME-DEFAULTS` sets a dark-blue palette.  All slots
+can be overridden via a TOML config file under `[desk.theme]`.
 
 | TOML Key | Slot | Default |
 |----------|------|---------|
@@ -106,6 +113,7 @@ overridden via a TOML config file under `[desk.theme]`.
 | `divider-bg` | Divider background | 0 |
 | `clock-fg` | Clock text | 14 (cyan) |
 | `clock-bg` | Clock background | 17 |
+| `desk-bg` | Desktop background (layer 0) | 17 |
 
 Colour values are parsed by `TUI-PARSE-COLOR`: CSS named colours,
 `#RRGGBB`, `#RGB`, or raw 0–255 xterm-256 indices.
@@ -262,7 +270,7 @@ live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
 |---|-------|-------------|
 | 1 | Slot Struct | 64-byte linked-list node, state enum |
 | 2 | DESK Global State | Head, focus, ID counter, layout prefs |
-| 2b | Theme | 14 colour slot variables, defaults, TOML loader |
+| 2b | Theme | 15 colour slot variables, defaults, TOML loader |
 | 2c | Hotbar | Pinned-app entry array, TOML loader, painting |
 | 2d | Config Loader | `DESK-LOAD-CONFIG` master loader |
 | 3 | Linked-List Helpers | Find, unlink, append, count |

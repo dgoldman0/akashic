@@ -178,13 +178,14 @@ For mouse events (synthesised by cursor clicks):
 
 ### Paint Order
 
+0. `_ASHELL-CUR-RESTORE` — restore cell saved under cursor last frame
 1. `RGN-ROOT` — reset region to full screen
 2. `UTUI-PAINT` — UIDL elements (if loaded)
 3. `APP.PAINT-XT` — app's custom widget drawing (on top of UIDL)
 4. Toast overlay — `_ASHELL-DRAW-TOAST` (if visible)
-5. Cursor overlay — `_ASHELL-DRAW-CURSOR` (if `_ASHELL-CUR-VIS`)
+5. Cursor overlay — `_ASHELL-DRAW-CURSOR` (save cell + draw glyph)
 6. `RGN-ROOT` — reset region
-6. `SCR-FLUSH` — diff and emit to terminal
+7. `SCR-FLUSH` — diff and emit to terminal
 
 ### Resize Handling
 
@@ -267,6 +268,27 @@ The dispatch chain is: app event handler first (so desk can do
 tile routing), then UIDL `UTUI-DISPATCH-MOUSE` (hit-test → focus →
 fire `do=`).
 
+### Non-Destructive Overlay
+
+The cursor does not rely on the UIDL dirty system to repaint
+underneath.  `UTUI-PAINT` only redraws elements whose own dirty flag
+is set, so if the cursor moved but the underlying element didn't
+change, the old glyph would persist as a ghost.
+
+Instead the cursor saves and restores the back-buffer cell:
+
+1. **Draw** — `_ASHELL-DRAW-CURSOR` reads the cell at `(row, col)`
+   via `SCR-GET`, stashes it in `_ASHELL-CUR-SAVED`, then overwrites
+   the cell with the ⊹ glyph.
+2. **Restore** — at the *start* of the next `_ASHELL-PAINT`, before
+   `UTUI-PAINT` or any app painting, `_ASHELL-CUR-RESTORE` writes
+   the saved cell back via `SCR-SET`.
+3. If `UTUI-PAINT` or the app then repaints that cell (because the
+   element is dirty), the fresh content wins.  If not, the restored
+   cell is already correct.
+
+This makes the cursor a zero-waste overlay — it never leaves artefacts.
+
 ### Mouse Event Helpers
 
 | Word | Stack | Purpose |
@@ -284,7 +306,8 @@ fire `do=`).
 | `_ASHELL-CUR-INIT` | `( -- )` | Centre cursor, clear visibility |
 | `_ASHELL-CUR-MOVE` | `( drow dcol -- )` | Move + clamp + show + dirty |
 | `_ASHELL-CUR-KEY?` | `( ev -- flag )` | Handle cursor keys, return consumed? |
-| `_ASHELL-DRAW-CURSOR` | `( -- )` | Draw ⊹ glyph at cursor pos |
+| `_ASHELL-CUR-RESTORE` | `( -- )` | Restore saved cell under cursor |
+| `_ASHELL-DRAW-CURSOR` | `( -- )` | Save cell + draw ⊹ glyph |
 | `_ASHELL-DISPATCH-MOUSE-IMPL` | `( ev -- )` | Mouse event routing (resolves DEFER) |
 
 ## Cooperative Multitasking
@@ -393,5 +416,9 @@ This works because the RUNNING flag is set *before* the init callback.
 | `_ASHELL-CUR-ROW` | mid | Cursor row position |
 | `_ASHELL-CUR-COL` | mid | Cursor column position |
 | `_ASHELL-CUR-VIS` | 0 | Cursor visible flag |
+| `_ASHELL-CUR-SAVED` | 0 | Back-buffer cell saved before cursor draw |
+| `_ASHELL-CUR-SROW` | 0 | Row of saved cell |
+| `_ASHELL-CUR-SCOL` | 0 | Col of saved cell |
+| `_ASHELL-CUR-ACTIVE` | 0 | -1 if a saved cell needs restoring |
 
 All state is reset to defaults by `_ASHELL-TEARDOWN`.

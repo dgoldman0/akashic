@@ -147,10 +147,15 @@ VARIABLE _ASHELL-TOAST-WAS-VIS            \ was-visible flag
 VARIABLE _ASHELL-CUR-ROW
 VARIABLE _ASHELL-CUR-COL
 VARIABLE _ASHELL-CUR-VIS        \ 0 = hidden, -1 = visible
+VARIABLE _ASHELL-CUR-SAVED      \ back-buffer cell saved before draw
+VARIABLE _ASHELL-CUR-SROW       \ row where we saved from
+VARIABLE _ASHELL-CUR-SCOL       \ col where we saved from
+VARIABLE _ASHELL-CUR-ACTIVE     \ -1 if a saved cell needs restoring
 
 0 _ASHELL-CUR-ROW !
 0 _ASHELL-CUR-COL !
 0 _ASHELL-CUR-VIS !
+0 _ASHELL-CUR-ACTIVE !
 
 \ Button constants for ASHELL-CUR-CLICK / UTUI-DISPATCH-MOUSE
 0 CONSTANT ASHELL-BTN-LEFT
@@ -381,11 +386,30 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
     DUP KEY-PGDN  = IF DROP ASHELL-BTN-RIGHT  ASHELL-CUR-CLICK -1 EXIT THEN
     DROP 0 ;
 
+\ _ASHELL-CUR-RESTORE ( -- )
+\   If we previously overwrote a cell with the cursor glyph,
+\   put the original content back into the back buffer.
+: _ASHELL-CUR-RESTORE  ( -- )
+    _ASHELL-CUR-ACTIVE @ 0= IF EXIT THEN
+    _ASHELL-CUR-SAVED @
+    _ASHELL-CUR-SROW @
+    _ASHELL-CUR-SCOL @
+    SCR-SET
+    0 _ASHELL-CUR-ACTIVE ! ;
+
 \ _ASHELL-DRAW-CURSOR ( -- )
-\   Draw cursor glyph ⊹ (U+22B9) at the cursor position.
-\   Uses bright white on the cell's existing background.
+\   Save the cell underneath, then draw cursor glyph ⊹ (U+22B9).
+\   The saved cell is restored at the start of the next paint
+\   via _ASHELL-CUR-RESTORE so the cursor never corrupts content.
 : _ASHELL-DRAW-CURSOR  ( -- )
     RGN-ROOT
+    \ Save the cell currently at the cursor position
+    _ASHELL-CUR-ROW @ _ASHELL-CUR-COL @ SCR-GET
+    _ASHELL-CUR-SAVED !
+    _ASHELL-CUR-ROW @ _ASHELL-CUR-SROW !
+    _ASHELL-CUR-COL @ _ASHELL-CUR-SCOL !
+    -1 _ASHELL-CUR-ACTIVE !
+    \ Draw the cursor glyph on top
     15 DRW-FG!  0 DRW-BG!  1 DRW-ATTR!   \ bright white, bold
     0x22B9
     _ASHELL-CUR-ROW @
@@ -512,6 +536,8 @@ VARIABLE _ASHELL-TICK-TMP
     THEN
     _ASHELL-DIRTY @ 0= IF EXIT THEN
     0 _ASHELL-DIRTY !
+    \ Restore the cell that the cursor glyph overwrote last frame
+    _ASHELL-CUR-RESTORE
     RGN-ROOT
     \ UIDL elements first (they own the background/structure)
     _ASHELL-HAS-UIDL @ IF

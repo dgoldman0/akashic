@@ -130,6 +130,9 @@ VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
 VARIABLE _DESK-PENDING
 0 _DESK-PENDING !
 
+VARIABLE _DESK-BG-DIRTY     \ -1 = need full background fill next paint
+-1 _DESK-BG-DIRTY !
+
 \ =====================================================================
 \  §2b — Theme
 \ =====================================================================
@@ -143,6 +146,7 @@ VARIABLE _DTH-MIN-FG     VARIABLE _DTH-MIN-BG
 VARIABLE _DTH-PIN-FG     VARIABLE _DTH-PIN-BG
 VARIABLE _DTH-DIV-FG     VARIABLE _DTH-DIV-BG
 VARIABLE _DTH-CLOCK-FG   VARIABLE _DTH-CLOCK-BG
+VARIABLE _DTH-DESK-BG                             \ desktop background (layer 0)
 
 : _DESK-THEME-DEFAULTS  ( -- )
     15 _DTH-TBAR-FG !   17 _DTH-TBAR-BG !   0 _DTH-TBAR-ATTR !
@@ -150,7 +154,8 @@ VARIABLE _DTH-CLOCK-FG   VARIABLE _DTH-CLOCK-BG
      8 _DTH-MIN-FG  !   17 _DTH-MIN-BG  !
    244 _DTH-PIN-FG  !    0 _DTH-PIN-BG  !
    240 _DTH-DIV-FG  !    0 _DTH-DIV-BG  !
-    14 _DTH-CLOCK-FG !  17 _DTH-CLOCK-BG ! ;
+    14 _DTH-CLOCK-FG !  17 _DTH-CLOCK-BG !
+    17 _DTH-DESK-BG ! ;
 _DESK-THEME-DEFAULTS
 
 \ Helper: try to load a colour key from a TOML table into a variable.
@@ -175,7 +180,8 @@ _DESK-THEME-DEFAULTS
     2DUP S" divider-fg"     _DTH-DIV-FG    _DTH-TRY
     2DUP S" divider-bg"     _DTH-DIV-BG    _DTH-TRY
     2DUP S" clock-fg"       _DTH-CLOCK-FG  _DTH-TRY
-         S" clock-bg"       _DTH-CLOCK-BG  _DTH-TRY ;
+    2DUP S" clock-bg"       _DTH-CLOCK-BG  _DTH-TRY
+         S" desk-bg"        _DTH-DESK-BG   _DTH-TRY ;
 
 \ =====================================================================
 \  §2c — Hotbar (Pinned App Entries)
@@ -214,7 +220,7 @@ VARIABLE _DHBAR-COUNT
     SWAP _HB-ENTRY _HB-SLOT + ! ;
 
 : _DESK-HOTBAR-SLOT-CLOSED  ( slot-id -- )
-    _DHBAR-COUNT @ 0 DO
+    _DHBAR-COUNT @ 0 ?DO
         I _HB-ENTRY _HB-SLOT + @
         OVER = IF 0 I _HB-ENTRY _HB-SLOT + ! THEN
     LOOP DROP ;
@@ -508,6 +514,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
         THEN
         DROP
     LOOP
+    -1 _DESK-BG-DIRTY !
     ASHELL-DIRTY! ;
 
 \ =====================================================================
@@ -594,7 +601,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     THEN
     R@ _SL-ID @ _DESK-HOTBAR-SLOT-CLOSED
     R@ _DESK-UNLINK
-    R> FREE
+    R> FREE DROP
     \ Auto-focus next visible slot if focus was lost
     _DESK-FOCUS-SA @ 0= IF
         _DESK-HEAD @
@@ -961,6 +968,15 @@ VARIABLE _DTA-ROW  VARIABLE _DTA-COL
 \  draws dividers and the taskbar.
 : DESK-PAINT-CB  ( -- )
     RGN-ROOT
+    \ Layer 0: fill tile area with desk background colour
+    \ Only runs when geometry changed (relayout / init / resize)
+    _DESK-BG-DIRTY @ IF
+        0 _DESK-BG-DIRTY !
+        DRW-STYLE-SAVE
+        0 _DTH-DESK-BG @ 0 DRW-STYLE!
+        32 0 0 SCR-H 1- SCR-W DRW-FILL-RECT
+        DRW-STYLE-RESTORE
+    THEN
     _DESK-HEAD @
     BEGIN ?DUP WHILE
         DUP _SL-VISIBLE? IF
