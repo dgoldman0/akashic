@@ -16,7 +16,9 @@ The parser accepts UIDL XML text (addr len), validates it, and builds an
 in-memory tree of element nodes with:
 
 - **Extensible Element Registry** — open hash-table of element definitions;
-  any code can register new element types at load time via `DEFINE-ELEMENT`
+  any code can register new element types at load time via `DEFINE-ELEMENT`,
+  and patch render/event/layout hooks via `EL-SET-RENDER` / `EL-SET-EVENT` /
+  `EL-SET-LAYOUT` — no library modification needed
 - **21 built-in element types** — structural, content, interactive,
   collection, and pseudo-type primitives (type-ids 1–21)
 - **21 chrome elements** registered by `uidl-chrome.f` — menubar, tabs,
@@ -409,6 +411,36 @@ definition record address, or 0 if not found.
 EL-DEF-BY-TYPE ( type-id -- def | 0 )
 ```
 Look up a definition by its numeric type-id.  O(1) via index table.
+
+#### EL-SET-RENDER
+```forth
+EL-SET-RENDER ( xt type-id -- )
+```
+Replace the render hook for a registered element type.  The `xt`
+must conform to `( elem -- )`.  If `type-id` is invalid the call is
+a silent no-op.  Guard-wrapped when `GUARDED` is defined.
+
+#### EL-SET-EVENT
+```forth
+EL-SET-EVENT ( xt type-id -- )
+```
+Replace the event hook for a registered element type.  The `xt`
+must conform to `( elem evt -- handled? )`.  Same guard semantics.
+
+#### EL-SET-LAYOUT
+```forth
+EL-SET-LAYOUT ( xt type-id -- )
+```
+Replace the layout hook for a registered element type.  The `xt`
+must conform to `( elem -- )`.  Same guard semantics.
+
+**Usage (external code):**
+```forth
+: my-fancy-render  ( elem -- )  ... ;
+' my-fancy-render UIDL-T-LABEL EL-SET-RENDER
+```
+This is the preferred mechanism for backends and plugins to override
+default `NOOP` hooks without editing any library source.
 
 #### Definition Record Accessors
 

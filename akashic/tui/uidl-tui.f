@@ -1376,69 +1376,65 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
 \ =====================================================================
 \  §8 — XT Installation
 \ =====================================================================
-
-: _UTUI-INST-R  ( xt name-a name-l -- )
-    EL-LOOKUP ?DUP IF ED.RENDER-XT ! ELSE DROP THEN ;
-: _UTUI-INST-E  ( xt name-a name-l -- )
-    EL-LOOKUP ?DUP IF ED.EVENT-XT  ! ELSE DROP THEN ;
-: _UTUI-INST-L  ( xt name-a name-l -- )
-    EL-LOOKUP ?DUP IF ED.LAYOUT-XT ! ELSE DROP THEN ;
+\
+\  Uses EL-SET-RENDER / EL-SET-EVENT / EL-SET-LAYOUT (uidl.f public
+\  API) with UIDL-T-* type-id constants.  External code (applets,
+\  plugins) uses the same API to register custom element behaviour
+\  without modifying any library file.
 
 : UTUI-INSTALL-XTS  ( -- )
     \ --- Render XTs ---
-    ['] _UTUI-RENDER-LABEL     S" label"      _UTUI-INST-R
-    ['] _UTUI-RENDER-ACTION    S" action"     _UTUI-INST-R
-    ['] _UTUI-RENDER-INPUT     S" input"      _UTUI-INST-R
-    ['] _UTUI-RENDER-SEP       S" separator"  _UTUI-INST-R
-    ['] _UTUI-RENDER-REGION    S" region"     _UTUI-INST-R
-    ['] _UTUI-RENDER-REGION    S" group"      _UTUI-INST-R
-    ['] _UTUI-RENDER-MBAR      S" menubar"    _UTUI-INST-R
-    ['] _UTUI-RENDER-STATUS    S" status"     _UTUI-INST-R
-    ['] _UTUI-RENDER-TOOLBAR   S" toolbar"    _UTUI-INST-R
-    ['] _UTUI-RENDER-DLG       S" dialog"     _UTUI-INST-R
-    ['] _UTUI-RENDER-SPLIT     S" split"      _UTUI-INST-R
-    ['] _UTUI-RENDER-TABS      S" tabs"       _UTUI-INST-R
-    ['] _UTUI-RENDER-PROGRESS  S" progress"   _UTUI-INST-R
-    ['] _UTUI-RENDER-TOGGLE    S" toggle"     _UTUI-INST-R
-    ['] _UTUI-RENDER-INDICATOR S" indicator"  _UTUI-INST-R
-    ['] _UTUI-RENDER-LIST      S" collection" _UTUI-INST-R
-    ['] _UTUI-RENDER-LIST      S" list"       _UTUI-INST-R
-    ['] _UTUI-RENDER-TREE      S" tree"       _UTUI-INST-R
-    ['] _UTUI-RENDER-TEXTAREA  S" textarea"   _UTUI-INST-R
-    ['] _UTUI-RENDER-SCROLL    S" scroll"     _UTUI-INST-R
-    ['] _UTUI-RENDER-CANVAS    S" canvas"     _UTUI-INST-R
-    ['] _UTUI-RENDER-NOP       S" template"   _UTUI-INST-R
-    ['] _UTUI-RENDER-NOP       S" empty"      _UTUI-INST-R
-    ['] _UTUI-RENDER-NOP       S" rep"        _UTUI-INST-R
-    ['] _UTUI-RENDER-NOP       S" option"     _UTUI-INST-R
-    ['] _UTUI-RENDER-NOP       S" meta"       _UTUI-INST-R
-    ['] _UTUI-RENDER-NOP       S" uidl"       _UTUI-INST-R
+    ['] _UTUI-RENDER-LABEL     UIDL-T-LABEL      EL-SET-RENDER
+    ['] _UTUI-RENDER-ACTION    UIDL-T-ACTION     EL-SET-RENDER
+    ['] _UTUI-RENDER-INPUT     UIDL-T-INPUT      EL-SET-RENDER
+    ['] _UTUI-RENDER-SEP       UIDL-T-SEPARATOR  EL-SET-RENDER
+    ['] _UTUI-RENDER-REGION    UIDL-T-REGION     EL-SET-RENDER
+    ['] _UTUI-RENDER-REGION    UIDL-T-GROUP      EL-SET-RENDER
+    ['] _UTUI-RENDER-MBAR      UIDL-T-MENUBAR    EL-SET-RENDER
+    ['] _UTUI-RENDER-STATUS    UIDL-T-STATUS     EL-SET-RENDER
+    ['] _UTUI-RENDER-TOOLBAR   UIDL-T-TOOLBAR    EL-SET-RENDER
+    ['] _UTUI-RENDER-DLG       UIDL-T-DIALOG     EL-SET-RENDER
+    ['] _UTUI-RENDER-SPLIT     UIDL-T-SPLIT      EL-SET-RENDER
+    ['] _UTUI-RENDER-TABS      UIDL-T-TABS       EL-SET-RENDER
+    ['] _UTUI-RENDER-TOGGLE    UIDL-T-TOGGLE     EL-SET-RENDER
+    ['] _UTUI-RENDER-INDICATOR UIDL-T-INDICATOR  EL-SET-RENDER
+    ['] _UTUI-RENDER-LIST      UIDL-T-COLLECTION EL-SET-RENDER
+    ['] _UTUI-RENDER-TREE      UIDL-T-TREE       EL-SET-RENDER
+    ['] _UTUI-RENDER-TEXTAREA  UIDL-T-TEXTAREA   EL-SET-RENDER
+    ['] _UTUI-RENDER-SCROLL    UIDL-T-SCROLL     EL-SET-RENDER
+    ['] _UTUI-RENDER-CANVAS    UIDL-T-CANVAS     EL-SET-RENDER
+    ['] _UTUI-RENDER-NOP       UIDL-T-TEMPLATE   EL-SET-RENDER
+    ['] _UTUI-RENDER-NOP       UIDL-T-EMPTY      EL-SET-RENDER
+    ['] _UTUI-RENDER-NOP       UIDL-T-REP        EL-SET-RENDER
+    ['] _UTUI-RENDER-NOP       UIDL-T-OPTION     EL-SET-RENDER
+    ['] _UTUI-RENDER-NOP       UIDL-T-META       EL-SET-RENDER
+    ['] _UTUI-RENDER-NOP       UIDL-T-UIDL       EL-SET-RENDER
 
     \ --- Event XTs ---
-    ['] _UTUI-H-ACTION         S" action"     _UTUI-INST-E
-    ['] _UTUI-H-INPUT          S" input"      _UTUI-INST-E
-    ['] _UTUI-H-TOGGLE         S" toggle"     _UTUI-INST-E
-    ['] _UTUI-H-MENU           S" menu"       _UTUI-INST-E
-    ['] _UTUI-H-TEXTAREA       S" textarea"   _UTUI-INST-E
-    ['] _UTUI-H-LIST           S" collection" _UTUI-INST-E
-    ['] _UTUI-H-TREE           S" tree"       _UTUI-INST-E
-    ['] _UTUI-H-TABS           S" tabs"       _UTUI-INST-E
-    ['] _UTUI-H-DIALOG         S" dialog"     _UTUI-INST-E
-    ['] _UTUI-H-CANVAS         S" canvas"     _UTUI-INST-E
-    ['] _UTUI-H-REGION         S" region"     _UTUI-INST-E
-    ['] _UTUI-H-REGION         S" group"      _UTUI-INST-E
+    ['] _UTUI-H-ACTION         UIDL-T-ACTION     EL-SET-EVENT
+    ['] _UTUI-H-INPUT          UIDL-T-INPUT      EL-SET-EVENT
+    ['] _UTUI-H-TOGGLE         UIDL-T-TOGGLE     EL-SET-EVENT
+    ['] _UTUI-H-MENU           UIDL-T-MENU       EL-SET-EVENT
+    ['] _UTUI-H-TEXTAREA       UIDL-T-TEXTAREA   EL-SET-EVENT
+    ['] _UTUI-H-LIST           UIDL-T-COLLECTION EL-SET-EVENT
+    ['] _UTUI-H-TREE           UIDL-T-TREE       EL-SET-EVENT
+    ['] _UTUI-H-TABS           UIDL-T-TABS       EL-SET-EVENT
+    ['] _UTUI-H-DIALOG         UIDL-T-DIALOG     EL-SET-EVENT
+    ['] _UTUI-H-CANVAS         UIDL-T-CANVAS     EL-SET-EVENT
+    ['] _UTUI-H-REGION         UIDL-T-REGION     EL-SET-EVENT
+    ['] _UTUI-H-REGION         UIDL-T-GROUP      EL-SET-EVENT
 
     \ --- Layout XTs ---
-    ['] _UTUI-LAYOUT-DISPATCH  S" region"     _UTUI-INST-L
-    ['] _UTUI-LAYOUT-DISPATCH  S" group"      _UTUI-INST-L
-    ['] _UTUI-LAYOUT-MBAR      S" menubar"    _UTUI-INST-L
-    ['] _UTUI-LAYOUT-STATUS    S" status"     _UTUI-INST-L
-    ['] _UTUI-LAYOUT-TOOLBAR   S" toolbar"    _UTUI-INST-L
-    ['] _UTUI-LAYOUT-DLG       S" dialog"     _UTUI-INST-L
-    ['] _UTUI-LAYOUT-SPLIT     S" split"      _UTUI-INST-L
-    ['] _UTUI-LAYOUT-TABS      S" tabs"       _UTUI-INST-L
-    ['] _UTUI-LAYOUT-SCROLL    S" scroll"     _UTUI-INST-L
-    ['] _UTUI-LAYOUT-DISPATCH  S" uidl"       _UTUI-INST-L
+    ['] _UTUI-LAYOUT-DISPATCH  UIDL-T-REGION     EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-DISPATCH  UIDL-T-GROUP      EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-MBAR      UIDL-T-MENUBAR    EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-STATUS    UIDL-T-STATUS     EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-TOOLBAR   UIDL-T-TOOLBAR    EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-DLG       UIDL-T-DIALOG     EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-SPLIT     UIDL-T-SPLIT      EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-TABS      UIDL-T-TABS       EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-SCROLL    UIDL-T-SCROLL     EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-DISPATCH  UIDL-T-UIDL       EL-SET-LAYOUT
 ;
 
 UTUI-INSTALL-XTS

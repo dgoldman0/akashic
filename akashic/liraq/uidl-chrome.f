@@ -14,7 +14,9 @@
 \   log, code, accordion, password, contextmenu
 \
 \ All render-xt / event-xt / layout-xt start as NOOP.
-\ The TUI backend (tui/uidl-tui.f) patches them when loaded.
+\ Backends set them via EL-SET-RENDER / EL-SET-EVENT / EL-SET-LAYOUT
+\ using the UIDL-T-* type-id constants.  External code (applets,
+\ plugins) uses the same API — no library modification needed.
 \
 \ Prefix: UIDL-T-  (type constants)
 \

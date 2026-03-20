@@ -358,6 +358,22 @@ def test_compilation():
         "' DESK-LOAD-CONFIG  0<> .",
     ], expected='-1 -1 -1 -1 -1')
 
+    check("el-set-api-exist", [
+        "' EL-SET-RENDER  0<> .",
+        "' EL-SET-EVENT   0<> .",
+        "' EL-SET-LAYOUT  0<> .",
+    ], expected='-1 -1 -1')
+
+    # EL-SET-RENDER should update the render-xt for a type
+    check("el-set-render-works", [
+        ': _TST-MY-RENDER DROP ;',
+        "UIDL-T-LABEL EL-DEF-BY-TYPE ED.RENDER-XT @ VARIABLE _TST-OLD-R  _TST-OLD-R !",
+        "['] _TST-MY-RENDER UIDL-T-LABEL EL-SET-RENDER",
+        "UIDL-T-LABEL EL-DEF-BY-TYPE ED.RENDER-XT @ ['] _TST-MY-RENDER = .",
+        # Restore original
+        "_TST-OLD-R @ UIDL-T-LABEL EL-SET-RENDER",
+    ], expected='-1')
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  §2 — Theme Defaults

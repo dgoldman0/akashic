@@ -69,7 +69,7 @@ REQUIRE tui/uidl-tui.f
 | **Auto-dirty** | `_UTUI-NEEDS-PAINT` flag is set by any DOM / widget mutation. The shell converts this to `ASHELL-DIRTY!` at tick and paint time — apps never call `ASHELL-DIRTY!`. |
 | **Packed style** | FG (8 bits) + BG (8 bits) + attrs (8 bits) + text-align (2 bits) + position (2 bits) + z-index (8 bits) packed into one cell at `+32`. |
 | **CSS inheritance** | `_UTUI-RESOLVE-STYLES-REC` propagates inheritable properties (fg, bg, attrs, text-align — bits 0-25) from parent to child before resolving the child's `style=`. Non-inheritable properties (position, z-index) are preserved from prelayout. |
-| **Registry patching** | `UTUI-INSTALL-XTS` writes render/event/layout XTs into Element Registry definitions. Each chrome element type gets its own adapter. |
+| **Registry patching** | `UTUI-INSTALL-XTS` sets render/event/layout XTs via the public `EL-SET-RENDER` / `EL-SET-EVENT` / `EL-SET-LAYOUT` API and `UIDL-T-*` type-id constants. Each chrome element type gets its own adapter. External code uses the same API — no library modification needed. |
 | **Guard safety** | When `GUARDED` is defined, all public words are serialized through `_utui-guard`. |
 
 ---
@@ -337,9 +337,17 @@ will evaluate against this state tree.
 
 ### UTUI-INSTALL-XTS — `( -- )`
 
-Write render/event/layout execution tokens into the Element Registry
-for all chrome types (tabs, split, status, tree, scroll, dialog,
-menu, toast, etc.).  Called once at load time.
+Set render/event/layout execution tokens for all chrome element types
+using the public `EL-SET-RENDER` / `EL-SET-EVENT` / `EL-SET-LAYOUT`
+API with `UIDL-T-*` type-id constants (e.g. `UIDL-T-TABS`,
+`UIDL-T-SPLIT`, `UIDL-T-STATUS`, `UIDL-T-TREE`, `UIDL-T-SCROLL`,
+`UIDL-T-DIALOG`, `UIDL-T-MENU`, `UIDL-T-TOAST`, etc.).
+Called once at load time.
+
+> **Historical note:** Before the extensibility refactor this word
+> used private `_UTUI-INST-R/E/L` helpers that performed string
+> lookups.  Those helpers have been deleted; all registration now
+> goes through the type-id based public API.
 
 ### UTUI-WIDGET@ — `( elem -- wptr | 0 )`
 
@@ -395,8 +403,13 @@ Full repaint cycle:
 
 Recompute sidecar geometry for all elements based on the root region
 and arrangement modes (`dock`, `flex`, `stack`, `flow`, `grid`).
-Layout-specific handlers (e.g. `_UTUI-LAYOUT-TABS`) are called for
-elements with custom layout words.
+Layout-specific handlers are called for elements with custom layout
+words:
+
+| Handler | Element | Behaviour |
+|---------|---------|-----------|
+| `_UTUI-LAYOUT-TABS` | `<tabs>` | Horizontal tab bar + content pane |
+| `_UTUI-LAYOUT-MBAR` | `<menubar>` | Horizontal layout: each `<menu>` child placed at parent row, advancing column by label-length + 2, height 1 |
 
 ---
 

@@ -226,6 +226,14 @@ VARIABLE _ER-NA   VARIABLE _ER-NL   VARIABLE _ER-TID
 : DEFINE-ELEMENT  ( render-xt event-xt layout-xt flags "name" -- type-id )
     PARSE-NAME NAMEBUF PN-LEN @ _UDL-REG-ELEM ;
 
+\ --- Public XT Setters (post-registration) ---
+\ Allow external code to set render/event/layout XTs on any registered
+\ element type, by type-id.  This is the extensibility API: applets and
+\ backends call these instead of modifying library registration tables.
+: EL-SET-RENDER  ( xt type-id -- )  EL-DEF-BY-TYPE ?DUP IF ED.RENDER-XT ! ELSE DROP THEN ;
+: EL-SET-EVENT   ( xt type-id -- )  EL-DEF-BY-TYPE ?DUP IF ED.EVENT-XT  ! ELSE DROP THEN ;
+: EL-SET-LAYOUT  ( xt type-id -- )  EL-DEF-BY-TYPE ?DUP IF ED.LAYOUT-XT ! ELSE DROP THEN ;
+
 \ =====================================================================
 \  Built-in Element Registrations (20 core + option)
 \ =====================================================================
@@ -1247,6 +1255,9 @@ GUARD _uidl-guard
 ' ED.RENDER-XT     CONSTANT _ed-dotrender-xt-xt
 ' ED.EVENT-XT      CONSTANT _ed-dotevent-xt-xt
 ' ED.LAYOUT-XT     CONSTANT _ed-dotlayout-xt-xt
+' EL-SET-RENDER    CONSTANT _el-set-render-xt
+' EL-SET-EVENT     CONSTANT _el-set-event-xt
+' EL-SET-LAYOUT    CONSTANT _el-set-layout-xt
 ' EL-CONTENT-MODEL CONSTANT _el-content-model-xt
 ' EL-CATEGORY      CONSTANT _el-category-xt
 ' EL-FOCUSABLE?    CONSTANT _el-focusable-q-xt
@@ -1335,6 +1346,9 @@ GUARD _uidl-guard
 : ED.RENDER-XT     _ed-dotrender-xt-xt _uidl-guard WITH-GUARD ;
 : ED.EVENT-XT      _ed-dotevent-xt-xt _uidl-guard WITH-GUARD ;
 : ED.LAYOUT-XT     _ed-dotlayout-xt-xt _uidl-guard WITH-GUARD ;
+: EL-SET-RENDER    _el-set-render-xt _uidl-guard WITH-GUARD ;
+: EL-SET-EVENT     _el-set-event-xt _uidl-guard WITH-GUARD ;
+: EL-SET-LAYOUT    _el-set-layout-xt _uidl-guard WITH-GUARD ;
 : EL-CONTENT-MODEL _el-content-model-xt _uidl-guard WITH-GUARD ;
 : EL-CATEGORY      _el-category-xt _uidl-guard WITH-GUARD ;
 : EL-FOCUSABLE?    _el-focusable-q-xt _uidl-guard WITH-GUARD ;
