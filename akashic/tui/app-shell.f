@@ -579,7 +579,7 @@ VARIABLE _ASHELL-TICK-TMP
     VMP-NEW                                ( vfs )
     DUP VMP-INIT
     ABORT" ashell: VMP-INIT failed"
-    DUP _ASHELL-VFS !                      \ VFS-USE already called by VFS-NEW
+    _ASHELL-VFS !                      \ VFS-USE already called by VFS-NEW
 ;
 
 \ Run eagerly at load time so VFS is available before any applet

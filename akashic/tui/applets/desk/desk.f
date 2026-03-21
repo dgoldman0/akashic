@@ -569,7 +569,8 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     THEN
     \ Call sub-app init callback while context is live so that
     \ UTUI-BY-ID, UTUI-WIDGET-SET, UTUI-DO! etc. persist.
-    DUP APP.INIT-XT @ ?DUP IF EXECUTE THEN
+    DUP APP.INIT-XT @
+    ?DUP IF EXECUTE THEN
     \ Save context AFTER init — widget mounts & actions are now captured
     R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
     DROP

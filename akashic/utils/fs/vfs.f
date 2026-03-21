@@ -714,8 +714,7 @@ VARIABLE _VR-CL      \ component length
 
 : VFS-CLOSE  ( fd -- )
     DUP FD.VFS @                 ( fd vfs )
-    SWAP                         ( vfs fd )
-    OVER _VFS-FD-FREE           \ return FD to pool
+    _VFS-FD-FREE                \ return FD to pool
     ;
 
 \ =====================================================================

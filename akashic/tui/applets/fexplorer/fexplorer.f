@@ -194,22 +194,24 @@ VARIABLE _FFL-IN  VARIABLE _FFL-IDX  VARIABLE _FFL-DST  VARIABLE _FFL-COL
             IN.SIZE-LO @ SWAP IN.SIZE-LO @ SWAP -
         ENDOF
         FEXP-SORT-TYPE OF
-            DUP IN.TYPE @ ROT DUP IN.TYPE @
+            OVER IN.TYPE @ OVER IN.TYPE @
             2DUP <> IF
-                NIP NIP NIP - NEGATE
+                - NEGATE NIP NIP
             ELSE
-                2DROP SWAP
-                DUP IN.NAME @ _VFS-STR-GET
-                2SWAP
-                DUP IN.NAME @ _VFS-STR-GET
-                STR-ICMP NEGATE
+                2DROP
+                OVER IN.NAME @ _VFS-STR-GET
+                >R >R
+                IN.NAME @ _VFS-STR-GET
+                R> R> 2SWAP
+                STR-ICMP NEGATE NIP
             THEN
         ENDOF
-        DUP IN.NAME @ _VFS-STR-GET
-        ROT
-        DUP IN.NAME @ _VFS-STR-GET
-        >R >R DROP R> R>
-        2SWAP ROT DROP
+        DROP
+        OVER IN.NAME @ _VFS-STR-GET
+        >R >R
+        IN.NAME @ _VFS-STR-GET
+        ROT DROP
+        R> R> 2SWAP
         STR-ICMP
         0
     ENDCASE ;
@@ -220,17 +222,17 @@ VARIABLE _FSW-TMP
     2DUP = IF 2DROP EXIT THEN
     DUP CELLS _FEXP-INODES + @ _FSW-TMP !
     OVER CELLS _FEXP-INODES + @  OVER CELLS _FEXP-INODES + !
-    _FSW-TMP @ OVER CELLS _FEXP-INODES + !
+    _FSW-TMP @ 2 PICK CELLS _FEXP-INODES + !
     DUP 2 * CELLS _FEXP-ITEMS + @ _FSW-TMP !
     OVER 2 * CELLS _FEXP-ITEMS + @  OVER 2 * CELLS _FEXP-ITEMS + !
-    _FSW-TMP @ OVER 2 * CELLS _FEXP-ITEMS + !
+    _FSW-TMP @ 2 PICK 2 * CELLS _FEXP-ITEMS + !
     DUP 2 * CELLS _FEXP-ITEMS + 8 + @ _FSW-TMP !
     OVER 2 * CELLS _FEXP-ITEMS + 8 + @  OVER 2 * CELLS _FEXP-ITEMS + 8 + !
-    _FSW-TMP @ OVER 2 * CELLS _FEXP-ITEMS + 8 + !
+    _FSW-TMP @ 2 PICK 2 * CELLS _FEXP-ITEMS + 8 + !
     DUP _FEXP-LINE-W * _FEXP-LINES + _FEXP-PREV-BUF _FEXP-LINE-W CMOVE
     OVER _FEXP-LINE-W * _FEXP-LINES +  OVER _FEXP-LINE-W * _FEXP-LINES +
     _FEXP-LINE-W CMOVE
-    _FEXP-PREV-BUF  OVER _FEXP-LINE-W * _FEXP-LINES +
+    _FEXP-PREV-BUF  2 PICK _FEXP-LINE-W * _FEXP-LINES +
     _FEXP-LINE-W CMOVE
     2DROP ;
 
@@ -239,7 +241,7 @@ VARIABLE _FSW-TMP
     _FEXP-CNT @ 1- 0
     DO
         _FEXP-CNT @ 1- I 1+
-        DO
+        ?DO
             J CELLS _FEXP-INODES + @
             I CELLS _FEXP-INODES + @
             _FEXP-CMP 0> IF
@@ -355,7 +357,7 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
     _FEXP-SLEFT SWAP CMOVE
     _FEXP-CNT @ NUM>STR NIP
     S"  items" DUP >R
-    _FEXP-SLEFT ROT + SWAP CMOVE
+    ROT _FEXP-SLEFT + SWAP CMOVE
     _FEXP-CNT @ NUM>STR NIP R> +
     _FEXP-SLEFT-L !
     \ Update UIDL label element text= attribute
@@ -547,7 +549,7 @@ VARIABLE _FEXP-PROP-IN
     \ Create list widget and mount on detail region
     _FEXP-E-DETAIL @ UTUI-ELEM-RGN      ( row col h w )
     RGN-NEW                              ( rgn )
-    _FEXP-ITEMS 0 ROT LST-NEW
+    _FEXP-ITEMS 0 LST-NEW
     _FEXP-LIST !
     ['] _FEXP-ON-LIST-SEL _FEXP-LIST @ LST-ON-SELECT
     _FEXP-LIST @ _FEXP-E-DETAIL @ UTUI-WIDGET-SET
