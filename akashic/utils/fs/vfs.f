@@ -428,7 +428,7 @@ VARIABLE _VRW-VS
     _VRW-OFF @ +                            ( dst )
     _VRW-BUF @ SWAP _VRW-LEN @ CMOVE
     _VRW-LEN @ ;                            ( actual )
-    ;
+
 : _VFS-RAM-READDIR   ( inode vfs -- )       2DROP ;
 : _VFS-RAM-SYNC      ( inode vfs -- ior )   2DROP 0 ;
 : _VFS-RAM-CREATE    ( inode vfs -- ior )   2DROP 0 ;

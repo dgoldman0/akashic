@@ -456,6 +456,23 @@ VARIABLE _TSC-CUR  VARIABLE _TSC-SCR  VARIABLE _TSC-VH
 
 : TREE-REFRESH  ( w -- )  WDG-DIRTY ;
 
+\ TREE-SCROLL-INFO ( widget -- content-h offset visible-h )
+\   Return scroll parameters for the scroll container.
+: TREE-SCROLL-INFO  ( widget -- content-h offset visible-h )
+    DUP _TREE-VIS-COUNT
+    OVER _TREE-O-SCROLL + @
+    ROT WDG-REGION RGN-H ;
+
+\ TREE-SCROLL-SET ( offset widget -- )
+\   Set scroll-top directly (clamped).  Does NOT change cursor.
+: TREE-SCROLL-SET  ( offset widget -- )
+    >R
+    R@ _TREE-VIS-COUNT R@ WDG-REGION RGN-H -
+    DUP 0< IF DROP 0 THEN              \ max scroll
+    MIN  0 MAX                          \ clamp 0..max
+    R@ _TREE-O-SCROLL + !
+    R> WDG-DIRTY ;
+
 : TREE-FREE  ( w -- )
     DUP _TREE-O-EXP-BUF + @ FREE
     FREE ;

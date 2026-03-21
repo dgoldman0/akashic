@@ -56,6 +56,7 @@ REQUIRE layout.f
 REQUIRE keys.f
 REQUIRE widgets/tree.f
 REQUIRE widgets/input.f
+REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
 REQUIRE ../css/css.f
 REQUIRE color.f
@@ -836,10 +837,84 @@ VARIABLE _UT-TAB-COL
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     DROP _UTUI-FILL-BG ;
 
-\ --- Scroll: background fill (scroll indicators TODO) ---
+\ --- Scroll: render scrollbar track and proportional thumb ---
+\
+\ The <scroll> container wraps a single child (region, textarea, tree,
+\ etc.).  Layout reserves 1 column on the right for a scrollbar track.
+\ The render word fills the background, then queries the child widget
+\ for (content-height, scroll-offset, visible-height) and draws a
+\ proportional thumb on the track.
+
+\ Type-dispatched scroll-info query.  Returns 0 0 0 for unsupported types.
+: _USCR-SCROLL-INFO  ( widget -- content-h offset visible-h )
+    DUP WDG-TYPE
+    DUP WDG-T-LIST = IF DROP LST-SCROLL-INFO EXIT THEN
+    DUP WDG-T-TREE = IF DROP TREE-SCROLL-INFO EXIT THEN
+    DUP WDG-T-TEXTAREA = IF DROP TXTA-SCROLL-INFO EXIT THEN
+    DROP DROP 0 0 0 ;
+
+\ Type-dispatched scroll-set.  No-op for unsupported types.
+: _USCR-SCROLL-SET  ( offset widget -- )
+    DUP WDG-TYPE
+    DUP WDG-T-LIST = IF DROP LST-SCROLL-SET EXIT THEN
+    DUP WDG-T-TREE = IF DROP TREE-SCROLL-SET EXIT THEN
+    DUP WDG-T-TEXTAREA = IF DROP TXTA-SCROLL-SET EXIT THEN
+    DROP 2DROP ;
+
+\ Get the widget pointer from <scroll>'s single child element.
+: _USCR-CHILD-WDG  ( scroll-elem -- widget | 0 )
+    UIDL-FIRST-CHILD DUP 0= IF EXIT THEN
+    _UTUI-SIDECAR _UTUI-SC-WPTR@ ;
+
+\ Scroll-track drawing constants (Unicode)
+9617 CONSTANT _USCR-TRACK-CP    \ ░ light shade — track background
+9608 CONSTANT _USCR-THUMB-CP    \ █ full block  — thumb
+
+\ Temp vars for scroll rendering (single-threaded, safe)
+VARIABLE _USCR-CH    \ content height
+VARIABLE _USCR-SO    \ scroll offset
+VARIABLE _USCR-VH    \ visible height
+VARIABLE _USCR-TH    \ thumb height (cells)
+VARIABLE _USCR-TP    \ thumb top (0-based within track)
+VARIABLE _USCR-SC    \ saved sidecar during scroll mouse dispatch
+
 : _UTUI-RENDER-SCROLL  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    DROP _UTUI-FILL-BG ;
+    _UTUI-FILL-BG
+    \ Sync child's proxy region so widget sees correct dimensions
+    DUP UIDL-FIRST-CHILD ?DUP IF
+        _UTUI-SIDECAR _UTUI-SYNC-PROXY
+    THEN
+    \ Get child widget
+    _USCR-CHILD-WDG DUP 0= IF DROP EXIT THEN
+    _USCR-SCROLL-INFO
+    _USCR-VH ! _USCR-SO ! _USCR-CH !
+    \ If content fits, draw dimmed track with no thumb
+    _USCR-CH @ _USCR-VH @ <= IF
+        CELL-A-DIM DRW-ATTR!
+        _USCR-TRACK-CP _UR-ROW @ _UR-COL @ _UR-W @ + 1-
+        _UR-H @ DRW-VLINE
+        DRW-STYLE-RESTORE EXIT
+    THEN
+    \ Compute thumb height: max(1, visible * track / content)
+    _USCR-VH @ _UR-H @ * _USCR-CH @ /
+    1 MAX _USCR-TH !
+    \ Compute thumb position: offset * (track - thumb) / (content - visible)
+    _USCR-SO @
+    _UR-H @ _USCR-TH @ -               ( offset track-avail )
+    *                                    ( offset*avail )
+    _USCR-CH @ _USCR-VH @ -            ( offset*avail max-scroll )
+    DUP 0= IF DROP DROP 0 ELSE / THEN  ( thumb-top )
+    _USCR-TP !
+    \ Draw track column: DRW-VLINE ( cp row col len -- )
+    _UR-COL @ _UR-W @ + 1-             ( track-col )
+    CELL-A-DIM DRW-ATTR!
+    _USCR-TRACK-CP _UR-ROW @ 2 PICK _UR-H @ DRW-VLINE
+    \ Draw thumb over track
+    DRW-STYLE-RESTORE
+    _USCR-THUMB-CP _UR-ROW @ _USCR-TP @ + 2 PICK _USCR-TH @ DRW-VLINE
+    DROP                                \ drop track-col
+    DRW-STYLE-RESTORE ;
 
 \ --- NOP ---
 : _UTUI-RENDER-NOP  ( elem -- ) DROP ;
@@ -1128,6 +1203,21 @@ VARIABLE _UTUI-MENU-SAVE-W
     NIP R>                                 ( ev wptr )
     WDG-HANDLE ;
 
+\ Scroll container: forward keyboard events to child's widget
+: _UTUI-H-SCROLL  ( elem key-ev -- handled? )
+    OVER UIDL-FIRST-CHILD DUP 0= IF
+        DROP 2DROP 0 EXIT
+    THEN
+    NIP SWAP                               ( child ev )
+    OVER _UTUI-SIDECAR                     ( child ev csc )
+    DUP _UTUI-SC-WPTR@                     ( child ev csc wptr )
+    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    >R                                      ( child ev csc  R: wptr )
+    DUP R@ _UTUI-SYNC-WFOCUS
+    _UTUI-SYNC-PROXY
+    NIP R>                                  ( ev wptr )
+    WDG-HANDLE ;
+
 \ Tree: delegate to materialized TREE widget's _TREE-HANDLE
 : _UTUI-H-TREE  ( elem key-ev -- handled? )
     OVER _UTUI-SIDECAR                    ( elem ev sc )
@@ -1197,6 +1287,7 @@ VARIABLE _UL-LEAF-ROWS   \ pre-counted leaf row total
     UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
         ED.FLAGS @ EL-CONTENT-MODEL
         DUP EL-CONTAINER = OVER EL-FIXED-2 = OR
+        OVER EL-FIXED-1 = OR
         OVER EL-COLLECTION = OR IF DROP 0 ELSE DROP -1 THEN
     ELSE -1 THEN ;
 
@@ -1545,8 +1636,17 @@ VARIABLE _UDL-DLG-SC
     \ Layout children inside dialog (stack)
     _UTUI-LAYOUT-STACK ;
 
-\ --- Scroll ---
-: _UTUI-LAYOUT-SCROLL  ( elem -- ) _UTUI-LAYOUT-STACK ;
+\ --- Scroll: reserve 1 col for scrollbar track on child ---
+: _UTUI-LAYOUT-SCROLL  ( elem -- )
+    DUP _UTUI-SIDECAR _UTUI-SC-W@ 2 < IF
+        _UTUI-LAYOUT-STACK EXIT         \ too narrow for track
+    THEN
+    \ Temporarily reduce own width by 1 for child layout
+    DUP _UTUI-SIDECAR DUP _UTUI-SC-W@  ( elem sc w )
+    1- OVER _UTUI-SC-W!                 ( elem sc )
+    SWAP _UTUI-LAYOUT-STACK             ( sc )
+    \ Restore full width so render sees the track column
+    DUP _UTUI-SC-W@ 1+ SWAP _UTUI-SC-W! ;
 
 \ --- Generic layout dispatcher based on arrange= ---
 : _UTUI-LAYOUT-DISPATCH  ( elem -- )
@@ -1700,6 +1800,7 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-H-CANVAS         UIDL-T-CANVAS     EL-SET-EVENT
     ['] _UTUI-H-REGION         UIDL-T-REGION     EL-SET-EVENT
     ['] _UTUI-H-REGION         UIDL-T-GROUP      EL-SET-EVENT
+    ['] _UTUI-H-SCROLL         UIDL-T-SCROLL     EL-SET-EVENT
 
     \ --- Layout XTs ---
     ['] _UTUI-LAYOUT-DISPATCH  UIDL-T-REGION     EL-SET-LAYOUT
@@ -2242,6 +2343,34 @@ CREATE _UDM-EV 3 CELLS ALLOT
         DUP _UTUI-TAB-CLICK
         DUP _UTUI-DO-LAYOUT-REC
         UIDL-DIRTY! -1 EXIT
+    THEN
+    \ Scroll: click on track column → jump scroll
+    DUP UIDL-TYPE UIDL-T-SCROLL = IF
+        DUP _UTUI-SIDECAR                 ( elem sc )
+        DUP _UTUI-SC-COL@ OVER _UTUI-SC-W@ + 1-  ( elem sc track-col )
+        _UHT-COL @ = IF                   ( elem sc )
+            \ Click is on the scrollbar track
+            _USCR-SC !                     ( elem ) \ save sc
+            _USCR-CHILD-WDG DUP 0= IF     ( widget|0 )
+                DROP -1 EXIT
+            THEN
+            DUP _USCR-SCROLL-INFO          ( widget ch so vh )
+            _USCR-VH ! DROP _USCR-CH !    ( widget )
+            _USCR-CH @ _USCR-VH @ -
+            DUP 0< IF DROP 0 THEN          ( widget max-scroll )
+            _UHT-ROW @ _USCR-SC @ _UTUI-SC-ROW@ -
+                                            ( widget max-scroll rel-row )
+            _USCR-SC @ _UTUI-SC-H@        ( widget max-scroll rel-row h )
+            DUP 0= IF                      \ 0-height guard
+                2DROP DROP 0               ( widget 0 )
+            ELSE >R * R> / THEN            ( widget target-offset )
+            SWAP _USCR-SCROLL-SET
+            UIDL-ROOT UIDL-DIRTY!
+            -1 EXIT
+        ELSE
+            2DROP                          ( -- drop elem sc )
+        THEN
+        -1 EXIT
     THEN
     DUP _UTUI-FOCUSABLE? IF
         DUP UTUI-FOCUS!

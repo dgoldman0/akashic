@@ -34,7 +34,9 @@
 <region id=sidebar/>
 <tabs id=tabs>
 <tab label=Details>
+<scroll>
 <region id=detail/>
+</scroll>
 </tab>
 <tab label=Preview>
 <textarea id=preview readonly=true/>

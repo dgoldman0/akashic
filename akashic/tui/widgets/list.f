@@ -68,7 +68,7 @@ REQUIRE ../keys.f
     \ If sel >= scroll + height → scroll = sel - height + 1
     R@ WDG-REGION RGN-H                   \ ( sel scroll height )
     OVER +                                  \ ( sel scroll scroll+height )
-    2 PICK SWAP >= IF                       \ sel < scroll+height → visible
+    2 PICK SWAP > IF                        \ sel < scroll+height → visible
         2DROP R> DROP EXIT
     THEN
     \ sel >= scroll+height
@@ -268,6 +268,23 @@ VARIABLE _LST-HND-W   \ widget saved during handle
 \   Set custom item renderer: ( index widget -- ).
 : LST-SET-RENDER  ( xt widget -- )
     _LST-O-ITEM-XT + ! ;
+
+\ LST-SCROLL-INFO ( widget -- content-h offset visible-h )
+\   Return scroll parameters for the scroll container.
+: LST-SCROLL-INFO  ( widget -- content-h offset visible-h )
+    DUP _LST-O-COUNT + @
+    OVER _LST-O-SCROLL + @
+    ROT WDG-REGION RGN-H ;
+
+\ LST-SCROLL-SET ( offset widget -- )
+\   Set scroll-top directly (clamped).  Does NOT change selection.
+: LST-SCROLL-SET  ( offset widget -- )
+    >R
+    R@ _LST-O-COUNT + @ R@ WDG-REGION RGN-H -
+    DUP 0< IF DROP 0 THEN              \ max scroll
+    MIN  0 MAX                          \ clamp 0..max
+    R@ _LST-O-SCROLL + !
+    R> WDG-DIRTY ;
 
 \ LST-FREE ( widget -- )
 : LST-FREE  ( widget -- )

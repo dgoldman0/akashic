@@ -989,6 +989,25 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
     -1 OVER _TXTA-O-SEL-ANCHOR + !
     WDG-DIRTY ;
 
+\ TXTA-SCROLL-INFO ( widget -- content-h offset visible-h )
+\   Return vertical scroll parameters for the scroll container.
+: TXTA-SCROLL-INFO  ( widget -- content-h offset visible-h )
+    DUP _TXTA-W !
+    _TXTA-LINE-COUNT
+    _TXTA-W @ _TXTA-O-SCROLL-Y + @
+    _TXTA-W @ WDG-REGION RGN-H ;
+
+\ TXTA-SCROLL-SET ( offset widget -- )
+\   Set vertical scroll offset directly (clamped).
+: TXTA-SCROLL-SET  ( offset widget -- )
+    >R
+    R@ _TXTA-W !
+    _TXTA-LINE-COUNT R@ WDG-REGION RGN-H -
+    DUP 0< IF DROP 0 THEN              \ max scroll
+    MIN  0 MAX                          \ clamp 0..max
+    R@ _TXTA-O-SCROLL-Y + !
+    R> WDG-DIRTY ;
+
 \ TXTA-FREE ( widget -- )
 : TXTA-FREE  ( widget -- )
     FREE ;
