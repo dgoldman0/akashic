@@ -167,9 +167,12 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : _UTUI-PACK-STYLE  ( fg bg attrs -- style )
     TSC-PACK-STYLE ;
 
-\ Apply sidecar style to draw engine; add reverse-video when focused
+\ Apply sidecar style to draw engine; add reverse-video when focused.
+\ Suppress focus highlight when element has a mounted widget — the
+\ widget renders its own selection/focus indicator internally.
 : _UTUI-APPLY-STYLE  ( sc -- )
     DUP TSC-FLAGS@ _UTUI-SCF-FOC AND 0<>
+    OVER _UTUI-SC-WPTR@ IF DROP 0 THEN     \ widget → no UIDL focus chrome
     TSC-APPLY-STYLE-FOC ;
 
 \ Clear all sidecars
@@ -2197,6 +2200,9 @@ VARIABLE _UTC-POS
     REPEAT
     DROP DROP R> DROP ;
 
+\ Scratch event buffer for synthesising mouse events to widgets
+CREATE _UDM-EV 3 CELLS ALLOT
+
 : UTUI-DISPATCH-MOUSE  ( row col btn -- handled? )
     \ Ignore mouse release events — only act on press
     DUP KEY-MOUSE-RELEASE = IF
@@ -2240,7 +2246,22 @@ VARIABLE _UTC-POS
     DUP _UTUI-FOCUSABLE? IF
         DUP UTUI-FOCUS!
     THEN
-    _UTUI-FIRE-DO -1 ;
+    \ If the element has a mounted widget, forward mouse event to it
+    DUP _UTUI-SIDECAR DUP _UTUI-SC-WPTR@  ( elem sc wptr )
+    ?DUP IF
+        >R                                 ( elem sc  R: wptr )
+        DUP R@ _UTUI-SYNC-WFOCUS          ( elem sc  R: wptr )
+        _UTUI-SYNC-PROXY                   ( elem  R: wptr )
+        DROP                               ( R: wptr )
+        KEY-T-MOUSE _UDM-EV !
+        KEY-MOUSE-LEFT _UDM-EV 8 + !
+        _UHT-ROW @ 16 LSHIFT _UHT-COL @ OR _UDM-EV 16 + !
+        _UDM-EV R> WDG-HANDLE DROP
+    ELSE
+        DROP                               ( elem sc -- drop sc )
+        _UTUI-FIRE-DO                      ( -- fires do= action )
+    THEN
+    -1 ;
 
 \ =====================================================================
 \  §16 — Overlay Show / Hide
@@ -2304,7 +2325,7 @@ VARIABLE _UDR-SC
                 _UDR-SC @ _UTUI-SC-ROW@ _UDR-SC @ _UTUI-SC-H@ + _UDR-R1 @ >  AND
                 _UDR-SC @ _UTUI-SC-COL@  _UDR-C2 @ <  AND
                 _UDR-SC @ _UTUI-SC-COL@ _UDR-SC @ _UTUI-SC-W@ + _UDR-C1 @ >  AND
-                IF DUP UIDL-DIRTY! THEN
+                IF DUP _UTUI-DIRTY-SUBTREE THEN
             THEN
         THEN
         \ DFS advance

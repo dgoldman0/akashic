@@ -193,6 +193,20 @@ VARIABLE _LST-HND-W   \ widget saved during handle
         ENDCASE
         EXIT
     THEN
+    \ Mouse click: compute clicked item from row coordinate
+    DUP @ KEY-T-MOUSE = IF
+        16 + @                              \ mods = row<<16 | col
+        16 RSHIFT                           \ extract absolute row (0-based)
+        _LST-HND-W @ WDG-REGION RGN-ROW -  \ relative row within widget
+        _LST-HND-W @ _LST-O-SCROLL + @ +   \ add scroll offset → index
+        DUP 0 >= IF
+            DUP _LST-HND-W @ _LST-O-COUNT + @ < IF
+                _LST-HND-W @ _LST-SELECT!
+                -1 EXIT
+            THEN
+        THEN
+        DROP -1 EXIT                        \ click in list area but out of range
+    THEN
     DROP 0 ;
 
 \ =====================================================================
