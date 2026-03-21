@@ -602,6 +602,12 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     \ If a widget was attached via UTUI-WIDGET-SET, draw it
     _UTUI-SIDECAR _UTUI-SC-WPTR@ ?DUP IF  ( wptr )
         _UTUI-PROXY-FROM-UR
+        \ Sync the widget's own region from current sidecar (handles resize)
+        DUP _WDG-O-REGION + @
+        _UR-ROW @ OVER _RGN-O-ROW + !
+        _UR-COL @ OVER _RGN-O-COL + !
+        _UR-H @   OVER _RGN-O-H   + !
+        _UR-W @   SWAP _RGN-O-W   + !
         _UTUI-PROXY-RGN RGN-USE
         DUP _WDG-O-DRAW-XT + @ EXECUTE
         RGN-ROOT
@@ -908,6 +914,9 @@ DEFER _UTUI-DIRTY-RECT-D  ( row col h w -- )
 : _udr-drop4  2DROP 2DROP ;
 ' _udr-drop4 IS _UTUI-DIRTY-RECT-D
 
+DEFER _UTUI-DO-LAYOUT-REC-D  ( elem -- )
+' DROP IS _UTUI-DO-LAYOUT-REC-D
+
 \ Saved original sidecar geometry (1-row label from menubar layout)
 VARIABLE _UTUI-MENU-SAVE-ROW
 VARIABLE _UTUI-MENU-SAVE-H
@@ -1126,6 +1135,7 @@ VARIABLE _UTUI-MENU-SAVE-W
     _TREE-HANDLE ;
 
 \ Tabs: Left/Right to switch active tab
+\ After switching, relayout the subtree so child panels resize.
 : _UTUI-H-TABS  ( elem key-ev -- handled? )
     KEY-CODE@                              ( elem code )
     OVER _UTUI-SIDECAR _UTUI-SC-WPTR@     ( elem code state )
@@ -1135,6 +1145,7 @@ VARIABLE _UTUI-MENU-SAVE-W
         DROP
         R@ @ 0> IF
             R@ @ 1- R@ !
+            DUP _UTUI-DO-LAYOUT-REC-D
             UIDL-DIRTY! R> DROP -1 EXIT
         THEN
         DROP R> DROP 0 EXIT
@@ -1145,6 +1156,7 @@ VARIABLE _UTUI-MENU-SAVE-W
         OVER UIDL-NCHILDREN                ( elem next nch )
         < IF
             R@ @ 1+ R@ !
+            DUP _UTUI-DO-LAYOUT-REC-D
             UIDL-DIRTY! R> DROP -1 EXIT
         THEN
         DROP R> DROP 0 EXIT
@@ -1175,6 +1187,7 @@ VARIABLE _UL-LEAF-ROWS   \ pre-counted leaf row total
 \ Everything else: containers expand, leaves get 1 row.
 : _UL-IS-LEAF?  ( elem -- flag )
     DUP UIDL-TYPE DUP UIDL-T-STATUS = SWAP UIDL-T-TOOLBAR = OR
+    OVER UIDL-TYPE UIDL-T-MENUBAR = OR
     IF DROP -1 EXIT THEN
     DUP UIDL-TYPE UIDL-T-TEXTAREA = IF DROP 0 EXIT THEN
     DUP UIDL-TYPE UIDL-T-CANVAS   = IF DROP 0 EXIT THEN
@@ -1696,6 +1709,7 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-LAYOUT-SPLIT     UIDL-T-SPLIT      EL-SET-LAYOUT
     ['] _UTUI-LAYOUT-TABS      UIDL-T-TABS       EL-SET-LAYOUT
     ['] _UTUI-LAYOUT-SCROLL    UIDL-T-SCROLL     EL-SET-LAYOUT
+    ['] _UTUI-LAYOUT-DISPATCH  UIDL-T-TAB        EL-SET-LAYOUT
     ['] _UTUI-LAYOUT-DISPATCH  UIDL-T-UIDL       EL-SET-LAYOUT
 ;
 
@@ -1883,6 +1897,9 @@ VARIABLE _UHT-SC
     UIDL-ROOT _UTUI-DO-LAYOUT-REC ;
 
 \ =====================================================================
+\ Resolve forward references that need _UTUI-DO-LAYOUT-REC
+' _UTUI-DO-LAYOUT-REC IS _UTUI-DO-LAYOUT-REC-D
+
 \  §12 — Subscription Wiring
 \ =====================================================================
 
@@ -2103,14 +2120,21 @@ VARIABLE _UTUI-SKIP-CHILDREN
     THEN
 
     \ Down / Right → next focusable; Up / Left → prev focusable
-    OVER KEY-DOWN = OVER 0= AND IF
-        2DROP UTUI-FOCUS-NEXT -1 EXIT THEN
-    OVER KEY-RIGHT = OVER 0= AND IF
-        2DROP UTUI-FOCUS-NEXT -1 EXIT THEN
-    OVER KEY-UP = OVER 0= AND IF
-        2DROP UTUI-FOCUS-PREV -1 EXIT THEN
-    OVER KEY-LEFT = OVER 0= AND IF
-        2DROP UTUI-FOCUS-PREV -1 EXIT THEN
+    \ Skip arrow focus-nav when the focused element has a mounted widget
+    \ (widgets use arrows for internal navigation).
+    UTUI-FOCUS DUP IF
+        _UTUI-SIDECAR _UTUI-SC-WPTR@
+    ELSE DROP 0 THEN
+    0= IF
+        OVER KEY-DOWN = OVER 0= AND IF
+            2DROP UTUI-FOCUS-NEXT -1 EXIT THEN
+        OVER KEY-RIGHT = OVER 0= AND IF
+            2DROP UTUI-FOCUS-NEXT -1 EXIT THEN
+        OVER KEY-UP = OVER 0= AND IF
+            2DROP UTUI-FOCUS-PREV -1 EXIT THEN
+        OVER KEY-LEFT = OVER 0= AND IF
+            2DROP UTUI-FOCUS-PREV -1 EXIT THEN
+    THEN
 
     \ Shortcut table
     2DUP _UTUI-SHORT-MATCH            ( code mods elem|0 )
@@ -2145,6 +2169,34 @@ VARIABLE _UTUI-SKIP-CHILDREN
 \  §15 — Mouse Dispatch
 \ =====================================================================
 
+\ --- Tab click helper: map click column to tab index ---
+\ _UHT-COL still holds the clicked column from UTUI-HIT-TEST.
+VARIABLE _UTC-POS
+
+: _UTUI-TAB-CLICK  ( elem -- )
+    DUP _UTUI-SIDECAR                     ( elem sc )
+    DUP _UTUI-SC-COL@ 1+ _UTC-POS !       ( elem sc )
+    _UTUI-SC-WPTR@ ?DUP 0= IF DROP EXIT THEN  ( elem state )
+    >R                                     ( elem   R: state )
+    0 SWAP                                 ( idx elem   R: state )
+    UIDL-FIRST-CHILD                       ( idx child|0   R: state )
+    BEGIN DUP 0<> WHILE
+        DUP S" label" UIDL-ATTR IF         ( idx child la ll )
+            NIP                            ( idx child ll )
+            _UHT-COL @ _UTC-POS @ >=
+            _UHT-COL @ _UTC-POS @ 3 PICK 2 + + < AND IF
+                                            ( idx child ll )
+                DROP DROP                   ( idx   R: state )
+                R> !                        ( )
+                EXIT
+            THEN
+            2 + _UTC-POS +!                ( idx child )
+        ELSE 2DROP THEN                    ( idx child )
+        UIDL-NEXT-SIB
+        SWAP 1+ SWAP                       ( idx+1 next )
+    REPEAT
+    DROP DROP R> DROP ;
+
 : UTUI-DISPATCH-MOUSE  ( row col btn -- handled? )
     \ Ignore mouse release events — only act on press
     DUP KEY-MOUSE-RELEASE = IF
@@ -2178,6 +2230,13 @@ VARIABLE _UTUI-SKIP-CHILDREN
     THEN
     \ Anything else: close menu first, then normal dispatch
     _UTUI-MENU-OPEN @ IF _UTUI-MENU-CLOSE THEN
+    \ Tabs: click to switch active tab, relayout subtree
+    DUP UIDL-TYPE UIDL-T-TABS = IF
+        DUP UTUI-FOCUS!
+        DUP _UTUI-TAB-CLICK
+        DUP _UTUI-DO-LAYOUT-REC
+        UIDL-DIRTY! -1 EXIT
+    THEN
     DUP _UTUI-FOCUSABLE? IF
         DUP UTUI-FOCUS!
     THEN
