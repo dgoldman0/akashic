@@ -234,6 +234,9 @@ VARIABLE _FSW-TMP
     _FEXP-LINE-W CMOVE
     _FEXP-PREV-BUF  2 PICK _FEXP-LINE-W * _FEXP-LINES +
     _FEXP-LINE-W CMOVE
+    \ Update item pointers to track their new line slots
+    OVER _FEXP-LINE-W * _FEXP-LINES +  2 PICK 2 * CELLS _FEXP-ITEMS + !
+    DUP  _FEXP-LINE-W * _FEXP-LINES +  OVER  2 * CELLS _FEXP-ITEMS + !
     2DROP ;
 
 : _FEXP-SORT-LIST  ( -- )
