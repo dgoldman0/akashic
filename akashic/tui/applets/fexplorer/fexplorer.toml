@@ -1,0 +1,36 @@
+# =========================================================
+#  fexplorer.toml — File Explorer theme configuration
+# =========================================================
+#
+#  Colour values: CSS named colours, "#RRGGBB", "#RGB", or
+#  a raw xterm-256 palette index (0–255).
+
+[fexp.theme]
+
+# Sidebar (tree view) — light text on dark navy
+sidebar-fg     = 251
+sidebar-bg     = 17
+
+# Detail list panel — white on dark charcoal
+detail-fg      = 253
+detail-bg      = 235
+
+# Preview textarea — soft gray on near-black
+preview-fg     = 250
+preview-bg     = 233
+
+# Menubar — bright white on slate
+menubar-fg     = 255
+menubar-bg     = 60
+
+# Tab bar — white on same slate
+tabs-fg        = 255
+tabs-bg        = 60
+
+# Status bar — bright white on vivid blue
+status-fg      = 15
+status-bg      = 21
+
+# Scrollbar — distinct from list selection highlight
+scroll-fg      = 68
+scroll-bg      = 235

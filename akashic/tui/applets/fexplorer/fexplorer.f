@@ -51,6 +51,8 @@ REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/string.f
+REQUIRE ../../../utils/toml.f
+REQUIRE ../../color.f
 
 \ =====================================================================
 \  §2 — Constants
@@ -99,6 +101,8 @@ VARIABLE _FEXP-E-PREVIEW    \ <textarea id="preview">
 VARIABLE _FEXP-E-TABS       \ <tabs id="tabs">
 VARIABLE _FEXP-E-SBAR-L     \ <label id="sbar-left">
 VARIABLE _FEXP-E-SBAR-R     \ <label id="sbar-right">
+VARIABLE _FEXP-E-MBAR       \ <menubar id="mbar">
+VARIABLE _FEXP-E-SCROLLER   \ <scroll id="scroller">
 
 \ Widget handles (native widgets mounted on UIDL regions)
 VARIABLE _FEXP-EXPL         \ explorer widget (EXPL-NEW)
@@ -112,6 +116,94 @@ VARIABLE _FEXP-CUR-DIR       \ inode of currently displayed directory
 \ Clipboard
 VARIABLE _FEXP-CLIP-IN       \ clipboard inode
 VARIABLE _FEXP-CLIP-OP       \ clipboard operation (0/1/2)
+
+\ =====================================================================
+\  §4b — Theme
+\ =====================================================================
+\  12 colour slots — 2 per region (fg + bg).  Defaults are a
+\  dark-navy palette.  _FEXP-LOAD-THEME overrides any slot that
+\  appears in [fexp.theme] of a TOML config.
+
+VARIABLE _FTH-SIDEBAR-FG  VARIABLE _FTH-SIDEBAR-BG
+VARIABLE _FTH-DETAIL-FG   VARIABLE _FTH-DETAIL-BG
+VARIABLE _FTH-PREVIEW-FG  VARIABLE _FTH-PREVIEW-BG
+VARIABLE _FTH-MENU-FG     VARIABLE _FTH-MENU-BG
+VARIABLE _FTH-TABS-FG     VARIABLE _FTH-TABS-BG
+VARIABLE _FTH-STATUS-FG   VARIABLE _FTH-STATUS-BG
+VARIABLE _FTH-SCROLL-FG   VARIABLE _FTH-SCROLL-BG
+
+: _FEXP-THEME-DEFAULTS  ( -- )
+    251 _FTH-SIDEBAR-FG !    17 _FTH-SIDEBAR-BG !
+    253 _FTH-DETAIL-FG  !   235 _FTH-DETAIL-BG  !
+    250 _FTH-PREVIEW-FG !   233 _FTH-PREVIEW-BG !
+    255 _FTH-MENU-FG    !    60 _FTH-MENU-BG    !
+    255 _FTH-TABS-FG    !    60 _FTH-TABS-BG    !
+     15 _FTH-STATUS-FG  !    21 _FTH-STATUS-BG  !
+     68 _FTH-SCROLL-FG  !   235 _FTH-SCROLL-BG  ! ;
+_FEXP-THEME-DEFAULTS
+
+\ Helper: try to load a colour key from a TOML table into a variable.
+: _FTH-TRY  ( tbl-a tbl-l key-a key-l var -- )
+    >R TOML-KEY?
+    IF   TOML-GET-STRING TUI-PARSE-COLOR
+         IF R> ! EXIT THEN DROP
+    ELSE 2DROP
+    THEN R> DROP ;
+
+: _FEXP-LOAD-THEME  ( toml-a toml-l -- )
+    S" fexp.theme" TOML-FIND-TABLE?
+    0= IF 2DROP EXIT THEN
+    2DUP S" sidebar-fg"   _FTH-SIDEBAR-FG  _FTH-TRY
+    2DUP S" sidebar-bg"   _FTH-SIDEBAR-BG  _FTH-TRY
+    2DUP S" detail-fg"    _FTH-DETAIL-FG   _FTH-TRY
+    2DUP S" detail-bg"    _FTH-DETAIL-BG   _FTH-TRY
+    2DUP S" preview-fg"   _FTH-PREVIEW-FG  _FTH-TRY
+    2DUP S" preview-bg"   _FTH-PREVIEW-BG  _FTH-TRY
+    2DUP S" menubar-fg"   _FTH-MENU-FG     _FTH-TRY
+    2DUP S" menubar-bg"   _FTH-MENU-BG     _FTH-TRY
+    2DUP S" tabs-fg"      _FTH-TABS-FG     _FTH-TRY
+    2DUP S" tabs-bg"      _FTH-TABS-BG     _FTH-TRY
+    2DUP S" status-fg"    _FTH-STATUS-FG   _FTH-TRY
+    2DUP S" status-bg"    _FTH-STATUS-BG   _FTH-TRY
+    2DUP S" scroll-fg"    _FTH-SCROLL-FG   _FTH-TRY
+         S" scroll-bg"    _FTH-SCROLL-BG   _FTH-TRY ;
+
+\ TOML config buffer (kept alive so zero-copy strings remain valid).
+VARIABLE _FEXP-CFG-A  VARIABLE _FEXP-CFG-L
+0 _FEXP-CFG-A !  0 _FEXP-CFG-L !
+
+\ Config file buffer (for reading TOML from VFS).
+4096 CONSTANT _FEXP-CFG-CAP
+CREATE _FEXP-CFG-BUF  _FEXP-CFG-CAP ALLOT
+
+VARIABLE _FEXP-CFG-FD
+
+: _FEXP-LOAD-CONFIG  ( -- )
+    \ Read fexplorer.toml from VFS
+    VFS-CUR >R  _FEXP-VFS @ VFS-USE
+    S" tui/applets/fexplorer/fexplorer.toml" VFS-OPEN
+    R> VFS-USE
+    DUP 0= IF DROP EXIT THEN
+    _FEXP-CFG-FD !
+    _FEXP-CFG-BUF _FEXP-CFG-CAP _FEXP-CFG-FD @ VFS-READ
+    DUP 0= IF DROP _FEXP-CFG-FD @ VFS-CLOSE EXIT THEN
+    _FEXP-CFG-BUF SWAP 2DUP _FEXP-CFG-L ! _FEXP-CFG-A !
+    _FEXP-LOAD-THEME
+    _FEXP-CFG-FD @ VFS-CLOSE ;
+
+\ Apply resolved theme colours to a UIDL element's sidecar.
+: _FEXP-THEME-ELEM  ( fg bg elem -- )
+    _UTUI-SIDECAR >R
+    0 _UTUI-PACK-STYLE R> _UTUI-SC-STYLE! ;
+
+: _FEXP-APPLY-THEME  ( -- )
+    _FTH-SIDEBAR-FG @ _FTH-SIDEBAR-BG @ _FEXP-E-SIDEBAR @ _FEXP-THEME-ELEM
+    _FTH-DETAIL-FG  @ _FTH-DETAIL-BG  @ _FEXP-E-DETAIL  @ _FEXP-THEME-ELEM
+    _FTH-PREVIEW-FG @ _FTH-PREVIEW-BG @ _FEXP-E-PREVIEW @ _FEXP-THEME-ELEM
+    _FTH-MENU-FG    @ _FTH-MENU-BG    @ _FEXP-E-MBAR    @ _FEXP-THEME-ELEM
+    _FTH-TABS-FG    @ _FTH-TABS-BG    @ _FEXP-E-TABS    @ _FEXP-THEME-ELEM
+    _FTH-STATUS-FG  @ _FTH-STATUS-BG  @ S" sbar" UTUI-BY-ID _FEXP-THEME-ELEM
+    _FTH-SCROLL-FG  @ _FTH-SCROLL-BG  @ _FEXP-E-SCROLLER @ _FEXP-THEME-ELEM ;
 
 \ =====================================================================
 \  §5 — Buffers
@@ -537,6 +629,13 @@ VARIABLE _FEXP-PROP-IN
     S" tabs"       UTUI-BY-ID _FEXP-E-TABS !
     S" sbar-left"  UTUI-BY-ID _FEXP-E-SBAR-L !
     S" sbar-right" UTUI-BY-ID _FEXP-E-SBAR-R !
+    S" mbar"       UTUI-BY-ID _FEXP-E-MBAR !
+    S" scroller"   UTUI-BY-ID _FEXP-E-SCROLLER !
+
+    \ Load TOML config and apply theme colours to UIDL sidecars
+    _FEXP-THEME-DEFAULTS
+    _FEXP-LOAD-CONFIG
+    _FEXP-APPLY-THEME
 
     \ Create explorer widget and mount on sidebar region
     _FEXP-E-SIDEBAR @ UTUI-ELEM-RGN     ( row col h w )
@@ -615,7 +714,8 @@ VARIABLE _FEXP-PROP-IN
     0 _FEXP-EXPL !  0 _FEXP-LIST !
     0 _FEXP-E-SIDEBAR !  0 _FEXP-E-DETAIL !
     0 _FEXP-E-PREVIEW !  0 _FEXP-E-TABS !
-    0 _FEXP-E-SBAR-L !   0 _FEXP-E-SBAR-R ! ;
+    0 _FEXP-E-SBAR-L !   0 _FEXP-E-SBAR-R !
+    0 _FEXP-E-MBAR !  0 _FEXP-E-SCROLLER ! ;
 
 \ =====================================================================
 \  §17 — Entry Point & Standalone Runner

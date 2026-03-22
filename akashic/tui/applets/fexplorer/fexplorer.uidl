@@ -1,5 +1,5 @@
 <uidl arrange=stack>
-<menubar>
+<menubar id=mbar>
 <menu label=File>
 <item text=New_File do=new-file/>
 <item text=New_Folder do=new-dir/>
@@ -34,7 +34,7 @@
 <region id=sidebar/>
 <tabs id=tabs>
 <tab label=Details>
-<scroll>
+<scroll id=scroller>
 <region id=detail/>
 </scroll>
 </tab>
