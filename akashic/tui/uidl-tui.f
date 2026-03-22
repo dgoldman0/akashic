@@ -2351,21 +2351,22 @@ CREATE _UDM-EV 3 CELLS ALLOT
         _UHT-COL @ = IF                   ( elem sc )
             \ Click is on the scrollbar track
             _USCR-SC !                     ( elem ) \ save sc
-            _USCR-CHILD-WDG DUP 0= IF     ( widget|0 )
-                DROP -1 EXIT
+            DUP                            ( elem elem )
+            _USCR-CHILD-WDG DUP 0= IF     ( elem widget|0 )
+                2DROP -1 EXIT
             THEN
-            DUP _USCR-SCROLL-INFO          ( widget ch so vh )
-            _USCR-VH ! DROP _USCR-CH !    ( widget )
+            DUP _USCR-SCROLL-INFO          ( elem widget ch so vh )
+            _USCR-VH ! DROP _USCR-CH !    ( elem widget )
             _USCR-CH @ _USCR-VH @ -
-            DUP 0< IF DROP 0 THEN          ( widget max-scroll )
+            DUP 0< IF DROP 0 THEN          ( elem widget max-scroll )
             _UHT-ROW @ _USCR-SC @ _UTUI-SC-ROW@ -
-                                            ( widget max-scroll rel-row )
-            _USCR-SC @ _UTUI-SC-H@        ( widget max-scroll rel-row h )
+                                            ( elem widget max-scroll rel-row )
+            _USCR-SC @ _UTUI-SC-H@        ( elem widget max-scroll rel-row h )
             DUP 0= IF                      \ 0-height guard
-                2DROP DROP 0               ( widget 0 )
-            ELSE >R * R> / THEN            ( widget target-offset )
-            SWAP _USCR-SCROLL-SET
-            UIDL-ROOT UIDL-DIRTY!
+                2DROP DROP 0               ( elem widget 0 )
+            ELSE >R * R> / THEN            ( elem widget target-offset )
+            SWAP _USCR-SCROLL-SET          ( elem )
+            _UTUI-DIRTY-SUBTREE-D
             -1 EXIT
         ELSE
             2DROP                          ( -- drop elem sc )
