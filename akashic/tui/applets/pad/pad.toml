@@ -1,0 +1,37 @@
+[pad.theme]
+
+# Editor textarea — soft gray on near-black
+editor-fg      = 253
+editor-bg      = 234
+
+# Menubar — bright white on dark slate
+menubar-fg     = 255
+menubar-bg     = 60
+
+# Status bar — bright white on deep teal
+status-fg      = 15
+status-bg      = 24
+
+# Scrollbar — steelblue on charcoal
+scroll-fg      = 68
+scroll-bg      = 234
+
+# Sidebar (file explorer) — light on dark navy
+sidebar-fg     = 251
+sidebar-bg     = 236
+
+# Editor tabs — white on slate
+tabs-fg        = 255
+tabs-bg        = 60
+
+# Output panel — dim gray on near-black
+output-fg      = 248
+output-bg      = 233
+
+# Active tab indicator
+active-tab-fg  = 255
+active-tab-bg  = 234
+
+# Line numbers / gutter
+gutter-fg      = 243
+gutter-bg      = 235

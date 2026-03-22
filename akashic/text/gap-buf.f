@@ -9,16 +9,20 @@
 \  O(distance).  A line-start index is rebuilt after every edit
 \  for fast line-number <-> byte-offset mapping.
 \
-\  The buffer owns its storage and grows automatically.
+\  Storage is arena-allocated.  The caller supplies an arena
+\  handle; all internal allocations (buffer, line index) come
+\  from that arena.  Growth abandons the old block in the arena
+\  and allocates a new one (reclaimed on ARENA-DESTROY/RESET).
 \
-\  Descriptor layout (7 cells = 56 bytes):
-\    +0   buf    Byte buffer  (ALLOCATE'd)
+\  Descriptor layout (8 cells = 64 bytes):
+\    +0   buf    Byte buffer  (arena-allocated)
 \    +8   cap    Total capacity in bytes
 \    +16  gs     Gap start = logical cursor position
 \    +24  ge     Gap end (exclusive)
-\    +32  lidx   Line-start offset array (cells, ALLOCATE'd)
+\    +32  lidx   Line-start offset array (cells, arena-allocated)
 \    +40  lcap   Line-index capacity (entries)
 \    +48  lcnt   Line count (always >= 1)
+\    +56  arena  Arena handle (for growth allocation)
 \
 \  Buffer physical layout:
 \    [content A][.....gap.....][content B]
@@ -30,8 +34,8 @@
 \    pos >= gs -> buf[pos + (ge - gs)]
 \
 \  Public API:
-\    GB-NEW        ( cap -- gb )
-\    GB-FREE       ( gb -- )
+\    GB-NEW        ( cap arena -- gb )
+\    GB-FREE       ( gb -- )        no-op; arena handles deallocation
 \    GB-LEN        ( gb -- u )       content length
 \    GB-CURSOR     ( gb -- n )       cursor position = gs
 \    GB-BYTE@      ( pos gb -- c )   logical byte access
@@ -69,7 +73,8 @@ REQUIRE utf8.f
 32 CONSTANT _GB-O-LIDX
 40 CONSTANT _GB-O-LCAP
 48 CONSTANT _GB-O-LCNT
-56 CONSTANT _GB-DESC-SZ
+56 CONSTANT _GB-O-ARENA
+64 CONSTANT _GB-DESC-SZ
 
 \ =====================================================================
 \  S2 -- Module Temporaries
@@ -133,59 +138,65 @@ VARIABLE _GB-D           \ delta for move / grow
 
 256 CONSTANT _GB-LIDX-INIT    \ initial line-index capacity
 
-: GB-NEW  ( cap -- gb )
-    _GB-DESC-SZ ALLOCATE 0<> ABORT" GB-NEW: desc"
-    >R                                 ( cap  R: gb )
-    DUP ALLOCATE 0<> ABORT" GB-NEW: buf"
-    R@ _GB-O-BUF + !                  ( cap  R: gb )
-    DUP R@ _GB-O-CAP + !              \ cap
-    0 R@ _GB-O-GS + !                 \ gs = 0
-    R@ _GB-O-GE + !                   \ ge = cap (all gap)
-    _GB-LIDX-INIT CELLS ALLOCATE 0<> ABORT" GB-NEW: lidx"
-    R@ _GB-O-LIDX + !
-    _GB-LIDX-INIT R@ _GB-O-LCAP + !
-    1 R@ _GB-O-LCNT + !
-    0 R@ _GB-O-LIDX + @ !             \ line 0 at offset 0
-    R> ;
+: GB-NEW  ( cap arena -- gb )
+    _GB-D !                            \ _GB-D = arena
+    _GB-D @ _GB-DESC-SZ ARENA-ALLOT   ( cap gb )
+    _GB-T !                            \ _GB-T = gb
+    _GB-D @ _GB-T @ _GB-O-ARENA + !   \ store arena in descriptor
+    _GB-D @ OVER ARENA-ALLOT           ( cap buf )
+    _GB-T @ _GB-O-BUF + !             ( cap )
+    DUP _GB-T @ _GB-O-CAP + !         \ cap
+    0 _GB-T @ _GB-O-GS + !            \ gs = 0
+    _GB-T @ _GB-O-GE + !              \ ge = cap (all gap)
+    _GB-D @ _GB-LIDX-INIT CELLS ARENA-ALLOT
+    _GB-T @ _GB-O-LIDX + !
+    _GB-LIDX-INIT _GB-T @ _GB-O-LCAP + !
+    1 _GB-T @ _GB-O-LCNT + !
+    0 _GB-T @ _GB-O-LIDX + @ !         \ line 0 at offset 0
+    _GB-T @ ;
 
 : GB-FREE  ( gb -- )
-    DUP _GB-O-BUF + @ FREE DROP
-    DUP _GB-O-LIDX + @ FREE DROP
-    FREE DROP ;
+    DROP ;                             \ no-op — arena handles deallocation
 
 \ =====================================================================
 \  S7 -- Growth
 \ =====================================================================
 
 \ _GB-LIDX-GROW ( -- )   double the line-index array.  Uses _GB-T.
+\   Allocates new from arena, copies old entries, abandons old.
 : _GB-LIDX-GROW  ( -- )
     _GB-T @ _GB-O-LCAP + @ 2 *     ( new-lcap )
     DUP CELLS
-    _GB-T @ _GB-O-LIDX + @ SWAP RESIZE 0<> ABORT" lidx grow"
+    _GB-T @ _GB-O-ARENA + @ SWAP ARENA-ALLOT  ( new-lcap new-lidx )
+    _GB-T @ _GB-O-LIDX + @  OVER
+    _GB-T @ _GB-O-LCAP + @ CELLS  CMOVE       ( new-lcap new-lidx )
     _GB-T @ _GB-O-LIDX + !
     _GB-T @ _GB-O-LCAP + ! ;
 
 \ _GB-GROW ( needed -- )   ensure gap >= needed bytes.  Uses _GB-T.
+\   Allocates new buffer from arena, copies both segments, abandons old.
 : _GB-GROW  ( needed -- )
     _GB-T @ _GB-GAP  OVER >= IF DROP EXIT THEN
     \ new-cap = max( 2*cap, cap + needed )
     _GB-T @ _GB-O-CAP + @ 2 *                    ( needed nc1 )
     _GB-T @ _GB-O-CAP + @ 2 PICK +               ( needed nc1 nc2 )
     MAX NIP                                       ( new-cap )
-    \ RESIZE buffer
-    _GB-T @ _GB-O-BUF + @ OVER RESIZE
-    0<> ABORT" _GB-GROW: resize"
-    _GB-T @ _GB-O-BUF + !                        ( new-cap )
+    \ Allocate new buffer from arena (old buf abandoned)
+    _GB-T @ _GB-O-ARENA + @ OVER ARENA-ALLOT     ( new-cap new-buf )
+    _GB-D !                                       ( new-cap )  \ _GB-D = new-buf
+    \ Copy pre-gap: old[0..gs) -> new[0..gs)
+    _GB-T @ _GB-O-BUF + @  _GB-D @
+    _GB-T @ _GB-O-GS + @  CMOVE                   ( new-cap )
     \ delta = new-cap - old-cap
-    DUP _GB-T @ _GB-O-CAP + @ -  _GB-D !         ( new-cap )
-    \ Move post-gap content to end of new buffer
-    \ CMOVE> buf+ge -> buf+ge+delta, count = old-cap - ge
-    _GB-T @ _GB-O-BUF + @  _GB-T @ _GB-O-GE + @  +   ( nc src )
-    DUP _GB-D @ +                                      ( nc src dst )
-    _GB-T @ _GB-O-CAP + @  _GB-T @ _GB-O-GE + @  -   ( nc src dst count )
-    DUP 0> IF CMOVE> ELSE DROP 2DROP THEN              ( nc )
-    \ Update ge and cap
-    _GB-D @ _GB-T @ _GB-O-GE + +!
+    DUP _GB-T @ _GB-O-CAP + @ -  >R              ( new-cap  R: delta )
+    \ Copy post-gap: old[ge..cap) -> new[ge+delta..new-cap)
+    _GB-T @ _GB-O-BUF + @  _GB-T @ _GB-O-GE + @  +
+    _GB-D @  _GB-T @ _GB-O-GE + @  +  R@ +
+    _GB-T @ _GB-O-CAP + @  _GB-T @ _GB-O-GE + @  -
+    DUP 0> IF CMOVE ELSE DROP 2DROP THEN          ( new-cap  R: delta )
+    \ Update descriptor
+    _GB-D @ _GB-T @ _GB-O-BUF + !                ( new-cap  R: delta )
+    R> _GB-T @ _GB-O-GE + +!                     ( new-cap )
     _GB-T @ _GB-O-CAP + ! ;
 
 \ =====================================================================
@@ -366,8 +377,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     \ Grow buffer if content exceeds capacity
     DUP _GB-T @ _GB-O-CAP + @ > IF
         DUP 256 +                           ( addr u new-cap )
-        _GB-T @ _GB-O-BUF + @ OVER RESIZE
-        0<> ABORT" GB-SET: resize"
+        _GB-T @ _GB-O-ARENA + @ OVER ARENA-ALLOT
         _GB-T @ _GB-O-BUF + !              ( addr u new-cap )
         _GB-T @ _GB-O-CAP + !              ( addr u )
     THEN

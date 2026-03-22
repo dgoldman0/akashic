@@ -1,0 +1,107 @@
+<uidl arrange=stack>
+
+<!-- ===== Menu Bar ===== -->
+<menubar id=mbar>
+<menu label=File>
+<item text=New_File do=new key=Ctrl+N/>
+<item text=Open_File do=open key=Ctrl+O/>
+<separator/>
+<item text=Save do=save key=Ctrl+S/>
+<item text=Save_As do=save-as key=Ctrl+Shift+S/>
+<item text=Save_All do=save-all/>
+<separator/>
+<item text=Close_Tab do=close-tab key=Ctrl+W/>
+<item text=Close_All do=close-all/>
+<separator/>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+<menu label=Edit>
+<item text=Undo do=undo key=Ctrl+Z/>
+<item text=Redo do=redo key=Ctrl+Y/>
+<separator/>
+<item text=Cut do=cut key=Ctrl+X/>
+<item text=Copy do=copy key=Ctrl+C/>
+<item text=Paste do=paste key=Ctrl+V/>
+<separator/>
+<item text=Select_All do=select-all key=Ctrl+A/>
+<item text=Delete_Line do=delete-line key=Ctrl+Shift+K/>
+</menu>
+<menu label=Selection>
+<item text=Select_Word do=select-word key=Ctrl+D/>
+<item text=Select_Line do=select-line key=Ctrl+L/>
+<item text=Select_All do=select-all key=Ctrl+A/>
+</menu>
+<menu label=View>
+<item text=Toggle_Sidebar do=toggle-sidebar key=Ctrl+B/>
+<item text=Toggle_Output do=toggle-output key=Ctrl+J/>
+<separator/>
+<item text=Show_Hidden_Files do=toggle-hidden/>
+</menu>
+<menu label=Go>
+<item text=Go_to_File do=goto-file key=Ctrl+P/>
+<item text=Go_to_Line do=goto-line key=Ctrl+G/>
+<separator/>
+<item text=Find do=find key=Ctrl+F/>
+<item text=Find_and_Replace do=replace key=Ctrl+H/>
+<separator/>
+<item text=Next_Tab do=next-tab key=Ctrl+PageDown/>
+<item text=Prev_Tab do=prev-tab key=Ctrl+PageUp/>
+</menu>
+<menu label=Help>
+<item text=About do=about/>
+<item text=Keyboard_Shortcuts do=shortcuts/>
+</menu>
+</menubar>
+
+<!-- ===== Main Layout: sidebar | editor+output ===== -->
+<split id=main-split ratio=20>
+
+<!-- Left: file explorer sidebar -->
+<scroll id=sidebar-scroll>
+<region id=sidebar/>
+</scroll>
+
+<!-- Right: editor tabs (top) + output panel (bottom) -->
+<split id=eo-split ratio=80>
+
+<!-- Top: editor tab bar + content area -->
+<region id=editor-area/>
+
+<!-- Bottom: output panel (console, build log, etc.) -->
+<scroll id=output-scroll>
+<textarea id=output readonly=true/>
+</scroll>
+
+</split>
+</split>
+
+<!-- ===== Status Bar ===== -->
+<status id=sbar style=color:white;background-color:blue>
+<label id=sbar-file text=Ready/>
+<label id=sbar-pos text=Ln_1,_Col_1/>
+<label id=sbar-enc text=UTF-8/>
+<label id=sbar-tabs text=0_tabs/>
+</status>
+
+<!-- ===== Global Keyboard Shortcuts ===== -->
+<action do=new key=Ctrl+N/>
+<action do=open key=Ctrl+O/>
+<action do=save key=Ctrl+S/>
+<action do=close-tab key=Ctrl+W/>
+<action do=quit key=Ctrl+Q/>
+<action do=undo key=Ctrl+Z/>
+<action do=redo key=Ctrl+Y/>
+<action do=cut key=Ctrl+X/>
+<action do=copy key=Ctrl+C/>
+<action do=paste key=Ctrl+V/>
+<action do=select-all key=Ctrl+A/>
+<action do=find key=Ctrl+F/>
+<action do=replace key=Ctrl+H/>
+<action do=goto-line key=Ctrl+G/>
+<action do=goto-file key=Ctrl+P/>
+<action do=toggle-sidebar key=Ctrl+B/>
+<action do=toggle-output key=Ctrl+J/>
+<action do=next-tab key=Ctrl+PageDown/>
+<action do=prev-tab key=Ctrl+PageUp/>
+
+</uidl>
