@@ -992,7 +992,7 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 \ TXTA-SCROLL-INFO ( widget -- content-h offset visible-h )
 \   Return vertical scroll parameters for the scroll container.
 : TXTA-SCROLL-INFO  ( widget -- content-h offset visible-h )
-    DUP _TXTA-W !
+    _TXTA-W !
     _TXTA-LINE-COUNT
     _TXTA-W @ _TXTA-O-SCROLL-Y + @
     _TXTA-W @ WDG-REGION RGN-H ;
@@ -1015,20 +1015,20 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 \ TXTA-CURSOR-LINE ( widget -- line )
 \   Return 0-based cursor line number.
 : TXTA-CURSOR-LINE  ( widget -- line )
-    DUP _TXTA-W ! _TXTA-CURSOR-LINE ;
+    _TXTA-W ! _TXTA-CURSOR-LINE ;
 
 \ TXTA-CURSOR-COL ( widget -- col )
 \   Return 0-based cursor column (codepoint count from SOL).
 : TXTA-CURSOR-COL  ( widget -- col )
-    DUP _TXTA-W ! _TXTA-CURSOR-COL ;
+    _TXTA-W ! _TXTA-CURSOR-COL ;
 
 \ TXTA-GET-SEL ( widget -- addr len | 0 0 )
 \   Return the selected text range.  Returns 0 0 if no selection.
 \   In GB mode: copies to _TXTA-FLAT-BUF (max 1024 bytes).
 \   In flat mode: returns pointer into flat buffer (no alloc).
 : TXTA-GET-SEL  ( widget -- addr len | 0 0 )
-    DUP _TXTA-W !
-    _TXTA-HAS-SEL? 0= IF DROP 0 0 EXIT THEN
+    _TXTA-W !
+    _TXTA-HAS-SEL? 0= IF 0 0 EXIT THEN
     _TXTA-SEL-RANGE              ( start end )
     OVER -                       ( start len )
     _TXTA-GB? IF
@@ -1046,7 +1046,7 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 \ TXTA-DEL-SEL ( widget -- flag )
 \   Delete the selected text.  Returns TRUE if a selection existed.
 : TXTA-DEL-SEL  ( widget -- flag )
-    DUP _TXTA-W !
+    _TXTA-W !
     _TXTA-DEL-SEL DUP IF
         _TXTA-FIRE-CHANGE
         _TXTA-W @ WDG-DIRTY
@@ -1055,16 +1055,16 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 \ TXTA-INS-STR ( addr len widget -- )
 \   Insert a string at cursor.  Deletes any active selection first.
 : TXTA-INS-STR  ( addr len widget -- )
-    DUP _TXTA-W !
+    _TXTA-W !
     _TXTA-DEL-SEL DROP
-    ROT ROT _TXTA-INS-STR
+    _TXTA-INS-STR
     _TXTA-FIRE-CHANGE
     _TXTA-W @ WDG-DIRTY ;
 
 \ TXTA-SELECT-ALL ( widget -- )
 \   Select the entire buffer.
 : TXTA-SELECT-ALL  ( widget -- )
-    DUP _TXTA-W ! _TXTA-SELECT-ALL ;
+    _TXTA-W ! _TXTA-SELECT-ALL ;
 
 \ --- Phase-0 API: gap-buf / undo binding & hooks ---
 

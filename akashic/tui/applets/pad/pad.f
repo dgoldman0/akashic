@@ -33,7 +33,6 @@
 \ =================================================================
 
 PROVIDED akashic-tui-pad
-.( [pad.f loading...] ) CR
 
 \ =====================================================================
 \  S1 -- Dependencies
@@ -194,10 +193,9 @@ _PAD-THEME-DEFAULTS
 
 : _PTH-TRY  ( tbl-a tbl-l key-a key-l var -- )
     >R TOML-KEY?
-    IF   TOML-GET-STRING TUI-PARSE-COLOR
-         IF R> ! EXIT THEN DROP
-    ELSE 2DROP
-    THEN R> DROP ;
+    IF   TOML-GET-INT R> !
+    ELSE 2DROP R> DROP
+    THEN ;
 
 : _PAD-LOAD-THEME  ( toml-a toml-l -- )
     S" pad.theme" TOML-FIND-TABLE?
@@ -490,13 +488,10 @@ VARIABLE _PDT-COL  \ column accumulator during tab draw
 
 \ Open a new buffer.  Returns the buffer index or -1 on failure.
 : _PAD-BUF-OPEN  ( -- index | -1 )
-    .( [PAD-BUF-OPEN] ) CR
-    _PAD-ALLOC-SLOT DUP 0< IF .( [BUF-OPEN: no slot] ) CR EXIT THEN
+    _PAD-ALLOC-SLOT DUP 0< IF EXIT THEN
     >R
     \ Allocate gap-buffer and undo state
-    .( [BUF-OPEN: slot=) R@ . .( cap=) _PAD-BUF-CAP . .( ] ) CR
     _PAD-BUF-CAP _PAD-ARENA @ GB-NEW   R@ _PAD-BUF-ENTRY _PBE-GB + !
-    .( [BUF-OPEN: GB-NEW ok] ) CR
     UNDO-NEW               R@ _PAD-BUF-ENTRY _PBE-UNDO + !
     -1                     R@ _PAD-BUF-ENTRY _PBE-FLAGS + !
     0                      R@ _PAD-BUF-ENTRY _PBE-FNAME-L + !
@@ -873,7 +868,6 @@ VARIABLE _PIO-FD
 \ =====================================================================
 
 : PAD-INIT-CB  ( -- )
-    .( [PAD-INIT-CB start] ) CR
     \ ---- Initialize state ----
     _PAD-INIT-BUF-TABLE
     -1 _PAD-SIDEBAR-VIS !
@@ -889,12 +883,9 @@ VARIABLE _PIO-FD
     ABORT" pad: arena alloc failed"
     _PAD-ARENA !
 
-    .( [PAD: state init done] ) CR
     \ ---- VFS ----
     VFS-CUR DUP 0= ABORT" pad: no VFS available"
     _PAD-VFS !
-    .( [PAD: VFS ok] ) CR
-
     \ ---- Find UIDL elements by ID ----
     S" mbar"           UTUI-BY-ID _PAD-E-MBAR !
     S" main-split"     UTUI-BY-ID _PAD-E-MAIN-SPLIT !
@@ -920,7 +911,6 @@ VARIABLE _PIO-FD
         UTUI-WIDGET@ _PAD-OUT-TXTA !
     THEN
 
-    .( [PAD: UIDL elements found] ) CR
     \ ---- Create explorer on sidebar ----
     _PAD-E-SIDEBAR @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW
@@ -931,7 +921,6 @@ VARIABLE _PIO-FD
         _PAD-EXPL @ _PAD-E-SIDEBAR @ UTUI-WIDGET-SET
     THEN
 
-    .( [PAD: explorer mounted] ) CR
     \ ---- Create composite panel on editor-area ----
     _PAD-E-EDITOR-AREA @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW
@@ -954,11 +943,8 @@ VARIABLE _PIO-FD
         _PAD-PANEL _PAD-E-EDITOR-AREA @ UTUI-WIDGET-SET
     THEN
 
-    .( [PAD: panel+txta created] ) CR
     \ ---- Open initial untitled buffer ----
-    .( [PAD: about to open initial buffer] ) CR
     _PAD-BUF-OPEN DROP
-    .( [PAD: initial buffer opened] ) CR
 
     \ ---- Register all named actions ----
     S" quit"            ['] _PAD-DO-QUIT           UTUI-DO!
@@ -1066,9 +1052,7 @@ VARIABLE _PIO-FD
 CREATE PAD-DESC  APP-DESC ALLOT
 
 : PAD-RUN  ( -- )
-    .( [PAD-RUN called] ) CR
     PAD-DESC PAD-ENTRY
-    .( [PAD-RUN: entry done, calling ASHELL-RUN] ) CR
     PAD-DESC ASHELL-RUN ;
 
 \ =====================================================================

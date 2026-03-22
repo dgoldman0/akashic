@@ -397,7 +397,7 @@ VARIABLE _TGS-CNT  \ byte count
 \   Dispatch to the appropriate string extractor.
 : TOML-GET-STRING  ( addr len -- str-addr str-len )
     TOML-SKIP-WS
-    DUP 0> 0= IF TOML-E-WRONG-TYPE _TOML-FAIL-00 EXIT THEN
+    DUP 0> 0= IF 2DROP TOML-E-WRONG-TYPE _TOML-FAIL-00 EXIT THEN
     OVER C@ 34 = IF
         2DUP _TOML-3DQ? IF _TOML-GET-ML-BASIC-STR EXIT THEN
         _TOML-GET-BASIC-STR EXIT
@@ -406,7 +406,7 @@ VARIABLE _TGS-CNT  \ byte count
         2DUP _TOML-3SQ? IF _TOML-GET-ML-LITERAL-STR EXIT THEN
         _TOML-GET-LITERAL-STR EXIT
     THEN
-    TOML-E-WRONG-TYPE _TOML-FAIL-00 ;
+    2DROP TOML-E-WRONG-TYPE _TOML-FAIL-00 ;
 
 \ ── String unescaping ────────────────────────────────────────────────
 
