@@ -270,7 +270,7 @@ VARIABLE _FPV-FD
     _FEXP-PREV-BUF _FEXP-PREVIEW-CAP _FPV-FD @ VFS-READ
     \ Set the UIDL textarea content via its materialized widget
     _FEXP-E-PREVIEW @ UTUI-WIDGET@ ?DUP IF
-        _FEXP-PREV-BUF ROT TXTA-SET-TEXT
+        _FEXP-PREV-BUF -ROT TXTA-SET-TEXT
     ELSE DROP THEN
     _FPV-FD @ VFS-CLOSE
     ASHELL-DIRTY! ;
