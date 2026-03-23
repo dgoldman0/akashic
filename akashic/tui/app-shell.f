@@ -232,9 +232,10 @@ VARIABLE _ASHELL-POST-TAIL
 : ASHELL-MOUSE?     ( ev -- flag ) @ KEY-T-MOUSE = ;
 
 \ ASHELL-LOAD-UIDL ( path-a path-u rgn -- buf | 0 )
-\   Open a VFS file, read its contents into a heap buffer, then
-\   feed the content to UTUI-LOAD.  Returns the heap buffer address
-\   (caller must FREE) or 0 on failure.
+\   Open a VFS file, read its contents into an XMEM buffer, then
+\   feed the content to UTUI-LOAD.  Returns the buffer address
+\   (caller must XMEM-FREE-BLOCK with _ASHELL-UIDL-FILE-MAX) or 0
+\   on failure.
 8192 CONSTANT _ASHELL-UIDL-FILE-MAX
 
 VARIABLE _ALUF-RGN
@@ -246,7 +247,7 @@ VARIABLE _ALUF-BUF
     VFS-OPEN                          ( fd | 0 )
     DUP 0= IF EXIT THEN
     _ALUF-FD !
-    _ASHELL-UIDL-FILE-MAX ALLOCATE IF
+    _ASHELL-UIDL-FILE-MAX XMEM-ALLOT? IF
         _ALUF-FD @ VFS-CLOSE  0 EXIT
     THEN
     _ALUF-BUF !
@@ -653,7 +654,7 @@ _ASHELL-VFS-INIT
     THEN
     \ Free shell-loaded UIDL file buffer (if we loaded it)
     _ASHELL-UIDL-BUF @ ?DUP IF
-        FREE DROP
+        _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK
         0 _ASHELL-UIDL-BUF !
     THEN
     \ Free region

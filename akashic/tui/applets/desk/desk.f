@@ -125,10 +125,12 @@ VARIABLE _DESK-LAST-MIN-SA  \ last minimized slot (for restore)
 VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
 0 _DESK-CFG-A !  0 _DESK-CFG-L !
 
-\ Startup applet: set via DESK-QUEUE-LAUNCH before DESK-RUN.
-\ DESK-INIT-CB launches this after the screen & region are ready.
-VARIABLE _DESK-PENDING
-0 _DESK-PENDING !
+\ Startup applets: set via DESK-QUEUE-LAUNCH before DESK-RUN.
+\ DESK-INIT-CB launches them after the screen & region are ready.
+8 CONSTANT _DESK-PEND-MAX
+CREATE _DESK-PEND-BUF  _DESK-PEND-MAX CELLS ALLOT
+VARIABLE _DESK-PEND-N
+0 _DESK-PEND-N !
 
 VARIABLE _DESK-BG-DIRTY     \ -1 = need full background fill next paint
 -1 _DESK-BG-DIRTY !
@@ -590,7 +592,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
         0 ASHELL-CTX-SWITCH
     THEN
     \ Free resources
-    R@ _SL-UIDL-BUF @ ?DUP IF FREE DROP THEN
+    R@ _SL-UIDL-BUF @ ?DUP IF _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK THEN
     R@ _SL-UCTX @ ?DUP IF UCTX-FREE THEN
     R@ _SL-RGN @ ?DUP IF RGN-FREE THEN
     \ Fixup focus / last-minimized pointers
@@ -773,8 +775,11 @@ VARIABLE _DTB-ROW
     _DESK-HOTBAR-CLEAR
     \ Load config if a buffer was supplied before DESK-RUN
     _DESK-CFG-A @ ?DUP IF _DESK-CFG-L @ DESK-LOAD-CONFIG THEN
-    \ Launch queued startup applet if one was set
-    _DESK-PENDING @ ?DUP IF 0 _DESK-PENDING ! DESK-LAUNCH DROP THEN ;
+    \ Launch queued startup applets
+    _DESK-PEND-N @ 0 DO
+        I CELLS _DESK-PEND-BUF + @ DESK-LAUNCH DROP
+    LOOP
+    0 _DESK-PEND-N ! ;
 
 \ --- Shortcuts ---
 CREATE _DESK-EV  24 ALLOT
@@ -1040,10 +1045,13 @@ CREATE DESK-DESC  APP-DESC ALLOT
               DESK-DESC APP.TITLE-A ! ;
 
 \ DESK-QUEUE-LAUNCH ( desc -- )
-\   Set the applet to auto-launch at desk startup.
-\   Must be called BEFORE DESK-RUN.
+\   Queue an applet for auto-launch at desk startup.
+\   May be called multiple times (up to 8).  Must be called BEFORE DESK-RUN.
 : DESK-QUEUE-LAUNCH  ( desc -- )
-    _DESK-PENDING ! ;
+    _DESK-PEND-N @ DUP _DESK-PEND-MAX < IF
+        CELLS _DESK-PEND-BUF + !
+        1 _DESK-PEND-N +!
+    ELSE 2DROP THEN ;
 
 : DESK-RUN  ( -- )
     _DESK-FILL-DESC

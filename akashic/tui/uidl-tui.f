@@ -1990,7 +1990,7 @@ VARIABLE _UHT-SC
 : UTUI-RELAYOUT  ( -- )
     UIDL-ROOT ?DUP 0= IF EXIT THEN
 
-    DUP _UTUI-SIDECAR
+    _UTUI-SIDECAR
     _UTUI-RGN @ RGN-ROW OVER _UTUI-SC-ROW!
     _UTUI-RGN @ RGN-COL OVER _UTUI-SC-COL!
     _UTUI-RGN @ RGN-W   OVER _UTUI-SC-W!
@@ -3187,7 +3187,7 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     _UTUI-ACT-CLEAR
 
     _UTUI-PRELAYOUT-STYLES             \ §16c: position, display, padding, margin
-    UTUI-RELAYOUT          DROP        \ (leaks 1 item — drop it)
+    UTUI-RELAYOUT
     _UTUI-RESOLVE-STYLES               \ §16b: colors, text-align, z-index, dims, offsets
     _UTUI-RESOLVE-POSITIONED           \ §7b: place absolute/fixed elements
     _UTUI-MATERIALIZE
@@ -3314,9 +3314,10 @@ _UCTX-INIT-POOLS
 \ --- Public API ---
 
 : UCTX-ALLOC  ( -- ctx | 0 )
-    UCTX-TOTAL ALLOCATE IF DROP 0 THEN ;
+    UCTX-TOTAL XMEM-ALLOT? IF DROP 0 THEN ;
 
-: UCTX-FREE  ( ctx -- )  FREE ;
+: UCTX-FREE  ( ctx -- )
+    ?DUP IF UCTX-TOTAL XMEM-FREE-BLOCK THEN ;
 
 \ Pool copy helper variables
 VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
