@@ -250,3 +250,26 @@ VARIABLE _SYS-CULL-XT
     DUP _SYS-CULL-ECS !
     SYS-C-HP @
     _SYS-CULL-XT @ ECS-EACH ;
+
+\ =====================================================================
+\  §10 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _sys-guard
+
+' SYSRUN-NEW     CONSTANT _sys-new-xt
+' SYSRUN-FREE    CONSTANT _sys-free-xt
+' SYSRUN-ADD     CONSTANT _sys-add-xt
+' SYSRUN-ENABLE  CONSTANT _sys-enable-xt
+' SYSRUN-DISABLE CONSTANT _sys-disable-xt
+' SYS-BIND-COMPS CONSTANT _sys-bind-xt
+
+: SYSRUN-NEW     _sys-new-xt     _sys-guard WITH-GUARD ;
+: SYSRUN-FREE    _sys-free-xt    _sys-guard WITH-GUARD ;
+: SYSRUN-ADD     _sys-add-xt     _sys-guard WITH-GUARD ;
+: SYSRUN-ENABLE  _sys-enable-xt  _sys-guard WITH-GUARD ;
+: SYSRUN-DISABLE _sys-disable-xt _sys-guard WITH-GUARD ;
+: SYS-BIND-COMPS _sys-bind-xt    _sys-guard WITH-GUARD ;
+[THEN] [THEN]

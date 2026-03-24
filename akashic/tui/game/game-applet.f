@@ -166,3 +166,30 @@ VARIABLE _GAPP-ROOT-RGN   0 _GAPP-ROOT-RGN !
 
 : GAPP-GV  ( desc -- gv | 0 )
     _GAPP-O-GV + @ ;
+
+\ =====================================================================
+\  §6 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _gapp-guard
+
+' GAME-APP-DESC    CONSTANT _gapp-desc-xt
+' GAPP-FPS!        CONSTANT _gapp-fps-xt
+' GAPP-ON-INIT!    CONSTANT _gapp-init-xt
+' GAPP-ON-UPDATE!  CONSTANT _gapp-update-xt
+' GAPP-ON-DRAW!    CONSTANT _gapp-draw-xt
+' GAPP-ON-INPUT!   CONSTANT _gapp-input-xt
+' GAPP-ON-SHUTDOWN! CONSTANT _gapp-shutdown-xt
+' GAPP-TITLE!      CONSTANT _gapp-title-xt
+
+: GAME-APP-DESC    _gapp-desc-xt     _gapp-guard WITH-GUARD ;
+: GAPP-FPS!        _gapp-fps-xt      _gapp-guard WITH-GUARD ;
+: GAPP-ON-INIT!    _gapp-init-xt     _gapp-guard WITH-GUARD ;
+: GAPP-ON-UPDATE!  _gapp-update-xt   _gapp-guard WITH-GUARD ;
+: GAPP-ON-DRAW!    _gapp-draw-xt     _gapp-guard WITH-GUARD ;
+: GAPP-ON-INPUT!   _gapp-input-xt    _gapp-guard WITH-GUARD ;
+: GAPP-ON-SHUTDOWN! _gapp-shutdown-xt _gapp-guard WITH-GUARD ;
+: GAPP-TITLE!      _gapp-title-xt    _gapp-guard WITH-GUARD ;
+[THEN] [THEN]

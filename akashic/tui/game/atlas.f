@@ -115,3 +115,22 @@ REQUIRE ../cell.f
 
 : ATLAS-CAP  ( atlas -- capacity )
     _ATLAS-O-CAP + @ ;
+
+\ =====================================================================
+\  §6 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _atlas-guard
+
+' ATLAS-NEW    CONSTANT _atlas-new-xt
+' ATLAS-FREE   CONSTANT _atlas-free-xt
+' ATLAS-DEFINE CONSTANT _atlas-def-xt
+' ATLAS-LOAD   CONSTANT _atlas-load-xt
+
+: ATLAS-NEW    _atlas-new-xt    _atlas-guard WITH-GUARD ;
+: ATLAS-FREE   _atlas-free-xt   _atlas-guard WITH-GUARD ;
+: ATLAS-DEFINE _atlas-def-xt    _atlas-guard WITH-GUARD ;
+: ATLAS-LOAD   _atlas-load-xt   _atlas-guard WITH-GUARD ;
+[THEN] [THEN]

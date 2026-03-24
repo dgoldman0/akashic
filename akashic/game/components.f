@@ -110,3 +110,16 @@ REQUIRE ecs.f
     DUP C-TMR-SZ ECS-REG-COMP SWAP
     DUP C-TAG-SZ ECS-REG-COMP SWAP
     C-AI-SZ ECS-REG-COMP ;
+
+\ =====================================================================
+\  §10 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _comp-guard
+
+' COMPS-REG-ALL CONSTANT _comp-reg-all-xt
+
+: COMPS-REG-ALL _comp-reg-all-xt _comp-guard WITH-GUARD ;
+[THEN] [THEN]

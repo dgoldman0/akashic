@@ -162,3 +162,28 @@ REQUIRE ../app-desc.f
     ['] SCN-UPDATE GAME-ON-UPDATE
     ['] GAME-TICK  OVER APP.TICK-XT  !
     ['] SCN-DRAW   SWAP APP.PAINT-XT ! ;
+
+\ =====================================================================
+\  §8 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _scn-guard
+
+' SCN-DEFINE      CONSTANT _scn-define-xt
+' SCN-FREE        CONSTANT _scn-free-xt
+' SCN-PUSH        CONSTANT _scn-push-xt
+' SCN-POP         CONSTANT _scn-pop-xt
+' SCN-SWITCH      CONSTANT _scn-switch-xt
+' SCN-BIND-LOOP   CONSTANT _scn-bloop-xt
+' SCN-BIND-APPLET CONSTANT _scn-bapplet-xt
+
+: SCN-DEFINE      _scn-define-xt   _scn-guard WITH-GUARD ;
+: SCN-FREE        _scn-free-xt     _scn-guard WITH-GUARD ;
+: SCN-PUSH        _scn-push-xt     _scn-guard WITH-GUARD ;
+: SCN-POP         _scn-pop-xt      _scn-guard WITH-GUARD ;
+: SCN-SWITCH      _scn-switch-xt   _scn-guard WITH-GUARD ;
+: SCN-BIND-LOOP   _scn-bloop-xt    _scn-guard WITH-GUARD ;
+: SCN-BIND-APPLET _scn-bapplet-xt  _scn-guard WITH-GUARD ;
+[THEN] [THEN]

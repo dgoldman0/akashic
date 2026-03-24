@@ -133,3 +133,22 @@ VARIABLE _CA-X2  VARIABLE _CA-Y2  VARIABLE _CA-W2  VARIABLE _CA-H2
     _CA-X2 @  _CA-X1 @ _CA-W1 @ +  < AND
     _CA-Y1 @  _CA-Y2 @ _CA-H2 @ +  < AND
     _CA-Y2 @  _CA-Y1 @ _CA-H1 @ +  < AND ;
+
+\ =====================================================================
+\  §6 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _cmap-guard
+
+' CMAP-NEW   CONSTANT _cmap-new-xt
+' CMAP-FREE  CONSTANT _cmap-free-xt
+' CMAP-SET   CONSTANT _cmap-set-xt
+' CMAP-FILL  CONSTANT _cmap-fill-xt
+
+: CMAP-NEW   _cmap-new-xt   _cmap-guard WITH-GUARD ;
+: CMAP-FREE  _cmap-free-xt  _cmap-guard WITH-GUARD ;
+: CMAP-SET   _cmap-set-xt   _cmap-guard WITH-GUARD ;
+: CMAP-FILL  _cmap-fill-xt  _cmap-guard WITH-GUARD ;
+[THEN] [THEN]

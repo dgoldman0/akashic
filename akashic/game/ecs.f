@@ -279,3 +279,28 @@ VARIABLE _ECS-IT-CD2
 
 : ECS-MAX  ( ecs -- max-ents )
     _ECS-O-MAX + @ ;
+
+\ =====================================================================
+\  §9 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../concurrency/guard.f
+GUARD _ecs-guard
+
+' ECS-NEW       CONSTANT _ecs-new-xt
+' ECS-FREE      CONSTANT _ecs-free-xt
+' ECS-REG-COMP  CONSTANT _ecs-reg-comp-xt
+' ECS-SPAWN     CONSTANT _ecs-spawn-xt
+' ECS-KILL      CONSTANT _ecs-kill-xt
+' ECS-ATTACH    CONSTANT _ecs-attach-xt
+' ECS-DETACH    CONSTANT _ecs-detach-xt
+
+: ECS-NEW       _ecs-new-xt       _ecs-guard WITH-GUARD ;
+: ECS-FREE      _ecs-free-xt      _ecs-guard WITH-GUARD ;
+: ECS-REG-COMP  _ecs-reg-comp-xt  _ecs-guard WITH-GUARD ;
+: ECS-SPAWN     _ecs-spawn-xt     _ecs-guard WITH-GUARD ;
+: ECS-KILL      _ecs-kill-xt      _ecs-guard WITH-GUARD ;
+: ECS-ATTACH    _ecs-attach-xt    _ecs-guard WITH-GUARD ;
+: ECS-DETACH    _ecs-detach-xt    _ecs-guard WITH-GUARD ;
+[THEN] [THEN]

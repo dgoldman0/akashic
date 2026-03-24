@@ -230,3 +230,32 @@ PROVIDED akashic-game-2d-camera
         +
     THEN
     NIP ;
+
+\ =====================================================================
+\  §8 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _cam-guard
+
+' CAM-NEW     CONSTANT _cam-new-xt
+' CAM-FREE    CONSTANT _cam-free-xt
+' CAM-SMOOTH! CONSTANT _cam-smooth-xt
+' CAM-BOUNDS! CONSTANT _cam-bounds-xt
+' CAM-VIEW!   CONSTANT _cam-view-xt
+' CAM-FOLLOW  CONSTANT _cam-follow-xt
+' CAM-SNAP    CONSTANT _cam-snap-xt
+' CAM-SHAKE   CONSTANT _cam-shake-xt
+' CAM-TICK    CONSTANT _cam-tick-xt
+
+: CAM-NEW     _cam-new-xt     _cam-guard WITH-GUARD ;
+: CAM-FREE    _cam-free-xt    _cam-guard WITH-GUARD ;
+: CAM-SMOOTH! _cam-smooth-xt  _cam-guard WITH-GUARD ;
+: CAM-BOUNDS! _cam-bounds-xt  _cam-guard WITH-GUARD ;
+: CAM-VIEW!   _cam-view-xt    _cam-guard WITH-GUARD ;
+: CAM-FOLLOW  _cam-follow-xt  _cam-guard WITH-GUARD ;
+: CAM-SNAP    _cam-snap-xt    _cam-guard WITH-GUARD ;
+: CAM-SHAKE   _cam-shake-xt   _cam-guard WITH-GUARD ;
+: CAM-TICK    _cam-tick-xt    _cam-guard WITH-GUARD ;
+[THEN] [THEN]

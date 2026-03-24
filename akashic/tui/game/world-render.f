@@ -207,3 +207,22 @@ VARIABLE _WREN-VIEW-H
     DUP _WREN-O-LAYER3 + @ _WREN-RENDER-LAYER2
     \ Render sprites
     _WREN-O-SPOOL + @ _WREN-RENDER-SPRITES ;
+
+\ =====================================================================
+\  §7 — Concurrency Guards
+\ =====================================================================
+
+[DEFINED] GUARDED [IF] GUARDED [IF]
+REQUIRE ../../concurrency/guard.f
+GUARD _wren-guard
+
+' WREN-NEW         CONSTANT _wren-new-xt
+' WREN-FREE        CONSTANT _wren-free-xt
+' WREN-SET-MAP     CONSTANT _wren-setmap-xt
+' WREN-SET-SPRITES CONSTANT _wren-setspr-xt
+
+: WREN-NEW         _wren-new-xt    _wren-guard WITH-GUARD ;
+: WREN-FREE        _wren-free-xt   _wren-guard WITH-GUARD ;
+: WREN-SET-MAP     _wren-setmap-xt _wren-guard WITH-GUARD ;
+: WREN-SET-SPRITES _wren-setspr-xt _wren-guard WITH-GUARD ;
+[THEN] [THEN]
