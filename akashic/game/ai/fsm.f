@@ -1,5 +1,5 @@
 \ =====================================================================
-\  akashic/tui/game/fsm.f — Finite State Machine
+\  akashic/game/ai/fsm.f — Finite State Machine
 \ =====================================================================
 \
 \  General-purpose FSM for entity AI or game state management.
@@ -38,10 +38,10 @@
 \    FSM-FREE        ( fsm -- )
 \
 \  Prefix: FSM- (public), _FSM- (internal)
-\  Provider: akashic-tui-game-fsm
+\  Provider: akashic-game-ai-fsm
 \  Dependencies: (standalone)
 
-PROVIDED akashic-tui-game-fsm
+PROVIDED akashic-game-ai-fsm
 
 \ =====================================================================
 \  §1 — Constants & Offsets

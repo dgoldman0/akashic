@@ -1,5 +1,5 @@
 \ =====================================================================
-\  akashic/tui/game/save.f — Game Save / Load (CBOR-based)
+\  akashic/game/save.f — Game Save / Load (CBOR-based)
 \ =====================================================================
 \
 \  Serialize / deserialize game state as a CBOR map stored on disk.
@@ -36,12 +36,12 @@
 \    GLOAD-CLOSE ( ctx -- )
 \
 \  Prefix: GSAVE- / GLOAD- (public), _GSV- (internal)
-\  Provider: akashic-tui-game-save
+\  Provider: akashic-game-save
 \  Dependencies: cbor.f
 
-PROVIDED akashic-tui-game-save
+PROVIDED akashic-game-save
 
-REQUIRE ../../cbor/cbor.f
+REQUIRE ../cbor/cbor.f
 
 \ =====================================================================
 \  §1 — Constants & Offsets
@@ -497,7 +497,7 @@ VARIABLE _GSV-FK-KU
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../../concurrency/guard.f
+REQUIRE ../concurrency/guard.f
 GUARD _gsv-guard
 
 ' GSAVE-NEW   CONSTANT _gsave-new-xt

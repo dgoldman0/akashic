@@ -1,5 +1,5 @@
 \ =====================================================================
-\  akashic/tui/game/btree.f — Behaviour Trees
+\  akashic/game/ai/btree.f — Behaviour Trees
 \ =====================================================================
 \
 \  Composable behaviour tree nodes for NPC / entity AI.
@@ -41,10 +41,10 @@
 \    BT-SUCCESS  BT-FAILURE  BT-RUNNING
 \
 \  Prefix: BT- (public), _BT- (internal)
-\  Provider: akashic-tui-game-btree
+\  Provider: akashic-game-ai-btree
 \  Dependencies: (standalone)
 
-PROVIDED akashic-tui-game-btree
+PROVIDED akashic-game-ai-btree
 
 \ =====================================================================
 \  §1 — Constants & Offsets

@@ -1,12 +1,11 @@
 \ =====================================================================
-\  akashic/tui/game/fog.f — Fog of War
+\  akashic/game/2d/fog.f — Fog of War (pure logic)
 \ =====================================================================
 \
 \  Per-tile visibility layer.  Three visibility states per tile:
-\    0 — FOG-UNSEEN    Never seen; render as solid block.
-\    1 — FOG-REMEMBERED Seen previously but not currently visible;
-\                       render dimmed (dark fg, black bg).
-\    2 — FOG-VISIBLE    Currently in line-of-sight; render normally.
+\    0 — FOG-UNSEEN    Never seen.
+\    1 — FOG-REMEMBERED Seen previously but not currently visible.
+\    2 — FOG-VISIBLE    Currently in line-of-sight.
 \
 \  Uses recursive shadowcasting (octant-symmetric) to compute a
 \  circular field of view from a centre point.  The algorithm works
@@ -27,18 +26,12 @@
 \    FOG-REVEAL    ( fog cx cy radius -- )
 \    FOG-HIDE-ALL  ( fog -- )
 \    FOG-STATE     ( fog x y -- 0|1|2 )
-\    FOG-RENDER    ( fog cam rgn -- )
 \
 \  Prefix: FOG- (public), _FOG- (internal)
-\  Provider: akashic-tui-game-fog
-\  Dependencies: camera.f, cell.f, screen.f, region.f
+\  Provider: akashic-game-2d-fog
+\  Dependencies: (standalone)
 
-PROVIDED akashic-tui-game-fog
-
-REQUIRE ../../game/2d/camera.f
-REQUIRE ../cell.f
-REQUIRE ../screen.f
-REQUIRE ../region.f
+PROVIDED akashic-game-2d-fog
 
 \ =====================================================================
 \  §1 — Constants & Offsets
@@ -53,14 +46,6 @@ REQUIRE ../region.f
 16 CONSTANT _FOG-O-DATA
 24 CONSTANT _FOG-O-BLOCKED
 32 CONSTANT _FOG-DESC-SZ
-
-\ Dimmed colour used for remembered tiles
-8 CONSTANT _FOG-DIM-FG
-
-\ Unseen cell: solid dark block
-\ Unicode '░' (0x2591) with dark grey fg, black bg
-HEX 2591 DECIMAL CONSTANT _FOG-UNSEEN-CP
-8 CONSTANT _FOG-UNSEEN-FG
 
 \ =====================================================================
 \  §2 — Constructor / Destructor
@@ -264,8 +249,7 @@ VARIABLE _FOG-CO-TSLOPE    \ tile centre slope (approx)
         _FOG-CO-OCT @ _FOG-CO-ROW @ _FOG-CO-COL @
         _FOG-OCTANT-XY
         _FOG-CO-CY ! _FOG-CO-CX !
-        \ Check if within radius (manhattan approx for speed —
-        \ use squared distance for precision)
+        \ Check if within radius (squared distance)
         _FOG-CO-ROW @ _FOG-CO-ROW @ * _FOG-CO-COL @ _FOG-CO-COL @ * +
         _FOG-SC-RAD @ _FOG-SC-RAD @ * <= IF
             \ Mark visible
@@ -275,8 +259,7 @@ VARIABLE _FOG-CO-TSLOPE    \ tile centre slope (approx)
         _FOG-CO-CX @ _FOG-CO-CY @ _FOG-BLOCKED?
         IF  \ current tile is opaque
             _FOG-CO-BLOCKED @ 0= IF
-                \ Start of a blocked run — compute new start-slope
-                \ for the next recursive call
+                \ Start of a blocked run
                 _FOG-CO-COL @ 2 * 1- _FOG-CO-ROW @ 2 * _FOG-SLOPE
                 _FOG-CO-NEWSTART !
             THEN
@@ -313,8 +296,6 @@ VARIABLE _FOG-CO-TSLOPE    \ tile centre slope (approx)
     THEN ;
 
 \ FOG-REVEAL ( fog cx cy radius -- )
-\   Compute field of view from (cx,cy) with given radius.
-\   Call FOG-HIDE-ALL first to reset visibility, then FOG-REVEAL.
 VARIABLE _FOG-RV-I
 : FOG-REVEAL  ( fog cx cy radius -- )
     _FOG-SC-RAD ! _FOG-SC-CY ! _FOG-SC-CX ! _FOG-SC-FOG !
@@ -332,62 +313,7 @@ VARIABLE _FOG-RV-I
     REPEAT ;
 
 \ =====================================================================
-\  §6 — FOG-RENDER
-\ =====================================================================
-\
-\  Post-process the visible portion of the screen, applying fog
-\  effects based on tile visibility:
-\    UNSEEN     → replace cell with dark block
-\    REMEMBERED → dim: darken fg, set bg=0
-\    VISIBLE    → no change
-\
-\  Reads camera position to map screen coords → world coords.
-
-VARIABLE _FOG-RN-FOG
-VARIABLE _FOG-RN-CAM
-VARIABLE _FOG-RN-RGN
-VARIABLE _FOG-RN-VW
-VARIABLE _FOG-RN-VH
-VARIABLE _FOG-RN-CX
-VARIABLE _FOG-RN-CY
-VARIABLE _FOG-RN-WX
-VARIABLE _FOG-RN-WY
-VARIABLE _FOG-RN-ST
-VARIABLE _FOG-RN-CELL
-
-: FOG-RENDER  ( fog cam rgn -- )
-    _FOG-RN-RGN ! _FOG-RN-CAM ! _FOG-RN-FOG !
-    _FOG-RN-RGN @ RGN-W _FOG-RN-VW !
-    _FOG-RN-RGN @ RGN-H _FOG-RN-VH !
-    _FOG-RN-CAM @ CAM-X _FOG-RN-CX !
-    _FOG-RN-CAM @ CAM-Y _FOG-RN-CY !
-    _FOG-RN-RGN @ RGN-USE
-    _FOG-RN-VH @ 0 ?DO                \ screen row
-        _FOG-RN-VW @ 0 ?DO            \ screen col
-            I _FOG-RN-CX @ + _FOG-RN-WX !
-            J _FOG-RN-CY @ + _FOG-RN-WY !
-            _FOG-RN-FOG @ _FOG-RN-WX @ _FOG-RN-WY @ FOG-STATE
-            _FOG-RN-ST !
-            _FOG-RN-ST @ FOG-VISIBLE = IF
-                \ No modification needed
-            ELSE
-                _FOG-RN-ST @ FOG-UNSEEN = IF
-                    \ Replace with dark block
-                    _FOG-UNSEEN-CP _FOG-UNSEEN-FG 0 0 CELL-MAKE
-                    J I SCR-SET
-                ELSE
-                    \ REMEMBERED: dim existing cell
-                    J I SCR-GET _FOG-RN-CELL !
-                    _FOG-DIM-FG _FOG-RN-CELL @ CELL-FG!
-                    0 SWAP CELL-BG!
-                    J I SCR-SET
-                THEN
-            THEN
-        LOOP
-    LOOP ;
-
-\ =====================================================================
-\  §7 — Concurrency Guards
+\  §6 — Concurrency Guards
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -399,12 +325,10 @@ GUARD _fog-guard
 ' FOG-REVEAL   CONSTANT _fog-reveal-xt
 ' FOG-HIDE-ALL CONSTANT _fog-hide-xt
 ' FOG-STATE    CONSTANT _fog-state-xt
-' FOG-RENDER   CONSTANT _fog-render-xt
 
 : FOG-NEW      _fog-new-xt    _fog-guard WITH-GUARD ;
 : FOG-FREE     _fog-free-xt   _fog-guard WITH-GUARD ;
 : FOG-REVEAL   _fog-reveal-xt _fog-guard WITH-GUARD ;
 : FOG-HIDE-ALL _fog-hide-xt   _fog-guard WITH-GUARD ;
 : FOG-STATE    _fog-state-xt  _fog-guard WITH-GUARD ;
-: FOG-RENDER   _fog-render-xt _fog-guard WITH-GUARD ;
 [THEN] [THEN]

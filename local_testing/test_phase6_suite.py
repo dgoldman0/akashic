@@ -150,7 +150,7 @@ DISK_FILES = [
     ("camera.f",        "/game/2d",   os.path.join(AK_DIR, "game", "2d", "camera.f")),
     ("world-render.f",  "/tui/game", os.path.join(AK_DIR, "tui", "game", "world-render.f")),
     # Phase 6 modules
-    ("save.f",       "/tui/game", os.path.join(AK_DIR, "tui", "game", "save.f")),
+    ("save.f",       "/game",     os.path.join(AK_DIR, "game", "save.f")),
     ("map-loader.f", "/tui/game", os.path.join(AK_DIR, "tui", "game", "map-loader.f")),
 ]
 
@@ -210,7 +210,7 @@ CREATE _T-NAMEBUF 80 ALLOT
 
 \ ── Load modules ─────────────────────────────────────────────
 
-REQUIRE tui/game/save.f
+REQUIRE game/save.f
 REQUIRE tui/game/map-loader.f
 REQUIRE tui/game/atlas.f
 
