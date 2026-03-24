@@ -1,4 +1,4 @@
-# akashic-tui-game-systems — System Runner
+# akashic-game-systems — System Runner
 
 A registry of update systems executed in priority order each tick.
 Each system is an XT that receives `( ecs dt -- )` and operates on
@@ -6,10 +6,10 @@ the ECS.  Systems are sorted by priority (low runs first).  Includes
 three built-in systems: velocity, timer, and cull-dead.
 
 ```forth
-REQUIRE tui/game/systems.f
+REQUIRE game/systems.f
 ```
 
-`PROVIDED akashic-tui-game-systems` — safe to include multiple times.
+`PROVIDED akashic-game-systems` — safe to include multiple times.
 
 ---
 

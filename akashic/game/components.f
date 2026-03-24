@@ -1,5 +1,5 @@
 \ =====================================================================
-\  akashic/tui/game/components.f — Common ECS Components
+\  akashic/game/components.f — Common ECS Components
 \ =====================================================================
 \
 \  Pre-defined component types for common game patterns.  Each
@@ -26,10 +26,10 @@
 \    99 SWAP C-POS.Y + !
 \
 \  Prefix: C- (component ID, user-stored), C-xxx. (field offsets)
-\  Provider: akashic-tui-game-components
+\  Provider: akashic-game-components
 \  Dependencies: ecs.f
 
-PROVIDED akashic-tui-game-components
+PROVIDED akashic-game-components
 
 REQUIRE ecs.f
 

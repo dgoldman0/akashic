@@ -152,7 +152,7 @@ REQUIRE loop.f
 \  §7 — App-Shell Integration
 \ =====================================================================
 
-REQUIRE ../tui/app-desc.f
+REQUIRE ../app-desc.f
 
 \ SCN-BIND-APPLET ( desc -- )
 \   Wire the scene manager into an app descriptor for desk hosting.

@@ -54,15 +54,21 @@
 \    SPOOL-RENDER    ( pool rgn vpx vpy -- )     Draw sprites to screen
 \    SPOOL-COUNT     ( pool -- n )               Count of sprites
 \
+\  Collision Helpers (requires collide.f):
+\    SPR-CMAP-BLOCKED? ( spr dx dy cmap -- flag )
+\        Check if sprite's target position is blocked.
+\    SPR-SPR-OVERLAP?  ( spr1 spr2 -- flag )
+\        Check if two 1×1 sprites share the same tile.
+\
 \  Prefix: SPR- / SPOOL- (public), _SPR- / _SPOOL- (internal)
 \  Provider: akashic-tui-game-sprite
-\  Dependencies: cell.f, screen.f, region.f
+\  Dependencies: cell.f, screen.f, region.f, collide.f
 
 PROVIDED akashic-tui-game-sprite
 
-REQUIRE ../tui/cell.f
-REQUIRE ../tui/screen.f
-REQUIRE ../tui/region.f
+REQUIRE ../cell.f
+REQUIRE ../screen.f
+REQUIRE ../region.f
 
 \ =====================================================================
 \  §1 — Sprite Descriptor
@@ -339,11 +345,35 @@ VARIABLE _SPOOL-SI  VARIABLE _SPOOL-SJ  VARIABLE _SPOOL-SK
     DROP ;
 
 \ =====================================================================
-\  §7 — Guard
+\  §7 — Collision Helpers
+\ =====================================================================
+
+REQUIRE ../../game/2d/collide.f
+
+VARIABLE _CB-NX  VARIABLE _CB-NY
+
+\ SPR-CMAP-BLOCKED? ( spr dx dy cmap -- flag )
+\   Check if moving sprite by (dx,dy) would land on a solid tile.
+: SPR-CMAP-BLOCKED?  ( spr dx dy cmap -- flag )
+    >R                                 ( spr dx dy  R: cmap )
+    2 PICK SPR-POS@                    ( spr dx dy x y  R: cmap )
+    ROT +  _CB-NY !                    ( spr dx x  R: cmap )
+    +  _CB-NX !                        ( spr  R: cmap )
+    DROP
+    R> _CB-NX @ _CB-NY @ CMAP-SOLID? ;
+
+\ SPR-SPR-OVERLAP? ( spr1 spr2 -- flag )
+\   True if two 1×1 sprites occupy the same tile position.
+: SPR-SPR-OVERLAP?  ( spr1 spr2 -- flag )
+    SPR-POS@ ROT SPR-POS@             ( x2 y2 x1 y1 )
+    ROT = -ROT = AND ;
+
+\ =====================================================================
+\  §8 — Guard
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _spr-guard
 
 ' SPR-NEW      CONSTANT _spr-new-xt

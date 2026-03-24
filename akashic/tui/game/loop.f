@@ -36,8 +36,8 @@
 
 PROVIDED akashic-tui-game-loop
 
-REQUIRE ../tui/keys.f
-REQUIRE ../tui/screen.f
+REQUIRE ../keys.f
+REQUIRE ../screen.f
 
 \ =====================================================================
 \  §1 — State
@@ -281,7 +281,7 @@ VARIABLE _GAME-POST-TAIL   0 _GAME-POST-TAIL !
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _game-loop-guard
 
 ' GAME-FPS!      CONSTANT _game-fps-xt

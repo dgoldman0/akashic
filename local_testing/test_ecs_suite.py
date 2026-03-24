@@ -33,22 +33,23 @@ DISK_FILES = [
     ("region.f",    "/tui", os.path.join(AK_DIR, "tui", "region.f")),
     ("widget.f",    "/tui", os.path.join(AK_DIR, "tui", "widget.f")),
     ("app-desc.f",  "/tui", os.path.join(AK_DIR, "tui", "app-desc.f")),
-    # standalone game engine
-    ("loop.f",    "/game", os.path.join(AK_DIR, "game", "loop.f")),
-    ("input.f",   "/game", os.path.join(AK_DIR, "game", "input.f")),
-    ("tilemap.f", "/game", os.path.join(AK_DIR, "game", "tilemap.f")),
-    ("sprite.f",  "/game", os.path.join(AK_DIR, "game", "sprite.f")),
-    ("collide.f", "/game", os.path.join(AK_DIR, "game", "collide.f")),
-    ("scene.f",   "/game", os.path.join(AK_DIR, "game", "scene.f")),
-    # Phase 2: ECS
-    ("ecs.f",        "/tui/game", os.path.join(AK_DIR, "tui", "game", "ecs.f")),
-    ("components.f", "/tui/game", os.path.join(AK_DIR, "tui", "game", "components.f")),
-    ("systems.f",    "/tui/game", os.path.join(AK_DIR, "tui", "game", "systems.f")),
+    # tui game engine
+    ("loop.f",    "/tui/game", os.path.join(AK_DIR, "tui", "game", "loop.f")),
+    ("input.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "input.f")),
+    ("tilemap.f", "/tui/game", os.path.join(AK_DIR, "tui", "game", "tilemap.f")),
+    ("sprite.f",  "/tui/game", os.path.join(AK_DIR, "tui", "game", "sprite.f")),
+    ("scene.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "scene.f")),
+    # 2d game engine
+    ("collide.f", "/game/2d", os.path.join(AK_DIR, "game", "2d", "collide.f")),
+    # core game (ECS)
+    ("ecs.f",        "/game", os.path.join(AK_DIR, "game", "ecs.f")),
+    ("components.f", "/game", os.path.join(AK_DIR, "game", "components.f")),
+    ("systems.f",    "/game", os.path.join(AK_DIR, "game", "systems.f")),
 ]
 
 # ── Forth test harness ─────────────────────────────────────────
 FORTH_HARNESS = r"""\ =====================================================================
-\  test_ecs_suite.f — Tests for tui/game/ecs.f, components.f, systems.f
+\  test_ecs_suite.f — Tests for game/ecs.f, components.f, systems.f
 \ =====================================================================
 
 \ ── Minimal test harness ─────────────────────────────────────
@@ -97,9 +98,9 @@ VARIABLE _T-NAME-U
 
 \ ── Load modules ──────────────────────────────────────────────
 
-REQUIRE tui/game/ecs.f
-REQUIRE tui/game/components.f
-REQUIRE tui/game/systems.f
+REQUIRE game/ecs.f
+REQUIRE game/components.f
+REQUIRE game/systems.f
 
 ." [MODULES LOADED]" CR
 

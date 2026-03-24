@@ -35,7 +35,7 @@
 
 PROVIDED akashic-tui-game-input
 
-REQUIRE ../tui/keys.f
+REQUIRE ../keys.f
 
 \ =====================================================================
 \  §1 — Constants & Storage
@@ -240,7 +240,7 @@ GACT-CLEAR
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _gact-guard
 
 ' GACT-BIND        CONSTANT _gact-bind-xt

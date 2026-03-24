@@ -36,18 +36,19 @@ DISK_FILES = [
     # tui widgets needed by game-canvas
     ("canvas.f", "/tui/widgets", os.path.join(AK_DIR, "tui", "widgets", "canvas.f")),
     # standalone game engine (used by world-render for tilemap/sprite formats)
-    ("loop.f",    "/game", os.path.join(AK_DIR, "game", "loop.f")),
-    ("input.f",   "/game", os.path.join(AK_DIR, "game", "input.f")),
-    ("tilemap.f", "/game", os.path.join(AK_DIR, "game", "tilemap.f")),
-    ("sprite.f",  "/game", os.path.join(AK_DIR, "game", "sprite.f")),
-    ("collide.f", "/game", os.path.join(AK_DIR, "game", "collide.f")),
-    ("scene.f",   "/game", os.path.join(AK_DIR, "game", "scene.f")),
+    ("loop.f",    "/tui/game", os.path.join(AK_DIR, "tui", "game", "loop.f")),
+    ("input.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "input.f")),
+    ("tilemap.f", "/tui/game", os.path.join(AK_DIR, "tui", "game", "tilemap.f")),
+    ("sprite.f",  "/tui/game", os.path.join(AK_DIR, "tui", "game", "sprite.f")),
+    ("scene.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "scene.f")),
+    # 2d game engine
+    ("collide.f", "/game/2d", os.path.join(AK_DIR, "game", "2d", "collide.f")),
     # TUI game components (Phase 0 + Phase 1)
     ("game-view.f",     "/tui/game", os.path.join(AK_DIR, "tui", "game", "game-view.f")),
     ("game-canvas.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "game-canvas.f")),
     ("game-applet.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "game-applet.f")),
     ("atlas.f",         "/tui/game", os.path.join(AK_DIR, "tui", "game", "atlas.f")),
-    ("camera.f",        "/tui/game", os.path.join(AK_DIR, "tui", "game", "camera.f")),
+    ("camera.f",        "/game/2d",   os.path.join(AK_DIR, "game", "2d", "camera.f")),
     ("world-render.f",  "/tui/game", os.path.join(AK_DIR, "tui", "game", "world-render.f")),
 ]
 
@@ -66,7 +67,7 @@ REQUIRE tui/game/game-applet.f
 REQUIRE tui/game/atlas.f
 ." [OK] atlas.f" CR
 
-REQUIRE tui/game/camera.f
+REQUIRE game/2d/camera.f
 ." [OK] camera.f" CR
 
 REQUIRE tui/game/world-render.f

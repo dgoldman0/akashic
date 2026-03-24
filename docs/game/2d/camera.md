@@ -1,4 +1,4 @@
-# akashic-tui-game-camera — Camera / Viewport Controller
+# akashic-game-2d-camera — Camera / Viewport Controller
 
 A 2D camera that tracks a target position within a tile-based
 world.  Supports instant snap, smooth lerp follow, screen shake,
@@ -6,10 +6,10 @@ and viewport bounds clamping.  Positions are stored in fixed-point
 (×256) for sub-tile precision.
 
 ```forth
-REQUIRE tui/game/camera.f
+REQUIRE game/2d/camera.f
 ```
 
-`PROVIDED akashic-tui-game-camera` — safe to include multiple times.
+`PROVIDED akashic-game-2d-camera` — safe to include multiple times.
 
 ---
 

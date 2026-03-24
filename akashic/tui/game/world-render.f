@@ -37,7 +37,7 @@
 PROVIDED akashic-tui-game-world-render
 
 REQUIRE atlas.f
-REQUIRE camera.f
+REQUIRE ../../game/2d/camera.f
 REQUIRE ../cell.f
 REQUIRE ../screen.f
 REQUIRE ../region.f

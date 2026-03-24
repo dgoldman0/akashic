@@ -1,5 +1,5 @@
 \ =====================================================================
-\  akashic/tui/game/ecs.f — Entity-Component Store
+\  akashic/game/ecs.f — Entity-Component Store
 \ =====================================================================
 \
 \  Lightweight archetype-free ECS.  Entities are integer IDs (0-based)
@@ -37,10 +37,10 @@
 \    ECS-MAX        ( ecs -- max-ents )
 \
 \  Prefix: ECS- (public), _ECS- (internal)
-\  Provider: akashic-tui-game-ecs
+\  Provider: akashic-game-ecs
 \  Dependencies: (standalone)
 
-PROVIDED akashic-tui-game-ecs
+PROVIDED akashic-game-ecs
 
 \ =====================================================================
 \  §1 — Constants & Offsets

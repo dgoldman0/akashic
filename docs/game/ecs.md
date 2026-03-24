@@ -1,4 +1,4 @@
-# akashic-tui-game-ecs — Entity-Component Store
+# akashic-game-ecs — Entity-Component Store
 
 Lightweight archetype-free ECS.  Entities are integer IDs (0-based)
 with generation counters to detect stale references.  Components are
@@ -6,10 +6,10 @@ fixed-size byte arrays stored in parallel pools indexed by entity ID.
 Supports up to 16 component types per ECS instance.
 
 ```forth
-REQUIRE tui/game/ecs.f
+REQUIRE game/ecs.f
 ```
 
-`PROVIDED akashic-tui-game-ecs` — safe to include multiple times.
+`PROVIDED akashic-game-ecs` — safe to include multiple times.
 
 ---
 

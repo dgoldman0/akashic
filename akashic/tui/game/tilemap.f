@@ -42,9 +42,9 @@
 
 PROVIDED akashic-tui-game-tilemap
 
-REQUIRE ../tui/cell.f
-REQUIRE ../tui/screen.f
-REQUIRE ../tui/region.f
+REQUIRE ../cell.f
+REQUIRE ../screen.f
+REQUIRE ../region.f
 
 \ =====================================================================
 \  §1 — Descriptor Offsets
@@ -201,7 +201,7 @@ VARIABLE _TMAP-RR    VARIABLE _TMAP-RC
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../concurrency/guard.f
 GUARD _tmap-guard
 
 ' TMAP-NEW       CONSTANT _tmap-new-xt

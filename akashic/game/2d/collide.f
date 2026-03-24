@@ -1,5 +1,5 @@
 \ =====================================================================
-\  akashic/tui/game/collide.f — Collision Detection
+\  akashic/game/2d/collide.f — Collision Detection
 \ =====================================================================
 \
 \  Provides a collision map (parallel byte array to a tilemap) and
@@ -26,17 +26,11 @@
 \    PT-IN-RECT?     ( px py rx ry rw rh -- flag )
 \    AABB-OVERLAP?   ( x1 y1 w1 h1 x2 y2 w2 h2 -- flag )
 \
-\  Public API — Sprite Helpers:
-\    SPR-CMAP-BLOCKED? ( spr dx dy cmap -- flag )
-\        Check if sprite's target position is blocked.
-\    SPR-SPR-OVERLAP?  ( spr1 spr2 -- flag )
-\        Check if two 1×1 sprites share the same tile.
-\
 \  Prefix: CMAP- (public), _CMAP- (internal)
-\  Provider: akashic-tui-game-collide
-\  Dependencies: sprite.f (for sprite helpers)
+\  Provider: akashic-game-2d-collide
+\  Dependencies: none
 
-PROVIDED akashic-tui-game-collide
+PROVIDED akashic-game-2d-collide
 
 \ =====================================================================
 \  §1 — Collision Map Descriptor
@@ -139,27 +133,3 @@ VARIABLE _CA-X2  VARIABLE _CA-Y2  VARIABLE _CA-W2  VARIABLE _CA-H2
     _CA-X2 @  _CA-X1 @ _CA-W1 @ +  < AND
     _CA-Y1 @  _CA-Y2 @ _CA-H2 @ +  < AND
     _CA-Y2 @  _CA-Y1 @ _CA-H1 @ +  < AND ;
-
-\ =====================================================================
-\  §5 — Sprite Helpers
-\ =====================================================================
-
-REQUIRE sprite.f
-
-VARIABLE _CB-NX  VARIABLE _CB-NY
-
-\ SPR-CMAP-BLOCKED? ( spr dx dy cmap -- flag )
-\   Check if moving sprite by (dx,dy) would land on a solid tile.
-: SPR-CMAP-BLOCKED?  ( spr dx dy cmap -- flag )
-    >R                                 ( spr dx dy  R: cmap )
-    2 PICK SPR-POS@                    ( spr dx dy x y  R: cmap )
-    ROT +  _CB-NY !                    ( spr dx x  R: cmap )
-    +  _CB-NX !                        ( spr  R: cmap )
-    DROP
-    R> _CB-NX @ _CB-NY @ CMAP-SOLID? ;
-
-\ SPR-SPR-OVERLAP? ( spr1 spr2 -- flag )
-\   True if two 1×1 sprites occupy the same tile position.
-: SPR-SPR-OVERLAP?  ( spr1 spr2 -- flag )
-    SPR-POS@ ROT SPR-POS@             ( x2 y2 x1 y1 )
-    ROT = -ROT = AND ;

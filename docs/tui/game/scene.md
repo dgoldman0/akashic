@@ -5,7 +5,7 @@ callbacks.  Push and pop scenes to navigate menus, gameplay states,
 pause screens, etc.  Supports up to 8 nested scenes.
 
 ```forth
-REQUIRE game/scene.f
+REQUIRE tui/game/scene.f
 ```
 
 `PROVIDED akashic-tui-game-scene` — safe to include multiple times.

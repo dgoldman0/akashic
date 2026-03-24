@@ -6,7 +6,7 @@ configurable frame rate.  Supports two modes: **standalone**
 `GAME-TICK` driven by an external scheduler like the app shell).
 
 ```forth
-REQUIRE game/loop.f
+REQUIRE tui/game/loop.f
 ```
 
 `PROVIDED akashic-tui-game-loop` — safe to include multiple times.

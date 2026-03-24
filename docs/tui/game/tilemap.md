@@ -6,7 +6,7 @@ scrolling and region-clipped rendering.  Each tile is a packed
 used by `screen.f` and `cell.f`.
 
 ```forth
-REQUIRE game/tilemap.f
+REQUIRE tui/game/tilemap.f
 ```
 
 `PROVIDED akashic-tui-game-tilemap` — safe to include multiple times.

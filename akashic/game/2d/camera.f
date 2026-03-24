@@ -1,5 +1,5 @@
 \ =====================================================================
-\  akashic/tui/game/camera.f — Camera / Viewport Controller
+\  akashic/game/2d/camera.f — Camera / Viewport Controller
 \ =====================================================================
 \
 \  Tracks a target position with optional smoothing, screen-shake,
@@ -39,10 +39,10 @@
 \    CAM-Y        ( cam -- y )     Effective Y (with shake)
 \
 \  Prefix: CAM- (public), _CAM- (internal)
-\  Provider: akashic-tui-game-camera
+\  Provider: akashic-game-2d-camera
 \  No dependencies.
 
-PROVIDED akashic-tui-game-camera
+PROVIDED akashic-game-2d-camera
 
 \ =====================================================================
 \  §1 — Descriptor Offsets

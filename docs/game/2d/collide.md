@@ -1,14 +1,14 @@
-# akashic-tui-game-collide — Collision Detection
+# akashic-game-2d-collide — Collision Detection
 
 Tile-based collision maps, geometric primitives (point-in-rect,
 AABB overlap), and sprite-level collision helpers.  Data is stored
 as a byte-per-tile grid — compact and fast for tile-based games.
 
 ```forth
-REQUIRE game/collide.f
+REQUIRE game/2d/collide.f
 ```
 
-`PROVIDED akashic-tui-game-collide` — safe to include multiple times.
+`PROVIDED akashic-game-2d-collide` — safe to include multiple times.
 
 ---
 

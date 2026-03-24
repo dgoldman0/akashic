@@ -5,7 +5,7 @@ multiple keys per action (up to 4) and edge detection
 (pressed-this-frame vs held).
 
 ```forth
-REQUIRE game/input.f
+REQUIRE tui/game/input.f
 ```
 
 `PROVIDED akashic-tui-game-input` — safe to include multiple times.

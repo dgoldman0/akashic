@@ -5,7 +5,7 @@ frame animation, and user-data fields.  Includes a pool system
 for managing groups of sprites with z-sorted rendering.
 
 ```forth
-REQUIRE game/sprite.f
+REQUIRE tui/game/sprite.f
 ```
 
 `PROVIDED akashic-tui-game-sprite` — safe to include multiple times.

@@ -1,4 +1,4 @@
-# akashic-tui-game-components — Common ECS Components
+# akashic-game-components — Common ECS Components
 
 Pre-defined component types for common game patterns.  Each component
 is a fixed-size struct accessed via field offset constants.  Register
@@ -6,10 +6,10 @@ with `ECS-REG-COMP`, attach with `ECS-ATTACH`, then read/write fields
 at the returned address.
 
 ```forth
-REQUIRE tui/game/components.f
+REQUIRE game/components.f
 ```
 
-`PROVIDED akashic-tui-game-components` — safe to include multiple times.
+`PROVIDED akashic-game-components` — safe to include multiple times.
 
 ---
 

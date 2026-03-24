@@ -1,5 +1,5 @@
 \ =====================================================================
-\  akashic/tui/game/systems.f — System Runner
+\  akashic/game/systems.f — System Runner
 \ =====================================================================
 \
 \  A registry of update systems executed in priority order each tick.
@@ -36,10 +36,10 @@
 \    SYS-BIND-COMPS ( c-pos c-vel c-hp c-tmr -- )
 \
 \  Prefix: SYSRUN- (runner), SYS- (systems)
-\  Provider: akashic-tui-game-systems
+\  Provider: akashic-game-systems
 \  Dependencies: ecs.f, components.f
 
-PROVIDED akashic-tui-game-systems
+PROVIDED akashic-game-systems
 
 REQUIRE ecs.f
 REQUIRE components.f
