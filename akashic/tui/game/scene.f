@@ -79,7 +79,7 @@ _SCN-INIT
     R> ;
 
 : SCN-FREE  ( scn -- )
-    FREE DROP ;
+    FREE ;
 
 \ =====================================================================
 \  §4 — Stack Operations

@@ -72,7 +72,7 @@ REQUIRE ../draw.f
     R> ;
 
 : WREN-FREE  ( wren -- )
-    FREE DROP ;
+    FREE ;
 
 \ =====================================================================
 \  §3 — Configuration

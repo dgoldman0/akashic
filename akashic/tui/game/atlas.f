@@ -56,8 +56,8 @@ REQUIRE ../cell.f
     R> ;
 
 : ATLAS-FREE  ( atlas -- )
-    DUP _ATLAS-O-DATA + @ FREE DROP
-    FREE DROP ;
+    DUP _ATLAS-O-DATA + @ FREE
+    FREE ;
 
 \ =====================================================================
 \  §3 — Define / Get

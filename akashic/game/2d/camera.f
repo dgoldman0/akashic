@@ -78,7 +78,7 @@ PROVIDED akashic-game-2d-camera
     42 R@ _CAM-O-SHAKE-SEED + !         \ arbitrary PRNG seed
     R> ;
 
-: CAM-FREE  ( cam -- )  FREE DROP ;
+: CAM-FREE  ( cam -- )  FREE ;
 
 \ =====================================================================
 \  §3 — Configuration

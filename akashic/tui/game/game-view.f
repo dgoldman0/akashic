@@ -121,7 +121,7 @@ REQUIRE ../keys.f
     0 OVER _GV-O-GV-FLAGS  + ! ;
 
 : GV-FREE  ( widget -- )
-    FREE DROP ;
+    FREE ;
 
 \ =====================================================================
 \  §5 — Configuration

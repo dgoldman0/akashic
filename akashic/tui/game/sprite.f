@@ -107,7 +107,7 @@ REQUIRE ../region.f
     R> ;
 
 : SPR-FREE  ( spr -- )
-    FREE DROP ;
+    FREE ;
 
 \ =====================================================================
 \  §3 — Sprite Accessors
@@ -228,8 +228,8 @@ VARIABLE _SPR-TK-FRM   VARIABLE _SPR-TK-TCK
     OVER _SPOOL-O-ARR + ! ;
 
 : SPOOL-FREE  ( pool -- )
-    DUP _SPOOL-O-ARR + @ FREE DROP
-    FREE DROP ;
+    DUP _SPOOL-O-ARR + @ FREE
+    FREE ;
 
 : SPOOL-COUNT  ( pool -- n )
     _SPOOL-O-CNT + @ ;

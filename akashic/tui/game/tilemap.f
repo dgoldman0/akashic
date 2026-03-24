@@ -72,6 +72,7 @@ VARIABLE _TMAP-RR    VARIABLE _TMAP-RC
 \ TMAP-NEW ( w h -- tmap )
 : TMAP-NEW  ( w h -- tmap )
     OVER _TMAP-TMP !   DUP _TMAP-TMP2 !
+    2DROP
     _TMAP-DESC-SIZE ALLOCATE 0<> ABORT" TMAP-NEW: desc alloc"
     >R
     _TMAP-TMP @ _TMAP-TMP2 @ * 8 *
@@ -90,8 +91,8 @@ VARIABLE _TMAP-RR    VARIABLE _TMAP-RC
 
 \ TMAP-FREE ( tmap -- )
 : TMAP-FREE  ( tmap -- )
-    DUP _TMAP-O-DATA + @ FREE DROP
-    FREE DROP ;
+    DUP _TMAP-O-DATA + @ FREE
+    FREE ;
 
 \ =====================================================================
 \  §3 — Accessors

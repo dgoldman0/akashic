@@ -38,3 +38,5 @@ local_testing/*
 !local_testing/test_app_shell.py
 !local_testing/test_app_compositor.py
 !local_testing/ROADMAP-tui-apps.md
+!local_testing/test_game_suite.py
+!local_testing/test_phase6_suite.py

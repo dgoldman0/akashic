@@ -140,7 +140,7 @@ VARIABLE _GCVS-OUTER
 : GCVS-FREE  ( widget -- )
     DUP _GCVS-O-CVS + @ CVS-FREE
     DUP _GCVS-O-GV  + @ GV-FREE
-    FREE DROP ;
+    FREE ;
 
 \ =====================================================================
 \  §6 — Configuration

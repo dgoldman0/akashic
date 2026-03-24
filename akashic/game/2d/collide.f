@@ -61,8 +61,8 @@ PROVIDED akashic-game-2d-collide
     0 FILL ;
 
 : CMAP-FREE  ( cmap -- )
-    DUP _CMAP-O-DATA + @ FREE DROP
-    FREE DROP ;
+    DUP _CMAP-O-DATA + @ FREE
+    FREE ;
 
 \ =====================================================================
 \  §3 — Collision Map Accessors
