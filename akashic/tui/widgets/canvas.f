@@ -183,16 +183,16 @@ _CVS-BMAP-INIT
 : _CVS-CELL-CP  ( w col row -- cp )
     SWAP 2 * SWAP 4 *                   ( w dxb dyb )
     0                                     ( w dxb dyb acc )
-    4 0 DO                                \ dy = I
+    4 0 DO                                \ dy = J (outer)
         2 0 DO                            \ dx = I (inner)
-            3 PICK I +                    ( ... dx )
-            3 PICK J +                    ( ... dx dy )
-            6 PICK -ROT                   ( ... w' dx dy )
+            2 PICK I +                    ( ... dxb+I )
+            2 PICK J +                    ( ... dxb+I dyb+J )
+            5 PICK -ROT                   ( ... w dxb+I dyb+J )
             _CVS-OK? IF
                 _CVS-ADR SWAP C@ AND 0<> IF
                     I J _CVS-DOTBIT
                     1 SWAP LSHIFT OR
-                ELSE DROP THEN
+                THEN
             ELSE 3DROP THEN
         LOOP
     LOOP
