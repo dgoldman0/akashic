@@ -3313,11 +3313,31 @@ _UCTX-INIT-POOLS
 
 \ --- Public API ---
 
+\ Arena-backed UCTX allocation avoids XMEM bump-allocator
+\ fragmentation for these ~103 KiB blocks.  A free-chain recycles
+\ contexts when sub-apps close.
+
+VARIABLE _UCTX-ARENA
+VARIABLE _UCTX-FREELIST
+
+: _UCTX-ENSURE-ARENA  ( -- flag )   \ 0 = OK, non-zero = fail
+    _UCTX-ARENA @ IF 0 EXIT THEN
+    UCTX-TOTAL 4 * 256 +  A-XMEM ARENA-NEW   ( arena ior )
+    ?DUP IF NIP EXIT THEN
+    _UCTX-ARENA ! 0 ;
+
 : UCTX-ALLOC  ( -- ctx | 0 )
-    UCTX-TOTAL XMEM-ALLOT? IF DROP 0 THEN ;
+    _UCTX-ENSURE-ARENA IF 0 EXIT THEN
+    _UCTX-FREELIST @ ?DUP IF
+        DUP @ _UCTX-FREELIST !  EXIT
+    THEN
+    _UCTX-ARENA @ UCTX-TOTAL ARENA-ALLOT ;
 
 : UCTX-FREE  ( ctx -- )
-    ?DUP IF UCTX-TOTAL XMEM-FREE-BLOCK THEN ;
+    ?DUP IF
+        _UCTX-FREELIST @ OVER !
+        _UCTX-FREELIST !
+    THEN ;
 
 \ Pool copy helper variables
 VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ

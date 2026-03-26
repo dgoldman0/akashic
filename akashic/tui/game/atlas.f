@@ -95,15 +95,12 @@ REQUIRE ../cell.f
 
 : ATLAS-LOAD  ( atlas table count -- )
     0 ?DO                                ( atlas table )
-        OVER                             ( atlas table atlas )
-        OVER @ >R                        \ id
-        OVER CELL+ @ >R                  \ cp
-        OVER 2 CELLS + @ >R             \ fg
-        OVER 3 CELLS + @ >R             \ bg
-        OVER 4 CELLS + @                \ attrs
-        R> R> R> R>                      ( atlas table atlas attrs bg fg cp id )
-        >R >R >R >R >R                  \ reorder: atlas id cp fg bg attrs
-        R> R> R> R> R>
+        DUP >R  OVER                     ( atlas table atlas  R: table )
+        R@      @                        ( .. atlas id )
+        R@ CELL+ @                       ( .. atlas id cp )
+        R@ 2 CELLS + @                  ( .. atlas id cp fg )
+        R@ 3 CELLS + @                  ( .. atlas id cp fg bg )
+        R> 4 CELLS + @                  ( .. atlas id cp fg bg attrs )
         ATLAS-DEFINE                     ( atlas table )
         5 CELLS +                        \ advance table pointer
     LOOP
