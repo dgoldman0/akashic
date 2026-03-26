@@ -269,7 +269,7 @@ VARIABLE _GSV-IVAL     \ integer value
 \  Walk the entry buffer, encode each entry into CBOR, then write
 \  the resulting bytes to disk.
 
-CREATE _GSV-CBUF 16384 ALLOT          \ CBOR output buffer
+VARIABLE _GSV-CBUF                     \ -> XMEM addr (set by _GSV-INIT-BUFS)
 
 \ Read a byte from entry buffer at offset, advance offset.
 VARIABLE _GSV-RPTR
@@ -328,7 +328,7 @@ VARIABLE _GSV-ENC-VADDR
 : _GSV-ENCODE  ( ctx -- )
     DUP _GSV-O-BUF + @ _GSV-RBUF !
     0 _GSV-RPTR !
-    _GSV-CBUF 16384 CBOR-RESET
+    _GSV-CBUF @ 16384 CBOR-RESET
     _GSV-O-COUNT + @                  ( count )
     DUP CBOR-MAP                      ( count )
     0 ?DO _GSV-ENCODE-ONE LOOP ;
@@ -366,7 +366,13 @@ VARIABLE _GSV-WR-PU
 \ =====================================================================
 
 \ Read buffer for loading
-CREATE _GSV-LBUF 16384 ALLOT
+VARIABLE _GSV-LBUF                     \ -> XMEM addr (set by _GSV-INIT-BUFS)
+
+\ Allocate both 16 KB buffers in extended memory.
+: _GSV-INIT-BUFS  ( -- )
+    _GSV-CBUF @ 0= IF 16384 XMEM-ALLOT _GSV-CBUF ! THEN
+    _GSV-LBUF @ 0= IF 16384 XMEM-ALLOT _GSV-LBUF ! THEN ;
+_GSV-INIT-BUFS
 
 \ GLOAD-OPEN ( path-a path-u -- ctx | 0 )
 \   Open a save file, read and parse CBOR.  Returns context or 0.
@@ -379,14 +385,14 @@ VARIABLE _GSV-LD-BYTES
     _GSV-LD-FD !
     \ Rewind and read file contents
     _GSV-LD-FD @ FREWIND
-    _GSV-LBUF 16384 _GSV-LD-FD @ FREAD
+    _GSV-LBUF @ 16384 _GSV-LD-FD @ FREAD
     _GSV-LD-BYTES !
     _GSV-LD-FD @ FCLOSE
     0 _GSV-LD-FD !
     \ Validate we got data
     _GSV-LD-BYTES @ 0= IF 0 EXIT THEN
     \ Parse CBOR
-    _GSV-LBUF _GSV-LD-BYTES @ CBOR-PARSE
+    _GSV-LBUF @ _GSV-LD-BYTES @ CBOR-PARSE
     0<> IF 0 EXIT THEN
     \ Check it's a map
     CBOR-TYPE CBOR-MT-MAP <> IF 0 EXIT THEN
@@ -394,7 +400,7 @@ VARIABLE _GSV-LD-BYTES
     _GSV-DESC-SZ ALLOCATE
     0<> IF 0 EXIT THEN               ( ctx )
     DUP _GSV-DESC-SZ 0 FILL
-    _GSV-LBUF      OVER _GSV-O-PADDR + !
+    _GSV-LBUF @    OVER _GSV-O-PADDR + !
     _GSV-LD-BYTES @  OVER _GSV-O-PLEN + !
     1              OVER _GSV-O-MODE + !
     \ Read map header to get pair count

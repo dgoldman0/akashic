@@ -194,7 +194,6 @@ VARIABLE _WREN-VIEW-H
     DUP _WREN-O-ATLAS + @ _WREN-CUR-ATLAS !
     DUP _WREN-O-CAM   + @ DUP
         CAM-X _WREN-CUR-CAM-X !
-    DUP _WREN-O-CAM   + @
         CAM-Y _WREN-CUR-CAM-Y !
     DUP _WREN-O-RGN   + @ _WREN-CUR-RGN !
     \ Clear the region first

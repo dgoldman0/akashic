@@ -41,7 +41,7 @@ REQUIRE ../cell.f
 \ =====================================================================
 
 : ATLAS-NEW  ( capacity -- atlas )
-    DUP 1 MAX                            \ clamp >= 1
+    1 MAX                                \ clamp >= 1
     _ATLAS-DESC-SZ ALLOCATE
     0<> ABORT" ATLAS-NEW: desc alloc"    ( cap desc )
     >R R@ _ATLAS-DESC-SZ 0 FILL
