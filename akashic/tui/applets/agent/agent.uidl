@@ -1,0 +1,31 @@
+<uidl arrange=stack>
+<menubar id=mbar>
+<menu label=Agent>
+<item text=Ask do=prompt key=Ctrl+L/>
+<item text=Clear do=clear/>
+<separator/>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+<menu label=Run>
+<item text=Cancel do=cancel key=Escape/>
+<item text=Reconnect do=reconnect/>
+</menu>
+<menu label=Review>
+<item text=Approve do=approve key=F6/>
+<item text=Deny do=deny key=F7/>
+</menu>
+<menu label=Help>
+<item text=About_Agent do=about/>
+</menu>
+</menubar>
+<region id=agent-body style=color:#eeeeee;background-color:#1c1c1c/>
+<status id=sbar style=color:white;background-color:#005f5f>
+<label id=provider text=Provider/>
+<label id=state text=Ready/>
+</status>
+<action do=prompt key=Ctrl+L/>
+<action do=cancel key=Escape/>
+<action do=approve key=F6/>
+<action do=deny key=F7/>
+<action do=quit key=Ctrl+Q/>
+</uidl>

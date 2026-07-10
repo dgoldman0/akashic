@@ -1,6 +1,6 @@
 # Akashic TUI Development
 
-`akashic_tui.py` is the supported bridge between this repository and the
+`akashic_tui.py` is the supported test harness between this repository and the
 sibling MegaPad checkout. It builds only the transitive `REQUIRE` closure for
 the selected app profile, preserving the source paths inside MP64FS. It does
 not use or create `local_testing/emu`.
@@ -22,21 +22,27 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
-Profiles are `desktop` (Desk with all four applets), `pad`, `fexplorer`,
-`daybook`, and `grid`. Generated images, terminal text, cell JSON, and PNG
-captures go under `local_testing/out/`.
+Profiles are `interop` (the non-TUI runtime and interoperability contracts),
+`agent` (provider-neutral conversations), `agent-ui`, `desktop` (Desk with all
+five applets), `desktop-agent`, `pad`, `fexplorer`, `daybook`, and `grid`.
+Generated images, terminal text, cell JSON, and PNG captures go under
+`local_testing/out/`.
 
 The smoke journeys exercise application behavior, not just boot markers:
 
 | Profile | Verified journey |
 |---|---|
+| `interop` | instance-relative state, isolated instances, registry lookup, bounded request dispatch, and typed values without loading TUI |
+| `agent` | native offline fallback, provider connection, streamed transcript assembly, approval resolution, cancellation, and owned conversation cleanup without loading TUI |
+| `agent-ui` | transcript, streaming, prompt, review, cancellation, reconnect, resize, and terminal rendering |
 | `pad` | edit/undo/redo, open/find/go-to, fragmented multi-sector Save As, exact bytes, word and line replacement, dirty-state redraw |
 | `fexplorer` | create file/folder, rename, copy/paste, confirmed deletion, preview, and persisted MP64FS metadata |
 | `daybook` | task capture, completion, exact Markdown persistence, responsive calendar/agenda resize |
 | `grid` | formula edit, dependent `SUM` recalculation, CSV persistence/reload, virtual-grid resize |
-| `desktop` | Pad, File Explorer, Daybook, and Grid boot together with app focus/routing, compact layouts, resize, editing, and live terminal redraw |
+| `desktop-agent` | all five applets, direct intents, deterministic conversation/tool approval, global prompt, focus, and resize |
 
-Run all five before changing shared TUI, VFS, or app-shell behavior.
+Run the focused profile plus `desktop-agent` before changing shared TUI, VFS,
+agent, or app-shell behavior. The normal suite is fully native and offline.
 
 ## Shared Live Environment
 
@@ -69,8 +75,9 @@ python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock capture \
   --png akashic/local_testing/out/live.png
 ```
 
-In the desktop profile, `Alt+1` focuses Pad, `Alt+2` File Explorer, `Alt+3`
-Daybook, and `Alt+4` Grid. Desk's other shortcuts remain documented in
+In the agent desktop profiles, `Alt+1` focuses Pad, `Alt+2` File Explorer,
+`Alt+3` Daybook, `Alt+4` Grid, and `Alt+5` Agent. `Ctrl+Space` or `Alt+A` opens
+Desk's global agent prompt. Desk's other shortcuts remain documented in
 `docs/tui/applets/desk/desk.md`.
 Bare F1-F12 keys are forwarded to the guest. Viewer controls use `Ctrl+F5` to
 pause/resume, `Ctrl+F10` to pause and step one instruction, `Ctrl+R` to reset,

@@ -1,0 +1,151 @@
+\ =====================================================================
+\  conversation.f - Owned conversation transcript and streamed messages
+\ =====================================================================
+
+PROVIDED akashic-agent-conversation
+
+1 CONSTANT AROLE-USER
+2 CONSTANT AROLE-ASSISTANT
+3 CONSTANT AROLE-TOOL
+4 CONSTANT AROLE-SYSTEM
+
+0 CONSTANT AMSG-S-COMPLETE
+1 CONSTANT AMSG-S-STREAMING
+2 CONSTANT AMSG-S-PENDING
+3 CONSTANT AMSG-S-APPROVAL
+4 CONSTANT AMSG-S-ERROR
+5 CONSTANT AMSG-S-CANCELLED
+
+ 0 CONSTANT _AM-ROLE
+ 8 CONSTANT _AM-STATE
+16 CONSTANT _AM-RUN-ID
+24 CONSTANT _AM-TEXT-A
+32 CONSTANT _AM-TEXT-U
+40 CONSTANT _AM-TEXT-CAP
+48 CONSTANT _AM-TIME-MS
+56 CONSTANT _AM-FLAGS
+64 CONSTANT AGENT-MESSAGE-SIZE
+
+: AMSG.ROLE      ( message -- a ) _AM-ROLE + ;
+: AMSG.STATE     ( message -- a ) _AM-STATE + ;
+: AMSG.RUN-ID    ( message -- a ) _AM-RUN-ID + ;
+: AMSG.TEXT-A    ( message -- a ) _AM-TEXT-A + ;
+: AMSG.TEXT-U    ( message -- a ) _AM-TEXT-U + ;
+: AMSG.TEXT-CAP  ( message -- a ) _AM-TEXT-CAP + ;
+: AMSG.TIME-MS   ( message -- a ) _AM-TIME-MS + ;
+: AMSG.FLAGS     ( message -- a ) _AM-FLAGS + ;
+
+: AMSG-TEXT  ( message -- addr len )
+    DUP AMSG.TEXT-A @ SWAP AMSG.TEXT-U @ ;
+
+: AMSG-INIT  ( message -- ) AGENT-MESSAGE-SIZE 0 FILL ;
+
+: AMSG-FREE  ( message -- )
+    DUP AMSG.TEXT-A @ ?DUP IF FREE THEN
+    AMSG-INIT ;
+
+64 CONSTANT ACONV-MAX-MESSAGES
+ 0 CONSTANT _AC-ID
+ 8 CONSTANT _AC-COUNT
+16 CONSTANT _AC-REVISION
+24 CONSTANT _AC-ACTIVE-RUN
+32 CONSTANT _AC-FLAGS
+40 CONSTANT _AC-MESSAGES
+_AC-MESSAGES ACONV-MAX-MESSAGES AGENT-MESSAGE-SIZE * +
+CONSTANT AGENT-CONVERSATION-SIZE
+
+: ACONV.ID          ( conversation -- a ) _AC-ID + ;
+: ACONV.COUNT       ( conversation -- a ) _AC-COUNT + ;
+: ACONV.REVISION    ( conversation -- a ) _AC-REVISION + ;
+: ACONV.ACTIVE-RUN  ( conversation -- a ) _AC-ACTIVE-RUN + ;
+: ACONV.FLAGS       ( conversation -- a ) _AC-FLAGS + ;
+: ACONV.MESSAGES    ( conversation -- a ) _AC-MESSAGES + ;
+
+: ACONV-NEW  ( -- conversation ior )
+    AGENT-CONVERSATION-SIZE ALLOCATE
+    DUP IF EXIT THEN
+    DROP DUP AGENT-CONVERSATION-SIZE 0 FILL
+    1 OVER ACONV.ID ! 1 OVER ACONV.REVISION ! 0 ;
+
+: ACONV-NTH  ( index conversation -- message | 0 )
+    >R DUP 0< OVER R@ ACONV.COUNT @ >= OR IF DROP R> DROP 0 EXIT THEN
+    AGENT-MESSAGE-SIZE * R> ACONV.MESSAGES + ;
+
+VARIABLE _ACF-C
+
+: ACONV-FREE  ( conversation -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP _ACF-C !
+    _ACF-C @ ACONV.COUNT @ 0 ?DO I _ACF-C @ ACONV-NTH AMSG-FREE LOOP
+    FREE ;
+
+VARIABLE _AMT-A
+VARIABLE _AMT-U
+VARIABLE _AMT-M
+VARIABLE _AMT-P
+
+: AMSG-TEXT!  ( addr len message -- ior )
+    _AMT-M ! _AMT-U ! _AMT-A !
+    _AMT-M @ AMSG.TEXT-A @ ?DUP IF FREE THEN
+    0 _AMT-M @ AMSG.TEXT-A ! 0 _AMT-M @ AMSG.TEXT-U !
+    0 _AMT-M @ AMSG.TEXT-CAP !
+    _AMT-U @ 0= IF 0 EXIT THEN
+    _AMT-U @ ALLOCATE DUP IF SWAP DROP EXIT THEN
+    DROP DUP _AMT-P ! DROP
+    _AMT-A @ _AMT-P @ _AMT-U @ CMOVE
+    _AMT-P @ _AMT-M @ AMSG.TEXT-A !
+    _AMT-U @ DUP _AMT-M @ AMSG.TEXT-U !
+    _AMT-M @ AMSG.TEXT-CAP ! 0 ;
+
+VARIABLE _ACA-ROLE
+VARIABLE _ACA-STATE
+VARIABLE _ACA-RUN
+VARIABLE _ACA-A
+VARIABLE _ACA-U
+VARIABLE _ACA-C
+VARIABLE _ACA-M
+
+: ACONV-APPEND  ( role state run-id addr len conversation -- message ior )
+    _ACA-C ! _ACA-U ! _ACA-A ! _ACA-RUN ! _ACA-STATE ! _ACA-ROLE !
+    _ACA-C @ ACONV.COUNT @ ACONV-MAX-MESSAGES >= IF 0 1 EXIT THEN
+    _ACA-C @ ACONV.COUNT @ AGENT-MESSAGE-SIZE *
+    _ACA-C @ ACONV.MESSAGES + DUP _ACA-M ! AMSG-INIT
+    _ACA-ROLE @ _ACA-M @ AMSG.ROLE !
+    _ACA-STATE @ _ACA-M @ AMSG.STATE !
+    _ACA-RUN @ _ACA-M @ AMSG.RUN-ID !
+    MS@ _ACA-M @ AMSG.TIME-MS !
+    _ACA-A @ _ACA-U @ _ACA-M @ AMSG-TEXT! ?DUP IF
+        _ACA-M @ AMSG-FREE 0 SWAP EXIT
+    THEN
+    1 _ACA-C @ ACONV.COUNT +!
+    1 _ACA-C @ ACONV.REVISION +!
+    _ACA-M @ 0 ;
+
+VARIABLE _AMD-A
+VARIABLE _AMD-U
+VARIABLE _AMD-M
+VARIABLE _AMD-P
+VARIABLE _AMD-OLD-U
+
+: AMSG-APPEND  ( addr len message -- ior )
+    _AMD-M ! _AMD-U ! _AMD-A !
+    _AMD-U @ 0= IF 0 EXIT THEN
+    _AMD-M @ AMSG.TEXT-U @ _AMD-OLD-U !
+    _AMD-OLD-U @ _AMD-U @ + ALLOCATE
+    DUP IF SWAP DROP EXIT THEN
+    DROP DUP _AMD-P ! DROP
+    _AMD-M @ AMSG.TEXT-A @ ?DUP IF
+        _AMD-P @ _AMD-OLD-U @ CMOVE
+    THEN
+    _AMD-A @ _AMD-P @ _AMD-OLD-U @ + _AMD-U @ CMOVE
+    _AMD-M @ AMSG.TEXT-A @ ?DUP IF FREE THEN
+    _AMD-P @ _AMD-M @ AMSG.TEXT-A !
+    _AMD-OLD-U @ _AMD-U @ + DUP _AMD-M @ AMSG.TEXT-U !
+    _AMD-M @ AMSG.TEXT-CAP !
+    0 ;
+
+: ACONV-CLEAR  ( conversation -- )
+    _ACF-C !
+    _ACF-C @ ACONV.COUNT @ 0 ?DO I _ACF-C @ ACONV-NTH AMSG-FREE LOOP
+    0 _ACF-C @ ACONV.COUNT ! 0 _ACF-C @ ACONV.ACTIVE-RUN !
+    1 _ACF-C @ ACONV.REVISION +! ;

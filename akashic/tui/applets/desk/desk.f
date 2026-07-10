@@ -45,9 +45,18 @@ REQUIRE ../../region.f
 REQUIRE ../../draw.f
 REQUIRE ../../keys.f
 REQUIRE ../../color.f
+REQUIRE ../../widgets/prompt.f
 REQUIRE ../../../utils/toml.f
 REQUIRE ../../../liraq/uidl.f
 REQUIRE ../../../utils/binimg.f
+REQUIRE ../../../runtime/state-layout.f
+REQUIRE ../../../interop/endpoint.f
+REQUIRE ../../../interop/intent.f
+REQUIRE ../../../interop/job.f
+REQUIRE ../../../agent/runtime.f
+REQUIRE ../../../agent/providers/offline.f
+
+OFFLINE-PROVIDER-USE-DEFAULT
 
 \ =====================================================================
 \  §1 — Slot Struct (linked list, heap-allocated)
@@ -63,22 +72,29 @@ REQUIRE ../../../utils/binimg.f
 \    3 = focused (visible + receives input)
 
  0 CONSTANT _SLOT-O-DESC       \ APP-DESC pointer
- 8 CONSTANT _SLOT-O-RGN        \ region handle (0 if no region)
-16 CONSTANT _SLOT-O-STATE      \ state enum
-24 CONSTANT _SLOT-O-UCTX       \ UIDL context pointer (0 = no UIDL)
-32 CONSTANT _SLOT-O-HAS-UIDL   \ flag: app has UIDL?
-40 CONSTANT _SLOT-O-NEXT       \ → next slot in list (0 = tail)
-48 CONSTANT _SLOT-O-ID         \ unique ID (monotonic)
-56 CONSTANT _SLOT-O-UIDL-BUF   \ shell-loaded UIDL file buffer (0 = none)
-64 CONSTANT _SLOT-SZ
+ 8 CONSTANT _SLOT-O-INST       \ generic component instance
+16 CONSTANT _SLOT-O-RGN        \ region handle (0 if no region)
+24 CONSTANT _SLOT-O-STATE      \ state enum
+32 CONSTANT _SLOT-O-UCTX       \ UIDL context pointer (0 = no UIDL)
+40 CONSTANT _SLOT-O-HAS-UIDL   \ flag: app has UIDL?
+48 CONSTANT _SLOT-O-NEXT       \ -> next slot in list (0 = tail)
+56 CONSTANT _SLOT-O-ID         \ unique Desk ID (monotonic)
+64 CONSTANT _SLOT-O-UIDL-BUF   \ shell-loaded UIDL file buffer (0 = none)
+72 CONSTANT _SLOT-O-DIRTY      \ child surface needs repaint
+80 CONSTANT _SLOT-O-SEEN-REV   \ last painted component revision
+88 CONSTANT _SLOT-SZ
 
 0 CONSTANT _ST-EMPTY
 1 CONSTANT _ST-RUNNING
 2 CONSTANT _ST-MINIMIZED
 3 CONSTANT _ST-FOCUSED
 
+CREATE DESK-COMP-DESC COMP-DESC ALLOT
+CREATE DESK-DESC      APP-DESC ALLOT
+
 \ Slot field access helpers  ( slot-addr -- field-addr )
 : _SL-DESC     ( sa -- a )  _SLOT-O-DESC     + ;
+: _SL-INST     ( sa -- a )  _SLOT-O-INST     + ;
 : _SL-RGN      ( sa -- a )  _SLOT-O-RGN      + ;
 : _SL-STATE    ( sa -- a )  _SLOT-O-STATE    + ;
 : _SL-UCTX     ( sa -- a )  _SLOT-O-UCTX     + ;
@@ -86,6 +102,8 @@ REQUIRE ../../../utils/binimg.f
 : _SL-NEXT     ( sa -- a )  _SLOT-O-NEXT     + ;
 : _SL-ID       ( sa -- a )  _SLOT-O-ID       + ;
 : _SL-UIDL-BUF ( sa -- a )  _SLOT-O-UIDL-BUF + ;
+: _SL-DIRTY    ( sa -- a )  _SLOT-O-DIRTY    + ;
+: _SL-SEEN-REV ( sa -- a )  _SLOT-O-SEEN-REV + ;
 
 : _SL-VISIBLE?  ( sa -- flag )
     _SL-STATE @ DUP _ST-RUNNING = SWAP _ST-FOCUSED = OR ;
@@ -100,42 +118,36 @@ REQUIRE ../../../utils/binimg.f
 \  Simplified from compositor: no _COMP-RUNNING, _COMP-DIRTY,
 \  _COMP-TICK-MS, _COMP-LAST-TICK — the shell owns all of those.
 
-VARIABLE _DESK-HEAD       \ → first slot in linked list (0 = empty)
-0 _DESK-HEAD !
+VARIABLE _DESK-CURRENT-STATE
+0 _DESK-CURRENT-STATE !
+CMP-LAYOUT-BEGIN
 
-VARIABLE _DESK-FOCUS-SA   \ slot address of focused slot (0 = none)
-0 _DESK-FOCUS-SA !
-
-VARIABLE _DESK-NEXT-ID    \ monotonic ID counter, starts at 1
-1 _DESK-NEXT-ID !
-
-VARIABLE _DESK-VH         \ 0 = V-pref (cols first), 1 = H-pref
-0 _DESK-VH !
-
-VARIABLE _DESK-FULLFRAME  \ flag: full-frame mode active
-0 _DESK-FULLFRAME !
-
-VARIABLE _DESK-LAST-MIN-SA  \ last minimized slot (for restore)
-0 _DESK-LAST-MIN-SA !
+_DESK-CURRENT-STATE CMP-CELL: _DESK-HEAD       \ first live slot
+_DESK-CURRENT-STATE CMP-CELL: _DESK-FOCUS-SA   \ focused slot
+_DESK-CURRENT-STATE CMP-CELL: _DESK-NEXT-ID    \ monotonic slot ID
+_DESK-CURRENT-STATE CMP-CELL: _DESK-VH         \ tiling preference
+_DESK-CURRENT-STATE CMP-CELL: _DESK-FULLFRAME
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAST-MIN-SA
 
 \ Active UIDL context tracking lives in the shell.
 \ Desk delegates via ASHELL-CTX-SWITCH.
 
-\ Config TOML buffer (kept alive so zero-copy strings remain valid).
+\ Pre-instance constructor inputs.  These are consumed by DESK-INIT-CB;
+\ live Desk state is instance-relative below.
 VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
 0 _DESK-CFG-A !  0 _DESK-CFG-L !
 
 \ Startup applets: set via DESK-QUEUE-LAUNCH before DESK-RUN.
 \ DESK-INIT-CB launches them after the screen & region are ready.
 8 CONSTANT _DESK-PEND-MAX
+512 CONSTANT _DESK-AGENT-PROMPT-CAP
 CREATE _DESK-PEND-BUF  _DESK-PEND-MAX CELLS ALLOT
 VARIABLE _DESK-PEND-N
 0 _DESK-PEND-N !
 
-VARIABLE _DESK-BG-DIRTY     \ -1 = need full background fill next paint
--1 _DESK-BG-DIRTY !
-VARIABLE _DESK-LAST-W
-VARIABLE _DESK-LAST-H
+_DESK-CURRENT-STATE CMP-CELL: _DESK-BG-DIRTY
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAST-W
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAST-H
 
 \ =====================================================================
 \  §2b — Theme
@@ -144,13 +156,21 @@ VARIABLE _DESK-LAST-H
 \  _DESK-THEME-DEFAULTS sets a dark-blue palette.  _DESK-LOAD-THEME
 \  overrides any slot that appears in [desk.theme] of a TOML config.
 
-VARIABLE _DTH-TBAR-FG    VARIABLE _DTH-TBAR-BG    VARIABLE _DTH-TBAR-ATTR
-VARIABLE _DTH-ACT-FG     VARIABLE _DTH-ACT-BG     VARIABLE _DTH-ACT-ATTR
-VARIABLE _DTH-MIN-FG     VARIABLE _DTH-MIN-BG
-VARIABLE _DTH-PIN-FG     VARIABLE _DTH-PIN-BG
-VARIABLE _DTH-DIV-FG     VARIABLE _DTH-DIV-BG
-VARIABLE _DTH-CLOCK-FG   VARIABLE _DTH-CLOCK-BG
-VARIABLE _DTH-DESK-BG                             \ desktop background (layer 0)
+_DESK-CURRENT-STATE CMP-CELL: _DTH-TBAR-FG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-TBAR-BG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-TBAR-ATTR
+_DESK-CURRENT-STATE CMP-CELL: _DTH-ACT-FG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-ACT-BG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-ACT-ATTR
+_DESK-CURRENT-STATE CMP-CELL: _DTH-MIN-FG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-MIN-BG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-PIN-FG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-PIN-BG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-DIV-FG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-DIV-BG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-CLOCK-FG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-CLOCK-BG
+_DESK-CURRENT-STATE CMP-CELL: _DTH-DESK-BG
 
 : _DESK-THEME-DEFAULTS  ( -- )
     15 _DTH-TBAR-FG !   17 _DTH-TBAR-BG !   0 _DTH-TBAR-ATTR !
@@ -160,8 +180,6 @@ VARIABLE _DTH-DESK-BG                             \ desktop background (layer 0)
    240 _DTH-DIV-FG  !    0 _DTH-DIV-BG  !
     14 _DTH-CLOCK-FG !  17 _DTH-CLOCK-BG !
     17 _DTH-DESK-BG ! ;
-_DESK-THEME-DEFAULTS
-
 \ Helper: try to load a colour key from a TOML table into a variable.
 : _DTH-TRY  ( tbl-a tbl-l key-a key-l var -- )
     >R TOML-KEY?
@@ -200,10 +218,58 @@ _DESK-THEME-DEFAULTS
 48 CONSTANT _HB-SLOT
 56 CONSTANT _HB-SZ
 12 CONSTANT _HB-MAX
+32 CONSTANT _DESK-MAX-INSTALLED
 
-CREATE _HB-ENTRIES  _HB-SZ _HB-MAX * ALLOT
-VARIABLE _DHBAR-COUNT
-0 _DHBAR-COUNT !
+_DESK-CURRENT-STATE _HB-SZ _HB-MAX * CMP-FIELD: _HB-ENTRIES
+_DESK-CURRENT-STATE CMP-CELL: _DHBAR-COUNT
+
+\ Generic runtime and interoperability ownership.
+_DESK-CURRENT-STATE CMP-CELL: _DESK-REGISTRY
+_DESK-CURRENT-STATE CMP-CELL: _DESK-POLICY
+_DESK-CURRENT-STATE CMP-CELL: _DESK-BUS
+_DESK-CURRENT-STATE CMP-CELL: _DESK-INTENTS
+_DESK-CURRENT-STATE CMP-CELL: _DESK-JOBS
+_DESK-CURRENT-STATE IENDPOINT-SIZE CMP-FIELD: _DESK-ENDPOINT
+_DESK-CURRENT-STATE CMP-CELL: _DESK-INSTALLED-N
+_DESK-CURRENT-STATE _DESK-MAX-INSTALLED CELLS CMP-FIELD: _DESK-INSTALLED
+_DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROVIDER
+_DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-RUNTIME
+_DESK-CURRENT-STATE CMP-CELL: _DESK-TOOL-GATEWAY
+_DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROMPT
+_DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROMPT-RGN
+_DESK-CURRENT-STATE _DESK-AGENT-PROMPT-CAP CMP-FIELD: _DESK-AGENT-PROMPT-BUF
+
+CMP-LAYOUT-SIZE CONSTANT _DESK-STATE-SIZE
+
+: _DESK-USE-STATE  ( instance -- )
+    CINST-STATE _DESK-CURRENT-STATE ! ;
+
+VARIABLE _DIF-COMP
+
+: _DESK-INSTALLED-FIND  ( comp-desc -- app-desc | 0 )
+    _DIF-COMP !
+    _DESK-INSTALLED-N @ 0 ?DO
+        I CELLS _DESK-INSTALLED + @ DUP APP.COMP-DESC @
+        _DIF-COMP @ = IF UNLOOP EXIT THEN
+        DROP
+    LOOP
+    0 ;
+
+VARIABLE _DII-APP
+VARIABLE _DII-COMP
+
+: DESK-INSTALL  ( app-desc -- ior )
+    DUP APP-DESC-VALID? 0= IF DROP CREG-E-NOT-FOUND EXIT THEN
+    _DII-APP !
+    _DII-APP @ APP.COMP-DESC @ _DII-COMP !
+    _DII-COMP @ _DESK-INSTALLED-FIND IF 0 EXIT THEN
+    _DESK-INSTALLED-N @ _DESK-MAX-INSTALLED >= IF CREG-E-FULL EXIT THEN
+    _DII-COMP @ _DESK-REGISTRY @ CREG-TYPE-ENSURE ?DUP IF EXIT THEN
+    _DII-COMP @ _DESK-INTENTS @ CINT-REGISTER-COMP ?DUP IF EXIT THEN
+    _DII-APP @
+    _DESK-INSTALLED-N @ CELLS _DESK-INSTALLED + !
+    1 _DESK-INSTALLED-N +!
+    0 ;
 
 : _HB-ENTRY  ( idx -- addr )  _HB-SZ * _HB-ENTRIES + ;
 
@@ -414,6 +480,13 @@ VARIABLE _DL-LW    VARIABLE _DL-LH
         _SL-NEXT @
     REPEAT ;
 
+: _DESK-MARK-ALL-CHILDREN  ( -- )
+    _DESK-HEAD @
+    BEGIN ?DUP WHILE
+        -1 OVER _SL-DIRTY !
+        _SL-NEXT @
+    REPEAT ;
+
 \ Compute grid dimensions for N visible apps.
 : _DESK-GRID  ( n -- )
     DUP 0 <= IF DROP 0 _DL-COLS ! 0 _DL-ROWS ! EXIT THEN
@@ -497,8 +570,14 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 : _DESK-CTX-SAVE  ( sa -- )
     _SL-UCTX @ ASHELL-CTX-SAVE ;
 
+: _DESK-ACTIVATE-CHILD  ( sa -- )
+    DUP _SL-DESC @ APP.ACTIVATE-XT @ ?DUP IF
+        SWAP _SL-INST @ SWAP EXECUTE
+    ELSE DROP THEN ;
+
 : _DESK-CTX-SWITCH  ( sa -- )
-    _SL-UCTX @ ASHELL-CTX-SWITCH ;
+    DUP _SL-UCTX @ ASHELL-CTX-SWITCH
+    _DESK-ACTIVATE-CHILD ;
 
 \ Master relayout.
 : DESK-RELAYOUT  ( -- )
@@ -511,6 +590,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     \ Re-load UIDL for visible sub-apps into their new regions
     _DESK-VIS-N @ 0 DO
         I CELLS _DESK-VIS-BUF + @          ( sa )
+        -1 OVER _SL-DIRTY !
         DUP _SL-HAS-UIDL @ IF
             DUP _DESK-CTX-SWITCH
             DUP _SL-RGN @ UTUI-RGN!
@@ -536,63 +616,84 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 \  owns the terminal.  Sub-app INIT-XT is called, but terminal
 \  setup is not the sub-app's job.
 
+VARIABLE _DL-DESC
+VARIABLE _DL-INST
+VARIABLE _DL-SLOT
+
 : DESK-LAUNCH  ( desc -- id )
-    _SLOT-SZ ALLOCATE IF DROP -1 EXIT THEN
-    >R
-    R@ _SLOT-SZ 0 FILL
-    DUP R@ _SL-DESC !
-    _ST-RUNNING R@ _SL-STATE !
-    _DESK-NEXT-ID @ R@ _SL-ID !
+    DUP APP-DESC-VALID? 0= IF DROP -1 EXIT THEN
+    DUP DESK-INSTALL IF DROP -1 EXIT THEN
+    _DL-DESC !
+    _DL-DESC @ APP.COMP-DESC @ CINST-NEW
+    DUP IF 2DROP -1 EXIT THEN
+    DROP _DL-INST !
+    _DESK-ENDPOINT _DL-INST @ CINST.ENDPOINT !
+    _DL-INST @ _DESK-REGISTRY @ CREG-INST+ IF
+        _DL-INST @ CINST-FREE -1 EXIT
+    THEN
+    _SLOT-SZ ALLOCATE
+    DUP IF
+        SWAP DROP DROP
+        _DL-INST @ _DESK-REGISTRY @ CREG-INST- DROP
+        _DL-INST @ CINST-FREE -1 EXIT
+    THEN
+    DROP DUP _DL-SLOT ! _SLOT-SZ 0 FILL
+    _DL-DESC @ _DL-SLOT @ _SL-DESC !
+    _DL-INST @ _DL-SLOT @ _SL-INST !
+    _ST-RUNNING _DL-SLOT @ _SL-STATE !
+    _DESK-NEXT-ID @ _DL-SLOT @ _SL-ID !
     1 _DESK-NEXT-ID +!
     \ Allocate UIDL context if app declares UIDL (inline or file)
-    DUP APP.UIDL-A @ OVER APP.UIDL-FILE-A @ OR IF
+    _DL-DESC @ APP.UIDL-A @ _DL-DESC @ APP.UIDL-FILE-A @ OR IF
         UCTX-ALLOC DUP IF DUP UCTX-CLEAR THEN
-        R@ _SL-UCTX !
-        -1 R@ _SL-HAS-UIDL !
+        _DL-SLOT @ _SL-UCTX !
+        -1 _DL-SLOT @ _SL-HAS-UIDL !
     ELSE
-        0 R@ _SL-UCTX !
-        0 R@ _SL-HAS-UIDL !
+        0 _DL-SLOT @ _SL-UCTX !
+        0 _DL-SLOT @ _SL-HAS-UIDL !
     THEN
-    R@ _DESK-APPEND
+    _DL-SLOT @ _DESK-APPEND
     \ Auto-focus if this is the first slot
     _DESK-FOCUS-SA @ 0= IF
-        _ST-FOCUSED R@ _SL-STATE !
-        R@ _DESK-FOCUS-SA !
+        _ST-FOCUSED _DL-SLOT @ _SL-STATE !
+        _DL-SLOT @ _DESK-FOCUS-SA !
     THEN
     DESK-RELAYOUT
     \ Load UIDL document into sub-app context
-    R@ _SL-HAS-UIDL @ IF
-        R@ _DESK-CTX-SWITCH
-        DUP APP.UIDL-A @ IF
+    _DL-SLOT @ _SL-HAS-UIDL @ IF
+        _DL-SLOT @ _DESK-CTX-SWITCH
+        _DL-DESC @ APP.UIDL-A @ IF
             \ --- inline UIDL ---
-            DUP APP.UIDL-A @
-            OVER APP.UIDL-U @
-            R@ _SL-RGN @
+            _DL-DESC @ APP.UIDL-A @
+            _DL-DESC @ APP.UIDL-U @
+            _DL-SLOT @ _SL-RGN @
             UTUI-LOAD DROP
-        ELSE DUP APP.UIDL-FILE-A @ IF
+        ELSE _DL-DESC @ APP.UIDL-FILE-A @ IF
             \ --- file-based UIDL (loaded via shared loader) ---
-            DUP APP.UIDL-FILE-A @
-            OVER APP.UIDL-FILE-U @  ( desc path-a path-u )
-            R@ _SL-RGN @           ( desc path-a path-u rgn )
-            ASHELL-LOAD-UIDL       ( desc buf|0 )
-            R@ _SL-UIDL-BUF !
+            _DL-DESC @ APP.UIDL-FILE-A @
+            _DL-DESC @ APP.UIDL-FILE-U @
+            _DL-SLOT @ _SL-RGN @
+            ASHELL-LOAD-UIDL
+            _DL-SLOT @ _SL-UIDL-BUF !
         THEN THEN
     THEN
     \ Call sub-app init callback while context is live so that
     \ UTUI-BY-ID, UTUI-WIDGET-SET, UTUI-DO! etc. persist.
-    DUP APP.INIT-XT @
-    ?DUP IF EXECUTE THEN
+    _DL-DESC @ APP.INIT-XT @ ?DUP IF
+        _DL-INST @ SWAP EXECUTE
+    THEN
     \ Save context AFTER init — widget mounts & actions are now captured
-    R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
-    DROP
-    R> _SL-ID @ ;
+    _DL-SLOT @ _SL-HAS-UIDL @ IF _DL-SLOT @ _DESK-CTX-SAVE THEN
+    _DL-SLOT @ _SL-ID @ ;
 
 : DESK-CLOSE-ID  ( id -- )
     _DESK-FIND-ID DUP 0= IF DROP EXIT THEN
     >R
     \ Sub-app shutdown callback
     R@ _SL-DESC @ ?DUP IF
-        APP.SHUTDOWN-XT @ ?DUP IF EXECUTE THEN
+        APP.SHUTDOWN-XT @ ?DUP IF
+            R@ _SL-INST @ SWAP EXECUTE
+        THEN
     THEN
     \ Detach UIDL if active
     R@ _SL-HAS-UIDL @ IF
@@ -604,6 +705,10 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     R@ _SL-UIDL-BUF @ ?DUP IF _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK THEN
     R@ _SL-UCTX @ ?DUP IF UCTX-FREE THEN
     R@ _SL-RGN @ ?DUP IF RGN-FREE THEN
+    R@ _SL-INST @ ?DUP IF
+        DUP _DESK-REGISTRY @ CREG-INST- DROP
+        CINST-FREE
+    THEN
     \ Fixup focus / last-minimized pointers
     R@ _DESK-FOCUS-SA @ = IF
         0 _DESK-FOCUS-SA !
@@ -687,6 +792,168 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     DESK-RELAYOUT ;
 
 \ =====================================================================
+\  §8b — Runtime Registry and Interoperability Endpoint
+\ =====================================================================
+
+VARIABLE _DFI-INST
+
+: _DESK-FOCUS-INSTANCE  ( instance -- )
+    _DFI-INST !
+    _DESK-HEAD @
+    BEGIN ?DUP WHILE
+        DUP _SL-INST @ _DFI-INST @ = IF
+            _SL-ID @ DESK-FOCUS-ID EXIT
+        THEN
+        _SL-NEXT @
+    REPEAT ;
+
+: _DESK-ENDPOINT-POST  ( request desk-instance -- status )
+    _DESK-USE-STATE
+    _DESK-BUS @ CBUS-POST ;
+
+VARIABLE _DSE-ID-A
+VARIABLE _DSE-ID-U
+
+: _DESK-ENDPOINT-SERVICE  ( id-a id-u desk-instance -- service | 0 )
+    _DESK-USE-STATE _DSE-ID-U ! _DSE-ID-A !
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.runtime" STR-STR= IF
+        _DESK-AGENT-RUNTIME @ EXIT
+    THEN
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.tool-gateway" STR-STR= IF
+        _DESK-TOOL-GATEWAY @ EXIT
+    THEN
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.runtime.registry" STR-STR= IF
+        _DESK-REGISTRY @ EXIT
+    THEN
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.interop.endpoint" STR-STR= IF
+        _DESK-ENDPOINT EXIT
+    THEN
+    0 ;
+
+VARIABLE _DIR-ID-A
+VARIABLE _DIR-ID-U
+VARIABLE _DIR-REQ
+VARIABLE _DIR-ENTRY
+VARIABLE _DIR-COMP
+VARIABLE _DIR-INST
+
+: _DESK-ENDPOINT-INTENT  ( id-a id-u request desk-instance -- status )
+    _DESK-USE-STATE
+    _DIR-REQ ! _DIR-ID-U ! _DIR-ID-A !
+    _DIR-ID-A @ _DIR-ID-U @ _DESK-INTENTS @ CINT-RESOLVE
+    DUP 0= IF DROP CBUS-S-NO-HANDLER EXIT THEN
+    _DIR-ENTRY !
+    _DIR-ENTRY @ CIE.COMP-DESC @ _DIR-COMP !
+    0 _DIR-INST !
+
+    \ Prefer a focused compatible instance.
+    _DESK-FOCUS-SA @ ?DUP IF
+        _SL-INST @ DUP CINST-DESC _DIR-COMP @ = IF
+            _DIR-INST !
+        ELSE DROP THEN
+    THEN
+
+    \ Then any live compatible instance.
+    _DIR-INST @ 0= IF
+        _DIR-COMP @ _DESK-REGISTRY @ CREG-INST-BY-DESC _DIR-INST !
+    THEN
+
+    \ Finally launch the installed TUI binding for that component type.
+    _DIR-INST @ 0= IF
+        _DIR-COMP @ _DESK-INSTALLED-FIND ?DUP IF
+            DESK-LAUNCH DROP
+            _DIR-COMP @ _DESK-REGISTRY @ CREG-INST-BY-DESC _DIR-INST !
+        THEN
+    THEN
+    _DIR-INST @ 0= IF CBUS-S-NO-HANDLER EXIT THEN
+
+    _DIR-INST @ _DESK-FOCUS-INSTANCE
+    _DIR-INST @ _DIR-REQ @ CBR-TARGET!
+    _DIR-ENTRY @ CIE.CAP @ _DIR-REQ @ CBR.CAP !
+    _DIR-REQ @ _DESK-BUS @ CBUS-POST ;
+
+VARIABLE _DINI-INST
+
+: _DESK-AGENT-PROMPT-SUBMIT  ( prompt -- )
+    PRM-GET-TEXT _DESK-AGENT-RUNTIME @ ARUNTIME-SEND
+    DUP 0= IF
+        DROP S" Agent request started" 1000 ASHELL-TOAST
+    ELSE
+        DROP S" Agent is busy" 1600 ASHELL-TOAST
+    THEN
+    ASHELL-DIRTY! ;
+
+: _DESK-AGENT-PROMPT-CANCEL  ( prompt -- )
+    DROP ASHELL-DIRTY! ;
+
+: _DESK-SHOW-AGENT-PROMPT  ( -- )
+    _DESK-AGENT-PROMPT @ 0= IF EXIT THEN
+    S" Ask:" 0 0 _DESK-AGENT-PROMPT @ PRM-SHOW
+    ASHELL-DIRTY! ;
+
+: _DESK-INTEROP-INIT  ( desk-instance -- )
+    DUP _DINI-INST ! _DESK-USE-STATE
+    0 _DESK-INSTALLED-N !
+    CREG-NEW 0<> ABORT" desk: registry allocation failed" _DESK-REGISTRY !
+    CPOLICY-SIZE ALLOCATE
+    0<> ABORT" desk: policy allocation failed"
+    DUP _DESK-POLICY ! CPOLICY-INIT
+    CINT-NEW 0<> ABORT" desk: intent router allocation failed" _DESK-INTENTS !
+    CJOB-TABLE-NEW 0<> ABORT" desk: job table allocation failed" _DESK-JOBS !
+    _DESK-REGISTRY @ _DESK-POLICY @ CBUS-NEW
+    0<> ABORT" desk: request bus allocation failed" _DESK-BUS !
+    APROV-NEW
+    0<> ABORT" desk: agent provider allocation failed" _DESK-AGENT-PROVIDER !
+    _DESK-AGENT-PROVIDER @ ARUNTIME-NEW
+    0<> ABORT" desk: agent runtime allocation failed" _DESK-AGENT-RUNTIME !
+    _DESK-REGISTRY @ _DESK-BUS @ _DINI-INST @ ATOOLG-NEW
+    0<> ABORT" desk: agent tool gateway allocation failed"
+    DUP _DESK-TOOL-GATEWAY !
+    _DESK-AGENT-RUNTIME @ ARUNTIME-TOOL-GATEWAY!
+    _DESK-TOOL-GATEWAY @ _DESK-AGENT-PROVIDER @ APROV-BIND-TOOLS
+    ABORT" desk: provider tool binding failed"
+
+    _DESK-ENDPOINT IENDPOINT-INIT
+    _DINI-INST @ _DESK-ENDPOINT IEND.CONTEXT !
+    ['] _DESK-ENDPOINT-POST _DESK-ENDPOINT IEND.POST-XT !
+    ['] _DESK-ENDPOINT-INTENT _DESK-ENDPOINT IEND.INTENT-XT !
+    ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
+    _DESK-ENDPOINT _DINI-INST @ CINST.ENDPOINT !
+
+    DESK-COMP-DESC _DESK-REGISTRY @ CREG-TYPE-ENSURE
+    ABORT" desk: could not register Desk type"
+    _DINI-INST @ _DESK-REGISTRY @ CREG-INST+
+    ABORT" desk: could not register Desk instance"
+
+    SCR-H 1- 0 1 SCR-W RGN-NEW DUP _DESK-AGENT-PROMPT-RGN !
+    _DESK-AGENT-PROMPT-BUF _DESK-AGENT-PROMPT-CAP PRM-NEW
+    DUP _DESK-AGENT-PROMPT !
+    ['] _DESK-AGENT-PROMPT-SUBMIT OVER PRM-ON-SUBMIT
+    ['] _DESK-AGENT-PROMPT-CANCEL OVER PRM-ON-CANCEL
+    _DTH-TBAR-FG @ _DTH-TBAR-BG @ ROT PRM-COLORS! ;
+
+: _DESK-INTEROP-FINI  ( -- )
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-FREE THEN
+    _DESK-AGENT-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
+    _DESK-BUS @ ?DUP IF
+        DUP CBUS-CANCEL-ALL DROP
+    THEN
+    _DESK-TOOL-GATEWAY @ ?DUP IF ATOOLG-FREE THEN
+    _DESK-BUS @ ?DUP IF CBUS-FREE THEN
+    _DESK-AGENT-RUNTIME @ ?DUP IF ARUNTIME-FREE THEN
+    _DESK-AGENT-PROVIDER @ ?DUP IF APROV-FREE THEN
+    _DESK-JOBS @ ?DUP IF CJOB-TABLE-FREE THEN
+    _DESK-INTENTS @ ?DUP IF CINT-FREE THEN
+    _DESK-POLICY @ ?DUP IF FREE THEN
+    _DESK-REGISTRY @ ?DUP IF CREG-FREE THEN
+    0 _DESK-BUS ! 0 _DESK-JOBS ! 0 _DESK-INTENTS !
+    0 _DESK-POLICY ! 0 _DESK-REGISTRY !
+    0 _DESK-AGENT-RUNTIME ! 0 _DESK-AGENT-PROVIDER !
+    0 _DESK-TOOL-GATEWAY !
+    0 _DESK-AGENT-PROMPT ! 0 _DESK-AGENT-PROMPT-RGN !
+    _DESK-ENDPOINT IENDPOINT-SIZE 0 FILL ;
+
+\ =====================================================================
 \  §9 — Taskbar Painter
 \ =====================================================================
 
@@ -712,6 +979,30 @@ VARIABLE _DESK-TB-POS
 
 VARIABLE _DTB-COL
 VARIABLE _DTB-ROW
+VARIABLE _DAS-A
+VARIABLE _DAS-U
+VARIABLE _DAS-COL
+
+: _DESK-AGENT-STATE-TEXT  ( -- addr len )
+    _DESK-AGENT-RUNTIME @ ARUNTIME.STATUS @ CASE
+        ARUN-S-RUNNING OF S" [Agent: working]" ENDOF
+        ARUN-S-APPROVAL OF S" [Agent: review]" ENDOF
+        ARUN-S-OFFLINE OF S" [Agent: offline]" ENDOF
+        ARUN-S-ERROR OF S" [Agent: error]" ENDOF
+        ARUN-S-CANCELLED OF S" [Agent: cancelled]" ENDOF
+        DROP S" [Agent: ready]"
+    ENDCASE ;
+
+: _DESK-PAINT-AGENT-STATE  ( -- )
+    _DESK-AGENT-STATE-TEXT _DAS-U ! _DAS-A !
+    SCR-W _DAS-U @ - 1- 0 MAX _DAS-COL !
+    _DAS-COL @ _DTB-COL @ <= IF EXIT THEN
+    _DESK-AGENT-RUNTIME @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = IF
+        0 220 1 DRW-STYLE!
+    ELSE
+        _DTH-CLOCK-FG @ _DTH-CLOCK-BG @ 0 DRW-STYLE!
+    THEN
+    _DAS-A @ _DAS-U @ _DTB-ROW @ _DAS-COL @ DRW-TEXT ;
 
 : _DESK-PAINT-TASKBAR  ( -- )
     DRW-STYLE-SAVE
@@ -762,6 +1053,7 @@ VARIABLE _DTB-ROW
         1 _DTB-COL +!
         _DTB-ROW @ _DTB-COL @ _DESK-PAINT-HOTBAR
     THEN
+    _DESK-PAINT-AGENT-STATE
     DRW-STYLE-RESTORE ;
 
 \ =====================================================================
@@ -772,13 +1064,15 @@ VARIABLE _DTB-ROW
 \  callbacks — no private event loop, no APP-INIT/APP-SHUTDOWN.
 
 \ --- Init ---
-: DESK-INIT-CB  ( -- )
+: DESK-INIT-CB  ( instance -- )
+    DUP _DINI-INST ! _DESK-USE-STATE
     0 _DESK-HEAD !
     0 _DESK-FOCUS-SA !
     1 _DESK-NEXT-ID !
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
     0 _DESK-LAST-MIN-SA !
+    -1 _DESK-BG-DIRTY !
     SCR-W _DESK-LAST-W !
     SCR-H _DESK-LAST-H !
     0 ASHELL-CTX-SWITCH
@@ -786,6 +1080,7 @@ VARIABLE _DTB-ROW
     _DESK-HOTBAR-CLEAR
     \ Load config if a buffer was supplied before DESK-RUN
     _DESK-CFG-A @ ?DUP IF _DESK-CFG-L @ DESK-LOAD-CONFIG THEN
+    _DINI-INST @ _DESK-INTEROP-INIT
     \ Launch queued startup applets
     _DESK-PEND-N @ 0 DO
         I CELLS _DESK-PEND-BUF + @ DESK-LAUNCH DROP
@@ -851,6 +1146,10 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
 
 : _DESK-SHORTCUT?  ( ev -- flag )
     DUP _DESK-EV-TYPE KEY-T-CHAR <> IF DROP 0 EXIT THEN
+    DUP _DESK-EV-CODE 32 =
+    OVER _DESK-EV-MODS KEY-MOD-CTRL AND 0<> AND IF
+        DROP _DESK-SHOW-AGENT-PROMPT -1 EXIT
+    THEN
     DUP _DESK-EV-MODS KEY-MOD-ALT AND IF
         DUP _DESK-EV-CODE DUP 49 >= SWAP 57 <= AND IF
             DUP _DESK-EV-CODE 48 - DESK-FOCUS-ID
@@ -873,6 +1172,8 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
         THEN -1 EXIT THEN
     DUP 104 _DESK-ALT? IF
         DROP _DESK-HOTBAR-LAUNCH-NEXT -1 EXIT THEN
+    DUP 97 _DESK-ALT? IF
+        DROP _DESK-SHOW-AGENT-PROMPT -1 EXIT THEN
     DROP 0 ;
 
 \ _DESK-TILE-AT ( row col -- slot | 0 )
@@ -921,12 +1222,11 @@ VARIABLE _DDM-EV
         _DDM-EV @ ASHELL-MOUSE-BTN        ( row col btn )
         UTUI-DISPATCH-MOUSE               ( handled? )
         IF
-            R@ _DESK-CTX-SAVE
+            -1 R@ _SL-DIRTY !
             R> DROP
             -1 EXIT
         THEN
     THEN
-    R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
     R> DROP
     0 ;
 
@@ -936,7 +1236,11 @@ VARIABLE _DDM-EV
 \  ASHELL-QUIT, we intercept it via ASHELL-QUIT-PENDING? /
 \  ASHELL-CANCEL-QUIT, and close that tile instead of shutting
 \  down the whole shell.
-: DESK-EVENT-CB  ( ev -- flag )
+: DESK-EVENT-CB  ( ev instance -- flag )
+    _DESK-USE-STATE
+    _DESK-AGENT-PROMPT @ ?DUP IF
+        DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
+    THEN
     \ 0. Mouse events → tile hit-test routing
     DUP ASHELL-MOUSE? IF
         _DESK-DISPATCH-MOUSE EXIT
@@ -953,17 +1257,16 @@ VARIABLE _DDM-EV
         \ as command bars before the focused UIDL widget sees the key.
         R@ _SL-DESC @ ?DUP IF
             APP.EVENT-XT @ ?DUP IF
-                OVER SWAP EXECUTE         ( ev consumed? )
+                OVER R@ _SL-INST @ ROT EXECUTE  ( ev consumed? )
                 \ Intercept sub-app ASHELL-QUIT
                 ASHELL-QUIT-PENDING? IF
                     ASHELL-CANCEL-QUIT
-                    R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
                     R@ _SL-ID @ DESK-CLOSE-ID
                     R> DROP
                     2DROP -1 EXIT
                 THEN
                 IF
-                    R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
+                    -1 R@ _SL-DIRTY !
                     R> DROP
                     ASHELL-DIRTY! DROP -1 EXIT
                 THEN
@@ -971,27 +1274,38 @@ VARIABLE _DDM-EV
         THEN
         R@ _SL-HAS-UIDL @ IF
             DUP UTUI-DISPATCH-KEY IF
-                R@ _DESK-CTX-SAVE
+                -1 R@ _SL-DIRTY !
                 R> DROP
                 ASHELL-DIRTY! DROP -1 EXIT
             THEN
         THEN
-        R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
         R> DROP
     THEN
     DROP 0 ;
 
 \ --- Tick ---
-: DESK-TICK-CB  ( -- )
+: DESK-TICK-CB  ( instance -- )
+    _DESK-USE-STATE
+    _DESK-FOCUS-SA @ ?DUP IF _SL-INST @ ELSE 0 THEN
+    _DESK-TOOL-GATEWAY @ ATOOLG.FOCUSED !
+    8 _DESK-AGENT-RUNTIME @ ARUNTIME-PUMP ?DUP IF
+        DROP _DESK-MARK-ALL-CHILDREN ASHELL-DIRTY!
+    THEN
+    8 _DESK-BUS @ CBUS-PUMP DROP
     _DESK-HEAD @
     BEGIN ?DUP WHILE
         DUP _SL-ALIVE? IF
             DUP >R
-            R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SWITCH THEN
-            R@ _SL-DESC @ ?DUP IF
-                APP.TICK-XT @ ?DUP IF EXECUTE THEN
+            R@ _SL-INST @ CINST.REVISION @
+            R@ _SL-SEEN-REV @ <> IF -1 R@ _SL-DIRTY ! THEN
+            R@ _SL-DIRTY @
+            R@ _SL-DESC @ APP.FLAGS @ APP-F-TICK-WHEN-CLEAN AND OR IF
+                R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SWITCH THEN
+                R@ _DESK-ACTIVATE-CHILD
+                R@ _SL-DESC @ ?DUP IF
+                    APP.TICK-XT @ ?DUP IF R@ _SL-INST @ SWAP EXECUTE THEN
+                THEN
             THEN
-            R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
             R> DROP
         THEN
         _SL-NEXT @
@@ -1002,12 +1316,15 @@ VARIABLE _DDM-EV
 \  Iterates visible sub-apps, context-switches to each, and calls
 \  their UTUI-PAINT + PAINT-XT within their tile region.  Then
 \  draws dividers and the taskbar.
-: DESK-PAINT-CB  ( -- )
+VARIABLE _DPC-PAINT-ALL
+
+: DESK-PAINT-CB  ( instance -- )
+    _DESK-USE-STATE
     _DESK-SYNC-GEOMETRY
     RGN-ROOT
     \ Layer 0: fill tile area with desk background colour
     \ Only runs when geometry changed (relayout / init / resize)
-    _DESK-BG-DIRTY @ IF
+    _DESK-BG-DIRTY @ DUP _DPC-PAINT-ALL ! IF
         0 _DESK-BG-DIRTY !
         DRW-STYLE-SAVE
         0 _DTH-DESK-BG @ 0 DRW-STYLE!
@@ -1023,12 +1340,18 @@ VARIABLE _DDM-EV
                 0
             THEN
             0= IF
-                DUP _SL-RGN @ IF
-                    DUP _SL-UCTX @
-                    OVER _SL-RGN @
-                    2 PICK _SL-HAS-UIDL @
-                    3 PICK _SL-DESC @
-                    ASHELL-PAINT-CHILD
+                DUP _SL-DIRTY @ _DPC-PAINT-ALL @ OR IF
+                    DUP _SL-RGN @ IF
+                        DUP _SL-UCTX @
+                        OVER _SL-RGN @
+                        2 PICK _SL-HAS-UIDL @
+                        3 PICK _SL-DESC @
+                        4 PICK _SL-INST @
+                        ASHELL-PAINT-CHILD
+                        DUP _SL-INST @ CINST.REVISION @
+                        OVER _SL-SEEN-REV !
+                        0 OVER _SL-DIRTY !
+                    THEN
                 THEN
             THEN
         THEN
@@ -1036,27 +1359,44 @@ VARIABLE _DDM-EV
     REPEAT
     RGN-ROOT
     _DESK-FULLFRAME @ 0= IF _DESK-DRAW-DIVIDERS THEN
-    _DESK-PAINT-TASKBAR ;
+    _DESK-PAINT-TASKBAR
+    _DESK-AGENT-PROMPT @ ?DUP IF
+        DUP PRM-ACTIVE? IF
+            SCR-H 1- 0 1 SCR-W 4 PICK PRM-SET-BOUNDS
+            WDG-DRAW
+        ELSE DROP THEN
+    THEN ;
 
 \ --- Shutdown ---
-: DESK-SHUTDOWN-CB  ( -- )
+: DESK-SHUTDOWN-CB  ( instance -- )
+    _DESK-USE-STATE
     BEGIN _DESK-HEAD @ ?DUP WHILE
         _SL-ID @ DESK-CLOSE-ID
-    REPEAT ;
+    REPEAT
+    _DESK-INTEROP-FINI ;
 
 \ =====================================================================
 \  §11 — DESK Descriptor & Entry Point
 \ =====================================================================
 
-CREATE DESK-DESC  APP-DESC ALLOT
+: _DESK-FILL-COMP-DESC  ( -- )
+    DESK-COMP-DESC COMP-DESC-INIT
+    S" org.akashic.desk"
+    DESK-COMP-DESC COMP.ID-U ! DESK-COMP-DESC COMP.ID-A !
+    S" 1.0.0"
+    DESK-COMP-DESC COMP.VERSION-U ! DESK-COMP-DESC COMP.VERSION-A !
+    _DESK-STATE-SIZE DESK-COMP-DESC COMP.STATE-SIZE ! ;
 
 : _DESK-FILL-DESC  ( -- )
+    _DESK-FILL-COMP-DESC
     DESK-DESC APP-DESC-INIT
+    DESK-COMP-DESC       DESK-DESC APP.COMP-DESC !
     ['] DESK-INIT-CB     DESK-DESC APP.INIT-XT !
     ['] DESK-EVENT-CB    DESK-DESC APP.EVENT-XT !
     ['] DESK-TICK-CB     DESK-DESC APP.TICK-XT !
     ['] DESK-PAINT-CB    DESK-DESC APP.PAINT-XT !
     ['] DESK-SHUTDOWN-CB DESK-DESC APP.SHUTDOWN-XT !
+    ['] _DESK-USE-STATE  DESK-DESC APP.ACTIVATE-XT !
     0                    DESK-DESC APP.UIDL-A !
     0                    DESK-DESC APP.UIDL-U !
     0                    DESK-DESC APP.WIDTH !

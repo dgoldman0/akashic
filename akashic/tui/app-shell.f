@@ -88,16 +88,25 @@ VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
 : ASHELL-CTX-SAVE  ( uctx -- )
     ?DUP IF UCTX-SAVE THEN ;
 
-\ ASHELL-PAINT-CHILD ( uctx rgn has-uidl desc -- )
+\ ASHELL-PAINT-CHILD ( uctx rgn has-uidl desc instance -- )
 \   The browser's per-child paint primitive.  Context-switches to
 \   uctx, sets the region, calls UTUI-PAINT (if has-uidl), then
 \   calls the app descriptor's paint callback (if any).
-: ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc -- )
-    >R >R                                 ( uctx rgn   R: desc has-uidl )
-    SWAP ASHELL-CTX-SWITCH                ( rgn )
+VARIABLE _ASPC-HAS-UIDL
+VARIABLE _ASPC-DESC
+VARIABLE _ASPC-INST
+
+: ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance -- )
+    _ASPC-INST ! _ASPC-DESC ! _ASPC-HAS-UIDL !
+    SWAP ASHELL-CTX-SWITCH
     ?DUP IF RGN-USE THEN
-    R> IF UTUI-PAINT THEN                 (  R: desc )
-    R> ?DUP IF APP.PAINT-XT @ ?DUP IF EXECUTE THEN THEN ;
+    _ASPC-DESC @ APP.ACTIVATE-XT @ ?DUP IF
+        _ASPC-INST @ SWAP EXECUTE
+    THEN
+    _ASPC-HAS-UIDL @ IF UTUI-PAINT THEN
+    _ASPC-DESC @ APP.PAINT-XT @ ?DUP IF
+        _ASPC-INST @ SWAP EXECUTE
+    THEN ;
 
 \ =====================================================================
 \  §2 — Shell State
@@ -111,6 +120,9 @@ VARIABLE _ASHELL-VFS          \ Shared VFS instance (0 = not yet created)
 
 VARIABLE _ASHELL-DESC         \ Current app descriptor (0 = not running)
 0 _ASHELL-DESC !
+
+VARIABLE _ASHELL-INST         \ Current component instance
+0 _ASHELL-INST !
 
 VARIABLE _ASHELL-RUNNING      \ Event loop active flag
 0 _ASHELL-RUNNING !
@@ -273,6 +285,14 @@ VARIABLE _ALUF-BUF
 \   The currently running app descriptor (0 if not running).
 : ASHELL-DESC  ( -- desc )
     _ASHELL-DESC @ ;
+
+: ASHELL-INSTANCE  ( -- instance )
+    _ASHELL-INST @ ;
+
+: _ASHELL-ACTIVATE  ( -- )
+    _ASHELL-DESC @ ?DUP IF
+        APP.ACTIVATE-XT @ ?DUP IF _ASHELL-INST @ SWAP EXECUTE THEN
+    THEN ;
 
 \ ASHELL-TOAST-VISIBLE? ( -- flag )
 \   True if toast message is currently showing.
@@ -459,9 +479,10 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
         0 _ASHELL-CUR-VIS !
         ASHELL-DIRTY!
     THEN
+    _ASHELL-ACTIVATE
     \ 1. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
-        OVER SWAP EXECUTE            ( ev consumed? )
+        OVER _ASHELL-INST @ ROT EXECUTE  ( ev consumed? )
         IF DROP ASHELL-DIRTY! EXIT THEN
     THEN
     \ 2. UIDL dispatch (shortcuts, focused element)
@@ -475,9 +496,10 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 \   Route a mouse event through the app's handler, then UIDL dispatch.
 \   ev layout: +0=KEY-T-MOUSE, +8=btn, +16=row<<16|col
 : _ASHELL-DISPATCH-MOUSE-IMPL  ( ev -- )
+    _ASHELL-ACTIVATE
     \ 1. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
-        OVER SWAP EXECUTE            ( ev consumed? )
+        OVER _ASHELL-INST @ ROT EXECUTE  ( ev consumed? )
         IF DROP ASHELL-DIRTY! EXIT THEN
     THEN
     \ 2. UIDL mouse dispatch
@@ -519,7 +541,8 @@ VARIABLE _ASHELL-TICK-TMP
         _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK @ -
         _ASHELL-TICK-MS @ >= IF
             _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK !
-            _ASHELL-DESC @ APP.TICK-XT @ EXECUTE
+            _ASHELL-ACTIVATE
+            _ASHELL-INST @ _ASHELL-DESC @ APP.TICK-XT @ EXECUTE
             \ If tick caused any UIDL/widget changes, auto-dirty
             _UTUI-NEEDS-PAINT @ IF
                 0 _UTUI-NEEDS-PAINT !
@@ -550,6 +573,7 @@ VARIABLE _ASHELL-TICK-TMP
     0 _ASHELL-DIRTY !
     \ Restore the cell that the cursor glyph overwrote last frame
     _ASHELL-CUR-RESTORE
+    _ASHELL-ACTIVATE
     RGN-ROOT
     \ UIDL elements first (they own the background/structure)
     _ASHELL-HAS-UIDL @ IF
@@ -557,7 +581,7 @@ VARIABLE _ASHELL-TICK-TMP
     THEN
     \ App's custom widget painting (on top of UIDL)
     _ASHELL-DESC @ APP.PAINT-XT @ ?DUP IF
-        EXECUTE
+        _ASHELL-INST @ SWAP EXECUTE
     THEN
     \ Toast overlay (drawn last, on top of everything)
     ASHELL-TOAST-VISIBLE? IF
@@ -607,7 +631,11 @@ _ASHELL-VFS-INIT
     0<> ;
 
 : _ASHELL-SETUP  ( desc -- )
+    DUP APP-DESC-VALID? 0= ABORT" ashell: invalid app descriptor"
     DUP _ASHELL-DESC !
+    DUP APP.COMP-DESC @ CINST-NEW
+    0<> ABORT" ashell: component instance allocation failed"
+    _ASHELL-INST !
     \ 0. VFS — ensure a shared filesystem is available for applets
     _ASHELL-VFS-INIT
     \ 1. Terminal init
@@ -641,7 +669,10 @@ _ASHELL-VFS-INIT
     -1 _ASHELL-RUNNING !
     MS@ _ASHELL-LAST-TICK !
     \ 6. App init callback
-    DUP APP.INIT-XT @ ?DUP IF EXECUTE THEN
+    _ASHELL-ACTIVATE
+    DUP APP.INIT-XT @ ?DUP IF
+        _ASHELL-INST @ SWAP EXECUTE
+    THEN
     \ 7. Escape sequence timeout
     1 KEY-TIMEOUT!
     \ 8. Initial paint
@@ -656,7 +687,9 @@ _ASHELL-VFS-INIT
 : _ASHELL-TEARDOWN  ( -- )
     \ App shutdown callback
     _ASHELL-DESC @ ?DUP IF
-        APP.SHUTDOWN-XT @ ?DUP IF EXECUTE THEN
+        APP.SHUTDOWN-XT @ ?DUP IF
+            _ASHELL-INST @ SWAP EXECUTE
+        THEN
     THEN
     \ UIDL detach
     _ASHELL-HAS-UIDL @ IF
@@ -675,8 +708,11 @@ _ASHELL-VFS-INIT
     THEN
     \ Terminal teardown
     APP-SHUTDOWN
+    \ Release component state after app shutdown has freed its resources.
+    _ASHELL-INST @ ?DUP IF CINST-FREE THEN
     \ Reset shell state
     0 _ASHELL-DESC !
+    0 _ASHELL-INST !
     0 _ASHELL-RUNNING !
     0 _ASHELL-DIRTY !
     0 _ASHELL-POST-HEAD !
@@ -747,6 +783,7 @@ GUARD _ashell-guard
 ' ASHELL-POST    CONSTANT _ashell-post-xt
 ' ASHELL-UIDL?   CONSTANT _ashell-uidl-xt
 ' ASHELL-DESC    CONSTANT _ashell-desc-xt
+' ASHELL-INSTANCE CONSTANT _ashell-inst-xt
 ' ASHELL-TOAST   CONSTANT _ashell-toast-xt
 ' ASHELL-TOAST-VISIBLE? CONSTANT _ashell-toast-vis-xt
 
@@ -758,6 +795,7 @@ GUARD _ashell-guard
 : ASHELL-POST     _ashell-post-xt     _ashell-guard WITH-GUARD ;
 : ASHELL-UIDL?    _ashell-uidl-xt     _ashell-guard WITH-GUARD ;
 : ASHELL-DESC     _ashell-desc-xt     _ashell-guard WITH-GUARD ;
+: ASHELL-INSTANCE _ashell-inst-xt     _ashell-guard WITH-GUARD ;
 : ASHELL-TOAST    _ashell-toast-xt    _ashell-guard WITH-GUARD ;
 : ASHELL-TOAST-VISIBLE? _ashell-toast-vis-xt _ashell-guard WITH-GUARD ;
 [THEN] [THEN]

@@ -3365,23 +3365,37 @@ _UCTX-INIT-POOLS
 \ --- Public API ---
 
 \ Arena-backed UCTX allocation avoids XMEM bump-allocator
-\ fragmentation for these ~103 KiB blocks.  A free-chain recycles
-\ contexts when sub-apps close.
+\ fragmentation for these ~103 KiB blocks.  Four-context chunks are
+\ added on demand, while a free-chain recycles contexts when apps close.
 
 VARIABLE _UCTX-ARENA
 VARIABLE _UCTX-FREELIST
+VARIABLE _UCTX-ARENA-N
+4 CONSTANT _UCTX-PER-ARENA
+4 CONSTANT _UCTX-MAX-ARENAS
+32 CONSTANT _UCTX-ARENA-DESC-SIZE
+CREATE _UCTX-ARENAS
+    _UCTX-MAX-ARENAS _UCTX-ARENA-DESC-SIZE * ALLOT
+
+: _UCTX-ARENA-NTH  ( index -- arena )
+    _UCTX-ARENA-DESC-SIZE * _UCTX-ARENAS + ;
 
 : _UCTX-ENSURE-ARENA  ( -- flag )   \ 0 = OK, non-zero = fail
-    _UCTX-ARENA @ IF 0 EXIT THEN
-    UCTX-TOTAL 4 * 256 +  A-XMEM ARENA-NEW   ( arena ior )
+    _UCTX-ARENA @ ?DUP IF
+        ARENA-FREE UCTX-TOTAL >= IF 0 EXIT THEN
+    THEN
+    _UCTX-ARENA-N @ _UCTX-MAX-ARENAS >= IF -1 EXIT THEN
+    _UCTX-ARENA-N @ _UCTX-ARENA-NTH
+    DUP UCTX-TOTAL _UCTX-PER-ARENA * 256 + A-XMEM ARENA-NEW-AT
     ?DUP IF NIP EXIT THEN
-    _UCTX-ARENA ! 0 ;
+    _UCTX-ARENA !
+    1 _UCTX-ARENA-N +! 0 ;
 
 : UCTX-ALLOC  ( -- ctx | 0 )
-    _UCTX-ENSURE-ARENA IF 0 EXIT THEN
     _UCTX-FREELIST @ ?DUP IF
         DUP @ _UCTX-FREELIST !  EXIT
     THEN
+    _UCTX-ENSURE-ARENA IF 0 EXIT THEN
     _UCTX-ARENA @ UCTX-TOTAL ARENA-ALLOT ;
 
 : UCTX-FREE  ( ctx -- )

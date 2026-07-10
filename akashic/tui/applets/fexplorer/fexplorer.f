@@ -54,6 +54,11 @@ REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/toml.f
 REQUIRE ../../color.f
+REQUIRE ../../../runtime/state-layout.f
+REQUIRE ../../../interop/capability.f
+REQUIRE ../../../interop/endpoint.f
+REQUIRE ../../../interop/intent.f
+REQUIRE ../../../interop/resource.f
 
 \ =====================================================================
 \  §2 — Constants
@@ -103,37 +108,43 @@ REQUIRE ../../color.f
 \  §4 — Module State
 \ =====================================================================
 
+VARIABLE _FEXP-CURRENT-STATE
+0 _FEXP-CURRENT-STATE !
+VARIABLE _FEXP-CURRENT-INSTANCE
+0 _FEXP-CURRENT-INSTANCE !
+CMP-LAYOUT-BEGIN
+
 \ UIDL element handles (set in INIT-XT via UTUI-BY-ID)
-VARIABLE _FEXP-E-SIDEBAR    \ <region id="sidebar">
-VARIABLE _FEXP-E-DETAIL     \ <region id="detail">
-VARIABLE _FEXP-E-PREVIEW    \ <textarea id="preview">
-VARIABLE _FEXP-E-TABS       \ <tabs id="tabs">
-VARIABLE _FEXP-E-SBAR-L     \ <label id="sbar-left">
-VARIABLE _FEXP-E-SBAR-R     \ <label id="sbar-right">
-VARIABLE _FEXP-E-SBAR       \ <status id="sbar">
-VARIABLE _FEXP-E-MBAR       \ <menubar id="mbar">
-VARIABLE _FEXP-E-SCROLLER   \ <scroll id="scroller">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-SIDEBAR    \ <region id="sidebar">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-DETAIL     \ <region id="detail">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-PREVIEW    \ <textarea id="preview">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-TABS       \ <tabs id="tabs">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-SBAR-L     \ <label id="sbar-left">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-SBAR-R     \ <label id="sbar-right">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-SBAR       \ <status id="sbar">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-MBAR       \ <menubar id="mbar">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-SCROLLER   \ <scroll id="scroller">
 
 \ Widget handles (native widgets mounted on UIDL regions)
-VARIABLE _FEXP-EXPL         \ explorer widget (EXPL-NEW)
-VARIABLE _FEXP-LIST         \ list widget (LST-NEW)
-VARIABLE _FEXP-PROMPT       \ status-row command bar
-VARIABLE _FEXP-PROMPT-RGN   \ caller-owned prompt region
-VARIABLE _FEXP-PROMPT-MODE
-CREATE _FEXP-PROMPT-BUF _FEXP-PROMPT-CAP ALLOT
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-EXPL         \ explorer widget (EXPL-NEW)
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-LIST         \ list widget (LST-NEW)
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-PROMPT       \ status-row command bar
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-PROMPT-RGN   \ caller-owned prompt region
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-PROMPT-MODE
+_FEXP-CURRENT-STATE _FEXP-PROMPT-CAP CMP-FIELD: _FEXP-PROMPT-BUF
 
 \ Business state
-VARIABLE _FEXP-VFS           \ VFS instance
-VARIABLE _FEXP-SORT          \ sort mode (0=name, 1=size, 2=type)
-VARIABLE _FEXP-CUR-DIR       \ inode of currently displayed directory
-VARIABLE _FEXP-SEL-IN        \ active inode from either pane
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-VFS           \ VFS instance
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-SORT          \ sort mode (0=name, 1=size, 2=type)
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CUR-DIR       \ inode of currently displayed directory
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-SEL-IN        \ active inode from either pane
 
 : _FEXP-SELECTED  ( -- inode | 0 )
     _FEXP-SEL-IN @ ;
 
 \ Clipboard
-VARIABLE _FEXP-CLIP-IN       \ clipboard inode
-VARIABLE _FEXP-CLIP-OP       \ clipboard operation (0/1/2)
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CLIP-IN       \ clipboard inode
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CLIP-OP       \ clipboard operation (0/1/2)
 
 \ =====================================================================
 \  §4b — Theme
@@ -142,13 +153,20 @@ VARIABLE _FEXP-CLIP-OP       \ clipboard operation (0/1/2)
 \  dark-navy palette.  _FEXP-LOAD-THEME overrides any slot that
 \  appears in [fexp.theme] of a TOML config.
 
-VARIABLE _FTH-SIDEBAR-FG  VARIABLE _FTH-SIDEBAR-BG
-VARIABLE _FTH-DETAIL-FG   VARIABLE _FTH-DETAIL-BG
-VARIABLE _FTH-PREVIEW-FG  VARIABLE _FTH-PREVIEW-BG
-VARIABLE _FTH-MENU-FG     VARIABLE _FTH-MENU-BG
-VARIABLE _FTH-TABS-FG     VARIABLE _FTH-TABS-BG
-VARIABLE _FTH-STATUS-FG   VARIABLE _FTH-STATUS-BG
-VARIABLE _FTH-SCROLL-FG   VARIABLE _FTH-SCROLL-BG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-SIDEBAR-FG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-SIDEBAR-BG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-DETAIL-FG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-DETAIL-BG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-PREVIEW-FG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-PREVIEW-BG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-MENU-FG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-MENU-BG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-TABS-FG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-TABS-BG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-STATUS-FG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-STATUS-BG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-SCROLL-FG
+_FEXP-CURRENT-STATE CMP-CELL: _FTH-SCROLL-BG
 
 : _FEXP-THEME-DEFAULTS  ( -- )
     251 _FTH-SIDEBAR-FG !    17 _FTH-SIDEBAR-BG !
@@ -158,8 +176,6 @@ VARIABLE _FTH-SCROLL-FG   VARIABLE _FTH-SCROLL-BG
     255 _FTH-TABS-FG    !    60 _FTH-TABS-BG    !
      15 _FTH-STATUS-FG  !    21 _FTH-STATUS-BG  !
      68 _FTH-SCROLL-FG  !   235 _FTH-SCROLL-BG  ! ;
-_FEXP-THEME-DEFAULTS
-
 \ Helper: try to load a colour key from a TOML table into a variable.
 : _FTH-TRY  ( tbl-a tbl-l key-a key-l var -- )
     >R TOML-KEY?
@@ -187,14 +203,14 @@ _FEXP-THEME-DEFAULTS
          S" scroll-bg"    _FTH-SCROLL-BG   _FTH-TRY ;
 
 \ TOML config buffer (kept alive so zero-copy strings remain valid).
-VARIABLE _FEXP-CFG-A  VARIABLE _FEXP-CFG-L
-0 _FEXP-CFG-A !  0 _FEXP-CFG-L !
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CFG-A
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CFG-L
 
 \ Config file buffer (for reading TOML from VFS).
 4096 CONSTANT _FEXP-CFG-CAP
-CREATE _FEXP-CFG-BUF  _FEXP-CFG-CAP ALLOT
+_FEXP-CURRENT-STATE _FEXP-CFG-CAP CMP-FIELD: _FEXP-CFG-BUF
 
-VARIABLE _FEXP-CFG-FD
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CFG-FD
 
 : _FEXP-LOAD-CONFIG  ( -- )
     \ Read fexplorer.toml from VFS
@@ -227,18 +243,24 @@ VARIABLE _FEXP-CFG-FD
 \  §5 — Buffers
 \ =====================================================================
 
-CREATE _FEXP-ITEMS   _FEXP-MAX-DIR 2 * CELLS ALLOT
-CREATE _FEXP-INODES  _FEXP-MAX-DIR CELLS ALLOT
-CREATE _FEXP-LINES   _FEXP-MAX-DIR _FEXP-LINE-W * ALLOT
-VARIABLE _FEXP-CNT
+_FEXP-CURRENT-STATE _FEXP-MAX-DIR 2 * CELLS CMP-FIELD: _FEXP-ITEMS
+_FEXP-CURRENT-STATE _FEXP-MAX-DIR CELLS CMP-FIELD: _FEXP-INODES
+_FEXP-CURRENT-STATE _FEXP-MAX-DIR _FEXP-LINE-W * CMP-FIELD: _FEXP-LINES
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CNT
 
-CREATE _FEXP-PREV-BUF  _FEXP-PREVIEW-CAP ALLOT
-CREATE _FEXP-PATH-BUF  _FEXP-PATH-CAP ALLOT
-VARIABLE _FEXP-PATH-LEN
+_FEXP-CURRENT-STATE _FEXP-PREVIEW-CAP CMP-FIELD: _FEXP-PREV-BUF
+_FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-PATH-BUF
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-PATH-LEN
 
 \ Status bar text scratch
-CREATE _FEXP-SLEFT   128 ALLOT
-VARIABLE _FEXP-SLEFT-L
+_FEXP-CURRENT-STATE 128 CMP-FIELD: _FEXP-SLEFT
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-SLEFT-L
+
+CMP-LAYOUT-SIZE CONSTANT _FEXP-STATE-SIZE
+
+: _FEXP-ACTIVATE  ( instance -- )
+    DUP _FEXP-CURRENT-INSTANCE !
+    CINST-STATE _FEXP-CURRENT-STATE ! ;
 
 \ =====================================================================
 \  §6 — Utility: path builder (thin wrapper around VFS-INODE-PATH)
@@ -527,12 +549,53 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
     _FEXP-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
+VARIABLE _FOP-REQ
+
+: _FEXP-OPEN-COMPLETE  ( request -- )
+    DUP CBR.STATUS @
+    CASE
+        CBUS-S-OK OF ENDOF
+        CBUS-S-NO-HANDLER OF
+            S" No application can open this resource" 2200 ASHELL-TOAST
+        ENDOF
+        CBUS-S-STALE-INSTANCE OF
+            S" The target application closed" 1800 ASHELL-TOAST
+        ENDOF
+        S" Could not open the resource" 1800 ASHELL-TOAST
+    ENDCASE
+    CBR-FREE ;
+
+: _FEXP-POST-OPEN  ( inode -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
+    _FEXP-BUILD-PATH
+    CBR-NEW DUP IF
+        2DROP S" Could not allocate open request" 1800 ASHELL-TOAST EXIT
+    THEN
+    DROP _FOP-REQ !
+    CPRINC-COMPONENT _FOP-REQ @ CBR.PRINCIPAL !
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FOP-REQ @ CBR.ARGS IRES-VFS! IF
+        _FOP-REQ @ CBR-FREE
+        S" Resource path is too large" 1800 ASHELL-TOAST EXIT
+    THEN
+    ['] _FEXP-OPEN-COMPLETE _FOP-REQ @ CBR.COMPLETE-XT !
+    S" resource.open" _FOP-REQ @ _FEXP-CURRENT-INSTANCE @
+    CINST-POST-INTENT
+    DUP CBUS-S-OK <> IF
+        DROP _FOP-REQ @ CBR-FREE
+        S" Open is unavailable outside Desk" 1800 ASHELL-TOAST
+    ELSE DROP THEN ;
+
+: _FEXP-DO-OPEN  ( elem -- )
+    DROP _FEXP-SELECTED _FEXP-POST-OPEN ;
+
 : _FEXP-ON-OPEN  ( inode explorer -- )
     DROP
     DUP 0= IF DROP EXIT THEN
     DUP _FEXP-SEL-IN !
     DUP IN.TYPE @ VFS-T-FILE = IF
-        _FEXP-LOAD-PREVIEW
+        DUP _FEXP-LOAD-PREVIEW
+        _FEXP-POST-OPEN
         _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN
     ELSE
         DUP _FEXP-CUR-DIR !
@@ -806,7 +869,8 @@ VARIABLE _FSUB-MODE
 \  §14 — INIT callback ("document ready")
 \ =====================================================================
 
-: FEXP-INIT-CB  ( -- )
+: FEXP-INIT-CB  ( instance -- )
+    _FEXP-ACTIVATE
     \ Initialize business state
     FEXP-SORT-NAME _FEXP-SORT !
     0 _FEXP-CNT !
@@ -870,6 +934,7 @@ VARIABLE _FSUB-MODE
 
     \ Register all named actions
     S" quit"           ['] _FEXP-DO-QUIT           UTUI-DO!
+    S" open"           ['] _FEXP-DO-OPEN           UTUI-DO!
     S" new-file"       ['] _FEXP-DO-NEW-FILE       UTUI-DO!
     S" new-dir"        ['] _FEXP-DO-NEW-DIR        UTUI-DO!
     S" delete"         ['] _FEXP-DO-DELETE          UTUI-DO!
@@ -910,14 +975,16 @@ VARIABLE _FSUB-MODE
 \ FEXP-EVENT-CB — app-level key handling.
 \ Widget dispatch is now handled by the UIDL engine's _UTUI-H-REGION,
 \ which automatically routes keys to mounted widgets on focused regions.
-: FEXP-EVENT-CB  ( ev -- flag )
+: FEXP-EVENT-CB  ( ev instance -- flag )
+    _FEXP-ACTIVATE
     _FEXP-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN
         DROP
     THEN
     DROP 0 ;
 
-: FEXP-PAINT-CB  ( -- )
+: FEXP-PAINT-CB  ( instance -- )
+    _FEXP-ACTIVATE
     _FEXP-PROMPT @ ?DUP 0= IF EXIT THEN
     DUP PRM-ACTIVE? 0= IF DROP EXIT THEN
     DROP
@@ -930,7 +997,8 @@ VARIABLE _FSUB-MODE
 \  §16 — SHUTDOWN callback
 \ =====================================================================
 
-: FEXP-SHUTDOWN-CB  ( -- )
+: FEXP-SHUTDOWN-CB  ( instance -- )
+    _FEXP-ACTIVATE
     \ Detach widgets from UIDL elements before freeing
     _FEXP-E-SIDEBAR @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
     _FEXP-E-DETAIL @  ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
@@ -952,13 +1020,132 @@ VARIABLE _FSUB-MODE
 \  §17 — Entry Point & Standalone Runner
 \ =====================================================================
 
+CREATE _FEXP-RESOURCE-SCHEMA CS-SIZE ALLOT
+CREATE _FEXP-OPTIONAL-RESOURCE-SCHEMA CS-SIZE ALLOT
+2 CONSTANT _FEXP-CAP-COUNT
+CREATE FEXP-CAPS _FEXP-CAP-COUNT CAP-DESC * ALLOT
+: FEXP-CAP-REVEAL    ( -- cap ) FEXP-CAPS ;
+: FEXP-CAP-SELECTED  ( -- cap ) FEXP-CAPS CAP-DESC + ;
+
+CREATE FEXP-INTENTS CINT-DESC-SIZE ALLOT
+
+VARIABLE _FRV-IN
+VARIABLE _FRV-DIR
+
+: _FEXP-REVEAL-PATH  ( path-a path-u -- ior )
+    _FEXP-VFS @ VFS-RESOLVE DUP 0= IF DROP -1 EXIT THEN
+    DUP _FRV-IN !
+    DUP IN.TYPE @ VFS-T-DIR = IF DUP ELSE IN.PARENT @ THEN
+    DUP 0= IF DROP -1 EXIT THEN _FRV-DIR !
+    _FRV-DIR @ _FEXP-CUR-DIR !
+    _FRV-IN @ _FEXP-SEL-IN !
+    _FRV-DIR @ _FEXP-POPULATE-DIR
+    _FEXP-SORT-LIST
+    _FEXP-LIST @ ?DUP IF
+        _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
+        _FEXP-CNT @ 0 ?DO
+            I CELLS _FEXP-INODES + @ _FRV-IN @ = IF
+                I _FEXP-LIST @ LST-SELECT
+                I _FEXP-LIST @ LST-SCROLL-TO
+                LEAVE
+            THEN
+        LOOP
+    THEN
+    _FRV-IN @ IN.TYPE @ VFS-T-FILE = IF _FRV-IN @ _FEXP-LOAD-PREVIEW THEN
+    _FEXP-UPDATE-STATUS ASHELL-DIRTY!
+    0 ;
+
+VARIABLE _FRH-A
+VARIABLE _FRH-U
+
+: _FEXP-CAP-REVEAL-HANDLER  ( request instance -- status )
+    _FEXP-ACTIVATE
+    DUP CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    IRES-VFS-PATH 0= IF 2DROP DROP CBUS-S-INVALID EXIT THEN
+    _FRH-U ! _FRH-A !
+    _FRH-A @ _FRH-U @ _FEXP-REVEAL-PATH IF
+        DROP CBUS-S-NOT-FOUND EXIT
+    THEN
+    DUP CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    ROT CBR.RESULT CV-RESOURCE! IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+
+: _FEXP-CAP-SELECTED-HANDLER  ( request instance -- status )
+    _FEXP-ACTIVATE
+    _FEXP-SELECTED DUP 0= IF
+        DROP DUP CBR.RESULT CV-NULL! DROP CBUS-S-OK EXIT
+    THEN
+    _FEXP-BUILD-PATH
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ ROT CBR.RESULT IRES-VFS!
+    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+
+: _FEXP-CAP-SETUP  ( -- )
+    _FEXP-RESOURCE-SCHEMA CS-INIT
+    CV-T-RESOURCE _FEXP-RESOURCE-SCHEMA CS-ALLOW!
+    516 _FEXP-RESOURCE-SCHEMA CS-MAX-LEN!
+    _FEXP-OPTIONAL-RESOURCE-SCHEMA CS-INIT
+    CV-T-NULL CS-TYPE-BIT CV-T-RESOURCE CS-TYPE-BIT OR
+    _FEXP-OPTIONAL-RESOURCE-SCHEMA CS-ALLOW-MASK!
+    516 _FEXP-OPTIONAL-RESOURCE-SCHEMA CS-MAX-LEN!
+
+    FEXP-CAP-REVEAL CAP-DESC-INIT
+    CAP-K-COMMAND FEXP-CAP-REVEAL CAP.KIND !
+    S" fexplorer.resource.reveal"
+    FEXP-CAP-REVEAL CAP.ID-U ! FEXP-CAP-REVEAL CAP.ID-A !
+    S" Reveal resource"
+    FEXP-CAP-REVEAL CAP.TITLE-U ! FEXP-CAP-REVEAL CAP.TITLE-A !
+    S" Navigate to and select a VFS resource"
+    FEXP-CAP-REVEAL CAP.DESC-U ! FEXP-CAP-REVEAL CAP.DESC-A !
+    _FEXP-RESOURCE-SCHEMA FEXP-CAP-REVEAL CAP.IN-SCHEMA !
+    _FEXP-RESOURCE-SCHEMA FEXP-CAP-REVEAL CAP.OUT-SCHEMA !
+    CAP-E-NAVIGATE FEXP-CAP-REVEAL CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR FEXP-CAP-REVEAL CAP.FLAGS !
+    ['] _FEXP-CAP-REVEAL-HANDLER FEXP-CAP-REVEAL CAP.HANDLER-XT !
+
+    FEXP-CAP-SELECTED CAP-DESC-INIT
+    CAP-K-RESOURCE FEXP-CAP-SELECTED CAP.KIND !
+    S" fexplorer.resource.selected"
+    FEXP-CAP-SELECTED CAP.ID-U ! FEXP-CAP-SELECTED CAP.ID-A !
+    S" Selected resource"
+    FEXP-CAP-SELECTED CAP.TITLE-U ! FEXP-CAP-SELECTED CAP.TITLE-A !
+    S" Read the selected VFS resource"
+    FEXP-CAP-SELECTED CAP.DESC-U ! FEXP-CAP-SELECTED CAP.DESC-A !
+    _FEXP-OPTIONAL-RESOURCE-SCHEMA FEXP-CAP-SELECTED CAP.OUT-SCHEMA !
+    CAP-E-OBSERVE FEXP-CAP-SELECTED CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR CAP-F-CONTEXT-DEFAULT OR
+    FEXP-CAP-SELECTED CAP.FLAGS !
+    ['] _FEXP-CAP-SELECTED-HANDLER FEXP-CAP-SELECTED CAP.HANDLER-XT !
+
+    FEXP-INTENTS CINT-DESC-INIT
+    S" resource.reveal"
+    FEXP-INTENTS CINTD.ID-U ! FEXP-INTENTS CINTD.ID-A !
+    FEXP-CAP-REVEAL FEXP-INTENTS CINTD.CAP !
+    100 FEXP-INTENTS CINTD.PRIORITY ! ;
+
+CREATE FEXP-COMP-DESC COMP-DESC ALLOT
+
+: _FEXP-COMP-SETUP  ( -- )
+    _FEXP-CAP-SETUP
+    FEXP-COMP-DESC COMP-DESC-INIT
+    S" org.akashic.fexplorer"
+    FEXP-COMP-DESC COMP.ID-U ! FEXP-COMP-DESC COMP.ID-A !
+    S" 1.0.0"
+    FEXP-COMP-DESC COMP.VERSION-U ! FEXP-COMP-DESC COMP.VERSION-A !
+    _FEXP-STATE-SIZE FEXP-COMP-DESC COMP.STATE-SIZE !
+    FEXP-CAPS FEXP-COMP-DESC COMP.CAPS-A !
+    _FEXP-CAP-COUNT FEXP-COMP-DESC COMP.CAPS-N !
+    FEXP-INTENTS FEXP-COMP-DESC COMP.INTENTS-A !
+    1 FEXP-COMP-DESC COMP.INTENTS-N ! ;
+
 : FEXP-ENTRY  ( desc -- )
+    _FEXP-COMP-SETUP
     DUP APP-DESC-INIT
+    FEXP-COMP-DESC      OVER APP.COMP-DESC !
     ['] FEXP-INIT-CB     OVER APP.INIT-XT !
     ['] FEXP-EVENT-CB    OVER APP.EVENT-XT !
     0                    OVER APP.TICK-XT !
     ['] FEXP-PAINT-CB    OVER APP.PAINT-XT !
     ['] FEXP-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
+    ['] _FEXP-ACTIVATE   OVER APP.ACTIVATE-XT !
     \ S" pushes two values — switch to R-stack for desc
     S" tui/applets/fexplorer/fexplorer.uidl"
                          ROT DUP >R

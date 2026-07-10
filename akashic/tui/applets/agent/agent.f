@@ -1,0 +1,345 @@
+\ =====================================================================
+\  agent.f - Conversation, streaming, tools, and approval applet
+\ =====================================================================
+
+PROVIDED akashic-tui-agent
+
+REQUIRE ../../widgets/prompt.f
+REQUIRE ../../app-desc.f
+REQUIRE ../../app-shell.f
+REQUIRE ../../uidl-tui.f
+REQUIRE ../../draw.f
+REQUIRE ../../region.f
+REQUIRE ../../keys.f
+REQUIRE ../../widget.f
+REQUIRE ../../../runtime/state-layout.f
+REQUIRE ../../../interop/endpoint.f
+REQUIRE ../../../agent/runtime.f
+REQUIRE ../../../agent/providers/offline.f
+
+OFFLINE-PROVIDER-USE-DEFAULT
+
+512 CONSTANT _AG-PROMPT-CAP
+
+VARIABLE _AG-CURRENT-STATE
+0 _AG-CURRENT-STATE !
+VARIABLE _AG-CURRENT-INSTANCE
+0 _AG-CURRENT-INSTANCE !
+CMP-LAYOUT-BEGIN
+
+_AG-CURRENT-STATE CMP-CELL: _AG-RUNTIME
+_AG-CURRENT-STATE CMP-CELL: _AG-PROVIDER
+_AG-CURRENT-STATE CMP-CELL: _AG-OWNS-RUNTIME
+_AG-CURRENT-STATE CMP-CELL: _AG-E-BODY
+_AG-CURRENT-STATE CMP-CELL: _AG-E-SBAR
+_AG-CURRENT-STATE CMP-CELL: _AG-E-PROVIDER
+_AG-CURRENT-STATE CMP-CELL: _AG-E-STATE
+_AG-CURRENT-STATE 40 CMP-FIELD: _AG-PANEL
+_AG-CURRENT-STATE CMP-CELL: _AG-PANEL-RGN
+_AG-CURRENT-STATE CMP-CELL: _AG-PROMPT
+_AG-CURRENT-STATE CMP-CELL: _AG-PROMPT-RGN
+_AG-CURRENT-STATE _AG-PROMPT-CAP CMP-FIELD: _AG-PROMPT-BUF
+_AG-CURRENT-STATE CMP-CELL: _AG-LAST-REVISION
+_AG-CURRENT-STATE CMP-CELL: _AG-SCROLL
+
+CMP-LAYOUT-SIZE CONSTANT _AG-STATE-SIZE
+
+: _AG-ACTIVATE  ( instance -- )
+    DUP _AG-CURRENT-INSTANCE !
+    CINST-STATE _AG-CURRENT-STATE ! ;
+
+: _AG-NONNEG  ( n -- n' )
+    DUP 0< IF DROP 0 THEN ;
+
+: _AG-STATUS-TEXT  ( status -- addr len )
+    CASE
+        ARUN-S-IDLE OF S" Ready" ENDOF
+        ARUN-S-RUNNING OF S" Streaming" ENDOF
+        ARUN-S-APPROVAL OF S" Review required" ENDOF
+        ARUN-S-OFFLINE OF S" Offline" ENDOF
+        ARUN-S-ERROR OF S" Error" ENDOF
+        ARUN-S-CANCELLED OF S" Cancelled" ENDOF
+        DROP S" Unknown"
+    ENDCASE ;
+
+: _AG-UPDATE-STATUS  ( -- )
+    _AG-E-PROVIDER @ ?DUP IF
+        S" text" _AG-RUNTIME @ ARUNTIME.PROVIDER @
+        DUP APROV.ID-A @ SWAP APROV.ID-U @ UTUI-SET-ATTR
+    THEN
+    _AG-E-STATE @ ?DUP IF
+        S" text" _AG-RUNTIME @ ARUNTIME.STATUS @ _AG-STATUS-TEXT
+        UTUI-SET-ATTR
+    THEN ;
+
+: _AG-INVALIDATE  ( -- )
+    _AG-PANEL WDG-DIRTY
+    _AG-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
+    _AG-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _AG-UPDATE-STATUS
+    ASHELL-DIRTY! ;
+
+: _AG-SHOW-PROMPT  ( -- )
+    _AG-PROMPT @ 0= IF EXIT THEN
+    S" Ask:" 0 0 _AG-PROMPT @ PRM-SHOW
+    ASHELL-DIRTY! ;
+
+: _AG-PROMPT-SUBMIT  ( prompt -- )
+    PRM-GET-TEXT _AG-RUNTIME @ ARUNTIME-SEND
+    DUP IF
+        DROP S" Agent is busy" 1600 ASHELL-TOAST
+    ELSE DROP THEN
+    _AG-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+    0 _AG-SCROLL ! _AG-INVALIDATE ;
+
+: _AG-PROMPT-CANCEL  ( prompt -- )
+    DROP _AG-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+    _AG-INVALIDATE ;
+
+: _AG-ROLE-TEXT  ( role -- addr len )
+    CASE
+        AROLE-USER OF S" YOU" ENDOF
+        AROLE-ASSISTANT OF S" AGENT" ENDOF
+        AROLE-TOOL OF S" TOOL" ENDOF
+        AROLE-SYSTEM OF S" SYSTEM" ENDOF
+        DROP S" MESSAGE"
+    ENDCASE ;
+
+: _AG-ROLE-STYLE  ( role -- )
+    CASE
+        AROLE-USER OF 81 234 1 DRW-STYLE! ENDOF
+        AROLE-ASSISTANT OF 42 234 1 DRW-STYLE! ENDOF
+        AROLE-TOOL OF 220 234 1 DRW-STYLE! ENDOF
+        AROLE-SYSTEM OF 244 234 1 DRW-STYLE! ENDOF
+        253 234 0 DRW-STYLE!
+    ENDCASE ;
+
+VARIABLE _AGD-W
+VARIABLE _AGD-H
+VARIABLE _AGD-COUNT
+VARIABLE _AGD-MAX
+VARIABLE _AGD-START
+VARIABLE _AGD-END
+VARIABLE _AGD-I
+VARIABLE _AGD-ROW
+VARIABLE _AGD-MSG
+VARIABLE _AGD-TEXT-W
+
+: _AG-PANEL-DRAW  ( widget -- )
+    DUP WDG-REGION RGN-W _AGD-W !
+    WDG-REGION RGN-H _AGD-H !
+    253 234 0 DRW-STYLE!
+    32 0 0 _AGD-H @ _AGD-W @ DRW-FILL-RECT
+    _AG-RUNTIME @ 0= IF
+        203 234 1 DRW-STYLE!
+        S" Agent runtime unavailable" 1 2 DRW-TEXT
+        DRW-STYLE-RESET EXIT
+    THEN
+    _AG-RUNTIME @ ARUNTIME.CONVERSATION @ ACONV.COUNT @ _AGD-COUNT !
+    _AGD-H @ 2 / 1 MAX _AGD-MAX !
+    _AGD-COUNT @ _AGD-MAX @ - _AG-SCROLL @ - _AG-NONNEG _AGD-START !
+    _AGD-START @ _AGD-MAX @ + _AGD-COUNT @ MIN _AGD-END !
+    _AGD-W @ 4 - 1 MAX _AGD-TEXT-W !
+    _AGD-START @ _AGD-I ! 0 _AGD-ROW !
+    BEGIN
+        _AGD-I @ _AGD-END @ < _AGD-ROW @ 1+ _AGD-H @ < AND
+    WHILE
+        _AGD-I @ _AG-RUNTIME @ ARUNTIME.CONVERSATION @ ACONV-NTH
+        DUP _AGD-MSG ! AMSG.ROLE @ DUP _AG-ROLE-STYLE _AG-ROLE-TEXT
+        _AGD-ROW @ 1 DRW-TEXT
+        _AGD-MSG @ AMSG.STATE @ AMSG-S-STREAMING = IF
+            244 234 0 DRW-STYLE! S" ..." _AGD-ROW @ 8 DRW-TEXT
+        ELSE _AGD-MSG @ AMSG.STATE @ AMSG-S-APPROVAL = IF
+            220 234 1 DRW-STYLE! S" REVIEW" _AGD-ROW @ 8 DRW-TEXT
+        THEN THEN
+        253 234 0 DRW-STYLE!
+        _AGD-MSG @ AMSG-TEXT
+        DUP _AGD-TEXT-W @ > IF DROP _AGD-TEXT-W @ THEN
+        _AGD-ROW @ 1+ 2 DRW-TEXT
+        1 _AGD-I +! 2 _AGD-ROW +!
+    REPEAT
+    _AGD-COUNT @ 0= IF
+        244 234 0 DRW-STYLE!
+        S" Start a conversation" 1 2 DRW-TEXT
+    THEN
+    DRW-STYLE-RESET ;
+
+VARIABLE _AGH-WIDGET
+
+: _AG-PANEL-HANDLE  ( event widget -- consumed? )
+    _AGH-WIDGET !
+    DUP @ KEY-T-SPECIAL = IF
+        8 + @ CASE
+            KEY-ENTER OF _AG-SHOW-PROMPT -1 EXIT ENDOF
+            KEY-UP OF 1 _AG-SCROLL +! _AG-INVALIDATE -1 EXIT ENDOF
+            KEY-DOWN OF _AG-SCROLL @ 1- _AG-NONNEG _AG-SCROLL ! _AG-INVALIDATE -1 EXIT ENDOF
+            KEY-PGUP OF 5 _AG-SCROLL +! _AG-INVALIDATE -1 EXIT ENDOF
+            KEY-PGDN OF _AG-SCROLL @ 5 - _AG-NONNEG _AG-SCROLL ! _AG-INVALIDATE -1 EXIT ENDOF
+            KEY-ESC OF _AG-RUNTIME @ ARUNTIME-CANCEL DROP _AG-INVALIDATE -1 EXIT ENDOF
+        ENDCASE
+        0 EXIT
+    THEN
+    DROP 0 ;
+
+: _AG-PANEL-INIT  ( region -- )
+    DUP _AG-PANEL-RGN !
+    _AG-PANEL
+    41 OVER !
+    SWAP OVER 8 + !
+    ['] _AG-PANEL-DRAW OVER 16 + !
+    ['] _AG-PANEL-HANDLE OVER 24 + !
+    WDG-F-VISIBLE WDG-F-DIRTY OR SWAP 32 + ! ;
+
+: _AG-DO-PROMPT  ( elem -- ) DROP _AG-SHOW-PROMPT ;
+: _AG-DO-CANCEL  ( elem -- ) DROP _AG-RUNTIME @ ARUNTIME-CANCEL DROP _AG-INVALIDATE ;
+VARIABLE _AG-REVIEW-APPROVED
+
+: _AG-RESOLVE-REVIEW  ( approved -- )
+    _AG-REVIEW-APPROVED !
+    _AG-RUNTIME @ ARUNTIME-RESOLVE IF
+        _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @ ?DUP IF
+            ATOOLG.STATE @ CASE
+                ATOOLG-S-IDLE OF S" Review rejected: gateway idle" ENDOF
+                ATOOLG-S-QUEUED OF S" Review rejected: gateway queued" ENDOF
+                ATOOLG-S-APPROVAL OF S" Review resolution failed" ENDOF
+                ATOOLG-S-COMPLETE OF S" Review rejected: gateway complete" ENDOF
+                S" Review state is invalid"
+            ENDCASE
+        ELSE
+            S" No review request is pending"
+        THEN
+        1800 ASHELL-TOAST
+    ELSE
+        _AG-REVIEW-APPROVED @ IF
+            S" Request approved" 1000 ASHELL-TOAST
+        ELSE
+            S" Request denied" 1000 ASHELL-TOAST
+        THEN
+    THEN
+    _AG-INVALIDATE ;
+
+: _AG-DO-APPROVE ( elem -- ) DROP -1 _AG-RESOLVE-REVIEW ;
+: _AG-DO-DENY    ( elem -- ) DROP 0 _AG-RESOLVE-REVIEW ;
+: _AG-DO-CLEAR   ( elem -- ) DROP _AG-RUNTIME @ ARUNTIME-CLEAR DROP 0 _AG-SCROLL ! _AG-INVALIDATE ;
+: _AG-DO-RECONNECT ( elem -- ) DROP _AG-RUNTIME @ ARUNTIME-RECONNECT DROP _AG-INVALIDATE ;
+: _AG-DO-QUIT    ( elem -- ) DROP ASHELL-QUIT ;
+: _AG-DO-ABOUT   ( elem -- ) DROP S" Agent - provider-neutral conversations and app tools" 2500 ASHELL-TOAST ;
+
+: AGENT-INIT-CB  ( instance -- )
+    _AG-ACTIVATE
+    0 _AG-OWNS-RUNTIME !
+    0 _AG-SCROLL ! 0 _AG-LAST-REVISION !
+    S" org.akashic.agent.runtime" _AG-CURRENT-INSTANCE @ CINST-SERVICE
+    DUP _AG-RUNTIME !
+    0= IF
+        APROV-NEW 0<> ABORT" agent: provider allocation failed"
+        DUP _AG-PROVIDER !
+        ARUNTIME-NEW 0<> ABORT" agent: runtime allocation failed"
+        _AG-RUNTIME ! -1 _AG-OWNS-RUNTIME !
+    THEN
+    S" agent-body" UTUI-BY-ID _AG-E-BODY !
+    S" sbar" UTUI-BY-ID _AG-E-SBAR !
+    S" provider" UTUI-BY-ID _AG-E-PROVIDER !
+    S" state" UTUI-BY-ID _AG-E-STATE !
+
+    _AG-E-SBAR @ ?DUP IF
+        UTUI-ELEM-RGN RGN-NEW DUP _AG-PROMPT-RGN !
+        _AG-PROMPT-BUF _AG-PROMPT-CAP PRM-NEW DUP _AG-PROMPT !
+        ['] _AG-PROMPT-SUBMIT OVER PRM-ON-SUBMIT
+        ['] _AG-PROMPT-CANCEL OVER PRM-ON-CANCEL
+        15 24 ROT PRM-COLORS!
+    THEN
+    _AG-E-BODY @ ?DUP IF
+        UTUI-ELEM-RGN RGN-NEW _AG-PANEL-INIT
+        _AG-PANEL _AG-E-BODY @ UTUI-WIDGET-SET
+    THEN
+    S" prompt" ['] _AG-DO-PROMPT UTUI-DO!
+    S" cancel" ['] _AG-DO-CANCEL UTUI-DO!
+    S" approve" ['] _AG-DO-APPROVE UTUI-DO!
+    S" deny" ['] _AG-DO-DENY UTUI-DO!
+    S" clear" ['] _AG-DO-CLEAR UTUI-DO!
+    S" reconnect" ['] _AG-DO-RECONNECT UTUI-DO!
+    S" quit" ['] _AG-DO-QUIT UTUI-DO!
+    S" about" ['] _AG-DO-ABOUT UTUI-DO!
+    _AG-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+    _AG-RUNTIME @ ARUNTIME.REVISION @ _AG-LAST-REVISION !
+    _AG-INVALIDATE ;
+
+: AGENT-EVENT-CB  ( event instance -- consumed? )
+    _AG-ACTIVATE
+    DUP @ KEY-T-SPECIAL = IF
+        DUP KEY-CODE@ CASE
+            KEY-F6 OF DROP -1 _AG-RESOLVE-REVIEW -1 EXIT ENDOF
+            KEY-F7 OF DROP 0 _AG-RESOLVE-REVIEW -1 EXIT ENDOF
+        ENDCASE
+    THEN
+    _AG-PROMPT @ ?DUP IF
+        DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
+    THEN
+    DUP @ KEY-T-CHAR = IF
+        DUP KEY-HAS-CTRL? IF
+            DUP KEY-CODE@ [CHAR] l = IF
+                DROP _AG-SHOW-PROMPT -1 EXIT
+            THEN
+        THEN
+    THEN
+    _UTUI-MENU-OPEN @ IF DROP 0 EXIT THEN
+    _AG-PANEL WDG-HANDLE ;
+
+: AGENT-TICK-CB  ( instance -- )
+    _AG-ACTIVATE
+    _AG-OWNS-RUNTIME @ IF 8 _AG-RUNTIME @ ARUNTIME-PUMP DROP THEN
+    _AG-RUNTIME @ ARUNTIME.REVISION @ _AG-LAST-REVISION @ <> IF
+        _AG-RUNTIME @ ARUNTIME.REVISION @ _AG-LAST-REVISION !
+        0 _AG-SCROLL ! _AG-INVALIDATE
+    THEN ;
+
+: AGENT-PAINT-CB  ( instance -- )
+    _AG-ACTIVATE
+    _AG-PROMPT @ ?DUP 0= IF EXIT THEN
+    DUP PRM-ACTIVE? 0= IF DROP EXIT THEN DROP
+    _AG-E-SBAR @ ?DUP IF UTUI-ELEM-RGN _AG-PROMPT @ PRM-SET-BOUNDS THEN
+    _AG-PROMPT @ WDG-DRAW ;
+
+: AGENT-SHUTDOWN-CB  ( instance -- )
+    _AG-ACTIVATE
+    _AG-E-BODY @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
+    _AG-PROMPT @ ?DUP IF PRM-FREE THEN
+    _AG-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
+    _AG-PANEL-RGN @ ?DUP IF RGN-FREE THEN
+    _AG-OWNS-RUNTIME @ IF
+        _AG-RUNTIME @ ARUNTIME-FREE
+        _AG-PROVIDER @ APROV-FREE
+    THEN
+    0 _AG-RUNTIME ! 0 _AG-PROVIDER ! 0 _AG-PROMPT ! ;
+
+CREATE AGENT-COMP-DESC COMP-DESC ALLOT
+
+: _AGENT-COMP-SETUP  ( -- )
+    AGENT-COMP-DESC COMP-DESC-INIT
+    S" org.akashic.agent"
+    AGENT-COMP-DESC COMP.ID-U ! AGENT-COMP-DESC COMP.ID-A !
+    S" 1.0.0"
+    AGENT-COMP-DESC COMP.VERSION-U ! AGENT-COMP-DESC COMP.VERSION-A !
+    _AG-STATE-SIZE AGENT-COMP-DESC COMP.STATE-SIZE ! ;
+
+: AGENT-ENTRY  ( app-desc -- )
+    _AGENT-COMP-SETUP
+    DUP APP-DESC-INIT
+    AGENT-COMP-DESC OVER APP.COMP-DESC !
+    ['] AGENT-INIT-CB OVER APP.INIT-XT !
+    ['] AGENT-EVENT-CB OVER APP.EVENT-XT !
+    ['] AGENT-TICK-CB OVER APP.TICK-XT !
+    ['] AGENT-PAINT-CB OVER APP.PAINT-XT !
+    ['] AGENT-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
+    ['] _AG-ACTIVATE OVER APP.ACTIVATE-XT !
+    S" tui/applets/agent/agent.uidl"
+    ROT DUP >R APP.UIDL-FILE-U ! R@ APP.UIDL-FILE-A !
+    0 R@ APP.WIDTH ! 0 R@ APP.HEIGHT !
+    S" Agent" R@ APP.TITLE-U ! R> APP.TITLE-A ! ;
+
+CREATE AGENT-DESC APP-DESC ALLOT
+
+: AGENT-RUN  ( -- )
+    AGENT-DESC AGENT-ENTRY
+    AGENT-DESC ASHELL-RUN ;

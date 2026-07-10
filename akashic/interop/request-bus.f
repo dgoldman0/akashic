@@ -1,0 +1,290 @@
+\ =====================================================================
+\  request-bus.f - Bounded interoperable requests and owner dispatch
+\ =====================================================================
+
+PROVIDED akashic-interop-request-bus
+
+REQUIRE ../runtime/registry.f
+REQUIRE policy.f
+
+0  CONSTANT CBUS-S-OK
+1  CONSTANT CBUS-S-INVALID
+2  CONSTANT CBUS-S-NOT-FOUND
+3  CONSTANT CBUS-S-STALE-INSTANCE
+4  CONSTANT CBUS-S-STALE-REVISION
+5  CONSTANT CBUS-S-DENIED
+6  CONSTANT CBUS-S-NEEDS-APPROVAL
+7  CONSTANT CBUS-S-BUSY
+8  CONSTANT CBUS-S-TIMEOUT
+9  CONSTANT CBUS-S-CANCELLED
+10 CONSTANT CBUS-S-FAILED
+11 CONSTANT CBUS-S-NO-HANDLER
+
+1 CONSTANT CBR-F-APPROVED
+2 CONSTANT CBR-F-CANCELLED
+
+\ Request structure, 30 cells / 240 bytes.  Caller and target are stable
+\ runtime handles, never raw instance pointers.
+  0 CONSTANT _CBR-ID
+  8 CONSTANT _CBR-TRACE
+ 16 CONSTANT _CBR-PRINCIPAL
+ 24 CONSTANT _CBR-CALLER-ID
+ 32 CONSTANT _CBR-CALLER-GEN
+ 40 CONSTANT _CBR-TARGET-ID
+ 48 CONSTANT _CBR-TARGET-GEN
+ 56 CONSTANT _CBR-CAP
+ 64 CONSTANT _CBR-DEADLINE
+ 72 CONSTANT _CBR-EXPECT-REV
+ 80 CONSTANT _CBR-FLAGS
+ 88 CONSTANT _CBR-STATUS
+ 96 CONSTANT _CBR-COMPLETE-XT       \ ( request -- )
+104 CONSTANT _CBR-COMPLETE-DATA
+112 CONSTANT _CBR-ARGS              \ inline CV-SIZE
+152 CONSTANT _CBR-RESULT            \ inline CV-SIZE
+192 CONSTANT _CBR-ERROR-A
+200 CONSTANT _CBR-ERROR-U
+208 CONSTANT _CBR-ACTUAL-REV
+216 CONSTANT _CBR-START-MS
+224 CONSTANT _CBR-END-MS
+232 CONSTANT _CBR-RESERVED
+240 CONSTANT CBR-SIZE
+
+: CBR.ID             ( req -- a ) _CBR-ID + ;
+: CBR.TRACE          ( req -- a ) _CBR-TRACE + ;
+: CBR.PRINCIPAL      ( req -- a ) _CBR-PRINCIPAL + ;
+: CBR.CALLER-ID      ( req -- a ) _CBR-CALLER-ID + ;
+: CBR.CALLER-GEN     ( req -- a ) _CBR-CALLER-GEN + ;
+: CBR.TARGET-ID      ( req -- a ) _CBR-TARGET-ID + ;
+: CBR.TARGET-GEN     ( req -- a ) _CBR-TARGET-GEN + ;
+: CBR.CAP            ( req -- a ) _CBR-CAP + ;
+: CBR.DEADLINE       ( req -- a ) _CBR-DEADLINE + ;
+: CBR.EXPECT-REV     ( req -- a ) _CBR-EXPECT-REV + ;
+: CBR.FLAGS          ( req -- a ) _CBR-FLAGS + ;
+: CBR.STATUS         ( req -- a ) _CBR-STATUS + ;
+: CBR.COMPLETE-XT    ( req -- a ) _CBR-COMPLETE-XT + ;
+: CBR.COMPLETE-DATA  ( req -- a ) _CBR-COMPLETE-DATA + ;
+: CBR.ARGS           ( req -- value ) _CBR-ARGS + ;
+: CBR.RESULT         ( req -- value ) _CBR-RESULT + ;
+: CBR.ERROR-A        ( req -- a ) _CBR-ERROR-A + ;
+: CBR.ERROR-U        ( req -- a ) _CBR-ERROR-U + ;
+: CBR.ACTUAL-REV     ( req -- a ) _CBR-ACTUAL-REV + ;
+: CBR.START-MS       ( req -- a ) _CBR-START-MS + ;
+: CBR.END-MS         ( req -- a ) _CBR-END-MS + ;
+: CBR.ERROR-CODE     ( req -- a ) _CBR-RESERVED + ;
+
+: CBR-ERROR-CLEAR  ( request -- )
+    DUP 0 SWAP CBR.ERROR-A !
+    DUP 0 SWAP CBR.ERROR-U !
+    0 SWAP CBR.ERROR-CODE ! ;
+
+: CBR-ERROR!  ( addr len code request -- )
+    >R
+    R@ CBR.ERROR-CODE !
+    R@ CBR.ERROR-U !
+    R> CBR.ERROR-A ! ;
+
+: CBR-NEW  ( -- req ior )
+    CBR-SIZE ALLOCATE
+    DUP IF EXIT THEN
+    DROP DUP CBR-SIZE 0 FILL 0 ;
+
+: CBR-FREE  ( req -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP CBR.ARGS CV-FREE
+    DUP CBR.RESULT CV-FREE
+    FREE ;
+
+32 CONSTANT CBUS-CAPACITY
+
+\ Bus descriptor + inline pointer ring.
+  0 CONSTANT _CBUS-HEAD
+  8 CONSTANT _CBUS-TAIL
+ 16 CONSTANT _CBUS-COUNT
+ 24 CONSTANT _CBUS-NEXT-ID
+ 32 CONSTANT _CBUS-REGISTRY
+ 40 CONSTANT _CBUS-POLICY
+ 48 CONSTANT _CBUS-DROPPED
+ 56 CONSTANT _CBUS-RESERVED
+ 64 CONSTANT _CBUS-RING
+_CBUS-RING CBUS-CAPACITY 8 * + CONSTANT CBUS-SIZE
+
+: CBUS.HEAD      ( bus -- a ) _CBUS-HEAD + ;
+: CBUS.TAIL      ( bus -- a ) _CBUS-TAIL + ;
+: CBUS.COUNT     ( bus -- a ) _CBUS-COUNT + ;
+: CBUS.NEXT-ID   ( bus -- a ) _CBUS-NEXT-ID + ;
+: CBUS.REGISTRY  ( bus -- a ) _CBUS-REGISTRY + ;
+: CBUS.POLICY    ( bus -- a ) _CBUS-POLICY + ;
+: CBUS.DROPPED   ( bus -- a ) _CBUS-DROPPED + ;
+: CBUS.RING      ( bus -- a ) _CBUS-RING + ;
+
+: CBUS-NEW  ( registry policy -- bus ior )
+    >R >R
+    CBUS-SIZE ALLOCATE
+    DUP IF R> DROP R> DROP EXIT THEN
+    DROP DUP CBUS-SIZE 0 FILL
+    1 OVER CBUS.NEXT-ID !
+    R> OVER CBUS.REGISTRY !
+    R> OVER CBUS.POLICY !
+    0 ;
+
+: CBUS-FREE  ( bus -- ) ?DUP IF FREE THEN ;
+
+: CBUS-POST  ( request bus -- status )
+    >R
+    R@ CBUS.COUNT @ CBUS-CAPACITY >= IF
+        1 R@ CBUS.DROPPED +!
+        DROP R> DROP CBUS-S-BUSY EXIT
+    THEN
+    DUP CBR.ID @ 0= IF
+        R@ CBUS.NEXT-ID @ OVER CBR.ID !
+        1 R@ CBUS.NEXT-ID +!
+    THEN
+    R@ CBUS.HEAD @ 8 * R@ CBUS.RING + !
+    R@ CBUS.HEAD @ 1+ CBUS-CAPACITY MOD R@ CBUS.HEAD !
+    1 R@ CBUS.COUNT +!
+    R> DROP CBUS-S-OK ;
+
+: _CBUS-POP  ( bus -- request | 0 )
+    DUP CBUS.COUNT @ 0= IF DROP 0 EXIT THEN
+    DUP >R
+    R@ CBUS.TAIL @ 8 * R@ CBUS.RING + DUP @ SWAP 0 SWAP !
+    R@ CBUS.TAIL @ 1+ CBUS-CAPACITY MOD R@ CBUS.TAIL !
+    -1 R> CBUS.COUNT +!
+    NIP ;
+
+VARIABLE _CBD-REQ
+VARIABLE _CBD-INST
+VARIABLE _CBD-CAP
+VARIABLE _CBD-BUS
+VARIABLE _CBD-STATUS
+
+VARIABLE _CBC-CAP
+VARIABLE _CBC-INST
+VARIABLE _CBC-DESC
+
+: _CBUS-CAP-BELONGS?  ( cap inst -- flag )
+    _CBC-INST ! _CBC-CAP !
+    _CBC-INST @ CINST-DESC DUP _CBC-DESC !
+    COMP.CAPS-N @ 0= IF 0 EXIT THEN
+    _CBC-CAP @ _CBC-DESC @ COMP.CAPS-A @ >=
+    _CBC-CAP @ _CBC-DESC @ COMP.CAPS-A @
+    _CBC-DESC @ COMP.CAPS-N @ CAP-DESC * + < AND
+    _CBC-CAP @ _CBC-DESC @ COMP.CAPS-A @ - CAP-DESC MOD 0= AND ;
+
+: _CBUS-CALL-HANDLER  ( -- )
+    _CBD-REQ @ _CBD-INST @ _CBD-CAP @ CAP.HANDLER-XT @ EXECUTE
+    _CBD-STATUS ! ;
+
+: _CBUS-COMPLETE  ( status -- )
+    _CBD-REQ @ CBR.STATUS !
+    MS@ _CBD-REQ @ CBR.END-MS !
+    _CBD-REQ @ CBR.COMPLETE-XT @ ?DUP IF
+        _CBD-REQ @ SWAP EXECUTE
+    THEN ;
+
+: CBUS-DISPATCH  ( request bus -- status )
+    _CBD-BUS ! DUP _CBD-REQ !
+    DUP CBR-ERROR-CLEAR
+    MS@ OVER CBR.START-MS !
+    DUP CBR.FLAGS @ CBR-F-CANCELLED AND IF
+        DROP CBUS-S-CANCELLED DUP _CBUS-COMPLETE EXIT
+    THEN
+    DUP CBR.DEADLINE @ ?DUP IF
+        MS@ SWAP > IF
+            DROP CBUS-S-TIMEOUT DUP _CBUS-COMPLETE EXIT
+        THEN
+    THEN
+    DUP CBR.TARGET-ID @ OVER CBR.TARGET-GEN @
+    _CBD-BUS @ CBUS.REGISTRY @ CREG-INST-FIND DUP 0= IF
+        DROP DROP CBUS-S-STALE-INSTANCE DUP _CBUS-COMPLETE EXIT
+    THEN
+    _CBD-INST !
+    DUP CBR.CAP @ DUP 0= IF
+        2DROP CBUS-S-NOT-FOUND DUP _CBUS-COMPLETE EXIT
+    THEN
+    _CBD-CAP !
+    _CBD-CAP @ _CBD-INST @ _CBUS-CAP-BELONGS? 0= IF
+        DROP CBUS-S-NO-HANDLER DUP _CBUS-COMPLETE EXIT
+    THEN
+    DUP CBR.EXPECT-REV @ ?DUP IF
+        _CBD-INST @ CINST.REVISION @ <> IF
+            DROP CBUS-S-STALE-REVISION DUP _CBUS-COMPLETE EXIT
+        THEN
+    THEN
+    DUP CBR.ARGS _CBD-CAP @ CAP.IN-SCHEMA @ ?DUP IF
+        CS-VALIDATE ?DUP IF
+            DROP CBUS-S-INVALID DUP _CBUS-COMPLETE EXIT
+        THEN
+    ELSE DROP THEN
+    DUP CBR.FLAGS @ CBR-F-APPROVED AND 0= IF
+        DUP CBR.PRINCIPAL @ _CBD-CAP @ CAP.EFFECTS @
+        _CBD-BUS @ CBUS.POLICY @ CPOLICY-DECIDE
+        DUP CPOL-DENY = IF
+            2DROP CBUS-S-DENIED DUP _CBUS-COMPLETE EXIT
+        THEN
+        CPOL-APPROVAL = IF
+            DROP CBUS-S-NEEDS-APPROVAL DUP _CBUS-COMPLETE EXIT
+        THEN
+    THEN
+    DROP
+    _CBD-CAP @ CAP.HANDLER-XT @ 0= IF
+        CBUS-S-NOT-FOUND DUP _CBUS-COMPLETE EXIT
+    THEN
+    CBUS-S-FAILED _CBD-STATUS !
+    ['] _CBUS-CALL-HANDLER CATCH ?DUP IF
+        S" Capability handler threw" ROT _CBD-REQ @ CBR-ERROR!
+        CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
+    THEN
+    _CBD-STATUS @ DUP CBUS-S-OK = IF
+        _CBD-REQ @ CBR.RESULT _CBD-CAP @ CAP.OUT-SCHEMA @ ?DUP IF
+            CS-VALIDATE ?DUP IF
+                _CBD-REQ @ CBR.RESULT CV-TYPE@ CV-T-INT = IF
+                    S" Capability output schema rejected an integer result"
+                ELSE
+                    S" Capability returned the wrong value type"
+                THEN
+                ROT _CBD-REQ @ CBR-ERROR!
+                DROP CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
+            THEN
+        ELSE DROP THEN
+        _CBD-CAP @ CAP.EFFECTS @
+        CAP-E-MUTATE CAP-E-PERSIST OR CAP-E-DESTRUCTIVE OR AND IF
+            _CBD-INST @ CINST-TOUCH
+        THEN
+        _CBD-INST @ CINST.REVISION @ _CBD-REQ @ CBR.ACTUAL-REV !
+    THEN
+    DUP _CBUS-COMPLETE ;
+
+VARIABLE _CBP-BUS
+VARIABLE _CBP-N
+
+: CBUS-PUMP  ( max bus -- count )
+    _CBP-BUS ! 0 _CBP-N !
+    0 ?DO
+        _CBP-BUS @ _CBUS-POP ?DUP 0= IF LEAVE THEN
+        _CBP-BUS @ CBUS-DISPATCH DROP
+        1 _CBP-N +!
+    LOOP
+    _CBP-N @ ;
+
+VARIABLE _CBCA-BUS
+VARIABLE _CBCA-N
+
+: CBUS-CANCEL-ALL  ( bus -- count )
+    _CBCA-BUS ! 0 _CBCA-N !
+    BEGIN
+        _CBCA-BUS @ _CBUS-POP ?DUP
+    WHILE
+        DUP _CBD-REQ !
+        _CBCA-BUS @ _CBD-BUS !
+        CBUS-S-CANCELLED _CBUS-COMPLETE
+        1 _CBCA-N +!
+    REPEAT
+    _CBCA-N @ ;
+
+: CBR-APPROVE  ( request -- )
+    DUP CBR.FLAGS DUP @ CBR-F-APPROVED OR SWAP !
+    0 SWAP CBR.STATUS ! ;
+
+: CBR-CANCEL  ( request -- )
+    CBR.FLAGS DUP @ CBR-F-CANCELLED OR SWAP ! ;

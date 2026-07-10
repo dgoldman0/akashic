@@ -4,6 +4,9 @@
 <item text=Save do=save key=Ctrl+S/>
 <item text=Reload do=reload key=Ctrl+R/>
 <separator/>
+<item text=Edit_Source_in_Pad do=edit-source/>
+<item text=Reveal_Source_in_Files do=reveal-source/>
+<separator/>
 <item text=Quit do=quit key=Ctrl+Q/>
 </menu>
 <menu label=Entry>

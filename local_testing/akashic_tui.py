@@ -25,6 +25,8 @@ SOURCE_ROOT = AKASHIC_ROOT / "akashic"
 DEFAULT_MEGAPAD_ROOT = AKASHIC_ROOT.parent / "megapad"
 OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
 REQUIRE_RE = re.compile(r"^\s*REQUIRE\s+(\S+)", re.MULTILINE)
+PROVIDED_RE = re.compile(r"^\s*PROVIDED\s+(\S+)", re.MULTILINE)
+MODULE_KEY_BYTES = 24
 
 
 def _megapad_root() -> Path:
@@ -66,6 +68,308 @@ class Profile:
 
 
 PROFILES = {
+    "agent": Profile(
+        roots=(
+            "agent/event.f",
+            "agent/provider.f",
+            "agent/conversation.f",
+            "agent/runtime.f",
+            "agent/providers/offline.f",
+            "agent/providers/testing/scripted.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - provider-neutral agent runtime
+ENTER-USERLAND
+." [akashic] loading agent runtime" CR
+REQUIRE agent/providers/offline.f
+REQUIRE agent/providers/testing/scripted.f
+REQUIRE agent/runtime.f
+SCRIPTED-PROVIDER-USE
+
+VARIABLE _at-fails
+VARIABLE _at-check
+: _at-assert  ( flag -- )
+    1 _at-check +!
+    0= IF 1 _at-fails +! ." ASSERT " _at-check @ . CR THEN ;
+
+VARIABLE _at-provider
+VARIABLE _at-runtime
+VARIABLE _at-offline-provider
+VARIABLE _at-offline-runtime
+VARIABLE _at-conv
+VARIABLE _at-registry
+VARIABLE _at-instance
+VARIABLE _at-bus
+VARIABLE _at-gateway
+VARIABLE _at-tool-value
+VARIABLE _at-stack-depth
+
+CREATE _at-component COMP-DESC ALLOT
+CREATE _at-capability CAP-DESC ALLOT
+CREATE _at-policy CPOLICY-SIZE ALLOT
+
+: _at-tool-handler  ( request instance -- status )
+    DROP
+    DUP CBR.ARGS CV-LEN@ _at-tool-value !
+    1 OVER CBR.RESULT CV-INT!
+    DROP CBUS-S-OK ;
+
+: _at-tool-setup  ( -- )
+    _at-component COMP-DESC-INIT
+    S" org.akashic.test.agent-tools"
+    _at-component COMP.ID-U ! _at-component COMP.ID-A !
+    S" 1.0.0"
+    _at-component COMP.VERSION-U ! _at-component COMP.VERSION-A !
+    8 _at-component COMP.STATE-SIZE !
+    _at-capability CAP-DESC-INIT
+    CAP-K-COMMAND _at-capability CAP.KIND !
+    S" daybook.task.capture"
+    _at-capability CAP.ID-U ! _at-capability CAP.ID-A !
+    CAP-E-MUTATE CAP-E-PERSIST OR _at-capability CAP.EFFECTS !
+    ['] _at-tool-handler _at-capability CAP.HANDLER-XT !
+    _at-capability _at-component COMP.CAPS-A !
+    1 _at-component COMP.CAPS-N !
+    _at-policy CPOLICY-INIT ;
+
+: _at-pump  ( count -- )
+    0 ?DO 8 _at-runtime @ ARUNTIME-PUMP DROP LOOP ;
+
+: _at-stack-clean  ( -- )
+    DEPTH DUP _at-stack-depth @ <> IF
+        ." STACK DEPTH " _at-stack-depth @ . ." -> " DUP . CR
+    THEN
+    _at-stack-depth @ = _at-assert ;
+
+: _at-run  ( -- )
+    0 _at-fails ! 0 _at-check !
+    DEPTH _at-stack-depth !
+    OFFLINE-PROVIDER-NEW DUP 0= _at-assert DROP _at-offline-provider !
+    _at-offline-provider @ ARUNTIME-NEW
+    DUP 0= _at-assert DROP _at-offline-runtime !
+    _at-offline-runtime @ ARUNTIME.STATUS @ ARUN-S-OFFLINE = _at-assert
+    _at-offline-runtime @ ARUNTIME-FREE
+    _at-offline-provider @ APROV-FREE
+    _at-stack-clean
+    APROV-NEW DUP 0= _at-assert DROP _at-provider !
+    _at-provider @ DUP APROV.ID-A @ SWAP APROV.ID-U @
+    S" org.akashic.agent.testing.scripted" STR-STR= _at-assert
+    _at-provider @ ARUNTIME-NEW DUP 0= _at-assert DROP _at-runtime !
+    _at-stack-clean
+    2 _at-pump
+    _at-stack-clean
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _at-assert
+    S" hello runtime" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-stack-clean
+    6 _at-pump
+    _at-stack-clean
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _at-assert
+    _at-runtime @ ARUNTIME.CONVERSATION @ DUP _at-conv !
+    ACONV.COUNT @ 2 = _at-assert
+    1 _at-conv @ ACONV-NTH AMSG-TEXT
+    S" hello runtime" STR-STR-CONTAINS _at-assert
+    _at-stack-clean
+
+    S" request approval" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    4 _at-pump
+    _at-stack-clean
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _at-assert
+    -1 _at-runtime @ ARUNTIME-RESOLVE 0= _at-assert
+    2 _at-pump
+    _at-stack-clean
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _at-assert
+
+    _at-tool-setup
+    _at-stack-clean
+    CREG-NEW DUP 0= _at-assert DROP _at-registry !
+    _at-component _at-registry @ CREG-TYPE+ 0= _at-assert
+    _at-component CINST-NEW DUP 0= _at-assert DROP _at-instance !
+    _at-instance @ _at-registry @ CREG-INST+ 0= _at-assert
+    _at-registry @ _at-policy CBUS-NEW
+    DUP 0= _at-assert DROP _at-bus !
+    _at-registry @ _at-bus @ _at-instance @ ATOOLG-NEW
+    DUP 0= _at-assert DROP _at-gateway !
+    _at-gateway @ _at-runtime @ ARUNTIME-TOOL-GATEWAY!
+    _at-gateway @ _at-provider @ APROV-BIND-TOOLS 0= _at-assert
+    _at-stack-clean
+
+    S" task gateway test" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    4 0 DO 1 _at-pump _at-stack-clean LOOP
+    _at-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _at-assert
+    _at-stack-clean
+    8 _at-bus @ CBUS-PUMP 1 = _at-assert
+    _at-stack-clean
+    1 _at-pump
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _at-assert
+    _at-stack-clean
+    -1 _at-runtime @ ARUNTIME-RESOLVE 0= _at-assert
+    _at-stack-clean
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _at-assert
+    _at-tool-value @ 17 = _at-assert
+    _at-runtime @ ARUNTIME.CONVERSATION @ DUP _at-conv !
+    ACONV.COUNT @ 0> _at-assert
+    _at-conv @ ACONV.COUNT @ 1- _at-conv @ ACONV-NTH AMSG-TEXT
+    S" Daybook task captured." STR-STR-CONTAINS _at-assert
+
+    S" cancel this" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-runtime @ ARUNTIME-CANCEL 0= _at-assert
+    2 _at-pump
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _at-assert
+
+    _at-runtime @ ARUNTIME-FREE
+    _at-provider @ APROV-FREE
+    _at-gateway @ ATOOLG-FREE
+    _at-bus @ CBUS-FREE
+    _at-instance @ _at-registry @ CREG-INST- DROP
+    _at-registry @ CREG-FREE
+    _at-instance @ CINST-FREE
+    _at-fails @ 0= IF
+        ." AGENT RUNTIME PASS"
+    ELSE
+        ." AGENT RUNTIME FAIL " _at-fails @ .
+    THEN CR ;
+
+_at-run
+""",
+        ready_markers=("AGENT RUNTIME PASS",),
+        stable_markers=("AGENT RUNTIME PASS",),
+    ),
+    "interop": Profile(
+        roots=(
+            "runtime/state-layout.f",
+            "runtime/instance.f",
+            "runtime/registry.f",
+            "interop/value.f",
+            "interop/schema.f",
+            "interop/capability.f",
+            "interop/policy.f",
+            "interop/request-bus.f",
+            "interop/intent.f",
+            "interop/job.f",
+            "interop/endpoint.f",
+            "interop/resource.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - runtime and interoperability contracts
+ENTER-USERLAND
+." [akashic] loading runtime and interop contracts" CR
+REQUIRE runtime/state-layout.f
+REQUIRE runtime/instance.f
+REQUIRE runtime/registry.f
+REQUIRE interop/value.f
+REQUIRE interop/schema.f
+REQUIRE interop/capability.f
+REQUIRE interop/policy.f
+REQUIRE interop/request-bus.f
+REQUIRE interop/intent.f
+REQUIRE interop/job.f
+REQUIRE interop/endpoint.f
+REQUIRE interop/resource.f
+
+VARIABLE _ct-fails
+VARIABLE _ct-check
+: _ct-assert  ( flag -- )
+    1 _ct-check +!
+    0= IF 1 _ct-fails +! ." ASSERT " _ct-check @ . CR THEN ;
+
+VARIABLE _ct-cur
+CMP-LAYOUT-BEGIN
+_ct-cur CMP-CELL: _ct-value
+_ct-cur 24 CMP-FIELD: _ct-buffer
+CMP-LAYOUT-SIZE CONSTANT _ct-state-size
+
+CREATE _ct-comp COMP-DESC ALLOT
+: _ct-comp-setup  ( -- )
+    _ct-comp COMP-DESC-INIT
+    S" org.akashic.test.runtime"
+    _ct-comp COMP.ID-U ! _ct-comp COMP.ID-A !
+    S" 1.0.0" _ct-comp COMP.VERSION-U ! _ct-comp COMP.VERSION-A !
+    _ct-state-size _ct-comp COMP.STATE-SIZE ! ;
+
+VARIABLE _ct-i1
+VARIABLE _ct-i2
+VARIABLE _ct-reg
+VARIABLE _ct-bus
+VARIABLE _ct-req
+VARIABLE _ct-router
+
+: _ct-handler  ( request instance -- status )
+    DUP CINST-STATE _ct-cur ! DROP
+    DUP CBR.ARGS CV-DATA@ _ct-value !
+    DROP CBUS-S-OK ;
+
+CREATE _ct-cap CAP-DESC ALLOT
+CREATE _ct-intent CINT-DESC-SIZE ALLOT
+: _ct-cap-setup  ( -- )
+    _ct-cap CAP-DESC-INIT
+    CAP-K-COMMAND _ct-cap CAP.KIND !
+    S" org.akashic.test/set"
+    _ct-cap CAP.ID-U ! _ct-cap CAP.ID-A !
+    CAP-E-OBSERVE _ct-cap CAP.EFFECTS !
+    ['] _ct-handler _ct-cap CAP.HANDLER-XT ! ;
+
+: _ct-intent-setup  ( -- )
+    _ct-intent CINT-DESC-INIT
+    S" resource.test"
+    _ct-intent CINTD.ID-U ! _ct-intent CINTD.ID-A !
+    _ct-cap _ct-intent CINTD.CAP !
+    10 _ct-intent CINTD.PRIORITY !
+    _ct-intent _ct-comp COMP.INTENTS-A !
+    1 _ct-comp COMP.INTENTS-N ! ;
+
+: _ct-run  ( -- )
+    0 _ct-fails ! 0 _ct-check !
+    _ct-comp-setup _ct-cap-setup _ct-intent-setup
+    _ct-cap _ct-comp COMP.CAPS-A !
+    1 _ct-comp COMP.CAPS-N !
+    _ct-state-size 32 = _ct-assert
+    _ct-comp COMP-DESC-VALID? _ct-assert
+    _ct-comp CINST-NEW DUP 0= _ct-assert DROP _ct-i1 !
+    _ct-comp CINST-NEW DUP 0= _ct-assert DROP _ct-i2 !
+    _ct-i1 @ CINST-STATE _ct-cur ! 11 _ct-value !
+    _ct-i2 @ CINST-STATE _ct-cur ! 22 _ct-value !
+    _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 11 = _ct-assert
+    _ct-i2 @ CINST-STATE _ct-cur ! _ct-value @ 22 = _ct-assert
+    CREG-NEW DUP 0= _ct-assert DROP _ct-reg !
+    _ct-comp _ct-reg @ CREG-TYPE+ 0= _ct-assert
+    _ct-i1 @ _ct-reg @ CREG-INST+ 0= _ct-assert
+    _ct-i2 @ _ct-reg @ CREG-INST+ 0= _ct-assert
+    _ct-i1 @ CINST.ID @ _ct-i1 @ CINST.GENERATION @ _ct-reg @
+    CREG-INST-FIND _ct-i1 @ = _ct-assert
+    CINT-NEW DUP 0= _ct-assert DROP _ct-router !
+    _ct-comp _ct-router @ CINT-REGISTER-COMP 0= _ct-assert
+    S" resource.test" _ct-router @ CINT-RESOLVE
+    DUP 0<> _ct-assert CIE.CAP @ _ct-cap = _ct-assert
+    _ct-reg @ 0 CBUS-NEW DUP 0= _ct-assert DROP _ct-bus !
+    CBR-NEW DUP 0= _ct-assert DROP _ct-req !
+    CPRINC-AGENT _ct-req @ CBR.PRINCIPAL !
+    _ct-i2 @ _ct-req @ CBR-CALLER!
+    _ct-i1 @ _ct-req @ CBR-TARGET!
+    _ct-cap _ct-req @ CBR.CAP !
+    77 _ct-req @ CBR.ARGS CV-INT!
+    _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
+    1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
+    _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 77 = _ct-assert
+    _ct-req @ CBR.STATUS @ CBUS-S-OK = _ct-assert
+    _ct-i1 @ CINST.REVISION @ 1 = _ct-assert
+    _ct-req @ CBR-FREE
+    _ct-bus @ CBUS-FREE
+    _ct-router @ CINT-FREE
+    _ct-i1 @ _ct-reg @ CREG-INST- 0= _ct-assert
+    _ct-i1 @ CINST.ID @ _ct-i1 @ CINST.GENERATION @ _ct-reg @
+    CREG-INST-FIND 0= _ct-assert
+    _ct-reg @ CREG-FREE
+    _ct-i1 @ CINST-FREE _ct-i2 @ CINST-FREE
+    _ct-fails @ 0= IF
+        ." RUNTIME INTEROP PASS"
+    ELSE
+        ." RUNTIME INTEROP FAIL " _ct-fails @ .
+    THEN CR ;
+
+_ct-run
+""",
+        ready_markers=("RUNTIME INTEROP PASS",),
+        stable_markers=("RUNTIME INTEROP PASS",),
+    ),
     "desktop": Profile(
         roots=(
             "tui/applets/desk/desk.f",
@@ -73,6 +377,8 @@ PROFILES = {
             "tui/applets/fexplorer/fexplorer.f",
             "tui/applets/daybook/daybook.f",
             "tui/applets/grid/grid.f",
+            "tui/applets/agent/agent.f",
+            "agent/providers/testing/scripted.f",
         ),
         resources=(
             "tui/applets/desk/desk.toml",
@@ -82,6 +388,7 @@ PROFILES = {
             "tui/applets/fexplorer/fexplorer.toml",
             "tui/applets/daybook/daybook.uidl",
             "tui/applets/grid/grid.uidl",
+            "tui/applets/agent/agent.uidl",
         ),
         autoexec=r"""\ autoexec.f - Akashic desktop profile
 ENTER-USERLAND
@@ -91,6 +398,9 @@ REQUIRE tui/applets/pad/pad.f
 REQUIRE tui/applets/fexplorer/fexplorer.f
 REQUIRE tui/applets/daybook/daybook.f
 REQUIRE tui/applets/grid/grid.f
+REQUIRE tui/applets/agent/agent.f
+REQUIRE agent/providers/testing/scripted.f
+SCRIPTED-PROVIDER-USE
 
 CREATE _boot-pad-desc APP-DESC ALLOT
 _boot-pad-desc PAD-ENTRY
@@ -108,8 +418,15 @@ CREATE _boot-grid-desc APP-DESC ALLOT
 _boot-grid-desc GRID-ENTRY
 _boot-grid-desc DESK-QUEUE-LAUNCH
 
+CREATE _boot-agent-desc APP-DESC ALLOT
+_boot-agent-desc AGENT-ENTRY
+_boot-agent-desc DESK-QUEUE-LAUNCH
+
 ." [akashic] starting desktop" CR
-DESK-RUN
+: _boot-run-desktop  ( -- ) DESK-RUN ;
+' _boot-run-desktop CATCH ?DUP IF
+    ." [akashic] desktop exception " . CR
+THEN
 ." [akashic] desktop exited" CR
 """,
         ready_markers=(
@@ -120,6 +437,7 @@ DESK-RUN
             "Entry",
             "Data",
             "Grid",
+            "Agent",
         ),
         stable_markers=(
             "Selection",
@@ -129,7 +447,28 @@ DESK-RUN
             "Entry",
             "Data",
             "Grid",
+            "Agent",
         ),
+    ),
+    "agent-ui": Profile(
+        roots=(
+            "tui/applets/agent/agent.f",
+            "agent/providers/testing/scripted.f",
+        ),
+        resources=("tui/applets/agent/agent.uidl",),
+        autoexec=r"""\ autoexec.f - standalone Agent applet profile
+ENTER-USERLAND
+." [akashic] loading Agent applet" CR
+REQUIRE agent/providers/testing/scripted.f
+REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/agent.f
+SCRIPTED-PROVIDER-USE
+." [akashic] starting Agent applet" CR
+AGENT-RUN
+." [akashic] Agent applet exited" CR
+""",
+        ready_markers=("Agent", "Run", "Review", "Ready"),
+        stable_markers=("Agent", "Run", "Review", "Ready"),
     ),
     "pad": Profile(
         roots=("tui/applets/pad/pad.f",),
@@ -195,7 +534,9 @@ GRID-RUN
     ),
 }
 
-
+# Same production-shaped image as desktop, with a focused agent/interop
+# journey instead of the full applet regression tour.
+PROFILES["desktop-agent"] = PROFILES["desktop"]
 LARGE_SAMPLE = b"".join(
     f"Large fixture line {line:03d}: Pad crosses MP64FS sector boundaries.\n".encode()
     for line in range(1, 49)
@@ -285,6 +626,28 @@ def _validate_image_paths(paths: set[str], directories: list[str]):
             )
 
 
+def _validate_module_ids(modules: tuple[str, ...]):
+    """Reject PROVIDED names that alias in KDOS's bounded module table."""
+    keys: dict[bytes, tuple[str, str]] = {}
+    for module in modules:
+        text = (SOURCE_ROOT / module).read_text(encoding="utf-8")
+        match = PROVIDED_RE.search(text)
+        if not match:
+            continue
+        module_id = match.group(1)
+        key = module_id.encode("utf-8")[:MODULE_KEY_BYTES].ljust(
+            MODULE_KEY_BYTES, b"\0"
+        )
+        previous = keys.get(key)
+        if previous and previous != (module, module_id):
+            other_module, other_id = previous
+            raise RuntimeError(
+                "KDOS PROVIDED key collision: "
+                f"{other_id!r} ({other_module}) and {module_id!r} ({module})"
+            )
+        keys[key] = (module, module_id)
+
+
 def default_image_path(profile: str) -> Path:
     return OUTPUT_ROOT / f"akashic-{profile}.img"
 
@@ -295,6 +658,7 @@ def build_image(profile_name: str, output: Path | None = None) -> Path:
     resources = set(profile.resources)
     paths = set(modules) | resources
     directories = _directories(paths)
+    _validate_module_ids(modules)
     _validate_image_paths(paths, directories)
 
     target = (output or default_image_path(profile_name)).resolve()
@@ -421,19 +785,30 @@ def smoke(
             if remaining <= 0 or time.monotonic() >= deadline:
                 journey_errors.append(f"{failure} (journey budget exhausted)")
                 return False
-            report = session.wait_for_text(
-                marker,
-                scope="screen",
-                max_steps=remaining,
-                wall_timeout_s=min(
-                    wall_timeout, max(0.05, deadline - time.monotonic())
-                ),
-            )
-            total_steps += report.steps
+            local_deadline = min(deadline, time.monotonic() + wall_timeout)
+            while remaining > 0 and time.monotonic() < local_deadline:
+                screen = session.snapshot()
+                if marker in screen.text():
+                    return True
+                chunk = min(50_000_000, remaining)
+                report = session.run(
+                    max_steps=chunk,
+                    wall_timeout_s=min(
+                        1.0, max(0.05, local_deadline - time.monotonic())
+                    ),
+                    advance_idle=True,
+                )
+                total_steps += report.steps
+                remaining -= report.steps
+                if report.reason == "halted":
+                    break
+                if report.steps == 0:
+                    time.sleep(0.005)
             screen = session.snapshot()
-            if not report.matched:
-                journey_errors.append(failure)
-            return report.matched
+            if marker in screen.text():
+                return True
+            journey_errors.append(failure)
+            return False
 
         def wait_screen_gone(
             marker: str,
@@ -455,16 +830,146 @@ def smoke(
                     wall_timeout_s=min(
                         0.75, max(0.05, local_deadline - time.monotonic())
                     ),
+                    advance_idle=True,
                 )
                 total_steps += report.steps
                 remaining -= report.steps
-                if report.reason in ("halted", "idle", "stalled"):
+                if report.reason == "halted":
                     break
+                if report.steps == 0:
+                    time.sleep(0.005)
             screen = session.snapshot()
             if marker not in screen.text():
                 return True
             journey_errors.append(failure)
             return False
+
+        def wait_screen_any(
+            markers: tuple[str, ...],
+            failure: str,
+            *,
+            step_budget: int = 250_000_000,
+            wall_timeout: float = 8.0,
+        ) -> str | None:
+            nonlocal total_steps, screen
+            remaining = min(step_budget, max_steps - total_steps)
+            local_deadline = min(deadline, time.monotonic() + wall_timeout)
+            while remaining > 0 and time.monotonic() < local_deadline:
+                screen = session.snapshot()
+                text = screen.text()
+                for marker in markers:
+                    if marker in text:
+                        return marker
+                chunk = min(50_000_000, remaining)
+                report = session.run(
+                    max_steps=chunk,
+                    wall_timeout_s=min(
+                        1.0, max(0.05, local_deadline - time.monotonic())
+                    ),
+                    advance_idle=True,
+                )
+                total_steps += report.steps
+                remaining -= report.steps
+                if report.reason == "halted":
+                    break
+                if report.steps == 0:
+                    time.sleep(0.005)
+            screen = session.snapshot()
+            text = screen.text()
+            for marker in markers:
+                if marker in text:
+                    return marker
+            journey_errors.append(failure)
+            return None
+
+        def run_desk_agent_journey() -> None:
+            session.send_key("alt+5")
+            focused = wait_screen(
+                "[5:Agent*]", "Desk did not focus Agent before composing"
+            )
+            if focused:
+                session.send_key("ctrl+l")
+            if focused and wait_screen(
+                "Ask:", "Agent applet did not open its shared composer"
+            ):
+                session.send_text("task smoke")
+                session.send_key("enter")
+                if wait_screen(
+                    "Review required",
+                    "persistent app tool did not pause for approval",
+                    step_budget=1_200_000_000,
+                    wall_timeout=30.0,
+                ):
+                    wait_screen(
+                        "daybook.task.capture",
+                        "approval view did not identify the exact capability",
+                    )
+                    session.send_key("alt+5")
+                    wait_screen(
+                        "[5:Agent*]", "Desk did not keep Agent focused for review"
+                    )
+                    session.send_key("f6")
+                    resolved = wait_screen(
+                        "Request approved",
+                        "F6 did not approve the app tool review request",
+                        step_budget=800_000_000,
+                        wall_timeout=20.0,
+                    )
+                    outcome = None
+                    if resolved:
+                        outcome = wait_screen_any(
+                            (
+                                "Daybook task captured.",
+                                "Daybook persistence failed",
+                                "Capability handler threw",
+                                "Capability output schema rejected",
+                                "Capability returned the wrong value type",
+                            ),
+                            "approved capability did not return a tool result",
+                            step_budget=2_000_000_000,
+                            wall_timeout=60.0,
+                        )
+                    if outcome == "Daybook task captured.":
+                        live_fs = MP64FS(
+                            bytearray(session.system.storage._image_data)
+                        )
+                        try:
+                            daybook = live_fs.read_file("daybook.md")
+                        except FileNotFoundError:
+                            daybook = b""
+                        if b"task smoke" not in daybook:
+                            journey_errors.append(
+                                "approved Daybook capability did not persist its task"
+                            )
+                    elif outcome:
+                        journey_errors.append(
+                            f"approved Daybook capability failed: {outcome}"
+                        )
+                        return
+
+            session.send_key("alt+2")
+            session.send_key("ctrl+space")
+            if wait_screen(
+                "Ask:",
+                "Desk's global Agent composer did not open over File Explorer",
+            ):
+                session.send_text("desk hi")
+                session.send_key("enter")
+                if wait_screen_gone(
+                    "Ask:", "Desk's global Agent composer did not close"
+                ):
+                    wait_screen(
+                        "desk hi",
+                        "Desk's global prompt did not reach the shared conversation",
+                        step_budget=900_000_000,
+                        wall_timeout=20.0,
+                    )
+                    wait_screen(
+                        "Ready", "Desk's shared agent runtime did not finish"
+                    )
+
+        if initial_ready and profile_name == "desktop-agent":
+            run_desk_agent_journey()
 
         if initial_ready and profile_name in ("desktop", "pad"):
             if profile_name == "desktop":
@@ -490,14 +995,46 @@ def smoke(
                     session.send_key("ctrl+y")
                     if wait_screen("smoke", "Ctrl+Y did not redo Pad input"):
                         session.send_key("tab")
-                        if wait_screen(
-                            "Ln 1, Col 9",
-                            "Pad Tab did not advance to a four-column stop",
+                        report = session.run(
+                            max_steps=min(150_000_000, max_steps - total_steps),
+                            wall_timeout_s=min(
+                                4.0, max(0.05, deadline - time.monotonic())
+                            ),
+                        )
+                        total_steps += report.steps
+                        screen = session.snapshot()
+                        tab_hits = [
+                            (row, col)
+                            for row, col in screen.find("smoke")
+                            if row >= 3
+                        ]
+                        if not tab_hits or not (
+                            screen.cells[tab_hits[0][0]][tab_hits[0][1] + 8].attrs
+                            & 32
                         ):
-                            session.send_key("ctrl+z")
-                            wait_screen(
-                                "Ln 1, Col 6",
-                                "Pad Tab indentation did not undo as one edit",
+                            journey_errors.append(
+                                "Pad Tab did not advance to a four-column stop"
+                            )
+                        session.send_key("ctrl+z")
+                        report = session.run(
+                            max_steps=min(150_000_000, max_steps - total_steps),
+                            wall_timeout_s=min(
+                                4.0, max(0.05, deadline - time.monotonic())
+                            ),
+                        )
+                        total_steps += report.steps
+                        screen = session.snapshot()
+                        undo_hits = [
+                            (row, col)
+                            for row, col in screen.find("smoke")
+                            if row >= 3
+                        ]
+                        if not undo_hits or not (
+                            screen.cells[undo_hits[0][0]][undo_hits[0][1] + 5].attrs
+                            & 32
+                        ):
+                            journey_errors.append(
+                                "Pad Tab indentation did not undo as one edit"
                             )
                         session.send_key("ctrl+s")
                         if wait_screen(
@@ -645,7 +1182,65 @@ def smoke(
                                         "D2", "Grid did not return to the edited formula"
                                     )
 
-        if initial_ready:
+        if initial_ready and profile_name == "agent-ui":
+            session.send_key("ctrl+l")
+            if wait_screen("Ask:", "Ctrl+L did not open Agent's composer"):
+                session.send_text("hello agent")
+                session.send_key("enter")
+                if wait_screen(
+                    "hello agent",
+                    "Agent did not stream the provider response",
+                    step_budget=600_000_000,
+                    wall_timeout=15.0,
+                ):
+                    wait_screen("Ready", "Agent did not finish the streamed run")
+
+            session.send_key("ctrl+l")
+            if wait_screen("Ask:", "Agent did not reopen its composer"):
+                session.send_text("approval check")
+                session.send_key("enter")
+                if wait_screen(
+                    "Review required",
+                    "Agent did not surface the provider approval request",
+                    step_budget=600_000_000,
+                    wall_timeout=15.0,
+                ):
+                    wait_screen(
+                        "Persist the simulated change?",
+                        "Agent did not show the approval reason",
+                    )
+                    session.send_key("f6")
+                    if wait_screen_gone(
+                        "Review required",
+                        "F6 did not resolve Agent's approval request",
+                    ):
+                        wait_screen("Approved.", "Agent did not record approval")
+
+            session.send_key("ctrl+l")
+            if wait_screen("Ask:", "Agent did not open its third prompt"):
+                session.send_text("cancel this run")
+                session.send_key("enter")
+                session.send_key("escape")
+                if wait_screen(
+                    "Cancelled", "Escape did not cancel Agent's active run"
+                ):
+                    session.send_key("ctrl+l")
+                    if wait_screen(
+                        "Ask:", "Agent could not compose after cancellation"
+                    ):
+                        session.send_text("recovered after cancel")
+                        session.send_key("enter")
+                        wait_screen(
+                            "recovered after cancel",
+                            "Agent could not start a run after cancellation",
+                            step_budget=600_000_000,
+                            wall_timeout=15.0,
+                        )
+                        wait_screen(
+                            "Ready", "Agent did not recover to its ready state"
+                        )
+
+        if initial_ready and profile_name != "interop":
             session.resize(cols + 8, rows + 2)
             resize_budget = min(250_000_000, max_steps - total_steps)
             if resize_budget > 0 and time.monotonic() < deadline:
@@ -680,6 +1275,17 @@ def smoke(
                 marker in resized_text for marker in ("41", "91")
             ):
                 journey_errors.append("Grid formula results were lost after resize")
+            if profile_name == "agent-ui" and not all(
+                marker in resized_text
+                for marker in (
+                    "hello agent",
+                    "approval check",
+                    "recovered after cancel",
+                )
+            ):
+                journey_errors.append(
+                    "Agent transcript or run state was lost after resize"
+                )
             if (
                 profile_name == "desktop"
                 and resized_text.count("[1:Akashic Pa") != 1
@@ -692,7 +1298,7 @@ def smoke(
                 session.send_text("/welcome.txt")
                 session.send_key("enter")
                 if wait_screen(
-                    "Welcome to Akashic.", "Pad could not open /welcome.txt"
+                    "Welcome to Ak", "Pad could not open /welcome.txt"
                 ):
                     session.send_key("ctrl+f")
                     if wait_screen("Find:", "Ctrl+F did not open Find"):
@@ -844,6 +1450,22 @@ def smoke(
                 session.send_key("enter")
                 wait_screen("SQUARE", "File Explorer could not preview /example.f")
 
+            if profile_name == "desktop":
+                session.send_key("ctrl+o")
+                if wait_screen(
+                    "[1:Akashic Pa*]",
+                    "resource.open did not route File Explorer's selection to Pad",
+                ):
+                    wait_screen(
+                        "/example.f",
+                        "Pad did not open the resource delivered by Desk",
+                    )
+                session.send_key("alt+2")
+                wait_screen(
+                    "[2:File Explo*]",
+                    "Desk did not return to File Explorer after resource.open",
+                )
+
             if profile_name == "fexplorer":
                 session.send_key("ctrl+n")
                 if wait_screen(
@@ -987,6 +1609,8 @@ def smoke(
                 )
             screen = session.snapshot()
             if profile_name == "desktop":
+                run_desk_agent_journey()
+
                 session.send_key("alt+3")
                 wait_screen(
                     "[3:Daybook*]",

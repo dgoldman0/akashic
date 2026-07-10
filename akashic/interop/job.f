@@ -1,0 +1,76 @@
+\ =====================================================================
+\  job.f - Bounded interoperable job lifecycle
+\ =====================================================================
+
+PROVIDED akashic-interop-job
+
+0 CONSTANT CJOB-S-FREE
+1 CONSTANT CJOB-S-QUEUED
+2 CONSTANT CJOB-S-RUNNING
+3 CONSTANT CJOB-S-APPROVAL
+4 CONSTANT CJOB-S-SUCCEEDED
+5 CONSTANT CJOB-S-FAILED
+6 CONSTANT CJOB-S-CANCELLED
+
+32 CONSTANT CJOB-MAX
+64 CONSTANT CJOB-ENTRY-SIZE
+
+ 0 CONSTANT _CJE-ID
+ 8 CONSTANT _CJE-STATE
+16 CONSTANT _CJE-PRINCIPAL
+24 CONSTANT _CJE-TARGET
+32 CONSTANT _CJE-REQUEST
+40 CONSTANT _CJE-PROGRESS
+48 CONSTANT _CJE-CANCELLED
+56 CONSTANT _CJE-UPDATED-MS
+
+: CJE.ID          ( job -- a ) _CJE-ID + ;
+: CJE.STATE       ( job -- a ) _CJE-STATE + ;
+: CJE.PRINCIPAL   ( job -- a ) _CJE-PRINCIPAL + ;
+: CJE.TARGET      ( job -- a ) _CJE-TARGET + ;
+: CJE.REQUEST     ( job -- a ) _CJE-REQUEST + ;
+: CJE.PROGRESS    ( job -- a ) _CJE-PROGRESS + ;
+: CJE.CANCELLED   ( job -- a ) _CJE-CANCELLED + ;
+: CJE.UPDATED-MS  ( job -- a ) _CJE-UPDATED-MS + ;
+
+ 0 CONSTANT _CJT-NEXT-ID
+ 8 CONSTANT _CJT-ENTRIES
+_CJT-ENTRIES CJOB-MAX CJOB-ENTRY-SIZE * + CONSTANT CJOB-TABLE-SIZE
+
+: CJOB.NEXT-ID  ( table -- a ) _CJT-NEXT-ID + ;
+: CJOB.ENTRIES  ( table -- a ) _CJT-ENTRIES + ;
+
+: CJOB-TABLE-NEW  ( -- table ior )
+    CJOB-TABLE-SIZE ALLOCATE
+    DUP IF EXIT THEN
+    DROP DUP CJOB-TABLE-SIZE 0 FILL 1 OVER CJOB.NEXT-ID ! 0 ;
+
+: CJOB-TABLE-FREE  ( table -- ) ?DUP IF FREE THEN ;
+
+: CJOB-NTH  ( index table -- job | 0 )
+    >R DUP 0< OVER CJOB-MAX >= OR IF DROP R> DROP 0 EXIT THEN
+    CJOB-ENTRY-SIZE * R> CJOB.ENTRIES + ;
+
+VARIABLE _CJA-T
+
+: CJOB-ALLOC  ( table -- job | 0 )
+    _CJA-T !
+    CJOB-MAX 0 ?DO
+        I _CJA-T @ CJOB-NTH DUP CJE.STATE @ CJOB-S-FREE = IF
+            DUP CJOB-ENTRY-SIZE 0 FILL
+            _CJA-T @ CJOB.NEXT-ID @ OVER CJE.ID !
+            1 _CJA-T @ CJOB.NEXT-ID +!
+            CJOB-S-QUEUED OVER CJE.STATE !
+            MS@ OVER CJE.UPDATED-MS !
+            UNLOOP EXIT
+        THEN
+        DROP
+    LOOP
+    0 ;
+
+: CJOB-STATE!  ( state job -- )
+    DUP >R CJE.STATE ! MS@ R> CJE.UPDATED-MS ! ;
+
+: CJOB-CANCEL  ( job -- )
+    -1 OVER CJE.CANCELLED !
+    CJOB-S-CANCELLED SWAP CJOB-STATE! ;
