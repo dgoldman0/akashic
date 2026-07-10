@@ -69,13 +69,13 @@ class Profile:
 
 PROFILES = {
     "mcp": Profile(
-        roots=("interop/mcp/server.f", "interop/mcp/transport.f"),
+        roots=("interop/mcp/server.f", "interop/mcp/client.f"),
         resources=(),
         autoexec=r"""\ autoexec.f - native MCP server contracts
 ENTER-USERLAND
 ." [akashic] loading MCP server" CR
 REQUIRE interop/mcp/server.f
-REQUIRE interop/mcp/transport.f
+REQUIRE interop/mcp/client.f
 
 VARIABLE _mt-fails
 VARIABLE _mt-checks
@@ -100,12 +100,48 @@ VARIABLE _mt-server
 VARIABLE _mt-status
 VARIABLE _mt-tool-hits
 VARIABLE _mt-read-hits
+VARIABLE _mt-client
 
 CREATE _mt-string-schema CS-SIZE ALLOT
 CREATE _mt-null-schema CS-SIZE ALLOT
 CREATE _mt-tool MCP-TOOL-DESC-SIZE ALLOT
 CREATE _mt-resource MCP-RESOURCE-DESC-SIZE ALLOT
 CREATE _mt-template MCP-RESOURCE-TEMPLATE-SIZE ALLOT
+CREATE _mt-transport MCP-TRANSPORT-SIZE ALLOT
+
+0 CONSTANT _MTL-SERVER
+8 CONSTANT _MTL-LEN
+16 CONSTANT _MTL-STATUS
+24 CONSTANT _MTL-CLOSED
+32 CONSTANT _MTL-BUF
+_MTL-BUF 32768 + CONSTANT _MTL-SIZE
+CREATE _mt-loop _MTL-SIZE ALLOT
+
+: _MTL.SERVER  ( loop -- a ) _MTL-SERVER + ;
+: _MTL.LEN     ( loop -- a ) _MTL-LEN + ;
+: _MTL.STATUS  ( loop -- a ) _MTL-STATUS + ;
+: _MTL.CLOSED  ( loop -- a ) _MTL-CLOSED + ;
+: _MTL.BUF     ( loop -- a ) _MTL-BUF + ;
+
+VARIABLE _mtl-a
+VARIABLE _mtl-u
+VARIABLE _mtl-c
+
+: _mt-loop-send  ( addr len loop -- status )
+    _mtl-c ! _mtl-u ! _mtl-a !
+    _mtl-a @ _mtl-u @ _mtl-c @ _MTL.BUF 32768
+    _mtl-c @ _MTL.SERVER @ MCP-SERVER-HANDLE
+    _mtl-c @ _MTL.STATUS ! _mtl-c @ _MTL.LEN !
+    _mtl-c @ _MTL.STATUS @ ;
+
+: _mt-loop-recv  ( buffer capacity loop -- len status )
+    _mtl-c ! _mtl-u ! _mtl-a !
+    _mtl-c @ _MTL.STATUS @ IF 0 _mtl-c @ _MTL.STATUS @ EXIT THEN
+    _mtl-c @ _MTL.LEN @ _mtl-u @ > IF 0 MCP-S-CAPACITY EXIT THEN
+    _mtl-c @ _MTL.BUF _mtl-a @ _mtl-c @ _MTL.LEN @ CMOVE
+    _mtl-c @ _MTL.LEN @ MCP-S-OK ;
+
+: _mt-loop-close  ( loop -- ) -1 SWAP _MTL.CLOSED ! ;
 
 : _mt-tool-call  ( call context -- status )
     1 SWAP +!
@@ -212,6 +248,12 @@ CREATE _mt-template MCP-RESOURCE-TEMPLATE-SIZE ALLOT
     _mt-msg JRPC.KIND @ JRPC-K-ERROR = _mt-assert
     _mt-msg JRPC.ERROR-CODE @ MCP-E-NOT-INITIALIZED = _mt-assert
 
+    20 S" initialize" S" {}" _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.ERROR-CODE @ JRPC-E-INVALID-PARAMS = _mt-assert
+    _mt-server @ MSERVER.STATE @ MCP-STATE-NEW = _mt-assert
+
     _mt-initialize-params
     2 S" initialize" _mt-params _mt-params-u @ _mt-request
     _mt-status @ MCP-S-OK = _mt-assert
@@ -235,6 +277,18 @@ CREATE _mt-template MCP-RESOURCE-TEMPLATE-SIZE ALLOT
     _mt-parse 0= _mt-assert
     _mt-msg JRPC.RESULT-A @ _mt-msg JRPC.RESULT-U @ JSON-ENTER
     S" tools" JSON-KEY JSON-ARRAY? _mt-assert
+
+    _mt-params-begin JSON-{
+    S" cursor" S" 99" JSON-KV-ESTR JSON-} _mt-params-end
+    40 S" tools/list" _mt-params _mt-params-u @ _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.ERROR-CODE @ JRPC-E-INVALID-PARAMS = _mt-assert
+
+    41 S" tools/call" S" {}" _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.ERROR-CODE @ JRPC-E-INVALID-PARAMS = _mt-assert
 
     _mt-call-params
     5 S" tools/call" _mt-params _mt-params-u @ _mt-request
@@ -271,6 +325,44 @@ CREATE _mt-template MCP-RESOURCE-TEMPLATE-SIZE ALLOT
     _mt-parse 0= _mt-assert
     _mt-msg JRPC.ERROR-CODE @ JRPC-E-PARSE = _mt-assert
 
+    _mt-server @ MCP-SERVER-FREE
+
+    S" akashic-loopback" S" 1.0.0" MCP-SERVER-NEW
+    DUP 0= _mt-assert DROP DUP _mt-server ! _mt-loop _MTL.SERVER !
+    _mt-tool _mt-server @ MCP-SERVER-TOOL+ MCP-S-OK = _mt-assert
+    _mt-resource _mt-server @ MCP-SERVER-RESOURCE+ MCP-S-OK = _mt-assert
+    _mt-template _mt-server @ MCP-SERVER-TEMPLATE+ MCP-S-OK = _mt-assert
+    _mt-transport MCP-TRANSPORT-INIT
+    _mt-loop _mt-transport MTRANS.CONTEXT !
+    ['] _mt-loop-send _mt-transport MTRANS.SEND-XT !
+    ['] _mt-loop-recv _mt-transport MTRANS.RECV-XT !
+    ['] _mt-loop-close _mt-transport MTRANS.CLOSE-XT !
+    _mt-transport S" akashic-client-test" S" 1.0.0" MCP-CLIENT-NEW
+    DUP 0= _mt-assert DROP _mt-client !
+    _mt-client @ MCP-CLIENT-INITIALIZE MCP-S-OK = _mt-assert
+    _mt-client @ MCLIENT.STATE @ MCP-STATE-READY = _mt-assert
+    _mt-server @ MSERVER.STATE @ MCP-STATE-READY = _mt-assert
+    _mt-client @ MCLIENT.SERVER-CAPS @
+    MCP-CAP-TOOLS MCP-CAP-RESOURCES OR = _mt-assert
+
+    _mt-client @ MCP-CLIENT-PING
+    DUP MCP-S-OK = _mt-assert DROP JSON-OBJECT? _mt-assert
+    S" 0" _mt-client @ MCP-CLIENT-TOOLS-LIST
+    DUP MCP-S-OK = _mt-assert DROP JSON-OBJECT? _mt-assert
+    S" echo.native" S" {}" _mt-client @ MCP-CLIENT-TOOLS-CALL
+    DUP MCP-S-OK = _mt-assert DROP JSON-OBJECT? _mt-assert
+    _mt-tool-hits @ 2 = _mt-assert
+    S" " _mt-client @ MCP-CLIENT-RESOURCES-LIST
+    DUP MCP-S-OK = _mt-assert DROP JSON-OBJECT? _mt-assert
+    S" " _mt-client @ MCP-CLIENT-TEMPLATES-LIST
+    DUP MCP-S-OK = _mt-assert DROP JSON-OBJECT? _mt-assert
+    S" akashic://test/notes" _mt-client @ MCP-CLIENT-RESOURCE-READ
+    DUP MCP-S-OK = _mt-assert DROP JSON-OBJECT? _mt-assert
+    _mt-read-hits @ 2 = _mt-assert
+
+    _mt-client @ MCP-CLIENT-CLOSE
+    _mt-loop _MTL.CLOSED @ 0<> _mt-assert
+    _mt-client @ MCP-CLIENT-FREE
     _mt-server @ MCP-SERVER-FREE
     _mt-stack
     _mt-fails @ 0= IF
