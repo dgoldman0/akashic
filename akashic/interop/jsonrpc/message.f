@@ -95,296 +95,24 @@ REQUIRE ../../text/utf8.f
 : JRPC-ID-TEXT  ( message -- addr len )
     DUP JRPC.ID-A @ SWAP JRPC.ID-U @ ;
 
-\ =====================================================================
-\  Strict JSON validation used before cursor-based field extraction
-\ =====================================================================
-
-VARIABLE _JRV-A
-VARIABLE _JRV-U
-VARIABLE _JRV-DEPTH
-VARIABLE _JRV-OK
-
-: _JRV-FAIL  ( -- ) 0 _JRV-OK ! ;
-
-: _JRV-PEEK  ( -- c | -1 )
-    _JRV-U @ 0= IF -1 ELSE _JRV-A @ C@ THEN ;
-
-: _JRV-ADV  ( count -- )
-    DUP _JRV-U @ > IF DROP _JRV-FAIL EXIT THEN
-    DUP _JRV-A +! NEGATE _JRV-U +! ;
-
-: _JRV-WS  ( -- )
-    BEGIN
-        _JRV-U @ 0> IF
-            _JRV-PEEK DUP 32 = OVER 9 = OR OVER 10 = OR SWAP 13 = OR
-        ELSE 0 THEN
-    WHILE
-        1 _JRV-ADV
-    REPEAT ;
-
-: _JRV-HEX?  ( c -- flag )
-    DUP 48 >= OVER 57 <= AND IF DROP -1 EXIT THEN
-    DUP 65 >= OVER 70 <= AND IF DROP -1 EXIT THEN
-    DUP 97 >= SWAP 102 <= AND ;
-
-: _JRV-DIGIT?  ( c -- flag )
+\ Generic JSON grammar and Unicode decoding live in utils/json.f.  This
+\ module adds only the JSON-RPC size bound and maps JSON errors to its IORs.
+: _JRPC-DIGIT?  ( c -- flag )
     DUP 48 >= SWAP 57 <= AND ;
 
-: _JRV-HEX4  ( -- )
-    _JRV-U @ 4 < IF _JRV-FAIL EXIT THEN
-    4 0 DO
-        _JRV-A @ I + C@ _JRV-HEX? 0= IF _JRV-FAIL THEN
-    LOOP
-    _JRV-OK @ IF 4 _JRV-ADV THEN ;
-
-: _JRV-STRING  ( -- )
-    _JRV-PEEK 34 <> IF _JRV-FAIL EXIT THEN
-    1 _JRV-ADV
-    BEGIN _JRV-U @ 0> WHILE
-        _JRV-PEEK DUP 34 = IF
-            DROP 1 _JRV-ADV EXIT
-        THEN
-        DUP 32 < IF DROP _JRV-FAIL EXIT THEN
-        92 = IF
-            1 _JRV-ADV
-            _JRV-U @ 0= IF _JRV-FAIL EXIT THEN
-            _JRV-PEEK DUP 34 = OVER 92 = OR OVER 47 = OR
-            OVER 98 = OR OVER 102 = OR OVER 110 = OR
-            OVER 114 = OR OVER 116 = OR IF
-                DROP 1 _JRV-ADV
-            ELSE
-                117 = IF
-                    1 _JRV-ADV _JRV-HEX4
-                    _JRV-OK @ 0= IF EXIT THEN
-                ELSE
-                    _JRV-FAIL EXIT
-                THEN
-            THEN
-        ELSE
-            1 _JRV-ADV
-        THEN
-    REPEAT
-    _JRV-FAIL ;
-
-VARIABLE _JRL-A
-VARIABLE _JRL-U
-
-: _JRV-LITERAL  ( addr len -- )
-    _JRL-U ! _JRL-A !
-    _JRV-U @ _JRL-U @ < IF _JRV-FAIL EXIT THEN
-    _JRV-A @ _JRL-U @ _JRL-A @ _JRL-U @ STR-STR= 0= IF
-        _JRV-FAIL EXIT
-    THEN
-    _JRL-U @ _JRV-ADV ;
-
-: _JRV-NUMBER  ( -- )
-    _JRV-PEEK 45 = IF
-        1 _JRV-ADV
-        _JRV-U @ 0= IF _JRV-FAIL EXIT THEN
-    THEN
-    _JRV-PEEK DUP 48 = IF
-        DROP 1 _JRV-ADV
-        _JRV-U @ IF _JRV-PEEK _JRV-DIGIT? IF _JRV-FAIL EXIT THEN THEN
-    ELSE
-        DUP 49 >= SWAP 57 <= AND 0= IF _JRV-FAIL EXIT THEN
-        BEGIN _JRV-U @ 0> IF _JRV-PEEK _JRV-DIGIT? ELSE 0 THEN WHILE
-            1 _JRV-ADV
-        REPEAT
-    THEN
-    _JRV-U @ IF _JRV-PEEK 46 = ELSE 0 THEN IF
-        1 _JRV-ADV
-        _JRV-U @ 0= IF _JRV-FAIL EXIT THEN
-        _JRV-PEEK _JRV-DIGIT? 0= IF _JRV-FAIL EXIT THEN
-        BEGIN _JRV-U @ 0> IF _JRV-PEEK _JRV-DIGIT? ELSE 0 THEN WHILE
-            1 _JRV-ADV
-        REPEAT
-    THEN
-    _JRV-U @ IF _JRV-PEEK DUP 101 = SWAP 69 = OR ELSE 0 THEN IF
-        1 _JRV-ADV
-        _JRV-U @ 0= IF _JRV-FAIL EXIT THEN
-        _JRV-PEEK DUP 43 = SWAP 45 = OR IF 1 _JRV-ADV THEN
-        _JRV-U @ 0= IF _JRV-FAIL EXIT THEN
-        _JRV-PEEK _JRV-DIGIT? 0= IF _JRV-FAIL EXIT THEN
-        BEGIN _JRV-U @ 0> IF _JRV-PEEK _JRV-DIGIT? ELSE 0 THEN WHILE
-            1 _JRV-ADV
-        REPEAT
-    THEN ;
-
-DEFER _JRV-VALUE
-
-: _JRV-DEPTH+  ( -- flag )
-    1 _JRV-DEPTH +!
-    _JRV-DEPTH @ JRPC-MAX-DEPTH > IF _JRV-FAIL 0 ELSE -1 THEN ;
-
-: _JRV-ARRAY  ( -- )
-    _JRV-DEPTH+ 0= IF EXIT THEN
-    1 _JRV-ADV _JRV-WS
-    _JRV-PEEK 93 = IF 1 _JRV-ADV -1 _JRV-DEPTH +! EXIT THEN
-    BEGIN
-        _JRV-VALUE
-        _JRV-OK @ 0= IF -1 _JRV-DEPTH +! EXIT THEN
-        _JRV-WS
-        _JRV-PEEK 93 = IF
-            1 _JRV-ADV -1 _JRV-DEPTH +! EXIT
-        THEN
-        _JRV-PEEK 44 <> IF
-            _JRV-FAIL -1 _JRV-DEPTH +! EXIT
-        THEN
-        1 _JRV-ADV _JRV-WS
-    AGAIN ;
-
-: _JRV-OBJECT  ( -- )
-    _JRV-DEPTH+ 0= IF EXIT THEN
-    1 _JRV-ADV _JRV-WS
-    _JRV-PEEK 125 = IF 1 _JRV-ADV -1 _JRV-DEPTH +! EXIT THEN
-    BEGIN
-        _JRV-STRING
-        _JRV-OK @ 0= IF -1 _JRV-DEPTH +! EXIT THEN
-        _JRV-WS
-        _JRV-PEEK 58 <> IF
-            _JRV-FAIL -1 _JRV-DEPTH +! EXIT
-        THEN
-        1 _JRV-ADV _JRV-WS
-        _JRV-VALUE
-        _JRV-OK @ 0= IF -1 _JRV-DEPTH +! EXIT THEN
-        _JRV-WS
-        _JRV-PEEK 125 = IF
-            1 _JRV-ADV -1 _JRV-DEPTH +! EXIT
-        THEN
-        _JRV-PEEK 44 <> IF
-            _JRV-FAIL -1 _JRV-DEPTH +! EXIT
-        THEN
-        1 _JRV-ADV _JRV-WS
-    AGAIN ;
-
-: _JRV-VALUE-IMPL  ( -- )
-    _JRV-WS
-    _JRV-U @ 0= IF _JRV-FAIL EXIT THEN
-    _JRV-PEEK CASE
-        34 OF _JRV-STRING ENDOF
-        91 OF _JRV-ARRAY ENDOF
-        123 OF _JRV-OBJECT ENDOF
-        116 OF S" true" _JRV-LITERAL ENDOF
-        102 OF S" false" _JRV-LITERAL ENDOF
-        110 OF S" null" _JRV-LITERAL ENDOF
-        DUP 45 = OVER _JRV-DIGIT? OR IF
-            _JRV-NUMBER
-        ELSE
-            _JRV-FAIL
-        THEN
-    ENDCASE ;
-
-' _JRV-VALUE-IMPL IS _JRV-VALUE
-
 : JRPC-JSON-VALID?  ( addr len -- flag )
-    DUP 0= OVER JRPC-MAX-MESSAGE > OR IF 2DROP 0 EXIT THEN
-    2DUP UTF8-VALID? 0= IF 2DROP 0 EXIT THEN
-    _JRV-U ! _JRV-A !
-    0 _JRV-DEPTH ! -1 _JRV-OK !
-    _JRV-VALUE _JRV-WS
-    _JRV-OK @ _JRV-U @ 0= AND ;
-
-\ =====================================================================
-\  JSON string decoding, including UTF-16 surrogate pairs
-\ =====================================================================
-
-VARIABLE _JUS-A
-VARIABLE _JUS-U
-VARIABLE _JUS-D
-VARIABLE _JUS-CAP
-VARIABLE _JUS-N
-VARIABLE _JUS-V
-VARIABLE _JUS-GOOD
-CREATE _JUS-UTF8 4 ALLOT
-
-: _JUS-ADV  ( count -- )
-    DUP _JUS-A +! NEGATE _JUS-U +! ;
-
-: _JUS-HEX  ( c -- n | -1 )
-    DUP 48 >= OVER 57 <= AND IF 48 - EXIT THEN
-    DUP 65 >= OVER 70 <= AND IF 55 - EXIT THEN
-    DUP 97 >= OVER 102 <= AND IF 87 - EXIT THEN
-    DROP -1 ;
-
-: _JUS-HEX4  ( -- value flag )
-    _JUS-U @ 4 < IF 0 0 EXIT THEN
-    0 _JUS-V ! -1 _JUS-GOOD !
-    4 0 DO
-        _JUS-A @ I + C@ _JUS-HEX DUP 0< IF
-            DROP 0 _JUS-GOOD !
-        ELSE
-            _JUS-V @ 16 * + _JUS-V !
-        THEN
-    LOOP
-    _JUS-GOOD @ 0= IF 0 0 EXIT THEN
-    4 _JUS-ADV _JUS-V @ -1 ;
-
-: _JUS-BYTE  ( c -- flag )
-    _JUS-N @ _JUS-CAP @ >= IF DROP 0 EXIT THEN
-    _JUS-D @ _JUS-N @ + C! 1 _JUS-N +! -1 ;
-
-VARIABLE _JUS-CP
-VARIABLE _JUS-LEN
-
-: _JUS-CODEPOINT  ( cp -- flag )
-    DUP 0< OVER 0x10FFFF > OR IF DROP 0 EXIT THEN
-    DUP 0xD800 >= OVER 0xDFFF <= AND IF DROP 0 EXIT THEN
-    _JUS-CP !
-    _JUS-CP @ _JUS-UTF8 UTF8-ENCODE _JUS-UTF8 - DUP _JUS-LEN !
-    _JUS-N @ + _JUS-CAP @ > IF 0 EXIT THEN
-    _JUS-UTF8 _JUS-D @ _JUS-N @ + _JUS-LEN @ CMOVE
-    _JUS-LEN @ _JUS-N +! -1 ;
-
-VARIABLE _JUS-HI
+    DUP JRPC-MAX-MESSAGE > IF 2DROP 0 EXIT THEN
+    JSON-VALID? ;
 
 : _JRPC-UNESCAPE  ( src len dest cap -- decoded-len ior )
-    _JUS-CAP ! _JUS-D ! _JUS-U ! _JUS-A ! 0 _JUS-N !
-    BEGIN _JUS-U @ 0> WHILE
-        _JUS-A @ C@ 92 <> IF
-            _JUS-A @ C@ _JUS-BYTE 0= IF 0 JRPC-IOR-CAPACITY EXIT THEN
-            1 _JUS-ADV
-        ELSE
-            1 _JUS-ADV
-            _JUS-U @ 0= IF 0 JRPC-IOR-VALUE EXIT THEN
-            _JUS-A @ C@ DUP 117 = IF
-                DROP 1 _JUS-ADV _JUS-HEX4 0= IF
-                    DROP 0 JRPC-IOR-VALUE EXIT
-                THEN
-                DUP 0xD800 >= OVER 0xDBFF <= AND IF
-                    _JUS-HI !
-                    _JUS-U @ 6 < IF 0 JRPC-IOR-VALUE EXIT THEN
-                    _JUS-A @ C@ 92 <> _JUS-A @ 1+ C@ 117 <> OR IF
-                        0 JRPC-IOR-VALUE EXIT
-                    THEN
-                    2 _JUS-ADV _JUS-HEX4 0= IF
-                        DROP 0 JRPC-IOR-VALUE EXIT
-                    THEN
-                    DUP 0xDC00 < OVER 0xDFFF > OR IF
-                        DROP 0 JRPC-IOR-VALUE EXIT
-                    THEN
-                    0xDC00 - _JUS-HI @ 0xD800 - 1024 * + 0x10000 +
-                ELSE
-                    DUP 0xDC00 >= OVER 0xDFFF <= AND IF
-                        DROP 0 JRPC-IOR-VALUE EXIT
-                    THEN
-                THEN
-                _JUS-CODEPOINT 0= IF 0 JRPC-IOR-CAPACITY EXIT THEN
-            ELSE DUP 34 = IF DROP 34 ELSE
-            DUP 92 = IF DROP 92 ELSE
-            DUP 47 = IF DROP 47 ELSE
-            DUP 98 = IF DROP 8 ELSE
-            DUP 102 = IF DROP 12 ELSE
-            DUP 110 = IF DROP 10 ELSE
-            DUP 114 = IF DROP 13 ELSE
-            DUP 116 = IF DROP 9 ELSE
-                DROP 0 JRPC-IOR-VALUE EXIT
-            THEN THEN THEN THEN THEN THEN THEN THEN
-                _JUS-BYTE 0= IF 0 JRPC-IOR-CAPACITY EXIT THEN
-                1 _JUS-ADV
-            THEN
-        THEN
-    REPEAT
-    _JUS-N @ 0 ;
+    JSON-UNESCAPE
+    JSON-OK? IF 0 EXIT THEN
+    DROP 0
+    JSON-ERR @ JSON-E-OVERFLOW = IF
+        JRPC-IOR-CAPACITY
+    ELSE
+        JRPC-IOR-VALUE
+    THEN ;
 
 \ =====================================================================
 \  Message parsing
@@ -468,7 +196,7 @@ VARIABLE _JSP-U
         _JSP-U @ 18 > IF 0 EXIT THEN
     THEN
     _JSP-U @ 0 DO
-        _JSP-A @ I + C@ _JRV-DIGIT? 0= IF 0 UNLOOP EXIT THEN
+        _JSP-A @ I + C@ _JRPC-DIGIT? 0= IF 0 UNLOOP EXIT THEN
     LOOP
     -1 ;
 

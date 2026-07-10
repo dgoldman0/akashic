@@ -10,6 +10,9 @@
 
 PROVIDED akashic-json
 
+REQUIRE ../text/utf8.f
+REQUIRE string.f
+
 \ =====================================================================
 \  Error Handling
 \ =====================================================================
@@ -28,6 +31,7 @@ VARIABLE JSON-ABORT-ON-ERROR         \ -1 = abort, 0 = flag-only
 3 CONSTANT JSON-E-UNTERMINATED      \ unterminated string
 4 CONSTANT JSON-E-UNEXPECTED        \ unexpected character
 5 CONSTANT JSON-E-OVERFLOW          \ buffer overflow
+6 CONSTANT JSON-E-DEPTH             \ nesting exceeds bounded parser depth
 
 : JSON-FAIL  ( err-code -- )
     JSON-ERR !
@@ -38,6 +42,201 @@ VARIABLE JSON-ABORT-ON-ERROR         \ -1 = abort, 0 = flag-only
 
 : JSON-CLEAR-ERR  ( -- )
     0 JSON-ERR ! ;
+
+\ =====================================================================
+\  Strict document validation
+\ =====================================================================
+\  Cursor helpers elsewhere in this module intentionally remain small
+\  and allocation-free.  JSON-VALID? supplies the strict grammar gate for
+\  protocol and interoperability codecs before those helpers are used.
+
+65536 CONSTANT JSON-MAX-DOCUMENT
+16 CONSTANT JSON-MAX-DEPTH
+
+VARIABLE _JV-A
+VARIABLE _JV-U
+VARIABLE _JV-DEPTH
+VARIABLE _JV-OK
+
+: _JV-FAIL  ( -- ) 0 _JV-OK ! ;
+
+: _JV-PEEK  ( -- c | -1 )
+    _JV-U @ 0= IF -1 ELSE _JV-A @ C@ THEN ;
+
+: _JV-ADV  ( count -- )
+    DUP _JV-U @ > IF DROP _JV-FAIL EXIT THEN
+    DUP _JV-A +! NEGATE _JV-U +! ;
+
+: _JV-WS  ( -- )
+    BEGIN
+        _JV-U @ 0> IF
+            _JV-PEEK DUP 32 = OVER 9 = OR OVER 10 = OR SWAP 13 = OR
+        ELSE 0 THEN
+    WHILE
+        1 _JV-ADV
+    REPEAT ;
+
+: _JV-HEX?  ( c -- flag )
+    DUP 48 >= OVER 57 <= AND IF DROP -1 EXIT THEN
+    DUP 65 >= OVER 70 <= AND IF DROP -1 EXIT THEN
+    DUP 97 >= SWAP 102 <= AND ;
+
+: _JV-DIGIT?  ( c -- flag )
+    DUP 48 >= SWAP 57 <= AND ;
+
+: _JV-HEX4  ( -- )
+    _JV-U @ 4 < IF _JV-FAIL EXIT THEN
+    4 0 DO
+        _JV-A @ I + C@ _JV-HEX? 0= IF _JV-FAIL THEN
+    LOOP
+    _JV-OK @ IF 4 _JV-ADV THEN ;
+
+: _JV-STRING  ( -- )
+    _JV-PEEK 34 <> IF _JV-FAIL EXIT THEN
+    1 _JV-ADV
+    BEGIN _JV-U @ 0> WHILE
+        _JV-PEEK DUP 34 = IF
+            DROP 1 _JV-ADV EXIT
+        THEN
+        DUP 32 < IF DROP _JV-FAIL EXIT THEN
+        92 = IF
+            1 _JV-ADV
+            _JV-U @ 0= IF _JV-FAIL EXIT THEN
+            _JV-PEEK DUP 34 = OVER 92 = OR OVER 47 = OR
+            OVER 98 = OR OVER 102 = OR OVER 110 = OR
+            OVER 114 = OR OVER 116 = OR IF
+                DROP 1 _JV-ADV
+            ELSE
+                117 = IF
+                    1 _JV-ADV _JV-HEX4
+                    _JV-OK @ 0= IF EXIT THEN
+                ELSE
+                    _JV-FAIL EXIT
+                THEN
+            THEN
+        ELSE
+            1 _JV-ADV
+        THEN
+    REPEAT
+    _JV-FAIL ;
+
+VARIABLE _JVL-A
+VARIABLE _JVL-U
+
+: _JV-LITERAL  ( addr len -- )
+    _JVL-U ! _JVL-A !
+    _JV-U @ _JVL-U @ < IF _JV-FAIL EXIT THEN
+    _JV-A @ _JVL-U @ _JVL-A @ _JVL-U @ STR-STR= 0= IF
+        _JV-FAIL EXIT
+    THEN
+    _JVL-U @ _JV-ADV ;
+
+: _JV-NUMBER  ( -- )
+    _JV-PEEK 45 = IF
+        1 _JV-ADV
+        _JV-U @ 0= IF _JV-FAIL EXIT THEN
+    THEN
+    _JV-PEEK DUP 48 = IF
+        DROP 1 _JV-ADV
+        _JV-U @ IF _JV-PEEK _JV-DIGIT? IF _JV-FAIL EXIT THEN THEN
+    ELSE
+        DUP 49 >= SWAP 57 <= AND 0= IF _JV-FAIL EXIT THEN
+        BEGIN _JV-U @ 0> IF _JV-PEEK _JV-DIGIT? ELSE 0 THEN WHILE
+            1 _JV-ADV
+        REPEAT
+    THEN
+    _JV-U @ IF _JV-PEEK 46 = ELSE 0 THEN IF
+        1 _JV-ADV
+        _JV-U @ 0= IF _JV-FAIL EXIT THEN
+        _JV-PEEK _JV-DIGIT? 0= IF _JV-FAIL EXIT THEN
+        BEGIN _JV-U @ 0> IF _JV-PEEK _JV-DIGIT? ELSE 0 THEN WHILE
+            1 _JV-ADV
+        REPEAT
+    THEN
+    _JV-U @ IF _JV-PEEK DUP 101 = SWAP 69 = OR ELSE 0 THEN IF
+        1 _JV-ADV
+        _JV-U @ 0= IF _JV-FAIL EXIT THEN
+        _JV-PEEK DUP 43 = SWAP 45 = OR IF 1 _JV-ADV THEN
+        _JV-U @ 0= IF _JV-FAIL EXIT THEN
+        _JV-PEEK _JV-DIGIT? 0= IF _JV-FAIL EXIT THEN
+        BEGIN _JV-U @ 0> IF _JV-PEEK _JV-DIGIT? ELSE 0 THEN WHILE
+            1 _JV-ADV
+        REPEAT
+    THEN ;
+
+DEFER _JV-VALUE
+
+: _JV-DEPTH+  ( -- flag )
+    1 _JV-DEPTH +!
+    _JV-DEPTH @ JSON-MAX-DEPTH > IF _JV-FAIL 0 ELSE -1 THEN ;
+
+: _JV-ARRAY  ( -- )
+    _JV-DEPTH+ 0= IF EXIT THEN
+    1 _JV-ADV _JV-WS
+    _JV-PEEK 93 = IF 1 _JV-ADV -1 _JV-DEPTH +! EXIT THEN
+    BEGIN
+        _JV-VALUE
+        _JV-OK @ 0= IF -1 _JV-DEPTH +! EXIT THEN
+        _JV-WS
+        _JV-PEEK 93 = IF
+            1 _JV-ADV -1 _JV-DEPTH +! EXIT
+        THEN
+        _JV-PEEK 44 <> IF
+            _JV-FAIL -1 _JV-DEPTH +! EXIT
+        THEN
+        1 _JV-ADV _JV-WS
+    AGAIN ;
+
+: _JV-OBJECT  ( -- )
+    _JV-DEPTH+ 0= IF EXIT THEN
+    1 _JV-ADV _JV-WS
+    _JV-PEEK 125 = IF 1 _JV-ADV -1 _JV-DEPTH +! EXIT THEN
+    BEGIN
+        _JV-STRING
+        _JV-OK @ 0= IF -1 _JV-DEPTH +! EXIT THEN
+        _JV-WS
+        _JV-PEEK 58 <> IF
+            _JV-FAIL -1 _JV-DEPTH +! EXIT
+        THEN
+        1 _JV-ADV _JV-WS
+        _JV-VALUE
+        _JV-OK @ 0= IF -1 _JV-DEPTH +! EXIT THEN
+        _JV-WS
+        _JV-PEEK 125 = IF
+            1 _JV-ADV -1 _JV-DEPTH +! EXIT
+        THEN
+        _JV-PEEK 44 <> IF
+            _JV-FAIL -1 _JV-DEPTH +! EXIT
+        THEN
+        1 _JV-ADV _JV-WS
+    AGAIN ;
+
+: _JV-VALUE-IMPL  ( -- )
+    _JV-WS
+    _JV-U @ 0= IF _JV-FAIL EXIT THEN
+    _JV-PEEK CASE
+        34 OF _JV-STRING ENDOF
+        91 OF _JV-ARRAY ENDOF
+        123 OF _JV-OBJECT ENDOF
+        116 OF S" true" _JV-LITERAL ENDOF
+        102 OF S" false" _JV-LITERAL ENDOF
+        110 OF S" null" _JV-LITERAL ENDOF
+        DUP 45 = OVER _JV-DIGIT? OR IF
+            _JV-NUMBER
+        ELSE
+            _JV-FAIL
+        THEN
+    ENDCASE ;
+
+' _JV-VALUE-IMPL IS _JV-VALUE
+
+: JSON-VALID?  ( addr len -- flag )
+    DUP 0= OVER JSON-MAX-DOCUMENT > OR IF 2DROP 0 EXIT THEN
+    2DUP UTF8-VALID? 0= IF 2DROP 0 EXIT THEN
+    _JV-U ! _JV-A !
+    0 _JV-DEPTH ! -1 _JV-OK !
+    _JV-VALUE _JV-WS
+    _JV-OK @ _JV-U @ 0= AND ;
 
 \ =====================================================================
 \  Layer 0 — Primitives
@@ -230,50 +429,110 @@ VARIABLE _JSON-DEPTH
     0 0 ;
 
 \ JSON-UNESCAPE ( src slen dest dmax -- len )
-\   Decode JSON escape sequences into a user-provided buffer.
-\   Handles: \" \\ \/ \n \r \t \b \f
-\   Returns actual length written.  0 on error/overflow.
+\   Decode a validated JSON string body into UTF-8.  This handles all
+\   standard escapes, \uXXXX, and paired UTF-16 surrogates.  JSON-ERR
+\   distinguishes a successful empty string from malformed or short output.
+VARIABLE _JU-SRC
+VARIABLE _JU-LEN
 VARIABLE _JU-DST
 VARIABLE _JU-MAX
 VARIABLE _JU-POS
+VARIABLE _JU-VALUE
+VARIABLE _JU-GOOD
+VARIABLE _JU-HIGH
+VARIABLE _JU-CP
+VARIABLE _JU-CP-LEN
+CREATE _JU-UTF8 4 ALLOT
+
+: _JU-ADV  ( count -- )
+    DUP _JU-SRC +! NEGATE _JU-LEN +! ;
+
+: _JU-HEX  ( c -- n | -1 )
+    DUP 48 >= OVER 57 <= AND IF 48 - EXIT THEN
+    DUP 65 >= OVER 70 <= AND IF 55 - EXIT THEN
+    DUP 97 >= OVER 102 <= AND IF 87 - EXIT THEN
+    DROP -1 ;
+
+: _JU-HEX4  ( -- value flag )
+    _JU-LEN @ 4 < IF 0 0 EXIT THEN
+    0 _JU-VALUE ! -1 _JU-GOOD !
+    4 0 DO
+        _JU-SRC @ I + C@ _JU-HEX DUP 0< IF
+            DROP 0 _JU-GOOD !
+        ELSE
+            _JU-VALUE @ 16 * + _JU-VALUE !
+        THEN
+    LOOP
+    _JU-GOOD @ 0= IF 0 0 EXIT THEN
+    4 _JU-ADV _JU-VALUE @ -1 ;
+
+: _JU-BYTE  ( c -- flag )
+    _JU-POS @ _JU-MAX @ >= IF DROP 0 EXIT THEN
+    _JU-DST @ _JU-POS @ + C! 1 _JU-POS +! -1 ;
+
+: _JU-CODEPOINT  ( cp -- flag )
+    DUP 0< OVER 0x10FFFF > OR IF DROP 0 EXIT THEN
+    DUP 0xD800 >= OVER 0xDFFF <= AND IF DROP 0 EXIT THEN
+    _JU-CP !
+    _JU-CP @ _JU-UTF8 UTF8-ENCODE _JU-UTF8 - DUP _JU-CP-LEN !
+    _JU-POS @ + _JU-MAX @ > IF 0 EXIT THEN
+    _JU-UTF8 _JU-DST @ _JU-POS @ + _JU-CP-LEN @ CMOVE
+    _JU-CP-LEN @ _JU-POS +! -1 ;
+
+: _JU-ERROR  ( code -- length )
+    JSON-FAIL 0 ;
 
 : JSON-UNESCAPE  ( src slen dest dmax -- len )
-    _JU-MAX !  _JU-DST !  0 _JU-POS !
-    BEGIN
-        DUP 0>
-    WHILE
-        OVER C@ 92 = IF             \ backslash
-            1 /STRING
-            DUP 0> 0= IF 2DROP _JU-POS @ EXIT THEN
-            OVER C@
-            DUP 110 = IF DROP 10 ELSE        \ \n -> LF
-            DUP 114 = IF DROP 13 ELSE        \ \r -> CR
-            DUP 116 = IF DROP  9 ELSE        \ \t -> TAB
-            DUP  98 = IF DROP  8 ELSE        \ \b -> BS
-            DUP 102 = IF DROP 12 ELSE        \ \f -> FF
-            DUP  34 = IF DROP 34 ELSE        \ \" -> "
-            DUP  92 = IF DROP 92 ELSE        \ \\ -> backslash
-            DUP  47 = IF DROP 47 ELSE        \ \/ -> /
-                                              \ unknown: pass through
-            THEN THEN THEN THEN THEN THEN THEN THEN
-            \ store character
-            _JU-POS @ _JU-MAX @ >= IF
-                2DROP JSON-E-OVERFLOW JSON-FAIL 0 EXIT
+    JSON-CLEAR-ERR
+    _JU-MAX ! _JU-DST ! _JU-LEN ! _JU-SRC ! 0 _JU-POS !
+    BEGIN _JU-LEN @ 0> WHILE
+        _JU-SRC @ C@ 92 <> IF
+            _JU-SRC @ C@ _JU-BYTE 0= IF
+                JSON-E-OVERFLOW _JU-ERROR EXIT
             THEN
-            _JU-DST @ _JU-POS @ + C!
-            1 _JU-POS +!
-            1 /STRING
+            1 _JU-ADV
         ELSE
-            \ plain character
-            _JU-POS @ _JU-MAX @ >= IF
-                2DROP JSON-E-OVERFLOW JSON-FAIL 0 EXIT
+            1 _JU-ADV
+            _JU-LEN @ 0= IF JSON-E-UNTERMINATED _JU-ERROR EXIT THEN
+            _JU-SRC @ C@ DUP 117 = IF
+                DROP 1 _JU-ADV _JU-HEX4 0= IF
+                    DROP JSON-E-UNEXPECTED _JU-ERROR EXIT
+                THEN
+                DUP 0xD800 >= OVER 0xDBFF <= AND IF
+                    _JU-HIGH !
+                    _JU-LEN @ 6 < IF JSON-E-UNEXPECTED _JU-ERROR EXIT THEN
+                    _JU-SRC @ C@ 92 <> _JU-SRC @ 1+ C@ 117 <> OR IF
+                        JSON-E-UNEXPECTED _JU-ERROR EXIT
+                    THEN
+                    2 _JU-ADV _JU-HEX4 0= IF
+                        DROP JSON-E-UNEXPECTED _JU-ERROR EXIT
+                    THEN
+                    DUP 0xDC00 < OVER 0xDFFF > OR IF
+                        DROP JSON-E-UNEXPECTED _JU-ERROR EXIT
+                    THEN
+                    0xDC00 - _JU-HIGH @ 0xD800 - 1024 * + 0x10000 +
+                ELSE
+                    DUP 0xDC00 >= OVER 0xDFFF <= AND IF
+                        DROP JSON-E-UNEXPECTED _JU-ERROR EXIT
+                    THEN
+                THEN
+                _JU-CODEPOINT 0= IF JSON-E-OVERFLOW _JU-ERROR EXIT THEN
+            ELSE DUP 34 = IF DROP 34 ELSE
+            DUP 92 = IF DROP 92 ELSE
+            DUP 47 = IF DROP 47 ELSE
+            DUP 98 = IF DROP 8 ELSE
+            DUP 102 = IF DROP 12 ELSE
+            DUP 110 = IF DROP 10 ELSE
+            DUP 114 = IF DROP 13 ELSE
+            DUP 116 = IF DROP 9 ELSE
+                DROP JSON-E-UNEXPECTED _JU-ERROR EXIT
+            THEN THEN THEN THEN THEN THEN THEN THEN
+                _JU-BYTE 0= IF JSON-E-OVERFLOW _JU-ERROR EXIT THEN
+                1 _JU-ADV
             THEN
-            OVER C@ _JU-DST @ _JU-POS @ + C!
-            1 _JU-POS +!
-            1 /STRING
         THEN
     REPEAT
-    2DROP _JU-POS @ ;
+    _JU-POS @ ;
 
 \ JSON-GET-NUMBER ( addr len -- n )
 \   Parse a signed integer from JSON.  Stops at first non-digit.
@@ -907,6 +1166,7 @@ GUARD _json-guard
 ' JSON-FAIL       CONSTANT _json-fail-xt
 ' JSON-OK?        CONSTANT _json-ok-q-xt
 ' JSON-CLEAR-ERR  CONSTANT _json-clear-err-xt
+' JSON-VALID?     CONSTANT _json-valid-q-xt
 ' JSON-SKIP-WS    CONSTANT _json-skip-ws-xt
 ' JSON-SKIP-STRING CONSTANT _json-skip-string-xt
 ' JSON-SKIP-VALUE CONSTANT _json-skip-value-xt
@@ -971,6 +1231,7 @@ GUARD _json-guard
 : JSON-FAIL       _json-fail-xt _json-guard WITH-GUARD ;
 : JSON-OK?        _json-ok-q-xt _json-guard WITH-GUARD ;
 : JSON-CLEAR-ERR  _json-clear-err-xt _json-guard WITH-GUARD ;
+: JSON-VALID?     _json-valid-q-xt _json-guard WITH-GUARD ;
 : JSON-SKIP-WS    _json-skip-ws-xt _json-guard WITH-GUARD ;
 : JSON-SKIP-STRING _json-skip-string-xt _json-guard WITH-GUARD ;
 : JSON-SKIP-VALUE _json-skip-value-xt _json-guard WITH-GUARD ;
