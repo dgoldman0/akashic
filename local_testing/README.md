@@ -22,9 +22,9 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
-Profiles are `desktop` (Desk with Pad and File Explorer), `pad`, and
-`fexplorer`. Generated images, terminal text, cell JSON, and PNG captures go
-under `local_testing/out/`.
+Profiles are `desktop` (Desk with all four applets), `pad`, `fexplorer`,
+`daybook`, and `grid`. Generated images, terminal text, cell JSON, and PNG
+captures go under `local_testing/out/`.
 
 The smoke journeys exercise application behavior, not just boot markers:
 
@@ -32,9 +32,11 @@ The smoke journeys exercise application behavior, not just boot markers:
 |---|---|
 | `pad` | edit/undo/redo, open/find/go-to, fragmented multi-sector Save As, exact bytes, word and line replacement, dirty-state redraw |
 | `fexplorer` | create file/folder, rename, copy/paste, confirmed deletion, preview, and persisted MP64FS metadata |
-| `desktop` | Pad and File Explorer boot together, app focus/routing, resize, editing, and live terminal redraw |
+| `daybook` | task capture, completion, exact Markdown persistence, responsive calendar/agenda resize |
+| `grid` | formula edit, dependent `SUM` recalculation, CSV persistence/reload, virtual-grid resize |
+| `desktop` | Pad, File Explorer, Daybook, and Grid boot together with app focus/routing, compact layouts, resize, editing, and live terminal redraw |
 
-Run all three before changing shared TUI, VFS, or app-shell behavior.
+Run all five before changing shared TUI, VFS, or app-shell behavior.
 
 ## Shared Live Environment
 
@@ -67,8 +69,9 @@ python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock capture \
   --png akashic/local_testing/out/live.png
 ```
 
-In the desktop profile, `Alt+1` focuses Pad and `Alt+2` focuses File Explorer.
-Desk's other shortcuts remain documented in `docs/tui/applets/desk/desk.md`.
+In the desktop profile, `Alt+1` focuses Pad, `Alt+2` File Explorer, `Alt+3`
+Daybook, and `Alt+4` Grid. Desk's other shortcuts remain documented in
+`docs/tui/applets/desk/desk.md`.
 Bare F1-F12 keys are forwarded to the guest. Viewer controls use `Ctrl+F5` to
 pause/resume, `Ctrl+F10` to pause and step one instruction, `Ctrl+R` to reset,
 and `Ctrl+Q` to close only the viewer. Combined guest shortcuts such as

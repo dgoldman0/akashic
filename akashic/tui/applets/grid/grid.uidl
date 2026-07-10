@@ -1,0 +1,34 @@
+<uidl arrange=stack>
+<menubar id=mbar>
+<menu label=File>
+<item text=Save do=save key=Ctrl+S/>
+<item text=Reload do=reload key=Ctrl+R/>
+<separator/>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+<menu label=Edit>
+<item text=Edit_Cell do=edit-cell key=F2/>
+<item text=Clear_Cell do=clear-cell key=Delete/>
+<item text=Clear_Sheet do=clear-sheet/>
+</menu>
+<menu label=Data>
+<item text=Recalculate do=recalculate key=F9/>
+<item text=Go_to_Cell do=goto key=Ctrl+G/>
+</menu>
+<menu label=Help>
+<item text=About_Grid do=about/>
+</menu>
+</menubar>
+<region id=grid-body style=color:#eeeeee;background-color:#121212/>
+<status id=sbar style=color:white;background-color:#005f5f>
+<label id=sbar-cell text=A1/>
+<label id=sbar-state text=Grid_ready/>
+</status>
+<action do=save key=Ctrl+S/>
+<action do=reload key=Ctrl+R/>
+<action do=edit-cell key=F2/>
+<action do=clear-cell key=Delete/>
+<action do=recalculate key=F9/>
+<action do=goto key=Ctrl+G/>
+<action do=quit key=Ctrl+Q/>
+</uidl>

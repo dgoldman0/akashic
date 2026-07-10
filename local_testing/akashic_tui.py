@@ -16,6 +16,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 
@@ -70,6 +71,8 @@ PROFILES = {
             "tui/applets/desk/desk.f",
             "tui/applets/pad/pad.f",
             "tui/applets/fexplorer/fexplorer.f",
+            "tui/applets/daybook/daybook.f",
+            "tui/applets/grid/grid.f",
         ),
         resources=(
             "tui/applets/desk/desk.toml",
@@ -77,6 +80,8 @@ PROFILES = {
             "tui/applets/pad/pad.toml",
             "tui/applets/fexplorer/fexplorer.uidl",
             "tui/applets/fexplorer/fexplorer.toml",
+            "tui/applets/daybook/daybook.uidl",
+            "tui/applets/grid/grid.uidl",
         ),
         autoexec=r"""\ autoexec.f - Akashic desktop profile
 ENTER-USERLAND
@@ -84,6 +89,8 @@ ENTER-USERLAND
 REQUIRE tui/applets/desk/desk.f
 REQUIRE tui/applets/pad/pad.f
 REQUIRE tui/applets/fexplorer/fexplorer.f
+REQUIRE tui/applets/daybook/daybook.f
+REQUIRE tui/applets/grid/grid.f
 
 CREATE _boot-pad-desc APP-DESC ALLOT
 _boot-pad-desc PAD-ENTRY
@@ -93,12 +100,36 @@ CREATE _boot-fexp-desc APP-DESC ALLOT
 _boot-fexp-desc FEXP-ENTRY
 _boot-fexp-desc DESK-QUEUE-LAUNCH
 
+CREATE _boot-daybook-desc APP-DESC ALLOT
+_boot-daybook-desc DAYBOOK-ENTRY
+_boot-daybook-desc DESK-QUEUE-LAUNCH
+
+CREATE _boot-grid-desc APP-DESC ALLOT
+_boot-grid-desc GRID-ENTRY
+_boot-grid-desc DESK-QUEUE-LAUNCH
+
 ." [akashic] starting desktop" CR
 DESK-RUN
 ." [akashic] desktop exited" CR
 """,
-        ready_markers=("Selection", "Untitled", "Details", "Preview", "Tools"),
-        stable_markers=("Selection", "UTF-8", "Details", "Preview", "Tools"),
+        ready_markers=(
+            "Selection",
+            "Untitled",
+            "Details",
+            "Tools",
+            "Entry",
+            "Data",
+            "Grid",
+        ),
+        stable_markers=(
+            "Selection",
+            "UTF-8",
+            "Details",
+            "Tools",
+            "Entry",
+            "Data",
+            "Grid",
+        ),
     ),
     "pad": Profile(
         roots=("tui/applets/pad/pad.f",),
@@ -134,6 +165,34 @@ FEXP-RUN
         ready_markers=("File", "Edit", "View", "Tools"),
         stable_markers=("File", "Edit", "View", "Tools"),
     ),
+    "daybook": Profile(
+        roots=("tui/applets/daybook/daybook.f",),
+        resources=("tui/applets/daybook/daybook.uidl",),
+        autoexec=r"""\ autoexec.f - standalone Daybook profile
+ENTER-USERLAND
+." [akashic] loading daybook" CR
+REQUIRE tui/applets/daybook/daybook.f
+." [akashic] starting daybook" CR
+DAYBOOK-RUN
+." [akashic] daybook exited" CR
+""",
+        ready_markers=("File", "Entry", "Go", "4 entries"),
+        stable_markers=("File", "Entry", "Go", "entries"),
+    ),
+    "grid": Profile(
+        roots=("tui/applets/grid/grid.f",),
+        resources=("tui/applets/grid/grid.uidl",),
+        autoexec=r"""\ autoexec.f - standalone Grid profile
+ENTER-USERLAND
+." [akashic] loading grid" CR
+REQUIRE tui/applets/grid/grid.f
+." [akashic] starting grid" CR
+GRID-RUN
+." [akashic] grid exited" CR
+""",
+        ready_markers=("File", "Edit", "Data", "Grid"),
+        stable_markers=("File", "Edit", "Data", "Grid"),
+    ),
 }
 
 
@@ -142,10 +201,28 @@ LARGE_SAMPLE = b"".join(
     for line in range(1, 49)
 )
 
+SAMPLE_DATE = datetime.now(timezone.utc).date().isoformat()
+DAYBOOK_SAMPLE = (
+    "# Daybook\n\n"
+    f"- {SAMPLE_DATE} 09:30 | Project review\n"
+    f"- [ ] {SAMPLE_DATE} | Plan the next release\n"
+    f"- [x] {SAMPLE_DATE} | Morning walk\n"
+    f"> {SAMPLE_DATE} | Keep the system small and legible\n"
+).encode()
+
+GRID_SAMPLE = (
+    "Item,Qty,Price,Total\n"
+    '"Paper, A4",3,12,=B2*C2\n'
+    "Ink,2,25,=B3*C3\n"
+    "Subtotal,,,=SUM(D2:D3)\n"
+).encode()
+
 SAMPLE_FILES = {
     "welcome.txt": b"Welcome to Akashic.\nThis file is editable in Pad.\n",
     "example.f": b": SQUARE DUP * ;\n9 SQUARE .\n",
     "large.txt": LARGE_SAMPLE,
+    "daybook.md": DAYBOOK_SAMPLE,
+    "grid.csv": GRID_SAMPLE,
 }
 
 
@@ -263,7 +340,7 @@ def build_image(profile_name: str, output: Path | None = None) -> Path:
     )
     fs.inject_file(".growth-hole-2", bytes(512), flags=FLAG_SYSTEM)
 
-    for name in ("welcome.txt", "example.f"):
+    for name in sorted(SAMPLE_FILES.keys() - {"large.txt"}):
         fs.inject_file(name, SAMPLE_FILES[name], ftype=FTYPE_TEXT)
 
     fs.delete_file(".growth-hole-1")
@@ -428,11 +505,11 @@ def smoke(
                         ):
                             session.send_text("smoke.txt")
                             session.send_key("enter")
-                            if wait_screen("Saved", "Pad did not complete Save As"):
-                                if "Save as:" in screen.text():
-                                    journey_errors.append(
-                                        "Pad's Save As prompt remained active after Enter"
-                                    )
+                            if wait_screen_gone(
+                                "Save as:", "Pad did not close its Save As prompt"
+                            ) and wait_screen(
+                                "smoke.txt", "Pad did not adopt its saved filename"
+                            ):
                                 live_fs = MP64FS(
                                     bytearray(session.system.storage._image_data)
                                 )
@@ -455,6 +532,117 @@ def smoke(
                                 if live_fs.find_file("kdos.f") is None:
                                     journey_errors.append(
                                         "Pad Save As damaged the MP64FS directory"
+                                    )
+
+        if initial_ready and profile_name == "daybook":
+            session.send_key("ctrl+n")
+            if wait_screen(
+                "New task:", "Ctrl+N did not open Daybook's task prompt"
+            ):
+                session.send_text("Ship the smoke journey")
+                session.send_key("enter")
+                if wait_screen(
+                    "Ship the smoke journey",
+                    "Daybook did not add the submitted task",
+                ):
+                    session.send_text(" ")
+                    if wait_screen(
+                        "[x] Ship the smoke journey",
+                        "Daybook did not complete the selected task",
+                    ):
+                        live_fs = MP64FS(
+                            bytearray(session.system.storage._image_data)
+                        )
+                        try:
+                            daybook = live_fs.read_file("daybook.md")
+                        except FileNotFoundError:
+                            daybook = b""
+                        expected = (
+                            f"- [x] {SAMPLE_DATE} | "
+                            "Ship the smoke journey\n"
+                        ).encode()
+                        if expected not in daybook:
+                            journey_errors.append(
+                                "Daybook did not persist the completed task"
+                            )
+
+        if initial_ready and profile_name == "grid":
+            for _ in range(3):
+                session.send_key("right")
+            session.send_key("down")
+            session.send_key("enter")
+            if wait_screen(
+                "Edit cell:", "Enter did not open Grid's cell editor"
+            ):
+                for _ in range(len("=B2*C2")):
+                    session.send_key("backspace")
+                session.send_text("=B2*C2+5")
+                session.send_key("enter")
+                if wait_screen(
+                    "41",
+                    "Grid did not evaluate the edited formula",
+                    step_budget=600_000_000,
+                    wall_timeout=15.0,
+                ):
+                    wait_screen(
+                        "91", "Grid did not recalculate the dependent SUM range"
+                    )
+                    session.send_key("ctrl+s")
+                    wait_screen(
+                        "Grid saved", "Ctrl+S did not save Grid's worksheet"
+                    )
+                    session.send_key("ctrl+r")
+                    wait_screen(
+                        "Grid reloaded",
+                        "Grid could not reload its autosaved worksheet",
+                    )
+                    live_fs = MP64FS(
+                        bytearray(session.system.storage._image_data)
+                    )
+                    try:
+                        worksheet = live_fs.read_file("grid.csv")
+                    except FileNotFoundError:
+                        worksheet = b""
+                    if b'"Paper, A4",3,12,=B2*C2+5\n' not in worksheet:
+                        journey_errors.append(
+                            "Grid did not persist the edited formula as CSV"
+                        )
+                    session.send_key("ctrl+g")
+                    if wait_screen(
+                        "Go to cell:", "Grid did not reopen Go to Cell"
+                    ):
+                        for _ in range(len("D2")):
+                            session.send_key("backspace")
+                        session.send_text("A6")
+                        session.send_key("enter")
+                        if wait_screen("A6", "Grid did not navigate to A6"):
+                            session.send_key("enter")
+                            if wait_screen(
+                                "Edit cell:",
+                                "Grid did not edit the cycle-test cell",
+                            ):
+                                session.send_text("=A6")
+                                session.send_key("enter")
+                                if wait_screen(
+                                    "#ERR",
+                                    "Grid did not report a self-reference cycle",
+                                ):
+                                    session.send_key("delete")
+                                    wait_screen_gone(
+                                        "#ERR",
+                                        "Grid did not recover after clearing the cycle",
+                                    )
+                                    session.send_key("ctrl+s")
+                                    wait_screen(
+                                        "Grid saved",
+                                        "Grid did not save after cycle recovery",
+                                    )
+                                    for _ in range(4):
+                                        session.send_key("up")
+                                    for _ in range(3):
+                                        session.send_key("right")
+                                    wait_screen(
+                                        "D2", "Grid did not return to the edited formula"
                                     )
 
         if initial_ready:
@@ -483,6 +671,15 @@ def smoke(
                 )
             if profile_name in ("desktop", "pad") and "smoke" not in resized_text:
                 journey_errors.append("Pad text was lost after resize")
+            if (
+                profile_name == "daybook"
+                and "Ship the smoke journey" not in resized_text
+            ):
+                journey_errors.append("Daybook entries were lost after resize")
+            if profile_name == "grid" and not all(
+                marker in resized_text for marker in ("41", "91")
+            ):
+                journey_errors.append("Grid formula results were lost after resize")
             if (
                 profile_name == "desktop"
                 and resized_text.count("[1:Akashic Pa") != 1
@@ -790,6 +987,22 @@ def smoke(
                 )
             screen = session.snapshot()
             if profile_name == "desktop":
+                session.send_key("alt+3")
+                wait_screen(
+                    "[3:Daybook*]",
+                    "Desk could not focus Daybook with Alt+3",
+                )
+                session.send_key("alt+4")
+                wait_screen(
+                    "[4:Grid*]",
+                    "Desk could not focus Grid with Alt+4",
+                )
+                session.send_key("alt+2")
+                wait_screen(
+                    "[2:File Explo*]",
+                    "Desk could not return focus to File Explorer",
+                )
+                screen = session.snapshot()
                 final_text = screen.text()
                 if "1smoke2" in final_text or "smoke2" in final_text:
                     journey_errors.append(

@@ -1,0 +1,795 @@
+\ =====================================================================
+\  daybook.f - Daily planner, tasks, events, and notes
+\ =====================================================================
+\  Durable data is stored in /daybook.md using a small Markdown dialect:
+\    - [ ] 2026-07-10 | unfinished task
+\    - [x] 2026-07-10 | finished task
+\    - 2026-07-10 09:30 | timed event
+\    > 2026-07-10 | note
+\
+\  Entry: DAYBOOK-ENTRY ( desc -- )  for Desk
+\         DAYBOOK-RUN   ( -- )       standalone
+\ =====================================================================
+
+PROVIDED akashic-tui-daybook
+
+REQUIRE ../../widgets/prompt.f
+REQUIRE ../../app-desc.f
+REQUIRE ../../app-shell.f
+REQUIRE ../../uidl-tui.f
+REQUIRE ../../draw.f
+REQUIRE ../../region.f
+REQUIRE ../../keys.f
+REQUIRE ../../widget.f
+REQUIRE ../../../utils/fs/vfs.f
+REQUIRE ../../../utils/string.f
+REQUIRE ../../../utils/datetime.f
+
+86400 CONSTANT _DB-SECONDS-DAY
+96    CONSTANT _DB-MAX-ENTRIES
+120   CONSTANT _DB-TEXT-CAP
+160   CONSTANT _DB-ENTRY-SZ
+32768 CONSTANT _DB-IO-CAP
+256   CONSTANT _DB-PROMPT-CAP
+
+1 CONSTANT _DB-K-TASK
+2 CONSTANT _DB-K-EVENT
+3 CONSTANT _DB-K-NOTE
+
+0 CONSTANT _DB-PRM-NONE
+1 CONSTANT _DB-PRM-TASK
+2 CONSTANT _DB-PRM-EVENT
+3 CONSTANT _DB-PRM-NOTE
+
+ 0 CONSTANT _DB-E-KIND
+ 8 CONSTANT _DB-E-DONE
+16 CONSTANT _DB-E-DATE
+24 CONSTANT _DB-E-MINUTE
+32 CONSTANT _DB-E-TEXT-U
+40 CONSTANT _DB-E-TEXT
+
+CREATE _DB-ENTRIES _DB-MAX-ENTRIES _DB-ENTRY-SZ * ALLOT
+VARIABLE _DB-COUNT
+VARIABLE _DB-SELECTED-DATE
+VARIABLE _DB-SELECTED
+VARIABLE _DB-DIRTY
+VARIABLE _DB-VFS
+
+VARIABLE _DB-E-BODY
+VARIABLE _DB-E-SBAR
+VARIABLE _DB-E-SBAR-DATE
+VARIABLE _DB-E-SBAR-STATE
+
+CREATE _DB-PANEL 40 ALLOT
+VARIABLE _DB-PANEL-RGN
+
+VARIABLE _DB-PROMPT
+VARIABLE _DB-PROMPT-RGN
+VARIABLE _DB-PROMPT-MODE
+CREATE _DB-PROMPT-BUF _DB-PROMPT-CAP ALLOT
+
+CREATE _DB-IO-BUF _DB-IO-CAP ALLOT
+VARIABLE _DB-IO-U
+CREATE _DB-DATE-BUF 16 ALLOT
+CREATE _DB-STATUS-BUF 96 ALLOT
+VARIABLE _DB-STATUS-U
+
+: _DB-ENTRY  ( index -- addr )
+    _DB-ENTRY-SZ * _DB-ENTRIES + ;
+
+: _DB-TODAY  ( -- epoch )
+    DT-NOW-S _DB-SECONDS-DAY / _DB-SECONDS-DAY * ;
+
+: _DB-CLEAR  ( -- )
+    _DB-ENTRIES _DB-MAX-ENTRIES _DB-ENTRY-SZ * 0 FILL
+    0 _DB-COUNT !
+    0 _DB-SELECTED ! ;
+
+VARIABLE _DB-A-KIND
+VARIABLE _DB-A-DONE
+VARIABLE _DB-A-DATE
+VARIABLE _DB-A-MINUTE
+VARIABLE _DB-A-TEXT-A
+VARIABLE _DB-A-TEXT-U
+VARIABLE _DB-A-N
+VARIABLE _DB-A-ENTRY
+
+: _DB-ADD  ( kind done date minute text-a text-u -- index | -1 )
+    _DB-A-TEXT-U ! _DB-A-TEXT-A ! _DB-A-MINUTE !
+    _DB-A-DATE ! _DB-A-DONE ! _DB-A-KIND !
+    _DB-COUNT @ _DB-MAX-ENTRIES >= IF -1 EXIT THEN
+    _DB-COUNT @ DUP _DB-ENTRY _DB-A-ENTRY !
+    _DB-A-KIND @   _DB-A-ENTRY @ _DB-E-KIND + !
+    _DB-A-DONE @   _DB-A-ENTRY @ _DB-E-DONE + !
+    _DB-A-DATE @   _DB-A-ENTRY @ _DB-E-DATE + !
+    _DB-A-MINUTE @ _DB-A-ENTRY @ _DB-E-MINUTE + !
+    _DB-A-TEXT-U @ _DB-TEXT-CAP MIN DUP _DB-A-N !
+    _DB-A-N @ _DB-A-ENTRY @ _DB-E-TEXT-U + !
+    _DB-A-TEXT-A @ _DB-A-ENTRY @ _DB-E-TEXT + _DB-A-N @ CMOVE
+    1 _DB-COUNT +! ;
+
+VARIABLE _DB-N-A
+VARIABLE _DB-N-U
+VARIABLE _DB-N-ACC
+VARIABLE _DB-N-OK
+
+: _DB-FIXED-NUM  ( addr digits -- n flag )
+    _DB-N-U ! _DB-N-A ! 0 _DB-N-ACC ! -1 _DB-N-OK !
+    _DB-N-U @ 0 ?DO
+        _DB-N-A @ I + C@
+        DUP [CHAR] 0 < OVER [CHAR] 9 > OR IF
+            DROP 0 _DB-N-OK !
+        ELSE
+            [CHAR] 0 - _DB-N-ACC @ 10 * + _DB-N-ACC !
+        THEN
+    LOOP
+    _DB-N-ACC @ _DB-N-OK @ ;
+
+VARIABLE _DB-P-A
+VARIABLE _DB-P-U
+VARIABLE _DB-P-Y
+VARIABLE _DB-P-M
+VARIABLE _DB-P-D
+VARIABLE _DB-P-H
+VARIABLE _DB-P-MIN
+
+: _DB-PARSE-DATE  ( addr len -- epoch flag )
+    _DB-P-U ! _DB-P-A !
+    _DB-P-U @ 10 < IF 0 0 EXIT THEN
+    _DB-P-A @ 4 + C@ [CHAR] - <> IF 0 0 EXIT THEN
+    _DB-P-A @ 7 + C@ [CHAR] - <> IF 0 0 EXIT THEN
+    _DB-P-A @ 4 _DB-FIXED-NUM 0= IF DROP 0 0 EXIT THEN _DB-P-Y !
+    _DB-P-A @ 5 + 2 _DB-FIXED-NUM 0= IF DROP 0 0 EXIT THEN _DB-P-M !
+    _DB-P-A @ 8 + 2 _DB-FIXED-NUM 0= IF DROP 0 0 EXIT THEN _DB-P-D !
+    _DB-P-Y @ 1970 < IF 0 0 EXIT THEN
+    _DB-P-M @ 1 < _DB-P-M @ 12 > OR IF 0 0 EXIT THEN
+    _DB-P-D @ 1 < IF 0 0 EXIT THEN
+    _DB-P-D @ _DB-P-M @ _DB-P-Y @ _DT-DIM@ > IF 0 0 EXIT THEN
+    _DB-P-Y @ _DB-P-M @ _DB-P-D @ DT-YMD>EPOCH -1 ;
+
+: _DB-PARSE-TIME  ( addr len -- minute flag )
+    _DB-P-U ! _DB-P-A !
+    _DB-P-U @ 5 < IF 0 0 EXIT THEN
+    _DB-P-A @ 2 + C@ [CHAR] : <> IF 0 0 EXIT THEN
+    _DB-P-A @ 2 _DB-FIXED-NUM 0= IF DROP 0 0 EXIT THEN _DB-P-H !
+    _DB-P-A @ 3 + 2 _DB-FIXED-NUM 0= IF DROP 0 0 EXIT THEN _DB-P-MIN !
+    _DB-P-H @ 23 > _DB-P-MIN @ 59 > OR IF 0 0 EXIT THEN
+    _DB-P-H @ 60 * _DB-P-MIN @ + -1 ;
+
+VARIABLE _DB-LINE-A
+VARIABLE _DB-LINE-U
+VARIABLE _DB-LINE-DATE
+VARIABLE _DB-LINE-TIME
+VARIABLE _DB-LINE-DONE
+
+: _DB-PARSE-TASK?  ( -- flag )
+    _DB-LINE-U @ 19 < IF 0 EXIT THEN
+    _DB-LINE-A @ C@ [CHAR] - <> IF 0 EXIT THEN
+    _DB-LINE-A @ 1+ C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 2 + C@ [CHAR] [ <> IF 0 EXIT THEN
+    _DB-LINE-A @ 4 + C@ [CHAR] ] <> IF 0 EXIT THEN
+    _DB-LINE-A @ 5 + C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 16 + C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 17 + C@ [CHAR] | <> IF 0 EXIT THEN
+    _DB-LINE-A @ 18 + C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 3 + C@ DUP [CHAR] x = OVER [CHAR] X = OR IF
+        DROP -1 _DB-LINE-DONE !
+    ELSE
+        BL <> IF 0 EXIT THEN 0 _DB-LINE-DONE !
+    THEN
+    _DB-LINE-A @ 6 + 10 _DB-PARSE-DATE
+    0= IF DROP 0 EXIT THEN _DB-LINE-DATE !
+    _DB-K-TASK _DB-LINE-DONE @ _DB-LINE-DATE @ -1
+    _DB-LINE-A @ 19 + _DB-LINE-U @ 19 - _DB-ADD DROP
+    -1 ;
+
+: _DB-PARSE-EVENT?  ( -- flag )
+    _DB-LINE-U @ 21 < IF 0 EXIT THEN
+    _DB-LINE-A @ C@ [CHAR] - <> IF 0 EXIT THEN
+    _DB-LINE-A @ 1+ C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 12 + C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 18 + C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 19 + C@ [CHAR] | <> IF 0 EXIT THEN
+    _DB-LINE-A @ 20 + C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 2 + 10 _DB-PARSE-DATE
+    0= IF DROP 0 EXIT THEN _DB-LINE-DATE !
+    _DB-LINE-A @ 13 + 5 _DB-PARSE-TIME
+    0= IF DROP 0 EXIT THEN _DB-LINE-TIME !
+    _DB-K-EVENT 0 _DB-LINE-DATE @ _DB-LINE-TIME @
+    _DB-LINE-A @ 21 + _DB-LINE-U @ 21 - _DB-ADD DROP
+    -1 ;
+
+: _DB-PARSE-NOTE?  ( -- flag )
+    _DB-LINE-U @ 15 < IF 0 EXIT THEN
+    _DB-LINE-A @ C@ [CHAR] > <> IF 0 EXIT THEN
+    _DB-LINE-A @ 1+ C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 12 + C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 13 + C@ [CHAR] | <> IF 0 EXIT THEN
+    _DB-LINE-A @ 14 + C@ BL <> IF 0 EXIT THEN
+    _DB-LINE-A @ 2 + 10 _DB-PARSE-DATE
+    0= IF DROP 0 EXIT THEN _DB-LINE-DATE !
+    _DB-K-NOTE 0 _DB-LINE-DATE @ -1
+    _DB-LINE-A @ 15 + _DB-LINE-U @ 15 - _DB-ADD DROP
+    -1 ;
+
+: _DB-PARSE-LINE  ( addr len -- )
+    _DB-LINE-U ! _DB-LINE-A !
+    _DB-LINE-U @ 0> IF
+        _DB-LINE-A @ _DB-LINE-U @ + 1- C@ 13 = IF -1 _DB-LINE-U +! THEN
+    THEN
+    _DB-PARSE-TASK? IF EXIT THEN
+    _DB-PARSE-EVENT? IF EXIT THEN
+    _DB-PARSE-NOTE? DROP ;
+
+VARIABLE _DB-LOAD-POS
+VARIABLE _DB-LOAD-START
+VARIABLE _DB-LOAD-FD
+
+: _DB-PARSE-FILE  ( -- )
+    0 _DB-LOAD-POS ! 0 _DB-LOAD-START !
+    BEGIN _DB-LOAD-POS @ _DB-IO-U @ < WHILE
+        _DB-IO-BUF _DB-LOAD-POS @ + C@ 10 = IF
+            _DB-IO-BUF _DB-LOAD-START @ +
+            _DB-LOAD-POS @ _DB-LOAD-START @ - _DB-PARSE-LINE
+            _DB-LOAD-POS @ 1+ _DB-LOAD-START !
+        THEN
+        1 _DB-LOAD-POS +!
+    REPEAT
+    _DB-LOAD-START @ _DB-IO-U @ < IF
+        _DB-IO-BUF _DB-LOAD-START @ +
+        _DB-IO-U @ _DB-LOAD-START @ - _DB-PARSE-LINE
+    THEN ;
+
+: _DB-LOAD  ( -- ior )
+    _DB-CLEAR
+    VFS-CUR >R _DB-VFS @ VFS-USE
+    S" /daybook.md" VFS-OPEN
+    R> VFS-USE
+    DUP 0= IF DROP 0 EXIT THEN
+    _DB-LOAD-FD !
+    _DB-IO-BUF _DB-IO-CAP _DB-LOAD-FD @ VFS-READ _DB-IO-U !
+    _DB-LOAD-FD @ VFS-CLOSE
+    _DB-PARSE-FILE
+    0 ;
+
+VARIABLE _DB-APP-A
+VARIABLE _DB-APP-U
+VARIABLE _DB-APP-N
+
+: _DB-IO-RESET  ( -- )  0 _DB-IO-U ! ;
+
+: _DB-IO-APPEND  ( addr len -- )
+    _DB-APP-U ! _DB-APP-A !
+    _DB-IO-CAP _DB-IO-U @ - 0 MAX _DB-APP-U @ MIN DUP _DB-APP-N !
+    _DB-APP-A @ _DB-IO-BUF _DB-IO-U @ + _DB-APP-N @ CMOVE
+    _DB-APP-N @ _DB-IO-U +! ;
+
+: _DB-IO-CHAR  ( c -- )
+    _DB-IO-U @ _DB-IO-CAP < IF
+        _DB-IO-BUF _DB-IO-U @ + C! 1 _DB-IO-U +!
+    ELSE DROP THEN ;
+
+: _DB-IO-2D  ( n -- )
+    DUP 10 / [CHAR] 0 + _DB-IO-CHAR
+    10 MOD [CHAR] 0 + _DB-IO-CHAR ;
+
+VARIABLE _DB-SER-E
+
+: _DB-SERIALIZE-ENTRY  ( entry -- )
+    _DB-SER-E !
+    _DB-SER-E @ _DB-E-KIND + @ CASE
+        _DB-K-TASK OF
+            S" - [" _DB-IO-APPEND
+            _DB-SER-E @ _DB-E-DONE + @ IF [CHAR] x ELSE BL THEN _DB-IO-CHAR
+            S" ] " _DB-IO-APPEND
+        ENDOF
+        _DB-K-EVENT OF S" - " _DB-IO-APPEND ENDOF
+        _DB-K-NOTE OF S" > " _DB-IO-APPEND ENDOF
+    ENDCASE
+    _DB-SER-E @ _DB-E-DATE + @ _DB-DATE-BUF 16 DT-DATE
+    _DB-DATE-BUF SWAP _DB-IO-APPEND
+    _DB-SER-E @ _DB-E-KIND + @ _DB-K-EVENT = IF
+        BL _DB-IO-CHAR
+        _DB-SER-E @ _DB-E-MINUTE + @ DUP 60 / _DB-IO-2D
+        [CHAR] : _DB-IO-CHAR 60 MOD _DB-IO-2D
+    THEN
+    S"  | " _DB-IO-APPEND
+    _DB-SER-E @ _DB-E-TEXT +
+    _DB-SER-E @ _DB-E-TEXT-U + @ _DB-IO-APPEND
+    10 _DB-IO-CHAR ;
+
+: _DB-SERIALIZE  ( -- )
+    _DB-IO-RESET
+    S" # Daybook" _DB-IO-APPEND 10 _DB-IO-CHAR 10 _DB-IO-CHAR
+    _DB-COUNT @ 0 ?DO I _DB-ENTRY _DB-SERIALIZE-ENTRY LOOP ;
+
+VARIABLE _DB-SAVE-FD
+VARIABLE _DB-SAVE-ACTUAL
+VARIABLE _DB-SAVE-IOR
+
+: _DB-WRITE  ( -- ior )
+    VFS-CUR >R _DB-VFS @ VFS-USE
+    S" /daybook.md" VFS-OPEN
+    DUP 0= IF
+        DROP S" /daybook.md" _DB-VFS @ VFS-CREATE
+        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN DROP
+        S" /daybook.md" VFS-OPEN
+        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN
+    THEN
+    R> VFS-USE
+    _DB-SAVE-FD !
+    _DB-SAVE-FD @ VFS-REWIND
+    0 _DB-SAVE-FD @ VFS-TRUNCATE IF
+        _DB-SAVE-FD @ VFS-CLOSE -2 EXIT
+    THEN
+    _DB-IO-BUF _DB-IO-U @ _DB-SAVE-FD @ VFS-WRITE _DB-SAVE-ACTUAL !
+    _DB-SAVE-FD @ VFS-CLOSE
+    _DB-VFS @ VFS-SYNC DROP
+    _DB-SAVE-ACTUAL @ _DB-IO-U @ = IF 0 ELSE -3 THEN ;
+
+: _DB-DAY-COUNT  ( -- n )
+    0
+    _DB-COUNT @ 0 ?DO
+        I _DB-ENTRY _DB-E-DATE + @ _DB-SELECTED-DATE @ = IF 1+ THEN
+    LOOP ;
+
+VARIABLE _DB-KC-KIND
+: _DB-KIND-COUNT  ( kind -- n )
+    _DB-KC-KIND ! 0
+    _DB-COUNT @ 0 ?DO
+        I _DB-ENTRY DUP _DB-E-DATE + @ _DB-SELECTED-DATE @ =
+        SWAP _DB-E-KIND + @ _DB-KC-KIND @ = AND IF 1+ THEN
+    LOOP ;
+
+: _DB-CLAMP-SELECTION  ( -- )
+    _DB-DAY-COUNT DUP 0= IF DROP 0 _DB-SELECTED ! EXIT THEN
+    1- _DB-SELECTED @ MIN 0 MAX _DB-SELECTED ! ;
+
+VARIABLE _DB-NTH-WANT
+VARIABLE _DB-NTH-SEEN
+VARIABLE _DB-NTH-KIND
+
+: _DB-NTH-IN-KIND  ( kind -- entry | 0 )
+    _DB-NTH-KIND !
+    _DB-COUNT @ 0 ?DO
+        I _DB-ENTRY DUP _DB-E-DATE + @ _DB-SELECTED-DATE @ =
+        OVER _DB-E-KIND + @ _DB-NTH-KIND @ = AND IF
+            _DB-NTH-SEEN @ _DB-NTH-WANT @ = IF UNLOOP EXIT THEN
+            1 _DB-NTH-SEEN +!
+        THEN DROP
+    LOOP 0 ;
+
+: _DB-SELECTED-ENTRY  ( -- entry | 0 )
+    _DB-SELECTED @ _DB-NTH-WANT ! 0 _DB-NTH-SEEN !
+    _DB-K-EVENT _DB-NTH-IN-KIND ?DUP IF EXIT THEN
+    _DB-K-TASK  _DB-NTH-IN-KIND ?DUP IF EXIT THEN
+    _DB-K-NOTE  _DB-NTH-IN-KIND ;
+
+VARIABLE _DB-ST-A
+VARIABLE _DB-ST-U
+VARIABLE _DB-ST-N
+
+: _DB-ST-RESET  ( -- ) 0 _DB-STATUS-U ! ;
+: _DB-ST-APPEND  ( addr len -- )
+    _DB-ST-U ! _DB-ST-A !
+    96 _DB-STATUS-U @ - 0 MAX _DB-ST-U @ MIN DUP _DB-ST-N !
+    _DB-ST-A @ _DB-STATUS-BUF _DB-STATUS-U @ + _DB-ST-N @ CMOVE
+    _DB-ST-N @ _DB-STATUS-U +! ;
+
+: _DB-UPDATE-STATUS  ( -- )
+    _DB-SELECTED-DATE @ _DB-DATE-BUF 16 DT-DATE DROP
+    _DB-E-SBAR-DATE @ ?DUP IF
+        S" text" _DB-DATE-BUF 10 UTUI-SET-ATTR
+    THEN
+    _DB-ST-RESET
+    _DB-DAY-COUNT NUM>STR _DB-ST-APPEND
+    S"  entries  |  " _DB-ST-APPEND
+    _DB-DIRTY @ IF S" Unsaved" ELSE S" Saved" THEN _DB-ST-APPEND
+    _DB-E-SBAR-STATE @ ?DUP IF
+        S" text" _DB-STATUS-BUF _DB-STATUS-U @ UTUI-SET-ATTR
+    THEN ;
+
+: _DB-INVALIDATE  ( -- )
+    _DB-PANEL WDG-DIRTY
+    _DB-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
+    _DB-UPDATE-STATUS
+    ASHELL-DIRTY! ;
+
+: _DB-SAVE  ( -- ior )
+    _DB-SERIALIZE _DB-WRITE DUP _DB-SAVE-IOR !
+    0= IF 0 _DB-DIRTY ! THEN
+    _DB-INVALIDATE
+    _DB-SAVE-IOR @ ;
+
+: _DB-COMMIT  ( -- )
+    -1 _DB-DIRTY !
+    _DB-SAVE IF S" Daybook save failed" 2200 ASHELL-TOAST THEN ;
+
+VARIABLE _DB-HAS-DATE
+
+: _DB-HAS-ENTRY?  ( epoch -- flag )
+    _DB-HAS-DATE !
+    _DB-COUNT @ 0 ?DO
+        I _DB-ENTRY _DB-E-DATE + @ _DB-HAS-DATE @ = IF
+            -1 UNLOOP EXIT
+        THEN
+    LOOP 0 ;
+
+: _DB-MONTH-NAME  ( month -- addr len )
+    CASE
+        1 OF S" January" ENDOF 2 OF S" February" ENDOF
+        3 OF S" March" ENDOF 4 OF S" April" ENDOF
+        5 OF S" May" ENDOF 6 OF S" June" ENDOF
+        7 OF S" July" ENDOF 8 OF S" August" ENDOF
+        9 OF S" September" ENDOF 10 OF S" October" ENDOF
+        11 OF S" November" ENDOF 12 OF S" December" ENDOF
+        S" Month"
+    ENDCASE ;
+
+VARIABLE _DB-DW
+VARIABLE _DB-DH
+VARIABLE _DB-DCAL-W
+VARIABLE _DB-DY
+VARIABLE _DB-DM
+VARIABLE _DB-DD
+VARIABLE _DB-DMONTH-EPOCH
+VARIABLE _DB-DWDAY
+VARIABLE _DB-DROW
+VARIABLE _DB-DCOL
+VARIABLE _DB-DEPOCH
+VARIABLE _DB-DATTR
+
+: _DB-DRAW-CALENDAR  ( -- )
+    _DB-SELECTED-DATE @ DT-EPOCH>YMD _DB-DD ! _DB-DM ! _DB-DY !
+    255 23 0 DRW-STYLE!
+    32 0 0 _DB-DH @ _DB-DCAL-W @ DRW-FILL-RECT
+    255 23 1 DRW-STYLE!
+    _DB-DM @ _DB-MONTH-NAME 0 2 DRW-TEXT
+    _DB-DY @ NUM>STR 0 _DB-DCAL-W @ 6 - DRW-TEXT
+    250 23 0 DRW-STYLE!
+    S" Mo Tu We Th Fr Sa Su" 2 1 DRW-TEXT
+    _DB-DY @ _DB-DM @ 1 DT-YMD>EPOCH DUP _DB-DMONTH-EPOCH !
+    _DB-SECONDS-DAY / 3 + 7 MOD _DB-DWDAY !
+    _DB-DM @ _DB-DY @ _DT-DIM@ 1+ 1 DO
+        _DB-DWDAY @ I 1- + DUP 7 / 4 + _DB-DROW !
+        7 MOD 3 * 2 + _DB-DCOL !
+        _DB-DMONTH-EPOCH @ I 1- _DB-SECONDS-DAY * + _DB-DEPOCH !
+        0 _DB-DATTR !
+        _DB-DEPOCH @ _DB-SELECTED-DATE @ = IF
+            CELL-A-REVERSE _DB-DATTR +!
+        THEN
+        _DB-DEPOCH @ _DB-TODAY = IF CELL-A-UNDERLINE _DB-DATTR +! THEN
+        _DB-DEPOCH @ _DB-HAS-ENTRY? IF CELL-A-BOLD _DB-DATTR +! THEN
+        255 23 _DB-DATTR @ DRW-STYLE!
+        I NUM>STR _DB-DROW @ _DB-DCOL @ 2 DRW-TEXT-RIGHT
+    LOOP
+    239 234 0 DRW-STYLE!
+    9474 0 _DB-DCAL-W @ _DB-DH @ DRW-VLINE ;
+
+VARIABLE _DB-AGENDA-COL
+VARIABLE _DB-AGENDA-W
+VARIABLE _DB-VIEW-INDEX
+VARIABLE _DB-DRAW-KIND
+VARIABLE _DB-DRAW-ROW
+VARIABLE _DB-DRAW-E
+VARIABLE _DB-DRAW-TEXT-W
+
+: _DB-DRAW-TIME  ( minute row col -- )
+    _DB-DCOL ! _DB-DROW !
+    DUP 60 / DUP 10 / [CHAR] 0 + _DB-DROW @ _DB-DCOL @ DRW-CHAR
+    10 MOD [CHAR] 0 + _DB-DROW @ _DB-DCOL @ 1+ DRW-CHAR
+    [CHAR] : _DB-DROW @ _DB-DCOL @ 2 + DRW-CHAR
+    60 MOD DUP 10 / [CHAR] 0 + _DB-DROW @ _DB-DCOL @ 3 + DRW-CHAR
+    10 MOD [CHAR] 0 + _DB-DROW @ _DB-DCOL @ 4 + DRW-CHAR ;
+
+: _DB-DRAW-ENTRY  ( entry -- )
+    _DB-DRAW-E !
+    _DB-VIEW-INDEX @ _DB-SELECTED @ = IF CELL-A-REVERSE ELSE 0 THEN
+    _DB-DRAW-E @ _DB-E-KIND + @ _DB-K-TASK =
+    _DB-DRAW-E @ _DB-E-DONE + @ AND IF CELL-A-DIM OR THEN
+    253 234 ROT DRW-STYLE!
+    _DB-DRAW-E @ _DB-E-KIND + @ CASE
+        _DB-K-EVENT OF
+            220 DRW-FG!
+            _DB-DRAW-E @ _DB-E-MINUTE + @ _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + _DB-DRAW-TIME
+            253 DRW-FG!
+            _DB-DRAW-E @ _DB-E-TEXT +
+            _DB-DRAW-E @ _DB-E-TEXT-U + @ _DB-DRAW-TEXT-W @ MIN
+            _DB-DRAW-ROW @ _DB-AGENDA-COL @ 9 + DRW-TEXT
+        ENDOF
+        _DB-K-TASK OF
+            _DB-DRAW-E @ _DB-E-DONE + @ IF S" [x]" ELSE S" [ ]" THEN
+            _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + DRW-TEXT
+            _DB-DRAW-E @ _DB-E-TEXT +
+            _DB-DRAW-E @ _DB-E-TEXT-U + @ _DB-DRAW-TEXT-W @ 4 + MIN
+            _DB-DRAW-ROW @ _DB-AGENDA-COL @ 6 + DRW-TEXT
+        ENDOF
+        _DB-K-NOTE OF
+            45 _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + DRW-CHAR
+            _DB-DRAW-E @ _DB-E-TEXT +
+            _DB-DRAW-E @ _DB-E-TEXT-U + @ _DB-DRAW-TEXT-W @ 2 + MIN
+            _DB-DRAW-ROW @ _DB-AGENDA-COL @ 4 + DRW-TEXT
+        ENDOF
+    ENDCASE
+    1 _DB-VIEW-INDEX +! ;
+
+: _DB-DRAW-KIND-SECTION  ( kind -- )
+    _DB-DRAW-KIND !
+    _DB-DRAW-ROW @ _DB-DH @ >= IF EXIT THEN
+    244 234 1 DRW-STYLE!
+    _DB-DRAW-KIND @ CASE
+        _DB-K-EVENT OF S" SCHEDULE" ENDOF
+        _DB-K-TASK OF S" TASKS" ENDOF
+        _DB-K-NOTE OF S" NOTES" ENDOF
+    ENDCASE
+    _DB-DRAW-ROW @ _DB-AGENDA-COL @ 1+ DRW-TEXT
+    1 _DB-DRAW-ROW +!
+    _DB-COUNT @ 0 ?DO
+        I _DB-ENTRY DUP _DB-E-DATE + @ _DB-SELECTED-DATE @ =
+        OVER _DB-E-KIND + @ _DB-DRAW-KIND @ = AND IF
+            _DB-DRAW-ROW @ _DB-DH @ < IF
+                DUP _DB-DRAW-ENTRY 1 _DB-DRAW-ROW +!
+            THEN
+        THEN DROP
+    LOOP
+    1 _DB-DRAW-ROW +! ;
+
+: _DB-DRAW-AGENDA  ( -- )
+    253 234 0 DRW-STYLE!
+    32 0 _DB-AGENDA-COL @ _DB-DH @ _DB-AGENDA-W @ DRW-FILL-RECT
+    255 234 1 DRW-STYLE!
+    _DB-SELECTED-DATE @ _DB-DATE-BUF 16 DT-DATE
+    _DB-DATE-BUF SWAP 0 _DB-AGENDA-COL @ 2 + DRW-TEXT
+    244 234 0 DRW-STYLE!
+    _DB-DAY-COUNT NUM>STR 0
+    _DB-AGENDA-COL @ _DB-AGENDA-W @ + 10 - 0 MAX DRW-TEXT
+    239 234 0 DRW-STYLE!
+    9472 1 _DB-AGENDA-COL @ 1+ _DB-AGENDA-W @ 2 - DRW-HLINE
+    _DB-AGENDA-W @ 11 - 1 MAX _DB-DRAW-TEXT-W !
+    0 _DB-VIEW-INDEX ! 3 _DB-DRAW-ROW !
+    _DB-DAY-COUNT 0= IF
+        244 234 CELL-A-DIM DRW-STYLE!
+        S" No entries for this day" 4 _DB-AGENDA-COL @ 2 + DRW-TEXT
+        EXIT
+    THEN
+    _DB-K-EVENT _DB-DRAW-KIND-SECTION
+    _DB-K-TASK _DB-DRAW-KIND-SECTION
+    _DB-K-NOTE _DB-DRAW-KIND-SECTION ;
+
+: _DB-PANEL-DRAW  ( widget -- )
+    DUP WDG-REGION RGN-W _DB-DW !
+    WDG-REGION RGN-H _DB-DH !
+    _DB-DW @ 72 >= _DB-DH @ 14 >= AND IF
+        25 _DB-DCAL-W !
+        _DB-DCAL-W @ 1+ _DB-AGENDA-COL !
+        _DB-DW @ _DB-AGENDA-COL @ - _DB-AGENDA-W !
+        _DB-DRAW-CALENDAR
+    ELSE
+        0 _DB-AGENDA-COL ! _DB-DW @ _DB-AGENDA-W !
+    THEN
+    _DB-DRAW-AGENDA
+    DRW-STYLE-RESET ;
+
+: _DB-MOVE-DATE  ( days -- )
+    _DB-SECONDS-DAY * _DB-SELECTED-DATE +!
+    0 _DB-SELECTED ! _DB-INVALIDATE ;
+
+: _DB-SELECT-UP  ( -- )
+    _DB-SELECTED @ 0> IF -1 _DB-SELECTED +! THEN _DB-INVALIDATE ;
+
+: _DB-SELECT-DOWN  ( -- )
+    _DB-DAY-COUNT 1- _DB-SELECTED @ > IF 1 _DB-SELECTED +! THEN
+    _DB-INVALIDATE ;
+
+: _DB-TOGGLE-SELECTED  ( -- )
+    _DB-SELECTED-ENTRY ?DUP 0= IF EXIT THEN
+    DUP _DB-E-KIND + @ _DB-K-TASK <> IF DROP EXIT THEN
+    DUP _DB-E-DONE + DUP @ 0= SWAP ! DROP
+    _DB-COMMIT ;
+
+VARIABLE _DB-DEL-E
+VARIABLE _DB-DEL-I
+
+: _DB-DELETE-SELECTED  ( -- )
+    _DB-SELECTED-ENTRY DUP 0= IF DROP EXIT THEN _DB-DEL-E !
+    _DB-DEL-E @ _DB-ENTRIES - _DB-ENTRY-SZ / _DB-DEL-I !
+    _DB-COUNT @ _DB-DEL-I @ - 1- DUP 0> IF
+        _DB-DEL-E @ _DB-ENTRY-SZ + _DB-DEL-E @ ROT _DB-ENTRY-SZ * CMOVE
+    ELSE DROP THEN
+    -1 _DB-COUNT +!
+    _DB-CLAMP-SELECTION
+    _DB-COMMIT ;
+
+VARIABLE _DB-H-WIDGET
+
+: _DB-PANEL-HANDLE  ( event widget -- consumed? )
+    _DB-H-WIDGET !
+    DUP @ KEY-T-SPECIAL = IF
+        8 + @ CASE
+            KEY-LEFT OF -1 _DB-MOVE-DATE -1 EXIT ENDOF
+            KEY-RIGHT OF 1 _DB-MOVE-DATE -1 EXIT ENDOF
+            KEY-PGUP OF -7 _DB-MOVE-DATE -1 EXIT ENDOF
+            KEY-PGDN OF 7 _DB-MOVE-DATE -1 EXIT ENDOF
+            KEY-UP OF _DB-SELECT-UP -1 EXIT ENDOF
+            KEY-DOWN OF _DB-SELECT-DOWN -1 EXIT ENDOF
+            KEY-HOME OF _DB-TODAY _DB-SELECTED-DATE ! 0 _DB-SELECTED ! _DB-INVALIDATE -1 EXIT ENDOF
+            KEY-ENTER OF _DB-TOGGLE-SELECTED -1 EXIT ENDOF
+            KEY-DEL OF _DB-DELETE-SELECTED -1 EXIT ENDOF
+        ENDCASE
+        0 EXIT
+    THEN
+    DUP @ KEY-T-CHAR = IF
+        DUP 16 + @ 0= IF
+            8 + @ CASE
+                BL OF _DB-TOGGLE-SELECTED -1 EXIT ENDOF
+                [CHAR] t OF _DB-TODAY _DB-SELECTED-DATE ! 0 _DB-SELECTED ! _DB-INVALIDATE -1 EXIT ENDOF
+            ENDCASE
+        THEN
+    THEN
+    DROP 0 ;
+
+: _DB-PANEL-INIT  ( rgn -- )
+    DUP _DB-PANEL-RGN !
+    _DB-PANEL
+    30 OVER !
+    SWAP OVER 8 + !
+    ['] _DB-PANEL-DRAW OVER 16 + !
+    ['] _DB-PANEL-HANDLE OVER 24 + !
+    WDG-F-VISIBLE WDG-F-DIRTY OR SWAP 32 + ! ;
+
+VARIABLE _DB-SHOW-MODE
+VARIABLE _DB-SHOW-LA
+VARIABLE _DB-SHOW-LU
+
+: _DB-SHOW-PROMPT  ( mode label-a label-u -- )
+    _DB-SHOW-LU ! _DB-SHOW-LA ! _DB-SHOW-MODE !
+    _DB-PROMPT @ 0= IF EXIT THEN
+    _DB-SHOW-MODE @ _DB-PROMPT-MODE !
+    _DB-SHOW-LA @ _DB-SHOW-LU @ 0 0 _DB-PROMPT @ PRM-SHOW
+    ASHELL-DIRTY! ;
+
+: _DB-DO-NEW-TASK  ( elem -- ) DROP _DB-PRM-TASK S" New task:" _DB-SHOW-PROMPT ;
+: _DB-DO-NEW-EVENT ( elem -- ) DROP _DB-PRM-EVENT S" Event (HH:MM title):" _DB-SHOW-PROMPT ;
+: _DB-DO-NEW-NOTE  ( elem -- ) DROP _DB-PRM-NOTE S" New note:" _DB-SHOW-PROMPT ;
+
+VARIABLE _DB-SUB-A
+VARIABLE _DB-SUB-U
+VARIABLE _DB-SUB-MODE
+VARIABLE _DB-SUB-MINUTE
+
+: _DB-SELECT-NEW-TASK  ( -- )
+    _DB-K-EVENT _DB-KIND-COUNT
+    _DB-K-TASK _DB-KIND-COUNT + 1- 0 MAX _DB-SELECTED ! ;
+
+: _DB-PROMPT-SUBMIT  ( prompt -- )
+    PRM-GET-TEXT _DB-SUB-U ! _DB-SUB-A !
+    _DB-PROMPT-MODE @ _DB-SUB-MODE !
+    _DB-PRM-NONE _DB-PROMPT-MODE !
+    _DB-SUB-U @ 0= IF _DB-INVALIDATE EXIT THEN
+    _DB-SUB-MODE @ CASE
+        _DB-PRM-TASK OF
+            _DB-K-TASK 0 _DB-SELECTED-DATE @ -1
+            _DB-SUB-A @ _DB-SUB-U @ _DB-ADD DROP
+            _DB-SELECT-NEW-TASK _DB-COMMIT
+        ENDOF
+        _DB-PRM-EVENT OF
+            _DB-SUB-U @ 6 < IF
+                S" Use HH:MM followed by a title" 2200 ASHELL-TOAST
+            ELSE
+                _DB-SUB-A @ 5 _DB-PARSE-TIME
+                0= IF
+                    DROP S" Invalid event time" 2200 ASHELL-TOAST
+                ELSE
+                    _DB-SUB-MINUTE !
+                    _DB-K-EVENT 0 _DB-SELECTED-DATE @ _DB-SUB-MINUTE @
+                    _DB-SUB-A @ 6 + _DB-SUB-U @ 6 - _DB-ADD DROP
+                    _DB-K-EVENT _DB-KIND-COUNT 1- 0 MAX _DB-SELECTED !
+                    _DB-COMMIT
+                THEN
+            THEN
+        ENDOF
+        _DB-PRM-NOTE OF
+            _DB-K-NOTE 0 _DB-SELECTED-DATE @ -1
+            _DB-SUB-A @ _DB-SUB-U @ _DB-ADD DROP
+            _DB-DAY-COUNT 1- 0 MAX _DB-SELECTED ! _DB-COMMIT
+        ENDOF
+    ENDCASE
+    _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+    _DB-INVALIDATE ;
+
+: _DB-PROMPT-CANCEL  ( prompt -- )
+    DROP _DB-PRM-NONE _DB-PROMPT-MODE !
+    _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+    _DB-INVALIDATE ;
+
+: _DB-DO-SAVE  ( elem -- )
+    DROP _DB-SAVE IF S" Daybook save failed" ELSE S" Daybook saved" THEN
+    1600 ASHELL-TOAST ;
+
+: _DB-DO-RELOAD  ( elem -- )
+    DROP _DB-LOAD DROP _DB-CLAMP-SELECTION 0 _DB-DIRTY !
+    _DB-INVALIDATE S" Daybook reloaded" 1400 ASHELL-TOAST ;
+
+: _DB-DO-TOGGLE ( elem -- ) DROP _DB-TOGGLE-SELECTED ;
+: _DB-DO-DELETE ( elem -- ) DROP _DB-DELETE-SELECTED ;
+: _DB-DO-TODAY  ( elem -- ) DROP _DB-TODAY _DB-SELECTED-DATE ! 0 _DB-SELECTED ! _DB-INVALIDATE ;
+: _DB-DO-PREVIOUS ( elem -- ) DROP -1 _DB-MOVE-DATE ;
+: _DB-DO-NEXT ( elem -- ) DROP 1 _DB-MOVE-DATE ;
+: _DB-DO-QUIT ( elem -- ) DROP ASHELL-QUIT ;
+: _DB-DO-ABOUT ( elem -- ) DROP S" Daybook - tasks, events, and daily notes" 2600 ASHELL-TOAST ;
+
+: DAYBOOK-INIT-CB  ( -- )
+    0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! _DB-PRM-NONE _DB-PROMPT-MODE !
+    0 _DB-DIRTY ! _DB-TODAY _DB-SELECTED-DATE !
+    VFS-CUR DUP 0= ABORT" daybook: no VFS available" _DB-VFS !
+    S" daybook-body" UTUI-BY-ID _DB-E-BODY !
+    S" sbar" UTUI-BY-ID _DB-E-SBAR !
+    S" sbar-date" UTUI-BY-ID _DB-E-SBAR-DATE !
+    S" sbar-state" UTUI-BY-ID _DB-E-SBAR-STATE !
+    _DB-LOAD DROP
+
+    _DB-E-SBAR @ ?DUP IF
+        UTUI-ELEM-RGN RGN-NEW DUP _DB-PROMPT-RGN !
+        _DB-PROMPT-BUF _DB-PROMPT-CAP PRM-NEW DUP _DB-PROMPT !
+        ['] _DB-PROMPT-SUBMIT OVER PRM-ON-SUBMIT
+        ['] _DB-PROMPT-CANCEL OVER PRM-ON-CANCEL
+        15 23 ROT PRM-COLORS!
+    THEN
+    _DB-E-BODY @ ?DUP IF
+        UTUI-ELEM-RGN RGN-NEW _DB-PANEL-INIT
+        _DB-PANEL _DB-E-BODY @ UTUI-WIDGET-SET
+    THEN
+    S" save" ['] _DB-DO-SAVE UTUI-DO!
+    S" reload" ['] _DB-DO-RELOAD UTUI-DO!
+    S" new-task" ['] _DB-DO-NEW-TASK UTUI-DO!
+    S" new-event" ['] _DB-DO-NEW-EVENT UTUI-DO!
+    S" new-note" ['] _DB-DO-NEW-NOTE UTUI-DO!
+    S" toggle" ['] _DB-DO-TOGGLE UTUI-DO!
+    S" delete" ['] _DB-DO-DELETE UTUI-DO!
+    S" today" ['] _DB-DO-TODAY UTUI-DO!
+    S" previous-day" ['] _DB-DO-PREVIOUS UTUI-DO!
+    S" next-day" ['] _DB-DO-NEXT UTUI-DO!
+    S" quit" ['] _DB-DO-QUIT UTUI-DO!
+    S" about" ['] _DB-DO-ABOUT UTUI-DO!
+    _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+    _DB-CLAMP-SELECTION _DB-UPDATE-STATUS ;
+
+: DAYBOOK-EVENT-CB  ( event -- consumed? )
+    _DB-PROMPT @ ?DUP IF
+        DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
+    THEN
+    _UTUI-MENU-OPEN @ IF DROP 0 EXIT THEN
+    _DB-PANEL WDG-HANDLE ;
+
+: DAYBOOK-PAINT-CB  ( -- )
+    _DB-PROMPT @ ?DUP 0= IF EXIT THEN
+    DUP PRM-ACTIVE? 0= IF DROP EXIT THEN DROP
+    _DB-E-SBAR @ ?DUP IF UTUI-ELEM-RGN _DB-PROMPT @ PRM-SET-BOUNDS THEN
+    _DB-PROMPT @ WDG-DRAW ;
+
+: DAYBOOK-TICK-CB  ( -- ) ;
+
+: DAYBOOK-SHUTDOWN-CB  ( -- )
+    _DB-E-BODY @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
+    _DB-PROMPT @ ?DUP IF PRM-FREE THEN
+    _DB-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
+    _DB-PANEL-RGN @ ?DUP IF RGN-FREE THEN
+    0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! 0 _DB-PANEL-RGN ! ;
+
+: DAYBOOK-ENTRY  ( desc -- )
+    DUP APP-DESC-INIT
+    ['] DAYBOOK-INIT-CB OVER APP.INIT-XT !
+    ['] DAYBOOK-EVENT-CB OVER APP.EVENT-XT !
+    ['] DAYBOOK-TICK-CB OVER APP.TICK-XT !
+    ['] DAYBOOK-PAINT-CB OVER APP.PAINT-XT !
+    ['] DAYBOOK-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
+    S" tui/applets/daybook/daybook.uidl"
+    ROT DUP >R APP.UIDL-FILE-U ! R@ APP.UIDL-FILE-A !
+    0 R@ APP.WIDTH ! 0 R@ APP.HEIGHT !
+    S" Daybook" R@ APP.TITLE-U ! R> APP.TITLE-A ! ;
+
+CREATE DAYBOOK-DESC APP-DESC ALLOT
+
+: DAYBOOK-RUN  ( -- )
+    DAYBOOK-DESC DAYBOOK-ENTRY
+    DAYBOOK-DESC ASHELL-RUN ;

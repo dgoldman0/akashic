@@ -365,6 +365,9 @@ This timeout is also used by the CR handler, which waits up to
 `_KEY-TIMEOUT` milliseconds for an optional LF byte after receiving
 CR (13).  On systems that only send bare CR for Enter (e.g. the
 Megapad emulator), this adds a per-Enter delay equal to the timeout.
+If another byte arrives instead of LF, the decoder retains it in a
+one-byte pending slot and returns it from the next `KEY-POLL` or
+`KEY-READ`; input typed immediately after Enter is therefore not lost.
 Set `1 KEY-TIMEOUT!` to eliminate the overhead when LF is never sent.
 
 ```forth
@@ -391,7 +394,8 @@ dispatches:
 2. **Tab (9)** → `KEY-T-SPECIAL KEY-TAB`.
 
 3. **CR (13)** → `KEY-T-SPECIAL KEY-ENTER`.  Consumes optional LF
-   after CR (handles CR+LF line endings).
+   after CR (handles CR+LF line endings) and pushes any non-LF byte
+   back for the next event.
 
 4. **LF (10)** → `KEY-T-SPECIAL KEY-ENTER`.
 

@@ -197,12 +197,26 @@ CREATE _KEY-UTF8  4 ALLOT
 \    Uses MS@ (BIOS millisecond uptime counter) for timing.
 
 VARIABLE _KEY-DEADLINE
+VARIABLE _KEY-PENDING-BYTE
+VARIABLE _KEY-HAS-PENDING
+
+0 _KEY-HAS-PENDING !
+
+: _KEY-RAW?  ( -- flag )
+    _KEY-HAS-PENDING @ IF -1 ELSE KEY? THEN ;
+
+: _KEY-RAW@  ( -- char )
+    _KEY-HAS-PENDING @ IF
+        0 _KEY-HAS-PENDING ! _KEY-PENDING-BYTE @
+    ELSE
+        KEY
+    THEN ;
 
 : _KEY-TIMED?  ( ms -- char flag )
     MS@ +                              \ absolute deadline in ms
     _KEY-DEADLINE !
     BEGIN
-        KEY? IF KEY -1 EXIT THEN
+        _KEY-RAW? IF _KEY-RAW@ -1 EXIT THEN
         MS@ _KEY-DEADLINE @ >= IF 0 0 EXIT THEN
     AGAIN ;
 
@@ -514,12 +528,7 @@ VARIABLE _KEY-B0             \ first raw byte
             \ Consume optional LF after CR
             _KEY-TIMEOUT @ _KEY-TIMED? IF
                 DUP 10 = IF DROP ELSE
-                    \ Not LF — put it back?  Can't unpoll on UART.
-                    \ Store it to be returned on next call.
-                    \ For simplicity, discard non-LF — this is
-                    \ extremely rare (CR followed by non-LF within
-                    \ the timeout window).
-                    DROP
+                    _KEY-PENDING-BYTE ! -1 _KEY-HAS-PENDING !
                 THEN
             ELSE DROP THEN
             KEY-T-SPECIAL KEY-ENTER 0 _KEY-SET-EV
@@ -594,8 +603,8 @@ VARIABLE _KEY-B0             \ first raw byte
 \ _KEY-READ-RAW ( ev -- flag )
 \   Non-blocking: check KEY?, read first byte, then decode.
 : _KEY-READ-RAW  ( ev -- flag )
-    KEY? 0= IF DROP 0 EXIT THEN
-    KEY _KEY-B0 !
+    _KEY-RAW? 0= IF DROP 0 EXIT THEN
+    _KEY-RAW@ _KEY-B0 !
     _KEY-DECODE-B0 ;
 
 \ =====================================================================
@@ -606,7 +615,7 @@ VARIABLE _KEY-B0             \ first raw byte
 \   Non-blocking: check if input is available and decode one event.
 \   Returns TRUE if event was filled, FALSE if no input.
 : KEY-POLL  ( ev -- flag )
-    KEY? IF _KEY-READ-RAW ELSE DROP 0 THEN ;
+    _KEY-READ-RAW ;
 
 \ KEY-READ ( ev -- flag )
 \   Blocking read: wait for one complete key event.
@@ -614,7 +623,7 @@ VARIABLE _KEY-B0             \ first raw byte
 \   allowing the host / emulator to yield properly), then decodes.
 \   Returns TRUE always.
 : KEY-READ  ( ev -- flag )
-    KEY _KEY-B0 !
+    _KEY-RAW? IF _KEY-RAW@ ELSE KEY THEN _KEY-B0 !
     _KEY-DECODE-B0 ;
 
 \ KEY-WAIT ( ev ms -- flag )
