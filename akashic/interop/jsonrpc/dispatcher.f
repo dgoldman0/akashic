@@ -1,0 +1,107 @@
+\ =====================================================================
+\  dispatcher.f - Bounded JSON-RPC method registry and dispatch
+\ =====================================================================
+
+PROVIDED akashic-jsonrpc-dispatcher
+
+REQUIRE message.f
+
+32 CONSTANT JRPC-DISPATCH-MAX
+40 CONSTANT JRPC-DISPATCH-ENTRY-SIZE
+
+ 0 CONSTANT _JDE-METHOD-A
+ 8 CONSTANT _JDE-METHOD-U
+16 CONSTANT _JDE-HANDLER-XT       \ ( message context -- error-code )
+24 CONSTANT _JDE-CONTEXT
+32 CONSTANT _JDE-FLAGS
+
+: JRPC-DE.METHOD-A  ( entry -- a ) _JDE-METHOD-A + ;
+: JRPC-DE.METHOD-U  ( entry -- a ) _JDE-METHOD-U + ;
+: JRPC-DE.HANDLER-XT ( entry -- a ) _JDE-HANDLER-XT + ;
+: JRPC-DE.CONTEXT   ( entry -- a ) _JDE-CONTEXT + ;
+: JRPC-DE.FLAGS     ( entry -- a ) _JDE-FLAGS + ;
+
+ 0 CONSTANT _JDISP-COUNT
+ 8 CONSTANT _JDISP-ENTRIES
+_JDISP-ENTRIES JRPC-DISPATCH-MAX JRPC-DISPATCH-ENTRY-SIZE * +
+CONSTANT JRPC-DISPATCHER-SIZE
+
+: JRPC-DISP.COUNT  ( dispatcher -- a ) _JDISP-COUNT + ;
+: JRPC-DISP.ENTRIES ( dispatcher -- a ) _JDISP-ENTRIES + ;
+
+: JRPC-DISPATCHER-NEW  ( -- dispatcher ior )
+    JRPC-DISPATCHER-SIZE ALLOCATE
+    DUP IF EXIT THEN
+    DROP DUP JRPC-DISPATCHER-SIZE 0 FILL 0 ;
+
+: JRPC-DISPATCHER-FREE  ( dispatcher -- )
+    ?DUP IF FREE THEN ;
+
+: _JRPC-DISPATCH-SLOT  ( index dispatcher -- entry )
+    >R JRPC-DISPATCH-ENTRY-SIZE * R> JRPC-DISP.ENTRIES + ;
+
+: JRPC-DISPATCH-NTH  ( index dispatcher -- entry | 0 )
+    >R DUP 0< OVER R@ JRPC-DISP.COUNT @ >= OR IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R> _JRPC-DISPATCH-SLOT ;
+
+VARIABLE _JDF-A
+VARIABLE _JDF-U
+VARIABLE _JDF-D
+
+: JRPC-DISPATCH-FIND  ( method-a method-u dispatcher -- entry | 0 )
+    _JDF-D ! _JDF-U ! _JDF-A !
+    _JDF-D @ JRPC-DISP.COUNT @ 0 ?DO
+        I _JDF-D @ JRPC-DISPATCH-NTH DUP
+        DUP JRPC-DE.METHOD-A @ SWAP JRPC-DE.METHOD-U @
+        _JDF-A @ _JDF-U @ STR-STR= IF UNLOOP EXIT THEN
+        DROP
+    LOOP
+    0 ;
+
+VARIABLE _JDR-A
+VARIABLE _JDR-U
+VARIABLE _JDR-XT
+VARIABLE _JDR-CONTEXT
+VARIABLE _JDR-FLAGS
+VARIABLE _JDR-D
+
+: JRPC-DISPATCH-REGISTER  ( method-a method-u handler-xt context flags dispatcher -- ior )
+    _JDR-D ! _JDR-FLAGS ! _JDR-CONTEXT ! _JDR-XT ! _JDR-U ! _JDR-A !
+    _JDR-U @ 0= _JDR-U @ JRPC-MAX-METHOD > OR
+    _JDR-XT @ 0= OR IF JRPC-IOR-VALUE EXIT THEN
+    _JDR-A @ _JDR-U @ _JDR-D @ JRPC-DISPATCH-FIND IF
+        JRPC-IOR-VALUE EXIT
+    THEN
+    _JDR-D @ JRPC-DISP.COUNT @ JRPC-DISPATCH-MAX >= IF
+        JRPC-IOR-CAPACITY EXIT
+    THEN
+    _JDR-D @ JRPC-DISP.COUNT @ _JDR-D @ _JRPC-DISPATCH-SLOT >R
+    _JDR-A @ R@ JRPC-DE.METHOD-A !
+    _JDR-U @ R@ JRPC-DE.METHOD-U !
+    _JDR-XT @ R@ JRPC-DE.HANDLER-XT !
+    _JDR-CONTEXT @ R@ JRPC-DE.CONTEXT !
+    _JDR-FLAGS @ R> JRPC-DE.FLAGS !
+    1 _JDR-D @ JRPC-DISP.COUNT +! 0 ;
+
+VARIABLE _JDD-M
+VARIABLE _JDD-D
+VARIABLE _JDD-E
+VARIABLE _JDD-STATUS
+
+: _JRPC-DISPATCH-CALL  ( -- )
+    _JDD-M @ _JDD-E @ JRPC-DE.CONTEXT @
+    _JDD-E @ JRPC-DE.HANDLER-XT @ EXECUTE _JDD-STATUS ! ;
+
+: JRPC-DISPATCH  ( message dispatcher -- error-code )
+    _JDD-D ! DUP _JDD-M !
+    JRPC.KIND @ DUP JRPC-K-REQUEST = SWAP JRPC-K-NOTIFICATION = OR 0= IF
+        JRPC-E-INVALID-REQUEST EXIT
+    THEN
+    _JDD-M @ JRPC-METHOD _JDD-D @ JRPC-DISPATCH-FIND DUP 0= IF
+        DROP JRPC-E-METHOD-NOT-FOUND EXIT
+    THEN
+    _JDD-E ! JRPC-E-INTERNAL _JDD-STATUS !
+    ['] _JRPC-DISPATCH-CALL CATCH IF JRPC-E-INTERNAL EXIT THEN
+    _JDD-STATUS @ ;

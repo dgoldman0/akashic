@@ -22,9 +22,10 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
-Profiles are `interop` (the non-TUI runtime and interoperability contracts),
-`agent` (provider-neutral conversations), `agent-ui`, `desktop` (Desk with all
-five applets), `desktop-agent`, `pad`, `fexplorer`, `daybook`, and `grid`.
+Profiles are `jsonrpc`, `interop` (the non-TUI runtime and interoperability
+contracts), `agent` (provider-neutral conversations), `agent-ui`, `desktop`
+(Desk with all five applets), `desktop-agent`, `pad`, `fexplorer`, `daybook`,
+and `grid`.
 Generated images, terminal text, cell JSON, and PNG captures go under
 `local_testing/out/`.
 
@@ -32,6 +33,7 @@ The smoke journeys exercise application behavior, not just boot markers:
 
 | Profile | Verified journey |
 |---|---|
+| `jsonrpc` | strict native JSON grammar, JSON-RPC message forms, escaped methods, bounded serialization, method dispatch, handler faults, and stack balance |
 | `interop` | instance-relative state, isolated instances, registry lookup, bounded request dispatch, and typed values without loading TUI |
 | `agent` | native offline fallback, provider connection, streamed transcript assembly, approval resolution, cancellation, and owned conversation cleanup without loading TUI |
 | `agent-ui` | transcript, streaming, prompt, review, cancellation, reconnect, resize, and terminal rendering |

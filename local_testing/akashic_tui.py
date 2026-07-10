@@ -68,6 +68,228 @@ class Profile:
 
 
 PROFILES = {
+    "jsonrpc": Profile(
+        roots=("interop/jsonrpc/dispatcher.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native JSON-RPC contracts
+ENTER-USERLAND
+." [akashic] loading JSON-RPC contracts" CR
+REQUIRE interop/jsonrpc/dispatcher.f
+
+VARIABLE _jt-fails
+VARIABLE _jt-checks
+VARIABLE _jt-depth
+: _jt-assert  ( flag -- )
+    1 _jt-checks +!
+    0= IF 1 _jt-fails +! ." ASSERT " _jt-checks @ . CR THEN ;
+: _jt-stack  ( -- )
+    DEPTH DUP _jt-depth @ <> IF
+        ." STACK DEPTH " _jt-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _jt-depth @ = _jt-assert ;
+
+CREATE _jt-json 2048 ALLOT
+VARIABLE _jt-json-u
+CREATE _jt-out 2048 ALLOT
+VARIABLE _jt-out-u
+CREATE _jt-msg JRPC-MESSAGE-SIZE ALLOT
+VARIABLE _jt-disp
+VARIABLE _jt-hits
+
+: _jt-reset  ( -- ) 0 _jt-json-u ! ;
+: _jt-c  ( c -- ) _jt-json _jt-json-u @ + C! 1 _jt-json-u +! ;
+: _jt-s  ( addr len -- )
+    DUP >R _jt-json _jt-json-u @ + SWAP CMOVE R> _jt-json-u +! ;
+: _jt-q  ( addr len -- ) 34 _jt-c _jt-s 34 _jt-c ;
+: _jt-key  ( addr len -- ) _jt-q 58 _jt-c ;
+: _jt-comma  ( -- ) 44 _jt-c ;
+: _jt-common  ( -- )
+    123 _jt-c S" jsonrpc" _jt-key S" 2.0" _jt-q ;
+: _jt-parse  ( -- ior )
+    _jt-json _jt-json-u @ _jt-msg JRPC-PARSE ;
+
+: _jt-request  ( -- )
+    _jt-reset _jt-common _jt-comma
+    S" id" _jt-key 55 _jt-c _jt-comma
+    S" method" _jt-key S" echo" _jt-q _jt-comma
+    S" params" _jt-key 123 _jt-c
+        S" text" _jt-key S" hi" _jt-q
+    125 _jt-c 125 _jt-c ;
+
+: _jt-notification  ( -- )
+    _jt-reset _jt-common _jt-comma
+    S" method" _jt-key S" echo" _jt-q
+    125 _jt-c ;
+
+: _jt-result  ( -- )
+    _jt-reset _jt-common _jt-comma
+    S" id" _jt-key S" abc" _jt-q _jt-comma
+    S" result" _jt-key 91 _jt-c 49 _jt-c _jt-comma 50 _jt-c 93 _jt-c
+    125 _jt-c ;
+
+: _jt-error  ( -- )
+    _jt-reset _jt-common _jt-comma
+    S" id" _jt-key S" null" _jt-s _jt-comma
+    S" error" _jt-key 123 _jt-c
+        S" code" _jt-key S" -32602" _jt-s _jt-comma
+        S" message" _jt-key S" Bad params" _jt-q _jt-comma
+        S" data" _jt-key 123 _jt-c S" field" _jt-key S" name" _jt-q 125 _jt-c
+    125 _jt-c 125 _jt-c ;
+
+: _jt-escaped-method  ( -- )
+    _jt-reset _jt-common _jt-comma
+    S" id" _jt-key 49 _jt-c _jt-comma
+    S" method" _jt-key 34 _jt-c S" ec" _jt-s 92 _jt-c
+        S" u0068o" _jt-s 34 _jt-c
+    125 _jt-c ;
+
+: _jt-escaped-fields  ( -- )
+    _jt-reset 123 _jt-c
+    34 _jt-c S" json" _jt-s 92 _jt-c S" u0072pc" _jt-s 34 _jt-c
+    58 _jt-c 34 _jt-c S" 2" _jt-s 92 _jt-c S" u002e0" _jt-s 34 _jt-c
+    _jt-comma S" id" _jt-key 50 _jt-c
+    _jt-comma 34 _jt-c S" meth" _jt-s 92 _jt-c S" u006fd" _jt-s
+    34 _jt-c 58 _jt-c S" echo" _jt-q 125 _jt-c ;
+
+: _jt-duplicate-id  ( -- )
+    _jt-reset _jt-common _jt-comma
+    S" id" _jt-key 49 _jt-c _jt-comma S" id" _jt-key 50 _jt-c
+    _jt-comma S" method" _jt-key S" echo" _jt-q 125 _jt-c ;
+
+: _jt-wide-id  ( -- )
+    _jt-reset _jt-common _jt-comma S" id" _jt-key
+    S" 1234567890123456789" _jt-s _jt-comma
+    S" method" _jt-key S" echo" _jt-q 125 _jt-c ;
+
+: _jt-invalid-version  ( -- )
+    _jt-reset 123 _jt-c S" jsonrpc" _jt-key S" 1.0" _jt-q _jt-comma
+    S" id" _jt-key 49 _jt-c _jt-comma S" method" _jt-key S" echo" _jt-q
+    125 _jt-c ;
+
+: _jt-invalid-params  ( -- )
+    _jt-reset _jt-common _jt-comma S" id" _jt-key 49 _jt-c _jt-comma
+    S" method" _jt-key S" echo" _jt-q _jt-comma
+    S" params" _jt-key 49 _jt-c 125 _jt-c ;
+
+: _jt-result-and-error  ( -- )
+    _jt-reset _jt-common _jt-comma S" id" _jt-key 49 _jt-c _jt-comma
+    S" result" _jt-key S" null" _jt-s _jt-comma
+    S" error" _jt-key 123 _jt-c S" code" _jt-key S" -1" _jt-s
+    _jt-comma S" message" _jt-key S" no" _jt-q 125 _jt-c 125 _jt-c ;
+
+: _jt-too-deep  ( -- )
+    _jt-reset 17 0 DO 91 _jt-c LOOP 48 _jt-c 17 0 DO 93 _jt-c LOOP ;
+
+: _jt-handler  ( message context -- error-code )
+    SWAP DROP 1 SWAP +! 0 ;
+: _jt-throwing-handler  ( message context -- error-code )
+    2DROP -99 THROW ;
+
+: _jt-run  ( -- )
+    0 _jt-fails ! 0 _jt-checks ! DEPTH _jt-depth !
+
+    _jt-request _jt-json _jt-json-u @ JRPC-JSON-VALID? _jt-assert
+    _jt-parse 0= _jt-assert
+    _jt-msg JRPC.KIND @ JRPC-K-REQUEST = _jt-assert
+    _jt-msg JRPC.ID-KIND @ JRPC-ID-INT = _jt-assert
+    _jt-msg JRPC.ID-INT @ 7 = _jt-assert
+    _jt-msg JRPC-METHOD S" echo" STR-STR= _jt-assert
+    _jt-msg JRPC.PARAMS-A @ _jt-msg JRPC.PARAMS-U @ JSON-OBJECT? _jt-assert
+    _jt-stack
+
+    _jt-notification _jt-parse 0= _jt-assert
+    _jt-msg JRPC.KIND @ JRPC-K-NOTIFICATION = _jt-assert
+    _jt-msg JRPC.ID-KIND @ JRPC-ID-ABSENT = _jt-assert
+
+    _jt-result _jt-parse 0= _jt-assert
+    _jt-msg JRPC.KIND @ JRPC-K-RESULT = _jt-assert
+    _jt-msg JRPC.ID-KIND @ JRPC-ID-STRING = _jt-assert
+    _jt-msg JRPC-ID-TEXT S" abc" STR-STR= _jt-assert
+    _jt-msg JRPC.RESULT-A @ _jt-msg JRPC.RESULT-U @ JSON-ARRAY? _jt-assert
+
+    _jt-error _jt-parse 0= _jt-assert
+    _jt-msg JRPC.KIND @ JRPC-K-ERROR = _jt-assert
+    _jt-msg JRPC.ID-KIND @ JRPC-ID-NULL = _jt-assert
+    _jt-msg JRPC.ERROR-CODE @ -32602 = _jt-assert
+    _jt-msg DUP JRPC.ERROR-MESSAGE-A @ SWAP JRPC.ERROR-MESSAGE-U @
+    S" Bad params" STR-STR= _jt-assert
+    _jt-msg JRPC.ERROR-DATA-A @ _jt-msg JRPC.ERROR-DATA-U @
+    JSON-OBJECT? _jt-assert
+    _jt-stack
+
+    _jt-escaped-method _jt-parse 0= _jt-assert
+    _jt-msg JRPC-METHOD S" echo" STR-STR= _jt-assert
+    _jt-escaped-fields _jt-parse 0= _jt-assert
+    _jt-msg JRPC.ID-INT @ 2 = _jt-assert
+    _jt-msg JRPC-METHOD S" echo" STR-STR= _jt-assert
+    _jt-duplicate-id _jt-parse JRPC-E-INVALID-REQUEST = _jt-assert
+    _jt-wide-id _jt-parse JRPC-E-INVALID-REQUEST = _jt-assert
+
+    _jt-invalid-version _jt-parse JRPC-E-INVALID-REQUEST = _jt-assert
+    _jt-invalid-params _jt-parse JRPC-E-INVALID-PARAMS = _jt-assert
+    _jt-result-and-error _jt-parse JRPC-E-INVALID-REQUEST = _jt-assert
+    _jt-reset 123 _jt-c _jt-parse JRPC-E-PARSE = _jt-assert
+    _jt-too-deep _jt-json _jt-json-u @ JRPC-JSON-VALID? 0= _jt-assert
+    _jt-reset 34 _jt-c 255 _jt-c 34 _jt-c
+    _jt-json _jt-json-u @ JRPC-JSON-VALID? 0= _jt-assert
+    _jt-stack
+
+    42 S" echo" S" {}" _jt-out 2048 JRPC-BUILD-REQUEST
+    DUP 0= _jt-assert DROP DUP _jt-out-u ! 0> _jt-assert
+    _jt-out _jt-out-u @ _jt-msg JRPC-PARSE 0= _jt-assert
+    _jt-msg JRPC.ID-INT @ 42 = _jt-assert
+    _jt-msg JRPC-METHOD S" echo" STR-STR= _jt-assert
+
+    S" tick" S" []" _jt-out 2048 JRPC-BUILD-NOTIFICATION
+    DUP 0= _jt-assert DROP DUP _jt-out-u ! 0> _jt-assert
+    _jt-out _jt-out-u @ _jt-msg JRPC-PARSE 0= _jt-assert
+    _jt-msg JRPC.KIND @ JRPC-K-NOTIFICATION = _jt-assert
+
+    1 S" echo" S" {}" _jt-out 8 JRPC-BUILD-REQUEST
+    JRPC-IOR-CAPACITY = _jt-assert DROP
+    _jt-stack
+
+    JRPC-DISPATCHER-NEW DUP 0= _jt-assert DROP _jt-disp !
+    0 _jt-hits !
+    S" echo" ['] _jt-handler _jt-hits 0 _jt-disp @
+    JRPC-DISPATCH-REGISTER 0= _jt-assert
+    S" boom" ['] _jt-throwing-handler 0 0 _jt-disp @
+    JRPC-DISPATCH-REGISTER 0= _jt-assert
+    S" echo" ['] _jt-handler _jt-hits 0 _jt-disp @
+    JRPC-DISPATCH-REGISTER JRPC-IOR-VALUE = _jt-assert
+
+    _jt-request _jt-parse 0= _jt-assert
+    _jt-msg _jt-disp @ JRPC-DISPATCH 0= _jt-assert
+    _jt-hits @ 1 = _jt-assert
+
+    _jt-notification _jt-parse 0= _jt-assert
+    _jt-msg _jt-disp @ JRPC-DISPATCH 0= _jt-assert
+    _jt-hits @ 2 = _jt-assert
+
+    8 S" absent" S" {}" _jt-out 2048 JRPC-BUILD-REQUEST
+    DROP _jt-out-u !
+    _jt-out _jt-out-u @ _jt-msg JRPC-PARSE 0= _jt-assert
+    _jt-msg _jt-disp @ JRPC-DISPATCH
+    JRPC-E-METHOD-NOT-FOUND = _jt-assert
+
+    9 S" boom" S" {}" _jt-out 2048 JRPC-BUILD-REQUEST
+    DROP _jt-out-u !
+    _jt-out _jt-out-u @ _jt-msg JRPC-PARSE 0= _jt-assert
+    _jt-msg _jt-disp @ JRPC-DISPATCH JRPC-E-INTERNAL = _jt-assert
+    _jt-disp @ JRPC-DISPATCHER-FREE
+    _jt-stack
+
+    _jt-fails @ 0= IF
+        ." JSONRPC PASS"
+    ELSE
+        ." JSONRPC FAIL " _jt-fails @ .
+    THEN CR ;
+
+_jt-run
+""",
+        ready_markers=("JSONRPC PASS",),
+        stable_markers=("JSONRPC PASS",),
+    ),
     "agent": Profile(
         roots=(
             "agent/event.f",

@@ -639,13 +639,14 @@ VARIABLE JSON-TYPE-XT              \ ( addr len -- )
 VARIABLE _JB-BUF                   \ buffer base address
 VARIABLE _JB-MAX                   \ buffer capacity
 VARIABLE _JB-POS                   \ current write position
+VARIABLE _JB-OVERFLOW              \ output exceeded caller capacity
 
 : _JB-EMIT  ( c -- )
     _JB-POS @  _JB-MAX @  < IF
         _JB-BUF @ _JB-POS @ + C!
         1 _JB-POS +!
     ELSE
-        DROP
+        DROP -1 _JB-OVERFLOW !
     THEN ;
 
 : _JB-TYPE  ( addr len -- )
@@ -654,7 +655,7 @@ VARIABLE _JB-POS                   \ current write position
     LOOP DROP ;
 
 : JSON-SET-OUTPUT  ( addr max -- )
-    _JB-MAX ! _JB-BUF !  0 _JB-POS !
+    _JB-MAX ! _JB-BUF !  0 _JB-POS ! 0 _JB-OVERFLOW !
     ['] _JB-EMIT JSON-EMIT-XT !
     ['] _JB-TYPE JSON-TYPE-XT ! ;
 
@@ -662,7 +663,10 @@ VARIABLE _JB-POS                   \ current write position
     _JB-BUF @ _JB-POS @ ;
 
 : JSON-OUTPUT-RESET  ( -- )
-    0 _JB-POS ! ;
+    0 _JB-POS ! 0 _JB-OVERFLOW ! ;
+
+: JSON-OUTPUT-OK?  ( -- flag )
+    _JB-OVERFLOW @ 0= ;
 
 \ ── Comma-state stack ────────────────────────────────────────────────
 \  Each nesting level has a flag: 0 = no comma needed, 1 = need comma.
@@ -749,6 +753,10 @@ _JC-RESET
 : JSON-BOOL  ( flag -- )
     IF JSON-TRUE ELSE JSON-FALSE THEN ;
 
+\ Emit a caller-validated JSON value without adding quotes.
+: JSON-RAW  ( addr len -- )
+    _JC-COMMA JSON-TYPE ;
+
 \ ── Number output ────────────────────────────────────────────────────
 \  Print a signed integer as decimal text.
 
@@ -797,12 +805,15 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
 : JSON-KV-NULL  ( kaddr klen -- )
     JSON-KEY: JSON-NULL ;
 
+: JSON-KV-RAW  ( kaddr klen vaddr vlen -- )
+    2SWAP JSON-KEY: JSON-RAW ;
+
 \ ── Reset builder state ─────────────────────────────────────────────
 
 : JSON-BUILD-RESET  ( -- )
     _JC-RESET
-    ' _JSON-DEFAULT-EMIT JSON-EMIT-XT !
-    ' _JSON-DEFAULT-TYPE JSON-TYPE-XT ! ;
+    ['] _JSON-DEFAULT-EMIT JSON-EMIT-XT !
+    ['] _JSON-DEFAULT-TYPE JSON-TYPE-XT ! ;
 
 \ =====================================================================
 \  Layer 9 — Type Guards & Escaped String Output
@@ -849,6 +860,9 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
 \    backspace → \b  formfeed → \f
 \  Use instead of JSON-STR when the string may contain special chars.
 
+: _JSON-HEX-CHAR  ( nibble -- char )
+    15 AND DUP 10 < IF 48 + ELSE 55 + THEN ;
+
 : JSON-ESTR  ( addr len -- )
     _JC-COMMA
     34 JSON-EMIT                     \ opening "
@@ -868,9 +882,14 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
             DROP 92 JSON-EMIT 98 JSON-EMIT
         ELSE DUP 12 = IF             \ formfeed
             DROP 92 JSON-EMIT 102 JSON-EMIT
+        ELSE DUP 32 < IF              \ remaining control bytes -> \u00XX
+            92 JSON-EMIT 117 JSON-EMIT
+            48 JSON-EMIT 48 JSON-EMIT
+            DUP 4 RSHIFT _JSON-HEX-CHAR JSON-EMIT
+            _JSON-HEX-CHAR JSON-EMIT
         ELSE
             JSON-EMIT
-        THEN THEN THEN THEN THEN THEN THEN
+        THEN THEN THEN THEN THEN THEN THEN THEN
     LOOP
     DROP
     34 JSON-EMIT ;                   \ closing "
@@ -921,6 +940,7 @@ GUARD _json-guard
 ' JSON-SET-OUTPUT CONSTANT _json-set-output-xt
 ' JSON-OUTPUT-RESULT CONSTANT _json-output-result-xt
 ' JSON-OUTPUT-RESET CONSTANT _json-output-reset-xt
+' JSON-OUTPUT-OK? CONSTANT _json-output-ok-q-xt
 ' JSON-{          CONSTANT _json-ob-xt
 ' JSON-}          CONSTANT _json-cb-xt
 ' JSON-[          CONSTANT _json-os-xt
@@ -931,11 +951,13 @@ GUARD _json-guard
 ' JSON-TRUE       CONSTANT _json-true-xt
 ' JSON-FALSE      CONSTANT _json-false-xt
 ' JSON-BOOL       CONSTANT _json-bool-xt
+' JSON-RAW        CONSTANT _json-raw-xt
 ' JSON-NUM        CONSTANT _json-num-xt
 ' JSON-KV-STR     CONSTANT _json-kv-str-xt
 ' JSON-KV-NUM     CONSTANT _json-kv-num-xt
 ' JSON-KV-BOOL    CONSTANT _json-kv-bool-xt
 ' JSON-KV-NULL    CONSTANT _json-kv-null-xt
+' JSON-KV-RAW     CONSTANT _json-kv-raw-xt
 ' JSON-BUILD-RESET CONSTANT _json-build-reset-xt
 ' JSON-EXPECT-STRING CONSTANT _json-expect-string-xt
 ' JSON-EXPECT-NUMBER CONSTANT _json-expect-number-xt
@@ -982,6 +1004,7 @@ GUARD _json-guard
 : JSON-SET-OUTPUT _json-set-output-xt _json-guard WITH-GUARD ;
 : JSON-OUTPUT-RESULT _json-output-result-xt _json-guard WITH-GUARD ;
 : JSON-OUTPUT-RESET _json-output-reset-xt _json-guard WITH-GUARD ;
+: JSON-OUTPUT-OK? _json-output-ok-q-xt _json-guard WITH-GUARD ;
 : JSON-{          _json-ob-xt _json-guard WITH-GUARD ;
 : JSON-}          _json-cb-xt _json-guard WITH-GUARD ;
 : JSON-[          _json-os-xt _json-guard WITH-GUARD ;
@@ -992,11 +1015,13 @@ GUARD _json-guard
 : JSON-TRUE       _json-true-xt _json-guard WITH-GUARD ;
 : JSON-FALSE      _json-false-xt _json-guard WITH-GUARD ;
 : JSON-BOOL       _json-bool-xt _json-guard WITH-GUARD ;
+: JSON-RAW        _json-raw-xt _json-guard WITH-GUARD ;
 : JSON-NUM        _json-num-xt _json-guard WITH-GUARD ;
 : JSON-KV-STR     _json-kv-str-xt _json-guard WITH-GUARD ;
 : JSON-KV-NUM     _json-kv-num-xt _json-guard WITH-GUARD ;
 : JSON-KV-BOOL    _json-kv-bool-xt _json-guard WITH-GUARD ;
 : JSON-KV-NULL    _json-kv-null-xt _json-guard WITH-GUARD ;
+: JSON-KV-RAW     _json-kv-raw-xt _json-guard WITH-GUARD ;
 : JSON-BUILD-RESET _json-build-reset-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-STRING _json-expect-string-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-NUMBER _json-expect-number-xt _json-guard WITH-GUARD ;
