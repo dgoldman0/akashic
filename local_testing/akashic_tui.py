@@ -128,6 +128,9 @@ VARIABLE _mah-inst
 : _ma-review-deny  ( request context -- decision )
     SWAP DROP 1 SWAP +! MCPA-REVIEW-DENY ;
 
+: _ma-review-cancel  ( request context -- decision )
+    SWAP DROP 1 SWAP +! MCPA-REVIEW-CANCEL ;
+
 : _ma-setup  ( -- )
     _ma-text-schema CS-INIT CV-T-STRING _ma-text-schema CS-ALLOW!
     256 _ma-text-schema CS-MAX-LEN!
@@ -232,6 +235,11 @@ VARIABLE _mah-inst
     0 0 _ma-adapter @ MCPA-REVIEWER!
     _ma-call-reset
     0 _ma-adapter @ MCPA-BINDING-NTH _ma-invoke MCP-S-APPROVAL = _ma-assert
+    _ma-instance @ CINST-STATE @ 1 = _ma-assert
+
+    ['] _ma-review-cancel _ma-review-hits _ma-adapter @ MCPA-REVIEWER!
+    _ma-call-reset
+    0 _ma-adapter @ MCPA-BINDING-NTH _ma-invoke MCP-S-CANCELLED = _ma-assert
     _ma-instance @ CINST-STATE @ 1 = _ma-assert
 
     -1 _ma-persist-cap CAP.MAX-MS !
@@ -546,6 +554,9 @@ VARIABLE _mtl-c
     S" echo.native" S" {}" _mt-client @ MCP-CLIENT-TOOLS-CALL
     DUP MCP-S-OK = _mt-assert DROP JSON-OBJECT? _mt-assert
     _mt-tool-hits @ 2 = _mt-assert
+    4 S" already completed" _mt-client @ MCP-CLIENT-CANCEL
+    MCP-S-OK = _mt-assert
+    _mt-server @ MSERVER.STATE @ MCP-STATE-READY = _mt-assert
     S" " _mt-client @ MCP-CLIENT-RESOURCES-LIST
     DUP MCP-S-OK = _mt-assert DROP JSON-OBJECT? _mt-assert
     S" " _mt-client @ MCP-CLIENT-TEMPLATES-LIST

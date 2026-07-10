@@ -14,6 +14,7 @@ REQUIRE ../request-bus.f
 
 0 CONSTANT MCPA-REVIEW-DENY
 1 CONSTANT MCPA-REVIEW-ALLOW
+2 CONSTANT MCPA-REVIEW-CANCEL
 
 64 CONSTANT MCPA-MAX-BINDINGS
 
@@ -345,7 +346,11 @@ VARIABLE _MCADV-DECISION
                 _MCAD-REQ @ _MCADV-A @ MCPA.BUS @ CBUS-DISPATCH
                 _MCAD-STATUS !
             ELSE
-                CBUS-S-DENIED _MCAD-STATUS !
+                _MCADV-DECISION @ MCPA-REVIEW-CANCEL = IF
+                    CBUS-S-CANCELLED _MCAD-STATUS !
+                ELSE
+                    CBUS-S-DENIED _MCAD-STATUS !
+                THEN
             THEN
         THEN
     THEN
