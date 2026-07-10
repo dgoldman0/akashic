@@ -68,6 +68,222 @@ class Profile:
 
 
 PROFILES = {
+    "mcp": Profile(
+        roots=("interop/mcp/server.f", "interop/mcp/transport.f"),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native MCP server contracts
+ENTER-USERLAND
+." [akashic] loading MCP server" CR
+REQUIRE interop/mcp/server.f
+REQUIRE interop/mcp/transport.f
+
+VARIABLE _mt-fails
+VARIABLE _mt-checks
+VARIABLE _mt-depth
+: _mt-assert  ( flag -- )
+    1 _mt-checks +!
+    0= IF 1 _mt-fails +! ." ASSERT " _mt-checks @ . CR THEN ;
+: _mt-stack  ( -- )
+    DEPTH DUP _mt-depth @ <> IF
+        ." STACK DEPTH " _mt-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _mt-depth @ = _mt-assert ;
+
+CREATE _mt-in 8192 ALLOT
+VARIABLE _mt-in-u
+CREATE _mt-out 32768 ALLOT
+VARIABLE _mt-out-u
+CREATE _mt-params 4096 ALLOT
+VARIABLE _mt-params-u
+CREATE _mt-msg JRPC-MESSAGE-SIZE ALLOT
+VARIABLE _mt-server
+VARIABLE _mt-status
+VARIABLE _mt-tool-hits
+VARIABLE _mt-read-hits
+
+CREATE _mt-string-schema CS-SIZE ALLOT
+CREATE _mt-null-schema CS-SIZE ALLOT
+CREATE _mt-tool MCP-TOOL-DESC-SIZE ALLOT
+CREATE _mt-resource MCP-RESOURCE-DESC-SIZE ALLOT
+CREATE _mt-template MCP-RESOURCE-TEMPLATE-SIZE ALLOT
+
+: _mt-tool-call  ( call context -- status )
+    1 SWAP +!
+    S" hello from native tool" ROT MCALL.RESULT CV-STRING!
+    IF MCP-S-FAILED ELSE MCP-S-OK THEN ;
+
+: _mt-resource-read  ( read context -- status )
+    1 SWAP +!
+    S" native resource body" ROT MREAD.CONTENT CV-STRING!
+    IF MCP-S-FAILED ELSE MCP-S-OK THEN ;
+
+: _mt-params-begin  ( -- )
+    JSON-BUILD-RESET _mt-params 4096 JSON-SET-OUTPUT ;
+: _mt-params-end  ( -- )
+    JSON-OUTPUT-RESULT NIP _mt-params-u ! ;
+
+: _mt-request  ( id method-a method-u params-a params-u -- )
+    _mt-in 8192 JRPC-BUILD-REQUEST
+    _mt-status ! _mt-in-u !
+    _mt-status @ IF EXIT THEN
+    _mt-in _mt-in-u @ _mt-out 32768 _mt-server @ MCP-SERVER-HANDLE
+    _mt-status ! _mt-out-u ! ;
+
+: _mt-notification  ( method-a method-u params-a params-u -- )
+    _mt-in 8192 JRPC-BUILD-NOTIFICATION
+    _mt-status ! _mt-in-u !
+    _mt-status @ IF EXIT THEN
+    _mt-in _mt-in-u @ _mt-out 32768 _mt-server @ MCP-SERVER-HANDLE
+    _mt-status ! _mt-out-u ! ;
+
+: _mt-parse  ( -- ior )
+    _mt-out _mt-out-u @ _mt-msg JRPC-PARSE ;
+
+: _mt-setup  ( -- )
+    _mt-string-schema CS-INIT
+    CV-T-STRING _mt-string-schema CS-ALLOW!
+    256 _mt-string-schema CS-MAX-LEN!
+    _mt-null-schema CS-INIT
+    CV-T-NULL _mt-null-schema CS-ALLOW!
+
+    _mt-tool MCP-TOOL-INIT
+    S" echo.native" _mt-tool MTOOL.NAME-U ! _mt-tool MTOOL.NAME-A !
+    S" Native echo" _mt-tool MTOOL.TITLE-U ! _mt-tool MTOOL.TITLE-A !
+    S" Return a native test value"
+    _mt-tool MTOOL.DESC-U ! _mt-tool MTOOL.DESC-A !
+    _mt-null-schema _mt-tool MTOOL.IN-SCHEMA !
+    _mt-string-schema _mt-tool MTOOL.OUT-SCHEMA !
+    MCP-TOOL-F-READ-ONLY MCP-TOOL-F-IDEMPOTENT OR
+    _mt-tool MTOOL.FLAGS !
+    ['] _mt-tool-call _mt-tool MTOOL.CALL-XT !
+    _mt-tool-hits _mt-tool MTOOL.CONTEXT !
+
+    _mt-resource MCP-RESOURCE-INIT
+    S" akashic://test/notes"
+    _mt-resource MRES.URI-U ! _mt-resource MRES.URI-A !
+    S" notes" _mt-resource MRES.NAME-U ! _mt-resource MRES.NAME-A !
+    S" Native notes"
+    _mt-resource MRES.TITLE-U ! _mt-resource MRES.TITLE-A !
+    S" text/plain" _mt-resource MRES.MIME-U ! _mt-resource MRES.MIME-A !
+    ['] _mt-resource-read _mt-resource MRES.READ-XT !
+    _mt-read-hits _mt-resource MRES.CONTEXT !
+
+    _mt-template MCP-RESOURCE-TEMPLATE-INIT
+    S" akashic://test/{name}"
+    _mt-template MRT.URI-U ! _mt-template MRT.URI-A !
+    S" test-template"
+    _mt-template MRT.NAME-U ! _mt-template MRT.NAME-A ! ;
+
+: _mt-initialize-params  ( -- )
+    _mt-params-begin JSON-{
+    S" protocolVersion" MCP-PROTOCOL-VERSION JSON-KV-ESTR
+    S" capabilities" JSON-KEY: JSON-{ JSON-}
+    S" clientInfo" JSON-KEY: JSON-{
+        S" name" S" native-test" JSON-KV-ESTR
+        S" version" S" 1.0.0" JSON-KV-ESTR
+    JSON-}
+    JSON-} _mt-params-end ;
+
+: _mt-call-params  ( -- )
+    _mt-params-begin JSON-{
+    S" name" S" echo.native" JSON-KV-ESTR
+    S" arguments" JSON-KEY: JSON-{
+        S" value" S" ignored" JSON-KV-ESTR
+    JSON-}
+    JSON-} _mt-params-end ;
+
+: _mt-read-params  ( -- )
+    _mt-params-begin JSON-{
+    S" uri" S" akashic://test/notes" JSON-KV-ESTR
+    JSON-} _mt-params-end ;
+
+: _mt-run  ( -- )
+    0 _mt-fails ! 0 _mt-checks ! 0 _mt-tool-hits ! 0 _mt-read-hits !
+    DEPTH _mt-depth ! _mt-setup
+    S" akashic-native-test" S" 1.0.0" MCP-SERVER-NEW
+    DUP 0= _mt-assert DROP _mt-server !
+    _mt-tool _mt-server @ MCP-SERVER-TOOL+ MCP-S-OK = _mt-assert
+    _mt-resource _mt-server @ MCP-SERVER-RESOURCE+ MCP-S-OK = _mt-assert
+    _mt-template _mt-server @ MCP-SERVER-TEMPLATE+ MCP-S-OK = _mt-assert
+
+    1 S" tools/list" S" {}" _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.KIND @ JRPC-K-ERROR = _mt-assert
+    _mt-msg JRPC.ERROR-CODE @ MCP-E-NOT-INITIALIZED = _mt-assert
+
+    _mt-initialize-params
+    2 S" initialize" _mt-params _mt-params-u @ _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.KIND @ JRPC-K-RESULT = _mt-assert
+    _mt-msg JRPC.RESULT-A @ _mt-msg JRPC.RESULT-U @ JSON-OBJECT? _mt-assert
+    _mt-server @ MSERVER.STATE @ MCP-STATE-INITIALIZING = _mt-assert
+
+    3 S" ping" S" {}" _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.KIND @ JRPC-K-RESULT = _mt-assert
+
+    S" notifications/initialized" S" " _mt-notification
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-out-u @ 0= _mt-assert
+    _mt-server @ MSERVER.STATE @ MCP-STATE-READY = _mt-assert
+
+    4 S" tools/list" S" {}" _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.RESULT-A @ _mt-msg JRPC.RESULT-U @ JSON-ENTER
+    S" tools" JSON-KEY JSON-ARRAY? _mt-assert
+
+    _mt-call-params
+    5 S" tools/call" _mt-params _mt-params-u @ _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-tool-hits @ 1 = _mt-assert
+    _mt-msg JRPC.RESULT-A @ _mt-msg JRPC.RESULT-U @ JSON-ENTER
+    S" isError" JSON-KEY JSON-GET-BOOL 0= _mt-assert
+
+    6 S" resources/list" S" {}" _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.RESULT-A @ _mt-msg JRPC.RESULT-U @ JSON-ENTER
+    S" resources" JSON-KEY JSON-ARRAY? _mt-assert
+
+    7 S" resources/templates/list" S" {}" _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.RESULT-A @ _mt-msg JRPC.RESULT-U @ JSON-ENTER
+    S" resourceTemplates" JSON-KEY JSON-ARRAY? _mt-assert
+
+    _mt-read-params
+    8 S" resources/read" _mt-params _mt-params-u @ _mt-request
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-read-hits @ 1 = _mt-assert
+    _mt-msg JRPC.RESULT-A @ _mt-msg JRPC.RESULT-U @ JSON-ENTER
+    S" contents" JSON-KEY JSON-ARRAY? _mt-assert
+
+    S" {" _mt-in SWAP CMOVE
+    _mt-in 1 _mt-out 32768 _mt-server @ MCP-SERVER-HANDLE
+    _mt-status ! _mt-out-u !
+    _mt-status @ MCP-S-OK = _mt-assert
+    _mt-parse 0= _mt-assert
+    _mt-msg JRPC.ERROR-CODE @ JRPC-E-PARSE = _mt-assert
+
+    _mt-server @ MCP-SERVER-FREE
+    _mt-stack
+    _mt-fails @ 0= IF
+        ." MCP SERVER PASS"
+    ELSE
+        ." MCP SERVER FAIL " _mt-fails @ .
+    THEN CR ;
+
+_mt-run
+""",
+        ready_markers=("MCP SERVER PASS",),
+        stable_markers=("MCP SERVER PASS",),
+    ),
     "codec-json": Profile(
         roots=("interop/codecs/json-schema.f",),
         resources=(),
