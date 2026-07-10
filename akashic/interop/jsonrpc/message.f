@@ -178,17 +178,6 @@ CREATE _JLK-KEY-BUF 96 ALLOT
 : _JRPC-ROOT-LOOKUP  ( key-a key-u -- value-a value-u flag )
     _JPM-ROOT-A @ _JPM-ROOT-U @ 2SWAP _JRPC-LOOKUP-IN ;
 
-\ Duplicate-aware lookup for validated protocol objects. The final IOR is
-\ nonzero only when a matching member is duplicated or malformed.
-: JRPC-FIELD  ( object-a object-u key-a key-u -- value-a value-u found ior )
-    0 _JPM-LOOKUP-ERROR !
-    _JRPC-LOOKUP-IN
-    _JPM-LOOKUP-ERROR @ IF
-        DROP 2DROP 0 0 0 JRPC-E-INVALID-PARAMS
-    ELSE
-        0
-    THEN ;
-
 VARIABLE _JSP-A
 VARIABLE _JSP-U
 
@@ -196,6 +185,20 @@ VARIABLE _JSP-U
     _JSP-U ! _JSP-A !
     _JSP-A @ _JSP-U @ JSON-SKIP-VALUE DROP _JSP-A @ -
     _JSP-A @ SWAP ;
+
+\ Duplicate-aware exact-span lookup for validated protocol objects. The
+\ final IOR is nonzero only when a matching member is duplicated or malformed.
+: JRPC-FIELD  ( object-a object-u key-a key-u -- value-a value-u found ior )
+    0 _JPM-LOOKUP-ERROR !
+    _JRPC-LOOKUP-IN
+    _JPM-LOOKUP-ERROR @ IF
+        DROP 2DROP 0 0 0 JRPC-E-INVALID-PARAMS EXIT
+    THEN
+    DUP IF
+        >R _JRPC-VALUE-SPAN R> 0
+    ELSE
+        0
+    THEN ;
 
 : _JRPC-INTEGER?  ( value-a value-u -- flag )
     _JRPC-VALUE-SPAN _JSP-U ! _JSP-A !

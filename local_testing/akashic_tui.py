@@ -68,6 +68,200 @@ class Profile:
 
 
 PROFILES = {
+    "mcp-component": Profile(
+        roots=("interop/mcp/component-adapter.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native MCP component adapter
+ENTER-USERLAND
+." [akashic] loading MCP component adapter" CR
+REQUIRE interop/mcp/component-adapter.f
+
+VARIABLE _ma-fails
+VARIABLE _ma-checks
+VARIABLE _ma-depth
+: _ma-assert  ( flag -- )
+    1 _ma-checks +!
+    0= IF 1 _ma-fails +! ." ASSERT " _ma-checks @ . CR THEN ;
+: _ma-stack  ( -- )
+    DEPTH DUP _ma-depth @ <> IF
+        ." STACK DEPTH " _ma-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ma-depth @ = _ma-assert ;
+
+VARIABLE _ma-registry
+VARIABLE _ma-bus
+VARIABLE _ma-server
+VARIABLE _ma-adapter
+VARIABLE _ma-instance
+VARIABLE _ma-review-hits
+CREATE _ma-policy CPOLICY-SIZE ALLOT
+CREATE _ma-text-schema CS-SIZE ALLOT
+CREATE _ma-int-schema CS-SIZE ALLOT
+CREATE _ma-caps CAP-DESC 2 * ALLOT
+CREATE _ma-desc COMP-DESC ALLOT
+CREATE _ma-call MCP-CALL-SIZE ALLOT
+CREATE _ma-read MCP-READ-SIZE ALLOT
+CREATE _ma-args 512 ALLOT
+VARIABLE _ma-args-u
+VARIABLE _ma-tool
+VARIABLE _ma-resource
+
+: _ma-persist-cap  ( -- cap ) _ma-caps ;
+: _ma-observe-cap  ( -- cap ) _ma-caps CAP-DESC + ;
+
+VARIABLE _mah-req
+VARIABLE _mah-inst
+
+: _ma-persist  ( request instance -- status )
+    _mah-inst ! _mah-req !
+    _mah-inst @ CINST-STATE DUP @ 1+ DUP >R SWAP !
+    R> _mah-req @ CBR.RESULT CV-INT!
+    CBUS-S-OK ;
+
+: _ma-observe  ( request instance -- status )
+    DROP S" native component resource" ROT CBR.RESULT CV-STRING!
+    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+
+: _ma-review-allow  ( request context -- decision )
+    SWAP DROP 1 SWAP +! MCPA-REVIEW-ALLOW ;
+
+: _ma-review-deny  ( request context -- decision )
+    SWAP DROP 1 SWAP +! MCPA-REVIEW-DENY ;
+
+: _ma-setup  ( -- )
+    _ma-text-schema CS-INIT CV-T-STRING _ma-text-schema CS-ALLOW!
+    256 _ma-text-schema CS-MAX-LEN!
+    _ma-int-schema CS-INIT CV-T-INT _ma-int-schema CS-ALLOW!
+
+    _ma-persist-cap CAP-DESC-INIT
+    CAP-K-COMMAND _ma-persist-cap CAP.KIND !
+    S" test.note.append"
+    _ma-persist-cap CAP.ID-U ! _ma-persist-cap CAP.ID-A !
+    S" Append note"
+    _ma-persist-cap CAP.TITLE-U ! _ma-persist-cap CAP.TITLE-A !
+    S" Append a reviewed persistent note"
+    _ma-persist-cap CAP.DESC-U ! _ma-persist-cap CAP.DESC-A !
+    _ma-text-schema _ma-persist-cap CAP.IN-SCHEMA !
+    _ma-int-schema _ma-persist-cap CAP.OUT-SCHEMA !
+    CAP-E-MUTATE CAP-E-PERSIST OR _ma-persist-cap CAP.EFFECTS !
+    ['] _ma-persist _ma-persist-cap CAP.HANDLER-XT !
+
+    _ma-observe-cap CAP-DESC-INIT
+    CAP-K-RESOURCE _ma-observe-cap CAP.KIND !
+    S" test.note.current"
+    _ma-observe-cap CAP.ID-U ! _ma-observe-cap CAP.ID-A !
+    S" Current note"
+    _ma-observe-cap CAP.TITLE-U ! _ma-observe-cap CAP.TITLE-A !
+    S" Read the native component resource"
+    _ma-observe-cap CAP.DESC-U ! _ma-observe-cap CAP.DESC-A !
+    _ma-text-schema _ma-observe-cap CAP.OUT-SCHEMA !
+    CAP-E-OBSERVE _ma-observe-cap CAP.EFFECTS !
+    CAP-F-IDEMPOTENT _ma-observe-cap CAP.FLAGS !
+    ['] _ma-observe _ma-observe-cap CAP.HANDLER-XT !
+
+    _ma-desc COMP-DESC-INIT
+    S" org.akashic.test-component" _ma-desc COMP.ID-U ! _ma-desc COMP.ID-A !
+    S" 1.0.0" _ma-desc COMP.VERSION-U ! _ma-desc COMP.VERSION-A !
+    8 _ma-desc COMP.STATE-SIZE !
+    _ma-caps _ma-desc COMP.CAPS-A ! 2 _ma-desc COMP.CAPS-N ! ;
+
+: _ma-args-valid  ( -- )
+    JSON-BUILD-RESET _ma-args 512 JSON-SET-OUTPUT
+    JSON-{ S" value" S" reviewed entry" JSON-KV-ESTR JSON-}
+    JSON-OUTPUT-RESULT NIP _ma-args-u ! ;
+
+: _ma-args-empty  ( -- )
+    S" {}" _ma-args SWAP CMOVE 2 _ma-args-u ! ;
+
+: _ma-call-reset  ( -- )
+    _ma-call MCP-CALL-FREE _ma-call MCP-CALL-INIT
+    _ma-args _ma-call MCALL.ARGS-A !
+    _ma-args-u @ _ma-call MCALL.ARGS-U ! ;
+
+: _ma-invoke  ( binding -- status )
+    MCPB.TOOL _ma-tool !
+    _ma-call _ma-tool @ MTOOL.CONTEXT @
+    _ma-tool @ MTOOL.CALL-XT @ EXECUTE ;
+
+: _ma-read-resource  ( binding -- status )
+    MCPB.RESOURCE _ma-resource !
+    _ma-read _ma-resource @ MRES.CONTEXT @
+    _ma-resource @ MRES.READ-XT @ EXECUTE ;
+
+: _ma-run  ( -- )
+    0 _ma-fails ! 0 _ma-checks ! 0 _ma-review-hits !
+    DEPTH _ma-depth ! _ma-setup
+    _ma-call MCP-CALL-INIT _ma-read MCP-READ-INIT
+    CREG-NEW DUP 0= _ma-assert DROP _ma-registry !
+    _ma-desc _ma-registry @ CREG-TYPE+ 0= _ma-assert
+    _ma-desc CINST-NEW DUP 0= _ma-assert DROP
+    DUP _ma-instance ! _ma-registry @ CREG-INST+ 0= _ma-assert
+    _ma-policy CPOLICY-INIT
+    _ma-registry @ _ma-policy CBUS-NEW DUP 0= _ma-assert DROP _ma-bus !
+    S" component-test" S" 1.0.0" MCP-SERVER-NEW
+    DUP 0= _ma-assert DROP _ma-server !
+    _ma-registry @ _ma-bus @ _ma-server @ MCPA-NEW
+    DUP 0= _ma-assert DROP _ma-adapter !
+    ['] _ma-review-allow _ma-review-hits _ma-adapter @ MCPA-REVIEWER!
+    _ma-adapter @ MCPA-REFRESH MCP-S-OK = _ma-assert
+    _ma-adapter @ MCPA.BINDING-N @ 2 = _ma-assert
+    _ma-server @ MSERVER.TOOL-N @ 2 = _ma-assert
+    _ma-server @ MSERVER.RESOURCE-N @ 1 = _ma-assert
+    0 _ma-adapter @ MCPA-BINDING-NTH MCPB.TOOL MCP-TOOL-NAME
+    2DUP MCP-TOOL-NAME-VALID? _ma-assert
+    S" .i" STR-STR-CONTAINS _ma-assert
+    1 _ma-adapter @ MCPA-BINDING-NTH MCPB.RESOURCE MCP-RESOURCE-URI
+    MCP-URI-VALID? _ma-assert
+
+    _ma-args-valid _ma-call-reset
+    0 _ma-adapter @ MCPA-BINDING-NTH _ma-invoke MCP-S-OK = _ma-assert
+    _ma-call MCALL.RESULT CV-TYPE@ CV-T-INT = _ma-assert
+    _ma-call MCALL.RESULT CV-DATA@ 1 = _ma-assert
+    _ma-review-hits @ 1 = _ma-assert
+    _ma-instance @ CINST-STATE @ 1 = _ma-assert
+
+    _ma-read MCP-READ-FREE _ma-read MCP-READ-INIT
+    1 _ma-adapter @ MCPA-BINDING-NTH _ma-read-resource MCP-S-OK = _ma-assert
+    _ma-read MREAD.CONTENT CV-TYPE@ CV-T-STRING = _ma-assert
+
+    ['] _ma-review-deny _ma-review-hits _ma-adapter @ MCPA-REVIEWER!
+    _ma-call-reset
+    0 _ma-adapter @ MCPA-BINDING-NTH _ma-invoke MCP-S-DENIED = _ma-assert
+    _ma-instance @ CINST-STATE @ 1 = _ma-assert
+
+    0 0 _ma-adapter @ MCPA-REVIEWER!
+    _ma-call-reset
+    0 _ma-adapter @ MCPA-BINDING-NTH _ma-invoke MCP-S-APPROVAL = _ma-assert
+    _ma-instance @ CINST-STATE @ 1 = _ma-assert
+
+    -1 _ma-persist-cap CAP.MAX-MS !
+    ['] _ma-review-allow _ma-review-hits _ma-adapter @ MCPA-REVIEWER!
+    _ma-call-reset
+    0 _ma-adapter @ MCPA-BINDING-NTH _ma-invoke MCP-S-TIMEOUT = _ma-assert
+    0 _ma-persist-cap CAP.MAX-MS !
+    _ma-instance @ CINST-STATE @ 1 = _ma-assert
+
+    _ma-args-empty _ma-call-reset
+    0 _ma-adapter @ MCPA-BINDING-NTH _ma-invoke MCP-S-INVALID = _ma-assert
+    _ma-args-valid _ma-call-reset
+    _ma-instance @ _ma-registry @ CREG-INST- 0= _ma-assert
+    0 _ma-adapter @ MCPA-BINDING-NTH _ma-invoke MCP-S-NOT-FOUND = _ma-assert
+
+    _ma-call MCP-CALL-FREE _ma-read MCP-READ-FREE
+    _ma-adapter @ MCPA-FREE _ma-server @ MCP-SERVER-FREE
+    _ma-bus @ CBUS-FREE _ma-registry @ CREG-FREE _ma-instance @ CINST-FREE
+    _ma-stack
+    _ma-fails @ 0= IF
+        ." MCP COMPONENT PASS"
+    ELSE
+        ." MCP COMPONENT FAIL " _ma-fails @ .
+    THEN CR ;
+
+_ma-run
+""",
+        ready_markers=("MCP COMPONENT PASS",),
+        stable_markers=("MCP COMPONENT PASS",),
+    ),
     "mcp": Profile(
         roots=("interop/mcp/server.f", "interop/mcp/client.f"),
         resources=(),
