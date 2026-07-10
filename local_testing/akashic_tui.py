@@ -68,6 +68,154 @@ class Profile:
 
 
 PROFILES = {
+    "codec-json": Profile(
+        roots=("interop/codecs/json-schema.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native interoperability JSON codecs
+ENTER-USERLAND
+." [akashic] loading JSON codecs" CR
+REQUIRE interop/codecs/json-schema.f
+
+VARIABLE _ct-fails
+VARIABLE _ct-checks
+VARIABLE _ct-depth
+: _ct-assert  ( flag -- )
+    1 _ct-checks +!
+    0= IF 1 _ct-fails +! ." ASSERT " _ct-checks @ . CR THEN ;
+: _ct-stack  ( -- )
+    DEPTH DUP _ct-depth @ <> IF
+        ." STACK DEPTH " _ct-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ct-depth @ = _ct-assert ;
+
+CREATE _ct-json 2048 ALLOT
+VARIABLE _ct-json-u
+CREATE _ct-out 4096 ALLOT
+VARIABLE _ct-out-u
+CREATE _ct-val CV-SIZE ALLOT
+CREATE _ct-copy CV-SIZE ALLOT
+CREATE _ct-keybuf 3 ALLOT
+CREATE _ct-resource-schema CS-SIZE ALLOT
+CREATE _ct-null-schema CS-SIZE ALLOT
+
+: _ct-reset  ( -- ) 0 _ct-json-u ! ;
+: _ct-c  ( c -- ) _ct-json _ct-json-u @ + C! 1 _ct-json-u +! ;
+: _ct-s  ( addr len -- )
+    DUP >R _ct-json _ct-json-u @ + SWAP CMOVE R> _ct-json-u +! ;
+: _ct-q  ( addr len -- ) 34 _ct-c _ct-s 34 _ct-c ;
+: _ct-key  ( addr len -- ) _ct-q 58 _ct-c ;
+: _ct-comma  ( -- ) 44 _ct-c ;
+
+: _ct-document  ( -- )
+    _ct-reset 123 _ct-c
+    S" name" _ct-key S" Alpha" _ct-q _ct-comma
+    S" items" _ct-key 91 _ct-c 49 _ct-c _ct-comma
+        S" true" _ct-s _ct-comma S" null" _ct-s 93 _ct-c _ct-comma
+    S" uri" _ct-key S" vfs:/notes.txt" _ct-q
+    125 _ct-c ;
+
+: _ct-duplicate  ( -- )
+    _ct-reset 123 _ct-c S" x" _ct-key 49 _ct-c _ct-comma
+    S" x" _ct-key 50 _ct-c 125 _ct-c ;
+
+: _ct-unicode  ( -- )
+    _ct-reset 34 _ct-c 92 _ct-c S" uD83D" _ct-s
+    92 _ct-c S" uDE00" _ct-s 34 _ct-c ;
+
+: _ct-bad-unicode  ( -- )
+    _ct-reset 34 _ct-c 92 _ct-c S" uD800" _ct-s 34 _ct-c ;
+
+: _ct-escaped-key  ( -- )
+    97 _ct-keybuf C! 34 _ct-keybuf 1+ C! 98 _ct-keybuf 2 + C!
+    _ct-reset 123 _ct-c 34 _ct-c 97 _ct-c 92 _ct-c 34 _ct-c
+    98 _ct-c 34 _ct-c 58 _ct-c 49 _ct-c 125 _ct-c ;
+
+: _ct-run  ( -- )
+    0 _ct-fails ! 0 _ct-checks ! DEPTH _ct-depth !
+    _ct-val CV-INIT _ct-copy CV-INIT
+
+    _ct-document _ct-json _ct-json-u @ _ct-val IVJSON-DECODE
+    0= _ct-assert
+    _ct-val CV-TYPE@ CV-T-MAP = _ct-assert
+    _ct-val CV-LEN@ 3 = _ct-assert
+    S" name" _ct-val CV-MAP-FIND DUP 0<> _ct-assert
+    DUP CV-TYPE@ CV-T-STRING = _ct-assert
+    DUP CV-DATA@ SWAP CV-LEN@ S" Alpha" STR-STR= _ct-assert
+    S" items" _ct-val CV-MAP-FIND DUP CV-TYPE@ CV-T-LIST = _ct-assert
+    DUP CV-LEN@ 3 = _ct-assert
+    0 OVER CV-LIST-NTH CV-DATA@ 1 = _ct-assert
+    1 OVER CV-LIST-NTH CV-DATA@ 0<> _ct-assert
+    2 SWAP CV-LIST-NTH CV-TYPE@ CV-T-NULL = _ct-assert
+
+    _ct-val _ct-out 4096 IVJSON-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+    _ct-out _ct-out-u @ _ct-copy IVJSON-DECODE 0= _ct-assert
+    _ct-copy CV-TYPE@ CV-T-MAP = _ct-assert
+    _ct-stack
+
+    _ct-val _ct-out 4 IVJSON-ENCODE
+    IVJSON-E-CAPACITY = _ct-assert DROP
+
+    _ct-duplicate _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
+    IVJSON-E-INVALID = _ct-assert
+    _ct-reset S" 1.5" _ct-s
+    _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
+    IVJSON-E-UNSUPPORTED = _ct-assert
+
+    _ct-unicode _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE 0= _ct-assert
+    _ct-copy CV-LEN@ 4 = _ct-assert
+    _ct-copy CV-DATA@ C@ 240 = _ct-assert
+    _ct-bad-unicode _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
+    IVJSON-E-INVALID = _ct-assert
+
+    _ct-escaped-key _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
+    0= _ct-assert
+    _ct-keybuf 3 _ct-copy CV-MAP-FIND DUP 0<> _ct-assert
+    CV-DATA@ 1 = _ct-assert
+    _ct-copy _ct-out 4096 IVJSON-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+
+    _ct-resource-schema CS-INIT
+    CV-T-RESOURCE _ct-resource-schema CS-ALLOW!
+    128 _ct-resource-schema CS-MAX-LEN!
+    _ct-reset S" vfs:/notes.txt" _ct-q
+    _ct-json _ct-json-u @ _ct-resource-schema _ct-copy
+    IVJSON-DECODE-AS 0= _ct-assert
+    _ct-copy CV-TYPE@ CV-T-RESOURCE = _ct-assert
+
+    _ct-resource-schema _ct-out 4096 CSJSON-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+    _ct-out _ct-out-u @ JSON-ENTER S" format" JSON-KEY
+    S" uri" JSON-STRING= _ct-assert
+
+    _ct-resource-schema _ct-out 4096 CSJSON-INPUT-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+    _ct-out _ct-out-u @ JSON-ENTER S" properties" JSON-KEY
+    JSON-OBJECT? _ct-assert
+
+    _ct-null-schema CS-INIT
+    CV-T-NULL _ct-null-schema CS-ALLOW!
+    _ct-null-schema _ct-out 4096 CSJSON-INPUT-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+
+    _ct-val CV-FREE _ct-copy CV-FREE
+    _ct-stack
+    _ct-fails @ 0= IF
+        ." CODEC JSON PASS"
+    ELSE
+        ." CODEC JSON FAIL " _ct-fails @ .
+    THEN CR ;
+
+_ct-run
+""",
+        ready_markers=("CODEC JSON PASS",),
+        stable_markers=("CODEC JSON PASS",),
+    ),
     "jsonrpc": Profile(
         roots=("interop/jsonrpc/dispatcher.f",),
         resources=(),

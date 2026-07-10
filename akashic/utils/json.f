@@ -1122,8 +1122,7 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
 : _JSON-HEX-CHAR  ( nibble -- char )
     15 AND DUP 10 < IF 48 + ELSE 55 + THEN ;
 
-: JSON-ESTR  ( addr len -- )
-    _JC-COMMA
+: _JSON-ESCAPED-QUOTED  ( addr len -- )
     34 JSON-EMIT                     \ opening "
     0 DO
         DUP I + C@
@@ -1152,6 +1151,18 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
     LOOP
     DROP
     34 JSON-EMIT ;                   \ closing "
+
+: JSON-ESTR  ( addr len -- )
+    _JC-COMMA _JSON-ESCAPED-QUOTED ;
+
+\ Escape dynamic keys. JSON-KEY: remains the fast path for safe literals.
+: JSON-EKEY:  ( addr len -- )
+    _JC-COMMA
+    _JSON-ESCAPED-QUOTED
+    58 JSON-EMIT
+    _JC-DEPTH @ 0> IF
+        0 _JC-STACK _JC-DEPTH @ 1- + C!
+    THEN ;
 
 \ JSON-KV-ESTR  ( kaddr klen vaddr vlen -- )
 \   Key-value convenience with escaped string value.
@@ -1226,6 +1237,7 @@ GUARD _json-guard
 ' JSON-EXPECT-BOOL CONSTANT _json-expect-bool-xt
 ' JSON-EXPECT-NULL CONSTANT _json-expect-null-xt
 ' JSON-ESTR       CONSTANT _json-estr-xt
+' JSON-EKEY:      CONSTANT _json-ekey-c-xt
 ' JSON-KV-ESTR    CONSTANT _json-kv-estr-xt
 
 : JSON-FAIL       _json-fail-xt _json-guard WITH-GUARD ;
@@ -1291,5 +1303,6 @@ GUARD _json-guard
 : JSON-EXPECT-BOOL _json-expect-bool-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-NULL _json-expect-null-xt _json-guard WITH-GUARD ;
 : JSON-ESTR       _json-estr-xt _json-guard WITH-GUARD ;
+: JSON-EKEY:      _json-ekey-c-xt _json-guard WITH-GUARD ;
 : JSON-KV-ESTR    _json-kv-estr-xt _json-guard WITH-GUARD ;
 [THEN] [THEN]
