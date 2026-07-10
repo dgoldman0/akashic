@@ -10,7 +10,7 @@
 Wraps the six BIOS UART Geometry register words behind a consistent
 `TERM-` prefix and adds derived convenience words for area
 calculation, fitness testing, clamping, centering, change detection,
-and resize-with-timeout.
+output batch flushing, and resize-with-timeout.
 
 The underlying hardware is the UART Geometry device at MMIO address
 `0xFFFF_FF00_0000_0010`, which exposes the host terminal's column and
@@ -37,6 +37,7 @@ row counts and supports cooperative resize requests.
 | `TERM-H` | `( -- n )` | Current terminal height in rows. Delegates to `ROWS`. |
 | `TERM-SIZE` | `( -- w h )` | Current terminal dimensions. Delegates to `TERMSIZE`. |
 | `TERM-RESIZED?` | `( -- flag )` | Check if a resize has occurred since the last check. Clears the hardware flag (write-1-to-clear). |
+| `TERM-FLUSH` | `( -- )` | Commit pending bytes in the BIOS UART TX ring, including a partial batch. |
 
 ### §2 — Derived Geometry Words
 
@@ -73,6 +74,13 @@ When `GUARDED` is defined, all eleven public words are wrapped with
 `_term-guard WITH-GUARD` for thread-safety.
 
 ## TUI Framework Integration
+
+### screen.f — Frame Completion
+
+`SCR-FLUSH` calls `TERM-FLUSH` after emitting its final ANSI reset. This makes
+the complete frame visible immediately even when it does not fill the BIOS
+4 KiB TX ring. Without this commit, a quiet TUI can leave its last rows or a
+small interaction update buffered indefinitely.
 
 ### event.f — Hardware Resize Polling
 

@@ -17,7 +17,8 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 │  tree with │  src/     <DIR>  dir              │
 │  VFS inodes│  build.f  540    file             │
 │  rename    │        (LST-NEW)                  │
-│  Ctrl+N/D  │  ── or ──                         │
+│  Ctrl+N    │  ── or ──                         │
+│ Ctrl+Shift+N│                                    │
 │  Del,F2,F5 │  (TXTA-NEW) file preview          │
 ├────────────┴───────────────────────────────────┤
 │ 42 items                 /projects/akashic      │
@@ -59,7 +60,7 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 |------|-------|-------------|
 | `FEXP-CLIP-COPY` | `( -- )` | Copy selected item to clipboard. |
 | `FEXP-CLIP-CUT` | `( -- )` | Cut selected item to clipboard. |
-| `FEXP-CLIP-PASTE` | `( -- )` | Paste clipboard into target directory. File copy only currently. |
+| `FEXP-CLIP-PASTE` | `( -- )` | Paste a copied file into the selected or current directory. |
 
 ### Constants
 
@@ -85,6 +86,11 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 | **Ctrl+H** | Toggle hidden files |
 | **Alt+1** | Switch to Details tab |
 | **Alt+2** | Switch to Preview tab |
+| **Ctrl+N** | Create a named file in the selected/current directory |
+| **Ctrl+Shift+N** | Create a named folder |
+| **F2** | Rename the selected item |
+| **F5** | Refresh both panes |
+| **Delete** | Confirm and delete the selected item |
 | **Esc** | Close menu / cancel goto overlay |
 
 ### Tree Sidebar (inherited from explorer.f)
@@ -98,7 +104,7 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 | F5 | Refresh |
 | Del | Delete |
 | Ctrl+N | New file |
-| Ctrl+D | New directory |
+| Ctrl+Shift+N | New directory |
 
 ## Menu Structure
 
@@ -147,3 +153,9 @@ Creates its own descriptor and runs the app-shell event loop.
 - Preview reads up to 32 KiB via `VFS-OPEN` / `VFS-READ` / `VFS-CLOSE`
 - Path built by walking `IN.PARENT @` chain up to root, then reversing segments
 - Clipboard uses file copy via VFS read/write loop; cut additionally calls `VFS-RM`
+- Go To, New File, New Folder, and Rename share a non-blocking command bar
+  mounted over the status row, so they work both standalone and inside Desk.
+- Selection is unified across the sidebar and Details list. Preview,
+  properties, rename, delete, copy, cut, and paste all act on that same inode.
+- MP64FS names are validated before mutation (non-empty, no slash, at most 23
+  UTF-8 bytes), and duplicate sibling names are rejected by the VFS layer.

@@ -6,7 +6,7 @@
 \
 \  Wraps the BIOS UART Geometry register words (COLS, ROWS,
 \  TERMSIZE, RESIZED?, RESIZE-DENIED?, RESIZE-REQUEST) behind a
-\  consistent TERM- prefix and adds derived convenience words for
+\  consistent TERM- prefix and adds output flushing, derived geometry,
 \  centering, clamping, and resize-with-timeout.
 \
 \  BIOS words used (from UART Geometry MMIO at 0xFFFF_FF00_0000_0010):
@@ -23,6 +23,7 @@
 \   TERM-SIZE        ( -- w h )             Current dimensions
 \   TERM-AREA        ( -- n )               w * h
 \   TERM-RESIZED?    ( -- flag )            Resize occurred? (clears flag)
+\   TERM-FLUSH       ( -- )                 Commit pending UART TX bytes
 \   TERM-RESIZE      ( w h -- ior )         Request resize with timeout
 \   TERM-FIT?        ( w h -- flag )        Both fit within terminal?
 \   TERM-CLAMP       ( w h -- w' h' )       Clamp to terminal bounds
@@ -54,6 +55,15 @@ PROVIDED akashic-term
 \   Clears the hardware RESIZED flag (write-1-to-clear).
 : TERM-RESIZED?  ( -- flag )
     RESIZED? ;
+
+\ TERM-FLUSH ( -- )
+\   Commit the BIOS TX ring's partial batch to the UART.  The BIOS flushes
+\   automatically when its 4 KiB ring fills, but an interactive frame often
+\   ends with a smaller batch that otherwise remains invisible to the host.
+0xFFFFFF0000000006 CONSTANT _TERM-UART-TX-FLUSH
+
+: TERM-FLUSH  ( -- )
+    0 _TERM-UART-TX-FLUSH C! ;
 
 \ =====================================================================
 \  §2 — Derived Geometry Words
@@ -149,6 +159,7 @@ GUARD _term-guard
 ' TERM-SIZE      CONSTANT _term-size-xt
 ' TERM-AREA      CONSTANT _term-area-xt
 ' TERM-RESIZED?  CONSTANT _term-resized-xt
+' TERM-FLUSH     CONSTANT _term-flush-xt
 ' TERM-RESIZE    CONSTANT _term-resize-xt
 ' TERM-FIT?      CONSTANT _term-fit-xt
 ' TERM-CLAMP     CONSTANT _term-clamp-xt
@@ -161,6 +172,7 @@ GUARD _term-guard
 : TERM-SIZE      _term-size-xt      _term-guard WITH-GUARD ;
 : TERM-AREA      _term-area-xt      _term-guard WITH-GUARD ;
 : TERM-RESIZED?  _term-resized-xt   _term-guard WITH-GUARD ;
+: TERM-FLUSH     _term-flush-xt     _term-guard WITH-GUARD ;
 : TERM-RESIZE    _term-resize-xt    _term-guard WITH-GUARD ;
 : TERM-FIT?      _term-fit-xt       _term-guard WITH-GUARD ;
 : TERM-CLAMP     _term-clamp-xt     _term-guard WITH-GUARD ;

@@ -151,17 +151,16 @@ VARIABLE _EXRC-NU   \ rename-commit: new name len
 \   Return TRUE if name is valid: non-empty, no '/', and no
 \   duplicate sibling name under parent.
 : _EXPL-RENAME-VALIDATE  ( addr len parent-inode -- flag )
-    >R                                    ( addr len  R: parent )
-    DUP 0= IF  R> DROP 2DROP FALSE EXIT  THEN
+    DROP
+    DUP 0= IF 2DROP FALSE EXIT THEN
+    DUP 23 > IF 2DROP FALSE EXIT THEN
     \ Check for '/' in name
-    DUP 0 DO
+    DUP 0 ?DO
         OVER I + C@ [CHAR] / = IF
-            2DROP R> DROP FALSE UNLOOP EXIT
+            2DROP FALSE UNLOOP EXIT
         THEN
     LOOP
-    \ Check for duplicate sibling
-    R> _VFS-FIND-CHILD                    ( child | 0 )
-    0= ;                                  \ TRUE if 0 (no dup)
+    2DROP TRUE ;
 
 \ _EXPL-RENAME-COMMIT ( input-widget -- )
 \   Called when user presses Enter in rename input.
@@ -177,16 +176,8 @@ VARIABLE _EXRC-NU   \ rename-commit: new name len
     _EXRC-NA @  _EXRC-NU @  _EXRC-IN @ IN.PARENT @
     _EXPL-RENAME-VALIDATE  0= IF  EXIT  THEN
 
-    \ Allocate new name in VFS string pool
-    _EXRC-NA @  _EXRC-NU @  _EXRN-W @ _EXPL-O-VFS + @
-    _VFS-STR-ALLOC                        ( new-handle )
-
-    \ Release old name, store new
-    _EXRC-IN @ IN.NAME @ _VFS-STR-RELEASE
-    _EXRC-IN @ IN.NAME !                  ( -- )
-
-    \ Mark inode dirty
-    _EXRC-IN @ IN.FLAGS DUP @ VFS-IF-DIRTY OR SWAP !
+    _EXRC-NA @ _EXRC-NU @ _EXRC-IN @
+    _EXRN-W @ _EXPL-O-VFS + @ VFS-RENAME IF EXIT THEN
 
     \ Sync VFS
     _EXRN-W @ _EXPL-O-VFS + @ VFS-SYNC DROP

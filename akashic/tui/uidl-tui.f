@@ -58,6 +58,7 @@ REQUIRE widgets/tree.f
 REQUIRE widgets/input.f
 REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
+REQUIRE widgets/dialog.f
 REQUIRE ../css/css.f
 REQUIRE color.f
 
@@ -604,7 +605,11 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     \ Stack: ( elem )
     _UTUI-FILL-BG
     \ If a widget was attached via UTUI-WIDGET-SET, draw it
-    _UTUI-SIDECAR _UTUI-SC-WPTR@ ?DUP IF  ( wptr )
+    DUP _UTUI-SIDECAR                    ( elem sc )
+    DUP _UTUI-SC-WPTR@ ?DUP IF           ( elem sc wptr )
+        >R
+        DUP R@ _UTUI-SYNC-WFOCUS
+        2DROP R>                          ( wptr )
         _UTUI-PROXY-FROM-UR
         \ Sync the widget's own region from current sidecar (handles resize)
         DUP _WDG-O-REGION + @
@@ -615,6 +620,8 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
         _UTUI-PROXY-RGN RGN-USE
         DUP _WDG-O-DRAW-XT + @ EXECUTE
         RGN-ROOT
+    ELSE
+        2DROP
     THEN ;
 
 \ --- Menu dropdown state ---
@@ -2063,6 +2070,17 @@ VARIABLE _UTUI-OVERLAY-CNT
     THEN
     UIDL-CLEAN! ;
 
+\ Parent renderers own and clear their full rectangles.  Ensure their
+\ direct children repaint later in the same DFS pass so clean child
+\ content is not erased by a parent-only update.
+: _UTUI-DIRTY-CHILDREN  ( elem -- )
+    UIDL-FIRST-CHILD
+    BEGIN DUP 0<> WHILE
+        DUP UE.FLAGS DUP @ UIDL-F-DIRTY OR SWAP !
+        UIDL-NEXT-SIB
+    REPEAT
+    DROP ;
+
 \ --- Paint entire subtree (element + all descendants) ---
 \ Used in Pass 2 for overlay elements that were deferred from Pass 1.
 \ Does NOT re-defer elements — all descendants paint unconditionally.
@@ -2125,6 +2143,7 @@ VARIABLE _UTUI-SKIP-CHILDREN
         -1 _UTUI-SKIP-CHILDREN !
         EXIT
     THEN DROP
+    DUP _UTUI-DIRTY-CHILDREN
     _UTUI-RENDER-ONE ;
 
 \ --- DFS advance past subtree ---
@@ -2478,6 +2497,10 @@ VARIABLE _UDR-SC
 ' UTUI-FOCUS-PREV     IS _UTUI-FOCUS-PREV-D
 ' _UTUI-DIRTY-SUBTREE IS _UTUI-DIRTY-SUBTREE-D
 ' _UTUI-DIRTY-RECT    IS _UTUI-DIRTY-RECT-D
+
+: _UTUI-DIALOG-DISMISS  ( row col h w -- )
+    _UTUI-DIRTY-RECT ;
+' _UTUI-DIALOG-DISMISS IS _DLG-DISMISS-HOOK
 
 \ --- Focus save / restore ---
 VARIABLE _UTUI-SAVED-FOCUS     \ stashed focus elem for overlay hide
@@ -3119,6 +3142,22 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
 : UTUI-WIDGET@  ( elem -- wptr | 0 )
     _UTUI-SIDECAR _UTUI-SC-WPTR@ ;
 
+VARIABLE _UTS-ELEM
+VARIABLE _UTS-INDEX
+
+\ UTUI-TAB-SELECT ( index elem -- )
+\   Select a UIDL <tabs> child, relayout its subtree, and repaint it.
+: UTUI-TAB-SELECT  ( index elem -- )
+    _UTS-ELEM ! _UTS-INDEX !
+    _UTS-ELEM @ UIDL-NCHILDREN DUP 0= IF DROP EXIT THEN
+    1- _UTS-INDEX @ 0 MAX MIN _UTS-INDEX !
+    _UTS-ELEM @ _UTUI-SIDECAR _UTUI-SC-WPTR@ ?DUP IF
+        _UTS-INDEX @ SWAP !
+    THEN
+    _UTS-ELEM @ _UTUI-DO-LAYOUT-REC
+    _UTS-ELEM @ UIDL-DIRTY!
+    _UTUI-NEEDS-PAINT ON ;
+
 \ =====================================================================
 \  §17a — Dynamic DOM Mutation (TUI-aware wrappers)
 \ =====================================================================
@@ -3150,12 +3189,24 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
 
 \ UTUI-SET-ATTR ( elem na nl va vl -- )
 \   Set attribute + auto-dirty the element and signal repaint.
-\   UIDL-SET-ATTR doesn't call UIDL-DIRTY! itself, so we keep
-\   elem on stack and dirty it after the attribute is written.
+\   Equal-value writes are no-ops: they neither consume string-pool
+\   space nor schedule a redundant frame.
+VARIABLE _USA-ELEM
+VARIABLE _USA-NA
+VARIABLE _USA-NL
+VARIABLE _USA-VA
+VARIABLE _USA-VL
+
 : UTUI-SET-ATTR  ( elem na nl va vl -- )
-    4 PICK >R
+    _USA-VL ! _USA-VA ! _USA-NL ! _USA-NA ! _USA-ELEM !
+    _USA-ELEM @ _USA-NA @ _USA-NL @ UIDL-ATTR IF
+        _USA-VA @ _USA-VL @ STR-STR= IF EXIT THEN
+    ELSE
+        2DROP
+    THEN
+    _USA-ELEM @ _USA-NA @ _USA-NL @ _USA-VA @ _USA-VL @
     UIDL-SET-ATTR
-    R> UIDL-DIRTY! ;
+    _USA-ELEM @ UIDL-DIRTY! ;
 
 \ UTUI-WIDGET-SET ( wptr elem -- )
 \   Attach a manually created widget to a UIDL element.
@@ -3397,6 +3448,7 @@ GUARD _utui-guard
 ' UTUI-FOCUS-PREV     CONSTANT _utui-focus-prev-xt
 ' UTUI-BY-ID          CONSTANT _utui-by-id-xt
 ' UTUI-WIDGET@        CONSTANT _utui-widget-at-xt
+' UTUI-TAB-SELECT     CONSTANT _utui-tab-select-xt
 ' UTUI-DO!            CONSTANT _utui-do-s-xt
 ' UTUI-SHOW-DIALOG    CONSTANT _utui-show-dialog-xt
 ' UTUI-HIDE-DIALOG    CONSTANT _utui-hide-dialog-xt
@@ -3421,6 +3473,7 @@ GUARD _utui-guard
 : UTUI-FOCUS-PREV     _utui-focus-prev-xt     _utui-guard WITH-GUARD ;
 : UTUI-BY-ID          _utui-by-id-xt          _utui-guard WITH-GUARD ;
 : UTUI-WIDGET@        _utui-widget-at-xt      _utui-guard WITH-GUARD ;
+: UTUI-TAB-SELECT     _utui-tab-select-xt     _utui-guard WITH-GUARD ;
 : UTUI-DO!            _utui-do-s-xt           _utui-guard WITH-GUARD ;
 : UTUI-SHOW-DIALOG    _utui-show-dialog-xt    _utui-guard WITH-GUARD ;
 : UTUI-HIDE-DIALOG    _utui-hide-dialog-xt    _utui-guard WITH-GUARD ;

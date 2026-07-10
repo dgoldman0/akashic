@@ -1,13 +1,13 @@
 <uidl arrange=stack>
 <menubar id=mbar>
 <menu label=File>
-<item text=New_File do=new-file/>
-<item text=New_Folder do=new-dir/>
+<item text=New_File do=new-file key=Ctrl+N/>
+<item text=New_Folder do=new-dir key=Ctrl+Shift+N/>
 <separator/>
-<item text=Delete do=delete/>
-<item text=Rename do=rename/>
+<item text=Delete do=delete key=Delete/>
+<item text=Rename do=rename key=F2/>
 <separator/>
-<item text=Refresh do=refresh/>
+<item text=Refresh do=refresh key=F5/>
 <item text=Quit do=quit key=Ctrl+Q/>
 </menu>
 <menu label=Edit>
@@ -55,4 +55,6 @@
 <action do=paste key=Ctrl+V/>
 <action do=toggle-hidden key=Ctrl+H/>
 <action do=parent-dir key=Backspace/>
+<action do=show-details key=Alt+1/>
+<action do=show-preview key=Alt+2/>
 </uidl>

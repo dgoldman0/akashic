@@ -51,8 +51,9 @@ PROVIDED akashic-string
 \ STR-STR= ( s1 l1 s2 l2 -- flag )
 \   Case-sensitive string comparison. -1 = equal, 0 = not equal.
 : STR-STR=  ( s1 l1 s2 l2 -- flag )
-    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
-    DUP 0= IF DROP 2DROP -1 EXIT THEN
+    2 PICK OVER <> IF 2DROP 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP 2DROP -1 EXIT THEN
+    >R SWAP DROP R>
     0 DO
         OVER I + C@  OVER I + C@ <> IF
             2DROP 0 UNLOOP EXIT
@@ -63,8 +64,9 @@ PROVIDED akashic-string
 \ STR-STRI= ( s1 l1 s2 l2 -- flag )
 \   Case-insensitive string comparison. -1 = equal, 0 = not equal.
 : STR-STRI=  ( s1 l1 s2 l2 -- flag )
-    ROT OVER <> IF 2DROP DROP 0 EXIT THEN
-    DUP 0= IF DROP 2DROP -1 EXIT THEN
+    2 PICK OVER <> IF 2DROP 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP 2DROP -1 EXIT THEN
+    >R SWAP DROP R>
     0 DO
         OVER I + C@ _STR-LC
         OVER I + C@ _STR-LC

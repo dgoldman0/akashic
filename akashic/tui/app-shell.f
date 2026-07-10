@@ -279,9 +279,18 @@ VARIABLE _ALUF-BUF
 : ASHELL-TOAST-VISIBLE?  ( -- flag )
     _ASHELL-TOAST-EXPIRY @ MS@ > ;
 
+: _ASHELL-DIRTY-TOAST-RECT  ( -- )
+    _ASHELL-HAS-UIDL @ 0= IF EXIT THEN
+    _ASHELL-TOAST-MSG 2@ NIP 4 + >R
+    SCR-H 1-
+    SCR-W R@ - 2 /
+    1 R>
+    _UTUI-DIRTY-RECT-D ;
+
 \ ASHELL-TOAST ( addr u ms -- )
 \   Show a toast message for ms milliseconds.
 : ASHELL-TOAST  ( addr u ms -- )
+    _ASHELL-TOAST-WAS-VIS @ IF _ASHELL-DIRTY-TOAST-RECT THEN
     MS@ + _ASHELL-TOAST-EXPIRY !
     _ASHELL-TOAST-MSG 2!
     -1 _ASHELL-TOAST-WAS-VIS !
@@ -505,21 +514,23 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 VARIABLE _ASHELL-TICK-TMP
 
 : _ASHELL-CHECK-TICK  ( -- )
-    _ASHELL-DESC @ APP.TICK-XT @ 0= IF EXIT THEN
-    MS@ _ASHELL-TICK-TMP !
-    _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK @ -
-    _ASHELL-TICK-MS @ >= IF
-        _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK !
-        _ASHELL-DESC @ APP.TICK-XT @ EXECUTE
-        \ If tick caused any UIDL/widget changes, auto-dirty
-        _UTUI-NEEDS-PAINT @ IF
-            0 _UTUI-NEEDS-PAINT !
-            ASHELL-DIRTY!
+    _ASHELL-DESC @ APP.TICK-XT @ IF
+        MS@ _ASHELL-TICK-TMP !
+        _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK @ -
+        _ASHELL-TICK-MS @ >= IF
+            _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK !
+            _ASHELL-DESC @ APP.TICK-XT @ EXECUTE
+            \ If tick caused any UIDL/widget changes, auto-dirty
+            _UTUI-NEEDS-PAINT @ IF
+                0 _UTUI-NEEDS-PAINT !
+                ASHELL-DIRTY!
+            THEN
         THEN
     THEN
     \ Toast expiry: if toast just expired, trigger repaint to clear it
     ASHELL-TOAST-VISIBLE? 0= IF
         _ASHELL-TOAST-WAS-VIS @ IF
+            _ASHELL-DIRTY-TOAST-RECT
             0 _ASHELL-TOAST-WAS-VIS !
             ASHELL-DIRTY!
         THEN

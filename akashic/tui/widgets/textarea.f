@@ -576,45 +576,45 @@ VARIABLE _TXTA-DR-LEN
 \ _TXTA-SCROLL-ADJ ( -- )
 \   Ensure cursor line is visible within viewport height.
 
-VARIABLE _TXTA-SA-GW   \ gutter width during scroll adj
+VARIABLE _TXTA-SA-GW      \ gutter width during scroll adjustment
+VARIABLE _TXTA-SA-CLINE   \ cursor line
+VARIABLE _TXTA-SA-VH      \ viewport height
+VARIABLE _TXTA-SA-SX      \ horizontal scroll position
+VARIABLE _TXTA-SA-TW      \ text viewport width
+VARIABLE _TXTA-SA-CCOL    \ cursor column
+
 : _TXTA-SCROLL-ADJ  ( -- )
     _TXTA-W @ _TXTA-O-GUTTER-W + @ _TXTA-SA-GW !
-    _TXTA-CURSOR-LINE                   ( cline )
-    DUP _TXTA-SCROLL < IF
+    _TXTA-CURSOR-LINE _TXTA-SA-CLINE !
+    _TXTA-SA-CLINE @ _TXTA-SCROLL < IF
         \ Cursor above viewport — scroll up
-        _TXTA-W @ _TXTA-O-SCROLL-Y + !
+        _TXTA-SA-CLINE @ _TXTA-W @ _TXTA-O-SCROLL-Y + !
         EXIT
     THEN
-    _TXTA-W @ WDG-REGION RGN-H         ( cline vh )
-    _TXTA-SCROLL + OVER SWAP           ( cline cline scroll+vh )
-    <= IF
+    _TXTA-W @ WDG-REGION RGN-H _TXTA-SA-VH !
+    _TXTA-SA-CLINE @ _TXTA-SCROLL _TXTA-SA-VH @ + >= IF
         \ Cursor at or below viewport bottom — scroll down
-        _TXTA-W @ WDG-REGION RGN-H - 1+
+        _TXTA-SA-CLINE @ _TXTA-SA-VH @ - 1+
         DUP 0< IF DROP 0 THEN
         _TXTA-W @ _TXTA-O-SCROLL-Y + !
-        EXIT
     THEN
-    DROP
     \ --- Horizontal scroll adjustment ---
-    _TXTA-W @ _TXTA-O-SCROLL-X + @     ( scroll-x )
+    _TXTA-W @ _TXTA-O-SCROLL-X + @ _TXTA-SA-SX !
     _TXTA-W @ WDG-REGION RGN-W
-    _TXTA-SA-GW @ -                     ( scroll-x text-w )
-    DUP 1 < IF DROP 1 THEN             ( scroll-x tw )   \ safety
-    _TXTA-CURSOR-COL                    ( scroll-x tw ccol )
+    _TXTA-SA-GW @ - 1 MAX _TXTA-SA-TW !
+    _TXTA-CURSOR-COL _TXTA-SA-CCOL !
     \ Cursor left of viewport?
-    2 PICK OVER > IF
-        NIP NIP                          ( ccol )
-        4 - 0 MAX
+    _TXTA-SA-CCOL @ _TXTA-SA-SX @ < IF
+        _TXTA-SA-CCOL @ 4 - 0 MAX
         _TXTA-W @ _TXTA-O-SCROLL-X + !
         EXIT
     THEN
     \ Cursor right of viewport?
-    ROT 2 PICK + OVER <= IF            ( tw ccol )
-        SWAP - 4 +                       ( new-scroll-x )
+    _TXTA-SA-CCOL @ _TXTA-SA-SX @ _TXTA-SA-TW @ + >= IF
+        _TXTA-SA-CCOL @ _TXTA-SA-TW @ - 4 +
         _TXTA-W @ _TXTA-O-SCROLL-X + !
-        EXIT
     THEN
-    2DROP ;
+;
 
 \ =====================================================================
 \  7. Internal draw
@@ -785,12 +785,15 @@ VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
     0 _TXTA-DRW-CDONE !
     _TXTA-SCROLL _TXTA-DRW-LINE# !
     0 ?DO
-        I _TXTA-DRW-GUTTER
         I _TXTA-DRAW-LINE
+        \ Draw the gutter last: the default renderer clears the full row.
+        DRW-STYLE-SAVE
+        I _TXTA-DRW-GUTTER
+        DRW-STYLE-RESTORE
         1 _TXTA-DRW-LINE# +!
     LOOP
     \ Free flattened copy if allocated
-    _TXTA-DRW-GBFLAT @ ?DUP IF FREE DROP THEN ;
+    _TXTA-DRW-GBFLAT @ ?DUP IF FREE THEN ;
 
 \ =====================================================================
 \  8. Internal handle
@@ -962,14 +965,17 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
     R> WDG-DIRTY ;
 
 \ TXTA-GET-TEXT ( widget -- addr len )
-\   In GB mode: returns GB-FLATTEN result (caller must FREE).
-\   In flat mode: returns pointer into flat buffer (no alloc).
+\   Return an allocated contiguous snapshot.  Caller must FREE addr.
 : TXTA-GET-TEXT  ( widget -- addr len )
     DUP _TXTA-O-GB + @ IF
-        _TXTA-O-GB + @ GB-FLATTEN EXIT
+        _TXTA-O-GB + @
+        DUP GB-LEN 1 MAX ALLOCATE 0<> ABORT" TXTA-GET-TEXT: alloc"
+        DUP ROT GB-FLATTEN EXIT
     THEN
-    DUP _TXTA-O-BUF-A + @
-    SWAP _TXTA-O-BUF-LEN + @ ;
+    DUP _TXTA-O-BUF-LEN + @ >R
+    R@ 1 MAX ALLOCATE 0<> ABORT" TXTA-GET-TEXT: alloc"
+    SWAP _TXTA-O-BUF-A + @ OVER R@ CMOVE
+    R> ;
 
 \ TXTA-ON-CHANGE ( xt widget -- )
 : TXTA-ON-CHANGE  ( xt widget -- )

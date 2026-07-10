@@ -43,6 +43,7 @@ REQUIRE ../../widgets/list.f
 REQUIRE ../../widgets/textarea.f
 REQUIRE ../../widgets/input.f
 REQUIRE ../../widgets/dialog.f
+REQUIRE ../../widgets/prompt.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../uidl-tui.f
@@ -62,11 +63,19 @@ REQUIRE ../../color.f
  80 CONSTANT _FEXP-LINE-W         \ formatted line width (chars)
 512 CONSTANT _FEXP-PATH-CAP       \ path buffer capacity
 32768 CONSTANT _FEXP-PREVIEW-CAP  \ preview buffer 32 KiB
+512 CONSTANT _FEXP-PROMPT-CAP     \ command-bar input capacity
 
 \ Sort modes
 0 CONSTANT FEXP-SORT-NAME
 1 CONSTANT FEXP-SORT-SIZE
 2 CONSTANT FEXP-SORT-TYPE
+
+\ Command-bar modes
+0 CONSTANT _FEXP-PRM-NONE
+1 CONSTANT _FEXP-PRM-GOTO
+2 CONSTANT _FEXP-PRM-NEW-FILE
+3 CONSTANT _FEXP-PRM-NEW-DIR
+4 CONSTANT _FEXP-PRM-RENAME
 
 \ Clipboard operations
 0 CONSTANT _FEXP-CLIP-NONE
@@ -101,17 +110,26 @@ VARIABLE _FEXP-E-PREVIEW    \ <textarea id="preview">
 VARIABLE _FEXP-E-TABS       \ <tabs id="tabs">
 VARIABLE _FEXP-E-SBAR-L     \ <label id="sbar-left">
 VARIABLE _FEXP-E-SBAR-R     \ <label id="sbar-right">
+VARIABLE _FEXP-E-SBAR       \ <status id="sbar">
 VARIABLE _FEXP-E-MBAR       \ <menubar id="mbar">
 VARIABLE _FEXP-E-SCROLLER   \ <scroll id="scroller">
 
 \ Widget handles (native widgets mounted on UIDL regions)
 VARIABLE _FEXP-EXPL         \ explorer widget (EXPL-NEW)
 VARIABLE _FEXP-LIST         \ list widget (LST-NEW)
+VARIABLE _FEXP-PROMPT       \ status-row command bar
+VARIABLE _FEXP-PROMPT-RGN   \ caller-owned prompt region
+VARIABLE _FEXP-PROMPT-MODE
+CREATE _FEXP-PROMPT-BUF _FEXP-PROMPT-CAP ALLOT
 
 \ Business state
 VARIABLE _FEXP-VFS           \ VFS instance
 VARIABLE _FEXP-SORT          \ sort mode (0=name, 1=size, 2=type)
 VARIABLE _FEXP-CUR-DIR       \ inode of currently displayed directory
+VARIABLE _FEXP-SEL-IN        \ active inode from either pane
+
+: _FEXP-SELECTED  ( -- inode | 0 )
+    _FEXP-SEL-IN @ ;
 
 \ Clipboard
 VARIABLE _FEXP-CLIP-IN       \ clipboard inode
@@ -350,15 +368,17 @@ VARIABLE _FSW-TMP
 \ =====================================================================
 
 VARIABLE _FPV-FD
+VARIABLE _FPV-IN
 
 : _FEXP-LOAD-PREVIEW  ( inode -- )
     DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
-    DUP IN.NAME @ _VFS-STR-GET
+    DUP _FPV-IN !
+    _FEXP-BUILD-PATH
     VFS-CUR >R  _FEXP-VFS @ VFS-USE
-    VFS-OPEN
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ VFS-OPEN
     R> VFS-USE
-    DUP 0= IF 2DROP EXIT THEN
-    _FPV-FD ! DROP
+    DUP 0= IF DROP EXIT THEN
+    _FPV-FD !
     _FEXP-PREV-BUF _FEXP-PREVIEW-CAP _FPV-FD @ VFS-READ
     \ Set the UIDL textarea content via its materialized widget
     _FEXP-E-PREVIEW @ UTUI-WIDGET@ ?DUP IF
@@ -375,14 +395,14 @@ VARIABLE _FCP-SRC  VARIABLE _FCP-DST
 VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
 
 : FEXP-CLIP-COPY  ( -- )
-    _FEXP-EXPL @ EXPL-SELECTED
+    _FEXP-SELECTED
     DUP 0= IF DROP EXIT THEN
     _FEXP-CLIP-IN !
     _FEXP-CLIP-COPY _FEXP-CLIP-OP !
     S" Copied to clipboard" 2000 ASHELL-TOAST ;
 
 : FEXP-CLIP-CUT  ( -- )
-    _FEXP-EXPL @ EXPL-SELECTED
+    _FEXP-SELECTED
     DUP 0= IF DROP EXIT THEN
     _FEXP-CLIP-IN !
     _FEXP-CLIP-CUT _FEXP-CLIP-OP !
@@ -395,7 +415,7 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
     _FEXP-CLIP-IN @ 0= IF
         S" No source" 1500 ASHELL-TOAST EXIT
     THEN
-    _FEXP-EXPL @ EXPL-SELECTED
+    _FEXP-SELECTED
     DUP 0= IF DROP EXIT THEN
     DUP IN.TYPE @ VFS-T-DIR = IF ELSE IN.PARENT @ THEN
     _FCP-DST !
@@ -460,7 +480,7 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
         S" text" _FEXP-SLEFT _FEXP-SLEFT-L @ UTUI-SET-ATTR
     THEN
     \ Right: path of selected item
-    _FEXP-EXPL @ EXPL-SELECTED
+    _FEXP-SELECTED
     DUP 0<> IF
         _FEXP-BUILD-PATH
         _FEXP-E-SBAR-R @ ?DUP IF
@@ -495,6 +515,7 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
 : _FEXP-ON-SELECT  ( inode explorer -- )
     DROP
     DUP 0= IF DROP EXIT THEN
+    DUP _FEXP-SEL-IN !
     DUP IN.TYPE @ VFS-T-DIR = IF
         DUP _FEXP-CUR-DIR !
         _FEXP-POPULATE-DIR
@@ -509,10 +530,10 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
 : _FEXP-ON-OPEN  ( inode explorer -- )
     DROP
     DUP 0= IF DROP EXIT THEN
+    DUP _FEXP-SEL-IN !
     DUP IN.TYPE @ VFS-T-FILE = IF
         _FEXP-LOAD-PREVIEW
-        \ Switch to Preview tab via UIDL tabs state
-        _FEXP-E-TABS @ ?DUP IF UTUI-WIDGET@ ?DUP IF 1 SWAP ! THEN THEN
+        _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN
     ELSE
         DUP _FEXP-CUR-DIR !
         _FEXP-POPULATE-DIR
@@ -529,8 +550,96 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
     DUP _FEXP-CNT @ >= IF DROP EXIT THEN
     CELLS _FEXP-INODES + @
     DUP 0= IF DROP EXIT THEN
-    DUP IN.TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW ELSE DROP THEN
+    DUP _FEXP-SEL-IN !
+    DUP IN.TYPE @ VFS-T-FILE = IF
+        _FEXP-LOAD-PREVIEW
+        _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN
+    ELSE DROP THEN
     _FEXP-UPDATE-STATUS ;
+
+VARIABLE _FPS-MODE
+VARIABLE _FPS-LA
+VARIABLE _FPS-LU
+VARIABLE _FPS-IA
+VARIABLE _FPS-IU
+
+: _FEXP-SHOW-PROMPT  ( mode label-a label-u initial-a initial-u -- )
+    _FPS-IU ! _FPS-IA ! _FPS-LU ! _FPS-LA ! _FPS-MODE !
+    _FEXP-PROMPT @ 0= IF EXIT THEN
+    _FPS-MODE @ _FEXP-PROMPT-MODE !
+    _FPS-LA @ _FPS-LU @ _FPS-IA @ _FPS-IU @
+        _FEXP-PROMPT @ PRM-SHOW
+    ASHELL-DIRTY! ;
+
+: _FEXP-TARGET-DIR  ( -- inode | 0 )
+    _FEXP-SELECTED
+    DUP 0= IF DROP _FEXP-CUR-DIR @ EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR = IF EXIT THEN
+    IN.PARENT @ ;
+
+VARIABLE _FMU-A
+VARIABLE _FMU-U
+VARIABLE _FMU-TYPE
+VARIABLE _FMU-DIR
+VARIABLE _FMU-OLD-CWD
+VARIABLE _FMU-OK
+
+: _FEXP-CREATE-NAMED  ( name-a name-u type -- flag )
+    _FMU-TYPE ! _FMU-U ! _FMU-A !
+    _FMU-U @ 0= _FMU-U @ 23 > OR IF FALSE EXIT THEN
+    _FEXP-TARGET-DIR DUP 0= IF DROP FALSE EXIT THEN _FMU-DIR !
+    _FEXP-VFS @ V.CWD @ _FMU-OLD-CWD !
+    _FMU-DIR @ _FEXP-VFS @ V.CWD !
+    _FMU-TYPE @ VFS-T-DIR = IF
+        _FMU-A @ _FMU-U @ _FEXP-VFS @ VFS-MKDIR 0=
+    ELSE
+        _FMU-A @ _FMU-U @ _FEXP-VFS @ VFS-MKFILE 0<>
+    THEN
+    _FMU-OK !
+    _FMU-OLD-CWD @ _FEXP-VFS @ V.CWD !
+    _FMU-OK @ IF
+        _FMU-A @ _FMU-U @ _FMU-DIR @ _VFS-FIND-CHILD
+        DUP _FEXP-SEL-IN !
+        _FEXP-VFS @ VFS-SYNC IF 0 _FMU-OK ! THEN
+        _FEXP-EXPL @ EXPL-REFRESH
+        _FEXP-REFRESH-DETAIL
+    THEN
+    _FMU-OK @ ;
+
+VARIABLE _FMR-IN
+
+: _FEXP-RENAME-NAMED  ( name-a name-u -- flag )
+    DUP 0= OVER 23 > OR IF 2DROP FALSE EXIT THEN
+    _FEXP-SELECTED DUP 0= IF DROP 2DROP FALSE EXIT THEN
+    _FMR-IN !
+    _FMR-IN @ _FEXP-VFS @ VFS-RENAME IF FALSE EXIT THEN
+    _FEXP-VFS @ VFS-SYNC IF FALSE EXIT THEN
+    _FEXP-EXPL @ EXPL-REFRESH
+    _FEXP-REFRESH-DETAIL
+    TRUE ;
+
+VARIABLE _FDEL-IN
+VARIABLE _FDEL-PARENT
+VARIABLE _FDEL-A
+VARIABLE _FDEL-U
+VARIABLE _FDEL-OLD-CWD
+
+: _FEXP-DELETE-SELECTED  ( -- flag )
+    _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
+    DUP _FEXP-VFS @ V.ROOT @ = IF DROP FALSE EXIT THEN _FDEL-IN !
+    S" Delete the selected item?" DLG-CONFIRM 0= IF FALSE EXIT THEN
+    _FDEL-IN @ IN.PARENT @ _FDEL-PARENT !
+    _FDEL-IN @ IN.NAME @ _VFS-STR-GET _FDEL-U ! _FDEL-A !
+    _FEXP-VFS @ V.CWD @ _FDEL-OLD-CWD !
+    _FDEL-PARENT @ _FEXP-VFS @ V.CWD !
+    _FDEL-A @ _FDEL-U @ _FEXP-VFS @ VFS-RM
+    _FDEL-OLD-CWD @ _FEXP-VFS @ V.CWD !
+    IF FALSE EXIT THEN
+    _FEXP-VFS @ VFS-SYNC IF FALSE EXIT THEN
+    _FDEL-PARENT @ _FEXP-SEL-IN !
+    _FEXP-EXPL @ EXPL-REFRESH
+    _FEXP-REFRESH-DETAIL
+    TRUE ;
 
 \ =====================================================================
 \  §13 — Action handlers (registered via UTUI-DO!)
@@ -540,10 +649,20 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
 \  We ignore the element argument since our actions are global.
 
 : _FEXP-DO-QUIT       ( elem -- ) DROP ASHELL-QUIT ;
-: _FEXP-DO-NEW-FILE   ( elem -- ) DROP _FEXP-EXPL @ EXPL-NEW-FILE  ASHELL-DIRTY! ;
-: _FEXP-DO-NEW-DIR    ( elem -- ) DROP _FEXP-EXPL @ EXPL-NEW-DIR   ASHELL-DIRTY! ;
-: _FEXP-DO-DELETE     ( elem -- ) DROP _FEXP-EXPL @ EXPL-DELETE     _FEXP-REFRESH-DETAIL ;
-: _FEXP-DO-RENAME     ( elem -- ) DROP _FEXP-EXPL @ EXPL-RENAME    ASHELL-DIRTY! ;
+: _FEXP-DO-NEW-FILE   ( elem -- )
+    DROP _FEXP-PRM-NEW-FILE S" New file:" 0 0 _FEXP-SHOW-PROMPT ;
+: _FEXP-DO-NEW-DIR    ( elem -- )
+    DROP _FEXP-PRM-NEW-DIR S" New folder:" 0 0 _FEXP-SHOW-PROMPT ;
+: _FEXP-DO-DELETE     ( elem -- )
+    DROP _FEXP-DELETE-SELECTED 0= IF
+        S" Delete cancelled or failed" 1800 ASHELL-TOAST
+    THEN ;
+: _FEXP-DO-RENAME     ( elem -- )
+    DROP
+    _FEXP-SELECTED DUP 0= IF DROP EXIT THEN
+    _FMR-IN !
+    _FEXP-PRM-RENAME S" Rename:"
+    _FMR-IN @ IN.NAME @ _VFS-STR-GET _FEXP-SHOW-PROMPT ;
 : _FEXP-DO-REFRESH    ( elem -- ) DROP _FEXP-EXPL @ EXPL-REFRESH   _FEXP-REFRESH-DETAIL ;
 : _FEXP-DO-COPY       ( elem -- ) DROP FEXP-CLIP-COPY ;
 : _FEXP-DO-CUT        ( elem -- ) DROP FEXP-CLIP-CUT ;
@@ -561,6 +680,12 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
 : _FEXP-DO-EXPAND-ALL   ( elem -- ) DROP _FEXP-EXPL @ EXPL-EXPAND-ALL   ASHELL-DIRTY! ;
 : _FEXP-DO-COLLAPSE-ALL ( elem -- ) DROP _FEXP-EXPL @ EXPL-COLLAPSE-ALL ASHELL-DIRTY! ;
 
+: _FEXP-DO-DETAILS  ( elem -- )
+    DROP _FEXP-E-TABS @ ?DUP IF 0 SWAP UTUI-TAB-SELECT THEN ;
+
+: _FEXP-DO-PREVIEW  ( elem -- )
+    DROP _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN ;
+
 : _FEXP-DO-PARENT-DIR  ( elem -- )
     DROP
     _FEXP-CUR-DIR @ ?DUP IF
@@ -574,16 +699,87 @@ VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
         THEN
     THEN ;
 
-\ Go-to-path: use DLG-CONFIRM for now (simple approach)
 VARIABLE _FEXP-PROP-IN
+VARIABLE _FGP-IN
+
+: _FEXP-GOTO-PATH  ( path-a path-u -- flag )
+    _FEXP-VFS @ VFS-RESOLVE
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _FGP-IN !
+    DUP _FEXP-SEL-IN !
+    IN.TYPE @ VFS-T-DIR = IF
+        _FGP-IN @ DUP _FEXP-EXPL @ EXPL-ROOT!
+        DUP _FEXP-CUR-DIR !
+        _FEXP-POPULATE-DIR
+        _FEXP-SORT-LIST
+        _FEXP-LIST @ ?DUP IF
+            _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
+        THEN
+    ELSE
+        _FGP-IN @ _FEXP-LOAD-PREVIEW
+        _FEXP-E-TABS @ ?DUP IF
+            1 SWAP UTUI-TAB-SELECT
+        THEN
+    THEN
+    _FEXP-UPDATE-STATUS
+    ASHELL-DIRTY!
+    -1 ;
+
+VARIABLE _FSUB-A
+VARIABLE _FSUB-U
+VARIABLE _FSUB-MODE
+
+: _FEXP-PROMPT-SUBMIT  ( prompt -- )
+    PRM-GET-TEXT _FSUB-U ! _FSUB-A !
+    _FEXP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _FEXP-PROMPT-MODE @ _FSUB-MODE !
+    _FEXP-PRM-NONE _FEXP-PROMPT-MODE !
+    _FSUB-U @ 0= IF EXIT THEN
+    _FSUB-MODE @ CASE
+        _FEXP-PRM-GOTO OF
+            _FSUB-A @ _FSUB-U @ _FEXP-GOTO-PATH 0= IF
+                S" Path not found" 2000 ASHELL-TOAST
+            THEN
+        ENDOF
+        _FEXP-PRM-NEW-FILE OF
+            _FSUB-A @ _FSUB-U @ VFS-T-FILE _FEXP-CREATE-NAMED IF
+                S" File created" 1400 ASHELL-TOAST
+            ELSE
+                S" Could not create file" 2200 ASHELL-TOAST
+            THEN
+        ENDOF
+        _FEXP-PRM-NEW-DIR OF
+            _FSUB-A @ _FSUB-U @ VFS-T-DIR _FEXP-CREATE-NAMED IF
+                S" Folder created" 1400 ASHELL-TOAST
+            ELSE
+                S" Could not create folder" 2200 ASHELL-TOAST
+            THEN
+        ENDOF
+        _FEXP-PRM-RENAME OF
+            _FSUB-A @ _FSUB-U @ _FEXP-RENAME-NAMED IF
+                S" Renamed" 1400 ASHELL-TOAST
+            ELSE
+                S" Could not rename" 2200 ASHELL-TOAST
+            THEN
+        ENDOF
+    ENDCASE
+    ASHELL-DIRTY! ;
+
+: _FEXP-PROMPT-CANCEL  ( prompt -- )
+    DROP
+    _FEXP-PRM-NONE _FEXP-PROMPT-MODE !
+    _FEXP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    ASHELL-DIRTY! ;
 
 : _FEXP-DO-GOTO  ( elem -- )
     DROP
-    S" Go to Path" 2000 ASHELL-TOAST ;
+    _FEXP-CUR-DIR @ _FEXP-BUILD-PATH
+    _FEXP-PRM-GOTO S" Go to:" _FEXP-PATH-BUF _FEXP-PATH-LEN @
+    _FEXP-SHOW-PROMPT ;
 
 : _FEXP-DO-PROPS  ( elem -- )
     DROP
-    _FEXP-EXPL @ EXPL-SELECTED
+    _FEXP-SELECTED
     DUP 0= IF DROP EXIT THEN
     _FEXP-PROP-IN !
     _FEXP-PROP-IN @ _FEXP-BUILD-PATH
@@ -604,7 +800,7 @@ VARIABLE _FEXP-PROP-IN
     R> SWAP DUP >R CMOVE
     R> +
     NIP
-    _FEXP-PREV-BUF SWAP DLG-CONFIRM DROP ;
+    _FEXP-PREV-BUF SWAP DLG-INFO ;
 
 \ =====================================================================
 \  §14 — INIT callback ("document ready")
@@ -617,6 +813,10 @@ VARIABLE _FEXP-PROP-IN
     0 _FEXP-CLIP-IN !
     _FEXP-CLIP-NONE _FEXP-CLIP-OP !
     0 _FEXP-CUR-DIR !
+    0 _FEXP-SEL-IN !
+    0 _FEXP-PROMPT !
+    0 _FEXP-PROMPT-RGN !
+    _FEXP-PRM-NONE _FEXP-PROMPT-MODE !
 
     \ Get VFS
     VFS-CUR DUP 0= ABORT" fexplorer: no VFS available"
@@ -629,6 +829,7 @@ VARIABLE _FEXP-PROP-IN
     S" tabs"       UTUI-BY-ID _FEXP-E-TABS !
     S" sbar-left"  UTUI-BY-ID _FEXP-E-SBAR-L !
     S" sbar-right" UTUI-BY-ID _FEXP-E-SBAR-R !
+    S" sbar"       UTUI-BY-ID _FEXP-E-SBAR !
     S" mbar"       UTUI-BY-ID _FEXP-E-MBAR !
     S" scroller"   UTUI-BY-ID _FEXP-E-SCROLLER !
 
@@ -636,6 +837,17 @@ VARIABLE _FEXP-PROP-IN
     _FEXP-THEME-DEFAULTS
     _FEXP-LOAD-CONFIG
     _FEXP-APPLY-THEME
+
+    \ Create a command bar that overlays the status row while active.
+    _FEXP-E-SBAR @ ?DUP IF
+        UTUI-ELEM-RGN RGN-NEW
+        DUP _FEXP-PROMPT-RGN !
+        _FEXP-PROMPT-BUF _FEXP-PROMPT-CAP PRM-NEW
+        DUP _FEXP-PROMPT !
+        ['] _FEXP-PROMPT-SUBMIT OVER PRM-ON-SUBMIT
+        ['] _FEXP-PROMPT-CANCEL OVER PRM-ON-CANCEL
+        _FTH-STATUS-FG @ _FTH-STATUS-BG @ ROT PRM-COLORS!
+    THEN
 
     \ Create explorer widget and mount on sidebar region
     _FEXP-E-SIDEBAR @ UTUI-ELEM-RGN     ( row col h w )
@@ -675,9 +887,12 @@ VARIABLE _FEXP-PROP-IN
     S" goto"           ['] _FEXP-DO-GOTO            UTUI-DO!
     S" props"          ['] _FEXP-DO-PROPS           UTUI-DO!
     S" parent-dir"     ['] _FEXP-DO-PARENT-DIR      UTUI-DO!
+    S" show-details"   ['] _FEXP-DO-DETAILS         UTUI-DO!
+    S" show-preview"   ['] _FEXP-DO-PREVIEW         UTUI-DO!
 
     \ Populate initial directory listing
     _FEXP-VFS @ V.ROOT @ DUP _FEXP-CUR-DIR !
+    _FEXP-VFS @ V.ROOT @ _FEXP-SEL-IN !
     _FEXP-POPULATE-DIR
     _FEXP-SORT-LIST
     _FEXP-LIST @ _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
@@ -696,7 +911,20 @@ VARIABLE _FEXP-PROP-IN
 \ Widget dispatch is now handled by the UIDL engine's _UTUI-H-REGION,
 \ which automatically routes keys to mounted widgets on focused regions.
 : FEXP-EVENT-CB  ( ev -- flag )
+    _FEXP-PROMPT @ ?DUP IF
+        DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN
+        DROP
+    THEN
     DROP 0 ;
+
+: FEXP-PAINT-CB  ( -- )
+    _FEXP-PROMPT @ ?DUP 0= IF EXIT THEN
+    DUP PRM-ACTIVE? 0= IF DROP EXIT THEN
+    DROP
+    _FEXP-E-SBAR @ ?DUP IF
+        UTUI-ELEM-RGN _FEXP-PROMPT @ PRM-SET-BOUNDS
+    THEN
+    _FEXP-PROMPT @ WDG-DRAW ;
 
 \ =====================================================================
 \  §16 — SHUTDOWN callback
@@ -709,9 +937,12 @@ VARIABLE _FEXP-PROP-IN
     \ Free native widgets
     _FEXP-EXPL @ ?DUP IF EXPL-FREE THEN
     _FEXP-LIST @ ?DUP IF LST-FREE THEN
+    _FEXP-PROMPT @ ?DUP IF PRM-FREE THEN
+    _FEXP-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     \ (UIDL buffer is owned and freed by the host shell/desk)
     \ Zero handles
     0 _FEXP-EXPL !  0 _FEXP-LIST !
+    0 _FEXP-PROMPT ! 0 _FEXP-PROMPT-RGN !
     0 _FEXP-E-SIDEBAR !  0 _FEXP-E-DETAIL !
     0 _FEXP-E-PREVIEW !  0 _FEXP-E-TABS !
     0 _FEXP-E-SBAR-L !   0 _FEXP-E-SBAR-R !
@@ -726,7 +957,7 @@ VARIABLE _FEXP-PROP-IN
     ['] FEXP-INIT-CB     OVER APP.INIT-XT !
     ['] FEXP-EVENT-CB    OVER APP.EVENT-XT !
     0                    OVER APP.TICK-XT !
-    0                    OVER APP.PAINT-XT !
+    ['] FEXP-PAINT-CB    OVER APP.PAINT-XT !
     ['] FEXP-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
     \ S" pushes two values — switch to R-stack for desc
     S" tui/applets/fexplorer/fexplorer.uidl"

@@ -134,6 +134,8 @@ VARIABLE _DESK-PEND-N
 
 VARIABLE _DESK-BG-DIRTY     \ -1 = need full background fill next paint
 -1 _DESK-BG-DIRTY !
+VARIABLE _DESK-LAST-W
+VARIABLE _DESK-LAST-H
 
 \ =====================================================================
 \  §2b — Theme
@@ -519,6 +521,13 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     -1 _DESK-BG-DIRTY !
     ASHELL-DIRTY! ;
 
+: _DESK-SYNC-GEOMETRY  ( -- )
+    SCR-W _DESK-LAST-W @ <>
+    SCR-H _DESK-LAST-H @ <> OR 0= IF EXIT THEN
+    SCR-W _DESK-LAST-W !
+    SCR-H _DESK-LAST-H !
+    DESK-RELAYOUT ;
+
 \ =====================================================================
 \  §7 — App Launch & Close
 \ =====================================================================
@@ -604,7 +613,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     THEN
     R@ _SL-ID @ _DESK-HOTBAR-SLOT-CLOSED
     R@ _DESK-UNLINK
-    R> FREE DROP
+    R> FREE
     \ Auto-focus next visible slot if focus was lost
     _DESK-FOCUS-SA @ 0= IF
         _DESK-HEAD @
@@ -770,6 +779,8 @@ VARIABLE _DTB-ROW
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
     0 _DESK-LAST-MIN-SA !
+    SCR-W _DESK-LAST-W !
+    SCR-H _DESK-LAST-H !
     0 ASHELL-CTX-SWITCH
     _DESK-THEME-DEFAULTS
     _DESK-HOTBAR-CLEAR
@@ -930,27 +941,26 @@ VARIABLE _DDM-EV
     DUP ASHELL-MOUSE? IF
         _DESK-DISPATCH-MOUSE EXIT
     THEN
-    \ 1. Route to focused sub-app
+    \ 1. Desktop-global shortcuts take precedence over child input.
+    DUP _DESK-SHORTCUT? IF DROP -1 EXIT THEN
+    \ 2. Route to focused sub-app
     _DESK-FOCUS-SA @ ?DUP IF
         >R
         R@ _SL-HAS-UIDL @ IF
             R@ _DESK-CTX-SWITCH
-            OVER UTUI-DISPATCH-KEY IF
-                R@ _DESK-CTX-SAVE
-                R> DROP
-                ASHELL-DIRTY! DROP -1 EXIT
-            THEN
         THEN
+        \ Match ASHELL routing: the app callback owns modal input such
+        \ as command bars before the focused UIDL widget sees the key.
         R@ _SL-DESC @ ?DUP IF
             APP.EVENT-XT @ ?DUP IF
-                2 PICK SWAP EXECUTE       ( ev consumed? )
+                OVER SWAP EXECUTE         ( ev consumed? )
                 \ Intercept sub-app ASHELL-QUIT
                 ASHELL-QUIT-PENDING? IF
                     ASHELL-CANCEL-QUIT
                     R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
                     R@ _SL-ID @ DESK-CLOSE-ID
                     R> DROP
-                    DROP -1 EXIT
+                    2DROP -1 EXIT
                 THEN
                 IF
                     R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
@@ -959,11 +969,16 @@ VARIABLE _DDM-EV
                 THEN
             THEN
         THEN
+        R@ _SL-HAS-UIDL @ IF
+            DUP UTUI-DISPATCH-KEY IF
+                R@ _DESK-CTX-SAVE
+                R> DROP
+                ASHELL-DIRTY! DROP -1 EXIT
+            THEN
+        THEN
         R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
         R> DROP
     THEN
-    \ 2. DESK's own shortcuts
-    DUP _DESK-SHORTCUT? IF DROP -1 EXIT THEN
     DROP 0 ;
 
 \ --- Tick ---
@@ -971,9 +986,13 @@ VARIABLE _DDM-EV
     _DESK-HEAD @
     BEGIN ?DUP WHILE
         DUP _SL-ALIVE? IF
-            DUP _SL-DESC @ ?DUP IF
+            DUP >R
+            R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SWITCH THEN
+            R@ _SL-DESC @ ?DUP IF
                 APP.TICK-XT @ ?DUP IF EXECUTE THEN
             THEN
+            R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SAVE THEN
+            R> DROP
         THEN
         _SL-NEXT @
     REPEAT ;
@@ -984,6 +1003,7 @@ VARIABLE _DDM-EV
 \  their UTUI-PAINT + PAINT-XT within their tile region.  Then
 \  draws dividers and the taskbar.
 : DESK-PAINT-CB  ( -- )
+    _DESK-SYNC-GEOMETRY
     RGN-ROOT
     \ Layer 0: fill tile area with desk background colour
     \ Only runs when geometry changed (relayout / init / resize)

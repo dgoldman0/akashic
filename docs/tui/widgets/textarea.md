@@ -45,7 +45,7 @@ Insertion is rejected when the buffer is full.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `TXTA-SET-TEXT` | `( text-a text-u widget -- )` | Set text; clamps to capacity; cursor at end |
-| `TXTA-GET-TEXT` | `( widget -- addr len )` | Get buffer address and current length |
+| `TXTA-GET-TEXT` | `( widget -- addr len )` | Allocate a contiguous text snapshot; caller must `FREE` `addr` |
 | `TXTA-CLEAR` | `( widget -- )` | Clear buffer, reset cursor and scroll |
 
 ### Cursor Queries

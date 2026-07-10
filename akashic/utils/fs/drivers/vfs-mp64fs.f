@@ -110,6 +110,60 @@ VARIABLE _VMP-NL
     ROT 8 MOD 1 SWAP LSHIFT
     INVERT AND SWAP C! ;
 
+\ Find a contiguous run of free sectors in the cached bitmap.
+VARIABLE _VMFF-NEED
+VARIABLE _VMFF-START
+VARIABLE _VMFF-LEN
+VARIABLE _VMFF-CTX
+VARIABLE _VMFF-TOTAL
+
+: _VMP-FIND-FREE  ( count ctx -- sector | -1 )
+    _VMFF-CTX !  _VMFF-NEED !
+    _VMFF-CTX @ _VMP-C.DSTART + @  _VMFF-START !
+    0 _VMFF-LEN !
+    _VMFF-CTX @ _VMP-C.TOTAL + @   _VMFF-TOTAL !
+    -1
+    _VMFF-TOTAL @  _VMFF-CTX @ _VMP-C.DSTART + @  DO
+        I _VMFF-CTX @  _VMP-BIT-FREE? IF
+            _VMFF-LEN @ 0= IF  I _VMFF-START !  THEN
+            1 _VMFF-LEN +!
+            _VMFF-LEN @ _VMFF-NEED @ >= IF
+                DROP _VMFF-START @
+                LEAVE
+            THEN
+        ELSE
+            0 _VMFF-LEN !
+        THEN
+    LOOP ;
+
+VARIABLE _VMRUN-START
+VARIABLE _VMRUN-COUNT
+VARIABLE _VMRUN-CTX
+
+: _VMP-RUN-FREE?  ( start count ctx -- flag )
+    _VMRUN-CTX ! _VMRUN-COUNT ! _VMRUN-START !
+    _VMRUN-START @ _VMRUN-CTX @ _VMP-C.DSTART + @ < IF FALSE EXIT THEN
+    _VMRUN-START @ _VMRUN-COUNT @ +
+    _VMRUN-CTX @ _VMP-C.TOTAL + @ > IF FALSE EXIT THEN
+    TRUE
+    _VMRUN-COUNT @ 0 ?DO
+        _VMRUN-START @ I + _VMRUN-CTX @ _VMP-BIT-FREE? 0= IF
+            DROP FALSE LEAVE
+        THEN
+    LOOP ;
+
+: _VMP-RUN-SET  ( start count ctx -- )
+    _VMRUN-CTX ! _VMRUN-COUNT ! _VMRUN-START !
+    _VMRUN-COUNT @ 0 ?DO
+        _VMRUN-START @ I + _VMRUN-CTX @ _VMP-BIT-SET
+    LOOP ;
+
+: _VMP-RUN-CLR  ( start count ctx -- )
+    _VMRUN-CTX ! _VMRUN-COUNT ! _VMRUN-START !
+    _VMRUN-COUNT @ 0 ?DO
+        _VMRUN-START @ I + _VMRUN-CTX @ _VMP-BIT-CLR
+    LOOP ;
+
 \ =====================================================================
 \  Probe  ( sector-0-buf vfs -- flag )
 \ =====================================================================
@@ -304,12 +358,28 @@ VARIABLE _VMRR-REM     \ remaining bytes
 VARIABLE _VMRR-POS     \ current byte position within file data
 VARIABLE _VMRR-SSEC    \ start sector of current extent
 VARIABLE _VMRR-NSEC    \ sector count of current extent
+VARIABLE _VMRR-ESEC    \ secondary extent start sector
+VARIABLE _VMRR-ENSEC   \ secondary extent sector count
 VARIABLE _VMRR-ACT     \ actual bytes read so far
 VARIABLE _VMRR-SCR     \ scratch buffer address
 
-\ Helper: disk sector for a byte position within a single extent
+\ Map a logical file position to its physical sector across both extents.
 : _VMRR-DSEC  ( -- sec )
-    _VMRR-POS @ _VMP-SECTOR /  _VMRR-SSEC @ + ;
+    _VMRR-POS @ _VMP-SECTOR / DUP
+    _VMRR-NSEC @ < IF
+        _VMRR-SSEC @ +
+    ELSE
+        _VMRR-NSEC @ - _VMRR-ESEC @ +
+    THEN ;
+
+\ Contiguous sectors remaining in the current extent.
+: _VMRR-RUN-SECS  ( -- count )
+    _VMRR-POS @ _VMP-SECTOR / DUP
+    _VMRR-NSEC @ < IF
+        _VMRR-NSEC @ SWAP -
+    ELSE
+        _VMRR-NSEC @ _VMRR-ENSEC @ + SWAP -
+    THEN ;
 
 \ Helper: read head partial sector
 VARIABLE _VMRR-CHUNK
@@ -328,7 +398,7 @@ VARIABLE _VMRR-CHUNK
     BEGIN DUP 0> WHILE
         _VMRR-DSEC DISK-SEC!
         _VMRR-BUF @ DISK-DMA!
-        DUP 255 MIN             ( n-full batch )
+        DUP 255 MIN _VMRR-RUN-SECS MIN  ( n-full batch )
         DUP DISK-N!  DISK-READ
         DUP _VMP-SECTOR *
         DUP _VMRR-BUF +!
@@ -352,24 +422,88 @@ VARIABLE _VMRR-CHUNK
     _VMRR-V @ V.BCTX @  _VMRR-CTX !
     _VMRR-CTX @ _VMP-C.SCRATCH +  _VMRR-SCR !
     0 _VMRR-ACT !
+    \ Load both extents before clamping the request.
+    _VMRR-IN @ IN.BDATA @      _VMRR-SSEC !
+    _VMRR-IN @ IN.BDATA 8 + @  _VMRR-NSEC !
+    _VMRR-IN @ IN.BID @ _VMRR-CTX @ _VMP-DIRENT
+    DUP _VMP-DE.EXT1S _VMRR-ESEC !
+        _VMP-DE.EXT1C _VMRR-ENSEC !
     \ Clamp len to file size - offset
     _VMRR-IN @ IN.SIZE-LO @  _VMRR-OFF @ -
     DUP 0< IF  DROP 0 EXIT  THEN   \ offset past EOF
     _VMRR-LEN @ MIN  _VMRR-LEN !
+    \ Corrupt metadata must not read beyond allocated extents.
+    _VMRR-NSEC @ _VMRR-ENSEC @ + _VMP-SECTOR * _VMRR-OFF @ -
+    0 MAX _VMRR-LEN @ MIN _VMRR-LEN !
     _VMRR-LEN @ 0= IF  0 EXIT  THEN
-    \ Set up extent: primary extent first
-    _VMRR-IN @ IN.BDATA @      _VMRR-SSEC !   \ start_sector
-    _VMRR-IN @ IN.BDATA 8 + @  _VMRR-NSEC !   \ sec_count
     _VMRR-OFF @  _VMRR-POS !
     _VMRR-LEN @  _VMRR-REM !
-    \ For simplicity, this binding handles the primary extent only.
-    \ Multi-extent files (ext1) can be added later.
     _VMRR-HEAD  _VMRR-FULL  _VMRR-TAIL
     _VMRR-ACT @ ;
 
 \ =====================================================================
 \  Write  ( buf len offset inode vfs -- actual )
 \ =====================================================================
+
+\ Grow a file's allocation to cover a desired byte length.  Prefer an
+\ in-place primary extension; otherwise use MP64FS's secondary extent.
+VARIABLE _VMG-BYTES
+VARIABLE _VMG-IN
+VARIABLE _VMG-V
+VARIABLE _VMG-CTX
+VARIABLE _VMG-DE
+VARIABLE _VMG-WANT
+VARIABLE _VMG-PCOUNT
+VARIABLE _VMG-ESTART
+VARIABLE _VMG-ECOUNT
+VARIABLE _VMG-ADD
+VARIABLE _VMG-START
+
+: _VMP-ENSURE  ( bytes inode vfs -- ior )
+    _VMG-V ! _VMG-IN ! _VMG-BYTES !
+    _VMG-IN @ IN.TYPE @ VFS-T-FILE <> IF -1 EXIT THEN
+    _VMG-BYTES @ 0= IF 0 EXIT THEN
+    _VMG-V @ V.BCTX @ _VMG-CTX !
+    _VMG-IN @ IN.BID @ _VMG-CTX @ _VMP-DIRENT DUP _VMG-DE !
+    DUP _VMP-DE.COUNT _VMG-PCOUNT !
+    DUP _VMP-DE.EXT1S _VMG-ESTART !
+        _VMP-DE.EXT1C _VMG-ECOUNT !
+    _VMG-BYTES @ _VMP-SECTOR 1- + _VMP-SECTOR / _VMG-WANT !
+    _VMG-WANT @ _VMG-PCOUNT @ _VMG-ECOUNT @ + <= IF 0 EXIT THEN
+    _VMG-WANT @ _VMG-PCOUNT @ _VMG-ECOUNT @ + - _VMG-ADD !
+
+    _VMG-ECOUNT @ 0> IF
+        \ A two-extent file can only grow at the end of extent 1.
+        _VMG-ESTART @ _VMG-ECOUNT @ +
+        _VMG-ADD @ _VMG-CTX @ _VMP-RUN-FREE? 0= IF -2 EXIT THEN
+        _VMG-ESTART @ _VMG-ECOUNT @ +
+        _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
+        _VMG-ECOUNT @ _VMG-ADD @ +
+        DUP _VMG-ECOUNT ! _VMG-DE @ 46 + W!
+    ELSE
+        \ First try to keep the file in one contiguous extent.
+        _VMG-IN @ IN.BDATA @ _VMG-PCOUNT @ +
+        _VMG-ADD @ _VMG-CTX @ _VMP-RUN-FREE? IF
+            _VMG-IN @ IN.BDATA @ _VMG-PCOUNT @ +
+            _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
+            _VMG-PCOUNT @ _VMG-ADD @ + DUP _VMG-PCOUNT !
+            DUP _VMG-IN @ IN.BDATA 8 + !
+                _VMG-DE @ 26 + W!
+        ELSE
+            \ Fragmented growth becomes the secondary extent.
+            _VMG-ADD @ _VMG-CTX @ _VMP-FIND-FREE DUP -1 = IF
+                DROP -2 EXIT
+            THEN
+            DUP _VMG-START !
+            _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
+            _VMG-START @ _VMG-DE @ 44 + W!
+            _VMG-ADD @   _VMG-DE @ 46 + W!
+        THEN
+    THEN
+    -1 _VMG-CTX @ _VMP-C.DBMAP + !
+    -1 _VMG-CTX @ _VMP-C.DDIR + !
+    VFS-IF-DIRTY _VMG-IN @ IN.FLAGS DUP @ ROT OR SWAP !
+    0 ;
 
 VARIABLE _VMRW-BUF
 VARIABLE _VMRW-LEN
@@ -381,11 +515,26 @@ VARIABLE _VMRW-REM
 VARIABLE _VMRW-POS
 VARIABLE _VMRW-SSEC
 VARIABLE _VMRW-NSEC
+VARIABLE _VMRW-ESEC
+VARIABLE _VMRW-ENSEC
 VARIABLE _VMRW-ACT
 VARIABLE _VMRW-SCR
 
 : _VMRW-DSEC  ( -- sec )
-    _VMRW-POS @ _VMP-SECTOR /  _VMRW-SSEC @ + ;
+    _VMRW-POS @ _VMP-SECTOR / DUP
+    _VMRW-NSEC @ < IF
+        _VMRW-SSEC @ +
+    ELSE
+        _VMRW-NSEC @ - _VMRW-ESEC @ +
+    THEN ;
+
+: _VMRW-RUN-SECS  ( -- count )
+    _VMRW-POS @ _VMP-SECTOR / DUP
+    _VMRW-NSEC @ < IF
+        _VMRW-NSEC @ SWAP -
+    ELSE
+        _VMRW-NSEC @ _VMRW-ENSEC @ + SWAP -
+    THEN ;
 
 VARIABLE _VMRW-CHUNK
 : _VMRW-HEAD  ( -- )
@@ -405,7 +554,7 @@ VARIABLE _VMRW-CHUNK
     BEGIN DUP 0> WHILE
         _VMRW-DSEC DISK-SEC!
         _VMRW-BUF @ DISK-DMA!
-        DUP 255 MIN
+        DUP 255 MIN _VMRW-RUN-SECS MIN
         DUP DISK-N!  DISK-WRITE
         DUP _VMP-SECTOR *
         DUP _VMRW-BUF +!
@@ -430,15 +579,22 @@ VARIABLE _VMRW-CHUNK
     _VMRW-V @ V.BCTX @  _VMRW-CTX !
     _VMRW-CTX @ _VMP-C.SCRATCH +  _VMRW-SCR !
     0 _VMRW-ACT !
-    \ Bounds check: offset + len must fit in allocated sectors
-    _VMRW-IN @ IN.BDATA 8 + @  _VMP-SECTOR *   ( capacity )
+    \ Grow before clamping so ordinary writes are not limited by the
+    \ file's creation-time allocation.
+    _VMRW-OFF @ _VMRW-LEN @ +
+    _VMRW-IN @ _VMRW-V @ _VMP-ENSURE DROP
+    _VMRW-IN @ IN.BDATA @      _VMRW-SSEC !
+    _VMRW-IN @ IN.BDATA 8 + @  _VMRW-NSEC !
+    _VMRW-IN @ IN.BID @ _VMRW-CTX @ _VMP-DIRENT
+    DUP _VMP-DE.EXT1S _VMRW-ESEC !
+        _VMP-DE.EXT1C _VMRW-ENSEC !
+    \ If growth failed, retain VFS partial-write semantics.
+    _VMRW-NSEC @ _VMRW-ENSEC @ + _VMP-SECTOR *  ( capacity )
     _VMRW-OFF @ _VMRW-LEN @ +  OVER > IF
         \ Clamp to capacity
         _VMRW-OFF @ -  0 MAX  _VMRW-LEN !
     ELSE DROP THEN
     _VMRW-LEN @ 0= IF  0 EXIT  THEN
-    _VMRW-IN @ IN.BDATA @      _VMRW-SSEC !
-    _VMRW-IN @ IN.BDATA 8 + @  _VMRW-NSEC !
     _VMRW-OFF @  _VMRW-POS !
     _VMRW-LEN @  _VMRW-REM !
     _VMRW-HEAD  _VMRW-FULL  _VMRW-TAIL
@@ -447,6 +603,7 @@ VARIABLE _VMRW-CHUNK
     _VMRW-IN @ IN.BID @  _VMRW-CTX @  _VMP-DIRENT  ( new-end de )
     DUP _VMP-DE.USED  ROT MAX                       ( de new-used )
     OVER 28 + L!                                     \ update dir cache
+    DROP                                              \ discard dir entry
     \ Mark dir dirty
     -1 _VMRW-CTX @ _VMP-C.DDIR + !
     \ Update inode size-lo
@@ -464,11 +621,29 @@ VARIABLE _VMRW-CHUNK
 
 VARIABLE _VMSY-V
 VARIABLE _VMSY-CTX
+VARIABLE _VMSY-IN
 
 : _VMP-SYNC  ( inode vfs -- ior )
-    _VMSY-V !  DROP      \ inode ignored; we sync globally
+    _VMSY-V !  _VMSY-IN !
     _VMSY-V @ V.BCTX @  _VMSY-CTX !
     _VMSY-CTX @ 0= IF  -1 EXIT  THEN
+    \ Reflect mutable inode metadata, notably rename, into its stable
+    \ directory slot before flushing the global cache.
+    _VMSY-IN @ DUP 0<> IF
+        DUP _VMSY-V @ V.ROOT @ <> IF
+            DUP IN.BID @ _VMSY-CTX @ _VMP-DIRENT
+            DUP 24 0 FILL
+            OVER IN.NAME @ _VFS-STR-GET 23 MIN
+            >R OVER R> CMOVE
+            0 OVER 40 + L!              \ content changed: CRC unknown
+            DROP DROP
+            -1 _VMSY-CTX @ _VMP-C.DDIR + !
+        ELSE
+            DROP
+        THEN
+    ELSE
+        DROP
+    THEN
     \ Write bitmap if dirty
     _VMSY-CTX @ _VMP-C.DBMAP + @ IF
         1 DISK-SEC!
@@ -498,45 +673,20 @@ VARIABLE _VMCR-V
 VARIABLE _VMCR-CTX
 VARIABLE _VMCR-SLOT
 VARIABLE _VMCR-NSEC
+VARIABLE _VMFS-CTX
 
 : _VMP-FIND-FREE-SLOT  ( ctx -- slot | -1 )
-    >R -1
+    _VMFS-CTX ! -1
     _VMP-MAX-FILES 0 DO
-        I R@ _VMP-DIRENT  C@ 0= IF
+        I _VMFS-CTX @ _VMP-DIRENT C@ 0= IF
             DROP I LEAVE
-        THEN
-    LOOP
-    R> DROP ;
-
-\ FIND-FREE-RUN: find contiguous free sectors in bitmap
-VARIABLE _VMFF-NEED
-VARIABLE _VMFF-START
-VARIABLE _VMFF-LEN
-VARIABLE _VMFF-CTX
-VARIABLE _VMFF-TOTAL
-
-: _VMP-FIND-FREE  ( count ctx -- sector | -1 )
-    _VMFF-CTX !  _VMFF-NEED !
-    _VMFF-CTX @ _VMP-C.DSTART + @  _VMFF-START !
-    0 _VMFF-LEN !
-    _VMFF-CTX @ _VMP-C.TOTAL + @   _VMFF-TOTAL !
-    -1   \ default result
-    _VMFF-TOTAL @  _VMFF-CTX @ _VMP-C.DSTART + @  DO
-        I _VMFF-CTX @  _VMP-BIT-FREE? IF
-            _VMFF-LEN @ 0= IF  I _VMFF-START !  THEN
-            1 _VMFF-LEN +!
-            _VMFF-LEN @ _VMFF-NEED @ >= IF
-                DROP _VMFF-START @
-                LEAVE
-            THEN
-        ELSE
-            0 _VMFF-LEN !
         THEN
     LOOP ;
 
 : _VMP-CREATE  ( inode vfs -- ior )
     _VMCR-V !  _VMCR-IN !
     _VMCR-V @ V.BCTX @  _VMCR-CTX !
+    _VMCR-IN @ IN.NAME @ _VFS-STR-GET NIP 23 > IF -3 EXIT THEN
     \ Find free dir slot
     _VMCR-CTX @ _VMP-FIND-FREE-SLOT  _VMCR-SLOT !
     _VMCR-SLOT @ -1 = IF  -1 EXIT  THEN  \ directory full
@@ -544,23 +694,15 @@ VARIABLE _VMFF-TOTAL
     _VMCR-IN @ IN.TYPE @ VFS-T-DIR = IF
         0 _VMCR-NSEC !   \ directories don't get data sectors
     ELSE
-        \ Default: allocate 2 sectors for a new file (1 KiB)
-        2 _VMCR-NSEC !
+        \ Start small; _VMP-WRITE grows into one or two extents.
+        1 _VMCR-NSEC !
         _VMCR-NSEC @ _VMCR-CTX @  _VMP-FIND-FREE  ( sector | -1 )
         DUP -1 = IF
-            \ Try 1 sector
-            DROP 1 _VMCR-NSEC !
-            _VMCR-NSEC @ _VMCR-CTX @  _VMP-FIND-FREE
-            DUP -1 = IF
-                DROP -2 EXIT   \ no space
-            THEN
+            DROP -2 EXIT   \ no space
         THEN
         _VMCR-IN @ IN.BDATA !           \ bdata-0 = start_sector
         _VMCR-NSEC @  _VMCR-IN @ IN.BDATA 8 + !  \ bdata-1 = sec_count
-        \ Mark sectors allocated in bitmap
-        _VMCR-NSEC @ 0 DO
-            _VMCR-IN @ IN.BDATA @ I +  _VMCR-CTX @  _VMP-BIT-SET
-        LOOP
+        _VMCR-IN @ IN.BDATA @ _VMCR-NSEC @ _VMCR-CTX @ _VMP-RUN-SET
         -1 _VMCR-CTX @ _VMP-C.DBMAP + !   \ bitmap dirty
     THEN
     \ Build directory entry
@@ -608,10 +750,14 @@ VARIABLE _VMDL-CTX
 : _VMP-DELETE  ( inode vfs -- ior )
     _VMDL-V !  _VMDL-IN !
     _VMDL-V @ V.BCTX @  _VMDL-CTX !
-    \ Free bitmap sectors (primary extent)
-    _VMDL-IN @ IN.BDATA 8 + @  0 DO     \ sec_count iterations
-        _VMDL-IN @ IN.BDATA @ I +  _VMDL-CTX @  _VMP-BIT-CLR
-    LOOP
+    \ Free bitmap sectors in both extents.
+    _VMDL-IN @ IN.BDATA @
+    _VMDL-IN @ IN.BDATA 8 + @
+    _VMDL-CTX @ _VMP-RUN-CLR
+    _VMDL-IN @ IN.BID @ _VMDL-CTX @ _VMP-DIRENT
+    DUP _VMP-DE.EXT1S
+    SWAP _VMP-DE.EXT1C
+    _VMDL-CTX @ _VMP-RUN-CLR
     -1 _VMDL-CTX @ _VMP-C.DBMAP + !     \ bitmap dirty
     \ Clear directory entry
     _VMDL-IN @ IN.BID @  _VMDL-CTX @  _VMP-DIRENT
@@ -623,13 +769,58 @@ VARIABLE _VMDL-CTX
 \  Truncate  ( inode vfs -- ior )
 \ =====================================================================
 \
-\  Set used_bytes in the dir cache to inode's size-lo.
+\  Resize the allocation and update used_bytes.  Files retain at least
+\  one primary sector so a zero-length file remains writable.
+
+VARIABLE _VMTR-IN
+VARIABLE _VMTR-V
+VARIABLE _VMTR-CTX
+VARIABLE _VMTR-DE
+VARIABLE _VMTR-WANT
+VARIABLE _VMTR-PCOUNT
+VARIABLE _VMTR-ESTART
+VARIABLE _VMTR-ECOUNT
+VARIABLE _VMTR-KEEP-E
+
+: _VMP-SHRINK  ( bytes inode vfs -- )
+    _VMTR-V ! _VMTR-IN !
+    _VMP-SECTOR 1- + _VMP-SECTOR / 1 MAX _VMTR-WANT !
+    _VMTR-V @ V.BCTX @ _VMTR-CTX !
+    _VMTR-IN @ IN.BID @ _VMTR-CTX @ _VMP-DIRENT DUP _VMTR-DE !
+    DUP _VMP-DE.COUNT _VMTR-PCOUNT !
+    DUP _VMP-DE.EXT1S _VMTR-ESTART !
+        _VMP-DE.EXT1C _VMTR-ECOUNT !
+    _VMTR-WANT @ _VMTR-PCOUNT @ _VMTR-ECOUNT @ + >= IF EXIT THEN
+    _VMTR-WANT @ _VMTR-PCOUNT @ >= IF
+        _VMTR-WANT @ _VMTR-PCOUNT @ - _VMTR-KEEP-E !
+        _VMTR-ESTART @ _VMTR-KEEP-E @ +
+        _VMTR-ECOUNT @ _VMTR-KEEP-E @ -
+        _VMTR-CTX @ _VMP-RUN-CLR
+        _VMTR-KEEP-E @ DUP _VMTR-DE @ 46 + W!
+        0= IF 0 _VMTR-DE @ 44 + W! THEN
+    ELSE
+        _VMTR-IN @ IN.BDATA @ _VMTR-WANT @ +
+        _VMTR-PCOUNT @ _VMTR-WANT @ -
+        _VMTR-CTX @ _VMP-RUN-CLR
+        _VMTR-ESTART @ _VMTR-ECOUNT @ _VMTR-CTX @ _VMP-RUN-CLR
+        _VMTR-WANT @ DUP _VMTR-IN @ IN.BDATA 8 + !
+            _VMTR-DE @ 26 + W!
+        0 _VMTR-DE @ 44 + W!
+        0 _VMTR-DE @ 46 + W!
+    THEN
+    -1 _VMTR-CTX @ _VMP-C.DBMAP + !
+    -1 _VMTR-CTX @ _VMP-C.DDIR + ! ;
 
 : _VMP-TRUNCATE  ( inode vfs -- ior )
-    V.BCTX @  SWAP                       ( ctx inode )
-    DUP IN.BID @  ROT  _VMP-DIRENT      ( inode de )
-    OVER IN.SIZE-LO @  SWAP 28 + L!     \ update used_bytes
-    DROP  0 ;
+    _VMTR-V ! _VMTR-IN !
+    _VMTR-IN @ IN.SIZE-LO @ _VMTR-IN @ _VMTR-V @ _VMP-ENSURE
+    ?DUP IF EXIT THEN
+    _VMTR-IN @ IN.SIZE-LO @ _VMTR-IN @ _VMTR-V @ _VMP-SHRINK
+    _VMTR-IN @ IN.BID @ _VMTR-V @ V.BCTX @ _VMP-DIRENT
+    _VMTR-IN @ IN.SIZE-LO @ OVER 28 + L!
+    DROP
+    -1 _VMTR-V @ V.BCTX @ _VMP-C.DDIR + !
+    0 ;
 
 \ =====================================================================
 \  Teardown  ( vfs -- )
@@ -670,4 +861,3 @@ CREATE VMP-VTABLE  VFS-VT-SIZE ALLOT
 
 : VMP-NEW  ( arena -- vfs )
     VMP-VTABLE VFS-NEW ;
-

@@ -91,8 +91,8 @@ VARIABLE _UE-A   VARIABLE _UE-B   VARIABLE _UE-C   VARIABLE _UE-D
 
 \ _UE-FREE ( entry -- )
 : _UE-FREE  ( entry -- )
-    DUP _UE-O-DATA + @ ?DUP IF FREE DROP THEN
-    FREE DROP ;
+    DUP _UE-O-DATA + @ ?DUP IF FREE THEN
+    FREE ;
 
 \ _UE-ENSURE ( additional entry -- )
 \   Grow the entry's data buffer so it can hold `additional` more bytes.
@@ -266,9 +266,9 @@ VARIABLE _UC-E      \ top undo entry being checked
 : UNDO-FREE  ( ud -- )
     DUP _UD-T !
     _UD-UCLEAR  _UD-RCLEAR
-    DUP _UD-O-USTK + @ FREE DROP
-    DUP _UD-O-RSTK + @ FREE DROP
-    FREE DROP ;
+    DUP _UD-O-USTK + @ FREE
+    DUP _UD-O-RSTK + @ FREE
+    FREE ;
 
 \ =====================================================================
 \  S8 -- Public API

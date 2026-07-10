@@ -780,6 +780,32 @@ VARIABLE _VWR-ACT
 : VFS-TELL    ( fd -- pos )      FD.CUR-LO @ ;
 : VFS-SIZE    ( fd -- size )     FD.INODE @ IN.SIZE-LO @ ;
 
+VARIABLE _VTR-FD
+VARIABLE _VTR-SIZE
+VARIABLE _VTR-OLD-SIZE
+
+\ VFS-TRUNCATE ( size fd -- ior )
+\   Set a file's logical size and notify its backing store.  The file
+\   cursor is clamped to the new end on success.
+: VFS-TRUNCATE  ( size fd -- ior )
+    _VTR-FD ! _VTR-SIZE !
+    _VTR-FD @ FD.VFS @ V.FLAGS @ VFS-F-RO AND IF -1 EXIT THEN
+    _VTR-FD @ FD.INODE @ IN.SIZE-LO @ _VTR-OLD-SIZE !
+    _VTR-SIZE @ _VTR-FD @ FD.INODE @ IN.SIZE-LO !
+    0 _VTR-FD @ FD.INODE @ IN.SIZE-HI !
+    _VTR-FD @ FD.INODE @
+    _VTR-FD @ FD.VFS @
+    DUP >R VFS-VT-TRUNCATE R> _VFS-XT EXECUTE
+    DUP IF
+        _VTR-OLD-SIZE @ _VTR-FD @ FD.INODE @ IN.SIZE-LO !
+        EXIT
+    THEN
+    VFS-IF-DIRTY
+    _VTR-FD @ FD.INODE @ IN.FLAGS DUP @ ROT OR SWAP !
+    _VTR-FD @ FD.CUR-LO @ _VTR-SIZE @ > IF
+        _VTR-SIZE @ _VTR-FD @ FD.CUR-LO !
+    THEN ;
+
 \ =====================================================================
 \  Inode Tree Mutation Helpers
 \ =====================================================================
@@ -800,7 +826,7 @@ VARIABLE _VRC-PREV
     DUP IN.CHILD @              ( child parent first )
     2 PICK = IF
         \ child is first in list — parent.child = child.sibling
-        SWAP IN.CHILD            ( child pchild-field )
+        IN.CHILD                 ( child pchild-field )
         SWAP IN.SIBLING @       ( pchild-field new-first )
         SWAP ! EXIT
     THEN
@@ -824,41 +850,158 @@ VARIABLE _VRC-PREV
 \ =====================================================================
 
 VARIABLE _VMK-V
+VARIABLE _VMK-IN
+VARIABLE _VMK-IOR
+VARIABLE _VMK-A
+VARIABLE _VMK-U
+
+: _VFS-VALID-NAME?  ( c-addr u -- flag )
+    DUP 0= IF 2DROP FALSE EXIT THEN
+    DUP 0 ?DO
+        OVER I + C@ [CHAR] / = IF
+            2DROP FALSE UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP TRUE ;
 
 : VFS-MKFILE  ( c-addr u vfs -- inode | 0 )
-    _VMK-V !
+    _VMK-V ! _VMK-U ! _VMK-A !
+    _VMK-A @ _VMK-U @ _VFS-VALID-NAME? 0= IF 0 EXIT THEN
+    _VMK-V @ V.CWD @ _VMK-V @ _VFS-ENSURE-CHILDREN
+    _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VFS-FIND-CHILD
+    ?DUP IF DROP 0 EXIT THEN
     \ Allocate new inode
-    VFS-T-FILE _VMK-V @ _VFS-INODE-ALLOC   ( c-addr u inode )
+    VFS-T-FILE _VMK-V @ _VFS-INODE-ALLOC   ( inode )
     \ Set name
-    ROT ROT _VMK-V @ _VFS-STR-ALLOC        ( inode handle )
+    _VMK-A @ _VMK-U @ _VMK-V @ _VFS-STR-ALLOC ( inode handle )
     OVER IN.NAME !                           ( inode )
     \ Zero size
     0 OVER IN.SIZE-LO !
     0 OVER IN.SIZE-HI !
     0 OVER IN.FLAGS !
+    DUP _VMK-IN !
     \ Add to cwd
     DUP _VMK-V @ V.CWD @  _VFS-ADD-CHILD
     \ Notify binding
-    DUP _VMK-V @ VFS-VT-CREATE _VMK-V @ _VFS-XT EXECUTE DROP
+    DUP _VMK-V @ VFS-VT-CREATE _VMK-V @ _VFS-XT EXECUTE _VMK-IOR !
+    _VMK-IOR @ IF
+        DROP
+        _VMK-IN @ _VMK-V @ V.CWD @ _VFS-REMOVE-CHILD
+        _VMK-IN @ _VMK-V @ _VFS-INODE-FREE
+        0 EXIT
+    THEN
     \ Increment count
     _VMK-V @ V.ICOUNT DUP @ 1+ SWAP !
     ;
 
 : VFS-MKDIR  ( c-addr u vfs -- ior )
-    _VMK-V !
-    VFS-T-DIR _VMK-V @ _VFS-INODE-ALLOC    ( c-addr u inode )
-    ROT ROT _VMK-V @ _VFS-STR-ALLOC        ( inode handle )
+    _VMK-V ! _VMK-U ! _VMK-A !
+    _VMK-A @ _VMK-U @ _VFS-VALID-NAME? 0= IF -1 EXIT THEN
+    _VMK-V @ V.CWD @ _VMK-V @ _VFS-ENSURE-CHILDREN
+    _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VFS-FIND-CHILD
+    ?DUP IF DROP -1 EXIT THEN
+    VFS-T-DIR _VMK-V @ _VFS-INODE-ALLOC    ( inode )
+    _VMK-A @ _VMK-U @ _VMK-V @ _VFS-STR-ALLOC ( inode handle )
     OVER IN.NAME !
     0 OVER IN.SIZE-LO !
     0 OVER IN.SIZE-HI !
     VFS-IF-CHILDREN OVER IN.FLAGS !  \ empty dir = children loaded
+    DUP _VMK-IN !
     DUP _VMK-V @ V.CWD @  _VFS-ADD-CHILD
-    DUP _VMK-V @  VFS-VT-CREATE _VMK-V @ _VFS-XT EXECUTE DROP
+    DUP _VMK-V @  VFS-VT-CREATE _VMK-V @ _VFS-XT EXECUTE _VMK-IOR !
+    _VMK-IOR @ IF
+        DROP
+        _VMK-IN @ _VMK-V @ V.CWD @ _VFS-REMOVE-CHILD
+        _VMK-IN @ _VMK-V @ _VFS-INODE-FREE
+        _VMK-IOR @ EXIT
+    THEN
     _VMK-V @ V.ICOUNT DUP @ 1+ SWAP !
     DROP 0 ;                     \ ior = 0 (success)
 
+\ Rename an inode within its current parent.  Binding sync persists
+\ the dirty inode's updated name.
+VARIABLE _VRN-A
+VARIABLE _VRN-U
+VARIABLE _VRN-IN
+VARIABLE _VRN-V
+VARIABLE _VRN-PARENT
+VARIABLE _VRN-HANDLE
+
+: VFS-RENAME  ( new-a new-u inode vfs -- ior )
+    _VRN-V ! _VRN-IN ! _VRN-U ! _VRN-A !
+    _VRN-A @ _VRN-U @ _VFS-VALID-NAME? 0= IF -1 EXIT THEN
+    _VRN-IN @ IN.PARENT @ DUP 0= IF DROP -1 EXIT THEN _VRN-PARENT !
+    _VRN-PARENT @ _VRN-V @ _VFS-ENSURE-CHILDREN
+    _VRN-A @ _VRN-U @ _VRN-PARENT @ _VFS-FIND-CHILD
+    ?DUP IF
+        _VRN-IN @ = IF 0 ELSE -2 THEN EXIT
+    THEN
+    _VRN-A @ _VRN-U @ _VRN-V @ _VFS-STR-ALLOC _VRN-HANDLE !
+    _VRN-IN @ IN.NAME @ _VFS-STR-RELEASE
+    _VRN-HANDLE @ _VRN-IN @ IN.NAME !
+    VFS-IF-DIRTY _VRN-IN @ IN.FLAGS DUP @ ROT OR SWAP !
+    VFS-F-DIRTY _VRN-V @ V.FLAGS DUP @ ROT OR SWAP !
+    0 ;
+
+\ =====================================================================
+\  VFS-CREATE -- path-aware file creation
+\ =====================================================================
+
+VARIABLE _VCR-A
+VARIABLE _VCR-U
+VARIABLE _VCR-V
+VARIABLE _VCR-OLD-V
+VARIABLE _VCR-OLD-CWD
+VARIABLE _VCR-SPLIT
+VARIABLE _VCR-PARENT
+
+: _VCR-RESTORE  ( -- )
+    _VCR-OLD-CWD @ _VCR-V @ V.CWD !
+    _VCR-OLD-V @ VFS-USE ;
+
+\ VFS-CREATE ( path-a path-u vfs -- inode | 0 )
+\   Create a file at an absolute or relative path.  Parent directories
+\   must already exist.  Existing paths and trailing slashes fail.
+: VFS-CREATE  ( path-a path-u vfs -- inode | 0 )
+    _VCR-V ! _VCR-U ! _VCR-A !
+    _VCR-U @ 0= IF 0 EXIT THEN
+    _VCR-A @ _VCR-U @ 1- + C@ [CHAR] / = IF 0 EXIT THEN
+    VFS-CUR _VCR-OLD-V !
+    _VCR-V @ V.CWD @ _VCR-OLD-CWD !
+    _VCR-V @ VFS-USE
+    _VCR-A @ _VCR-U @ _VCR-V @ VFS-RESOLVE ?DUP IF
+        DROP _VCR-RESTORE 0 EXIT
+    THEN
+    -1 _VCR-SPLIT !
+    _VCR-U @ 0 DO
+        _VCR-A @ I + C@ [CHAR] / = IF I _VCR-SPLIT ! THEN
+    LOOP
+    _VCR-SPLIT @ 0< IF
+        _VCR-OLD-CWD @ _VCR-PARENT !
+    ELSE
+        _VCR-SPLIT @ 0= IF
+            _VCR-A @ 1
+        ELSE
+            _VCR-A @ _VCR-SPLIT @
+        THEN
+        _VCR-V @ VFS-RESOLVE
+        DUP 0= IF DROP _VCR-RESTORE 0 EXIT THEN
+        DUP IN.TYPE @ VFS-T-DIR <> IF DROP _VCR-RESTORE 0 EXIT THEN
+        _VCR-PARENT !
+    THEN
+    _VCR-PARENT @ _VCR-V @ V.CWD !
+    _VCR-SPLIT @ 0< IF
+        _VCR-A @ _VCR-U @
+    ELSE
+        _VCR-A @ _VCR-SPLIT @ 1+ +
+        _VCR-U @ _VCR-SPLIT @ 1+ -
+    THEN
+    _VCR-V @ VFS-MKFILE
+    _VCR-RESTORE ;
+
 VARIABLE _VRM-V
 VARIABLE _VRM-IN
+VARIABLE _VRM-IOR
 
 : VFS-RM  ( c-addr u vfs -- ior )
     _VRM-V !
@@ -872,7 +1015,8 @@ VARIABLE _VRM-IN
         _VRM-IN @ IN.CHILD @ 0<> IF  -1 EXIT  THEN
     THEN
     \ Notify binding (delete on-disk structures)
-    _VRM-IN @  _VRM-V @  VFS-VT-DELETE _VRM-V @ _VFS-XT EXECUTE DROP
+    _VRM-IN @  _VRM-V @  VFS-VT-DELETE _VRM-V @ _VFS-XT EXECUTE
+    DUP _VRM-IOR ! IF _VRM-IOR @ EXIT THEN
     \ Unlink from parent
     _VRM-IN @  _VRM-IN @ IN.PARENT @  _VFS-REMOVE-CHILD
     \ Free inode
@@ -985,6 +1129,15 @@ VARIABLE _VSY-IOR    \ accumulated ior
         LOOP
         _VSY-P @ @  _VSY-P !          \ next slab page
     REPEAT
+    \ Flush binding-global metadata too.  Create/delete can dirty a
+    \ cached bitmap or directory after the affected inode has gone.
+    0 _VSY-V @
+    VFS-VT-SYNC _VSY-V @ _VFS-XT EXECUTE
+    DUP IF
+        _VSY-IOR @ 0= IF _VSY-IOR ! ELSE DROP THEN
+    ELSE
+        DROP
+    THEN
     \ Clear VFS-level dirty flag on success
     _VSY-IOR @ 0= IF
         _VSY-V @ V.FLAGS @
@@ -1127,7 +1280,7 @@ VARIABLE _VIP-D  VARIABLE _VIP-BUF  VARIABLE _VIP-CAP  VARIABLE _VIP-POS
         1 EXIT
     THEN
     \ Write segments deepest-first → "/a/b/c"
-    _VIP-D @ 1- 0 SWAP
+    -1 _VIP-D @ 1-
     DO
         _VIP-POS @ _VIP-CAP @ >= IF LEAVE THEN
         47 _VIP-BUF @ _VIP-POS @ + C!     \ '/'
@@ -1171,8 +1324,11 @@ GUARD _vfs-guard
 ' VFS-REWIND       CONSTANT _vfs-rewind-xt
 ' VFS-TELL         CONSTANT _vfs-tell-xt
 ' VFS-SIZE         CONSTANT _vfs-size-xt
+' VFS-TRUNCATE     CONSTANT _vfs-truncate-xt
 ' VFS-MKFILE       CONSTANT _vfs-mkfile-xt
+' VFS-CREATE       CONSTANT _vfs-create-xt
 ' VFS-MKDIR        CONSTANT _vfs-mkdir-xt
+' VFS-RENAME       CONSTANT _vfs-rename-xt
 ' VFS-RM           CONSTANT _vfs-rm-xt
 ' VFS-DIR          CONSTANT _vfs-dir-xt
 ' VFS-CD           CONSTANT _vfs-cd-xt
@@ -1194,8 +1350,11 @@ GUARD _vfs-guard
 : VFS-REWIND       _vfs-rewind-xt   _vfs-guard WITH-GUARD ;
 : VFS-TELL         _vfs-tell-xt     _vfs-guard WITH-GUARD ;
 : VFS-SIZE         _vfs-size-xt     _vfs-guard WITH-GUARD ;
+: VFS-TRUNCATE     _vfs-truncate-xt _vfs-guard WITH-GUARD ;
 : VFS-MKFILE       _vfs-mkfile-xt   _vfs-guard WITH-GUARD ;
+: VFS-CREATE       _vfs-create-xt   _vfs-guard WITH-GUARD ;
 : VFS-MKDIR        _vfs-mkdir-xt    _vfs-guard WITH-GUARD ;
+: VFS-RENAME       _vfs-rename-xt   _vfs-guard WITH-GUARD ;
 : VFS-RM           _vfs-rm-xt       _vfs-guard WITH-GUARD ;
 : VFS-DIR          _vfs-dir-xt      _vfs-guard WITH-GUARD ;
 : VFS-CD           _vfs-cd-xt       _vfs-guard WITH-GUARD ;

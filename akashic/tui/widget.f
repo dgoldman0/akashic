@@ -61,6 +61,7 @@ REQUIRE region.f
 14 CONSTANT WDG-T-CANVAS
 15 CONSTANT WDG-T-FSEL
 16 CONSTANT WDG-T-EXPLORER
+17 CONSTANT WDG-T-PROMPT
 
 \ =====================================================================
 \ 3. Flag constants

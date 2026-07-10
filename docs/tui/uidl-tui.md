@@ -734,6 +734,10 @@ The flag is also set explicitly by:
 - `UTUI-REMOVE-ELEM`
 - `UTUI-WIDGET-SET`
 
+`UTUI-SET-ATTR` compares an existing value before writing it. Setting an
+attribute to the value it already has is a no-op and does not request a
+repaint or consume additional UIDL string-pool space.
+
 The shell checks `_UTUI-NEEDS-PAINT` after `TICK-XT` and at the
 start of `_ASHELL-PAINT`, converting it to `ASHELL-DIRTY!`.  Apps
 never need to call `ASHELL-DIRTY!` themselves.
@@ -881,6 +885,11 @@ tree as if it were its own node graph.
 State: 8-byte block at wptr, single cell holding the active tab
 index (0-based).  Inline adapter — no `TAB-NEW` widget allocated.
 
+`UTUI-TAB-SELECT ( index elem -- )` selects a tab programmatically,
+clamps the index to the available children, relayouts the document,
+and marks the tab element dirty.  This is the supported way for an
+applet to keep a tabbed preview in sync with another control.
+
 ### Split (`UIDL-T-SPLIT`)
 
 | Phase | Adapter | Behaviour |
@@ -983,7 +992,7 @@ single guard (`_utui-guard`) for thread-safe access:
 `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`,
 `UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`,
 `UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`, `UTUI-WIDGET@`,
-`UTUI-INSTALL-XTS`.
+`UTUI-TAB-SELECT`, `UTUI-INSTALL-XTS`.
 
 `UTUI-SHOW` and `UTUI-HIDE` are **not** guarded — they are thin
 wrappers that delegate to the guarded `UTUI-SHOW-DIALOG` and
@@ -1010,6 +1019,7 @@ UTUI-FOCUS-PREV        ( -- )                        Retreat focus (DFS)
 UTUI-HIT-TEST          ( row col -- elem | 0 )       Deepest element at screen pos
 UTUI-BY-ID             ( id-a id-l -- elem | 0 )     Look up element by ID
 UTUI-WIDGET@           ( elem -- wptr | 0 )          Get widget pointer from element sidecar
+UTUI-TAB-SELECT        ( index elem -- )             Select and lay out a tab
 UTUI-ADD-ELEM          ( parent type -- elem | 0 )    Create child with sidecar + style + materialize
 UTUI-REMOVE-ELEM       ( elem -- )                    Dematerialize + free sidecar + unlink
 UTUI-SET-ATTR          ( elem na nl va vl -- )         Set attribute with auto-dirty

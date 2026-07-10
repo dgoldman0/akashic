@@ -24,7 +24,7 @@
 \   - Clipboard (copy / cut / paste via clipboard.f)
 \   - File I/O: new, open, save, save-as via VFS
 \   - Toggle sidebar / output panels (split ratio manipulation)
-\   - Find / go-to-line stubs
+\   - Find, replace, go-to-line, and selection commands
 \   - TOML theme colours (10 regions)
 \   - Status bar: filename+dirty, Ln/Col, encoding, tab count
 \
@@ -42,6 +42,7 @@ REQUIRE ../../widgets/explorer.f
 REQUIRE ../../widgets/textarea.f
 REQUIRE ../../widgets/input.f
 REQUIRE ../../widgets/dialog.f
+REQUIRE ../../widgets/prompt.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../uidl-tui.f
@@ -56,6 +57,7 @@ REQUIRE ../../../utils/toml.f
 REQUIRE ../../color.f
 REQUIRE ../../../text/gap-buf.f
 REQUIRE ../../../text/undo.f
+REQUIRE ../../../text/search.f
 
 \ =====================================================================
 \  S2 -- Constants
@@ -67,8 +69,18 @@ REQUIRE ../../../text/undo.f
   128 CONSTANT _PAD-STATUS-CAP    \ status scratch
  4096 CONSTANT _PAD-IO-CAP        \ file I/O scratch
    16 CONSTANT _PAD-MAX-BUFS      \ max open buffers
-    5 CONSTANT _PAD-GUTTER-W      \ gutter width (line numbers)
+    4 CONSTANT _PAD-GUTTER-W      \ compact line-number gutter
+    4 CONSTANT _PAD-TAB-W         \ editor indentation columns
    64 CONSTANT _PAD-DUMMY-CAP     \ minimal buffer for TXTA-NEW
+  512 CONSTANT _PAD-PROMPT-CAP    \ command-bar input capacity
+
+0 CONSTANT _PAD-PRM-NONE
+1 CONSTANT _PAD-PRM-OPEN
+2 CONSTANT _PAD-PRM-SAVE-AS
+3 CONSTANT _PAD-PRM-FIND
+4 CONSTANT _PAD-PRM-GOTO-LINE
+5 CONSTANT _PAD-PRM-REPLACE-FIND
+6 CONSTANT _PAD-PRM-REPLACE-WITH
 
 \ Buffer entry struct offsets (11 cells = 88 bytes)
  0 CONSTANT _PBE-FLAGS      \ 0=free, -1=in-use
@@ -89,8 +101,9 @@ REQUIRE ../../../text/undo.f
 64 CONSTANT _PTO-CURSOR
 72 CONSTANT _PTO-SCROLL-Y
 88 CONSTANT _PTO-SEL-ANC
-96 CONSTANT _PTO-GB
+ 96 CONSTANT _PTO-GB
 104 CONSTANT _PTO-UNDO
+136 CONSTANT _PTO-SCROLL-X
 
 \ =====================================================================
 \  S3 -- UIDL File Path
@@ -132,6 +145,12 @@ VARIABLE _PAD-E-SBAR-TABS
 VARIABLE _PAD-EXPL          \ explorer widget (sidebar)
 VARIABLE _PAD-TXTA          \ THE single shared textarea
 VARIABLE _PAD-OUT-TXTA      \ output textarea (auto-materialized)
+VARIABLE _PAD-PROMPT        \ status-row command bar
+VARIABLE _PAD-PROMPT-RGN    \ caller-owned prompt region
+VARIABLE _PAD-PROMPT-MODE
+CREATE _PAD-PROMPT-BUF _PAD-PROMPT-CAP ALLOT
+CREATE _PAD-REPLACE-FIND-BUF _PAD-PROMPT-CAP ALLOT
+VARIABLE _PAD-REPLACE-FIND-U
 
 \ ---- Buffer table ----
 CREATE _PAD-BUFS  _PAD-MAX-BUFS _PAD-BUF-ENTRY-SIZE * ALLOT
@@ -343,20 +362,50 @@ VARIABLE _PDT-COL  \ column accumulator during tab draw
     OVER RGN-H 2 -   0 MAX OVER 16 + !
     SWAP RGN-W        SWAP 24 + ! ;
 
+: _PAD-SYNC-TXTA-FOCUS  ( -- )
+    _PAD-TXTA @ ?DUP IF
+        DUP 32 + @ WDG-F-FOCUSED INVERT AND
+        _PAD-PANEL 32 + @ WDG-F-FOCUSED AND IF WDG-F-FOCUSED OR THEN
+        SWAP 32 + !
+    THEN ;
+
+VARIABLE _PDC-W
+VARIABLE _PDC-RGN
+VARIABLE _PDC-ROW
+VARIABLE _PDC-COL
+VARIABLE _PDC-AROW
+VARIABLE _PDC-ACOL
+
+: _PAD-DRAW-CARET  ( -- )
+    _PAD-TXTA @ ?DUP 0= IF EXIT THEN _PDC-W !
+    _PDC-W @ TXTA-CURSOR-LINE
+    _PDC-W @ _PTO-SCROLL-Y + @ - _PDC-ROW !
+    _PDC-W @ TXTA-CURSOR-COL
+    _PDC-W @ _PTO-SCROLL-X + @ - _PAD-GUTTER-W + _PDC-COL !
+    _PDC-W @ 8 + @ _PDC-RGN !
+    _PDC-ROW @ 0< _PDC-COL @ 0< OR IF EXIT THEN
+    _PDC-ROW @ _PDC-RGN @ RGN-H >= IF EXIT THEN
+    _PDC-COL @ _PDC-RGN @ RGN-W >= IF EXIT THEN
+    _PDC-RGN @ RGN-ROW _PDC-ROW @ + _PDC-AROW !
+    _PDC-RGN @ RGN-COL _PDC-COL @ + _PDC-ACOL !
+    _PDC-AROW @ _PDC-ACOL @ SCR-GET
+    DUP CELL-ATTRS@ CELL-A-REVERSE OR SWAP CELL-ATTRS!
+    _PDC-AROW @ _PDC-ACOL @ SCR-SET ;
+
 : _PAD-PANEL-DRAW  ( widget -- )
     DUP _PAD-SYNC-TXTA-RGN
     DROP
+    _PAD-SYNC-TXTA-FOCUS
     _PAD-DRAW-TABS
-    _PAD-TXTA @ ?DUP IF WDG-DRAW THEN ;
+    _PTH-EDITOR-FG @ DRW-FG!  _PTH-EDITOR-BG @ DRW-BG!
+    _PAD-TXTA @ ?DUP IF WDG-DRAW THEN
+    _PAD-DRAW-CARET ;
 
 : _PAD-PANEL-HANDLE  ( event widget -- consumed? )
-    DUP 32 + @ 2 AND          ( event widget focused? )
-    IF
-        _PAD-TXTA @ ?DUP IF
-            DUP 32 + @ 2 OR SWAP 32 + !
-        THEN
-    THEN
+    \ Reaching this handler proves the mounted editor region owns focus.
+    DUP 32 + DUP @ WDG-F-FOCUSED OR SWAP !
     DROP
+    _PAD-SYNC-TXTA-FOCUS
     _PAD-TXTA @ ?DUP IF
         WDG-HANDLE
     ELSE DROP 0 THEN ;
@@ -383,7 +432,7 @@ VARIABLE _PDT-COL  \ column accumulator during tab draw
     _PTH-GUTTER-FG @ DRW-FG!
     _PTH-GUTTER-BG @ DRW-BG!
     SWAP 1+  NUM>STR                   ( row addr len )
-    ROT  0  R>  DRW-TEXT-RIGHT
+    ROT  0  R> 1- 0 MAX  DRW-TEXT-RIGHT
     0 DRW-ATTR! ;
 
 \ =====================================================================
@@ -561,55 +610,130 @@ VARIABLE _PDT-COL  \ column accumulator during tab draw
 \ =====================================================================
 
 VARIABLE _PIO-FD
+VARIABLE _PIO-TEXT
+VARIABLE _PIO-TEXT-U
+VARIABLE _PIO-NAME-A
+VARIABLE _PIO-NAME-U
+VARIABLE _PIO-SIZE
+VARIABLE _PIO-ACT
+VARIABLE _PIO-BUF
+
+VARIABLE _PFN-A
+VARIABLE _PFN-U
+VARIABLE _PFN-N
+VARIABLE _PFN-I
+
+: _PAD-FILENAME!  ( fname-a fname-u index -- )
+    _PFN-I ! _PFN-U ! _PFN-A !
+    _PFN-U @ _PAD-FNAME-CAP MIN DUP _PFN-N !
+    _PFN-I @ _PAD-BUF-ENTRY _PBE-FNAME-L + !
+    _PFN-A @
+    _PFN-I @ _PAD-BUF-ENTRY _PBE-FNAME-A + @
+    _PFN-N @ CMOVE ;
+
+VARIABLE _PFB-A
+VARIABLE _PFB-U
+
+: _PAD-FIND-BUFFER  ( fname-a fname-u -- index | -1 )
+    _PFB-U ! _PFB-A !
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY _PBE-FLAGS + @ IF
+            _PFB-A @ _PFB-U @
+            I _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @
+            SWAP _PBE-FNAME-L + @
+            STR-STR= IF I UNLOOP EXIT THEN
+        THEN
+    LOOP
+    -1 ;
 
 : _PAD-DO-SAVE-TO  ( fname-a fname-u -- ior )
+    _PIO-NAME-U ! _PIO-NAME-A !
     VFS-CUR >R  _PAD-VFS @ VFS-USE
-    2DUP VFS-OPEN
+    _PIO-NAME-A @ _PIO-NAME-U @ VFS-OPEN
     DUP 0= IF
         DROP
-        2DUP _PAD-VFS @ VFS-MKFILE
-        DUP 0= IF 2DROP R> VFS-USE -1 EXIT THEN
+        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-VFS @ VFS-CREATE
+        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN
         DROP
-        2DUP VFS-OPEN
-        DUP 0= IF 2DROP R> VFS-USE -1 EXIT THEN
+        _PIO-NAME-A @ _PIO-NAME-U @ VFS-OPEN
+        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN
     THEN
     R> VFS-USE
-    >R 2DROP R>
-    DUP VFS-REWIND
+    _PIO-FD !
+    _PIO-FD @ VFS-REWIND
+    0 _PIO-FD @ VFS-TRUNCATE IF
+        _PIO-FD @ VFS-CLOSE -2 EXIT
+    THEN
     _PAD-TXTA @ TXTA-GET-TEXT
-    ROT DUP >R VFS-WRITE DROP
-    R> DUP VFS-REWIND VFS-CLOSE
+    _PIO-TEXT-U ! _PIO-TEXT !
+    _PIO-TEXT @ _PIO-TEXT-U @ _PIO-FD @ VFS-WRITE _PIO-ACT !
+    _PIO-TEXT @ FREE
+    _PIO-FD @ VFS-CLOSE
+    _PAD-VFS @ VFS-SYNC DROP
+    _PIO-ACT @ _PIO-TEXT-U @ = IF 0 ELSE -3 THEN ;
+
+: _PAD-SAVE-CURRENT-AS  ( fname-a fname-u -- ior )
+    2DUP _PAD-DO-SAVE-TO
+    ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    _PAD-ACTIVE @ _PAD-FILENAME!
+    0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
+    _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
+    _PAD-UPDATE-STATUS
+    ASHELL-DIRTY!
     0 ;
 
-\ Open a file from path into the active buffer.
-: _PAD-LOAD-FILE  ( fname-a fname-u -- )
+\ Load a file from path into the active buffer.
+: _PAD-LOAD-FILE  ( fname-a fname-u -- ior )
+    _PIO-NAME-U ! _PIO-NAME-A !
     VFS-CUR >R  _PAD-VFS @ VFS-USE
-    2DUP VFS-OPEN
+    _PIO-NAME-A @ _PIO-NAME-U @ VFS-OPEN
     R> VFS-USE
     DUP 0= IF
-        2DROP DROP
-        S" File not found" 2000 ASHELL-TOAST EXIT
+        DROP -1 EXIT
     THEN
     _PIO-FD !
-    \ Store filename in active buffer
-    _PAD-ACTIVE @ 0< IF 2DROP _PIO-FD @ VFS-CLOSE EXIT THEN
-    _PAD-ACTIVE @ _PAD-BUF-ENTRY >R
-    DUP _PAD-FNAME-CAP MIN               ( fa fu u' )
-    DUP R@ _PBE-FNAME-L + !             ( fa fu u' )
-    NIP                                   ( fa u' )
-    R> _PBE-FNAME-A + @ SWAP CMOVE       ( )
-    \ Read file content
-    _PAD-IO-BUF _PAD-IO-CAP _PIO-FD @ VFS-READ
-    DUP 0<> IF
-        _PAD-IO-BUF SWAP
-        _PAD-TXTA @ TXTA-SET-TEXT
-    ELSE
-        DROP _PAD-TXTA @ TXTA-CLEAR
+    _PAD-ACTIVE @ 0< IF _PIO-FD @ VFS-CLOSE -2 EXIT THEN
+    _PIO-FD @ VFS-SIZE _PAD-BUF-CAP MIN _PIO-SIZE !
+    _PIO-SIZE @ 1 MAX ALLOCATE IF
+        DROP _PIO-FD @ VFS-CLOSE -3 EXIT
+    THEN
+    _PIO-BUF !
+    _PIO-BUF @ _PIO-SIZE @ _PIO-FD @ VFS-READ _PIO-ACT !
+    _PIO-BUF @ _PIO-ACT @ _PAD-TXTA @ TXTA-SET-TEXT
+    _PIO-BUF @ FREE
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-ACTIVE @ _PAD-FILENAME!
+    _PIO-FD @ FD.INODE @
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-INODE + !
+    _PIO-FD @ VFS-SIZE _PAD-BUF-CAP > IF
+        S" File truncated to editor capacity" 2500 ASHELL-TOAST
     THEN
     _PIO-FD @ VFS-CLOSE
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    ASHELL-DIRTY!
+    0 ;
+
+VARIABLE _POP-IDX
+
+: _PAD-OPEN-PATH  ( fname-a fname-u -- ior )
+    _PIO-NAME-U ! _PIO-NAME-A !
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-FIND-BUFFER DUP 0>= IF
+        _PAD-BUF-SWITCH 0 EXIT
+    THEN
+    DROP
+    VFS-CUR >R _PAD-VFS @ VFS-USE
+    _PIO-NAME-A @ _PIO-NAME-U @ VFS-OPEN
+    R> VFS-USE
+    DUP 0= IF DROP -1 EXIT THEN
+    VFS-CLOSE
+    _PAD-BUF-OPEN DUP 0< IF DROP -2 EXIT THEN
+    _POP-IDX !
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-LOAD-FILE DUP IF
+        _POP-IDX @ _PAD-BUF-CLOSE
+    THEN ;
 
 \ =====================================================================
 \  S12 -- Explorer Callback
@@ -619,17 +743,13 @@ VARIABLE _PIO-FD
     DROP
     DUP 0= IF DROP EXIT THEN
     DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
-    \ Build full path from inode
     DUP _PAD-PATH-BUF 512 VFS-INODE-PATH   ( inode len )
-    SWAP DROP                                ( len )
+    SWAP DROP                              ( len )
     DUP 0= IF DROP EXIT THEN
-    \ Open a new buffer tab
-    _PAD-BUF-OPEN DUP 0< IF
-        DROP DROP S" Max buffers reached" 2000 ASHELL-TOAST EXIT
-    THEN
-    DROP
-    \ Load the file
-    _PAD-PATH-BUF SWAP _PAD-LOAD-FILE ;
+    _PAD-PATH-BUF SWAP _PAD-OPEN-PATH
+    DUP -1 = IF S" File not found" 2000 ASHELL-TOAST THEN
+    DUP -2 = IF S" Max buffers reached" 2000 ASHELL-TOAST THEN
+    DROP ;
 
 \ =====================================================================
 \  S13 -- Actions: File Menu
@@ -643,38 +763,119 @@ VARIABLE _PIO-FD
     _PAD-TXTA @ ?DUP IF TXTA-CLEAR THEN
     _PAD-UPDATE-STATUS ASHELL-DIRTY! ;
 
+VARIABLE _PPS-MODE
+VARIABLE _PPS-LA
+VARIABLE _PPS-LU
+VARIABLE _PPS-IA
+VARIABLE _PPS-IU
+
+: _PAD-SHOW-PROMPT  ( mode label-a label-u initial-a initial-u -- )
+    _PPS-IU ! _PPS-IA ! _PPS-LU ! _PPS-LA ! _PPS-MODE !
+    _PAD-PROMPT @ 0= IF EXIT THEN
+    _PPS-MODE @ _PAD-PROMPT-MODE !
+    _PPS-LA @ _PPS-LU @ _PPS-IA @ _PPS-IU @
+        _PAD-PROMPT @ PRM-SHOW
+    ASHELL-DIRTY! ;
+
+: _PAD-SHOW-SAVE-AS  ( -- )
+    _PAD-ACTIVE @ 0< IF EXIT THEN
+    _PAD-PRM-SAVE-AS S" Save as:"
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY
+    DUP _PBE-FNAME-A + @ SWAP _PBE-FNAME-L + @
+    _PAD-SHOW-PROMPT ;
+
 : _PAD-DO-OPEN  ( elem -- )
     DROP
-    S" Open: (use explorer)" 2000 ASHELL-TOAST ;
+    _PAD-PRM-OPEN S" Open:" 0 0 _PAD-SHOW-PROMPT ;
 
 : _PAD-DO-SAVE  ( elem -- )
     DROP
     _PAD-ACTIVE @ 0< IF EXIT THEN
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-FNAME-L + @ 0= IF
-        S" Save As: not yet implemented" 2000 ASHELL-TOAST EXIT
+        _PAD-SHOW-SAVE-AS EXIT
     THEN
     _PAD-ACTIVE @ _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @ SWAP _PBE-FNAME-L + @
-    _PAD-DO-SAVE-TO
+    _PAD-SAVE-CURRENT-AS
     IF S" Save failed" 2000 ASHELL-TOAST EXIT THEN
-    0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     S" Saved" 1500 ASHELL-TOAST
     _PAD-UPDATE-STATUS ASHELL-DIRTY! ;
 
 : _PAD-DO-SAVE-AS  ( elem -- )
-    DROP
-    S" Save As: not yet implemented" 2000 ASHELL-TOAST ;
+    DROP _PAD-SHOW-SAVE-AS ;
+
+VARIABLE _PSA-ORIG
+VARIABLE _PSA-SAVED
+VARIABLE _PSA-SKIPPED
+VARIABLE _PSA-FAILED
 
 : _PAD-DO-SAVE-ALL  ( elem -- )
     DROP
-    S" Save All: not yet implemented" 2000 ASHELL-TOAST ;
+    _PAD-ACTIVE @ _PSA-ORIG !
+    0 _PSA-SAVED ! 0 _PSA-SKIPPED ! 0 _PSA-FAILED !
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY DUP _PBE-FLAGS + @ IF
+            DUP _PBE-DIRTY + @ IF
+                DUP _PBE-FNAME-L + @ 0= IF
+                    DROP 1 _PSA-SKIPPED +!
+                ELSE
+                    DROP I _PAD-BUF-SWITCH
+                    I _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @
+                    SWAP _PBE-FNAME-L + @ _PAD-DO-SAVE-TO
+                    IF
+                        1 _PSA-FAILED +!
+                    ELSE
+                        0 I _PAD-BUF-ENTRY _PBE-DIRTY + !
+                        1 _PSA-SAVED +!
+                    THEN
+                THEN
+            ELSE
+                DROP
+            THEN
+        ELSE
+            DROP
+        THEN
+    LOOP
+    _PSA-ORIG @ DUP 0>= IF
+        DUP _PAD-BUF-ENTRY _PBE-FLAGS + @ IF
+            _PAD-BUF-SWITCH
+        ELSE DROP THEN
+    ELSE DROP THEN
+    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
+    _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
+    _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    _PSA-FAILED @ IF
+        S" Some buffers failed to save" 2500 ASHELL-TOAST EXIT
+    THEN
+    _PSA-SKIPPED @ IF
+        S" Saved named buffers; untitled buffers remain" 2500 ASHELL-TOAST EXIT
+    THEN
+    _PSA-SAVED @ IF
+        S" All modified buffers saved" 1800 ASHELL-TOAST
+    ELSE
+        S" Nothing to save" 1200 ASHELL-TOAST
+    THEN ;
+
+: _PAD-HAS-DIRTY?  ( -- flag )
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY DUP _PBE-FLAGS + @ IF
+            _PBE-DIRTY + @ IF TRUE UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP
+    FALSE ;
 
 : _PAD-DO-CLOSE-TAB  ( elem -- )
     DROP
     _PAD-ACTIVE @ 0< IF EXIT THEN
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
+        S" Discard unsaved changes?" DLG-CONFIRM 0= IF EXIT THEN
+    THEN
     _PAD-ACTIVE @ _PAD-BUF-CLOSE ;
 
 : _PAD-DO-CLOSE-ALL  ( elem -- )
     DROP
+    _PAD-HAS-DIRTY? IF
+        S" Close all and discard unsaved changes?" DLG-CONFIRM 0= IF EXIT THEN
+    THEN
     BEGIN _PAD-BUF-CNT @ 0> WHILE
         _PAD-ACTIVE @ 0< IF
             _PAD-MAX-BUFS 0 DO
@@ -688,7 +889,11 @@ VARIABLE _PIO-FD
     REPEAT ;
 
 : _PAD-DO-QUIT  ( elem -- )
-    DROP ASHELL-QUIT ;
+    DROP
+    _PAD-HAS-DIRTY? IF
+        S" Quit and discard unsaved changes?" DLG-CONFIRM 0= IF EXIT THEN
+    THEN
+    ASHELL-QUIT ;
 
 \ =====================================================================
 \  S14 -- Actions: Clipboard
@@ -724,9 +929,43 @@ VARIABLE _PIO-FD
     _PAD-TXTA @ ?DUP IF TXTA-SELECT-ALL THEN
     ASHELL-DIRTY! ;
 
+VARIABLE _PSR-START
+VARIABLE _PSR-END
+
+: _PAD-SELECT-RANGE  ( start end -- )
+    _PSR-END ! _PSR-START !
+    _PAD-TXTA @ 0= IF EXIT THEN
+    _PSR-START @ _PAD-TXTA @ _PTO-SEL-ANC + !
+    _PSR-END @ DUP
+    _PAD-TXTA @ _PTO-GB + @ GB-MOVE!
+    _PAD-TXTA @ _PTO-CURSOR + !
+    _PAD-TXTA @ WDG-DIRTY
+    ASHELL-DIRTY! ;
+
+VARIABLE _PLR-GB
+VARIABLE _PLR-LINE
+VARIABLE _PLR-START
+VARIABLE _PLR-END
+
+: _PAD-CURRENT-LINE-RANGE  ( -- start end )
+    _PAD-TXTA @ _PTO-GB + @ _PLR-GB !
+    _PLR-GB @ GB-CURSOR-LINE _PLR-LINE !
+    _PLR-LINE @ _PLR-GB @ GB-LINE-OFF DUP _PLR-START !
+    _PLR-LINE @ _PLR-GB @ GB-LINE-LEN + _PLR-END !
+    _PLR-LINE @ 1+ _PLR-GB @ GB-LINES < IF
+        1 _PLR-END +!
+    ELSE
+        _PLR-START @ 0> IF -1 _PLR-START +! THEN
+    THEN
+    _PLR-START @ _PLR-END @ ;
+
 : _PAD-DO-DELETE-LINE  ( elem -- )
     DROP
-    S" Delete line: not yet implemented" 2000 ASHELL-TOAST ;
+    _PAD-TXTA @ 0= IF EXIT THEN
+    _PAD-CURRENT-LINE-RANGE 2DUP = IF 2DROP EXIT THEN
+    _PAD-SELECT-RANGE
+    _PAD-TXTA @ TXTA-DEL-SEL DROP
+    ASHELL-DIRTY! ;
 
 \ =====================================================================
 \  S15 -- Actions: Undo / Redo
@@ -757,20 +996,119 @@ VARIABLE _PIO-FD
     ASHELL-DIRTY! ;
 
 \ =====================================================================
-\  S16 -- Actions: Find / Replace / Goto (stubs)
+\  S16 -- Actions: Find / Replace / Goto
 \ =====================================================================
 
+VARIABLE _PFT-A
+VARIABLE _PFT-U
+VARIABLE _PFT-GB
+VARIABLE _PFT-START
+VARIABLE _PFT-MATCH
+
+: _PAD-FIND-MATCH  ( find-a find-u -- flag )
+    _PFT-U ! _PFT-A !
+    _PFT-U @ 0= IF 0 EXIT THEN
+    _PAD-TXTA @ 0= IF 0 EXIT THEN
+    _PAD-TXTA @ _PTO-GB + @ DUP 0= IF DROP 0 EXIT THEN _PFT-GB !
+    _PAD-TXTA @ _PTO-CURSOR + @ _PFT-START !
+    _PFT-START @ _PFT-A @ _PFT-U @ _PFT-GB @ SRCH-FIND
+    DUP 0< IF
+        DROP 0 _PFT-A @ _PFT-U @ _PFT-GB @ SRCH-FIND
+    THEN
+    DUP 0< IF DROP 0 EXIT THEN
+    DUP _PFT-MATCH !
+    _PFT-U @ +
+    _PFT-MATCH @ SWAP _PAD-SELECT-RANGE
+    -1 ;
+
+: _PAD-CURSOR!  ( pos -- )
+    _PAD-TXTA @ 0= IF DROP EXIT THEN
+    0 MAX
+    _PAD-TXTA @ _PTO-GB + @ GB-LEN MIN
+    DUP _PAD-TXTA @ _PTO-GB + @ GB-MOVE!
+    _PAD-TXTA @ _PTO-CURSOR + !
+    -1 _PAD-TXTA @ _PTO-SEL-ANC + !
+    _PAD-TXTA @ WDG-DIRTY
+    ASHELL-DIRTY! ;
+
+: _PAD-GOTO-LINE-TEXT  ( addr len -- )
+    STR>NUM 0= IF
+        DROP S" Invalid line number" 1800 ASHELL-TOAST EXIT
+    THEN
+    DUP 1 < IF DROP S" Line numbers start at 1" 1800 ASHELL-TOAST EXIT THEN
+    1-
+    _PAD-TXTA @ _PTO-GB + @ >R
+    DUP R@ GB-LINES >= IF
+        DROP R> DROP S" Line is outside the document" 1800 ASHELL-TOAST EXIT
+    THEN
+    R> GB-LINE-OFF _PAD-CURSOR! ;
+
 : _PAD-DO-FIND  ( elem -- )
-    DROP S" Find: not yet implemented" 2000 ASHELL-TOAST ;
+    DROP _PAD-PRM-FIND S" Find:" 0 0 _PAD-SHOW-PROMPT ;
 
 : _PAD-DO-REPLACE  ( elem -- )
-    DROP S" Replace: not yet implemented" 2000 ASHELL-TOAST ;
+    DROP _PAD-PRM-REPLACE-FIND S" Replace:" 0 0 _PAD-SHOW-PROMPT ;
 
 : _PAD-DO-GOTO-LINE  ( elem -- )
-    DROP S" Go to line: not yet implemented" 2000 ASHELL-TOAST ;
+    DROP _PAD-PRM-GOTO-LINE S" Go to line:" 0 0 _PAD-SHOW-PROMPT ;
 
 : _PAD-DO-GOTO-FILE  ( elem -- )
-    DROP S" Go to file: not yet implemented" 2000 ASHELL-TOAST ;
+    DROP _PAD-PRM-OPEN S" Open:" 0 0 _PAD-SHOW-PROMPT ;
+
+VARIABLE _PPSUB-A
+VARIABLE _PPSUB-U
+VARIABLE _PPSUB-MODE
+
+: _PAD-PROMPT-SUBMIT  ( prompt -- )
+    PRM-GET-TEXT _PPSUB-U ! _PPSUB-A !
+    _PAD-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _PAD-PROMPT-MODE @ _PPSUB-MODE !
+    _PAD-PRM-NONE _PAD-PROMPT-MODE !
+    _PPSUB-MODE @ _PAD-PRM-REPLACE-WITH <
+    _PPSUB-U @ 0= AND IF EXIT THEN
+    _PPSUB-MODE @ CASE
+        _PAD-PRM-OPEN OF
+            _PPSUB-A @ _PPSUB-U @ _PAD-OPEN-PATH
+            DUP -1 = IF S" File not found" 2000 ASHELL-TOAST THEN
+            DUP -2 = IF S" Max buffers reached" 2000 ASHELL-TOAST THEN
+            DROP
+        ENDOF
+        _PAD-PRM-SAVE-AS OF
+            _PPSUB-A @ _PPSUB-U @ _PAD-SAVE-CURRENT-AS
+            IF S" Save failed" 2000 ASHELL-TOAST
+            ELSE S" Saved" 1500 ASHELL-TOAST THEN
+        ENDOF
+        _PAD-PRM-FIND OF
+            _PPSUB-A @ _PPSUB-U @ _PAD-FIND-MATCH 0= IF
+                S" Text not found" 1800 ASHELL-TOAST
+            THEN
+        ENDOF
+        _PAD-PRM-GOTO-LINE OF
+            _PPSUB-A @ _PPSUB-U @ _PAD-GOTO-LINE-TEXT
+        ENDOF
+        _PAD-PRM-REPLACE-FIND OF
+            _PPSUB-U @ _PAD-PROMPT-CAP MIN
+            DUP _PAD-REPLACE-FIND-U !
+            _PPSUB-A @ _PAD-REPLACE-FIND-BUF ROT CMOVE
+            _PAD-PRM-REPLACE-WITH S" Replace with:" 0 0 _PAD-SHOW-PROMPT
+        ENDOF
+        _PAD-PRM-REPLACE-WITH OF
+            _PAD-REPLACE-FIND-BUF _PAD-REPLACE-FIND-U @
+            _PAD-FIND-MATCH IF
+                _PAD-TXTA @ TXTA-DEL-SEL DROP
+                _PPSUB-A @ _PPSUB-U @ _PAD-TXTA @ TXTA-INS-STR
+                S" Replaced" 1200 ASHELL-TOAST
+            ELSE
+                S" Text not found" 1800 ASHELL-TOAST
+            THEN
+        ENDOF
+    ENDCASE
+    ASHELL-DIRTY! ;
+
+: _PAD-PROMPT-CANCEL  ( prompt -- )
+    DROP _PAD-PRM-NONE _PAD-PROMPT-MODE !
+    _PAD-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    ASHELL-DIRTY! ;
 
 \ =====================================================================
 \  S17 -- Actions: Toggle Sidebar / Output
@@ -857,11 +1195,57 @@ VARIABLE _PIO-FD
     DROP
     S" Ctrl+N/O/S/W  Ctrl+Z/Y  Ctrl+C/X/V  Ctrl+B/J  Ctrl+F/G" 4000 ASHELL-TOAST ;
 
+VARIABLE _PSW-GB
+VARIABLE _PSW-LEN
+VARIABLE _PSW-POS
+VARIABLE _PSW-START
+VARIABLE _PSW-END
+VARIABLE _PSW-BYTE
+
+: _PAD-WORD-BYTE?  ( c -- flag )
+    _PSW-BYTE !
+    _PSW-BYTE @ [CHAR] 0 >= _PSW-BYTE @ [CHAR] 9 <= AND
+    _PSW-BYTE @ [CHAR] A >= _PSW-BYTE @ [CHAR] Z <= AND OR
+    _PSW-BYTE @ [CHAR] a >= _PSW-BYTE @ [CHAR] z <= AND OR
+    _PSW-BYTE @ [CHAR] _ = OR
+    _PSW-BYTE @ 128 >= OR ;
+
 : _PAD-DO-SELECT-WORD  ( elem -- )
-    DROP S" Select word: not yet implemented" 2000 ASHELL-TOAST ;
+    DROP
+    _PAD-TXTA @ 0= IF EXIT THEN
+    _PAD-TXTA @ _PTO-GB + @ DUP 0= IF DROP EXIT THEN _PSW-GB !
+    _PSW-GB @ GB-LEN DUP 0= IF DROP EXIT THEN _PSW-LEN !
+    _PAD-TXTA @ _PTO-CURSOR + @ _PSW-POS !
+    _PSW-POS @ _PSW-LEN @ >= IF _PSW-LEN @ 1- _PSW-POS ! THEN
+    _PSW-POS @ _PSW-GB @ GB-BYTE@ _PAD-WORD-BYTE? 0= IF
+        _PSW-POS @ 0= IF EXIT THEN
+        _PSW-POS @ 1- DUP _PSW-GB @ GB-BYTE@ _PAD-WORD-BYTE? 0= IF
+            DROP EXIT
+        THEN
+        _PSW-POS !
+    THEN
+    _PSW-POS @ _PSW-START !
+    BEGIN
+        _PSW-START @ 0> IF
+            _PSW-START @ 1- _PSW-GB @ GB-BYTE@ _PAD-WORD-BYTE?
+        ELSE FALSE THEN
+    WHILE
+        -1 _PSW-START +!
+    REPEAT
+    _PSW-POS @ 1+ _PSW-END !
+    BEGIN
+        _PSW-END @ _PSW-LEN @ < IF
+            _PSW-END @ _PSW-GB @ GB-BYTE@ _PAD-WORD-BYTE?
+        ELSE FALSE THEN
+    WHILE
+        1 _PSW-END +!
+    REPEAT
+    _PSW-START @ _PSW-END @ _PAD-SELECT-RANGE ;
 
 : _PAD-DO-SELECT-LINE  ( elem -- )
-    DROP S" Select line: not yet implemented" 2000 ASHELL-TOAST ;
+    DROP
+    _PAD-TXTA @ 0= IF EXIT THEN
+    _PAD-CURRENT-LINE-RANGE _PAD-SELECT-RANGE ;
 
 \ =====================================================================
 \  S20 -- INIT Callback
@@ -876,6 +1260,10 @@ VARIABLE _PIO-FD
     0 _PAD-EXPL !
     0 _PAD-TXTA !
     0 _PAD-OUT-TXTA !
+    0 _PAD-PROMPT !
+    0 _PAD-PROMPT-RGN !
+    _PAD-PRM-NONE _PAD-PROMPT-MODE !
+    0 _PAD-REPLACE-FIND-U !
     0 _PAD-ARENA !
 
     \ ---- Create XMEM arena for editor buffers ----
@@ -905,6 +1293,17 @@ VARIABLE _PIO-FD
     _PAD-THEME-DEFAULTS
     _PAD-LOAD-CONFIG
     _PAD-APPLY-THEME
+
+    \ ---- Status-row command bar ----
+    _PAD-E-SBAR @ ?DUP IF
+        UTUI-ELEM-RGN RGN-NEW
+        DUP _PAD-PROMPT-RGN !
+        _PAD-PROMPT-BUF _PAD-PROMPT-CAP PRM-NEW
+        DUP _PAD-PROMPT !
+        ['] _PAD-PROMPT-SUBMIT OVER PRM-ON-SUBMIT
+        ['] _PAD-PROMPT-CANCEL OVER PRM-ON-CANCEL
+        _PTH-STATUS-FG @ _PTH-STATUS-BG @ ROT PRM-COLORS!
+    THEN
 
     \ ---- Get output textarea (auto-materialized by UIDL) ----
     _PAD-E-OUTPUT @ ?DUP IF
@@ -986,8 +1385,46 @@ VARIABLE _PIO-FD
 \  S21 -- EVENT Callback
 \ =====================================================================
 
+: _PAD-INSERT-TAB  ( -- )
+    _PAD-TXTA @ ?DUP IF
+        DUP TXTA-CURSOR-COL _PAD-TAB-W MOD
+        _PAD-TAB-W SWAP -
+        S"     " DROP SWAP ROT TXTA-INS-STR
+    THEN ;
+
 : PAD-EVENT-CB  ( ev -- flag )
+    _PAD-PROMPT @ ?DUP IF
+        DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN
+        DROP
+    THEN
+    DUP @ KEY-T-SPECIAL = IF
+        DUP 8 + @ KEY-TAB = IF
+            DUP 16 + @ KEY-MOD-SHIFT AND 0= IF
+                DROP _PAD-INSERT-TAB -1 EXIT
+            THEN
+        THEN
+    THEN
     DROP 0 ;
+
+\ Paint the command bar after UIDL so it overlays the status row.
+: PAD-PAINT-CB  ( -- )
+    \ The editor is a custom widget mounted inside a UIDL region.  Its
+    \ model may change from app-level prompt actions that bypass UIDL's
+    \ normal focused-element invalidation, so bridge widget dirtiness here.
+    _PAD-TXTA @ ?DUP IF
+        DUP WDG-DIRTY? IF
+            DROP _PAD-PANEL WDG-DRAW
+        ELSE
+            DROP
+        THEN
+    THEN
+    _PAD-PROMPT @ ?DUP 0= IF EXIT THEN
+    DUP PRM-ACTIVE? 0= IF DROP EXIT THEN
+    DROP
+    _PAD-E-SBAR @ ?DUP IF
+        UTUI-ELEM-RGN _PAD-PROMPT @ PRM-SET-BOUNDS
+    THEN
+    _PAD-PROMPT @ WDG-DRAW ;
 
 \ =====================================================================
 \  S22 -- TICK Callback
@@ -1022,10 +1459,16 @@ VARIABLE _PIO-FD
     \ Free explorer widget
     _PAD-EXPL @ ?DUP IF EXPL-FREE THEN
 
+    \ Free command-bar allocations (outer region is caller-owned)
+    _PAD-PROMPT @ ?DUP IF PRM-FREE THEN
+    _PAD-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
+
     \ Zero handles
     0 _PAD-TXTA !
     0 _PAD-EXPL !
     0 _PAD-OUT-TXTA !
+    0 _PAD-PROMPT !
+    0 _PAD-PROMPT-RGN !
     -1 _PAD-ACTIVE !
     0 _PAD-BUF-CNT ! ;
 
@@ -1038,7 +1481,7 @@ VARIABLE _PIO-FD
     ['] PAD-INIT-CB     OVER APP.INIT-XT !
     ['] PAD-EVENT-CB    OVER APP.EVENT-XT !
     ['] PAD-TICK-CB     OVER APP.TICK-XT !
-    0                   OVER APP.PAINT-XT !
+    ['] PAD-PAINT-CB    OVER APP.PAINT-XT !
     ['] PAD-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
     S" tui/applets/pad/pad.uidl"
                         ROT DUP >R

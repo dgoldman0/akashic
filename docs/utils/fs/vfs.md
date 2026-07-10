@@ -218,6 +218,14 @@ VFS-SIZE  ( fd -- u )
 ```
 Return the file size from the FD's inode.
 
+### VFS-TRUNCATE
+```forth
+VFS-TRUNCATE  ( size fd -- ior )
+```
+Set the logical file size, update the backing-store metadata, and clamp the
+cursor to the new end. This is required before replacing a file with shorter
+content.
+
 ---
 
 ## Directory Operations
@@ -226,13 +234,31 @@ Return the file size from the FD's inode.
 ```forth
 VFS-MKFILE  ( c-addr u vfs -- inode )
 ```
-Create an empty file in the current working directory.
+Create an empty file in the current working directory. Returns 0 for an
+invalid/duplicate name or when the binding cannot create the entry.
+
+### VFS-CREATE
+```forth
+VFS-CREATE  ( path-a path-u vfs -- inode|0 )
+```
+Create a file at an absolute or relative path. Parent directories must
+already exist. The current VFS and working directory are restored before the
+word returns.
 
 ### VFS-MKDIR
 ```forth
-VFS-MKDIR  ( c-addr u vfs -- inode )
+VFS-MKDIR  ( c-addr u vfs -- ior )
 ```
-Create a subdirectory in the current working directory.
+Create a subdirectory in the current working directory. Returns 0 on success
+and nonzero for an invalid/duplicate name or binding failure.
+
+### VFS-RENAME
+```forth
+VFS-RENAME  ( new-a new-u inode vfs -- ior )
+```
+Rename an inode within its current parent. Empty names, names containing `/`,
+and duplicate sibling names are rejected. The inode is marked dirty; call
+`VFS-SYNC` to persist the new name through the backing binding.
 
 ### VFS-RM
 ```forth
@@ -269,8 +295,9 @@ Print metadata for the named path (type, size, timestamps).
 ```forth
 VFS-SYNC  ( vfs -- ior )
 ```
-Walk all slab pages and call the binding's `sync` xt for every dirty
-inode.  Returns 0 on success.
+Walk all slab pages and call the binding's `sync` xt for every dirty inode,
+then call it once with inode 0 so metadata-only create/delete operations are
+flushed. Returns 0 on success.
 
 ### VFS-SET-HWM
 ```forth
@@ -350,8 +377,11 @@ copy bytes from/to an arena-allocated content buffer stored in
 | `VFS-REWIND` | `( fd -- )` | Cursor → 0 |
 | `VFS-TELL` | `( fd -- u )` | Get cursor |
 | `VFS-SIZE` | `( fd -- u )` | Get file size |
+| `VFS-TRUNCATE` | `( size fd -- ior )` | Set logical size |
 | `VFS-MKFILE` | `( c-addr u vfs -- inode )` | Create file |
-| `VFS-MKDIR` | `( c-addr u vfs -- inode )` | Create directory |
+| `VFS-CREATE` | `( path-a path-u vfs -- inode\|0 )` | Create file by path |
+| `VFS-MKDIR` | `( c-addr u vfs -- ior )` | Create directory |
+| `VFS-RENAME` | `( new-a new-u inode vfs -- ior )` | Rename entry |
 | `VFS-RM` | `( c-addr u vfs -- ior )` | Remove entry |
 | `VFS-DIR` | `( vfs -- )` | List cwd |
 | `VFS-CD` | `( c-addr u vfs -- ior )` | Change directory |

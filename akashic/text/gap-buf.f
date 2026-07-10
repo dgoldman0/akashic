@@ -281,7 +281,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     SWAP >R                             ( addr dest  R: u )
     R@ CMOVE                            ( R: u )
     R> _GB-T @ _GB-O-GS + +!             \ gs += u
-    _GB-T @ _GB-REBUILD-LINES ;
+    _GB-REBUILD-LINES ;
 
 \ GB-INS-CP ( cp gb -- )
 \   Insert a single Unicode codepoint (UTF-8 encoded) at cursor.
@@ -310,7 +310,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     SWAP DUP >R                            ( del-addr n  R: n )
     \ Expand gap forward: ge += n
     _GB-T @ _GB-O-GE + +!
-    _GB-T @ _GB-REBUILD-LINES
+    _GB-REBUILD-LINES
     R> ;                                  ( del-addr del-u )
 
 \ GB-BS ( n gb -- del-addr del-u )
@@ -327,7 +327,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     NEGATE _GB-T @ _GB-O-GS + +!           \ gs -= n
     _GB-T @ _GB-O-BUF + @
     _GB-T @ _GB-O-GS + @ +               ( del-addr )
-    _GB-T @ _GB-REBUILD-LINES
+    _GB-REBUILD-LINES
     R> ;                                  ( del-addr del-u )
 
 \ GB-DEL-CP ( gb -- del-addr del-u )
@@ -387,7 +387,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     \ gs = u, ge = cap
     R> _GB-T @ _GB-O-GS + !
     _GB-T @ _GB-O-CAP + @  _GB-T @ _GB-O-GE + !
-    _GB-T @ _GB-REBUILD-LINES ;
+    _GB-REBUILD-LINES ;
 
 \ GB-FLATTEN ( dest gb -- u )
 \   Copy content to a flat buffer.  Returns content length.

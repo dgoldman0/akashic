@@ -33,7 +33,7 @@ Depends on `akashic-vfs`.
 |---|---|
 | **One VFS per disk** | Each VFS instance backed by MP64FS owns a single disk image.  Multiple MP64FS disks need multiple VFS instances. |
 | **Cached metadata** | Superblock, bitmap, and full directory are cached in arena RAM on init.  Only data sectors hit the disk on read/write. |
-| **Lazy flush** | Dirty bitmap and directory caches are written back only on explicit `VFS-SYNC` or `VFS-DESTROY`. |
+| **Lazy metadata flush** | Dirty bitmap and directory caches are written back on explicit `VFS-SYNC` or `VFS-DESTROY`; data sectors are written by each write operation. |
 | **Sector-aligned DMA** | Partial-sector reads/writes use a 512-byte scratch buffer.  Full sectors bypass the scratch for direct DMA. |
 | **Matches KDOS layout** | Sector 0 = superblock, sector 1 = bitmap, sectors 2–13 = directory (128 entries × 48 bytes), sectors 14+ = data.  Compatible with `diskutil.py` and KDOS `FREAD`/`FWRITE`. |
 
@@ -69,8 +69,9 @@ my-vfs VFS-DESTROY
 
 ## On-Disk Format
 
-MP64FS is a flat, single-directory-level filesystem with a
-single-extent allocation model and a bitmap free-space tracker.
+MP64FS stores a flat directory table with parent slot IDs, allowing a bounded
+directory tree. Files use a primary extent plus one optional secondary extent
+and a bitmap free-space tracker.
 
 ### Disk Layout
 
@@ -210,9 +211,12 @@ file size).
 _VMP-WRITE  ( buf len offset inode vfs -- actual )
 ```
 
-Write up to `len` bytes at byte `offset`.  Same head/full/tail
-sector strategy as read.  Marks the directory cache as dirty
-(updates `used_bytes` if the write extends the file).
+Write up to `len` bytes at byte `offset`. The binding grows the primary extent
+in place when possible. If fragmented space blocks that growth, it allocates
+the requested run as `ext1`; later growth extends that secondary extent in
+place. Transfers stop and restart at extent boundaries. If allocation cannot
+cover the whole request, VFS partial-write semantics apply. The callback marks
+the bitmap/directory caches and inode metadata dirty and updates `used_bytes`.
 
 ### _VMP-SYNC
 
@@ -220,9 +224,10 @@ sector strategy as read.  Marks the directory cache as dirty
 _VMP-SYNC  ( inode vfs -- ior )
 ```
 
-If the bitmap cache is dirty, write it back to sector 1.  If the
-directory cache is dirty, write the 12 directory sectors back.
-The `inode` argument is ignored (sync is global).
+For a non-root inode, first reflect its current name into its stable directory
+slot. If the bitmap cache is dirty, write it to sector 1; if the directory
+cache is dirty, write all 12 directory sectors. VFS also invokes the binding
+once with inode 0 so metadata-only operations are flushed.
 
 ### _VMP-CREATE
 
@@ -231,8 +236,7 @@ _VMP-CREATE  ( inode vfs -- ior )
 ```
 
 1. Find a free directory slot
-2. Find a contiguous run of free sectors in the bitmap (default:
-   1 sector for files, 0 for directories)
+2. Find one free sector for a file (directories allocate no data sectors)
 3. Populate the directory entry (name, type, parent slot, sector
    allocation)
 4. Mark bitmap sectors as allocated
@@ -244,8 +248,8 @@ _VMP-CREATE  ( inode vfs -- ior )
 _VMP-DELETE  ( inode vfs -- ior )
 ```
 
-Clear the allocated bitmap sectors and zero the directory entry.
-Marks both caches as dirty.
+Clear both allocated extents and zero the directory entry. Marks both caches
+as dirty.
 
 ### _VMP-TRUNCATE
 
@@ -253,8 +257,11 @@ Marks both caches as dirty.
 _VMP-TRUNCATE  ( inode vfs -- ior )
 ```
 
-Update the `used_bytes` field in the directory cache from the
-inode's `IN.SIZE-LO`.
+Resize allocation and `used_bytes` to the inode's `IN.SIZE-LO`. Shrinking frees
+unused secondary sectors first, then unused primary sectors while retaining
+one primary sector for a file. Truncating to zero frees `ext1` and keeps that
+single primary sector. Growth delegates to the same two-extent allocator used
+by writes.
 
 ### _VMP-TEARDOWN
 

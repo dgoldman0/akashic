@@ -12,7 +12,7 @@ REQUIRE tui/screen.f
 
 `PROVIDED akashic-tui-screen` — safe to include multiple times.
 
-**Dependencies:** `cell.f`, `ansi.f`, `../text/utf8.f`
+**Dependencies:** `cell.f`, `ansi.f`, `../text/utf8.f`, `../utils/term.f`
 
 ---
 
@@ -224,7 +224,8 @@ Differential screen update.  Iterates every cell position.  Where
 After flushing every dirty cell, `back[]` is copied to `front[]`
 cell-by-cell.  The cursor is hidden during the update
 (`ANSI-CURSOR-OFF`) and optionally restored at the logical position
-with `ANSI-CURSOR-ON`.
+with `ANSI-CURSOR-ON`. Finally, `TERM-FLUSH` commits the BIOS UART ring's
+partial batch so the host observes the complete frame immediately.
 
 ```forth
 \ Typical frame loop:

@@ -392,6 +392,13 @@ VARIABLE _KEY-CSI-FINAL    \ final (terminator) byte
         \ Shift-Tab: ESC[Z
         [CHAR] Z OF KEY-T-SPECIAL KEY-BACKTAB R> _KEY-SET-EV EXIT ENDOF
 
+        \ CSI-u character encoding: ESC[codepoint;modifieru.
+        \ This preserves combinations such as Ctrl+Shift+S that cannot
+        \ be represented by the legacy C0 control-byte encoding.
+        [CHAR] u OF
+            KEY-T-CHAR _KEY-CSI-P1 @ R> _KEY-SET-EV EXIT
+        ENDOF
+
         \ Terminal size response: ESC[8;rows;colst
         [CHAR] t OF
             \ First param should be 8

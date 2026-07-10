@@ -34,6 +34,11 @@ REQUIRE ../draw.f
 REQUIRE ../box.f
 REQUIRE ../region.f
 
+\ Optional backend hook used to repaint content covered by a modal.
+DEFER _DLG-DISMISS-HOOK  ( row col h w -- )
+: _DLG-DISMISS-NOOP  ( row col h w -- )  2DROP 2DROP ;
+' _DLG-DISMISS-NOOP IS _DLG-DISMISS-HOOK
+
 \ =====================================================================
 \ 1. Descriptor layout
 \ =====================================================================
@@ -326,7 +331,7 @@ VARIABLE _DLG-N-BC
 \ 8. Modal loop — DLG-SHOW
 \ =====================================================================
 \
-\   Auto-sizes the dialog, centres it on an 80×24 screen, draws it,
+\   Auto-sizes the dialog, centres it on the current screen, draws it,
 \   then enters a KEY-POLL busy-loop.  Each key event is dispatched
 \   through WDG-HANDLE (→ _DLG-HANDLE).  The loop exits once the
 \   per-widget result field becomes >=0 (set by Enter or Escape).
@@ -365,18 +370,19 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
     _DLG-SH-W @ _DLG-O-MSG-U   + @ 4 + MAX
     _DLG-SH-W @ _DLG-CALC-BTN-W 4 + MAX
     20 MAX  60 MIN
+    SCR-W 2 - 1 MAX MIN
     _DLG-SH-WD !
 
-    _DLG-SH-W @ _DLG-O-MSG-U + @
-    _DLG-SH-WD @ 4 - DUP 1 < IF DROP 1 THEN /         \ msg-u / inner-width
+    _DLG-SH-WD @ 4 - DUP 1 < IF DROP 1 THEN >R
+    _DLG-SH-W @ _DLG-O-MSG-U + @ R@ 1- + R> /
     DUP 1 < IF DROP 1 THEN
     _DLG-SH-MR !
 
-    _DLG-SH-MR @ 5 + _DLG-SH-HT !
+    _DLG-SH-MR @ 5 + SCR-H 2 - 1 MAX MIN _DLG-SH-HT !
 
-    \ ---- Centre on 24×80 screen ----
-    24 _DLG-SH-HT @ - 2 / DUP 0< IF DROP 0 THEN
-    80 _DLG-SH-WD @ - 2 / DUP 0< IF DROP 0 THEN
+    \ ---- Centre in the current terminal geometry ----
+    SCR-H _DLG-SH-HT @ - 2 / DUP 0< IF DROP 0 THEN
+    SCR-W _DLG-SH-WD @ - 2 / DUP 0< IF DROP 0 THEN
     _DLG-SH-HT @
     _DLG-SH-WD @
     RGN-NEW _DLG-SH-RGN !
@@ -398,6 +404,11 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
 
     \ ---- Collect result, clean up region ----
     _DLG-SH-W @ _DLG-O-RESULT + @
+    _DLG-SH-RGN @ RGN-ROW
+    _DLG-SH-RGN @ RGN-COL
+    _DLG-SH-RGN @ RGN-H
+    _DLG-SH-RGN @ RGN-W
+    _DLG-DISMISS-HOOK
     _DLG-SH-RGN @ RGN-FREE ;
 
 \ =====================================================================

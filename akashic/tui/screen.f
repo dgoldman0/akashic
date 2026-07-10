@@ -28,6 +28,7 @@ PROVIDED akashic-tui-screen
 REQUIRE cell.f
 REQUIRE ansi.f
 REQUIRE ../text/utf8.f
+REQUIRE ../utils/term.f
 
 \ =====================================================================
 \ 1. Descriptor field offsets
@@ -310,18 +311,18 @@ CREATE _SCR-UTF8-BUF 4 ALLOT
     _SCR-CUR @ _SCR-O-H + @ 0 DO              \ for each row
         _SCR-CUR @ _SCR-O-W + @ 0 DO          \ for each col
             _SCR-TMP2 @ @                      ( back-cell )
-            _SCR-TMP  @ @ OVER = 0= IF         \ front ≠ back?
-                J I _SCR-MOVE-TO               \ position cursor  (J=row I=col)
-                DUP _SCR-EMIT-ATTRS            \ attrs/colors
-                DUP _SCR-EMIT-CHAR             \ character
+            _SCR-TMP @ @ OVER = 0= IF          \ front ≠ back?
+                J I _SCR-MOVE-TO                \ position cursor  (J=row I=col)
+                DUP _SCR-EMIT-ATTRS             \ attrs/colors
+                DUP _SCR-EMIT-CHAR              \ character
                 _SCR-LAST-COL @ 1+
-                _SCR-LAST-COL !                \ advance col tracking
+                _SCR-LAST-COL !                 \ advance col tracking
             THEN
             \ Copy back → front
             _SCR-TMP2 @ @ _SCR-TMP @ !
-            8 _SCR-TMP  +!
+            8 _SCR-TMP +!
             8 _SCR-TMP2 +!
-            DROP                               \ drop back-cell
+            DROP                                \ drop back-cell
         LOOP
     LOOP
 
@@ -334,7 +335,8 @@ CREATE _SCR-UTF8-BUF 4 ALLOT
     THEN
 
     ANSI-RESET                         \ clean up attribute state
-    0 _SCR-CUR @ _SCR-O-DIRTY + ! ;   \ clear dirty flag
+    0 _SCR-CUR @ _SCR-O-DIRTY + !     \ clear dirty flag
+    TERM-FLUSH ;                       \ publish the final partial TX batch
 
 \ =====================================================================
 \ 12. SCR-RESIZE
