@@ -32,6 +32,7 @@ VARIABLE JSON-ABORT-ON-ERROR         \ -1 = abort, 0 = flag-only
 4 CONSTANT JSON-E-UNEXPECTED        \ unexpected character
 5 CONSTANT JSON-E-OVERFLOW          \ buffer overflow
 6 CONSTANT JSON-E-DEPTH             \ nesting exceeds bounded parser depth
+7 CONSTANT JSON-E-DUPLICATE         \ duplicate member selected by lookup
 
 : JSON-FAIL  ( err-code -- )
     JSON-ERR !
@@ -842,6 +843,77 @@ VARIABLE _JPQ-SAVE-ABORT
     JSON-SKIP-WS
     2R> -1 ;
 
+\ JSON-VALUE-SPAN ( value-a value-u -- value-a span-u )
+\   Return the exact span of the value at the cursor. The document must have
+\   passed JSON-VALID? before callers use this navigation helper.
+VARIABLE _JFV-A
+VARIABLE _JFV-U
+
+: JSON-VALUE-SPAN  ( value-a value-u -- value-a span-u )
+    _JFV-U ! _JFV-A !
+    _JFV-A @ _JFV-U @ JSON-SKIP-VALUE DROP _JFV-A @ -
+    _JFV-A @ SWAP ;
+
+\ JSON-FIELD ( object-a object-u key-a key-u
+\              -- value-a value-u found ior )
+\   Exact, duplicate-aware lookup in a validated object. JSON object names
+\   are unescaped before comparison, so escaped spellings cannot evade the
+\   duplicate check. Returned value spans borrow the input document.
+256 CONSTANT JSON-FIELD-MAX-KEY
+
+VARIABLE _JFL-TARGET-A
+VARIABLE _JFL-TARGET-U
+VARIABLE _JFL-CUR-A
+VARIABLE _JFL-CUR-U
+VARIABLE _JFL-KEY-A
+VARIABLE _JFL-KEY-U
+VARIABLE _JFL-FOUND-A
+VARIABLE _JFL-FOUND-U
+VARIABLE _JFL-COUNT
+VARIABLE _JFL-IOR
+CREATE _JFL-KEY-BUF JSON-FIELD-MAX-KEY ALLOT
+
+: _JSON-FIELD-MATCH?  ( -- flag )
+    _JFL-KEY-U @ _JFL-TARGET-U @ 6 * > IF 0 EXIT THEN
+    _JFL-KEY-A @ _JFL-KEY-U @ _JFL-KEY-BUF JSON-FIELD-MAX-KEY
+    JSON-UNESCAPE
+    JSON-OK? 0= IF DROP JSON-E-UNEXPECTED _JFL-IOR ! 0 EXIT THEN
+    _JFL-KEY-BUF SWAP
+    _JFL-TARGET-A @ _JFL-TARGET-U @ STR-STR= ;
+
+: JSON-FIELD  ( object-a object-u key-a key-u
+                -- value-a value-u found ior )
+    _JFL-TARGET-U ! _JFL-TARGET-A !
+    _JFL-TARGET-U @ JSON-FIELD-MAX-KEY > IF
+        2DROP 0 0 0 JSON-E-OVERFLOW EXIT
+    THEN
+    2DUP JSON-OBJECT? 0= IF 2DROP 0 0 0 JSON-E-WRONG-TYPE EXIT THEN
+    JSON-ENTER _JFL-CUR-U ! _JFL-CUR-A !
+    0 _JFL-COUNT ! 0 _JFL-IOR !
+    BEGIN
+        _JFL-CUR-A @ _JFL-CUR-U @ JSON-EACH-KEY
+        IF
+            _JFL-KEY-U ! _JFL-KEY-A ! _JFL-CUR-U ! _JFL-CUR-A !
+            _JSON-FIELD-MATCH? IF
+                _JFL-COUNT @ IF JSON-E-DUPLICATE _JFL-IOR ! THEN
+                _JFL-CUR-A @ _JFL-CUR-U @ JSON-VALUE-SPAN
+                _JFL-FOUND-U ! _JFL-FOUND-A !
+                1 _JFL-COUNT +!
+            THEN
+            _JFL-CUR-A @ _JFL-CUR-U @ JSON-NEXT DROP
+            _JFL-CUR-U ! _JFL-CUR-A !
+        ELSE
+            2DROP 2DROP
+            _JFL-IOR @ IF 0 0 0 _JFL-IOR @ EXIT THEN
+            _JFL-COUNT @ IF
+                _JFL-FOUND-A @ _JFL-FOUND-U @ -1 0
+            ELSE
+                0 0 0 0
+            THEN
+            EXIT
+        THEN
+    AGAIN ;
+
 \ =====================================================================
 \  Layer 7 — Comparison & Matching
 \ =====================================================================
@@ -1204,6 +1276,8 @@ GUARD _json-guard
 ' JSON-PATH       CONSTANT _json-path-xt
 ' JSON-PATH?      CONSTANT _json-path-q-xt
 ' JSON-EACH-KEY   CONSTANT _json-each-key-xt
+' JSON-VALUE-SPAN CONSTANT _json-value-span-xt
+' JSON-FIELD      CONSTANT _json-field-xt
 ' JSON-STRING=    CONSTANT _json-string=-xt
 ' JSON-NUMBER=    CONSTANT _json-number=-xt
 ' JSON-EMIT       CONSTANT _json-emit-xt
@@ -1270,6 +1344,8 @@ GUARD _json-guard
 : JSON-PATH       _json-path-xt _json-guard WITH-GUARD ;
 : JSON-PATH?      _json-path-q-xt _json-guard WITH-GUARD ;
 : JSON-EACH-KEY   _json-each-key-xt _json-guard WITH-GUARD ;
+: JSON-VALUE-SPAN _json-value-span-xt _json-guard WITH-GUARD ;
+: JSON-FIELD      _json-field-xt _json-guard WITH-GUARD ;
 : JSON-STRING=    _json-string=-xt _json-guard WITH-GUARD ;
 : JSON-NUMBER=    _json-number=-xt _json-guard WITH-GUARD ;
 : JSON-EMIT       _json-emit-xt _json-guard WITH-GUARD ;

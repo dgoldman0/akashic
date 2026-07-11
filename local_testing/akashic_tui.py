@@ -151,6 +151,165 @@ _ct-run
         ready_markers=("CREDENTIAL PASS",),
         stable_markers=("CREDENTIAL PASS",),
     ),
+    "http-request": Profile(
+        roots=("net/http-request.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native bounded HTTP request tests
+ENTER-USERLAND
+." [akashic] loading HTTP request writer" CR
+REQUIRE net/http-request.f
+
+VARIABLE _rt-fails
+VARIABLE _rt-checks
+VARIABLE _rt-depth
+: _rt-assert  ( flag -- )
+    1 _rt-checks +!
+    0= IF 1 _rt-fails +! ." ASSERT " _rt-checks @ . CR THEN ;
+: _rt-stack  ( -- )
+    DEPTH DUP _rt-depth @ <> IF
+        ." STACK " _rt-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _rt-depth @ = _rt-assert ;
+
+CREATE _rt-request HTTP-REQUEST-SIZE ALLOT
+CREATE _rt-buffer 1024 ALLOT
+CREATE _rt-small 66 ALLOT
+CREATE _rt-port NET-IO-PORT-SIZE ALLOT
+CREATE _rt-sink 1024 ALLOT
+CREATE _rt-expected 1024 ALLOT
+VARIABLE _rt-sink-u
+VARIABLE _rt-expected-u
+VARIABLE _rt-polls
+VARIABLE _rt-mode
+VARIABLE _rt-send-a
+VARIABLE _rt-send-u
+VARIABLE _rt-send-n
+VARIABLE _rt-zero
+VARIABLE _rt-result
+
+: _rt-e,  ( addr len -- )
+    DUP >R _rt-expected _rt-expected-u @ + SWAP CMOVE
+    R> _rt-expected-u +! ;
+: _rt-ec,  ( c -- )
+    _rt-expected _rt-expected-u @ + C! 1 _rt-expected-u +! ;
+: _rt-crlf,  ( -- ) 13 _rt-ec, 10 _rt-ec, ;
+
+: _rt-build-expected  ( -- )
+    0 _rt-expected-u !
+    S" POST /v1/responses HTTP/1.1" _rt-e, _rt-crlf,
+    S" Host: api.openai.com" _rt-e, _rt-crlf,
+    S" Authorization: Bearer test-secret" _rt-e, _rt-crlf,
+    S" Content-Type: application/json" _rt-e, _rt-crlf,
+    S" Accept: text/event-stream" _rt-e, _rt-crlf,
+    S" Connection: close" _rt-e, _rt-crlf,
+    S" Content-Length: 2" _rt-e, _rt-crlf,
+    _rt-crlf, S" {}" _rt-e, ;
+
+: _rt-poll  ( context -- ) DROP 1 _rt-polls +! ;
+: _rt-close  ( context -- ) DROP ;
+: _rt-send  ( buffer length context -- count status )
+    DROP _rt-send-u ! _rt-send-a !
+    _rt-mode @ 1 = IF 0 NIO-S-OK EXIT THEN
+    _rt-mode @ 2 = IF 0 NIO-S-FAILED EXIT THEN
+    _rt-mode @ 3 = IF 0 NIO-S-CANCELLED EXIT THEN
+    _rt-mode @ 4 = IF _rt-send-u @ 1+ NIO-S-OK EXIT THEN
+    _rt-mode @ 5 = IF -77 THROW THEN
+    _rt-send-u @ 7 MIN _rt-send-n !
+    _rt-send-a @ _rt-sink _rt-sink-u @ + _rt-send-n @ CMOVE
+    _rt-send-n @ _rt-sink-u +!
+    _rt-send-n @ NIO-S-OK ;
+
+: _rt-port-reset  ( mode -- )
+    _rt-mode ! 0 _rt-sink-u ! 0 _rt-polls !
+    _rt-port NIO-INIT
+    ['] _rt-send _rt-port NIO.SEND-XT !
+    ['] _rt-poll _rt-port NIO.POLL-XT !
+    ['] _rt-close _rt-port NIO.CLOSE-XT ! ;
+
+: _rt-request-reset  ( -- )
+    _rt-buffer 1024 _rt-request HREQ-INIT HREQ-S-OK = _rt-assert ;
+
+: _rt-build  ( -- )
+    S" POST" S" /v1/responses" _rt-request HREQ-BEGIN
+    HREQ-S-OK = _rt-assert
+    S" api.openai.com" _rt-request HREQ-HOST HREQ-S-OK = _rt-assert
+    S" test-secret" _rt-request HREQ-AUTH-BEARER HREQ-S-OK = _rt-assert
+    S" application/json" _rt-request HREQ-CONTENT-TYPE
+    HREQ-S-OK = _rt-assert
+    S" text/event-stream" _rt-request HREQ-ACCEPT HREQ-S-OK = _rt-assert
+    _rt-request HREQ-CONNECTION-CLOSE HREQ-S-OK = _rt-assert
+    S" {}" _rt-request HREQ-BODY HREQ-S-OK = _rt-assert ;
+
+: _rt-all-zero?  ( addr len -- flag )
+    -1 -ROT 0 ?DO DUP I + C@ IF SWAP DROP 0 SWAP THEN LOOP DROP ;
+
+: _rt-run  ( -- )
+    0 _rt-fails ! 0 _rt-checks ! DEPTH _rt-depth !
+    _rt-build-expected _rt-request-reset _rt-build
+    _rt-request HREQ.STATE @ HREQ-STATE-SEALED = _rt-assert
+    _rt-request HREQ.BUFFER @ _rt-request HREQ.LENGTH @
+    _rt-expected _rt-expected-u @ STR-STR= _rt-assert
+
+    0 _rt-port-reset
+    200 0 DO
+        _rt-port _rt-request HREQ-SEND-STEP _rt-result !
+        _rt-result @ HREQ-PUMP-ERROR <> _rt-assert
+        _rt-result @ HREQ-PUMP-CANCELLED <> _rt-assert
+        _rt-result @ HREQ-PUMP-DONE = IF LEAVE THEN
+    LOOP
+    _rt-request HREQ.STATE @ HREQ-STATE-SENT = _rt-assert
+    _rt-sink _rt-sink-u @ _rt-expected _rt-expected-u @ STR-STR= _rt-assert
+    _rt-polls @ 1 > _rt-assert
+    _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-DONE = _rt-assert
+
+    _rt-request HREQ-CLEAR
+    _rt-request HREQ.STATE @ HREQ-STATE-EMPTY = _rt-assert
+    _rt-buffer 1024 _rt-all-zero? _rt-assert
+    _rt-request HREQ.BUFFER @ _rt-buffer = _rt-assert
+    _rt-request HREQ.CAPACITY @ 1024 = _rt-assert
+
+    _rt-request-reset
+    S" GET" S" /bad path" _rt-request HREQ-BEGIN
+    HREQ-S-INVALID = _rt-assert
+    _rt-request HREQ.STATE @ HREQ-STATE-ERROR = _rt-assert
+
+    _rt-request-reset
+    S" GET" S" /" _rt-request HREQ-BEGIN HREQ-S-OK = _rt-assert
+    13 _rt-expected C! 10 _rt-expected 1+ C!
+    S" X-Test" _rt-expected 2 _rt-request HREQ-HEADER
+    HREQ-S-INVALID = _rt-assert
+
+    _rt-small 66 _rt-request HREQ-INIT HREQ-S-OK = _rt-assert
+    91 _rt-small 64 + C! 92 _rt-small 65 + C!
+    S" POST" S" /" _rt-request HREQ-BEGIN HREQ-S-OK = _rt-assert
+    S" this-value-is-deliberately-too-large-for-the-small-request-buffer"
+    _rt-request HREQ-AUTH-BEARER HREQ-S-CAPACITY = _rt-assert
+    _rt-small 64 + C@ 91 = _rt-assert _rt-small 65 + C@ 92 = _rt-assert
+
+    _rt-request-reset _rt-build 1 _rt-port-reset
+    _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-IDLE = _rt-assert
+    _rt-request HREQ-CLEAR _rt-request-reset _rt-build 2 _rt-port-reset
+    _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-ERROR = _rt-assert
+    _rt-request HREQ.STATUS @ HREQ-S-TRANSPORT = _rt-assert
+    _rt-request HREQ-CLEAR _rt-request-reset _rt-build 3 _rt-port-reset
+    _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-CANCELLED = _rt-assert
+    _rt-request HREQ-CLEAR _rt-request-reset _rt-build 4 _rt-port-reset
+    _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-ERROR = _rt-assert
+    _rt-request HREQ-CLEAR _rt-request-reset _rt-build 5 _rt-port-reset
+    _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-ERROR = _rt-assert
+
+    _rt-stack
+    _rt-fails @ 0= IF
+        ." HTTP REQUEST PASS " _rt-checks @ .
+    ELSE
+        ." HTTP REQUEST FAIL " _rt-fails @ . ." / " _rt-checks @ .
+    THEN CR ;
+
+_rt-run
+""",
+        ready_markers=("HTTP REQUEST PASS",),
+        stable_markers=("HTTP REQUEST PASS",),
+    ),
     "net-stream": Profile(
         roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
         resources=(),
@@ -497,7 +656,7 @@ VARIABLE _nh-zero
     _nh-long-host 65 443 -1 HTTP-CONNECT 0= _ns-assert
     HTTP-ERR @ HTTP-E-CONNECT = _ns-assert ;
 
-CREATE _np-port HIO-PORT-SIZE ALLOT
+CREATE _np-port NET-IO-PORT-SIZE ALLOT
 CREATE _np-buffer 128 ALLOT
 VARIABLE _np-position
 VARIABLE _np-mode
@@ -512,28 +671,28 @@ VARIABLE _np-result
 : _np-close  ( context -- ) DROP ;
 : _np-recv  ( buffer capacity context -- count status )
     DROP _np-capacity ! _np-buffer-a ! 1 _np-calls +!
-    _np-mode @ 1 = IF 0 HIO-S-OK EXIT THEN
-    _np-mode @ 2 = IF 0 HIO-S-FAILED EXIT THEN
-    _np-mode @ 3 = IF 0 HIO-S-CANCELLED EXIT THEN
-    _np-mode @ 4 = IF _np-capacity @ 1+ HIO-S-OK EXIT THEN
+    _np-mode @ 1 = IF 0 NIO-S-OK EXIT THEN
+    _np-mode @ 2 = IF 0 NIO-S-FAILED EXIT THEN
+    _np-mode @ 3 = IF 0 NIO-S-CANCELLED EXIT THEN
+    _np-mode @ 4 = IF _np-capacity @ 1+ NIO-S-OK EXIT THEN
     _np-mode @ 5 = IF -91 THROW THEN
-    _np-position @ _nh-response-u @ >= IF 0 HIO-S-EOF EXIT THEN
+    _np-position @ _nh-response-u @ >= IF 0 NIO-S-EOF EXIT THEN
     _nh-response-u @ _np-position @ - _np-capacity @ MIN 7 MIN
     _np-count !
     _nh-response _np-position @ + _np-buffer-a @ _np-count @ CMOVE
     _np-count @ _np-position +!
-    _np-count @ HIO-S-OK ;
+    _np-count @ NIO-S-OK ;
 
 : _np-reset  ( mode -- )
     _np-mode ! 0 _np-position ! 0 _np-calls ! 0 _np-polls !
     _nh-reset ;
 
 : _np-run  ( -- )
-    _np-port HIO-INIT
-    ['] _np-recv _np-port HIO.RECV-XT !
-    ['] _np-poll _np-port HIO.POLL-XT !
-    ['] _np-close _np-port HIO.CLOSE-XT !
-    0 _np-port HIO.CONTEXT !
+    _np-port NIO-INIT
+    ['] _np-recv _np-port NIO.RECV-XT !
+    ['] _np-poll _np-port NIO.POLL-XT !
+    ['] _np-close _np-port NIO.CLOSE-XT !
+    0 _np-port NIO.CONTEXT !
 
     1 _nh-kind ! _nh-build-length 0 _np-reset
     100 0 DO

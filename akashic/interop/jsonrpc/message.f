@@ -128,52 +128,13 @@ VARIABLE _JPM-HAS-RESULT
 VARIABLE _JPM-HAS-ERROR
 VARIABLE _JPM-LOOKUP-ERROR
 
-VARIABLE _JLK-TARGET-A
-VARIABLE _JLK-TARGET-U
-VARIABLE _JLK-CUR-A
-VARIABLE _JLK-CUR-U
-VARIABLE _JLK-KEY-A
-VARIABLE _JLK-KEY-U
-VARIABLE _JLK-FOUND-A
-VARIABLE _JLK-FOUND-U
-VARIABLE _JLK-COUNT
-CREATE _JLK-KEY-BUF 96 ALLOT
-
 : _JRPC-LOOKUP-IN  ( object-a object-u key-a key-u -- value-a value-u flag )
-    _JLK-TARGET-U ! _JLK-TARGET-A !
-    JSON-ENTER _JLK-CUR-U ! _JLK-CUR-A !
-    0 _JLK-COUNT !
-    BEGIN
-        _JLK-CUR-A @ _JLK-CUR-U @ JSON-EACH-KEY
-        IF
-            _JLK-KEY-U ! _JLK-KEY-A ! _JLK-CUR-U ! _JLK-CUR-A !
-            _JLK-KEY-U @ _JLK-TARGET-U @ 12 * <= IF
-                _JLK-KEY-A @ _JLK-KEY-U @ _JLK-KEY-BUF 96
-                _JRPC-UNESCAPE
-                DUP IF
-                    2DROP -1 _JPM-LOOKUP-ERROR !
-                ELSE
-                    DROP _JLK-KEY-BUF SWAP
-                    _JLK-TARGET-A @ _JLK-TARGET-U @ STR-STR= IF
-                        _JLK-COUNT @ IF -1 _JPM-LOOKUP-ERROR ! THEN
-                        _JLK-CUR-A @ _JLK-FOUND-A !
-                        _JLK-CUR-U @ _JLK-FOUND-U !
-                        1 _JLK-COUNT +!
-                    THEN
-                THEN
-            THEN
-            _JLK-CUR-A @ _JLK-CUR-U @ JSON-NEXT DROP
-            _JLK-CUR-U ! _JLK-CUR-A !
-        ELSE
-            2DROP 2DROP
-            _JLK-COUNT @ IF
-                _JLK-FOUND-A @ _JLK-FOUND-U @ -1
-            ELSE
-                0 0 0
-            THEN
-            EXIT
-        THEN
-    AGAIN ;
+    JSON-FIELD
+    DUP IF
+        DROP DROP 2DROP -1 _JPM-LOOKUP-ERROR ! 0 0 0
+    ELSE
+        DROP
+    THEN ;
 
 : _JRPC-ROOT-LOOKUP  ( key-a key-u -- value-a value-u flag )
     _JPM-ROOT-A @ _JPM-ROOT-U @ 2SWAP _JRPC-LOOKUP-IN ;
@@ -182,22 +143,13 @@ VARIABLE _JSP-A
 VARIABLE _JSP-U
 
 : _JRPC-VALUE-SPAN  ( value-a value-u -- value-a span-u )
-    _JSP-U ! _JSP-A !
-    _JSP-A @ _JSP-U @ JSON-SKIP-VALUE DROP _JSP-A @ -
-    _JSP-A @ SWAP ;
+    JSON-VALUE-SPAN ;
 
 \ Duplicate-aware exact-span lookup for validated protocol objects. The
 \ final IOR is nonzero only when a matching member is duplicated or malformed.
 : JRPC-FIELD  ( object-a object-u key-a key-u -- value-a value-u found ior )
-    0 _JPM-LOOKUP-ERROR !
-    _JRPC-LOOKUP-IN
-    _JPM-LOOKUP-ERROR @ IF
-        DROP 2DROP 0 0 0 JRPC-E-INVALID-PARAMS EXIT
-    THEN
-    DUP IF
-        >R _JRPC-VALUE-SPAN R> 0
-    ELSE
-        0
+    JSON-FIELD DUP IF
+        DROP DROP 2DROP 0 0 0 JRPC-E-INVALID-PARAMS
     THEN ;
 
 : _JRPC-INTEGER?  ( value-a value-u -- flag )
@@ -292,7 +244,7 @@ VARIABLE _JPE-M
     _JPM-U @ JRPC-MAX-MESSAGE > IF JRPC-E-INVALID-REQUEST EXIT THEN
     _JPM-A @ _JPM-U @ JRPC-JSON-VALID? 0= IF JRPC-E-PARSE EXIT THEN
     _JPM-A @ _JPM-U @ JSON-OBJECT? 0= IF JRPC-E-INVALID-REQUEST EXIT THEN
-    _JPM-A @ _JPM-U @ JSON-ENTER _JPM-ROOT-U ! _JPM-ROOT-A !
+    _JPM-A @ _JPM-U @ _JPM-ROOT-U ! _JPM-ROOT-A !
     0 _JPM-LOOKUP-ERROR !
 
     S" jsonrpc" _JRPC-ROOT-LOOKUP 0= IF
