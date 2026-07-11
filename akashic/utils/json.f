@@ -881,8 +881,7 @@ CREATE _JFL-KEY-BUF JSON-FIELD-MAX-KEY ALLOT
     _JFL-KEY-BUF SWAP
     _JFL-TARGET-A @ _JFL-TARGET-U @ STR-STR= ;
 
-: JSON-FIELD  ( object-a object-u key-a key-u
-                -- value-a value-u found ior )
+: JSON-FIELD  ( object-a object-u key-a key-u -- value-a value-u found ior )
     _JFL-TARGET-U ! _JFL-TARGET-A !
     _JFL-TARGET-U @ JSON-FIELD-MAX-KEY > IF
         2DROP 0 0 0 JSON-E-OVERFLOW EXIT

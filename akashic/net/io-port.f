@@ -16,18 +16,21 @@ PROVIDED akashic-net-io-port
 \ SEND-XT:  ( buffer length context -- count io-status )
 \ POLL-XT:  ( context -- )
 \ CLOSE-XT: ( context -- )
+\ OPEN-XT:  ( context -- io-status )
  0 CONSTANT _NIO-CONTEXT
  8 CONSTANT _NIO-RECV-XT
 16 CONSTANT _NIO-SEND-XT
 24 CONSTANT _NIO-POLL-XT
 32 CONSTANT _NIO-CLOSE-XT
-40 CONSTANT NET-IO-PORT-SIZE
+40 CONSTANT _NIO-OPEN-XT
+48 CONSTANT NET-IO-PORT-SIZE
 
 : NIO.CONTEXT  ( port -- a ) _NIO-CONTEXT + ;
 : NIO.RECV-XT  ( port -- a ) _NIO-RECV-XT + ;
 : NIO.SEND-XT  ( port -- a ) _NIO-SEND-XT + ;
 : NIO.POLL-XT  ( port -- a ) _NIO-POLL-XT + ;
 : NIO.CLOSE-XT ( port -- a ) _NIO-CLOSE-XT + ;
+: NIO.OPEN-XT  ( port -- a ) _NIO-OPEN-XT + ;
 
 : NIO-INIT  ( port -- ) NET-IO-PORT-SIZE 0 FILL ;
 
@@ -46,6 +49,22 @@ PROVIDED akashic-net-io-port
     ELSE
         DROP
     THEN ;
+
+VARIABLE _NIOO-PORT
+VARIABLE _NIOO-XT
+VARIABLE _NIOO-STATUS
+
+: _NIO-OPEN-INNER  ( -- )
+    _NIOO-PORT @ NIO.CONTEXT @ _NIOO-XT @ EXECUTE _NIOO-STATUS ! ;
+
+: NIO-OPEN  ( port -- io-status )
+    DUP 0= IF DROP NIO-S-FAILED EXIT THEN
+    DUP _NIOO-PORT ! NIO.OPEN-XT @ DUP 0= IF
+        DROP NIO-S-OK EXIT
+    THEN
+    _NIOO-XT ! NIO-S-FAILED _NIOO-STATUS !
+    ['] _NIO-OPEN-INNER CATCH IF NIO-S-FAILED EXIT THEN
+    _NIOO-STATUS @ ;
 
 VARIABLE _NIOR-PORT
 VARIABLE _NIOR-XT

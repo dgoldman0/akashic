@@ -150,6 +150,36 @@ DEFER _CSJE-SCHEMA
     S" additionalProperties" 0 JSON-KV-BOOL
     JSON-} ;
 
+\ OpenAI strict function schemas require every declared object property to be
+\ required. The ordinary projection preserves optional Akashic fields, so
+\ protocol adapters can use this predicate to enable strict mode only when the
+\ source schema actually satisfies that stronger contract.
+\ ( schema depth -- flag )
+: _CSJSON-STRICT-R?
+    DUP IVJSON-MAX-DEPTH >= IF 2DROP 0 EXIT THEN
+    >R
+    DUP 0= IF DROP R> DROP -1 EXIT THEN
+    DUP CS.TYPE-MASK @ CV-T-LIST CS-TYPE-BIT AND IF
+        DUP CS.ITEM @ ?DUP IF
+            R@ 1+ RECURSE 0= IF DROP R> DROP 0 EXIT THEN
+        THEN
+    THEN
+    DUP CS.TYPE-MASK @ CV-T-MAP CS-TYPE-BIT AND IF
+        DUP CS.FIELD-N @ 0 ?DO
+            DUP CS.FIELDS @ I CS-FIELD-SIZE * + DUP CSF.FLAGS @
+            CSF-F-REQUIRED AND 0= IF
+                2DROP R> DROP 0 UNLOOP EXIT
+            THEN
+            CSF.SCHEMA @ R@ 1+ RECURSE 0= IF
+                DROP R> DROP 0 UNLOOP EXIT
+            THEN
+        LOOP
+    THEN
+    DROP R> DROP -1 ;
+
+\ ( schema -- flag )
+: CSJSON-STRICT?  0 _CSJSON-STRICT-R? ;
+
 : CSJSON-INPUT-WRITE  ( schema -- ior )
     DUP 0= IF DROP CSJSON-NO-ARGS-WRITE 0 EXIT THEN
     DUP CS.TYPE-MASK @ CV-T-NULL CS-TYPE-BIT = IF

@@ -23,10 +23,10 @@ python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
 Profiles are `credential`, `http-request`, `net-stream`, `mcp`,
-`mcp-component`, `codec-json`, `jsonrpc`, `interop` (the non-TUI runtime and
-interoperability contracts), `agent` (provider-neutral conversations),
-`agent-ui`, `desktop` (Desk with all five applets), `desktop-agent`, `pad`,
-`fexplorer`, `daybook`, and `grid`.
+`mcp-component`, `codec-json`, `jsonrpc`, `openai-codec`, `openai-provider`,
+`interop` (the non-TUI runtime and interoperability contracts), `agent`
+(provider-neutral conversations), `agent-ui`, `desktop` (Desk with all five
+applets), `desktop-agent`, `pad`, `fexplorer`, `daybook`, and `grid`.
 Generated images, terminal text, cell JSON, and PNG captures go under
 `local_testing/out/`.
 
@@ -41,6 +41,8 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `mcp-component` | native component catalog mapping, stable names and URIs, approved persistence, denial, approval-required, timeout, malformed arguments, resources, stale targets, and stack balance |
 | `codec-json` | owned value decode/encode, nested containers, Unicode, duplicate rejection, schema coercion, JSON Schema projection, bounds, and stack balance |
 | `jsonrpc` | strict native JSON grammar, JSON-RPC message forms, escaped methods, bounded serialization, method dispatch, handler faults, and stack balance |
+| `openai-codec` | native Responses request projection, strict tool schemas and stable names, stateless continuation history, representative stream-event decoding, provider construction/binding, credential-backed runtime connection, bounds, and stack balance |
+| `openai-provider` | a fully in-guest HTTP/SSE fixture through request streaming, tool discovery, persistent-write approval, native capability execution, stateless tool continuation, final transcript text, cancellation, credential-use accounting, request zeroization, and stack balance |
 | `interop` | instance-relative state, isolated instances, registry lookup, bounded request dispatch, and typed values without loading TUI |
 | `agent` | native offline fallback, provider connection, streamed transcript assembly, approval resolution, cancellation, and owned conversation cleanup without loading TUI |
 | `agent-ui` | transcript, streaming, prompt, review, cancellation, reconnect, resize, and terminal rendering |
@@ -52,6 +54,8 @@ The smoke journeys exercise application behavior, not just boot markers:
 
 Run the focused profile plus `desktop-agent` before changing shared TUI, VFS,
 agent, or app-shell behavior. The normal suite is fully native and offline.
+The OpenAI profiles use a fixed in-guest test credential and deterministic
+transport callbacks; they never contact OpenAI or require a developer API key.
 
 ## Shared Live Environment
 

@@ -26,7 +26,8 @@ DEFAULT_MEGAPAD_ROOT = AKASHIC_ROOT.parent / "megapad"
 OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
 REQUIRE_RE = re.compile(r"^\s*REQUIRE\s+(\S+)", re.MULTILINE)
 PROVIDED_RE = re.compile(r"^\s*PROVIDED\s+(\S+)", re.MULTILINE)
-MODULE_KEY_BYTES = 24
+# KDOS stores a terminating NUL in its 24-byte NAMEBUF, leaving 23 key bytes.
+MODULE_KEY_BYTES = 23
 
 
 def _megapad_root() -> Path:
@@ -309,6 +310,590 @@ _rt-run
 """,
         ready_markers=("HTTP REQUEST PASS",),
         stable_markers=("HTTP REQUEST PASS",),
+    ),
+    "openai-codec": Profile(
+        roots=(
+            "agent/providers/openai/request-codec.f",
+            "agent/providers/openai/event-codec.f",
+            "agent/providers/openai/responses.f",
+            "agent/runtime.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native OpenAI Responses codec tests
+ENTER-USERLAND
+." [akashic] loading OpenAI Responses codecs" CR
+REQUIRE agent/providers/openai/config.f
+REQUIRE agent/tool-gateway.f
+REQUIRE interop/codecs/json-schema.f
+REQUIRE agent/providers/openai/request-codec.f
+REQUIRE agent/providers/openai/event-codec.f
+REQUIRE agent/providers/openai/responses.f
+REQUIRE agent/runtime.f
+
+VARIABLE _oc-fails
+VARIABLE _oc-checks
+VARIABLE _oc-depth
+: _oc-assert  ( flag -- )
+    1 _oc-checks +!
+    0= IF 1 _oc-fails +! ." ASSERT " _oc-checks @ . CR THEN ;
+: _oc-stack  ( -- )
+    DEPTH DUP _oc-depth @ <> IF
+        ." STACK " _oc-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _oc-depth @ = _oc-assert ;
+
+CREATE _oc-config OPENAI-CONFIG-SIZE ALLOT
+CREATE _oc-credential CREDENTIAL-SIZE ALLOT
+CREATE _oc-event OPENAI-EVENT-SIZE ALLOT
+CREATE _oc-port NET-IO-PORT-SIZE ALLOT
+CREATE _oc-out 65536 ALLOT
+VARIABLE _oc-out-u
+CREATE _oc-json 32768 ALLOT
+VARIABLE _oc-json-u
+CREATE _oc-name OAI-TOOL-NAME-CAPACITY ALLOT
+VARIABLE _oc-name-u
+
+CREATE _oc-component COMP-DESC ALLOT
+CREATE _oc-capability CAP-DESC ALLOT
+CREATE _oc-schema CS-SIZE ALLOT
+CREATE _oc-policy CPOLICY-SIZE ALLOT
+VARIABLE _oc-registry
+VARIABLE _oc-instance
+VARIABLE _oc-bus
+VARIABLE _oc-gateway
+VARIABLE _oc-provider
+VARIABLE _oc-runtime
+
+: _oc-handler  ( request instance -- status )
+    2DROP CBUS-S-OK ;
+
+: _oc-setup-tools  ( -- )
+    _oc-schema CS-INIT CV-T-STRING _oc-schema CS-ALLOW!
+    256 _oc-schema CS-MAX-LEN!
+    _oc-component COMP-DESC-INIT
+    S" org.akashic.test.openai"
+    _oc-component COMP.ID-U ! _oc-component COMP.ID-A !
+    S" 1.0.0" _oc-component COMP.VERSION-U ! _oc-component COMP.VERSION-A !
+    8 _oc-component COMP.STATE-SIZE !
+    _oc-capability CAP-DESC-INIT
+    CAP-K-COMMAND _oc-capability CAP.KIND !
+    S" daybook.task.capture"
+    _oc-capability CAP.ID-U ! _oc-capability CAP.ID-A !
+    S" Capture task" _oc-capability CAP.TITLE-U ! _oc-capability CAP.TITLE-A !
+    S" Capture a task in Daybook"
+    _oc-capability CAP.DESC-U ! _oc-capability CAP.DESC-A !
+    _oc-schema _oc-capability CAP.IN-SCHEMA !
+    CAP-E-MUTATE CAP-E-PERSIST OR _oc-capability CAP.EFFECTS !
+    ['] _oc-handler _oc-capability CAP.HANDLER-XT !
+    _oc-capability _oc-component COMP.CAPS-A !
+    1 _oc-component COMP.CAPS-N !
+    _oc-policy CPOLICY-INIT
+    CREG-NEW DROP _oc-registry !
+    _oc-component _oc-registry @ CREG-TYPE+ DROP
+    _oc-component CINST-NEW DROP _oc-instance !
+    _oc-instance @ _oc-registry @ CREG-INST+ DROP
+    _oc-registry @ _oc-policy CBUS-NEW DROP _oc-bus !
+    _oc-registry @ _oc-bus @ _oc-instance @ ATOOLG-NEW
+    DROP _oc-gateway ! ;
+
+: _oc-json-begin  ( -- )
+    JSON-BUILD-RESET _oc-json 32768 JSON-SET-OUTPUT ;
+: _oc-json-end  ( -- ) JSON-OUTPUT-RESULT NIP _oc-json-u ! ;
+
+: _oc-start-request  ( -- status )
+    S" Add milk to tomorrow's list" _oc-config _oc-gateway @
+    _oc-out 65536 OAI-RESPONSES-START-JSON
+    SWAP _oc-out-u ! ;
+
+: _oc-test-config-and-request  ( -- )
+    _oc-config OAIC-INIT
+    _oc-credential CRED-INIT
+    S" test-api-key" _oc-credential CRED-SET DROP
+    _oc-credential _oc-config OAIC-CREDENTIAL! DROP
+    _oc-config OAIC-HOST S" api.openai.com" STR-STR= _oc-assert
+    _oc-config OAIC-PATH S" /v1/responses" STR-STR= _oc-assert
+    _oc-config OAIC-MODEL S" gpt-5.5" STR-STR= _oc-assert
+    _oc-config OAIC.MAX-OUTPUT @ 262144 = _oc-assert
+    S" You assist the active Akashic applet."
+    _oc-config OAIC-INSTRUCTIONS! OAIC-S-OK = _oc-assert
+    S" bad host" _oc-config OAIC-HOST! OAIC-S-INVALID = _oc-assert
+    _oc-setup-tools
+    _oc-gateway @ ATOOLG-TOOL-N 1 = _oc-assert
+    0 _oc-gateway @ ATOOLG-TOOL-NTH _oc-capability = _oc-assert
+    _oc-gateway @ OAI-GATEWAY-TOOLS-VALID? _oc-assert
+    _oc-port NIO-INIT
+    _oc-config _oc-port OPENAI-PROVIDER-NEW
+    DUP OAIR-S-OK = _oc-assert DROP DUP _oc-provider !
+    _oc-gateway @ OVER APROV-BIND-TOOLS OAIR-S-OK = _oc-assert
+    DUP ARUNTIME-NEW
+    DUP 0= _oc-assert DROP DUP _oc-runtime !
+    _oc-gateway @ OVER ARUNTIME-TOOL-GATEWAY!
+    ARUNTIME-FREE
+    APROV-FREE 0 _oc-provider ! 0 _oc-runtime !
+    _oc-capability _oc-name OAI-TOOL-NAME-CAPACITY OAI-TOOL-NAME
+    DUP OAIREQ-S-OK = _oc-assert DROP
+    DUP _oc-name-u !
+    DUP 64 <= _oc-assert
+    _oc-name SWAP 46 STR-INDEX 0< _oc-assert
+
+    _oc-start-request OAIREQ-S-OK = _oc-assert
+    _oc-out _oc-out-u @ JSON-VALID? _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" model" JSON-KEY JSON-GET-STRING
+    S" gpt-5.5" STR-STR= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" stream" JSON-KEY
+    JSON-GET-BOOL _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" store" JSON-KEY
+    JSON-GET-BOOL 0= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" include" JSON-KEY
+    JSON-ENTER JSON-COUNT 1 = _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" parallel_tool_calls" JSON-KEY
+    JSON-GET-BOOL 0= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" tools" JSON-KEY
+    JSON-ENTER JSON-COUNT 1 = _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" tools" JSON-KEY JSON-ENTER
+    0 JSON-NTH JSON-ENTER
+    S" type" JSON-KEY JSON-GET-STRING S" function" STR-STR= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" tools" JSON-KEY JSON-ENTER
+    0 JSON-NTH JSON-ENTER S" strict" JSON-KEY JSON-GET-BOOL _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" tools" JSON-KEY JSON-ENTER
+    0 JSON-NTH JSON-ENTER S" parameters" JSON-KEY JSON-OBJECT? _oc-assert
+
+    _oc-json-begin JSON-[
+        JSON-{ S" type" S" reasoning" JSON-KV-ESTR
+        S" encrypted_content" S" abc" JSON-KV-ESTR JSON-}
+        JSON-{ S" type" S" function_call" JSON-KV-ESTR
+        S" call_id" S" call_1" JSON-KV-ESTR
+        S" name" S" test" JSON-KV-ESTR
+        S" arguments" S" {}" JSON-KV-ESTR JSON-}
+    JSON-] _oc-json-end
+    S" Add milk to tomorrow's list" _oc-json _oc-json-u @
+    S" call_1" S" ok" _oc-config _oc-gateway @
+    _oc-out 65536 OAI-RESPONSES-CONTINUE-JSON
+    DUP OAIREQ-S-OK = _oc-assert DROP _oc-out-u !
+    _oc-out _oc-out-u @ JSON-VALID? _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    JSON-COUNT 4 = _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    3 JSON-NTH JSON-ENTER S" type" JSON-KEY JSON-GET-STRING
+    S" function_call_output" STR-STR= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    3 JSON-NTH JSON-ENTER S" call_id" JSON-KEY JSON-GET-STRING
+    S" call_1" STR-STR= _oc-assert
+
+    _oc-config OAIC.FLAGS DUP @ OAIC-F-STORE OR SWAP !
+    _oc-start-request OAIREQ-S-OK = _oc-assert
+    _oc-out _oc-out-u @ S" include" JSON-FIELD
+    DUP 0= _oc-assert DROP 0= _oc-assert 2DROP
+    S" short" _oc-config 0 _oc-out 8 OAI-RESPONSES-START-JSON
+    OAIREQ-S-CAPACITY = _oc-assert DROP ;
+
+: _oc-event-created  ( -- )
+    _oc-json-begin JSON-{
+    S" type" S" response.created" JSON-KV-ESTR
+    S" response" JSON-KEY: JSON-{ S" id" S" resp_1" JSON-KV-ESTR JSON-}
+    JSON-} _oc-json-end ;
+
+: _oc-event-text  ( -- )
+    _oc-json-begin JSON-{
+    S" type" S" response.output_text.delta" JSON-KV-ESTR
+    S" response_id" S" resp_1" JSON-KV-ESTR
+    S" output_index" 0 JSON-KV-NUM
+    S" delta" JSON-KEY: S" Hello" JSON-ESTR
+    JSON-} _oc-json-end ;
+
+: _oc-event-item  ( done? -- )
+    _oc-json-begin JSON-{
+    IF S" type" S" response.output_item.done" JSON-KV-ESTR
+    ELSE S" type" S" response.output_item.added" JSON-KV-ESTR THEN
+    S" response_id" S" resp_1" JSON-KV-ESTR
+    S" output_index" 0 JSON-KV-NUM
+    S" item" JSON-KEY: JSON-{
+        S" type" S" function_call" JSON-KV-ESTR
+        S" id" S" fc_1" JSON-KV-ESTR
+        S" call_id" S" call_1" JSON-KV-ESTR
+        S" name" JSON-KEY: _oc-name _oc-name-u @ JSON-ESTR
+        S" arguments" S" {}" JSON-KV-ESTR
+    JSON-} JSON-} _oc-json-end ;
+
+: _oc-event-arguments  ( done? -- )
+    _oc-json-begin JSON-{
+    IF S" type" S" response.function_call_arguments.done" JSON-KV-ESTR
+       S" arguments" S" {}" JSON-KV-ESTR
+    ELSE S" type" S" response.function_call_arguments.delta" JSON-KV-ESTR
+       S" delta" S" {" JSON-KV-ESTR THEN
+    S" response_id" S" resp_1" JSON-KV-ESTR
+    S" output_index" 0 JSON-KV-NUM
+    JSON-} _oc-json-end ;
+
+: _oc-event-error  ( -- )
+    _oc-json-begin JSON-{
+    S" type" S" response.failed" JSON-KV-ESTR
+    S" response" JSON-KEY: JSON-{
+        S" id" S" resp_1" JSON-KV-ESTR
+        S" error" JSON-KEY: JSON-{ S" message" S" denied" JSON-KV-ESTR JSON-}
+    JSON-} JSON-} _oc-json-end ;
+
+: _oc-parse-event  ( -- status )
+    _oc-json _oc-json-u @ _oc-event OAIEV-PARSE ;
+
+: _oc-test-events  ( -- )
+    _oc-event OAIEV-INIT
+    _oc-event-created _oc-parse-event OAIEV-S-OK = _oc-assert
+    _oc-event OAIEV.KIND @ OAIEV-K-RESPONSE-CREATED = _oc-assert
+    _oc-event OAIEV-RESPONSE-ID S" resp_1" STR-STR= _oc-assert
+    _oc-event-text _oc-parse-event OAIEV-S-OK = _oc-assert
+    _oc-event OAIEV.KIND @ OAIEV-K-TEXT-DELTA = _oc-assert
+    _oc-event OAIEV-DELTA S" Hello" STR-STR= _oc-assert
+    0 _oc-event-item _oc-parse-event OAIEV-S-OK = _oc-assert
+    _oc-event OAIEV.KIND @ OAIEV-K-OUTPUT-ADDED = _oc-assert
+    _oc-event OAIEV-CALL-ID S" call_1" STR-STR= _oc-assert
+    _oc-event OAIEV-NAME NIP 0> _oc-assert
+    _oc-event OAIEV-ITEM JSON-OBJECT? _oc-assert
+    0 _oc-event-arguments _oc-parse-event OAIEV-S-OK = _oc-assert
+    _oc-event OAIEV-DELTA S" {" STR-STR= _oc-assert
+    -1 _oc-event-arguments _oc-parse-event OAIEV-S-OK = _oc-assert
+    _oc-event OAIEV-ARGUMENTS S" {}" STR-STR= _oc-assert
+    -1 _oc-event-item _oc-parse-event OAIEV-S-OK = _oc-assert
+    _oc-event OAIEV.KIND @ OAIEV-K-OUTPUT-DONE = _oc-assert
+    _oc-event-error _oc-parse-event OAIEV-S-OK = _oc-assert
+    _oc-event OAIEV.KIND @ OAIEV-K-RESPONSE-FAILED = _oc-assert
+    _oc-event OAIEV-MESSAGE S" denied" STR-STR= _oc-assert
+    S" {" _oc-event OAIEV-PARSE OAIEV-S-INVALID = _oc-assert ;
+
+: _oc-cleanup  ( -- )
+    _oc-gateway @ ATOOLG-FREE
+    _oc-bus @ CBUS-FREE
+    _oc-instance @ _oc-registry @ CREG-INST- DROP
+    _oc-registry @ CREG-FREE
+    _oc-instance @ CINST-FREE
+    _oc-credential CRED-CLEAR ;
+
+: _oc-run  ( -- )
+    0 _oc-fails ! 0 _oc-checks ! DEPTH _oc-depth !
+    _oc-test-config-and-request
+    _oc-test-events
+    _oc-cleanup _oc-stack
+    _oc-fails @ 0= IF
+        ." OPENAI CODEC PASS " _oc-checks @ .
+    ELSE
+        ." OPENAI CODEC FAIL " _oc-fails @ . ." / " _oc-checks @ .
+    THEN CR ;
+
+_oc-run
+""",
+        ready_markers=("OPENAI CODEC PASS",),
+        stable_markers=("OPENAI CODEC PASS",),
+    ),
+    "openai-provider": Profile(
+        roots=(
+            "agent/providers/openai/responses.f",
+            "agent/runtime.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native OpenAI provider fixture
+ENTER-USERLAND
+." [akashic] loading OpenAI provider fixture" CR
+REQUIRE agent/providers/openai/responses.f
+REQUIRE agent/runtime.f
+
+VARIABLE _op-fails
+VARIABLE _op-checks
+VARIABLE _op-depth
+: _op-assert  ( flag -- )
+    1 _op-checks +!
+    0= IF 1 _op-fails +! ." ASSERT " _op-checks @ . CR THEN ;
+: _op-stack  ( -- )
+    DEPTH DUP _op-depth @ <> IF
+        ." STACK " _op-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _op-depth @ = _op-assert ;
+
+CREATE _op-port NET-IO-PORT-SIZE ALLOT
+CREATE _op-response 49152 ALLOT
+VARIABLE _op-response-u
+VARIABLE _op-response-pos
+CREATE _op-body 32768 ALLOT
+VARIABLE _op-body-u
+CREATE _op-json 16384 ALLOT
+VARIABLE _op-json-u
+CREATE _op-args 1024 ALLOT
+VARIABLE _op-args-u
+CREATE _op-request 67584 ALLOT
+VARIABLE _op-request-u
+VARIABLE _op-opens
+VARIABLE _op-closes
+VARIABLE _op-polls
+VARIABLE _op-send-a
+VARIABLE _op-send-u
+VARIABLE _op-send-n
+VARIABLE _op-recv-a
+VARIABLE _op-recv-u
+VARIABLE _op-recv-n
+
+CREATE _op-config OPENAI-CONFIG-SIZE ALLOT
+CREATE _op-credential CREDENTIAL-SIZE ALLOT
+CREATE _op-component COMP-DESC ALLOT
+CREATE _op-capability CAP-DESC ALLOT
+CREATE _op-schema CS-SIZE ALLOT
+CREATE _op-policy CPOLICY-SIZE ALLOT
+CREATE _op-tool-name OAI-TOOL-NAME-CAPACITY ALLOT
+VARIABLE _op-tool-name-u
+VARIABLE _op-registry
+VARIABLE _op-instance
+VARIABLE _op-bus
+VARIABLE _op-gateway
+VARIABLE _op-provider
+VARIABLE _op-runtime
+VARIABLE _op-handler-hits
+VARIABLE _op-found-text
+
+: _op-b,  ( addr len -- )
+    _op-body-u @ OVER + 32768 > IF 2DROP EXIT THEN
+    DUP >R _op-body _op-body-u @ + SWAP CMOVE R> _op-body-u +! ;
+: _op-bc,  ( c -- )
+    _op-body _op-body-u @ + C! 1 _op-body-u +! ;
+: _op-r,  ( addr len -- )
+    _op-response-u @ OVER + 49152 > IF 2DROP EXIT THEN
+    DUP >R _op-response _op-response-u @ + SWAP CMOVE
+    R> _op-response-u +! ;
+: _op-rc,  ( c -- )
+    _op-response _op-response-u @ + C! 1 _op-response-u +! ;
+: _op-crlf-r,  ( -- ) 13 _op-rc, 10 _op-rc, ;
+
+: _op-json-begin  ( -- )
+    JSON-BUILD-RESET _op-json 16384 JSON-SET-OUTPUT ;
+: _op-json-end  ( -- ) JSON-OUTPUT-RESULT NIP _op-json-u ! ;
+
+: _op-sse-event,  ( -- )
+    S" data: " _op-b,
+    _op-json _op-json-u @ _op-b,
+    10 _op-bc, 10 _op-bc, ;
+
+: _op-args-build  ( -- )
+    JSON-BUILD-RESET _op-args 1024 JSON-SET-OUTPUT
+    JSON-{ S" value" S" buy milk" JSON-KV-ESTR JSON-}
+    JSON-OUTPUT-RESULT NIP _op-args-u ! ;
+
+: _op-created,  ( id-a id-u -- )
+    _op-json-begin JSON-{
+    S" type" S" response.created" JSON-KV-ESTR
+    S" response" JSON-KEY: JSON-{ S" id" 2SWAP JSON-KV-ESTR JSON-}
+    JSON-} _op-json-end _op-sse-event, ;
+
+: _op-completed,  ( id-a id-u -- )
+    _op-json-begin JSON-{
+    S" type" S" response.completed" JSON-KV-ESTR
+    S" response" JSON-KEY: JSON-{ S" id" 2SWAP JSON-KV-ESTR JSON-}
+    JSON-} _op-json-end _op-sse-event, ;
+
+: _op-tool-item,  ( -- )
+    _op-json-begin JSON-{
+    S" type" S" response.output_item.done" JSON-KV-ESTR
+    S" response_id" S" resp_tool" JSON-KV-ESTR
+    S" output_index" 0 JSON-KV-NUM
+    S" item" JSON-KEY: JSON-{
+        S" type" S" function_call" JSON-KV-ESTR
+        S" id" S" fc_1" JSON-KV-ESTR
+        S" call_id" S" call_1" JSON-KV-ESTR
+        S" name" JSON-KEY: _op-tool-name _op-tool-name-u @ JSON-ESTR
+        S" arguments" JSON-KEY: _op-args _op-args-u @ JSON-ESTR
+    JSON-} JSON-} _op-json-end _op-sse-event, ;
+
+: _op-text,  ( -- )
+    _op-json-begin JSON-{
+    S" type" S" response.output_text.delta" JSON-KV-ESTR
+    S" response_id" S" resp_final" JSON-KV-ESTR
+    S" output_index" 0 JSON-KV-NUM
+    S" delta" S" Task captured." JSON-KV-ESTR
+    JSON-} _op-json-end _op-sse-event, ;
+
+: _op-http-wrap  ( -- )
+    0 _op-response-u !
+    S" HTTP/1.1 200 OK" _op-r, _op-crlf-r,
+    S" Content-Type: text/event-stream" _op-r, _op-crlf-r,
+    S" Content-Length: " _op-r,
+    _op-body-u @ NUM>STR _op-r, _op-crlf-r,
+    S" Connection: close" _op-r, _op-crlf-r,
+    _op-crlf-r,
+    _op-body _op-body-u @ _op-r, ;
+
+: _op-build-first-response  ( -- )
+    0 _op-body-u ! _op-args-build
+    S" resp_tool" _op-created,
+    _op-tool-item,
+    S" resp_tool" _op-completed,
+    _op-http-wrap ;
+
+: _op-build-final-response  ( -- )
+    0 _op-body-u !
+    S" resp_final" _op-created,
+    _op-text,
+    S" resp_final" _op-completed,
+    _op-http-wrap ;
+
+: _op-open  ( context -- status )
+    DROP 1 _op-opens +! 0 _op-response-pos ! 0 _op-request-u !
+    _op-opens @ 1 = IF _op-build-first-response ELSE _op-build-final-response THEN
+    NIO-S-OK ;
+
+: _op-close  ( context -- ) DROP 1 _op-closes +! ;
+: _op-poll  ( context -- ) DROP 1 _op-polls +! ;
+
+: _op-send  ( buffer length context -- count status )
+    DROP _op-send-u ! _op-send-a !
+    _op-request-u @ _op-send-u @ + 67584 > IF 0 NIO-S-FAILED EXIT THEN
+    _op-send-u @ 97 MIN _op-send-n !
+    _op-send-a @ _op-request _op-request-u @ + _op-send-n @ CMOVE
+    _op-send-n @ _op-request-u +!
+    _op-send-n @ NIO-S-OK ;
+
+: _op-recv  ( buffer capacity context -- count status )
+    DROP _op-recv-u ! _op-recv-a !
+    _op-response-pos @ _op-response-u @ >= IF 0 NIO-S-EOF EXIT THEN
+    _op-response-u @ _op-response-pos @ - _op-recv-u @ MIN 53 MIN
+    _op-recv-n !
+    _op-response _op-response-pos @ + _op-recv-a @ _op-recv-n @ CMOVE
+    _op-recv-n @ _op-response-pos +!
+    _op-recv-n @ NIO-S-OK ;
+
+: _op-handler  ( request instance -- status )
+    DROP 1 _op-handler-hits +!
+    DUP CBR.ARGS DUP CV-TYPE@ CV-T-STRING = _op-assert
+    DUP CV-DATA@ SWAP CV-LEN@ S" buy milk" STR-STR= _op-assert
+    S" captured" 2 PICK CBR.RESULT CV-STRING! IF
+        DROP CBUS-S-FAILED EXIT
+    THEN
+    DROP CBUS-S-OK ;
+
+: _op-setup  ( -- )
+    0 _op-opens ! 0 _op-closes ! 0 _op-polls ! 0 _op-handler-hits !
+    _op-port NIO-INIT
+    ['] _op-open _op-port NIO.OPEN-XT !
+    ['] _op-close _op-port NIO.CLOSE-XT !
+    ['] _op-poll _op-port NIO.POLL-XT !
+    ['] _op-send _op-port NIO.SEND-XT !
+    ['] _op-recv _op-port NIO.RECV-XT !
+    ." [openai-provider] port" CR
+
+    _op-config OAIC-INIT
+    _op-credential CRED-INIT
+    S" test-api-key" _op-credential CRED-SET DROP
+    _op-credential _op-config OAIC-CREDENTIAL! DROP
+    ." [openai-provider] config" CR
+
+    _op-schema CS-INIT CV-T-STRING _op-schema CS-ALLOW!
+    256 _op-schema CS-MAX-LEN!
+    _op-component COMP-DESC-INIT
+    S" org.akashic.test.openai-provider"
+    _op-component COMP.ID-U ! _op-component COMP.ID-A !
+    S" 1.0.0" _op-component COMP.VERSION-U ! _op-component COMP.VERSION-A !
+    8 _op-component COMP.STATE-SIZE !
+    _op-capability CAP-DESC-INIT
+    CAP-K-COMMAND _op-capability CAP.KIND !
+    S" daybook.task.capture"
+    _op-capability CAP.ID-U ! _op-capability CAP.ID-A !
+    S" Capture task" _op-capability CAP.TITLE-U ! _op-capability CAP.TITLE-A !
+    S" Capture a task in Daybook"
+    _op-capability CAP.DESC-U ! _op-capability CAP.DESC-A !
+    _op-schema _op-capability CAP.IN-SCHEMA !
+    CAP-E-MUTATE CAP-E-PERSIST OR _op-capability CAP.EFFECTS !
+    ['] _op-handler _op-capability CAP.HANDLER-XT !
+    _op-capability _op-component COMP.CAPS-A !
+    1 _op-component COMP.CAPS-N !
+    _op-policy CPOLICY-INIT
+    ." [openai-provider] descriptors" CR
+    CREG-NEW DROP _op-registry !
+    _op-component _op-registry @ CREG-TYPE+ DROP
+    _op-component CINST-NEW DROP _op-instance !
+    _op-instance @ _op-registry @ CREG-INST+ DROP
+    _op-registry @ _op-policy CBUS-NEW DROP _op-bus !
+    _op-registry @ _op-bus @ _op-instance @ ATOOLG-NEW DROP _op-gateway !
+    ." [openai-provider] gateway" CR
+    _op-capability _op-tool-name OAI-TOOL-NAME-CAPACITY OAI-TOOL-NAME
+    DROP _op-tool-name-u !
+
+    _op-config _op-port OPENAI-PROVIDER-NEW DROP _op-provider !
+    ." [openai-provider] provider" CR
+    ." [openai-provider] tools " _op-gateway @ ATOOLG-TOOL-N . CR
+    _op-gateway @ OAI-GATEWAY-TOOLS-VALID? _op-assert
+    ." [openai-provider] tools-valid" CR
+    _op-gateway @ _op-provider @ APROV-BIND-TOOLS OAIR-S-OK = _op-assert
+    ." [openai-provider] bound" CR
+    _op-provider @ ARUNTIME-NEW DROP _op-runtime !
+    ." [openai-provider] runtime-new" CR
+    _op-gateway @ _op-runtime @ ARUNTIME-TOOL-GATEWAY!
+    ." [openai-provider] runtime" CR ;
+
+: _op-pump-until-review  ( -- )
+    3000 0 DO
+        8 _op-runtime @ ARUNTIME-PUMP DROP
+        8 _op-bus @ CBUS-PUMP DROP
+        _op-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = IF LEAVE THEN
+    LOOP ;
+
+: _op-pump-until-idle  ( -- )
+    5000 0 DO
+        8 _op-runtime @ ARUNTIME-PUMP DROP
+        8 _op-bus @ CBUS-PUMP DROP
+        _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = IF LEAVE THEN
+    LOOP ;
+
+: _op-test-run  ( -- )
+    4 _op-runtime @ ARUNTIME-PUMP DROP
+    _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _op-assert
+    S" Please capture a milk task" _op-runtime @ ARUNTIME-SEND 0= _op-assert
+    _op-pump-until-review
+    _op-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _op-assert
+    -1 _op-runtime @ ARUNTIME-RESOLVE 0= _op-assert
+    _op-pump-until-idle
+    _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _op-assert
+    _op-opens @ 2 = _op-assert
+    _op-closes @ 2 >= _op-assert
+    _op-handler-hits @ 1 = _op-assert
+    _op-credential CRED.USES @ 2 = _op-assert
+    _op-request _op-request-u @ S" Authorization: Bearer "
+    STR-STR-CONTAINS _op-assert
+    _op-runtime @ ARUNTIME.CONVERSATION @ DUP ACONV.COUNT @ 0> _op-assert
+    0 _op-found-text !
+    DUP ACONV.COUNT @ 0 ?DO
+        I OVER ACONV-NTH AMSG-TEXT S" Task captured."
+        STR-STR-CONTAINS IF -1 _op-found-text ! THEN
+    LOOP
+    DROP _op-found-text @ _op-assert
+
+    S" cancel now" _op-runtime @ ARUNTIME-SEND 0= _op-assert
+    _op-runtime @ ARUNTIME-CANCEL 0= _op-assert
+    4 _op-runtime @ ARUNTIME-PUMP DROP
+    _op-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _op-assert ;
+
+: _op-cleanup  ( -- )
+    _op-runtime @ ARUNTIME-FREE
+    _op-provider @ APROV-FREE
+    _op-gateway @ ATOOLG-FREE
+    _op-bus @ CBUS-FREE
+    _op-instance @ _op-registry @ CREG-INST- DROP
+    _op-registry @ CREG-FREE
+    _op-instance @ CINST-FREE
+    _op-credential CRED-CLEAR ;
+
+: _op-run  ( -- )
+    0 _op-fails ! 0 _op-checks ! DEPTH _op-depth !
+    ." [openai-provider] setup" CR
+    _op-setup
+    ." [openai-provider] run" CR
+    _op-test-run
+    ." [openai-provider] cleanup" CR
+    _op-cleanup _op-stack
+    _op-fails @ 0= IF
+        ." OPENAI PROVIDER PASS " _op-checks @ .
+    ELSE
+        ." OPENAI PROVIDER FAIL " _op-fails @ . ." / " _op-checks @ .
+    THEN CR ;
+
+_op-run
+""",
+        ready_markers=("OPENAI PROVIDER PASS",),
+        stable_markers=("OPENAI PROVIDER PASS",),
     ),
     "net-stream": Profile(
         roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
@@ -2276,6 +2861,10 @@ def build_image(profile_name: str, output: Path | None = None) -> Path:
 def _has_forth_error(raw: str) -> list[str]:
     patterns = (
         re.compile(r"(?i)\b(abort|undefined word|stack underflow)\b"),
+        re.compile(
+            r"(?i)(\?\s+\(not found\)|branch offset overflow|"
+            r"evaluate depth limit exceeded|dictionary full)"
+        ),
         re.compile(r"(?m)^\s*\?\s*$"),
     )
     return [line for line in raw.splitlines() if any(p.search(line) for p in patterns)]
@@ -2293,6 +2882,7 @@ def smoke(
     profile = PROFILES[profile_name]
     started = time.perf_counter()
     total_steps = 0
+    stop_reason = "budget"
 
     with MachineSession.from_bios(
         MEGAPAD_ROOT / "bios.asm",
@@ -2311,13 +2901,16 @@ def smoke(
             report = session.run(
                 max_steps=min(50_000_000, remaining),
                 wall_timeout_s=min(2.0, max(0.05, deadline - time.monotonic())),
+                advance_idle=True,
             )
             total_steps += report.steps
+            stop_reason = report.reason
             screen = session.snapshot()
             screen_text = screen.text()
             if all(marker in screen_text for marker in profile.ready_markers):
+                stop_reason = "ready"
                 break
-            if report.reason in ("halted", "idle", "stalled"):
+            if report.reason in ("halted", "stalled"):
                 break
 
         initial_text = screen.text()
@@ -3209,7 +3802,8 @@ def smoke(
         print(
             f"Smoke {profile_name}: {'PASS' if ok else 'FAIL'}\n"
             f"  {total_steps:,} steps in {elapsed:.2f}s; "
-            f"screen={screen.cols}x{screen.rows}; raw={len(session.raw_output):,} bytes"
+            f"screen={screen.cols}x{screen.rows}; raw={len(session.raw_output):,} bytes; "
+            f"stop={stop_reason}"
         )
         if missing:
             print(f"  missing screen markers: {', '.join(missing)}")

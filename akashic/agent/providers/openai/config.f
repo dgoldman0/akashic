@@ -1,0 +1,152 @@
+\ =====================================================================
+\  config.f - Native OpenAI Responses provider configuration
+\ =====================================================================
+\  Configuration owns non-secret endpoint and model text. It references the
+\  general security/credential owner but never exposes or copies its secret.
+\ =====================================================================
+
+PROVIDED akashic-agent-openai-config
+
+REQUIRE ../../../security/credential.f
+REQUIRE ../../../text/utf8.f
+
+0 CONSTANT OAIC-S-OK
+1 CONSTANT OAIC-S-INVALID
+2 CONSTANT OAIC-S-CAPACITY
+
+1 CONSTANT OAIC-F-STORE
+2 CONSTANT OAIC-F-TOOLS
+
+64   CONSTANT OAIC-HOST-CAPACITY
+128  CONSTANT OAIC-PATH-CAPACITY
+96   CONSTANT OAIC-MODEL-CAPACITY
+2048 CONSTANT OAIC-INSTRUCTIONS-CAPACITY
+
+  0 CONSTANT _OAIC-HOST-U
+  8 CONSTANT _OAIC-PATH-U
+ 16 CONSTANT _OAIC-MODEL-U
+ 24 CONSTANT _OAIC-INSTRUCTIONS-U
+ 32 CONSTANT _OAIC-PORT
+ 40 CONSTANT _OAIC-TLS
+ 48 CONSTANT _OAIC-CREDENTIAL
+ 56 CONSTANT _OAIC-FLAGS
+ 64 CONSTANT _OAIC-MAX-REQUEST
+ 72 CONSTANT _OAIC-MAX-OUTPUT
+ 80 CONSTANT _OAIC-RESERVED
+ 88 CONSTANT _OAIC-HOST-BUF
+_OAIC-HOST-BUF OAIC-HOST-CAPACITY + CONSTANT _OAIC-PATH-BUF
+_OAIC-PATH-BUF OAIC-PATH-CAPACITY + CONSTANT _OAIC-MODEL-BUF
+_OAIC-MODEL-BUF OAIC-MODEL-CAPACITY + CONSTANT _OAIC-INSTRUCTIONS-BUF
+_OAIC-INSTRUCTIONS-BUF OAIC-INSTRUCTIONS-CAPACITY +
+CONSTANT OPENAI-CONFIG-SIZE
+
+: OAIC.HOST-U         ( config -- a ) _OAIC-HOST-U + ;
+: OAIC.PATH-U         ( config -- a ) _OAIC-PATH-U + ;
+: OAIC.MODEL-U        ( config -- a ) _OAIC-MODEL-U + ;
+: OAIC.INSTRUCTIONS-U ( config -- a ) _OAIC-INSTRUCTIONS-U + ;
+: OAIC.PORT           ( config -- a ) _OAIC-PORT + ;
+: OAIC.TLS            ( config -- a ) _OAIC-TLS + ;
+: OAIC.CREDENTIAL     ( config -- a ) _OAIC-CREDENTIAL + ;
+: OAIC.FLAGS          ( config -- a ) _OAIC-FLAGS + ;
+: OAIC.MAX-REQUEST    ( config -- a ) _OAIC-MAX-REQUEST + ;
+: OAIC.MAX-OUTPUT     ( config -- a ) _OAIC-MAX-OUTPUT + ;
+: OAIC.HOST-BUF       ( config -- a ) _OAIC-HOST-BUF + ;
+: OAIC.PATH-BUF       ( config -- a ) _OAIC-PATH-BUF + ;
+: OAIC.MODEL-BUF      ( config -- a ) _OAIC-MODEL-BUF + ;
+: OAIC.INSTRUCTIONS-BUF ( config -- a ) _OAIC-INSTRUCTIONS-BUF + ;
+
+: OAIC-HOST  ( config -- addr len )
+    DUP OAIC.HOST-BUF SWAP OAIC.HOST-U @ ;
+
+: OAIC-PATH  ( config -- addr len )
+    DUP OAIC.PATH-BUF SWAP OAIC.PATH-U @ ;
+
+: OAIC-MODEL  ( config -- addr len )
+    DUP OAIC.MODEL-BUF SWAP OAIC.MODEL-U @ ;
+
+: OAIC-INSTRUCTIONS  ( config -- addr len )
+    DUP OAIC.INSTRUCTIONS-BUF SWAP OAIC.INSTRUCTIONS-U @ ;
+
+: _OAIC-HOST-CHAR?  ( c -- flag )
+    DUP 48 >= OVER 57 <= AND IF DROP -1 EXIT THEN
+    DUP 65 >= OVER 90 <= AND IF DROP -1 EXIT THEN
+    DUP 97 >= OVER 122 <= AND IF DROP -1 EXIT THEN
+    DUP 45 = SWAP 46 = OR ;
+
+: _OAIC-HOST?  ( addr len -- flag )
+    DUP 0= OVER OAIC-HOST-CAPACITY > OR IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ _OAIC-HOST-CHAR? 0= IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+: _OAIC-PATH?  ( addr len -- flag )
+    DUP 0= OVER OAIC-PATH-CAPACITY > OR IF 2DROP 0 EXIT THEN
+    OVER C@ 47 <> IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ DUP 33 < SWAP 126 > OR IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+VARIABLE _OAICS-A
+VARIABLE _OAICS-U
+VARIABLE _OAICS-D
+VARIABLE _OAICS-CAP
+VARIABLE _OAICS-LEN
+
+: _OAIC-STRING!  ( source-a source-u dest capacity length-cell -- status )
+    _OAICS-LEN ! _OAICS-CAP ! _OAICS-D ! _OAICS-U ! _OAICS-A !
+    _OAICS-U @ _OAICS-CAP @ > IF OAIC-S-CAPACITY EXIT THEN
+    _OAICS-A @ 0= _OAICS-U @ 0> AND IF OAIC-S-INVALID EXIT THEN
+    _OAICS-U @ IF
+        _OAICS-A @ _OAICS-U @ UTF8-VALID? 0= IF OAIC-S-INVALID EXIT THEN
+    THEN
+    _OAICS-D @ _OAICS-CAP @ 0 FILL
+    _OAICS-U @ IF _OAICS-A @ _OAICS-D @ _OAICS-U @ CMOVE THEN
+    _OAICS-U @ _OAICS-LEN @ !
+    OAIC-S-OK ;
+
+VARIABLE _OAICV-C
+VARIABLE _OAICV-A
+VARIABLE _OAICV-U
+
+: OAIC-HOST!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAIC-HOST? 0= IF OAIC-S-INVALID EXIT THEN
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.HOST-BUF
+    OAIC-HOST-CAPACITY _OAICV-C @ OAIC.HOST-U _OAIC-STRING! ;
+
+: OAIC-PATH!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAIC-PATH? 0= IF OAIC-S-INVALID EXIT THEN
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.PATH-BUF
+    OAIC-PATH-CAPACITY _OAICV-C @ OAIC.PATH-U _OAIC-STRING! ;
+
+: OAIC-MODEL!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-U @ 0= IF OAIC-S-INVALID EXIT THEN
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.MODEL-BUF
+    OAIC-MODEL-CAPACITY _OAICV-C @ OAIC.MODEL-U _OAIC-STRING! ;
+
+: OAIC-INSTRUCTIONS!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.INSTRUCTIONS-BUF
+    OAIC-INSTRUCTIONS-CAPACITY _OAICV-C @ OAIC.INSTRUCTIONS-U
+    _OAIC-STRING! ;
+
+VARIABLE _OAICI-C
+
+: OAIC-INIT  ( config -- )
+    DUP _OAICI-C ! OPENAI-CONFIG-SIZE 0 FILL
+    S" api.openai.com" _OAICI-C @ OAIC-HOST! DROP
+    S" /v1/responses" _OAICI-C @ OAIC-PATH! DROP
+    S" gpt-5.5" _OAICI-C @ OAIC-MODEL! DROP
+    443 _OAICI-C @ OAIC.PORT !
+    -1 _OAICI-C @ OAIC.TLS !
+    OAIC-F-TOOLS _OAICI-C @ OAIC.FLAGS !
+    65536 _OAICI-C @ OAIC.MAX-REQUEST !
+    262144 _OAICI-C @ OAIC.MAX-OUTPUT ! ;
+
+: OAIC-CREDENTIAL!  ( credential config -- status )
+    OVER 0= IF 2DROP OAIC-S-INVALID EXIT THEN
+    OAIC.CREDENTIAL ! OAIC-S-OK ;
