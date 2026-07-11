@@ -152,6 +152,241 @@ _ct-run
         ready_markers=("CREDENTIAL PASS",),
         stable_markers=("CREDENTIAL PASS",),
     ),
+    "conversation-store": Profile(
+        roots=("agent/storage/vfs-conversation.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - durable conversation snapshots
+ENTER-USERLAND
+." [akashic] loading conversation store" CR
+REQUIRE agent/storage/vfs-conversation.f
+
+VARIABLE _ts-fails
+VARIABLE _ts-checks
+VARIABLE _ts-depth
+VARIABLE _ts-vfs
+VARIABLE _ts-conv
+VARIABLE _ts-loaded
+VARIABLE _ts-store
+VARIABLE _ts-store2
+VARIABLE _ts-store3
+VARIABLE _ts-store4
+VARIABLE _ts-fd
+CREATE _ts-bad 8 ALLOT
+
+: _ts-assert  ( flag -- )
+    1 _ts-checks +!
+    0= IF 1 _ts-fails +! ." ASSERT " _ts-checks @ . CR THEN ;
+: _ts-stack  ( -- )
+    DEPTH DUP _ts-depth @ <> IF
+        ." STACK " _ts-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ts-depth @ = _ts-assert ;
+
+: _ts-new-store  ( -- store )
+    _ts-vfs @ AVFSSTORE-NEW
+    DUP ACSTORE-S-OK = _ts-assert DROP ;
+
+: _ts-corrupt  ( path-a path-u -- )
+    _ts-vfs @ VFS-USE
+    VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-bad 8 88 FILL
+    _ts-fd @ VFS-REWIND
+    _ts-bad 8 _ts-fd @ VFS-WRITE 8 = _ts-assert
+    _ts-fd @ VFS-CLOSE
+    _ts-vfs @ VFS-SYNC 0= _ts-assert ;
+
+: _ts-run  ( -- )
+    0 _ts-fails ! 0 _ts-checks ! DEPTH _ts-depth !
+    524288 A-XMEM ARENA-NEW
+    DUP 0= _ts-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _ts-vfs ! VFS-USE
+    ACONV-NEW DUP 0= _ts-assert DROP _ts-conv !
+
+    AROLE-USER AMSG-S-COMPLETE 1 S" first durable message"
+    _ts-conv @ ACONV-APPEND DUP 0= _ts-assert DROP
+    DUP AMSG-F-AUDIT SWAP AMSG.FLAGS ! DROP
+    _ts-new-store DUP _ts-store !
+    _ts-conv @ SWAP ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
+    _ts-store @ AVFSSTORE.GENERATION @ 1 = _ts-assert
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @ 0= _ts-assert
+
+    AROLE-ASSISTANT AMSG-S-STREAMING 2 S" interrupted output"
+    _ts-conv @ ACONV-APPEND DUP 0= _ts-assert DROP DROP
+    _ts-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
+    _ts-store @ AVFSSTORE.GENERATION @ 2 = _ts-assert
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @ 1 = _ts-assert
+
+    _ts-new-store DUP _ts-store2 ! ACSTORE-LOAD
+    DUP ACSTORE-S-OK = _ts-assert DROP DUP _ts-loaded ! DROP
+    _ts-store2 @ AVFSSTORE.GENERATION @ 2 = _ts-assert
+    _ts-loaded @ ACONV.COUNT @ 3 = _ts-assert
+    1 _ts-loaded @ ACONV-NTH DUP AMSG.STATE @ AMSG-S-CANCELLED = _ts-assert
+    AMSG.FLAGS @ AMSG-F-RECOVERED AND 0<> _ts-assert
+    2 _ts-loaded @ ACONV-NTH AMSG-TEXT
+    S" interrupted before completion" STR-STR-CONTAINS _ts-assert
+    _ts-loaded @ ACONV-FREE
+
+    _AVFS-PATH-B _ts-corrupt
+    _ts-new-store DUP _ts-store3 ! ACSTORE-LOAD
+    DUP ACSTORE-S-OK = _ts-assert DROP DUP _ts-loaded ! DROP
+    _ts-store3 @ AVFSSTORE.GENERATION @ 1 = _ts-assert
+    _ts-loaded @ ACONV.COUNT @ 1 = _ts-assert
+    0 _ts-loaded @ ACONV-NTH AMSG-TEXT
+    S" first durable message" STR-STR= _ts-assert
+    _ts-loaded @ ACONV-FREE
+
+    _AVFS-PATH-A _ts-corrupt
+    _ts-new-store DUP _ts-store4 ! ACSTORE-LOAD
+    ACSTORE-S-INVALID = _ts-assert 0= _ts-assert
+
+    _ts-store4 @ ACSTORE-FREE
+    _ts-store3 @ ACSTORE-FREE
+    _ts-store2 @ ACSTORE-FREE
+    _ts-store @ ACSTORE-FREE
+    _ts-conv @ ACONV-FREE
+    _ts-vfs @ VFS-DESTROY
+    _ts-stack
+    _ts-fails @ 0= IF
+        ." CONVERSATION STORE PASS " _ts-checks @ .
+    ELSE
+        ." CONVERSATION STORE FAIL " _ts-fails @ . ." / " _ts-checks @ .
+    THEN CR ;
+
+_ts-run
+""",
+        ready_markers=("CONVERSATION STORE PASS",),
+        stable_markers=("CONVERSATION STORE PASS",),
+    ),
+    "agent-persistence": Profile(
+        roots=(
+            "agent/storage/vfs-conversation.f",
+            "agent/runtime.f",
+            "agent/providers/testing/scripted.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - durable agent runtime lifecycle
+ENTER-USERLAND
+." [akashic] loading agent persistence lifecycle" CR
+REQUIRE agent/storage/vfs-conversation.f
+REQUIRE agent/providers/testing/scripted.f
+REQUIRE agent/runtime.f
+
+VARIABLE _ap-fails
+VARIABLE _ap-checks
+VARIABLE _ap-depth
+VARIABLE _ap-vfs
+VARIABLE _ap-source
+VARIABLE _ap-provider
+VARIABLE _ap-runtime
+VARIABLE _ap-store
+VARIABLE _ap-conv
+VARIABLE _ap-msg
+
+: _ap-assert  ( flag -- )
+    1 _ap-checks +!
+    0= IF 1 _ap-fails +! ." ASSERT " _ap-checks @ . CR THEN ;
+: _ap-stack  ( -- )
+    DEPTH DUP _ap-depth @ <> IF
+        ." STACK " _ap-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ap-depth @ = _ap-assert ;
+
+: _ap-open  ( -- )
+    SCRIPTED-SOURCE-NEW DUP 0= _ap-assert DROP _ap-source !
+    _ap-source @ APSOURCE-PROVIDER-NEW
+    DUP 0= _ap-assert DROP _ap-provider !
+    _ap-provider @ ARUNTIME-NEW
+    DUP 0= _ap-assert DROP _ap-runtime !
+    _ap-vfs @ AVFSSTORE-NEW
+    DUP ACSTORE-S-OK = _ap-assert DROP DUP _ap-store !
+    _ap-runtime @ ARUNTIME-CONVERSATION-STORE!
+    ACSTORE-S-OK = _ap-assert
+    _ap-runtime @ ARUNTIME.CONVERSATION @ _ap-conv ! ;
+
+: _ap-close  ( -- )
+    _ap-runtime @ ARUNTIME-FREE
+    _ap-provider @ APROV-FREE
+    _ap-source @ APSOURCE-FREE
+    0 _ap-runtime ! 0 _ap-provider ! 0 _ap-source ! 0 _ap-store ! ;
+
+: _ap-pump  ( count -- )
+    0 ?DO 8 _ap-runtime @ ARUNTIME-PUMP DROP LOOP ;
+: _ap-message  ( index -- message )
+    _ap-conv @ ACONV-NTH ;
+
+: _ap-check-audit  ( -- )
+    3 _ap-message DUP 0<> _ap-assert _ap-msg !
+    _ap-msg @ AMSG.ROLE @ AROLE-SYSTEM = _ap-assert
+    _ap-msg @ AMSG.FLAGS @ DUP AMSG-F-AUDIT AND 0<> _ap-assert
+    AMSG-F-APPROVED AND 0<> _ap-assert
+    _ap-msg @ AMSG-TEXT
+    S" Approved agent action: Persist the simulated change?" STR-STR=
+    _ap-assert ;
+
+: _ap-run  ( -- )
+    0 _ap-fails ! 0 _ap-checks ! DEPTH _ap-depth !
+    524288 A-XMEM ARENA-NEW DUP 0= _ap-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _ap-vfs ! VFS-USE
+
+    _ap-open 2 _ap-pump
+    _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ap-assert
+    S" approval durable history" _ap-runtime @ ARUNTIME-SEND 0= _ap-assert
+    4 _ap-pump
+    _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _ap-assert
+    -1 _ap-runtime @ ARUNTIME-RESOLVE 0= _ap-assert
+    2 _ap-pump
+    _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ap-assert
+    _ap-conv @ ACONV.COUNT @ 4 = _ap-assert
+    _ap-check-audit
+    _ap-runtime @ ARUNTIME.STORE-STATUS @ ACSTORE-S-OK = _ap-assert
+    _ap-close _ap-stack
+
+    _ap-open 2 _ap-pump
+    _ap-conv @ ACONV.COUNT @ 4 = _ap-assert
+    _ap-check-audit
+    _ap-runtime @ ARUNTIME.NEXT-RUN @ 2 = _ap-assert
+    S" approval interrupted persistence" _ap-runtime @ ARUNTIME-SEND
+    0= _ap-assert
+    4 _ap-pump
+    _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _ap-assert
+    _ap-conv @ ACONV.COUNT @ 7 = _ap-assert
+    _ap-runtime @ ARUNTIME-PERSIST-FORCE ACSTORE-S-OK = _ap-assert
+    _ap-close _ap-stack
+
+    _ap-open 2 _ap-pump
+    _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ap-assert
+    _ap-conv @ ACONV.COUNT @ 8 = _ap-assert
+    5 _ap-message DUP AMSG.STATE @ AMSG-S-CANCELLED = _ap-assert
+    AMSG.FLAGS @ AMSG-F-RECOVERED AND 0<> _ap-assert
+    6 _ap-message DUP AMSG.STATE @ AMSG-S-CANCELLED = _ap-assert
+    AMSG.FLAGS @ AMSG-F-RECOVERED AND 0<> _ap-assert
+    7 _ap-message AMSG.FLAGS @ DUP AMSG-F-AUDIT AND 0<> _ap-assert
+    AMSG-F-RECOVERED AND 0<> _ap-assert
+    7 _ap-message AMSG-TEXT
+    S" Previous agent run was interrupted before completion." STR-STR=
+    _ap-assert
+    _ap-runtime @ ARUNTIME.NEXT-RUN @ 3 = _ap-assert
+    _ap-runtime @ ARUNTIME-CLEAR 0= _ap-assert
+    _ap-conv @ ACONV.COUNT @ 0= _ap-assert
+    _ap-close _ap-stack
+
+    _ap-open 2 _ap-pump
+    _ap-conv @ ACONV.COUNT @ 0= _ap-assert
+    _ap-runtime @ ARUNTIME.STORE-STATUS @ ACSTORE-S-OK = _ap-assert
+    _ap-close
+    _ap-vfs @ VFS-DESTROY
+    _ap-stack
+    _ap-fails @ 0= IF
+        ." AGENT PERSISTENCE PASS " _ap-checks @ .
+    ELSE
+        ." AGENT PERSISTENCE FAIL " _ap-fails @ . ." / " _ap-checks @ .
+    THEN CR ;
+
+_ap-run
+""",
+        ready_markers=("AGENT PERSISTENCE PASS",),
+        stable_markers=("AGENT PERSISTENCE PASS",),
+    ),
     "http-request": Profile(
         roots=("net/http-request.f",),
         resources=(),

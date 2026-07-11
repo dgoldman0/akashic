@@ -16,6 +16,7 @@ REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../agent/runtime.f
 REQUIRE ../../../agent/providers/offline.f
+REQUIRE ../../../agent/storage/vfs-conversation.f
 
 512 CONSTANT _AG-PROMPT-CAP
 0 CONSTANT _AG-PRM-ASK
@@ -81,7 +82,11 @@ CMP-LAYOUT-SIZE CONSTANT _AG-STATE-SIZE
         S" text" _AG-AUTH-MISSING? IF
             S" Credential required"
         ELSE
-            _AG-RUNTIME @ ARUNTIME.STATUS @ _AG-STATUS-TEXT
+            _AG-RUNTIME @ ARUNTIME.STORE-STATUS @ ACSTORE-S-OK <> IF
+                S" History unavailable"
+            ELSE
+                _AG-RUNTIME @ ARUNTIME.STATUS @ _AG-STATUS-TEXT
+            THEN
         THEN
         UTUI-SET-ATTR
     THEN ;
@@ -288,6 +293,13 @@ VARIABLE _AG-REVIEW-APPROVED
 : _AG-DO-QUIT    ( elem -- ) DROP ASHELL-QUIT ;
 : _AG-DO-ABOUT   ( elem -- ) DROP S" Agent - provider-neutral conversations and app tools" 2500 ASHELL-TOAST ;
 
+: _AG-BIND-STORE  ( -- )
+    VFS-CUR ?DUP 0= IF EXIT THEN
+    AVFSSTORE-NEW DUP IF
+        NIP _AG-RUNTIME @ ARUNTIME.STORE-STATUS ! EXIT
+    THEN
+    DROP _AG-RUNTIME @ ARUNTIME-CONVERSATION-STORE! DROP ;
+
 : AGENT-INIT-CB  ( instance -- )
     _AG-ACTIVATE
     0 _AG-OWNS-RUNTIME !
@@ -305,6 +317,7 @@ VARIABLE _AG-REVIEW-APPROVED
         DUP _AG-PROVIDER !
         ARUNTIME-NEW 0<> ABORT" agent: runtime allocation failed"
         _AG-RUNTIME ! -1 _AG-OWNS-RUNTIME !
+        _AG-BIND-STORE
     ELSE
         S" org.akashic.agent.provider-source"
         _AG-CURRENT-INSTANCE @ CINST-SERVICE _AG-SOURCE !

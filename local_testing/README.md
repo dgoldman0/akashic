@@ -24,7 +24,7 @@ python3 local_testing/akashic_tui.py smoke --profile desktop
 
 Profiles are `credential`, `http-request`, `tls-port`, `net-stream`, `mcp`,
 `mcp-component`, `codec-json`, `jsonrpc`, `openai-codec`, `openai-provider`,
-`openai-megapad`,
+`openai-megapad`, `conversation-store`, `agent-persistence`,
 `interop` (the non-TUI runtime and interoperability contracts), `agent`
 (provider-neutral conversations), `agent-ui`, `agent-auth-ui`, `desktop` (Desk
 with all five applets), `desktop-agent`, `pad`, `fexplorer`, `daybook`, and
@@ -47,6 +47,8 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `openai-codec` | native Responses request projection, strict tool schemas and stable names, stateless continuation history, representative stream-event decoding, provider construction/binding, credential-backed runtime connection, bounds, and stack balance |
 | `openai-provider` | a fully in-guest HTTP/SSE fixture through request streaming, tool discovery, persistent-write approval, native capability execution, stateless tool continuation, final transcript text, cancellation, credential-use accounting, request zeroization, and stack balance |
 | `openai-megapad` | physical-machine source composition, native TLS-port ownership, provider construction, generic authentication, reconnect, credential clearing/zeroization, and stack balance without opening a network connection |
+| `conversation-store` | checksummed bounded transcript encoding, alternating VFS generations, newest-valid selection, corruption fallback, fail-closed loading, interrupted-state normalization, ownership cleanup, and stack balance |
+| `agent-persistence` | completed approval audit, repeated runtime reconstruction over one native VFS, interrupted approval recovery, run-ID continuity, durable clearing, and stack balance |
 | `interop` | instance-relative state, isolated instances, registry lookup, bounded request dispatch, and typed values without loading TUI |
 | `agent` | native offline fallback, provider connection, streamed transcript assembly, approval resolution, cancellation, and owned conversation cleanup without loading TUI |
 | `agent-ui` | transcript, streaming, prompt, review, cancellation, reconnect, resize, and terminal rendering |

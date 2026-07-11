@@ -51,3 +51,16 @@ objects. Source selection is explicit through `DESK-AGENT-SOURCE!` or
 
 `providers/offline.f` and `providers/testing/scripted.f` supply sources through
 the same contract. There is no parallel global factory path.
+
+## Conversation Store
+
+Provider ownership is independent of transcript ownership.
+`agent/conversation-store.f` defines the generic `ACSTORE` port, and
+`ARUNTIME-CONVERSATION-STORE!` transfers one store to a runtime. Desk and the
+standalone Agent compose the native VFS adapter from
+`agent/storage/vfs-conversation.f`; providers never open transcript files.
+
+The runtime must be freed before its provider and provider source. A borrowed
+VFS must remain alive until after the runtime has released its store. See
+`docs/agent/persistence.md` for the format, recovery behavior, and current
+single-conversation boundary.

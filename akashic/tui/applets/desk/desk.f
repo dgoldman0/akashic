@@ -56,6 +56,7 @@ REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/job.f
 REQUIRE ../../../agent/runtime.f
 REQUIRE ../../../agent/providers/offline.f
+REQUIRE ../../../agent/storage/vfs-conversation.f
 
 \ =====================================================================
 \  §1 — Slot Struct (linked list, heap-allocated)
@@ -879,6 +880,13 @@ VARIABLE _DIR-INST
 
 VARIABLE _DINI-INST
 
+: _DESK-BIND-AGENT-STORE  ( -- )
+    VFS-CUR ?DUP 0= IF EXIT THEN
+    AVFSSTORE-NEW DUP IF
+        NIP _DESK-AGENT-RUNTIME @ ARUNTIME.STORE-STATUS ! EXIT
+    THEN
+    DROP _DESK-AGENT-RUNTIME @ ARUNTIME-CONVERSATION-STORE! DROP ;
+
 : _DESK-AGENT-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT _DESK-AGENT-RUNTIME @ ARUNTIME-SEND
     DUP 0= IF
@@ -917,6 +925,7 @@ VARIABLE _DINI-INST
     0<> ABORT" desk: agent provider allocation failed" _DESK-AGENT-PROVIDER !
     _DESK-AGENT-PROVIDER @ ARUNTIME-NEW
     0<> ABORT" desk: agent runtime allocation failed" _DESK-AGENT-RUNTIME !
+    _DESK-BIND-AGENT-STORE
     _DESK-REGISTRY @ _DESK-BUS @ _DINI-INST @ ATOOLG-NEW
     0<> ABORT" desk: agent tool gateway allocation failed"
     DUP _DESK-TOOL-GATEWAY !
@@ -997,6 +1006,9 @@ VARIABLE _DAS-U
 VARIABLE _DAS-COL
 
 : _DESK-AGENT-STATE-TEXT  ( -- addr len )
+    _DESK-AGENT-RUNTIME @ ARUNTIME.STORE-STATUS @ ACSTORE-S-OK <> IF
+        S" [Agent: history error]" EXIT
+    THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME.STATUS @ CASE
         ARUN-S-RUNNING OF S" [Agent: working]" ENDOF
         ARUN-S-APPROVAL OF S" [Agent: review]" ENDOF
