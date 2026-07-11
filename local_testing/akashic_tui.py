@@ -1195,7 +1195,7 @@ _oc-run
     ),
     "openai-provider": Profile(
         roots=(
-            "agent/auth/api-key.f",
+            "security/credential.f",
             "agent/providers/openai/responses.f",
             "agent/runtime.f",
         ),
@@ -1203,7 +1203,7 @@ _oc-run
         autoexec=r"""\ autoexec.f - native OpenAI provider fixture
 ENTER-USERLAND
 ." [akashic] loading OpenAI provider fixture" CR
-REQUIRE agent/auth/api-key.f
+REQUIRE security/credential.f
 REQUIRE agent/providers/openai/responses.f
 REQUIRE agent/runtime.f
 
@@ -1231,9 +1231,12 @@ CREATE _op-args 1024 ALLOT
 VARIABLE _op-args-u
 CREATE _op-request 67584 ALLOT
 VARIABLE _op-request-u
+CREATE _op-retry-request 67584 ALLOT
+VARIABLE _op-retry-request-u
 VARIABLE _op-opens
 VARIABLE _op-closes
 VARIABLE _op-polls
+VARIABLE _op-response-mode
 VARIABLE _op-send-a
 VARIABLE _op-send-u
 VARIABLE _op-send-n
@@ -1243,7 +1246,7 @@ VARIABLE _op-recv-n
 
 CREATE _op-config OPENAI-CONFIG-SIZE ALLOT
 CREATE _op-credential CREDENTIAL-SIZE ALLOT
-CREATE _op-auth APIKEY-AUTH-SIZE ALLOT
+CREATE _op-auth AGENT-PROVIDER-AUTH-SIZE ALLOT
 CREATE _op-component COMP-DESC ALLOT
 CREATE _op-capability CAP-DESC ALLOT
 CREATE _op-schema CS-SIZE ALLOT
@@ -1258,6 +1261,41 @@ VARIABLE _op-provider
 VARIABLE _op-runtime
 VARIABLE _op-handler-hits
 VARIABLE _op-found-text
+VARIABLE _op-refreshes
+VARIABLE _op-auth-polls
+VARIABLE _op-auth-cb
+VARIABLE _op-auth-context
+
+: _op-auth-with  ( callback callback-context context -- status )
+    DROP _op-auth-context ! _op-auth-cb !
+    _op-auth-cb @ _op-auth-context @ _op-credential CRED-WITH
+    CRED-S-OK = IF AAUTH-S-OK ELSE AAUTH-S-INVALID THEN ;
+
+: _op-auth-refresh  ( context -- status )
+    DROP 1 _op-refreshes +!
+    AAUTH-STATE-REFRESHING _op-auth AAUTH.STATE !
+    AAUTH-S-PENDING DUP _op-auth AAUTH.LAST-STATUS !
+    1 _op-auth AAUTH.REVISION +! ;
+
+: _op-auth-poll  ( context -- status )
+    DROP 1 _op-auth-polls +!
+    S" fresh-test-token" _op-credential CRED-SET CRED-S-OK <> IF
+        AAUTH-STATE-ERROR _op-auth AAUTH.STATE !
+        AAUTH-S-CAPACITY DUP _op-auth AAUTH.LAST-STATUS !
+        1 _op-auth AAUTH.REVISION +! EXIT
+    THEN
+    AAUTH-STATE-READY _op-auth AAUTH.STATE !
+    AAUTH-S-OK DUP _op-auth AAUTH.LAST-STATUS !
+    1 _op-auth AAUTH.REVISION +! ;
+
+: _op-auth-init  ( -- )
+    _op-auth AAUTH-INIT
+    AAUTH-M-DEVICE _op-auth AAUTH.METHODS !
+    _op-auth _op-auth AAUTH.CONTEXT !
+    ['] _op-auth-with _op-auth AAUTH.WITH-ACCESS-XT !
+    ['] _op-auth-refresh _op-auth AAUTH.REFRESH-XT !
+    ['] _op-auth-poll _op-auth AAUTH.POLL-XT !
+    AAUTH-STATE-READY _op-auth AAUTH.STATE ! ;
 
 : _op-b,  ( addr len -- )
     _op-body-u @ OVER + 32768 > IF 2DROP EXIT THEN
@@ -1355,9 +1393,37 @@ VARIABLE _op-found-text
     S" resp_final" _op-completed,
     _op-http-wrap ;
 
+: _op-build-unauthorized  ( -- )
+    0 _op-body-u ! S" expired access token" _op-b,
+    0 _op-response-u !
+    S" HTTP/1.1 401 Unauthorized" _op-r, _op-crlf-r,
+    S" Content-Type: text/plain" _op-r, _op-crlf-r,
+    S" Content-Length: " _op-r,
+    _op-body-u @ NUM>STR _op-r, _op-crlf-r,
+    S" Connection: close" _op-r, _op-crlf-r,
+    _op-crlf-r,
+    _op-body _op-body-u @ _op-r, ;
+
 : _op-open  ( context -- status )
-    DROP 1 _op-opens +! 0 _op-response-pos ! 0 _op-request-u !
-    _op-opens @ 1 = IF _op-build-first-response ELSE _op-build-final-response THEN
+    DROP
+    _op-response-mode @ 0= _op-opens @ 2 = AND IF
+        _op-request-u @ DUP _op-retry-request-u !
+        _op-request _op-retry-request ROT CMOVE
+    THEN
+    1 _op-opens +! 0 _op-response-pos ! 0 _op-request-u !
+    _op-response-mode @ IF
+        _op-build-unauthorized
+    ELSE
+        _op-opens @ 1 = IF
+            _op-build-first-response
+        ELSE
+            _op-opens @ 2 = IF
+                _op-build-unauthorized
+            ELSE
+                _op-build-final-response
+            THEN
+        THEN
+    THEN
     NIO-S-OK ;
 
 : _op-close  ( context -- ) DROP 1 _op-closes +! ;
@@ -1391,6 +1457,8 @@ VARIABLE _op-found-text
 
 : _op-setup  ( -- )
     0 _op-opens ! 0 _op-closes ! 0 _op-polls ! 0 _op-handler-hits !
+    0 _op-response-mode ! 0 _op-retry-request-u !
+    0 _op-refreshes ! 0 _op-auth-polls !
     _op-port NIO-INIT
     ['] _op-open _op-port NIO.OPEN-XT !
     ['] _op-close _op-port NIO.CLOSE-XT !
@@ -1401,8 +1469,8 @@ VARIABLE _op-found-text
 
     _op-config OAIC-INIT
     _op-credential CRED-INIT
-    S" test-api-key" _op-credential CRED-SET DROP
-    _op-credential _op-auth APIKEY-AUTH-INIT DROP
+    S" stale-test-token" _op-credential CRED-SET DROP
+    _op-auth-init
     ." [openai-provider] config" CR
 
     _op-schema CS-INIT CV-T-STRING _op-schema CS-ALLOW!
@@ -1436,7 +1504,7 @@ VARIABLE _op-found-text
     _op-capability _op-tool-name OAI-TOOL-NAME-CAPACITY OAI-TOOL-NAME
     DROP _op-tool-name-u !
 
-    _op-config _op-auth APIKEY-AUTH.PORT _op-port OPENAI-PROVIDER-NEW
+    _op-config _op-auth _op-port OPENAI-PROVIDER-NEW
     DROP _op-provider !
     ." [openai-provider] provider" CR
     ." [openai-provider] tools " _op-gateway @ ATOOLG-TOOL-N . CR
@@ -1463,6 +1531,78 @@ VARIABLE _op-found-text
         _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = IF LEAVE THEN
     LOOP ;
 
+VARIABLE _op-scan-a
+VARIABLE _op-scan-u
+VARIABLE _op-old-body-a
+VARIABLE _op-old-body-u
+VARIABLE _op-new-body-a
+VARIABLE _op-new-body-u
+VARIABLE _op-history-seen
+
+: _op-request-body  ( request-a request-u -- body-a body-u )
+    _op-scan-u ! _op-scan-a !
+    _op-scan-u @ 4 < IF 0 0 EXIT THEN
+    _op-scan-u @ 3 - 0 DO
+        _op-scan-a @ I + C@ 13 =
+        _op-scan-a @ I 1+ + C@ 10 = AND
+        _op-scan-a @ I 2 + + C@ 13 = AND
+        _op-scan-a @ I 3 + + C@ 10 = AND IF
+            _op-scan-a @ I 4 + +
+            _op-scan-u @ I 4 + - UNLOOP EXIT
+        THEN
+    LOOP
+    0 0 ;
+
+: _op-check-replayed-request  ( -- )
+    _op-retry-request _op-retry-request-u @ _op-request-body
+    _op-old-body-u ! _op-old-body-a !
+    _op-request _op-request-u @ _op-request-body
+    _op-new-body-u ! _op-new-body-a !
+    _op-old-body-u @ 0> _op-assert
+    _op-new-body-u @ 0> _op-assert
+    _op-old-body-a @ _op-old-body-u @
+    _op-new-body-a @ _op-new-body-u @ STR-STR= _op-assert
+    _op-retry-request _op-retry-request-u @ S" stale-test-token"
+    STR-STR-CONTAINS _op-assert
+    _op-request _op-request-u @ S" fresh-test-token"
+    STR-STR-CONTAINS _op-assert ;
+
+: _op-pump-until-auth-wait  ( -- )
+    5000 0 DO
+        8 _op-runtime @ ARUNTIME-PUMP DROP
+        8 _op-bus @ CBUS-PUMP DROP
+        _op-provider @ APROV.CONTEXT @ OAIR-C.STATE @
+        OAIR-STATE-WAITING-AUTH = IF LEAVE THEN
+    LOOP
+    _op-provider @ APROV.CONTEXT @ OAIR-C.STATE @
+    OAIR-STATE-WAITING-AUTH = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    DUP OAIR-S.AUTH-RETRIED @ 0<> _op-assert
+    DUP OAIR-S.HISTORY-COMMITTED @ 0= _op-assert
+    OAIR-S.BODY-U @ 0> _op-assert ;
+
+: _op-pump-until-history  ( -- )
+    0 _op-history-seen !
+    5000 0 DO
+        8 _op-runtime @ ARUNTIME-PUMP DROP
+        8 _op-bus @ CBUS-PUMP DROP
+        _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ ?DUP IF
+            DUP OAIR-S.HISTORY-COMMITTED @ IF
+                OAIR-S.HISTORY-N @ 3 = _op-assert
+                -1 _op-history-seen ! LEAVE
+            THEN
+            DROP
+        THEN
+    LOOP
+    _op-history-seen @ _op-assert ;
+
+: _op-pump-until-error  ( -- )
+    5000 0 DO
+        8 _op-runtime @ ARUNTIME-PUMP DROP
+        8 _op-bus @ CBUS-PUMP DROP
+        _op-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = IF LEAVE THEN
+    LOOP ;
+
 : _op-test-run  ( -- )
     4 _op-runtime @ ARUNTIME-PUMP DROP
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _op-assert
@@ -1470,12 +1610,23 @@ VARIABLE _op-found-text
     _op-pump-until-review
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _op-assert
     -1 _op-runtime @ ARUNTIME-RESOLVE 0= _op-assert
+    _op-pump-until-auth-wait
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @
+    OAIR-S.HISTORY-N @ 2 = _op-assert
+    _op-refreshes @ 1 = _op-assert
+    _op-auth-polls @ 0= _op-assert
+    _op-auth AAUTH.STATE @ AAUTH-STATE-REFRESHING = _op-assert
+    _op-pump-until-history
+    _op-check-replayed-request
     _op-pump-until-idle
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _op-assert
-    _op-opens @ 2 = _op-assert
-    _op-closes @ 2 >= _op-assert
+    _op-opens @ 3 = _op-assert
+    _op-closes @ 3 >= _op-assert
     _op-handler-hits @ 1 = _op-assert
-    _op-credential CRED.USES @ 2 = _op-assert
+    _op-refreshes @ 1 = _op-assert
+    _op-auth-polls @ 1 = _op-assert
+    _op-auth AAUTH-READY? _op-assert
+    _op-credential CRED.USES @ 3 = _op-assert
     _op-request _op-request-u @ S" Authorization: Bearer "
     STR-STR-CONTAINS _op-assert
     _op-runtime @ ARUNTIME.CONVERSATION @ DUP ACONV.COUNT @ 0> _op-assert
@@ -1499,6 +1650,37 @@ VARIABLE _op-found-text
     4 _op-runtime @ ARUNTIME-PUMP DROP
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _op-assert ;
 
+: _op-test-second-401  ( -- )
+    1 _op-response-mode !
+    0 _op-opens ! 0 _op-closes ! 0 _op-refreshes ! 0 _op-auth-polls !
+    0 _op-request-u ! 0 _op-retry-request-u !
+    0 _op-credential CRED.USES !
+    S" stale-second-token" _op-credential CRED-SET CRED-S-OK = _op-assert
+    AAUTH-STATE-READY _op-auth AAUTH.STATE !
+    S" reject the retry" _op-runtime @ ARUNTIME-SEND 0= _op-assert
+    _op-pump-until-auth-wait
+    _op-refreshes @ 1 = _op-assert
+    _op-auth-polls @ 0= _op-assert
+    _op-pump-until-error
+    _op-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _op-assert
+    _op-opens @ 2 = _op-assert
+    _op-closes @ 2 >= _op-assert
+    _op-refreshes @ 1 = _op-assert
+    _op-auth-polls @ 1 = _op-assert
+    _op-credential CRED.USES @ 2 = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0= _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.STATE @
+    OAIR-STATE-IDLE = _op-assert
+    0 _op-found-text !
+    _op-runtime @ ARUNTIME.CONVERSATION @ DUP ACONV.COUNT @ 0 ?DO
+        I OVER ACONV-NTH AMSG-TEXT
+        S" Provider remained unauthorized after refresh"
+        STR-STR-CONTAINS IF -1 _op-found-text ! THEN
+    LOOP
+    DROP _op-found-text @ _op-assert
+    8 _op-runtime @ ARUNTIME-PUMP DROP
+    _op-opens @ 2 = _op-assert ;
+
 : _op-cleanup  ( -- )
     _op-runtime @ ARUNTIME-FREE
     _op-provider @ APROV-FREE
@@ -1507,7 +1689,7 @@ VARIABLE _op-found-text
     _op-instance @ _op-registry @ CREG-INST- DROP
     _op-registry @ CREG-FREE
     _op-instance @ CINST-FREE
-    _op-auth APIKEY-AUTH.PORT AAUTH-DESTROY
+    _op-auth AAUTH-DESTROY
     _op-credential CRED-CLEAR ;
 
 : _op-run  ( -- )
@@ -1516,6 +1698,8 @@ VARIABLE _op-found-text
     _op-setup
     ." [openai-provider] run" CR
     _op-test-run
+    ." [openai-provider] unauthorized" CR
+    _op-test-second-401
     ." [openai-provider] cleanup" CR
     _op-cleanup _op-stack
     _op-fails @ 0= IF

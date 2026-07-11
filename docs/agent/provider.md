@@ -14,18 +14,24 @@ Authentication is deliberately generic:
 
 | Word | Stack | Description |
 |---|---|---|
-| `APROV-AUTH-SET` | `( secret-a secret-u provider -- status )` | Copy an opaque credential into provider-owned storage |
-| `APROV-AUTH-CLEAR` | `( provider -- status )` | Clear and zero the active credential |
-| `APROV-AUTH-PRESENT?` | `( provider -- flag )` | Report whether authentication material is present |
+| `APROV-AUTH` | `( provider -- auth \| 0 )` | Borrow the provider's `AAUTH` port |
+| `AAUTH-READY?` | `( auth -- flag )` | Report whether an access credential is usable |
+| `AAUTH-PENDING?` | `( auth -- flag )` | Report a starting, login-pending, or refreshing operation |
+| `AAUTH-BEGIN` / `AAUTH-CANCEL` | `( auth -- status )` | Start or cancel an account login |
+| `AAUTH-POLL` | `( auth -- status )` | Advance a pending authentication operation |
+| `AAUTH-SECRET-SET` | `( secret-a secret-u auth -- status )` | Replace an opaque direct-provider secret |
+| `AAUTH-WITH-ACCESS` | `( callback context auth -- status )` | Borrow access bytes only for one callback |
+| `AAUTH-REFRESH` / `AAUTH-LOGOUT` | `( auth -- status )` | Rotate account tokens or clear authentication |
 
-Providers that implement these operations set `APROV-F-AUTH`. The API does
-not prescribe API-key syntax or name a vendor. A future local provider can
-omit authentication or implement the same port without changing Agent UI.
+Providers that expose this port set `APROV-F-AUTH`. Its method mask,
+state, account metadata, and callbacks cover direct secrets, device login, and
+future account systems without naming a vendor. A local provider can omit it.
 
-`ARUNTIME-AUTH-SET`, `ARUNTIME-AUTH-CLEAR`, and
-`ARUNTIME-AUTH-PRESENT?` coordinate these operations with runtime state.
-Credential replacement and clearing are rejected while a run or review is
-active.
+`ARUNTIME-AUTH-SET`, `ARUNTIME-AUTH-CLEAR`, `ARUNTIME-AUTH-PRESENT?`,
+`ARUNTIME-AUTH-BEGIN`, and `ARUNTIME-AUTH-CANCEL` coordinate user operations
+with provider connection state. The runtime pumps pending auth before model
+and tool work. Secret replacement, logout, and login start are rejected while
+a run or review is active.
 
 ## Provider Source
 

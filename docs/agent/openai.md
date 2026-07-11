@@ -39,6 +39,15 @@ SSE events, projects native capability schemas into function tools, runs tool
 calls through Desk's Tool Gateway and approval policy, returns tool output, and
 continues without relying on server-side conversation storage.
 
+The request body remains owned until a valid 200 SSE response accepts it. On
+the first 401 for one logical request, the provider closes the model transport,
+starts `AAUTH-REFRESH`, waits while the runtime pumps authentication, and then
+rebuilds only the HTTP envelope with the rotated access token. The bearer wire
+buffer is cleared after each send, the replayed body is byte-identical, and a
+tool result enters model history only after successful response headers. A
+second 401 for that request is terminal; a later, newly constructed request
+receives its own single retry allowance.
+
 The source's configuration and transport can be inspected before ownership is
 transferred:
 
@@ -67,8 +76,10 @@ after an authenticated TLS open.
 
 The current deterministic profiles require no API key or network:
 
-- `openai-provider` exercises HTTP/SSE, tools, approval, continuation, and
-  cancellation through a recorded native transport.
+- `openai-provider` exercises HTTP/SSE, tools, approval, continuation,
+  asynchronous token rotation, exact-body 401 replay, one-time history commit,
+  terminal repeated authorization failure, and cancellation through a recorded
+  native transport.
 - `openai-source` verifies source composition, ownership, authentication,
   reconnect, clearing, zeroization, and stack balance.
 - `agent-auth-ui` verifies masked entry and confirms fixture plaintext is absent
