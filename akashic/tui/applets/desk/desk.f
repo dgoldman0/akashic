@@ -31,6 +31,7 @@
 \    DESK-RELAYOUT     ( -- )          Recompute tile grid
 \    DESK-SLOT-COUNT   ( -- n )        Number of live slots
 \    DESK-VCOUNT       ( -- n )        Number of visible slots
+\    DESK-AGENT-SOURCE! ( source -- )   Transfer provider source before run
 \    DESK-QUEUE-LAUNCH ( desc -- )     Set startup applet (before DESK-RUN)
 \    DESK-RUN          ( -- )          Fill desc, call ASHELL-RUN
 \ =================================================================
@@ -55,8 +56,6 @@ REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/job.f
 REQUIRE ../../../agent/runtime.f
 REQUIRE ../../../agent/providers/offline.f
-
-OFFLINE-PROVIDER-USE-DEFAULT
 
 \ =====================================================================
 \  §1 — Slot Struct (linked list, heap-allocated)
@@ -136,6 +135,8 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-LAST-MIN-SA
 \ live Desk state is instance-relative below.
 VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
 0 _DESK-CFG-A !  0 _DESK-CFG-L !
+VARIABLE _DESK-PENDING-AGENT-SOURCE
+0 _DESK-PENDING-AGENT-SOURCE !
 
 \ Startup applets: set via DESK-QUEUE-LAUNCH before DESK-RUN.
 \ DESK-INIT-CB launches them after the screen & region are ready.
@@ -232,6 +233,7 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-JOBS
 _DESK-CURRENT-STATE IENDPOINT-SIZE CMP-FIELD: _DESK-ENDPOINT
 _DESK-CURRENT-STATE CMP-CELL: _DESK-INSTALLED-N
 _DESK-CURRENT-STATE _DESK-MAX-INSTALLED CELLS CMP-FIELD: _DESK-INSTALLED
+_DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-SOURCE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROVIDER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-RUNTIME
 _DESK-CURRENT-STATE CMP-CELL: _DESK-TOOL-GATEWAY
@@ -822,6 +824,9 @@ VARIABLE _DSE-ID-U
     _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.tool-gateway" STR-STR= IF
         _DESK-TOOL-GATEWAY @ EXIT
     THEN
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.provider-source" STR-STR= IF
+        _DESK-AGENT-SOURCE @ EXIT
+    THEN
     _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.runtime.registry" STR-STR= IF
         _DESK-REGISTRY @ EXIT
     THEN
@@ -902,7 +907,13 @@ VARIABLE _DINI-INST
     CJOB-TABLE-NEW 0<> ABORT" desk: job table allocation failed" _DESK-JOBS !
     _DESK-REGISTRY @ _DESK-POLICY @ CBUS-NEW
     0<> ABORT" desk: request bus allocation failed" _DESK-BUS !
-    APROV-NEW
+    _DESK-PENDING-AGENT-SOURCE @ ?DUP 0= IF
+        OFFLINE-SOURCE-NEW
+        0<> ABORT" desk: offline source allocation failed"
+    THEN
+    0 _DESK-PENDING-AGENT-SOURCE !
+    DUP _DESK-AGENT-SOURCE !
+    APSOURCE-PROVIDER-NEW
     0<> ABORT" desk: agent provider allocation failed" _DESK-AGENT-PROVIDER !
     _DESK-AGENT-PROVIDER @ ARUNTIME-NEW
     0<> ABORT" desk: agent runtime allocation failed" _DESK-AGENT-RUNTIME !
@@ -942,12 +953,14 @@ VARIABLE _DINI-INST
     _DESK-BUS @ ?DUP IF CBUS-FREE THEN
     _DESK-AGENT-RUNTIME @ ?DUP IF ARUNTIME-FREE THEN
     _DESK-AGENT-PROVIDER @ ?DUP IF APROV-FREE THEN
+    _DESK-AGENT-SOURCE @ ?DUP IF APSOURCE-FREE THEN
     _DESK-JOBS @ ?DUP IF CJOB-TABLE-FREE THEN
     _DESK-INTENTS @ ?DUP IF CINT-FREE THEN
     _DESK-POLICY @ ?DUP IF FREE THEN
     _DESK-REGISTRY @ ?DUP IF CREG-FREE THEN
     0 _DESK-BUS ! 0 _DESK-JOBS ! 0 _DESK-INTENTS !
     0 _DESK-POLICY ! 0 _DESK-REGISTRY !
+    0 _DESK-AGENT-SOURCE !
     0 _DESK-AGENT-RUNTIME ! 0 _DESK-AGENT-PROVIDER !
     0 _DESK-TOOL-GATEWAY !
     0 _DESK-AGENT-PROMPT ! 0 _DESK-AGENT-PROMPT-RGN !
@@ -1413,6 +1426,14 @@ VARIABLE _DPC-PAINT-ALL
         1 _DESK-PEND-N +!
     ELSE 2DROP THEN ;
 
+VARIABLE _DASSET-SOURCE
+
+: DESK-AGENT-SOURCE!  ( source -- )
+    _DASSET-SOURCE !
+    _DASSET-SOURCE @ _DESK-PENDING-AGENT-SOURCE @ = IF EXIT THEN
+    _DESK-PENDING-AGENT-SOURCE @ ?DUP IF APSOURCE-FREE THEN
+    _DASSET-SOURCE @ _DESK-PENDING-AGENT-SOURCE ! ;
+
 : DESK-RUN  ( -- )
     _DESK-FILL-DESC
     DESK-DESC ASHELL-RUN ;
@@ -1435,6 +1456,7 @@ GUARD _desk-guard
 ' DESK-RELAYOUT     CONSTANT _desk-relayout-xt
 ' DESK-SLOT-COUNT   CONSTANT _desk-slotcount-xt
 ' DESK-VCOUNT       CONSTANT _desk-vcount-xt
+' DESK-AGENT-SOURCE! CONSTANT _desk-agent-source-xt
 ' DESK-RUN          CONSTANT _desk-run-xt
 
 : DESK-LAUNCH       _desk-launch-xt       _desk-guard WITH-GUARD ;
@@ -1447,5 +1469,6 @@ GUARD _desk-guard
 : DESK-RELAYOUT     _desk-relayout-xt     _desk-guard WITH-GUARD ;
 : DESK-SLOT-COUNT   _desk-slotcount-xt    _desk-guard WITH-GUARD ;
 : DESK-VCOUNT       _desk-vcount-xt       _desk-guard WITH-GUARD ;
+: DESK-AGENT-SOURCE! _desk-agent-source-xt _desk-guard WITH-GUARD ;
 : DESK-RUN          _desk-run-xt          _desk-guard WITH-GUARD ;
 [THEN] [THEN]

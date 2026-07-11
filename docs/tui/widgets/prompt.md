@@ -18,9 +18,16 @@ the signature `( prompt -- )`.
 | `PRM-ON-SUBMIT` | `( xt prompt -- )` | Set the Enter callback |
 | `PRM-ON-CANCEL` | `( xt prompt -- )` | Set the Escape callback |
 | `PRM-COLORS!` | `( fg bg prompt -- )` | Set xterm-256 colors |
+| `PRM-MASK!` | `( codepoint prompt -- )` | Set input masking; zero disables it |
+| `PRM-WIPE` | `( prompt -- )` | Zero the full caller-owned input buffer |
 | `PRM-SET-BOUNDS` | `( row col h w prompt -- )` | Follow a relaid-out status element |
 | `PRM-FREE` | `( prompt -- )` | Free prompt-owned allocations |
 
 An active prompt consumes all key events routed to it. Enter deactivates it
 and invokes the submit callback; Escape deactivates it and invokes the cancel
 callback. Other events are delegated to the embedded input widget.
+
+For credentials, enable masking before `PRM-SHOW`, synchronously copy the
+borrowed text into a credential owner, and call `PRM-WIPE` on submit and cancel.
+Masking prevents display disclosure; wiping removes bytes retained by the
+caller-owned command buffer.

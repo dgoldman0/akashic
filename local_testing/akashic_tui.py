@@ -1102,6 +1102,98 @@ _op-run
         ready_markers=("OPENAI PROVIDER PASS",),
         stable_markers=("OPENAI PROVIDER PASS",),
     ),
+    "openai-megapad": Profile(
+        roots=(
+            "agent/providers/openai/megapad.f",
+            "agent/runtime.f",
+            "utils/string.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - physical MegaPad OpenAI composition
+ENTER-USERLAND
+." [akashic] loading OpenAI MegaPad composition" CR
+REQUIRE agent/providers/openai/megapad.f
+REQUIRE agent/runtime.f
+REQUIRE utils/string.f
+
+VARIABLE _om-fails
+VARIABLE _om-checks
+VARIABLE _om-depth
+VARIABLE _om-source
+VARIABLE _om-provider
+VARIABLE _om-runtime
+
+: _om-assert  ( flag -- )
+    1 _om-checks +!
+    0= IF 1 _om-fails +! ." ASSERT " _om-checks @ . CR THEN ;
+
+: _om-stack  ( -- )
+    DEPTH DUP _om-depth @ <> IF
+        ." STACK " _om-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _om-depth @ = _om-assert ;
+
+: _om-zero?  ( addr len -- flag )
+    -1 -ROT 0 ?DO
+        DUP I + C@ IF SWAP DROP 0 SWAP THEN
+    LOOP
+    DROP ;
+
+: _om-run  ( -- )
+    0 _om-fails ! 0 _om-checks ! DEPTH _om-depth !
+    OPENAI-MEGAPAD-SOURCE-NEW
+    DUP APSOURCE-S-OK = _om-assert DROP _om-source !
+    _om-source @ DUP APSOURCE.ID-A @ SWAP APSOURCE.ID-U @
+    S" org.akashic.agent.source.openai.megapad" STR-STR= _om-assert
+    _om-source @ OPENAI-MEGAPAD-SOURCE-CONFIG OAIC-HOST
+    S" api.openai.com" STR-STR= _om-assert
+    _om-source @ OPENAI-MEGAPAD-SOURCE-TRANSPORT MPTLS-HOST
+    S" api.openai.com" STR-STR= _om-assert
+    _om-source @ OPENAI-MEGAPAD-SOURCE-TRANSPORT MPTLS.REMOTE-PORT @
+    443 = _om-assert
+
+    _om-source @ APSOURCE-PROVIDER-NEW
+    DUP OAIR-S-OK = _om-assert DROP _om-provider !
+    _om-provider @ APROV.FEATURES @ APROV-F-AUTH AND 0<> _om-assert
+    _om-provider @ APROV-AUTH-PRESENT? 0= _om-assert
+    _om-provider @ OPENAI-PROVIDER-CONFIG OAIC.CREDENTIAL @
+    _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL = _om-assert
+    _om-provider @ APROV.CONTEXT @ OAIR-C.PORT @
+    _om-source @ OPENAI-MEGAPAD-SOURCE-TRANSPORT MPTLS.PORT = _om-assert
+
+    _om-provider @ ARUNTIME-NEW
+    DUP 0= _om-assert DROP _om-runtime !
+    _om-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _om-assert
+    _om-runtime @ ARUNTIME-AUTH-PRESENT? 0= _om-assert
+    S" local-fixture-secret" _om-runtime @ ARUNTIME-AUTH-SET
+    APROV-AUTH-S-OK = _om-assert
+    _om-runtime @ ARUNTIME-AUTH-PRESENT? _om-assert
+    _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL CRED.LENGTH @
+    20 = _om-assert
+    8 _om-runtime @ ARUNTIME-PUMP DROP
+    _om-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _om-assert
+
+    _om-runtime @ ARUNTIME-AUTH-CLEAR APROV-AUTH-S-OK = _om-assert
+    _om-runtime @ ARUNTIME.STATUS @ ARUN-S-OFFLINE = _om-assert
+    _om-runtime @ ARUNTIME-AUTH-PRESENT? 0= _om-assert
+    _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL _CRED-SECRET-A
+    CRED-SECRET-CAPACITY _om-zero? _om-assert
+
+    _om-runtime @ ARUNTIME-FREE
+    _om-provider @ APROV-FREE
+    _om-source @ APSOURCE-FREE
+    _om-stack
+    _om-fails @ 0= IF
+        ." OPENAI MEGAPAD PASS " _om-checks @ .
+    ELSE
+        ." OPENAI MEGAPAD FAIL " _om-fails @ . ." / " _om-checks @ .
+    THEN CR ;
+
+_om-run
+""",
+        ready_markers=("OPENAI MEGAPAD PASS",),
+        stable_markers=("OPENAI MEGAPAD PASS",),
+    ),
     "net-stream": Profile(
         roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
         resources=(),
@@ -2428,7 +2520,6 @@ ENTER-USERLAND
 REQUIRE agent/providers/offline.f
 REQUIRE agent/providers/testing/scripted.f
 REQUIRE agent/runtime.f
-SCRIPTED-PROVIDER-USE
 
 VARIABLE _at-fails
 VARIABLE _at-check
@@ -2437,6 +2528,7 @@ VARIABLE _at-check
     0= IF 1 _at-fails +! ." ASSERT " _at-check @ . CR THEN ;
 
 VARIABLE _at-provider
+VARIABLE _at-source
 VARIABLE _at-runtime
 VARIABLE _at-offline-provider
 VARIABLE _at-offline-runtime
@@ -2494,7 +2586,9 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     _at-offline-runtime @ ARUNTIME-FREE
     _at-offline-provider @ APROV-FREE
     _at-stack-clean
-    APROV-NEW DUP 0= _at-assert DROP _at-provider !
+    SCRIPTED-SOURCE-NEW DUP 0= _at-assert DROP _at-source !
+    _at-source @ APSOURCE-PROVIDER-NEW
+    DUP 0= _at-assert DROP _at-provider !
     _at-provider @ DUP APROV.ID-A @ SWAP APROV.ID-U @
     S" org.akashic.agent.testing.scripted" STR-STR= _at-assert
     _at-provider @ ARUNTIME-NEW DUP 0= _at-assert DROP _at-runtime !
@@ -2561,6 +2655,7 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
 
     _at-runtime @ ARUNTIME-FREE
     _at-provider @ APROV-FREE
+    _at-source @ APSOURCE-FREE
     _at-gateway @ ATOOLG-FREE
     _at-bus @ CBUS-FREE
     _at-instance @ _at-registry @ CREG-INST- DROP
@@ -2744,7 +2839,10 @@ REQUIRE tui/applets/daybook/daybook.f
 REQUIRE tui/applets/grid/grid.f
 REQUIRE tui/applets/agent/agent.f
 REQUIRE agent/providers/testing/scripted.f
-SCRIPTED-PROVIDER-USE
+: _boot-agent-source  ( -- )
+    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
+    DESK-AGENT-SOURCE! ;
+_boot-agent-source
 
 CREATE _boot-pad-desc APP-DESC ALLOT
 _boot-pad-desc PAD-ENTRY
@@ -2806,13 +2904,39 @@ ENTER-USERLAND
 REQUIRE agent/providers/testing/scripted.f
 REQUIRE agent/runtime.f
 REQUIRE tui/applets/agent/agent.f
-SCRIPTED-PROVIDER-USE
+: _boot-agent-source  ( -- )
+    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
+    AGENT-SOURCE! ;
+_boot-agent-source
 ." [akashic] starting Agent applet" CR
 AGENT-RUN
 ." [akashic] Agent applet exited" CR
 """,
         ready_markers=("Agent", "Run", "Review", "Ready"),
         stable_markers=("Agent", "Run", "Review", "Ready"),
+    ),
+    "agent-auth-ui": Profile(
+        roots=(
+            "tui/applets/agent/agent.f",
+            "agent/providers/openai/megapad.f",
+        ),
+        resources=("tui/applets/agent/agent.uidl",),
+        autoexec=r"""\ autoexec.f - native provider credential UI
+ENTER-USERLAND
+." [akashic] loading Agent credential UI" CR
+REQUIRE agent/providers/openai/megapad.f
+REQUIRE tui/applets/agent/agent.f
+: _boot-openai-source  ( -- )
+    OPENAI-MEGAPAD-SOURCE-NEW
+    0<> ABORT" OpenAI MegaPad source allocation failed"
+    AGENT-SOURCE! ;
+_boot-openai-source
+." [akashic] starting Agent credential UI" CR
+AGENT-RUN
+." [akashic] Agent credential UI exited" CR
+""",
+        ready_markers=("Agent", "Connection", "Credential required"),
+        stable_markers=("Agent", "Connection", "Credential required"),
     ),
     "pad": Profile(
         roots=("tui/applets/pad/pad.f",),
@@ -3591,6 +3715,48 @@ def smoke(
                         wait_screen(
                             "Ready", "Agent did not recover to its ready state"
                         )
+
+        if initial_ready and profile_name == "agent-auth-ui":
+            fixture_secret = "credential-must-not-render"
+            session.send_key("ctrl+k")
+            if wait_screen(
+                "Credential:", "Ctrl+K did not open the credential prompt"
+            ):
+                session.send_text(fixture_secret)
+                if wait_screen(
+                    "********",
+                    "Credential input was not visibly masked",
+                ):
+                    masked_text = session.snapshot().text()
+                    if fixture_secret in masked_text:
+                        journey_errors.append(
+                            "Credential plaintext appeared in the rendered screen"
+                        )
+                session.send_key("escape")
+                if wait_screen_gone(
+                    "Credential:", "Escape did not close the credential prompt"
+                ):
+                    if fixture_secret in session.snapshot().text():
+                        journey_errors.append(
+                            "Cancelled credential remained in the rendered screen"
+                        )
+
+            session.send_key("ctrl+k")
+            if wait_screen(
+                "Credential:", "Credential prompt could not be reopened"
+            ):
+                session.send_text(fixture_secret)
+                session.send_key("enter")
+                wait_screen("Ready", "Credential submission did not connect provider")
+                wait_screen_gone(
+                    "Credential required",
+                    "Credential submission left the provider unauthenticated",
+                )
+                session.send_key("ctrl+shift+k")
+                wait_screen(
+                    "Credential required",
+                    "Credential clear did not return to unauthenticated state",
+                )
 
         if initial_ready and profile_name != "interop":
             session.resize(cols + 8, rows + 2)

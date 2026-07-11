@@ -10,6 +10,10 @@
 <item text=Cancel do=cancel key=Escape/>
 <item text=Reconnect do=reconnect/>
 </menu>
+<menu label=Connection>
+<item text=Set_credential do=credential key=Ctrl+K/>
+<item text=Clear_credential do=clear-credential key=Ctrl+Shift+K/>
+</menu>
 <menu label=Review>
 <item text=Approve do=approve key=F6/>
 <item text=Deny do=deny key=F7/>
@@ -24,6 +28,8 @@
 <label id=state text=Ready/>
 </status>
 <action do=prompt key=Ctrl+L/>
+<action do=credential key=Ctrl+K/>
+<action do=clear-credential key=Ctrl+Shift+K/>
 <action do=cancel key=Escape/>
 <action do=approve key=F6/>
 <action do=deny key=F7/>

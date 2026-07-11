@@ -15,7 +15,7 @@ an optional placeholder shown when the buffer is empty.
 The input widget stores text in a caller-provided fixed-size buffer.
 Insertion is rejected when the buffer is full.
 
-## Descriptor Layout (96 bytes)
+## Descriptor Layout (112 bytes)
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -27,6 +27,8 @@ Insertion is rejected when the buffer is full.
 | +72 | scroll | u | Scroll offset (codepoints) |
 | +80 | placeholder-a | address | Placeholder text address |
 | +88 | placeholder-u | u | Placeholder text length |
+| +96 | submit-xt | xt | Enter callback |
+| +104 | mask-cp | codepoint | Render replacement; zero means plain text |
 
 ## API Reference
 
@@ -44,6 +46,8 @@ Insertion is rejected when the buffer is full.
 | `INP-SET-TEXT` | `( text-a text-u widget -- )` | Set text; clamps to capacity; cursor at end |
 | `INP-GET-TEXT` | `( widget -- addr len )` | Get buffer address and current length |
 | `INP-CLEAR` | `( widget -- )` | Clear buffer, reset cursor and scroll |
+| `INP-WIPE` | `( widget -- )` | Zero the full caller-owned buffer, then clear |
+| `INP-MASK!` | `( codepoint widget -- )` | Set a render-only replacement; zero disables masking |
 | `INP-SET-PLACEHOLDER` | `( text-a text-u widget -- )` | Set placeholder text; marks dirty |
 
 ### Cursor
@@ -115,6 +119,10 @@ backend (`uidl-tui.f`), the following happens:
 - **Horizontal scroll.** When the cursor moves past the visible
   region width, `_INP-SCROLL-ADJ` shifts the scroll offset so the
   cursor remains visible.
+- **Masking is render-only.** Editing and UTF-8 cursor movement continue to
+  operate on the caller-owned bytes, while drawing emits one configured mask
+  codepoint per input codepoint. Callers handling secrets must still invoke
+  `INP-WIPE` after synchronous consumption.
 - **KDOS CMOVE note.** Uses `CMOVE ( src dst u -- )` with non-standard
   argument order per KDOS convention.
 - **KDOS FREE note.** `INP-FREE` uses `FREE` without `DROP` (KDOS FREE

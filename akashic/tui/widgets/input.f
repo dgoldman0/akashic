@@ -25,6 +25,7 @@
 \    +80      placeholder-a   Placeholder text address
 \    +88      placeholder-u   Placeholder text length
 \    +96      submit-xt       Callback on Enter ( widget -- )
+\    +104     mask-cp         Draw this codepoint instead of input (0 = plain)
 \
 \  Prefix: INP- (public), _INP- (internal)
 \  Provider: akashic-tui-input
@@ -49,8 +50,9 @@ REQUIRE ../keys.f
 80 CONSTANT _INP-O-PH-A          \ placeholder text address
 88 CONSTANT _INP-O-PH-U          \ placeholder text length
 96 CONSTANT _INP-O-SUBMIT-XT     \ submit callback xt (0 = none)
+104 CONSTANT _INP-O-MASK-CP      \ replacement codepoint (0 = unmasked)
 
-104 CONSTANT _INP-DESC-SIZE       \ total descriptor size
+112 CONSTANT _INP-DESC-SIZE       \ total descriptor size
 
 \ =====================================================================
 \ 2. UTF-8 cursor helpers
@@ -268,13 +270,17 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         CELL-A-REVERSE DRW-ATTR!
         _INP-DRW-W @ _INP-O-CURSOR + @
         _INP-DRW-W @ _INP-O-BUF-LEN + @ < IF
-            \ Character under cursor — decode it
-            _INP-DRW-W @ _INP-O-BUF-A + @
-            _INP-DRW-W @ _INP-O-CURSOR + @ +
-            DUP C@ _UTF8-SEQLEN
-            DUP 0= IF DROP 1 THEN           \ ( viscol addr seqlen )
-            0 3 PICK DRW-TEXT                \ DRW-TEXT( addr len row col )
-            DROP                             \ drop viscol
+            _INP-DRW-W @ _INP-O-MASK-CP + @ ?DUP IF
+                SWAP 0 SWAP DRW-CHAR
+            ELSE
+                \ Character under cursor — decode it
+                _INP-DRW-W @ _INP-O-BUF-A + @
+                _INP-DRW-W @ _INP-O-CURSOR + @ +
+                DUP C@ _UTF8-SEQLEN
+                DUP 0= IF DROP 1 THEN        \ ( viscol addr seqlen )
+                0 3 PICK DRW-TEXT             \ DRW-TEXT( addr len row col )
+                DROP                          \ drop viscol
+            THEN
         ELSE
             \ Cursor past end — draw space
             32 0 ROT DRW-CHAR               \ DRW-CHAR( cp=32 row=0 col=viscol )
@@ -327,6 +333,9 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         _INP-DRW-A @ _INP-DRW-L @
         UTF8-DECODE
         _INP-DRW-L ! _INP-DRW-A !          \ ( col cp )
+        _INP-DRW-W @ _INP-O-MASK-CP + @ ?DUP IF
+            SWAP DROP                        \ replace decoded cp with mask
+        THEN
         OVER                                \ ( col cp col )
         0 SWAP                              \ ( col cp 0 col )
         DRW-CHAR                            \ DRW-CHAR( cp row col )
@@ -403,7 +412,8 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     0              OVER _INP-O-SCROLL    + !   \ scroll = 0
     0              OVER _INP-O-PH-A      + !   \ no placeholder
     0              OVER _INP-O-PH-U      + !
-    0              OVER _INP-O-SUBMIT-XT + ! ; \ no callback
+    0              OVER _INP-O-SUBMIT-XT + !
+    0              OVER _INP-O-MASK-CP   + ! ; \ unmasked
 
 \ =====================================================================
 \ 8. Public API
@@ -445,6 +455,20 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     0 OVER _INP-O-SCROLL + !
     WDG-DIRTY ;
 
+\ INP-WIPE ( widget -- )
+\   Zero the caller-owned edit buffer and reset all edit state.
+: INP-WIPE  ( widget -- )
+    DUP _INP-O-BUF-A + @ OVER _INP-O-BUF-CAP + @ 0 FILL
+    INP-CLEAR ;
+
+\ INP-MASK! ( codepoint widget -- )
+\   A nonzero codepoint masks every entered character during rendering.
+: INP-MASK!  ( codepoint widget -- )
+    >R DUP 0< IF DROP 0 THEN
+    R@ _INP-O-MASK-CP + !
+    0 R@ _INP-O-SCROLL + !
+    R> WDG-DIRTY ;
+
 \ INP-CURSOR-POS ( widget -- n )
 \   Get cursor column (codepoint position, not byte offset).
 : INP-CURSOR-POS  ( widget -- n )
@@ -470,6 +494,8 @@ GUARD _inp-guard
 ' INP-ON-SUBMIT      CONSTANT _inp-onsubmit-xt
 ' INP-SET-PLACEHOLDER CONSTANT _inp-setph-xt
 ' INP-CLEAR           CONSTANT _inp-clear-xt
+' INP-WIPE            CONSTANT _inp-wipe-xt
+' INP-MASK!           CONSTANT _inp-mask-xt
 ' INP-CURSOR-POS      CONSTANT _inp-curpos-xt
 ' INP-FREE            CONSTANT _inp-free-xt
 
@@ -479,6 +505,8 @@ GUARD _inp-guard
 : INP-ON-SUBMIT      _inp-onsubmit-xt  _inp-guard WITH-GUARD ;
 : INP-SET-PLACEHOLDER _inp-setph-xt    _inp-guard WITH-GUARD ;
 : INP-CLEAR           _inp-clear-xt    _inp-guard WITH-GUARD ;
+: INP-WIPE            _inp-wipe-xt     _inp-guard WITH-GUARD ;
+: INP-MASK!           _inp-mask-xt     _inp-guard WITH-GUARD ;
 : INP-CURSOR-POS      _inp-curpos-xt   _inp-guard WITH-GUARD ;
 : INP-FREE            _inp-free-xt     _inp-guard WITH-GUARD ;
 [THEN] [THEN]

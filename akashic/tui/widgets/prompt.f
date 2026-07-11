@@ -15,6 +15,8 @@
 \    PRM-ON-SUBMIT    ( xt prompt -- )       xt: ( prompt -- )
 \    PRM-ON-CANCEL    ( xt prompt -- )       xt: ( prompt -- )
 \    PRM-COLORS!      ( fg bg prompt -- )
+\    PRM-MASK!        ( codepoint prompt -- )  0 disables masking
+\    PRM-WIPE         ( prompt -- )          Zero caller-owned input
 \    PRM-SET-BOUNDS   ( row col h w prompt -- )
 \    PRM-FREE         ( prompt -- )
 \ =====================================================================
@@ -162,6 +164,12 @@ VARIABLE _PRM-S-LU
     R@ _PRM-O-FG + !
     R> WDG-DIRTY ;
 
+: PRM-MASK!  ( codepoint prompt -- )
+    _PRM-O-INPUT + @ INP-MASK! ;
+
+: PRM-WIPE  ( prompt -- )
+    _PRM-O-INPUT + @ INP-WIPE ;
+
 : PRM-SET-BOUNDS  ( row col h w prompt -- )
     >R
     R@ WDG-REGION >R
@@ -175,4 +183,3 @@ VARIABLE _PRM-S-LU
     DUP _PRM-O-INPUT + @ ?DUP IF INP-FREE THEN
     DUP _PRM-O-INPUT-RGN + @ ?DUP IF RGN-FREE THEN
     FREE ;
-
