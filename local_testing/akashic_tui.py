@@ -68,6 +68,433 @@ class Profile:
 
 
 PROFILES = {
+    "net-stream": Profile(
+        roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native streaming protocol tests
+ENTER-USERLAND
+." [akashic] loading streaming parsers" CR
+REQUIRE net/sse.f
+REQUIRE net/http-stream.f
+REQUIRE net/http.f
+
+VARIABLE _ns-fails
+VARIABLE _ns-checks
+VARIABLE _ns-depth
+: _ns-assert  ( flag -- )
+    1 _ns-checks +!
+    0= IF 1 _ns-fails +! ." ASSERT " _ns-checks @ . CR THEN ;
+: _ns-stack  ( -- )
+    DEPTH DUP _ns-depth @ <> IF
+        ." STACK " _ns-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ns-depth @ = _ns-assert ;
+
+CREATE _ns-sse SSE-PARSER-SIZE ALLOT
+CREATE _ns-fixture 512 ALLOT
+VARIABLE _ns-fixture-u
+CREATE _ns-expected 64 ALLOT
+VARIABLE _ns-expected-u
+VARIABLE _ns-events
+VARIABLE _ns-split
+
+: _ns-fc,  ( c -- )
+    _ns-fixture _ns-fixture-u @ + C! 1 _ns-fixture-u +! ;
+: _ns-f,  ( addr len -- )
+    DUP >R _ns-fixture _ns-fixture-u @ + SWAP CMOVE
+    R> _ns-fixture-u +! ;
+: _ns-ec,  ( c -- )
+    _ns-expected _ns-expected-u @ + C! 1 _ns-expected-u +! ;
+: _ns-e,  ( addr len -- )
+    DUP >R _ns-expected _ns-expected-u @ + SWAP CMOVE
+    R> _ns-expected-u +! ;
+
+: _ns-build-sse  ( -- )
+    0 _ns-fixture-u !
+    239 _ns-fc, 187 _ns-fc, 191 _ns-fc,
+    S" : ping" _ns-f, 13 _ns-fc, 10 _ns-fc,
+    S" retry: 1500" _ns-f, 10 _ns-fc,
+    S" event: delta" _ns-f, 13 _ns-fc, 10 _ns-fc,
+    S" id: 42" _ns-f, 13 _ns-fc, 10 _ns-fc,
+    S" data: first" _ns-f, 10 _ns-fc,
+    S" data:second" _ns-f, 13 _ns-fc, 10 _ns-fc,
+    13 _ns-fc, 10 _ns-fc,
+    S" id" _ns-f, 13 _ns-fc,
+    S" retry: nope" _ns-f, 13 _ns-fc,
+    S" data:  leading" _ns-f, 13 _ns-fc,
+    13 _ns-fc,
+    0 _ns-expected-u !
+    S" first" _ns-e, 10 _ns-ec, S" second" _ns-e, ;
+
+: _ns-sse-event  ( parser context -- status )
+    DROP
+    _ns-events @ 0= IF
+        DUP SSE-EVENT S" delta" COMPARE 0= _ns-assert
+        DUP SSE-DATA _ns-expected _ns-expected-u @ COMPARE 0= _ns-assert
+        DUP SSE-LAST-ID S" 42" COMPARE 0= _ns-assert
+        DUP SSE.RETRY @ 1500 = _ns-assert
+    ELSE
+        DUP SSE-EVENT S" message" COMPARE 0= _ns-assert
+        DUP SSE-DATA S"  leading" COMPARE 0= _ns-assert
+        DUP SSE-LAST-ID NIP 0= _ns-assert
+        DUP SSE.RETRY @ 1500 = _ns-assert
+    THEN
+    DROP 1 _ns-events +! 0 ;
+
+: _ns-sse-reset  ( -- )
+    _ns-sse SSE-RESET 0 _ns-events ! ;
+
+: _ns-sse-split  ( split -- )
+    _ns-split ! _ns-sse-reset
+    _ns-fixture _ns-split @ _ns-sse SSE-FEED SSE-S-OK = _ns-assert
+    _ns-fixture _ns-split @ +
+    _ns-fixture-u @ _ns-split @ - _ns-sse SSE-FEED
+    SSE-S-OK = _ns-assert
+    _ns-events @ 2 = _ns-assert
+    _ns-sse SSE.STATE @ SSE-STATE-OPEN = _ns-assert ;
+
+CREATE _ns-overflow SSE-LINE-CAPACITY 1+ ALLOT
+CREATE _ns-id-stream 64 ALLOT
+VARIABLE _ns-id-u
+: _ns-ic,  ( c -- )
+    _ns-id-stream _ns-id-u @ + C! 1 _ns-id-u +! ;
+: _ns-i,  ( addr len -- )
+    DUP >R _ns-id-stream _ns-id-u @ + SWAP CMOVE R> _ns-id-u +! ;
+
+: _ns-stop-event  ( parser context -- status ) 2DROP 1 ;
+: _ns-throw-event  ( parser context -- status ) 2DROP -77 THROW 0 ;
+
+: _ns-run-sse  ( -- )
+    _ns-build-sse
+    _ns-sse SSE-INIT ['] _ns-sse-event 0 _ns-sse SSE-ON-EVENT!
+    _ns-fixture-u @ 1+ 0 DO I _ns-sse-split LOOP
+
+    _ns-sse-reset
+    _ns-fixture-u @ 0 DO
+        _ns-fixture I + 1 _ns-sse SSE-FEED SSE-S-OK = _ns-assert
+    LOOP
+    _ns-events @ 2 = _ns-assert
+
+    _ns-sse-reset
+    S" data: pending" _ns-sse SSE-FEED SSE-S-OK = _ns-assert
+    10 _ns-sse _SSE-BYTE
+    _ns-sse SSE-EOF SSE-S-OK = _ns-assert
+    _ns-events @ 0= _ns-assert
+    _ns-sse SSE.STATE @ SSE-STATE-EOF = _ns-assert
+    S" x" _ns-sse SSE-FEED SSE-S-CLOSED = _ns-assert
+
+    _ns-overflow SSE-LINE-CAPACITY 1+ 65 FILL
+    _ns-sse-reset
+    _ns-overflow SSE-LINE-CAPACITY 1+ _ns-sse SSE-FEED
+    SSE-S-LINE-OVERFLOW = _ns-assert
+
+    _ns-sse SSE-RESET 0 _ns-id-u !
+    S" id: keep" _ns-i, 10 _ns-ic,
+    S" id: bad" _ns-i, 0 _ns-ic, S" value" _ns-i, 10 _ns-ic,
+    _ns-id-stream _ns-id-u @ _ns-sse SSE-FEED SSE-S-OK = _ns-assert
+    _ns-sse SSE-LAST-ID S" keep" COMPARE 0= _ns-assert
+
+    _ns-sse SSE-RESET ['] _ns-stop-event 0 _ns-sse SSE-ON-EVENT!
+    0 _ns-id-u ! S" data: stop" _ns-i, 10 _ns-ic, 10 _ns-ic,
+    _ns-id-stream _ns-id-u @ _ns-sse SSE-FEED SSE-S-CALLBACK = _ns-assert
+    _ns-sse SSE.STATE @ SSE-STATE-STOPPED = _ns-assert
+
+    _ns-sse SSE-RESET ['] _ns-throw-event 0 _ns-sse SSE-ON-EVENT!
+    _ns-id-stream _ns-id-u @ _ns-sse SSE-FEED SSE-S-CALLBACK = _ns-assert
+    _ns-sse SSE.STATE @ SSE-STATE-STOPPED = _ns-assert ;
+
+CREATE _nh-parser HSTR-PARSER-SIZE ALLOT
+CREATE _nh-response 1024 ALLOT
+VARIABLE _nh-response-u
+CREATE _nh-output 256 ALLOT
+VARIABLE _nh-output-u
+VARIABLE _nh-headers
+VARIABLE _nh-kind
+VARIABLE _nh-split
+
+: _nh-c,  ( c -- )
+    _nh-response _nh-response-u @ + C! 1 _nh-response-u +! ;
+: _nh-r,  ( addr len -- )
+    DUP >R _nh-response _nh-response-u @ + SWAP CMOVE
+    R> _nh-response-u +! ;
+: _nh-crlf  ( -- ) 13 _nh-c, 10 _nh-c, ;
+: _nh-out+  ( addr len -- )
+    DUP _nh-output-u @ + 256 <= _ns-assert
+    DUP >R _nh-output _nh-output-u @ + SWAP CMOVE R> _nh-output-u +! ;
+
+: _nh-header-cb  ( parser context -- status )
+    DROP >R 1 _nh-headers +!
+    _nh-kind @ 1 = IF
+        R@ HSTR.CODE @ 200 = _ns-assert
+        R@ HSTR.VERSION @ 11 = _ns-assert
+        R@ HSTR.BODY-MODE @ HSTR-BODY-LENGTH = _ns-assert
+        S" Content-Type" R@ HSTR-HEADER IF
+            S" text/event-stream; charset=utf-8" COMPARE 0= _ns-assert
+        ELSE
+            2DROP 0 _ns-assert
+        THEN
+        S" X-Test" R@ HSTR-HEADER IF
+            S" yes" COMPARE 0= _ns-assert
+        ELSE
+            2DROP 0 _ns-assert
+        THEN
+    THEN
+    _nh-kind @ 2 = IF
+        R@ HSTR.BODY-MODE @ HSTR-BODY-CHUNKED = _ns-assert
+    THEN
+    _nh-kind @ 3 = IF
+        R@ HSTR.CODE @ 204 = _ns-assert
+        R@ HSTR.BODY-MODE @ HSTR-BODY-NONE = _ns-assert
+    THEN
+    _nh-kind @ 4 = IF
+        R@ HSTR.VERSION @ 10 = _ns-assert
+        R@ HSTR.BODY-MODE @ HSTR-BODY-CLOSE = _ns-assert
+    THEN
+    R> DROP 0 ;
+
+: _nh-body-cb  ( parser context -- status )
+    DROP HSTR-BODY-SLICE _nh-out+ 0 ;
+: _nh-stop-cb  ( parser context -- status ) 2DROP 1 ;
+
+: _nh-reset  ( -- )
+    _nh-parser HSTR-RESET
+    0 _nh-output-u ! 0 _nh-headers ! ;
+
+: _nh-build-length  ( -- )
+    0 _nh-response-u !
+    S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Content-Type: text/event-stream; charset=utf-8" _nh-r, _nh-crlf
+    S" Content-Length: 11" _nh-r, _nh-crlf
+    S" X-Test: yes" _nh-r, _nh-crlf _nh-crlf
+    S" hello world" _nh-r, ;
+
+: _nh-build-chunked  ( -- )
+    0 _nh-response-u !
+    S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Transfer-Encoding: chunked" _nh-r, _nh-crlf
+    S" Content-Type: text/plain" _nh-r, _nh-crlf _nh-crlf
+    S" 5;foo=bar" _nh-r, _nh-crlf S" hello" _nh-r, _nh-crlf
+    S" 6" _nh-r, _nh-crlf S"  world" _nh-r, _nh-crlf
+    S" 0" _nh-r, _nh-crlf S" X-Trailer: yes" _nh-r, _nh-crlf _nh-crlf ;
+
+: _nh-build-interim  ( -- )
+    0 _nh-response-u !
+    S" HTTP/1.1 100 Continue" _nh-r, _nh-crlf _nh-crlf
+    S" HTTP/1.1 204 No Content" _nh-r, _nh-crlf
+    S" X-Final: yes" _nh-r, _nh-crlf _nh-crlf ;
+
+: _nh-build-close  ( -- )
+    0 _nh-response-u !
+    S" HTTP/1.0 200 OK" _nh-r, _nh-crlf _nh-crlf
+    S" close body" _nh-r, ;
+
+: _nh-check-body  ( -- )
+    _nh-output _nh-output-u @ S" hello world" COMPARE 0= _ns-assert
+    _nh-parser HSTR.BODY-TOTAL @ 11 = _ns-assert ;
+
+: _nh-run-split  ( split -- )
+    _nh-split ! _nh-reset
+    _nh-response _nh-split @ _nh-parser HSTR-FEED HSTR-S-OK = _ns-assert
+    _nh-response _nh-split @ + _nh-response-u @ _nh-split @ -
+    _nh-parser HSTR-FEED HSTR-S-OK = _ns-assert
+    _nh-parser HSTR.STATE @ HSTR-STATE-DONE = _ns-assert
+    _nh-headers @ 1 = _ns-assert _nh-check-body ;
+
+: _nh-feed-all  ( -- status )
+    _nh-reset _nh-response _nh-response-u @ _nh-parser HSTR-FEED ;
+
+: _nh-run-http-positive  ( -- )
+    _nh-parser HSTR-INIT
+    ['] _nh-header-cb _nh-parser HSTR-ON-HEADERS!
+    ['] _nh-body-cb _nh-parser HSTR-ON-BODY!
+    0 _nh-parser HSTR-CONTEXT!
+
+    1 _nh-kind ! _nh-build-length
+    _nh-response-u @ 1+ 0 DO I _nh-run-split LOOP
+
+    2 _nh-kind ! _nh-build-chunked
+    _nh-response-u @ 1+ 0 DO I _nh-run-split LOOP
+    _nh-reset
+    _nh-response-u @ 0 DO
+        _nh-response I + 1 _nh-parser HSTR-FEED HSTR-S-OK = _ns-assert
+    LOOP
+    _nh-parser HSTR.STATE @ HSTR-STATE-DONE = _ns-assert
+    _nh-check-body
+
+    3 _nh-kind ! _nh-build-interim _nh-feed-all HSTR-S-OK = _ns-assert
+    _nh-parser HSTR.STATE @ HSTR-STATE-DONE = _ns-assert
+    _nh-parser HSTR.INTERIMS @ 1 = _ns-assert
+    _nh-headers @ 1 = _ns-assert
+    _nh-output-u @ 0= _ns-assert
+
+    4 _nh-kind ! _nh-build-close _nh-feed-all HSTR-S-OK = _ns-assert
+    _nh-parser HSTR.STATE @ HSTR-STATE-CLOSE = _ns-assert
+    _nh-parser HSTR-EOF HSTR-S-OK = _ns-assert
+    _nh-parser HSTR.STATE @ HSTR-STATE-DONE = _ns-assert
+    _nh-output _nh-output-u @ S" close body" COMPARE 0= _ns-assert
+
+    0 _nh-kind ! HSTR-F-HEAD _nh-parser HSTR.FLAGS !
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Content-Length: 99" _nh-r, _nh-crlf _nh-crlf
+    _nh-feed-all HSTR-S-OK = _ns-assert
+    _nh-parser HSTR.STATE @ HSTR-STATE-DONE = _ns-assert
+    _nh-parser HSTR.BODY-MODE @ HSTR-BODY-NONE = _ns-assert
+    0 _nh-parser HSTR.FLAGS ! ;
+
+: _nh-run-http-negative  ( -- )
+    0 _nh-kind !
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Content-Length: 2" _nh-r, _nh-crlf
+    S" Content-Length: 3" _nh-r, _nh-crlf _nh-crlf S" xx" _nh-r,
+    _nh-feed-all HSTR-S-FRAMING = _ns-assert
+
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Transfer-Encoding: chunked" _nh-r, _nh-crlf
+    S" Content-Length: 1" _nh-r, _nh-crlf _nh-crlf
+    _nh-feed-all HSTR-S-FRAMING = _ns-assert
+
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Transfer-Encoding: gzip" _nh-r, _nh-crlf _nh-crlf
+    _nh-feed-all HSTR-S-UNSUPPORTED = _ns-assert
+
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, 10 _nh-c,
+    S" Content-Length: 0" _nh-r, 10 _nh-c, 10 _nh-c,
+    _nh-feed-all HSTR-S-MALFORMED = _ns-assert
+
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S"  Folded: no" _nh-r, _nh-crlf _nh-crlf
+    _nh-feed-all HSTR-S-MALFORMED = _ns-assert
+
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Transfer-Encoding: chunked" _nh-r, _nh-crlf _nh-crlf
+    S" Z" _nh-r, _nh-crlf
+    _nh-feed-all HSTR-S-FRAMING = _ns-assert
+
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Transfer-Encoding: chunked" _nh-r, _nh-crlf _nh-crlf
+    S" 1" _nh-r, _nh-crlf S" x" _nh-r, _nh-crlf
+    S" 0" _nh-r, _nh-crlf S" Content-Length: 9" _nh-r, _nh-crlf _nh-crlf
+    _nh-feed-all HSTR-S-FRAMING = _ns-assert
+
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Content-Length: 5" _nh-r, _nh-crlf _nh-crlf S" abc" _nh-r,
+    _nh-feed-all HSTR-S-OK = _ns-assert
+    _nh-parser HSTR-EOF HSTR-S-TRUNCATED = _ns-assert
+
+    4 _nh-parser HSTR-BODY-LIMIT!
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Content-Length: 5" _nh-r, _nh-crlf _nh-crlf S" abcde" _nh-r,
+    _nh-feed-all HSTR-S-BODY-OVERFLOW = _ns-assert
+    HSTR-DEFAULT-BODY-LIMIT _nh-parser HSTR-BODY-LIMIT!
+
+    _nh-parser HSTR-RESET _nh-parser HSTR-CANCEL
+    _nh-parser HSTR.STATUS @ HSTR-S-CANCELLED = _ns-assert
+
+    ['] _nh-stop-cb _nh-parser HSTR-ON-BODY!
+    0 _nh-response-u ! S" HTTP/1.1 200 OK" _nh-r, _nh-crlf
+    S" Content-Length: 1" _nh-r, _nh-crlf _nh-crlf S" x" _nh-r,
+    _nh-feed-all HSTR-S-CALLBACK = _ns-assert
+    ['] _nh-body-cb _nh-parser HSTR-ON-BODY! ;
+
+: _nh-run-http  ( -- )
+    _nh-run-http-positive _nh-run-http-negative ;
+
+CREATE _nh-long-host 65 ALLOT
+VARIABLE _nh-zero
+: _nh-run-http-guards  ( -- )
+    S" native-secret" HTTP-SET-BEARER
+    _HTTP-BEARER-LEN @ 13 = _ns-assert
+    _HTTP-BEARER C@ 110 = _ns-assert
+    HTTP-CLEAR-BEARER
+    _HTTP-BEARER-LEN @ 0= _ns-assert
+    -1 _nh-zero !
+    512 0 DO _HTTP-BEARER I + C@ IF 0 _nh-zero ! THEN LOOP
+    _nh-zero @ _ns-assert
+    _nh-long-host 65 97 FILL HTTP-CLEAR-ERR
+    _nh-long-host 65 443 -1 HTTP-CONNECT 0= _ns-assert
+    HTTP-ERR @ HTTP-E-CONNECT = _ns-assert ;
+
+CREATE _np-port HIO-PORT-SIZE ALLOT
+CREATE _np-buffer 128 ALLOT
+VARIABLE _np-position
+VARIABLE _np-mode
+VARIABLE _np-calls
+VARIABLE _np-polls
+VARIABLE _np-buffer-a
+VARIABLE _np-capacity
+VARIABLE _np-count
+VARIABLE _np-result
+
+: _np-poll  ( context -- ) DROP 1 _np-polls +! ;
+: _np-close  ( context -- ) DROP ;
+: _np-recv  ( buffer capacity context -- count status )
+    DROP _np-capacity ! _np-buffer-a ! 1 _np-calls +!
+    _np-mode @ 1 = IF 0 HIO-S-OK EXIT THEN
+    _np-mode @ 2 = IF 0 HIO-S-FAILED EXIT THEN
+    _np-mode @ 3 = IF 0 HIO-S-CANCELLED EXIT THEN
+    _np-mode @ 4 = IF _np-capacity @ 1+ HIO-S-OK EXIT THEN
+    _np-mode @ 5 = IF -91 THROW THEN
+    _np-position @ _nh-response-u @ >= IF 0 HIO-S-EOF EXIT THEN
+    _nh-response-u @ _np-position @ - _np-capacity @ MIN 7 MIN
+    _np-count !
+    _nh-response _np-position @ + _np-buffer-a @ _np-count @ CMOVE
+    _np-count @ _np-position +!
+    _np-count @ HIO-S-OK ;
+
+: _np-reset  ( mode -- )
+    _np-mode ! 0 _np-position ! 0 _np-calls ! 0 _np-polls !
+    _nh-reset ;
+
+: _np-run  ( -- )
+    _np-port HIO-INIT
+    ['] _np-recv _np-port HIO.RECV-XT !
+    ['] _np-poll _np-port HIO.POLL-XT !
+    ['] _np-close _np-port HIO.CLOSE-XT !
+    0 _np-port HIO.CONTEXT !
+
+    1 _nh-kind ! _nh-build-length 0 _np-reset
+    100 0 DO
+        _nh-parser _np-port _np-buffer 128 HSTR-PUMP _np-result !
+        _np-result @ HSTR-PUMP-PARSER-ERROR = 0= _ns-assert
+        _np-result @ HSTR-PUMP-TRANSPORT-ERROR = 0= _ns-assert
+    LOOP
+    _nh-parser HSTR.STATE @ HSTR-STATE-DONE = _ns-assert
+    _nh-check-body
+    _np-calls @ 1 > _ns-assert
+    _np-polls @ _np-calls @ = _ns-assert
+
+    0 _nh-kind ! _nh-build-length 1 _np-reset
+    _nh-parser _np-port _np-buffer 128 HSTR-PUMP
+    HSTR-PUMP-IDLE = _ns-assert
+
+    2 _np-reset _nh-parser _np-port _np-buffer 128 HSTR-PUMP
+    HSTR-PUMP-TRANSPORT-ERROR = _ns-assert
+
+    3 _np-reset _nh-parser _np-port _np-buffer 128 HSTR-PUMP
+    HSTR-PUMP-CANCELLED = _ns-assert
+    _nh-parser HSTR.STATUS @ HSTR-S-CANCELLED = _ns-assert
+
+    4 _np-reset _nh-parser _np-port _np-buffer 128 HSTR-PUMP
+    HSTR-PUMP-TRANSPORT-ERROR = _ns-assert
+
+    5 _np-reset _nh-parser _np-port _np-buffer 128 HSTR-PUMP
+    HSTR-PUMP-TRANSPORT-ERROR = _ns-assert ;
+
+: _ns-run  ( -- )
+    0 _ns-fails ! 0 _ns-checks ! DEPTH _ns-depth !
+    _ns-run-sse _ns-stack _nh-run-http _ns-stack
+    _nh-run-http-guards _ns-stack _np-run _ns-stack
+    _ns-fails @ 0= IF
+        ." NET STREAM PASS " _ns-checks @ .
+    ELSE
+        ." NET STREAM FAIL " _ns-fails @ . ." / " _ns-checks @ .
+    THEN CR ;
+
+_ns-run
+""",
+        ready_markers=("NET STREAM PASS",),
+        stable_markers=("NET STREAM PASS",),
+    ),
     "mcp-component": Profile(
         roots=("interop/mcp/component-adapter.f",),
         resources=(),

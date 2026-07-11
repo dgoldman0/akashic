@@ -22,10 +22,10 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
-Profiles are `mcp`, `mcp-component`, `codec-json`, `jsonrpc`, `interop` (the
-non-TUI runtime and interoperability contracts), `agent` (provider-neutral
-conversations), `agent-ui`, `desktop` (Desk with all five applets),
-`desktop-agent`, `pad`, `fexplorer`, `daybook`, and `grid`.
+Profiles are `net-stream`, `mcp`, `mcp-component`, `codec-json`, `jsonrpc`,
+`interop` (the non-TUI runtime and interoperability contracts), `agent`
+(provider-neutral conversations), `agent-ui`, `desktop` (Desk with all five
+applets), `desktop-agent`, `pad`, `fexplorer`, `daybook`, and `grid`.
 Generated images, terminal text, cell JSON, and PNG captures go under
 `local_testing/out/`.
 
@@ -33,6 +33,7 @@ The smoke journeys exercise application behavior, not just boot markers:
 
 | Profile | Verified journey |
 |---|---|
+| `net-stream` | native incremental SSE and HTTP parsing across every fixture boundary, body framing, trailers, interim responses, EOF, limits, callback isolation, cooperative receive pumping, cancellation, transport faults, and stack balance |
 | `mcp` | native lifecycle gating, initialization, ping, tool discovery/call, resource and template discovery, resource reads, malformed requests, and stack balance |
 | `mcp-component` | native component catalog mapping, stable names and URIs, approved persistence, denial, approval-required, timeout, malformed arguments, resources, stale targets, and stack balance |
 | `codec-json` | owned value decode/encode, nested containers, Unicode, duplicate rejection, schema coercion, JSON Schema projection, bounds, and stack balance |

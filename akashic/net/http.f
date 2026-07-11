@@ -110,6 +110,9 @@ VARIABLE _HC-HLEN
     _HTTP-TLS !
     >R                                     \ save port
     DUP _HC-HLEN !  OVER _HC-HOST !        \ save host for SNI
+    _HC-HLEN @ 0= _HC-HLEN @ 64 > OR IF
+        2DROP R> DROP HTTP-E-CONNECT HTTP-FAIL 0 EXIT
+    THEN
     HTTP-DNS-LOOKUP                        \ ( ip | 0 )
     DUP 0= IF
         R> DROP HTTP-E-DNS HTTP-FAIL EXIT
@@ -117,9 +120,10 @@ VARIABLE _HC-HLEN
     R> _HTTP-NEXT-PORT                     \ ( ip port local-port )
     _HTTP-TLS @ IF
         \ Set SNI before TLS connect
-        _HC-HLEN @ 63 MIN DUP TLS-SNI-LEN !
+        TLS-SNI-HOST 64 0 FILL
+        _HC-HLEN @ DUP TLS-SNI-LEN !
         _HC-HOST @ TLS-SNI-HOST ROT CMOVE
-        TLS-CONNECT
+        TLS-ALPN-HTTP11 TLS-CONNECT-ALPN
     ELSE
         TCP-CONNECT
     THEN
@@ -328,11 +332,13 @@ VARIABLE _HTTP-ACCEPT-LEN
 
 \ HTTP-SET-BEARER ( token-a token-u -- )
 : HTTP-SET-BEARER  ( token-a token-u -- )
+    _HTTP-BEARER 512 0 FILL
     511 MIN DUP _HTTP-BEARER-LEN !
     _HTTP-BEARER SWAP CMOVE ;
 
 \ HTTP-CLEAR-BEARER ( -- )
-: HTTP-CLEAR-BEARER  ( -- )  0 _HTTP-BEARER-LEN ! ;
+: HTTP-CLEAR-BEARER  ( -- )
+    _HTTP-BEARER 512 0 FILL 0 _HTTP-BEARER-LEN ! ;
 
 \ HTTP-SET-UA ( ua-a ua-u -- )
 : HTTP-SET-UA  ( ua-a ua-u -- )
