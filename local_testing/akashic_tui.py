@@ -311,6 +311,213 @@ _rt-run
         ready_markers=("HTTP REQUEST PASS",),
         stable_markers=("HTTP REQUEST PASS",),
     ),
+    "tls-port": Profile(
+        roots=("net/transports/megapad-tls.f", "utils/string.f"),
+        resources=(),
+        autoexec=r"""\ autoexec.f - MegaPad native TLS NIO adapter tests
+ENTER-USERLAND
+." [akashic] loading MegaPad TLS transport" CR
+REQUIRE net/transports/megapad-tls.f
+REQUIRE utils/string.f
+
+VARIABLE _mt-fails
+VARIABLE _mt-checks
+VARIABLE _mt-depth
+: _mt-assert  ( flag -- )
+    1 _mt-checks +!
+    0= IF 1 _mt-fails +! ." ASSERT " _mt-checks @ . CR THEN ;
+: _mt-stack  ( -- )
+    DEPTH DUP _mt-depth @ <> IF
+        ." STACK " _mt-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _mt-depth @ = _mt-assert ;
+
+CREATE _mt-a MPTLS-SIZE ALLOT
+CREATE _mt-b MPTLS-SIZE ALLOT
+CREATE _mt-recv 32 ALLOT
+CREATE _mt-sent 256 ALLOT
+VARIABLE _mt-sent-u
+VARIABLE _mt-in-pos
+VARIABLE _mt-dns-hits
+VARIABLE _mt-connect-hits
+VARIABLE _mt-close-hits
+VARIABLE _mt-poll-hits
+VARIABLE _mt-link
+VARIABLE _mt-old-trust
+VARIABLE _mt-op-a
+VARIABLE _mt-op-b
+VARIABLE _mt-op-u
+VARIABLE _mt-op-n
+
+: _mt-dns  ( host-a host-u adapter -- ip )
+    DROP 1 _mt-dns-hits +!
+    S" api.openai.com" STR-STR= _mt-assert
+    0x01020304 ;
+
+: _mt-dns-zero  ( host-a host-u adapter -- ip )
+    DROP 2DROP 0 ;
+
+: _mt-dns-throw  ( host-a host-u adapter -- ip )
+    DROP 2DROP -777 THROW ;
+
+: _mt-connect  ( ip remote-port local-port adapter -- ctx )
+    _mt-op-a ! _mt-op-n ! _mt-op-u ! _mt-op-b !
+    1 _mt-connect-hits +!
+    _mt-op-b @ 0x01020304 = _mt-assert
+    _mt-op-u @ 443 = _mt-assert
+    _mt-op-n @ 49152 >= _mt-assert
+    _mt-op-n @ 65535 <= _mt-assert
+    _mt-op-a @ ;
+
+: _mt-status  ( ctx adapter -- link-status )
+    2DROP _mt-link @ ;
+
+: _mt-send  ( ctx buffer length adapter -- count )
+    DROP _mt-op-u ! _mt-op-b ! DROP
+    _mt-op-u @ 17 MIN _mt-op-n !
+    _mt-sent-u @ _mt-op-n @ + 256 > IF 0 EXIT THEN
+    _mt-op-b @ _mt-sent _mt-sent-u @ + _mt-op-n @ CMOVE
+    _mt-op-n @ _mt-sent-u +!
+    _mt-op-n @ ;
+
+: _mt-send-bad  ( ctx buffer length adapter -- count )
+    DROP >R 2DROP R> 1+ ;
+
+: _mt-recv-op  ( ctx buffer capacity adapter -- count )
+    DROP _mt-op-u ! _mt-op-b ! DROP
+    5 _mt-in-pos @ - DUP 0> 0= IF DROP 0 EXIT THEN
+    _mt-op-u @ MIN 3 MIN _mt-op-n !
+    S" hello" DROP _mt-in-pos @ + _mt-op-b @ _mt-op-n @ CMOVE
+    _mt-op-n @ _mt-in-pos +!
+    _mt-op-n @ ;
+
+: _mt-recv-bad  ( ctx buffer capacity adapter -- count )
+    2DROP 2DROP -1 ;
+
+: _mt-close  ( ctx adapter -- )
+    2DROP 1 _mt-close-hits +! ;
+
+: _mt-close-throw  ( ctx adapter -- )
+    2DROP -778 THROW ;
+
+: _mt-poll  ( adapter -- )
+    DROP 1 _mt-poll-hits +! ;
+
+VARIABLE _mt-bind-a
+
+: _mt-bind  ( adapter -- )
+    _mt-bind-a !
+    _mt-bind-a @ MPTLS-INIT
+    S" api.openai.com" 443 _mt-bind-a @ MPTLS-CONFIGURE
+    MPTLS-E-OK = _mt-assert
+    ['] _mt-dns _mt-bind-a @ MPTLS.DNS-XT !
+    ['] _mt-connect _mt-bind-a @ MPTLS.CONNECT-XT !
+    ['] _mt-send _mt-bind-a @ MPTLS.SEND-XT !
+    ['] _mt-recv-op _mt-bind-a @ MPTLS.RECV-XT !
+    ['] _mt-close _mt-bind-a @ MPTLS.CLOSE-XT !
+    ['] _mt-poll _mt-bind-a @ MPTLS.POLL-XT !
+    ['] _mt-status _mt-bind-a @ MPTLS.STATUS-XT ! ;
+
+: _mt-test-config  ( -- )
+    _mt-b MPTLS-INIT
+    S" bad host" 443 _mt-b MPTLS-CONFIGURE MPTLS-E-INVALID = _mt-assert
+    S" api.openai.com" 0 _mt-b MPTLS-CONFIGURE
+    MPTLS-E-INVALID = _mt-assert
+    S" api.openai.com" 443 MPTLS-NEW
+    DUP MPTLS-E-OK = _mt-assert DROP
+    DUP MPTLS-HOST S" api.openai.com" STR-STR= _mt-assert
+    DUP MPTLS.REMOTE-PORT @ 443 = _mt-assert
+    MPTLS-FREE ;
+
+: _mt-test-open-and-io  ( -- )
+    _mt-a _mt-bind _mt-b _mt-bind
+    1 TLS-TRUST-COUNT ! MPTLS-LINK-OPEN _mt-link !
+    _mt-a MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    _mt-a MPTLS.STATE @ MPTLS-STATE-OPEN = _mt-assert
+    _mt-a MPTLS.LAST-ERROR @ MPTLS-E-OK = _mt-assert
+    TLS-SNI-HOST TLS-SNI-LEN @ S" api.openai.com" STR-STR= _mt-assert
+    _mt-dns-hits @ 1 = _mt-assert
+    _mt-connect-hits @ 1 = _mt-assert
+
+    _mt-b MPTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-b MPTLS.LAST-ERROR @ MPTLS-E-BUSY = _mt-assert
+
+    S" 0123456789abcdefghijkl" _mt-a MPTLS.PORT NIO-SEND
+    NIO-S-OK = _mt-assert 17 = _mt-assert
+    _mt-sent _mt-sent-u @ S" 0123456789abcdefg" STR-STR= _mt-assert
+
+    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    NIO-S-OK = _mt-assert 3 = _mt-assert
+    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    NIO-S-OK = _mt-assert 2 = _mt-assert
+    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    NIO-S-OK = _mt-assert 0= _mt-assert
+    MPTLS-LINK-CLOSED _mt-link !
+    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    NIO-S-EOF = _mt-assert 0= _mt-assert
+    _mt-a MPTLS.PORT NIO-CLOSE
+    _mt-close-hits @ 1 = _mt-assert
+
+    MPTLS-LINK-OPEN _mt-link !
+    _mt-b MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    _mt-b MPTLS.PORT NIO-POLL
+    _mt-poll-hits @ 1 = _mt-assert
+    ['] _mt-close-throw _mt-b MPTLS.CLOSE-XT !
+    _mt-b MPTLS.PORT NIO-CLOSE
+    _mt-b MPTLS.STATE @ MPTLS-STATE-CLOSED = _mt-assert
+    _mt-a MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    _mt-a MPTLS.PORT NIO-CLOSE ;
+
+: _mt-test-errors  ( -- )
+    _mt-a _mt-bind
+    0 TLS-TRUST-COUNT !
+    _mt-a MPTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-a MPTLS.LAST-ERROR @ MPTLS-E-NO-TRUST = _mt-assert
+    1 TLS-TRUST-COUNT !
+    ['] _mt-dns-zero _mt-a MPTLS.DNS-XT !
+    _mt-a MPTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-a MPTLS.LAST-ERROR @ MPTLS-E-DNS = _mt-assert
+    ['] _mt-dns-throw _mt-a MPTLS.DNS-XT !
+    _mt-a MPTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-a MPTLS.LAST-ERROR @ MPTLS-E-FAULT = _mt-assert
+    ['] _mt-dns _mt-a MPTLS.DNS-XT !
+    MPTLS-LINK-OPEN _mt-link !
+    _mt-a MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    ['] _mt-send-bad _mt-a MPTLS.SEND-XT !
+    S" bad" _mt-a MPTLS.PORT NIO-SEND
+    NIO-S-FAILED = _mt-assert 0= _mt-assert
+    _mt-a MPTLS.PORT NIO-CLOSE
+
+    _mt-a _mt-bind 1 TLS-TRUST-COUNT ! MPTLS-LINK-OPEN _mt-link !
+    _mt-a MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    ['] _mt-recv-bad _mt-a MPTLS.RECV-XT !
+    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    NIO-S-FAILED = _mt-assert 0= _mt-assert
+    _mt-a MPTLS.PORT NIO-CLOSE ;
+
+: _mt-run  ( -- )
+    0 _mt-fails ! 0 _mt-checks ! DEPTH _mt-depth !
+    TLS-TRUST-COUNT @ _mt-old-trust !
+    0 _mt-sent-u ! 0 _mt-in-pos ! 0 _mt-dns-hits !
+    0 _mt-connect-hits ! 0 _mt-close-hits ! 0 _mt-poll-hits !
+    _mt-test-config
+    _mt-test-open-and-io
+    _mt-test-errors
+    _mt-a MPTLS.PORT NIO-CLOSE
+    _mt-b MPTLS.PORT NIO-CLOSE
+    _mt-old-trust @ TLS-TRUST-COUNT !
+    _mt-stack
+    _mt-fails @ 0= IF
+        ." TLS PORT PASS " _mt-checks @ .
+    ELSE
+        ." TLS PORT FAIL " _mt-fails @ . ." / " _mt-checks @ .
+    THEN CR ;
+
+_mt-run
+""",
+        ready_markers=("TLS PORT PASS",),
+        stable_markers=("TLS PORT PASS",),
+    ),
     "openai-codec": Profile(
         roots=(
             "agent/providers/openai/request-codec.f",

@@ -22,7 +22,7 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
-Profiles are `credential`, `http-request`, `net-stream`, `mcp`,
+Profiles are `credential`, `http-request`, `tls-port`, `net-stream`, `mcp`,
 `mcp-component`, `codec-json`, `jsonrpc`, `openai-codec`, `openai-provider`,
 `interop` (the non-TUI runtime and interoperability contracts), `agent`
 (provider-neutral conversations), `agent-ui`, `desktop` (Desk with all five
@@ -36,6 +36,7 @@ The smoke journeys exercise application behavior, not just boot markers:
 |---|---|
 | `credential` | native bounded secret replacement, callback-only borrowing, callback fault isolation, overlap rejection, generation/use metadata, replacement and clear zeroization, allocation cleanup, and stack balance |
 | `http-request` | caller-owned request framing, header validation, partial cooperative sends, transport cancellation and faults, capacity sentinels, authorization-buffer zeroization, and stack balance |
+| `tls-port` | caller-owned MegaPad DNS/TLS binding, SNI and trust gating, authenticated opens, partial I/O, idle/EOF distinction, single-owner serialization, callback faults, retries, and stack balance |
 | `net-stream` | native incremental SSE and HTTP parsing across every fixture boundary, body framing, trailers, interim responses, EOF, limits, callback isolation, cooperative receive pumping, cancellation, transport faults, and stack balance |
 | `mcp` | native lifecycle gating, initialization, ping, tool discovery/call, resource and template discovery, resource reads, malformed requests, and stack balance |
 | `mcp-component` | native component catalog mapping, stable names and URIs, approved persistence, denial, approval-required, timeout, malformed arguments, resources, stale targets, and stack balance |
