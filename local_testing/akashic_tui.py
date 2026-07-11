@@ -68,6 +68,89 @@ class Profile:
 
 
 PROFILES = {
+    "credential": Profile(
+        roots=("security/credential.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native credential ownership tests
+ENTER-USERLAND
+." [akashic] loading credential owner" CR
+REQUIRE security/credential.f
+
+VARIABLE _ct-fails
+VARIABLE _ct-checks
+VARIABLE _ct-depth
+: _ct-assert  ( flag -- )
+    1 _ct-checks +!
+    0= IF 1 _ct-fails +! ." ASSERT " _ct-checks @ . CR THEN ;
+: _ct-stack  ( -- ) DEPTH _ct-depth @ = _ct-assert ;
+
+CREATE _ct-credential CREDENTIAL-SIZE ALLOT
+CREATE _ct-long CRED-SECRET-CAPACITY 1+ ALLOT
+VARIABLE _ct-callbacks
+
+: _ct-use  ( secret-a secret-u context -- status )
+    77 = _ct-assert
+    S" second" COMPARE 0= _ct-assert
+    1 _ct-callbacks +! 9 ;
+: _ct-throw  ( secret-a secret-u context -- status )
+    DROP 2DROP -88 THROW 0 ;
+
+: _ct-zero?  ( addr len -- flag )
+    -1 -ROT 0 ?DO
+        DUP I + C@ IF SWAP DROP 0 SWAP THEN
+    LOOP
+    DROP ;
+
+: _ct-run  ( -- )
+    0 _ct-fails ! 0 _ct-checks ! 0 _ct-callbacks ! DEPTH _ct-depth !
+    _ct-credential CRED-INIT
+    _ct-credential CRED-PRESENT? 0= _ct-assert
+    ['] _ct-use 77 _ct-credential CRED-WITH CRED-S-ABSENT = _ct-assert
+
+    S" first credential value" _ct-credential CRED-SET CRED-S-OK = _ct-assert
+    _ct-credential CRED-PRESENT? _ct-assert
+    _ct-credential CRED.LENGTH @ 22 = _ct-assert
+    _ct-credential CRED.GENERATION @ 1 = _ct-assert
+
+    S" second" _ct-credential CRED-SET CRED-S-OK = _ct-assert
+    _ct-credential CRED.LENGTH @ 6 = _ct-assert
+    _ct-credential _CRED-SECRET-A 6 + CRED-SECRET-CAPACITY 6 -
+    _ct-zero? _ct-assert
+    ['] _ct-use 77 _ct-credential CRED-WITH 9 = _ct-assert
+    _ct-callbacks @ 1 = _ct-assert
+    _ct-credential CRED.USES @ 1 = _ct-assert
+    _ct-credential CRED.LAST-STATUS @ 9 = _ct-assert
+
+    ['] _ct-throw 0 _ct-credential CRED-WITH CRED-S-CALLBACK = _ct-assert
+    _ct-credential CRED.USES @ 2 = _ct-assert
+    _ct-credential _CRED-SECRET-A 6 _ct-credential CRED-SET
+    CRED-S-OVERLAP = _ct-assert
+
+    _ct-long CRED-SECRET-CAPACITY 1+ 65 FILL
+    _ct-long CRED-SECRET-CAPACITY 1+ _ct-credential CRED-SET
+    CRED-S-TOO-LONG = _ct-assert
+    0 1 _ct-credential CRED-SET CRED-S-INVALID = _ct-assert
+
+    _ct-credential CRED-CLEAR
+    _ct-credential CRED-PRESENT? 0= _ct-assert
+    _ct-credential CRED.LENGTH @ 0= _ct-assert
+    _ct-credential _CRED-SECRET-A CRED-SECRET-CAPACITY _ct-zero? _ct-assert
+    _ct-credential CRED.GENERATION @ 3 = _ct-assert
+
+    CRED-NEW DUP 0= _ct-assert DROP
+    DUP CRED-PRESENT? 0= _ct-assert CRED-FREE
+    _ct-stack
+    _ct-fails @ 0= IF
+        ." CREDENTIAL PASS " _ct-checks @ .
+    ELSE
+        ." CREDENTIAL FAIL " _ct-fails @ . ." / " _ct-checks @ .
+    THEN CR ;
+
+_ct-run
+""",
+        ready_markers=("CREDENTIAL PASS",),
+        stable_markers=("CREDENTIAL PASS",),
+    ),
     "net-stream": Profile(
         roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
         resources=(),
