@@ -14,8 +14,8 @@ VARIABLE _OFP-PROVIDER
 : _OFP-DISCONNECT  ( event-queue context -- )
     2DROP ;
 
-: _OFP-START  ( prompt-a prompt-u run-id event-queue context -- ior )
-    2DROP 2DROP DROP 1 ;
+: _OFP-START  ( turn event-queue context -- ior )
+    2DROP DROP 1 ;
 
 : _OFP-CANCEL  ( run-id event-queue context -- ior )
     2DROP DROP 0 ;

@@ -1,13 +1,12 @@
 \ =====================================================================
 \  config.f - Native OpenAI Responses provider configuration
 \ =====================================================================
-\  Configuration owns non-secret endpoint and model text. It references the
-\  general security/credential owner but never exposes or copies its secret.
+\  Configuration owns only non-secret endpoint and model text. Authentication
+\  is supplied independently through the provider-auth port.
 \ =====================================================================
 
 PROVIDED akashic-agent-openai-config
 
-REQUIRE ../../../security/credential.f
 REQUIRE ../../../text/utf8.f
 
 0 CONSTANT OAIC-S-OK
@@ -26,14 +25,13 @@ REQUIRE ../../../text/utf8.f
   8 CONSTANT _OAIC-PATH-U
  16 CONSTANT _OAIC-MODEL-U
  24 CONSTANT _OAIC-INSTRUCTIONS-U
- 32 CONSTANT _OAIC-PORT
- 40 CONSTANT _OAIC-TLS
- 48 CONSTANT _OAIC-CREDENTIAL
- 56 CONSTANT _OAIC-FLAGS
- 64 CONSTANT _OAIC-MAX-REQUEST
- 72 CONSTANT _OAIC-MAX-OUTPUT
- 80 CONSTANT _OAIC-RESERVED
- 88 CONSTANT _OAIC-HOST-BUF
+32 CONSTANT _OAIC-PORT
+40 CONSTANT _OAIC-TLS
+ 48 CONSTANT _OAIC-FLAGS
+ 56 CONSTANT _OAIC-MAX-REQUEST
+ 64 CONSTANT _OAIC-MAX-OUTPUT
+ 72 CONSTANT _OAIC-RESERVED
+ 80 CONSTANT _OAIC-HOST-BUF
 _OAIC-HOST-BUF OAIC-HOST-CAPACITY + CONSTANT _OAIC-PATH-BUF
 _OAIC-PATH-BUF OAIC-PATH-CAPACITY + CONSTANT _OAIC-MODEL-BUF
 _OAIC-MODEL-BUF OAIC-MODEL-CAPACITY + CONSTANT _OAIC-INSTRUCTIONS-BUF
@@ -46,7 +44,6 @@ CONSTANT OPENAI-CONFIG-SIZE
 : OAIC.INSTRUCTIONS-U ( config -- a ) _OAIC-INSTRUCTIONS-U + ;
 : OAIC.PORT           ( config -- a ) _OAIC-PORT + ;
 : OAIC.TLS            ( config -- a ) _OAIC-TLS + ;
-: OAIC.CREDENTIAL     ( config -- a ) _OAIC-CREDENTIAL + ;
 : OAIC.FLAGS          ( config -- a ) _OAIC-FLAGS + ;
 : OAIC.MAX-REQUEST    ( config -- a ) _OAIC-MAX-REQUEST + ;
 : OAIC.MAX-OUTPUT     ( config -- a ) _OAIC-MAX-OUTPUT + ;
@@ -146,7 +143,3 @@ VARIABLE _OAICI-C
     OAIC-F-TOOLS _OAICI-C @ OAIC.FLAGS !
     65536 _OAICI-C @ OAIC.MAX-REQUEST !
     262144 _OAICI-C @ OAIC.MAX-OUTPUT ! ;
-
-: OAIC-CREDENTIAL!  ( credential config -- status )
-    OVER 0= IF 2DROP OAIC-S-INVALID EXIT THEN
-    OAIC.CREDENTIAL ! OAIC-S-OK ;

@@ -152,6 +152,89 @@ _ct-run
         ready_markers=("CREDENTIAL PASS",),
         stable_markers=("CREDENTIAL PASS",),
     ),
+    "agent-context": Profile(
+        roots=("agent/turn-request.f", "agent/providers/testing/scripted.f"),
+        resources=(),
+        autoexec=r"""\ autoexec.f - model context and structured turn contract
+ENTER-USERLAND
+." [akashic] loading agent context" CR
+REQUIRE agent/turn-request.f
+REQUIRE agent/providers/testing/scripted.f
+
+VARIABLE _cx-fails
+VARIABLE _cx-checks
+VARIABLE _cx-depth
+VARIABLE _cx-context
+VARIABLE _cx-item
+VARIABLE _cx-provider
+VARIABLE _cx-queue
+CREATE _cx-turn AGENT-TURN-REQUEST-SIZE ALLOT
+CREATE _cx-value CV-SIZE ALLOT
+
+: _cx-assert  ( flag -- )
+    1 _cx-checks +!
+    0= IF 1 _cx-fails +! ." ASSERT " _cx-checks @ . CR THEN ;
+: _cx-stack  ( -- )
+    DEPTH DUP _cx-depth @ <> IF
+        ." STACK " _cx-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _cx-depth @ = _cx-assert ;
+
+: _cx-run  ( -- )
+    0 _cx-fails ! 0 _cx-checks ! DEPTH _cx-depth !
+    ACTX-NEW DUP ACTX-S-OK = _cx-assert DROP DUP _cx-context ! DROP
+    AROLE-USER 1 S" first question" _cx-context @ ACTX-APPEND-MESSAGE
+    DUP ACTX-S-OK = _cx-assert DROP DUP _cx-item ! DROP
+    _cx-item @ ACTXI-VALID? _cx-assert
+    _cx-context @ ACTX.COUNT @ 1 = _cx-assert
+    _cx-stack
+
+    _cx-value CV-INIT S" task input" _cx-value CV-STRING! 0= _cx-assert
+    2 S" org.akashic.test" S" daybook.task.capture" S" call-2"
+    _cx-value _cx-context @ ACTX-APPEND-TOOL-CALL-VALUE
+    DUP ACTX-S-OK = _cx-assert DROP DROP
+    2 S" daybook.task.capture"
+    _cx-context @ ACTX-LAST-TOOL-CALL DUP 0<> _cx-assert DROP
+    2 S" org.akashic.test" S" daybook.task.capture" S" call-2"
+    _cx-value 0 _cx-context @ ACTX-APPEND-TOOL-RESULT-VALUE
+    DUP ACTX-S-OK = _cx-assert DROP DROP
+    _cx-context @ ACTX.COUNT @ 3 = _cx-assert
+    _cx-stack
+
+    _cx-turn ATURN-INIT
+    1 _cx-turn ATURN.THREAD-ID ! 3 _cx-turn ATURN.RUN-ID !
+    S" second question" _cx-turn ATURN.PROMPT-U ! _cx-turn ATURN.PROMPT-A !
+    _cx-context @ _cx-turn ATURN.CONTEXT !
+    _cx-context @ ACTX.COUNT @ _cx-turn ATURN.CONTEXT-N !
+    _cx-context @ ACTX.REVISION @ _cx-turn ATURN.CONTEXT-REVISION !
+    _cx-turn ATURN-VALID? _cx-assert
+    _cx-stack
+
+    SCRIPTED-PROVIDER-NEW DUP 0= _cx-assert DROP _cx-provider !
+    AEQ-NEW DUP 0= _cx-assert DROP _cx-queue !
+    _cx-turn _cx-queue @ _cx-provider @ APROV-START
+    DUP 0= _cx-assert DROP
+    _cx-provider @ SCRIPTED-LAST-CONTEXT-N 3 = _cx-assert
+    _cx-stack
+    _cx-provider @ APROV-FREE _cx-queue @ AEQ-FREE
+
+    2 _cx-context @ ACTX-DROP-RUN
+    _cx-context @ ACTX.COUNT @ 1 = _cx-assert
+    _cx-context @ ACTX-DROP-LAST
+    _cx-context @ ACTX.COUNT @ 0= _cx-assert
+    _cx-value CV-FREE _cx-context @ ACTX-FREE
+    _cx-stack
+    _cx-fails @ 0= IF
+        ." AGENT CONTEXT PASS " _cx-checks @ .
+    ELSE
+        ." AGENT CONTEXT FAIL " _cx-fails @ . ." / " _cx-checks @ .
+    THEN CR ;
+
+_cx-run
+""",
+        ready_markers=("AGENT CONTEXT PASS",),
+        stable_markers=("AGENT CONTEXT PASS",),
+    ),
     "conversation-store": Profile(
         roots=("agent/storage/vfs-conversation.f",),
         resources=(),
@@ -205,6 +288,21 @@ CREATE _ts-bad 8 ALLOT
     AROLE-USER AMSG-S-COMPLETE 1 S" first durable message"
     _ts-conv @ ACONV-APPEND DUP 0= _ts-assert DROP
     DUP AMSG-F-AUDIT SWAP AMSG.FLAGS ! DROP
+    AROLE-USER 1 S" first durable message"
+    _ts-conv @ ACONV.MODEL-CONTEXT @ ACTX-APPEND-MESSAGE
+    DUP ACTX-S-OK = _ts-assert DROP DROP
+    1 S" org.akashic.test" S" reasoning" S" {}"
+    _ts-conv @ ACONV.MODEL-CONTEXT @ ACTX-APPEND-PROVIDER
+    DUP ACTX-S-OK = _ts-assert DROP DROP
+    1 S" org.akashic.test" S" daybook.task.capture" S" call-1" S" {}"
+    _ts-conv @ ACONV.MODEL-CONTEXT @ ACTX-APPEND-TOOL-CALL
+    DUP ACTX-S-OK = _ts-assert DROP DROP
+    1 S" org.akashic.test" S" daybook.task.capture" S" call-1"
+    S" true" 0 _ts-conv @ ACONV.MODEL-CONTEXT @
+    ACTX-APPEND-TOOL-RESULT DUP ACTX-S-OK = _ts-assert DROP DROP
+    AROLE-ASSISTANT 1 S" first durable answer"
+    _ts-conv @ ACONV.MODEL-CONTEXT @ ACTX-APPEND-MESSAGE
+    DUP ACTX-S-OK = _ts-assert DROP DROP
     _ts-new-store DUP _ts-store !
     _ts-conv @ SWAP ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
     _ts-store @ AVFSSTORE.GENERATION @ 1 = _ts-assert
@@ -212,6 +310,9 @@ CREATE _ts-bad 8 ALLOT
 
     AROLE-ASSISTANT AMSG-S-STREAMING 2 S" interrupted output"
     _ts-conv @ ACONV-APPEND DUP 0= _ts-assert DROP DROP
+    AROLE-USER 2 S" interrupted question"
+    _ts-conv @ ACONV.MODEL-CONTEXT @ ACTX-APPEND-MESSAGE
+    DUP ACTX-S-OK = _ts-assert DROP DROP
     _ts-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
     _ts-store @ AVFSSTORE.GENERATION @ 2 = _ts-assert
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @ 1 = _ts-assert
@@ -220,6 +321,11 @@ CREATE _ts-bad 8 ALLOT
     DUP ACSTORE-S-OK = _ts-assert DROP DUP _ts-loaded ! DROP
     _ts-store2 @ AVFSSTORE.GENERATION @ 2 = _ts-assert
     _ts-loaded @ ACONV.COUNT @ 3 = _ts-assert
+    _ts-loaded @ ACONV.MODEL-CONTEXT @ ACTX.COUNT @ 5 = _ts-assert
+    1 _ts-loaded @ ACONV.MODEL-CONTEXT @ ACTX-NTH
+    ACTXI-DATA-TEXT S" {}" STR-STR= _ts-assert
+    2 _ts-loaded @ ACONV.MODEL-CONTEXT @ ACTX-NTH
+    ACTXI-CALL-ID-TEXT S" call-1" STR-STR= _ts-assert
     1 _ts-loaded @ ACONV-NTH DUP AMSG.STATE @ AMSG-S-CANCELLED = _ts-assert
     AMSG.FLAGS @ AMSG-F-RECOVERED AND 0<> _ts-assert
     2 _ts-loaded @ ACONV-NTH AMSG-TEXT
@@ -231,6 +337,7 @@ CREATE _ts-bad 8 ALLOT
     DUP ACSTORE-S-OK = _ts-assert DROP DUP _ts-loaded ! DROP
     _ts-store3 @ AVFSSTORE.GENERATION @ 1 = _ts-assert
     _ts-loaded @ ACONV.COUNT @ 1 = _ts-assert
+    _ts-loaded @ ACONV.MODEL-CONTEXT @ ACTX.COUNT @ 5 = _ts-assert
     0 _ts-loaded @ ACONV-NTH AMSG-TEXT
     S" first durable message" STR-STR= _ts-assert
     _ts-loaded @ ACONV-FREE
@@ -337,19 +444,23 @@ VARIABLE _ap-msg
     2 _ap-pump
     _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ap-assert
     _ap-conv @ ACONV.COUNT @ 4 = _ap-assert
+    _ap-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 2 = _ap-assert
     _ap-check-audit
     _ap-runtime @ ARUNTIME.STORE-STATUS @ ACSTORE-S-OK = _ap-assert
     _ap-close _ap-stack
 
     _ap-open 2 _ap-pump
     _ap-conv @ ACONV.COUNT @ 4 = _ap-assert
+    _ap-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 2 = _ap-assert
     _ap-check-audit
     _ap-runtime @ ARUNTIME.NEXT-RUN @ 2 = _ap-assert
     S" approval interrupted persistence" _ap-runtime @ ARUNTIME-SEND
     0= _ap-assert
+    _ap-provider @ SCRIPTED-LAST-CONTEXT-N 2 = _ap-assert
     4 _ap-pump
     _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _ap-assert
     _ap-conv @ ACONV.COUNT @ 7 = _ap-assert
+    _ap-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 3 = _ap-assert
     _ap-runtime @ ARUNTIME-PERSIST-FORCE ACSTORE-S-OK = _ap-assert
     _ap-close _ap-stack
 
@@ -366,12 +477,15 @@ VARIABLE _ap-msg
     S" Previous agent run was interrupted before completion." STR-STR=
     _ap-assert
     _ap-runtime @ ARUNTIME.NEXT-RUN @ 3 = _ap-assert
+    _ap-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 2 = _ap-assert
     _ap-runtime @ ARUNTIME-CLEAR 0= _ap-assert
     _ap-conv @ ACONV.COUNT @ 0= _ap-assert
+    _ap-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 0= _ap-assert
     _ap-close _ap-stack
 
     _ap-open 2 _ap-pump
     _ap-conv @ ACONV.COUNT @ 0= _ap-assert
+    _ap-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 0= _ap-assert
     _ap-runtime @ ARUNTIME.STORE-STATUS @ ACSTORE-S-OK = _ap-assert
     _ap-close
     _ap-vfs @ VFS-DESTROY
@@ -755,6 +869,7 @@ _mt-run
     ),
     "openai-codec": Profile(
         roots=(
+            "agent/auth/api-key.f",
             "agent/providers/openai/request-codec.f",
             "agent/providers/openai/event-codec.f",
             "agent/providers/openai/responses.f",
@@ -765,6 +880,7 @@ _mt-run
 ENTER-USERLAND
 ." [akashic] loading OpenAI Responses codecs" CR
 REQUIRE agent/providers/openai/config.f
+REQUIRE agent/auth/api-key.f
 REQUIRE agent/tool-gateway.f
 REQUIRE interop/codecs/json-schema.f
 REQUIRE agent/providers/openai/request-codec.f
@@ -786,10 +902,13 @@ VARIABLE _oc-depth
 
 CREATE _oc-config OPENAI-CONFIG-SIZE ALLOT
 CREATE _oc-credential CREDENTIAL-SIZE ALLOT
+CREATE _oc-auth APIKEY-AUTH-SIZE ALLOT
 CREATE _oc-event OPENAI-EVENT-SIZE ALLOT
 CREATE _oc-port NET-IO-PORT-SIZE ALLOT
 CREATE _oc-out 65536 ALLOT
 VARIABLE _oc-out-u
+CREATE _oc-input 32768 ALLOT
+VARIABLE _oc-input-u
 CREATE _oc-json 32768 ALLOT
 VARIABLE _oc-json-u
 CREATE _oc-name OAI-TOOL-NAME-CAPACITY ALLOT
@@ -805,6 +924,8 @@ VARIABLE _oc-bus
 VARIABLE _oc-gateway
 VARIABLE _oc-provider
 VARIABLE _oc-runtime
+VARIABLE _oc-context
+CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
 
 : _oc-handler  ( request instance -- status )
     2DROP CBUS-S-OK ;
@@ -842,8 +963,36 @@ VARIABLE _oc-runtime
     JSON-BUILD-RESET _oc-json 32768 JSON-SET-OUTPUT ;
 : _oc-json-end  ( -- ) JSON-OUTPUT-RESULT NIP _oc-json-u ! ;
 
+: _oc-setup-turn  ( -- )
+    ACTX-NEW DUP ACTX-S-OK = _oc-assert DROP _oc-context !
+    AROLE-USER 1 S" Earlier question" _oc-context @ ACTX-APPEND-MESSAGE
+    DUP ACTX-S-OK = _oc-assert DROP DROP
+    AROLE-ASSISTANT 1 S" Earlier answer" _oc-context @ ACTX-APPEND-MESSAGE
+    DUP ACTX-S-OK = _oc-assert DROP DROP
+    _oc-json-begin JSON-{
+        S" type" S" reasoning" JSON-KV-ESTR
+        S" encrypted_content" S" abc" JSON-KV-ESTR
+    JSON-} _oc-json-end
+    1 S" org.akashic.agent.openai.responses" S" reasoning"
+    _oc-json _oc-json-u @ _oc-context @ ACTX-APPEND-PROVIDER
+    DUP ACTX-S-OK = _oc-assert DROP DROP
+    1 S" org.akashic.agent.openai.responses" S" daybook.task.capture"
+    S" call-old" S" {}" _oc-context @ ACTX-APPEND-TOOL-CALL
+    DUP ACTX-S-OK = _oc-assert DROP DROP
+    1 S" org.akashic.agent.openai.responses" S" daybook.task.capture"
+    S" call-old" S" true" 0 _oc-context @ ACTX-APPEND-TOOL-RESULT
+    DUP ACTX-S-OK = _oc-assert DROP DROP
+    _oc-turn ATURN-INIT
+    1 _oc-turn ATURN.THREAD-ID ! 2 _oc-turn ATURN.RUN-ID !
+    S" Add milk to tomorrow's list"
+    _oc-turn ATURN.PROMPT-U ! _oc-turn ATURN.PROMPT-A !
+    _oc-context @ _oc-turn ATURN.CONTEXT !
+    _oc-context @ ACTX.COUNT @ _oc-turn ATURN.CONTEXT-N !
+    _oc-context @ ACTX.REVISION @ _oc-turn ATURN.CONTEXT-REVISION !
+    _oc-gateway @ _oc-turn ATURN.TOOL-GATEWAY ! ;
+
 : _oc-start-request  ( -- status )
-    S" Add milk to tomorrow's list" _oc-config _oc-gateway @
+    _oc-turn S" org.akashic.agent.openai.responses" _oc-config _oc-gateway @
     _oc-out 65536 OAI-RESPONSES-START-JSON
     SWAP _oc-out-u ! ;
 
@@ -851,7 +1000,7 @@ VARIABLE _oc-runtime
     _oc-config OAIC-INIT
     _oc-credential CRED-INIT
     S" test-api-key" _oc-credential CRED-SET DROP
-    _oc-credential _oc-config OAIC-CREDENTIAL! DROP
+    _oc-credential _oc-auth APIKEY-AUTH-INIT AAUTH-S-OK = _oc-assert
     _oc-config OAIC-HOST S" api.openai.com" STR-STR= _oc-assert
     _oc-config OAIC-PATH S" /v1/responses" STR-STR= _oc-assert
     _oc-config OAIC-MODEL S" gpt-5.5" STR-STR= _oc-assert
@@ -860,11 +1009,12 @@ VARIABLE _oc-runtime
     _oc-config OAIC-INSTRUCTIONS! OAIC-S-OK = _oc-assert
     S" bad host" _oc-config OAIC-HOST! OAIC-S-INVALID = _oc-assert
     _oc-setup-tools
+    _oc-setup-turn
     _oc-gateway @ ATOOLG-TOOL-N 1 = _oc-assert
     0 _oc-gateway @ ATOOLG-TOOL-NTH _oc-capability = _oc-assert
     _oc-gateway @ OAI-GATEWAY-TOOLS-VALID? _oc-assert
     _oc-port NIO-INIT
-    _oc-config _oc-port OPENAI-PROVIDER-NEW
+    _oc-config _oc-auth APIKEY-AUTH.PORT _oc-port OPENAI-PROVIDER-NEW
     DUP OAIR-S-OK = _oc-assert DROP DUP _oc-provider !
     _oc-gateway @ OVER APROV-BIND-TOOLS OAIR-S-OK = _oc-assert
     DUP ARUNTIME-NEW
@@ -899,6 +1049,17 @@ VARIABLE _oc-runtime
     0 JSON-NTH JSON-ENTER S" strict" JSON-KEY JSON-GET-BOOL _oc-assert
     _oc-out _oc-out-u @ JSON-ENTER S" tools" JSON-KEY JSON-ENTER
     0 JSON-NTH JSON-ENTER S" parameters" JSON-KEY JSON-OBJECT? _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    JSON-COUNT 6 = _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    0 JSON-NTH JSON-ENTER S" content" JSON-KEY JSON-GET-STRING
+    S" Earlier question" STR-STR= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    2 JSON-NTH JSON-ENTER S" type" JSON-KEY JSON-GET-STRING
+    S" reasoning" STR-STR= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    3 JSON-NTH JSON-ENTER S" call_id" JSON-KEY JSON-GET-STRING
+    S" call-old" STR-STR= _oc-assert
 
     _oc-json-begin JSON-[
         JSON-{ S" type" S" reasoning" JSON-KV-ESTR
@@ -908,25 +1069,29 @@ VARIABLE _oc-runtime
         S" name" S" test" JSON-KV-ESTR
         S" arguments" S" {}" JSON-KV-ESTR JSON-}
     JSON-] _oc-json-end
-    S" Add milk to tomorrow's list" _oc-json _oc-json-u @
+    _oc-turn S" org.akashic.agent.openai.responses"
+    _oc-input 32768 OAI-TURN-INPUT-JSON
+    DUP OAIREQ-S-OK = _oc-assert DROP _oc-input-u !
+    _oc-input _oc-input-u @ _oc-json _oc-json-u @
     S" call_1" S" ok" _oc-config _oc-gateway @
     _oc-out 65536 OAI-RESPONSES-CONTINUE-JSON
     DUP OAIREQ-S-OK = _oc-assert DROP _oc-out-u !
     _oc-out _oc-out-u @ JSON-VALID? _oc-assert
     _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
-    JSON-COUNT 4 = _oc-assert
+    JSON-COUNT 9 = _oc-assert
     _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
-    3 JSON-NTH JSON-ENTER S" type" JSON-KEY JSON-GET-STRING
+    8 JSON-NTH JSON-ENTER S" type" JSON-KEY JSON-GET-STRING
     S" function_call_output" STR-STR= _oc-assert
     _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
-    3 JSON-NTH JSON-ENTER S" call_id" JSON-KEY JSON-GET-STRING
+    8 JSON-NTH JSON-ENTER S" call_id" JSON-KEY JSON-GET-STRING
     S" call_1" STR-STR= _oc-assert
 
     _oc-config OAIC.FLAGS DUP @ OAIC-F-STORE OR SWAP !
     _oc-start-request OAIREQ-S-OK = _oc-assert
     _oc-out _oc-out-u @ S" include" JSON-FIELD
     DUP 0= _oc-assert DROP 0= _oc-assert 2DROP
-    S" short" _oc-config 0 _oc-out 8 OAI-RESPONSES-START-JSON
+    _oc-turn S" org.akashic.agent.openai.responses"
+    _oc-config 0 _oc-out 8 OAI-RESPONSES-START-JSON
     OAIREQ-S-CAPACITY = _oc-assert DROP ;
 
 : _oc-event-created  ( -- )
@@ -1003,6 +1168,8 @@ VARIABLE _oc-runtime
     S" {" _oc-event OAIEV-PARSE OAIEV-S-INVALID = _oc-assert ;
 
 : _oc-cleanup  ( -- )
+    _oc-context @ ACTX-FREE
+    _oc-auth APIKEY-AUTH.PORT AAUTH-DESTROY
     _oc-gateway @ ATOOLG-FREE
     _oc-bus @ CBUS-FREE
     _oc-instance @ _oc-registry @ CREG-INST- DROP
@@ -1028,6 +1195,7 @@ _oc-run
     ),
     "openai-provider": Profile(
         roots=(
+            "agent/auth/api-key.f",
             "agent/providers/openai/responses.f",
             "agent/runtime.f",
         ),
@@ -1035,6 +1203,7 @@ _oc-run
         autoexec=r"""\ autoexec.f - native OpenAI provider fixture
 ENTER-USERLAND
 ." [akashic] loading OpenAI provider fixture" CR
+REQUIRE agent/auth/api-key.f
 REQUIRE agent/providers/openai/responses.f
 REQUIRE agent/runtime.f
 
@@ -1074,6 +1243,7 @@ VARIABLE _op-recv-n
 
 CREATE _op-config OPENAI-CONFIG-SIZE ALLOT
 CREATE _op-credential CREDENTIAL-SIZE ALLOT
+CREATE _op-auth APIKEY-AUTH-SIZE ALLOT
 CREATE _op-component COMP-DESC ALLOT
 CREATE _op-capability CAP-DESC ALLOT
 CREATE _op-schema CS-SIZE ALLOT
@@ -1141,6 +1311,17 @@ VARIABLE _op-found-text
         S" arguments" JSON-KEY: _op-args _op-args-u @ JSON-ESTR
     JSON-} JSON-} _op-json-end _op-sse-event, ;
 
+: _op-reasoning-item,  ( -- )
+    _op-json-begin JSON-{
+    S" type" S" response.output_item.done" JSON-KV-ESTR
+    S" response_id" S" resp_tool" JSON-KV-ESTR
+    S" output_index" 0 JSON-KV-NUM
+    S" item" JSON-KEY: JSON-{
+        S" type" S" reasoning" JSON-KV-ESTR
+        S" id" S" rs_1" JSON-KV-ESTR
+        S" encrypted_content" S" encrypted-test-state" JSON-KV-ESTR
+    JSON-} JSON-} _op-json-end _op-sse-event, ;
+
 : _op-text,  ( -- )
     _op-json-begin JSON-{
     S" type" S" response.output_text.delta" JSON-KV-ESTR
@@ -1162,6 +1343,7 @@ VARIABLE _op-found-text
 : _op-build-first-response  ( -- )
     0 _op-body-u ! _op-args-build
     S" resp_tool" _op-created,
+    _op-reasoning-item,
     _op-tool-item,
     S" resp_tool" _op-completed,
     _op-http-wrap ;
@@ -1220,7 +1402,7 @@ VARIABLE _op-found-text
     _op-config OAIC-INIT
     _op-credential CRED-INIT
     S" test-api-key" _op-credential CRED-SET DROP
-    _op-credential _op-config OAIC-CREDENTIAL! DROP
+    _op-credential _op-auth APIKEY-AUTH-INIT DROP
     ." [openai-provider] config" CR
 
     _op-schema CS-INIT CV-T-STRING _op-schema CS-ALLOW!
@@ -1254,7 +1436,8 @@ VARIABLE _op-found-text
     _op-capability _op-tool-name OAI-TOOL-NAME-CAPACITY OAI-TOOL-NAME
     DROP _op-tool-name-u !
 
-    _op-config _op-port OPENAI-PROVIDER-NEW DROP _op-provider !
+    _op-config _op-auth APIKEY-AUTH.PORT _op-port OPENAI-PROVIDER-NEW
+    DROP _op-provider !
     ." [openai-provider] provider" CR
     ." [openai-provider] tools " _op-gateway @ ATOOLG-TOOL-N . CR
     _op-gateway @ OAI-GATEWAY-TOOLS-VALID? _op-assert
@@ -1302,8 +1485,16 @@ VARIABLE _op-found-text
         STR-STR-CONTAINS IF -1 _op-found-text ! THEN
     LOOP
     DROP _op-found-text @ _op-assert
+    _op-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 5 = _op-assert
 
     S" cancel now" _op-runtime @ ARUNTIME-SEND 0= _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    DUP OAIR-S.INPUT SWAP OAIR-S.INPUT-U @ JSON-ENTER
+    2DUP JSON-COUNT 6 = _op-assert
+    2DUP 0 JSON-NTH JSON-ENTER S" content" JSON-KEY JSON-GET-STRING
+    S" Please capture a milk task" STR-STR= _op-assert
+    5 JSON-NTH JSON-ENTER S" content" JSON-KEY JSON-GET-STRING
+    S" cancel now" STR-STR= _op-assert
     _op-runtime @ ARUNTIME-CANCEL 0= _op-assert
     4 _op-runtime @ ARUNTIME-PUMP DROP
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _op-assert ;
@@ -1316,6 +1507,7 @@ VARIABLE _op-found-text
     _op-instance @ _op-registry @ CREG-INST- DROP
     _op-registry @ CREG-FREE
     _op-instance @ CINST-FREE
+    _op-auth APIKEY-AUTH.PORT AAUTH-DESTROY
     _op-credential CRED-CLEAR ;
 
 : _op-run  ( -- )
@@ -1390,8 +1582,8 @@ VARIABLE _om-runtime
     _om-source @ APSOURCE-PROVIDER-NEW
     DUP OAIR-S-OK = _om-assert DROP _om-provider !
     _om-provider @ APROV.FEATURES @ APROV-F-AUTH AND 0<> _om-assert
-    _om-provider @ APROV-AUTH-PRESENT? 0= _om-assert
-    _om-provider @ OPENAI-PROVIDER-CONFIG OAIC.CREDENTIAL @
+    _om-provider @ APROV-AUTH AAUTH-READY? 0= _om-assert
+    _om-provider @ APROV-AUTH AAUTH.CONTEXT @ APIKEY-AUTH.CREDENTIAL @
     _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL = _om-assert
     _om-provider @ APROV.CONTEXT @ OAIR-C.PORT @
     _om-source @ OPENAI-MEGAPAD-SOURCE-TRANSPORT MPTLS.PORT = _om-assert
@@ -1401,14 +1593,14 @@ VARIABLE _om-runtime
     _om-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _om-assert
     _om-runtime @ ARUNTIME-AUTH-PRESENT? 0= _om-assert
     S" local-fixture-secret" _om-runtime @ ARUNTIME-AUTH-SET
-    APROV-AUTH-S-OK = _om-assert
+    AAUTH-S-OK = _om-assert
     _om-runtime @ ARUNTIME-AUTH-PRESENT? _om-assert
     _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL CRED.LENGTH @
     20 = _om-assert
     8 _om-runtime @ ARUNTIME-PUMP DROP
     _om-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _om-assert
 
-    _om-runtime @ ARUNTIME-AUTH-CLEAR APROV-AUTH-S-OK = _om-assert
+    _om-runtime @ ARUNTIME-AUTH-CLEAR AAUTH-S-OK = _om-assert
     _om-runtime @ ARUNTIME.STATUS @ ARUN-S-OFFLINE = _om-assert
     _om-runtime @ ARUNTIME-AUTH-PRESENT? 0= _om-assert
     _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL _CRED-SECRET-A
@@ -1428,6 +1620,309 @@ _om-run
 """,
         ready_markers=("OPENAI MEGAPAD PASS",),
         stable_markers=("OPENAI MEGAPAD PASS",),
+    ),
+    "codex-auth": Profile(
+        roots=("agent/providers/codex/auth.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native Codex device authentication fixture
+ENTER-USERLAND
+." [akashic] loading Codex device authentication" CR
+REQUIRE agent/providers/codex/auth.f
+
+VARIABLE _ca-fails
+VARIABLE _ca-checks
+VARIABLE _ca-depth
+: _ca-assert  ( flag -- )
+    1 _ca-checks +!
+    0= IF 1 _ca-fails +! ." ASSERT " _ca-checks @ . CR THEN ;
+: _ca-stack  ( -- )
+    DEPTH DUP _ca-depth @ <> IF
+        ." STACK " _ca-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ca-depth @ = _ca-assert ;
+
+CREATE _ca-port NET-IO-PORT-SIZE ALLOT
+CREATE _ca-response 49152 ALLOT
+VARIABLE _ca-response-u
+VARIABLE _ca-response-pos
+CREATE _ca-body 32768 ALLOT
+VARIABLE _ca-body-u
+CREATE _ca-json 16384 ALLOT
+VARIABLE _ca-json-u
+CREATE _ca-request 32768 ALLOT
+VARIABLE _ca-request-u
+CREATE _ca-id-token 8192 ALLOT
+VARIABLE _ca-id-token-u
+CREATE _ca-access-token 8192 ALLOT
+VARIABLE _ca-access-token-u
+CREATE _ca-payload 4096 ALLOT
+VARIABLE _ca-payload-u
+CREATE _ca-b64 8192 ALLOT
+VARIABLE _ca-b64-u
+VARIABLE _ca-auth
+VARIABLE _ca-opens
+VARIABLE _ca-closes
+VARIABLE _ca-send-a
+VARIABLE _ca-send-u
+VARIABLE _ca-send-n
+VARIABLE _ca-recv-a
+VARIABLE _ca-recv-u
+VARIABLE _ca-recv-n
+VARIABLE _ca-jwt-d
+VARIABLE _ca-jwt-cap
+VARIABLE _ca-jwt-w
+
+: _ca-b,  ( addr len -- )
+    DUP >R _ca-body _ca-body-u @ + SWAP CMOVE R> _ca-body-u +! ;
+: _ca-r,  ( addr len -- )
+    DUP >R _ca-response _ca-response-u @ + SWAP CMOVE R> _ca-response-u +! ;
+: _ca-rc,  ( c -- )
+    _ca-response _ca-response-u @ + C! 1 _ca-response-u +! ;
+: _ca-crlf,  ( -- ) 13 _ca-rc, 10 _ca-rc, ;
+: _ca-json-begin  ( -- )
+    JSON-BUILD-RESET _ca-json 16384 JSON-SET-OUTPUT ;
+: _ca-json-end  ( -- ) JSON-OUTPUT-RESULT NIP _ca-json-u ! ;
+
+: _ca-jwt  ( payload-a payload-u destination capacity -- length )
+    _ca-jwt-cap ! _ca-jwt-d ! 0 _ca-jwt-w !
+    S" e30." _ca-jwt-d @ SWAP CMOVE 4 _ca-jwt-w !
+    _ca-jwt-d @ _ca-jwt-w @ + _ca-jwt-cap @ _ca-jwt-w @ -
+    B64-ENCODE-URL DUP _ca-b64-u ! _ca-jwt-w +!
+    46 _ca-jwt-d @ _ca-jwt-w @ + C! 1 _ca-jwt-w +!
+    S" sig" _ca-jwt-d @ _ca-jwt-w @ + SWAP CMOVE 3 _ca-jwt-w +!
+    _ca-jwt-w @ ;
+
+: _ca-build-tokens  ( -- )
+    JSON-BUILD-RESET _ca-payload 4096 JSON-SET-OUTPUT
+    JSON-{ S" exp" 4102444800 JSON-KV-NUM JSON-}
+    JSON-OUTPUT-RESULT NIP _ca-payload-u !
+    _ca-payload _ca-payload-u @ _ca-access-token 8192 _ca-jwt
+    _ca-access-token-u !
+    JSON-BUILD-RESET _ca-payload 4096 JSON-SET-OUTPUT
+    JSON-{
+    S" email" S" user@example.com" JSON-KV-ESTR
+    S" https://api.openai.com/auth" JSON-KEY: JSON-{
+        S" chatgpt_plan_type" S" pro" JSON-KV-ESTR
+        S" chatgpt_account_id" S" account-fixture" JSON-KV-ESTR
+    JSON-}
+    JSON-}
+    JSON-OUTPUT-RESULT NIP _ca-payload-u !
+    _ca-payload _ca-payload-u @ _ca-id-token 8192 _ca-jwt
+    _ca-id-token-u ! ;
+
+: _ca-http-wrap  ( success? -- )
+    0 _ca-response-u !
+    IF S" HTTP/1.1 200 OK" ELSE S" HTTP/1.1 403 Forbidden" THEN
+    _ca-r, _ca-crlf,
+    S" Content-Type: application/json" _ca-r, _ca-crlf,
+    S" Content-Length: " _ca-r, _ca-body-u @ NUM>STR _ca-r, _ca-crlf,
+    S" Connection: close" _ca-r, _ca-crlf, _ca-crlf,
+    _ca-body _ca-body-u @ _ca-r, ;
+
+: _ca-user-code-response  ( -- )
+    _ca-json-begin JSON-{
+    S" device_auth_id" S" device-fixture" JSON-KV-ESTR
+    S" user_code" S" TEST-CODE" JSON-KV-ESTR
+    S" interval" S" 1" JSON-KV-ESTR
+    JSON-} _ca-json-end
+    0 _ca-body-u ! _ca-json _ca-json-u @ _ca-b, -1 _ca-http-wrap ;
+
+: _ca-pending-response  ( -- )
+    0 _ca-body-u ! S" {}" _ca-b, 0 _ca-http-wrap ;
+
+: _ca-code-response  ( -- )
+    _ca-json-begin JSON-{
+    S" authorization_code" S" authorization-fixture" JSON-KV-ESTR
+    S" code_challenge" S" challenge-fixture" JSON-KV-ESTR
+    S" code_verifier" S" verifier-fixture" JSON-KV-ESTR
+    JSON-} _ca-json-end
+    0 _ca-body-u ! _ca-json _ca-json-u @ _ca-b, -1 _ca-http-wrap ;
+
+: _ca-token-response  ( -- )
+    _ca-json-begin JSON-{
+    S" id_token" JSON-KEY: _ca-id-token _ca-id-token-u @ JSON-ESTR
+    S" access_token" JSON-KEY: _ca-access-token _ca-access-token-u @ JSON-ESTR
+    S" refresh_token" S" refresh-fixture" JSON-KV-ESTR
+    JSON-} _ca-json-end
+    0 _ca-body-u ! _ca-json _ca-json-u @ _ca-b, -1 _ca-http-wrap ;
+
+: _ca-open  ( context -- status )
+    DROP 1 _ca-opens +! 0 _ca-response-pos ! 0 _ca-request-u !
+    _ca-opens @ CASE
+        1 OF _ca-user-code-response ENDOF
+        2 OF _ca-pending-response ENDOF
+        3 OF _ca-code-response ENDOF
+        _ca-token-response
+    ENDCASE
+    NIO-S-OK ;
+: _ca-close  ( context -- ) DROP 1 _ca-closes +! ;
+: _ca-poll-port  ( context -- ) DROP ;
+: _ca-send  ( addr len context -- count status )
+    DROP _ca-send-u ! _ca-send-a !
+    _ca-request-u @ _ca-send-u @ + 32768 > IF 0 NIO-S-FAILED EXIT THEN
+    _ca-send-u @ 101 MIN _ca-send-n !
+    _ca-send-a @ _ca-request _ca-request-u @ + _ca-send-n @ CMOVE
+    _ca-send-n @ _ca-request-u +!
+    _ca-send-n @ NIO-S-OK ;
+: _ca-recv  ( addr cap context -- count status )
+    DROP _ca-recv-u ! _ca-recv-a !
+    _ca-response-pos @ _ca-response-u @ >= IF 0 NIO-S-EOF EXIT THEN
+    _ca-response-u @ _ca-response-pos @ - _ca-recv-u @ MIN 47 MIN
+    _ca-recv-n !
+    _ca-response _ca-response-pos @ + _ca-recv-a @ _ca-recv-n @ CMOVE
+    _ca-recv-n @ _ca-response-pos +!
+    _ca-recv-n @ NIO-S-OK ;
+
+: _ca-pump-to-pending  ( -- )
+    400 0 DO
+        _ca-auth @ CDA.AUTH AAUTH-POLL DROP
+        _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-PENDING = IF LEAVE THEN
+        _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-ERROR = IF LEAVE THEN
+    LOOP ;
+: _ca-pump-poll-once  ( -- )
+    4000 0 DO
+        _ca-auth @ CDA.AUTH AAUTH-POLL DROP
+        _ca-auth @ CDA.SUBSTATE @ CDA-SUB-IDLE = IF LEAVE THEN
+    LOOP ;
+: _ca-pump-to-ready  ( -- )
+    8000 0 DO
+        _ca-auth @ CDA.AUTH AAUTH-POLL DROP
+        _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-READY = IF LEAVE THEN
+    LOOP ;
+
+VARIABLE _ca-access-seen
+: _ca-access-callback  ( addr len context -- status )
+    DROP _ca-access-token _ca-access-token-u @ STR-STR= _ca-access-seen ! 0 ;
+
+: _ca-zero?  ( addr len -- flag )
+    -1 -ROT 0 ?DO DUP I + C@ IF SWAP DROP 0 SWAP THEN LOOP DROP ;
+
+: _ca-run  ( -- )
+    0 _ca-fails ! 0 _ca-checks ! DEPTH _ca-depth !
+    _ca-build-tokens
+    _ca-port NIO-INIT
+    ['] _ca-open _ca-port NIO.OPEN-XT !
+    ['] _ca-close _ca-port NIO.CLOSE-XT !
+    ['] _ca-poll-port _ca-port NIO.POLL-XT !
+    ['] _ca-send _ca-port NIO.SEND-XT !
+    ['] _ca-recv _ca-port NIO.RECV-XT !
+    CODEX-DEVICE-AUTH-SIZE ALLOCATE DUP 0= _ca-assert DROP _ca-auth !
+    _ca-port _ca-auth @ CODEX-DEVICE-AUTH-INIT AAUTH-S-OK = _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-SIGNED-OUT = _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH-BEGIN AAUTH-S-PENDING = _ca-assert
+    _ca-pump-to-pending
+    _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-PENDING = _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH.USER-CODE DUP CV-DATA@ SWAP CV-LEN@
+    S" TEST-CODE" STR-STR= _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH.VERIFY-URI DUP CV-DATA@ SWAP CV-LEN@
+    CODEX-AUTH-VERIFY-URI STR-STR= _ca-assert
+
+    _ca-auth @ CDA.AUTH AAUTH-POLL DROP
+    _ca-pump-poll-once
+    _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-PENDING = _ca-assert
+    0 _ca-auth @ CDA.NEXT-POLL-MS !
+    _ca-pump-to-ready
+    _ca-auth @ CDA.AUTH AAUTH-READY? _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH.ACCOUNT-ID DUP CV-DATA@ SWAP CV-LEN@
+    S" account-fixture" STR-STR= _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH.ACCOUNT-LABEL DUP CV-DATA@ SWAP CV-LEN@
+    S" user@example.com" STR-STR= _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH.PLAN DUP CV-DATA@ SWAP CV-LEN@
+    S" pro" STR-STR= _ca-assert
+    0 _ca-access-seen !
+    ['] _ca-access-callback 0 _ca-auth @ CDA.AUTH AAUTH-WITH-ACCESS
+    AAUTH-S-OK = _ca-assert _ca-access-seen @ _ca-assert
+    _ca-opens @ 4 = _ca-assert
+    _ca-request _ca-request-u @ S" grant_type=authorization_code"
+    STR-STR-CONTAINS _ca-assert
+    _ca-auth @ CDA.WORK @ 0= _ca-assert
+
+    _ca-auth @ CDA.AUTH AAUTH-REFRESH AAUTH-S-PENDING = _ca-assert
+    _ca-pump-to-ready
+    _ca-auth @ CDA.AUTH AAUTH-READY? _ca-assert
+    _ca-opens @ 5 = _ca-assert
+    _ca-request _ca-request-u @ S" refresh_token" STR-STR-CONTAINS _ca-assert
+
+    _ca-auth @ CDA.AUTH AAUTH-LOGOUT AAUTH-S-OK = _ca-assert
+    _ca-auth @ CDA.TOKENS O2TOK-PRESENT? 0= _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH-BEGIN AAUTH-S-PENDING = _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH-CANCEL AAUTH-S-CANCELLED = _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-SIGNED-OUT = _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH-DESTROY
+    _ca-auth @ FREE
+    _ca-stack
+    _ca-fails @ 0= IF
+        ." CODEX AUTH PASS " _ca-checks @ .
+    ELSE
+        ." CODEX AUTH FAIL " _ca-fails @ . ." / " _ca-checks @ .
+    THEN CR ;
+
+_ca-run
+""",
+        ready_markers=("CODEX AUTH PASS",),
+        stable_markers=("CODEX AUTH PASS",),
+    ),
+    "codex-megapad": Profile(
+        roots=("agent/providers/codex/megapad.f", "agent/runtime.f"),
+        resources=(),
+        autoexec=r"""\ autoexec.f - physical MegaPad Codex composition
+ENTER-USERLAND
+." [akashic] loading Codex MegaPad composition" CR
+REQUIRE agent/providers/codex/megapad.f
+REQUIRE agent/runtime.f
+
+VARIABLE _cm-fails
+VARIABLE _cm-checks
+VARIABLE _cm-depth
+VARIABLE _cm-source
+VARIABLE _cm-provider
+VARIABLE _cm-runtime
+: _cm-assert  ( flag -- )
+    1 _cm-checks +!
+    0= IF 1 _cm-fails +! ." ASSERT " _cm-checks @ . CR THEN ;
+: _cm-stack  ( -- )
+    DEPTH DUP _cm-depth @ <> IF
+        ." STACK " _cm-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _cm-depth @ = _cm-assert ;
+
+: _cm-run  ( -- )
+    0 _cm-fails ! 0 _cm-checks ! DEPTH _cm-depth !
+    CODEX-MEGAPAD-SOURCE-NEW
+    DUP APSOURCE-S-OK = _cm-assert DROP _cm-source !
+    _cm-source @ CODEX-MEGAPAD-SOURCE-CONFIG OAIC-HOST
+    CODEX-BACKEND-HOST STR-STR= _cm-assert
+    _cm-source @ CODEX-MEGAPAD-AUTH-TRANSPORT MPTLS-HOST
+    CODEX-AUTH-HOST STR-STR= _cm-assert
+    _cm-source @ CODEX-MEGAPAD-MODEL-TRANSPORT MPTLS-HOST
+    CODEX-BACKEND-HOST STR-STR= _cm-assert
+    _cm-source @ CODEX-MEGAPAD-SOURCE-AUTH CDA.AUTH AAUTH.METHODS @
+    AAUTH-M-DEVICE AND 0<> _cm-assert
+
+    _cm-source @ APSOURCE-PROVIDER-NEW
+    DUP OAIR-S-OK = _cm-assert DROP _cm-provider !
+    _cm-provider @ DUP APROV.ID-A @ SWAP APROV.ID-U @
+    CODEX-PROVIDER-ID STR-STR= _cm-assert
+    _cm-provider @ APROV-AUTH
+    _cm-source @ CODEX-MEGAPAD-SOURCE-AUTH CDA.AUTH = _cm-assert
+    _cm-provider @ APROV.FEATURES @ APROV-F-CONTEXT AND 0<> _cm-assert
+    _cm-provider @ ARUNTIME-NEW DUP 0= _cm-assert DROP _cm-runtime !
+    _cm-runtime @ ARUNTIME-AUTH DUP 0<> _cm-assert
+    AAUTH.STATE @ AAUTH-STATE-SIGNED-OUT = _cm-assert
+    _cm-runtime @ ARUNTIME-FREE
+    _cm-provider @ APROV-FREE
+    _cm-source @ APSOURCE-FREE
+    _cm-stack
+    _cm-fails @ 0= IF
+        ." CODEX MEGAPAD PASS " _cm-checks @ .
+    ELSE
+        ." CODEX MEGAPAD FAIL " _cm-fails @ . ." / " _cm-checks @ .
+    THEN CR ;
+
+_cm-run
+""",
+        ready_markers=("CODEX MEGAPAD PASS",),
+        stable_markers=("CODEX MEGAPAD PASS",),
     ),
     "net-stream": Profile(
         roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
@@ -2838,11 +3333,13 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     _at-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _at-assert
     _at-runtime @ ARUNTIME.CONVERSATION @ DUP _at-conv !
     ACONV.COUNT @ 2 = _at-assert
+    _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 2 = _at-assert
     1 _at-conv @ ACONV-NTH AMSG-TEXT
     S" hello runtime" STR-STR-CONTAINS _at-assert
     _at-stack-clean
 
     S" request approval" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-provider @ SCRIPTED-LAST-CONTEXT-N 2 = _at-assert
     4 _at-pump
     _at-stack-clean
     _at-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _at-assert
@@ -2850,6 +3347,7 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     2 _at-pump
     _at-stack-clean
     _at-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _at-assert
+    _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 4 = _at-assert
 
     _at-tool-setup
     _at-stack-clean
@@ -2866,6 +3364,7 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     _at-stack-clean
 
     S" task gateway test" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-provider @ SCRIPTED-LAST-CONTEXT-N 4 = _at-assert
     4 0 DO 1 _at-pump _at-stack-clean LOOP
     _at-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _at-assert
     _at-stack-clean
@@ -2882,11 +3381,14 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     ACONV.COUNT @ 0> _at-assert
     _at-conv @ ACONV.COUNT @ 1- _at-conv @ ACONV-NTH AMSG-TEXT
     S" Daybook task captured." STR-STR-CONTAINS _at-assert
+    _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 8 = _at-assert
 
     S" cancel this" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-provider @ SCRIPTED-LAST-CONTEXT-N 8 = _at-assert
     _at-runtime @ ARUNTIME-CANCEL 0= _at-assert
     2 _at-pump
     _at-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _at-assert
+    _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 8 = _at-assert
 
     _at-runtime @ ARUNTIME-FREE
     _at-provider @ APROV-FREE

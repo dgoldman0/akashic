@@ -17,6 +17,7 @@ REQUIRE ../interop/value.f
 9  CONSTANT AEV-RUN-DONE
 10 CONSTANT AEV-ERROR
 11 CONSTANT AEV-CANCELLED
+12 CONSTANT AEV-CONTEXT-ITEM
 
  0 CONSTANT _AEV-KIND
  8 CONSTANT _AEV-RUN-ID
@@ -24,7 +25,8 @@ REQUIRE ../interop/value.f
 24 CONSTANT _AEV-FLAGS
 32 CONSTANT _AEV-NAME
 72 CONSTANT _AEV-DATA
-112 CONSTANT AGENT-EVENT-SIZE
+112 CONSTANT _AEV-CALL-ID
+152 CONSTANT AGENT-EVENT-SIZE
 
 : AEV.KIND      ( event -- a ) _AEV-KIND + ;
 : AEV.RUN-ID    ( event -- a ) _AEV-RUN-ID + ;
@@ -32,12 +34,14 @@ REQUIRE ../interop/value.f
 : AEV.FLAGS     ( event -- a ) _AEV-FLAGS + ;
 : AEV.NAME      ( event -- value ) _AEV-NAME + ;
 : AEV.DATA      ( event -- value ) _AEV-DATA + ;
+: AEV.CALL-ID   ( event -- value ) _AEV-CALL-ID + ;
 
 : AEV-INIT  ( event -- ) AGENT-EVENT-SIZE 0 FILL ;
 
 : AEV-FREE  ( event -- )
     DUP AEV.NAME CV-FREE
     DUP AEV.DATA CV-FREE
+    DUP AEV.CALL-ID CV-FREE
     AEV-INIT ;
 
 : AEV-MOVE  ( source destination -- )

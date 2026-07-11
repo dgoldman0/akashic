@@ -71,7 +71,7 @@ CMP-LAYOUT-SIZE CONSTANT _AG-STATE-SIZE
 : _AG-AUTH-MISSING?  ( -- flag )
     _AG-RUNTIME @ ARUNTIME.PROVIDER @
     DUP APROV.FEATURES @ APROV-F-AUTH AND 0= IF DROP 0 EXIT THEN
-    APROV-AUTH-PRESENT? 0= ;
+    APROV-AUTH AAUTH-READY? 0= ;
 
 : _AG-UPDATE-STATUS  ( -- )
     _AG-E-PROVIDER @ ?DUP IF
@@ -122,10 +122,10 @@ CMP-LAYOUT-SIZE CONSTANT _AG-STATE-SIZE
 
 : _AG-AUTH-SET-TOAST  ( status -- )
     CASE
-        APROV-AUTH-S-OK OF S" Credential set" 1200 ENDOF
-        APROV-AUTH-S-UNSUPPORTED OF S" Provider does not accept a credential" 1800 ENDOF
-        APROV-AUTH-S-CAPACITY OF S" Credential is too long" 1800 ENDOF
-        APROV-AUTH-S-BUSY OF S" Finish or cancel the active run first" 1800 ENDOF
+        AAUTH-S-OK OF S" Credential set" 1200 ENDOF
+        AAUTH-S-UNSUPPORTED OF S" Provider does not accept a credential" 1800 ENDOF
+        AAUTH-S-CAPACITY OF S" Credential is too long" 1800 ENDOF
+        AAUTH-S-BUSY OF S" Finish or cancel the active run first" 1800 ENDOF
         DROP S" Credential was rejected" 1800
     ENDCASE
     ASHELL-TOAST ;
