@@ -1,6 +1,6 @@
 # Native OpenAI Responses Provider
 
-The OpenAI provider is implemented entirely in native Akashic and MegaPad
+The OpenAI provider is implemented entirely in native Akashic using KDOS
 services. It does not invoke Python, a host bridge, Codex CLI, or an emulator
 service.
 
@@ -11,19 +11,19 @@ akashic/agent/providers/openai/config.f
 akashic/agent/providers/openai/request-codec.f
 akashic/agent/providers/openai/event-codec.f
 akashic/agent/providers/openai/responses.f
-akashic/agent/providers/openai/megapad.f
+akashic/agent/providers/openai/source.f
 ```
 
 `responses.f` implements the provider-neutral `APROV` callbacks over an `NIO`
-port. `megapad.f` is the physical-machine composition: one allocation embeds
-an OpenAI configuration, a generic zeroizing credential container, and the
-native MegaPad TLS adapter. It owns no Desk or TUI behavior.
+port. `source.f` owns the complete construction environment: one allocation
+embeds OpenAI configuration, a zeroizing credential adapter, and a KDOS TLS
+transport. It owns no hardware, Desk, or TUI behavior.
 
 ```forth
-REQUIRE agent/providers/openai/megapad.f
+REQUIRE agent/providers/openai/source.f
 
 : USE-OPENAI  ( -- )
-    OPENAI-MEGAPAD-SOURCE-NEW
+    OPENAI-SOURCE-NEW
     0<> ABORT" OpenAI source allocation failed"
     DESK-AGENT-SOURCE! ;
 ```
@@ -43,8 +43,8 @@ The source's configuration and transport can be inspected before ownership is
 transferred:
 
 ```forth
-source OPENAI-MEGAPAD-SOURCE-CONFIG
-source OPENAI-MEGAPAD-SOURCE-TRANSPORT
+source OPENAI-SOURCE-CONFIG
+source OPENAI-SOURCE-TRANSPORT
 ```
 
 Do not free or mutate the source while its provider exists.
@@ -61,7 +61,7 @@ vault and its key lifecycle are reviewed.
 
 ## Trust Gate
 
-`megapad.f` does not install trust anchors. `NIO-OPEN` fails before DNS/TLS use
+`source.f` does not install trust anchors. `NIO-OPEN` fails before DNS/TLS use
 when KDOS has no applicable trust bundle, and bearer bytes are only written
 after an authenticated TLS open.
 
@@ -69,7 +69,7 @@ The current deterministic profiles require no API key or network:
 
 - `openai-provider` exercises HTTP/SSE, tools, approval, continuation, and
   cancellation through a recorded native transport.
-- `openai-megapad` verifies physical composition, ownership, authentication,
+- `openai-source` verifies source composition, ownership, authentication,
   reconnect, clearing, zeroization, and stack balance.
 - `agent-auth-ui` verifies masked entry and confirms fixture plaintext is absent
   from every emulator capture.

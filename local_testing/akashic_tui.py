@@ -153,13 +153,13 @@ _ct-run
         stable_markers=("CREDENTIAL PASS",),
     ),
     "agent-context": Profile(
-        roots=("agent/turn-request.f", "agent/providers/testing/scripted.f"),
+        roots=("agent/turn-request.f", "agent/providers/devtools/scripted.f"),
         resources=(),
         autoexec=r"""\ autoexec.f - model context and structured turn contract
 ENTER-USERLAND
 ." [akashic] loading agent context" CR
 REQUIRE agent/turn-request.f
-REQUIRE agent/providers/testing/scripted.f
+REQUIRE agent/providers/devtools/scripted.f
 
 VARIABLE _cx-fails
 VARIABLE _cx-checks
@@ -368,14 +368,14 @@ _ts-run
         roots=(
             "agent/storage/vfs-conversation.f",
             "agent/runtime.f",
-            "agent/providers/testing/scripted.f",
+            "agent/providers/devtools/scripted.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - durable agent runtime lifecycle
 ENTER-USERLAND
 ." [akashic] loading agent persistence lifecycle" CR
 REQUIRE agent/storage/vfs-conversation.f
-REQUIRE agent/providers/testing/scripted.f
+REQUIRE agent/providers/devtools/scripted.f
 REQUIRE agent/runtime.f
 
 VARIABLE _ap-fails
@@ -661,12 +661,12 @@ _rt-run
         stable_markers=("HTTP REQUEST PASS",),
     ),
     "tls-port": Profile(
-        roots=("net/transports/megapad-tls.f", "utils/string.f"),
+        roots=("net/transports/kdos-tls.f", "utils/string.f"),
         resources=(),
-        autoexec=r"""\ autoexec.f - MegaPad native TLS NIO adapter tests
+        autoexec=r"""\ autoexec.f - KDOS TLS NIO adapter tests
 ENTER-USERLAND
-." [akashic] loading MegaPad TLS transport" CR
-REQUIRE net/transports/megapad-tls.f
+." [akashic] loading KDOS TLS transport" CR
+REQUIRE net/transports/kdos-tls.f
 REQUIRE utils/string.f
 
 VARIABLE _mt-fails
@@ -681,8 +681,8 @@ VARIABLE _mt-depth
     THEN
     _mt-depth @ = _mt-assert ;
 
-CREATE _mt-a MPTLS-SIZE ALLOT
-CREATE _mt-b MPTLS-SIZE ALLOT
+CREATE _mt-a KDOSTLS-SIZE ALLOT
+CREATE _mt-b KDOSTLS-SIZE ALLOT
 CREATE _mt-recv 32 ALLOT
 CREATE _mt-sent 256 ALLOT
 VARIABLE _mt-sent-u
@@ -756,93 +756,93 @@ VARIABLE _mt-bind-a
 
 : _mt-bind  ( adapter -- )
     _mt-bind-a !
-    _mt-bind-a @ MPTLS-INIT
-    S" api.openai.com" 443 _mt-bind-a @ MPTLS-CONFIGURE
-    MPTLS-E-OK = _mt-assert
-    ['] _mt-dns _mt-bind-a @ MPTLS.DNS-XT !
-    ['] _mt-connect _mt-bind-a @ MPTLS.CONNECT-XT !
-    ['] _mt-send _mt-bind-a @ MPTLS.SEND-XT !
-    ['] _mt-recv-op _mt-bind-a @ MPTLS.RECV-XT !
-    ['] _mt-close _mt-bind-a @ MPTLS.CLOSE-XT !
-    ['] _mt-poll _mt-bind-a @ MPTLS.POLL-XT !
-    ['] _mt-status _mt-bind-a @ MPTLS.STATUS-XT ! ;
+    _mt-bind-a @ KDOSTLS-INIT
+    S" api.openai.com" 443 _mt-bind-a @ KDOSTLS-CONFIGURE
+    KDOSTLS-E-OK = _mt-assert
+    ['] _mt-dns _mt-bind-a @ KDOSTLS.DNS-XT !
+    ['] _mt-connect _mt-bind-a @ KDOSTLS.CONNECT-XT !
+    ['] _mt-send _mt-bind-a @ KDOSTLS.SEND-XT !
+    ['] _mt-recv-op _mt-bind-a @ KDOSTLS.RECV-XT !
+    ['] _mt-close _mt-bind-a @ KDOSTLS.CLOSE-XT !
+    ['] _mt-poll _mt-bind-a @ KDOSTLS.POLL-XT !
+    ['] _mt-status _mt-bind-a @ KDOSTLS.STATUS-XT ! ;
 
 : _mt-test-config  ( -- )
-    _mt-b MPTLS-INIT
-    S" bad host" 443 _mt-b MPTLS-CONFIGURE MPTLS-E-INVALID = _mt-assert
-    S" api.openai.com" 0 _mt-b MPTLS-CONFIGURE
-    MPTLS-E-INVALID = _mt-assert
-    S" api.openai.com" 443 MPTLS-NEW
-    DUP MPTLS-E-OK = _mt-assert DROP
-    DUP MPTLS-HOST S" api.openai.com" STR-STR= _mt-assert
-    DUP MPTLS.REMOTE-PORT @ 443 = _mt-assert
-    MPTLS-FREE ;
+    _mt-b KDOSTLS-INIT
+    S" bad host" 443 _mt-b KDOSTLS-CONFIGURE KDOSTLS-E-INVALID = _mt-assert
+    S" api.openai.com" 0 _mt-b KDOSTLS-CONFIGURE
+    KDOSTLS-E-INVALID = _mt-assert
+    S" api.openai.com" 443 KDOSTLS-NEW
+    DUP KDOSTLS-E-OK = _mt-assert DROP
+    DUP KDOSTLS-HOST S" api.openai.com" STR-STR= _mt-assert
+    DUP KDOSTLS.REMOTE-PORT @ 443 = _mt-assert
+    KDOSTLS-FREE ;
 
 : _mt-test-open-and-io  ( -- )
     _mt-a _mt-bind _mt-b _mt-bind
-    1 TLS-TRUST-COUNT ! MPTLS-LINK-OPEN _mt-link !
-    _mt-a MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    _mt-a MPTLS.STATE @ MPTLS-STATE-OPEN = _mt-assert
-    _mt-a MPTLS.LAST-ERROR @ MPTLS-E-OK = _mt-assert
+    1 TLS-TRUST-COUNT ! KDOSTLS-LINK-OPEN _mt-link !
+    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-OK = _mt-assert
     TLS-SNI-HOST TLS-SNI-LEN @ S" api.openai.com" STR-STR= _mt-assert
     _mt-dns-hits @ 1 = _mt-assert
     _mt-connect-hits @ 1 = _mt-assert
 
-    _mt-b MPTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-b MPTLS.LAST-ERROR @ MPTLS-E-BUSY = _mt-assert
+    _mt-b KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
 
-    S" 0123456789abcdefghijkl" _mt-a MPTLS.PORT NIO-SEND
+    S" 0123456789abcdefghijkl" _mt-a KDOSTLS.PORT NIO-SEND
     NIO-S-OK = _mt-assert 17 = _mt-assert
     _mt-sent _mt-sent-u @ S" 0123456789abcdefg" STR-STR= _mt-assert
 
-    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
     NIO-S-OK = _mt-assert 3 = _mt-assert
-    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
     NIO-S-OK = _mt-assert 2 = _mt-assert
-    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
     NIO-S-OK = _mt-assert 0= _mt-assert
-    MPTLS-LINK-CLOSED _mt-link !
-    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    KDOSTLS-LINK-CLOSED _mt-link !
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
     NIO-S-EOF = _mt-assert 0= _mt-assert
-    _mt-a MPTLS.PORT NIO-CLOSE
+    _mt-a KDOSTLS.PORT NIO-CLOSE
     _mt-close-hits @ 1 = _mt-assert
 
-    MPTLS-LINK-OPEN _mt-link !
-    _mt-b MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    _mt-b MPTLS.PORT NIO-POLL
+    KDOSTLS-LINK-OPEN _mt-link !
+    _mt-b KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    _mt-b KDOSTLS.PORT NIO-POLL
     _mt-poll-hits @ 1 = _mt-assert
-    ['] _mt-close-throw _mt-b MPTLS.CLOSE-XT !
-    _mt-b MPTLS.PORT NIO-CLOSE
-    _mt-b MPTLS.STATE @ MPTLS-STATE-CLOSED = _mt-assert
-    _mt-a MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    _mt-a MPTLS.PORT NIO-CLOSE ;
+    ['] _mt-close-throw _mt-b KDOSTLS.CLOSE-XT !
+    _mt-b KDOSTLS.PORT NIO-CLOSE
+    _mt-b KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CLOSE ;
 
 : _mt-test-errors  ( -- )
     _mt-a _mt-bind
     0 TLS-TRUST-COUNT !
-    _mt-a MPTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-a MPTLS.LAST-ERROR @ MPTLS-E-NO-TRUST = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
     1 TLS-TRUST-COUNT !
-    ['] _mt-dns-zero _mt-a MPTLS.DNS-XT !
-    _mt-a MPTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-a MPTLS.LAST-ERROR @ MPTLS-E-DNS = _mt-assert
-    ['] _mt-dns-throw _mt-a MPTLS.DNS-XT !
-    _mt-a MPTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-a MPTLS.LAST-ERROR @ MPTLS-E-FAULT = _mt-assert
-    ['] _mt-dns _mt-a MPTLS.DNS-XT !
-    MPTLS-LINK-OPEN _mt-link !
-    _mt-a MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    ['] _mt-send-bad _mt-a MPTLS.SEND-XT !
-    S" bad" _mt-a MPTLS.PORT NIO-SEND
+    ['] _mt-dns-zero _mt-a KDOSTLS.DNS-XT !
+    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-DNS = _mt-assert
+    ['] _mt-dns-throw _mt-a KDOSTLS.DNS-XT !
+    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
+    ['] _mt-dns _mt-a KDOSTLS.DNS-XT !
+    KDOSTLS-LINK-OPEN _mt-link !
+    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    ['] _mt-send-bad _mt-a KDOSTLS.SEND-XT !
+    S" bad" _mt-a KDOSTLS.PORT NIO-SEND
     NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a MPTLS.PORT NIO-CLOSE
+    _mt-a KDOSTLS.PORT NIO-CLOSE
 
-    _mt-a _mt-bind 1 TLS-TRUST-COUNT ! MPTLS-LINK-OPEN _mt-link !
-    _mt-a MPTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    ['] _mt-recv-bad _mt-a MPTLS.RECV-XT !
-    _mt-recv 32 _mt-a MPTLS.PORT NIO-RECV
+    _mt-a _mt-bind 1 TLS-TRUST-COUNT ! KDOSTLS-LINK-OPEN _mt-link !
+    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
+    ['] _mt-recv-bad _mt-a KDOSTLS.RECV-XT !
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
     NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a MPTLS.PORT NIO-CLOSE ;
+    _mt-a KDOSTLS.PORT NIO-CLOSE ;
 
 : _mt-run  ( -- )
     0 _mt-fails ! 0 _mt-checks ! DEPTH _mt-depth !
@@ -852,8 +852,8 @@ VARIABLE _mt-bind-a
     _mt-test-config
     _mt-test-open-and-io
     _mt-test-errors
-    _mt-a MPTLS.PORT NIO-CLOSE
-    _mt-b MPTLS.PORT NIO-CLOSE
+    _mt-a KDOSTLS.PORT NIO-CLOSE
+    _mt-b KDOSTLS.PORT NIO-CLOSE
     _mt-old-trust @ TLS-TRUST-COUNT !
     _mt-stack
     _mt-fails @ 0= IF
@@ -1529,17 +1529,17 @@ _op-run
         ready_markers=("OPENAI PROVIDER PASS",),
         stable_markers=("OPENAI PROVIDER PASS",),
     ),
-    "openai-megapad": Profile(
+    "openai-source": Profile(
         roots=(
-            "agent/providers/openai/megapad.f",
+            "agent/providers/openai/source.f",
             "agent/runtime.f",
             "utils/string.f",
         ),
         resources=(),
-        autoexec=r"""\ autoexec.f - physical MegaPad OpenAI composition
+        autoexec=r"""\ autoexec.f - owned OpenAI provider source
 ENTER-USERLAND
-." [akashic] loading OpenAI MegaPad composition" CR
-REQUIRE agent/providers/openai/megapad.f
+." [akashic] loading OpenAI provider source" CR
+REQUIRE agent/providers/openai/source.f
 REQUIRE agent/runtime.f
 REQUIRE utils/string.f
 
@@ -1568,15 +1568,15 @@ VARIABLE _om-runtime
 
 : _om-run  ( -- )
     0 _om-fails ! 0 _om-checks ! DEPTH _om-depth !
-    OPENAI-MEGAPAD-SOURCE-NEW
+    OPENAI-SOURCE-NEW
     DUP APSOURCE-S-OK = _om-assert DROP _om-source !
     _om-source @ DUP APSOURCE.ID-A @ SWAP APSOURCE.ID-U @
-    S" org.akashic.agent.source.openai.megapad" STR-STR= _om-assert
-    _om-source @ OPENAI-MEGAPAD-SOURCE-CONFIG OAIC-HOST
+    S" org.akashic.agent.source.openai" STR-STR= _om-assert
+    _om-source @ OPENAI-SOURCE-CONFIG OAIC-HOST
     S" api.openai.com" STR-STR= _om-assert
-    _om-source @ OPENAI-MEGAPAD-SOURCE-TRANSPORT MPTLS-HOST
+    _om-source @ OPENAI-SOURCE-TRANSPORT KDOSTLS-HOST
     S" api.openai.com" STR-STR= _om-assert
-    _om-source @ OPENAI-MEGAPAD-SOURCE-TRANSPORT MPTLS.REMOTE-PORT @
+    _om-source @ OPENAI-SOURCE-TRANSPORT KDOSTLS.REMOTE-PORT @
     443 = _om-assert
 
     _om-source @ APSOURCE-PROVIDER-NEW
@@ -1584,9 +1584,9 @@ VARIABLE _om-runtime
     _om-provider @ APROV.FEATURES @ APROV-F-AUTH AND 0<> _om-assert
     _om-provider @ APROV-AUTH AAUTH-READY? 0= _om-assert
     _om-provider @ APROV-AUTH AAUTH.CONTEXT @ APIKEY-AUTH.CREDENTIAL @
-    _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL = _om-assert
+    _om-source @ OPENAI-SOURCE-CREDENTIAL = _om-assert
     _om-provider @ APROV.CONTEXT @ OAIR-C.PORT @
-    _om-source @ OPENAI-MEGAPAD-SOURCE-TRANSPORT MPTLS.PORT = _om-assert
+    _om-source @ OPENAI-SOURCE-TRANSPORT KDOSTLS.PORT = _om-assert
 
     _om-provider @ ARUNTIME-NEW
     DUP 0= _om-assert DROP _om-runtime !
@@ -1595,7 +1595,7 @@ VARIABLE _om-runtime
     S" local-fixture-secret" _om-runtime @ ARUNTIME-AUTH-SET
     AAUTH-S-OK = _om-assert
     _om-runtime @ ARUNTIME-AUTH-PRESENT? _om-assert
-    _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL CRED.LENGTH @
+    _om-source @ OPENAI-SOURCE-CREDENTIAL CRED.LENGTH @
     20 = _om-assert
     8 _om-runtime @ ARUNTIME-PUMP DROP
     _om-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _om-assert
@@ -1603,7 +1603,7 @@ VARIABLE _om-runtime
     _om-runtime @ ARUNTIME-AUTH-CLEAR AAUTH-S-OK = _om-assert
     _om-runtime @ ARUNTIME.STATUS @ ARUN-S-OFFLINE = _om-assert
     _om-runtime @ ARUNTIME-AUTH-PRESENT? 0= _om-assert
-    _om-source @ OPENAI-MEGAPAD-SOURCE-CREDENTIAL _CRED-SECRET-A
+    _om-source @ OPENAI-SOURCE-CREDENTIAL _CRED-SECRET-A
     CRED-SECRET-CAPACITY _om-zero? _om-assert
 
     _om-runtime @ ARUNTIME-FREE
@@ -1611,15 +1611,15 @@ VARIABLE _om-runtime
     _om-source @ APSOURCE-FREE
     _om-stack
     _om-fails @ 0= IF
-        ." OPENAI MEGAPAD PASS " _om-checks @ .
+        ." OPENAI SOURCE PASS " _om-checks @ .
     ELSE
-        ." OPENAI MEGAPAD FAIL " _om-fails @ . ." / " _om-checks @ .
+        ." OPENAI SOURCE FAIL " _om-fails @ . ." / " _om-checks @ .
     THEN CR ;
 
 _om-run
 """,
-        ready_markers=("OPENAI MEGAPAD PASS",),
-        stable_markers=("OPENAI MEGAPAD PASS",),
+        ready_markers=("OPENAI SOURCE PASS",),
+        stable_markers=("OPENAI SOURCE PASS",),
     ),
     "codex-auth": Profile(
         roots=("agent/providers/codex/auth.f",),
@@ -1862,13 +1862,13 @@ _ca-run
         ready_markers=("CODEX AUTH PASS",),
         stable_markers=("CODEX AUTH PASS",),
     ),
-    "codex-megapad": Profile(
-        roots=("agent/providers/codex/megapad.f", "agent/runtime.f"),
+    "codex-source": Profile(
+        roots=("agent/providers/codex/source.f", "agent/runtime.f"),
         resources=(),
-        autoexec=r"""\ autoexec.f - physical MegaPad Codex composition
+        autoexec=r"""\ autoexec.f - owned Codex provider source
 ENTER-USERLAND
-." [akashic] loading Codex MegaPad composition" CR
-REQUIRE agent/providers/codex/megapad.f
+." [akashic] loading Codex provider source" CR
+REQUIRE agent/providers/codex/source.f
 REQUIRE agent/runtime.f
 
 VARIABLE _cm-fails
@@ -1888,15 +1888,15 @@ VARIABLE _cm-runtime
 
 : _cm-run  ( -- )
     0 _cm-fails ! 0 _cm-checks ! DEPTH _cm-depth !
-    CODEX-MEGAPAD-SOURCE-NEW
+    CODEX-SOURCE-NEW
     DUP APSOURCE-S-OK = _cm-assert DROP _cm-source !
-    _cm-source @ CODEX-MEGAPAD-SOURCE-CONFIG OAIC-HOST
+    _cm-source @ CODEX-SOURCE-CONFIG OAIC-HOST
     CODEX-BACKEND-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-MEGAPAD-AUTH-TRANSPORT MPTLS-HOST
+    _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT KDOSTLS-HOST
     CODEX-AUTH-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-MEGAPAD-MODEL-TRANSPORT MPTLS-HOST
+    _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT KDOSTLS-HOST
     CODEX-BACKEND-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-MEGAPAD-SOURCE-AUTH CDA.AUTH AAUTH.METHODS @
+    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH AAUTH.METHODS @
     AAUTH-M-DEVICE AND 0<> _cm-assert
 
     _cm-source @ APSOURCE-PROVIDER-NEW
@@ -1904,7 +1904,7 @@ VARIABLE _cm-runtime
     _cm-provider @ DUP APROV.ID-A @ SWAP APROV.ID-U @
     CODEX-PROVIDER-ID STR-STR= _cm-assert
     _cm-provider @ APROV-AUTH
-    _cm-source @ CODEX-MEGAPAD-SOURCE-AUTH CDA.AUTH = _cm-assert
+    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH = _cm-assert
     _cm-provider @ APROV.FEATURES @ APROV-F-CONTEXT AND 0<> _cm-assert
     _cm-provider @ ARUNTIME-NEW DUP 0= _cm-assert DROP _cm-runtime !
     _cm-runtime @ ARUNTIME-AUTH DUP 0<> _cm-assert
@@ -1914,15 +1914,15 @@ VARIABLE _cm-runtime
     _cm-source @ APSOURCE-FREE
     _cm-stack
     _cm-fails @ 0= IF
-        ." CODEX MEGAPAD PASS " _cm-checks @ .
+        ." CODEX SOURCE PASS " _cm-checks @ .
     ELSE
-        ." CODEX MEGAPAD FAIL " _cm-fails @ . ." / " _cm-checks @ .
+        ." CODEX SOURCE FAIL " _cm-fails @ . ." / " _cm-checks @ .
     THEN CR ;
 
 _cm-run
 """,
-        ready_markers=("CODEX MEGAPAD PASS",),
-        stable_markers=("CODEX MEGAPAD PASS",),
+        ready_markers=("CODEX SOURCE PASS",),
+        stable_markers=("CODEX SOURCE PASS",),
     ),
     "net-stream": Profile(
         roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
@@ -3241,14 +3241,14 @@ _jt-run
             "agent/conversation.f",
             "agent/runtime.f",
             "agent/providers/offline.f",
-            "agent/providers/testing/scripted.f",
+            "agent/providers/devtools/scripted.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - provider-neutral agent runtime
 ENTER-USERLAND
 ." [akashic] loading agent runtime" CR
 REQUIRE agent/providers/offline.f
-REQUIRE agent/providers/testing/scripted.f
+REQUIRE agent/providers/devtools/scripted.f
 REQUIRE agent/runtime.f
 
 VARIABLE _at-fails
@@ -3554,7 +3554,7 @@ _ct-run
             "tui/applets/daybook/daybook.f",
             "tui/applets/grid/grid.f",
             "tui/applets/agent/agent.f",
-            "agent/providers/testing/scripted.f",
+            "agent/providers/devtools/scripted.f",
         ),
         resources=(
             "tui/applets/desk/desk.toml",
@@ -3575,7 +3575,7 @@ REQUIRE tui/applets/fexplorer/fexplorer.f
 REQUIRE tui/applets/daybook/daybook.f
 REQUIRE tui/applets/grid/grid.f
 REQUIRE tui/applets/agent/agent.f
-REQUIRE agent/providers/testing/scripted.f
+REQUIRE agent/providers/devtools/scripted.f
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
     DESK-AGENT-SOURCE! ;
@@ -3632,13 +3632,13 @@ THEN
     "agent-ui": Profile(
         roots=(
             "tui/applets/agent/agent.f",
-            "agent/providers/testing/scripted.f",
+            "agent/providers/devtools/scripted.f",
         ),
         resources=("tui/applets/agent/agent.uidl",),
         autoexec=r"""\ autoexec.f - standalone Agent applet profile
 ENTER-USERLAND
 ." [akashic] loading Agent applet" CR
-REQUIRE agent/providers/testing/scripted.f
+REQUIRE agent/providers/devtools/scripted.f
 REQUIRE agent/runtime.f
 REQUIRE tui/applets/agent/agent.f
 : _boot-agent-source  ( -- )
@@ -3655,17 +3655,17 @@ AGENT-RUN
     "agent-auth-ui": Profile(
         roots=(
             "tui/applets/agent/agent.f",
-            "agent/providers/openai/megapad.f",
+            "agent/providers/openai/source.f",
         ),
         resources=("tui/applets/agent/agent.uidl",),
         autoexec=r"""\ autoexec.f - native provider credential UI
 ENTER-USERLAND
 ." [akashic] loading Agent credential UI" CR
-REQUIRE agent/providers/openai/megapad.f
+REQUIRE agent/providers/openai/source.f
 REQUIRE tui/applets/agent/agent.f
 : _boot-openai-source  ( -- )
-    OPENAI-MEGAPAD-SOURCE-NEW
-    0<> ABORT" OpenAI MegaPad source allocation failed"
+    OPENAI-SOURCE-NEW
+    0<> ABORT" OpenAI source allocation failed"
     AGENT-SOURCE! ;
 _boot-openai-source
 ." [akashic] starting Agent credential UI" CR

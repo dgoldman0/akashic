@@ -49,7 +49,7 @@ Desk follows this order and exposes its shared source as the service
 objects. Source selection is explicit through `DESK-AGENT-SOURCE!` or
 `AGENT-SOURCE!`; loading a provider module has no selection side effect.
 
-`providers/offline.f` and `providers/testing/scripted.f` supply sources through
+`providers/offline.f` and `providers/devtools/scripted.f` supply sources through
 the same contract. There is no parallel global factory path.
 
 ## Conversation Store

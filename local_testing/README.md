@@ -24,7 +24,8 @@ python3 local_testing/akashic_tui.py smoke --profile desktop
 
 Profiles are `credential`, `http-request`, `tls-port`, `net-stream`, `mcp`,
 `mcp-component`, `codec-json`, `jsonrpc`, `openai-codec`, `openai-provider`,
-`openai-megapad`, `conversation-store`, `agent-persistence`,
+`openai-source`, `codex-auth`, `codex-source`, `conversation-store`,
+`agent-context`, `agent-persistence`,
 `interop` (the non-TUI runtime and interoperability contracts), `agent`
 (provider-neutral conversations), `agent-ui`, `agent-auth-ui`, `desktop` (Desk
 with all five applets), `desktop-agent`, `pad`, `fexplorer`, `daybook`, and
@@ -38,7 +39,7 @@ The smoke journeys exercise application behavior, not just boot markers:
 |---|---|
 | `credential` | native bounded secret replacement, callback-only borrowing, callback fault isolation, overlap rejection, generation/use metadata, replacement and clear zeroization, allocation cleanup, and stack balance |
 | `http-request` | caller-owned request framing, header validation, partial cooperative sends, transport cancellation and faults, capacity sentinels, authorization-buffer zeroization, and stack balance |
-| `tls-port` | caller-owned MegaPad DNS/TLS binding, SNI and trust gating, authenticated opens, partial I/O, idle/EOF distinction, single-owner serialization, callback faults, retries, and stack balance |
+| `tls-port` | caller-owned KDOS DNS/TLS binding, SNI and trust gating, authenticated opens, partial I/O, idle/EOF distinction, single-owner serialization, callback faults, retries, and stack balance |
 | `net-stream` | native incremental SSE and HTTP parsing across every fixture boundary, body framing, trailers, interim responses, EOF, limits, callback isolation, cooperative receive pumping, cancellation, transport faults, and stack balance |
 | `mcp` | native lifecycle gating, initialization, ping, tool discovery/call, resource and template discovery, resource reads, malformed requests, and stack balance |
 | `mcp-component` | native component catalog mapping, stable names and URIs, approved persistence, denial, approval-required, timeout, malformed arguments, resources, stale targets, and stack balance |
@@ -46,7 +47,10 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `jsonrpc` | strict native JSON grammar, JSON-RPC message forms, escaped methods, bounded serialization, method dispatch, handler faults, and stack balance |
 | `openai-codec` | native Responses request projection, strict tool schemas and stable names, stateless continuation history, representative stream-event decoding, provider construction/binding, credential-backed runtime connection, bounds, and stack balance |
 | `openai-provider` | a fully in-guest HTTP/SSE fixture through request streaming, tool discovery, persistent-write approval, native capability execution, stateless tool continuation, final transcript text, cancellation, credential-use accounting, request zeroization, and stack balance |
-| `openai-megapad` | physical-machine source composition, native TLS-port ownership, provider construction, generic authentication, reconnect, credential clearing/zeroization, and stack balance without opening a network connection |
+| `openai-source` | provider-source composition, KDOS TLS-port ownership, provider construction, generic authentication, reconnect, credential clearing/zeroization, and stack balance without opening a network connection |
+| `codex-auth` | native device authorization, pending polling, PKCE exchange, JWT claims, account/plan metadata, refresh rotation, cancellation, logout, zeroization, and stack balance |
+| `codex-source` | Codex source composition, separate auth/model KDOS TLS ports, provider/runtime ownership, account-port binding, cleanup, and stack balance without opening a network connection |
+| `agent-context` | structured turns, transcript-independent model items, provider/tool identity, source filtering, bounded rollback, and stack balance |
 | `conversation-store` | checksummed bounded transcript encoding, alternating VFS generations, newest-valid selection, corruption fallback, fail-closed loading, interrupted-state normalization, ownership cleanup, and stack balance |
 | `agent-persistence` | completed approval audit, repeated runtime reconstruction over one native VFS, interrupted approval recovery, run-ID continuity, durable clearing, and stack balance |
 | `interop` | instance-relative state, isolated instances, registry lookup, bounded request dispatch, and typed values without loading TUI |

@@ -1,7 +1,7 @@
 # Agent Conversation Persistence
 
 Akashic persists the local, provider-neutral transcript through a storage port.
-The implementation is native Forth and runs on the physical MegaPad filesystem;
+The implementation is native Forth and runs on the KDOS filesystem;
 it has no host service, Python runtime dependency, Desk dependency, or OpenAI
 dependency.
 
