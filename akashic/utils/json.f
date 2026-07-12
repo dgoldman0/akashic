@@ -48,8 +48,10 @@ VARIABLE JSON-ABORT-ON-ERROR         \ -1 = abort, 0 = flag-only
 \  Strict document validation
 \ =====================================================================
 \  Cursor helpers elsewhere in this module intentionally remain small
-\  and allocation-free.  JSON-VALID? supplies the strict grammar gate for
-\  protocol and interoperability codecs before those helpers are used.
+\  and allocation-free.  JSON-VALID? supplies the conservative strict grammar
+\  gate for protocol and interoperability codecs before those helpers are used.
+\  Protocols with a larger, independently bounded receive buffer can use
+\  JSON-VALID-LIMIT? without changing the process-wide default.
 
 65536 CONSTANT JSON-MAX-DOCUMENT
 16 CONSTANT JSON-MAX-DEPTH
@@ -71,10 +73,10 @@ VARIABLE _JV-OK
 : _JV-WS  ( -- )
     BEGIN
         _JV-U @ 0> IF
-            _JV-PEEK DUP 32 = OVER 9 = OR OVER 10 = OR SWAP 13 = OR
+            _JV-A @ C@ DUP 32 = OVER 9 = OR OVER 10 = OR SWAP 13 = OR
         ELSE 0 THEN
     WHILE
-        1 _JV-ADV
+        1 _JV-A +! -1 _JV-U +!
     REPEAT ;
 
 : _JV-HEX?  ( c -- flag )
@@ -96,14 +98,14 @@ VARIABLE _JV-OK
     _JV-PEEK 34 <> IF _JV-FAIL EXIT THEN
     1 _JV-ADV
     BEGIN _JV-U @ 0> WHILE
-        _JV-PEEK DUP 34 = IF
+        _JV-A @ C@ DUP 34 = IF
             DROP 1 _JV-ADV EXIT
         THEN
         DUP 32 < IF DROP _JV-FAIL EXIT THEN
         92 = IF
             1 _JV-ADV
             _JV-U @ 0= IF _JV-FAIL EXIT THEN
-            _JV-PEEK DUP 34 = OVER 92 = OR OVER 47 = OR
+            _JV-A @ C@ DUP 34 = OVER 92 = OR OVER 47 = OR
             OVER 98 = OR OVER 102 = OR OVER 110 = OR
             OVER 114 = OR OVER 116 = OR IF
                 DROP 1 _JV-ADV
@@ -116,7 +118,7 @@ VARIABLE _JV-OK
                 THEN
             THEN
         ELSE
-            1 _JV-ADV
+            1 _JV-A +! -1 _JV-U +!
         THEN
     REPEAT
     _JV-FAIL ;
@@ -231,13 +233,17 @@ DEFER _JV-VALUE
 
 ' _JV-VALUE-IMPL IS _JV-VALUE
 
-: JSON-VALID?  ( addr len -- flag )
-    DUP 0= OVER JSON-MAX-DOCUMENT > OR IF 2DROP 0 EXIT THEN
+: JSON-VALID-LIMIT?  ( addr len max-len -- flag )
+    >R DUP 0= OVER R@ > OR IF 2DROP R> DROP 0 EXIT THEN
+    R> DROP
     2DUP UTF8-VALID? 0= IF 2DROP 0 EXIT THEN
     _JV-U ! _JV-A !
     0 _JV-DEPTH ! -1 _JV-OK !
     _JV-VALUE _JV-WS
     _JV-OK @ _JV-U @ 0= AND ;
+
+: JSON-VALID?  ( addr len -- flag )
+    JSON-MAX-DOCUMENT JSON-VALID-LIMIT? ;
 
 \ =====================================================================
 \  Layer 0 — Primitives
@@ -253,89 +259,102 @@ DEFER _JV-VALUE
 
 \ JSON-SKIP-WS ( addr len -- addr' len' )
 \   Skip JSON whitespace: space, tab, LF, CR.
+VARIABLE _JSW-A
+VARIABLE _JSW-U
+
 : JSON-SKIP-WS  ( addr len -- addr' len' )
+    _JSW-U ! _JSW-A !
     BEGIN
-        DUP 0> WHILE
-        OVER C@ DUP 32 =            \ space
-        OVER  9 = OR                 \ tab
-        OVER 10 = OR                 \ LF
-        SWAP 13 = OR                 \ CR
-        0= IF EXIT THEN
-        1 /STRING
-    REPEAT ;
+        _JSW-U @ 0> IF
+            _JSW-A @ C@ DUP 32 = OVER 9 = OR OVER 10 = OR SWAP 13 = OR
+        ELSE 0 THEN
+    WHILE
+        1 _JSW-A +! -1 _JSW-U +!
+    REPEAT
+    _JSW-A @ _JSW-U @ ;
 
 \ JSON-SKIP-STRING ( addr len -- addr' len' )
 \   Skip past a JSON string value.  addr must point at opening ".
 \   Cursor ends up just past the closing ".
+VARIABLE _JSS-A
+VARIABLE _JSS-U
+VARIABLE _JSS-CLOSED
+
+: _JSS-ADV  ( count -- )
+    DUP _JSS-A +! NEGATE _JSS-U +! ;
+
 : JSON-SKIP-STRING  ( addr len -- addr' len' )
-    DUP 0> 0= IF EXIT THEN
-    OVER C@ 34 <> IF EXIT THEN      \ not a " — bail
-    1 /STRING                        \ skip opening "
-    BEGIN
-        DUP 0>
-    WHILE
-        OVER C@ 92 = IF             \ backslash — skip escape pair
-            DUP 2 >= IF
-                2 /STRING
-            ELSE
-                1 /STRING
-            THEN
+    _JSS-U ! _JSS-A ! 0 _JSS-CLOSED !
+    _JSS-U @ 0= IF _JSS-A @ _JSS-U @ EXIT THEN
+    _JSS-A @ C@ 34 <> IF _JSS-A @ _JSS-U @ EXIT THEN
+    1 _JSS-ADV
+    BEGIN _JSS-U @ 0> WHILE
+        _JSS-A @ C@ 92 = IF
+            _JSS-U @ 2 >= IF 2 ELSE 1 THEN _JSS-ADV
         ELSE
-            OVER C@ 34 = IF         \ closing "
-                1 /STRING EXIT
+            _JSS-A @ C@ 34 = IF
+                1 _JSS-ADV -1 _JSS-CLOSED ! _JSS-A @ _JSS-U @ EXIT
             THEN
-            1 /STRING
+            1 _JSS-ADV
         THEN
     REPEAT
-    JSON-E-UNTERMINATED JSON-FAIL ;
+    JSON-E-UNTERMINATED JSON-FAIL _JSS-A @ _JSS-U @ ;
 
 \ JSON-SKIP-VALUE ( addr len -- addr' len' )
 \   Skip one complete JSON value: string, number, object, array,
 \   boolean, or null.  Depth-aware for nested structures.
 VARIABLE _JSON-DEPTH
+VARIABLE _JSV-A
+VARIABLE _JSV-U
+
+: _JSV-ADV  ( count -- )
+    DUP _JSV-A +! NEGATE _JSV-U +! ;
+
 : JSON-SKIP-VALUE  ( addr len -- addr' len' )
-    JSON-SKIP-WS
-    DUP 0> 0= IF EXIT THEN
-    OVER C@
+    JSON-SKIP-WS _JSV-U ! _JSV-A !
+    _JSV-U @ 0= IF _JSV-A @ _JSV-U @ EXIT THEN
+    _JSV-A @ C@
     DUP 34 = IF                      \ " — string
-        DROP JSON-SKIP-STRING EXIT
+        DROP _JSV-A @ _JSV-U @ JSON-SKIP-STRING EXIT
     THEN
     DUP 123 = OVER 91 = OR IF       \ { or [ — nested structure
         DROP
         1 _JSON-DEPTH !
-        1 /STRING
+        1 _JSV-ADV
         BEGIN
-            DUP 0> _JSON-DEPTH @ 0> AND
+            _JSV-U @ 0> _JSON-DEPTH @ 0> AND
         WHILE
-            OVER C@
+            _JSV-A @ C@
             DUP 34 = IF              \ " inside — skip string
-                DROP JSON-SKIP-STRING
+                DROP _JSV-A @ _JSV-U @ JSON-SKIP-STRING
+                _JSV-U ! _JSV-A !
             ELSE DUP 123 = OVER 91 = OR IF   \ { or [
                 DROP 1 _JSON-DEPTH +!
-                1 /STRING
+                1 _JSV-ADV
             ELSE DUP 125 = OVER 93 = OR IF   \ } or ]
                 DROP -1 _JSON-DEPTH +!
-                1 /STRING
+                1 _JSV-ADV
             ELSE
-                DROP 1 /STRING
+                DROP 1 _JSV-ADV
             THEN THEN THEN
         REPEAT
-        EXIT
+        _JSV-A @ _JSV-U @ EXIT
     THEN
     \ number, true, false, null — scan until delimiter
     DROP
     BEGIN
-        DUP 0> WHILE
-        OVER C@ DUP 44 =            \ ,
+        _JSV-U @ 0> WHILE
+        _JSV-A @ C@ DUP 44 =        \ ,
         OVER 125 = OR               \ }
         OVER  93 = OR               \ ]
         OVER  32 = OR               \ space
         OVER   9 = OR               \ tab
         OVER  10 = OR               \ LF
         SWAP  13 = OR               \ CR
-        IF EXIT THEN
-        1 /STRING
-    REPEAT ;
+        IF _JSV-A @ _JSV-U @ EXIT THEN
+        1 _JSV-ADV
+    REPEAT
+    _JSV-A @ _JSV-U @ ;
 
 \ JSON-SKIP-KV ( addr len -- addr' len' )
 \   Skip one "key":value pair in an object.
@@ -399,35 +418,20 @@ VARIABLE _JSON-DEPTH
 \   Extract the inner bytes of a JSON string (without quotes).
 \   Does NOT unescape — returns raw bytes.  Zero-copy.
 \   addr must point at the opening " quote.
+VARIABLE _JGS-A
+VARIABLE _JGS-U
+VARIABLE _JGS-START
+
 : JSON-GET-STRING  ( addr len -- str-addr str-len )
-    JSON-SKIP-WS
-    DUP 0> 0= IF JSON-E-WRONG-TYPE JSON-FAIL 0 0 EXIT THEN
-    OVER C@ 34 <> IF JSON-E-WRONG-TYPE JSON-FAIL 0 0 EXIT THEN
-    1 /STRING                        \ skip opening "
-    OVER                             \ save start address
-    >R 0                             \ ( addr' len' 0=count  R: start )
-    BEGIN
-        OVER 0>
-    WHILE
-        2 PICK C@ 92 = IF           \ backslash escape
-            OVER 2 < IF             \ malformed
-                2DROP DROP R> DROP
-                JSON-E-UNTERMINATED JSON-FAIL
-                0 0 EXIT
-            THEN
-            >R 2 /STRING R>
-            2 +                      \ count += 2
-        ELSE
-            2 PICK C@ 34 = IF       \ closing "
-                NIP NIP R> SWAP EXIT
-            THEN
-            >R 1 /STRING R>
-            1+
-        THEN
-    REPEAT
-    2DROP DROP R> DROP
-    JSON-E-UNTERMINATED JSON-FAIL
-    0 0 ;
+    JSON-SKIP-WS _JGS-U ! _JGS-A !
+    _JGS-U @ 0= IF JSON-E-WRONG-TYPE JSON-FAIL 0 0 EXIT THEN
+    _JGS-A @ C@ 34 <> IF JSON-E-WRONG-TYPE JSON-FAIL 0 0 EXIT THEN
+    _JGS-A @ 1+ _JGS-START !
+    _JGS-A @ _JGS-U @ JSON-SKIP-STRING
+    _JGS-U ! _JGS-A !
+    _JSS-CLOSED @ 0= IF 0 0 EXIT THEN
+    _JGS-A @ _JGS-START @ - 1-
+    _JGS-START @ SWAP ;
 
 \ JSON-UNESCAPE ( src slen dest dmax -- len )
 \   Decode a validated JSON string body into UTF-8.  This handles all
@@ -1248,6 +1252,7 @@ GUARD _json-guard
 ' JSON-FAIL       CONSTANT _json-fail-xt
 ' JSON-OK?        CONSTANT _json-ok-q-xt
 ' JSON-CLEAR-ERR  CONSTANT _json-clear-err-xt
+' JSON-VALID-LIMIT? CONSTANT _json-valid-limit-q-xt
 ' JSON-VALID?     CONSTANT _json-valid-q-xt
 ' JSON-SKIP-WS    CONSTANT _json-skip-ws-xt
 ' JSON-SKIP-STRING CONSTANT _json-skip-string-xt
@@ -1316,6 +1321,7 @@ GUARD _json-guard
 : JSON-FAIL       _json-fail-xt _json-guard WITH-GUARD ;
 : JSON-OK?        _json-ok-q-xt _json-guard WITH-GUARD ;
 : JSON-CLEAR-ERR  _json-clear-err-xt _json-guard WITH-GUARD ;
+: JSON-VALID-LIMIT? _json-valid-limit-q-xt _json-guard WITH-GUARD ;
 : JSON-VALID?     _json-valid-q-xt _json-guard WITH-GUARD ;
 : JSON-SKIP-WS    _json-skip-ws-xt _json-guard WITH-GUARD ;
 : JSON-SKIP-STRING _json-skip-string-xt _json-guard WITH-GUARD ;

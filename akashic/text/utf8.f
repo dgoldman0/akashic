@@ -155,16 +155,71 @@ VARIABLE _UD-L                         \ buffer length
 \ =====================================================================
 \  UTF8-VALID? — check if buffer is valid UTF-8
 \ =====================================================================
-\  Returns -1 for valid, 0 if any replacement chars were emitted.
+\  Validation has a direct ASCII path instead of calling UTF8-DECODE for
+\  every byte.  Multibyte lead constraints reject overlong encodings,
+\  surrogate codepoints, and values beyond U+10FFFF.
+
+VARIABLE _UV-A
+VARIABLE _UV-U
+VARIABLE _UV-B0
+VARIABLE _UV-B1
+
+: _UV-CONT?  ( offset -- flag )
+    DUP _UV-U @ >= IF DROP 0 EXIT THEN
+    _UV-A @ + C@ 0xC0 AND 0x80 = ;
+
+: _UV-ADV  ( count -- )
+    DUP _UV-A +! NEGATE _UV-U +! ;
 
 : UTF8-VALID?  ( addr len -- flag )
-    BEGIN DUP 0 > WHILE
-        UTF8-DECODE                    ( cp addr' len' )
-        ROT UTF8-REPLACEMENT = IF
-            2DROP 0 EXIT
+    _UV-U ! _UV-A !
+    BEGIN _UV-U @ 0> WHILE
+        _UV-A @ C@ DUP _UV-B0 !
+        0x80 < IF
+            1 _UV-ADV
+        ELSE
+            _UV-B0 @ 0xC2 >= _UV-B0 @ 0xDF <= AND IF
+                1 _UV-CONT? 0= IF 0 EXIT THEN
+                2 _UV-ADV
+            ELSE
+                _UV-B0 @ 0xE0 >= _UV-B0 @ 0xEF <= AND IF
+                    _UV-U @ 3 < IF 0 EXIT THEN
+                    _UV-A @ 1+ C@ _UV-B1 !
+                    _UV-B0 @ 0xE0 = IF
+                        _UV-B1 @ 0xA0 >= _UV-B1 @ 0xBF <= AND
+                    ELSE
+                        _UV-B0 @ 0xED = IF
+                            _UV-B1 @ 0x80 >= _UV-B1 @ 0x9F <= AND
+                        ELSE
+                            _UV-B1 @ 0xC0 AND 0x80 =
+                        THEN
+                    THEN
+                    2 _UV-CONT? AND 0= IF 0 EXIT THEN
+                    3 _UV-ADV
+                ELSE
+                    _UV-B0 @ 0xF0 >= _UV-B0 @ 0xF4 <= AND IF
+                        _UV-U @ 4 < IF 0 EXIT THEN
+                        _UV-A @ 1+ C@ _UV-B1 !
+                        _UV-B0 @ 0xF0 = IF
+                            _UV-B1 @ 0x90 >= _UV-B1 @ 0xBF <= AND
+                        ELSE
+                            _UV-B0 @ 0xF4 = IF
+                                _UV-B1 @ 0x80 >= _UV-B1 @ 0x8F <= AND
+                            ELSE
+                                _UV-B1 @ 0xC0 AND 0x80 =
+                            THEN
+                        THEN
+                        2 _UV-CONT? AND 3 _UV-CONT? AND
+                        0= IF 0 EXIT THEN
+                        4 _UV-ADV
+                    ELSE
+                        0 EXIT
+                    THEN
+                THEN
+            THEN
         THEN
     REPEAT
-    2DROP -1 ;
+    -1 ;
 
 \ =====================================================================
 \  UTF8-NTH — return the nth codepoint (0-based)

@@ -73,7 +73,7 @@ VARIABLE _ARSP-ROW-I
         _ARSP-I @ _ARSP-M @
         R@ IF ARMODEL-EFFORT-NTH ELSE ARMODEL-TIER-NTH THEN
         DUP IF ARCH.FLAGS @ ARCH-F-SELECTED AND IF
-            DROP R> DROP _ARSP-I @ EXIT
+            R> DROP _ARSP-I @ EXIT
         THEN ELSE DROP THEN
         1 _ARSP-I +!
     REPEAT
@@ -91,7 +91,7 @@ VARIABLE _ARSP-ROW-I
 : _ARSP-DRAW-ROW  ( label-a label-u value-a value-u index -- )
     _ARSP-ROW-I ! _ARSP-VU ! _ARSP-VA ! _ARSP-LU ! _ARSP-LA !
     _ARSP-ROW-I @ _ARSP-ROW-STYLE
-    32 _ARSP-ROW-I @ 2 * 3 + 1 _ARSP-W @ 2 - DRW-FILL-RECT
+    32 _ARSP-ROW-I @ 2 * 3 + 1 1 _ARSP-W @ 2 - DRW-FILL-RECT
     _ARSP-LA @ _ARSP-LU @ _ARSP-ROW-I @ 2 * 3 + 3 _ARSP-TEXT
     _ARSP-VA @ _ARSP-VU @ _ARSP-ROW-I @ 2 * 3 + 19 _ARSP-TEXT ;
 

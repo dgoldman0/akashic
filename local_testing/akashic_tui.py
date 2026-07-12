@@ -10,6 +10,7 @@ MP64FS image.  No private emulator copy is required.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import posixpath
 import re
@@ -31,6 +32,7 @@ MODULE_KEY_BYTES = 23
 # KDOS's module loader performs one 8-bit sector-count transfer.  Leave
 # headroom below its 255-sector ceiling when linking deployment chunks.
 LINK_CHUNK_BYTES = 120 * 1024
+CODEX_AUTH_CHECKPOINT_FORMAT = "akashic-local-codex-auth-checkpoint"
 
 
 def _megapad_root() -> Path:
@@ -260,6 +262,7 @@ VARIABLE _ts-store2
 VARIABLE _ts-store3
 VARIABLE _ts-store4
 VARIABLE _ts-fd
+VARIABLE _ts-snapshot-u
 CREATE _ts-bad 8 ALLOT
 
 : _ts-assert  ( flag -- )
@@ -309,10 +312,16 @@ CREATE _ts-bad 8 ALLOT
     AROLE-ASSISTANT 1 S" first durable answer"
     _ts-conv @ ACONV.MODEL-CONTEXT @ ACTX-APPEND-MESSAGE
     DUP ACTX-S-OK = _ts-assert DROP DROP
+    _ts-conv @ ATHREAD-ENCODE-SIZE
+    DUP ATHREAD-S-OK = _ts-assert DROP DUP _ts-snapshot-u !
+    ATHREAD-HEADER-SIZE > _ts-assert
     _ts-new-store DUP _ts-store !
     _ts-conv @ SWAP ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
     _ts-store @ AVFSSTORE.GENERATION @ 1 = _ts-assert
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @ 0= _ts-assert
+    _AVFS-PATH-A VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-fd @ VFS-SIZE _ts-snapshot-u @ = _ts-assert
+    _ts-fd @ VFS-CLOSE
 
     AROLE-ASSISTANT AMSG-S-STREAMING 2 S" interrupted output"
     _ts-conv @ ACONV-APPEND DUP 0= _ts-assert DROP DROP
@@ -691,6 +700,8 @@ CREATE _mt-a KDOSTLS-SIZE ALLOT
 CREATE _mt-b KDOSTLS-SIZE ALLOT
 CREATE _mt-recv 32 ALLOT
 CREATE _mt-sent 256 ALLOT
+CREATE _mt-native-ctx /TLS-CTX ALLOT
+CREATE _mt-native-tcb /TCB ALLOT
 VARIABLE _mt-sent-u
 VARIABLE _mt-in-pos
 VARIABLE _mt-dns-hits
@@ -742,6 +753,9 @@ VARIABLE _mt-op-n
 
 : _mt-send-bad  ( ctx buffer length adapter -- count )
     DROP >R 2DROP R> 1+ ;
+
+: _mt-send-zero  ( ctx buffer length adapter -- count )
+    2DROP 2DROP 0 ;
 
 : _mt-recv-op  ( ctx buffer capacity adapter -- count )
     DROP _mt-op-u ! _mt-op-b ! DROP
@@ -863,6 +877,29 @@ VARIABLE _mt-bind-a
     NIO-S-FAILED = _mt-assert 0= _mt-assert
     _mt-a KDOSTLS.PORT NIO-CLOSE ;
 
+: _mt-test-native-link-close  ( -- )
+    _mt-native-ctx /TLS-CTX 0 FILL
+    _mt-native-tcb /TCB 0 FILL
+    TLSS-ESTABLISHED _mt-native-ctx TLS-CTX.STATE !
+    1 _mt-native-ctx TLS-CTX.PEER-AUTH !
+    _mt-native-tcb _mt-native-ctx TLS-CTX.TCB !
+    TCPS-ESTABLISHED _mt-native-tcb TCB.STATE !
+    _mt-native-ctx 0 _KDOSTLS-STATUS-DEFAULT
+    KDOSTLS-LINK-OPEN = _mt-assert
+    TCPS-CLOSED _mt-native-tcb TCB.STATE !
+    _mt-native-ctx 0 _KDOSTLS-STATUS-DEFAULT
+    KDOSTLS-LINK-CLOSED = _mt-assert
+
+    _mt-a KDOSTLS-INIT
+    KDOSTLS-STATE-OPEN _mt-a KDOSTLS.STATE !
+    _mt-native-ctx _mt-a KDOSTLS.CONTEXT !
+    ['] _mt-send-zero _mt-a KDOSTLS.SEND-XT !
+    S" stalled" _mt-a KDOSTLS.PORT NIO-SEND
+    NIO-S-FAILED = _mt-assert 0= _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
+    0 _mt-a KDOSTLS.CONTEXT !
+    _mt-a KDOSTLS.PORT NIO-CLOSE ;
+
 : _mt-run  ( -- )
     0 _mt-fails ! 0 _mt-checks ! DEPTH _mt-depth !
     TLS-TRUST-COUNT @ _mt-old-trust !
@@ -871,6 +908,7 @@ VARIABLE _mt-bind-a
     _mt-test-config
     _mt-test-open-and-io
     _mt-test-errors
+    _mt-test-native-link-close
     _mt-a KDOSTLS.PORT NIO-CLOSE
     _mt-b KDOSTLS.PORT NIO-CLOSE
     _mt-old-trust @ TLS-TRUST-COUNT !
@@ -950,7 +988,7 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     2DROP CBUS-S-OK ;
 
 : _oc-setup-tools  ( -- )
-    _oc-schema CS-INIT CV-T-STRING _oc-schema CS-ALLOW!
+    _oc-schema CS-INIT CV-T-RESOURCE _oc-schema CS-ALLOW!
     256 _oc-schema CS-MAX-LEN!
     _oc-component COMP-DESC-INIT
     S" org.akashic.test.openai"
@@ -1068,6 +1106,7 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     0 JSON-NTH JSON-ENTER S" strict" JSON-KEY JSON-GET-BOOL _oc-assert
     _oc-out _oc-out-u @ JSON-ENTER S" tools" JSON-KEY JSON-ENTER
     0 JSON-NTH JSON-ENTER S" parameters" JSON-KEY JSON-OBJECT? _oc-assert
+    _oc-out _oc-out-u @ S" format" STR-STR-CONTAINS 0= _oc-assert
     _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
     JSON-COUNT 6 = _oc-assert
     _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
@@ -1079,6 +1118,12 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
     3 JSON-NTH JSON-ENTER S" call_id" JSON-KEY JSON-GET-STRING
     S" call-old" STR-STR= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    3 JSON-NTH JSON-ENTER S" name" JSON-KEY JSON-GET-STRING
+    _oc-name _oc-name-u @ STR-STR= _oc-assert
+    _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
+    3 JSON-NTH JSON-ENTER S" name" JSON-KEY JSON-GET-STRING
+    46 STR-INDEX 0< _oc-assert
 
     _oc-json-begin JSON-[
         JSON-{ S" type" S" reasoning" JSON-KV-ESTR
@@ -1159,6 +1204,15 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
         S" error" JSON-KEY: JSON-{ S" message" S" denied" JSON-KV-ESTR JSON-}
     JSON-} JSON-} _oc-json-end ;
 
+: _oc-event-metadata  ( -- )
+    _oc-json-begin JSON-{
+    S" type" S" response.metadata" JSON-KV-ESTR
+    S" headers" JSON-KEY: JSON-{
+        S" x-codex-turn-state" JSON-KEY:
+        JSON-[ S" streamed-state" JSON-ESTR JSON-]
+    JSON-}
+    JSON-} _oc-json-end ;
+
 : _oc-parse-event  ( -- status )
     _oc-json _oc-json-u @ _oc-event OAIEV-PARSE ;
 
@@ -1184,6 +1238,9 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-event-error _oc-parse-event OAIEV-S-OK = _oc-assert
     _oc-event OAIEV.KIND @ OAIEV-K-RESPONSE-FAILED = _oc-assert
     _oc-event OAIEV-MESSAGE S" denied" STR-STR= _oc-assert
+    _oc-event-metadata _oc-parse-event OAIEV-S-OK = _oc-assert
+    _oc-event OAIEV.KIND @ OAIEV-K-RESPONSE-METADATA = _oc-assert
+    _oc-event OAIEV-TURN-STATE S" streamed-state" STR-STR= _oc-assert
     S" {" _oc-event OAIEV-PARSE OAIEV-S-INVALID = _oc-assert ;
 
 : _oc-cleanup  ( -- )
@@ -1252,10 +1309,13 @@ CREATE _op-request 67584 ALLOT
 VARIABLE _op-request-u
 CREATE _op-retry-request 67584 ALLOT
 VARIABLE _op-retry-request-u
+CREATE _op-turn-state 1024 ALLOT
 VARIABLE _op-opens
 VARIABLE _op-closes
 VARIABLE _op-polls
 VARIABLE _op-response-mode
+VARIABLE _op-send-fail-once
+VARIABLE _op-send-failures
 VARIABLE _op-send-a
 VARIABLE _op-send-u
 VARIABLE _op-send-n
@@ -1390,7 +1450,8 @@ VARIABLE _op-auth-context
 : _op-http-wrap  ( -- )
     0 _op-response-u !
     S" HTTP/1.1 200 OK" _op-r, _op-crlf-r,
-    S" Content-Type: text/event-stream" _op-r, _op-crlf-r,
+    S" x-codex-turn-state: " _op-r,
+    _op-turn-state 1024 _op-r, _op-crlf-r,
     S" Content-Length: " _op-r,
     _op-body-u @ NUM>STR _op-r, _op-crlf-r,
     S" Connection: close" _op-r, _op-crlf-r,
@@ -1430,7 +1491,9 @@ VARIABLE _op-auth-context
         _op-request _op-retry-request ROT CMOVE
     THEN
     1 _op-opens +! 0 _op-response-pos ! 0 _op-request-u !
-    _op-response-mode @ IF
+    _op-response-mode @ 2 = IF
+        _op-build-final-response
+    ELSE _op-response-mode @ IF
         _op-build-unauthorized
     ELSE
         _op-opens @ 1 = IF
@@ -1442,7 +1505,7 @@ VARIABLE _op-auth-context
                 _op-build-final-response
             THEN
         THEN
-    THEN
+    THEN THEN
     NIO-S-OK ;
 
 : _op-close  ( context -- ) DROP 1 _op-closes +! ;
@@ -1450,6 +1513,9 @@ VARIABLE _op-auth-context
 
 : _op-send  ( buffer length context -- count status )
     DROP _op-send-u ! _op-send-a !
+    _op-send-fail-once @ _op-send-failures @ 0= AND IF
+        1 _op-send-failures +! 0 NIO-S-FAILED EXIT
+    THEN
     _op-request-u @ _op-send-u @ + 67584 > IF 0 NIO-S-FAILED EXIT THEN
     _op-send-u @ 97 MIN _op-send-n !
     _op-send-a @ _op-request _op-request-u @ + _op-send-n @ CMOVE
@@ -1477,7 +1543,9 @@ VARIABLE _op-auth-context
 : _op-setup  ( -- )
     0 _op-opens ! 0 _op-closes ! 0 _op-polls ! 0 _op-handler-hits !
     0 _op-response-mode ! 0 _op-retry-request-u !
+    0 _op-send-fail-once ! 0 _op-send-failures !
     0 _op-refreshes ! 0 _op-auth-polls !
+    _op-turn-state 1024 65 FILL
     _op-port NIO-INIT
     ['] _op-open _op-port NIO.OPEN-XT !
     ['] _op-close _op-port NIO.CLOSE-XT !
@@ -1628,6 +1696,9 @@ VARIABLE _op-history-seen
     S" Please capture a milk task" _op-runtime @ ARUNTIME-SEND 0= _op-assert
     _op-pump-until-review
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP
+    OAIR-S.TURN-STATE-U @ 1024 = _op-assert
+    OAIR-S.TURN-STATE 1024 _op-turn-state 1024 STR-STR= _op-assert
     -1 _op-runtime @ ARUNTIME-RESOLVE 0= _op-assert
     _op-pump-until-auth-wait
     _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @
@@ -1668,6 +1739,19 @@ VARIABLE _op-history-seen
     _op-runtime @ ARUNTIME-CANCEL 0= _op-assert
     4 _op-runtime @ ARUNTIME-PUMP DROP
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _op-assert ;
+
+: _op-test-send-retry  ( -- )
+    2 _op-response-mode !
+    0 _op-opens ! 0 _op-closes ! 0 _op-request-u !
+    0 _op-send-failures ! -1 _op-send-fail-once !
+    S" retry an incomplete send" _op-runtime @ ARUNTIME-SEND 0= _op-assert
+    _op-pump-until-idle
+    _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _op-assert
+    _op-opens @ 2 = _op-assert
+    _op-closes @ 2 >= _op-assert
+    _op-send-failures @ 1 = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0= _op-assert
+    0 _op-send-fail-once ! ;
 
 : _op-test-second-401  ( -- )
     1 _op-response-mode !
@@ -1717,6 +1801,8 @@ VARIABLE _op-history-seen
     _op-setup
     ." [openai-provider] run" CR
     _op-test-run
+    ." [openai-provider] send retry" CR
+    _op-test-send-retry
     ." [openai-provider] unauthorized" CR
     _op-test-second-401
     ." [openai-provider] cleanup" CR
@@ -2051,6 +2137,12 @@ VARIABLE _ca-access-seen
     _ca-requests @ 4 = _ca-assert
     _ca-request _ca-request-u @ S" grant_type=authorization_code"
     STR-STR-CONTAINS _ca-assert
+    _ca-request _ca-request-u @ S" code=authorization-fixture"
+    STR-STR-CONTAINS _ca-assert
+    _ca-request _ca-request-u @ S" code=%22authorization-fixture%22"
+    STR-STR-CONTAINS 0= _ca-assert
+    _ca-request _ca-request-u @ S" code_verifier=verifier-fixture"
+    STR-STR-CONTAINS _ca-assert
     _ca-auth @ CDA.WORK @ 0= _ca-assert
 
     _ca-auth @ CDA.AUTH AAUTH-REFRESH AAUTH-S-PENDING = _ca-assert
@@ -2062,6 +2154,16 @@ VARIABLE _ca-access-seen
 
     _ca-auth @ CDA.AUTH AAUTH-LOGOUT AAUTH-S-OK = _ca-assert
     _ca-auth @ CDA.TOKENS O2TOK-PRESENT? 0= _ca-assert
+    _ca-id-token _ca-id-token-u @
+    _ca-access-token _ca-access-token-u @
+    S" refresh-fixture" 4102444800000 _ca-auth @
+    CODEX-DEVICE-AUTH-RESTORE AAUTH-S-OK = _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH-READY? _ca-assert
+    _ca-auth @ CDA.TOKENS O2TOK-PRESENT? _ca-assert
+    _ca-auth @ CDA.WORK @ 0= _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH.ACCOUNT-ID DUP CV-DATA@ SWAP CV-LEN@
+    S" account-fixture" STR-STR= _ca-assert
+    _ca-auth @ CDA.AUTH AAUTH-LOGOUT AAUTH-S-OK = _ca-assert
     _ca-auth @ CDA.AUTH AAUTH-BEGIN AAUTH-S-PENDING = _ca-assert
     _ca-auth @ CDA.AUTH AAUTH-CANCEL AAUTH-S-CANCELLED = _ca-assert
     _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-SIGNED-OUT = _ca-assert
@@ -2129,6 +2231,9 @@ VARIABLE _cc-refresh-polls
 VARIABLE _cc-callback
 VARIABLE _cc-callback-context
 VARIABLE _cc-pump-status
+VARIABLE _cc-large
+
+JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
 
 : _cc-settings  ( -- settings ) _cc-catalog @ CDMC.SETTINGS ;
 : _cc-b,  ( addr len -- )
@@ -2336,6 +2441,20 @@ VARIABLE _cc-pump-status
     0 _cc-request S" ChatGPT-Account-ID: account-fixture"
     STR-STR-CONTAINS _cc-assert ;
 
+: _cc-test-large-catalog  ( -- )
+    _CC-LARGE-U ALLOCATE
+    DUP 0= _cc-assert DROP _cc-large !
+    _cc-json-u @ 1- >R
+    _cc-json _cc-large @ R@ CMOVE
+    _cc-large @ R@ + _CC-LARGE-U R@ - 1- 32 FILL
+    125 _cc-large @ _CC-LARGE-U 1- + C! R> DROP
+    _cc-large @ _CC-LARGE-U JSON-VALID? 0= _cc-assert
+    _cc-large @ _CC-LARGE-U CDMC-BODY-CAPACITY JSON-VALID-LIMIT? _cc-assert
+    _cc-large @ _CC-LARGE-U _cc-catalog @ _CDMC-PARSE
+    ARSET-S-OK = _cc-assert
+    _cc-settings ARSET-MODEL-N 2 = _cc-assert
+    _cc-large @ FREE 0 _cc-large ! ;
+
 : _cc-test-selection  ( -- )
     1 _cc-settings ARSET-MODEL! ARSET-S-OK = _cc-assert
     _cc-config OAIC-MODEL S" gpt-slow" STR-STR= _cc-assert
@@ -2394,6 +2513,7 @@ VARIABLE _cc-pump-status
     0 _cc-fails ! 0 _cc-checks ! DEPTH _cc-depth !
     _cc-setup
     _cc-test-catalog
+    _cc-test-large-catalog
     _cc-test-selection
     _cc-test-auth-retry
     _cc-test-recovery
@@ -2589,6 +2709,8 @@ VARIABLE _ns-split
     _ns-sse SSE.STATE @ SSE-STATE-OPEN = _ns-assert ;
 
 CREATE _ns-overflow SSE-LINE-CAPACITY 1+ ALLOT
+CREATE _ns-large-line 2048 ALLOT
+VARIABLE _ns-large-events
 CREATE _ns-id-stream 64 ALLOT
 VARIABLE _ns-id-u
 : _ns-ic,  ( c -- )
@@ -2598,6 +2720,9 @@ VARIABLE _ns-id-u
 
 : _ns-stop-event  ( parser context -- status ) 2DROP 1 ;
 : _ns-throw-event  ( parser context -- status ) 2DROP -77 THROW 0 ;
+: _ns-large-event  ( parser context -- status )
+    DROP DUP SSE-DATA NIP 1500 = _ns-assert
+    DROP 1 _ns-large-events +! 0 ;
 
 : _ns-run-sse  ( -- )
     _ns-build-sse
@@ -2622,6 +2747,15 @@ VARIABLE _ns-id-u
     _ns-sse-reset
     _ns-overflow SSE-LINE-CAPACITY 1+ _ns-sse SSE-FEED
     SSE-S-LINE-OVERFLOW = _ns-assert
+
+    _ns-sse SSE-RESET ['] _ns-large-event 0 _ns-sse SSE-ON-EVENT!
+    _ns-large-line 2048 0 FILL
+    S" data: " _ns-large-line SWAP CMOVE
+    _ns-large-line 6 + 1500 65 FILL
+    10 _ns-large-line 1506 + C! 10 _ns-large-line 1507 + C!
+    0 _ns-large-events !
+    _ns-large-line 1508 _ns-sse SSE-FEED SSE-S-OK = _ns-assert
+    _ns-large-events @ 1 = _ns-assert
 
     _ns-sse SSE-RESET 0 _ns-id-u !
     S" id: keep" _ns-i, 10 _ns-ic,
@@ -3544,6 +3678,19 @@ CREATE _ct-null-schema CS-SIZE ALLOT
     _ct-bad-unicode _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
     IVJSON-E-INVALID = _ct-assert
 
+    _ct-reset 34 _ct-c 195 _ct-c 169 _ct-c 34 _ct-c
+    _ct-json _ct-json-u @ UTF8-VALID? _ct-assert
+    _ct-json _ct-json-u @ JSON-VALID? _ct-assert
+    _ct-reset 34 _ct-c 240 _ct-c 159 _ct-c 152 _ct-c 128 _ct-c 34 _ct-c
+    _ct-json _ct-json-u @ JSON-VALID? _ct-assert
+    _ct-reset 34 _ct-c 192 _ct-c 175 _ct-c 34 _ct-c
+    _ct-json _ct-json-u @ UTF8-VALID? 0= _ct-assert
+    _ct-json _ct-json-u @ JSON-VALID? 0= _ct-assert
+    _ct-reset 34 _ct-c 237 _ct-c 160 _ct-c 128 _ct-c 34 _ct-c
+    _ct-json _ct-json-u @ JSON-VALID? 0= _ct-assert
+    _ct-reset 34 _ct-c 244 _ct-c 144 _ct-c 128 _ct-c 128 _ct-c 34 _ct-c
+    _ct-json _ct-json-u @ JSON-VALID? 0= _ct-assert
+
     _ct-escaped-key _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
     0= _ct-assert
     _ct-keybuf 3 _ct-copy CV-MAP-FIND DUP 0<> _ct-assert
@@ -3572,11 +3719,21 @@ CREATE _ct-null-schema CS-SIZE ALLOT
     _ct-out _ct-out-u @ JSON-ENTER S" properties" JSON-KEY
     JSON-OBJECT? _ct-assert
 
+    _ct-resource-schema _ct-out 4096 CSJSON-STRUCTURAL-INPUT-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+    _ct-out _ct-out-u @ S" format" STR-STR-CONTAINS 0= _ct-assert
+    _ct-out _ct-out-u @ S" maxLength" STR-STR-CONTAINS _ct-assert
+
     _ct-null-schema CS-INIT
     CV-T-NULL _ct-null-schema CS-ALLOW!
     _ct-null-schema _ct-out 4096 CSJSON-INPUT-ENCODE
     DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
     _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+    _ct-out _ct-out-u @ JSON-ENTER S" properties" JSON-KEY
+    JSON-ENTER JSON-COUNT 0= _ct-assert
+    _ct-out _ct-out-u @ JSON-ENTER S" required" JSON-KEY
+    JSON-ENTER JSON-COUNT 0= _ct-assert
 
     _ct-val CV-FREE _ct-copy CV-FREE
     _ct-stack
@@ -4231,7 +4388,10 @@ REQUIRE tui/widgets/agent-auth.f
 REQUIRE tui/widgets/agent-settings.f
 
 VARIABLE _aw-fails
-: _aw-assert  ( flag -- ) 0= IF 1 _aw-fails +! THEN ;
+VARIABLE _aw-checks
+: _aw-assert  ( flag -- )
+    1 _aw-checks +!
+    0= IF 1 _aw-fails +! ." ASSERT " _aw-checks @ . CR THEN ;
 CREATE _aw-provider AGENT-PROVIDER-SIZE ALLOT
 CREATE _aw-runtime AGENT-RUNTIME-SIZE ALLOT
 CREATE _aw-settings AGENT-RUN-SETTINGS-SIZE ALLOT
@@ -4239,10 +4399,15 @@ CREATE _aw-auth AGENT-PROVIDER-AUTH-SIZE ALLOT
 CREATE _aw-event 24 ALLOT
 CREATE _aw-sync-provider AGENT-PROVIDER-SIZE ALLOT
 CREATE _aw-sync-settings AGENT-RUN-SETTINGS-SIZE ALLOT
+CREATE _aw-model AGENT-RUN-MODEL-SIZE ALLOT
+CREATE _aw-choice AGENT-RUN-CHOICE-SIZE ALLOT
+CREATE _aw-model-list 8 ALLOT
+CREATE _aw-choice-list 8 ALLOT
 VARIABLE _aw-sync-runtime
 VARIABLE _aw-sync-connects
 VARIABLE _aw-region
 VARIABLE _aw-widget
+VARIABLE _aw-screen
 
 : _aw-sync-refresh  ( context -- status )
     DROP ARSET-STATE-READY _aw-sync-settings ARSET.STATE !
@@ -4259,14 +4424,38 @@ VARIABLE _aw-widget
     ['] _aw-sync-refresh _aw-sync-settings ARSET.REFRESH-XT !
     _aw-sync-settings _aw-sync-provider APROV.RUN-SETTINGS !
     ['] _aw-sync-connect _aw-sync-provider APROV.CONNECT-XT !
-    0 _aw-sync-provider ARUNTIME-NEW
+    _aw-sync-provider ARUNTIME-NEW
     DUP 0= _aw-assert DROP _aw-sync-runtime !
     _aw-sync-settings ARSET.STATE @ ARSET-STATE-READY = _aw-assert
     _aw-sync-connects @ 1 = _aw-assert
     _aw-sync-runtime @ ARUNTIME-FREE ;
 
+: _aw-ready-settings  ( -- )
+    _aw-model AGENT-RUN-MODEL-SIZE 0 FILL
+    _aw-choice AGENT-RUN-CHOICE-SIZE 0 FILL
+    S" test-model" _aw-model ARMODEL.ID-U ! _aw-model ARMODEL.ID-A !
+    S" Test model" _aw-model ARMODEL.LABEL-U ! _aw-model ARMODEL.LABEL-A !
+    S" Model used to exercise the ready settings renderer."
+    _aw-model ARMODEL.DESC-U ! _aw-model ARMODEL.DESC-A !
+    ARMODEL-F-SELECTED ARMODEL-F-VERBOSITY OR
+    _aw-model ARMODEL.FLAGS !
+    S" balanced" _aw-choice ARCH.ID-U ! _aw-choice ARCH.ID-A !
+    S" Balanced" _aw-choice ARCH.LABEL-U ! _aw-choice ARCH.LABEL-A !
+    S" Balanced reasoning" _aw-choice ARCH.DESC-U ! _aw-choice ARCH.DESC-A !
+    ARCH-F-SELECTED _aw-choice ARCH.FLAGS !
+    _aw-choice _aw-choice-list !
+    _aw-choice-list _aw-model ARMODEL.EFFORTS-A !
+    1 _aw-model ARMODEL.EFFORTS-N !
+    _aw-choice-list _aw-model ARMODEL.TIERS-A !
+    1 _aw-model ARMODEL.TIERS-N !
+    _aw-model _aw-model-list !
+    ARSET-STATE-READY _aw-settings ARSET.STATE !
+    _aw-model-list _aw-settings ARSET.MODELS-A !
+    1 _aw-settings ARSET.MODELS-N !
+    0 _aw-settings ARSET.SELECTED ! ;
+
 : _aw-run  ( -- )
-    0 _aw-fails !
+    0 _aw-fails ! 0 _aw-checks !
     _aw-test-sync-settings
     _aw-provider APROV-INIT
     _aw-runtime AGENT-RUNTIME-SIZE 0 FILL
@@ -4275,9 +4464,15 @@ VARIABLE _aw-widget
     _aw-provider _aw-runtime ARUNTIME.PROVIDER !
     _aw-settings _aw-provider APROV.RUN-SETTINGS !
     _aw-auth _aw-provider APROV.AUTH !
+    80 20 SCR-NEW DUP _aw-screen ! SCR-USE
     0 0 20 80 RGN-NEW _aw-region !
     _aw-runtime _aw-region @ ARSP-NEW DUP _aw-widget ! ARSP-SHOW
     _aw-widget @ ARSP-ACTIVE? _aw-assert
+    11111 _aw-widget @ WDG-DRAW
+    11111 = _aw-assert
+    _aw-ready-settings
+    12345 _aw-widget @ WDG-DRAW
+    12345 = _aw-assert
     _aw-event KEY-T-SPECIAL KEY-ESC 0 _KEY-SET-EV
     _aw-event _aw-widget @ WDG-HANDLE _aw-assert
     _aw-widget @ ARSP-ACTIVE? 0= _aw-assert
@@ -4288,6 +4483,7 @@ VARIABLE _aw-widget
     _aw-widget @ AAUTHP-ACTIVE? 0= _aw-assert
     _aw-widget @ AAUTHP-FREE
     _aw-region @ RGN-FREE
+    _aw-screen @ SCR-FREE
     _aw-auth AAUTH-DESTROY
     _aw-fails @ 0= IF ." AGENT WIDGETS PASS" ELSE
         ." AGENT WIDGETS FAIL " _aw-fails @ .
@@ -4835,8 +5031,91 @@ def default_image_path(profile: str) -> Path:
     return OUTPUT_ROOT / f"akashic-{profile}.img"
 
 
-def build_image(profile_name: str, output: Path | None = None) -> Path:
+def _load_codex_auth_checkpoint(path: Path) -> dict[str, str | int]:
+    source = path.expanduser().resolve()
+    if source.stat().st_mode & 0o077:
+        raise RuntimeError(
+            f"Codex auth checkpoint must be private (chmod 600): {source}"
+        )
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if payload.get("format") != CODEX_AUTH_CHECKPOINT_FORMAT:
+        raise RuntimeError(f"Unsupported Codex auth checkpoint: {source}")
+    limits = {
+        "access_token": 8192,
+        "refresh_token": 4096,
+        "id_token": 8192,
+    }
+    result: dict[str, str | int] = {}
+    for key, capacity in limits.items():
+        value = payload.get(key)
+        if not isinstance(value, str) or not value or len(value.encode("utf-8")) > capacity:
+            raise RuntimeError(f"Invalid {key} in Codex auth checkpoint")
+        result[key] = value
+    expires_ms = payload.get("expires_ms")
+    if isinstance(expires_ms, bool) or not isinstance(expires_ms, int) or expires_ms <= 0:
+        raise RuntimeError("Invalid expires_ms in Codex auth checkpoint")
+    result["expires_ms"] = expires_ms
+    return result
+
+
+def _forth_byte_buffer(name: str, value: str) -> str:
+    encoded = value.encode("utf-8")
+    lines = [f"CREATE {name}"]
+    for start in range(0, len(encoded), 24):
+        chunk = encoded[start : start + 24]
+        lines.append("  " + " ".join(f"{byte} C," for byte in chunk))
+    lines.append(f"{len(encoded)} CONSTANT {name}-u")
+    return "\n".join(lines)
+
+
+def _with_codex_auth_checkpoint(autoexec: str, checkpoint: Path) -> str:
+    payload = _load_codex_auth_checkpoint(checkpoint)
+    definition_marker = ": _boot-agent-source  ( -- )"
+    constructor_marker = (
+        '    CODEX-SOURCE-NEW 0<> ABORT" Codex source allocation failed"'
+    )
+    if definition_marker not in autoexec or constructor_marker not in autoexec:
+        raise RuntimeError("Selected profile cannot restore a Codex auth checkpoint")
+    buffers = "\n".join(
+        (
+            _forth_byte_buffer("_boot-codex-id", str(payload["id_token"])),
+            _forth_byte_buffer(
+                "_boot-codex-access", str(payload["access_token"])
+            ),
+            _forth_byte_buffer(
+                "_boot-codex-refresh", str(payload["refresh_token"])
+            ),
+        )
+    )
+    autoexec = autoexec.replace(
+        definition_marker, f"{buffers}\n\n{definition_marker}", 1
+    )
+    restore = "\n".join(
+        (
+            constructor_marker,
+            "    DUP CODEX-SOURCE-AUTH >R",
+            "    _boot-codex-id _boot-codex-id-u",
+            "    _boot-codex-access _boot-codex-access-u",
+            "    _boot-codex-refresh _boot-codex-refresh-u",
+            f'    {payload["expires_ms"]} R> CODEX-DEVICE-AUTH-RESTORE',
+            '    AAUTH-S-OK <> ABORT" Codex checkpoint restore failed"',
+            "    _boot-codex-id _boot-codex-id-u 0 FILL",
+            "    _boot-codex-access _boot-codex-access-u 0 FILL",
+            "    _boot-codex-refresh _boot-codex-refresh-u 0 FILL",
+        )
+    )
+    return autoexec.replace(constructor_marker, restore, 1)
+
+
+def build_image(
+    profile_name: str,
+    output: Path | None = None,
+    codex_auth_checkpoint: Path | None = None,
+) -> Path:
     profile = PROFILES[profile_name]
+    autoexec = profile.autoexec
+    if codex_auth_checkpoint is not None:
+        autoexec = _with_codex_auth_checkpoint(autoexec, codex_auth_checkpoint)
     modules = (
         dependency_order(profile.roots)
         if profile.linked
@@ -4892,9 +5171,9 @@ def build_image(profile_name: str, output: Path | None = None) -> Path:
     fs.inject_file(
         "autoexec.f",
         (
-            _linked_autoexec(profile.autoexec, tuple(linked_chunks))
+            _linked_autoexec(autoexec, tuple(linked_chunks))
             if profile.linked
-            else profile.autoexec
+            else autoexec
         ).encode("utf-8"),
         ftype=FTYPE_FORTH,
     )
@@ -4906,6 +5185,8 @@ def build_image(profile_name: str, output: Path | None = None) -> Path:
     fs.delete_file(".growth-hole-1")
     fs.delete_file(".growth-hole-2")
     fs.save(target)
+    if codex_auth_checkpoint is not None:
+        target.chmod(0o600)
 
     info = fs.info()
     print(
@@ -5516,6 +5797,23 @@ def smoke(
                         "F6 did not resolve Agent's approval request",
                     ):
                         wait_screen("Approved.", "Agent did not record approval")
+
+            session.send_key("ctrl+l")
+            if wait_screen("Ask:", "Agent did not open its denial composer"):
+                session.send_text("approval denial check")
+                session.send_key("enter")
+                if wait_screen(
+                    "Review required",
+                    "Agent did not surface the denial review request",
+                    step_budget=600_000_000,
+                    wall_timeout=15.0,
+                ):
+                    session.send_key("f7")
+                    if wait_screen_gone(
+                        "Review required",
+                        "F7 did not resolve Agent's denial request",
+                    ):
+                        wait_screen("Denied.", "Agent did not record denial")
 
             session.send_key("ctrl+l")
             if wait_screen("Ask:", "Agent did not open its third prompt"):
@@ -6165,6 +6463,11 @@ def _parser() -> argparse.ArgumentParser:
             "--profile", choices=tuple(PROFILES), default="desktop"
         )
         command.add_argument("--output", type=Path)
+        command.add_argument(
+            "--codex-auth-checkpoint",
+            type=Path,
+            help="seed a private local Codex Desk image from a mode-0600 checkpoint",
+        )
         if name in ("smoke", "serve"):
             command.add_argument("--cols", type=int, default=100)
             command.add_argument("--rows", type=int, default=32)
@@ -6185,7 +6488,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
-    image_path = build_image(args.profile, args.output)
+    image_path = build_image(
+        args.profile, args.output, args.codex_auth_checkpoint
+    )
     if args.command == "build":
         return 0
     if args.command == "smoke":
