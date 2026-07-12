@@ -4008,6 +4008,7 @@ VARIABLE _at-registry
 VARIABLE _at-instance
 VARIABLE _at-bus
 VARIABLE _at-gateway
+VARIABLE _at-authority
 VARIABLE _at-tool-value
 VARIABLE _at-stack-depth
 
@@ -4098,6 +4099,8 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     _at-instance @ _at-registry @ CREG-INST+ 0= _at-assert
     _at-registry @ _at-policy CBUS-NEW
     DUP 0= _at-assert DROP _at-bus !
+    77 305419896 AHT-NEW DUP 0= _at-assert DROP _at-authority !
+    _at-authority @ _at-bus @ CBUS-AUTHORITY!
     _at-registry @ _at-bus @ _at-instance @ ATOOLG-NEW
     DUP 0= _at-assert DROP _at-gateway !
     _at-gateway @ _at-runtime @ ARUNTIME-TOOL-GATEWAY!
@@ -4115,6 +4118,10 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     _at-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _at-assert
     _at-stack-clean
     -1 _at-runtime @ ARUNTIME-RESOLVE 0= _at-assert
+    _at-stack-clean
+    _at-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _at-assert
+    8 _at-bus @ CBUS-PUMP 1 = _at-assert
+    2 _at-pump
     _at-stack-clean
     _at-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _at-assert
     _at-tool-value @ 17 = _at-assert
@@ -4136,6 +4143,7 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     _at-source @ APSOURCE-FREE
     _at-gateway @ ATOOLG-FREE
     _at-bus @ CBUS-FREE
+    _at-authority @ AHT-FREE
     _at-instance @ _at-registry @ CREG-INST- DROP
     _at-registry @ CREG-FREE
     _at-instance @ CINST-FREE
@@ -4149,6 +4157,319 @@ _at-run
 """,
         ready_markers=("AGENT RUNTIME PASS",),
         stable_markers=("AGENT RUNTIME PASS",),
+    ),
+    "practice-contracts": Profile(
+        roots=(
+            "runtime/context.f",
+            "runtime/practice-head.f",
+            "runtime/vfs-practice-head.f",
+            "interop/mandate.f",
+            "interop/authority.f",
+            "interop/practice-turn.f",
+            "interop/request-bus.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - Practice authority and Turn contracts
+ENTER-USERLAND
+." [akashic] loading Practice contracts" CR
+REQUIRE runtime/context.f
+REQUIRE runtime/practice-head.f
+REQUIRE runtime/vfs-practice-head.f
+REQUIRE interop/mandate.f
+REQUIRE interop/authority.f
+REQUIRE interop/practice-turn.f
+REQUIRE interop/request-bus.f
+
+VARIABLE _pc-fails
+VARIABLE _pc-checks
+VARIABLE _pc-depth
+: _pc-assert  ( flag -- )
+    1 _pc-checks +!
+    0= IF 1 _pc-fails +! ." ASSERT " _pc-checks @ . CR THEN ;
+: _pc-stack  ( -- )
+    DEPTH DUP _pc-depth @ <> IF
+        ." STACK " _pc-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _pc-depth @ = _pc-assert ;
+
+: _pc-id!  ( value id -- )
+    DUP RID-CLEAR ! ;
+
+CREATE _pc-head PHEAD-SIZE ALLOT
+VARIABLE _pc-context
+VARIABLE _pc-child
+CREATE _pc-mandate MAND-SIZE ALLOT
+CREATE _pc-turn PTURN-SIZE ALLOT
+CREATE _pc-binding AUTH-BINDING-SIZE ALLOT
+CREATE _pc-grant AUTH-GRANT-SIZE ALLOT
+CREATE _pc-handle INVOCATION-HANDLE-SIZE ALLOT
+CREATE _pc-handle2 INVOCATION-HANDLE-SIZE ALLOT
+VARIABLE _pc-table
+
+VARIABLE _pc-pvfs
+VARIABLE _pc-pvfs-fd
+CREATE _pc-pstore PHEADVFS-SIZE ALLOT
+CREATE _pc-pstore2 PHEADVFS-SIZE ALLOT
+CREATE _pc-pstore3 PHEADVFS-SIZE ALLOT
+CREATE _pc-persist-head PHEAD-SIZE ALLOT
+CREATE _pc-persist-out PHEAD-SIZE ALLOT
+CREATE _pc-persist-bad 8 ALLOT
+
+: _pc-persist-corrupt  ( path-a path-u -- )
+    _pc-pvfs @ VFS-USE VFS-OPEN DUP _pc-pvfs-fd ! 0<> _pc-assert
+    _pc-persist-bad 8 88 FILL _pc-pvfs-fd @ VFS-REWIND
+    _pc-persist-bad 8 _pc-pvfs-fd @ VFS-WRITE 8 = _pc-assert
+    _pc-pvfs-fd @ VFS-CLOSE ;
+
+: _pc-persist-run  ( -- )
+    524288 A-XMEM ARENA-NEW DUP 0= _pc-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _pc-pvfs ! VFS-USE
+    _pc-persist-head PHEAD-INIT
+    11 _pc-persist-head PHEAD.ID _pc-id!
+    22 _pc-persist-head PHEAD.CURRENT-ROOT _pc-id!
+    _pc-pvfs @ _pc-pstore PHEADVFS-INIT
+        PHEADVFS-S-OK = _pc-assert
+    _pc-persist-head _pc-pstore PHEADVFS-SAVE
+        PHEADVFS-S-OK = _pc-assert
+    _pc-pstore PHEADVFS.GENERATION @ 1 = _pc-assert
+    _pc-pstore PHEADVFS.ACTIVE-SLOT @ 0= _pc-assert
+    _pc-pstore PHEADVFS-FALLBACK? _pc-assert
+    2 _pc-persist-head PHEAD.REVISION !
+    _pc-persist-head _pc-pstore PHEADVFS-SAVE
+        PHEADVFS-S-OK = _pc-assert
+    _pc-pstore PHEADVFS.GENERATION @ 2 = _pc-assert
+    _pc-pstore PHEADVFS.ACTIVE-SLOT @ 1 = _pc-assert
+    _pc-pstore PHEADVFS-FALLBACK? 0= _pc-assert
+    _pc-pvfs @ _pc-pstore2 PHEADVFS-INIT
+        PHEADVFS-S-OK = _pc-assert
+    _pc-persist-out _pc-pstore2 PHEADVFS-LOAD
+        PHEADVFS-S-OK = _pc-assert
+    _pc-pstore2 PHEADVFS.GENERATION @ 2 = _pc-assert
+    _pc-persist-out PHEAD.REVISION @ 2 = _pc-assert
+    S" /practice-head-b.bin" _pc-persist-corrupt
+    _pc-pvfs @ _pc-pstore3 PHEADVFS-INIT
+        PHEADVFS-S-OK = _pc-assert
+    _pc-persist-out _pc-pstore3 PHEADVFS-LOAD
+        PHEADVFS-S-OK = _pc-assert
+    _pc-pstore3 PHEADVFS-FALLBACK? _pc-assert
+    _pc-pstore3 PHEADVFS.GENERATION @ 1 = _pc-assert
+    S" /practice-head-a.bin" _pc-persist-corrupt
+    _pc-persist-out _pc-pstore3 PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY = _pc-assert
+    _pc-pstore3 PHEADVFS-READONLY? _pc-assert
+    _pc-pstore3 PHEADVFS-RECOVERY? _pc-assert
+    _pc-persist-head _pc-pstore3 PHEADVFS-SAVE
+        PHEADVFS-S-READONLY = _pc-assert
+    _pc-persist-head _pc-pstore3 PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK = _pc-assert
+    _pc-pstore3 PHEADVFS.GENERATION @ 2 = _pc-assert
+    _pc-pstore3 PHEADVFS-FALLBACK? 0= _pc-assert
+    _pc-pvfs @ _pc-pstore2 PHEADVFS-INIT
+        PHEADVFS-S-OK = _pc-assert
+    _pc-persist-out _pc-pstore2 PHEADVFS-LOAD
+        PHEADVFS-S-OK = _pc-assert
+    _pc-pstore2 PHEADVFS.GENERATION @ 2 = _pc-assert
+    _pc-persist-out PHEAD.REVISION @ 2 = _pc-assert
+    _pc-pvfs @ VFS-DESTROY ;
+
+: _pc-binding-setup  ( -- )
+    _pc-binding ABIND-INIT
+    77 _pc-binding ABIND.EPOCH !
+    CPRINC-AGENT _pc-binding ABIND.PRINCIPAL !
+    11 _pc-binding ABIND.CONTEXT-ID !
+    2 _pc-binding ABIND.CONTEXT-GEN !
+    31 _pc-binding ABIND.TARGET-ID !
+    7 _pc-binding ABIND.TARGET-GEN !
+    CAP-E-MUTATE CAP-E-PERSIST OR _pc-binding ABIND.EFFECTS !
+    9 _pc-binding ABIND.EXPECT-REV !
+    S" practice.test.mutate" _pc-binding ABIND-OP! AUTH-S-OK = _pc-assert
+    101 _pc-binding ABIND.INVOCATION-ID _pc-id!
+    102 _pc-binding ABIND.PRACTICE-ID _pc-id!
+    103 _pc-binding ABIND.MANDATE-ID _pc-id! ;
+
+: _pc-grant-setup  ( -- )
+    _pc-grant AGR-INIT
+    _pc-binding _pc-grant AGR-BIND! AUTH-S-OK = _pc-assert
+    MS@ 10000 + _pc-grant AGR.EXPIRES ! ;
+
+CREATE _pc-cap CAP-DESC ALLOT
+CREATE _pc-comp COMP-DESC ALLOT
+VARIABLE _pc-inst
+VARIABLE _pc-registry
+VARIABLE _pc-bus
+VARIABLE _pc-request
+VARIABLE _pc-applied
+
+: _pc-handler  ( request instance -- status )
+    2DROP 1 _pc-applied +! CBUS-S-OK ;
+
+: _pc-runtime-setup  ( -- )
+    _pc-cap CAP-DESC-INIT
+    CAP-K-COMMAND _pc-cap CAP.KIND !
+    S" practice.test.mutate" _pc-cap CAP.ID-U ! _pc-cap CAP.ID-A !
+    CAP-E-MUTATE CAP-E-PERSIST OR _pc-cap CAP.EFFECTS !
+    ['] _pc-handler _pc-cap CAP.HANDLER-XT !
+    _pc-comp COMP-DESC-INIT
+    S" org.akashic.practice-test"
+        _pc-comp COMP.ID-U ! _pc-comp COMP.ID-A !
+    S" 1.0.0" _pc-comp COMP.VERSION-U ! _pc-comp COMP.VERSION-A !
+    _pc-cap _pc-comp COMP.CAPS-A ! 1 _pc-comp COMP.CAPS-N !
+    _pc-comp CINST-NEW DUP 0= _pc-assert DROP _pc-inst !
+    CREG-NEW DUP 0= _pc-assert DROP _pc-registry !
+    _pc-comp _pc-registry @ CREG-TYPE+ 0= _pc-assert
+    _pc-inst @ _pc-registry @ CREG-INST+ 0= _pc-assert
+    _pc-registry @ 0 CBUS-NEW DUP 0= _pc-assert DROP _pc-bus !
+    _pc-table @ _pc-bus @ CBUS-AUTHORITY!
+    CBR-NEW DUP 0= _pc-assert DROP _pc-request !
+    CPRINC-AGENT _pc-request @ CBR.PRINCIPAL !
+    77 _pc-request @ CBR.EPOCH !
+    11 _pc-request @ CBR.CONTEXT-ID !
+    2 _pc-request @ CBR.CONTEXT-GEN !
+    _pc-inst @ CINST.ID @ _pc-request @ CBR.TARGET-ID !
+    _pc-inst @ CINST.GENERATION @ _pc-request @ CBR.TARGET-GEN !
+    _pc-inst @ CINST.REVISION @ _pc-request @ CBR.EXPECT-REV !
+    _pc-cap _pc-request @ CBR.CAP !
+    201 _pc-request @ CBR.INVOCATION-ID _pc-id!
+    202 _pc-request @ CBR.PRACTICE-ID _pc-id!
+    203 _pc-request @ CBR.MANDATE-ID _pc-id! ;
+
+: _pc-run  ( -- )
+    0 _pc-fails ! 0 _pc-checks ! 0 _pc-applied ! DEPTH _pc-depth !
+
+    _pc-head PHEAD-INIT
+    1 _pc-head PHEAD.ID _pc-id!
+    2 _pc-head PHEAD.CURRENT-ROOT _pc-id!
+    _pc-head PHEAD-VALID? _pc-assert
+    0 _pc-head PHEAD.FORMAT !
+    _pc-head PHEAD-VALID? 0= _pc-assert
+    PHEAD-FORMAT-V1 _pc-head PHEAD.FORMAT !
+
+    77 CTX-NEW DUP 0= _pc-assert DROP DUP _pc-context ! DROP
+    9 _pc-context @ CTX.AUTHORITY !
+    10 _pc-context @ CTX.VFS !
+    CTX-F-READONLY _pc-context @ CTX.FLAGS !
+    _pc-context @ CTX-CHILD-NEW DUP 0= _pc-assert DROP
+        DUP _pc-child ! DROP
+    _pc-child @ CTX.AUTHORITY @ 0= _pc-assert
+    _pc-child @ CTX.VFS @ 0= _pc-assert
+    _pc-child @ CTX-READONLY? _pc-assert
+    _pc-stack
+
+    _pc-mandate MAND-INIT
+    3 _pc-mandate MAND.ID _pc-id!
+    77 _pc-mandate MAND.ACTIVATION-EPOCH !
+    CPRINC-AGENT _pc-mandate MAND.PRINCIPAL !
+    11 _pc-mandate MAND.CONTEXT-ID !
+    2 _pc-mandate MAND.CONTEXT-GENERATION !
+    CAP-E-MUTATE CAP-E-PERSIST OR _pc-mandate MAND.EFFECTS !
+    MAND-D-PROPOSAL _pc-mandate MAND.DISPOSITION !
+    _pc-mandate MAND-STRUCTURAL-VALID? _pc-assert
+    CAP-E-MUTATE 77 MS@ _pc-mandate MAND-COMMIT-VALID? 0= _pc-assert
+    MAND-D-COMMIT _pc-mandate MAND.DISPOSITION !
+    CAP-E-MUTATE 77 MS@ _pc-mandate MAND-COMMIT-VALID? _pc-assert
+
+    _pc-turn PTURN-INIT
+    4 _pc-turn PTURN.INVOCATION-ID _pc-id!
+    77 _pc-turn PTURN.ACTIVATION-EPOCH !
+    11 _pc-turn PTURN.CONTEXT-ID ! 2 _pc-turn PTURN.CONTEXT-GENERATION !
+    31 _pc-turn PTURN.TARGET-ID ! 7 _pc-turn PTURN.TARGET-GENERATION !
+    S" practice.test.mutate" _pc-turn PTURN-OP! _pc-assert
+    9 _pc-turn PTURN.EXPECTED-REVISION !
+    CAP-E-MUTATE _pc-turn PTURN.EFFECTS !
+    5 _pc-turn PTURN.GRANT-ID _pc-id!
+    _pc-turn PTURN-STRUCTURAL-VALID? _pc-assert
+    8 MS@ _pc-turn PTURN-BEGIN 0= _pc-assert
+    9 MS@ _pc-turn PTURN-BEGIN _pc-assert
+    MAND-D-PROPOSAL _pc-mandate MAND.DISPOSITION !
+    _pc-mandate 77 MS@ _pc-turn PTURN-COMMIT-VALID? 0= _pc-assert
+    MAND-D-COMMIT _pc-mandate MAND.DISPOSITION !
+    10 _pc-mandate 77 MS@ _pc-turn PTURN-COMMIT _pc-assert
+    _pc-turn PTURN.STATE @ PTURN-S-COMMITTED = _pc-assert
+    _pc-stack
+
+    _pc-binding-setup _pc-grant-setup
+    77 305419896 AHT-NEW DUP 0= _pc-assert DROP _pc-table !
+    _pc-grant _pc-handle _pc-table @ AHT-ISSUE AUTH-S-OK = _pc-assert
+    _pc-handle IH.SEAL DUP C@ 1 XOR SWAP C!
+    MS@ _pc-binding _pc-handle _pc-table @ AHT-RESOLVE
+    AUTH-S-STALE-HANDLE = _pc-assert DROP
+    _pc-handle IH.SEAL DUP C@ 1 XOR SWAP C!
+    MS@ _pc-binding _pc-handle _pc-table @ AHT-RESOLVE
+    DUP AUTH-S-OK = _pc-assert DROP DUP 0<> _pc-assert DROP
+    32 _pc-binding ABIND.TARGET-ID !
+    MS@ _pc-binding _pc-handle _pc-table @ AHT-RESOLVE
+    AUTH-S-MISMATCH = _pc-assert DROP
+    31 _pc-binding ABIND.TARGET-ID !
+    8 _pc-binding ABIND.TARGET-GEN !
+    MS@ _pc-binding _pc-handle _pc-table @ AHT-RESOLVE
+    AUTH-S-MISMATCH = _pc-assert DROP
+    7 _pc-binding ABIND.TARGET-GEN !
+    MS@ _pc-binding _pc-handle _pc-table @ AHT-CONSUME
+    AUTH-S-OK = _pc-assert DROP
+    MS@ _pc-binding _pc-handle _pc-table @ AHT-CONSUME
+    AUTH-S-CONSUMED = _pc-assert DROP
+
+    _pc-grant-setup
+    _pc-grant _pc-handle2 _pc-table @ AHT-ISSUE AUTH-S-OK = _pc-assert
+    _pc-handle2 _pc-table @ AHT-REVOKE AUTH-S-OK = _pc-assert
+    MS@ _pc-binding _pc-handle2 _pc-table @ AHT-RESOLVE
+    AUTH-S-REVOKED = _pc-assert DROP
+    _pc-grant-setup
+    MS@ 1- _pc-grant AGR.EXPIRES !
+    _pc-grant _pc-handle2 _pc-table @ AHT-ISSUE AUTH-S-OK = _pc-assert
+    MS@ _pc-binding _pc-handle2 _pc-table @ AHT-RESOLVE
+    AUTH-S-EXPIRED = _pc-assert DROP
+    78 2271560481 _pc-table @ AHT-RESET
+    MS@ _pc-binding _pc-handle _pc-table @ AHT-RESOLVE
+    AUTH-S-STALE-HANDLE = _pc-assert DROP
+    _pc-stack
+
+    77 305419896 _pc-table @ AHT-RESET
+    _pc-runtime-setup
+    _pc-request @ _pc-bus @ CBUS-DISPATCH
+        CBUS-S-NEEDS-APPROVAL = _pc-assert
+    _pc-applied @ 0= _pc-assert
+    _pc-request @ _pc-binding CBR-AUTH-BIND! AUTH-S-OK = _pc-assert
+    _pc-grant AGR-INIT
+    _pc-binding _pc-grant AGR-BIND! AUTH-S-OK = _pc-assert
+    MS@ 10000 + _pc-grant AGR.EXPIRES !
+    _pc-grant _pc-request @ CBR.HANDLE _pc-table @ AHT-ISSUE
+        AUTH-S-OK = _pc-assert
+    _pc-request @ _pc-bus @ CBUS-DISPATCH CBUS-S-OK = _pc-assert
+    _pc-applied @ 1 = _pc-assert
+    _pc-inst @ CINST.REVISION @ 2 = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.STATE @
+        PTURN-S-COMMITTED = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.OBSERVED-REVISION @ 1 = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.COMMITTED-REVISION @ 2 = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.GRANT-ID RID-PRESENT? _pc-assert
+    2 _pc-request @ CBR.EXPECT-REV !
+    _pc-request @ _pc-bus @ CBUS-DISPATCH
+        CBUS-S-CONSUMED-AUTHORITY = _pc-assert
+    _pc-applied @ 1 = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.STATE @
+        PTURN-S-COMMITTED = _pc-assert
+    _pc-stack
+
+    _pc-request @ CBR-FREE
+    _pc-bus @ CBUS-FREE
+    _pc-inst @ _pc-registry @ CREG-INST- DROP
+    _pc-registry @ CREG-FREE
+    _pc-inst @ CINST-FREE
+    _pc-table @ AHT-FREE
+    _pc-child @ CTX-FREE _pc-context @ CTX-FREE
+    _pc-persist-run
+    _pc-stack
+    _pc-fails @ 0= IF
+        ." PRACTICE CONTRACTS PASS " _pc-checks @ .
+    ELSE
+        ." PRACTICE CONTRACTS FAIL " _pc-fails @ . ." / " _pc-checks @ .
+    THEN CR ;
+
+_pc-run
+""",
+        ready_markers=("PRACTICE CONTRACTS PASS",),
+        stable_markers=("PRACTICE CONTRACTS PASS",),
     ),
     "interop": Profile(
         roots=(

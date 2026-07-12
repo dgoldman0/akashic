@@ -343,6 +343,14 @@ VARIABLE _ART-STATUS
         DROP 0 0 0
     THEN ;
 
+: _AR-EVENT-CALL-ID  ( event -- addr len flag )
+    AEV.CALL-ID DUP CV-TYPE@ CV-T-STRING = IF
+        DUP CV-DATA@ SWAP CV-LEN@ DUP 0<> IF -1 EXIT THEN
+        2DROP 0 0 0
+    ELSE
+        DROP 0 0 0
+    THEN ;
+
 : _AR-APPEND-TOOL-CALL  ( event runtime -- message | 0 )
     _ART-R ! _ART-E !
     _ART-E @ _AR-EVENT-NAME IF
@@ -460,7 +468,10 @@ VARIABLE _ARTR-CU
     THEN
     _ART-E @ AEV.DATA
     _ART-E @ AEV.RUN-ID @
-    _ART-R @ ARUNTIME.TOOL-GATEWAY @ ATOOLG-CALL ;
+    _ART-E @ _AR-EVENT-CALL-ID 0= IF
+        2DROP _ART-R @ ARUNTIME.TOOL-GATEWAY @ ATOOLG-CALL EXIT
+    THEN
+    _ART-R @ ARUNTIME.TOOL-GATEWAY @ ATOOLG-CALL-WITH-ID ;
 
 : _AR-FAIL-TOOL  ( status event runtime -- )
     _ART-R ! _ART-E ! _ART-STATUS !

@@ -1,0 +1,251 @@
+\ =====================================================================
+\  practice-turn.f - Versioned owner-serialized semantic mutation Turn
+\ =====================================================================
+\  This is distinct from agent/turn-request.f.  A Practice Turn records
+\  one revision-checked attempt to publish Context-owned state.  It holds
+\  stable identities only: no handler XT, component pointer, or UI object.
+\ =====================================================================
+
+PROVIDED akashic-interop-practice-turn
+
+REQUIRE mandate.f
+REQUIRE ../text/utf8.f
+
+1347703374 CONSTANT PTURN-MAGIC       \ "PTRN"
+1          CONSTANT PTURN-ABI-VERSION
+
+1 CONSTANT PTURN-S-NEW
+2 CONSTANT PTURN-S-QUEUED
+3 CONSTANT PTURN-S-RUNNING
+4 CONSTANT PTURN-S-PROPOSED
+5 CONSTANT PTURN-S-COMMITTED
+6 CONSTANT PTURN-S-REJECTED
+7 CONSTANT PTURN-S-FAILED
+8 CONSTANT PTURN-S-INDETERMINATE
+9 CONSTANT PTURN-S-CANCELLED
+
+64 CONSTANT PTURN-OP-ID-MAX
+
+\ Version-1 Practice Turn, 36 cells / 288 bytes.  The operation ID is
+\ copied inline in the same string form as CAP.ID; it is never a borrowed
+\ pointer and needs no lossy hash-to-name translation at recovery time.
+  0 CONSTANT _PTURN-MAGIC
+  8 CONSTANT _PTURN-ABI
+ 16 CONSTANT _PTURN-SIZE
+ 24 CONSTANT _PTURN-INVOCATION-ID     \ RID-SIZE bytes
+ 56 CONSTANT _PTURN-ACTIVATION-EPOCH
+ 64 CONSTANT _PTURN-CONTEXT-ID
+ 72 CONSTANT _PTURN-CONTEXT-GEN
+ 80 CONSTANT _PTURN-TARGET-ID
+ 88 CONSTANT _PTURN-TARGET-GEN
+ 96 CONSTANT _PTURN-OP-U
+104 CONSTANT _PTURN-OP                  \ PTURN-OP-ID-MAX bytes
+168 CONSTANT _PTURN-EXPECTED-REVISION
+176 CONSTANT _PTURN-OBSERVED-REVISION
+184 CONSTANT _PTURN-COMMITTED-REVISION
+192 CONSTANT _PTURN-EFFECTS
+200 CONSTANT _PTURN-GRANT-ID            \ RID-SIZE bytes
+232 CONSTANT _PTURN-STATE
+240 CONSTANT _PTURN-STATUS
+248 CONSTANT _PTURN-FLAGS
+256 CONSTANT _PTURN-STARTED-MS
+264 CONSTANT _PTURN-COMPLETED-MS
+272 CONSTANT _PTURN-RESERVED-0
+280 CONSTANT _PTURN-RESERVED-1
+288 CONSTANT PTURN-SIZE
+
+: PTURN.MAGIC               ( turn -- a ) _PTURN-MAGIC + ;
+: PTURN.ABI                 ( turn -- a ) _PTURN-ABI + ;
+: PTURN.SIZE                ( turn -- a ) _PTURN-SIZE + ;
+: PTURN.INVOCATION-ID       ( turn -- id ) _PTURN-INVOCATION-ID + ;
+: PTURN.ACTIVATION-EPOCH    ( turn -- a ) _PTURN-ACTIVATION-EPOCH + ;
+: PTURN.CONTEXT-ID          ( turn -- a ) _PTURN-CONTEXT-ID + ;
+: PTURN.CONTEXT-GENERATION  ( turn -- a ) _PTURN-CONTEXT-GEN + ;
+: PTURN.TARGET-ID           ( turn -- a ) _PTURN-TARGET-ID + ;
+: PTURN.TARGET-GENERATION   ( turn -- a ) _PTURN-TARGET-GEN + ;
+: PTURN.OP-U                ( turn -- a ) _PTURN-OP-U + ;
+: PTURN.OP                  ( turn -- a ) _PTURN-OP + ;
+: PTURN.EXPECTED-REVISION   ( turn -- a ) _PTURN-EXPECTED-REVISION + ;
+: PTURN.OBSERVED-REVISION   ( turn -- a ) _PTURN-OBSERVED-REVISION + ;
+: PTURN.COMMITTED-REVISION  ( turn -- a ) _PTURN-COMMITTED-REVISION + ;
+: PTURN.EFFECTS             ( turn -- a ) _PTURN-EFFECTS + ;
+: PTURN.GRANT-ID            ( turn -- id ) _PTURN-GRANT-ID + ;
+: PTURN.STATE               ( turn -- a ) _PTURN-STATE + ;
+: PTURN.STATUS              ( turn -- a ) _PTURN-STATUS + ;
+: PTURN.FLAGS               ( turn -- a ) _PTURN-FLAGS + ;
+: PTURN.STARTED-MS          ( turn -- a ) _PTURN-STARTED-MS + ;
+: PTURN.COMPLETED-MS        ( turn -- a ) _PTURN-COMPLETED-MS + ;
+
+: PTURN-INIT  ( turn -- )
+    DUP PTURN-SIZE 0 FILL
+    PTURN-MAGIC OVER PTURN.MAGIC !
+    PTURN-ABI-VERSION OVER PTURN.ABI !
+    PTURN-SIZE OVER PTURN.SIZE !
+    PTURN-S-NEW SWAP PTURN.STATE ! ;
+
+: PTURN-OP!  ( addr len turn -- flag )
+    >R
+    DUP 1 < OVER PTURN-OP-ID-MAX > OR IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP UTF8-VALID? 0= IF 2DROP R> DROP 0 EXIT THEN
+    DUP R@ PTURN.OP-U !
+    R@ PTURN.OP PTURN-OP-ID-MAX 0 FILL
+    R@ PTURN.OP SWAP MOVE
+    R> DROP -1 ;
+
+: PTURN-OP@  ( turn -- addr len )
+    DUP PTURN.OP SWAP PTURN.OP-U @ ;
+
+: PTURN-OP-VALID?  ( turn -- flag )
+    DUP PTURN.OP-U @ DUP 0> SWAP PTURN-OP-ID-MAX <= AND 0= IF
+        DROP 0 EXIT
+    THEN
+    PTURN-OP@ UTF8-VALID? ;
+
+: PTURN-STATE-VALID?  ( state -- flag )
+    DUP PTURN-S-NEW < SWAP PTURN-S-CANCELLED > OR 0= ;
+
+: PTURN-TERMINAL?  ( turn -- flag )
+    PTURN.STATE @ DUP PTURN-S-COMMITTED =
+    OVER PTURN-S-REJECTED = OR
+    OVER PTURN-S-FAILED = OR
+    OVER PTURN-S-INDETERMINATE = OR
+    SWAP PTURN-S-CANCELLED = OR ;
+
+: PTURN-STRUCTURAL-VALID?  ( turn -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP PTURN.MAGIC @ PTURN-MAGIC =
+    OVER PTURN.ABI @ PTURN-ABI-VERSION = AND
+    OVER PTURN.SIZE @ PTURN-SIZE >= AND
+    OVER PTURN.INVOCATION-ID RID-PRESENT? AND
+    OVER PTURN.ACTIVATION-EPOCH @ 0> AND
+    OVER PTURN.CONTEXT-ID @ 0> AND
+    OVER PTURN.CONTEXT-GENERATION @ 0> AND
+    OVER PTURN.TARGET-ID @ 0> AND
+    OVER PTURN.TARGET-GENERATION @ 0> AND
+    OVER PTURN-OP-VALID? AND
+    OVER PTURN.EXPECTED-REVISION @ 0> AND
+    OVER PTURN.EFFECTS @ MAND-EFFECT-MASK-VALID? AND
+    SWAP PTURN.STATE @ PTURN-STATE-VALID? AND ;
+
+: PTURN-REVISION-MATCH?  ( actual-revision turn -- flag )
+    PTURN.EXPECTED-REVISION @ = ;
+
+: PTURN-MANDATE-MATCH?  ( mandate turn -- flag )
+    >R
+    DUP MAND-STRUCTURAL-VALID? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP MAND.ACTIVATION-EPOCH @ R@ PTURN.ACTIVATION-EPOCH @ =
+    OVER R@ PTURN.CONTEXT-ID @
+    R@ PTURN.CONTEXT-GENERATION @ ROT MAND-CONTEXT-MATCH? AND
+    SWAP DROP R> DROP ;
+
+: PTURN-LEGAL-TRANSITION?  ( current-state next-state -- flag )
+    SWAP CASE
+        PTURN-S-NEW OF
+            DUP PTURN-S-QUEUED =
+            OVER PTURN-S-RUNNING = OR
+            OVER PTURN-S-REJECTED = OR
+            SWAP PTURN-S-CANCELLED = OR
+        ENDOF
+        PTURN-S-QUEUED OF
+            DUP PTURN-S-RUNNING =
+            OVER PTURN-S-REJECTED = OR
+            OVER PTURN-S-FAILED = OR
+            SWAP PTURN-S-CANCELLED = OR
+        ENDOF
+        PTURN-S-RUNNING OF
+            DUP PTURN-S-PROPOSED =
+            OVER PTURN-S-COMMITTED = OR
+            OVER PTURN-S-REJECTED = OR
+            OVER PTURN-S-FAILED = OR
+            OVER PTURN-S-INDETERMINATE = OR
+            SWAP PTURN-S-CANCELLED = OR
+        ENDOF
+        PTURN-S-PROPOSED OF
+            DUP PTURN-S-COMMITTED =
+            OVER PTURN-S-REJECTED = OR
+            OVER PTURN-S-FAILED = OR
+            SWAP PTURN-S-CANCELLED = OR
+        ENDOF
+        DROP 0 SWAP
+    ENDCASE ;
+
+: PTURN-TRANSITION  ( next-state turn -- flag )
+    >R
+    DUP R@ PTURN.STATE @ SWAP PTURN-LEGAL-TRANSITION? IF
+        R@ PTURN.STATE ! R> DROP -1 EXIT
+    THEN
+    DROP R> DROP 0 ;
+
+: PTURN-BEGIN  ( actual-revision now-ms turn -- flag )
+    >R
+    OVER R@ PTURN-REVISION-MATCH? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    PTURN-S-RUNNING R@ PTURN-TRANSITION 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    SWAP R@ PTURN.OBSERVED-REVISION !
+    R> PTURN.STARTED-MS !
+    -1 ;
+
+: PTURN-GRANT!  ( grant-id turn -- )
+    PTURN.GRANT-ID RID-COPY ;
+
+: PTURN-COMMIT-VALID?  ( mandate activation-epoch now-ms turn -- flag )
+    >R
+    R@ PTURN-STRUCTURAL-VALID? 0= IF 2DROP DROP R> DROP 0 EXIT THEN
+    2 PICK R@ PTURN-MANDATE-MATCH? 0= IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    R@ PTURN.STATE @ DUP PTURN-S-RUNNING =
+    SWAP PTURN-S-PROPOSED = OR 0= IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    R@ PTURN.GRANT-ID RID-ZERO? IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    R@ PTURN.OBSERVED-REVISION @
+    R@ PTURN.EXPECTED-REVISION @ <> IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    R@ PTURN.COMMITTED-REVISION @ 0<> IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    R@ PTURN.EFFECTS @ -ROT 3 PICK MAND-COMMIT-VALID?
+    SWAP DROP R> DROP ;
+
+: PTURN-COMMIT  ( committed-revision mandate epoch now-ms turn -- flag )
+    >R
+    2 PICK 2 PICK 2 PICK R@ PTURN-COMMIT-VALID? 0= IF
+        2DROP 2DROP R> DROP 0 EXIT
+    THEN
+    3 PICK R@ PTURN.OBSERVED-REVISION @ <= IF
+        2DROP 2DROP R> DROP 0 EXIT
+    THEN
+    3 PICK R@ PTURN.COMMITTED-REVISION !
+    DUP R@ PTURN.COMPLETED-MS !
+    PTURN-S-COMMITTED R@ PTURN-TRANSITION
+    >R 2DROP 2DROP R> R> DROP ;
+
+VARIABLE _PTOC-REVISION
+VARIABLE _PTOC-NOW
+VARIABLE _PTOC-TURN
+
+\ Owner-side finalization after the request bus has already validated and
+\ consumed a protected grant.  Mandate-aware callers should use the stricter
+\ PTURN-COMMIT above; this word never supplies authority by itself.
+: PTURN-OWNER-COMMIT  ( committed-revision now-ms turn -- flag )
+    _PTOC-TURN ! _PTOC-NOW ! _PTOC-REVISION !
+    _PTOC-TURN @ PTURN.STATE @ DUP PTURN-S-RUNNING =
+    SWAP PTURN-S-PROPOSED = OR 0= IF 0 EXIT THEN
+    _PTOC-TURN @ PTURN.GRANT-ID RID-ZERO? IF 0 EXIT THEN
+    _PTOC-TURN @ PTURN.OBSERVED-REVISION @
+        _PTOC-TURN @ PTURN.EXPECTED-REVISION @ <> IF 0 EXIT THEN
+    _PTOC-REVISION @ _PTOC-TURN @ PTURN.OBSERVED-REVISION @ <= IF
+        0 EXIT
+    THEN
+    _PTOC-REVISION @ _PTOC-TURN @ PTURN.COMMITTED-REVISION !
+    _PTOC-NOW @ _PTOC-TURN @ PTURN.COMPLETED-MS !
+    PTURN-S-COMMITTED _PTOC-TURN @ PTURN-TRANSITION ;
