@@ -297,6 +297,10 @@ VARIABLE _ALUF-BUF
 \ ASHELL-TOAST-VISIBLE? ( -- flag )
 \   True if toast message is currently showing.
 : ASHELL-TOAST-VISIBLE?  ( -- flag )
+    \ Avoid an eight-byte RTC read on every event-loop and paint pass
+    \ when no toast is active.  _ASHELL-TOAST-WAS-VIS is set together
+    \ with the deadline by ASHELL-TOAST and cleared by the expiry path.
+    _ASHELL-TOAST-WAS-VIS @ 0= IF 0 EXIT THEN
     _ASHELL-TOAST-EXPIRY @ MS@ > ;
 
 : _ASHELL-DIRTY-TOAST-RECT  ( -- )
