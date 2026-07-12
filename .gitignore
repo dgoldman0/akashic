@@ -42,6 +42,8 @@ local_testing/*
 !local_testing/test_phase6_suite.py
 !local_testing/README.md
 !local_testing/akashic_tui.py
+!local_testing/test_gap_buf.py
+!local_testing/test_textarea.py
 
 # Generated system images and captures stay local.
 local_testing/out/

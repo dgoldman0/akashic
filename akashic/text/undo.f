@@ -251,7 +251,7 @@ VARIABLE _UC-E      \ top undo entry being checked
 
 : UNDO-NEW  ( -- ud )
     _UD-DESC-SZ ALLOCATE 0<> ABORT" UNDO-NEW"
-    DUP >R
+    >R
     _UD-STK-MAX CELLS ALLOCATE 0<> ABORT" UNDO-NEW:u"
     R@ _UD-O-USTK + !
     _UD-STK-MAX R@ _UD-O-UCAP + !

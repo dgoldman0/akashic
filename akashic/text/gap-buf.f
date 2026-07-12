@@ -6,8 +6,9 @@
 \
 \  A gap buffer for efficient text editing.  Insert and delete at
 \  the cursor are O(1) amortised.  Moving the cursor is
-\  O(distance).  A line-start index is rebuilt after every edit
-\  for fast line-number <-> byte-offset mapping.
+\  O(distance).  A line-start index is maintained incrementally after
+\  edits for fast line-number <-> byte-offset mapping.  GB-SET performs
+\  a full rebuild because it replaces the complete document.
 \
 \  Storage is arena-allocated.  The caller supplies an arena
 \  handle; all internal allocations (buffer, line index) come
@@ -49,6 +50,7 @@
 \    GB-SET        ( addr u gb -- )  replace all content
 \    GB-CLEAR      ( gb -- )
 \    GB-FLATTEN    ( dest gb -- u )  copy content to flat buffer
+\    GB-COPY       ( off dest u gb -- copied ) copy a logical range
 \    GB-PRE        ( gb -- addr u )  content segment before gap
 \    GB-POST       ( gb -- addr u )  content segment after gap
 \    GB-LINES      ( gb -- n )       line count (>= 1)
@@ -200,7 +202,7 @@ VARIABLE _GB-D           \ delta for move / grow
     _GB-T @ _GB-O-CAP + ! ;
 
 \ =====================================================================
-\  S8 -- Line Index Rebuild
+\  S8 -- Line Index Maintenance
 \ =====================================================================
 
 \ _GB-REBUILD-LINES ( -- )   Full rebuild.  Uses _GB-T.
@@ -229,6 +231,129 @@ VARIABLE _GB-D           \ delta for move / grow
             _GB-T @ _GB-O-LCNT + @ CELLS + !
             1 _GB-T @ _GB-O-LCNT + +!
         THEN
+    LOOP ;
+
+\ _GB-LIDX-FIRST-AFTER ( pos -- index )
+\   Return the first line-index entry whose logical byte offset is
+\   strictly greater than pos.  Returning lcnt means there is no such
+\   entry.  Strict comparison matters at a line start: text inserted at
+\   that offset belongs to the existing line, so its start remains fixed.
+VARIABLE _GB-LF-POS
+VARIABLE _GB-LF-LO
+VARIABLE _GB-LF-HI
+VARIABLE _GB-LF-MID
+
+: _GB-LIDX-FIRST-AFTER  ( pos -- index )
+    _GB-LF-POS !
+    0 _GB-LF-LO !
+    _GB-T @ _GB-O-LCNT + @ _GB-LF-HI !
+    BEGIN
+        _GB-LF-LO @ _GB-LF-HI @ <
+    WHILE
+        _GB-LF-LO @ _GB-LF-HI @ + 2 / DUP _GB-LF-MID !
+        _GB-T @ _GB-O-LIDX + @ SWAP CELLS + @
+        _GB-LF-POS @ <= IF
+            _GB-LF-MID @ 1+ _GB-LF-LO !
+        ELSE
+            _GB-LF-MID @ _GB-LF-HI !
+        THEN
+    REPEAT
+    _GB-LF-LO @ ;
+
+\ _GB-LIDX-ENSURE ( count -- )
+\   Ensure the line-index array can hold count entries.  A single paste
+\   can contain more newlines than one doubling accommodates.
+: _GB-LIDX-ENSURE  ( count -- )
+    BEGIN
+        DUP _GB-T @ _GB-O-LCAP + @ >
+    WHILE
+        _GB-LIDX-GROW
+    REPEAT
+    DROP ;
+
+VARIABLE _GB-LI-POS
+VARIABLE _GB-LI-LEN
+VARIABLE _GB-LI-FIRST
+VARIABLE _GB-LI-AFTER
+VARIABLE _GB-LI-NL
+VARIABLE _GB-LI-OLD-CNT
+VARIABLE _GB-LI-NEW-CNT
+VARIABLE _GB-LI-WR
+VARIABLE _GB-LI-SRC
+VARIABLE _GB-LI-DEL-A
+
+\ _GB-LIDX-INSERT ( -- )
+\   Update the line index after _GB-LI-LEN bytes have been copied into
+\   the pre-gap segment at logical/physical offset _GB-LI-POS.  Existing
+\   line starts after the insertion point move right; each inserted LF
+\   contributes a new start immediately after itself.
+: _GB-LIDX-INSERT  ( -- )
+    0 _GB-LI-NL !
+    _GB-LI-LEN @ 0 ?DO
+        _GB-T @ _GB-O-BUF + @ _GB-LI-POS @ + I + C@ 10 = IF
+            1 _GB-LI-NL +!
+        THEN
+    LOOP
+
+    _GB-LI-POS @ _GB-LIDX-FIRST-AFTER _GB-LI-FIRST !
+    _GB-T @ _GB-O-LCNT + @ _GB-LI-OLD-CNT !
+    _GB-LI-OLD-CNT @ _GB-LI-NL @ + DUP _GB-LI-NEW-CNT !
+    _GB-LIDX-ENSURE
+
+    \ Open room for the new line starts.  CMOVE> is overlap-safe when
+    \ moving the tail toward higher addresses.
+    _GB-LI-NL @ IF
+        _GB-T @ _GB-O-LIDX + @ _GB-LI-FIRST @ CELLS +
+        DUP _GB-LI-NL @ CELLS +
+        _GB-LI-OLD-CNT @ _GB-LI-FIRST @ - CELLS
+        DUP 0> IF CMOVE> ELSE DROP 2DROP THEN
+    THEN
+
+    \ All old starts strictly after the insertion point shift by len.
+    _GB-LI-NEW-CNT @ _GB-LI-FIRST @ _GB-LI-NL @ + ?DO
+        _GB-LI-LEN @
+        _GB-T @ _GB-O-LIDX + @ I CELLS + +!
+    LOOP
+
+    \ Fill the opened slots with starts contributed by inserted LFs.
+    0 _GB-LI-WR !
+    _GB-LI-LEN @ 0 ?DO
+        _GB-T @ _GB-O-BUF + @ _GB-LI-POS @ + I + C@ 10 = IF
+            _GB-LI-POS @ I + 1+
+            _GB-T @ _GB-O-LIDX + @
+            _GB-LI-FIRST @ _GB-LI-WR @ + CELLS + !
+            1 _GB-LI-WR +!
+        THEN
+    LOOP
+    _GB-LI-NEW-CNT @ _GB-T @ _GB-O-LCNT + ! ;
+
+\ _GB-LIDX-DELETE ( start len -- )
+\   Remove line starts introduced by LFs in [start,start+len), then shift
+\   every surviving later start left by len.  A deleted LF at byte q owns
+\   the line-start entry q+1, hence the interval (start,start+len].
+: _GB-LIDX-DELETE  ( start len -- )
+    DUP 0= IF 2DROP EXIT THEN
+    _GB-LI-LEN ! _GB-LI-POS !
+    _GB-LI-POS @ _GB-LIDX-FIRST-AFTER _GB-LI-FIRST !
+    _GB-LI-POS @ _GB-LI-LEN @ +
+    _GB-LIDX-FIRST-AFTER _GB-LI-AFTER !
+    _GB-T @ _GB-O-LCNT + @ _GB-LI-OLD-CNT !
+
+    \ Close over entries belonging to deleted LFs.  CMOVE is overlap-safe
+    \ in this lower-address direction.
+    _GB-T @ _GB-O-LIDX + @ _GB-LI-AFTER @ CELLS +
+    _GB-T @ _GB-O-LIDX + @ _GB-LI-FIRST @ CELLS +
+    _GB-LI-OLD-CNT @ _GB-LI-AFTER @ - CELLS
+    DUP 0> IF CMOVE ELSE DROP 2DROP THEN
+
+    _GB-LI-OLD-CNT @
+    _GB-LI-AFTER @ _GB-LI-FIRST @ - -
+    DUP _GB-LI-NEW-CNT !
+    _GB-T @ _GB-O-LCNT + !
+
+    _GB-LI-NEW-CNT @ _GB-LI-FIRST @ ?DO
+        _GB-LI-LEN @ NEGATE
+        _GB-T @ _GB-O-LIDX + @ I CELLS + +!
     LOOP ;
 
 \ =====================================================================
@@ -274,14 +399,16 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
 : GB-INS  ( addr u gb -- )
     _GB-T !
     DUP 0= IF 2DROP EXIT THEN
-    DUP _GB-GROW                        \ ensure space
+    _GB-LI-LEN ! _GB-LI-SRC !
+    _GB-T @ _GB-O-GS + @ _GB-LI-POS !
+    _GB-LI-LEN @ _GB-GROW               \ ensure space
     \ Copy into gap at buf+gs
+    _GB-LI-SRC @
     _GB-T @ _GB-O-BUF + @
-    _GB-T @ _GB-O-GS + @ +             ( addr u dest )
-    SWAP >R                             ( addr dest  R: u )
-    R@ CMOVE                            ( R: u )
-    R> _GB-T @ _GB-O-GS + +!             \ gs += u
-    _GB-REBUILD-LINES ;
+    _GB-T @ _GB-O-GS + @ +             ( addr dest )
+    _GB-LI-LEN @ CMOVE
+    _GB-LI-LEN @ _GB-T @ _GB-O-GS + +!  \ gs += u
+    _GB-LIDX-INSERT ;
 
 \ GB-INS-CP ( cp gb -- )
 \   Insert a single Unicode codepoint (UTF-8 encoded) at cursor.
@@ -305,13 +432,15 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     DUP 0= IF
         _GB-T @ _GB-O-BUF + @  SWAP EXIT    \ empty result
     THEN
-    \ Deleted bytes sit at buf+ge (about to become inner gap)
-    _GB-T @ _GB-O-BUF + @  _GB-T @ _GB-O-GE + @  +  ( n del-addr )
-    SWAP DUP >R                            ( del-addr n  R: n )
+    DUP _GB-LI-LEN ! DROP
+    _GB-T @ _GB-O-GS + @ _GB-LI-POS !
+    \ Deleted bytes sit at buf+ge (about to become inner gap).
+    _GB-T @ _GB-O-BUF + @  _GB-T @ _GB-O-GE + @ +
+    _GB-LI-DEL-A !
+    _GB-LI-POS @ _GB-LI-LEN @ _GB-LIDX-DELETE
     \ Expand gap forward: ge += n
-    _GB-T @ _GB-O-GE + +!
-    _GB-REBUILD-LINES
-    R> ;                                  ( del-addr del-u )
+    _GB-LI-LEN @ _GB-T @ _GB-O-GE + +!
+    _GB-LI-DEL-A @ _GB-LI-LEN @ ;         ( del-addr del-u )
 
 \ GB-BS ( n gb -- del-addr del-u )
 \   Delete n bytes backward from cursor.  Returns pointer to
@@ -322,18 +451,19 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     DUP 0= IF
         _GB-T @ _GB-O-BUF + @  SWAP EXIT
     THEN
-    DUP >R                                ( n  R: n )
-    \ Deleted bytes at buf+(gs-n) -- will be inside gap after
-    NEGATE _GB-T @ _GB-O-GS + +!           \ gs -= n
-    _GB-T @ _GB-O-BUF + @
-    _GB-T @ _GB-O-GS + @ +               ( del-addr )
-    _GB-REBUILD-LINES
-    R> ;                                  ( del-addr del-u )
+    DUP _GB-LI-LEN !
+    _GB-T @ _GB-O-GS + @ OVER - _GB-LI-POS !
+    DROP
+    _GB-T @ _GB-O-BUF + @ _GB-LI-POS @ + _GB-LI-DEL-A !
+    _GB-LI-POS @ _GB-LI-LEN @ _GB-LIDX-DELETE
+    \ Deleted bytes at buf+(gs-n) -- will be inside gap after.
+    _GB-LI-LEN @ NEGATE _GB-T @ _GB-O-GS + +!  \ gs -= n
+    _GB-LI-DEL-A @ _GB-LI-LEN @ ;         ( del-addr del-u )
 
 \ GB-DEL-CP ( gb -- del-addr del-u )
 \   Delete one codepoint forward.
 : GB-DEL-CP  ( gb -- del-addr del-u )
-    DUP >R
+    >R
     R@ GB-CURSOR  R@ GB-LEN >= IF
         R> DROP 0 0 EXIT                  \ at end
     THEN
@@ -345,7 +475,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
 \ GB-BS-CP ( gb -- del-addr del-u )
 \   Delete one codepoint backward.
 : GB-BS-CP  ( gb -- del-addr del-u )
-    DUP >R
+    >R
     R@ GB-CURSOR 0= IF
         R> DROP 0 0 EXIT                  \ at start
     THEN
@@ -403,6 +533,44 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     _GB-T @ _GB-O-CAP + @  _GB-T @ _GB-O-GE + @  -
     CMOVE
     _GB-T @ GB-LEN ;
+
+VARIABLE _GB-RNG-OFF
+VARIABLE _GB-RNG-DEST
+VARIABLE _GB-RNG-LEN
+VARIABLE _GB-RNG-PRE
+
+\ GB-COPY ( off dest u gb -- copied )
+\   Copy a clamped logical range without flattening the whole buffer.
+\   At most two CMOVEs are needed: one from each side of the gap.
+: GB-COPY  ( off dest u gb -- copied )
+    _GB-T !
+    _GB-RNG-LEN ! _GB-RNG-DEST ! _GB-RNG-OFF !
+    _GB-RNG-OFF @ DUP 0< IF DROP 0 THEN
+    _GB-T @ GB-LEN MIN _GB-RNG-OFF !
+    _GB-RNG-LEN @ DUP 0< IF DROP 0 THEN
+    _GB-T @ GB-LEN _GB-RNG-OFF @ - MIN _GB-RNG-LEN !
+    0 _GB-RNG-PRE !
+
+    \ Portion before the gap, if the requested range starts there.
+    _GB-RNG-OFF @ _GB-T @ _GB-O-GS + @ < IF
+        _GB-T @ _GB-O-GS + @ _GB-RNG-OFF @ -
+        _GB-RNG-LEN @ MIN DUP _GB-RNG-PRE !
+        _GB-T @ _GB-O-BUF + @ _GB-RNG-OFF @ +
+        _GB-RNG-DEST @ ROT CMOVE
+    THEN
+
+    \ Remaining portion starts at or after the logical gap boundary.
+    _GB-RNG-LEN @ _GB-RNG-PRE @ - DUP 0> IF
+        _GB-RNG-OFF @ _GB-RNG-PRE @ +
+        _GB-T @ _GB-O-GS + @ -
+        _GB-T @ _GB-O-GE + @ +
+        _GB-T @ _GB-O-BUF + @ +
+        _GB-RNG-DEST @ _GB-RNG-PRE @ +
+        ROT CMOVE
+    ELSE
+        DROP
+    THEN
+    _GB-RNG-LEN @ ;
 
 \ =====================================================================
 \  S13 -- Line Queries
@@ -477,6 +645,7 @@ GUARD _gb-guard
 ' GB-SET         CONSTANT _gb-set-xt
 ' GB-CLEAR       CONSTANT _gb-clear-xt
 ' GB-FLATTEN     CONSTANT _gb-flat-xt
+' GB-COPY        CONSTANT _gb-copy-xt
 ' GB-CURSOR-LINE CONSTANT _gb-cline-xt
 ' GB-CURSOR-COL  CONSTANT _gb-ccol-xt
 
@@ -492,6 +661,7 @@ GUARD _gb-guard
 : GB-SET         _gb-set-xt    _gb-guard WITH-GUARD ;
 : GB-CLEAR       _gb-clear-xt  _gb-guard WITH-GUARD ;
 : GB-FLATTEN     _gb-flat-xt   _gb-guard WITH-GUARD ;
+: GB-COPY        _gb-copy-xt   _gb-guard WITH-GUARD ;
 : GB-CURSOR-LINE _gb-cline-xt  _gb-guard WITH-GUARD ;
 : GB-CURSOR-COL  _gb-ccol-xt   _gb-guard WITH-GUARD ;
 [THEN] [THEN]
