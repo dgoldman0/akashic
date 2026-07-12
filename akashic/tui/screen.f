@@ -294,6 +294,12 @@ CREATE _SCR-UTF8-BUF 4 ALLOT
 \    2. Emit attribute/color changes
 \    3. Emit character (UTF-8)
 \  After flushing, copy back → front cell by cell.
+\
+\  An equal row is rejected first with COMPARE, which maps to MegaPad's
+\  native BCOMP instruction.  Stable UI rows therefore avoid the much more
+\  expensive interpreted cell loop entirely.
+
+VARIABLE _SCR-ROW-BYTES
 
 : SCR-FLUSH  ( -- )
     ANSI-CURSOR-OFF                    \ hide cursor during update
@@ -307,23 +313,30 @@ CREATE _SCR-UTF8-BUF 4 ALLOT
 
     _SCR-CUR @ _SCR-O-FRONT + @ _SCR-TMP  !   \ front
     _SCR-CUR @ _SCR-O-BACK  + @ _SCR-TMP2 !   \ back
+    _SCR-CUR @ _SCR-O-W + @ 8 * _SCR-ROW-BYTES !
 
     _SCR-CUR @ _SCR-O-H + @ 0 DO              \ for each row
-        _SCR-CUR @ _SCR-O-W + @ 0 DO          \ for each col
-            _SCR-TMP2 @ @                      ( back-cell )
-            _SCR-TMP @ @ OVER = 0= IF          \ front ≠ back?
-                J I _SCR-MOVE-TO                \ position cursor  (J=row I=col)
-                DUP _SCR-EMIT-ATTRS             \ attrs/colors
-                DUP _SCR-EMIT-CHAR              \ character
-                _SCR-LAST-COL @ 1+
-                _SCR-LAST-COL !                 \ advance col tracking
-            THEN
-            \ Copy back → front
-            _SCR-TMP2 @ @ _SCR-TMP @ !
-            8 _SCR-TMP +!
-            8 _SCR-TMP2 +!
-            DROP                                \ drop back-cell
-        LOOP
+        _SCR-TMP @ _SCR-ROW-BYTES @
+        _SCR-TMP2 @ _SCR-ROW-BYTES @ COMPARE 0= IF
+            \ Native whole-row equality: nothing to emit or copy.
+            _SCR-ROW-BYTES @ _SCR-TMP +!
+            _SCR-ROW-BYTES @ _SCR-TMP2 +!
+        ELSE
+            _SCR-CUR @ _SCR-O-W + @ 0 DO        \ for each col
+                _SCR-TMP2 @ @                    ( back-cell )
+                _SCR-TMP @ @ OVER = 0= IF        \ front ≠ back?
+                    J I _SCR-MOVE-TO              \ J=row, I=col
+                    DUP _SCR-EMIT-ATTRS
+                    DUP _SCR-EMIT-CHAR
+                    _SCR-LAST-COL @ 1+ _SCR-LAST-COL !
+                THEN
+                \ Copy back → front
+                _SCR-TMP2 @ @ _SCR-TMP @ !
+                8 _SCR-TMP +!
+                8 _SCR-TMP2 +!
+                DROP
+            LOOP
+        THEN
     LOOP
 
     \ Restore cursor

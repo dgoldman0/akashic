@@ -599,13 +599,21 @@ VARIABLE _TXTA-SA-CCOL    \ cursor column
         _TXTA-W @ _TXTA-O-SCROLL-Y + !
     THEN
     \ --- Horizontal scroll adjustment ---
-    _TXTA-W @ _TXTA-O-SCROLL-X + @ _TXTA-SA-SX !
+    \ A previous build could leave a negative scroll value here.  Clamp it
+    \ explicitly: KDOS MAX currently compares unsigned values, so 0 MAX is
+    \ not a signed clamp for a negative intermediate.
+    _TXTA-W @ _TXTA-O-SCROLL-X + @
+    DUP 0< IF
+        DROP 0 DUP _TXTA-W @ _TXTA-O-SCROLL-X + !
+    THEN
+    _TXTA-SA-SX !
     _TXTA-W @ WDG-REGION RGN-W
     _TXTA-SA-GW @ - 1 MAX _TXTA-SA-TW !
     _TXTA-CURSOR-COL _TXTA-SA-CCOL !
     \ Cursor left of viewport?
     _TXTA-SA-CCOL @ _TXTA-SA-SX @ < IF
-        _TXTA-SA-CCOL @ 4 - 0 MAX
+        _TXTA-SA-CCOL @ 4 -
+        DUP 0< IF DROP 0 THEN
         _TXTA-W @ _TXTA-O-SCROLL-X + !
         EXIT
     THEN
@@ -632,14 +640,20 @@ VARIABLE _TXTA-DRW-SELE   \ selection end byte offset
 VARIABLE _TXTA-DRW-LINE#  \ which document line we're painting
 VARIABLE _TXTA-DRW-GW     \ gutter width for this paint pass
 VARIABLE _TXTA-DRW-SX     \ horizontal scroll offset
-VARIABLE _TXTA-DRW-GBFLAT \ if non-zero, ALLOCATEd flat copy (must FREE)
+VARIABLE _TXTA-DRW-GBFLAT \ if non-zero, ALLOCATEd visible copy (must FREE)
+VARIABLE _TXTA-DRW-BASE   \ document byte offset at start of draw copy
+VARIABLE _TXTA-DRW-TOTAL  \ total bytes available in draw copy
+VARIABLE _TXTA-DRW-VH     \ viewport height for this paint pass
+VARIABLE _TXTA-DRW-FIRST  \ first viewport row to repaint
+VARIABLE _TXTA-DRW-COUNT  \ number of viewport rows to repaint
 
 CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB line extraction (hook path)
 
 \ _TXTA-DRW-BYTEOFF ( -- off )
-\   Current byte offset into buffer during draw (content-len - remaining).
+\   Current document byte offset during draw.
 : _TXTA-DRW-BYTEOFF  ( -- off )
-    _TXTA-CONTENT-LEN _TXTA-DRW-L @ - ;
+    _TXTA-DRW-BASE @
+    _TXTA-DRW-TOTAL @ _TXTA-DRW-L @ - + ;
 
 \ _TXTA-DRW-IN-SEL? ( -- flag )
 \   True if current draw byte offset is inside the selection range.
@@ -671,6 +685,7 @@ CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB line extraction (hook path)
 
 VARIABLE _TXTA-DL-OFF   \ byte offset of this line's start
 VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
+VARIABLE _TXTA-DL-SKIP  \ codepoints clipped by horizontal scrolling
 
 : _TXTA-DRAW-LINE  ( row -- )
     _TXTA-DRW-ROW !
@@ -681,11 +696,9 @@ VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
         _TXTA-DRW-LINE# @  _TXTA-GB GB-LINE-LEN
         1024 MIN  DUP _TXTA-DL-LEN !
         _TXTA-DRW-LINE# @  _TXTA-GB GB-LINE-OFF  _TXTA-DL-OFF !
-        \ Copy bytes from gap-buf to flat buf
-        _TXTA-DL-LEN @ 0 ?DO
-            _TXTA-DL-OFF @ I +  _TXTA-GB GB-BYTE@
-            _TXTA-FLAT-BUF I + C!
-        LOOP
+        \ Copy only this line from the gap buffer.
+        _TXTA-DL-OFF @ _TXTA-FLAT-BUF _TXTA-DL-LEN @
+        _TXTA-GB GB-COPY DROP
         \ Call hook: ( line-addr line-len line# row col-offset widget -- )
         _TXTA-FLAT-BUF  _TXTA-DL-LEN @
         _TXTA-DRW-LINE# @  _TXTA-DRW-ROW @
@@ -698,6 +711,19 @@ VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
     \ Clear row (whole width including gutter)
     32 _TXTA-DRW-ROW @ 0 _TXTA-DRW-RW @ DRW-HLINE
     _TXTA-DRW-GW @ _TXTA-DRW-COL !   \ start text after gutter
+    \ Consume horizontally clipped codepoints before drawing.  Keeping the
+    \ sequential pointer in sync also keeps selection/caret byte offsets
+    \ correct for UTF-8 text.
+    _TXTA-DRW-SX @ _TXTA-DL-SKIP !
+    BEGIN
+        _TXTA-DL-SKIP @ 0>
+        _TXTA-DRW-L @ 0> AND
+        _TXTA-DRW-A @ C@ 10 <> AND
+    WHILE
+        _TXTA-DRW-A @ _TXTA-DRW-L @ UTF8-DECODE
+        _TXTA-DRW-L ! _TXTA-DRW-A ! DROP
+        -1 _TXTA-DL-SKIP +!
+    REPEAT
     BEGIN
         _TXTA-DRW-COL @ _TXTA-DRW-RW @ <
         _TXTA-DRW-L @ 0 > AND
@@ -735,6 +761,16 @@ VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
             -1 _TXTA-DRW-CDONE !
         THEN
     THEN THEN
+    \ A logical line wider than the viewport is clipped, not soft-wrapped.
+    \ Consume its undisplayed tail so the next screen row begins at the next
+    \ indexed/logical line.
+    BEGIN
+        _TXTA-DRW-L @ 0>
+        _TXTA-DRW-A @ C@ 10 <> AND
+    WHILE
+        1 _TXTA-DRW-A +!
+       -1 _TXTA-DRW-L +!
+    REPEAT
     \ Skip past newline
     _TXTA-DRW-L @ 0 > IF
         _TXTA-DRW-A @ C@ 10 = IF
@@ -743,11 +779,12 @@ VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
         THEN
     THEN ;
 
-\ _TXTA-DRAW ( widget -- )
-\   Top-level draw: scroll adjust, set up state, draw each visible row.
+\ _TXTA-DRAW-RANGE ( widget first count -- )
+\   Scroll-adjust, set up state, and draw a range of viewport rows.
 \   In GB mode with draw-line hook: per-line extraction from gap-buf.
 \   In flat mode: sequential pointer walk as before.
-: _TXTA-DRAW  ( widget -- )
+: _TXTA-DRAW-RANGE  ( widget first count -- )
+    _TXTA-DRW-COUNT ! _TXTA-DRW-FIRST !
     DUP _TXTA-W !
     _TXTA-SCROLL-ADJ
     \ Compute selection range for draw pass
@@ -760,31 +797,58 @@ VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
     _TXTA-W @ _TXTA-O-SCROLL-X + @  _TXTA-DRW-SX !
     DUP WDG-REGION RGN-W  DUP _TXTA-DRW-RW !
     _TXTA-DRW-GW @ -  _TXTA-DRW-TW !
-    WDG-REGION RGN-H                    ( vh )
+    WDG-REGION RGN-H _TXTA-DRW-VH !
+    _TXTA-DRW-FIRST @ DUP 0< IF DROP 0 THEN
+    _TXTA-DRW-VH @ MIN _TXTA-DRW-FIRST !
+    _TXTA-DRW-COUNT @ DUP 0< IF DROP 0 THEN
+    _TXTA-DRW-VH @ _TXTA-DRW-FIRST @ - MIN _TXTA-DRW-COUNT !
     0 _TXTA-DRW-GBFLAT !
-    \ Set up buffer pointers for sequential walk
-    _TXTA-SCROLL _TXTA-LINE-OFF        ( vh off )
+    \ Set up buffer pointers for a sequential visible-line walk.
+    _TXTA-SCROLL _TXTA-DRW-FIRST @ +
+    _TXTA-LINE-OFF DUP _TXTA-DRW-BASE !
     _TXTA-GB? IF
         _TXTA-W @ _TXTA-O-DRAW-LINE-XT + @ IF
             \ Draw-line hook handles its own extraction per line
             DROP
         ELSE
-            \ Default renderer in GB mode: flatten entire gap-buf
-            _TXTA-GB GB-LEN 1 MAX ALLOCATE 0<> ABORT" draw:flat"
-            ( vh off flat-buf )
-            DUP _TXTA-DRW-GBFLAT !     \ save base for FREE later
-            DUP _TXTA-GB GB-FLATTEN DROP  ( vh off flat-buf )
-            OVER + _TXTA-DRW-A !       ( vh off )
-            _TXTA-CONTENT-LEN SWAP - _TXTA-DRW-L !  ( vh )
+            DROP
+            \ Default GB renderer copies only the logical lines that can
+            \ appear in this viewport, rather than the whole document.
+            _TXTA-SCROLL _TXTA-DRW-FIRST @ +
+            _TXTA-DRW-COUNT @ + _TXTA-LINE-COUNT MIN
+            DUP _TXTA-LINE-COUNT < IF
+                _TXTA-LINE-OFF
+            ELSE
+                DROP _TXTA-CONTENT-LEN
+            THEN
+            _TXTA-DRW-BASE @ -
+            DUP 0< IF DROP 0 THEN
+            DUP _TXTA-DRW-TOTAL !
+            \ Most viewports fit the module scratch buffer, avoiding an
+            \ ALLOCATE/FREE pair on every keystroke.  Unusually large
+            \ visible spans still fall back to a right-sized allocation.
+            1024 <= IF
+                _TXTA-FLAT-BUF
+            ELSE
+                _TXTA-DRW-TOTAL @ 1 MAX
+                ALLOCATE 0<> ABORT" draw:visible"
+                DUP _TXTA-DRW-GBFLAT !
+            THEN
+            _TXTA-DRW-BASE @ OVER _TXTA-DRW-TOTAL @
+            _TXTA-GB GB-COPY DROP
+            _TXTA-DRW-A !
+            _TXTA-DRW-TOTAL @ _TXTA-DRW-L !
         THEN
     ELSE
-        _TXTA-BUF-A OVER + _TXTA-DRW-A !
-        _TXTA-BUF-LEN SWAP - _TXTA-DRW-L !
+        DUP _TXTA-BUF-A + _TXTA-DRW-A !
+        _TXTA-BUF-LEN SWAP - DUP _TXTA-DRW-TOTAL !
+        _TXTA-DRW-L !
     THEN
     \ Draw visible rows
     0 _TXTA-DRW-CDONE !
-    _TXTA-SCROLL _TXTA-DRW-LINE# !
-    0 ?DO
+    _TXTA-SCROLL _TXTA-DRW-FIRST @ + _TXTA-DRW-LINE# !
+    _TXTA-DRW-FIRST @ _TXTA-DRW-COUNT @ +
+    _TXTA-DRW-FIRST @ ?DO
         I _TXTA-DRAW-LINE
         \ Draw the gutter last: the default renderer clears the full row.
         DRW-STYLE-SAVE
@@ -794,6 +858,12 @@ VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
     LOOP
     \ Free flattened copy if allocated
     _TXTA-DRW-GBFLAT @ ?DUP IF FREE THEN ;
+
+\ _TXTA-DRAW ( widget -- )
+\   Standard widget draw repaints the complete viewport.
+: _TXTA-DRAW  ( widget -- )
+    DUP WDG-REGION RGN-H >R
+    0 R> _TXTA-DRAW-RANGE ;
 
 \ =====================================================================
 \  8. Internal handle
@@ -1106,6 +1176,23 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
     >R R@ _TXTA-O-GUTTER-W + !
     R> _TXTA-O-GUTTER-XT + ! ;
 
+\ TXTA-ADJUST-SCROLL ( widget -- )
+\   Apply the same cursor-visibility adjustment used by draw.  Composite
+\   owners use this before deciding whether a row-local repaint is safe.
+: TXTA-ADJUST-SCROLL  ( widget -- )
+    _TXTA-W ! _TXTA-SCROLL-ADJ ;
+
+\ TXTA-DRAW-ROWS ( first count widget -- )
+\   Repaint only a caller-verified range of viewport rows and clean the
+\   widget.  This is intended for edits known not to alter line mapping;
+\   structural edits should use the normal full WDG-DRAW path.
+: TXTA-DRAW-ROWS  ( first count widget -- )
+    DUP WDG-VISIBLE? 0= IF DROP 2DROP EXIT THEN
+    >R
+    R@ WDG-REGION RGN-USE
+    R@ -ROT _TXTA-DRAW-RANGE
+    R> WDG-CLEAN ;
+
 \ TXTA-SCROLL-X@ ( widget -- n )
 \   Get current horizontal scroll offset.
 : TXTA-SCROLL-X@  ( widget -- n )
@@ -1143,6 +1230,8 @@ GUARD _txta-guard
 ' TXTA-UNBIND-UNDO CONSTANT _txta-unbindundo-xt
 ' TXTA-DRAW-LINE! CONSTANT _txta-drawline-xt
 ' TXTA-GUTTER!    CONSTANT _txta-gutter-xt
+' TXTA-ADJUST-SCROLL CONSTANT _txta-adjustscroll-xt
+' TXTA-DRAW-ROWS  CONSTANT _txta-drawrows-xt
 ' TXTA-SCROLL-X@  CONSTANT _txta-scrollxrd-xt
 ' TXTA-SCROLL-X!  CONSTANT _txta-scrollxwr-xt
 
@@ -1164,6 +1253,8 @@ GUARD _txta-guard
 : TXTA-UNBIND-UNDO _txta-unbindundo-xt _txta-guard WITH-GUARD ;
 : TXTA-DRAW-LINE! _txta-drawline-xt _txta-guard WITH-GUARD ;
 : TXTA-GUTTER!    _txta-gutter-xt  _txta-guard WITH-GUARD ;
+: TXTA-ADJUST-SCROLL _txta-adjustscroll-xt _txta-guard WITH-GUARD ;
+: TXTA-DRAW-ROWS  _txta-drawrows-xt _txta-guard WITH-GUARD ;
 : TXTA-SCROLL-X@  _txta-scrollxrd-xt _txta-guard WITH-GUARD ;
 : TXTA-SCROLL-X!  _txta-scrollxwr-xt _txta-guard WITH-GUARD ;
 [THEN] [THEN]

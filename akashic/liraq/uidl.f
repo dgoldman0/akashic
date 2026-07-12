@@ -1017,6 +1017,13 @@ VARIABLE _UDL-MUT-P   \ parent temp for mutations
             \ Found — overwrite value
             >R                         \ ( elem na nl va vl  R: attr )
             2SWAP 2DROP ROT DROP       \ ( va vl  R: attr )
+            \ Equal-sized dynamic values can safely reuse their existing
+            \ storage.  This is the common status/counter update path and
+            \ avoids consuming the bump-only string pool per keystroke.
+            DUP R@ UA.VAL-L @ = IF
+                R@ UA.VAL-A @ SWAP CMOVE
+                R> DROP EXIT
+            THEN
             _UDL-STR-COPY
             R@ UA.VAL-L ! R> UA.VAL-A !
             EXIT

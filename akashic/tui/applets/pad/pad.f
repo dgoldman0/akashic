@@ -260,6 +260,13 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-CFG-L
 _PAD-CURRENT-STATE _PAD-CFG-CAP CMP-FIELD: _PAD-CFG-BUF
 _PAD-CURRENT-STATE CMP-CELL: _PAD-CFG-FD
 
+\ ---- Incremental editor paint state ----
+_PAD-CURRENT-STATE CMP-CELL: _PAD-FAST-ROW
+_PAD-CURRENT-STATE CMP-CELL: _PAD-FAST-COUNT
+_PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-LINE
+_PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL
+_PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL-X
+
 CMP-LAYOUT-SIZE CONSTANT _PAD-STATE-SIZE
 
 : _PAD-ACTIVATE  ( instance -- )
@@ -1287,6 +1294,8 @@ VARIABLE _PSW-BYTE
     _PAD-PRM-NONE _PAD-PROMPT-MODE !
     0 _PAD-REPLACE-FIND-U !
     0 _PAD-ARENA !
+   -1 _PAD-FAST-ROW !
+    0 _PAD-FAST-COUNT !
 
     \ ---- Create XMEM arena for editor buffers ----
     _PAD-ARENA-SIZE A-XMEM ARENA-NEW
@@ -1414,12 +1423,87 @@ VARIABLE _PSW-BYTE
         S"     " DROP SWAP ROT TXTA-INS-STR
     THEN ;
 
+: _PAD-FAST-CHAR?  ( ev -- flag )
+    DUP @ KEY-T-CHAR <> IF DROP 0 EXIT THEN
+    DUP 16 + @ KEY-MOD-CTRL AND IF DROP 0 EXIT THEN
+    8 + @ 32 < IF 0 EXIT THEN
+    _PAD-TXTA @ _PTO-SEL-ANC + @ -1 = ;
+
+: _PAD-ENTER-EVENT?  ( ev -- flag )
+    DUP @ KEY-T-SPECIAL = IF
+        8 + @ KEY-ENTER = EXIT
+    THEN
+    DUP @ KEY-T-CHAR = IF
+        8 + @ 13 = EXIT
+    THEN
+    DROP 0 ;
+
+: _PAD-FAST-LAST-ENTER?  ( ev -- flag )
+    _PAD-ENTER-EVENT? 0= IF 0 EXIT THEN
+    _PAD-TXTA @ _PTO-SEL-ANC + @ -1 <> IF 0 EXIT THEN
+    _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE !
+    _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL !
+    _PAD-EV-OLD-LINE @
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-GB + @ GB-LINES 1- =
+    _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
+    DUP 0>= SWAP 1+ _PAD-TXTA @ WDG-REGION RGN-H < AND
+    AND ;
+
+: _PAD-HANDLE-EDITOR  ( ev -- flag )
+    -1 _PAD-FAST-ROW !
+    0 _PAD-FAST-COUNT !
+    DUP _PAD-FAST-CHAR? IF
+        _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE !
+        _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL !
+        _PAD-TXTA @ _PTO-SCROLL-X + @ _PAD-EV-OLD-SCROLL-X !
+        DUP _PAD-PANEL WDG-HANDLE       ( ev handled? )
+        DUP IF
+            _PAD-TXTA @ TXTA-ADJUST-SCROLL
+            _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE @ =
+            _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL @ = AND IF
+                _PAD-TXTA @ _PTO-SCROLL-X + @
+                _PAD-EV-OLD-SCROLL-X @ = IF
+                    _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
+                    _PAD-FAST-ROW !
+                    1 _PAD-FAST-COUNT !
+                THEN
+            THEN
+        THEN
+        NIP EXIT
+    THEN
+    DUP _PAD-FAST-LAST-ENTER? IF
+        _PAD-TXTA @ _PTO-SCROLL-X + @ _PAD-EV-OLD-SCROLL-X !
+        DUP _PAD-PANEL WDG-HANDLE       ( ev handled? )
+        DUP IF
+            _PAD-TXTA @ TXTA-ADJUST-SCROLL
+            _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE @ 1+ =
+            _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL @ = AND IF
+                _PAD-TXTA @ _PTO-SCROLL-X + @
+                _PAD-EV-OLD-SCROLL-X @ = IF
+                    _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
+                    _PAD-FAST-ROW !
+                    2 _PAD-FAST-COUNT !
+                THEN
+            THEN
+        THEN
+        NIP EXIT
+    THEN
+    _PAD-PANEL WDG-HANDLE ;
+
 : PAD-EVENT-CB  ( ev instance -- flag )
     _PAD-ACTIVATE
+    -1 _PAD-FAST-ROW !
+    0 _PAD-FAST-COUNT !
     _PAD-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN
         DROP
     THEN
+    \ Only bypass UIDL's region repaint while the mounted editor owns focus.
+    \ Sidebar/menu events must continue through normal focused dispatch.
+    UTUI-FOCUS _PAD-E-EDITOR-AREA @ <> IF DROP 0 EXIT THEN
+    \ Modified keys may be registered UIDL/menu shortcuts.  Preserve that
+    \ priority; UIDL will forward an unmatched key back to the textarea.
+    DUP 16 + @ KEY-MOD-CTRL KEY-MOD-ALT OR AND IF DROP 0 EXIT THEN
     DUP @ KEY-T-SPECIAL = IF
         DUP 8 + @ KEY-TAB = IF
             DUP 16 + @ KEY-MOD-SHIFT AND 0= IF
@@ -1427,7 +1511,12 @@ VARIABLE _PSW-BYTE
             THEN
         THEN
     THEN
-    DROP 0 ;
+    \ Route ordinary editor input directly to the mounted panel.  Letting
+    \ UIDL redispatch the same event dirties and refills the entire
+    \ editor-area before Pad paints its already-dirty textarea, doubling
+    \ the cell work for every character.  Unhandled shortcuts still fall
+    \ through to UIDL via the false result.
+    _PAD-HANDLE-EDITOR ;
 
 \ Paint the command bar after UIDL so it overlays the status row.
 : PAD-PAINT-CB  ( instance -- )
@@ -1437,7 +1526,24 @@ VARIABLE _PSW-BYTE
     \ normal focused-element invalidation, so bridge widget dirtiness here.
     _PAD-TXTA @ ?DUP IF
         DUP WDG-DIRTY? IF
-            DROP _PAD-PANEL WDG-DRAW
+            DROP
+            _PAD-FAST-ROW @ 0< IF
+                _PAD-PANEL WDG-DRAW
+            ELSE
+                \ A printable edit with unchanged line mapping only needs
+                \ its viewport row.  Tabs are cheap and keep the dirty-star
+                \ indicator current without repainting the editor body.
+                _PAD-PANEL WDG-REGION RGN-USE
+                _PAD-PANEL _PAD-SYNC-TXTA-RGN
+                _PAD-SYNC-TXTA-FOCUS
+                _PAD-DRAW-TABS
+                _PTH-EDITOR-FG @ DRW-FG! _PTH-EDITOR-BG @ DRW-BG!
+                _PAD-FAST-ROW @ _PAD-FAST-COUNT @
+                _PAD-TXTA @ TXTA-DRAW-ROWS
+                _PAD-DRAW-CARET
+            THEN
+            -1 _PAD-FAST-ROW !
+            0 _PAD-FAST-COUNT !
         ELSE
             DROP
         THEN
