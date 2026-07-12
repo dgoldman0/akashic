@@ -156,24 +156,87 @@ CREATE _OAIB-TOOL-NAME OAI-TOOL-NAME-CAPACITY ALLOT
     _OAIB-GATEWAY @ 0<> AND
     _OAIB-GATEWAY @ ?DUP IF ATOOLG-TOOL-N 0> ELSE 0 THEN AND ;
 
-: _OAIB-WRITE-TOOLS  ( -- )
-    _OAIB-TOOLS? 0= IF EXIT THEN
+: _OAIB-PREPARE-TOOLS  ( -- flag )
+    _OAIB-TOOLS? 0= IF 0 EXIT THEN
     _OAIB-GATEWAY @ ATOOLG-REFRESH ?DUP IF
-        OAIREQ-S-TOOLS _OAIB-FAIL EXIT
+        OAIREQ-S-TOOLS _OAIB-FAIL 0 EXIT
     THEN
-    S" parallel_tool_calls" 0 JSON-KV-BOOL
-    S" tools" JSON-KEY: JSON-[
+    -1 ;
+
+: _OAIB-WRITE-TOOL-ARRAY  ( -- )
     _OAIB-GATEWAY @ ATOOLG-TOOL-N 0 ?DO
         I _OAIB-GATEWAY @ ATOOLG-TOOL-NTH _OAIB-TOOL-WRITE
         _OAIB-ERROR @ IF LEAVE THEN
-    LOOP
+    LOOP ;
+
+: _OAIB-WRITE-TOOLS  ( -- )
+    _OAIB-PREPARE-TOOLS 0= IF EXIT THEN
+    S" parallel_tool_calls" 0 JSON-KV-BOOL
+    S" tools" JSON-KEY: JSON-[
+    _OAIB-WRITE-TOOL-ARRAY
     JSON-] ;
 
-: _OAIB-WRITE-SETTINGS  ( -- )
+: _OAIB-WRITE-LITE-PREFIX  ( -- )
+    _OAIB-CONFIG @ OAIC-RESPONSES-LITE? 0= IF EXIT THEN
+    JSON-{
+    S" type" S" additional_tools" JSON-KV-ESTR
+    S" role" S" developer" JSON-KV-ESTR
+    S" tools" JSON-KEY: JSON-[
+    _OAIB-PREPARE-TOOLS IF _OAIB-WRITE-TOOL-ARRAY THEN
+    JSON-] JSON-}
     _OAIB-CONFIG @ OAIC-INSTRUCTIONS DUP IF
-        S" instructions" 2SWAP JSON-KV-ESTR
+        JSON-{
+        S" type" S" message" JSON-KV-ESTR
+        S" role" S" developer" JSON-KV-ESTR
+        S" content" JSON-KEY: JSON-[ JSON-{
+        S" type" S" input_text" JSON-KV-ESTR
+        S" text" 2SWAP JSON-KV-ESTR
+        JSON-} JSON-] JSON-}
     ELSE
         2DROP
+    THEN ;
+
+: _OAIB-WRITE-REASONING  ( -- )
+    _OAIB-CONFIG @ OAIC-EFFORT NIP
+    _OAIB-CONFIG @ OAIC-SUMMARY NIP OR
+    _OAIB-CONFIG @ OAIC-RESPONSES-LITE? OR 0= IF EXIT THEN
+    S" reasoning" JSON-KEY: JSON-{
+    _OAIB-CONFIG @ OAIC-EFFORT DUP IF
+        S" effort" 2SWAP JSON-KV-ESTR
+    ELSE
+        2DROP
+    THEN
+    _OAIB-CONFIG @ OAIC-SUMMARY DUP IF
+        S" summary" 2SWAP JSON-KV-ESTR
+    ELSE
+        2DROP
+    THEN
+    _OAIB-CONFIG @ OAIC-RESPONSES-LITE? IF
+        S" context" S" all_turns" JSON-KV-ESTR
+    THEN
+    JSON-} ;
+
+: _OAIB-WRITE-OPTIONALS  ( -- )
+    _OAIB-WRITE-REASONING
+    _OAIB-CONFIG @ OAIC-TIER DUP IF
+        S" service_tier" 2SWAP JSON-KV-ESTR
+    ELSE
+        2DROP
+    THEN
+    _OAIB-CONFIG @ OAIC-VERBOSITY DUP IF
+        S" text" JSON-KEY: JSON-{
+        S" verbosity" 2SWAP JSON-KV-ESTR JSON-}
+    ELSE
+        2DROP
+    THEN ;
+
+: _OAIB-WRITE-SETTINGS  ( -- )
+    _OAIB-CONFIG @ OAIC-RESPONSES-LITE? 0= IF
+        _OAIB-CONFIG @ OAIC-INSTRUCTIONS DUP IF
+            S" instructions" 2SWAP JSON-KV-ESTR
+        ELSE
+            2DROP
+        THEN
     THEN
     S" stream" -1 JSON-KV-BOOL
     S" store" _OAIB-CONFIG @ OAIC.FLAGS @ OAIC-F-STORE AND 0<>
@@ -182,7 +245,12 @@ CREATE _OAIB-TOOL-NAME OAI-TOOL-NAME-CAPACITY ALLOT
         S" include" JSON-KEY: JSON-[
         S" reasoning.encrypted_content" JSON-ESTR JSON-]
     THEN
-    _OAIB-WRITE-TOOLS ;
+    _OAIB-WRITE-OPTIONALS
+    _OAIB-CONFIG @ OAIC-RESPONSES-LITE? IF
+        S" parallel_tool_calls" 0 JSON-KV-BOOL
+    ELSE
+        _OAIB-WRITE-TOOLS
+    THEN ;
 
 : _OAIB-BEGIN  ( -- )
     0 _OAIB-ERROR !
@@ -197,6 +265,13 @@ CREATE _OAIB-TOOL-NAME OAI-TOOL-NAME-CAPACITY ALLOT
     ELSE
         OAIREQ-S-OK
     THEN ;
+
+: _OAIB-WRITE-ARRAY  ( json-a json-u -- )
+    JSON-ENTER
+    2DUP JSON-COUNT 0 ?DO
+        2DUP I JSON-NTH JSON-VALUE-SPAN JSON-RAW
+    LOOP
+    2DROP ;
 
 VARIABLE _OAITR-TURN
 VARIABLE _OAITR-PA
@@ -300,7 +375,10 @@ VARIABLE _OAIS-INPUT-U
     THEN
     _OAIB-BEGIN JSON-{
     S" model" JSON-KEY: _OAIB-CONFIG @ OAIC-MODEL JSON-ESTR
-    S" input" JSON-KEY: _OAIS-INPUT-A @ _OAIS-INPUT-U @ JSON-RAW
+    S" input" JSON-KEY: JSON-[
+    _OAIB-WRITE-LITE-PREFIX
+    _OAIS-INPUT-A @ _OAIS-INPUT-U @ _OAIB-WRITE-ARRAY
+    JSON-]
     _OAIB-WRITE-SETTINGS
     JSON-} _OAIB-END ;
 
@@ -334,13 +412,6 @@ VARIABLE _OAICN-OUTPUT-U
 VARIABLE _OAICN-ITEM-A
 VARIABLE _OAICN-ITEM-U
 
-: _OAICN-WRITE-ARRAY  ( json-a json-u -- )
-    JSON-ENTER
-    2DUP JSON-COUNT 0 ?DO
-        2DUP I JSON-NTH JSON-VALUE-SPAN JSON-RAW
-    LOOP
-    2DROP ;
-
 : OAI-RESPONSES-CONTINUE-JSON  ( input history call output config gateway buffer -- length status )
     _OAIB-CAPACITY ! _OAIB-BUFFER ! _OAIB-GATEWAY ! _OAIB-CONFIG !
     _OAICN-OUTPUT-U ! _OAICN-OUTPUT-A !
@@ -372,8 +443,9 @@ VARIABLE _OAICN-ITEM-U
     _OAIB-BEGIN JSON-{
     S" model" JSON-KEY: _OAIB-CONFIG @ OAIC-MODEL JSON-ESTR
     S" input" JSON-KEY: JSON-[
-        _OAICN-INPUT-A @ _OAICN-INPUT-U @ _OAICN-WRITE-ARRAY
-        _OAICN-HISTORY-A @ _OAICN-HISTORY-U @ _OAICN-WRITE-ARRAY
+        _OAIB-WRITE-LITE-PREFIX
+        _OAICN-INPUT-A @ _OAICN-INPUT-U @ _OAIB-WRITE-ARRAY
+        _OAICN-HISTORY-A @ _OAICN-HISTORY-U @ _OAIB-WRITE-ARRAY
         JSON-{
         S" type" S" function_call_output" JSON-KV-ESTR
         S" call_id" JSON-KEY: _OAICN-CALL-A @ _OAICN-CALL-U @ JSON-ESTR

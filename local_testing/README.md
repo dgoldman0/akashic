@@ -24,14 +24,24 @@ python3 local_testing/akashic_tui.py smoke --profile desktop
 
 Profiles are `credential`, `http-request`, `tls-port`, `net-stream`, `mcp`,
 `mcp-component`, `codec-json`, `jsonrpc`, `openai-codec`, `openai-provider`,
-`openai-source`, `codex-auth`, `codex-source`, `conversation-store`,
+`openai-source`, `codex-auth`, `codex-catalog`, `codex-source`,
+`codex-live-tls` (opt-in, credential-free TAP/TLS gate),
+`codex-live-auth` (opt-in native device-flow probe),
+`conversation-store`,
 `agent-context`, `agent-persistence`,
 `interop` (the non-TUI runtime and interoperability contracts), `agent`
-(provider-neutral conversations), `agent-ui`, `agent-auth-ui`, `desktop` (Desk
-with all five applets), `desktop-agent`, `pad`, `fexplorer`, `daybook`, and
-`grid`.
+(provider-neutral conversations), `agent-ui`, `agent-auth-ui`, `agent-widgets`,
+`agent-device-ui`, `desktop` (Desk with all five applets), `desktop-agent`,
+`desktop-codex`, `desktop-codex-live` (opt-in TAP-backed shared environment),
+`pad`, `fexplorer`, `daybook`, and `grid`.
 Generated images, terminal text, cell JSON, and PNG captures go under
 `local_testing/out/`.
+
+Full Desktop closures exceed MP64FS's 128-entry directory limit. The harness
+therefore links those profiles into dependency-ordered native Forth chunks
+under `/.akashic/`, each below KDOS's 255-sector module-transfer ceiling.
+Focused profiles keep ordinary per-module `REQUIRE` loading. Linking changes
+only the generated deployment image, not source organization or runtime ABI.
 
 The smoke journeys exercise application behavior, not just boot markers:
 
@@ -49,7 +59,10 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `openai-provider` | a fully in-guest HTTP/SSE fixture through request streaming, tool discovery, persistent-write approval, native capability execution, stateless tool continuation, asynchronous token refresh, byte-identical one-shot 401 replay, one-time tool-history commit, terminal repeated 401, final transcript text, cancellation, credential-use accounting, request zeroization, and stack balance |
 | `openai-source` | provider-source composition, KDOS TLS-port ownership, provider construction, generic authentication, reconnect, credential clearing/zeroization, and stack balance without opening a network connection |
 | `codex-auth` | native device authorization, pending polling, PKCE exchange, JWT claims, account/plan metadata, refresh rotation, cancellation, logout, zeroization, and stack balance |
-| `codex-source` | Codex source composition, separate auth/model KDOS TLS ports, provider/runtime ownership, account-port binding, cleanup, and stack balance without opening a network connection |
+| `codex-catalog` | source-pinned authenticated catalog request, bounded parse/filter/sort, model instructions, reasoning/tier/verbosity selection, ordinary and Responses Lite projection, malformed recovery, exact one-shot 401 retry, and stack balance |
+| `codex-source` | Codex source composition, exact-host WE1 trust provisioning, separate auth/model KDOS TLS ports, catalog/provider/runtime ownership, Responses Lite header binding, cleanup, and stack balance without opening a network connection |
+| `codex-live-tls` | opt-in credential-free native DNS/TCP/TLS authentication of `auth.openai.com` and `chatgpt.com`; no HTTP request, login code, token, or API key is sent |
+| `codex-live-auth` | opt-in native device-code request, displayed browser code, persistent-connection polling, and bounded transport/auth diagnostics against `auth.openai.com` |
 | `agent-context` | structured turns, transcript-independent model items, provider/tool identity, source filtering, bounded rollback, and stack balance |
 | `conversation-store` | checksummed bounded transcript encoding, alternating VFS generations, newest-valid selection, corruption fallback, fail-closed loading, interrupted-state normalization, ownership cleanup, and stack balance |
 | `agent-persistence` | completed approval audit, repeated runtime reconstruction over one native VFS, interrupted approval recovery, run-ID continuity, durable clearing, and stack balance |
@@ -57,16 +70,65 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `agent` | native offline fallback, provider connection, streamed transcript assembly, approval resolution, cancellation, and owned conversation cleanup without loading TUI |
 | `agent-ui` | transcript, streaming, prompt, review, cancellation, reconnect, resize, and terminal rendering |
 | `agent-auth-ui` | native OpenAI source selection, missing-credential state, masked entry, cancellation, reconnect, clearing, resize, and plaintext absence from all captures |
+| `agent-widgets` | provider-neutral account and run-settings panel states, selection, refresh, cancellation, direct Escape close behavior, and stack balance |
+| `agent-device-ui` | external-browser device code, pending/connected/sign-out states, catalog loading, model/reasoning/speed/verbosity controls, conversation, cancellation, and resize through a reusable native development source |
 | `pad` | edit/undo/redo, open/find/go-to, fragmented multi-sector Save As, exact bytes, word and line replacement, dirty-state redraw |
 | `fexplorer` | create file/folder, rename, copy/paste, confirmed deletion, preview, and persisted MP64FS metadata |
 | `daybook` | task capture, completion, exact Markdown persistence, responsive calendar/agenda resize |
 | `grid` | formula edit, dependent `SUM` recalculation, CSV persistence/reload, virtual-grid resize |
 | `desktop-agent` | all five applets, direct intents, deterministic conversation/tool approval, global prompt, focus, and resize |
+| `desktop-codex` | the complete linked Desktop with the real native Codex source, signed-out account gating, model-readiness gating, all applets, and production-shaped visual boot |
+| `desktop-codex-live` | the same linked Desktop with explicit TAP network configuration for watchable native device login and subscription-backed Codex use |
 
 Run the focused profile plus `desktop-agent` before changing shared TUI, VFS,
 agent, or app-shell behavior. The normal suite is fully native and offline.
 The OpenAI profiles use deterministic in-guest fixture credentials and
 transports; they never contact OpenAI or require a developer API key.
+
+## Opt-In Live Network
+
+The live profiles require a user-owned TAP interface. From the workspace root,
+one script configures it and immediately runs the credential-free gate:
+
+```bash
+sudo local_testing/setup_codex_live.sh
+```
+
+The script creates or reuses `mp64tap0`, enables forwarding and masquerading,
+drops back to the account that invoked `sudo`, and runs this gate command. It
+authenticates both source-pinned hosts with the native KDOS TLS stack but sends
+no application request:
+
+```bash
+python3 local_testing/akashic_tui.py smoke \
+  --profile codex-live-tls --nic-tap mp64tap0 \
+  --max-steps 5000000000 --timeout 300
+```
+
+The Codex source provisions Google Trust Services WE1 as two exact-host
+anchors: `auth.openai.com` and `chatgpt.com`. It does not trust `openai.com`,
+`api.openai.com`, arbitrary subdomains, or unrelated services. The anchor is
+valid through 2029-02-20; certificate/algorithm rotation must be handled as an
+explicit reviewed update, not an automatic network download.
+
+The live gate uses MegaPad's standards-only public ClientHello. Private
+MegaPad hybrid suites and groups are not offered to OpenAI endpoints. On
+failure, the report includes both Akashic's broad transport error and KDOS's
+native handshake-phase status, plus a bounded TAP frame trace.
+
+After that keyless gate, the focused device-flow probe can be kept alive for a
+browser authorization run:
+
+```bash
+python3 local_testing/akashic_tui.py serve \
+  --profile codex-live-auth --nic-tap mp64tap0 \
+  --socket /tmp/akashic-tui.sock
+```
+
+The `desktop-codex-live` smoke journey automatically focuses Agent, opens F9,
+starts login, and verifies that the guest reaches the displayed-code state.
+Use `serve` for a watched login that must continue through browser completion,
+catalog discovery, and conversation.
 
 ## Shared Live Environment
 
@@ -75,6 +137,14 @@ Start the machine owner:
 ```bash
 python3 local_testing/akashic_tui.py serve \
   --profile desktop --socket /tmp/akashic-tui.sock
+```
+
+For native Codex account access after the credential-free gate passes:
+
+```bash
+python3 local_testing/akashic_tui.py serve \
+  --profile desktop-codex-live --nic-tap mp64tap0 \
+  --socket /tmp/akashic-tui.sock
 ```
 
 Attach the viewer from the workspace root in another terminal:
@@ -90,6 +160,10 @@ The viewer and automation clients share the same guest. Control it with:
 
 ```bash
 python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock status
+python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock network
+python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock forth \
+  _ASHELL-LAST-TICK DESK-DESC
+python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock peek 0x1000 4
 python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock key alt+1
 python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock send "hello"
 python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock resize 120 36
@@ -103,8 +177,11 @@ In the agent desktop profiles, `Alt+1` focuses Pad, `Alt+2` File Explorer,
 `Alt+3` Daybook, `Alt+4` Grid, and `Alt+5` Agent. `Ctrl+Space` or `Alt+A` opens
 Desk's global agent prompt. Desk's other shortcuts remain documented in
 `docs/tui/applets/desk/desk.md`.
-In Agent, `Ctrl+K` opens masked credential entry and `Ctrl+Shift+K` clears the
-active provider credential.
+In Agent, F8 opens provider-neutral model/run settings and F9 opens account
+access. For the direct API provider, `Ctrl+K` opens masked credential entry and
+`Ctrl+Shift+K` clears the active credential. Codex device login shows an
+external verification URL and one-time code; it does not require a guest
+browser or an API key.
 Bare F1-F12 keys are forwarded to the guest. Viewer controls use `Ctrl+F5` to
 pause/resume, `Ctrl+F10` to pause and step one instruction, `Ctrl+R` to reset,
 and `Ctrl+Q` to close only the viewer. Combined guest shortcuts such as

@@ -8,9 +8,12 @@
 </menu>
 <menu label=Run>
 <item text=Cancel do=cancel key=Escape/>
+<item text=Settings do=settings key=F8/>
+<item text=Refresh_models do=refresh-models/>
 <item text=Reconnect do=reconnect/>
 </menu>
 <menu label=Connection>
+<item text=Account do=account key=F9/>
 <item text=Set_credential do=credential key=Ctrl+K/>
 <item text=Clear_credential do=clear-credential key=Ctrl+Shift+K/>
 </menu>
@@ -33,5 +36,7 @@
 <action do=cancel key=Escape/>
 <action do=approve key=F6/>
 <action do=deny key=F7/>
+<action do=settings key=F8/>
+<action do=account key=F9/>
 <action do=quit key=Ctrl+Q/>
 </uidl>

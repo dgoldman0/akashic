@@ -28,6 +28,9 @@ REQUIRE_RE = re.compile(r"^\s*REQUIRE\s+(\S+)", re.MULTILINE)
 PROVIDED_RE = re.compile(r"^\s*PROVIDED\s+(\S+)", re.MULTILINE)
 # KDOS stores a terminating NUL in its 24-byte NAMEBUF, leaving 23 key bytes.
 MODULE_KEY_BYTES = 23
+# KDOS's module loader performs one 8-bit sector-count transfer.  Leave
+# headroom below its 255-sector ceiling when linking deployment chunks.
+LINK_CHUNK_BYTES = 120 * 1024
 
 
 def _megapad_root() -> Path:
@@ -66,6 +69,9 @@ class Profile:
     autoexec: str
     ready_markers: tuple[str, ...]
     stable_markers: tuple[str, ...]
+    linked: bool = False
+    requires_tap: bool = False
+    failure_markers: tuple[str, ...] = ()
 
 
 PROFILES = {
@@ -718,6 +724,11 @@ VARIABLE _mt-op-n
     _mt-op-n @ 65535 <= _mt-assert
     _mt-op-a @ ;
 
+: _mt-connect-zero  ( ip remote-port local-port adapter -- 0 )
+    2DROP 2DROP
+    TLS-CONNECT-E-TCP-OPEN TLS-CONNECT-LAST-ERROR !
+    0 ;
+
 : _mt-status  ( ctx adapter -- link-status )
     2DROP _mt-link @ ;
 
@@ -829,6 +840,14 @@ VARIABLE _mt-bind-a
     ['] _mt-dns-throw _mt-a KDOSTLS.DNS-XT !
     _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
+
+    _mt-a _mt-bind 1 TLS-TRUST-COUNT !
+    ['] _mt-connect-zero _mt-a KDOSTLS.CONNECT-XT !
+    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-CONNECT = _mt-assert
+    _mt-a KDOSTLS.NATIVE-ERROR @ TLS-CONNECT-E-TCP-OPEN = _mt-assert
+
+    _mt-a _mt-bind 1 TLS-TRUST-COUNT !
     ['] _mt-dns _mt-a KDOSTLS.DNS-XT !
     KDOSTLS-LINK-OPEN _mt-link !
     _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
@@ -1835,6 +1854,7 @@ CREATE _ca-json 16384 ALLOT
 VARIABLE _ca-json-u
 CREATE _ca-request 32768 ALLOT
 VARIABLE _ca-request-u
+VARIABLE _ca-force-close
 CREATE _ca-id-token 8192 ALLOT
 VARIABLE _ca-id-token-u
 CREATE _ca-access-token 8192 ALLOT
@@ -1846,6 +1866,7 @@ VARIABLE _ca-b64-u
 VARIABLE _ca-auth
 VARIABLE _ca-opens
 VARIABLE _ca-closes
+VARIABLE _ca-requests
 VARIABLE _ca-send-a
 VARIABLE _ca-send-u
 VARIABLE _ca-send-n
@@ -1900,7 +1921,10 @@ VARIABLE _ca-jwt-w
     _ca-r, _ca-crlf,
     S" Content-Type: application/json" _ca-r, _ca-crlf,
     S" Content-Length: " _ca-r, _ca-body-u @ NUM>STR _ca-r, _ca-crlf,
-    S" Connection: close" _ca-r, _ca-crlf, _ca-crlf,
+    _ca-force-close @ IF S" Connection: close" ELSE
+        S" Connection: keep-alive"
+    THEN _ca-r, _ca-crlf, _ca-crlf,
+    0 _ca-force-close !
     _ca-body _ca-body-u @ _ca-r, ;
 
 : _ca-user-code-response  ( -- )
@@ -1912,7 +1936,7 @@ VARIABLE _ca-jwt-w
     0 _ca-body-u ! _ca-json _ca-json-u @ _ca-b, -1 _ca-http-wrap ;
 
 : _ca-pending-response  ( -- )
-    0 _ca-body-u ! S" {}" _ca-b, 0 _ca-http-wrap ;
+    0 _ca-body-u ! S" {}" _ca-b, -1 _ca-force-close ! 0 _ca-http-wrap ;
 
 : _ca-code-response  ( -- )
     _ca-json-begin JSON-{
@@ -1930,19 +1954,25 @@ VARIABLE _ca-jwt-w
     JSON-} _ca-json-end
     0 _ca-body-u ! _ca-json _ca-json-u @ _ca-b, -1 _ca-http-wrap ;
 
-: _ca-open  ( context -- status )
-    DROP 1 _ca-opens +! 0 _ca-response-pos ! 0 _ca-request-u !
-    _ca-opens @ CASE
+: _ca-next-response  ( -- )
+    1 _ca-requests +!
+    _ca-requests @ CASE
         1 OF _ca-user-code-response ENDOF
         2 OF _ca-pending-response ENDOF
         3 OF _ca-code-response ENDOF
         _ca-token-response
-    ENDCASE
+    ENDCASE ;
+: _ca-open  ( context -- status )
+    DROP 1 _ca-opens +! 0 _ca-response-u ! 0 _ca-response-pos !
+    0 _ca-request-u !
     NIO-S-OK ;
 : _ca-close  ( context -- ) DROP 1 _ca-closes +! ;
 : _ca-poll-port  ( context -- ) DROP ;
 : _ca-send  ( addr len context -- count status )
     DROP _ca-send-u ! _ca-send-a !
+    _ca-response-pos @ _ca-response-u @ >= IF
+        0 _ca-response-pos ! 0 _ca-request-u ! _ca-next-response
+    THEN
     _ca-request-u @ _ca-send-u @ + 32768 > IF 0 NIO-S-FAILED EXIT THEN
     _ca-send-u @ 101 MIN _ca-send-n !
     _ca-send-a @ _ca-request _ca-request-u @ + _ca-send-n @ CMOVE
@@ -1983,6 +2013,7 @@ VARIABLE _ca-access-seen
 
 : _ca-run  ( -- )
     0 _ca-fails ! 0 _ca-checks ! DEPTH _ca-depth !
+    0 _ca-opens ! 0 _ca-closes ! 0 _ca-requests ! 0 _ca-force-close !
     _ca-build-tokens
     _ca-port NIO-INIT
     ['] _ca-open _ca-port NIO.OPEN-XT !
@@ -2016,7 +2047,8 @@ VARIABLE _ca-access-seen
     0 _ca-access-seen !
     ['] _ca-access-callback 0 _ca-auth @ CDA.AUTH AAUTH-WITH-ACCESS
     AAUTH-S-OK = _ca-assert _ca-access-seen @ _ca-assert
-    _ca-opens @ 4 = _ca-assert
+    _ca-opens @ 2 = _ca-assert
+    _ca-requests @ 4 = _ca-assert
     _ca-request _ca-request-u @ S" grant_type=authorization_code"
     STR-STR-CONTAINS _ca-assert
     _ca-auth @ CDA.WORK @ 0= _ca-assert
@@ -2024,7 +2056,8 @@ VARIABLE _ca-access-seen
     _ca-auth @ CDA.AUTH AAUTH-REFRESH AAUTH-S-PENDING = _ca-assert
     _ca-pump-to-ready
     _ca-auth @ CDA.AUTH AAUTH-READY? _ca-assert
-    _ca-opens @ 5 = _ca-assert
+    _ca-opens @ 3 = _ca-assert
+    _ca-requests @ 5 = _ca-assert
     _ca-request _ca-request-u @ S" refresh_token" STR-STR-CONTAINS _ca-assert
 
     _ca-auth @ CDA.AUTH AAUTH-LOGOUT AAUTH-S-OK = _ca-assert
@@ -2046,6 +2079,336 @@ _ca-run
         ready_markers=("CODEX AUTH PASS",),
         stable_markers=("CODEX AUTH PASS",),
     ),
+    "codex-catalog": Profile(
+        roots=("agent/providers/codex/model-catalog.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - native Codex model catalog fixture
+ENTER-USERLAND
+." [akashic] loading Codex model catalog" CR
+REQUIRE agent/providers/codex/model-catalog.f
+
+VARIABLE _cc-fails
+VARIABLE _cc-checks
+VARIABLE _cc-depth
+: _cc-assert  ( flag -- )
+    1 _cc-checks +!
+    0= IF 1 _cc-fails +! ." ASSERT " _cc-checks @ . CR THEN ;
+: _cc-stack  ( -- )
+    DEPTH DUP _cc-depth @ <> IF
+        ." STACK " _cc-depth @ . ."  -> " DUP . CR .S CR
+    THEN
+    _cc-depth @ = _cc-assert ;
+
+CREATE _cc-auth AGENT-PROVIDER-AUTH-SIZE ALLOT
+CREATE _cc-port NET-IO-PORT-SIZE ALLOT
+CREATE _cc-config OPENAI-CONFIG-SIZE ALLOT
+VARIABLE _cc-catalog
+CREATE _cc-json 32768 ALLOT
+VARIABLE _cc-json-u
+CREATE _cc-body 32768 ALLOT
+VARIABLE _cc-body-u
+CREATE _cc-response 49152 ALLOT
+VARIABLE _cc-response-u
+VARIABLE _cc-response-pos
+CREATE _cc-requests 49152 ALLOT
+CREATE _cc-request-us 24 ALLOT
+VARIABLE _cc-opens
+VARIABLE _cc-closes
+VARIABLE _cc-mode
+VARIABLE _cc-send-a
+VARIABLE _cc-send-u
+VARIABLE _cc-send-n
+VARIABLE _cc-recv-a
+VARIABLE _cc-recv-u
+VARIABLE _cc-recv-n
+VARIABLE _cc-current-a
+VARIABLE _cc-current-u
+VARIABLE _cc-token-n
+VARIABLE _cc-refresh-hits
+VARIABLE _cc-refresh-polls
+VARIABLE _cc-callback
+VARIABLE _cc-callback-context
+VARIABLE _cc-pump-status
+
+: _cc-settings  ( -- settings ) _cc-catalog @ CDMC.SETTINGS ;
+: _cc-b,  ( addr len -- )
+    DUP >R _cc-body _cc-body-u @ + SWAP CMOVE R> _cc-body-u +! ;
+: _cc-r,  ( addr len -- )
+    DUP >R _cc-response _cc-response-u @ + SWAP CMOVE
+    R> _cc-response-u +! ;
+: _cc-rc,  ( c -- )
+    _cc-response _cc-response-u @ + C! 1 _cc-response-u +! ;
+: _cc-crlf,  ( -- ) 13 _cc-rc, 10 _cc-rc, ;
+
+: _cc-build-catalog  ( -- )
+    JSON-BUILD-RESET _cc-json 32768 JSON-SET-OUTPUT
+    JSON-{ S" models" JSON-KEY: JSON-[
+        JSON-{
+            S" slug" S" gpt-slow" JSON-KV-ESTR
+            S" display_name" S" Deliberate" JSON-KV-ESTR
+            S" description" S" Careful general work" JSON-KV-ESTR
+            S" visibility" S" list" JSON-KV-ESTR
+            S" priority" 20 JSON-KV-NUM
+            S" context_window" 200000 JSON-KV-NUM
+            S" use_responses_lite" 0 JSON-KV-BOOL
+            S" support_verbosity" -1 JSON-KV-BOOL
+            S" default_verbosity" S" medium" JSON-KV-ESTR
+            S" default_reasoning_summary" S" auto" JSON-KV-ESTR
+            S" base_instructions" S" Slow instructions." JSON-KV-ESTR
+            S" default_reasoning_level" S" high" JSON-KV-ESTR
+            S" supported_reasoning_levels" JSON-KEY: JSON-[
+                JSON-{ S" effort" S" low" JSON-KV-ESTR
+                    S" description" S" Quicker" JSON-KV-ESTR JSON-}
+                JSON-{ S" effort" S" high" JSON-KV-ESTR
+                    S" description" S" More reasoning" JSON-KV-ESTR JSON-}
+            JSON-]
+            S" service_tiers" JSON-KEY: JSON-[
+                JSON-{ S" id" S" priority" JSON-KV-ESTR
+                    S" name" S" Fast" JSON-KV-ESTR
+                    S" description" S" Faster responses" JSON-KV-ESTR JSON-}
+            JSON-]
+            S" default_service_tier" JSON-KV-NULL
+        JSON-}
+        JSON-{
+            S" visibility" S" hide" JSON-KV-ESTR
+            S" priority" 0 JSON-KV-NUM
+        JSON-}
+        JSON-{
+            S" slug" S" gpt-fast" JSON-KV-ESTR
+            S" display_name" S" Swift" JSON-KV-ESTR
+            S" description" S" Fast everyday work" JSON-KV-ESTR
+            S" visibility" S" list" JSON-KV-ESTR
+            S" priority" 1 JSON-KV-NUM
+            S" context_window" 100000 JSON-KV-NUM
+            S" use_responses_lite" -1 JSON-KV-BOOL
+            S" support_verbosity" -1 JSON-KV-BOOL
+            S" default_verbosity" S" low" JSON-KV-ESTR
+            S" default_reasoning_summary" S" none" JSON-KV-ESTR
+            S" base_instructions" S" Fast instructions." JSON-KV-ESTR
+            S" default_reasoning_level" S" low" JSON-KV-ESTR
+            S" supported_reasoning_levels" JSON-KEY: JSON-[
+                JSON-{ S" effort" S" low" JSON-KV-ESTR
+                    S" description" S" Quick" JSON-KV-ESTR JSON-}
+                JSON-{ S" effort" S" medium" JSON-KV-ESTR
+                    S" description" S" Balanced" JSON-KV-ESTR JSON-}
+            JSON-]
+            S" service_tiers" JSON-KEY: JSON-[ JSON-]
+            S" default_service_tier" JSON-KV-NULL
+        JSON-}
+    JSON-] JSON-}
+    JSON-OUTPUT-RESULT NIP _cc-json-u ! ;
+
+: _cc-http-wrap  ( code -- )
+    0 _cc-response-u !
+    DUP 200 = IF
+        DROP S" HTTP/1.1 200 OK"
+    ELSE
+        DROP S" HTTP/1.1 401 Unauthorized"
+    THEN
+    _cc-r, _cc-crlf,
+    S" Content-Type: application/json" _cc-r, _cc-crlf,
+    S" Content-Length: " _cc-r, _cc-body-u @ NUM>STR _cc-r, _cc-crlf,
+    S" Connection: close" _cc-r, _cc-crlf, _cc-crlf,
+    _cc-body _cc-body-u @ _cc-r, ;
+
+: _cc-catalog-response  ( -- )
+    0 _cc-body-u ! _cc-json _cc-json-u @ _cc-b, 200 _cc-http-wrap ;
+: _cc-unauthorized-response  ( -- )
+    0 _cc-body-u ! S" {}" _cc-b, 401 _cc-http-wrap ;
+: _cc-malformed-response  ( -- )
+    0 _cc-body-u ! S" {" _cc-b, 200 _cc-http-wrap ;
+
+: _cc-reset-io  ( -- )
+    0 _cc-opens ! 0 _cc-closes !
+    _cc-request-us 24 0 FILL _cc-requests 49152 0 FILL ;
+
+: _cc-request  ( index -- addr len )
+    DUP 8 * _cc-request-us + @ >R 16384 * _cc-requests + R> ;
+
+: _cc-open  ( context -- status )
+    DROP 1 _cc-opens +! 0 _cc-response-pos !
+    _cc-opens @ 1- 2 MIN DUP 16384 * _cc-requests + _cc-current-a !
+    8 * _cc-request-us + DUP _cc-current-u ! 0 SWAP !
+    _cc-mode @ 2 = IF _cc-unauthorized-response NIO-S-OK EXIT THEN
+    _cc-mode @ 1 = _cc-opens @ 1 = AND IF
+        _cc-unauthorized-response NIO-S-OK EXIT
+    THEN
+    _cc-mode @ 3 = IF _cc-malformed-response NIO-S-OK EXIT THEN
+    _cc-catalog-response NIO-S-OK ;
+: _cc-close  ( context -- ) DROP 1 _cc-closes +! ;
+: _cc-poll-port  ( context -- ) DROP ;
+: _cc-send  ( addr len context -- count status )
+    DROP _cc-send-u ! _cc-send-a !
+    _cc-send-u @ _cc-send-n !
+    _cc-current-u @ @ _cc-send-n @ + 16384 > IF
+        0 NIO-S-FAILED EXIT
+    THEN
+    _cc-send-a @ _cc-current-a @ _cc-current-u @ @ +
+    _cc-send-n @ CMOVE
+    _cc-send-n @ _cc-current-u @ +!
+    _cc-send-n @ NIO-S-OK ;
+: _cc-recv  ( addr cap context -- count status )
+    DROP _cc-recv-u ! _cc-recv-a !
+    _cc-response-pos @ _cc-response-u @ >= IF 0 NIO-S-EOF EXIT THEN
+    _cc-response-u @ _cc-response-pos @ - _cc-recv-u @ MIN
+    _cc-recv-n !
+    _cc-response _cc-response-pos @ + _cc-recv-a @ _cc-recv-n @ CMOVE
+    _cc-recv-n @ _cc-response-pos +!
+    _cc-recv-n @ NIO-S-OK ;
+
+: _cc-with-access  ( callback callback-context context -- status )
+    DROP _cc-callback-context ! _cc-callback !
+    _cc-token-n @ 1 = IF S" token-one" ELSE S" token-two" THEN
+    _cc-callback-context @ _cc-callback @ EXECUTE ;
+
+: _cc-auth-refresh  ( context -- status )
+    DROP 1 _cc-refresh-hits +! 0 _cc-refresh-polls !
+    AAUTH-STATE-REFRESHING _cc-auth AAUTH.STATE !
+    1 _cc-auth AAUTH.REVISION +! AAUTH-S-PENDING ;
+
+: _cc-auth-poll  ( context -- status )
+    DROP _cc-auth AAUTH.STATE @ AAUTH-STATE-REFRESHING <> IF
+        AAUTH-S-OK EXIT
+    THEN
+    1 _cc-refresh-polls +!
+    _cc-refresh-polls @ 2 < IF AAUTH-S-PENDING EXIT THEN
+    2 _cc-token-n ! AAUTH-STATE-READY _cc-auth AAUTH.STATE !
+    1 _cc-auth AAUTH.REVISION +! AAUTH-S-OK ;
+
+: _cc-auth-ready  ( -- )
+    1 _cc-token-n ! 0 _cc-refresh-hits ! 0 _cc-refresh-polls !
+    AAUTH-STATE-READY _cc-auth AAUTH.STATE ! ;
+
+: _cc-pump  ( -- status )
+    ARSET-S-PENDING _cc-pump-status !
+    12000 0 DO
+        _cc-settings ARSET-POLL _cc-pump-status !
+        _cc-pump-status @ ARSET-S-PENDING <> IF
+            _cc-pump-status @ UNLOOP EXIT
+        THEN
+    LOOP
+    _cc-pump-status @ ;
+
+: _cc-setup  ( -- )
+    _cc-build-catalog
+    _cc-port NIO-INIT
+    ['] _cc-open _cc-port NIO.OPEN-XT !
+    ['] _cc-close _cc-port NIO.CLOSE-XT !
+    ['] _cc-poll-port _cc-port NIO.POLL-XT !
+    ['] _cc-send _cc-port NIO.SEND-XT !
+    ['] _cc-recv _cc-port NIO.RECV-XT !
+    _cc-auth AAUTH-INIT
+    _cc-auth _cc-auth AAUTH.CONTEXT !
+    AAUTH-M-DEVICE _cc-auth AAUTH.METHODS !
+    ['] _cc-with-access _cc-auth AAUTH.WITH-ACCESS-XT !
+    ['] _cc-auth-refresh _cc-auth AAUTH.REFRESH-XT !
+    ['] _cc-auth-poll _cc-auth AAUTH.POLL-XT !
+    S" account-fixture" _cc-auth AAUTH.ACCOUNT-ID CV-STRING! 0= _cc-assert
+    _cc-auth-ready
+    _cc-config CODEX-CONFIG-INIT OAIC-S-OK = _cc-assert
+    CODEX-MODEL-CATALOG-SIZE ALLOCATE
+    DUP 0= _cc-assert DROP _cc-catalog !
+    _cc-auth _cc-port _cc-catalog @ CDMC-INIT ARSET-S-OK = _cc-assert
+    _cc-config _cc-catalog @ CDMC-CONFIG! ;
+
+: _cc-test-catalog  ( -- )
+    0 _cc-mode ! _cc-reset-io
+    _cc-settings ARSET-REFRESH ARSET-S-PENDING = _cc-assert
+    _cc-pump ARSET-S-OK = _cc-assert
+    _cc-settings ARSET.STATE @ ARSET-STATE-READY = _cc-assert
+    _cc-settings ARSET-MODEL-N 2 = _cc-assert
+    0 _cc-settings ARSET-MODEL-NTH ARMODEL-ID
+    S" gpt-fast" STR-STR= _cc-assert
+    1 _cc-settings ARSET-MODEL-NTH ARMODEL-ID
+    S" gpt-slow" STR-STR= _cc-assert
+    _cc-settings ARSET-SELECTED-MODEL
+    0 _cc-settings ARSET-MODEL-NTH = _cc-assert
+    _cc-config OAIC-MODEL S" gpt-fast" STR-STR= _cc-assert
+    _cc-config OAIC-EFFORT S" low" STR-STR= _cc-assert
+    _cc-config OAIC-TIER NIP 0= _cc-assert
+    _cc-config OAIC-SUMMARY NIP 0= _cc-assert
+    _cc-config OAIC-VERBOSITY S" low" STR-STR= _cc-assert
+    _cc-config OAIC-INSTRUCTIONS S" Fast instructions." STR-STR= _cc-assert
+    _cc-config OAIC-RESPONSES-LITE? _cc-assert
+    0 _cc-request CODEX-MODELS-PATH STR-STR-CONTAINS _cc-assert
+    0 _cc-request S" Authorization: Bearer token-one" STR-STR-CONTAINS
+    _cc-assert
+    0 _cc-request S" ChatGPT-Account-ID: account-fixture"
+    STR-STR-CONTAINS _cc-assert ;
+
+: _cc-test-selection  ( -- )
+    1 _cc-settings ARSET-MODEL! ARSET-S-OK = _cc-assert
+    _cc-config OAIC-MODEL S" gpt-slow" STR-STR= _cc-assert
+    _cc-config OAIC-EFFORT S" high" STR-STR= _cc-assert
+    _cc-config OAIC-SUMMARY S" auto" STR-STR= _cc-assert
+    _cc-config OAIC-VERBOSITY S" medium" STR-STR= _cc-assert
+    _cc-config OAIC-RESPONSES-LITE? 0= _cc-assert
+    0 _cc-settings ARSET-EFFORT! ARSET-S-OK = _cc-assert
+    _cc-config OAIC-EFFORT S" low" STR-STR= _cc-assert
+    0 _cc-settings ARSET-TIER! ARSET-S-OK = _cc-assert
+    _cc-config OAIC-TIER S" priority" STR-STR= _cc-assert
+    -1 _cc-settings ARSET-TIER! ARSET-S-OK = _cc-assert
+    _cc-config OAIC-TIER NIP 0= _cc-assert
+    ARVERB-HIGH _cc-settings ARSET-VERBOSITY! ARSET-S-OK = _cc-assert
+    _cc-config OAIC-VERBOSITY S" high" STR-STR= _cc-assert
+    ARVERB-AUTO _cc-settings ARSET-VERBOSITY! ARSET-S-OK = _cc-assert
+    _cc-config OAIC-VERBOSITY S" medium" STR-STR= _cc-assert
+    -1 _cc-settings ARSET-MODEL! ARSET-S-INVALID = _cc-assert
+    2 _cc-settings ARSET-MODEL! ARSET-S-INVALID = _cc-assert
+    -1 _cc-settings ARSET-EFFORT! ARSET-S-INVALID = _cc-assert
+    1 _cc-settings ARSET-TIER! ARSET-S-INVALID = _cc-assert
+    9 _cc-settings ARSET-VERBOSITY! ARSET-S-INVALID = _cc-assert ;
+
+: _cc-test-auth-retry  ( -- )
+    1 _cc-mode ! _cc-reset-io _cc-auth-ready
+    _cc-settings ARSET-REFRESH ARSET-S-PENDING = _cc-assert
+    _cc-pump ARSET-S-OK = _cc-assert
+    _cc-opens @ 2 = _cc-assert
+    _cc-refresh-hits @ 1 = _cc-assert
+    0 _cc-request S" Bearer token-one" STR-STR-CONTAINS _cc-assert
+    1 _cc-request S" Bearer token-two" STR-STR-CONTAINS _cc-assert
+
+    2 _cc-mode ! _cc-reset-io _cc-auth-ready
+    _cc-settings ARSET-REFRESH ARSET-S-PENDING = _cc-assert
+    _cc-pump ARSET-S-AUTH = _cc-assert
+    _cc-opens @ 2 = _cc-assert
+    _cc-settings ARSET.STATE @ ARSET-STATE-ERROR = _cc-assert
+    _cc-settings ARSET-ERROR NIP 0> _cc-assert ;
+
+: _cc-test-recovery  ( -- )
+    3 _cc-mode ! _cc-reset-io _cc-auth-ready
+    _cc-settings ARSET-REFRESH ARSET-S-PENDING = _cc-assert
+    _cc-pump ARSET-S-PROTOCOL = _cc-assert
+    _cc-settings ARSET.STATE @ ARSET-STATE-ERROR = _cc-assert
+    0 _cc-mode ! _cc-reset-io
+    _cc-settings ARSET-REFRESH ARSET-S-PENDING = _cc-assert
+    _cc-pump ARSET-S-OK = _cc-assert
+    _cc-settings ARSET.STATE @ ARSET-STATE-READY = _cc-assert ;
+
+: _cc-cleanup  ( -- )
+    _cc-settings ARSET-DESTROY
+    _cc-catalog @ FREE
+    _cc-auth AAUTH-DESTROY ;
+
+: _cc-run  ( -- )
+    0 _cc-fails ! 0 _cc-checks ! DEPTH _cc-depth !
+    _cc-setup
+    _cc-test-catalog
+    _cc-test-selection
+    _cc-test-auth-retry
+    _cc-test-recovery
+    _cc-cleanup _cc-stack
+    _cc-fails @ 0= IF
+        ." CODEX CATALOG PASS " _cc-checks @ .
+    ELSE
+        ." CODEX CATALOG FAIL " _cc-fails @ . ." / " _cc-checks @ .
+    THEN CR ;
+
+_cc-run
+""",
+        ready_markers=("CODEX CATALOG PASS",),
+        stable_markers=("CODEX CATALOG PASS",),
+    ),
     "codex-source": Profile(
         roots=("agent/providers/codex/source.f", "agent/runtime.f"),
         resources=(),
@@ -2061,6 +2424,9 @@ VARIABLE _cm-depth
 VARIABLE _cm-source
 VARIABLE _cm-provider
 VARIABLE _cm-runtime
+CREATE _cm-wire 4096 ALLOT
+CREATE _cm-request HTTP-REQUEST-SIZE ALLOT
+CREATE _cm-session 200 ALLOT
 : _cm-assert  ( flag -- )
     1 _cm-checks +!
     0= IF 1 _cm-fails +! ." ASSERT " _cm-checks @ . CR THEN ;
@@ -2089,10 +2455,39 @@ VARIABLE _cm-runtime
     CODEX-PROVIDER-ID STR-STR= _cm-assert
     _cm-provider @ APROV-AUTH
     _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH = _cm-assert
+    TLS-TRUST-COUNT @ 2 = _cm-assert
+    TLS-TRUST-VERSION @ 1 = _cm-assert
+    TLS-TRUST-GENERATION @ CODEX-TRUST-GENERATION = _cm-assert
+    S" auth.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _cm-assert
+    S" chatgpt.com" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _cm-assert
+    S" api.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _cm-assert
+    S" auth.openai.com.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _cm-assert
+    _cm-provider @ APROV-RUN-SETTINGS
+    _cm-source @ CODEX-SOURCE-CATALOG CDMC.SETTINGS = _cm-assert
+    _cm-source @ CODEX-SOURCE-CATALOG CDMC.CONFIG @
+    _cm-provider @ OPENAI-PROVIDER-CONFIG = _cm-assert
     _cm-provider @ APROV.FEATURES @ APROV-F-CONTEXT AND 0<> _cm-assert
     _cm-provider @ ARUNTIME-NEW DUP 0= _cm-assert DROP _cm-runtime !
     _cm-runtime @ ARUNTIME-AUTH DUP 0<> _cm-assert
     AAUTH.STATE @ AAUTH-STATE-SIGNED-OUT = _cm-assert
+    _cm-runtime @ ARUNTIME-RUN-SETTINGS
+    _cm-source @ CODEX-SOURCE-CATALOG CDMC.SETTINGS = _cm-assert
+    S" hello" _cm-runtime @ ARUNTIME-SEND 4 = _cm-assert
+
+    S" account-fixture"
+    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH AAUTH.ACCOUNT-ID CV-STRING!
+    0= _cm-assert
+    _cm-provider @ OPENAI-PROVIDER-CONFIG OAIC.FLAGS DUP @
+    OAIC-F-RESPONSES-LITE OR SWAP !
+    _cm-wire 4096 _cm-request HREQ-INIT HREQ-S-OK = _cm-assert
+    S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
+    HREQ-S-OK = _cm-assert
+    _cm-session 200 0 FILL 42 _cm-session OAIR-S.THREAD-ID !
+    _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
+    OAIR-S-OK = _cm-assert
+    _cm-wire _cm-request HREQ.LENGTH @
+    S" x-openai-internal-codex-responses-lite: true"
+    STR-STR-CONTAINS _cm-assert
     _cm-runtime @ ARUNTIME-FREE
     _cm-provider @ APROV-FREE
     _cm-source @ APSOURCE-FREE
@@ -3678,6 +4073,11 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
 
 : _ct-run  ( -- )
     0 _ct-fails ! 0 _ct-check !
+    S" vfs:/example.f" IRES-VFS-PATH _ct-assert
+    DUP 10 = _ct-assert
+    DROP C@ [CHAR] / = _ct-assert
+    S" file:/example.f" IRES-VFS-PATH 0= _ct-assert 2DROP
+    S" vfs" IRES-VFS-PATH 0= _ct-assert 2DROP
     _ct-comp-setup _ct-cap-setup _ct-intent-setup
     _ct-cap _ct-comp COMP.CAPS-A !
     1 _ct-comp COMP.CAPS-N !
@@ -3711,6 +4111,11 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 77 = _ct-assert
     _ct-req @ CBR.STATUS @ CBUS-S-OK = _ct-assert
     _ct-i1 @ CINST.REVISION @ 1 = _ct-assert
+    CAP-E-NAVIGATE _ct-cap CAP.EFFECTS !
+    88 _ct-req @ CBR.ARGS CV-INT!
+    _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
+    1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
+    _ct-i1 @ CINST.REVISION @ 2 = _ct-assert
     _ct-req @ CBR-FREE
     _ct-bus @ CBUS-FREE
     _ct-router @ CINT-FREE
@@ -3812,6 +4217,86 @@ THEN
             "Grid",
             "Agent",
         ),
+        linked=True,
+    ),
+    "agent-widgets": Profile(
+        roots=(
+            "tui/widgets/agent-auth.f",
+            "tui/widgets/agent-settings.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - agent account and settings widgets
+ENTER-USERLAND
+REQUIRE tui/widgets/agent-auth.f
+REQUIRE tui/widgets/agent-settings.f
+
+VARIABLE _aw-fails
+: _aw-assert  ( flag -- ) 0= IF 1 _aw-fails +! THEN ;
+CREATE _aw-provider AGENT-PROVIDER-SIZE ALLOT
+CREATE _aw-runtime AGENT-RUNTIME-SIZE ALLOT
+CREATE _aw-settings AGENT-RUN-SETTINGS-SIZE ALLOT
+CREATE _aw-auth AGENT-PROVIDER-AUTH-SIZE ALLOT
+CREATE _aw-event 24 ALLOT
+CREATE _aw-sync-provider AGENT-PROVIDER-SIZE ALLOT
+CREATE _aw-sync-settings AGENT-RUN-SETTINGS-SIZE ALLOT
+VARIABLE _aw-sync-runtime
+VARIABLE _aw-sync-connects
+VARIABLE _aw-region
+VARIABLE _aw-widget
+
+: _aw-sync-refresh  ( context -- status )
+    DROP ARSET-STATE-READY _aw-sync-settings ARSET.STATE !
+    1 _aw-sync-settings ARSET.REVISION +! ARSET-S-OK ;
+
+: _aw-sync-connect  ( queue context -- status )
+    2DROP 1 _aw-sync-connects +!
+    APROV-S-READY _aw-sync-provider APROV.STATE ! 0 ;
+
+: _aw-test-sync-settings  ( -- )
+    0 _aw-sync-connects !
+    _aw-sync-provider APROV-INIT
+    _aw-sync-settings ARSET-INIT
+    ['] _aw-sync-refresh _aw-sync-settings ARSET.REFRESH-XT !
+    _aw-sync-settings _aw-sync-provider APROV.RUN-SETTINGS !
+    ['] _aw-sync-connect _aw-sync-provider APROV.CONNECT-XT !
+    0 _aw-sync-provider ARUNTIME-NEW
+    DUP 0= _aw-assert DROP _aw-sync-runtime !
+    _aw-sync-settings ARSET.STATE @ ARSET-STATE-READY = _aw-assert
+    _aw-sync-connects @ 1 = _aw-assert
+    _aw-sync-runtime @ ARUNTIME-FREE ;
+
+: _aw-run  ( -- )
+    0 _aw-fails !
+    _aw-test-sync-settings
+    _aw-provider APROV-INIT
+    _aw-runtime AGENT-RUNTIME-SIZE 0 FILL
+    _aw-settings ARSET-INIT
+    _aw-auth AAUTH-INIT
+    _aw-provider _aw-runtime ARUNTIME.PROVIDER !
+    _aw-settings _aw-provider APROV.RUN-SETTINGS !
+    _aw-auth _aw-provider APROV.AUTH !
+    0 0 20 80 RGN-NEW _aw-region !
+    _aw-runtime _aw-region @ ARSP-NEW DUP _aw-widget ! ARSP-SHOW
+    _aw-widget @ ARSP-ACTIVE? _aw-assert
+    _aw-event KEY-T-SPECIAL KEY-ESC 0 _KEY-SET-EV
+    _aw-event _aw-widget @ WDG-HANDLE _aw-assert
+    _aw-widget @ ARSP-ACTIVE? 0= _aw-assert
+    _aw-widget @ ARSP-FREE
+    _aw-runtime _aw-region @ AAUTHP-NEW DUP _aw-widget ! AAUTHP-SHOW
+    _aw-widget @ AAUTHP-ACTIVE? _aw-assert
+    _aw-event _aw-widget @ WDG-HANDLE _aw-assert
+    _aw-widget @ AAUTHP-ACTIVE? 0= _aw-assert
+    _aw-widget @ AAUTHP-FREE
+    _aw-region @ RGN-FREE
+    _aw-auth AAUTH-DESTROY
+    _aw-fails @ 0= IF ." AGENT WIDGETS PASS" ELSE
+        ." AGENT WIDGETS FAIL " _aw-fails @ .
+    THEN CR ;
+
+_aw-run
+""",
+        ready_markers=("AGENT WIDGETS PASS",),
+        stable_markers=("AGENT WIDGETS PASS",),
     ),
     "agent-ui": Profile(
         roots=(
@@ -3858,6 +4343,29 @@ AGENT-RUN
 """,
         ready_markers=("Agent", "Connection", "Credential required"),
         stable_markers=("Agent", "Connection", "Credential required"),
+    ),
+    "agent-device-ui": Profile(
+        roots=(
+            "tui/applets/agent/agent.f",
+            "agent/providers/devtools/device-flow.f",
+        ),
+        resources=("tui/applets/agent/agent.uidl",),
+        autoexec=r"""\ autoexec.f - native device-flow and model-settings UI
+ENTER-USERLAND
+." [akashic] loading Agent device-flow UI" CR
+REQUIRE agent/providers/devtools/device-flow.f
+REQUIRE tui/applets/agent/agent.f
+: _boot-device-source  ( -- )
+    DEVFLOW-SOURCE-NEW
+    0<> ABORT" device-flow source allocation failed"
+    AGENT-SOURCE! ;
+_boot-device-source
+." [akashic] starting Agent device-flow UI" CR
+AGENT-RUN
+." [akashic] Agent device-flow UI exited" CR
+""",
+        ready_markers=("Agent", "Connection", "Sign-in required"),
+        stable_markers=("Agent", "Connection"),
     ),
     "pad": Profile(
         roots=("tui/applets/pad/pad.f",),
@@ -3926,6 +4434,211 @@ GRID-RUN
 # Same production-shaped image as desktop, with a focused agent/interop
 # journey instead of the full applet regression tour.
 PROFILES["desktop-agent"] = PROFILES["desktop"]
+PROFILES["desktop-resource"] = PROFILES["desktop"]
+PROFILES["desktop-codex"] = Profile(
+    roots=tuple(
+        "agent/providers/codex/source.f"
+        if root == "agent/providers/devtools/scripted.f"
+        else root
+        for root in PROFILES["desktop"].roots
+    ),
+    resources=PROFILES["desktop"].resources,
+    autoexec=(
+        PROFILES["desktop"].autoexec
+        .replace(
+            "REQUIRE agent/providers/devtools/scripted.f",
+            "REQUIRE agent/providers/codex/source.f",
+        )
+        .replace(
+            "SCRIPTED-SOURCE-NEW 0<> ABORT\" scripted source allocation failed\"",
+            "CODEX-SOURCE-NEW 0<> ABORT\" Codex source allocation failed\"",
+        )
+    ),
+    ready_markers=PROFILES["desktop"].ready_markers,
+    stable_markers=PROFILES["desktop"].stable_markers,
+    linked=True,
+)
+PROFILES["desktop-codex-live"] = Profile(
+    roots=PROFILES["desktop-codex"].roots,
+    resources=PROFILES["desktop-codex"].resources,
+    autoexec=PROFILES["desktop-codex"].autoexec.replace(
+        "ENTER-USERLAND",
+        "ENTER-USERLAND\n"
+        "10 64 0 2 IP-SET\n"
+        "10 64 0 1 GW-IP IP!\n"
+        "255 255 255 0 NET-MASK IP!\n"
+        "8 8 8 8 DNS-SERVER-IP IP!",
+        1,
+    ),
+    ready_markers=PROFILES["desktop-codex"].ready_markers,
+    stable_markers=PROFILES["desktop-codex"].stable_markers,
+    linked=True,
+    requires_tap=True,
+)
+PROFILES["codex-live-tls"] = Profile(
+    roots=(
+        "agent/providers/codex/auth.f",
+        "agent/providers/codex/config.f",
+        "agent/providers/codex/trust.f",
+        "net/transports/kdos-tls.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - credential-free native Codex TLS gate
+ENTER-USERLAND
+." [akashic] loading Codex live TLS gate" CR
+REQUIRE agent/providers/codex/auth.f
+REQUIRE agent/providers/codex/config.f
+REQUIRE agent/providers/codex/trust.f
+REQUIRE net/transports/kdos-tls.f
+
+CREATE _clt-auth KDOSTLS-SIZE ALLOT
+CREATE _clt-backend KDOSTLS-SIZE ALLOT
+VARIABLE _clt-adapter
+
+: _clt-connect  ( host-a host-u adapter -- )
+    DUP _clt-adapter ! KDOSTLS-INIT
+    443 _clt-adapter @ KDOSTLS-CONFIGURE
+    DUP KDOSTLS-E-OK <> IF
+        ." CODEX TLS CONFIG FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP
+    _clt-adapter @ KDOSTLS.PORT NIO-OPEN
+    DUP NIO-S-OK <> IF
+        ." CODEX TLS OPEN FAIL status=" .
+        ."  error=" _clt-adapter @ KDOSTLS.LAST-ERROR @ .
+        ."  native=" _clt-adapter @ KDOSTLS.NATIVE-ERROR @ . CR
+        TX-FLUSH ABORT
+    THEN DROP
+    _clt-adapter @ KDOSTLS.PORT NIO-CLOSE ;
+
+10 64 0 2 IP-SET
+10 64 0 1 GW-IP IP!
+255 255 255 0 NET-MASK IP!
+8 8 8 8 DNS-SERVER-IP IP!
+
+CODEX-TRUST-INSTALL DUP TLS-CERT-OK <> IF
+    ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
+THEN DROP
+." CODEX TLS GATE READY" CR TX-FLUSH
+CODEX-AUTH-HOST _clt-auth _clt-connect
+." CODEX TLS AUTH OK" CR TX-FLUSH
+CODEX-BACKEND-HOST _clt-backend _clt-connect
+." CODEX TLS BACKEND OK" CR TX-FLUSH
+." CODEX TLS LIVE PASS" CR TX-FLUSH
+""",
+    ready_markers=("CODEX TLS LIVE PASS",),
+    stable_markers=(
+        "CODEX TLS AUTH OK",
+        "CODEX TLS BACKEND OK",
+        "CODEX TLS LIVE PASS",
+    ),
+    requires_tap=True,
+    failure_markers=(
+        "CODEX TLS CONFIG FAIL",
+        "CODEX TLS TRUST FAIL",
+        "CODEX TLS OPEN FAIL",
+    ),
+)
+PROFILES["codex-live-auth"] = Profile(
+    roots=(
+        "agent/providers/codex/auth.f",
+        "agent/providers/codex/trust.f",
+        "net/transports/kdos-tls.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - native Codex device-flow diagnostic
+ENTER-USERLAND
+." [akashic] loading Codex live authentication probe" CR
+REQUIRE agent/providers/codex/auth.f
+REQUIRE agent/providers/codex/trust.f
+REQUIRE net/transports/kdos-tls.f
+
+CREATE _cla-tls KDOSTLS-SIZE ALLOT
+CREATE _cla-auth CODEX-DEVICE-AUTH-SIZE ALLOT
+VARIABLE _cla-polls
+VARIABLE _cla-code-shown
+
+: _cla-dump  ( -- )
+    ." auth=" _cla-auth CDA.AUTH AAUTH.STATE @ .
+    ."  sub=" _cla-auth CDA.SUBSTATE @ .
+    _cla-auth CDA.WORK @ IF
+        ."  hbuf=" _cla-auth CDA.EXCHANGE HBUF.STATE @ .
+        ." /" _cla-auth CDA.EXCHANGE HBUF.LAST-STATUS @ .
+        ."  http=" _cla-auth CDA.EXCHANGE HBUF.HTTP-CODE @ .
+    THEN
+    ."  tls=" _cla-tls KDOSTLS.STATE @ .
+    ." /" _cla-tls KDOSTLS.LAST-ERROR @ .
+    ." /" _cla-tls KDOSTLS.NATIVE-ERROR @ . CR TX-FLUSH ;
+
+: _cla-fail  ( -- )
+    ." CODEX AUTH LIVE FAIL " _cla-dump
+    _cla-auth CDA.AUTH AAUTH.ERROR DUP CV-DATA@ SWAP CV-LEN@ TYPE CR
+    TX-FLUSH ABORT ;
+
+: _cla-show-code  ( -- )
+    _cla-code-shown @ IF EXIT THEN
+    -1 _cla-code-shown !
+    ." CODEX AUTH CODE READY" CR
+    ." Open https://auth.openai.com/codex/device" CR
+    ." Code: "
+    _cla-auth CDA.AUTH AAUTH.USER-CODE DUP CV-DATA@ SWAP CV-LEN@ TYPE CR
+    ." Waiting for browser authorization..." CR TX-FLUSH ;
+
+: _cla-run  ( -- )
+    0 _cla-polls ! 0 _cla-code-shown !
+    10 64 0 2 IP-SET
+    10 64 0 1 GW-IP IP!
+    255 255 255 0 NET-MASK IP!
+    8 8 8 8 DNS-SERVER-IP IP!
+    CODEX-TRUST-INSTALL DUP TLS-CERT-OK <> IF
+        ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP
+    _cla-tls KDOSTLS-INIT
+    CODEX-AUTH-HOST 443 _cla-tls KDOSTLS-CONFIGURE
+    DUP KDOSTLS-E-OK <> IF
+        ." CODEX AUTH CONFIG FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP
+    _cla-tls KDOSTLS.PORT _cla-auth CODEX-DEVICE-AUTH-INIT
+    DUP AAUTH-S-OK <> IF
+        ." CODEX AUTH INIT FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP
+    ." CODEX AUTH BEGIN ENTER" CR TX-FLUSH
+    _cla-auth CDA.AUTH AAUTH-BEGIN DUP
+    ." CODEX AUTH BEGIN RETURN status=" . SPACE _cla-dump
+    AAUTH-S-PENDING <> IF _cla-fail THEN
+    BEGIN
+        _cla-auth CDA.AUTH AAUTH.STATE @ DUP AAUTH-STATE-READY <
+        SWAP AAUTH-STATE-ERROR <> AND
+    WHILE
+        1 _cla-polls +!
+        _cla-polls @ 1 = IF
+            ." CODEX AUTH POLL ENTER" CR TX-FLUSH
+        THEN
+        _cla-auth CDA.AUTH AAUTH-POLL DROP
+        _cla-polls @ 1 = IF
+            ." CODEX AUTH POLL RETURN " _cla-dump
+        THEN
+        _cla-auth CDA.AUTH AAUTH.STATE @ AAUTH-STATE-PENDING = IF
+            _cla-show-code
+        THEN
+    REPEAT
+    _cla-auth CDA.AUTH AAUTH.STATE @ AAUTH-STATE-ERROR = IF _cla-fail THEN
+    ." CODEX AUTH LIVE PASS" CR
+    ." Account: "
+    _cla-auth CDA.AUTH AAUTH.ACCOUNT-LABEL DUP CV-DATA@ SWAP CV-LEN@ TYPE CR
+    TX-FLUSH ;
+
+_cla-run
+""",
+    ready_markers=("CODEX AUTH CODE READY",),
+    stable_markers=("CODEX AUTH CODE READY",),
+    requires_tap=True,
+    failure_markers=(
+        "CODEX AUTH TRUST FAIL",
+        "CODEX AUTH CONFIG FAIL",
+        "CODEX AUTH INIT FAIL",
+        "CODEX AUTH LIVE FAIL",
+    ),
+)
 LARGE_SAMPLE = b"".join(
     f"Large fixture line {line:03d}: Pad crosses MP64FS sector boundaries.\n".encode()
     for line in range(1, 49)
@@ -3990,6 +4703,87 @@ def dependency_closure(roots: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(seen))
 
 
+def dependency_order(roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Return dependencies before their requiring modules."""
+    ordered: list[str] = []
+    visited: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(module: str, requiring: str | None = None):
+        normalized = _normalize_module(module, requiring)
+        if normalized in visited:
+            return
+        if normalized in visiting:
+            raise RuntimeError(f"Cyclic linked REQUIRE dependency: {normalized}")
+        host_path = SOURCE_ROOT / normalized
+        if not host_path.is_file():
+            raise FileNotFoundError(f"Missing Akashic module: {normalized}")
+        visiting.add(normalized)
+        text = host_path.read_text(encoding="utf-8")
+        for match in REQUIRE_RE.finditer(text):
+            visit(match.group(1), normalized)
+        visiting.remove(normalized)
+        visited.add(normalized)
+        ordered.append(normalized)
+
+    for root in roots:
+        visit(root)
+    return tuple(ordered)
+
+
+def _minify_forth(text: str, *, remove_requires: bool = False) -> str:
+    """Remove deployment-only line comments without rewriting Forth tokens."""
+    lines: list[str] = []
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("\\"):
+            continue
+        if remove_requires and REQUIRE_RE.match(line):
+            continue
+        lines.append(line.rstrip())
+    return "\n".join(lines) + "\n"
+
+
+def _linked_chunks(modules: tuple[str, ...]) -> dict[str, bytes]:
+    """Pack ordered modules into loader-safe native Forth source chunks."""
+    chunks: list[bytearray] = []
+    current = bytearray()
+    for module in modules:
+        source = _minify_forth(
+            (SOURCE_ROOT / module).read_text(encoding="utf-8"),
+            remove_requires=True,
+        ).encode("utf-8")
+        if len(source) > LINK_CHUNK_BYTES:
+            raise RuntimeError(
+                f"Linked module exceeds {LINK_CHUNK_BYTES} bytes: {module}"
+            )
+        if current and len(current) + len(source) > LINK_CHUNK_BYTES:
+            chunks.append(current)
+            current = bytearray()
+        current.extend(source)
+    if current:
+        chunks.append(current)
+    return {
+        f".akashic/link-{index:02d}.f": bytes(content)
+        for index, content in enumerate(chunks)
+    }
+
+
+def _linked_autoexec(autoexec: str, chunk_names: tuple[str, ...]) -> str:
+    """Replace source REQUIREs with ordered deployment-chunk REQUIREs."""
+    lines: list[str] = []
+    inserted = False
+    for line in autoexec.splitlines():
+        if REQUIRE_RE.match(line):
+            if not inserted:
+                lines.extend(f"REQUIRE {name}" for name in chunk_names)
+                inserted = True
+            continue
+        lines.append(line)
+    if not inserted:
+        lines[0:0] = [f"REQUIRE {name}" for name in chunk_names]
+    return "\n".join(lines) + "\n"
+
+
 def _directories(paths: set[str]) -> list[str]:
     directories: set[str] = set()
     for path in paths:
@@ -4043,9 +4837,14 @@ def default_image_path(profile: str) -> Path:
 
 def build_image(profile_name: str, output: Path | None = None) -> Path:
     profile = PROFILES[profile_name]
-    modules = dependency_closure(profile.roots)
+    modules = (
+        dependency_order(profile.roots)
+        if profile.linked
+        else dependency_closure(profile.roots)
+    )
     resources = set(profile.resources)
-    paths = set(modules) | resources
+    linked_chunks = _linked_chunks(modules) if profile.linked else {}
+    paths = set(linked_chunks) | resources if profile.linked else set(modules) | resources
     directories = _directories(paths)
     _validate_module_ids(modules)
     _validate_image_paths(paths, directories)
@@ -4067,14 +4866,18 @@ def build_image(profile_name: str, output: Path | None = None) -> Path:
 
     for path in sorted(paths):
         source = SOURCE_ROOT / path
-        if not source.is_file():
-            raise FileNotFoundError(f"Missing Akashic resource: {path}")
+        if path in linked_chunks:
+            content = linked_chunks[path]
+        else:
+            if not source.is_file():
+                raise FileNotFoundError(f"Missing Akashic resource: {path}")
+            content = source.read_bytes()
         disk_path = PurePosixPath(path)
-        file_type = FTYPE_FORTH if source.suffix == ".f" else FTYPE_TEXT
-        parent = "/" + str(disk_path.parent)
+        file_type = FTYPE_FORTH if disk_path.suffix == ".f" else FTYPE_TEXT
+        parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
         fs.inject_file(
             disk_path.name,
-            source.read_bytes(),
+            content,
             ftype=file_type,
             path=parent,
         )
@@ -4088,7 +4891,11 @@ def build_image(profile_name: str, output: Path | None = None) -> Path:
 
     fs.inject_file(
         "autoexec.f",
-        profile.autoexec.encode("utf-8"),
+        (
+            _linked_autoexec(profile.autoexec, tuple(linked_chunks))
+            if profile.linked
+            else profile.autoexec
+        ).encode("utf-8"),
         ftype=FTYPE_FORTH,
     )
     fs.inject_file(".growth-hole-2", bytes(512), flags=FLAG_SYSTEM)
@@ -4103,7 +4910,9 @@ def build_image(profile_name: str, output: Path | None = None) -> Path:
     info = fs.info()
     print(
         f"Built {profile_name} image: {target}\n"
-        f"  {len(modules)} modules, {len(resources)} resources, "
+        f"  {len(modules)} modules"
+        f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
+        f"{len(resources)} resources, "
         f"{len(directories)} directories\n"
         f"  {info['files']} MP64FS entries, {target.stat().st_size:,} bytes"
     )
@@ -4130,8 +4939,26 @@ def smoke(
     rows: int,
     max_steps: int,
     timeout: float,
+    nic_tap: str | None = None,
 ) -> bool:
     profile = PROFILES[profile_name]
+    if profile.requires_tap and not nic_tap:
+        print(
+            f"Smoke {profile_name}: FAIL\n"
+            "  this opt-in live profile requires --nic-tap[=IFNAME]"
+        )
+        return False
+    nic_backend = None
+    if nic_tap:
+        from nic_backends import TAPBackend, tap_available
+
+        if not tap_available(nic_tap):
+            print(
+                f"Smoke {profile_name}: FAIL\n"
+                f"  TAP device {nic_tap!r} does not exist or is not accessible"
+            )
+            return False
+        nic_backend = TAPBackend(tap_name=nic_tap)
     started = time.perf_counter()
     total_steps = 0
     stop_reason = "budget"
@@ -4142,6 +4969,8 @@ def smoke(
         cols=cols,
         rows=rows,
         batch_steps=500_000,
+        nic_backend=nic_backend,
+        realtime_clock=bool(nic_tap),
     ) as session:
         session.boot()
         deadline = time.monotonic() + timeout
@@ -4161,6 +4990,9 @@ def smoke(
             screen_text = screen.text()
             if all(marker in screen_text for marker in profile.ready_markers):
                 stop_reason = "ready"
+                break
+            if any(marker in screen_text for marker in profile.failure_markers):
+                stop_reason = "failed"
                 break
             if report.reason in ("halted", "stalled"):
                 break
@@ -4279,6 +5111,55 @@ def smoke(
             journey_errors.append(failure)
             return None
 
+        def wait_desktop_tile(
+            marker: str,
+            tile: int,
+            failure: str,
+            *,
+            step_budget: int = 250_000_000,
+            wall_timeout: float = 8.0,
+        ) -> bool:
+            nonlocal total_steps, screen
+
+            def tile_contains() -> bool:
+                tile_col = tile % 3
+                tile_row = tile // 3
+                content_rows = max(1, screen.rows - 1)
+                left = tile_col * screen.cols // 3
+                right = (tile_col + 1) * screen.cols // 3
+                top = tile_row * content_rows // 2
+                bottom = (tile_row + 1) * content_rows // 2
+                return any(
+                    marker in line[left:right]
+                    for line in screen.lines()[top:bottom]
+                )
+
+            remaining = min(step_budget, max_steps - total_steps)
+            local_deadline = min(deadline, time.monotonic() + wall_timeout)
+            while remaining > 0 and time.monotonic() < local_deadline:
+                screen = session.snapshot()
+                if tile_contains():
+                    return True
+                chunk = min(50_000_000, remaining)
+                report = session.run(
+                    max_steps=chunk,
+                    wall_timeout_s=min(
+                        1.0, max(0.05, local_deadline - time.monotonic())
+                    ),
+                    advance_idle=True,
+                )
+                total_steps += report.steps
+                remaining -= report.steps
+                if report.reason == "halted":
+                    break
+                if report.steps == 0:
+                    time.sleep(0.005)
+            screen = session.snapshot()
+            if tile_contains():
+                return True
+            journey_errors.append(failure)
+            return False
+
         def run_desk_agent_journey() -> None:
             session.send_key("alt+5")
             focused = wait_screen(
@@ -4368,9 +5249,32 @@ def smoke(
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
 
+        if initial_ready and profile_name == "desktop-codex-live":
+            session.send_key("alt+5")
+            if wait_screen(
+                "[5:Agent*]",
+                "Desk did not focus Agent for the live auth diagnostic",
+            ):
+                session.send_key("f9")
+                if wait_screen(
+                    "Agent account",
+                    "Agent did not open the live account panel",
+                ):
+                    session.send_key("enter")
+                    wait_screen(
+                        "Browser authorization is pending.",
+                        "Desk did not advance native auth to the device-code state",
+                        step_budget=4_000_000_000,
+                        wall_timeout=120.0,
+                    )
+
         if initial_ready and profile_name in ("desktop", "pad"):
             if profile_name == "desktop":
                 session.send_key("alt+1")
+                wait_screen(
+                    "[1:Akashic Pa*]",
+                    "Desk did not focus Pad before its edit journey",
+                )
             session.send_text("smoke")
             if wait_screen("smoke", "typing did not reach Pad's textarea"):
                 content_hits = [
@@ -4679,6 +5583,67 @@ def smoke(
                     "Credential clear did not return to unauthenticated state",
                 )
 
+        if initial_ready and profile_name == "agent-device-ui":
+            session.send_key("f9")
+            if wait_screen(
+                "Agent account", "F9 did not open the account panel"
+            ):
+                session.send_key("enter")
+                if wait_screen(
+                    "AKASHIC-7H2K",
+                    "Device sign-in did not expose its user code",
+                ):
+                    wait_screen(
+                        "https://auth.openai.com/codex/device",
+                        "Device sign-in did not expose its verification address",
+                    )
+                    wait_screen(
+                        "Connected",
+                        "Device authorization did not complete",
+                        step_budget=600_000_000,
+                        wall_timeout=15.0,
+                    )
+                session.send_key("escape")
+                wait_screen_gone(
+                    "Agent account", "Escape did not close the account panel"
+                )
+
+            session.send_key("f8")
+            if wait_screen(
+                "Run settings", "F8 did not open run settings"
+            ) and wait_screen(
+                "Swift",
+                "Run settings did not receive the discovered model catalog",
+                step_budget=600_000_000,
+                wall_timeout=15.0,
+            ):
+                session.send_key("right")
+                wait_screen("Deliberate", "Model selection did not advance")
+                session.send_key("down")
+                session.send_key("right")
+                wait_screen("Low", "Reasoning selection did not advance")
+                session.send_key("down")
+                session.send_key("right")
+                wait_screen("Fast", "Speed selection did not advance")
+                session.send_key("down")
+                session.send_key("right")
+                wait_screen("Verbosity", "Verbosity row was not interactive")
+                session.send_key("escape")
+                wait_screen_gone(
+                    "Run settings", "Escape did not close run settings"
+                )
+
+            session.send_key("ctrl+l")
+            if wait_screen("Ask:", "Authorized Agent could not compose"):
+                session.send_text("device flow smoke")
+                session.send_key("enter")
+                wait_screen(
+                    "device flow smoke",
+                    "Authorized Agent did not complete a conversation",
+                    step_budget=600_000_000,
+                    wall_timeout=15.0,
+                )
+
         if initial_ready and profile_name != "interop":
             session.resize(cols + 8, rows + 2)
             resize_budget = min(250_000_000, max_steps - total_steps)
@@ -4743,10 +5708,17 @@ def smoke(
                     if wait_screen("Find:", "Ctrl+F did not open Find"):
                         session.send_text("editable")
                         session.send_key("enter")
-                        wait_screen(
-                            "Ln 2",
-                            "Pad did not move to the matched search line",
-                        )
+                        if profile_name == "pad":
+                            wait_screen(
+                                "Ln 2",
+                                "Pad did not move to the matched search line",
+                                step_budget=500_000_000,
+                                wall_timeout=15.0,
+                            )
+                        else:
+                            wait_screen_gone(
+                                "Find:", "Pad did not complete Find"
+                            )
                     session.send_key("ctrl+g")
                     if wait_screen(
                         "Go to line:", "Ctrl+G did not open Go to Line"
@@ -4878,8 +5850,20 @@ def smoke(
                                                 "line replacement saved incorrect bytes"
                                             )
 
-        if initial_ready and profile_name in ("desktop", "fexplorer"):
-            if profile_name == "desktop":
+        if initial_ready and profile_name == "desktop":
+            run_desk_agent_journey()
+
+        if initial_ready and profile_name in (
+            "desktop",
+            "desktop-agent",
+            "desktop-resource",
+            "fexplorer",
+        ):
+            if profile_name in (
+                "desktop",
+                "desktop-agent",
+                "desktop-resource",
+            ):
                 session.send_key("alt+2")
             session.send_key("ctrl+g")
             if wait_screen(
@@ -4889,14 +5873,19 @@ def smoke(
                 session.send_key("enter")
                 wait_screen("SQUARE", "File Explorer could not preview /example.f")
 
-            if profile_name == "desktop":
+            if profile_name in (
+                "desktop",
+                "desktop-agent",
+                "desktop-resource",
+            ):
                 session.send_key("ctrl+o")
                 if wait_screen(
                     "[1:Akashic Pa*]",
                     "resource.open did not route File Explorer's selection to Pad",
                 ):
-                    wait_screen(
-                        "/example.f",
+                    wait_desktop_tile(
+                        "SQUARE DUP",
+                        0,
                         "Pad did not open the resource delivered by Desk",
                     )
                 session.send_key("alt+2")
@@ -5037,6 +6026,10 @@ def smoke(
 
                 session.send_key("alt+1")
                 wait_screen(
+                    "[1:Akashic Pa*]",
+                    "Desk did not return focus to Pad after Explorer journey",
+                )
+                wait_screen(
                     "renamed.txt",
                     "File Explorer did not return to the populated Details view",
                 )
@@ -5047,25 +6040,11 @@ def smoke(
                     wall_timeout=3.0,
                 )
             screen = session.snapshot()
-            if profile_name == "desktop":
-                run_desk_agent_journey()
-
-                session.send_key("alt+3")
-                wait_screen(
-                    "[3:Daybook*]",
-                    "Desk could not focus Daybook with Alt+3",
-                )
-                session.send_key("alt+4")
-                wait_screen(
-                    "[4:Grid*]",
-                    "Desk could not focus Grid with Alt+4",
-                )
-                session.send_key("alt+2")
-                wait_screen(
-                    "[2:File Explo*]",
-                    "Desk could not return focus to File Explorer",
-                )
-                screen = session.snapshot()
+            if profile_name in (
+                "desktop",
+                "desktop-agent",
+                "desktop-resource",
+            ):
                 final_text = screen.text()
                 if "1smoke2" in final_text or "smoke2" in final_text:
                     journey_errors.append(
@@ -5109,6 +6088,30 @@ def smoke(
             print("  journey errors:")
             for error in journey_errors:
                 print(f"    {error}")
+        if not ok and nic_backend is not None:
+            stats = nic_backend.stats()
+            print(
+                "  TAP diagnostics: "
+                f"tx={stats['tx_frames']} frames/{stats['tx_bytes']} bytes; "
+                f"rx={stats['rx_frames']} frames/{stats['rx_bytes']} bytes; "
+                f"errors={stats['tx_errors']}"
+            )
+            for label in (
+                "first_tx_hex",
+                "first_rx_hex",
+                "last_tx_hex",
+                "last_rx_hex",
+            ):
+                if stats[label] is not None:
+                    print(f"    {label}: {stats[label]}")
+            if stats["error"] is not None:
+                print(f"    backend error: {stats['error']}")
+            print("    bounded frame trace:")
+            for index, frame in enumerate(stats["frame_trace"]):
+                print(
+                    f"      {index:02d} {frame['direction']} "
+                    f"len={frame['length']}: {frame['prefix_hex']}"
+                )
         print(f"  captures: {capture_root}.[txt|raw.txt|cells.json|png]")
         if not ok:
             print("  recent guest output:")
@@ -5125,26 +6128,31 @@ def serve(
     socket_path: str,
     cols: int,
     rows: int,
+    nic_tap: str | None = None,
 ):
-    os.execv(
+    if PROFILES[profile_name].requires_tap and not nic_tap:
+        raise SystemExit(
+            f"profile {profile_name!r} requires --nic-tap[=IFNAME]"
+        )
+    command = [
         sys.executable,
-        [
-            sys.executable,
-            str(MEGAPAD_ROOT / "session_server.py"),
-            "--bios",
-            str(MEGAPAD_ROOT / "bios.asm"),
-            "--storage",
-            str(image_path),
-            "--socket",
-            socket_path,
-            "--cols",
-            str(cols),
-            "--rows",
-            str(rows),
-            "--batch-steps",
-            "500000",
-        ],
-    )
+        str(MEGAPAD_ROOT / "session_server.py"),
+        "--bios",
+        str(MEGAPAD_ROOT / "bios.asm"),
+        "--storage",
+        str(image_path),
+        "--socket",
+        socket_path,
+        "--cols",
+        str(cols),
+        "--rows",
+        str(rows),
+        "--batch-steps",
+        "500000",
+    ]
+    if nic_tap:
+        command.extend(("--nic-tap", nic_tap))
+    os.execv(sys.executable, command)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -5160,6 +6168,12 @@ def _parser() -> argparse.ArgumentParser:
         if name in ("smoke", "serve"):
             command.add_argument("--cols", type=int, default=100)
             command.add_argument("--rows", type=int, default=32)
+            command.add_argument(
+                "--nic-tap",
+                nargs="?",
+                const="mp64tap0",
+                help="attach a preconfigured Linux TAP device",
+            )
         if name == "smoke":
             command.add_argument("--max-steps", type=int, default=3_000_000_000)
             command.add_argument("--timeout", type=float, default=75.0)
@@ -5182,6 +6196,7 @@ def main() -> int:
             rows=args.rows,
             max_steps=args.max_steps,
             timeout=args.timeout,
+            nic_tap=args.nic_tap,
         ) else 1
     serve(
         args.profile,
@@ -5189,6 +6204,7 @@ def main() -> int:
         socket_path=args.socket,
         cols=args.cols,
         rows=args.rows,
+        nic_tap=args.nic_tap,
     )
     return 0
 

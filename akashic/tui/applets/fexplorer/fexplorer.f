@@ -561,6 +561,23 @@ VARIABLE _FOP-REQ
         CBUS-S-STALE-INSTANCE OF
             S" The target application closed" 1800 ASHELL-TOAST
         ENDOF
+        CBUS-S-INVALID OF
+            S" The application rejected this resource" 2200 ASHELL-TOAST
+        ENDOF
+        CBUS-S-NOT-FOUND OF
+            S" The resource could not be found" 2200 ASHELL-TOAST
+        ENDOF
+        CBUS-S-DENIED OF
+            S" Permission denied while opening the resource" 2200 ASHELL-TOAST
+        ENDOF
+        CBUS-S-FAILED OF
+            DUP CBR.ERROR-U @ ?DUP IF
+                >R DUP CBR.ERROR-A @ R> 2600 ASHELL-TOAST
+            ELSE
+                S" The application failed to open the resource"
+                2200 ASHELL-TOAST
+            THEN
+        ENDOF
         S" Could not open the resource" 1800 ASHELL-TOAST
     ENDCASE
     CBR-FREE ;

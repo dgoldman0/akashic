@@ -7,6 +7,7 @@ PROVIDED akashic-agent-provider
 REQUIRE event.f
 REQUIRE turn-request.f
 REQUIRE provider-auth.f
+REQUIRE run-settings.f
 
 1  CONSTANT APROV-F-STREAMING
 2  CONSTANT APROV-F-TOOLS
@@ -35,8 +36,9 @@ REQUIRE provider-auth.f
 96 CONSTANT _AP-FLAGS
 104 CONSTANT _AP-BIND-TOOLS-XT   \ ( gateway context -- ior )
 112 CONSTANT _AP-AUTH            \ borrowed provider-auth port
-120 CONSTANT _AP-FREE-XT         \ ( provider -- )
-128 CONSTANT AGENT-PROVIDER-SIZE
+120 CONSTANT _AP-RUN-SETTINGS     \ borrowed run-settings port
+128 CONSTANT _AP-FREE-XT         \ ( provider -- )
+136 CONSTANT AGENT-PROVIDER-SIZE
 
 : APROV.ID-A           ( provider -- a ) _AP-ID-A + ;
 : APROV.ID-U           ( provider -- a ) _AP-ID-U + ;
@@ -53,6 +55,7 @@ REQUIRE provider-auth.f
 : APROV.FLAGS          ( provider -- a ) _AP-FLAGS + ;
 : APROV.BIND-TOOLS-XT  ( provider -- a ) _AP-BIND-TOOLS-XT + ;
 : APROV.AUTH           ( provider -- a ) _AP-AUTH + ;
+: APROV.RUN-SETTINGS   ( provider -- a ) _AP-RUN-SETTINGS + ;
 : APROV.FREE-XT        ( provider -- a ) _AP-FREE-XT + ;
 
 : APROV-INIT  ( provider -- ) AGENT-PROVIDER-SIZE 0 FILL ;
@@ -92,6 +95,9 @@ REQUIRE provider-auth.f
     >R APROV.CONTEXT @ R> EXECUTE ;
 
 : APROV-AUTH  ( provider -- auth | 0 ) APROV.AUTH @ ;
+
+: APROV-RUN-SETTINGS  ( provider -- settings | 0 )
+    APROV.RUN-SETTINGS @ ;
 
 : APROV-FREE  ( provider -- )
     DUP 0= IF DROP EXIT THEN

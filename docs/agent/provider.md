@@ -33,6 +33,24 @@ with provider connection state. The runtime pumps pending auth before model
 and tool work. Secret replacement, logout, and login start are rejected while
 a run or review is active.
 
+Model and run options are also provider-neutral. A provider may expose a
+borrowed `ARSET` port through `APROV.RUN-SETTINGS`; descriptors and strings
+remain provider-owned until its revision changes.
+
+| Word | Stack | Description |
+|---|---|---|
+| `APROV-RUN-SETTINGS` | `( provider -- settings \| 0 )` | Borrow the provider's optional `ARSET` port |
+| `ARSET-REFRESH` / `ARSET-POLL` | `( settings -- status )` | Start or advance model discovery |
+| `ARSET-MODEL-NTH` | `( index settings -- model \| 0 )` | Borrow one discovered model descriptor |
+| `ARSET-MODEL!` | `( index settings -- status )` | Select a model |
+| `ARSET-EFFORT!` / `ARSET-TIER!` | `( index settings -- status )` | Select a model-supported reasoning effort or service tier |
+| `ARSET-VERBOSITY!` | `( verbosity settings -- status )` | Select provider-supported text verbosity |
+
+`ARUNTIME-RUN-SETTINGS-REFRESH`, `ARUNTIME-MODEL!`,
+`ARUNTIME-EFFORT!`, `ARUNTIME-TIER!`, and `ARUNTIME-VERBOSITY!` reject
+changes during a run or review. Desk and Agent render these choices without
+depending on Codex, OpenAI, or any particular model slug.
+
 ## Provider Source
 
 `akashic/agent/provider-source.f` defines `APSOURCE`, an owned construction

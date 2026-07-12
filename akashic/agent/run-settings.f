@@ -1,0 +1,217 @@
+\ =====================================================================
+\  run-settings.f - Provider-neutral model and run option contract
+\ =====================================================================
+\  Providers own all strings and descriptors returned through this port.
+\  Callers may borrow them until REVISION changes. Desk policy, approvals,
+\  credentials, TUI state, and vendor protocol fields do not belong here.
+\ =====================================================================
+
+PROVIDED akashic-agent-run-settings
+
+0 CONSTANT ARSET-S-OK
+1 CONSTANT ARSET-S-PENDING
+2 CONSTANT ARSET-S-UNSUPPORTED
+3 CONSTANT ARSET-S-INVALID
+4 CONSTANT ARSET-S-BUSY
+5 CONSTANT ARSET-S-CAPACITY
+6 CONSTANT ARSET-S-TRANSPORT
+7 CONSTANT ARSET-S-PROTOCOL
+8 CONSTANT ARSET-S-AUTH
+9 CONSTANT ARSET-S-CANCELLED
+
+0 CONSTANT ARSET-STATE-EMPTY
+1 CONSTANT ARSET-STATE-LOADING
+2 CONSTANT ARSET-STATE-READY
+3 CONSTANT ARSET-STATE-ERROR
+
+1 CONSTANT ARCH-F-DEFAULT
+2 CONSTANT ARCH-F-SELECTED
+
+1   CONSTANT ARMODEL-F-DEFAULT
+2   CONSTANT ARMODEL-F-SELECTED
+4   CONSTANT ARMODEL-F-RESPONSES-LITE
+8   CONSTANT ARMODEL-F-VERBOSITY
+16  CONSTANT ARMODEL-F-TEXT
+32  CONSTANT ARMODEL-F-IMAGE
+
+0 CONSTANT ARVERB-AUTO
+1 CONSTANT ARVERB-LOW
+2 CONSTANT ARVERB-MEDIUM
+3 CONSTANT ARVERB-HIGH
+
+ 0 CONSTANT _ARCH-ID-A
+ 8 CONSTANT _ARCH-ID-U
+16 CONSTANT _ARCH-LABEL-A
+24 CONSTANT _ARCH-LABEL-U
+32 CONSTANT _ARCH-DESC-A
+40 CONSTANT _ARCH-DESC-U
+48 CONSTANT _ARCH-FLAGS
+56 CONSTANT AGENT-RUN-CHOICE-SIZE
+
+: ARCH.ID-A     ( choice -- a ) _ARCH-ID-A + ;
+: ARCH.ID-U     ( choice -- a ) _ARCH-ID-U + ;
+: ARCH.LABEL-A  ( choice -- a ) _ARCH-LABEL-A + ;
+: ARCH.LABEL-U  ( choice -- a ) _ARCH-LABEL-U + ;
+: ARCH.DESC-A   ( choice -- a ) _ARCH-DESC-A + ;
+: ARCH.DESC-U   ( choice -- a ) _ARCH-DESC-U + ;
+: ARCH.FLAGS    ( choice -- a ) _ARCH-FLAGS + ;
+
+: ARCH-ID  ( choice -- addr len )
+    DUP ARCH.ID-A @ SWAP ARCH.ID-U @ ;
+
+: ARCH-LABEL  ( choice -- addr len )
+    DUP ARCH.LABEL-A @ SWAP ARCH.LABEL-U @ ;
+
+: ARCH-DESC  ( choice -- addr len )
+    DUP ARCH.DESC-A @ SWAP ARCH.DESC-U @ ;
+
+  0 CONSTANT _ARM-ID-A
+  8 CONSTANT _ARM-ID-U
+ 16 CONSTANT _ARM-LABEL-A
+ 24 CONSTANT _ARM-LABEL-U
+ 32 CONSTANT _ARM-DESC-A
+ 40 CONSTANT _ARM-DESC-U
+ 48 CONSTANT _ARM-FLAGS
+ 56 CONSTANT _ARM-PRIORITY
+ 64 CONSTANT _ARM-CONTEXT-WINDOW
+ 72 CONSTANT _ARM-EFFORTS-A
+ 80 CONSTANT _ARM-EFFORTS-N
+ 88 CONSTANT _ARM-TIERS-A
+ 96 CONSTANT _ARM-TIERS-N
+104 CONSTANT _ARM-CONTEXT
+112 CONSTANT AGENT-RUN-MODEL-SIZE
+
+: ARMODEL.ID-A           ( model -- a ) _ARM-ID-A + ;
+: ARMODEL.ID-U           ( model -- a ) _ARM-ID-U + ;
+: ARMODEL.LABEL-A        ( model -- a ) _ARM-LABEL-A + ;
+: ARMODEL.LABEL-U        ( model -- a ) _ARM-LABEL-U + ;
+: ARMODEL.DESC-A         ( model -- a ) _ARM-DESC-A + ;
+: ARMODEL.DESC-U         ( model -- a ) _ARM-DESC-U + ;
+: ARMODEL.FLAGS          ( model -- a ) _ARM-FLAGS + ;
+: ARMODEL.PRIORITY       ( model -- a ) _ARM-PRIORITY + ;
+: ARMODEL.CONTEXT-WINDOW ( model -- a ) _ARM-CONTEXT-WINDOW + ;
+: ARMODEL.EFFORTS-A      ( model -- a ) _ARM-EFFORTS-A + ;
+: ARMODEL.EFFORTS-N      ( model -- a ) _ARM-EFFORTS-N + ;
+: ARMODEL.TIERS-A        ( model -- a ) _ARM-TIERS-A + ;
+: ARMODEL.TIERS-N        ( model -- a ) _ARM-TIERS-N + ;
+: ARMODEL.CONTEXT        ( model -- a ) _ARM-CONTEXT + ;
+
+: ARMODEL-ID  ( model -- addr len )
+    DUP ARMODEL.ID-A @ SWAP ARMODEL.ID-U @ ;
+
+: ARMODEL-LABEL  ( model -- addr len )
+    DUP ARMODEL.LABEL-A @ SWAP ARMODEL.LABEL-U @ ;
+
+: ARMODEL-DESC  ( model -- addr len )
+    DUP ARMODEL.DESC-A @ SWAP ARMODEL.DESC-U @ ;
+
+VARIABLE _ARPN-I
+VARIABLE _ARPN-A
+VARIABLE _ARPN-N
+
+: _ARSET-PTR-NTH  ( index pointer-array count -- ptr | 0 )
+    _ARPN-N ! _ARPN-A ! _ARPN-I !
+    _ARPN-I @ 0< _ARPN-I @ _ARPN-N @ >= OR IF 0 EXIT THEN
+    _ARPN-A @ _ARPN-I @ 8 * + @ ;
+
+: ARMODEL-EFFORT-NTH  ( index model -- choice | 0 )
+    DUP ARMODEL.EFFORTS-A @ SWAP ARMODEL.EFFORTS-N @ _ARSET-PTR-NTH ;
+
+: ARMODEL-TIER-NTH  ( index model -- choice | 0 )
+    DUP ARMODEL.TIERS-A @ SWAP ARMODEL.TIERS-N @ _ARSET-PTR-NTH ;
+
+  0 CONSTANT _ARSET-STATE
+  8 CONSTANT _ARSET-REVISION
+ 16 CONSTANT _ARSET-CONTEXT
+ 24 CONSTANT _ARSET-MODELS-A
+ 32 CONSTANT _ARSET-MODELS-N
+ 40 CONSTANT _ARSET-SELECTED
+ 48 CONSTANT _ARSET-VERBOSITY
+ 56 CONSTANT _ARSET-ERROR-A
+ 64 CONSTANT _ARSET-ERROR-U
+ 72 CONSTANT _ARSET-REFRESH-XT
+ 80 CONSTANT _ARSET-POLL-XT
+ 88 CONSTANT _ARSET-CANCEL-XT
+ 96 CONSTANT _ARSET-MODEL-XT
+104 CONSTANT _ARSET-EFFORT-XT
+112 CONSTANT _ARSET-TIER-XT
+120 CONSTANT _ARSET-VERBOSITY-XT
+128 CONSTANT _ARSET-DISPOSE-XT
+136 CONSTANT AGENT-RUN-SETTINGS-SIZE
+
+: ARSET.STATE        ( settings -- a ) _ARSET-STATE + ;
+: ARSET.REVISION     ( settings -- a ) _ARSET-REVISION + ;
+: ARSET.CONTEXT      ( settings -- a ) _ARSET-CONTEXT + ;
+: ARSET.MODELS-A     ( settings -- a ) _ARSET-MODELS-A + ;
+: ARSET.MODELS-N     ( settings -- a ) _ARSET-MODELS-N + ;
+: ARSET.SELECTED     ( settings -- a ) _ARSET-SELECTED + ;
+: ARSET.VERBOSITY    ( settings -- a ) _ARSET-VERBOSITY + ;
+: ARSET.ERROR-A      ( settings -- a ) _ARSET-ERROR-A + ;
+: ARSET.ERROR-U      ( settings -- a ) _ARSET-ERROR-U + ;
+: ARSET.REFRESH-XT   ( settings -- a ) _ARSET-REFRESH-XT + ;
+: ARSET.POLL-XT      ( settings -- a ) _ARSET-POLL-XT + ;
+: ARSET.CANCEL-XT    ( settings -- a ) _ARSET-CANCEL-XT + ;
+: ARSET.MODEL-XT     ( settings -- a ) _ARSET-MODEL-XT + ;
+: ARSET.EFFORT-XT    ( settings -- a ) _ARSET-EFFORT-XT + ;
+: ARSET.TIER-XT      ( settings -- a ) _ARSET-TIER-XT + ;
+: ARSET.VERBOSITY-XT ( settings -- a ) _ARSET-VERBOSITY-XT + ;
+: ARSET.DISPOSE-XT   ( settings -- a ) _ARSET-DISPOSE-XT + ;
+
+: ARSET-INIT  ( settings -- )
+    DUP AGENT-RUN-SETTINGS-SIZE 0 FILL
+    1 OVER ARSET.REVISION !
+    -1 OVER ARSET.SELECTED !
+    ARSET-STATE-EMPTY SWAP ARSET.STATE ! ;
+
+: ARSET-PENDING?  ( settings -- flag )
+    DUP 0= IF DROP 0 EXIT THEN ARSET.STATE @ ARSET-STATE-LOADING = ;
+
+: ARSET-ERROR  ( settings -- addr len )
+    DUP ARSET.ERROR-A @ SWAP ARSET.ERROR-U @ ;
+
+: ARSET-MODEL-N  ( settings -- count )
+    DUP 0= IF EXIT THEN ARSET.MODELS-N @ ;
+
+: ARSET-MODEL-NTH  ( index settings -- model | 0 )
+    DUP ARSET.MODELS-A @ SWAP ARSET.MODELS-N @ _ARSET-PTR-NTH ;
+
+: ARSET-SELECTED-MODEL  ( settings -- model | 0 )
+    DUP ARSET.SELECTED @ SWAP ARSET-MODEL-NTH ;
+
+: _ARSET-NOARG  ( settings field-offset -- status )
+    >R DUP 0= IF DROP R> DROP ARSET-S-UNSUPPORTED EXIT THEN
+    DUP R> + @ ?DUP 0= IF DROP ARSET-S-UNSUPPORTED EXIT THEN
+    >R ARSET.CONTEXT @ R> EXECUTE ;
+
+: ARSET-REFRESH  ( settings -- status ) _ARSET-REFRESH-XT _ARSET-NOARG ;
+: ARSET-POLL     ( settings -- status ) _ARSET-POLL-XT _ARSET-NOARG ;
+: ARSET-CANCEL   ( settings -- status ) _ARSET-CANCEL-XT _ARSET-NOARG ;
+
+: ARSET-MODEL!  ( index settings -- status )
+    DUP 0= IF 2DROP ARSET-S-UNSUPPORTED EXIT THEN
+    DUP ARSET.MODEL-XT @ ?DUP 0= IF 2DROP ARSET-S-UNSUPPORTED EXIT THEN
+    >R ARSET.CONTEXT @ R> EXECUTE ;
+
+: ARSET-EFFORT!  ( index settings -- status )
+    DUP 0= IF 2DROP ARSET-S-UNSUPPORTED EXIT THEN
+    DUP ARSET.EFFORT-XT @ ?DUP 0= IF 2DROP ARSET-S-UNSUPPORTED EXIT THEN
+    >R ARSET.CONTEXT @ R> EXECUTE ;
+
+: ARSET-TIER!  ( index settings -- status )
+    DUP 0= IF 2DROP ARSET-S-UNSUPPORTED EXIT THEN
+    DUP ARSET.TIER-XT @ ?DUP 0= IF 2DROP ARSET-S-UNSUPPORTED EXIT THEN
+    >R ARSET.CONTEXT @ R> EXECUTE ;
+
+: ARSET-VERBOSITY!  ( verbosity settings -- status )
+    DUP 0= IF 2DROP ARSET-S-UNSUPPORTED EXIT THEN
+    DUP ARSET.VERBOSITY-XT @ ?DUP 0= IF
+        2DROP ARSET-S-UNSUPPORTED EXIT
+    THEN
+    >R ARSET.CONTEXT @ R> EXECUTE ;
+
+: ARSET-DESTROY  ( settings -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP ARSET.DISPOSE-XT @ ?DUP IF
+        >R DUP ARSET.CONTEXT @ R> EXECUTE
+    THEN
+    AGENT-RUN-SETTINGS-SIZE 0 FILL ;

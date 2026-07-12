@@ -899,8 +899,35 @@ VARIABLE _DINI-INST
 : _DESK-AGENT-PROMPT-CANCEL  ( prompt -- )
     DROP ASHELL-DIRTY! ;
 
+VARIABLE _DSFA-SLOT
+
+: _DESK-FOCUS-AGENT  ( -- )
+    _DESK-HEAD @
+    BEGIN DUP WHILE
+        DUP _DSFA-SLOT ! _SL-DESC @ APP.COMP-DESC @ ?DUP IF
+            DUP COMP.ID-A @ SWAP COMP.ID-U @
+            S" org.akashic.agent" STR-STR= IF
+                _DSFA-SLOT @ _SL-ID @ DESK-FOCUS-ID EXIT
+            THEN
+        THEN
+        _DSFA-SLOT @ _SL-NEXT @
+    REPEAT
+    DROP ;
+
 : _DESK-SHOW-AGENT-PROMPT  ( -- )
     _DESK-AGENT-PROMPT @ 0= IF EXIT THEN
+    _DESK-AGENT-RUNTIME @ ARUNTIME-AUTH ?DUP IF
+        AAUTH-READY? 0= IF
+            _DESK-FOCUS-AGENT
+            S" Agent sign-in required" 1600 ASHELL-TOAST EXIT
+        THEN
+    THEN
+    _DESK-AGENT-RUNTIME @ ARUNTIME-RUN-SETTINGS ?DUP IF
+        ARSET.STATE @ ARSET-STATE-READY <> IF
+            _DESK-FOCUS-AGENT
+            S" Agent models are not ready" 1600 ASHELL-TOAST EXIT
+        THEN
+    THEN
     S" Ask:" 0 0 _DESK-AGENT-PROMPT @ PRM-SHOW
     ASHELL-DIRTY! ;
 

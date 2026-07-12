@@ -8,7 +8,7 @@ REQUIRE value.f
 
 : IRES-VFS-PATH  ( uri-a uri-u -- path-a path-u flag )
     DUP 4 < IF 2DROP 0 0 0 EXIT THEN
-    2 PICK C@ [CHAR] v =
+    OVER C@ [CHAR] v =
     2 PICK 1+ C@ [CHAR] f = AND
     2 PICK 2 + C@ [CHAR] s = AND
     2 PICK 3 + C@ [CHAR] : = AND 0= IF

@@ -7,38 +7,29 @@
 
 PROVIDED akashic-agent-codex-provider
 
+REQUIRE config.f
 REQUIRE auth.f
 REQUIRE ../openai/responses.f
 
-: CODEX-BACKEND-HOST  ( -- addr len ) S" chatgpt.com" ;
-: CODEX-RESPONSES-PATH  ( -- addr len ) S" /backend-api/codex/responses" ;
-: CODEX-MODELS-PATH  ( -- addr len )
-    S" /backend-api/codex/models?client_version=0.144.0" ;
-: CODEX-PROVIDER-ID  ( -- addr len ) S" org.akashic.agent.codex" ;
-
-: CODEX-CONFIG-INIT  ( config -- status )
-    DUP OAIC-INIT >R
-    CODEX-BACKEND-HOST R@ OAIC-HOST! ?DUP IF R> DROP EXIT THEN
-    CODEX-RESPONSES-PATH R@ OAIC-PATH! ?DUP IF R> DROP EXIT THEN
-    S" gpt-5.5" R@ OAIC-MODEL! ?DUP IF R> DROP EXIT THEN
-    S" You are the integrated Akashic assistant. Work through the active applet capabilities, preserve user data, request review before persistent changes, and explain results in concise plain language."
-    R@ OAIC-INSTRUCTIONS! R> DROP ;
-
 VARIABLE _CDPH-REQ
 VARIABLE _CDPH-S
-VARIABLE _CDPH-C
+VARIABLE _CDPH-P
 VARIABLE _CDPH-A
 VARIABLE _CDPH-U
 
-: _CODEX-HEADERS  ( request session codex-auth -- status )
-    _CDPH-C ! _CDPH-S ! _CDPH-REQ !
-    _CDPH-C @ CDA.AUTH AAUTH.ACCOUNT-ID DUP CV-TYPE@ CV-T-STRING <> IF
+: _CODEX-HEADERS  ( request session provider -- status )
+    _CDPH-P ! _CDPH-S ! _CDPH-REQ !
+    _CDPH-P @ APROV-AUTH AAUTH.ACCOUNT-ID DUP CV-TYPE@ CV-T-STRING <> IF
         DROP OAIR-S-AUTH EXIT
     THEN
     DUP CV-DATA@ SWAP CV-LEN@ DUP 0= IF 2DROP OAIR-S-AUTH EXIT THEN
     S" ChatGPT-Account-ID" 2SWAP _CDPH-REQ @ HREQ-HEADER
     ?DUP IF EXIT THEN
     S" originator" S" akashic" _CDPH-REQ @ HREQ-HEADER ?DUP IF EXIT THEN
+    _CDPH-P @ OPENAI-PROVIDER-CONFIG OAIC-RESPONSES-LITE? IF
+        S" x-openai-internal-codex-responses-lite" S" true"
+        _CDPH-REQ @ HREQ-HEADER ?DUP IF EXIT THEN
+    THEN
     _CDPH-S @ OAIR-S.THREAD-ID @ NUM>STR _CDPH-U ! _CDPH-A !
     S" session-id" _CDPH-A @ _CDPH-U @ _CDPH-REQ @ HREQ-HEADER
     ?DUP IF EXIT THEN
@@ -68,5 +59,5 @@ VARIABLE _CDPN-STATUS
     _CDPN-STATUS ! _CDPN-P !
     _CDPN-STATUS @ IF _CDPN-P @ _CDPN-STATUS @ EXIT THEN
     CODEX-PROVIDER-ID _CDPN-P @ APROV.ID-U ! _CDPN-P @ APROV.ID-A !
-    ['] _CODEX-HEADERS _CDPN-AUTH @ _CDPN-P @ OPENAI-PROVIDER-HEADERS!
+    ['] _CODEX-HEADERS _CDPN-P @ _CDPN-P @ OPENAI-PROVIDER-HEADERS!
     _CDPN-P @ OAIR-S-OK ;

@@ -60,6 +60,7 @@ REQUIRE ../../../text/undo.f
 REQUIRE ../../../text/search.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/capability.f
+REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/resource.f
 
@@ -1512,22 +1513,24 @@ CREATE PAD-INTENTS CINT-DESC-SIZE ALLOT
 
 VARIABLE _PCH-A
 VARIABLE _PCH-U
+VARIABLE _PCH-REQ
 
 : _PAD-CAP-OPEN-HANDLER  ( request instance -- status )
     _PAD-ACTIVATE
-    DUP CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
-    IRES-VFS-PATH 0= IF 2DROP DROP CBUS-S-INVALID EXIT THEN
+    DUP _PCH-REQ !
+    CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    IRES-VFS-PATH 0= IF 2DROP CBUS-S-INVALID EXIT THEN
     _PCH-U ! _PCH-A !
     _PCH-A @ _PCH-U @ _PAD-OPEN-PATH
     DUP 0= IF
         DROP
-        DUP CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
-        ROT CBR.RESULT CV-RESOURCE! IF
+        _PCH-REQ @ CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+        _PCH-REQ @ CBR.RESULT CV-RESOURCE! IF
             CBUS-S-FAILED EXIT
         THEN
         CBUS-S-OK EXIT
     THEN
-    DROP DROP CBUS-S-NOT-FOUND ;
+    DROP CBUS-S-NOT-FOUND ;
 
 : _PAD-CAP-ACTIVE-HANDLER  ( request instance -- status )
     _PAD-ACTIVATE
