@@ -2260,6 +2260,8 @@ JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
             S" default_verbosity" S" medium" JSON-KV-ESTR
             S" default_reasoning_summary" S" auto" JSON-KV-ESTR
             S" base_instructions" S" Slow instructions." JSON-KV-ESTR
+            \ Preserve JSON-KEY's historical first-match behavior.
+            S" slug" S" ignored-late-duplicate" JSON-KV-ESTR
             S" default_reasoning_level" S" high" JSON-KV-ESTR
             S" supported_reasoning_levels" JSON-KEY: JSON-[
                 JSON-{ S" effort" S" low" JSON-KV-ESTR
@@ -2277,12 +2279,13 @@ JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
         JSON-{
             S" visibility" S" hide" JSON-KV-ESTR
             S" priority" 0 JSON-KV-NUM
+            \ Hidden entries must not validate fields that are never consumed.
+            S" base_instructions" 7 JSON-KV-NUM
         JSON-}
         JSON-{
             S" slug" S" gpt-fast" JSON-KV-ESTR
             S" display_name" S" Swift" JSON-KV-ESTR
             S" description" S" Fast everyday work" JSON-KV-ESTR
-            S" visibility" S" list" JSON-KV-ESTR
             S" priority" 1 JSON-KV-NUM
             S" context_window" 100000 JSON-KV-NUM
             S" use_responses_lite" -1 JSON-KV-BOOL
@@ -2299,6 +2302,8 @@ JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
             JSON-]
             S" service_tiers" JSON-KEY: JSON-[ JSON-]
             S" default_service_tier" JSON-KV-NULL
+            \ Exercise order independence by placing visibility last.
+            S" visibility" S" list" JSON-KV-ESTR
         JSON-}
     JSON-] JSON-}
     JSON-OUTPUT-RESULT NIP _cc-json-u ! ;
