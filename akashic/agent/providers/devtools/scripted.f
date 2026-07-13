@@ -135,6 +135,12 @@ VARIABLE _SPS-C
         ENDOF
         3 OF
             _SPP-C @ _SPC.PROMPT-A @ _SPP-C @ _SPC.PROMPT-U @
+            S" source" STR-STRI-CONTAINS IF
+                _SP-WAITING _SPP-C @ _SPC.STATE !
+                AEV-TOOL-CALL S" daybook.source"
+                0 0 _SPP-Q @ _SPP-C @ _SCRIPTED-EMIT
+            ELSE
+            _SPP-C @ _SPC.PROMPT-A @ _SPP-C @ _SPC.PROMPT-U @
             S" task" STR-STRI-CONTAINS IF
                 _SP-WAITING _SPP-C @ _SPC.STATE !
                 AEV-TOOL-CALL S" daybook.task.capture"
@@ -150,6 +156,7 @@ VARIABLE _SPS-C
             ELSE
                 _SPP-Q @ _SPP-C @ _SCRIPTED-FINISH-MESSAGE
                 _SP-IDLE _SPP-C @ _SPC.STATE !
+            THEN
             THEN
             THEN
         ENDOF

@@ -593,6 +593,52 @@ def test_sync_after_write():
         '_V1 VFS-SYNC . CR',
     ], "0")
 
+# ── Read-only enforcement ──
+
+def test_read_only_rejects_tree_mutations():
+    """Read-only VFS rejects every tree mutation without changing the tree."""
+    check("read-only rejects tree mutations", [
+        'T-VFS-NEW  CONSTANT _V1',
+        'S" parent" _V1 VFS-MKDIR DROP',
+        'S" keep.txt" _V1 VFS-MKFILE CONSTANT _KEEP',
+        '_V1 V.ICOUNT @ CONSTANT _COUNT',
+        'VFS-F-RO _V1 V.FLAGS DUP @ ROT OR SWAP !',
+        ': T-RO-TREE-A  S" new.txt" _V1 VFS-MKFILE 0= IF ." MF " THEN  S" parent/new.txt" _V1 VFS-CREATE 0= IF ." CR " THEN  S" newdir" _V1 VFS-MKDIR -1 = IF ." MD " THEN ;',
+        ': T-RO-TREE-B  S" changed.txt" _KEEP _V1 VFS-RENAME -1 = IF ." RN " THEN  S" keep.txt" _V1 VFS-RM -1 = IF ." RM " THEN  _V1 V.ICOUNT @ _COUNT = IF ." COUNT " THEN ;',
+        ': T-RO-TREE-C  S" keep.txt" _V1 VFS-RESOLVE _KEEP = IF ." KEEP " THEN  S" changed.txt" _V1 VFS-RESOLVE 0= IF ." NO-RENAME " THEN  S" new.txt" _V1 VFS-RESOLVE 0= IF ." NO-FILE " THEN ;',
+        ': T-RO-TREE-D  S" parent/new.txt" _V1 VFS-RESOLVE 0= IF ." NO-CREATE " THEN  S" newdir" _V1 VFS-RESOLVE 0= IF ." NO-DIR" THEN ;',
+        ': T-RO-TREE  T-RO-TREE-A T-RO-TREE-B T-RO-TREE-C T-RO-TREE-D ;',
+        'T-RO-TREE CR',
+    ], "MF CR MD RN RM COUNT KEEP NO-RENAME NO-FILE NO-CREATE NO-DIR")
+
+def test_read_only_rejects_data_mutations():
+    """Read-only writes/truncates leave file bytes, size, and cursor unchanged."""
+    check("read-only preserves file data", [
+        'T-VFS-NEW  CONSTANT _V1',
+        'S" keep.bin" _V1 VFS-MKFILE DROP',
+        '_V1 VFS-USE',
+        'S" keep.bin" VFS-OPEN CONSTANT _FD',
+        'S" stable" _FD VFS-WRITE DROP',
+        '_FD VFS-REWIND',
+        'VFS-F-RO _V1 V.FLAGS DUP @ ROT OR SWAP !',
+        ': T-RO-DATA  S" damage" _FD VFS-WRITE -1 = IF ." WRITE " THEN  _FD VFS-TELL 0= IF ." CURSOR " THEN  2 _FD VFS-TRUNCATE -1 = IF ." TRUNC " THEN  _FD VFS-SIZE 6 = IF ." SIZE " THEN  _RB 6 _FD VFS-READ 6 = IF _RB 6 TYPE THEN ;',
+        'T-RO-DATA CR',
+        '_FD VFS-CLOSE',
+    ], "WRITE CURSOR TRUNC SIZE stable")
+
+def test_read_only_rejects_sync():
+    """Read-only sync does not invoke flushing or clear dirty metadata."""
+    check("read-only rejects sync", [
+        'T-VFS-NEW  CONSTANT _V1',
+        'S" dirty.bin" _V1 VFS-MKFILE CONSTANT _IN',
+        '_V1 VFS-USE',
+        'S" dirty.bin" VFS-OPEN CONSTANT _FD',
+        'S" data" _FD VFS-WRITE DROP _FD VFS-CLOSE',
+        'VFS-F-RO _V1 V.FLAGS DUP @ ROT OR SWAP !',
+        ': T-RO-SYNC  _V1 VFS-SYNC -1 = IF ." SYNC " THEN  _IN IN.FLAGS @ VFS-IF-DIRTY AND 0<> IF ." DIRTY " THEN  S" dirty.bin" _V1 VFS-RESOLVE _IN = IF ." TREE" THEN ;',
+        'T-RO-SYNC CR',
+    ], "SYNC DIRTY TREE")
+
 # ── VFS-SET-HWM ──
 
 def test_set_hwm():
@@ -737,6 +783,10 @@ def main():
         # SYNC
         test_sync_clean,
         test_sync_after_write,
+        # Read-only enforcement
+        test_read_only_rejects_tree_mutations,
+        test_read_only_rejects_data_mutations,
+        test_read_only_rejects_sync,
         # SET-HWM
         test_set_hwm,
         # DESTROY

@@ -74,6 +74,41 @@ class Profile:
     linked: bool = False
     requires_tap: bool = False
     failure_markers: tuple[str, ...] = ()
+    initial_files: tuple[tuple[str, bytes], ...] = ()
+
+
+def _practice_crc32(data: bytes) -> int:
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte << 24
+        for _ in range(8):
+            if crc & 0x80000000:
+                crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF
+            else:
+                crc = (crc << 1) & 0xFFFFFFFF
+    return crc ^ 0xFFFFFFFF
+
+
+def _practice_head_snapshot(generation: int) -> bytes:
+    import struct
+
+    head = bytearray(352)
+    struct.pack_into("<Q", head, 0, 1095454792)  # PHEAD-MAGIC
+    struct.pack_into("<Q", head, 8, 1)
+    struct.pack_into("<Q", head, 16, len(head))
+    struct.pack_into("<Q", head, 32, 1)  # Practice ID
+    struct.pack_into("<Q", head, 64, 1)  # revision
+    struct.pack_into("<Q", head, 72, 2)  # current root
+    snapshot = bytearray(64 + len(head))
+    snapshot[:8] = b"AKPHS001"
+    struct.pack_into("<Q", snapshot, 8, 1)
+    struct.pack_into("<Q", snapshot, 16, 64)
+    struct.pack_into("<Q", snapshot, 24, generation)
+    struct.pack_into("<Q", snapshot, 32, len(head))
+    snapshot[64:] = head
+    checksum_data = bytes(snapshot[:40] + snapshot[48:])
+    struct.pack_into("<Q", snapshot, 40, _practice_crc32(checksum_data))
+    return bytes(snapshot)
 
 
 PROFILES = {
@@ -4163,10 +4198,13 @@ _at-run
             "runtime/context.f",
             "runtime/practice-head.f",
             "runtime/vfs-practice-head.f",
+            "runtime/practice-activation.f",
             "interop/mandate.f",
+            "interop/capability-facet.f",
             "interop/authority.f",
             "interop/practice-turn.f",
             "interop/request-bus.f",
+            "agent/mandate-run.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - Practice authority and Turn contracts
@@ -4175,10 +4213,13 @@ ENTER-USERLAND
 REQUIRE runtime/context.f
 REQUIRE runtime/practice-head.f
 REQUIRE runtime/vfs-practice-head.f
+REQUIRE runtime/practice-activation.f
 REQUIRE interop/mandate.f
+REQUIRE interop/capability-facet.f
 REQUIRE interop/authority.f
 REQUIRE interop/practice-turn.f
 REQUIRE interop/request-bus.f
+REQUIRE agent/mandate-run.f
 
 VARIABLE _pc-fails
 VARIABLE _pc-checks
@@ -4199,6 +4240,11 @@ CREATE _pc-head PHEAD-SIZE ALLOT
 VARIABLE _pc-context
 VARIABLE _pc-child
 CREATE _pc-mandate MAND-SIZE ALLOT
+CREATE _pc-run-mandate MAND-SIZE ALLOT
+CREATE _pc-facet CFACET-SIZE ALLOT
+VARIABLE _pc-run-child
+VARIABLE _pc-amrun
+VARIABLE _pc-fentry
 CREATE _pc-turn PTURN-SIZE ALLOT
 CREATE _pc-binding AUTH-BINDING-SIZE ALLOT
 CREATE _pc-grant AUTH-GRANT-SIZE ALLOT
@@ -4214,6 +4260,86 @@ CREATE _pc-pstore3 PHEADVFS-SIZE ALLOT
 CREATE _pc-persist-head PHEAD-SIZE ALLOT
 CREATE _pc-persist-out PHEAD-SIZE ALLOT
 CREATE _pc-persist-bad 8 ALLOT
+
+VARIABLE _pc-avfs
+CREATE _pc-astore PHEADVFS-SIZE ALLOT
+CREATE _pc-ahead PHEAD-SIZE ALLOT
+CREATE _pc-aout PHEAD-SIZE ALLOT
+CREATE _pc-arejected PHEAD-SIZE ALLOT
+CREATE _pc-pact PACT-SIZE ALLOT
+VARIABLE _pc-validator-reject
+VARIABLE _pc-first-epoch
+
+: _pc-semantic-validator  ( head data -- status )
+    @ DUP -1 = IF 2DROP 91 EXIT THEN
+    SWAP PHEAD.REVISION @ = IF 91 ELSE PHEADVFS-S-OK THEN ;
+
+: _pc-activation-run  ( -- )
+    524288 A-XMEM ARENA-NEW DUP 0= _pc-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _pc-avfs ! VFS-USE
+    _pc-ahead PHEAD-INIT
+    31 _pc-ahead PHEAD.ID _pc-id!
+    41 _pc-ahead PHEAD.CURRENT-ROOT _pc-id!
+    _pc-avfs @ _pc-astore PHEADVFS-INIT
+        PHEADVFS-S-OK = _pc-assert
+    _pc-ahead _pc-astore PHEADVFS-SAVE
+        PHEADVFS-S-OK = _pc-assert
+    2 _pc-ahead PHEAD.REVISION !
+    42 _pc-ahead PHEAD.CURRENT-ROOT _pc-id!
+    _pc-ahead _pc-astore PHEADVFS-SAVE
+        PHEADVFS-S-OK = _pc-assert
+
+    2 _pc-validator-reject !
+    _pc-aout _pc-arejected ['] _pc-semantic-validator
+        _pc-validator-reject _pc-astore PHEADVFS-LOAD-VALIDATED
+        PHEADVFS-S-OK = _pc-assert
+    _pc-astore PHEADVFS-FALLBACK? _pc-assert
+    _pc-astore PHEADVFS.GENERATION @ 1 = _pc-assert
+    _pc-astore PHEADVFS.REJECTED-GENERATION @ 2 = _pc-assert
+    _pc-astore PHEADVFS.REJECTED-STATUS @ 91 = _pc-assert
+    _pc-aout PHEAD.REVISION @ 1 = _pc-assert
+    _pc-aout PHEAD.CURRENT-ROOT @ 41 = _pc-assert
+    _pc-arejected PHEAD.REVISION @ 2 = _pc-assert
+    _pc-arejected PHEAD.CURRENT-ROOT @ 42 = _pc-assert
+
+    _pc-pact PACT-INIT
+    ['] _pc-semantic-validator _pc-validator-reject
+        PACT-TRUST-STRUCTURAL _pc-pact PACT-VALIDATOR!
+        PACT-S-OK = _pc-assert
+    _pc-avfs @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
+    _pc-pact PACT-ACTIVE? _pc-assert
+    _pc-pact PACT-FALLBACK? _pc-assert
+    _pc-pact PACT-RECOVERY? 0= _pc-assert
+    _pc-pact PACT-READONLY? 0= _pc-assert
+    _pc-pact PACT-AUTHENTICATED? 0= _pc-assert
+    _pc-pact PACT-HEAD PHEAD.REVISION @ 1 = _pc-assert
+    _pc-pact PACT-REJECTED-HEAD PHEAD.REVISION @ 2 = _pc-assert
+    _pc-pact PACT.CONTEXT @ DUP CTX-VALID? _pc-assert
+    DUP CTX.EPOCH @ _pc-pact PACT.EPOCH @ = _pc-assert
+    DUP CTX.PRACTICE @ _pc-pact PACT-HEAD = _pc-assert
+    CTX.VFS @ _pc-avfs @ = _pc-assert
+    _pc-pact PACT.EPOCH @ DUP 0> _pc-assert _pc-first-epoch !
+    _pc-pact PACT-DEACTIVATE
+    _pc-avfs @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
+    _pc-pact PACT.EPOCH @ DUP 0> _pc-assert
+    _pc-first-epoch @ <> _pc-assert
+    _pc-pact PACT-DEACTIVATE
+
+    -1 _pc-validator-reject !
+    _pc-avfs @ _pc-pact PACT-ACTIVATE
+        PACT-S-RECOVERY = _pc-assert
+    _pc-pact PACT-ACTIVE? _pc-assert
+    _pc-pact PACT-RECOVERY? _pc-assert
+    _pc-pact PACT-FALLBACK? 0= _pc-assert
+    _pc-pact PACT-READONLY? _pc-assert
+    _pc-pact PACT-AUTHENTICATED? 0= _pc-assert
+    _pc-pact PACT.CONTEXT @ CTX.FLAGS @
+        CTX-F-ACTIVE CTX-F-READONLY OR CTX-F-RECOVERY OR = _pc-assert
+    _pc-avfs @ V.FLAGS @ VFS-F-RO AND 0<> _pc-assert
+    _pc-pact PACT.REJECTED-GENERATION @ 2 = _pc-assert
+    _pc-pact PACT-REJECTED-HEAD PHEAD.REVISION @ 2 = _pc-assert
+    _pc-pact PACT-DEACTIVATE
+    _pc-avfs @ VFS-DESTROY ;
 
 : _pc-persist-corrupt  ( path-a path-u -- )
     _pc-pvfs @ VFS-USE VFS-OPEN DUP _pc-pvfs-fd ! 0<> _pc-assert
@@ -4290,6 +4416,7 @@ CREATE _pc-persist-bad 8 ALLOT
 : _pc-grant-setup  ( -- )
     _pc-grant AGR-INIT
     _pc-binding _pc-grant AGR-BIND! AUTH-S-OK = _pc-assert
+    AGR-F-REVIEWED-COMMIT _pc-grant AGR.FLAGS !
     MS@ 10000 + _pc-grant AGR.EXPIRES ! ;
 
 CREATE _pc-cap CAP-DESC ALLOT
@@ -4345,6 +4472,7 @@ VARIABLE _pc-applied
     PHEAD-FORMAT-V1 _pc-head PHEAD.FORMAT !
 
     77 CTX-NEW DUP 0= _pc-assert DROP DUP _pc-context ! DROP
+    _pc-head _pc-context @ CTX.PRACTICE !
     9 _pc-context @ CTX.AUTHORITY !
     10 _pc-context @ CTX.VFS !
     CTX-F-READONLY _pc-context @ CTX.FLAGS !
@@ -4361,6 +4489,9 @@ VARIABLE _pc-applied
     CPRINC-AGENT _pc-mandate MAND.PRINCIPAL !
     11 _pc-mandate MAND.CONTEXT-ID !
     2 _pc-mandate MAND.CONTEXT-GENERATION !
+    6 _pc-mandate MAND.PRACTICE-ID _pc-id!
+    7 _pc-mandate MAND.INPUT-FACET-ID _pc-id!
+    8 _pc-mandate MAND.DISCLOSURE-FACET-ID _pc-id!
     CAP-E-MUTATE CAP-E-PERSIST OR _pc-mandate MAND.EFFECTS !
     MAND-D-PROPOSAL _pc-mandate MAND.DISPOSITION !
     _pc-mandate MAND-STRUCTURAL-VALID? _pc-assert
@@ -4385,6 +4516,60 @@ VARIABLE _pc-applied
     MAND-D-COMMIT _pc-mandate MAND.DISPOSITION !
     10 _pc-mandate 77 MS@ _pc-turn PTURN-COMMIT _pc-assert
     _pc-turn PTURN.STATE @ PTURN-S-COMMITTED = _pc-assert
+    _pc-stack
+
+    _pc-context @ CTX-CHILD-NEW DUP 0= _pc-assert DROP
+        DUP _pc-run-child ! DROP
+    _pc-facet CFACET-INIT
+    7 _pc-facet CFACET.ID _pc-id!
+    1 _pc-facet CFACET.PRACTICE-ID _pc-id!
+    77 _pc-facet CFACET.EPOCH !
+    _pc-run-child @ CTX.ID @ _pc-facet CFACET.CONTEXT-ID !
+    _pc-run-child @ CTX.GENERATION @ _pc-facet CFACET.CONTEXT-GEN !
+    1 _pc-facet CFACET.REVISION !
+    31 7 CAP-E-MUTATE CAP-E-PERSIST OR
+    CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR
+        CFENTRY-F-REVIEW-COMMIT OR CFENTRY-F-DISCLOSE-RESULT OR
+    64 S" practice.test.mutate" _pc-facet CFACET-ADD
+        CFACET-S-OK = _pc-assert
+    _pc-stack
+    _pc-facet CFACET-VALID? _pc-assert
+    _pc-stack
+    31 8 S" practice.test.mutate" _pc-facet CFACET-FIND
+        0= _pc-assert
+    31 7 S" practice.test.mutate" _pc-facet CFACET-FIND
+        DUP 0<> _pc-assert _pc-fentry !
+    _pc-stack
+
+    _pc-run-mandate MAND-INIT
+    9 _pc-run-mandate MAND.ID _pc-id!
+    1 _pc-run-mandate MAND.PRACTICE-ID _pc-id!
+    7 _pc-run-mandate MAND.INPUT-FACET-ID _pc-id!
+    7 _pc-run-mandate MAND.DISCLOSURE-FACET-ID _pc-id!
+    77 _pc-run-mandate MAND.ACTIVATION-EPOCH !
+    CPRINC-AGENT _pc-run-mandate MAND.PRINCIPAL !
+    _pc-run-child @ CTX.ID @ _pc-run-mandate MAND.CONTEXT-ID !
+    _pc-run-child @ CTX.GENERATION @
+        _pc-run-mandate MAND.CONTEXT-GENERATION !
+    CAP-E-MUTATE CAP-E-PERSIST OR _pc-run-mandate MAND.EFFECTS !
+    MAND-D-PROPOSAL _pc-run-mandate MAND.DISPOSITION !
+    10000 _pc-run-mandate MAND.TIME-BUDGET-MS !
+    2 _pc-run-mandate MAND.TOOL-BUDGET !
+    128 _pc-run-mandate MAND.DISCLOSURE-BUDGET !
+    _pc-head _pc-run-child @ _pc-run-mandate _pc-facet AMRUN-NEW
+        DUP 0= _pc-assert DROP DUP _pc-amrun ! DROP
+    _pc-amrun @ AMRUN-ACTIVE? _pc-assert
+    _pc-stack
+    _pc-amrun @ AMRUN-TOOL-RESERVE AMRUN-S-OK = _pc-assert
+    _pc-amrun @ AMRUN-TOOL-RESERVE AMRUN-S-OK = _pc-assert
+    _pc-amrun @ AMRUN-TOOL-RESERVE AMRUN-S-BUDGET = _pc-assert
+    64 _pc-fentry @ _pc-amrun @ AMRUN-DISCLOSE-RESERVE
+        AMRUN-S-OK = _pc-assert
+    64 _pc-fentry @ _pc-amrun @ AMRUN-DISCLOSE-RESERVE
+        AMRUN-S-OK = _pc-assert
+    1 _pc-fentry @ _pc-amrun @ AMRUN-DISCLOSE-RESERVE
+        AMRUN-S-BUDGET = _pc-assert
+    _pc-amrun @ AMRUN-FREE
     _pc-stack
 
     _pc-binding-setup _pc-grant-setup
@@ -4432,6 +4617,17 @@ VARIABLE _pc-applied
     _pc-request @ _pc-binding CBR-AUTH-BIND! AUTH-S-OK = _pc-assert
     _pc-grant AGR-INIT
     _pc-binding _pc-grant AGR-BIND! AUTH-S-OK = _pc-assert
+    AGR-F-MANDATE-AUTO _pc-grant AGR.FLAGS !
+    MS@ 10000 + _pc-grant AGR.EXPIRES !
+    _pc-grant _pc-request @ CBR.HANDLE _pc-table @ AHT-ISSUE
+        AUTH-S-OK = _pc-assert
+    _pc-request @ _pc-bus @ CBUS-DISPATCH
+        CBUS-S-DENIED = _pc-assert
+    _pc-applied @ 0= _pc-assert
+    _pc-request @ CBR.HANDLE IH-INIT
+    _pc-grant AGR-INIT
+    _pc-binding _pc-grant AGR-BIND! AUTH-S-OK = _pc-assert
+    AGR-F-REVIEWED-COMMIT _pc-grant AGR.FLAGS !
     MS@ 10000 + _pc-grant AGR.EXPIRES !
     _pc-grant _pc-request @ CBR.HANDLE _pc-table @ AHT-ISSUE
         AUTH-S-OK = _pc-assert
@@ -4459,6 +4655,7 @@ VARIABLE _pc-applied
     _pc-table @ AHT-FREE
     _pc-child @ CTX-FREE _pc-context @ CTX-FREE
     _pc-persist-run
+    _pc-activation-run
     _pc-stack
     _pc-fails @ 0= IF
         ." PRACTICE CONTRACTS PASS " _pc-checks @ .
@@ -4652,6 +4849,30 @@ REQUIRE agent/providers/devtools/scripted.f
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
     DESK-AGENT-SOURCE! ;
 _boot-agent-source
+
+\ Development-image installation step: provision only genuinely blank media.
+\ Existing but invalid slots are deliberately left for Desk recovery.
+CREATE _boot-practice-head PHEAD-SIZE ALLOT
+CREATE _boot-practice-out PHEAD-SIZE ALLOT
+CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
+: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _boot-practice-slot?  ( path-a path-u -- flag )
+    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+: _boot-practice-present?  ( -- flag )
+    S" /practice-head-a.bin" _boot-practice-slot?
+    S" /practice-head-b.bin" _boot-practice-slot? OR ;
+: _boot-practice-provision  ( -- )
+    _boot-practice-present? IF EXIT THEN
+    VFS-CUR _boot-practice-store PHEADVFS-INIT
+        PHEADVFS-S-OK <> ABORT" Practice store init failed"
+    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
+    _boot-practice-head PHEAD-INIT
+    1 _boot-practice-head PHEAD.ID _boot-practice-id!
+    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
+    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
+_boot-practice-provision
 
 CREATE _boot-pad-desc APP-DESC ALLOT
 _boot-pad-desc PAD-ENTRY
@@ -4957,6 +5178,36 @@ GRID-RUN
 # journey instead of the full applet regression tour.
 PROFILES["desktop-agent"] = PROFILES["desktop"]
 PROFILES["desktop-resource"] = PROFILES["desktop"]
+PROFILES["desktop-recovery"] = Profile(
+    roots=PROFILES["desktop"].roots,
+    resources=PROFILES["desktop"].resources,
+    autoexec=PROFILES["desktop"].autoexec.replace(
+        "\n_boot-practice-provision\n",
+        "\n",
+    ),
+    ready_markers=("[Practice: recovery]",),
+    stable_markers=("[Practice: recovery]",),
+    linked=True,
+    initial_files=(
+        ("practice-head-a.bin", b"corrupt-a"),
+        ("practice-head-b.bin", b"corrupt-b"),
+    ),
+)
+PROFILES["desktop-fallback"] = Profile(
+    roots=PROFILES["desktop"].roots,
+    resources=PROFILES["desktop"].resources,
+    autoexec=PROFILES["desktop"].autoexec.replace(
+        "\n_boot-practice-provision\n",
+        "\n",
+    ),
+    ready_markers=PROFILES["desktop"].ready_markers + ("[Practice: fallback]",),
+    stable_markers=PROFILES["desktop"].stable_markers + ("[Practice: fallback]",),
+    linked=True,
+    initial_files=(
+        ("practice-head-a.bin", _practice_head_snapshot(1)),
+        ("practice-head-b.bin", b"corrupt-newest"),
+    ),
+)
 PROFILES["desktop-codex"] = Profile(
     roots=tuple(
         "agent/providers/codex/source.f"
@@ -5450,9 +5701,11 @@ def build_image(
     resources = set(profile.resources)
     linked_chunks = _linked_chunks(modules) if profile.linked else {}
     paths = set(linked_chunks) | resources if profile.linked else set(modules) | resources
-    directories = _directories(paths)
+    initial_paths = {path for path, _ in profile.initial_files}
+    image_paths = paths | initial_paths
+    directories = _directories(image_paths)
     _validate_module_ids(modules)
-    _validate_image_paths(paths, directories)
+    _validate_image_paths(image_paths, directories)
 
     target = (output or default_image_path(profile_name)).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -5486,6 +5739,11 @@ def build_image(
             ftype=file_type,
             path=parent,
         )
+
+    for path, content in profile.initial_files:
+        disk_path = PurePosixPath(path)
+        parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
+        fs.inject_file(disk_path.name, content, path=parent)
 
     fs.inject_file("large.txt", LARGE_SAMPLE, ftype=FTYPE_TEXT)
 
@@ -5832,6 +6090,20 @@ def smoke(
                         )
                         return
 
+            session.send_key("alt+5")
+            session.send_key("ctrl+l")
+            if wait_screen(
+                "Ask:", "Agent did not reopen its composer for the hidden-op probe"
+            ):
+                session.send_text("source smoke")
+                session.send_key("enter")
+                wait_screen(
+                    "Tool handler was not",
+                    "the raw Daybook source operation escaped the exact facet",
+                    step_budget=1_000_000_000,
+                    wall_timeout=25.0,
+                )
+
             session.send_key("alt+2")
             session.send_key("ctrl+space")
             if wait_screen(
@@ -5855,6 +6127,13 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
+
+        if initial_ready and profile_name == "desktop-recovery":
+            recovery_text = session.snapshot().text()
+            if "[1:" in recovery_text or "Agent: " in recovery_text:
+                journey_errors.append(
+                    "Practice recovery launched an applet or Agent service"
+                )
 
         if initial_ready and profile_name == "desktop-codex-live":
             session.send_key("alt+5")

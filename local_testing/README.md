@@ -29,9 +29,12 @@ Profiles are `credential`, `http-request`, `tls-port`, `net-stream`, `mcp`,
 `codex-live-auth` (opt-in native device-flow probe),
 `conversation-store`,
 `agent-context`, `agent-persistence`,
-`interop` (the non-TUI runtime and interoperability contracts), `agent`
+`interop` (the non-TUI runtime and interoperability contracts),
+`practice-contracts` (Practice/Context/facet/Mandate authority contracts),
+`agent`
 (provider-neutral conversations), `agent-ui`, `agent-auth-ui`, `agent-widgets`,
 `agent-device-ui`, `desktop` (Desk with all five applets), `desktop-agent`,
+`desktop-fallback`, `desktop-recovery`,
 `desktop-codex`, `desktop-codex-live` (opt-in TAP-backed shared environment),
 `pad`, `fexplorer`, `daybook`, and `grid`.
 Generated images, terminal text, cell JSON, and PNG captures go under
@@ -67,6 +70,7 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `conversation-store` | checksummed bounded transcript encoding, alternating VFS generations, newest-valid selection, corruption fallback, fail-closed loading, interrupted-state normalization, ownership cleanup, and stack balance |
 | `agent-persistence` | completed approval audit, repeated runtime reconstruction over one native VFS, interrupted approval recovery, run-ID continuity, durable clearing, and stack balance |
 | `interop` | instance-relative state, isolated instances, registry lookup, bounded request dispatch, and typed values without loading TUI |
+| `practice-contracts` | versioned Practice/Context/Mandate/Turn layouts, sealed one-use grants, semantic newest-to-older head validation, rejected-candidate diagnostics, exact target-generation facets, frozen Mandate Run bindings, tool/disclosure exhaustion, recovery, and stack balance |
 | `agent` | native offline fallback, provider connection, streamed transcript assembly, approval resolution, cancellation, and owned conversation cleanup without loading TUI |
 | `agent-ui` | transcript, streaming, prompt, review, cancellation, reconnect, resize, and terminal rendering |
 | `agent-auth-ui` | native OpenAI source selection, missing-credential state, masked entry, cancellation, reconnect, clearing, resize, and plaintext absence from all captures |
@@ -76,7 +80,9 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `fexplorer` | create file/folder, rename, copy/paste, confirmed deletion, preview, and persisted MP64FS metadata |
 | `daybook` | task capture, completion, exact Markdown persistence, responsive calendar/agenda resize |
 | `grid` | formula edit, dependent `SUM` recalculation, CSV persistence/reload, virtual-grid resize |
-| `desktop-agent` | all five applets, direct intents, deterministic conversation/tool approval, global prompt, focus, and resize |
+| `desktop-agent` | all five applets, direct intents, deterministic Mandate-scoped agenda read and reviewed task capture, hidden raw-source-name rejection, global prompt, focus, persistence, and resize |
+| `desktop-fallback` | cold Desk boot from one structurally valid older Practice-head slot when the newer MP64FS envelope is corrupt, with visible fallback status and normal applet activation |
+| `desktop-recovery` | cold dual-corruption boot into a visible read-only shell with applets, interop, Agent/provider, and transient authority suppressed |
 | `desktop-codex` | the complete linked Desktop with the real native Codex source, signed-out account gating, model-readiness gating, all applets, and production-shaped visual boot |
 | `desktop-codex-live` | the same linked Desktop with explicit TAP network configuration for watchable native device login and subscription-backed Codex use |
 
@@ -84,6 +90,14 @@ Run the focused profile plus `desktop-agent` before changing shared TUI, VFS,
 agent, or app-shell behavior. The normal suite is fully native and offline.
 The OpenAI profiles use deterministic in-guest fixture credentials and
 transports; they never contact OpenAI or require a developer API key.
+
+The default Desk Practice validator is structural. CRC and record validation
+detect corruption and torn envelopes, but do not authenticate a hostile
+replacement or validate a manifest/schema object graph. The development image
+may provision a blank Practice only when both slots are genuinely absent; this
+is bootstrap fixture behavior, not secure Practice enrollment. The current
+recovery profile proves fail-closed startup, not an inspection or repair
+console.
 
 ## Opt-In Live Network
 

@@ -866,6 +866,7 @@ VARIABLE _VMK-U
 
 : VFS-MKFILE  ( c-addr u vfs -- inode | 0 )
     _VMK-V ! _VMK-U ! _VMK-A !
+    _VMK-V @ V.FLAGS @ VFS-F-RO AND IF 0 EXIT THEN
     _VMK-A @ _VMK-U @ _VFS-VALID-NAME? 0= IF 0 EXIT THEN
     _VMK-V @ V.CWD @ _VMK-V @ _VFS-ENSURE-CHILDREN
     _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VFS-FIND-CHILD
@@ -896,6 +897,7 @@ VARIABLE _VMK-U
 
 : VFS-MKDIR  ( c-addr u vfs -- ior )
     _VMK-V ! _VMK-U ! _VMK-A !
+    _VMK-V @ V.FLAGS @ VFS-F-RO AND IF -1 EXIT THEN
     _VMK-A @ _VMK-U @ _VFS-VALID-NAME? 0= IF -1 EXIT THEN
     _VMK-V @ V.CWD @ _VMK-V @ _VFS-ENSURE-CHILDREN
     _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VFS-FIND-CHILD
@@ -929,6 +931,7 @@ VARIABLE _VRN-HANDLE
 
 : VFS-RENAME  ( new-a new-u inode vfs -- ior )
     _VRN-V ! _VRN-IN ! _VRN-U ! _VRN-A !
+    _VRN-V @ V.FLAGS @ VFS-F-RO AND IF -1 EXIT THEN
     _VRN-A @ _VRN-U @ _VFS-VALID-NAME? 0= IF -1 EXIT THEN
     _VRN-IN @ IN.PARENT @ DUP 0= IF DROP -1 EXIT THEN _VRN-PARENT !
     _VRN-PARENT @ _VRN-V @ _VFS-ENSURE-CHILDREN
@@ -964,6 +967,7 @@ VARIABLE _VCR-PARENT
 \   must already exist.  Existing paths and trailing slashes fail.
 : VFS-CREATE  ( path-a path-u vfs -- inode | 0 )
     _VCR-V ! _VCR-U ! _VCR-A !
+    _VCR-V @ V.FLAGS @ VFS-F-RO AND IF 0 EXIT THEN
     _VCR-U @ 0= IF 0 EXIT THEN
     _VCR-A @ _VCR-U @ 1- + C@ [CHAR] / = IF 0 EXIT THEN
     VFS-CUR _VCR-OLD-V !
@@ -1005,6 +1009,7 @@ VARIABLE _VRM-IOR
 
 : VFS-RM  ( c-addr u vfs -- ior )
     _VRM-V !
+    _VRM-V @ V.FLAGS @ VFS-F-RO AND IF 2DROP -1 EXIT THEN
     _VRM-V @ VFS-RESOLVE         ( inode | 0 )
     DUP 0= IF  DROP -1 EXIT  THEN   \ not found
     _VRM-IN !
@@ -1102,6 +1107,7 @@ VARIABLE _VSY-IOR    \ accumulated ior
 
 : VFS-SYNC  ( vfs -- ior )
     _VSY-V !
+    _VSY-V @ V.FLAGS @ VFS-F-RO AND IF -1 EXIT THEN
     0 _VSY-IOR !
     _VSY-V @ V.ISLAB @  _VSY-P !      \ first slab page
     BEGIN  _VSY-P @ 0<>  WHILE

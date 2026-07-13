@@ -273,6 +273,14 @@ VARIABLE _CBC-DESC
     _CBD-REQ @ CBR.PRINCIPAL @ _CBD-CAP @ CAP.EFFECTS @
     _CBD-BUS @ CBUS.POLICY @ CPOLICY-DECIDE ;
 
+: _CBUS-GRANT-CLASS-VALID?  ( grant -- flag )
+    _CBD-REQ @ CBR.MANDATE-ID RID-ZERO? IF DROP -1 EXIT THEN
+    _CBD-CAP @ CAP.EFFECTS @ CAP-E-OBSERVE = IF
+        AGR.FLAGS @ AGR-F-MANDATE-AUTO =
+    ELSE
+        AGR.FLAGS @ AGR-F-REVIEWED-COMMIT =
+    THEN ;
+
 \ Validate and consume at the serialized owner boundary immediately before
 \ the handler is entered.  A failing/throwing effect is therefore not
 \ silently replayable with the same approval.
@@ -289,6 +297,9 @@ VARIABLE _CBC-DESC
     MS@ _CBD-BINDING _CBD-REQ @ CBR.HANDLE
     _CBD-BUS @ CBUS.AUTHORITY @ AHT-CONSUME
     DUP AUTH-S-OK = IF
+        OVER _CBUS-GRANT-CLASS-VALID? 0= IF
+            2DROP CBUS-S-DENIED EXIT
+        THEN
         _CBD-REQ @ CBR.TURN @ ?DUP IF
             >R OVER AGR.ID R> PTURN-GRANT!
         THEN
