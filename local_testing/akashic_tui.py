@@ -4813,6 +4813,14 @@ VARIABLE _rc-saw-running
     DEPTH _rc-cap-depth !
     _rc-cap CAP-DESC-VALID? _rc-assert
     DEPTH _rc-cap-depth @ = _rc-assert
+    _rc-cap CAP.CONCURRENCY @ CCLASS-OWNER-COMMIT = _rc-assert
+    _rc-cap CAP-CONCURRENCY-EFFECTIVE CCLASS-OWNER-COMMIT = _rc-assert
+    CCLASS-PURE _rc-cap CAP.CONCURRENCY !
+    _rc-cap CAP-DESC-VALID? _rc-assert
+    _rc-cap CAP-CONCURRENCY-EFFECTIVE CCLASS-PURE = _rc-assert
+    10 _rc-cap CAP.CONCURRENCY !
+    _rc-cap CAP-DESC-VALID? 0= _rc-assert
+    0 _rc-cap CAP.CONCURRENCY !
     0 _rc-cap CAP.ID-U !
     _rc-cap CAP-DESC-VALID? 0= _rc-assert
     DEPTH _rc-cap-depth @ = _rc-assert

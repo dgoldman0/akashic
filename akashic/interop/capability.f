@@ -6,6 +6,7 @@ PROVIDED akashic-interop-capability
 
 REQUIRE schema.f
 REQUIRE ../runtime/instance.f
+REQUIRE ../runtime/concurrency-class.f
 REQUIRE ../text/utf8.f
 
 1 CONSTANT CAP-K-COMMAND
@@ -32,7 +33,9 @@ CAP-F-CONTEXT-DEFAULT OR CONSTANT CAP-FLAGS-MASK
 64 CONSTANT CAP-ID-MAX
 64 CONSTANT COMP-CAPS-MAX
 
-\ Capability descriptor, 16 cells / 128 bytes.
+\ Capability descriptor, 16 cells / 128 bytes.  CONCURRENCY classifies
+\ execution placement only; it grants no authority and does not imply that
+\ the handler, its dependencies, or its target state are worker-safe.
   0 CONSTANT _CAP-KIND
   8 CONSTANT _CAP-ID-A
  16 CONSTANT _CAP-ID-U
@@ -48,7 +51,7 @@ CAP-F-CONTEXT-DEFAULT OR CONSTANT CAP-FLAGS-MASK
  96 CONSTANT _CAP-PREVIEW-XT      \ ( request instance -- status )
 104 CONSTANT _CAP-UNDO-XT
 112 CONSTANT _CAP-MAX-MS
-120 CONSTANT _CAP-RESERVED
+120 CONSTANT _CAP-CONCURRENCY     \ CCLASS-*, default OWNER-COMMIT
 128 CONSTANT CAP-DESC
 
 : CAP.KIND        ( cap -- a ) _CAP-KIND + ;
@@ -66,8 +69,11 @@ CAP-F-CONTEXT-DEFAULT OR CONSTANT CAP-FLAGS-MASK
 : CAP.PREVIEW-XT  ( cap -- a ) _CAP-PREVIEW-XT + ;
 : CAP.UNDO-XT     ( cap -- a ) _CAP-UNDO-XT + ;
 : CAP.MAX-MS      ( cap -- a ) _CAP-MAX-MS + ;
+: CAP.CONCURRENCY ( cap -- a ) _CAP-CONCURRENCY + ;
 
-: CAP-DESC-INIT  ( cap -- ) CAP-DESC 0 FILL ;
+: CAP-DESC-INIT  ( cap -- )
+    DUP CAP-DESC 0 FILL
+    CCLASS-OWNER-COMMIT SWAP CAP.CONCURRENCY ! ;
 
 : CAP-DESC-VALID?  ( cap -- flag )
     DUP 0= IF DROP 0 EXIT THEN >R
@@ -84,7 +90,15 @@ CAP-F-CONTEXT-DEFAULT OR CONSTANT CAP-FLAGS-MASK
     CAP-EFFECTS-MASK INVERT AND IF R> DROP 0 EXIT THEN
     R@ CAP.FLAGS @ DUP 0< IF DROP R> DROP 0 EXIT THEN
     CAP-FLAGS-MASK INVERT AND IF R> DROP 0 EXIT THEN
-    R> CAP.MAX-MS @ 0< 0= ;
+    R@ CAP.MAX-MS @ 0< IF R> DROP 0 EXIT THEN
+    R> CAP.CONCURRENCY @ DUP CCLASS-UNSPECIFIED =
+    SWAP CCLASS-VALID? OR ;
+
+\ A zero field from a legacy/precompiled descriptor also fails safe to
+\ owner-side execution.  Export status, authority, effects, and concurrency
+\ remain independent contracts.
+: CAP-CONCURRENCY-EFFECTIVE  ( cap -- class )
+    CAP.CONCURRENCY @ ?DUP 0= IF CCLASS-OWNER-COMMIT THEN ;
 
 : _COMP-CAPS-RANGE-VALID?  ( caps count -- flag )
     DUP 0< IF 2DROP 0 EXIT THEN
