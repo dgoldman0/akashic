@@ -343,7 +343,11 @@ def _correctness_program() -> list[str]:
     lines += ["_TG-GB @ _TG-UNDO @ UNDO-REDO _TG-ASSERT"]
     model[pos:pos] = insertion
     lines += _expected_checks(model)
-    lines += ["_TG-UNDO @ UNDO-FREE"]
+    lines += [
+        "_TG-UNDO @ UNDO-CLEAR",
+        "DEPTH _TG-DEPTH @ = _TG-ASSERT",
+        "_TG-UNDO @ UNDO-FREE",
+    ]
 
     # Compare the incremental single-byte path with the retained bulk rebuild.
     lines += [

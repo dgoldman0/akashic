@@ -281,7 +281,7 @@ VARIABLE _UC-E      \ top undo entry being checked
     0 SWAP _UD-O-COAL + ! ;
 
 : UNDO-CLEAR  ( ud -- )
-    DUP _UD-T !
+    _UD-T !
     _UD-UCLEAR  _UD-RCLEAR ;
 
 \ UNDO-PUSH ( type pos addr u ud -- )
