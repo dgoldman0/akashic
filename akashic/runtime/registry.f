@@ -5,6 +5,7 @@
 PROVIDED akashic-runtime-registry
 
 REQUIRE instance.f
+REQUIRE ../interop/capability.f
 REQUIRE ../utils/string.f
 
 32 CONSTANT CREG-MAX-TYPES
@@ -58,7 +59,7 @@ VARIABLE _CRT-R
 
 : CREG-TYPE+  ( desc reg -- ior )
     >R
-    DUP COMP-DESC-VALID? 0= IF DROP R> DROP CREG-E-NOT-FOUND EXIT THEN
+    DUP COMP-CAPS-VALID? 0= IF DROP R> DROP CREG-E-NOT-FOUND EXIT THEN
     DUP COMP.ID-A @ OVER COMP.ID-U @ R@ CREG-TYPE-FIND IF
         DROP R> DROP CREG-E-DUPLICATE EXIT
     THEN

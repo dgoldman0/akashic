@@ -4668,6 +4668,353 @@ _pc-run
         ready_markers=("PRACTICE CONTRACTS PASS",),
         stable_markers=("PRACTICE CONTRACTS PASS",),
     ),
+    "resource-contracts": Profile(
+        roots=(
+            "runtime/resource-ref.f",
+            "runtime/resource-registry.f",
+            "interop/resource.f",
+            "interop/lens-binding.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - resource/lens substrate contracts
+ENTER-USERLAND
+." [akashic] loading resource contracts" CR
+REQUIRE runtime/resource-ref.f
+REQUIRE runtime/resource-registry.f
+REQUIRE interop/resource.f
+REQUIRE interop/lens-binding.f
+
+VARIABLE _rc-fails
+VARIABLE _rc-checks
+VARIABLE _rc-depth
+
+: _rc-assert  ( flag -- )
+    1 _rc-checks +!
+    0= IF 1 _rc-fails +! ." ASSERT " _rc-checks @ . CR THEN ;
+
+: _rc-stack  ( -- )
+    DEPTH DUP _rc-depth @ <> IF
+        ." STACK " _rc-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _rc-depth @ = _rc-assert ;
+
+: _rc-id!  ( value id -- )
+    DUP RID-CLEAR ! ;
+
+CREATE _rc-head PHEAD-SIZE ALLOT
+CREATE _rc-resource-id RID-SIZE ALLOT
+CREATE _rc-resource-id2 RID-SIZE ALLOT
+CREATE _rc-seen-resource-id RID-SIZE ALLOT
+CREATE _rc-ref RREF-SIZE ALLOT
+CREATE _rc-ref2 RREF-SIZE ALLOT
+CREATE _rc-ref3 RREF-SIZE ALLOT
+CREATE _rc-bind LBIND-SIZE ALLOT
+CREATE _rc-bind2 LBIND-SIZE ALLOT
+CREATE _rc-value CV-SIZE ALLOT
+CREATE _rc-cap CAP-DESC ALLOT
+CREATE _rc-comp COMP-DESC ALLOT
+
+VARIABLE _rc-context
+VARIABLE _rc-cold-context
+VARIABLE _rc-components
+VARIABLE _rc-instance
+VARIABLE _rc-resources
+VARIABLE _rc-request
+VARIABLE _rc-bus
+VARIABLE _rc-cap-depth
+VARIABLE _rc-handler-request
+VARIABLE _rc-running-rebind
+VARIABLE _rc-saw-running
+
+: _rc-handler  ( request instance -- status )
+    DROP _rc-handler-request !
+    _rc-handler-request @ CBR.RESOURCE-ID
+        _rc-seen-resource-id RID-COPY
+    _rc-handler-request @ CBR.FLAGS @ CBR-F-RUNNING AND 0<>
+        _rc-saw-running !
+    _rc-bind _rc-context @ _rc-handler-request @ LBIND-REQUEST!
+        _rc-running-rebind !
+    CBUS-S-OK ;
+
+: _rc-cap-setup  ( -- )
+    _rc-cap CAP-DESC-INIT
+    CAP-K-RESOURCE _rc-cap CAP.KIND !
+    S" resource.snapshot" _rc-cap CAP.ID-U ! _rc-cap CAP.ID-A !
+    CAP-E-OBSERVE _rc-cap CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR _rc-cap CAP.FLAGS !
+    ['] _rc-handler _rc-cap CAP.HANDLER-XT ! ;
+
+: _rc-comp-setup  ( -- )
+    _rc-comp COMP-DESC-INIT
+    S" org.akashic.test.resource"
+        _rc-comp COMP.ID-U ! _rc-comp COMP.ID-A !
+    S" 1.0.0" _rc-comp COMP.VERSION-U ! _rc-comp COMP.VERSION-A !
+    _rc-cap _rc-comp COMP.CAPS-A !
+    1 _rc-comp COMP.CAPS-N ! ;
+
+: _rc-resolve-ok  ( ref -- )
+    _rc-context @ _rc-resources @ RREG-RESOLVE
+    DUP RREG-S-OK = _rc-assert
+    DROP _rc-instance @ = _rc-assert ;
+
+: _rc-run  ( -- )
+    0 _rc-fails ! 0 _rc-checks ! DEPTH _rc-depth !
+    _rc-value CV-INIT
+    _rc-head PHEAD-INIT
+    11 _rc-head PHEAD.ID _rc-id!
+    12 _rc-head PHEAD.CURRENT-ROOT _rc-id!
+    41 _rc-resource-id _rc-id!
+    42 _rc-resource-id2 _rc-id!
+
+    _rc-ref RREF-INIT
+    _rc-ref RREF-VALID? 0= _rc-assert
+    _rc-resource-id _rc-ref RREF.ID RID-COPY
+    1 _rc-ref RREF.REVISION !
+    _rc-ref RREF-VALID? _rc-assert
+    _rc-ref _rc-ref2 RREF-COPY RREF-S-OK = _rc-assert
+    _rc-ref _rc-ref2 RREF= _rc-assert
+    _rc-ref _rc-ref2 RREF-ID= _rc-assert
+    1 _rc-ref2 RREF.FLAGS !
+    _rc-ref2 RREF-VALID? 0= _rc-assert
+    _rc-ref2 _rc-ref3 RREF-COPY RREF-S-INVALID = _rc-assert
+    0 _rc-ref2 RREF.FLAGS !
+    _rc-stack
+
+    _rc-ref _rc-value IRES-RREF! IRES-S-OK = _rc-assert
+    _rc-value _rc-ref2 IRES-RREF@ IRES-S-OK = _rc-assert
+    _rc-ref _rc-ref2 RREF= _rc-assert
+    0x7FFFFFFFFFFFFFFF _rc-ref RREF.REVISION !
+    _rc-ref _rc-value IRES-RREF! IRES-S-OK = _rc-assert
+    _rc-value CV-LEN@ IRES-RREF-URI-MAX = _rc-assert
+    _rc-value _rc-ref2 IRES-RREF@ IRES-S-OK = _rc-assert
+    _rc-ref _rc-ref2 RREF= _rc-assert
+    1 _rc-ref RREF.REVISION !
+    _rc-ref _rc-value IRES-RREF! IRES-S-OK = _rc-assert
+    [CHAR] A _rc-value CV-DATA@ IRES-RREF-PREFIX-U 1+ + C!
+    _rc-value _rc-ref2 IRES-RREF@ IRES-S-INVALID = _rc-assert
+    _rc-ref2 RREF-VALID? 0= _rc-assert
+    _rc-ref _rc-value IRES-RREF! IRES-S-OK = _rc-assert
+    S" /backing-only" _rc-value IRES-VFS! 0= _rc-assert
+    _rc-value _rc-ref2 IRES-RREF@ IRES-S-INVALID = _rc-assert
+    S" vfs:/backing-only" IRES-VFS-PATH _rc-assert 2DROP
+    0 5 IRES-VFS-PATH 0= _rc-assert 2DROP
+    0 1 _rc-value IRES-VFS! IRES-S-INVALID = _rc-assert
+    S" path" 0 IRES-VFS! IRES-S-INVALID = _rc-assert
+    0 IRES-RREF-URI-MIN _rc-ref2 IRES-RREF-PARSE
+        IRES-S-INVALID = _rc-assert
+    _rc-value CV-FREE
+    CV-T-RESOURCE _rc-value CV.TYPE !
+    1 _rc-value CV.LEN !
+    _rc-value _rc-ref2 IRES-RREF@ IRES-S-INVALID = _rc-assert
+    _rc-value CV-INIT
+    _rc-stack
+
+    _rc-cap-setup _rc-comp-setup
+    DEPTH _rc-cap-depth !
+    _rc-cap CAP-DESC-VALID? _rc-assert
+    DEPTH _rc-cap-depth @ = _rc-assert
+    0 _rc-cap CAP.ID-U !
+    _rc-cap CAP-DESC-VALID? 0= _rc-assert
+    DEPTH _rc-cap-depth @ = _rc-assert
+    S" resource.snapshot" _rc-cap CAP.ID-U ! _rc-cap CAP.ID-A !
+    128 _rc-cap CAP.FLAGS !
+    _rc-cap CAP-DESC-VALID? 0= _rc-assert
+    DEPTH _rc-cap-depth @ = _rc-assert
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR _rc-cap CAP.FLAGS !
+
+    77 CTX-NEW DUP 0= _rc-assert DROP _rc-context !
+    _rc-head _rc-context @ CTX.PRACTICE !
+    CTX-F-ACTIVE _rc-context @ CTX.FLAGS !
+    CREG-NEW DUP 0= _rc-assert DROP _rc-components !
+    128 _rc-cap CAP.FLAGS !
+    _rc-comp _rc-components @ CREG-TYPE+
+        CREG-E-NOT-FOUND = _rc-assert
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR _rc-cap CAP.FLAGS !
+    65 _rc-comp COMP.CAPS-N !
+    _rc-comp _rc-components @ CREG-TYPE+
+        CREG-E-NOT-FOUND = _rc-assert
+    1 _rc-comp COMP.CAPS-N !
+    0 _rc-comp COMP.CAPS-A !
+    _rc-comp _rc-components @ CREG-TYPE+
+        CREG-E-NOT-FOUND = _rc-assert
+    _rc-cap _rc-comp COMP.CAPS-A !
+    0x7FFFFFFFFFFFFFF0 _rc-comp COMP.CAPS-A !
+    _rc-comp _rc-components @ CREG-TYPE+
+        CREG-E-NOT-FOUND = _rc-assert
+    _rc-cap _rc-comp COMP.CAPS-A !
+    _rc-comp _rc-components @ CREG-TYPE+ 0= _rc-assert
+    _rc-comp CINST-NEW DUP 0= _rc-assert DROP _rc-instance !
+    _rc-instance @ _rc-components @ CREG-INST+ 0= _rc-assert
+    _rc-components @ _rc-context @ RREG-NEW
+        DUP 0= _rc-assert DROP _rc-resources !
+    _rc-resources @ RREG-VALID? _rc-assert
+    _rc-context @ _rc-resources @ RREG-CONTEXT? _rc-assert
+
+    _rc-resource-id _rc-instance @ _rc-context @ _rc-resources @
+        RREG-PUBLISH RREG-S-OK = _rc-assert
+    _rc-resource-id _rc-instance @ _rc-context @ _rc-resources @
+        RREG-PUBLISH RREG-S-DUPLICATE = _rc-assert
+    _rc-resource-id2 _rc-instance @ _rc-context @ _rc-resources @
+        RREG-PUBLISH RREG-S-DUPLICATE = _rc-assert
+    _rc-resources @ RREG.COUNT @ 1 = _rc-assert
+    _rc-resources @ RREG.ENTRIES
+    _rc-resources @ RREG.ENTRIES RREG-ENTRY-SIZE +
+        RREG-ENTRY-SIZE MOVE
+    2 _rc-resources @ RREG.COUNT !
+    _rc-resources @ RREG-VALID? 0= _rc-assert
+    1 _rc-resources @ RREG.COUNT !
+    _rc-resources @ RREG.ENTRIES RREG-ENTRY-SIZE +
+        RREG-ENTRY-SIZE 0 FILL
+    _rc-resource-id _rc-context @ _rc-ref2 _rc-resources @ RREG-REF
+        RREG-S-OK = _rc-assert
+    _rc-ref2 RREF.REVISION @ 1 = _rc-assert
+    _rc-ref2 _rc-resolve-ok
+    _rc-ref3 RREF-INIT
+    _rc-resource-id _rc-ref3 RREF.ID RID-COPY
+    _rc-ref3 _rc-resolve-ok
+    2 _rc-ref2 RREF.REVISION !
+    _rc-ref2 _rc-context @ _rc-resources @ RREG-RESOLVE
+    DUP RREG-S-STALE-REVISION = _rc-assert
+    SWAP 0= _rc-assert DROP
+    78 CTX-NEW DUP 0= _rc-assert DROP _rc-cold-context !
+    _rc-head _rc-cold-context @ CTX.PRACTICE !
+    CTX-F-ACTIVE _rc-cold-context @ CTX.FLAGS !
+    _rc-ref3 _rc-cold-context @ _rc-resources @ RREG-RESOLVE
+    DUP RREG-S-STALE-EPOCH = _rc-assert
+    SWAP 0= _rc-assert DROP
+    _rc-stack
+
+    _rc-instance @ CINST-TOUCH
+    _rc-resource-id _rc-context @ _rc-ref2 _rc-resources @ RREG-REF
+        RREG-S-OK = _rc-assert
+    _rc-ref2 RREF.REVISION @ 2 = _rc-assert
+    _rc-ref RREF-INIT
+    _rc-resource-id _rc-ref RREF.ID RID-COPY
+    _rc-ref _rc-context @ _rc-resources @ _rc-bind LBIND-ATTACH
+        LBIND-S-OK = _rc-assert
+    _rc-bind LBIND-VALID? _rc-assert
+    _rc-bind LBIND.REVISION @ 2 = _rc-assert
+    _rc-context @ _rc-bind LBIND-CONTEXT? _rc-assert
+    _rc-bind _rc-bind2 LBIND-COPY LBIND-S-OK = _rc-assert
+    _rc-bind _rc-ref3 LBIND-REF LBIND-S-OK = _rc-assert
+    _rc-ref3 RREF.REVISION @ 2 = _rc-assert
+
+    CBR-NEW DUP 0= _rc-assert DROP _rc-request !
+    CBR-SIZE 464 = _rc-assert
+    _rc-request @ CBR.RESOURCE-ID RID-ZERO? _rc-assert
+    _rc-bind _rc-context @ _rc-request @ LBIND-REQUEST!
+        LBIND-S-OK = _rc-assert
+    _rc-request @ CBR.EPOCH @ 77 = _rc-assert
+    _rc-request @ CBR.CONTEXT-ID @ _rc-context @ CTX.ID @ = _rc-assert
+    _rc-request @ CBR.CONTEXT-GEN @
+        _rc-context @ CTX.GENERATION @ = _rc-assert
+    _rc-request @ CBR.PRACTICE-ID _rc-head PHEAD.ID RID= _rc-assert
+    _rc-request @ CBR.RESOURCE-ID _rc-resource-id RID= _rc-assert
+    _rc-request @ CBR.TARGET-ID @ _rc-instance @ CINST.ID @ = _rc-assert
+    _rc-request @ CBR.TARGET-GEN @
+        _rc-instance @ CINST.GENERATION @ = _rc-assert
+    _rc-request @ CBR.EXPECT-REV @ 2 = _rc-assert
+
+    \ Re-stamping a reused request must erase every terminal/authority field
+    \ which could make a prior success look current.
+    91 _rc-request @ CBR.ID !
+    CBR-F-APPROVED CBR-F-CANCELLED OR _rc-request @ CBR.FLAGS !
+    CBUS-S-OK _rc-request @ CBR.STATUS !
+    99 _rc-request @ CBR.ACTUAL-REV !
+    7 _rc-request @ CBR.START-MS ! 8 _rc-request @ CBR.END-MS !
+    123 _rc-request @ CBR.RESULT CV-INT!
+    S" stale" 17 _rc-request @ CBR-ERROR!
+    1 _rc-request @ CBR.HANDLE IH.EPOCH !
+    _rc-bind _rc-context @ _rc-request @ LBIND-REQUEST!
+        LBIND-S-OK = _rc-assert
+    _rc-request @ CBR.ID @ 0= _rc-assert
+    _rc-request @ CBR.FLAGS @ 0= _rc-assert
+    _rc-request @ CBR.STATUS @ CBUS-S-INVALID = _rc-assert
+    _rc-request @ CBR.ACTUAL-REV @ 0= _rc-assert
+    _rc-request @ CBR.START-MS @ 0= _rc-assert
+    _rc-request @ CBR.END-MS @ 0= _rc-assert
+    _rc-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _rc-assert
+    _rc-request @ CBR.ERROR-A @ 0= _rc-assert
+    _rc-request @ CBR.ERROR-U @ 0= _rc-assert
+    _rc-request @ CBR.ERROR-CODE @ 0= _rc-assert
+    _rc-request @ CBR.HANDLE IH-VALID? 0= _rc-assert
+    _rc-request @ _rc-context @ _rc-bind LBIND-ADVANCE
+        LBIND-S-MISMATCH = _rc-assert
+
+    \ The semantic RID remains exact at the owner handler and advancement
+    \ boundaries, while RREG keeps the one-resource-per-owner invariant.
+    _rc-components @ 0 CBUS-NEW DUP 0= _rc-assert DROP _rc-bus !
+    CPRINC-USER _rc-request @ CBR.PRINCIPAL !
+    _rc-cap _rc-request @ CBR.CAP !
+    _rc-request @ _rc-bus @ CBUS-POST CBUS-S-OK = _rc-assert
+    _rc-request @ CBR.FLAGS @ CBR-F-QUEUED AND 0<> _rc-assert
+    _rc-bind _rc-context @ _rc-request @ LBIND-REQUEST!
+        LBIND-S-BUSY = _rc-assert
+    _rc-request @ CBR.FLAGS @ CBR-F-QUEUED AND 0<> _rc-assert
+    1 _rc-bus @ CBUS-PUMP 1 = _rc-assert
+    _rc-running-rebind @ LBIND-S-BUSY = _rc-assert
+    _rc-saw-running @ _rc-assert
+    _rc-request @ CBR.FLAGS @ CBR-F-COMPLETE AND 0<> _rc-assert
+    _rc-request @ CBR-LIFECYCLE-BUSY? 0= _rc-assert
+    _rc-seen-resource-id _rc-resource-id RID= _rc-assert
+    _rc-resource-id2 _rc-request @ CBR.RESOURCE-ID RID-COPY
+    _rc-request @ _rc-context @ _rc-bind LBIND-ADVANCE
+        LBIND-S-MISMATCH = _rc-assert
+    _rc-resource-id _rc-request @ CBR.RESOURCE-ID RID-COPY
+    _rc-request @ _rc-context @ _rc-bind LBIND-ADVANCE
+        LBIND-S-OK = _rc-assert
+
+    _rc-bind _rc-context @ _rc-request @ LBIND-REQUEST!
+        LBIND-S-OK = _rc-assert
+    _rc-request @ CBR.FLAGS @ 0= _rc-assert
+    _rc-request @ CBR.STATUS @ CBUS-S-INVALID = _rc-assert
+    _rc-request @ CBR.ACTUAL-REV @ 0= _rc-assert
+    _rc-instance @ CINST-TOUCH
+    CBUS-S-OK _rc-request @ CBR.STATUS !
+    3 _rc-request @ CBR.ACTUAL-REV !
+    _rc-request @ _rc-context @ _rc-bind LBIND-ADVANCE
+        LBIND-S-OK = _rc-assert
+    _rc-bind LBIND.REVISION @ 3 = _rc-assert
+    4 _rc-request @ CBR.ACTUAL-REV !
+    _rc-request @ _rc-context @ _rc-bind LBIND-ADVANCE
+        LBIND-S-STALE-REVISION = _rc-assert
+    _rc-bind _rc-cold-context @ _rc-request @ LBIND-REQUEST!
+        LBIND-S-STALE-EPOCH = _rc-assert
+    _rc-stack
+
+    _rc-instance @ _rc-components @ CREG-INST- 0= _rc-assert
+    _rc-ref _rc-context @ _rc-resources @ RREG-RESOLVE
+    DUP RREG-S-STALE-INSTANCE = _rc-assert
+    SWAP 0= _rc-assert DROP
+    _rc-instance @ _rc-components @ CREG-INST+ 0= _rc-assert
+    _rc-resource-id _rc-context @ _rc-resources @ RREG-UNPUBLISH
+        RREG-S-OK = _rc-assert
+    _rc-ref _rc-context @ _rc-resources @ RREG-RESOLVE
+    DUP RREG-S-NOT-FOUND = _rc-assert
+    SWAP 0= _rc-assert DROP
+    _rc-stack
+
+    _rc-request @ CBR-FREE
+    _rc-bus @ CBUS-FREE
+    _rc-value CV-FREE
+    _rc-resources @ RREG-FREE
+    _rc-instance @ _rc-components @ CREG-INST- DROP
+    _rc-instance @ CINST-FREE
+    _rc-components @ CREG-FREE
+    _rc-cold-context @ CTX-FREE
+    _rc-context @ CTX-FREE
+    _rc-stack
+    _rc-fails @ 0= IF
+        ." RESOURCE CONTRACTS PASS " _rc-checks @ .
+    ELSE
+        ." RESOURCE CONTRACTS FAIL " _rc-fails @ . ." / " _rc-checks @ .
+    THEN CR ;
+
+_rc-run
+""",
+        ready_markers=("RESOURCE CONTRACTS PASS",),
+        stable_markers=("RESOURCE CONTRACTS PASS",),
+    ),
     "interop": Profile(
         roots=(
             "runtime/state-layout.f",
@@ -4770,6 +5117,9 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 11 = _ct-assert
     _ct-i2 @ CINST-STATE _ct-cur ! _ct-value @ 22 = _ct-assert
     CREG-NEW DUP 0= _ct-assert DROP _ct-reg !
+    128 _ct-cap CAP.FLAGS !
+    _ct-comp _ct-reg @ CREG-TYPE+ CREG-E-NOT-FOUND = _ct-assert
+    0 _ct-cap CAP.FLAGS !
     _ct-comp _ct-reg @ CREG-TYPE+ 0= _ct-assert
     _ct-i1 @ _ct-reg @ CREG-INST+ 0= _ct-assert
     _ct-i2 @ _ct-reg @ CREG-INST+ 0= _ct-assert
@@ -4781,21 +5131,41 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     DUP 0<> _ct-assert CIE.CAP @ _ct-cap = _ct-assert
     _ct-reg @ 0 CBUS-NEW DUP 0= _ct-assert DROP _ct-bus !
     CBR-NEW DUP 0= _ct-assert DROP _ct-req !
+    CBR-SIZE 464 = _ct-assert
+    _ct-req @ CBR.RESOURCE-ID RID-ZERO? _ct-assert
     CPRINC-AGENT _ct-req @ CBR.PRINCIPAL !
     _ct-i2 @ _ct-req @ CBR-CALLER!
     _ct-i1 @ _ct-req @ CBR-TARGET!
     _ct-cap _ct-req @ CBR.CAP !
     77 _ct-req @ CBR.ARGS CV-INT!
     _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
+    _ct-req @ CBR.FLAGS @ CBR-F-QUEUED AND 0<> _ct-assert
+    _ct-req @ _ct-bus @ CBUS-POST CBUS-S-BUSY = _ct-assert
+    _ct-bus @ CBUS.COUNT @ 1 = _ct-assert
     1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
+    _ct-req @ CBR.FLAGS @ CBR-F-COMPLETE AND 0<> _ct-assert
+    _ct-req @ CBR-LIFECYCLE-BUSY? 0= _ct-assert
     _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 77 = _ct-assert
     _ct-req @ CBR.STATUS @ CBUS-S-OK = _ct-assert
     _ct-i1 @ CINST.REVISION @ 1 = _ct-assert
+    128 _ct-cap CAP.FLAGS !
+    78 _ct-req @ CBR.ARGS CV-INT!
+    _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
+    1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
+    _ct-req @ CBR.STATUS @ CBUS-S-INVALID = _ct-assert
+    _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 77 = _ct-assert
+    _ct-i1 @ CINST.REVISION @ 1 = _ct-assert
+    0 _ct-cap CAP.FLAGS !
     CAP-E-NAVIGATE _ct-cap CAP.EFFECTS !
     88 _ct-req @ CBR.ARGS CV-INT!
     _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
     1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
     _ct-i1 @ CINST.REVISION @ 2 = _ct-assert
+    CAP-E-OBSERVE _ct-cap CAP.EFFECTS !
+    99 _ct-req @ CBR.ARGS CV-INT!
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-OK = _ct-assert
+    _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 99 = _ct-assert
+    _ct-req @ CBR.FLAGS @ CBR-F-COMPLETE AND 0<> _ct-assert
     _ct-req @ CBR-FREE
     _ct-bus @ CBUS-FREE
     _ct-router @ CINT-FREE
@@ -6547,7 +6917,7 @@ def smoke(
                     wall_timeout=15.0,
                 )
 
-        if initial_ready and profile_name != "interop":
+        if initial_ready and profile_name not in ("interop", "resource-contracts"):
             session.resize(cols + 8, rows + 2)
             resize_budget = min(250_000_000, max_steps - total_steps)
             if resize_budget > 0 and time.monotonic() < deadline:

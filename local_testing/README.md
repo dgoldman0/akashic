@@ -69,7 +69,8 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `agent-context` | structured turns, transcript-independent model items, provider/tool identity, source filtering, bounded rollback, and stack balance |
 | `conversation-store` | checksummed bounded transcript encoding, alternating VFS generations, newest-valid selection, corruption fallback, fail-closed loading, interrupted-state normalization, ownership cleanup, and stack balance |
 | `agent-persistence` | completed approval audit, repeated runtime reconstruction over one native VFS, interrupted approval recovery, run-ID continuity, durable clearing, and stack balance |
-| `interop` | instance-relative state, isolated instances, registry lookup, bounded request dispatch, and typed values without loading TUI |
+| `interop` | instance-relative state, isolated instances, capability validation at registration and owner dispatch, legacy zero-resource requests, explicit queued/running/complete request lifecycle, bounded dispatch, and typed values without loading TUI |
+| `resource-contracts` | pointer-free stable resource references, canonical URI round trips, Context-scoped bounded resolution, the one-resource-per-owner-instance invariant, stale revision/instance/epoch rejection, pointer-free lens bindings, queued/running reuse rejection, completed request reuse, exact resource stamping/dispatch, revision advancement, and stack balance |
 | `practice-contracts` | versioned Practice/Context/Mandate/Turn layouts, sealed one-use grants, semantic newest-to-older head validation, rejected-candidate diagnostics, exact target-generation facets, frozen Mandate Run bindings, tool/disclosure exhaustion, recovery, and stack balance |
 | `agent` | native offline fallback, provider connection, streamed transcript assembly, approval resolution, cancellation, and owned conversation cleanup without loading TUI |
 | `agent-ui` | transcript, streaming, prompt, review, cancellation, reconnect, resize, and terminal rendering |
@@ -98,6 +99,11 @@ may provision a blank Practice only when both slots are genuinely absent; this
 is bootstrap fixture behavior, not secure Practice enrollment. The current
 recovery profile proves fail-closed startup, not an inspection or repair
 console.
+
+The substrate freeze appended a 32-byte semantic `CBR.RESOURCE-ID` to the
+request record. Existing field offsets are unchanged and zero remains the
+legacy/non-lens default, but `CBR-SIZE` changed from 432 to 464 bytes. Any
+precompiled code that allocated the former request size must be rebuilt.
 
 ## Opt-In Live Network
 

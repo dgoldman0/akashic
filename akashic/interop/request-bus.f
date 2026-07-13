@@ -8,6 +8,7 @@ REQUIRE ../runtime/registry.f
 REQUIRE policy.f
 REQUIRE authority.f
 REQUIRE practice-turn.f
+REQUIRE ../concurrency/guard.f
 
 0  CONSTANT CBUS-S-OK
 1  CONSTANT CBUS-S-INVALID
@@ -27,11 +28,22 @@ REQUIRE practice-turn.f
 
 1 CONSTANT CBR-F-APPROVED
 2 CONSTANT CBR-F-CANCELLED
+4 CONSTANT CBR-F-QUEUED
+8 CONSTANT CBR-F-RUNNING
+16 CONSTANT CBR-F-COMPLETE
+
+CBR-F-QUEUED CBR-F-RUNNING OR CONSTANT CBR-F-BUSY-MASK
 
 \ Request structure.  Caller and target are stable runtime handles, never
-\ raw instance pointers.  Practice identity and the invocation handle are
-\ inline: an operation descriptor pointer remains activation-local metadata,
-\ while authority is resolved separately by the target owner.
+\ raw instance pointers.  Practice identity, semantic resource identity, and
+\ the invocation handle are inline: an operation descriptor pointer remains
+\ activation-local metadata, while authority is resolved separately by the
+\ target owner.
+\
+\ Substrate-freeze ABI note: RESOURCE-ID was appended at the former 432-byte
+\ end of CBR.  Every older field retains its offset, but CBR-SIZE is now 464;
+\ precompiled clients which allocate the former size are binary-incompatible
+\ and must be rebuilt.  A zero RESOURCE-ID is the legacy/non-lens default.
   0 CONSTANT _CBR-ID
   8 CONSTANT _CBR-TRACE
  16 CONSTANT _CBR-PRINCIPAL
@@ -62,7 +74,8 @@ REQUIRE practice-turn.f
 328 CONSTANT _CBR-MANDATE-ID
 360 CONSTANT _CBR-HANDLE
 424 CONSTANT _CBR-TURN
-432 CONSTANT CBR-SIZE
+432 CONSTANT _CBR-RESOURCE-ID
+464 CONSTANT CBR-SIZE
 
 : CBR.ID             ( req -- a ) _CBR-ID + ;
 : CBR.TRACE          ( req -- a ) _CBR-TRACE + ;
@@ -94,6 +107,63 @@ REQUIRE practice-turn.f
 : CBR.MANDATE-ID     ( req -- id ) _CBR-MANDATE-ID + ;
 : CBR.HANDLE         ( req -- handle ) _CBR-HANDLE + ;
 : CBR.TURN           ( req -- turn-cell ) _CBR-TURN + ;
+: CBR.RESOURCE-ID    ( req -- id ) _CBR-RESOURCE-ID + ;
+
+\ CBR lifecycle transitions share one recursive cross-core guard.  This is
+\ deliberately independent of CBUS ring serialization: it prevents one
+\ request envelope from being queued, dispatched, or lens-restamped twice,
+\ including when the competing callers use different buses.
+GUARD _CBR-LIFECYCLE-GUARD
+
+: WITH-CBR-LIFECYCLE  ( xt -- )
+    _CBR-LIFECYCLE-GUARD WITH-GUARD ;
+
+: _CBR-LIFECYCLE-BUSY?-LOCKED  ( request -- flag )
+    CBR.FLAGS @ CBR-F-BUSY-MASK AND 0<> ;
+
+: _CBR-LIFECYCLE-BUSY?  ( request -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    _CBR-LIFECYCLE-BUSY?-LOCKED ;
+
+: CBR-LIFECYCLE-BUSY?  ( request -- flag )
+    ['] _CBR-LIFECYCLE-BUSY? WITH-CBR-LIFECYCLE ;
+
+: _CBR-LIFECYCLE-QUEUE  ( request -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _CBR-LIFECYCLE-BUSY?-LOCKED IF DROP 0 EXIT THEN
+    DUP CBR.FLAGS DUP @ CBR-F-COMPLETE INVERT AND
+        CBR-F-QUEUED OR SWAP !
+    DROP -1 ;
+
+: CBR-LIFECYCLE-QUEUE  ( request -- flag )
+    ['] _CBR-LIFECYCLE-QUEUE WITH-CBR-LIFECYCLE ;
+
+: _CBR-LIFECYCLE-RUN  ( request -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CBR.FLAGS @ CBR-F-RUNNING AND IF DROP 0 EXIT THEN
+    DUP CBR.FLAGS DUP @
+        CBR-F-QUEUED CBR-F-COMPLETE OR INVERT AND
+        CBR-F-RUNNING OR SWAP !
+    DROP -1 ;
+
+: CBR-LIFECYCLE-RUN  ( request -- flag )
+    ['] _CBR-LIFECYCLE-RUN WITH-CBR-LIFECYCLE ;
+
+: _CBR-LIFECYCLE-COMPLETE  ( request -- )
+    DUP 0= IF DROP EXIT THEN
+    CBR.FLAGS DUP @ CBR-F-BUSY-MASK INVERT AND
+        CBR-F-COMPLETE OR SWAP ! ;
+
+: CBR-LIFECYCLE-COMPLETE  ( request -- )
+    ['] _CBR-LIFECYCLE-COMPLETE WITH-CBR-LIFECYCLE ;
+
+: _CBR-LIFECYCLE-RESET  ( request -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _CBR-LIFECYCLE-BUSY?-LOCKED IF DROP 0 EXIT THEN
+    0 SWAP CBR.FLAGS ! -1 ;
+
+: CBR-LIFECYCLE-RESET  ( request -- flag )
+    ['] _CBR-LIFECYCLE-RESET WITH-CBR-LIFECYCLE ;
 
 : CBR-ERROR-CLEAR  ( request -- )
     DUP 0 SWAP CBR.ERROR-A !
@@ -160,8 +230,12 @@ _CBUS-RING CBUS-CAPACITY 8 * + CONSTANT CBUS-SIZE
 
 : CBUS-POST  ( request bus -- status )
     >R
+    DUP 0= IF DROP R> DROP CBUS-S-INVALID EXIT THEN
     R@ CBUS.COUNT @ CBUS-CAPACITY >= IF
         1 R@ CBUS.DROPPED +!
+        DROP R> DROP CBUS-S-BUSY EXIT
+    THEN
+    DUP CBR-LIFECYCLE-QUEUE 0= IF
         DROP R> DROP CBUS-S-BUSY EXIT
     THEN
     DUP CBR.ID @ 0= IF
@@ -338,12 +412,15 @@ VARIABLE _CBC-DESC
 : _CBUS-COMPLETE  ( status -- )
     _CBD-REQ @ CBR.STATUS !
     MS@ _CBD-REQ @ CBR.END-MS !
+    _CBD-REQ @ CBR-LIFECYCLE-COMPLETE
     _CBD-REQ @ CBR.COMPLETE-XT @ ?DUP IF
         _CBD-REQ @ SWAP EXECUTE
     THEN ;
 
 : CBUS-DISPATCH  ( request bus -- status )
     _CBD-BUS ! DUP _CBD-REQ !
+    DUP 0= IF DROP CBUS-S-INVALID EXIT THEN
+    DUP CBR-LIFECYCLE-RUN 0= IF DROP CBUS-S-BUSY EXIT THEN
     DUP CBR-ERROR-CLEAR
     MS@ OVER CBR.START-MS !
     DUP CBR.FLAGS @ CBR-F-CANCELLED AND IF
@@ -365,6 +442,12 @@ VARIABLE _CBC-DESC
     _CBD-CAP !
     _CBD-CAP @ _CBD-INST @ _CBUS-CAP-BELONGS? 0= IF
         DROP CBUS-S-NO-HANDLER DUP _CBUS-COMPLETE EXIT
+    THEN
+    \ Belonging to the descriptor's array is not enough: descriptors can be
+    \ mutated after registration, so owner dispatch validates the selected
+    \ capability again at the last trusted boundary before using its fields.
+    _CBD-CAP @ CAP-DESC-VALID? 0= IF
+        DROP CBUS-S-INVALID DUP _CBUS-COMPLETE EXIT
     THEN
     DUP CBR.EXPECT-REV @ ?DUP IF
         _CBD-INST @ CINST.REVISION @ <> IF
@@ -477,9 +560,15 @@ VARIABLE _CBCA-N
     REPEAT
     _CBCA-N @ ;
 
-: CBR-APPROVE  ( request -- )
+: _CBR-APPROVE  ( request -- )
     DUP CBR.FLAGS DUP @ CBR-F-APPROVED OR SWAP !
     0 SWAP CBR.STATUS ! ;
 
-: CBR-CANCEL  ( request -- )
+: CBR-APPROVE  ( request -- )
+    ['] _CBR-APPROVE WITH-CBR-LIFECYCLE ;
+
+: _CBR-CANCEL  ( request -- )
     CBR.FLAGS DUP @ CBR-F-CANCELLED OR SWAP ! ;
+
+: CBR-CANCEL  ( request -- )
+    ['] _CBR-CANCEL WITH-CBR-LIFECYCLE ;
