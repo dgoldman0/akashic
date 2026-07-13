@@ -4,7 +4,7 @@
 <item text=Save do=save key=Ctrl+S/>
 <item text=Reload do=reload key=Ctrl+R/>
 <separator/>
-<item text=Edit_Source_in_Pad do=edit-source/>
+<item text=Edit_Source_in_Pad do=edit-source key=Ctrl+O/>
 <item text=Reveal_Source_in_Files do=reveal-source/>
 <separator/>
 <item text=Quit do=quit key=Ctrl+Q/>
@@ -33,6 +33,7 @@
 </status>
 <action do=save key=Ctrl+S/>
 <action do=reload key=Ctrl+R/>
+<action do=edit-source key=Ctrl+O/>
 <action do=new-task key=Ctrl+N/>
 <action do=new-event key=Ctrl+E/>
 <action do=new-note key=Ctrl+Shift+N/>

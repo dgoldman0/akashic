@@ -584,6 +584,24 @@ def test_detach():
     ]), check_fn=lambda o: "UNLOADED" in o and "NO-FOCUS" in o)
 
 
+def test_detach_borrowed_widget():
+    """Detach must not FREE an app-owned widget attached to a region."""
+    check("detach-borrowed-widget", _xml_lines(_XML_MINIMAL, extra_after=[
+        'DROP',
+        # A CREATE'd descriptor models embedded component state (Pad's panel
+        # uses exactly this ownership pattern).  It has no allocator header.
+        'CREATE _TDB-WIDGET 40 ALLOT',
+        '_TDB-WIDGET UIDL-ROOT UIDL-FIRST-CHILD UTUI-WIDGET-SET',
+        'UIDL-ROOT UIDL-FIRST-CHILD _UTUI-SIDECAR',
+        '_UTUI-SC-WOWNER@ _UTUI-WOWNER-CALLER = 0= IF',
+        '  ." BAD-OWNER" CR',
+        'ELSE',
+        '  UTUI-DETACH',
+        '  ." BORROWED-DETACH-OK" CR',
+        'THEN',
+    ]), expected="BORROWED-DETACH-OK", not_expected="BAD-OWNER")
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  §J — Dialog Tests
 # ═══════════════════════════════════════════════════════════════════
@@ -1385,6 +1403,7 @@ def main():
     # §I Detach
     print("[I] Detach")
     test_detach()
+    test_detach_borrowed_widget()
     print()
 
     # §J Dialog

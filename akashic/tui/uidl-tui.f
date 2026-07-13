@@ -78,6 +78,7 @@ REQUIRE color.f
 \    AUX2 (+56)  = padding    Packed TRBL
 \    AUX3 (+64)  = offsets    4×16-bit signed
 \    AUX4 (+72)  = margin     Packed TRBL
+\    AUX5 (+80)  = wowner     0 = UIDL-owned, 1 = caller-owned
 
 TSC-SIZE CONSTANT _UTUI-SC-SZ
 256 CONSTANT _UTUI-MAX-ELEMS
@@ -94,6 +95,10 @@ TSC-O-AUX1  CONSTANT _UTUI-SC-O-WPTR
 TSC-O-AUX2  CONSTANT _UTUI-SC-O-PAD
 TSC-O-AUX3  CONSTANT _UTUI-SC-O-OFFS
 TSC-O-AUX4  CONSTANT _UTUI-SC-O-MARGIN
+TSC-O-AUX5  CONSTANT _UTUI-SC-O-WOWNER
+
+0 CONSTANT _UTUI-WOWNER-UIDL
+1 CONSTANT _UTUI-WOWNER-CALLER
 
 \ Sidecar flag aliases (all delegate to TSC-F-*)
 TSC-F-HAS       CONSTANT _UTUI-SCF-HAS
@@ -129,6 +134,8 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : _UTUI-SC-FLAGS! ( f sc -- ) TSC-FLAGS! ;
 : _UTUI-SC-WPTR@  ( sc -- p ) TSC-AUX1@ ;
 : _UTUI-SC-WPTR!  ( p sc -- ) TSC-AUX1! ;
+: _UTUI-SC-WOWNER@ ( sc -- n ) _UTUI-SC-O-WOWNER + @ ;
+: _UTUI-SC-WOWNER! ( n sc -- ) _UTUI-SC-O-WOWNER + ! ;
 
 \ Padding, offsets, margin accessors (via TSC AUX slots)
 : _UTUI-SC-PAD@    ( sc -- n ) TSC-AUX2@ ;
@@ -2665,27 +2672,42 @@ VARIABLE _USH-H    VARIABLE _USH-W
         THEN
     AGAIN ;
 
+VARIABLE _UDM-ELEM
+VARIABLE _UDM-SC
+VARIABLE _UDM-WPTR
+
+\ _UTUI-RELEASE-WIDGET ( elem -- )
+\   Release UIDL-materialized state, but only detach widgets installed by
+\   UTUI-WIDGET-SET.  Those pointers are borrowed from the applet and may
+\   name embedded component state rather than an ALLOCATE block.
+: _UTUI-RELEASE-WIDGET  ( elem -- )
+    DUP _UDM-ELEM !
+    _UTUI-SIDECAR DUP _UDM-SC !
+    _UTUI-SC-WPTR@ DUP _UDM-WPTR !
+    0= IF EXIT THEN
+    _UDM-SC @ _UTUI-SC-WOWNER@ _UTUI-WOWNER-CALLER <> IF
+        _UDM-ELEM @ UIDL-TYPE
+        DUP UIDL-T-TREE = IF
+            DROP _UDM-WPTR @ TREE-FREE
+        ELSE DUP UIDL-T-INPUT = IF
+            DROP
+            _UDM-WPTR @ DUP _INP-O-BUF-A + @ FREE
+            FREE
+        ELSE DUP UIDL-T-TEXTAREA = IF
+            DROP
+            _UDM-WPTR @ DUP _TXTA-O-BUF-A + @ FREE
+            FREE
+        ELSE
+            DROP _UDM-WPTR @ FREE       \ tabs state, etc.
+        THEN THEN THEN
+    THEN
+    0 _UDM-SC @ _UTUI-SC-WPTR!
+    _UTUI-WOWNER-UIDL _UDM-SC @ _UTUI-SC-WOWNER! ;
+
 : _UTUI-DEMATERIALIZE  ( -- )
     UIDL-ROOT ?DUP 0= IF EXIT THEN
     BEGIN
-        DUP _UTUI-SIDECAR _UTUI-SC-WPTR@  ( elem wptr )
-        ?DUP IF
-            OVER UIDL-TYPE             ( elem wptr type )
-            DUP UIDL-T-TREE = IF
-                DROP TREE-FREE
-            ELSE DUP UIDL-T-INPUT = IF
-                DROP
-                DUP _INP-O-BUF-A + @ FREE
-                FREE
-            ELSE DUP UIDL-T-TEXTAREA = IF
-                DROP
-                DUP _TXTA-O-BUF-A + @ FREE
-                FREE
-            ELSE
-                DROP FREE              \ tabs state, etc.
-            THEN THEN THEN
-            0 OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
-        THEN
+        DUP _UTUI-RELEASE-WIDGET
         \ DFS advance
         DUP UIDL-FIRST-CHILD ?DUP IF NIP
         ELSE
@@ -2728,25 +2750,7 @@ VARIABLE _USH-H    VARIABLE _USH-W
 
 \ --- Single-element dematerialize (resolves DEFER from §1c) ---
 : _UTUI-DO-DEMATERIALIZE  ( elem -- )
-    DUP _UTUI-SIDECAR _UTUI-SC-WPTR@  ( elem wptr )
-    ?DUP IF
-        OVER UIDL-TYPE                 ( elem wptr type )
-        DUP UIDL-T-TREE = IF
-            DROP TREE-FREE
-        ELSE DUP UIDL-T-INPUT = IF
-            DROP
-            DUP _INP-O-BUF-A + @ FREE
-            FREE
-        ELSE DUP UIDL-T-TEXTAREA = IF
-            DROP
-            DUP _TXTA-O-BUF-A + @ FREE
-            FREE
-        ELSE
-            DROP FREE
-        THEN THEN THEN
-        0 OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
-    THEN
-    DROP ;
+    _UTUI-RELEASE-WIDGET ;
 ' _UTUI-DO-DEMATERIALIZE IS _UTUI-DEMATERIALIZE-ONE
 
 \ _UTUI-CSS-INT ( a u -- n flag )
@@ -3211,10 +3215,17 @@ VARIABLE _USA-VL
 \ UTUI-WIDGET-SET ( wptr elem -- )
 \   Attach a manually created widget to a UIDL element.
 \   The widget is drawn automatically by UTUI-PAINT when it
-\   visits this element.  Pass 0 as wptr to detach.
+\   visits this element.  The pointer remains caller-owned: detach and
+\   document teardown clear it but never free it.  Pass 0 as wptr to detach.
 : UTUI-WIDGET-SET  ( wptr elem -- )
     DUP >R
-    _UTUI-SIDECAR _UTUI-SC-WPTR!
+    _UTUI-SIDECAR
+    OVER IF
+        _UTUI-WOWNER-CALLER OVER _UTUI-SC-WOWNER!
+    ELSE
+        _UTUI-WOWNER-UIDL OVER _UTUI-SC-WOWNER!
+    THEN
+    _UTUI-SC-WPTR!
     R> UIDL-DIRTY!
     _UTUI-NEEDS-PAINT ON ;
 

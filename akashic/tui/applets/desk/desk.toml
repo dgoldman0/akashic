@@ -24,22 +24,12 @@ divider-bg   = "black"
 clock-fg     = "cyan"
 clock-bg     = "#000057"
 
-# ---------------------------------------------------------
-#  Hotbar — pinned apps shown in the taskbar
-# ---------------------------------------------------------
-#  Each [[desk.hotbar]] entry defines a pinned shortcut.
-#  Fields:
-#    label  — text shown in the taskbar  (required)
-#    file   — .f file to INCLUDE on launch  (required)
-#    desc   — Forth word that returns the APP-DESC addr
-#             (required for launch)
-
-# [[desk.hotbar]]
-# label = "Pad"
-# file  = "tui/applets/pad/pad.f"
-# desc  = "PAD-DESC"
-
-# [[desk.hotbar]]
-# label = "Explorer"
-# file  = "tui/applets/fexplorer/fexplorer.f"
-# desc  = "FILES-DESC"
+# The hotbar is now the pinned projection of /app-catalog.bin.  Applet
+# identity, installed-manifest paths, enabled/pinned/autostart/quarantine
+# policy, and runtime status live in that durable catalog rather than this
+# presentation config.  Alt+H opens the non-blocking catalog launcher.
+#
+# Older [[desk.hotbar]] tables are still parsed for source compatibility,
+# but Desk never evaluates their file or descriptor strings and they do not
+# override an active catalog.  Use Desk/Pad's Build & Install workflow and
+# catalog flags for new entries.

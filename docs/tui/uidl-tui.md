@@ -60,10 +60,10 @@ REQUIRE tui/uidl-tui.f
 
 | Principle | Detail |
 |---|---|
-| **One sidecar per element** | Every UIDL element receives an 80-byte sidecar in a parallel array, indexed by pool position. |
+| **One sidecar per element** | Every UIDL element receives a 96-byte sidecar in a parallel array, indexed by pool position. |
 | **No DOM intermediary** | Unlike `dom-tui.f`, this backend reads UIDL elements directly — no N.AUX, no DOM node walk. |
 | **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree` and `tabs` allocate real widget state. |
-| **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget, input, textarea, manually attached widget) or mini state block (tabs active index). Zero means "no widget state". |
+| **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget, input, textarea, manually attached widget) or mini state block (tabs active index). `+80` records whether that pointer belongs to UIDL or the caller. Zero `wptr` means "no widget state". |
 | **Proxy region** | A single static 40-byte region (`_UTUI-PROXY-RGN`) is synced from sidecar geometry before calling widget `_*-DRAW` / `_*-HANDLE`. Safe because the TUI is single-threaded. |
 | **Dynamic DOM** | `UTUI-ADD-ELEM` and `UTUI-REMOVE-ELEM` wrap the base UIDL tree operations with sidecar allocation, style resolution, materialization, and dirty propagation. Apps manipulate the tree like JavaScript's `appendChild` / `removeChild`. |
 | **Auto-dirty** | `_UTUI-NEEDS-PAINT` flag is set by any DOM / widget mutation. The shell converts this to `ASHELL-DIRTY!` at tick and paint time — apps never call `ASHELL-DIRTY!`. |
@@ -76,21 +76,23 @@ REQUIRE tui/uidl-tui.f
 
 ## Sidecar Layout
 
-Each sidecar is 80 bytes (10 cells), stored in the parallel array
+Each sidecar is 96 bytes (12 cells), stored in the parallel array
 `_UTUI-SIDECARS` (capacity: 256 elements).
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
-| +0 | `row` | u | Computed screen row |
-| +8 | `col` | u | Computed screen column |
-| +16 | `width` | u | Width in character cells |
-| +24 | `height` | u | Height in character cells |
-| +32 | `style` | packed | FG(8), BG(8), attrs(8), text-align(2), position(2), z-index(8) |
-| +40 | `flags` | bitfield | HAS / VIS / FOC / HIDE / overflow-clip |
+| +0 | `flags` | bitfield | HAS / VIS / FOC / HIDE and shared sidecar flags |
+| +8 | `row` | u | Computed screen row |
+| +16 | `col` | u | Computed screen column |
+| +24 | `width` | u | Width in character cells |
+| +32 | `height` | u | Height in character cells |
+| +40 | `style` | packed | FG(8), BG(8), attrs(16), text-align(2), position(2), z-index(8) |
 | +48 | `wptr` | address | Widget struct pointer or mini state block (0 = none) |
 | +56 | `padding` | packed | PT(8), PR(8), PB(8), PL(8) in bits 0-31 |
 | +64 | `offsets` | packed | top(16s), right(16s), bottom(16s), left(16s) |
 | +72 | `margin` | packed | MT(8), MR(8), MB(8), ML(8) in bits 0-31 |
+| +80 | `wowner` | enum | 0 = UIDL-owned allocation, 1 = caller-owned attachment |
+| +88 | reserved | cell | Reserved |
 
 ### Sidecar Flag Bits
 
@@ -99,7 +101,7 @@ Each sidecar is 80 bytes (10 cells), stored in the parallel array
 | `_UTUI-SCF-HAS` | 1 | Sidecar allocated |
 | `_UTUI-SCF-VIS` | 2 | Visible |
 | `_UTUI-SCF-FOC` | 4 | Focused |
-| `_UTUI-SCF-HIDE` | 8 | display:none |
+| `_UTUI-SCF-HIDE` | 128 | display:none |
 
 ### Element → Sidecar Mapping
 
@@ -240,7 +242,7 @@ sidecar:
 | `<tabs>` | 8-byte state block (1 cell: active index) | 8 bytes | `ALLOCATE` at load, `FREE` at detach |
 | `<input>` | `INP-NEW` widget struct + 256-byte buffer | varies | `INP-NEW` at load/add, free buffer+struct at detach/remove |
 | `<textarea>` | `TXTA-NEW` widget struct + 4096-byte buffer | varies | `TXTA-NEW` at load/add, free buffer+struct at detach/remove |
-| `<region>` (manual) | Any widget attached via `UTUI-WIDGET-SET` | varies | App manages creation; `_UTUI-DEMATERIALIZE-ONE` frees by type |
+| `<region>` (manual) | Any widget attached via `UTUI-WIDGET-SET` | varies | App owns and frees it; UIDL only clears the borrowed pointer |
 
 All other element types (status, split, scroll, dialog, etc.) use
 inline adapters that read UIDL attributes directly — `wptr` stays 0.
@@ -260,16 +262,19 @@ Materialize a single element by type dispatch.  Used by both the bulk
 
 ### _UTUI-DEMATERIALIZE-ONE — `( elem -- )`
 
-Free the widget attached to a single element.  Used by both the bulk
-`_UTUI-DEMATERIALIZE` and `UTUI-REMOVE-ELEM`.
+Release the widget attached to a single element. Used by both the bulk
+`_UTUI-DEMATERIALIZE` and `UTUI-REMOVE-ELEM`. UIDL-owned pointers are
+freed by element type; caller-owned pointers installed with
+`UTUI-WIDGET-SET` are only detached.
 
 | Type | Action |
 |------|--------|
 | tree | `TREE-FREE` |
 | input / textarea | `FREE` buffer (widget+40), `FREE` descriptor |
 | other | `FREE` (generic heap block) |
+| caller-owned | Clear `wptr`; do not dereference or free |
 
-Always zeroes the wptr cell after freeing.
+Always zeroes the `wptr` and returns its ownership marker to the UIDL default.
 
 ### _UTUI-MATERIALIZE — `( -- )`
 
@@ -284,8 +289,9 @@ Called by `UTUI-LOAD` after `UTUI-RELAYOUT`.
 ### _UTUI-DEMATERIALIZE — `( -- )`
 
 DFS walk.  For each element whose wptr ≠ 0:
-- **tree:** calls `TREE-FREE`.
-- **other:** calls `FREE DROP`.
+- **UIDL-owned tree:** calls `TREE-FREE`.
+- **other UIDL-owned state:** releases it according to element type.
+- **caller-owned attachment:** clears the borrowed pointer without freeing it.
 - Zeroes the wptr cell.
 
 Called by `UTUI-DETACH` before `_UTUI-SC-CLEAR-ALL`.
@@ -324,7 +330,7 @@ Returns `-1` on success, `0` on parse failure.
 
 Tear down the TUI backend:
 
-1. Run `_UTUI-DEMATERIALIZE` (free tree/tabs state)
+1. Run `_UTUI-DEMATERIALIZE` (free UIDL-owned state and detach borrowed widgets)
 2. Clear sidecars
 3. Clear action table and shortcut table
 4. Reset subscriptions
@@ -681,7 +687,10 @@ next paint, `_UTUI-RENDER-REGION` automatically detects the attached
 widget, syncs a proxy region from the sidecar geometry, and calls
 the widget's `draw-xt` — the app never paints.
 
-Pass 0 as *wptr* to detach a widget from an element.
+The pointer is borrowed: ownership stays with the app. `UTUI-DETACH`
+and `UTUI-REMOVE-ELEM` clear the attachment but never free or otherwise
+dereference it. The app must release heap-backed widgets in its shutdown
+callback. Pass 0 as *wptr* to detach a widget from an element explicitly.
 
 ```forth
 \ In app init callback:
@@ -1015,7 +1024,7 @@ wrappers that delegate to the guarded `UTUI-SHOW-DIALOG` and
 
 ```
 UTUI-LOAD              ( xml-a xml-u rgn -- flag )   Parse UIDL, build sidecars + widgets
-UTUI-DETACH            ( -- )                        Free widgets, clear sidecars
+UTUI-DETACH            ( -- )                        Free UIDL state, detach borrowed widgets, clear sidecars
 UTUI-BIND-STATE        ( st -- )                     Bind state-tree for expressions
 UTUI-INSTALL-XTS       ( -- )                        Patch Element Registry with TUI adapters
 UTUI-PAINT             ( -- )                        Full repaint
@@ -1034,7 +1043,7 @@ UTUI-TAB-SELECT        ( index elem -- )             Select and lay out a tab
 UTUI-ADD-ELEM          ( parent type -- elem | 0 )    Create child with sidecar + style + materialize
 UTUI-REMOVE-ELEM       ( elem -- )                    Dematerialize + free sidecar + unlink
 UTUI-SET-ATTR          ( elem na nl va vl -- )         Set attribute with auto-dirty
-UTUI-WIDGET-SET        ( wptr elem -- )                Attach/detach widget to region element
+UTUI-WIDGET-SET        ( wptr elem -- )                Attach/detach caller-owned widget to region element
 UTUI-ELEM-RGN          ( elem -- row col h w )         Computed screen geometry from sidecar
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)

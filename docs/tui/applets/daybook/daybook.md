@@ -14,10 +14,60 @@ agenda groups entries into Schedule, Tasks, and Notes and keeps one entry
 selected for keyboard actions.
 
 Quick capture uses the shared non-blocking prompt widget. Creating or changing
-an entry synchronizes `/daybook.md` immediately, so Pad and File Explorer see
-the same ordinary file. A failed save leaves Daybook visibly dirty. Closing a
-dirty Daybook is fail-closed and requires typing `DISCARD`; a second close
-request is issued by the confirmation, so Desk does not prompt the child twice.
+an entry synchronizes its source immediately. A failed save leaves Daybook
+visibly dirty. Closing a dirty Daybook is fail-closed and requires typing
+`DISCARD`; a second close request is issued by the confirmation, so Desk does
+not prompt the child twice.
+
+## Standalone and Shared Modes
+
+Standalone Daybook remains the control case: an instance with no runtime
+endpoint reads `/daybook.md` directly and publishes with its private `VREPL`
+staged replacement. An attached endpoint which fails to supply Context is
+treated as broken runtime wiring and blocks instead of selecting this control
+path. The genuine standalone behavior and its recovery contracts are
+otherwise unchanged.
+
+Inside Desk, Daybook instead discovers the active Context, resource registry,
+request bus, and `org.akashic.resource.daybook` RID through its endpoint. It
+copies the RID and attaches an activation-local `RREF`/`LBIND` lens to the
+shared document owner. Loads request `resource.snapshot`; saves request
+`resource.replace` at the binding's exact revision and advance the binding only
+after a successful owner commit. Daybook never receives the owner's VFS path,
+replacement object, or private buffer.
+
+Reference lookup and lens attachment are separate guarded registry operations.
+Daybook retries a bounded exact-reference race; repeated contention is reported
+as transient stale state, while missing or invalid services remain structural
+and block rather than being confused with stale status codes.
+
+If the owner reports a successful commit but the local binding cannot advance,
+the commit remains authoritative: Daybook does not claim the save failed or
+roll back a captured entry that is already durable. It clears the unusable
+binding, marks the source blocked, and requires an explicit reload before any
+later write.
+
+If another lens commits first, save is rejected as stale, the edited model
+stays dirty, and Daybook asks the user to reload before saving. Reload is the
+explicit refresh boundary: it resolves the current resource reference,
+reattaches the lens, and then snapshots. If a valid Desk Context is present but
+any shared-resource service or attachment is unavailable, Daybook enters
+`Shared resource blocked` mode and will not silently fall back to writing
+`/daybook.md`.
+
+`Edit Source in Pad` (Ctrl+O) emits the semantic resource URI from the current
+binding in shared mode; standalone mode continues to emit `vfs:/daybook.md`.
+Task capture persists through the same owner. Because general derived authority
+does not yet exist, its nested replace is an explicitly approved, bounded
+implementation hop inside the already-authorized `daybook.task.capture`
+handler—not a reusable delegation mechanism.
+
+This experiment does not make the VFS path globally exclusive. Trusted code
+and File Explorer can still write `/daybook.md` directly, outside the owner's
+revision sequence. The migrated Daybook/Pad path therefore demonstrates
+coordinated semantic lenses by convention, not system-wide mediation. That gap
+is part of the evidence for deciding whether the additional Practice machinery
+earns its complexity.
 
 ## Durable Format
 
@@ -80,7 +130,8 @@ as saved, while ambiguous or corrupt recovery state fails closed.
 | Ctrl+Shift+N | Capture a note |
 | Delete | Delete the selected entry |
 | Ctrl+S | Save |
-| Ctrl+R | Reload `/daybook.md` |
+| Ctrl+R | Reload the current Daybook source |
+| Ctrl+O | Edit the source in Pad (semantic resource in Desk) |
 | Ctrl+Q | Quit standalone Daybook |
 
 ## Public Words
@@ -106,6 +157,13 @@ preservation, and close negotiation. It also injects after-effect throws from
 descriptor close and VFS-selector restoration, proving that both cleanup
 stages are attempted exactly once, the descriptor free list remains intact,
 the previous selector is restored, and no failed load publishes a model.
+
+`python3 local_testing/test_daybook_shared_lens.py` supplies the four Desk
+services to two headless Daybook instances. It verifies snapshot/replace,
+revision advancement, stale overwrite refusal, reload/reattach, semantic source
+URI emission, nested task-capture persistence, and fail-closed behavior when a
+valid Context exposes an incomplete shared-resource service set or an attached
+endpoint loses its Context service.
 
 ## Deliberate Next Steps
 

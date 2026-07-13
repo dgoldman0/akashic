@@ -31,6 +31,12 @@ local_testing/*
 !local_testing/ROADMAP_filesystem.md
 !local_testing/CHANGES_per_file.md
 !local_testing/test_vfs.py
+!local_testing/test_app_catalog.py
+!local_testing/package_two_boot.py
+!local_testing/test_shared_document.py
+!local_testing/test_desk_shared_document.py
+!local_testing/test_daybook_shared_lens.py
+!local_testing/test_request_bus_reentrancy.py
 !local_testing/test_vfs_mount.py
 !local_testing/test_vfs_mp64fs.py
 !local_testing/test_vfs_fat.py

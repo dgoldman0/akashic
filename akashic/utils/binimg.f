@@ -1,962 +1,1160 @@
-\ binimg.f — Relocatable binary image saver/loader for KDOS
+\ binimg.f -- relocatable MF64 dictionary images
 \
-\ Save compiled Forth dictionary regions as .m64 binary files with
-\ full relocation metadata.  Load them back at any base address
-\ without re-parsing source text.
+\ Version 2 adds named exports and makes the in-memory image the
+\ authority.  File words at the end of this file are compatibility
+\ wrappers for the KDOS raw filesystem; VFS users should use the
+\ buffer APIs directly.
 \
-\ Prefix: IMG-   (public API)
-\         _IMG-  (internal helpers)
-\
-\ Phase 1: Core Saver (IMG-MARK, IMG-SAVE)
-\ Phase 2: Core Loader (IMG-LOAD)
-\ Phase 3: Imports (auto-detect)
-\ Phase 4: Module System Integration
-\ Phase 5: Diagnostics & Hardening         — this file
-\
-\ Memory strategy:
-\   No ALLOCATE / FREE — uses only HERE / ALLOT.
-\   IMG-MARK parks the reloc buffer at HERE, ALLOTs past it,
-\   then sets the segment mark.  IMG-SAVE builds the output
-\   file at HERE (past the segment), writes it in one shot via
-\   FWRITE, then denormalizes.  No heap interaction, no effect
-\   on other modules or cores.
-\
-\   Layout during compilation:
-\     [...dict...][reloc-buf 8K/64K][mark-base ... segment ... HERE]
-\
-\   Layout during IMG-SAVE (temporary):
-\     [...dict...][reloc-buf][segment][output-buf]
-\
-\ Load with:   REQUIRE utils/binimg.f
+\ Public prefix: IMG-
+\ Private prefix: _IMG- / _img- / _IMV- / _imv-
 
 PROVIDED akashic-binimg
 
 \ =====================================================================
-\  Constants
+\ Format and status values
 \ =====================================================================
 
-64 CONSTANT _IMG-HDR-SZ       \ .m64 header size (bytes)
-1  CONSTANT _IMG-VERSION      \ format version
+64 CONSTANT _IMG-HDR-SZ
+1  CONSTANT _IMG-VERSION-V1
+2  CONSTANT _IMG-VERSION
 
-\ Reloc buffer: adaptive sizing based on available memory.
-\ In kernel space (1 MiB system RAM) a large ALLOT can clobber
-\ BIOS structures, so we keep the buffer small.  When the caller has
-\ entered userland (HERE in ext mem, 16 MB), the full 8192 slots
-\ are safe.  The check is ULAND @ (currently in userland?) not
-\ XMEM? (hardware present?) because the latter is true even when
-\ HERE still points into base RAM.
-1024 CONSTANT _IMG-RELOCS-SMALL  \ kernel-space cap (8 KB)
-8192 CONSTANT _IMG-RELOCS-LARGE  \ userland cap (64 KB)
+32 CONSTANT _IMG-EXPORT-ENTRY-SZ
+32 CONSTANT _IMG-IMPORT-ENTRY-SZ
+16 CONSTANT _IMG-EXPORT-CAP
+1024 CONSTANT _IMG-IMPORT-CAP
 
-\ Flag bits
+1024 CONSTANT _IMG-RELOCS-SMALL
+8192 CONSTANT _IMG-RELOCS-LARGE
+1024 CONSTANT _IMG-EXT-CAP
+
 1 CONSTANT _IMG-FLAG-JIT
 2 CONSTANT _IMG-FLAG-XMEM
 4 CONSTANT _IMG-FLAG-EXEC
 8 CONSTANT _IMG-FLAG-LIB
+15 CONSTANT _IMG-FLAG-MASK
 
-\ Error codes
--1 CONSTANT _IMG-ERR-IO
--2 CONSTANT _IMG-ERR-MAGIC
--5 CONSTANT _IMG-ERR-RELOC
--3 CONSTANT _IMG-ERR-IMPORT    \ unresolved import
--6 CONSTANT _IMG-ERR-NOEXEC    \ not an executable image
+0   CONSTANT IMG-E-OK
+-1  CONSTANT IMG-E-IO
+-2  CONSTANT IMG-E-FORMAT
+-3  CONSTANT IMG-E-IMPORT
+-5  CONSTANT IMG-E-RELOC
+-6  CONSTANT IMG-E-NOEXEC
+-7  CONSTANT IMG-E-EXPORT
+-8  CONSTANT IMG-E-STATE
+-9  CONSTANT IMG-E-CAPACITY
+-10 CONSTANT IMG-E-SHORT
+-11 CONSTANT IMG-E-NOMEM
 
-\ Import table
-32 CONSTANT _IMG-IMPORT-ENTRY-SZ  \ bytes per import entry in file
+\ Old private spellings are retained for source compatibility.
+IMG-E-IO       CONSTANT _IMG-ERR-IO
+IMG-E-FORMAT   CONSTANT _IMG-ERR-MAGIC
+IMG-E-IMPORT   CONSTANT _IMG-ERR-IMPORT
+IMG-E-RELOC    CONSTANT _IMG-ERR-RELOC
+IMG-E-NOEXEC   CONSTANT _IMG-ERR-NOEXEC
+
+\ Header, version 2 (all integer fields are little-endian):
+\   +0  magic "MF64"          +4  u16 version
+\   +6  u16 flags             +8  u64 segment size
+\   +16 u64 reloc count       +24 u64 export count
+\   +32 u64 import count      +40 i64 dictionary-head offset
+\   +48 i64 PROVIDED offset   +56 i64 default-entry offset
+\ Body:
+\   segment, reloc[u64], export[32], import[32]
+\ Export: u64 code offset, char name[24] (NUL padded, length 1..23)
+\ Import: u64 fixup offset, char name[24] (NUL padded, length 1..23)
 
 \ =====================================================================
-\  Module State
+\ Build state
 \ =====================================================================
 
-VARIABLE _img-mark-base    \ HERE at mark time (start of segment)
-VARIABLE _img-mark-latest  \ LATEST at mark time
-VARIABLE _img-reloc-buf    \ address of reloc buffer (below segment)
-VARIABLE _img-reloc-cap    \ runtime reloc capacity (set by IMG-MARK)
-VARIABLE _img-seg-size     \ computed segment size
-VARIABLE _img-fd           \ file descriptor during save
+VARIABLE _img-mark-base
+VARIABLE _img-mark-latest
+VARIABLE _img-reloc-buf
+VARIABLE _img-reloc-cap
+VARIABLE _img-seg-size
+VARIABLE _img-chain-head
+VARIABLE _img-tail-slot
+VARIABLE _img-marked
+VARIABLE _img-finalized
+VARIABLE _img-build-error
 
-\ Import state (Phase 3) — ext-pairs buffer (static, large)
-1024 CONSTANT _IMG-EXT-CAP
-VARIABLE _img-ext-count        \ count of all out-of-segment relocs
-VARIABLE _img-import-count     \ count of named imports
-CREATE _img-ext-buf  _IMG-EXT-CAP 16 * ALLOT  \ (offset, value) pairs
+VARIABLE _img-flags
+VARIABLE _img-prov-offset
+VARIABLE _img-entry-offset
 
-\ Module/entry state (Phase 4)
-VARIABLE _img-flags            \ flag bits for next save
-VARIABLE _img-prov-offset      \ segment-rel offset of PROVIDED string
-VARIABLE _img-entry-offset     \ segment-rel offset of entry point
+VARIABLE _img-ext-count
+VARIABLE _img-import-count
+VARIABLE _img-original-relocs
+VARIABLE _img-internal-relocs
+\ Build-time external (slot,value) pairs.  Validation reuses the first
+\ cell of each pair to cache a resolved import XT before loading.
+CREATE _img-ext-buf _IMG-EXT-CAP 16 * ALLOT
+
+VARIABLE _img-export-count
+CREATE _img-export-buf _IMG-EXPORT-CAP _IMG-EXPORT-ENTRY-SZ * ALLOT
+
+CREATE _img-find-buf 24 ALLOT
+
+\ General private scratch.  The module is serialized by its optional
+\ guard, so these cells are deliberately shared instead of using the
+\ return stack across deep validation walks.
+VARIABLE _img-a0
+VARIABLE _img-a1
+VARIABLE _img-u0
+VARIABLE _img-u1
+VARIABLE _img-n0
+VARIABLE _img-i0
+VARIABLE _img-register-xt
+VARIABLE _img-build-dst
+VARIABLE _img-build-cap
+VARIABLE _img-build-used
+VARIABLE _img-request-name
+VARIABLE _img-request-len
+VARIABLE _img-selected-offset
+VARIABLE _img-import-dest
+VARIABLE _img-import-entry
+
+: _IMG-LATCH  ( ior -- ior )
+    DUP 0<> IF
+        _img-build-error @ 0= IF DUP _img-build-error ! THEN
+    THEN ;
+
+: _IMG-SAME?  ( a1 u1 a2 u2 -- flag )
+    _img-u0 !  _img-a1 !             ( a1 u1 )
+    DUP _img-u0 @ <> IF 2DROP 0 EXIT THEN
+    DROP _img-a0 !
+    _img-u0 @ 0 ?DO
+        _img-a0 @ I + C@ _img-a1 @ I + C@ <> IF
+            0 UNLOOP EXIT
+        THEN
+    LOOP
+    -1 ;
+
+: _IMG-RANGE-OVERLAP?  ( a1 u1 a2 u2 -- flag )
+    _img-u1 ! _img-a1 ! _img-u0 ! _img-a0 !
+    _img-a0 @ _img-u0 @ + _img-a1 @ >
+    _img-a1 @ _img-u1 @ + _img-a0 @ > AND ;
+
+: _IMG-DICT-ROOM?  ( u -- flag )
+    DUP 0< IF DROP 0 EXIT THEN
+    ULAND @ IF
+        HERE +  U-DICT-BASE @ U-ZONE-SIZE + <= EXIT
+    THEN
+    HERE + 256 +
+    DUP SP@ >= IF DROP 0 EXIT THEN
+    HEAP-INIT @ IF HEAP-BASE @ < ELSE DROP -1 THEN ;
+
+: _IMG-RESET-BUILD  ( -- )
+    0 _img-finalized !
+    0 _img-build-error !
+    0 _img-seg-size !
+    0 _img-chain-head !
+    0 _img-tail-slot !
+    0 _img-ext-count !
+    0 _img-import-count !
+    0 _img-original-relocs !
+    0 _img-internal-relocs !
+    0 _img-export-count !
+    0 _img-flags !
+    -1 _img-prov-offset !
+    -1 _img-entry-offset ! ;
 
 \ =====================================================================
-\  IMG-MARK  ( -- )
-\    Park reloc buffer at current HERE, ALLOT past it, then snapshot
-\    HERE as the segment start.  Enable BIOS relocation tracking.
-\    Everything compiled after this call is part of the segment.
-\
-\    No ALLOCATE.  No heap dependency.  Just dictionary space.
+\ Marking and export registration
 \ =====================================================================
 
 : IMG-MARK  ( -- )
-    \ Pick reloc capacity: large if in userland, small otherwise
+    \ A second mark commits the previous undiscarded region and begins
+    \ another one, preserving the historical IMG-MARK behaviour.
+    0 _RELOC-ACTIVE !
+    _IMG-RESET-BUILD
     ULAND @ IF _IMG-RELOCS-LARGE ELSE _IMG-RELOCS-SMALL THEN
     _img-reloc-cap !
-
-    \ Park reloc buffer at HERE
     HERE _img-reloc-buf !
     _img-reloc-cap @ 8 * ALLOT
-
-    \ Point BIOS at our buffer
     _img-reloc-buf @ _RELOC-BUF !
     0 _RELOC-COUNT !
     1 _RELOC-ACTIVE !
-
-    \ Snapshot segment start (right after the reloc buffer)
     HERE _img-mark-base !
     LATEST _img-mark-latest !
+    -1 _img-marked ! ;
 
-    \ Phase 4 state
-    0 _img-flags !
-    -1 _img-prov-offset !
-    -1 _img-entry-offset !
-;
-
-\ =====================================================================
-\  IMG-PROVIDED  ( "token" -- )
-\    Store a NUL-terminated module name in the segment.  After save,
-\    the loader will call _MOD-MARK to register it so that REQUIRE
-\    of the source .f file is skipped.
-\ =====================================================================
+: IMG-DISCARD  ( -- ior )
+    _img-marked @ 0= IF IMG-E-STATE EXIT THEN
+    0 _RELOC-ACTIVE !
+    _img-mark-latest @ LATEST!
+    _img-reloc-buf @ HERE - ALLOT
+    0 _img-marked !
+    _IMG-RESET-BUILD
+    0 ;
 
 : IMG-PROVIDED  ( "token" -- )
-    PARSE-NAME                        \ fills NAMEBUF, sets PN-LEN
-    PN-LEN @ DUP 0= IF DROP EXIT THEN ( len )
-    HERE _img-mark-base @ -  _img-prov-offset !  ( len )
-    DUP >R
-    NAMEBUF HERE R@ CMOVE             ( len ; name at HERE )
-    R> ALLOT  0 C,                    ( -- ; NUL-terminated )
-;
+    PARSE-NAME
+    _img-marked @ 0= IF IMG-E-STATE _IMG-LATCH DROP EXIT THEN
+    PN-LEN @ DUP 0= OVER 23 > OR IF
+        DROP IMG-E-FORMAT _IMG-LATCH DROP EXIT
+    THEN
+    HERE _img-mark-base @ - _img-prov-offset !
+    DUP >R NAMEBUF HERE R@ CMOVE R> ALLOT
+    0 C, ;
 
-\ =====================================================================
-\  IMG-ENTRY  ( xt -- )
-\    Record an entry-point xt for the current segment.  Sets the
-\    EXEC flag.  The xt must belong to a word compiled after IMG-MARK.
-\ =====================================================================
-
-: IMG-ENTRY  ( xt -- )
-    _img-mark-base @ -  _img-entry-offset !
-    _img-flags @ _IMG-FLAG-EXEC OR  _img-flags !
-;
-
-\ =====================================================================
-\  IMG-XMEM  ( -- )
-\    Set the XMEM flag.  When set, the loader allocates the segment
-\    in extended memory via XMEM-ALLOT instead of base-RAM ALLOT.
-\ =====================================================================
-
-: IMG-XMEM  ( -- )
-    _img-flags @ _IMG-FLAG-XMEM OR  _img-flags !
-;
-
-\ =====================================================================
-\  _IMG-COLLECT-LINKS  ( -- )
-\    Walk the dictionary chain from LATEST back to _img-mark-latest.
-\    Each entry's link field (byte +0, 8 bytes) is an absolute addr.
-\    Append each link field's absolute address to the BIOS reloc
-\    buffer (same format as reloc_record: absolute slot address).
-\ =====================================================================
-
-: _IMG-COLLECT-LINKS  ( -- )
-    LATEST                            ( entry )
-    BEGIN
-        DUP _img-mark-latest @ <>     ( entry flag )
-    WHILE
-        \ Append absolute address of this link field to reloc buf
-        _RELOC-COUNT @ DUP _img-reloc-cap @ >= IF
-            ABORT" IMG: reloc buffer overflow"
-        THEN
-        8 * _img-reloc-buf @ +        ( entry buf-slot )
-        OVER SWAP !                    ( entry )
-        _RELOC-COUNT @ 1+ _RELOC-COUNT !
-        \ Follow the link
-        @                              ( prev-entry )
-    REPEAT
-    DROP
-;
-
-\ =====================================================================
-\  _IMG-XT>ENTRY  ( xt -- entry | 0 )
-\    Reverse-lookup: given a code-field address (xt), find the
-\    dictionary entry.  Walks the pre-mark dictionary only (link
-\    fields in the segment may be normalized during save).
-\ =====================================================================
-
-: _IMG-XT>ENTRY  ( xt -- entry | 0 )
-    _img-mark-latest @
-    BEGIN DUP WHILE
-        DUP 8 + C@ 127 AND    ( xt entry name-len )
-        OVER 9 + +             ( xt entry code-field )
-        2 PICK = IF
-            NIP EXIT
-        THEN
+: _IMG-SEG-XT>ENTRY  ( xt -- entry | 0 )
+    _img-a0 !
+    LATEST
+    BEGIN DUP _img-mark-latest @ <> WHILE
+        DUP 8 + C@ 127 AND OVER 9 + + _img-a0 @ = IF EXIT THEN
         @
     REPEAT
-    NIP
-;
+    DROP 0 ;
 
-\ =====================================================================
-\  _IMG-RECORD-EXT  ( abs-slot-addr val -- )
-\    Record an out-of-segment relocation: store the segment-relative
-\    offset and the original absolute value for later import detection
-\    and denormalization.
-\ =====================================================================
+: _IMG-XT>ENTRY  ( xt -- entry | 0 )
+    _img-a0 !
+    _img-mark-latest @
+    BEGIN DUP WHILE
+        DUP 8 + C@ 127 AND OVER 9 + + _img-a0 @ = IF EXIT THEN
+        @
+    REPEAT ;
 
-: _IMG-RECORD-EXT  ( abs-slot-addr val -- )
-    _img-ext-count @ _IMG-EXT-CAP >= IF
-        ABORT" IMG-SAVE: ext-pair overflow (>1024 external refs)"
+\ Compiled calls normally target dictionary XTs and become imports.
+\ A small set of BIOS runtime helpers (notably the helper compiled by S")
+\ are fixed ABI addresses despite having no reachable dictionary entry.
+\ Trusted-local images retain such low addresses verbatim; unknown
+\ non-XT references into userland remain rejected.
+: _IMG-FIXED-ABI?  ( value -- flag )
+    DUP 0> 0= IF DROP 0 EXIT THEN
+    U-DICT-BASE @ DUP 0= IF DROP MEM-SIZE THEN < ;
+
+: _IMG-EXPORT-REC  ( i -- a )
+    _IMG-EXPORT-ENTRY-SZ * _img-export-buf + ;
+
+: _IMG-EXPORT  ( xt name-a name-u -- ior )
+    _img-u0 ! _img-a1 ! _img-a0 !
+    _img-marked @ 0= IF IMG-E-STATE EXIT THEN
+    _img-u0 @ 0= _img-u0 @ 23 > OR IF IMG-E-EXPORT EXIT THEN
+    _img-a0 @ _IMG-SEG-XT>ENTRY DUP 0= IF DROP IMG-E-EXPORT EXIT THEN
+    DUP ENTRY>NAME _img-a1 @ _img-u0 @ _IMG-SAME? 0= IF
+        DROP IMG-E-EXPORT EXIT
     THEN
-    _img-ext-count @ 16 * _img-ext-buf +  ( abs val pair )
-    ROT _img-mark-base @ -                  ( val pair offset )
-    OVER !                                   ( val pair )
-    8 + !                                    ( )
-    _img-ext-count @ 1+ _img-ext-count !
-;
+    DUP 8 + C@ 127 AND SWAP 9 + + _img-mark-base @ - _img-n0 !
 
-\ =====================================================================
-\  _IMG-COUNT-IMPORTS  ( -- n )
-\    Count out-of-segment relocs that resolve to named dictionary
-\    entries (i.e., actual callable imports, not terminal links).
-\ =====================================================================
-
-: _IMG-COUNT-IMPORTS  ( -- n )
-    0
-    _img-ext-count @ 0 ?DO
-        I 16 * _img-ext-buf + 8 + @   ( count xt )
-        _IMG-XT>ENTRY 0<> IF 1+ THEN
+    _img-export-count @ 0 ?DO
+        I _IMG-EXPORT-REC 8 + _img-u0 @ _img-a1 @ _img-u0 @ _IMG-SAME? IF
+            I _IMG-EXPORT-REC @ _img-n0 @ = IF 0 ELSE IMG-E-EXPORT THEN
+            UNLOOP EXIT
+        THEN
+        I _IMG-EXPORT-REC @ _img-n0 @ = IF
+            IMG-E-EXPORT UNLOOP EXIT
+        THEN
     LOOP
-;
+
+    _img-export-count @ _IMG-EXPORT-CAP >= IF IMG-E-CAPACITY EXIT THEN
+    _img-export-count @ _IMG-EXPORT-REC DUP _IMG-EXPORT-ENTRY-SZ 0 FILL
+    DUP _img-n0 @ SWAP !
+    8 + _img-a1 @ SWAP _img-u0 @ CMOVE
+    1 _img-export-count +!
+    _img-flags @ _IMG-FLAG-LIB OR _img-flags !
+    0 ;
+
+: IMG-EXPORT  ( xt name-a name-u -- ior )
+    _IMG-EXPORT _IMG-LATCH ;
+
+: _IMG-ENTRY-NAMED  ( xt name-a name-u -- ior )
+    _img-u0 ! _img-a1 ! _img-register-xt !
+    _img-register-xt @ _img-a1 @ _img-u0 @ _IMG-EXPORT DUP 0<> IF EXIT THEN
+    DROP
+    _img-register-xt @ _img-mark-base @ - _img-entry-offset !
+    _img-flags @ _IMG-FLAG-EXEC OR _img-flags !
+    0 ;
+
+: IMG-ENTRY-NAMED  ( xt name-a name-u -- ior )
+    _IMG-ENTRY-NAMED _IMG-LATCH ;
+
+: IMG-ENTRY  ( xt -- )
+    DUP _img-a0 !
+    _IMG-SEG-XT>ENTRY DUP 0= IF
+        DROP IMG-E-EXPORT _IMG-LATCH DROP EXIT
+    THEN
+    ENTRY>NAME _img-a0 @ -ROT _IMG-ENTRY-NAMED _IMG-LATCH DROP ;
+
+: IMG-XMEM  ( -- )
+    _img-marked @ 0= IF IMG-E-STATE _IMG-LATCH DROP EXIT THEN
+    _img-flags @ _IMG-FLAG-XMEM OR _img-flags ! ;
 
 \ =====================================================================
-\  _IMG-NORMALIZE  ( -- )
-\    For each entry in the reloc buffer:
-\      1. Read absolute address of the 8-byte slot
-\      2. Convert buffer entry to segment-relative offset
-\      3. Subtract seg-base from the value at that slot
-\    Out-of-segment references are recorded as imports (Phase 3).
+\ Finalization, normalization, and serialization
 \ =====================================================================
+
+: _IMG-APPEND-LINK  ( entry -- )
+    DUP _img-tail-slot !
+    _RELOC-COUNT @ _img-reloc-cap @ >= IF
+        DROP IMG-E-CAPACITY _IMG-LATCH DROP EXIT
+    THEN
+    _RELOC-COUNT @ 8 * _img-reloc-buf @ + !
+    1 _RELOC-COUNT +! ;
+
+: _IMG-FINALIZE  ( -- ior )
+    _img-marked @ 0= IF IMG-E-STATE EXIT THEN
+    _img-finalized @ IF _img-build-error @ EXIT THEN
+    0 _RELOC-ACTIVE !
+    HERE _img-mark-base @ - _img-seg-size !
+    _RELOC-COUNT @ _img-reloc-cap @ > IF
+        IMG-E-CAPACITY _IMG-LATCH DROP
+    THEN
+    LATEST _img-mark-latest @ = IF
+        IMG-E-STATE _IMG-LATCH DROP
+    ELSE
+        LATEST _img-mark-base @ - _img-chain-head !
+        LATEST
+        BEGIN DUP _img-mark-latest @ <> WHILE
+            DUP _IMG-APPEND-LINK
+            @
+        REPEAT
+        DROP
+    THEN
+    -1 _img-finalized !
+    _img-build-error @ ;
+
+: _IMG-RELOC-SLOT  ( i -- abs-slot )
+    8 * _img-reloc-buf @ + @ ;
+
+: _IMG-RELOC-DUP?  ( i -- flag )
+    DUP _IMG-RELOC-SLOT _img-a0 !
+    0 ?DO
+        I _IMG-RELOC-SLOT _img-a0 @ = IF -1 UNLOOP EXIT THEN
+    LOOP
+    0 ;
+
+: _IMG-PRECHECK-RELOCS  ( -- ior )
+    0 _img-import-count !
+    0 _img-ext-count !
+    0 _img-internal-relocs !
+    _RELOC-COUNT @ _img-original-relocs !
+    _img-seg-size @ 8 < IF IMG-E-RELOC EXIT THEN
+    _RELOC-COUNT @ _img-reloc-cap @ > IF IMG-E-CAPACITY EXIT THEN
+    _RELOC-COUNT @ 0 ?DO
+        I _IMG-RELOC-DUP? IF IMG-E-RELOC UNLOOP EXIT THEN
+        I _IMG-RELOC-SLOT DUP _img-mark-base @ <
+        OVER _img-mark-base @ _img-seg-size @ + 8 - > OR IF
+            DROP IMG-E-RELOC UNLOOP EXIT
+        THEN
+        DUP @ _img-n0 !
+        _img-n0 @ _img-mark-base @ >=
+        _img-n0 @ _img-mark-base @ _img-seg-size @ + < AND 0= IF
+            _img-ext-count @ _IMG-EXT-CAP >= IF
+                DROP IMG-E-CAPACITY UNLOOP EXIT
+            THEN
+            DUP _img-tail-slot @ = IF
+                _img-n0 @ _img-mark-latest @ <> IF
+                    DROP IMG-E-RELOC UNLOOP EXIT
+                THEN
+            ELSE
+                _img-n0 @ _IMG-XT>ENTRY DUP 0= IF
+                    DROP _img-n0 @ _IMG-FIXED-ABI? 0= IF
+                        DROP IMG-E-IMPORT UNLOOP EXIT
+                    THEN
+                    \ Fixed ABI immediate: retained, not an import.
+                ELSE
+                    ENTRY>NAME NIP DUP 0= SWAP 23 > OR IF
+                        DROP IMG-E-IMPORT UNLOOP EXIT
+                    THEN
+                    1 _img-import-count +!
+                THEN
+            THEN
+            DROP
+            1 _img-ext-count +!
+        ELSE
+            DROP
+            1 _img-internal-relocs +!
+        THEN
+    LOOP
+    _img-import-count @ _IMG-IMPORT-CAP > IF IMG-E-CAPACITY EXIT THEN
+
+    \ Version 2 executable entries are always named exports.
+    _img-flags @ _IMG-FLAG-EXEC AND IF
+        _img-entry-offset @ -1 = IF IMG-E-NOEXEC EXIT THEN
+        0 _img-i0 !
+        _img-export-count @ 0 ?DO
+            I _IMG-EXPORT-REC @ _img-entry-offset @ = IF -1 _img-i0 ! THEN
+        LOOP
+        _img-i0 @ 0= IF IMG-E-EXPORT EXIT THEN
+    ELSE
+        _img-entry-offset @ -1 <> IF IMG-E-FORMAT EXIT THEN
+    THEN
+    0 ;
+
+: _IMG-PREPARE  ( -- ior )
+    _IMG-FINALIZE DUP 0<> IF EXIT THEN DROP
+    _img-build-error @ DUP 0<> IF EXIT THEN DROP
+    _IMG-PRECHECK-RELOCS DUP 0<> IF _IMG-LATCH THEN ;
+
+: _IMG-IMAGE-SIZE  ( -- u )
+    _IMG-HDR-SZ _img-seg-size @ +
+    _img-internal-relocs @ 8 * +
+    _img-export-count @ _IMG-EXPORT-ENTRY-SZ * +
+    _img-import-count @ _IMG-IMPORT-ENTRY-SZ * + ;
+
+: IMG-BUFFER-MAX  ( -- max-u ior )
+    _IMG-PREPARE DUP 0<> IF 0 SWAP EXIT THEN
+    DROP _IMG-IMAGE-SIZE 0 ;
+
+: _IMG-RECORD-EXT  ( abs-slot value -- )
+    _img-ext-count @ 16 * _img-ext-buf + >R
+    SWAP _img-mark-base @ - R@ !
+    R> 8 + !
+    1 _img-ext-count +! ;
 
 : _IMG-NORMALIZE  ( -- )
-    \ Normalize relocs whose target values fall within the segment.
-    \ Out-of-segment references (calls to KDOS/BIOS words, terminal
-    \ link) are recorded as ext-pairs and their slots zeroed.
-    0  ( j — compacted output index )
-    _RELOC-COUNT @ 0 ?DO
-        I 8 * _img-reloc-buf @ + @    ( j abs-slot-addr )
-        DUP @                           ( j abs val )
-        \ Is val in [mark-base, mark-base + seg-size)?
-        DUP _img-mark-base @ >=
-        OVER _img-mark-base @ _img-seg-size @ + < AND IF
-            \ In-segment → normalize value and store in compacted slot
-            _img-mark-base @ -          ( j abs norm-val )
-            OVER !                       ( j abs )
-            _img-mark-base @ -          ( j offset )
-            OVER 8 * _img-reloc-buf @ + !  ( j )
-            1+                           ( j+1 )
+    0 _img-ext-count !
+    0 _img-i0 !
+    _img-original-relocs @ 0 ?DO
+        I _IMG-RELOC-SLOT DUP @ _img-n0 !
+        _img-n0 @ _img-mark-base @ >=
+        _img-n0 @ _img-mark-base @ _img-seg-size @ + < AND IF
+            DUP _img-n0 @ _img-mark-base @ - SWAP !
+            _img-mark-base @ -
+            _img-i0 @ 8 * _img-reloc-buf @ + !
+            1 _img-i0 +!
         ELSE
-            \ Out-of-segment → record for import & denorm, zero slot
-            2DUP _IMG-RECORD-EXT         ( j abs val )
-            DROP 0 SWAP !                ( j )
+            DUP _img-n0 @ _IMG-RECORD-EXT
+            DUP _img-tail-slot @ = IF
+                0 SWAP !
+            ELSE
+                _img-n0 @ _IMG-XT>ENTRY IF 0 SWAP ! ELSE DROP THEN
+            THEN
         THEN
     LOOP
-    _RELOC-COUNT !  \ update to filtered count
-;
-
-\ =====================================================================
-\  _IMG-DENORMALIZE  ( -- )
-\    Undo normalization so the live dictionary stays valid.
-\ =====================================================================
+    _img-i0 @ DUP _img-internal-relocs ! _RELOC-COUNT ! ;
 
 : _IMG-DENORMALIZE  ( -- )
-    _RELOC-COUNT @ 0 ?DO
-        \ Read offset from buffer, convert to absolute address
-        I 8 * _img-reloc-buf @ + @   ( offset )
-        _img-mark-base @ +           ( abs-slot-addr )
-        \ Restore value: add seg-base back
-        DUP @ _img-mark-base @ +     ( abs abs-val )
-        SWAP !
-        \ Restore buffer entry to absolute address
-        I 8 * _img-reloc-buf @ +     ( buf-entry )
-        DUP @ _img-mark-base @ +     ( buf-entry abs )
-        SWAP !
+    _img-internal-relocs @ 0 ?DO
+        I 8 * _img-reloc-buf @ + DUP @ _img-mark-base @ + _img-a0 !
+        _img-a0 @ DUP @ _img-mark-base @ + SWAP !
+        _img-a0 @ SWAP !
     LOOP
-    \ Restore out-of-segment slots (imports + terminal link)
     _img-ext-count @ 0 ?DO
-        I 16 * _img-ext-buf +        ( pair )
-        DUP @                           ( pair offset )
-        _img-mark-base @ +             ( pair abs-slot-addr )
-        SWAP 8 + @                      ( abs-slot-addr original-val )
-        SWAP !
+        I 16 * _img-ext-buf + DUP @ _img-mark-base @ + _img-a0 !
+        DUP 8 + @ _img-a0 @ !
+        _img-a0 @
+        _img-internal-relocs @ I + 8 * _img-reloc-buf @ + !
+        DROP
     LOOP
-;
+    _img-internal-relocs @ _img-ext-count @ + _RELOC-COUNT ! ;
 
-\ =====================================================================
-\  _IMG-BUILD-OUTPUT  ( -- addr size )
-\    Build the complete .m64 at HERE (past the segment).
-\    Returns output address and byte count.
-\ =====================================================================
+VARIABLE _img-out-base
+VARIABLE _img-out-size
+VARIABLE _img-out-rel
+VARIABLE _img-out-exp
+VARIABLE _img-out-imp
 
-: _IMG-BUILD-OUTPUT  ( -- addr size )
-    \ Total output size
-    _IMG-HDR-SZ _img-seg-size @ + _RELOC-COUNT @ 8 * +
-    _img-import-count @ _IMG-IMPORT-ENTRY-SZ * +
-                                      ( out-size )
-    HERE SWAP                         ( buf out-size )
+: _IMG-WRITE-HEADER  ( -- )
+    _img-out-base @ DUP
+    77 OVER C! 70 OVER 1 + C! 54 OVER 2 + C! 52 OVER 3 + C!
+    _IMG-VERSION OVER 4 + W!
+    _img-flags @ OVER 6 + W!
+    _img-seg-size @ OVER 8 + !
+    _img-internal-relocs @ OVER 16 + !
+    _img-export-count @ OVER 24 + !
+    _img-import-count @ OVER 32 + !
+    _img-chain-head @ OVER 40 + !
+    _img-prov-offset @ OVER 48 + !
+    _img-entry-offset @ SWAP 56 + !
+    DROP ;
 
-    \ Zero the output area
-    OVER OVER 0 FILL                  ( buf out-size )
-
-    \ ── Header (64 bytes) ────────────────────────────────────────
-    OVER                              ( buf out-size buf )
-    77 OVER     C!                    \ 'M'
-    70 OVER 1 + C!                    \ 'F'
-    54 OVER 2 + C!                    \ '6'
-    52 OVER 3 + C!                    \ '4'
-    _IMG-VERSION OVER 4 + W!          \ version
-    _img-flags @ OVER 6 + W!          \ flags
-    _img-seg-size @ OVER 8 + !        \ segment size
-    _RELOC-COUNT @ OVER 16 + !        \ reloc count
-    0 OVER 24 + !                     \ exports (0 for now)
-    _img-import-count @ OVER 32 + !   \ imports
-    LATEST _img-mark-base @ - OVER 40 + !  \ chain head offset
-    _img-prov-offset @ OVER 48 + !    \ provided offset
-    _img-entry-offset @ OVER 56 + !   \ entry offset
-    DROP                              ( buf out-size )
-
-    \ ── Segment copy ─────────────────────────────────────────────
-    _img-mark-base @                  ( buf out-size src )
-    2 PICK _IMG-HDR-SZ +             ( buf out-size src dst )
-    _img-seg-size @ CMOVE            ( buf out-size )
-
-    \ ── Reloc table ──────────────────────────────────────────────
-    _RELOC-COUNT @ 0<> IF
-        _img-reloc-buf @              ( buf out-size reloc-src )
-        2 PICK _IMG-HDR-SZ + _img-seg-size @ +
-                                      ( buf out-size reloc-src dst )
-        _RELOC-COUNT @ 8 * CMOVE     ( buf out-size )
-    THEN
-
-    \ ── Import table ─────────────────────────────────────────────
-    \ Each entry: fixup_offset(8) + name(24, NUL-padded).
-    \ Only ext-pairs with a resolvable XT>ENTRY are written.
-    _img-import-count @ 0<> IF
-        OVER _IMG-HDR-SZ + _img-seg-size @ +
-        _RELOC-COUNT @ 8 * +             ( buf out-size imp-dest )
-        _img-ext-count @ 0 ?DO
-            I 16 * _img-ext-buf + 8 + @   ( ... imp-dest xt )
-            _IMG-XT>ENTRY DUP IF
-                \ Write fixup offset at imp-dest+0
-                I 16 * _img-ext-buf + @    ( ... imp-dest entry offset )
-                2 PICK !                      ( ... imp-dest entry )
-                \ Write name at imp-dest+8 (up to 23 chars)
-                ENTRY>NAME 23 MIN            ( ... imp-dest addr len )
-                2 PICK 8 +                    ( ... imp-dest addr len dest+8 )
-                SWAP CMOVE                    ( ... imp-dest )
-                _IMG-IMPORT-ENTRY-SZ +        ( ... imp-dest' )
-            ELSE
+: _IMG-WRITE-IMPORTS  ( -- )
+    0 _img-i0 !
+    _img-ext-count @ 0 ?DO
+        I 16 * _img-ext-buf + DUP @ _img-mark-base @ +
+        _img-tail-slot @ <> IF
+            DUP 8 + @ _IMG-XT>ENTRY DUP IF
+                _img-import-entry !
+                _img-i0 @ _IMG-IMPORT-ENTRY-SZ * _img-out-imp @ +
+                _img-import-dest !
+                DUP @ _img-import-dest @ !
                 DROP
+                _img-import-entry @ ENTRY>NAME
+                _img-import-dest @ 8 + SWAP CMOVE
+                1 _img-i0 +!
+            ELSE
+                DROP DROP
             THEN
-        LOOP
-        DROP                                  ( buf out-size )
+        ELSE
+            DROP
+        THEN
+    LOOP ;
+
+: _IMG-SERIALIZE-V2  ( dst used -- )
+    _img-out-size ! _img-out-base !
+    _img-out-base @ _img-out-size @ 0 FILL
+    _img-out-base @ _IMG-HDR-SZ + _img-seg-size @ + _img-out-rel !
+    _img-out-rel @ _img-internal-relocs @ 8 * + _img-out-exp !
+    _img-out-exp @ _img-export-count @ _IMG-EXPORT-ENTRY-SZ * +
+    _img-out-imp !
+    _IMG-WRITE-HEADER
+    _img-mark-base @ _img-out-base @ _IMG-HDR-SZ +
+    _img-seg-size @ CMOVE
+    _img-internal-relocs @ 0<> IF
+        _img-reloc-buf @ _img-out-rel @ _img-internal-relocs @ 8 * CMOVE
     THEN
-;
-
-\ =====================================================================
-\  IMG-SAVE  ( "filename" -- ior )
-\    Save [mark-base .. HERE) as a .m64 file.
-\    File must already exist on disk.  Parses filename from input.
-\    Returns 0 on success, negative on error.
-\
-\    After save the live dictionary is restored (denormalized).
-\ =====================================================================
-
-: IMG-SAVE  ( "filename" -- ior )
-    \ 1. Stop tracking
-    0 _RELOC-ACTIVE !
-    0 _img-ext-count !
-
-    \ 2. Segment size
-    HERE _img-mark-base @ - _img-seg-size !
-
-    \ 3. Collect dict-chain link fields
-    _IMG-COLLECT-LINKS
-
-    \ 4. Open file FIRST — OPEN-BY-SLOT builds fdesc at HERE via `,`
-    \    so it must happen before we lay down the output buffer.
-    PARSE-NAME
-    FIND-BY-NAME DUP -1 = IF
-        DROP
-        _IMG-DENORMALIZE
-        ." IMG-SAVE: not found: " NAMEBUF .ZSTR CR
-        _IMG-ERR-IO EXIT
+    _img-export-count @ 0<> IF
+        _img-export-buf _img-out-exp @
+        _img-export-count @ _IMG-EXPORT-ENTRY-SZ * CMOVE
     THEN
-    OPEN-BY-SLOT DUP 0= IF
-        DROP
-        _IMG-DENORMALIZE
-        ." IMG-SAVE: open failed" CR
-        _IMG-ERR-IO EXIT
-    THEN
-    _img-fd !
-
-    \ 5. Normalize to base-0 (also records out-of-segment relocs)
-    _IMG-NORMALIZE
-
-    \ 5b. Count named imports (resolvable XT>ENTRY lookups)
-    _IMG-COUNT-IMPORTS _img-import-count !
-
-    \ 6. Build output at HERE (past segment + fdesc — safe scratch)
-    _IMG-BUILD-OUTPUT                 ( buf out-size )
-
-    \ 7. Write entire .m64 in one FWRITE
-    _img-fd @ FWRITE
-
-    \ 8. Flush
-    _img-fd @ FFLUSH
-
-    \ 9. Denormalize (restore live dictionary)
-    _IMG-DENORMALIZE
-
-    \ Done — HERE still points past segment, caller keeps compiling.
-    0
-;
+    _IMG-WRITE-IMPORTS ;
 
 \ =====================================================================
-\  IMG-SAVE-EXEC  ( xt "filename" -- ior )
-\    Convenience: record entry point then save.  Equivalent to
-\    IMG-ENTRY followed by IMG-SAVE.
+\ Non-mutating memory validator
 \ =====================================================================
 
-: IMG-SAVE-EXEC  ( xt "filename" -- ior )
-    IMG-ENTRY
-    IMG-SAVE
-;
+VARIABLE _imv-image
+VARIABLE _imv-size
+VARIABLE _imv-version
+VARIABLE _imv-flags
+VARIABLE _imv-seg
+VARIABLE _imv-nrel
+VARIABLE _imv-nexp
+VARIABLE _imv-nimp
+VARIABLE _imv-head
+VARIABLE _imv-prov
+VARIABLE _imv-entry
+VARIABLE _imv-seg-base
+VARIABLE _imv-rel-base
+VARIABLE _imv-exp-base
+VARIABLE _imv-imp-base
+VARIABLE _imv-used
+VARIABLE _imv-rem
+VARIABLE _imv-name-len
+VARIABLE _imv-name-error
+VARIABLE _imv-cur
+VARIABLE _imv-guard
+VARIABLE _imv-target-off
+VARIABLE _imv-target-name
+VARIABLE _imv-target-len
+VARIABLE _imv-loop
+VARIABLE _imv-inner
+VARIABLE _imv-scan
+VARIABLE _imv-rec
+VARIABLE _imv-name-a
+VARIABLE _imv-name-u
 
-\ =====================================================================
-\  Phase 2 — Core Loader
-\ =====================================================================
-
-\ Loader state
-VARIABLE _img-load-base    \ base address where segment was loaded
-VARIABLE _img-load-fd      \ file descriptor during load
-VARIABLE _img-load-seg     \ loaded segment size
-VARIABLE _img-load-nrel    \ loaded reloc count
-VARIABLE _img-load-head    \ chain-head offset from header
-VARIABLE _img-load-nimp    \ loaded import count
-VARIABLE _img-load-flags   \ loaded flags from header
-VARIABLE _img-load-prov    \ loaded provided offset
-VARIABLE _img-load-entry   \ loaded entry offset
-VARIABLE _img-scratch      \ scratch address for reloc/import tables
-VARIABLE _img-splice-guard \ countdown guard for chain walk
-
-CREATE _img-find-buf  32 ALLOT  \ counted string buffer for FIND
-
-\ =====================================================================
-\  _IMG-RELOCATE  ( reloc-buf count base -- )
-\    Apply relocations: for each u64 offset in reloc-buf, add base
-\    to the 8-byte value at (base + offset).
-\ =====================================================================
-
-: _IMG-RELOCATE  ( reloc-buf count base -- )
-    ROT ROT                           ( base reloc-buf count )
-    0 ?DO
-        DUP I 8 * + @                ( base reloc-buf offset )
-        2 PICK +                      ( base reloc-buf slot-addr )
-        DUP @                         ( base reloc-buf slot-addr val )
-        3 PICK +                      ( base reloc-buf slot-addr relocated )
-        SWAP !                        ( base reloc-buf )
+: _IMV-NAME  ( name24 -- len ior )
+    _img-a0 !
+    -1 _imv-name-len !
+    0 _imv-name-error !
+    24 0 DO
+        _img-a0 @ I + C@ DUP 0= IF
+            DROP _imv-name-len @ -1 = IF I _imv-name-len ! THEN
+        ELSE
+            DROP _imv-name-len @ -1 <> IF IMG-E-FORMAT _imv-name-error ! THEN
+        THEN
     LOOP
-    2DROP
-;
+    _imv-name-error @ DUP 0<> IF 0 SWAP EXIT THEN DROP
+    _imv-name-len @ DUP 1 < OVER 23 > OR IF DROP 0 IMG-E-FORMAT EXIT THEN
+    0 ;
 
-\ =====================================================================
-\  _IMG-SPLICE-DICT  ( -- )
-\    Splice the loaded dictionary chain into the live dictionary.
-\    Uses _img-load-base, _img-load-head, _img-load-seg.
-\    Walks from the chain head to find the tail (terminal link),
-\    splices tail→LATEST, sets LATEST to head.
-\ =====================================================================
+: _IMV-FIND  ( name-a name-u -- xt ior )
+    DUP 0= OVER 23 > OR IF 2DROP 0 IMG-E-IMPORT EXIT THEN
+    DUP _img-find-buf C!
+    _img-find-buf 1+ SWAP CMOVE
+    _img-find-buf FIND IF 0 ELSE DROP 0 IMG-E-IMPORT THEN ;
 
-: _IMG-SPLICE-DICT  ( -- )
-    \ Guard: max entries = seg-size / 10 (min entry = 8 link + 1 len + 1 char)
-    _img-load-seg @ 10 / 1+ _img-splice-guard !
-    _img-load-base @ _img-load-head @ +   ( head )
-    DUP                                     ( head cur )
+: _IMV-BOUNDS  ( need -- flag )
+    DUP 0< IF DROP 0 EXIT THEN
+    _imv-rem @ <= ;
+
+: _IMV-CONSUME  ( u -- )
+    NEGATE _imv-rem +! ;
+
+: _IMV-PARSE  ( image-a image-u -- ior )
+    _imv-size ! _imv-image !
+    _imv-image @ 0= _imv-size @ _IMG-HDR-SZ < OR IF IMG-E-FORMAT EXIT THEN
+    _imv-image @ _imv-size @ + _imv-image @ < IF IMG-E-FORMAT EXIT THEN
+    _imv-image @ C@ 77 <>
+    _imv-image @ 1+ C@ 70 <> OR
+    _imv-image @ 2 + C@ 54 <> OR
+    _imv-image @ 3 + C@ 52 <> OR IF IMG-E-FORMAT EXIT THEN
+    _imv-image @ 4 + W@ DUP _IMG-VERSION-V1 < OVER _IMG-VERSION > OR IF
+        DROP IMG-E-FORMAT EXIT
+    THEN _imv-version !
+    _imv-image @ 6 + W@ DUP _IMG-FLAG-MASK AND OVER <> IF
+        DROP IMG-E-FORMAT EXIT
+    THEN _imv-flags !
+    _imv-image @ 8 + @ _imv-seg !
+    _imv-image @ 16 + @ _imv-nrel !
+    _imv-image @ 24 + @ _imv-nexp !
+    _imv-image @ 32 + @ _imv-nimp !
+    _imv-image @ 40 + @ _imv-head !
+    _imv-image @ 48 + @ _imv-prov !
+    _imv-image @ 56 + @ _imv-entry !
+
+    _imv-seg @ 0< _imv-nrel @ 0< OR _imv-nexp @ 0< OR
+    _imv-nimp @ 0< OR IF IMG-E-FORMAT EXIT THEN
+    _imv-nrel @ _IMG-RELOCS-LARGE > IF IMG-E-CAPACITY EXIT THEN
+    _imv-nexp @ _IMG-EXPORT-CAP > IF IMG-E-CAPACITY EXIT THEN
+    _imv-nimp @ _IMG-IMPORT-CAP > IF IMG-E-CAPACITY EXIT THEN
+    _imv-version @ _IMG-VERSION-V1 = _imv-nexp @ 0<> AND IF
+        IMG-E-FORMAT EXIT
+    THEN
+
+    _imv-size @ _IMG-HDR-SZ - _imv-rem !
+    _imv-seg @ _IMV-BOUNDS 0= IF IMG-E-SHORT EXIT THEN
+    _imv-image @ _IMG-HDR-SZ + _imv-seg-base !
+    _imv-seg @ _IMV-CONSUME
+
+    _imv-nrel @ 8 * DUP _IMV-BOUNDS 0= IF DROP IMG-E-SHORT EXIT THEN
+    _imv-seg-base @ _imv-seg @ + _imv-rel-base !
+    _IMV-CONSUME
+
+    _imv-version @ _IMG-VERSION = IF
+        _imv-nexp @ _IMG-EXPORT-ENTRY-SZ *
+    ELSE 0 THEN
+    DUP _IMV-BOUNDS 0= IF DROP IMG-E-SHORT EXIT THEN
+    _imv-rel-base @ _imv-nrel @ 8 * + _imv-exp-base !
+    _IMV-CONSUME
+
+    _imv-nimp @ _IMG-IMPORT-ENTRY-SZ *
+    DUP _IMV-BOUNDS 0= IF DROP IMG-E-SHORT EXIT THEN
+    _imv-exp-base @
+    _imv-version @ _IMG-VERSION = IF
+        _imv-nexp @ _IMG-EXPORT-ENTRY-SZ * +
+    THEN _imv-imp-base !
+    _IMV-CONSUME
+
+    _imv-size @ _imv-rem @ - _imv-used !
+    _imv-rem @ 0<> IF IMG-E-FORMAT EXIT THEN
+    0 ;
+
+: _IMV-RELOC-OFF  ( i -- off )
+    8 * _imv-rel-base @ + @ ;
+
+: _IMV-IMPORT-REC  ( i -- a )
+    _IMG-IMPORT-ENTRY-SZ * _imv-imp-base @ + ;
+
+: _IMV-EXPORT-REC  ( i -- a )
+    _IMG-EXPORT-ENTRY-SZ * _imv-exp-base @ + ;
+
+: _IMV-IS-RELOC?  ( slot-off -- flag )
+    _img-n0 !
+    0 _imv-scan !
+    BEGIN _imv-scan @ _imv-nrel @ < WHILE
+        _imv-scan @ _IMV-RELOC-OFF _img-n0 @ = IF -1 EXIT THEN
+        1 _imv-scan +!
+    REPEAT 0 ;
+
+: _IMV-IS-IMPORT?  ( slot-off -- flag )
+    _img-n0 !
+    0 _imv-scan !
+    BEGIN _imv-scan @ _imv-nimp @ < WHILE
+        _imv-scan @ _IMV-IMPORT-REC @ _img-n0 @ = IF -1 EXIT THEN
+        1 _imv-scan +!
+    REPEAT 0 ;
+
+: _IMV-VALIDATE-RELOCS  ( -- ior )
+    _imv-nrel @ 0= IF 0 EXIT THEN
+    _imv-seg @ 8 < IF IMG-E-RELOC EXIT THEN
+    0 _imv-loop !
+    BEGIN _imv-loop @ _imv-nrel @ < WHILE
+        _imv-loop @ _IMV-RELOC-OFF DUP 0< IF DROP IMG-E-RELOC EXIT THEN
+        DUP _imv-seg @ 8 - > IF DROP IMG-E-RELOC EXIT THEN
+        _imv-seg-base @ + @ DUP 0< SWAP _imv-seg @ >= OR IF
+            IMG-E-RELOC EXIT
+        THEN
+        0 _imv-inner !
+        BEGIN _imv-inner @ _imv-loop @ < WHILE
+            _imv-loop @ _IMV-RELOC-OFF
+            _imv-inner @ _IMV-RELOC-OFF = IF
+                IMG-E-RELOC EXIT
+            THEN
+            1 _imv-inner +!
+        REPEAT
+        1 _imv-loop +!
+    REPEAT 0 ;
+
+: _IMV-VALIDATE-IMPORTS  ( -- ior )
+    _imv-seg @ 8 < _imv-nimp @ 0<> AND IF IMG-E-RELOC EXIT THEN
+    0 _imv-loop !
+    BEGIN _imv-loop @ _imv-nimp @ < WHILE
+        _imv-loop @ _IMV-IMPORT-REC DUP _imv-rec ! @ _img-n0 !
+        _img-n0 @ 0< _img-n0 @ _imv-seg @ 8 - > OR IF
+            IMG-E-RELOC EXIT
+        THEN
+        _img-n0 @ _IMV-IS-RELOC? IF IMG-E-RELOC EXIT THEN
+        _imv-seg-base @ _img-n0 @ + @ 0<> IF
+            IMG-E-RELOC EXIT
+        THEN
+        _imv-rec @ 8 + DUP _imv-name-a ! _IMV-NAME
+        DUP 0<> IF NIP EXIT THEN
+        DROP _imv-name-u !
+        _imv-name-a @ _imv-name-u @ _IMV-FIND
+        DUP 0<> IF NIP EXIT THEN
+        DROP
+        _imv-loop @ 8 * _img-ext-buf + !
+
+        0 _imv-inner !
+        BEGIN _imv-inner @ _imv-loop @ < WHILE
+            _imv-loop @ _IMV-IMPORT-REC @
+            _imv-inner @ _IMV-IMPORT-REC @ = IF
+                IMG-E-RELOC EXIT
+            THEN
+            1 _imv-inner +!
+        REPEAT
+        1 _imv-loop +!
+    REPEAT 0 ;
+
+: _IMV-VALIDATE-EXPORTS  ( -- ior )
+    _imv-version @ _IMG-VERSION-V1 = IF 0 EXIT THEN
+    0 _imv-loop !
+    BEGIN _imv-loop @ _imv-nexp @ < WHILE
+        _imv-loop @ _IMV-EXPORT-REC DUP _imv-rec ! @
+        DUP 0< SWAP _imv-seg @ >= OR IF IMG-E-EXPORT EXIT THEN
+        _imv-rec @ 8 + DUP _imv-name-a ! _IMV-NAME
+        DUP 0<> IF NIP EXIT THEN
+        DROP _imv-name-u !
+
+        0 _imv-inner !
+        BEGIN _imv-inner @ _imv-loop @ < WHILE
+            _imv-loop @ _IMV-EXPORT-REC @
+            _imv-inner @ _IMV-EXPORT-REC @ = IF IMG-E-EXPORT EXIT THEN
+            _imv-inner @ _IMV-EXPORT-REC 8 + DUP _IMV-NAME DROP
+            _imv-name-a @ _imv-name-u @ _IMG-SAME? IF
+                IMG-E-EXPORT EXIT
+            THEN
+            1 _imv-inner +!
+        REPEAT
+        1 _imv-loop +!
+    REPEAT 0 ;
+
+: _IMV-ENTRY-AT  ( off -- entry-a name-u code-off ior )
+    _img-n0 !
+    _imv-seg @ 10 < IF 0 0 0 IMG-E-FORMAT EXIT THEN
+    _img-n0 @ 0< _img-n0 @ _imv-seg @ 9 - > OR IF
+        0 0 0 IMG-E-FORMAT EXIT
+    THEN
+    _imv-seg-base @ _img-n0 @ + DUP 8 + C@ 127 AND _img-u0 !
+    _img-u0 @ 0= IF 0 0 0 IMG-E-FORMAT EXIT THEN
+    _img-n0 @ 9 + _img-u0 @ + DUP _imv-seg @ >= IF
+        2DROP 0 0 0 IMG-E-FORMAT EXIT
+    THEN
+    _img-u0 @ SWAP 0 ;
+
+: _IMV-VALIDATE-CHAIN  ( -- ior )
+    _imv-head @ _imv-cur !
+    _imv-seg @ 9 / 1+ _imv-guard !
     BEGIN
-        DUP @                               ( head cur link )
-        DUP _img-load-base @ >=
-        OVER _img-load-base @ _img-load-seg @ + < AND
-    WHILE
-        NIP DUP                             ( head link link )
-        _img-splice-guard @ 1- DUP _img-splice-guard !
-        0= IF ABORT" IMG-LOAD: corrupt dict chain (loop detected)" THEN
-    REPEAT
-    DROP                                    ( head tail )
+        _imv-guard @ 0= IF IMG-E-FORMAT EXIT THEN
+        -1 _imv-guard +!
+        _imv-cur @ _IMV-ENTRY-AT DUP 0<> IF
+            >R 2DROP DROP R> EXIT
+        THEN
+        DROP 2DROP                    ( entry-a )
+        _imv-cur @ _IMV-IS-IMPORT? IF DROP IMG-E-RELOC EXIT THEN
+        _imv-cur @ _IMV-IS-RELOC? IF
+            @ DUP 0< OVER _imv-cur @ >= OR IF DROP IMG-E-FORMAT EXIT THEN
+            _imv-cur !
+        ELSE
+            @ 0<> IF IMG-E-FORMAT EXIT THEN
+            0 EXIT
+        THEN
+    AGAIN ;
 
-    \ tail.link → current LATEST
-    LATEST SWAP !                           ( head )
+: _IMV-BINDING?  ( code-off name-a name-u -- flag )
+    _imv-target-len ! _imv-target-name ! _imv-target-off !
+    _imv-head @ _imv-cur !
+    _imv-seg @ 9 / 1+ _imv-guard !
+    BEGIN _imv-guard @ 0<> WHILE
+        -1 _imv-guard +!
+        _imv-cur @ _IMV-ENTRY-AT DUP 0<> IF
+            DROP 2DROP DROP 0 EXIT
+        THEN
+        DROP                           ( entry-a name-u code-off )
+        DUP _imv-target-off @ = IF
+            DROP OVER 9 + SWAP
+            _imv-target-name @ _imv-target-len @ _IMG-SAME? NIP EXIT
+        THEN
+        2DROP                          ( entry-a )
+        _imv-cur @ _IMV-IS-RELOC? IF
+            @ _imv-cur !
+        ELSE
+            DROP 0 EXIT
+        THEN
+    REPEAT 0 ;
 
-    \ Set LATEST to head
-    LATEST!
-;
+: _IMV-CODE-REACHABLE?  ( code-off -- flag )
+    _imv-target-off !
+    _imv-head @ _imv-cur !
+    _imv-seg @ 9 / 1+ _imv-guard !
+    BEGIN _imv-guard @ 0<> WHILE
+        -1 _imv-guard +!
+        _imv-cur @ _IMV-ENTRY-AT DUP 0<> IF
+            DROP 2DROP DROP 0 EXIT
+        THEN
+        DROP                           ( entry-a name-u code-off )
+        _imv-target-off @ = IF 2DROP -1 EXIT THEN
+        2DROP
+        _imv-cur @ _IMV-IS-RELOC? IF @ _imv-cur ! ELSE DROP 0 EXIT THEN
+    REPEAT 0 ;
+
+: _IMV-VALIDATE-BINDINGS  ( -- ior )
+    _imv-version @ _IMG-VERSION = IF
+        _imv-nexp @ 0 ?DO
+            I _IMV-EXPORT-REC DUP @ SWAP 8 + DUP _IMV-NAME
+            DUP 0<> IF >R 2DROP DROP R> UNLOOP EXIT THEN
+            DROP _IMV-BINDING? 0= IF IMG-E-EXPORT UNLOOP EXIT THEN
+        LOOP
+    THEN
+
+    _imv-flags @ _IMG-FLAG-EXEC AND IF
+        _imv-entry @ -1 = IF IMG-E-NOEXEC EXIT THEN
+        _imv-entry @ 0< _imv-entry @ _imv-seg @ >= OR IF
+            IMG-E-RELOC EXIT
+        THEN
+        _imv-version @ _IMG-VERSION = IF
+            0 _img-i0 !
+            _imv-nexp @ 0 ?DO
+                I _IMV-EXPORT-REC @ _imv-entry @ = IF -1 _img-i0 ! THEN
+            LOOP
+            _img-i0 @ 0= IF IMG-E-EXPORT EXIT THEN
+        ELSE
+            _imv-entry @ _IMV-CODE-REACHABLE? 0= IF IMG-E-RELOC EXIT THEN
+        THEN
+    ELSE
+        _imv-entry @ -1 <> IF IMG-E-FORMAT EXIT THEN
+    THEN
+
+    _imv-version @ _IMG-VERSION = IF
+        _imv-nexp @ 0<> _imv-flags @ _IMG-FLAG-LIB AND 0= AND IF
+            IMG-E-FORMAT EXIT
+        THEN
+        _imv-nexp @ 0= _imv-flags @ _IMG-FLAG-LIB AND 0<> AND IF
+            IMG-E-FORMAT EXIT
+        THEN
+    THEN
+    0 ;
+
+: _IMV-VALIDATE-PROVIDED  ( -- ior )
+    _imv-prov @ -1 = IF 0 EXIT THEN
+    _imv-prov @ 0< _imv-prov @ _imv-seg @ >= OR IF IMG-E-FORMAT EXIT THEN
+    _imv-seg @ _imv-prov @ - _img-u0 !
+    _imv-seg-base @ _imv-prov @ + _img-a0 !
+    _img-u0 @ 0 ?DO
+        _img-a0 @ I + C@ 0= IF
+            I 0= IF IMG-E-FORMAT ELSE 0 THEN UNLOOP EXIT
+        THEN
+    LOOP
+    IMG-E-FORMAT ;
+
+: _IMG-VERIFY-MEM  ( image-a image-u -- ior )
+    _IMV-PARSE DUP 0<> IF EXIT THEN DROP
+    _IMV-VALIDATE-RELOCS DUP 0<> IF EXIT THEN DROP
+    _IMV-VALIDATE-IMPORTS DUP 0<> IF EXIT THEN DROP
+    _IMV-VALIDATE-EXPORTS DUP 0<> IF EXIT THEN DROP
+    _IMV-VALIDATE-CHAIN DUP 0<> IF EXIT THEN DROP
+    _IMV-VALIDATE-BINDINGS DUP 0<> IF EXIT THEN DROP
+    _IMV-VALIDATE-PROVIDED ;
+
+: IMG-VERIFY-MEM  ( image-a image-u -- ior )
+    _IMG-VERIFY-MEM ;
+
+: IMG-BUILD-INTO  ( dst cap -- used ior )
+    _img-build-cap ! _img-build-dst !
+    _IMG-PREPARE DUP 0<> IF 0 SWAP EXIT THEN DROP
+    _IMG-IMAGE-SIZE _img-build-used !
+    _img-build-dst @ 0=
+    _img-build-cap @ _img-build-used @ < OR IF 0 IMG-E-CAPACITY EXIT THEN
+    _img-build-dst @ _img-build-used @ + _img-build-dst @ < IF
+        0 IMG-E-CAPACITY EXIT
+    THEN
+    _img-build-dst @ _img-build-used @
+    _img-reloc-buf @ HERE _img-reloc-buf @ -
+    _IMG-RANGE-OVERLAP? IF 0 IMG-E-STATE EXIT THEN
+
+    _IMG-NORMALIZE
+    _img-build-dst @ _img-build-used @ _IMG-SERIALIZE-V2
+    _IMG-DENORMALIZE
+    _img-build-dst @ _img-build-used @ _IMG-VERIFY-MEM
+    DUP 0<> IF 0 SWAP EXIT THEN
+    DROP _img-build-used @ 0 ;
 
 \ =====================================================================
-\  _IMG-STRLEN  ( c-addr max -- len )
-\    Count bytes until NUL or max, whichever comes first.
+\ Verified memory loading and exact export lookup
 \ =====================================================================
+
+VARIABLE _img-load-base
+VARIABLE _img-load-flags
+VARIABLE _img-load-seg
+VARIABLE _img-load-nrel
+VARIABLE _img-load-nimp
+VARIABLE _img-load-head
+VARIABLE _img-load-prov
+VARIABLE _img-load-entry
+
+: _IMG-EXPORT-FIND-PARSED  ( name-a name-u -- offset ior )
+    _img-request-len ! _img-request-name !
+    _imv-version @ _IMG-VERSION <> IF 0 IMG-E-EXPORT EXIT THEN
+    _img-request-len @ 0= _img-request-len @ 23 > OR IF
+        0 IMG-E-EXPORT EXIT
+    THEN
+    _imv-nexp @ 0 ?DO
+        I _IMV-EXPORT-REC DUP 8 + DUP _IMV-NAME
+        DUP 0<> IF >R 2DROP DROP R> UNLOOP 0 SWAP EXIT THEN
+        DROP _img-request-name @ _img-request-len @ _IMG-SAME? IF
+            @ 0 UNLOOP EXIT
+        THEN
+        DROP
+    LOOP
+    0 IMG-E-EXPORT ;
+
+: IMG-EXPORT-FIND  ( image-a image-u name-a name-u -- offset ior )
+    _img-request-len ! _img-request-name ! _img-u1 ! _img-a1 !
+    _img-a1 @ _img-u1 @ _IMG-VERIFY-MEM DUP 0<> IF 0 SWAP EXIT THEN DROP
+    _img-request-name @ _img-request-len @ _IMG-EXPORT-FIND-PARSED ;
+
+: _IMG-RELOCATE  ( reloc-a count base -- )
+    _img-a0 ! _img-n0 ! _img-a1 !
+    _img-n0 @ 0 ?DO
+        _img-a1 @ I 8 * + @ _img-a0 @ + DUP @ _img-a0 @ + SWAP !
+    LOOP ;
+
+: _IMG-PATCH-IMPORTS  ( -- )
+    _imv-nimp @ 0 ?DO
+        I _IMV-IMPORT-REC @ _img-load-base @ +
+        I 8 * _img-ext-buf + @ SWAP !
+    LOOP ;
+
+: _IMG-SPLICE-VALID  ( -- )
+    _img-load-base @ _imv-head @ + DUP _img-a0 !
+    BEGIN DUP @ DUP WHILE NIP REPEAT DROP
+    LATEST SWAP !
+    _img-a0 @ LATEST! ;
 
 : _IMG-STRLEN  ( c-addr max -- len )
-    SWAP OVER                 ( max c-addr max )
-    0 ?DO                     ( max c-addr )
-        DUP I + C@            ( max c-addr byte )
-        0= IF
-            2DROP I UNLOOP EXIT
+    SWAP OVER 0 ?DO
+        DUP I + C@ 0= IF 2DROP I UNLOOP EXIT THEN
+    LOOP DROP ;
+
+: _IMG-REGISTER-PROVIDED  ( -- )
+    _imv-prov @ -1 = IF EXIT THEN
+    NAMEBUF 24 0 FILL
+    _img-load-base @ _imv-prov @ + DUP
+    _imv-seg @ _imv-prov @ - 23 MIN _IMG-STRLEN
+    NAMEBUF SWAP CMOVE
+    _MOD-MARK ;
+
+: _IMG-LOAD-VERIFIED  ( -- base ior )
+    _imv-flags @ _IMG-FLAG-XMEM AND IF
+        _imv-seg @ XMEM-ALLOT? DUP 0<> IF
+            >R DROP 0 R> DROP IMG-E-NOMEM EXIT
         THEN
-    LOOP
-    DROP                      ( max )
-;
-
-\ =====================================================================
-\  _IMG-RESOLVE-IMPORTS  ( imp-base count -- )
-\    For each import entry, look up the name via FIND and patch the
-\    fixup slot with the resolved xt.
-\    Import entry (32 bytes): fixup_offset(8) + name(24, NUL-padded).
-\ =====================================================================
-
-: _IMG-RESOLVE-IMPORTS  ( imp-base count -- )
-    0 ?DO                                  ( imp-base )
-        \ Build counted string from name at imp-base+8
-        DUP 8 +  23 _IMG-STRLEN           ( imp-base len )
-        DUP _img-find-buf C!              ( imp-base len )
-        OVER 8 +                           ( imp-base len name-addr )
-        _img-find-buf 1+                  ( imp-base len name-addr buf+1 )
-        ROT CMOVE                          ( imp-base )
-        \ Resolve via FIND
-        _img-find-buf FIND                ( imp-base [xt flag | caddr 0] )
-        0<> IF
-            \ Found: patch fixup slot
-            SWAP DUP @ _img-load-base @ +  ( xt imp-base abs-slot )
-            ROT SWAP !                     ( imp-base )
-        ELSE
-            \ Not found: print warning
-            DROP                            ( imp-base )
-            ." IMG: import not found: "
-            _img-find-buf 1+ _img-find-buf C@ TYPE CR
-        THEN
-        _IMG-IMPORT-ENTRY-SZ +             ( imp-base' )
-    LOOP
-    DROP
-;
-
-\ =====================================================================
-\  IMG-LOAD  ( "filename" -- ior )
-\    Load a .m64 file into the dictionary, relocate, and splice
-\    the dictionary chain.  After loading, the words defined in the
-\    file are available for use.
-\
-\    File must exist on disk.  Parses filename from input stream.
-\    Returns 0 on success, negative error code on failure.
-\
-\    Strategy: read the ENTIRE file in one FREAD (avoids the sector-
-\    aligned cursor issue where FREAD advances by whole sectors).
-\    NOTE: megapad c574899 fixes FREAD/FWRITE return-stack corruption
-\    in FR-HEAD/FW-HEAD.  With that fix, byte-level reads should work
-\    correctly.  The one-big-read strategy still works and is simpler.
-\    The file lands at HERE.  The segment lives at HERE+64.
-\    We ALLOT header+segment to make it permanent, then use the
-\    reloc data still sitting past the ALLOT (scratch at new HERE).
-\ =====================================================================
-
-: IMG-LOAD  ( "filename" -- ior )
-    \ 1. Open (fdesc at HERE, advances HERE by 56 bytes)
-    PARSE-NAME
-    FIND-BY-NAME DUP -1 = IF
-        DROP
-        ." IMG-LOAD: not found: " NAMEBUF .ZSTR CR
-        _IMG-ERR-IO EXIT
-    THEN
-    OPEN-BY-SLOT DUP 0= IF
-        DROP
-        ." IMG-LOAD: open failed" CR
-        _IMG-ERR-IO EXIT
-    THEN
-    _img-load-fd !
-
-    \ 2. Read entire file into HERE in one FREAD
-    \    FREAD DMA is sector-aligned, cursor advances by sectors.
-    \    One big read avoids the misalignment problem.
-    _img-load-fd @ FSIZE              ( file-size )
-    DUP 64 < IF
-        DROP ." IMG-LOAD: file too small" CR
-        _IMG-ERR-MAGIC EXIT
-    THEN
-    HERE OVER                         ( fsize buf fsize )
-    _img-load-fd @ FREAD DROP         ( fsize )
-
-    \ 3. Validate header at HERE
-    HERE     C@ 77 <> IF DROP ." IMG-LOAD: bad magic" CR _IMG-ERR-MAGIC EXIT THEN
-    HERE 1 + C@ 70 <> IF DROP ." IMG-LOAD: bad magic" CR _IMG-ERR-MAGIC EXIT THEN
-    HERE 2 + C@ 54 <> IF DROP ." IMG-LOAD: bad magic" CR _IMG-ERR-MAGIC EXIT THEN
-    HERE 3 + C@ 52 <> IF DROP ." IMG-LOAD: bad magic" CR _IMG-ERR-MAGIC EXIT THEN
-    HERE 4 + W@ _IMG-VERSION > IF
-        DROP ." IMG-LOAD: version too new" CR _IMG-ERR-MAGIC EXIT
-    THEN
-
-    \ 4. Extract metadata
-    HERE 6  + W@ _img-load-flags !
-    HERE 8  + @ _img-load-seg !
-    HERE 16 + @ _img-load-nrel !
-    HERE 32 + @ _img-load-nimp !
-    HERE 40 + @ _img-load-head !
-    HERE 48 + @ _img-load-prov !
-    HERE 56 + @ _img-load-entry !
-    DROP                              \ drop file-size
-
-    \ 5. Allocate segment — XMEM or base-RAM
-    _img-load-flags @ _IMG-FLAG-XMEM AND IF
-        \ XMEM: allocate in ext memory, copy segment there
-        _img-load-seg @ XMEM-ALLOT _img-load-base !
-        HERE 64 + _img-load-base @ _img-load-seg @ CMOVE
-        HERE 64 + _img-load-seg @ + _img-scratch !
+        DROP _img-load-base !
     ELSE
-        \ Normal: segment at HERE+64, ALLOT to make permanent
-        HERE 64 + _img-load-base !
-        64 _img-load-seg @ + ALLOT
-        HERE _img-scratch !
+        _imv-seg @ _IMG-DICT-ROOM? 0= IF 0 IMG-E-NOMEM EXIT THEN
+        HERE _img-load-base !
     THEN
 
-    \ 6. Relocate
-    _img-load-nrel @ 0<> IF
-        _img-scratch @ _img-load-nrel @ _img-load-base @ _IMG-RELOCATE
+    _imv-seg-base @ _img-load-base @ _imv-seg @ MOVE
+    _imv-flags @ _IMG-FLAG-XMEM AND 0= IF _imv-seg @ ALLOT THEN
+    _imv-nrel @ 0<> IF
+        _imv-rel-base @ _imv-nrel @ _img-load-base @ _IMG-RELOCATE
     THEN
+    _IMG-PATCH-IMPORTS
+    _IMG-SPLICE-VALID
+    _IMG-REGISTER-PROVIDED
 
-    \ 7. Resolve imports
-    _img-load-nimp @ 0<> IF
-        _img-scratch @ _img-load-nrel @ 8 * +
-        _img-load-nimp @ _IMG-RESOLVE-IMPORTS
+    _imv-flags @ _img-load-flags !
+    _imv-seg @ _img-load-seg !
+    _imv-nrel @ _img-load-nrel !
+    _imv-nimp @ _img-load-nimp !
+    _imv-head @ _img-load-head !
+    _imv-prov @ _img-load-prov !
+    _imv-entry @ _img-load-entry !
+    _img-load-base @ 0 ;
+
+: IMG-LOAD-MEM  ( image-a image-u -- ior )
+    _IMG-VERIFY-MEM DUP 0<> IF EXIT THEN DROP
+    _IMG-LOAD-VERIFIED NIP ;
+
+: IMG-LOAD-EXEC-MEM  ( image-a image-u -- xt ior )
+    _IMG-VERIFY-MEM DUP 0<> IF 0 SWAP EXIT THEN DROP
+    _imv-flags @ _IMG-FLAG-EXEC AND 0= IF 0 IMG-E-NOEXEC EXIT THEN
+    _imv-entry @ _img-selected-offset !
+    _IMG-LOAD-VERIFIED DUP 0<> IF NIP 0 SWAP EXIT THEN
+    DROP _img-selected-offset @ + 0 ;
+
+: IMG-LOAD-EXPORT  ( image-a image-u name-a name-u -- xt ior )
+    _img-request-len ! _img-request-name ! _img-u1 ! _img-a1 !
+    _img-a1 @ _img-u1 @ _IMG-VERIFY-MEM DUP 0<> IF 0 SWAP EXIT THEN DROP
+    _img-request-name @ _img-request-len @ _IMG-EXPORT-FIND-PARSED
+    DUP 0<> IF
+        >R DROP 0 R> EXIT
     THEN
-
-    \ 8. Splice dictionary chain
-    _IMG-SPLICE-DICT
-
-    \ 9. Register PROVIDED token if present  (-1 = none)
-    _img-load-prov @ -1 <> IF
-        NAMEBUF 24 0 FILL
-        _img-load-base @ _img-load-prov @ +   ( str-addr )
-        DUP 23 _IMG-STRLEN 23 MIN             ( str-addr len )
-        NAMEBUF SWAP CMOVE
-        _MOD-MARK
-    THEN
-
-    0
-;
+    DROP _img-selected-offset !
+    _IMG-LOAD-VERIFIED DUP 0<> IF NIP 0 SWAP EXIT THEN
+    DROP _img-selected-offset @ + 0 ;
 
 \ =====================================================================
-\  IMG-LOAD-EXEC  ( "filename" -- xt ior )
-\    Load a .m64 file that has the EXEC flag set (bit 2).  Returns
-\    the entry-point xt and 0 on success.  On error, returns dummy
-\    xt=0 and a negative ior.  Returns _IMG-ERR-NOEXEC if the
-\    image is not an executable.
+\ Optional guard: memory/state APIs only.  Raw file operations below
+\ never retain a guard across KDOS I/O.
 \ =====================================================================
 
-: IMG-LOAD-EXEC  ( "filename" -- xt ior )
-    IMG-LOAD DUP 0<> IF
-        0 SWAP EXIT               \ error → ( 0 ior )
-    THEN
-    _img-load-flags @ _IMG-FLAG-EXEC AND 0= IF
-        DROP 0 _IMG-ERR-NOEXEC EXIT
-    THEN
-    DROP
-    _img-load-base @ _img-load-entry @ +
-    0
-;
-
-\ =====================================================================
-\  Phase 5 — Diagnostics & Hardening
-\ =====================================================================
-
-\ Helper: open a .m64 file, read whole file at HERE, validate header.
-\ On success: leaves file-size on stack, header data at HERE.
-\ On failure: prints diagnostic, returns 0.
-
-: _IMG-OPEN-READ  ( "filename" -- file-size | 0 )
-    PARSE-NAME
-    FIND-BY-NAME DUP -1 = IF
-        DROP ." IMG: not found: " NAMEBUF .ZSTR CR 0 EXIT
-    THEN
-    OPEN-BY-SLOT DUP 0= IF
-        DROP ." IMG: open failed" CR 0 EXIT
-    THEN
-    DUP FSIZE                         ( fd file-size )
-    DUP 64 < IF
-        2DROP ." IMG: file too small" CR 0 EXIT
-    THEN
-    \ FREAD ( buf len fd -- n )
-    HERE OVER                         ( fd fsize HERE fsize )
-    3 PICK                            ( fd fsize HERE fsize fd )
-    FREAD DROP                        ( fd fsize ; data at HERE )
-    NIP                               ( fsize )
-    \ Validate magic
-    HERE     C@ 77 <>
-    HERE 1 + C@ 70 <> OR
-    HERE 2 + C@ 54 <> OR
-    HERE 3 + C@ 52 <> OR IF
-        DROP ." IMG: bad magic" CR 0 EXIT
-    THEN
-    HERE 4 + W@ _IMG-VERSION > IF
-        DROP ." IMG: version too new" CR 0 EXIT
-    THEN
-;
-
-\ =====================================================================
-\  IMG-INFO  ( "filename" -- )
-\    Read and print the .m64 header without loading.
-\ =====================================================================
-
-: IMG-INFO  ( "filename" -- )
-    _IMG-OPEN-READ                    ( file-size | 0 )
-    DUP 0= IF DROP EXIT THEN
-
-    \ Extract fields from header at HERE
-    HERE 4  + W@                      \ version
-    HERE 6  + W@                      \ flags
-    HERE 8  + @                       \ seg-size
-    HERE 16 + @                       \ reloc-count
-    HERE 24 + @                       \ export-count
-    HERE 32 + @                       \ import-count
-    HERE 40 + @                       \ chain-head (unused for display)
-    HERE 48 + @                       \ prov-offset
-    HERE 56 + @                       \ entry-point
-
-    ( fsize ver flags seg nrel nexp nimp head prov entry )
-    \ PICK indices (0=TOS): 0=entry 1=prov 2=head 3=nimp
-    \   4=nexp 5=nrel 6=seg 7=flags 8=ver 9=fsize
-
-    ." MF64 v" 8 PICK . CR           \ version
-    ."   Flags:     "
-    7 PICK                            \ flags
-    DUP _IMG-FLAG-EXEC AND IF ." EXEC " THEN
-    DUP _IMG-FLAG-LIB  AND IF ." LIB " THEN
-    DUP _IMG-FLAG-XMEM AND IF ." XMEM " THEN
-    DUP _IMG-FLAG-JIT  AND IF ." JIT " THEN
-    DUP 0= IF ." (none)" THEN
-    DROP CR
-    ."   Segment:   " 6 PICK . ." bytes" CR
-    ."   Relocs:    " 5 PICK . CR
-    ."   Exports:   " 4 PICK . CR
-    ."   Imports:   " 3 PICK . CR
-    ."   Provided:  "
-    OVER -1 <> IF                     \ prov-offset (pos 1) valid?
-        HERE 64 + 2 PICK +           ( ... prov entry prov-addr )
-        DUP 64 _IMG-STRLEN           ( ... prov entry prov-addr len )
-        TYPE                          ( ... prov entry )
-    ELSE ." (none)"
-    THEN CR
-    ."   Entry:     "
-    DUP -1 <> IF
-        .
-    ELSE
-        DROP ." (none)"
-    THEN CR
-    ."   File size: " 8 PICK . ." bytes" CR
-    \ Drop remaining values on stack
-    \ After entry consumed by ./DROP above: ( fsize ver flags seg nrel nexp nimp head prov )
-    2DROP 2DROP 2DROP 2DROP DROP
-;
-
-\ =====================================================================
-\  IMG-VERIFY  ( "filename" -- ior )
-\    Non-destructive validation of a .m64 file.
-\    Reads file, applies relocations to a temp copy, checks:
-\    - All reloc offsets within segment bounds
-\    - All import names resolve via FIND
-\    - Entry-point offset within segment bounds (if EXEC flag)
-\    Does NOT splice into dictionary.  Returns 0 if OK.
-\ =====================================================================
-
-: IMG-VERIFY  ( "filename" -- ior )
-    _IMG-OPEN-READ                    ( file-size | 0 )
-    DUP 0= IF _IMG-ERR-MAGIC EXIT THEN
-
-    \ Parse header fields
-    HERE 6  + W@                      ( fsize flags )
-    HERE 8  + @                       ( fsize flags seg )
-    HERE 16 + @                       ( fsize flags seg nrel )
-    HERE 32 + @                       ( fsize flags seg nrel nimp )
-    HERE 48 + @                       ( fsize flags seg nrel nimp prov )
-    HERE 56 + @                       ( fsize flags seg nrel nimp prov entry )
-
-    \ Stack indices (0=TOS): entry=0 prov=1 nimp=2 nrel=3 seg=4 flags=5 fsize=6
-
-    \ Check file size is large enough for all sections
-    \ expected = 64 + seg + nrel*8 + nimp*32 (import entry = 32 bytes)
-    64                                ( ... entry min )
-    5 PICK +                          ( ... entry min+seg )
-    4 PICK 8 * +                      ( ... entry min+seg+rel )
-    3 PICK _IMG-IMPORT-ENTRY-SZ * +   ( ... entry expected )
-    7 PICK > IF
-        ." IMG-VERIFY: file truncated" CR
-        2DROP 2DROP 2DROP DROP
-        _IMG-ERR-MAGIC EXIT
-    THEN
-
-    \ Check all reloc offsets within segment
-    \ Relocs start at HERE + 64 + seg
-    HERE 64 + 5 PICK +               ( ... reloc-base )  \ 8-item: seg=5
-    4 PICK 0 ?DO                      ( ... reloc-base )  \ 8-item: nrel=4
-        DUP I 8 * + @                ( ... reloc-base offset )
-        6 PICK >= IF                  \ 9-item: seg=6
-            ." IMG-VERIFY: reloc[" I . ." ] offset out of range" CR
-            DROP
-            2DROP 2DROP 2DROP DROP
-            _IMG-ERR-RELOC EXIT
-        THEN
-    LOOP
-    DROP                              ( fsize flags seg nrel nimp prov entry )
-
-    \ Check import name resolution
-    \ Imports at HERE + 64 + seg + nrel*8 (no export section in v1)
-    \ Import entry: 8-byte fixup-offset + 24-byte inline name (NUL-padded)
-    HERE 64 + 5 PICK + 4 PICK 8 * +  ( ... imp-base )  \ 8-item: seg=5 nrel=4
-    3 PICK 0 ?DO                      ( ... imp-base )   \ 8-item: nimp=3
-        DUP I _IMG-IMPORT-ENTRY-SZ * + ( ... imp-base entry-addr )
-        \ Check fixup offset within segment
-        DUP @ 7 PICK >= IF           \ 10-item: seg=7
-            ." IMG-VERIFY: import[" I . ." ] fixup offset out of range" CR
-            2DROP
-            2DROP 2DROP 2DROP DROP
-            _IMG-ERR-RELOC EXIT
-        THEN
-        \ Inline name at entry+8 (up to 23 chars NUL-terminated)
-        8 +                           ( ... imp-base name-addr )
-        DUP 23 _IMG-STRLEN            ( ... imp-base name-addr len )
-        DUP 0= IF
-            ." IMG-VERIFY: import[" I . ." ] empty name" CR
-            2DROP DROP
-            2DROP 2DROP 2DROP DROP
-            _IMG-ERR-IMPORT EXIT
-        THEN
-        \ Build counted string in _img-find-buf
-        DUP _img-find-buf C!          ( ... imp-base name-addr len )
-        _img-find-buf 1 + SWAP CMOVE  ( ... imp-base )
-        _img-find-buf FIND 0= IF
-            ." IMG-VERIFY: unresolved import: "
-            _img-find-buf COUNT TYPE CR
-            DROP                      \ drop c-addr from FIND
-            2DROP 2DROP 2DROP 2DROP   \ drop 8: imp-base + 7 base values
-            _IMG-ERR-IMPORT EXIT
-        THEN
-        DROP                          ( ... imp-base )
-    LOOP
-    DROP                              ( fsize flags seg nrel nimp prov entry )
-
-    \ Check entry-point if EXEC
-    5 PICK _IMG-FLAG-EXEC AND IF      \ 7-item: flags=5
-        DUP -1 = IF
-            ." IMG-VERIFY: EXEC flag set but no entry point" CR
-            2DROP 2DROP 2DROP DROP
-            _IMG-ERR-NOEXEC EXIT
-        THEN
-        DUP 5 PICK >= IF             \ 8-item (after DUP): seg=5
-            ." IMG-VERIFY: entry point out of segment" CR
-            2DROP 2DROP 2DROP DROP
-            _IMG-ERR-RELOC EXIT
-        THEN
-    THEN
-
-    \ Check provided offset if present
-    OVER -1 <> IF
-        OVER 5 PICK >= IF            \ 8-item (after OVER): seg=5
-            ." IMG-VERIFY: provided offset out of segment" CR
-            2DROP 2DROP 2DROP DROP
-            _IMG-ERR-RELOC EXIT
-        THEN
-    THEN
-
-    \ All checks passed
-    2DROP 2DROP 2DROP DROP
-    0
-;
-
-\ =====================================================================
-\  IMG-CHECKSUM  ( "filename" -- u64 )
-\    Compute FNV-1a 64-bit hash over segment + relocation table +
-\    import/export tables.  Skips the header and reserved field.
-\    Useful for reproducible-build verification.
-\ =====================================================================
-
-\ FNV-1a 64-bit constants
-\ Using 32-bit FNV-1a for portability (64-bit MUL can overflow weirdly)
-\ FNV offset basis = 2166136261 (0x811c9dc5)
-\ FNV prime = 16777619 (0x01000193)
-\ Operates byte-at-a-time for simplicity.
-
-: IMG-CHECKSUM  ( "filename" -- u64 )
-    _IMG-OPEN-READ                    ( file-size | 0 )
-    DUP 0= IF EXIT THEN              ( file-size )
-
-    HERE 8 + @                        ( fsize seg-size )
-    HERE 16 + @                       ( fsize seg nrel )
-    HERE 24 + @                       ( fsize seg nrel nexp )
-    HERE 32 + @                       ( fsize seg nrel nexp nimp )
-
-    \ Compute data length: seg + nrel*8 + nexp*16 + nimp*32
-    3 PICK                            ( ... nimp data-len=seg )
-    3 PICK 8 * +                      ( ... nimp data-len )
-    2 PICK 16 * +                     ( ... nimp data-len )
-    OVER _IMG-IMPORT-ENTRY-SZ * +     ( fsize seg nrel nexp nimp data-len )
-
-    \ Data starts at HERE + 64 (segment)
-    HERE 64 +                         ( ... data-len data-addr )
-    SWAP                              ( ... data-addr data-len )
-
-    \ FNV-1a hash
-    2166136261                        ( ... data-addr data-len hash )
-    ROT ROT                           ( ... hash data-addr data-len )
-    0 ?DO                             ( ... hash data-addr )
-        DUP I + C@                    ( hash data-addr byte )
-        ROT XOR                       ( data-addr hash' )
-        16777619 *                    ( data-addr hash'' )
-        SWAP                          ( hash'' data-addr )
-    LOOP
-    DROP                              ( fsize seg nrel nexp nimp hash )
-
-    \ Clean up stack: drop fsize seg nrel nexp nimp, keep hash
-    SWAP DROP SWAP DROP SWAP DROP SWAP DROP SWAP DROP
-;
-
-\ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _binimg-guard
 
-' IMG-MARK        CONSTANT _img-mark-xt
-' IMG-PROVIDED    CONSTANT _img-provided-xt
-' IMG-ENTRY       CONSTANT _img-entry-xt
-' IMG-XMEM        CONSTANT _img-xmem-xt
-' IMG-SAVE        CONSTANT _img-save-xt
-' IMG-SAVE-EXEC   CONSTANT _img-save-exec-xt
-' IMG-LOAD        CONSTANT _img-load-xt
-' IMG-LOAD-EXEC   CONSTANT _img-load-exec-xt
-' IMG-INFO        CONSTANT _img-info-xt
-' IMG-VERIFY      CONSTANT _img-verify-xt
-' IMG-CHECKSUM    CONSTANT _img-checksum-xt
+' IMG-MARK            CONSTANT _img-mark-xt
+' IMG-DISCARD         CONSTANT _img-discard-xt
+' IMG-PROVIDED        CONSTANT _img-provided-xt
+' IMG-EXPORT          CONSTANT _img-export-xt
+' IMG-ENTRY-NAMED     CONSTANT _img-entry-named-xt
+' IMG-ENTRY           CONSTANT _img-entry-xt
+' IMG-XMEM            CONSTANT _img-xmem-xt
+' IMG-BUFFER-MAX      CONSTANT _img-buffer-max-xt
+' IMG-BUILD-INTO      CONSTANT _img-build-into-xt
+' IMG-VERIFY-MEM      CONSTANT _img-verify-mem-xt
+' IMG-EXPORT-FIND     CONSTANT _img-export-find-xt
+' IMG-LOAD-MEM        CONSTANT _img-load-mem-xt
+' IMG-LOAD-EXEC-MEM   CONSTANT _img-load-exec-mem-xt
+' IMG-LOAD-EXPORT     CONSTANT _img-load-export-xt
 
-: IMG-MARK        _img-mark-xt _binimg-guard WITH-GUARD ;
-: IMG-PROVIDED    _img-provided-xt _binimg-guard WITH-GUARD ;
-: IMG-ENTRY       _img-entry-xt _binimg-guard WITH-GUARD ;
-: IMG-XMEM        _img-xmem-xt _binimg-guard WITH-GUARD ;
-: IMG-SAVE        _img-save-xt _binimg-guard WITH-GUARD ;
-: IMG-SAVE-EXEC   _img-save-exec-xt _binimg-guard WITH-GUARD ;
-: IMG-LOAD        _img-load-xt _binimg-guard WITH-GUARD ;
-: IMG-LOAD-EXEC   _img-load-exec-xt _binimg-guard WITH-GUARD ;
-: IMG-INFO        _img-info-xt _binimg-guard WITH-GUARD ;
-: IMG-VERIFY      _img-verify-xt _binimg-guard WITH-GUARD ;
-: IMG-CHECKSUM    _img-checksum-xt _binimg-guard WITH-GUARD ;
+: IMG-MARK            _img-mark-xt _binimg-guard WITH-GUARD ;
+: IMG-DISCARD         _img-discard-xt _binimg-guard WITH-GUARD ;
+: IMG-PROVIDED        _img-provided-xt _binimg-guard WITH-GUARD ;
+: IMG-EXPORT          _img-export-xt _binimg-guard WITH-GUARD ;
+: IMG-ENTRY-NAMED     _img-entry-named-xt _binimg-guard WITH-GUARD ;
+: IMG-ENTRY           _img-entry-xt _binimg-guard WITH-GUARD ;
+: IMG-XMEM            _img-xmem-xt _binimg-guard WITH-GUARD ;
+: IMG-BUFFER-MAX      _img-buffer-max-xt _binimg-guard WITH-GUARD ;
+: IMG-BUILD-INTO      _img-build-into-xt _binimg-guard WITH-GUARD ;
+: IMG-VERIFY-MEM      _img-verify-mem-xt _binimg-guard WITH-GUARD ;
+: IMG-EXPORT-FIND     _img-export-find-xt _binimg-guard WITH-GUARD ;
+: IMG-LOAD-MEM        _img-load-mem-xt _binimg-guard WITH-GUARD ;
+: IMG-LOAD-EXEC-MEM   _img-load-exec-mem-xt _binimg-guard WITH-GUARD ;
+: IMG-LOAD-EXPORT     _img-load-export-xt _binimg-guard WITH-GUARD ;
 [THEN] [THEN]
+
+\ =====================================================================
+\ Legacy KDOS raw-file wrappers
+\ =====================================================================
+
+VARIABLE _img-file-fd
+VARIABLE _img-file-size
+VARIABLE _img-file-buffer
+VARIABLE _img-file-actual
+VARIABLE _img-file-result
+VARIABLE _img-file-status
+
+: _IMG-READ-FILE  ( "filename" -- image-a image-u ior )
+    PARSE-NAME
+    FIND-BY-NAME DUP -1 = IF DROP 0 0 IMG-E-IO EXIT THEN
+    OPEN-BY-SLOT DUP 0= IF DROP 0 0 IMG-E-IO EXIT THEN
+    _img-file-fd !
+    _img-file-fd @ FSIZE DUP _img-file-size !
+    _IMG-HDR-SZ < IF _img-file-fd @ FCLOSE 0 0 IMG-E-SHORT EXIT THEN
+    _img-file-size @ DMA-ALLOCATE DUP 0<> IF
+        2DROP
+        _img-file-fd @ FCLOSE 0 0 IMG-E-NOMEM EXIT
+    THEN
+    DROP _img-file-buffer !
+    _img-file-buffer @ _img-file-size @ _img-file-fd @ FREAD
+    _img-file-actual !
+    _img-file-fd @ FCLOSE
+    _img-file-actual @ _img-file-size @ <> IF
+        _img-file-buffer @ DMA-FREE 0 0 IMG-E-SHORT EXIT
+    THEN
+    _img-file-buffer @ _img-file-size @ 0 ;
+
+: IMG-SAVE  ( "filename" -- ior )
+    IMG-BUFFER-MAX DUP 0<> IF NIP EXIT THEN DROP _img-file-size !
+    PARSE-NAME
+    FIND-BY-NAME DUP -1 = IF DROP IMG-E-IO EXIT THEN
+    OPEN-BY-SLOT DUP 0= IF DROP IMG-E-IO EXIT THEN
+    _img-file-fd !
+    _img-file-fd @ F.MAX SECTOR * _img-file-size @ < IF
+        _img-file-fd @ FCLOSE IMG-E-CAPACITY EXIT
+    THEN
+
+    _img-file-size @ DMA-ALLOCATE DUP 0<> IF
+        >R DROP _img-file-fd @ FCLOSE R> DROP IMG-E-NOMEM EXIT
+    THEN
+    DROP _img-file-buffer !
+    _img-file-buffer @ _img-file-size @ IMG-BUILD-INTO
+    DUP 0<> IF
+        _img-file-status ! DROP
+        _img-file-buffer @ DMA-FREE
+        _img-file-fd @ FCLOSE
+        _img-file-status @ EXIT
+    THEN
+    DROP _img-file-size !
+
+    0 _img-file-fd @ FTRUNCATE
+    0 _img-file-fd @ FSEEK
+    _img-file-buffer @ _img-file-size @ _img-file-fd @ FWRITE
+    _img-file-fd @ F.CURSOR _img-file-size @ =
+    _img-file-fd @ FSIZE _img-file-size @ = AND _img-i0 !
+    _img-file-fd @ FFLUSH
+    _img-file-fd @ FCLOSE
+    _img-file-buffer @ DMA-FREE
+    _img-i0 @ IF 0 ELSE IMG-E-IO THEN ;
+
+: IMG-SAVE-EXEC  ( xt "filename" -- ior )
+    IMG-ENTRY IMG-SAVE ;
+
+: IMG-LOAD  ( "filename" -- ior )
+    _IMG-READ-FILE DUP 0<> IF >R 2DROP R> EXIT THEN
+    DROP IMG-LOAD-MEM _img-file-status !
+    _img-file-buffer @ DMA-FREE
+    _img-file-status @ ;
+
+: IMG-LOAD-EXEC  ( "filename" -- xt ior )
+    _IMG-READ-FILE DUP 0<> IF >R 2DROP 0 R> EXIT THEN
+    DROP IMG-LOAD-EXEC-MEM
+    _img-file-status ! _img-file-result !
+    _img-file-buffer @ DMA-FREE
+    _img-file-result @ _img-file-status @ ;
+
+: IMG-VERIFY  ( "filename" -- ior )
+    _IMG-READ-FILE DUP 0<> IF >R 2DROP R> EXIT THEN
+    DROP IMG-VERIFY-MEM _img-file-status !
+    _img-file-buffer @ DMA-FREE
+    _img-file-status @ ;
+
+: IMG-INFO  ( "filename" -- )
+    _IMG-READ-FILE DUP 0<> IF >R 2DROP R> . EXIT THEN
+    DROP 2DUP IMG-VERIFY-MEM DUP 0<> IF
+        >R 2DROP _img-file-buffer @ DMA-FREE R> . EXIT
+    THEN DROP
+    2DROP
+    ." MF64 v" _imv-version @ . CR
+    ."   Flags:     "
+    _imv-flags @ DUP _IMG-FLAG-EXEC AND IF ." EXEC " THEN
+    DUP _IMG-FLAG-LIB AND IF ." LIB " THEN
+    DUP _IMG-FLAG-XMEM AND IF ." XMEM " THEN
+    DUP _IMG-FLAG-JIT AND IF ." JIT " THEN
+    DUP 0= IF ." (none)" THEN DROP CR
+    ."   Segment:   " _imv-seg @ . ." bytes" CR
+    ."   Relocs:    " _imv-nrel @ . CR
+    ."   Exports:   " _imv-nexp @ . CR
+    ."   Imports:   " _imv-nimp @ . CR
+    ."   Provided:  " _imv-prov @ -1 = IF
+        ." (none)"
+    ELSE
+        _imv-seg-base @ _imv-prov @ + DUP
+        _imv-seg @ _imv-prov @ - _IMG-STRLEN TYPE
+    THEN CR
+    ."   Entry:     " _imv-entry @ -1 = IF ." (none)" ELSE _imv-entry @ . THEN CR
+    ."   File size: " _imv-size @ . ." bytes" CR
+    _img-file-buffer @ DMA-FREE ;
+
+: _IMG-HASH-BODY  ( -- u )
+    2166136261
+    _imv-seg-base @ _imv-used @ _IMG-HDR-SZ -
+    0 ?DO
+        DUP I + C@ ROT XOR 16777619 * SWAP
+    LOOP DROP ;
+
+: IMG-CHECKSUM  ( "filename" -- u )
+    _IMG-READ-FILE DUP 0<> IF >R 2DROP R> DROP 0 EXIT THEN
+    DROP 2DUP IMG-VERIFY-MEM DUP 0<> IF
+        >R 2DROP _img-file-buffer @ DMA-FREE R> DROP 0 EXIT
+    THEN
+    DROP 2DROP _IMG-HASH-BODY _img-file-result !
+    _img-file-buffer @ DMA-FREE
+    _img-file-result @ ;

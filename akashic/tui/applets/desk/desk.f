@@ -36,7 +36,12 @@
 \    DESK-PRACTICE     ( -- head | 0 )  Active validated Practice head
 \    DESK-CONTEXT      ( -- ctx | 0 )   Active root Context
 \    DESK-RECOVERY?    ( -- flag )      Fail-closed recovery mode
+\    DESK-CATALOG      ( -- catalog|0 ) Installed app catalog
+\    DESK-TRY-LAUNCH   ( desc -- id ior ) Transactional sub-app launch
+\    DESK-QUEUE-BUILTIN ( desc flags -- ) Bind built-in before run
 \    DESK-QUEUE-LAUNCH ( desc -- )     Set startup applet (before DESK-RUN)
+\    DESK-PACKAGE-RESOLVER! ( xt context -- ) Set lazy package resolver
+\    DESK-PACKAGE-RELEASER! ( xt context -- ) Set descriptor releaser
 \    DESK-RUN          ( -- )          Fill desc, call ASHELL-RUN
 \ =================================================================
 
@@ -51,15 +56,19 @@ REQUIRE ../../draw.f
 REQUIRE ../../keys.f
 REQUIRE ../../color.f
 REQUIRE ../../widgets/prompt.f
+REQUIRE ../../app-catalog.f
+REQUIRE ../../app-loader.f
+REQUIRE ../../app-builder.f
 REQUIRE ../../../utils/toml.f
 REQUIRE ../../../liraq/uidl.f
-REQUIRE ../../../utils/binimg.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../runtime/practice-activation.f
+REQUIRE ../../../runtime/resource-registry.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/job.f
 REQUIRE ../../../interop/capability-facet.f
+REQUIRE ../../../interop/shared-document.f
 REQUIRE ../../../agent/runtime.f
 REQUIRE ../../../agent/mandate-run.f
 REQUIRE ../../../agent/providers/offline.f
@@ -145,6 +154,44 @@ VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
 0 _DESK-CFG-A !  0 _DESK-CFG-L !
 VARIABLE _DESK-PENDING-AGENT-SOURCE
 0 _DESK-PENDING-AGENT-SOURCE !
+
+\ Built-ins are constructor inputs, like the startup queue.  Each entry is
+\ (APP-DESC, default catalog flags).  DESK-QUEUE-LAUNCH also registers its
+\ descriptor here so existing boot profiles acquire catalog entries without
+\ changing their startup behavior.
+32 CONSTANT _DESK-BUILTIN-MAX
+16 CONSTANT _DESK-BUILTIN-SZ
+CREATE _DESK-BUILTIN-BUF _DESK-BUILTIN-MAX _DESK-BUILTIN-SZ * ALLOT
+VARIABLE _DESK-BUILTIN-N
+0 _DESK-BUILTIN-N !
+
+ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-AUTOSTART OR ACAT-F-BUILTIN OR
+CONSTANT _DESK-BUILTIN-DEFAULT-FLAGS
+
+VARIABLE _DESK-PENDING-RESOLVER-XT
+VARIABLE _DESK-PENDING-RESOLVER-CTX
+VARIABLE _DESK-PENDING-RELEASER-XT
+VARIABLE _DESK-PENDING-RELEASER-CTX
+0 _DESK-PENDING-RESOLVER-XT !
+0 _DESK-PENDING-RESOLVER-CTX !
+0 _DESK-PENDING-RELEASER-XT !
+0 _DESK-PENDING-RELEASER-CTX !
+
+: _DESK-BUILTIN-ENTRY  ( index -- a )
+    _DESK-BUILTIN-SZ * _DESK-BUILTIN-BUF + ;
+
+VARIABLE _DBQ-DESC
+VARIABLE _DBQ-FLAGS
+
+: _DESK-QUEUE-BUILTIN-RAW  ( desc flags -- )
+    _DBQ-FLAGS ! _DBQ-DESC !
+    _DESK-BUILTIN-N @ 0 ?DO
+        I _DESK-BUILTIN-ENTRY @ _DBQ-DESC @ = IF UNLOOP EXIT THEN
+    LOOP
+    _DESK-BUILTIN-N @ _DESK-BUILTIN-MAX >= IF EXIT THEN
+    _DESK-BUILTIN-N @ _DESK-BUILTIN-ENTRY DUP >R
+    _DBQ-DESC @ R@ ! _DBQ-FLAGS @ R> 8 + !
+    1 _DESK-BUILTIN-N +! ;
 
 \ Startup applets: set via DESK-QUEUE-LAUNCH before DESK-RUN.
 \ DESK-INIT-CB launches them after the screen & region are ready.
@@ -234,14 +281,23 @@ _DESK-CURRENT-STATE CMP-CELL: _DHBAR-COUNT
 
 \ Generic runtime and interoperability ownership.
 _DESK-CURRENT-STATE CMP-CELL: _DESK-REGISTRY
+_DESK-CURRENT-STATE CMP-CELL: _DESK-RREG
 _DESK-CURRENT-STATE CMP-CELL: _DESK-POLICY
 _DESK-CURRENT-STATE CMP-CELL: _DESK-BUS
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AUTHORITY
 _DESK-CURRENT-STATE CMP-CELL: _DESK-INTENTS
 _DESK-CURRENT-STATE CMP-CELL: _DESK-JOBS
+_DESK-CURRENT-STATE RID-SIZE CMP-FIELD: _DESK-DAYBOOK-RID
+_DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
+_DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-STATUS
 _DESK-CURRENT-STATE IENDPOINT-SIZE CMP-FIELD: _DESK-ENDPOINT
 _DESK-CURRENT-STATE CMP-CELL: _DESK-INSTALLED-N
 _DESK-CURRENT-STATE _DESK-MAX-INSTALLED CELLS CMP-FIELD: _DESK-INSTALLED
+_DESK-CURRENT-STATE CMP-CELL: _DESK-CATALOG
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-ACTIVE
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-SELECTED
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-SCROLL
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-STATUS
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-SOURCE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROVIDER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-RUNTIME
@@ -274,6 +330,32 @@ CMP-LAYOUT-SIZE CONSTANT _DESK-STATE-SIZE
 : DESK-RECOVERY?  ( -- flag )
     _DESK-PRACTICE-ACTIVATION PACT-RECOVERY? ;
 
+: DESK-CATALOG  ( -- catalog | 0 )
+    _DESK-CATALOG @ ;
+
+: _DESK-PACKAGE-RESOLVER  ( entry context -- desc status )
+    DROP ACE-MANIFEST$ ALOAD-PATH ;
+
+: _DESK-PACKAGE-RELEASER  ( desc context -- )
+    DROP ALOAD-DESC-FREE ;
+
+: DESK-PACKAGE-RESOLVER!  ( xt context -- )
+    \ Hook replacement is a constructor operation.  Swapping ownership
+    \ policy while descriptors are cached could free with the wrong hook.
+    _DESK-CURRENT-STATE @ IF 2DROP EXIT THEN
+    _DESK-PENDING-RESOLVER-CTX !
+    _DESK-PENDING-RESOLVER-XT !
+    0 _DESK-PENDING-RELEASER-XT !
+    0 _DESK-PENDING-RELEASER-CTX ! ;
+
+: DESK-PACKAGE-RELEASER!  ( xt context -- )
+    _DESK-CURRENT-STATE @ IF 2DROP EXIT THEN
+    _DESK-PENDING-RELEASER-CTX !
+    _DESK-PENDING-RELEASER-XT ! ;
+
+' _DESK-PACKAGE-RESOLVER 0 DESK-PACKAGE-RESOLVER!
+' _DESK-PACKAGE-RELEASER 0 DESK-PACKAGE-RELEASER!
+
 VARIABLE _DIF-COMP
 
 : _DESK-INSTALLED-FIND  ( comp-desc -- app-desc | 0 )
@@ -300,6 +382,22 @@ VARIABLE _DII-COMP
     _DESK-INSTALLED-N @ CELLS _DESK-INSTALLED + !
     1 _DESK-INSTALLED-N +!
     0 ;
+
+VARIABLE _DCED-DESC
+VARIABLE _DCED-ID
+
+: _DESK-CATALOG-ENTRY-FOR-DESC  ( desc -- entry | 0 )
+    _DCED-DESC !
+    _DESK-CATALOG @ ?DUP 0= IF 0 EXIT THEN >R
+    _DCED-DESC @ APP-DESC-VALID? 0= IF R> DROP 0 EXIT THEN
+    _DCED-DESC @ APP.COMP-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
+    R> ACAT-FIND-ID ;
+
+: _DESK-CATALOG-MARK-DESC  ( desc slot-id -- )
+    _DCED-ID ! _DCED-DESC !
+    _DCED-DESC @ _DESK-CATALOG-ENTRY-FOR-DESC ?DUP IF
+        _DCED-ID @ SWAP _DESK-CATALOG @ ACAT-MARK-SLOT
+    THEN ;
 
 : _HB-ENTRY  ( idx -- addr )  _HB-SZ * _HB-ENTRIES + ;
 
@@ -359,6 +457,54 @@ VARIABLE _DHBL-BA  VARIABLE _DHBL-BL
 
 \ Paint hotbar entries.  Called from the taskbar painter.
 VARIABLE _DHBP-COL
+
+VARIABLE _DHBC-ENTRY
+VARIABLE _DHBC-SHOWN
+VARIABLE _DHBC-CLOSE
+VARIABLE _DHBC-LABEL-A
+VARIABLE _DHBC-LABEL-U
+
+: _DESK-PAINT-CATALOG-HOTBAR  ( row col -- )
+    _DHBP-COL !
+    0 _DHBC-SHOWN !
+    _DESK-CATALOG @ ACAT-COUNT 0 ?DO
+        _DHBC-SHOWN @ _HB-MAX >= IF LEAVE THEN
+        I _DESK-CATALOG @ ACAT-NTH DUP ACE-PINNED? IF
+            _DHBC-ENTRY !
+            _DHBC-ENTRY @ ACE-QUARANTINED?
+            _DHBC-ENTRY @ ACE.STATE @ ACAT-R-FAILED = OR IF
+                33 _DHBC-CLOSE !
+                15 124 1 DRW-STYLE! 33
+            ELSE _DHBC-ENTRY @ ACE-ENABLED? 0= IF
+                41 _DHBC-CLOSE !
+                _DTH-MIN-FG @ _DTH-PIN-BG @ 0 DRW-STYLE! 40
+            ELSE _DHBC-ENTRY @ ACE.SLOT @ IF
+                93 _DHBC-CLOSE !
+                _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE! 91
+            ELSE
+                62 _DHBC-CLOSE !
+                _DTH-PIN-FG @ _DTH-PIN-BG @ 0 DRW-STYLE! 60
+            THEN THEN THEN
+            OVER _DHBP-COL @ DRW-CHAR 1 _DHBP-COL +!
+            _DHBC-ENTRY @ ACE-TITLE$ DUP 0= IF
+                2DROP _DHBC-ENTRY @ ACE-ID$
+            THEN
+            DUP 10 > IF DROP 10 THEN
+            _DHBC-LABEL-U ! _DHBC-LABEL-A !
+            _DHBC-LABEL-A @ _DHBC-LABEL-U @
+            2 PICK _DHBP-COL @ DRW-TEXT
+            _DHBC-LABEL-U @ _DHBP-COL +!
+            _DHBC-CLOSE @ OVER _DHBP-COL @ DRW-CHAR 1 _DHBP-COL +!
+            32 OVER _DHBP-COL @ DRW-CHAR 1 _DHBP-COL +!
+            1 _DHBC-SHOWN +!
+        ELSE
+            DROP
+        THEN
+    LOOP
+    DROP ;
+
+: _DESK-HOTBAR-PROJECTION-COUNT  ( -- n )
+    _DESK-CATALOG @ ?DUP IF ACAT-PINNED-COUNT ELSE _DHBAR-COUNT @ THEN ;
 
 : _DESK-PAINT-HOTBAR  ( row col -- )
     _DHBP-COL !
@@ -649,72 +795,97 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 VARIABLE _DL-DESC
 VARIABLE _DL-INST
 VARIABLE _DL-SLOT
+VARIABLE _DL-REGISTERED
+VARIABLE _DL-APPENDED
+VARIABLE _DL-INIT-STARTED
+VARIABLE _DL-ID
+VARIABLE _DL-IOR
 
-: DESK-LAUNCH  ( desc -- id )
-    DUP APP-DESC-VALID? 0= IF DROP -1 EXIT THEN
-    DUP DESK-INSTALL IF DROP -1 EXIT THEN
-    _DL-DESC !
+-1400 CONSTANT DESK-LAUNCH-E-DESC
+-1401 CONSTANT DESK-LAUNCH-E-INSTANCE
+-1402 CONSTANT DESK-LAUNCH-E-REGISTRY
+-1403 CONSTANT DESK-LAUNCH-E-SLOT
+-1404 CONSTANT DESK-LAUNCH-E-CONTEXT
+-1405 CONSTANT DESK-LAUNCH-E-UIDL
+
+DEFER _DESK-LAUNCH-ROLLBACK  ( -- )
+' NOOP IS _DESK-LAUNCH-ROLLBACK
+
+: _DESK-LAUNCH-BODY  ( -- )
+    _DL-DESC @ APP-DESC-VALID? 0= IF DESK-LAUNCH-E-DESC THROW THEN
+    _DL-DESC @ DESK-INSTALL ?DUP IF THROW THEN
     _DL-DESC @ APP.COMP-DESC @ CINST-NEW
-    DUP IF 2DROP -1 EXIT THEN
-    DROP _DL-INST !
+    DUP IF NIP THROW THEN DROP DUP 0= IF DESK-LAUNCH-E-INSTANCE THROW THEN
+    _DL-INST !
     _DESK-ENDPOINT _DL-INST @ CINST.ENDPOINT !
-    _DL-INST @ _DESK-REGISTRY @ CREG-INST+ IF
-        _DL-INST @ CINST-FREE -1 EXIT
-    THEN
-    _SLOT-SZ ALLOCATE
-    DUP IF
-        SWAP DROP DROP
-        _DL-INST @ _DESK-REGISTRY @ CREG-INST- DROP
-        _DL-INST @ CINST-FREE -1 EXIT
-    THEN
-    DROP DUP _DL-SLOT ! _SLOT-SZ 0 FILL
+    _DL-INST @ _DESK-REGISTRY @ CREG-INST+ ?DUP IF THROW THEN
+    -1 _DL-REGISTERED !
+    _SLOT-SZ ALLOCATE DUP IF NIP THROW THEN DROP
+    DUP 0= IF DESK-LAUNCH-E-SLOT THROW THEN
+    DUP _DL-SLOT ! _SLOT-SZ 0 FILL
     _DL-DESC @ _DL-SLOT @ _SL-DESC !
     _DL-INST @ _DL-SLOT @ _SL-INST !
     _ST-RUNNING _DL-SLOT @ _SL-STATE !
-    _DESK-NEXT-ID @ _DL-SLOT @ _SL-ID !
+    _DESK-NEXT-ID @ DUP _DL-ID ! _DL-SLOT @ _SL-ID !
     1 _DESK-NEXT-ID +!
-    \ Allocate UIDL context if app declares UIDL (inline or file)
+    \ Allocate UIDL context if app declares UIDL (inline or file).
     _DL-DESC @ APP.UIDL-A @ _DL-DESC @ APP.UIDL-FILE-A @ OR IF
-        UCTX-ALLOC DUP IF DUP UCTX-CLEAR THEN
-        _DL-SLOT @ _SL-UCTX !
+        UCTX-ALLOC DUP 0= IF DROP DESK-LAUNCH-E-CONTEXT THROW THEN
+        DUP UCTX-CLEAR _DL-SLOT @ _SL-UCTX !
         -1 _DL-SLOT @ _SL-HAS-UIDL !
     ELSE
         0 _DL-SLOT @ _SL-UCTX !
         0 _DL-SLOT @ _SL-HAS-UIDL !
     THEN
     _DL-SLOT @ _DESK-APPEND
-    \ Auto-focus if this is the first slot
+    -1 _DL-APPENDED !
+    \ Auto-focus if this is the first slot.
     _DESK-FOCUS-SA @ 0= IF
         _ST-FOCUSED _DL-SLOT @ _SL-STATE !
         _DL-SLOT @ _DESK-FOCUS-SA !
     THEN
     DESK-RELAYOUT
-    \ Load UIDL document into sub-app context
+    \ Load UIDL document into the new child context.
     _DL-SLOT @ _SL-HAS-UIDL @ IF
         _DL-SLOT @ _DESK-CTX-SWITCH
         _DL-DESC @ APP.UIDL-A @ IF
-            \ --- inline UIDL ---
             _DL-DESC @ APP.UIDL-A @
             _DL-DESC @ APP.UIDL-U @
             _DL-SLOT @ _SL-RGN @
-            UTUI-LOAD DROP
+            UTUI-LOAD 0= IF DESK-LAUNCH-E-UIDL THROW THEN
         ELSE _DL-DESC @ APP.UIDL-FILE-A @ IF
-            \ --- file-based UIDL (loaded via shared loader) ---
             _DL-DESC @ APP.UIDL-FILE-A @
             _DL-DESC @ APP.UIDL-FILE-U @
             _DL-SLOT @ _SL-RGN @
-            ASHELL-LOAD-UIDL
+            ASHELL-LOAD-UIDL DUP 0= IF DROP DESK-LAUNCH-E-UIDL THROW THEN
             _DL-SLOT @ _SL-UIDL-BUF !
         THEN THEN
     THEN
-    \ Call sub-app init callback while context is live so that
-    \ UTUI-BY-ID, UTUI-WIDGET-SET, UTUI-DO! etc. persist.
+    \ Init runs with the child's context live.  Mark the boundary before
+    \ invoking app code so rollback may give a partially initialized app
+    \ one best-effort shutdown call.
     _DL-DESC @ APP.INIT-XT @ ?DUP IF
+        -1 _DL-INIT-STARTED !
         _DL-INST @ SWAP EXECUTE
     THEN
-    \ Save context AFTER init — widget mounts & actions are now captured
-    _DL-SLOT @ _SL-HAS-UIDL @ IF _DL-SLOT @ _DESK-CTX-SAVE THEN
-    _DL-SLOT @ _SL-ID @ ;
+    _DL-SLOT @ _SL-HAS-UIDL @ IF _DL-SLOT @ _DESK-CTX-SAVE THEN ;
+
+: DESK-TRY-LAUNCH  ( desc -- id ior )
+    _DL-DESC !
+    0 _DL-INST ! 0 _DL-SLOT ! 0 _DL-REGISTERED ! 0 _DL-APPENDED !
+    0 _DL-INIT-STARTED ! -1 _DL-ID ! 0 _DL-IOR !
+    ['] _DESK-LAUNCH-BODY CATCH ?DUP IF
+        _DL-IOR !
+        ['] _DESK-LAUNCH-ROLLBACK CATCH ?DUP IF
+            _DL-IOR @ 0= IF _DL-IOR ! ELSE DROP THEN
+        THEN
+        -1 _DL-IOR @ EXIT
+    THEN
+    _DL-DESC @ _DL-ID @ _DESK-CATALOG-MARK-DESC
+    _DL-ID @ 0 ;
+
+: DESK-LAUNCH  ( desc -- id )
+    DESK-TRY-LAUNCH DUP IF 2DROP -1 ELSE DROP THEN ;
 
 VARIABLE _DRCS-SA
 VARIABLE _DRCS-REASON
@@ -774,6 +945,7 @@ VARIABLE _DCF-SA
 VARIABLE _DCF-IOR
 VARIABLE _DCF-INST
 VARIABLE _DCF-ENTERED
+VARIABLE _DCF-HOST-ONLY
 
 : _DCF-REMEMBER  ( ior -- )
     ?DUP IF
@@ -835,7 +1007,11 @@ VARIABLE _DCF-ENTERED
     R@ _DCF-SA !
     R@ _SL-INST @ _DCF-INST !
     0 _DCF-IOR !
-    ['] _DCF-ENTER CATCH DUP 0= _DCF-ENTERED ! _DCF-REMEMBER
+    _DCF-HOST-ONLY @ IF
+        0 _DCF-ENTERED !
+    ELSE
+        ['] _DCF-ENTER CATCH DUP 0= _DCF-ENTERED ! _DCF-REMEMBER
+    THEN
     \ Entry includes context selection and child activation.  If it failed,
     \ do not run app-owned shutdown against a context whose identity is
     \ uncertain; host-owned unlink/release still proceeds below.
@@ -863,6 +1039,7 @@ VARIABLE _DCF-ENTERED
         0 _DESK-LAST-MIN-SA !
     THEN
     R@ _SL-ID @ _DESK-HOTBAR-SLOT-CLOSED
+    _DESK-CATALOG @ ?DUP IF R@ _SL-ID @ SWAP ACAT-SLOT-CLOSED THEN
     R@ _DESK-UNLINK
     R@ _DCF-SA !
     ['] _DCF-FREE-UIDL-BUF CATCH _DCF-REMEMBER
@@ -892,6 +1069,45 @@ VARIABLE _DCF-ENTERED
     THEN
     _DCF-IOR @ ;
 
+VARIABLE _DLR-IOR
+
+: _DLR-REMEMBER  ( ior -- )
+    ?DUP IF
+        _DLR-IOR @ 0= IF _DLR-IOR ! ELSE DROP THEN
+    THEN ;
+
+: _DLR-EXIT  ( -- )
+    0 ASHELL-CTX-SWITCH ;
+
+: _DLR-UNREGISTER  ( -- )
+    _DL-INST @ ?DUP IF
+        _DESK-REGISTRY @ ?DUP IF CREG-INST- DROP ELSE DROP THEN
+    THEN ;
+
+: _DLR-FREE-INST  ( -- )
+    _DL-INST @ ?DUP IF CINST-FREE THEN ;
+
+: _DLR-RELAYOUT  ( -- )
+    DESK-RELAYOUT ;
+
+: _DESK-LAUNCH-ROLLBACK-CALL  ( -- )
+    0 _DLR-IOR !
+    _DL-SLOT @ ?DUP IF
+        _DL-INIT-STARTED @ 0= _DCF-HOST-ONLY !
+        _DESK-CLOSE-SA-FORCE _DLR-REMEMBER
+        0 _DCF-HOST-ONLY !
+    ELSE
+        _DL-REGISTERED @ IF ['] _DLR-UNREGISTER CATCH _DLR-REMEMBER THEN
+        ['] _DLR-FREE-INST CATCH _DLR-REMEMBER
+    THEN
+    ['] _DLR-EXIT CATCH _DLR-REMEMBER
+    ['] _DLR-RELAYOUT CATCH _DLR-REMEMBER
+    0 _DL-INST ! 0 _DL-SLOT ! 0 _DL-REGISTERED ! 0 _DL-APPENDED !
+    0 _DL-INIT-STARTED !
+    _DLR-IOR @ ?DUP IF THROW THEN ;
+
+' _DESK-LAUNCH-ROLLBACK-CALL IS _DESK-LAUNCH-ROLLBACK
+
 VARIABLE _DRCI-REASON
 VARIABLE _DRCI-IOR
 
@@ -909,6 +1125,7 @@ VARIABLE _DRCI-IOR
     DUP >R _DRCI-REASON @ _DESK-REQUEST-CLOSE-SA
     DUP APP-CLOSE-D-ALLOW = IF
         0 _DRCI-IOR !
+        0 _DCF-HOST-ONLY !
         R@ _DESK-CLOSE-SA-FORCE _DRCI-REMEMBER
         ['] DESK-RELAYOUT CATCH _DRCI-REMEMBER
         _DRCI-IOR @ ?DUP IF THROW THEN
@@ -977,6 +1194,59 @@ VARIABLE _DRCI-IOR
     _DESK-VH @ 0= _DESK-VH !
     DESK-RELAYOUT ;
 
+VARIABLE _DCO-ENTRY
+VARIABLE _DCO-SLOT
+VARIABLE _DCO-DESC
+VARIABLE _DCO-STATUS
+VARIABLE _DCA-CAT
+
+
+: _DESK-OPEN-CATALOG-ENTRY  ( entry -- status )
+    _DCO-ENTRY !
+    _DCO-ENTRY @ ACE.SLOT @ DUP _DCO-SLOT ! IF
+        _DCO-SLOT @ _DESK-FIND-ID IF
+            _DCO-SLOT @ DESK-FOCUS-ID ACAT-S-OK EXIT
+        THEN
+        0 _DCO-ENTRY @ _DESK-CATALOG @ ACAT-MARK-SLOT
+    THEN
+    _DCO-ENTRY @ _DESK-CATALOG @ ACAT-RESOLVE
+    _DCO-STATUS ! _DCO-DESC !
+    _DCO-STATUS @ IF _DCO-STATUS @ EXIT THEN
+    _DCO-DESC @ DESK-TRY-LAUNCH
+    _DCO-STATUS ! _DCO-SLOT !
+    _DCO-STATUS @ IF
+        ACAT-R-FAILED _DCO-ENTRY @ ACE.STATE !
+        _DCO-STATUS @ _DCO-ENTRY @ ACE.ERROR !
+        _DCO-STATUS @ EXIT
+    THEN
+    _DCO-SLOT @ _DCO-ENTRY @ _DESK-CATALOG @ ACAT-MARK-SLOT
+    ACAT-R-LOADED _DCO-ENTRY @ ACE.STATE !
+    0 _DCO-ENTRY @ ACE.ERROR !
+    ACAT-S-OK ;
+
+: _DESK-AUTOSTART-CATALOG  ( -- )
+    _DESK-CATALOG @ ?DUP 0= IF EXIT THEN _DCA-CAT !
+    _DCA-CAT @ ACAT-COUNT 0 ?DO
+        I _DCA-CAT @ ACAT-NTH DUP ACE-AUTOSTART? OVER ACE.SLOT @ 0= AND IF
+            _DESK-OPEN-CATALOG-ENTRY DROP
+        ELSE
+            DROP
+        THEN
+    LOOP
+    _DCA-CAT @ ACAT-RECOVERY? IF
+        \ A corrupt/read-only catalog cannot accept a newly queued built-in.
+        \ Keep existing profiles bootable, but only for descriptors which
+        \ have no persisted row whose flags should remain authoritative.
+        _DESK-PEND-N @ 0 ?DO
+            I CELLS _DESK-PEND-BUF + @ DUP
+            _DESK-CATALOG-ENTRY-FOR-DESC 0= IF
+                DESK-TRY-LAUNCH 2DROP
+            ELSE
+                DROP
+            THEN
+        LOOP
+    THEN ;
+
 \ =====================================================================
 \  §8b — Runtime Registry and Interoperability Endpoint
 \ =====================================================================
@@ -1013,6 +1283,24 @@ VARIABLE _DSE-ID-U
     THEN
     _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.runtime.registry" STR-STR= IF
         _DESK-REGISTRY @ EXIT
+    THEN
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.runtime.context" STR-STR= IF
+        DESK-CONTEXT EXIT
+    THEN
+    _DSE-ID-A @ _DSE-ID-U @
+        S" org.akashic.runtime.resource-registry" STR-STR= IF
+        _DESK-RREG @ EXIT
+    THEN
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.interop.request-bus" STR-STR= IF
+        _DESK-BUS @ EXIT
+    THEN
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.resource.daybook" STR-STR= IF
+        _DESK-DAYBOOK-STATUS @ 0=
+        _DESK-DAYBOOK-OWNER @ 0<> AND IF
+            _DESK-DAYBOOK-RID
+        ELSE
+            0
+        THEN EXIT
     THEN
     _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.interop.endpoint" STR-STR= IF
         _DESK-ENDPOINT EXIT
@@ -1063,6 +1351,31 @@ VARIABLE _DIR-INST
 
 VARIABLE _DINI-INST
 VARIABLE _DINI-CONTEXT
+VARIABLE _DCI-CAT
+VARIABLE _DCI-STATUS
+
+: _DESK-CATALOG-INIT  ( -- )
+    VFS-CUR ACAT-NEW _DCI-STATUS ! _DCI-CAT !
+    _DCI-STATUS @ ACAT-S-OK <> ABORT" desk: catalog allocation failed"
+    _DCI-CAT @ _DESK-CATALOG !
+    _DCI-CAT @ ACAT-ACTIVATE DUP
+    ACAT-S-OK = OVER ACAT-S-MISSING = OR
+    OVER ACAT-S-RECOVERY = OR 0=
+    ABORT" desk: catalog activation failed"
+    DROP
+    _DESK-PENDING-RESOLVER-XT @ ?DUP IF
+        _DESK-PENDING-RESOLVER-CTX @ _DCI-CAT @ ACAT-RESOLVER!
+    THEN
+    _DESK-PENDING-RELEASER-XT @
+    _DESK-PENDING-RELEASER-CTX @ _DCI-CAT @ ACAT-RELEASER!
+    _DESK-BUILTIN-N @ 0 ?DO
+        I _DESK-BUILTIN-ENTRY DUP @ SWAP 8 + @ _DCI-CAT @
+        ACAT-BIND-BUILTIN DUP ACAT-S-OK <> IF
+            _DCI-CAT @ ACAT-RECOVERY? 0=
+            ABORT" desk: built-in catalog binding failed"
+        THEN DROP
+    LOOP
+    _DESK-CATALOG @ ABUILD-CATALOG! ;
 
 : _DESK-BIND-AGENT-STORE  ( -- )
     VFS-CUR ?DUP 0= IF EXIT THEN
@@ -1129,6 +1442,29 @@ VARIABLE _DMF-STATUS
 VARIABLE _DMF-TAG-A
 VARIABLE _DMF-TAG-U
 VARIABLE _DMF-DEST
+
+: _DESK-DAYBOOK-RID!  ( -- )
+    SHA3-256-BEGIN
+    DESK-PRACTICE PHEAD.ID RID-SIZE SHA3-256-ADD
+    S" org.akashic.resource.daybook" SHA3-256-ADD
+    _DESK-DAYBOOK-RID SHA3-256-END ;
+
+: _DESK-DAYBOOK-INIT  ( -- )
+    0 _DESK-RREG !
+    0 _DESK-DAYBOOK-OWNER !
+    SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
+    _DESK-DAYBOOK-RID!
+    _DESK-REGISTRY @ DESK-CONTEXT RREG-NEW
+    DUP IF
+        _DESK-DAYBOOK-STATUS ! DROP EXIT
+    THEN
+    DROP _DESK-RREG !
+    DESK-CONTEXT CTX.VFS @ _DESK-DAYBOOK-RID DESK-CONTEXT
+        _DESK-RREG @ _DESK-REGISTRY @ SDOC-ACTIVATE
+    DUP _DESK-DAYBOOK-STATUS ! IF
+        DROP EXIT
+    THEN
+    _DESK-DAYBOOK-OWNER ! ;
 
 : _DESK-FIND-MANDATE-TARGET  ( -- flag )
     0 _DMF-INST ! 0 _DMF-AGENDA ! 0 _DMF-CAPTURE !
@@ -1237,6 +1573,7 @@ VARIABLE _DMF-DEST
     _DESK-BUS @ _DINI-CONTEXT @ CTX.QUEUE !
     _DESK-POLICY @ _DINI-CONTEXT @ CTX.POLICY !
     VFS-CUR _DINI-CONTEXT @ CTX.VFS !
+    _DESK-DAYBOOK-INIT
     _DESK-PENDING-AGENT-SOURCE @ ?DUP 0= IF
         OFFLINE-SOURCE-NEW
         0<> ABORT" desk: offline source allocation failed"
@@ -1264,6 +1601,8 @@ VARIABLE _DMF-DEST
     ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
     _DESK-ENDPOINT _DINI-INST @ CINST.ENDPOINT !
 
+    _DESK-CATALOG-INIT
+
     DESK-COMP-DESC _DESK-REGISTRY @ CREG-TYPE-ENSURE
     ABORT" desk: could not register Desk type"
     _DINI-INST @ _DESK-REGISTRY @ CREG-INST+
@@ -1276,12 +1615,17 @@ VARIABLE _DMF-DEST
     ['] _DESK-AGENT-PROMPT-CANCEL OVER PRM-ON-CANCEL
     _DTH-TBAR-FG @ _DTH-TBAR-BG @ ROT PRM-COLORS! ;
 
-: _DESK-INTEROP-FINI  ( -- )
+: _DESK-INTEROP-FINI-QUIESCED  ( -- )
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-FREE THEN
     _DESK-AGENT-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     _DESK-BUS @ ?DUP IF
         DUP CBUS-CANCEL-ALL DROP
     THEN
+    _DESK-DAYBOOK-OWNER @ ?DUP IF
+        SDOC-DEACTIVATE
+        ABORT" desk: shared document teardown failed"
+    THEN
+    _DESK-RREG @ ?DUP IF RREG-FREE THEN
     _DESK-AGENT-RUNTIME @ ?DUP IF ARUNTIME-FREE THEN
     _DESK-TOOL-GATEWAY @ ?DUP IF ATOOLG-FREE THEN
     _DESK-BUS @ ?DUP IF CBUS-FREE THEN
@@ -1292,18 +1636,30 @@ VARIABLE _DMF-DEST
     _DESK-INTENTS @ ?DUP IF CINT-FREE THEN
     _DESK-POLICY @ ?DUP IF FREE THEN
     _DESK-REGISTRY @ ?DUP IF CREG-FREE THEN
+    0 ABUILD-CATALOG!
+    _DESK-CATALOG @ ?DUP IF ACAT-FREE THEN
     DESK-CONTEXT ?DUP IF
         0 OVER CTX.AUTHORITY !
         0 OVER CTX.QUEUE !
         0 SWAP CTX.POLICY !
     THEN
     0 _DESK-BUS ! 0 _DESK-AUTHORITY ! 0 _DESK-JOBS ! 0 _DESK-INTENTS !
-    0 _DESK-POLICY ! 0 _DESK-REGISTRY !
+    0 _DESK-POLICY ! 0 _DESK-REGISTRY ! 0 _DESK-RREG !
+    0 _DESK-DAYBOOK-OWNER !
+    SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
+    _DESK-DAYBOOK-RID RID-CLEAR
+    0 _DESK-CATALOG !
     0 _DESK-AGENT-SOURCE !
     0 _DESK-AGENT-RUNTIME ! 0 _DESK-AGENT-PROVIDER !
     0 _DESK-TOOL-GATEWAY !
     0 _DESK-AGENT-PROMPT ! 0 _DESK-AGENT-PROMPT-RGN !
     _DESK-ENDPOINT IENDPOINT-SIZE 0 FILL ;
+
+: _DESK-INTEROP-FINI  ( -- )
+    \ Children are already closed.  Keep cancellation, owner unpublication,
+    \ registry teardown, and bus free inside one dispatch-quiesced boundary so
+    \ no stale endpoint can begin work between those dependent lifetime steps.
+    ['] _DESK-INTEROP-FINI-QUIESCED CBUS-WITH-DISPATCH-QUIESCED ;
 
 \ =====================================================================
 \  §9 — Taskbar Painter
@@ -1409,13 +1765,17 @@ VARIABLE _DAS-COL
         _SL-NEXT @
     REPEAT
     \ ---- hotbar entries ----
-    _DHBAR-COUNT @ IF
+    _DESK-HOTBAR-PROJECTION-COUNT IF
         _DTH-DIV-FG @ _DTH-DIV-BG @ 0 DRW-STYLE!
         124 _DTB-ROW @ _DTB-COL @ DRW-CHAR    \ '|'
         1 _DTB-COL +!
         32 _DTB-ROW @ _DTB-COL @ DRW-CHAR
         1 _DTB-COL +!
-        _DTB-ROW @ _DTB-COL @ _DESK-PAINT-HOTBAR
+        _DESK-CATALOG @ IF
+            _DTB-ROW @ _DTB-COL @ _DESK-PAINT-CATALOG-HOTBAR
+        ELSE
+            _DTB-ROW @ _DTB-COL @ _DESK-PAINT-HOTBAR
+        THEN
     THEN
     _DESK-PAINT-AGENT-STATE
     DRW-STYLE-RESTORE ;
@@ -1436,6 +1796,15 @@ VARIABLE _DAS-COL
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
     0 _DESK-LAST-MIN-SA !
+    0 _DESK-CATALOG !
+    0 _DESK-LAUNCHER-ACTIVE !
+    0 _DESK-LAUNCHER-SELECTED !
+    0 _DESK-LAUNCHER-SCROLL !
+    0 _DESK-LAUNCHER-STATUS !
+    0 _DESK-RREG !
+    0 _DESK-DAYBOOK-OWNER !
+    SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
+    _DESK-DAYBOOK-RID RID-CLEAR
     -1 _DESK-BG-DIRTY !
     SCR-W _DESK-LAST-W !
     SCR-H _DESK-LAST-H !
@@ -1452,10 +1821,9 @@ VARIABLE _DAS-COL
         0 _DESK-PEND-N ! EXIT
     THEN
     _DINI-INST @ _DESK-INTEROP-INIT
-    \ Launch queued startup applets
-    _DESK-PEND-N @ 0 DO
-        I CELLS _DESK-PEND-BUF + @ DESK-LAUNCH DROP
-    LOOP
+    \ DESK-QUEUE-LAUNCH rows were migrated by _DESK-CATALOG-INIT.
+    \ Autostart now honors their persisted enabled/quarantine flags.
+    _DESK-AUTOSTART-CATALOG
     0 _DESK-PEND-N ! ;
 
 \ --- Shortcuts ---
@@ -1489,31 +1857,204 @@ CREATE _DESK-EV  24 ALLOT
         _SL-NEXT @
     REPEAT ;
 
-\ Scratch buffer for building EVALUATE strings
-CREATE _DESK-EVAL-BUF 80 ALLOT
+\ ---------------------------------------------------------------------
+\ Catalog launcher.  This is a Desk-owned modal state machine, not a
+\ blocking dialog, so the shell's normal event/tick loop remains live.
+
+VARIABLE _DLA-COUNT
+VARIABLE _DLA-PAGE
+VARIABLE _DLA-ENTRY
+VARIABLE _DLA-W
+VARIABLE _DLA-H
+VARIABLE _DLA-ROW
+VARIABLE _DLA-COL
+VARIABLE _DLA-LABEL-A
+VARIABLE _DLA-LABEL-U
+VARIABLE _DLA-STATUS-A
+VARIABLE _DLA-STATUS-U
+
+: _DESK-LAUNCHER-COUNT  ( -- n )
+    _DESK-CATALOG @ ?DUP IF ACAT-COUNT ELSE 0 THEN ;
+
+: _DESK-LAUNCHER-PAGE  ( -- n )
+    SCR-H 8 - 1 MAX 10 MIN ;
+
+: _DESK-LAUNCHER-ENSURE-VISIBLE  ( -- )
+    _DESK-LAUNCHER-COUNT DUP _DLA-COUNT ! 0= IF
+        0 _DESK-LAUNCHER-SELECTED ! 0 _DESK-LAUNCHER-SCROLL ! EXIT
+    THEN
+    _DESK-LAUNCHER-SELECTED @ 0 MAX _DLA-COUNT @ 1- MIN
+    DUP _DESK-LAUNCHER-SELECTED !
+    _DESK-LAUNCHER-SCROLL @ OVER > IF
+        DUP _DESK-LAUNCHER-SCROLL !
+    THEN
+    _DESK-LAUNCHER-PAGE _DLA-PAGE !
+    DUP _DESK-LAUNCHER-SCROLL @ _DLA-PAGE @ + >= IF
+        _DLA-PAGE @ - 1+ 0 MAX _DESK-LAUNCHER-SCROLL !
+    ELSE
+        DROP
+    THEN ;
+
+: _DESK-LAUNCHER-MOVE  ( delta -- )
+    _DESK-LAUNCHER-SELECTED @ +
+    _DESK-LAUNCHER-COUNT DUP 0= IF 2DROP EXIT THEN
+    1- MIN 0 MAX _DESK-LAUNCHER-SELECTED !
+    0 _DESK-LAUNCHER-STATUS !
+    _DESK-LAUNCHER-ENSURE-VISIBLE
+    ASHELL-DIRTY! ;
+
+: _DESK-LAUNCHER-HIDE  ( -- )
+    0 _DESK-LAUNCHER-ACTIVE !
+    -1 _DESK-BG-DIRTY !
+    _DESK-MARK-ALL-CHILDREN
+    ASHELL-DIRTY! ;
+
+: _DESK-SHOW-LAUNCHER  ( -- )
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
+    -1 _DESK-LAUNCHER-ACTIVE !
+    0 _DESK-LAUNCHER-SELECTED !
+    0 _DESK-LAUNCHER-SCROLL !
+    0 _DESK-LAUNCHER-STATUS !
+    _DESK-LAUNCHER-ENSURE-VISIBLE
+    ASHELL-DIRTY! ;
+
+: _DESK-LAUNCHER-ACTIVATE  ( -- )
+    _DESK-LAUNCHER-COUNT 0= IF
+        ACAT-S-NOT-FOUND _DESK-LAUNCHER-STATUS !
+        ASHELL-DIRTY! EXIT
+    THEN
+    _DESK-LAUNCHER-SELECTED @ _DESK-CATALOG @ ACAT-NTH
+    DUP 0= IF
+        DROP ACAT-S-NOT-FOUND _DESK-LAUNCHER-STATUS !
+        ASHELL-DIRTY! EXIT
+    THEN
+    _DESK-OPEN-CATALOG-ENTRY DUP _DESK-LAUNCHER-STATUS !
+    IF
+        ASHELL-DIRTY!
+    ELSE
+        \ Opening from the interactive launcher transfers focus to the
+        \ selected applet.  Startup catalog activation deliberately keeps
+        \ its existing first-app focus policy.
+        _DCO-SLOT @ DESK-FOCUS-ID
+        _DESK-LAUNCHER-HIDE
+    THEN ;
+
+: _DESK-LAUNCHER-HANDLE  ( ev -- consumed? )
+    DUP _DESK-EV-TYPE KEY-T-SPECIAL <> IF DROP -1 EXIT THEN
+    _DESK-EV-CODE CASE
+        KEY-ESC OF _DESK-LAUNCHER-HIDE ENDOF
+        KEY-UP OF -1 _DESK-LAUNCHER-MOVE ENDOF
+        KEY-DOWN OF 1 _DESK-LAUNCHER-MOVE ENDOF
+        KEY-PGUP OF _DESK-LAUNCHER-PAGE NEGATE _DESK-LAUNCHER-MOVE ENDOF
+        KEY-PGDN OF _DESK-LAUNCHER-PAGE _DESK-LAUNCHER-MOVE ENDOF
+        KEY-HOME OF
+            0 _DESK-LAUNCHER-SELECTED !
+            0 _DESK-LAUNCHER-STATUS !
+            _DESK-LAUNCHER-ENSURE-VISIBLE ASHELL-DIRTY!
+        ENDOF
+        KEY-END OF
+            _DESK-LAUNCHER-COUNT 1- 0 MAX _DESK-LAUNCHER-SELECTED !
+            0 _DESK-LAUNCHER-STATUS !
+            _DESK-LAUNCHER-ENSURE-VISIBLE ASHELL-DIRTY!
+        ENDOF
+        KEY-ENTER OF _DESK-LAUNCHER-ACTIVATE ENDOF
+        DROP
+    ENDCASE
+    -1 ;
+
+: _DESK-CATALOG-STATUS$  ( status -- a u )
+    DUP 0< IF DROP S" launch failed" EXIT THEN
+    CASE
+        ACAT-S-OK OF S" ready" ENDOF
+        ACAT-S-MISSING OF S" catalog missing" ENDOF
+        ACAT-S-INVALID OF S" invalid catalog" ENDOF
+        ACAT-S-IO OF S" storage error" ENDOF
+        ACAT-S-FULL OF S" catalog full" ENDOF
+        ACAT-S-DUPLICATE OF S" duplicate ID" ENDOF
+        ACAT-S-NOT-FOUND OF S" not found" ENDOF
+        ACAT-S-READONLY OF S" read-only" ENDOF
+        ACAT-S-NO-RESOLVER OF S" loader unavailable" ENDOF
+        ACAT-S-RESOLVE OF S" load failed" ENDOF
+        ACAT-S-INCOMPATIBLE OF S" incompatible" ENDOF
+        ACAT-S-QUARANTINED OF S" quarantined" ENDOF
+        ACAT-S-DISABLED OF S" disabled" ENDOF
+        ACAT-S-RECOVERY OF S" recovery mode" ENDOF
+        ACAT-S-BUSY OF S" applet is open" ENDOF
+        DROP S" unknown error"
+    ENDCASE ;
+
+: _DESK-CATALOG-ENTRY-STATUS$  ( entry -- a u )
+    DUP ACE-QUARANTINED? IF DROP S" quarantined" EXIT THEN
+    DUP ACE-ENABLED? 0= IF DROP S" disabled" EXIT THEN
+    DUP ACE.SLOT @ IF DROP S" running" EXIT THEN
+    DUP ACE.STATE @ ACAT-R-FAILED = IF DROP S" load failed" EXIT THEN
+    DUP ACE-BUILTIN? OVER ACE.STATE @ ACAT-R-UNBOUND = AND IF
+        DROP S" unavailable" EXIT
+    THEN
+    DROP S" ready" ;
+
+: _DESK-PAINT-LAUNCHER-ENTRY  ( index screen-row -- )
+    >R
+    DUP _DESK-CATALOG @ ACAT-NTH _DLA-ENTRY !
+    DUP _DESK-LAUNCHER-SELECTED @ = IF
+        _DTH-ACT-FG @ _DTH-ACT-BG @ _DTH-ACT-ATTR @ DRW-STYLE!
+        62
+    ELSE
+        _DTH-TBAR-FG @ _DTH-TBAR-BG @ 0 DRW-STYLE!
+        32
+    THEN
+    NIP
+    R@ _DLA-COL @ 1+ DRW-CHAR
+    _DLA-ENTRY @ ACE-TITLE$ DUP 0= IF
+        2DROP _DLA-ENTRY @ ACE-ID$
+    THEN
+    DUP _DLA-W @ 22 - 1 MAX > IF DROP _DLA-W @ 22 - 1 MAX THEN
+    _DLA-LABEL-U ! _DLA-LABEL-A !
+    _DLA-LABEL-A @ _DLA-LABEL-U @ R@ _DLA-COL @ 3 + DRW-TEXT
+    _DLA-ENTRY @ _DESK-CATALOG-ENTRY-STATUS$
+    _DLA-STATUS-U ! _DLA-STATUS-A !
+    _DLA-STATUS-A @ _DLA-STATUS-U @ R@
+    _DLA-COL @ _DLA-W @ + _DLA-STATUS-U @ - 2 - DRW-TEXT
+    R> DROP ;
+
+: _DESK-PAINT-LAUNCHER  ( -- )
+    _DESK-LAUNCHER-ACTIVE @ 0= IF EXIT THEN
+    _DESK-LAUNCHER-ENSURE-VISIBLE
+    SCR-W 4 - 68 MIN DUP 24 < IF DROP SCR-W 2 - THEN _DLA-W !
+    _DESK-LAUNCHER-PAGE DUP _DLA-PAGE ! 4 + _DLA-H !
+    SCR-H _DLA-H @ - 2 / 0 MAX _DLA-ROW !
+    SCR-W _DLA-W @ - 2 / 0 MAX _DLA-COL !
+    DRW-STYLE-SAVE
+    _DTH-TBAR-FG @ _DTH-TBAR-BG @ 0 DRW-STYLE!
+    32 _DLA-ROW @ _DLA-COL @ _DLA-H @ _DLA-W @ DRW-FILL-RECT
+    S" Applets" _DLA-ROW @ _DLA-COL @ 2 + DRW-TEXT
+    _DESK-LAUNCHER-STATUS @ DUP IF
+        _DESK-CATALOG-STATUS$
+    ELSE
+        DROP _DESK-CATALOG @ ?DUP IF ACAT-RECOVERY? ELSE 0 THEN IF
+            S" catalog recovery: read-only"
+        ELSE
+            S" select an applet"
+        THEN
+    THEN
+    _DLA-ROW @ 1+ _DLA-COL @ 2 + DRW-TEXT
+    _DLA-PAGE @ 0 ?DO
+        _DESK-LAUNCHER-SCROLL @ I + DUP
+        _DESK-LAUNCHER-COUNT < IF
+            _DLA-ROW @ 2 + I + _DESK-PAINT-LAUNCHER-ENTRY
+        ELSE
+            DROP
+        THEN
+    LOOP
+    S" Up/Down PgUp/PgDn Home/End  Enter open  Esc close"
+    DUP _DLA-W @ 4 - > IF DROP _DLA-W @ 4 - THEN
+    _DLA-ROW @ _DLA-H @ + 1- _DLA-COL @ 2 + DRW-TEXT
+    DRW-STYLE-RESTORE ;
 
 \ Launch the first unlaunched hotbar entry.
 \ file field = .m64 binary path, desc field = entry word name.
 : _DESK-HOTBAR-LAUNCH-NEXT  ( -- )
-    _DESK-HOTBAR-NEXT DUP 0< IF DROP EXIT THEN
-    DUP _HB-ENTRY                 ( idx entry )
-    DUP _HB-FILE-U + @ 0= IF 2DROP EXIT THEN
-    \ Build "IMG-LOAD-EXEC <filename>" and EVALUATE it
-    \ "IMG-LOAD-EXEC " = 14 chars (13 letters + 1 trailing space)
-    S" IMG-LOAD-EXEC " _DESK-EVAL-BUF SWAP CMOVE
-    DUP _HB-FILE-A + @            ( idx entry file-a )
-    OVER _HB-FILE-U + @           ( idx entry file-a file-u )
-    _DESK-EVAL-BUF 14 + SWAP DUP >R CMOVE
-    _DESK-EVAL-BUF  14 R> +       ( idx entry buf total-len )
-    EVALUATE                       ( idx entry xt ior )
-    ?DUP IF DROP 2DROP EXIT THEN   ( idx entry xt )
-    DROP                           ( idx entry )
-    \ Now entry word is in dictionary — EVALUATE the desc name
-    DUP _HB-DESC-U + @ 0= IF 2DROP EXIT THEN
-    DUP _HB-DESC-A + @ SWAP _HB-DESC-U + @
-    EVALUATE                      ( idx desc-addr )
-    DESK-LAUNCH                   ( idx slot-id )
-    _DESK-HOTBAR-MARK ;
+    _DESK-SHOW-LAUNCHER ;
 
 : _DESK-SHORTCUT?  ( ev -- flag )
     DUP _DESK-EV-TYPE KEY-T-CHAR <> IF DROP 0 EXIT THEN
@@ -1542,7 +2083,7 @@ CREATE _DESK-EVAL-BUF 80 ALLOT
             _SL-ID @ DESK-CLOSE-ID
         THEN -1 EXIT THEN
     DUP 104 _DESK-ALT? IF
-        DROP _DESK-HOTBAR-LAUNCH-NEXT -1 EXIT THEN
+        DROP _DESK-SHOW-LAUNCHER -1 EXIT THEN
     DUP 97 _DESK-ALT? IF
         DROP _DESK-SHOW-AGENT-PROMPT -1 EXIT THEN
     DROP 0 ;
@@ -1609,6 +2150,7 @@ VARIABLE _DDM-EV
 \  down the whole shell.
 : DESK-EVENT-CB  ( ev instance -- flag )
     _DESK-USE-STATE
+    _DESK-LAUNCHER-ACTIVE @ IF _DESK-LAUNCHER-HANDLE EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
     THEN
@@ -1738,6 +2280,7 @@ VARIABLE _DPC-PAINT-ALL
     RGN-ROOT
     _DESK-FULLFRAME @ 0= IF _DESK-DRAW-DIVIDERS THEN
     _DESK-PAINT-TASKBAR
+    _DESK-PAINT-LAUNCHER
     _DESK-AGENT-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF
             SCR-H 1- 0 1 SCR-W 4 PICK PRM-SET-BOUNDS
@@ -1793,6 +2336,7 @@ VARIABLE _DSD-IOR
 : DESK-SHUTDOWN-CB  ( instance -- )
     _DESK-USE-STATE
     0 _DSD-IOR !
+    0 _DCF-HOST-ONLY !
     \ ASHELL already received ALLOW from DESK-REQUEST-CLOSE-CB.  Force
     \ finalization here so callbacks are not re-prompted and a prior
     \ CANCEL/DEFER can never leave this loop stuck on the head slot.  Each
@@ -1801,8 +2345,10 @@ VARIABLE _DSD-IOR
     BEGIN _DESK-HEAD @ ?DUP WHILE
         _DESK-CLOSE-SA-FORCE _DSD-REMEMBER
     REPEAT
-    ['] _DSD-INTEROP-FINI CATCH _DSD-REMEMBER
-    ['] _DSD-PRACTICE-FINI CATCH _DSD-REMEMBER
+    ['] _DSD-INTEROP-FINI CATCH DUP _DSD-REMEMBER
+    0= IF
+        ['] _DSD-PRACTICE-FINI CATCH _DSD-REMEMBER
+    THEN
     _DSD-IOR @ ?DUP IF THROW THEN ;
 
 \ =====================================================================
@@ -1839,10 +2385,14 @@ VARIABLE _DSD-IOR
 \   Queue an applet for auto-launch at desk startup.
 \   May be called multiple times (up to 8).  Must be called BEFORE DESK-RUN.
 : DESK-QUEUE-LAUNCH  ( desc -- )
+    DUP _DESK-BUILTIN-DEFAULT-FLAGS _DESK-QUEUE-BUILTIN-RAW
     _DESK-PEND-N @ DUP _DESK-PEND-MAX < IF
         CELLS _DESK-PEND-BUF + !
         1 _DESK-PEND-N +!
     ELSE 2DROP THEN ;
+
+: DESK-QUEUE-BUILTIN  ( desc flags -- )
+    _DESK-QUEUE-BUILTIN-RAW ;
 
 VARIABLE _DASSET-SOURCE
 
@@ -1865,6 +2415,7 @@ REQUIRE ../../../concurrency/guard.f
 GUARD _desk-guard
 
 ' DESK-LAUNCH       CONSTANT _desk-launch-xt
+' DESK-TRY-LAUNCH   CONSTANT _desk-trylaunch-xt
 ' DESK-CLOSE-ID     CONSTANT _desk-closeid-xt
 ' DESK-REQUEST-CLOSE-ID CONSTANT _desk-request-closeid-xt
 ' DESK-FOCUS-ID     CONSTANT _desk-focusid-xt
@@ -1879,12 +2430,17 @@ GUARD _desk-guard
 ' DESK-PRACTICE     CONSTANT _desk-practice-xt
 ' DESK-CONTEXT      CONSTANT _desk-context-xt
 ' DESK-RECOVERY?    CONSTANT _desk-recovery-xt
+' DESK-CATALOG      CONSTANT _desk-catalog-xt
+' DESK-QUEUE-BUILTIN CONSTANT _desk-queuebuiltin-xt
+' DESK-PACKAGE-RESOLVER! CONSTANT _desk-package-resolver-xt
+' DESK-PACKAGE-RELEASER! CONSTANT _desk-package-releaser-xt
 ' DESK-RUN          CONSTANT _desk-run-xt
 
-: DESK-LAUNCH       _desk-launch-xt       _desk-guard WITH-GUARD ;
-\ Close negotiation can invoke arbitrary app code or a blocking confirmation
-\ dialog.  These are owner-core lifecycle entries, not metadata critical
-\ sections; cross-core producers must post a close request to Desk's owner.
+\ Launch and close can invoke arbitrary app code.  These are owner-core
+\ lifecycle entries, not metadata critical sections; cross-core producers
+\ must post requests to Desk's owner.
+: DESK-LAUNCH       _desk-launch-xt EXECUTE ;
+: DESK-TRY-LAUNCH   _desk-trylaunch-xt EXECUTE ;
 : DESK-CLOSE-ID     _desk-closeid-xt EXECUTE ;
 : DESK-REQUEST-CLOSE-ID _desk-request-closeid-xt EXECUTE ;
 : DESK-FOCUS-ID     _desk-focusid-xt      _desk-guard WITH-GUARD ;
@@ -1899,6 +2455,10 @@ GUARD _desk-guard
 : DESK-PRACTICE     _desk-practice-xt     _desk-guard WITH-GUARD ;
 : DESK-CONTEXT      _desk-context-xt      _desk-guard WITH-GUARD ;
 : DESK-RECOVERY?    _desk-recovery-xt     _desk-guard WITH-GUARD ;
+: DESK-CATALOG      _desk-catalog-xt      _desk-guard WITH-GUARD ;
+: DESK-QUEUE-BUILTIN _desk-queuebuiltin-xt _desk-guard WITH-GUARD ;
+: DESK-PACKAGE-RESOLVER! _desk-package-resolver-xt _desk-guard WITH-GUARD ;
+: DESK-PACKAGE-RELEASER! _desk-package-releaser-xt _desk-guard WITH-GUARD ;
 \ Like ASHELL-RUN, DESK-RUN is the owner-core yielding lifecycle driver.
 \ Task-aware CATCH may span the loop; a lifetime metadata guard may not,
 \ because it would exclude bounded control operations while this task yields.

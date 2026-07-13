@@ -23,6 +23,7 @@
 \   - Undo / redo per buffer (TXTA-BIND-UNDO / TXTA-BIND-GB)
 \   - Clipboard (copy / cut / paste via clipboard.f)
 \   - File I/O: new, open, save, save-as via VFS
+\   - Trusted-local applet Build & Install via a project manifest
 \   - Toggle sidebar / output panels (split ratio manipulation)
 \   - Find, replace, go-to-line, and selection commands
 \   - TOML theme colours (10 regions)
@@ -45,6 +46,7 @@ REQUIRE ../../widgets/dialog.f
 REQUIRE ../../widgets/prompt.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
+REQUIRE ../../app-builder.f
 REQUIRE ../../uidl-tui.f
 REQUIRE ../../draw.f
 REQUIRE ../../region.f
@@ -64,6 +66,7 @@ REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/resource.f
+REQUIRE ../../../interop/lens-binding.f
 
 \ =====================================================================
 \  S2 -- Constants
@@ -79,6 +82,7 @@ REQUIRE ../../../interop/resource.f
     4 CONSTANT _PAD-TAB-W         \ editor indentation columns
    64 CONSTANT _PAD-DUMMY-CAP     \ minimal buffer for TXTA-NEW
   512 CONSTANT _PAD-PROMPT-CAP    \ command-bar input capacity
+  512 CONSTANT _PAD-BUILD-LOG-CAP \ Build & Install result text
 
 0 CONSTANT _PAD-PRM-NONE
 1 CONSTANT _PAD-PRM-OPEN
@@ -87,6 +91,19 @@ REQUIRE ../../../interop/resource.f
 4 CONSTANT _PAD-PRM-GOTO-LINE
 5 CONSTANT _PAD-PRM-REPLACE-FIND
 6 CONSTANT _PAD-PRM-REPLACE-WITH
+
+0 CONSTANT _PAD-MODE-DIRECT
+1 CONSTANT _PAD-MODE-SHARED
+2 CONSTANT _PAD-MODE-BLOCKED
+
+0 CONSTANT _PAD-SR-S-OK
+1 CONSTANT _PAD-SR-S-STALE
+2 CONSTANT _PAD-SR-S-STRUCTURAL
+
+-8  CONSTANT _PAD-E-SHARED-UNAVAILABLE
+-9  CONSTANT _PAD-E-STALE
+-10 CONSTANT _PAD-E-SHARED-FAILED
+-11 CONSTANT _PAD-E-DAYBOOK-PROTECTED
 
 \ Buffer entry struct offsets (11 cells = 88 bytes)
  0 CONSTANT _PBE-FLAGS      \ 0=free, -1=in-use
@@ -133,7 +150,9 @@ REQUIRE ../../../interop/resource.f
 \ =====================================================================
 
 VARIABLE _PAD-CURRENT-STATE
+VARIABLE _PAD-CURRENT-INSTANCE
 0 _PAD-CURRENT-STATE !
+0 _PAD-CURRENT-INSTANCE !
 CMP-LAYOUT-BEGIN
 
 \ ---- UIDL element handles ----
@@ -155,6 +174,8 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-E-SBAR-TABS
 _PAD-CURRENT-STATE CMP-CELL: _PAD-EXPL
 _PAD-CURRENT-STATE CMP-CELL: _PAD-TXTA
 _PAD-CURRENT-STATE CMP-CELL: _PAD-OUT-TXTA
+_PAD-CURRENT-STATE _PAD-BUILD-LOG-CAP CMP-FIELD: _PAD-BUILD-LOG
+_PAD-CURRENT-STATE CMP-CELL: _PAD-BUILD-LOG-U
 _PAD-CURRENT-STATE CMP-CELL: _PAD-PROMPT
 _PAD-CURRENT-STATE CMP-CELL: _PAD-PROMPT-RGN
 _PAD-CURRENT-STATE CMP-CELL: _PAD-PROMPT-MODE
@@ -182,6 +203,26 @@ _PAD-CURRENT-STATE _PAD-IO-CAP CMP-FIELD: _PAD-IO-BUF
 \ ---- VFS ----
 _PAD-CURRENT-STATE CMP-CELL: _PAD-VFS
 _PAD-CURRENT-STATE VREPL-SIZE CMP-FIELD: _PAD-REPL
+
+\ ---- Activation-local shared Daybook lens ----
+\ Service pointers and capability descriptors are borrowed from Desk.  Stable
+\ identity and revision state are copied into the Pad instance allocation.
+_PAD-CURRENT-STATE CMP-CELL: _PAD-RESOURCE-MODE
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-CONTEXT
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-RREG
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-BUS
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-OWNER
+_PAD-CURRENT-STATE RID-SIZE CMP-FIELD: _PAD-SHARED-RID
+_PAD-CURRENT-STATE RREF-SIZE CMP-FIELD: _PAD-SHARED-REF
+_PAD-CURRENT-STATE LBIND-SIZE CMP-FIELD: _PAD-SHARED-BIND
+_PAD-CURRENT-STATE RREF-SIZE CMP-FIELD: _PAD-SHARED-CANDIDATE-REF
+_PAD-CURRENT-STATE LBIND-SIZE CMP-FIELD: _PAD-SHARED-CANDIDATE-BIND
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-SNAPSHOT-CAP
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-REPLACE-CAP
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-REQUEST
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-SNAPSHOT-A
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-SNAPSHOT-U
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SHARED-STALE
 
 \ ---- Toggle state ----
 _PAD-CURRENT-STATE CMP-CELL: _PAD-SIDEBAR-VIS
@@ -272,7 +313,134 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL-X
 CMP-LAYOUT-SIZE CONSTANT _PAD-STATE-SIZE
 
 : _PAD-ACTIVATE  ( instance -- )
+    DUP _PAD-CURRENT-INSTANCE !
     CINST-STATE _PAD-CURRENT-STATE ! ;
+
+: _PAD-SHARED-BLOCK!  ( -- )
+    _PAD-MODE-BLOCKED _PAD-RESOURCE-MODE ! ;
+
+: _PAD-SHARED-BUS-VALID?  ( -- flag )
+    _PAD-SHARED-BUS @ DUP 0= IF DROP 0 EXIT THEN
+    DUP CBUS.REGISTRY @ _PAD-SHARED-RREG @ RREG.COMPONENTS @ =
+    OVER CBUS.POLICY @ DUP 0<> >R
+        _PAD-SHARED-CONTEXT @ CTX.POLICY @ = AND
+    SWAP _PAD-SHARED-CONTEXT @ CTX.QUEUE @ = AND
+    R> AND ;
+
+VARIABLE _PAD-SA-OWNER
+
+: _PAD-SHARED-OWNER-VALID?  ( -- flag )
+    _PAD-SHARED-OWNER @ DUP 0= IF DROP 0 EXIT THEN
+    DUP CINST.ID @ 0>
+    OVER CINST.GENERATION @ 0> AND
+    OVER CINST.REVISION @ 0> AND
+    SWAP CINST-DESC COMP-CAPS-VALID? AND ;
+
+: _PAD-SHARED-REFRESH-LIVE  ( -- status )
+    \ Current-reference acquisition and exact attachment are separately
+    \ guarded.  A concurrent owner commit between them is contention, not
+    \ broken wiring, so retry it within a fixed bound.
+    3 0 DO
+        _PAD-SHARED-RID _PAD-SHARED-CONTEXT @ _PAD-SHARED-REF
+            _PAD-SHARED-RREG @ RREG-REF ?DUP IF
+            DROP _PAD-SR-S-STRUCTURAL UNLOOP EXIT
+        THEN
+        _PAD-SHARED-REF _PAD-SHARED-CONTEXT @ _PAD-SHARED-RREG @
+            _PAD-SHARED-BIND LBIND-ATTACH
+        DUP LBIND-S-OK = IF DROP _PAD-SR-S-OK UNLOOP EXIT THEN
+        LBIND-S-STALE-REVISION <> IF
+            _PAD-SR-S-STRUCTURAL UNLOOP EXIT
+        THEN
+    LOOP
+    _PAD-SR-S-STALE ;
+
+: _PAD-SHARED-INIT  ( -- )
+    _PAD-MODE-DIRECT _PAD-RESOURCE-MODE !
+    0 _PAD-SHARED-CONTEXT ! 0 _PAD-SHARED-RREG !
+    0 _PAD-SHARED-BUS ! 0 _PAD-SHARED-OWNER !
+    0 _PAD-SHARED-SNAPSHOT-CAP ! 0 _PAD-SHARED-REPLACE-CAP !
+    0 _PAD-SHARED-REQUEST ! 0 _PAD-SHARED-SNAPSHOT-A !
+    0 _PAD-SHARED-SNAPSHOT-U ! 0 _PAD-SHARED-STALE !
+    _PAD-SHARED-RID RID-CLEAR
+    _PAD-SHARED-REF RREF-INIT
+    _PAD-SHARED-BIND LBIND-INIT
+    _PAD-SHARED-CANDIDATE-REF RREF-INIT
+    _PAD-SHARED-CANDIDATE-BIND LBIND-INIT
+
+    \ No endpoint at all is the genuine standalone control.  Once a runtime
+    \ endpoint is advertised, a missing Context is broken Desk wiring rather
+    \ than permission to fall through to the backing /daybook.md path.
+    _PAD-CURRENT-INSTANCE @ CINST.ENDPOINT @ 0= IF EXIT THEN
+    S" org.akashic.runtime.context"
+        _PAD-CURRENT-INSTANCE @ CINST-SERVICE DUP 0= IF
+        DROP _PAD-SHARED-BLOCK! EXIT
+    THEN
+    DUP _PAD-SHARED-CONTEXT !
+    CTX-VALID? 0= IF _PAD-SHARED-BLOCK! EXIT THEN
+    _PAD-SHARED-CONTEXT @ CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
+        _PAD-SHARED-BLOCK! EXIT
+    THEN
+    S" org.akashic.runtime.resource-registry"
+        _PAD-CURRENT-INSTANCE @ CINST-SERVICE DUP _PAD-SHARED-RREG !
+    DUP 0= IF DROP _PAD-SHARED-BLOCK! EXIT THEN
+    RREG-VALID? 0= IF _PAD-SHARED-BLOCK! EXIT THEN
+    _PAD-SHARED-CONTEXT @ _PAD-SHARED-RREG @ RREG-CONTEXT? 0= IF
+        _PAD-SHARED-BLOCK! EXIT
+    THEN
+    S" org.akashic.interop.request-bus"
+        _PAD-CURRENT-INSTANCE @ CINST-SERVICE DUP _PAD-SHARED-BUS !
+    0= IF _PAD-SHARED-BLOCK! EXIT THEN
+    _PAD-SHARED-BUS-VALID? 0= IF _PAD-SHARED-BLOCK! EXIT THEN
+    S" org.akashic.resource.daybook"
+        _PAD-CURRENT-INSTANCE @ CINST-SERVICE DUP 0= IF
+        DROP _PAD-SHARED-BLOCK! EXIT
+    THEN
+    DUP RID-PRESENT? 0= IF DROP _PAD-SHARED-BLOCK! EXIT THEN
+    _PAD-SHARED-RID RID-COPY
+
+    _PAD-SHARED-REFRESH-LIVE DUP IF
+        DROP _PAD-SHARED-BLOCK! EXIT
+    THEN DROP
+    \ Resolve current only to discover the stable owner descriptor.  Keep the
+    \ actual lens exact and restore its reference from the attached binding.
+    0 _PAD-SHARED-REF RREF.REVISION !
+    _PAD-SHARED-REF _PAD-SHARED-CONTEXT @ _PAD-SHARED-RREG @ RREG-RESOLVE
+    DUP IF 2DROP _PAD-SHARED-BLOCK! EXIT THEN
+    DROP DUP _PAD-SA-OWNER ! _PAD-SHARED-OWNER !
+    _PAD-SHARED-BIND _PAD-SHARED-REF LBIND-REF DUP IF
+        DROP _PAD-SHARED-BLOCK! EXIT
+    THEN DROP
+    _PAD-SHARED-OWNER-VALID? 0= IF _PAD-SHARED-BLOCK! EXIT THEN
+    S" resource.snapshot" _PAD-SA-OWNER @ CINST-DESC COMP-CAP-FIND
+        DUP _PAD-SHARED-SNAPSHOT-CAP !
+    DUP 0= IF DROP _PAD-SHARED-BLOCK! EXIT THEN
+    CAP-DESC-VALID? 0= IF _PAD-SHARED-BLOCK! EXIT THEN
+    S" resource.replace" _PAD-SA-OWNER @ CINST-DESC COMP-CAP-FIND
+        DUP _PAD-SHARED-REPLACE-CAP !
+    DUP 0= IF DROP _PAD-SHARED-BLOCK! EXIT THEN
+    CAP-DESC-VALID? 0= IF _PAD-SHARED-BLOCK! EXIT THEN
+    CBR-NEW DUP IF
+        2DROP _PAD-SHARED-BLOCK! EXIT
+    THEN DROP _PAD-SHARED-REQUEST !
+    _PAD-MODE-SHARED _PAD-RESOURCE-MODE ! ;
+
+: _PAD-SHARED-DETACH-BUFFER  ( -- )
+    _PAD-SHARED-BIND LBIND-CLEAR
+    _PAD-SHARED-REF RREF-INIT
+    0 _PAD-SHARED-STALE ! ;
+
+: _PAD-SHARED-FINI  ( -- )
+    _PAD-SHARED-REQUEST @ ?DUP IF CBR-FREE THEN
+    0 _PAD-SHARED-REQUEST !
+    _PAD-SHARED-DETACH-BUFFER
+    _PAD-SHARED-CANDIDATE-BIND LBIND-CLEAR
+    _PAD-SHARED-CANDIDATE-REF RREF-INIT
+    _PAD-SHARED-RID RID-CLEAR
+    0 _PAD-SHARED-CONTEXT ! 0 _PAD-SHARED-RREG !
+    0 _PAD-SHARED-BUS ! 0 _PAD-SHARED-OWNER !
+    0 _PAD-SHARED-SNAPSHOT-CAP ! 0 _PAD-SHARED-REPLACE-CAP !
+    0 _PAD-SHARED-SNAPSHOT-A ! 0 _PAD-SHARED-SNAPSHOT-U !
+    _PAD-MODE-DIRECT _PAD-RESOURCE-MODE ! ;
 
 : _PAD-LOAD-CONFIG  ( -- )
     VFS-CUR >R  _PAD-VFS @ VFS-USE
@@ -476,14 +644,20 @@ VARIABLE _PDC-ACOL
             S" text" S" Ready" UTUI-SET-ATTR
         THEN
     ELSE
-        \ Build label in scratch: "filename" or "filename *"
-        _PAD-ACTIVE @ _PAD-BUF-LABEL          ( fa fu )
-        _PAD-STXT SWAP DUP >R CMOVE           ( -- , R: fu )
-        _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
-            S"  *" _PAD-STXT R@ + SWAP CMOVE
-            R> 2 + _PAD-STXT-L !
+        _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + @
+        _PAD-SHARED-STALE @ AND IF
+            S" changed elsewhere; reload before saving"
+            _PAD-STXT SWAP DUP _PAD-STXT-L ! CMOVE
         ELSE
-            R> _PAD-STXT-L !
+            \ Build label in scratch: "filename" or "filename *"
+            _PAD-ACTIVE @ _PAD-BUF-LABEL          ( fa fu )
+            _PAD-STXT SWAP DUP >R CMOVE           ( -- , R: fu )
+            _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
+                S"  *" _PAD-STXT R@ + SWAP CMOVE
+                R> 2 + _PAD-STXT-L !
+            ELSE
+                R> _PAD-STXT-L !
+            THEN
         THEN
         _PAD-E-SBAR-FILE @ ?DUP IF
             S" text" _PAD-STXT _PAD-STXT-L @ UTUI-SET-ATTR
@@ -591,6 +765,7 @@ VARIABLE _PDC-ACOL
     0                      R@ _PAD-BUF-ENTRY _PBE-SCROLL-Y + !
     -1                     R@ _PAD-BUF-ENTRY _PBE-SEL-ANC + !
     0                      R@ _PAD-BUF-ENTRY _PBE-INODE + !
+    0                      R@ _PAD-BUF-ENTRY _PBE-RESERVED + !
     1 _PAD-BUF-CNT +!
     \ Switch to the new buffer
     _PAD-SAVE-STATE
@@ -606,6 +781,7 @@ VARIABLE _PDC-ACOL
 \ Close the buffer at index.  Does NOT check for dirty.
 : _PAD-BUF-CLOSE  ( index -- )
     DUP _PAD-BUF-ENTRY >R
+    R@ _PBE-RESERVED + @ IF _PAD-SHARED-DETACH-BUFFER THEN
     \ If this is the active buffer, unbind first
     DUP _PAD-ACTIVE @ = IF
         _PAD-UNBIND
@@ -791,6 +967,210 @@ VARIABLE _PFB-U
     LOOP
     -1 ;
 
+: _PAD-FIND-SHARED-BUFFER  ( -- index | -1 )
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY DUP _PBE-FLAGS + @
+        SWAP _PBE-RESERVED + @ AND IF I UNLOOP EXIT THEN
+    LOOP
+    -1 ;
+
+: _PAD-DAYBOOK-PATH?  ( path-a path-u -- flag )
+    S" /daybook.md" STR-STR= ;
+
+: _PAD-LBIND-IOR  ( lbind-status -- ior )
+    DUP LBIND-S-STALE-REVISION = IF DROP _PAD-E-STALE EXIT THEN
+    DUP LBIND-S-NOT-FOUND = IF DROP -1 EXIT THEN
+    DROP _PAD-E-SHARED-FAILED ;
+
+VARIABLE _PSRQ-BIND
+VARIABLE _PSRQ-CAP
+VARIABLE _PAD-SHARED-ADVANCE-XT
+' LBIND-ADVANCE _PAD-SHARED-ADVANCE-XT !
+
+: _PAD-SHARED-ADVANCE  ( request context binding -- status )
+    _PAD-SHARED-ADVANCE-XT @ EXECUTE ;
+
+: _PAD-SHARED-REQUEST!  ( binding capability -- ior )
+    _PSRQ-CAP ! _PSRQ-BIND !
+    _PSRQ-BIND @ _PAD-SHARED-CONTEXT @ _PAD-SHARED-REQUEST @
+        LBIND-REQUEST! DUP IF _PAD-LBIND-IOR EXIT THEN DROP
+    CPRINC-USER _PAD-SHARED-REQUEST @ CBR.PRINCIPAL !
+    _PSRQ-CAP @ _PAD-SHARED-REQUEST @ CBR.CAP !
+    0 ;
+
+: _PAD-SHARED-SNAPSHOT-CANDIDATE  ( -- ior )
+    0 _PAD-SHARED-SNAPSHOT-A ! 0 _PAD-SHARED-SNAPSHOT-U !
+    _PAD-SHARED-CANDIDATE-BIND _PAD-SHARED-SNAPSHOT-CAP @
+        _PAD-SHARED-REQUEST! DUP IF EXIT THEN DROP
+    \ The reusable request may still own replace arguments from a prior save.
+    _PAD-SHARED-REQUEST @ CBR.ARGS CV-NULL!
+    _PAD-SHARED-REQUEST @ _PAD-SHARED-BUS @ CBUS-DISPATCH
+    DUP CBUS-S-STALE-REVISION = IF DROP _PAD-E-STALE EXIT THEN
+    DUP IF DROP _PAD-E-SHARED-FAILED EXIT THEN DROP
+    _PAD-SHARED-REQUEST @ CBR.RESULT
+    DUP CV-TYPE@ CV-T-STRING <> IF
+        DROP _PAD-E-SHARED-FAILED EXIT
+    THEN
+    DUP CV-LEN@ DUP 0< OVER _PAD-BUF-CAP > OR IF
+        2DROP _PAD-E-SHARED-FAILED EXIT
+    THEN
+    _PAD-SHARED-SNAPSHOT-U !
+    CV-DATA@ DUP _PAD-SHARED-SNAPSHOT-A !
+    _PAD-SHARED-SNAPSHOT-U @ 0> SWAP 0= AND IF
+        _PAD-E-SHARED-FAILED EXIT
+    THEN
+    _PAD-SHARED-SNAPSHOT-A @ _PAD-SHARED-SNAPSHOT-U @ UTF8-VALID? 0= IF
+        _PAD-E-SHARED-FAILED EXIT
+    THEN
+    0 ;
+
+VARIABLE _PSHO-IDX
+VARIABLE _PSHO-ORIG
+
+: _PAD-SHARED-OPEN-CANDIDATE  ( -- ior )
+    _PAD-RESOURCE-MODE @ _PAD-MODE-SHARED <> IF
+        _PAD-E-SHARED-UNAVAILABLE EXIT
+    THEN
+    _PAD-SHARED-CANDIDATE-REF RREF-VALID? 0= IF
+        _PAD-E-SHARED-FAILED EXIT
+    THEN
+    _PAD-SHARED-CANDIDATE-REF RREF.ID _PAD-SHARED-RID RID= 0= IF
+        -1 EXIT
+    THEN
+    _PAD-SHARED-CANDIDATE-REF _PAD-SHARED-CONTEXT @
+        _PAD-SHARED-RREG @ _PAD-SHARED-CANDIDATE-BIND LBIND-ATTACH
+    DUP IF _PAD-LBIND-IOR EXIT THEN DROP
+    \ Attach resolves revision zero, but Pad always retains and reports the
+    \ resulting exact revision rather than a moving "current" reference.
+    _PAD-SHARED-CANDIDATE-BIND _PAD-SHARED-CANDIDATE-REF LBIND-REF
+    DUP IF _PAD-LBIND-IOR EXIT THEN DROP
+
+    _PAD-FIND-SHARED-BUFFER DUP _PSHO-IDX ! 0>= IF
+        _PAD-SHARED-REF RREF-VALID? IF
+            _PAD-SHARED-REF _PAD-SHARED-CANDIDATE-REF RREF= IF
+                _PSHO-IDX @ _PAD-BUF-SWITCH 0 EXIT
+            THEN
+        THEN
+        _PSHO-IDX @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
+            -1 _PAD-SHARED-STALE !
+            _PSHO-IDX @ _PAD-BUF-SWITCH
+            _PAD-UPDATE-STATUS ASHELL-DIRTY!
+            _PAD-E-STALE EXIT
+        THEN
+    THEN
+
+    _PAD-SHARED-SNAPSHOT-CANDIDATE DUP IF
+        DUP _PAD-E-STALE = _PSHO-IDX @ 0>= AND IF
+            -1 _PAD-SHARED-STALE !
+            _PSHO-IDX @ _PAD-BUF-SWITCH
+            _PAD-UPDATE-STATUS ASHELL-DIRTY!
+        THEN
+        EXIT
+    THEN DROP
+
+    _PSHO-IDX @ 0< IF
+        _PAD-ACTIVE @ _PSHO-ORIG !
+        _PAD-BUF-OPEN DUP 0< IF DROP -2 EXIT THEN _PSHO-IDX !
+    ELSE
+        _PSHO-IDX @ _PAD-BUF-SWITCH
+    THEN
+    _PAD-SHARED-SNAPSHOT-A @ _PAD-SHARED-SNAPSHOT-U @
+        _PAD-TXTA @ TXTA-SET-TEXT
+    _PSHO-IDX @ _PAD-BUF-ENTRY >R
+    R@ _PBE-UNDO + @ ?DUP IF UNDO-CLEAR THEN
+    S" /daybook.md" _PSHO-IDX @ _PAD-FILENAME!
+    0 R@ _PBE-INODE + !
+    0 R@ _PBE-DIRTY + !
+    0 R@ _PBE-CURSOR + !
+    0 R@ _PBE-SCROLL-Y + !
+    -1 R@ _PBE-SEL-ANC + !
+    -1 R> _PBE-RESERVED + !
+    _PAD-SHARED-CANDIDATE-BIND _PAD-SHARED-BIND LBIND-COPY DROP
+    _PAD-SHARED-CANDIDATE-REF _PAD-SHARED-REF RREF-COPY DROP
+    0 _PAD-SHARED-STALE !
+    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
+    _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    0 ;
+
+: _PAD-OPEN-RREF  ( reference -- ior )
+    _PAD-RESOURCE-MODE @ _PAD-MODE-SHARED <> IF
+        DROP _PAD-E-SHARED-UNAVAILABLE EXIT
+    THEN
+    _PAD-SHARED-CANDIDATE-REF RREF-COPY DUP IF
+        DROP _PAD-E-SHARED-FAILED EXIT
+    THEN DROP
+    _PAD-SHARED-OPEN-CANDIDATE ;
+
+: _PAD-OPEN-SHARED-LATEST  ( -- ior )
+    _PAD-RESOURCE-MODE @ _PAD-MODE-BLOCKED = IF
+        _PAD-E-SHARED-UNAVAILABLE EXIT
+    THEN
+    _PAD-RESOURCE-MODE @ _PAD-MODE-SHARED <> IF
+        _PAD-E-SHARED-FAILED EXIT
+    THEN
+    3 0 DO
+        _PAD-SHARED-RID _PAD-SHARED-CONTEXT @ _PAD-SHARED-CANDIDATE-REF
+            _PAD-SHARED-RREG @ RREG-REF DUP IF
+            DROP _PAD-E-SHARED-FAILED UNLOOP EXIT
+        THEN DROP
+        _PAD-SHARED-OPEN-CANDIDATE
+        DUP _PAD-E-STALE <> IF UNLOOP EXIT THEN DROP
+    LOOP
+    _PAD-E-STALE ;
+
+: _PAD-SHARED-CAPTURE-FREE  ( -- )
+    _PIO-TEXT @ ?DUP IF FREE THEN
+    0 _PIO-TEXT ! 0 _PIO-TEXT-U ! ;
+
+: _PAD-SHARED-SAVE  ( -- ior )
+    _PAD-SHARED-STALE @ IF _PAD-E-STALE EXIT THEN
+    0 _PIO-TEXT ! 0 _PIO-TEXT-U !
+    ['] _PAD-CAPTURE-TEXT CATCH IF
+        _PAD-SHARED-CAPTURE-FREE _PAD-E-SHARED-FAILED EXIT
+    THEN
+    _PAD-SHARED-BIND _PAD-SHARED-REPLACE-CAP @ _PAD-SHARED-REQUEST!
+    DUP IF _PAD-SHARED-CAPTURE-FREE EXIT THEN DROP
+    _PIO-TEXT @ _PIO-TEXT-U @ _PAD-SHARED-REQUEST @ CBR.ARGS CV-STRING!
+    _PAD-SHARED-CAPTURE-FREE
+    IF _PAD-E-SHARED-FAILED EXIT THEN
+    _PAD-SHARED-REQUEST @ _PAD-SHARED-BUS @ CBUS-DISPATCH
+    DUP CBUS-S-STALE-REVISION = IF
+        DROP -1 _PAD-SHARED-STALE !
+        _PAD-UPDATE-STATUS ASHELL-DIRTY!
+        _PAD-E-STALE EXIT
+    THEN
+    DUP IF DROP _PAD-E-SHARED-FAILED EXIT THEN DROP
+    _PAD-SHARED-REQUEST @ CBR.RESULT
+    DUP CV-TYPE@ CV-T-BOOL <> IF DROP _PAD-E-SHARED-FAILED EXIT THEN
+    CV-DATA@ 0= IF _PAD-E-SHARED-FAILED EXIT THEN
+    _PAD-SHARED-REQUEST @ _PAD-SHARED-CONTEXT @ _PAD-SHARED-BIND
+        _PAD-SHARED-ADVANCE DUP IF
+        \ The owner commit is already authoritative.  Never present this as
+        \ retryable unsaved work: invalidate the lens, clear dirty, and require
+        \ a fresh exact snapshot before any later write.
+        DROP _PAD-SHARED-BIND LBIND-CLEAR
+        _PAD-SHARED-REF RREF-INIT
+        -1 _PAD-SHARED-STALE !
+        0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+        _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
+        _PAD-UPDATE-STATUS ASHELL-DIRTY!
+        0 EXIT
+    THEN DROP
+    _PAD-SHARED-BIND _PAD-SHARED-REF LBIND-REF DUP IF
+        DROP _PAD-SHARED-BIND LBIND-CLEAR
+        _PAD-SHARED-REF RREF-INIT
+        -1 _PAD-SHARED-STALE !
+        0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+        _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
+        _PAD-UPDATE-STATUS ASHELL-DIRTY!
+        0 EXIT
+    THEN DROP
+    0 _PAD-SHARED-STALE !
+    0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
+    _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    0 ;
+
 : _PAD-DO-SAVE-TO  ( fname-a fname-u -- ior )
     _PIO-NAME-U ! _PIO-NAME-A !
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-CANON-PATH IF
@@ -806,8 +1186,31 @@ VARIABLE _PFB-U
     IF 0 ELSE -2 THEN ;
 
 : _PAD-SAVE-CURRENT-AS  ( fname-a fname-u -- ior )
-    _PAD-DO-SAVE-TO ?DUP IF EXIT THEN
-    _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
+    _PAD-ACTIVE @ 0< IF 2DROP -1 EXIT THEN
+    _PAD-CANON-PATH IF 2DROP -1 EXIT THEN
+    _PIO-NAME-U ! _PIO-NAME-A !
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + @ IF
+        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DAYBOOK-PATH? IF
+            _PAD-SHARED-SAVE EXIT
+        THEN
+        \ Saving a shared buffer elsewhere is an explicit export.  Only after
+        \ the VFS commit succeeds does it become an ordinary Pad buffer.
+        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DO-SAVE-TO ?DUP IF EXIT THEN
+        _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
+        0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + !
+        _PAD-SHARED-DETACH-BUFFER
+    ELSE
+        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DAYBOOK-PATH? IF
+            _PAD-RESOURCE-MODE @ _PAD-MODE-BLOCKED = IF
+                _PAD-E-SHARED-UNAVAILABLE EXIT
+            THEN
+            _PAD-RESOURCE-MODE @ _PAD-MODE-SHARED = IF
+                _PAD-E-DAYBOOK-PROTECTED EXIT
+            THEN
+        THEN
+        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DO-SAVE-TO ?DUP IF EXIT THEN
+        _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
+    THEN
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
@@ -908,6 +1311,11 @@ VARIABLE _POP-ORIG
 : _PAD-OPEN-PATH  ( fname-a fname-u -- ior )
     _PAD-CANON-PATH IF 2DROP -3 EXIT THEN
     _PIO-NAME-U ! _PIO-NAME-A !
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DAYBOOK-PATH? IF
+        _PAD-RESOURCE-MODE @ _PAD-MODE-DIRECT <> IF
+            _PAD-OPEN-SHARED-LATEST EXIT
+        THEN
+    THEN
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-REPL VREPL-DERIVE-PATHS!
     IF -3 EXIT THEN
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-FIND-BUFFER DUP 0>= IF
@@ -934,6 +1342,53 @@ VARIABLE _POP-ORIG
         ELSE DROP THEN
     THEN ;
 
+: _PAD-REPORT-OPEN-RESULT  ( ior -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP -1 = IF DROP S" File not found" 2000 ASHELL-TOAST EXIT THEN
+    DUP -2 = IF DROP S" Max buffers reached" 2000 ASHELL-TOAST EXIT THEN
+    DUP -3 = IF
+        DROP S" Invalid or unsupported path" 2200 ASHELL-TOAST EXIT
+    THEN
+    DUP -4 = IF
+        DROP S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST EXIT
+    THEN
+    DUP -5 = IF
+        DROP S" File read failed; document was not changed"
+        2500 ASHELL-TOAST EXIT
+    THEN
+    DUP -6 = IF
+        DROP S" File recovery is required before opening"
+        2500 ASHELL-TOAST EXIT
+    THEN
+    DUP -7 = IF
+        DROP S" File open failed safely after an internal storage fault"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP _PAD-E-SHARED-UNAVAILABLE = IF
+        DROP S" Shared Daybook resource is unavailable"
+        2400 ASHELL-TOAST EXIT
+    THEN
+    DUP _PAD-E-STALE = IF
+        DROP S" changed elsewhere; reload before saving"
+        2600 ASHELL-TOAST EXIT
+    THEN
+    DROP S" Shared Daybook open failed" 2400 ASHELL-TOAST ;
+
+: _PAD-REPORT-SAVE-ERROR  ( ior -- )
+    DUP _PAD-E-STALE = IF
+        DROP S" changed elsewhere; reload before saving"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP _PAD-E-SHARED-UNAVAILABLE = IF
+        DROP S" Shared Daybook resource is unavailable"
+        2400 ASHELL-TOAST EXIT
+    THEN
+    DUP _PAD-E-DAYBOOK-PROTECTED = IF
+        DROP S" /daybook.md is owned by the shared Daybook resource"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DROP S" Save failed" 2000 ASHELL-TOAST ;
+
 \ =====================================================================
 \  S12 -- Explorer Callback
 \ =====================================================================
@@ -946,14 +1401,7 @@ VARIABLE _POP-ORIG
         2DROP S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST EXIT
     THEN
     _PAD-OPEN-PATH
-    DUP -1 = IF S" File not found" 2000 ASHELL-TOAST THEN
-    DUP -2 = IF S" Max buffers reached" 2000 ASHELL-TOAST THEN
-    DUP -3 = IF S" Invalid or unsupported path" 2200 ASHELL-TOAST THEN
-    DUP -4 = IF S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST THEN
-    DUP -5 = IF S" File read failed; document was not changed" 2500 ASHELL-TOAST THEN
-    DUP -6 = IF S" File recovery is required before opening" 2500 ASHELL-TOAST THEN
-    DUP -7 = IF S" File open failed safely after an internal storage fault" 2800 ASHELL-TOAST THEN
-    DROP ;
+    _PAD-REPORT-OPEN-RESULT ;
 
 \ =====================================================================
 \  S13 -- Actions: File Menu
@@ -1000,7 +1448,7 @@ VARIABLE _PPS-IU
     THEN
     _PAD-ACTIVE @ _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @ SWAP _PBE-FNAME-L + @
     _PAD-SAVE-CURRENT-AS
-    IF S" Save failed" 2000 ASHELL-TOAST EXIT THEN
+    DUP IF _PAD-REPORT-SAVE-ERROR EXIT THEN DROP
     S" Saved" 1500 ASHELL-TOAST
     _PAD-UPDATE-STATUS ASHELL-DIRTY! ;
 
@@ -1011,11 +1459,12 @@ VARIABLE _PSA-ORIG
 VARIABLE _PSA-SAVED
 VARIABLE _PSA-SKIPPED
 VARIABLE _PSA-FAILED
+VARIABLE _PSA-STALE
 
 : _PAD-DO-SAVE-ALL  ( elem -- )
     DROP
     _PAD-ACTIVE @ _PSA-ORIG !
-    0 _PSA-SAVED ! 0 _PSA-SKIPPED ! 0 _PSA-FAILED !
+    0 _PSA-SAVED ! 0 _PSA-SKIPPED ! 0 _PSA-FAILED ! 0 _PSA-STALE !
     _PAD-MAX-BUFS 0 DO
         I _PAD-BUF-ENTRY DUP _PBE-FLAGS + @ IF
             DUP _PBE-DIRTY + @ IF
@@ -1024,11 +1473,12 @@ VARIABLE _PSA-FAILED
                 ELSE
                     DROP I _PAD-BUF-SWITCH
                     I _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @
-                    SWAP _PBE-FNAME-L + @ _PAD-DO-SAVE-TO
-                    IF
+                    SWAP _PBE-FNAME-L + @ _PAD-SAVE-CURRENT-AS
+                    DUP IF
+                        _PAD-E-STALE = IF -1 _PSA-STALE ! THEN
                         1 _PSA-FAILED +!
                     ELSE
-                        0 I _PAD-BUF-ENTRY _PBE-DIRTY + !
+                        DROP
                         1 _PSA-SAVED +!
                     THEN
                 THEN
@@ -1047,6 +1497,10 @@ VARIABLE _PSA-FAILED
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
     _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    _PSA-STALE @ IF
+        S" changed elsewhere; reload before saving"
+        2800 ASHELL-TOAST EXIT
+    THEN
     _PSA-FAILED @ IF
         S" Some buffers failed to save" 2500 ASHELL-TOAST EXIT
     THEN
@@ -1066,6 +1520,126 @@ VARIABLE _PSA-FAILED
         ELSE DROP THEN
     LOOP
     FALSE ;
+
+\ =====================================================================
+\  S13b -- Trusted-local Build & Install
+\ =====================================================================
+
+VARIABLE _PBUILD-ENTRY
+VARIABLE _PBUILD-STATUS
+
+: _PAD-BUILD-RESET  ( -- ) 0 _PAD-BUILD-LOG-U ! ;
+
+: _PAD-BUILD-APPEND  ( addr len -- )
+    DUP _PAD-BUILD-LOG-U @ + _PAD-BUILD-LOG-CAP > IF 2DROP EXIT THEN
+    DUP >R
+    _PAD-BUILD-LOG _PAD-BUILD-LOG-U @ + SWAP CMOVE
+    R> _PAD-BUILD-LOG-U +! ;
+
+: _PAD-BUILD-NL  ( -- )
+    _PAD-BUILD-LOG-U @ _PAD-BUILD-LOG-CAP >= IF EXIT THEN
+    10 _PAD-BUILD-LOG _PAD-BUILD-LOG-U @ + C!
+    1 _PAD-BUILD-LOG-U +! ;
+
+: _PAD-BUILD-NUM  ( n -- ) NUM>STR _PAD-BUILD-APPEND ;
+
+: _PAD-BUILD-SHOW  ( -- )
+    -1 _PAD-OUTPUT-VIS !
+    _PAD-E-EO-SPLIT @ ?DUP IF S" ratio" S" 80" UTUI-SET-ATTR THEN
+    _PAD-OUT-TXTA @ ?DUP IF
+        >R _PAD-BUILD-LOG _PAD-BUILD-LOG-U @ R> TXTA-SET-TEXT
+    THEN
+    _PAD-E-OUTPUT @ ?DUP IF UIDL-DIRTY! THEN
+    ASHELL-DIRTY! ;
+
+: _PAD-BUILD-COMPILE-ERROR  ( -- )
+    ABUILD-EVAL-STATUS EVAL-S-THROW = IF
+        S" Source evaluation threw " _PAD-BUILD-APPEND
+        ABUILD-EVAL-THROW _PAD-BUILD-NUM
+        S"  at line " _PAD-BUILD-APPEND
+        ABUILD-EVAL-LINE _PAD-BUILD-NUM _PAD-BUILD-NL
+        S" Nothing was installed; the build dictionary was discarded."
+            _PAD-BUILD-APPEND _PAD-BUILD-NL
+        EXIT
+    THEN
+    S" Checked compilation failed at line " _PAD-BUILD-APPEND
+    ABUILD-EVAL-LINE _PAD-BUILD-NUM
+    S" , column " _PAD-BUILD-APPEND
+    ABUILD-EVAL-COLUMN _PAD-BUILD-NUM _PAD-BUILD-NL
+    ABUILD-EVAL-TOKEN DUP IF
+        S" Token: " _PAD-BUILD-APPEND _PAD-BUILD-APPEND _PAD-BUILD-NL
+    ELSE
+        2DROP
+    THEN
+    S" Nothing was installed; the build dictionary was discarded."
+        _PAD-BUILD-APPEND _PAD-BUILD-NL ;
+
+: _PAD-BUILD-GENERIC-ERROR  ( status -- )
+    DUP ABUILD-E-SETUP = IF
+        DROP S" Build service is not connected to Desk's catalog."
+        _PAD-BUILD-APPEND EXIT
+    THEN
+    DUP ABUILD-E-MANIFEST = IF
+        DROP S" Project or generated installed manifest is invalid."
+        _PAD-BUILD-APPEND EXIT
+    THEN
+    DUP ABUILD-E-ENTRY = IF
+        DROP S" The declared entry was not defined as a named image export."
+        _PAD-BUILD-APPEND EXIT
+    THEN
+    DUP ABUILD-E-CATALOG = IF
+        DROP ABUILD-LAST-DETAIL ACAT-S-BUSY = IF
+            S" Close the running applet before rebuilding this stable ID."
+        ELSE
+            S" Image and manifest are safe, but the catalog commit failed."
+        THEN
+        _PAD-BUILD-APPEND EXIT
+    THEN
+    DUP ABUILD-E-COLLISION = IF
+        DROP S" A content-address collision was detected; no file was replaced."
+        _PAD-BUILD-APPEND EXIT
+    THEN
+    DROP S" Build failed safely before the catalog commit."
+    _PAD-BUILD-APPEND ;
+
+: _PAD-DO-BUILD-INSTALL  ( elem -- )
+    DROP
+    _PAD-ACTIVE @ 0< IF
+        S" Open a project manifest before building" 2400 ASHELL-TOAST EXIT
+    THEN
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-FNAME-L + @ 0= IF
+        S" Save the project manifest before building" 2600 ASHELL-TOAST EXIT
+    THEN
+    _PAD-HAS-DIRTY? IF
+        0 _PAD-DO-SAVE-ALL
+        _PSA-FAILED @ IF
+            S" Build stopped because a modified file could not be saved"
+                3000 ASHELL-TOAST EXIT
+        THEN
+    THEN
+    _PAD-BUILD-RESET
+    S" Build & Install" _PAD-BUILD-APPEND _PAD-BUILD-NL
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY
+    DUP _PBE-FNAME-A + @ SWAP _PBE-FNAME-L + @
+    ABUILD-INSTALL _PBUILD-STATUS ! _PBUILD-ENTRY !
+    _PBUILD-STATUS @ 0= IF
+        S" Installed: " _PAD-BUILD-APPEND
+        _PBUILD-ENTRY @ ACE-ID$ _PAD-BUILD-APPEND _PAD-BUILD-NL
+        S" Manifest: " _PAD-BUILD-APPEND
+        ABUILD-INSTALLED-PATH _PAD-BUILD-APPEND _PAD-BUILD-NL
+        S" Launch or focus it from Desk with Alt+H."
+            _PAD-BUILD-APPEND _PAD-BUILD-NL
+        _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
+        S" Applet installed" 1800 ASHELL-TOAST
+    ELSE
+        _PBUILD-STATUS @ ABUILD-E-COMPILE = IF
+            _PAD-BUILD-COMPILE-ERROR
+        ELSE
+            _PBUILD-STATUS @ _PAD-BUILD-GENERIC-ERROR _PAD-BUILD-NL
+        THEN
+        S" Build & Install failed" 2600 ASHELL-TOAST
+    THEN
+    _PAD-BUILD-SHOW ;
 
 : _PAD-DO-CLOSE-TAB  ( elem -- )
     DROP
@@ -1269,19 +1843,12 @@ VARIABLE _PPSUB-MODE
     _PPSUB-MODE @ CASE
         _PAD-PRM-OPEN OF
             _PPSUB-A @ _PPSUB-U @ _PAD-OPEN-PATH
-            DUP -1 = IF S" File not found" 2000 ASHELL-TOAST THEN
-            DUP -2 = IF S" Max buffers reached" 2000 ASHELL-TOAST THEN
-            DUP -3 = IF S" Invalid or unsupported path" 2200 ASHELL-TOAST THEN
-            DUP -4 = IF S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST THEN
-            DUP -5 = IF S" File read failed; document was not changed" 2500 ASHELL-TOAST THEN
-            DUP -6 = IF S" File recovery is required before opening" 2500 ASHELL-TOAST THEN
-            DUP -7 = IF S" File open failed safely after an internal storage fault" 2800 ASHELL-TOAST THEN
-            DROP
+            _PAD-REPORT-OPEN-RESULT
         ENDOF
         _PAD-PRM-SAVE-AS OF
             _PPSUB-A @ _PPSUB-U @ _PAD-SAVE-CURRENT-AS
-            IF S" Save failed" 2000 ASHELL-TOAST
-            ELSE S" Saved" 1500 ASHELL-TOAST THEN
+            DUP IF _PAD-REPORT-SAVE-ERROR
+            ELSE DROP S" Saved" 1500 ASHELL-TOAST THEN
         ENDOF
         _PAD-PRM-FIND OF
             _PPSUB-A @ _PPSUB-U @ _PAD-FIND-MATCH 0= IF
@@ -1398,7 +1965,8 @@ VARIABLE _PPSUB-MODE
 
 : _PAD-DO-SHORTCUTS  ( elem -- )
     DROP
-    S" Ctrl+N/O/S/W  Ctrl+Z/Y  Ctrl+C/X/V  Ctrl+B/J  Ctrl+F/G" 4000 ASHELL-TOAST ;
+    S" Ctrl+Shift+B Build  Ctrl+N/O/S/W  Ctrl+Z/Y  Ctrl+C/X/V  Ctrl+F/G"
+        4000 ASHELL-TOAST ;
 
 VARIABLE _PSW-GB
 VARIABLE _PSW-LEN
@@ -1484,6 +2052,7 @@ VARIABLE _PSW-BYTE
     _PAD-VFS !
     _PAD-VFS @ _PAD-REPL VREPL-INIT
     VREPL-S-OK <> ABORT" pad: replacement init failed"
+    _PAD-SHARED-INIT
     \ ---- Find UIDL elements by ID ----
     S" mbar"           UTUI-BY-ID _PAD-E-MBAR !
     S" main-split"     UTUI-BY-ID _PAD-E-MAIN-SPLIT !
@@ -1562,6 +2131,7 @@ VARIABLE _PSW-BYTE
     S" save"            ['] _PAD-DO-SAVE           UTUI-DO!
     S" save-as"         ['] _PAD-DO-SAVE-AS        UTUI-DO!
     S" save-all"        ['] _PAD-DO-SAVE-ALL       UTUI-DO!
+    S" build-install"   ['] _PAD-DO-BUILD-INSTALL  UTUI-DO!
     S" close-tab"       ['] _PAD-DO-CLOSE-TAB      UTUI-DO!
     S" close-all"       ['] _PAD-DO-CLOSE-ALL      UTUI-DO!
     S" undo"            ['] _PAD-DO-UNDO           UTUI-DO!
@@ -1761,6 +2331,10 @@ VARIABLE _PSW-BYTE
     \ Unbind from textarea
     _PAD-UNBIND
 
+    \ Release only Pad-owned semantic state.  Context, registry, bus, owner,
+    \ and capability descriptors are activation-local borrowed services.
+    _PAD-SHARED-FINI
+
     \ Free retained slot resources, including allocations belonging to
     \ currently closed slots.  GB-FREE releases packed line indexes; byte
     \ buffers and descriptors are released by ARENA-DESTROY below.
@@ -1810,36 +2384,74 @@ CREATE PAD-INTENTS CINT-DESC-SIZE ALLOT
 VARIABLE _PCH-A
 VARIABLE _PCH-U
 VARIABLE _PCH-REQ
+VARIABLE _PAR-V
+
+: _PAD-ACTIVE-RESOURCE!  ( value -- status )
+    _PAR-V !
+    _PAD-ACTIVE @ 0< IF IRES-S-INVALID EXIT THEN
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY
+    DUP _PBE-RESERVED + @ IF
+        DROP
+        _PAD-SHARED-BIND _PAD-SHARED-REF LBIND-REF DUP IF
+            DROP IRES-S-INVALID EXIT
+        THEN DROP
+        _PAD-SHARED-REF _PAR-V @ IRES-RREF!
+        EXIT
+    THEN
+    DUP _PBE-FNAME-L + @ DUP 0= IF
+        2DROP S" /untitled" _PAR-V @ IRES-VFS!
+    ELSE
+        >R _PBE-FNAME-A + @ R> _PAR-V @ IRES-VFS!
+    THEN ;
+
+: _PAD-CAP-OPEN-STATUS  ( pad-status -- bus-status )
+    DUP 0= IF DROP CBUS-S-OK EXIT THEN
+    DUP _PAD-E-STALE = IF DROP CBUS-S-STALE-REVISION EXIT THEN
+    DUP -1 = IF DROP CBUS-S-NOT-FOUND EXIT THEN
+    DUP -2 = IF DROP CBUS-S-BUSY EXIT THEN
+    DUP -3 = IF DROP CBUS-S-INVALID EXIT THEN
+    DROP CBUS-S-FAILED ;
 
 : _PAD-CAP-OPEN-HANDLER  ( request instance -- status )
     _PAD-ACTIVATE
-    DUP _PCH-REQ !
-    CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    DUP _PCH-REQ ! DROP
+    \ Semantic identity wins over the legacy backing locator.  The candidate
+    \ parse storage is distinct from the retained live binding so a stale or
+    \ foreign request cannot disturb the document already open in Pad.
+    _PCH-REQ @ CBR.ARGS _PAD-SHARED-CANDIDATE-REF IRES-RREF@
+    DUP IRES-S-OK = IF
+        DROP
+        _PAD-SHARED-OPEN-CANDIDATE DUP IF
+            _PAD-CAP-OPEN-STATUS EXIT
+        THEN DROP
+        _PCH-REQ @ CBR.RESULT _PAD-ACTIVE-RESOURCE! IF
+            CBUS-S-FAILED EXIT
+        THEN
+        CBUS-S-OK EXIT
+    THEN DROP
+    _PCH-REQ @ CBR.ARGS DUP CV-TYPE@ CV-T-RESOURCE <> IF
+        DROP CBUS-S-INVALID EXIT
+    THEN
+    DUP CV-DATA@ SWAP CV-LEN@
     IRES-VFS-PATH 0= IF 2DROP CBUS-S-INVALID EXIT THEN
     _PCH-U ! _PCH-A !
     _PCH-A @ _PCH-U @ _PAD-OPEN-PATH
     DUP 0= IF
         DROP
-        _PCH-REQ @ CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
-        _PCH-REQ @ CBR.RESULT CV-RESOURCE! IF
+        _PCH-REQ @ CBR.RESULT _PAD-ACTIVE-RESOURCE! IF
             CBUS-S-FAILED EXIT
         THEN
         CBUS-S-OK EXIT
     THEN
-    DROP CBUS-S-NOT-FOUND ;
+    _PAD-CAP-OPEN-STATUS ;
 
 : _PAD-CAP-ACTIVE-HANDLER  ( request instance -- status )
     _PAD-ACTIVATE
     _PAD-ACTIVE @ 0< IF
         DUP CBR.RESULT CV-NULL! DROP CBUS-S-OK EXIT
     THEN
-    _PAD-ACTIVE @ _PAD-BUF-ENTRY
-    DUP _PBE-FNAME-L + @ DUP 0= IF
-        2DROP S" /untitled" ROT CBR.RESULT IRES-VFS!
-    ELSE
-        >R _PBE-FNAME-A + @ R> ROT CBR.RESULT IRES-VFS!
-    THEN
-    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+    DUP CBR.RESULT _PAD-ACTIVE-RESOURCE!
+    IF DROP CBUS-S-FAILED ELSE DROP CBUS-S-OK THEN ;
 
 : _PAD-CAP-SETUP  ( -- )
     _PAD-RESOURCE-SCHEMA CS-INIT
@@ -1856,7 +2468,7 @@ VARIABLE _PCH-REQ
     PAD-CAP-OPEN CAP.ID-U ! PAD-CAP-OPEN CAP.ID-A !
     S" Open document"
     PAD-CAP-OPEN CAP.TITLE-U ! PAD-CAP-OPEN CAP.TITLE-A !
-    S" Open or focus a VFS text document in this Pad instance"
+    S" Open or focus a semantic or VFS text document in this Pad instance"
     PAD-CAP-OPEN CAP.DESC-U ! PAD-CAP-OPEN CAP.DESC-A !
     _PAD-RESOURCE-SCHEMA PAD-CAP-OPEN CAP.IN-SCHEMA !
     _PAD-RESOURCE-SCHEMA PAD-CAP-OPEN CAP.OUT-SCHEMA !

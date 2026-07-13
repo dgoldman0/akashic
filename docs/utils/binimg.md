@@ -1,331 +1,174 @@
-# binimg — Relocatable Binary Images for KDOS
+# MF64 relocatable dictionary images
 
-**Module:** `akashic/utils/binimg.f`
-**Prefix:** `IMG-` (public), `_IMG-` (internal)
-**Provides:** `akashic-binimg`
-**Phase:** 5 — Core Saver + Loader + Imports + Modules + Hardening
+`akashic/utils/binimg.f` builds, verifies, and loads relocatable MF64 Forth dictionary images. Version 2 is the current write format and adds exact named exports. The memory APIs also read legacy version-1 images.
 
-## Overview
+MF64 is a trusted-native transport format, not a sandbox or authenticity mechanism. Verification checks structure and resolves imports against the current dictionary. It does not authenticate an image, constrain imported authority, inspect native semantics, or provide unload isolation.
 
-Save compiled Forth dictionary regions as `.m64` binary files with
-relocation metadata, and load them back at any base address without
-re-parsing source text.
+## Memory API
 
-The **saver** (`IMG-MARK` / `IMG-SAVE`) snapshots a contiguous segment
-of the dictionary, normalizes in-segment absolute addresses to base-0
-offsets, and writes a single `.m64` file.
-
-The **loader** (`IMG-LOAD`) reads a `.m64` file into the dictionary,
-applies relocations to adjust all addresses to the new base, resolves
-imported external words by name, and splices the loaded words into the
-live dictionary chain.
-
-Future phases will add export tables, module-system integration, and
-diagnostics.
-
-## Quick Start
+The primary API operates on counted memory buffers and is the interface VFS code should use:
 
 ```forth
-REQUIRE utils/binimg.f
+IMG-MARK          ( -- )
+IMG-DISCARD       ( -- ior )
+IMG-PROVIDED      ( "token" -- )
+IMG-EXPORT        ( xt name-a name-u -- ior )
+IMG-ENTRY-NAMED   ( xt name-a name-u -- ior )
+IMG-ENTRY         ( xt -- )
+IMG-XMEM          ( -- )
+IMG-BUFFER-MAX    ( -- max-u ior )
+IMG-BUILD-INTO    ( dst cap -- used ior )
 
-\ 1. Create the target file (enough sectors for the output)
-16 1 MKFILE mylib.m64
+IMG-VERIFY-MEM    ( image-a image-u -- ior )
+IMG-EXPORT-FIND   ( image-a image-u name-a name-u -- offset ior )
+IMG-LOAD-MEM      ( image-a image-u -- ior )
+IMG-LOAD-EXEC-MEM ( image-a image-u -- xt ior )
+IMG-LOAD-EXPORT   ( image-a image-u name-a name-u -- xt ior )
+```
 
-\ 2. Mark the start of the segment
+All `ior` results use the status table below. APIs returning another value return zero for that value on failure.
+
+## Building an image
+
+A build is one global marked dictionary region:
+
+```forth
 IMG-MARK
-
-\ 3. Compile your code
-VARIABLE COUNTER
-: BUMP  1 COUNTER +! ;
-: GET   COUNTER @ ;
-
-\ 4. Save
-IMG-SAVE mylib.m64    \ ( -- ior )  0 = success
-
-\ --- Later, or in a different session ---
-
-\ Load the saved module
-IMG-LOAD mylib.m64    \ ( -- ior )  0 = success
-
-\ Words are now available
-BUMP GET .   \ prints 1
+\ compile one or more words
+' MY-ENTRY S" MY-ENTRY" IMG-ENTRY-NAMED THROW
+IMG-BUFFER-MAX THROW              \ leaves exact required byte count
+\ allocate caller-owned output storage
+output capacity IMG-BUILD-INTO    \ leaves used ior
+IMG-DISCARD THROW
 ```
 
-## Public API
+`IMG-MARK` reserves relocation storage, records `LATEST`, and starts tracking the segment at the subsequent `HERE`. The relocation capacity is 1024 entries in the kernel dictionary and 8192 in userland. Image construction also caps external-reference sites at 1024 and named imports at 1024; repeated calls to the same imported word still consume separate external-reference sites. At least one dictionary word must be compiled after the mark.
 
-### `IMG-MARK  ( -- )`
+Calling `IMG-MARK` again without first calling `IMG-DISCARD` preserves the historical behavior: the previous marked region is left committed in the live dictionary and a new build starts. Code that wants rollback must pair every mark with a successful discard.
 
-Snapshot the current dictionary position as the start of a saveable
-segment. Everything compiled after `IMG-MARK` becomes part of the
-segment.
+`IMG-DISCARD` stops tracking, restores the saved `LATEST`, and rolls `HERE` back through both the compiled segment and its reserved relocation buffer. It returns `IMG-E-STATE` if no build is marked. Building an image does not discard automatically; the live segment remains usable until the caller discards it.
 
-Internally:
-- Parks a relocation buffer at HERE via `ALLOT`.  The buffer size is
-  **adaptive**: 8192 entries (64 KiB) when `ULAND @` is true (userland
-  mode, HERE in ext mem), 1024 entries (8 KiB) when in kernel space.
-  This avoids clobbering BIOS structures with a large ALLOT in the
-  1 MiB system-RAM region.
-- Enables BIOS relocation tracking (`_RELOC-ACTIVE`, `_RELOC-BUF`,
-  `_RELOC-COUNT`).
-- Records `HERE` as `_img-mark-base` and `LATEST` as
-  `_img-mark-latest`.
+### Registration words
 
-### `IMG-SAVE  ( "filename" -- ior )`
+`IMG-EXPORT` registers a named version-2 export. The XT must belong to a dictionary word compiled after the current mark, and the supplied 1--23 byte name must exactly equal that word's dictionary name. Re-registering the same name/offset pair is idempotent; duplicate names with different offsets, duplicate offsets with different names, and more than 16 exports are rejected.
 
-Save the segment `[mark-base .. HERE)` to the named `.m64` file.
-The file must already exist on disk (use `MKFILE` to pre-create it).
-Returns 0 on success, negative on error.
+`IMG-ENTRY-NAMED` performs the same exact registration and also makes that export the default executable entry. Version-2 executable entries must be named exports. `IMG-ENTRY` is a compatibility form that derives the word's dictionary name and latches any error rather than returning it.
 
-Steps performed:
-1. Disable BIOS reloc tracking.
-2. Compute segment size.
-3. Walk the dictionary chain to collect link-field relocations
-   (`_IMG-COLLECT-LINKS`).
-4. Open the target file (via `FIND-BY-NAME` / `OPEN-BY-SLOT`).
-5. Normalize: filter relocs to in-segment references only, convert
-   absolute addresses to base-0 offsets. Out-of-segment references
-   (external calls) are recorded as import candidates
-   (`_IMG-NORMALIZE`).
-6. Count named imports: for each out-of-segment reloc, attempt
-   reverse lookup via `_IMG-XT>ENTRY` → `_IMG-COUNT-IMPORTS`.
-7. Build the `.m64` output at HERE (past the segment and file
-   descriptor) in one contiguous buffer, including the import table
-   (`_IMG-BUILD-OUTPUT`).
-7. Write the entire buffer with a single `FWRITE` (avoids the
-   sector-level DMA overwrite issue).
-8. Flush directory metadata via `FFLUSH`.
-9. Denormalize the live dictionary so compiled words remain usable.
+`IMG-PROVIDED` copies a parsed 1--23 byte token into the segment and records it for `_MOD-MARK` registration after loading. `IMG-XMEM` requests extended-memory allocation at load time. Both words, and compatibility `IMG-ENTRY`, have no status result; misuse is latched into build state and surfaces from a later sizing, build, or save operation.
 
-### `IMG-LOAD  ( "filename" -- ior )`
+The first build error is sticky. Once an operation latches an error, subsequent preparation reports it until `IMG-DISCARD` or a new `IMG-MARK` resets the state.
 
-Load a `.m64` file, relocate all addresses, and splice the loaded
-words into the live dictionary. Returns 0 on success, negative on
-error.
+### Buffer ownership
 
-Steps performed:
-1. Open the file (via `FIND-BY-NAME` / `OPEN-BY-SLOT`).
-2. Read the entire file into HERE in one `FREAD` call.
-3. Validate header magic (`MF64`) and version.
-4. Extract segment size, relocation count, import count, and
-   chain-head offset.
-5. Mark `HERE+64` as load-base (segment starts after header).
-6. `ALLOT` header + segment to make the space permanent.
-7. Apply relocations: add load-base to every 8-byte value at the
-   offsets listed in the relocation table.
-8. Resolve imports: for each import entry, build a counted string
-   from the name field, call `FIND` to look up the word in the
-   host dictionary, and patch the fixup slot with the resolved XT.
-9. Splice the dictionary chain: walk the loaded chain from head to
-   tail (bounded by a splice guard to prevent infinite loops on
-   corrupt chains), set the tail link to the current `LATEST`, then
-   set `LATEST` to the loaded chain head.
+`IMG-BUFFER-MAX` finalizes and prechecks the marked region and returns the exact version-2 image size. `IMG-BUILD-INTO` requires a nonzero caller-owned buffer of at least that size. The destination must not overlap the relocation buffer or live marked segment.
 
-### `IMG-LOAD-EXEC  ( "filename" -- xt ior )`
+Construction temporarily normalizes pointers in the live marked region, serializes the image, restores the live pointers, and verifies the completed output. On success, `used` is the exact image length. The caller owns the output buffer; binimg neither allocates nor frees it.
 
-Load a `.m64` file that has the `EXEC` flag (bit 2).  Returns the
-entry-point XT and 0 on success.  Returns `0 _IMG-ERR-NOEXEC` if the
-image is not an executable.
+## Version-2 file layout
 
-### `IMG-PROVIDED  ( "token" -- )`
+All integer fields are little-endian. The header is exactly 64 bytes:
 
-Store a NUL-terminated module name in the segment.  After save/load,
-the loader calls `_MOD-MARK` to register it so `REQUIRE` of the
-corresponding `.f` source file is skipped.
+| Offset | Size | Field |
+| ---: | ---: | --- |
+| 0 | 4 | magic `MF64` |
+| 4 | 2 | version (`2` when written) |
+| 6 | 2 | flags |
+| 8 | 8 | segment byte length |
+| 16 | 8 | relocation count |
+| 24 | 8 | export count |
+| 32 | 8 | import count |
+| 40 | 8 | signed dictionary-head offset |
+| 48 | 8 | signed `PROVIDED` string offset, or `-1` |
+| 56 | 8 | signed default-entry offset, or `-1` |
 
-### `IMG-ENTRY  ( xt -- )`
+The body immediately follows in this exact order, with no alignment gaps or trailing bytes:
 
-Record an entry-point XT for executable images.  Sets the `EXEC` flag
-automatically.
-
-### `IMG-XMEM  ( -- )`
-
-Set the `XMEM` flag.  The segment will be loaded into extended memory
-via `XMEM-ALLOT` instead of base-RAM `ALLOT`.
-
-### `IMG-INFO  ( "filename" -- )`
-
-Print a human-readable summary of a `.m64` file's header: magic,
-version, flags, segment size, reloc/import counts, PROVIDED token,
-and entry-point offset.
-
-### `IMG-VERIFY  ( "filename" -- ior )`
-
-Validate a `.m64` file's structural integrity: magic, version, segment
-size vs file size, reloc offsets within bounds.  Returns 0 on success.
-
-### `IMG-CHECKSUM  ( "filename" -- u )`
-
-Compute a 64-bit hash of the entire `.m64` file contents.  Useful for
-reproducible-build verification.
-
-## .m64 File Format
-
-All multi-byte fields are little-endian.
-
-### Header (64 bytes)
-
-| Offset | Size  | Field         | Description                        |
-|--------|-------|--------------|------------------------------------|
-| 0      | 4     | magic        | `MF64` (77 70 54 52)              |
-| 4      | 2     | version      | Format version (currently 1)       |
-| 6      | 2     | flags        | Bit flags (see below)              |
-| 8      | 8     | seg_size     | Segment size in bytes              |
-| 16     | 8     | reloc_count  | Number of relocation entries       |
-| 24     | 8     | export_count | Export table entries (Phase 4: 0)  |
-| 32     | 8     | import_count | Import table entries               |
-| 40     | 8     | chain_head   | Dict chain head offset into segment|
-| 48     | 8     | prov_offset  | PROVIDED string offset (Phase 4: 0)|
-| 56     | 8     | reserved     | Must be 0                          |
-
-### Flag Bits
-
-| Bit | Constant          | Meaning                 |
-|-----|--------------------|------------------------|
-| 0   | `_IMG-FLAG-JIT`   | Contains JIT code       |
-| 1   | `_IMG-FLAG-XMEM`  | Uses extended memory    |
-| 2   | `_IMG-FLAG-EXEC`  | Executable (has entry)  |
-| 3   | `_IMG-FLAG-LIB`   | Library (exports only)  |
-
-### Body
-
-```
-[header 64B][segment seg_size B][reloc_table reloc_count × 8B][import_table import_count × 32B]
+```text
+segment bytes
+relocation[count]     each: u64 slot offset
+export[count]         each: 32 bytes
+import[count]         each: 32 bytes
 ```
 
-Each relocation entry is a `u64` byte-offset into the segment. The
-8-byte value at that offset is a base-0 address that must be adjusted
-by adding the load base address.
+An export record is a `u64` code offset followed by a 24-byte NUL-padded name. An import record is a `u64` fixup-slot offset followed by the same name representation. A canonical record name is 1--23 bytes followed by NULs through the end of the field.
 
-### Import Table
+The recognized flag bits are:
 
-Each import entry is 32 bytes:
+| Mask | Name | Meaning in this implementation |
+| ---: | --- | --- |
+| `0x1` | `JIT` | recognized legacy flag; no public builder setter or load behavior here |
+| `0x2` | `XMEM` | allocate the segment through `XMEM-ALLOT?` |
+| `0x4` | `EXEC` | a default executable entry is present |
+| `0x8` | `LIB` | version-2 named exports are present |
 
-| Offset | Size | Field        | Description                        |
-|--------|------|-------------|------------------------------------|
-| 0      | 8    | fixup_offset | Segment-relative offset of the slot |
-| 8      | 24   | name         | NUL-padded ASCII word name          |
+Unknown flag bits are rejected. For version 2, `LIB` is required exactly when the export count is nonzero.
 
-The fixup offset points to the 8-byte slot in the segment that
-originally held an absolute XT of an external word (outside the
-segment). During save, that slot is zeroed. During load, `FIND`
-resolves the name, and the resulting XT is written to
-`load-base + fixup_offset`.
+Version 1 uses the same header shape but has no export records and requires an export count of zero. It can still be verified and loaded, including through its legacy default entry, but exact named-export lookup requires version 2. New builds always serialize version 2.
 
-## Memory Strategy
+## Verification
 
-No `ALLOCATE` / `FREE`. All buffers live in dictionary space via
-`HERE` / `ALLOT`:
+`IMG-VERIFY-MEM` requires the supplied byte count to match the image layout exactly. It rejects truncation and trailing bytes. Validation includes:
 
+- supported version, known flags, nonnegative sizes and counts, and hard caps of 8192 relocations, 16 exports, and 1024 imports;
+- unique, in-bounds relocation slots whose stored values are segment-relative;
+- unique import slots that are not relocation slots and contain zero in the serialized segment;
+- canonical import names that resolve exactly through the current ambient dictionary;
+- unique, canonical version-2 export names and offsets;
+- a bounded, backward dictionary chain with valid entry shapes and consistent link relocation;
+- exact binding of every version-2 export name and code offset to a reachable dictionary word;
+- a valid executable entry, with a named export required in version 2;
+- a nonempty NUL-terminated `PROVIDED` value when present.
+
+Compiled calls into the preexisting dictionary become named imports and are patched to whatever exact word `FIND` resolves during verification and loading. A limited set of positive low runtime/BIOS ABI addresses is retained directly; unknown external userland references are rejected. Thus verification is environment-dependent and does not turn an import into a capability restriction.
+
+`IMG-VERIFY-MEM` does not modify the supplied image or splice a dictionary segment, but it uses shared module scratch and performs ambient dictionary lookup.
+
+## Exact exports and loading
+
+`IMG-EXPORT-FIND` fully verifies the image and then returns the segment-relative offset for an exact version-2 export name. It does not load the image and rejects version 1.
+
+All load operations verify before allocating and copy the segment into its destination, apply internal relocations, patch resolved imports, splice the image's dictionary chain into `LATEST`, and register an optional `PROVIDED` token. The caller retains ownership of the input image buffer and may release it after the call.
+
+- `IMG-LOAD-MEM` loads an image without selecting an entry.
+- `IMG-LOAD-EXEC-MEM` requires `EXEC`, loads the image, and returns the relocated default-entry XT.
+- `IMG-LOAD-EXPORT` requires an exact version-2 export, loads the image, and returns that relocated XT.
+
+A successful load is permanent: binimg exposes no unload operation. The module itself does not provide an exception-level transaction around dictionary or XMEM mutation, so a higher-level loader that needs rollback or quarantine semantics must establish that boundary itself.
+
+## Status values
+
+| Value | Name | Meaning |
+| ---: | --- | --- |
+| 0 | `IMG-E-OK` | success |
+| -1 | `IMG-E-IO` | raw-file I/O failure |
+| -2 | `IMG-E-FORMAT` | bad magic/version/flags/layout/name or other format violation |
+| -3 | `IMG-E-IMPORT` | import is invalid or cannot be resolved |
+| -5 | `IMG-E-RELOC` | invalid, duplicate, or inconsistent relocation/fixup |
+| -6 | `IMG-E-NOEXEC` | executable entry was requested but is absent |
+| -7 | `IMG-E-EXPORT` | named export or exact binding is invalid or absent |
+| -8 | `IMG-E-STATE` | invalid build state or overlapping output buffer |
+| -9 | `IMG-E-CAPACITY` | count cap or destination/file capacity exceeded |
+| -10 | `IMG-E-SHORT` | truncated header/body or short raw-file read |
+| -11 | `IMG-E-NOMEM` | DMA, dictionary, or XMEM allocation failed |
+
+The old private `_IMG-ERR-*` aliases remain only for source compatibility. New code should use the public `IMG-E-*` names.
+
+## Legacy raw-file wrappers
+
+These compatibility words parse the following filename token and use the KDOS raw filesystem:
+
+```forth
+IMG-SAVE       ( "filename" -- ior )
+IMG-SAVE-EXEC  ( xt "filename" -- ior )
+IMG-LOAD       ( "filename" -- ior )
+IMG-LOAD-EXEC  ( "filename" -- xt ior )
+IMG-VERIFY     ( "filename" -- ior )
+IMG-INFO       ( "filename" -- )
+IMG-CHECKSUM   ( "filename" -- u )
 ```
-During compilation (after IMG-MARK):
-  [...dict...][reloc-buf 8K/64K][mark-base ... segment ... HERE]
 
-During IMG-SAVE (temporary):
-  [...dict...][reloc-buf][segment][fdesc 56B][output-buf]
+The save target must already exist and have enough raw-file capacity. `IMG-SAVE` builds into a temporary DMA buffer first, then truncates, writes, checks the exact resulting size, and flushes. The read wrappers exact-read the complete raw file into DMA memory and release it after verification or loading.
 
-During IMG-LOAD:
-  [...dict...][fdesc 56B][header 64B][segment seg_size B][relocs (scratch)]
-                                     ^ load-base         ^ new HERE
-```
+`IMG-INFO` prints verified header metadata or a numeric error. `IMG-CHECKSUM` returns an FNV-like checksum over the image body, or zero on read/verification error. It is a diagnostic compatibility checksum, not a cryptographic digest or trust check.
 
-The output buffer is built past the segment and file descriptor,
-written in one FWRITE, then abandoned. The dictionary frontier
-(`HERE`) is not rolled back — the reloc buffer and fdesc remain
-allocated but harmless. Subsequent compilation continues from the
-current HERE.
-
-## Relocation Details
-
-Two sources feed the relocation buffer:
-
-1. **BIOS-tracked** (`_RELOC-ACTIVE` / `reloc_record`): The BIOS
-   compiler records every `LDI64` immediate that holds an absolute
-   address — from `compile_call`, `CREATE`, `VARIABLE`, and `DOES>`.
-
-2. **Dictionary link fields** (`_IMG-COLLECT-LINKS`): Walks from
-   `LATEST` back to `_img-mark-latest`, appending the address of each
-   link cell.
-
-During normalization, entries whose target value falls **outside** the
-segment are recorded as out-of-segment relocs in `_img-ext-buf`.
-These are references to KDOS/BIOS words (e.g., `!`, `@`, `.`) and the
-terminal link field.  The buffer holds up to 1024 entries
-(`_IMG-EXT-CAP`); overflow aborts with a diagnostic message.  Note
-that each **call site** consumes one slot — calling `EMIT` 10 times
-uses 10 slots, not 1.  For each ext-pair, `_IMG-XT>ENTRY` attempts a
-reverse lookup by walking the pre-mark dictionary; if found, the
-reference becomes a named import entry in the `.m64` file.  The fixup
-slot is zeroed in the output.
-
-## Error Codes
-
-| Code | Constant          | Meaning                            |
-|------|--------------------|------------------------------------|
-| 0    | —                  | Success                            |
-| -1   | `_IMG-ERR-IO`     | File not found or open failed      |
-| -2   | `_IMG-ERR-MAGIC`  | Bad magic or version too new       |
-| -3   | `_IMG-ERR-IMPORT` | Unresolved import (name not found) |
-| -5   | `_IMG-ERR-RELOC`  | Relocation buffer overflow         |
-| -6   | `_IMG-ERR-NOEXEC` | Not an executable image             |
-
-## Design Notes
-
-- **Single FWRITE**: KDOS FWRITE is sector-level DMA. Multiple small
-  writes to the same sector overwrite each other. The entire `.m64` is
-  assembled in one contiguous buffer and written in a single call.
-
-- **OPEN-BY-SLOT at HERE**: `OPEN-BY-SLOT` builds a 56-byte file
-  descriptor at HERE via `,` (comma). `IMG-SAVE` opens the file
-  *before* building the output buffer so the fdesc doesn't clobber it.
-
-- **Denormalization**: After saving, `_IMG-DENORMALIZE` restores all
-  normalized values — both in-segment relocs and out-of-segment
-  references — so the live dictionary remains functional. The caller
-  can continue using words compiled in the segment.
-
-- **Import auto-detection**: The saver does not require the user to
-  declare imports. Any compiled reference (LDI64 immediate) whose
-  target falls outside the segment is an import candidate.
-  `_IMG-XT>ENTRY` walks the pre-mark dictionary chain to find the
-  entry containing that code-field address, then `ENTRY>NAME`
-  extracts the name for the import table.
-
-- **Pre-mark chain walk**: `_IMG-XT>ENTRY` must walk from
-  `_img-mark-latest` (the pre-mark LATEST), not from current LATEST.
-  During normalization the link fields of in-segment entries are
-  rewritten to base-0 offsets and cannot be followed.
-
-- **No cross-core impact**: The module touches only dictionary space
-  (HERE/ALLOT) and the BIOS reloc variables. No heap, no shared
-  state, no effect on other cores or tasks.
-
-- **Single FREAD for loading**: KDOS `FREAD` advances the cursor by
-  whole sectors (512 bytes), not by the requested byte count.
-  Sequential small reads skip data. The loader reads the entire file
-  in one `FREAD` call, then parses header, segment, and reloc table
-  from the in-memory buffer.
-
-- **Chain-head offset in header**: The saver stores the segment-
-  relative offset of `LATEST` (the dictionary chain head) at header
-  offset 40. The loader uses this to find the chain head directly,
-  avoiding the need to scan or walk the segment.
-
-- **Dictionary chain splice**: After relocation, the loaded chain
-  head's most-recent entry links down to the tail (oldest loaded
-  word). The tail's link still holds the absolute address of the
-  pre-mark `LATEST` from the original save session. The loader
-  replaces it with the current `LATEST`, then sets `LATEST` to the
-  loaded chain head. The loaded words shadow any same-named words.
-
-## Roadmap
-
-| Phase | Status  | Description                          |
-|-------|---------|--------------------------------------|
-| 1     | **Done**| Core saver (IMG-MARK, IMG-SAVE)      |
-| 2     | **Done**| Core loader (IMG-LOAD)               |
-| 3     | **Done**| Import table (auto-detect + resolve) |
-| 4     | **Done**| Module system (PROVIDED, EXEC, XMEM) |
-| 5     | **Done**| Diagnostics & hardening              |
-
-See `local_testing/ROADMAP_executable.md` for the full phase plan and
-decision log.
+When guards are enabled, the memory and build-state APIs are individually guarded to serialize shared scratch. The raw wrappers are not guarded across filesystem I/O and also use shared state, so callers must serialize complete raw-file operations themselves.

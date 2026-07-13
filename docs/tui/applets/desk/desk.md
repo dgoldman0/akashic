@@ -1,6 +1,5 @@
 # akashic/tui/applets/desk/desk.f — TUI Multi-App Desktop
 
-**Lines:** ~1007  
 **Prefix:** `DESK-` (public), `_DESK-` / `_DTH-` / `_HB-` / `_DHBAR-` (internal)  
 **Provider:** `akashic-tui-desk`  
 **Location:** `akashic/tui/applets/desk/desk.f`  
@@ -8,7 +7,8 @@
 [`uidl-tui.f`](../../uidl-tui.md), [`screen.f`](../../screen.md),
 [`region.f`](../../region.md), [`draw.f`](../../draw.md),
 [`keys.f`](../../keys.md), [`color.f`](../../color.md),
-[`toml.f`](../../../../utils/toml.md), [`binimg.f`](../../../../utils/binimg.md),
+[`toml.f`](../../../../utils/toml.md), [`app-catalog.f`](../../app-catalog.md),
+`app-loader.f`, `app-builder.f`,
 `liraq/uidl.f`
 
 ## Why `applets/`?
@@ -143,46 +143,79 @@ can be overridden via a TOML config file under `[desk.theme]`.
 Colour values are parsed by `TUI-PARSE-COLOR`: CSS named colours,
 `#RRGGBB`, `#RGB`, or raw 0–255 xterm-256 indices.
 
-## Hotbar (Pinned Apps)
+## Durable Catalog, Hotbar, and Launcher
 
-The hotbar is a row of up to 12 pinned application shortcuts rendered
-in the taskbar after the running-app entries.  Each entry is defined
-by a `[[desk.hotbar]]` array-of-tables section in the TOML config:
+Desk owns one bounded catalog at `/app-catalog.bin`.  The catalog copies applet
+identity, title, version, and installed-manifest path and durably records the
+enabled, pinned, autostart, and quarantine flags.  The hotbar is now simply the
+first twelve pinned catalog rows: `<Label>` is available, `[Label]` is running,
+`(Label)` is disabled, and `!Label!` is quarantined or failed.  Closing an
+applet clears only its live slot; its cached descriptor remains available for a
+fast relaunch during the same Desk session.
 
-```toml
-[[desk.hotbar]]
-label = "Pad"
-file  = "pad.m64"
-desc  = "PAD-DESC"
-```
+`Alt+H` opens a non-blocking modal over the desktop.  It lists every catalog
+row and its status.  Up/Down, PgUp/PgDn, Home/End select; Enter focuses an
+already-running row or lazily resolves and transactionally launches it; Esc
+closes the modal.  Package resolution is manifest-bound:
+`ACE-MANIFEST$ ALOAD-PATH`.  Desk does not evaluate catalog text or load any
+package during catalog activation.  Built-ins bind only when the exact
+component ID matches a queued descriptor.  The companion releaser calls
+`ALOAD-DESC-FREE` for loader-created package descriptors on replacement or
+teardown; static built-in descriptors are never released.
 
-Entries start as **pinned** (not launched) and appear in a dimmed
-`<Label>` style.  When launched (via `Alt+H`), the desk loads
-the `.m64` binary via `IMG-LOAD-EXEC` (using an `EVALUATE` trick
-to inject the filename), then `EVALUATE`s the `desc` word to obtain
-an APP-DESC address, and calls `DESK-LAUNCH`.  The entry then shows
-as `[Label]` in normal taskbar style.
+`DESK-QUEUE-LAUNCH` remains source-compatible with existing profiles.  It now
+migrates the descriptor into the catalog with enabled, pinned, and autostart
+defaults.  Once persisted, the row's flags are authoritative on later boots.
+Pad's Build & Install workflow receives the live catalog only after activation;
+the builder pointer is cleared before the catalog is freed.
 
-> **Note:** KDOS does not have `INCLUDED`.  All applet code is loaded
-> as pre-compiled `.m64` binary images.  See
-> [app-loader.md](../../app-loader.md) for the full packaging pipeline.
+## Activation-local Daybook resource
 
-Hotbar entry structure (7 cells = 56 bytes):
+On a healthy Practice activation, Desk creates one resource registry and one
+headless [shared document owner](../../../interop/shared-document.md) for the
+canonical Daybook document. Its semantic RID is the SHA3-256 digest of the
+stable Practice ID and `org.akashic.resource.daybook`; the activation epoch and
+applet instance IDs are deliberately absent. The RID therefore remains the
+same across Desk restarts while its RID-to-instance mapping and revision remain
+activation-local.
 
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | label-a | Label string address (zero-copy into TOML buffer) |
-| +8 | label-u | Label string length |
-| +16 | file-a | File path address |
-| +24 | file-u | File path length |
-| +32 | desc-a | Descriptor word name address |
-| +40 | desc-u | Descriptor word name length |
-| +48 | slot-id | Desk slot ID (0 = not launched) |
+Children receive borrowed services through their inherited interoperability
+endpoint:
+
+| Service ID | Value |
+|------------|-------|
+| `org.akashic.runtime.context` | Active root Context |
+| `org.akashic.runtime.resource-registry` | Activation-local `RREG` |
+| `org.akashic.interop.request-bus` | Desk request bus |
+| `org.akashic.resource.daybook` | Stable Daybook RID |
+
+The endpoint does not expose the owner instance. A lens resolves the RID into
+an exact `RREF`, attaches its own `LBIND`, and invokes `resource.snapshot` or
+`resource.replace` through the bus. If resource activation fails, Desk can
+still run, but it withholds the Daybook RID. A child which can see the Desk
+Context must treat an incomplete service set as a blocked Practice resource;
+falling back to direct `/daybook.md` access would erase the distinction this
+experiment is meant to test.
+
+Desk closes every lens before entering one dispatch-quiesced teardown boundary
+which cancels requests, deactivates the owner, and frees the resource registry,
+bus, and component registry in dependency order. No new synchronous dispatch
+can enter between owner unpublication and bus free. Practice deactivation is
+skipped if dependent interoperability teardown throws, so the Context is not
+freed from underneath a live owner.
+
+This is not yet enforced path ownership. File Explorer and arbitrary trusted
+native code can still write `/daybook.md` directly, outside the owner's
+revision sequence. The current claim is intentionally narrower: migrated
+Daybook and Pad lenses coordinate through one owner by convention. Whether the
+benefits justify that glue is part of the Practice experiment.
 
 ## Config Loading
 
-`DESK-LOAD-CONFIG ( addr len -- )` takes a TOML buffer and loads
-both the theme (`_DESK-LOAD-THEME`) and hotbar (`_DESK-LOAD-HOTBAR`).
+`DESK-LOAD-CONFIG ( addr len -- )` takes a TOML buffer and loads the theme.
+Legacy `[[desk.hotbar]]` tables remain parseable for compatibility, but they
+never override an active catalog and their file/descriptor strings are never
+evaluated.
 
 To supply a config before `DESK-RUN`, store the buffer address/length
 in `_DESK-CFG-A` / `_DESK-CFG-L`.  `DESK-INIT-CB` will call
@@ -198,6 +231,7 @@ A sample config template is provided in
 | Word | Stack | Description |
 |------|-------|-------------|
 | `DESK-LAUNCH` | `( desc -- id )` | Launch sub-app from APP-DESC.  Returns slot ID (−1 on failure). |
+| `DESK-TRY-LAUNCH` | `( desc -- id ior )` | Transactional launch with an explicit error.  Every known host resource is rolled back on failure. |
 | `DESK-CLOSE-ID` | `( id -- )` | Compatibility window-close request; CANCEL/DEFER leave the child live. |
 | `DESK-REQUEST-CLOSE-ID` | `( id reason -- decision )` | Negotiate close; ALLOW shuts down/removes, CANCEL/DEFER preserve. |
 | `DESK-FOCUS-ID` | `( id -- )` | Focus sub-app by slot ID.  No-op if minimized or not found. |
@@ -218,19 +252,27 @@ A sample config template is provided in
 |------|-------|-------------|
 | `DESK-SLOT-COUNT` | `( -- n )` | Number of live slots (all states). |
 | `DESK-VCOUNT` | `( -- n )` | Number of visible (non-minimized) slots. |
+| `DESK-CATALOG` | `( -- catalog\|0 )` | Active installed-applet catalog. |
 
 ### Configuration
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `DESK-LOAD-CONFIG` | `( addr len -- )` | Load TOML buffer — applies theme and hotbar. |
+| `DESK-LOAD-CONFIG` | `( addr len -- )` | Load presentation/theme TOML. |
 
 ### Startup
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `DESK-QUEUE-LAUNCH` | `( desc -- )` | Set a startup applet to launch automatically when the desktop initialises.  Call before `DESK-RUN`. |
+| `DESK-QUEUE-LAUNCH` | `( desc -- )` | Compatibly register a pinned/autostart built-in.  Call before `DESK-RUN`. |
+| `DESK-QUEUE-BUILTIN` | `( desc flags -- )` | Queue an exact-ID built-in binding with caller-selected catalog defaults. |
+| `DESK-PACKAGE-RESOLVER!` | `( xt context -- )` | Replace the lazy package resolver; hook is `( entry context -- desc status )`. |
+| `DESK-PACKAGE-RELEASER!` | `( xt context -- )` | Before run, set the companion descriptor hook `( desc context -- )`. |
 | `DESK-RUN` | `( -- )` | Fill `DESK-DESC`, call `ASHELL-RUN`.  Blocks until shell exits. |
+
+The package hook setters are constructor-only.  Replacing the resolver clears
+the pending releaser, so a custom resolver that allocates descriptors must then
+install its matching releaser before `DESK-RUN`.
 
 ## Keyboard Shortcuts
 
@@ -245,7 +287,10 @@ All shortcuts require **Alt** modifier:
 | Alt+F | Toggle full-frame mode |
 | Alt+L | Toggle V/H tiling preference |
 | Alt+W | Close focused slot |
-| Alt+H | Launch next unlaunched hotbar entry |
+| Alt+H | Open the selectable catalog launcher |
+
+Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter focuses or
+launches; Esc closes it.  The modal consumes input without blocking Desk ticks.
 
 Alt+Arrow, Alt+Del, Alt+End, and Alt+PgDn are reserved by&nbsp;the shell
 cursor and never reach desk’s event handler.
@@ -301,13 +346,13 @@ live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
 | 1 | Slot Struct | 88-byte linked-list node, state enum |
 | 2 | DESK Global State | Head, focus, ID counter, layout prefs |
 | 2b | Theme | 15 colour slot variables, defaults, TOML loader |
-| 2c | Hotbar | Pinned-app entry array, TOML loader, painting |
+| 2c | Hotbar | Pinned catalog projection and legacy TOML compatibility |
 | 2d | Config Loader | `DESK-LOAD-CONFIG` master loader |
 | 3 | Linked-List Helpers | Find, unlink, append, count |
 | 4 | Visible Collection Buffer | Up to 64 visible slots |
 | 5 | Tiling Layout Engine | Grid, tile sizes, region assignment, dividers |
 | 6 | Context Switching | Save/restore/switch helpers (delegates to shell) |
-| 7 | Launch & Close | `DESK-LAUNCH`, `DESK-CLOSE-ID` |
+| 7 | Launch & Close | transactional `DESK-TRY-LAUNCH`, rollback, close negotiation |
 | 8 | Focus/Minimize/Restore | State transitions, auto-focus |
 | 9 | Taskbar Painter | Per-item styled painting + hotbar + divider |
 | 10 | APP-DESC Callbacks | Init, event, tick, paint, shutdown |
@@ -317,13 +362,14 @@ live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
 
 ## Guard-Protected Words
 
-Under `[DEFINED] GUARDED`: `DESK-LAUNCH`, `DESK-FOCUS-ID`,
+Under `[DEFINED] GUARDED`: `DESK-FOCUS-ID`,
 `DESK-MINIMIZE-ID`, `DESK-RESTORE`, `DESK-FULLFRAME!`,
 `DESK-TOGGLE-VH`, `DESK-RELAYOUT`, `DESK-SLOT-COUNT`, `DESK-VCOUNT`,
 `DESK-AGENT-SOURCE!`, `DESK-PRACTICE`, `DESK-CONTEXT`, and
 `DESK-RECOVERY?`.
 
-`DESK-RUN`, `DESK-CLOSE-ID`, and `DESK-REQUEST-CLOSE-ID` are owner-core
-lifecycle entries and remain unwrapped.  Close callbacks may open a blocking
-confirmation dialog, so no metadata guard is retained across negotiation.
-Cross-core producers must post the close request to Desk's owner task.
+`DESK-RUN`, `DESK-LAUNCH`, `DESK-TRY-LAUNCH`, `DESK-CLOSE-ID`, and
+`DESK-REQUEST-CLOSE-ID` are owner-core lifecycle entries and remain unwrapped.
+Launch/init and close callbacks may execute arbitrary applet code, so no
+metadata guard is retained across them.  Cross-core producers must post these
+requests to Desk's owner task.

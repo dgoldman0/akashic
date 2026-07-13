@@ -30,6 +30,7 @@ REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
+REQUIRE ../../../interop/lens-binding.f
 REQUIRE ../../../interop/resource.f
 
 86400 CONSTANT _DB-SECONDS-DAY
@@ -58,6 +59,18 @@ REQUIRE ../../../interop/resource.f
 5 CONSTANT _DB-L-S-CAPACITY
 6 CONSTANT _DB-L-S-TEXT
 7 CONSTANT _DB-L-S-RECOVERY
+8 CONSTANT _DB-L-S-STALE
+9 CONSTANT _DB-L-S-SHARED
+
+0 CONSTANT _DB-MODE-DIRECT
+1 CONSTANT _DB-MODE-SHARED
+2 CONSTANT _DB-MODE-BLOCKED
+
+1001 CONSTANT _DB-W-S-SHARED
+
+0 CONSTANT _DB-SR-S-OK
+1 CONSTANT _DB-SR-S-STALE
+2 CONSTANT _DB-SR-S-STRUCTURAL
 
  0 CONSTANT _DB-E-KIND
  8 CONSTANT _DB-E-DONE
@@ -82,6 +95,23 @@ _DB-CURRENT-STATE CMP-CELL: _DB-VFS
 _DB-CURRENT-STATE VREPL-SIZE CMP-FIELD: _DB-REPLACE
 _DB-CURRENT-STATE CMP-CELL: _DB-DISCARD-ARMED
 _DB-CURRENT-STATE CMP-CELL: _DB-SOURCE-BLOCKED
+_DB-CURRENT-STATE CMP-CELL: _DB-SAVE-STALE
+
+\ A Daybook instance is either a standalone VFS client or a lens onto the
+\ activation-local semantic owner.  Service pointers are borrowed; identity,
+\ reference, and binding state are copied into the instance allocation.
+_DB-CURRENT-STATE CMP-CELL: _DB-RESOURCE-MODE
+_DB-CURRENT-STATE CMP-CELL: _DB-SHARED-CONTEXT
+_DB-CURRENT-STATE CMP-CELL: _DB-SHARED-RREG
+_DB-CURRENT-STATE CMP-CELL: _DB-SHARED-BUS
+_DB-CURRENT-STATE CMP-CELL: _DB-SHARED-OWNER
+_DB-CURRENT-STATE RID-SIZE CMP-FIELD: _DB-SHARED-RID
+_DB-CURRENT-STATE RREF-SIZE CMP-FIELD: _DB-SHARED-REF
+_DB-CURRENT-STATE LBIND-SIZE CMP-FIELD: _DB-SHARED-BIND
+_DB-CURRENT-STATE CMP-CELL: _DB-SHARED-SNAPSHOT-CAP
+_DB-CURRENT-STATE CMP-CELL: _DB-SHARED-REPLACE-CAP
+_DB-CURRENT-STATE CMP-CELL: _DB-SHARED-REQUEST
+_DB-CURRENT-STATE CMP-CELL: _DB-CAPTURE-HOP
 
 _DB-CURRENT-STATE CMP-CELL: _DB-E-BODY
 _DB-CURRENT-STATE CMP-CELL: _DB-E-SBAR
@@ -107,6 +137,118 @@ CMP-LAYOUT-SIZE CONSTANT _DB-STATE-SIZE
 : _DB-ACTIVATE  ( instance -- )
     DUP _DB-CURRENT-INSTANCE !
     CINST-STATE _DB-CURRENT-STATE ! ;
+
+: _DB-SHARED-BLOCK!  ( -- )
+    _DB-MODE-BLOCKED _DB-RESOURCE-MODE !
+    -1 _DB-SOURCE-BLOCKED ! ;
+
+VARIABLE _DB-SA-OWNER
+
+: _DB-SHARED-BUS-VALID?  ( -- flag )
+    _DB-SHARED-BUS @ DUP 0= IF DROP 0 EXIT THEN
+    DUP CBUS.REGISTRY @ _DB-SHARED-RREG @ RREG.COMPONENTS @ =
+    OVER CBUS.POLICY @ _DB-SHARED-CONTEXT @ CTX.POLICY @ = AND
+    SWAP _DB-SHARED-CONTEXT @ CTX.QUEUE @ = AND ;
+
+: _DB-SHARED-REFRESH  ( -- status )
+    \ RREG-REF and LBIND-ATTACH are separately guarded.  A commit can make
+    \ the exact reference stale between them, which is contention rather than
+    \ broken wiring.  Retry a bounded number of times and leave a transient
+    \ stale status to the caller instead of permanently blocking the lens.
+    3 0 DO
+        _DB-SHARED-RID _DB-SHARED-CONTEXT @ _DB-SHARED-REF
+            _DB-SHARED-RREG @ RREG-REF ?DUP IF
+            DROP _DB-SR-S-STRUCTURAL UNLOOP EXIT
+        THEN
+        _DB-SHARED-REF _DB-SHARED-CONTEXT @ _DB-SHARED-RREG @
+            _DB-SHARED-BIND LBIND-ATTACH
+        DUP LBIND-S-OK = IF DROP _DB-SR-S-OK UNLOOP EXIT THEN
+        LBIND-S-STALE-REVISION <> IF
+            _DB-SR-S-STRUCTURAL UNLOOP EXIT
+        THEN
+    LOOP
+    _DB-SR-S-STALE ;
+
+: _DB-SHARED-INIT  ( -- )
+    _DB-MODE-DIRECT _DB-RESOURCE-MODE !
+    0 _DB-SHARED-CONTEXT ! 0 _DB-SHARED-RREG ! 0 _DB-SHARED-BUS !
+    0 _DB-SHARED-OWNER ! 0 _DB-SHARED-SNAPSHOT-CAP !
+    0 _DB-SHARED-REPLACE-CAP ! 0 _DB-SHARED-REQUEST !
+    0 _DB-CAPTURE-HOP !
+    _DB-SHARED-RID RID-CLEAR
+    _DB-SHARED-REF RREF-INIT
+    _DB-SHARED-BIND LBIND-INIT
+
+    \ A missing Context service defines the standalone control only when the
+    \ instance has no endpoint at all.  An attached endpoint which loses its
+    \ Context is broken Desk wiring, not permission to write the backing path.
+    \ Once a Context is advertised, every remaining service is mandatory.
+    S" org.akashic.runtime.context"
+        _DB-CURRENT-INSTANCE @ CINST-SERVICE DUP 0= IF
+        DROP _DB-CURRENT-INSTANCE @ CINST.ENDPOINT @ IF
+            _DB-SHARED-BLOCK!
+        THEN EXIT
+    THEN
+    DUP _DB-SHARED-CONTEXT !
+    CTX-VALID? 0= IF _DB-SHARED-BLOCK! EXIT THEN
+    _DB-SHARED-CONTEXT @ CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
+        _DB-SHARED-BLOCK! EXIT
+    THEN
+    S" org.akashic.runtime.resource-registry"
+        _DB-CURRENT-INSTANCE @ CINST-SERVICE DUP _DB-SHARED-RREG !
+    0= IF _DB-SHARED-BLOCK! EXIT THEN
+    _DB-SHARED-RREG @ RREG-VALID? 0= IF _DB-SHARED-BLOCK! EXIT THEN
+    _DB-SHARED-CONTEXT @ _DB-SHARED-RREG @ RREG-CONTEXT? 0= IF
+        _DB-SHARED-BLOCK! EXIT
+    THEN
+    S" org.akashic.interop.request-bus"
+        _DB-CURRENT-INSTANCE @ CINST-SERVICE DUP _DB-SHARED-BUS !
+    0= IF _DB-SHARED-BLOCK! EXIT THEN
+    _DB-SHARED-BUS-VALID? 0= IF _DB-SHARED-BLOCK! EXIT THEN
+    S" org.akashic.resource.daybook"
+        _DB-CURRENT-INSTANCE @ CINST-SERVICE DUP 0= IF
+        DROP _DB-SHARED-BLOCK! EXIT
+    THEN
+    DUP RID-PRESENT? 0= IF DROP _DB-SHARED-BLOCK! EXIT THEN
+    _DB-SHARED-RID RID-COPY
+
+    _DB-SHARED-REFRESH DUP IF DROP _DB-SHARED-BLOCK! EXIT THEN DROP
+    \ Resolve current only to discover the stable owner descriptor.  The
+    \ retained lens remains exact and is restored from LBIND immediately.
+    0 _DB-SHARED-REF RREF.REVISION !
+    _DB-SHARED-REF _DB-SHARED-CONTEXT @ _DB-SHARED-RREG @ RREG-RESOLVE
+    DUP IF
+        2DROP _DB-SHARED-BLOCK! EXIT
+    THEN
+    DROP DUP _DB-SA-OWNER ! _DB-SHARED-OWNER !
+    _DB-SHARED-BIND _DB-SHARED-REF LBIND-REF IF
+        _DB-SHARED-BLOCK! EXIT
+    THEN
+    S" resource.snapshot" _DB-SA-OWNER @ CINST-DESC COMP-CAP-FIND
+        DUP _DB-SHARED-SNAPSHOT-CAP ! 0= IF
+        _DB-SHARED-BLOCK! EXIT
+    THEN
+    S" resource.replace" _DB-SA-OWNER @ CINST-DESC COMP-CAP-FIND
+        DUP _DB-SHARED-REPLACE-CAP ! 0= IF
+        _DB-SHARED-BLOCK! EXIT
+    THEN
+    CBR-NEW DUP IF
+        2DROP _DB-SHARED-BLOCK! EXIT
+    THEN
+    DROP _DB-SHARED-REQUEST !
+    _DB-MODE-SHARED _DB-RESOURCE-MODE !
+    0 _DB-SOURCE-BLOCKED ! ;
+
+: _DB-SHARED-FINI  ( -- )
+    _DB-SHARED-REQUEST @ ?DUP IF CBR-FREE THEN
+    0 _DB-SHARED-REQUEST !
+    _DB-SHARED-BIND LBIND-CLEAR
+    _DB-SHARED-REF RREF-INIT
+    _DB-SHARED-RID RID-CLEAR
+    0 _DB-SHARED-CONTEXT ! 0 _DB-SHARED-RREG ! 0 _DB-SHARED-BUS !
+    0 _DB-SHARED-OWNER ! 0 _DB-SHARED-SNAPSHOT-CAP !
+    0 _DB-SHARED-REPLACE-CAP ! 0 _DB-CAPTURE-HOP !
+    _DB-MODE-DIRECT _DB-RESOURCE-MODE ! ;
 
 : _DB-ENTRY  ( index -- addr )
     _DB-ENTRY-SZ * _DB-ENTRIES + ;
@@ -424,13 +566,70 @@ _DB-RESET-LOAD-DEPENDENCIES
     DUP VREPL-S-ROLLED-BACK = IF DROP _DB-L-S-OK EXIT THEN
     VREPL-S-COMMITTED-CLEANUP = IF _DB-L-S-OK ELSE _DB-L-S-RECOVERY THEN ;
 
-: _DB-LOAD  ( -- status )
+: _DB-LOAD-DIRECT  ( -- status )
     _DB-RECOVER DUP IF -1 _DB-SOURCE-BLOCKED ! EXIT THEN DROP
     _DB-READ-FILE DUP _DB-L-S-MISSING = IF
         DROP _DB-CLEAR 0 _DB-SOURCE-BLOCKED ! _DB-L-S-OK EXIT
     THEN
     DUP IF -1 _DB-SOURCE-BLOCKED ! EXIT THEN DROP
     _DB-PARSE-FILE DUP IF -1 ELSE 0 THEN _DB-SOURCE-BLOCKED ! ;
+
+VARIABLE _DB-SL-A
+VARIABLE _DB-SL-U
+
+VARIABLE _DB-SRQ-CAP
+VARIABLE _DB-SRQ-PRINCIPAL
+
+: _DB-SHARED-REQUEST!  ( capability principal -- status )
+    _DB-SRQ-PRINCIPAL ! _DB-SRQ-CAP !
+    _DB-SHARED-BIND _DB-SHARED-CONTEXT @ _DB-SHARED-REQUEST @
+        LBIND-REQUEST! DUP IF EXIT THEN DROP
+    _DB-SRQ-PRINCIPAL @ _DB-SHARED-REQUEST @ CBR.PRINCIPAL !
+    _DB-SRQ-CAP @ _DB-SHARED-REQUEST @ CBR.CAP !
+    LBIND-S-OK ;
+
+: _DB-SHARED-SNAPSHOT  ( -- status )
+    _DB-SHARED-REFRESH DUP IF
+        DUP _DB-SR-S-STALE = IF
+            DROP _DB-L-S-STALE EXIT
+        THEN
+        DROP _DB-SHARED-BLOCK! _DB-L-S-SHARED EXIT
+    THEN DROP
+    _DB-SHARED-SNAPSHOT-CAP @ CPRINC-USER _DB-SHARED-REQUEST!
+    DUP IF DROP _DB-SHARED-BLOCK! _DB-L-S-SHARED EXIT THEN DROP
+    \ LBIND restamps the envelope but intentionally does not choose operation
+    \ arguments.  A prior replace may have left a string in this reusable CBR.
+    _DB-SHARED-REQUEST @ CBR.ARGS CV-NULL!
+    _DB-SHARED-REQUEST @ _DB-SHARED-BUS @ CBUS-DISPATCH
+    DUP CBUS-S-STALE-REVISION = IF DROP _DB-L-S-STALE EXIT THEN
+    DUP IF DROP _DB-L-S-IO EXIT THEN DROP
+    _DB-SHARED-REQUEST @ CBR.RESULT
+    DUP CV-LEN@ _DB-SL-U ! CV-DATA@ _DB-SL-A !
+    _DB-SL-U @ DUP 0< SWAP _DB-IO-CAP > OR IF
+        _DB-L-S-TOO-LARGE EXIT
+    THEN
+    _DB-SL-U @ 0> _DB-SL-A @ 0= AND IF _DB-L-S-IO EXIT THEN
+    _DB-SL-A @ _DB-IO-BUF _DB-SL-U @ CMOVE
+    _DB-SL-U @ _DB-IO-U !
+    _DB-L-S-OK ;
+
+: _DB-LOAD-SHARED  ( -- status )
+    _DB-SHARED-SNAPSHOT DUP IF
+        -1 _DB-SOURCE-BLOCKED ! EXIT
+    THEN DROP
+    _DB-IO-U @ 0= IF
+        _DB-CLEAR 0 _DB-SOURCE-BLOCKED ! _DB-L-S-OK EXIT
+    THEN
+    _DB-PARSE-FILE DUP IF -1 ELSE 0 THEN _DB-SOURCE-BLOCKED ! ;
+
+: _DB-LOAD  ( -- status )
+    _DB-RESOURCE-MODE @ CASE
+        _DB-MODE-SHARED OF _DB-LOAD-SHARED ENDOF
+        _DB-MODE-BLOCKED OF
+            -1 _DB-SOURCE-BLOCKED ! _DB-L-S-SHARED
+        ENDOF
+        _DB-LOAD-DIRECT SWAP
+    ENDCASE ;
 
 VARIABLE _DB-APP-A
 VARIABLE _DB-APP-U
@@ -485,11 +684,51 @@ VARIABLE _DB-SER-E
 
 VARIABLE _DB-SAVE-IOR
 
-: _DB-WRITE  ( -- ior )
+: _DB-WRITE-DIRECT  ( -- ior )
     _DB-SOURCE-BLOCKED @ IF _DB-L-S-RECOVERY EXIT THEN
     _DB-IO-BUF _DB-IO-U @ _DB-REPLACE VREPL-REPLACE
     DUP VREPL-S-OK = IF DROP 0 EXIT THEN
     DUP VREPL-S-COMMITTED-CLEANUP = IF DROP 0 EXIT THEN ;
+
+: _DB-WRITE-SHARED  ( -- ior )
+    0 _DB-SAVE-STALE !
+    _DB-SOURCE-BLOCKED @ IF _DB-W-S-SHARED EXIT THEN
+    _DB-SHARED-REPLACE-CAP @
+    _DB-CAPTURE-HOP @ IF CPRINC-COMPONENT ELSE CPRINC-USER THEN
+    _DB-SHARED-REQUEST! DUP IF
+        DROP _DB-SHARED-BLOCK! _DB-W-S-SHARED EXIT
+    THEN DROP
+    _DB-CAPTURE-HOP @ IF
+        \ This approval is a bounded implementation hop inside the already
+        \ authorized daybook.task.capture handler.  It is not delegation:
+        \ general derived authority does not exist yet.
+        _DB-SHARED-REQUEST @ CBR-APPROVE
+    THEN
+    _DB-IO-BUF _DB-IO-U @ _DB-SHARED-REQUEST @ CBR.ARGS CV-STRING!
+    IF _DB-W-S-SHARED EXIT THEN
+    _DB-SHARED-REQUEST @ _DB-SHARED-BUS @ CBUS-DISPATCH
+    DUP CBUS-S-STALE-REVISION = IF
+        DROP -1 _DB-SAVE-STALE ! CBUS-S-STALE-REVISION EXIT
+    THEN
+    DUP IF EXIT THEN DROP
+    _DB-SHARED-REQUEST @ _DB-SHARED-CONTEXT @ _DB-SHARED-BIND
+        LBIND-ADVANCE DUP IF
+        \ The owner has already committed and advanced.  Never report this as
+        \ an unsaved failure or roll a captured entry back.  Invalidate the
+        \ local lens, preserve the committed model, and require an explicit
+        \ reload before another write.
+        DROP _DB-SHARED-BIND LBIND-CLEAR
+        -1 _DB-SOURCE-BLOCKED ! 0 EXIT
+    THEN DROP
+    0 ;
+
+: _DB-WRITE  ( -- ior )
+    0 _DB-SAVE-STALE !
+    _DB-RESOURCE-MODE @ CASE
+        _DB-MODE-SHARED OF _DB-WRITE-SHARED ENDOF
+        _DB-MODE-BLOCKED OF _DB-W-S-SHARED ENDOF
+        _DB-WRITE-DIRECT SWAP
+    ENDCASE ;
 
 : _DB-DAY-COUNT  ( -- n )
     0
@@ -548,11 +787,13 @@ VARIABLE _DB-ST-N
     _DB-ST-RESET
     _DB-DAY-COUNT NUM>STR _DB-ST-APPEND
     S"  entries  |  " _DB-ST-APPEND
-    _DB-SOURCE-BLOCKED @ IF
+    _DB-RESOURCE-MODE @ _DB-MODE-BLOCKED = IF
+        S" Shared resource blocked"
+    ELSE _DB-SOURCE-BLOCKED @ IF
         S" Source blocked"
     ELSE
         _DB-DIRTY @ IF S" Unsaved" ELSE S" Saved" THEN
-    THEN
+    THEN THEN
     _DB-ST-APPEND
     _DB-E-SBAR-STATE @ ?DUP IF
         S" text" _DB-STATUS-BUF _DB-STATUS-U @ UTUI-SET-ATTR
@@ -574,11 +815,17 @@ VARIABLE _DB-ST-N
     _DB-CURRENT-INSTANCE @ ?DUP IF CINST-TOUCH THEN ;
 
 : _DB-SAVE-ERROR-TOAST  ( -- )
-    _DB-SOURCE-BLOCKED @ IF
+    _DB-SAVE-STALE @ IF
+        S" Daybook changed elsewhere; reload before saving"
+        3000 ASHELL-TOAST
+    ELSE _DB-RESOURCE-MODE @ _DB-MODE-BLOCKED = IF
+        S" Shared Daybook resource is unavailable; saving is blocked"
+        3000 ASHELL-TOAST
+    ELSE _DB-SOURCE-BLOCKED @ IF
         S" Reload a valid Daybook source before saving" 2600 ASHELL-TOAST
     ELSE
         S" Daybook save failed" 2200 ASHELL-TOAST
-    THEN ;
+    THEN THEN THEN ;
 
 : _DB-COMMIT  ( -- )
     -1 _DB-DIRTY ! 0 _DB-DISCARD-ARMED !
@@ -848,6 +1095,14 @@ VARIABLE _DB-SUB-MINUTE
     S" Entry is too long or Daybook is full" 2400 ASHELL-TOAST ;
 
 : _DB-LOAD-ERROR-TOAST  ( status -- )
+    DUP _DB-L-S-STALE = IF
+        DROP S" Daybook changed while reloading; reload again"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP _DB-L-S-SHARED = IF
+        DROP S" Shared Daybook resource is unavailable; saving is blocked"
+        3200 ASHELL-TOAST EXIT
+    THEN
     DUP _DB-L-S-TOO-LARGE = IF
         DROP S" Daybook source exceeds 32 KiB; current entries kept"
         3000 ASHELL-TOAST EXIT
@@ -980,6 +1235,20 @@ VARIABLE _DB-SUB-MINUTE
 
 VARIABLE _DB-SOURCE-REQ
 VARIABLE _DB-INIT-LOAD-STATUS
+VARIABLE _DB-SOURCE-VALUE
+
+: _DB-SOURCE-VALUE!  ( value -- status )
+    _DB-SOURCE-VALUE !
+    _DB-RESOURCE-MODE @ CASE
+        _DB-MODE-SHARED OF
+            _DB-SHARED-BIND _DB-SHARED-REF LBIND-REF DUP IF
+                DROP IRES-S-INVALID EXIT
+            THEN DROP
+            _DB-SHARED-REF _DB-SOURCE-VALUE @ IRES-RREF!
+        ENDOF
+        _DB-MODE-BLOCKED OF IRES-S-INVALID ENDOF
+        S" /daybook.md" _DB-SOURCE-VALUE @ IRES-VFS! SWAP
+    ENDCASE ;
 
 : _DB-SOURCE-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
@@ -993,8 +1262,11 @@ VARIABLE _DB-INIT-LOAD-STATUS
     THEN
     DROP _DB-SOURCE-REQ !
     CPRINC-COMPONENT _DB-SOURCE-REQ @ CBR.PRINCIPAL !
-    S" /daybook.md" _DB-SOURCE-REQ @ CBR.ARGS IRES-VFS! IF
-        2DROP _DB-SOURCE-REQ @ CBR-FREE EXIT
+    _DB-SOURCE-REQ @ CBR.ARGS _DB-SOURCE-VALUE! IF
+        2DROP _DB-SOURCE-REQ @ CBR-FREE
+        _DB-RESOURCE-MODE @ _DB-MODE-BLOCKED = IF
+            S" Shared Daybook resource is unavailable" 2200 ASHELL-TOAST
+        THEN EXIT
     THEN
     ['] _DB-SOURCE-COMPLETE _DB-SOURCE-REQ @ CBR.COMPLETE-XT !
     _DB-SOURCE-REQ @ _DB-CURRENT-INSTANCE @ CINST-POST-INTENT
@@ -1013,12 +1285,16 @@ VARIABLE _DB-INIT-LOAD-STATUS
     _DB-ACTIVATE
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! _DB-PRM-NONE _DB-PROMPT-MODE !
     0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! 0 _DB-SOURCE-BLOCKED !
+    0 _DB-SAVE-STALE !
     _DB-TODAY _DB-SELECTED-DATE !
     VFS-CUR DUP 0= ABORT" daybook: no VFS available" _DB-VFS !
-    _DB-VFS @ _DB-REPLACE VREPL-INIT
-    0<> ABORT" daybook: replacement initialization failed"
-    S" /daybook.md" _DB-REPLACE VREPL-DERIVE-PATHS!
-    0<> ABORT" daybook: replacement path setup failed"
+    _DB-SHARED-INIT
+    _DB-RESOURCE-MODE @ _DB-MODE-DIRECT = IF
+        _DB-VFS @ _DB-REPLACE VREPL-INIT
+        0<> ABORT" daybook: replacement initialization failed"
+        S" /daybook.md" _DB-REPLACE VREPL-DERIVE-PATHS!
+        0<> ABORT" daybook: replacement path setup failed"
+    THEN
     S" daybook-body" UTUI-BY-ID _DB-E-BODY !
     S" sbar" UTUI-BY-ID _DB-E-SBAR !
     S" sbar-date" UTUI-BY-ID _DB-E-SBAR-DATE !
@@ -1102,7 +1378,8 @@ VARIABLE _DB-INIT-LOAD-STATUS
     _DB-PROMPT @ ?DUP IF PRM-FREE THEN
     _DB-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     _DB-PANEL-RGN @ ?DUP IF RGN-FREE THEN
-    0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! 0 _DB-PANEL-RGN ! ;
+    0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! 0 _DB-PANEL-RGN !
+    _DB-SHARED-FINI ;
 
 CREATE _DB-TEXT-SCHEMA CS-SIZE ALLOT
 CREATE _DB-AGENDA-SCHEMA CS-SIZE ALLOT
@@ -1121,6 +1398,10 @@ VARIABLE _DBCH-COUNT-BEFORE
 VARIABLE _DBCH-DIRTY-BEFORE
 VARIABLE _DBCH-DISCARD-BEFORE
 VARIABLE _DBCH-INDEX
+VARIABLE _DBCH-PERSIST-THROW
+
+: _DBCH-PERSIST-CALL  ( -- )
+    _DB-SERIALIZE _DB-WRITE _DB-SAVE-IOR ! ;
 
 : _DB-CAP-CAPTURE-HANDLER  ( request instance -- status )
     _DB-ACTIVATE
@@ -1135,7 +1416,14 @@ VARIABLE _DBCH-INDEX
     OVER CBR.RESULT CV-INT!
     DROP
     -1 _DB-DIRTY ! 0 _DB-DISCARD-ARMED !
-    _DB-SERIALIZE _DB-WRITE DUP _DB-SAVE-IOR !
+    -1 _DB-CAPTURE-HOP !
+    ['] _DBCH-PERSIST-CALL CATCH _DBCH-PERSIST-THROW !
+    0 _DB-CAPTURE-HOP !
+    _DBCH-PERSIST-THROW @ IF
+        _DB-W-S-SHARED
+    ELSE
+        _DB-SAVE-IOR @
+    THEN
     DUP 0= IF 0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! THEN
     -1 _DB-VIEW-DIRTY !
     DUP IF
@@ -1152,8 +1440,8 @@ VARIABLE _DBCH-INDEX
 
 : _DB-CAP-SOURCE-HANDLER  ( request instance -- status )
     _DB-ACTIVATE
-    S" /daybook.md" ROT CBR.RESULT IRES-VFS!
-    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+    DUP CBR.RESULT _DB-SOURCE-VALUE!
+    IF DROP CBUS-S-FAILED ELSE DROP CBUS-S-OK THEN ;
 
 : _DB-CAP-AGENDA-HANDLER  ( request instance -- status )
     _DB-ACTIVATE

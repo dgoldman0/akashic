@@ -11,6 +11,8 @@ From the Akashic repository:
 ```bash
 python3 local_testing/akashic_tui.py smoke --profile pad
 python3 local_testing/akashic_tui.py smoke --profile pad-contracts
+python3 local_testing/akashic_tui.py smoke --profile pad-resource-contracts
+python3 local_testing/akashic_tui.py smoke --profile desktop-resource
 ```
 
 The smoke profile builds a bootable MP64FS image from Pad's transitive
@@ -30,6 +32,8 @@ it, see [`local_testing/README.md`](../../local_testing/README.md).
 - A cell-accurate software caret that remains visible when Pad is hosted by
   Desk or observed through the shared-session viewer.
 - VFS-backed new, open, save, Save As, and Save All operations.
+- A semantic shared-Daybook buffer inside Desk, with exact-revision snapshot,
+  replace, stale-write refusal, and ordinary-file export.
 - Crash-recoverable staged replacement with exact readback, including files
   that shrink and files that grow into fragmented MP64FS extents.
 - Sidebar file explorer and optional output pane.
@@ -82,6 +86,8 @@ pad.f / pad.uidl
   +-- prompt.f                       non-blocking status-row command bar
   +-- vfs.f + vfs-mp64fs.f           file I/O and persistence
   |     +-- vfs-replace.f            staged replace and recovery
+  +-- resource-registry.f            exact semantic resource references
+  +-- lens-binding.f + request-bus.f revision binding and owner dispatch
   +-- clipboard.f + search.f         app-level editing operations
 ```
 
@@ -113,6 +119,44 @@ instead of silently truncating the document. A failed open closes the candidate
 tab and restores the original active buffer. MP64FS can extend files through a
 primary and secondary extent, and staged replacement verifies the exact bytes
 before publication.
+
+## Shared Daybook Resource
+
+Standalone Pad remains the ordinary-file control: an instance with no runtime
+endpoint reads and writes VFS paths directly. Inside Desk, Pad instead discovers
+the active Context, resource registry, reentrant request bus, and
+`org.akashic.resource.daybook` owner. An attached endpoint with a missing or
+invalid shared service is treated as broken runtime wiring and blocks the
+shared resource; it never silently falls back to `/daybook.md`.
+
+Daybook's `Edit Source in Pad` action sends an exact semantic `RREF`. Pad
+attaches an activation-local lens, requests `resource.snapshot` through the
+same bus, and retains the copied reference and binding for the lifetime of the
+shared tab. At most one such tab exists. Its active-resource capability returns
+that semantic reference rather than exposing the owner's backing path.
+
+Saving the shared tab requests `resource.replace` at the binding's exact
+revision and advances the binding only after the owner commits. If another lens
+commits first, Pad leaves its text dirty and reports exactly
+`changed elsewhere; reload before saving`; the rejected write cannot clobber
+the newer owner bytes. A successful owner commit remains authoritative even if
+Pad cannot advance its local binding afterward: Pad clears the unusable lens
+and requires a reload instead of claiming that an already-durable write failed.
+
+Within the shared Desk runtime, opening `/daybook.md` resolves the current
+semantic owner snapshot, and an ordinary buffer cannot Save As over that
+canonical path. Save As from the shared tab to any other path is an explicit
+export and converts that tab back to an ordinary VFS buffer. Other Pad tabs and
+their Save All behavior remain independent of a stale shared tab.
+
+`pad-resource-contracts` exercises the exact lens, nested bus dispatch,
+successful and stale replaces, post-commit local failure, canonical-path
+protection, export, cleanup, and direct/blocked mode boundaries. The
+`desktop-resource` journey drives the real Daybook Ctrl+O route, closes Daybook
+while Pad retains an old lens, proves the later Pad save is stale and
+non-clobbering, saves an unrelated ordinary file, and relaunches Daybook against
+the current Desk-owned owner. This is a same-activation integration test; it
+does not claim a separate two-cold-boot durability result.
 
 ## Selection And Editing
 

@@ -1,0 +1,13 @@
+[package]
+format = 1
+trust = "local"
+source = "/hello.f"
+
+[app]
+id = "local.hello"
+title = "Hello"
+version = "0.1.0"
+abi = 1
+entry = "HELLO-ENTRY"
+width = 44
+height = 8

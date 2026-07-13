@@ -15,6 +15,9 @@
 <separator/>
 <item text=Quit do=quit key=Ctrl+Q/>
 </menu>
+<menu label=Build>
+<item text=Build_and_Install do=build-install key=Ctrl+Shift+B/>
+</menu>
 <menu label=Edit>
 <item text=Undo do=undo key=Ctrl+Z/>
 <item text=Redo do=redo key=Ctrl+Y/>
@@ -87,6 +90,7 @@
 <action do=new key=Ctrl+N/>
 <action do=open key=Ctrl+O/>
 <action do=save key=Ctrl+S/>
+<action do=build-install key=Ctrl+Shift+B/>
 <action do=close-tab key=Ctrl+W/>
 <action do=quit key=Ctrl+Q/>
 <action do=undo key=Ctrl+Z/>

@@ -5763,6 +5763,57 @@ AGENT-RUN
         ready_markers=("Agent", "Connection", "Sign-in required"),
         stable_markers=("Agent", "Connection"),
     ),
+    "uidl-lifecycle": Profile(
+        roots=("tui/uidl-tui.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - UIDL widget ownership contracts
+ENTER-USERLAND
+REQUIRE tui/uidl-tui.f
+
+VARIABLE _ulc-fails VARIABLE _ulc-checks
+VARIABLE _ulc-screen VARIABLE _ulc-rgn
+CREATE _ulc-borrowed-widget 40 ALLOT
+
+: _ulc-assert  ( flag -- )
+    1 _ulc-checks +! 0= IF
+        1 _ulc-fails +! ." UIDL LIFECYCLE ASSERT " _ulc-checks @ . CR
+    THEN ;
+
+: _ulc-run  ( -- )
+    0 _ulc-fails ! 0 _ulc-checks !
+    80 24 SCR-NEW DUP _ulc-screen ! SCR-USE
+    0 0 24 80 RGN-NEW DUP _ulc-rgn !
+
+    \ UTUI-WIDGET-SET borrows applet-owned state.  Pad's editor panel is
+    \ an embedded 40-byte descriptor with this exact ownership shape.
+    S" <uidl><region></region></uidl>" _ulc-rgn @ UTUI-LOAD 0<> _ulc-assert
+    _ulc-borrowed-widget UIDL-ROOT UIDL-FIRST-CHILD UTUI-WIDGET-SET
+    UIDL-ROOT UIDL-FIRST-CHILD _UTUI-SIDECAR
+        _UTUI-SC-WOWNER@ _UTUI-WOWNER-CALLER = _ulc-assert
+    ['] UTUI-DETACH CATCH 0= _ulc-assert
+
+    \ UIDL's own materialized widgets retain the opposite contract and
+    \ are still reclaimed by document teardown.
+    S" <uidl><region><input></input></region></uidl>"
+        _ulc-rgn @ UTUI-LOAD 0<> _ulc-assert
+    UIDL-ROOT UIDL-FIRST-CHILD UIDL-FIRST-CHILD _UTUI-SIDECAR
+    DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-UIDL = _ulc-assert
+    _UTUI-SC-WPTR@ 0<> _ulc-assert
+    ['] UTUI-DETACH CATCH 0= _ulc-assert
+
+    _ulc-rgn @ RGN-FREE _ulc-screen @ SCR-FREE
+    _ulc-fails @ 0= IF
+        ." UIDL LIFECYCLE PASS " _ulc-checks @ .
+    ELSE
+        ." UIDL LIFECYCLE FAIL " _ulc-fails @ . ." / " _ulc-checks @ .
+    THEN CR ;
+
+_ulc-run
+""",
+        ready_markers=("UIDL LIFECYCLE PASS",),
+        stable_markers=("UIDL LIFECYCLE PASS",),
+        failure_markers=("UIDL LIFECYCLE FAIL", "UIDL LIFECYCLE ASSERT"),
+    ),
     "pad-contracts": Profile(
         roots=("tui/applets/pad/pad.f",),
         resources=(),
@@ -6070,6 +6121,389 @@ _pc-run
         ready_markers=("PAD CONTRACT PASS",),
         stable_markers=("PAD CONTRACT PASS",),
         failure_markers=("PAD CONTRACT FAIL", "PAD ASSERT"),
+    ),
+    "pad-resource-contracts": Profile(
+        roots=(
+            "tui/applets/pad/pad.f",
+            "interop/shared-document.f",
+        ),
+        resources=(),
+        autoexec=r"""\ autoexec.f - Pad semantic Daybook lens contracts
+ENTER-USERLAND
+REQUIRE tui/applets/pad/pad.f
+REQUIRE interop/shared-document.f
+
+VARIABLE _pr-fails VARIABLE _pr-checks VARIABLE _pr-depth
+VARIABLE _pr-call-depth VARIABLE _pr-status
+VARIABLE _pr-vfs VARIABLE _pr-context VARIABLE _pr-creg VARIABLE _pr-rreg
+VARIABLE _pr-bus VARIABLE _pr-owner VARIABLE _pr-pad VARIABLE _pr-request
+VARIABLE _pr-ext-request VARIABLE _pr-screen VARIABLE _pr-rgn
+VARIABLE _pr-fd VARIABLE _pr-a VARIABLE _pr-u VARIABLE _pr-pa VARIABLE _pr-pu
+VARIABLE _pr-shared-index VARIABLE _pr-owner-revision VARIABLE _pr-service-mode
+VARIABLE _pr-pad-binding-revision
+
+CREATE _pr-head PHEAD-SIZE ALLOT
+CREATE _pr-rid RID-SIZE ALLOT
+CREATE _pr-ref RREF-SIZE ALLOT
+CREATE _pr-opened-ref RREF-SIZE ALLOT
+CREATE _pr-result-ref RREF-SIZE ALLOT
+CREATE _pr-ext-bind LBIND-SIZE ALLOT
+CREATE _pr-policy CPOLICY-SIZE ALLOT
+CREATE _pr-endpoint IENDPOINT-SIZE ALLOT
+CREATE _pr-io 256 ALLOT
+
+: _pr-assert  ( flag -- )
+    1 _pr-checks +! 0= IF
+        1 _pr-fails +! ." PAD RESOURCE ASSERT " _pr-checks @ . CR
+    THEN ;
+
+: _pr-stack  ( -- )
+    DEPTH DUP _pr-depth @ <> IF
+        ." PAD RESOURCE STACK " _pr-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _pr-depth @ = _pr-assert ;
+
+: _pr-id!  ( value id -- )
+    DUP RID-CLEAR ! ;
+
+: _pr-put  ( data-a data-u path-a path-u -- )
+    _pr-pu ! _pr-pa ! _pr-u ! _pr-a !
+    _pr-pa @ _pr-pu @ _pr-vfs @ VFS-CREATE 0<> _pr-assert
+    _pr-pa @ _pr-pu @ VFS-OPEN DUP 0<> _pr-assert _pr-fd !
+    _pr-a @ _pr-u @ _pr-fd @ VFS-WRITE-EXACT 0= _pr-assert
+    _pr-fd @ VFS-CLOSE _pr-vfs @ VFS-SYNC 0= _pr-assert ;
+
+: _pr-file=  ( expected-a expected-u path-a path-u -- flag )
+    _pr-pu ! _pr-pa ! _pr-u ! _pr-a !
+    _pr-pa @ _pr-pu @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _pr-fd !
+    _pr-fd @ VFS-SIZE _pr-u @ <> IF _pr-fd @ VFS-CLOSE 0 EXIT THEN
+    _pr-u @ 256 > IF _pr-fd @ VFS-CLOSE 0 EXIT THEN
+    _pr-io _pr-u @ _pr-fd @ VFS-READ-EXACT IF
+        _pr-fd @ VFS-CLOSE 0 EXIT
+    THEN
+    _pr-fd @ VFS-CLOSE
+    _pr-io _pr-u @ _pr-a @ _pr-u @ COMPARE 0= ;
+
+: _pr-text=  ( expected-a expected-u -- flag )
+    _pr-u ! _pr-a !
+    _PAD-TXTA @ TXTA-GET-TEXT
+    2DUP _pr-a @ _pr-u @ COMPARE 0= >R
+    DROP FREE R> ;
+
+VARIABLE _pr-service-a VARIABLE _pr-service-u
+
+: _pr-service  ( id-a id-u ignored -- service | 0 )
+    DROP _pr-service-u ! _pr-service-a !
+    _pr-service-a @ _pr-service-u @
+        S" org.akashic.runtime.context" STR-STR= IF
+        _pr-service-mode @ 2 = IF 0 ELSE _pr-context @ THEN EXIT
+    THEN
+    _pr-service-a @ _pr-service-u @
+        S" org.akashic.runtime.resource-registry" STR-STR= IF
+        _pr-rreg @ EXIT
+    THEN
+    _pr-service-a @ _pr-service-u @
+        S" org.akashic.interop.request-bus" STR-STR= IF
+        _pr-service-mode @ 1 = IF 0 ELSE _pr-bus @ THEN EXIT
+    THEN
+    _pr-service-a @ _pr-service-u @
+        S" org.akashic.resource.daybook" STR-STR= IF
+        _pr-rid EXIT
+    THEN
+    0 ;
+
+: _pr-open-request!  ( reference -- )
+    _pr-request @ ?DUP IF CBR-FREE THEN
+    CBR-NEW DUP 0= _pr-assert DROP _pr-request !
+    CPRINC-USER _pr-request @ CBR.PRINCIPAL !
+    _pr-pad @ _pr-request @ CBR-TARGET!
+    PAD-CAP-OPEN _pr-request @ CBR.CAP !
+    _pr-request @ CBR.ARGS IRES-RREF! IRES-S-OK = _pr-assert ;
+
+: _pr-dispatch-open  ( -- status )
+    DEPTH _pr-call-depth !
+    _pr-request @ _pr-bus @ CBUS-DISPATCH _pr-status !
+    DEPTH _pr-call-depth @ = _pr-assert
+    _pr-status @ ;
+
+: _pr-active-request!  ( -- )
+    _pr-request @ ?DUP IF CBR-FREE THEN
+    CBR-NEW DUP 0= _pr-assert DROP _pr-request !
+    CPRINC-USER _pr-request @ CBR.PRINCIPAL !
+    _pr-pad @ _pr-request @ CBR-TARGET!
+    PAD-CAP-ACTIVE _pr-request @ CBR.CAP !
+    _pr-request @ CBR.ARGS CV-NULL! ;
+
+: _pr-fail-advance  ( request context binding -- status )
+    2DROP DROP LBIND-S-MISMATCH ;
+
+: _pr-owner-snapshot  ( -- )
+    _pr-ext-bind _pr-context @ _pr-ext-request @ LBIND-REQUEST!
+        LBIND-S-OK = _pr-assert
+    CPRINC-USER _pr-ext-request @ CBR.PRINCIPAL !
+    S" resource.snapshot" _pr-owner @ CINST-DESC COMP-CAP-FIND
+        _pr-ext-request @ CBR.CAP !
+    _pr-ext-request @ CBR.ARGS CV-NULL!
+    DEPTH _pr-call-depth !
+    _pr-ext-request @ _pr-bus @ CBUS-DISPATCH CBUS-S-OK = _pr-assert
+    DEPTH _pr-call-depth @ = _pr-assert
+    _pr-ext-request @ CBR.RESULT DUP CV-TYPE@ CV-T-STRING = _pr-assert
+    DUP CV-DATA@ SWAP CV-LEN@
+    S" # Daybook\n\n> 2026-07-13 | Daybook edit\n" STR-STR= _pr-assert ;
+
+: _pr-pad-storage-setup  ( -- )
+    _pr-pad @ _PAD-ACTIVATE
+    _pr-vfs @ VFS-USE _pr-vfs @ _PAD-VFS !
+    _pr-vfs @ _PAD-REPL VREPL-INIT VREPL-S-OK = _pr-assert
+    _PAD-INIT-BUF-TABLE
+    _PAD-ARENA-SIZE A-XMEM ARENA-NEW
+    DUP 0= _pr-assert DROP _PAD-ARENA !
+    80 20 SCR-NEW DUP _pr-screen ! SCR-USE
+    0 0 10 40 RGN-NEW DUP _pr-rgn !
+    _PAD-DUMMY-BUF _PAD-DUMMY-CAP TXTA-NEW _PAD-TXTA !
+    _PAD-BUF-OPEN DUP 0= _pr-assert DROP
+    _PAD-SHARED-INIT
+    _PAD-RESOURCE-MODE @ _PAD-MODE-SHARED = _pr-assert ;
+
+: _pr-pad-storage-free  ( -- )
+    _pr-pad @ _PAD-ACTIVATE
+    _PAD-UNBIND _PAD-SHARED-FINI
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY _PBE-GB + @ ?DUP IF GB-FREE THEN
+        I _PAD-BUF-ENTRY _PBE-UNDO + @ ?DUP IF UNDO-FREE THEN
+    LOOP
+    _PAD-ARENA @ ?DUP IF ARENA-DESTROY THEN
+    _PAD-TXTA @ ?DUP IF TXTA-FREE THEN
+    _pr-rgn @ RGN-FREE _pr-screen @ SCR-FREE ;
+
+: _pr-mode-controls  ( -- )
+    1 _pr-service-mode !
+    PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
+    _pr-endpoint R@ CINST.ENDPOINT !
+    R@ _PAD-ACTIVATE _PAD-SHARED-INIT
+    _PAD-RESOURCE-MODE @ _PAD-MODE-BLOCKED = _pr-assert
+    _PAD-SHARED-FINI R> CINST-FREE
+    2 _pr-service-mode !
+    PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
+    _pr-endpoint R@ CINST.ENDPOINT !
+    R@ _PAD-ACTIVATE _PAD-SHARED-INIT
+    _PAD-RESOURCE-MODE @ _PAD-MODE-BLOCKED = _pr-assert
+    _PAD-SHARED-FINI R> CINST-FREE
+    PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
+    R@ _PAD-ACTIVATE _PAD-SHARED-INIT
+    _PAD-RESOURCE-MODE @ _PAD-MODE-DIRECT = _pr-assert
+    _PAD-SHARED-FINI R> CINST-FREE
+    0 _pr-service-mode !
+    _pr-pad @ _PAD-ACTIVATE ;
+
+: _pr-run  ( -- )
+    0 _pr-fails ! 0 _pr-checks ! 0 _pr-request ! 0 _pr-ext-request !
+    0 _pr-service-mode ! DEPTH _pr-depth !
+    524288 A-XMEM ARENA-NEW IF -201 THROW THEN
+    VFS-RAM-VTABLE VFS-NEW DUP _pr-vfs ! VFS-USE
+    S" # Daybook\n" S" /daybook.md" _pr-put
+
+    _pr-head PHEAD-INIT
+    101 _pr-head PHEAD.ID _pr-id!
+    102 _pr-head PHEAD.CURRENT-ROOT _pr-id!
+    777 CTX-NEW DUP 0= _pr-assert DROP _pr-context !
+    _pr-head _pr-context @ CTX.PRACTICE !
+    CTX-F-ACTIVE _pr-context @ CTX.FLAGS !
+    _pr-vfs @ _pr-context @ CTX.VFS !
+    CREG-NEW DUP 0= _pr-assert DROP _pr-creg !
+    _pr-creg @ _pr-context @ RREG-NEW
+        DUP 0= _pr-assert DROP _pr-rreg !
+    103 _pr-rid _pr-id!
+    _pr-vfs @ _pr-rid _pr-context @ _pr-rreg @ _pr-creg @
+        SDOC-ACTIVATE DUP SDOC-S-OK = _pr-assert DROP _pr-owner !
+    _pr-policy CPOLICY-INIT
+    _pr-creg @ _pr-policy CBUS-NEW DUP 0= _pr-assert DROP _pr-bus !
+    _pr-bus @ _pr-context @ CTX.QUEUE !
+    _pr-policy _pr-context @ CTX.POLICY !
+
+    _pr-endpoint IENDPOINT-INIT
+    ['] _pr-service _pr-endpoint IEND.SERVICE-XT !
+    _PAD-COMP-SETUP
+    PAD-COMP-DESC _pr-creg @ CREG-TYPE+ 0= _pr-assert
+    PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP _pr-pad !
+    _pr-endpoint _pr-pad @ CINST.ENDPOINT !
+    _pr-pad @ _pr-creg @ CREG-INST+ 0= _pr-assert
+    _pr-pad-storage-setup
+    _pr-mode-controls
+
+    \ Route an exact semantic resource through the real bus.  Pad's handler
+    \ synchronously dispatches resource.snapshot on that same bus.
+    _pr-rid _pr-context @ _pr-ref _pr-rreg @ RREG-REF
+        RREG-S-OK = _pr-assert
+    _pr-ref _pr-open-request!
+    _pr-dispatch-open CBUS-S-OK = _pr-assert
+    _pr-request @ CBR.RESULT _pr-result-ref IRES-RREF@
+        IRES-S-OK = _pr-assert
+    _pr-result-ref _pr-ref RREF= _pr-assert
+    _pr-result-ref _pr-opened-ref RREF-COPY RREF-S-OK = _pr-assert
+    _PAD-FIND-SHARED-BUFFER DUP 0>= _pr-assert _pr-shared-index !
+    _PAD-BUF-CNT @ 2 = _pr-assert
+    S" # Daybook\n" _pr-text= _pr-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + @ 0<> _pr-assert
+    _PAD-SHARED-BIND LBIND.REVISION @
+        _pr-opened-ref RREF.REVISION @ = _pr-assert
+
+    \ The public active-document capability reports the same exact semantic
+    \ identity retained by the shared buffer, never its VFS backing path.
+    _pr-active-request!
+    DEPTH _pr-call-depth !
+    _pr-request @ _pr-bus @ CBUS-DISPATCH CBUS-S-OK = _pr-assert
+    DEPTH _pr-call-depth @ = _pr-assert
+    _pr-request @ CBR.RESULT _pr-result-ref IRES-RREF@
+        IRES-S-OK = _pr-assert
+    _pr-result-ref _pr-opened-ref RREF= _pr-assert
+
+    \ A successful save advances only after resource.replace commits.
+    S" # Daybook\n\n> 2026-07-13 | Pad committed edit\n"
+        _PAD-TXTA @ TXTA-SET-TEXT
+    -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    DEPTH _pr-call-depth !
+    S" /daybook.md" _PAD-SAVE-CURRENT-AS _pr-status !
+    DEPTH _pr-call-depth @ = _pr-assert
+    _pr-status @ 0= _pr-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0= _pr-assert
+    _PAD-SHARED-BIND LBIND.REVISION @ DUP _pr-pad-binding-revision !
+        _pr-owner @ CINST.REVISION @ = _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | Pad committed edit\n"
+        S" /daybook.md" _pr-file= _pr-assert
+
+    \ Commit a competing owner edit from the current revision.
+    _pr-rid _pr-context @ _pr-ref _pr-rreg @ RREG-REF
+        RREG-S-OK = _pr-assert
+    _pr-ext-bind LBIND-INIT
+    _pr-ref _pr-context @ _pr-rreg @ _pr-ext-bind LBIND-ATTACH
+        LBIND-S-OK = _pr-assert
+    CBR-NEW DUP 0= _pr-assert DROP _pr-ext-request !
+    _pr-ext-bind _pr-context @ _pr-ext-request @ LBIND-REQUEST!
+        LBIND-S-OK = _pr-assert
+    CPRINC-USER _pr-ext-request @ CBR.PRINCIPAL !
+    S" resource.replace" _pr-owner @ CINST-DESC COMP-CAP-FIND
+        _pr-ext-request @ CBR.CAP !
+    S" # Daybook\n\n> 2026-07-13 | Daybook edit\n"
+        _pr-ext-request @ CBR.ARGS CV-STRING! 0= _pr-assert
+    _pr-ext-request @ _pr-bus @ CBUS-DISPATCH CBUS-S-OK = _pr-assert
+    _pr-ext-request @ _pr-context @ _pr-ext-bind LBIND-ADVANCE
+        LBIND-S-OK = _pr-assert
+    _pr-owner @ CINST.REVISION @ DUP _pr-owner-revision ! 3 = _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | Daybook edit\n"
+        S" /daybook.md" _pr-file= _pr-assert
+    _pr-owner-snapshot
+
+    \ Pad remains bound to the prior revision.  Its stale save preserves the
+    \ dirty text while leaving owner revision, owner content, and backing bytes
+    \ exactly as committed by the competing Daybook edit.
+    S" # Daybook\n\n> 2026-07-13 | stale Pad edit\n"
+        _PAD-TXTA @ TXTA-SET-TEXT
+    -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    DEPTH _pr-call-depth !
+    S" /daybook.md" _PAD-SAVE-CURRENT-AS _pr-status !
+    DEPTH _pr-call-depth @ = _pr-assert
+    _pr-status @ _PAD-E-STALE = _pr-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pr-assert
+    _PAD-SHARED-STALE @ 0<> _pr-assert
+    _PAD-SHARED-BIND LBIND.REVISION @
+        _pr-pad-binding-revision @ = _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | stale Pad edit\n" _pr-text= _pr-assert
+    _pr-owner @ CINST.REVISION @ _pr-owner-revision @ = _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | Daybook edit\n"
+        S" /daybook.md" _pr-file= _pr-assert
+    _pr-owner-snapshot
+
+    \ The old exact semantic reference fails without disturbing the live tab.
+    _pr-opened-ref _pr-open-request!
+    _pr-dispatch-open CBUS-S-STALE-REVISION = _pr-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | stale Pad edit\n" _pr-text= _pr-assert
+
+    \ Close/discard and reopen the current exact reference to reload safely.
+    _pr-shared-index @ _PAD-BUF-CLOSE
+    _pr-rid _pr-context @ _pr-ref _pr-rreg @ RREG-REF
+        RREG-S-OK = _pr-assert
+    _pr-ref _pr-open-request!
+    _pr-dispatch-open CBUS-S-OK = _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | Daybook edit\n" _pr-text= _pr-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0= _pr-assert
+    _PAD-SHARED-STALE @ 0= _pr-assert
+    _PAD-FIND-SHARED-BUFFER DUP 0>= _pr-assert _pr-shared-index !
+
+    \ If revision advancement itself fails after a successful owner commit,
+    \ Pad treats the commit as authoritative, invalidates the lens, clears the
+    \ retryable dirty bit, and blocks every later write until a fresh reload.
+    ['] _pr-fail-advance _PAD-SHARED-ADVANCE-XT !
+    S" # Daybook\n\n> 2026-07-13 | post-commit Pad edit\n"
+        _PAD-TXTA @ TXTA-SET-TEXT
+    -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    S" /daybook.md" _PAD-SAVE-CURRENT-AS 0= _pr-assert
+    ['] LBIND-ADVANCE _PAD-SHARED-ADVANCE-XT !
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0= _pr-assert
+    _PAD-SHARED-STALE @ 0<> _pr-assert
+    _PAD-SHARED-BIND LBIND-VALID? 0= _pr-assert
+    _pr-owner @ CINST.REVISION @ DUP _pr-owner-revision ! 4 = _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | post-commit Pad edit\n"
+        S" /daybook.md" _pr-file= _pr-assert
+    S" retry must wait for reload" _PAD-TXTA @ TXTA-SET-TEXT
+    -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    S" /daybook.md" _PAD-SAVE-CURRENT-AS _PAD-E-STALE = _pr-assert
+    _pr-owner @ CINST.REVISION @ _pr-owner-revision @ = _pr-assert
+    _pr-shared-index @ _PAD-BUF-CLOSE
+    _pr-rid _pr-context @ _pr-ref _pr-rreg @ RREG-REF
+        RREG-S-OK = _pr-assert
+    _pr-ref _pr-open-request!
+    _pr-dispatch-open CBUS-S-OK = _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | post-commit Pad edit\n"
+        _pr-text= _pr-assert
+    _PAD-FIND-SHARED-BUFFER DUP 0>= _pr-assert _pr-shared-index !
+
+    \ An unrelated Pad buffer remains ordinary VFS data and cannot Save As
+    \ over the canonical shared backing path while running inside Desk.
+    _PAD-BUF-OPEN DUP 0>= _pr-assert DROP
+    S" ordinary Pad bytes" _PAD-TXTA @ TXTA-SET-TEXT
+    -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    S" /ordinary.txt" _PAD-SAVE-CURRENT-AS 0= _pr-assert
+    S" ordinary Pad bytes" S" /ordinary.txt" _pr-file= _pr-assert
+    S" cannot clobber Daybook" _PAD-TXTA @ TXTA-SET-TEXT
+    -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    S" /daybook.md" _PAD-SAVE-CURRENT-AS
+        _PAD-E-DAYBOOK-PROTECTED = _pr-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pr-assert
+    S" # Daybook\n\n> 2026-07-13 | post-commit Pad edit\n"
+        S" /daybook.md" _pr-file= _pr-assert
+    _PAD-MODE-BLOCKED _PAD-RESOURCE-MODE !
+    S" /daybook.md" _PAD-SAVE-CURRENT-AS
+        _PAD-E-SHARED-UNAVAILABLE = _pr-assert
+    _PAD-MODE-SHARED _PAD-RESOURCE-MODE !
+
+    _pr-stack
+    _pr-request @ ?DUP IF CBR-FREE THEN
+    _pr-ext-request @ ?DUP IF CBR-FREE THEN
+    _pr-pad-storage-free
+    _pr-pad @ _pr-creg @ CREG-INST- 0= _pr-assert
+    _pr-pad @ CINST-FREE
+    _pr-owner @ SDOC-DEACTIVATE SDOC-S-OK = _pr-assert
+    _pr-bus @ CBUS-FREE _pr-rreg @ RREG-FREE
+    _pr-creg @ CREG-FREE _pr-context @ CTX-FREE
+    _pr-vfs @ VFS-DESTROY
+    _pr-stack
+    _pr-fails @ 0= IF
+        ." PAD RESOURCE CONTRACTS PASS " _pr-checks @ .
+    ELSE
+        ." PAD RESOURCE CONTRACTS FAIL " _pr-fails @ . ." / " _pr-checks @ .
+    THEN CR ;
+
+_pr-run
+""",
+        ready_markers=("PAD RESOURCE CONTRACTS PASS",),
+        stable_markers=("PAD RESOURCE CONTRACTS PASS",),
+        failure_markers=(
+            "PAD RESOURCE CONTRACTS FAIL",
+            "PAD RESOURCE ASSERT",
+            "PAD RESOURCE STACK",
+        ),
     ),
     "pad": Profile(
         roots=("tui/applets/pad/pad.f",),
@@ -6852,10 +7286,359 @@ GRID-RUN
     ),
 }
 
+PROFILES["manifest-contracts"] = Profile(
+    roots=(
+        "tui/app-manifest.f",
+        "utils/fs/drivers/vfs-mp64fs.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - trusted-local app manifest contracts
+ENTER-USERLAND
+REQUIRE tui/app-manifest.f
+REQUIRE utils/fs/drivers/vfs-mp64fs.f
+
+VARIABLE _mc-fails
+VARIABLE _mc-checks
+VARIABLE _mc-depth
+VARIABLE _mc-vfs
+VARIABLE _mc-fd
+VARIABLE _mc-doc
+VARIABLE _mc-doc-u
+VARIABLE _mc-mft
+
+: _mc-assert  ( flag -- )
+    1 _mc-checks +!
+    0= IF 1 _mc-fails +! ." ASSERT " _mc-checks @ . CR THEN ;
+: _mc-stack  ( -- ) DEPTH _mc-depth @ = _mc-assert ;
+
+: _mc-read  ( path-a path-u -- status )
+    VFS-OPEN DUP _mc-fd ! 0= IF -1 EXIT THEN
+    _mc-fd @ VFS-SIZE DUP _mc-doc-u !
+    1 MAX ALLOCATE DUP IF
+        2DROP _mc-fd @ VFS-CLOSE 0 _mc-fd ! -2 EXIT
+    THEN
+    DROP _mc-doc !
+    _mc-doc @ _mc-doc-u @ _mc-fd @ VFS-READ-EXACT IF
+        _mc-fd @ VFS-CLOSE 0 _mc-fd !
+        _mc-doc @ FREE 0 _mc-doc ! -3 EXIT
+    THEN
+    _mc-fd @ VFS-CLOSE 0 _mc-fd ! 0 ;
+
+: _mc-parse  ( path-a path-u -- status )
+    _mc-read DUP IF EXIT THEN DROP
+    _mc-doc @ _mc-doc-u @ MFT-PARSE
+    DUP IF NIP 0 _mc-mft ! EXIT THEN
+    DROP _mc-mft ! 0 ;
+
+: _mc-clean  ( -- )
+    _mc-mft @ ?DUP IF MFT-FREE 0 _mc-mft ! THEN
+    _mc-doc @ ?DUP IF FREE 0 _mc-doc ! THEN ;
+
+: _mc-project  ( -- )
+    S" /project.toml" _mc-parse 0= _mc-assert
+    _mc-mft @ 0<> _mc-assert
+    _mc-mft @ MFT-VALIDATE-PROJECT MFT-S-OK = _mc-assert
+    _mc-mft @ MFT-VALIDATE-INSTALLED MFT-E-DIGEST = _mc-assert
+    _mc-mft @ MFT-ID S" local.hello" COMPARE 0= _mc-assert
+    _mc-mft @ MFT-TITLE S" local.hello" COMPARE 0= _mc-assert
+    _mc-mft @ MFT-ENTRY S" HELLO-ENTRY" COMPARE 0= _mc-assert
+    _mc-mft @ MFT-SOURCE S" /hello.f" COMPARE 0= _mc-assert
+    _mc-clean _mc-stack ;
+
+: _mc-installed  ( -- )
+    S" /installed.toml" _mc-parse 0= _mc-assert
+    _mc-mft @ MFT-VALIDATE-INSTALLED MFT-S-OK = _mc-assert
+    _mc-mft @ MFT-IMAGE S" /.i0123456789ab.m64" COMPARE 0= _mc-assert
+    _mc-mft @ MFT-WIDTH 40 = _mc-assert
+    _mc-mft @ MFT-HEIGHT 8 = _mc-assert
+    _mc-clean _mc-stack ;
+
+: _mc-reject  ( path-a path-u expected -- )
+    >R _mc-parse R> = _mc-assert
+    _mc-mft @ 0= _mc-assert
+    _mc-clean _mc-stack ;
+
+: _mc-run  ( -- )
+    0 _mc-fails ! 0 _mc-checks ! DEPTH _mc-depth !
+    MFT-SIZE 256 = _mc-assert
+    2097152 A-XMEM ARENA-NEW
+    DUP 0= _mc-assert DROP
+    VMP-NEW DUP _mc-vfs ! VMP-INIT 0= _mc-assert
+    _mc-project
+    _mc-installed
+    S" /bad-trust.toml" MFT-E-TRUST _mc-reject
+    S" /bad-path.toml" MFT-E-BOUNDS _mc-reject
+    S" /bad-type.toml" MFT-E-TYPE _mc-reject
+    S" /missing.toml" MFT-E-MISSING _mc-reject
+    _mc-fails @ 0= IF
+        ." MANIFEST CONTRACTS PASS " _mc-checks @ .
+    ELSE
+        ." MANIFEST CONTRACTS FAIL " _mc-fails @ . ." / " _mc-checks @ .
+    THEN CR ;
+
+_mc-run
+""",
+    ready_markers=("MANIFEST CONTRACTS PASS",),
+    stable_markers=("MANIFEST CONTRACTS PASS",),
+    failure_markers=("MANIFEST CONTRACTS FAIL",),
+    initial_files=(
+        (
+            "project.toml",
+            b'''[package]\nformat = 1\ntrust = "local"\nsource = "/hello.f"\n\n[app]\nid = "local.hello"\nversion = "0.1.0"\nabi = 1\nentry = "HELLO-ENTRY"\n''',
+        ),
+        (
+            "installed.toml",
+            b'''[package]\nformat = 1\ntrust = "local"\nsource = "/hello.f"\nsource-sha3 = "0000000000000000000000000000000000000000000000000000000000000000"\nimage = "/.i0123456789ab.m64"\nimage-sha3 = "1111111111111111111111111111111111111111111111111111111111111111"\n\n[app]\nid = "local.hello"\ntitle = "Hello"\nversion = "0.1.0"\nabi = 1\nentry = "HELLO-ENTRY"\nwidth = 40\nheight = 8\n''',
+        ),
+        (
+            "bad-trust.toml",
+            b'''[package]\nformat = 1\ntrust = "remote"\nsource = "/hello.f"\n\n[app]\nid = "local.hello"\nversion = "0.1.0"\nabi = 1\nentry = "HELLO-ENTRY"\n''',
+        ),
+        (
+            "bad-path.toml",
+            b'''[package]\nformat = 1\ntrust = "local"\nsource = "/../hello.f"\n\n[app]\nid = "local.hello"\nversion = "0.1.0"\nabi = 1\nentry = "HELLO-ENTRY"\n''',
+        ),
+        (
+            "bad-type.toml",
+            b'''[package]\nformat = "one"\ntrust = "local"\nsource = "/hello.f"\n\n[app]\nid = "local.hello"\nversion = "0.1.0"\nabi = 1\nentry = "HELLO-ENTRY"\n''',
+        ),
+        (
+            "missing.toml",
+            b'''[package]\nformat = 1\ntrust = "local"\nsource = "/hello.f"\n\n[app]\nid = "local.hello"\nversion = "0.1.0"\nabi = 1\n''',
+        ),
+    ),
+)
+
+PROFILES["package-contracts"] = Profile(
+    roots=(
+        "tui/app-builder.f",
+        "tui/app-loader.f",
+        "tui/draw.f",
+        "utils/fs/drivers/vfs-mp64fs.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - trusted-local creator spine contracts
+ENTER-USERLAND
+REQUIRE tui/app-builder.f
+REQUIRE tui/app-loader.f
+REQUIRE tui/draw.f
+REQUIRE utils/fs/drivers/vfs-mp64fs.f
+
+VARIABLE _pkg-fails
+VARIABLE _pkg-checks
+VARIABLE _pkg-depth
+VARIABLE _pkg-vfs
+VARIABLE _pkg-cat
+VARIABLE _pkg-entry
+VARIABLE _pkg-status
+VARIABLE _pkg-desc
+VARIABLE _pkg-inst
+VARIABLE _pkg-doc
+VARIABLE _pkg-doc-u
+VARIABLE _pkg-fd
+VARIABLE _pkg-mft
+VARIABLE _pkg-mut
+VARIABLE _pkg-byte
+VARIABLE _pkg-here
+VARIABLE _pkg-latest
+VARIABLE _pkg-xfree
+
+: _pkg-assert  ( flag -- )
+    1 _pkg-checks +!
+    0= IF 1 _pkg-fails +! ." ASSERT " _pkg-checks @ . CR THEN ;
+: _pkg-stack  ( -- )
+    DEPTH _pkg-depth @ -
+    DUP IF ." DEPTH DELTA " DUP . CR THEN
+    0= _pkg-assert ;
+
+: _pkg-read-installed  ( -- status )
+    ABUILD-INSTALLED-PATH VFS-OPEN DUP _pkg-fd ! 0= IF -1 EXIT THEN
+    _pkg-fd @ VFS-SIZE DUP _pkg-doc-u !
+    1 MAX ALLOCATE DUP IF
+        2DROP _pkg-fd @ VFS-CLOSE 0 _pkg-fd ! -2 EXIT
+    THEN
+    DROP _pkg-doc !
+    _pkg-doc @ _pkg-doc-u @ _pkg-fd @ VFS-READ-EXACT IF
+        _pkg-fd @ VFS-CLOSE 0 _pkg-fd !
+        _pkg-doc @ FREE 0 _pkg-doc ! -3 EXIT
+    THEN
+    _pkg-fd @ VFS-CLOSE 0 _pkg-fd ! 0 ;
+
+: _pkg-load-fails  ( expected -- )
+    >R _pkg-doc @ _pkg-doc-u @ ALOAD-MANIFEST
+    R> = SWAP 0= AND _pkg-assert ;
+
+: _pkg-resolver  ( entry context -- desc status )
+    DROP ACE-MANIFEST$ ALOAD-PATH ;
+
+: _pkg-cycle  ( -- )
+    _pkg-desc @ APP.COMP-DESC @ CINST-NEW
+    DUP 0= _pkg-assert DROP DUP 0<> _pkg-assert _pkg-inst !
+    _pkg-desc @ APP.INIT-XT @ ?DUP IF _pkg-inst @ SWAP EXECUTE THEN
+    _pkg-desc @ APP.REQUEST-CLOSE-XT @ ?DUP IF
+        APP-CLOSE-R-WINDOW _pkg-inst @ ROT EXECUTE
+        APP-CLOSE-D-ALLOW = _pkg-assert
+    THEN
+    _pkg-desc @ APP.SHUTDOWN-XT @ ?DUP IF
+        _pkg-inst @ SWAP EXECUTE
+    THEN
+    _pkg-inst @ CINST-FREE 0 _pkg-inst ! ;
+
+: _pkg-bad-build  ( -- )
+    S" /bad.toml" ABUILD-INSTALL
+    ABUILD-E-COMPILE = SWAP 0= AND _pkg-assert ;
+
+: _pkg-throw-build  ( -- )
+    S" /throw.toml" ABUILD-INSTALL _pkg-status ! _pkg-entry !
+    _pkg-status @ ABUILD-E-COMPILE <>
+    ABUILD-LAST-DETAIL EVAL-S-THROW <> OR
+    ABUILD-EVAL-THROW -777 <> OR IF
+        ." THROW BUILD STATUS " _pkg-status @ .
+        ." DETAIL " ABUILD-LAST-DETAIL .
+        ." THROW " ABUILD-EVAL-THROW . CR
+    THEN
+    _pkg-status @ ABUILD-E-COMPILE = _pkg-entry @ 0= AND _pkg-assert
+    ABUILD-LAST-DETAIL EVAL-S-THROW = _pkg-assert
+    ABUILD-EVAL-THROW -777 = _pkg-assert ;
+
+: _pkg-run  ( -- )
+    0 _pkg-fails ! 0 _pkg-checks !
+    2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
+    VMP-NEW DUP _pkg-vfs !
+    DUP VMP-INIT 0= _pkg-assert VFS-USE
+    _pkg-vfs @ ACAT-NEW
+    DUP ACAT-S-OK = _pkg-assert DROP DUP _pkg-cat !
+    ACAT-ACTIVATE
+    DUP ACAT-S-MISSING = SWAP ACAT-S-OK = OR _pkg-assert
+    _pkg-cat @ ABUILD-CATALOG!
+    DEPTH _pkg-depth !
+
+    S" /hello.toml" ABUILD-INSTALL _pkg-status ! _pkg-entry !
+    _pkg-status @ ABUILD-S-OK = _pkg-assert
+    _pkg-entry @ 0<> _pkg-assert
+    _pkg-cat @ ACAT-COUNT 1 = _pkg-assert
+    _pkg-status @ IF
+        ." BUILD STATUS " _pkg-status @ .
+        ." DETAIL " ABUILD-LAST-DETAIL . CR
+        ." PACKAGE CONTRACTS FAIL " _pkg-fails @ . ." / " _pkg-checks @ . CR
+        EXIT
+    THEN
+    _pkg-stack
+    _pkg-read-installed 0= _pkg-assert
+    _pkg-doc @ _pkg-doc-u @ MFT-PARSE
+    DUP MFT-S-OK = _pkg-assert DROP _pkg-mft !
+    _pkg-stack
+
+    \ Repeated digest failures must close every VFS descriptor and leave
+    \ the dictionary untouched.  The 70th failure crosses VFS's 64 slots.
+    _pkg-mft @ MFT-IMAGE-SHA3 DUP 64 = _pkg-assert DROP _pkg-mut !
+    _pkg-mut @ C@ _pkg-byte !
+    _pkg-byte @ [CHAR] 0 = IF [CHAR] 1 ELSE [CHAR] 0 THEN _pkg-mut @ C!
+    HERE _pkg-here ! LATEST _pkg-latest !
+    ALOAD-E-IMAGE-HASH _pkg-load-fails
+    XMEM-FREE _pkg-xfree !
+    69 0 DO ALOAD-E-IMAGE-HASH _pkg-load-fails LOOP
+    XMEM-FREE _pkg-xfree @ = _pkg-assert
+    HERE _pkg-here @ = _pkg-assert LATEST _pkg-latest @ = _pkg-assert
+    _pkg-byte @ _pkg-mut @ C!
+    _pkg-stack
+
+    \ A valid digest with a different exact export fails before mutation.
+    _pkg-mft @ MFT-ENTRY DUP 0<> _pkg-assert DROP _pkg-mut !
+    _pkg-mut @ C@ _pkg-byte !
+    [CHAR] X _pkg-mut @ C!
+    ALOAD-E-EXPORT _pkg-load-fails
+    HERE _pkg-here @ = _pkg-assert LATEST _pkg-latest @ = _pkg-assert
+    _pkg-byte @ _pkg-mut @ C!
+    _pkg-mft @ MFT-FREE 0 _pkg-mft !
+    _pkg-doc @ FREE 0 _pkg-doc !
+    _pkg-stack
+
+    \ First resolve loads exactly once; later close/relaunch cycles reuse
+    \ the cached descriptor without growing the dictionary.
+    ['] _pkg-resolver 0 _pkg-cat @ ACAT-RESOLVER!
+    _pkg-entry @ _pkg-cat @ ACAT-RESOLVE
+    DUP ACAT-S-OK = _pkg-assert DROP DUP 0<> _pkg-assert _pkg-desc !
+    _pkg-desc @ APP-DESC-VALID? _pkg-assert
+    _pkg-cycle _pkg-cycle
+    HERE _pkg-here ! LATEST _pkg-latest !
+    _pkg-entry @ _pkg-cat @ ACAT-RESOLVE
+    DUP ACAT-S-OK = _pkg-assert DROP _pkg-desc @ = _pkg-assert
+    HERE _pkg-here @ = _pkg-assert LATEST _pkg-latest @ = _pkg-assert
+    _pkg-stack
+
+    \ Checked source failures discard the mark/relocation reservation and
+    \ never add a catalog row.  Warm once, then prove allocator reuse.
+    _pkg-bad-build
+    HERE _pkg-here ! LATEST _pkg-latest ! XMEM-FREE _pkg-xfree !
+    19 0 DO _pkg-bad-build LOOP
+    5 0 DO _pkg-throw-build LOOP
+    HERE _pkg-here @ = _pkg-assert LATEST _pkg-latest @ = _pkg-assert
+    XMEM-FREE _pkg-xfree @ = _pkg-assert
+    _pkg-cat @ ACAT-COUNT 1 = _pkg-assert
+    _pkg-stack
+
+    _pkg-fails @ 0= IF
+        ." PACKAGE CONTRACTS PASS " _pkg-checks @ .
+    ELSE
+        ." PACKAGE CONTRACTS FAIL " _pkg-fails @ . ." / " _pkg-checks @ .
+    THEN CR ;
+
+_pkg-run
+""",
+    ready_markers=("PACKAGE CONTRACTS PASS",),
+    stable_markers=("PACKAGE CONTRACTS PASS",),
+    failure_markers=("PACKAGE CONTRACTS FAIL",),
+    initial_files=(
+        (
+            "hello.toml",
+            (AKASHIC_ROOT / "examples/trusted-local/project.toml").read_bytes(),
+        ),
+        (
+            "hello.f",
+            (AKASHIC_ROOT / "examples/trusted-local/hello.f").read_bytes(),
+        ),
+        (
+            "bad.toml",
+            b'''[package]\nformat = 1\ntrust = "local"\nsource = "/bad.f"\n\n[app]\nid = "local.bad"\ntitle = "Bad"\nversion = "0.1.0"\nabi = 1\nentry = "BAD-ENTRY"\nwidth = 20\nheight = 4\n''',
+        ),
+        (
+            "bad.f",
+            b''': BAD-ENTRY  ( deliberately unfinished )\n    1\n''',
+        ),
+        (
+            "throw.toml",
+            b'''[package]\nformat = 1\ntrust = "local"\nsource = "/throw.f"\n\n[app]\nid = "local.throw"\ntitle = "Throw"\nversion = "0.1.0"\nabi = 1\nentry = "THROW-ENTRY"\nwidth = 20\nheight = 4\n''',
+        ),
+        (
+            "throw.f",
+            b'''-777 THROW\n''',
+        ),
+    ),
+)
+
 # Same production-shaped image as desktop, with a focused agent/interop
 # journey instead of the full applet regression tour.
 PROFILES["desktop-agent"] = PROFILES["desktop"]
 PROFILES["desktop-resource"] = PROFILES["desktop"]
+PROFILES["desktop-local-applet"] = Profile(
+    roots=PROFILES["desktop"].roots,
+    resources=PROFILES["desktop"].resources,
+    autoexec=PROFILES["desktop"].autoexec,
+    ready_markers=PROFILES["desktop"].ready_markers,
+    stable_markers=PROFILES["desktop"].stable_markers,
+    linked=PROFILES["desktop"].linked,
+    initial_files=(
+        (
+            "hello.toml",
+            (AKASHIC_ROOT / "examples/trusted-local/project.toml").read_bytes(),
+        ),
+        (
+            "hello.f",
+            (AKASHIC_ROOT / "examples/trusted-local/hello.f").read_bytes(),
+        ),
+    ),
+)
 PROFILES["desktop-recovery"] = Profile(
     roots=PROFILES["desktop"].roots,
     resources=PROFILES["desktop"].resources,
@@ -7654,6 +8437,19 @@ def smoke(
             journey_errors.append(failure)
             return None
 
+        def desktop_tile_contains(marker: str, tile: int) -> bool:
+            tile_col = tile % 3
+            tile_row = tile // 3
+            content_rows = max(1, screen.rows - 1)
+            left = tile_col * screen.cols // 3
+            right = (tile_col + 1) * screen.cols // 3
+            top = tile_row * content_rows // 2
+            bottom = (tile_row + 1) * content_rows // 2
+            return any(
+                marker in line[left:right]
+                for line in screen.lines()[top:bottom]
+            )
+
         def wait_desktop_tile(
             marker: str,
             tile: int,
@@ -7663,25 +8459,11 @@ def smoke(
             wall_timeout: float = 8.0,
         ) -> bool:
             nonlocal total_steps, screen
-
-            def tile_contains() -> bool:
-                tile_col = tile % 3
-                tile_row = tile // 3
-                content_rows = max(1, screen.rows - 1)
-                left = tile_col * screen.cols // 3
-                right = (tile_col + 1) * screen.cols // 3
-                top = tile_row * content_rows // 2
-                bottom = (tile_row + 1) * content_rows // 2
-                return any(
-                    marker in line[left:right]
-                    for line in screen.lines()[top:bottom]
-                )
-
             remaining = min(step_budget, max_steps - total_steps)
             local_deadline = min(deadline, time.monotonic() + wall_timeout)
             while remaining > 0 and time.monotonic() < local_deadline:
                 screen = session.snapshot()
-                if tile_contains():
+                if desktop_tile_contains(marker, tile):
                     return True
                 chunk = min(50_000_000, remaining)
                 report = session.run(
@@ -7698,7 +8480,7 @@ def smoke(
                 if report.steps == 0:
                     time.sleep(0.005)
             screen = session.snapshot()
-            if tile_contains():
+            if desktop_tile_contains(marker, tile):
                 return True
             journey_errors.append(failure)
             return False
@@ -7803,8 +8585,326 @@ def smoke(
                         "Ready", "Desk's shared agent runtime did not finish"
                     )
 
+        def run_local_applet_journey() -> None:
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Akashic Pa*]",
+                "Desk did not focus Pad for the local applet journey",
+            ):
+                return
+            session.send_key("ctrl+o")
+            if not wait_screen(
+                "Open:", "Pad did not open its project-manifest prompt"
+            ):
+                return
+            session.send_text("/hello.toml")
+            session.send_key("enter")
+            if not wait_screen(
+                "local.hell", "Pad could not open the local applet manifest"
+            ):
+                return
+            session.send_key("ctrl+shift+b")
+            if not wait_screen(
+                "Applet installed",
+                "Pad did not build and install the trusted-local applet",
+                step_budget=1_500_000_000,
+                wall_timeout=35.0,
+            ):
+                return
+
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets", "Desk did not open the installed-applet launcher"
+            ):
+                return
+            session.send_key("end")
+            if not wait_screen(
+                "Hello", "Desk launcher did not expose the installed applet"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen(
+                "packaged applet",
+                "Desk did not load and launch the installed applet",
+                step_budget=1_000_000_000,
+                wall_timeout=25.0,
+            ):
+                return
+            if not wait_screen(
+                "Hello*",
+                "Desk did not focus the applet opened from its launcher",
+            ):
+                return
+
+            session.send_key("alt+w")
+            if not wait_screen_gone(
+                "packaged applet", "Desk did not close the packaged applet"
+            ):
+                return
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets", "Desk did not reopen the applet launcher"
+            ):
+                return
+            session.send_key("end")
+            session.send_key("enter")
+            relaunched = wait_screen(
+                "packaged applet",
+                "Desk did not relaunch the packaged applet",
+                step_budget=800_000_000,
+                wall_timeout=20.0,
+            )
+            if not relaunched:
+                return
+
+            # Pad mounts an embedded panel and app-owned Explorer through
+            # UTUI-WIDGET-SET.  Closing it exercises the borrowed-widget
+            # teardown boundary after several context switches and relayouts.
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Akashic Pa*]",
+                "Desk did not refocus Pad before its close regression",
+            ):
+                return
+            session.send_key("alt+w")
+            if not wait_screen_gone(
+                "[1:Akashic Pa*]",
+                "Desk did not close Pad after the local applet journey",
+            ):
+                return
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets", "Desk did not open the launcher to relaunch Pad"
+            ):
+                return
+            session.send_key("home")
+            session.send_key("enter")
+            wait_screen(
+                "UTF-8",
+                "Desk did not relaunch Pad after closing its borrowed widgets",
+                step_budget=1_000_000_000,
+                wall_timeout=25.0,
+            )
+
+        def run_shared_resource_journey() -> None:
+            stale_marker = "PADOLD"
+            owner_marker = "DBNEW"
+            ordinary_marker = "PADFILE"
+
+            session.send_key("alt+3")
+            if not wait_screen(
+                "[3:Daybook*]",
+                "Desk did not focus Daybook for the shared-resource journey",
+            ):
+                return
+            session.send_key("ctrl+o")
+            if not wait_screen(
+                "[1:Akashic Pa*]",
+                "Daybook Ctrl+O did not route its semantic source to Pad",
+                step_budget=800_000_000,
+                wall_timeout=20.0,
+            ):
+                return
+            if not wait_desktop_tile(
+                "# Daybook",
+                0,
+                "Pad did not show the Daybook semantic snapshot in its tile",
+            ):
+                return
+            session.send_key("ctrl+a")
+            session.send_text("# Daybook")
+            session.send_key("enter")
+            session.send_key("enter")
+            session.send_text(f"> {SAMPLE_DATE} | {stale_marker}")
+            if not wait_desktop_tile(
+                stale_marker,
+                0,
+                "Pad did not retain the edited semantic snapshot",
+            ):
+                return
+
+            session.send_key("alt+3")
+            if not wait_screen(
+                "[3:Daybook*]",
+                "Desk did not return focus to Daybook before its competing edit",
+            ):
+                return
+            session.send_key("ctrl+n")
+            if not wait_desktop_tile(
+                "New task:",
+                2,
+                "Daybook did not open its task prompt in its own tile",
+            ):
+                return
+            session.send_text(owner_marker)
+            session.send_key("enter")
+            if not wait_desktop_tile(
+                owner_marker,
+                2,
+                "Daybook did not publish its competing edit in its own tile",
+                step_budget=1_200_000_000,
+                wall_timeout=30.0,
+            ):
+                return
+
+            # Pad must still display the exact old semantic snapshot.  Check
+            # this in Pad's tile: a global search would also see Daybook's new
+            # entry and could not distinguish a leaked refresh from ownership.
+            screen = session.snapshot()
+            if desktop_tile_contains(owner_marker, 0):
+                journey_errors.append(
+                    "Daybook's competing edit leaked into Pad's old snapshot"
+                )
+            if not desktop_tile_contains(stale_marker, 0):
+                journey_errors.append(
+                    "Pad lost its dirty old snapshot after Daybook committed"
+                )
+
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                committed_daybook = live_fs.read_file("daybook.md")
+            except FileNotFoundError:
+                committed_daybook = b""
+            expected_owner_record = (
+                f"- [ ] {SAMPLE_DATE} | {owner_marker}\n"
+            ).encode()
+            if expected_owner_record not in committed_daybook:
+                journey_errors.append(
+                    "Daybook's competing semantic commit did not reach backing bytes"
+                )
+            if stale_marker.encode() in committed_daybook:
+                journey_errors.append(
+                    "Pad's unsaved old snapshot reached backing bytes prematurely"
+                )
+
+            # Close the lens-owning Daybook instance before Pad attempts its
+            # old exact write.  A recreated revision-1 owner would accept that
+            # write; stale refusal below therefore proves the Desk-owned owner
+            # and revision survived Daybook teardown.
+            session.send_key("alt+w")
+            if not wait_screen_gone(
+                "[3:Daybook",
+                "Desk did not close the clean Daybook instance",
+                step_budget=800_000_000,
+                wall_timeout=20.0,
+            ):
+                return
+
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Akashic Pa*]",
+                "Desk did not refocus Pad for the stale save",
+            ):
+                return
+            session.send_key("alt+f")
+            if not wait_screen(
+                stale_marker,
+                "Desk full-frame did not preserve Pad's dirty semantic snapshot",
+            ):
+                session.send_key("alt+f")
+                return
+            session.send_key("ctrl+s")
+            if not wait_screen(
+                "changed elsewhere; reload before saving",
+                "Pad did not report the exact stale semantic-save refusal",
+                step_budget=800_000_000,
+                wall_timeout=20.0,
+            ):
+                session.send_key("alt+f")
+                return
+            if "/daybook.md*" not in session.snapshot().text():
+                journey_errors.append(
+                    "Pad cleared the shared buffer's dirty state after a stale save"
+                )
+
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                after_stale = live_fs.read_file("daybook.md")
+            except FileNotFoundError:
+                after_stale = b""
+            if after_stale != committed_daybook:
+                journey_errors.append(
+                    "Pad's stale semantic save changed the Daybook backing bytes"
+                )
+
+            # A stale shared tab must not poison unrelated ordinary Pad I/O.
+            session.send_key("ctrl+n")
+            session.send_text(ordinary_marker)
+            if not wait_screen(
+                ordinary_marker,
+                "Pad did not create the ordinary control buffer",
+            ):
+                session.send_key("alt+f")
+                return
+            session.send_key("ctrl+s")
+            if not wait_screen(
+                "Save as:",
+                "Pad did not open Save As for the ordinary control buffer",
+            ):
+                session.send_key("alt+f")
+                return
+            session.send_text("/resource-control.txt")
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "Save as:",
+                "Pad did not finish the ordinary control save",
+            ):
+                session.send_key("alt+f")
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                ordinary_bytes = live_fs.read_file("resource-control.txt")
+            except FileNotFoundError:
+                ordinary_bytes = None
+            if ordinary_bytes != ordinary_marker.encode():
+                journey_errors.append(
+                    "ordinary Pad control save did not persist exact bytes"
+                )
+
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                after_ordinary = live_fs.read_file("daybook.md")
+            except FileNotFoundError:
+                after_ordinary = b""
+            if after_ordinary != after_stale:
+                journey_errors.append(
+                    "ordinary Pad control save changed the shared Daybook bytes"
+                )
+
+            session.send_key("alt+f")
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets",
+                "Desk did not open the launcher to relaunch Daybook",
+            ):
+                return
+            session.send_key("home")
+            session.send_key("down")
+            session.send_key("down")
+            session.send_key("enter")
+            if not wait_screen(
+                ":Daybook*]",
+                "Desk did not relaunch and focus Daybook from its catalog",
+                step_budget=1_200_000_000,
+                wall_timeout=30.0,
+            ):
+                return
+            wait_desktop_tile(
+                owner_marker,
+                4,
+                "relaunched Daybook did not load the current owner snapshot",
+                step_budget=1_200_000_000,
+                wall_timeout=30.0,
+            )
+
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
+
+        if initial_ready and profile_name == "desktop-local-applet":
+            run_local_applet_journey()
+
+        if initial_ready and profile_name == "desktop-resource":
+            run_shared_resource_journey()
 
         if initial_ready and profile_name == "desktop-recovery":
             recovery_text = session.snapshot().text()
@@ -8437,13 +9537,11 @@ def smoke(
         if initial_ready and profile_name in (
             "desktop",
             "desktop-agent",
-            "desktop-resource",
             "fexplorer",
         ):
             if profile_name in (
                 "desktop",
                 "desktop-agent",
-                "desktop-resource",
             ):
                 session.send_key("alt+2")
             session.send_key("ctrl+g")
@@ -8457,7 +9555,6 @@ def smoke(
             if profile_name in (
                 "desktop",
                 "desktop-agent",
-                "desktop-resource",
             ):
                 session.send_key("ctrl+o")
                 if wait_screen(
@@ -8623,7 +9720,6 @@ def smoke(
             if profile_name in (
                 "desktop",
                 "desktop-agent",
-                "desktop-resource",
             ):
                 final_text = screen.text()
                 if "1smoke2" in final_text or "smoke2" in final_text:
@@ -8760,7 +9856,7 @@ def _parser() -> argparse.ArgumentParser:
                 help="attach a preconfigured Linux TAP device",
             )
         if name == "smoke":
-            command.add_argument("--max-steps", type=int, default=3_000_000_000)
+            command.add_argument("--max-steps", type=int, default=4_000_000_000)
             command.add_argument("--timeout", type=float, default=75.0)
         if name == "serve":
             command.add_argument("--socket", default="/tmp/akashic-tui.sock")

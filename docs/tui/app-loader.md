@@ -1,133 +1,102 @@
-# akashic/tui/app-loader.f — Applet Package Loader
+# Trusted-local applet loader
 
-**Lines:** ~186  
-**Prefix:** `ALOAD-` (public), `_ALOAD-` (internal)  
-**Provider:** `akashic-tui-app-loader`  
-**Dependencies:** [`binimg.f`](../utils/binimg.md), [`app-manifest.f`](app-manifest.md),
-[`app-desc.f`](app-desc.md)
+`akashic/tui/app-loader.f` loads an installed trusted-local applet from a validated manifest and a verified MF64 image. It is a synchronous, core-0-only ownership boundary around manifest parsing, VFS reads, image verification and loading, and the applet entry call.
 
-## Overview
+The loader does not evaluate source text and has no `FIND` fallback for the requested entry. It selects the exact version-2 named export recorded by `app.entry`.
 
-Unified loader that ties together the binary image system
-(`binimg.f`), the TOML manifest (`app-manifest.f`), and the
-applet descriptor (`app-desc.f`) into a single load-and-launch
-operation.
+This is not a security sandbox. A loaded applet is native Forth code, image imports resolve against the ambient dictionary, and the code executes with the authority of its host. The SHA3 check detects image corruption or substitution relative to the installed manifest; it is not a signature or statement of origin.
+
+## API and ownership
 
 ```forth
-REQUIRE tui/app-loader.f
+ALOAD-FROM-MFT   ( mft -- desc status )
+ALOAD-MANIFEST   ( doc-a doc-u -- desc status )
+ALOAD-PATH       ( manifest-path-a manifest-path-u -- desc status )
+ALOAD-DESC-FREE  ( desc -- )
 ```
 
-`PROVIDED akashic-tui-app-loader` — safe to include multiple times.
+All three load operations return `0 status` on failure. On success they return a loader-owned `APP-DESC` and `ALOAD-S-OK`.
 
-## Applet Package Contract
+- `ALOAD-FROM-MFT` borrows the manifest descriptor and its backing TOML document. It neither frees nor retains them after the call.
+- `ALOAD-MANIFEST` borrows the TOML document for the duration of the call. It creates and frees its temporary manifest descriptor internally.
+- `ALOAD-PATH` validates the path, exact-reads the document through VFS, and releases the document buffer and file handle internally. Manifest files are limited to 4096 bytes.
+- `ALOAD-DESC-FREE` releases a descriptor returned with `ALOAD-S-OK`; it accepts zero. The caller must keep the descriptor alive while Desk or another consumer still refers to it.
 
-1. A **TOML manifest** declares name, entry word, `.m64` filename,
-   optional UIDL filename, dimensions, dependencies.
-2. The `.m64` binary is a **relocatable image** saved with
-   `IMG-SAVE-EXEC`.  After loading, its entry word is available
-   in the dictionary.
-3. The entry word has the signature: **`( desc -- )`**.
-   It receives a zeroed `APP-DESC` and fills in its callbacks
-   (`init-xt`, `event-xt`, `tick-xt`, `paint-xt`, `shutdown-xt`)
-   plus optional UIDL pointer and title.
-4. The loader returns the filled `APP-DESC` ready for
-   `DESK-LAUNCH` or `ASHELL-RUN`.
+The successful descriptor is one heap allocation containing the `APP-DESC` plus owned copies of the manifest title and optional UIDL-file path. It no longer borrows those strings from the manifest document. The loaded dictionary image itself remains resident and has no unload operation.
 
-## Pipeline
+`ALOAD-PATH` accepts the same canonical absolute path form as the manifest module: 2--255 bytes, components of 1--23 bytes, no empty, `.`, or `..` components, and only letters, digits, `.`, `-`, `_`, and `/`.
 
-```
-  ALOAD-MANIFEST  ( toml-a toml-l -- desc ior )
-    │
-    ├─ MFT-PARSE         →  parse TOML into manifest descriptor
-    ├─ _ALOAD-LOAD-BINARY →  IMG-LOAD-EXEC via EVALUATE trick
-    ├─ _ALOAD-FIND-WORD   →  fallback FIND if IMG-LOAD-EXEC returned xt=0
-    ├─ _ALOAD-FILL-DESC   →  allocate APP-DESC, fill from manifest, call entry
-    └─ MFT-FREE           →  release manifest descriptor
-```
+## Load pipeline
 
-## API Reference
+The installed-manifest pipeline is deliberately ordered:
 
-### Public Words
+1. Run `MFT-VALIDATE-INSTALLED`.
+2. Open the declared image through VFS, require a size of 1 byte through 1 MiB, and exact-read it into a heap buffer.
+3. Compute SHA3-256 over the exact image bytes and compare its lowercase hexadecimal encoding with `package.image-sha3`.
+4. Run full structural `IMG-VERIFY-MEM` validation.
+5. Resolve the exact `app.entry` export with `IMG-EXPORT-FIND`.
+6. Allocate and seed the loader-owned `APP-DESC`.
+7. Load that exact export with `IMG-LOAD-EXPORT`. This is the load commit point.
+8. Call the export with stack contract `( desc -- )` under `CATCH` and stack sentinels.
+9. Validate the resulting descriptor, component identity, and presentation contract.
 
-| Word | Stack | Description |
-|------|-------|-------------|
-| `ALOAD-MANIFEST` | `( toml-a toml-l -- desc ior )` | Full pipeline: parse manifest TOML → load binary → build APP-DESC. Frees the manifest descriptor on completion. |
-| `ALOAD-FROM-MFT` | `( mft -- desc ior )` | Load applet from an already-parsed manifest descriptor. |
+The loader does not read or compare the source file. `package.source-sha3` is part of the installed build receipt, while `package.image-sha3` is the digest enforced at load time.
 
-### Error Constants
+## Entry and descriptor contract
 
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `ALOAD-ERR-PARSE` | −120 | Manifest TOML parse failed |
-| `ALOAD-ERR-NOBIN` | −121 | No `binary=` field in manifest |
-| `ALOAD-ERR-LOAD` | −122 | `IMG-LOAD-EXEC` failed (file not found, bad magic, etc.) |
-| `ALOAD-ERR-ENTRY` | −123 | Entry word not found via `FIND` after load |
+The requested export must return normally with exactly the stack effect `( desc -- )`. A throw, missing consumption, or extra output is normalized to a loader status; the loader forcibly restores its caller-visible stack in each case.
 
-On error, `desc` is returned as 0 and `ior` is one of the above codes.
+After the entry returns, all of the following must hold:
 
-## Internal Words
+- `APP-DESC-VALID?` accepts the descriptor.
+- The component descriptor's ID and version exactly match `app.id` and `app.version`.
+- `APP.ABI` exactly matches the manifest ABI and `APP.SIZE` is exactly `APP-DESC`.
+- Width, height, title, and UIDL-file path exactly match the manifest.
+- Empty inline UIDL is represented canonically as `(0, 0)`; nonempty inline UIDL has a nonzero address.
+- If the manifest declares `uidl-file`, the entry supplies no inline UIDL.
 
-| Word | Stack | Description |
-|------|-------|-------------|
-| `_ALOAD-LOAD-BINARY` | `( mft -- xt ior )` | Reads `MFT-BINARY`, builds `"IMG-LOAD-EXEC <filename>"` in a scratch buffer, and calls `EVALUATE`. Returns the entry XT and 0 on success. |
-| `_ALOAD-FIND-WORD` | `( addr len -- xt flag )` | Builds a counted string and calls `FIND`. Returns `(xt -1\|1)` on success, `(0 0)` on failure. Name limited to 31 chars. |
-| `_ALOAD-FILL-DESC` | `( mft xt -- desc ior )` | Allocates an `APP-DESC` at `HERE`, fills dimensions and title from the manifest, calls the entry XT with `( desc -- )` to let the applet fill its callbacks. |
+After validation, the loader rebinds the title and UIDL-file fields to its owned copies. It does not copy inline UIDL or component data; those pointers remain as supplied by the entry and their backing storage must remain valid. In the normal packaged case that storage is part of the now-resident applet image.
 
-## Usage Example
+## Commit and failure behavior
 
-```forth
-REQUIRE tui/app-loader.f
+At entry to each public load operation, the loader snapshots `HERE` and `LATEST`.
 
-\ Given a TOML manifest in memory:
-S" [app]\nname = \"pad\"\nentry = \"PAD-ENTRY\"\nbinary = \"pad.m64\"\n"
-ALOAD-MANIFEST           ( desc ior )
-?DUP IF
-    ." Load failed: " . CR
-    DROP
-ELSE
-    DESK-LAUNCH           ( slot-id )
-    DROP
-THEN
-```
+| Failure point | Dictionary effect | Descriptor result |
+| --- | --- | --- |
+| Before successful `IMG-LOAD-EXPORT` | snapshot restored; handles and heap buffers released | `0 status` |
+| Entry or validation failure after load | verified image remains resident; loader allocations released | `0 status` |
+| Unexpected throw before load | snapshot restored; `ALOAD-E-UNEXPECTED` | `0 status` |
+| Unexpected throw after load | image remains resident; `ALOAD-E-QUARANTINE` | `0 status` |
 
-## The EVALUATE Trick
+Successful loading commits the image permanently. A later entry, identity, or presentation failure cannot unload it, so these statuses mean the applet was rejected but its already verified trusted-native definitions may still be present.
 
-`IMG-LOAD-EXEC` parses its filename from the Forth input stream
-(using `PARSE-NAME`), but the app-loader has the filename as an
-`(addr len)` pair from the manifest.  To bridge this gap,
-`_ALOAD-LOAD-BINARY` builds the string `"IMG-LOAD-EXEC <filename>"`
-in a scratch buffer and passes it to `EVALUATE`, which temporarily
-redirects the input stream to that string.
+## Status values
 
-Important: the applet's entry word must use `[']` (compile-time tick)
-rather than `'` (runtime tick) to reference words, since the input
-stream during `EXECUTE` of a loaded binary is not the original source.
+Manifest statuses `MFT-E-NO-PACKAGE` through `MFT-E-ALLOC` (`-110` through `-119`) propagate unchanged.
 
-## Design Notes
+| Value | Name | Meaning |
+| ---: | --- | --- |
+| 0 | `ALOAD-S-OK` | success |
+| -120 | `ALOAD-E-MANIFEST-PATH` | invalid manifest path argument |
+| -121 | `ALOAD-E-MANIFEST-OPEN` | manifest open failed |
+| -122 | `ALOAD-E-MANIFEST-SIZE` | manifest is empty or over 4096 bytes |
+| -123 | `ALOAD-E-MANIFEST-READ` | exact manifest read failed |
+| -124 | `ALOAD-E-ALLOC` | heap allocation failed |
+| -125 | `ALOAD-E-IMAGE-OPEN` | image open failed |
+| -126 | `ALOAD-E-IMAGE-SIZE` | image is empty or over 1 MiB |
+| -127 | `ALOAD-E-IMAGE-READ` | exact image read failed |
+| -128 | `ALOAD-E-IMAGE-HASH` | image SHA3-256 does not match the manifest |
+| -129 | `ALOAD-E-IMAGE-VERIFY` | MF64 structural verification failed |
+| -130 | `ALOAD-E-EXPORT` | exact named export is absent or invalid |
+| -131 | `ALOAD-E-IMAGE-LOAD` | verified image could not be loaded |
+| -132 | `ALOAD-E-ENTRY-THROW` | entry threw or did not return normally |
+| -133 | `ALOAD-E-ENTRY-STACK` | entry violated `( desc -- )` |
+| -134 | `ALOAD-E-DESC` | returned `APP-DESC` is invalid |
+| -135 | `ALOAD-E-COMPONENT` | component ID or version differs from the manifest |
+| -136 | `ALOAD-E-PRESENTATION` | ABI, size, geometry, title, or UIDL contract differs |
+| -137 | `ALOAD-E-CORE` | called away from core 0 |
+| -138 | `ALOAD-E-UNEXPECTED` | unexpected throw before the load commit |
+| -139 | `ALOAD-E-QUARANTINE` | unexpected throw after the load commit |
+| -140 | `ALOAD-E-BUSY` | recursive or concurrent loader entry |
 
-- **Sibling to `app-image.f`**, not a replacement.  `app-image.f`
-  wraps `binimg.f` + `app.f` for **standalone full-terminal** apps
-  that call `APP-RUN-FULL`.  `app-loader.f` wraps `binimg.f` +
-  `app-manifest.f` + `app-desc.f` for **applets** that fill an
-  `APP-DESC` and are hosted by `app-shell.f` or the desk.
-- **No INCLUDED.**  KDOS does not have `INCLUDED`.  All applet code
-  is loaded as pre-compiled `.m64` binary images via `IMG-LOAD-EXEC`.
-- **Dictionary allocation.**  Both the manifest descriptor and the
-  `APP-DESC` are `ALLOT`ed at `HERE`.  The manifest is freed after
-  loading; the `APP-DESC` persists for the applet's lifetime.
-- **Entry word fallback.**  If `IMG-LOAD-EXEC` returns `xt=0` (e.g.
-  older binaries without `IMG-ENTRY`), the loader falls back to
-  `FIND` on the manifest's `entry` word name.
-
-## Guard-Protected Words
-
-Under `[DEFINED] GUARDED`: `ALOAD-FROM-MFT`, `ALOAD-MANIFEST`
-are wrapped with `_aload-guard WITH-GUARD` for concurrency safety.
-
-## See Also
-
-- [app-manifest.md](app-manifest.md) — TOML manifest parser
-- [app-desc.md](app-desc.md) — APP-DESC data layout
-- [binimg.md](../utils/binimg.md) — Binary image save/load system
-- [app-image.md](app-image.md) — Standalone app wrapper (sibling)
-- [desk.md](applets/desk/desk.md) — Multi-app desktop (primary consumer)
+The loader is non-reentrant and intentionally does not hold a guard across VFS I/O. Call it synchronously on core 0.

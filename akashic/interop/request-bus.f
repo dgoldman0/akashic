@@ -26,6 +26,8 @@ REQUIRE ../concurrency/guard.f
 13 CONSTANT CBUS-S-EXPIRED-AUTHORITY
 14 CONSTANT CBUS-S-CONSUMED-AUTHORITY
 
+-258 CONSTANT CBUS-E-DISPATCH-ACTIVE
+
 1 CONSTANT CBR-F-APPROVED
 2 CONSTANT CBR-F-CANCELLED
 4 CONSTANT CBR-F-QUEUED
@@ -214,6 +216,25 @@ _CBUS-RING CBUS-CAPACITY 8 * + CONSTANT CBUS-SIZE
 : CBUS.RING      ( bus -- a ) _CBUS-RING + ;
 : CBUS.AUTHORITY ( bus -- a ) _CBUS-RESERVED + ;
 
+\ Ring state, dispatch scratch, and the handler-to-revision owner commit form
+\ one synchronous owner boundary.  The guard is recursive so policy,
+\ capability, and completion callbacks may dispatch synchronously on the same
+\ execution owner while other cores remain excluded.
+GUARD _CBUS-DISPATCH-GUARD
+VARIABLE _CBUS-DISPATCH-DEPTH
+VARIABLE _CBUS-OWNER-OP-DEPTH
+
+: CBUS-DISPATCHING?  ( -- flag )
+    _CBUS-DISPATCH-GUARD GUARD-MINE?
+    _CBUS-DISPATCH-DEPTH @ 0> AND ;
+
+: _CBUS-OWNER-OP-ACTIVE?  ( -- flag )
+    _CBUS-DISPATCH-GUARD GUARD-MINE?
+    _CBUS-DISPATCH-DEPTH @ _CBUS-OWNER-OP-DEPTH @ + 0> AND ;
+
+: CBUS-WITH-DISPATCH-QUIESCED  ( i*x xt -- j*x )
+    _CBUS-DISPATCH-GUARD WITH-GUARD ;
+
 : CBUS-AUTHORITY!  ( table bus -- ) CBUS.AUTHORITY ! ;
 
 : CBUS-NEW  ( registry policy -- bus ior )
@@ -226,9 +247,15 @@ _CBUS-RING CBUS-CAPACITY 8 * + CONSTANT CBUS-SIZE
     R> OVER CBUS.POLICY !
     0 ;
 
-: CBUS-FREE  ( bus -- ) ?DUP IF FREE THEN ;
+: _CBUS-FREE-QUIESCED  ( bus -- ) ?DUP IF FREE THEN ;
 
-: CBUS-POST  ( request bus -- status )
+: CBUS-FREE  ( bus -- )
+    _CBUS-OWNER-OP-ACTIVE? IF
+        DROP CBUS-E-DISPATCH-ACTIVE THROW
+    THEN
+    ['] _CBUS-FREE-QUIESCED CBUS-WITH-DISPATCH-QUIESCED ;
+
+: _CBUS-POST-QUIESCED  ( request bus -- status )
     >R
     DUP 0= IF DROP R> DROP CBUS-S-INVALID EXIT THEN
     R@ CBUS.COUNT @ CBUS-CAPACITY >= IF
@@ -247,13 +274,19 @@ _CBUS-RING CBUS-CAPACITY 8 * + CONSTANT CBUS-SIZE
     1 R@ CBUS.COUNT +!
     R> DROP CBUS-S-OK ;
 
-: _CBUS-POP  ( bus -- request | 0 )
+: CBUS-POST  ( request bus -- status )
+    ['] _CBUS-POST-QUIESCED CBUS-WITH-DISPATCH-QUIESCED ;
+
+: _CBUS-POP-QUIESCED  ( bus -- request | 0 )
     DUP CBUS.COUNT @ 0= IF DROP 0 EXIT THEN
     DUP >R
     R@ CBUS.TAIL @ 8 * R@ CBUS.RING + DUP @ SWAP 0 SWAP !
     R@ CBUS.TAIL @ 1+ CBUS-CAPACITY MOD R@ CBUS.TAIL !
     -1 R> CBUS.COUNT +!
     NIP ;
+
+: _CBUS-POP  ( bus -- request | 0 )
+    ['] _CBUS-POP-QUIESCED CBUS-WITH-DISPATCH-QUIESCED ;
 
 VARIABLE _CBD-REQ
 VARIABLE _CBD-INST
@@ -412,12 +445,13 @@ VARIABLE _CBC-DESC
 : _CBUS-COMPLETE  ( status -- )
     _CBD-REQ @ CBR.STATUS !
     MS@ _CBD-REQ @ CBR.END-MS !
-    _CBD-REQ @ CBR-LIFECYCLE-COMPLETE
-    _CBD-REQ @ CBR.COMPLETE-XT @ ?DUP IF
-        _CBD-REQ @ SWAP EXECUTE
-    THEN ;
+    _CBD-REQ @ CBR-LIFECYCLE-COMPLETE ;
 
-: CBUS-DISPATCH  ( request bus -- status )
+: _CBUS-COMPLETE-CALLBACK  ( request -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP CBR.COMPLETE-XT @ ?DUP IF EXECUTE ELSE DROP THEN ;
+
+: _CBUS-DISPATCH-BODY  ( request bus -- status )
     _CBD-BUS ! DUP _CBD-REQ !
     DUP 0= IF DROP CBUS-S-INVALID EXIT THEN
     DUP CBR-LIFECYCLE-RUN 0= IF DROP CBUS-S-BUSY EXIT THEN
@@ -497,7 +531,8 @@ VARIABLE _CBC-DESC
         CBUS-S-NOT-FOUND DUP _CBUS-COMPLETE EXIT
     THEN
     CBUS-S-FAILED _CBD-STATUS !
-    ['] _CBUS-CALL-HANDLER CATCH ?DUP IF
+    ['] _CBUS-CALL-HANDLER CATCH
+    ?DUP IF
         S" Capability handler threw" ROT _CBD-REQ @ CBR-ERROR!
         _CBUS-TURN-FAIL
         CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
@@ -533,10 +568,36 @@ VARIABLE _CBC-DESC
     THEN
     DUP _CBUS-COMPLETE ;
 
+: _CBUS-DISPATCH-FRAMED  ( request bus -- status )
+    \ Policy, authority, handler, and completion callbacks may all dispatch
+    \ synchronously.  Protect the complete dispatch, not merely the handler:
+    \ a nested call must restore its caller's scratch before the outer body
+    \ resumes.  The fixed frame sits below CATCH's exception frame and is
+    \ restored on both normal return and THROW.
+    _CBD-REQ @ >R _CBD-INST @ >R _CBD-CAP @ >R _CBD-BUS @ >R
+    ['] _CBUS-DISPATCH-BODY CATCH
+    R> _CBD-BUS ! R> _CBD-CAP ! R> _CBD-INST ! R> _CBD-REQ !
+    ?DUP IF THROW THEN ;
+
+: _CBUS-DISPATCH-GUARDED  ( request bus -- status )
+    1 _CBUS-DISPATCH-DEPTH +!
+    ['] _CBUS-DISPATCH-FRAMED CATCH
+    -1 _CBUS-DISPATCH-DEPTH +!
+    ?DUP IF THROW THEN ;
+
+: CBUS-DISPATCH  ( request bus -- status )
+    \ Mark the request complete while serialized, then let an ordinary
+    \ top-level completion callback run after releasing the cross-core owner
+    \ boundary.  A callback may synchronously dispatch; it must not retain the
+    \ request after returning.
+    OVER >R
+    ['] _CBUS-DISPATCH-GUARDED _CBUS-DISPATCH-GUARD WITH-GUARD
+    R> _CBUS-COMPLETE-CALLBACK ;
+
 VARIABLE _CBP-BUS
 VARIABLE _CBP-N
 
-: CBUS-PUMP  ( max bus -- count )
+: _CBUS-PUMP-QUIESCED  ( max bus -- count )
     _CBP-BUS ! 0 _CBP-N !
     0 ?DO
         _CBP-BUS @ _CBUS-POP ?DUP 0= IF LEAVE THEN
@@ -545,10 +606,25 @@ VARIABLE _CBP-N
     LOOP
     _CBP-N @ ;
 
+: _CBUS-PUMP-FRAMED  ( max bus -- count )
+    _CBP-BUS @ >R _CBP-N @ >R
+    ['] _CBUS-PUMP-QUIESCED CATCH
+    R> _CBP-N ! R> _CBP-BUS !
+    ?DUP IF THROW THEN ;
+
+: _CBUS-PUMP-GUARDED  ( max bus -- count )
+    1 _CBUS-OWNER-OP-DEPTH +!
+    ['] _CBUS-PUMP-FRAMED CATCH
+    -1 _CBUS-OWNER-OP-DEPTH +!
+    ?DUP IF THROW THEN ;
+
+: CBUS-PUMP  ( max bus -- count )
+    ['] _CBUS-PUMP-GUARDED CBUS-WITH-DISPATCH-QUIESCED ;
+
 VARIABLE _CBCA-BUS
 VARIABLE _CBCA-N
 
-: CBUS-CANCEL-ALL  ( bus -- count )
+: _CBUS-CANCEL-ALL-QUIESCED  ( bus -- count )
     _CBCA-BUS ! 0 _CBCA-N !
     BEGIN
         _CBCA-BUS @ _CBUS-POP ?DUP
@@ -556,9 +632,27 @@ VARIABLE _CBCA-N
         DUP _CBD-REQ !
         _CBCA-BUS @ _CBD-BUS !
         CBUS-S-CANCELLED _CBUS-COMPLETE
+        _CBD-REQ @ _CBUS-COMPLETE-CALLBACK
         1 _CBCA-N +!
     REPEAT
     _CBCA-N @ ;
+
+: _CBUS-CANCEL-ALL-FRAMED  ( bus -- count )
+    _CBCA-BUS @ >R _CBCA-N @ >R
+    _CBD-REQ @ >R _CBD-INST @ >R _CBD-CAP @ >R _CBD-BUS @ >R
+    ['] _CBUS-CANCEL-ALL-QUIESCED CATCH
+    R> _CBD-BUS ! R> _CBD-CAP ! R> _CBD-INST ! R> _CBD-REQ !
+    R> _CBCA-N ! R> _CBCA-BUS !
+    ?DUP IF THROW THEN ;
+
+: _CBUS-CANCEL-ALL-GUARDED  ( bus -- count )
+    1 _CBUS-OWNER-OP-DEPTH +!
+    ['] _CBUS-CANCEL-ALL-FRAMED CATCH
+    -1 _CBUS-OWNER-OP-DEPTH +!
+    ?DUP IF THROW THEN ;
+
+: CBUS-CANCEL-ALL  ( bus -- count )
+    ['] _CBUS-CANCEL-ALL-GUARDED CBUS-WITH-DISPATCH-QUIESCED ;
 
 : _CBR-APPROVE  ( request -- )
     DUP CBR.FLAGS DUP @ CBR-F-APPROVED OR SWAP !

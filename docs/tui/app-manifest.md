@@ -1,143 +1,123 @@
-# akashic/tui/app-manifest.f — Application Manifest Reader
+# Trusted-local applet manifests
 
-**Layer:** 8  
-**Lines:** ~288  
-**Prefix:** `MFT-` (public), `_MFT-` (internal)  
-**Provider:** `akashic-tui-app-manifest`  
-**Dependencies:** `utils/toml.f` (which requires `utils/string.f`, `utils/utf8.f`)
+`akashic/tui/app-manifest.f` parses and validates format-1 manifests for locally authored native applets. The manifest is an integrity and ABI contract. It is not a signature, permission model, capability declaration, or sandbox boundary.
 
-## Overview
+## Manifest forms
 
-Reads a TOML manifest describing a TUI application's metadata.
-The caller provides an `(addr len)` pair pointing to the TOML text
-already in memory.  `MFT-PARSE` allocates a 128-byte descriptor at
-`HERE` and populates it from the `[app]` section.
-
-Returned string pointers reference slices of the original document
-(via `TOML-GET-STRING`), so the caller must keep the source text
-alive for as long as the descriptor is in use.
-
-## Manifest Format
+A project manifest names the source to compile and the applet entry point:
 
 ```toml
-[app]
-name      = "my-app"
-title     = "My Application"
-version   = "0.1.0"
-width     = 80
-height    = 24
-entry     = "my-main"
-binary    = "my-app.m64"
-uidl-file = "my-app.xml"
+[package]
+format = 1
+trust = "local"
+source = "/apps/hello/hello.f"
 
-[deps]
-uidl = true
-css  = true
+[app]
+id = "local.hello"
+version = "0.1.0"
+abi = 1
+entry = "HELLO-ENTRY"
+title = "Hello"
+width = 40
+height = 8
+uidl-file = "/apps/hello/hello.uidl"
 ```
 
-**Required keys:** `name`, `entry`.  
-**Optional keys:** `title` (defaults to `name`), `version`, `width`
-(default 0 = auto), `height` (default 0 = auto), `binary` (`.m64`
-filename), `uidl-file` (UIDL XML filename).  
-**Optional section:** `[deps]` — queried lazily via `MFT-DEP?`.
+`title`, `width`, `height`, and `uidl-file` are optional. An omitted title defaults to `id`; omitted dimensions are zero, meaning automatic sizing. An omitted `uidl-file` is returned as an empty string.
 
-## API Reference
+Build and Install produces an installed manifest by adding three required package fields:
 
-### Lifecycle
+```toml
+[package]
+format = 1
+trust = "local"
+source = "/apps/hello/hello.f"
+source-sha3 = "<64 lowercase hexadecimal characters>"
+image = "/.i0123456789ab.m64"
+image-sha3 = "<64 lowercase hexadecimal characters>"
+```
 
-| Word | Stack | Description |
-|------|-------|-------------|
-| `MFT-PARSE` | `( doc-a doc-l -- mft \| 0 )` | Parse a TOML manifest. Returns the descriptor address on success, or 0 if required keys are missing. The descriptor is `ALLOT`ed at `HERE`. |
-| `MFT-FREE` | `( mft -- )` | Release the descriptor. Reclaims dictionary space only if the descriptor is the most recent `ALLOT`. |
+The two digests are SHA3-256 encodings. `source-sha3` records the source used for the build; `image-sha3` is the digest the loader checks before loading the image.
 
-### Accessors
+## Field contract
 
-| Word | Stack | Description |
-|------|-------|-------------|
-| `MFT-NAME` | `( mft -- addr len )` | Application name (required). |
-| `MFT-TITLE` | `( mft -- addr len )` | Application title. Defaults to name if not specified. |
-| `MFT-VERSION` | `( mft -- addr len )` | Version string. `( 0 0 )` if not specified. |
-| `MFT-WIDTH` | `( mft -- n )` | Preferred terminal width. 0 = auto. |
-| `MFT-HEIGHT` | `( mft -- n )` | Preferred terminal height. 0 = auto. |
-| `MFT-ENTRY` | `( mft -- addr len )` | Entry word name (required). |
-| `MFT-BINARY` | `( mft -- addr len )` | Binary `.m64` filename. `( 0 0 )` if not specified. |
-| `MFT-UIDL-FILE` | `( mft -- addr len )` | UIDL XML filename. `( 0 0 )` if not specified. |
+| Field | Project | Installed | Contract |
+| --- | --- | --- | --- |
+| `package.format` | required | required | integer `1` |
+| `package.trust` | required | required | string `"local"` |
+| `package.source` | required | required | canonical absolute MP64FS path |
+| `package.source-sha3` | not required | required | exactly 64 lowercase hexadecimal characters when installed |
+| `package.image` | not required | required | canonical absolute MP64FS path when installed |
+| `package.image-sha3` | not required | required | exactly 64 lowercase hexadecimal characters when installed |
+| `app.id` | required | required | safe atom, 1--63 bytes |
+| `app.version` | required | required | safe atom, 1--31 bytes |
+| `app.abi` | required | required | integer `1` |
+| `app.entry` | required | required | safe atom, 1--23 bytes |
+| `app.title` | optional | optional | printable ASCII, 1--63 bytes; no quote or backslash |
+| `app.width` | optional | optional | integer 0--4096 |
+| `app.height` | optional | optional | integer 0--4096 |
+| `app.uidl-file` | optional | optional | canonical absolute MP64FS path |
 
-### Dependency Query
+A safe atom contains only ASCII letters, digits, `.`, `-`, and `_`.
 
-| Word | Stack | Description |
-|------|-------|-------------|
-| `MFT-DEP?` | `( mft key-a key-l -- flag )` | Check if a named dependency is listed as `true` in the `[deps]` section. Returns `FALSE` if `[deps]` is missing, the key is absent, or the value is `false`. Performs a lazy lookup into the original TOML document each time. |
+A canonical path is 2--255 bytes, begins with `/`, and uses only ASCII letters, digits, `.`, `-`, `_`, and `/`. Each component is 1--23 bytes. Empty, `.`, and `..` components are rejected, which also rejects repeated slashes and a trailing slash. `/` alone is not a valid manifest path.
 
-## Error Codes
+## API
 
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `MFT-E-NO-APP` | -110 | Missing `[app]` section. |
-| `MFT-E-NO-NAME` | -111 | Missing `name` key in `[app]`. |
-| `MFT-E-NO-ENTRY` | -112 | Missing `entry` key in `[app]`. |
+```forth
+MFT-PARSE               ( doc-a doc-u -- mft status )
+MFT-FREE                ( mft -- )
+MFT-VALIDATE-PROJECT    ( mft -- status )
+MFT-VALIDATE-INSTALLED  ( mft -- status )
+```
 
-> **Note:** The current implementation returns 0 from `MFT-PARSE` on
-> error rather than throwing.  The error constants are defined for
-> future use or caller-side `THROW`.
+`MFT-PARSE` requires both `[package]` and `[app]`, reads all known fields, applies defaults, and runs project validation. On failure it returns `0 status`; on success it returns a nonzero descriptor and `MFT-S-OK`.
 
-## Descriptor Layout
+Installed-only fields are optional while parsing. Code that consumes an installed manifest must call `MFT-VALIDATE-INSTALLED`; successful `MFT-PARSE` by itself does not establish that the three installed fields exist or satisfy their installed form.
 
-The descriptor is a flat 128-byte (16-cell) structure `ALLOT`ed at
-`HERE`:
+String accessors have stack effect `( mft -- a u )`:
 
-| Offset | Field | Type | Description |
-|--------|-------|------|-------------|
-| +0 | name-addr | cell | Pointer into source doc |
-| +8 | name-len | cell | Name string length |
-| +16 | title-addr | cell | Pointer into source doc |
-| +24 | title-len | cell | Title string length |
-| +32 | version-addr | cell | Pointer into source doc |
-| +40 | version-len | cell | Version string length |
-| +48 | width | cell | Preferred width (0 = auto) |
-| +56 | height | cell | Preferred height (0 = auto) |
-| +64 | entry-addr | cell | Pointer into source doc |
-| +72 | entry-len | cell | Entry word name length |
-| +80 | binary-addr | cell | Pointer to `.m64` filename string |
-| +88 | binary-len | cell | Binary filename length |
-| +96 | uidlf-addr | cell | Pointer to UIDL XML filename string |
-| +104 | uidlf-len | cell | UIDL XML filename length |
-| +112 | doc-addr | cell | Original TOML text address |
-| +120 | doc-len | cell | Original TOML text length |
+```forth
+MFT-DOCUMENT       MFT-ID           MFT-TITLE
+MFT-VERSION        MFT-ENTRY        MFT-SOURCE
+MFT-SOURCE-SHA3    MFT-IMAGE        MFT-IMAGE-SHA3
+MFT-TRUST          MFT-UIDL-FILE
+```
 
-## Internal Words
+Integer accessors have stack effect `( mft -- n )`:
 
-| Word | Stack | Description |
-|------|-------|-------------|
-| `_MFT-SET-STR` | `( str-a str-l mft offset -- )` | Store a string pair into the descriptor at the given field offset. |
-| `_MFT-GET-STR` | `( mft offset -- addr len )` | Read a string pair from the descriptor. |
-| `_MFT-DEALLOC` | `( mft -- )` | Reclaim descriptor space (negative `ALLOT`). |
+```forth
+MFT-FORMAT         MFT-ABI          MFT-WIDTH         MFT-HEIGHT
+```
 
-## Guard Support
+Compatibility names remain for the abandoned prototype:
 
-When `GUARDED` is defined, all public words (`MFT-PARSE`,
-`MFT-FREE`, `MFT-NAME`, `MFT-TITLE`, `MFT-VERSION`, `MFT-WIDTH`,
-`MFT-HEIGHT`, `MFT-ENTRY`, `MFT-BINARY`, `MFT-UIDL-FILE`,
-`MFT-DEP?`) are wrapped with `_mft-guard WITH-GUARD` for
-thread-safety.
+```forth
+MFT-NAME    ( mft -- a u )                 \ identical to MFT-ID
+MFT-BINARY  ( mft -- a u )                 \ identical to MFT-IMAGE
+MFT-DEP?    ( mft key-a key-u -- false )   \ dependencies are not implemented
+```
 
-## Design Notes
+## Ownership
 
-- **TOML, not LCF.** `lcf.f` is an RPC message format
-  (`[action]`/`[result]`/`[notification]`), not a config file format.
-  Manifests use `toml.f` directly.
-- **Zero-copy strings.** `TOML-GET-STRING` returns pointers into the
-  original document.  No heap allocation, no copying — but the source
-  text must stay alive.
-- **Lazy dependency lookup.** `MFT-DEP?` stores the original
-  `(doc-addr doc-len)` at offsets +112/+120 and re-parses the `[deps]`
-  table on each call.  This avoids pre-loading dependency data that
-  may never be queried.
-- **Dictionary allocation.** The descriptor lives at `HERE` via
-  `ALLOT`.  `MFT-FREE` can only truly reclaim it if nothing else was
-  compiled after the parse — otherwise the space is reclaimed on the
-  next dictionary reset.  This matches idiomatic Forth ephemeral
-  allocation patterns.
-- **Title defaults to name.** If no `title` key is present, the
-  descriptor copies the name pointer/length into the title fields,
-  so `MFT-TITLE` always returns a valid string.
+The returned descriptor is a 256-byte heap allocation. `MFT-FREE` releases only that descriptor. Every returned string, including the value from `MFT-DOCUMENT`, points into the caller's TOML document; the caller must keep that document alive until it has finished using the descriptor.
+
+`MFT-FREE` accepts zero. Do not use a descriptor or any accessor result after freeing either the descriptor or its backing document.
+
+## Status values
+
+| Value | Name | Meaning |
+| ---: | --- | --- |
+| 0 | `MFT-S-OK` | success |
+| -110 | `MFT-E-NO-PACKAGE` | no `[package]` table |
+| -111 | `MFT-E-NO-APP` | no `[app]` table |
+| -112 | `MFT-E-MISSING` | required key absent |
+| -113 | `MFT-E-TYPE` | field has the wrong TOML type |
+| -114 | `MFT-E-BOUNDS` | empty, overlong, out-of-range, or unsafe value |
+| -115 | `MFT-E-FORMAT` | unsupported package format |
+| -116 | `MFT-E-TRUST` | trust is not `local` |
+| -117 | `MFT-E-DIGEST` | installed digest is not exact lowercase SHA3-256 hex |
+| -118 | `MFT-E-ABI` | unsupported app ABI |
+| -119 | `MFT-E-ALLOC` | descriptor allocation failed |
+
+When guards are enabled, parsing and the two validation words serialize their short shared-scratch sections. Manifest processing performs no file I/O and does not yield.
