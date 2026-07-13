@@ -479,6 +479,26 @@ if __name__ == '__main__':
            '; _T'],
           "33 22 11 ")
 
+    check("BIOS coroutine slots are distinct guard owners",
+          ['GUARD _CT-G',
+           'VARIABLE _CT-OWNER 0 _CT-OWNER !',
+           'VARIABLE _CT-TRY1 0 _CT-TRY1 !',
+           'VARIABLE _CT-TRY2 0 _CT-TRY2 !',
+           ': _CT-BG',
+           '  _CT-G GUARD-ACQUIRE',
+           '  _CT-G _GRD-OWNER-TASK @ _CT-OWNER !',
+           '  TASK-YIELD',
+           '  _CT-G GUARD-RELEASE',
+           ';',
+           "' _CT-BG BACKGROUND",
+           'PAUSE',
+           '_CT-G GUARD-TRY-ACQUIRE _CT-TRY1 !',
+           'PAUSE',
+           '_CT-G GUARD-TRY-ACQUIRE _CT-TRY2 !',
+           '_CT-G GUARD-RELEASE',
+           '_CT-TRY1 @ . _CT-TRY2 @ . _CT-OWNER @ .'],
+          "0 -1 -1 ")
+
     # ────────────────────────────────────────────────────────────────
     print("\n── Four-core ownership and contention ──\n")
 

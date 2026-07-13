@@ -1,9 +1,10 @@
 \ guard.f — Recursive Cross-Core Guards for KDOS / Megapad-64
 \
 \ A guard is a named mutual-exclusion wrapper for shared state.  Guard
-\ ownership is the pair (hardware core, KDOS task).  BIOS worker cores do
-\ not have KDOS task descriptors, so their task half is deliberately zero;
-\ the core half still keeps zero-task workers distinct.
+\ ownership is the pair (hardware core, execution context).  Core-0
+\ foreground uses its KDOS task descriptor; BIOS background slots use a
+\ negative TASK-ID token.  BIOS worker cores use zero, with COREID keeping
+\ zero-context workers distinct.
 \
 \ Guards are recursive for the same execution owner.  This is required by
 \ Akashic's public wrapper pattern, where a guarded public word may call
@@ -21,7 +22,7 @@
 \ Data structure — spinning guard (4 cells = 32 bytes):
 \   +0   depth       0 = free, positive = recursive hold depth
 \   +8   owner-core  hardware core ID of holder
-\   +16  owner-task  core-0 KDOS task descriptor, or 0
+\   +16  owner-task  core-0 task/context token, or 0 on workers
 \   +24  mode        0 = spin, 1 = blocking
 \
 \ Data structure — blocking guard (4 cells + semaphore = 72 bytes):
@@ -105,12 +106,18 @@ EVT-LOCK CONSTANT _GRD-META-LOCK
 \  Owner Identity and Atomic Metadata Helpers
 \ =====================================================================
 
-\ CURRENT-TASK is a core-0 scheduler variable, not per-core TLS.  A BIOS
-\ worker therefore never reads it as its identity.  There is one dispatched
-\ execution at a time on each worker core, so (COREID, 0) is unambiguous.
+\ CURRENT-TASK is a core-0 scheduler variable, not per-core TLS.  TASK-ID
+\ distinguishes its foreground (0) from the three BIOS background coroutine
+\ slots.  Negative slot tokens cannot alias aligned KDOS task descriptors.
+\ A BIOS worker never reads core-0 task state; one dispatched execution per
+\ worker makes (COREID, 0) unambiguous.
 
 : _GRD-CURRENT-TASK  ( -- task )
-    COREID 0= IF  CURRENT-TASK @  ELSE  0  THEN ;
+    COREID 0= IF
+        TASK-ID ?DUP IF NEGATE ELSE CURRENT-TASK @ THEN
+    ELSE
+        0
+    THEN ;
 
 \ _GRD-MINE-LOCKED? ( guard -- flag )
 \   Caller holds _GRD-META-LOCK.

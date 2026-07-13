@@ -2,8 +2,8 @@
 
 `guard.f` provides statically declared mutual-exclusion guards for KDOS and
 Megapad-64. A guard serializes access by an execution owner identified by the
-pair `(hardware core, KDOS task)` and supports recursive acquisition by that
-same owner.
+pair `(hardware core, execution-context token)` and supports recursive
+acquisition by that same owner.
 
 ```forth
 REQUIRE guard.f
@@ -16,11 +16,11 @@ REQUIRE guard.f
 | Property | Contract |
 |---|---|
 | Cross-core exclusion | Claim, recursion, and release metadata transitions are serialized by a hardware spinlock. |
-| Owner identity | Core ID plus the core-0 KDOS task descriptor. BIOS workers use `(COREID, 0)`, so different zero-task workers remain distinct. |
+| Owner identity | Core ID plus the core-0 KDOS task descriptor or negative BIOS `TASK-ID`. BIOS workers use `(COREID, 0)`, so different zero-context workers remain distinct. |
 | Recursive entry | The same execution owner may acquire repeatedly; each release removes one level. |
 | Non-owner release | Releasing a free guard or another owner's guard throws `GUARD-E-NOT-OWNER` (`-257`). |
 | Scoped cleanup | `WITH-GUARD` releases before propagating a body `THROW`. |
-| Coroutine boundary | Ownership and a live `WITH-GUARD` frame must not cross BIOS `PAUSE` or `TASK-YIELD`. |
+| Coroutine boundary | BIOS slots are distinct owners. Do not carry a guard across `TASK-YIELD`: a waiting foreground cannot schedule the suspended holder. |
 | Allocation | Guard declarations allocate static dictionary storage only. |
 | Publication | A full release publishes writes made in the protected body before a later successful acquisition. |
 
@@ -37,7 +37,7 @@ backdoors.
 |---:|---|---|
 | 0 | depth | `0` when free; positive recursive depth while held |
 | 8 | owner-core | Hardware core ID of the holder |
-| 16 | owner-task | Core-0 KDOS task descriptor, or `0` |
+| 16 | owner-task | Core-0 KDOS task descriptor, negative BIOS slot token, or `0` on a worker |
 | 24 | mode | `0`, spinning |
 
 ### Blocking guard — 9 cells / 72 bytes
@@ -121,9 +121,9 @@ Remove one recursive level. At depth one it clears ownership and, for a
 blocking guard, signals the semaphore after the metadata lock has been
 released.
 
-Only the owning `(core, task)` pair may release. A different core does not
-become the owner merely because both it and the holder have
-`CURRENT-TASK = 0`.
+Only the owning `(core, execution-context)` pair may release. A different core
+does not become the owner merely because both it and the holder use context
+token `0`.
 
 ## Scoped execution
 
@@ -140,11 +140,11 @@ stack.
     ['] index-insert index-guard WITH-GUARD ;
 ```
 
-This is the preferred form when the protected operation can throw.
-KDOS exception-chain heads are now per full core, so simultaneous
-`WITH-GUARD` calls on different full cores do not overwrite one another's
-`CATCH` frames. They are not per BIOS coroutine, however: a `WITH-GUARD` body
-must not call `PAUSE` or `TASK-YIELD`.
+This is the preferred form when the protected operation can throw. KDOS
+exception-chain heads are per physical worker or core-0 BIOS task, so
+simultaneous `WITH-GUARD` calls do not overwrite one another's `CATCH` frames.
+A body must still not call `PAUSE` or `TASK-YIELD`, because the foreground can
+otherwise block while the guard holder is suspended and unschedulable.
 
 ## Queries
 
@@ -193,9 +193,10 @@ acquirer observes them after its successful locked metadata transition.
 ## Owner identity
 
 `CURRENT-TASK` is a KDOS scheduler variable owned by core 0; it is not
-per-core TLS. Therefore the guard identity helper uses:
+per-core TLS. The guard identity helper therefore uses:
 
-- `(0, CURRENT-TASK @)` on core 0
+- `(0, CURRENT-TASK @)` in the core-0 foreground (`TASK-ID = 0`)
+- `(0, -TASK-ID)` in core-0 BIOS background slots 1–3
 - `(COREID, 0)` on BIOS worker cores
 
 There is currently one dispatched BIOS execution per worker core. If KDOS
@@ -205,13 +206,13 @@ per-core current-task identity and the guard helper must adopt it.
 A guard must not be held across task migration. Migration is not part of the
 current KDOS task model.
 
-The owner pair also does not identify BIOS coroutine slots. `PAUSE` and
-`TASK-YIELD` switch same-core BIOS stacks without changing `COREID` or the
-core-0 `CURRENT-TASK` cell. If a guard were carried across that switch, another
-coroutine on the core could be mistaken for recursive entry by the same owner.
-Therefore acquire and final release must occur in the same uninterrupted BIOS
-coroutine activation. This restriction applies even more strongly to
-`WITH-GUARD`, whose live `CATCH` chain is per core rather than per coroutine.
+The owner pair distinguishes BIOS coroutine slots through `TASK-ID`; a
+foreground attempt can no longer be mistaken for recursive entry into a guard
+held by a background slot. Acquire and final release must nevertheless occur
+in the same uninterrupted coroutine activation. A spinning or blocking wait in
+the foreground cannot run `PAUSE` to resume the suspended holder, so carrying a
+guard across `TASK-YIELD` creates a scheduler-level deadlock even though owner
+identity and KDOS `CATCH` chains are now correct.
 
 KDOS `CORE-CHECKPOINT`/`YIELD?` is not a BIOS coroutine switch. Its final
 multicore action is deferred so early-compiled users such as `LOCK` reach the
@@ -259,5 +260,5 @@ provide a worker completion boundary.
 
 - `semaphore.f`
 - `event.f` transitively
-- KDOS `COREID`, `CURRENT-TASK`, `LOCK`, `UNLOCK`, `CORE-CHECKPOINT`
+- KDOS/BIOS `COREID`, `CURRENT-TASK`, `TASK-ID`, `LOCK`, `UNLOCK`, `CORE-CHECKPOINT`
   (`YIELD?`), and `EPOCH@`
