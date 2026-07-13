@@ -130,7 +130,8 @@ invalid shared service is treated as broken runtime wiring and blocks the
 shared resource; it never silently falls back to `/daybook.md`.
 
 Daybook's `Edit Source in Pad` action sends an exact semantic `RREF`. Pad
-attaches an activation-local lens, requests `resource.snapshot` through the
+attaches an activation-local lens through the common
+`shared-document-lens.f` client, requests `resource.snapshot` through the
 same bus, and retains the copied reference and binding for the lifetime of the
 shared tab. At most one such tab exists. Its active-resource capability returns
 that semantic reference rather than exposing the owner's backing path.

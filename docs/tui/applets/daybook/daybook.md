@@ -30,8 +30,9 @@ otherwise unchanged.
 
 Inside Desk, Daybook instead discovers the active Context, resource registry,
 request bus, and `org.akashic.resource.daybook` RID through its endpoint. It
-copies the RID and attaches an activation-local `RREF`/`LBIND` lens to the
-shared document owner. Loads request `resource.snapshot`; saves request
+copies the RID and uses the common `shared-document-lens.f` client to attach an
+activation-local exact `RREF`/`LBIND` lens to the shared document owner. Loads
+request `resource.snapshot`; saves request
 `resource.replace` at the binding's exact revision and advance the binding only
 after a successful owner commit. Daybook never receives the owner's VFS path,
 replacement object, or private buffer.

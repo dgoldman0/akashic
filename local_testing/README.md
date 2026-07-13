@@ -22,6 +22,10 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
+Smoke and served sessions use 32 MiB of emulated external memory by default.
+This leaves realistic headroom for the userland dictionary and applet working
+sets as the Desk image grows; pass `--ext-mem-mib N` to test another budget.
+
 Profiles are `credential`, `http-request`, `tls-port`, `net-stream`, `mcp`,
 `mcp-component`, `codec-json`, `jsonrpc`, `openai-codec`, `openai-provider`,
 `openai-source`, `codex-auth`, `codex-catalog`, `codex-source`,

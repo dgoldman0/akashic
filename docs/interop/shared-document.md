@@ -11,6 +11,22 @@ model. The RID-to-instance mapping, current revision, registries, and VFS
 handles are activation-local. Code is trusted native code; capabilities are
 routing and authority contracts, not a sandbox boundary.
 
+Cooperating applets use
+[`shared-document-lens.f`](shared-document-lens.md) for the common service
+discovery, exact attachment, and request-envelope lifecycle. Document parsing,
+editing policy, snapshot/replace dispatch, binding advancement, and post-commit
+handling remain with each applet.
+
+## Open security boundary
+
+Exact-revision protection currently covers cooperating semantic lenses, not
+every VFS writer. The VFS does not reserve `/daybook.md`, so code with ambient
+VFS authority, including File Explorer, can mutate it outside the owner's
+revision sequence. Whether to enforce ownership at the VFS boundary, through
+Practice-scoped authority or mediation, or retain a documented trusted-code
+convention remains an explicit design decision. Desk orchestrates the
+activation but need not be the enforcement layer.
+
 ## Public interface
 
 ```forth
@@ -25,7 +41,8 @@ SDOC-CAP-REPLACE  ( -- capability )
 ```
 
 Only one owner may be live in the module at a time. `SDOC-ACTIVATE` copies the
-RID, claims `/daybook.md`, recovers its `VREPL` transaction namespace,
+RID, uses `/daybook.md` as its canonical VFS backing path, recovers its `VREPL`
+transaction namespace,
 validates the existing bounded UTF-8 source, registers the component
 instance, and publishes the RID. `SDOC-DEACTIVATE` unpublishes before it
 removes and frees the instance. Lens bindings are neither accepted nor

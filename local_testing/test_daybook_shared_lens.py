@@ -153,7 +153,7 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     DEPTH _dsl-depth !
 
     _dsl-endpoint _dsl-new-daybook DUP _dsl-a ! _dsl-lens-init
-    _DB-RESOURCE-MODE @ _DB-MODE-SHARED = _dsl-assert
+    _DB-RESOURCE-MODE @ SDLENS-M-SHARED = _dsl-assert
     _DB-LOAD _DB-L-S-OK = _dsl-assert
     _DB-COUNT @ DUP _dsl-base-count ! 0>= _dsl-assert
     _DB-SHARED-BIND LBIND.REVISION @ 1 = _dsl-assert
@@ -219,7 +219,7 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     \ It cannot silently use the ordinary backing path.
     _dsl-blocked-endpoint _dsl-new-daybook
         DUP _dsl-blocked ! _dsl-lens-init
-    _DB-RESOURCE-MODE @ _DB-MODE-BLOCKED = _dsl-assert
+    _DB-RESOURCE-MODE @ SDLENS-M-BLOCKED = _dsl-assert
     _DB-SOURCE-BLOCKED @ _dsl-assert
     _dsl-owner @ CINST.REVISION @ _dsl-owner-rev !
     _DB-IO-RESET S" must not publish" _DB-IO-APPEND
@@ -232,7 +232,7 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     \ instead of falling open to direct /daybook.md access.
     _dsl-no-context-endpoint _dsl-new-daybook
         DUP _dsl-no-context ! _dsl-lens-init
-    _DB-RESOURCE-MODE @ _DB-MODE-BLOCKED = _dsl-assert
+    _DB-RESOURCE-MODE @ SDLENS-M-BLOCKED = _dsl-assert
     _DB-SOURCE-BLOCKED @ _dsl-assert
     _DB-IO-RESET S" endpoint must not publish" _DB-IO-APPEND
     _DB-WRITE 0<> _dsl-assert

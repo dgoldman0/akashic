@@ -51,6 +51,7 @@ def _megapad_root() -> Path:
 
 
 MEGAPAD_ROOT = _megapad_root()
+DEFAULT_EXT_MEM_MIB = 32
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import (  # noqa: E402
@@ -6263,7 +6264,7 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     _PAD-DUMMY-BUF _PAD-DUMMY-CAP TXTA-NEW _PAD-TXTA !
     _PAD-BUF-OPEN DUP 0= _pr-assert DROP
     _PAD-SHARED-INIT
-    _PAD-RESOURCE-MODE @ _PAD-MODE-SHARED = _pr-assert ;
+    _PAD-RESOURCE-MODE @ SDLENS-M-SHARED = _pr-assert ;
 
 : _pr-pad-storage-free  ( -- )
     _pr-pad @ _PAD-ACTIVATE
@@ -6281,17 +6282,17 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
     _pr-endpoint R@ CINST.ENDPOINT !
     R@ _PAD-ACTIVATE _PAD-SHARED-INIT
-    _PAD-RESOURCE-MODE @ _PAD-MODE-BLOCKED = _pr-assert
+    _PAD-RESOURCE-MODE @ SDLENS-M-BLOCKED = _pr-assert
     _PAD-SHARED-FINI R> CINST-FREE
     2 _pr-service-mode !
     PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
     _pr-endpoint R@ CINST.ENDPOINT !
     R@ _PAD-ACTIVATE _PAD-SHARED-INIT
-    _PAD-RESOURCE-MODE @ _PAD-MODE-BLOCKED = _pr-assert
+    _PAD-RESOURCE-MODE @ SDLENS-M-BLOCKED = _pr-assert
     _PAD-SHARED-FINI R> CINST-FREE
     PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
     R@ _PAD-ACTIVATE _PAD-SHARED-INIT
-    _PAD-RESOURCE-MODE @ _PAD-MODE-DIRECT = _pr-assert
+    _PAD-RESOURCE-MODE @ SDLENS-M-DIRECT = _pr-assert
     _PAD-SHARED-FINI R> CINST-FREE
     0 _pr-service-mode !
     _pr-pad @ _PAD-ACTIVATE ;
@@ -6473,10 +6474,10 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pr-assert
     S" # Daybook\n\n> 2026-07-13 | post-commit Pad edit\n"
         S" /daybook.md" _pr-file= _pr-assert
-    _PAD-MODE-BLOCKED _PAD-RESOURCE-MODE !
+    SDLENS-M-BLOCKED _PAD-RESOURCE-MODE !
     S" /daybook.md" _PAD-SAVE-CURRENT-AS
         _PAD-E-SHARED-UNAVAILABLE = _pr-assert
-    _PAD-MODE-SHARED _PAD-RESOURCE-MODE !
+    SDLENS-M-SHARED _PAD-RESOURCE-MODE !
 
     _pr-stack
     _pr-request @ ?DUP IF CBR-FREE THEN
@@ -8265,6 +8266,7 @@ def smoke(
     rows: int,
     max_steps: int,
     timeout: float,
+    ext_mem_mib: int = DEFAULT_EXT_MEM_MIB,
     nic_tap: str | None = None,
 ) -> bool:
     profile = PROFILES[profile_name]
@@ -8295,6 +8297,7 @@ def smoke(
         cols=cols,
         rows=rows,
         batch_steps=500_000,
+        ext_mem_size=ext_mem_mib << 20,
         nic_backend=nic_backend,
         realtime_clock=bool(nic_tap),
     ) as session:
@@ -9804,6 +9807,7 @@ def serve(
     socket_path: str,
     cols: int,
     rows: int,
+    ext_mem_mib: int = DEFAULT_EXT_MEM_MIB,
     nic_tap: str | None = None,
 ):
     if PROFILES[profile_name].requires_tap and not nic_tap:
@@ -9825,10 +9829,22 @@ def serve(
         str(rows),
         "--batch-steps",
         "500000",
+        "--ext-mem-mib",
+        str(ext_mem_mib),
     ]
     if nic_tap:
         command.extend(("--nic-tap", nic_tap))
     os.execv(sys.executable, command)
+
+
+def _positive_mib(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -9849,6 +9865,12 @@ def _parser() -> argparse.ArgumentParser:
         if name in ("smoke", "serve"):
             command.add_argument("--cols", type=int, default=100)
             command.add_argument("--rows", type=int, default=32)
+            command.add_argument(
+                "--ext-mem-mib",
+                type=_positive_mib,
+                default=DEFAULT_EXT_MEM_MIB,
+                help="emulated external memory in MiB (default: 32)",
+            )
             command.add_argument(
                 "--nic-tap",
                 nargs="?",
@@ -9879,6 +9901,7 @@ def main() -> int:
             rows=args.rows,
             max_steps=args.max_steps,
             timeout=args.timeout,
+            ext_mem_mib=args.ext_mem_mib,
             nic_tap=args.nic_tap,
         ) else 1
     serve(
@@ -9887,6 +9910,7 @@ def main() -> int:
         socket_path=args.socket,
         cols=args.cols,
         rows=args.rows,
+        ext_mem_mib=args.ext_mem_mib,
         nic_tap=args.nic_tap,
     )
     return 0
