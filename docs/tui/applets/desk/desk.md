@@ -153,6 +153,13 @@ first twelve pinned catalog rows: `<Label>` is available, `[Label]` is running,
 applet clears only its live slot; its cached descriptor remains available for a
 fast relaunch during the same Desk session.
 
+The running-slot labels at the left edge of the taskbar are also live pointer
+targets.  Painting and hit-testing use the same exact label builder, including
+the focused `*` and minimized `~` suffixes.  A left press on one of those labels
+focuses that exact slot and restores it first if minimized.  The one-cell
+separators between labels are inert.  This does not yet make pinned catalog
+entries pointer-launchable; their keyboard/launcher behavior is unchanged.
+
 `Alt+H` opens a non-blocking modal over the desktop.  It lists every catalog
 row and its status.  Up/Down, PgUp/PgDn, Home/End select; Enter focuses an
 already-running row or lazily resolves and transactionally launches it; Esc
@@ -234,7 +241,7 @@ A sample config template is provided in
 | `DESK-TRY-LAUNCH` | `( desc -- id ior )` | Transactional launch with an explicit error.  Every known host resource is rolled back on failure. |
 | `DESK-CLOSE-ID` | `( id -- )` | Compatibility window-close request; CANCEL/DEFER leave the child live. |
 | `DESK-REQUEST-CLOSE-ID` | `( id reason -- decision )` | Negotiate close; ALLOW shuts down/removes, CANCEL/DEFER preserve. |
-| `DESK-FOCUS-ID` | `( id -- )` | Focus sub-app by slot ID.  No-op if minimized or not found. |
+| `DESK-FOCUS-ID` | `( id -- )` | Focus sub-app by slot ID.  Restores that exact slot if minimized; no-op if not found. |
 | `DESK-MINIMIZE-ID` | `( id -- )` | Minimize sub-app (alive but hidden). |
 | `DESK-RESTORE` | `( -- )` | Restore last minimized app. |
 
@@ -242,7 +249,7 @@ A sample config template is provided in
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `DESK-RELAYOUT` | `( -- )` | Recompute tile grid.  Called automatically on launch/close/minimize. |
+| `DESK-RELAYOUT` | `( -- )` | Recompute tile grid.  Called automatically on launch/close/minimize and minimized-slot focus/restore. |
 | `DESK-FULLFRAME!` | `( flag -- )` | Toggle full-frame mode (show only focused app). |
 | `DESK-TOGGLE-VH` | `( -- )` | Toggle V-pref / H-pref tiling. |
 
@@ -310,11 +317,24 @@ juggling, then performs four comparisons:
 `rr <= row`, `rc <= col`, `rr+rh > row`, `rc+rw > col`.
 Returns the first matching slot, or 0 on miss.
 
-**Dispatch** — `_DESK-DISPATCH-MOUSE` saves the event pointer in
-`_DDM-EV`, extracts row/col for hit-testing, then drops the
-intermediate values.  On a hit, it context-switches to the winning
-slot and calls `UTUI-DISPATCH-MOUSE` (re-extracting row, col, btn
-from `_DDM-EV`).  If no tile is hit, the event is dropped.
+**Taskbar dispatch** — a left-button press on the taskbar row first scans the
+rendered live-slot labels.  `_DESK-TASKBAR-LABEL` supplies the exact text and
+length to both painting and `_DESK-TASKBAR-SLOT-AT`, so hit geometry cannot
+drift from the visible labels.  A hit calls `DESK-FOCUS-ID`, consuming the
+press; focusing a minimized label restores that exact slot and relayouts.
+Separators, blank taskbar cells, pinned entries, and button releases are not
+handled by this path.
+
+**Tile dispatch** — `_DESK-DISPATCH-MOUSE` saves the event pointer in
+`_DDM-EV`, extracts row/col for hit-testing, then drops the intermediate
+values.  A left press focuses the winning tile before switching into its child
+context and forwarding the same event to `UTUI-DISPATCH-MOUSE`.  This preserves
+child click delivery while ensuring callbacks observe their tile as focused.
+The press remains handled when focus changed even if the child has no UIDL or
+declines the event.  Releases never change focus.  Focusing an already-visible
+tile marks Desk dirty but does not relayout its peers; only restoring a
+minimized target requires new tile geometry.  If no tile is hit, the event is
+dropped.
 
 ## UIDL Context System
 
@@ -354,9 +374,9 @@ live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
 | 6 | Context Switching | Save/restore/switch helpers (delegates to shell) |
 | 7 | Launch & Close | transactional `DESK-TRY-LAUNCH`, rollback, close negotiation |
 | 8 | Focus/Minimize/Restore | State transitions, auto-focus |
-| 9 | Taskbar Painter | Per-item styled painting + hotbar + divider |
+| 9 | Taskbar Painter | Shared live-label geometry, per-item styled painting, hotbar + divider |
 | 10 | APP-DESC Callbacks | Init, event, tick, paint, shutdown |
-| 10b | Mouse Dispatch | Tile hit-test + per-tile UTUI-DISPATCH-MOUSE routing |
+| 10b | Mouse Dispatch | Live-taskbar activation + focus-before-forward tile routing |
 | 11 | Descriptor & Entry | `DESK-DESC`, `_DESK-FILL-DESC`, `DESK-RUN` |
 | 12 | Guard | `WITH-GUARD` wrappers for concurrency safety |
 

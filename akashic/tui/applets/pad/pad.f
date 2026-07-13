@@ -25,7 +25,8 @@
 \   - File I/O: new, open, save, save-as via VFS
 \   - Trusted-local applet Build & Install via a project manifest
 \   - Toggle sidebar / output panels (split ratio manipulation)
-\   - Find, replace, go-to-line, and selection commands
+\   - Current/open-buffer find, F3 navigation, replace, and go-to commands
+\   - Retained checked-build diagnostics with F4 source navigation
 \   - TOML theme colours (10 regions)
 \   - Status bar: filename+dirty, Ln/Col, encoding, tab count
 \
@@ -83,7 +84,7 @@ REQUIRE ../../../interop/shared-document-lens.f
     4 CONSTANT _PAD-TAB-W         \ editor indentation columns
    64 CONSTANT _PAD-DUMMY-CAP     \ minimal buffer for TXTA-NEW
   512 CONSTANT _PAD-PROMPT-CAP    \ command-bar input capacity
-  512 CONSTANT _PAD-BUILD-LOG-CAP \ Build & Install result text
+ 4096 CONSTANT _PAD-OUTPUT-CAP    \ bounded search/build result text
 
 0 CONSTANT _PAD-PRM-NONE
 1 CONSTANT _PAD-PRM-OPEN
@@ -92,6 +93,10 @@ REQUIRE ../../../interop/shared-document-lens.f
 4 CONSTANT _PAD-PRM-GOTO-LINE
 5 CONSTANT _PAD-PRM-REPLACE-FIND
 6 CONSTANT _PAD-PRM-REPLACE-WITH
+7 CONSTANT _PAD-PRM-FIND-OPEN
+
+0 CONSTANT _PAD-SEARCH-CURRENT
+1 CONSTANT _PAD-SEARCH-OPEN
 
 -8  CONSTANT _PAD-E-SHARED-UNAVAILABLE
 -9  CONSTANT _PAD-E-STALE
@@ -167,14 +172,28 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-E-SBAR-TABS
 _PAD-CURRENT-STATE CMP-CELL: _PAD-EXPL
 _PAD-CURRENT-STATE CMP-CELL: _PAD-TXTA
 _PAD-CURRENT-STATE CMP-CELL: _PAD-OUT-TXTA
-_PAD-CURRENT-STATE _PAD-BUILD-LOG-CAP CMP-FIELD: _PAD-BUILD-LOG
-_PAD-CURRENT-STATE CMP-CELL: _PAD-BUILD-LOG-U
+_PAD-CURRENT-STATE _PAD-OUTPUT-CAP CMP-FIELD: _PAD-OUTPUT-LOG
+_PAD-CURRENT-STATE CMP-CELL: _PAD-OUTPUT-LOG-U
 _PAD-CURRENT-STATE CMP-CELL: _PAD-PROMPT
 _PAD-CURRENT-STATE CMP-CELL: _PAD-PROMPT-RGN
 _PAD-CURRENT-STATE CMP-CELL: _PAD-PROMPT-MODE
 _PAD-CURRENT-STATE _PAD-PROMPT-CAP CMP-FIELD: _PAD-PROMPT-BUF
 _PAD-CURRENT-STATE _PAD-PROMPT-CAP CMP-FIELD: _PAD-REPLACE-FIND-BUF
 _PAD-CURRENT-STATE CMP-CELL: _PAD-REPLACE-FIND-U
+
+\ ---- Persistent search/navigation state ----
+_PAD-CURRENT-STATE _PAD-PROMPT-CAP CMP-FIELD: _PAD-SEARCH-QUERY
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEARCH-QUERY-U
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEARCH-SCOPE
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEARCH-BUF
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEARCH-POS
+
+\ ---- Most recent build diagnostic ----
+_PAD-CURRENT-STATE _PAD-FNAME-CAP CMP-FIELD: _PAD-DIAG-PATH
+_PAD-CURRENT-STATE CMP-CELL: _PAD-DIAG-PATH-U
+_PAD-CURRENT-STATE CMP-CELL: _PAD-DIAG-LINE
+_PAD-CURRENT-STATE CMP-CELL: _PAD-DIAG-COLUMN
+_PAD-CURRENT-STATE CMP-CELL: _PAD-DIAG-VALID
 
 \ ---- Buffer table ----
 _PAD-CURRENT-STATE _PAD-MAX-BUFS _PAD-BUF-ENTRY-SIZE * CMP-FIELD: _PAD-BUFS
@@ -1415,65 +1434,101 @@ VARIABLE _PSA-STALE
 
 VARIABLE _PBUILD-ENTRY
 VARIABLE _PBUILD-STATUS
+VARIABLE _PBUILD-DIAG-A
+VARIABLE _PBUILD-DIAG-U
 
-: _PAD-BUILD-RESET  ( -- ) 0 _PAD-BUILD-LOG-U ! ;
+: _PAD-OUTPUT-RESET  ( -- ) 0 _PAD-OUTPUT-LOG-U ! ;
 
-: _PAD-BUILD-APPEND  ( addr len -- )
-    DUP _PAD-BUILD-LOG-U @ + _PAD-BUILD-LOG-CAP > IF 2DROP EXIT THEN
+: _PAD-OUTPUT-APPEND  ( addr len -- )
+    DUP _PAD-OUTPUT-LOG-U @ + _PAD-OUTPUT-CAP > IF 2DROP EXIT THEN
     DUP >R
-    _PAD-BUILD-LOG _PAD-BUILD-LOG-U @ + SWAP CMOVE
-    R> _PAD-BUILD-LOG-U +! ;
+    _PAD-OUTPUT-LOG _PAD-OUTPUT-LOG-U @ + SWAP CMOVE
+    R> _PAD-OUTPUT-LOG-U +! ;
 
-: _PAD-BUILD-NL  ( -- )
-    _PAD-BUILD-LOG-U @ _PAD-BUILD-LOG-CAP >= IF EXIT THEN
-    10 _PAD-BUILD-LOG _PAD-BUILD-LOG-U @ + C!
-    1 _PAD-BUILD-LOG-U +! ;
+: _PAD-OUTPUT-CHAR  ( c -- )
+    _PAD-OUTPUT-LOG-U @ _PAD-OUTPUT-CAP >= IF DROP EXIT THEN
+    _PAD-OUTPUT-LOG _PAD-OUTPUT-LOG-U @ + C!
+    1 _PAD-OUTPUT-LOG-U +! ;
 
-: _PAD-BUILD-NUM  ( n -- ) NUM>STR _PAD-BUILD-APPEND ;
+: _PAD-OUTPUT-NL  ( -- ) 10 _PAD-OUTPUT-CHAR ;
 
-: _PAD-BUILD-SHOW  ( -- )
+: _PAD-OUTPUT-NUM  ( n -- ) NUM>STR _PAD-OUTPUT-APPEND ;
+
+: _PAD-OUTPUT-SHOW  ( -- )
     -1 _PAD-OUTPUT-VIS !
     _PAD-E-EO-SPLIT @ ?DUP IF S" ratio" S" 80" UTUI-SET-ATTR THEN
     _PAD-OUT-TXTA @ ?DUP IF
-        >R _PAD-BUILD-LOG _PAD-BUILD-LOG-U @ R> TXTA-SET-TEXT
+        >R _PAD-OUTPUT-LOG _PAD-OUTPUT-LOG-U @ R> TXTA-SET-TEXT
     THEN
     _PAD-E-OUTPUT @ ?DUP IF UIDL-DIRTY! THEN
     ASHELL-DIRTY! ;
 
+: _PAD-DIAG-RESET  ( -- )
+    0 _PAD-DIAG-PATH-U !
+    0 _PAD-DIAG-LINE !
+    0 _PAD-DIAG-COLUMN !
+    0 _PAD-DIAG-VALID ! ;
+
+: _PAD-DIAG-CAPTURE  ( -- )
+    ABUILD-SOURCE-PATH _PBUILD-DIAG-U ! _PBUILD-DIAG-A !
+    _PBUILD-DIAG-U @ 0= IF EXIT THEN
+    _PBUILD-DIAG-U @ _PAD-FNAME-CAP MIN DUP _PAD-DIAG-PATH-U !
+    _PBUILD-DIAG-A @ _PAD-DIAG-PATH ROT CMOVE
+    ABUILD-EVAL-LINE _PAD-DIAG-LINE !
+    \ MegaPad reports a zero-based evaluator byte column; Pad presents and
+    \ navigates one-based coordinates.
+    ABUILD-EVAL-COLUMN 1+ _PAD-DIAG-COLUMN !
+    _PAD-DIAG-LINE @ 0> _PAD-DIAG-VALID ! ;
+
+: _PAD-BUILD-DIAG-LOCATION  ( -- )
+    _PAD-DIAG-VALID @ 0= IF EXIT THEN
+    _PAD-DIAG-PATH _PAD-DIAG-PATH-U @ _PAD-OUTPUT-APPEND
+    S" :" _PAD-OUTPUT-APPEND
+    _PAD-DIAG-LINE @ _PAD-OUTPUT-NUM
+    S" :" _PAD-OUTPUT-APPEND
+    _PAD-DIAG-COLUMN @ _PAD-OUTPUT-NUM _PAD-OUTPUT-NL ;
+
 : _PAD-BUILD-COMPILE-ERROR  ( -- )
+    _PAD-BUILD-DIAG-LOCATION
     ABUILD-EVAL-STATUS EVAL-S-THROW = IF
-        S" Source evaluation threw " _PAD-BUILD-APPEND
-        ABUILD-EVAL-THROW _PAD-BUILD-NUM
-        S"  at line " _PAD-BUILD-APPEND
-        ABUILD-EVAL-LINE _PAD-BUILD-NUM _PAD-BUILD-NL
+        S" Source evaluation threw " _PAD-OUTPUT-APPEND
+        ABUILD-EVAL-THROW _PAD-OUTPUT-NUM
+        S"  at line " _PAD-OUTPUT-APPEND
+        ABUILD-EVAL-LINE _PAD-OUTPUT-NUM _PAD-OUTPUT-NL
         S" Nothing was installed; the build dictionary was discarded."
-            _PAD-BUILD-APPEND _PAD-BUILD-NL
+            _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
+        _PAD-DIAG-VALID @ IF
+            S" F4 opens this diagnostic." _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
+        THEN
         EXIT
     THEN
-    S" Checked compilation failed at line " _PAD-BUILD-APPEND
-    ABUILD-EVAL-LINE _PAD-BUILD-NUM
-    S" , column " _PAD-BUILD-APPEND
-    ABUILD-EVAL-COLUMN _PAD-BUILD-NUM _PAD-BUILD-NL
+    S" Checked compilation failed at line " _PAD-OUTPUT-APPEND
+    ABUILD-EVAL-LINE _PAD-OUTPUT-NUM
+    S" , column " _PAD-OUTPUT-APPEND
+    ABUILD-EVAL-COLUMN 1+ _PAD-OUTPUT-NUM _PAD-OUTPUT-NL
     ABUILD-EVAL-TOKEN DUP IF
-        S" Token: " _PAD-BUILD-APPEND _PAD-BUILD-APPEND _PAD-BUILD-NL
+        S" Token: " _PAD-OUTPUT-APPEND _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
     ELSE
         2DROP
     THEN
     S" Nothing was installed; the build dictionary was discarded."
-        _PAD-BUILD-APPEND _PAD-BUILD-NL ;
+        _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
+    _PAD-DIAG-VALID @ IF
+        S" F4 opens this diagnostic." _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
+    THEN ;
 
 : _PAD-BUILD-GENERIC-ERROR  ( status -- )
     DUP ABUILD-E-SETUP = IF
         DROP S" Build service is not connected to Desk's catalog."
-        _PAD-BUILD-APPEND EXIT
+        _PAD-OUTPUT-APPEND EXIT
     THEN
     DUP ABUILD-E-MANIFEST = IF
         DROP S" Project or generated installed manifest is invalid."
-        _PAD-BUILD-APPEND EXIT
+        _PAD-OUTPUT-APPEND EXIT
     THEN
     DUP ABUILD-E-ENTRY = IF
         DROP S" The declared entry was not defined as a named image export."
-        _PAD-BUILD-APPEND EXIT
+        _PAD-OUTPUT-APPEND EXIT
     THEN
     DUP ABUILD-E-CATALOG = IF
         DROP ABUILD-LAST-DETAIL ACAT-S-BUSY = IF
@@ -1481,14 +1536,14 @@ VARIABLE _PBUILD-STATUS
         ELSE
             S" Image and manifest are safe, but the catalog commit failed."
         THEN
-        _PAD-BUILD-APPEND EXIT
+        _PAD-OUTPUT-APPEND EXIT
     THEN
     DUP ABUILD-E-COLLISION = IF
         DROP S" A content-address collision was detected; no file was replaced."
-        _PAD-BUILD-APPEND EXIT
+        _PAD-OUTPUT-APPEND EXIT
     THEN
     DROP S" Build failed safely before the catalog commit."
-    _PAD-BUILD-APPEND ;
+    _PAD-OUTPUT-APPEND ;
 
 : _PAD-DO-BUILD-INSTALL  ( elem -- )
     DROP
@@ -1505,29 +1560,30 @@ VARIABLE _PBUILD-STATUS
                 3000 ASHELL-TOAST EXIT
         THEN
     THEN
-    _PAD-BUILD-RESET
-    S" Build & Install" _PAD-BUILD-APPEND _PAD-BUILD-NL
+    _PAD-OUTPUT-RESET _PAD-DIAG-RESET
+    S" Build & Install" _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
     _PAD-ACTIVE @ _PAD-BUF-ENTRY
     DUP _PBE-FNAME-A + @ SWAP _PBE-FNAME-L + @
     ABUILD-INSTALL _PBUILD-STATUS ! _PBUILD-ENTRY !
     _PBUILD-STATUS @ 0= IF
-        S" Installed: " _PAD-BUILD-APPEND
-        _PBUILD-ENTRY @ ACE-ID$ _PAD-BUILD-APPEND _PAD-BUILD-NL
-        S" Manifest: " _PAD-BUILD-APPEND
-        ABUILD-INSTALLED-PATH _PAD-BUILD-APPEND _PAD-BUILD-NL
+        S" Installed: " _PAD-OUTPUT-APPEND
+        _PBUILD-ENTRY @ ACE-ID$ _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
+        S" Manifest: " _PAD-OUTPUT-APPEND
+        ABUILD-INSTALLED-PATH _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
         S" Launch or focus it from Desk with Alt+H."
-            _PAD-BUILD-APPEND _PAD-BUILD-NL
+            _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
         _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
         S" Applet installed" 1800 ASHELL-TOAST
     ELSE
         _PBUILD-STATUS @ ABUILD-E-COMPILE = IF
+            _PAD-DIAG-CAPTURE
             _PAD-BUILD-COMPILE-ERROR
         ELSE
-            _PBUILD-STATUS @ _PAD-BUILD-GENERIC-ERROR _PAD-BUILD-NL
+            _PBUILD-STATUS @ _PAD-BUILD-GENERIC-ERROR _PAD-OUTPUT-NL
         THEN
         S" Build & Install failed" 2600 ASHELL-TOAST
     THEN
-    _PAD-BUILD-SHOW ;
+    _PAD-OUTPUT-SHOW ;
 
 : _PAD-DO-CLOSE-TAB  ( elem -- )
     DROP
@@ -1667,6 +1723,165 @@ VARIABLE _PFT-GB
 VARIABLE _PFT-START
 VARIABLE _PFT-MATCH
 
+VARIABLE _PSQ-A
+VARIABLE _PSQ-U
+VARIABLE _PSQ-SCOPE
+VARIABLE _PSN-BUF
+VARIABLE _PSN-POS
+VARIABLE _PSN-GB
+VARIABLE _PSN-MATCH
+VARIABLE _PSLC-POS
+VARIABLE _PSLC-GB
+VARIABLE _PSLC-LINE
+VARIABLE _PSLC-COLUMN
+VARIABLE _PSRP-BUF
+VARIABLE _PSRP-GB
+VARIABLE _PSRP-POS
+VARIABLE _PSRP-MATCH
+VARIABLE _PSRP-LINE
+VARIABLE _PSRP-COLUMN
+VARIABLE _PSRP-TOTAL
+VARIABLE _PSRP-FULL
+VARIABLE _PSOL-LINE
+VARIABLE _PSOL-GB
+VARIABLE _PSOL-START
+VARIABLE _PSOL-LEN
+VARIABLE _PSOL-TAKE
+
+96 CONSTANT _PAD-SEARCH-SNIPPET-CAP
+416 CONSTANT _PAD-SEARCH-RESULT-RESERVE
+
+: _PAD-SEARCH-SET  ( addr len scope -- )
+    _PSQ-SCOPE ! _PSQ-U ! _PSQ-A !
+    _PSQ-U @ _PAD-PROMPT-CAP MIN DUP _PAD-SEARCH-QUERY-U !
+    _PSQ-A @ _PAD-SEARCH-QUERY ROT CMOVE
+    _PSQ-SCOPE @ _PAD-SEARCH-SCOPE !
+    _PAD-ACTIVE @ _PAD-SEARCH-BUF !
+    _PSQ-SCOPE @ _PAD-SEARCH-CURRENT = _PAD-TXTA @ 0<> AND IF
+        _PAD-TXTA @ _PTO-CURSOR + @
+    ELSE
+        0
+    THEN _PAD-SEARCH-POS ! ;
+
+: _PAD-SEARCH-CURRENT!  ( addr len -- )
+    _PAD-SEARCH-CURRENT _PAD-SEARCH-SET ;
+
+: _PAD-SEARCH-OPEN!  ( addr len -- )
+    _PAD-SEARCH-OPEN _PAD-SEARCH-SET ;
+
+\ Convert a byte offset to one-based line and byte-column coordinates.
+: _PAD-POS-LINE-COLUMN  ( pos gb -- line column )
+    _PSLC-GB !
+    0 MAX _PSLC-GB @ GB-LEN MIN _PSLC-POS !
+    1 _PSLC-LINE ! 1 _PSLC-COLUMN !
+    _PSLC-POS @ 0 ?DO
+        I _PSLC-GB @ GB-BYTE@ 10 = IF
+            1 _PSLC-LINE +! 1 _PSLC-COLUMN !
+        ELSE
+            1 _PSLC-COLUMN +!
+        THEN
+    LOOP
+    _PSLC-LINE @ _PSLC-COLUMN @ ;
+
+: _PAD-OUTPUT-BUF-LABEL  ( index -- )
+    DUP _PSRP-BUF ! _PAD-BUF-ENTRY
+    DUP _PBE-FNAME-L + @ DUP IF
+        >R _PBE-FNAME-A + @ R> _PAD-OUTPUT-APPEND
+    ELSE
+        2DROP S" Untitled#" _PAD-OUTPUT-APPEND
+        _PSRP-BUF @ 1+ _PAD-OUTPUT-NUM
+    THEN ;
+
+: _PAD-OUTPUT-SEARCH-LINE  ( line# gb -- )
+    _PSOL-GB ! _PSOL-LINE !
+    _PSOL-LINE @ _PSOL-GB @ GB-LINE-OFF _PSOL-START !
+    _PSOL-LINE @ _PSOL-GB @ GB-LINE-LEN _PSOL-LEN !
+    _PSOL-LEN @ _PAD-SEARCH-SNIPPET-CAP MIN _PSOL-TAKE !
+    \ If the byte cap lands inside a UTF-8 sequence, omit that entire
+    \ codepoint so the output pane always receives valid source text.
+    _PSOL-LEN @ _PAD-SEARCH-SNIPPET-CAP > IF
+        BEGIN
+            _PSOL-TAKE @ 0> IF
+                _PSOL-START @ _PSOL-TAKE @ + _PSOL-GB @ GB-BYTE@
+                192 AND 128 =
+            ELSE
+                FALSE
+            THEN
+        WHILE
+            -1 _PSOL-TAKE +!
+        REPEAT
+    THEN
+    _PSOL-TAKE @ 0 ?DO
+        _PSOL-START @ I + _PSOL-GB @ GB-BYTE@
+        DUP 9 = IF DROP 32 ELSE DUP 32 < IF DROP [CHAR] ? THEN THEN
+        _PAD-OUTPUT-CHAR
+    LOOP
+    _PSOL-TAKE @ _PSOL-LEN @ < IF
+        S" ..." _PAD-OUTPUT-APPEND
+    THEN ;
+
+: _PAD-SEARCH-COUNT-OPEN  ( -- count )
+    0
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY DUP _PBE-FLAGS + @ IF
+            _PBE-GB + @ >R
+            _PAD-SEARCH-QUERY _PAD-SEARCH-QUERY-U @ R>
+            SRCH-COUNT +
+        ELSE
+            DROP
+        THEN
+    LOOP ;
+
+: _PAD-SEARCH-REPORT-ENTRY  ( -- )
+    _PSRP-BUF @ _PAD-OUTPUT-BUF-LABEL
+    S" :" _PAD-OUTPUT-APPEND
+    _PSRP-MATCH @ _PSRP-GB @ _PAD-POS-LINE-COLUMN
+    _PSRP-COLUMN ! _PSRP-LINE !
+    _PSRP-LINE @ _PAD-OUTPUT-NUM S" :" _PAD-OUTPUT-APPEND
+    _PSRP-COLUMN @ _PAD-OUTPUT-NUM S" : " _PAD-OUTPUT-APPEND
+    _PSRP-LINE @ 1- _PSRP-GB @ _PAD-OUTPUT-SEARCH-LINE
+    _PAD-OUTPUT-NL ;
+
+: _PAD-SEARCH-REPORT-BUFFER  ( index -- )
+    _PSRP-FULL @ IF DROP EXIT THEN
+    DUP _PSRP-BUF ! _PAD-BUF-ENTRY DUP _PBE-FLAGS + @ 0= IF
+        DROP EXIT
+    THEN
+    _PBE-GB + @ _PSRP-GB ! 0 _PSRP-POS !
+    BEGIN
+        _PSRP-POS @ _PAD-SEARCH-QUERY _PAD-SEARCH-QUERY-U @
+            _PSRP-GB @ SRCH-FIND DUP 0>=
+    WHILE
+        _PSRP-MATCH !
+        \ Leave enough room for the longest path, a snippet, and the
+        \ explicit truncation marker rather than cutting a result in half.
+        _PAD-OUTPUT-LOG-U @
+            _PAD-OUTPUT-CAP _PAD-SEARCH-RESULT-RESERVE - > IF
+            -1 _PSRP-FULL ! EXIT
+        THEN
+        _PAD-SEARCH-REPORT-ENTRY
+        _PSRP-MATCH @ _PAD-SEARCH-QUERY-U @ + _PSRP-POS !
+    REPEAT
+    DROP ;
+
+: _PAD-SEARCH-REPORT  ( -- count )
+    _PAD-SEARCH-COUNT-OPEN _PSRP-TOTAL !
+    _PAD-OUTPUT-RESET
+    S" Find in Open Buffers: " _PAD-OUTPUT-APPEND
+    _PSRP-TOTAL @ _PAD-OUTPUT-NUM S"  match" _PAD-OUTPUT-APPEND
+    _PSRP-TOTAL @ 1 <> IF S" es" _PAD-OUTPUT-APPEND THEN
+    S"  for " _PAD-OUTPUT-APPEND [CHAR] " _PAD-OUTPUT-CHAR
+    _PAD-SEARCH-QUERY _PAD-SEARCH-QUERY-U @ _PAD-OUTPUT-APPEND
+    [CHAR] " _PAD-OUTPUT-CHAR _PAD-OUTPUT-NL
+    0 _PSRP-FULL !
+    _PAD-MAX-BUFS 0 DO I _PAD-SEARCH-REPORT-BUFFER LOOP
+    _PSRP-FULL @ IF
+        S" ... additional matches omitted" _PAD-OUTPUT-APPEND
+        _PAD-OUTPUT-NL
+    THEN
+    _PAD-OUTPUT-SHOW
+    _PSRP-TOTAL @ ;
+
 : _PAD-FIND-MATCH  ( find-a find-u -- flag )
     _PFT-U ! _PFT-A !
     _PFT-U @ 0= IF 0 EXIT THEN
@@ -1683,6 +1898,46 @@ VARIABLE _PFT-MATCH
     _PFT-MATCH @ SWAP _PAD-SELECT-RANGE
     -1 ;
 
+: _PAD-SEARCH-NEXT-OPEN  ( -- flag )
+    _PAD-SEARCH-QUERY-U @ 0= IF 0 EXIT THEN
+    _PAD-SEARCH-BUF @ DUP 0< OVER _PAD-MAX-BUFS >= OR IF
+        DROP _PAD-ACTIVE @
+    THEN _PSN-BUF !
+    _PSN-BUF @ 0< IF 0 EXIT THEN
+    _PAD-SEARCH-POS @ _PSN-POS !
+    \ The extra pass revisits the starting buffer at offset zero, providing
+    \ wraparound without losing matches before the original cursor.
+    _PAD-MAX-BUFS 1+ 0 DO
+        _PSN-BUF @ _PAD-BUF-ENTRY DUP _PBE-FLAGS + @ IF
+            _PBE-GB + @ _PSN-GB !
+            _PSN-POS @ _PAD-SEARCH-QUERY _PAD-SEARCH-QUERY-U @
+                _PSN-GB @ SRCH-FIND DUP 0>= IF
+                _PSN-MATCH !
+                _PSN-BUF @ _PAD-BUF-SWITCH
+                _PSN-BUF @ _PAD-SEARCH-BUF !
+                _PSN-MATCH @ _PAD-SEARCH-QUERY-U @ +
+                    DUP _PAD-SEARCH-POS !
+                _PSN-MATCH @ SWAP _PAD-SELECT-RANGE
+                _PAD-TXTA @ ?DUP IF TXTA-ADJUST-SCROLL THEN
+                -1 UNLOOP EXIT
+            THEN
+            DROP
+        ELSE
+            DROP
+        THEN
+        _PSN-BUF @ 1+ _PAD-MAX-BUFS MOD _PSN-BUF !
+        0 _PSN-POS !
+    LOOP
+    0 ;
+
+: _PAD-SEARCH-NEXT  ( -- flag )
+    _PAD-SEARCH-QUERY-U @ 0= IF 0 EXIT THEN
+    _PAD-SEARCH-SCOPE @ _PAD-SEARCH-OPEN = IF
+        _PAD-SEARCH-NEXT-OPEN
+    ELSE
+        _PAD-SEARCH-QUERY _PAD-SEARCH-QUERY-U @ _PAD-FIND-MATCH
+    THEN ;
+
 : _PAD-CURSOR!  ( pos -- )
     _PAD-TXTA @ 0= IF DROP EXIT THEN
     0 MAX
@@ -1693,20 +1948,58 @@ VARIABLE _PFT-MATCH
     _PAD-TXTA @ WDG-DIRTY
     ASHELL-DIRTY! ;
 
+VARIABLE _PGLC-LINE
+VARIABLE _PGLC-COLUMN
+VARIABLE _PGLC-GB
+VARIABLE _PGLC-OFF
+
+: _PAD-GOTO-LINE-COLUMN  ( line column -- flag )
+    _PGLC-COLUMN ! _PGLC-LINE !
+    _PAD-TXTA @ 0= IF 0 EXIT THEN
+    _PAD-TXTA @ _PTO-GB + @ DUP 0= IF DROP 0 EXIT THEN _PGLC-GB !
+    _PGLC-LINE @ 1 < _PGLC-LINE @ _PGLC-GB @ GB-LINES > OR IF
+        0 EXIT
+    THEN
+    _PGLC-LINE @ 1- _PGLC-GB @ GB-LINE-OFF _PGLC-OFF !
+    _PGLC-LINE @ 1- _PGLC-GB @ GB-LINE-LEN
+    _PGLC-COLUMN @ 1- 0 MAX MIN _PGLC-OFF @ + _PAD-CURSOR!
+    _PAD-TXTA @ ?DUP IF TXTA-ADJUST-SCROLL THEN
+    -1 ;
+
 : _PAD-GOTO-LINE-TEXT  ( addr len -- )
     STR>NUM 0= IF
         DROP S" Invalid line number" 1800 ASHELL-TOAST EXIT
     THEN
     DUP 1 < IF DROP S" Line numbers start at 1" 1800 ASHELL-TOAST EXIT THEN
-    1-
-    _PAD-TXTA @ _PTO-GB + @ >R
-    DUP R@ GB-LINES >= IF
-        DROP R> DROP S" Line is outside the document" 1800 ASHELL-TOAST EXIT
-    THEN
-    R> GB-LINE-OFF _PAD-CURSOR! ;
+    1 _PAD-GOTO-LINE-COLUMN 0= IF
+        S" Line is outside the document" 1800 ASHELL-TOAST
+    THEN ;
 
 : _PAD-DO-FIND  ( elem -- )
-    DROP _PAD-PRM-FIND S" Find:" 0 0 _PAD-SHOW-PROMPT ;
+    DROP _PAD-PRM-FIND S" Find:"
+    _PAD-SEARCH-QUERY _PAD-SEARCH-QUERY-U @ _PAD-SHOW-PROMPT ;
+
+: _PAD-DO-FIND-OPEN  ( elem -- )
+    DROP _PAD-PRM-FIND-OPEN S" Find in open buffers:"
+    _PAD-SEARCH-QUERY _PAD-SEARCH-QUERY-U @ _PAD-SHOW-PROMPT ;
+
+: _PAD-DO-FIND-NEXT  ( elem -- )
+    DROP _PAD-SEARCH-NEXT 0= IF
+        S" No further match" 1600 ASHELL-TOAST
+    THEN ;
+
+: _PAD-DO-GOTO-BUILD-ERROR  ( elem -- )
+    DROP
+    _PAD-DIAG-VALID @ 0= IF
+        S" No build diagnostic is available" 1800 ASHELL-TOAST EXIT
+    THEN
+    _PAD-DIAG-PATH _PAD-DIAG-PATH-U @ _PAD-OPEN-PATH
+    DUP IF _PAD-REPORT-OPEN-RESULT EXIT THEN DROP
+    _PAD-DIAG-LINE @ _PAD-DIAG-COLUMN @ _PAD-GOTO-LINE-COLUMN 0= IF
+        S" Build diagnostic is outside the current source" 2200 ASHELL-TOAST
+        EXIT
+    THEN
+    S" Opened build diagnostic" 1400 ASHELL-TOAST ;
 
 : _PAD-DO-REPLACE  ( elem -- )
     DROP _PAD-PRM-REPLACE-FIND S" Replace:" 0 0 _PAD-SHOW-PROMPT ;
@@ -1726,8 +2019,7 @@ VARIABLE _PPSUB-MODE
     _PAD-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     _PAD-PROMPT-MODE @ _PPSUB-MODE !
     _PAD-PRM-NONE _PAD-PROMPT-MODE !
-    _PPSUB-MODE @ _PAD-PRM-REPLACE-WITH <
-    _PPSUB-U @ 0= AND IF EXIT THEN
+    _PPSUB-U @ 0= _PPSUB-MODE @ _PAD-PRM-REPLACE-WITH <> AND IF EXIT THEN
     _PPSUB-MODE @ CASE
         _PAD-PRM-OPEN OF
             _PPSUB-A @ _PPSUB-U @ _PAD-OPEN-PATH
@@ -1739,8 +2031,17 @@ VARIABLE _PPSUB-MODE
             ELSE DROP S" Saved" 1500 ASHELL-TOAST THEN
         ENDOF
         _PAD-PRM-FIND OF
-            _PPSUB-A @ _PPSUB-U @ _PAD-FIND-MATCH 0= IF
+            _PPSUB-A @ _PPSUB-U @ _PAD-SEARCH-CURRENT!
+            _PAD-SEARCH-NEXT 0= IF
                 S" Text not found" 1800 ASHELL-TOAST
+            THEN
+        ENDOF
+        _PAD-PRM-FIND-OPEN OF
+            _PPSUB-A @ _PPSUB-U @ _PAD-SEARCH-OPEN!
+            _PAD-SEARCH-REPORT IF
+                _PAD-SEARCH-NEXT DROP
+            ELSE
+                S" Text not found in open buffers" 1800 ASHELL-TOAST
             THEN
         ENDOF
         _PAD-PRM-GOTO-LINE OF
@@ -1853,7 +2154,7 @@ VARIABLE _PPSUB-MODE
 
 : _PAD-DO-SHORTCUTS  ( elem -- )
     DROP
-    S" Ctrl+Shift+B Build  Ctrl+N/O/S/W  Ctrl+Z/Y  Ctrl+C/X/V  Ctrl+F/G"
+    S" Ctrl+Shift+B Build  F4 Diagnostic  Ctrl+Shift+F Open Search  F3 Next"
         4000 ASHELL-TOAST ;
 
 VARIABLE _PSW-GB
@@ -1926,6 +2227,12 @@ VARIABLE _PSW-BYTE
     0 _PAD-PROMPT-RGN !
     _PAD-PRM-NONE _PAD-PROMPT-MODE !
     0 _PAD-REPLACE-FIND-U !
+    0 _PAD-SEARCH-QUERY-U !
+    _PAD-SEARCH-CURRENT _PAD-SEARCH-SCOPE !
+    -1 _PAD-SEARCH-BUF !
+    0 _PAD-SEARCH-POS !
+    0 _PAD-OUTPUT-LOG-U !
+    _PAD-DIAG-RESET
     0 _PAD-ARENA !
    -1 _PAD-FAST-ROW !
     0 _PAD-FAST-COUNT !
@@ -2020,6 +2327,7 @@ VARIABLE _PSW-BYTE
     S" save-as"         ['] _PAD-DO-SAVE-AS        UTUI-DO!
     S" save-all"        ['] _PAD-DO-SAVE-ALL       UTUI-DO!
     S" build-install"   ['] _PAD-DO-BUILD-INSTALL  UTUI-DO!
+    S" goto-build-error" ['] _PAD-DO-GOTO-BUILD-ERROR UTUI-DO!
     S" close-tab"       ['] _PAD-DO-CLOSE-TAB      UTUI-DO!
     S" close-all"       ['] _PAD-DO-CLOSE-ALL      UTUI-DO!
     S" undo"            ['] _PAD-DO-UNDO           UTUI-DO!
@@ -2030,6 +2338,8 @@ VARIABLE _PSW-BYTE
     S" select-all"      ['] _PAD-DO-SELECT-ALL     UTUI-DO!
     S" delete-line"     ['] _PAD-DO-DELETE-LINE    UTUI-DO!
     S" find"            ['] _PAD-DO-FIND           UTUI-DO!
+    S" find-open"       ['] _PAD-DO-FIND-OPEN      UTUI-DO!
+    S" find-next"       ['] _PAD-DO-FIND-NEXT      UTUI-DO!
     S" replace"         ['] _PAD-DO-REPLACE        UTUI-DO!
     S" goto-line"       ['] _PAD-DO-GOTO-LINE      UTUI-DO!
     S" goto-file"       ['] _PAD-DO-GOTO-FILE      UTUI-DO!

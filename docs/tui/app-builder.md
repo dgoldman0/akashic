@@ -69,14 +69,31 @@ ABUILD-EVAL-LINE       ( -- line )
 ABUILD-EVAL-COLUMN     ( -- column )
 ABUILD-EVAL-THROW      ( -- throw-code )
 ABUILD-EVAL-TOKEN      ( -- addr len )
+ABUILD-SOURCE-PATH     ( -- addr len )
 ABUILD-INSTALLED-PATH  ( -- addr len )
 ```
 
 `ABUILD-LAST-STATUS` reports the most recent completed non-busy build operation. `ABUILD-LAST-DETAIL` reports the lower-level manifest, evaluator, binimg, serializer, VFS-replace, catalog, or raw thrown status when that failure path supplies one; it may be zero for a direct builder error.
 
-The evaluator accessors expose MegaPad's checked-evaluator diagnostics. A source-level `THROW` is caught by the checked evaluator: `ABUILD-INSTALL` returns `ABUILD-E-COMPILE`, `ABUILD-LAST-DETAIL` is `EVAL-S-THROW` (`5`), and `ABUILD-EVAL-THROW` returns the original throw code. `ABUILD-E-THROW` is reserved for an unexpected throw outside that checked source-evaluation boundary.
+The evaluator accessors expose MegaPad's checked-evaluator diagnostics. Lines
+are one-based and columns are zero-based byte offsets, matching
+`SOURCE-EVALUATE-CHECKED`; presentation layers that display one-based columns
+must normalize them. A source-level `THROW` is caught by the checked evaluator:
+`ABUILD-INSTALL` returns `ABUILD-E-COMPILE`, `ABUILD-LAST-DETAIL` is
+`EVAL-S-THROW` (`5`), and `ABUILD-EVAL-THROW` returns the original throw code.
+`ABUILD-E-THROW` is reserved for an unexpected throw outside that checked
+source-evaluation boundary.
 
 A failed compilation leaves evaluator diagnostics readable after dictionary rollback. Reaching the checked-evaluation stage of the next build clears the evaluator status, so callers should consume diagnostics before retrying.
+
+`ABUILD-SOURCE-PATH` returns a module-owned copy of the validated project
+manifest's source path for the current or most recently completed non-busy
+operation. A new non-busy operation clears it, then populates it after project
+manifest validation and before the source is opened, read, or evaluated.
+Cleanup preserves the copy on both success and failure, including compile
+failure; failures before manifest validation leave it empty. A rejected busy
+call does not alter it. The next non-busy operation may overwrite the storage,
+so callers that need a longer lifetime must copy it.
 
 `ABUILD-INSTALLED-PATH` returns module-owned storage for the installed-manifest path derived during the current or most recently completed operation. A new non-busy operation resets and may overwrite it; early failures return an empty path.
 

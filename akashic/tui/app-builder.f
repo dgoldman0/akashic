@@ -18,6 +18,7 @@
 \    ABUILD-EVAL-COLUMN    ( -- column )
 \    ABUILD-EVAL-THROW     ( -- throw-code )
 \    ABUILD-EVAL-TOKEN     ( -- addr len )
+\    ABUILD-SOURCE-PATH    ( -- addr len )
 \    ABUILD-INSTALLED-PATH ( -- addr len )
 \
 \  A successful return owns no temporary buffers.  The returned catalog
@@ -100,6 +101,8 @@ CREATE _ab-image-path      24 ALLOT
 CREATE _ab-manifest-path   24 ALLOT
 VARIABLE _ab-image-path-u
 VARIABLE _ab-manifest-path-u
+CREATE _ab-source-path MFT-PATH-MAX ALLOT
+VARIABLE _ab-source-path-u
 
 CREATE _ab-manifest-buf _AB-MANIFEST-BUF-MAX ALLOT
 VARIABLE _ab-manifest-u
@@ -116,8 +119,15 @@ CREATE _ab-find-buf 24 ALLOT
 : ABUILD-EVAL-COLUMN  ( -- column ) EVAL-COLUMN @ ;
 : ABUILD-EVAL-THROW   ( -- throw-code ) EVAL-THROW @ ;
 : ABUILD-EVAL-TOKEN   ( -- addr len ) EVAL-TOKEN ;
+: ABUILD-SOURCE-PATH  ( -- addr len )
+    _ab-source-path _ab-source-path-u @ ;
 : ABUILD-INSTALLED-PATH  ( -- addr len )
     _ab-manifest-path _ab-manifest-path-u @ ;
+
+: _AB-CAPTURE-SOURCE-PATH  ( -- )
+    _ab-project-mft @ MFT-SOURCE
+    DUP _ab-source-path-u !
+    _ab-source-path SWAP CMOVE ;
 
 : _AB-FAIL  ( detail public-status -- public-status )
     SWAP _ab-detail ! ;
@@ -322,7 +332,8 @@ VARIABLE _ab-entry-xt
         ABUILD-E-MANIFEST _AB-FAIL EXIT
     THEN DROP
 
-    _ab-project-mft @ MFT-SOURCE ABUILD-SOURCE-MAX _AB-READ-FILE
+    _AB-CAPTURE-SOURCE-PATH
+    _ab-source-path _ab-source-path-u @ ABUILD-SOURCE-MAX _AB-READ-FILE
     DUP IF >R 2DROP R> EXIT THEN
     DROP _ab-source-u ! _ab-source-a !
     _ab-source-a @ _ab-source-u @ _ab-source-digest SHA3-256-HASH
@@ -424,7 +435,7 @@ VARIABLE _ab-entry-xt
     0 _ab-installed-mft ! 0 _ab-marked !
     0 _ab-eval-depth ! 0 _ab-eval-saved !
     0 _ab-fd ! 0 _abr-buf !
-    0 _ab-image-path-u ! 0 _ab-manifest-path-u ! ;
+    0 _ab-image-path-u ! 0 _ab-manifest-path-u ! 0 _ab-source-path-u ! ;
 
 : ABUILD-INSTALL  ( project-path-a project-path-u -- entry status )
     _ab-busy @ IF 2DROP 0 ABUILD-E-BUSY EXIT THEN

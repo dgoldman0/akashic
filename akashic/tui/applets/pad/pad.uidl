@@ -17,6 +17,7 @@
 </menu>
 <menu label=Build>
 <item text=Build_and_Install do=build-install key=Ctrl+Shift+B/>
+<item text=Go_to_Build_Error do=goto-build-error key=F4/>
 </menu>
 <menu label=Edit>
 <item text=Undo do=undo key=Ctrl+Z/>
@@ -45,6 +46,8 @@
 <item text=Go_to_Line do=goto-line key=Ctrl+G/>
 <separator/>
 <item text=Find do=find key=Ctrl+F/>
+<item text=Find_in_Open_Buffers do=find-open key=Ctrl+Shift+F/>
+<item text=Find_Next do=find-next key=F3/>
 <item text=Find_and_Replace do=replace key=Ctrl+H/>
 <separator/>
 <item text=Next_Tab do=next-tab key=Ctrl+PageDown/>
@@ -91,6 +94,7 @@
 <action do=open key=Ctrl+O/>
 <action do=save key=Ctrl+S/>
 <action do=build-install key=Ctrl+Shift+B/>
+<action do=goto-build-error key=F4/>
 <action do=close-tab key=Ctrl+W/>
 <action do=quit key=Ctrl+Q/>
 <action do=undo key=Ctrl+Z/>
@@ -100,6 +104,8 @@
 <action do=paste key=Ctrl+V/>
 <action do=select-all key=Ctrl+A/>
 <action do=find key=Ctrl+F/>
+<action do=find-open key=Ctrl+Shift+F/>
+<action do=find-next key=F3/>
 <action do=replace key=Ctrl+H/>
 <action do=goto-line key=Ctrl+G/>
 <action do=goto-file key=Ctrl+P/>

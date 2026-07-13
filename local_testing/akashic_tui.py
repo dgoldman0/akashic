@@ -5920,6 +5920,61 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     S" ../escape" _PAD-DO-SAVE-TO 0<> _pc-assert
     S" /escape" _pc-vfs @ VFS-RESOLVE 0= _pc-assert
 
+    \ Open-buffer search reports every match and F3-style navigation walks
+    \ active slots in order before wrapping to the first result.
+    S" alpha needle omega" _PAD-TXTA @ TXTA-SET-TEXT
+    S" /one.f" 0 _PAD-FILENAME!
+    0 _PAD-CURSOR!
+    _PAD-BUF-OPEN DUP 1 = _pc-assert DROP
+    S" needle second needle" _PAD-TXTA @ TXTA-SET-TEXT
+    S" /two.f" 1 _PAD-FILENAME!
+    0 _PAD-BUF-SWITCH
+    S" needle" _PAD-SEARCH-OPEN!
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-GB + @ >R
+    S" NEEDLE" R> SRCH-ICOUNT 1 = _pc-assert
+    _PAD-SEARCH-REPORT 3 = _pc-assert
+    _PAD-OUTPUT-LOG-U @ 0> _pc-assert
+    _PAD-OUTPUT-LOG _PAD-OUTPUT-LOG-U @
+        S" Find in Open Buffers: 3 matches" STR-STR-CONTAINS _pc-assert
+    _PAD-OUTPUT-LOG _PAD-OUTPUT-LOG-U @
+        S" /one.f:1:7: alpha needle omega" STR-STR-CONTAINS _pc-assert
+    _PAD-SEARCH-NEXT _pc-assert
+    _PAD-ACTIVE @ 0= _pc-assert
+    _PAD-TXTA @ _PTO-CURSOR + @ 12 = _pc-assert
+    _PAD-SEARCH-NEXT _pc-assert
+    _PAD-ACTIVE @ 1 = _pc-assert
+    _PAD-TXTA @ _PTO-CURSOR + @ 6 = _pc-assert
+    _PAD-SEARCH-NEXT _pc-assert
+    _PAD-ACTIVE @ 1 = _pc-assert
+    _PAD-TXTA @ _PTO-CURSOR + @ 20 = _pc-assert
+    _PAD-SEARCH-NEXT _pc-assert
+    _PAD-ACTIVE @ 0= _pc-assert
+    _PAD-TXTA @ _PTO-CURSOR + @ 12 = _pc-assert
+
+    \ Builder columns are zero-based.  The retained Pad diagnostic exposes
+    \ a one-based coordinate and F4-style navigation opens the exact source.
+    S" /one.f" DUP _ab-source-path-u ! _ab-source-path SWAP CMOVE
+    1 EVAL-LINE ! 6 EVAL-COLUMN !
+    _PAD-DIAG-CAPTURE
+    _PAD-DIAG-VALID @ _pc-assert
+    _PAD-DIAG-LINE @ 1 = _pc-assert
+    _PAD-DIAG-COLUMN @ 7 = _pc-assert
+    0 _PAD-DO-GOTO-BUILD-ERROR
+    _PAD-ACTIVE @ 0= _pc-assert
+    _PAD-TXTA @ _PTO-CURSOR + @ 6 = _pc-assert
+    1 _PAD-BUF-CLOSE
+
+    \ Diagnostic navigation uses one-based line/column coordinates and
+    \ clamps the column to the target line without changing document bytes.
+    S" first" _PAD-TXTA @ TXTA-SET-TEXT
+    5 _PAD-CURSOR!
+    10 _pc-io C! _pc-io 1 _PAD-TXTA @ TXTA-INS-STR
+    S" second" _PAD-TXTA @ TXTA-INS-STR
+    2 3 _PAD-GOTO-LINE-COLUMN _pc-assert
+    _PAD-TXTA @ _PTO-CURSOR + @ 8 = _pc-assert
+    S" keep" _PAD-TXTA @ TXTA-SET-TEXT
+    0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-FNAME-L + !
+
     65537 ALLOCATE IF -2 THROW THEN DUP >R 65537 88 FILL
     R@ 65537 S" /huge.txt" _pc-put R> FREE
     _PAD-ACTIVE @ _pc-orig ! 0 _pc-calls !
@@ -7517,6 +7572,7 @@ VARIABLE _pkg-xfree
     S" /hello.toml" ABUILD-INSTALL _pkg-status ! _pkg-entry !
     _pkg-status @ ABUILD-S-OK = _pkg-assert
     _pkg-entry @ 0<> _pkg-assert
+    ABUILD-SOURCE-PATH S" /hello.f" COMPARE 0= _pkg-assert
     _pkg-cat @ ACAT-COUNT 1 = _pkg-assert
     _pkg-status @ IF
         ." BUILD STATUS " _pkg-status @ .
@@ -7571,9 +7627,11 @@ VARIABLE _pkg-xfree
     \ Checked source failures discard the mark/relocation reservation and
     \ never add a catalog row.  Warm once, then prove allocator reuse.
     _pkg-bad-build
+    ABUILD-SOURCE-PATH S" /bad.f" COMPARE 0= _pkg-assert
     HERE _pkg-here ! LATEST _pkg-latest ! XMEM-FREE _pkg-xfree !
     19 0 DO _pkg-bad-build LOOP
     5 0 DO _pkg-throw-build LOOP
+    ABUILD-SOURCE-PATH S" /throw.f" COMPARE 0= _pkg-assert
     HERE _pkg-here @ = _pkg-assert LATEST _pkg-latest @ = _pkg-assert
     XMEM-FREE _pkg-xfree @ = _pkg-assert
     _pkg-cat @ ACAT-COUNT 1 = _pkg-assert
@@ -8453,6 +8511,53 @@ def smoke(
                 for line in screen.lines()[top:bottom]
             )
 
+        def desktop_tile_hits(marker: str, tile: int) -> list[tuple[int, int]]:
+            tile_col = tile % 3
+            tile_row = tile // 3
+            content_rows = max(1, screen.rows - 1)
+            left = tile_col * screen.cols // 3
+            right = (tile_col + 1) * screen.cols // 3
+            top = tile_row * content_rows // 2
+            bottom = (tile_row + 1) * content_rows // 2
+            return [
+                (row, col)
+                for row, col in screen.find(marker)
+                if top <= row < bottom and left <= col < right
+            ]
+
+        def send_sgr_mouse(
+            row: int, col: int, *, button: int = 0, release: bool = False
+        ) -> None:
+            terminator = "m" if release else "M"
+            session.send_text(
+                f"\x1b[<{button};{col + 1};{row + 1}{terminator}"
+            )
+
+        def settle_input(
+            failure: str,
+            *,
+            step_budget: int = 150_000_000,
+            wall_timeout: float = 4.0,
+        ) -> bool:
+            nonlocal total_steps, screen
+            remaining = min(step_budget, max_steps - total_steps)
+            if remaining <= 0 or time.monotonic() >= deadline:
+                journey_errors.append(f"{failure} (journey budget exhausted)")
+                return False
+            report = session.run(
+                max_steps=remaining,
+                wall_timeout_s=min(
+                    wall_timeout, max(0.05, deadline - time.monotonic())
+                ),
+                advance_idle=True,
+            )
+            total_steps += report.steps
+            screen = session.snapshot()
+            if report.reason == "halted":
+                journey_errors.append(failure)
+                return False
+            return True
+
         def wait_desktop_tile(
             marker: str,
             tile: int,
@@ -8487,6 +8592,121 @@ def smoke(
                 return True
             journey_errors.append(failure)
             return False
+
+        def run_desk_pointer_journey() -> None:
+            nonlocal screen
+            # Leave Explorer's Preview tab active first, so the final Details
+            # press proves that Desk both focuses the tile and still forwards
+            # the original pointer event into the child.
+            session.send_key("alt+2")
+            if not wait_screen(
+                "[2:File Explo*]",
+                "Desk did not focus File Explorer for pointer setup",
+            ):
+                return
+            screen = session.snapshot()
+            preview_hits = desktop_tile_hits("Preview", 1)
+            preview_observable = False
+            if not preview_hits:
+                journey_errors.append(
+                    "File Explorer's visible Preview tab was not found"
+                )
+            else:
+                send_sgr_mouse(*preview_hits[0])
+                preview_observable = wait_screen_gone(
+                    "autoexec.f",
+                    "File Explorer did not receive the Preview tab press",
+                )
+
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Akashic Pa*]",
+                "Desk did not focus Pad for pointer contracts",
+            ):
+                return
+            session.send_key("alt+m")
+            if not wait_screen(
+                "[1:Akashic Pa~]",
+                "Desk did not minimize Pad for taskbar pointer contracts",
+            ) or not wait_screen(
+                "[2:File Explo*]",
+                "Desk did not focus File Explorer after minimizing Pad",
+            ):
+                return
+
+            screen = session.snapshot()
+            taskbar_row = screen.rows - 1
+            minimized_label = "[1:Akashic Pa~]"
+            pad_hits = [
+                (row, col)
+                for row, col in screen.find(minimized_label)
+                if row == taskbar_row
+            ]
+            if not pad_hits:
+                journey_errors.append("Desk's minimized Pad label was not rendered")
+                return
+            label_row, label_col = pad_hits[0]
+
+            # The cell immediately after the exact rendered label is its
+            # separator and must not activate either neighboring slot.
+            send_sgr_mouse(label_row, label_col + len(minimized_label))
+            if not settle_input("Desk did not process the taskbar separator press"):
+                return
+            separator_text = screen.text()
+            if (
+                minimized_label not in separator_text
+                or "[2:File Explo*]" not in separator_text
+            ):
+                journey_errors.append("Desk's taskbar separator changed focus")
+                return
+
+            send_sgr_mouse(label_row, label_col + 1)
+            if not wait_screen(
+                "[1:Akashic Pa*]",
+                "Pad's live taskbar label did not restore and focus it",
+            ):
+                return
+
+            screen = session.snapshot()
+            taskbar_row = screen.rows - 1
+            explorer_label = "[2:File Explo]"
+            explorer_hits = [
+                (row, col)
+                for row, col in screen.find(explorer_label)
+                if row == taskbar_row
+            ]
+            if not explorer_hits:
+                journey_errors.append("Desk's File Explorer taskbar label was not rendered")
+                return
+            release_row, release_col = explorer_hits[0]
+            send_sgr_mouse(release_row, release_col + 1, release=True)
+            if not settle_input("Desk did not process the taskbar release"):
+                return
+            release_text = screen.text()
+            if (
+                "[1:Akashic Pa*]" not in release_text
+                or "[2:File Explo*]" in release_text
+            ):
+                journey_errors.append("A taskbar button release changed Desk focus")
+                return
+
+            screen = session.snapshot()
+            details_hits = desktop_tile_hits("Details", 1)
+            if not details_hits:
+                journey_errors.append(
+                    "File Explorer's visible Details tab was not found"
+                )
+                return
+            send_sgr_mouse(*details_hits[0])
+            if wait_screen(
+                "[2:File Explo*]",
+                "Clicking File Explorer did not focus slot 2",
+            ) and preview_observable:
+                wait_desktop_tile(
+                    "autoexec.f",
+                    1,
+                    "Desk focused File Explorer but did not deliver its Details press",
+                )
 
         def run_desk_agent_journey() -> None:
             session.send_key("alt+5")
@@ -8934,6 +9154,9 @@ def smoke(
                         step_budget=4_000_000_000,
                         wall_timeout=120.0,
                     )
+
+        if initial_ready and profile_name == "desktop":
+            run_desk_pointer_journey()
 
         if initial_ready and profile_name in ("desktop", "pad"):
             if profile_name == "desktop":
@@ -9388,8 +9611,30 @@ def smoke(
                 if wait_screen(
                     "Welcome to Ak", "Pad could not open /welcome.txt"
                 ):
+                    if profile_name == "pad":
+                        session.send_key("ctrl+shift+f")
+                        if wait_screen(
+                            "Find in open buffers:",
+                            "Ctrl+Shift+F did not open Pad's open-buffer search",
+                        ):
+                            session.send_text("Welcome")
+                            session.send_key("enter")
+                            if wait_screen(
+                                "/welcome.txt:1:1",
+                                "Pad's open-buffer search did not render its match",
+                            ):
+                                session.send_key("f3")
+                                if settle_input(
+                                    "Pad did not process F3 open-buffer navigation"
+                                ) and "Find in open buffers:" in screen.text():
+                                    journey_errors.append(
+                                        "Pad left its open-buffer search prompt active after F3"
+                                    )
                     session.send_key("ctrl+f")
                     if wait_screen("Find:", "Ctrl+F did not open Find"):
+                        if profile_name == "pad":
+                            for _ in range(len("Welcome")):
+                                session.send_key("backspace")
                         session.send_text("editable")
                         session.send_key("enter")
                         if profile_name == "pad":

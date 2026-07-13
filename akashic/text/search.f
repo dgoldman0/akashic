@@ -131,7 +131,7 @@ VARIABLE _SRCH-NU       \ needle length
 \ SRCH-COUNT ( ndl-a ndl-u gb -- n )
 \   Count non-overlapping occurrences (forward, case-sensitive).
 : SRCH-COUNT  ( ndl-a ndl-u gb -- n )
-    _SRCH-SETUP DROP                           \ pos not needed
+    _SRCH-GB ! _SRCH-NU ! _SRCH-NA !
     _SRCH-NU @ 0= IF 0 EXIT THEN
     0  0                                       ( count pos )
     BEGIN
@@ -149,7 +149,7 @@ VARIABLE _SRCH-NU       \ needle length
 \ SRCH-ICOUNT ( ndl-a ndl-u gb -- n )
 \   Count non-overlapping occurrences (case-insensitive).
 : SRCH-ICOUNT  ( ndl-a ndl-u gb -- n )
-    _SRCH-SETUP DROP
+    _SRCH-GB ! _SRCH-NU ! _SRCH-NA !
     _SRCH-NU @ 0= IF 0 EXIT THEN
     0  0
     BEGIN

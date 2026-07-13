@@ -1141,9 +1141,16 @@ VARIABLE _DRCI-IOR
 \  §8 — Focus, Minimize, Restore
 \ =====================================================================
 
+VARIABLE _DFOCUS-RELAYOUT
+
 : DESK-FOCUS-ID  ( id -- )
+    0 _DFOCUS-RELAYOUT !
     _DESK-FIND-ID DUP 0= IF DROP EXIT THEN
-    DUP _SL-STATE @ _ST-MINIMIZED = IF DROP EXIT THEN
+    DUP _SL-STATE @ _ST-MINIMIZED = IF
+        -1 _DFOCUS-RELAYOUT !
+        DUP _DESK-LAST-MIN-SA @ = IF 0 _DESK-LAST-MIN-SA ! THEN
+        _ST-RUNNING OVER _SL-STATE !
+    THEN
     _DESK-FOCUS-SA @ ?DUP IF
         DUP _SL-STATE @ _ST-FOCUSED = IF
             _ST-RUNNING SWAP _SL-STATE !
@@ -1151,7 +1158,7 @@ VARIABLE _DRCI-IOR
     THEN
     _ST-FOCUSED OVER _SL-STATE !
     _DESK-FOCUS-SA !
-    ASHELL-DIRTY! ;
+    _DFOCUS-RELAYOUT @ IF DESK-RELAYOUT ELSE ASHELL-DIRTY! THEN ;
 
 : DESK-MINIMIZE-ID  ( id -- )
     _DESK-FIND-ID DUP 0= IF DROP EXIT THEN
@@ -1685,6 +1692,25 @@ VARIABLE _DESK-TB-POS
     DUP 10 / 10 MOD 48 + _DTB-CH
     10 MOD 48 + _DTB-CH ;
 
+\ Build the exact live-slot label used by both painting and pointer
+\ hit-testing.  The separator cell is deliberately not part of the label.
+: _DESK-TASKBAR-LABEL  ( slot -- addr len )
+    0 _DESK-TB-POS !
+    91 _DTB-CH
+    DUP _SL-ID @ _DTB-DIGIT
+    58 _DTB-CH
+    DUP _SL-DESC @ ?DUP IF
+        APP.TITLE-A @ ?DUP IF
+            OVER _SL-DESC @ APP.TITLE-U @
+            DUP 10 > IF DROP 10 THEN
+            _DTB-STR
+        ELSE S" App" _DTB-STR THEN
+    ELSE S" App" _DTB-STR THEN
+    DUP _SL-STATE @ _ST-FOCUSED = IF 42 _DTB-CH THEN
+    _SL-STATE @ _ST-MINIMIZED = IF 126 _DTB-CH THEN
+    93 _DTB-CH
+    _DESK-TB-BUF _DESK-TB-POS @ ;
+
 VARIABLE _DTB-COL
 VARIABLE _DTB-ROW
 VARIABLE _DAS-A
@@ -1742,21 +1768,7 @@ VARIABLE _DAS-COL
             _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
         THEN THEN
         \ Build label: [id:title*] or [id:title~]
-        0 _DESK-TB-POS !
-        91 _DTB-CH
-        DUP _SL-ID @ _DTB-DIGIT
-        58 _DTB-CH
-        DUP _SL-DESC @ ?DUP IF
-            APP.TITLE-A @ ?DUP IF
-                OVER _SL-DESC @ APP.TITLE-U @
-                DUP 10 > IF DROP 10 THEN
-                _DTB-STR
-            ELSE S" App" _DTB-STR THEN
-        ELSE S" App" _DTB-STR THEN
-        DUP _SL-STATE @ _ST-FOCUSED = IF 42 _DTB-CH THEN
-        DUP _SL-STATE @ _ST-MINIMIZED = IF 126 _DTB-CH THEN
-        93 _DTB-CH
-        _DESK-TB-BUF _DESK-TB-POS @
+        DUP _DESK-TASKBAR-LABEL
         _DTB-ROW @ _DTB-COL @ DRW-TEXT
         _DESK-TB-POS @ _DTB-COL +!
         \ space separator
@@ -1779,6 +1791,23 @@ VARIABLE _DAS-COL
     THEN
     _DESK-PAINT-AGENT-STATE
     DRW-STYLE-RESTORE ;
+
+VARIABLE _DTS-COL
+VARIABLE _DTS-START
+VARIABLE _DTS-END
+
+: _DESK-TASKBAR-SLOT-AT  ( col -- slot | 0 )
+    _DTS-COL ! 0 _DTS-START !
+    _DESK-HEAD @
+    BEGIN ?DUP WHILE
+        DUP _DESK-TASKBAR-LABEL NIP
+        _DTS-START @ + _DTS-END !
+        _DTS-COL @ _DTS-START @ >=
+        _DTS-COL @ _DTS-END @ < AND IF EXIT THEN
+        _DTS-END @ 1+ _DTS-START !
+        _SL-NEXT @
+    REPEAT
+    0 ;
 
 \ =====================================================================
 \  §10 — APP-DESC Callbacks
@@ -2118,15 +2147,32 @@ VARIABLE _DTA-RH   VARIABLE _DTA-RW
 
 \ _DESK-DISPATCH-MOUSE ( ev -- flag )
 \   Handle a synthetic mouse event from the shell cursor.
-\   Hit-test tiles, context-switch, and forward to UTUI-DISPATCH-MOUSE.
+\   Activate live taskbar entries or hit-test tiles, focus on a left press,
+\   context-switch, and forward to UTUI-DISPATCH-MOUSE.
 VARIABLE _DDM-EV
+VARIABLE _DDM-FOCUS-CHANGED
+
+: _DESK-DISPATCH-TASKBAR  ( ev -- handled? )
+    DUP ASHELL-MOUSE-BTN KEY-MOUSE-LEFT <> IF DROP 0 EXIT THEN
+    DUP ASHELL-MOUSE-ROW SCR-H 1- <> IF DROP 0 EXIT THEN
+    ASHELL-MOUSE-COL _DESK-TASKBAR-SLOT-AT ?DUP IF
+        _SL-ID @ DESK-FOCUS-ID -1
+    ELSE
+        0
+    THEN ;
 
 : _DESK-DISPATCH-MOUSE  ( ev -- flag )
     DUP _DDM-EV !
+    DUP _DESK-DISPATCH-TASKBAR IF DROP -1 EXIT THEN
+    0 _DDM-FOCUS-CHANGED !
     DUP ASHELL-MOUSE-ROW OVER ASHELL-MOUSE-COL   ( ev row col )
     2DUP _DESK-TILE-AT                             ( ev row col slot|0 )
     DUP 0= IF DROP 2DROP DROP 0 EXIT THEN
     >R 2DROP DROP                                  ( R: slot )
+    _DDM-EV @ ASHELL-MOUSE-BTN KEY-MOUSE-LEFT = IF
+        R@ _DESK-FOCUS-SA @ <> IF -1 _DDM-FOCUS-CHANGED ! THEN
+        R@ _SL-ID @ DESK-FOCUS-ID
+    THEN
     R@ _SL-HAS-UIDL @ IF
         R@ _DESK-CTX-SWITCH
         _DDM-EV @ ASHELL-MOUSE-ROW
@@ -2140,7 +2186,7 @@ VARIABLE _DDM-EV
         THEN
     THEN
     R> DROP
-    0 ;
+    _DDM-FOCUS-CHANGED @ ;
 
 \ --- Event ---
 \

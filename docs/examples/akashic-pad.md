@@ -36,9 +36,13 @@ it, see [`local_testing/README.md`](../../local_testing/README.md).
   replace, stale-write refusal, and ordinary-file export.
 - Crash-recoverable staged replacement with exact readback, including files
   that shrink and files that grow into fragmented MP64FS extents.
-- Sidebar file explorer and optional output pane.
+- Sidebar file explorer and a bounded search/build output pane.
 - Clipboard copy, cut, and paste.
-- Find with wraparound, single replacement, go to line, and go to file.
+- Current-buffer find with wraparound, Find in Open Buffers with dirty and
+  untitled-buffer coverage, F3 result navigation, single replacement, go to
+  line, and go to file.
+- Trusted-local Build & Install from a project manifest, with retained
+  evaluator diagnostics and F4 source navigation after a compile failure.
 - Word, line, and full-document selection.
 - Dirty-buffer confirmation for close tab, close all, and quit.
 - TOML-configurable colors and responsive terminal layout.
@@ -64,9 +68,13 @@ selection.
 | Ctrl+L | Select current line, including its line break |
 | Ctrl+Shift+K | Delete current line |
 | Ctrl+F | Find |
+| Ctrl+Shift+F | Find in all open buffers and show a bounded result summary |
+| F3 | Move to the next match in the active search scope |
 | Ctrl+H | Find and replace |
 | Ctrl+G | Go to line |
 | Ctrl+P | Go to file |
+| Ctrl+Shift+B | Build and install the active saved project manifest |
+| F4 | Open the source location from the most recent build failure |
 | Ctrl+B | Toggle sidebar |
 | Ctrl+J | Toggle output pane |
 | Ctrl+PageDown / Ctrl+PageUp | Next / previous tab |
@@ -84,6 +92,7 @@ pad.f / pad.uidl
   |     +-- gap-buf.f                text storage and line index
   |     +-- undo.f                   per-buffer edit history
   +-- prompt.f                       non-blocking status-row command bar
+  +-- app-builder.f                  checked trusted-local build and install
   +-- vfs.f + vfs-mp64fs.f           file I/O and persistence
   |     +-- vfs-replace.f            staged replace and recovery
   +-- resource-registry.f            exact semantic resource references
@@ -103,6 +112,24 @@ The status row doubles as a command bar. `prompt.f` receives normal shell key
 events, so open, Save As, find, replace, and go-to operations remain inside the
 main event loop. This is important when Pad is hosted by Desk: no nested
 blocking input loop steals terminal ownership from the desktop.
+
+## Search And Build Diagnostics
+
+Ctrl+F searches the active buffer and retains the query for F3. Ctrl+Shift+F
+searches every currently open buffer, including unsaved text and untitled
+buffers. It writes a bounded summary to the output pane with buffer label,
+one-based line and byte-column, and a clipped source-line preview. F3 then
+cycles through exact matches across those buffers and wraps to the beginning.
+This is deliberately named Find in Open Buffers: it does not imply a recursive
+VFS or project-directory search.
+
+Build & Install treats the active saved file as a project manifest and saves
+dirty named buffers before invoking the checked trusted-local builder. A
+compile failure retains the validated manifest source path together with the
+evaluator's line, column, token, and throw diagnostics after dictionary
+rollback. The output pane shows that location, and F4 opens or focuses its
+source buffer and moves the cursor there. A later non-busy build replaces the
+retained diagnostic; failures before source validation provide no jump target.
 
 ## File I/O
 
@@ -175,12 +202,16 @@ covered by focused gap-buffer tests and the Pad contract journey.
 ## Current Boundaries
 
 - There is no syntax-highlighting or language-server layer yet.
-- The output pane is present but is not connected to a build/run task system.
+- The output pane reports open-buffer search and the specialized Build &
+  Install workflow; there is no configurable general-purpose task runner yet.
 - Loading one file is capped at 64 KiB. All 16 retained tab slots have been
   exercised simultaneously with worst-case newline-dense 64 KiB documents;
   packed line indexes are reclaimed independently of the fixed editor arena.
 - Find-and-replace replaces one wrapped match per invocation rather than all
   matches.
+- Search does not yet walk a project directory or the general VFS. That needs
+  an explicit search root and a public traversal API whose inode lifetimes stay
+  valid while files are opened.
 
 These are product-level extensions; the core multi-buffer editing, navigation,
 selection, persistence, and Desk-hosted workflows are functional.

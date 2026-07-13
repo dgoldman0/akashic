@@ -84,7 +84,7 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `agent-widgets` | provider-neutral account and run-settings panel states, selection, refresh, cancellation, direct Escape close behavior, and stack balance |
 | `agent-device-ui` | external-browser device code, pending/connected/sign-out states, catalog loading, model/reasoning/speed/verbosity controls, conversation, cancellation, and resize through a reusable native development source |
 | `pad` | edit/undo/redo, open/find/go-to, fragmented multi-sector Save As, exact bytes, word and line replacement, dirty-state redraw |
-| `pad-contracts` | canonical paths, exact bounded load, crash-recoverable replacement, failure rollback, dirty-close negotiation, all 16 worst-case newline-dense buffers, repeated slot reuse, and resource/stack balance |
+| `pad-contracts` | open-buffer search reporting and wraparound navigation, exact line/column jumps, canonical paths, exact bounded load, crash-recoverable replacement, failure rollback, dirty-close negotiation, all 16 worst-case newline-dense buffers, repeated slot reuse, and resource/stack balance |
 | `fexplorer` | create file/folder, rename, copy/paste, confirmed deletion, preview, and persisted MP64FS metadata |
 | `daybook` | task capture, completion, exact Markdown persistence, responsive calendar/agenda resize |
 | `daybook-contracts` | transactional strict import, source bounds, injected short reads, staged replacement, interrupted-publication recovery, dirty-state preservation, close negotiation, and stack balance |
