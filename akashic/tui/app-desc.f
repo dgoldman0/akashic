@@ -7,6 +7,10 @@
 \  APP-DESC is the TUI view/lifecycle adapter for a generic Akashic
 \  component.  The host creates a CINST and passes it to every callback.
 \  Applets do not own the terminal or event loop.
+\
+\  REQUEST-CLOSE is advisory and fail-closed.  A host asks before a
+\  normal user/host close, then calls SHUTDOWN only after ALLOW.  The
+\  callback may update UI state while returning CANCEL or DEFER.
 \ =====================================================================
 
 PROVIDED akashic-tui-app-desc
@@ -17,6 +21,16 @@ REQUIRE ../runtime/instance.f
 1          CONSTANT APP-ABI-VERSION
 
 1 CONSTANT APP-F-TICK-WHEN-CLEAN
+
+\ Close reasons passed to APP.REQUEST-CLOSE-XT.
+1 CONSTANT APP-CLOSE-R-QUIT             \ app called ASHELL-QUIT
+2 CONSTANT APP-CLOSE-R-WINDOW           \ host/window close command
+3 CONSTANT APP-CLOSE-R-HOST-SHUTDOWN    \ containing host is exiting
+
+\ Decisions returned by APP.REQUEST-CLOSE-XT ( reason instance -- decision ).
+0 CONSTANT APP-CLOSE-D-ALLOW
+1 CONSTANT APP-CLOSE-D-CANCEL
+2 CONSTANT APP-CLOSE-D-DEFER
 
   0 CONSTANT _AD-MAGIC
   8 CONSTANT _AD-ABI
@@ -37,7 +51,7 @@ REQUIRE ../runtime/instance.f
 128 CONSTANT _AD-UIDL-FILE-A
 136 CONSTANT _AD-UIDL-FILE-U
 144 CONSTANT _AD-ACTIVATE          \ ( instance -- ), bind dynamic state
-152 CONSTANT _AD-RESERVED-1
+152 CONSTANT _AD-REQUEST-CLOSE     \ ( reason instance -- decision )
 
 160 CONSTANT APP-DESC
 
@@ -59,7 +73,13 @@ REQUIRE ../runtime/instance.f
 : APP.FLAGS        ( desc -- a ) _AD-FLAGS + ;
 : APP.UIDL-FILE-A  ( desc -- a ) _AD-UIDL-FILE-A + ;
 : APP.UIDL-FILE-U  ( desc -- a ) _AD-UIDL-FILE-U + ;
-: APP.ACTIVATE-XT   ( desc -- a ) _AD-ACTIVATE + ;
+: APP.ACTIVATE-XT  ( desc -- a ) _AD-ACTIVATE + ;
+: APP.REQUEST-CLOSE-XT ( desc -- a ) _AD-REQUEST-CLOSE + ;
+
+: APP-CLOSE-DECISION-VALID?  ( decision -- flag )
+    DUP APP-CLOSE-D-ALLOW =
+    OVER APP-CLOSE-D-CANCEL = OR
+    SWAP APP-CLOSE-D-DEFER = OR ;
 
 : APP-DESC-INIT  ( desc -- )
     DUP APP-DESC 0 FILL

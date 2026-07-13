@@ -229,10 +229,14 @@ def _correctness_program() -> list[str]:
         "VARIABLE _TG-DEL-A",
         "VARIABLE _TG-DEL-U",
         "VARIABLE _TG-T0",
+        "VARIABLE _TG-X0",
+        "VARIABLE _TG-XFREE",
         "CREATE _TG-SRC 2048 ALLOT",
         "CREATE _TG-COPY 2048 ALLOT",
         ": _TG-ASSERT  1 _TG-CHECKS +! 0= IF 1 _TG-FAILS +! .\" FAIL# \" _TG-CHECKS @ . CR THEN ;",
+        ": _TG-XMEM-AVAIL  0 _TG-XFREE ! XMEM-FL @ BEGIN DUP WHILE DUP @ _TG-XFREE +! 8 + @ REPEAT DROP XMEM-FREE _TG-XFREE @ + ;",
         "0 _TG-FAILS ! 0 _TG-CHECKS ! DEPTH _TG-DEPTH !",
+        "_TG-XMEM-AVAIL _TG-X0 !",
         "524288 A-XMEM ARENA-NEW DUP 0= _TG-ASSERT DROP _TG-ARENA !",
         "16 _TG-ARENA @ GB-NEW _TG-GB !",
     ]
@@ -360,6 +364,9 @@ def _correctness_program() -> list[str]:
         'CYCLES _TG-T0 @ - ." GB-INC-CYCLES " . CR',
         "_TG-GB @ _GB-T ! CYCLES _TG-T0 ! _GB-REBUILD-LINES",
         'CYCLES _TG-T0 @ - ." GB-FULL-CYCLES " . CR',
+        "_TG-GB @ GB-FREE",
+        "_TG-ARENA @ ARENA-DESTROY",
+        "_TG-XMEM-AVAIL _TG-X0 @ = _TG-ASSERT",
         '_TG-FAILS @ 0= IF ." GB TEST PASS " ELSE ." GB TEST FAIL " THEN '
         "_TG-CHECKS @ . _TG-FAILS @ . CR",
     ]

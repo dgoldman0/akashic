@@ -15,7 +15,9 @@ selected for keyboard actions.
 
 Quick capture uses the shared non-blocking prompt widget. Creating or changing
 an entry synchronizes `/daybook.md` immediately, so Pad and File Explorer see
-the same ordinary file.
+the same ordinary file. A failed save leaves Daybook visibly dirty. Closing a
+dirty Daybook is fail-closed and requires typing `DISCARD`; a second close
+request is issued by the confirmation, so Desk does not prompt the child twice.
 
 ## Durable Format
 
@@ -30,10 +32,39 @@ Daybook recognizes these UTF-8 Markdown records:
 > 2026-07-10 | Keep this note legible outside the app
 ```
 
-Unknown lines are ignored when loading. Saving rewrites the recognized entries
-in canonical form beneath the `# Daybook` heading. The current MP64FS write
-path is exact and synchronized, but it is not yet a transactional or
-two-generation replacement protocol.
+Import is deliberately strict and lossless. A source must contain one canonical
+`# Daybook` heading before its records; blank lines and the three record forms
+shown above are the only accepted lines. Dates and event times must be valid,
+`[x]` is lowercase, record text is valid single-line UTF-8 of at most 120 bytes,
+and the file may contain at most 96 records. Files over 32 KiB are rejected
+before any read. Unknown or malformed lines, short reads, overlong text, and
+capacity overflow reject the complete import rather than dropping or
+truncating data.
+
+Load uses an exact read and validates the complete buffer in a non-mutating
+first pass. Only a successful second pass replaces the current model; every
+failure preserves both the entries and dirty state. Reloading a dirty model
+requires typing `RELOAD`, and a failed confirmed reload still preserves it.
+Any load or recovery failure also blocks subsequent saves, preventing an edit
+from overwriting the unaccepted external source. The status bar reports
+`Source blocked`; saving is enabled again only after a clean reload (or a
+confirmed reload when the in-memory model is dirty).
+
+The exact-read path treats its file descriptor and previous VFS selector as
+separate owned cleanup stages. It relinquishes each ownership marker before
+calling the corresponding void cleanup operation, so a cleanup that completes
+and then throws is never retried. Close and selector restoration are caught
+independently, and restoration is still attempted when close fails. Any such
+cleanup fault is normalized to a load I/O failure: parsing and publication do
+not run, entries and dirty state remain unchanged, and the source becomes
+blocked until a clean reload succeeds.
+
+Save uses the generic VFS staged-replacement protocol. The candidate is written
+and read back exactly, synchronized, and published through a checksummed
+rollback marker and same-directory backup. Activation and every load recover a
+pending replacement before opening `/daybook.md`; the live target is never
+truncated in place. A committed target whose backup cleanup remains is treated
+as saved, while ambiguous or corrupt recovery state fails closed.
 
 ## Keys
 
@@ -66,10 +97,20 @@ disk, captures a task through the prompt, completes it, verifies the exact
 Markdown record in live MP64FS state, resizes the terminal, and writes text,
 cell, raw-terminal, and PNG captures under `local_testing/out/`.
 
+`python3 local_testing/akashic_tui.py smoke --profile daybook-contracts` adds
+deterministic checks for atomic strict import, unknown/malformed lines, the
+96-record and 120-byte limits, pre-read oversize rejection, injected short
+reads, staged persistence, interrupted-publication recovery, artifact cleanup,
+corrupt-marker refusal, blocked-source overwrite prevention, dirty-state
+preservation, and close negotiation. It also injects after-effect throws from
+descriptor close and VFS-selector restoration, proving that both cleanup
+stages are attempted exactly once, the descriptor free list remains intact,
+the previous selector is restored, and no failed load publishes a model.
+
 ## Deliberate Next Steps
 
 The broader ecosystem design still calls for project/tag fields, deferral,
-search and backlinks, daily note files, Pad `open-path` intents, and
-crash-recoverable replacement. Those features should build on this proven
-calendar, prompt, VFS, and responsive-layout path rather than changing the
-plain-text source-of-truth principle.
+search and backlinks, daily note files, and Pad `open-path` intents. Those
+features should build on this strict calendar, prompt, recovery, VFS, and
+responsive-layout path rather than changing the plain-text source-of-truth
+principle.

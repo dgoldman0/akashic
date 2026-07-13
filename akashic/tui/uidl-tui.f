@@ -3475,19 +3475,13 @@ GUARD _utui-guard
 ' UTUI-WIDGET-SET     CONSTANT _utui-widget-set-xt
 ' UTUI-ELEM-RGN       CONSTANT _utui-elem-rgn-xt
 
-: UTUI-LOAD           _utui-load-xt           _utui-guard WITH-GUARD ;
 : UTUI-BIND-STATE     _utui-bind-state-xt     _utui-guard WITH-GUARD ;
-: UTUI-PAINT          _utui-paint-xt          _utui-guard WITH-GUARD ;
-: UTUI-RELAYOUT       _utui-relayout-xt       _utui-guard WITH-GUARD ;
-: UTUI-DISPATCH-KEY   _utui-dispatch-key-xt   _utui-guard WITH-GUARD ;
-: UTUI-DISPATCH-MOUSE _utui-dispatch-mouse-xt _utui-guard WITH-GUARD ;
 : UTUI-FOCUS          _utui-focus-xt          _utui-guard WITH-GUARD ;
 : UTUI-FOCUS!         _utui-focus-s-xt        _utui-guard WITH-GUARD ;
 : UTUI-FOCUS-NEXT     _utui-focus-next-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS-PREV     _utui-focus-prev-xt     _utui-guard WITH-GUARD ;
 : UTUI-BY-ID          _utui-by-id-xt          _utui-guard WITH-GUARD ;
 : UTUI-WIDGET@        _utui-widget-at-xt      _utui-guard WITH-GUARD ;
-: UTUI-TAB-SELECT     _utui-tab-select-xt     _utui-guard WITH-GUARD ;
 : UTUI-DO!            _utui-do-s-xt           _utui-guard WITH-GUARD ;
 : UTUI-SHOW-DIALOG    _utui-show-dialog-xt    _utui-guard WITH-GUARD ;
 : UTUI-HIDE-DIALOG    _utui-hide-dialog-xt    _utui-guard WITH-GUARD ;
@@ -3499,4 +3493,15 @@ GUARD _utui-guard
 : UTUI-SET-ATTR       _utui-set-attr-xt       _utui-guard WITH-GUARD ;
 : UTUI-WIDGET-SET     _utui-widget-set-xt     _utui-guard WITH-GUARD ;
 : UTUI-ELEM-RGN       _utui-elem-rgn-xt       _utui-guard WITH-GUARD ;
+
+\ These entries own the current UIDL context and execute registered layout,
+\ render, widget, or app action callbacks.  They run only on the UI owner
+\ core and deliberately do not retain _utui-guard across callback code.
+\ Cross-core callers must post a lifecycle/render/input request to that owner.
+: UTUI-LOAD           _utui-load-xt EXECUTE ;
+: UTUI-PAINT          _utui-paint-xt EXECUTE ;
+: UTUI-RELAYOUT       _utui-relayout-xt EXECUTE ;
+: UTUI-DISPATCH-KEY   _utui-dispatch-key-xt EXECUTE ;
+: UTUI-DISPATCH-MOUSE _utui-dispatch-mouse-xt EXECUTE ;
+: UTUI-TAB-SELECT     _utui-tab-select-xt EXECUTE ;
 [THEN] [THEN]

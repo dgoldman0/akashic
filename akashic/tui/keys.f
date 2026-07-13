@@ -12,7 +12,7 @@
 \
 \  Public API:
 \   KEY-READ          ( ev -- flag )       Blocking read, fill event
-\   KEY-POLL          ( ev -- flag )       Non-blocking check
+\   KEY-POLL          ( ev -- flag )       Poll; may finish a sequence
 \   KEY-WAIT          ( ev ms -- flag )    Blocking with timeout
 \   KEY-IS-CHAR?      ( ev -- flag )       Character event?
 \   KEY-IS-SPECIAL?   ( ev -- flag )       Special key event?
@@ -26,7 +26,8 @@
 \   KEY-MOUSE-X       ( -- addr )          VARIABLE: last mouse column
 \   KEY-MOUSE-Y       ( -- addr )          VARIABLE: last mouse row
 \
-\  Not reentrant (shared state VARIABLEs for decode).
+\  Not reentrant (shared state VARIABLEs for decode).  Input-consuming
+\  entry points belong to one UI/input owner core.
 \  Uses BIOS MS@ for escape timeout timing.
 \ =================================================================
 
@@ -601,7 +602,8 @@ VARIABLE _KEY-B0             \ first raw byte
     -1 ;
 
 \ _KEY-READ-RAW ( ev -- flag )
-\   Non-blocking: check KEY?, read first byte, then decode.
+\   Return immediately if no first byte is pending.  Once a byte is consumed,
+\   sequence decoding can perform bounded waits or read UTF-8 continuations.
 : _KEY-READ-RAW  ( ev -- flag )
     _KEY-RAW? 0= IF DROP 0 EXIT THEN
     _KEY-RAW@ _KEY-B0 !
@@ -612,8 +614,9 @@ VARIABLE _KEY-B0             \ first raw byte
 \ =====================================================================
 
 \ KEY-POLL ( ev -- flag )
-\   Non-blocking: check if input is available and decode one event.
-\   Returns TRUE if event was filled, FALSE if no input.
+\   Check if input is available and decode one event.  Returns immediately
+\   with FALSE if no first byte is pending, but may wait to finish a sequence
+\   after consuming that byte.  Returns TRUE if an event was filled.
 : KEY-POLL  ( ev -- flag )
     _KEY-READ-RAW ;
 
@@ -665,9 +668,14 @@ GUARD _keys-guard
 ' KEY-HAS-SHIFT?      CONSTANT _keys-hshift-xt
 ' KEY-TIMEOUT!        CONSTANT _keys-timeout-xt
 
-: KEY-READ            _keys-read-xt _keys-guard WITH-GUARD ;
-: KEY-POLL            _keys-poll-xt _keys-guard WITH-GUARD ;
-: KEY-WAIT            _keys-wait-xt _keys-guard WITH-GUARD ;
+\ Input-consuming entries own the shared decoder state.  All three can wait:
+\ KEY-READ blocks, KEY-WAIT polls to a deadline, and KEY-POLL may wait after
+\ consuming the first byte of an escape or UTF-8 sequence.  They therefore
+\ run unwrapped on the UI/input owner core; cross-core callers must post or
+\ inject input for that owner rather than holding _keys-guard across a wait.
+: KEY-READ            _keys-read-xt EXECUTE ;
+: KEY-POLL            _keys-poll-xt EXECUTE ;
+: KEY-WAIT            _keys-wait-xt EXECUTE ;
 : KEY-IS-CHAR?        _keys-ischar-xt _keys-guard WITH-GUARD ;
 : KEY-IS-SPECIAL?     _keys-isspec-xt _keys-guard WITH-GUARD ;
 : KEY-IS-MOUSE?       _keys-ismouse-xt _keys-guard WITH-GUARD ;

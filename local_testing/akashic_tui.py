@@ -298,6 +298,22 @@ VARIABLE _ts-store3
 VARIABLE _ts-store4
 VARIABLE _ts-fd
 VARIABLE _ts-snapshot-u
+VARIABLE _ts-other-vfs
+VARIABLE _ts-fault-buffer
+VARIABLE _ts-fault-generation
+VARIABLE _ts-fault-slot
+VARIABLE _ts-fault-fd-head
+VARIABLE _ts-fault-fd-next
+VARIABLE _ts-fault-use-count
+VARIABLE _ts-fault-read-count
+VARIABLE _ts-fault-decode-count
+VARIABLE _ts-fault-heap
+VARIABLE _ts-fault-conv
+VARIABLE _ts-probe-store
+VARIABLE _ts-probe-conv
+VARIABLE _ts-read-conv
+VARIABLE _ts-read-generation
+VARIABLE _ts-read-status
 CREATE _ts-bad 8 ALLOT
 
 : _ts-assert  ( flag -- )
@@ -321,6 +337,261 @@ CREATE _ts-bad 8 ALLOT
     _ts-bad 8 _ts-fd @ VFS-WRITE 8 = _ts-assert
     _ts-fd @ VFS-CLOSE
     _ts-vfs @ VFS-SYNC 0= _ts-assert ;
+
+: _ts-buffer-reusable?  ( size -- flag )
+    ALLOCATE DUP IF 2DROP 0 EXIT THEN DROP
+    DUP _ts-fault-buffer @ = >R FREE R> ;
+
+: _ts-fault-begin  ( -- )
+    0 _ts-fault-buffer !
+    _ts-store @ AVFSSTORE.GENERATION @ _ts-fault-generation !
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @ _ts-fault-slot !
+    _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head !
+    ?DUP IF FD.FREE @ ELSE 0 THEN _ts-fault-fd-next !
+    HEAP-FREE-BYTES _ts-fault-heap !
+    _ts-other-vfs @ VFS-USE ;
+
+: _ts-save-clean?  ( -- )
+    VFS-CUR _ts-other-vfs @ = _ts-assert
+    _AVW-FD @ 0= _ts-assert
+    _AVW-BUF @ 0= _ts-assert
+    _AVW-HAVE-OLD-VFS @ 0= _ts-assert
+    _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
+    ?DUP IF FD.FREE @ ELSE 0 THEN
+    _ts-fault-fd-next @ = _ts-assert
+    HEAP-FREE-BYTES _ts-fault-heap @ = _ts-assert
+    _ts-store @ AVFSSTORE.GENERATION @
+    _ts-fault-generation @ = _ts-assert
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @
+    _ts-fault-slot @ = _ts-assert ;
+
+: _ts-read-clean?  ( -- )
+    VFS-CUR _ts-other-vfs @ = _ts-assert
+    _AVR-FD @ 0= _ts-assert
+    _AVR-BUF @ 0= _ts-assert
+    _AVR-HAVE-OLD-VFS @ 0= _ts-assert
+    _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
+    ?DUP IF FD.FREE @ ELSE 0 THEN
+    _ts-fault-fd-next @ = _ts-assert
+    HEAP-FREE-BYTES _ts-fault-heap @ = _ts-assert
+    _ts-store @ AVFSSTORE.GENERATION @
+    _ts-fault-generation @ = _ts-assert
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @
+    _ts-fault-slot @ = _ts-assert ;
+
+: _ts-save-published-clean?  ( -- )
+    VFS-CUR _ts-other-vfs @ = _ts-assert
+    _AVW-FD @ 0= _ts-assert
+    _AVW-BUF @ 0= _ts-assert
+    _AVW-HAVE-OLD-VFS @ 0= _ts-assert
+    _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
+    ?DUP IF FD.FREE @ ELSE 0 THEN
+    _ts-fault-fd-next @ = _ts-assert
+    HEAP-FREE-BYTES _ts-fault-heap @ = _ts-assert
+    _ts-store @ AVFSSTORE.GENERATION @
+    _ts-fault-generation @ 1+ = _ts-assert
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @
+    _ts-fault-slot @ = 0= _ts-assert ;
+
+: _ts-throw-use  ( vfs -- )
+    _AVW-BUF @ _ts-fault-buffer !
+    DUP VFS-USE DROP -701 THROW ;
+: _ts-throw-use-on-restore  ( vfs -- )
+    1 _ts-fault-use-count +!
+    DUP VFS-USE
+    _ts-fault-use-count @ 2 = IF
+        DROP _AVW-BUF @ _ts-fault-buffer ! -709 THROW
+    THEN
+    DROP ;
+: _ts-throw-open  ( path-a path-u -- fd )
+    2DROP _AVW-BUF @ _ts-fault-buffer ! -702 THROW ;
+: _ts-open-missing  ( path-a path-u -- fd )
+    2DROP 0 ;
+: _ts-throw-create  ( path-a path-u vfs -- inode )
+    DROP 2DROP _AVW-BUF @ _ts-fault-buffer ! -710 THROW ;
+: _ts-throw-read  ( buf len fd -- ior )
+    2DROP _ts-fault-buffer ! -703 THROW ;
+: _ts-throw-read-second  ( buf len fd -- ior )
+    1 _ts-fault-read-count +!
+    _ts-fault-read-count @ 2 = IF
+        2DROP _ts-fault-buffer ! -703 THROW
+    THEN
+    VFS-READ-EXACT ;
+: _ts-throw-write  ( buf len fd -- ior )
+    2DROP _ts-fault-buffer ! -704 THROW ;
+: _ts-throw-close  ( fd -- )
+    _AVW-BUF @ _ts-fault-buffer ! VFS-CLOSE -705 THROW ;
+: _ts-throw-sync  ( vfs -- ior )
+    _AVW-BUF @ _ts-fault-buffer ! VFS-SYNC DROP -706 THROW ;
+: _ts-fail-sync  ( vfs -- ior )
+    DROP 1 ;
+: _ts-throw-encode-size  ( conversation -- length status )
+    DROP -711 THROW ;
+: _ts-throw-encode  ( generation conversation buf capacity -- len status )
+    DROP _ts-fault-buffer ! 2DROP -707 THROW ;
+: _ts-throw-decode  ( buf len -- conversation generation status )
+    DROP _ts-fault-buffer ! -708 THROW ;
+: _ts-throw-decode-second  ( buf len -- conversation generation status )
+    1 _ts-fault-decode-count +!
+    _ts-fault-decode-count @ 2 = IF
+        DROP _ts-fault-buffer ! -708 THROW
+    THEN
+    ATHREAD-DECODE ;
+: _ts-throw-conv-free  ( conversation -- )
+    ACONV-FREE -712 THROW ;
+: _ts-throw-guard-release  ( guard -- )
+    DUP GUARD-RELEASE DROP -713 THROW ;
+
+: _ts-probe-newer  ( -- )
+    _ts-vfs @ AVFSSTORE-NEW
+    DUP ACSTORE-S-OK = _ts-assert DROP _ts-probe-store !
+    _ts-probe-store @ ACSTORE-LOAD
+    DUP ACSTORE-S-OK = _ts-assert DROP
+    DUP 0<> _ts-assert _ts-probe-conv !
+    _ts-probe-store @ AVFSSTORE.GENERATION @
+    _ts-fault-generation @ 1+ = _ts-assert
+    _ts-probe-store @ AVFSSTORE.ACTIVE-SLOT @
+    _ts-fault-slot @ = 0= _ts-assert
+    _ts-probe-conv @ ACONV-FREE
+    _ts-probe-store @ ACSTORE-FREE
+    0 _ts-probe-conv ! 0 _ts-probe-store !
+    HEAP-FREE-BYTES _ts-fault-heap @ = _ts-assert ;
+
+: _ts-test-load-guard-release  ( -- )
+    _ts-vfs @ AVFSSTORE-NEW
+    DUP ACSTORE-S-OK = _ts-assert DROP _ts-probe-store !
+    _ts-fault-begin
+    ['] _ts-throw-guard-release _AVFS-GUARD-RELEASE-XT !
+    _ts-probe-store @ ACSTORE-LOAD
+    DUP ACSTORE-S-IO = _ts-assert DROP 0= _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-read-clean?
+    _ts-probe-store @ AVFSSTORE.GENERATION @
+    _ts-fault-generation @ 1+ = _ts-assert
+    _ts-probe-store @ AVFSSTORE.ACTIVE-SLOT @
+    _ts-fault-slot @ = 0= _ts-assert
+    _ts-probe-store @ ACSTORE-FREE 0 _ts-probe-store !
+    _ts-stack ;
+
+: _ts-read-result!  ( conversation generation status -- )
+    _ts-read-status ! _ts-read-generation ! _ts-read-conv ! ;
+
+: _ts-test-fault-cleanup  ( -- )
+    ACONV-NEW DUP 0= _ts-assert DROP _ts-fault-conv !
+    \ Re-establish one known-valid generation after the corruption tests.
+    _ts-vfs @ VFS-USE
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
+
+    524288 A-XMEM ARENA-NEW DUP 0= _ts-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _ts-other-vfs ! DROP
+
+    _ts-fault-begin ['] _ts-throw-encode-size _AVFS-ENCODE-SIZE-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean? _ts-stack
+
+    _ts-fault-begin ['] _ts-throw-encode _AVFS-ENCODE-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
+
+    _ts-fault-begin ['] _ts-throw-use _AVFS-USE-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
+
+    _ts-fault-begin 0 _ts-fault-use-count !
+    ['] _ts-throw-use-on-restore _AVFS-USE-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
+    ACSTORE-S-UNCERTAIN = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
+
+    _ts-fault-begin ['] _ts-throw-open _AVFS-OPEN-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
+
+    _ts-fault-begin
+    ['] _ts-open-missing _AVFS-OPEN-XT !
+    ['] _ts-throw-create _AVFS-CREATE-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
+
+    _ts-fault-begin ['] _ts-throw-write _AVFS-WRITE-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
+    ACSTORE-S-UNCERTAIN = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
+
+    _ts-fault-begin ['] _ts-throw-close _AVFS-CLOSE-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
+    ACSTORE-S-UNCERTAIN = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert
+    _ts-probe-newer _ts-stack
+
+    _ts-fault-begin ['] _ts-throw-sync _AVFS-SYNC-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
+    ACSTORE-S-UNCERTAIN = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
+
+    _ts-fault-begin ['] _ts-fail-sync _AVFS-SYNC-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
+    ACSTORE-S-UNCERTAIN = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-clean? _ts-stack
+
+    _ts-fault-begin 0 _ts-fault-read-count !
+    ['] _ts-throw-read-second _AVFS-READ-XT !
+    _ts-store @ ACSTORE-LOAD
+    DUP ACSTORE-S-IO = _ts-assert DROP 0= _ts-assert
+    _AVFS-RESET-DEPENDENCIES
+    _ts-read-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _ts-stack
+
+    _ts-fault-begin 0 _ts-fault-decode-count !
+    ['] _ts-throw-decode-second _AVFS-DECODE-XT !
+    _ts-store @ ACSTORE-LOAD
+    DUP ACSTORE-S-IO = _ts-assert DROP 0= _ts-assert
+    _AVFS-RESET-DEPENDENCIES
+    _ts-read-clean?
+    _ts-fault-buffer @ 0<> _ts-assert
+    _ts-stack
+
+    _ts-fault-begin ['] _ts-throw-conv-free _AVFS-CONV-FREE-XT !
+    _ts-store @ ACSTORE-LOAD
+    DUP ACSTORE-S-IO = _ts-assert DROP 0= _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-read-clean? _ts-stack
+
+    _ts-test-load-guard-release
+
+    _ts-fault-begin
+    ['] _ts-throw-guard-release _AVFS-GUARD-RELEASE-XT !
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
+    ACSTORE-S-UNCERTAIN = _ts-assert
+    _AVFS-RESET-DEPENDENCIES _ts-save-published-clean?
+    _ts-store @ ACSTORE.LAST-STATUS @
+    ACSTORE-S-UNCERTAIN = _ts-assert _ts-stack
+
+    \ Ordinary use remains possible after contained and post-body faults.
+    _ts-fault-begin
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
+    VFS-CUR _ts-other-vfs @ = _ts-assert
+    _ts-store @ AVFSSTORE.GENERATION @
+    _ts-fault-generation @ 1+ = _ts-assert
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @
+    _ts-fault-slot @ = 0= _ts-assert
+    _ts-fault-conv @ ACONV-FREE 0 _ts-fault-conv !
+    _ts-stack ;
 
 : _ts-run  ( -- )
     0 _ts-fails ! 0 _ts-checks ! DEPTH _ts-depth !
@@ -396,11 +667,15 @@ CREATE _ts-bad 8 ALLOT
     _ts-new-store DUP _ts-store4 ! ACSTORE-LOAD
     ACSTORE-S-INVALID = _ts-assert 0= _ts-assert
 
+    _ts-test-fault-cleanup
+
     _ts-store4 @ ACSTORE-FREE
     _ts-store3 @ ACSTORE-FREE
     _ts-store2 @ ACSTORE-FREE
     _ts-store @ ACSTORE-FREE
     _ts-conv @ ACONV-FREE
+    0 VFS-USE
+    _ts-other-vfs @ VFS-DESTROY
     _ts-vfs @ VFS-DESTROY
     _ts-stack
     _ts-fails @ 0= IF
@@ -5488,6 +5763,314 @@ AGENT-RUN
         ready_markers=("Agent", "Connection", "Sign-in required"),
         stable_markers=("Agent", "Connection"),
     ),
+    "pad-contracts": Profile(
+        roots=("tui/applets/pad/pad.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - Pad checked persistence contracts
+ENTER-USERLAND
+REQUIRE tui/applets/pad/pad.f
+
+VARIABLE _pc-fails VARIABLE _pc-checks VARIABLE _pc-depth
+: _pc-assert  ( flag -- )
+    1 _pc-checks +! 0= IF
+        1 _pc-fails +! ." PAD ASSERT " _pc-checks @ . CR
+    THEN ;
+
+CREATE _pc-state _PAD-STATE-SIZE ALLOT
+CREATE _pc-io 128 ALLOT
+CREATE _pc-desc APP-DESC ALLOT
+VARIABLE _pc-vfs VARIABLE _pc-other-vfs VARIABLE _pc-screen VARIABLE _pc-rgn
+VARIABLE _pc-a VARIABLE _pc-u VARIABLE _pc-pa VARIABLE _pc-pu
+VARIABLE _pc-fd VARIABLE _pc-calls VARIABLE _pc-orig VARIABLE _pc-loaded
+VARIABLE _pc-fdfree VARIABLE _pc-heap VARIABLE _pc-xmem VARIABLE _pc-arena-used
+VARIABLE _pc-xfree VARIABLE _pc-lines
+VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
+
+: _pc-xmem-avail  ( -- u )
+    0 _pc-xfree ! XMEM-FL @
+    BEGIN DUP WHILE
+        DUP @ _pc-xfree +! 8 + @
+    REPEAT DROP
+    XMEM-FREE _pc-xfree @ + ;
+
+: _pc-put  ( data-a data-u path-a path-u -- )
+    _pc-pu ! _pc-pa ! _pc-u ! _pc-a !
+    _pc-pa @ _pc-pu @ _pc-vfs @ VFS-CREATE 0<> _pc-assert
+    _pc-pa @ _pc-pu @ VFS-OPEN DUP 0<> _pc-assert _pc-fd !
+    _pc-a @ _pc-u @ _pc-fd @ VFS-WRITE-EXACT 0= _pc-assert
+    _pc-fd @ VFS-CLOSE _pc-vfs @ VFS-SYNC 0= _pc-assert ;
+
+: _pc-file=  ( expected-a expected-u path-a path-u -- flag )
+    _pc-pu ! _pc-pa ! _pc-u ! _pc-a !
+    _pc-pa @ _pc-pu @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _pc-fd !
+    _pc-fd @ VFS-SIZE _pc-u @ <> IF _pc-fd @ VFS-CLOSE 0 EXIT THEN
+    _pc-u @ 128 > IF _pc-fd @ VFS-CLOSE 0 EXIT THEN
+    _pc-io _pc-u @ _pc-fd @ VFS-READ-EXACT IF
+        _pc-fd @ VFS-CLOSE 0 EXIT
+    THEN
+    _pc-fd @ VFS-CLOSE
+    _pc-io _pc-u @ _pc-a @ _pc-u @ COMPARE 0= ;
+
+: _pc-text=  ( expected-a expected-u -- flag )
+    _pc-u ! _pc-a !
+    _PAD-TXTA @ TXTA-GET-TEXT
+    2DUP _pc-a @ _pc-u @ COMPARE 0= >R
+    DROP FREE R> ;
+
+: _pc-zero-read  ( buf len offset inode vfs -- actual )
+    2DROP 2DROP DROP 1 _pc-calls +! 0 ;
+: _pc-throw-read  ( buf len offset inode vfs -- actual )
+    2DROP 2DROP DROP 1 _pc-calls +! -91 THROW ;
+: _pc-fail-sync  ( inode vfs -- ior ) 2DROP -1 ;
+: _pc-close-after  ( fd -- )
+    VFS-CLOSE 1 _pc-close-calls +! -92 THROW ;
+: _pc-use-after  ( vfs -- )
+    VFS-USE 1 _pc-use-calls +!
+    _pc-use-calls @ _pc-use-throw-at @ = IF -93 THROW THEN ;
+
+: _pc-arm-marked-rollback  ( -- )
+    S" /recover.txt" _PAD-REPL VREPL-DERIVE-PATHS!
+        VREPL-S-OK = _pc-assert
+    _PAD-REPL _VRO-R !
+    S" candidate" _PAD-REPL VREPL-STAGE$ _VREPL-CREATE-WRITE
+        VREPL-S-OK = _pc-assert
+    S" candidate" _VRO-LEN ! _VRO-DATA !
+    -1 _VRO-ORIGINAL !
+    _VREPL-WRITE-MARKER VREPL-S-OK = _pc-assert
+    _pc-vfs @ VFS-SYNC 0= _pc-assert
+    _VRO-TARGET>BACKUP 0= _pc-assert
+    _pc-vfs @ VFS-SYNC 0= _pc-assert ;
+
+: _pc-setup  ( -- )
+    _pc-state _PAD-STATE-SIZE 0 FILL
+    _pc-state _PAD-CURRENT-STATE !
+    524288 A-XMEM ARENA-NEW IF -1 THROW THEN
+    VFS-RAM-VTABLE VFS-NEW DUP _pc-vfs ! VFS-USE
+    _pc-vfs @ _PAD-VFS !
+    _pc-vfs @ _PAD-REPL VREPL-INIT VREPL-S-OK = _pc-assert
+    ['] VFS-CLOSE _PAD-LOAD-CLOSE-XT !
+    ['] VFS-USE _PAD-LOAD-USE-XT !
+    _PAD-INIT-BUF-TABLE
+    _PAD-ARENA-SIZE A-XMEM ARENA-NEW
+    DUP 0= _pc-assert DROP _PAD-ARENA !
+    80 20 SCR-NEW DUP _pc-screen ! SCR-USE
+    0 0 10 40 RGN-NEW DUP _pc-rgn !
+    _PAD-DUMMY-BUF _PAD-DUMMY-CAP TXTA-NEW _PAD-TXTA !
+    _PAD-BUF-OPEN DUP 0= _pc-assert DROP ;
+
+: _pc-run  ( -- )
+    0 _pc-fails ! 0 _pc-checks ! DEPTH _pc-depth !
+    _pc-setup
+    S" note.txt" _PAD-CANON-PATH DUP 0= _pc-assert DROP
+    S" /note.txt" STR-STR= _pc-assert
+    S" keep" _PAD-TXTA @ TXTA-SET-TEXT
+    -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    S" ../escape" _PAD-DO-SAVE-TO 0<> _pc-assert
+    S" /escape" _pc-vfs @ VFS-RESOLVE 0= _pc-assert
+
+    65537 ALLOCATE IF -2 THROW THEN DUP >R 65537 88 FILL
+    R@ 65537 S" /huge.txt" _pc-put R> FREE
+    _PAD-ACTIVE @ _pc-orig ! 0 _pc-calls !
+    ['] _pc-zero-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    S" /huge.txt" _PAD-OPEN-PATH -4 = _pc-assert
+    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    _pc-calls @ 0= _pc-assert
+    _PAD-ACTIVE @ _pc-orig @ = _pc-assert
+    S" keep" _pc-text= _pc-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pc-assert
+
+    S" short" S" /short.txt" _pc-put 0 _pc-calls !
+    ['] _pc-zero-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    S" /short.txt" _PAD-OPEN-PATH -5 = _pc-assert
+    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    _pc-calls @ 0> _pc-assert
+    _PAD-ACTIVE @ _pc-orig @ = _pc-assert
+    S" keep" _pc-text= _pc-assert
+
+    \ Recovery happens before the existence probe: target is deliberately
+    \ absent while a durable rollback marker, stage, and backup remain.
+    S" recovered" S" /recover.txt" _pc-put
+    _pc-arm-marked-rollback
+    _PAD-REPL VREPL-TARGET$ _pc-vfs @ VFS-RESOLVE 0= _pc-assert
+    _PAD-REPL VREPL-BACKUP$ _pc-vfs @ VFS-RESOLVE 0<> _pc-assert
+    _PAD-REPL VREPL-MARKER$ _pc-vfs @ VFS-RESOLVE 0<> _pc-assert
+    S" /recover.txt" _PAD-OPEN-PATH 0= _pc-assert
+    _PAD-ACTIVE @ DUP _pc-loaded ! _pc-orig @ <> _pc-assert
+    S" recovered" _pc-text= _pc-assert
+    _PAD-REPL VREPL-TARGET$ _pc-vfs @ VFS-RESOLVE 0<> _pc-assert
+    _PAD-REPL VREPL-BACKUP$ _pc-vfs @ VFS-RESOLVE 0= _pc-assert
+    _PAD-REPL VREPL-MARKER$ _pc-vfs @ VFS-RESOLVE 0= _pc-assert
+    _pc-loaded @ _PAD-BUF-CLOSE
+    _PAD-ACTIVE @ _pc-orig @ = _pc-assert
+    S" keep" _pc-text= _pc-assert
+
+    \ A thrown transfer is contained after allocating/opening.  The newly
+    \ opened buffer is rolled back, owned I/O state is released, and the
+    \ caller's active-VFS selector is restored even when it names another VFS.
+    _pc-vfs @ VFS-USE S" throw" S" /throw.txt" _pc-put
+    524288 A-XMEM ARENA-NEW IF -3 THROW THEN
+    VFS-RAM-VTABLE VFS-NEW _pc-other-vfs !
+    _pc-vfs @ V.FDFREE @ _pc-fdfree !
+    HEAP-FREE-BYTES _pc-heap !
+    _pc-xmem-avail _pc-xmem !
+    _PAD-ARENA @ ARENA-USED _pc-arena-used !
+    0 _pc-calls !
+    ['] _pc-throw-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    _pc-other-vfs @ VFS-USE
+    S" /throw.txt" _PAD-OPEN-PATH -7 = _pc-assert
+    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    _pc-calls @ 0> _pc-assert
+    VFS-CUR _pc-other-vfs @ = _pc-assert
+    _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
+    _pc-vfs @ V.FDFREE @ _pc-fdfree @ = _pc-assert
+    HEAP-FREE-BYTES _pc-heap @ = _pc-assert
+    _pc-xmem-avail _pc-xmem @ = _pc-assert
+    _PAD-ARENA @ ARENA-USED _pc-arena-used @ = _pc-assert
+    _PAD-ACTIVE @ _pc-orig @ = _pc-assert
+    S" keep" _pc-text= _pc-assert
+    _pc-vfs @ VFS-USE
+
+    \ A close implementation may recycle the descriptor and only then
+    \ throw.  Ownership is cleared before the call, so cleanup neither
+    \ double-closes it nor skips the remaining buffer/selector stages.
+    S" after" S" /after.txt" _pc-put
+    _pc-vfs @ V.FDFREE @ _pc-fdfree !
+    HEAP-FREE-BYTES _pc-heap ! _pc-xmem-avail _pc-xmem !
+    _PAD-ARENA @ ARENA-USED _pc-arena-used !
+    0 _pc-close-calls !
+    ['] _pc-close-after _PAD-LOAD-CLOSE-XT !
+    _pc-other-vfs @ VFS-USE
+    S" /after.txt" _PAD-OPEN-PATH -7 = _pc-assert
+    ['] VFS-CLOSE _PAD-LOAD-CLOSE-XT !
+    _pc-close-calls @ 1 = _pc-assert
+    _PIO-THROW @ -92 = _pc-assert
+    _PIO-CLEANUP-THROW @ 0= _pc-assert
+    VFS-CUR _pc-other-vfs @ = _pc-assert
+    _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
+    _pc-vfs @ V.FDFREE @ _pc-fdfree @ = _pc-assert
+    HEAP-FREE-BYTES _pc-heap @ = _pc-assert
+    _pc-xmem-avail _pc-xmem @ = _pc-assert
+    _PAD-ARENA @ ARENA-USED _pc-arena-used @ = _pc-assert
+    _PAD-ACTIVE @ _pc-orig @ = _pc-assert
+    S" keep" _pc-text= _pc-assert
+
+    \ Cleanup-only selector failure is normalized to -7.  The injected use
+    \ switches first and throws second, so the old selector invariant still
+    \ holds and the successfully loaded scratch tab is rolled back.
+    _pc-vfs @ V.FDFREE @ _pc-fdfree !
+    HEAP-FREE-BYTES _pc-heap ! _pc-xmem-avail _pc-xmem !
+    0 _pc-use-calls ! 2 _pc-use-throw-at !
+    ['] _pc-use-after _PAD-LOAD-USE-XT !
+    _pc-other-vfs @ VFS-USE
+    S" /after.txt" _PAD-OPEN-PATH -7 = _pc-assert
+    ['] VFS-USE _PAD-LOAD-USE-XT !
+    _pc-use-calls @ 2 = _pc-assert
+    _PIO-THROW @ 0= _pc-assert
+    _PIO-CLEANUP-THROW @ -93 = _pc-assert
+    VFS-CUR _pc-other-vfs @ = _pc-assert
+    _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
+    _pc-vfs @ V.FDFREE @ _pc-fdfree @ = _pc-assert
+    HEAP-FREE-BYTES _pc-heap @ = _pc-assert
+    _pc-xmem-avail _pc-xmem @ = _pc-assert
+    _PAD-ACTIVE @ _pc-orig @ = _pc-assert
+    S" keep" _pc-text= _pc-assert
+
+    \ A specific primary transfer result wins over a later restoration
+    \ THROW, while cleanup still restores the selector and all ownership.
+    0 _pc-calls ! 0 _pc-use-calls ! 2 _pc-use-throw-at !
+    ['] _pc-zero-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _pc-use-after _PAD-LOAD-USE-XT !
+    _pc-other-vfs @ VFS-USE
+    S" /short.txt" _PAD-OPEN-PATH -5 = _pc-assert
+    ['] VFS-USE _PAD-LOAD-USE-XT !
+    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    _pc-calls @ 0> _pc-assert _pc-use-calls @ 2 = _pc-assert
+    _PIO-CLEANUP-THROW @ -93 = _pc-assert
+    VFS-CUR _pc-other-vfs @ = _pc-assert
+    _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
+    _PAD-ACTIVE @ _pc-orig @ = _pc-assert
+    S" keep" _pc-text= _pc-assert
+    _pc-vfs @ VFS-USE
+
+    S" old" S" /save.txt" _pc-put
+    S" new" _PAD-TXTA @ TXTA-SET-TEXT
+    -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
+    ['] _pc-fail-sync VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !
+    S" /save.txt" _PAD-SAVE-CURRENT-AS 0<> _pc-assert
+    ['] _VFS-RAM-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !
+    S" old" S" /save.txt" _pc-file= _pc-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pc-assert
+    S" /save.txt" _PAD-SAVE-CURRENT-AS 0= _pc-assert
+    S" new" S" /save.txt" _pc-file= _pc-assert
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0= _pc-assert
+
+    \ Every advertised tab must hold an exact-limit, newline-dense file.
+    \ Packed line indexes grow directly to the required 65,537 entries;
+    \ they no longer consume or abandon blocks in Pad's shared text arena.
+    _PAD-BUF-CAP ALLOCATE IF -4 THROW THEN DUP _pc-lines !
+    _PAD-BUF-CAP 10 FILL
+    _PAD-MAX-BUFS 0 DO
+        I IF _PAD-BUF-OPEN I = _pc-assert ELSE 0 _PAD-BUF-SWITCH THEN
+        _pc-lines @ _PAD-BUF-CAP _PAD-TXTA @ TXTA-SET-TEXT
+        I _PAD-BUF-ENTRY _PBE-GB + @
+        DUP GB-LEN _PAD-BUF-CAP = _pc-assert
+        DUP GB-LINES _PAD-BUF-CAP 1+ = _pc-assert
+        DUP _GB-O-LCAP + @ _PAD-BUF-CAP 1+ = _pc-assert
+        _PAD-BUF-CAP OVER GB-LINE-OFF _PAD-BUF-CAP = _pc-assert
+        DROP
+    LOOP
+    _pc-lines @ FREE 0 _pc-lines !
+    _PAD-BUF-CNT @ _PAD-MAX-BUFS = _pc-assert
+    _PAD-BUF-OPEN -1 = _pc-assert
+    _PAD-ARENA @ ARENA-USED
+    _PAD-MAX-BUFS _PAD-BUF-CAP _GB-DESC-SZ + * = _pc-assert
+
+    \ Roll back the same inactive slot repeatedly after it has held the
+    \ worst-case document.  Both allocators, the VFS descriptor pool, the
+    \ active selector, and the arena high-water mark must remain unchanged.
+    _PAD-MAX-BUFS 1- _PAD-BUF-CLOSE
+    _pc-vfs @ V.FDFREE @ _pc-fdfree !
+    HEAP-FREE-BYTES _pc-heap !
+    _pc-xmem-avail _pc-xmem !
+    _PAD-ARENA @ ARENA-USED _pc-arena-used !
+    0 _pc-calls !
+    ['] _pc-throw-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    _pc-other-vfs @ VFS-USE
+    32 0 DO S" /throw.txt" _PAD-OPEN-PATH -7 = _pc-assert LOOP
+    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    _pc-calls @ 32 = _pc-assert
+    VFS-CUR _pc-other-vfs @ = _pc-assert
+    _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
+    _pc-vfs @ V.FDFREE @ _pc-fdfree @ = _pc-assert
+    HEAP-FREE-BYTES _pc-heap @ = _pc-assert
+    _pc-xmem-avail _pc-xmem @ = _pc-assert
+    _PAD-ARENA @ ARENA-USED _pc-arena-used @ = _pc-assert
+    _PAD-BUF-CNT @ _PAD-MAX-BUFS 1- = _pc-assert
+    _PAD-ACTIVE @ 0= _pc-assert
+    _pc-vfs @ VFS-USE
+
+    \ Leave the normal one-tab state for the remaining descriptor checks.
+    _PAD-MAX-BUFS 1- 1 DO I _PAD-BUF-CLOSE LOOP
+    _PAD-BUF-CNT @ 1 = _pc-assert
+
+    _pc-desc PAD-ENTRY
+    _pc-desc APP.REQUEST-CLOSE-XT @ ['] PAD-REQUEST-CLOSE-CB = _pc-assert
+    DEPTH _pc-depth @ <> IF
+        ." PAD STACK DELTA " DEPTH _pc-depth @ - . CR .S CR
+    THEN
+    DEPTH _pc-depth @ = _pc-assert
+    _pc-fails @ 0= IF
+        ." PAD CONTRACT PASS " _pc-checks @ .
+    ELSE
+        ." PAD CONTRACT FAIL " _pc-fails @ . ." / " _pc-checks @ .
+    THEN CR ;
+
+_pc-run
+""",
+        ready_markers=("PAD CONTRACT PASS",),
+        stable_markers=("PAD CONTRACT PASS",),
+        failure_markers=("PAD CONTRACT FAIL", "PAD ASSERT"),
+    ),
     "pad": Profile(
         roots=("tui/applets/pad/pad.f",),
         resources=(
@@ -5535,6 +6118,723 @@ DAYBOOK-RUN
 """,
         ready_markers=("File", "Entry", "Go", "4 entries"),
         stable_markers=("File", "Entry", "Go", "entries"),
+    ),
+    "daybook-contracts": Profile(
+        roots=("tui/applets/daybook/daybook.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - strict Daybook import/persistence fixture
+ENTER-USERLAND
+." [akashic] loading Daybook contracts" CR
+REQUIRE tui/applets/daybook/daybook.f
+
+VARIABLE _dt-fails
+VARIABLE _dt-checks
+VARIABLE _dt-depth
+VARIABLE _dt-inst
+VARIABLE _dt-fd
+VARIABLE _dt-old-vtable
+VARIABLE _dt-read-calls
+VARIABLE _dt-close-calls
+VARIABLE _dt-use-calls
+VARIABLE _dt-fd-head
+VARIABLE _dt-fd-next
+VARIABLE _dt-close-prompt
+VARIABLE _dt-close-rgn
+CREATE _dt-big _DB-IO-CAP 1+ ALLOT
+CREATE _dt-vtable VFS-VT-SIZE ALLOT
+
+: _dt-assert  ( flag -- )
+    1 _dt-checks +!
+    0= IF 1 _dt-fails +! ." ASSERT " _dt-checks @ . CR THEN ;
+: _dt-stack  ( -- )
+    DEPTH DUP _dt-depth @ <> IF
+        ." STACK " _dt-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _dt-depth @ = _dt-assert ;
+: _dt-line  ( a u -- ) _DB-IO-APPEND 10 _DB-IO-CHAR ;
+: _dt-header  ( -- ) _DB-IO-RESET S" # Daybook" _dt-line 10 _DB-IO-CHAR ;
+: _dt-canonical  ( -- )
+    _dt-header
+    S" - 2026-07-10 09:30 | Project review" _dt-line
+    S" - [ ] 2026-07-10 | Send the draft" _dt-line
+    S" > 2026-07-10 | A durable note" _dt-line ;
+: _dt-seed  ( -- )
+    _DB-CLEAR
+    _DB-K-TASK 0 2026 7 10 DT-YMD>EPOCH -1 S" sentinel" _DB-ADD
+    0= _dt-assert
+    -1 _DB-DIRTY ! ;
+: _dt-short-read  ( buf len offset inode vfs -- actual )
+    DROP DROP DROP NIP
+    1 _dt-read-calls +!
+    _dt-read-calls @ 1 = IF 1- 0 MAX ELSE DROP 0 THEN ;
+: _dt-short-reads-on  ( -- )
+    _DB-VFS @ V.VTABLE @ DUP _dt-old-vtable !
+    _dt-vtable VFS-VT-SIZE CMOVE
+    ['] _dt-short-read _dt-vtable VFS-VT-READ CELLS + !
+    _dt-vtable _DB-VFS @ V.VTABLE ! ;
+: _dt-short-reads-off  ( -- )
+    _dt-old-vtable @ _DB-VFS @ V.VTABLE ! ;
+: _dt-after-close  ( fd -- )
+    1 _dt-close-calls +! VFS-CLOSE -801 THROW ;
+: _dt-after-restore  ( vfs -- )
+    1 _dt-use-calls +!
+    DUP VFS-USE
+    _dt-use-calls @ 2 = IF DROP -802 THROW THEN
+    DROP ;
+: _dt-fd-snapshot  ( -- )
+    _DB-VFS @ V.FDFREE @ DUP _dt-fd-head !
+    ?DUP IF FD.FREE @ ELSE 0 THEN _dt-fd-next ! ;
+: _dt-load-failure-clean?  ( -- )
+    VFS-CUR 0= _dt-assert
+    _DB-LOAD-FD @ 0= _dt-assert
+    _DB-LOAD-HAVE-OLD-VFS @ 0= _dt-assert
+    _DB-VFS @ V.FDFREE @ DUP _dt-fd-head @ = _dt-assert
+    ?DUP IF FD.FREE @ ELSE 0 THEN _dt-fd-next @ = _dt-assert
+    _DB-COUNT @ 1 = _dt-assert
+    0 _DB-ENTRY _DB-E-TEXT + 8 S" sentinel" STR-STR= _dt-assert
+    _DB-DIRTY @ _dt-assert _DB-SOURCE-BLOCKED @ _dt-assert ;
+: _dt-model-canonical?  ( -- flag )
+    _DB-COUNT @ 3 =
+    0 _DB-ENTRY _DB-E-KIND + @ _DB-K-EVENT = AND
+    1 _DB-ENTRY _DB-E-KIND + @ _DB-K-TASK = AND
+    2 _DB-ENTRY _DB-E-KIND + @ _DB-K-NOTE = AND ;
+
+: _dt-test-strict-import  ( -- )
+    _dt-seed _dt-canonical _DB-PARSE-FILE _DB-L-S-OK = _dt-assert
+    _dt-model-canonical? _dt-assert
+    _DB-DIRTY @ _dt-assert
+
+    _DB-COUNT @ >R -1 _DB-DIRTY !
+    _dt-header S" unsupported markdown" _dt-line
+    _DB-PARSE-FILE _DB-L-S-INVALID = _dt-assert
+    _DB-COUNT @ R> = _dt-assert _DB-DIRTY @ _dt-assert
+    _dt-model-canonical? _dt-assert
+
+    _dt-header S" - [X] 2026-07-10 | not canonical" _dt-line
+    _DB-PARSE-FILE _DB-L-S-INVALID = _dt-assert
+    _dt-model-canonical? _dt-assert
+
+    _dt-header S" - [ ] 2026-07-10 | " _DB-IO-APPEND
+    121 0 DO [CHAR] a _DB-IO-CHAR LOOP 10 _DB-IO-CHAR
+    _DB-PARSE-FILE _DB-L-S-TEXT = _dt-assert
+    _dt-model-canonical? _dt-assert
+
+    _dt-header
+    97 0 DO S" - [ ] 2026-07-10 | x" _dt-line LOOP
+    _DB-PARSE-FILE _DB-L-S-CAPACITY = _dt-assert
+    _dt-model-canonical? _dt-assert _DB-DIRTY @ _dt-assert
+    _dt-stack ;
+
+: _dt-write-oversize  ( -- )
+    _dt-big _DB-IO-CAP 1+ [CHAR] z FILL
+    S" /daybook.md" VFS-OPEN DUP 0= IF
+        DROP S" /daybook.md" _DB-VFS @ VFS-CREATE DROP
+        S" /daybook.md" VFS-OPEN
+    THEN
+    DUP 0<> _dt-assert _dt-fd !
+    0 _dt-fd @ VFS-TRUNCATE 0= _dt-assert
+    _dt-big _DB-IO-CAP 1+ _dt-fd @ VFS-WRITE-EXACT 0= _dt-assert
+    _dt-fd @ VFS-CLOSE ;
+
+: _dt-test-load-and-replace  ( -- )
+    _dt-seed _dt-write-oversize
+    90 _DB-IO-BUF C! 0 _dt-read-calls ! _dt-short-reads-on
+    _DB-READ-FILE _DB-L-S-TOO-LARGE = _dt-assert
+    _dt-short-reads-off
+    _dt-read-calls @ 0= _dt-assert
+    _DB-IO-BUF C@ 90 = _dt-assert
+    _DB-LOAD _DB-L-S-TOO-LARGE = _dt-assert
+    _DB-COUNT @ 1 = _dt-assert _DB-DIRTY @ _dt-assert
+    _DB-SOURCE-BLOCKED @ _dt-assert
+    0 _DB-ENTRY _DB-E-TEXT + 8 S" sentinel" STR-STR= _dt-assert
+
+    _dt-canonical _DB-PARSE-FILE _DB-L-S-OK = _dt-assert
+    _DB-SERIALIZE _DB-WRITE 0<> _dt-assert
+    _DB-READ-FILE _DB-L-S-TOO-LARGE = _dt-assert
+    0 _DB-SOURCE-BLOCKED !
+    _DB-SERIALIZE _DB-WRITE 0= _dt-assert
+    _DB-CLEAR _DB-COUNT @ 0= _dt-assert
+    _DB-LOAD _DB-L-S-OK = _dt-assert
+    _dt-model-canonical? _dt-assert
+    _DB-REPLACE VREPL-STAGE$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
+    _DB-REPLACE VREPL-BACKUP$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
+    _DB-REPLACE VREPL-MARKER$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
+
+    -1 _DB-DIRTY ! 0 _dt-read-calls ! _dt-short-reads-on
+    _DB-LOAD _DB-L-S-IO = _dt-assert
+    _dt-short-reads-off
+    _dt-read-calls @ 2 = _dt-assert
+    _dt-model-canonical? _dt-assert _DB-DIRTY @ _dt-assert
+    _DB-SOURCE-BLOCKED @ _dt-assert
+    _DB-LOAD _DB-L-S-OK = _dt-assert
+    _DB-SOURCE-BLOCKED @ 0= _dt-assert
+
+    _DB-REPLACE _VRO-R !
+    _VRO-TARGET>BACKUP 0= _dt-assert
+    _DB-VFS @ VFS-SYNC 0= _dt-assert
+    _DB-REPLACE VREPL-TARGET$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
+    _DB-LOAD _DB-L-S-OK = _dt-assert
+    _dt-model-canonical? _dt-assert
+    _DB-REPLACE VREPL-TARGET$ _DB-VFS @ VFS-RESOLVE 0<> _dt-assert
+    _DB-REPLACE VREPL-BACKUP$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
+
+    _DB-REPLACE _VRO-R !
+    S" bad" _DB-REPLACE VREPL-MARKER$ _VREPL-CREATE-WRITE
+    VREPL-S-OK = _dt-assert
+    -1 _DB-DIRTY !
+    _DB-LOAD _DB-L-S-RECOVERY = _dt-assert
+    _dt-model-canonical? _dt-assert _DB-DIRTY @ _dt-assert
+    _DB-SOURCE-BLOCKED @ _dt-assert
+    _DB-REPLACE VREPL-MARKER$ _DB-VFS @ VFS-RM 0= _dt-assert
+    _DB-VFS @ VFS-SYNC 0= _dt-assert
+    _dt-stack ;
+
+: _dt-test-load-cleanup-faults  ( -- )
+    _dt-seed 0 _DB-SOURCE-BLOCKED ! _dt-fd-snapshot
+    0 _dt-close-calls ! 0 VFS-USE
+    ['] _dt-after-close _DB-LOAD-CLOSE-XT !
+    _DB-LOAD _DB-L-S-IO = _dt-assert
+    _DB-RESET-LOAD-DEPENDENCIES
+    _dt-close-calls @ 1 = _dt-assert
+    _dt-load-failure-clean? _dt-stack
+    _DB-VFS @ VFS-USE
+
+    _dt-seed 0 _DB-SOURCE-BLOCKED ! _dt-fd-snapshot
+    0 _dt-use-calls ! 0 VFS-USE
+    ['] _dt-after-restore _DB-LOAD-USE-XT !
+    _DB-LOAD _DB-L-S-IO = _dt-assert
+    _DB-RESET-LOAD-DEPENDENCIES
+    _dt-use-calls @ 2 = _dt-assert
+    _dt-load-failure-clean? _dt-stack
+    _DB-VFS @ VFS-USE
+    _DB-LOAD _DB-L-S-OK = _dt-assert
+    _DB-SOURCE-BLOCKED @ 0= _dt-assert ;
+
+: _dt-test-close  ( -- )
+    0 _DB-DIRTY !
+    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
+    APP-CLOSE-D-ALLOW = _dt-assert
+    -1 _DB-DIRTY ! 0 _DB-PROMPT ! 0 _DB-DISCARD-ARMED !
+    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
+    APP-CLOSE-D-CANCEL = _dt-assert
+
+    0 0 1 80 RGN-NEW DUP _dt-close-rgn ! _DB-PROMPT-RGN !
+    _DB-PROMPT-BUF _DB-PROMPT-CAP PRM-NEW
+    DUP _dt-close-prompt ! _DB-PROMPT !
+    0 _DB-DO-RELOAD
+    _DB-PROMPT-MODE @ _DB-PRM-DISCARD-RELOAD = _dt-assert
+    _DB-PROMPT @ PRM-ACTIVE? _dt-assert _DB-DIRTY @ _dt-assert
+    S" RELOAD" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
+    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
+    _DB-DIRTY @ 0= _dt-assert _dt-model-canonical? _dt-assert
+
+    -1 _DB-DIRTY !
+    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
+    APP-CLOSE-D-DEFER = _dt-assert
+    _DB-PROMPT-MODE @ _DB-PRM-DISCARD-CLOSE = _dt-assert
+    _DB-PROMPT @ PRM-ACTIVE? _dt-assert
+    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
+    APP-CLOSE-D-DEFER = _dt-assert
+
+    S" discard" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
+    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
+    _DB-DISCARD-ARMED @ 0= _dt-assert
+    _DB-PROMPT @ PRM-ACTIVE? _dt-assert
+    S" DISCARD" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
+    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
+    _DB-DISCARD-ARMED @ _dt-assert
+    ASHELL-QUIT-PENDING? _dt-assert
+    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
+    APP-CLOSE-D-ALLOW = _dt-assert
+    _DB-DISCARD-ARMED @ 0= _dt-assert
+    ASHELL-CANCEL-QUIT
+    _dt-close-prompt @ PRM-FREE 0 _DB-PROMPT !
+    _dt-close-rgn @ RGN-FREE 0 _DB-PROMPT-RGN !
+    _dt-stack ;
+
+: _dt-run  ( -- )
+    0 _dt-fails ! 0 _dt-checks ! DEPTH _dt-depth !
+    _DAYBOOK-COMP-SETUP
+    DAYBOOK-COMP-DESC CINST-NEW DUP 0= _dt-assert DROP _dt-inst !
+    _dt-inst @ _DB-ACTIVATE
+    VFS-CUR DUP 0<> _dt-assert _DB-VFS !
+    _DB-VFS @ _DB-REPLACE VREPL-INIT VREPL-S-OK = _dt-assert
+    S" /daybook.md" _DB-REPLACE VREPL-DERIVE-PATHS!
+    VREPL-S-OK = _dt-assert
+    _dt-test-strict-import
+    _dt-test-load-and-replace
+    _dt-test-load-cleanup-faults
+    _dt-test-close
+    _dt-inst @ CINST-FREE
+    _dt-stack
+    _dt-fails @ 0= IF
+        ." DAYBOOK CONTRACTS PASS " _dt-checks @ .
+    ELSE
+        ." DAYBOOK CONTRACTS FAIL " _dt-fails @ . ." / " _dt-checks @ .
+    THEN CR ;
+
+_dt-run
+""",
+        ready_markers=("DAYBOOK CONTRACTS PASS",),
+        stable_markers=("DAYBOOK CONTRACTS PASS",),
+    ),
+    "grid-eval": Profile(
+        roots=("tui/applets/grid/grid.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - focused Grid dependency evaluator bounds
+ENTER-USERLAND
+." [akashic] loading grid evaluator" CR
+REQUIRE tui/applets/grid/grid.f
+
+VARIABLE _gt-fails
+VARIABLE _gt-checks
+VARIABLE _gt-depth
+VARIABLE _gt-canary
+CREATE _gt-state _GRID-STATE-SIZE ALLOT
+
+: _gt-assert  ( flag -- )
+    1 _gt-checks +!
+    0= IF 1 _gt-fails +! ." ASSERT " _gt-checks @ . CR THEN ;
+: _gt-stack  ( -- )
+    DEPTH DUP _gt-depth @ <> IF
+        ." STACK " _gt-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _gt-depth @ = _gt-assert ;
+: _gt-status  ( row col -- status )
+    _GRID-CELL _GC-STATUS + @ ;
+: _gt-value  ( row col -- value )
+    _GRID-CELL _GC-VALUE + @ ;
+
+: _gt-links-19  ( -- )
+    S" =A2"   0 0 _GRID-SET-CELL
+    S" =A3"   1 0 _GRID-SET-CELL
+    S" =A4"   2 0 _GRID-SET-CELL
+    S" =A5"   3 0 _GRID-SET-CELL
+    S" =A6"   4 0 _GRID-SET-CELL
+    S" =A7"   5 0 _GRID-SET-CELL
+    S" =A8"   6 0 _GRID-SET-CELL
+    S" =A9"   7 0 _GRID-SET-CELL
+    S" =A10"  8 0 _GRID-SET-CELL
+    S" =A11"  9 0 _GRID-SET-CELL
+    S" =A12" 10 0 _GRID-SET-CELL
+    S" =A13" 11 0 _GRID-SET-CELL
+    S" =A14" 12 0 _GRID-SET-CELL
+    S" =A15" 13 0 _GRID-SET-CELL
+    S" =A16" 14 0 _GRID-SET-CELL
+    S" =A17" 15 0 _GRID-SET-CELL
+    S" =A18" 16 0 _GRID-SET-CELL
+    S" =A19" 17 0 _GRID-SET-CELL
+    S" =A20" 18 0 _GRID-SET-CELL ;
+
+: _gt-chain-20  ( -- )
+    _GRID-CLEAR-MODEL _gt-links-19
+    S" 7" 19 0 _GRID-SET-CELL
+    _GRID-RECALCULATE ;
+
+: _gt-chain-21  ( -- )
+    _GRID-CLEAR-MODEL _gt-links-19
+    S" =A21" 19 0 _GRID-SET-CELL
+    S" 7" 20 0 _GRID-SET-CELL
+    _GRID-RECALCULATE ;
+
+: _gt-capacity-reject  ( -- )
+    _GE-CELL-STACK _GRID-EVAL-DEPTH CELLS + @ _gt-canary !
+    _GRID-EVAL-DEPTH _GE-DEPTH !
+    _GRID-CELLS @ _GE-PUSH 0= _gt-assert DROP
+    _GE-DEPTH @ _GRID-EVAL-DEPTH = _gt-assert
+    _GE-CELL-STACK _GRID-EVAL-DEPTH CELLS + @
+    _gt-canary @ = _gt-assert
+    0 _GE-DEPTH ! ;
+
+: _gt-run  ( -- )
+    0 _gt-fails ! 0 _gt-checks ! DEPTH _gt-depth !
+    _gt-state _GRID-STATE-SIZE 0 FILL
+    _gt-state _GRID-CURRENT-STATE !
+    _GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * ALLOCATE
+    DUP 0= _gt-assert
+    0<> IF DROP 1 _gt-fails +! EXIT THEN
+    _GRID-CELLS !
+
+    _gt-capacity-reject
+    _gt-stack
+
+    _gt-chain-20
+    0 0 _gt-status _GRID-ST-FORMULA = _gt-assert
+    0 0 _gt-value 7 = _gt-assert
+    19 0 _gt-status _GRID-ST-NUMBER = _gt-assert
+    _GE-DEPTH @ 0= _gt-assert
+    _GP-DEPTH @ 0= _gt-assert
+    _gt-stack
+
+    _gt-chain-21
+    0 0 _gt-status _GRID-ST-DEPTH = _gt-assert
+    19 0 _gt-status _GRID-ST-DEPTH = _gt-assert
+    20 0 _gt-status _GRID-ST-DEPTH = _gt-assert
+    0 0 _gt-status _GRID-ST-ERROR? _gt-assert
+    _GE-DEPTH @ 0= _gt-assert
+    _GP-DEPTH @ 0= _gt-assert
+    _GRID-RECALCULATE
+    0 0 _gt-status _GRID-ST-DEPTH = _gt-assert
+    _gt-stack
+
+    _GRID-CLEAR-MODEL
+    S" =A2" 0 0 _GRID-SET-CELL
+    S" =A1" 1 0 _GRID-SET-CELL
+    _GRID-RECALCULATE
+    0 0 _gt-status _GRID-ST-CYCLE = _gt-assert
+    1 0 _gt-status _GRID-ST-CYCLE = _gt-assert
+    0 0 _gt-status _GRID-ST-ERROR? _gt-assert
+    _GE-DEPTH @ 0= _gt-assert
+    _GP-DEPTH @ 0= _gt-assert
+    _gt-stack
+
+    _GRID-CLEAR-MODEL
+    S" =1/0" 0 0 _GRID-SET-CELL
+    _GRID-RECALCULATE
+    0 0 _gt-status _GRID-ST-ERROR = _gt-assert
+
+    S" =A2" 0 0 _GRID-SET-CELL
+    S" 7" 1 0 _GRID-SET-CELL
+    _GRID-RECALCULATE
+    0 0 _gt-status _GRID-ST-FORMULA = _gt-assert
+    0 0 _gt-value 7 = _gt-assert
+    _gt-stack
+
+    _GRID-CELLS @ FREE 0 _GRID-CELLS !
+    _gt-stack
+    _gt-fails @ 0= IF
+        ." GRID EVAL PASS " _gt-checks @ .
+    ELSE
+        ." GRID EVAL FAIL " _gt-fails @ . ." / " _gt-checks @ .
+    THEN CR ;
+
+_gt-run
+""",
+        ready_markers=("GRID EVAL PASS",),
+        stable_markers=("GRID EVAL PASS",),
+        failure_markers=("GRID EVAL FAIL",),
+    ),
+    "grid-contracts": Profile(
+        roots=("tui/applets/grid/grid.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - strict Grid import/persistence contracts
+ENTER-USERLAND
+." [akashic] loading Grid contracts" CR
+REQUIRE tui/applets/grid/grid.f
+
+VARIABLE _gcx-fails
+VARIABLE _gcx-checks
+VARIABLE _gcx-depth
+VARIABLE _gcx-inst
+VARIABLE _gcx-fd
+VARIABLE _gcx-a
+VARIABLE _gcx-u
+VARIABLE _gcx-r
+VARIABLE _gcx-c
+VARIABLE _gcx-old-vtable
+VARIABLE _gcx-read-calls
+VARIABLE _gcx-close-calls
+VARIABLE _gcx-use-calls
+VARIABLE _gcx-fd-head
+VARIABLE _gcx-fd-next
+CREATE _gcx-vtable VFS-VT-SIZE ALLOT
+CREATE _gcx-check 256 ALLOT
+CREATE _gcx-corrupt 7 ALLOT
+CREATE _gcx-quoted 6 ALLOT
+CREATE _gcx-saved 4 ALLOT
+CREATE _gcx-desc APP-DESC ALLOT
+
+: _gcx-assert  ( flag -- )
+    1 _gcx-checks +!
+    0= IF 1 _gcx-fails +! ." ASSERT " _gcx-checks @ . CR THEN ;
+: _gcx-stack  ( -- )
+    DEPTH DUP _gcx-depth @ <> IF
+        ." STACK " _gcx-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _gcx-depth @ = _gcx-assert ;
+: _gcx-cell=  ( a u row col -- flag )
+    _gcx-c ! _gcx-r ! _gcx-u ! _gcx-a !
+    _gcx-r @ _gcx-c @ _GRID-CELL
+    DUP _GC-LEN + @ _gcx-u @ <> IF DROP 0 EXIT THEN
+    _GC-SOURCE + _gcx-u @ _gcx-a @ _gcx-u @ COMPARE 0= ;
+: _gcx-model-canonical?  ( -- flag )
+    S" alpha" 0 0 _gcx-cell=
+    S" be,ta" 0 1 _gcx-cell= AND
+    _gcx-quoted 6 1 0 _gcx-cell= AND
+    S" =A1" 1 1 _gcx-cell= AND
+    _GRID-MAX-ROW @ 1 = AND _GRID-MAX-COL @ 1 = AND ;
+
+: _gcx-artifacts-init  ( -- )
+    [CHAR] " _gcx-corrupt C!
+    [CHAR] x _gcx-corrupt 1+ C!
+    [CHAR] " _gcx-corrupt 2 + C!
+    [CHAR] j _gcx-corrupt 3 + C!
+    [CHAR] u _gcx-corrupt 4 + C!
+    [CHAR] n _gcx-corrupt 5 + C!
+    [CHAR] k _gcx-corrupt 6 + C!
+    [CHAR] q _gcx-quoted C!
+    [CHAR] " _gcx-quoted 1+ C!
+    [CHAR] u _gcx-quoted 2 + C!
+    [CHAR] o _gcx-quoted 3 + C!
+    [CHAR] t _gcx-quoted 4 + C!
+    [CHAR] e _gcx-quoted 5 + C!
+    S" new" _gcx-saved SWAP CMOVE
+    10 _gcx-saved 3 + C! ;
+
+: _gcx-canonical-io  ( -- )
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    S" alpha," _GIO-APPEND
+    [CHAR] " _GIO-CHAR S" be,ta" _GIO-APPEND [CHAR] " _GIO-CHAR
+    13 _GIO-CHAR 10 _GIO-CHAR
+    [CHAR] " _GIO-CHAR S" q" _GIO-APPEND
+    [CHAR] " _GIO-CHAR [CHAR] " _GIO-CHAR
+    S" uote" _GIO-APPEND [CHAR] " _GIO-CHAR
+    [CHAR] , _GIO-CHAR S" =A1" _GIO-APPEND 10 _GIO-CHAR ;
+
+: _gcx-seed  ( -- )
+    _GRID-CLEAR-MODEL
+    S" sentinel" 0 0 _GRID-SET-CELL
+    _GRID-RECALCULATE -1 _GRID-DIRTY ! 0 _GRID-SOURCE-BLOCKED ! ;
+
+: _gcx-invalid  ( expected-status -- )
+    _GRID-PARSE-CSV = _gcx-assert
+    _gcx-model-canonical? _gcx-assert
+    _GRID-DIRTY @ _gcx-assert
+    _GRID-SOURCE-BLOCKED @ 0= _gcx-assert ;
+
+: _gcx-put  ( a u -- )
+    _gcx-u ! _gcx-a !
+    S" /grid.csv" VFS-OPEN DUP 0= IF
+        DROP S" /grid.csv" _GRID-VFS @ VFS-CREATE 0<> _gcx-assert
+        S" /grid.csv" VFS-OPEN
+    THEN
+    DUP 0<> _gcx-assert _gcx-fd !
+    0 _gcx-fd @ VFS-TRUNCATE 0= _gcx-assert
+    _gcx-a @ _gcx-u @ _gcx-fd @ VFS-WRITE-EXACT 0= _gcx-assert
+    _gcx-fd @ VFS-CLOSE
+    _GRID-VFS @ VFS-SYNC 0= _gcx-assert ;
+
+: _gcx-file=  ( a u -- flag )
+    _gcx-u ! _gcx-a !
+    S" /grid.csv" VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _gcx-fd !
+    _gcx-fd @ VFS-SIZE _gcx-u @ <> IF
+        _gcx-fd @ VFS-CLOSE 0 EXIT
+    THEN
+    _gcx-u @ 256 > IF _gcx-fd @ VFS-CLOSE 0 EXIT THEN
+    _gcx-check _gcx-u @ _gcx-fd @ VFS-READ-EXACT IF
+        _gcx-fd @ VFS-CLOSE 0 EXIT
+    THEN
+    _gcx-fd @ VFS-CLOSE
+    _gcx-check _gcx-u @ _gcx-a @ _gcx-u @ COMPARE 0= ;
+
+: _gcx-short-read  ( buf len offset inode vfs -- actual )
+    DROP DROP DROP NIP
+    1 _gcx-read-calls +!
+    _gcx-read-calls @ 1 = IF 1- 0 MAX ELSE DROP 0 THEN ;
+: _gcx-fail-sync  ( inode vfs -- ior ) 2DROP -1 ;
+: _gcx-vtable-save  ( -- )
+    _GRID-VFS @ V.VTABLE @ DUP _gcx-old-vtable !
+    _gcx-vtable VFS-VT-SIZE CMOVE ;
+: _gcx-vtable-restore  ( -- )
+    _gcx-old-vtable @ _GRID-VFS @ V.VTABLE ! ;
+: _gcx-short-reads-on  ( -- )
+    _gcx-vtable-save
+    ['] _gcx-short-read _gcx-vtable VFS-VT-READ CELLS + !
+    _gcx-vtable _GRID-VFS @ V.VTABLE ! ;
+: _gcx-sync-fails-on  ( -- )
+    _gcx-vtable-save
+    ['] _gcx-fail-sync _gcx-vtable VFS-VT-SYNC CELLS + !
+    _gcx-vtable _GRID-VFS @ V.VTABLE ! ;
+: _gcx-after-close  ( fd -- )
+    1 _gcx-close-calls +! VFS-CLOSE -811 THROW ;
+: _gcx-after-restore  ( vfs -- )
+    1 _gcx-use-calls +!
+    DUP VFS-USE
+    _gcx-use-calls @ 2 = IF DROP -812 THROW THEN
+    DROP ;
+: _gcx-fd-snapshot  ( -- )
+    _GRID-VFS @ V.FDFREE @ DUP _gcx-fd-head !
+    ?DUP IF FD.FREE @ ELSE 0 THEN _gcx-fd-next ! ;
+: _gcx-load-failure-clean?  ( -- )
+    VFS-CUR 0= _gcx-assert
+    _GRID-LOAD-FD @ 0= _gcx-assert
+    _GRID-LOAD-HAVE-OLD-VFS @ 0= _gcx-assert
+    _GRID-VFS @ V.FDFREE @ DUP _gcx-fd-head @ = _gcx-assert
+    ?DUP IF FD.FREE @ ELSE 0 THEN _gcx-fd-next @ = _gcx-assert
+    S" sentinel" 0 0 _gcx-cell= _gcx-assert
+    _GRID-DIRTY @ _gcx-assert _GRID-SOURCE-BLOCKED @ _gcx-assert ;
+
+: _gcx-test-parser  ( -- )
+    _gcx-canonical-io
+    _GRID-PARSE-CSV _GRID-L-S-OK = _gcx-assert
+    _gcx-model-canonical? _gcx-assert
+    -1 _GRID-DIRTY ! 0 _GRID-SOURCE-BLOCKED !
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    41 0 DO [CHAR] a _GIO-CHAR LOOP
+    _GRID-IO-BUF @ _GRID-IO-U @ 0 0 _GRID-SET-CELL
+    _gcx-model-canonical? _gcx-assert
+    _GRID-L-S-FIELD _gcx-invalid
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    16 0 DO [CHAR] , _GIO-CHAR LOOP [CHAR] x _GIO-CHAR
+    _GRID-L-S-CAPACITY _gcx-invalid
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    65 0 DO S" x" _GIO-APPEND 10 _GIO-CHAR LOOP
+    _GRID-L-S-CAPACITY _gcx-invalid
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    _gcx-corrupt 7 _GIO-APPEND
+    _GRID-L-S-INVALID _gcx-invalid
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    [CHAR] " _GIO-CHAR S" x" _GIO-APPEND
+    _GRID-L-S-INVALID _gcx-invalid
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    S" a" _GIO-APPEND [CHAR] " _GIO-CHAR S" b" _GIO-APPEND
+    _GRID-L-S-INVALID _gcx-invalid
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    S" a" _GIO-APPEND 13 _GIO-CHAR S" b" _GIO-APPEND
+    _GRID-L-S-INVALID _gcx-invalid
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    [CHAR] " _GIO-CHAR S" x" _GIO-APPEND [CHAR] " _GIO-CHAR
+    BL _GIO-CHAR
+    _GRID-L-S-INVALID _gcx-invalid
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GRID-ROWS 0 DO
+        _GRID-COLS 0 DO
+            S" x" _GIO-APPEND
+            I _GRID-COLS 1- < IF [CHAR] , _GIO-CHAR THEN
+        LOOP
+        10 _GIO-CHAR
+    LOOP
+    _GRID-PARSE-CSV _GRID-L-S-OK = _gcx-assert
+    _GRID-MAX-ROW @ _GRID-ROWS 1- = _gcx-assert
+    _GRID-MAX-COL @ _GRID-COLS 1- = _gcx-assert
+
+    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GRID-SOURCE-CAP 0 DO [CHAR] z _GIO-CHAR LOOP
+    _GRID-PARSE-CSV _GRID-L-S-OK = _gcx-assert
+    0 0 _GRID-CELL _GC-LEN + @ _GRID-SOURCE-CAP = _gcx-assert
+    _gcx-stack ;
+
+: _gcx-test-load-save  ( -- )
+    _gcx-seed
+    _GRID-IO-CAP 1+ ALLOCATE IF -2 THROW THEN
+    DUP >R _GRID-IO-CAP 1+ [CHAR] z FILL
+    R@ _GRID-IO-CAP 1+ _gcx-put R> FREE
+    90 _GRID-IO-BUF @ C! 0 _gcx-read-calls ! _gcx-short-reads-on
+    _GRID-LOAD _GRID-L-S-TOO-LARGE = _gcx-assert
+    _gcx-vtable-restore
+    _gcx-read-calls @ 0= _gcx-assert
+    _GRID-IO-BUF @ C@ 90 = _gcx-assert
+    S" sentinel" 0 0 _gcx-cell= _gcx-assert
+    _GRID-DIRTY @ _gcx-assert _GRID-SOURCE-BLOCKED @ _gcx-assert
+
+    _gcx-canonical-io
+    _GRID-IO-BUF @ _GRID-IO-U @ _gcx-put
+    _gcx-seed 0 _gcx-read-calls ! _gcx-short-reads-on
+    _GRID-LOAD _GRID-L-S-IO = _gcx-assert
+    _gcx-vtable-restore
+    _gcx-read-calls @ 2 = _gcx-assert
+    S" sentinel" 0 0 _gcx-cell= _gcx-assert
+    _GRID-DIRTY @ _gcx-assert _GRID-SOURCE-BLOCKED @ _gcx-assert
+    _GRID-LOAD _GRID-L-S-OK = _gcx-assert
+    _gcx-model-canonical? _gcx-assert
+    _GRID-SOURCE-BLOCKED @ 0= _gcx-assert _GRID-DIRTY @ _gcx-assert
+
+    _gcx-corrupt 7 _gcx-put
+    _GRID-LOAD _GRID-L-S-INVALID = _gcx-assert
+    _gcx-model-canonical? _gcx-assert
+    _GRID-DIRTY @ _gcx-assert _GRID-SOURCE-BLOCKED @ _gcx-assert
+    _GRID-SERIALIZE _GRID-L-S-OK = _gcx-assert
+    _GRID-WRITE _GRID-L-S-RECOVERY = _gcx-assert
+    _gcx-corrupt 7 _gcx-file= _gcx-assert
+
+    S" old" _gcx-put
+    _GRID-LOAD _GRID-L-S-OK = _gcx-assert
+    _GRID-SOURCE-BLOCKED @ 0= _gcx-assert
+    S" new" 0 0 _GRID-SET-CELL -1 _GRID-DIRTY !
+    _gcx-sync-fails-on
+    _GRID-SAVE 0<> _gcx-assert
+    _gcx-vtable-restore
+    S" old" _gcx-file= _gcx-assert
+    _GRID-DIRTY @ _gcx-assert _GRID-SOURCE-BLOCKED @ 0= _gcx-assert
+    _GRID-SAVE 0= _gcx-assert
+    _gcx-saved 4 _gcx-file= _gcx-assert
+    _GRID-DIRTY @ 0= _gcx-assert _GRID-SOURCE-BLOCKED @ 0= _gcx-assert
+    _GRID-REPLACE VREPL-STAGE$ _GRID-VFS @ VFS-RESOLVE 0= _gcx-assert
+    _GRID-REPLACE VREPL-BACKUP$ _GRID-VFS @ VFS-RESOLVE 0= _gcx-assert
+    _GRID-REPLACE VREPL-MARKER$ _GRID-VFS @ VFS-RESOLVE 0= _gcx-assert
+    _gcx-stack ;
+
+: _gcx-test-load-cleanup-faults  ( -- )
+    _gcx-seed _gcx-fd-snapshot
+    0 _gcx-close-calls ! 0 VFS-USE
+    ['] _gcx-after-close _GRID-LOAD-CLOSE-XT !
+    _GRID-LOAD _GRID-L-S-IO = _gcx-assert
+    _GRID-RESET-LOAD-DEPENDENCIES
+    _gcx-close-calls @ 1 = _gcx-assert
+    _gcx-load-failure-clean? _gcx-stack
+    _GRID-VFS @ VFS-USE
+
+    _gcx-seed _gcx-fd-snapshot
+    0 _gcx-use-calls ! 0 VFS-USE
+    ['] _gcx-after-restore _GRID-LOAD-USE-XT !
+    _GRID-LOAD _GRID-L-S-IO = _gcx-assert
+    _GRID-RESET-LOAD-DEPENDENCIES
+    _gcx-use-calls @ 2 = _gcx-assert
+    _gcx-load-failure-clean? _gcx-stack
+    _GRID-VFS @ VFS-USE
+    _GRID-LOAD _GRID-L-S-OK = _gcx-assert
+    _GRID-SOURCE-BLOCKED @ 0= _gcx-assert ;
+
+: _gcx-run  ( -- )
+    0 _gcx-fails ! 0 _gcx-checks ! DEPTH _gcx-depth !
+    _gcx-artifacts-init
+    _GRID-COMP-SETUP
+    GRID-COMP-DESC CINST-NEW DUP 0= _gcx-assert DROP _gcx-inst !
+    _gcx-inst @ _GRID-ACTIVATE
+    _GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * ALLOCATE
+    IF -2 THROW THEN _GRID-CELLS !
+    _GRID-IO-CAP ALLOCATE IF -2 THROW THEN _GRID-IO-BUF !
+    VFS-CUR DUP 0<> _gcx-assert _GRID-VFS !
+    _GRID-VFS @ _GRID-REPLACE VREPL-INIT VREPL-S-OK = _gcx-assert
+    S" /grid.csv" _GRID-REPLACE VREPL-DERIVE-PATHS!
+    VREPL-S-OK = _gcx-assert
+    _GRID-CLEAR-MODEL 0 _GRID-DIRTY ! 0 _GRID-SOURCE-BLOCKED !
+
+    _gcx-test-parser
+    _gcx-test-load-save
+    _gcx-test-load-cleanup-faults
+
+    _gcx-desc GRID-ENTRY
+    _gcx-desc APP.REQUEST-CLOSE-XT @
+    ['] GRID-REQUEST-CLOSE-CB = _gcx-assert
+    0 _GRID-DIRTY !
+    APP-CLOSE-R-WINDOW _gcx-inst @ GRID-REQUEST-CLOSE-CB
+    APP-CLOSE-D-ALLOW = _gcx-assert
+
+    _GRID-CELLS @ FREE 0 _GRID-CELLS !
+    _GRID-IO-BUF @ FREE 0 _GRID-IO-BUF !
+    _gcx-inst @ CINST-FREE
+    _gcx-stack
+    _gcx-fails @ 0= IF
+        ." GRID CONTRACTS PASS " _gcx-checks @ .
+    ELSE
+        ." GRID CONTRACTS FAIL " _gcx-fails @ . ." / " _gcx-checks @ .
+    THEN CR ;
+
+_gcx-run
+""",
+        ready_markers=("GRID CONTRACTS PASS",),
+        stable_markers=("GRID CONTRACTS PASS",),
+        failure_markers=("GRID CONTRACTS FAIL",),
     ),
     "grid": Profile(
         roots=("tui/applets/grid/grid.f",),
@@ -7305,11 +8605,10 @@ def smoke(
                         "Explorer delete did not remove the empty destination folder"
                     )
 
+                # Drive one ordinary post-dialog event before inspecting the
+                # final list repaint; standalone Explorer has no Desk hotbar,
+                # so Alt+1 is intentionally unclaimed here.
                 session.send_key("alt+1")
-                wait_screen(
-                    "[1:Akashic Pa*]",
-                    "Desk did not return focus to Pad after Explorer journey",
-                )
                 wait_screen(
                     "renamed.txt",
                     "File Explorer did not return to the populated Details view",

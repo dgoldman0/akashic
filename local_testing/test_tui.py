@@ -9,14 +9,16 @@ keys.f tests:  Define busy-loop Forth words that call KEY-POLL, inject
                raw escape sequences from Python between batches, and
                verify decoded event fields.
 """
-import os, sys, time
+import os, re, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+EMU_DIR    = os.path.abspath(os.environ.get(
+    "MEGAPAD_ROOT", os.path.join(ROOT_DIR, "..", "megapad")))
 ANSI_F     = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
 KEYS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "keys.f")
 UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
+TERM_F     = os.path.join(ROOT_DIR, "akashic", "utils", "term.f")
 CELL_F     = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
 SCREEN_F   = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
 DRAW_F     = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
@@ -31,6 +33,7 @@ LIST_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "list.f")
 TABS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "tabs.f")
 MENU_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "menu.f")
 DIALOG_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "dialog.f")
+UIDL_TUI_F = os.path.join(ROOT_DIR, "akashic", "tui", "uidl-tui.f")
 CANVAS_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "canvas.f")
 TREE_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "tree.f")
 
@@ -101,6 +104,7 @@ def build_snapshot():
     utf8_lines = _load_forth_lines(UTF8_F)
     ansi_lines = _load_forth_lines(ANSI_F)
     keys_lines = _load_forth_lines(KEYS_F)
+    term_lines = _load_forth_lines(TERM_F)
     cell_lines = _load_forth_lines(CELL_F)
     screen_lines = _load_forth_lines(SCREEN_F)
     draw_lines = _load_forth_lines(DRAW_F)
@@ -128,7 +132,7 @@ def build_snapshot():
 
     payload = "\n".join(
         kdos_lines + ["ENTER-USERLAND"] +
-        utf8_lines + ansi_lines + keys_lines +
+        utf8_lines + ansi_lines + keys_lines + term_lines +
         cell_lines + screen_lines +
         draw_lines + box_lines +
         region_lines + layout_lines +
@@ -643,6 +647,45 @@ def test_keys_accessors():
         '_EV KEY-HAS-CTRL? .', "-1")
     check_keys_custom("HAS-SHIFT? false", b'\x1b[A',
         '_EV KEY-HAS-SHIFT? .', "0")
+
+
+def test_blocking_ui_guard_boundaries():
+    """Blocking/event-loop entries must not retain a module guard."""
+    print("\n── GUARDED blocking UI ownership ──")
+    cases = (
+        (KEYS_F, "KEY-READ", "_keys-read-xt"),
+        (KEYS_F, "KEY-POLL", "_keys-poll-xt"),
+        (KEYS_F, "KEY-WAIT", "_keys-wait-xt"),
+        (DIALOG_F, "DLG-SHOW", "_dlg-show-xt"),
+        (DIALOG_F, "DLG-INFO", "_dlg-info-xt"),
+        (DIALOG_F, "DLG-CONFIRM", "_dlg-confirm-xt"),
+        (WIDGET_F, "WDG-DRAW", "_wdg-draw-xt"),
+        (WIDGET_F, "WDG-HANDLE", "_wdg-handle-xt"),
+        (UIDL_TUI_F, "UTUI-LOAD", "_utui-load-xt"),
+        (UIDL_TUI_F, "UTUI-PAINT", "_utui-paint-xt"),
+        (UIDL_TUI_F, "UTUI-RELAYOUT", "_utui-relayout-xt"),
+        (UIDL_TUI_F, "UTUI-DISPATCH-KEY", "_utui-dispatch-key-xt"),
+        (UIDL_TUI_F, "UTUI-DISPATCH-MOUSE", "_utui-dispatch-mouse-xt"),
+        (UIDL_TUI_F, "UTUI-TAB-SELECT", "_utui-tab-select-xt"),
+        (os.path.join(ROOT_DIR, "akashic", "tui", "applets", "fexplorer",
+                      "fexplorer.f"), "FEXP-RUN", "_fexp-run-xt"),
+    )
+    global _pass_count, _fail_count
+    for path, word, xt_name in cases:
+        with open(path) as source:
+            text = source.read()
+        unwrapped = re.search(
+            rf"^:\s*{re.escape(word)}\s+{re.escape(xt_name)}\s+EXECUTE\s*;",
+            text, re.MULTILINE)
+        guarded = re.search(
+            rf"^:\s*{re.escape(word)}\b[^\n]*WITH-GUARD",
+            text, re.MULTILINE)
+        if unwrapped and not guarded:
+            _pass_count += 1
+            print(f"  PASS  {word} is an unwrapped owner entry")
+        else:
+            _fail_count += 1
+            print(f"  FAIL  {word} retains or lacks its owner-entry wrapper")
 
 
 # =====================================================================
@@ -3497,6 +3540,7 @@ if __name__ == "__main__":
     test_keys_shift_tab()
     test_keys_modifiers()
     test_keys_accessors()
+    test_blocking_ui_guard_boundaries()
 
     # Cell tests (Layer 1)
     test_cell_pack_unpack()

@@ -144,15 +144,32 @@ FEXP-RUN
 ```
 
 Creates its own descriptor and runs the app-shell event loop.
+In a `GUARDED` build this lifecycle word deliberately runs unwrapped on the
+applet owner core, matching `ASHELL-RUN`: the event loop may block or yield,
+so a cross-core launcher must post a launch request instead of calling it
+while retaining the Explorer guard.
 
 ## Internals
 
 - Detail list populated by walking VFS inode children (`IN.CHILD @` / `IN.SIBLING @` chain)
 - `_VFS-ENSURE-CHILDREN` called before first child walk to lazy-load from binding
 - Bubble sort on parallel arrays (items, inodes, formatted lines)
-- Preview reads up to 32 KiB via `VFS-OPEN` / `VFS-READ` / `VFS-CLOSE`
+- Preview reads up to 32 KiB with an exact checked transfer; a failed preview
+  read leaves the prior view intact.
 - Path built by walking `IN.PARENT @` chain up to root, then reversing segments
-- Clipboard uses file copy via VFS read/write loop; cut additionally calls `VFS-RM`
+- Clipboard captures a canonical source path rather than relying on a live
+  inode pointer. Directories, same-path pastes, and existing destinations are
+  rejected before mutation.
+- Paste holds `VFS-TRANSACTION` across validation, context selection, exact
+  chunked I/O, sync, byte verification, cleanup, and context restoration. A
+  pre-verification failure removes the newly created destination; cleanup
+  uncertainty is reported explicitly.
+- Cut removes the source only after the copied destination has synced and
+  byte-verified. If source deletion fails, both verified copies remain and the
+  app reports the incomplete cut instead of silently losing data.
+- Create, rename, and post-confirmation delete mutations are bounded
+  `VFS-TRANSACTION` operations. Modal confirmation never holds the VFS guard
+  across its input/yield loop.
 - Go To, New File, New Folder, and Rename share a non-blocking command bar
   mounted over the status row, so they work both standalone and inside Desk.
 - Selection is unified across the sidebar and Details list. Preview,

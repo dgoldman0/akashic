@@ -22,8 +22,10 @@ REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
+REQUIRE ../../../utils/fs/vfs-replace.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/datetime.f
+REQUIRE ../../../text/utf8.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/endpoint.f
@@ -45,6 +47,17 @@ REQUIRE ../../../interop/resource.f
 1 CONSTANT _DB-PRM-TASK
 2 CONSTANT _DB-PRM-EVENT
 3 CONSTANT _DB-PRM-NOTE
+4 CONSTANT _DB-PRM-DISCARD-CLOSE
+5 CONSTANT _DB-PRM-DISCARD-RELOAD
+
+0 CONSTANT _DB-L-S-OK
+1 CONSTANT _DB-L-S-MISSING
+2 CONSTANT _DB-L-S-IO
+3 CONSTANT _DB-L-S-TOO-LARGE
+4 CONSTANT _DB-L-S-INVALID
+5 CONSTANT _DB-L-S-CAPACITY
+6 CONSTANT _DB-L-S-TEXT
+7 CONSTANT _DB-L-S-RECOVERY
 
  0 CONSTANT _DB-E-KIND
  8 CONSTANT _DB-E-DONE
@@ -66,6 +79,9 @@ _DB-CURRENT-STATE CMP-CELL: _DB-SELECTED
 _DB-CURRENT-STATE CMP-CELL: _DB-DIRTY
 _DB-CURRENT-STATE CMP-CELL: _DB-VIEW-DIRTY
 _DB-CURRENT-STATE CMP-CELL: _DB-VFS
+_DB-CURRENT-STATE VREPL-SIZE CMP-FIELD: _DB-REPLACE
+_DB-CURRENT-STATE CMP-CELL: _DB-DISCARD-ARMED
+_DB-CURRENT-STATE CMP-CELL: _DB-SOURCE-BLOCKED
 
 _DB-CURRENT-STATE CMP-CELL: _DB-E-BODY
 _DB-CURRENT-STATE CMP-CELL: _DB-E-SBAR
@@ -112,16 +128,34 @@ VARIABLE _DB-A-TEXT-U
 VARIABLE _DB-A-N
 VARIABLE _DB-A-ENTRY
 
+VARIABLE _DB-TV-A
+VARIABLE _DB-TV-U
+VARIABLE _DB-TV-OK
+
+: _DB-TEXT-VALID?  ( addr len -- flag )
+    _DB-TV-U ! _DB-TV-A !
+    _DB-TV-U @ 0< _DB-TV-U @ _DB-TEXT-CAP > OR IF 0 EXIT THEN
+    _DB-TV-U @ 0> _DB-TV-A @ 0= AND IF 0 EXIT THEN
+    _DB-TV-A @ _DB-TV-U @ UTF8-VALID? 0= IF 0 EXIT THEN
+    -1 _DB-TV-OK !
+    _DB-TV-U @ 0 ?DO
+        _DB-TV-A @ I + C@ DUP 10 = SWAP 13 = OR IF
+            0 _DB-TV-OK !
+        THEN
+    LOOP
+    _DB-TV-OK @ ;
+
 : _DB-ADD  ( kind done date minute text-a text-u -- index | -1 )
     _DB-A-TEXT-U ! _DB-A-TEXT-A ! _DB-A-MINUTE !
     _DB-A-DATE ! _DB-A-DONE ! _DB-A-KIND !
     _DB-COUNT @ _DB-MAX-ENTRIES >= IF -1 EXIT THEN
+    _DB-A-TEXT-A @ _DB-A-TEXT-U @ _DB-TEXT-VALID? 0= IF -1 EXIT THEN
     _DB-COUNT @ DUP _DB-ENTRY _DB-A-ENTRY !
     _DB-A-KIND @   _DB-A-ENTRY @ _DB-E-KIND + !
     _DB-A-DONE @   _DB-A-ENTRY @ _DB-E-DONE + !
     _DB-A-DATE @   _DB-A-ENTRY @ _DB-E-DATE + !
     _DB-A-MINUTE @ _DB-A-ENTRY @ _DB-E-MINUTE + !
-    _DB-A-TEXT-U @ _DB-TEXT-CAP MIN _DB-A-N !
+    _DB-A-TEXT-U @ _DB-A-N !
     _DB-A-N @ _DB-A-ENTRY @ _DB-E-TEXT-U + !
     _DB-A-TEXT-A @ _DB-A-ENTRY @ _DB-E-TEXT + _DB-A-N @ CMOVE
     1 _DB-COUNT +! ;
@@ -179,6 +213,19 @@ VARIABLE _DB-LINE-U
 VARIABLE _DB-LINE-DATE
 VARIABLE _DB-LINE-TIME
 VARIABLE _DB-LINE-DONE
+VARIABLE _DB-LINE-KIND
+VARIABLE _DB-LINE-TEXT-A
+VARIABLE _DB-LINE-TEXT-U
+VARIABLE _DB-PARSE-ERROR
+VARIABLE _DB-PARSE-COUNT
+VARIABLE _DB-PARSE-HEADER
+VARIABLE _DB-PARSE-COMMIT
+
+: _DB-LINE-TEXT!  ( addr len -- flag )
+    2DUP _DB-TEXT-VALID? 0= IF
+        2DROP _DB-L-S-TEXT _DB-PARSE-ERROR ! 0 EXIT
+    THEN
+    _DB-LINE-TEXT-U ! _DB-LINE-TEXT-A ! -1 ;
 
 : _DB-PARSE-TASK?  ( -- flag )
     _DB-LINE-U @ 19 < IF 0 EXIT THEN
@@ -190,15 +237,15 @@ VARIABLE _DB-LINE-DONE
     _DB-LINE-A @ 16 + C@ BL <> IF 0 EXIT THEN
     _DB-LINE-A @ 17 + C@ [CHAR] | <> IF 0 EXIT THEN
     _DB-LINE-A @ 18 + C@ BL <> IF 0 EXIT THEN
-    _DB-LINE-A @ 3 + C@ DUP [CHAR] x = OVER [CHAR] X = OR IF
+    _DB-LINE-A @ 3 + C@ DUP [CHAR] x = IF
         DROP -1 _DB-LINE-DONE !
-    ELSE
-        BL <> IF 0 EXIT THEN 0 _DB-LINE-DONE !
-    THEN
+    ELSE BL <> IF 0 EXIT THEN 0 _DB-LINE-DONE ! THEN
     _DB-LINE-A @ 6 + 10 _DB-PARSE-DATE
     0= IF DROP 0 EXIT THEN _DB-LINE-DATE !
-    _DB-K-TASK _DB-LINE-DONE @ _DB-LINE-DATE @ -1
-    _DB-LINE-A @ 19 + _DB-LINE-U @ 19 - _DB-ADD DROP
+    _DB-LINE-A @ 19 + _DB-LINE-U @ 19 - _DB-LINE-TEXT! 0= IF
+        0 EXIT
+    THEN
+    _DB-K-TASK _DB-LINE-KIND ! -1 _DB-LINE-TIME !
     -1 ;
 
 : _DB-PARSE-EVENT?  ( -- flag )
@@ -213,8 +260,10 @@ VARIABLE _DB-LINE-DONE
     0= IF DROP 0 EXIT THEN _DB-LINE-DATE !
     _DB-LINE-A @ 13 + 5 _DB-PARSE-TIME
     0= IF DROP 0 EXIT THEN _DB-LINE-TIME !
-    _DB-K-EVENT 0 _DB-LINE-DATE @ _DB-LINE-TIME @
-    _DB-LINE-A @ 21 + _DB-LINE-U @ 21 - _DB-ADD DROP
+    _DB-LINE-A @ 21 + _DB-LINE-U @ 21 - _DB-LINE-TEXT! 0= IF
+        0 EXIT
+    THEN
+    _DB-K-EVENT _DB-LINE-KIND ! 0 _DB-LINE-DONE !
     -1 ;
 
 : _DB-PARSE-NOTE?  ( -- flag )
@@ -226,49 +275,162 @@ VARIABLE _DB-LINE-DONE
     _DB-LINE-A @ 14 + C@ BL <> IF 0 EXIT THEN
     _DB-LINE-A @ 2 + 10 _DB-PARSE-DATE
     0= IF DROP 0 EXIT THEN _DB-LINE-DATE !
-    _DB-K-NOTE 0 _DB-LINE-DATE @ -1
-    _DB-LINE-A @ 15 + _DB-LINE-U @ 15 - _DB-ADD DROP
+    _DB-LINE-A @ 15 + _DB-LINE-U @ 15 - _DB-LINE-TEXT! 0= IF
+        0 EXIT
+    THEN
+    _DB-K-NOTE _DB-LINE-KIND ! 0 _DB-LINE-DONE ! -1 _DB-LINE-TIME !
     -1 ;
 
-: _DB-PARSE-LINE  ( addr len -- )
+: _DB-ACCEPT-LINE  ( -- flag )
+    _DB-PARSE-COUNT @ _DB-MAX-ENTRIES >= IF
+        _DB-L-S-CAPACITY _DB-PARSE-ERROR ! 0 EXIT
+    THEN
+    _DB-PARSE-COMMIT @ IF
+        _DB-LINE-KIND @ _DB-LINE-DONE @ _DB-LINE-DATE @
+        _DB-LINE-TIME @ _DB-LINE-TEXT-A @ _DB-LINE-TEXT-U @ _DB-ADD
+        0< IF _DB-L-S-INVALID _DB-PARSE-ERROR ! 0 EXIT THEN
+    THEN
+    1 _DB-PARSE-COUNT +! -1 ;
+
+: _DB-PARSE-LINE  ( addr len -- flag )
     _DB-LINE-U ! _DB-LINE-A !
     _DB-LINE-U @ 0> IF
         _DB-LINE-A @ _DB-LINE-U @ + 1- C@ 13 = IF -1 _DB-LINE-U +! THEN
     THEN
-    _DB-PARSE-TASK? IF EXIT THEN
-    _DB-PARSE-EVENT? IF EXIT THEN
-    _DB-PARSE-NOTE? DROP ;
+    _DB-LINE-U @ 0= IF -1 EXIT THEN
+    _DB-LINE-A @ _DB-LINE-U @ S" # Daybook" STR-STR= IF
+        _DB-PARSE-HEADER @ _DB-PARSE-COUNT @ 0<> OR IF
+            _DB-L-S-INVALID _DB-PARSE-ERROR ! 0 EXIT
+        THEN
+        -1 _DB-PARSE-HEADER ! -1 EXIT
+    THEN
+    _DB-PARSE-HEADER @ 0= IF
+        _DB-L-S-INVALID _DB-PARSE-ERROR ! 0 EXIT
+    THEN
+    _DB-PARSE-TASK? IF _DB-ACCEPT-LINE EXIT THEN
+    _DB-PARSE-EVENT? IF _DB-ACCEPT-LINE EXIT THEN
+    _DB-PARSE-NOTE? IF _DB-ACCEPT-LINE EXIT THEN
+    _DB-PARSE-ERROR @ 0= IF _DB-L-S-INVALID _DB-PARSE-ERROR ! THEN
+    0 ;
 
 VARIABLE _DB-LOAD-POS
 VARIABLE _DB-LOAD-START
 VARIABLE _DB-LOAD-FD
 
-: _DB-PARSE-FILE  ( -- )
+: _DB-SCAN-FILE  ( commit? -- status )
+    _DB-PARSE-COMMIT !
+    0 _DB-PARSE-ERROR ! 0 _DB-PARSE-COUNT ! 0 _DB-PARSE-HEADER !
+    _DB-IO-BUF _DB-IO-U @ UTF8-VALID? 0= IF _DB-L-S-INVALID EXIT THEN
     0 _DB-LOAD-POS ! 0 _DB-LOAD-START !
     BEGIN _DB-LOAD-POS @ _DB-IO-U @ < WHILE
         _DB-IO-BUF _DB-LOAD-POS @ + C@ 10 = IF
             _DB-IO-BUF _DB-LOAD-START @ +
-            _DB-LOAD-POS @ _DB-LOAD-START @ - _DB-PARSE-LINE
+            _DB-LOAD-POS @ _DB-LOAD-START @ - _DB-PARSE-LINE 0= IF
+                _DB-PARSE-ERROR @ EXIT
+            THEN
             _DB-LOAD-POS @ 1+ _DB-LOAD-START !
         THEN
         1 _DB-LOAD-POS +!
     REPEAT
     _DB-LOAD-START @ _DB-IO-U @ < IF
         _DB-IO-BUF _DB-LOAD-START @ +
-        _DB-IO-U @ _DB-LOAD-START @ - _DB-PARSE-LINE
+        _DB-IO-U @ _DB-LOAD-START @ - _DB-PARSE-LINE 0= IF
+            _DB-PARSE-ERROR @ EXIT
+        THEN
+    THEN
+    _DB-PARSE-HEADER @ 0= IF _DB-L-S-INVALID EXIT THEN
+    _DB-L-S-OK ;
+
+: _DB-PARSE-FILE  ( -- status )
+    0 _DB-SCAN-FILE DUP IF EXIT THEN DROP
+    _DB-CLEAR
+    -1 _DB-SCAN-FILE ;
+
+VARIABLE _DB-LOAD-OLD-VFS
+VARIABLE _DB-LOAD-STATUS
+VARIABLE _DB-LOAD-HAVE-OLD-VFS
+VARIABLE _DB-LOAD-CLEAN-FD
+VARIABLE _DB-LOAD-CLEAN-FAILED
+VARIABLE _DB-LOAD-CLOSE-XT
+VARIABLE _DB-LOAD-USE-XT
+
+: _DB-RESET-LOAD-DEPENDENCIES  ( -- )
+    ['] VFS-CLOSE _DB-LOAD-CLOSE-XT !
+    ['] VFS-USE   _DB-LOAD-USE-XT ! ;
+
+_DB-RESET-LOAD-DEPENDENCIES
+
+: _DB-LOAD-CLOSE-CALL  ( -- )
+    _DB-LOAD-CLEAN-FD @ _DB-LOAD-CLOSE-XT @ EXECUTE ;
+
+: _DB-LOAD-RESTORE-CALL  ( -- )
+    _DB-LOAD-OLD-VFS @ _DB-LOAD-USE-XT @ EXECUTE ;
+
+: _DB-READ-FILE-CLEANUP  ( -- failed? )
+    0 _DB-LOAD-CLEAN-FAILED !
+    _DB-LOAD-FD @ ?DUP IF
+        _DB-LOAD-CLEAN-FD ! 0 _DB-LOAD-FD !
+        ['] _DB-LOAD-CLOSE-CALL CATCH IF
+            -1 _DB-LOAD-CLEAN-FAILED !
+        THEN
+    THEN
+    _DB-LOAD-HAVE-OLD-VFS @ IF
+        0 _DB-LOAD-HAVE-OLD-VFS !
+        ['] _DB-LOAD-RESTORE-CALL CATCH IF
+            -1 _DB-LOAD-CLEAN-FAILED !
+        THEN
+    THEN
+    _DB-LOAD-CLEAN-FAILED @ ;
+
+: _DB-READ-FILE-BODY  ( -- status )
+    S" /daybook.md" VFS-OPEN DUP 0= IF
+        DROP _DB-L-S-MISSING EXIT
+    THEN
+    _DB-LOAD-FD !
+    _DB-LOAD-FD @ VFS-SIZE DUP _DB-IO-U !
+    DUP 0< IF DROP _DB-L-S-IO EXIT THEN
+    _DB-IO-CAP > IF
+        _DB-L-S-TOO-LARGE EXIT
+    THEN
+    _DB-IO-BUF _DB-IO-U @ _DB-LOAD-FD @ VFS-READ-EXACT
+    IF _DB-L-S-IO ELSE _DB-L-S-OK THEN ;
+
+: _DB-READ-FILE-OP  ( -- )
+    VFS-CUR _DB-LOAD-OLD-VFS !
+    -1 _DB-LOAD-HAVE-OLD-VFS !
+    _DB-VFS @ _DB-LOAD-USE-XT @ EXECUTE
+    _DB-READ-FILE-BODY _DB-LOAD-STATUS ! ;
+
+: _DB-READ-FILE-TRANSACTION  ( -- status )
+    0 _DB-LOAD-FD ! 0 _DB-LOAD-HAVE-OLD-VFS !
+    _DB-L-S-IO _DB-LOAD-STATUS !
+    ['] _DB-READ-FILE-OP CATCH IF
+        _DB-L-S-IO _DB-LOAD-STATUS !
+    THEN
+    _DB-READ-FILE-CLEANUP IF _DB-L-S-IO EXIT THEN
+    _DB-LOAD-STATUS @ ;
+
+: _DB-READ-FILE-TRANSACTION-CALL  ( -- status )
+    ['] _DB-READ-FILE-TRANSACTION VFS-TRANSACTION ;
+
+: _DB-READ-FILE  ( -- status )
+    ['] _DB-READ-FILE-TRANSACTION-CALL CATCH ?DUP IF
+        DROP _DB-L-S-IO
     THEN ;
 
-: _DB-LOAD  ( -- ior )
-    _DB-CLEAR
-    VFS-CUR >R _DB-VFS @ VFS-USE
-    S" /daybook.md" VFS-OPEN
-    R> VFS-USE
-    DUP 0= IF DROP 0 EXIT THEN
-    _DB-LOAD-FD !
-    _DB-IO-BUF _DB-IO-CAP _DB-LOAD-FD @ VFS-READ _DB-IO-U !
-    _DB-LOAD-FD @ VFS-CLOSE
-    _DB-PARSE-FILE
-    0 ;
+: _DB-RECOVER  ( -- status )
+    _DB-REPLACE VREPL-RECOVER
+    DUP VREPL-S-OK = IF DROP _DB-L-S-OK EXIT THEN
+    DUP VREPL-S-ROLLED-BACK = IF DROP _DB-L-S-OK EXIT THEN
+    VREPL-S-COMMITTED-CLEANUP = IF _DB-L-S-OK ELSE _DB-L-S-RECOVERY THEN ;
+
+: _DB-LOAD  ( -- status )
+    _DB-RECOVER DUP IF -1 _DB-SOURCE-BLOCKED ! EXIT THEN DROP
+    _DB-READ-FILE DUP _DB-L-S-MISSING = IF
+        DROP _DB-CLEAR 0 _DB-SOURCE-BLOCKED ! _DB-L-S-OK EXIT
+    THEN
+    DUP IF -1 _DB-SOURCE-BLOCKED ! EXIT THEN DROP
+    _DB-PARSE-FILE DUP IF -1 ELSE 0 THEN _DB-SOURCE-BLOCKED ! ;
 
 VARIABLE _DB-APP-A
 VARIABLE _DB-APP-U
@@ -321,29 +483,13 @@ VARIABLE _DB-SER-E
     S" # Daybook" _DB-IO-APPEND 10 _DB-IO-CHAR 10 _DB-IO-CHAR
     _DB-COUNT @ 0 ?DO I _DB-ENTRY _DB-SERIALIZE-ENTRY LOOP ;
 
-VARIABLE _DB-SAVE-FD
-VARIABLE _DB-SAVE-ACTUAL
 VARIABLE _DB-SAVE-IOR
 
 : _DB-WRITE  ( -- ior )
-    VFS-CUR >R _DB-VFS @ VFS-USE
-    S" /daybook.md" VFS-OPEN
-    DUP 0= IF
-        DROP S" /daybook.md" _DB-VFS @ VFS-CREATE
-        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN DROP
-        S" /daybook.md" VFS-OPEN
-        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN
-    THEN
-    R> VFS-USE
-    _DB-SAVE-FD !
-    _DB-SAVE-FD @ VFS-REWIND
-    0 _DB-SAVE-FD @ VFS-TRUNCATE IF
-        _DB-SAVE-FD @ VFS-CLOSE -2 EXIT
-    THEN
-    _DB-IO-BUF _DB-IO-U @ _DB-SAVE-FD @ VFS-WRITE _DB-SAVE-ACTUAL !
-    _DB-SAVE-FD @ VFS-CLOSE
-    _DB-VFS @ VFS-SYNC DROP
-    _DB-SAVE-ACTUAL @ _DB-IO-U @ = IF 0 ELSE -3 THEN ;
+    _DB-SOURCE-BLOCKED @ IF _DB-L-S-RECOVERY EXIT THEN
+    _DB-IO-BUF _DB-IO-U @ _DB-REPLACE VREPL-REPLACE
+    DUP VREPL-S-OK = IF DROP 0 EXIT THEN
+    DUP VREPL-S-COMMITTED-CLEANUP = IF DROP 0 EXIT THEN ;
 
 : _DB-DAY-COUNT  ( -- n )
     0
@@ -402,7 +548,12 @@ VARIABLE _DB-ST-N
     _DB-ST-RESET
     _DB-DAY-COUNT NUM>STR _DB-ST-APPEND
     S"  entries  |  " _DB-ST-APPEND
-    _DB-DIRTY @ IF S" Unsaved" ELSE S" Saved" THEN _DB-ST-APPEND
+    _DB-SOURCE-BLOCKED @ IF
+        S" Source blocked"
+    ELSE
+        _DB-DIRTY @ IF S" Unsaved" ELSE S" Saved" THEN
+    THEN
+    _DB-ST-APPEND
     _DB-E-SBAR-STATE @ ?DUP IF
         S" text" _DB-STATUS-BUF _DB-STATUS-U @ UTUI-SET-ATTR
     THEN ;
@@ -415,17 +566,24 @@ VARIABLE _DB-ST-N
 
 : _DB-SAVE  ( -- ior )
     _DB-SERIALIZE _DB-WRITE DUP _DB-SAVE-IOR !
-    0= IF 0 _DB-DIRTY ! THEN
+    0= IF 0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! THEN
     _DB-INVALIDATE
     _DB-SAVE-IOR @ ;
 
 : _DB-TOUCH  ( -- )
     _DB-CURRENT-INSTANCE @ ?DUP IF CINST-TOUCH THEN ;
 
-: _DB-COMMIT  ( -- )
-    -1 _DB-DIRTY !
-    _DB-SAVE IF
+: _DB-SAVE-ERROR-TOAST  ( -- )
+    _DB-SOURCE-BLOCKED @ IF
+        S" Reload a valid Daybook source before saving" 2600 ASHELL-TOAST
+    ELSE
         S" Daybook save failed" 2200 ASHELL-TOAST
+    THEN ;
+
+: _DB-COMMIT  ( -- )
+    -1 _DB-DIRTY ! 0 _DB-DISCARD-ARMED !
+    _DB-SAVE IF
+        _DB-SAVE-ERROR-TOAST
     ELSE
         _DB-TOUCH
     THEN ;
@@ -686,16 +844,81 @@ VARIABLE _DB-SUB-MINUTE
     _DB-K-EVENT _DB-KIND-COUNT
     _DB-K-TASK _DB-KIND-COUNT + 1- 0 MAX _DB-SELECTED ! ;
 
+: _DB-ADD-FAILED-TOAST  ( -- )
+    S" Entry is too long or Daybook is full" 2400 ASHELL-TOAST ;
+
+: _DB-LOAD-ERROR-TOAST  ( status -- )
+    DUP _DB-L-S-TOO-LARGE = IF
+        DROP S" Daybook source exceeds 32 KiB; current entries kept"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP _DB-L-S-RECOVERY = IF
+        DROP S" Daybook recovery failed; current entries kept"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP _DB-L-S-INVALID = IF
+        DROP S" Daybook source is invalid; current entries kept"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP _DB-L-S-CAPACITY = IF
+        DROP S" Daybook source has more than 96 entries; current entries kept"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    _DB-L-S-TEXT = IF
+        S" Daybook source has text over 120 bytes; current entries kept"
+    ELSE
+        S" Daybook read failed; current entries kept"
+    THEN
+    3000 ASHELL-TOAST ;
+
+: _DB-RELOAD-NOW  ( -- )
+    _DB-LOAD DUP IF
+        _DB-LOAD-ERROR-TOAST
+    ELSE
+        DROP 0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED !
+        _DB-CLAMP-SELECTION _DB-TOUCH _DB-INVALIDATE
+        S" Daybook reloaded" 1400 ASHELL-TOAST
+    THEN ;
+
+: _DB-RESHOW-DISCARD-CLOSE  ( -- )
+    _DB-PRM-DISCARD-CLOSE S" Type DISCARD to close without saving:"
+    _DB-SHOW-PROMPT ;
+
+: _DB-RESHOW-DISCARD-RELOAD  ( -- )
+    _DB-PRM-DISCARD-RELOAD S" Type RELOAD to discard unsaved changes:"
+    _DB-SHOW-PROMPT ;
+
 : _DB-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT _DB-SUB-U ! _DB-SUB-A !
     _DB-PROMPT-MODE @ _DB-SUB-MODE !
     _DB-PRM-NONE _DB-PROMPT-MODE !
+    _DB-SUB-MODE @ _DB-PRM-DISCARD-CLOSE = IF
+        _DB-SUB-A @ _DB-SUB-U @ S" DISCARD" STR-STR= IF
+            -1 _DB-DISCARD-ARMED !
+            S" Unsaved Daybook changes will be discarded" 1800 ASHELL-TOAST
+            ASHELL-QUIT
+        ELSE
+            S" Enter DISCARD exactly to confirm" 2000 ASHELL-TOAST
+            _DB-RESHOW-DISCARD-CLOSE
+        THEN
+        _DB-INVALIDATE EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-DISCARD-RELOAD = IF
+        _DB-SUB-A @ _DB-SUB-U @ S" RELOAD" STR-STR= IF
+            _DB-RELOAD-NOW
+        ELSE
+            S" Enter RELOAD exactly to confirm" 2000 ASHELL-TOAST
+            _DB-RESHOW-DISCARD-RELOAD
+        THEN
+        _DB-INVALIDATE EXIT
+    THEN
     _DB-SUB-U @ 0= IF _DB-INVALIDATE EXIT THEN
     _DB-SUB-MODE @ CASE
         _DB-PRM-TASK OF
             _DB-K-TASK 0 _DB-SELECTED-DATE @ -1
-            _DB-SUB-A @ _DB-SUB-U @ _DB-ADD DROP
-            _DB-SELECT-NEW-TASK _DB-COMMIT
+            _DB-SUB-A @ _DB-SUB-U @ _DB-ADD
+            DUP 0< IF DROP _DB-ADD-FAILED-TOAST
+            ELSE DROP _DB-SELECT-NEW-TASK _DB-COMMIT THEN
         ENDOF
         _DB-PRM-EVENT OF
             _DB-SUB-U @ 6 < IF
@@ -707,16 +930,22 @@ VARIABLE _DB-SUB-MINUTE
                 ELSE
                     _DB-SUB-MINUTE !
                     _DB-K-EVENT 0 _DB-SELECTED-DATE @ _DB-SUB-MINUTE @
-                    _DB-SUB-A @ 6 + _DB-SUB-U @ 6 - _DB-ADD DROP
-                    _DB-K-EVENT _DB-KIND-COUNT 1- 0 MAX _DB-SELECTED !
-                    _DB-COMMIT
+                    _DB-SUB-A @ 6 + _DB-SUB-U @ 6 - _DB-ADD
+                    DUP 0< IF DROP _DB-ADD-FAILED-TOAST
+                    ELSE
+                        DROP _DB-K-EVENT _DB-KIND-COUNT 1- 0 MAX
+                        _DB-SELECTED ! _DB-COMMIT
+                    THEN
                 THEN
             THEN
         ENDOF
         _DB-PRM-NOTE OF
             _DB-K-NOTE 0 _DB-SELECTED-DATE @ -1
-            _DB-SUB-A @ _DB-SUB-U @ _DB-ADD DROP
-            _DB-DAY-COUNT 1- 0 MAX _DB-SELECTED ! _DB-COMMIT
+            _DB-SUB-A @ _DB-SUB-U @ _DB-ADD
+            DUP 0< IF DROP _DB-ADD-FAILED-TOAST
+            ELSE
+                DROP _DB-DAY-COUNT 1- 0 MAX _DB-SELECTED ! _DB-COMMIT
+            THEN
         ENDOF
     ENDCASE
     _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
@@ -728,12 +957,18 @@ VARIABLE _DB-SUB-MINUTE
     _DB-INVALIDATE ;
 
 : _DB-DO-SAVE  ( elem -- )
-    DROP _DB-SAVE IF S" Daybook save failed" ELSE S" Daybook saved" THEN
-    1600 ASHELL-TOAST ;
+    DROP _DB-SAVE IF
+        _DB-SAVE-ERROR-TOAST
+    ELSE
+        S" Daybook saved" 1600 ASHELL-TOAST
+    THEN ;
 
 : _DB-DO-RELOAD  ( elem -- )
-    DROP _DB-LOAD DROP _DB-CLAMP-SELECTION 0 _DB-DIRTY !
-    _DB-TOUCH _DB-INVALIDATE S" Daybook reloaded" 1400 ASHELL-TOAST ;
+    DROP _DB-DIRTY @ IF
+        _DB-RESHOW-DISCARD-RELOAD
+    ELSE
+        _DB-RELOAD-NOW
+    THEN ;
 
 : _DB-DO-TOGGLE ( elem -- ) DROP _DB-TOGGLE-SELECTED ;
 : _DB-DO-DELETE ( elem -- ) DROP _DB-DELETE-SELECTED ;
@@ -744,6 +979,7 @@ VARIABLE _DB-SUB-MINUTE
 : _DB-DO-ABOUT ( elem -- ) DROP S" Daybook - tasks, events, and daily notes" 2600 ASHELL-TOAST ;
 
 VARIABLE _DB-SOURCE-REQ
+VARIABLE _DB-INIT-LOAD-STATUS
 
 : _DB-SOURCE-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
@@ -776,13 +1012,18 @@ VARIABLE _DB-SOURCE-REQ
 : DAYBOOK-INIT-CB  ( instance -- )
     _DB-ACTIVATE
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! _DB-PRM-NONE _DB-PROMPT-MODE !
-    0 _DB-DIRTY ! _DB-TODAY _DB-SELECTED-DATE !
+    0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! 0 _DB-SOURCE-BLOCKED !
+    _DB-TODAY _DB-SELECTED-DATE !
     VFS-CUR DUP 0= ABORT" daybook: no VFS available" _DB-VFS !
+    _DB-VFS @ _DB-REPLACE VREPL-INIT
+    0<> ABORT" daybook: replacement initialization failed"
+    S" /daybook.md" _DB-REPLACE VREPL-DERIVE-PATHS!
+    0<> ABORT" daybook: replacement path setup failed"
     S" daybook-body" UTUI-BY-ID _DB-E-BODY !
     S" sbar" UTUI-BY-ID _DB-E-SBAR !
     S" sbar-date" UTUI-BY-ID _DB-E-SBAR-DATE !
     S" sbar-state" UTUI-BY-ID _DB-E-SBAR-STATE !
-    _DB-LOAD DROP
+    _DB-LOAD _DB-INIT-LOAD-STATUS !
 
     _DB-E-SBAR @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW DUP _DB-PROMPT-RGN !
@@ -810,7 +1051,8 @@ VARIABLE _DB-SOURCE-REQ
     S" edit-source" ['] _DB-DO-EDIT-SOURCE UTUI-DO!
     S" reveal-source" ['] _DB-DO-REVEAL-SOURCE UTUI-DO!
     _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
-    _DB-CLAMP-SELECTION _DB-UPDATE-STATUS ;
+    _DB-CLAMP-SELECTION _DB-UPDATE-STATUS
+    _DB-INIT-LOAD-STATUS @ ?DUP IF _DB-LOAD-ERROR-TOAST THEN ;
 
 : DAYBOOK-EVENT-CB  ( event instance -- consumed? )
     _DB-ACTIVATE
@@ -833,6 +1075,26 @@ VARIABLE _DB-SOURCE-REQ
         0 _DB-VIEW-DIRTY !
         _DB-INVALIDATE
     THEN ;
+
+: DAYBOOK-REQUEST-CLOSE-CB  ( reason instance -- decision )
+    SWAP DROP _DB-ACTIVATE
+    _DB-DIRTY @ 0= IF
+        0 _DB-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
+    THEN
+    _DB-DISCARD-ARMED @ IF
+        0 _DB-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
+    THEN
+    _DB-PROMPT @ 0= IF APP-CLOSE-D-CANCEL EXIT THEN
+    _DB-PROMPT @ PRM-ACTIVE? IF
+        _DB-PROMPT-MODE @ _DB-PRM-DISCARD-CLOSE = IF
+            APP-CLOSE-D-DEFER EXIT
+        THEN
+        S" Finish or cancel the current Daybook prompt before closing"
+        2400 ASHELL-TOAST
+        APP-CLOSE-D-CANCEL EXIT
+    THEN
+    _DB-RESHOW-DISCARD-CLOSE
+    APP-CLOSE-D-DEFER ;
 
 : DAYBOOK-SHUTDOWN-CB  ( instance -- )
     _DB-ACTIVATE
@@ -857,6 +1119,7 @@ VARIABLE _DBCH-U
 VARIABLE _DBCH-REQ
 VARIABLE _DBCH-COUNT-BEFORE
 VARIABLE _DBCH-DIRTY-BEFORE
+VARIABLE _DBCH-DISCARD-BEFORE
 VARIABLE _DBCH-INDEX
 
 : _DB-CAP-CAPTURE-HANDLER  ( request instance -- status )
@@ -865,19 +1128,21 @@ VARIABLE _DBCH-INDEX
     DUP CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@ _DBCH-U ! _DBCH-A !
     _DB-COUNT @ _DBCH-COUNT-BEFORE !
     _DB-DIRTY @ _DBCH-DIRTY-BEFORE !
+    _DB-DISCARD-ARMED @ _DBCH-DISCARD-BEFORE !
     _DB-K-TASK 0 _DB-SELECTED-DATE @ -1 _DBCH-A @ _DBCH-U @ _DB-ADD
     DUP 0< IF DROP DROP CBUS-S-BUSY EXIT THEN
     DUP _DBCH-INDEX !
     OVER CBR.RESULT CV-INT!
     DROP
-    -1 _DB-DIRTY !
+    -1 _DB-DIRTY ! 0 _DB-DISCARD-ARMED !
     _DB-SERIALIZE _DB-WRITE DUP _DB-SAVE-IOR !
-    DUP 0= IF 0 _DB-DIRTY ! THEN
+    DUP 0= IF 0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! THEN
     -1 _DB-VIEW-DIRTY !
     DUP IF
         _DBCH-INDEX @ _DB-ENTRY _DB-ENTRY-SZ 0 FILL
         _DBCH-COUNT-BEFORE @ _DB-COUNT !
         _DBCH-DIRTY-BEFORE @ _DB-DIRTY !
+        _DBCH-DISCARD-BEFORE @ _DB-DISCARD-ARMED !
         _DBCH-REQ @ CBR.RESULT CV-FREE
         S" Daybook persistence failed" ROT _DBCH-REQ @ CBR-ERROR!
         CBUS-S-FAILED
@@ -973,6 +1238,7 @@ CREATE DAYBOOK-COMP-DESC COMP-DESC ALLOT
     ['] DAYBOOK-PAINT-CB OVER APP.PAINT-XT !
     ['] DAYBOOK-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
     ['] _DB-ACTIVATE OVER APP.ACTIVATE-XT !
+    ['] DAYBOOK-REQUEST-CLOSE-CB OVER APP.REQUEST-CLOSE-XT !
     S" tui/applets/daybook/daybook.uidl"
     ROT DUP >R APP.UIDL-FILE-U ! R@ APP.UIDL-FILE-A !
     0 R@ APP.WIDTH ! 0 R@ APP.HEIGHT !

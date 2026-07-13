@@ -107,5 +107,10 @@ widgets generically without knowing the concrete type.
   activated by `WDG-DRAW` before calling draw-xt.
 - **handle-xt signature:** `( event widget -- consumed? )`. Returns
   TRUE (-1) if the event was consumed, FALSE (0) otherwise.
+- **UI-owner dispatch:** in a `GUARDED` build, bounded header access and flag
+  mutation retain `_wdg-guard`. `WDG-DRAW` and `WDG-HANDLE` deliberately run
+  unwrapped on the UI owner core because they execute widget-provided code.
+  Cross-core callers must post render/input work to that owner rather than
+  invoking polymorphic callbacks concurrently.
 - **Default flags:** New widgets are VISIBLE + DIRTY. Not FOCUSED
   (focus is managed by the focus chain in Layer 5).

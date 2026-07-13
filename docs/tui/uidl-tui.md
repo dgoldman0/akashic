@@ -982,17 +982,28 @@ and by `desk.f` (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-CLEAR`).
 
 ## Guard Wrappers
 
-When `GUARDED` is defined, all public words are wrapped with a
-single guard (`_utui-guard`) for thread-safe access:
+When `GUARDED` is defined, bounded state access and mutation words use the
+single `_utui-guard`:
 
-`UTUI-LOAD`, `UTUI-BIND-STATE`, `UTUI-PAINT`, `UTUI-RELAYOUT`,
-`UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, `UTUI-FOCUS`,
+`UTUI-BIND-STATE`, `UTUI-FOCUS`,
 `UTUI-FOCUS!`, `UTUI-FOCUS-NEXT`, `UTUI-FOCUS-PREV`,
 `UTUI-HIT-TEST`, `UTUI-BY-ID`, `UTUI-DETACH`, `UTUI-DO!`,
 `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`,
 `UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`,
 `UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`, `UTUI-WIDGET@`,
-`UTUI-TAB-SELECT`, `UTUI-INSTALL-XTS`.
+`UTUI-INSTALL-XTS`.
+
+The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
+`UTUI-RELAYOUT`, `UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, and
+`UTUI-TAB-SELECT` deliberately run unwrapped on the current UI owner core.
+They can execute registered layout, render, widget, or app action code; an
+outer `_utui-guard` would otherwise remain held if that code opened a modal
+dialog or yielded. Cross-core callers must post lifecycle, render, and input
+requests to the owner instead of invoking these entries concurrently.
+
+Desk/App Shell dispatch is UIDL-direct and has no DOM-event or `FOC-DISPATCH`
+intermediary. Those alternate dispatch stacks are outside this ownership
+boundary.
 
 `UTUI-SHOW` and `UTUI-HIDE` are **not** guarded — they are thin
 wrappers that delegate to the guarded `UTUI-SHOW-DIALOG` and

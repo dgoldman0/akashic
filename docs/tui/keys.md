@@ -29,6 +29,7 @@ Depends on: `akashic-utf8` (for multi-byte character decoding).
 - [Modifier Queries](#modifier-queries)
 - [Mouse & Resize State](#mouse--resize-state)
 - [Configuration](#configuration)
+- [Concurrency and Ownership](#concurrency-and-ownership)
 - [Decode Algorithm](#decode-algorithm)
 - [Quick Reference](#quick-reference)
 
@@ -39,13 +40,13 @@ Depends on: `akashic-utf8` (for multi-byte character decoding).
 | Principle | Implementation |
 |-----------|---------------|
 | **Event-oriented** | Raw bytes are decoded into structured 3-cell event descriptors. |
-| **Blocking & non-blocking** | `KEY-READ` blocks; `KEY-POLL` returns immediately; `KEY-WAIT` has a timeout. |
+| **Blocking & polling** | `KEY-READ` blocks; `KEY-POLL` returns immediately when no byte is pending; `KEY-WAIT` has a caller timeout. |
 | **Escape disambiguation** | Configurable timeout (default 50 ms) distinguishes standalone ESC from CSI/SS3 sequence starts. |
 | **Full VT100 coverage** | Arrows, F1–F12, Home/End, PgUp/PgDn, Ins/Del, Shift-Tab, SGR mouse, terminal size reports. |
 | **UTF-8 aware** | Multi-byte characters are decoded via `akashic-utf8` and returned as `KEY-T-CHAR` events with the Unicode codepoint. |
 | **Microsecond timing** | Uses KDOS `TIMER@` for precise escape sequence timeouts. |
 | **Prefix convention** | Public: `KEY-`. Internal: `_KEY-`. |
-| **Not reentrant** | Shared `VARIABLE`s for decode state; call from one task only. |
+| **Single input owner** | Shared `VARIABLE`s make decoding non-reentrant; input-consuming words run on one UI/input owner core. |
 
 ---
 
@@ -177,9 +178,11 @@ THEN
 KEY-POLL ( ev -- flag )
 ```
 
-Non-blocking poll.  If input bytes are available, decodes one event
-and returns TRUE.  If no input is pending, returns FALSE (0) without
-blocking.
+Poll for an event. If no input byte is pending, returns FALSE (0)
+without blocking. Once it consumes the first byte, completing that event can
+still take time: escape and CR disambiguation use bounded sequence timeouts,
+and a UTF-8 lead byte waits for its continuation bytes. Thus `KEY-POLL` is
+not a general scheduling or cross-core non-blocking boundary.
 
 ```forth
 ev KEY-POLL IF
@@ -376,6 +379,19 @@ Set `1 KEY-TIMEOUT!` to eliminate the overhead when LF is never sent.
 1   KEY-TIMEOUT!    \ 1 ms   — emulator with bare CR (no CR+LF)
 ```
 
+## Concurrency and ownership
+
+`KEY-READ`, `KEY-POLL`, and `KEY-WAIT` mutate one shared decoder state and
+may all wait after entering the decoder. In a `GUARDED` build these three
+input-consuming entries therefore run unwrapped on the designated UI/input
+owner core. The bounded event accessors and `KEY-TIMEOUT!` remain protected
+by the keys guard.
+
+Cross-core code must post work or inject bytes/events for the input owner;
+it must not call the decoder concurrently. This keeps guards out of BIOS
+`KEY`, escape/CR timeout loops, and caller timeouts while preserving bounded
+serialization for metadata access.
+
 ---
 
 ## Decode Algorithm
@@ -446,7 +462,7 @@ The second numeric CSI parameter encodes modifiers as `1 + bitmask`.
 | Word | Signature | Behavior |
 |------|-----------|----------|
 | `KEY-READ` | `( ev -- flag )` | Blocking read; always TRUE |
-| `KEY-POLL` | `( ev -- flag )` | Non-blocking; TRUE if event filled |
+| `KEY-POLL` | `( ev -- flag )` | Immediate if no first byte; may wait to finish a started sequence |
 | `KEY-WAIT` | `( ev ms -- flag )` | Timeout read; TRUE if event, FALSE if expired |
 | `KEY-IS-CHAR?` | `( ev -- flag )` | Character event? |
 | `KEY-IS-SPECIAL?` | `( ev -- flag )` | Special key event? |

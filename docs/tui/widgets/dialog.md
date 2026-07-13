@@ -9,8 +9,8 @@
 ## Overview
 
 Modal popup dialog with a titled box border, a message area, and a
-horizontal button row.  `DLG-SHOW` runs a real `KEY-POLL` busy-loop
-that blocks the caller until the user picks a button (Enter to accept,
+horizontal button row.  `DLG-SHOW` runs a real blocking `KEY-READ` modal
+loop until the user picks a button (Enter to accept,
 Escape to cancel, Tab / arrow keys to navigate buttons).
 
 The dialog auto-sizes based on the title, message, and button widths,
@@ -62,7 +62,7 @@ Buttons are contiguous `(addr, len)` pairs, 2 cells each.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `DLG-SHOW` | `( widget -- index )` | Auto-size, centre, draw, run `KEY-POLL` modal loop; returns chosen button index |
+| `DLG-SHOW` | `( widget -- index )` | Auto-size, centre, draw, run the blocking `KEY-READ` modal loop; returns chosen button index |
 
 ### Convenience Wrappers
 
@@ -110,9 +110,15 @@ The focused button is rendered in reverse video.
 
 - **Per-widget result**:  the result field lives at +96 in each
   descriptor, so multiple dialogs stay independent (no global state).
-- **Real modal loop**: `DLG-SHOW` calls `KEY-POLL` in a tight
+- **Real modal loop**: `DLG-SHOW` calls `KEY-READ` in a
   `BEGIN … UNTIL` loop, dispatching events through `WDG-HANDLE`.
   Each accepted event redraws (if dirty) and calls `SCR-FLUSH`.
+- **UI-owner lifecycle**: in a `GUARDED` build, bounded constructor,
+  accessor, region, and destructor calls use the dialog guard. `DLG-SHOW`,
+  `DLG-INFO`, and `DLG-CONFIRM` deliberately run unwrapped on the UI owner
+  core because they can wait for input and invoke widget or dismissal
+  callbacks. Cross-core callers must post a modal request to the UI owner;
+  they must not invoke a modal entry concurrently.
 - **KDOS MAX/MIN are unsigned**: the LEFT handler uses an explicit
   `0>` guard instead of `1- 0 MAX` to avoid unsigned underflow.
 - Button label arrays and title/message strings are **caller-owned**

@@ -3,7 +3,7 @@
 \ =====================================================================
 \
 \  Modal popup dialog with a title, message, and horizontal button
-\  row.  DLG-SHOW runs a real KEY-POLL modal loop — it blocks the
+\  row.  DLG-SHOW runs a real KEY-READ modal loop — it blocks the
 \  caller until the user picks a button (Enter, Escape, or Tab
 \  to cycle + Enter).  Returns the 0-based button index.
 \
@@ -332,7 +332,7 @@ VARIABLE _DLG-N-BC
 \ =====================================================================
 \
 \   Auto-sizes the dialog, centres it on the current screen, draws it,
-\   then enters a KEY-POLL busy-loop.  Each key event is dispatched
+\   then enters a blocking KEY-READ loop.  Each key event is dispatched
 \   through WDG-HANDLE (→ _DLG-HANDLE).  The loop exits once the
 \   per-widget result field becomes >=0 (set by Enter or Escape).
 \
@@ -463,8 +463,12 @@ GUARD _dlg-guard
 : DLG-SELECTED    _dlg-selected-xt  _dlg-guard WITH-GUARD ;
 : DLG-BTN-COUNT   _dlg-btncnt-xt    _dlg-guard WITH-GUARD ;
 : DLG-RESULT      _dlg-result-xt    _dlg-guard WITH-GUARD ;
-: DLG-SHOW        _dlg-show-xt      _dlg-guard WITH-GUARD ;
-: DLG-INFO        _dlg-info-xt      _dlg-guard WITH-GUARD ;
-: DLG-CONFIRM     _dlg-confirm-xt   _dlg-guard WITH-GUARD ;
+\ Modal entries own the UI/input lifecycle.  They can block in KEY-READ and
+\ execute widget or dismissal callbacks, so they must never retain the dialog
+\ guard while waiting.  Call them only on the UI owner core; cross-core work
+\ must post a request to that owner.
+: DLG-SHOW        _dlg-show-xt EXECUTE ;
+: DLG-INFO        _dlg-info-xt EXECUTE ;
+: DLG-CONFIRM     _dlg-confirm-xt EXECUTE ;
 : DLG-FREE        _dlg-free-xt      _dlg-guard WITH-GUARD ;
 [THEN] [THEN]

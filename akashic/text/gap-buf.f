@@ -10,17 +10,19 @@
 \  edits for fast line-number <-> byte-offset mapping.  GB-SET performs
 \  a full rebuild because it replaces the complete document.
 \
-\  Storage is arena-allocated.  The caller supplies an arena
-\  handle; all internal allocations (buffer, line index) come
-\  from that arena.  Growth abandons the old block in the arena
-\  and allocates a new one (reclaimed on ARENA-DESTROY/RESET).
+\  The descriptor and byte buffer are arena-allocated.  The caller
+\  supplies that arena and buffer growth is reclaimed with it.  The
+\  line index has a different lifetime: it is a packed u32 array
+\  allocated independently so growth can release the superseded block.
+\  GB-FREE releases that index; the arena still owns the descriptor and
+\  byte buffer.
 \
 \  Descriptor layout (8 cells = 64 bytes):
 \    +0   buf    Byte buffer  (arena-allocated)
 \    +8   cap    Total capacity in bytes
 \    +16  gs     Gap start = logical cursor position
 \    +24  ge     Gap end (exclusive)
-\    +32  lidx   Line-start offset array (cells, arena-allocated)
+\    +32  lidx   Line-start offset array (packed u32, ALLOCATE-owned)
 \    +40  lcap   Line-index capacity (entries)
 \    +48  lcnt   Line count (always >= 1)
 \    +56  arena  Arena handle (for growth allocation)
@@ -36,7 +38,7 @@
 \
 \  Public API:
 \    GB-NEW        ( cap arena -- gb )
-\    GB-FREE       ( gb -- )        no-op; arena handles deallocation
+\    GB-FREE       ( gb -- )        release the independently-owned index
 \    GB-LEN        ( gb -- u )       content length
 \    GB-CURSOR     ( gb -- n )       cursor position = gs
 \    GB-BYTE@      ( pos gb -- c )   logical byte access
@@ -84,6 +86,10 @@ REQUIRE utf8.f
 
 VARIABLE _GB-T           \ current gb handle
 VARIABLE _GB-D           \ delta for move / grow
+VARIABLE _GB-LNEW        \ replacement line-index allocation
+VARIABLE _GB-LNEW-CAP    \ replacement line-index entry capacity
+
+4 CONSTANT _GB-LIDX-SZ   \ packed u32 byte offsets
 
 \ =====================================================================
 \  S3 -- Basic Queries
@@ -100,7 +106,19 @@ VARIABLE _GB-D           \ delta for move / grow
     _GB-O-LCNT + @ ;
 
 : GB-LINE-OFF  ( line# gb -- off )
-    _GB-O-LIDX + @  SWAP CELLS +  @ ;
+    _GB-O-LIDX + @  SWAP _GB-LIDX-SZ * +  L@ ;
+
+: _GB-LIDX-ADDR  ( index -- addr )
+    _GB-LIDX-SZ * _GB-T @ _GB-O-LIDX + @ + ;
+
+: _GB-LIDX@  ( index -- off )
+    _GB-LIDX-ADDR L@ ;
+
+: _GB-LIDX!  ( off index -- )
+    _GB-LIDX-ADDR L! ;
+
+: _GB-LIDX+!  ( delta index -- )
+    >R R@ _GB-LIDX@ + R> _GB-LIDX! ;
 
 : _GB-GAP  ( gb -- u )
     DUP _GB-O-GE + @  SWAP _GB-O-GS + @  - ;
@@ -150,30 +168,42 @@ VARIABLE _GB-D           \ delta for move / grow
     DUP _GB-T @ _GB-O-CAP + !         \ cap
     0 _GB-T @ _GB-O-GS + !            \ gs = 0
     _GB-T @ _GB-O-GE + !              \ ge = cap (all gap)
-    _GB-D @ _GB-LIDX-INIT CELLS ARENA-ALLOT
+    _GB-LIDX-INIT _GB-LIDX-SZ * ALLOCATE
+    DUP IF 2DROP ABORT" GB-NEW: line index alloc failed" THEN DROP
     _GB-T @ _GB-O-LIDX + !
     _GB-LIDX-INIT _GB-T @ _GB-O-LCAP + !
     1 _GB-T @ _GB-O-LCNT + !
-    0 _GB-T @ _GB-O-LIDX + @ !         \ line 0 at offset 0
+    0 0 _GB-LIDX!                       \ line 0 at offset 0
     _GB-T @ ;
 
 : GB-FREE  ( gb -- )
-    DROP ;                             \ no-op — arena handles deallocation
+    DUP _GB-O-LIDX + @ ?DUP IF FREE THEN
+    0 OVER _GB-O-LIDX + !
+    0 OVER _GB-O-LCAP + !
+    0 SWAP _GB-O-LCNT + ! ;
 
 \ =====================================================================
 \  S7 -- Growth
 \ =====================================================================
 
+\ _GB-LIDX-RESIZE ( new-lcap -- )
+\   Replace the packed line index transactionally: allocation must succeed
+\   before the live pointer changes or the old block is released.
+: _GB-LIDX-RESIZE  ( new-lcap -- )
+    DUP _GB-T @ _GB-O-LCAP + @ <= IF DROP EXIT THEN
+    _GB-LNEW-CAP !
+    _GB-LNEW-CAP @ _GB-LIDX-SZ * ALLOCATE
+    DUP IF 2DROP ABORT" gap buffer: line index alloc failed" THEN DROP
+    _GB-LNEW !
+    _GB-T @ _GB-O-LIDX + @ _GB-LNEW @
+    _GB-T @ _GB-O-LCAP + @ _GB-LIDX-SZ * CMOVE
+    _GB-T @ _GB-O-LIDX + @ FREE
+    _GB-LNEW @ _GB-T @ _GB-O-LIDX + !
+    _GB-LNEW-CAP @ _GB-T @ _GB-O-LCAP + ! ;
+
 \ _GB-LIDX-GROW ( -- )   double the line-index array.  Uses _GB-T.
-\   Allocates new from arena, copies old entries, abandons old.
 : _GB-LIDX-GROW  ( -- )
-    _GB-T @ _GB-O-LCAP + @ 2 *     ( new-lcap )
-    DUP CELLS
-    _GB-T @ _GB-O-ARENA + @ SWAP ARENA-ALLOT  ( new-lcap new-lidx )
-    _GB-T @ _GB-O-LIDX + @  OVER
-    _GB-T @ _GB-O-LCAP + @ CELLS  CMOVE       ( new-lcap new-lidx )
-    _GB-T @ _GB-O-LIDX + !
-    _GB-T @ _GB-O-LCAP + ! ;
+    _GB-T @ _GB-O-LCAP + @ 2 * _GB-LIDX-RESIZE ;
 
 \ _GB-GROW ( needed -- )   ensure gap >= needed bytes.  Uses _GB-T.
 \   Allocates new buffer from arena, copies both segments, abandons old.
@@ -205,18 +235,40 @@ VARIABLE _GB-D           \ delta for move / grow
 \  S8 -- Line Index Maintenance
 \ =====================================================================
 
+\ _GB-LIDX-ENSURE ( count -- )
+\   Ensure the packed array can hold count entries.  A bulk operation may
+\   jump directly to its exact requirement; ordinary edits retain geometric
+\   growth so sequential typing does not resize for every new line.
+: _GB-LIDX-ENSURE  ( count -- )
+    DUP _GB-T @ _GB-O-LCAP + @ <= IF DROP EXIT THEN
+    _GB-T @ _GB-O-LCAP + @ 2 * MAX _GB-LIDX-RESIZE ;
+
+VARIABLE _GB-LCOUNT
+
+\ _GB-CONTENT-LINES ( -- count )
+\   Count first so a bulk replacement can grow its index once to the exact
+\   required capacity instead of retaining geometric slack.
+: _GB-CONTENT-LINES  ( -- count )
+    1 _GB-LCOUNT !
+    _GB-T @ _GB-O-GS + @ 0 ?DO
+        _GB-T @ _GB-O-BUF + @ I + C@ 10 = IF 1 _GB-LCOUNT +! THEN
+    LOOP
+    _GB-T @ _GB-O-CAP + @ _GB-T @ _GB-O-GE + @ ?DO
+        _GB-T @ _GB-O-BUF + @ I + C@ 10 = IF 1 _GB-LCOUNT +! THEN
+    LOOP
+    _GB-LCOUNT @ ;
+
 \ _GB-REBUILD-LINES ( -- )   Full rebuild.  Uses _GB-T.
 : _GB-REBUILD-LINES  ( -- )
+    _GB-CONTENT-LINES _GB-LIDX-ENSURE
     1 _GB-T @ _GB-O-LCNT + !
-    0 _GB-T @ _GB-O-LIDX + @ !            \ line 0 at offset 0
+    0 0 _GB-LIDX!                          \ line 0 at offset 0
     \ --- pre-gap: physical [0..gs), logical = physical ---
     _GB-T @ _GB-O-GS + @ 0 ?DO
         _GB-T @ _GB-O-BUF + @ I + C@ 10 = IF
             _GB-T @ _GB-O-LCNT + @
             _GB-T @ _GB-O-LCAP + @ >= IF _GB-LIDX-GROW THEN
-            I 1+
-            _GB-T @ _GB-O-LIDX + @
-            _GB-T @ _GB-O-LCNT + @ CELLS + !
+            I 1+ _GB-T @ _GB-O-LCNT + @ _GB-LIDX!
             1 _GB-T @ _GB-O-LCNT + +!
         THEN
     LOOP
@@ -225,10 +277,9 @@ VARIABLE _GB-D           \ delta for move / grow
         _GB-T @ _GB-O-BUF + @ I + C@ 10 = IF
             _GB-T @ _GB-O-LCNT + @
             _GB-T @ _GB-O-LCAP + @ >= IF _GB-LIDX-GROW THEN
-            I  _GB-T @ _GB-O-GE + @ -
-            _GB-T @ _GB-O-GS + @ +  1+
-            _GB-T @ _GB-O-LIDX + @
-            _GB-T @ _GB-O-LCNT + @ CELLS + !
+            I _GB-T @ _GB-O-GE + @ -
+            _GB-T @ _GB-O-GS + @ + 1+
+            _GB-T @ _GB-O-LCNT + @ _GB-LIDX!
             1 _GB-T @ _GB-O-LCNT + +!
         THEN
     LOOP ;
@@ -251,7 +302,7 @@ VARIABLE _GB-LF-MID
         _GB-LF-LO @ _GB-LF-HI @ <
     WHILE
         _GB-LF-LO @ _GB-LF-HI @ + 2 / DUP _GB-LF-MID !
-        _GB-T @ _GB-O-LIDX + @ SWAP CELLS + @
+        _GB-LIDX@
         _GB-LF-POS @ <= IF
             _GB-LF-MID @ 1+ _GB-LF-LO !
         ELSE
@@ -259,17 +310,6 @@ VARIABLE _GB-LF-MID
         THEN
     REPEAT
     _GB-LF-LO @ ;
-
-\ _GB-LIDX-ENSURE ( count -- )
-\   Ensure the line-index array can hold count entries.  A single paste
-\   can contain more newlines than one doubling accommodates.
-: _GB-LIDX-ENSURE  ( count -- )
-    BEGIN
-        DUP _GB-T @ _GB-O-LCAP + @ >
-    WHILE
-        _GB-LIDX-GROW
-    REPEAT
-    DROP ;
 
 VARIABLE _GB-LI-POS
 VARIABLE _GB-LI-LEN
@@ -303,16 +343,15 @@ VARIABLE _GB-LI-DEL-A
     \ Open room for the new line starts.  CMOVE> is overlap-safe when
     \ moving the tail toward higher addresses.
     _GB-LI-NL @ IF
-        _GB-T @ _GB-O-LIDX + @ _GB-LI-FIRST @ CELLS +
-        DUP _GB-LI-NL @ CELLS +
-        _GB-LI-OLD-CNT @ _GB-LI-FIRST @ - CELLS
+        _GB-LI-FIRST @ _GB-LIDX-ADDR
+        _GB-LI-FIRST @ _GB-LI-NL @ + _GB-LIDX-ADDR
+        _GB-LI-OLD-CNT @ _GB-LI-FIRST @ - _GB-LIDX-SZ *
         DUP 0> IF CMOVE> ELSE DROP 2DROP THEN
     THEN
 
     \ All old starts strictly after the insertion point shift by len.
     _GB-LI-NEW-CNT @ _GB-LI-FIRST @ _GB-LI-NL @ + ?DO
-        _GB-LI-LEN @
-        _GB-T @ _GB-O-LIDX + @ I CELLS + +!
+        _GB-LI-LEN @ I _GB-LIDX+!
     LOOP
 
     \ Fill the opened slots with starts contributed by inserted LFs.
@@ -320,8 +359,7 @@ VARIABLE _GB-LI-DEL-A
     _GB-LI-LEN @ 0 ?DO
         _GB-T @ _GB-O-BUF + @ _GB-LI-POS @ + I + C@ 10 = IF
             _GB-LI-POS @ I + 1+
-            _GB-T @ _GB-O-LIDX + @
-            _GB-LI-FIRST @ _GB-LI-WR @ + CELLS + !
+            _GB-LI-FIRST @ _GB-LI-WR @ + _GB-LIDX!
             1 _GB-LI-WR +!
         THEN
     LOOP
@@ -341,9 +379,9 @@ VARIABLE _GB-LI-DEL-A
 
     \ Close over entries belonging to deleted LFs.  CMOVE is overlap-safe
     \ in this lower-address direction.
-    _GB-T @ _GB-O-LIDX + @ _GB-LI-AFTER @ CELLS +
-    _GB-T @ _GB-O-LIDX + @ _GB-LI-FIRST @ CELLS +
-    _GB-LI-OLD-CNT @ _GB-LI-AFTER @ - CELLS
+    _GB-LI-AFTER @ _GB-LIDX-ADDR
+    _GB-LI-FIRST @ _GB-LIDX-ADDR
+    _GB-LI-OLD-CNT @ _GB-LI-AFTER @ - _GB-LIDX-SZ *
     DUP 0> IF CMOVE ELSE DROP 2DROP THEN
 
     _GB-LI-OLD-CNT @
@@ -352,8 +390,7 @@ VARIABLE _GB-LI-DEL-A
     _GB-T @ _GB-O-LCNT + !
 
     _GB-LI-NEW-CNT @ _GB-LI-FIRST @ ?DO
-        _GB-LI-LEN @ NEGATE
-        _GB-T @ _GB-O-LIDX + @ I CELLS + +!
+        _GB-LI-LEN @ NEGATE I _GB-LIDX+!
     LOOP ;
 
 \ =====================================================================
@@ -498,7 +535,7 @@ CREATE _GB-CP-BUF 4 ALLOT      \ scratch for single-codepoint encode
     DUP _GB-O-CAP + @ OVER _GB-O-GE + !   \ ge = cap
     0 OVER _GB-O-GS + !                    \ gs = 0
     1 OVER _GB-O-LCNT + !
-    _GB-O-LIDX + @ 0 SWAP ! ;             \ line 0 at 0
+    _GB-O-LIDX + @ 0 SWAP L! ;            \ line 0 at 0
 
 \ GB-SET ( addr u gb -- )
 \   Replace all content.  Grows buffer if needed.

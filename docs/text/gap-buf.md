@@ -2,7 +2,8 @@
 
 Efficient text-editing buffer.  Insert and delete at the cursor are
 O(1) amortised; moving the cursor is O(distance).  A line-start
-index is rebuilt after every mutation for fast line ↔ offset mapping.
+index is maintained incrementally after edits for fast line ↔ offset
+mapping; whole-document replacement performs a bounded rebuild.
 
 ```forth
 REQUIRE text/gap-buf.f
@@ -33,8 +34,8 @@ REQUIRE text/gap-buf.f
 | Principle | Implementation |
 |-----------|---------------|
 | **Gap buffer** | `[pre-content][gap][post-content]` — insert/delete at cursor = gap boundary manipulation. |
-| **Auto-growing** | `ALLOCATE`/`RESIZE`-managed buffer; doubles on overflow. |
-| **Integrated line index** | Array of line-start byte offsets rebuilt after every edit. |
+| **Auto-growing** | Arena-owned byte buffer doubles on overflow and is reclaimed with its arena. |
+| **Integrated line index** | Independently allocated packed-u32 offsets; growth releases the superseded block instead of consuming arena space. |
 | **UTF-8 aware** | `GB-INS-CP`, `GB-DEL-CP`, `GB-BS-CP` handle multi-byte codepoints. |
 | **Prefix convention** | Public: `GB-`. Internal: `_GB-`. |
 
@@ -42,17 +43,18 @@ REQUIRE text/gap-buf.f
 
 ## Descriptor Layout
 
-56 bytes (7 cells):
+64 bytes (8 cells):
 
 | Offset | Field | Description |
 |--------|-------|-------------|
-| +0 | `buf` | Byte buffer (`ALLOCATE`'d) |
+| +0 | `buf` | Byte buffer (arena-owned) |
 | +8 | `cap` | Total buffer capacity |
 | +16 | `gs` | Gap start = logical cursor position |
 | +24 | `ge` | Gap end (exclusive) |
-| +32 | `lidx` | Line-start offset array (`ALLOCATE`'d, cells) |
+| +32 | `lidx` | Line-start offset array (`ALLOCATE`-owned packed u32 entries) |
 | +40 | `lcap` | Line index capacity (entries) |
 | +48 | `lcnt` | Line count (always ≥ 1) |
+| +56 | `arena` | Arena that owns the descriptor and byte buffers |
 
 Physical layout:
 
@@ -70,12 +72,12 @@ Content length = `cap - (ge - gs)`.
 ### GB-NEW
 
 ```
-( cap -- gb )
+( cap arena -- gb )
 ```
 
-Allocate a new gap buffer with initial capacity `cap` bytes.  The
-buffer starts empty (gap spans the entire capacity).  Line index
-starts with 1 line at offset 0.
+Allocate a new gap buffer with initial capacity `cap` bytes from
+`arena`.  The buffer starts empty (gap spans the entire capacity).
+The independently-owned line index starts with one line at offset 0.
 
 ### GB-FREE
 
@@ -83,12 +85,16 @@ starts with 1 line at offset 0.
 ( gb -- )
 ```
 
-Free all three allocations (buffer, line index, descriptor).
+Release the independently-owned line index.  The caller must still
+destroy or reset the supplying arena to reclaim the descriptor and byte
+buffers.  Call `GB-FREE` before invalidating that arena.
 
 ```forth
-4096 GB-NEW   ( gb )
+65536 A-XMEM ARENA-NEW ABORT" arena allocation failed" CONSTANT text-arena
+4096 text-arena GB-NEW CONSTANT text-gb
 \ ... use it ...
-GB-FREE
+text-gb GB-FREE
+text-arena ARENA-DESTROY
 ```
 
 ---
@@ -124,7 +130,7 @@ Move the cursor to logical position `pos`.  Clamped to
 
 Insert `u` bytes at the cursor.  The gap grows automatically if
 needed (buffer doubles in size).  Advances the cursor past the
-inserted text.  Rebuilds the line index.
+inserted text and updates the affected portion of the line index.
 
 ### GB-INS-CP
 
@@ -136,7 +142,7 @@ Insert a single Unicode codepoint, UTF-8 encoded.  Uses
 `UTF8-ENCODE` into a 4-byte scratch buffer then calls `GB-INS`.
 
 ```forth
-4096 GB-NEW  ( gb )
+4096 text-arena GB-NEW  ( gb )
 S" Hello" OVER GB-INS
 [CHAR] ! OVER GB-INS-CP
 \ Content: "Hello!"
@@ -307,8 +313,8 @@ my-gb GB-CURSOR-COL    \ → 12 (13th codepoint)
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `GB-NEW` | `( cap -- gb )` | Create gap buffer |
-| `GB-FREE` | `( gb -- )` | Free gap buffer |
+| `GB-NEW` | `( cap arena -- gb )` | Create a gap buffer with arena-owned byte storage |
+| `GB-FREE` | `( gb -- )` | Release the independently-owned packed line index |
 | `GB-LEN` | `( gb -- u )` | Content length |
 | `GB-CURSOR` | `( gb -- n )` | Cursor position |
 | `GB-BYTE@` | `( pos gb -- c )` | Logical byte access |
@@ -335,6 +341,7 @@ my-gb GB-CURSOR-COL    \ → 12 (13th codepoint)
 ## Dependencies
 
 - `text/utf8.f` — `UTF8-ENCODE`, `UTF8-DECODE`, `_UTF8-SEQLEN`, `_UTF8-CONT?`
+- KDOS memory primitives — `ARENA-ALLOT`, `ALLOCATE`, `FREE`, `L@`, `L!`
 
 ## Consumers
 

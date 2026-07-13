@@ -234,7 +234,10 @@ GUARD _wdg-guard
 : WDG-DISABLE     _wdg-disable-xt   _wdg-guard WITH-GUARD ;
 : WDG-DIRTY       _wdg-dirty2-xt    _wdg-guard WITH-GUARD ;
 : WDG-CLEAN       _wdg-clean-xt     _wdg-guard WITH-GUARD ;
-: WDG-DRAW        _wdg-draw-xt      _wdg-guard WITH-GUARD ;
-: WDG-HANDLE      _wdg-handle-xt    _wdg-guard WITH-GUARD ;
+\ Polymorphic dispatch executes widget-provided code.  Drawing and input
+\ handling are UI-owner lifecycle work, so never retain _wdg-guard across a
+\ draw/handle callback; cross-core callers must post work to the UI owner.
+: WDG-DRAW        _wdg-draw-xt EXECUTE ;
+: WDG-HANDLE      _wdg-handle-xt EXECUTE ;
 : _WDG-INIT       _wdg-init-xt      _wdg-guard WITH-GUARD ;
 [THEN] [THEN]

@@ -38,6 +38,7 @@ cycling, and tick timing to the shell:
           ├── DESK-EVENT-CB    → shortcuts, route to focused sub-app
           ├── DESK-TICK-CB     → tick all alive sub-apps
           ├── DESK-PAINT-CB    → bg fill*, paint tiles, dividers, taskbar
+          ├── DESK-REQUEST-CLOSE-CB → negotiate every child
           └── DESK-SHUTDOWN-CB → close all sub-apps
 ```
 
@@ -66,19 +67,22 @@ only the focused app and hides dividers.
 
 ## Slot Structure
 
-Each sub-app occupies a heap-allocated 64-byte slot, linked in a singly
+Each sub-app occupies a heap-allocated 88-byte slot, linked in a singly
 linked list.  Slot IDs are monotonic (1, 2, 3, …).
 
 | Offset | Field | Description |
 |--------|-------|-------------|
 | +0 | `DESC` | APP-DESC pointer |
-| +8 | `RGN` | Region handle (0 if no region) |
-| +16 | `STATE` | 0=empty, 1=running, 2=minimized, 3=focused |
-| +24 | `UCTX` | UIDL context pointer (0 = no UIDL) |
-| +32 | `HAS-UIDL` | Flag: app has UIDL? |
-| +40 | `NEXT` | → next slot in list (0 = tail) |
-| +48 | `ID` | Unique slot ID |
-| +56 | `UIDL-BUF` | Shell-loaded UIDL file buffer (0 = none) |
+| +8 | `INST` | Generic component instance |
+| +16 | `RGN` | Region handle (0 if no region) |
+| +24 | `STATE` | 0=empty, 1=running, 2=minimized, 3=focused |
+| +32 | `UCTX` | UIDL context pointer (0 = no UIDL) |
+| +40 | `HAS-UIDL` | Flag: app has UIDL? |
+| +48 | `NEXT` | → next slot in list (0 = tail) |
+| +56 | `ID` | Unique slot ID |
+| +64 | `UIDL-BUF` | Shell-loaded UIDL file buffer (0 = none) |
+| +72 | `DIRTY` | Child surface needs repaint |
+| +80 | `SEEN-REV` | Last painted component revision |
 
 ## ASHELL-QUIT Interception
 
@@ -87,10 +91,31 @@ via the public API:
 
 1. Checks `ASHELL-QUIT-PENDING?` (returns true when quit is pending)
 2. Calls `ASHELL-CANCEL-QUIT` (re-arms the event loop)
-3. Calls `DESK-CLOSE-ID` for that sub-app's slot
+3. Calls `DESK-REQUEST-CLOSE-ID` with `APP-CLOSE-R-QUIT`
 4. Returns −1 (consumed) to the shell
 
-This means sub-app quit closes a tile, not the whole desktop.
+ALLOW shuts down and removes the tile.  CANCEL and DEFER preserve its entire
+slot, component instance, and UIDL context.  The request and later shutdown
+callbacks both run with that child's UIDL context and activation binding live.
+Context entry, callback, save, and exit are fault boundaries: any failure while
+negotiating is normalized to CANCEL, and Desk attempts to leave the child
+context before returning.
+
+Closing Desk itself is two-phase.  `DESK-REQUEST-CLOSE-CB` queries every
+child with `APP-CLOSE-R-HOST-SHUTDOWN` without destroying any of them.  CANCEL
+wins over DEFER, and DEFER wins over ALLOW.  Only an all-ALLOW pass lets the
+shell enter `DESK-SHUTDOWN-CB`; shutdown then force-cleans those approved
+children without prompting again, so it cannot loop forever on a refusal.
+Force-close catches shutdown, UIDL detach, context-exit, and resource-release
+faults independently.  It unlinks the slot and attempts every known release
+before returning its first cleanup error.  Top-level Desk shutdown drains all
+children and completes Desk cleanup before surfacing the first such error to
+the shell.  If context entry/activation itself fails, Desk suppresses the
+child-owned shutdown callback rather than invoke it against an uncertain
+context.  UIDL detach has a stricter identity check of its own: it runs only
+when the active UCTX is exactly the child's, allowing cleanup after an
+activation failure without touching a wrong context.  Desk still unlinks the
+slot and releases every host-owned handle it can identify.
 
 ## Theme System
 
@@ -173,7 +198,8 @@ A sample config template is provided in
 | Word | Stack | Description |
 |------|-------|-------------|
 | `DESK-LAUNCH` | `( desc -- id )` | Launch sub-app from APP-DESC.  Returns slot ID (−1 on failure). |
-| `DESK-CLOSE-ID` | `( id -- )` | Close sub-app by slot ID.  Calls SHUTDOWN-XT, frees UIDL context. |
+| `DESK-CLOSE-ID` | `( id -- )` | Compatibility window-close request; CANCEL/DEFER leave the child live. |
+| `DESK-REQUEST-CLOSE-ID` | `( id reason -- decision )` | Negotiate close; ALLOW shuts down/removes, CANCEL/DEFER preserve. |
 | `DESK-FOCUS-ID` | `( id -- )` | Focus sub-app by slot ID.  No-op if minimized or not found. |
 | `DESK-MINIMIZE-ID` | `( id -- )` | Minimize sub-app (alive but hidden). |
 | `DESK-RESTORE` | `( -- )` | Restore last minimized app. |
@@ -272,7 +298,7 @@ live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
 
 | § | Title | Description |
 |---|-------|-------------|
-| 1 | Slot Struct | 64-byte linked-list node, state enum |
+| 1 | Slot Struct | 88-byte linked-list node, state enum |
 | 2 | DESK Global State | Head, focus, ID counter, layout prefs |
 | 2b | Theme | 15 colour slot variables, defaults, TOML loader |
 | 2c | Hotbar | Pinned-app entry array, TOML loader, painting |
@@ -291,7 +317,13 @@ live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
 
 ## Guard-Protected Words
 
-Under `[DEFINED] GUARDED`:  `DESK-LAUNCH`, `DESK-CLOSE-ID`,
-`DESK-FOCUS-ID`, `DESK-MINIMIZE-ID`, `DESK-RESTORE`, `DESK-FULLFRAME!`,
+Under `[DEFINED] GUARDED`: `DESK-LAUNCH`, `DESK-FOCUS-ID`,
+`DESK-MINIMIZE-ID`, `DESK-RESTORE`, `DESK-FULLFRAME!`,
 `DESK-TOGGLE-VH`, `DESK-RELAYOUT`, `DESK-SLOT-COUNT`, `DESK-VCOUNT`,
-`DESK-RUN`.
+`DESK-AGENT-SOURCE!`, `DESK-PRACTICE`, `DESK-CONTEXT`, and
+`DESK-RECOVERY?`.
+
+`DESK-RUN`, `DESK-CLOSE-ID`, and `DESK-REQUEST-CLOSE-ID` are owner-core
+lifecycle entries and remain unwrapped.  Close callbacks may open a blocking
+confirmation dialog, so no metadata guard is retained across negotiation.
+Cross-core producers must post the close request to Desk's owner task.

@@ -65,6 +65,51 @@ its generation. Loading validates both slots and chooses the newest valid
 generation; a torn or corrupt newest file falls back to the prior valid file.
 If neither file is valid, loading fails closed.
 
+Slot reads and writes are exact: a zero-progress or short transfer is an I/O
+failure, never a shorter valid snapshot. Each slot operation holds one VFS
+transaction across active-VFS selection, open/create, transfer, close, and
+sync. A dedicated recursive store guard covers allocation, codec scratch,
+generation selection, publication, construction, and destruction as well, so
+owner-core callers cannot interleave through the module-global working state.
+The adapter remains core-affine because allocation and the active-VFS selector
+are not worker-safe. The runtime must also linearize store lifetime: no caller
+may race `AVFSSTORE-FREE` or use the store after ownership is released. Within
+that lifetime contract, the guard provides scratch-state safety and coherent
+generation publication; it does not provide conflicting-edit resolution or
+turn a borrowed store pointer into a concurrent ownership mechanism.
+
+The store callback ABI remains status-based even when a VFS binding or codec
+unexpectedly `THROW`s. The adapter catches the fault only after independently
+attempting descriptor close, active-VFS restoration, candidate-conversation
+release, and buffer release. The original fault takes precedence over a
+cleanup fault internally; the public load/save callback then reports
+`ACSTORE-S-IO` rather than exposing an exception or misclassifying an
+invariant failure as corrupt snapshot data. Ordinary returned codec statuses
+retain their existing `INVALID`, `CAPACITY`, and `NOMEM` meanings.
+
+Save has one additional result, `ACSTORE-S-UNCERTAIN`. It is returned when an
+unexpected fault occurs after writing may have begun, or when close/sync or
+the final selector restore cannot prove the effect, including a nonzero sync
+result after a complete write. For faults before the save body adopts the new
+generation, the in-memory generation and active slot do not advance. A fault
+while releasing the store guard after a successful body is later still: RAM
+adoption has already occurred, so it is retained and the result remains
+uncertain rather than attempting a false rollback. The inactive slot may
+nevertheless contain a complete, valid newer generation, so a later load
+validates both slots normally and may adopt it. This is deliberately not
+reported as a clean failure or silently rolled back.
+
+Descriptor and selector ownership markers are cleared before close/restore is
+called. This prevents an operation that completed and then threw from being
+retried as a double-close or double-restore during outer cleanup. A binding
+that throws before performing such a void operation can therefore strand the
+resource; that is an invariant violation in the binding, not a recoverable
+storage result. Deterministic tests cover after-effect close/sync faults,
+free-list integrity, selector restoration, allocation recovery, unchanged RAM
+publication before adoption, second-slot read/decode rollback, post-body guard
+release faults, returned-conversation cleanup, and later acceptance of a valid
+uncertain generation.
+
 Messages stored as streaming, pending, or awaiting approval cannot honestly be
 resumed without provider and tool execution state. Decode therefore marks them
 cancelled, adds `AMSG-F-RECOVERED`, clears the active run, and appends one audit
@@ -94,8 +139,8 @@ Desk environment rather than to this storage port.
 Deterministic coverage is split intentionally:
 
 - `conversation-store` validates the codec, both generations, corruption
-  fallback, fail-closed loading, recovery normalization, ownership, and stack
-  balance.
+  fallback, fail-closed loading, recovery normalization, thrown dependency
+  cleanup, uncertain publication recovery, ownership, and stack balance.
 - `agent-persistence` reconstructs multiple runtimes over one native VFS and
   verifies completed approval audit, interrupted approval recovery, next-run
   continuity, and durable clearing.

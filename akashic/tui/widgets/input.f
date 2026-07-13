@@ -94,14 +94,14 @@ REQUIRE ../keys.f
 \   Move cursor forward by one UTF-8 character.
 \   Returns new byte offset (or buf-len if already at end).
 : _INP-NEXT-CP  ( buf-a buf-len cursor -- cursor' )
-    2DUP >= IF                             \ at or past end
+    2DUP <= IF                             \ cursor at or past end
         NIP NIP EXIT
     THEN
     SWAP >R                                \ ( buf-a cursor  R: buf-len )
     OVER OVER + C@ _UTF8-SEQLEN           \ ( buf-a cursor seqlen )
     DUP 0= IF DROP 1 THEN                 \ treat invalid as 1
     + NIP                                  \ cursor + seqlen
-    DUP R> MIN ;                           \ clamp to buf-len
+    R> MIN ;                               \ clamp to buf-len
 
 \ =====================================================================
 \ 3. Edit operations
@@ -196,7 +196,7 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     DUP DUP _INP-O-BUF-A + @
     OVER _INP-O-CURSOR + @
     _INP-PREV-CP
-    SWAP _INP-O-CURSOR + !
+    OVER _INP-O-CURSOR + !
     WDG-DIRTY ;
 
 \ _INP-RIGHT ( widget -- )
@@ -205,7 +205,7 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     OVER _INP-O-BUF-LEN + @
     ROT _INP-O-CURSOR + @
     _INP-NEXT-CP
-    SWAP _INP-O-CURSOR + !
+    OVER _INP-O-CURSOR + !
     WDG-DIRTY ;
 
 \ _INP-HOME ( widget -- )

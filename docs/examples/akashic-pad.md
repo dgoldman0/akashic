@@ -10,6 +10,7 @@ From the Akashic repository:
 
 ```bash
 python3 local_testing/akashic_tui.py smoke --profile pad
+python3 local_testing/akashic_tui.py smoke --profile pad-contracts
 ```
 
 The smoke profile builds a bootable MP64FS image from Pad's transitive
@@ -24,13 +25,13 @@ it, see [`local_testing/README.md`](../../local_testing/README.md).
 
 - Up to 16 open buffers with a dynamic tab strip and per-buffer cursor,
   selection, scroll, dirty, undo, and redo state.
-- Arena-backed gap buffers with line indexes and a compact four-column
-  line-number gutter.
+- Arena-backed gap-buffer text with independently reclaimable packed line
+  indexes and a compact four-column line-number gutter.
 - A cell-accurate software caret that remains visible when Pad is hosted by
   Desk or observed through the shared-session viewer.
 - VFS-backed new, open, save, Save As, and Save All operations.
-- Exact truncating saves, including files that shrink and files that grow into
-  fragmented MP64FS extents.
+- Crash-recoverable staged replacement with exact readback, including files
+  that shrink and files that grow into fragmented MP64FS extents.
 - Sidebar file explorer and optional output pane.
 - Clipboard copy, cut, and paste.
 - Find with wraparound, single replacement, go to line, and go to file.
@@ -80,6 +81,7 @@ pad.f / pad.uidl
   |     +-- undo.f                   per-buffer edit history
   +-- prompt.f                       non-blocking status-row command bar
   +-- vfs.f + vfs-mp64fs.f           file I/O and persistence
+  |     +-- vfs-replace.f            staged replace and recovery
   +-- clipboard.f + search.f         app-level editing operations
 ```
 
@@ -98,17 +100,19 @@ blocking input loop steals terminal ownership from the desktop.
 
 ## File I/O
 
-Pad uses the abstract VFS API rather than KDOS directory internals:
+Pad uses the abstract VFS API rather than KDOS directory internals. It
+canonicalizes every path, rejects traversal and reserved replacement names,
+captures one immutable buffer snapshot, and publishes that snapshot through
+`VREPL-REPLACE`. Recovery runs before an open or save. A save clears dirty state
+only when publication succeeded (including the committed-cleanup status); a
+failure retains both the editor model and its dirty state.
 
-1. Resolve or create the requested path with `VFS-OPEN` / `VFS-CREATE`.
-2. Rewind and truncate the descriptor to zero.
-3. Flatten the active gap buffer and write the exact byte count.
-4. Close the descriptor and call `VFS-SYNC`.
-5. Clear the buffer dirty flag and redraw both status and tab metadata.
-
-Opening a path loads at most 64 KiB into a new buffer. Editing can grow the gap
-buffer while the app's 2 MiB arena has room. MP64FS starts files with one sector
-and can extend them through a primary and secondary extent.
+Opening performs an exact bounded read into a new buffer. Files larger than
+64 KiB, short reads, recovery failures, and unexpected VFS throws are reported
+instead of silently truncating the document. A failed open closes the candidate
+tab and restores the original active buffer. MP64FS can extend files through a
+primary and secondary extent, and staged replacement verifies the exact bytes
+before publication.
 
 ## Selection And Editing
 
@@ -118,16 +122,18 @@ the anchor at its start. The first inserted character deletes the selected
 range, moves the cursor to the start, and then inserts normally; later
 characters append at the updated gap.
 
-All gap-buffer mutators have strict stack contracts. In particular,
-`GB-INS`, `GB-DEL`, `GB-BS`, and `GB-SET` rebuild the line index without leaking
-the buffer handle onto the caller's data stack. This is covered indirectly by
-the full replacement and exact-persistence smoke journey.
+All gap-buffer mutators have strict stack contracts. `GB-INS`, `GB-DEL`, and
+`GB-BS` update the affected line-index range incrementally; `GB-SET` performs a
+bounded whole-document rebuild after sizing the packed index once. This is
+covered by focused gap-buffer tests and the Pad contract journey.
 
 ## Current Boundaries
 
 - There is no syntax-highlighting or language-server layer yet.
 - The output pane is present but is not connected to a build/run task system.
-- Loading one file is capped at 64 KiB and the editor arena is fixed at 2 MiB.
+- Loading one file is capped at 64 KiB. All 16 retained tab slots have been
+  exercised simultaneously with worst-case newline-dense 64 KiB documents;
+  packed line indexes are reclaimed independently of the fixed editor arena.
 - Find-and-replace replaces one wrapped match per invocation rather than all
   matches.
 

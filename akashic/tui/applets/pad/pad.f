@@ -51,6 +51,7 @@ REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
+REQUIRE ../../../utils/fs/vfs-replace.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/clipboard.f
 REQUIRE ../../../utils/toml.f
@@ -180,6 +181,7 @@ _PAD-CURRENT-STATE _PAD-IO-CAP CMP-FIELD: _PAD-IO-BUF
 
 \ ---- VFS ----
 _PAD-CURRENT-STATE CMP-CELL: _PAD-VFS
+_PAD-CURRENT-STATE VREPL-SIZE CMP-FIELD: _PAD-REPL
 
 \ ---- Toggle state ----
 _PAD-CURRENT-STATE CMP-CELL: _PAD-SIDEBAR-VIS
@@ -567,9 +569,21 @@ VARIABLE _PDC-ACOL
 : _PAD-BUF-OPEN  ( -- index | -1 )
     _PAD-ALLOC-SLOT DUP 0< IF EXIT THEN
     >R
-    \ Allocate gap-buffer and undo state
-    _PAD-BUF-CAP _PAD-ARENA @ GB-NEW   R@ _PAD-BUF-ENTRY _PBE-GB + !
-    UNDO-NEW               R@ _PAD-BUF-ENTRY _PBE-UNDO + !
+    \ The descriptor and byte storage live in a bump arena, so retain one
+    \ gap buffer per slot and reset it on reuse.  Its independently-owned
+    \ packed line index is likewise retained until shutdown.  Failed opens
+    \ and ordinary tab churn are therefore bounded by the fixed slot count.
+    R@ _PAD-BUF-ENTRY _PBE-GB + @ ?DUP IF
+        GB-CLEAR
+    ELSE
+        _PAD-BUF-CAP _PAD-ARENA @ GB-NEW
+        R@ _PAD-BUF-ENTRY _PBE-GB + !
+    THEN
+    R@ _PAD-BUF-ENTRY _PBE-UNDO + @ ?DUP IF
+        UNDO-CLEAR
+    ELSE
+        UNDO-NEW R@ _PAD-BUF-ENTRY _PBE-UNDO + !
+    THEN
     -1                     R@ _PAD-BUF-ENTRY _PBE-FLAGS + !
     0                      R@ _PAD-BUF-ENTRY _PBE-FNAME-L + !
     0                      R@ _PAD-BUF-ENTRY _PBE-DIRTY + !
@@ -596,12 +610,20 @@ VARIABLE _PDC-ACOL
     DUP _PAD-ACTIVE @ = IF
         _PAD-UNBIND
     THEN
-    \ Free GB and undo
-    R@ _PBE-GB + @ ?DUP IF GB-FREE THEN
-    R@ _PBE-UNDO + @ ?DUP IF UNDO-FREE THEN
-    \ Mark slot free
-    R> _PAD-BUF-ENTRY-SIZE 0 FILL
-    DUP _PAD-BUF-FNAME OVER _PAD-BUF-ENTRY _PBE-FNAME-A + !
+    \ Reset content and history, but retain the per-slot allocations.
+    \ GB-FREE releases the line index and is reserved for final shutdown;
+    \ the descriptor and byte storage remain arena-owned.
+    R@ _PBE-GB + @ ?DUP IF GB-CLEAR THEN
+    R@ _PBE-UNDO + @ ?DUP IF UNDO-CLEAR THEN
+    0 R@ _PBE-FLAGS + !
+    0 R@ _PBE-FNAME-L + !
+    0 R@ _PBE-DIRTY + !
+    0 R@ _PBE-CURSOR + !
+    0 R@ _PBE-SCROLL-Y + !
+    -1 R@ _PBE-SEL-ANC + !
+    0 R@ _PBE-INODE + !
+    0 R@ _PBE-RESERVED + !
+    R> DROP
     -1 _PAD-BUF-CNT +!
     \ If we closed the active buffer, switch to another
     _PAD-ACTIVE @ = IF
@@ -645,6 +667,100 @@ VARIABLE _PIO-NAME-U
 VARIABLE _PIO-SIZE
 VARIABLE _PIO-ACT
 VARIABLE _PIO-BUF
+VARIABLE _PIO-OLD-VFS
+VARIABLE _PIO-STATUS
+VARIABLE _PIO-THROW
+VARIABLE _PIO-CLEANUP-THROW
+
+\ Storage dependency seams used by the load transaction's ownership tests.
+\ Product builds leave these bound to KDOS.  Keeping them below the public
+\ API makes after-effect fault injection deterministic without redefining a
+\ global VFS word.
+VARIABLE _PAD-LOAD-CLOSE-XT
+VARIABLE _PAD-LOAD-USE-XT
+' VFS-CLOSE _PAD-LOAD-CLOSE-XT !
+' VFS-USE   _PAD-LOAD-USE-XT !
+
+: _PAD-LOAD-CLOSE  ( fd -- )
+    _PAD-LOAD-CLOSE-XT @ EXECUTE ;
+
+: _PAD-LOAD-USE  ( vfs -- )
+    _PAD-LOAD-USE-XT @ EXECUTE ;
+
+\ Relinquish descriptor ownership before invoking close.  If the driver
+\ closes successfully and then throws, cleanup must not close the recycled
+\ descriptor a second time.
+: _PAD-LOAD-CLOSE-FD  ( -- )
+    _PIO-FD @ ?DUP IF 0 _PIO-FD ! _PAD-LOAD-CLOSE THEN ;
+
+: _PAD-CAPTURE-TEXT  ( -- )
+    _PAD-TXTA @ TXTA-GET-TEXT
+    _PIO-TEXT-U ! _PIO-TEXT ! ;
+
+: _PAD-REPLACE-CAPTURED-TEXT  ( -- )
+    _PIO-TEXT @ _PIO-TEXT-U @ _PAD-REPL VREPL-REPLACE
+    _PIO-ACT ! ;
+
+VARIABLE _PCA-A
+VARIABLE _PCA-U
+VARIABLE _PCA-CWD-U
+VARIABLE _PCA-IN
+VARIABLE _PCA-ORIG
+VARIABLE _PCA-DEPTH
+16 CONSTANT _PAD-CANON-DEPTH
+
+: _PAD-INODE-PATH-BODY  ( -- path-a path-u ior )
+    0 _PCA-DEPTH !
+    BEGIN _PCA-IN @ IN.PARENT @ 0<> WHILE
+        1 _PCA-DEPTH +!
+        _PCA-DEPTH @ _PAD-CANON-DEPTH > IF 0 0 -1 EXIT THEN
+        _PCA-IN @ IN.PARENT @ _PCA-IN !
+    REPEAT
+    _PCA-ORIG @ _PAD-PATH-BUF VREPL-PATH-MAX 1+ VFS-INODE-PATH
+    DUP VREPL-PATH-MAX > IF DROP 0 0 -1 EXIT THEN
+    _PAD-PATH-BUF SWAP 0 ;
+
+: _PAD-INODE-PATH-CHECKED  ( inode -- path-a path-u ior )
+    DUP _PCA-ORIG ! _PCA-IN !
+    ['] _PAD-INODE-PATH-BODY VFS-TRANSACTION ;
+
+\ Return a bounded absolute path without silently normalizing traversal.
+\ VREPL-DERIVE-PATHS! performs the final component and reserved-name checks
+\ before any mutation.
+: _PAD-CANON-PATH-BODY  ( -- canon-a canon-u ior )
+    _PCA-U @ 0= _PCA-U @ VREPL-PATH-MAX > OR IF 0 0 -1 EXIT THEN
+    _PCA-A @ C@ [CHAR] / = IF
+        _PCA-A @ _PAD-PATH-BUF _PCA-U @ CMOVE
+        _PAD-PATH-BUF _PCA-U @ 0 EXIT
+    THEN
+    _PAD-VFS @ V.CWD @ _PCA-IN ! 0 _PCA-DEPTH !
+    BEGIN _PCA-IN @ IN.PARENT @ 0<> WHILE
+        1 _PCA-DEPTH +!
+        _PCA-DEPTH @ _PAD-CANON-DEPTH > IF 0 0 -1 EXIT THEN
+        _PCA-IN @ IN.PARENT @ _PCA-IN !
+    REPEAT
+    _PAD-VFS @ V.CWD @ _PAD-PATH-BUF VREPL-PATH-MAX 1+
+    VFS-INODE-PATH DUP _PCA-CWD-U ! DROP
+    _PCA-CWD-U @ VREPL-PATH-MAX > IF 0 0 -1 EXIT THEN
+    _PCA-CWD-U @ 1 = _PAD-PATH-BUF C@ [CHAR] / = AND IF
+        1 _PCA-U @ + DUP VREPL-PATH-MAX > IF DROP 0 0 -1 EXIT THEN
+        _PCA-A @ _PAD-PATH-BUF 1+ _PCA-U @ CMOVE
+    ELSE
+        _PCA-CWD-U @ 1+ _PCA-U @ +
+        DUP VREPL-PATH-MAX > IF DROP 0 0 -1 EXIT THEN
+        [CHAR] / _PAD-PATH-BUF _PCA-CWD-U @ + C!
+        _PCA-A @ _PAD-PATH-BUF _PCA-CWD-U @ 1+ + _PCA-U @ CMOVE
+    THEN
+    _PAD-PATH-BUF SWAP 0 ;
+
+: _PAD-CANON-PATH  ( path-a path-u -- canon-a canon-u ior )
+    _PCA-U ! _PCA-A !
+    ['] _PAD-CANON-PATH-BODY VFS-TRANSACTION ;
+
+: _PAD-VREPL-USABLE?  ( status -- flag )
+    DUP VREPL-S-OK =
+    OVER VREPL-S-ROLLED-BACK = OR
+    SWAP VREPL-S-COMMITTED-CLEANUP = OR ;
 
 VARIABLE _PFN-A
 VARIABLE _PFN-U
@@ -653,7 +769,8 @@ VARIABLE _PFN-I
 
 : _PAD-FILENAME!  ( fname-a fname-u index -- )
     _PFN-I ! _PFN-U ! _PFN-A !
-    _PFN-U @ _PAD-FNAME-CAP MIN DUP _PFN-N !
+    _PFN-U @ DUP _PAD-FNAME-CAP >= ABORT" pad: filename too long"
+    DUP _PFN-N !
     _PFN-I @ _PAD-BUF-ENTRY _PBE-FNAME-L + !
     _PFN-A @
     _PFN-I @ _PAD-BUF-ENTRY _PBE-FNAME-A + @
@@ -676,36 +793,21 @@ VARIABLE _PFB-U
 
 : _PAD-DO-SAVE-TO  ( fname-a fname-u -- ior )
     _PIO-NAME-U ! _PIO-NAME-A !
-    VFS-CUR >R  _PAD-VFS @ VFS-USE
-    _PIO-NAME-A @ _PIO-NAME-U @ VFS-OPEN
-    DUP 0= IF
-        DROP
-        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-VFS @ VFS-CREATE
-        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN
-        DROP
-        _PIO-NAME-A @ _PIO-NAME-U @ VFS-OPEN
-        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-CANON-PATH IF
+        2DROP -1 EXIT
     THEN
-    R> VFS-USE
-    _PIO-FD !
-    _PIO-FD @ VFS-REWIND
-    0 _PIO-FD @ VFS-TRUNCATE IF
-        _PIO-FD @ VFS-CLOSE -2 EXIT
-    THEN
-    _PAD-TXTA @ TXTA-GET-TEXT
-    _PIO-TEXT-U ! _PIO-TEXT !
-    _PIO-TEXT @ _PIO-TEXT-U @ _PIO-FD @ VFS-WRITE _PIO-ACT !
-    _PIO-TEXT @ FREE
-    _PIO-FD @ VFS-CLOSE
-    _PAD-VFS @ VFS-SYNC DROP
-    _PIO-ACT @ _PIO-TEXT-U @ = IF 0 ELSE -3 THEN ;
+    _PAD-REPL VREPL-DERIVE-PATHS! DUP IF EXIT THEN DROP
+    0 _PIO-TEXT ! 0 _PIO-TEXT-U !
+    ['] _PAD-CAPTURE-TEXT CATCH IF -3 EXIT THEN
+    ['] _PAD-REPLACE-CAPTURED-TEXT CATCH
+    _PIO-TEXT @ FREE 0 _PIO-TEXT !
+    IF -4 EXIT THEN
+    _PIO-ACT @ DUP VREPL-S-OK = SWAP VREPL-S-COMMITTED-CLEANUP = OR
+    IF 0 ELSE -2 THEN ;
 
 : _PAD-SAVE-CURRENT-AS  ( fname-a fname-u -- ior )
-    2DUP _PAD-DO-SAVE-TO
-    ?DUP IF
-        >R 2DROP R> EXIT
-    THEN
-    _PAD-ACTIVE @ _PAD-FILENAME!
+    _PAD-DO-SAVE-TO ?DUP IF EXIT THEN
+    _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
@@ -713,54 +815,123 @@ VARIABLE _PFB-U
     ASHELL-DIRTY!
     0 ;
 
-\ Load a file from path into the active buffer.
-: _PAD-LOAD-FILE  ( fname-a fname-u -- ior )
-    _PIO-NAME-U ! _PIO-NAME-A !
-    VFS-CUR >R  _PAD-VFS @ VFS-USE
-    _PIO-NAME-A @ _PIO-NAME-U @ VFS-OPEN
-    R> VFS-USE
+\ Unexpected THROWs at the applet/storage boundary are normalized to -7.
+\ Cleanup still runs for every owned fd/buffer and restores the caller's
+\ active VFS; an ordinary short/zero transfer remains the more specific -5.
+: _PAD-LOAD-FILE-BODY  ( -- ior )
+    _PAD-VFS @ _PAD-LOAD-USE
+    _PAD-REPL VREPL-TARGET$ VFS-OPEN
     DUP 0= IF
         DROP -1 EXIT
     THEN
     _PIO-FD !
-    _PAD-ACTIVE @ 0< IF _PIO-FD @ VFS-CLOSE -2 EXIT THEN
-    _PIO-FD @ VFS-SIZE _PAD-BUF-CAP MIN _PIO-SIZE !
+    _PAD-ACTIVE @ 0< IF -2 EXIT THEN
+    _PIO-FD @ VFS-SIZE DUP 0< OVER _PAD-BUF-CAP > OR IF
+        DROP -4 EXIT
+    THEN _PIO-SIZE !
     _PIO-SIZE @ 1 MAX ALLOCATE IF
-        DROP _PIO-FD @ VFS-CLOSE -3 EXIT
+        DROP -3 EXIT
     THEN
     _PIO-BUF !
-    _PIO-BUF @ _PIO-SIZE @ _PIO-FD @ VFS-READ _PIO-ACT !
-    _PIO-BUF @ _PIO-ACT @ _PAD-TXTA @ TXTA-SET-TEXT
-    _PIO-BUF @ FREE
-    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-ACTIVE @ _PAD-FILENAME!
-    _PIO-FD @ FD.INODE @
-    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-INODE + !
-    _PIO-FD @ VFS-SIZE _PAD-BUF-CAP > IF
-        S" File truncated to editor capacity" 2500 ASHELL-TOAST
+    _PIO-BUF @ _PIO-SIZE @ _PIO-FD @ VFS-READ-EXACT IF
+        -5 EXIT
     THEN
-    _PIO-FD @ VFS-CLOSE
+    _PIO-FD @ FD.INODE @ _PIO-ACT !
+    _PAD-LOAD-CLOSE-FD
+    _PIO-BUF @ _PIO-SIZE @ _PAD-TXTA @ TXTA-SET-TEXT
+    _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
+    _PIO-ACT @ _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-INODE + !
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-UPDATE-STATUS
     ASHELL-DIRTY!
     0 ;
 
+: _PAD-LOAD-FREE-BUF  ( -- )
+    _PIO-BUF @ ?DUP IF 0 _PIO-BUF ! FREE THEN ;
+
+: _PAD-LOAD-RESTORE-VFS  ( -- )
+    _PIO-OLD-VFS @ _PAD-LOAD-USE ;
+
+: _PAD-LOAD-RESTORE-VFS-RAW  ( -- )
+    _PIO-OLD-VFS @ VFS-USE ;
+
+: _PAD-LOAD-RECORD-CLEANUP-THROW  ( ior -- )
+    ?DUP IF
+        _PIO-CLEANUP-THROW @ 0= IF _PIO-CLEANUP-THROW ! ELSE DROP THEN
+    THEN ;
+
+: _PAD-LOAD-CLEANUP  ( -- )
+    0 _PIO-CLEANUP-THROW !
+    ['] _PAD-LOAD-CLOSE-FD CATCH _PAD-LOAD-RECORD-CLEANUP-THROW
+    ['] _PAD-LOAD-FREE-BUF CATCH _PAD-LOAD-RECORD-CLEANUP-THROW
+    ['] _PAD-LOAD-RESTORE-VFS CATCH _PAD-LOAD-RECORD-CLEANUP-THROW
+    \ An injected or future selector implementation can fail before its
+    \ side effect.  Recheck the invariant and use the stable KDOS primitive
+    \ as a final backstop; an after-effect THROW needs no duplicate switch.
+    VFS-CUR _PIO-OLD-VFS @ <> IF
+        ['] _PAD-LOAD-RESTORE-VFS-RAW CATCH
+        _PAD-LOAD-RECORD-CLEANUP-THROW
+    THEN ;
+
+: _PAD-LOAD-FILE-TRANSACTION  ( -- ior )
+    0 _PIO-FD ! 0 _PIO-BUF ! 0 _PIO-THROW !
+    VFS-CUR _PIO-OLD-VFS !
+    ['] _PAD-LOAD-FILE-BODY CATCH ?DUP IF
+        _PIO-THROW ! -7 _PIO-STATUS !
+    ELSE
+        _PIO-STATUS !
+    THEN
+    _PAD-LOAD-CLEANUP
+    \ Status precedence is deliberate: a specific primary transfer result
+    \ survives later cleanup faults.  Cleanup-only failure after an otherwise
+    \ successful load is normalized to -7.  All owned resources and the VFS
+    \ selector have already passed through independent cleanup stages.
+    _PIO-STATUS @ 0= _PIO-CLEANUP-THROW @ 0<> AND IF
+        -7
+    ELSE
+        _PIO-STATUS @
+    THEN ;
+
+\ Load a file from path into the active buffer.
+: _PAD-LOAD-FILE  ( fname-a fname-u -- ior )
+    _PIO-NAME-U ! _PIO-NAME-A !
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-REPL VREPL-DERIVE-PATHS!
+    DUP IF EXIT THEN DROP
+    _PAD-REPL VREPL-RECOVER DUP _PAD-VREPL-USABLE? 0= IF
+        DROP -6 EXIT
+    THEN DROP
+    ['] _PAD-LOAD-FILE-TRANSACTION VFS-TRANSACTION ;
+
 VARIABLE _POP-IDX
+VARIABLE _POP-ORIG
 
 : _PAD-OPEN-PATH  ( fname-a fname-u -- ior )
+    _PAD-CANON-PATH IF 2DROP -3 EXIT THEN
     _PIO-NAME-U ! _PIO-NAME-A !
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-REPL VREPL-DERIVE-PATHS!
+    IF -3 EXIT THEN
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-FIND-BUFFER DUP 0>= IF
         _PAD-BUF-SWITCH 0 EXIT
     THEN
     DROP
-    VFS-CUR >R _PAD-VFS @ VFS-USE
-    _PIO-NAME-A @ _PIO-NAME-U @ VFS-OPEN
-    R> VFS-USE
-    DUP 0= IF DROP -1 EXIT THEN
-    VFS-CLOSE
+    \ Recovery must precede the existence probe.  A crash may leave only a
+    \ valid backup plus intent state, in which case the target is supposed
+    \ to be missing until VREPL restores it.
+    _PAD-REPL VREPL-RECOVER DUP _PAD-VREPL-USABLE? 0= IF
+        DROP -6 EXIT
+    THEN DROP
+    \ Do not preflight with a second open: the checked load transaction owns
+    \ open/read/close and can distinguish an absent target from a contained
+    \ THROW without duplicating selector and descriptor lifetime.
+    _PAD-ACTIVE @ _POP-ORIG !
     _PAD-BUF-OPEN DUP 0< IF DROP -2 EXIT THEN
     _POP-IDX !
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-LOAD-FILE DUP IF
         _POP-IDX @ _PAD-BUF-CLOSE
+        _POP-ORIG @ DUP 0>= IF
+            DUP _PAD-BUF-ENTRY _PBE-FLAGS + @ IF _PAD-BUF-SWITCH
+            ELSE DROP THEN
+        ELSE DROP THEN
     THEN ;
 
 \ =====================================================================
@@ -771,12 +942,17 @@ VARIABLE _POP-IDX
     DROP
     DUP 0= IF DROP EXIT THEN
     DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
-    DUP _PAD-PATH-BUF 512 VFS-INODE-PATH   ( inode len )
-    SWAP DROP                              ( len )
-    DUP 0= IF DROP EXIT THEN
-    _PAD-PATH-BUF SWAP _PAD-OPEN-PATH
+    _PAD-INODE-PATH-CHECKED IF
+        2DROP S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST EXIT
+    THEN
+    _PAD-OPEN-PATH
     DUP -1 = IF S" File not found" 2000 ASHELL-TOAST THEN
     DUP -2 = IF S" Max buffers reached" 2000 ASHELL-TOAST THEN
+    DUP -3 = IF S" Invalid or unsupported path" 2200 ASHELL-TOAST THEN
+    DUP -4 = IF S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST THEN
+    DUP -5 = IF S" File read failed; document was not changed" 2500 ASHELL-TOAST THEN
+    DUP -6 = IF S" File recovery is required before opening" 2500 ASHELL-TOAST THEN
+    DUP -7 = IF S" File open failed safely after an internal storage fault" 2800 ASHELL-TOAST THEN
     DROP ;
 
 \ =====================================================================
@@ -917,11 +1093,7 @@ VARIABLE _PSA-FAILED
     REPEAT ;
 
 : _PAD-DO-QUIT  ( elem -- )
-    DROP
-    _PAD-HAS-DIRTY? IF
-        S" Quit and discard unsaved changes?" DLG-CONFIRM 0= IF EXIT THEN
-    THEN
-    ASHELL-QUIT ;
+    DROP ASHELL-QUIT ;
 
 \ =====================================================================
 \  S14 -- Actions: Clipboard
@@ -1099,6 +1271,11 @@ VARIABLE _PPSUB-MODE
             _PPSUB-A @ _PPSUB-U @ _PAD-OPEN-PATH
             DUP -1 = IF S" File not found" 2000 ASHELL-TOAST THEN
             DUP -2 = IF S" Max buffers reached" 2000 ASHELL-TOAST THEN
+            DUP -3 = IF S" Invalid or unsupported path" 2200 ASHELL-TOAST THEN
+            DUP -4 = IF S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST THEN
+            DUP -5 = IF S" File read failed; document was not changed" 2500 ASHELL-TOAST THEN
+            DUP -6 = IF S" File recovery is required before opening" 2500 ASHELL-TOAST THEN
+            DUP -7 = IF S" File open failed safely after an internal storage fault" 2800 ASHELL-TOAST THEN
             DROP
         ENDOF
         _PAD-PRM-SAVE-AS OF
@@ -1305,6 +1482,8 @@ VARIABLE _PSW-BYTE
     \ ---- VFS ----
     VFS-CUR DUP 0= ABORT" pad: no VFS available"
     _PAD-VFS !
+    _PAD-VFS @ _PAD-REPL VREPL-INIT
+    VREPL-S-OK <> ABORT" pad: replacement init failed"
     \ ---- Find UIDL elements by ID ----
     S" mbar"           UTUI-BY-ID _PAD-E-MBAR !
     S" main-split"     UTUI-BY-ID _PAD-E-MAIN-SPLIT !
@@ -1568,17 +1747,28 @@ VARIABLE _PSW-BYTE
 \  S23 -- SHUTDOWN Callback
 \ =====================================================================
 
+: PAD-REQUEST-CLOSE-CB  ( reason instance -- decision )
+    _PAD-ACTIVATE DROP
+    _PAD-HAS-DIRTY? 0= IF APP-CLOSE-D-ALLOW EXIT THEN
+    S" Close Pad and discard all unsaved changes?" DLG-CONFIRM IF
+        APP-CLOSE-D-ALLOW
+    ELSE
+        APP-CLOSE-D-CANCEL
+    THEN ;
+
 : PAD-SHUTDOWN-CB  ( instance -- )
     _PAD-ACTIVATE
     \ Unbind from textarea
     _PAD-UNBIND
 
-    \ Free all open buffers (GB-FREE is a no-op; undo uses bank0 heap)
+    \ Free retained slot resources, including allocations belonging to
+    \ currently closed slots.  GB-FREE releases packed line indexes; byte
+    \ buffers and descriptors are released by ARENA-DESTROY below.
     _PAD-MAX-BUFS 0 DO
-        I _PAD-BUF-ENTRY _PBE-FLAGS + @ IF
-            I _PAD-BUF-ENTRY _PBE-GB + @ ?DUP IF GB-FREE THEN
-            I _PAD-BUF-ENTRY _PBE-UNDO + @ ?DUP IF UNDO-FREE THEN
-        THEN
+        I _PAD-BUF-ENTRY _PBE-GB + @ ?DUP IF GB-FREE THEN
+        I _PAD-BUF-ENTRY _PBE-UNDO + @ ?DUP IF UNDO-FREE THEN
+        0 I _PAD-BUF-ENTRY _PBE-GB + !
+        0 I _PAD-BUF-ENTRY _PBE-UNDO + !
     LOOP
 
     \ Destroy the editor arena (frees all GB memory in one shot)
@@ -1719,6 +1909,7 @@ CREATE PAD-COMP-DESC COMP-DESC ALLOT
     ['] PAD-PAINT-CB    OVER APP.PAINT-XT !
     ['] PAD-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
     ['] _PAD-ACTIVATE   OVER APP.ACTIVATE-XT !
+    ['] PAD-REQUEST-CLOSE-CB OVER APP.REQUEST-CLOSE-XT !
     S" tui/applets/pad/pad.uidl"
                         ROT DUP >R
                         APP.UIDL-FILE-U !

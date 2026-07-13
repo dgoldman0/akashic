@@ -30,13 +30,15 @@ Profiles are `credential`, `http-request`, `tls-port`, `net-stream`, `mcp`,
 `conversation-store`,
 `agent-context`, `agent-persistence`,
 `interop` (the non-TUI runtime and interoperability contracts),
+`resource-contracts` (resource-reference and lens-binding contracts),
 `practice-contracts` (Practice/Context/facet/Mandate authority contracts),
 `agent`
 (provider-neutral conversations), `agent-ui`, `agent-auth-ui`, `agent-widgets`,
 `agent-device-ui`, `desktop` (Desk with all five applets), `desktop-agent`,
 `desktop-fallback`, `desktop-recovery`,
 `desktop-codex`, `desktop-codex-live` (opt-in TAP-backed shared environment),
-`pad`, `fexplorer`, `daybook`, and `grid`.
+`pad`, `pad-contracts`, `fexplorer`, `daybook`, `daybook-contracts`,
+`grid-eval`, `grid-contracts`, and `grid`.
 Generated images, terminal text, cell JSON, and PNG captures go under
 `local_testing/out/`.
 
@@ -67,7 +69,7 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `codex-live-tls` | opt-in credential-free native DNS/TCP/TLS authentication of `auth.openai.com` and `chatgpt.com`; no HTTP request, login code, token, or API key is sent |
 | `codex-live-auth` | opt-in native device-code request, displayed browser code, persistent-connection polling, and bounded transport/auth diagnostics against `auth.openai.com` |
 | `agent-context` | structured turns, transcript-independent model items, provider/tool identity, source filtering, bounded rollback, and stack balance |
-| `conversation-store` | checksummed bounded transcript encoding, alternating VFS generations, newest-valid selection, corruption fallback, fail-closed loading, interrupted-state normalization, ownership cleanup, and stack balance |
+| `conversation-store` | checksummed bounded transcript encoding, alternating VFS generations, newest-valid selection, corruption fallback, fail-closed loading, interrupted-state normalization, deterministic VFS/codec fault cleanup, uncertain-publication recovery, ownership cleanup, and stack balance |
 | `agent-persistence` | completed approval audit, repeated runtime reconstruction over one native VFS, interrupted approval recovery, run-ID continuity, durable clearing, and stack balance |
 | `interop` | instance-relative state, isolated instances, capability validation at registration and owner dispatch, legacy zero-resource requests, explicit queued/running/complete request lifecycle, bounded dispatch, and typed values without loading TUI |
 | `resource-contracts` | pointer-free stable resource references, canonical URI round trips, Context-scoped bounded resolution, the one-resource-per-owner-instance invariant, stale revision/instance/epoch rejection, pointer-free lens bindings, queued/running reuse rejection, completed request reuse, exact resource stamping/dispatch, revision advancement, and stack balance |
@@ -78,8 +80,12 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `agent-widgets` | provider-neutral account and run-settings panel states, selection, refresh, cancellation, direct Escape close behavior, and stack balance |
 | `agent-device-ui` | external-browser device code, pending/connected/sign-out states, catalog loading, model/reasoning/speed/verbosity controls, conversation, cancellation, and resize through a reusable native development source |
 | `pad` | edit/undo/redo, open/find/go-to, fragmented multi-sector Save As, exact bytes, word and line replacement, dirty-state redraw |
+| `pad-contracts` | canonical paths, exact bounded load, crash-recoverable replacement, failure rollback, dirty-close negotiation, all 16 worst-case newline-dense buffers, repeated slot reuse, and resource/stack balance |
 | `fexplorer` | create file/folder, rename, copy/paste, confirmed deletion, preview, and persisted MP64FS metadata |
 | `daybook` | task capture, completion, exact Markdown persistence, responsive calendar/agenda resize |
+| `daybook-contracts` | transactional strict import, source bounds, injected short reads, staged replacement, interrupted-publication recovery, dirty-state preservation, close negotiation, and stack balance |
+| `grid-eval` | bounded dependency traversal, exact depth/cycle/error classification, recovery after errors, and stack balance |
+| `grid-contracts` | strict transactional CSV import, exact shape bounds, oversized and injected short reads, source blocking, failed-sync rollback, replacement cleanup, close registration, and stack balance |
 | `grid` | formula edit, dependent `SUM` recalculation, CSV persistence/reload, virtual-grid resize |
 | `desktop-agent` | all five applets, direct intents, deterministic Mandate-scoped agenda read and reviewed task capture, hidden raw-source-name rejection, global prompt, focus, persistence, and resize |
 | `desktop-fallback` | cold Desk boot from one structurally valid older Practice-head slot when the newer MP64FS envelope is corrupt, with visible fallback status and normal applet activation |
@@ -91,6 +97,20 @@ Run the focused profile plus `desktop-agent` before changing shared TUI, VFS,
 agent, or app-shell behavior. The normal suite is fully native and offline.
 The OpenAI profiles use deterministic in-guest fixture credentials and
 transports; they never contact OpenAI or require a developer API key.
+
+The substrate and lifecycle regressions also have focused production-emulator
+drivers:
+
+```bash
+python3 local_testing/test_guard.py
+python3 local_testing/test_vfs_replace.py
+python3 local_testing/test_explorer_transactions.py
+python3 local_testing/test_applet_close.py
+```
+
+The applet-close driver deliberately isolates the guarded APP-SHELL contract;
+run the `desktop` and `desktop-agent` profiles for the full linked Desk
+lifecycle.
 
 The default Desk Practice validator is structural. CRC and record validation
 detect corruption and torn envelopes, but do not authenticate a hostile

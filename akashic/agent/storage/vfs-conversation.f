@@ -2,7 +2,12 @@
 \  vfs-conversation.f - Dual-generation VFS conversation snapshots
 \ =====================================================================
 \  Saves always target the inactive slot. Startup validates both complete
-\  checksummed snapshots and chooses the newest valid generation.
+\  checksummed snapshots and chooses the newest valid generation.  Slot I/O
+\  is exact and each publication is one guarded VFS transaction.  A store
+\  guard also covers the module scratch state and generation selection, so
+\  owner-core callers cannot interleave before the VFS transaction begins.
+\  Allocation and VFS selection keep this adapter core-affine; the runtime
+\  must separately serialize object lifetime against AVFSSTORE-FREE.
 \ =====================================================================
 
 PROVIDED akashic-agent-vfs-store
@@ -10,6 +15,9 @@ PROVIDED akashic-agent-vfs-store
 REQUIRE ../conversation-store.f
 REQUIRE thread-codec.f
 REQUIRE ../../utils/fs/vfs.f
+REQUIRE ../../concurrency/guard.f
+
+GUARD _avfs-store-guard
 
 0 CONSTANT _AVS-STORE
 _AVS-STORE AGENT-CONVERSATION-STORE-SIZE + CONSTANT _AVS-VFS
@@ -26,6 +34,48 @@ _AVS-FLAGS 8 + CONSTANT AVFSSTORE-SIZE
 : _AVFS-PATH-A  ( -- addr len ) S" /agent-thread-a.bin" ;
 : _AVFS-PATH-B  ( -- addr len ) S" /agent-thread-b.bin" ;
 
+\ Internal dependency vectors make every potentially-throwing boundary
+\ explicit.  Production uses the ordinary VFS and codec words; deterministic
+\ fault tests replace one vector at a time while the store guard is held.
+VARIABLE _AVFS-USE-XT
+VARIABLE _AVFS-OPEN-XT
+VARIABLE _AVFS-CREATE-XT
+VARIABLE _AVFS-READ-XT
+VARIABLE _AVFS-WRITE-XT
+VARIABLE _AVFS-CLOSE-XT
+VARIABLE _AVFS-SYNC-XT
+VARIABLE _AVFS-DECODE-XT
+VARIABLE _AVFS-ENCODE-SIZE-XT
+VARIABLE _AVFS-ENCODE-XT
+VARIABLE _AVFS-CONV-FREE-XT
+VARIABLE _AVFS-GUARD-RELEASE-XT
+
+: _AVFS-RESET-DEPENDENCIES  ( -- )
+    ['] VFS-USE             _AVFS-USE-XT !
+    ['] VFS-OPEN            _AVFS-OPEN-XT !
+    ['] VFS-CREATE          _AVFS-CREATE-XT !
+    ['] VFS-READ-EXACT      _AVFS-READ-XT !
+    ['] VFS-WRITE-EXACT     _AVFS-WRITE-XT !
+    ['] VFS-CLOSE           _AVFS-CLOSE-XT !
+    ['] VFS-SYNC            _AVFS-SYNC-XT !
+    ['] ATHREAD-DECODE      _AVFS-DECODE-XT !
+    ['] ATHREAD-ENCODE-SIZE _AVFS-ENCODE-SIZE-XT !
+    ['] ATHREAD-ENCODE      _AVFS-ENCODE-XT !
+    ['] ACONV-FREE          _AVFS-CONV-FREE-XT !
+    ['] GUARD-RELEASE       _AVFS-GUARD-RELEASE-XT ! ;
+
+_AVFS-RESET-DEPENDENCIES
+
+VARIABLE _AVFS-CLEAN-IOR
+
+: _AVFS-CLEAN-BEGIN  ( -- ) 0 _AVFS-CLEAN-IOR ! ;
+
+: _AVFS-CLEAN-NOTE  ( ior -- )
+    _AVFS-CLEAN-IOR @ 0= IF _AVFS-CLEAN-IOR ! ELSE DROP THEN ;
+
+: _AVFS-CLEAN-PREFER-FIRST  ( first-ior next-ior -- ior )
+    OVER IF DROP ELSE NIP THEN ;
+
 : _AVFS-CODEC-STATUS  ( codec-status -- store-status )
     DUP ATHREAD-S-OK = IF DROP ACSTORE-S-OK EXIT THEN
     DUP ATHREAD-S-CAPACITY = IF DROP ACSTORE-S-CAPACITY EXIT THEN
@@ -39,36 +89,118 @@ VARIABLE _AVR-OLD-VFS
 VARIABLE _AVR-FD
 VARIABLE _AVR-SIZE
 VARIABLE _AVR-BUF
-VARIABLE _AVR-ACTUAL
 VARIABLE _AVR-CONV
 VARIABLE _AVR-GEN
 VARIABLE _AVR-STATUS
+VARIABLE _AVR-CODEC-STATUS
+VARIABLE _AVR-HAVE-OLD-VFS
+VARIABLE _AVR-PRIMARY-IOR
+VARIABLE _AVR-CLEAN-FD
 
-: _AVFS-READ-SLOT  ( path-a path-u store -- conversation generation status )
-    _AVR-S ! _AVR-PU ! _AVR-PA ! 0 _AVR-FD ! 0 _AVR-BUF !
+: _AVR-CLEAN-CLOSE  ( -- ) _AVR-CLEAN-FD @ VFS-CLOSE ;
+: _AVR-CLEAN-RESTORE  ( -- ) _AVR-OLD-VFS @ VFS-USE ;
+: _AVR-CLEAN-FREE  ( -- ) _AVR-BUF @ FREE ;
+: _AVR-CLEAN-CONV  ( -- ) _AVR-CONV @ ACONV-FREE ;
+
+: _AVR-CLEAN-IO  ( -- cleanup-ior )
+    _AVFS-CLEAN-BEGIN
+    _AVR-FD @ IF
+        _AVR-FD @ _AVR-CLEAN-FD !
+        0 _AVR-FD !
+        ['] _AVR-CLEAN-CLOSE CATCH
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVR-HAVE-OLD-VFS @ IF
+        0 _AVR-HAVE-OLD-VFS !
+        ['] _AVR-CLEAN-RESTORE CATCH
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVFS-CLEAN-IOR @ ;
+
+: _AVR-CLEAN-BUFFER  ( -- cleanup-ior )
+    _AVFS-CLEAN-BEGIN
+    _AVR-BUF @ IF
+        ['] _AVR-CLEAN-FREE CATCH
+        0 _AVR-BUF !
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVFS-CLEAN-IOR @ ;
+
+: _AVR-CLEAN-CONVERSATION  ( -- cleanup-ior )
+    _AVFS-CLEAN-BEGIN
+    _AVR-CONV @ IF
+        ['] _AVR-CLEAN-CONV CATCH
+        0 _AVR-CONV ! 0 _AVR-GEN !
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVFS-CLEAN-IOR @ ;
+
+: _AVFS-READ-BYTES-BODY  ( -- )
+    ACSTORE-S-IO _AVR-STATUS !
     VFS-CUR _AVR-OLD-VFS !
-    _AVR-S @ AVFSSTORE.VFS @ VFS-USE
-    _AVR-PA @ _AVR-PU @ VFS-OPEN _AVR-FD !
-    _AVR-OLD-VFS @ VFS-USE
-    _AVR-FD @ 0= IF 0 0 ACSTORE-S-NOT-FOUND EXIT THEN
+    -1 _AVR-HAVE-OLD-VFS !
+    _AVR-S @ AVFSSTORE.VFS @ _AVFS-USE-XT @ EXECUTE
+    _AVR-PA @ _AVR-PU @ _AVFS-OPEN-XT @ EXECUTE _AVR-FD !
+    _AVR-FD @ 0= IF ACSTORE-S-NOT-FOUND _AVR-STATUS ! EXIT THEN
     _AVR-FD @ VFS-SIZE DUP _AVR-SIZE !
     DUP ATHREAD-HEADER-SIZE < SWAP ATHREAD-MAX-SNAPSHOT > OR IF
-        _AVR-FD @ VFS-CLOSE 0 0 ACSTORE-S-INVALID EXIT
+        ACSTORE-S-INVALID _AVR-STATUS ! EXIT
     THEN
     _AVR-SIZE @ ALLOCATE DUP IF
-        2DROP _AVR-FD @ VFS-CLOSE 0 0 ACSTORE-S-NOMEM EXIT
+        2DROP ACSTORE-S-NOMEM _AVR-STATUS ! EXIT
     THEN
-    DROP DUP _AVR-BUF ! DROP
-    _AVR-BUF @ _AVR-SIZE @ _AVR-FD @ VFS-READ _AVR-ACTUAL !
-    _AVR-FD @ VFS-CLOSE
-    _AVR-ACTUAL @ _AVR-SIZE @ <> IF
-        _AVR-BUF @ FREE 0 0 ACSTORE-S-IO EXIT
-    THEN
-    _AVR-BUF @ _AVR-SIZE @ ATHREAD-DECODE
-    _AVR-STATUS ! _AVR-GEN ! _AVR-CONV !
-    _AVR-BUF @ FREE
+    DROP _AVR-BUF !
+    _AVR-BUF @ _AVR-SIZE @ _AVR-FD @ _AVFS-READ-XT @ EXECUTE
+    IF EXIT THEN
+    _AVR-FD @ 0 _AVR-FD ! _AVFS-CLOSE-XT @ EXECUTE
+    _AVR-OLD-VFS @ 0 _AVR-HAVE-OLD-VFS ! _AVFS-USE-XT @ EXECUTE
+    ACSTORE-S-OK _AVR-STATUS ! ;
+
+: _AVFS-READ-TRANSACTION  ( -- )
+    ['] _AVFS-READ-BYTES-BODY CATCH _AVR-PRIMARY-IOR !
+    _AVR-CLEAN-IO
     _AVR-STATUS @ IF
-        0 0 _AVR-STATUS @ _AVFS-CODEC-STATUS EXIT
+        _AVR-CLEAN-BUFFER _AVFS-CLEAN-PREFER-FIRST
+    THEN
+    _AVR-PRIMARY-IOR @ ?DUP IF NIP THROW THEN
+    ?DUP IF THROW THEN ;
+
+: _AVFS-READ-TRANSACTION-CALL  ( -- )
+    ['] _AVFS-READ-TRANSACTION VFS-TRANSACTION ;
+
+: _AVFS-READ-BYTES  ( -- status )
+    ACSTORE-S-IO _AVR-STATUS !
+    ['] _AVFS-READ-TRANSACTION-CALL CATCH ?DUP IF
+        >R
+        _AVR-CLEAN-IO _AVR-CLEAN-BUFFER
+        _AVFS-CLEAN-PREFER-FIRST DROP
+        R> THROW
+    THEN
+    _AVR-STATUS @ ;
+
+: _AVFS-DECODE-BODY  ( -- )
+    _AVR-BUF @ _AVR-SIZE @ _AVFS-DECODE-XT @ EXECUTE
+    _AVR-CODEC-STATUS ! _AVR-GEN ! _AVR-CONV ! ;
+
+: _AVFS-READ-SLOT  ( path-a path-u store -- conversation generation status )
+    _AVR-S ! _AVR-PU ! _AVR-PA !
+    0 _AVR-FD ! 0 _AVR-BUF ! 0 _AVR-HAVE-OLD-VFS !
+    _AVFS-READ-BYTES DUP IF
+        0 0 ROT EXIT
+    THEN DROP
+    0 _AVR-CONV ! 0 _AVR-GEN ! ATHREAD-S-INVALID _AVR-CODEC-STATUS !
+    ['] _AVFS-DECODE-BODY CATCH ?DUP IF
+        >R
+        _AVR-CLEAN-BUFFER _AVR-CLEAN-CONVERSATION
+        _AVFS-CLEAN-PREFER-FIRST DROP
+        R> THROW
+    THEN
+    _AVR-CLEAN-BUFFER ?DUP IF
+        >R _AVR-CLEAN-CONVERSATION DROP R> THROW
+    THEN
+    _AVR-CODEC-STATUS @ IF
+        _AVR-CLEAN-CONVERSATION ?DUP IF THROW THEN
+        0 0 _AVR-CODEC-STATUS @ _AVFS-CODEC-STATUS EXIT
     THEN
     _AVR-CONV @ _AVR-GEN @ ACSTORE-S-OK ;
 
@@ -80,9 +212,54 @@ VARIABLE _AVL-B-CONV
 VARIABLE _AVL-B-GEN
 VARIABLE _AVL-B-STATUS
 
-: _AVFS-LOAD  ( store -- conversation status )
-    DUP _AVL-S !
-    _AVFS-PATH-A ROT _AVFS-READ-SLOT
+: _AVL-CLEAN-A-BODY  ( -- ) _AVL-A-CONV @ ACONV-FREE ;
+: _AVL-CLEAN-B-BODY  ( -- ) _AVL-B-CONV @ ACONV-FREE ;
+
+: _AVL-CLEAN-A  ( -- cleanup-ior )
+    _AVFS-CLEAN-BEGIN
+    _AVL-A-CONV @ IF
+        ['] _AVL-CLEAN-A-BODY CATCH
+        0 _AVL-A-CONV !
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVFS-CLEAN-IOR @ ;
+
+: _AVL-CLEAN-B  ( -- cleanup-ior )
+    _AVFS-CLEAN-BEGIN
+    _AVL-B-CONV @ IF
+        ['] _AVL-CLEAN-B-BODY CATCH
+        0 _AVL-B-CONV !
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVFS-CLEAN-IOR @ ;
+
+: _AVL-CLEAN-CANDIDATES  ( -- cleanup-ior )
+    _AVL-CLEAN-A _AVL-CLEAN-B _AVFS-CLEAN-PREFER-FIRST ;
+
+: _AVL-DISCARD-A  ( -- )
+    _AVL-A-CONV @ ?DUP IF
+        0 _AVL-A-CONV ! _AVFS-CONV-FREE-XT @ EXECUTE
+    THEN ;
+
+: _AVL-DISCARD-B  ( -- )
+    _AVL-B-CONV @ ?DUP IF
+        0 _AVL-B-CONV ! _AVFS-CONV-FREE-XT @ EXECUTE
+    THEN ;
+
+: _AVL-TAKE-A  ( -- conversation status )
+    _AVL-A-CONV @ 0 _AVL-A-CONV ! ACSTORE-S-OK ;
+
+: _AVL-TAKE-B  ( -- conversation status )
+    _AVL-B-CONV @ 0 _AVL-B-CONV ! ACSTORE-S-OK ;
+
+: _AVFS-FREE-ONE-NOTHROW  ( conversation -- )
+    ['] ACONV-FREE CATCH IF DROP THEN ;
+
+: _AVFS-STORE-GUARD-RELEASE  ( -- )
+    _avfs-store-guard _AVFS-GUARD-RELEASE-XT @ EXECUTE ;
+
+: _AVFS-LOAD-BODY  ( -- conversation status )
+    _AVFS-PATH-A _AVL-S @ _AVFS-READ-SLOT
     _AVL-A-STATUS ! _AVL-A-GEN ! _AVL-A-CONV !
     _AVFS-PATH-B _AVL-S @ _AVFS-READ-SLOT
     _AVL-B-STATUS ! _AVL-B-GEN ! _AVL-B-CONV !
@@ -90,33 +267,60 @@ VARIABLE _AVL-B-STATUS
     _AVL-A-STATUS @ ACSTORE-S-OK =
     _AVL-B-STATUS @ ACSTORE-S-OK = AND IF
         _AVL-B-GEN @ _AVL-A-GEN @ > IF
-            _AVL-A-CONV @ ACONV-FREE
+            _AVL-DISCARD-A
             _AVL-B-GEN @ _AVL-S @ AVFSSTORE.GENERATION !
             1 _AVL-S @ AVFSSTORE.ACTIVE-SLOT !
-            _AVL-B-CONV @ ACSTORE-S-OK
+            _AVL-TAKE-B
         ELSE
-            _AVL-B-CONV @ ACONV-FREE
+            _AVL-DISCARD-B
             _AVL-A-GEN @ _AVL-S @ AVFSSTORE.GENERATION !
             0 _AVL-S @ AVFSSTORE.ACTIVE-SLOT !
-            _AVL-A-CONV @ ACSTORE-S-OK
+            _AVL-TAKE-A
         THEN
         EXIT
     THEN
     _AVL-A-STATUS @ ACSTORE-S-OK = IF
+        _AVL-DISCARD-B
         _AVL-A-GEN @ _AVL-S @ AVFSSTORE.GENERATION !
         0 _AVL-S @ AVFSSTORE.ACTIVE-SLOT !
-        _AVL-A-CONV @ ACSTORE-S-OK EXIT
+        _AVL-TAKE-A EXIT
     THEN
     _AVL-B-STATUS @ ACSTORE-S-OK = IF
+        _AVL-DISCARD-A
         _AVL-B-GEN @ _AVL-S @ AVFSSTORE.GENERATION !
         1 _AVL-S @ AVFSSTORE.ACTIVE-SLOT !
-        _AVL-B-CONV @ ACSTORE-S-OK EXIT
+        _AVL-TAKE-B EXIT
     THEN
+    _AVL-CLEAN-CANDIDATES ?DUP IF THROW THEN
     _AVL-A-STATUS @ ACSTORE-S-NOT-FOUND =
     _AVL-B-STATUS @ ACSTORE-S-NOT-FOUND = AND IF
         0 ACSTORE-S-NOT-FOUND
     ELSE
         0 ACSTORE-S-INVALID
+    THEN ;
+
+: _AVFS-LOAD-LOCKED  ( store -- conversation status )
+    _AVL-S !
+    0 _AVL-A-CONV ! 0 _AVL-B-CONV !
+    ['] _AVFS-LOAD-BODY CATCH ?DUP IF
+        >R _AVL-CLEAN-CANDIDATES DROP R> THROW
+    THEN ;
+
+: _AVFS-LOAD-GUARDED  ( store -- conversation status )
+    _avfs-store-guard GUARD-ACQUIRE
+    ['] _AVFS-LOAD-LOCKED CATCH ?DUP IF
+        >R DROP
+        ['] _AVFS-STORE-GUARD-RELEASE CATCH DROP
+        R> DROP 0 ACSTORE-S-IO EXIT
+    THEN
+    ['] _AVFS-STORE-GUARD-RELEASE CATCH ?DUP IF
+        DROP SWAP _AVFS-FREE-ONE-NOTHROW DROP
+        0 ACSTORE-S-IO
+    THEN ;
+
+: _AVFS-LOAD  ( store -- conversation status )
+    ['] _AVFS-LOAD-GUARDED CATCH ?DUP IF
+        2DROP 0 ACSTORE-S-IO
     THEN ;
 
 VARIABLE _AVW-CONV
@@ -131,65 +335,179 @@ VARIABLE _AVW-LEN
 VARIABLE _AVW-STATUS
 VARIABLE _AVW-FD
 VARIABLE _AVW-OLD-VFS
-VARIABLE _AVW-ACTUAL
+VARIABLE _AVW-HAVE-OLD-VFS
+VARIABLE _AVW-RESULT
+VARIABLE _AVW-PRIMARY-IOR
+VARIABLE _AVW-CLEAN-FD
+VARIABLE _AVW-PUBLICATION-MAYBE
 
 : _AVFS-SELECT-WRITE-PATH  ( slot -- )
     IF _AVFS-PATH-B ELSE _AVFS-PATH-A THEN
     _AVW-PU ! _AVW-PA ! ;
 
-: _AVFS-OPEN-WRITE  ( -- fd | 0 )
-    VFS-CUR _AVW-OLD-VFS !
-    _AVW-S @ AVFSSTORE.VFS @ VFS-USE
-    _AVW-PA @ _AVW-PU @ VFS-OPEN DUP 0= IF
+: _AVFS-OPEN-WRITE-LOCKED  ( -- fd | 0 )
+    _AVW-PA @ _AVW-PU @ _AVFS-OPEN-XT @ EXECUTE DUP 0= IF
         DROP
-        _AVW-PA @ _AVW-PU @ _AVW-S @ AVFSSTORE.VFS @ VFS-CREATE
+        _AVW-PA @ _AVW-PU @ _AVW-S @ AVFSSTORE.VFS @
+        _AVFS-CREATE-XT @ EXECUTE
         DUP 0= IF
-            DROP _AVW-OLD-VFS @ VFS-USE 0 EXIT
+            DROP 0 EXIT
         THEN
-        DROP _AVW-PA @ _AVW-PU @ VFS-OPEN
-    THEN
-    _AVW-OLD-VFS @ VFS-USE ;
+        DROP _AVW-PA @ _AVW-PU @ _AVFS-OPEN-XT @ EXECUTE
+    THEN ;
 
-: _AVFS-SAVE  ( conversation store -- status )
-    _AVW-S ! _AVW-CONV ! 0 _AVW-BUF ! 0 _AVW-FD !
+: _AVW-CLEAN-CLOSE  ( -- ) _AVW-CLEAN-FD @ VFS-CLOSE ;
+: _AVW-CLEAN-RESTORE  ( -- ) _AVW-OLD-VFS @ VFS-USE ;
+: _AVW-CLEAN-FREE  ( -- ) _AVW-BUF @ FREE ;
+
+: _AVW-CLEAN-IO  ( -- cleanup-ior )
+    _AVFS-CLEAN-BEGIN
+    _AVW-FD @ IF
+        _AVW-FD @ _AVW-CLEAN-FD !
+        0 _AVW-FD !
+        ['] _AVW-CLEAN-CLOSE CATCH
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVW-HAVE-OLD-VFS @ IF
+        0 _AVW-HAVE-OLD-VFS !
+        ['] _AVW-CLEAN-RESTORE CATCH
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVFS-CLEAN-IOR @ ;
+
+: _AVW-CLEAN-BUFFER  ( -- cleanup-ior )
+    _AVFS-CLEAN-BEGIN
+    _AVW-BUF @ IF
+        ['] _AVW-CLEAN-FREE CATCH
+        0 _AVW-BUF !
+        ?DUP IF _AVFS-CLEAN-NOTE THEN
+    THEN
+    _AVFS-CLEAN-IOR @ ;
+
+: _AVFS-WRITE-SLOT-BODY  ( -- )
+    ACSTORE-S-IO _AVW-STATUS !
+    VFS-CUR _AVW-OLD-VFS ! -1 _AVW-HAVE-OLD-VFS !
+    _AVW-S @ AVFSSTORE.VFS @ _AVFS-USE-XT @ EXECUTE
+    _AVFS-OPEN-WRITE-LOCKED DUP _AVW-FD ! 0= IF EXIT THEN
+    _AVW-FD @ VFS-REWIND
+    0 _AVW-FD @ VFS-TRUNCATE IF EXIT THEN
+    -1 _AVW-PUBLICATION-MAYBE !
+    _AVW-BUF @ _AVW-LEN @ _AVW-FD @ _AVFS-WRITE-XT @ EXECUTE
+    IF EXIT THEN
+    _AVW-FD @ 0 _AVW-FD ! _AVFS-CLOSE-XT @ EXECUTE
+    ACSTORE-S-UNCERTAIN _AVW-STATUS !
+    _AVW-S @ AVFSSTORE.VFS @ _AVFS-SYNC-XT @ EXECUTE IF EXIT THEN
+    _AVW-OLD-VFS @ 0 _AVW-HAVE-OLD-VFS ! _AVFS-USE-XT @ EXECUTE
+    ACSTORE-S-OK _AVW-STATUS ! ;
+
+: _AVFS-WRITE-TRANSACTION  ( -- )
+    ['] _AVFS-WRITE-SLOT-BODY CATCH _AVW-PRIMARY-IOR !
+    _AVW-CLEAN-IO
+    _AVW-STATUS @ IF
+        _AVW-CLEAN-BUFFER _AVFS-CLEAN-PREFER-FIRST
+    THEN
+    _AVW-PRIMARY-IOR @ ?DUP IF NIP THROW THEN
+    ?DUP IF THROW THEN ;
+
+: _AVFS-WRITE-TRANSACTION-CALL  ( -- )
+    ['] _AVFS-WRITE-TRANSACTION VFS-TRANSACTION ;
+
+: _AVFS-WRITE-SLOT  ( -- status )
+    ACSTORE-S-IO _AVW-STATUS !
+    ['] _AVFS-WRITE-TRANSACTION-CALL CATCH ?DUP IF
+        >R
+        _AVW-CLEAN-IO _AVW-CLEAN-BUFFER
+        _AVFS-CLEAN-PREFER-FIRST DROP
+        R> THROW
+    THEN
+    _AVW-STATUS @ ;
+
+: _AVFS-ENCODE-SIZE-BODY  ( -- )
+    _AVW-CONV @ _AVFS-ENCODE-SIZE-XT @ EXECUTE
+    _AVW-STATUS ! _AVW-SIZE ! ;
+
+: _AVFS-ENCODE-BODY  ( -- )
+    _AVW-GEN @ _AVW-CONV @ _AVW-BUF @ _AVW-SIZE @
+    _AVFS-ENCODE-XT @ EXECUTE _AVW-STATUS ! _AVW-LEN ! ;
+
+: _AVFS-SAVE-LOCKED  ( conversation store -- status )
+    _AVW-S ! _AVW-CONV !
+    0 _AVW-BUF ! 0 _AVW-FD ! 0 _AVW-HAVE-OLD-VFS !
+    0 _AVW-PUBLICATION-MAYBE !
     _AVW-S @ AVFSSTORE.GENERATION @ 1+ _AVW-GEN !
     _AVW-S @ AVFSSTORE.ACTIVE-SLOT @ 0= IF 1 ELSE 0 THEN
     DUP _AVW-SLOT ! _AVFS-SELECT-WRITE-PATH
-    _AVW-CONV @ ATHREAD-ENCODE-SIZE _AVW-STATUS ! _AVW-SIZE !
+    ATHREAD-S-INVALID _AVW-STATUS !
+    ['] _AVFS-ENCODE-SIZE-BODY CATCH ?DUP IF
+        THROW
+    THEN
     _AVW-STATUS @ IF
         _AVW-STATUS @ _AVFS-CODEC-STATUS EXIT
     THEN
     _AVW-SIZE @ ALLOCATE DUP IF
         2DROP ACSTORE-S-NOMEM EXIT
     THEN
-    DROP DUP _AVW-BUF ! DROP
-    _AVW-GEN @ _AVW-CONV @ _AVW-BUF @ _AVW-SIZE @
-    ATHREAD-ENCODE _AVW-STATUS ! _AVW-LEN !
-    _AVW-STATUS @ IF
-        _AVW-BUF @ FREE _AVW-STATUS @ _AVFS-CODEC-STATUS EXIT
+    DROP _AVW-BUF !
+    ATHREAD-S-INVALID _AVW-STATUS !
+    ['] _AVFS-ENCODE-BODY CATCH ?DUP IF
+        >R _AVW-CLEAN-BUFFER DROP R> THROW
+    ELSE
+        _AVW-STATUS @ _AVFS-CODEC-STATUS _AVW-RESULT !
     THEN
-    _AVFS-OPEN-WRITE DUP _AVW-FD ! 0= IF
-        _AVW-BUF @ FREE ACSTORE-S-IO EXIT
+    _AVW-RESULT @ IF
+        _AVW-CLEAN-BUFFER ?DUP IF THROW THEN
+        _AVW-RESULT @ EXIT
     THEN
-    _AVW-FD @ VFS-REWIND
-    0 _AVW-FD @ VFS-TRUNCATE IF
-        _AVW-FD @ VFS-CLOSE _AVW-BUF @ FREE ACSTORE-S-IO EXIT
-    THEN
-    _AVW-BUF @ _AVW-LEN @ _AVW-FD @ VFS-WRITE _AVW-ACTUAL !
-    _AVW-FD @ VFS-CLOSE
-    _AVW-BUF @ FREE
-    _AVW-ACTUAL @ _AVW-LEN @ <> IF ACSTORE-S-IO EXIT THEN
-    _AVW-S @ AVFSSTORE.VFS @ VFS-SYNC IF ACSTORE-S-IO EXIT THEN
+    _AVFS-WRITE-SLOT _AVW-STATUS !
+    _AVW-CLEAN-BUFFER ?DUP IF THROW THEN
+    _AVW-STATUS @ IF _AVW-STATUS @ EXIT THEN
     _AVW-GEN @ _AVW-S @ AVFSSTORE.GENERATION !
     _AVW-SLOT @ _AVW-S @ AVFSSTORE.ACTIVE-SLOT !
     ACSTORE-S-OK ;
 
-: AVFSSTORE-FREE  ( store -- )
+: _AVFS-SAVE-CONTAINED  ( conversation store -- status )
+    0 _AVW-PUBLICATION-MAYBE !
+    ['] _AVFS-SAVE-LOCKED CATCH ?DUP IF
+        DROP 2DROP
+        _AVW-PUBLICATION-MAYBE @ IF
+            ACSTORE-S-UNCERTAIN
+        ELSE
+            ACSTORE-S-IO
+        THEN
+    THEN ;
+
+: _AVFS-SAVE-FAULT-STATUS  ( -- status )
+    _AVW-PUBLICATION-MAYBE @ IF
+        ACSTORE-S-UNCERTAIN
+    ELSE
+        ACSTORE-S-IO
+    THEN ;
+
+: _AVFS-SAVE-GUARDED  ( conversation store -- status )
+    _avfs-store-guard GUARD-ACQUIRE
+    ['] _AVFS-SAVE-CONTAINED CATCH ?DUP IF
+        >R 2DROP
+        ['] _AVFS-STORE-GUARD-RELEASE CATCH DROP
+        R> DROP _AVFS-SAVE-FAULT-STATUS EXIT
+    THEN
+    ['] _AVFS-STORE-GUARD-RELEASE CATCH ?DUP IF
+        2DROP _AVFS-SAVE-FAULT-STATUS
+    THEN ;
+
+: _AVFS-SAVE  ( conversation store -- status )
+    ['] _AVFS-SAVE-GUARDED CATCH ?DUP IF
+        DROP 2DROP ACSTORE-S-IO
+    THEN ;
+
+: _AVFSSTORE-FREE-LOCKED  ( store -- )
     DUP AVFSSTORE-SIZE 0 FILL FREE ;
+
+: AVFSSTORE-FREE  ( store -- )
+    ['] _AVFSSTORE-FREE-LOCKED _avfs-store-guard WITH-GUARD ;
 
 VARIABLE _AVN-S
 
-: AVFSSTORE-NEW  ( vfs -- store status )
+: _AVFSSTORE-NEW-LOCKED  ( vfs -- store status )
     DUP 0= IF DROP 0 ACSTORE-S-INVALID EXIT THEN
     >R AVFSSTORE-SIZE ALLOCATE
     DUP IF 2DROP R> DROP 0 ACSTORE-S-NOMEM EXIT THEN
@@ -202,3 +520,6 @@ VARIABLE _AVN-S
     ['] _AVFS-SAVE _AVN-S @ ACSTORE.SAVE-XT !
     ['] AVFSSTORE-FREE _AVN-S @ ACSTORE.FREE-XT !
     _AVN-S @ ACSTORE-S-OK ;
+
+: AVFSSTORE-NEW  ( vfs -- store status )
+    ['] _AVFSSTORE-NEW-LOCKED _avfs-store-guard WITH-GUARD ;

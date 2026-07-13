@@ -87,6 +87,21 @@ REQUIRE ../../../interop/resource.f
 1 CONSTANT _FEXP-CLIP-COPY
 2 CONSTANT _FEXP-CLIP-CUT
 
+\ Paste transaction results.  Expected storage failures stay in-band so a
+\ failed file operation cannot unwind the Desk event loop.
+0  CONSTANT _FCP-S-OK
+1  CONSTANT _FCP-S-SOURCE
+2  CONSTANT _FCP-S-DESTINATION
+3  CONSTANT _FCP-S-SAME
+4  CONSTANT _FCP-S-CONFLICT
+5  CONSTANT _FCP-S-CREATE
+6  CONSTANT _FCP-S-IO
+7  CONSTANT _FCP-S-VERIFY
+8  CONSTANT _FCP-S-DELETE
+9  CONSTANT _FCP-S-DELETE-SYNC
+10 CONSTANT _FCP-S-ROLLBACK
+11 CONSTANT _FCP-S-INTERNAL
+
 \ =====================================================================
 \  §3 — UIDL File Path (manifest declaration)
 \ =====================================================================
@@ -145,6 +160,8 @@ _FEXP-CURRENT-STATE CMP-CELL: _FEXP-SEL-IN        \ active inode from either pan
 \ Clipboard
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CLIP-IN       \ clipboard inode
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CLIP-OP       \ clipboard operation (0/1/2)
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CLIP-PATH-LEN
+_FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-CLIP-PATH
 
 \ =====================================================================
 \  §4b — Theme
@@ -212,16 +229,32 @@ _FEXP-CURRENT-STATE _FEXP-CFG-CAP CMP-FIELD: _FEXP-CFG-BUF
 
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CFG-FD
 
+VARIABLE _FOV-A
+VARIABLE _FOV-U
+VARIABLE _FOV-OLD
+
+: _FEXP-OPEN-VFS-BODY  ( -- fd|0 )
+    VFS-CUR _FOV-OLD !
+    _FEXP-VFS @ VFS-USE
+    _FOV-A @ _FOV-U @ VFS-OPEN
+    _FOV-OLD @ VFS-USE ;
+
+: _FEXP-OPEN-VFS  ( path-a path-u -- fd|0 )
+    _FOV-U ! _FOV-A !
+    ['] _FEXP-OPEN-VFS-BODY VFS-TRANSACTION ;
+
 : _FEXP-LOAD-CONFIG  ( -- )
     \ Read fexplorer.toml from VFS
-    VFS-CUR >R  _FEXP-VFS @ VFS-USE
-    S" tui/applets/fexplorer/fexplorer.toml" VFS-OPEN
-    R> VFS-USE
+    S" tui/applets/fexplorer/fexplorer.toml" _FEXP-OPEN-VFS
     DUP 0= IF DROP EXIT THEN
     _FEXP-CFG-FD !
-    _FEXP-CFG-BUF _FEXP-CFG-CAP _FEXP-CFG-FD @ VFS-READ
-    DUP 0= IF DROP _FEXP-CFG-FD @ VFS-CLOSE EXIT THEN
-    _FEXP-CFG-BUF SWAP 2DUP _FEXP-CFG-L ! _FEXP-CFG-A !
+    _FEXP-CFG-FD @ VFS-SIZE DUP 0= OVER _FEXP-CFG-CAP > OR IF
+        DROP _FEXP-CFG-FD @ VFS-CLOSE EXIT
+    THEN
+    DUP >R _FEXP-CFG-BUF SWAP _FEXP-CFG-FD @ VFS-READ-EXACT IF
+        R> DROP _FEXP-CFG-FD @ VFS-CLOSE EXIT
+    THEN
+    R> _FEXP-CFG-BUF SWAP 2DUP _FEXP-CFG-L ! _FEXP-CFG-A !
     _FEXP-LOAD-THEME
     _FEXP-CFG-FD @ VFS-CLOSE ;
 
@@ -391,21 +424,23 @@ VARIABLE _FSW-TMP
 
 VARIABLE _FPV-FD
 VARIABLE _FPV-IN
+VARIABLE _FPV-LEN
 
 : _FEXP-LOAD-PREVIEW  ( inode -- )
     DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
     DUP _FPV-IN !
     _FEXP-BUILD-PATH
-    VFS-CUR >R  _FEXP-VFS @ VFS-USE
-    _FEXP-PATH-BUF _FEXP-PATH-LEN @ VFS-OPEN
-    R> VFS-USE
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FEXP-OPEN-VFS
     DUP 0= IF DROP EXIT THEN
     _FPV-FD !
-    _FEXP-PREV-BUF _FEXP-PREVIEW-CAP _FPV-FD @ VFS-READ
+    _FPV-FD @ VFS-SIZE _FEXP-PREVIEW-CAP MIN DUP _FPV-LEN !
+    _FEXP-PREV-BUF SWAP _FPV-FD @ VFS-READ-EXACT IF
+        _FPV-FD @ VFS-CLOSE EXIT
+    THEN
     \ Set the UIDL textarea content via its materialized widget
     _FEXP-E-PREVIEW @ UTUI-WIDGET@ ?DUP IF
-        _FEXP-PREV-BUF -ROT TXTA-SET-TEXT
-    ELSE DROP THEN
+        _FEXP-PREV-BUF _FPV-LEN @ ROT TXTA-SET-TEXT
+    THEN
     _FPV-FD @ VFS-CLOSE
     ASHELL-DIRTY! ;
 
@@ -413,76 +448,382 @@ VARIABLE _FPV-IN
 \  §9 — Clipboard (copy / cut / paste)
 \ =====================================================================
 
-VARIABLE _FCP-SRC  VARIABLE _FCP-DST
-VARIABLE _FCP-FDS  VARIABLE _FCP-FDD  VARIABLE _FCP-ACT
+16 CONSTANT _FCP-MAX-PATH-DEPTH
+_FEXP-PREVIEW-CAP 2 / CONSTANT _FCP-CHUNK-CAP
+
+VARIABLE _FCP-SRC       VARIABLE _FCP-DST
+VARIABLE _FCP-FDS       VARIABLE _FCP-FDD
+VARIABLE _FCP-SIZE      VARIABLE _FCP-POS
+VARIABLE _FCP-WANT      VARIABLE _FCP-BASE
+VARIABLE _FCP-RESULT    VARIABLE _FCP-CREATED
+VARIABLE _FCP-COMMITTED VARIABLE _FCP-RESIDUE
+VARIABLE _FCP-TARGET-MAYBE
+VARIABLE _FCP-OLD-VFS   VARIABLE _FCP-OLD-CWD
+VARIABLE _FCP-THROW
+VARIABLE _FCP-CLEANUP-THROW
+VARIABLE _FCP-CLOSE-THROW
+VARIABLE _FCP-PRIMARY-RESULT
+VARIABLE _FCP-PATH-IN   VARIABLE _FCP-PATH-BUF
+VARIABLE _FCP-PATH-DEPTH
+VARIABLE _FCP-CLIP-SET-IN  VARIABLE _FCP-CLIP-SET-OP
+
+\ Deterministic seams for cleanup after-effect tests.  Product bindings stay
+\ on the KDOS primitives; callers do not use these internal vectors.
+VARIABLE _FCP-CLOSE-XT
+VARIABLE _FCP-USE-XT
+VARIABLE _FCP-RM-XT
+VARIABLE _FCP-SYNC-XT
+' VFS-CLOSE _FCP-CLOSE-XT !
+' VFS-USE   _FCP-USE-XT !
+' VFS-RM    _FCP-RM-XT !
+' VFS-SYNC  _FCP-SYNC-XT !
+
+: _FCP-CLOSE  ( fd -- )
+    _FCP-CLOSE-XT @ EXECUTE ;
+
+: _FCP-USE  ( vfs -- )
+    _FCP-USE-XT @ EXECUTE ;
+
+: _FCP-RM  ( path-a path-u vfs -- ior )
+    _FCP-RM-XT @ EXECUTE ;
+
+: _FCP-SYNC  ( vfs -- ior )
+    _FCP-SYNC-XT @ EXECUTE ;
+
+: _FCP-INODE-PATH?  ( inode buf -- len flag )
+    _FCP-PATH-BUF ! _FCP-PATH-IN !
+    0 _FCP-PATH-DEPTH !
+    _FCP-PATH-IN @
+    BEGIN DUP IN.PARENT @ 0<> WHILE
+        1 _FCP-PATH-DEPTH +!
+        _FCP-PATH-DEPTH @ _FCP-MAX-PATH-DEPTH > IF
+            DROP 0 FALSE EXIT
+        THEN
+        IN.PARENT @
+    REPEAT
+    DROP
+    _FCP-PATH-IN @ _FCP-PATH-BUF @ _FEXP-PATH-CAP VFS-INODE-PATH
+    DUP _FEXP-PATH-CAP < ;
+
+: _FEXP-CLIP-CLEAR  ( -- )
+    0 _FEXP-CLIP-IN !
+    0 _FEXP-CLIP-PATH-LEN !
+    _FEXP-CLIP-NONE _FEXP-CLIP-OP ! ;
+
+: _FEXP-CLIP-SET-BODY  ( -- flag )
+    _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
+    DUP IN.TYPE @ VFS-T-FILE <> IF
+        DROP S" Directory clipboard operations are not supported"
+        2500 ASHELL-TOAST FALSE EXIT
+    THEN
+    _FCP-CLIP-SET-IN !
+    _FCP-CLIP-SET-IN @ _FEXP-CLIP-PATH _FCP-INODE-PATH?
+    0= IF
+        DROP S" Source path is too deep" 2000 ASHELL-TOAST FALSE EXIT
+    THEN
+    _FEXP-CLIP-PATH-LEN !
+    _FCP-CLIP-SET-IN @ _FEXP-CLIP-IN !
+    _FCP-CLIP-SET-OP @ _FEXP-CLIP-OP !
+    TRUE ;
+
+: _FEXP-CLIP-SET  ( operation -- flag )
+    _FCP-CLIP-SET-OP !
+    ['] _FEXP-CLIP-SET-BODY VFS-TRANSACTION ;
 
 : FEXP-CLIP-COPY  ( -- )
-    _FEXP-SELECTED
-    DUP 0= IF DROP EXIT THEN
-    _FEXP-CLIP-IN !
-    _FEXP-CLIP-COPY _FEXP-CLIP-OP !
-    S" Copied to clipboard" 2000 ASHELL-TOAST ;
+    _FEXP-CLIP-COPY _FEXP-CLIP-SET IF
+        S" Copied to clipboard" 2000 ASHELL-TOAST
+    THEN ;
 
 : FEXP-CLIP-CUT  ( -- )
-    _FEXP-SELECTED
-    DUP 0= IF DROP EXIT THEN
-    _FEXP-CLIP-IN !
-    _FEXP-CLIP-CUT _FEXP-CLIP-OP !
-    S" Cut to clipboard" 2000 ASHELL-TOAST ;
+    _FEXP-CLIP-CUT _FEXP-CLIP-SET IF
+        S" Cut to clipboard" 2000 ASHELL-TOAST
+    THEN ;
+
+: _FCP-SOURCE-BASENAME  ( -- addr len flag )
+    0 _FCP-BASE !
+    _FEXP-CLIP-PATH-LEN @ 0 DO
+        _FEXP-CLIP-PATH I + C@ [CHAR] / = IF I 1+ _FCP-BASE ! THEN
+    LOOP
+    _FEXP-CLIP-PATH-LEN @ _FCP-BASE @ - DUP 0= IF
+        DROP 0 0 FALSE EXIT
+    THEN
+    _FEXP-CLIP-PATH _FCP-BASE @ + SWAP TRUE ;
+
+VARIABLE _FCP-NAME-A  VARIABLE _FCP-NAME-U
+VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
+
+: _FCP-BUILD-TARGET  ( -- flag )
+    _FCP-DST @ _FEXP-PATH-BUF _FCP-INODE-PATH? 0= IF
+        DROP FALSE EXIT
+    THEN
+    _FCP-DIR-LEN !
+    _FCP-SOURCE-BASENAME 0= IF 2DROP FALSE EXIT THEN
+    _FCP-NAME-U ! _FCP-NAME-A !
+    _FCP-DIR-LEN @ 1 > IF 1 ELSE 0 THEN
+    _FCP-DIR-LEN @ + _FCP-NAME-U @ +
+    DUP _FEXP-PATH-CAP > IF DROP FALSE EXIT THEN
+    _FCP-TARGET-LEN !
+    _FCP-DIR-LEN @ 1 > IF
+        [CHAR] / _FEXP-PATH-BUF _FCP-DIR-LEN @ + C!
+        _FCP-DIR-LEN @ 1+
+    ELSE
+        _FCP-DIR-LEN @
+    THEN
+    _FEXP-PATH-BUF + _FCP-NAME-A @ _FCP-NAME-U @ ROT SWAP CMOVE
+    TRUE ;
+
+: _FCP-CLOSE-SRC  ( -- )
+    \ Clear ownership before close so an after-effect THROW cannot cause a
+    \ second close of a descriptor that the VFS has already recycled.
+    _FCP-FDS @ ?DUP IF 0 _FCP-FDS ! _FCP-CLOSE THEN ;
+
+: _FCP-CLOSE-DST  ( -- )
+    _FCP-FDD @ ?DUP IF 0 _FCP-FDD ! _FCP-CLOSE THEN ;
+
+: _FCP-RECORD-CLOSE-THROW  ( ior -- )
+    ?DUP IF
+        _FCP-CLOSE-THROW @ 0= IF _FCP-CLOSE-THROW ! ELSE DROP THEN
+    THEN ;
+
+: _FCP-CLOSE-FDS  ( -- )
+    \ Both descriptors are independent resources.  Attempt both closes even
+    \ when the first one throws, then rethrow the first fault to the phase
+    \ boundary after all ownership has been relinquished.
+    0 _FCP-CLOSE-THROW !
+    ['] _FCP-CLOSE-SRC CATCH _FCP-RECORD-CLOSE-THROW
+    ['] _FCP-CLOSE-DST CATCH _FCP-RECORD-CLOSE-THROW
+    _FCP-CLOSE-THROW @ ?DUP IF THROW THEN ;
+
+: _FCP-COPY-BYTES  ( -- flag )
+    0 _FCP-POS !
+    BEGIN _FCP-POS @ _FCP-SIZE @ < WHILE
+        _FCP-SIZE @ _FCP-POS @ - _FCP-CHUNK-CAP MIN _FCP-WANT !
+        _FEXP-PREV-BUF _FCP-WANT @ _FCP-FDS @ VFS-READ-EXACT IF
+            FALSE EXIT
+        THEN
+        _FEXP-PREV-BUF _FCP-WANT @ _FCP-FDD @ VFS-WRITE-EXACT IF
+            FALSE EXIT
+        THEN
+        _FCP-WANT @ _FCP-POS +!
+    REPEAT
+    TRUE ;
+
+: _FCP-VERIFY-BYTES  ( -- flag )
+    _FCP-FDS @ VFS-SIZE _FCP-SIZE @ <> IF FALSE EXIT THEN
+    _FCP-FDD @ VFS-SIZE _FCP-SIZE @ <> IF FALSE EXIT THEN
+    0 _FCP-POS !
+    BEGIN _FCP-POS @ _FCP-SIZE @ < WHILE
+        _FCP-SIZE @ _FCP-POS @ - _FCP-CHUNK-CAP MIN _FCP-WANT !
+        _FEXP-PREV-BUF _FCP-WANT @ _FCP-FDS @ VFS-READ-EXACT IF
+            FALSE EXIT
+        THEN
+        _FEXP-PREV-BUF _FCP-CHUNK-CAP +
+        _FCP-WANT @ _FCP-FDD @ VFS-READ-EXACT IF FALSE EXIT THEN
+        _FEXP-PREV-BUF _FCP-WANT @
+        _FEXP-PREV-BUF _FCP-CHUNK-CAP + _FCP-WANT @
+        COMPARE 0<> IF FALSE EXIT THEN
+        _FCP-WANT @ _FCP-POS +!
+    REPEAT
+    TRUE ;
+
+: _FCP-OPEN-PAIR  ( -- flag )
+    _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @ VFS-OPEN
+    DUP 0= IF DROP FALSE EXIT THEN _FCP-FDS !
+    _FEXP-PATH-BUF _FCP-TARGET-LEN @ VFS-OPEN
+    DUP 0= IF DROP FALSE EXIT THEN _FCP-FDD !
+    TRUE ;
+
+: _FCP-COPY-CORE  ( -- )
+    _FEXP-CLIP-PATH-LEN @ 0= IF _FCP-S-SOURCE _FCP-RESULT ! EXIT THEN
+    _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @ _FEXP-VFS @ VFS-RESOLVE
+    DUP 0= IF DROP _FCP-S-SOURCE _FCP-RESULT ! EXIT THEN
+    DUP IN.TYPE @ VFS-T-FILE <> IF DROP _FCP-S-SOURCE _FCP-RESULT ! EXIT THEN
+    DUP _FCP-SRC ! IN.SIZE-LO @ _FCP-SIZE !
+
+    _FEXP-SELECTED DUP 0= IF DROP _FCP-S-DESTINATION _FCP-RESULT ! EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR = IF ELSE IN.PARENT @ THEN
+    DUP 0= IF DROP _FCP-S-DESTINATION _FCP-RESULT ! EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR <> IF DROP _FCP-S-DESTINATION _FCP-RESULT ! EXIT THEN
+    _FCP-DST !
+    _FCP-BUILD-TARGET 0= IF _FCP-S-DESTINATION _FCP-RESULT ! EXIT THEN
+
+    _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @
+    _FEXP-PATH-BUF _FCP-TARGET-LEN @ COMPARE 0= IF
+        _FCP-S-SAME _FCP-RESULT ! EXIT
+    THEN
+    _FEXP-PATH-BUF _FCP-TARGET-LEN @ _FEXP-VFS @ VFS-RESOLVE
+    ?DUP IF DROP _FCP-S-CONFLICT _FCP-RESULT ! EXIT THEN
+
+    _FCP-S-CREATE _FCP-RESULT !
+    TRUE _FCP-TARGET-MAYBE !
+    _FEXP-PATH-BUF _FCP-TARGET-LEN @ _FEXP-VFS @ VFS-CREATE
+    DUP 0= IF DROP _FCP-S-CREATE _FCP-RESULT ! EXIT THEN DROP
+    TRUE _FCP-CREATED !
+    _FCP-S-IO _FCP-RESULT !
+    _FCP-OPEN-PAIR 0= IF _FCP-S-IO _FCP-RESULT ! EXIT THEN
+    _FCP-COPY-BYTES 0= IF _FCP-S-IO _FCP-RESULT ! EXIT THEN
+    _FCP-CLOSE-FDS
+    _FEXP-VFS @ _FCP-SYNC IF _FCP-S-IO _FCP-RESULT ! EXIT THEN
+
+    _FCP-S-VERIFY _FCP-RESULT !
+    _FCP-OPEN-PAIR 0= IF _FCP-S-VERIFY _FCP-RESULT ! EXIT THEN
+    _FCP-VERIFY-BYTES 0= IF _FCP-S-VERIFY _FCP-RESULT ! EXIT THEN
+    _FCP-CLOSE-FDS
+    TRUE _FCP-COMMITTED !
+    FALSE _FCP-TARGET-MAYBE !
+
+    _FEXP-CLIP-OP @ _FEXP-CLIP-CUT = IF
+        \ Once a verified destination is published, a throwing delete/sync
+        \ may have removed the source.  Predeclare the conservative status
+        \ so an after-effect fault cannot leave a stale "internal" outcome.
+        _FCP-S-DELETE-SYNC _FCP-RESULT !
+        _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @ _FEXP-VFS @ _FCP-RM IF
+            _FCP-S-DELETE _FCP-RESULT ! EXIT
+        THEN
+        _FEXP-VFS @ _FCP-SYNC IF
+            _FCP-S-DELETE-SYNC _FCP-RESULT ! EXIT
+        THEN
+    THEN
+    _FCP-S-OK _FCP-RESULT ! ;
+
+: _FCP-ROLLBACK  ( -- )
+    _FCP-COMMITTED @ IF EXIT THEN
+    _FCP-CREATED @ _FCP-TARGET-MAYBE @ OR 0= IF EXIT THEN
+    _FCP-RESULT @ _FCP-PRIMARY-RESULT !
+    \ From this point until delete+sync both complete, a target may remain or
+    \ its absence may be non-durable.  Establish uncertainty before invoking
+    \ either operation so after-effect THROWs retain the conservative state.
+    TRUE _FCP-RESIDUE ! _FCP-S-ROLLBACK _FCP-RESULT !
+    _FEXP-PATH-BUF _FCP-TARGET-LEN @ _FEXP-VFS @ VFS-RESOLVE
+    DUP 0= IF
+        DROP
+        FALSE _FCP-CREATED ! FALSE _FCP-TARGET-MAYBE !
+        FALSE _FCP-RESIDUE !
+        _FCP-PRIMARY-RESULT @ _FCP-RESULT ! EXIT
+    THEN DROP
+    _FEXP-PATH-BUF _FCP-TARGET-LEN @ _FEXP-VFS @ _FCP-RM IF
+        EXIT
+    THEN
+    _FEXP-VFS @ _FCP-SYNC IF
+        EXIT
+    THEN
+    FALSE _FCP-CREATED ! FALSE _FCP-TARGET-MAYBE !
+    FALSE _FCP-RESIDUE !
+    _FCP-PRIMARY-RESULT @ _FCP-RESULT ! ;
+
+: _FCP-RECORD-CLEANUP-THROW  ( ior -- )
+    ?DUP IF
+        _FCP-CLEANUP-THROW @ 0= IF
+            _FCP-CLEANUP-THROW !
+        ELSE
+            DROP
+        THEN
+    THEN ;
+
+: _FCP-RESTORE-CWD  ( -- )
+    _FCP-OLD-CWD @ _FEXP-VFS @ V.CWD ! ;
+
+: _FCP-RESTORE-VFS  ( -- )
+    _FCP-OLD-VFS @ _FCP-USE ;
+
+: _FCP-RESTORE-VFS-RAW  ( -- )
+    _FCP-OLD-VFS @ VFS-USE ;
+
+: _FCP-CLEANUP  ( -- )
+    \ Cleanup stages are independent: no close, rollback, or selector fault
+    \ may suppress a later release/restoration attempt.  Preserve the first
+    \ cleanup THROW for deterministic diagnostics.
+    0 _FCP-CLEANUP-THROW !
+    ['] _FCP-CLOSE-SRC CATCH _FCP-RECORD-CLEANUP-THROW
+    ['] _FCP-CLOSE-DST CATCH _FCP-RECORD-CLEANUP-THROW
+    ['] _FCP-ROLLBACK CATCH _FCP-RECORD-CLEANUP-THROW
+    ['] _FCP-RESTORE-CWD CATCH _FCP-RECORD-CLEANUP-THROW
+    ['] _FCP-RESTORE-VFS CATCH _FCP-RECORD-CLEANUP-THROW
+    VFS-CUR _FCP-OLD-VFS @ <> IF
+        ['] _FCP-RESTORE-VFS-RAW CATCH _FCP-RECORD-CLEANUP-THROW
+    THEN ;
+
+: _FCP-TRANSACTION-BODY  ( -- )
+    \ Selecting the Explorer VFS is itself part of the caught operation.  An
+    \ after-effect selector fault must still reach the restoration pipeline.
+    _FEXP-VFS @ _FCP-USE
+    _FCP-COPY-CORE ;
+
+: _FCP-TRANSACTION  ( -- status )
+    0 _FCP-FDS ! 0 _FCP-FDD !
+    0 _FCP-CREATED ! 0 _FCP-COMMITTED ! 0 _FCP-RESIDUE !
+    0 _FCP-TARGET-MAYBE !
+    _FCP-S-INTERNAL _FCP-RESULT !
+    VFS-CUR _FCP-OLD-VFS !
+    _FEXP-VFS @ V.CWD @ _FCP-OLD-CWD !
+    ['] _FCP-TRANSACTION-BODY CATCH _FCP-THROW !
+    _FCP-CLEANUP
+    \ Rollback uncertainty has highest precedence.  Otherwise preserve the
+    \ phase-specific primary status; only a cleanup-only fault following an
+    \ apparent success is normalized to INTERNAL.  COMMITTED/RESIDUE remain
+    \ orthogonal publication facts for the UI refresh path.
+    _FCP-RESIDUE @ IF
+        _FCP-S-ROLLBACK _FCP-RESULT !
+    ELSE
+        _FCP-CLEANUP-THROW @ _FCP-RESULT @ _FCP-S-OK = AND IF
+            _FCP-S-INTERNAL _FCP-RESULT !
+        THEN
+    THEN
+    _FCP-RESULT @ ;
+
+: _FCP-RUN  ( -- status )
+    ['] _FCP-TRANSACTION VFS-TRANSACTION ;
+
+: _FEXP-REFRESH-AFTER-MUTATION  ( -- )
+    _FEXP-EXPL @ ?DUP IF EXPL-REFRESH THEN
+    _FEXP-CUR-DIR @ ?DUP IF _FEXP-POPULATE-DIR _FEXP-SORT-LIST THEN
+    _FEXP-LIST @ ?DUP IF _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS THEN
+    ASHELL-DIRTY! ;
+
+: _FCP-REPORT-FAILURE  ( status -- )
+    CASE
+        _FCP-S-SOURCE OF S" Paste failed: source unavailable" ENDOF
+        _FCP-S-DESTINATION OF S" Paste failed: invalid destination" ENDOF
+        _FCP-S-SAME OF S" Paste refused: source equals destination" ENDOF
+        _FCP-S-CONFLICT OF S" Paste refused: destination exists" ENDOF
+        _FCP-S-CREATE OF S" Paste failed: cannot create destination" ENDOF
+        _FCP-S-VERIFY OF S" Paste failed: destination did not verify" ENDOF
+        _FCP-S-ROLLBACK OF S" Paste failed: cleanup is uncertain" ENDOF
+        _FCP-S-INTERNAL OF S" Paste failed: internal storage error" ENDOF
+        S" Paste failed: storage I/O"
+    ENDCASE
+    3000 ASHELL-TOAST ;
 
 : FEXP-CLIP-PASTE  ( -- )
     _FEXP-CLIP-OP @ _FEXP-CLIP-NONE = IF
         S" Clipboard empty" 1500 ASHELL-TOAST EXIT
     THEN
-    _FEXP-CLIP-IN @ 0= IF
+    _FEXP-CLIP-PATH-LEN @ 0= IF
         S" No source" 1500 ASHELL-TOAST EXIT
     THEN
-    _FEXP-SELECTED
-    DUP 0= IF DROP EXIT THEN
-    DUP IN.TYPE @ VFS-T-DIR = IF ELSE IN.PARENT @ THEN
-    _FCP-DST !
-    _FEXP-CLIP-IN @ _FCP-SRC !
-    _FCP-SRC @ IN.TYPE @ VFS-T-FILE <> IF
-        S" Dir copy not supported" 2000 ASHELL-TOAST EXIT
+    _FCP-RUN
+    DUP _FCP-S-OK = IF
+        DROP
+        _FEXP-CLIP-OP @ _FEXP-CLIP-CUT = IF _FEXP-CLIP-CLEAR THEN
+        _FEXP-REFRESH-AFTER-MUTATION
+        S" Pasted!" 1500 ASHELL-TOAST EXIT
     THEN
-    _FCP-SRC @ IN.NAME @ _VFS-STR-GET
-    _FEXP-VFS @ V.CWD @ >R
-    _FCP-DST @ _FEXP-VFS @ V.CWD !
-    2DUP _FEXP-VFS @ VFS-MKFILE
-    DUP 0= IF
-        DROP 2DROP
-        R> _FEXP-VFS @ V.CWD !
-        S" Paste failed: mkfile" 2000 ASHELL-TOAST EXIT
+    DUP _FCP-S-DELETE = IF
+        DROP _FEXP-CLIP-CLEAR
+        _FEXP-REFRESH-AFTER-MUTATION
+        S" Copied, but source could not be removed" 3500 ASHELL-TOAST EXIT
     THEN
-    DROP
-    VFS-CUR >R  _FEXP-VFS @ VFS-USE
-    _FCP-SRC @ IN.PARENT @ _FEXP-VFS @ V.CWD !
-    _FCP-SRC @ IN.NAME @ _VFS-STR-GET VFS-OPEN _FCP-FDS !
-    _FCP-DST @ _FEXP-VFS @ V.CWD !
-    VFS-OPEN _FCP-FDD !
-    R> VFS-USE
-    _FCP-FDS @ 0<> _FCP-FDD @ 0<> AND IF
-        BEGIN
-            _FEXP-PREV-BUF _FEXP-PREVIEW-CAP _FCP-FDS @ VFS-READ
-            _FCP-ACT !
-            _FCP-ACT @ 0> WHILE
-            _FEXP-PREV-BUF _FCP-ACT @ _FCP-FDD @ VFS-WRITE DROP
-        REPEAT
-        _FCP-FDS @ VFS-CLOSE
-        _FCP-FDD @ VFS-CLOSE
+    DUP _FCP-S-DELETE-SYNC = IF
+        DROP _FEXP-CLIP-CLEAR
+        _FEXP-REFRESH-AFTER-MUTATION
+        S" Copied; source cleanup durability is uncertain"
+        4000 ASHELL-TOAST EXIT
     THEN
-    _FEXP-CLIP-OP @ _FEXP-CLIP-CUT = IF
-        _FCP-SRC @ IN.PARENT @ _FEXP-VFS @ V.CWD !
-        _FCP-SRC @ IN.NAME @ _VFS-STR-GET _FEXP-VFS @ VFS-RM DROP
+    _FCP-COMMITTED @ _FCP-RESIDUE @ OR IF
+        _FEXP-REFRESH-AFTER-MUTATION
     THEN
-    R> _FEXP-VFS @ V.CWD !
-    _FEXP-VFS @ VFS-SYNC DROP
-    0 _FEXP-CLIP-IN !  _FEXP-CLIP-NONE _FEXP-CLIP-OP !
-    _FEXP-EXPL @ EXPL-REFRESH
-    _FEXP-CUR-DIR @ ?DUP IF _FEXP-POPULATE-DIR _FEXP-SORT-LIST THEN
-    _FEXP-LIST @ ?DUP IF _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS THEN
-    S" Pasted!" 1500 ASHELL-TOAST
-    ASHELL-DIRTY! ;
+    _FCP-REPORT-FAILURE ;
 
 \ =====================================================================
 \  §10 — Status bar update (via UIDL label attributes)
@@ -664,8 +1005,7 @@ VARIABLE _FMU-DIR
 VARIABLE _FMU-OLD-CWD
 VARIABLE _FMU-OK
 
-: _FEXP-CREATE-NAMED  ( name-a name-u type -- flag )
-    _FMU-TYPE ! _FMU-U ! _FMU-A !
+: _FEXP-CREATE-NAMED-BODY  ( -- flag )
     _FMU-U @ 0= _FMU-U @ 23 > OR IF FALSE EXIT THEN
     _FEXP-TARGET-DIR DUP 0= IF DROP FALSE EXIT THEN _FMU-DIR !
     _FEXP-VFS @ V.CWD @ _FMU-OLD-CWD !
@@ -686,17 +1026,27 @@ VARIABLE _FMU-OK
     THEN
     _FMU-OK @ ;
 
-VARIABLE _FMR-IN
+: _FEXP-CREATE-NAMED  ( name-a name-u type -- flag )
+    _FMU-TYPE ! _FMU-U ! _FMU-A !
+    ['] _FEXP-CREATE-NAMED-BODY VFS-TRANSACTION ;
 
-: _FEXP-RENAME-NAMED  ( name-a name-u -- flag )
-    DUP 0= OVER 23 > OR IF 2DROP FALSE EXIT THEN
-    _FEXP-SELECTED DUP 0= IF DROP 2DROP FALSE EXIT THEN
+VARIABLE _FMR-IN
+VARIABLE _FMR-A
+VARIABLE _FMR-U
+
+: _FEXP-RENAME-NAMED-BODY  ( -- flag )
+    _FMR-U @ 0= _FMR-U @ 23 > OR IF FALSE EXIT THEN
+    _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
     _FMR-IN !
-    _FMR-IN @ _FEXP-VFS @ VFS-RENAME IF FALSE EXIT THEN
+    _FMR-A @ _FMR-U @ _FMR-IN @ _FEXP-VFS @ VFS-RENAME IF FALSE EXIT THEN
     _FEXP-VFS @ VFS-SYNC IF FALSE EXIT THEN
     _FEXP-EXPL @ EXPL-REFRESH
     _FEXP-REFRESH-DETAIL
     TRUE ;
+
+: _FEXP-RENAME-NAMED  ( name-a name-u -- flag )
+    _FMR-U ! _FMR-A !
+    ['] _FEXP-RENAME-NAMED-BODY VFS-TRANSACTION ;
 
 VARIABLE _FDEL-IN
 VARIABLE _FDEL-PARENT
@@ -704,10 +1054,7 @@ VARIABLE _FDEL-A
 VARIABLE _FDEL-U
 VARIABLE _FDEL-OLD-CWD
 
-: _FEXP-DELETE-SELECTED  ( -- flag )
-    _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
-    DUP _FEXP-VFS @ V.ROOT @ = IF DROP FALSE EXIT THEN _FDEL-IN !
-    S" Delete the selected item?" DLG-CONFIRM 0= IF FALSE EXIT THEN
+: _FEXP-DELETE-BODY  ( -- flag )
     _FDEL-IN @ IN.PARENT @ _FDEL-PARENT !
     _FDEL-IN @ IN.NAME @ _VFS-STR-GET _FDEL-U ! _FDEL-A !
     _FEXP-VFS @ V.CWD @ _FDEL-OLD-CWD !
@@ -720,6 +1067,13 @@ VARIABLE _FDEL-OLD-CWD
     _FEXP-EXPL @ EXPL-REFRESH
     _FEXP-REFRESH-DETAIL
     TRUE ;
+
+: _FEXP-DELETE-SELECTED  ( -- flag )
+    _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
+    DUP _FEXP-VFS @ V.ROOT @ = IF DROP FALSE EXIT THEN _FDEL-IN !
+    \ Never hold the VFS guard across the modal confirmation/yield loop.
+    S" Delete the selected item?" DLG-CONFIRM 0= IF FALSE EXIT THEN
+    ['] _FEXP-DELETE-BODY VFS-TRANSACTION ;
 
 \ =====================================================================
 \  §13 — Action handlers (registered via UTUI-DO!)
@@ -891,8 +1245,7 @@ VARIABLE _FSUB-MODE
     \ Initialize business state
     FEXP-SORT-NAME _FEXP-SORT !
     0 _FEXP-CNT !
-    0 _FEXP-CLIP-IN !
-    _FEXP-CLIP-NONE _FEXP-CLIP-OP !
+    _FEXP-CLIP-CLEAR
     0 _FEXP-CUR-DIR !
     0 _FEXP-SEL-IN !
     0 _FEXP-PROMPT !
@@ -1194,7 +1547,10 @@ GUARD _fexp-guard
 ' FEXP-CLIP-PASTE  CONSTANT _fexp-clip-paste-xt
 
 : FEXP-ENTRY       _fexp-entry-xt      _fexp-guard WITH-GUARD ;
-: FEXP-RUN         _fexp-run-xt        _fexp-guard WITH-GUARD ;
+\ FEXP-RUN owns the shell lifecycle and may block/yield in its event loop.
+\ Invoke it only on the applet's owner core; cross-core callers must post a
+\ launch request rather than holding _fexp-guard for the applet lifetime.
+: FEXP-RUN         _fexp-run-xt EXECUTE ;
 : FEXP-CLIP-COPY   _fexp-clip-copy-xt  _fexp-guard WITH-GUARD ;
 : FEXP-CLIP-CUT    _fexp-clip-cut-xt   _fexp-guard WITH-GUARD ;
 : FEXP-CLIP-PASTE  _fexp-clip-paste-xt _fexp-guard WITH-GUARD ;

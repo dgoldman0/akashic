@@ -44,6 +44,7 @@
 \    ASHELL-POST      ( xt -- )        Enqueue deferred action
 \    ASHELL-UIDL?     ( -- flag )      Is a UIDL document loaded?
 \    ASHELL-DESC      ( -- desc )      Current app descriptor
+\    ASHELL-REQUEST-CLOSE ( reason -- decision )  Negotiate a close
 \
 \  The shell guarantees APP-SHUTDOWN runs even on THROW.
 \ =================================================================
@@ -198,6 +199,7 @@ VARIABLE _ASHELL-POST-TAIL
 : _ASHELL-DRAIN-POSTED  ( -- )
     BEGIN
         _ASHELL-POST-TAIL @ _ASHELL-POST-HEAD @ <
+        _ASHELL-RUNNING @ AND
     WHILE
         _ASHELL-POST-TAIL @
         _ASHELL-POST-MAX MOD CELLS _ASHELL-POST-Q + @
@@ -210,7 +212,9 @@ VARIABLE _ASHELL-POST-TAIL
 \ =====================================================================
 
 \ ASHELL-QUIT ( -- )
-\   Signal the event loop to exit after the current iteration.
+\   Idempotent aligned stop signal.  It does not provide a general
+\   cross-core synchronization boundary; lifecycle ownership and result
+\   publication remain the host's responsibility.
 : ASHELL-QUIT  ( -- )
     0 _ASHELL-RUNNING ! ;
 
@@ -221,10 +225,32 @@ VARIABLE _ASHELL-POST-TAIL
     _ASHELL-RUNNING @ 0= ;
 
 \ ASHELL-CANCEL-QUIT ( -- )
-\   Cancel a pending quit (re-arm the event loop).  Used by desk
-\   to intercept sub-app ASHELL-QUIT and close only that slot.
+\   Owner-lifecycle inverse of ASHELL-QUIT: cancel a pending quit and
+\   re-arm the event loop.  It is likewise only an aligned signal store,
+\   not a cross-core synchronization primitive.  Used by Desk to intercept
+\   sub-app ASHELL-QUIT and close only that slot.
 : ASHELL-CANCEL-QUIT  ( -- )
     -1 _ASHELL-RUNNING ! ;
+
+VARIABLE _ASHELL-CLOSE-REASON
+
+: _ASHELL-CALL-REQUEST-CLOSE  ( -- decision )
+    _ASHELL-DESC @ APP.REQUEST-CLOSE-XT @ ?DUP 0= IF
+        APP-CLOSE-D-ALLOW EXIT
+    THEN
+    _ASHELL-CLOSE-REASON @ _ASHELL-INST @ ROT EXECUTE ;
+
+\ ASHELL-REQUEST-CLOSE ( reason -- decision )
+\   Ask the current app whether a normal close may proceed.  Missing
+\   callbacks allow.  A THROW or an invalid decision fails closed.
+: ASHELL-REQUEST-CLOSE  ( reason -- decision )
+    _ASHELL-CLOSE-REASON !
+    ['] _ASHELL-CALL-REQUEST-CLOSE CATCH ?DUP IF
+        DROP APP-CLOSE-D-CANCEL EXIT
+    THEN
+    DUP APP-CLOSE-DECISION-VALID? 0= IF
+        DROP APP-CLOSE-D-CANCEL
+    THEN ;
 
 \ ASHELL-DIRTY! ( -- )
 \   Mark the screen as needing repaint.
@@ -681,47 +707,84 @@ _ASHELL-VFS-INIT
     1 KEY-TIMEOUT!
     \ 8. Initial paint
     ASHELL-DIRTY!
-    _ASHELL-PAINT
+    \ Init may immediately request close.  Reach negotiation before
+    \ invoking another app callback or touching the terminal surface.
+    _ASHELL-RUNNING @ IF _ASHELL-PAINT THEN
     DROP ;
 
 \ =====================================================================
 \  §11 — Lifecycle: Shutdown
 \ =====================================================================
 
-: _ASHELL-TEARDOWN  ( -- )
-    \ App shutdown callback
+VARIABLE _ASHELL-TD-IOR
+
+\ Keep the first teardown failure.  Every teardown stage is caught so
+\ later host-owned resources are still released.
+: _ASHELL-TD-REMEMBER  ( ior -- )
+    ?DUP IF
+        _ASHELL-TD-IOR @ 0= IF _ASHELL-TD-IOR ! ELSE DROP THEN
+    THEN ;
+
+: _ASHELL-TD-APP  ( -- )
+    \ A descriptor may have been stored before CINST-NEW failed.  Never
+    \ invoke an app callback without the live instance required by its ABI.
+    _ASHELL-INST @ 0= IF EXIT THEN
     _ASHELL-DESC @ ?DUP IF
         APP.SHUTDOWN-XT @ ?DUP IF
             _ASHELL-INST @ SWAP EXECUTE
         THEN
-    THEN
-    \ UIDL detach
+    THEN ;
+
+: _ASHELL-TD-UIDL  ( -- )
     _ASHELL-HAS-UIDL @ IF
-        UTUI-DETACH
         0 _ASHELL-HAS-UIDL !
-    THEN
-    \ Free shell-loaded UIDL file buffer (if we loaded it)
-    _ASHELL-UIDL-BUF @ ?DUP IF
+        UTUI-DETACH
+    THEN ;
+
+: _ASHELL-TD-UIDL-BUF  ( -- )
+    _ASHELL-UIDL-BUF DUP @ SWAP 0 SWAP ! ?DUP IF
         _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK
-        0 _ASHELL-UIDL-BUF !
-    THEN
-    \ Free region
-    _ASHELL-RGN @ ?DUP IF
+    THEN ;
+
+: _ASHELL-TD-REGION  ( -- )
+    _ASHELL-RGN DUP @ SWAP 0 SWAP ! ?DUP IF
         RGN-FREE
-        0 _ASHELL-RGN !
-    THEN
-    \ Terminal teardown
-    APP-SHUTDOWN
-    \ Release component state after app shutdown has freed its resources.
-    _ASHELL-INST @ ?DUP IF CINST-FREE THEN
-    \ Reset shell state
+    THEN ;
+
+: _ASHELL-TD-TERM  ( -- )
+    APP-SHUTDOWN ;
+
+: _ASHELL-TD-INST  ( -- )
+    _ASHELL-INST DUP @ SWAP 0 SWAP ! ?DUP IF CINST-FREE THEN ;
+
+\ _ASHELL-TEARDOWN ( -- ior )
+\   Nonthrowing best-effort teardown.  The first cleanup error is returned
+\   only after every independent stage has run and shell ownership has been
+\   reset.  ASHELL-RUN decides whether a primary execution error takes
+\   precedence over this result.
+: _ASHELL-TEARDOWN  ( -- ior )
+    0 _ASHELL-TD-IOR !
+    ['] _ASHELL-TD-APP      CATCH _ASHELL-TD-REMEMBER
+    ['] _ASHELL-TD-UIDL     CATCH _ASHELL-TD-REMEMBER
+    ['] _ASHELL-TD-UIDL-BUF CATCH _ASHELL-TD-REMEMBER
+    ['] _ASHELL-TD-REGION   CATCH _ASHELL-TD-REMEMBER
+    ['] _ASHELL-TD-TERM     CATCH _ASHELL-TD-REMEMBER
+    ['] _ASHELL-TD-INST     CATCH _ASHELL-TD-REMEMBER
+    \ Reset shell state even when a cleanup stage failed.  Ownership fields
+    \ are cleared before their release attempt, so no stale handle can be
+    \ reused or released twice by a later run.
     0 _ASHELL-DESC !
     0 _ASHELL-INST !
+    0 _ASHELL-RGN !
+    0 _ASHELL-HAS-UIDL !
+    0 _ASHELL-UIDL-BUF !
+    0 _ASHELL-ACTIVE-CTX !
     0 _ASHELL-RUNNING !
     0 _ASHELL-DIRTY !
     0 _ASHELL-POST-HEAD !
     0 _ASHELL-POST-TAIL !
-    0 _ASHELL-CUR-VIS ! ;
+    0 _ASHELL-CUR-VIS !
+    _ASHELL-TD-IOR @ ;
 
 \ =====================================================================
 \  §12 — Event Loop
@@ -745,13 +808,33 @@ _ASHELL-VFS-INIT
         _ASHELL-CHECK-HW-RESIZE
         \ 3. Deferred actions
         _ASHELL-DRAIN-POSTED
-        \ 4. Timer tick
-        _ASHELL-CHECK-TICK
-        \ 5. Paint (only if dirty)
-        _ASHELL-PAINT
-        \ 6. Cooperative yield
-        YIELD?
+        \ A deferred action may request close.  Return to the negotiation
+        \ boundary before any further app callback, paint, or scheduler hop.
+        _ASHELL-RUNNING @ IF
+            \ 4. Timer tick
+            _ASHELL-CHECK-TICK
+            \ A tick may request close.  Treat that as another hard
+            \ lifecycle boundary before paint or a scheduler hop.
+            _ASHELL-RUNNING @ IF
+                \ 5. Paint (only if dirty)
+                _ASHELL-PAINT
+                \ 6. Cooperative yield.
+                _ASHELL-RUNNING @ IF YIELD? THEN
+            THEN
+        THEN
     REPEAT ;
+
+\ _ASHELL-LOOP-UNTIL-CLOSED ( -- )
+\   A normal ASHELL-QUIT is only a request.  CANCEL and DEFER both keep
+\   the app alive; DEFER remains distinct so an app can report pending
+\   work and issue ASHELL-QUIT again when that work completes.
+: _ASHELL-LOOP-UNTIL-CLOSED  ( -- )
+    BEGIN
+        _ASHELL-LOOP
+        APP-CLOSE-R-QUIT ASHELL-REQUEST-CLOSE
+        APP-CLOSE-D-ALLOW = IF EXIT THEN
+        ASHELL-CANCEL-QUIT
+    AGAIN ;
 
 \ =====================================================================
 \  §13 — Main Entry Point
@@ -761,15 +844,21 @@ _ASHELL-VFS-INIT
 \   Run an application.  Blocks until ASHELL-QUIT is called or the
 \   app's init/event/tick/paint callback THROWs.  Terminal is always
 \   restored on exit.
+VARIABLE _ASHELL-RUN-IOR
+
+: _ASHELL-RUN-FINISH  ( primary-ior -- )
+    _ASHELL-RUN-IOR !
+    _ASHELL-TEARDOWN                 ( cleanup-ior )
+    _ASHELL-RUN-IOR @ ?DUP IF
+        NIP THROW                    \ primary execution error wins
+    THEN
+    ?DUP IF THROW THEN ;             \ otherwise surface cleanup failure
+
 : ASHELL-RUN  ( desc -- )
     ['] _ASHELL-SETUP CATCH ?DUP IF
-        \ Setup failed — still try to clean up
-        _ASHELL-TEARDOWN
-        THROW
+        _ASHELL-RUN-FINISH
     THEN
-    ['] _ASHELL-LOOP CATCH
-    _ASHELL-TEARDOWN
-    ?DUP IF THROW THEN ;
+    ['] _ASHELL-LOOP-UNTIL-CLOSED CATCH _ASHELL-RUN-FINISH ;
 
 \ =====================================================================
 \  §14 — Guard (Concurrency Safety)
@@ -788,11 +877,20 @@ GUARD _ashell-guard
 ' ASHELL-UIDL?   CONSTANT _ashell-uidl-xt
 ' ASHELL-DESC    CONSTANT _ashell-desc-xt
 ' ASHELL-INSTANCE CONSTANT _ashell-inst-xt
+' ASHELL-REQUEST-CLOSE CONSTANT _ashell-request-close-xt
 ' ASHELL-TOAST   CONSTANT _ashell-toast-xt
 ' ASHELL-TOAST-VISIBLE? CONSTANT _ashell-toast-vis-xt
 
-: ASHELL-RUN      _ashell-run-xt      _ashell-guard WITH-GUARD ;
-: ASHELL-QUIT     _ashell-quit-xt     _ashell-guard WITH-GUARD ;
+\ ASHELL-RUN is an owner-core lifecycle driver and deliberately does not
+\ hold WITH-GUARD across its yielding event loop.  CATCH is task-aware and
+\ may span TASK-YIELD; a lifetime guard still must not monopolize shared
+\ shell metadata while the owner task is parked.  Short bounded mutation
+\ and accessor entry points remain guarded below.
+: ASHELL-RUN      _ashell-run-xt EXECUTE ;
+\ ASHELL-QUIT is an idempotent aligned stop signal.  Keep it lock-free so
+\ callbacks and worker/host control paths can request negotiation even if a
+\ bounded shell operation currently owns the metadata guard.
+: ASHELL-QUIT     _ashell-quit-xt EXECUTE ;
 : ASHELL-DIRTY!   _ashell-dirty-xt    _ashell-guard WITH-GUARD ;
 : ASHELL-REGION   _ashell-region-xt   _ashell-guard WITH-GUARD ;
 : ASHELL-TICK-MS! _ashell-tick-ms-xt  _ashell-guard WITH-GUARD ;
@@ -800,6 +898,10 @@ GUARD _ashell-guard
 : ASHELL-UIDL?    _ashell-uidl-xt     _ashell-guard WITH-GUARD ;
 : ASHELL-DESC     _ashell-desc-xt     _ashell-guard WITH-GUARD ;
 : ASHELL-INSTANCE _ashell-inst-xt     _ashell-guard WITH-GUARD ;
+\ Close negotiation dispatches arbitrary app code and may park for user
+\ confirmation.  It is owner-core lifecycle work, never a guarded metadata
+\ critical section; cross-core callers must post the request to the owner.
+: ASHELL-REQUEST-CLOSE _ashell-request-close-xt EXECUTE ;
 : ASHELL-TOAST    _ashell-toast-xt    _ashell-guard WITH-GUARD ;
 : ASHELL-TOAST-VISIBLE? _ashell-toast-vis-xt _ashell-guard WITH-GUARD ;
 [THEN] [THEN]

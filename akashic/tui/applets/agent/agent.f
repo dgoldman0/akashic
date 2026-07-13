@@ -5,6 +5,7 @@
 PROVIDED akashic-tui-agent
 
 REQUIRE ../../widgets/prompt.f
+REQUIRE ../../widgets/dialog.f
 REQUIRE ../../widgets/agent-auth.f
 REQUIRE ../../widgets/agent-settings.f
 REQUIRE ../../app-desc.f
@@ -477,6 +478,24 @@ VARIABLE _AG-REVIEW-APPROVED
     _AG-E-SBAR @ ?DUP IF UTUI-ELEM-RGN _AG-PROMPT @ PRM-SET-BOUNDS THEN
     _AG-PROMPT @ WDG-DRAW ;
 
+\ Shared runtimes belong to the containing Practice, not to this visual
+\ lens.  Closing that lens must never cancel work another view or the owner
+\ is supervising.  A standalone Agent owns its runtime, so an active stream
+\ or approval is explicitly cancelled before its resources are released.
+: AGENT-REQUEST-CLOSE-CB  ( reason instance -- decision )
+    _AG-ACTIVATE DROP
+    _AG-RUNTIME @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
+    _AG-OWNS-RUNTIME @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
+    _AG-RUNTIME @ ARUNTIME-BUSY? 0= IF APP-CLOSE-D-ALLOW EXIT THEN
+    S" Cancel the active Agent run and close?" DLG-CONFIRM 0= IF
+        APP-CLOSE-D-CANCEL EXIT
+    THEN
+    _AG-RUNTIME @ ARUNTIME-CANCEL IF
+        APP-CLOSE-D-CANCEL
+    ELSE
+        APP-CLOSE-D-ALLOW
+    THEN ;
+
 : AGENT-SHUTDOWN-CB  ( instance -- )
     _AG-ACTIVATE
     _AG-E-BODY @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
@@ -515,6 +534,7 @@ CREATE AGENT-COMP-DESC COMP-DESC ALLOT
     ['] AGENT-PAINT-CB OVER APP.PAINT-XT !
     ['] AGENT-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
     ['] _AG-ACTIVATE OVER APP.ACTIVATE-XT !
+    ['] AGENT-REQUEST-CLOSE-CB OVER APP.REQUEST-CLOSE-XT !
     S" tui/applets/agent/agent.uidl"
     ROT DUP >R APP.UIDL-FILE-U ! R@ APP.UIDL-FILE-A !
     0 R@ APP.WIDTH ! 0 R@ APP.HEIGHT !

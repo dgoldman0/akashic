@@ -19,8 +19,10 @@ from [`cogs/term-init.f`](cogs/term-init.md) — the same cog that
 depend on `app.f`; the standalone and applet paths are fully
 independent.
 
-`ASHELL-RUN` blocks until the app calls `ASHELL-QUIT` or a callback
-throws.  Terminal state is always restored via `CATCH`-guarded teardown.
+`ASHELL-RUN` blocks until a normal `ASHELL-QUIT` is approved or a callback
+throws.  Teardown catches each independent cleanup stage, attempts all
+host-owned releases, and resets shell ownership even if an app shutdown
+callback throws.
 
 Not reentrant.  One app at a time.
 
@@ -32,27 +34,19 @@ Not reentrant.  One app at a time.
 
 ## APP-DESC — Application Descriptor
 
-The 96-byte APP-DESC struct is defined in
+The 160-byte APP-DESC struct is defined in
 [app-desc.f](app-desc.md) and pulled in via `REQUIRE app-desc.f`.
 
-96 bytes (12 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
+160 bytes (20 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
 zero-fill with `APP-DESC-INIT`.  Unused callback fields must be 0
 (the shell skips them).
 
 | Offset | Field | Stack | Description |
 |--------|-------|-------|-------------|
-| +0 | `APP.INIT-XT` | `( -- )` | Called once during setup |
-| +8 | `APP.EVENT-XT` | `( ev -- flag )` | Key/mouse handler; return true if consumed |
-| +16 | `APP.TICK-XT` | `( -- )` | Periodic tick (timers, animation) |
-| +24 | `APP.PAINT-XT` | `( -- )` | Custom widget painting (after UIDL) |
-| +32 | `APP.SHUTDOWN-XT` | `( -- )` | Cleanup on exit |
-| +40 | `APP.UIDL-A` | addr | UIDL XML source address (0 = no UIDL) |
-| +48 | `APP.UIDL-U` | u | UIDL XML source length |
-| +56 | `APP.WIDTH` | u | Preferred terminal width (0 = auto) |
-| +64 | `APP.HEIGHT` | u | Preferred terminal height (0 = auto) |
-| +72 | `APP.TITLE-A` | addr | Terminal title address (0 = none) |
-| +80 | `APP.TITLE-U` | u | Terminal title length |
-| +88 | `APP.FLAGS` | u | Reserved (0) |
+The descriptor begins with its ABI header and required `APP.COMP-DESC`.
+Lifecycle callbacks receive the live component instance.  The final field,
+`APP.REQUEST-CLOSE-XT`, is `( reason instance -- decision )`; see
+[app-desc.md](app-desc.md) for the complete offset table.
 
 Each field accessor takes `( desc -- addr )` and returns the address of
 that field within the descriptor, suitable for `@` or `!`.
@@ -63,10 +57,11 @@ that field within the descriptor, suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `ASHELL-RUN` | `( desc -- )` | Run app.  Blocks until quit or throw.  Always restores terminal. |
-| `ASHELL-QUIT` | `( -- )` | Signal the event loop to exit after the current iteration. Safe to call from any callback, including init. |
+| `ASHELL-RUN` | `( desc -- )` | Owner-core lifecycle driver. Blocks until an approved quit or throw and always restores the terminal. |
+| `ASHELL-QUIT` | `( -- )` | Lock-free, idempotent normal-close signal. Safe from callbacks, including init. |
 | `ASHELL-QUIT-PENDING?` | `( -- flag )` | True if a sub-app has called `ASHELL-QUIT` but the host hasn't processed it yet. |
-| `ASHELL-CANCEL-QUIT` | `( -- )` | Cancel a pending quit (re-arm the event loop).  Used by desk to intercept sub-app quit. |
+| `ASHELL-CANCEL-QUIT` | `( -- )` | Owner-lifecycle re-arm signal used by Desk and close negotiation. |
+| `ASHELL-REQUEST-CLOSE` | `( reason -- decision )` | Query the live descriptor; THROW/invalid decisions fail closed. |
 
 ### Context Switch & Child Painting
 
@@ -114,7 +109,7 @@ that field within the descriptor, suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `APP-DESC` | `( -- 96 )` | Descriptor size constant. |
+| `APP-DESC` | `( -- 160 )` | Descriptor size constant. |
 | `APP-DESC-INIT` | `( desc -- )` | Zero-fill a descriptor. |
 
 ## Lifecycle Sequence
@@ -134,7 +129,7 @@ ASHELL-RUN
   │     8. KEY-TIMEOUT! for ESC sequences
   │     9. Mark dirty, initial paint + flush
   │
-  ├── _ASHELL-LOOP (via CATCH)
+  ├── _ASHELL-LOOP-UNTIL-CLOSED (via CATCH)
   │     BEGIN RUNNING WHILE
   │       1. KEY-POLL → resize / dispatch
   │       2. Hardware resize poll
@@ -143,18 +138,28 @@ ASHELL-RUN
   │       5. Paint if dirty
   │       6. YIELD?
   │     REPEAT
+  │     APP.REQUEST-CLOSE-XT(APP-CLOSE-R-QUIT)
+  │       ALLOW  → teardown
+  │       CANCEL → re-arm loop
+  │       DEFER  → re-arm loop; app may issue quit when ready
   │
   └── _ASHELL-TEARDOWN (always runs)
         1. APP.SHUTDOWN-XT callback
         2. UTUI-DETACH (if UIDL loaded)
-        3. RGN-FREE root region
-        4. APP-SHUTDOWN (terminal restore, from term-init.f)
-        5. Reset all shell state
+        3. Free shell-loaded UIDL buffer
+        4. RGN-FREE root region
+        5. APP-SHUTDOWN (terminal restore, from term-init.f)
+        6. CINST-FREE component instance
+        7. Reset all shell ownership/state
 ```
 
-If `_ASHELL-SETUP` throws, teardown still runs and the throw is
-re-raised.  If `_ASHELL-LOOP` throws, teardown runs and the throw
-is re-raised.  The terminal is always left clean.
+Every teardown stage is individually caught, so a throwing shutdown callback
+cannot strand UIDL, region, terminal, or component-instance cleanup.  If setup
+or the event loop threw, that primary error is re-raised after teardown; it
+takes precedence over a cleanup error.  With no primary error, the first
+cleanup error is raised after all stages have run.  A setup failure before
+component-instance allocation skips the app shutdown callback because its
+required callback instance does not exist.
 
 ### Event Dispatch Order
 
@@ -327,20 +332,34 @@ actions drain every loop iteration, after event dispatch and before
 tick/paint.  Use for work that shouldn't run inside a callback
 (e.g., modifying the UIDL tree, opening dialogs).
 
+A posted action that calls `ASHELL-QUIT` stops the drain immediately.  Any
+remaining actions stay queued until close negotiation either re-arms the loop
+or teardown clears the queue.  A quit from the tick callback likewise returns
+to negotiation before paint or `YIELD?`.  These stop checks make a pending
+close a hard callback boundary.
+
 ## Concurrency Guards
 
-When `GUARDED` is defined at compile time, all public words are
-wrapped with `WITH-GUARD` for thread safety:
+When `GUARDED` is defined, bounded public operations use `WITH-GUARD`.
+`ASHELL-RUN` and `ASHELL-REQUEST-CLOSE` are intentionally owner-core-only and
+unwrapped.  KDOS exception state is task-aware, so lifecycle `CATCH` may safely
+span `YIELD?`; a lifetime metadata guard still must not span the loop or close
+callback because either may park for scheduling or user confirmation.
+Cross-core code posts lifecycle work to the owner.  `ASHELL-QUIT` and
+`ASHELL-CANCEL-QUIT` are lock-free aligned lifecycle signals, not general
+cross-core synchronization primitives.
 
-`ASHELL-RUN`, `ASHELL-QUIT`, `ASHELL-DIRTY!`, `ASHELL-REGION`,
-`ASHELL-TICK-MS!`, `ASHELL-POST`, `ASHELL-UIDL?`, `ASHELL-DESC`,
-`ASHELL-TOAST`, `ASHELL-TOAST-VISIBLE?`.
+`ASHELL-DIRTY!`, `ASHELL-REGION`, `ASHELL-TICK-MS!`, `ASHELL-POST`,
+`ASHELL-UIDL?`, `ASHELL-DESC`, `ASHELL-INSTANCE`, `ASHELL-TOAST`,
+`ASHELL-TOAST-VISIBLE?`.
 
-`ASHELL-QUIT-PENDING?`, `ASHELL-CANCEL-QUIT`, and `ASHELL-LOAD-UIDL`
-are **not** guarded — they are lightweight accessors / helpers that
-do not touch shared mutable state.
+`ASHELL-REQUEST-CLOSE`, `ASHELL-QUIT-PENDING?`, `ASHELL-CANCEL-QUIT`, and
+`ASHELL-LOAD-UIDL` are **not** guarded.  Close negotiation is an owner-core
+lifecycle dispatch; the others are lightweight accessors/helpers.
 
-Currently `GUARDED` is not defined, so guards are inactive.
+The event loop and all descriptor callbacks remain serialized on the host
+owner core.  Worker jobs publish results for that owner to apply; they do not
+call applet lifecycle callbacks directly.
 
 ## Usage Examples
 

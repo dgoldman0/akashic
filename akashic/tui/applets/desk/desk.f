@@ -23,6 +23,7 @@
 \  Public API:
 \    DESK-LAUNCH       ( desc -- id )  Launch sub-app, return slot ID
 \    DESK-CLOSE-ID     ( id -- )       Close sub-app by ID
+\    DESK-REQUEST-CLOSE-ID ( id reason -- decision )  Negotiate/close
 \    DESK-FOCUS-ID     ( id -- )       Focus sub-app by ID
 \    DESK-MINIMIZE-ID  ( id -- )       Minimize by ID
 \    DESK-RESTORE      ( -- )          Restore last minimized
@@ -715,28 +716,144 @@ VARIABLE _DL-SLOT
     _DL-SLOT @ _SL-HAS-UIDL @ IF _DL-SLOT @ _DESK-CTX-SAVE THEN
     _DL-SLOT @ _SL-ID @ ;
 
-: DESK-CLOSE-ID  ( id -- )
-    _DESK-FIND-ID DUP 0= IF DROP EXIT THEN
-    >R
-    \ Sub-app shutdown callback
-    R@ _SL-DESC @ ?DUP IF
-        APP.SHUTDOWN-XT @ ?DUP IF
-            R@ _SL-INST @ SWAP EXECUTE
+VARIABLE _DRCS-SA
+VARIABLE _DRCS-REASON
+VARIABLE _DRCS-DECISION
+
+: _DESK-CALL-REQUEST-CLOSE  ( -- decision )
+    _DRCS-SA @ _SL-DESC @ APP.REQUEST-CLOSE-XT @ ?DUP 0= IF
+        APP-CLOSE-D-ALLOW EXIT
+    THEN
+    _DRCS-REASON @ _DRCS-SA @ _SL-INST @ ROT EXECUTE ;
+
+: _DESK-REQUEST-CLOSE-ENTER  ( -- )
+    _DRCS-SA @ _DESK-CTX-SWITCH ;
+
+: _DESK-REQUEST-CLOSE-SAVE  ( -- )
+    \ Only save when entry reached this child's actual UIDL context.
+    \ If a context restore failed earlier, saving arbitrary live globals
+    \ into the child's buffer would corrupt the preserved applet.
+    _DRCS-SA @ _SL-HAS-UIDL @ IF
+        _ASHELL-ACTIVE-CTX @ _DRCS-SA @ _SL-UCTX @ = IF
+            _DRCS-SA @ _DESK-CTX-SAVE
+        THEN
+    THEN ;
+
+: _DESK-REQUEST-CLOSE-EXIT  ( -- )
+    0 ASHELL-CTX-SWITCH ;
+
+\ _DESK-REQUEST-CLOSE-SA ( sa reason -- decision )
+\   Query one child with its UIDL context and activation binding live.
+\   Missing callbacks allow; THROW and invalid decisions fail closed.
+: _DESK-REQUEST-CLOSE-SA  ( sa reason -- decision )
+    _DRCS-REASON ! _DRCS-SA !
+    APP-CLOSE-D-CANCEL _DRCS-DECISION !
+    ['] _DESK-REQUEST-CLOSE-ENTER CATCH 0= IF
+        ['] _DESK-CALL-REQUEST-CLOSE CATCH ?DUP IF
+            DROP
+        ELSE
+            DUP APP-CLOSE-DECISION-VALID? IF
+                _DRCS-DECISION !
+            ELSE
+                DROP
+            THEN
         THEN
     THEN
-    \ Detach UIDL if active
-    R@ _SL-HAS-UIDL @ IF
-        R@ _DESK-CTX-SWITCH
-        UTUI-DETACH
-        0 ASHELL-CTX-SWITCH
+    \ Saving and leaving the child context are part of negotiation.  A
+    \ failure in either step vetoes the close just like a callback fault.
+    ['] _DESK-REQUEST-CLOSE-SAVE CATCH IF
+        APP-CLOSE-D-CANCEL _DRCS-DECISION !
     THEN
-    \ Free resources
-    R@ _SL-UIDL-BUF @ ?DUP IF _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK THEN
-    R@ _SL-UCTX @ ?DUP IF UCTX-FREE THEN
-    R@ _SL-RGN @ ?DUP IF RGN-FREE THEN
-    R@ _SL-INST @ ?DUP IF
-        DUP _DESK-REGISTRY @ CREG-INST- DROP
-        CINST-FREE
+    ['] _DESK-REQUEST-CLOSE-EXIT CATCH IF
+        0 _ASHELL-ACTIVE-CTX !
+        APP-CLOSE-D-CANCEL _DRCS-DECISION !
+    THEN
+    _DRCS-DECISION @ ;
+
+VARIABLE _DCF-SA
+VARIABLE _DCF-IOR
+VARIABLE _DCF-INST
+VARIABLE _DCF-ENTERED
+
+: _DCF-REMEMBER  ( ior -- )
+    ?DUP IF
+        _DCF-IOR @ 0= IF _DCF-IOR ! ELSE DROP THEN
+    THEN ;
+
+: _DCF-ENTER  ( -- )
+    _DCF-SA @ _DESK-CTX-SWITCH ;
+
+: _DCF-SHUTDOWN  ( -- )
+    _DCF-SA @ _SL-DESC @ APP.SHUTDOWN-XT @ ?DUP IF
+        _DCF-SA @ _SL-INST @ SWAP EXECUTE
+    THEN ;
+
+: _DCF-DETACH  ( -- )
+    _DCF-SA @ _SL-HAS-UIDL DUP @ IF
+        0 SWAP !
+        \ Detach only if context entry actually selected this child.
+        _ASHELL-ACTIVE-CTX @ _DCF-SA @ _SL-UCTX @ = IF
+            UTUI-DETACH
+        THEN
+    ELSE
+        DROP
+    THEN ;
+
+: _DCF-EXIT  ( -- )
+    0 ASHELL-CTX-SWITCH ;
+
+: _DCF-FREE-UIDL-BUF  ( -- )
+    _DCF-SA @ _SL-UIDL-BUF DUP @ SWAP 0 SWAP ! ?DUP IF
+        _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK
+    THEN ;
+
+: _DCF-FREE-UCTX  ( -- )
+    _DCF-SA @ _SL-UCTX DUP @ SWAP 0 SWAP ! ?DUP IF UCTX-FREE THEN ;
+
+: _DCF-FREE-REGION  ( -- )
+    _DCF-SA @ _SL-RGN DUP @ SWAP 0 SWAP ! ?DUP IF RGN-FREE THEN ;
+
+: _DCF-UNREGISTER-INST  ( -- )
+    _DCF-INST @ ?DUP IF
+        _DESK-REGISTRY @ ?DUP IF CREG-INST- DROP ELSE DROP THEN
+    THEN ;
+
+: _DCF-FREE-INST  ( -- )
+    0 _DCF-SA @ _SL-INST !
+    _DCF-INST @ ?DUP IF CINST-FREE THEN ;
+
+: _DCF-FREE-SLOT  ( -- )
+    _DCF-SA @ FREE ;
+
+\ _DESK-CLOSE-SA-FORCE ( sa -- ior )
+\   Finalize an already-approved child without asking again.  Callback,
+\   context, and release failures are contained until the slot is unlinked
+\   and every known resource has had one release attempt.  The first error
+\   is returned after structural cleanup.
+: _DESK-CLOSE-SA-FORCE  ( sa -- ior )
+    >R
+    R@ _DCF-SA !
+    R@ _SL-INST @ _DCF-INST !
+    0 _DCF-IOR !
+    ['] _DCF-ENTER CATCH DUP 0= _DCF-ENTERED ! _DCF-REMEMBER
+    \ Entry includes context selection and child activation.  If it failed,
+    \ do not run app-owned shutdown against a context whose identity is
+    \ uncertain; host-owned unlink/release still proceeds below.
+    _DCF-ENTERED @ IF
+        R@ _DCF-SA !
+        ['] _DCF-SHUTDOWN CATCH _DCF-REMEMBER
+    THEN
+    \ _DCF-DETACH has its own exact active-UCTX identity check.  Thus an
+    \ activation failure after a successful switch can still dematerialize
+    \ UIDL, while a switch failure cannot detach some other live context.
+    R@ _DCF-SA !
+    ['] _DCF-DETACH CATCH _DCF-REMEMBER
+    R@ _DCF-SA !
+    ['] _DCF-EXIT     CATCH _DCF-REMEMBER
+    \ A failed context save/exit must not leave the soon-to-be-freed UCTX
+    \ advertised as active.
+    _ASHELL-ACTIVE-CTX @ R@ _SL-UCTX @ = IF
+        0 _ASHELL-ACTIVE-CTX !
     THEN
     \ Fixup focus / last-minimized pointers
     R@ _DESK-FOCUS-SA @ = IF
@@ -747,7 +864,19 @@ VARIABLE _DL-SLOT
     THEN
     R@ _SL-ID @ _DESK-HOTBAR-SLOT-CLOSED
     R@ _DESK-UNLINK
-    R> FREE
+    R@ _DCF-SA !
+    ['] _DCF-FREE-UIDL-BUF CATCH _DCF-REMEMBER
+    R@ _DCF-SA !
+    ['] _DCF-FREE-UCTX CATCH _DCF-REMEMBER
+    R@ _DCF-SA !
+    ['] _DCF-FREE-REGION CATCH _DCF-REMEMBER
+    R@ _DCF-SA !
+    ['] _DCF-UNREGISTER-INST CATCH _DCF-REMEMBER
+    R@ _DCF-SA !
+    ['] _DCF-FREE-INST CATCH _DCF-REMEMBER
+    R@ _DCF-SA !
+    ['] _DCF-FREE-SLOT CATCH _DCF-REMEMBER
+    R> DROP
     \ Auto-focus next visible slot if focus was lost
     _DESK-FOCUS-SA @ 0= IF
         _DESK-HEAD @
@@ -761,7 +890,35 @@ VARIABLE _DL-SLOT
             THEN
         REPEAT
     THEN
-    DESK-RELAYOUT ;
+    _DCF-IOR @ ;
+
+VARIABLE _DRCI-REASON
+VARIABLE _DRCI-IOR
+
+: _DRCI-REMEMBER  ( ior -- )
+    ?DUP IF
+        _DRCI-IOR @ 0= IF _DRCI-IOR ! ELSE DROP THEN
+    THEN ;
+
+\ DESK-REQUEST-CLOSE-ID ( id reason -- decision )
+\   Negotiate a child close.  ALLOW performs shutdown/removal before
+\   returning; CANCEL and DEFER preserve the complete live slot.
+: DESK-REQUEST-CLOSE-ID  ( id reason -- decision )
+    _DRCI-REASON !
+    _DESK-FIND-ID DUP 0= IF DROP APP-CLOSE-D-ALLOW EXIT THEN
+    DUP >R _DRCI-REASON @ _DESK-REQUEST-CLOSE-SA
+    DUP APP-CLOSE-D-ALLOW = IF
+        0 _DRCI-IOR !
+        R@ _DESK-CLOSE-SA-FORCE _DRCI-REMEMBER
+        ['] DESK-RELAYOUT CATCH _DRCI-REMEMBER
+        _DRCI-IOR @ ?DUP IF THROW THEN
+    THEN
+    R> DROP ;
+
+\ Compatibility entry point: a tile/window close request.  Callers that
+\ need to distinguish CANCEL from DEFER use DESK-REQUEST-CLOSE-ID.
+: DESK-CLOSE-ID  ( id -- )
+    APP-CLOSE-R-WINDOW DESK-REQUEST-CLOSE-ID DROP ;
 
 \ =====================================================================
 \  §8 — Focus, Minimize, Restore
@@ -1475,7 +1632,8 @@ VARIABLE _DDM-EV
                 \ Intercept sub-app ASHELL-QUIT
                 ASHELL-QUIT-PENDING? IF
                     ASHELL-CANCEL-QUIT
-                    R@ _SL-ID @ DESK-CLOSE-ID
+                    R@ _SL-ID @ APP-CLOSE-R-QUIT
+                    DESK-REQUEST-CLOSE-ID DROP
                     R> DROP
                     2DROP -1 EXIT
                 THEN
@@ -1587,14 +1745,65 @@ VARIABLE _DPC-PAINT-ALL
         ELSE DROP THEN
     THEN ;
 
-\ --- Shutdown ---
+\ --- Close negotiation and shutdown ---
+VARIABLE _DRCT-DECISION
+
+: _DESK-MERGE-CLOSE-DECISION  ( decision -- )
+    DUP APP-CLOSE-D-CANCEL = IF
+        DROP APP-CLOSE-D-CANCEL _DRCT-DECISION ! EXIT
+    THEN
+    APP-CLOSE-D-DEFER = IF
+        _DRCT-DECISION @ APP-CLOSE-D-CANCEL <> IF
+            APP-CLOSE-D-DEFER _DRCT-DECISION !
+        THEN
+    THEN ;
+
+\ DESK-REQUEST-CLOSE-CB ( reason instance -- decision )
+\   A Desk close is a host-shutdown request to every child.  This pass
+\   only negotiates: no child is torn down unless every child allows.
+\   CANCEL wins over DEFER, which wins over ALLOW.
+: DESK-REQUEST-CLOSE-CB  ( reason instance -- decision )
+    SWAP DROP _DESK-USE-STATE
+    APP-CLOSE-D-ALLOW _DRCT-DECISION !
+    _DESK-HEAD @
+    BEGIN ?DUP WHILE
+        DUP APP-CLOSE-R-HOST-SHUTDOWN _DESK-REQUEST-CLOSE-SA
+        _DESK-MERGE-CLOSE-DECISION
+        _SL-NEXT @
+    REPEAT
+    ['] _DESK-REQUEST-CLOSE-EXIT CATCH IF
+        0 _ASHELL-ACTIVE-CTX !
+        APP-CLOSE-D-CANCEL _DRCT-DECISION !
+    THEN
+    _DRCT-DECISION @ ;
+
+VARIABLE _DSD-IOR
+
+: _DSD-REMEMBER  ( ior -- )
+    ?DUP IF
+        _DSD-IOR @ 0= IF _DSD-IOR ! ELSE DROP THEN
+    THEN ;
+
+: _DSD-INTEROP-FINI  ( -- )
+    _DESK-INTEROP-FINI ;
+
+: _DSD-PRACTICE-FINI  ( -- )
+    _DESK-PRACTICE-ACTIVATION PACT-DEACTIVATE ;
+
 : DESK-SHUTDOWN-CB  ( instance -- )
     _DESK-USE-STATE
+    0 _DSD-IOR !
+    \ ASHELL already received ALLOW from DESK-REQUEST-CLOSE-CB.  Force
+    \ finalization here so callbacks are not re-prompted and a prior
+    \ CANCEL/DEFER can never leave this loop stuck on the head slot.  Each
+    \ force-close unlinks even after a callback fault, so shutdown drains
+    \ the complete list before surfacing the first cleanup error.
     BEGIN _DESK-HEAD @ ?DUP WHILE
-        _SL-ID @ DESK-CLOSE-ID
+        _DESK-CLOSE-SA-FORCE _DSD-REMEMBER
     REPEAT
-    _DESK-INTEROP-FINI
-    _DESK-PRACTICE-ACTIVATION PACT-DEACTIVATE ;
+    ['] _DSD-INTEROP-FINI CATCH _DSD-REMEMBER
+    ['] _DSD-PRACTICE-FINI CATCH _DSD-REMEMBER
+    _DSD-IOR @ ?DUP IF THROW THEN ;
 
 \ =====================================================================
 \  §11 — DESK Descriptor & Entry Point
@@ -1618,6 +1827,7 @@ VARIABLE _DPC-PAINT-ALL
     ['] DESK-PAINT-CB    DESK-DESC APP.PAINT-XT !
     ['] DESK-SHUTDOWN-CB DESK-DESC APP.SHUTDOWN-XT !
     ['] _DESK-USE-STATE  DESK-DESC APP.ACTIVATE-XT !
+    ['] DESK-REQUEST-CLOSE-CB DESK-DESC APP.REQUEST-CLOSE-XT !
     0                    DESK-DESC APP.UIDL-A !
     0                    DESK-DESC APP.UIDL-U !
     0                    DESK-DESC APP.WIDTH !
@@ -1656,6 +1866,7 @@ GUARD _desk-guard
 
 ' DESK-LAUNCH       CONSTANT _desk-launch-xt
 ' DESK-CLOSE-ID     CONSTANT _desk-closeid-xt
+' DESK-REQUEST-CLOSE-ID CONSTANT _desk-request-closeid-xt
 ' DESK-FOCUS-ID     CONSTANT _desk-focusid-xt
 ' DESK-MINIMIZE-ID  CONSTANT _desk-minimizeid-xt
 ' DESK-RESTORE      CONSTANT _desk-restore-xt
@@ -1671,7 +1882,11 @@ GUARD _desk-guard
 ' DESK-RUN          CONSTANT _desk-run-xt
 
 : DESK-LAUNCH       _desk-launch-xt       _desk-guard WITH-GUARD ;
-: DESK-CLOSE-ID     _desk-closeid-xt      _desk-guard WITH-GUARD ;
+\ Close negotiation can invoke arbitrary app code or a blocking confirmation
+\ dialog.  These are owner-core lifecycle entries, not metadata critical
+\ sections; cross-core producers must post a close request to Desk's owner.
+: DESK-CLOSE-ID     _desk-closeid-xt EXECUTE ;
+: DESK-REQUEST-CLOSE-ID _desk-request-closeid-xt EXECUTE ;
 : DESK-FOCUS-ID     _desk-focusid-xt      _desk-guard WITH-GUARD ;
 : DESK-MINIMIZE-ID  _desk-minimizeid-xt   _desk-guard WITH-GUARD ;
 : DESK-RESTORE      _desk-restore-xt      _desk-guard WITH-GUARD ;
@@ -1684,5 +1899,8 @@ GUARD _desk-guard
 : DESK-PRACTICE     _desk-practice-xt     _desk-guard WITH-GUARD ;
 : DESK-CONTEXT      _desk-context-xt      _desk-guard WITH-GUARD ;
 : DESK-RECOVERY?    _desk-recovery-xt     _desk-guard WITH-GUARD ;
-: DESK-RUN          _desk-run-xt          _desk-guard WITH-GUARD ;
+\ Like ASHELL-RUN, DESK-RUN is the owner-core yielding lifecycle driver.
+\ Task-aware CATCH may span the loop; a lifetime metadata guard may not,
+\ because it would exclude bounded control operations while this task yields.
+: DESK-RUN          _desk-run-xt EXECUTE ;
 [THEN] [THEN]

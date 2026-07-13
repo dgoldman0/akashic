@@ -28,18 +28,49 @@ Formulas begin with `=` and currently support:
 - recursive references and cycle detection.
 
 Division by zero, malformed expressions, invalid references, and cycles produce
-`#ERR`. Recalculation is scalar and deterministic. It clears evaluation marks,
-then evaluates the used rectangle while resolving referenced cells on demand.
+`#ERR`. Dependency walks are bounded to 20 cells. A cycle and an acyclic chain
+that exceeds that bound are tracked as distinct internal errors, and neither
+can write beyond the evaluator stacks. Recalculation is scalar and
+deterministic. It clears evaluation marks, then evaluates the used rectangle
+while resolving referenced cells on demand.
 
 ## CSV Persistence
 
 `/grid.csv` is both the native first-slice document and the interchange format.
-The reader handles quoted fields, doubled quotes, commas, LF/CRLF records, and
-empty cells. The writer quotes fields when required and preserves formula
-source rather than serializing cached values.
+The reader handles quoted fields, doubled quotes, commas, LF/CRLF records,
+quoted line breaks, and empty cells. Import is intentionally strict: a sheet
+may contain at most 64 rows and 16 columns, decoded fields may contain at most
+40 bytes, quotes may only open at the start of a field, and only a delimiter,
+record ending, or end-of-file may follow a closing quote. Lone CR bytes,
+unclosed quotes, junk after a closing quote, invalid UTF-8, and over-limit data
+are rejected rather than clipped or reinterpreted.
 
-Edits mark the sheet unsaved and repaint immediately. `Ctrl+S` performs an exact
-truncate/write/sync; `Ctrl+R` reloads and recalculates the CSV file.
+Reload first recovers any interrupted replacement, checks the file size before
+reading, reads exactly the reported number of bytes, and validates the entire
+CSV before clearing the current model. A failed reload therefore keeps the
+current sheet and its dirty state. It also blocks saves, preventing a malformed
+or uncertain external source from being overwritten until a clean recovery and
+reload succeeds.
+
+The exact-read path owns its file descriptor and previous VFS selector as
+separate cleanup stages. Each ownership marker is cleared before its void
+cleanup operation is called, so an operation that takes effect and then throws
+cannot be retried. Close and selector restoration are caught independently,
+and restoration is attempted even after a close fault. A cleanup fault becomes
+a load I/O failure: CSV validation and model publication do not run, the sheet
+and dirty state are preserved, and saves remain source-blocked until a clean
+reload.
+
+Edits mark the sheet unsaved and repaint immediately. `Ctrl+S` serializes into a
+bounded buffer and uses checked staged replacement: the candidate is written,
+read back, synced, and published without truncating the live file first.
+Failures known to have rolled back leave the sheet dirty and immediately
+retryable; only an ambiguous/corrupt replacement state blocks another save
+until recovery and reload succeed.
+`Ctrl+R` confirms before discarding unsaved edits, reloads, and recalculates.
+Closing a dirty Grid also requires confirmation through the app lifecycle close
+contract; the quit action itself only requests closure, so it cannot prompt a
+second time.
 
 ## Keys
 
@@ -72,6 +103,19 @@ truncate/write/sync; `Ctrl+R` reloads and recalculates the CSV file.
 saves and reloads the sheet, verifies quoted CSV and formula source in live
 MP64FS bytes, reports a self-reference as `#ERR`, recovers after clearing it,
 and checks the results after terminal resize.
+
+`python3 local_testing/akashic_tui.py smoke --profile grid-eval` checks the
+dependency-stack boundary, a maximum-depth chain, an over-depth chain, cycle
+classification, and recovery on recalculation.
+
+`python3 local_testing/akashic_tui.py smoke --profile grid-contracts` exercises
+strict CSV acceptance and rejection at every shape bound, exact and oversized
+reads, short-read preservation, source blocking, failed-sync rollback,
+retry-after-rollback, replacement-artifact cleanup, and close-callback
+registration in a live MP64 image. It injects after-effect throws from both
+descriptor close and VFS-selector restoration and verifies single-attempt
+cleanup, descriptor free-list integrity, selector restoration, and preservation
+of the dirty model under both faults.
 
 ## Deliberate Next Steps
 

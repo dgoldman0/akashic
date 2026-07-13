@@ -12,6 +12,7 @@
 PROVIDED akashic-tui-grid
 
 REQUIRE ../../widgets/prompt.f
+REQUIRE ../../widgets/dialog.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../uidl-tui.f
@@ -20,7 +21,9 @@ REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
+REQUIRE ../../../utils/fs/vfs-replace.f
 REQUIRE ../../../utils/string.f
+REQUIRE ../../../text/utf8.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/endpoint.f
@@ -32,7 +35,8 @@ REQUIRE ../../../interop/resource.f
 72 CONSTANT _GRID-CELL-SZ
 98304 CONSTANT _GRID-IO-CAP
 256 CONSTANT _GRID-PROMPT-CAP
-16 CONSTANT _GRID-PARSE-DEPTH
+20 CONSTANT _GRID-EVAL-DEPTH
+_GRID-EVAL-DEPTH CONSTANT _GRID-PARSE-DEPTH
 
  0 CONSTANT _GC-LEN
  8 CONSTANT _GC-VALUE
@@ -44,10 +48,23 @@ REQUIRE ../../../interop/resource.f
 1  CONSTANT _GRID-ST-NUMBER
 2  CONSTANT _GRID-ST-FORMULA
 -1 CONSTANT _GRID-ST-ERROR
+-2 CONSTANT _GRID-ST-CYCLE
+-3 CONSTANT _GRID-ST-DEPTH
+
+: _GRID-ST-ERROR?  ( status -- flag ) 0< ;
 
 0 CONSTANT _GRID-PRM-NONE
 1 CONSTANT _GRID-PRM-EDIT
 2 CONSTANT _GRID-PRM-GOTO
+
+0 CONSTANT _GRID-L-S-OK
+1 CONSTANT _GRID-L-S-MISSING
+2 CONSTANT _GRID-L-S-IO
+3 CONSTANT _GRID-L-S-TOO-LARGE
+4 CONSTANT _GRID-L-S-INVALID
+5 CONSTANT _GRID-L-S-CAPACITY
+6 CONSTANT _GRID-L-S-FIELD
+7 CONSTANT _GRID-L-S-RECOVERY
 
 VARIABLE _GRID-CURRENT-STATE
 0 _GRID-CURRENT-STATE !
@@ -66,6 +83,9 @@ _GRID-CURRENT-STATE CMP-CELL: _GRID-SCROLL-ROW
 _GRID-CURRENT-STATE CMP-CELL: _GRID-SCROLL-COL
 _GRID-CURRENT-STATE CMP-CELL: _GRID-DIRTY
 _GRID-CURRENT-STATE CMP-CELL: _GRID-VFS
+_GRID-CURRENT-STATE VREPL-SIZE CMP-FIELD: _GRID-REPLACE
+_GRID-CURRENT-STATE CMP-CELL: _GRID-SOURCE-BLOCKED
+_GRID-CURRENT-STATE CMP-CELL: _GRID-IO-ERROR
 
 : _GRID-CELL  ( row col -- cell )
     SWAP _GRID-COLS * + _GRID-CELL-SZ * _GRID-CELLS @ + ;
@@ -85,9 +105,10 @@ VARIABLE _GS-CELL
     _GS-COL ! _GS-ROW ! _GS-U ! _GS-A !
     _GS-ROW @ 0< _GS-ROW @ _GRID-ROWS >= OR IF EXIT THEN
     _GS-COL @ 0< _GS-COL @ _GRID-COLS >= OR IF EXIT THEN
+    _GS-U @ _GRID-SOURCE-CAP > IF EXIT THEN
     _GS-ROW @ _GS-COL @ _GRID-CELL _GS-CELL !
     _GS-CELL @ _GC-SOURCE + _GRID-SOURCE-CAP 0 FILL
-    _GS-U @ _GRID-SOURCE-CAP MIN _GS-N !
+    _GS-U @ _GS-N !
     _GS-N @ _GS-CELL @ _GC-LEN + !
     _GS-A @ _GS-CELL @ _GC-SOURCE + _GS-N @ CMOVE
     0 _GS-CELL @ _GC-VALUE + !
@@ -110,74 +131,247 @@ VARIABLE _GCSV-POS
 VARIABLE _GCSV-ROW
 VARIABLE _GCSV-COL
 VARIABLE _GCSV-FIELD-U
-VARIABLE _GCSV-QUOTED
 VARIABLE _GCSV-CH
+VARIABLE _GCSV-STATE
+VARIABLE _GCSV-COMMIT
+VARIABLE _GCSV-ROW-STARTED
+VARIABLE _GCSV-STATUS
+
+0 CONSTANT _GCSV-ST-START
+1 CONSTANT _GCSV-ST-UNQUOTED
+2 CONSTANT _GCSV-ST-QUOTED
+3 CONSTANT _GCSV-ST-AFTER-QUOTE
 
 : _GCSV-FIELD-RESET  ( -- )
-    0 _GCSV-FIELD-U ! 0 _GCSV-QUOTED !
+    0 _GCSV-FIELD-U !
     _GRID-CSV-FIELD _GRID-SOURCE-CAP 0 FILL ;
 
-: _GCSV-FIELD-CHAR  ( c -- )
-    _GCSV-FIELD-U @ _GRID-SOURCE-CAP < IF
-        _GRID-CSV-FIELD _GCSV-FIELD-U @ + C!
-        1 _GCSV-FIELD-U +!
-    ELSE DROP THEN ;
+\ The parser is deliberately strict.  It never clips a decoded field and
+\ never mutates the worksheet during its validation pass.
+: _GCSV-FAIL  ( status -- flag )
+    _GCSV-STATUS ! 0 ;
 
-: _GCSV-FIELD-FINISH  ( -- )
-    _GRID-CSV-FIELD _GCSV-FIELD-U @ _GCSV-ROW @ _GCSV-COL @
-    _GRID-SET-CELL
-    1 _GCSV-COL +!
-    _GCSV-FIELD-RESET ;
+: _GCSV-FIELD-CHAR  ( c -- flag )
+    _GCSV-FIELD-U @ _GRID-SOURCE-CAP >= IF
+        DROP _GRID-L-S-FIELD _GCSV-FAIL EXIT
+    THEN
+    _GRID-CSV-FIELD _GCSV-FIELD-U @ + C!
+    1 _GCSV-FIELD-U +! -1 ;
 
-: _GRID-PARSE-CSV  ( -- )
-    _GRID-CLEAR-MODEL
-    0 _GCSV-POS ! 0 _GCSV-ROW ! 0 _GCSV-COL ! _GCSV-FIELD-RESET
-    BEGIN _GCSV-POS @ _GRID-IO-U @ < WHILE
-        _GRID-IO-BUF @ _GCSV-POS @ + C@ DUP _GCSV-CH !
-        _GCSV-QUOTED @ IF
-            _GCSV-CH @ [CHAR] " = IF
-                _GCSV-POS @ 1+ _GRID-IO-U @ < IF
-                    _GRID-IO-BUF @ _GCSV-POS @ + 1+ C@ [CHAR] " = IF
-                        [CHAR] " _GCSV-FIELD-CHAR
-                        2 _GCSV-POS +!
-                    ELSE
-                        0 _GCSV-QUOTED ! 1 _GCSV-POS +!
-                    THEN
-                ELSE
-                    0 _GCSV-QUOTED ! 1 _GCSV-POS +!
-                THEN
-            ELSE
-                _GCSV-CH @ _GCSV-FIELD-CHAR 1 _GCSV-POS +!
-            THEN
-        ELSE
-            _GCSV-CH @ CASE
-                [CHAR] " OF -1 _GCSV-QUOTED ! 1 _GCSV-POS +! ENDOF
-                [CHAR] , OF _GCSV-FIELD-FINISH 1 _GCSV-POS +! ENDOF
-                10 OF
-                    _GCSV-FIELD-FINISH
-                    1 _GCSV-ROW +! 0 _GCSV-COL !
-                    1 _GCSV-POS +!
-                ENDOF
-                13 OF 1 _GCSV-POS +! ENDOF
-                _GCSV-CH @ _GCSV-FIELD-CHAR 1 _GCSV-POS +!
-            ENDCASE
+: _GCSV-FIELD-FINISH  ( -- flag )
+    _GCSV-ROW @ _GRID-ROWS >=
+    _GCSV-COL @ _GRID-COLS >= OR IF
+        _GRID-L-S-CAPACITY _GCSV-FAIL EXIT
+    THEN
+    _GCSV-COMMIT @ IF
+        _GRID-CSV-FIELD _GCSV-FIELD-U @ _GCSV-ROW @ _GCSV-COL @
+        _GRID-SET-CELL
+    THEN
+    1 _GCSV-COL +! _GCSV-FIELD-RESET -1 ;
+
+: _GCSV-ROW-FINISH  ( -- flag )
+    _GCSV-FIELD-FINISH 0= IF 0 EXIT THEN
+    1 _GCSV-ROW +! 0 _GCSV-COL ! 0 _GCSV-ROW-STARTED !
+    _GCSV-ST-START _GCSV-STATE ! -1 ;
+
+: _GCSV-RECORD-CR  ( -- )
+    _GCSV-POS @ 1+ _GRID-IO-U @ >= IF
+        _GRID-L-S-INVALID _GCSV-FAIL DROP EXIT
+    THEN
+    _GRID-IO-BUF @ _GCSV-POS @ + 1+ C@ 10 <> IF
+        _GRID-L-S-INVALID _GCSV-FAIL DROP EXIT
+    THEN
+    _GCSV-ROW-FINISH IF 2 _GCSV-POS +! THEN ;
+
+: _GCSV-QUOTED-CR  ( -- )
+    _GCSV-POS @ 1+ _GRID-IO-U @ >= IF
+        _GRID-L-S-INVALID _GCSV-FAIL DROP EXIT
+    THEN
+    _GRID-IO-BUF @ _GCSV-POS @ + 1+ C@ 10 <> IF
+        _GRID-L-S-INVALID _GCSV-FAIL DROP EXIT
+    THEN
+    13 _GCSV-FIELD-CHAR 0= IF EXIT THEN
+    10 _GCSV-FIELD-CHAR 0= IF EXIT THEN
+    2 _GCSV-POS +! ;
+
+: _GCSV-STEP-START  ( -- )
+    _GCSV-CH @ CASE
+        [CHAR] " OF
+            -1 _GCSV-ROW-STARTED !
+            _GCSV-ST-QUOTED _GCSV-STATE ! 1 _GCSV-POS +!
+        ENDOF
+        [CHAR] , OF
+            -1 _GCSV-ROW-STARTED !
+            _GCSV-FIELD-FINISH IF 1 _GCSV-POS +! THEN
+        ENDOF
+        10 OF _GCSV-ROW-FINISH IF 1 _GCSV-POS +! THEN ENDOF
+        13 OF _GCSV-RECORD-CR ENDOF
+        _GCSV-CH @ _GCSV-FIELD-CHAR IF
+            -1 _GCSV-ROW-STARTED !
+            _GCSV-ST-UNQUOTED _GCSV-STATE ! 1 _GCSV-POS +!
         THEN
+    ENDCASE ;
+
+: _GCSV-STEP-UNQUOTED  ( -- )
+    _GCSV-CH @ CASE
+        [CHAR] " OF _GRID-L-S-INVALID _GCSV-FAIL DROP ENDOF
+        [CHAR] , OF
+            _GCSV-FIELD-FINISH IF
+                _GCSV-ST-START _GCSV-STATE ! 1 _GCSV-POS +!
+            THEN
+        ENDOF
+        10 OF _GCSV-ROW-FINISH IF 1 _GCSV-POS +! THEN ENDOF
+        13 OF _GCSV-RECORD-CR ENDOF
+        _GCSV-CH @ _GCSV-FIELD-CHAR IF 1 _GCSV-POS +! THEN
+    ENDCASE ;
+
+: _GCSV-STEP-QUOTED  ( -- )
+    _GCSV-CH @ [CHAR] " = IF
+        _GCSV-POS @ 1+ _GRID-IO-U @ < IF
+            _GRID-IO-BUF @ _GCSV-POS @ + 1+ C@ [CHAR] " = IF
+                [CHAR] " _GCSV-FIELD-CHAR IF 2 _GCSV-POS +! THEN
+                EXIT
+            THEN
+        THEN
+        _GCSV-ST-AFTER-QUOTE _GCSV-STATE ! 1 _GCSV-POS +! EXIT
+    THEN
+    _GCSV-CH @ 13 = IF _GCSV-QUOTED-CR EXIT THEN
+    _GCSV-CH @ _GCSV-FIELD-CHAR IF 1 _GCSV-POS +! THEN ;
+
+: _GCSV-STEP-AFTER-QUOTE  ( -- )
+    _GCSV-CH @ CASE
+        [CHAR] , OF
+            _GCSV-FIELD-FINISH IF
+                _GCSV-ST-START _GCSV-STATE ! 1 _GCSV-POS +!
+            THEN
+        ENDOF
+        10 OF _GCSV-ROW-FINISH IF 1 _GCSV-POS +! THEN ENDOF
+        13 OF _GCSV-RECORD-CR ENDOF
+        _GRID-L-S-INVALID _GCSV-FAIL DROP
+    ENDCASE ;
+
+: _GRID-SCAN-CSV  ( commit? -- status )
+    _GCSV-COMMIT !
+    0 _GCSV-POS ! 0 _GCSV-ROW ! 0 _GCSV-COL !
+    0 _GCSV-ROW-STARTED ! 0 _GCSV-STATUS !
+    _GCSV-ST-START _GCSV-STATE ! _GCSV-FIELD-RESET
+    _GRID-IO-BUF @ _GRID-IO-U @ UTF8-VALID? 0= IF
+        _GRID-L-S-INVALID EXIT
+    THEN
+    BEGIN
+        _GCSV-POS @ _GRID-IO-U @ < _GCSV-STATUS @ 0= AND
+    WHILE
+        _GRID-IO-BUF @ _GCSV-POS @ + C@ _GCSV-CH !
+        _GCSV-STATE @ CASE
+            _GCSV-ST-START OF _GCSV-STEP-START ENDOF
+            _GCSV-ST-UNQUOTED OF _GCSV-STEP-UNQUOTED ENDOF
+            _GCSV-ST-QUOTED OF _GCSV-STEP-QUOTED ENDOF
+            _GCSV-ST-AFTER-QUOTE OF _GCSV-STEP-AFTER-QUOTE ENDOF
+            DROP _GRID-L-S-INVALID _GCSV-FAIL DROP
+        ENDCASE
     REPEAT
-    _GCSV-FIELD-U @ 0> _GCSV-COL @ 0> OR IF _GCSV-FIELD-FINISH THEN ;
+    _GCSV-STATUS @ ?DUP IF EXIT THEN
+    _GCSV-STATE @ _GCSV-ST-QUOTED = IF _GRID-L-S-INVALID EXIT THEN
+    _GCSV-ROW-STARTED @ IF
+        _GCSV-FIELD-FINISH 0= IF _GCSV-STATUS @ EXIT THEN
+    THEN
+    _GRID-L-S-OK ;
+
+: _GRID-PARSE-CSV  ( -- status )
+    0 _GRID-SCAN-CSV DUP IF EXIT THEN DROP
+    _GRID-CLEAR-MODEL
+    -1 _GRID-SCAN-CSV ;
 
 VARIABLE _GRID-LOAD-FD
+VARIABLE _GRID-LOAD-OLD-VFS
+VARIABLE _GRID-LOAD-STATUS
+VARIABLE _GRID-LOAD-HAVE-OLD-VFS
+VARIABLE _GRID-LOAD-CLEAN-FD
+VARIABLE _GRID-LOAD-CLEAN-FAILED
+VARIABLE _GRID-LOAD-CLOSE-XT
+VARIABLE _GRID-LOAD-USE-XT
 
-: _GRID-LOAD  ( -- ior )
-    _GRID-CLEAR-MODEL
-    VFS-CUR >R _GRID-VFS @ VFS-USE
-    S" /grid.csv" VFS-OPEN
-    R> VFS-USE
-    DUP 0= IF DROP 0 EXIT THEN
+: _GRID-RESET-LOAD-DEPENDENCIES  ( -- )
+    ['] VFS-CLOSE _GRID-LOAD-CLOSE-XT !
+    ['] VFS-USE   _GRID-LOAD-USE-XT ! ;
+
+_GRID-RESET-LOAD-DEPENDENCIES
+
+: _GRID-LOAD-CLOSE-CALL  ( -- )
+    _GRID-LOAD-CLEAN-FD @ _GRID-LOAD-CLOSE-XT @ EXECUTE ;
+
+: _GRID-LOAD-RESTORE-CALL  ( -- )
+    _GRID-LOAD-OLD-VFS @ _GRID-LOAD-USE-XT @ EXECUTE ;
+
+: _GRID-READ-FILE-CLEANUP  ( -- failed? )
+    0 _GRID-LOAD-CLEAN-FAILED !
+    _GRID-LOAD-FD @ ?DUP IF
+        _GRID-LOAD-CLEAN-FD ! 0 _GRID-LOAD-FD !
+        ['] _GRID-LOAD-CLOSE-CALL CATCH IF
+            -1 _GRID-LOAD-CLEAN-FAILED !
+        THEN
+    THEN
+    _GRID-LOAD-HAVE-OLD-VFS @ IF
+        0 _GRID-LOAD-HAVE-OLD-VFS !
+        ['] _GRID-LOAD-RESTORE-CALL CATCH IF
+            -1 _GRID-LOAD-CLEAN-FAILED !
+        THEN
+    THEN
+    _GRID-LOAD-CLEAN-FAILED @ ;
+
+: _GRID-READ-FILE-BODY  ( -- status )
+    S" /grid.csv" VFS-OPEN DUP 0= IF
+        DROP _GRID-L-S-MISSING EXIT
+    THEN
     _GRID-LOAD-FD !
-    _GRID-IO-BUF @ _GRID-IO-CAP _GRID-LOAD-FD @ VFS-READ _GRID-IO-U !
-    _GRID-LOAD-FD @ VFS-CLOSE
-    _GRID-PARSE-CSV
-    0 ;
+    _GRID-LOAD-FD @ VFS-SIZE DUP 0< IF
+        DROP _GRID-L-S-IO EXIT
+    THEN
+    DUP _GRID-IO-U ! _GRID-IO-CAP > IF
+        _GRID-L-S-TOO-LARGE EXIT
+    THEN
+    _GRID-IO-BUF @ _GRID-IO-U @ _GRID-LOAD-FD @ VFS-READ-EXACT
+    IF _GRID-L-S-IO ELSE _GRID-L-S-OK THEN ;
+
+: _GRID-READ-FILE-OP  ( -- )
+    VFS-CUR _GRID-LOAD-OLD-VFS !
+    -1 _GRID-LOAD-HAVE-OLD-VFS !
+    _GRID-VFS @ _GRID-LOAD-USE-XT @ EXECUTE
+    _GRID-READ-FILE-BODY _GRID-LOAD-STATUS ! ;
+
+: _GRID-READ-FILE-TRANSACTION  ( -- status )
+    0 _GRID-LOAD-FD ! 0 _GRID-LOAD-HAVE-OLD-VFS !
+    _GRID-L-S-IO _GRID-LOAD-STATUS !
+    ['] _GRID-READ-FILE-OP CATCH IF
+        _GRID-L-S-IO _GRID-LOAD-STATUS !
+    THEN
+    _GRID-READ-FILE-CLEANUP IF _GRID-L-S-IO EXIT THEN
+    _GRID-LOAD-STATUS @ ;
+
+: _GRID-READ-FILE-TRANSACTION-CALL  ( -- status )
+    ['] _GRID-READ-FILE-TRANSACTION VFS-TRANSACTION ;
+
+: _GRID-READ-FILE  ( -- status )
+    ['] _GRID-READ-FILE-TRANSACTION-CALL CATCH ?DUP IF
+        DROP _GRID-L-S-IO
+    THEN ;
+
+: _GRID-RECOVER  ( -- status )
+    _GRID-REPLACE VREPL-RECOVER
+    DUP VREPL-S-OK = IF DROP _GRID-L-S-OK EXIT THEN
+    DUP VREPL-S-ROLLED-BACK = IF DROP _GRID-L-S-OK EXIT THEN
+    VREPL-S-COMMITTED-CLEANUP = IF
+        _GRID-L-S-OK ELSE _GRID-L-S-RECOVERY
+    THEN ;
+
+: _GRID-LOAD  ( -- status )
+    _GRID-RECOVER DUP IF -1 _GRID-SOURCE-BLOCKED ! EXIT THEN DROP
+    _GRID-READ-FILE DUP _GRID-L-S-MISSING = IF
+        DROP _GRID-CLEAR-MODEL 0 _GRID-SOURCE-BLOCKED !
+        _GRID-L-S-OK EXIT
+    THEN
+    DUP IF -1 _GRID-SOURCE-BLOCKED ! EXIT THEN DROP
+    _GRID-PARSE-CSV DUP IF -1 ELSE 0 THEN _GRID-SOURCE-BLOCKED ! ;
 
 \ ---------------------------------------------------------------------
 \ Formula parser
@@ -350,11 +544,52 @@ VARIABLE _GP-EXPR-XT
 
 ' _GP-PARSE-EXPR _GP-EXPR-XT !
 
+\ The dependency stack and its parallel error stack have one shared,
+\ explicit capacity.  _GE-PUSH checks that capacity before either write.
+CREATE _GE-CELL-STACK _GRID-EVAL-DEPTH CELLS ALLOT
+CREATE _GE-ERROR-STACK _GRID-EVAL-DEPTH CELLS ALLOT
+VARIABLE _GE-DEPTH
+VARIABLE _GE-VALUE
+VARIABLE _GE-STATUS
+VARIABLE _GE-OK
+
+: _GE-PUSH  ( cell -- cell flag )
+    _GE-DEPTH @ DUP 0< SWAP _GRID-EVAL-DEPTH >= OR IF 0 EXIT THEN
+    DUP _GE-CELL-STACK _GE-DEPTH @ CELLS + !
+    _GRID-ST-ERROR _GE-ERROR-STACK _GE-DEPTH @ CELLS + !
+    1 _GE-DEPTH +! -1 ;
+
+: _GE-CELL@  ( -- cell )
+    _GE-CELL-STACK _GE-DEPTH @ 1- CELLS + @ ;
+
+: _GE-ERROR@  ( -- status )
+    _GE-DEPTH @ 0= IF _GRID-ST-ERROR EXIT THEN
+    _GE-ERROR-STACK _GE-DEPTH @ 1- CELLS + @ ;
+
+: _GE-NOTE-ERROR  ( status -- )
+    _GE-DEPTH @ 0= IF DROP EXIT THEN
+    _GE-ERROR-STACK _GE-DEPTH @ 1- CELLS +
+    DUP @ _GRID-ST-ERROR = IF ! ELSE 2DROP THEN ;
+
+: _GE-POP  ( -- )
+    _GE-DEPTH @ 0> IF -1 _GE-DEPTH +! THEN ;
+
+: _GE-FINISH  ( value status ok -- value ok )
+    _GE-OK ! _GE-STATUS ! _GE-VALUE !
+    _GE-VALUE @ _GE-CELL@ _GC-VALUE + !
+    _GE-STATUS @ _GE-CELL@ _GC-STATUS + !
+    2 _GE-CELL@ _GC-MARK + !
+    _GE-POP
+    _GE-OK @ 0= IF _GE-STATUS @ _GE-NOTE-ERROR THEN
+    _GE-VALUE @ _GE-OK @ ;
+
 VARIABLE _GP-RESULT
 VARIABLE _GP-RESULT-OK
 
 : _GRID-EVAL-FORMULA  ( addr len -- value ok )
-    _GP-PUSH 0= IF 2DROP 0 0 EXIT THEN
+    _GP-PUSH 0= IF
+        2DROP _GRID-ST-DEPTH _GE-NOTE-ERROR 0 0 EXIT
+    THEN
     _GP-LEN ! _GP-SRC ! 0 _GP-POS ! -1 _GP-OK !
     _GP-EXPR _GP-RESULT !
     _GP-SKIP-WS
@@ -367,46 +602,33 @@ VARIABLE _GP-RESULT-OK
 \ Cell evaluator with cycle detection
 \ ---------------------------------------------------------------------
 
-CREATE _GE-CELL-STACK 20 CELLS ALLOT
-VARIABLE _GE-DEPTH
-VARIABLE _GE-VALUE
-VARIABLE _GE-STATUS
-VARIABLE _GE-OK
-
-: _GE-PUSH  ( cell -- )
-    _GE-CELL-STACK _GE-DEPTH @ CELLS + ! 1 _GE-DEPTH +! ;
-
-: _GE-CELL@  ( -- cell )
-    _GE-CELL-STACK _GE-DEPTH @ 1- CELLS + @ ;
-
-: _GE-POP  ( -- ) -1 _GE-DEPTH +! ;
-
-: _GE-FINISH  ( value status ok -- value ok )
-    _GE-OK ! _GE-STATUS ! _GE-VALUE !
-    _GE-VALUE @ _GE-CELL@ _GC-VALUE + !
-    _GE-STATUS @ _GE-CELL@ _GC-STATUS + !
-    2 _GE-CELL@ _GC-MARK + !
-    _GE-POP
-    _GE-VALUE @ _GE-OK @ ;
-
 : _GRID-EVAL-CELL  ( row col -- value ok )
     OVER 0< OVER 0< OR IF 2DROP 0 0 EXIT THEN
     OVER _GRID-ROWS >= OVER _GRID-COLS >= OR IF 2DROP 0 0 EXIT THEN
     _GRID-CELL
     DUP _GC-MARK + @ 2 = IF
-        DUP _GC-VALUE + @ SWAP _GC-STATUS + @ _GRID-ST-ERROR <> EXIT
+        DUP _GC-STATUS + @ DUP _GRID-ST-ERROR? IF
+            _GE-NOTE-ERROR DROP 0 0 EXIT
+        THEN
+        DROP _GC-VALUE + @ -1 EXIT
     THEN
     DUP _GC-MARK + @ 1 = IF
-        _GRID-ST-ERROR OVER _GC-STATUS + !
-        2 SWAP _GC-MARK + ! 0 0 EXIT
+        _GRID-ST-CYCLE OVER _GC-STATUS + !
+        2 SWAP _GC-MARK + !
+        _GRID-ST-CYCLE _GE-NOTE-ERROR 0 0 EXIT
     THEN
-    _GE-PUSH
+    _GE-PUSH 0= IF
+        _GRID-ST-DEPTH OVER _GC-STATUS + !
+        2 SWAP _GC-MARK + !
+        _GRID-ST-DEPTH _GE-NOTE-ERROR 0 0 EXIT
+    THEN
+    DROP
     1 _GE-CELL@ _GC-MARK + !
     _GE-CELL@ _GC-LEN + @ 0= IF 0 _GRID-ST-TEXT -1 _GE-FINISH EXIT THEN
     _GE-CELL@ _GC-SOURCE + C@ [CHAR] = = IF
         _GE-CELL@ _GC-SOURCE + 1+
         _GE-CELL@ _GC-LEN + @ 1- _GRID-EVAL-FORMULA
-        0= IF DROP 0 _GRID-ST-ERROR 0 _GE-FINISH
+        0= IF DROP 0 _GE-ERROR@ 0 _GE-FINISH
         ELSE _GRID-ST-FORMULA -1 _GE-FINISH THEN
         EXIT
     THEN
@@ -437,14 +659,19 @@ VARIABLE _GIO-N
 
 : _GIO-APPEND  ( addr len -- )
     _GIO-U ! _GIO-A !
-    _GRID-IO-CAP _GRID-IO-U @ - 0 MAX _GIO-U @ MIN _GIO-N !
+    _GRID-IO-ERROR @ IF EXIT THEN
+    _GIO-U @ _GRID-IO-CAP _GRID-IO-U @ - > IF
+        -1 _GRID-IO-ERROR ! EXIT
+    THEN
+    _GIO-U @ _GIO-N !
     _GIO-A @ _GRID-IO-BUF @ _GRID-IO-U @ + _GIO-N @ CMOVE
     _GIO-N @ _GRID-IO-U +! ;
 
 : _GIO-CHAR  ( c -- )
+    _GRID-IO-ERROR @ IF DROP EXIT THEN
     _GRID-IO-U @ _GRID-IO-CAP < IF
         _GRID-IO-BUF @ _GRID-IO-U @ + C! 1 _GRID-IO-U +!
-    ELSE DROP THEN ;
+    ELSE DROP -1 _GRID-IO-ERROR ! THEN ;
 
 VARIABLE _GQ-A
 VARIABLE _GQ-U
@@ -477,8 +704,8 @@ VARIABLE _GQ-U
         LOOP
     LOOP ;
 
-: _GRID-SERIALIZE  ( -- )
-    _GIO-RESET _GRID-RECALC-MAX
+: _GRID-SERIALIZE  ( -- status )
+    0 _GRID-IO-ERROR ! _GIO-RESET _GRID-RECALC-MAX
     _GRID-MAX-ROW @ 1+ 0 ?DO
         _GRID-MAX-COL @ 1+ 0 ?DO
             J I _GRID-CELL DUP _GC-SOURCE + SWAP _GC-LEN + @
@@ -486,31 +713,27 @@ VARIABLE _GQ-U
             I _GRID-MAX-COL @ < IF [CHAR] , _GIO-CHAR THEN
         LOOP
         10 _GIO-CHAR
-    LOOP ;
+    LOOP
+    _GRID-IO-ERROR @ IF
+        _GRID-L-S-CAPACITY ELSE _GRID-L-S-OK
+    THEN ;
 
-VARIABLE _GRID-SAVE-FD
-VARIABLE _GRID-SAVE-ACTUAL
 VARIABLE _GRID-SAVE-IOR
 
 : _GRID-WRITE  ( -- ior )
-    VFS-CUR >R _GRID-VFS @ VFS-USE
-    S" /grid.csv" VFS-OPEN
-    DUP 0= IF
-        DROP S" /grid.csv" _GRID-VFS @ VFS-CREATE
-        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN DROP
-        S" /grid.csv" VFS-OPEN
-        DUP 0= IF DROP R> VFS-USE -1 EXIT THEN
-    THEN
-    R> VFS-USE _GRID-SAVE-FD !
-    _GRID-SAVE-FD @ VFS-REWIND
-    0 _GRID-SAVE-FD @ VFS-TRUNCATE IF
-        _GRID-SAVE-FD @ VFS-CLOSE -2 EXIT
-    THEN
-    _GRID-IO-BUF @ _GRID-IO-U @ _GRID-SAVE-FD @ VFS-WRITE
-    _GRID-SAVE-ACTUAL !
-    _GRID-SAVE-FD @ VFS-CLOSE
-    _GRID-VFS @ VFS-SYNC DROP
-    _GRID-SAVE-ACTUAL @ _GRID-IO-U @ = IF 0 ELSE -3 THEN ;
+    _GRID-SOURCE-BLOCKED @ IF _GRID-L-S-RECOVERY EXIT THEN
+    _GRID-IO-BUF @ _GRID-IO-U @ _GRID-REPLACE VREPL-REPLACE
+    DUP VREPL-S-OK = IF DROP 0 EXIT THEN
+    DUP VREPL-S-COMMITTED-CLEANUP = IF DROP 0 EXIT THEN
+    \ A verified rollback or pre-publication I/O failure leaves the old
+    \ target authoritative and the in-memory sheet retryable.  Only states
+    \ whose winning generation is ambiguous block another save until load
+    \ recovery succeeds.
+    DUP VREPL-S-RECOVERY =
+    OVER VREPL-S-MARKER-CORRUPT = OR
+    OVER VREPL-S-UNCERTAIN = OR IF
+        -1 _GRID-SOURCE-BLOCKED !
+    THEN ;
 
 \ ---------------------------------------------------------------------
 \ UI state and status helpers
@@ -565,13 +788,20 @@ VARIABLE _GSA-N
     _GSTATE-RESET S" Grid  |  " _GSTATE-APPEND
     _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-CELL DUP _GC-STATUS + @
     CASE
+        _GRID-ST-DEPTH OF S" Depth" _GSTATE-APPEND ENDOF
+        _GRID-ST-CYCLE OF S" Cycle" _GSTATE-APPEND ENDOF
         _GRID-ST-ERROR OF S" Error" _GSTATE-APPEND ENDOF
         _GRID-ST-FORMULA OF S" Formula" _GSTATE-APPEND ENDOF
         _GRID-ST-NUMBER OF S" Number" _GSTATE-APPEND ENDOF
         DROP S" Text" _GSTATE-APPEND
     ENDCASE
     S"   |  " _GSTATE-APPEND
-    _GRID-DIRTY @ IF S" Unsaved" ELSE S" Saved" THEN _GSTATE-APPEND
+    _GRID-SOURCE-BLOCKED @ IF
+        _GRID-DIRTY @ IF S" Source blocked / Unsaved"
+        ELSE S" Source blocked" THEN
+    ELSE
+        _GRID-DIRTY @ IF S" Unsaved" ELSE S" Saved" THEN
+    THEN _GSTATE-APPEND
     _GRID-E-SBAR-STATE @ ?DUP IF
         S" text" _GRID-STATE-BUF _GRID-STATE-U @ UTUI-SET-ATTR
     THEN ;
@@ -583,8 +813,12 @@ VARIABLE _GSA-N
     ASHELL-DIRTY! ;
 
 : _GRID-SAVE  ( -- ior )
-    _GRID-SERIALIZE _GRID-WRITE DUP _GRID-SAVE-IOR !
-    0= IF 0 _GRID-DIRTY ! THEN
+    _GRID-SERIALIZE DUP IF
+        _GRID-SAVE-IOR !
+    ELSE
+        DROP _GRID-WRITE _GRID-SAVE-IOR !
+    THEN
+    _GRID-SAVE-IOR @ 0= IF 0 _GRID-DIRTY ! THEN
     _GRID-INVALIDATE
     _GRID-SAVE-IOR @ ;
 
@@ -706,7 +940,7 @@ VARIABLE _GD-TEXT-W
     32 _GD-ROW @ _GD-COL @ _GD-W @ DRW-HLINE
     _GD-W @ 1- 1 MAX _GD-TEXT-W !
     _GD-CELL @ _GC-LEN + @ 0= IF EXIT THEN
-    _GD-CELL @ _GC-STATUS + @ _GRID-ST-ERROR = IF
+    _GD-CELL @ _GC-STATUS + @ _GRID-ST-ERROR? IF
         _GD-SELECTED @ 0= IF 203 DRW-FG! THEN
         S" #ERR" _GD-ROW @ _GD-COL @ DRW-TEXT EXIT
     THEN
@@ -829,9 +1063,13 @@ VARIABLE _GRID-SUB-MODE
     _GRID-PRM-NONE _GRID-PROMPT-MODE !
     _GRID-SUB-MODE @ CASE
         _GRID-PRM-EDIT OF
-            _GRID-SUB-A @ _GRID-SUB-U @
-            _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-SET-CELL
-            _GRID-RECALCULATE _GRID-COMMIT
+            _GRID-SUB-U @ _GRID-SOURCE-CAP > IF
+                S" A Grid cell is limited to 40 bytes" 2200 ASHELL-TOAST
+            ELSE
+                _GRID-SUB-A @ _GRID-SUB-U @
+                _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-SET-CELL
+                _GRID-RECALCULATE _GRID-COMMIT
+            THEN
         ENDOF
         _GRID-PRM-GOTO OF
             _GRID-SUB-A @ _GRID-SUB-U @ _GRID-NAME>COORD
@@ -855,9 +1093,45 @@ VARIABLE _GRID-SUB-MODE
     DROP _GRID-SAVE IF S" Grid save failed" ELSE S" Grid saved" THEN
     1500 ASHELL-TOAST ;
 
+: _GRID-LOAD-ERROR-TOAST  ( status -- )
+    DUP _GRID-L-S-TOO-LARGE = IF
+        DROP S" Grid source exceeds 96 KiB; current sheet kept"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP _GRID-L-S-RECOVERY = IF
+        DROP S" Grid recovery failed; current sheet kept"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP _GRID-L-S-CAPACITY = IF
+        DROP S" Grid source exceeds 64 rows or 16 columns"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP _GRID-L-S-FIELD = IF
+        DROP S" Grid source has a field over 40 bytes"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP _GRID-L-S-INVALID = IF
+        DROP S" Grid source is malformed; current sheet kept"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DROP S" Grid read failed; current sheet kept" 2800 ASHELL-TOAST ;
+
+: _GRID-RELOAD-NOW  ( -- )
+    _GRID-LOAD DUP IF
+        _GRID-LOAD-ERROR-TOAST
+    ELSE
+        DROP _GRID-RECALCULATE 0 _GRID-DIRTY !
+        _GRID-INVALIDATE S" Grid reloaded" 1400 ASHELL-TOAST
+    THEN ;
+
 : _GRID-DO-RELOAD  ( elem -- )
-    DROP _GRID-LOAD DROP _GRID-RECALCULATE 0 _GRID-DIRTY !
-    _GRID-INVALIDATE S" Grid reloaded" 1400 ASHELL-TOAST ;
+    DROP
+    _GRID-DIRTY @ IF
+        S" Reload Grid and discard unsaved changes?" DLG-CONFIRM 0= IF
+            EXIT
+        THEN
+    THEN
+    _GRID-RELOAD-NOW ;
 
 : _GRID-DO-EDIT  ( elem -- ) DROP _GRID-BEGIN-EDIT ;
 : _GRID-DO-CLEAR-CELL  ( elem -- ) DROP _GRID-CLEAR-SELECTED ;
@@ -876,6 +1150,7 @@ VARIABLE _GRID-SUB-MODE
     DROP S" Grid - CSV worksheet with live integer formulas" 2600 ASHELL-TOAST ;
 
 VARIABLE _GRID-SOURCE-REQ
+VARIABLE _GRID-INIT-LOAD-STATUS
 
 : _GRID-SOURCE-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
@@ -919,13 +1194,19 @@ VARIABLE _GRID-SOURCE-REQ
     _GRID-PRM-NONE _GRID-PROMPT-MODE !
     0 _GRID-SEL-ROW ! 0 _GRID-SEL-COL !
     0 _GRID-SCROLL-ROW ! 0 _GRID-SCROLL-COL ! 0 _GRID-DIRTY !
+    0 _GRID-SOURCE-BLOCKED ! 0 _GRID-IO-ERROR !
     1 _GRID-VIS-COLS ! 1 _GRID-VIS-ROWS !
     VFS-CUR DUP 0= ABORT" grid: no VFS available" _GRID-VFS !
+    _GRID-VFS @ _GRID-REPLACE VREPL-INIT
+    0<> ABORT" grid: replacement initialization failed"
+    S" /grid.csv" _GRID-REPLACE VREPL-DERIVE-PATHS!
+    0<> ABORT" grid: replacement path setup failed"
+    _GRID-CLEAR-MODEL
     S" grid-body" UTUI-BY-ID _GRID-E-BODY !
     S" sbar" UTUI-BY-ID _GRID-E-SBAR !
     S" sbar-cell" UTUI-BY-ID _GRID-E-SBAR-CELL !
     S" sbar-state" UTUI-BY-ID _GRID-E-SBAR-STATE !
-    _GRID-LOAD DROP _GRID-RECALCULATE
+    _GRID-LOAD _GRID-INIT-LOAD-STATUS ! _GRID-RECALCULATE
 
     _GRID-E-SBAR @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW DUP _GRID-PROMPT-RGN !
@@ -950,7 +1231,8 @@ VARIABLE _GRID-SOURCE-REQ
     S" edit-source" ['] _GRID-DO-EDIT-SOURCE UTUI-DO!
     S" reveal-source" ['] _GRID-DO-REVEAL-SOURCE UTUI-DO!
     _GRID-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
-    _GRID-UPDATE-STATUS ;
+    _GRID-UPDATE-STATUS
+    _GRID-INIT-LOAD-STATUS @ ?DUP IF _GRID-LOAD-ERROR-TOAST THEN ;
 
 : GRID-EVENT-CB  ( event instance -- consumed? )
     _GRID-ACTIVATE
@@ -968,6 +1250,15 @@ VARIABLE _GRID-SOURCE-REQ
     _GRID-PROMPT @ WDG-DRAW ;
 
 : GRID-TICK-CB  ( instance -- ) _GRID-ACTIVATE ;
+
+: GRID-REQUEST-CLOSE-CB  ( reason instance -- decision )
+    _GRID-ACTIVATE DROP
+    _GRID-DIRTY @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
+    S" Close Grid and discard unsaved changes?" DLG-CONFIRM IF
+        APP-CLOSE-D-ALLOW
+    ELSE
+        APP-CLOSE-D-CANCEL
+    THEN ;
 
 : GRID-SHUTDOWN-CB  ( instance -- )
     _GRID-ACTIVATE
@@ -999,6 +1290,7 @@ VARIABLE _GCH-U
 : _GRID-CAP-SET-HANDLER  ( request instance -- status )
     _GRID-ACTIVATE
     DUP CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@ _GCH-U ! _GCH-A !
+    _GCH-U @ _GRID-SOURCE-CAP > IF DROP CBUS-S-FAILED EXIT THEN
     _GCH-A @ _GCH-U @ _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-SET-CELL
     _GRID-RECALCULATE _GRID-COMMIT
     DUP CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
@@ -1012,7 +1304,7 @@ VARIABLE _GCH-U
 
 : _GRID-CAP-CSV-HANDLER  ( request instance -- status )
     _GRID-ACTIVATE
-    _GRID-SERIALIZE
+    _GRID-SERIALIZE IF DROP CBUS-S-FAILED EXIT THEN
     _GRID-IO-BUF @ _GRID-IO-U @ ROT CBR.RESULT CV-STRING!
     IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
 
@@ -1132,6 +1424,7 @@ CREATE GRID-COMP-DESC COMP-DESC ALLOT
     ['] GRID-PAINT-CB OVER APP.PAINT-XT !
     ['] GRID-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
     ['] _GRID-ACTIVATE OVER APP.ACTIVATE-XT !
+    ['] GRID-REQUEST-CLOSE-CB OVER APP.REQUEST-CLOSE-XT !
     S" tui/applets/grid/grid.uidl"
     ROT DUP >R APP.UIDL-FILE-U ! R@ APP.UIDL-FILE-A !
     0 R@ APP.WIDTH ! 0 R@ APP.HEIGHT !
