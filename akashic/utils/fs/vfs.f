@@ -771,6 +771,55 @@ VARIABLE _VWR-ACT
     THEN
     _VWR-ACT @ ;
 
+\ VFS-READ-EXACT / VFS-WRITE-EXACT
+\   Complete a requested transfer across legal partial progress.  A zero,
+\   negative, or overlong result before completion fails with ior=-1.  The
+\   descriptor cursor remains advanced by any progress made before failure.
+
+VARIABLE _VRE-A
+VARIABLE _VRE-REM
+VARIABLE _VRE-FD
+VARIABLE _VRE-ACT
+VARIABLE _VRE-POS
+
+: VFS-READ-EXACT  ( buf len fd -- ior )
+    _VRE-FD ! _VRE-REM ! _VRE-A !
+    _VRE-REM @ 0< IF -1 EXIT THEN
+    _VRE-REM @ 0> _VRE-A @ 0= AND IF -1 EXIT THEN
+    BEGIN _VRE-REM @ 0> WHILE
+        _VRE-FD @ FD.CUR-LO @ _VRE-POS !
+        _VRE-A @ _VRE-REM @ _VRE-FD @ VFS-READ
+        DUP _VRE-ACT !
+        DUP 0= OVER 0< OR SWAP _VRE-REM @ > OR IF
+            _VRE-POS @ _VRE-FD @ FD.CUR-LO ! -1 EXIT
+        THEN
+        _VRE-ACT @ _VRE-A +!
+        _VRE-ACT @ NEGATE _VRE-REM +!
+    REPEAT
+    0 ;
+
+VARIABLE _VWE-A
+VARIABLE _VWE-REM
+VARIABLE _VWE-FD
+VARIABLE _VWE-ACT
+VARIABLE _VWE-POS
+
+: VFS-WRITE-EXACT  ( buf len fd -- ior )
+    _VWE-FD ! _VWE-REM ! _VWE-A !
+    _VWE-REM @ 0< IF -1 EXIT THEN
+    _VWE-REM @ 0> _VWE-A @ 0= AND IF -1 EXIT THEN
+    BEGIN _VWE-REM @ 0> WHILE
+        _VWE-FD @ FD.CUR-LO @ _VWE-POS !
+        _VWE-A @ _VWE-REM @ _VWE-FD @ VFS-WRITE
+        DUP _VWE-ACT !
+        DUP 0= OVER 0< OR SWAP _VWE-REM @ > OR IF
+            _VWE-POS @ _VWE-FD @ FD.CUR-LO ! -1 EXIT
+        THEN
+        _VWE-ACT @ _VWE-A +!
+        _VWE-ACT @ NEGATE _VWE-REM +!
+    REPEAT
+    0 ;
+
 \ =====================================================================
 \  VFS-SEEK / VFS-REWIND / VFS-TELL / VFS-SIZE
 \ =====================================================================
@@ -1305,6 +1354,13 @@ VARIABLE _VIP-D  VARIABLE _VIP-BUF  VARIABLE _VIP-CAP  VARIABLE _VIP-POS
 \ -- Patch forward reference now that _VFS-EVICT is defined --
 ' _VFS-EVICT  _VFS-EVICT-XT !
 
+\ VFS-TRANSACTION ( xt -- ... )
+\   Execute an arbitrary multi-call VFS operation as one exclusion region.
+\   The guarded build replaces this fallback with a recursive _vfs-guard
+\   wrapper below.  Results and THROW behavior are those of xt.
+: VFS-TRANSACTION  ( xt -- ... )
+    EXECUTE ;
+
 \ =====================================================================
 \  Guard Section (opt-in concurrency)
 \ =====================================================================
@@ -1326,6 +1382,8 @@ GUARD _vfs-guard
 ' VFS-CLOSE        CONSTANT _vfs-close-xt
 ' VFS-READ         CONSTANT _vfs-read-xt
 ' VFS-WRITE        CONSTANT _vfs-write-xt
+' VFS-READ-EXACT   CONSTANT _vfs-read-exact-xt
+' VFS-WRITE-EXACT  CONSTANT _vfs-write-exact-xt
 ' VFS-SEEK         CONSTANT _vfs-seek-xt
 ' VFS-REWIND       CONSTANT _vfs-rewind-xt
 ' VFS-TELL         CONSTANT _vfs-tell-xt
@@ -1342,6 +1400,7 @@ GUARD _vfs-guard
 ' VFS-SYNC         CONSTANT _vfs-sync-xt
 ' VFS-SET-HWM      CONSTANT _vfs-set-hwm-xt
 ' VFS-INODE-PATH   CONSTANT _vfs-inode-path-xt
+' VFS-TRANSACTION  CONSTANT _vfs-transaction-xt
 
 : VFS-USE          _vfs-use-xt      _vfs-guard WITH-GUARD ;
 : VFS-CUR          _vfs-cur-xt      _vfs-guard WITH-GUARD ;
@@ -1352,6 +1411,8 @@ GUARD _vfs-guard
 : VFS-CLOSE        _vfs-close-xt    _vfs-guard WITH-GUARD ;
 : VFS-READ         _vfs-read-xt     _vfs-guard WITH-GUARD ;
 : VFS-WRITE        _vfs-write-xt    _vfs-guard WITH-GUARD ;
+: VFS-READ-EXACT   _vfs-read-exact-xt _vfs-guard WITH-GUARD ;
+: VFS-WRITE-EXACT  _vfs-write-exact-xt _vfs-guard WITH-GUARD ;
 : VFS-SEEK         _vfs-seek-xt     _vfs-guard WITH-GUARD ;
 : VFS-REWIND       _vfs-rewind-xt   _vfs-guard WITH-GUARD ;
 : VFS-TELL         _vfs-tell-xt     _vfs-guard WITH-GUARD ;
@@ -1368,5 +1429,6 @@ GUARD _vfs-guard
 : VFS-SYNC         _vfs-sync-xt     _vfs-guard WITH-GUARD ;
 : VFS-SET-HWM      _vfs-set-hwm-xt  _vfs-guard WITH-GUARD ;
 : VFS-INODE-PATH   _vfs-inode-path-xt _vfs-guard WITH-GUARD ;
+: VFS-TRANSACTION  _vfs-transaction-xt _vfs-guard WITH-GUARD ;
 
 [THEN] [THEN]

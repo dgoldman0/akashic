@@ -40,7 +40,7 @@ REQUIRE utils/fs/vfs.f
 | **Binding-dispatched** | The VFS knows nothing about sectors, DMA, or on-disk formats.  Actual byte transfer is delegated to a vtable of 10 execution tokens. |
 | **Lazy tree** | Directories are populated on first descent, not at mount time.  A binding for a 2 TiB volume materialises only the directories actually traversed. |
 | **No fixed limits** | Inode count, children per directory, and path depth are bounded only by arena capacity.  Slab pages chain on demand. |
-| **Concurrent-safe** | Optional guard section wraps all public words in a mutex when `GUARDED` is defined. |
+| **Concurrent-safe** | Optional guard section wraps all public words in a recursive cross-core guard when `GUARDED` is defined. Multi-call mutations use `VFS-TRANSACTION`. |
 
 ---
 
@@ -194,6 +194,25 @@ VFS-WRITE  ( buf len fd -- actual )
 Write `len` bytes from `buf` at the cursor position.  Advances cursor.
 Updates inode size if the write extends the file.
 
+### VFS-READ-EXACT / VFS-WRITE-EXACT
+
+```forth
+VFS-READ-EXACT   ( buf len fd -- ior )
+VFS-WRITE-EXACT  ( buf len fd -- ior )
+```
+
+Complete exactly `len` bytes by repeating the binding-dispatched operation
+while it makes legal partial progress. They return `0` only after the whole
+request completes. A zero, negative, or greater-than-requested transfer count
+before completion returns `-1`; the cursor movement from that invalid call is
+undone while prior valid progress remains advanced. A negative length, or a
+null buffer with nonzero length, also returns `-1`. Zero-length transfers are
+valid.
+
+These words are completion helpers, not rollback transactions: bytes and
+inode size already changed by a binding are not reverted on error. In a
+`GUARDED` build the complete loop is one recursive VFS guard region.
+
 ### VFS-SEEK
 ```forth
 VFS-SEEK  ( pos fd -- )
@@ -291,6 +310,22 @@ Print metadata for the named path (type, size, timestamps).
 
 ## Sync & Eviction
 
+### VFS-TRANSACTION
+
+```forth
+VFS-TRANSACTION  ( xt -- ... )
+```
+
+Execute `xt` as one VFS exclusion region. In a `GUARDED` build the recursive
+VFS guard remains held across every public VFS call made by `xt`, including
+changes to the process-global `VFS-CUR` selector. Results are preserved and a
+`THROW` releases the guard before it propagates. Nested public VFS calls and
+nested transactions by the same execution owner are supported.
+
+When `GUARDED` is absent this word is a plain `EXECUTE` compatibility
+fallback; it provides grouping but no cross-core exclusion. Components that
+can run concurrently must enable guarding in their production image.
+
 ### VFS-SYNC
 ```forth
 VFS-SYNC  ( vfs -- ior )
@@ -373,6 +408,8 @@ copy bytes from/to an arena-allocated content buffer stored in
 | `VFS-CLOSE` | `( fd -- )` | Close file |
 | `VFS-READ` | `( buf len fd -- actual )` | Read bytes |
 | `VFS-WRITE` | `( buf len fd -- actual )` | Write bytes |
+| `VFS-READ-EXACT` | `( buf len fd -- ior )` | Complete an exact read across partial transfers |
+| `VFS-WRITE-EXACT` | `( buf len fd -- ior )` | Complete an exact write across partial transfers |
 | `VFS-SEEK` | `( pos fd -- )` | Set cursor |
 | `VFS-REWIND` | `( fd -- )` | Cursor → 0 |
 | `VFS-TELL` | `( fd -- u )` | Get cursor |
@@ -386,5 +423,6 @@ copy bytes from/to an arena-allocated content buffer stored in
 | `VFS-DIR` | `( vfs -- )` | List cwd |
 | `VFS-CD` | `( c-addr u vfs -- ior )` | Change directory |
 | `VFS-STAT` | `( c-addr u vfs -- )` | Print metadata |
+| `VFS-TRANSACTION` | `( xt -- ... )` | Run a multi-call VFS exclusion region |
 | `VFS-SYNC` | `( vfs -- ior )` | Flush dirty inodes |
 | `VFS-SET-HWM` | `( n vfs -- )` | Set eviction threshold |
