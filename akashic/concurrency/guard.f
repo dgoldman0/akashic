@@ -1,30 +1,34 @@
-\ guard.f — Non-Reentrant Guards for KDOS / Megapad-64
+\ guard.f — Recursive Cross-Core Guards for KDOS / Megapad-64
 \
-\ A guard is a named mutual-exclusion wrapper.  Module authors
-\ attach guards to words to ensure non-reentrant access to shared
-\ state (e.g., shared VARIABLEs in fp16.f, mat2d.f, MMIO registers).
+\ A guard is a named mutual-exclusion wrapper for shared state.  Guard
+\ ownership is the pair (hardware core, KDOS task).  BIOS worker cores do
+\ not have KDOS task descriptors, so their task half is deliberately zero;
+\ the core half still keeps zero-task workers distinct.
+\
+\ Guards are recursive for the same execution owner.  This is required by
+\ Akashic's public wrapper pattern, where a guarded public word may call
+\ another guarded public word protected by the same guard.
+\
+\ Metadata transitions are serialized by EVT-LOCK.  That hardware lock is
+\ held only for the few aligned loads/stores that claim, recurse, or release
+\ a guard.  It is never held across a semaphore/event operation, YIELD?, the
+\ protected body, CATCH, or THROW.
 \
 \ Two flavors:
-\   GUARD          — spinning guard (busy-waits via SPIN@ style loop)
-\   GUARD-BLOCKING — blocking guard (yields via embedded semaphore)
+\   GUARD          — spinning guard (retry + YIELD?)
+\   GUARD-BLOCKING — semaphore-backed guard for longer waits
 \
-\ Both detect re-entry and ABORT instead of deadlocking.
+\ Data structure — spinning guard (4 cells = 32 bytes):
+\   +0   depth       0 = free, positive = recursive hold depth
+\   +8   owner-core  hardware core ID of holder
+\   +16  owner-task  core-0 KDOS task descriptor, or 0
+\   +24  mode        0 = spin, 1 = blocking
 \
-\ Data structure — spinning guard (3 cells = 24 bytes):
-\   +0   flag     0 = free, -1 = held
-\   +8   owner    task descriptor of holder, or 0
-\   +16  mode     0 = spin, 1 = blocking
+\ Data structure — blocking guard (4 cells + semaphore = 72 bytes):
+\   +0..+24          fields above
+\   +32              embedded 1-count semaphore (5 cells = 40 bytes)
 \
-\ Data structure — blocking guard (3 cells + semaphore = 64 bytes):
-\   +0   flag     0 = free, -1 = held
-\   +8   owner    task descriptor of holder, or 0
-\   +16  mode     0 = spin, 1 = blocking
-\   +24  sem      embedded 1-count semaphore (5 cells = 40 bytes)
-\
-\ CRITICAL: PAUSE and TASK-YIELD are BIOS hardware coroutine words.
-\ Guards use KDOS YIELD? for cooperative spinning — different mechanism.
-\
-\ Dependencies: semaphore.f (for GUARD-BLOCKING only)
+\ Dependencies: semaphore.f (and event.f transitively)
 \
 \ Prefix: GUARD-  (public API)
 \         _GRD-   (internal helpers)
@@ -39,130 +43,242 @@ PROVIDED akashic-guard
 \  Constants
 \ =====================================================================
 
-3 CONSTANT _GRD-CELLS-SPIN         \ cells for spinning guard
-8 CONSTANT _GRD-CELLS-BLOCK        \ cells for blocking guard (3 + 5 sem)
-24 CONSTANT _GRD-SIZE-SPIN         \ bytes
-64 CONSTANT _GRD-SIZE-BLOCK        \ bytes
+4 CONSTANT _GRD-CELLS-SPIN
+9 CONSTANT _GRD-CELLS-BLOCK
+32 CONSTANT _GRD-SIZE-SPIN
+72 CONSTANT _GRD-SIZE-BLOCK
+
+\ Guard metadata shares event.f's hardware synchronization lock.  Guard
+\ code never calls an event/semaphore/yield word while this lock is held.
+EVT-LOCK CONSTANT _GRD-META-LOCK
+
+-257 CONSTANT GUARD-E-NOT-OWNER
 
 \ =====================================================================
 \  Field Accessors
 \ =====================================================================
 
-: _GRD-FLAG   ( guard -- addr )   ;          \ +0  flag cell
-: _GRD-OWNER  ( guard -- addr )   8 + ;      \ +8  owner cell
-: _GRD-MODE   ( guard -- addr )   16 + ;     \ +16 mode cell
-: _GRD-SEM    ( guard -- sem )    24 + ;     \ +24 embedded semaphore
+: _GRD-DEPTH       ( guard -- addr )   ;          \ +0
+: _GRD-OWNER-CORE  ( guard -- addr )   8 + ;      \ +8
+: _GRD-OWNER-TASK  ( guard -- addr )   16 + ;     \ +16
+: _GRD-MODE        ( guard -- addr )   24 + ;     \ +24
+: _GRD-SEM         ( guard -- sem )    32 + ;     \ +32
+
+\ Compatibility aliases for code which inspected the old internal layout.
+: _GRD-FLAG   ( guard -- addr )   _GRD-DEPTH ;
+: _GRD-OWNER  ( guard -- addr )   _GRD-OWNER-TASK ;
 
 \ =====================================================================
-\  GUARD — Defining Word (spinning)
+\  Defining Words
 \ =====================================================================
 
 \ GUARD ( "name" -- )
-\   Create a named spinning guard, initially free.
-\   Spinning guards busy-wait with YIELD? — suitable for short
-\   critical sections where contention is rare.
-\
-\   Example:   GUARD fp16-guard
+\   Create an initially free spinning guard.
 
 : GUARD  ( "name" -- )
     CREATE
-        0 ,          \ flag = free
-        0 ,          \ owner = none
+        0 ,          \ depth = free
+        0 ,          \ owner core
+        0 ,          \ owner task
         0 ,          \ mode = spin
     DOES> ;
 
-\ =====================================================================
-\  GUARD-BLOCKING — Defining Word (blocking)
-\ =====================================================================
-
 \ GUARD-BLOCKING ( "name" -- )
-\   Create a named blocking guard, initially free.
-\   Blocking guards yield via semaphore wait — suitable for longer
-\   critical sections or when spinning wastes too many cycles.
-\
-\   The embedded semaphore starts with count 1 (one permit).
-\
-\   Example:   GUARD-BLOCKING fs-guard
+\   Create an initially free semaphore-backed guard.  Recursive entry does
+\   not consume another semaphore permit.
 
 : GUARD-BLOCKING  ( "name" -- )
     CREATE
-        0 ,          \ flag = free
-        0 ,          \ owner = none
+        0 ,          \ depth = free
+        0 ,          \ owner core
+        0 ,          \ owner task
         1 ,          \ mode = blocking
         \ Inline a 1-count semaphore (5 cells = 40 bytes)
         1 ,          \ sem +0: count = 1
-        0 ,          \ sem +8: event flag = 0 (unset)
+        0 ,          \ sem +8: event flag = 0
         0 ,          \ sem +16: event wait-count = 0
         0 ,          \ sem +24: event waiter-0 = 0
         0 ,          \ sem +32: event waiter-1 = 0
     DOES> ;
 
 \ =====================================================================
-\  GUARD-ACQUIRE — Acquire a Guard
+\  Owner Identity and Atomic Metadata Helpers
 \ =====================================================================
+
+\ CURRENT-TASK is a core-0 scheduler variable, not per-core TLS.  A BIOS
+\ worker therefore never reads it as its identity.  There is one dispatched
+\ execution at a time on each worker core, so (COREID, 0) is unambiguous.
+
+: _GRD-CURRENT-TASK  ( -- task )
+    COREID 0= IF  CURRENT-TASK @  ELSE  0  THEN ;
+
+\ _GRD-MINE-LOCKED? ( guard -- flag )
+\   Caller holds _GRD-META-LOCK.
+
+: _GRD-MINE-LOCKED?  ( guard -- flag )
+    DUP _GRD-DEPTH @ 0= IF  DROP 0 EXIT  THEN
+    DUP _GRD-OWNER-CORE @ COREID <> IF  DROP 0 EXIT  THEN
+    _GRD-OWNER-TASK @ _GRD-CURRENT-TASK = ;
+
+\ _GRD-CLAIM-LOCKED ( guard -- )
+\   Publish owner fields before making the positive depth visible.  Caller
+\   holds _GRD-META-LOCK and has already established that depth is zero.
+
+: _GRD-CLAIM-LOCKED  ( guard -- )
+    COREID OVER _GRD-OWNER-CORE !
+    _GRD-CURRENT-TASK OVER _GRD-OWNER-TASK !
+    1 SWAP _GRD-DEPTH ! ;
+
+\ _GRD-TRY-META ( guard -- flag )
+\   Atomically claim a free guard or recurse for the same owner.
+
+: _GRD-TRY-META  ( guard -- flag )
+    _GRD-META-LOCK LOCK
+    DUP _GRD-DEPTH @ 0= IF
+        DUP _GRD-CLAIM-LOCKED
+        _GRD-META-LOCK UNLOCK
+        DROP -1 EXIT
+    THEN
+    DUP _GRD-MINE-LOCKED? IF
+        1 OVER _GRD-DEPTH +!
+        _GRD-META-LOCK UNLOCK
+        DROP -1 EXIT
+    THEN
+    _GRD-META-LOCK UNLOCK
+    DROP 0 ;
+
+\ _GRD-TRY-REENTER ( guard -- flag )
+\   Atomically recurse only; never claims a free guard.  Blocking guards use
+\   this before touching their semaphore permit.
+
+: _GRD-TRY-REENTER  ( guard -- flag )
+    _GRD-META-LOCK LOCK
+    DUP _GRD-MINE-LOCKED? IF
+        1 OVER _GRD-DEPTH +!
+        _GRD-META-LOCK UNLOCK
+        DROP -1 EXIT
+    THEN
+    _GRD-META-LOCK UNLOCK
+    DROP 0 ;
+
+\ _GRD-TRY-CLAIM ( guard -- flag )
+\   Atomically claim only if free; never recurses.  For blocking guards the
+\   caller must already own the embedded semaphore permit.
+
+: _GRD-TRY-CLAIM  ( guard -- flag )
+    _GRD-META-LOCK LOCK
+    DUP _GRD-DEPTH @ 0= IF
+        DUP _GRD-CLAIM-LOCKED
+        _GRD-META-LOCK UNLOCK
+        DROP -1 EXIT
+    THEN
+    _GRD-META-LOCK UNLOCK
+    DROP 0 ;
+
+\ =====================================================================
+\  Acquisition
+\ =====================================================================
+
+\ GUARD-TRY-ACQUIRE ( guard -- flag )
+\   Attempt one acquisition without waiting.  A recursive acquisition by
+\   the same owner succeeds and increments depth.
+
+: GUARD-TRY-ACQUIRE  ( guard -- flag )
+    DUP _GRD-MODE @ IF
+        \ Recursive entry must not consume a second semaphore permit.
+        DUP _GRD-TRY-REENTER IF  DROP -1 EXIT  THEN
+        \ The semaphore and metadata each use EVT-LOCK, but in disjoint
+        \ calls: neither lock hold spans the other operation.
+        DUP _GRD-SEM SEM-TRYWAIT 0= IF  DROP 0 EXIT  THEN
+        DUP _GRD-TRY-CLAIM IF  DROP -1 EXIT  THEN
+        \ Defensive rollback if metadata and permit ever disagree.
+        DUP _GRD-SEM SEM-SIGNAL
+        DROP 0 EXIT
+    THEN
+    _GRD-TRY-META ;
+
+\ _GRD-ACQUIRE-BLOCKING ( guard -- )
+\   Wait for the binary permit, then atomically publish ownership.
+
+: _GRD-ACQUIRE-BLOCKING  ( guard -- )
+    DUP GUARD-TRY-ACQUIRE IF  DROP EXIT  THEN
+    BEGIN
+        \ SEM-WAIT relies on a transient EVT-PULSE.  A bounded semaphore
+        \ retry also yields cooperatively, but rechecks the count after each
+        \ yield and therefore cannot miss its only wakeup.
+        DUP _GRD-SEM 1 SEM-WAIT-TIMEOUT IF
+            DUP _GRD-TRY-CLAIM IF  DROP EXIT  THEN
+            \ A claim failure is not expected, but never leak the permit.
+            DUP _GRD-SEM SEM-SIGNAL
+        THEN
+    AGAIN ;
 
 \ GUARD-ACQUIRE ( guard -- )
-\   Acquire the guard.  If the same task already holds it, the
-\   nesting depth is incremented (recursive entry) — this allows
-\   higher-level wrappers to call lower-level guarded words safely.
-\
-\   For spinning guards:  busy-wait on the flag cell with YIELD?.
-\   For blocking guards:  SEM-WAIT on the embedded semaphore.
+\   Wait until acquired.  Same-owner entry is recursive.
 
 : GUARD-ACQUIRE  ( guard -- )
-    \ Re-entry check: if guard is held AND owner matches current task
-    DUP _GRD-FLAG @ IF
-        DUP _GRD-OWNER @ CURRENT-TASK @ = IF
-            \ Same-task re-entry: increment depth and return
-            _GRD-FLAG DUP @ 1 + SWAP ! EXIT
+    DUP _GRD-MODE @ IF  _GRD-ACQUIRE-BLOCKING EXIT  THEN
+    BEGIN
+        DUP GUARD-TRY-ACQUIRE 0=
+    WHILE
+        YIELD?
+    REPEAT
+    DROP ;
+
+\ GUARD-ACQUIRE-TIMEOUT ( guard ms -- flag )
+\   Attempt acquisition for at most ms milliseconds.  The first try is
+\   immediate, so a zero timeout can still acquire a free guard.  Timeout
+\   polling never holds _GRD-META-LOCK across YIELD?.
+
+: GUARD-ACQUIRE-TIMEOUT  ( guard ms -- flag )
+    DUP 0< IF  DROP 0  THEN
+    EPOCH@ + >R
+    BEGIN
+        DUP GUARD-TRY-ACQUIRE IF
+            R> DROP DROP -1 EXIT
         THEN
-    THEN
-    DUP _GRD-MODE @ IF
-        \ Blocking mode: wait on semaphore
-        DUP _GRD-SEM SEM-WAIT
-    ELSE
-        \ Spinning mode: busy-wait on flag
-        DUP _GRD-FLAG
-        BEGIN DUP @ WHILE YIELD? REPEAT
-        DROP
-    THEN
-    \ Claim it (depth = 1)
-    1 OVER _GRD-FLAG !
-    CURRENT-TASK @ SWAP _GRD-OWNER ! ;
+        EPOCH@ R@ >= IF
+            R> DROP DROP 0 EXIT
+        THEN
+        YIELD?
+    AGAIN ;
 
 \ =====================================================================
-\  GUARD-RELEASE — Release a Guard
+\  Release
 \ =====================================================================
 
 \ GUARD-RELEASE ( guard -- )
-\   Release the guard.  If nesting depth > 1, decrements the depth.
-\   If depth == 1, clears owner and flag (full release).
-\   For blocking guards, also signals the embedded semaphore.
+\   Decrement recursive depth, or fully release at depth one.  Releasing a
+\   free guard or another execution owner's guard throws
+\   GUARD-E-NOT-OWNER.  A blocking guard's semaphore is signaled only after
+\   the metadata lock has been released.
 
 : GUARD-RELEASE  ( guard -- )
-    DUP _GRD-FLAG @ 1 > IF
-        \ Nested: decrement depth
-        _GRD-FLAG DUP @ 1 - SWAP ! EXIT
+    _GRD-META-LOCK LOCK
+    DUP _GRD-MINE-LOCKED? 0= IF
+        _GRD-META-LOCK UNLOCK
+        DROP GUARD-E-NOT-OWNER THROW
     THEN
-    \ Depth was 1: full release
-    0 OVER _GRD-OWNER !     \ clear owner
-    0 OVER _GRD-FLAG !      \ clear flag
-    DUP _GRD-MODE @ IF
-        _GRD-SEM SEM-SIGNAL \ wake one blocked waiter
-    ELSE
-        DROP
-    THEN ;
+    DUP _GRD-DEPTH @ 1 > IF
+        -1 OVER _GRD-DEPTH +!
+        _GRD-META-LOCK UNLOCK
+        DROP EXIT
+    THEN
+    \ Clear owner first and publish free depth last.
+    0 OVER _GRD-OWNER-TASK !
+    0 OVER _GRD-OWNER-CORE !
+    0 OVER _GRD-DEPTH !
+    DUP _GRD-MODE @ >R
+    _GRD-META-LOCK UNLOCK
+    R> IF  _GRD-SEM SEM-SIGNAL  ELSE  DROP  THEN ;
 
 \ =====================================================================
-\  WITH-GUARD — RAII-Style Execute Under Guard
+\  Scoped Execution
 \ =====================================================================
 
 \ WITH-GUARD ( xt guard -- )
-\   Acquire guard, execute xt, release guard.
-\   If xt THROWs, the guard is still released before re-throw.
-\
-\   Example:
-\     ['] my-fp16-op  fp16-guard WITH-GUARD
+\   Acquire guard, execute xt, and release on both normal and exceptional
+\   exits.  Body results below CATCH's status cell are preserved.
 
 : WITH-GUARD  ( xt guard -- )
     DUP >R GUARD-ACQUIRE
@@ -172,56 +288,58 @@ PROVIDED akashic-guard
     DROP ;
 
 \ =====================================================================
-\  GUARD-HELD? — Query Guard Status
+\  Queries and Debugging
 \ =====================================================================
 
-\ GUARD-HELD? ( guard -- flag )
-\   TRUE (-1) if the guard is currently held, FALSE (0) otherwise.
-\   Lock-free read — just reads the flag cell.
+\ GUARD-HELD? is a lock-free aligned snapshot.  It is suitable for status
+\ display, not for making an acquisition decision.
 
 : GUARD-HELD?  ( guard -- flag )
-    _GRD-FLAG @ 0<> ;
-
-\ =====================================================================
-\  GUARD-MINE? — Am I the Holder?
-\ =====================================================================
-
-\ GUARD-MINE? ( guard -- flag )
-\   TRUE (-1) if the current task holds this guard.
+    _GRD-DEPTH @ 0<> ;
 
 : GUARD-MINE?  ( guard -- flag )
-    DUP _GRD-FLAG @ 0= IF DROP 0 EXIT THEN
-    _GRD-OWNER @ CURRENT-TASK @ = ;
+    _GRD-META-LOCK LOCK
+    DUP _GRD-MINE-LOCKED?
+    _GRD-META-LOCK UNLOCK
+    SWAP DROP ;
 
-\ =====================================================================
-\  GUARD-INFO — Debug Display
-\ =====================================================================
+\ Take a coherent metadata snapshot, then print without holding EVT-LOCK.
 
-\ GUARD-INFO ( guard -- )
-\   Print guard status.
+: _GRD-SNAPSHOT  ( guard -- depth core task mode )
+    _GRD-META-LOCK LOCK
+    DUP _GRD-DEPTH @
+    OVER _GRD-OWNER-CORE @
+    2 PICK _GRD-OWNER-TASK @
+    3 PICK _GRD-MODE @
+    _GRD-META-LOCK UNLOCK
+    4 ROLL DROP ;
 
 : GUARD-INFO  ( guard -- )
+    _GRD-SNAPSHOT
     ." [guard "
-    DUP _GRD-MODE @ IF ." blocking" ELSE ." spin" THEN
+    IF  ." blocking"  ELSE  ." spin"  THEN
     ."  "
-    DUP GUARD-HELD? IF
-        ." HELD owner="
-        DUP _GRD-OWNER @ .
+    2 PICK IF
+        ." HELD core=" OVER .
+        ." task=" DUP .
+        ." depth=" 2 PICK .
     ELSE
         ." FREE"
     THEN
     ." ]" CR
-    DROP ;
+    2DROP DROP ;
 
 \ =====================================================================
 \  Quick Reference
 \ =====================================================================
 \
-\  GUARD             ( "name" -- )           Create spinning guard
-\  GUARD-BLOCKING    ( "name" -- )           Create blocking guard
-\  GUARD-ACQUIRE     ( guard -- )            Acquire (recursive nesting OK)
-\  GUARD-RELEASE     ( guard -- )            Release
-\  WITH-GUARD        ( xt guard -- )         RAII execute under guard
-\  GUARD-HELD?       ( guard -- flag )       Is guard held?
-\  GUARD-MINE?       ( guard -- flag )       Am I the holder?
-\  GUARD-INFO        ( guard -- )            Debug display
+\  GUARD                  ( "name" -- )       Create spinning guard
+\  GUARD-BLOCKING         ( "name" -- )       Create blocking guard
+\  GUARD-TRY-ACQUIRE      ( guard -- flag )   Acquire without waiting
+\  GUARD-ACQUIRE          ( guard -- )        Acquire, waiting as needed
+\  GUARD-ACQUIRE-TIMEOUT  ( guard ms -- flag) Bounded acquisition
+\  GUARD-RELEASE          ( guard -- )        Release one recursion level
+\  WITH-GUARD             ( xt guard -- )     Exception-safe scoped use
+\  GUARD-HELD?            ( guard -- flag )   Lock-free status snapshot
+\  GUARD-MINE?            ( guard -- flag )   Current owner?
+\  GUARD-INFO             ( guard -- )        Debug display

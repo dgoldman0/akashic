@@ -1,110 +1,90 @@
-# akashic-guard — Non-Reentrant Guards for KDOS / Megapad-64
+# akashic-guard — Recursive cross-core guards
 
-Declarative mutual-exclusion wrappers for Forth words that access
-shared state.  A guard ensures that only one task at a time can execute
-a protected region, and detects (and aborts on) re-entry instead of
-deadlocking.
+`guard.f` provides statically declared mutual-exclusion guards for KDOS and
+Megapad-64. A guard serializes access by an execution owner identified by the
+pair `(hardware core, KDOS task)` and supports recursive acquisition by that
+same owner.
 
 ```forth
 REQUIRE guard.f
 ```
 
-`PROVIDED akashic-guard` — safe to include multiple times.
+`PROVIDED akashic-guard` makes repeated inclusion safe.
 
----
+## Contract
 
-## Table of Contents
+| Property | Contract |
+|---|---|
+| Cross-core exclusion | Claim, recursion, and release metadata transitions are serialized by a hardware spinlock. |
+| Owner identity | Core ID plus the core-0 KDOS task descriptor. BIOS workers use `(COREID, 0)`, so different zero-task workers remain distinct. |
+| Recursive entry | The same execution owner may acquire repeatedly; each release removes one level. |
+| Non-owner release | Releasing a free guard or another owner's guard throws `GUARD-E-NOT-OWNER` (`-257`). |
+| Scoped cleanup | `WITH-GUARD` releases before propagating a body `THROW`. |
+| Coroutine boundary | Ownership and a live `WITH-GUARD` frame must not cross BIOS `PAUSE` or `TASK-YIELD`. |
+| Allocation | Guard declarations allocate static dictionary storage only. |
+| Publication | A full release publishes writes made in the protected body before a later successful acquisition. |
 
-- [Design Principles](#design-principles)
-- [Memory Layout](#memory-layout)
-- [Creation](#creation)
-- [Acquire / Release](#acquire--release)
-- [RAII — WITH-GUARD](#raii--with-guard)
-- [Query](#query)
-- [Debug](#debug)
-- [Concurrency Model](#concurrency-model)
-- [Constraints](#constraints)
-- [Quick Reference](#quick-reference)
+Recursive behavior is intentional. Akashic public wrappers frequently call
+lower-level public words protected by the same module guard. Treating this as
+an error would either deadlock those wrappers or require unsafe unguarded
+backdoors.
 
----
+## Memory layout
 
-## Design Principles
+### Spinning guard — 4 cells / 32 bytes
 
-| Principle | Implementation |
-|-----------|---------------|
-| **Two flavors** | Spinning guard (busy-wait + `YIELD?`) or blocking guard (semaphore-backed, yields). |
-| **Re-entry detection** | If the current task already holds the guard, `GUARD-ACQUIRE` throws -257 instead of deadlocking. |
-| **RAII cleanup** | `WITH-GUARD` uses `CATCH` to guarantee release even on `THROW`. |
-| **Zero heap allocation** | Guards are statically declared with defining words. |
-| **Prefix convention** | Public: `GUARD-`.  Internal: `_GRD-`. |
-| **Building block** | Protects shared `VARIABLE`s in fp16.f, mat2d.f, MMIO wrappers, etc. |
+| Offset | Field | Meaning |
+|---:|---|---|
+| 0 | depth | `0` when free; positive recursive depth while held |
+| 8 | owner-core | Hardware core ID of the holder |
+| 16 | owner-task | Core-0 KDOS task descriptor, or `0` |
+| 24 | mode | `0`, spinning |
 
----
+### Blocking guard — 9 cells / 72 bytes
 
-## Memory Layout
+The first four cells are identical. At offset 32 is an embedded five-cell,
+one-count semaphore; mode is `1`.
 
-### Spinning Guard — 3 cells = 24 bytes
-
-```
-Offset  Size   Field
-──────  ─────  ─────────────
-0       8      flag     (0 = free, -1 = held)
-8       8      owner    (task descriptor of holder, or 0)
-16      8      mode     (0 = spin)
-```
-
-### Blocking Guard — 8 cells = 64 bytes
-
-```
-Offset  Size   Field
-──────  ─────  ─────────────
-0       8      flag     (0 = free, -1 = held)
-8       8      owner    (task descriptor of holder, or 0)
-16      8      mode     (1 = blocking)
-24      40     sem      (embedded 1-count semaphore)
-```
-
-The embedded semaphore starts with count 1 (one permit).  When the
-guard is acquired, `SEM-WAIT` decrements the permit to 0.  A second
-acquirer blocks on the semaphore until the first releases.
-
----
+The old internal names `_GRD-FLAG` and `_GRD-OWNER` remain compatibility
+aliases for `_GRD-DEPTH` and `_GRD-OWNER-TASK`. Code outside the guard module
+should use the public query words instead of inspecting these fields.
 
 ## Creation
 
-### `GUARD`
-
 ```forth
-GUARD ( "name" -- )
+GUARD short-state-guard
+GUARD-BLOCKING longer-state-guard
 ```
 
-Create a named **spinning** guard, initially free.  Spinning guards
-busy-wait with `YIELD?` — suitable for short critical sections where
-contention is rare.
+`GUARD` retries with `YIELD?`, the compatibility name for KDOS
+`CORE-CHECKPOINT`, when another owner holds it. It is suitable for short
+critical sections with rare contention. On secondary full cores the checkpoint
+only acknowledges that worker's preemption flag; it does not enter the core-0
+scheduler or touch `CURRENT-TASK`.
+
+`GUARD-BLOCKING` waits through an embedded semaphore. Its acquisition loop uses
+short `SEM-WAIT-TIMEOUT` retries, which yield and recheck the permit instead of
+depending on observing a transient event pulse. Recursive entry bypasses the
+semaphore, so it does not consume an additional permit.
+
+## Acquire and release
+
+### `GUARD-TRY-ACQUIRE`
 
 ```forth
-GUARD fp16-guard
-GUARD mmio-guard
+GUARD-TRY-ACQUIRE ( guard -- acquired? )
 ```
 
-### `GUARD-BLOCKING`
+Make one non-blocking attempt. It returns true if the caller claimed a free
+guard or recursively entered its own guard. A successful call must eventually
+be balanced by `GUARD-RELEASE`.
 
 ```forth
-GUARD-BLOCKING ( "name" -- )
+cache-guard GUARD-TRY-ACQUIRE IF
+    update-cache
+    cache-guard GUARD-RELEASE
+THEN
 ```
-
-Create a named **blocking** guard, initially free.  Blocking guards
-yield via an embedded semaphore — suitable for longer critical sections
-or when spinning would waste too many cycles.
-
-```forth
-GUARD-BLOCKING fs-guard
-GUARD-BLOCKING hash-guard
-```
-
----
-
-## Acquire / Release
 
 ### `GUARD-ACQUIRE`
 
@@ -112,21 +92,24 @@ GUARD-BLOCKING hash-guard
 GUARD-ACQUIRE ( guard -- )
 ```
 
-Acquire the guard.  Behavior depends on the guard's mode:
+Wait until acquisition succeeds. Spinning guards retry with `YIELD?`.
+Blocking guards wait for their semaphore permit in bounded, yield-aware
+increments and then publish ownership atomically.
 
-- **Spinning:** busy-waits on the flag cell, calling `YIELD?` each
-  iteration.
-- **Blocking:** calls `SEM-WAIT` on the embedded semaphore (yields
-  to the scheduler while waiting).
-
-**Re-entry detection:** if the guard is currently held and the owner
-is the current task, throws -257 immediately instead of deadlocking.
+### `GUARD-ACQUIRE-TIMEOUT`
 
 ```forth
-fp16-guard GUARD-ACQUIRE
-\ ... use shared fp16 state ...
-fp16-guard GUARD-RELEASE
+GUARD-ACQUIRE-TIMEOUT ( guard ms -- acquired? )
 ```
+
+Retry for at most `ms` milliseconds. The first acquisition attempt is always
+made, so a zero timeout still succeeds if the guard is immediately available.
+A true result owns one recursion level and must be released; false owns
+nothing.
+
+The timeout path polls with `YIELD?` for both guard flavors. This keeps the
+deadline bounded and avoids holding either guard metadata or event state
+across a yield.
 
 ### `GUARD-RELEASE`
 
@@ -134,175 +117,147 @@ fp16-guard GUARD-RELEASE
 GUARD-RELEASE ( guard -- )
 ```
 
-Release the guard.  Clears the owner and flag.  For blocking guards,
-also signals the embedded semaphore to wake one waiting task.
+Remove one recursive level. At depth one it clears ownership and, for a
+blocking guard, signals the semaphore after the metadata lock has been
+released.
 
-```forth
-fp16-guard GUARD-RELEASE
-```
+Only the owning `(core, task)` pair may release. A different core does not
+become the owner merely because both it and the holder have
+`CURRENT-TASK = 0`.
 
----
-
-## RAII — WITH-GUARD
-
-### `WITH-GUARD`
+## Scoped execution
 
 ```forth
 WITH-GUARD ( xt guard -- )
 ```
 
-Acquire the guard, execute `xt`, then release the guard.  If `xt`
-throws an exception, the guard is **still released** before the
-exception propagates (uses `CATCH` internally).
-
-This is the recommended way to use guards — it guarantees cleanup.
+`WITH-GUARD` acquires the guard, executes `xt`, releases the guard, and then
+rethrows any exception from `xt`. Normal body results remain on the data
+stack.
 
 ```forth
-: my-fp16-op  ( x y -- z )  FP16+ FP16* ;
-
-['] my-fp16-op  fp16-guard WITH-GUARD
+: update-index  ( item -- )
+    ['] index-insert index-guard WITH-GUARD ;
 ```
 
-**Exception safety:**
+This is the preferred form when the protected operation can throw.
+KDOS exception-chain heads are now per full core, so simultaneous
+`WITH-GUARD` calls on different full cores do not overwrite one another's
+`CATCH` frames. They are not per BIOS coroutine, however: a `WITH-GUARD` body
+must not call `PAUSE` or `TASK-YIELD`.
 
-```forth
-: risky-op  42 THROW ;
-['] risky-op  fp16-guard ['] WITH-GUARD CATCH
-\ guard is released, CATCH returns 42
-```
-
----
-
-## Query
-
-### `GUARD-HELD?`
+## Queries
 
 ```forth
 GUARD-HELD? ( guard -- flag )
-```
-
-Non-blocking query.  Returns TRUE (-1) if the guard is currently held,
-FALSE (0) otherwise.  Lock-free — reads a single flag cell.
-
-```forth
-fp16-guard GUARD-HELD? IF ." busy" CR THEN
-```
-
-### `GUARD-MINE?`
-
-```forth
 GUARD-MINE? ( guard -- flag )
+GUARD-INFO  ( guard -- )
 ```
 
-Returns TRUE (-1) if the **current task** holds this guard.  Returns
-FALSE if the guard is free or held by a different task.
+`GUARD-HELD?` is a lock-free aligned status snapshot. It must not be used as a
+check before an unguarded claim; only the acquisition words make that decision
+atomically.
 
-```forth
-fp16-guard GUARD-MINE? IF ." I hold it" CR THEN
-```
+`GUARD-MINE?` takes the short metadata lock and compares both owner fields.
 
----
+`GUARD-INFO` takes a coherent metadata snapshot, releases the lock, and only
+then prints. Example output:
 
-## Debug
-
-### `GUARD-INFO`
-
-```forth
-GUARD-INFO ( guard -- )
-```
-
-Print guard status:
-
-```
+```text
 [guard spin FREE]
-[guard blocking HELD owner=4839520]
+[guard blocking HELD core=1 task=0 depth=2]
 ```
 
----
+## Synchronization details
 
-## Concurrency Model
+Guard metadata shares `EVT-LOCK` with the event and semaphore primitives. A
+guard holds it only around a few aligned metadata loads and stores. In
+particular, it is released before:
 
-### Single-Core Cooperative
+- `SEM-WAIT-TIMEOUT`, `SEM-SIGNAL`, or `SEM-TRYWAIT`
+- any event operation
+- `YIELD?`
+- the guarded body
+- `CATCH` or `THROW`
+- diagnostic output
 
-On a single core with the KDOS cooperative scheduler, guards are most
-useful for preventing **re-entry** — a second KDOS task calling the
-same guarded word while the first task is mid-execution:
+This short shared lock closes the old cross-core check-then-set race without
+holding a hardware spinlock for the duration of arbitrary Forth code. Internal
+code that has manually acquired `EVT-LOCK` must not call a guard operation;
+event and semaphore public words already manage that lock themselves.
 
-```forth
-GUARD fp16-guard
+On the current MP64 memory system, hardware-lock release/acquire is the
+publication boundary: body stores precede the releasing unlock, and a later
+acquirer observes them after its successful locked metadata transition.
 
-: SAFE-FP16+  ( x y -- z )
-    ['] FP16+  fp16-guard WITH-GUARD ;
-```
+## Owner identity
 
-When Task A holds the guard and `YIELD?` causes Task B to run, Task B
-will block on `SAFE-FP16+` until Task A releases the guard.
+`CURRENT-TASK` is a KDOS scheduler variable owned by core 0; it is not
+per-core TLS. Therefore the guard identity helper uses:
 
-### Multicore
+- `(0, CURRENT-TASK @)` on core 0
+- `(COREID, 0)` on BIOS worker cores
 
-Guards also work across cores.  The spinning variant uses `YIELD?`
-which checks the preemption flag — safe for multicore.  The blocking
-variant uses `SEM-WAIT` which is itself spinlock-protected (EVT-LOCK).
+There is currently one dispatched BIOS execution per worker core. If KDOS
+later schedules multiple tasks on secondary cores, it must first expose a
+per-core current-task identity and the guard helper must adopt it.
 
-For multicore-critical MMIO sequences where preemption must also be
-disabled, combine WITH-GUARD with critical sections (see critical.f).
+A guard must not be held across task migration. Migration is not part of the
+current KDOS task model.
 
-### Re-entry Detection
+The owner pair also does not identify BIOS coroutine slots. `PAUSE` and
+`TASK-YIELD` switch same-core BIOS stacks without changing `COREID` or the
+core-0 `CURRENT-TASK` cell. If a guard were carried across that switch, another
+coroutine on the core could be mistaken for recursive entry by the same owner.
+Therefore acquire and final release must occur in the same uninterrupted BIOS
+coroutine activation. This restriction applies even more strongly to
+`WITH-GUARD`, whose live `CATCH` chain is per core rather than per coroutine.
 
-Re-entry throws -257 rather than deadlocking.  Use `CATCH` to handle
-re-entry gracefully:
+KDOS `CORE-CHECKPOINT`/`YIELD?` is not a BIOS coroutine switch. Its final
+multicore action is deferred so early-compiled users such as `LOCK` reach the
+installed per-core implementation: core 0 may update its scheduler task,
+whereas a secondary one-shot worker only clears its own preemption flag.
 
-```forth
-['] guarded-op ['] WITH-GUARD CATCH
-DUP -257 = IF
-    DROP  \ re-entry detected, handle gracefully
-THEN
-```
+## What a guard does not guarantee
 
----
+Mutual exclusion does not make every operation worker-safe. A guarded word may
+still be core-affine because it uses UI state, terminal I/O, dictionary or heap
+mutation, the active VFS selector, an applet's module-global current-state
+pointer, or another owner-only service.
 
-## Constraints
+Consequently, globally enabling every optional `GUARDED` wrapper is not a
+multicore-safety policy. Each public surface still needs an execution class
+such as owner-only, serialized service, pure, snapshot-read, or
+exclusive-buffer.
 
-| Constraint | Reason |
-|------------|--------|
-| **No nesting same guard** | Re-entry throws -257 by design. Use separate guards for nested resources. |
-| **Owner tracks CURRENT-TASK** | Outside the KDOS scheduler (CURRENT-TASK = 0), ownership tracking is limited. |
-| **Spinning wastes cycles** | Spinning guards busy-wait.  Use `GUARD-BLOCKING` for long critical sections. |
-| **Blocking needs scheduler** | `GUARD-BLOCKING` relies on `SEM-WAIT` which calls `YIELD?`.  Works with or without the KDOS scheduler running. |
+Do not hold long-lived guards around event loops. A guard around an entire Desk
+or app-shell run would serialize for the application's lifetime rather than
+provide a worker completion boundary.
 
----
+## Quick reference
 
-## Quick Reference
+| Word | Stack effect | Behavior |
+|---|---|---|
+| `GUARD` | `( "name" -- )` | Declare a spinning recursive guard |
+| `GUARD-BLOCKING` | `( "name" -- )` | Declare a semaphore-backed recursive guard |
+| `GUARD-TRY-ACQUIRE` | `( guard -- flag )` | Attempt without waiting |
+| `GUARD-ACQUIRE` | `( guard -- )` | Wait until acquired |
+| `GUARD-ACQUIRE-TIMEOUT` | `( guard ms -- flag )` | Bounded acquisition |
+| `GUARD-RELEASE` | `( guard -- )` | Release one depth; reject non-owner |
+| `WITH-GUARD` | `( xt guard -- )` | Exception-safe scoped execution |
+| `GUARD-HELD?` | `( guard -- flag )` | Lock-free status snapshot |
+| `GUARD-MINE?` | `( guard -- flag )` | Test the complete execution owner |
+| `GUARD-INFO` | `( guard -- )` | Print a coherent metadata snapshot |
 
-### Public Words
+### Error code
 
-| Word | Signature | Behavior |
-|------|-----------|----------|
-| `GUARD` | `( "name" -- )` | Create spinning guard |
-| `GUARD-BLOCKING` | `( "name" -- )` | Create blocking guard (semaphore-backed) |
-| `GUARD-ACQUIRE` | `( guard -- )` | Acquire (throws -257 on re-entry) |
-| `GUARD-RELEASE` | `( guard -- )` | Release |
-| `WITH-GUARD` | `( xt guard -- )` | RAII execute under guard |
-| `GUARD-HELD?` | `( guard -- flag )` | Is guard held? |
-| `GUARD-MINE?` | `( guard -- flag )` | Am I the holder? |
-| `GUARD-INFO` | `( guard -- )` | Debug display |
-
-### Internal Words
-
-| Word | Signature | Behavior |
-|------|-----------|----------|
-| `_GRD-FLAG` | `( guard -- addr )` | Flag cell accessor |
-| `_GRD-OWNER` | `( guard -- addr )` | Owner cell accessor |
-| `_GRD-MODE` | `( guard -- addr )` | Mode cell accessor |
-| `_GRD-SEM` | `( guard -- sem )` | Embedded semaphore accessor |
-
-### Error Codes
-
-| Code | Meaning |
-|------|---------|
-| -257 | Guard re-entry detected (same task tried to acquire twice) |
+| Constant | Value | Meaning |
+|---|---:|---|
+| `GUARD-E-NOT-OWNER` | -257 | Release attempted by a non-owner or on a free guard |
 
 ### Dependencies
 
-- `semaphore.f` (for `GUARD-BLOCKING`)
-- `event.f` (transitive, via semaphore.f)
+- `semaphore.f`
+- `event.f` transitively
+- KDOS `COREID`, `CURRENT-TASK`, `LOCK`, `UNLOCK`, `CORE-CHECKPOINT`
+  (`YIELD?`), and `EPOCH@`
