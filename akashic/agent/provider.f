@@ -15,6 +15,14 @@ REQUIRE run-settings.f
 8  CONSTANT APROV-F-CANCEL
 16 CONSTANT APROV-F-CONTEXT
 32 CONSTANT APROV-F-AUTH
+\ Provider provenance is deliberately separate from feature support.  UI and
+\ policy code must not infer whether a provider is a fixture, unavailable, or
+\ remote from its identifier string.
+1 CONSTANT APROV-PF-DEMO
+2 CONSTANT APROV-PF-OFFLINE
+4 CONSTANT APROV-PF-REMOTE
+APROV-PF-DEMO APROV-PF-OFFLINE OR APROV-PF-REMOTE OR
+CONSTANT APROV-PF-CLASS-MASK
 
 0 CONSTANT APROV-S-OFFLINE
 1 CONSTANT APROV-S-CONNECTING

@@ -33,6 +33,8 @@
 \    DESK-SLOT-COUNT   ( -- n )        Number of live slots
 \    DESK-VCOUNT       ( -- n )        Number of visible slots
 \    DESK-AGENT-SOURCE! ( source -- )   Transfer provider source before run
+\    DESK-AGENT-ACCESS-PRESET! ( preset -- status ) Select access before run
+\    DESK-AGENT-ACCESS ( -- profile|0 ) Current Desk-owned Agent scope
 \    DESK-PRACTICE     ( -- head | 0 )  Active validated Practice head
 \    DESK-CONTEXT      ( -- ctx | 0 )   Active root Context
 \    DESK-RECOVERY?    ( -- flag )      Fail-closed recovery mode
@@ -70,6 +72,7 @@ REQUIRE ../../../interop/job.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../../../interop/shared-document.f
 REQUIRE ../../../agent/runtime.f
+REQUIRE ../../../agent/access-profile.f
 REQUIRE ../../../agent/mandate-run.f
 REQUIRE ../../../agent/providers/offline.f
 REQUIRE ../../../agent/storage/vfs-conversation.f
@@ -154,6 +157,8 @@ VARIABLE _DESK-CFG-A   VARIABLE _DESK-CFG-L
 0 _DESK-CFG-A !  0 _DESK-CFG-L !
 VARIABLE _DESK-PENDING-AGENT-SOURCE
 0 _DESK-PENDING-AGENT-SOURCE !
+VARIABLE _DESK-PENDING-AGENT-ACCESS
+AAP-PRESET-CHAT-ONLY _DESK-PENDING-AGENT-ACCESS !
 
 \ Built-ins are constructor inputs, like the startup queue.  Each entry is
 \ (APP-DESC, default catalog flags).  DESK-QUEUE-LAUNCH also registers its
@@ -332,6 +337,13 @@ CMP-LAYOUT-SIZE CONSTANT _DESK-STATE-SIZE
 
 : DESK-CATALOG  ( -- catalog | 0 )
     _DESK-CATALOG @ ;
+
+: DESK-AGENT-ACCESS  ( -- profile | 0 )
+    _DESK-AGENT-RUNTIME @ ?DUP IF
+        ARUNTIME-ACCESS-PROFILE
+    ELSE
+        0
+    THEN ;
 
 : _DESK-PACKAGE-RESOLVER  ( entry context -- desc status )
     DROP ACE-MANIFEST$ ALOAD-PATH ;
@@ -1288,6 +1300,13 @@ VARIABLE _DSE-ID-U
     _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.provider-source" STR-STR= IF
         _DESK-AGENT-SOURCE @ EXIT
     THEN
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.access-profile" STR-STR= IF
+        _DESK-AGENT-RUNTIME @ ?DUP IF
+            ARUNTIME-ACCESS-PROFILE
+        ELSE
+            0
+        THEN EXIT
+    THEN
     _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.runtime.registry" STR-STR= IF
         _DESK-REGISTRY @ EXIT
     THEN
@@ -1440,15 +1459,13 @@ VARIABLE _DSFA-SLOT
 
 VARIABLE _DMF-DESK
 VARIABLE _DMF-RUN-ID
-VARIABLE _DMF-INST
-VARIABLE _DMF-DESC
-VARIABLE _DMF-AGENDA
-VARIABLE _DMF-CAPTURE
 VARIABLE _DMF-CHILD
 VARIABLE _DMF-STATUS
 VARIABLE _DMF-TAG-A
 VARIABLE _DMF-TAG-U
 VARIABLE _DMF-DEST
+VARIABLE _DMF-PROFILE
+VARIABLE _DMF-EFFECTS
 
 : _DESK-DAYBOOK-RID!  ( -- )
     SHA3-256-BEGIN
@@ -1473,19 +1490,157 @@ VARIABLE _DMF-DEST
     THEN
     _DESK-DAYBOOK-OWNER ! ;
 
-: _DESK-FIND-MANDATE-TARGET  ( -- flag )
-    0 _DMF-INST ! 0 _DMF-AGENDA ! 0 _DMF-CAPTURE !
-    _DESK-REGISTRY @ CREG.INST-N @ 0 ?DO
-        I _DESK-REGISTRY @ CREG-INST-NTH DUP _DMF-INST !
-        CINST-DESC _DMF-DESC !
-        S" daybook.agenda.markdown" _DMF-DESC @ COMP-CAP-FIND
-        DUP _DMF-AGENDA !
-        0<> IF
-            S" daybook.task.capture" _DMF-DESC @ COMP-CAP-FIND
-            DUP _DMF-CAPTURE ! 0<> IF -1 UNLOOP EXIT THEN
+VARIABLE _DMA-A
+VARIABLE _DMA-U
+VARIABLE _DMA-EXPECTED
+VARIABLE _DMA-FLAGS
+VARIABLE _DMA-MAX-RESULT
+VARIABLE _DMA-EFFECTS
+VARIABLE _DMA-INST
+VARIABLE _DMA-DESC
+VARIABLE _DMA-CAP
+
+VARIABLE _DTC-A
+VARIABLE _DTC-U
+VARIABLE _DTC-FOUND
+VARIABLE _DTC-DESC
+
+\ Resolve authority only from the exact component descriptor pointer carried
+\ by Desk's trusted built-in constructor list.  Registry text identity alone
+\ is insufficient because an installed descriptor may impersonate a built-in
+\ component id.
+: _DESK-TRUSTED-COMP  ( id-a id-u -- descriptor | 0 )
+    _DTC-U ! _DTC-A ! 0 _DTC-FOUND !
+    _DESK-BUILTIN-N @ 0 ?DO
+        I _DESK-BUILTIN-ENTRY @ APP.COMP-DESC @ _DTC-DESC !
+        _DTC-DESC @ IF
+            _DTC-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
+                _DTC-A @ _DTC-U @ STR-STR= IF
+                _DTC-FOUND @ ?DUP IF
+                    _DTC-DESC @ <> IF 0 UNLOOP EXIT THEN
+                ELSE
+                    _DTC-DESC @ _DTC-FOUND !
+                THEN
+            THEN
         THEN
     LOOP
-    0 _DMF-INST ! 0 ;
+    _DTC-FOUND @ ;
+
+\ Add the focused live implementation, or otherwise the first live
+\ implementation, of one explicitly named built-in
+\ operation.  Missing applets are not an error; they simply do not appear in
+\ this run's frozen facet.  No descriptor enumeration can expand the list.
+: _DESK-MANDATE-CAP+
+  ( expected-desc id-a id-u effects facet-flags max-result -- status )
+    _DMA-MAX-RESULT ! _DMA-FLAGS ! _DMA-EFFECTS !
+    _DMA-U ! _DMA-A ! _DMA-EXPECTED !
+    _DMA-EFFECTS @ _DMF-PROFILE @ AAP.EFFECTS @ AND
+        _DMA-EFFECTS @ <> IF CFACET-S-INVALID EXIT THEN
+    0 _DMA-INST !
+    _DESK-FOCUS-SA @ ?DUP IF
+        _SL-INST @ DUP CINST-DESC _DMA-EXPECTED @ = IF
+            _DMA-INST !
+        ELSE
+            DROP
+        THEN
+    THEN
+    _DMA-INST @ 0= IF
+        _DMA-EXPECTED @ _DESK-REGISTRY @ CREG-INST-BY-DESC _DMA-INST !
+    THEN
+    _DMA-INST @ 0= IF CFACET-S-OK EXIT THEN
+    _DMA-INST @ CINST-DESC _DMA-DESC !
+    _DMA-A @ _DMA-U @ _DMA-DESC @ COMP-CAP-FIND DUP 0= IF
+        DROP CFACET-S-OK EXIT
+    THEN
+    _DMA-CAP !
+    _DMA-CAP @ CAP.EFFECTS @ _DMA-EFFECTS @ <> IF
+        CFACET-S-INVALID EXIT
+    THEN
+    _DMA-INST @ CINST.ID @ _DMA-INST @ CINST.GENERATION @
+    _DMA-EFFECTS @ _DMA-FLAGS @ _DMA-MAX-RESULT @
+    _DMA-A @ _DMA-U @ _DESK-AGENT-FACET CFACET-ADD
+    DUP IF EXIT THEN DROP
+    _DMA-EFFECTS @ _DMF-EFFECTS @ OR _DMF-EFFECTS !
+    CFACET-S-OK ;
+
+CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR CFENTRY-F-AUTO-OBSERVE OR
+CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-OBSERVE-FLAGS
+
+CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR CFENTRY-F-REVIEW-COMMIT OR
+CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
+
+\ 4 KiB raw can expand roughly 6x in capability JSON and is escaped a second
+\ time on the OpenAI continuation wire; larger results require pagination.
+4096 CONSTANT _DESK-AGENT-TEXT-MAX
+
+: _DESK-MANDATE-OBSERVE-LIST  ( -- status )
+    S" org.akashic.daybook" _DESK-TRUSTED-COMP
+        S" daybook.agenda.markdown" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.daybook" _DESK-TRUSTED-COMP
+        S" daybook.source" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 516
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.pad" _DESK-TRUSTED-COMP
+        S" pad.document.active" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 516
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.pad" _DESK-TRUSTED-COMP
+        S" pad.document.text" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.fexplorer" _DESK-TRUSTED-COMP
+        S" fexplorer.resource.selected" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 516
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.fexplorer" _DESK-TRUSTED-COMP
+        S" fexplorer.preview.text" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.grid" _DESK-TRUSTED-COMP
+        S" grid.cell.selected" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 40
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.grid" _DESK-TRUSTED-COMP
+        S" grid.workbook.csv" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.grid" _DESK-TRUSTED-COMP
+        S" grid.source" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 516
+        _DESK-MANDATE-CAP+ ;
+
+: _DESK-MANDATE-REVIEW-LIST  ( -- status )
+    S" org.akashic.daybook" _DESK-TRUSTED-COMP
+        S" daybook.task.capture"
+        CAP-E-MUTATE CAP-E-PERSIST OR _DESK-AGENT-REVIEW-FLAGS 8
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.pad" _DESK-TRUSTED-COMP
+        S" pad.document.open" CAP-E-NAVIGATE
+        _DESK-AGENT-REVIEW-FLAGS 516
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.fexplorer" _DESK-TRUSTED-COMP
+        S" fexplorer.resource.reveal" CAP-E-NAVIGATE
+        _DESK-AGENT-REVIEW-FLAGS 516
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.grid" _DESK-TRUSTED-COMP
+        S" grid.cell.set-selected" CAP-E-MUTATE
+        _DESK-AGENT-REVIEW-FLAGS 40
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.grid" _DESK-TRUSTED-COMP
+        S" grid.workbook.save" CAP-E-PERSIST
+        _DESK-AGENT-REVIEW-FLAGS 8
+        _DESK-MANDATE-CAP+ ;
+
+: _DESK-MANDATE-COMPILE-ACCESS  ( -- status )
+    _DMF-PROFILE @ AAP.FLAGS @ AAP-F-CONTEXT-OBSERVE AND IF
+        _DESK-MANDATE-OBSERVE-LIST ?DUP IF EXIT THEN
+    THEN
+    _DMF-PROFILE @ AAP.FLAGS @ AAP-F-REVIEW-CHANGES AND IF
+        _DESK-MANDATE-REVIEW-LIST ?DUP IF EXIT THEN
+    THEN
+    CFACET-S-OK ;
 
 : _DESK-MANDATE-ID!  ( tag-a tag-u destination -- )
     _DMF-DEST ! _DMF-TAG-U ! _DMF-TAG-A !
@@ -1501,7 +1656,10 @@ VARIABLE _DMF-DEST
     _DMF-DESK ! _DMF-RUN-ID !
     _DMF-DESK @ _DESK-USE-STATE
     DESK-RECOVERY? DESK-PRACTICE 0= OR IF 0 AMRUN-S-DENIED EXIT THEN
-    _DESK-FIND-MANDATE-TARGET 0= IF 0 AMRUN-S-DENIED EXIT THEN
+    _DESK-AGENT-RUNTIME @ ARUNTIME-ACCESS-PROFILE
+        DUP _DMF-PROFILE ! 0= IF 0 AMRUN-S-DENIED EXIT THEN
+    \ Built-in targets are optional.  An empty exact facet is a legitimate
+    \ chat-only run and never expands into the gateway's ambient catalog.
     DESK-CONTEXT CTX-CHILD-NEW DUP IF
         NIP 0 SWAP EXIT
     THEN
@@ -1515,20 +1673,8 @@ VARIABLE _DMF-DEST
     _DMF-CHILD @ CTX.ID @ _DESK-AGENT-FACET CFACET.CONTEXT-ID !
     _DMF-CHILD @ CTX.GENERATION @ _DESK-AGENT-FACET CFACET.CONTEXT-GEN !
     1 _DESK-AGENT-FACET CFACET.REVISION !
-    _DMF-INST @ CINST.ID @ _DMF-INST @ CINST.GENERATION @
-    _DMF-AGENDA @ CAP.EFFECTS @
-    CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR CFENTRY-F-AUTO-OBSERVE OR
-        CFENTRY-F-DISCLOSE-RESULT OR
-    32768 _DMF-AGENDA @ CAP-ID _DESK-AGENT-FACET CFACET-ADD
-    DUP _DMF-STATUS ! IF
-        _DMF-CHILD @ CTX-FREE 0 _DMF-STATUS @ EXIT
-    THEN
-    _DMF-INST @ CINST.ID @ _DMF-INST @ CINST.GENERATION @
-    _DMF-CAPTURE @ CAP.EFFECTS @
-    CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR CFENTRY-F-REVIEW-COMMIT OR
-        CFENTRY-F-DISCLOSE-RESULT OR
-    8 _DMF-CAPTURE @ CAP-ID _DESK-AGENT-FACET CFACET-ADD
-    DUP _DMF-STATUS ! IF
+    0 _DMF-EFFECTS !
+    _DESK-MANDATE-COMPILE-ACCESS DUP _DMF-STATUS ! IF
         _DMF-CHILD @ CTX-FREE 0 _DMF-STATUS @ EXIT
     THEN
 
@@ -1546,14 +1692,25 @@ VARIABLE _DMF-DEST
     _DMF-CHILD @ CTX.ID @ _DESK-AGENT-MANDATE MAND.CONTEXT-ID !
     _DMF-CHILD @ CTX.GENERATION @
         _DESK-AGENT-MANDATE MAND.CONTEXT-GENERATION !
-    CAP-E-OBSERVE CAP-E-MUTATE OR CAP-E-PERSIST OR
-        _DESK-AGENT-MANDATE MAND.EFFECTS !
-    MAND-D-COMMIT _DESK-AGENT-MANDATE MAND.DISPOSITION !
-    600000 _DESK-AGENT-MANDATE MAND.TIME-BUDGET-MS !
-    1048576 _DESK-AGENT-MANDATE MAND.MEMORY-BUDGET !
-    32768 _DESK-AGENT-MANDATE MAND.TOKEN-BUDGET !
-    8 _DESK-AGENT-MANDATE MAND.TOOL-BUDGET !
-    65536 _DESK-AGENT-MANDATE MAND.DISCLOSURE-BUDGET !
+    _DMF-EFFECTS @ _DESK-AGENT-MANDATE MAND.EFFECTS !
+    _DMF-EFFECTS @ CAP-E-NAVIGATE CAP-E-MUTATE OR CAP-E-PERSIST OR AND IF
+        _DMF-PROFILE @ AAP.DISPOSITION @
+    ELSE
+        MAND-D-READ-ONLY
+    THEN _DESK-AGENT-MANDATE MAND.DISPOSITION !
+    _DMF-PROFILE @ AAP.TIME-BUDGET-MS @
+        _DESK-AGENT-MANDATE MAND.TIME-BUDGET-MS !
+    _DMF-PROFILE @ AAP.MEMORY-BUDGET @
+        _DESK-AGENT-MANDATE MAND.MEMORY-BUDGET !
+    _DMF-PROFILE @ AAP.TOKEN-BUDGET @
+        _DESK-AGENT-MANDATE MAND.TOKEN-BUDGET !
+    _DESK-AGENT-FACET CFACET.COUNT @ IF
+        _DMF-PROFILE @ AAP.TOOL-BUDGET @
+    ELSE
+        0
+    THEN _DESK-AGENT-MANDATE MAND.TOOL-BUDGET !
+    _DMF-PROFILE @ AAP.DISCLOSURE-BUDGET @
+        _DESK-AGENT-MANDATE MAND.DISCLOSURE-BUDGET !
     DESK-PRACTICE _DMF-CHILD @ _DESK-AGENT-MANDATE _DESK-AGENT-FACET
         AMRUN-NEW DUP IF
         _DMF-STATUS ! DROP _DMF-CHILD @ CTX-FREE
@@ -1600,6 +1757,9 @@ VARIABLE _DMF-DEST
         _DESK-AGENT-RUNTIME @ ARUNTIME-MANDATE-FACTORY!
     _DESK-TOOL-GATEWAY @ _DESK-AGENT-PROVIDER @ APROV-BIND-TOOLS
     ABORT" desk: provider tool binding failed"
+    _DESK-PENDING-AGENT-ACCESS @ _DESK-AGENT-RUNTIME @
+        ARUNTIME-ACCESS-PRESET!
+    ABORT" desk: unavailable or invalid agent access preset"
 
     _DESK-ENDPOINT IENDPOINT-INIT
     _DINI-INST @ _DESK-ENDPOINT IEND.CONTEXT !
@@ -1633,7 +1793,12 @@ VARIABLE _DMF-DEST
         ABORT" desk: shared document teardown failed"
     THEN
     _DESK-RREG @ ?DUP IF RREG-FREE THEN
-    _DESK-AGENT-RUNTIME @ ?DUP IF ARUNTIME-FREE THEN
+    _DESK-AGENT-RUNTIME @ ?DUP IF
+        DUP ARUNTIME-ACCESS-PROFILE ?DUP IF
+            AAP.PRESET @ _DESK-PENDING-AGENT-ACCESS !
+        THEN
+        ARUNTIME-FREE
+    THEN
     _DESK-TOOL-GATEWAY @ ?DUP IF ATOOLG-FREE THEN
     _DESK-BUS @ ?DUP IF CBUS-FREE THEN
     _DESK-AUTHORITY @ ?DUP IF AHT-FREE THEN
@@ -1727,12 +1892,14 @@ VARIABLE _DAS-COL
         S" [Agent: history error]" EXIT
     THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME.STATUS @ CASE
+        ARUN-S-IDLE OF S" [Agent: ready]" ENDOF
         ARUN-S-RUNNING OF S" [Agent: working]" ENDOF
         ARUN-S-APPROVAL OF S" [Agent: review]" ENDOF
         ARUN-S-OFFLINE OF S" [Agent: offline]" ENDOF
         ARUN-S-ERROR OF S" [Agent: error]" ENDOF
         ARUN-S-CANCELLED OF S" [Agent: cancelled]" ENDOF
-        DROP S" [Agent: ready]"
+        ARUN-S-EXPIRED OF S" [Agent: expired]" ENDOF
+        S" [Agent: unknown]" ROT
     ENDCASE ;
 
 : _DESK-PAINT-AGENT-STATE  ( -- )
@@ -2441,12 +2608,28 @@ VARIABLE _DSD-IOR
     _DESK-QUEUE-BUILTIN-RAW ;
 
 VARIABLE _DASSET-SOURCE
+VARIABLE _DASSET-ACCESS
 
 : DESK-AGENT-SOURCE!  ( source -- )
     _DASSET-SOURCE !
     _DASSET-SOURCE @ _DESK-PENDING-AGENT-SOURCE @ = IF EXIT THEN
     _DESK-PENDING-AGENT-SOURCE @ ?DUP IF APSOURCE-FREE THEN
     _DASSET-SOURCE @ _DESK-PENDING-AGENT-SOURCE ! ;
+
+: DESK-AGENT-ACCESS-PRESET!  ( preset -- status )
+    DUP _DASSET-ACCESS !
+    DUP AAP-PRESET-CHAT-ONLY =
+    OVER AAP-PRESET-PRACTICE-READ = OR
+    OVER AAP-PRESET-PRACTICE-ASSIST = OR 0= IF DROP AAP-S-INVALID EXIT THEN
+    _DESK-CURRENT-STATE @ IF
+        _DESK-AGENT-RUNTIME @ ?DUP 0= IF DROP AAP-S-INVALID EXIT THEN
+        ARUNTIME-ACCESS-PRESET!
+        DUP AAP-S-OK = IF
+            _DASSET-ACCESS @ _DESK-PENDING-AGENT-ACCESS !
+        THEN
+    ELSE
+        _DESK-PENDING-AGENT-ACCESS ! AAP-S-OK
+    THEN ;
 
 : DESK-RUN  ( -- )
     _DESK-FILL-DESC
@@ -2473,6 +2656,8 @@ GUARD _desk-guard
 ' DESK-SLOT-COUNT   CONSTANT _desk-slotcount-xt
 ' DESK-VCOUNT       CONSTANT _desk-vcount-xt
 ' DESK-AGENT-SOURCE! CONSTANT _desk-agent-source-xt
+' DESK-AGENT-ACCESS-PRESET! CONSTANT _desk-agent-access-preset-xt
+' DESK-AGENT-ACCESS CONSTANT _desk-agent-access-xt
 ' DESK-PRACTICE     CONSTANT _desk-practice-xt
 ' DESK-CONTEXT      CONSTANT _desk-context-xt
 ' DESK-RECOVERY?    CONSTANT _desk-recovery-xt
@@ -2498,6 +2683,9 @@ GUARD _desk-guard
 : DESK-SLOT-COUNT   _desk-slotcount-xt    _desk-guard WITH-GUARD ;
 : DESK-VCOUNT       _desk-vcount-xt       _desk-guard WITH-GUARD ;
 : DESK-AGENT-SOURCE! _desk-agent-source-xt _desk-guard WITH-GUARD ;
+: DESK-AGENT-ACCESS-PRESET!
+    _desk-agent-access-preset-xt _desk-guard WITH-GUARD ;
+: DESK-AGENT-ACCESS _desk-agent-access-xt _desk-guard WITH-GUARD ;
 : DESK-PRACTICE     _desk-practice-xt     _desk-guard WITH-GUARD ;
 : DESK-CONTEXT      _desk-context-xt      _desk-guard WITH-GUARD ;
 : DESK-RECOVERY?    _desk-recovery-xt     _desk-guard WITH-GUARD ;

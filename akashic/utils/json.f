@@ -12,6 +12,7 @@ PROVIDED akashic-json
 
 REQUIRE ../text/utf8.f
 REQUIRE string.f
+REQUIRE ../concurrency/guard.f
 
 \ =====================================================================
 \  Error Handling
@@ -1244,9 +1245,75 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
 : JSON-KV-ESTR  ( kaddr klen vaddr vlen -- )
     2SWAP JSON-KEY: JSON-ESTR ;
 
+\ ── builder transaction guard ───────────────────────────────────────
+\ JSON's streaming builder is process-global.  Individual public builder
+\ words take this recursive guard, and compound encoders can hold it across
+\ a complete reset/output/emit/result transaction with JSON-WITH-BUILDER.
+\ This boundary is always present: production callers must not depend on the
+\ optional GUARDED flag merely to keep builder output coherent.
+GUARD _json-builder-guard
+
+' JSON-EMIT       CONSTANT _json-builder-emit-xt
+' JSON-TYPE       CONSTANT _json-builder-type-xt
+' JSON-SET-OUTPUT CONSTANT _json-builder-set-output-xt
+' JSON-OUTPUT-RESULT CONSTANT _json-builder-output-result-xt
+' JSON-OUTPUT-RESET CONSTANT _json-builder-output-reset-xt
+' JSON-OUTPUT-OK? CONSTANT _json-builder-output-ok-q-xt
+' JSON-{          CONSTANT _json-builder-ob-xt
+' JSON-}          CONSTANT _json-builder-cb-xt
+' JSON-[          CONSTANT _json-builder-os-xt
+' JSON-]          CONSTANT _json-builder-cs-xt
+' JSON-KEY:       CONSTANT _json-builder-key-c-xt
+' JSON-STR        CONSTANT _json-builder-str-xt
+' JSON-NULL       CONSTANT _json-builder-null-xt
+' JSON-TRUE       CONSTANT _json-builder-true-xt
+' JSON-FALSE      CONSTANT _json-builder-false-xt
+' JSON-BOOL       CONSTANT _json-builder-bool-xt
+' JSON-RAW        CONSTANT _json-builder-raw-xt
+' JSON-NUM        CONSTANT _json-builder-num-xt
+' JSON-KV-STR     CONSTANT _json-builder-kv-str-xt
+' JSON-KV-NUM     CONSTANT _json-builder-kv-num-xt
+' JSON-KV-BOOL    CONSTANT _json-builder-kv-bool-xt
+' JSON-KV-NULL    CONSTANT _json-builder-kv-null-xt
+' JSON-KV-RAW     CONSTANT _json-builder-kv-raw-xt
+' JSON-BUILD-RESET CONSTANT _json-builder-reset-xt
+' JSON-ESTR       CONSTANT _json-builder-estr-xt
+' JSON-EKEY:      CONSTANT _json-builder-ekey-c-xt
+' JSON-KV-ESTR    CONSTANT _json-builder-kv-estr-xt
+
+: JSON-WITH-BUILDER  ( ... xt -- ... )
+    _json-builder-guard WITH-GUARD ;
+
+: JSON-EMIT       _json-builder-emit-xt JSON-WITH-BUILDER ;
+: JSON-TYPE       _json-builder-type-xt JSON-WITH-BUILDER ;
+: JSON-SET-OUTPUT _json-builder-set-output-xt JSON-WITH-BUILDER ;
+: JSON-OUTPUT-RESULT _json-builder-output-result-xt JSON-WITH-BUILDER ;
+: JSON-OUTPUT-RESET _json-builder-output-reset-xt JSON-WITH-BUILDER ;
+: JSON-OUTPUT-OK? _json-builder-output-ok-q-xt JSON-WITH-BUILDER ;
+: JSON-{          _json-builder-ob-xt JSON-WITH-BUILDER ;
+: JSON-}          _json-builder-cb-xt JSON-WITH-BUILDER ;
+: JSON-[          _json-builder-os-xt JSON-WITH-BUILDER ;
+: JSON-]          _json-builder-cs-xt JSON-WITH-BUILDER ;
+: JSON-KEY:       _json-builder-key-c-xt JSON-WITH-BUILDER ;
+: JSON-STR        _json-builder-str-xt JSON-WITH-BUILDER ;
+: JSON-NULL       _json-builder-null-xt JSON-WITH-BUILDER ;
+: JSON-TRUE       _json-builder-true-xt JSON-WITH-BUILDER ;
+: JSON-FALSE      _json-builder-false-xt JSON-WITH-BUILDER ;
+: JSON-BOOL       _json-builder-bool-xt JSON-WITH-BUILDER ;
+: JSON-RAW        _json-builder-raw-xt JSON-WITH-BUILDER ;
+: JSON-NUM        _json-builder-num-xt JSON-WITH-BUILDER ;
+: JSON-KV-STR     _json-builder-kv-str-xt JSON-WITH-BUILDER ;
+: JSON-KV-NUM     _json-builder-kv-num-xt JSON-WITH-BUILDER ;
+: JSON-KV-BOOL    _json-builder-kv-bool-xt JSON-WITH-BUILDER ;
+: JSON-KV-NULL    _json-builder-kv-null-xt JSON-WITH-BUILDER ;
+: JSON-KV-RAW     _json-builder-kv-raw-xt JSON-WITH-BUILDER ;
+: JSON-BUILD-RESET _json-builder-reset-xt JSON-WITH-BUILDER ;
+: JSON-ESTR       _json-builder-estr-xt JSON-WITH-BUILDER ;
+: JSON-EKEY:      _json-builder-ekey-c-xt JSON-WITH-BUILDER ;
+: JSON-KV-ESTR    _json-builder-kv-estr-xt JSON-WITH-BUILDER ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
 GUARD _json-guard
 
 ' JSON-FAIL       CONSTANT _json-fail-xt
@@ -1284,39 +1351,12 @@ GUARD _json-guard
 ' JSON-FIELD      CONSTANT _json-field-xt
 ' JSON-STRING=    CONSTANT _json-string=-xt
 ' JSON-NUMBER=    CONSTANT _json-number=-xt
-' JSON-EMIT       CONSTANT _json-emit-xt
-' JSON-TYPE       CONSTANT _json-type-xt
-' JSON-SET-OUTPUT CONSTANT _json-set-output-xt
-' JSON-OUTPUT-RESULT CONSTANT _json-output-result-xt
-' JSON-OUTPUT-RESET CONSTANT _json-output-reset-xt
-' JSON-OUTPUT-OK? CONSTANT _json-output-ok-q-xt
-' JSON-{          CONSTANT _json-ob-xt
-' JSON-}          CONSTANT _json-cb-xt
-' JSON-[          CONSTANT _json-os-xt
-' JSON-]          CONSTANT _json-cs-xt
-' JSON-KEY:       CONSTANT _json-key-c-xt
-' JSON-STR        CONSTANT _json-str-xt
-' JSON-NULL       CONSTANT _json-null-xt
-' JSON-TRUE       CONSTANT _json-true-xt
-' JSON-FALSE      CONSTANT _json-false-xt
-' JSON-BOOL       CONSTANT _json-bool-xt
-' JSON-RAW        CONSTANT _json-raw-xt
-' JSON-NUM        CONSTANT _json-num-xt
-' JSON-KV-STR     CONSTANT _json-kv-str-xt
-' JSON-KV-NUM     CONSTANT _json-kv-num-xt
-' JSON-KV-BOOL    CONSTANT _json-kv-bool-xt
-' JSON-KV-NULL    CONSTANT _json-kv-null-xt
-' JSON-KV-RAW     CONSTANT _json-kv-raw-xt
-' JSON-BUILD-RESET CONSTANT _json-build-reset-xt
 ' JSON-EXPECT-STRING CONSTANT _json-expect-string-xt
 ' JSON-EXPECT-NUMBER CONSTANT _json-expect-number-xt
 ' JSON-EXPECT-OBJECT CONSTANT _json-expect-object-xt
 ' JSON-EXPECT-ARRAY CONSTANT _json-expect-array-xt
 ' JSON-EXPECT-BOOL CONSTANT _json-expect-bool-xt
 ' JSON-EXPECT-NULL CONSTANT _json-expect-null-xt
-' JSON-ESTR       CONSTANT _json-estr-xt
-' JSON-EKEY:      CONSTANT _json-ekey-c-xt
-' JSON-KV-ESTR    CONSTANT _json-kv-estr-xt
 
 : JSON-FAIL       _json-fail-xt _json-guard WITH-GUARD ;
 : JSON-OK?        _json-ok-q-xt _json-guard WITH-GUARD ;
@@ -1353,37 +1393,10 @@ GUARD _json-guard
 : JSON-FIELD      _json-field-xt _json-guard WITH-GUARD ;
 : JSON-STRING=    _json-string=-xt _json-guard WITH-GUARD ;
 : JSON-NUMBER=    _json-number=-xt _json-guard WITH-GUARD ;
-: JSON-EMIT       _json-emit-xt _json-guard WITH-GUARD ;
-: JSON-TYPE       _json-type-xt _json-guard WITH-GUARD ;
-: JSON-SET-OUTPUT _json-set-output-xt _json-guard WITH-GUARD ;
-: JSON-OUTPUT-RESULT _json-output-result-xt _json-guard WITH-GUARD ;
-: JSON-OUTPUT-RESET _json-output-reset-xt _json-guard WITH-GUARD ;
-: JSON-OUTPUT-OK? _json-output-ok-q-xt _json-guard WITH-GUARD ;
-: JSON-{          _json-ob-xt _json-guard WITH-GUARD ;
-: JSON-}          _json-cb-xt _json-guard WITH-GUARD ;
-: JSON-[          _json-os-xt _json-guard WITH-GUARD ;
-: JSON-]          _json-cs-xt _json-guard WITH-GUARD ;
-: JSON-KEY:       _json-key-c-xt _json-guard WITH-GUARD ;
-: JSON-STR        _json-str-xt _json-guard WITH-GUARD ;
-: JSON-NULL       _json-null-xt _json-guard WITH-GUARD ;
-: JSON-TRUE       _json-true-xt _json-guard WITH-GUARD ;
-: JSON-FALSE      _json-false-xt _json-guard WITH-GUARD ;
-: JSON-BOOL       _json-bool-xt _json-guard WITH-GUARD ;
-: JSON-RAW        _json-raw-xt _json-guard WITH-GUARD ;
-: JSON-NUM        _json-num-xt _json-guard WITH-GUARD ;
-: JSON-KV-STR     _json-kv-str-xt _json-guard WITH-GUARD ;
-: JSON-KV-NUM     _json-kv-num-xt _json-guard WITH-GUARD ;
-: JSON-KV-BOOL    _json-kv-bool-xt _json-guard WITH-GUARD ;
-: JSON-KV-NULL    _json-kv-null-xt _json-guard WITH-GUARD ;
-: JSON-KV-RAW     _json-kv-raw-xt _json-guard WITH-GUARD ;
-: JSON-BUILD-RESET _json-build-reset-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-STRING _json-expect-string-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-NUMBER _json-expect-number-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-OBJECT _json-expect-object-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-ARRAY _json-expect-array-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-BOOL _json-expect-bool-xt _json-guard WITH-GUARD ;
 : JSON-EXPECT-NULL _json-expect-null-xt _json-guard WITH-GUARD ;
-: JSON-ESTR       _json-estr-xt _json-guard WITH-GUARD ;
-: JSON-EKEY:      _json-ekey-c-xt _json-guard WITH-GUARD ;
-: JSON-KV-ESTR    _json-kv-estr-xt _json-guard WITH-GUARD ;
 [THEN] [THEN]

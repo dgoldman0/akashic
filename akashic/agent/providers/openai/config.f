@@ -199,5 +199,7 @@ VARIABLE _OAICI-C
     443 _OAICI-C @ OAIC.PORT !
     -1 _OAICI-C @ OAIC.TLS !
     OAIC-F-TOOLS _OAICI-C @ OAIC.FLAGS !
-    65536 _OAICI-C @ OAIC.MAX-REQUEST !
-    262144 _OAICI-C @ OAIC.MAX-OUTPUT ! ;
+    196608 _OAICI-C @ OAIC.MAX-REQUEST !
+    \ Keep one valid response composable with the bounded transcript and its
+    \ model-context copy inside the 256 KiB conversation snapshot envelope.
+    49152 _OAICI-C @ OAIC.MAX-OUTPUT ! ;

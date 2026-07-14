@@ -27,6 +27,7 @@ DEFAULT_MEGAPAD_ROOT = AKASHIC_ROOT.parent / "megapad"
 OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
 REQUIRE_RE = re.compile(r"^\s*REQUIRE\s+(\S+)", re.MULTILINE)
 PROVIDED_RE = re.compile(r"^\s*PROVIDED\s+(\S+)", re.MULTILINE)
+STACK_EFFECT_RE = re.compile(r"[ \t]+\([^()\r\n]*--[^()\r\n]*\)")
 # KDOS stores a terminating NUL in its 24-byte NAMEBUF, leaving 23 key bytes.
 MODULE_KEY_BYTES = 23
 # KDOS's module loader performs one 8-bit sector-count transfer.  Leave
@@ -76,6 +77,7 @@ class Profile:
     requires_tap: bool = False
     failure_markers: tuple[str, ...] = ()
     initial_files: tuple[tuple[str, bytes], ...] = ()
+    include_large_sample: bool = True
 
 
 def _practice_crc32(data: bytes) -> int:
@@ -742,6 +744,12 @@ VARIABLE _ap-msg
     _ap-source @ APSOURCE-FREE
     0 _ap-runtime ! 0 _ap-provider ! 0 _ap-source ! 0 _ap-store ! ;
 
+\ Deliberately abandon one object graph after a forced durable save.  This
+\ one-shot arena fixture models process loss; ARUNTIME-FREE is intentionally
+\ not used because it is a graceful, quiescing shutdown contract.
+: _ap-abandon  ( -- )
+    0 _ap-runtime ! 0 _ap-provider ! 0 _ap-source ! 0 _ap-store ! ;
+
 : _ap-pump  ( count -- )
     0 ?DO 8 _ap-runtime @ ARUNTIME-PUMP DROP LOOP ;
 : _ap-message  ( index -- message )
@@ -753,7 +761,8 @@ VARIABLE _ap-msg
     _ap-msg @ AMSG.FLAGS @ DUP AMSG-F-AUDIT AND 0<> _ap-assert
     AMSG-F-APPROVED AND 0<> _ap-assert
     _ap-msg @ AMSG-TEXT
-    S" Approved agent action: Persist the simulated change?" STR-STR=
+    S" Approved agent action: provider org.akashic.agent.testing.scripted: Persist the simulated change?"
+    STR-STR=
     _ap-assert ;
 
 : _ap-run  ( -- )
@@ -788,7 +797,7 @@ VARIABLE _ap-msg
     _ap-conv @ ACONV.COUNT @ 7 = _ap-assert
     _ap-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 3 = _ap-assert
     _ap-runtime @ ARUNTIME-PERSIST-FORCE ACSTORE-S-OK = _ap-assert
-    _ap-close _ap-stack
+    _ap-abandon _ap-stack
 
     _ap-open 2 _ap-pump
     _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ap-assert
@@ -826,6 +835,7 @@ _ap-run
 """,
         ready_markers=("AGENT PERSISTENCE PASS",),
         stable_markers=("AGENT PERSISTENCE PASS",),
+        failure_markers=("AGENT PERSISTENCE FAIL",),
     ),
     "http-request": Profile(
         roots=("net/http-request.f",),
@@ -1281,6 +1291,12 @@ CREATE _oc-json 32768 ALLOT
 VARIABLE _oc-json-u
 CREATE _oc-name OAI-TOOL-NAME-CAPACITY ALLOT
 VARIABLE _oc-name-u
+VARIABLE _oc-large-input
+VARIABLE _oc-large-history
+VARIABLE _oc-large-output
+VARIABLE _oc-large-body
+VARIABLE _oc-large-array-cap
+VARIABLE _oc-large-array-a
 
 CREATE _oc-component COMP-DESC ALLOT
 CREATE _oc-capability CAP-DESC ALLOT
@@ -1364,6 +1380,41 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-out 65536 OAI-RESPONSES-START-JSON
     SWAP _oc-out-u ! ;
 
+: _oc-large-array!  ( char capacity address -- )
+    _oc-large-array-a ! _oc-large-array-cap !
+    _oc-large-array-a @ 2 + _oc-large-array-cap @ 4 - ROT FILL
+    91 _oc-large-array-a @ C! 34 _oc-large-array-a @ 1+ C!
+    34 _oc-large-array-a @ _oc-large-array-cap @ 2 - + C!
+    93 _oc-large-array-a @ _oc-large-array-cap @ 1- + C! ;
+
+: _oc-test-composed-capacity  ( -- )
+    OAIR-INPUT-CAPACITY ALLOCATE
+        ABORT" OpenAI input capacity allocation failed" _oc-large-input !
+    OAIR-HISTORY-CAPACITY ALLOCATE
+        ABORT" OpenAI history capacity allocation failed" _oc-large-history !
+    OAIR-TOOL-OUTPUT-CAPACITY ALLOCATE
+        ABORT" OpenAI tool-output capacity allocation failed" _oc-large-output !
+    OAIR-BODY-CAPACITY ALLOCATE
+        ABORT" OpenAI body capacity allocation failed" _oc-large-body !
+    65 OAIR-INPUT-CAPACITY _oc-large-input @ _oc-large-array!
+    66 OAIR-HISTORY-CAPACITY _oc-large-history @ _oc-large-array!
+    _oc-large-output @ OAIR-TOOL-OUTPUT-CAPACITY 92 FILL
+    _oc-large-input @ OAIR-INPUT-CAPACITY
+    _oc-large-history @ OAIR-HISTORY-CAPACITY
+    S" call-capacity"
+    _oc-large-output @ OAIR-TOOL-OUTPUT-CAPACITY
+    _oc-config _oc-gateway @ _oc-large-body @ OAIR-BODY-CAPACITY
+    OAI-RESPONSES-CONTINUE-JSON
+    DUP OAIREQ-S-OK = _oc-assert DROP _oc-out-u !
+    _oc-out-u @ 160000 > _oc-assert
+    _oc-out-u @ OAIR-BODY-CAPACITY <= _oc-assert
+    _oc-large-body @ _oc-out-u @ OAIR-BODY-CAPACITY
+        JSON-VALID-LIMIT? _oc-assert
+    _oc-large-input @ FREE 0 _oc-large-input !
+    _oc-large-history @ FREE 0 _oc-large-history !
+    _oc-large-output @ FREE 0 _oc-large-output !
+    _oc-large-body @ FREE 0 _oc-large-body ! ;
+
 : _oc-test-config-and-request  ( -- )
     _oc-config OAIC-INIT
     _oc-credential CRED-INIT
@@ -1372,7 +1423,10 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-config OAIC-HOST S" api.openai.com" STR-STR= _oc-assert
     _oc-config OAIC-PATH S" /v1/responses" STR-STR= _oc-assert
     _oc-config OAIC-MODEL S" gpt-5.5" STR-STR= _oc-assert
-    _oc-config OAIC.MAX-OUTPUT @ 262144 = _oc-assert
+    _oc-config OAIC.MAX-REQUEST @ 196608 = _oc-assert
+    _oc-config OAIC.MAX-OUTPUT @ 49152 = _oc-assert
+    OAIR-BODY-CAPACITY 196608 = _oc-assert
+    OAIR-WIRE-CAPACITY 200704 = _oc-assert
     S" You assist the active Akashic applet."
     _oc-config OAIC-INSTRUCTIONS! OAIC-S-OK = _oc-assert
     S" bad host" _oc-config OAIC-HOST! OAIC-S-INVALID = _oc-assert
@@ -1460,6 +1514,8 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-out _oc-out-u @ JSON-ENTER S" input" JSON-KEY JSON-ENTER
     8 JSON-NTH JSON-ENTER S" call_id" JSON-KEY JSON-GET-STRING
     S" call_1" STR-STR= _oc-assert
+
+    _oc-test-composed-capacity
 
     _oc-config OAIC.FLAGS DUP @ OAIC-F-STORE OR SWAP !
     _oc-start-request OAIREQ-S-OK = _oc-assert
@@ -1583,6 +1639,7 @@ _oc-run
     "openai-provider": Profile(
         roots=(
             "security/credential.f",
+            "agent/storage/vfs-conversation.f",
             "agent/providers/openai/responses.f",
             "agent/runtime.f",
         ),
@@ -1591,6 +1648,7 @@ _oc-run
 ENTER-USERLAND
 ." [akashic] loading OpenAI provider fixture" CR
 REQUIRE security/credential.f
+REQUIRE agent/storage/vfs-conversation.f
 REQUIRE agent/providers/openai/responses.f
 REQUIRE agent/runtime.f
 
@@ -1649,6 +1707,8 @@ VARIABLE _op-bus
 VARIABLE _op-gateway
 VARIABLE _op-provider
 VARIABLE _op-runtime
+VARIABLE _op-vfs
+VARIABLE _op-store
 VARIABLE _op-handler-hits
 VARIABLE _op-found-text
 VARIABLE _op-refreshes
@@ -1904,6 +1964,8 @@ VARIABLE _op-auth-context
 
     _op-config _op-auth _op-port OPENAI-PROVIDER-NEW
     DROP _op-provider !
+    _op-provider @ APROV.FLAGS @ APROV-PF-CLASS-MASK AND
+    APROV-PF-REMOTE = _op-assert
     ." [openai-provider] provider" CR
     ." [openai-provider] tools " _op-gateway @ ATOOLG-TOOL-N . CR
     _op-gateway @ OAI-GATEWAY-TOOLS-VALID? _op-assert
@@ -1911,7 +1973,14 @@ VARIABLE _op-auth-context
     _op-gateway @ _op-provider @ APROV-BIND-TOOLS OAIR-S-OK = _op-assert
     ." [openai-provider] bound" CR
     _op-provider @ ARUNTIME-NEW DROP _op-runtime !
+    _op-runtime @ ARUNTIME-REMOTE-VERIFIED? 0= _op-assert
     ." [openai-provider] runtime-new" CR
+    524288 A-XMEM ARENA-NEW DUP 0= _op-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _op-vfs ! VFS-USE
+    _op-vfs @ AVFSSTORE-NEW
+    DUP ACSTORE-S-OK = _op-assert DROP DUP _op-store !
+    _op-runtime @ ARUNTIME-CONVERSATION-STORE!
+    ACSTORE-S-OK = _op-assert
     _op-gateway @ _op-runtime @ ARUNTIME-TOOL-GATEWAY!
     ." [openai-provider] runtime" CR ;
 
@@ -2004,6 +2073,7 @@ VARIABLE _op-history-seen
 : _op-test-run  ( -- )
     4 _op-runtime @ ARUNTIME-PUMP DROP
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _op-assert
+    _op-runtime @ ARUNTIME-REMOTE-VERIFIED? 0= _op-assert
     S" Please capture a milk task" _op-runtime @ ARUNTIME-SEND 0= _op-assert
     _op-pump-until-review
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _op-assert
@@ -2021,6 +2091,9 @@ VARIABLE _op-history-seen
     _op-check-replayed-request
     _op-pump-until-idle
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _op-assert
+    _op-runtime @ ARUNTIME-REMOTE-VERIFIED? _op-assert
+    _op-runtime @ ARUNTIME.LAST-REMOTE-RUN @ 1 = _op-assert
+    _op-runtime @ ARUNTIME.LAST-REMOTE-MS @ 0<> _op-assert
     _op-opens @ 3 = _op-assert
     _op-closes @ 3 >= _op-assert
     _op-handler-hits @ 1 = _op-assert
@@ -2104,7 +2177,8 @@ VARIABLE _op-history-seen
     _op-registry @ CREG-FREE
     _op-instance @ CINST-FREE
     _op-auth AAUTH-DESTROY
-    _op-credential CRED-CLEAR ;
+    _op-credential CRED-CLEAR
+    _op-vfs @ VFS-DESTROY ;
 
 : _op-run  ( -- )
     0 _op-fails ! 0 _op-checks ! DEPTH _op-depth !
@@ -2128,6 +2202,8 @@ _op-run
 """,
         ready_markers=("OPENAI PROVIDER PASS",),
         stable_markers=("OPENAI PROVIDER PASS",),
+        failure_markers=("OPENAI PROVIDER FAIL",),
+        linked=True,
     ),
     "openai-source": Profile(
         roots=(
@@ -4051,6 +4127,19 @@ CREATE _ct-null-schema CS-SIZE ALLOT
     _ct-out _ct-out-u @ JSON-ENTER S" required" JSON-KEY
     JSON-ENTER JSON-COUNT 0= _ct-assert
 
+    \ Unsupported native types must fail without consuming an extra stack
+    \ cell in either ordinary or exact typed canonical mode.
+    _ct-copy CV-FREE 123 _ct-copy CV-F32!
+    _ct-copy _ct-out 4096 IVJSON-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP _ct-stack
+    _ct-copy _ct-out 4096 IVJSON-TYPED-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP _ct-stack
+    S" opaque" _ct-copy CV-BYTES! 0= _ct-assert
+    _ct-copy _ct-out 4096 IVJSON-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP _ct-stack
+    _ct-copy _ct-out 4096 IVJSON-TYPED-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP _ct-stack
+
     _ct-val CV-FREE _ct-copy CV-FREE
     _ct-stack
     _ct-fails @ 0= IF
@@ -4322,10 +4411,38 @@ VARIABLE _at-gateway
 VARIABLE _at-authority
 VARIABLE _at-tool-value
 VARIABLE _at-stack-depth
+VARIABLE _at-history-status
+VARIABLE _at-history-bytes
+VARIABLE _at-current-run
+VARIABLE _at-before-count
+VARIABLE _at-h-role VARIABLE _at-h-run VARIABLE _at-h-a VARIABLE _at-h-u
+VARIABLE _at-cancel-xt
+VARIABLE _at-parent
+VARIABLE _at-mf-parent VARIABLE _at-mf-child VARIABLE _at-mf-run-id
+VARIABLE _at-mf-status VARIABLE _at-live-mandate
+VARIABLE _at-store-fail
+VARIABLE _at-message
 
 CREATE _at-component COMP-DESC ALLOT
 CREATE _at-capability CAP-DESC ALLOT
 CREATE _at-policy CPOLICY-SIZE ALLOT
+CREATE _at-stale-event AGENT-EVENT-SIZE ALLOT
+CREATE _at-head PHEAD-SIZE ALLOT
+CREATE _at-mandate MAND-SIZE ALLOT
+CREATE _at-facet CFACET-SIZE ALLOT
+CREATE _at-store AGENT-CONVERSATION-STORE-SIZE ALLOT
+
+: _at-store-load  ( context -- conversation status )
+    DROP 0 ACSTORE-S-NOT-FOUND ;
+: _at-store-save  ( conversation context -- status )
+    DROP DROP _at-store-fail @ IF ACSTORE-S-IO ELSE ACSTORE-S-OK THEN ;
+: _at-store-free  ( store -- ) DROP ;
+: _at-store-setup  ( -- )
+    0 _at-store-fail !
+    _at-store ACSTORE-INIT
+    ['] _at-store-load _at-store ACSTORE.LOAD-XT !
+    ['] _at-store-save _at-store ACSTORE.SAVE-XT !
+    ['] _at-store-free _at-store ACSTORE.FREE-XT ! ;
 
 : _at-tool-handler  ( request instance -- status )
     DROP
@@ -4350,6 +4467,60 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     1 _at-component COMP.CAPS-N !
     _at-policy CPOLICY-INIT ;
 
+: _at-rid!  ( value rid -- ) DUP RID-CLEAR ! ;
+
+: _at-mandate-factory  ( run-id parent-context -- mandate-run status )
+    _at-mf-parent ! _at-mf-run-id !
+    _at-mf-parent @ CTX-CHILD-NEW DUP IF NIP 0 SWAP EXIT THEN
+    DROP _at-mf-child !
+
+    _at-facet CFACET-INIT
+    _at-mf-run-id @ _at-facet CFACET.ID _at-rid!
+    _at-head PHEAD.ID _at-facet CFACET.PRACTICE-ID RID-COPY
+    _at-mf-parent @ CTX.EPOCH @ _at-facet CFACET.EPOCH !
+    _at-mf-child @ CTX.ID @ _at-facet CFACET.CONTEXT-ID !
+    _at-mf-child @ CTX.GENERATION @ _at-facet CFACET.CONTEXT-GEN !
+    1 _at-facet CFACET.REVISION !
+    _at-instance @ CINST.ID @ _at-instance @ CINST.GENERATION @
+    CAP-E-MUTATE CAP-E-PERSIST OR
+    CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR
+        CFENTRY-F-REVIEW-COMMIT OR CFENTRY-F-DISCLOSE-RESULT OR
+    8 S" daybook.task.capture" _at-facet CFACET-ADD
+    DUP IF
+        _at-mf-child @ CTX-FREE 0 SWAP EXIT
+    THEN DROP
+
+    _at-mandate MAND-INIT
+    _at-mf-run-id @ 100 + _at-mandate MAND.ID _at-rid!
+    _at-head PHEAD.ID _at-mandate MAND.PRACTICE-ID RID-COPY
+    _at-facet CFACET.ID _at-mandate MAND.INPUT-FACET-ID RID-COPY
+    _at-facet CFACET.ID _at-mandate MAND.DISCLOSURE-FACET-ID RID-COPY
+    _at-mf-parent @ CTX.EPOCH @
+        _at-mandate MAND.ACTIVATION-EPOCH !
+    CPRINC-AGENT _at-mandate MAND.PRINCIPAL !
+    _at-mf-child @ CTX.ID @ _at-mandate MAND.CONTEXT-ID !
+    _at-mf-child @ CTX.GENERATION @
+        _at-mandate MAND.CONTEXT-GENERATION !
+    CAP-E-MUTATE CAP-E-PERSIST OR _at-mandate MAND.EFFECTS !
+    MAND-D-COMMIT _at-mandate MAND.DISPOSITION !
+    600000 _at-mandate MAND.TIME-BUDGET-MS !
+    8 _at-mandate MAND.TOOL-BUDGET !
+    49152 _at-mandate MAND.DISCLOSURE-BUDGET !
+    _at-head _at-mf-child @ _at-mandate _at-facet AMRUN-NEW
+    DUP IF
+        _at-mf-status ! DROP _at-mf-child @ CTX-FREE
+        0 _at-mf-status @
+    THEN ;
+
+: _at-scope-setup  ( -- )
+    _at-head PHEAD-INIT
+    71 _at-head PHEAD.ID _at-rid!
+    72 _at-head PHEAD.CURRENT-ROOT _at-rid!
+    77 CTX-NEW DUP 0= _at-assert DROP _at-parent !
+    _at-head _at-parent @ CTX.PRACTICE !
+    ['] _at-mandate-factory _at-parent @ _at-runtime @
+        ARUNTIME-MANDATE-FACTORY! ;
+
 : _at-pump  ( count -- )
     0 ?DO 8 _at-runtime @ ARUNTIME-PUMP DROP LOOP ;
 
@@ -4359,10 +4530,184 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     THEN
     _at-stack-depth @ = _at-assert ;
 
+: _at-history+  ( role run-id addr len -- )
+    _at-h-u ! _at-h-a ! _at-h-run ! _at-h-role !
+    _at-h-role @ AMSG-S-COMPLETE _at-h-run @ _at-h-a @ _at-h-u @
+    _at-runtime @ ARUNTIME.CONVERSATION @ ACONV-APPEND
+    0= _at-assert DROP ;
+
+: _at-unscoped  ( -- )
+    _at-runtime @ ARUNTIME.ACCESS-PROFILE AAP-INIT ;
+
+: _at-history-contract  ( -- )
+    AROLE-USER      11 S" u1" _at-history+
+    AROLE-ASSISTANT 11 S" a1" _at-history+
+    \ Run 12 has no user and must not become provider-visible.
+    AROLE-ASSISTANT 12 S" orphan" _at-history+
+    \ Interleaved records cannot splice an assistant from another run into
+    \ the selected pair: only the newest complete run is disclosed.
+    AROLE-USER      13 S" x1" _at-history+
+    AROLE-USER      14 S" x2" _at-history+
+    AROLE-ASSISTANT 13 S" y1" _at-history+
+    AROLE-ASSISTANT 14 S" y2" _at-history+
+    \ A trailing user without an assistant is also excluded.
+    AROLE-USER      15 S" lonely" _at-history+
+    _at-runtime @ _ARUNTIME-BUILD-HISTORY
+    _at-history-status ! _at-history-bytes !
+    _at-history-status @ ACTX-S-OK = _at-assert
+    _at-history-bytes @ 8 = _at-assert
+    _at-runtime @ ARUNTIME-LAST-DISCLOSURE-ITEMS 4 = _at-assert
+    _at-runtime @ ARUNTIME-LAST-DISCLOSURE-BYTES 8 = _at-assert
+    _at-runtime @ ARUNTIME.DISCLOSURE-CONTEXT @ DUP ACTX.COUNT @ 4 =
+        _at-assert
+    DUP 0 SWAP ACTX-NTH DUP ACTXI.ROLE @ AROLE-USER = _at-assert
+        ACTXI-DATA-TEXT S" u1" STR-STR= _at-assert
+    DUP 1 SWAP ACTX-NTH DUP ACTXI.ROLE @ AROLE-ASSISTANT = _at-assert
+        ACTXI-DATA-TEXT S" a1" STR-STR= _at-assert
+    DUP 2 SWAP ACTX-NTH DUP ACTXI.ROLE @ AROLE-USER = _at-assert
+        ACTXI-DATA-TEXT S" x2" STR-STR= _at-assert
+    3 SWAP ACTX-NTH DUP ACTXI.ROLE @ AROLE-ASSISTANT = _at-assert
+        ACTXI-DATA-TEXT S" y2" STR-STR= _at-assert
+    _at-runtime @ ARUNTIME-CLEAR 0= _at-assert ;
+
+: _at-stale-event-contract  ( -- )
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ DUP _at-current-run ! 1- >R
+    \ Even a stale ERROR status cannot authorize clearing a live run.
+    ARUN-S-ERROR _at-runtime @ ARUNTIME.STATUS !
+    _at-runtime @ ARUNTIME-CLEAR 1 = _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run @ = _at-assert
+    ARUN-S-RUNNING _at-runtime @ ARUNTIME.STATUS !
+    _at-stale-event AEV-INIT
+    \ A zero-id tool event has no authority, even while another run is live.
+    AEV-TOOL-CALL _at-stale-event AEV.KIND !
+    _at-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @ _at-before-count !
+    _at-stale-event _at-runtime @ _AR-HANDLE-EVENT
+    _at-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @
+        _at-before-count @ = _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run @ = _at-assert
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-RUNNING = _at-assert
+    _at-stale-event AEV-FREE
+    AEV-TEXT-DELTA _at-stale-event AEV.KIND !
+    R@ _at-stale-event AEV.RUN-ID !
+    S" stale" _at-stale-event AEV.DATA CV-STRING! 0= _at-assert
+    _at-stale-event _at-runtime @ _AR-HANDLE-EVENT
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run @ = _at-assert
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-RUNNING = _at-assert
+    _at-runtime @ ARUNTIME.ASSISTANT-MSG @ AMSG-TEXT NIP 0= _at-assert
+    _at-stale-event AEV-FREE
+    AEV-RUN-DONE _at-stale-event AEV.KIND !
+    R> _at-stale-event AEV.RUN-ID !
+    _at-stale-event _at-runtime @ _AR-HANDLE-EVENT
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run @ = _at-assert
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-RUNNING = _at-assert
+    _at-stale-event AEV-FREE ;
+
+: _at-terminal-race  ( -- )
+    0 _at-tool-value !
+    AAP-PRESET-PRACTICE-ASSIST _at-runtime @ ARUNTIME-ACCESS-PRESET!
+        AAP-S-OK = _at-assert
+    S" task terminal race" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-runtime @ ARUNTIME.MANDATE-RUN @ DUP 0<> _at-assert
+        _at-live-mandate !
+    _at-live-mandate @ AMRUN-ACTIVE? _at-assert
+    4 0 DO 1 _at-pump _at-stack-clean LOOP
+    _at-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run !
+    _at-stale-event AEV-INIT
+    AEV-RUN-DONE _at-stale-event AEV.KIND !
+    _at-current-run @ _at-stale-event AEV.RUN-ID !
+    _at-stale-event _at-runtime @ _AR-HANDLE-EVENT
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run @ = _at-assert
+    _at-runtime @ ARUNTIME.FLAGS @ ARUNTIME-F-TERMINATING AND
+        0<> _at-assert
+    _at-runtime @ ARUNTIME.MANDATE-RUN @ _at-live-mandate @ = _at-assert
+    _at-live-mandate @ AMRUN-ACTIVE? _at-assert
+    _at-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _at-assert
+    8 _at-bus @ CBUS-PUMP 1 = _at-assert
+    _at-tool-value @ 0= _at-assert
+    _at-gateway @ ATOOLG.STATE @ ATOOLG-S-COMPLETE = _at-assert
+    _at-runtime @ ARUNTIME.MANDATE-RUN @ _at-live-mandate @ = _at-assert
+    _at-live-mandate @ AMRUN-ACTIVE? _at-assert
+    2 _at-pump
+    _at-gateway @ ATOOLG.STATE @ ATOOLG-S-IDLE = _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _at-assert
+    _at-runtime @ ARUNTIME.MANDATE-RUN @ 0= _at-assert
+    _at-runtime @ ARUNTIME.FLAGS @ ARUNTIME-F-TERMINATING AND
+        0= _at-assert
+    _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 8 = _at-assert
+    AAP-PRESET-CHAT-ONLY _at-runtime @ ARUNTIME-ACCESS-PRESET!
+        AAP-S-OK = _at-assert
+    AAP-PRESET-PRACTICE-READ _at-runtime @ ARUNTIME-ACCESS-PRESET!
+        AAP-S-OK = _at-assert
+    _at-unscoped
+    0 0 _at-runtime @ ARUNTIME-MANDATE-FACTORY!
+    _at-stale-event AEV-FREE ;
+
+: _at-provider-protocol-rejection  ( -- )
+    \ RUN-DONE cannot finish a transcript item that was never committed by
+    \ MESSAGE-DONE.
+    S" premature run done" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run !
+    _at-runtime @ ARUNTIME.ASSISTANT-MSG @ _at-message !
+    _at-stale-event AEV-INIT
+    AEV-RUN-DONE _at-stale-event AEV.KIND !
+    _at-current-run @ _at-stale-event AEV.RUN-ID !
+    _at-stale-event _at-runtime @ _AR-HANDLE-EVENT
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _at-assert
+    _at-runtime @ ARUNTIME.ASSISTANT-MSG @ 0= _at-assert
+    _at-message @ AMSG.STATE @ AMSG-S-ERROR = _at-assert
+    _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 8 = _at-assert
+    2 _at-pump
+
+    \ A late delta cannot mutate the visible transcript after its assistant
+    \ snapshot has already entered model context.
+    S" late delta" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run !
+    _at-runtime @ ARUNTIME.ASSISTANT-MSG @ _at-message !
+    _at-stale-event AEV-FREE
+    AEV-MESSAGE-DONE _at-stale-event AEV.KIND !
+    _at-current-run @ _at-stale-event AEV.RUN-ID !
+    _at-stale-event _at-runtime @ _AR-HANDLE-EVENT
+    _at-message @ AMSG.STATE @ AMSG-S-COMPLETE = _at-assert
+    _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 10 = _at-assert
+    _at-stale-event AEV-FREE
+    AEV-TEXT-DELTA _at-stale-event AEV.KIND !
+    _at-current-run @ _at-stale-event AEV.RUN-ID !
+    S" rejected" _at-stale-event AEV.DATA CV-STRING! 0= _at-assert
+    _at-stale-event _at-runtime @ _AR-HANDLE-EVENT
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _at-assert
+    _at-runtime @ ARUNTIME.ASSISTANT-MSG @ 0= _at-assert
+    _at-message @ AMSG.STATE @ AMSG-S-ERROR = _at-assert
+    _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 8 = _at-assert
+    _at-stale-event AEV-FREE
+    2 _at-pump ;
+
+: _at-cancel-fail  ( run-id queue context -- ior )
+    DROP 2DROP 77 ;
+
+: _at-cancel-failure  ( -- )
+    _at-provider @ APROV.CANCEL-XT @ _at-cancel-xt !
+    ['] _at-cancel-fail _at-provider @ APROV.CANCEL-XT !
+    S" provider cancel failure" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ _at-current-run !
+    _at-runtime @ ARUNTIME-CANCEL 77 = _at-assert
+    _at-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _at-assert
+    _at-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _at-assert
+    _at-runtime @ ARUNTIME.MANDATE-RUN @ 0= _at-assert
+    _at-cancel-xt @ _at-provider @ APROV.CANCEL-XT !
+    _at-current-run @ _at-runtime @ ARUNTIME.EVENTS @
+        _at-provider @ APROV-CANCEL 0= _at-assert
+    2 _at-pump ;
+
 : _at-run  ( -- )
     0 _at-fails ! 0 _at-check !
     DEPTH _at-stack-depth !
     OFFLINE-PROVIDER-NEW DUP 0= _at-assert DROP _at-offline-provider !
+    _at-offline-provider @ APROV.FLAGS @ APROV-PF-CLASS-MASK AND
+    APROV-PF-OFFLINE = _at-assert
     _at-offline-provider @ ARUNTIME-NEW
     DUP 0= _at-assert DROP _at-offline-runtime !
     _at-offline-runtime @ ARUNTIME.STATUS @ ARUN-S-OFFLINE = _at-assert
@@ -4374,12 +4719,30 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     DUP 0= _at-assert DROP _at-provider !
     _at-provider @ DUP APROV.ID-A @ SWAP APROV.ID-U @
     S" org.akashic.agent.testing.scripted" STR-STR= _at-assert
+    _at-provider @ APROV.FLAGS @ APROV-PF-CLASS-MASK AND
+    APROV-PF-DEMO = _at-assert
     _at-provider @ ARUNTIME-NEW DUP 0= _at-assert DROP _at-runtime !
+    _at-store-setup
+    _at-store _at-runtime @ ARUNTIME-CONVERSATION-STORE!
+        ACSTORE-S-OK = _at-assert
+    _at-runtime @ ARUNTIME-ACCESS-PROFILE 0= _at-assert
+    _at-runtime @ ARUNTIME-ACCESS-SCOPE$ S" Unscoped" STR-STR= _at-assert
+    _at-runtime @ ARUNTIME-SCOPE-AVAILABLE? 0= _at-assert
+    AAP-PRESET-CHAT-ONLY _at-runtime @ ARUNTIME-ACCESS-PRESET!
+    AAP-S-UNAVAILABLE = _at-assert
+    _at-runtime @ ARUNTIME-ACCESS-PROFILE 0= _at-assert
+    AAP-PRESET-CHAT-ONLY _at-runtime @ ARUNTIME.ACCESS-PROFILE AAP-PRESET!
+        AAP-S-OK = _at-assert
+    _at-history-contract
+    _at-unscoped
     _at-stack-clean
     2 _at-pump
     _at-stack-clean
     _at-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _at-assert
     S" hello runtime" _at-runtime @ ARUNTIME-SEND 0= _at-assert
+    AAP-PRESET-PRACTICE-ASSIST _at-runtime @ ARUNTIME-ACCESS-PRESET!
+    2 = _at-assert
+    _at-runtime @ ARUNTIME-ACCESS-SCOPE$ S" Unscoped" STR-STR= _at-assert
     _at-stack-clean
     6 _at-pump
     _at-stack-clean
@@ -4387,8 +4750,13 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     _at-runtime @ ARUNTIME.CONVERSATION @ DUP _at-conv !
     ACONV.COUNT @ 2 = _at-assert
     _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 2 = _at-assert
+    AAP-PRESET-PRACTICE-READ _at-runtime @ ARUNTIME-ACCESS-PRESET!
+    AAP-S-UNAVAILABLE = _at-assert
+    _at-runtime @ ARUNTIME-ACCESS-SCOPE$
+    S" Unscoped" STR-STR= _at-assert
     1 _at-conv @ ACONV-NTH AMSG-TEXT
     S" hello runtime" STR-STR-CONTAINS _at-assert
+    _at-unscoped
     _at-stack-clean
 
     S" request approval" _at-runtime @ ARUNTIME-SEND 0= _at-assert
@@ -4442,8 +4810,18 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     S" Daybook task captured." STR-STR-CONTAINS _at-assert
     _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 8 = _at-assert
 
+    _at-provider-protocol-rejection
+    _at-stack-clean
+    _at-scope-setup
+    _at-terminal-race
+    _at-stack-clean
+    _at-cancel-failure
+    _at-stack-clean
+
     S" cancel this" _at-runtime @ ARUNTIME-SEND 0= _at-assert
     _at-provider @ SCRIPTED-LAST-CONTEXT-N 8 = _at-assert
+    _at-stale-event-contract
+    _at-stack-clean
     _at-runtime @ ARUNTIME-CANCEL 0= _at-assert
     2 _at-pump
     _at-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _at-assert
@@ -4458,6 +4836,7 @@ CREATE _at-policy CPOLICY-SIZE ALLOT
     _at-instance @ _at-registry @ CREG-INST- DROP
     _at-registry @ CREG-FREE
     _at-instance @ CINST-FREE
+    _at-parent @ CTX-FREE
     _at-fails @ 0= IF
         ." AGENT RUNTIME PASS"
     ELSE
@@ -5184,7 +5563,7 @@ VARIABLE _rc-saw-running
     _rc-ref3 RREF.REVISION @ 2 = _rc-assert
 
     CBR-NEW DUP 0= _rc-assert DROP _rc-request !
-    CBR-SIZE 464 = _rc-assert
+    CBR-SIZE 512 = _rc-assert
     _rc-request @ CBR.RESOURCE-ID RID-ZERO? _rc-assert
     _rc-bind _rc-context @ _rc-request @ LBIND-REQUEST!
         LBIND-S-OK = _rc-assert
@@ -5415,7 +5794,7 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     DUP 0<> _ct-assert CIE.CAP @ _ct-cap = _ct-assert
     _ct-reg @ 0 CBUS-NEW DUP 0= _ct-assert DROP _ct-bus !
     CBR-NEW DUP 0= _ct-assert DROP _ct-req !
-    CBR-SIZE 464 = _ct-assert
+    CBR-SIZE 512 = _ct-assert
     _ct-req @ CBR.RESOURCE-ID RID-ZERO? _ct-assert
     CPRINC-AGENT _ct-req @ CBR.PRINCIPAL !
     _ct-i2 @ _ct-req @ CBR-CALLER!
@@ -5707,6 +6086,63 @@ ENTER-USERLAND
 REQUIRE agent/providers/devtools/scripted.f
 REQUIRE agent/runtime.f
 REQUIRE tui/applets/agent/agent.f
+
+CREATE _aui-state _AG-STATE-SIZE ALLOT
+CREATE _aui-runtime AGENT-RUNTIME-SIZE ALLOT
+CREATE _aui-conversation AGENT-CONVERSATION-SIZE ALLOT
+VARIABLE _aui-message
+VARIABLE _aui-depth
+
+: _aui-assert  ( flag -- )
+    0= ABORT" agent review anchor stack contract" ;
+
+\ Exercise both sides of the draw-time review anchor.  The first frame can
+\ observe provider approval before the transcript message is promoted; the
+\ following frame has a nonzero wrapped review and must not consume UIDL's
+\ caller-owned traversal cell.
+: _aui-review-anchor-contract  ( -- )
+    _aui-state _AG-STATE-SIZE 0 FILL
+    _aui-runtime AGENT-RUNTIME-SIZE 0 FILL
+    _aui-conversation AGENT-CONVERSATION-SIZE 0 FILL
+    _aui-state _AG-CURRENT-STATE !
+    _aui-runtime _AG-RUNTIME !
+    _aui-conversation _aui-runtime ARUNTIME.CONVERSATION !
+    1 _aui-conversation ACONV.COUNT !
+    0 _aui-conversation ACONV-NTH DUP _aui-message ! AMSG-INIT
+    S" provider review fixture"
+        _aui-message @ AMSG.TEXT-U ! _aui-message @ AMSG.TEXT-A !
+    _aui-message @ _aui-runtime ARUNTIME.APPROVAL-MSG !
+    ARUN-S-APPROVAL _aui-runtime ARUNTIME.STATUS !
+    _aui-message @ _AG-REVIEW-REQUEST-ID !
+    _AG-ANCHOR-PENDING _AG-REVIEW-ANCHOR-STATE !
+    DEPTH _aui-depth !
+
+    11111 20 4 _AG-APPLY-REVIEW-ANCHOR 11111 = _aui-assert
+    DEPTH _aui-depth @ = _aui-assert
+    _AG-REVIEW-ANCHOR-STATE @ _AG-ANCHOR-NONE = _aui-assert
+
+    AMSG-S-APPROVAL _aui-message @ AMSG.STATE !
+    _AG-ANCHOR-PENDING _AG-REVIEW-ANCHOR-STATE !
+    22222 20 4 _AG-APPLY-REVIEW-ANCHOR 22222 = _aui-assert
+    DEPTH _aui-depth @ = _aui-assert
+    _AG-REVIEW-ANCHOR-STATE @ _AG-ANCHOR-APPLIED = _aui-assert
+
+    \ Resolving the tracked review releases its forced top anchor so the
+    \ result appended below it becomes visible.  A later sync with no tracked
+    \ review must preserve an ordinary user-selected transcript position.
+    7 _AG-SCROLL !
+    0 _aui-runtime ARUNTIME.APPROVAL-MSG !
+    ARUN-S-IDLE _aui-runtime ARUNTIME.STATUS !
+    _AG-SYNC-REVIEW
+    _AG-SCROLL @ 0= _aui-assert
+    _AG-REVIEW-REQUEST-ID @ 0= _aui-assert
+    9 _AG-SCROLL !
+    _AG-SYNC-REVIEW
+    _AG-SCROLL @ 9 = _aui-assert
+    0 _AG-CURRENT-STATE ! ;
+
+_aui-review-anchor-contract
+
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
     AGENT-SOURCE! ;
@@ -5738,8 +6174,9 @@ _boot-openai-source
 AGENT-RUN
 ." [akashic] Agent credential UI exited" CR
 """,
-        ready_markers=("Agent", "Connection", "Credential required"),
-        stable_markers=("Agent", "Connection", "Credential required"),
+        ready_markers=("Agent", "Connection", "Credential"),
+        stable_markers=("Agent", "Connection", "Credential"),
+        linked=True,
     ),
     "agent-device-ui": Profile(
         roots=(
@@ -7676,10 +8113,1287 @@ _pkg-run
     ),
 )
 
+# Runtime authority, audit, teardown, and capacity cases are intentionally
+# separate from the broad `agent` profile.  Keeping each autoexec focused
+# avoids making acceptance depend on KDOS's fixed user-dictionary ceiling.
+PROFILES["agent-security"] = Profile(
+    roots=PROFILES["agent"].roots,
+    resources=(),
+    autoexec=r"""\ autoexec.f - Agent authority and lifecycle hardening
+ENTER-USERLAND
+." [akashic] loading Agent security contracts" CR
+REQUIRE agent/providers/devtools/scripted.f
+REQUIRE agent/runtime.f
+
+VARIABLE _ahs-fails VARIABLE _ahs-checks VARIABLE _ahs-depth
+VARIABLE _ahs-source VARIABLE _ahs-provider VARIABLE _ahs-runtime
+VARIABLE _ahs-reg VARIABLE _ahs-inst VARIABLE _ahs-bus VARIABLE _ahs-gateway
+VARIABLE _ahs-authority VARIABLE _ahs-parent VARIABLE _ahs-live-run
+VARIABLE _ahs-tool-value VARIABLE _ahs-store-fail VARIABLE _ahs-store-saves
+VARIABLE _ahs-current-run VARIABLE _ahs-before VARIABLE _ahs-message
+VARIABLE _ahs-cancel-xt VARIABLE _ahs-poll-xt VARIABLE _ahs-resolve-xt
+VARIABLE _ahs-poll-hits VARIABLE _ahs-audit-count VARIABLE _ahs-find-a
+VARIABLE _ahs-find-u VARIABLE _ahs-digest-a VARIABLE _ahs-digest-u
+VARIABLE _ahs-digest-hex-u VARIABLE _ahs-canonical-u
+VARIABLE _ahs-original-count VARIABLE _ahs-original-context
+VARIABLE _ahs-original-next VARIABLE _ahs-original-revision
+VARIABLE _ahs-mf-parent VARIABLE _ahs-mf-child VARIABLE _ahs-mf-run
+VARIABLE _ahs-mf-status
+VARIABLE _ahs-unsupported-req
+
+CREATE _ahs-component COMP-DESC ALLOT
+CREATE _ahs-cap CAP-DESC ALLOT
+CREATE _ahs-policy CPOLICY-SIZE ALLOT
+CREATE _ahs-head PHEAD-SIZE ALLOT
+CREATE _ahs-mandate MAND-SIZE ALLOT
+CREATE _ahs-facet CFACET-SIZE ALLOT
+CREATE _ahs-store AGENT-CONVERSATION-STORE-SIZE ALLOT
+CREATE _ahs-digest-hex SHA3-256-LEN 2* ALLOT
+CREATE _ahs-large ATOOLG-ARGS-REVIEW-MAX ALLOT
+CREATE _ahs-container CV-SIZE ALLOT
+CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
+
+: _ahs-assert  ( flag -- )
+    1 _ahs-checks +! 0= IF 1 _ahs-fails +! ." ASSERT " _ahs-checks @ . CR THEN ;
+: _ahs-stack  ( -- ) DEPTH _ahs-depth @ = _ahs-assert ;
+: _ahs-rid!  ( value rid -- ) DUP RID-CLEAR ! ;
+: _ahs-pump  ( count -- ) 0 ?DO 8 _ahs-runtime @ ARUNTIME-PUMP DROP LOOP ;
+
+: _ahs-store-load  ( context -- conversation status )
+    DROP 0 ACSTORE-S-NOT-FOUND ;
+: _ahs-store-save  ( conversation context -- status )
+    2DROP 1 _ahs-store-saves +!
+    _ahs-store-fail @ IF ACSTORE-S-IO ELSE ACSTORE-S-OK THEN ;
+: _ahs-store-free  ( store -- ) DROP ;
+: _ahs-store-setup  ( -- )
+    0 _ahs-store-fail ! 0 _ahs-store-saves !
+    _ahs-store ACSTORE-INIT
+    ['] _ahs-store-load _ahs-store ACSTORE.LOAD-XT !
+    ['] _ahs-store-save _ahs-store ACSTORE.SAVE-XT !
+    ['] _ahs-store-free _ahs-store ACSTORE.FREE-XT ! ;
+
+: _ahs-tool-handler  ( request instance -- status )
+    DROP DUP CBR.ARGS CV-LEN@ _ahs-tool-value !
+    1 OVER CBR.RESULT CV-INT! DROP CBUS-S-OK ;
+
+: _ahs-tool-setup  ( -- )
+    _ahs-component COMP-DESC-INIT
+    S" org.akashic.test.agent-security"
+        _ahs-component COMP.ID-U ! _ahs-component COMP.ID-A !
+    S" 1.0.0"
+        _ahs-component COMP.VERSION-U ! _ahs-component COMP.VERSION-A !
+    8 _ahs-component COMP.STATE-SIZE !
+    _ahs-cap CAP-DESC-INIT
+    CAP-K-COMMAND _ahs-cap CAP.KIND !
+    S" daybook.task.capture" _ahs-cap CAP.ID-U ! _ahs-cap CAP.ID-A !
+    CAP-E-MUTATE CAP-E-PERSIST OR _ahs-cap CAP.EFFECTS !
+    ['] _ahs-tool-handler _ahs-cap CAP.HANDLER-XT !
+    _ahs-cap _ahs-component COMP.CAPS-A !
+    1 _ahs-component COMP.CAPS-N !
+    _ahs-policy CPOLICY-INIT ;
+
+: _ahs-mandate-factory  ( run-id parent-context -- mandate-run status )
+    _ahs-mf-parent ! _ahs-mf-run !
+    _ahs-mf-parent @ CTX-CHILD-NEW DUP IF NIP 0 SWAP EXIT THEN
+    DROP _ahs-mf-child !
+    _ahs-facet CFACET-INIT
+    _ahs-mf-run @ _ahs-facet CFACET.ID _ahs-rid!
+    _ahs-head PHEAD.ID _ahs-facet CFACET.PRACTICE-ID RID-COPY
+    _ahs-mf-parent @ CTX.EPOCH @ _ahs-facet CFACET.EPOCH !
+    _ahs-mf-child @ CTX.ID @ _ahs-facet CFACET.CONTEXT-ID !
+    _ahs-mf-child @ CTX.GENERATION @ _ahs-facet CFACET.CONTEXT-GEN !
+    1 _ahs-facet CFACET.REVISION !
+    _ahs-inst @ CINST.ID @ _ahs-inst @ CINST.GENERATION @
+    CAP-E-MUTATE CAP-E-PERSIST OR
+    CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR
+        CFENTRY-F-REVIEW-COMMIT OR CFENTRY-F-DISCLOSE-RESULT OR
+    8 S" daybook.task.capture" _ahs-facet CFACET-ADD
+    DUP IF _ahs-mf-child @ CTX-FREE 0 SWAP EXIT THEN DROP
+    _ahs-mandate MAND-INIT
+    _ahs-mf-run @ 100 + _ahs-mandate MAND.ID _ahs-rid!
+    _ahs-head PHEAD.ID _ahs-mandate MAND.PRACTICE-ID RID-COPY
+    _ahs-facet CFACET.ID _ahs-mandate MAND.INPUT-FACET-ID RID-COPY
+    _ahs-facet CFACET.ID _ahs-mandate MAND.DISCLOSURE-FACET-ID RID-COPY
+    _ahs-mf-parent @ CTX.EPOCH @ _ahs-mandate MAND.ACTIVATION-EPOCH !
+    CPRINC-AGENT _ahs-mandate MAND.PRINCIPAL !
+    _ahs-mf-child @ CTX.ID @ _ahs-mandate MAND.CONTEXT-ID !
+    _ahs-mf-child @ CTX.GENERATION @
+        _ahs-mandate MAND.CONTEXT-GENERATION !
+    CAP-E-MUTATE CAP-E-PERSIST OR _ahs-mandate MAND.EFFECTS !
+    MAND-D-COMMIT _ahs-mandate MAND.DISPOSITION !
+    600000 _ahs-mandate MAND.TIME-BUDGET-MS !
+    8 _ahs-mandate MAND.TOOL-BUDGET !
+    49152 _ahs-mandate MAND.DISCLOSURE-BUDGET !
+    _ahs-head _ahs-mf-child @ _ahs-mandate _ahs-facet AMRUN-NEW
+    DUP IF
+        _ahs-mf-status ! DROP _ahs-mf-child @ CTX-FREE
+        0 _ahs-mf-status @
+    THEN ;
+
+: _ahs-scope-setup  ( -- )
+    _ahs-head PHEAD-INIT
+    71 _ahs-head PHEAD.ID _ahs-rid!
+    72 _ahs-head PHEAD.CURRENT-ROOT _ahs-rid!
+    77 CTX-NEW DUP 0= _ahs-assert DROP _ahs-parent !
+    _ahs-head _ahs-parent @ CTX.PRACTICE !
+    ['] _ahs-mandate-factory _ahs-parent @ _ahs-runtime @
+        ARUNTIME-MANDATE-FACTORY!
+    AAP-PRESET-PRACTICE-ASSIST _ahs-runtime @ ARUNTIME-ACCESS-PRESET!
+        AAP-S-OK = _ahs-assert ;
+
+: _ahs-audit-n  ( -- count )
+    0 _ahs-audit-count !
+    _ahs-runtime @ ARUNTIME.CONVERSATION @ DUP ACONV.COUNT @ 0 ?DO
+        I OVER ACONV-NTH AMSG.FLAGS @ AMSG-F-AUDIT AND IF
+            1 _ahs-audit-count +!
+        THEN
+    LOOP DROP _ahs-audit-count @ ;
+
+: _ahs-last-audit  ( -- message | 0 )
+    _ahs-runtime @ ARUNTIME.CONVERSATION @ DUP ACONV.COUNT @
+    BEGIN DUP 0> WHILE
+        1- 2DUP SWAP ACONV-NTH
+        DUP AMSG.FLAGS @ AMSG-F-AUDIT AND IF NIP NIP EXIT THEN DROP
+    REPEAT 2DROP 0 ;
+
+: _ahs-audit-has  ( addr len -- flag )
+    _ahs-find-u ! _ahs-find-a !
+    _ahs-last-audit ?DUP IF
+        AMSG-TEXT _ahs-find-a @ _ahs-find-u @ STR-STR-CONTAINS
+    ELSE 0 THEN ;
+
+: _ahs-queued  ( addr len -- )
+    _ahs-runtime @ ARUNTIME-SEND 0= _ahs-assert
+    4 0 DO 1 _ahs-pump _ahs-stack LOOP
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _ahs-assert ;
+: _ahs-review  ( -- )
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    1 _ahs-pump
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _ahs-assert ;
+: _ahs-finish  ( -- )
+    2 _ahs-pump
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ahs-assert ;
+
+: _ahs-padding+  ( -- )
+    AROLE-SYSTEM AMSG-S-COMPLETE 0 S" capacity padding"
+    _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV-APPEND
+    0= _ahs-assert DROP ;
+: _ahs-trim  ( count -- )
+    BEGIN DUP _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @ < WHILE
+        _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV-DROP-LAST
+    REPEAT DROP ;
+
+: _ahs-cancel-fail  ( run-id queue context -- ior ) DROP 2DROP 77 ;
+: _ahs-poll-fail  ( queue context -- ior )
+    2DROP 1 _ahs-poll-hits +! 77 ;
+: _ahs-resolve-fail  ( approved run-id queue context -- ior )
+    2DROP 2DROP 77 ;
+
+: _ahs-audit-envelope  ( -- )
+    0 _ahs-tool-value !
+    S" task audit envelope" _ahs-queued
+    _ahs-gateway @ ATOOLG-ARGS-CANONICAL-ALLOC
+    DUP 0= _ahs-assert DROP DUP _ahs-canonical-u !
+    OVER >R
+    2DUP S" task audit envelope" STR-STR-CONTAINS _ahs-assert 2DROP
+    R> FREE
+    _ahs-gateway @ ATOOLG-ARGS-FINGERPRINT
+    DUP _ahs-canonical-u @ = _ahs-assert
+    DROP _ahs-digest-u ! _ahs-digest-a !
+    _ahs-digest-u @ SHA3-256-LEN = _ahs-assert
+    _ahs-digest-a @ _ahs-digest-u @ _ahs-digest-hex FMT->HEX
+        _ahs-digest-hex-u !
+    _ahs-review _ahs-audit-n _ahs-before !
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE 0= _ahs-assert
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    _ahs-finish
+    _ahs-tool-value @ 19 = _ahs-assert
+    _ahs-audit-n _ahs-before @ 1+ = _ahs-assert
+    _ahs-last-audit DUP 0<> _ahs-assert
+    DUP AMSG.FLAGS @ AMSG-F-APPROVED AND 0<> _ahs-assert DROP
+    S" local tool daybook.task.capture" _ahs-audit-has _ahs-assert
+    S" provider=org.akashic.agent.testing.scripted" _ahs-audit-has _ahs-assert
+    S" [call scripted.call]" _ahs-audit-has _ahs-assert
+    S" target_id_le=" _ahs-audit-has _ahs-assert
+    S" target_generation_le=" _ahs-audit-has _ahs-assert
+    S" expected_revision_le=" _ahs-audit-has _ahs-assert
+    S" effects_le=" _ahs-audit-has _ahs-assert
+    S" args_encoding=typed-ivjson-v1" _ahs-audit-has _ahs-assert
+    S" args_length_le=" _ahs-audit-has _ahs-assert
+    S" args_fingerprint_domain=akashic.agent.cbr-args.typed-ivjson.v1"
+        _ahs-audit-has _ahs-assert
+    S" args_fingerprint_sha3_256=" _ahs-audit-has _ahs-assert
+    _ahs-digest-hex _ahs-digest-hex-u @ _ahs-audit-has _ahs-assert
+    S" args=" _ahs-audit-has _ahs-assert
+    S" task audit envelope" _ahs-audit-has _ahs-assert ;
+
+: _ahs-quiesce  ( -- )
+    0 _ahs-tool-value !
+    S" task quiesce queued" _ahs-queued
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ DUP 0<> _ahs-assert
+        DUP _ahs-live-run ! AMRUN-ACTIVE? _ahs-assert
+    _ahs-runtime @ ARUNTIME-QUIESCE CBUS-S-OK = _ahs-assert
+    _ahs-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _ahs-assert
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ 0= _ahs-assert
+    _ahs-gateway @ ATOOLG.MANDATE-RUN @ 0= _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-IDLE = _ahs-assert
+    _ahs-tool-value @ 0= _ahs-assert 2 _ahs-pump
+    S" task quiesce approval" _ahs-queued _ahs-review
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ DUP 0<> _ahs-assert
+        DUP _ahs-live-run ! AMRUN-ACTIVE? _ahs-assert
+    _ahs-runtime @ ARUNTIME-QUIESCE CBUS-S-OK = _ahs-assert
+    _ahs-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _ahs-assert
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ 0= _ahs-assert
+    _ahs-gateway @ ATOOLG.MANDATE-RUN @ 0= _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-IDLE = _ahs-assert
+    _ahs-tool-value @ 0= _ahs-assert 2 _ahs-pump ;
+
+: _ahs-cancel-poll-race  ( -- )
+    0 _ahs-tool-value ! 0 _ahs-poll-hits !
+    S" task cancel poll race" _ahs-queued
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ DUP _ahs-live-run !
+        AMRUN-ACTIVE? _ahs-assert
+    _ahs-runtime @ ARUNTIME.ACTIVE-RUN @ _ahs-current-run !
+    _ahs-provider @ APROV.CANCEL-XT @ _ahs-cancel-xt !
+    _ahs-provider @ APROV.POLL-XT @ _ahs-poll-xt !
+    ['] _ahs-cancel-fail _ahs-provider @ APROV.CANCEL-XT !
+    ['] _ahs-poll-fail _ahs-provider @ APROV.POLL-XT !
+    _ahs-store-saves @ _ahs-before !
+    _ahs-runtime @ ARUNTIME-CANCEL 77 = _ahs-assert
+    _ahs-store-saves @ _ahs-before @ > _ahs-assert
+    _ahs-runtime @ ARUNTIME.PERSISTED-REVISION @
+        _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.REVISION @ = _ahs-assert
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _ahs-assert
+    _ahs-runtime @ ARUNTIME.FLAGS @ ARUNTIME-F-TERMINATING AND
+        0<> _ahs-assert
+    8 _ahs-runtime @ ARUNTIME-PUMP 0= _ahs-assert
+    _ahs-poll-hits @ 0= _ahs-assert
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _ahs-assert
+    _ahs-runtime @ ARUNTIME.ACTIVE-RUN @ _ahs-current-run @ = _ahs-assert
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ _ahs-live-run @ = _ahs-assert
+    _ahs-cancel-xt @ _ahs-provider @ APROV.CANCEL-XT !
+    _ahs-poll-xt @ _ahs-provider @ APROV.POLL-XT !
+    _ahs-current-run @ _ahs-runtime @ ARUNTIME.EVENTS @
+        _ahs-provider @ APROV-CANCEL 0= _ahs-assert
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert 2 _ahs-pump
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _ahs-assert
+    _ahs-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _ahs-assert
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ 0= _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-IDLE = _ahs-assert
+    _ahs-tool-value @ 0= _ahs-assert ;
+
+: _ahs-audit-save-failure  ( -- )
+    0 _ahs-tool-value ! _ahs-audit-n _ahs-before !
+    S" task audit persistence failure" _ahs-queued _ahs-review
+    _ahs-runtime @ ARUNTIME.APPROVAL-MSG @ _ahs-message !
+    -1 _ahs-store-fail !
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE ACSTORE-S-IO = _ahs-assert
+    0 _ahs-store-fail !
+    _ahs-tool-value @ 0= _ahs-assert
+    _ahs-message @ AMSG.STATE @ AMSG-S-ERROR = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-IDLE = _ahs-assert
+    _ahs-audit-n _ahs-before @ = _ahs-assert _ahs-finish ;
+
+: _ahs-provider-denial-failure  ( -- )
+    _ahs-audit-n _ahs-before !
+    S" approval denial delivery failure" _ahs-runtime @
+        ARUNTIME-SEND 0= _ahs-assert
+    4 _ahs-pump
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-APPROVAL = _ahs-assert
+    _ahs-runtime @ ARUNTIME.APPROVAL-MSG @ _ahs-message !
+    _ahs-provider @ APROV.RESOLVE-XT @ _ahs-resolve-xt !
+    -1 _ahs-store-fail !
+    ['] _ahs-resolve-fail _ahs-provider @ APROV.RESOLVE-XT !
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE 77 = _ahs-assert
+    _ahs-resolve-xt @ _ahs-provider @ APROV.RESOLVE-XT !
+    0 _ahs-store-fail !
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _ahs-assert
+    _ahs-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _ahs-assert
+    _ahs-message @ AMSG.STATE @ AMSG-S-ERROR = _ahs-assert
+    _ahs-audit-n _ahs-before @ = _ahs-assert 2 _ahs-pump ;
+
+: _ahs-fingerprint-mismatch  ( -- )
+    0 _ahs-tool-value ! _ahs-audit-n _ahs-before !
+    S" task fingerprint mutation" _ahs-queued
+    _ahs-gateway @ ATOOLG.REQUEST @ CBR.ARGS
+    DUP CV-TYPE@ CV-T-STRING = _ahs-assert
+    CV-T-RESOURCE SWAP CV.TYPE !
+    _ahs-gateway @ ATOOLG-ARGS-FINGERPRINT-MATCH? 0= _ahs-assert
+    _ahs-review
+    -1 _ahs-gateway @ ATOOLG-RESOLVE CBUS-S-DENIED = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-APPROVAL = _ahs-assert
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE CBUS-S-DENIED = _ahs-assert
+    _ahs-tool-value @ 0= _ahs-assert
+    _ahs-audit-n _ahs-before @ 1+ = _ahs-assert
+    _ahs-last-audit AMSG.FLAGS @ AMSG-F-DENIED AND 0<> _ahs-assert
+    S" <omitted: operand no longer matches creation fingerprint>"
+        _ahs-audit-has _ahs-assert
+    _ahs-finish ;
+
+: _ahs-post-approval-mismatch  ( -- )
+    0 _ahs-tool-value !
+    S" task post approval mutation" _ahs-queued _ahs-review
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE 0= _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _ahs-assert
+    _ahs-gateway @ ATOOLG.REQUEST @ CBR.ARGS
+    DUP CV-TYPE@ CV-T-STRING = _ahs-assert CV-DATA@ 89 SWAP C!
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    _ahs-gateway @ ATOOLG.REQUEST @ CBR.STATUS @
+        CBUS-S-DENIED = _ahs-assert
+    _ahs-tool-value @ 0= _ahs-assert
+    _ahs-finish ;
+
+: _ahs-unsupported-seals  ( -- )
+    CBR-NEW DUP 0= _ahs-assert DROP _ahs-unsupported-req !
+    123 _ahs-unsupported-req @ CBR.ARGS CV-F32!
+    _ahs-unsupported-req @ CBR-ARGS-SEAL!
+        CBUS-S-INVALID = _ahs-assert
+    S" opaque" _ahs-unsupported-req @ CBR.ARGS CV-BYTES!
+        0= _ahs-assert
+    _ahs-unsupported-req @ CBR-ARGS-SEAL!
+        CBUS-S-INVALID = _ahs-assert
+    _ahs-unsupported-req @ CBR-FREE 0 _ahs-unsupported-req ! ;
+
+: _ahs-review-ceiling  ( -- )
+    _ahs-large ATOOLG-ARGS-REVIEW-MAX 88 FILL
+    S" task " _ahs-large SWAP CMOVE
+    0 _ahs-tool-value ! _ahs-audit-n _ahs-before !
+    _ahs-large ATOOLG-ARGS-REVIEW-MAX _ahs-queued
+    _ahs-gateway @ ATOOLG.ARGS-LEN @ ATOOLG-ARGS-REVIEW-MAX > _ahs-assert
+    _ahs-gateway @ ATOOLG-ARGS-REVIEWABLE? 0= _ahs-assert
+    _ahs-review
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE CBUS-S-DENIED = _ahs-assert
+    _ahs-tool-value @ 0= _ahs-assert
+    _ahs-audit-n _ahs-before @ 1+ = _ahs-assert
+    _ahs-last-audit DUP AMSG.FLAGS @ AMSG-F-DENIED AND 0<> _ahs-assert
+        AMSG.FLAGS @ AMSG-F-APPROVED AND 0= _ahs-assert
+    S" <omitted: canonical args exceed inline audit limit>"
+        _ahs-audit-has _ahs-assert _ahs-finish ;
+
+: _ahs-capacity  ( -- )
+    _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @
+        _ahs-original-count !
+    _ahs-runtime @ ARUNTIME.NEXT-RUN @ _ahs-original-next !
+    BEGIN _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @ 63 < WHILE
+        _ahs-padding+
+    REPEAT
+    S" no partial send" _ahs-runtime @ ARUNTIME-SEND 3 = _ahs-assert
+    _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @ 63 = _ahs-assert
+    _ahs-runtime @ ARUNTIME.NEXT-RUN @ _ahs-original-next @ = _ahs-assert
+    _ahs-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _ahs-assert
+    _ahs-original-count @ _ahs-trim
+    _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @
+        _ahs-original-count !
+    _ahs-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @
+        _ahs-original-context !
+    BEGIN _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @ 60 < WHILE
+        _ahs-padding+
+    REPEAT
+    0 _ahs-tool-value !
+    S" task reviewed capacity" _ahs-runtime @ ARUNTIME-SEND 0= _ahs-assert
+    4 _ahs-pump
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _ahs-assert
+    _ahs-runtime @ ARUNTIME.ACTIVE-RUN @ 0= _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-IDLE = _ahs-assert
+    _ahs-tool-value @ 0= _ahs-assert
+    _ahs-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @
+        _ahs-original-context @ = _ahs-assert
+    2 _ahs-pump _ahs-original-count @ _ahs-trim ;
+
+: _ahs-idle-poll-failure  ( -- )
+    _ahs-provider @ APROV.POLL-XT @ _ahs-poll-xt !
+    _ahs-runtime @ ARUNTIME.REVISION @ _ahs-original-revision !
+    0 _ahs-poll-hits ! ['] _ahs-poll-fail _ahs-provider @ APROV.POLL-XT !
+    1 _ahs-runtime @ ARUNTIME-PUMP 1 = _ahs-assert
+    _ahs-poll-xt @ _ahs-provider @ APROV.POLL-XT !
+    _ahs-poll-hits @ 1 = _ahs-assert
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-ERROR = _ahs-assert
+    _ahs-runtime @ ARUNTIME.REVISION @ _ahs-original-revision @ > _ahs-assert ;
+
+: _ahs-boundary-stack-contracts  ( -- )
+    \ A provider tool event without a bound gateway is a normal fail-closed
+    \ boundary, not an underflow in the runtime's event dispatcher.
+    _ahs-runtime @ ARUNTIME.TOOL-GATEWAY @ _ahs-gateway !
+    0 _ahs-runtime @ ARUNTIME.TOOL-GATEWAY !
+    _ahs-stale-event AEV-INIT
+    _ahs-stale-event _ahs-runtime @ _AR-START-TOOL
+        CBUS-S-NO-HANDLER = _ahs-assert
+    _ahs-stale-event AEV-FREE
+    _ahs-gateway @ _ahs-runtime @ ARUNTIME.TOOL-GATEWAY !
+
+    \ Containers have no provider-safe projection yet and must therefore
+    \ consume an impossible disclosure size rather than a pointer value.
+    _ahs-container CV-INIT
+    0 _ahs-container CV-LIST! 0= _ahs-assert
+    _ahs-container _ATOOLG-RESULT-BYTES
+        9223372036854775807 = _ahs-assert
+    _ahs-container CV-FREE
+
+    \ COMPLETE and defensive unknown states take CANCEL's default arm.
+    ATOOLG-S-COMPLETE _ahs-gateway @ ATOOLG.STATE !
+    _ahs-gateway @ ATOOLG-CANCEL CBUS-S-OK = _ahs-assert
+    99 _ahs-gateway @ ATOOLG.STATE !
+    _ahs-gateway @ ATOOLG-CANCEL CBUS-S-OK = _ahs-assert
+    ATOOLG-S-IDLE _ahs-gateway @ ATOOLG.STATE ! ;
+
+: _ahs-setup  ( -- )
+    _ahs-store-setup _ahs-tool-setup
+    SCRIPTED-SOURCE-NEW DUP 0= _ahs-assert DROP _ahs-source !
+    _ahs-source @ APSOURCE-PROVIDER-NEW
+        DUP 0= _ahs-assert DROP _ahs-provider !
+    _ahs-provider @ ARUNTIME-NEW DUP 0= _ahs-assert DROP _ahs-runtime !
+    _ahs-store _ahs-runtime @ ARUNTIME-CONVERSATION-STORE!
+        ACSTORE-S-OK = _ahs-assert
+    CREG-NEW DUP 0= _ahs-assert DROP _ahs-reg !
+    _ahs-component _ahs-reg @ CREG-TYPE+ 0= _ahs-assert
+    _ahs-component CINST-NEW DUP 0= _ahs-assert DROP _ahs-inst !
+    _ahs-inst @ _ahs-reg @ CREG-INST+ 0= _ahs-assert
+    _ahs-reg @ _ahs-policy CBUS-NEW DUP 0= _ahs-assert DROP _ahs-bus !
+    77 305419896 AHT-NEW DUP 0= _ahs-assert DROP _ahs-authority !
+    _ahs-authority @ _ahs-bus @ CBUS-AUTHORITY!
+    _ahs-reg @ _ahs-bus @ _ahs-inst @ ATOOLG-NEW
+        DUP 0= _ahs-assert DROP _ahs-gateway !
+    _ahs-gateway @ _ahs-runtime @ ARUNTIME-TOOL-GATEWAY!
+    _ahs-gateway @ _ahs-provider @ APROV-BIND-TOOLS 0= _ahs-assert
+    _ahs-scope-setup 2 _ahs-pump
+    _ahs-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ahs-assert ;
+
+: _ahs-cleanup  ( -- )
+    _ahs-runtime @ ARUNTIME-FREE
+    _ahs-provider @ APROV-FREE _ahs-source @ APSOURCE-FREE
+    _ahs-gateway @ ATOOLG-FREE _ahs-bus @ CBUS-FREE
+    _ahs-authority @ AHT-FREE
+    _ahs-inst @ _ahs-reg @ CREG-INST- DROP
+    _ahs-reg @ CREG-FREE _ahs-inst @ CINST-FREE
+    _ahs-parent @ CTX-FREE ;
+
+: _ahs-run  ( -- )
+    0 _ahs-fails ! 0 _ahs-checks ! DEPTH _ahs-depth !
+    _ahs-setup _ahs-stack
+    _ahs-audit-envelope _ahs-stack
+    _ahs-quiesce _ahs-stack
+    _ahs-cancel-poll-race _ahs-stack
+    _ahs-audit-save-failure _ahs-stack
+    _ahs-provider-denial-failure _ahs-stack
+    _ahs-fingerprint-mismatch _ahs-stack
+    _ahs-post-approval-mismatch _ahs-stack
+    _ahs-unsupported-seals _ahs-stack
+    _ahs-review-ceiling _ahs-stack
+    _ahs-capacity _ahs-stack
+    _ahs-idle-poll-failure _ahs-stack
+    _ahs-boundary-stack-contracts _ahs-stack
+    _ahs-cleanup _ahs-stack
+    _ahs-fails @ 0= IF
+        ." AGENT SECURITY PASS " _ahs-checks @ .
+    ELSE
+        ." AGENT SECURITY FAIL " _ahs-fails @ . ." / " _ahs-checks @ .
+    THEN CR ;
+
+_ahs-run
+""",
+    ready_markers=("AGENT SECURITY PASS",),
+    stable_markers=("AGENT SECURITY PASS",),
+    failure_markers=("AGENT SECURITY FAIL",),
+    linked=True,
+)
+
 # Same production-shaped image as desktop, with a focused agent/interop
 # journey instead of the full applet regression tour.
 PROFILES["desktop-agent"] = PROFILES["desktop"]
 PROFILES["desktop-resource"] = PROFILES["desktop"]
+
+# Seed the durable transcript before launching the ordinary standalone Agent.
+# This keeps layout acceptance independent of provider chunking and lets the
+# black-box journey exercise hard newlines, soft wrapping, wide codepoints,
+# visual-row scrolling, and resize reflow using production storage/loading.
+_AGENT_LAYOUT_SEED = r"""
+CREATE _al-text 8192 ALLOT
+VARIABLE _al-text-u
+VARIABLE _al-conv
+VARIABLE _al-store
+
+: _al-text,  ( addr len -- )
+    DUP >R _al-text _al-text-u @ + SWAP CMOVE R> _al-text-u +! ;
+: _al-newline  ( -- )
+    10 _al-text _al-text-u @ + C! 1 _al-text-u +! ;
+: _al-byte,  ( byte -- )
+    _al-text _al-text-u @ + C! 1 _al-text-u +! ;
+
+: _al-seed-transcript  ( -- )
+    0 _al-text-u !
+    S" WRAP-START alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu SOFT-WRAP-END"
+        _al-text,
+    _al-newline
+    S" HARD-BREAK-TOP" _al-text, _al-newline
+    80 0 DO
+        S" hard-newline filler row keeps visual scrolling independent of message count"
+        _al-text, _al-newline
+    LOOP
+    S" HARD-BREAK-BOTTOM" _al-text, _al-newline
+    S" UNICODE-ROW café 界界 λογική UNICODE-END" _al-text, _al-newline
+    S" COMBINING-STRESS " _al-text,
+    80 0 DO 0xCC _al-byte, 0x81 _al-byte, LOOP
+    S" COMBINING-TAIL" _al-text, _al-newline
+    S" WRAP-BOTTOM" _al-text,
+
+    ACONV-NEW 0<> ABORT" layout conversation allocation failed"
+    _al-conv !
+    AROLE-ASSISTANT AMSG-S-COMPLETE 1 _al-text _al-text-u @
+    _al-conv @ ACONV-APPEND
+    0<> ABORT" layout message append failed" DROP
+    VFS-CUR AVFSSTORE-NEW
+    DUP ACSTORE-S-OK <> ABORT" layout store allocation failed"
+    DROP _al-store !
+    _al-conv @ _al-store @ ACSTORE-SAVE
+    ACSTORE-S-OK <> ABORT" layout transcript save failed"
+    _al-store @ ACSTORE-FREE
+    _al-conv @ ACONV-FREE ;
+
+_al-seed-transcript
+"""
+
+PROFILES["agent-layout-ui"] = Profile(
+    roots=PROFILES["agent-ui"].roots,
+    resources=PROFILES["agent-ui"].resources,
+    autoexec=PROFILES["agent-ui"].autoexec.replace(
+        ": _boot-agent-source  ( -- )",
+        _AGENT_LAYOUT_SEED + "\n: _boot-agent-source  ( -- )",
+        1,
+    ),
+    ready_markers=PROFILES["agent-ui"].ready_markers,
+    stable_markers=PROFILES["agent-ui"].stable_markers,
+)
+
+PROFILES["agent-applet-capabilities"] = Profile(
+    roots=(
+        "tui/applets/pad/pad.f",
+        "tui/applets/fexplorer/fexplorer.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - bounded applet observation contracts
+ENTER-USERLAND
+." [akashic] loading Agent-visible applet capabilities" CR
+REQUIRE tui/applets/pad/pad.f
+REQUIRE tui/applets/fexplorer/fexplorer.f
+
+VARIABLE _aac-fails
+VARIABLE _aac-checks
+VARIABLE _aac-depth
+VARIABLE _aac-vfs
+VARIABLE _aac-old-vfs
+VARIABLE _aac-inst
+VARIABLE _aac-pad-inst
+VARIABLE _aac-request
+VARIABLE _aac-in
+VARIABLE _aac-fd
+VARIABLE _aac-da
+VARIABLE _aac-du
+VARIABLE _aac-pa
+VARIABLE _aac-pu
+VARIABLE _aac-preview-fd-head
+VARIABLE _aac-preview-fd-next
+VARIABLE _aac-preview-old-vtable
+VARIABLE _aac-preview-read-throws
+CREATE _aac-text _FEXP-CAP-TEXT-MAX 8 + ALLOT
+CREATE _aac-long-name _FEXP-PATH-CAP 8 + ALLOT
+CREATE _aac-preview-vtable VFS-VT-SIZE ALLOT
+
+: _aac-assert  ( flag -- )
+    1 _aac-checks +!
+    0= IF 1 _aac-fails +! ." ASSERT " _aac-checks @ . CR THEN ;
+: _aac-stack  ( -- ) DEPTH _aac-depth @ = _aac-assert ;
+: _aac-observe-flags  ( -- mask )
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR CAP-F-CONTEXT-DEFAULT OR ;
+: _aac-text-types  ( -- mask )
+    CV-T-NULL CS-TYPE-BIT CV-T-STRING CS-TYPE-BIT OR ;
+
+: _aac-put  ( data-a data-u path-a path-u -- inode )
+    _aac-pu ! _aac-pa ! _aac-du ! _aac-da !
+    _aac-pa @ _aac-pu @ _aac-vfs @ VFS-CREATE
+    DUP 0<> _aac-assert DUP _aac-in ! DROP
+    _aac-pa @ _aac-pu @ VFS-OPEN
+    DUP 0<> _aac-assert _aac-fd !
+    _aac-da @ _aac-du @ _aac-fd @ VFS-WRITE-EXACT 0= _aac-assert
+    _aac-fd @ VFS-CLOSE _aac-in @ ;
+
+: _aac-preview-result  ( expected-len -- )
+    _aac-request @ CBR.RESULT
+    DUP CV-TYPE@ CV-T-STRING = _aac-assert
+    DUP CV-LEN@ ROT = _aac-assert
+    DUP CV-DATA@ SWAP CV-LEN@ UTF8-VALID? _aac-assert ;
+
+: _aac-preview-read-throw  ( buf len offset inode vfs -- actual )
+    2DROP 2DROP DROP
+    1 _aac-preview-read-throws +! -901 THROW ;
+
+: _aac-preview-throw-cleanup  ( -- )
+    S" cleanup" S" /aac-cleanup.txt" _aac-put _FEXP-SEL-IN !
+    _aac-vfs @ V.FDFREE @ DUP _aac-preview-fd-head !
+    ?DUP IF FD.FREE @ ELSE 0 THEN _aac-preview-fd-next !
+    _aac-vfs @ V.VTABLE @ DUP _aac-preview-old-vtable !
+    _aac-preview-vtable VFS-VT-SIZE CMOVE
+    ['] _aac-preview-read-throw
+        _aac-preview-vtable VFS-VT-READ CELLS + !
+    _aac-preview-vtable _aac-vfs @ V.VTABLE !
+    0 _aac-preview-read-throws !
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-FAILED = _aac-assert
+    _aac-preview-old-vtable @ _aac-vfs @ V.VTABLE !
+    _aac-preview-read-throws @ 1 = _aac-assert
+    _FRP-FD @ 0= _aac-assert
+    _FRP-THROW @ -901 = _aac-assert
+    _FRP-CLEANUP-THROW @ 0= _aac-assert
+    _aac-vfs @ V.FDFREE @ DUP _aac-preview-fd-head @ = _aac-assert
+    ?DUP IF FD.FREE @ ELSE 0 THEN _aac-preview-fd-next @ = _aac-assert ;
+
+: _aac-null-results  ( -- )
+    0 _FEXP-SEL-IN !
+    _aac-request @ _aac-inst @ _FEXP-CAP-SELECTED-HANDLER
+    CBUS-S-OK = _aac-assert
+    _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-OK = _aac-assert
+    _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert
+    _aac-vfs @ V.ROOT @ _FEXP-SEL-IN !
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-OK = _aac-assert
+    _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert
+
+    PAD-COMP-DESC CINST-NEW
+    DUP 0= _aac-assert DROP _aac-pad-inst !
+    _aac-pad-inst @ _PAD-ACTIVATE -1 _PAD-ACTIVE !
+    _aac-request @ _aac-pad-inst @ _PAD-CAP-TEXT-HANDLER
+    CBUS-S-OK = _aac-assert
+    _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert
+    _aac-pad-inst @ CINST-FREE ;
+
+: _aac-text-integrity  ( -- )
+    \ A valid multibyte codepoint cut by the byte budget backs up to the
+    \ preceding complete boundary in both applet implementations.
+    _aac-text _FEXP-CAP-TEXT-MAX 3 + [CHAR] a FILL
+    0xE7 _aac-text _FEXP-CAP-TEXT-MAX 1- + C!
+    0x95 _aac-text _FEXP-CAP-TEXT-MAX + C!
+    0x8C _aac-text _FEXP-CAP-TEXT-MAX 1+ + C!
+    _aac-text _PAD-CAP-TEXT-MAX 3 + _PAD-CAP-TEXT-LEN? IF
+        _PAD-CAP-TEXT-MAX 1- = _aac-assert
+    ELSE
+        DROP 0 _aac-assert
+    THEN
+
+    \ Malformed bytes within the retained prefix fail rather than being
+    \ packaged into a CV string.
+    0xFF _aac-text 100 + C!
+    _aac-text _PAD-CAP-TEXT-MAX 3 + _PAD-CAP-TEXT-LEN?
+    0= _aac-assert 0= _aac-assert
+    [CHAR] a _aac-text 100 + C!
+
+    _aac-text _FEXP-CAP-TEXT-MAX 3 + S" /aac-boundary.txt" _aac-put
+    _FEXP-SEL-IN !
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-OK = _aac-assert
+    _FEXP-CAP-TEXT-MAX 1- _aac-preview-result
+
+    0xFF _aac-text 100 + C!
+    _aac-text _FEXP-CAP-TEXT-MAX 1+ S" /aac-invalid.txt" _aac-put
+    _FEXP-SEL-IN !
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-FAILED = _aac-assert
+    [CHAR] a _aac-text 100 + C!
+
+    \ An invalid byte exactly at the size edge is not a split codepoint and
+    \ therefore cannot be hidden by the bounded backoff.
+    0xFF _aac-text _FEXP-CAP-TEXT-MAX 1- + C!
+    _aac-text _FEXP-CAP-TEXT-MAX 3 + S" /aac-invalid-edge.txt" _aac-put
+    _FEXP-SEL-IN !
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-FAILED = _aac-assert ;
+
+: _aac-path-integrity  ( -- )
+    \ A root file name longer than the reconstruction buffer exercises the
+    \ same fail-closed invariant as VFS-INODE-PATH's ancestor ceiling.
+    _aac-long-name _FEXP-PATH-CAP 1+ [CHAR] n FILL
+    _aac-long-name _FEXP-PATH-CAP 1+ _aac-vfs @ VFS-MKFILE
+    DUP 0<> _aac-assert
+    DUP _FEXP-SEL-IN !
+    DUP _FEXP-BUILD-PATH-EXACT? 0= _aac-assert DROP
+    _aac-request @ _aac-inst @ _FEXP-CAP-SELECTED-HANDLER
+    CBUS-S-FAILED = _aac-assert
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-FAILED = _aac-assert ;
+
+: _aac-run  ( -- )
+    0 _aac-fails ! 0 _aac-checks ! DEPTH _aac-depth !
+    _PAD-COMP-SETUP
+    PAD-COMP-DESC COMP.CAPS-N @ 3 = _aac-assert
+    PAD-COMP-DESC COMP-CAPS-VALID? _aac-assert
+    S" pad.document.text" PAD-COMP-DESC COMP-CAP-FIND
+    PAD-CAP-TEXT = _aac-assert
+    PAD-CAP-TEXT DUP CAP.ID-A @ SWAP CAP.ID-U @
+    S" pad.document.text" STR-STR= _aac-assert
+    PAD-CAP-TEXT CAP.KIND @ CAP-K-RESOURCE = _aac-assert
+    PAD-CAP-TEXT CAP.EFFECTS @ CAP-E-OBSERVE = _aac-assert
+    PAD-CAP-TEXT CAP.FLAGS @ _aac-observe-flags = _aac-assert
+    PAD-CAP-TEXT CAP.OUT-SCHEMA @ DUP 0<> _aac-assert
+    DUP CS.TYPE-MASK @ _aac-text-types = _aac-assert
+    CS.MAX-LEN @ _PAD-CAP-TEXT-MAX = _aac-assert
+
+    _FEXP-COMP-SETUP
+    FEXP-COMP-DESC COMP.CAPS-N @ 3 = _aac-assert
+    FEXP-COMP-DESC COMP-CAPS-VALID? _aac-assert
+    S" fexplorer.preview.text" FEXP-COMP-DESC COMP-CAP-FIND
+    FEXP-CAP-PREVIEW = _aac-assert
+    FEXP-CAP-PREVIEW DUP CAP.ID-A @ SWAP CAP.ID-U @
+    S" fexplorer.preview.text" STR-STR= _aac-assert
+    FEXP-CAP-PREVIEW CAP.KIND @ CAP-K-RESOURCE = _aac-assert
+    FEXP-CAP-PREVIEW CAP.EFFECTS @ CAP-E-OBSERVE = _aac-assert
+    FEXP-CAP-PREVIEW CAP.FLAGS @ _aac-observe-flags = _aac-assert
+    FEXP-CAP-PREVIEW CAP.OUT-SCHEMA @ DUP 0<> _aac-assert
+    DUP CS.TYPE-MASK @ _aac-text-types = _aac-assert
+    CS.MAX-LEN @ _FEXP-CAP-TEXT-MAX = _aac-assert
+
+    VFS-CUR _aac-old-vfs !
+    524288 A-XMEM ARENA-NEW DUP 0= _aac-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _aac-vfs ! VFS-USE
+    FEXP-COMP-DESC CINST-NEW
+    DUP 0= _aac-assert DROP _aac-inst !
+    _aac-inst @ _FEXP-ACTIVATE _aac-vfs @ _FEXP-VFS !
+    CBR-NEW DUP 0= _aac-assert DROP _aac-request !
+    _aac-null-results
+    _aac-text-integrity
+    _aac-preview-throw-cleanup
+    _aac-path-integrity
+    _aac-request @ CBR-FREE _aac-inst @ CINST-FREE
+    _aac-old-vfs @ VFS-USE _aac-vfs @ VFS-DESTROY
+    _aac-stack
+    _aac-fails @ 0= IF
+        ." AGENT APPLET CAPABILITIES PASS " _aac-checks @ .
+    ELSE
+        ." AGENT APPLET CAPABILITIES FAIL " _aac-fails @ .
+        ." / " _aac-checks @ .
+    THEN CR ;
+
+_aac-run
+""",
+    ready_markers=("AGENT APPLET CAPABILITIES PASS",),
+    stable_markers=("AGENT APPLET CAPABILITIES PASS",),
+    failure_markers=("AGENT APPLET CAPABILITIES FAIL",),
+)
+
+PROFILES["agent-access"] = Profile(
+    roots=(
+        "agent/access-profile.f",
+        "agent/tool-gateway.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - access preset and exact target-pin contracts
+ENTER-USERLAND
+." [akashic] loading Agent access contracts" CR
+REQUIRE agent/access-profile.f
+REQUIRE agent/tool-gateway.f
+
+VARIABLE _ac-fails VARIABLE _ac-checks VARIABLE _ac-depth
+VARIABLE _ac-reg VARIABLE _ac-foreign VARIABLE _ac-legit
+VARIABLE _ac-bus VARIABLE _ac-gateway VARIABLE _ac-parent
+VARIABLE _ac-child VARIABLE _ac-run VARIABLE _ac-found-inst
+VARIABLE _ac-found-cap
+CREATE _ac-profile AGENT-ACCESS-PROFILE-SIZE ALLOT
+CREATE _ac-head PHEAD-SIZE ALLOT
+CREATE _ac-mandate MAND-SIZE ALLOT
+CREATE _ac-facet CFACET-SIZE ALLOT
+CREATE _ac-desc COMP-DESC ALLOT
+CREATE _ac-cap CAP-DESC ALLOT
+CREATE _ac-spoof-desc COMP-DESC ALLOT
+CREATE _ac-spoof-cap CAP-DESC ALLOT
+CREATE _ac-policy CPOLICY-SIZE ALLOT
+
+: _ac-assert  ( flag -- )
+    1 _ac-checks +! 0= IF 1 _ac-fails +! ." ASSERT " _ac-checks @ . CR THEN ;
+: _ac-rid!  ( value rid -- ) DUP RID-CLEAR ! ;
+: _ac-handler  ( request instance -- status ) 2DROP CBUS-S-OK ;
+: _ac-common-budgets?  ( profile -- flag )
+    DUP AAP.HISTORY-ITEMS @ 12 =
+    OVER AAP.HISTORY-BYTES @ 4096 = AND
+    OVER AAP.TIME-BUDGET-MS @ 600000 = AND
+    OVER AAP.MEMORY-BUDGET @ 0= AND
+    SWAP AAP.TOKEN-BUDGET @ 0= AND ;
+
+: _ac-presets  ( -- )
+    AAP-PRESET-CHAT-ONLY _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    _ac-profile AAP-VALID? _ac-assert
+    _ac-profile AAP-ID$ S" desk.chat-only" STR-STR= _ac-assert
+    _ac-profile AAP-LABEL$ S" Chat only" STR-STR= _ac-assert
+    _ac-profile AAP.FLAGS @ AAP-F-CHAT-HISTORY = _ac-assert
+    _ac-profile AAP.EFFECTS @ 0= _ac-assert
+    _ac-profile AAP.DISPOSITION @ MAND-D-READ-ONLY = _ac-assert
+    _ac-profile _ac-common-budgets? _ac-assert
+    _ac-profile AAP.TOOL-BUDGET @ 0= _ac-assert
+    _ac-profile AAP.DISCLOSURE-BUDGET @ 8192 = _ac-assert
+
+    AAP-PRESET-PRACTICE-READ _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    _ac-profile AAP-VALID? _ac-assert
+    _ac-profile AAP-ID$ S" desk.practice-read" STR-STR= _ac-assert
+    _ac-profile AAP-LABEL$ S" Practice read only" STR-STR= _ac-assert
+    _ac-profile AAP.FLAGS @
+        AAP-F-CHAT-HISTORY AAP-F-CONTEXT-OBSERVE OR = _ac-assert
+    _ac-profile AAP.EFFECTS @ CAP-E-OBSERVE = _ac-assert
+    _ac-profile AAP.DISPOSITION @ MAND-D-READ-ONLY = _ac-assert
+    _ac-profile _ac-common-budgets? _ac-assert
+    _ac-profile AAP.TOOL-BUDGET @ 4 = _ac-assert
+    _ac-profile AAP.DISCLOSURE-BUDGET @ 32768 = _ac-assert
+
+    AAP-PRESET-PRACTICE-ASSIST _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    _ac-profile AAP-VALID? _ac-assert
+    _ac-profile AAP-ID$ S" desk.practice-assist" STR-STR= _ac-assert
+    _ac-profile AAP-LABEL$ S" Practice assist" STR-STR= _ac-assert
+    _ac-profile AAP.FLAGS @ AAP-F-CHAT-HISTORY
+        AAP-F-CONTEXT-OBSERVE OR AAP-F-REVIEW-CHANGES OR = _ac-assert
+    _ac-profile AAP.EFFECTS @ CAP-E-OBSERVE CAP-E-NAVIGATE OR
+        CAP-E-MUTATE OR CAP-E-PERSIST OR = _ac-assert
+    _ac-profile AAP.EFFECTS @ CAP-E-DESTRUCTIVE CAP-E-EXTERNAL OR AND
+        0= _ac-assert
+    _ac-profile AAP.DISPOSITION @ MAND-D-COMMIT = _ac-assert
+    _ac-profile _ac-common-budgets? _ac-assert
+    _ac-profile AAP.TOOL-BUDGET @ 8 = _ac-assert
+    _ac-profile AAP.DISCLOSURE-BUDGET @ 49152 = _ac-assert
+
+    \ A structurally coherent mutation must not smuggle Assist authority
+    \ under the trusted Chat-only preset identity.
+    AAP-PRESET-CHAT-ONLY _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    AAP-F-CHAT-HISTORY AAP-F-CONTEXT-OBSERVE OR
+        AAP-F-REVIEW-CHANGES OR _ac-profile AAP.FLAGS !
+    CAP-E-OBSERVE CAP-E-NAVIGATE OR CAP-E-MUTATE OR CAP-E-PERSIST OR
+        _ac-profile AAP.EFFECTS !
+    MAND-D-COMMIT _ac-profile AAP.DISPOSITION !
+    8 _ac-profile AAP.TOOL-BUDGET !
+    49152 _ac-profile AAP.DISCLOSURE-BUDGET !
+    _ac-profile AAP-VALID? 0= _ac-assert
+
+    \ Invalid setter input preserves the last valid profile.
+    AAP-PRESET-PRACTICE-READ _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    99 _ac-profile AAP-PRESET! AAP-S-INVALID = _ac-assert
+    _ac-profile AAP-VALID? _ac-assert
+    _ac-profile AAP-ID$ S" desk.practice-read" STR-STR= _ac-assert ;
+
+: _ac-collision  ( -- )
+    _ac-desc COMP-DESC-INIT
+    S" org.akashic.test.agent-access"
+        _ac-desc COMP.ID-U ! _ac-desc COMP.ID-A !
+    S" 1.0.0" _ac-desc COMP.VERSION-U ! _ac-desc COMP.VERSION-A !
+    _ac-cap CAP-DESC-INIT
+    CAP-K-RESOURCE _ac-cap CAP.KIND !
+    S" pad.document.text" _ac-cap CAP.ID-U ! _ac-cap CAP.ID-A !
+    CAP-E-OBSERVE _ac-cap CAP.EFFECTS !
+    ['] _ac-handler _ac-cap CAP.HANDLER-XT !
+    _ac-cap _ac-desc COMP.CAPS-A ! 1 _ac-desc COMP.CAPS-N !
+
+    \ A distinct descriptor may claim the same component and capability
+    \ text.  Registry order must never substitute it for the pinned owner.
+    _ac-spoof-desc COMP-DESC-INIT
+    S" org.akashic.test.agent-access"
+        _ac-spoof-desc COMP.ID-U ! _ac-spoof-desc COMP.ID-A !
+    S" 9.9.9"
+        _ac-spoof-desc COMP.VERSION-U ! _ac-spoof-desc COMP.VERSION-A !
+    _ac-spoof-cap CAP-DESC-INIT
+    CAP-K-RESOURCE _ac-spoof-cap CAP.KIND !
+    S" pad.document.text"
+        _ac-spoof-cap CAP.ID-U ! _ac-spoof-cap CAP.ID-A !
+    CAP-E-OBSERVE _ac-spoof-cap CAP.EFFECTS !
+    ['] _ac-handler _ac-spoof-cap CAP.HANDLER-XT !
+    _ac-spoof-cap _ac-spoof-desc COMP.CAPS-A !
+    1 _ac-spoof-desc COMP.CAPS-N !
+
+    CREG-NEW DUP 0= _ac-assert DROP _ac-reg !
+    _ac-desc _ac-reg @ CREG-TYPE+ 0= _ac-assert
+    _ac-spoof-desc CINST-NEW DUP 0= _ac-assert DROP _ac-foreign !
+    _ac-desc CINST-NEW DUP 0= _ac-assert DROP _ac-legit !
+    \ Register the same-name foreign target first: name order must not win.
+    _ac-foreign @ _ac-reg @ CREG-INST+ 0= _ac-assert
+    _ac-legit @ _ac-reg @ CREG-INST+ 0= _ac-assert
+
+    _ac-head PHEAD-INIT
+    1 _ac-head PHEAD.ID _ac-rid!
+    2 _ac-head PHEAD.CURRENT-ROOT _ac-rid!
+    77 CTX-NEW DUP 0= _ac-assert DROP _ac-parent !
+    _ac-head _ac-parent @ CTX.PRACTICE !
+    _ac-parent @ CTX-CHILD-NEW DUP 0= _ac-assert DROP _ac-child !
+
+    _ac-facet CFACET-INIT
+    3 _ac-facet CFACET.ID _ac-rid!
+    _ac-head PHEAD.ID _ac-facet CFACET.PRACTICE-ID RID-COPY
+    77 _ac-facet CFACET.EPOCH !
+    _ac-child @ CTX.ID @ _ac-facet CFACET.CONTEXT-ID !
+    _ac-child @ CTX.GENERATION @ _ac-facet CFACET.CONTEXT-GEN !
+    1 _ac-facet CFACET.REVISION !
+    _ac-legit @ CINST.ID @ _ac-legit @ CINST.GENERATION @
+    CAP-E-OBSERVE CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR
+        CFENTRY-F-AUTO-OBSERVE OR CFENTRY-F-DISCLOSE-RESULT OR
+    65536 S" pad.document.text" _ac-facet CFACET-ADD
+        CFACET-S-OK = _ac-assert
+
+    _ac-mandate MAND-INIT
+    4 _ac-mandate MAND.ID _ac-rid!
+    77 _ac-mandate MAND.ACTIVATION-EPOCH !
+    CPRINC-AGENT _ac-mandate MAND.PRINCIPAL !
+    _ac-child @ CTX.ID @ _ac-mandate MAND.CONTEXT-ID !
+    _ac-child @ CTX.GENERATION @ _ac-mandate MAND.CONTEXT-GENERATION !
+    CAP-E-OBSERVE _ac-mandate MAND.EFFECTS !
+    MAND-D-READ-ONLY _ac-mandate MAND.DISPOSITION !
+    4 _ac-mandate MAND.TOOL-BUDGET !
+    262144 _ac-mandate MAND.DISCLOSURE-BUDGET !
+    _ac-head PHEAD.ID _ac-mandate MAND.PRACTICE-ID RID-COPY
+    _ac-facet CFACET.ID _ac-mandate MAND.INPUT-FACET-ID RID-COPY
+    _ac-facet CFACET.ID _ac-mandate MAND.DISCLOSURE-FACET-ID RID-COPY
+
+    _ac-head _ac-child @ _ac-mandate _ac-facet AMRUN-NEW
+    DUP AMRUN-S-OK = _ac-assert DROP _ac-run !
+    _ac-policy CPOLICY-INIT
+    _ac-reg @ _ac-policy CBUS-NEW DUP 0= _ac-assert DROP _ac-bus !
+    _ac-reg @ _ac-bus @ 0 ATOOLG-NEW
+    DUP 0= _ac-assert DROP _ac-gateway !
+    \ Focus is a non-owning ambient preference.  Carry a foreign preference
+    \ into the scoped gateway so closing it exercises stale-pointer cleanup.
+    _ac-foreign @ _ac-gateway @ ATOOLG-FOCUSED! 0= _ac-assert
+    _ac-run @ _ac-gateway @ ATOOLG-MANDATE! 0= _ac-assert
+    _ac-gateway @ ATOOLG-TOOL-N 1 = _ac-assert
+    0 _ac-gateway @ ATOOLG-TOOL-NTH _ac-cap = _ac-assert
+    S" pad.document.text" _ac-gateway @ ATOOLG-FIND
+    _ac-found-cap ! _ac-found-inst !
+    _ac-found-cap @ _ac-cap = _ac-assert
+    _ac-found-inst @ _ac-legit @ = _ac-assert
+    _ac-foreign @ CINST.ID @ _ac-foreign @ CINST.GENERATION @
+        S" pad.document.text" _ac-facet CFACET-FIND 0= _ac-assert
+    _ac-legit @ CINST.ID @ _ac-legit @ CINST.GENERATION @
+        S" pad.document.text" _ac-facet CFACET-FIND 0<> _ac-assert
+
+    \ Applet close unregisters before freeing.  Refresh and lookup must only
+    \ compare the old address, clear it, and keep the pinned live owner.
+    _ac-foreign @ _ac-reg @ CREG-INST- 0= _ac-assert
+    _ac-foreign @ CINST-FREE 0 _ac-foreign !
+    _ac-gateway @ ATOOLG-REFRESH 0= _ac-assert
+    _ac-gateway @ ATOOLG.FOCUSED @ 0= _ac-assert
+    S" pad.document.text" _ac-gateway @ ATOOLG-FIND
+    _ac-found-cap ! _ac-found-inst !
+    _ac-found-cap @ _ac-cap = _ac-assert
+    _ac-found-inst @ _ac-legit @ = _ac-assert
+
+    _ac-gateway @ ATOOLG-MANDATE-CLEAR 0= _ac-assert
+    _ac-gateway @ ATOOLG-FREE _ac-bus @ CBUS-FREE
+    _ac-foreign @ ?DUP IF
+        DUP _ac-reg @ CREG-INST- DROP CINST-FREE
+    THEN
+    _ac-legit @ _ac-reg @ CREG-INST- DROP
+    _ac-legit @ CINST-FREE
+    _ac-reg @ CREG-FREE _ac-run @ AMRUN-FREE _ac-parent @ CTX-FREE ;
+
+: _ac-run-all  ( -- )
+    0 _ac-fails ! 0 _ac-checks ! DEPTH _ac-depth !
+    _ac-presets
+    _ac-collision
+    DEPTH DUP _ac-depth @ <> IF
+        ." STACK DEPTH " _ac-depth @ . ." -> " DUP . CR
+    THEN
+    _ac-depth @ = _ac-assert
+    _ac-fails @ 0= IF
+        ." AGENT ACCESS PASS " _ac-checks @ .
+    ELSE
+        ." AGENT ACCESS FAIL " _ac-fails @ . ." / " _ac-checks @ .
+    THEN CR ;
+
+_ac-run-all
+""",
+    ready_markers=("AGENT ACCESS PASS",),
+    stable_markers=("AGENT ACCESS PASS",),
+    failure_markers=("AGENT ACCESS FAIL",),
+)
+
+# The production scripted provider records context cardinality but does not
+# render it.  This harness-only source wraps its poll hook and emits a bounded
+# marker at the beginning of each response.  Desk acceptance can therefore
+# distinguish an empty first turn from disclosed prior visible messages while
+# retaining the provider's normal approval/tool behavior.
+_DESKTOP_AGENT_HARDENING_SOURCE = r"""
+VARIABLE _dah-q
+VARIABLE _dah-c
+VARIABLE _dah-turn
+VARIABLE _dah-facet-state
+VARIABLE _dah-ffa
+VARIABLE _dah-ffu
+VARIABLE _dah-fff
+VARIABLE _dah-ea
+VARIABLE _dah-eu
+VARIABLE _dah-ee
+VARIABLE _dah-ef
+VARIABLE _dah-em
+VARIABLE _dah-eft
+VARIABLE _dah-toa
+VARIABLE _dah-tou
+VARIABLE _dah-tca
+VARIABLE _dah-tcu
+VARIABLE _dah-tfacet
+VARIABLE _dah-hturn
+VARIABLE _dah-hctx
+VARIABLE _dah-hn
+VARIABLE _dah-hrun
+
+: _dah-facet-find-op  ( id-a id-u facet -- entry | 0 )
+    _dah-fff ! _dah-ffu ! _dah-ffa !
+    _dah-fff @ CFACET.COUNT @ 0 ?DO
+        I _dah-fff @ CFACET-NTH DUP CFENTRY-OP@
+        _dah-ffa @ _dah-ffu @ STR-STR= IF UNLOOP EXIT THEN
+        DROP
+    LOOP
+    0 ;
+
+: _dah-entry-exact?  ( id-a id-u effects flags max-result facet -- flag )
+    _dah-eft ! _dah-em ! _dah-ef ! _dah-ee ! _dah-eu ! _dah-ea !
+    _dah-ea @ _dah-eu @ _dah-eft @ _dah-facet-find-op DUP 0= IF EXIT THEN
+    DUP CFENTRY.EFFECTS @ _dah-ee @ =
+    OVER CFENTRY.FLAGS @ _dah-ef @ = AND
+    SWAP CFENTRY.MAX-RESULT @ _dah-em @ = AND ;
+
+: _dah-entry-trusted-target?
+  ( op-a op-u component-a component-u facet -- flag )
+    _dah-tfacet ! _dah-tcu ! _dah-tca ! _dah-tou ! _dah-toa !
+    _dah-toa @ _dah-tou @ _dah-tfacet @ _dah-facet-find-op
+    DUP 0= IF EXIT THEN
+    DUP CFENTRY.TARGET-ID @ SWAP CFENTRY.TARGET-GEN @
+    _DESK-REGISTRY @ CREG-INST-FIND DUP 0= IF EXIT THEN
+    CINST-DESC
+    _dah-tca @ _dah-tcu @ _DESK-TRUSTED-COMP = ;
+
+: _dah-observe-targets?  ( facet -- flag )
+    _dah-tfacet !
+    S" daybook.agenda.markdown" S" org.akashic.daybook"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" daybook.source" S" org.akashic.daybook"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" pad.document.active" S" org.akashic.pad"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" pad.document.text" S" org.akashic.pad"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" fexplorer.resource.selected" S" org.akashic.fexplorer"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" fexplorer.preview.text" S" org.akashic.fexplorer"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" grid.cell.selected" S" org.akashic.grid"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" grid.workbook.csv" S" org.akashic.grid"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" grid.source" S" org.akashic.grid"
+        _dah-tfacet @ _dah-entry-trusted-target? ;
+
+: _dah-review-targets?  ( facet -- flag )
+    _dah-tfacet !
+    S" daybook.task.capture" S" org.akashic.daybook"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" pad.document.open" S" org.akashic.pad"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" fexplorer.resource.reveal" S" org.akashic.fexplorer"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" grid.cell.set-selected" S" org.akashic.grid"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" grid.workbook.save" S" org.akashic.grid"
+        _dah-tfacet @ _dah-entry-trusted-target? ;
+
+: _dah-observe-set?  ( facet -- flag )
+    _dah-eft !
+    S" daybook.agenda.markdown" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" daybook.source" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" pad.document.active" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" pad.document.text" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" fexplorer.resource.selected" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" fexplorer.preview.text" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" grid.cell.selected" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 40 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" grid.workbook.csv" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" grid.source" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact? ;
+
+: _dah-review-set?  ( facet -- flag )
+    _dah-eft !
+    S" daybook.task.capture" CAP-E-MUTATE CAP-E-PERSIST OR
+        _DESK-AGENT-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" pad.document.open" CAP-E-NAVIGATE
+        _DESK-AGENT-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" fexplorer.resource.reveal" CAP-E-NAVIGATE
+        _DESK-AGENT-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" grid.cell.set-selected" CAP-E-MUTATE
+        _DESK-AGENT-REVIEW-FLAGS 40 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" grid.workbook.save" CAP-E-PERSIST
+        _DESK-AGENT-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact? ;
+
+: _dah-safe-effects?  ( facet -- flag )
+    DUP CFACET.COUNT @ 0 ?DO
+        I OVER CFACET-NTH CFENTRY.EFFECTS @
+        CAP-E-DESTRUCTIVE CAP-E-EXTERNAL OR AND IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _dah-facet-class  ( gateway -- class )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ATOOLG.MANDATE-RUN @ DUP 0= IF 2DROP 0 EXIT THEN
+    DUP AMRUN-ACTIVE? 0= IF 2DROP 0 EXIT THEN
+    DUP AMRUN.FACET DUP CFACET-VALID? 0= IF 3DROP 0 EXIT THEN
+    DUP _dah-safe-effects? 0= IF 3DROP 0 EXIT THEN
+    DUP CFACET.COUNT @ CASE
+        0 OF
+            DROP SWAP DROP
+            DUP AMRUN.MANDATE MAND.EFFECTS @ 0=
+            OVER AMRUN.MANDATE MAND.TOOL-BUDGET @ 0= AND
+            SWAP AMRUN.MANDATE MAND.DISPOSITION @ MAND-D-READ-ONLY = AND
+            IF 1 ELSE 0 THEN
+        ENDOF
+        9 OF
+            DUP _dah-observe-set? OVER _dah-observe-targets? AND >R
+            DROP SWAP DROP
+            DUP AMRUN.MANDATE MAND.EFFECTS @ CAP-E-OBSERVE =
+            OVER AMRUN.MANDATE MAND.TOOL-BUDGET @ 4 = AND
+            SWAP AMRUN.MANDATE MAND.DISPOSITION @ MAND-D-READ-ONLY = AND
+            R> AND IF 2 ELSE 0 THEN
+        ENDOF
+        14 OF
+            DUP _dah-observe-set? OVER _dah-review-set? AND >R
+            DUP _dah-observe-targets? R> AND >R
+            DUP _dah-review-targets? R> AND >R
+            DROP SWAP DROP
+            DUP AMRUN.MANDATE MAND.EFFECTS @ CAP-E-OBSERVE
+                CAP-E-NAVIGATE OR CAP-E-MUTATE OR CAP-E-PERSIST OR =
+            OVER AMRUN.MANDATE MAND.TOOL-BUDGET @ 8 = AND
+            SWAP AMRUN.MANDATE MAND.DISPOSITION @ MAND-D-COMMIT = AND
+            R> AND IF 3 ELSE 0 THEN
+        ENDOF
+        3DROP 0
+    ENDCASE ;
+
+: _dah-history-safe?  ( turn -- flag )
+    DUP _dah-hturn !
+    DUP ATURN.FLAGS @ ATURN-F-SCOPED-HISTORY AND 0= IF DROP 0 EXIT THEN
+    DUP ATURN.CONTEXT @ DUP 0= IF 2DROP 0 EXIT THEN _dah-hctx !
+    ATURN.CONTEXT-N @ DUP _dah-hn !
+    DUP 0< OVER 1 AND OR IF DROP 0 EXIT THEN
+    DROP
+    _dah-hctx @ ACTX.COUNT @ _dah-hn @ <> IF 0 EXIT THEN
+    _dah-hn @ 0 ?DO
+        I _dah-hctx @ ACTX-NTH DUP ACTXI-VALID? 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+        DUP ACTXI.KIND @ ACTX-K-MESSAGE <>
+        OVER ACTXI.ROLE @ AROLE-USER <> OR IF DROP 0 UNLOOP EXIT THEN
+        DUP ACTXI.FLAGS @ IF DROP 0 UNLOOP EXIT THEN
+        DUP ACTXI.STATUS @ IF DROP 0 UNLOOP EXIT THEN
+        ACTXI.RUN-ID @ DUP 1 < IF DROP 0 UNLOOP EXIT THEN _dah-hrun !
+        I 1+ _dah-hctx @ ACTX-NTH DUP ACTXI-VALID? 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+        DUP ACTXI.KIND @ ACTX-K-MESSAGE <>
+        OVER ACTXI.ROLE @ AROLE-ASSISTANT <> OR IF DROP 0 UNLOOP EXIT THEN
+        DUP ACTXI.FLAGS @ IF DROP 0 UNLOOP EXIT THEN
+        DUP ACTXI.STATUS @ IF DROP 0 UNLOOP EXIT THEN
+        ACTXI.RUN-ID @ _dah-hrun @ <> IF 0 UNLOOP EXIT THEN
+    2 +LOOP
+    -1 ;
+
+: _dah-start  ( turn queue context -- ior )
+    _dah-c ! _dah-q ! _dah-turn !
+    _dah-turn @ _dah-history-safe? 0= IF
+        0 _dah-facet-state ! 97 EXIT
+    THEN
+    _dah-turn @ ATURN.TOOL-GATEWAY @ _dah-facet-class
+    DUP _dah-facet-state ! 0= IF 98 EXIT THEN
+    _dah-turn @ _dah-q @ _dah-c @ _SCRIPTED-START ;
+
+: _dah-poll  ( queue context -- ior )
+    _dah-c ! _dah-q !
+    _dah-c @ _SPC.STATE @ _SP-STREAMING =
+    _dah-c @ _SPC.STEP @ 3 = AND IF
+        _dah-c @ _SPC.PROMPT-A @ _dah-c @ _SPC.PROMPT-U @
+        S" excluded" STR-STRI-CONTAINS IF
+            _SP-WAITING _dah-c @ _SPC.STATE !
+            AEV-TOOL-CALL S" agent.excluded.operation" 0 0
+            _dah-q @ _dah-c @ _SCRIPTED-EMIT EXIT
+        THEN
+    THEN
+    _dah-c @ _SPC.STATE @ _SP-STREAMING =
+    _dah-c @ _SPC.STEP @ 0= AND IF
+        AEV-TEXT-DELTA 0 0 _dah-facet-state @ CASE
+            1 OF S" Facet contract: chat-only. " ENDOF
+            2 OF S" Facet contract: read-only. " ENDOF
+            3 OF S" Facet contract: assist. " ENDOF
+            S" Facet contract: INVALID. "
+        ENDCASE
+        _dah-q @ _dah-c @ _SCRIPTED-EMIT ?DUP IF EXIT THEN
+        AEV-TEXT-DELTA 0 0
+        _dah-c @ _SPC.TURN-CONTEXT-N @ DUP 0= IF
+            DROP S" Scoped history: none. "
+        ELSE 2 = IF
+            S" Scoped history: two messages. "
+        ELSE
+            S" Scoped history: prior messages. "
+        THEN THEN
+        _dah-q @ _dah-c @ _SCRIPTED-EMIT ?DUP IF EXIT THEN
+    THEN
+    _dah-q @ _dah-c @ _SCRIPTED-POLL ;
+
+: _dah-provider-new  ( -- provider ior )
+    SCRIPTED-PROVIDER-NEW DUP IF EXIT THEN
+    DROP DUP ['] _dah-start SWAP APROV.START-XT !
+    DUP ['] _dah-poll SWAP APROV.POLL-XT ! 0 ;
+: _dah-source-create  ( context -- provider status )
+    DROP _dah-provider-new ;
+
+: _boot-agent-source  ( -- )
+    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
+    DUP ['] _dah-source-create SWAP APSOURCE.NEW-XT !
+    DESK-AGENT-SOURCE! ;
+"""
+
+PROFILES["desktop-agent-hardening"] = Profile(
+    roots=PROFILES["desktop"].roots,
+    resources=PROFILES["desktop"].resources,
+    autoexec=PROFILES["desktop"].autoexec.replace(
+        r''': _boot-agent-source  ( -- )
+    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
+    DESK-AGENT-SOURCE! ;''',
+        _DESKTOP_AGENT_HARDENING_SOURCE.strip(),
+        1,
+    ),
+    ready_markers=PROFILES["desktop"].ready_markers,
+    # This journey deliberately closes Daybook to prove Chat-only behavior
+    # with an empty facet, so its Entry menu is not a final-state marker.
+    stable_markers=tuple(
+        marker
+        for marker in PROFILES["desktop"].stable_markers
+        if marker != "Entry"
+    ),
+    linked=PROFILES["desktop"].linked,
+    include_large_sample=False,
+)
+
 PROFILES["desktop-local-applet"] = Profile(
     roots=PROFILES["desktop"].roots,
     resources=PROFILES["desktop"].resources,
@@ -8025,15 +9739,30 @@ def dependency_order(roots: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _minify_forth(text: str, *, remove_requires: bool = False) -> str:
-    """Remove deployment-only line comments without rewriting Forth tokens."""
+    """Remove deployment-only comments without rewriting executable tokens."""
     lines: list[str] = []
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("\\"):
             continue
         if remove_requires and REQUIRE_RE.match(line):
             continue
-        lines.append(line.rstrip())
+        lines.append(STACK_EFFECT_RE.sub("", line).rstrip())
     return "\n".join(lines) + "\n"
+
+
+def _strip_forth_noncode_lines(text: str) -> str:
+    """Strip only blank and full-line backslash comments from guest source.
+
+    Unlike linked Akashic chunks, the copied KDOS source is not eligible for
+    stack-effect removal: diagnostic strings can legitimately contain text
+    that resembles a parenthesized Forth comment.  This transform leaves
+    every retained executable line byte-for-byte intact.
+    """
+    return "\n".join(
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("\\")
+    ) + "\n"
 
 
 def _linked_chunks(modules: tuple[str, ...]) -> dict[str, bytes]:
@@ -8074,7 +9803,7 @@ def _linked_autoexec(autoexec: str, chunk_names: tuple[str, ...]) -> str:
         lines.append(line)
     if not inserted:
         lines[0:0] = [f"REQUIRE {name}" for name in chunk_names]
-    return "\n".join(lines) + "\n"
+    return _minify_forth("\n".join(lines) + "\n")
 
 
 def _directories(paths: set[str]) -> list[str]:
@@ -8234,7 +9963,9 @@ def build_image(
     fs.format()
     fs.inject_file(
         "kdos.f",
-        (MEGAPAD_ROOT / "kdos.f").read_bytes(),
+        _strip_forth_noncode_lines(
+            (MEGAPAD_ROOT / "kdos.f").read_text(encoding="utf-8")
+        ).encode("utf-8"),
         ftype=FTYPE_FORTH,
         flags=FLAG_SYSTEM,
     )
@@ -8265,12 +9996,13 @@ def build_image(
         parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
         fs.inject_file(disk_path.name, content, path=parent)
 
-    fs.inject_file("large.txt", LARGE_SAMPLE, ftype=FTYPE_TEXT)
+    if profile.include_large_sample:
+        fs.inject_file("large.txt", LARGE_SAMPLE, ftype=FTYPE_TEXT)
 
-    # Leave two isolated one-sector holes in the generated test image.
-    # Guest-created smoke.txt uses the first; the large Save As copy uses
-    # the second and must grow through MP64FS's secondary extent.
-    fs.inject_file(".growth-hole-1", bytes(512), flags=FLAG_SYSTEM)
+        # Leave two isolated one-sector holes in the generated test image.
+        # Guest-created smoke.txt uses the first; the large Save As copy uses
+        # the second and must grow through MP64FS's secondary extent.
+        fs.inject_file(".growth-hole-1", bytes(512), flags=FLAG_SYSTEM)
 
     fs.inject_file(
         "autoexec.f",
@@ -8281,13 +10013,15 @@ def build_image(
         ).encode("utf-8"),
         ftype=FTYPE_FORTH,
     )
-    fs.inject_file(".growth-hole-2", bytes(512), flags=FLAG_SYSTEM)
+    if profile.include_large_sample:
+        fs.inject_file(".growth-hole-2", bytes(512), flags=FLAG_SYSTEM)
 
     for name in sorted(SAMPLE_FILES.keys() - {"large.txt"}):
         fs.inject_file(name, SAMPLE_FILES[name], ftype=FTYPE_TEXT)
 
-    fs.delete_file(".growth-hole-1")
-    fs.delete_file(".growth-hole-2")
+    if profile.include_large_sample:
+        fs.delete_file(".growth-hole-1")
+        fs.delete_file(".growth-hole-2")
     fs.save(target)
     if codex_auth_checkpoint is not None:
         target.chmod(0o600)
@@ -8426,6 +10160,46 @@ def smoke(
             journey_errors.append(failure)
             return False
 
+        def wait_screen_normalized(
+            marker: str,
+            failure: str,
+            *,
+            step_budget: int = 250_000_000,
+            wall_timeout: float = 8.0,
+        ) -> bool:
+            """Wait for prose independent of visual line wrapping."""
+
+            nonlocal total_steps, screen
+            normalized_marker = " ".join(marker.split())
+            remaining = min(step_budget, max_steps - total_steps)
+            if remaining <= 0 or time.monotonic() >= deadline:
+                journey_errors.append(f"{failure} (journey budget exhausted)")
+                return False
+            local_deadline = min(deadline, time.monotonic() + wall_timeout)
+            while remaining > 0 and time.monotonic() < local_deadline:
+                screen = session.snapshot()
+                if normalized_marker in " ".join(screen.text().split()):
+                    return True
+                chunk = min(50_000_000, remaining)
+                report = session.run(
+                    max_steps=chunk,
+                    wall_timeout_s=min(
+                        1.0, max(0.05, local_deadline - time.monotonic())
+                    ),
+                    advance_idle=True,
+                )
+                total_steps += report.steps
+                remaining -= report.steps
+                if report.reason == "halted":
+                    break
+                if report.steps == 0:
+                    time.sleep(0.005)
+            screen = session.snapshot()
+            if normalized_marker in " ".join(screen.text().split()):
+                return True
+            journey_errors.append(failure)
+            return False
+
         def wait_screen_gone(
             marker: str,
             failure: str,
@@ -8557,6 +10331,119 @@ def smoke(
                 journey_errors.append(failure)
                 return False
             return True
+
+        def collect_scroll_views(
+            key: str,
+            *,
+            max_presses: int = 12,
+        ) -> tuple[str, int]:
+            """Collect distinct rendered views while moving a visual viewport.
+
+            This intentionally reasons about observable text and convergence,
+            not fixed rows or columns.  It remains valid as Agent chrome and
+            message-card heights evolve, while still failing a message-indexed
+            viewport that cannot traverse one long wrapped message.
+            """
+
+            nonlocal total_steps, screen
+            views = [session.snapshot().text()]
+            changes = 0
+            for _ in range(max_presses):
+                before = views[-1]
+                before_revision = session.revision
+                session.send_key(key)
+                # Agent reflow can take substantially longer than one generic
+                # settling slice.  An unchanged early snapshot is not proof
+                # that Page Up/Down reached a boundary: the escape sequence
+                # may still be queued, or a full wrapped-frame repaint may be
+                # in progress.  Wait for the UART bytes to be consumed and an
+                # observable terminal repaint before comparing views.
+                remaining = min(240_000_000, max_steps - total_steps)
+                key_deadline = min(deadline, time.monotonic() + 6.0)
+                processed = False
+                while remaining > 0 and time.monotonic() < key_deadline:
+                    chunk = min(40_000_000, remaining)
+                    report = session.run(
+                        max_steps=chunk,
+                        wall_timeout_s=min(
+                            1.0,
+                            max(0.05, key_deadline - time.monotonic()),
+                        ),
+                        advance_idle=True,
+                    )
+                    total_steps += report.steps
+                    remaining -= report.steps
+                    screen = session.snapshot()
+                    if (
+                        not session.system.uart.has_rx_data
+                        and session.revision > before_revision
+                    ):
+                        processed = True
+                        break
+                    if report.reason == "halted":
+                        break
+                    if report.steps == 0:
+                        time.sleep(0.005)
+                if not processed:
+                    if changes == 0:
+                        journey_errors.append(
+                            f"Agent did not process {key} visual scrolling"
+                        )
+                    break
+                after = screen.text()
+                # Repeated transcript rows can make two different viewport
+                # offsets render byte-identical screens.  Equality therefore
+                # cannot prove that Page Up/Down reached a boundary; continue
+                # the bounded traversal and retain only observable changes.
+                if after != before:
+                    changes += 1
+                    views.append(after)
+            return "\n".join(views), changes
+
+        def unlock_agent_review(
+            failure: str,
+            *,
+            max_pages: int = 32,
+            views: list[str] | None = None,
+        ) -> bool:
+            """Traverse every bounded approval row before approving."""
+
+            nonlocal total_steps, screen
+            for _ in range(max_pages + 1):
+                screen = session.snapshot()
+                if views is not None:
+                    views.append(screen.text())
+                if "[F6] Approve once" in screen.text():
+                    return True
+                before_revision = session.revision
+                session.send_key("pagedown")
+                remaining = min(240_000_000, max_steps - total_steps)
+                key_deadline = min(deadline, time.monotonic() + 6.0)
+                while remaining > 0 and time.monotonic() < key_deadline:
+                    chunk = min(40_000_000, remaining)
+                    report = session.run(
+                        max_steps=chunk,
+                        wall_timeout_s=min(
+                            1.0,
+                            max(0.05, key_deadline - time.monotonic()),
+                        ),
+                        advance_idle=True,
+                    )
+                    total_steps += report.steps
+                    remaining -= report.steps
+                    screen = session.snapshot()
+                    if (
+                        not session.system.uart.has_rx_data
+                        and session.revision > before_revision
+                    ):
+                        break
+                    if report.reason == "halted":
+                        journey_errors.append(failure)
+                        return False
+                    if report.steps == 0:
+                        time.sleep(0.005)
+            journey_errors.append(failure)
+            return False
 
         def wait_desktop_tile(
             marker: str,
@@ -8721,7 +10608,7 @@ def smoke(
                 session.send_text("task smoke")
                 session.send_key("enter")
                 if wait_screen(
-                    "Review required",
+                    "daybook.task.capture",
                     "persistent app tool did not pause for approval",
                     step_budget=1_200_000_000,
                     wall_timeout=30.0,
@@ -8734,6 +10621,10 @@ def smoke(
                     wait_screen(
                         "[5:Agent*]", "Desk did not keep Agent focused for review"
                     )
+                    if not unlock_agent_review(
+                        "Agent did not expose approval after every operand row"
+                    ):
+                        return
                     session.send_key("f6")
                     resolved = wait_screen(
                         "Request approved",
@@ -8776,16 +10667,20 @@ def smoke(
             session.send_key("alt+5")
             session.send_key("ctrl+l")
             if wait_screen(
-                "Ask:", "Agent did not reopen its composer for the hidden-op probe"
+                "Ask:", "Agent did not reopen its composer for the source probe"
             ):
                 session.send_text("source smoke")
                 session.send_key("enter")
-                wait_screen(
-                    "Tool handler was not",
-                    "the raw Daybook source operation escaped the exact facet",
+                if wait_screen(
+                    "Daybook task captured.",
+                    "the allowed Daybook source observation did not complete",
                     step_budget=1_000_000_000,
                     wall_timeout=25.0,
-                )
+                ):
+                    wait_screen(
+                        "Ready",
+                        "Agent did not finish the allowed source observation",
+                    )
 
             session.send_key("alt+2")
             session.send_key("ctrl+space")
@@ -8807,6 +10702,318 @@ def smoke(
                     wait_screen(
                         "Ready", "Desk's shared agent runtime did not finish"
                     )
+
+        def run_desk_agent_hardening_journey() -> None:
+            """Exercise Agent as a scoped Desk service, not just an applet."""
+
+            def compose(prompt: str, failure: str) -> bool:
+                session.send_key("ctrl+l")
+                if not wait_screen("Ask:", f"{failure}: composer did not open"):
+                    return False
+                session.send_text(prompt)
+                session.send_key("enter")
+                return True
+
+            def select_access(item_index: int, expected: str) -> bool:
+                compact = {
+                    "Chat only": "Chat",
+                    "Practice read only": "Read",
+                    "Practice assist": "Assist",
+                }[expected]
+                item_text = ("Chat", "Read-only", "Assist")[item_index]
+                if not wait_screen_gone(
+                    "Agent access profile changed",
+                    f"stale access toast did not clear before selecting {expected!r}",
+                ):
+                    return False
+                menu_hits = session.snapshot().find("Access")
+                if not menu_hits:
+                    journey_errors.append(
+                        f"Agent did not render its Access menu for {expected!r}"
+                    )
+                    return False
+                menu_row, menu_col = min(menu_hits)
+                send_sgr_mouse(menu_row, menu_col + 1)
+                if not wait_screen(
+                    "Read-only",
+                    f"Agent did not open its Access menu for {expected!r}",
+                ):
+                    return False
+                menu_item_hits = [
+                    (row, col)
+                    for row, col in session.snapshot().find(item_text)
+                    if row > menu_row
+                    and menu_col - 2 <= col <= menu_col + 20
+                ]
+                if not menu_item_hits:
+                    journey_errors.append(
+                        f"Agent Access menu omitted item {item_text!r}"
+                    )
+                    return False
+                for step in range(item_index):
+                    session.send_key("down")
+                    if not settle_input(
+                        f"Agent Access menu did not move to item {step + 1}"
+                    ):
+                        return False
+                session.send_key("enter")
+                if not wait_screen(
+                    "Agent access profile changed",
+                    f"Agent did not apply access profile {expected!r}",
+                ):
+                    return False
+                status_text = session.snapshot().text()
+                if expected not in status_text and compact not in status_text:
+                    journey_errors.append(
+                        f"Agent status did not retain access profile {expected!r}"
+                    )
+                    return False
+                return True
+
+            session.send_key("alt+5")
+            if not wait_screen(
+                "[5:Agent*]", "Desk did not focus Agent for hardening acceptance"
+            ):
+                return
+            session.send_key("alt+f")
+            if not settle_input(
+                "Desk did not open Agent full-frame for identity acceptance"
+            ):
+                return
+            identity = session.snapshot().text()
+            if not (
+                "DEMO" in identity
+                and "scripted" in identity
+                and ("Chat only" in identity or "Chat" in identity)
+            ):
+                journey_errors.append(
+                    "Desk Agent did not expose demo provider identity and safe default access"
+                )
+
+            if not select_access(2, "Practice assist"):
+                return
+            if compose("continuity first", "first scoped turn"):
+                wait_screen(
+                    "Facet contract: assist.",
+                    "Practice assist did not compile its exact built-in facet",
+                    step_budget=900_000_000,
+                    wall_timeout=20.0,
+                )
+                wait_screen_normalized(
+                    "Scoped history: none.",
+                    "first scoped turn disclosed unexpected prior history",
+                    step_budget=900_000_000,
+                    wall_timeout=20.0,
+                )
+                wait_screen("Ready", "first scoped turn did not finish")
+
+            if compose("continuity second", "second scoped turn"):
+                wait_screen_normalized(
+                    "Scoped history: two messages.",
+                    "second scoped turn did not receive bounded prior chat",
+                    step_budget=900_000_000,
+                    wall_timeout=20.0,
+                )
+                wait_screen("Ready", "second scoped turn did not finish")
+
+            if select_access(1, "Practice read only"):
+                if compose("read facet probe", "read-only facet probe"):
+                    wait_screen(
+                        "Facet contract: read-only.",
+                        "Practice read only did not compile its exact observe facet",
+                        step_budget=900_000_000,
+                        wall_timeout=20.0,
+                    )
+                    wait_screen("Ready", "read-only facet probe did not finish")
+            select_access(2, "Practice assist")
+
+            approved_prompt = "task approved-hardening"
+            if compose(approved_prompt, "reviewed scoped write") and wait_screen(
+                "PgDn to inspect all rows",
+                "scoped persistent write did not start at its locked review top",
+                step_budget=1_200_000_000,
+                wall_timeout=30.0,
+            ):
+                review_views: list[str] = []
+                if not unlock_agent_review(
+                    "structured local review did not unlock after all rows",
+                    views=review_views,
+                ):
+                    return
+                review_text = "\n".join(review_views)
+                for marker in (
+                    "daybook.task.capture",
+                    "Target",
+                    "mutate",
+                    "persist",
+                    "revision",
+                    "F6",
+                    "F7",
+                ):
+                    if marker not in review_text:
+                        journey_errors.append(
+                            f"local review omitted structured detail {marker!r}"
+                        )
+                session.send_key("f6")
+                if wait_screen(
+                    "Request approved",
+                    "F6 did not approve the structured local review",
+                    step_budget=800_000_000,
+                    wall_timeout=20.0,
+                ):
+                    wait_screen(
+                        "Daybook task captured.",
+                        "approved scoped write did not return its tool result",
+                        step_budget=2_000_000_000,
+                        wall_timeout=60.0,
+                    )
+                live_fs = MP64FS(bytearray(session.system.storage._image_data))
+                try:
+                    daybook = live_fs.read_file("daybook.md")
+                except FileNotFoundError:
+                    daybook = b""
+                if approved_prompt.encode() not in daybook:
+                    journey_errors.append(
+                        "approved scoped write did not reach Daybook persistence"
+                    )
+
+            denied_prompt = "task denied-hardening"
+            if compose(denied_prompt, "denied scoped write") and wait_screen(
+                "PgDn to inspect all rows",
+                "second scoped write did not start at its locked review top",
+                step_budget=1_200_000_000,
+                wall_timeout=30.0,
+            ):
+                session.send_key("f7")
+                if wait_screen(
+                    "Request denied",
+                    "F7 did not deny the structured local review",
+                    step_budget=800_000_000,
+                    wall_timeout=20.0,
+                ):
+                    wait_screen_normalized(
+                        "Tool request was denied.",
+                        "provider did not receive the local denial result",
+                        step_budget=1_200_000_000,
+                        wall_timeout=30.0,
+                    )
+                live_fs = MP64FS(bytearray(session.system.storage._image_data))
+                try:
+                    daybook = live_fs.read_file("daybook.md")
+                except FileNotFoundError:
+                    daybook = b""
+                if denied_prompt.encode() in daybook:
+                    journey_errors.append(
+                        "denied scoped write changed Daybook persistence"
+                    )
+
+            if compose("excluded capability hardening", "hidden capability probe"):
+                wait_screen(
+                    "Tool handler was not",
+                    "an applet capability outside the frozen facet became callable",
+                    step_budget=1_000_000_000,
+                    wall_timeout=25.0,
+                )
+
+            if compose("cancel scoped-hardening", "scoped cancellation probe"):
+                session.send_key("escape")
+                wait_screen(
+                    "Cancelled",
+                    "Desk Agent did not cancel an active scoped run",
+                )
+
+            select_access(0, "Chat only")
+
+            session.send_key("alt+f")
+            settle_input("Desk did not leave Agent full-frame before applet teardown")
+            session.send_key("alt+3")
+            if wait_screen(
+                "[3:Daybook*]",
+                "Desk did not focus Daybook before the no-tool chat probe",
+            ):
+                session.send_key("alt+w")
+                wait_screen_gone(
+                    "[3:Daybook",
+                    "Desk did not close Daybook for the empty-facet probe",
+                    step_budget=800_000_000,
+                    wall_timeout=20.0,
+                )
+
+            session.send_key("alt+5")
+            if wait_screen(
+                "[5:Agent*]",
+                "Desk did not refocus Agent after Daybook closed",
+            ):
+                session.send_key("alt+f")
+                settle_input(
+                    "Desk did not reopen Agent full-frame for no-tool chat"
+                )
+            if "[5:Agent*]" in session.snapshot().text() and compose(
+                "chat without daybook", "no-tool scoped chat"
+            ):
+                wait_screen(
+                    "chat without daybook",
+                    "ordinary chat failed when no applet tool target existed",
+                    step_budget=900_000_000,
+                    wall_timeout=20.0,
+                )
+                wait_screen_normalized(
+                    "Scoped history: prior messages.",
+                    "empty-facet chat lost its bounded conversation history",
+                    step_budget=900_000_000,
+                    wall_timeout=20.0,
+                )
+                wait_screen(
+                    "Facet contract: chat-only.",
+                    "Chat only exposed a tool or non-empty capability facet",
+                    step_budget=900_000_000,
+                    wall_timeout=20.0,
+                )
+                wait_screen("Ready", "no-tool scoped chat did not finish")
+
+            session.send_key("alt+f")
+            settle_input("Desk did not leave Agent full-frame before lens close")
+            session.send_key("alt+w")
+            if not wait_screen_gone(
+                "[5:Agent",
+                "Desk did not close the Agent lens after its completed run",
+            ):
+                return
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets", "Desk did not open the launcher to restore Agent"
+            ):
+                return
+            session.send_key("end")
+            session.send_key("enter")
+            if not wait_screen(
+                ":Agent*]",
+                "Desk did not relaunch and focus the shared Agent lens",
+                step_budget=1_000_000_000,
+                wall_timeout=25.0,
+            ):
+                return
+            session.send_key("alt+f")
+            settle_input("Desk did not open the relaunched Agent full-frame")
+            relaunched_text = session.snapshot().text()
+            if "Chat only" not in relaunched_text and "Chat" not in relaunched_text:
+                journey_errors.append(
+                    "relaunched Agent lens lost the selected Chat-only access profile"
+                )
+            wait_screen(
+                "chat without daybook",
+                "relaunched Agent lens lost the shared transcript",
+            )
+            if compose("after agent lens restart", "post-relaunch scoped chat"):
+                wait_screen(
+                    "after agent lens restart",
+                    "relaunched Agent lens could not complete another turn",
+                    step_budget=900_000_000,
+                    wall_timeout=20.0,
+                )
+                wait_screen("Ready", "relaunched Agent did not return to ready")
+            session.send_key("alt+f")
+            settle_input("Desk did not leave the relaunched Agent full-frame")
 
         def run_local_applet_journey() -> None:
             session.send_key("alt+1")
@@ -9123,6 +11330,9 @@ def smoke(
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
 
+        if initial_ready and profile_name == "desktop-agent-hardening":
+            run_desk_agent_hardening_journey()
+
         if initial_ready and profile_name == "desktop-local-applet":
             run_local_applet_journey()
 
@@ -9373,7 +11583,103 @@ def smoke(
                                         "D2", "Grid did not return to the edited formula"
                                     )
 
+        if initial_ready and profile_name == "agent-layout-ui":
+            initial_layout = session.snapshot().text()
+            if "WRAP-BOTTOM" not in initial_layout:
+                journey_errors.append(
+                    "Agent did not anchor the preloaded wrapped transcript at its bottom"
+                )
+            if not all(
+                marker in initial_layout
+                for marker in ("DEMO", "scripted", "Unscoped")
+            ):
+                journey_errors.append(
+                    "Agent did not expose demo provider identity and unscoped access"
+                )
+
+            upward, upward_changes = collect_scroll_views("pageup")
+            for marker in (
+                "WRAP-START",
+                "SOFT-WRAP-END",
+                "HARD-BREAK-TOP",
+                "HARD-BREAK-BOTTOM",
+                "UNICODE-END",
+                "café",
+                "界 界",
+                "COMBINING-TAIL",
+            ):
+                if marker not in upward:
+                    journey_errors.append(
+                        f"Agent visual scrolling lost layout marker {marker!r}"
+                    )
+            if upward_changes < 2:
+                journey_errors.append(
+                    "Agent transcript did not scroll through distinct visual-row views"
+                )
+
+            collect_scroll_views("pagedown")
+            if "WRAP-BOTTOM" not in session.snapshot().text():
+                journey_errors.append(
+                    "Agent Page Down did not return to the transcript bottom"
+                )
+
+            narrow_cols = max(52, cols - 24)
+            narrow_rows = max(18, rows - 4)
+            session.resize(narrow_cols, narrow_rows)
+            if settle_input(
+                "Agent did not redraw after narrow transcript resize",
+                step_budget=120_000_000,
+                wall_timeout=4.0,
+            ):
+                screen = session.snapshot()
+                if (screen.cols, screen.rows) != (narrow_cols, narrow_rows):
+                    journey_errors.append(
+                        "Agent layout probe did not reach its narrow terminal size"
+                    )
+                if "WRAP-BOTTOM" not in screen.text():
+                    journey_errors.append(
+                        "Agent resize lost the followed transcript bottom anchor"
+                    )
+                narrow_upward, _ = collect_scroll_views("pageup")
+                for marker in (
+                    "WRAP-START",
+                    "SOFT-WRAP-END",
+                    "UNICODE-END",
+                    "COMBINING-TAIL",
+                ):
+                    if marker not in narrow_upward:
+                        journey_errors.append(
+                            f"Agent resize reflow lost layout marker {marker!r}"
+                        )
+                collect_scroll_views("pagedown")
+
+            session.resize(cols, rows)
+            settle_input(
+                "Agent did not redraw after restoring transcript size",
+                step_budget=120_000_000,
+                wall_timeout=4.0,
+            )
+
         if initial_ready and profile_name == "agent-ui":
+            identity = session.snapshot().text()
+            if not all(
+                marker in identity
+                for marker in ("DEMO", "scripted", "Unscoped")
+            ):
+                journey_errors.append(
+                    "Agent did not expose demo provider identity and unscoped access"
+                )
+
+            session.send_key("ctrl+l")
+            if wait_screen(
+                "Ask:", "Agent did not open its empty-send composer"
+            ):
+                session.send_key("enter")
+                wait_screen(
+                    "Message is empty",
+                    "Agent did not explain its rejected empty message",
+                )
+
             session.send_key("ctrl+l")
             if wait_screen("Ask:", "Ctrl+L did not open Agent's composer"):
                 session.send_text("hello agent")
@@ -9391,7 +11697,7 @@ def smoke(
                 session.send_text("approval check")
                 session.send_key("enter")
                 if wait_screen(
-                    "Review required",
+                    "Provider approval request",
                     "Agent did not surface the provider approval request",
                     step_budget=600_000_000,
                     wall_timeout=15.0,
@@ -9400,26 +11706,40 @@ def smoke(
                         "Persist the simulated change?",
                         "Agent did not show the approval reason",
                     )
-                    session.send_key("f6")
-                    if wait_screen_gone(
-                        "Review required",
-                        "F6 did not resolve Agent's approval request",
+                    if unlock_agent_review(
+                        "provider review did not unlock after all rows"
                     ):
-                        wait_screen("Approved.", "Agent did not record approval")
+                        provider_review = session.snapshot().text()
+                        for marker in (
+                            "Provider approval request",
+                            "no local tool envelope",
+                            "[F6] Approve once",
+                            "[F7] Deny",
+                        ):
+                            if marker not in provider_review:
+                                journey_errors.append(
+                                    f"provider review omitted detail {marker!r}"
+                                )
+                        session.send_key("f6")
+                        if wait_screen_gone(
+                            "Provider approval request",
+                            "F6 did not resolve Agent's approval request",
+                        ):
+                            wait_screen("Approved.", "Agent did not record approval")
 
             session.send_key("ctrl+l")
             if wait_screen("Ask:", "Agent did not open its denial composer"):
                 session.send_text("approval denial check")
                 session.send_key("enter")
                 if wait_screen(
-                    "Review required",
+                    "Provider approval request",
                     "Agent did not surface the denial review request",
                     step_budget=600_000_000,
                     wall_timeout=15.0,
                 ):
                     session.send_key("f7")
                     if wait_screen_gone(
-                        "Review required",
+                        "Provider approval request",
                         "F7 did not resolve Agent's denial request",
                     ):
                         wait_screen("Denied.", "Agent did not record denial")
@@ -9450,6 +11770,14 @@ def smoke(
 
         if initial_ready and profile_name == "agent-auth-ui":
             fixture_secret = "credential-must-not-render"
+            remote_identity = session.snapshot().text()
+            if not all(
+                marker in remote_identity
+                for marker in ("REMOTE?", "responses", "Unscoped")
+            ):
+                journey_errors.append(
+                    "unverified remote Agent identity was not visibly qualified"
+                )
             session.send_key("ctrl+k")
             if wait_screen(
                 "Credential:", "Ctrl+K did not open the credential prompt"
@@ -9481,12 +11809,12 @@ def smoke(
                 session.send_key("enter")
                 wait_screen("Ready", "Credential submission did not connect provider")
                 wait_screen_gone(
-                    "Credential required",
+                    "Credential",
                     "Credential submission left the provider unauthenticated",
                 )
                 session.send_key("ctrl+shift+k")
                 wait_screen(
-                    "Credential required",
+                    "Credential",
                     "Credential clear did not return to unauthenticated state",
                 )
 
@@ -9536,9 +11864,22 @@ def smoke(
                 session.send_key("right")
                 wait_screen("Verbosity", "Verbosity row was not interactive")
                 session.send_key("escape")
-                wait_screen_gone(
+                settings_closed = wait_screen_gone(
                     "Run settings", "Escape did not close run settings"
                 )
+                if settings_closed:
+                    run_identity = session.snapshot().text()
+                    for marker in (
+                        "DEMO",
+                        "device-flow",
+                        "Deliberate",
+                        "Low",
+                        "Unscoped",
+                    ):
+                        if marker not in run_identity:
+                            journey_errors.append(
+                                f"persistent run identity omitted {marker!r}"
+                            )
 
             session.send_key("ctrl+l")
             if wait_screen("Ask:", "Authorized Agent could not compose"):
@@ -9785,11 +12126,13 @@ def smoke(
         if initial_ready and profile_name in (
             "desktop",
             "desktop-agent",
+            "desktop-agent-hardening",
             "fexplorer",
         ):
             if profile_name in (
                 "desktop",
                 "desktop-agent",
+                "desktop-agent-hardening",
             ):
                 session.send_key("alt+2")
             session.send_key("ctrl+g")
@@ -9803,6 +12146,7 @@ def smoke(
             if profile_name in (
                 "desktop",
                 "desktop-agent",
+                "desktop-agent-hardening",
             ):
                 session.send_key("ctrl+o")
                 if wait_screen(
@@ -9968,6 +12312,7 @@ def smoke(
             if profile_name in (
                 "desktop",
                 "desktop-agent",
+                "desktop-agent-hardening",
             ):
                 final_text = screen.text()
                 if "1smoke2" in final_text or "smoke2" in final_text:

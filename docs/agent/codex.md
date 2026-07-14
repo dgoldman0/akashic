@@ -128,6 +128,43 @@ All normal profiles are native and offline:
 - `desktop-codex` boots all applets with the real Codex source in signed-out
   production shape.
 
+Agent/Desk hardening also has an offline acceptance gate. A change is not
+complete merely because a provider can return text:
+
+- `agent` verifies that offline, scripted, and remote provider provenance is
+  explicit metadata rather than an inference from provider IDs.
+- `agent-applet-capabilities` verifies the bounded, idempotent observation
+  descriptors exported by Pad and File Explorer, including exact IDs, effects,
+  target requirements, result schemas, and size limits.
+- `agent-access` freezes the three Desk access-preset budgets and effects, then
+  proves that an exact target pin wins when a foreign instance registers the
+  same operation ID first.
+- `agent-security` exercises reviewed-action audit envelopes, recursively typed
+  canonical operand fingerprints, same-payload type mutation before and after
+  approval, durable approval failure, queued and approval-state teardown,
+  cancellation races, event capacity, and idle provider failures.
+- `agent-layout-ui` loads a durable pathological transcript and requires hard
+  newlines, long soft wrapping, wide Unicode, visual-row scrolling, bottom
+  anchoring, and resize reflow without dropped text.
+- `agent-ui` requires unmistakable demo/provider/access identity, an honest
+  empty-send error, provider-review details, denial, cancellation, recovery,
+  and transcript preservation across resize.
+- `desktop-agent-hardening` drives Assist, Read only, and Chat only through the
+  visible Access menu; validates each run's exact frozen operation set, flags,
+  effects, and budgets; requires bounded multi-turn history made solely of
+  same-run user/assistant pairs, structured local review details, approved and
+  denied writes, rejection of capabilities outside the facet, ordinary chat
+  with an empty tool facet, and conversation continuity after the Agent lens is
+  closed and relaunched.
+- `agent-device-ui` requires the selected model and reasoning choice to remain
+  visible after the settings panel closes. `agent-persistence` retains the
+  interrupted-run/reopen gate, and `openai-provider` exercises remote-provider
+  provenance plus transport, tool, retry, and cancellation behavior.
+
+These deterministic profiles must pass before a live run is useful evidence.
+They deliberately use no network or account credential and do not substitute
+for the live service gate below.
+
 Live TAP runs have authenticated both source-pinned hosts and issued a real
 device code from the native guest. During the first watched browser completion,
 Desk stopped polling because MegaPad's 64-bit `MS@` reconstruction wrapped at

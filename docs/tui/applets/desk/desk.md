@@ -176,6 +176,28 @@ defaults.  Once persisted, the row's flags are authoritative on later boots.
 Pad's Build & Install workflow receives the live catalog only after activation;
 the builder pointer is cleared before the catalog is freed.
 
+## Desk-owned Agent composition
+
+Desk owns the shared Agent provider source, runtime, tool gateway, and visible
+access profile. It starts with the exact `Chat only` preset. `Practice read
+only` adds bounded observations from trusted built-in applet instances, while
+`Practice assist` also adds fixed local operations that always require review.
+Each scoped run receives a freshly compiled Practice Mandate; the selected
+profile is policy input and is not itself authority.
+
+Children can borrow the composition through the Desk interoperability endpoint:
+
+| Service ID | Value |
+|------------|-------|
+| `org.akashic.agent.runtime` | Shared Agent runtime |
+| `org.akashic.agent.tool-gateway` | Shared scoped tool gateway |
+| `org.akashic.agent.provider-source` | Desk-owned provider source |
+| `org.akashic.agent.access-profile` | Current immutable profile descriptor |
+
+The source remains Desk-owned; children must not free it. A preset change is
+rejected while a run or review is active, and the runtime freezes the compiled
+facet for the duration of each accepted run.
+
 ## Activation-local Daybook resource
 
 On a healthy Practice activation, Desk creates one resource registry and one
@@ -266,6 +288,9 @@ A sample config template is provided in
 | Word | Stack | Description |
 |------|-------|-------------|
 | `DESK-LOAD-CONFIG` | `( addr len -- )` | Load presentation/theme TOML. |
+| `DESK-AGENT-SOURCE!` | `( source -- )` | Transfer a provider source to Desk before run. Replacing a pending source frees the old one. |
+| `DESK-AGENT-ACCESS-PRESET!` | `( preset -- status )` | Select one exact built-in Agent access preset; active runs and reviews reject changes. |
+| `DESK-AGENT-ACCESS` | `( -- profile\|0 )` | Borrow the current Desk-owned immutable access profile. |
 
 ### Startup
 
@@ -385,8 +410,8 @@ live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
 Under `[DEFINED] GUARDED`: `DESK-FOCUS-ID`,
 `DESK-MINIMIZE-ID`, `DESK-RESTORE`, `DESK-FULLFRAME!`,
 `DESK-TOGGLE-VH`, `DESK-RELAYOUT`, `DESK-SLOT-COUNT`, `DESK-VCOUNT`,
-`DESK-AGENT-SOURCE!`, `DESK-PRACTICE`, `DESK-CONTEXT`, and
-`DESK-RECOVERY?`.
+`DESK-AGENT-SOURCE!`, `DESK-AGENT-ACCESS-PRESET!`, `DESK-AGENT-ACCESS`,
+`DESK-PRACTICE`, `DESK-CONTEXT`, and `DESK-RECOVERY?`.
 
 `DESK-RUN`, `DESK-LAUNCH`, `DESK-TRY-LAUNCH`, `DESK-CLOSE-ID`, and
 `DESK-REQUEST-CLOSE-ID` are owner-core lifecycle entries and remain unwrapped.

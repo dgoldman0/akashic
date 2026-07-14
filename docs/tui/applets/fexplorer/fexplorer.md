@@ -70,6 +70,15 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 | `FEXP-SORT-SIZE` | 1 | Sort by size |
 | `FEXP-SORT-TYPE` | 2 | Sort by type (dirs first) |
 
+### Agent-visible observation
+
+The `fexplorer.preview.text` resource capability returns `null` unless the
+current selection is a file. Otherwise it revalidates the selected inode's
+exact VFS path and returns at most 4096 bytes of valid UTF-8 file content. Path
+verification, open, read, and descriptor cleanup share one VFS transaction;
+malformed text, truncated path identity, transfer failure, or an unexpected
+post-open exception fails without disclosing a partial value.
+
 ## Key Bindings
 
 | Key | Action |

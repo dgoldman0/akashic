@@ -10,6 +10,10 @@ PROVIDED akashic-agent-turn-request
 
 REQUIRE model-context.f
 
+\ The context snapshot contains only completed prior user/assistant chat
+\ messages selected by the authority owner's bounded disclosure policy.
+1 CONSTANT ATURN-F-SCOPED-HISTORY
+
  0 CONSTANT _ATR-THREAD-ID
  8 CONSTANT _ATR-RUN-ID
 16 CONSTANT _ATR-PROMPT-A

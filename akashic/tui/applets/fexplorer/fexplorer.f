@@ -68,6 +68,7 @@ REQUIRE ../../../interop/resource.f
  80 CONSTANT _FEXP-LINE-W         \ formatted line width (chars)
 512 CONSTANT _FEXP-PATH-CAP       \ path buffer capacity
 32768 CONSTANT _FEXP-PREVIEW-CAP  \ preview buffer 32 KiB
+ 4096 CONSTANT _FEXP-CAP-TEXT-MAX \ Agent-visible UTF-8 preview bytes
 512 CONSTANT _FEXP-PROMPT-CAP     \ command-bar input capacity
 
 \ Sort modes
@@ -302,6 +303,17 @@ CMP-LAYOUT-SIZE CONSTANT _FEXP-STATE-SIZE
 : _FEXP-BUILD-PATH  ( inode -- )
     _FEXP-PATH-BUF _FEXP-PATH-CAP VFS-INODE-PATH
     _FEXP-PATH-LEN ! ;
+
+VARIABLE _FBP-IN
+
+: _FEXP-BUILD-PATH-EXACT?  ( inode -- flag )
+    DUP _FBP-IN ! _FEXP-BUILD-PATH
+    \ VFS-INODE-PATH reports the number of bytes written, not whether either
+    \ its byte or ancestor ceiling was reached.  Resolve the reconstruction
+    \ and require the exact selected inode before exposing or reopening it.
+    _FEXP-PATH-LEN @ _FEXP-PATH-CAP >= IF 0 EXIT THEN
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FEXP-VFS @ VFS-RESOLVE
+    _FBP-IN @ = ;
 
 \ =====================================================================
 \  §7 — Detail List: populate / format / sort
@@ -1392,10 +1404,12 @@ VARIABLE _FSUB-MODE
 
 CREATE _FEXP-RESOURCE-SCHEMA CS-SIZE ALLOT
 CREATE _FEXP-OPTIONAL-RESOURCE-SCHEMA CS-SIZE ALLOT
-2 CONSTANT _FEXP-CAP-COUNT
+CREATE _FEXP-PREVIEW-SCHEMA CS-SIZE ALLOT
+3 CONSTANT _FEXP-CAP-COUNT
 CREATE FEXP-CAPS _FEXP-CAP-COUNT CAP-DESC * ALLOT
 : FEXP-CAP-REVEAL    ( -- cap ) FEXP-CAPS ;
 : FEXP-CAP-SELECTED  ( -- cap ) FEXP-CAPS CAP-DESC + ;
+: FEXP-CAP-PREVIEW   ( -- cap ) FEXP-CAPS CAP-DESC 2 * + ;
 
 CREATE FEXP-INTENTS CINT-DESC-SIZE ALLOT
 
@@ -1427,6 +1441,57 @@ VARIABLE _FRV-DIR
 
 VARIABLE _FRH-A
 VARIABLE _FRH-U
+VARIABLE _FRS-REQ
+VARIABLE _FRP-REQ
+VARIABLE _FRP-IN
+VARIABLE _FRP-FD
+VARIABLE _FRP-LEN
+VARIABLE _FRP-SIZE
+VARIABLE _FRP-STATUS
+VARIABLE _FRP-TEXT-A
+VARIABLE _FRP-TEXT-U
+VARIABLE _FRP-TEXT-TRUNC
+VARIABLE _FRP-TEXT-CHECK
+VARIABLE _FRP-TEXT-OUT
+VARIABLE _FRP-TEXT-EDGE-OK
+VARIABLE _FRP-THROW
+VARIABLE _FRP-CLEANUP-THROW
+
+: _FEXP-CAP-TEXT-LEN?  ( addr len truncated? -- preview-len flag )
+    _FRP-TEXT-TRUNC ! _FRP-TEXT-U ! _FRP-TEXT-A !
+    _FRP-TEXT-TRUNC @ 0= IF
+        _FRP-TEXT-A @ _FRP-TEXT-U @ UTF8-VALID? IF
+            _FRP-TEXT-U @ -1
+        ELSE
+            0 0
+        THEN
+        EXIT
+    THEN
+    \ Prove the bytes at the output edge complete a valid codepoint using
+    \ the caller's three-byte lookahead.  This distinguishes a split valid
+    \ sequence from an arbitrary malformed suffix that backoff could hide.
+    0 _FRP-TEXT-EDGE-OK !
+    _FEXP-CAP-TEXT-MAX _FRP-TEXT-CHECK !
+    BEGIN
+        _FRP-TEXT-CHECK @ _FRP-TEXT-U @ <=
+        _FRP-TEXT-EDGE-OK @ 0= AND
+    WHILE
+        _FRP-TEXT-A @ _FRP-TEXT-CHECK @ UTF8-VALID? IF
+            -1 _FRP-TEXT-EDGE-OK !
+        ELSE
+            1 _FRP-TEXT-CHECK +!
+        THEN
+    REPEAT
+    _FRP-TEXT-EDGE-OK @ 0= IF 0 0 EXIT THEN
+
+    _FEXP-CAP-TEXT-MAX _FRP-TEXT-OUT !
+    4 0 DO
+        _FRP-TEXT-A @ _FRP-TEXT-OUT @ UTF8-VALID? IF
+            _FRP-TEXT-OUT @ -1 UNLOOP EXIT
+        THEN
+        -1 _FRP-TEXT-OUT +!
+    LOOP
+    0 0 ;
 
 : _FEXP-CAP-REVEAL-HANDLER  ( request instance -- status )
     _FEXP-ACTIVATE
@@ -1439,14 +1504,75 @@ VARIABLE _FRH-U
     DUP CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
     ROT CBR.RESULT CV-RESOURCE! IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
 
-: _FEXP-CAP-SELECTED-HANDLER  ( request instance -- status )
-    _FEXP-ACTIVATE
+: _FEXP-CAP-SELECTED-BODY  ( -- status )
     _FEXP-SELECTED DUP 0= IF
-        DROP DUP CBR.RESULT CV-NULL! DROP CBUS-S-OK EXIT
+        DROP _FRS-REQ @ CBR.RESULT CV-NULL! CBUS-S-OK EXIT
     THEN
-    _FEXP-BUILD-PATH
-    _FEXP-PATH-BUF _FEXP-PATH-LEN @ ROT CBR.RESULT IRES-VFS!
+    _FEXP-BUILD-PATH-EXACT? 0= IF CBUS-S-FAILED EXIT THEN
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FRS-REQ @ CBR.RESULT IRES-VFS!
     IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+
+: _FEXP-CAP-SELECTED-HANDLER  ( request instance -- status )
+    _FEXP-ACTIVATE _FRS-REQ !
+    ['] _FEXP-CAP-SELECTED-BODY VFS-TRANSACTION ;
+
+: _FEXP-CAP-PREVIEW-CLOSE  ( -- )
+    _FRP-FD @ ?DUP IF 0 _FRP-FD ! VFS-CLOSE THEN ;
+
+: _FEXP-CAP-PREVIEW-BODY  ( -- status )
+    \ Keep identity verification, reopen, and read in one VFS exclusion
+    \ region.  A rename cannot redirect the verified path between calls.
+    _FEXP-SELECTED DUP 0= IF
+        DROP _FRP-REQ @ CBR.RESULT CV-NULL!
+        CBUS-S-OK EXIT
+    THEN
+    DUP _FRP-IN ! IN.TYPE @ VFS-T-FILE <> IF
+        _FRP-REQ @ CBR.RESULT CV-NULL!
+        CBUS-S-OK EXIT
+    THEN
+    _FRP-IN @ _FEXP-BUILD-PATH-EXACT? 0= IF CBUS-S-FAILED EXIT THEN
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FEXP-OPEN-VFS
+    DUP 0= IF DROP CBUS-S-NOT-FOUND EXIT THEN _FRP-FD !
+    _FRP-FD @ VFS-SIZE DUP 0< IF
+        DROP CBUS-S-FAILED EXIT
+    THEN DUP _FRP-SIZE !
+    _FEXP-CAP-TEXT-MAX 3 + MIN DUP _FRP-LEN !
+    _FEXP-PREV-BUF SWAP _FRP-FD @ VFS-READ-EXACT IF
+        CBUS-S-FAILED EXIT
+    THEN
+    _FEXP-PREV-BUF _FRP-LEN @
+    _FRP-SIZE @ _FEXP-CAP-TEXT-MAX > _FEXP-CAP-TEXT-LEN? 0= IF
+        DROP CBUS-S-FAILED EXIT
+    THEN
+    _FRP-LEN !
+    _FEXP-PREV-BUF _FRP-LEN @ _FRP-REQ @ CBR.RESULT CV-STRING!
+    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+
+: _FEXP-CAP-PREVIEW-TRANSACTION  ( -- status )
+    \ CBR dispatch catches handler exceptions, but by then an acquired VFS
+    \ descriptor would no longer be reachable.  Normalize the body here so
+    \ descriptor cleanup still runs inside the same exclusion region.  The
+    \ close helper clears ownership before calling VFS-CLOSE, preventing an
+    \ after-effect THROW from recycling the same descriptor twice.
+    CBUS-S-FAILED _FRP-STATUS !
+    0 _FRP-THROW ! 0 _FRP-CLEANUP-THROW !
+    ['] _FEXP-CAP-PREVIEW-BODY CATCH ?DUP IF
+        _FRP-THROW !
+    ELSE
+        _FRP-STATUS !
+    THEN
+    ['] _FEXP-CAP-PREVIEW-CLOSE CATCH ?DUP IF
+        _FRP-CLEANUP-THROW !
+    THEN
+    _FRP-THROW @ _FRP-CLEANUP-THROW @ OR IF
+        CBUS-S-FAILED
+    ELSE
+        _FRP-STATUS @
+    THEN ;
+
+: _FEXP-CAP-PREVIEW-HANDLER  ( request instance -- status )
+    _FEXP-ACTIVATE _FRP-REQ ! 0 _FRP-FD !
+    ['] _FEXP-CAP-PREVIEW-TRANSACTION VFS-TRANSACTION ;
 
 : _FEXP-CAP-SETUP  ( -- )
     _FEXP-RESOURCE-SCHEMA CS-INIT
@@ -1456,6 +1582,10 @@ VARIABLE _FRH-U
     CV-T-NULL CS-TYPE-BIT CV-T-RESOURCE CS-TYPE-BIT OR
     _FEXP-OPTIONAL-RESOURCE-SCHEMA CS-ALLOW-MASK!
     516 _FEXP-OPTIONAL-RESOURCE-SCHEMA CS-MAX-LEN!
+    _FEXP-PREVIEW-SCHEMA CS-INIT
+    CV-T-NULL CS-TYPE-BIT CV-T-STRING CS-TYPE-BIT OR
+    _FEXP-PREVIEW-SCHEMA CS-ALLOW-MASK!
+    _FEXP-CAP-TEXT-MAX _FEXP-PREVIEW-SCHEMA CS-MAX-LEN!
 
     FEXP-CAP-REVEAL CAP-DESC-INIT
     CAP-K-COMMAND FEXP-CAP-REVEAL CAP.KIND !
@@ -1484,6 +1614,20 @@ VARIABLE _FRH-U
     CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR CAP-F-CONTEXT-DEFAULT OR
     FEXP-CAP-SELECTED CAP.FLAGS !
     ['] _FEXP-CAP-SELECTED-HANDLER FEXP-CAP-SELECTED CAP.HANDLER-XT !
+
+    FEXP-CAP-PREVIEW CAP-DESC-INIT
+    CAP-K-RESOURCE FEXP-CAP-PREVIEW CAP.KIND !
+    S" fexplorer.preview.text"
+    FEXP-CAP-PREVIEW CAP.ID-U ! FEXP-CAP-PREVIEW CAP.ID-A !
+    S" Selected file preview"
+    FEXP-CAP-PREVIEW CAP.TITLE-U ! FEXP-CAP-PREVIEW CAP.TITLE-A !
+    S" Read a bounded valid UTF-8 preview of the selected VFS file"
+    FEXP-CAP-PREVIEW CAP.DESC-U ! FEXP-CAP-PREVIEW CAP.DESC-A !
+    _FEXP-PREVIEW-SCHEMA FEXP-CAP-PREVIEW CAP.OUT-SCHEMA !
+    CAP-E-OBSERVE FEXP-CAP-PREVIEW CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR CAP-F-CONTEXT-DEFAULT OR
+    FEXP-CAP-PREVIEW CAP.FLAGS !
+    ['] _FEXP-CAP-PREVIEW-HANDLER FEXP-CAP-PREVIEW CAP.HANDLER-XT !
 
     FEXP-INTENTS CINT-DESC-INIT
     S" resource.reveal"

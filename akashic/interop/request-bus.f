@@ -8,6 +8,8 @@ REQUIRE ../runtime/registry.f
 REQUIRE policy.f
 REQUIRE authority.f
 REQUIRE practice-turn.f
+REQUIRE codecs/json-value.f
+REQUIRE ../math/sha3.f
 REQUIRE ../concurrency/guard.f
 
 0  CONSTANT CBUS-S-OK
@@ -36,6 +38,9 @@ REQUIRE ../concurrency/guard.f
 
 CBR-F-QUEUED CBR-F-RUNNING OR CONSTANT CBR-F-BUSY-MASK
 
+1 CONSTANT CBR-ASF-TYPED-IVJSON-SHA3
+65536 CONSTANT CBR-ARGS-CANONICAL-MAX
+
 \ Request structure.  Caller and target are stable runtime handles, never
 \ raw instance pointers.  Practice identity, semantic resource identity, and
 \ the invocation handle are inline: an operation descriptor pointer remains
@@ -43,9 +48,10 @@ CBR-F-QUEUED CBR-F-RUNNING OR CONSTANT CBR-F-BUSY-MASK
 \ target owner.
 \
 \ Substrate-freeze ABI note: RESOURCE-ID was appended at the former 432-byte
-\ end of CBR.  Every older field retains its offset, but CBR-SIZE is now 464;
-\ precompiled clients which allocate the former size are binary-incompatible
-\ and must be rebuilt.  A zero RESOURCE-ID is the legacy/non-lens default.
+\ end of CBR.  The argument seal fields now follow it.  Every older field
+\ retains its offset, but CBR-SIZE is now 512; precompiled clients which
+\ allocate a former size are binary-incompatible and must be rebuilt.  A zero
+\ RESOURCE-ID and zero argument-seal flags are the legacy defaults.
   0 CONSTANT _CBR-ID
   8 CONSTANT _CBR-TRACE
  16 CONSTANT _CBR-PRINCIPAL
@@ -77,7 +83,10 @@ CBR-F-QUEUED CBR-F-RUNNING OR CONSTANT CBR-F-BUSY-MASK
 360 CONSTANT _CBR-HANDLE
 424 CONSTANT _CBR-TURN
 432 CONSTANT _CBR-RESOURCE-ID
-464 CONSTANT CBR-SIZE
+464 CONSTANT _CBR-ARGS-LEN
+472 CONSTANT _CBR-ARGS-DIGEST
+504 CONSTANT _CBR-ARGS-SEAL-FLAGS
+512 CONSTANT CBR-SIZE
 
 : CBR.ID             ( req -- a ) _CBR-ID + ;
 : CBR.TRACE          ( req -- a ) _CBR-TRACE + ;
@@ -110,6 +119,9 @@ CBR-F-QUEUED CBR-F-RUNNING OR CONSTANT CBR-F-BUSY-MASK
 : CBR.HANDLE         ( req -- handle ) _CBR-HANDLE + ;
 : CBR.TURN           ( req -- turn-cell ) _CBR-TURN + ;
 : CBR.RESOURCE-ID    ( req -- id ) _CBR-RESOURCE-ID + ;
+: CBR.ARGS-LEN       ( req -- a ) _CBR-ARGS-LEN + ;
+: CBR.ARGS-DIGEST    ( req -- digest ) _CBR-ARGS-DIGEST + ;
+: CBR.ARGS-SEAL-FLAGS ( req -- a ) _CBR-ARGS-SEAL-FLAGS + ;
 
 \ CBR lifecycle transitions share one recursive cross-core guard.  This is
 \ deliberately independent of CBUS ring serialization: it prevents one
@@ -177,6 +189,70 @@ GUARD _CBR-LIFECYCLE-GUARD
     R@ CBR.ERROR-CODE !
     R@ CBR.ERROR-U !
     R> CBR.ERROR-A ! ;
+
+CREATE _CBRS-NUL 0 C,
+CREATE _CBRS-CHECK SHA3-256-LEN ALLOT
+VARIABLE _CBRS-REQ
+VARIABLE _CBRS-VALUE
+VARIABLE _CBRS-DST
+VARIABLE _CBRS-BUF
+VARIABLE _CBRS-LEN
+VARIABLE _CBRS-STATUS
+GUARD _cbr-args-seal-guard
+
+: WITH-CBR-ARGS-SEAL  ( xt -- )
+    _cbr-args-seal-guard WITH-GUARD ;
+
+: _CBR-ARGS-DIGEST  ( value destination -- canonical-len status )
+    _CBRS-DST ! _CBRS-VALUE !
+    CBR-ARGS-CANONICAL-MAX ALLOCATE
+    DUP IF 2DROP 0 IVJSON-E-NOMEM EXIT THEN
+    DROP _CBRS-BUF !
+    _CBRS-VALUE @ _CBRS-BUF @ CBR-ARGS-CANONICAL-MAX
+        IVJSON-TYPED-ENCODE
+    _CBRS-STATUS ! _CBRS-LEN !
+    _CBRS-STATUS @ IF
+        _CBRS-BUF @ FREE 0 _CBRS-STATUS @ EXIT
+    THEN
+    SHA3-256-BEGIN
+    S" akashic.agent.cbr-args.typed-ivjson.v1" SHA3-256-ADD
+    _CBRS-NUL 1 SHA3-256-ADD
+    _CBRS-LEN 8 SHA3-256-ADD
+    _CBRS-BUF @ _CBRS-LEN @ SHA3-256-ADD
+    _CBRS-DST @ SHA3-256-END
+    _CBRS-BUF @ FREE _CBRS-LEN @ 0 ;
+
+: _CBR-ARGS-SEAL-CLEAR  ( request -- )
+    DUP 0 SWAP CBR.ARGS-LEN !
+    DUP CBR.ARGS-DIGEST SHA3-256-LEN 0 FILL
+    0 SWAP CBR.ARGS-SEAL-FLAGS ! ;
+
+: CBR-ARGS-SEAL-CLEAR  ( request -- )
+    ['] _CBR-ARGS-SEAL-CLEAR WITH-CBR-ARGS-SEAL ;
+
+: _CBR-ARGS-SEAL!  ( request -- status )
+    DUP _CBRS-REQ ! _CBR-ARGS-SEAL-CLEAR
+    _CBRS-REQ @ CBR.ARGS _CBRS-REQ @ CBR.ARGS-DIGEST _CBR-ARGS-DIGEST
+    _CBRS-STATUS ! _CBRS-LEN !
+    _CBRS-STATUS @ IF CBUS-S-INVALID EXIT THEN
+    _CBRS-LEN @ _CBRS-REQ @ CBR.ARGS-LEN !
+    CBR-ASF-TYPED-IVJSON-SHA3 _CBRS-REQ @ CBR.ARGS-SEAL-FLAGS !
+    CBUS-S-OK ;
+
+: CBR-ARGS-SEAL!  ( request -- status )
+    ['] _CBR-ARGS-SEAL! WITH-CBR-ARGS-SEAL ;
+
+: _CBR-ARGS-SEAL-MATCH?  ( request -- flag )
+    DUP _CBRS-REQ ! CBR.ARGS-SEAL-FLAGS @
+        CBR-ASF-TYPED-IVJSON-SHA3 AND 0= IF 0 EXIT THEN
+    _CBRS-REQ @ CBR.ARGS _CBRS-CHECK _CBR-ARGS-DIGEST
+    _CBRS-STATUS ! _CBRS-LEN !
+    _CBRS-STATUS @ IF 0 EXIT THEN
+    _CBRS-LEN @ _CBRS-REQ @ CBR.ARGS-LEN @ <> IF 0 EXIT THEN
+    _CBRS-CHECK _CBRS-REQ @ CBR.ARGS-DIGEST SHA3-256-COMPARE ;
+
+: CBR-ARGS-SEAL-MATCH?  ( request -- flag )
+    ['] _CBR-ARGS-SEAL-MATCH? WITH-CBR-ARGS-SEAL ;
 
 : CBR-NEW  ( -- req ior )
     CBR-SIZE ALLOCATE
@@ -340,6 +416,11 @@ VARIABLE _CBC-DESC
         _CBAB-BIND @ ABIND.PRACTICE-ID RID-COPY
     _CBAB-REQ @ CBR.MANDATE-ID
         _CBAB-BIND @ ABIND.MANDATE-ID RID-COPY
+    _CBAB-REQ @ CBR.ARGS-SEAL-FLAGS @
+        _CBAB-BIND @ ABIND.ARGS-SEAL-FLAGS !
+    _CBAB-REQ @ CBR.ARGS-LEN @ _CBAB-BIND @ ABIND.ARGS-LEN !
+    _CBAB-REQ @ CBR.ARGS-DIGEST _CBAB-BIND @ ABIND.ARGS-DIGEST
+        SHA3-256-LEN MOVE
     _CBAB-CAP @ CAP-ID _CBAB-BIND @ ABIND-OP! ;
 
 : CBR-TURN-PREPARE  ( request -- flag )
@@ -509,6 +590,15 @@ VARIABLE _CBC-DESC
         _CBUS-AUTHORITY-GATE DUP CBUS-S-OK <> IF
             NIP DUP _CBUS-COMPLETE EXIT
         THEN DROP
+        \ The grant binds the creation-time seal fields.  Recompute the
+        \ canonical operand after authority consumption but before any turn
+        \ or handler entry, so post-review mutation is denied and the one-shot
+        \ grant cannot be replayed.
+        DUP CBR.ARGS-SEAL-FLAGS @ CBR-ASF-TYPED-IVJSON-SHA3 AND IF
+            DUP CBR-ARGS-SEAL-MATCH? 0= IF
+                DROP CBUS-S-DENIED DUP _CBUS-COMPLETE EXIT
+            THEN
+        THEN
         _CBUS-TURN-REQUIRED? IF
             _CBD-INST @ CINST.REVISION @ MS@
             _CBD-REQ @ CBR.TURN @ PTURN-BEGIN 0= IF

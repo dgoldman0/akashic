@@ -11,6 +11,7 @@ PROVIDED akashic-agent-tool-gateway
 REQUIRE ../runtime/registry.f
 REQUIRE ../interop/capability.f
 REQUIRE ../interop/request-bus.f
+REQUIRE ../interop/codecs/json-value.f
 REQUIRE mandate-run.f
 
 0 CONSTANT ATOOLG-S-IDLE
@@ -32,7 +33,14 @@ REQUIRE mandate-run.f
 120 CONSTANT _ATG-CATALOG
 64 CONSTANT ATOOLG-MAX-TOOLS
 _ATG-CATALOG ATOOLG-MAX-TOOLS 8 * + CONSTANT _ATG-MANDATE-RUN
-_ATG-MANDATE-RUN 8 + CONSTANT AGENT-TOOL-GATEWAY-SIZE
+_ATG-MANDATE-RUN 8 + CONSTANT _ATG-ARGS-LEN
+_ATG-ARGS-LEN 8 + CONSTANT _ATG-ARGS-DIGEST
+_ATG-ARGS-DIGEST SHA3-256-LEN + CONSTANT _ATG-AUDIT-FLAGS
+_ATG-AUDIT-FLAGS 8 + CONSTANT AGENT-TOOL-GATEWAY-SIZE
+
+1 CONSTANT ATOOLG-AF-ARGS-FINGERPRINT
+65536 CONSTANT ATOOLG-ARGS-CANONICAL-MAX
+4096 CONSTANT ATOOLG-ARGS-REVIEW-MAX
 
 : ATOOLG.REGISTRY  ( gateway -- a ) _ATG-REGISTRY + ;
 : ATOOLG.BUS       ( gateway -- a ) _ATG-BUS + ;
@@ -47,6 +55,9 @@ _ATG-MANDATE-RUN 8 + CONSTANT AGENT-TOOL-GATEWAY-SIZE
 : ATOOLG.REGISTRY-N ( gateway -- a ) _ATG-REGISTRY-N + ;
 : ATOOLG.CATALOG   ( gateway -- a ) _ATG-CATALOG + ;
 : ATOOLG.MANDATE-RUN ( gateway -- a ) _ATG-MANDATE-RUN + ;
+: ATOOLG.ARGS-LEN    ( gateway -- a ) _ATG-ARGS-LEN + ;
+: ATOOLG.ARGS-DIGEST ( gateway -- a ) _ATG-ARGS-DIGEST + ;
+: ATOOLG.AUDIT-FLAGS ( gateway -- a ) _ATG-AUDIT-FLAGS + ;
 
 : ATOOLG-SCOPED?  ( gateway -- flag )
     ATOOLG.MANDATE-RUN @ 0<> ;
@@ -58,6 +69,91 @@ _ATG-MANDATE-RUN 8 + CONSTANT AGENT-TOOL-GATEWAY-SIZE
         DROP R> DROP 0 EXIT
     THEN
     8 * R> ATOOLG.CATALOG + @ ;
+
+VARIABLE _ATGFP-G
+VARIABLE _ATGFP-BUF
+VARIABLE _ATGFP-CAP
+GUARD _atoolg-canonical-guard
+
+\ The request owns a recursive CV-COPY of provider arguments.  Review,
+\ audit, and dispatch all address this one immutable gateway request.
+: ATOOLG-ARGS-VALUE  ( gateway -- value | 0 )
+    ATOOLG.REQUEST @ DUP IF CBR.ARGS THEN ;
+
+\ Canonical form is type-tagged IVJSON over the owned CV.  CV map insertion
+\ order is preserved, so the same exact request has one byte encoding.
+: _ATOOLG-ARGS-CANONICAL  ( buffer capacity gateway -- length status )
+    _ATGFP-G ! _ATGFP-CAP ! _ATGFP-BUF !
+    _ATGFP-G @ ATOOLG-ARGS-VALUE DUP 0= IF
+        DROP 0 IVJSON-E-INVALID EXIT
+    THEN
+    _ATGFP-BUF @ _ATGFP-CAP @ IVJSON-TYPED-ENCODE ;
+
+: ATOOLG-ARGS-CANONICAL  ( buffer capacity gateway -- length status )
+    ['] _ATOOLG-ARGS-CANONICAL _atoolg-canonical-guard WITH-GUARD ;
+
+\ Return caller-owned canonical bytes.  This avoids a borrowed module-global
+\ review buffer whose contents another gateway could change after return.
+: ATOOLG-ARGS-CANONICAL-ALLOC  ( gateway -- addr length status )
+    >R ATOOLG-ARGS-CANONICAL-MAX ALLOCATE DUP IF
+        NIP R> DROP 0 0 ROT EXIT
+    THEN
+    DROP DUP ATOOLG-ARGS-CANONICAL-MAX R> ATOOLG-ARGS-CANONICAL
+    DUP IF
+        >R DROP FREE 0 0 R>
+    THEN ;
+
+: _ATOOLG-ARGS-FINGERPRINT-CLEAR  ( gateway -- )
+    DUP 0 SWAP ATOOLG.ARGS-LEN !
+    DUP ATOOLG.ARGS-DIGEST SHA3-256-LEN 0 FILL
+    0 SWAP ATOOLG.AUDIT-FLAGS ! ;
+
+: _ATOOLG-ARGS-FINGERPRINT-LOCKED!  ( gateway -- status )
+    DUP _ATGFP-G ! _ATOOLG-ARGS-FINGERPRINT-CLEAR
+    _ATGFP-G @ ATOOLG.REQUEST @ DUP 0= IF
+        DROP CBUS-S-INVALID EXIT
+    THEN
+    DUP CBR-ARGS-SEAL! ?DUP IF 2DROP CBUS-S-INVALID EXIT THEN
+    DUP CBR.ARGS-LEN @ _ATGFP-G @ ATOOLG.ARGS-LEN !
+    CBR.ARGS-DIGEST _ATGFP-G @ ATOOLG.ARGS-DIGEST
+        SHA3-256-LEN MOVE
+    ATOOLG-AF-ARGS-FINGERPRINT _ATGFP-G @ ATOOLG.AUDIT-FLAGS !
+    CBUS-S-OK ;
+
+: _ATOOLG-ARGS-FINGERPRINT!  ( gateway -- status )
+    ['] _ATOOLG-ARGS-FINGERPRINT-LOCKED!
+        _atoolg-canonical-guard WITH-GUARD ;
+
+: ATOOLG-ARGS-FINGERPRINT  ( gateway -- digest-a digest-u canonical-u | 0 0 0 )
+    DUP ATOOLG.AUDIT-FLAGS @ ATOOLG-AF-ARGS-FINGERPRINT AND 0= IF
+        DROP 0 0 0 EXIT
+    THEN
+    DUP ATOOLG.ARGS-DIGEST SHA3-256-LEN ROT ATOOLG.ARGS-LEN @ ;
+
+: _ATOOLG-ARGS-FINGERPRINT-MATCH?  ( gateway -- flag )
+    DUP _ATGFP-G ! ATOOLG.AUDIT-FLAGS @
+        ATOOLG-AF-ARGS-FINGERPRINT AND 0= IF 0 EXIT THEN
+    _ATGFP-G @ ATOOLG.REQUEST @ DUP 0= IF DROP 0 EXIT THEN
+    DUP CBR-ARGS-SEAL-MATCH? 0= IF DROP 0 EXIT THEN
+    DUP CBR.ARGS-LEN @ _ATGFP-G @ ATOOLG.ARGS-LEN @ <> IF
+        DROP 0 EXIT
+    THEN
+    CBR.ARGS-DIGEST _ATGFP-G @ ATOOLG.ARGS-DIGEST
+        SHA3-256-COMPARE ;
+
+: ATOOLG-ARGS-FINGERPRINT-MATCH?  ( gateway -- flag )
+    ['] _ATOOLG-ARGS-FINGERPRINT-MATCH?
+        _atoolg-canonical-guard WITH-GUARD ;
+
+\ Approval is meaningful only when the complete immutable operand can be
+\ presented to the reviewer.  This check lives below the UI so every caller,
+\ including direct runtime and gateway clients, shares the same boundary.
+: ATOOLG-ARGS-REVIEWABLE?  ( gateway -- flag )
+    DUP ATOOLG.AUDIT-FLAGS @ ATOOLG-AF-ARGS-FINGERPRINT AND 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP ATOOLG.ARGS-LEN @ ATOOLG-ARGS-REVIEW-MAX > IF DROP 0 EXIT THEN
+    ATOOLG-ARGS-FINGERPRINT-MATCH? ;
 
 : _ATOOLG-EXPOSED?  ( cap -- flag )
     DUP CAP.HANDLER-XT @ 0= IF DROP 0 EXIT THEN
@@ -125,17 +221,33 @@ VARIABLE _ATGI-DESC
 
 VARIABLE _ATGRF-G
 VARIABLE _ATGRF-INST
+VARIABLE _ATGRF-FOCUSED
+VARIABLE _ATGLF-G
+VARIABLE _ATGLF-INST
+
+\ FOCUS is only an ambient preference, never an owning reference.  Validate
+\ its pointer by equality against the live registry before any dereference;
+\ applet close removes the registry entry before freeing the CINST.
+: _ATOOLG-LIVE-FOCUSED  ( gateway -- instance | 0 )
+    DUP _ATGLF-G ! ATOOLG.FOCUSED @ DUP 0= IF EXIT THEN
+    _ATGLF-INST !
+    _ATGLF-G @ ATOOLG.REGISTRY @ CREG.INST-N @ 0 ?DO
+        I _ATGLF-G @ ATOOLG.REGISTRY @ CREG-INST-NTH
+        _ATGLF-INST @ = IF _ATGLF-INST @ UNLOOP EXIT THEN
+    LOOP
+    0 _ATGLF-G @ ATOOLG.FOCUSED ! 0 ;
 
 : ATOOLG-REFRESH  ( gateway -- status )
     DUP 0= IF DROP 1 EXIT THEN
     DUP _ATGRF-G !
     DUP ATOOLG.CATALOG ATOOLG-MAX-TOOLS 8 * 0 FILL
     0 SWAP ATOOLG.CATALOG-N !
-    _ATGRF-G @ ATOOLG.FOCUSED @ _ATGRF-G @ _ATOOLG-INSTANCE+
+    _ATGRF-G @ _ATOOLG-LIVE-FOCUSED DUP _ATGRF-FOCUSED !
+    _ATGRF-G @ _ATOOLG-INSTANCE+
     ?DUP IF EXIT THEN
     _ATGRF-G @ ATOOLG.REGISTRY @ CREG.INST-N @ 0 ?DO
         I _ATGRF-G @ ATOOLG.REGISTRY @ CREG-INST-NTH DUP _ATGRF-INST !
-        _ATGRF-G @ ATOOLG.FOCUSED @ <> IF
+        _ATGRF-FOCUSED @ <> IF
             _ATGRF-INST @ _ATGRF-G @ _ATOOLG-INSTANCE+ ?DUP IF
                 UNLOOP EXIT
             THEN
@@ -214,7 +326,7 @@ VARIABLE _ATGF-CAP
 
 : ATOOLG-FIND  ( id-a id-u gateway -- instance cap | 0 0 )
     _ATGF-G ! _ATGF-U ! _ATGF-A !
-    _ATGF-G @ ATOOLG.FOCUSED @ ?DUP IF
+    _ATGF-G @ _ATOOLG-LIVE-FOCUSED ?DUP IF
         DUP _ATGF-INST !
         _ATGF-A @ _ATGF-U @ ROT _ATOOLG-FIND-ON
         DUP IF
@@ -298,7 +410,7 @@ VARIABLE _ATGIG-EXPIRES
         CV-T-RESOURCE OF CV-LEN@ ENDOF
         \ Nested containers are not yet projected into provider-safe bounded
         \ schemas.  Charge an impossible size rather than under-count them.
-        DROP 9223372036854775807
+        NIP 9223372036854775807 SWAP
     ENDCASE ;
 
 VARIABLE _ATGD-REQ
@@ -368,6 +480,7 @@ VARIABLE _ATGC-RESERVED
     _ATGC-REQ @ ?DUP IF CBR-FREE THEN
     0 _ATGC-G @ ATOOLG.REQUEST !
     _ATGC-G @ ATOOLG.NAME CV-FREE
+    _ATGC-G @ _ATOOLG-ARGS-FINGERPRINT-CLEAR
     ATOOLG-S-IDLE _ATGC-G @ ATOOLG.STATE !
     _ATGC-RESERVED @ IF
         _ATGC-G @ ATOOLG.MANDATE-RUN @ ?DUP IF AMRUN-TOOL-REFUND THEN
@@ -394,6 +507,10 @@ VARIABLE _ATGC-RESERVED
     THEN
     _ATGC-ARGS @ _ATGC-REQ @ CBR.ARGS CV-COPY ?DUP IF
         DROP CBUS-S-INVALID _ATOOLG-CALL-CLEANUP EXIT
+    THEN
+    \ Seal the canonical deep copy before the request can enter the bus.
+    _ATGC-G @ _ATOOLG-ARGS-FINGERPRINT! ?DUP IF
+        _ATOOLG-CALL-CLEANUP EXIT
     THEN
     CPRINC-AGENT _ATGC-REQ @ CBR.PRINCIPAL !
     _ATGC-G @ ATOOLG.CALLER @ ?DUP IF
@@ -500,6 +617,12 @@ VARIABLE _ATGR-STATUS
         CBUS-S-INVALID EXIT
     THEN
     _ATGR-APPROVED @ IF
+        \ Review must authorize the exact owned arguments that were shown
+        \ when the call was created.  Any mutation, codec drift, or operand
+        \ too large for complete review denies, regardless of caller.
+        _ATGR-G @ ATOOLG-ARGS-REVIEWABLE? 0= IF
+            CBUS-S-DENIED EXIT
+        THEN
         _ATGR-G @ ATOOLG.BUS @ CBUS.AUTHORITY @ IF
             _ATGR-G @ _ATOOLG-ISSUE-APPROVAL DUP _ATGR-STATUS !
             IF _ATGR-STATUS @ EXIT THEN
@@ -540,7 +663,7 @@ VARIABLE _ATGR-STATUS
             ATOOLG-S-COMPLETE OVER ATOOLG.STATE !
             1 SWAP ATOOLG.REVISION +! CBUS-S-OK
         ENDOF
-        DROP CBUS-S-OK
+        2DROP CBUS-S-OK 0
     ENDCASE ;
 
 : ATOOLG-CLEAR  ( gateway -- status )
@@ -550,6 +673,7 @@ VARIABLE _ATGR-STATUS
     DUP ATOOLG.REQUEST @ ?DUP IF CBR-FREE THEN
     0 OVER ATOOLG.REQUEST !
     DUP ATOOLG.NAME CV-FREE
+    DUP _ATOOLG-ARGS-FINGERPRINT-CLEAR
     ATOOLG-S-IDLE OVER ATOOLG.STATE !
     0 OVER ATOOLG.RUN-ID !
     1 SWAP ATOOLG.REVISION +! CBUS-S-OK ;

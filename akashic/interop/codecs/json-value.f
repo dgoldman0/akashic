@@ -11,6 +11,7 @@ PROVIDED akashic-ivalue-json-codec
 
 REQUIRE ../schema.f
 REQUIRE ../../utils/json.f
+REQUIRE ../../concurrency/guard.f
 
 1 CONSTANT IVJSON-E-INVALID
 2 CONSTANT IVJSON-E-TYPE
@@ -312,6 +313,13 @@ VARIABLE _IVJC-TOP-V
 CREATE _IVJEF-V IVJSON-MAX-DEPTH 8 * ALLOT
 VARIABLE _IVJE-DEPTH
 VARIABLE _IVJE-ERROR
+VARIABLE _IVJE-TYPED
+
+\ All encoders share recursive frame state and JSON's streaming builder.
+\ Public entry acquires this guard before JSON's builder guard, and holds both
+\ for the complete builder transaction.  The caller's output buffer remains
+\ owned by the caller after the guarded word returns.
+GUARD _ivjson-encode-guard
 
 : _IVJE-SLOT  ( -- address )
     _IVJEF-V _IVJE-DEPTH @ 8 * + ;
@@ -342,13 +350,19 @@ DEFER _IVJE-VALUE
     LOOP
     JSON-} ;
 
-: _IVJE-VALUE-R  ( value -- )
-    _IVJE-ERROR @ IF DROP EXIT THEN
-    1 _IVJE-DEPTH +!
-    _IVJE-DEPTH @ IVJSON-MAX-DEPTH >= IF
-        DROP IVJSON-E-DEPTH _IVJE-ERROR ! -1 _IVJE-DEPTH +! EXIT
-    THEN
-    _IVJE-V!
+: _IVJE-TYPE-TAG  ( type -- )
+    CASE
+        CV-T-NULL OF S" null" JSON-ESTR ENDOF
+        CV-T-BOOL OF S" bool" JSON-ESTR ENDOF
+        CV-T-INT OF S" int" JSON-ESTR ENDOF
+        CV-T-STRING OF S" string" JSON-ESTR ENDOF
+        CV-T-LIST OF S" list" JSON-ESTR ENDOF
+        CV-T-MAP OF S" map" JSON-ESTR ENDOF
+        CV-T-RESOURCE OF S" resource" JSON-ESTR ENDOF
+        IVJSON-E-UNSUPPORTED _IVJE-ERROR !
+    ENDCASE ;
+
+: _IVJE-PAYLOAD  ( -- )
     _IVJE-V@ CV-TYPE@ CASE
         CV-T-NULL OF JSON-NULL ENDOF
         CV-T-BOOL OF _IVJE-V@ CV-DATA@ JSON-BOOL ENDOF
@@ -361,8 +375,24 @@ DEFER _IVJE-VALUE
         ENDOF
         CV-T-LIST OF _IVJE-LIST ENDOF
         CV-T-MAP OF _IVJE-MAP ENDOF
-        DROP IVJSON-E-UNSUPPORTED _IVJE-ERROR !
-    ENDCASE
+        IVJSON-E-UNSUPPORTED _IVJE-ERROR !
+    ENDCASE ;
+
+: _IVJE-VALUE-R  ( value -- )
+    _IVJE-ERROR @ IF DROP EXIT THEN
+    1 _IVJE-DEPTH +!
+    _IVJE-DEPTH @ IVJSON-MAX-DEPTH >= IF
+        DROP IVJSON-E-DEPTH _IVJE-ERROR ! -1 _IVJE-DEPTH +! EXIT
+    THEN
+    _IVJE-V!
+    _IVJE-TYPED @ IF
+        JSON-[
+        _IVJE-V@ CV-TYPE@ _IVJE-TYPE-TAG
+        _IVJE-ERROR @ 0= IF _IVJE-PAYLOAD THEN
+        JSON-]
+    ELSE
+        _IVJE-PAYLOAD
+    THEN
     -1 _IVJE-DEPTH +! ;
 
 ' _IVJE-VALUE-R IS _IVJE-VALUE
@@ -370,7 +400,7 @@ DEFER _IVJE-VALUE
 VARIABLE _IVJE-BUF
 VARIABLE _IVJE-CAP
 
-: IVJSON-ENCODE  ( value buffer capacity -- length ior )
+: _IVJSON-ENCODE  ( value buffer capacity -- length ior )
     _IVJE-CAP ! _IVJE-BUF !
     DUP 0= IF DROP 0 IVJSON-E-TYPE EXIT THEN
     JSON-BUILD-RESET
@@ -380,3 +410,26 @@ VARIABLE _IVJE-CAP
     _IVJE-ERROR @ ?DUP IF 0 SWAP EXIT THEN
     JSON-OUTPUT-OK? 0= IF 0 IVJSON-E-CAPACITY EXIT THEN
     JSON-OUTPUT-RESULT NIP 0 ;
+
+: _IVJSON-ENCODE-PLAIN  ( value buffer capacity -- length ior )
+    0 _IVJE-TYPED ! _IVJSON-ENCODE ;
+
+: _IVJSON-ENCODE-TYPED  ( value buffer capacity -- length ior )
+    -1 _IVJE-TYPED ! _IVJSON-ENCODE ;
+
+: _IVJSON-ENCODE-PLAIN-JSON-GUARDED  ( value buffer capacity -- length ior )
+    ['] _IVJSON-ENCODE-PLAIN JSON-WITH-BUILDER ;
+
+: _IVJSON-ENCODE-TYPED-JSON-GUARDED  ( value buffer capacity -- length ior )
+    ['] _IVJSON-ENCODE-TYPED JSON-WITH-BUILDER ;
+
+: IVJSON-ENCODE  ( value buffer capacity -- length ior )
+    ['] _IVJSON-ENCODE-PLAIN-JSON-GUARDED
+    _ivjson-encode-guard WITH-GUARD ;
+
+\ Exact review/seal representation.  Every recursive node carries a type
+\ label, so values such as STRING and RESOURCE can never share canonical
+\ bytes merely because their payload text is equal.
+: IVJSON-TYPED-ENCODE  ( value buffer capacity -- length ior )
+    ['] _IVJSON-ENCODE-TYPED-JSON-GUARDED
+    _ivjson-encode-guard WITH-GUARD ;

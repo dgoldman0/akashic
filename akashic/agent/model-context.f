@@ -250,7 +250,10 @@ VARIABLE _ACTXP-C
     _ACTXP-SA @ _ACTXP-SU @ _ACTXP-NA @ _ACTXP-NU @
     0 0 _ACTXP-DA @ _ACTXP-DU @ _ACTXP-C @ ACTX-APPEND-RAW ;
 
-16384 CONSTANT ACTX-JSON-CAPACITY
+\ A bounded 4 KiB capability result can expand substantially under JSON
+\ escaping.  Keep the transient codec arena large enough for that worst-case
+\ envelope instead of advertising result sizes the ledger cannot encode.
+32768 CONSTANT ACTX-JSON-CAPACITY
 VARIABLE _ACTXV-KIND
 VARIABLE _ACTXV-ROLE
 VARIABLE _ACTXV-RUN

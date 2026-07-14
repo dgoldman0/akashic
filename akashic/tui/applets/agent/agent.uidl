@@ -17,6 +17,11 @@
 <item text=Set_credential do=credential key=Ctrl+K/>
 <item text=Clear_credential do=clear-credential key=Ctrl+Shift+K/>
 </menu>
+<menu label=Access>
+<item text=Chat do=access-chat/>
+<item text=Read-only do=access-read/>
+<item text=Assist do=access-assist/>
+</menu>
 <menu label=Review>
 <item text=Approve do=approve key=F6/>
 <item text=Deny do=deny key=F7/>
@@ -26,8 +31,14 @@
 </menu>
 </menubar>
 <region id=agent-body style=color:#eeeeee;background-color:#1c1c1c/>
-<status id=sbar style=color:white;background-color:#005f5f>
+<status id=meta style=color:white;background-color:#005f5f>
+<label id=source-class text=CUSTOM/>
 <label id=provider text=Provider/>
+<label id=model text=default/>
+</status>
+<status id=sbar style=color:white;background-color:#005f5f>
+<label id=effort text=default/>
+<label id=access text=Chat/>
 <label id=state text=Ready/>
 </status>
 <action do=prompt key=Ctrl+L/>

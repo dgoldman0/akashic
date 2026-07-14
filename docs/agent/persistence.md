@@ -42,20 +42,27 @@ conversation but refuses to overwrite the damaged evidence automatically.
 
 ## Snapshot Format
 
-Format version 1 is little-endian and bounded to 262,144 bytes. A 64-byte
+Format version 1 is little-endian and bounded to 262,144 bytes. An 80-byte
 header contains:
 
 - Magic `AKTHR001` and format version.
 - Monotonic snapshot generation.
-- Exact payload length and message count.
+- Exact payload length, message count, and model-context item count.
 - Conversation ID and revision.
+- Model-context revision.
 - CRC-32 of the complete payload.
 
 Each message has a fixed 48-byte record followed by UTF-8 text padded to an
 eight-byte boundary. Records preserve role, state, run ID, timestamp, and
-flags. Decoding validates the complete header, count, lengths, UTF-8, record
-boundaries, and checksum before allocating a conversation. The current
-conversation limit is 64 messages.
+flags. Each model-context item has a fixed 72-byte record followed by its
+source, name, call-ID, and data strings, again padded to an eight-byte
+boundary. Context records preserve their kind, role, run ID, flags, and
+status, so provider messages, canonical tool calls, tool results, and opaque
+provider state survive a restart without reconstructing them from display
+text. Decoding validates the complete header, both counts, lengths, UTF-8,
+record boundaries, item semantics, and checksum before allocating a
+conversation. The current limits are 64 transcript messages and 128 context
+items, subject to the shared snapshot-byte ceiling.
 
 ## Transaction And Recovery Model
 
@@ -112,16 +119,40 @@ uncertain generation.
 
 Messages stored as streaming, pending, or awaiting approval cannot honestly be
 resumed without provider and tool execution state. Decode therefore marks them
-cancelled, adds `AMSG-F-RECOVERED`, clears the active run, and appends one audit
-message:
+cancelled, adds `AMSG-F-RECOVERED`, clears the active run, removes the
+interrupted run's model-context records, and appends one audit message:
 
 ```text
 Previous agent run was interrupted before completion.
 ```
 
 Approval decisions are durable system messages flagged as audit records and
-as approved or denied. The record names the gateway capability when available;
-direct provider reviews retain their displayed action text.
+as approved or denied. Direct provider reviews identify the provider and
+retain their displayed action text. A local capability decision additionally
+records the provider, tool and call identity, target ID and generation,
+expected revision, effect bits, canonical-operand encoding and byte length,
+the domain-separated SHA3-256 operand fingerprint, and the exact canonical
+operand. Approval is capped at 4096 canonical operand bytes, so every value
+that can be approved is both displayable and inline in the audit record. An
+oversized request cannot be approved; its denial record retains the length and
+fingerprint plus an explicit operand-omission marker.
+
+The recorded encoding is `typed-ivjson-v1`: every recursive value is rendered
+as a type tag plus its payload. This prevents two distinct native operands from
+sharing review text or a fingerprint merely because their ordinary JSON form
+would be the same. The request carries the creation-time seal into the version
+2 one-shot grant, and owner dispatch recomputes it after consuming authority
+but before entering the capability handler. A post-review operand change is
+therefore denied without leaving reusable approval behind.
+
+For a local approval, the complete audit message must be appended and a clean
+snapshot save must succeed before the capability grant is issued. Missing
+storage, capacity or allocation failure, invalid canonical operands, and any
+failed or uncertain save therefore settle the request as denied without
+executing the effect. A failed save also removes the provisional audit message
+from memory so a later unrelated save cannot turn a failed approval into a
+durable approved record. Approval delivery failures terminate the run rather
+than hiding a provider or gateway request that may still be outstanding.
 
 Credentials are deliberately excluded. Provider secrets remain in the
 zeroizing credential container and are never serialized with conversation
@@ -129,8 +160,12 @@ history.
 
 ## Current Boundary
 
-This checkpoint provides one durable active conversation, corruption fallback,
-interrupted-state recovery, approval-decision audit records, and durable clear.
+This checkpoint provides one durable active conversation and model-context
+ledger, corruption fallback, interrupted-state recovery, exact reviewed-action
+audit records, and durable clear. Snapshot capacity remains a hard boundary:
+the runtime reports the store failure, the Agent applet labels history as
+unavailable, and clearing the conversation is the explicit recovery path; it
+does not silently discard older records to make a save fit.
 It does not yet provide a thread catalog, titles, archive/search, provider
 continuation IDs, context attachments, encrypted history, approval principals,
 or exactly-once tool-execution journals. Those belong to the larger durable

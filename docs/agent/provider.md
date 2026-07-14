@@ -51,6 +51,14 @@ remain provider-owned until its revision changes.
 changes during a run or review. Desk and Agent render these choices without
 depending on Codex, OpenAI, or any particular model slug.
 
+The native OpenAI transport uses a 196,608-byte request-body allowance and a
+200,704-byte HTTP wire buffer so its independent 32 KiB prompt, 64 KiB history,
+and 32 KiB tool-result ceilings can compose with JSON and header overhead. Its
+default maximum assembled response text is 49,152 bytes. That lower output
+boundary leaves room for the visible response, its model-context copy, and thread
+metadata to coexist under the 262,144-byte conversation snapshot ceiling; the
+transport limit is not presented as an aggregate history budget.
+
 ## Provider Source
 
 `akashic/agent/provider-source.f` defines `APSOURCE`, an owned construction
@@ -75,6 +83,46 @@ objects. Source selection is explicit through `DESK-AGENT-SOURCE!` or
 
 `providers/offline.f` and `providers/devtools/scripted.f` supply sources through
 the same contract. There is no parallel global factory path.
+
+## Desk Access Profiles
+
+Desk owns the visible Agent access choice and compiles it into a fresh Practice
+Mandate for each run. The profile is policy input, not authority by itself: the
+compiled facet pins each operation to one trusted built-in component descriptor
+and one live instance, while the capability bus still checks and consumes its
+sealed grant. Changing the visible profile during a run or review is rejected,
+and a scoped run fails closed if Desk's Mandate factory is unavailable.
+
+Desk starts in **Chat only**. The built-in profiles are deliberately exact:
+
+| Profile | Agent-visible authority |
+|---|---|
+| Chat only | Bounded prior user/assistant turns; no applet capabilities |
+| Practice read only | Chat history plus the fixed, bounded observation facet; no mutation |
+| Practice assist | The read facet plus fixed navigation, mutation, and persistence operations, each requiring one visible local review |
+
+Destructive and external effects are not present in any built-in profile.
+Observation results are capped per facet entry (text results currently at 4096 raw
+bytes), prompts at 512 bytes, and prior history at 12 messages and 4096 bytes.
+Each run also receives a ten-minute wall-time budget, a profile-specific tool
+count, and an aggregate disclosure budget. Token and memory fields are zero
+because those meters are not yet implemented; the UI and documentation must
+not imply that they are enforced.
+
+Agent anchors each new local or provider review at its first row. Approval with
+F6 remains locked until the viewport reaches the final review row; F7 can deny
+without granting or traversing the request.
+
+Reviewed local operands are sealed when the gateway creates its owned request.
+The canonical form is recursively type-tagged IVJSON, so native distinctions
+such as `STRING` versus `RESOURCE` remain visible and hash differently even
+when their payload text is identical. The one-shot authority grant ABI is
+version 2 and binds the canonical byte length and SHA3-256 digest. At the
+serialized target-owner boundary, Desk consumes that grant and recomputes the
+seal before entering the applet handler; mutation after review is denied and
+the consumed grant cannot be replayed. Canonical encoding and seal operations
+are guarded, while allocated audit bytes remain caller-owned rather than a
+borrowed global buffer.
 
 ## Conversation Store
 
