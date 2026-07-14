@@ -250,9 +250,9 @@ VARIABLE _BOX-SH-W
     DRW-HLINE
 
     \ Restore style
-    R> _DRW-ATTRS !
+    R> _DRW-FG !
     R> _DRW-BG !
-    R> _DRW-FG ! ;
+    R> _DRW-ATTRS ! ;
 
 \ =====================================================================
 \ 5. Guard

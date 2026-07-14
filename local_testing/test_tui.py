@@ -1253,6 +1253,11 @@ def test_box_shadow():
          '0 0 3 5 BOX-SHADOW',
          '3 1 SCR-GET CELL-CP@ .',
          'SCR-FREE'], "9617")
+    check("shadow restores caller style",
+        ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR 3 42 5 DRW-STYLE!',
+         '0 0 3 5 BOX-SHADOW',
+         '_DRW-FG @ . _DRW-BG @ . _DRW-ATTRS @ . 8888 .',
+         'SCR-FREE'], "3 42 5 8888")
 
 
 # =====================================================================
@@ -2870,7 +2875,7 @@ def test_dlg_contrast_and_style_restore():
     check("explicit modal palette and caller style restored",
         _DLG_SETUP + [
          '3 42 5 DRW-STYLE! DUP WDG-DRAW RGN-ROOT',
-         ('0 0 SCR-GET DUP CELL-FG@ . CELL-BG@ . '
+         ('2 2 SCR-GET DUP CELL-FG@ . CELL-BG@ . '
           '_DRW-FG @ . _DRW-BG @ . _DRW-ATTRS @ . 8888 .'),
          _DLG_CLEANUP], "15 24 3 42 5 8888")
 
