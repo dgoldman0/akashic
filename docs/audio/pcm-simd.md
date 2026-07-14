@@ -34,6 +34,7 @@ Depends on `akashic-math-simd-ext`, `akashic-audio-pcm`.
 | **512-bit tiles** | Internally dispatches via the Megapad-64 FP16 SIMD tile engine (32 lanes × FP16). Full tiles processed with `TADD`/`TMUL` (1–2 cycles each). |
 | **Remainder handling** | After processing complete 32-element tiles, remaining elements are handled with a scalar loop. |
 | **No allocation** | All operations are in-place or src→dst with no temporary buffers. |
+| **Checked layout** | Every entry point rejects non-16-bit storage before touching sample memory; two-buffer operations also require equal channel counts. |
 | **Prefix convention** | Public: `PCM-SIMD-`.  Internal: `_PSIMD-`. |
 
 ---
@@ -65,7 +66,8 @@ PCM-SIMD-ADD  ( src dst -- )
 
 Elementwise addition: `dst[i] += src[i]`.
 
-Both buffers must be 16-bit.  The operation processes
+Both buffers must use the 16-bit FP16 storage convention and have matching
+channel counts. The operation processes
 `min(src_samples, dst_samples)` elements.  Uses `SIMD-ADD-N`
 internally: `dst[i] = src[i] + dst[i]`.
 
@@ -83,6 +85,7 @@ In-place broadcast multiply: `buf[i] *= scalar`.
 
 **scalar** is an FP16 gain value.  Uses `SIMD-SCALE-N` with
 `src = dst = buf.data`.
+The buffer must use 16-bit FP16 storage.
 
 ```forth
 0x3800 my-buf PCM-SIMD-SCALE       \ halve all samples (×0.5)
@@ -98,6 +101,7 @@ Scaled accumulation: `dst[i] += gain × src[i]`.
 
 Uses `SIMD-SAXPY-N` (single-precision A×X+Y): `dst[i] = gain × src[i] + dst[i]`.
 Useful for mixing with a per-channel gain in one pass.
+Both buffers must use FP16 storage and have matching channel counts.
 
 ```forth
 0x3800 buf-voice buf-master PCM-SIMD-MIX   \ mix at -6 dB
@@ -113,6 +117,7 @@ Elementwise multiply: `dst[i] *= src[i]`.
 
 Uses `SIMD-MUL-N`.  Useful for applying a sample-by-sample gain
 curve (e.g. an envelope buffer × audio buffer).
+Both buffers must use FP16 storage and have matching channel counts.
 
 ```forth
 buf-envelope buf-audio PCM-SIMD-MUL    \ amplitude modulation
@@ -125,6 +130,7 @@ PCM-SIMD-FILL  ( val buf -- )
 ```
 
 Fill every sample with a constant FP16 value.  Uses `SIMD-FILL-N`.
+The buffer must use 16-bit FP16 storage.
 
 ```forth
 FP16-POS-HALF my-buf PCM-SIMD-FILL    \ fill with 0.5
@@ -137,6 +143,7 @@ PCM-SIMD-CLEAR  ( buf -- )
 ```
 
 Zero all sample data.  Uses `FILL` with 0 on the raw data bytes.
+The buffer must use 16-bit FP16 storage.
 
 ```forth
 my-buf PCM-SIMD-CLEAR                  \ silence

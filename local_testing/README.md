@@ -44,6 +44,8 @@ Profiles are `credential`, `http-request`, `tls-port`, `net-stream`, `mcp`,
 `desktop-agent-hardening`,
 `desktop-fallback`, `desktop-recovery`,
 `desktop-codex`, `desktop-codex-live` (opt-in TAP-backed shared environment),
+`audio-contracts` (deterministic guest DSP plus independent host oracles),
+`soundlab` (standalone render, playback-capture, and save journey),
 `pad`, `pad-contracts`, `fexplorer`, `daybook`, `daybook-contracts`,
 `grid-eval`, `grid-contracts`, and `grid`.
 Generated images, terminal text, cell JSON, and PNG captures go under
@@ -78,6 +80,8 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `codex-source` | Codex source composition, exact-host WE1 trust provisioning, separate auth/model KDOS TLS ports, catalog/provider/runtime ownership, Responses Lite header binding, cleanup, and stack balance without opening a network connection |
 | `codex-live-tls` | opt-in credential-free native DNS/TCP/TLS authentication of `auth.openai.com` and `chatgpt.com`; no HTTP request, login code, token, or API key is sent |
 | `codex-live-auth` | opt-in native device-code request, displayed browser code, persistent-connection polling, and bounded transport/auth diagnostics against `auth.openai.com` |
+| `audio-contracts` | exact FP16 PCM storage and signed negative-start slicing, independent native/host peak-RMS-DC-crossing comparisons including a 70,000-frame divisor probe, canonical 8/16-bit WAV decode/encode rails plus malformed-header rejection, exact raw-S16 and FP16 AudioOut captures, a 1 kHz spectral/pitch probe, 96 kHz spectral scaling, above-Nyquist band handling, short/remainder envelope behavior, oscillator block continuity, and a bounded synth create-render-release-free lifecycle |
+| `soundlab` | exact-value parameter editing, stale/render transitions, deterministic capture-only playback of the edited 8 kHz mono render through AudioOut, atomic WAV publication, and independent host parsing of the persisted 500 ms artifact |
 | `agent-context` | structured turns, transcript-independent model items, provider/tool identity, source filtering, bounded rollback, and stack balance |
 | `conversation-store` | checksummed bounded transcript encoding, alternating VFS generations, newest-valid selection, corruption fallback, fail-closed loading, interrupted-state normalization, deterministic VFS/codec fault cleanup, uncertain-publication recovery, ownership cleanup, and stack balance |
 | `agent-persistence` | completed approval audit, repeated runtime reconstruction over one native VFS, interrupted approval recovery, run-ID continuity, durable clearing, and stack balance |
@@ -107,6 +111,24 @@ The smoke journeys exercise application behavior, not just boot markers:
 | `desktop-recovery` | cold dual-corruption boot into a visible read-only shell with applets, interop, Agent/provider, and transient authority suppressed |
 | `desktop-codex` | the complete linked Desktop with the real native Codex source, signed-out account gating, model-readiness gating, all applets, and production-shaped visual boot |
 | `desktop-codex-live` | the same linked Desktop with explicit TAP network configuration for watchable native device login and subscription-backed Codex use |
+
+The audio qualification path has no host audio-device dependency and does not
+claim that numerical checks establish aesthetic quality. Run it with:
+
+```bash
+python3 local_testing/akashic_tui.py smoke \
+  --profile audio-contracts --max-steps 2500000000 --timeout 180
+```
+
+The guest leaves bounded mono FP16 buffers and one encoded WAV alive for the
+duration of the smoke session, while the headless machine records exact raw
+S16 and converted FP16 AudioOut submissions without requiring an audible host
+sink. The host reads those exact mapped-memory spans and capture bytes,
+recomputes its own time- and frequency-domain results, and writes the FP16
+vectors, `audio-output-{raw,fp16}.s16le`, `tone.wav`, and a JSON report under
+`local_testing/out/audio-contracts/`. This is deliberately separate from
+subjective audition; `aplay local_testing/out/audio-contracts/tone.wav` is an
+optional human check after the deterministic contracts pass.
 
 Run the focused profile plus `desktop-agent` before changing shared TUI, VFS,
 agent, or app-shell behavior. The normal suite is fully native and offline.

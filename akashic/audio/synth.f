@@ -34,11 +34,12 @@
 \   SYNTH-DETUNE!   ( cents voice -- )
 \   SYNTH-FILT-TYPE! ( type voice -- )
 
-REQUIRE fp16-ext.f
+REQUIRE ../math/fp16-ext.f
+REQUIRE ../math/fp32.f
 REQUIRE ../math/trig.f
-REQUIRE audio/pcm.f
-REQUIRE audio/osc.f
-REQUIRE audio/env.f
+REQUIRE pcm.f
+REQUIRE osc.f
+REQUIRE env.f
 
 PROVIDED akashic-audio-synth
 
@@ -130,26 +131,39 @@ VARIABLE _SY-S1
 VARIABLE _SY-S2
 VARIABLE _SY-RVAL
 VARIABLE _SY-FVAL
+VARIABLE _SY-FREE-V
+VARIABLE _SY-CHECK-RATE
 
-: SYNTH-CREATE  ( shape1 shape2 rate frames -- voice )
-    _SY-FVAL !                        \ frames
-    _SY-RVAL !                        \ rate
-    _SY-S2 !                          \ shape2
-    _SY-S1 !                          \ shape1
+0x7FFFFFFFFFFFFFFF CONSTANT _SY-MAX-POS
 
+: _SY-FREE-PARTIAL  ( voice|0 -- )
+    DUP 0= IF DROP EXIT THEN
+    _SY-FREE-V !
+    _SY-FREE-V @ SY.OSC1 @ ?DUP IF OSC-FREE THEN
+    _SY-FREE-V @ SY.OSC2 @ ?DUP IF OSC-FREE THEN
+    _SY-FREE-V @ SY.AENV @ ?DUP IF ENV-FREE THEN
+    _SY-FREE-V @ SY.FENV @ ?DUP IF ENV-FREE THEN
+    _SY-FREE-V @ SY.BUF  @ ?DUP IF PCM-FREE THEN
+    _SY-FREE-V @ FREE
+    0 _SY-FREE-V ! ;
+
+: _SY-CREATE-BODY  ( -- voice )
     \ Allocate descriptor
     _SY-DESC-SIZE ALLOCATE
-    0<> ABORT" SYNTH-CREATE: alloc failed"
+    DUP IF NIP THROW THEN
+    DROP
     _SY-TMP !
+    _SY-TMP @ _SY-DESC-SIZE 0 FILL
 
-    \ Create primary oscillator (freq = 440 initially)
-    440 INT>FP16 _SY-S1 @ _SY-RVAL @
+    \ A voice is silent until NOTE-ON.  Starting at 0 Hz keeps construction
+    \ valid for every accepted sample rate; NOTE-ON enforces Nyquist.
+    FP16-POS-ZERO _SY-S1 @ _SY-RVAL @
     OSC-CREATE
     _SY-TMP @ SY.OSC1 !
 
     \ Create secondary oscillator if shape2 >= 0
     _SY-S2 @ 0< 0= IF
-        440 INT>FP16 _SY-S2 @ _SY-RVAL @
+        FP16-POS-ZERO _SY-S2 @ _SY-RVAL @
         OSC-CREATE
         _SY-TMP @ SY.OSC2 !
     ELSE
@@ -184,30 +198,101 @@ VARIABLE _SY-FVAL
 
     _SY-TMP @ ;
 
+: SYNTH-CREATE  ( shape1 shape2 rate frames -- voice )
+    _SY-FVAL !                        \ frames
+    _SY-RVAL !                        \ rate
+    _SY-S2 !                          \ shape2
+    _SY-S1 !                          \ shape1
+
+    _SY-S1 @ DUP 0< SWAP OSC-PULSE > OR
+        ABORT" SYNTH-CREATE: shape1 must be OSC-SINE through OSC-PULSE"
+    _SY-S2 @ -1 < _SY-S2 @ OSC-PULSE > OR
+        ABORT" SYNTH-CREATE: shape2 must be -1 or OSC-SINE through OSC-PULSE"
+    _SY-RVAL @ 42 < ABORT" SYNTH-CREATE: rate must be at least 42 Hz"
+    _SY-FVAL @ 1 < ABORT" SYNTH-CREATE: frames must be positive"
+    \ Preflight every size/duration contract used by the child constructors.
+    \ After the descriptor is allocated, the only remaining failures are
+    \ allocator iors, which the children THROW and this word can clean up.
+    _SY-RVAL @ _SY-MAX-POS 300 / >
+        ABORT" SYNTH-CREATE: envelope duration multiplication overflow"
+    _SY-FVAL @ _SY-MAX-POS 15 - 2 / >
+        ABORT" SYNTH-CREATE: work buffer size multiplication overflow"
+
+    0 _SY-TMP !
+    ['] _SY-CREATE-BODY CATCH
+    DUP IF
+        _SY-TMP @ _SY-FREE-PARTIAL
+        THROW
+    THEN
+    DROP ;
+
 \ =====================================================================
 \  SYNTH-FREE — Free voice and all sub-descriptors
 \ =====================================================================
 
 : SYNTH-FREE  ( voice -- )
-    _SY-TMP !
-    _SY-TMP @ SY.OSC1 @ OSC-FREE
-    _SY-TMP @ SY.OSC2 @ ?DUP IF OSC-FREE THEN
-    _SY-TMP @ SY.AENV @ ENV-FREE
-    _SY-TMP @ SY.FENV @ ENV-FREE
-    _SY-TMP @ SY.BUF  @ PCM-FREE
-    _SY-TMP @ FREE ;
+    _SY-FREE-PARTIAL ;
 
 \ =====================================================================
 \  Setters
 \ =====================================================================
 
-: SYNTH-CUTOFF!    ( freq voice -- )  SY.FCUT  ! ;
-: SYNTH-RESO!      ( q voice -- )     SY.FRESO ! ;
-: SYNTH-FILT-TYPE! ( type voice -- )  SY.FTYPE ! ;
+: _SY-FP16-FINITE?  ( fp16 -- flag )
+    0x7C00 AND 0x7C00 <> ;
+
+: _SY-VALIDATE-CUTOFF  ( freq -- )
+    DUP _SY-FP16-FINITE? 0=
+        ABORT" SYNTH-CUTOFF!: cutoff must be finite"
+    FP16-POS-ZERO FP16-GT 0=
+        ABORT" SYNTH-CUTOFF!: cutoff must be positive" ;
+
+: _SY-VALIDATE-RESO  ( q -- )
+    DUP _SY-FP16-FINITE? 0=
+        ABORT" SYNTH-RESO!: resonance must be finite"
+    DUP 0x2E66 FP16-LT
+    SWAP 0x5000 FP16-GT OR
+        ABORT" SYNTH-RESO!: resonance must be between 0.1 and 32" ;
+
+: _SY-VALIDATE-DETUNE  ( cents -- )
+    DUP _SY-FP16-FINITE? 0=
+        ABORT" SYNTH-DETUNE!: detune must be finite"
+    DUP -1200 INT>FP16 FP16-LT
+    SWAP 1200 INT>FP16 FP16-GT OR
+        ABORT" SYNTH-DETUNE!: detune must be between -1200 and 1200 cents" ;
+
+: _SY-VALIDATE-FREQ  ( freq voice -- )
+    SY.OSC1 @ OSC-RATE _SY-CHECK-RATE !
+    DUP _SY-FP16-FINITE? 0=
+        ABORT" SYNTH-NOTE-ON: frequency must be finite"
+    DUP FP16-POS-ZERO FP16-LT
+        ABORT" SYNTH-NOTE-ON: frequency must not be negative"
+    FP16>FP32
+    _SY-CHECK-RATE @ 2/ INT>FP32 FP32> IF
+        -1 ABORT" SYNTH-NOTE-ON: frequency exceeds Nyquist"
+    THEN ;
+
+: SYNTH-CUTOFF!  ( freq voice -- )
+    _SY-TMP !
+    DUP _SY-VALIDATE-CUTOFF
+    _SY-TMP @ SY.FCUT ! ;
+
+: SYNTH-RESO!  ( q voice -- )
+    _SY-TMP !
+    DUP _SY-VALIDATE-RESO
+    _SY-TMP @ SY.FRESO ! ;
+
+: SYNTH-FILT-TYPE!  ( type voice -- )
+    _SY-TMP !
+    DUP SYNTH-FILT-LP < OVER SYNTH-FILT-BP > OR
+        ABORT" SYNTH-FILT-TYPE!: unknown filter type"
+    _SY-TMP @ SY.FTYPE ! ;
 
 \ SYNTH-DETUNE! ( cents voice -- )
 \ Detune amount in FP16 cents.  Applied to osc2 during NOTE-ON.
-: SYNTH-DETUNE!  ( cents voice -- ) SY.DETUNE ! ;
+: SYNTH-DETUNE!  ( cents voice -- )
+    _SY-TMP !
+    DUP _SY-VALIDATE-DETUNE
+    _SY-TMP @ SY.DETUNE ! ;
 
 \ =====================================================================
 \  SYNTH-NOTE-ON — Trigger note
@@ -218,11 +303,30 @@ VARIABLE _SY-FVAL
 \  Sets osc frequencies, triggers envelopes.
 
 VARIABLE _SY-FREQ
+VARIABLE _SY-FREQ2
+VARIABLE _SY-VEL
 
 : SYNTH-NOTE-ON  ( freq vel voice -- )
     _SY-TMP !
-    DROP                              \ vel (reserved)
+    _SY-VEL !
     _SY-FREQ !
+
+    _SY-VEL @ DUP _SY-FP16-FINITE? 0=
+        ABORT" SYNTH-NOTE-ON: velocity must be finite"
+    DUP FP16-POS-ZERO FP16-LT
+    SWAP FP16-POS-ONE FP16-GT OR
+        ABORT" SYNTH-NOTE-ON: velocity must be between 0.0 and 1.0"
+    _SY-FREQ @ _SY-TMP @ _SY-VALIDATE-FREQ
+
+    \ Precompute and validate oscillator 2 before mutating oscillator 1.
+    \ A rejected detuned note therefore leaves the voice unchanged.
+    _SY-TMP @ SY.OSC2 @ IF
+        _SY-TMP @ SY.DETUNE @
+        1200 INT>FP16 FP16-DIV
+        FP16-POS-ONE FP16-ADD
+        _SY-FREQ @ FP16-MUL DUP _SY-FREQ2 !
+        _SY-TMP @ _SY-VALIDATE-FREQ
+    THEN
 
     \ Set osc1 frequency
     _SY-FREQ @ _SY-TMP @ SY.OSC1 @ OSC-FREQ!
@@ -232,10 +336,7 @@ VARIABLE _SY-FREQ
         \ detune: freq2 = freq × 2^(cents/1200)
         \ Simplified: freq2 ≈ freq × (1 + cents/1200)
         \ cents/1200 is small, linear approx is fine
-        _SY-TMP @ SY.DETUNE @
-        1200 INT>FP16 FP16-DIV        ( cents/1200 )
-        FP16-POS-ONE FP16-ADD         ( 1 + cents/1200 )
-        _SY-FREQ @ FP16-MUL           ( freq2 )
+        _SY-FREQ2 @                   ( freq2 )
         SWAP OSC-FREQ!
     THEN
 
@@ -272,10 +373,13 @@ VARIABLE _SY-FREQ
 : _SY-COMPUTE-COEFFS  ( cutoff rate -- )
     _SY-RATE !
 
-    \ w0 = 2π × cutoff / rate
-    _SY-TWO _SY-PI FP16-MUL          ( 2π )
-    SWAP FP16-MUL                     ( 2π×cutoff )
-    _SY-RATE @ INT>FP16 FP16-DIV     ( w0 )
+    \ w0 = 2π × cutoff / rate.  Divide cutoff by the integer rate in
+    \ FP32 before narrowing; converting a 96 kHz rate through FP16 would
+    \ saturate, and multiplying cutoff by 2π first can overflow FP16.
+    FP16>FP32
+    _SY-RATE @ INT>FP32 FP32-DIV
+    _SY-TWO _SY-PI FP16-MUL FP16>FP32 FP32-MUL
+    FP32>FP16                         ( w0 )
     _SY-W0 !
 
     \ sin(w0), cos(w0)

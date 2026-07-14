@@ -6,7 +6,7 @@
 \ native format of every Akashic syn/ engine).
 \
 \ Words:
-\   PCM-PEAK            ( buf -- peak-fp16 frame )
+\   PCM-FP16-PEAK       ( buf -- peak-fp16 frame )
 \   PCM-ZERO-CROSSINGS  ( buf -- count )
 \   PCM-RMS             ( buf -- rms-fp16 )
 \   PCM-DC-OFFSET       ( buf -- mean-fp16 )
@@ -25,10 +25,10 @@
 \
 \ Load with:   REQUIRE audio/analysis/metrics.f
 
-REQUIRE fp16.f
-REQUIRE fp16-ext.f
-REQUIRE fp32.f
-REQUIRE audio/pcm.f
+REQUIRE ../../math/fp16.f
+REQUIRE ../../math/fp16-ext.f
+REQUIRE ../../math/fp32.f
+REQUIRE ../pcm.f
 
 PROVIDED akashic-analysis-metrics
 
@@ -46,12 +46,14 @@ VARIABLE _PM-LEN
 \  ( buf -- )  fills _PM-BUF, _PM-DPTR, _PM-LEN
 
 : _PM-SETUP  ( buf -- )
+    DUP PCM-FP16-MONO? 0=
+        ABORT" audio metrics: buffer must be mono FP16 PCM"
     DUP _PM-BUF !
     DUP PCM-DATA _PM-DPTR !
     PCM-LEN _PM-LEN ! ;
 
 \ =====================================================================
-\  PCM-PEAK — Find maximum absolute sample value and its frame index
+\  PCM-FP16-PEAK — Find maximum absolute sample value and its frame index
 \ =====================================================================
 \  ( buf -- peak-fp16 frame )
 \  Scans every sample, tracks max |value|.  Returns both the peak
@@ -64,7 +66,7 @@ VARIABLE _PM-LEN
 VARIABLE _PM-PK-BEST
 VARIABLE _PM-PK-FRAME
 
-: PCM-PEAK  ( buf -- peak-fp16 frame )
+: PCM-FP16-PEAK  ( buf -- peak-fp16 frame )
     _PM-SETUP
     FP16-POS-ZERO _PM-PK-BEST !
     0 _PM-PK-FRAME !
@@ -154,7 +156,9 @@ VARIABLE _PM-RMS-SUM
 
     \ mean = sum / N
     _PM-RMS-SUM @
-    _PM-LEN @ INT>FP16 FP16>FP32
+    \ Convert the frame count directly: INT>FP16 saturates above 65504 and
+    \ would make long-buffer RMS use the wrong divisor.
+    _PM-LEN @ INT>FP32
     FP32-DIV
 
     \ sqrt → FP16
@@ -186,7 +190,7 @@ VARIABLE _PM-DC-SUM
     LOOP
 
     _PM-DC-SUM @
-    _PM-LEN @ INT>FP16 FP16>FP32
+    _PM-LEN @ INT>FP32
     FP32-DIV
     FP32>FP16 ;
 
@@ -229,7 +233,7 @@ VARIABLE _PM-CF-RMS
 
 : PCM-CREST-FACTOR  ( buf -- cf-fp16 )
     DUP PCM-RMS _PM-CF-RMS !
-    PCM-PEAK DROP _PM-CF-PK !   \ drop frame index, keep peak
+    PCM-FP16-PEAK DROP _PM-CF-PK !   \ drop frame index, keep peak
 
     _PM-CF-RMS @ FP16-POS-ZERO FP16-GT IF
         _PM-CF-PK @ _PM-CF-RMS @ FP16-DIV
@@ -263,42 +267,51 @@ VARIABLE _PM-ER-N
 VARIABLE _PM-ER-RLEN
 VARIABLE _PM-ER-SUB
 VARIABLE _PM-ER-DBASE
+VARIABLE _PM-ER-RATE
+VARIABLE _PM-ER-REM
 
 : PCM-ENERGY-REGIONS  ( buf n -- )
     _PM-ER-N !
+    _PM-ER-N @ 1 < ABORT" PCM-ENERGY-REGIONS: regions must be positive"
     _PM-SETUP
     _PM-DPTR @ _PM-ER-DBASE !
+    _PM-BUF @ PCM-RATE _PM-ER-RATE !
+    _PM-LEN @ _PM-ER-N @ <
+        ABORT" PCM-ENERGY-REGIONS: regions exceed buffer frames"
     _PM-LEN @ _PM-ER-N @ / _PM-ER-RLEN !
+    _PM-LEN @ _PM-ER-N @ MOD _PM-ER-REM !
 
-    \ Allocate a raw descriptor (80 bytes) — just a view, no data alloc
-    80 ALLOCATE DROP _PM-ER-SUB !
-    _PM-BUF @ PCM-RATE  _PM-ER-SUB @ 16 + !    \ P.RATE
-    16                   _PM-ER-SUB @ 24 + !    \ P.BITS
-    1                    _PM-ER-SUB @ 32 + !    \ P.CHANS
+    \ Create one validated, non-owning view descriptor and retarget its
+    \ data pointer for each region.  This avoids unchecked raw allocation
+    \ and ensures every descriptor field is initialized.
+    _PM-ER-DBASE @ _PM-ER-RLEN @ _PM-ER-RATE @ 16 1
+    PCM-CREATE-FROM _PM-ER-SUB !
 
     _PM-ER-N @ 0 ?DO
         \ Point descriptor at region i's data
         _PM-ER-DBASE @ I _PM-ER-RLEN @ * 2* +
         _PM-ER-SUB @ !                          \ P.DATA (+0)
-        _PM-ER-RLEN @ _PM-ER-SUB @ 8 + !       \ P.LEN  (+8)
+        _PM-ER-RLEN @
+        I _PM-ER-N @ 1- = IF _PM-ER-REM @ + THEN
+        _PM-ER-SUB @ 8 + !                      \ P.LEN  (+8)
 
         ." R" I . ." : rms="
         _PM-ER-SUB @ PCM-RMS .
         ."  pk="
-        _PM-ER-SUB @ PCM-PEAK DROP .
+        _PM-ER-SUB @ PCM-FP16-PEAK DROP .
         ."  zc="
         _PM-ER-SUB @ PCM-ZERO-CROSSINGS .
         CR
     LOOP
 
-    _PM-ER-SUB @ FREE ;
+    _PM-ER-SUB @ PCM-FREE ;
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../../concurrency/guard.f
 GUARD _ametr-guard
 
-' PCM-PEAK        CONSTANT _pcm-peak-xt
+' PCM-FP16-PEAK   CONSTANT _pcm-fp16-peak-xt
 ' PCM-ZERO-CROSSINGS CONSTANT _pcm-zero-crossings-xt
 ' PCM-RMS         CONSTANT _pcm-rms-xt
 ' PCM-DC-OFFSET   CONSTANT _pcm-dc-offset-xt
@@ -306,7 +319,7 @@ GUARD _ametr-guard
 ' PCM-CREST-FACTOR CONSTANT _pcm-crest-factor-xt
 ' PCM-ENERGY-REGIONS CONSTANT _pcm-energy-regions-xt
 
-: PCM-PEAK        _pcm-peak-xt _ametr-guard WITH-GUARD ;
+: PCM-FP16-PEAK   _pcm-fp16-peak-xt _ametr-guard WITH-GUARD ;
 : PCM-ZERO-CROSSINGS _pcm-zero-crossings-xt _ametr-guard WITH-GUARD ;
 : PCM-RMS         _pcm-rms-xt _ametr-guard WITH-GUARD ;
 : PCM-DC-OFFSET   _pcm-dc-offset-xt _ametr-guard WITH-GUARD ;

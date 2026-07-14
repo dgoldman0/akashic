@@ -24,12 +24,12 @@
 \
 \ Load with:   REQUIRE audio/analysis/spectral.f
 
-REQUIRE fp16.f
-REQUIRE fp16-ext.f
-REQUIRE fp32.f
-REQUIRE trig.f
-REQUIRE fft.f
-REQUIRE audio/pcm.f
+REQUIRE ../../math/fp16.f
+REQUIRE ../../math/fp16-ext.f
+REQUIRE ../../math/fp32.f
+REQUIRE ../../math/trig.f
+REQUIRE ../../math/fft.f
+REQUIRE ../pcm.f
 
 PROVIDED akashic-analysis-spectral
 
@@ -63,9 +63,26 @@ VARIABLE _SP-ALLOCATED       \ flag: arrays allocated?
 
 : _SP-ALLOC  ( -- )
     _SP-ALLOCATED @ IF EXIT THEN
-    _SP-NFFT 2* ALLOCATE DROP _SP-RE  !
-    _SP-NFFT 2* ALLOCATE DROP _SP-IM  !
-    _SP-NFFT 2* ALLOCATE DROP _SP-PWR !
+    _SP-NFFT 2* ALLOCATE
+    DUP IF 2DROP -1 ABORT" spectral: real-array allocation failed" THEN
+    DROP _SP-RE !
+
+    _SP-NFFT 2* ALLOCATE
+    DUP IF
+        2DROP
+        _SP-RE @ FREE  0 _SP-RE !
+        -1 ABORT" spectral: imaginary-array allocation failed"
+    THEN
+    DROP _SP-IM !
+
+    _SP-NFFT 2* ALLOCATE
+    DUP IF
+        2DROP
+        _SP-IM @ FREE  0 _SP-IM !
+        _SP-RE @ FREE  0 _SP-RE !
+        -1 ABORT" spectral: power-array allocation failed"
+    THEN
+    DROP _SP-PWR !
     1 _SP-ALLOCATED ! ;
 
 \ =====================================================================
@@ -75,6 +92,9 @@ VARIABLE _SP-ALLOCATED       \ flag: arrays allocated?
 \  runs FFT-FORWARD + FFT-POWER.
 
 : _SP-SETUP  ( buf -- )
+    DUP PCM-FP16-MONO? 0=
+        ABORT" spectral: buffer must be mono FP16 PCM"
+    DUP PCM-RATE 1 < ABORT" spectral: sample rate must be positive"
     _SP-ALLOC
     DUP _SP-BUF !
     DUP PCM-DATA _SP-DPTR !
@@ -112,10 +132,13 @@ VARIABLE _SP-ALLOCATED       \ flag: arrays allocated?
 \ =====================================================================
 \  freq = bin * rate / NFFT
 
+: _SP-BIN>HZ32  ( bin -- freq-fp32 )
+    INT>FP32
+    _SP-RATE @ INT>FP32 _SP-NFFT INT>FP32 FP32-DIV
+    FP32-MUL ;
+
 : _SP-BIN>HZ  ( bin -- freq-fp16 )
-    INT>FP16
-    _SP-RATE @ INT>FP16 _SP-NFFT INT>FP16 FP16-DIV   \ rate/NFFT first
-    FP16-MUL ;                                         \ then bin * (rate/NFFT)
+    _SP-BIN>HZ32 FP32>FP16 ;
 
 \ =====================================================================
 \  PCM-SPECTRAL-CENTROID — center of mass of spectrum in Hz
@@ -142,7 +165,7 @@ VARIABLE _SP-PSUM            \ FP32: sum(power)
         _SP-PSUM @ FP32-ADD _SP-PSUM !   \ psum += pk
 
         FP16>FP32                         ( pk32 )
-        I _SP-BIN>HZ FP16>FP32           ( pk32 freq32 )
+        I _SP-BIN>HZ32                    ( pk32 freq32 )
         FP32-MUL                          ( freq*pk )
         _SP-WSUM @ FP32-ADD _SP-WSUM !   \ wsum += freq*pk
     LOOP
@@ -177,7 +200,7 @@ VARIABLE _SP-VSUM            \ FP32: sum( (f-c)^2 * p )
         DUP FP16>FP32
         _SP-PSUM @ FP32-ADD _SP-PSUM !
         FP16>FP32
-        I _SP-BIN>HZ FP16>FP32
+        I _SP-BIN>HZ32
         FP32-MUL
         _SP-WSUM @ FP32-ADD _SP-WSUM !
     LOOP
@@ -194,7 +217,7 @@ VARIABLE _SP-VSUM            \ FP32: sum( (f-c)^2 * p )
     _SP-NBINS 1 DO
         _SP-PWR @ I 2* + W@           \ power_k FP16
         FP16>FP32                       ( pk32 )
-        I _SP-BIN>HZ FP16>FP32         ( pk32 freq32 )
+        I _SP-BIN>HZ32                 ( pk32 freq32 )
         _SP-CENT-FP32 @ FP32-SUB       ( pk32 diff32 )
         DUP FP32-MUL                    ( pk32 diff^2 )
         FP32-MUL                        ( pk*diff^2 )
@@ -214,25 +237,45 @@ VARIABLE _SP-VSUM            \ FP32: sum( (f-c)^2 * p )
 VARIABLE _SP-BE-LO
 VARIABLE _SP-BE-HI
 VARIABLE _SP-BE-SUM
+VARIABLE _SP-BE-LOBIN
+VARIABLE _SP-BE-HIBIN
+VARIABLE _SP-BE-NYQUIST
+
+: _SP-BE-CLAMP-BIN  ( bin -- bin' )
+    DUP 1 < IF DROP 1 THEN
+    DUP _SP-NBINS >= IF DROP _SP-NBINS 1- THEN ;
 
 : PCM-BAND-ENERGY  ( buf lo-hz hi-hz -- energy-fp16 )
     _SP-BE-HI !
     _SP-BE-LO !
+    _SP-BE-LO @ 0< ABORT" PCM-BAND-ENERGY: low bound must not be negative"
+    _SP-BE-HI @ _SP-BE-LO @ <=
+        ABORT" PCM-BAND-ENERGY: high bound must exceed low bound"
     _SP-SETUP
 
     FP32-ZERO _SP-BE-SUM !
 
-    \ Convert Hz bounds to bin indices
-    \ bin = freq / (rate / NFFT)  — avoid overflow from freq * NFFT
-    _SP-RATE @ INT>FP16 _SP-NFFT INT>FP16 FP16-DIV    \ hz-per-bin = rate/NFFT
+    \ Restrict Hz inputs before multiplying by NFFT.  This both prevents
+    \ integer overflow and makes a wholly out-of-range band return zero.
+    _SP-RATE @ 2/ _SP-BE-NYQUIST !
+    _SP-BE-LO @ _SP-BE-NYQUIST @ >= IF
+        FP16-POS-ZERO EXIT
+    THEN
+    _SP-BE-HI @ _SP-BE-NYQUIST @ > IF
+        _SP-BE-NYQUIST @ _SP-BE-HI !
+    THEN
 
-    DUP _SP-BE-LO @ INT>FP16 SWAP FP16-DIV FP16>INT   ( hz/bin lo-bin )
-    1 MAX                                               \ at least bin 1
+    \ Values are now <= rate/2, so freq*NFFT is small even at 96 kHz.
+    _SP-BE-LO @ _SP-NFFT * _SP-RATE @ /
+    _SP-BE-CLAMP-BIN _SP-BE-LOBIN !
+    _SP-BE-HI @ _SP-NFFT * _SP-RATE @ /
+    DUP 1 < IF DROP FP16-POS-ZERO EXIT THEN
+    _SP-BE-CLAMP-BIN _SP-BE-HIBIN !
+    _SP-BE-LOBIN @ _SP-BE-HIBIN @ > IF
+        FP16-POS-ZERO EXIT
+    THEN
 
-    SWAP _SP-BE-HI @ INT>FP16 SWAP FP16-DIV FP16>INT  ( lo-bin hi-bin )
-    _SP-NBINS 1- MIN                                    \ at most bin 127
-
-    1+ SWAP DO                                 ( -- )
+    _SP-BE-HIBIN @ 1+ _SP-BE-LOBIN @ DO
         _SP-PWR @ I 2* + W@
         FP16>FP32
         _SP-BE-SUM @ FP32-ADD _SP-BE-SUM !
@@ -318,9 +361,9 @@ VARIABLE _SP-PT-DIP      \ 0 = still in origin region, 1 = past dip
     _SP-PT-LAG @ 0= IF
         FP16-POS-ZERO
     ELSE
-        _SP-RATE @ INT>FP16
-        _SP-PT-LAG @ INT>FP16
-        FP16-DIV
+        _SP-RATE @ INT>FP32
+        _SP-PT-LAG @ INT>FP32
+        FP32-DIV FP32>FP16
     THEN ;
 
 \ =====================================================================
@@ -334,6 +377,8 @@ VARIABLE _SP-RO-THRESH
 VARIABLE _SP-RO-ACC
 
 : PCM-SPECTRAL-ROLLOFF  ( buf pct -- freq-fp16 )
+    DUP 0< OVER 100 > OR
+        ABORT" PCM-SPECTRAL-ROLLOFF: percentage must be 0 through 100"
     SWAP _SP-SETUP
 
     \ Compute total energy first
@@ -343,6 +388,13 @@ VARIABLE _SP-RO-ACC
         FP16>FP32
         _SP-PSUM @ FP32-ADD _SP-PSUM !
     LOOP
+
+    \ Zero percent is defined at DC, and a silent spectrum has no
+    \ meaningful first occupied bin.  Handle both before the >= walk.
+    DUP 0= IF DROP FP16-POS-ZERO EXIT THEN
+    _SP-PSUM @ FP32-ZERO FP32> 0= IF
+        DROP FP16-POS-ZERO EXIT
+    THEN
 
     \ Threshold = total × pct / 100
     INT>FP16 FP16>FP32                  ( pct32 )
@@ -363,7 +415,7 @@ VARIABLE _SP-RO-ACC
     LOOP
 
     \ If we didn't reach threshold, return Nyquist
-    _SP-RATE @ 2/ INT>FP16 ;
+    _SP-RATE @ 2/ INT>FP32 FP32>FP16 ;
 
 \ =====================================================================
 \  PCM-SPECTRAL-FLUX — spectral change between consecutive windows
@@ -381,25 +433,38 @@ VARIABLE _SP-FL-PREV         \ previous window's power spectrum
 VARIABLE _SP-FL-ALLOC2       \ flag: prev array allocated?
 VARIABLE _SP-FL-SUM          \ FP32 accumulation of flux
 VARIABLE _SP-FL-PTOT         \ FP32: total power (for normalization)
+VARIABLE _SP-FL-REM          \ frames assigned to the final window
 
 0 _SP-FL-ALLOC2 !
 
 : _SP-FL-ALLOC-PREV  ( -- )
     _SP-FL-ALLOC2 @ IF EXIT THEN
-    _SP-NFFT 2* ALLOCATE DROP _SP-FL-PREV !
+    _SP-NFFT 2* ALLOCATE
+    DUP IF 2DROP -1 ABORT" spectral flux: previous-array allocation failed" THEN
+    DROP _SP-FL-PREV !
     1 _SP-FL-ALLOC2 ! ;
 
 : PCM-SPECTRAL-FLUX  ( buf n-windows -- flux-fp16 )
     _SP-FL-NWIN !
+    _SP-FL-NWIN @ 1 <
+        ABORT" PCM-SPECTRAL-FLUX: window count must be positive"
+    DUP PCM-FP16-MONO? 0=
+        ABORT" PCM-SPECTRAL-FLUX: buffer must be mono FP16 PCM"
     DUP _SP-BUF !
     DUP PCM-DATA _SP-DPTR !
     DUP PCM-LEN _SP-LEN !
     PCM-RATE _SP-RATE !
+    _SP-RATE @ 1 < ABORT" PCM-SPECTRAL-FLUX: sample rate must be positive"
 
     _SP-ALLOC
     _SP-FL-ALLOC-PREV
 
+    _SP-LEN @ _SP-FL-NWIN @ <
+        ABORT" PCM-SPECTRAL-FLUX: windows exceed buffer frames"
     _SP-LEN @ _SP-FL-NWIN @ / _SP-FL-WLEN !
+    _SP-LEN @ _SP-FL-NWIN @ MOD _SP-FL-REM !
+    _SP-FL-WLEN @ _SP-FL-REM @ + _SP-NFFT >
+        ABORT" PCM-SPECTRAL-FLUX: a window exceeds the FFT size"
 
     FP32-ZERO _SP-FL-SUM !
 
@@ -411,7 +476,9 @@ VARIABLE _SP-FL-PTOT         \ FP32: total power (for normalization)
         LOOP
 
         \ Copy window i samples into RE
-        _SP-FL-WLEN @ _SP-NFFT MIN 0 ?DO
+        _SP-FL-WLEN @
+        I _SP-FL-NWIN @ 1- = IF _SP-FL-REM @ + THEN
+        _SP-NFFT MIN 0 ?DO
             _SP-DPTR @ I 2* +  J _SP-FL-WLEN @ * 2* +  W@
             _SP-RE @ I 2* + W!
         LOOP
@@ -455,7 +522,8 @@ VARIABLE _SP-FL-PTOT         \ FP32: total power (for normalization)
     \ Average flux per window transition
     _SP-FL-NWIN @ 1 > IF
         _SP-FL-SUM @
-        _SP-FL-NWIN @ 1- _SP-NBINS * INT>FP16 FP16>FP32  \ divisor
+        _SP-FL-NWIN @ 1- INT>FP32
+        _SP-NBINS 1- INT>FP32 FP32-MUL
         FP32-DIV FP32>FP16
     ELSE
         FP16-POS-ZERO

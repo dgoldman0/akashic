@@ -1,7 +1,7 @@
 # akashic-analysis-metrics — PCM Buffer Analysis Metrics for KDOS / Megapad-64
 
 Seven diagnostic metrics for inspecting PCM buffers produced by
-synthesis engines.  Operates on FP16-valued PCM buffers (the native
+synthesis engines. Operates on mono FP16-valued PCM buffers (the native
 format of every Akashic `syn/` engine).  Useful for automated
 verification that audio output is non-silent, non-clipped, has
 expected energy profile, etc.
@@ -21,7 +21,7 @@ Dependencies: `fp16.f`, `fp16-ext.f`, `fp32.f`, `audio/pcm.f`.
 - [Design Principles](#design-principles)
 - [Metrics Overview](#metrics-overview)
 - [API Reference](#api-reference)
-  - [PCM-PEAK](#pcm-peak)
+  - [PCM-FP16-PEAK](#pcm-fp16-peak)
   - [PCM-ZERO-CROSSINGS](#pcm-zero-crossings)
   - [PCM-RMS](#pcm-rms)
   - [PCM-DC-OFFSET](#pcm-dc-offset)
@@ -39,6 +39,7 @@ Dependencies: `fp16.f`, `fp16-ext.f`, `fp32.f`, `audio/pcm.f`.
 | Principle | Detail |
 |---|---|
 | **PCM-level analysis** | Operates on PCM buffers (not WAV files). |
+| **Explicit sample contract** | Every entry point requires `PCM-FP16-MONO?`; integer PCM and interleaved multichannel buffers are rejected. |
 | **FP32 accumulation** | RMS and DC-OFFSET accumulate in FP32 to avoid FP16 cancellation. |
 | **Non-destructive** | All metrics are read-only; no buffer modification. |
 | **Variable-based state** | Internal scratch uses `VARIABLE`s — not re-entrant. |
@@ -50,7 +51,7 @@ Dependencies: `fp16.f`, `fp16-ext.f`, `fp32.f`, `audio/pcm.f`.
 
 | Metric | Stack Effect | What it Detects |
 |---|---|---|
-| **PCM-PEAK** | `( buf -- peak frame )` | Maximum absolute amplitude and where it occurs |
+| **PCM-FP16-PEAK** | `( buf -- peak frame )` | Maximum absolute amplitude and where it occurs |
 | **PCM-ZERO-CROSSINGS** | `( buf -- count )` | Number of sign transitions — proxy for frequency content |
 | **PCM-RMS** | `( buf -- rms )` | Root mean square energy level |
 | **PCM-DC-OFFSET** | `( buf -- mean )` | DC bias — should be ~0 for centered audio |
@@ -62,10 +63,10 @@ Dependencies: `fp16.f`, `fp16-ext.f`, `fp32.f`, `audio/pcm.f`.
 
 ## API Reference
 
-### PCM-PEAK
+### PCM-FP16-PEAK
 
 ```forth
-PCM-PEAK  ( buf -- peak-fp16 frame )
+PCM-FP16-PEAK  ( buf -- peak-fp16 frame )
 ```
 
 Scans every sample in the buffer.  Returns the maximum absolute
@@ -88,7 +89,7 @@ where it was found.
 
 ```forth
 \ Example: check if a synthesis output has any energy
-buf PCM-PEAK DROP FP16-POS-ZERO FP16-GT IF
+buf PCM-FP16-PEAK DROP FP16-POS-ZERO FP16-GT IF
     ." non-silent"
 THEN
 ```
@@ -141,7 +142,8 @@ $$\text{RMS} = \sqrt{\frac{1}{N} \sum_{i=0}^{N-1} x_i^2}$$
 
 Uses FP32 accumulation internally: each sample is converted
 FP16→FP32, squared, added to an FP32 running sum, then
-divided and square-rooted.
+divided and square-rooted. The frame-count divisor is converted directly with
+`INT>FP32`; long buffers never pass their length through saturating FP16.
 
 | Input | Type | Description |
 |---|---|---|
@@ -169,6 +171,7 @@ Arithmetic mean of all sample values:
 $$\text{DC} = \frac{1}{N} \sum_{i=0}^{N-1} x_i$$
 
 Uses FP32 accumulation to avoid catastrophic cancellation.
+The frame-count divisor is converted directly from integer to FP32.
 
 | Input | Type | Description |
 |---|---|---|
@@ -218,7 +221,7 @@ PCM-CREST-FACTOR  ( buf -- cf-fp16 )
 
 $$\text{Crest Factor} = \frac{\text{Peak}}{\text{RMS}}$$
 
-Calls `PCM-PEAK` and `PCM-RMS` internally.  Returns 0 if the
+Calls `PCM-FP16-PEAK` and `PCM-RMS` internally. Returns 0 if the
 buffer is silent (RMS = 0) to avoid division by zero.
 
 | Input | Type | Description |
@@ -246,7 +249,7 @@ buffer is silent (RMS = 0) to avoid division by zero.
 PCM-ENERGY-REGIONS  ( buf n -- )
 ```
 
-Splits the buffer into *n* equal regions and prints one
+Splits the buffer into *n* contiguous regions and prints one
 diagnostic line per region to UART:
 
 ```
@@ -258,13 +261,15 @@ R1: rms=<int> pk=<int> zc=<int>
 Values `rms` and `pk` are FP16 bit patterns printed as integers
 (for easy machine parsing).  `zc` is zero-crossing count.
 
-Creates a temporary 80-byte PCM descriptor (no sample data
-allocation) that points into successive slices of the source buffer.
+Creates one validated, non-owning PCM view descriptor (no sample data
+allocation) and retargets it to successive slices of the source buffer.
+If the frame count is not divisible by `n`, the final region owns the
+remainder; no tail frames are omitted.
 
 | Input | Type | Description |
 |---|---|---|
 | `buf` | addr | PCM buffer descriptor |
-| `n` | uint | Number of regions (must divide evenly into frame count) |
+| `n` | uint | Positive number of regions, no greater than the frame count |
 
 **Interpretation:**
 - **Percussive decay:** R0 highest rms, monotonically decreasing.
@@ -303,7 +308,7 @@ its own `_PM-ER-*` scratch variables for the outer loop state.
 ## Quick Reference
 
 ```
-PCM-PEAK            ( buf -- peak-fp16 frame )
+PCM-FP16-PEAK       ( buf -- peak-fp16 frame )
 PCM-ZERO-CROSSINGS  ( buf -- count )
 PCM-RMS             ( buf -- rms-fp16 )
 PCM-DC-OFFSET       ( buf -- mean-fp16 )
@@ -329,7 +334,7 @@ buf SILENT? IF ." buffer is silent!" CR THEN
 
 ```forth
 : PCM-HEALTH  ( buf -- )
-    ." Peak:   " DUP PCM-PEAK . ."  at frame " . CR
+    ." Peak:   " DUP PCM-FP16-PEAK . ."  at frame " . CR
     ." RMS:    " DUP PCM-RMS . CR
     ." DC:     " DUP PCM-DC-OFFSET . CR
     ." ZC:     " DUP PCM-ZERO-CROSSINGS . CR

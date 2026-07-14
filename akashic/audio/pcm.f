@@ -6,7 +6,8 @@
 \ bit depths (8 unsigned, 16 signed, 32 signed), and channel counts.
 \ Suitable for earcons, music, voice, audio processing, streaming.
 \
-\ Memory: sample data via XMEM when available, descriptor on heap.
+\ Memory: descriptor and sample data use the system allocator.  The
+\ allocator may route larger data blocks through XMEM when available.
 \ PCM-CREATE-FROM wraps existing data (no allocation).
 \
 \ Sample storage: interleaved channels.
@@ -34,8 +35,11 @@
 \   PCM-CHANS       ( buf -- n )         channel count
 \   PCM-FLAGS       ( buf -- flags )     flag word
 \   PCM-OFFSET      ( buf -- n )         cursor position
-\   PCM-PEAK        ( buf -- n )         peak value seen
+\   PCM-PEAK        ( buf -- n )         stored peak metadata (compat)
+\   PCM-STORED-PEAK ( buf -- n )         explicit stored peak accessor
 \   PCM-USER        ( buf -- x )         user payload
+\   PCM-FP16?       ( buf -- flag )      16-bit FP16 storage contract
+\   PCM-FP16-MONO?  ( buf -- flag )      mono FP16 storage contract
 \   PCM-FRAME-BYTES ( buf -- n )         bytes per frame
 \   PCM-DATA-BYTES  ( buf -- n )         total data bytes
 \   PCM-DURATION-MS ( buf -- ms )        buffer duration in ms
@@ -109,8 +113,25 @@ VARIABLE _PCM-FRAMES
 VARIABLE _PCM-RATE2
 VARIABLE _PCM-BITS2
 VARIABLE _PCM-CHANS2
+VARIABLE _PCM-MS
+VARIABLE _PCM-MUL-A
+VARIABLE _PCM-MUL-B
 VARIABLE _PCM-SA-BUF    \ buf for _PCM-SAMPLE-ADDR
 VARIABLE _PCM-RW-BUF    \ buf for PCM-SAMPLE! / PCM-SAMPLE@
+
+0x7FFFFFFFFFFFFFFF CONSTANT _PCM-MAX-POS
+_PCM-MAX-POS 15 - CONSTANT _PCM-MAX-ALLOC
+
+\ Checked multiplication for non-negative sizes.  Testing a > max/b before
+\ multiplying prevents a wrapped positive product from underallocating.
+: _PCM-SIZE*  ( a b -- product )
+    _PCM-MUL-B ! _PCM-MUL-A !
+    _PCM-MUL-A @ 0< _PCM-MUL-B @ 0< OR
+        ABORT" PCM: size factors must not be negative"
+    _PCM-MUL-B @ 0= IF 0 EXIT THEN
+    _PCM-MUL-A @ _PCM-MAX-POS _PCM-MUL-B @ / >
+        ABORT" PCM: size multiplication overflow"
+    _PCM-MUL-A @ _PCM-MUL-B @ * ;
 
 \ =====================================================================
 \  Accessors — read fields
@@ -124,20 +145,30 @@ VARIABLE _PCM-RW-BUF    \ buf for PCM-SAMPLE! / PCM-SAMPLE@
 : PCM-FLAGS  ( buf -- flags )   P.FLAGS @ ;
 : PCM-OFFSET ( buf -- n )       P.OFFSET @ ;
 : PCM-PEAK   ( buf -- n )       P.PEAK  @ ;
+: PCM-STORED-PEAK ( buf -- n )  PCM-PEAK ;
 : PCM-USER   ( buf -- x )       P.USER  @ ;
+
+\ Akashic synthesis stores FP16 bit patterns in 16-bit PCM slots.  The
+\ descriptor has no independent sample-encoding tag, so these predicates
+\ validate the structural convention (bits/channels), not the payload.
+: PCM-FP16?  ( buf -- flag )
+    PCM-BITS 16 = ;
+
+: PCM-FP16-MONO?  ( buf -- flag )
+    DUP PCM-FP16? SWAP PCM-CHANS 1 = AND ;
 
 \ =====================================================================
 \  Computed properties
 \ =====================================================================
 
 : PCM-FRAME-BYTES  ( buf -- n )
-    DUP PCM-BITS 8 / SWAP PCM-CHANS * ;
+    DUP PCM-BITS 8 / SWAP PCM-CHANS _PCM-SIZE* ;
 
 : PCM-DATA-BYTES  ( buf -- n )
-    DUP PCM-LEN SWAP PCM-FRAME-BYTES * ;
+    DUP PCM-LEN SWAP PCM-FRAME-BYTES _PCM-SIZE* ;
 
 : PCM-DURATION-MS  ( buf -- ms )
-    DUP PCM-LEN 1000 *
+    DUP PCM-LEN 1000 _PCM-SIZE*
     SWAP PCM-RATE / ;
 
 \ =====================================================================
@@ -162,33 +193,39 @@ VARIABLE _PCM-RW-BUF    \ buf for PCM-SAMPLE! / PCM-SAMPLE@
     _PCM-RATE2 !
     _PCM-FRAMES !
 
+    _PCM-FRAMES @ 1 < ABORT" PCM-ALLOC: frames must be positive"
+    _PCM-RATE2 @ 1 < ABORT" PCM-ALLOC: rate must be positive"
+    _PCM-CHANS2 @ 1 < ABORT" PCM-ALLOC: channels must be positive"
+
     \ Compute data size: frames × (bits/8) × channels
     _PCM-FRAMES @
-    _PCM-BITS2 @ 8 / *
-    _PCM-CHANS2 @ *
+    _PCM-BITS2 @ 8 / _PCM-SIZE*
+    _PCM-CHANS2 @ _PCM-SIZE*
     _PCM-BYTES !
+    _PCM-BYTES @ 1 < ABORT" PCM-ALLOC: invalid or overflowing data size"
+    \ KDOS ALLOCATE rounds by 7 bytes and may add an 8-byte XMEM prefix.
+    \ Reject the overhead boundary before either addition can wrap into a
+    \ tiny allocation followed by a huge FILL.
+    _PCM-BYTES @ _PCM-MAX-ALLOC >
+        ABORT" PCM-ALLOC: data size exceeds allocator-safe range"
 
     \ Allocate descriptor (80 bytes, always heap)
     PCM-DESC-SIZE ALLOCATE
-    0<> ABORT" PCM-ALLOC: descriptor alloc failed"
+    DUP IF NIP THROW THEN
+    DROP
     _PCM-TMP !
 
-    \ Allocate sample data
-    _PCM-BYTES @
-    XMEM? IF
-        XMEM-ALLOT
-        _PCM-PTR !
-        _PCM-F-OWNS-BUF _PCM-F-XMEM-BUF OR
-    ELSE
-        ALLOCATE
-        0<> IF
-            _PCM-TMP @ FREE
-            0 ABORT" PCM-ALLOC: data alloc failed"
-        THEN
-        _PCM-PTR !
-        _PCM-F-OWNS-BUF
+    \ Allocate sample data through the system allocator.  ALLOCATE is
+    \ XMEM-aware in KDOS and, unlike direct XMEM-ALLOT, reports failure and
+    \ correctly handles blocks smaller than an XMEM free-list quantum.
+    _PCM-BYTES @ ALLOCATE
+    DUP IF
+        NIP _PCM-VAL !
+        _PCM-TMP @ FREE
+        _PCM-VAL @ THROW
     THEN
-    _PCM-VAL !   \ flags → _PCM-VAL
+    DROP _PCM-PTR !
+    _PCM-F-OWNS-BUF _PCM-VAL !
 
     \ Zero sample data
     _PCM-PTR @  _PCM-BYTES @  0 FILL
@@ -214,10 +251,13 @@ VARIABLE _PCM-RW-BUF    \ buf for PCM-SAMPLE! / PCM-SAMPLE@
 : PCM-ALLOC-MS  ( ms rate bits chans -- buf )
     _PCM-CHANS2 !
     _PCM-BITS2 !
-    DUP _PCM-RATE2 !      \ save rate
-    SWAP                   ( rate ms )
-    OVER * 1000 /          ( rate frames )
-    SWAP                   ( frames rate )
+    _PCM-RATE2 !
+    _PCM-MS !
+    _PCM-MS @ 1 < ABORT" PCM-ALLOC-MS: duration must be positive"
+    _PCM-RATE2 @ 1 < ABORT" PCM-ALLOC-MS: rate must be positive"
+    _PCM-MS @ _PCM-RATE2 @ _PCM-SIZE* 1000 /
+    DUP 1 < ABORT" PCM-ALLOC-MS: duration is shorter than one frame"
+    _PCM-RATE2 @
     _PCM-BITS2 @
     _PCM-CHANS2 @
     PCM-ALLOC ;
@@ -228,6 +268,7 @@ VARIABLE _PCM-RW-BUF    \ buf for PCM-SAMPLE! / PCM-SAMPLE@
 \  ( buf -- )
 
 : PCM-FREE  ( buf -- )
+    DUP 0= IF DROP EXIT THEN
     DUP P.FLAGS @ _PCM-F-OWNS-BUF AND IF
         DUP P.FLAGS @ _PCM-F-XMEM-BUF AND IF
             DUP PCM-DATA-BYTES       ( buf bytes )
@@ -253,8 +294,19 @@ VARIABLE _PCM-RW-BUF    \ buf for PCM-SAMPLE! / PCM-SAMPLE@
     _PCM-FRAMES !
     _PCM-PTR !
 
+    _PCM-PTR @ 0= ABORT" PCM-CREATE-FROM: data address must be non-zero"
+    _PCM-FRAMES @ 0< ABORT" PCM-CREATE-FROM: frames must not be negative"
+    _PCM-RATE2 @ 1 < ABORT" PCM-CREATE-FROM: rate must be positive"
+    _PCM-CHANS2 @ 1 < ABORT" PCM-CREATE-FROM: channels must be positive"
+    \ Prove the described extent fits a positive cell even though this word
+    \ does not allocate or own the external sample memory.  Later address and
+    \ slice arithmetic can then rely on the same invariant as PCM-ALLOC.
+    _PCM-FRAMES @ _PCM-BITS2 @ 8 / _PCM-SIZE*
+    _PCM-CHANS2 @ _PCM-SIZE* DROP
+
     PCM-DESC-SIZE ALLOCATE
-    0<> ABORT" PCM-CREATE-FROM: descriptor alloc failed"
+    DUP IF NIP THROW THEN
+    DROP
     _PCM-TMP !
 
     _PCM-PTR @       _PCM-TMP @ P.DATA   !
@@ -397,9 +449,23 @@ VARIABLE _PCM-RW-BUF    \ buf for PCM-SAMPLE! / PCM-SAMPLE@
     _PCM-CNT !                  \ end
     _PCM-I !                    \ start
 
-    \ Clamp
-    _PCM-I @ 0 MAX _PCM-TMP @ PCM-LEN MIN  _PCM-I !
-    _PCM-CNT @ _PCM-I @ MAX _PCM-TMP @ PCM-LEN MIN  _PCM-CNT !
+    \ Clamp with signed comparisons.  KDOS MIN/MAX are unsigned, so using
+    \ them here would turn a negative start into an end-of-buffer slice.
+    _PCM-I @ 0< IF
+        0 _PCM-I !
+    ELSE
+        _PCM-I @ _PCM-TMP @ PCM-LEN > IF
+            _PCM-TMP @ PCM-LEN _PCM-I !
+        THEN
+    THEN
+
+    _PCM-CNT @ _PCM-I @ < IF
+        _PCM-I @ _PCM-CNT !
+    ELSE
+        _PCM-CNT @ _PCM-TMP @ PCM-LEN > IF
+            _PCM-TMP @ PCM-LEN _PCM-CNT !
+        THEN
+    THEN
 
     \ Compute new frame count
     _PCM-CNT @ _PCM-I @ -  _PCM-FRAMES !
@@ -483,7 +549,7 @@ VARIABLE _PCM-NORM-TGT  \ target for PCM-NORMALIZE (survives SCAN-PEAK)
 
 : PCM-MS>FRAMES  ( ms buf -- n )
     PCM-RATE  ( ms rate )
-    * 1000 / ;
+    _PCM-SIZE* 1000 / ;
 
 \ =====================================================================
 \  PCM-FRAMES>MS — Convert frame count to milliseconds
@@ -491,7 +557,7 @@ VARIABLE _PCM-NORM-TGT  \ target for PCM-NORMALIZE (survives SCAN-PEAK)
 
 : PCM-FRAMES>MS  ( n buf -- ms )
     PCM-RATE  ( n rate )
-    SWAP 1000 * SWAP / ;
+    SWAP 1000 _PCM-SIZE* SWAP / ;
 
 \ =====================================================================
 \  PCM-SCAN-PEAK — Scan all samples, update peak field
@@ -598,8 +664,9 @@ VARIABLE _PCM-NORM-TGT  \ target for PCM-NORMALIZE (survives SCAN-PEAK)
     _PCM-RATE2 !
 
     \ new frames = src-len × new-rate / src-rate
+    _PCM-RATE2 @ 1 < ABORT" PCM-RESAMPLE: rate must be positive"
     _PCM-SRC @ PCM-LEN
-    _PCM-RATE2 @ *
+    _PCM-RATE2 @ _PCM-SIZE*
     _PCM-SRC @ PCM-RATE /
     _PCM-FRAMES !
 
@@ -682,7 +749,10 @@ GUARD _pcm-guard
 ' PCM-FLAGS       CONSTANT _pcm-flags-xt
 ' PCM-OFFSET      CONSTANT _pcm-offset-xt
 ' PCM-PEAK        CONSTANT _pcm-peak-xt
+' PCM-STORED-PEAK CONSTANT _pcm-stored-peak-xt
 ' PCM-USER        CONSTANT _pcm-user-xt
+' PCM-FP16?       CONSTANT _pcm-fp16-q-xt
+' PCM-FP16-MONO?  CONSTANT _pcm-fp16-mono-q-xt
 ' PCM-FRAME-BYTES CONSTANT _pcm-frame-bytes-xt
 ' PCM-DATA-BYTES  CONSTANT _pcm-data-bytes-xt
 ' PCM-DURATION-MS CONSTANT _pcm-duration-ms-xt
@@ -724,7 +794,10 @@ GUARD _pcm-guard
 : PCM-FLAGS       _pcm-flags-xt _pcm-guard WITH-GUARD ;
 : PCM-OFFSET      _pcm-offset-xt _pcm-guard WITH-GUARD ;
 : PCM-PEAK        _pcm-peak-xt _pcm-guard WITH-GUARD ;
+: PCM-STORED-PEAK _pcm-stored-peak-xt _pcm-guard WITH-GUARD ;
 : PCM-USER        _pcm-user-xt _pcm-guard WITH-GUARD ;
+: PCM-FP16?       _pcm-fp16-q-xt _pcm-guard WITH-GUARD ;
+: PCM-FP16-MONO?  _pcm-fp16-mono-q-xt _pcm-guard WITH-GUARD ;
 : PCM-FRAME-BYTES _pcm-frame-bytes-xt _pcm-guard WITH-GUARD ;
 : PCM-DATA-BYTES  _pcm-data-bytes-xt _pcm-guard WITH-GUARD ;
 : PCM-DURATION-MS _pcm-duration-ms-xt _pcm-guard WITH-GUARD ;

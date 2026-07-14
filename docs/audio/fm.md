@@ -118,7 +118,7 @@ per-sample cost from ~1350 to ~500 cycles:
 
 **Fallback to scalar:** block mode is bypassed when:
 - Feedback ≠ 0 (mod\[i\] depends on mod\[i−1\])
-- `WT-BLOCK-INC` returns 0 (sub-1 Hz frequency)
+- `WT-BLOCK-INC` returns 0 (frequency too small for its fixed-point increment)
 - Voice has 4 operators (not yet block-optimised)
 
 The scalar path uses per-sample `_FM-OP-SAMPLE`, which itself now

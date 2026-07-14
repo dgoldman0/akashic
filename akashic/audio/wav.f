@@ -4,8 +4,9 @@
 \ Read and write Microsoft WAV files (RIFF container, PCM payload).
 \ The BMP of audio — simplest useful container format.
 \
-\ Encoding converts PCM buffer (FP16 samples in [-1, 1]) to the
-\ WAV's target bit depth (8 unsigned, 16 signed, or 32 signed).
+\ Encoding converts a 16-bit-storage FP16 PCM buffer (samples in [-1, 1])
+\ to signed 16-bit WAV PCM.  Decoding accepts 8-, 16-, and 32-bit integer
+\ WAV PCM and always produces 16-bit-storage FP16 PCM.
 \ Decoding reverses the process: raw samples → FP16 PCM buffer.
 \
 \ In-memory only — WAV-ENCODE / WAV-DECODE work on byte buffers.
@@ -25,6 +26,8 @@
 \
 \   WAV-ENCODE     ( buf out-addr max-bytes -- len | 0 )
 \     Encode PCM buffer to WAV bytes.  Returns byte count or 0.
+\   WAV-ENCODE-PCM16 ( buf out-addr max-bytes -- len | 0 )
+\     Explicit name for the same signed-16-bit encoder.
 \
 \   WAV-DECODE     ( in-addr in-len -- pcm-buf | 0 )
 \     Decode WAV bytes into a new PCM buffer.  Returns 0 on error.
@@ -32,8 +35,9 @@
 \   WAV-INFO       ( in-addr in-len -- rate bits chans frames | 0 )
 \     Read WAV header fields without decoding sample data.
 
-REQUIRE fp16-ext.f
-REQUIRE audio/pcm.f
+REQUIRE ../math/fp16-ext.f
+REQUIRE pcm.f
+REQUIRE pcm-fp16.f
 
 PROVIDED akashic-audio-wav
 
@@ -42,6 +46,8 @@ PROVIDED akashic-audio-wav
 \ =====================================================================
 
 44 CONSTANT WAV-HDR-SIZE       \ Standard RIFF + fmt + data header
+0xFFFF CONSTANT _WAV-U16-MAX
+0xFFFFFFFF CONSTANT _WAV-U32-MAX
 
 \ =====================================================================
 \  Internal cursor-based writers (little-endian, BMP pattern)
@@ -70,6 +76,7 @@ VARIABLE _WAV-POS       \ write cursor byte offset
 
 VARIABLE _WAV-IN        \ input buffer address
 VARIABLE _WAV-RPOS      \ read cursor byte offset
+VARIABLE _WAV-IN-LEN    \ input buffer length
 
 : _WAV-RB@  ( -- byte )
     _WAV-IN @ _WAV-RPOS @ + C@
@@ -99,6 +106,54 @@ VARIABLE _WAV-FSIZ      \ total file size
 VARIABLE _WAV-VAL       \ temp value
 VARIABLE _WAV-I         \ loop counter
 VARIABLE _WAV-J         \ inner loop counter
+VARIABLE _WAV-OUT       \ output buffer address
+VARIABLE _WAV-CAP       \ output buffer capacity
+VARIABLE _WAV-RIFF-SIZE
+VARIABLE _WAV-FMT-SIZE
+VARIABLE _WAV-BRATE
+VARIABLE _WAV-BALIGN
+VARIABLE _WAV-FBYTES
+VARIABLE _WAV-MUL-A
+VARIABLE _WAV-MUL-B
+VARIABLE _WAV-MUL-LIMIT
+
+\ Multiply non-negative header/size fields without ever forming a wrapped
+\ product.  The caller supplies the actual destination field limit.
+: _WAV-LIMITED*  ( a b limit -- product )
+    _WAV-MUL-LIMIT ! _WAV-MUL-B ! _WAV-MUL-A !
+    _WAV-MUL-A @ 0< _WAV-MUL-B @ 0< OR
+        ABORT" WAV: size factors must not be negative"
+    _WAV-MUL-B @ 0= IF 0 EXIT THEN
+    _WAV-MUL-A @ _WAV-MUL-LIMIT @ _WAV-MUL-B @ / >
+        ABORT" WAV: encoded field overflow"
+    _WAV-MUL-A @ _WAV-MUL-B @ * ;
+
+\ Validate the source and derive every encoded size once.  All values written
+\ by _WAV-W!/D! are proven to fit their u16/u32 fields before output begins.
+: _WAV-SET-ENCODE-FIELDS  ( buf -- )
+    DUP _WAV-SRC !
+    DUP PCM-FP16? 0=
+        ABORT" WAV: source must use FP16 16-bit storage"
+    DUP PCM-LEN _WAV-FRAMES !
+    DUP PCM-RATE _WAV-RATE !
+    PCM-CHANS _WAV-CHANS !
+    16 _WAV-BITS !
+
+    _WAV-FRAMES @ 1 < ABORT" WAV: source must contain samples"
+    _WAV-RATE @ 1 < ABORT" WAV: sample rate must be positive"
+    _WAV-RATE @ _WAV-U32-MAX > ABORT" WAV: sample rate exceeds u32"
+    _WAV-CHANS @ 1 < ABORT" WAV: channels must be positive"
+    _WAV-CHANS @ _WAV-U16-MAX > ABORT" WAV: channels exceed u16"
+
+    _WAV-CHANS @ 2 _WAV-U16-MAX _WAV-LIMITED*
+    DUP _WAV-FBYTES ! _WAV-BALIGN !
+    _WAV-RATE @ _WAV-FBYTES @ _WAV-U32-MAX _WAV-LIMITED*
+    _WAV-BRATE !
+    _WAV-FRAMES @ _WAV-FBYTES @ _WAV-U32-MAX _WAV-LIMITED*
+    _WAV-DSIZ !
+    _WAV-DSIZ @ _WAV-U32-MAX 36 - >
+        ABORT" WAV: RIFF payload exceeds u32"
+    _WAV-DSIZ @ WAV-HDR-SIZE + _WAV-FSIZ ! ;
 
 \ =====================================================================
 \  WAV-FILE-SIZE — Compute total output size for a PCM buffer
@@ -106,9 +161,8 @@ VARIABLE _WAV-J         \ inner loop counter
 \  ( buf -- bytes )
 
 : WAV-FILE-SIZE  ( buf -- bytes )
-    DUP PCM-DATA-BYTES          ( buf data-bytes )
-    NIP                         ( data-bytes )
-    WAV-HDR-SIZE + ;
+    _WAV-SET-ENCODE-FIELDS
+    _WAV-FSIZ @ ;
 
 \ =====================================================================
 \  Internal: convert FP16 sample to target format
@@ -119,28 +173,6 @@ VARIABLE _WAV-J         \ inner loop counter
 \  32-bit WAV: signed -2147483648 to +2147483647
 \
 \  Strategy: multiply by max positive value, clamp, truncate.
-
-: _WAV-FP16>8  ( fp16 -- u8 )
-    \ u8 = clamp(sample * 127 + 128, 0, 255)
-    127 INT>FP16 FP16-MUL FP16>INT
-    128 +
-    DUP 0   < IF DROP 0   THEN
-    DUP 255 > IF DROP 255 THEN ;
-
-: _WAV-FP16>16  ( fp16 -- s16 )
-    \ s16 = clamp(sample * 32767, -32768, 32767)
-    32767 INT>FP16 FP16-MUL FP16>INT
-    DUP -32768 < IF DROP -32768 THEN
-    DUP  32767 > IF DROP  32767 THEN ;
-
-: _WAV-FP16>32  ( fp16 -- s32 )
-    \ s32 = clamp(sample * 32767, -32768, 32767) << 16
-    \ (We scale to 16-bit then shift — FP16 doesn't have enough
-    \  precision for full 32-bit anyway.)
-    32767 INT>FP16 FP16-MUL FP16>INT
-    DUP -32768 < IF DROP -32768 THEN
-    DUP  32767 > IF DROP  32767 THEN
-    16 LSHIFT ;
 
 \ =====================================================================
 \  Internal: write the 44-byte WAV header
@@ -158,10 +190,8 @@ VARIABLE _WAV-J         \ inner loop counter
     1 _WAV-W!                                          \ format tag (1=PCM)
     _WAV-CHANS @ _WAV-W!                               \ channels
     _WAV-RATE @ _WAV-D!                                \ sample rate
-    \ byte rate = rate × channels × (bits/8)
-    _WAV-RATE @ _WAV-CHANS @ * _WAV-BITS @ 8 / * _WAV-D!
-    \ block align = channels × (bits/8)
-    _WAV-CHANS @ _WAV-BITS @ 8 / * _WAV-W!
+    _WAV-BRATE @ _WAV-D!                               \ byte rate
+    _WAV-BALIGN @ _WAV-W!                              \ block align
     _WAV-BITS @ _WAV-W!                                \ bits per sample
 
     \ --- data sub-chunk header (8 bytes) ---
@@ -177,14 +207,7 @@ VARIABLE _WAV-J         \ inner loop counter
         _WAV-CHANS @ 0 DO
             \ Read one FP16 sample from source PCM buffer
             J I _WAV-SRC @ PCM-SAMPLE@
-            \ Convert and write based on bit depth
-            _WAV-BITS @ DUP 8 = IF
-                DROP _WAV-FP16>8 _WAV-B!
-            ELSE DUP 16 = IF
-                DROP _WAV-FP16>16 _WAV-W!
-            ELSE
-                DROP _WAV-FP16>32 _WAV-D!
-            THEN THEN
+            PCM-FP16>S16 _WAV-W!
         LOOP
     LOOP ;
 
@@ -195,28 +218,16 @@ VARIABLE _WAV-J         \ inner loop counter
 \  Returns byte count written, or 0 if max-bytes too small.
 
 : WAV-ENCODE  ( buf out-addr max-bytes -- len | 0 )
-    >R >R                              \ R: max out
+    _WAV-CAP !
+    _WAV-OUT !
     _WAV-SRC !
 
-    \ Extract PCM properties
-    _WAV-SRC @ PCM-RATE   _WAV-RATE !
-    _WAV-SRC @ PCM-BITS   _WAV-BITS !
-    _WAV-SRC @ PCM-CHANS  _WAV-CHANS !
-    _WAV-SRC @ PCM-LEN    _WAV-FRAMES !
-
-    \ Compute data size and file size
-    _WAV-FRAMES @ _WAV-CHANS @ * _WAV-BITS @ 8 / *
-    _WAV-DSIZ !
-    _WAV-DSIZ @ WAV-HDR-SIZE +
-    _WAV-FSIZ !
+    _WAV-SRC @ _WAV-SET-ENCODE-FIELDS
+    _WAV-OUT @ 0= IF 0 EXIT THEN
 
     \ Check buffer capacity
-    R> R>                              ( out-addr max-bytes )
-    DUP _WAV-FSIZ @ < IF              \ max < fsiz → too small
-        2DROP 0 EXIT
-    THEN
-    DROP                               ( out-addr )
-    _WAV-BUF !
+    _WAV-CAP @ _WAV-FSIZ @ < IF 0 EXIT THEN
+    _WAV-OUT @ _WAV-BUF !
     0 _WAV-POS !
 
     \ Write header + samples
@@ -226,22 +237,21 @@ VARIABLE _WAV-J         \ inner loop counter
     \ Return bytes written
     _WAV-FSIZ @ ;
 
+: WAV-ENCODE-PCM16  ( buf out-addr max-bytes -- len | 0 )
+    WAV-ENCODE ;
+
 \ =====================================================================
 \  Internal: convert raw sample to FP16
 \ =====================================================================
 
 : _WAV-8>FP16  ( u8 -- fp16 )
-    128 -                    \ center to signed
-    INT>FP16
-    127 INT>FP16 FP16-DIV ;
-
-: _WAV-16>FP16  ( s16 -- fp16 )
-    \ Sign-extend from 16-bit
-    DUP 0x8000 AND IF 0xFFFFFFFFFFFF0000 OR THEN
-    \ Halve first to keep FP16 exponents in safe range for FP16-DIV
-    2 /
-    INT>FP16
-    16384 INT>FP16 FP16-DIV ;
+    \ PCM8 is asymmetric around 128.  Separate denominators make all three
+    \ landmarks exact: byte 0 -> -1, 128 -> 0, and 255 -> +1.
+    DUP 128 < IF
+        128 - INT>FP16 128 INT>FP16 FP16-DIV
+    ELSE
+        128 - INT>FP16 127 INT>FP16 FP16-DIV
+    THEN ;
 
 : _WAV-32>FP16  ( s32 -- fp16 )
     \ Shift down to 16-bit range then convert
@@ -255,9 +265,17 @@ VARIABLE _WAV-J         \ inner loop counter
 \  WAV-INFO — Read header fields without loading data
 \ =====================================================================
 \  ( in-addr in-len -- rate bits chans frames | 0 )
-\  Returns 0 on error (too short, bad magic, bad format tag).
+\  Returns 0 on error.  This parser intentionally accepts only the
+\  canonical 44-byte PCM layout emitted by WAV-ENCODE; it rejects malformed
+\  sizes and headers rather than reading beyond the supplied input buffer.
+
+: _WAV-VALID-BITS?  ( bits -- flag )
+    DUP 8 = IF DROP -1 EXIT THEN
+    DUP 16 = IF DROP -1 EXIT THEN
+    32 = ;
 
 : WAV-INFO  ( in-addr in-len -- rate bits chans frames | 0 )
+    DUP _WAV-IN-LEN !
     \ Need at least 44 bytes
     WAV-HDR-SIZE < IF DROP 0 EXIT THEN
 
@@ -268,8 +286,10 @@ VARIABLE _WAV-J         \ inner loop counter
     _WAV-RD@                           \ read 4 bytes as u32-LE
     0x46464952 <> IF 0 EXIT THEN       \ 'R','I','F','F' in LE
 
-    \ Skip file size (4 bytes)
-    _WAV-RPOS @ 4 + _WAV-RPOS !
+    \ RIFF payload size (file size minus the first 8 bytes)
+    _WAV-RD@ _WAV-RIFF-SIZE !
+    _WAV-RIFF-SIZE @ 36 < IF 0 EXIT THEN
+    _WAV-RIFF-SIZE @ 8 + _WAV-IN-LEN @ > IF 0 EXIT THEN
 
     \ Check "WAVE" (bytes 8–11)
     _WAV-RD@
@@ -279,23 +299,36 @@ VARIABLE _WAV-J         \ inner loop counter
     _WAV-RD@
     0x20746D66 <> IF 0 EXIT THEN       \ 'f','m','t',' ' in LE
 
-    \ Skip fmt chunk size (bytes 16–19)
-    _WAV-RPOS @ 4 + _WAV-RPOS !
+    \ Canonical PCM fmt chunk is exactly 16 bytes
+    _WAV-RD@ _WAV-FMT-SIZE !
+    _WAV-FMT-SIZE @ 16 <> IF 0 EXIT THEN
 
     \ format tag (bytes 20–21), must be 1 (PCM)
     _WAV-RW@ 1 <> IF 0 EXIT THEN
 
     \ channels (bytes 22–23)
     _WAV-RW@ _WAV-CHANS !
+    _WAV-CHANS @ 1 < IF 0 EXIT THEN
 
     \ sample rate (bytes 24–27)
     _WAV-RD@ _WAV-RATE !
+    _WAV-RATE @ 1 < IF 0 EXIT THEN
 
-    \ skip byte rate + block align (bytes 28–33)
-    _WAV-RPOS @ 6 + _WAV-RPOS !
+    \ byte rate + block align (bytes 28–33)
+    _WAV-RD@ _WAV-BRATE !
+    _WAV-RW@ _WAV-BALIGN !
 
     \ bits per sample (bytes 34–35)
     _WAV-RW@ _WAV-BITS !
+    _WAV-BITS @ _WAV-VALID-BITS? 0= IF 0 EXIT THEN
+
+    \ Cross-check the redundant format fields before reading payload.
+    _WAV-CHANS @ _WAV-BITS @ 8 / * _WAV-FBYTES !
+    _WAV-FBYTES @ 1 < IF 0 EXIT THEN
+    _WAV-FBYTES @ _WAV-U16-MAX > IF 0 EXIT THEN
+    _WAV-BALIGN @ _WAV-FBYTES @ <> IF 0 EXIT THEN
+    _WAV-RATE @ _WAV-U32-MAX _WAV-FBYTES @ / > IF 0 EXIT THEN
+    _WAV-BRATE @ _WAV-RATE @ _WAV-FBYTES @ * <> IF 0 EXIT THEN
 
     \ Check "data" (bytes 36–39)
     _WAV-RD@
@@ -304,10 +337,17 @@ VARIABLE _WAV-J         \ inner loop counter
     \ data size (bytes 40–43)
     _WAV-RD@ _WAV-DSIZ !
 
+    \ A zero-frame file is indistinguishable from this word's scalar error
+    \ return, so reject it explicitly.  Validate every declared byte before
+    \ deriving a frame count or letting WAV-DECODE advance its reader.
+    _WAV-DSIZ @ 1 < IF 0 EXIT THEN
+    _WAV-DSIZ @ _WAV-IN-LEN @ WAV-HDR-SIZE - > IF 0 EXIT THEN
+    _WAV-DSIZ @ _WAV-U32-MAX 36 - > IF 0 EXIT THEN
+    _WAV-RIFF-SIZE @ _WAV-DSIZ @ 36 + < IF 0 EXIT THEN
+    _WAV-DSIZ @ _WAV-FBYTES @ MOD 0<> IF 0 EXIT THEN
+
     \ Compute frame count = data_size / (channels × (bits/8))
-    _WAV-DSIZ @
-    _WAV-CHANS @ _WAV-BITS @ 8 / * /
-    _WAV-FRAMES !
+    _WAV-DSIZ @ _WAV-FBYTES @ / _WAV-FRAMES !
 
     \ Return results
     _WAV-RATE @
@@ -349,7 +389,7 @@ VARIABLE _WAV-J         \ inner loop counter
             _WAV-BITS @ DUP 8 = IF
                 DROP _WAV-RB@ _WAV-8>FP16
             ELSE DUP 16 = IF
-                DROP _WAV-RW@ _WAV-16>FP16
+                DROP _WAV-RW@ PCM-S16>FP16
             ELSE
                 DROP _WAV-RD@ _WAV-32>FP16
             THEN THEN
@@ -368,11 +408,13 @@ GUARD _wav-guard
 
 ' WAV-FILE-SIZE   CONSTANT _wav-file-size-xt
 ' WAV-ENCODE      CONSTANT _wav-encode-xt
+' WAV-ENCODE-PCM16 CONSTANT _wav-encode-pcm16-xt
 ' WAV-INFO        CONSTANT _wav-info-xt
 ' WAV-DECODE      CONSTANT _wav-decode-xt
 
 : WAV-FILE-SIZE   _wav-file-size-xt _wav-guard WITH-GUARD ;
 : WAV-ENCODE      _wav-encode-xt _wav-guard WITH-GUARD ;
+: WAV-ENCODE-PCM16 _wav-encode-pcm16-xt _wav-guard WITH-GUARD ;
 : WAV-INFO        _wav-info-xt _wav-guard WITH-GUARD ;
 : WAV-DECODE      _wav-decode-xt _wav-guard WITH-GUARD ;
 [THEN] [THEN]

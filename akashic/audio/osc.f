@@ -31,10 +31,11 @@
 \ Shape constants:
 \   OSC-SINE  OSC-SQUARE  OSC-SAW  OSC-TRI  OSC-PULSE
 
-REQUIRE fp16-ext.f
-REQUIRE trig.f
-REQUIRE audio/wavetable.f
-REQUIRE audio/pcm.f
+REQUIRE ../math/fp16-ext.f
+REQUIRE ../math/fp32.f
+REQUIRE ../math/trig.f
+REQUIRE wavetable.f
+REQUIRE pcm.f
 
 PROVIDED akashic-audio-osc
 
@@ -87,6 +88,44 @@ VARIABLE _OSC-BUF      \ target PCM buffer
 VARIABLE _OSC-INC      \ phase increment (FP16)
 VARIABLE _OSC-FPTR     \ raw PCM data pointer (fast path)
 VARIABLE _OSC-FTAB     \ cached wavetable pointer (fast path)
+VARIABLE _OSC-NEW-FREQ
+VARIABLE _OSC-NEW-SHAPE
+VARIABLE _OSC-NEW-RATE
+VARIABLE _OSC-CHECK-FREQ
+VARIABLE _OSC-CHECK-RATE
+
+: _OSC-FP16-FINITE?  ( fp16 -- flag )
+    0x7C00 AND 0x7C00 <> ;
+
+: _OSC-VALIDATE-FREQ  ( freq rate -- )
+    _OSC-CHECK-RATE ! _OSC-CHECK-FREQ !
+    _OSC-CHECK-RATE @ 1 < ABORT" oscillator: rate must be positive"
+    _OSC-CHECK-FREQ @ _OSC-FP16-FINITE? 0=
+        ABORT" oscillator: frequency must be finite"
+    _OSC-CHECK-FREQ @ FP16-POS-ZERO FP16-LT
+        ABORT" oscillator: frequency must not be negative"
+    _OSC-CHECK-FREQ @ FP16>FP32
+    _OSC-CHECK-RATE @ 2/ INT>FP32 FP32> IF
+        -1 ABORT" oscillator: frequency exceeds Nyquist"
+    THEN ;
+
+: _OSC-VALIDATE-DUTY  ( duty -- )
+    DUP _OSC-FP16-FINITE? 0=
+        ABORT" OSC-DUTY!: duty must be finite"
+    DUP FP16-POS-ZERO FP16-LT
+    SWAP FP16-POS-ONE FP16-GT OR
+        ABORT" OSC-DUTY!: duty must be between 0.0 and 1.0" ;
+
+: _OSC-PHASE-INC  ( osc -- inc-fp16 )
+    DUP O.FREQ @ FP16>FP32
+    SWAP O.RATE @ INT>FP32
+    FP32-DIV FP32>FP16 ;
+
+: _OSC-NORMALIZE-PHASE  ( phase -- phase' )
+    DUP _OSC-FP16-FINITE? 0= IF DROP FP16-POS-ZERO EXIT THEN
+    DUP FP16-FLOOR FP16-SUB
+    DUP FP16-POS-ZERO FP16-LT IF FP16-POS-ONE FP16-ADD THEN
+    DUP FP16-POS-ONE FP16-GE IF FP16-POS-ONE FP16-SUB THEN ;
 
 \ =====================================================================
 \  OSC-CREATE — Allocate oscillator descriptor
@@ -97,15 +136,24 @@ VARIABLE _OSC-FTAB     \ cached wavetable pointer (fast path)
 \  rate  = sample rate in Hz as integer (e.g., 44100)
 
 : OSC-CREATE  ( freq shape rate -- osc )
-    >R >R                             ( freq )  ( R: rate shape )
+    _OSC-NEW-RATE !
+    _OSC-NEW-SHAPE !
+    _OSC-NEW-FREQ !
+
+    _OSC-NEW-RATE @ 1 < ABORT" OSC-CREATE: rate must be positive"
+    _OSC-NEW-FREQ @ _OSC-NEW-RATE @ _OSC-VALIDATE-FREQ
+    _OSC-NEW-SHAPE @ DUP 0< SWAP OSC-PULSE > OR
+        ABORT" OSC-CREATE: shape must be OSC-SINE through OSC-PULSE"
+
     OSC-DESC-SIZE ALLOCATE
-    0<> ABORT" OSC-CREATE: alloc failed"
+    DUP IF NIP THROW THEN
+    DROP
     _OSC-TMP !
 
-    _OSC-TMP @ O.FREQ !              \ freq (FP16)
+    _OSC-NEW-FREQ @ _OSC-TMP @ O.FREQ !  \ freq (FP16)
     FP16-POS-ZERO _OSC-TMP @ O.PHASE !  \ phase = 0.0
-    R> DUP _OSC-TMP @ O.SHAPE !      \ shape (keep copy)
-    R> _OSC-TMP @ O.RATE  !          \ rate (integer)
+    _OSC-NEW-SHAPE @ DUP _OSC-TMP @ O.SHAPE !  \ shape (keep copy)
+    _OSC-NEW-RATE @ _OSC-TMP @ O.RATE !        \ rate (integer)
     FP16-POS-HALF _OSC-TMP @ O.DUTY  !  \ duty = 0.5 default
     OSC-SINE = IF WT-SIN-TABLE ELSE 0 THEN
     _OSC-TMP @ O.TABLE !             \ sine → wavetable, others → 0
@@ -116,19 +164,27 @@ VARIABLE _OSC-FTAB     \ cached wavetable pointer (fast path)
 \  OSC-FREE — Free descriptor
 \ =====================================================================
 
-: OSC-FREE  ( osc -- ) FREE ;
+: OSC-FREE  ( osc -- ) ?DUP IF FREE THEN ;
 
 \ =====================================================================
 \  Setters
 \ =====================================================================
 
-: OSC-FREQ!   ( freq osc -- )  O.FREQ  ! ;
+: OSC-FREQ!   ( freq osc -- )
+    _OSC-TMP !
+    DUP _OSC-TMP @ O.RATE @ _OSC-VALIDATE-FREQ
+    _OSC-TMP @ O.FREQ ! ;
 : OSC-SHAPE!  ( shape osc -- )
     _OSC-TMP !
+    DUP 0< OVER OSC-PULSE > OR
+        ABORT" OSC-SHAPE!: shape must be OSC-SINE through OSC-PULSE"
     DUP _OSC-TMP @ O.SHAPE !
     OSC-SINE = IF WT-SIN-TABLE ELSE 0 THEN
     _OSC-TMP @ O.TABLE ! ;
-: OSC-DUTY!   ( duty osc -- )  O.DUTY  ! ;
+: OSC-DUTY!   ( duty osc -- )
+    _OSC-TMP !
+    DUP _OSC-VALIDATE-DUTY
+    _OSC-TMP @ O.DUTY ! ;
 : OSC-TABLE!  ( addr osc -- )  O.TABLE ! ;
 : OSC-RESET   ( osc -- )       FP16-POS-ZERO SWAP O.PHASE ! ;
 
@@ -197,7 +253,8 @@ VARIABLE _OSC-GEN-DU
     _OSC-TMP !
 
     \ Read current phase
-    _OSC-TMP @ O.PHASE @  _OSC-PH !
+    _OSC-TMP @ O.PHASE @ _OSC-NORMALIZE-PHASE DUP _OSC-PH !
+    _OSC-TMP @ O.PHASE !
 
     \ Generate sample — wavetable fast path or shape dispatch
     _OSC-TMP @ O.TABLE @ DUP IF
@@ -211,19 +268,13 @@ VARIABLE _OSC-GEN-DU
     THEN
     _OSC-VAL !
 
-    \ Compute phase increment: freq / rate (both as FP16)
-    _OSC-TMP @ O.FREQ @
-    _OSC-TMP @ O.RATE @ INT>FP16
-    FP16-DIV
-    _OSC-INC !
+    \ Widen the integer rate directly so 96 kHz does not saturate via FP16.
+    _OSC-TMP @ _OSC-PHASE-INC _OSC-INC !
 
     \ Advance phase
     _OSC-PH @ _OSC-INC @ FP16-ADD
 
-    \ Wrap: if phase >= 1.0, subtract 1.0
-    DUP FP16-POS-ONE FP16-GE IF
-        FP16-POS-ONE FP16-SUB
-    THEN
+    _OSC-NORMALIZE-PHASE
     _OSC-TMP @ O.PHASE !
 
     _OSC-VAL @ ;
@@ -240,6 +291,9 @@ VARIABLE _OSC-GEN-DU
     _OSC-TMP !
     _OSC-BUF !
 
+    _OSC-BUF @ PCM-FP16-MONO? 0=
+        ABORT" OSC-FILL: buffer must be mono FP16 PCM"
+
     _OSC-TMP @ O.TABLE @ DUP IF
         _OSC-FTAB !
 
@@ -249,7 +303,7 @@ VARIABLE _OSC-GEN-DU
         WT-BLOCK-INC DUP IF
             \ ---- Block mode (integer phase, truncating lookup) ----
             _OSC-INC !   \ integer inc
-            _OSC-TMP @ O.PHASE @ WT-PH>INT   \ convert FP16 phase → int
+            _OSC-TMP @ O.PHASE @ _OSC-NORMALIZE-PHASE WT-PH>INT
             _OSC-INC @
             _OSC-BUF @ PCM-LEN
             _OSC-FTAB @
@@ -260,19 +314,14 @@ VARIABLE _OSC-GEN-DU
         ELSE
             \ ---- Scalar wavetable fallback (sub-1Hz) ----
             DROP
-            _OSC-TMP @ O.PHASE @ _OSC-PH !
-            _OSC-TMP @ O.FREQ @
-            _OSC-TMP @ O.RATE @ INT>FP16
-            FP16-DIV _OSC-INC !
+            _OSC-TMP @ O.PHASE @ _OSC-NORMALIZE-PHASE _OSC-PH !
+            _OSC-TMP @ _OSC-PHASE-INC _OSC-INC !
             _OSC-BUF @ PCM-DATA _OSC-FPTR !
             _OSC-BUF @ PCM-LEN 0 DO
                 _OSC-PH @ _OSC-FTAB @ WT-LERP
                 _OSC-FPTR @ I 2 * + W!
                 _OSC-PH @ _OSC-INC @ FP16-ADD
-                DUP FP16-POS-ONE FP16-GE IF
-                    FP16-POS-ONE FP16-SUB
-                THEN
-                _OSC-PH !
+                _OSC-NORMALIZE-PHASE _OSC-PH !
             LOOP
             _OSC-PH @ _OSC-TMP @ O.PHASE !
         THEN
@@ -296,6 +345,9 @@ VARIABLE _OSC-GEN-DU
     _OSC-TMP !
     _OSC-BUF !
 
+    _OSC-BUF @ PCM-FP16-MONO? 0=
+        ABORT" OSC-ADD: buffer must be mono FP16 PCM"
+
     _OSC-TMP @ O.TABLE @ DUP IF
         _OSC-FTAB !
 
@@ -304,7 +356,7 @@ VARIABLE _OSC-GEN-DU
         WT-BLOCK-INC DUP IF
             \ ---- Block mode add (scalar FP16-ADD per sample) ----
             _OSC-INC !
-            _OSC-TMP @ O.PHASE @ WT-PH>INT
+            _OSC-TMP @ O.PHASE @ _OSC-NORMALIZE-PHASE WT-PH>INT
             _OSC-INC @
             _OSC-BUF @ PCM-LEN
             _OSC-FTAB @
@@ -315,20 +367,15 @@ VARIABLE _OSC-GEN-DU
         ELSE
             \ ---- Scalar wavetable fallback (sub-1Hz) ----
             DROP
-            _OSC-TMP @ O.PHASE @ _OSC-PH !
-            _OSC-TMP @ O.FREQ @
-            _OSC-TMP @ O.RATE @ INT>FP16
-            FP16-DIV _OSC-INC !
+            _OSC-TMP @ O.PHASE @ _OSC-NORMALIZE-PHASE _OSC-PH !
+            _OSC-TMP @ _OSC-PHASE-INC _OSC-INC !
             _OSC-BUF @ PCM-DATA _OSC-FPTR !
             _OSC-BUF @ PCM-LEN 0 DO
                 _OSC-PH @ _OSC-FTAB @ WT-LERP
                 _OSC-FPTR @ I 2 * + DUP W@
                 ROT FP16-ADD SWAP W!
                 _OSC-PH @ _OSC-INC @ FP16-ADD
-                DUP FP16-POS-ONE FP16-GE IF
-                    FP16-POS-ONE FP16-SUB
-                THEN
-                _OSC-PH !
+                _OSC-NORMALIZE-PHASE _OSC-PH !
             LOOP
             _OSC-PH @ _OSC-TMP @ O.PHASE !
         THEN

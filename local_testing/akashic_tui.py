@@ -5856,6 +5856,7 @@ _ct-run
             "tui/applets/daybook/daybook.f",
             "tui/applets/grid/grid.f",
             "tui/applets/agent/agent.f",
+            "tui/applets/soundlab/soundlab.f",
             "agent/providers/devtools/scripted.f",
         ),
         resources=(
@@ -5867,6 +5868,7 @@ _ct-run
             "tui/applets/daybook/daybook.uidl",
             "tui/applets/grid/grid.uidl",
             "tui/applets/agent/agent.uidl",
+            "tui/applets/soundlab/soundlab.uidl",
         ),
         autoexec=r"""\ autoexec.f - Akashic desktop profile
 ENTER-USERLAND
@@ -5877,6 +5879,7 @@ REQUIRE tui/applets/fexplorer/fexplorer.f
 REQUIRE tui/applets/daybook/daybook.f
 REQUIRE tui/applets/grid/grid.f
 REQUIRE tui/applets/agent/agent.f
+REQUIRE tui/applets/soundlab/soundlab.f
 REQUIRE agent/providers/devtools/scripted.f
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
@@ -5926,6 +5929,13 @@ _boot-grid-desc DESK-QUEUE-LAUNCH
 CREATE _boot-agent-desc APP-DESC ALLOT
 _boot-agent-desc AGENT-ENTRY
 _boot-agent-desc DESK-QUEUE-LAUNCH
+
+\ Sound Lab is a discoverable built-in but does not consume a startup tile.
+CREATE _boot-soundlab-desc APP-DESC ALLOT
+_boot-soundlab-desc SOUNDLAB-ENTRY
+_boot-soundlab-desc
+ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
+DESK-QUEUE-BUILTIN
 
 ." [akashic] starting desktop" CR
 : _boot-run-desktop  ( -- ) DESK-RUN ;
@@ -7777,7 +7787,429 @@ GRID-RUN
         ready_markers=("File", "Edit", "Data", "Grid"),
         stable_markers=("File", "Edit", "Data", "Grid"),
     ),
+    "soundlab": Profile(
+        roots=("tui/applets/soundlab/soundlab.f",),
+        resources=("tui/applets/soundlab/soundlab.uidl",),
+        autoexec=r"""\ autoexec.f - standalone Sound Lab profile
+ENTER-USERLAND
+." [akashic] loading sound lab" CR
+REQUIRE tui/applets/soundlab/soundlab.f
+." [akashic] starting sound lab" CR
+SOUNDLAB-RUN
+." [akashic] sound lab exited" CR
+""",
+        ready_markers=("SOUND LAB", "Waveform", "Playback"),
+        stable_markers=("SOUND LAB", "Waveform", "Playback"),
+        linked=True,
+        include_large_sample=False,
+    ),
 }
+
+PROFILES["audio-contracts"] = Profile(
+    roots=(
+        "audio/pcm-fp16.f",
+        "audio/osc.f",
+        "audio/env.f",
+        "audio/synth.f",
+        "audio/wav.f",
+        "audio/output.f",
+        "audio/analysis/metrics.f",
+        "audio/analysis/envelope.f",
+        "audio/analysis/spectral.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - deterministic audio qualification contracts
+ENTER-USERLAND
+." [akashic] loading audio contracts" CR
+REQUIRE audio/pcm-fp16.f
+1 PCM-S16>FP16 0x0200 <> ABORT" standalone PCM conversion failed"
+0x3F7FF000 FP32>FP16 0x3C00 <>
+    ABORT" standalone FP32 narrowing carry failed"
+0xBF7FF000 FP32>FP16 0xBC00 <>
+    ABORT" standalone negative FP32 narrowing carry failed"
+REQUIRE audio/osc.f
+REQUIRE audio/env.f
+REQUIRE audio/synth.f
+REQUIRE audio/wav.f
+REQUIRE audio/output.f
+REQUIRE audio/analysis/metrics.f
+REQUIRE audio/analysis/envelope.f
+REQUIRE audio/analysis/spectral.f
+
+VARIABLE _ac-fails
+VARIABLE _ac-checks
+VARIABLE _ac-depth
+VARIABLE _ac-canonical
+VARIABLE _ac-tone
+VARIABLE _ac-envelope
+VARIABLE _ac-whole
+VARIABLE _ac-blocked
+VARIABLE _ac-slice
+VARIABLE _ac-osc
+VARIABLE _ac-env
+VARIABLE _ac-wav-a
+VARIABLE _ac-wav-u
+VARIABLE _ac-peak
+VARIABLE _ac-frame
+VARIABLE _ac-rms
+VARIABLE _ac-dc
+VARIABLE _ac-zc
+VARIABLE _ac-clips
+VARIABLE _ac-centroid
+VARIABLE _ac-pitch
+VARIABLE _ac-attack
+VARIABLE _ac-decay
+VARIABLE _ac-info-rate
+VARIABLE _ac-info-bits
+VARIABLE _ac-info-chans
+VARIABLE _ac-info-frames
+VARIABLE _ac-short
+VARIABLE _ac-high-rate
+VARIABLE _ac-long
+VARIABLE _ac-decoded
+VARIABLE _ac-synth
+VARIABLE _ac-ratio
+VARIABLE _ac-output-status
+VARIABLE _ac-worker-s16-status
+VARIABLE _ac-worker-fp16-status
+VARIABLE _ac-worker-stop-status
+VARIABLE _ac-worker-clear-status
+VARIABLE _ac-put-a
+VARIABLE _ac-put-u
+
+CREATE _ac-raw-s16 8 ALLOT
+CREATE _ac-wav8 47 ALLOT
+
+: _ac-assert  ( flag -- )
+    1 _ac-checks +!
+    0= IF 1 _ac-fails +! ." ASSERT " _ac-checks @ . CR THEN ;
+: _ac-stack  ( -- ) DEPTH _ac-depth @ = _ac-assert ;
+
+: _ac-le16!  ( u addr -- )
+    _ac-put-a ! _ac-put-u !
+    2 0 DO
+        _ac-put-u @ I 8 * RSHIFT 255 AND _ac-put-a @ I + C!
+    LOOP ;
+
+: _ac-le32!  ( u addr -- )
+    _ac-put-a ! _ac-put-u !
+    4 0 DO
+        _ac-put-u @ I 8 * RSHIFT 255 AND _ac-put-a @ I + C!
+    LOOP ;
+
+: _ac-measure  ( buf -- )
+    DUP PCM-FP16-PEAK _ac-frame ! _ac-peak !
+    DUP PCM-RMS _ac-rms !
+    DUP PCM-DC-OFFSET _ac-dc !
+    DUP PCM-ZERO-CROSSINGS _ac-zc !
+    PCM-CLIP-COUNT _ac-clips ! ;
+
+: _ac-print-artifact  ( buf -- )
+    DUP PCM-DATA .
+    DUP PCM-LEN .
+    DUP PCM-RATE .
+    DUP PCM-BITS .
+    PCM-CHANS . CR ;
+
+: _ac-fill-canonical  ( -- )
+    8 8000 16 1 PCM-ALLOC _ac-canonical !
+    0x0000 0 _ac-canonical @ PCM-FRAME!
+    0x3800 1 _ac-canonical @ PCM-FRAME!
+    0xB800 2 _ac-canonical @ PCM-FRAME!
+    0x3C00 3 _ac-canonical @ PCM-FRAME!
+    0xBC00 4 _ac-canonical @ PCM-FRAME!
+    0x3400 5 _ac-canonical @ PCM-FRAME!
+    0xB400 6 _ac-canonical @ PCM-FRAME!
+    0x0000 7 _ac-canonical @ PCM-FRAME! ;
+
+: _ac-worker-output-boundary  ( -- )
+    _ac-raw-s16 1 8000 1 0 AUDIO-OUT-SUBMIT-S16
+    _ac-worker-s16-status !
+    _ac-canonical @ 0 AUDIO-OUT-SUBMIT-FP16
+    _ac-worker-fp16-status !
+    AUDIO-OUT-STOP _ac-worker-stop-status !
+    AUDIO-OUT-CLEAR _ac-worker-clear-status ! ;
+
+: _ac-test-output  ( -- )
+    AUDIO-OUT-PRESENT? _ac-assert
+    AUDIO-OUT-CAPTURE? _ac-assert
+    AUDIO-OUT-SINK? 0= _ac-assert
+    AUDIO-OUT-GENERATION 0= _ac-assert
+
+    ['] _ac-worker-output-boundary 1 CORE-RUN
+    1 CORE-WAIT
+    _ac-worker-s16-status @ AUDIO-OUT-S-CORE = _ac-assert
+    _ac-worker-fp16-status @ AUDIO-OUT-S-CORE = _ac-assert
+    _ac-worker-stop-status @ AUDIO-OUT-S-CORE = _ac-assert
+    _ac-worker-clear-status @ AUDIO-OUT-S-CORE = _ac-assert
+    AUDIO-OUT-GENERATION 0= _ac-assert
+
+    -32768 _ac-raw-s16 W!
+    -1 _ac-raw-s16 2 + W!
+    0 _ac-raw-s16 4 + W!
+    32767 _ac-raw-s16 6 + W!
+    _ac-raw-s16 2 16000 2 1000 AUDIO-OUT-SUBMIT-S16
+    DUP _ac-output-status ! AUDIO-OUT-S-OK = _ac-assert
+    AUDIO-OUT-GENERATION 1 = _ac-assert
+    AUDIO-OUT-DONE? _ac-assert
+    AUDIO-OUT-ERROR AUDIO-OUT-E-NONE = _ac-assert
+    ." AUDIO OUTPUT raw " AUDIO-OUT-GENERATION .
+    16000 . 2 . 2 . _ac-output-status @ . CR
+
+    _ac-canonical @ 1000 AUDIO-OUT-SUBMIT-FP16
+    DUP _ac-output-status ! AUDIO-OUT-S-OK = _ac-assert
+    AUDIO-OUT-GENERATION 2 = _ac-assert
+    AUDIO-OUT-DONE? _ac-assert
+    AUDIO-OUT-ERROR AUDIO-OUT-E-NONE = _ac-assert
+    ." AUDIO OUTPUT fp16 " AUDIO-OUT-GENERATION .
+    8000 . 1 . 8 . _ac-output-status @ . CR ;
+
+: _ac-test-canonical  ( -- )
+    _ac-fill-canonical
+    _ac-canonical @ PCM-LEN 8 = _ac-assert
+    _ac-canonical @ PCM-RATE 8000 = _ac-assert
+    _ac-canonical @ PCM-BITS 16 = _ac-assert
+    _ac-canonical @ PCM-CHANS 1 = _ac-assert
+    _ac-canonical @ PCM-FP16? _ac-assert
+    _ac-canonical @ PCM-FP16-MONO? _ac-assert
+    _ac-canonical @ PCM-STORED-PEAK 0= _ac-assert
+    3 _ac-canonical @ PCM-FRAME@ 0x3C00 = _ac-assert
+    4 _ac-canonical @ PCM-FRAME@ 0xBC00 = _ac-assert
+    _ac-canonical @ _ac-measure
+    _ac-peak @ 0x3C00 = _ac-assert
+    _ac-frame @ 3 = _ac-assert
+    _ac-rms @ 0x3866 FP16-GT _ac-assert
+    _ac-rms @ 0x38CD FP16-LT _ac-assert
+    _ac-dc @ FP16-POS-ZERO = _ac-assert
+    _ac-zc @ 5 = _ac-assert
+    _ac-clips @ 2 = _ac-assert
+    ." AUDIO METRIC canonical "
+    _ac-peak @ . _ac-frame @ . _ac-rms @ . _ac-dc @ .
+    _ac-zc @ . _ac-clips @ . CR
+    ." AUDIO ARTIFACT canonical " _ac-canonical @ _ac-print-artifact
+
+    -5 2 _ac-canonical @ PCM-SLICE _ac-slice !
+    _ac-slice @ PCM-LEN 2 = _ac-assert
+    0 _ac-slice @ PCM-FRAME@
+    0 _ac-canonical @ PCM-FRAME@ = _ac-assert
+    1 _ac-slice @ PCM-FRAME@
+    1 _ac-canonical @ PCM-FRAME@ = _ac-assert
+    _ac-slice @ PCM-FREE 0 _ac-slice ! ;
+
+: _ac-test-tone  ( -- )
+    256 8000 16 1 PCM-ALLOC _ac-tone !
+    1000 INT>FP16 OSC-SINE 8000 OSC-CREATE _ac-osc !
+    _ac-tone @ _ac-osc @ OSC-FILL
+    _ac-tone @ _ac-measure
+    _ac-peak @ 0x3B00 FP16-GT _ac-assert
+    _ac-rms @ 0x3900 FP16-GT _ac-assert
+    _ac-rms @ 0x3A00 FP16-LT _ac-assert
+    _ac-dc @ FP16-ABS 0x2400 FP16-LT _ac-assert
+    _ac-zc @ 60 >= _ac-assert _ac-zc @ 66 <= _ac-assert
+    _ac-tone @ PCM-SPECTRAL-CENTROID _ac-centroid !
+    _ac-tone @ PCM-PITCH-ESTIMATE _ac-pitch !
+    _ac-centroid @ FP16>INT 900 >= _ac-assert
+    _ac-centroid @ FP16>INT 1100 <= _ac-assert
+    _ac-pitch @ FP16>INT 900 >= _ac-assert
+    _ac-pitch @ FP16>INT 1100 <= _ac-assert
+    ." AUDIO METRIC tone "
+    _ac-peak @ . _ac-frame @ . _ac-rms @ . _ac-dc @ .
+    _ac-zc @ . _ac-clips @ . CR
+    ." AUDIO SPECTRAL tone " _ac-centroid @ . _ac-pitch @ . CR
+    ." AUDIO ARTIFACT tone " _ac-tone @ _ac-print-artifact
+    _ac-osc @ OSC-FREE 0 _ac-osc ! ;
+
+: _ac-test-envelope  ( -- )
+    512 8000 16 1 PCM-ALLOC _ac-envelope !
+    16 48 8000 ENV-CREATE-AR _ac-env !
+    _ac-env @ ENV-GATE-ON
+    _ac-envelope @ _ac-env @ ENV-FILL
+    0 _ac-envelope @ PCM-FRAME@ FP16-POS-ZERO = _ac-assert
+    127 _ac-envelope @ PCM-FRAME@ 0x3B00 FP16-GT _ac-assert
+    128 _ac-envelope @ PCM-FRAME@ FP16-POS-ONE = _ac-assert
+    511 _ac-envelope @ PCM-FRAME@ 0x2000 FP16-LT _ac-assert
+    _ac-env @ ENV-DONE? _ac-assert
+    _ac-envelope @ PCM-ATTACK-TIME _ac-attack !
+    _ac-envelope @ 0x3400 PCM-DECAY-TIME _ac-decay !
+    _ac-attack @ 64 >= _ac-assert _ac-attack @ 192 <= _ac-assert
+    _ac-decay @ 192 >= _ac-assert _ac-decay @ 384 <= _ac-assert
+    ." AUDIO ENVELOPE ar " _ac-attack @ . _ac-decay @ . CR
+    ." AUDIO ARTIFACT envelope " _ac-envelope @ _ac-print-artifact
+    _ac-env @ ENV-FREE 0 _ac-env ! ;
+
+: _ac-test-block-continuity  ( -- )
+    \ Fractional-Hz input must survive the block-mode increment path.
+    0x5EE2 8000 WT-BLOCK-INC
+    440 INT>FP16 8000 WT-BLOCK-INC > _ac-assert
+    256 8000 16 1 PCM-ALLOC _ac-whole !
+    256 8000 16 1 PCM-ALLOC _ac-blocked !
+    440 INT>FP16 OSC-SINE 8000 OSC-CREATE _ac-osc !
+    _ac-whole @ _ac-osc @ OSC-FILL
+    _ac-osc @ OSC-FREE
+    440 INT>FP16 OSC-SINE 8000 OSC-CREATE _ac-osc !
+    4 0 DO
+        I 64 * DUP 64 + _ac-blocked @ PCM-SLICE _ac-slice !
+        _ac-slice @ _ac-osc @ OSC-FILL
+        _ac-slice @ PCM-FREE
+    LOOP
+    ." AUDIO ARTIFACT whole " _ac-whole @ _ac-print-artifact
+    ." AUDIO ARTIFACT blocked " _ac-blocked @ _ac-print-artifact
+    _ac-osc @ OSC-FREE 0 _ac-osc ! ;
+
+: _ac-test-wav  ( -- )
+    0x0000 PCM-FP16>S16 0 = _ac-assert
+    0x3800 PCM-FP16>S16 16384 = _ac-assert
+    0xB800 PCM-FP16>S16 -16384 = _ac-assert
+    0x3C00 PCM-FP16>S16 32767 = _ac-assert
+    0xBC00 PCM-FP16>S16 -32768 = _ac-assert
+    -32768 PCM-S16>FP16 FP16-NEG-ONE = _ac-assert
+    -1 PCM-S16>FP16 0x8200 = _ac-assert
+    0 PCM-S16>FP16 FP16-POS-ZERO = _ac-assert
+    1 PCM-S16>FP16 0x0200 = _ac-assert
+    32767 PCM-S16>FP16 FP16-POS-ONE = _ac-assert
+    4095 PCM-S16>FP16 0x3000 = _ac-assert
+    8191 PCM-S16>FP16 0x3400 = _ac-assert
+    16383 PCM-S16>FP16 0x3800 = _ac-assert
+    -4095 PCM-S16>FP16 0xB000 = _ac-assert
+    -8191 PCM-S16>FP16 0xB400 = _ac-assert
+    -16383 PCM-S16>FP16 0xB800 = _ac-assert
+    1 PCM-S16>FP16 PCM-FP16>S16 1 = _ac-assert
+    -1 PCM-S16>FP16 PCM-FP16>S16 -1 = _ac-assert
+    _ac-tone @ WAV-FILE-SIZE DUP _ac-wav-u !
+    ALLOCATE 0<> ABORT" audio WAV allocation failed" _ac-wav-a !
+    _ac-tone @ _ac-wav-a @ _ac-wav-u @ WAV-ENCODE
+    _ac-wav-u @ = _ac-assert
+    _ac-wav-a @ _ac-wav-u @ WAV-INFO
+    _ac-info-frames ! _ac-info-chans !
+    _ac-info-bits ! _ac-info-rate !
+    _ac-info-rate @ 8000 = _ac-assert
+    _ac-info-bits @ 16 = _ac-assert
+    _ac-info-chans @ 1 = _ac-assert
+    _ac-info-frames @ 256 = _ac-assert
+    ." AUDIO WAV tone " _ac-wav-a @ . _ac-wav-u @ . CR ;
+
+: _ac-init-wav8  ( -- )
+    _ac-wav8 47 0 FILL
+    0x46464952 _ac-wav8 _ac-le32!
+    39 _ac-wav8 4 + _ac-le32!
+    0x45564157 _ac-wav8 8 + _ac-le32!
+    0x20746D66 _ac-wav8 12 + _ac-le32!
+    16 _ac-wav8 16 + _ac-le32!
+    1 _ac-wav8 20 + _ac-le16!
+    1 _ac-wav8 22 + _ac-le16!
+    8000 _ac-wav8 24 + _ac-le32!
+    8000 _ac-wav8 28 + _ac-le32!
+    1 _ac-wav8 32 + _ac-le16!
+    8 _ac-wav8 34 + _ac-le16!
+    0x61746164 _ac-wav8 36 + _ac-le32!
+    3 _ac-wav8 40 + _ac-le32!
+    0 _ac-wav8 44 + C!
+    128 _ac-wav8 45 + C!
+    255 _ac-wav8 46 + C! ;
+
+: _ac-test-wav-decode  ( -- )
+    _ac-init-wav8
+    _ac-wav8 47 WAV-INFO
+    _ac-info-frames ! _ac-info-chans !
+    _ac-info-bits ! _ac-info-rate !
+    _ac-info-rate @ 8000 = _ac-assert
+    _ac-info-bits @ 8 = _ac-assert
+    _ac-info-chans @ 1 = _ac-assert
+    _ac-info-frames @ 3 = _ac-assert
+
+    _ac-wav8 46 WAV-INFO 0= _ac-assert
+    7999 _ac-wav8 28 + _ac-le32!
+    _ac-wav8 47 WAV-INFO 0= _ac-assert
+    8000 _ac-wav8 28 + _ac-le32!
+    40 _ac-wav8 4 + _ac-le32!
+    _ac-wav8 47 WAV-DECODE 0= _ac-assert
+    39 _ac-wav8 4 + _ac-le32!
+
+    _ac-wav8 47 WAV-DECODE DUP 0<> _ac-assert _ac-decoded !
+    _ac-decoded @ PCM-LEN 3 = _ac-assert
+    0 _ac-decoded @ PCM-FRAME@ FP16-NEG-ONE = _ac-assert
+    1 _ac-decoded @ PCM-FRAME@ FP16-POS-ZERO = _ac-assert
+    2 _ac-decoded @ PCM-FRAME@ FP16-POS-ONE = _ac-assert
+    _ac-decoded @ PCM-FREE 0 _ac-decoded ! ;
+
+: _ac-test-envelope-edges  ( -- )
+    _ac-canonical @ 3 PCM-ENVELOPE-DUMP
+    65 8000 16 1 PCM-ALLOC _ac-short !
+    0x3800 _ac-short @ PCM-FILL
+    FP16-POS-ZERO 64 _ac-short @ PCM-FRAME!
+    _ac-short @ 0x1000 PCM-SILENCE-RATIO _ac-ratio !
+    _ac-ratio @ FP16-POS-ZERO FP16-GT _ac-assert
+    _ac-ratio @ 0x3000 FP16-LT _ac-assert
+    _ac-short @ PCM-FREE 0 _ac-short ! ;
+
+: _ac-test-long-metrics  ( -- )
+    70000 8000 16 1 PCM-ALLOC _ac-long !
+    FP16-POS-HALF _ac-long @ PCM-FILL
+    _ac-long @ PCM-RMS FP16-POS-HALF = _ac-assert
+    _ac-long @ PCM-DC-OFFSET FP16-POS-HALF = _ac-assert
+    _ac-long @ PCM-FREE 0 _ac-long ! ;
+
+: _ac-test-spectral-edges  ( -- )
+    _ac-tone @ 5000 6000 PCM-BAND-ENERGY
+    FP16-POS-ZERO = _ac-assert
+
+    256 96000 16 1 PCM-ALLOC _ac-high-rate !
+    _ac-high-rate @ PCM-SPECTRAL-CENTROID
+    FP16-POS-ZERO = _ac-assert
+    _ac-high-rate @ 85 PCM-SPECTRAL-ROLLOFF
+    FP16-POS-ZERO = _ac-assert
+    _ac-tone @ 0 PCM-SPECTRAL-ROLLOFF
+    FP16-POS-ZERO = _ac-assert
+    12000 INT>FP16 OSC-SINE 96000 OSC-CREATE _ac-osc !
+    _ac-high-rate @ _ac-osc @ OSC-FILL
+    _ac-high-rate @ PCM-SPECTRAL-CENTROID FP16>INT
+    DUP 11500 >= _ac-assert 12500 <= _ac-assert
+    _ac-high-rate @ PCM-PITCH-ESTIMATE FP16>INT
+    DUP 11500 >= _ac-assert 12500 <= _ac-assert
+    _ac-osc @ OSC-FREE 0 _ac-osc !
+    _ac-high-rate @ PCM-FREE 0 _ac-high-rate ! ;
+
+: _ac-test-synth  ( -- )
+    OSC-SINE -1 8000 64 SYNTH-CREATE DUP 0<> _ac-assert _ac-synth !
+    440 INT>FP16 FP16-POS-HALF _ac-synth @ SYNTH-NOTE-ON
+    _ac-synth @ SYNTH-RENDER
+    DUP PCM-LEN 64 = _ac-assert
+    DUP PCM-RATE 8000 = _ac-assert
+    DUP PCM-FP16-MONO? _ac-assert
+    PCM-FP16-PEAK _ac-frame ! _ac-peak !
+    _ac-peak @ FP16-POS-ZERO FP16-GT _ac-assert
+    _ac-synth @ SYNTH-NOTE-OFF
+    _ac-synth @ SYNTH-FREE 0 _ac-synth !
+    0 SYNTH-FREE ;
+
+: _ac-run  ( -- )
+    0 _ac-fails ! 0 _ac-checks ! DEPTH _ac-depth !
+    _ac-test-canonical
+    _ac-test-output
+    _ac-test-tone
+    _ac-test-envelope
+    _ac-test-block-continuity
+    _ac-test-wav
+    _ac-test-wav-decode
+    _ac-test-envelope-edges
+    _ac-test-long-metrics
+    _ac-test-spectral-edges
+    _ac-test-synth
+    _ac-stack
+    _ac-fails @ 0= IF
+        ." AUDIO CONTRACTS PASS " _ac-checks @ . CR
+    ELSE
+        ." AUDIO CONTRACTS FAIL " _ac-fails @ . ." / " _ac-checks @ . CR
+    THEN
+    ." AUDIO CONTRACTS COMPLETE" CR ;
+
+_ac-run
+""",
+    ready_markers=("AUDIO CONTRACTS COMPLETE",),
+    stable_markers=("AUDIO CONTRACTS PASS", "AUDIO CONTRACTS COMPLETE"),
+    failure_markers=("AUDIO CONTRACTS FAIL",),
+    include_large_sample=False,
+)
 
 PROFILES["manifest-contracts"] = Profile(
     roots=(
@@ -10050,6 +10482,497 @@ def _has_forth_error(raw: str) -> list[str]:
     return [line for line in raw.splitlines() if any(p.search(line) for p in patterns)]
 
 
+@dataclass(frozen=True)
+class AudioHostQualification:
+    errors: tuple[str, ...]
+    notes: tuple[str, ...]
+
+
+def _qualify_audio_contracts(
+    raw: str,
+    system,
+    audio_captures: tuple[dict[str, object], ...],
+) -> AudioHostQualification:
+    """Independently validate guest audio artifacts using host arithmetic.
+
+    The guest reports only bounded mapped-memory spans and native metric
+    results.  The host then reads the exact FP16/WAV bytes from the running
+    machine, computes its own time/frequency-domain oracles, and preserves the
+    artifacts under ``local_testing/out/audio-contracts``.
+    """
+
+    import io
+    import math
+    import struct
+    import wave
+
+    errors: list[str] = []
+    notes: list[str] = []
+    report: dict[str, object] = {}
+    artifact_re = re.compile(
+        r"AUDIO ARTIFACT\s+([a-z-]+)\s+"
+        r"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"
+    )
+    metric_re = re.compile(
+        r"AUDIO METRIC\s+([a-z-]+)\s+"
+        r"(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)"
+    )
+    spectral_re = re.compile(
+        r"AUDIO SPECTRAL\s+([a-z-]+)\s+(-?\d+)\s+(-?\d+)"
+    )
+    envelope_re = re.compile(
+        r"AUDIO ENVELOPE\s+([a-z-]+)\s+(-?\d+)\s+(-?\d+)"
+    )
+    wav_re = re.compile(r"AUDIO WAV\s+([a-z-]+)\s+(\d+)\s+(\d+)")
+    output_re = re.compile(
+        r"AUDIO OUTPUT\s+(raw|fp16)\s+"
+        r"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"
+    )
+
+    artifacts = {
+        match.group(1): tuple(int(match.group(index)) for index in range(2, 7))
+        for match in artifact_re.finditer(raw)
+    }
+    metrics = {
+        match.group(1): tuple(int(match.group(index)) for index in range(2, 8))
+        for match in metric_re.finditer(raw)
+    }
+    spectra = {
+        match.group(1): (int(match.group(2)), int(match.group(3)))
+        for match in spectral_re.finditer(raw)
+    }
+    envelopes = {
+        match.group(1): (int(match.group(2)), int(match.group(3)))
+        for match in envelope_re.finditer(raw)
+    }
+    wavs = {
+        match.group(1): (int(match.group(2)), int(match.group(3)))
+        for match in wav_re.finditer(raw)
+    }
+    guest_outputs = {
+        match.group(1): tuple(int(match.group(index)) for index in range(2, 7))
+        for match in output_re.finditer(raw)
+    }
+
+    required_artifacts = {"canonical", "tone", "envelope", "whole", "blocked"}
+    for name in sorted(required_artifacts - artifacts.keys()):
+        errors.append(f"guest did not report {name!r} PCM artifact")
+    for name in ("canonical", "tone"):
+        if name not in metrics:
+            errors.append(f"guest did not report {name!r} native metrics")
+    if "tone" not in spectra:
+        errors.append("guest did not report native tone spectral results")
+    if "ar" not in envelopes:
+        errors.append("guest did not report native envelope results")
+    if "tone" not in wavs:
+        errors.append("guest did not report encoded tone WAV")
+    expected_guest_outputs = {
+        "raw": (1, 16000, 2, 2, 0),
+        "fp16": (2, 8000, 1, 8, 0),
+    }
+    for name, expected in expected_guest_outputs.items():
+        if guest_outputs.get(name) != expected:
+            errors.append(
+                f"guest {name} AudioOut result {guest_outputs.get(name)!r} "
+                f"differs from {expected!r}"
+            )
+
+    def mapped_bytes(address: int, count: int, label: str) -> bytes | None:
+        if count < 0 or count > 1 << 20:
+            errors.append(f"{label} requested invalid byte count {count}")
+            return None
+        end = address + count
+        ranges = [(0, system.ram_size)]
+        if system.ext_mem_size:
+            ranges.append((system.ext_mem_base, system.ext_mem_end))
+        if system.vram_size:
+            ranges.append((system.vram_base, system.vram_end))
+        if not any(start <= address <= end <= stop for start, stop in ranges):
+            errors.append(
+                f"{label} span {address:#x}+{count} is outside mapped host memory"
+            )
+            return None
+        return bytes(system._raw_mem_read(address + offset) for offset in range(count))
+
+    def fp16_value(bits: int) -> float:
+        return struct.unpack("<e", struct.pack("<H", bits & 0xFFFF))[0]
+
+    def fp16_samples(data: bytes) -> list[float]:
+        return [value[0] for value in struct.iter_unpack("<e", data)]
+
+    def host_metrics(samples: list[float]) -> tuple[float, int, float, float, int, int]:
+        if not samples:
+            return 0.0, 0, 0.0, 0.0, 0, 0
+        peak_frame = max(range(len(samples)), key=lambda index: abs(samples[index]))
+        peak = abs(samples[peak_frame])
+        rms = math.sqrt(sum(value * value for value in samples) / len(samples))
+        dc = sum(samples) / len(samples)
+        signs = [math.copysign(1.0, value) for value in samples if value != 0.0]
+        crossings = sum(left != right for left, right in zip(signs, signs[1:]))
+        clips = sum(abs(value) >= 1.0 for value in samples)
+        return peak, peak_frame, rms, dc, crossings, clips
+
+    def dominant_frequency(samples: list[float], rate: int) -> float:
+        count = len(samples)
+        best_bin = 0
+        best_power = -1.0
+        for bin_index in range(1, count // 2):
+            angular = 2.0 * math.pi * bin_index / count
+            real = sum(
+                value * math.cos(angular * index)
+                for index, value in enumerate(samples)
+            )
+            imag = -sum(
+                value * math.sin(angular * index)
+                for index, value in enumerate(samples)
+            )
+            power = real * real + imag * imag
+            if power > best_power:
+                best_power = power
+                best_bin = bin_index
+        return best_bin * rate / count
+
+    decoded: dict[str, list[float]] = {}
+    raw_artifacts: dict[str, bytes] = {}
+    artifact_root = OUTPUT_ROOT / "audio-contracts"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    for artifact_name in (
+        "canonical.f16le",
+        "tone.f16le",
+        "envelope.f16le",
+        "whole.f16le",
+        "blocked.f16le",
+        "audio-output-raw.s16le",
+        "audio-output-fp16.s16le",
+        "tone.wav",
+        "report.json",
+    ):
+        (artifact_root / artifact_name).unlink(missing_ok=True)
+
+    expected_output_captures = (
+        {
+            "generation": 1,
+            "rate": 16000,
+            "channels": 2,
+            "frames": 2,
+            "status": 0x82,
+            "error": 0,
+            "pcm": b"\x00\x80\xff\xff\x00\x00\xff\x7f",
+        },
+        {
+            "generation": 2,
+            "rate": 8000,
+            "channels": 1,
+            "frames": 8,
+            "status": 0x82,
+            "error": 0,
+            "pcm": (
+                b"\x00\x00\x00\x40\x00\xc0\xff\x7f"
+                b"\x00\x80\x00\x20\x00\xe0\x00\x00"
+            ),
+        },
+    )
+    if len(audio_captures) != len(expected_output_captures):
+        errors.append(
+            "AudioOut observed "
+            f"{len(audio_captures)} submissions, expected "
+            f"{len(expected_output_captures)}"
+        )
+    capture_report: list[dict[str, object]] = []
+    for index, expected in enumerate(expected_output_captures):
+        if index >= len(audio_captures):
+            break
+        actual = audio_captures[index]
+        label = "raw" if index == 0 else "fp16"
+        for field in (
+            "generation",
+            "rate",
+            "channels",
+            "frames",
+            "status",
+            "error",
+        ):
+            if actual.get(field) != expected[field]:
+                errors.append(
+                    f"AudioOut {label} {field}={actual.get(field)!r}, "
+                    f"expected {expected[field]!r}"
+                )
+        pcm = actual.get("pcm")
+        if pcm != expected["pcm"]:
+            errors.append(
+                f"AudioOut {label} PCM bytes differ from the exact host vector"
+            )
+        if isinstance(pcm, bytes):
+            (artifact_root / f"audio-output-{label}.s16le").write_bytes(pcm)
+        capture_report.append(
+            {
+                field: actual.get(field)
+                for field in (
+                    "generation",
+                    "rate",
+                    "channels",
+                    "frames",
+                    "status",
+                    "error",
+                )
+            }
+            | {"pcm_hex": pcm.hex() if isinstance(pcm, bytes) else None}
+        )
+
+    final_audio = system.audio
+    final_expected = expected_output_captures[-1]
+    final_fields = {
+        "generation": final_audio.generation,
+        "rate": final_audio.last_rate,
+        "channels": final_audio.last_channels,
+        "frames": final_audio.last_frames,
+        "status": final_audio._status(),
+        "error": final_audio.error,
+        "pcm": bytes(final_audio.last_pcm),
+    }
+    if final_fields != final_expected:
+        errors.append("final AudioOut device state does not match the FP16 submission")
+    report["audio_output_captures"] = capture_report
+    if not any("AudioOut" in error for error in errors):
+        notes.append(
+            "AudioOut: exact raw stereo and FP16 mono captures, generations 1-2"
+        )
+    for name, (address, frames, rate, bits, channels) in artifacts.items():
+        if frames <= 0 or frames > 8192:
+            errors.append(f"{name} reported invalid frame count {frames}")
+            continue
+        if bits != 16 or channels != 1 or not 1000 <= rate <= 192000:
+            errors.append(
+                f"{name} reported unsupported PCM shape "
+                f"rate={rate} bits={bits} channels={channels}"
+            )
+            continue
+        data = mapped_bytes(address, frames * 2, f"{name} PCM")
+        if data is None:
+            continue
+        samples = fp16_samples(data)
+        if any(not math.isfinite(value) for value in samples):
+            errors.append(f"{name} contains non-finite FP16 samples")
+        decoded[name] = samples
+        raw_artifacts[name] = data
+        (artifact_root / f"{name}.f16le").write_bytes(data)
+
+    canonical_bits = (0x0000, 0x3800, 0xB800, 0x3C00, 0xBC00, 0x3400, 0xB400, 0x0000)
+    if "canonical" in raw_artifacts:
+        actual_bits = tuple(
+            value[0] for value in struct.iter_unpack("<H", raw_artifacts["canonical"])
+        )
+        if actual_bits != canonical_bits:
+            errors.append(
+                "canonical PCM bytes differ from the independent FP16 vector"
+            )
+
+    computed_metrics: dict[str, dict[str, float | int]] = {}
+    for name in ("canonical", "tone"):
+        if name not in decoded:
+            continue
+        host = host_metrics(decoded[name])
+        computed_metrics[name] = {
+            "peak": host[0],
+            "peak_frame": host[1],
+            "rms": host[2],
+            "dc": host[3],
+            "zero_crossings": host[4],
+            "clips": host[5],
+        }
+        native = metrics.get(name)
+        if native is None:
+            continue
+        native_peak, native_frame, native_rms, native_dc, native_zc, native_clips = native
+        if abs(fp16_value(native_peak) - host[0]) > 0.002:
+            errors.append(f"native {name} peak disagrees with host oracle")
+        if native_frame != host[1]:
+            errors.append(f"native {name} peak frame disagrees with host oracle")
+        if abs(fp16_value(native_rms) - host[2]) > 0.003:
+            errors.append(f"native {name} RMS disagrees with host oracle")
+        if abs(fp16_value(native_dc) - host[3]) > 0.002:
+            errors.append(f"native {name} DC offset disagrees with host oracle")
+        if native_zc != host[4]:
+            errors.append(f"native {name} zero crossings disagree with host oracle")
+        if native_clips != host[5]:
+            errors.append(f"native {name} clip count disagrees with host oracle")
+
+    if "tone" in decoded and "tone" in artifacts:
+        tone = decoded["tone"]
+        rate = artifacts["tone"][2]
+        peak, _, rms, dc, crossings, _ = host_metrics(tone)
+        frequency = dominant_frequency(tone, rate)
+        if not 0.95 <= peak <= 1.001:
+            errors.append(f"host tone peak is implausible ({peak:.6f})")
+        if not 0.68 <= rms <= 0.73:
+            errors.append(f"host tone RMS is implausible ({rms:.6f})")
+        if abs(dc) > 0.01:
+            errors.append(f"host tone has excessive DC offset ({dc:.6f})")
+        if not 60 <= crossings <= 66:
+            errors.append(f"host tone has {crossings} zero crossings, expected ~64")
+        if abs(frequency - 1000.0) > rate / len(tone):
+            errors.append(f"host DFT found tone at {frequency:.2f} Hz")
+        report["tone_dominant_hz"] = frequency
+        native_spectral = spectra.get("tone")
+        if native_spectral:
+            centroid = fp16_value(native_spectral[0])
+            pitch = fp16_value(native_spectral[1])
+            if abs(centroid - frequency) > 80.0:
+                errors.append(
+                    f"native centroid {centroid:.2f} Hz disagrees with host DFT"
+                )
+            if abs(pitch - frequency) > 80.0:
+                errors.append(
+                    f"native pitch {pitch:.2f} Hz disagrees with host DFT"
+                )
+            report["native_spectral"] = {
+                "centroid_hz": centroid,
+                "pitch_hz": pitch,
+            }
+        notes.append(
+            f"tone: {frequency:.1f} Hz, peak={peak:.3f}, rms={rms:.3f}, "
+            f"dc={dc:.5f}, zc={crossings}"
+        )
+
+    if "envelope" in decoded:
+        envelope = decoded["envelope"]
+        peak_frame = max(range(len(envelope)), key=envelope.__getitem__)
+        rising = envelope[: peak_frame + 1]
+        falling = envelope[peak_frame:]
+        if abs(envelope[0]) > 0.001 or envelope[peak_frame] < 0.99:
+            errors.append("host envelope does not span silence to full scale")
+        if any(right + 0.002 < left for left, right in zip(rising, rising[1:])):
+            errors.append("host envelope attack is not monotonic")
+        if any(right > left + 0.002 for left, right in zip(falling, falling[1:])):
+            errors.append("host envelope release is not monotonic")
+        if abs(envelope[-1]) > 0.01:
+            errors.append("host envelope does not decay back near silence")
+
+        window_rms = []
+        for start in range(0, len(envelope), 64):
+            window = envelope[start : start + 64]
+            window_rms.append(
+                math.sqrt(sum(value * value for value in window) / len(window))
+            )
+        peak_window = max(range(len(window_rms)), key=window_rms.__getitem__)
+        host_attack = peak_window * 64
+        absolute_threshold = window_rms[peak_window] * 0.25
+        host_decay = len(envelope) - host_attack
+        for window_index in range(peak_window + 1, len(window_rms)):
+            if window_rms[window_index] < absolute_threshold:
+                host_decay = (window_index - peak_window) * 64
+                break
+        native_envelope = envelopes.get("ar")
+        if native_envelope:
+            attack, decay = native_envelope
+            if attack != host_attack:
+                errors.append(
+                    f"native attack {attack} disagrees with host window oracle "
+                    f"{host_attack}"
+                )
+            if decay != host_decay:
+                errors.append(
+                    f"native decay {decay} disagrees with host window oracle "
+                    f"{host_decay}"
+                )
+            report["native_envelope"] = {"attack_frames": attack, "decay_frames": decay}
+        report["host_envelope_peak_frame"] = peak_frame
+        report["host_window_envelope"] = {
+            "attack_frames": host_attack,
+            "decay_frames_at_quarter_peak": host_decay,
+            "peak_rms": window_rms[peak_window],
+        }
+        notes.append(
+            f"envelope: attack={host_attack}, decay={host_decay}, "
+            f"final={envelope[-1]:.5f}"
+        )
+
+    if "whole" in decoded and "blocked" in decoded:
+        whole = decoded["whole"]
+        blocked = decoded["blocked"]
+        if len(whole) != len(blocked):
+            errors.append("whole and blocked oscillator artifacts have different lengths")
+        else:
+            differences = [abs(left - right) for left, right in zip(whole, blocked)]
+            max_difference = max(differences, default=0.0)
+            rms_difference = math.sqrt(
+                sum(value * value for value in differences) / max(1, len(differences))
+            )
+            if max_difference > 0.02 or rms_difference > 0.01:
+                errors.append(
+                    "oscillator block segmentation changed output excessively "
+                    f"(max={max_difference:.6f}, rms={rms_difference:.6f})"
+                )
+            report["block_continuity"] = {
+                "max_abs_difference": max_difference,
+                "rms_difference": rms_difference,
+            }
+            notes.append(
+                f"block continuity: max delta={max_difference:.6f}, "
+                f"rms delta={rms_difference:.6f}"
+            )
+
+    if "tone" in wavs:
+        wav_address, wav_length = wavs["tone"]
+        wav_data = mapped_bytes(wav_address, wav_length, "tone WAV")
+        if wav_data is not None:
+            (artifact_root / "tone.wav").write_bytes(wav_data)
+            try:
+                with wave.open(io.BytesIO(wav_data), "rb") as reader:
+                    wav_channels = reader.getnchannels()
+                    wav_width = reader.getsampwidth()
+                    wav_rate = reader.getframerate()
+                    wav_frames = reader.getnframes()
+                    wav_pcm = reader.readframes(wav_frames)
+            except (EOFError, wave.Error) as exc:
+                errors.append(f"host wave parser rejected guest WAV: {exc}")
+            else:
+                if (wav_channels, wav_width, wav_rate, wav_frames) != (1, 2, 8000, 256):
+                    errors.append(
+                        "guest WAV metadata differs from 8 kHz mono signed-16 contract"
+                    )
+                if "tone" in decoded:
+                    expected_bytes = 2 * len(decoded["tone"])
+                    if len(wav_pcm) != expected_bytes:
+                        errors.append(
+                            "host WAV parser returned "
+                            f"{len(wav_pcm)} PCM bytes, expected {expected_bytes}"
+                        )
+                    else:
+                        signed = [
+                            value[0] for value in struct.iter_unpack("<h", wav_pcm)
+                        ]
+                        normalized = [value / 32768.0 for value in signed]
+                        max_error = max(
+                            abs(left - right)
+                            for left, right in zip(normalized, decoded["tone"])
+                        )
+                        # Interior conversion uses the exactly representable
+                        # 32768 scale.  Only integer truncation and the +1 ->
+                        # +32767 rail policy may lose one signed-16 LSB.
+                        wav_error_bound = 1.0 / 32768.0
+                        if max_error > wav_error_bound:
+                            errors.append(
+                                "guest WAV PCM differs from source FP16 by more "
+                                "than one signed-16 LSB "
+                                f"(max={max_error:.7f})"
+                            )
+                        report["wav_max_sample_error"] = max_error
+                        report["wav_max_sample_error_bound"] = wav_error_bound
+                        notes.append(
+                            f"WAV: {wav_frames} frames at {wav_rate} Hz, "
+                            f"max conversion error={max_error:.7f}"
+                        )
+
+    report["computed_metrics"] = computed_metrics
+    report["errors"] = errors
+    report["notes"] = notes
+    (artifact_root / "report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return AudioHostQualification(tuple(errors), tuple(notes))
+
+
 def smoke(
     profile_name: str,
     image_path: Path,
@@ -10082,6 +11005,7 @@ def smoke(
     started = time.perf_counter()
     total_steps = 0
     stop_reason = "budget"
+    audio_captures: list[dict[str, object]] = []
 
     with MachineSession.from_bios(
         MEGAPAD_ROOT / "bios.asm",
@@ -10090,13 +11014,34 @@ def smoke(
         rows=rows,
         batch_steps=500_000,
         ext_mem_size=ext_mem_mib << 20,
+        num_cores=2 if profile_name == "audio-contracts" else 1,
         nic_backend=nic_backend,
         realtime_clock=bool(nic_tap),
     ) as session:
+        if profile_name == "audio-contracts":
+            audio_device = session.system.audio
+            original_audio_submit = audio_device._submit
+
+            def observed_audio_submit():
+                original_audio_submit()
+                audio_captures.append(
+                    {
+                        "generation": audio_device.generation,
+                        "rate": audio_device.last_rate,
+                        "channels": audio_device.last_channels,
+                        "frames": audio_device.last_frames,
+                        "status": audio_device._status(),
+                        "error": audio_device.error,
+                        "pcm": bytes(audio_device.last_pcm),
+                    }
+                )
+
+            audio_device._submit = observed_audio_submit
         session.boot()
         deadline = time.monotonic() + timeout
         screen = session.snapshot()
         journey_errors: list[str] = []
+        host_notes: list[str] = []
 
         while total_steps < max_steps and time.monotonic() < deadline:
             remaining = max_steps - total_steps
@@ -10600,16 +11545,56 @@ def smoke(
             focused = wait_screen(
                 "[5:Agent*]", "Desk did not focus Agent before composing"
             )
+            assist_ready = False
             if focused:
+                identity = session.snapshot().text()
+                if "Chat" not in identity:
+                    journey_errors.append(
+                        "Desk Agent did not begin the legacy journey fail-closed"
+                    )
+                    return
+                access_hits = session.snapshot().find("Access")
+                if not access_hits:
+                    journey_errors.append(
+                        "Agent did not expose Access before the reviewed tool journey"
+                    )
+                    return
+                menu_row, menu_col = min(access_hits)
+                send_sgr_mouse(menu_row, menu_col + 1)
+                if not wait_screen(
+                    "Read-only",
+                    "Agent did not open Access before the reviewed tool journey",
+                ):
+                    return
+                for step in range(2):
+                    session.send_key("down")
+                    if not settle_input(
+                        f"Agent Access menu did not move to Assist step {step + 1}"
+                    ):
+                        return
+                session.send_key("enter")
+                if not wait_screen(
+                    "Agent access profile changed",
+                    "Agent did not opt the legacy journey into Practice Assist",
+                ):
+                    return
+                if "Assist" not in session.snapshot().text():
+                    journey_errors.append(
+                        "Agent status did not retain Practice Assist for the tool journey"
+                    )
+                    return
+                assist_ready = True
+
+            if assist_ready:
                 session.send_key("ctrl+l")
-            if focused and wait_screen(
+            if assist_ready and wait_screen(
                 "Ask:", "Agent applet did not open its shared composer"
             ):
                 session.send_text("task smoke")
                 session.send_key("enter")
                 if wait_screen(
-                    "daybook.task.capture",
-                    "persistent app tool did not pause for approval",
+                    "PgDn to inspect all rows",
+                    "persistent app tool did not enter its locked approval view",
                     step_budget=1_200_000_000,
                     wall_timeout=30.0,
                 ):
@@ -11583,6 +12568,131 @@ def smoke(
                                         "D2", "Grid did not return to the edited formula"
                                     )
 
+        if initial_ready and profile_name == "soundlab":
+            # Exercise exact-value editing, stale/render transitions, and the
+            # real atomic WAV artifact rather than accepting the initial paint
+            # as sufficient applet coverage.
+            soundlab_capture: bytes | None = None
+            session.send_key("down")
+            session.send_key("enter")
+            if wait_screen(
+                "Frequency (40-2000 Hz):",
+                "Sound Lab did not open the frequency editor",
+            ):
+                # The shared single-line input has no Select All command;
+                # replace its three-character prefill explicitly.
+                for _ in range(3):
+                    session.send_key("backspace")
+                session.send_text("880")
+                session.send_key("enter")
+                if wait_screen(
+                    "Render required",
+                    "Sound Lab did not mark changed parameters stale",
+                ):
+                    session.send_key("f5")
+                    if wait_screen(
+                        "centroid 880Hz",
+                        "Sound Lab did not rerender and analyze 880 Hz",
+                        step_budget=2_500_000_000,
+                        wall_timeout=70.0,
+                    ):
+                        audio = session.system.audio
+                        generation_before_play = audio.generation
+                        session.send_key("p")
+                        if wait_screen_normalized(
+                            "Captured the current render deterministically; "
+                            "no audible sink",
+                            "Sound Lab did not submit its edited render to AudioOut",
+                            step_budget=500_000_000,
+                            wall_timeout=15.0,
+                        ):
+                            expected_generation = (
+                                generation_before_play + 1
+                            ) & 0xFFFFFFFF
+                            if audio.generation != expected_generation:
+                                journey_errors.append(
+                                    "Sound Lab playback did not advance AudioOut "
+                                    f"generation ({generation_before_play} -> "
+                                    f"{audio.generation})"
+                                )
+                            if (
+                                audio.last_rate,
+                                audio.last_channels,
+                                audio.last_frames,
+                            ) != (8000, 1, 4000):
+                                journey_errors.append(
+                                    "Sound Lab AudioOut metadata differs from the "
+                                    "edited 500 ms mono render: "
+                                    f"{(audio.last_rate, audio.last_channels, audio.last_frames)!r}"
+                                )
+                            if len(audio.last_pcm) != 8000:
+                                journey_errors.append(
+                                    "Sound Lab AudioOut capture has "
+                                    f"{len(audio.last_pcm)} bytes, expected 8000"
+                                )
+                            elif not any(audio.last_pcm):
+                                journey_errors.append(
+                                    "Sound Lab submitted a silent AudioOut capture"
+                                )
+                            else:
+                                soundlab_capture = bytes(audio.last_pcm)
+                            if audio._status() != 0x82 or audio.error != 0:
+                                journey_errors.append(
+                                    "Sound Lab left AudioOut outside the completed "
+                                    f"capture state (status={audio._status():#x}, "
+                                    f"error={audio.error})"
+                                )
+                            host_notes.append(
+                                "Sound Lab playback: captured 4000 mono frames "
+                                "at 8 kHz"
+                            )
+                        session.send_key("ctrl+s")
+                        wait_screen(
+                            "Rendered / saved",
+                            "Sound Lab did not report a saved render",
+                            step_budget=500_000_000,
+                            wall_timeout=15.0,
+                        )
+
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                soundlab_wav = live_fs.read_file("soundlab.wav")
+            except FileNotFoundError:
+                soundlab_wav = b""
+                journey_errors.append("Sound Lab did not publish /soundlab.wav")
+            if soundlab_wav:
+                import io
+                import wave
+
+                try:
+                    with wave.open(io.BytesIO(soundlab_wav), "rb") as reader:
+                        wav_contract = (
+                            reader.getnchannels(),
+                            reader.getsampwidth(),
+                            reader.getframerate(),
+                            reader.getnframes(),
+                        )
+                        wav_pcm = reader.readframes(reader.getnframes())
+                except (EOFError, wave.Error) as exc:
+                    journey_errors.append(
+                        f"Sound Lab WAV failed host parsing: {exc}"
+                    )
+                else:
+                    if wav_contract != (1, 2, 8000, 4000):
+                        journey_errors.append(
+                            "Sound Lab WAV metadata differs from the bounded "
+                            f"mono PCM16 contract: {wav_contract!r}"
+                        )
+                    if not any(wav_pcm):
+                        journey_errors.append("Sound Lab saved a silent WAV")
+                    if (
+                        soundlab_capture is not None
+                        and wav_pcm != soundlab_capture
+                    ):
+                        journey_errors.append(
+                            "Sound Lab saved WAV PCM differs from its AudioOut capture"
+                        )
+
         if initial_ready and profile_name == "agent-layout-ui":
             initial_layout = session.snapshot().text()
             if "WRAP-BOTTOM" not in initial_layout:
@@ -12324,6 +13434,23 @@ def smoke(
                         "Desk did not leave File Explorer focused after Alt+2"
                     )
 
+        if initial_ready and profile_name == "audio-contracts":
+            try:
+                qualification = _qualify_audio_contracts(
+                    session.raw_text(), session.system, tuple(audio_captures)
+                )
+            except Exception as exc:
+                journey_errors.append(
+                    "audio host oracle raised "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            else:
+                journey_errors.extend(
+                    f"audio host oracle: {error}"
+                    for error in qualification.errors
+                )
+                host_notes.extend(qualification.notes)
+
         capture_root = OUTPUT_ROOT / f"smoke-{profile_name}"
         screen.write_text(capture_root.with_suffix(".txt"))
         screen.write_json(capture_root.with_suffix(".cells.json"))
@@ -12357,6 +13484,10 @@ def smoke(
             print("  journey errors:")
             for error in journey_errors:
                 print(f"    {error}")
+        if host_notes:
+            print("  host qualification:")
+            for note in host_notes:
+                print(f"    {note}")
         if not ok and nic_backend is not None:
             stats = nic_backend.stats()
             print(
@@ -12399,6 +13530,7 @@ def serve(
     rows: int,
     ext_mem_mib: int = DEFAULT_EXT_MEM_MIB,
     nic_tap: str | None = None,
+    audio: bool = False,
 ):
     if PROFILES[profile_name].requires_tap and not nic_tap:
         raise SystemExit(
@@ -12424,6 +13556,8 @@ def serve(
     ]
     if nic_tap:
         command.extend(("--nic-tap", nic_tap))
+    if audio:
+        command.append("--audio")
     os.execv(sys.executable, command)
 
 
@@ -12472,6 +13606,11 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--timeout", type=float, default=75.0)
         if name == "serve":
             command.add_argument("--socket", default="/tmp/akashic-tui.sock")
+            command.add_argument(
+                "--audio",
+                action="store_true",
+                help="attach MegaPad's optional pygame PCM16 playback sink",
+            )
 
     return parser
 
@@ -12502,6 +13641,7 @@ def main() -> int:
         rows=args.rows,
         ext_mem_mib=args.ext_mem_mib,
         nic_tap=args.nic_tap,
+        audio=args.audio,
     )
     return 0
 

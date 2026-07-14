@@ -37,9 +37,10 @@ Dependencies: `fp16.f`, `fp16-ext.f`, `fp32.f`, `trig.f`, `fft.f`,
 | Principle | Detail |
 |---|---|
 | **FFT-based** | Uses `FFT-FORWARD` + `FFT-POWER` from `math/fft.f` — no duplicate DFT code. |
+| **Explicit sample contract** | Every entry point requires mono FP16 PCM and a positive sample rate. |
 | **FP32 accumulation** | Weighted sums use FP32 to avoid FP16 overflow/cancellation. |
-| **Overflow-safe arithmetic** | Bin→Hz conversion computes `bin × (rate/NFFT)` rather than `(bin × rate) / NFFT` to stay within FP16 range. |
-| **Lazy allocation** | FFT work arrays (RE, IM, PWR) allocated on first call, reused thereafter. |
+| **Wide frequency arithmetic** | Bin→Hz axes and weighted frequency sums stay in FP32 until the public FP16 result is produced, so rates such as 96 kHz are not first narrowed through FP16. |
+| **Lazy allocation** | FFT work arrays (RE, IM, PWR) are allocated transactionally on first call and reused thereafter. Partial failure is cleaned up before aborting. |
 | **Non-destructive** | All words are read-only; no buffer modification. |
 | **Not re-entrant** | Shares scratch `VARIABLE`s — one analysis at a time. |
 | **Prefix convention** | Public: `PCM-`. Internal: `_SP-`. |
@@ -142,14 +143,18 @@ integers (Hz), converted to bin indices internally as
 | Input | Type | Description |
 |---|---|---|
 | `buf` | addr | PCM buffer descriptor |
-| `lo-hz` | int | Lower frequency bound (Hz) |
-| `hi-hz` | int | Upper frequency bound (Hz) |
+| `lo-hz` | int | Non-negative lower frequency bound (Hz) |
+| `hi-hz` | int | Upper bound (Hz), strictly greater than `lo-hz` |
 
 | Output | Type | Description |
 |---|---|---|
 | `energy-fp16` | u16 | FP16 total power in band |
 
-Bins are clamped to [1, 127].
+The requested interval is intersected with the represented spectrum.  Bins are
+clamped to [1, 127], the upper bound is capped at Nyquist, and a band whose
+lower bound is at or above Nyquist returns zero.  A valid but sub-bin interval
+that contains no represented bin also returns zero; it never wraps into a
+large `DO` range.
 
 ```forth
 \ Compare bass vs treble energy
@@ -223,6 +228,7 @@ The frequency below which `pct`% of spectral energy resides.
 **Interpretation:**
 - 85% rolloff at 500 Hz → most energy is below 500 Hz.
 - 85% rolloff at 3500 Hz → broadband / bright signal.
+- A request for 0% and a spectrum with zero total power both return 0 Hz.
 - Returns Nyquist if threshold is never reached.
 
 ```forth
@@ -239,18 +245,25 @@ PCM-SPECTRAL-FLUX  ( buf n-windows -- flux-fp16 )
 ```
 
 Measures timbral change over time.  Splits the buffer into
-`n-windows` equal time windows, computes the power spectrum for each
+`n-windows` contiguous time windows, computes the power spectrum for each
 (normalized to sum=1), and averages the bin-by-bin absolute
 difference between consecutive windows.
 
 $$\text{flux} = \frac{1}{(W-1) \times B} \sum_{w=1}^{W-1} \sum_{k=1}^{B} \lvert \hat{P}_k^{(w)} - \hat{P}_k^{(w-1)} \rvert$$
 
-where $\hat{P}$ is the normalized power spectrum.
+where $\hat{P}$ is the normalized power spectrum and $B=127$ (DC is
+excluded).
+
+The base window length is `frames / n-windows`; the final window receives the
+integer remainder, so every input frame participates exactly once.  Because
+the FFT is fixed at 256 points, every resulting window — including the longer
+final one — must contain at most 256 frames.  Calls that would silently omit
+samples instead abort.  A single-window request is valid and returns zero.
 
 | Input | Type | Description |
 |---|---|---|
-| `buf` | addr | PCM buffer descriptor (should be > NFFT samples) |
-| `n-windows` | int | Number of time windows (typically 2–8) |
+| `buf` | addr | PCM buffer descriptor |
+| `n-windows` | int | Positive count no greater than the frame count, with each resulting window at most 256 frames (typically 2–8) |
 
 | Output | Type | Description |
 |---|---|---|
@@ -278,7 +291,8 @@ For a 512-sample buffer with 4 windows, that's 4 × 256-pt FFTs.
 |---|---|---|
 | `_SP-ALLOC` | `( -- )` | Lazy-allocate RE, IM, PWR arrays (512 bytes each) |
 | `_SP-SETUP` | `( buf -- )` | Copy samples → RE, zero IM, run FFT + power |
-| `_SP-BIN>HZ` | `( bin -- freq-fp16 )` | Convert bin index to Hz: `bin × (rate / NFFT)` |
+| `_SP-BIN>HZ32` | `( bin -- freq-fp32 )` | Convert a bin to Hz without narrowing the integer sample rate through FP16 |
+| `_SP-BIN>HZ` | `( bin -- freq-fp16 )` | Narrow `_SP-BIN>HZ32` for public frequency results |
 | `_SP-FL-ALLOC-PREV` | `( -- )` | Allocate previous-window power array for flux |
 
 | Variable | Type | Purpose |
@@ -297,11 +311,12 @@ variables, analysis words are **not re-entrant**.
 
 ### Overflow Avoidance
 
-The original `bin × rate / NFFT` overflows FP16 when `bin × rate`
-exceeds 65504 (e.g., bin 14 × 8000 = 112000).  Instead, we
-precompute `rate / NFFT` (= 31.25 for 8 kHz / 256), which always
-fits in FP16, then multiply by bin.  Same approach for Hz→bin
-conversion in `PCM-BAND-ENERGY`.
+Frequency axes are computed as `FP32(bin) × (FP32(rate) / 256)` and remain
+wide through centroid and spread accumulation.  `PCM-BAND-ENERGY` handles its
+integer Hz bounds separately: it rejects invalid intervals, intersects them
+with Nyquist, and only then performs the Hz→bin multiplication.  This avoids
+both FP16 saturation at high sample rates and an out-of-range integer band
+turning into wrapped loop bounds.
 
 ---
 

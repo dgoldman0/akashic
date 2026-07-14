@@ -10,7 +10,8 @@ REQUIRE audio/env.f
 ```
 
 `PROVIDED akashic-audio-env` — safe to include multiple times.
-Depends on `akashic-fp16`, `akashic-fp16-ext`, `akashic-audio-pcm-simd`.
+Depends on `akashic-fp16`, `akashic-fp16-ext`, `akashic-fp32`,
+`akashic-audio-pcm-simd`.
 
 ---
 
@@ -34,7 +35,9 @@ Depends on `akashic-fp16`, `akashic-fp16-ext`, `akashic-audio-pcm-simd`.
 | Principle | Detail |
 |---|---|
 | **Millisecond timing** | Attack, decay, and release durations in ms; converted to frames at creation via `ms × rate / 1000`. |
-| **FP16 levels** | Sustain level and all intermediate values are FP16. |
+| **FP16 levels** | Stored levels and public gain values are FP16. |
+| **Wide timing ratios** | Integer frame positions and segment lengths are converted directly to FP32 before division, then narrowed for the FP16 gain calculation. |
+| **Checked construction** | Duration products are checked for cell overflow before allocation, so an invalid long segment cannot strand a partial descriptor. |
 | **Linear segments** | Attack ramps 0→1, decay ramps 1→sustain, release ramps sustain→0.  Exponential curves reserved for future. |
 | **Gate-driven** | `ENV-GATE-ON` starts attack; `ENV-GATE-OFF` starts release from the current level. |
 | **Variable-based scratch** | Internal `VARIABLE`s — not re-entrant. |
@@ -107,6 +110,11 @@ Create an ADSR envelope.
 - **rate** — sample rate in Hz (integer)
 
 All durations are converted to frames (minimum 1 frame).
+Durations must not be negative, `rate` must be positive, and sustain must be
+finite FP16 from `0.0` through `1.0`; invalid contracts abort at creation.
+The `milliseconds × rate` products are checked and all three frame counts are
+derived before descriptor allocation.  Descriptor allocation failure THROWs
+the allocator's nonzero `ior`, so a surrounding `CATCH` can recover.
 
 ```forth
 50 100 FP16-POS-HALF 200 44100 ENV-CREATE CONSTANT my-env
@@ -133,7 +141,7 @@ to release.
 ENV-FREE  ( env -- )
 ```
 
-Release the descriptor back to the heap.
+Release the descriptor back to the heap.  Passing `0` is a no-op.
 
 ---
 
@@ -146,7 +154,8 @@ ENV-GATE-ON  ( env -- )
 ```
 
 Trigger the attack phase.  Sets phase = ATTACK, position = 0.
-Can be called at any time (retrigger from current state).
+Can be called at any time.  The next tick restarts the attack curve from zero;
+the current stored level is not used as a new attack origin.
 
 ### ENV-GATE-OFF
 
@@ -163,7 +172,7 @@ release start point, then starts ramping toward 0.
 ENV-RETRIGGER  ( env -- )
 ```
 
-Alias for `ENV-GATE-ON`.  Useful for fast retrigger effects.
+Alias for `ENV-GATE-ON`.  Useful for fast attack restarts.
 
 ### ENV-RESET
 
@@ -192,6 +201,10 @@ Internally:
 4. Check for phase transitions (attack→decay, decay→sustain, etc.).
 5. Store the new level in the descriptor.
 6. Return level on the stack.
+
+Frame ratios use FP32 integer conversion internally.  In particular, a common
+96 kHz envelope or a long segment does not fail merely because its frame count
+is larger than the finite range of FP16.
 
 Call once per audio frame.  The level is also stored in `E.LEVEL`
 for later introspection via `ENV-LEVEL`.
@@ -231,7 +244,7 @@ ENV-FILL  ( buf env -- )
 Fill a PCM buffer with the envelope curve.  Calls `ENV-TICK` once
 per frame and writes each level via direct `W!` (bypasses
 `PCM-FRAME!` for faster writes).  Useful for pre-rendering an
-envelope curve into a buffer.
+envelope curve into a buffer. The target must satisfy `PCM-FP16-MONO?`.
 
 ### ENV-APPLY
 
@@ -240,6 +253,7 @@ ENV-APPLY  ( buf env -- )
 ```
 
 Multiply each sample in the PCM buffer by the envelope level.
+The target must satisfy `PCM-FP16-MONO?`.
 
 **SIMD fast paths:**
 

@@ -25,7 +25,7 @@
 \   ENV-FREE      ( env -- )               free descriptor
 \   ENV-GATE-ON   ( env -- )               trigger attack
 \   ENV-GATE-OFF  ( env -- )               trigger release
-\   ENV-RETRIGGER ( env -- )               retrigger from current level
+\   ENV-RETRIGGER ( env -- )               restart the attack phase
 \   ENV-RESET     ( env -- )               reset to idle
 \   ENV-TICK      ( env -- level )         advance one frame, return level
 \   ENV-FILL      ( buf env -- )           fill buffer with envelope curve
@@ -33,8 +33,9 @@
 \   ENV-DONE?     ( env -- flag )          true if envelope completed
 \   ENV-LEVEL     ( env -- level )         current output level (FP16)
 
-REQUIRE fp16-ext.f
-REQUIRE audio/pcm-simd.f
+REQUIRE ../math/fp16-ext.f
+REQUIRE ../math/fp32.f
+REQUIRE pcm-simd.f
 
 PROVIDED akashic-audio-env
 
@@ -92,6 +93,17 @@ VARIABLE _ENV-LEN
 VARIABLE _ENV-LVL
 VARIABLE _ENV-T
 VARIABLE _ENV-FPTR    \ cached PCM data pointer (fast path)
+VARIABLE _ENV-MUL-A
+VARIABLE _ENV-MUL-B
+
+: _ENV-SIZE*  ( a b -- product )
+    _ENV-MUL-B ! _ENV-MUL-A !
+    _ENV-MUL-A @ 0< _ENV-MUL-B @ 0< OR
+        ABORT" envelope: duration factors must not be negative"
+    _ENV-MUL-B @ 0= IF 0 EXIT THEN
+    _ENV-MUL-A @ 0x7FFFFFFFFFFFFFFF _ENV-MUL-B @ / >
+        ABORT" envelope: duration multiplication overflow"
+    _ENV-MUL-A @ _ENV-MUL-B @ * ;
 
 \ =====================================================================
 \  Internal: convert milliseconds to frames
@@ -99,7 +111,10 @@ VARIABLE _ENV-FPTR    \ cached PCM data pointer (fast path)
 \  ( ms rate -- frames )
 
 : _ENV-MS>FRAMES  ( ms rate -- frames )
-    * 1000 / ;
+    _ENV-SIZE* 1000 / ;
+
+: _ENV-FP16-FINITE?  ( fp16 -- flag )
+    0x7C00 AND 0x7C00 <> ;
 
 \ =====================================================================
 \  ENV-CREATE — Create ADSR envelope
@@ -114,6 +129,9 @@ VARIABLE _ENV-D
 VARIABLE _ENV-S
 VARIABLE _ENV-R
 VARIABLE _ENV-RATE
+VARIABLE _ENV-AF
+VARIABLE _ENV-DF
+VARIABLE _ENV-RF
 
 : ENV-CREATE  ( a d s r rate -- env )
     _ENV-RATE !                       \ rate (integer)
@@ -122,23 +140,35 @@ VARIABLE _ENV-RATE
     _ENV-D !                          \ decay (ms, integer)
     _ENV-A !                          \ attack (ms, integer)
 
+    _ENV-RATE @ 1 < ABORT" ENV-CREATE: rate must be positive"
+    _ENV-A @ 0< _ENV-D @ 0< OR _ENV-R @ 0< OR
+        ABORT" ENV-CREATE: times must not be negative"
+    _ENV-S @ _ENV-FP16-FINITE? 0=
+        ABORT" ENV-CREATE: sustain must be finite"
+    _ENV-S @ FP16-POS-ZERO FP16-LT
+    _ENV-S @ FP16-POS-ONE FP16-GT OR
+        ABORT" ENV-CREATE: sustain must be between 0.0 and 1.0"
+
+    \ Derive every duration before allocating the descriptor so an overflow
+    \ cannot strand a partially constructed envelope.
+    _ENV-A @ _ENV-RATE @ _ENV-MS>FRAMES
+    DUP 0= IF DROP 1 THEN _ENV-AF !
+    _ENV-D @ _ENV-RATE @ _ENV-MS>FRAMES
+    DUP 0= IF DROP 1 THEN _ENV-DF !
+    _ENV-R @ _ENV-RATE @ _ENV-MS>FRAMES
+    DUP 0= IF DROP 1 THEN _ENV-RF !
+
     ENV-DESC-SIZE ALLOCATE
-    0<> ABORT" ENV-CREATE: alloc failed"
+    DUP IF NIP THROW THEN
+    DROP
     _ENV-TMP !
 
-    _ENV-A @ _ENV-RATE @ _ENV-MS>FRAMES
-    DUP 0= IF DROP 1 THEN            \ minimum 1 frame
-    _ENV-TMP @ E.ATTACK !
-
-    _ENV-D @ _ENV-RATE @ _ENV-MS>FRAMES
-    DUP 0= IF DROP 1 THEN
-    _ENV-TMP @ E.DECAY !
+    _ENV-AF @ _ENV-TMP @ E.ATTACK !
+    _ENV-DF @ _ENV-TMP @ E.DECAY !
 
     _ENV-S @  _ENV-TMP @ E.SUSTAIN !
 
-    _ENV-R @ _ENV-RATE @ _ENV-MS>FRAMES
-    DUP 0= IF DROP 1 THEN
-    _ENV-TMP @ E.RELEASE !
+    _ENV-RF @ _ENV-TMP @ E.RELEASE !
 
     ENV-IDLE           _ENV-TMP @ E.PHASE  !
     0                  _ENV-TMP @ E.POS    !
@@ -167,7 +197,7 @@ VARIABLE _ENV-RATE
 \  ENV-FREE
 \ =====================================================================
 
-: ENV-FREE  ( env -- ) FREE ;
+: ENV-FREE  ( env -- ) ?DUP IF FREE THEN ;
 
 \ =====================================================================
 \  ENV-GATE-ON — Trigger attack phase
@@ -178,7 +208,6 @@ VARIABLE _ENV-RATE
     ENV-ATTACK  _ENV-TMP @ E.PHASE !
     0           _ENV-TMP @ E.POS   !
     ;
-    \ Level starts from current value (allows retriggering from non-zero)
 
 \ =====================================================================
 \  ENV-GATE-OFF — Trigger release phase
@@ -192,11 +221,11 @@ VARIABLE _ENV-RATE
     ;
 
 \ =====================================================================
-\  ENV-RETRIGGER — Retrigger from current level
+\  ENV-RETRIGGER — Restart the attack phase
 \ =====================================================================
 
 : ENV-RETRIGGER  ( env -- )
-    ENV-GATE-ON ;                     \ attack from current level
+    ENV-GATE-ON ;
 
 \ =====================================================================
 \  ENV-RESET — Reset to idle
@@ -228,13 +257,14 @@ VARIABLE _ENV-RATE
 \ =====================================================================
 \  ( start end position length -- value )
 \  value = start + (end - start) × position / length
-\  All FP16 except position and length are integers.
+\  Start/end are FP16; position/length are integer frame counts.
 
 : _ENV-LERP  ( start end pos len -- value )
     _ENV-LEN !  _ENV-POS !
     OVER FP16-SUB                     ( start end-start )
-    _ENV-POS @ INT>FP16 FP16-MUL     ( start (end-start)*pos )
-    _ENV-LEN @ INT>FP16 FP16-DIV     ( start (end-start)*pos/len )
+    _ENV-POS @ INT>FP32
+    _ENV-LEN @ INT>FP32 FP32-DIV FP32>FP16
+    FP16-MUL                          ( start (end-start)*pos/len )
     FP16-ADD ;                        ( start + fraction )
 
 \ =====================================================================
@@ -253,13 +283,12 @@ VARIABLE _ENV-RATE
         ENDOF
 
         ENV-ATTACK OF
-            \ Linear ramp from current level (or 0) to 1.0
+            \ Linear ramp from 0 to 1.0
             \ level = pos / attack_frames
             _ENV-TMP @ E.POS @
             _ENV-TMP @ E.ATTACK @
-            DUP _ENV-POS !
-            >R
-            INT>FP16 R> INT>FP16 FP16-DIV  ( pos/attack = level )
+            INT>FP32 SWAP INT>FP32 SWAP FP32-DIV FP32>FP16
+                                             ( pos/attack = level )
 
             \ If we've reached end of attack, transition to decay
             _ENV-TMP @ E.POS @ 1+
@@ -336,6 +365,8 @@ VARIABLE _ENV-RATE
 : ENV-FILL  ( buf env -- )
     _ENV-TMP !
     _ENV-BUF !
+    _ENV-BUF @ PCM-FP16-MONO? 0=
+        ABORT" ENV-FILL: buffer must be mono FP16 PCM"
     _ENV-BUF @ PCM-DATA _ENV-FPTR !
 
     _ENV-BUF @ PCM-LEN 0 DO
@@ -356,6 +387,9 @@ VARIABLE _ENV-RATE
 : ENV-APPLY  ( buf env -- )
     _ENV-TMP !
     _ENV-BUF !
+
+    _ENV-BUF @ PCM-FP16-MONO? 0=
+        ABORT" ENV-APPLY: buffer must be mono FP16 PCM"
 
     \ SIMD fast path: sustain phase — constant level, no state change
     _ENV-TMP @ E.PHASE @ ENV-SUSTAIN = IF

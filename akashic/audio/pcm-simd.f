@@ -28,8 +28,8 @@
 \   PCM-SIMD-FILL    ( val buf -- )         fill every sample with val
 \   PCM-SIMD-CLEAR   ( buf -- )             zero all samples
 
-REQUIRE math/simd-ext.f
-REQUIRE audio/pcm.f
+REQUIRE ../math/simd-ext.f
+REQUIRE pcm.f
 
 PROVIDED akashic-audio-pcm-simd
 
@@ -48,6 +48,16 @@ VARIABLE _PSIMD-N
 : _PSIMD-SAMPLES  ( buf -- n )
     DUP PCM-LEN SWAP PCM-CHANS * ;
 
+: _PSIMD-REQUIRE-FP16  ( buf -- )
+    PCM-FP16? 0=
+        ABORT" PCM-SIMD: buffer must use 16-bit FP16 storage" ;
+
+: _PSIMD-REQUIRE-PAIR  ( -- )
+    _PSIMD-BUF0 @ _PSIMD-REQUIRE-FP16
+    _PSIMD-BUF1 @ _PSIMD-REQUIRE-FP16
+    _PSIMD-BUF0 @ PCM-CHANS _PSIMD-BUF1 @ PCM-CHANS <>
+        ABORT" PCM-SIMD: buffer channel counts must match" ;
+
 \ =====================================================================
 \  PCM-SIMD-ADD — elementwise add: dst[i] += src[i]
 \ =====================================================================
@@ -56,6 +66,7 @@ VARIABLE _PSIMD-N
 
 : PCM-SIMD-ADD  ( src dst -- )
     _PSIMD-BUF1 !  _PSIMD-BUF0 !
+    _PSIMD-REQUIRE-PAIR
     _PSIMD-BUF0 @ _PSIMD-SAMPLES
     _PSIMD-BUF1 @ _PSIMD-SAMPLES MIN _PSIMD-N !
     _PSIMD-N @ 0= IF EXIT THEN
@@ -73,6 +84,7 @@ VARIABLE _PSIMD-N
 
 : PCM-SIMD-SCALE  ( scalar buf -- )
     _PSIMD-BUF0 !
+    _PSIMD-BUF0 @ _PSIMD-REQUIRE-FP16
     _PSIMD-BUF0 @ _PSIMD-SAMPLES DUP 0= IF 2DROP EXIT THEN
     _PSIMD-N !
     _PSIMD-BUF0 @ PCM-DATA
@@ -89,6 +101,7 @@ VARIABLE _PSIMD-N
 
 : PCM-SIMD-MIX  ( gain src dst -- )
     _PSIMD-BUF1 !  _PSIMD-BUF0 !
+    _PSIMD-REQUIRE-PAIR
     _PSIMD-BUF0 @ _PSIMD-SAMPLES
     _PSIMD-BUF1 @ _PSIMD-SAMPLES MIN _PSIMD-N !
     _PSIMD-N @ 0= IF DROP EXIT THEN
@@ -106,6 +119,7 @@ VARIABLE _PSIMD-N
 
 : PCM-SIMD-MUL  ( src dst -- )
     _PSIMD-BUF1 !  _PSIMD-BUF0 !
+    _PSIMD-REQUIRE-PAIR
     _PSIMD-BUF0 @ _PSIMD-SAMPLES
     _PSIMD-BUF1 @ _PSIMD-SAMPLES MIN _PSIMD-N !
     _PSIMD-N @ 0= IF EXIT THEN
@@ -120,6 +134,7 @@ VARIABLE _PSIMD-N
 \ =====================================================================
 
 : PCM-SIMD-FILL  ( val buf -- )
+    DUP _PSIMD-REQUIRE-FP16
     DUP _PSIMD-SAMPLES DUP 0= IF 2DROP DROP EXIT THEN
     >R PCM-DATA SWAP R>
     SIMD-FILL-N ;
@@ -129,6 +144,7 @@ VARIABLE _PSIMD-N
 \ =====================================================================
 
 : PCM-SIMD-CLEAR  ( buf -- )
+    DUP _PSIMD-REQUIRE-FP16
     DUP PCM-DATA SWAP _PSIMD-SAMPLES 2 * 0 FILL ;
 
 \ ── guard ────────────────────────────────────────────────

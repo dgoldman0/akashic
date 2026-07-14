@@ -10,7 +10,7 @@ REQUIRE audio/pcm.f
 ```
 
 `PROVIDED akashic-audio-pcm` — safe to include multiple times.
-No dependencies (standalone module).
+No unconditional dependencies (guarded builds load the shared guard module).
 
 ---
 
@@ -39,7 +39,7 @@ No dependencies (standalone module).
 |---|---|
 | **Interleaved storage** | Samples are interleaved: `[L0 R0] [L1 R1] ...`. One "frame" = one sample per channel. |
 | **Multi-format** | 8-bit unsigned, 16-bit signed, 32-bit signed.  Sample rates 8000–96000 Hz. |
-| **Heap + XMEM** | Descriptor (80 bytes) always on heap. Sample data uses XMEM when available, falls back to heap. |
+| **System allocation** | Descriptor and sample data use `ALLOCATE`; KDOS may route suitable allocations through XMEM. Allocation failure is reported before a partial descriptor escapes. |
 | **Ownership model** | `PCM-ALLOC` owns its data (freed on `PCM-FREE`). `PCM-CREATE-FROM` and `PCM-SLICE` wrap external data (no free). |
 | **Variable-based state** | Internal scratch uses `VARIABLE`s — not re-entrant. |
 | **Prefix convention** | Public: `PCM-`. Internal: `_PCM-`. Field accessors: `P.xxx`. |
@@ -58,7 +58,7 @@ Offset  Size   Field
 +16     8      rate       — sample rate in Hz
 +24     8      bits       — bits per sample (8, 16, or 32)
 +32     8      channels   — channel count (1 = mono, 2 = stereo, ...)
-+40     8      flags      — bit 0: owns buffer, bit 1: XMEM buffer
++40     8      flags      — bit 0: owns buffer; bit 1 is retained for legacy direct-XMEM descriptors
 +48     8      offset     — read/write cursor (frame index)
 +56     8      peak       — peak absolute sample value seen
 +64     8      user       — application-defined payload
@@ -96,8 +96,14 @@ PCM-ALLOC  ( frames rate bits chans -- buf )
 ```
 
 Allocate a new PCM buffer.  Sample data is zeroed (silence).
-Uses XMEM for the data area when available, heap otherwise.
-ABORTs if bits is not 8, 16, or 32, or if allocation fails.
+Uses the KDOS system allocator for both objects. Invalid dimensions or bit
+depth ABORT before allocation.  Allocator failures THROW the allocator's
+nonzero `ior`, allowing a surrounding `CATCH` to recover; if sample-data
+allocation fails, the descriptor is released before that THROW. Frame,
+sample-width, and channel products are checked before multiplication, so a
+wrapped size cannot underallocate. The final data size also reserves KDOS's
+worst-case alignment and XMEM-prefix overhead before calling `ALLOCATE`, so
+allocator rounding cannot wrap a near-cell-limit request into a tiny block.
 
 ```forth
 44100 44100 16 2 PCM-ALLOC CONSTANT one-sec-stereo
@@ -111,7 +117,9 @@ PCM-ALLOC-MS  ( ms rate bits chans -- buf )
 ```
 
 Allocate by duration in milliseconds.  Computes the frame count
-as `ms × rate / 1000`, then delegates to `PCM-ALLOC`.
+as `ms × rate / 1000`, then delegates to `PCM-ALLOC`. Duration and rate
+must be positive, their product is checked for cell overflow, and a duration
+shorter than one frame is rejected.
 
 ```forth
 500 44100 16 2 PCM-ALLOC-MS CONSTANT half-sec
@@ -129,6 +137,11 @@ does **not** own the data — `PCM-FREE` will not free it.  Use for
 hardware DMA buffers, shared memory regions, or aliasing into
 larger buffers.
 
+The address must be non-zero, frames must be non-negative, rate and channels
+must be positive, and bits must be 8, 16, or 32.  The described byte extent is
+checked for cell overflow even though the memory is externally owned.  A
+descriptor allocation failure THROWs its allocator `ior`.
+
 ```forth
 0x80000000 2048 8000 16 1 PCM-CREATE-FROM CONSTANT dma-buf
 ```
@@ -139,9 +152,9 @@ larger buffers.
 PCM-FREE  ( buf -- )
 ```
 
-Free the descriptor, and the sample data if owned.  XMEM data is
-released via `XMEM-FREE-BLOCK`; heap data via `FREE`.  Safe to
-call on non-owning buffers (only frees the descriptor).
+Free the descriptor, and the sample data if owned. Current allocations are
+released through the system allocator; the legacy direct-XMEM flag remains
+supported. Safe to call on `0` or on a non-owning buffer.
 
 ```forth
 one-sec-stereo PCM-FREE
@@ -161,9 +174,17 @@ PCM-BITS    ( buf -- n )         \ bits per sample (8, 16, 32)
 PCM-CHANS   ( buf -- n )        \ channel count
 PCM-FLAGS   ( buf -- flags )     \ flag word
 PCM-OFFSET  ( buf -- n )        \ cursor position (frame index)
-PCM-PEAK    ( buf -- n )        \ peak absolute value seen
+PCM-PEAK    ( buf -- n )        \ stored peak metadata (compatibility name)
+PCM-STORED-PEAK ( buf -- n )    \ explicit stored peak metadata accessor
 PCM-USER    ( buf -- x )        \ application payload
+PCM-FP16?       ( buf -- flag ) \ 16-bit FP16 storage convention
+PCM-FP16-MONO?  ( buf -- flag ) \ mono FP16 storage convention
 ```
+
+The descriptor has no separate sample-encoding field. `PCM-FP16?` therefore
+checks the Akashic structural convention (`bits = 16`), not every payload bit;
+`PCM-FP16-MONO?` additionally requires one channel. Synthesis and analysis
+entry points use these predicates to reject incompatible buffers.
 
 ---
 
@@ -176,6 +197,7 @@ PCM-FRAME-BYTES  ( buf -- n )
 ```
 
 Bytes per frame: `(bits / 8) × channels`.
+The multiplication is checked and ABORTs rather than returning a wrapped size.
 
 ```forth
 \ 16-bit stereo → 4 bytes per frame
@@ -190,6 +212,7 @@ PCM-DATA-BYTES  ( buf -- n )
 ```
 
 Total sample data size in bytes: `frames × frame-bytes`.
+The multiplication is checked against the positive cell range.
 
 ### PCM-DURATION-MS
 
@@ -308,7 +331,8 @@ PCM-SLICE  ( start end buf -- buf' )
 Create a sub-buffer view into the original data.  The returned
 descriptor does **not** own the data — it shares the parent's
 sample memory.  Start and end are frame indices, clamped to valid
-range.
+range.  A negative start clamps to frame 0; an end before the clamped start
+produces an empty slice at that start.
 
 Writing through the slice modifies the original buffer's samples.
 
@@ -409,6 +433,11 @@ stereo-buf PCM-TO-MONO CONSTANT mono-mix
 
 ## Analysis & Normalization
 
+The operations in this base module interpret slots as integer PCM. They are
+not FP16 amplitude operations even when a synthesis buffer also uses 16-bit
+storage. Use `audio/analysis/metrics.f` and `PCM-FP16-PEAK` for synthesized
+FP16 audio; use `PCM-STORED-PEAK` to read the metadata field explicitly.
+
 ### PCM-SCAN-PEAK
 
 ```forth
@@ -422,7 +451,7 @@ For 16/32-bit samples, sign extension is applied.
 
 ```forth
 my-buf PCM-SCAN-PEAK .     \ → 30000
-my-buf PCM-PEAK .           \ → 30000 (also stored)
+my-buf PCM-STORED-PEAK .    \ → 30000 (also stored)
 ```
 
 ### PCM-NORMALIZE
@@ -476,8 +505,11 @@ read/write operations.
 | `PCM-CHANS` | `( buf -- n )` | Channel count |
 | `PCM-FLAGS` | `( buf -- flags )` | Flags |
 | `PCM-OFFSET` | `( buf -- n )` | Cursor position |
-| `PCM-PEAK` | `( buf -- n )` | Peak value |
+| `PCM-PEAK` | `( buf -- n )` | Stored integer-PCM peak metadata (compatibility name) |
+| `PCM-STORED-PEAK` | `( buf -- n )` | Explicit stored peak metadata |
 | `PCM-USER` | `( buf -- x )` | User payload |
+| `PCM-FP16?` | `( buf -- flag )` | Uses the 16-bit FP16 storage convention |
+| `PCM-FP16-MONO?` | `( buf -- flag )` | Uses the mono FP16 storage convention |
 | `PCM-FRAME-BYTES` | `( buf -- n )` | Bytes per frame |
 | `PCM-DATA-BYTES` | `( buf -- n )` | Total data bytes |
 | `PCM-DURATION-MS` | `( buf -- ms )` | Duration in ms |
@@ -504,7 +536,7 @@ read/write operations.
 |---|---|---|
 | `PCM-DESC-SIZE` | 80 | Bytes per PCM descriptor |
 | `_PCM-F-OWNS-BUF` | 1 | Buffer owns its sample data |
-| `_PCM-F-XMEM-BUF` | 2 | Sample data is in XMEM |
+| `_PCM-F-XMEM-BUF` | 2 | Legacy descriptor owns a direct-XMEM data block |
 
 ---
 

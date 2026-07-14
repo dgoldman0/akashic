@@ -1,8 +1,10 @@
-# akashic-audio-osc — Band-Limited Oscillators for KDOS / Megapad-64
+# akashic-audio-osc — FP16 Oscillators for KDOS / Megapad-64
 
-Five anti-alias-free waveform generators: sine, square, saw, triangle,
-and pulse.  All arithmetic is FP16.  Output fills a `pcm.f` buffer
-one frame at a time.
+Five waveform generators: sine, square, saw, triangle, and pulse.  Sine uses
+a wavetable; the other shapes are direct mathematical waveforms and are not
+band-limited, so they can alias at higher frequencies.  Stored phase and
+output samples are FP16, with FP32 used where integer sample-rate range
+requires it.  Output fills a `pcm.f` buffer one frame at a time.
 
 ```forth
 REQUIRE audio/osc.f
@@ -10,7 +12,7 @@ REQUIRE audio/osc.f
 
 `PROVIDED akashic-audio-osc` — safe to include multiple times.
 Depends on `akashic-audio-pcm`, `akashic-audio-wavetable`,
-`akashic-fp16`, `akashic-fp16-ext`, `akashic-trig`.
+`akashic-fp16`, `akashic-fp16-ext`, `akashic-fp32`, `akashic-trig`.
 
 ---
 
@@ -32,7 +34,7 @@ Depends on `akashic-audio-pcm`, `akashic-audio-wavetable`,
 
 | Principle | Detail |
 |---|---|
-| **FP16 phase accumulator** | Phase is a FP16 value in `[0.0, 1.0)`.  Advances by `freq / rate` each sample. |
+| **FP16 phase accumulator** | Phase is a normalized FP16 value in `[0.0, 1.0)`.  The `freq / rate` increment is derived in FP32, so integer rates above FP16's range remain usable. |
 | **Wavetable fast path** | Sine oscillators automatically use `WT-SIN-TABLE` for lookup instead of `TRIG-SIN`, cutting per-sample cost by ~2×. |
 | **Three-tier dispatch** | `OSC-FILL` / `OSC-ADD` try: (1) block-mode integer phase via `WT-BLOCK-FILL`, (2) scalar wavetable via `WT-LERP`, (3) generic `_OSC-GEN-SHAPE`. |
 | **Shape dispatch** | `CASE/OF/ENDOF/ENDCASE` switches on shape constant (used for non-wavetable shapes). |
@@ -53,7 +55,7 @@ Offset  Size  Field
 +8      8     phase   — current phase [0.0, 1.0) (FP16)
 +16     8     rate    — sample rate in Hz (integer)
 +24     8     shape   — waveform index (0–4)
-+32     8     duty    — duty cycle for pulse/square (FP16, default 0.5)
++32     8     duty    — duty cycle for pulse (FP16, default 0.5)
 +40     8     table   — wavetable pointer (auto-set for sine, 0 for others)
 ```
 
@@ -77,6 +79,11 @@ Phase starts at 0.0, duty at 0.5.  If the shape is `OSC-SINE`,
 the `table` field is automatically set to `WT-SIN-TABLE` for
 wavetable-accelerated rendering.
 
+`rate` must be positive, `shape` must be one of the five public constants,
+and `freq` must be finite, non-negative, and no greater than `rate / 2`.
+Invalid contracts abort before descriptor allocation.  Allocation failure
+THROWs the allocator's nonzero `ior`, so a surrounding `CATCH` can recover.
+
 ```forth
 440 INT>FP16 OSC-SINE 44100 OSC-CREATE CONSTANT my-sine
 ```
@@ -87,7 +94,7 @@ wavetable-accelerated rendering.
 OSC-FREE  ( osc -- )
 ```
 
-Release the descriptor back to the heap.
+Release the descriptor back to the heap.  Passing `0` is a no-op.
 
 ---
 
@@ -120,6 +127,10 @@ all other shapes → 0 (disabling the wavetable fast path).
 `WT-ALLOC`) to any oscillator, enabling wavetable-accelerated
 rendering for arbitrary waveforms.
 
+`OSC-FREQ!` enforces the same finite, non-negative, at-or-below-Nyquist
+contract as creation.  `OSC-DUTY!` accepts only finite FP16 values in the
+closed interval `[0.0, 1.0]`.
+
 ---
 
 ## Single-Sample Generation
@@ -132,6 +143,8 @@ OSC-SAMPLE  ( osc -- value )
 
 Generate one FP16 sample at the current phase, then advance the
 phase accumulator by `freq / rate`.  Output is in `[−1.0, +1.0]`.
+The integer rate is widened directly to FP32 for the division (including
+96 kHz rates), and phase is normalized before lookup and after advancement.
 
 If a wavetable is assigned (non-zero `table` field), uses `WT-LERP`
 for the lookup.  Otherwise falls back to `_OSC-GEN-SHAPE`.
@@ -143,8 +156,7 @@ my-sine OSC-SAMPLE .        \ prints FP16 bit pattern
 **Phase advance formula:**
 
 ```
-phase' = phase + freq / rate
-if phase' ≥ 1.0 then phase' -= 1.0
+phase' = (phase + freq / rate) mod 1.0
 ```
 
 ---
@@ -159,14 +171,17 @@ OSC-FILL  ( buf osc -- )
 
 Fill every frame of the PCM buffer with consecutive oscillator
 samples.  The oscillator phase advances through the buffer.
+The buffer must satisfy `PCM-FP16-MONO?`; incompatible channel or storage
+layouts abort instead of being partially overwritten.
 
 **Three-tier dispatch** (when a wavetable is assigned):
 
 1. **Block mode** — `WT-BLOCK-FILL` with integer phase accumulation.
-   ~40 cycles/sample.  Used when `WT-BLOCK-INC` returns a non-zero
-   increment (frequencies ≥ 1 Hz).
+   ~40 cycles/sample. `WT-BLOCK-INC` computes through FP32, so fractional-Hz
+   frequencies are retained rather than truncated to integers.
 2. **Scalar wavetable** — per-sample `WT-LERP` with direct `W!`.
-   Used for sub-1 Hz frequencies.
+   Used only when a frequency is too small for the fixed-point block
+   increment to represent.
 3. **Generic** — per-sample `_OSC-GEN-SHAPE` via `PCM-FRAME!`.
    Used when no wavetable is assigned (non-sine shapes).
 
@@ -183,10 +198,12 @@ OSC-ADD  ( buf osc -- )
 
 Same as `OSC-FILL` but *adds* each oscillator sample to the
 existing buffer content.  Use for additive synthesis.
+The buffer must satisfy `PCM-FP16-MONO?`.
 
 **Three-tier dispatch** (same as `OSC-FILL`):
 
-1. **Block mode** — `WT-BLOCK-ADD` (fill scratch + `SIMD-ADD-N`).
+1. **Block mode** — `WT-BLOCK-ADD` (scratch-sized chunk fill +
+   `SIMD-ADD-N`; long buffers are processed without a fixed length limit).
 2. **Scalar wavetable** — per-sample `WT-LERP` + `FP16-ADD` + `W!`.
 3. **Generic** — per-sample `OSC-SAMPLE` + `PCM-FRAME@` + `FP16-ADD`.
 
@@ -205,7 +222,7 @@ wav osc-harmonic3   OSC-ADD      \ add 3rd harmonic
 | Constant      | Value | Description |
 |---------------|-------|-------------|
 | `OSC-SINE`    | 0     | Smooth sinusoid via wavetable (`WT-LERP` / `WT-BLOCK-FILL`) |
-| `OSC-SQUARE`  | 1     | Bipolar square (±1.0), threshold at `duty` |
+| `OSC-SQUARE`  | 1     | Bipolar square (±1.0), fixed 50% threshold |
 | `OSC-SAW`     | 2     | Rising sawtooth: `2 × phase − 1` |
 | `OSC-TRI`     | 3     | Triangle: `4 × |phase − 0.5| − 1` |
 | `OSC-PULSE`   | 4     | Unipolar pulse: `+1.0` while `phase < duty`, else `−1.0` |

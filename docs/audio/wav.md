@@ -9,7 +9,7 @@ REQUIRE audio/wav.f
 ```
 
 `PROVIDED akashic-audio-wav`
-Dependencies: `fp16-ext.f`, `audio/pcm.f`
+Dependencies: `fp16-ext.f`, `audio/pcm.f`, `audio/pcm-fp16.f`
 
 ---
 
@@ -32,7 +32,7 @@ Dependencies: `fp16-ext.f`, `audio/pcm.f`
 | Principle | Detail |
 |---|---|
 | **Cursor-based I/O** | Follows the `bmp.f` pattern: `_WAV-BUF`/`_WAV-POS` cursor with `_WAV-B!`/`_WAV-W!`/`_WAV-D!` writers. |
-| **FP16 ↔ PCM** | Internal samples are always FP16 [-1, +1].  WAV encoding converts to the target bit depth; decoding reverses. |
+| **FP16 ↔ PCM16** | Encoding accepts the Akashic 16-bit-storage FP16 convention and emits signed 16-bit WAV PCM. Decoding accepts integer PCM8/16/32 and emits FP16 storage. |
 | **In-memory** | No file I/O — `WAV-ENCODE`/`WAV-DECODE` work on byte buffers.  Pair with `FWRITE`/`FREAD` if needed. |
 | **Variable-based state** | Scratch via `VARIABLE`s — not re-entrant. |
 | **Prefix convention** | Public: `WAV-`.  Internal: `_WAV-`. |
@@ -48,6 +48,10 @@ WAV-FILE-SIZE  ( buf -- bytes )
 ```
 
 Compute total WAV output size for a PCM buffer (44-byte header + data).
+The source must satisfy `PCM-FP16?`; output data is always two bytes per
+sample regardless of any external integer-PCM convention. This performs the
+same checked field derivation as `WAV-ENCODE`: channels/block alignment must
+fit u16, and rate, byte rate, data size, and RIFF payload must fit u32.
 
 ### WAV-ENCODE
 
@@ -58,9 +62,14 @@ WAV-ENCODE  ( buf out-addr max-bytes -- len | 0 )
 Encode a PCM buffer into WAV format at `out-addr`.  Returns byte count
 written, or 0 if `max-bytes` is too small.
 
-- Reads PCM properties (rate, bits, channels, length) from `buf`.
+- Requires `PCM-FP16?` and at least one sample; invalid source contracts abort.
+- Reads rate, channels, and length from `buf`; output depth is fixed at 16 bits.
+- Validates every multiplication and WAV field width before writing any byte.
 - Writes 44-byte RIFF/WAVE/fmt/data header.
-- Converts each FP16 sample to the target bit depth and writes it.
+- Converts each FP16 sample with canonical `PCM-FP16>S16` policy and writes it.
+
+`WAV-ENCODE-PCM16` has the same stack effect and behavior. It is provided as
+an explicit boundary name when fixed PCM16 output matters to the caller.
 
 ### WAV-DECODE
 
@@ -68,10 +77,12 @@ written, or 0 if `max-bytes` is too small.
 WAV-DECODE  ( in-addr in-len -- pcm-buf | 0 )
 ```
 
-Decode WAV bytes into a new FP16 PCM buffer.  Returns 0 on error
-(bad magic, unsupported format).
+Decode WAV bytes into a new FP16 PCM buffer. Returns 0 on malformed input or
+an unsupported layout. If output allocation fails, the allocator's nonzero
+`ior` is propagated with catchable `THROW`.
 
-- Validates RIFF/WAVE/fmt/data header structure.
+- Validates the canonical 44-byte RIFF/WAVE/fmt/data layout, redundant byte
+  rate/block-align fields, declared sizes, frame alignment, and input bounds.
 - Allocates a PCM buffer with the decoded rate, channels, and frame count.
 - Output is always 16-bit FP16, regardless of source depth.
 
@@ -81,7 +92,9 @@ Decode WAV bytes into a new FP16 PCM buffer.  Returns 0 on error
 WAV-INFO  ( in-addr in-len -- rate bits chans frames | 0 )
 ```
 
-Read header fields without loading sample data.  Returns 0 on error.
+Read header fields without loading sample data. Returns 0 on error. This is a
+deliberately bounded canonical-layout parser, not a general RIFF chunk walker;
+extended `fmt ` chunks and pre-data metadata chunks are rejected.
 
 ---
 
@@ -126,18 +139,16 @@ PCM buffer.
 
 | Depth | Formula | Range |
 |---|---|---|
-| 8-bit | `sample × 127 + 128` (unsigned, center 128) | 0–255 |
-| 16-bit | `sample × 32767` (signed) | −32768–32767 |
-| 32-bit | `(sample × 32767) << 16` (signed, 16-bit shifted) | full 32-bit |
+| 16-bit | Canonical `PCM-FP16>S16`: exact interior scale 32768, signed clamp, `+1 → 32767`, `-1 → -32768` | −32768–32767 |
 
-Signed clamping uses `<` / `>` (not `MAX`/`MIN`, which are unsigned
-in this Forth).
+NaN maps to silence; infinities and finite out-of-range values saturate.
+Signed clamping uses `<` / `>` because KDOS `MAX`/`MIN` are unsigned.
 
 ### Decode (raw → FP16)
 
 | Depth | Formula |
 |---|---|
-| 8-bit | `(u8 − 128) / 127` |
+| 8-bit | Below center: `(u8 − 128) / 128`; at/above center: `(u8 − 128) / 127`. Thus 0, 128, 255 map exactly to −1, 0, +1. |
 | 16-bit | `(s16 / 2) / 16384` — halved first to keep FP16 exponents in safe range |
 | 32-bit | `(s32 >> 16) / 2 / 16384` |
 
@@ -175,6 +186,7 @@ in this Forth).
 WAV-HDR-SIZE   ( -- 44 )
 WAV-FILE-SIZE  ( buf -- bytes )
 WAV-ENCODE     ( buf out-addr max-bytes -- len | 0 )
+WAV-ENCODE-PCM16 ( buf out-addr max-bytes -- len | 0 )
 WAV-DECODE     ( in-addr in-len -- pcm-buf | 0 )
 WAV-INFO       ( in-addr in-len -- rate bits chans frames | 0 )
 ```
@@ -187,13 +199,21 @@ WAV-INFO       ( in-addr in-len -- rate bits chans frames | 0 )
 
 ```forth
 : SAVE-WAV  ( pcm-buf -- )
-    DUP WAV-FILE-SIZE              \ compute size
-    DUP ALLOCATE DROP              \ alloc output buffer
-    SWAP 2DUP ROT                  \ ( buf out fsiz )
-    WAV-ENCODE                     \ returns len or 0
-    DUP 0= IF ." encode failed" CR 2DROP EXIT THEN
-    \ … write (out-addr, len) to file …
-    DROP FREE ;
+    DUP WAV-FILE-SIZE              ( pcm-buf size )
+    DUP ALLOCATE IF                ( pcm-buf size out-addr )
+        ." allocation failed" CR
+        2DROP DROP EXIT
+    THEN
+    DUP >R SWAP                    ( pcm-buf out-addr size ) ( R: out-addr )
+    WAV-ENCODE                     ( len )
+    DUP 0= IF
+        DROP ." encode failed" CR
+        R> FREE EXIT
+    THEN
+    R@ SWAP                        ( out-addr len ) ( R: out-addr )
+    \ … replace this 2DROP with a writer that consumes (out-addr, len) …
+    2DROP
+    R> FREE ;
 ```
 
 ### Decode WAV bytes

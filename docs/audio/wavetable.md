@@ -167,11 +167,15 @@ Compute the integer phase increment for a given frequency and
 sample rate:
 
 $$
-\text{inc} = \lfloor \text{freq} \rfloor \times 134217728 \div \text{rate}
+\text{inc} = \left\lfloor
+\text{FP32}(\text{freq}) \times 134217728 \div \text{rate}
+\right\rfloor
 $$
 
-Returns 0 if `freq < 1 Hz` (integer truncation), signalling that
-the caller should fall back to the scalar FP16 path.
+The FP16 frequency is widened before multiplication, so fractional-Hz values
+are retained. A return value of 0 means only that the fixed-point increment
+cannot represent that very small frequency; callers may then use a scalar
+path.
 
 ### WT-BLOCK-FILL
 

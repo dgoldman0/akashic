@@ -1,0 +1,34 @@
+<uidl arrange=stack>
+<menubar id=mbar>
+<menu label=File>
+<item text=Save_WAV do=save key=Ctrl+S/>
+<item text=Reveal_Saved_Output do=reveal-output/>
+<separator/>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+<menu label=Signal>
+<item text=Edit_Selected_Value do=edit key=F2/>
+<item text=Previous_Waveform do=previous-shape/>
+<item text=Next_Waveform do=next-shape/>
+<separator/>
+<item text=Reset_Defaults do=reset/>
+</menu>
+<menu label=Render>
+<item text=Render_Signal do=render key=F5/>
+<item text=Play_Current_Render do=play/>
+</menu>
+<menu label=Help>
+<item text=About_Sound_Lab do=about/>
+</menu>
+</menubar>
+<region id=soundlab-body style=color:#eeeeee;background-color:#121212/>
+<status id=sbar style=color:white;background-color:#005f5f>
+<label id=sbar-signal text=Sound_Lab/>
+<label id=sbar-state text=Starting/>
+<label id=sbar-playback text=Audio_starting/>
+</status>
+<action do=save key=Ctrl+S/>
+<action do=render key=F5/>
+<action do=edit key=F2/>
+<action do=quit key=Ctrl+Q/>
+</uidl>

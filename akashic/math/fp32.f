@@ -586,7 +586,9 @@ VARIABLE _FD-Q
     THEN THEN
     \ Check for mantissa overflow after rounding
     DUP 0x400 AND IF                    \ bit 10 set → overflow
-        1 RSHIFT
+        \ The carry belongs entirely in the exponent.  Retaining bit 9
+        \ here would turn a rounded power-of-two into 1.5 times that value.
+        DROP 0
         SWAP 1+ SWAP                    \ exp5++
     THEN
     0x3FF AND                           ( exp5 frac10 )

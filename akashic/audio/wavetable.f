@@ -33,8 +33,8 @@
 \   WT-SIZE       ( -- 2048 )
 \   WT-MASK       ( -- 2047 )
 
-REQUIRE fp16-ext.f
-REQUIRE trig.f
+REQUIRE ../math/fp16-ext.f
+REQUIRE ../math/trig.f
 REQUIRE ../math/simd-ext.f
 
 PROVIDED akashic-audio-wavetable
@@ -158,15 +158,15 @@ VARIABLE _WT-BTBL   \ block table base
 
 \ WT-BLOCK-INC — compute integer phase increment
 \  ( freq rate -- inc )
-\  inc = FP16>INT(freq) * _WT-SCALE / rate
-\  Falls back to FP16 math for sub-1Hz (returns 0 if freq < 1Hz integer)
+\  inc = freq * _WT-SCALE / rate
+\  The FP32 intermediate preserves fractional-Hz input and sub-1Hz rates.
 
 : WT-BLOCK-INC  ( freq rate -- inc )
-    SWAP FP16>INT              ( rate freq_int )
-    DUP 0= IF                 \ sub-1Hz → return 0 as signal
-        2DROP 0 EXIT
-    THEN
-    _WT-SCALE * SWAP / ;      ( inc )
+    >R
+    FP16>FP32
+    _WT-SCALE INT>FP32 FP32-MUL
+    R> INT>FP32 FP32-DIV
+    FP32>INT ;
 
 \ WT-PH>INT — convert FP16 phase [0.0, 1.0) to integer phase
 \  ( fp16-phase -- int-phase )
@@ -224,24 +224,45 @@ VARIABLE _WT-BA-DST
 VARIABLE _WT-BA-N
 VARIABLE _WT-BA-TBL
 VARIABLE _WT-BA-INC
+VARIABLE _WT-BA-PH
+VARIABLE _WT-BA-LEFT
+VARIABLE _WT-BA-OFF
+VARIABLE _WT-BA-CHUNK
 
 : WT-BLOCK-ADD  ( phase inc n tbl dst -- phase' )
     _WT-BA-DST !               \ save dst
     _WT-BA-TBL !               \ save tbl
     _WT-BA-N !                 \ save n
     _WT-BA-INC !               \ save inc.       S: phase
-    \ Fill scratch with wavetable samples
-    _WT-BA-INC @
-    _WT-BA-N @
-    _WT-BA-TBL @
-    _WT-SCRATCH
-    WT-BLOCK-FILL              \ ( phase inc n tbl dst -- phase' )
-    \ SIMD add: dst[i] = scratch[i] + dst[i]  (result in dst)
-    _WT-SCRATCH
-    _WT-BA-DST @
-    DUP                        \ dst is both src1 and output
-    _WT-BA-N @
-    SIMD-ADD-N ;               \ phase' remains on stack
+    _WT-BA-N @ 0< ABORT" WT-BLOCK-ADD: sample count must not be negative"
+    _WT-BA-PH !
+    _WT-BA-N @ _WT-BA-LEFT !
+    0 _WT-BA-OFF !
+
+    \ Process arbitrarily long buffers in scratch-sized chunks.  Keeping
+    \ the returned integer phase between chunks preserves exact continuity.
+    BEGIN _WT-BA-LEFT @ 0> WHILE
+        _WT-BA-LEFT @ _WT-SCRATCH-SIZE MIN _WT-BA-CHUNK !
+
+        _WT-BA-PH @
+        _WT-BA-INC @
+        _WT-BA-CHUNK @
+        _WT-BA-TBL @
+        _WT-SCRATCH
+        WT-BLOCK-FILL _WT-BA-PH !
+
+        \ dst[i] = scratch[i] + dst[i], in place at the current offset.
+        _WT-SCRATCH
+        _WT-BA-DST @ _WT-BA-OFF @ 2* +
+        DUP
+        _WT-BA-CHUNK @
+        SIMD-ADD-N
+
+        _WT-BA-CHUNK @ NEGATE _WT-BA-LEFT +!
+        _WT-BA-CHUNK @ _WT-BA-OFF +!
+    REPEAT
+
+    _WT-BA-PH @ ;
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]

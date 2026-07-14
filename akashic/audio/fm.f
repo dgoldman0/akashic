@@ -460,7 +460,7 @@ VARIABLE _FM-EPHA     \ effective phase
 \
 \  Falls back to scalar if:
 \   - feedback ≠ 0 (mod[i] depends on mod[i-1])
-\   - WT-BLOCK-INC returns 0 (sub-1Hz frequency)
+\   - WT-BLOCK-INC returns 0 (fixed-point increment quantizes to zero)
 
 VARIABLE _FM-BK-OP0      \ modulator op address
 VARIABLE _FM-BK-OP1      \ carrier op address
@@ -489,7 +489,7 @@ VARIABLE _FM-BK-DST      \ output PCM data pointer
     _FM-BK-OP0 @ FO.FREQ @
     _FM-TMP @ FM.RATE @
     WT-BLOCK-INC DUP 0= IF
-        DROP 0 EXIT   \ sub-1Hz → scalar
+        DROP 0 EXIT   \ fixed-point increment unavailable → scalar
     THEN
     _FM-INC !   \ modulator integer inc
 

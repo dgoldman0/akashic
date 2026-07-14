@@ -12,7 +12,7 @@ REQUIRE audio/analysis/envelope.f
 
 Dependencies: `fp16.f`, `fp16-ext.f`, `fp32.f`, `audio/pcm.f`.
 
-*No FFT dependency* — purely time-domain, using a sliding RMS window.
+*No FFT dependency* — purely time-domain, using contiguous RMS windows.
 
 ---
 
@@ -37,7 +37,8 @@ Dependencies: `fp16.f`, `fp16-ext.f`, `fp32.f`, `audio/pcm.f`.
 
 | Principle | Detail |
 |---|---|
-| **Sliding RMS window** | 64-sample window (8 ms at 8 kHz) — smooths per-sample noise while tracking dynamics. |
+| **Contiguous RMS windows** | Non-overlapping 64-frame windows (8 ms at 8 kHz), including a final partial window — smooth per-sample noise while tracking dynamics. |
+| **Explicit sample contract** | Every entry point requires mono FP16 PCM and a positive sample rate. |
 | **FP32 accumulation** | Windowed RMS uses FP32 sum of squares to avoid FP16 cancellation. |
 | **Time-domain only** | No FFT required — lighter weight than spectral analysis. |
 | **Non-destructive** | All words are read-only; no buffer modification. |
@@ -55,11 +56,11 @@ Dependencies: `fp16.f`, `fp16-ext.f`, `fp32.f`, `audio/pcm.f`.
 | `ENV-PERCUSSIVE` | 0 | Fast attack, no sustain | Peak in first 10% AND sustain < 0.7 |
 | `ENV-SUSTAINED` | 1 | Slow attack or flat body | Sustain level ≥ 0.3 |
 | `ENV-SWELL` | 2 | Energy builds up over time | Peak in last 33% of buffer |
-| `ENV-SILENCE` | 3 | Effectively silent | Peak RMS < 0.015 |
+| `ENV-SILENCE` | 3 | Effectively silent | Peak RMS < 0.0078 |
 | `ENV-OTHER` | 4 | None of the above | Fallthrough |
 
 Classification order:
-1. Silence check (peak RMS < `_EN-SILENCE-THRESH` ≈ 0.015)
+1. Silence check (peak RMS < `_EN-SILENCE-THRESH` = 0x2000 ≈ 0.0078125)
 2. Swell check (peak window in last third)
 3. Percussive check (peak early AND sustain < 0.7)
 4. Sustained check (sustain ≥ 0.3)
@@ -114,7 +115,7 @@ RMS drops below `thresh-fp16 × peak_rms`.
 | Input | Type | Description |
 |---|---|---|
 | `buf` | addr | PCM buffer descriptor |
-| `thresh-fp16` | u16 | FP16 fraction of peak (e.g. 0.1 = 10%) |
+| `thresh-fp16` | u16 | FP16 fraction from 0.0 through 1.0 (e.g. 0.1 = 10%) |
 
 | Output | Type | Description |
 |---|---|---|
@@ -122,6 +123,7 @@ RMS drops below `thresh-fp16 × peak_rms`.
 
 If the signal never drops below the threshold, returns the
 remaining buffer length from peak to end.
+The threshold must also be finite; NaN and infinity abort.
 
 ```forth
 \ How long until the sound drops to 10% of peak?
@@ -157,8 +159,10 @@ $$\text{sustain} = \frac{\text{mean RMS}_{25\%..75\%}}{\text{peak RMS}}$$
 | 0.1–0.3 | Moderate decay (pluck, short reverb) |
 | < 0.1 | Rapid decay (snare, click) |
 
-Returns 0 for silent buffers.  Uses `?DO` to safely handle
-edge cases where q1 = q3 (buffer too short for middle-50%).
+Returns 0 for silent buffers.  A buffer shorter than one 64-frame window still
+contributes its sole partial window rather than producing an empty middle
+range.  Window counts are widened directly to FP32 for the mean, so long
+buffers are not first saturated through FP16.
 
 ```forth
 buf PCM-SUSTAIN-LEVEL .  \ e.g. 0.535 for linear decay
@@ -178,15 +182,19 @@ Fraction of the buffer's duration where windowed RMS is below
 | Input | Type | Description |
 |---|---|---|
 | `buf` | addr | PCM buffer descriptor |
-| `thresh-fp16` | u16 | FP16 absolute RMS threshold |
+| `thresh-fp16` | u16 | Non-negative FP16 absolute RMS threshold |
 
 | Output | Type | Description |
 |---|---|---|
 | `ratio-fp16` | u16 | FP16 fraction [0.0, 1.0]; 1.0 = all silent |
 
+The ratio is weighted by the number of frames in each window, so a short final
+partial window contributes only its actual duration.  The threshold must be a
+finite, non-negative FP16 value.  An empty buffer has a defined ratio of zero.
+
 ```forth
 \ What fraction of the buffer is "perceptually silent"?
-buf 0x2000 PCM-SILENCE-RATIO .   \ 0x2000 ≈ 0.0156
+buf 0x2000 PCM-SILENCE-RATIO .   \ 0x2000 = 0.0078125
 ```
 
 ---
@@ -211,11 +219,13 @@ E3 : 77
 | Input | Type | Description |
 |---|---|---|
 | `buf` | addr | PCM buffer descriptor |
-| `n-points` | int | Number of sample points (typically 4–16) |
+| `n-points` | int | Positive number of sample points (typically 4–16) |
 
 The output is human-readable and machine-parseable (for automated
 analysis in test scripts).  Values are `round(window_rms / peak_rms × 1000)`,
-clamped to [0, 1000].
+clamped with signed comparisons to [0, 1000].  Requested points beyond the
+last full-window start are pinned to the last valid start; short and empty
+buffers therefore never create a negative sample address.
 
 For a silent buffer, all values are 0.
 
@@ -255,7 +265,7 @@ Internally calls `_EN-FIND-PEAK` and `PCM-SUSTAIN-LEVEL`.
 
 **Classification logic:**
 
-1. If peak RMS < 0.015 → `ENV-SILENCE`
+1. If peak RMS < 0.0078125 → `ENV-SILENCE`
 2. If peak window in last 33% → `ENV-SWELL`
 3. If peak in first 10% AND sustain < 0.7 → `ENV-PERCUSSIVE`
 4. If sustain ≥ 0.3 → `ENV-SUSTAINED`
@@ -284,7 +294,7 @@ ENDCASE
 
 | Word | Stack Effect | Purpose |
 |---|---|---|
-| `_EN-SETUP` | `( buf -- )` | Extract data ptr, len, rate; compute window count |
+| `_EN-SETUP` | `( buf -- )` | Validate mono FP16 input; compute `ceil(len/64)` windows, including a final partial window |
 | `_EN-WIN-RMS` | `( start -- rms-fp16 )` | RMS of one 64-sample window starting at frame `start` |
 | `_EN-FIND-PEAK` | `( -- )` | Walk all windows, store peak RMS and its index |
 
@@ -294,21 +304,21 @@ ENDCASE
 | `_EN-DPTR` | addr | Current data pointer |
 | `_EN-LEN` | int | Current frame count |
 | `_EN-RATE` | int | Sample rate |
-| `_EN-NWIN` | int | Number of windows (`len / WINSZ`) |
+| `_EN-NWIN` | int | Number of windows (`ceil(len / WINSZ)`; one zero-length sentinel window for empty input) |
 | `_EN-PKRMS` | u16 | Peak windowed RMS (FP16) |
 | `_EN-PKIDX` | int | Window index of peak |
 
 | Constant | Value | Meaning |
 |---|---|---|
 | `_EN-WINSZ` | 64 | Window size in samples (8 ms at 8 kHz) |
-| `_EN-SILENCE-THRESH` | 0x2000 | ~0.015 FP16, threshold for silence classification |
+| `_EN-SILENCE-THRESH` | 0x2000 | 0.0078125 FP16, threshold for silence classification |
 
 ### Window RMS Algorithm
 
 For each window of 64 samples starting at frame `start`:
 
 1. Accumulate `sum += sample² ` in FP32 (via `FP16>FP32`, `FP32-MUL`, `FP32-ADD`).
-2. Divide by window size: `sum / 64` in FP32.
+2. Divide by the actual window frame count in FP32.
 3. Square root: `FP32-SQRT`.
 4. Narrow to FP16: `FP32>FP16`.
 

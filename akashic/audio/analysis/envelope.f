@@ -13,18 +13,18 @@
 \   PCM-ENVELOPE-DUMP   ( buf n-points -- )
 \   PCM-ENVELOPE-CLASS  ( buf -- class )
 \
-\ Implementation: sliding RMS window of 64 samples (8ms at 8kHz).
-\ Walk the buffer once, computing windowed RMS at each position.
+\ Implementation: contiguous, non-overlapping RMS windows of 64 samples
+\ (8ms at 8kHz), plus one final partial window when needed.
 \
 \ Prefix: PCM-    (public)
 \         _EN-    (internals)
 \
 \ Load with:   REQUIRE audio/analysis/envelope.f
 
-REQUIRE fp16.f
-REQUIRE fp16-ext.f
-REQUIRE fp32.f
-REQUIRE audio/pcm.f
+REQUIRE ../../math/fp16.f
+REQUIRE ../../math/fp16-ext.f
+REQUIRE ../../math/fp32.f
+REQUIRE ../pcm.f
 
 PROVIDED akashic-analysis-envelope
 
@@ -60,11 +60,21 @@ VARIABLE _EN-PKIDX           \ window index of peak RMS
 \ =====================================================================
 
 : _EN-SETUP  ( buf -- )
+    DUP PCM-FP16-MONO? 0=
+        ABORT" envelope analysis: buffer must be mono FP16 PCM"
     DUP _EN-BUF !
     DUP PCM-DATA _EN-DPTR !
     DUP PCM-LEN  _EN-LEN !
     PCM-RATE _EN-RATE !
-    _EN-LEN @ _EN-WINSZ / _EN-NWIN ! ;
+    _EN-RATE @ 1 < ABORT" envelope analysis: sample rate must be positive"
+    _EN-LEN @ 0< ABORT" envelope analysis: frame count must not be negative"
+    \ Overflow-safe ceil(len / winsz); retain one zero-length window so
+    \ empty-buffer metrics remain defined without touching sample memory.
+    _EN-LEN @ 0= IF
+        1 _EN-NWIN !
+    ELSE
+        _EN-LEN @ 1- _EN-WINSZ / 1+ _EN-NWIN !
+    THEN ;
 
 \ =====================================================================
 \  Internal: compute RMS for a single window starting at frame `start`
@@ -74,13 +84,16 @@ VARIABLE _EN-PKIDX           \ window index of peak RMS
 
 VARIABLE _EN-WRMS-SUM
 
+: _EN-WIN-COUNT  ( start -- count )
+    DUP 0< IF DROP 0 EXIT THEN
+    DUP _EN-LEN @ >= IF DROP 0 EXIT THEN
+    _EN-LEN @ SWAP -
+    DUP _EN-WINSZ > IF DROP _EN-WINSZ THEN ;
+
 : _EN-WIN-RMS  ( start -- rms-fp16 )
-    _EN-WRMS-SUM @ DROP                 \ touch (just for clarity)
     FP32-ZERO _EN-WRMS-SUM !
 
-    DUP _EN-WINSZ +                      ( start end )
-    _EN-LEN @ MIN                        ( start end' )
-    OVER -                               ( start count )
+    DUP _EN-WIN-COUNT                    ( start count )
     DUP 0= IF 2DROP FP16-POS-ZERO EXIT THEN
 
     SWAP                                 ( count start )
@@ -94,8 +107,11 @@ VARIABLE _EN-WRMS-SUM
 
     \ rms = sqrt(sum / count)
     _EN-WRMS-SUM @
-    SWAP INT>FP16 FP16>FP32 FP32-DIV
+    SWAP INT>FP32 FP32-DIV
     FP32-SQRT FP32>FP16 ;
+
+: _EN-FP16-FINITE?  ( fp16 -- flag )
+    0x7C00 AND 0x7C00 <> ;
 
 \ =====================================================================
 \  Internal: find peak windowed RMS and its window index
@@ -144,6 +160,11 @@ VARIABLE _EN-DT-THRESH
 
 : PCM-DECAY-TIME  ( buf thresh-fp16 -- frames )
     _EN-DT-THRESH !
+    _EN-DT-THRESH @ _EN-FP16-FINITE? 0=
+        ABORT" PCM-DECAY-TIME: threshold must be finite"
+    _EN-DT-THRESH @ FP16-POS-ZERO FP16-LT
+    _EN-DT-THRESH @ FP16-POS-ONE FP16-GT OR
+        ABORT" PCM-DECAY-TIME: threshold must be between 0.0 and 1.0"
     _EN-SETUP
     _EN-FIND-PEAK
 
@@ -172,6 +193,8 @@ VARIABLE _EN-DT-THRESH
 
 VARIABLE _EN-SL-SUM
 VARIABLE _EN-SL-COUNT
+VARIABLE _EN-SL-FIRST
+VARIABLE _EN-SL-END
 
 : PCM-SUSTAIN-LEVEL  ( buf -- ratio-fp16 )
     _EN-SETUP
@@ -184,10 +207,11 @@ VARIABLE _EN-SL-COUNT
     FP32-ZERO _EN-SL-SUM !
     0 _EN-SL-COUNT !
 
-    \ Middle 50%: windows from 25% to 75% of total
-    _EN-NWIN @ 4 /             ( q1 )
-    _EN-NWIN @ 3 * 4 /        ( q1 q3 )
-    SWAP ?DO
+    \ Middle body: [25%, 75%).  Express the upper bound as n-n/4 to
+    \ avoid n*3 overflow and ensure a one-window short buffer participates.
+    _EN-NWIN @ 4 / DUP _EN-SL-FIRST !
+    _EN-NWIN @ SWAP - _EN-SL-END !
+    _EN-SL-END @ _EN-SL-FIRST @ ?DO
         I _EN-WINSZ * _EN-WIN-RMS
         FP16>FP32
         _EN-SL-SUM @ FP32-ADD _EN-SL-SUM !
@@ -198,7 +222,7 @@ VARIABLE _EN-SL-COUNT
 
     \ average_mid_rms = sum / count
     _EN-SL-SUM @
-    _EN-SL-COUNT @ INT>FP16 FP16>FP32 FP32-DIV
+    _EN-SL-COUNT @ INT>FP32 FP32-DIV
     FP32>FP16
 
     \ ratio = average / peak
@@ -208,27 +232,34 @@ VARIABLE _EN-SL-COUNT
 \  PCM-SILENCE-RATIO — fraction of buffer duration below threshold
 \ =====================================================================
 \  ( buf thresh-fp16 -- ratio-fp16 )
-\  thresh-fp16 is an absolute RMS level.  E.g. 0x2000 (~0.0156).
+\  thresh-fp16 is an absolute RMS level.  E.g. 0x2000 (= 0.0078125).
 \  Returns fraction [0.0, 1.0].  1.0 = all silent.
 
 VARIABLE _EN-SR-THRESH
-VARIABLE _EN-SR-COUNT
+VARIABLE _EN-SR-FRAMES
 
 : PCM-SILENCE-RATIO  ( buf thresh-fp16 -- ratio-fp16 )
     _EN-SR-THRESH !
+    _EN-SR-THRESH @ _EN-FP16-FINITE? 0=
+        ABORT" PCM-SILENCE-RATIO: threshold must be finite"
+    _EN-SR-THRESH @ FP16-POS-ZERO FP16-LT
+        ABORT" PCM-SILENCE-RATIO: threshold must not be negative"
     _EN-SETUP
 
-    0 _EN-SR-COUNT !
+    _EN-LEN @ 0= IF FP16-POS-ZERO EXIT THEN
+    0 _EN-SR-FRAMES !
 
     _EN-NWIN @ 0 ?DO
-        I _EN-WINSZ * _EN-WIN-RMS
+        I _EN-WINSZ * DUP _EN-WIN-RMS
         _EN-SR-THRESH @ FP16-LT IF
-            _EN-SR-COUNT @ 1+ _EN-SR-COUNT !
+            _EN-WIN-COUNT _EN-SR-FRAMES +!
+        ELSE
+            DROP
         THEN
     LOOP
 
-    _EN-SR-COUNT @ INT>FP16
-    _EN-NWIN @ INT>FP16 FP16-DIV ;
+    _EN-SR-FRAMES @ INT>FP32
+    _EN-LEN @ INT>FP32 FP32-DIV FP32>FP16 ;
 
 \ =====================================================================
 \  PCM-ENVELOPE-DUMP — print windowed RMS at n equally-spaced points
@@ -242,9 +273,11 @@ VARIABLE _EN-SR-COUNT
 
 VARIABLE _EN-ED-N
 VARIABLE _EN-ED-STEP
+VARIABLE _EN-ED-LAST
 
 : PCM-ENVELOPE-DUMP  ( buf n-points -- )
     _EN-ED-N !
+    _EN-ED-N @ 1 < ABORT" PCM-ENVELOPE-DUMP: point count must be positive"
     _EN-SETUP
     _EN-FIND-PEAK
 
@@ -259,17 +292,24 @@ VARIABLE _EN-ED-STEP
     \ Step between sample points
     _EN-NWIN @ _EN-ED-N @ /  _EN-ED-STEP !
     _EN-ED-STEP @ 0= IF 1 _EN-ED-STEP ! THEN
+    _EN-LEN @ _EN-WINSZ > IF
+        _EN-LEN @ _EN-WINSZ -
+    ELSE
+        0
+    THEN
+    _EN-ED-LAST !
 
     _EN-ED-N @ 0 ?DO
         I _EN-ED-STEP @ * _EN-WINSZ *   ( frame-start )
-        DUP _EN-LEN @ _EN-WINSZ - MIN   \ don't exceed
+        DUP _EN-ED-LAST @ > IF DROP _EN-ED-LAST @ THEN
         _EN-WIN-RMS                       ( rms-fp16 )
 
         \ Normalize to peak and scale to 0-1000
         _EN-PKRMS @ FP16-DIV             ( ratio )
         1000 INT>FP16 FP16-MUL           ( ratio*1000 )
         FP16>INT                          ( integer 0-1000 )
-        0 MAX 1000 MIN                    ( clamped )
+        DUP 0< IF DROP 0 THEN
+        DUP 1000 > IF DROP 1000 THEN      ( clamped )
 
         ." E" I . ." : " . CR
     LOOP ;
@@ -282,12 +322,12 @@ VARIABLE _EN-ED-STEP
 \    0 = ENV-PERCUSSIVE  (attack < 10% of duration, sustain < 0.3)
 \    1 = ENV-SUSTAINED   (sustain >= 0.3)
 \    2 = ENV-SWELL       (peak is in last 33% of buffer)
-\    3 = ENV-SILENCE     (peak RMS < 0.01)
+\    3 = ENV-SILENCE     (peak RMS < 0.0078125)
 \    4 = ENV-OTHER
 \
 \  This is a quick heuristic, not a precise classifier.
 
-0x2000 CONSTANT _EN-SILENCE-THRESH   \ ~0.015 FP16
+0x2000 CONSTANT _EN-SILENCE-THRESH   \ 0.0078125 FP16
 
 : PCM-ENVELOPE-CLASS  ( buf -- class )
     DUP _EN-SETUP
