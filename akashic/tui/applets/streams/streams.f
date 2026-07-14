@@ -16,13 +16,14 @@ REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../../utils/string.f
+REQUIRE ../../../utils/fs/vfs.f
+REQUIRE ../../../atproto/feed-model.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/resource.f
 
-4 CONSTANT _STM-ITEM-COUNT
 2048 CONSTANT _STM-RESULT-CAP
 300 CONSTANT _STM-DRAFT-CAP
 96 CONSTANT _STM-PROMPT-CAP
@@ -46,6 +47,8 @@ _STM-CURRENT-STATE CMP-CELL: _STM-SEARCH-U
 _STM-CURRENT-STATE _STM-DRAFT-CAP CMP-FIELD: _STM-DRAFT-BUF
 _STM-CURRENT-STATE CMP-CELL: _STM-DRAFT-U
 _STM-CURRENT-STATE CMP-CELL: _STM-DRAFT-REV
+_STM-CURRENT-STATE BFM-FEED-SIZE CMP-FIELD: _STM-FEED
+_STM-CURRENT-STATE CMP-CELL: _STM-FEED-READY
 _STM-CURRENT-STATE _STM-RESULT-CAP CMP-FIELD: _STM-RESULT-BUF
 _STM-CURRENT-STATE CMP-CELL: _STM-RESULT-U
 CMP-LAYOUT-SIZE CONSTANT _STM-STATE-SIZE
@@ -53,43 +56,29 @@ CMP-LAYOUT-SIZE CONSTANT _STM-STATE-SIZE
 : _STM-ACTIVATE  ( instance -- )
     DUP _STM-CURRENT-INSTANCE ! CINST-STATE _STM-CURRENT-STATE ! ;
 
-\ Immutable recorded provider fixture.  Parent 0 means no parent.
+\ The UI and capabilities only read the owned provider-neutral feed model.
+: _STM-ITEM-COUNT  ( -- n )
+    _STM-FEED-READY @ IF _STM-FEED BFM.FEED.COUNT @ ELSE 0 THEN ;
+: _STM-ITEM  ( index -- item ) _STM-FEED BFM.FEED.ITEM ;
 : _STM-URI  ( index -- addr len )
-    CASE
-        0 OF S" streams:item:at:1" ENDOF
-        1 OF S" streams:item:at:2" ENDOF
-        2 OF S" streams:item:at:3" ENDOF
-        3 OF S" streams:item:at:4" ENDOF
-        DROP S" streams:item:unknown"
-    ENDCASE ;
+    DUP 0< OVER _STM-ITEM-COUNT >= OR IF DROP S" streams:item:unknown" EXIT THEN
+    _STM-ITEM BFM.ITEM.URI ;
 
 : _STM-AUTHOR  ( index -- addr len )
-    CASE
-        0 OF S" @mira.test" ENDOF
-        1 OF S" @rowan.test" ENDOF
-        2 OF S" @mira.test" ENDOF
-        3 OF S" @sol.test" ENDOF
-        DROP S" @unknown"
-    ENDCASE ;
+    DUP 0< OVER _STM-ITEM-COUNT >= OR IF DROP S" unknown" EXIT THEN
+    _STM-ITEM BFM.ITEM.HANDLE ;
 
 : _STM-TIME  ( index -- addr len )
-    CASE
-        0 OF S" 10:42" ENDOF 1 OF S" 10:38" ENDOF
-        2 OF S" 10:31" ENDOF 3 OF S" 09:55" ENDOF
-        DROP S" --:--"
-    ENDCASE ;
+    DUP 0< OVER _STM-ITEM-COUNT >= OR IF DROP S" --" EXIT THEN
+    _STM-ITEM BFM.ITEM.CREATED ;
 
 : _STM-TEXT  ( index -- addr len )
-    CASE
-        0 OF S" Recorded fixtures make network behavior reviewable." ENDOF
-        1 OF S" Does the thread retain identity across a cached restart?" ENDOF
-        2 OF S" Yes. The item URI remains stable while cache freshness changes." ENDOF
-        3 OF S" A text-first client can still hand links to the right applet." ENDOF
-        DROP S" Missing fixture item"
-    ENDCASE ;
+    DUP 0< OVER _STM-ITEM-COUNT >= OR IF DROP S" Missing feed item" EXIT THEN
+    _STM-ITEM BFM.ITEM.TEXT ;
 
 : _STM-PARENT  ( index -- parent+1 )
-    DUP 1 = IF DROP 1 EXIT THEN 2 = IF 2 ELSE 0 THEN ;
+    DUP 0< OVER _STM-ITEM-COUNT >= OR IF DROP 0 EXIT THEN
+    DUP _STM-ITEM BFM.ITEM.FLAGS @ BFM-F-REPLY AND IF DROP 1 ELSE DROP 0 THEN ;
 
 VARIABLE _STM-FA
 VARIABLE _STM-FU
@@ -112,8 +101,7 @@ VARIABLE _STM-FN
     S" uri: " _STM-RESULT+ R@ _STM-URI _STM-RESULT+ _STM-RESULT-NL
     S" provider: at-fixture" _STM-RESULT+ _STM-RESULT-NL
     S" author: " _STM-RESULT+ R@ _STM-AUTHOR _STM-RESULT+ _STM-RESULT-NL
-    S" created: 2026-07-14T" _STM-RESULT+ R@ _STM-TIME _STM-RESULT+
-    S" :00-04:00" _STM-RESULT+ _STM-RESULT-NL
+    S" created: " _STM-RESULT+ R@ _STM-TIME _STM-RESULT+ _STM-RESULT-NL
     S" text: " _STM-RESULT+ R@ _STM-TEXT _STM-RESULT+ _STM-RESULT-NL
     S" parent: " _STM-RESULT+ R@ _STM-PARENT DUP IF
         1- _STM-URI _STM-RESULT+
@@ -122,9 +110,9 @@ VARIABLE _STM-FN
 
 : _STM-THREAD-SNAPSHOT  ( index -- )
     _STM-RESULT-RESET
-    S" thread-root: streams:item:at:1" _STM-RESULT+ _STM-RESULT-NL
+    S" thread-root: " _STM-RESULT+ 0 _STM-URI _STM-RESULT+ _STM-RESULT-NL
     S" items:" _STM-RESULT+ _STM-RESULT-NL
-    3 0 DO
+    _STM-ITEM-COUNT 0 DO
         S" - " _STM-RESULT+ I _STM-URI _STM-RESULT+
         S" | " _STM-RESULT+ I _STM-AUTHOR _STM-RESULT+
         S" | " _STM-RESULT+ I _STM-TEXT _STM-RESULT+ _STM-RESULT-NL
@@ -202,7 +190,7 @@ VARIABLE _STM-ROW
 
 : _STM-DRAW-THREAD  ( -- )
     244 234 0 DRW-STYLE! S" Conversation: recorded identity chain" 3 2 DRW-TEXT
-    3 0 DO I 5 I 4 * + _STM-DRAW-ITEM LOOP ;
+    _STM-ITEM-COUNT 0 DO I 5 I 4 * + _STM-DRAW-ITEM LOOP ;
 
 : _STM-PANEL-DRAW  ( widget -- )
     DUP WDG-REGION RGN-W _STM-DW ! WDG-REGION RGN-H _STM-DH !
@@ -224,12 +212,12 @@ VARIABLE _STM-ROW
     DRW-STYLE-RESET ;
 
 : _STM-MOVE  ( delta -- )
-    _STM-SELECTED @ + 0 MAX _STM-ITEM-COUNT 1- MIN _STM-SELECTED !
+    _STM-SELECTED @ + 0 MAX _STM-ITEM-COUNT 1- 0 MAX MIN _STM-SELECTED !
     _STM-INVALIDATE ;
 
 : _STM-BEGIN-SEARCH  ( -- )
     S" identity" DUP _STM-SEARCH-U ! _STM-SEARCH-BUF SWAP CMOVE
-    2 _STM-SELECTED !
+    1 _STM-SELECTED !
     S" Found cached item matching identity" 1600 ASHELL-TOAST
     _STM-INVALIDATE ;
 : _STM-BEGIN-DRAFT  ( -- )
@@ -277,10 +265,34 @@ VARIABLE _STM-ROW
 \ Lifecycle
 \ ---------------------------------------------------------------------
 
+VARIABLE _STM-LOAD-FD
+VARIABLE _STM-LOAD-A
+VARIABLE _STM-LOAD-U
+
+: STREAMS-LOAD-FEED-JSON  ( json-a json-u instance -- status )
+    _STM-ACTIVATE _STM-FEED BFM-DECODE-FEED
+    DUP BFM-S-OK = IF -1 _STM-FEED-READY ! THEN ;
+
+: _STM-LOAD-RECORDED-FEED  ( -- status )
+    S" /atproto/fixtures/timeline.json" VFS-OPEN DUP _STM-LOAD-FD ! 0= IF
+        BFM-S-MISSING EXIT
+    THEN
+    _STM-LOAD-FD @ VFS-SIZE DUP _STM-LOAD-U !
+    ALLOCATE IF DROP _STM-LOAD-FD @ VFS-CLOSE BFM-S-CAPACITY EXIT THEN
+    _STM-LOAD-A !
+    _STM-LOAD-A @ _STM-LOAD-U @ _STM-LOAD-FD @ VFS-READ-EXACT IF
+        _STM-LOAD-FD @ VFS-CLOSE _STM-LOAD-A @ FREE BFM-S-INVALID EXIT
+    THEN
+    _STM-LOAD-FD @ VFS-CLOSE
+    _STM-LOAD-A @ _STM-LOAD-U @ _STM-CURRENT-INSTANCE @ STREAMS-LOAD-FEED-JSON
+    _STM-LOAD-A @ FREE ;
+
 : STREAMS-INIT-CB  ( instance -- )
     _STM-ACTIVATE
     0 _STM-PANEL-RGN ! _STM-V-TIMELINE _STM-VIEW !
     0 _STM-SELECTED ! 0 _STM-SEARCH-U ! 0 _STM-DRAFT-U ! 0 _STM-DRAFT-REV !
+    0 _STM-FEED-READY ! _STM-FEED BFM-FEED-INIT
+    _STM-LOAD-RECORDED-FEED DROP
     S" streams-body" UTUI-BY-ID _STM-E-BODY !
     S" sbar-view" UTUI-BY-ID _STM-E-SBAR-VIEW !
     _STM-E-BODY @ ?DUP IF

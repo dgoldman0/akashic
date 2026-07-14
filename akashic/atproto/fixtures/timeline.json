@@ -1,0 +1,47 @@
+{
+  "cursor": "page-2-token",
+  "feed": [
+    {
+      "post": {
+        "uri": "at://did:plc:mira/app.bsky.feed.post/one",
+        "cid": "bafyreiafixtureone",
+        "author": {
+          "did": "did:plc:mira",
+          "handle": "mira.test",
+          "displayName": "Mira"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Recorded fixtures make network behavior reviewable.",
+          "createdAt": "2026-07-14T10:42:00-04:00"
+        },
+        "likeCount": 7,
+        "repostCount": 2,
+        "replyCount": 1
+      }
+    },
+    {
+      "post": {
+        "uri": "at://did:plc:rowan/app.bsky.feed.post/two",
+        "cid": "bafyreiafixturetwo",
+        "author": {
+          "did": "did:plc:rowan",
+          "handle": "rowan.test",
+          "displayName": "Rowan \u2602"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "Does the thread retain identity across a cached restart?",
+          "createdAt": "2026-07-14T10:38:00-04:00"
+        },
+        "likeCount": 3,
+        "repostCount": 0,
+        "replyCount": 1
+      },
+      "reply": {
+        "root": {"uri": "at://did:plc:mira/app.bsky.feed.post/one"},
+        "parent": {"uri": "at://did:plc:mira/app.bsky.feed.post/one"}
+      }
+    }
+  ]
+}

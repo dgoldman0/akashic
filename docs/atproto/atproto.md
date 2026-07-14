@@ -1,20 +1,22 @@
 # akashic-atproto — AT Protocol Primitives for KDOS / Megapad-64
 
-AT Protocol identity, record-addressing, XRPC client, session
-management, and repository CRUD.  Foundation layer for Bluesky and
-any AT Protocol application.
+AT Protocol identity, record-addressing, XRPC client, bounded Bluesky feed
+decoding, session management, and repository CRUD. Foundation layer for
+Bluesky and any AT Protocol application.
 
 ```forth
 REQUIRE aturi.f    \ AT URI parser + builder
 REQUIRE did.f      \ DID validation + method extraction
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
+REQUIRE feed-model.f \ owned app.bsky timeline response model
 REQUIRE session.f  \ Session auth (login/refresh/bearer)
 REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 ```
 
 `PROVIDED akashic-aturi` / `akashic-did` / `akashic-tid` /
-`akashic-xrpc` / `akashic-session` / `akashic-repo` — safe to
+`akashic-xrpc` / `akashic-atproto-feed-model` / `akashic-session` /
+`akashic-repo` — safe to
 include multiple times.
 
 ---
@@ -26,6 +28,7 @@ include multiple times.
 - [DID — did.f](#did--didf)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
+- [Feed Model — feed-model.f](#feed-model--feed-modelf)
 - [Session — session.f](#session--sessionf)
 - [Repository — repo.f](#repository--repof)
 - [Quick Reference](#quick-reference)
@@ -38,7 +41,7 @@ include multiple times.
 
 | Principle | Detail |
 |---|---|
-| **Six independent files** | Each file is independently `REQUIRE`-able with its own `PROVIDED` guard. |
+| **Independent files** | Each file is independently `REQUIRE`-able with its own `PROVIDED` guard. |
 | **Buffer-based** | Parsed components are copied into fixed-size static buffers. |
 | **AT Protocol spec** | Follows the AT Protocol specification for URI syntax, DID validation, TID encoding, XRPC, and session management. |
 | **Variable-based state** | All internal loops use `VARIABLE`s to avoid KDOS R-stack conflicts. |
@@ -217,6 +220,24 @@ Execute a POST request with JSON body.  Returns response body and `ior`.
 
 ---
 
+## Feed Model — feed-model.f
+
+`feed-model.f` decodes the bounded `app.bsky.feed.getTimeline` response subset
+used by Streams. `BFM-DECODE-FEED ( json-a json-u feed -- status )` validates
+the response, copies and JSON-unescapes retained strings into caller-owned
+storage, accepts at most eight posts, and commits transactionally: a rejected
+response does not alter the destination feed. The model retains stable AT URI,
+CID, author DID/handle/display name, text, creation time, counts, reply/repost
+flags, and the page cursor. It owns no HTTP buffers, credentials, or global
+pagination state.
+
+Call `BFM-FEED-INIT` on `BFM-FEED-SIZE` bytes before first use. Feed and item
+accessors (`BFM.FEED.ITEM`, `BFM.ITEM.URI`, `BFM.ITEM.TEXT`, and peers) return
+views into that caller-owned model. Capacity, missing-field, and type failures
+are explicit `BFM-S-*` statuses.
+
+---
+
 ## Session — session.f
 
 Manages authentication with an AT Protocol PDS via `createSession`
@@ -368,6 +389,17 @@ Delete a record at the given AT URI.  Builds
 | `SESS-ACTIVE?` | `( -- flag )` | Check if session active |
 | `SESS-DID` | `( -- addr len )` | Get session DID |
 
+### feed-model.f
+
+| Word | Stack | Purpose |
+|---|---|---|
+| `BFM-FEED-INIT` | `( feed -- )` | Clear caller-owned feed storage |
+| `BFM-DECODE-FEED` | `( json-a json-u feed -- status )` | Transactionally decode a bounded timeline page |
+| `BFM.FEED.COUNT` | `( feed -- a )` | Address of retained item count |
+| `BFM.FEED.ITEM` | `( index feed -- item )` | Address a retained item |
+| `BFM.ITEM.URI` | `( item -- a u )` | Read the stable AT URI |
+| `BFM.ITEM.TEXT` | `( item -- a u )` | Read copied post text |
+
 ### repo.f
 
 | Word | Stack | Purpose |
@@ -482,6 +514,7 @@ S" at://did:plc:abc/app.bsky.feed.post/rk42" REPO-DELETE
 - **did.f** — standalone, no dependencies.
 - **tid.f** — standalone, uses BIOS `EPOCH@` for timestamps.
 - **xrpc.f** — requires `http.f`, `string.f`, `json.f`.
+- **feed-model.f** — requires `json.f` and `string.f`; it performs no I/O.
 - **session.f** — requires `xrpc.f`, `json.f`, `http.f`.
 - **repo.f** — requires `session.f`, `xrpc.f`, `json.f`, `aturi.f`.
 

@@ -5871,6 +5871,7 @@ _ct-run
             "tui/applets/agent/agent.uidl",
             "tui/applets/soundlab/soundlab.uidl",
             "tui/applets/streams/streams.uidl",
+            "atproto/fixtures/timeline.json",
         ),
         autoexec=r"""\ autoexec.f - Akashic desktop profile
 ENTER-USERLAND
@@ -7800,7 +7801,7 @@ GRID-RUN
     ),
     "streams": Profile(
         roots=("tui/applets/streams/streams.f",),
-        resources=("tui/applets/streams/streams.uidl",),
+        resources=("tui/applets/streams/streams.uidl", "atproto/fixtures/timeline.json"),
         autoexec=r"""\ autoexec.f - standalone Streams profile
 ENTER-USERLAND
 ." [akashic] loading streams" CR
@@ -7835,7 +7836,7 @@ SOUNDLAB-RUN
 
 PROFILES["streams-contracts"] = Profile(
     roots=("tui/applets/streams/streams.f",),
-    resources=(),
+    resources=("atproto/fixtures/timeline.json",),
     autoexec=r"""\ autoexec.f - deterministic Streams capability contracts
 ENTER-USERLAND
 ." [akashic] loading Streams contracts" CR
@@ -7845,6 +7846,10 @@ VARIABLE _stc-fails
 VARIABLE _stc-checks
 VARIABLE _stc-inst
 VARIABLE _stc-req
+VARIABLE _stc-fd
+VARIABLE _stc-doc
+VARIABLE _stc-doc-u
+VARIABLE _stc-load-status
 : _stc-assert  ( flag -- )
     1 _stc-checks +! 0= IF
         1 _stc-fails +! ." STC assertion " _stc-checks @ . ." failed" CR
@@ -7853,6 +7858,17 @@ VARIABLE _stc-req
     _stc-req @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@ 2SWAP STR-STR-CONTAINS ;
 : _stc-clear  ( -- )
     _stc-req @ CBR.ARGS CV-FREE _stc-req @ CBR.RESULT CV-FREE ;
+: _stc-load-feed  ( -- flag )
+    S" /atproto/fixtures/timeline.json" VFS-OPEN DUP 0= IF DROP 0 EXIT THEN
+    DUP _stc-fd ! VFS-SIZE DUP _stc-doc-u !
+    ALLOCATE IF DROP _stc-fd @ VFS-CLOSE 0 EXIT THEN _stc-doc !
+    _stc-doc @ _stc-doc-u @ _stc-fd @ VFS-READ-EXACT IF
+        _stc-fd @ VFS-CLOSE _stc-doc @ FREE 0 EXIT
+    THEN
+    _stc-fd @ VFS-CLOSE
+    _stc-doc @ _stc-doc-u @ _stc-inst @ STREAMS-LOAD-FEED-JSON
+    DUP _stc-load-status ! BFM-S-OK =
+    _stc-doc @ FREE ;
 
 : _stc-run  ( -- )
     0 _stc-fails ! 0 _stc-checks !
@@ -7862,27 +7878,38 @@ VARIABLE _stc-req
     LOOP
     STREAMS-COMP-DESC CINST-NEW DUP 0= _stc-assert DROP _stc-inst !
     CBR-NEW DUP 0= _stc-assert DROP _stc-req !
+    _stc-load-feed DUP 0= IF ." Streams feed status " _stc-load-status @ . CR THEN _stc-assert
+    _STM-FEED BFM.FEED.COUNT @ 2 = _stc-assert
+    _STM-FEED BFM.FEED.CURSOR _STM-FEED BFM.FEED.CURSOR-U @ S" page-2-token" STR-STR= _stc-assert
+    0 _STM-FEED BFM.FEED.ITEM DUP BFM.ITEM.HANDLE S" mira.test" STR-STR= _stc-assert
+    BFM.ITEM.LIKES @ 7 = _stc-assert
+    1 _STM-FEED BFM.FEED.ITEM DUP BFM.ITEM.DISPLAY S" Rowan ☂" STR-STR= _stc-assert
+    BFM.ITEM.FLAGS @ BFM-F-REPLY AND 0<> _stc-assert
+    91 _stc-doc @ C!
+    _stc-doc @ _stc-doc-u @ _stc-inst @ STREAMS-LOAD-FEED-JSON BFM-S-INVALID = _stc-assert
+    123 _stc-doc @ C!
+    _STM-FEED BFM.FEED.COUNT @ 2 = _stc-assert
 
     _stc-req @ _stc-inst @ _STM-CAP-SELECTION-H CBUS-S-OK = _stc-assert
     _stc-req @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
-        S" streams:item:at:1" STR-STR= _stc-assert
+        S" at://did:plc:mira/app.bsky.feed.post/one" STR-STR= _stc-assert
     _stc-clear
 
-    S" streams:item:at:2" _stc-req @ CBR.ARGS CV-RESOURCE! 0= _stc-assert
+    S" at://did:plc:rowan/app.bsky.feed.post/two" _stc-req @ CBR.ARGS CV-RESOURCE! 0= _stc-assert
     _stc-req @ _stc-inst @ _STM-CAP-ITEM-H CBUS-S-OK = _stc-assert
-    S" @rowan.test" _stc-result-has _stc-assert
+    S" rowan.test" _stc-result-has _stc-assert
     S" cached restart" _stc-result-has _stc-assert
     _stc-clear
 
-    S" streams:item:at:2" _stc-req @ CBR.ARGS CV-RESOURCE! 0= _stc-assert
+    S" at://did:plc:rowan/app.bsky.feed.post/two" _stc-req @ CBR.ARGS CV-RESOURCE! 0= _stc-assert
     _stc-req @ _stc-inst @ _STM-CAP-THREAD-H CBUS-S-OK = _stc-assert
-    S" streams:item:at:3" _stc-result-has _stc-assert
-    S" thread-root: streams:item:at:1" _stc-result-has _stc-assert
+    S" at://did:plc:rowan/app.bsky.feed.post/two" _stc-result-has _stc-assert
+    S" thread-root: at://did:plc:mira/app.bsky.feed.post/one" _stc-result-has _stc-assert
     _stc-clear
 
     S" identity" _stc-req @ CBR.ARGS CV-STRING! 0= _stc-assert
     _stc-req @ _stc-inst @ _STM-CAP-SEARCH-H CBUS-S-OK = _stc-assert
-    S" streams:item:at:2" _stc-result-has _stc-assert
+    S" at://did:plc:rowan/app.bsky.feed.post/two" _stc-result-has _stc-assert
     _stc-clear
 
     S" A bounded local draft" _stc-req @ CBR.ARGS CV-STRING! 0= _stc-assert
