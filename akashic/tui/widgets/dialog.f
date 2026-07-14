@@ -39,6 +39,13 @@ DEFER _DLG-DISMISS-HOOK  ( row col h w -- )
 : _DLG-DISMISS-NOOP  ( row col h w -- )  2DROP 2DROP ;
 ' _DLG-DISMISS-NOOP IS _DLG-DISMISS-HOOK
 
+\ Optional host hook defining the area in which a modal may appear.
+\ Standalone dialogs use the whole screen; UIDL hosts narrow this to
+\ the active document region so a child cannot paint across siblings.
+DEFER _DLG-BOUNDS-HOOK  ( -- row col h w )
+: _DLG-BOUNDS-SCREEN  ( -- row col h w )  0 0 SCR-H SCR-W ;
+' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK
+
 \ =====================================================================
 \ 1. Descriptor layout
 \ =====================================================================
@@ -191,6 +198,10 @@ VARIABLE _DLG-BT-TOTW     \ total width of all buttons
 \ --- Main draw callback ---
 
 : _DLG-DRAW  ( widget -- )
+    \ Modal chrome must remain legible regardless of the style left by
+    \ the document that opened it.  Preserve that style for the caller.
+    _DRW-FG @ _DRW-BG @ _DRW-ATTRS @ >R >R >R
+    15 24 0 DRW-STYLE!
     _DLG-DRW-W !
     _DLG-DRW-W @ WDG-REGION RGN-W _DLG-DRW-RW !
     _DLG-DRW-W @ WDG-REGION RGN-H _DLG-DRW-RH !
@@ -206,7 +217,8 @@ VARIABLE _DLG-BT-TOTW     \ total width of all buttons
     0 0 _DLG-DRW-RH @ _DLG-DRW-RW @ BOX-SHADOW
     32 1 1 _DLG-DRW-RH @ 2 - _DLG-DRW-RW @ 2 - DRW-FILL-RECT
     _DLG-DRAW-MESSAGE
-    _DLG-DRAW-BUTTONS ;
+    _DLG-DRAW-BUTTONS
+    R> DRW-FG! R> DRW-BG! R> DRW-ATTR! ;
 
 \ =====================================================================
 \ 5. Internal — Handle
@@ -331,7 +343,8 @@ VARIABLE _DLG-N-BC
 \ 8. Modal loop — DLG-SHOW
 \ =====================================================================
 \
-\   Auto-sizes the dialog, centres it on the current screen, draws it,
+\   Auto-sizes the dialog, centres it within the host-provided bounds,
+\   draws it,
 \   then enters a blocking KEY-READ loop.  Each key event is dispatched
 \   through WDG-HANDLE (→ _DLG-HANDLE).  The loop exits once the
 \   per-widget result field becomes >=0 (set by Enter or Escape).
@@ -344,6 +357,10 @@ VARIABLE _DLG-SH-WD
 VARIABLE _DLG-SH-HT
 VARIABLE _DLG-SH-MR
 VARIABLE _DLG-SH-RGN
+VARIABLE _DLG-SH-BR
+VARIABLE _DLG-SH-BC
+VARIABLE _DLG-SH-BH
+VARIABLE _DLG-SH-BW
 
 CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
 
@@ -365,12 +382,16 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
     -1 _DLG-SH-W @ _DLG-O-RESULT + !
     0  _DLG-SH-W @ _DLG-O-SEL    + !
 
+    \ Snapshot the bounds once for the complete blocking modal lifetime.
+    _DLG-BOUNDS-HOOK
+    _DLG-SH-BW ! _DLG-SH-BH ! _DLG-SH-BC ! _DLG-SH-BR !
+
     \ ---- Auto-size ----
     _DLG-SH-W @ _DLG-O-TITLE-U + @ 4 +
     _DLG-SH-W @ _DLG-O-MSG-U   + @ 4 + MAX
     _DLG-SH-W @ _DLG-CALC-BTN-W 4 + MAX
     20 MAX  60 MIN
-    SCR-W 2 - 1 MAX MIN
+    _DLG-SH-BW @ 2 - 1 MAX MIN
     _DLG-SH-WD !
 
     _DLG-SH-WD @ 4 - DUP 1 < IF DROP 1 THEN >R
@@ -378,11 +399,13 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
     DUP 1 < IF DROP 1 THEN
     _DLG-SH-MR !
 
-    _DLG-SH-MR @ 5 + SCR-H 2 - 1 MAX MIN _DLG-SH-HT !
+    _DLG-SH-MR @ 5 + _DLG-SH-BH @ 2 - 1 MAX MIN _DLG-SH-HT !
 
-    \ ---- Centre in the current terminal geometry ----
-    SCR-H _DLG-SH-HT @ - 2 / DUP 0< IF DROP 0 THEN
-    SCR-W _DLG-SH-WD @ - 2 / DUP 0< IF DROP 0 THEN
+    \ ---- Centre within the owning host/document geometry ----
+    _DLG-SH-BH @ _DLG-SH-HT @ - 2 / DUP 0< IF DROP 0 THEN
+    _DLG-SH-BR @ +
+    _DLG-SH-BW @ _DLG-SH-WD @ - 2 / DUP 0< IF DROP 0 THEN
+    _DLG-SH-BC @ +
     _DLG-SH-HT @
     _DLG-SH-WD @
     RGN-NEW _DLG-SH-RGN !

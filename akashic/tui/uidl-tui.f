@@ -2509,6 +2509,17 @@ VARIABLE _UDR-SC
     _UTUI-DIRTY-RECT ;
 ' _UTUI-DIALOG-DISMISS IS _DLG-DISMISS-HOOK
 
+: _UTUI-DIALOG-BOUNDS  ( -- row col h w )
+    _UTUI-RGN @ IF
+        _UTUI-RGN @ RGN-ROW
+        _UTUI-RGN @ RGN-COL
+        _UTUI-RGN @ RGN-H
+        _UTUI-RGN @ RGN-W
+    ELSE
+        0 0 SCR-H SCR-W
+    THEN ;
+' _UTUI-DIALOG-BOUNDS IS _DLG-BOUNDS-HOOK
+
 \ --- Focus save / restore ---
 VARIABLE _UTUI-SAVED-FOCUS     \ stashed focus elem for overlay hide
 

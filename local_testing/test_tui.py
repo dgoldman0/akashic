@@ -2864,6 +2864,17 @@ def test_dlg_draw():
          _DLG_CLEANUP], "0 8888")
 
 
+def test_dlg_contrast_and_style_restore():
+    """Dialogs use explicit high-contrast chrome without leaking style."""
+    print("\n── DIALOG contrast ──")
+    check("explicit modal palette and caller style restored",
+        _DLG_SETUP + [
+         '3 42 5 DRW-STYLE! DUP WDG-DRAW RGN-ROOT',
+         ('0 0 SCR-GET DUP CELL-FG@ . CELL-BG@ . '
+          '_DRW-FG @ . _DRW-BG @ . _DRW-ATTRS @ . 8888 .'),
+         _DLG_CLEANUP], "15 24 3 42 5 8888")
+
+
 def test_dlg_nav_left_right():
     """Arrow keys navigate buttons."""
     print("\n── DIALOG left/right ──")
@@ -2995,6 +3006,28 @@ def test_dlg_modal_arrow_enter():
         'S" Pick" S" Choose" _MB 2 DLG-NEW DUP DLG-SHOW . 8888 . DLG-FREE _SCR @ SCR-FREE',
         b'\x1b[C\x0d',   # Right arrow then Enter
         "1 8888")
+
+
+def test_dlg_modal_respects_host_bounds():
+    """DLG-SHOW centres inside host bounds and reports that same dirty rect."""
+    print("\n── DIALOG host bounds ──")
+    check_modal("DLG-SHOW stays within host bounds",
+        ['VARIABLE _SCR',
+         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
+         'CREATE _MB 16 ALLOT',
+         'S" OK" _MB 8 + ! _MB !',
+         'VARIABLE _DB-R VARIABLE _DB-C VARIABLE _DB-H VARIABLE _DB-W',
+         ': _DB-BOUNDS 4 10 12 30 ;',
+         ': _DB-DISMISS _DB-W ! _DB-H ! _DB-C ! _DB-R ! ;',
+         "' _DB-BOUNDS IS _DLG-BOUNDS-HOOK",
+         "' _DB-DISMISS IS _DLG-DISMISS-HOOK",
+        ],
+        ('S" Test" S" Hello" _MB 1 DLG-NEW '
+         'DUP DLG-SHOW . '
+         '_DB-R @ . _DB-C @ . _DB-H @ . _DB-W @ . 8888 . '
+         'DLG-FREE _SCR @ SCR-FREE'),
+        b'\x0d',
+        "0 7 15 6 20 8888")
 
 
 def test_dlg_free():
@@ -3694,6 +3727,7 @@ if __name__ == "__main__":
     test_dlg_create()
     test_dlg_accessors()
     test_dlg_draw()
+    test_dlg_contrast_and_style_restore()
     test_dlg_nav_left_right()
     test_dlg_nav_tab()
     test_dlg_enter()
@@ -3702,6 +3736,7 @@ if __name__ == "__main__":
     test_dlg_modal_enter()
     test_dlg_modal_tab_enter()
     test_dlg_modal_arrow_enter()
+    test_dlg_modal_respects_host_bounds()
     test_dlg_free()
 
     # Canvas tests (Layer 7)
