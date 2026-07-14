@@ -33,3 +33,22 @@ Legacy direct `CORE-RUN` calls do not participate in the worker slot table and
 can race a submission. A Desk integration should reserve core 0 for the owner
 event loop and route applet background work through this substrate; applet
 callbacks themselves never run concurrently.
+
+## Emulator boundary and follow-up
+
+MegaPad models separate guest-core register, stack, interrupt, mailbox, and
+shared-memory state, but its host execution loop does not currently run those
+cores in parallel. Active full cores are advanced sequentially in deterministic
+C++ instruction quanta, so several CPU-bound workers divide aggregate emulator
+throughput rather than gaining host-CPU speedup. This is also not a
+cycle-accurate model of simultaneous bus requests or hardware races. Idle cores
+are skipped, and ordinary open Desk applets remain on the owner event loop, so
+applet count alone does not imply an equal number of busy cores.
+
+Akashic smoke and served sessions currently inherit MegaPad's one-full-core
+default because the local launcher does not expose a core count. Before Desk
+depends on worker throughput, add explicit full-core and cluster options to the
+launcher, run the Desk acceptance journeys with four full cores, and benchmark
+idle, mixed, and fully CPU-bound workloads. Truly host-parallel guest-core
+execution is a separate emulator project requiring an intentional shared-RAM,
+MMIO-ordering, spinlock, and deterministic-testing model.
