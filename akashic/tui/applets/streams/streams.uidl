@@ -1,0 +1,29 @@
+<uidl arrange=stack>
+<menubar id=mbar>
+<menu label=File>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+<menu label=Feed>
+<item text=Timeline do=timeline/>
+<item text=Find_Identity_in_Cache do=search key=Ctrl+F/>
+</menu>
+<menu label=Post>
+<item text=Open_Thread do=thread/>
+<item text=Create_Local_Draft do=compose key=Ctrl+N/>
+</menu>
+<menu label=Help>
+<item text=About_Streams do=about/>
+</menu>
+</menubar>
+<region id=streams-body style=color:#eeeeee;background-color:#121212/>
+<status id=sbar style=color:white;background-color:#005f5f>
+<label id=sbar-account text=Fixture_account/>
+<label id=sbar-view text=Timeline/>
+<label id=sbar-state text=Offline_fixture/>
+</status>
+<action do=search key=Ctrl+F/>
+<action do=compose key=Ctrl+N/>
+<action do=thread key=Ctrl+T/>
+<action do=timeline key=Ctrl+L/>
+<action do=quit key=Ctrl+Q/>
+</uidl>

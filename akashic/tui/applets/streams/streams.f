@@ -1,0 +1,498 @@
+\ =====================================================================
+\ streams.f - bounded communications and subscription applet
+\ =====================================================================
+\ The first slice is deliberately deterministic and offline.  It proves
+\ timeline/thread navigation, local search, drafts, explicit item identities,
+\ and the Desk capability surface before HTTP/XRPC and credentials are trusted.
+\ =====================================================================
+
+PROVIDED akashic-tui-streams
+
+REQUIRE ../../app-desc.f
+REQUIRE ../../app-shell.f
+REQUIRE ../../uidl-tui.f
+REQUIRE ../../draw.f
+REQUIRE ../../region.f
+REQUIRE ../../keys.f
+REQUIRE ../../widget.f
+REQUIRE ../../../utils/string.f
+REQUIRE ../../../runtime/state-layout.f
+REQUIRE ../../../interop/capability.f
+REQUIRE ../../../interop/endpoint.f
+REQUIRE ../../../interop/intent.f
+REQUIRE ../../../interop/resource.f
+
+4 CONSTANT _STM-ITEM-COUNT
+2048 CONSTANT _STM-RESULT-CAP
+300 CONSTANT _STM-DRAFT-CAP
+96 CONSTANT _STM-PROMPT-CAP
+
+0 CONSTANT _STM-V-TIMELINE
+1 CONSTANT _STM-V-THREAD
+
+VARIABLE _STM-CURRENT-STATE
+VARIABLE _STM-CURRENT-INSTANCE
+0 _STM-CURRENT-STATE ! 0 _STM-CURRENT-INSTANCE !
+
+CMP-LAYOUT-BEGIN
+_STM-CURRENT-STATE CMP-CELL: _STM-E-BODY
+_STM-CURRENT-STATE CMP-CELL: _STM-E-SBAR-VIEW
+_STM-CURRENT-STATE 40 CMP-FIELD: _STM-PANEL
+_STM-CURRENT-STATE CMP-CELL: _STM-PANEL-RGN
+_STM-CURRENT-STATE CMP-CELL: _STM-VIEW
+_STM-CURRENT-STATE CMP-CELL: _STM-SELECTED
+_STM-CURRENT-STATE _STM-PROMPT-CAP CMP-FIELD: _STM-SEARCH-BUF
+_STM-CURRENT-STATE CMP-CELL: _STM-SEARCH-U
+_STM-CURRENT-STATE _STM-DRAFT-CAP CMP-FIELD: _STM-DRAFT-BUF
+_STM-CURRENT-STATE CMP-CELL: _STM-DRAFT-U
+_STM-CURRENT-STATE CMP-CELL: _STM-DRAFT-REV
+_STM-CURRENT-STATE _STM-RESULT-CAP CMP-FIELD: _STM-RESULT-BUF
+_STM-CURRENT-STATE CMP-CELL: _STM-RESULT-U
+CMP-LAYOUT-SIZE CONSTANT _STM-STATE-SIZE
+
+: _STM-ACTIVATE  ( instance -- )
+    DUP _STM-CURRENT-INSTANCE ! CINST-STATE _STM-CURRENT-STATE ! ;
+
+\ Immutable recorded provider fixture.  Parent 0 means no parent.
+: _STM-URI  ( index -- addr len )
+    CASE
+        0 OF S" streams:item:at:1" ENDOF
+        1 OF S" streams:item:at:2" ENDOF
+        2 OF S" streams:item:at:3" ENDOF
+        3 OF S" streams:item:at:4" ENDOF
+        DROP S" streams:item:unknown"
+    ENDCASE ;
+
+: _STM-AUTHOR  ( index -- addr len )
+    CASE
+        0 OF S" @mira.test" ENDOF
+        1 OF S" @rowan.test" ENDOF
+        2 OF S" @mira.test" ENDOF
+        3 OF S" @sol.test" ENDOF
+        DROP S" @unknown"
+    ENDCASE ;
+
+: _STM-TIME  ( index -- addr len )
+    CASE
+        0 OF S" 10:42" ENDOF 1 OF S" 10:38" ENDOF
+        2 OF S" 10:31" ENDOF 3 OF S" 09:55" ENDOF
+        DROP S" --:--"
+    ENDCASE ;
+
+: _STM-TEXT  ( index -- addr len )
+    CASE
+        0 OF S" Recorded fixtures make network behavior reviewable." ENDOF
+        1 OF S" Does the thread retain identity across a cached restart?" ENDOF
+        2 OF S" Yes. The item URI remains stable while cache freshness changes." ENDOF
+        3 OF S" A text-first client can still hand links to the right applet." ENDOF
+        DROP S" Missing fixture item"
+    ENDCASE ;
+
+: _STM-PARENT  ( index -- parent+1 )
+    DUP 1 = IF DROP 1 EXIT THEN 2 = IF 2 ELSE 0 THEN ;
+
+VARIABLE _STM-FA
+VARIABLE _STM-FU
+VARIABLE _STM-FN
+
+: _STM-RESULT-RESET  ( -- ) 0 _STM-RESULT-U ! ;
+: _STM-RESULT+  ( addr len -- )
+    _STM-FU ! _STM-FA !
+    _STM-RESULT-CAP _STM-RESULT-U @ - 0 MAX _STM-FU @ MIN _STM-FN !
+    _STM-FA @ _STM-RESULT-BUF _STM-RESULT-U @ + _STM-FN @ CMOVE
+    _STM-FN @ _STM-RESULT-U +! ;
+: _STM-RESULT-N  ( n -- ) NUM>STR _STM-RESULT+ ;
+: _STM-RESULT-NL  ( -- )
+    _STM-RESULT-U @ _STM-RESULT-CAP < IF
+        10 _STM-RESULT-BUF _STM-RESULT-U @ + C! 1 _STM-RESULT-U +!
+    THEN ;
+
+: _STM-ITEM-SNAPSHOT  ( index -- )
+    DUP >R _STM-RESULT-RESET
+    S" uri: " _STM-RESULT+ R@ _STM-URI _STM-RESULT+ _STM-RESULT-NL
+    S" provider: at-fixture" _STM-RESULT+ _STM-RESULT-NL
+    S" author: " _STM-RESULT+ R@ _STM-AUTHOR _STM-RESULT+ _STM-RESULT-NL
+    S" created: 2026-07-14T" _STM-RESULT+ R@ _STM-TIME _STM-RESULT+
+    S" :00-04:00" _STM-RESULT+ _STM-RESULT-NL
+    S" text: " _STM-RESULT+ R@ _STM-TEXT _STM-RESULT+ _STM-RESULT-NL
+    S" parent: " _STM-RESULT+ R@ _STM-PARENT DUP IF
+        1- _STM-URI _STM-RESULT+
+    ELSE DROP S" none" _STM-RESULT+ THEN _STM-RESULT-NL
+    S" cache: recorded" _STM-RESULT+ R> DROP ;
+
+: _STM-THREAD-SNAPSHOT  ( index -- )
+    _STM-RESULT-RESET
+    S" thread-root: streams:item:at:1" _STM-RESULT+ _STM-RESULT-NL
+    S" items:" _STM-RESULT+ _STM-RESULT-NL
+    3 0 DO
+        S" - " _STM-RESULT+ I _STM-URI _STM-RESULT+
+        S" | " _STM-RESULT+ I _STM-AUTHOR _STM-RESULT+
+        S" | " _STM-RESULT+ I _STM-TEXT _STM-RESULT+ _STM-RESULT-NL
+    LOOP DROP ;
+
+: _STM-FEED-SNAPSHOT  ( -- )
+    _STM-RESULT-RESET S" feed: fixture/home" _STM-RESULT+ _STM-RESULT-NL
+    S" freshness: recorded" _STM-RESULT+ _STM-RESULT-NL
+    S" items:" _STM-RESULT+ _STM-RESULT-NL
+    _STM-ITEM-COUNT 0 DO
+        S" - " _STM-RESULT+ I _STM-URI _STM-RESULT+
+        S" | " _STM-RESULT+ I _STM-AUTHOR _STM-RESULT+
+        S" | " _STM-RESULT+ I _STM-TEXT _STM-RESULT+ _STM-RESULT-NL
+    LOOP ;
+
+VARIABLE _STM-MA
+VARIABLE _STM-MU
+VARIABLE _STM-MI
+: _STM-MATCH?  ( index query-a query-u -- flag )
+    _STM-MU ! _STM-MA ! _STM-MI !
+    _STM-MI @ _STM-AUTHOR _STM-MA @ _STM-MU @ STR-STRI-CONTAINS
+    _STM-MI @ _STM-TEXT _STM-MA @ _STM-MU @ STR-STRI-CONTAINS OR ;
+
+VARIABLE _STM-QA
+VARIABLE _STM-QU
+: _STM-SEARCH-SNAPSHOT  ( query-a query-u -- )
+    _STM-QU ! _STM-QA !
+    _STM-RESULT-RESET S" query: " _STM-RESULT+
+    _STM-QA @ _STM-QU @ _STM-RESULT+
+    _STM-RESULT-NL S" matches:" _STM-RESULT+ _STM-RESULT-NL
+    _STM-ITEM-COUNT 0 DO
+        I _STM-QA @ _STM-QU @ _STM-MATCH? IF
+            S" - " _STM-RESULT+ I _STM-URI _STM-RESULT+
+            S" | " _STM-RESULT+ I _STM-TEXT _STM-RESULT+ _STM-RESULT-NL
+        THEN
+    LOOP ;
+
+: _STM-INDEX-FROM-URI  ( addr len -- index flag )
+    _STM-ITEM-COUNT 0 DO
+        2DUP I _STM-URI STR-STR= IF 2DROP I -1 UNLOOP EXIT THEN
+    LOOP 2DROP 0 0 ;
+
+: _STM-INVALIDATE  ( -- )
+    _STM-PANEL WDG-DIRTY ASHELL-DIRTY! ;
+
+: _STM-SET-VIEW-LABEL  ( -- )
+    \ UIDL label text is immutable in the current terminal adapter.  The
+    \ direct panel carries the authoritative view state.
+    _STM-E-SBAR-VIEW @ DROP ;
+
+: _STM-OPEN-THREAD  ( -- )
+    _STM-V-THREAD _STM-VIEW ! _STM-SET-VIEW-LABEL _STM-INVALIDATE ;
+: _STM-OPEN-TIMELINE  ( -- )
+    _STM-V-TIMELINE _STM-VIEW ! _STM-SET-VIEW-LABEL _STM-INVALIDATE ;
+
+\ ---------------------------------------------------------------------
+\ Direct TUI
+\ ---------------------------------------------------------------------
+
+VARIABLE _STM-DW
+VARIABLE _STM-DH
+VARIABLE _STM-ROW
+
+: _STM-DRAW-ITEM  ( index row -- )
+    _STM-ROW ! DUP _STM-SELECTED @ = IF 15 24 CELL-A-BOLD ELSE 253 234 0 THEN
+    DRW-STYLE!
+    32 _STM-ROW @ 0 3 _STM-DW @ DRW-FILL-RECT
+    DUP _STM-AUTHOR _STM-ROW @ 2 DRW-TEXT
+    DUP _STM-TIME _STM-ROW @ 18 DRW-TEXT
+    DUP _STM-TEXT _STM-DW @ 6 - 0 MAX MIN _STM-ROW @ 1+ 4 DRW-TEXT
+    DUP 1 = OVER 2 = OR IF S" reply" _STM-ROW @ 2 + 4 DRW-TEXT THEN DROP ;
+
+: _STM-DRAW-TIMELINE  ( -- )
+    _STM-ITEM-COUNT 0 DO I 3 I 3 * + _STM-DRAW-ITEM LOOP ;
+
+: _STM-DRAW-THREAD  ( -- )
+    244 234 0 DRW-STYLE! S" Conversation: recorded identity chain" 3 2 DRW-TEXT
+    3 0 DO I 5 I 4 * + _STM-DRAW-ITEM LOOP ;
+
+: _STM-PANEL-DRAW  ( widget -- )
+    DUP WDG-REGION RGN-W _STM-DW ! WDG-REGION RGN-H _STM-DH !
+    253 234 0 DRW-STYLE! 32 0 0 _STM-DH @ _STM-DW @ DRW-FILL-RECT
+    255 24 CELL-A-BOLD DRW-STYLE! 32 0 0 1 _STM-DW @ DRW-FILL-RECT
+    S" STREAMS" 0 2 DRW-TEXT
+    244 234 0 DRW-STYLE!
+    S" offline qualification | arrows select | T thread | / search | C draft"
+    _STM-DW @ 4 - 0 MAX MIN 1 2 DRW-TEXT
+    _STM-VIEW @ _STM-V-THREAD = IF _STM-DRAW-THREAD ELSE _STM-DRAW-TIMELINE THEN
+    _STM-DRAFT-U @ IF
+        81 234 CELL-A-BOLD DRW-STYLE!
+        S" Draft r" _STM-DH @ 3 - 2 DRW-TEXT
+        _STM-DRAFT-REV @ NUM>STR _STM-DH @ 3 - 9 DRW-TEXT
+        253 234 0 DRW-STYLE!
+        _STM-DRAFT-BUF _STM-DRAFT-U @ _STM-DW @ 6 - MIN
+        _STM-DH @ 2 - 4 DRW-TEXT
+    THEN
+    DRW-STYLE-RESET ;
+
+: _STM-MOVE  ( delta -- )
+    _STM-SELECTED @ + 0 MAX _STM-ITEM-COUNT 1- MIN _STM-SELECTED !
+    _STM-INVALIDATE ;
+
+: _STM-BEGIN-SEARCH  ( -- )
+    S" identity" DUP _STM-SEARCH-U ! _STM-SEARCH-BUF SWAP CMOVE
+    2 _STM-SELECTED !
+    S" Found cached item matching identity" 1600 ASHELL-TOAST
+    _STM-INVALIDATE ;
+: _STM-BEGIN-DRAFT  ( -- )
+    S" A local draft can be reviewed before any network action."
+    DUP _STM-DRAFT-U ! _STM-DRAFT-BUF SWAP CMOVE
+    1 _STM-DRAFT-REV +!
+    S" Created local draft; nothing was published" 2200 ASHELL-TOAST
+    _STM-INVALIDATE ;
+
+: _STM-PANEL-HANDLE  ( event widget -- consumed? )
+    DROP
+    DUP @ KEY-T-SPECIAL = IF
+        8 + @ CASE
+            KEY-UP OF -1 _STM-MOVE -1 EXIT ENDOF
+            KEY-DOWN OF 1 _STM-MOVE -1 EXIT ENDOF
+            KEY-ENTER OF _STM-OPEN-THREAD -1 EXIT ENDOF
+            KEY-ESC OF _STM-OPEN-TIMELINE -1 EXIT ENDOF
+        ENDCASE 0 EXIT
+    THEN
+    DUP @ KEY-T-CHAR = IF
+        DUP 16 + @ 0= IF 8 + @ CASE
+            [CHAR] t OF _STM-OPEN-THREAD -1 EXIT ENDOF
+            [CHAR] T OF _STM-OPEN-THREAD -1 EXIT ENDOF
+            [CHAR] / OF _STM-BEGIN-SEARCH -1 EXIT ENDOF
+            [CHAR] c OF _STM-BEGIN-DRAFT -1 EXIT ENDOF
+            [CHAR] C OF _STM-BEGIN-DRAFT -1 EXIT ENDOF
+        ENDCASE THEN
+    THEN DROP 0 ;
+
+: _STM-PANEL-INIT  ( rgn -- )
+    DUP _STM-PANEL-RGN ! _STM-PANEL 33 OVER ! SWAP OVER 8 + !
+    ['] _STM-PANEL-DRAW OVER 16 + ! ['] _STM-PANEL-HANDLE OVER 24 + !
+    WDG-F-VISIBLE WDG-F-DIRTY OR SWAP 32 + ! ;
+
+: _STM-DO-QUIT  ( elem -- ) DROP ASHELL-QUIT ;
+: _STM-DO-TIMELINE  ( elem -- ) DROP _STM-OPEN-TIMELINE ;
+: _STM-DO-THREAD  ( elem -- ) DROP _STM-OPEN-THREAD ;
+: _STM-DO-SEARCH  ( elem -- ) DROP _STM-BEGIN-SEARCH ;
+: _STM-DO-COMPOSE  ( elem -- ) DROP _STM-BEGIN-DRAFT ;
+: _STM-DO-ABOUT  ( elem -- )
+    DROP S" Streams - bounded communication, subscription, and draft workbench"
+    2600 ASHELL-TOAST ;
+
+\ ---------------------------------------------------------------------
+\ Lifecycle
+\ ---------------------------------------------------------------------
+
+: STREAMS-INIT-CB  ( instance -- )
+    _STM-ACTIVATE
+    0 _STM-PANEL-RGN ! _STM-V-TIMELINE _STM-VIEW !
+    0 _STM-SELECTED ! 0 _STM-SEARCH-U ! 0 _STM-DRAFT-U ! 0 _STM-DRAFT-REV !
+    S" streams-body" UTUI-BY-ID _STM-E-BODY !
+    S" sbar-view" UTUI-BY-ID _STM-E-SBAR-VIEW !
+    _STM-E-BODY @ ?DUP IF
+        UTUI-ELEM-RGN RGN-NEW _STM-PANEL-INIT
+        _STM-PANEL _STM-E-BODY @ UTUI-WIDGET-SET
+        _STM-E-BODY @ UTUI-FOCUS!
+    THEN
+    S" quit" ['] _STM-DO-QUIT UTUI-DO!
+    S" timeline" ['] _STM-DO-TIMELINE UTUI-DO!
+    S" thread" ['] _STM-DO-THREAD UTUI-DO!
+    S" search" ['] _STM-DO-SEARCH UTUI-DO!
+    S" compose" ['] _STM-DO-COMPOSE UTUI-DO!
+    S" about" ['] _STM-DO-ABOUT UTUI-DO! ;
+
+: STREAMS-EVENT-CB  ( event instance -- consumed? )
+    _STM-ACTIVATE
+    _UTUI-MENU-OPEN @ IF DROP 0 EXIT THEN _STM-PANEL WDG-HANDLE ;
+
+: STREAMS-PAINT-CB  ( instance -- ) _STM-ACTIVATE ;
+: STREAMS-TICK-CB  ( instance -- ) _STM-ACTIVATE ;
+: STREAMS-SHUTDOWN-CB  ( instance -- )
+    _STM-ACTIVATE _STM-E-BODY @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
+    _STM-PANEL-RGN @ ?DUP IF RGN-FREE THEN ;
+
+\ ---------------------------------------------------------------------
+\ Capability surface
+\ ---------------------------------------------------------------------
+
+CREATE _STM-NULL-SCHEMA CS-SIZE ALLOT
+CREATE _STM-STRING-SCHEMA CS-SIZE ALLOT
+CREATE _STM-RESOURCE-SCHEMA CS-SIZE ALLOT
+9 CONSTANT _STM-CAP-COUNT
+CREATE STREAMS-CAPS _STM-CAP-COUNT CAP-DESC * ALLOT
+: STREAMS-CAP-SELECTION STREAMS-CAPS ;
+: STREAMS-CAP-ITEM STREAMS-CAPS CAP-DESC + ;
+: STREAMS-CAP-THREAD STREAMS-CAPS CAP-DESC 2 * + ;
+: STREAMS-CAP-FEED STREAMS-CAPS CAP-DESC 3 * + ;
+: STREAMS-CAP-SEARCH STREAMS-CAPS CAP-DESC 4 * + ;
+: STREAMS-CAP-DRAFT-CREATE STREAMS-CAPS CAP-DESC 5 * + ;
+: STREAMS-CAP-DRAFT-READ STREAMS-CAPS CAP-DESC 6 * + ;
+: STREAMS-CAP-DRAFT-REPLACE STREAMS-CAPS CAP-DESC 7 * + ;
+: STREAMS-CAP-DRAFT-VALIDATE STREAMS-CAPS CAP-DESC 8 * + ;
+
+VARIABLE _STM-CAP-REQ
+VARIABLE _STM-CAP-A
+VARIABLE _STM-CAP-U
+VARIABLE _STM-CAP-I
+
+: _STM-CAP-STRING  ( request -- status )
+    _STM-RESULT-BUF _STM-RESULT-U @ ROT CBR.RESULT CV-STRING!
+    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+: _STM-CAP-DRAFT-RESOURCE  ( request -- status )
+    S" streams:draft:local" ROT CBR.RESULT CV-RESOURCE!
+    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+: _STM-CAP-SELECTION-H  ( request instance -- status )
+    _STM-ACTIVATE _STM-SELECTED @ _STM-URI ROT CBR.RESULT CV-RESOURCE!
+    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+: _STM-CAP-ITEM-H  ( request instance -- status )
+    _STM-ACTIVATE DUP _STM-CAP-REQ ! CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    _STM-INDEX-FROM-URI 0= IF DROP CBUS-S-NOT-FOUND EXIT THEN
+    _STM-ITEM-SNAPSHOT _STM-CAP-REQ @ _STM-CAP-STRING ;
+: _STM-CAP-THREAD-H  ( request instance -- status )
+    _STM-ACTIVATE DUP _STM-CAP-REQ ! CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    _STM-INDEX-FROM-URI 0= IF DROP CBUS-S-NOT-FOUND EXIT THEN
+    _STM-THREAD-SNAPSHOT _STM-CAP-REQ @ _STM-CAP-STRING ;
+: _STM-CAP-FEED-H  ( request instance -- status )
+    _STM-ACTIVATE DUP _STM-CAP-REQ ! _STM-FEED-SNAPSHOT
+    _STM-CAP-REQ @ _STM-CAP-STRING ;
+: _STM-CAP-SEARCH-H  ( request instance -- status )
+    _STM-ACTIVATE DUP _STM-CAP-REQ ! CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    _STM-SEARCH-SNAPSHOT _STM-CAP-REQ @ _STM-CAP-STRING ;
+
+: _STM-DRAFT!  ( addr len -- flag )
+    DUP _STM-DRAFT-CAP >= IF 2DROP 0 EXIT THEN
+    DUP _STM-DRAFT-U ! _STM-DRAFT-BUF SWAP CMOVE 1 _STM-DRAFT-REV +! -1 ;
+: _STM-CAP-DRAFT-CREATE-H  ( request instance -- status )
+    _STM-ACTIVATE DUP _STM-CAP-REQ ! CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    _STM-DRAFT! 0= IF CBUS-S-INVALID EXIT THEN
+    _STM-CAP-REQ @ _STM-CAP-DRAFT-RESOURCE ;
+: _STM-CAP-DRAFT-READ-H  ( request instance -- status )
+    _STM-ACTIVATE DUP _STM-CAP-REQ ! _STM-RESULT-RESET
+    S" resource: streams:draft:local" _STM-RESULT+ _STM-RESULT-NL
+    S" revision: " _STM-RESULT+ _STM-DRAFT-REV @ _STM-RESULT-N _STM-RESULT-NL
+    S" text: " _STM-RESULT+ _STM-DRAFT-BUF _STM-DRAFT-U @ _STM-RESULT+
+    _STM-CAP-REQ @ _STM-CAP-STRING ;
+: _STM-CAP-DRAFT-REPLACE-H  ( request instance -- status )
+    _STM-ACTIVATE DUP _STM-CAP-REQ ! CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+    _STM-DRAFT! 0= IF CBUS-S-INVALID EXIT THEN _STM-INVALIDATE
+    _STM-CAP-REQ @ _STM-CAP-DRAFT-RESOURCE ;
+: _STM-CAP-DRAFT-VALIDATE-H  ( request instance -- status )
+    _STM-ACTIVATE DUP _STM-CAP-REQ ! _STM-RESULT-RESET
+    _STM-DRAFT-U @ 0= IF
+        S" valid: false" _STM-RESULT+ _STM-RESULT-NL
+        S" problem: draft is empty" _STM-RESULT+
+    ELSE
+        S" valid: true" _STM-RESULT+ _STM-RESULT-NL
+        S" provider: fixture" _STM-RESULT+ _STM-RESULT-NL
+        S" external-effect: none" _STM-RESULT+
+    THEN
+    _STM-CAP-REQ @ _STM-CAP-STRING ;
+
+: _STM-CAP-COMMON  ( cap -- )
+    DUP CAP-DESC-INIT CAP-F-NEEDS-TARGET SWAP CAP.FLAGS ! ;
+VARIABLE _STM-MD-C
+VARIABLE _STM-MD-K
+VARIABLE _STM-MD-IA
+VARIABLE _STM-MD-IU
+VARIABLE _STM-MD-TA
+VARIABLE _STM-MD-TU
+VARIABLE _STM-MD-DA
+VARIABLE _STM-MD-DU
+: _STM-CAP-META  ( cap kind id-a id-u title-a title-u desc-a desc-u -- )
+    _STM-MD-DU ! _STM-MD-DA ! _STM-MD-TU ! _STM-MD-TA !
+    _STM-MD-IU ! _STM-MD-IA ! _STM-MD-K ! _STM-MD-C !
+    _STM-MD-C @ _STM-CAP-COMMON
+    _STM-MD-K @ _STM-MD-C @ CAP.KIND !
+    _STM-MD-IA @ _STM-MD-C @ CAP.ID-A !
+    _STM-MD-IU @ _STM-MD-C @ CAP.ID-U !
+    _STM-MD-TA @ _STM-MD-C @ CAP.TITLE-A !
+    _STM-MD-TU @ _STM-MD-C @ CAP.TITLE-U !
+    _STM-MD-DA @ _STM-MD-C @ CAP.DESC-A !
+    _STM-MD-DU @ _STM-MD-C @ CAP.DESC-U ! ;
+
+: _STM-CAP-SETUP  ( -- )
+    _STM-NULL-SCHEMA CS-INIT CV-T-NULL _STM-NULL-SCHEMA CS-ALLOW!
+    _STM-STRING-SCHEMA CS-INIT CV-T-STRING _STM-STRING-SCHEMA CS-ALLOW!
+    _STM-RESULT-CAP _STM-STRING-SCHEMA CS-MAX-LEN!
+    _STM-RESOURCE-SCHEMA CS-INIT CV-T-RESOURCE _STM-RESOURCE-SCHEMA CS-ALLOW!
+    128 _STM-RESOURCE-SCHEMA CS-MAX-LEN!
+
+    STREAMS-CAP-SELECTION CAP-K-RESOURCE
+    S" streams.selection.current" S" Current item" S" Read the selected network item resource"
+    _STM-CAP-META _STM-RESOURCE-SCHEMA STREAMS-CAP-SELECTION CAP.OUT-SCHEMA !
+    CAP-E-OBSERVE STREAMS-CAP-SELECTION CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR CAP-F-CONTEXT-DEFAULT OR STREAMS-CAP-SELECTION CAP.FLAGS !
+    ['] _STM-CAP-SELECTION-H STREAMS-CAP-SELECTION CAP.HANDLER-XT !
+
+    STREAMS-CAP-ITEM CAP-K-RESOURCE
+    S" streams.item.read" S" Read item" S" Read a bounded structured snapshot of an explicit item"
+    _STM-CAP-META _STM-RESOURCE-SCHEMA STREAMS-CAP-ITEM CAP.IN-SCHEMA !
+    _STM-STRING-SCHEMA STREAMS-CAP-ITEM CAP.OUT-SCHEMA ! CAP-E-OBSERVE STREAMS-CAP-ITEM CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR STREAMS-CAP-ITEM CAP.FLAGS !
+    ['] _STM-CAP-ITEM-H STREAMS-CAP-ITEM CAP.HANDLER-XT !
+
+    STREAMS-CAP-THREAD CAP-K-RESOURCE
+    S" streams.thread.read" S" Read thread" S" Read the bounded conversation containing an explicit item"
+    _STM-CAP-META _STM-RESOURCE-SCHEMA STREAMS-CAP-THREAD CAP.IN-SCHEMA !
+    _STM-STRING-SCHEMA STREAMS-CAP-THREAD CAP.OUT-SCHEMA ! CAP-E-OBSERVE STREAMS-CAP-THREAD CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR STREAMS-CAP-THREAD CAP.FLAGS !
+    ['] _STM-CAP-THREAD-H STREAMS-CAP-THREAD CAP.HANDLER-XT !
+
+    STREAMS-CAP-FEED CAP-K-RESOURCE
+    S" streams.feed.read" S" Read feed" S" Read the bounded recorded feed page and freshness"
+    _STM-CAP-META _STM-NULL-SCHEMA STREAMS-CAP-FEED CAP.IN-SCHEMA !
+    _STM-STRING-SCHEMA STREAMS-CAP-FEED CAP.OUT-SCHEMA ! CAP-E-OBSERVE STREAMS-CAP-FEED CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR STREAMS-CAP-FEED CAP.FLAGS !
+    ['] _STM-CAP-FEED-H STREAMS-CAP-FEED CAP.HANDLER-XT !
+
+    STREAMS-CAP-SEARCH CAP-K-RESOURCE
+    S" streams.search.local" S" Search cache" S" Search recorded cached item authors and text"
+    _STM-CAP-META _STM-STRING-SCHEMA STREAMS-CAP-SEARCH CAP.IN-SCHEMA !
+    _STM-STRING-SCHEMA STREAMS-CAP-SEARCH CAP.OUT-SCHEMA ! CAP-E-OBSERVE STREAMS-CAP-SEARCH CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR STREAMS-CAP-SEARCH CAP.FLAGS !
+    ['] _STM-CAP-SEARCH-H STREAMS-CAP-SEARCH CAP.HANDLER-XT !
+
+    STREAMS-CAP-DRAFT-CREATE CAP-K-COMMAND
+    S" streams.draft.create" S" Create draft" S" Create or reset the local unpublished draft"
+    _STM-CAP-META _STM-STRING-SCHEMA STREAMS-CAP-DRAFT-CREATE CAP.IN-SCHEMA !
+    _STM-RESOURCE-SCHEMA STREAMS-CAP-DRAFT-CREATE CAP.OUT-SCHEMA ! CAP-E-MUTATE STREAMS-CAP-DRAFT-CREATE CAP.EFFECTS !
+    ['] _STM-CAP-DRAFT-CREATE-H STREAMS-CAP-DRAFT-CREATE CAP.HANDLER-XT !
+
+    STREAMS-CAP-DRAFT-READ CAP-K-RESOURCE
+    S" streams.draft.read" S" Read draft" S" Read the local unpublished draft and revision"
+    _STM-CAP-META _STM-NULL-SCHEMA STREAMS-CAP-DRAFT-READ CAP.IN-SCHEMA !
+    _STM-STRING-SCHEMA STREAMS-CAP-DRAFT-READ CAP.OUT-SCHEMA ! CAP-E-OBSERVE STREAMS-CAP-DRAFT-READ CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR STREAMS-CAP-DRAFT-READ CAP.FLAGS !
+    ['] _STM-CAP-DRAFT-READ-H STREAMS-CAP-DRAFT-READ CAP.HANDLER-XT !
+
+    STREAMS-CAP-DRAFT-REPLACE CAP-K-COMMAND
+    S" streams.draft.replace" S" Replace draft" S" Replace local draft text without publishing"
+    _STM-CAP-META _STM-STRING-SCHEMA STREAMS-CAP-DRAFT-REPLACE CAP.IN-SCHEMA !
+    _STM-RESOURCE-SCHEMA STREAMS-CAP-DRAFT-REPLACE CAP.OUT-SCHEMA ! CAP-E-MUTATE STREAMS-CAP-DRAFT-REPLACE CAP.EFFECTS !
+    ['] _STM-CAP-DRAFT-REPLACE-H STREAMS-CAP-DRAFT-REPLACE CAP.HANDLER-XT !
+
+    STREAMS-CAP-DRAFT-VALIDATE CAP-K-RESOURCE
+    S" streams.draft.validate" S" Validate draft" S" Validate the draft without publishing or network access"
+    _STM-CAP-META _STM-NULL-SCHEMA STREAMS-CAP-DRAFT-VALIDATE CAP.IN-SCHEMA !
+    _STM-STRING-SCHEMA STREAMS-CAP-DRAFT-VALIDATE CAP.OUT-SCHEMA ! CAP-E-OBSERVE STREAMS-CAP-DRAFT-VALIDATE CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR STREAMS-CAP-DRAFT-VALIDATE CAP.FLAGS !
+    ['] _STM-CAP-DRAFT-VALIDATE-H STREAMS-CAP-DRAFT-VALIDATE CAP.HANDLER-XT ! ;
+
+CREATE STREAMS-COMP-DESC COMP-DESC ALLOT
+: _STREAMS-COMP-SETUP  ( -- )
+    _STM-CAP-SETUP STREAMS-COMP-DESC COMP-DESC-INIT
+    S" org.akashic.streams" STREAMS-COMP-DESC COMP.ID-U ! STREAMS-COMP-DESC COMP.ID-A !
+    S" 0.1.0" STREAMS-COMP-DESC COMP.VERSION-U ! STREAMS-COMP-DESC COMP.VERSION-A !
+    _STM-STATE-SIZE STREAMS-COMP-DESC COMP.STATE-SIZE !
+    STREAMS-CAPS STREAMS-COMP-DESC COMP.CAPS-A !
+    _STM-CAP-COUNT STREAMS-COMP-DESC COMP.CAPS-N ! ;
+
+: STREAMS-ENTRY  ( desc -- )
+    _STREAMS-COMP-SETUP DUP APP-DESC-INIT
+    STREAMS-COMP-DESC OVER APP.COMP-DESC !
+    ['] STREAMS-INIT-CB OVER APP.INIT-XT !
+    ['] STREAMS-EVENT-CB OVER APP.EVENT-XT !
+    ['] STREAMS-TICK-CB OVER APP.TICK-XT !
+    ['] STREAMS-PAINT-CB OVER APP.PAINT-XT !
+    ['] STREAMS-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
+    ['] _STM-ACTIVATE OVER APP.ACTIVATE-XT !
+    S" tui/applets/streams/streams.uidl" ROT DUP >R APP.UIDL-FILE-U ! R@ APP.UIDL-FILE-A !
+    0 R@ APP.WIDTH ! 0 R@ APP.HEIGHT !
+    S" Streams" R@ APP.TITLE-U ! R> APP.TITLE-A ! ;
+
+CREATE STREAMS-DESC APP-DESC ALLOT
+: STREAMS-RUN  ( -- ) STREAMS-DESC STREAMS-ENTRY STREAMS-DESC ASHELL-RUN ;

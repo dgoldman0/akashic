@@ -5857,6 +5857,7 @@ _ct-run
             "tui/applets/grid/grid.f",
             "tui/applets/agent/agent.f",
             "tui/applets/soundlab/soundlab.f",
+            "tui/applets/streams/streams.f",
             "agent/providers/devtools/scripted.f",
         ),
         resources=(
@@ -5869,6 +5870,7 @@ _ct-run
             "tui/applets/grid/grid.uidl",
             "tui/applets/agent/agent.uidl",
             "tui/applets/soundlab/soundlab.uidl",
+            "tui/applets/streams/streams.uidl",
         ),
         autoexec=r"""\ autoexec.f - Akashic desktop profile
 ENTER-USERLAND
@@ -5880,6 +5882,7 @@ REQUIRE tui/applets/daybook/daybook.f
 REQUIRE tui/applets/grid/grid.f
 REQUIRE tui/applets/agent/agent.f
 REQUIRE tui/applets/soundlab/soundlab.f
+REQUIRE tui/applets/streams/streams.f
 REQUIRE agent/providers/devtools/scripted.f
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
@@ -5934,6 +5937,14 @@ _boot-agent-desc DESK-QUEUE-LAUNCH
 CREATE _boot-soundlab-desc APP-DESC ALLOT
 _boot-soundlab-desc SOUNDLAB-ENTRY
 _boot-soundlab-desc
+ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
+DESK-QUEUE-BUILTIN
+
+\ Streams is a discoverable built-in; its offline qualification fixture does
+\ not consume a startup tile or imply that live network authority is present.
+CREATE _boot-streams-desc APP-DESC ALLOT
+_boot-streams-desc STREAMS-ENTRY
+_boot-streams-desc
 ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
 DESK-QUEUE-BUILTIN
 
@@ -7787,6 +7798,23 @@ GRID-RUN
         ready_markers=("File", "Edit", "Data", "Grid"),
         stable_markers=("File", "Edit", "Data", "Grid"),
     ),
+    "streams": Profile(
+        roots=("tui/applets/streams/streams.f",),
+        resources=("tui/applets/streams/streams.uidl",),
+        autoexec=r"""\ autoexec.f - standalone Streams profile
+ENTER-USERLAND
+." [akashic] loading streams" CR
+REQUIRE tui/applets/streams/streams.f
+." [akashic] streams definitions loaded" CR
+CREATE _boot-streams-desc APP-DESC ALLOT
+_boot-streams-desc STREAMS-ENTRY
+." [akashic] starting streams" CR
+_boot-streams-desc ASHELL-RUN
+""",
+        ready_markers=("STREAMS", "T thread", "Recorded fixtures"),
+        stable_markers=("STREAMS", "Recorded fixtures", "cached restart"),
+        linked=True,
+    ),
     "soundlab": Profile(
         roots=("tui/applets/soundlab/soundlab.f",),
         resources=("tui/applets/soundlab/soundlab.uidl",),
@@ -7804,6 +7832,88 @@ SOUNDLAB-RUN
         include_large_sample=False,
     ),
 }
+
+PROFILES["streams-contracts"] = Profile(
+    roots=("tui/applets/streams/streams.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - deterministic Streams capability contracts
+ENTER-USERLAND
+." [akashic] loading Streams contracts" CR
+REQUIRE tui/applets/streams/streams.f
+
+VARIABLE _stc-fails
+VARIABLE _stc-checks
+VARIABLE _stc-inst
+VARIABLE _stc-req
+: _stc-assert  ( flag -- )
+    1 _stc-checks +! 0= IF
+        1 _stc-fails +! ." STC assertion " _stc-checks @ . ." failed" CR
+    THEN ;
+: _stc-result-has  ( addr len -- flag )
+    _stc-req @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@ 2SWAP STR-STR-CONTAINS ;
+: _stc-clear  ( -- )
+    _stc-req @ CBR.ARGS CV-FREE _stc-req @ CBR.RESULT CV-FREE ;
+
+: _stc-run  ( -- )
+    0 _stc-fails ! 0 _stc-checks !
+    _STREAMS-COMP-SETUP
+    _STM-CAP-COUNT 0 DO
+        STREAMS-CAPS I CAP-DESC * + CAP-DESC-VALID? _stc-assert
+    LOOP
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _stc-assert DROP _stc-inst !
+    CBR-NEW DUP 0= _stc-assert DROP _stc-req !
+
+    _stc-req @ _stc-inst @ _STM-CAP-SELECTION-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
+        S" streams:item:at:1" STR-STR= _stc-assert
+    _stc-clear
+
+    S" streams:item:at:2" _stc-req @ CBR.ARGS CV-RESOURCE! 0= _stc-assert
+    _stc-req @ _stc-inst @ _STM-CAP-ITEM-H CBUS-S-OK = _stc-assert
+    S" @rowan.test" _stc-result-has _stc-assert
+    S" cached restart" _stc-result-has _stc-assert
+    _stc-clear
+
+    S" streams:item:at:2" _stc-req @ CBR.ARGS CV-RESOURCE! 0= _stc-assert
+    _stc-req @ _stc-inst @ _STM-CAP-THREAD-H CBUS-S-OK = _stc-assert
+    S" streams:item:at:3" _stc-result-has _stc-assert
+    S" thread-root: streams:item:at:1" _stc-result-has _stc-assert
+    _stc-clear
+
+    S" identity" _stc-req @ CBR.ARGS CV-STRING! 0= _stc-assert
+    _stc-req @ _stc-inst @ _STM-CAP-SEARCH-H CBUS-S-OK = _stc-assert
+    S" streams:item:at:2" _stc-result-has _stc-assert
+    _stc-clear
+
+    S" A bounded local draft" _stc-req @ CBR.ARGS CV-STRING! 0= _stc-assert
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-CREATE-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
+        S" streams:draft:local" STR-STR= _stc-assert
+    _stc-clear
+
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-READ-H CBUS-S-OK = _stc-assert
+    S" A bounded local draft" _stc-result-has _stc-assert
+    S" revision: 1" _stc-result-has _stc-assert
+    _stc-clear
+
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-VALIDATE-H CBUS-S-OK = _stc-assert
+    S" valid: true" _stc-result-has _stc-assert
+    S" external-effect: none" _stc-result-has _stc-assert
+
+    _stc-req @ CBR-FREE _stc-inst @ CINST-FREE
+    _stc-fails @ 0= IF
+        ." STREAMS CONTRACTS PASS " _stc-checks @ .
+    ELSE
+        ." STREAMS CONTRACTS FAIL " _stc-fails @ . ." / " _stc-checks @ .
+    THEN CR ;
+
+_stc-run
+""",
+    ready_markers=("STREAMS CONTRACTS PASS",),
+    stable_markers=("STREAMS CONTRACTS PASS",),
+    failure_markers=("STREAMS CONTRACTS FAIL",),
+    linked=True,
+)
 
 PROFILES["audio-contracts"] = Profile(
     roots=(
@@ -12567,6 +12677,24 @@ def smoke(
                                     wait_screen(
                                         "D2", "Grid did not return to the edited formula"
                                     )
+
+        if initial_ready and profile_name == "streams":
+            session.send_key("down")
+            settle_input("Streams did not settle its timeline selection")
+            session.send_key("ctrl+f")
+            wait_screen(
+                "Found cached item matching identity",
+                "Streams did not exercise its deterministic local search",
+            )
+            session.send_key("ctrl+n")
+            wait_screen(
+                "A local draft can be reviewed before any network action.",
+                "Streams did not create a local unpublished draft",
+            )
+            wait_screen(
+                "nothing was published",
+                "Streams did not distinguish local drafting from publication",
+            )
 
         if initial_ready and profile_name == "soundlab":
             # Exercise exact-value editing, stale/render transitions, and the
