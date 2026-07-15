@@ -78,9 +78,11 @@ or committing a successful response. Closing, relaunching, account changes, or
 request replacement advance the applicable generation before cancellation, so
 a late or retained success can only be discarded and wiped.
 
-The service does not own the TLS trust store. A transport binding must snapshot
-and validate the machine-owned trust generation separately; applets do not
-replace global trust state while an external operation is active.
+The service does not own the TLS trust store. Desk freezes the
+[machine-owned trust registry](tls-trust-registry.md) before initializing this
+service, and applets do not install or replace global trust as part of an
+operation. Trust composition and external-I/O admission are separate machine
+boundaries.
 
 Run the deterministic contract profile with:
 

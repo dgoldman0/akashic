@@ -1641,6 +1641,187 @@ _dx-run
         linked=True,
         include_large_sample=False,
     ),
+    "tls-trust-registry": Profile(
+        roots=("agent/providers/codex/trust.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - composed machine TLS trust contracts
+ENTER-USERLAND
+." [akashic] loading machine TLS trust contracts" CR
+REQUIRE agent/providers/codex/trust.f
+
+VARIABLE _tr-fails
+VARIABLE _tr-checks
+VARIABLE _tr-depth
+VARIABLE _tr-builder
+VARIABLE _tr-generation
+: _tr-assert  ( flag -- )
+    1 _tr-checks +!
+    0= IF 1 _tr-fails +! ." ASSERT " _tr-checks @ . CR THEN ;
+: _tr-stack  ( -- )
+    DEPTH DUP _tr-depth @ <> IF
+        ." STACK " _tr-depth @ . ."  -> " DUP . CR .S CR
+    THEN
+    _tr-depth @ = _tr-assert ;
+
+: _tr-extra-emit  ( builder context -- status )
+    DROP _tr-builder !
+    _CDTR-CERT 127 S" short.example" 0 _tr-builder @
+        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
+    _CDTR-CERT _CDTR-CERT-SIZE S" bad..example" 0 _tr-builder @
+        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
+    _CDTR-CERT _CDTR-CERT-SIZE S" badflags.example" 2 _tr-builder @
+        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
+    _CDTR-CERT _CDTR-CERT-SIZE S" auth.openai.com" 0 _tr-builder @
+        MTRUST-ANCHOR+ MTRUST-S-CONFLICT = _tr-assert
+    _CDTR-CERT _CDTR-CERT-SIZE S" testing.example" 0 _tr-builder @
+        MTRUST-ANCHOR+ MTRUST-S-OK = _tr-assert
+    _CDTR-CERT _CDTR-CERT-SIZE S" testing.example" 0 _tr-builder @
+        MTRUST-ANCHOR+ MTRUST-S-CONFLICT = _tr-assert
+    MTRUST-S-OK ;
+
+: _tr-other-emit  ( builder context -- status )
+    2DROP MTRUST-S-OK ;
+
+: _tr-leak-emit  ( builder context -- leaked status )
+    2DROP 123 MTRUST-S-OK ;
+
+CREATE _tr-leak-contributor _MTC-SIZE ALLOT
+
+: _tr-run  ( -- )
+    0 _tr-fails ! 0 _tr-checks ! DEPTH _tr-depth !
+    TLS-TRUST-RESET
+    ['] _tr-leak-emit _tr-leak-contributor _MTC.EMIT-XT !
+    0 _tr-leak-contributor _MTC.CONTEXT !
+    _tr-leak-contributor _MTR-CALL-EMITTER
+        MTRUST-S-CONTRIBUTOR = _tr-assert
+    MTRUST-LAST-DETAIL@ MTRUST-D-EMITTER-STACK = _tr-assert
+    _tr-stack
+    CODEX-TRUST-REGISTER MTRUST-S-OK = _tr-assert
+    CODEX-TRUST-REGISTER MTRUST-S-OK = _tr-assert
+    S" org.akashic.testing.trust" ['] _tr-extra-emit 0
+        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
+    S" org.akashic.testing.trust" ['] _tr-extra-emit 0
+        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
+    S" org.akashic.testing.empty-trust" ['] _tr-other-emit 0
+        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
+    S" org.akashic.testing.trust" ['] _tr-other-emit 0
+        MTRUST-REGISTER MTRUST-S-CONFLICT = _tr-assert
+    TLS-TRUST-COUNT @ 0= _tr-assert
+    MTRUST-FREEZE MTRUST-S-OK = _tr-assert
+    MTRUST-FROZEN? _tr-assert
+    MTRUST-COUNT@ 3 = _tr-assert
+    TLS-TRUST-COUNT @ 3 = _tr-assert
+    TLS-TRUST-VERSION @ 1 = _tr-assert
+    MTRUST-GENERATION@ DUP _tr-generation ! 0<> _tr-assert
+    _MTRUST-DIGEST _MTR-BE64@ _tr-generation @ = _tr-assert
+    TLS-TRUST-GENERATION @ _tr-generation @ = _tr-assert
+    S" auth.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
+    S" chatgpt.com" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
+    S" testing.example" 2 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
+    S" api.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _tr-assert
+    S" auth.openai.com.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _tr-assert
+    MTRUST-FREEZE MTRUST-S-OK = _tr-assert
+    CODEX-TRUST-REGISTER MTRUST-S-FROZEN = _tr-assert
+    _CDTR-CERT _CDTR-CERT-SIZE S" after-freeze.example" 0 _tr-builder @
+        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
+    _tr-generation @ 1+ TLS-TRUST-GENERATION !
+    MTRUST-FREEZE MTRUST-S-DIVERGED = _tr-assert
+    TLS-TRUST-GENERATION @ _tr-generation @ 1+ = _tr-assert
+    _tr-generation @ TLS-TRUST-GENERATION !
+    _tr-stack
+    _tr-fails @ 0= IF
+        ." TLS TRUST REGISTRY PASS " _tr-checks @ .
+    ELSE
+        ." TLS TRUST REGISTRY FAIL " _tr-fails @ . ."  / " _tr-checks @ .
+    THEN CR ;
+
+_tr-run
+""",
+        ready_markers=("TLS TRUST REGISTRY PASS",),
+        stable_markers=("TLS TRUST REGISTRY PASS",),
+        failure_markers=("TLS TRUST REGISTRY FAIL",),
+        include_large_sample=False,
+    ),
+    "tls-trust-registry-error": Profile(
+        roots=("net/tls-trust-registry.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - nonthrowing trust contributor failure
+ENTER-USERLAND
+." [akashic] loading trust contributor error contract" CR
+REQUIRE net/tls-trust-registry.f
+
+VARIABLE _te-fails
+VARIABLE _te-checks
+VARIABLE _te-depth
+: _te-assert  ( flag -- )
+    1 _te-checks +!
+    0= IF 1 _te-fails +! ." ASSERT " _te-checks @ . CR THEN ;
+: _te-error  ( builder context -- status ) 2DROP -771 ;
+: _te-run  ( -- )
+    0 _te-fails ! 0 _te-checks ! DEPTH _te-depth !
+    1 TLS-TRUST-COUNT ! 1 TLS-TRUST-VERSION ! 99 TLS-TRUST-GENERATION !
+    S" org.akashic.testing.error" ['] _te-error 0
+        MTRUST-REGISTER MTRUST-S-OK = _te-assert
+    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _te-assert
+    MTRUST-LAST-DETAIL@ -771 = _te-assert
+    MTRUST-STATE@ MTRUST-STATE-FAILED = _te-assert
+    TLS-TRUST-COUNT @ 0= _te-assert
+    TLS-TRUST-VERSION @ 0= _te-assert
+    TLS-TRUST-GENERATION @ 0= _te-assert
+    S" org.akashic.testing.late" ['] _te-error 0
+        MTRUST-REGISTER MTRUST-S-STATE = _te-assert
+    MTRUST-FREEZE MTRUST-S-STATE = _te-assert
+    DEPTH _te-depth @ = _te-assert
+    _te-fails @ 0= IF
+        ." TLS TRUST ERROR PASS " _te-checks @ .
+    ELSE
+        ." TLS TRUST ERROR FAIL " _te-fails @ . ."  / " _te-checks @ .
+    THEN CR ;
+
+_te-run
+""",
+        ready_markers=("TLS TRUST ERROR PASS",),
+        stable_markers=("TLS TRUST ERROR PASS",),
+        failure_markers=("TLS TRUST ERROR FAIL",),
+        include_large_sample=False,
+    ),
+    "tls-trust-registry-throw": Profile(
+        roots=("net/tls-trust-registry.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - throwing trust contributor failure
+ENTER-USERLAND
+." [akashic] loading trust contributor throw contract" CR
+REQUIRE net/tls-trust-registry.f
+
+VARIABLE _tt-fails
+VARIABLE _tt-checks
+VARIABLE _tt-depth
+: _tt-assert  ( flag -- )
+    1 _tt-checks +!
+    0= IF 1 _tt-fails +! ." ASSERT " _tt-checks @ . CR THEN ;
+: _tt-throw  ( builder context -- status ) 2DROP -772 THROW 0 ;
+: _tt-run  ( -- )
+    0 _tt-fails ! 0 _tt-checks ! DEPTH _tt-depth !
+    S" org.akashic.testing.throw" ['] _tt-throw 0
+        MTRUST-REGISTER MTRUST-S-OK = _tt-assert
+    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _tt-assert
+    MTRUST-LAST-DETAIL@ -772 = _tt-assert
+    MTRUST-STATE@ MTRUST-STATE-FAILED = _tt-assert
+    TLS-TRUST-COUNT @ 0= _tt-assert
+    DEPTH _tt-depth @ = _tt-assert
+    _tt-fails @ 0= IF
+        ." TLS TRUST THROW PASS " _tt-checks @ .
+    ELSE
+        ." TLS TRUST THROW FAIL " _tt-fails @ . ."  / " _tt-checks @ .
+    THEN CR ;
+
+_tt-run
+""",
+        ready_markers=("TLS TRUST THROW PASS",),
+        stable_markers=("TLS TRUST THROW PASS",),
+        failure_markers=("TLS TRUST THROW FAIL",),
+        include_large_sample=False,
+    ),
     "http-buffered": Profile(
         roots=("net/http-buffered.f",),
         resources=(),
@@ -4048,12 +4229,17 @@ _cc-run
         stable_markers=("CODEX CATALOG PASS",),
     ),
     "codex-source": Profile(
-        roots=("agent/providers/codex/source.f", "agent/runtime.f"),
+        roots=(
+            "agent/providers/codex/source.f",
+            "agent/providers/codex/trust.f",
+            "agent/runtime.f",
+        ),
         resources=(),
         autoexec=r"""\ autoexec.f - owned Codex provider source
 ENTER-USERLAND
 ." [akashic] loading Codex provider source" CR
 REQUIRE agent/providers/codex/source.f
+REQUIRE agent/providers/codex/trust.f
 REQUIRE agent/runtime.f
 
 VARIABLE _cm-fails
@@ -4062,6 +4248,7 @@ VARIABLE _cm-depth
 VARIABLE _cm-source
 VARIABLE _cm-provider
 VARIABLE _cm-runtime
+VARIABLE _cm-trust-generation
 CREATE _cm-wire 4096 ALLOT
 CREATE _cm-request HTTP-REQUEST-SIZE ALLOT
 CREATE _cm-session 200 ALLOT
@@ -4076,8 +4263,19 @@ CREATE _cm-session 200 ALLOT
 
 : _cm-run  ( -- )
     0 _cm-fails ! 0 _cm-checks ! DEPTH _cm-depth !
+    CODEX-TRUST-REGISTER MTRUST-S-OK = _cm-assert
+    CODEX-TRUST-REGISTER MTRUST-S-OK = _cm-assert
+    TLS-TRUST-COUNT @ 0= _cm-assert
     CODEX-SOURCE-NEW
     DUP APSOURCE-S-OK = _cm-assert DROP _cm-source !
+    TLS-TRUST-COUNT @ 0= _cm-assert
+    TLS-TRUST-GENERATION @ 0= _cm-assert
+    MTRUST-FREEZE MTRUST-S-OK = _cm-assert
+    MTRUST-FROZEN? _cm-assert
+    MTRUST-GENERATION@ DUP 0<> _cm-assert
+    DUP _cm-trust-generation ! TLS-TRUST-GENERATION @ = _cm-assert
+    MTRUST-FREEZE MTRUST-S-OK = _cm-assert
+    CODEX-TRUST-REGISTER MTRUST-S-FROZEN = _cm-assert
     _cm-source @ CODEX-SOURCE-CONFIG OAIC-HOST
     CODEX-BACKEND-HOST STR-STR= _cm-assert
     _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT KDOSTLS-HOST
@@ -4095,7 +4293,7 @@ CREATE _cm-session 200 ALLOT
     _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH = _cm-assert
     TLS-TRUST-COUNT @ 2 = _cm-assert
     TLS-TRUST-VERSION @ 1 = _cm-assert
-    TLS-TRUST-GENERATION @ CODEX-TRUST-GENERATION = _cm-assert
+    TLS-TRUST-GENERATION @ _cm-trust-generation @ = _cm-assert
     S" auth.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _cm-assert
     S" chatgpt.com" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _cm-assert
     S" api.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _cm-assert
@@ -4129,6 +4327,8 @@ CREATE _cm-session 200 ALLOT
     _cm-runtime @ ARUNTIME-FREE
     _cm-provider @ APROV-FREE
     _cm-source @ APSOURCE-FREE
+    TLS-TRUST-COUNT @ 2 = _cm-assert
+    TLS-TRUST-GENERATION @ _cm-trust-generation @ = _cm-assert
     _cm-stack
     _cm-fails @ 0= IF
         ." CODEX SOURCE PASS " _cm-checks @ .
@@ -14344,7 +14544,10 @@ VARIABLE _clt-adapter
 255 255 255 0 NET-MASK IP!
 8 8 8 8 DNS-SERVER-IP IP!
 
-CODEX-TRUST-INSTALL DUP TLS-CERT-OK <> IF
+CODEX-TRUST-REGISTER DUP MTRUST-S-OK <> IF
+    ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
+THEN DROP
+MTRUST-FREEZE DUP MTRUST-S-OK <> IF
     ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
 THEN DROP
 ." CODEX TLS GATE READY" CR TX-FLUSH
@@ -14418,7 +14621,10 @@ VARIABLE _cla-code-shown
     10 64 0 1 GW-IP IP!
     255 255 255 0 NET-MASK IP!
     8 8 8 8 DNS-SERVER-IP IP!
-    CODEX-TRUST-INSTALL DUP TLS-CERT-OK <> IF
+    CODEX-TRUST-REGISTER DUP MTRUST-S-OK <> IF
+        ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP
+    MTRUST-FREEZE DUP MTRUST-S-OK <> IF
         ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
     THEN DROP
     _cla-tls KDOSTLS-INIT

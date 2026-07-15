@@ -69,6 +69,7 @@ REQUIRE ../../../runtime/resource-registry.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/job.f
+REQUIRE ../../../net/tls-trust-registry.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../../../interop/shared-document.f
@@ -1807,6 +1808,8 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
     DUP _DINI-INST ! _DESK-USE-STATE
     DESK-CONTEXT DUP 0= ABORT" desk: no active Practice Context"
     _DINI-CONTEXT !
+    MTRUST-FREEZE MTRUST-S-OK <>
+    ABORT" desk: machine TLS trust unavailable"
     _DESK-XIO-INIT XIO-S-OK <>
     ABORT" desk: external I/O service unavailable"
     0 _DESK-INSTALLED-N !

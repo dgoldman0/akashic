@@ -9,6 +9,8 @@
 [`keys.f`](../../keys.md), [`color.f`](../../color.md),
 [`toml.f`](../../../../utils/toml.md), [`app-catalog.f`](../../app-catalog.md),
 `app-loader.f`, `app-builder.f`,
+[`tls-trust-registry.f`](../../../net/tls-trust-registry.md),
+[`external-io.f`](../../../net/external-io.md),
 `liraq/uidl.f`
 
 ## Why `applets/`?
@@ -236,6 +238,12 @@ receive its submission callbacks. Before freeing a child, Desk cancels or
 releases only operations whose instance identity and generation match that
 child. Final Desk teardown drains any remaining operation before unbinding the
 machine singleton.
+
+Before creating that service or publishing any interoperability endpoint, Desk
+freezes the machine TLS trust registry. Reviewed provider/network modules must
+register their scoped contributions before Desk activation; source constructors
+and applet launch do not modify trust. Desk teardown unbinds external I/O but
+does not reset or thaw the accepted machine snapshot.
 
 Desk closes every lens before entering one dispatch-quiesced teardown boundary
 which cancels requests, deactivates the owner, and frees the resource registry,

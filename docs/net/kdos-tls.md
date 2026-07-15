@@ -39,6 +39,12 @@ The adapter descriptor owns configuration and connection state but not the
 KDOS trust store. `KDOSTLS-NEW`/`KDOSTLS-FREE` are available for heap ownership;
 `KDOSTLS-INIT` supports embedded or static descriptors.
 
+Normal Akashic boots provision KDOS through the
+[machine trust registry](tls-trust-registry.md): reviewed modules contribute
+scoped anchors, and Desk freezes the composed snapshot before external I/O is
+initialized. Provider constructors and applets do not call `TLS-TRUST-LOAD` or
+`TLS-TRUST-RESET`; those remain platform provisioning primitives.
+
 KDOS currently shares its TLS handshake, SNI, record, and receive scratch.
 `kdos-tls.f` therefore permits one active adapter at a time and reports
 `KDOSTLS-E-BUSY` to another opener. This is an explicit machine-layer limit, not

@@ -10,7 +10,6 @@ PROVIDED akashic-agent-codex-source
 REQUIRE ../../provider-source.f
 REQUIRE provider.f
 REQUIRE model-catalog.f
-REQUIRE trust.f
 REQUIRE ../../../net/transports/kdos-tls.f
 
 0 CONSTANT _CDSRC-SOURCE
@@ -69,9 +68,6 @@ VARIABLE _CDSRCC-P
 VARIABLE _CDSRCN-S
 
 : CODEX-SOURCE-NEW  ( -- source status )
-    CODEX-TRUST-INSTALL ?DUP IF
-        DROP 0 APSOURCE-S-INVALID EXIT
-    THEN
     CODEX-SOURCE-SIZE ALLOCATE
     DUP IF 2DROP 0 APSOURCE-S-NOMEM EXIT THEN
     DROP DUP _CDSRCN-S ! CODEX-SOURCE-SIZE 0 FILL
