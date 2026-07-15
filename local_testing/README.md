@@ -38,6 +38,23 @@ The Streams qualification path is intentionally split by boundary:
 - `streams-contracts` covers the owned feed model and typed capabilities.
 - `streams-draft-contracts` covers the draft record and replacement primitive.
 - `streams-persistence-contracts` covers normal applet load/save/recovery.
+- `streams-source-registry-contracts` covers the pointer-free bounded source
+  model, exact revisions, validation, and canonical unused records.
+- `streams-source-store-contracts` covers the versioned source record, CRC,
+  staged replacement, recovery, fail-closed states, and buffer isolation.
+- `streams-source-owner-contracts` covers lifecycle loading, optimistic durable
+  mutations, sanitized capabilities, and actual Agent-principal authority,
+  operand-seal, reviewed-commit, and replay behavior.
+- `streams-syndication-contracts` covers the bounded JSON Feed 1/1.1 owned
+  projection and its transactional fixture generations.
+- `streams-page-contracts` covers exact content-type admission, inert bounded
+  HTML/text normalization, and raw/normalized hashes.
+- `streams-source-ui-contracts` covers standalone source creation, independent
+  selection, exact toggle/removal, stale-confirmation rejection, and blocked
+  storage presentation.
+- `local_testing/fixtures/streams/` is the explicit JSON Feed, RSS, Atom,
+  watched-page, text, and notification qualification corpus; fixture presence
+  is not a claim that every corresponding adapter is implemented.
 - `streams-xio-contracts` covers the explicitly composed Streams/XIO contract
   using injected port callbacks: submission, completion, actor rollback, stale
   results, and cleanup. It is offline integration evidence, not live-network or
@@ -48,7 +65,10 @@ The Streams qualification path is intentionally split by boundary:
   cancellation, graceful close, and bounded abort fallback without external
   network access.
 - `streams` covers the standalone timeline, context, search, and draft UI.
-- `desktop-streams` covers launch, close, relaunch, and recovery through Desk.
+- `desktop-streams` covers real launcher-driven source create/toggle/removal,
+  exact source/draft persistence, close, relaunch, and recovery through Desk.
+- `desktop-agent-hardening` keeps Streams live while proving Desk exposes only
+  its two sanitized Observe operations in ordinary read/assist facets.
 - `streams-live-public` is the opt-in TAP-facing component journey; it directly
   ticks the XIO service, Streams component, and network loop.
 

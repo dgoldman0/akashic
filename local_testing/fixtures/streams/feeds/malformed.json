@@ -1,0 +1,11 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Intentionally malformed Streams fixture",
+  "title": "Duplicate defined field must not win",
+  "items": [
+    {
+      "id": "jsonfeed:item:must-not-commit",
+      "content_text": "This item is never a valid observation."
+    }
+  ],
+}

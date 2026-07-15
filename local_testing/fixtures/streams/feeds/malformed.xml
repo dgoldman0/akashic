@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Intentionally malformed Streams fixture</title>
+    <item>
+      <guid isPermaLink="false">rss:item:must-not-commit</guid>
+      <description>This item is never a valid observation.</description>
+  </channel>
+</rss>

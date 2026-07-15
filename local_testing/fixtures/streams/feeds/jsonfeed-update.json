@@ -1,0 +1,52 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Example Desk JSON Feed — 東京",
+  "home_page_url": "https://example.test/",
+  "feed_url": "https://example.test/feed.json",
+  "next_url": "https://example.test/feed.json?page=2",
+  "description": "Qualification feed for Streams.",
+  "authors": [
+    {
+      "name": "Ada Example",
+      "url": "https://example.test/authors/ada"
+    }
+  ],
+  "items": [
+    {
+      "id": "jsonfeed:item:stable",
+      "url": "https://example.test/items/json-stable",
+      "title": "Café status 🛰️",
+      "content_text": "The stable item remains unchanged.",
+      "date_published": "2026-07-15T10:00:00Z",
+      "date_modified": "2026-07-15T10:00:00Z",
+      "tags": ["qualification", "unicode"],
+      "attachments": [
+        {
+          "url": "https://example.test/media/stable.mp3",
+          "mime_type": "audio/mpeg",
+          "title": "Stable audio",
+          "size_in_bytes": 1024,
+          "duration_in_seconds": 3
+        }
+      ]
+    },
+    {
+      "id": "jsonfeed:item:changed",
+      "url": "https://example.test/items/json-changed",
+      "title": "Change record, version two",
+      "content_html": "<p>Service state: degraded; investigation started.</p>",
+      "summary": "Version two of the changing item.",
+      "date_published": "2026-07-15T11:00:00Z",
+      "date_modified": "2026-07-15T12:30:00Z",
+      "tags": ["updates", "degraded"]
+    },
+    {
+      "id": "jsonfeed:item:new",
+      "url": "https://example.test/items/json-new",
+      "title": "New observation \ud83d\ude80",
+      "content_text": "First appearance of the new item.",
+      "date_published": "2026-07-15T12:45:00Z",
+      "tags": ["updates"]
+    }
+  ]
+}

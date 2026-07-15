@@ -9,6 +9,13 @@
 <item text=Set_Public_Actor do=actor/>
 <item text=Refresh_Public_Feed do=refresh/>
 </menu>
+<menu label=Sources>
+<item text=Manage_Sources do=sources key=Ctrl+S/>
+<item text=Add_Syndication_Source do=source-add-feed/>
+<item text=Add_Watched_Page do=source-add-page/>
+<item text=Toggle_Selected_Source do=source-toggle/>
+<item text=Remove_Selected_Source do=source-remove/>
+</menu>
 <menu label=Post>
 <item text=Open_Thread do=thread/>
 <item text=Create_Local_Draft do=compose key=Ctrl+N/>
@@ -27,5 +34,6 @@
 <action do=compose key=Ctrl+N/>
 <action do=thread key=Ctrl+T/>
 <action do=timeline key=Ctrl+L/>
+<action do=sources key=Ctrl+S/>
 <action do=quit key=Ctrl+Q/>
 </uidl>

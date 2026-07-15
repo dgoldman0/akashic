@@ -28,6 +28,30 @@ OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
 STREAMS_TIMELINE_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "atproto" / "timeline.json"
 ).read_bytes()
+STREAMS_JSON_FEED_BASE_FIXTURE = (
+    AKASHIC_ROOT
+    / "local_testing"
+    / "fixtures"
+    / "streams"
+    / "feeds"
+    / "jsonfeed-base.json"
+).read_bytes()
+STREAMS_JSON_FEED_UPDATE_FIXTURE = (
+    AKASHIC_ROOT
+    / "local_testing"
+    / "fixtures"
+    / "streams"
+    / "feeds"
+    / "jsonfeed-update.json"
+).read_bytes()
+STREAMS_JSON_FEED_MALFORMED_FIXTURE = (
+    AKASHIC_ROOT
+    / "local_testing"
+    / "fixtures"
+    / "streams"
+    / "feeds"
+    / "malformed.json"
+).read_bytes()
 REQUIRE_RE = re.compile(r"^ *REQUIRE +([^ \n]+)", re.MULTILINE)
 PROVIDED_RE = re.compile(r"^ *PROVIDED +([^ \n]+)", re.MULTILINE)
 COLON_STACK_EFFECT_RE = re.compile(
@@ -12719,6 +12743,600 @@ _stc-run
     initial_files=(("testing/streams/timeline.json", STREAMS_TIMELINE_FIXTURE),),
 )
 
+PROFILES["streams-page-contracts"] = Profile(
+    roots=("tui/applets/streams/page-snapshot.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - bounded watched-page normalization contracts
+ENTER-USERLAND
+-1 CONSTANT GUARDED
+REQUIRE tui/applets/streams/page-snapshot.f
+
+CREATE _spc-page  STREAMS-PAGE-SNAPSHOT-SIZE ALLOT
+CREATE _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE ALLOT
+CREATE _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE ALLOT
+CREATE _spc-digest SHA3-256-LEN ALLOT
+CREATE _spc-over   STREAMS-PAGE-TEXT-MAX 1+ ALLOT
+
+VARIABLE _spc-fails
+VARIABLE _spc-checks
+VARIABLE _spc-depth
+
+: _spc-base$  ( -- a u )
+    S" <!doctype html><html><head><title>Status</title><style>.x{}</style><script>if (a < b) x();</script></head><body><header><nav>Old links</nav></header><main><h1>Service</h1><p>State: nominal.</p></main><footer>12:00</footer></body></html>" ;
+
+: _spc-nav$  ( -- a u )
+    S" <!doctype html><html><head><title>Status</title><style>.y{}</style><script>different();</script></head><body><header><nav>New links</nav></header><main><h1>Service</h1><p>State: nominal.</p></main><footer>12:05</footer></body></html>" ;
+
+: _spc-change$  ( -- a u )
+    S" <!doctype html><html><head><title>Status</title></head><body><main><h1>Service</h1><p>State: degraded.</p></main></body></html>" ;
+
+: _spc-bad$  ( -- a u )
+    S" <html><body><main><p>Bad<div>nest</p></div></main></body></html>" ;
+
+: _spc-entity$  ( -- a u )
+    S" <p>A &amp; B &#x1F6F0; &lt;x&gt; &nbsp; z</p>" ;
+
+: _spc-unknown$  ( -- a u ) S" <p>&copy;</p>" ;
+: _spc-badnum$   ( -- a u ) S" <p>&#x110000;</p>" ;
+
+: _spc-assert  ( flag -- )
+    1 _spc-checks +!
+    0= IF 1 _spc-fails +! ." SPC assertion " _spc-checks @ . CR THEN ;
+
+: _spc-stack  ( -- )
+    DEPTH _spc-depth @ = _spc-assert ;
+
+: _spc-run  ( -- )
+    0 _spc-fails ! 0 _spc-checks ! DEPTH _spc-depth !
+
+    _spc-base$ S" text/html" _spc-page STREAMS-PAGE-NORMALIZE
+        SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-VALID? _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-TEXT$
+        S" Status Service State: nominal." COMPARE 0= _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
+        _spc-digest SHA3-256-LEN CMOVE
+
+    _spc-nav$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-VALID? _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
+        _spc-digest SHA3-256-COMPARE _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-RAW-DIGEST
+        _spc-page STREAMS-PAGE-SNAPSHOT-RAW-DIGEST
+        SHA3-256-COMPARE 0= _spc-assert _spc-stack
+
+    _spc-change$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
+        _spc-digest SHA3-256-COMPARE 0= _spc-assert _spc-stack
+
+    _spc-entity$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-TEXT$
+        S" A & B 🛰 <x> z" COMPARE 0= _spc-assert _spc-stack
+    _spc-unknown$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-UNSUPPORTED = _spc-assert _spc-stack
+    _spc-badnum$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-INVALID = _spc-assert _spc-stack
+    _spc-bad$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-INVALID = _spc-assert _spc-stack
+
+    _spc-page _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE CMOVE
+    _spc-bad$ S" text/html" _spc-page STREAMS-PAGE-NORMALIZE
+        SPAGE-S-INVALID = _spc-assert
+    _spc-page STREAMS-PAGE-SNAPSHOT-SIZE
+        _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE COMPARE 0=
+        _spc-assert _spc-stack
+
+    _spc-base$ S" text/html; charset=utf-8" _spc-page
+        STREAMS-PAGE-NORMALIZE SPAGE-S-UNSUPPORTED =
+        _spc-assert _spc-stack
+    _spc-base$ DROP STREAMS-PAGE-RAW-MAX 1+ S" text/html" _spc-page
+        STREAMS-PAGE-NORMALIZE SPAGE-S-CAPACITY = _spc-assert _spc-stack
+    _spc-over STREAMS-PAGE-TEXT-MAX 1+ 120 FILL
+    _spc-over STREAMS-PAGE-TEXT-MAX 1+ S" text/plain" _spc-page
+        STREAMS-PAGE-NORMALIZE SPAGE-S-CAPACITY = _spc-assert _spc-stack
+
+    _spc-fails @ 0= IF
+        ." STREAMS PAGE CONTRACTS PASS " _spc-checks @ .
+    ELSE
+        ." STREAMS PAGE CONTRACTS FAIL " _spc-fails @ . ." / "
+            _spc-checks @ .
+    THEN CR ;
+
+_spc-run
+""",
+    ready_markers=("STREAMS PAGE CONTRACTS PASS",),
+    stable_markers=("STREAMS PAGE CONTRACTS PASS",),
+    failure_markers=("STREAMS PAGE CONTRACTS FAIL", "SPC assertion"),
+    include_large_sample=False,
+)
+
+PROFILES["streams-syndication-contracts"] = Profile(
+    roots=("utils/json.f",),
+    resources=(
+        "tui/applets/streams/syndication-model.f",
+        "tui/applets/streams/json-feed.f",
+    ),
+    autoexec=r"""\ autoexec.f - bounded owned JSON Feed syndication contracts
+ENTER-USERLAND
+." [akashic] loading Streams syndication contracts" CR
+REQUIRE tui/applets/streams/syndication-model.f
+REQUIRE tui/applets/streams/json-feed.f
+
+VARIABLE _ssc-fails
+VARIABLE _ssc-checks
+VARIABLE _ssc-depth
+VARIABLE _ssc-fd
+VARIABLE _ssc-load-a
+VARIABLE _ssc-load-u
+VARIABLE _ssc-base-doc
+VARIABLE _ssc-base-u
+VARIABLE _ssc-update-doc
+VARIABLE _ssc-update-u
+VARIABLE _ssc-malformed-doc
+VARIABLE _ssc-malformed-u
+VARIABLE _ssc-arena
+VARIABLE _ssc-base
+VARIABLE _ssc-replay
+VARIABLE _ssc-update
+VARIABLE _ssc-base-entry0
+VARIABLE _ssc-base-entry1
+VARIABLE _ssc-update-entry0
+VARIABLE _ssc-update-entry1
+VARIABLE _ssc-update-entry2
+VARIABLE _ssc-attachment
+VARIABLE _ssc-author
+VARIABLE _ssc-expected
+VARIABLE _ssc-id-a
+VARIABLE _ssc-id-u
+VARIABLE _ssc-range-a
+VARIABLE _ssc-range-u
+VARIABLE _ssc-range-model
+
+CREATE _ssc-json 8192 ALLOT
+CREATE _ssc-long SYN-TITLE-CAP 1+ ALLOT
+CREATE _ssc-bad-byte 1 ALLOT
+
+: _ssc-assert  ( flag -- )
+    1 _ssc-checks +!
+    0= IF
+        1 _ssc-fails +!
+        ." SSC assertion " _ssc-checks @ . ." failed" CR
+    THEN ;
+
+: _ssc-stack  ( -- )
+    DEPTH DUP _ssc-depth @ <> IF
+        ." SSC stack " _ssc-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ssc-depth @ = _ssc-assert ;
+
+: _ssc-model-new  ( -- model )
+    _ssc-arena @ SYN-FEED-SIZE ARENA-ALLOT? DUP 0= _ssc-assert
+    ?DUP IF THROW THEN
+    DUP 0<> _ssc-assert ;
+
+: _ssc-load  ( name-a name-u -- document-a document-u status )
+    DUP 0= OVER 23 > OR IF 2DROP 0 0 SYN-S-MISSING EXIT THEN
+    NAMEBUF 24 0 FILL NAMEBUF SWAP CMOVE
+    FIND-BY-NAME DUP -1 = IF DROP 0 0 SYN-S-MISSING EXIT THEN
+    OPEN-BY-SLOT DUP 0= IF DROP 0 0 SYN-S-MISSING EXIT THEN
+    DUP _ssc-fd ! FSIZE DUP _ssc-load-u !
+    DUP 0= OVER 0< OR OVER JSON-FEED-DOCUMENT-CAP > OR IF
+        DROP _ssc-fd @ FCLOSE 0 0 SYN-S-CAPACITY EXIT
+    THEN
+    ALLOCATE DUP IF
+        2DROP _ssc-fd @ FCLOSE 0 0 SYN-S-CAPACITY EXIT
+    THEN
+    DROP _ssc-load-a !
+    _ssc-load-a @ _ssc-load-u @ _ssc-fd @ FREAD
+        _ssc-load-u @ <> IF
+        _ssc-fd @ FCLOSE _ssc-load-a @ FREE
+        0 0 SYN-S-INVALID EXIT
+    THEN
+    _ssc-fd @ FCLOSE
+    _ssc-load-a @ _ssc-load-u @ SYN-S-OK ;
+
+: _ssc-decode-expect  ( json-a json-u feed expected -- )
+    _ssc-expected !
+    JSON-FEED-DECODE _ssc-expected @ = _ssc-assert ;
+
+: _ssc-model=  ( model-a model-b -- flag )
+    SYN-FEED-SIZE SWAP SYN-FEED-SIZE STR-STR= ;
+
+: _ssc-owned?  ( string-a string-u model -- flag )
+    _ssc-range-model ! _ssc-range-u ! _ssc-range-a !
+    _ssc-range-a @ _ssc-range-model @ >=
+    _ssc-range-a @ _ssc-range-u @ +
+        _ssc-range-model @ SYN-FEED-SIZE + <= AND ;
+
+: _ssc-sentinel  ( -- )
+    _ssc-replay @ _ssc-update @ SYN-FEED-SIZE CMOVE ;
+
+: _ssc-unchanged  ( -- )
+    _ssc-replay @ _ssc-update @ _ssc-model= _ssc-assert ;
+
+: _ssc-json-begin  ( -- )
+    JSON-BUILD-RESET _ssc-json 8192 JSON-SET-OUTPUT ;
+
+: _ssc-json-item  ( id-a id-u -- )
+    _ssc-id-u ! _ssc-id-a !
+    JSON-{
+        S" id" _ssc-id-a @ _ssc-id-u @ JSON-KV-ESTR
+        S" content_text" S" bounded entry" JSON-KV-ESTR
+    JSON-} ;
+
+: _ssc-eight-items  ( -- )
+    S" cap:item:0" _ssc-json-item
+    S" cap:item:1" _ssc-json-item
+    S" cap:item:2" _ssc-json-item
+    S" cap:item:3" _ssc-json-item
+    S" cap:item:4" _ssc-json-item
+    S" cap:item:5" _ssc-json-item
+    S" cap:item:6" _ssc-json-item
+    S" cap:item:7" _ssc-json-item ;
+
+: _ssc-eight-feed  ( -- a u )
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/1.1" JSON-KV-ESTR
+        S" title" S" Eight entries" JSON-KV-ESTR
+        S" items" JSON-KEY: JSON-[ _ssc-eight-items JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-nine-feed  ( -- a u )
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/1.1" JSON-KV-ESTR
+        S" title" S" Nine entries" JSON-KV-ESTR
+        S" items" JSON-KEY: JSON-[
+            _ssc-eight-items S" cap:item:8" _ssc-json-item
+        JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-overlong-feed  ( -- a u )
+    _ssc-long SYN-TITLE-CAP 1+ 65 FILL
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/1.1" JSON-KV-ESTR
+        S" title" _ssc-long SYN-TITLE-CAP 1+ JSON-KV-ESTR
+        S" items" JSON-KEY: JSON-[
+            S" capacity:sentinel" _ssc-json-item
+        JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-duplicate-field-feed  ( -- a u )
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/1.1" JSON-KV-ESTR
+        S" title" S" first title" JSON-KV-ESTR
+        \ Raw escaped spelling semantically duplicates the defined title.
+        S" ti\u0074le" JSON-KEY: S" second title" JSON-ESTR
+        S" items" JSON-KEY: JSON-[
+            S" duplicate:field" _ssc-json-item
+        JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-duplicate-id-feed  ( -- a u )
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/1.1" JSON-KV-ESTR
+        S" title" S" Duplicate identities" JSON-KV-ESTR
+        S" items" JSON-KEY: JSON-[
+            S" duplicate:native-id" _ssc-json-item
+            S" duplicate:native-id" _ssc-json-item
+        JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-missing-id-feed  ( -- a u )
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/1.1" JSON-KV-ESTR
+        S" title" S" Missing identity" JSON-KV-ESTR
+        S" items" JSON-KEY: JSON-[ JSON-{
+            S" content_text" S" must not commit" JSON-KV-ESTR
+        JSON-} JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-unsupported-feed  ( -- a u )
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/2" JSON-KV-ESTR
+        S" title" S" Future version" JSON-KV-ESTR
+        S" items" JSON-KEY: JSON-[ JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-invalid-utf8-feed  ( -- a u )
+    255 _ssc-bad-byte C!
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/1.1" JSON-KV-ESTR
+        S" title" _ssc-bad-byte 1 JSON-KV-ESTR
+        S" items" JSON-KEY: JSON-[ JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-version-one-feed  ( -- a u )
+    _ssc-json-begin JSON-{
+        S" version" S" https://jsonfeed.org/version/1" JSON-KV-ESTR
+        S" title" S" Version one" JSON-KV-ESTR
+        S" author" JSON-KEY: JSON-{
+            S" name" S" Version One Author" JSON-KV-ESTR
+            S" url" S" https://example.test/v1-author" JSON-KV-ESTR
+        JSON-}
+        S" items" JSON-KEY: JSON-[ JSON-{
+            S" id" S" version-one:item" JSON-KV-ESTR
+            S" content_text" S" plain representation" JSON-KV-ESTR
+            S" content_html" S" <p>HTML representation</p>" JSON-KV-ESTR
+            S" author" JSON-KEY: JSON-{
+                S" name" S" Entry Author" JSON-KV-ESTR
+            JSON-}
+        JSON-} JSON-]
+    JSON-} JSON-OUTPUT-RESULT ;
+
+: _ssc-check-base  ( -- )
+    _ssc-base @ SYN.FEED.VERSION @ SYN-VERSION-JSON-FEED-1_1 = _ssc-assert
+    _ssc-base @ SYN.FEED.COUNT @ 2 = _ssc-assert
+    _ssc-base @ SYN.FEED.TITLE
+        S" Example Desk JSON Feed — 東京" STR-STR= _ssc-assert
+    _ssc-base @ SYN.FEED.HOME-URL
+        S" https://example.test/" STR-STR= _ssc-assert
+    _ssc-base @ SYN.FEED.FEED-URL
+        S" https://example.test/feed.json" STR-STR= _ssc-assert
+    _ssc-base @ SYN.FEED.NEXT-URL
+        S" https://example.test/feed.json?page=2" STR-STR= _ssc-assert
+    _ssc-base @ SYN.FEED.DESCRIPTION
+        S" Qualification feed for Streams." STR-STR= _ssc-assert
+
+    _ssc-base @ SYN.FEED.AUTHOR-COUNT @ 1 = _ssc-assert
+    0 _ssc-base @ SYN.FEED.AUTHOR DUP 0<> _ssc-assert _ssc-author !
+    _ssc-author @ SYN.AUTHOR.NAME S" Ada Example" STR-STR= _ssc-assert
+    _ssc-author @ SYN.AUTHOR.URL
+        S" https://example.test/authors/ada" STR-STR= _ssc-assert
+    _ssc-author @ SYN.AUTHOR.AVATAR NIP 0= _ssc-assert
+
+    0 _ssc-base @ SYN.FEED.ENTRY DUP 0<> _ssc-assert _ssc-base-entry0 !
+    1 _ssc-base @ SYN.FEED.ENTRY DUP 0<> _ssc-assert _ssc-base-entry1 !
+    2 _ssc-base @ SYN.FEED.ENTRY 0= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.ID
+        S" jsonfeed:item:stable" STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.URL
+        S" https://example.test/items/json-stable" STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.TITLE
+        S" Café status 🛰️" STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.SUMMARY NIP 0= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.CONTENT-REP @
+        SYN-CONTENT-TEXT = _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.CONTENT-TEXT
+        S" The stable item remains unchanged." STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.CONTENT-HTML NIP 0= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.PUBLISHED
+        S" 2026-07-15T10:00:00Z" STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.MODIFIED
+        S" 2026-07-15T10:00:00Z" STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.AUTHOR-COUNT @ 0= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.TAG-COUNT @ 2 = _ssc-assert
+    0 _ssc-base-entry0 @ SYN.ENTRY.TAG
+        S" qualification" STR-STR= _ssc-assert
+    1 _ssc-base-entry0 @ SYN.ENTRY.TAG
+        S" unicode" STR-STR= _ssc-assert
+
+    _ssc-base-entry0 @ SYN.ENTRY.ATTACHMENT-COUNT @ 1 = _ssc-assert
+    0 _ssc-base-entry0 @ SYN.ENTRY.ATTACHMENT
+        DUP 0<> _ssc-assert _ssc-attachment !
+    _ssc-attachment @ SYN.ATTACHMENT.URL
+        S" https://example.test/media/stable.mp3" STR-STR= _ssc-assert
+    _ssc-attachment @ SYN.ATTACHMENT.MIME
+        S" audio/mpeg" STR-STR= _ssc-assert
+    _ssc-attachment @ SYN.ATTACHMENT.TITLE
+        S" Stable audio" STR-STR= _ssc-assert
+    _ssc-attachment @ SYN.ATTACHMENT.FLAGS @
+        SYN-ATTACHMENT-HAS-SIZE AND 0<> _ssc-assert
+    _ssc-attachment @ SYN.ATTACHMENT.SIZE-IN-BYTES @
+        1024 = _ssc-assert
+    _ssc-attachment @ SYN.ATTACHMENT.FLAGS @
+        SYN-ATTACHMENT-HAS-DURATION AND 0<> _ssc-assert
+    _ssc-attachment @ SYN.ATTACHMENT.DURATION
+        S" 3" STR-STR= _ssc-assert
+
+    _ssc-base-entry1 @ SYN.ENTRY.ID
+        S" jsonfeed:item:changed" STR-STR= _ssc-assert
+    _ssc-base-entry1 @ SYN.ENTRY.TITLE
+        S" Change record, version one" STR-STR= _ssc-assert
+    _ssc-base-entry1 @ SYN.ENTRY.SUMMARY
+        S" Version one of the changing item." STR-STR= _ssc-assert
+    _ssc-base-entry1 @ SYN.ENTRY.CONTENT-REP @
+        SYN-CONTENT-HTML = _ssc-assert
+    _ssc-base-entry1 @ SYN.ENTRY.CONTENT-HTML
+        S" <p>Service state: nominal.</p>" STR-STR= _ssc-assert
+    _ssc-base-entry1 @ SYN.ENTRY.PUBLISHED
+        S" 2026-07-15T11:00:00Z" STR-STR= _ssc-assert
+    _ssc-base-entry1 @ SYN.ENTRY.MODIFIED
+        S" 2026-07-15T11:00:00Z" STR-STR= _ssc-assert ;
+
+: _ssc-check-owned  ( -- )
+    _ssc-base @ SYN.FEED.TITLE _ssc-base @ _ssc-owned? _ssc-assert
+    _ssc-author @ SYN.AUTHOR.NAME _ssc-base @ _ssc-owned? _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.ID _ssc-base @ _ssc-owned? _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.TITLE _ssc-base @ _ssc-owned? _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.CONTENT-TEXT
+        _ssc-base @ _ssc-owned? _ssc-assert
+    0 _ssc-base-entry0 @ SYN.ENTRY.TAG
+        _ssc-base @ _ssc-owned? _ssc-assert
+    _ssc-attachment @ SYN.ATTACHMENT.URL
+        _ssc-base @ _ssc-owned? _ssc-assert ;
+
+: _ssc-check-update  ( -- )
+    _ssc-update @ SYN.FEED.COUNT @ 3 = _ssc-assert
+    0 _ssc-update @ SYN.FEED.ENTRY _ssc-update-entry0 !
+    1 _ssc-update @ SYN.FEED.ENTRY _ssc-update-entry1 !
+    2 _ssc-update @ SYN.FEED.ENTRY _ssc-update-entry2 !
+
+    \ The stable native identity and entire retained entry remain identical.
+    _ssc-base-entry0 @ SYN.ENTRY.ID
+        _ssc-update-entry0 @ SYN.ENTRY.ID STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN-ENTRY-SIZE
+        _ssc-update-entry0 @ SYN-ENTRY-SIZE STR-STR= _ssc-assert
+
+    \ The changed entry keeps identity while its retained revision differs.
+    _ssc-base-entry1 @ SYN.ENTRY.ID
+        _ssc-update-entry1 @ SYN.ENTRY.ID STR-STR= _ssc-assert
+    _ssc-base-entry1 @ SYN-ENTRY-SIZE
+        _ssc-update-entry1 @ SYN-ENTRY-SIZE STR-STR= 0= _ssc-assert
+    _ssc-update-entry1 @ SYN.ENTRY.TITLE
+        S" Change record, version two" STR-STR= _ssc-assert
+    _ssc-update-entry1 @ SYN.ENTRY.CONTENT-HTML
+        S" <p>Service state: degraded; investigation started.</p>"
+        STR-STR= _ssc-assert
+    _ssc-update-entry1 @ SYN.ENTRY.MODIFIED
+        S" 2026-07-15T12:30:00Z" STR-STR= _ssc-assert
+    _ssc-update-entry1 @ SYN.ENTRY.TAG-COUNT @ 2 = _ssc-assert
+
+    \ The third stable native identity appears only in the update page.
+    _ssc-update-entry2 @ SYN.ENTRY.ID
+        S" jsonfeed:item:new" STR-STR= _ssc-assert
+    _ssc-update-entry2 @ SYN.ENTRY.TITLE
+        S" New observation 🚀" STR-STR= _ssc-assert
+    _ssc-update-entry2 @ SYN.ENTRY.CONTENT-TEXT
+        S" First appearance of the new item." STR-STR= _ssc-assert
+    _ssc-update-entry2 @ SYN.ENTRY.MODIFIED NIP 0= _ssc-assert ;
+
+: _ssc-check-v1  ( -- )
+    _ssc-version-one-feed _ssc-update @ SYN-S-OK _ssc-decode-expect
+    _ssc-update @ SYN.FEED.VERSION @ SYN-VERSION-JSON-FEED-1 = _ssc-assert
+    _ssc-update @ SYN.FEED.AUTHOR-COUNT @ 1 = _ssc-assert
+    0 _ssc-update @ SYN.FEED.AUTHOR SYN.AUTHOR.NAME
+        S" Version One Author" STR-STR= _ssc-assert
+    0 _ssc-update @ SYN.FEED.ENTRY DUP SYN.ENTRY.CONTENT-REP @
+        SYN-CONTENT-BOTH = _ssc-assert
+    DUP SYN.ENTRY.CONTENT-TEXT
+        S" plain representation" STR-STR= _ssc-assert
+    DUP SYN.ENTRY.CONTENT-HTML
+        S" <p>HTML representation</p>" STR-STR= _ssc-assert
+    DUP SYN.ENTRY.AUTHOR-COUNT @ 1 = _ssc-assert
+    0 SWAP SYN.ENTRY.AUTHOR SYN.AUTHOR.NAME
+        S" Entry Author" STR-STR= _ssc-assert ;
+
+: _ssc-check-failures  ( -- )
+    _ssc-sentinel
+    _ssc-malformed-doc @ _ssc-malformed-u @ _ssc-update @
+        SYN-S-INVALID _ssc-decode-expect
+    _ssc-unchanged
+
+    _ssc-duplicate-field-feed _ssc-update @
+        SYN-S-INVALID _ssc-decode-expect
+    _ssc-unchanged
+
+    _ssc-duplicate-id-feed _ssc-update @
+        SYN-S-INVALID _ssc-decode-expect
+    _ssc-unchanged
+
+    _ssc-missing-id-feed _ssc-update @
+        SYN-S-MISSING _ssc-decode-expect
+    _ssc-unchanged
+
+    _ssc-unsupported-feed _ssc-update @
+        SYN-S-UNSUPPORTED _ssc-decode-expect
+    _ssc-unchanged
+
+    _ssc-invalid-utf8-feed _ssc-update @
+        SYN-S-INVALID _ssc-decode-expect
+    _ssc-unchanged
+
+    _ssc-nine-feed _ssc-update @ SYN-S-CAPACITY _ssc-decode-expect
+    _ssc-unchanged
+
+    _ssc-overlong-feed _ssc-update @ SYN-S-CAPACITY _ssc-decode-expect
+    _ssc-unchanged
+
+    _ssc-json JSON-FEED-DOCUMENT-CAP 1+ _ssc-update @
+        SYN-S-CAPACITY _ssc-decode-expect
+    _ssc-unchanged ;
+
+: _ssc-run  ( -- )
+    0 _ssc-fails ! 0 _ssc-checks !
+    SYN-FEED-SIZE 454816 = _ssc-assert
+    SYN-MAX-ENTRIES 8 = _ssc-assert
+
+    2097152 A-XMEM ARENA-NEW DUP 0= _ssc-assert
+    ?DUP IF THROW THEN _ssc-arena !
+    _ssc-model-new _ssc-base !
+    _ssc-model-new _ssc-replay !
+    _ssc-model-new _ssc-update !
+    ." [ssc] model arena ready" CR
+
+    S" jsonfeed-base.json" _ssc-load
+    DUP SYN-S-OK = _ssc-assert DROP _ssc-base-u ! _ssc-base-doc !
+    S" jsonfeed-update.json" _ssc-load
+    DUP SYN-S-OK = _ssc-assert DROP _ssc-update-u ! _ssc-update-doc !
+    S" malformed.json" _ssc-load
+    DUP SYN-S-OK = _ssc-assert DROP
+    _ssc-malformed-u ! _ssc-malformed-doc !
+    DEPTH _ssc-depth !
+
+    _ssc-base-doc @ _ssc-base-u @ _ssc-base @
+        SYN-S-OK _ssc-decode-expect
+    _ssc-base-doc @ _ssc-base-u @ _ssc-replay @
+        SYN-S-OK _ssc-decode-expect
+    _ssc-base @ _ssc-replay @ _ssc-model= _ssc-assert
+    _ssc-check-base
+    _ssc-check-owned
+    _ssc-stack
+
+    _ssc-update-doc @ _ssc-update-u @ _ssc-update @
+        SYN-S-OK _ssc-decode-expect
+    _ssc-check-update
+    _ssc-stack
+
+    \ Destroy the source bytes; every exact value remains model-owned.
+    _ssc-base-doc @ _ssc-base-u @ 88 FILL
+    _ssc-base-doc @ FREE 0 _ssc-base-doc !
+    _ssc-base @ SYN.FEED.TITLE
+        S" Example Desk JSON Feed — 東京" STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.TITLE
+        S" Café status 🛰️" STR-STR= _ssc-assert
+    _ssc-base-entry0 @ SYN.ENTRY.CONTENT-TEXT
+        S" The stable item remains unchanged." STR-STR= _ssc-assert
+    _ssc-stack
+
+    \ Both exact published JSON Feed generations are admitted.
+    _ssc-check-v1
+    _ssc-stack
+
+    \ The page capacity is exact: eight commits, a ninth is transactional.
+    _ssc-eight-feed _ssc-update @ SYN-S-OK _ssc-decode-expect
+    _ssc-update @ SYN.FEED.COUNT @ 8 = _ssc-assert
+    7 _ssc-update @ SYN.FEED.ENTRY 0<> _ssc-assert
+    8 _ssc-update @ SYN.FEED.ENTRY 0= _ssc-assert
+    _ssc-check-failures
+    _ssc-stack
+
+    _ssc-update-doc @ FREE
+    _ssc-malformed-doc @ FREE
+    _ssc-arena @ ARENA-DESTROY
+    _ssc-stack
+    _ssc-fails @ 0= IF
+        ." STREAMS SYNDICATION CONTRACTS PASS " _ssc-checks @ .
+    ELSE
+        ." STREAMS SYNDICATION CONTRACTS FAIL " _ssc-fails @ . ." / "
+            _ssc-checks @ .
+    THEN CR ;
+
+_ssc-run
+""",
+    ready_markers=("STREAMS SYNDICATION CONTRACTS PASS",),
+    stable_markers=("STREAMS SYNDICATION CONTRACTS PASS",),
+    failure_markers=("STREAMS SYNDICATION CONTRACTS FAIL", "SSC assertion"),
+    linked=False,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "jsonfeed-base.json",
+            STREAMS_JSON_FEED_BASE_FIXTURE,
+        ),
+        (
+            "jsonfeed-update.json",
+            STREAMS_JSON_FEED_UPDATE_FIXTURE,
+        ),
+        (
+            "malformed.json",
+            STREAMS_JSON_FEED_MALFORMED_FIXTURE,
+        ),
+    ),
+)
+
 PROFILES["streams-xio-contracts"] = Profile(
     roots=("tui/applets/streams/bluesky-public.f",),
     resources=(),
@@ -16035,6 +16653,12 @@ VARIABLE _dah-hrun
     S" grid.workbook.csv" S" org.akashic.grid"
         _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
     S" grid.source" S" org.akashic.grid"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    \ This journey keeps a live Streams target resident.  Its exact
+    \ observation pair is therefore mandatory in every non-chat facet.
+    S" streams.source.query" S" org.akashic.streams"
+        _dah-tfacet @ _dah-entry-trusted-target? 0= IF 0 EXIT THEN
+    S" streams.source.read" S" org.akashic.streams"
         _dah-tfacet @ _dah-entry-trusted-target? ;
 
 : _dah-review-targets?  ( facet -- flag )
@@ -16081,7 +16705,15 @@ VARIABLE _dah-hrun
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.source" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact? ;
+        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" streams.source.query" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _dah-eft @ _dah-entry-exact?
+        0= IF 0 EXIT THEN
+    S" streams.source.read" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _dah-eft @ _dah-entry-exact? ;
 
 : _dah-review-set?  ( facet -- flag )
     _dah-eft !
@@ -16123,7 +16755,7 @@ VARIABLE _dah-hrun
             SWAP AMRUN.MANDATE MAND.DISPOSITION @ MAND-D-READ-ONLY = AND
             IF 1 ELSE 0 THEN
         ENDOF
-        9 OF
+        11 OF
             DUP _dah-observe-set? OVER _dah-observe-targets? AND >R
             DROP SWAP DROP
             DUP AMRUN.MANDATE MAND.EFFECTS @ CAP-E-OBSERVE =
@@ -16131,7 +16763,7 @@ VARIABLE _dah-hrun
             SWAP AMRUN.MANDATE MAND.DISPOSITION @ MAND-D-READ-ONLY = AND
             R> AND IF 2 ELSE 0 THEN
         ENDOF
-        14 OF
+        16 OF
             DUP _dah-observe-set? OVER _dah-review-set? AND >R
             DUP _dah-observe-targets? R> AND >R
             DUP _dah-review-targets? R> AND >R
@@ -17166,6 +17798,1698 @@ _paf-run
     failure_markers=("PUBLIC AUTHOR FEED FAIL", "PAF ASSERT", "PAF STACK"),
     include_large_sample=False,
 )
+
+PROFILES["streams-source-owner-contracts"] = Profile(
+    roots=("utils/fs/vfs.f", "tui/applets/streams/streams.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Streams source owner and capability contracts
+ENTER-USERLAND
+." [akashic] loading Streams source owner contracts" CR
+REQUIRE utils/fs/vfs.f
+REQUIRE tui/applets/streams/streams.f
+
+VARIABLE _soc-fails
+VARIABLE _soc-checks
+VARIABLE _soc-depth
+VARIABLE _soc-old-vfs
+VARIABLE _soc-vfs
+VARIABLE _soc-i1
+VARIABLE _soc-i2
+VARIABLE _soc-i3
+VARIABLE _soc-i4
+VARIABLE _soc-i5
+VARIABLE _soc-i6
+VARIABLE _soc-i7
+VARIABLE _soc-i8
+VARIABLE _soc-req
+VARIABLE _soc-reg
+VARIABLE _soc-bus
+VARIABLE _soc-resource-value
+VARIABLE _soc-live-rid
+VARIABLE _soc-fd
+VARIABLE _soc-data-a
+VARIABLE _soc-data-u
+VARIABLE _soc-path-a
+VARIABLE _soc-path-u
+VARIABLE _soc-record-u
+VARIABLE _soc-record-status
+VARIABLE _soc-owner-revision
+VARIABLE _soc-set-rid
+VARIABLE _soc-set-revision
+VARIABLE _soc-set-enabled
+VARIABLE _soc-old-field-schema
+VARIABLE _soc-old-vtable
+VARIABLE _soc-registry-generation
+VARIABLE _soc-auth
+VARIABLE _soc-agent-invocation
+VARIABLE _soc-agent-flags
+
+CREATE _soc-candidate STREAMS-SOURCE-SIZE ALLOT
+CREATE _soc-read STREAMS-SOURCE-SIZE ALLOT
+CREATE _soc-rid RID-SIZE ALLOT
+CREATE _soc-caller-rid RID-SIZE ALLOT
+CREATE _soc-rref RREF-SIZE ALLOT
+CREATE _soc-registry-snapshot STREAMS-SOURCE-REGISTRY-SIZE ALLOT
+CREATE _soc-fault-vtable VFS-VT-SIZE ALLOT
+CREATE _soc-binding AUTH-BINDING-SIZE ALLOT
+CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
+
+: _soc-assert  ( flag -- )
+    1 _soc-checks +! 0= IF
+        1 _soc-fails +! ." SOC ASSERT " _soc-checks @ . CR
+    THEN ;
+
+: _soc-stack  ( -- ) DEPTH _soc-depth @ = _soc-assert ;
+: _soc-ok  ( status -- ) STREAMS-SOURCE-S-OK = _soc-assert ;
+: _soc-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _soc-request-new  ( -- )
+    _soc-req @ ?DUP IF CBR-FREE THEN
+    CBR-NEW DUP 0= _soc-assert DROP _soc-req ! ;
+: _soc-agent-envelope!  ( capability instance -- )
+    >R
+    _soc-req @ CBR.CAP !
+    CPRINC-AGENT _soc-req @ CBR.PRINCIPAL !
+    77 _soc-req @ CBR.EPOCH !
+    7301 _soc-req @ CBR.CONTEXT-ID !
+    1 _soc-req @ CBR.CONTEXT-GEN !
+    R@ CINST.ID @ _soc-req @ CBR.TARGET-ID !
+    R@ CINST.GENERATION @ _soc-req @ CBR.TARGET-GEN !
+    R@ CINST.REVISION @ _soc-req @ CBR.EXPECT-REV !
+    1 _soc-agent-invocation +!
+    _soc-agent-invocation @ _soc-req @ CBR.INVOCATION-ID _soc-id!
+    7101 _soc-req @ CBR.PRACTICE-ID _soc-id!
+    7201 _soc-req @ CBR.MANDATE-ID _soc-id!
+    R> DROP ;
+: _soc-agent-authorize!  ( capability instance grant-flags -- )
+    _soc-agent-flags ! _soc-agent-envelope!
+    _soc-req @ CBR-ARGS-SEAL! CBUS-S-OK = _soc-assert
+    _soc-req @ _soc-binding CBR-AUTH-BIND! AUTH-S-OK = _soc-assert
+    _soc-grant AGR-INIT
+    _soc-binding _soc-grant AGR-BIND! AUTH-S-OK = _soc-assert
+    _soc-agent-flags @ _soc-grant AGR.FLAGS !
+    MS@ 10000 + _soc-grant AGR.EXPIRES !
+    _soc-req @ CBR.HANDLE IH-INIT
+    _soc-grant _soc-req @ CBR.HANDLE _soc-auth @ AHT-ISSUE
+        AUTH-S-OK = _soc-assert ;
+: _soc-agent-dispatch  ( capability instance grant-flags -- status )
+    _soc-agent-authorize!
+    _soc-req @ _soc-bus @ CBUS-DISPATCH ;
+: _soc-owner-revision!  ( instance -- )
+    CINST.REVISION @ _soc-owner-revision ! ;
+: _soc-owner-stable?  ( instance -- flag )
+    CINST.REVISION @ _soc-owner-revision @ = ;
+
+: _soc-zeroed?  ( address length -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _soc-source-cap-scratch-clean?  ( instance -- flag )
+    _STM-ACTIVATE
+    _STM-SOURCE-CANDIDATE-REGISTRY STREAMS-SOURCE-REGISTRY-SIZE
+        _soc-zeroed?
+    _STM-SOURCE-CANDIDATE STREAMS-SOURCE-SIZE _soc-zeroed? AND
+    _STM-SOURCE-RREF RREF-SIZE _soc-zeroed? AND
+    _STM-SOURCE-RESULT-CANDIDATE CV-SIZE _soc-zeroed? AND
+    _STM-SOURCE-RESULT-DEST @ 0= AND
+    _STM-CV-IOR @ 0= AND
+    _STM-CV-SOURCE @ 0= AND
+    _STM-CV-SOURCE-VALUE @ 0= AND
+    _STM-CAP-SOURCE @ 0= AND
+    _STM-CAP-SOURCE-ENABLED @ 0= AND
+    _STM-CAP-SOURCE-STATUS @ 0= AND ;
+
+: _soc-registry-snapshot!  ( instance -- )
+    _STM-ACTIVATE
+    _STM-SOURCE-REGISTRY _soc-registry-snapshot
+        STREAMS-SOURCE-REGISTRY-SIZE CMOVE
+    _STM-SOURCE-REGISTRY SSREG.GENERATION @
+        _soc-registry-generation ! ;
+
+: _soc-registry-unchanged?  ( instance -- flag )
+    _STM-ACTIVATE
+    _STM-SOURCE-REGISTRY STREAMS-SOURCE-REGISTRY-SIZE
+        _soc-registry-snapshot STREAMS-SOURCE-REGISTRY-SIZE COMPARE 0=
+    _STM-SOURCE-REGISTRY SSREG.GENERATION @
+        _soc-registry-generation @ = AND ;
+
+: _soc-slot  ( key-a key-u index map -- child )
+    CV-MAP-SLOT! DUP 0= _soc-assert DROP ;
+
+: _soc-set-enabled-args  ( rid revision enabled? -- )
+    _soc-set-enabled ! _soc-set-revision ! _soc-set-rid !
+    2 _soc-req @ CBR.ARGS CV-MAP! 0= _soc-assert
+    _soc-rref RREF-INIT
+    _soc-set-rid @ _soc-rref RREF.ID RID-COPY
+    _soc-set-revision @ _soc-rref RREF.REVISION !
+    S" resource" 0 _soc-req @ CBR.ARGS _soc-slot
+        _soc-rref SWAP IRES-RREF! IRES-S-OK = _soc-assert
+    S" enabled" 1 _soc-req @ CBR.ARGS _soc-slot
+        _soc-set-enabled @ SWAP CV-BOOL! ;
+
+: _soc-result-sentinel!  ( -- )
+    S" result sentinel" _soc-req @ CBR.RESULT CV-STRING!
+        0= _soc-assert ;
+
+: _soc-result-sentinel?  ( -- flag )
+    _soc-req @ CBR.RESULT DUP CV-TYPE@ CV-T-STRING <> IF
+        DROP 0 EXIT
+    THEN
+    DUP CV-DATA@ SWAP CV-LEN@ S" result sentinel" STR-STR= ;
+
+: _soc-clear-request  ( -- )
+    _soc-req @ CBR.ARGS CV-FREE
+    _soc-req @ CBR.RESULT CV-FREE ;
+
+: _soc-target!  ( instance -- )
+    >R
+    R@ CINST.ID @ _soc-req @ CBR.TARGET-ID !
+    R> CINST.GENERATION @ _soc-req @ CBR.TARGET-GEN ! ;
+
+: _soc-dispatch  ( capability instance -- )
+    _soc-target!
+    _soc-req @ CBR.CAP !
+    CPRINC-USER _soc-req @ CBR.PRINCIPAL !
+    _soc-req @ _soc-bus @ CBUS-POST CBUS-S-OK = _soc-assert
+    1 _soc-bus @ CBUS-PUMP 1 = _soc-assert ;
+
+: _soc-zero-write  ( buffer length offset inode vfs -- actual )
+    2DROP 2DROP DROP 0 ;
+
+: _soc-fault-on  ( -- )
+    _soc-vfs @ V.VTABLE @ DUP _soc-old-vtable !
+    _soc-fault-vtable VFS-VT-SIZE CMOVE
+    ['] _soc-zero-write
+        _soc-fault-vtable VFS-VT-WRITE CELLS + !
+    _soc-fault-vtable _soc-vfs @ V.VTABLE ! ;
+
+: _soc-fault-off  ( -- )
+    _soc-old-vtable @ _soc-vfs @ V.VTABLE ! ;
+
+: _soc-candidate-init  ( -- )
+    _soc-candidate STREAMS-SOURCE-INIT
+    SSOURCE-KIND-SYNDICATION _soc-candidate SSOURCE.KIND !
+    SSOURCE-FORMAT-RSS _soc-candidate SSOURCE.FORMAT !
+    S" Example feed" _soc-candidate STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _soc-assert
+    S" https://example.test/feed.xml" _soc-candidate
+        STREAMS-SOURCE-ENDPOINT! SSREG-S-OK = _soc-assert ;
+
+: _soc-init  ( instance -- )
+    DUP _soc-owner-revision!
+    DUP STREAMS-INIT-CB
+    DUP STREAMS-SOURCE-STORAGE-READY? _soc-assert
+    DUP _soc-owner-stable? _soc-assert
+    DROP ;
+
+: _soc-read-i1  ( -- )
+    _soc-rid _soc-read _soc-i1 @ STREAMS-SOURCE-READ-OWNER _soc-ok ;
+: _soc-read-i2  ( -- )
+    _soc-rid _soc-read _soc-i2 @ STREAMS-SOURCE-READ-OWNER _soc-ok ;
+: _soc-read-i3  ( -- )
+    _soc-rid _soc-read _soc-i3 @ STREAMS-SOURCE-READ-OWNER _soc-ok ;
+
+: _soc-result-field  ( key-a key-u -- value )
+    _soc-req @ CBR.RESULT CV-MAP-FIND ;
+
+: _soc-put  ( data-a data-u path-a path-u -- )
+    _soc-path-u ! _soc-path-a ! _soc-data-u ! _soc-data-a !
+    _soc-path-a @ _soc-path-u @ _soc-vfs @ VFS-RESOLVE IF
+        _soc-path-a @ _soc-path-u @ _soc-vfs @ VFS-RM
+            0= _soc-assert
+    THEN
+    _soc-path-a @ _soc-path-u @ _soc-vfs @ VFS-CREATE
+        DUP 0<> _soc-assert DUP 0= IF DROP EXIT THEN DROP
+    _soc-path-a @ _soc-path-u @ VFS-OPEN DUP _soc-fd !
+        0<> _soc-assert
+    _soc-fd @ 0= IF EXIT THEN
+    _soc-data-a @ _soc-data-u @ _soc-fd @ VFS-WRITE-EXACT
+        0= _soc-assert
+    _soc-fd @ VFS-CLOSE
+    _soc-vfs @ VFS-SYNC 0= _soc-assert ;
+
+: _soc-encode-current  ( instance -- )
+    _STM-ACTIVATE
+    _STM-SOURCE-REGISTRY _STREAMS-SOURCE-STORE-ENCODE
+        _soc-record-status ! _soc-record-u !
+    _soc-record-status @ SSSTORE-S-OK = _soc-assert ;
+
+: _soc-install-corrupt  ( instance -- )
+    _soc-encode-current
+    _SSSTORE-RECORD DUP C@ 1 XOR SWAP C!
+    _SSSTORE-RECORD _soc-record-u @ _STM-SOURCE-STORE
+        STREAMS-SOURCE-STORE-PATH$ _soc-put ;
+
+: _soc-install-future  ( instance -- )
+    _soc-encode-current
+    STREAMS-SOURCE-STORE-FORMAT-V1 1+
+        _SSSTORE-RECORD _SSS-H-FORMAT + !
+    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
+        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
+    _SSSTORE-RECORD _soc-record-u @ _STM-SOURCE-STORE
+        STREAMS-SOURCE-STORE-PATH$ _soc-put ;
+
+: _soc-blocked-create  ( instance expected-store-status -- )
+    >R DUP STREAMS-SOURCE-STORAGE-READY? 0= _soc-assert
+    DUP STREAMS-SOURCE-STORAGE-STATUS@ R> = _soc-assert
+    DUP _STM-ACTIVATE
+    _STM-SOURCE-REGISTRY STREAMS-SOURCE-REGISTRY-VALID? 0= _soc-assert
+    _soc-candidate-init
+    _soc-rid RID-SIZE 165 FILL
+    DUP _soc-candidate _soc-rid ROT STREAMS-SOURCE-CREATE-OWNER
+        STREAMS-SOURCE-S-BLOCKED = _soc-assert
+    DUP CINST.REVISION @ 1 = _soc-assert
+    DUP STREAMS-SOURCES-COUNT@
+        STREAMS-SOURCE-S-BLOCKED = SWAP 0= AND _soc-assert
+    DROP ;
+
+: _soc-run  ( -- )
+    0 _soc-fails ! 0 _soc-checks ! DEPTH _soc-depth !
+    VFS-CUR _soc-old-vfs !
+    1048576 A-XMEM ARENA-NEW DUP 0= _soc-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP 0<> _soc-assert DUP _soc-vfs ! VFS-USE
+    _STREAMS-COMP-SETUP
+    _STM-CAP-COUNT 14 = _soc-assert
+    STREAMS-COMP-DESC COMP.CAPS-N @ 14 = _soc-assert
+    STREAMS-CAP-SOURCE-QUERY CAP-DESC-VALID? _soc-assert
+    STREAMS-CAP-SOURCE-READ CAP-DESC-VALID? _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP-DESC-VALID? _soc-assert
+    STREAMS-CAP-SOURCE-QUERY CAP.EFFECTS @ CAP-E-OBSERVE = _soc-assert
+    STREAMS-CAP-SOURCE-READ CAP.EFFECTS @ CAP-E-OBSERVE = _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP.EFFECTS @
+        CAP-E-MUTATE CAP-E-PERSIST OR = _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP.ID-A @
+        STREAMS-CAP-SOURCE-SET-ENABLED CAP.ID-U @
+        S" streams.source.set-enabled" STR-STR= _soc-assert
+    S" streams.source.set-enabled" STREAMS-COMP-DESC COMP-CAP-FIND
+        STREAMS-CAP-SOURCE-SET-ENABLED = _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP.KIND @
+        CAP-K-COMMAND = _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP.IN-SCHEMA @
+        _STM-SOURCE-SET-ENABLED-SCHEMA = _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP.OUT-SCHEMA @
+        _STM-SOURCE-READ-SCHEMA = _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP.HANDLER-XT @
+        ['] _STM-CAP-SOURCE-SET-ENABLED-H = _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP.FLAGS @
+        CAP-F-NEEDS-TARGET = _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP.EFFECTS @
+        CAP-E-OBSERVE CAP-E-NAVIGATE OR CAP-E-DESTRUCTIVE OR
+        CAP-E-EXTERNAL OR AND 0= _soc-assert
+    _STM-SOURCE-SET-ENABLED-SCHEMA CS.FIELD-N @ 2 = _soc-assert
+    _STM-SOURCE-SET-ENABLED-SCHEMA CS.MAX-LEN @ 2 = _soc-assert
+    _STM-SOURCE-SET-ENABLED-SCHEMA CS.TYPE-MASK @
+        CV-T-MAP CS-TYPE-BIT = _soc-assert
+    _STM-SOURCE-SET-ENABLED-FIELDS DUP CSF.KEY-A @
+        SWAP CSF.KEY-U @ S" resource" STR-STR= _soc-assert
+    _STM-SOURCE-SET-ENABLED-FIELDS CSF.SCHEMA @
+        _STM-RESOURCE-SCHEMA = _soc-assert
+    _STM-SOURCE-SET-ENABLED-FIELDS CSF.FLAGS @
+        CSF-F-REQUIRED = _soc-assert
+    _STM-SOURCE-SET-ENABLED-FIELDS CS-FIELD-SIZE +
+        DUP CSF.KEY-A @ SWAP CSF.KEY-U @
+        S" enabled" STR-STR= _soc-assert
+    _STM-SOURCE-SET-ENABLED-FIELDS CS-FIELD-SIZE + CSF.SCHEMA @
+        _STM-BOOL-SCHEMA = _soc-assert
+    _STM-SOURCE-SET-ENABLED-FIELDS CS-FIELD-SIZE + CSF.FLAGS @
+        CSF-F-REQUIRED = _soc-assert
+    _STM-SOURCE-READ-SCHEMA CS.FIELD-N @ 14 = _soc-assert
+    STREAMS-CAP-SOURCE-QUERY CAP.EFFECTS @
+        CAP-E-MUTATE CAP-E-PERSIST OR CAP-E-DESTRUCTIVE OR
+        CAP-E-EXTERNAL OR AND 0= _soc-assert
+    STREAMS-CAP-SOURCE-READ CAP.EFFECTS @
+        CAP-E-MUTATE CAP-E-PERSIST OR CAP-E-DESTRUCTIVE OR
+        CAP-E-EXTERNAL OR AND 0= _soc-assert
+    CBR-NEW DUP 0= _soc-assert DROP _soc-req !
+
+    \ A direct CINST is uninitialized, not a fabricated empty registry.
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _soc-assert DROP _soc-i1 !
+    _soc-i1 @ STREAMS-SOURCE-STORAGE-READY? 0= _soc-assert
+    _soc-i1 @ STREAMS-SOURCE-STORAGE-STATUS@
+        SSSTORE-S-INVALID = _soc-assert
+    _soc-i1 @ STREAMS-SOURCES-COUNT@
+        STREAMS-SOURCE-S-BLOCKED = SWAP 0= AND _soc-assert
+    _soc-i1 @ _soc-init
+    _soc-i1 @ STREAMS-SOURCE-STORAGE-STATUS@
+        SSSTORE-S-ABSENT = _soc-assert
+    _soc-i1 @ STREAMS-SOURCES-COUNT@
+        STREAMS-SOURCE-S-OK = SWAP 0= AND _soc-assert
+    _soc-i1 @ CINST.REVISION @ 1 = _soc-assert
+
+    \ Create ignores the caller RID, assigns an opaque owner RID, persists
+    \ generation one, and touches the direct owner only after commit.
+    _soc-candidate-init
+    _soc-caller-rid RID-SIZE 165 FILL
+    _soc-caller-rid _soc-candidate STREAMS-SOURCE-ID!
+        SSREG-S-OK = _soc-assert
+    _soc-candidate _soc-rid _soc-i1 @ STREAMS-SOURCE-CREATE-OWNER _soc-ok
+    _soc-rid RID-PRESENT? _soc-assert
+    _soc-rid _soc-caller-rid RID= 0= _soc-assert
+    _soc-candidate SSOURCE.ID _soc-caller-rid RID= _soc-assert
+    _soc-i1 @ CINST.REVISION @ 2 = _soc-assert
+    _soc-i1 @ STREAMS-SOURCES-COUNT@
+        STREAMS-SOURCE-S-OK = SWAP 1 = AND _soc-assert
+    _soc-read-i1
+    _soc-read SSOURCE.REVISION @ 1 = _soc-assert
+    _soc-read SSOURCE.ID _soc-rid RID= _soc-assert
+    _soc-read STREAMS-SOURCE-LABEL$ S" Example feed" STR-STR= _soc-assert
+    _soc-read STREAMS-SOURCE-ENDPOINT$
+        S" https://example.test/feed.xml" STR-STR= _soc-assert
+
+    \ Cold lifecycle recovery reads the exact committed source without
+    \ changing the second component's owner revision.
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _soc-assert DROP _soc-i2 !
+    _soc-i2 @ _soc-init
+    _soc-i2 @ STREAMS-SOURCE-STORAGE-STATUS@
+        SSSTORE-S-OK = _soc-assert
+    _soc-i2 @ CINST.REVISION @ 1 = _soc-assert
+    _soc-read-i2
+    _soc-read SSOURCE.REVISION @ 1 = _soc-assert
+    _soc-read SSOURCE.ID _soc-rid RID= _soc-assert
+
+    \ A successful exact replace commits through instance two.
+    S" Updated label" _soc-read STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _soc-assert
+    _soc-read 1 _soc-i2 @ STREAMS-SOURCE-REPLACE-OWNER _soc-ok
+    _soc-i2 @ CINST.REVISION @ 2 = _soc-assert
+    _soc-read-i2
+    _soc-read SSOURCE.REVISION @ 2 = _soc-assert
+    _soc-read STREAMS-SOURCE-LABEL$ S" Updated label" STR-STR= _soc-assert
+
+    \ Instance one's stale store generation conflicts at SAVE.  Its live
+    \ registry, source revision, label, and owner revision remain unchanged.
+    _soc-read-i1
+    S" Stale writer" _soc-read STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _soc-assert
+    _soc-i1 @ _soc-owner-revision!
+    _soc-read 1 _soc-i1 @ STREAMS-SOURCE-REPLACE-OWNER
+        STREAMS-SOURCE-S-CONFLICT = _soc-assert
+    _soc-i1 @ _soc-owner-stable? _soc-assert
+    _soc-read-i1
+    _soc-read SSOURCE.REVISION @ 1 = _soc-assert
+    _soc-read STREAMS-SOURCE-LABEL$ S" Example feed" STR-STR= _soc-assert
+
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _soc-assert DROP _soc-i3 !
+    _soc-i3 @ _soc-init
+    _soc-read-i3
+    _soc-read SSOURCE.REVISION @ 2 = _soc-assert
+    _soc-read STREAMS-SOURCE-LABEL$ S" Updated label" STR-STR= _soc-assert
+
+    \ Domain-stale replacement is rejected before persistence and leaves the
+    \ current source and both revision domains unchanged.
+    _soc-i3 @ _soc-owner-revision!
+    S" Domain stale" _soc-read STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _soc-assert
+    1 _soc-read SSOURCE.REVISION !
+    _soc-read 1 _soc-i3 @ STREAMS-SOURCE-REPLACE-OWNER
+        STREAMS-SOURCE-S-STALE = _soc-assert
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+    _soc-read-i3
+    _soc-read SSOURCE.REVISION @ 2 = _soc-assert
+    _soc-read STREAMS-SOURCE-LABEL$ S" Updated label" STR-STR= _soc-assert
+
+    \ Owner-state/descriptor spans are never accepted as input or output.
+    _soc-i3 @ _STM-ACTIVATE
+    0 _STM-SOURCE-REGISTRY STREAMS-SOURCE-NTH SSOURCE.ID _soc-live-rid !
+    _soc-candidate-init
+    _soc-candidate _soc-live-rid @ _soc-i3 @ STREAMS-SOURCE-CREATE-OWNER
+        STREAMS-SOURCE-S-INVALID = _soc-assert
+    _soc-live-rid @ _soc-rid RID= _soc-assert
+    _soc-candidate _soc-candidate SSOURCE.ID _soc-i3 @
+        STREAMS-SOURCE-CREATE-OWNER STREAMS-SOURCE-S-INVALID = _soc-assert
+    _soc-rid _STM-SOURCE-STORE _soc-i3 @ STREAMS-SOURCE-READ-OWNER
+        STREAMS-SOURCE-S-INVALID = _soc-assert
+    _soc-rid _soc-i3 @ _soc-i3 @ STREAMS-SOURCE-READ-OWNER
+        STREAMS-SOURCE-S-INVALID = _soc-assert
+    _STM-SOURCE-CANDIDATE-REGISTRY _soc-rid _soc-i3 @
+        STREAMS-SOURCE-CREATE-OWNER STREAMS-SOURCE-S-INVALID = _soc-assert
+    0 _STM-SOURCE-REGISTRY STREAMS-SOURCE-NTH
+        2 _soc-i3 @ STREAMS-SOURCE-REPLACE-OWNER
+        STREAMS-SOURCE-S-INVALID = _soc-assert
+    _soc-i3 @ STREAMS-SOURCE-STORAGE-READY? _soc-assert
+    _soc-i3 @ STREAMS-SOURCES-COUNT@
+        STREAMS-SOURCE-S-OK = SWAP 1 = AND _soc-assert
+    _soc-read-i3
+    _soc-read SSOURCE.REVISION @ 2 = _soc-assert
+    _soc-read STREAMS-SOURCE-LABEL$ S" Updated label" STR-STR= _soc-assert
+
+    \ Observe query/read return exact semantic RREFs and a projection that
+    \ excludes endpoint and provider configuration.
+    _soc-req @ CBR.ARGS CV-NULL!
+    _soc-req @ _soc-i3 @ _STM-CAP-SOURCE-QUERY-H
+        CBUS-S-OK = _soc-assert
+    _soc-req @ CBR.RESULT STREAMS-CAP-SOURCE-QUERY CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP 0= _soc-assert
+    _soc-req @ CBR.RESULT CV-LEN@ 1 = _soc-assert
+    0 _soc-req @ CBR.RESULT CV-LIST-NTH _soc-resource-value !
+    _soc-resource-value @ _soc-rref IRES-RREF@
+        IRES-S-OK = _soc-assert
+    _soc-rref RREF.ID _soc-rid RID= _soc-assert
+    _soc-rref RREF.REVISION @ 2 = _soc-assert
+    _soc-resource-value @ DUP CV-DATA@ SWAP CV-LEN@
+        _soc-req @ CBR.ARGS CV-RESOURCE! 0= _soc-assert
+    _soc-req @ CBR.RESULT CV-FREE
+    _soc-req @ _soc-i3 @ _STM-CAP-SOURCE-READ-H
+        CBUS-S-OK = _soc-assert
+    _soc-req @ CBR.RESULT STREAMS-CAP-SOURCE-READ CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP 0= _soc-assert
+    S" label" _soc-result-field DUP CV-DATA@ SWAP CV-LEN@
+        S" Updated label" STR-STR= _soc-assert
+    S" revision" _soc-result-field CV-DATA@ 2 = _soc-assert
+    S" resource" _soc-result-field _soc-rref IRES-RREF@
+        IRES-S-OK = _soc-assert
+    S" endpoint" _soc-result-field 0= _soc-assert
+    S" config" _soc-result-field 0= _soc-assert
+    _soc-req @ CBR.ARGS CV-FREE _soc-req @ CBR.RESULT CV-FREE
+
+    \ Exact stale semantic revision is rejected; revision zero resolves the
+    \ current source without mutating either revision domain.
+    1 _soc-rref RREF.REVISION !
+    _soc-rref _soc-req @ CBR.ARGS IRES-RREF! IRES-S-OK = _soc-assert
+    _soc-i3 @ _soc-owner-revision!
+    _soc-req @ _soc-i3 @ _STM-CAP-SOURCE-READ-H
+        CBUS-S-STALE-REVISION = _soc-assert
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+    _soc-req @ CBR.ARGS CV-FREE
+    0 _soc-rref RREF.REVISION !
+    _soc-rref _soc-req @ CBR.ARGS IRES-RREF! IRES-S-OK = _soc-assert
+    _soc-req @ _soc-i3 @ _STM-CAP-SOURCE-READ-H
+        CBUS-S-OK = _soc-assert
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+    _soc-req @ CBR.ARGS CV-FREE _soc-req @ CBR.RESULT CV-FREE
+
+    \ Stale removal is inert.  The typed set-enabled command requires an
+    \ exact positive semantic RREF and preserves caller/live/owner state on
+    \ revision-zero, stale, redundant, and output-schema failures.
+    _soc-i3 @ _soc-owner-revision!
+    _soc-rid 1 _soc-i3 @ STREAMS-SOURCE-REMOVE-OWNER
+        STREAMS-SOURCE-S-STALE = _soc-assert
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+
+    _soc-rid 2 0 _soc-set-enabled-args
+    S" enabled" _soc-req @ CBR.ARGS CV-MAP-FIND
+        DUP 0<> _soc-assert 1 SWAP CV-INT!
+    _soc-req @ CBR.ARGS _STM-SOURCE-SET-ENABLED-SCHEMA
+        CS-VALIDATE-DEEP CS-E-TYPE = _soc-assert
+    _soc-clear-request _soc-stack
+
+    _soc-rid 2 0 _soc-set-enabled-args
+    1 _soc-req @ CBR.ARGS CV-MAP-NTH CV-MAP-KEY
+        S" extra" ROT CV-STRING! 0= _soc-assert
+    _soc-req @ CBR.ARGS _STM-SOURCE-SET-ENABLED-SCHEMA
+        CS-VALIDATE-DEEP CS-E-UNKNOWN = _soc-assert
+    _soc-clear-request _soc-stack
+
+    _soc-rid 0 0 _soc-set-enabled-args
+    _soc-req @ CBR.ARGS _STM-SOURCE-SET-ENABLED-SCHEMA
+        CS-VALIDATE-DEEP 0= _soc-assert
+    _soc-result-sentinel!
+    _soc-i3 @ _soc-registry-snapshot!
+    _soc-req @ _soc-i3 @ _STM-CAP-SOURCE-SET-ENABLED-H
+        CBUS-S-INVALID = _soc-assert
+    _soc-result-sentinel? _soc-assert
+    _soc-i3 @ _soc-registry-unchanged? _soc-assert
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+    _soc-i3 @ _soc-source-cap-scratch-clean? _soc-assert
+    _soc-clear-request _soc-stack
+
+    _soc-rid 1 0 _soc-set-enabled-args
+    _soc-result-sentinel!
+    _soc-i3 @ _soc-registry-snapshot!
+    _soc-req @ _soc-i3 @ _STM-CAP-SOURCE-SET-ENABLED-H
+        CBUS-S-STALE-REVISION = _soc-assert
+    _soc-result-sentinel? _soc-assert
+    _soc-i3 @ _soc-registry-unchanged? _soc-assert
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+    _soc-i3 @ _soc-source-cap-scratch-clean? _soc-assert
+    _soc-clear-request _soc-stack
+
+    _soc-rid 2 -1 _soc-set-enabled-args
+    _soc-result-sentinel!
+    _soc-i3 @ _soc-registry-snapshot!
+    _soc-i3 @ _STM-ACTIVATE _STM-PANEL WDG-CLEAN
+    0 _ASHELL-DIRTY !
+    _soc-req @ _soc-i3 @ _STM-CAP-SOURCE-SET-ENABLED-H
+        CBUS-S-INVALID = _soc-assert
+    _soc-result-sentinel? _soc-assert
+    _soc-i3 @ _soc-registry-unchanged? _soc-assert
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+    _soc-i3 @ _soc-source-cap-scratch-clean? _soc-assert
+    _STM-PANEL WDG-DIRTY? 0= _soc-assert
+    _ASHELL-DIRTY @ 0= _soc-assert
+    _soc-clear-request _soc-stack
+
+    \ Force the preallocated sanitized result to fail its deep schema before
+    \ persistence; restoring the field schema leaves the descriptor intact.
+    _soc-rid 2 0 _soc-set-enabled-args
+    _soc-result-sentinel!
+    _soc-i3 @ _soc-registry-snapshot!
+    _STM-SOURCE-READ-FIELDS CS-FIELD-SIZE 13 * + CSF.SCHEMA
+        DUP @ _soc-old-field-schema !
+    _STM-BOOL-SCHEMA SWAP !
+    _soc-req @ _soc-i3 @ _STM-CAP-SOURCE-SET-ENABLED-H
+        CBUS-S-FAILED = _soc-assert
+    _soc-old-field-schema @
+        _STM-SOURCE-READ-FIELDS CS-FIELD-SIZE 13 * + CSF.SCHEMA !
+    _soc-result-sentinel? _soc-assert
+    _soc-i3 @ _soc-registry-unchanged? _soc-assert
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+    _soc-i3 @ _soc-source-cap-scratch-clean? _soc-assert
+    STREAMS-CAP-SOURCE-SET-ENABLED CAP-DESC-VALID? _soc-assert
+    _soc-clear-request _soc-stack
+
+    \ Dispatch the real mutation through the owner bus.  The source and
+    \ registry revisions advance during the save-before-live commit; only
+    \ then does the bus advance the component revision exactly once.
+    CREG-NEW DUP 0= _soc-assert DROP _soc-reg !
+    STREAMS-COMP-DESC _soc-reg @ CREG-TYPE+ 0= _soc-assert
+    _soc-i3 @ _soc-reg @ CREG-INST+ 0= _soc-assert
+    _soc-reg @ 0 CBUS-NEW DUP 0= _soc-assert DROP _soc-bus !
+    _soc-rid 2 0 _soc-set-enabled-args
+    _soc-req @ CBR.ARGS STREAMS-CAP-SOURCE-SET-ENABLED CAP.IN-SCHEMA @
+        CS-VALIDATE-DEEP 0= _soc-assert
+    _soc-owner-revision @ _soc-req @ CBR.EXPECT-REV !
+    _soc-i3 @ _STM-ACTIVATE _STM-PANEL WDG-CLEAN
+    0 _ASHELL-DIRTY !
+    STREAMS-CAP-SOURCE-SET-ENABLED _soc-i3 @ _soc-dispatch
+    _soc-req @ CBR.STATUS @ CBUS-S-OK = _soc-assert
+    _STM-PANEL WDG-DIRTY? _soc-assert
+    _ASHELL-DIRTY @ 0<> _soc-assert
+    _soc-i3 @ CINST.REVISION @ _soc-owner-revision @ 1+ = _soc-assert
+    _soc-i3 @ CINST.REVISION @ _soc-req @ CBR.ACTUAL-REV @ = _soc-assert
+    _soc-req @ CBR.RESULT STREAMS-CAP-SOURCE-SET-ENABLED CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP 0= _soc-assert
+    S" revision" _soc-result-field CV-DATA@ 3 = _soc-assert
+    S" enabled" _soc-result-field DUP CV-TYPE@ CV-T-BOOL = _soc-assert
+        CV-DATA@ 0= _soc-assert
+    S" resource" _soc-result-field _soc-rref IRES-RREF@
+        IRES-S-OK = _soc-assert
+    _soc-rref RREF.ID _soc-rid RID= _soc-assert
+    _soc-rref RREF.REVISION @ 3 = _soc-assert
+    S" endpoint" _soc-result-field 0= _soc-assert
+    S" config" _soc-result-field 0= _soc-assert
+    _soc-read-i3
+    _soc-read SSOURCE.REVISION @ 3 = _soc-assert
+    _soc-read SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND 0= _soc-assert
+    _soc-i3 @ _soc-source-cap-scratch-clean? _soc-assert
+    _soc-clear-request _soc-stack
+
+    \ The direct owner method remains idempotent, while a real direct owner
+    \ transition still persists and touches its component exactly once.
+    _soc-i3 @ _soc-owner-revision!
+    _soc-rid 3 0 _soc-i3 @ STREAMS-SOURCE-ENABLE-OWNER _soc-ok
+    _soc-i3 @ _soc-owner-stable? _soc-assert
+    _soc-rid 3 -1 _soc-i3 @ STREAMS-SOURCE-ENABLE-OWNER _soc-ok
+    _soc-i3 @ CINST.REVISION @ _soc-owner-revision @ 1+ = _soc-assert
+    _soc-read-i3
+    _soc-read SSOURCE.REVISION @ 4 = _soc-assert
+    _soc-read SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND 0<> _soc-assert
+
+    \ A contained source-store write failure happens after result
+    \ preallocation but before live/caller publication.  It preserves every
+    \ live byte, the caller sentinel and component revision, wipes private
+    \ candidate scratch, and leaves the previous durable record recoverable.
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _soc-assert DROP _soc-i7 !
+    _soc-i7 @ _soc-init
+    _soc-rid 4 0 _soc-set-enabled-args
+    _soc-result-sentinel!
+    _soc-i7 @ _soc-owner-revision!
+    _soc-i7 @ _soc-registry-snapshot!
+    _soc-fault-on
+    _soc-req @ _soc-i7 @ _STM-CAP-SOURCE-SET-ENABLED-H
+        CBUS-S-FAILED = _soc-assert
+    _soc-fault-off
+    _soc-i7 @ _soc-owner-stable? _soc-assert
+    _soc-i7 @ _soc-registry-unchanged? _soc-assert
+    _soc-result-sentinel? _soc-assert
+    _soc-i7 @ _soc-source-cap-scratch-clean? _soc-assert
+    _soc-i7 @ STREAMS-SOURCE-STORAGE-READY? 0= _soc-assert
+    _soc-i7 @ STREAMS-SOURCE-STORAGE-STATUS@
+        SSSTORE-S-IO = _soc-assert
+    _soc-clear-request _soc-stack
+
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _soc-assert DROP _soc-i8 !
+    _soc-i8 @ _soc-init
+    _soc-rid _soc-read _soc-i8 @ STREAMS-SOURCE-READ-OWNER _soc-ok
+    _soc-read SSOURCE.REVISION @ 4 = _soc-assert
+    _soc-read SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND 0<> _soc-assert
+
+    \ Removal commits the next generation, advances the direct owner once,
+    \ and cold lifecycle recovery sees the committed empty registry.
+    _soc-i3 @ _soc-owner-revision!
+    _soc-rid 4 _soc-i3 @ STREAMS-SOURCE-REMOVE-OWNER _soc-ok
+    _soc-i3 @ CINST.REVISION @ _soc-owner-revision @ 1+ = _soc-assert
+    _soc-i3 @ STREAMS-SOURCES-COUNT@
+        STREAMS-SOURCE-S-OK = SWAP 0= AND _soc-assert
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _soc-assert DROP _soc-i4 !
+    _soc-i4 @ _soc-init
+    _soc-i4 @ STREAMS-SOURCE-STORAGE-STATUS@
+        SSSTORE-S-OK = _soc-assert
+    _soc-i4 @ STREAMS-SOURCES-COUNT@
+        STREAMS-SOURCE-S-OK = SWAP 0= AND _soc-assert
+
+    \ Build one fresh source on the recovered-empty owner, then prove the
+    \ exact capabilities through an actual Agent principal and owner table.
+    _soc-candidate-init
+    _soc-candidate _soc-rid _soc-i4 @ STREAMS-SOURCE-CREATE-OWNER _soc-ok
+    _soc-i4 @ CINST.REVISION @ 2 = _soc-assert
+    _soc-rid _soc-read _soc-i4 @ STREAMS-SOURCE-READ-OWNER _soc-ok
+    _soc-read SSOURCE.REVISION @ 1 = _soc-assert
+
+    _soc-i4 @ _soc-reg @ CREG-INST+ 0= _soc-assert
+    77 305419896 AHT-NEW DUP 0= _soc-assert DROP _soc-auth !
+    _soc-auth @ _soc-bus @ CBUS-AUTHORITY!
+    8000 _soc-agent-invocation !
+
+    \ Observe operations use one-use Mandate-auto grants and allocate no Turn.
+    _soc-request-new
+    _soc-req @ CBR.ARGS CV-NULL!
+    STREAMS-CAP-SOURCE-QUERY _soc-i4 @ AGR-F-MANDATE-AUTO
+        _soc-agent-dispatch CBUS-S-OK = _soc-assert
+    _soc-req @ CBR.PRINCIPAL @ CPRINC-AGENT = _soc-assert
+    _soc-req @ CBR.TURN @ 0= _soc-assert
+    _soc-req @ CBR.RESULT STREAMS-CAP-SOURCE-QUERY CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP 0= _soc-assert
+    _soc-req @ CBR.RESULT CV-LEN@ 1 = _soc-assert
+    0 _soc-req @ CBR.RESULT CV-LIST-NTH _soc-rref IRES-RREF@
+        IRES-S-OK = _soc-assert
+    _soc-rref RREF.ID _soc-rid RID= _soc-assert
+    _soc-rref RREF.REVISION @ 1 = _soc-assert
+
+    _soc-request-new
+    _soc-rref RREF-INIT
+    _soc-rid _soc-rref RREF.ID RID-COPY
+    1 _soc-rref RREF.REVISION !
+    _soc-rref _soc-req @ CBR.ARGS IRES-RREF! IRES-S-OK = _soc-assert
+    STREAMS-CAP-SOURCE-READ _soc-i4 @ AGR-F-MANDATE-AUTO
+        _soc-agent-dispatch CBUS-S-OK = _soc-assert
+    _soc-req @ CBR.PRINCIPAL @ CPRINC-AGENT = _soc-assert
+    _soc-req @ CBR.TURN @ 0= _soc-assert
+    _soc-req @ CBR.RESULT STREAMS-CAP-SOURCE-READ CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP 0= _soc-assert
+    S" revision" _soc-result-field CV-DATA@ 1 = _soc-assert
+    S" endpoint" _soc-result-field 0= _soc-assert
+    S" config" _soc-result-field 0= _soc-assert
+
+    \ Mutation is neither ambient nor Mandate-auto. Failed gates leave both
+    \ semantic and component revisions byte-stable.
+    _soc-i4 @ _soc-owner-revision!
+    _soc-i4 @ _soc-registry-snapshot!
+
+    _soc-request-new
+    _soc-rid 1 0 _soc-set-enabled-args
+    STREAMS-CAP-SOURCE-SET-ENABLED _soc-i4 @ _soc-agent-envelope!
+    _soc-req @ _soc-bus @ CBUS-DISPATCH
+        CBUS-S-NEEDS-APPROVAL = _soc-assert
+    _soc-i4 @ _soc-owner-stable? _soc-assert
+    _soc-i4 @ _soc-registry-unchanged? _soc-assert
+
+    _soc-request-new
+    _soc-rid 1 0 _soc-set-enabled-args
+    STREAMS-CAP-SOURCE-SET-ENABLED _soc-i4 @ AGR-F-MANDATE-AUTO
+        _soc-agent-dispatch CBUS-S-DENIED = _soc-assert
+    _soc-i4 @ _soc-owner-stable? _soc-assert
+    _soc-i4 @ _soc-registry-unchanged? _soc-assert
+
+    \ A reviewed grant binds the canonical operand; changing a still-valid
+    \ bool after issue consumes and denies the grant before owner entry.
+    _soc-request-new
+    _soc-rid 1 0 _soc-set-enabled-args
+    STREAMS-CAP-SOURCE-SET-ENABLED _soc-i4 @ AGR-F-REVIEWED-COMMIT
+        _soc-agent-authorize!
+    S" enabled" _soc-req @ CBR.ARGS CV-MAP-FIND
+        DUP 0<> _soc-assert -1 SWAP CV-BOOL!
+    _soc-req @ CBR-ARGS-SEAL-MATCH? 0= _soc-assert
+    _soc-req @ _soc-bus @ CBUS-DISPATCH CBUS-S-DENIED = _soc-assert
+    _soc-i4 @ _soc-owner-stable? _soc-assert
+    _soc-i4 @ _soc-registry-unchanged? _soc-assert
+
+    \ A fresh reviewed invocation commits exactly once.
+    _soc-request-new
+    _soc-rid 1 0 _soc-set-enabled-args
+    STREAMS-CAP-SOURCE-SET-ENABLED _soc-i4 @ AGR-F-REVIEWED-COMMIT
+        _soc-agent-dispatch CBUS-S-OK = _soc-assert
+    _soc-req @ CBR.PRINCIPAL @ CPRINC-AGENT = _soc-assert
+    _soc-i4 @ CINST.REVISION @ 3 = _soc-assert
+    _soc-req @ CBR.ACTUAL-REV @ 3 = _soc-assert
+    _soc-req @ CBR.TURN @ DUP 0<> _soc-assert
+    DUP PTURN.STATE @ PTURN-S-COMMITTED = _soc-assert
+    DUP PTURN.OBSERVED-REVISION @ 2 = _soc-assert
+    DUP PTURN.COMMITTED-REVISION @ 3 = _soc-assert
+    PTURN.GRANT-ID RID-PRESENT? _soc-assert
+    _soc-req @ CBR.RESULT STREAMS-CAP-SOURCE-SET-ENABLED CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP 0= _soc-assert
+    S" revision" _soc-result-field CV-DATA@ 2 = _soc-assert
+    S" enabled" _soc-result-field CV-DATA@ 0= _soc-assert
+    S" endpoint" _soc-result-field 0= _soc-assert
+    S" config" _soc-result-field 0= _soc-assert
+    _soc-rid _soc-read _soc-i4 @ STREAMS-SOURCE-READ-OWNER _soc-ok
+    _soc-read SSOURCE.REVISION @ 2 = _soc-assert
+    _soc-read SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND 0= _soc-assert
+
+    \ Matching the new component revision reaches the consumed-handle gate;
+    \ the same reviewed authority cannot replay.
+    3 _soc-req @ CBR.EXPECT-REV !
+    _soc-req @ _soc-bus @ CBUS-DISPATCH
+        CBUS-S-CONSUMED-AUTHORITY = _soc-assert
+    _soc-i4 @ CINST.REVISION @ 3 = _soc-assert
+    _soc-rid _soc-read _soc-i4 @ STREAMS-SOURCE-READ-OWNER _soc-ok
+    _soc-read SSOURCE.REVISION @ 2 = _soc-assert
+
+    \ Corrupt and future-format source evidence both block lifecycle
+    \ mutation.  Neither state publishes a fresh generation-zero registry.
+    _soc-i4 @ _soc-install-corrupt
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _soc-assert DROP _soc-i5 !
+    _soc-i5 @ STREAMS-INIT-CB
+    _soc-i5 @ SSSTORE-S-CORRUPT _soc-blocked-create
+
+    _soc-i4 @ _soc-install-future
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _soc-assert DROP _soc-i6 !
+    _soc-i6 @ STREAMS-INIT-CB
+    _soc-i6 @ SSSTORE-S-UNSUPPORTED _soc-blocked-create
+
+    _soc-bus @ CBUS-FREE
+    _soc-auth @ AHT-FREE
+    _soc-i3 @ _soc-reg @ CREG-INST- 0= _soc-assert
+    _soc-i4 @ _soc-reg @ CREG-INST- 0= _soc-assert
+    _soc-reg @ CREG-FREE
+    _soc-req @ CBR-FREE
+    _soc-i1 @ CINST-FREE _soc-i2 @ CINST-FREE
+    _soc-i3 @ CINST-FREE _soc-i4 @ CINST-FREE
+    _soc-i5 @ CINST-FREE _soc-i6 @ CINST-FREE
+    _soc-i7 @ CINST-FREE _soc-i8 @ CINST-FREE
+    _soc-old-vfs @ VFS-USE _soc-vfs @ VFS-DESTROY
+    _soc-stack
+    _soc-fails @ 0= IF
+        ." STREAMS SOURCE OWNER CONTRACTS PASS " _soc-checks @ .
+    ELSE
+        ." STREAMS SOURCE OWNER CONTRACTS FAIL " _soc-fails @ . ." / "
+            _soc-checks @ .
+    THEN CR ;
+
+_soc-run
+""",
+    ready_markers=("STREAMS SOURCE OWNER CONTRACTS PASS",),
+    stable_markers=("STREAMS SOURCE OWNER CONTRACTS PASS",),
+    failure_markers=("STREAMS SOURCE OWNER CONTRACTS FAIL", "SOC ASSERT"),
+    linked=True,
+    include_large_sample=False,
+)
+
+PROFILES["streams-source-registry-contracts"] = Profile(
+    roots=("tui/applets/streams/source-registry.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - bounded Streams source-registry contracts
+ENTER-USERLAND
+." [akashic] loading Streams source-registry contracts" CR
+REQUIRE tui/applets/streams/source-registry.f
+
+VARIABLE _srgc-fails
+VARIABLE _srgc-checks
+VARIABLE _srgc-depth
+VARIABLE _srgc-reg-memory
+VARIABLE _srgc-registry
+VARIABLE _srgc-reg-snapshot
+VARIABLE _srgc-source
+VARIABLE _srgc-copy
+VARIABLE _srgc-source-snapshot
+VARIABLE _srgc-over
+VARIABLE _srgc-build-source
+VARIABLE _srgc-build-number
+VARIABLE _srgc-byte
+
+CREATE _srgc-rid RID-SIZE ALLOT
+CREATE _srgc-bad 1 ALLOT
+
+: _srgc-assert  ( flag -- )
+    1 _srgc-checks +! 0= IF
+        1 _srgc-fails +! ." SRGC ASSERT " _srgc-checks @ . CR
+    THEN ;
+: _srgc-stack  ( -- ) DEPTH _srgc-depth @ = _srgc-assert ;
+: _srgc-allocate  ( size variable -- )
+    >R ALLOCATE
+    ABORT" STREAMS SOURCE REGISTRY CONTRACTS FAIL allocation"
+    R> ! ;
+: _srgc-free  ( variable -- )
+    DUP @ ?DUP IF FREE 0 SWAP ! ELSE DROP THEN ;
+: _srgc-filled?  ( a u byte -- flag )
+    _srgc-byte ! 0 ?DO
+        DUP I + C@ _srgc-byte @ <> IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+: _srgc-zero?  ( a u -- flag ) 0 _srgc-filled? ;
+: _srgc-source=  ( source-a source-b -- flag )
+    STREAMS-SOURCE-SIZE SWAP STREAMS-SOURCE-SIZE COMPARE 0= ;
+: _srgc-registry=  ( registry-a registry-b -- flag )
+    STREAMS-SOURCE-REGISTRY-SIZE SWAP
+        STREAMS-SOURCE-REGISTRY-SIZE COMPARE 0= ;
+: _srgc-reg-snapshot!  ( -- )
+    _srgc-registry @ _srgc-reg-snapshot @
+        STREAMS-SOURCE-REGISTRY-SIZE CMOVE ;
+: _srgc-reg-unchanged?  ( -- flag )
+    _srgc-registry @ _srgc-reg-snapshot @ _srgc-registry= ;
+: _srgc-source-snapshot!  ( -- )
+    _srgc-source @ _srgc-source-snapshot @ STREAMS-SOURCE-SIZE CMOVE ;
+: _srgc-source-unchanged?  ( -- flag )
+    _srgc-source @ _srgc-source-snapshot @ _srgc-source= ;
+
+: _srgc-label$  ( -- a u ) S" Streams ☂ café" ;
+: _srgc-endpoint$  ( -- a u ) S" https://例.example/路?q=café" ;
+: _srgc-config$  ( -- a u ) S" λ=config; mode=exact; café" ;
+: _srgc-renamed$  ( -- a u ) S" Renamed 🛰 source" ;
+
+: _srgc-rid!  ( number -- )
+    _srgc-rid RID-SIZE 0 FILL _srgc-rid C! ;
+: _srgc-build  ( number source -- )
+    _srgc-build-source ! _srgc-build-number !
+    _srgc-build-source @ STREAMS-SOURCE-INIT
+    _srgc-build-number @ _srgc-rid!
+    _srgc-rid _srgc-build-source @ STREAMS-SOURCE-ID!
+        SSREG-S-OK = _srgc-assert
+    SSOURCE-KIND-SYNDICATION _srgc-build-source @ SSOURCE.KIND !
+    SSOURCE-FORMAT-JSON-FEED _srgc-build-source @ SSOURCE.FORMAT !
+    _srgc-label$ _srgc-build-source @ STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _srgc-assert
+    _srgc-endpoint$ _srgc-build-source @ STREAMS-SOURCE-ENDPOINT!
+        SSREG-S-OK = _srgc-assert
+    _srgc-config$ _srgc-build-source @ STREAMS-SOURCE-CONFIG!
+        SSREG-S-OK = _srgc-assert
+    _srgc-build-source @ _SSOURCE-CONFIG-VALID? _srgc-assert ;
+
+: _srgc-label-tail-zero?  ( source -- flag )
+    _srgc-build-source !
+    _srgc-build-source @ SSOURCE.LABEL
+        _srgc-build-source @ SSOURCE.LABEL-U @ +
+    STREAMS-SOURCE-LABEL-MAX
+        _srgc-build-source @ SSOURCE.LABEL-U @ - _srgc-zero? ;
+: _srgc-endpoint-tail-zero?  ( source -- flag )
+    _srgc-build-source !
+    _srgc-build-source @ SSOURCE.ENDPOINT
+        _srgc-build-source @ SSOURCE.ENDPOINT-U @ +
+    STREAMS-SOURCE-ENDPOINT-MAX
+        _srgc-build-source @ SSOURCE.ENDPOINT-U @ - _srgc-zero? ;
+: _srgc-config-tail-zero?  ( source -- flag )
+    _srgc-build-source !
+    _srgc-build-source @ SSOURCE.CONFIG
+        _srgc-build-source @ SSOURCE.CONFIG-U @ +
+    STREAMS-SOURCE-CONFIG-MAX
+        _srgc-build-source @ SSOURCE.CONFIG-U @ - _srgc-zero? ;
+
+: _srgc-test-setters  ( -- )
+    1 _srgc-source @ _srgc-build
+    _srgc-source-snapshot!
+    \ Public owned strings can be fed back to the same setter.  MOVE must
+    \ preserve the exact prefix before the fixed tail is cleared.
+    _srgc-source @ STREAMS-SOURCE-LABEL$
+        _srgc-source @ STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _srgc-assert
+    _srgc-source @ STREAMS-SOURCE-ENDPOINT$
+        _srgc-source @ STREAMS-SOURCE-ENDPOINT!
+        SSREG-S-OK = _srgc-assert
+    _srgc-source @ STREAMS-SOURCE-CONFIG$
+        _srgc-source @ STREAMS-SOURCE-CONFIG!
+        SSREG-S-OK = _srgc-assert
+    _srgc-source-unchanged? _srgc-assert
+    _srgc-source @ STREAMS-SOURCE-LABEL$ _srgc-label$ COMPARE 0=
+        _srgc-assert
+    _srgc-source @ STREAMS-SOURCE-ENDPOINT$ _srgc-endpoint$ COMPARE 0=
+        _srgc-assert
+    _srgc-source @ STREAMS-SOURCE-CONFIG$ _srgc-config$ COMPARE 0=
+        _srgc-assert
+    _srgc-source @ _srgc-label-tail-zero? _srgc-assert
+    _srgc-source @ _srgc-endpoint-tail-zero? _srgc-assert
+    _srgc-source @ _srgc-config-tail-zero? _srgc-assert
+
+    \ Invalid and over-bound setter calls preserve every source byte.
+    _srgc-over @ STREAMS-SOURCE-ENDPOINT-MAX 1+ 65 FILL
+    255 _srgc-bad C! _srgc-source-snapshot!
+    _srgc-over @ STREAMS-SOURCE-LABEL-MAX 1+
+        _srgc-source @ STREAMS-SOURCE-LABEL!
+        SSREG-S-CAPACITY = _srgc-assert
+    _srgc-source-unchanged? _srgc-assert
+    _srgc-bad 1 _srgc-source @ STREAMS-SOURCE-LABEL!
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-source-unchanged? _srgc-assert
+    _srgc-over @ STREAMS-SOURCE-ENDPOINT-MAX 1+
+        _srgc-source @ STREAMS-SOURCE-ENDPOINT!
+        SSREG-S-CAPACITY = _srgc-assert
+    _srgc-source-unchanged? _srgc-assert
+    _srgc-bad 1 _srgc-source @ STREAMS-SOURCE-ENDPOINT!
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-source-unchanged? _srgc-assert
+    _srgc-over @ STREAMS-SOURCE-CONFIG-MAX 1+
+        _srgc-source @ STREAMS-SOURCE-CONFIG!
+        SSREG-S-CAPACITY = _srgc-assert
+    _srgc-source-unchanged? _srgc-assert
+    _srgc-bad 1 _srgc-source @ STREAMS-SOURCE-CONFIG!
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-source-unchanged? _srgc-assert _srgc-stack ;
+
+: _srgc-test-invalid-create  ( -- )
+    _srgc-reg-snapshot!
+    SSOURCE-KIND-PAGE _srgc-source @ SSOURCE.KIND !
+    _srgc-source @ _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    SSOURCE-KIND-SYNDICATION _srgc-source @ SSOURCE.KIND !
+    STREAMS-SOURCE-LABEL-MAX 1+
+        _srgc-source @ SSOURCE.LABEL-U !
+    _srgc-source @ _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-label$ _srgc-source @ STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _srgc-assert _srgc-stack ;
+
+: _srgc-test-alias-boundaries  ( -- )
+    \ Exact adjacency is safe and reaches semantic duplicate checking.
+    _srgc-source @ _srgc-registry @ STREAMS-SOURCE-SIZE -
+        STREAMS-SOURCE-SIZE CMOVE
+    _srgc-reg-snapshot!
+    _srgc-registry @ STREAMS-SOURCE-SIZE -
+        _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-DUPLICATE = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-source @ _srgc-registry @ STREAMS-SOURCE-REGISTRY-SIZE +
+        STREAMS-SOURCE-SIZE CMOVE
+    _srgc-registry @ STREAMS-SOURCE-REGISTRY-SIZE +
+        _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-DUPLICATE = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+
+    \ One-byte overlap before the header, within the header, and at the
+    \ final registry byte is rejected before candidate bytes are examined.
+    _srgc-registry @ STREAMS-SOURCE-SIZE - 1+
+        _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-registry @ _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-registry @ STREAMS-SOURCE-REGISTRY-SIZE + 1-
+        _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+
+    1 _srgc-rid!
+    _srgc-rid _srgc-registry @ STREAMS-SOURCE-SIZE -
+        _srgc-registry @ STREAMS-SOURCE-READ
+        SSREG-S-OK = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-rid _srgc-registry @ STREAMS-SOURCE-REGISTRY-SIZE +
+        _srgc-registry @ STREAMS-SOURCE-READ
+        SSREG-S-OK = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-rid _srgc-registry @ 1-
+        _srgc-registry @ STREAMS-SOURCE-READ
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-rid _srgc-registry @ STREAMS-SOURCE-REGISTRY-SIZE + 1-
+        _srgc-registry @ STREAMS-SOURCE-READ
+        SSREG-S-INVALID = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert _srgc-stack ;
+
+: _srgc-test-lifecycle  ( -- )
+    _srgc-registry @ STREAMS-SOURCE-REGISTRY-INIT
+    _srgc-registry @ STREAMS-SOURCE-REGISTRY-VALID? _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ 0= _srgc-assert
+    _srgc-registry @ STREAMS-SOURCE-COUNT 0= _srgc-assert
+    _srgc-test-invalid-create
+    _srgc-source @ _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-OK = _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ 1 = _srgc-assert
+    _srgc-registry @ STREAMS-SOURCE-COUNT 1 = _srgc-assert
+    0 _srgc-registry @ STREAMS-SOURCE-NTH DUP 0<> _srgc-assert
+    DUP STREAMS-SOURCE-VALID? _srgc-assert
+    DUP SSOURCE.REVISION @ 1 = _srgc-assert
+    STREAMS-SOURCE-LABEL$ _srgc-label$ COMPARE 0= _srgc-assert
+
+    _srgc-reg-snapshot!
+    _srgc-source @ _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-DUPLICATE = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-test-alias-boundaries
+
+    \ A no-op ENABLE changes neither optimistic revision domain.
+    1 _srgc-rid!
+    _srgc-rid 1 -1 _srgc-registry @ STREAMS-SOURCE-ENABLE
+        SSREG-S-OK = _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ 1 = _srgc-assert
+    0 _srgc-registry @ STREAMS-SOURCE-NTH SSOURCE.REVISION @ 1 =
+        _srgc-assert
+    _srgc-rid 1 0 _srgc-registry @ STREAMS-SOURCE-ENABLE
+        SSREG-S-OK = _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ 2 = _srgc-assert
+    0 _srgc-registry @ STREAMS-SOURCE-NTH SSOURCE.REVISION @ 2 =
+        _srgc-assert
+    _srgc-rid 2 0 _srgc-registry @ STREAMS-SOURCE-ENABLE
+        SSREG-S-OK = _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ 2 = _srgc-assert
+
+    _srgc-rid _srgc-copy @ _srgc-registry @ STREAMS-SOURCE-READ
+        SSREG-S-OK = _srgc-assert
+    _srgc-copy @ SSOURCE.REVISION @ 2 = _srgc-assert
+    _srgc-renamed$ _srgc-copy @ STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _srgc-assert
+    _srgc-copy @ 2 _srgc-registry @ STREAMS-SOURCE-REPLACE
+        SSREG-S-OK = _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ 3 = _srgc-assert
+    0 _srgc-registry @ STREAMS-SOURCE-NTH DUP SSOURCE.REVISION @ 3 =
+        _srgc-assert
+    STREAMS-SOURCE-LABEL$ _srgc-renamed$ COMPARE 0= _srgc-assert
+
+    \ Duplicate and stale failures preserve the complete registry.
+    _srgc-reg-snapshot!
+    _srgc-copy @ 2 _srgc-registry @ STREAMS-SOURCE-REPLACE
+        SSREG-S-STALE = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-rid 2 -1 _srgc-registry @ STREAMS-SOURCE-ENABLE
+        SSREG-S-STALE = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+    _srgc-rid 2 _srgc-registry @ STREAMS-SOURCE-REMOVE
+        SSREG-S-STALE = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+
+    _srgc-rid 3 _srgc-registry @ STREAMS-SOURCE-REMOVE
+        SSREG-S-OK = _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ 4 = _srgc-assert
+    _srgc-registry @ STREAMS-SOURCE-COUNT 0= _srgc-assert
+    _srgc-registry @ SSREG.RECORDS STREAMS-SOURCE-SIZE _srgc-zero?
+        _srgc-assert
+    _srgc-registry @ STREAMS-SOURCE-REGISTRY-VALID? _srgc-assert
+    _srgc-stack ;
+
+: _srgc-test-capacity  ( -- )
+    _srgc-registry @ STREAMS-SOURCE-REGISTRY-INIT
+    17 1 DO
+        I _srgc-source @ _srgc-build
+        _srgc-source @ _srgc-registry @ STREAMS-SOURCE-CREATE
+            SSREG-S-OK = _srgc-assert
+    LOOP
+    _srgc-registry @ STREAMS-SOURCE-COUNT STREAMS-SOURCE-MAX =
+        _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ STREAMS-SOURCE-MAX =
+        _srgc-assert
+    _srgc-registry @ STREAMS-SOURCE-REGISTRY-VALID? _srgc-assert
+    17 _srgc-source @ _srgc-build _srgc-reg-snapshot!
+    _srgc-source @ _srgc-registry @ STREAMS-SOURCE-CREATE
+        SSREG-S-FULL = _srgc-assert
+    _srgc-reg-unchanged? _srgc-assert
+
+    8 _srgc-rid!
+    _srgc-rid 1 _srgc-registry @ STREAMS-SOURCE-REMOVE
+        SSREG-S-OK = _srgc-assert
+    _srgc-registry @ STREAMS-SOURCE-COUNT 15 = _srgc-assert
+    _srgc-registry @ SSREG.GENERATION @ 17 = _srgc-assert
+    _srgc-rid _srgc-registry @ STREAMS-SOURCE-FIND 0= _srgc-assert
+    9 _srgc-rid!
+    7 _srgc-registry @ STREAMS-SOURCE-NTH SSOURCE.ID
+        _srgc-rid RID= _srgc-assert
+    _srgc-registry @ SSREG.RECORDS 15 STREAMS-SOURCE-SIZE * +
+        STREAMS-SOURCE-SIZE _srgc-zero? _srgc-assert
+    _srgc-registry @ STREAMS-SOURCE-REGISTRY-VALID? _srgc-assert
+    _srgc-stack ;
+
+: _srgc-run  ( -- )
+    0 _srgc-fails ! 0 _srgc-checks ! DEPTH _srgc-depth !
+    STREAMS-SOURCE-REGISTRY-SIZE STREAMS-SOURCE-SIZE 2 * +
+        _srgc-reg-memory _srgc-allocate
+    _srgc-reg-memory @ STREAMS-SOURCE-SIZE + _srgc-registry !
+    STREAMS-SOURCE-REGISTRY-SIZE _srgc-reg-snapshot _srgc-allocate
+    STREAMS-SOURCE-SIZE _srgc-source _srgc-allocate
+    STREAMS-SOURCE-SIZE _srgc-copy _srgc-allocate
+    STREAMS-SOURCE-SIZE _srgc-source-snapshot _srgc-allocate
+    STREAMS-SOURCE-ENDPOINT-MAX 1+ _srgc-over _srgc-allocate
+    _srgc-test-setters _srgc-test-lifecycle _srgc-test-capacity
+    _srgc-over _srgc-free _srgc-source-snapshot _srgc-free
+    _srgc-copy _srgc-free _srgc-source _srgc-free
+    _srgc-reg-snapshot _srgc-free _srgc-reg-memory _srgc-free
+    _srgc-stack
+    _srgc-fails @ 0= IF
+        ." STREAMS SOURCE REGISTRY CONTRACTS PASS " _srgc-checks @ . CR
+    ELSE
+        ." STREAMS SOURCE REGISTRY CONTRACTS FAIL " _srgc-fails @ .
+            ." / " _srgc-checks @ . CR
+    THEN ;
+
+_srgc-run
+""",
+    ready_markers=("STREAMS SOURCE REGISTRY CONTRACTS PASS",),
+    stable_markers=("STREAMS SOURCE REGISTRY CONTRACTS PASS",),
+    failure_markers=("STREAMS SOURCE REGISTRY CONTRACTS FAIL", "SRGC ASSERT"),
+    linked=True,
+    include_large_sample=False,
+)
+
+PROFILES["streams-source-store-contracts"] = Profile(
+    roots=("tui/applets/streams/source-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - durable Streams source-store contracts
+ENTER-USERLAND
+." [akashic] loading Streams source-store contracts" CR
+REQUIRE tui/applets/streams/source-store.f
+
+VARIABLE _ssoc-fails
+VARIABLE _ssoc-checks
+VARIABLE _ssoc-depth
+VARIABLE _ssoc-vfs
+VARIABLE _ssoc-old-vfs
+VARIABLE _ssoc-registry-one
+VARIABLE _ssoc-registry-two
+VARIABLE _ssoc-destination
+VARIABLE _ssoc-source
+VARIABLE _ssoc-store-a
+VARIABLE _ssoc-store-cold
+VARIABLE _ssoc-store-probe
+VARIABLE _ssoc-store-case
+VARIABLE _ssoc-byte
+VARIABLE _ssoc-data-a
+VARIABLE _ssoc-data-u
+VARIABLE _ssoc-path-a
+VARIABLE _ssoc-path-u
+VARIABLE _ssoc-fd
+VARIABLE _ssoc-record-u
+VARIABLE _ssoc-status
+VARIABLE _ssoc-expected
+VARIABLE _ssoc-case-store
+VARIABLE _ssoc-alias
+VARIABLE _ssoc-alias-snapshot
+VARIABLE _ssoc-span-a
+VARIABLE _ssoc-span-u
+VARIABLE _ssoc-span-snapshot
+
+STREAMS-SOURCE-STORE-SIZE STREAMS-SOURCE-REGISTRY-SIZE + 16 +
+    CONSTANT _SSOC-ALIAS-SIZE
+
+CREATE _ssoc-rid RID-SIZE ALLOT
+
+: _ssoc-assert  ( flag -- )
+    1 _ssoc-checks +! 0= IF
+        1 _ssoc-fails +! ." SSOC ASSERT " _ssoc-checks @ . CR
+    THEN ;
+: _ssoc-stack  ( -- ) DEPTH _ssoc-depth @ = _ssoc-assert ;
+: _ssoc-allocate  ( size variable -- )
+    >R ALLOCATE ABORT" STREAMS SOURCE STORE CONTRACTS FAIL allocation"
+    R> ! ;
+: _ssoc-free  ( variable -- )
+    DUP @ ?DUP IF FREE 0 SWAP ! ELSE DROP THEN ;
+: _ssoc-filled?  ( a u byte -- flag )
+    _ssoc-byte ! 0 ?DO
+        DUP I + C@ _ssoc-byte @ <> IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+: _ssoc-registry=  ( registry-a registry-b -- flag )
+    STREAMS-SOURCE-REGISTRY-SIZE SWAP
+        STREAMS-SOURCE-REGISTRY-SIZE COMPARE 0= ;
+: _ssoc-destination-fill  ( -- )
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE 90 FILL ;
+: _ssoc-destination-unchanged?  ( -- flag )
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE 90 _ssoc-filled? ;
+: _ssoc-alias-snapshot!  ( -- )
+    _ssoc-alias @ _ssoc-alias-snapshot @ _SSOC-ALIAS-SIZE CMOVE ;
+: _ssoc-alias-unchanged?  ( -- flag )
+    _ssoc-alias @ _SSOC-ALIAS-SIZE
+        _ssoc-alias-snapshot @ _SSOC-ALIAS-SIZE COMPARE 0= ;
+: _ssoc-span-snapshot!  ( a u -- )
+    _ssoc-span-u ! _ssoc-span-a !
+    _ssoc-span-a @ _ssoc-span-snapshot @ _ssoc-span-u @ CMOVE ;
+: _ssoc-span-unchanged?  ( a u -- flag )
+    DUP >R _ssoc-span-snapshot @ R> COMPARE 0= ;
+
+: _ssoc-dirty-scratch  ( -- )
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 FILL
+    _VREPL-CHECK-BUFFER _VREPL-CHECK-SIZE 78 FILL ;
+: _ssoc-dirty-record  ( -- )
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 FILL ;
+: _ssoc-record-zero?  ( -- flag )
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 0 _ssoc-filled? ;
+: _ssoc-vrepl-scratch-zero?  ( -- flag )
+    _VREPL-CHECK-BUFFER _VREPL-CHECK-SIZE 0 _ssoc-filled? ;
+: _ssoc-scratch-zero?  ( -- flag )
+    _ssoc-record-zero? _ssoc-vrepl-scratch-zero? AND ;
+
+: _ssoc-artifacts-clean?  ( store -- flag )
+    _ssoc-case-store !
+    _ssoc-case-store @ STREAMS-SOURCE-STORE.REPLACE VREPL-STAGE$
+        _ssoc-vfs @ VFS-RESOLVE 0=
+    _ssoc-case-store @ STREAMS-SOURCE-STORE.REPLACE VREPL-BACKUP$
+        _ssoc-vfs @ VFS-RESOLVE 0= AND
+    _ssoc-case-store @ STREAMS-SOURCE-STORE.REPLACE VREPL-MARKER$
+        _ssoc-vfs @ VFS-RESOLVE 0= AND ;
+: _ssoc-stage-backup-absent?  ( store -- flag )
+    _ssoc-case-store !
+    _ssoc-case-store @ STREAMS-SOURCE-STORE.REPLACE VREPL-STAGE$
+        _ssoc-vfs @ VFS-RESOLVE 0=
+    _ssoc-case-store @ STREAMS-SOURCE-STORE.REPLACE VREPL-BACKUP$
+        _ssoc-vfs @ VFS-RESOLVE 0= AND ;
+: _ssoc-marker-present?  ( store -- flag )
+    STREAMS-SOURCE-STORE.REPLACE VREPL-MARKER$
+        _ssoc-vfs @ VFS-RESOLVE 0<> ;
+
+: _ssoc-put  ( data-a data-u path-a path-u -- )
+    _ssoc-path-u ! _ssoc-path-a ! _ssoc-data-u ! _ssoc-data-a !
+    _ssoc-path-a @ _ssoc-path-u @ _ssoc-vfs @ VFS-RESOLVE IF
+        _ssoc-path-a @ _ssoc-path-u @ _ssoc-vfs @ VFS-RM
+            0= _ssoc-assert
+    THEN
+    _ssoc-path-a @ _ssoc-path-u @ _ssoc-vfs @ VFS-CREATE
+        DUP 0<> _ssoc-assert DUP 0= IF DROP EXIT THEN DROP
+    _ssoc-path-a @ _ssoc-path-u @ VFS-OPEN DUP _ssoc-fd !
+        0<> _ssoc-assert
+    _ssoc-fd @ 0= IF EXIT THEN
+    _ssoc-data-a @ _ssoc-data-u @ _ssoc-fd @ VFS-WRITE-EXACT
+        0= _ssoc-assert
+    _ssoc-fd @ VFS-CLOSE
+    _ssoc-vfs @ VFS-SYNC 0= _ssoc-assert ;
+: _ssoc-put-target  ( data-a data-u store -- )
+    >R R@ STREAMS-SOURCE-STORE-PATH$ _ssoc-put R> DROP ;
+
+: _ssoc-store-init  ( store -- )
+    _ssoc-vfs @ SWAP STREAMS-SOURCE-STORE-INIT
+        SSSTORE-S-OK = _ssoc-assert ;
+
+: _ssoc-build-registries  ( -- )
+    _ssoc-registry-one @ STREAMS-SOURCE-REGISTRY-INIT
+    _ssoc-source @ STREAMS-SOURCE-INIT
+    _ssoc-rid RID-SIZE 0 FILL 42 _ssoc-rid C!
+    _ssoc-rid _ssoc-source @ STREAMS-SOURCE-ID!
+        SSREG-S-OK = _ssoc-assert
+    SSOURCE-KIND-SYNDICATION _ssoc-source @ SSOURCE.KIND !
+    SSOURCE-FORMAT-JSON-FEED _ssoc-source @ SSOURCE.FORMAT !
+    S" Durable ☂ café" _ssoc-source @ STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _ssoc-assert
+    S" https://例.example/feed/路" _ssoc-source @
+        STREAMS-SOURCE-ENDPOINT! SSREG-S-OK = _ssoc-assert
+    S" λ=durable; café" _ssoc-source @ STREAMS-SOURCE-CONFIG!
+        SSREG-S-OK = _ssoc-assert
+    _ssoc-source @ _ssoc-registry-one @ STREAMS-SOURCE-CREATE
+        SSREG-S-OK = _ssoc-assert
+    _ssoc-registry-one @ SSREG.GENERATION @ 1 = _ssoc-assert
+
+    _ssoc-registry-one @ _ssoc-registry-two @
+        STREAMS-SOURCE-REGISTRY-SIZE CMOVE
+    _ssoc-rid 1 0 _ssoc-registry-two @ STREAMS-SOURCE-ENABLE
+        SSREG-S-OK = _ssoc-assert
+    _ssoc-registry-two @ SSREG.GENERATION @ 2 = _ssoc-assert
+    _ssoc-registry-two @ STREAMS-SOURCE-REGISTRY-VALID? _ssoc-assert ;
+
+: _ssoc-encode-two  ( -- )
+    _ssoc-registry-two @ _STREAMS-SOURCE-STORE-ENCODE
+        _ssoc-status ! _ssoc-record-u !
+    _ssoc-status @ SSSTORE-S-OK = _ssoc-assert
+    _ssoc-record-u @ STREAMS-SOURCE-STORE-RECORD-MAX = _ssoc-assert ;
+
+: _ssoc-load-blocked  ( expected-status store -- )
+    _ssoc-case-store ! _ssoc-expected !
+    _ssoc-destination-fill _ssoc-dirty-scratch
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE
+        _ssoc-case-store @ STREAMS-SOURCE-STORE-LOAD
+        _ssoc-expected @ = _ssoc-assert
+    _ssoc-destination-unchanged? _ssoc-assert
+    _ssoc-case-store @ STREAMS-SOURCE-STORE-BLOCKED? _ssoc-assert
+    _ssoc-case-store @ STREAMS-SOURCE-STORE.LAST-STATUS @
+        _ssoc-expected @ = _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert ;
+
+: _ssoc-test-basic  ( -- )
+    _ssoc-store-a @ _ssoc-store-init
+    _ssoc-destination-fill _ssoc-dirty-scratch
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-a @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-ABSENT = _ssoc-assert
+    _ssoc-destination-unchanged? _ssoc-assert
+    _ssoc-store-a @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
+    _ssoc-store-a @ STREAMS-SOURCE-STORE.LAST-STATUS @
+        SSSTORE-S-ABSENT = _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-a @ _ssoc-artifacts-clean? _ssoc-assert
+
+    \ A fresh generation-zero in-memory registry becomes generation one
+    \ through CREATE and is the only candidate accepted with expected zero.
+    _ssoc-dirty-scratch
+    _ssoc-registry-one @ 0 _ssoc-store-a @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-OK = _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-a @ _ssoc-artifacts-clean? _ssoc-assert
+    _ssoc-store-a @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
+
+    _ssoc-store-cold @ _ssoc-store-init
+    _ssoc-destination-fill _ssoc-dirty-scratch
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-cold @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-OK = _ssoc-assert
+    _ssoc-destination @ _ssoc-registry-one @ _ssoc-registry=
+        _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-cold @ _ssoc-artifacts-clean? _ssoc-assert
+
+    \ A stale expected generation changes neither target nor candidate and
+    \ does not poison the descriptor for the correctly sequenced next save.
+    _ssoc-registry-one @ _ssoc-destination @
+        STREAMS-SOURCE-REGISTRY-SIZE CMOVE
+    _ssoc-dirty-scratch
+    _ssoc-registry-one @ 0 _ssoc-store-cold @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-CONFLICT = _ssoc-assert
+    _ssoc-registry-one @ _ssoc-destination @ _ssoc-registry=
+        _ssoc-assert
+    _ssoc-store-cold @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-cold @ _ssoc-artifacts-clean? _ssoc-assert
+
+    _ssoc-store-probe @ _ssoc-store-init _ssoc-destination-fill
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-probe @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-OK = _ssoc-assert
+    _ssoc-destination @ _ssoc-registry-one @ _ssoc-registry=
+        _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert
+
+    _ssoc-dirty-scratch
+    _ssoc-registry-two @ 1 _ssoc-store-cold @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-OK = _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-cold @ _ssoc-artifacts-clean? _ssoc-assert
+    _ssoc-store-probe @ _ssoc-store-init _ssoc-destination-fill
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-probe @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-OK = _ssoc-assert
+    _ssoc-destination @ _ssoc-registry-two @ _ssoc-registry=
+        _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert _ssoc-stack ;
+
+: _ssoc-test-corrupt  ( -- )
+    _ssoc-encode-two
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+        DUP C@ 1 XOR SWAP C!
+    _SSSTORE-RECORD _ssoc-record-u @ _ssoc-store-a @ _ssoc-put-target
+    _ssoc-store-case @ _ssoc-store-init
+    SSSTORE-S-CORRUPT _ssoc-store-case @ _ssoc-load-blocked
+    _ssoc-store-case @ _ssoc-artifacts-clean? _ssoc-assert
+    _ssoc-dirty-record
+    _ssoc-registry-two @ 1 _ssoc-store-case @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-CORRUPT = _ssoc-assert
+    _ssoc-record-zero? _ssoc-assert _ssoc-stack ;
+
+: _ssoc-test-noncanonical-unused  ( -- )
+    \ Even with both CRCs recomputed, bytes hidden outside COUNT are not a
+    \ canonical V1 record and must fail closed without replacing evidence.
+    _ssoc-registry-one @ _STREAMS-SOURCE-STORE-ENCODE
+        _ssoc-status ! _ssoc-record-u !
+    _ssoc-status @ SSSTORE-S-OK = _ssoc-assert
+    91 _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+        SSREG.RECORDS STREAMS-SOURCE-SIZE + C!
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+        STREAMS-SOURCE-REGISTRY-SIZE
+        _STREAMS-SOURCE-STORE-PAYLOAD-CRC
+        _SSSTORE-RECORD _SSS-H-PAYLOAD-CRC + !
+    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
+        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
+    _SSSTORE-RECORD _ssoc-record-u @ _ssoc-store-a @ _ssoc-put-target
+    _ssoc-store-case @ _ssoc-store-init
+    SSSTORE-S-CORRUPT _ssoc-store-case @ _ssoc-load-blocked
+    _ssoc-store-case @ _ssoc-artifacts-clean? _ssoc-assert
+    _ssoc-stack ;
+
+: _ssoc-test-future  ( -- )
+    _ssoc-encode-two
+    2 _SSSTORE-RECORD _SSS-H-FORMAT + !
+    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
+        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
+    _SSSTORE-RECORD _ssoc-record-u @ _ssoc-store-a @ _ssoc-put-target
+    _ssoc-store-case @ _ssoc-store-init
+    SSSTORE-S-UNSUPPORTED _ssoc-store-case @ _ssoc-load-blocked
+    _ssoc-store-case @ _ssoc-artifacts-clean? _ssoc-assert
+    _ssoc-dirty-record
+    _ssoc-registry-two @ 1 _ssoc-store-case @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-UNSUPPORTED = _ssoc-assert
+    _ssoc-record-zero? _ssoc-assert _ssoc-stack ;
+
+: _ssoc-test-recovery  ( -- )
+    \ A valid target plus a corrupt durable intent marker is ambiguous.
+    \ RECOVER and all later operations preserve both pieces of evidence.
+    _ssoc-encode-two
+    _SSSTORE-RECORD _ssoc-record-u @ _ssoc-store-a @ _ssoc-put-target
+    S" bad" _ssoc-store-a @ STREAMS-SOURCE-STORE.REPLACE VREPL-MARKER$
+        _ssoc-put
+    _ssoc-store-case @ _ssoc-store-init _ssoc-dirty-scratch
+    _ssoc-store-case @ STREAMS-SOURCE-STORE-RECOVER
+        SSSTORE-S-RECOVERY = _ssoc-assert
+    _ssoc-store-case @ STREAMS-SOURCE-STORE-BLOCKED? _ssoc-assert
+    _ssoc-store-case @ STREAMS-SOURCE-STORE.LAST-STATUS @
+        SSSTORE-S-RECOVERY = _ssoc-assert
+    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-case @ _ssoc-stage-backup-absent? _ssoc-assert
+    _ssoc-store-case @ _ssoc-marker-present? _ssoc-assert
+    _ssoc-destination-fill _ssoc-dirty-record
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-case @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-RECOVERY = _ssoc-assert
+    _ssoc-destination-unchanged? _ssoc-assert
+    _ssoc-record-zero? _ssoc-assert
+    _ssoc-dirty-record
+    _ssoc-registry-two @ 1 _ssoc-store-case @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-RECOVERY = _ssoc-assert
+    _ssoc-record-zero? _ssoc-assert
+    _ssoc-store-case @ _ssoc-marker-present? _ssoc-assert _ssoc-stack ;
+
+: _ssoc-test-alias-preflight  ( -- )
+    \ The half-open predicate accepts exact adjacency and rejects a one-byte
+    \ overlap in either direction.  Wrapping spans are never dereferenced.
+    1000 10 1010 5 _SSSTORE-RANGES-OVERLAP? 0= _ssoc-assert
+    1000 11 1010 5 _SSSTORE-RANGES-OVERLAP? _ssoc-assert
+    1010 5 1000 11 _SSSTORE-RANGES-OVERLAP? _ssoc-assert
+    -8 16 _SSSTORE-SPAN-VALID? 0= _ssoc-assert
+    _ssoc-stack
+
+    \ A descriptor may never inhabit codec scratch: INIT and RECOVER reject
+    \ before clearing either caller-visible span.
+    _ssoc-dirty-record
+    S" /scratch-store.bin" _ssoc-vfs @ _SSSTORE-RECORD
+        STREAMS-SOURCE-STORE-INIT-AT SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
+        _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECOVER
+        SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
+        _ssoc-assert
+
+    \ Even invalid caller I/O cannot disguise a descriptor placed in codec
+    \ scratch.  Both public operations reject before wrapper arguments,
+    \ guards, or privacy cleanup can change any byte of the complete span.
+    _ssoc-dirty-record
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
+        _ssoc-span-snapshot!
+    0 -1 _SSSTORE-RECORD STREAMS-SOURCE-STORE-LOAD
+        SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
+        _ssoc-span-unchanged? _ssoc-assert
+    0 0 _SSSTORE-RECORD STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
+        _ssoc-span-unchanged? _ssoc-assert
+
+    \ INIT's descriptor and target may not alias its public-wrapper argument
+    \ cells.  Reject before the guard and preserve both the private target
+    \ spelling and an otherwise writable destination descriptor.
+    _SSSI-VFS 8 88 FILL
+    _SSSI-VFS 8 _ssoc-span-snapshot!
+    S" /private-descriptor.bin" _ssoc-vfs @ _SSSI-VFS
+        STREAMS-SOURCE-STORE-INIT-AT SSSTORE-S-INVALID = _ssoc-assert
+    _SSSI-VFS 8 _ssoc-span-unchanged? _ssoc-assert
+    _ssoc-store-case @ STREAMS-SOURCE-STORE-SIZE 55 FILL
+    _SSSI-VFS 8 88 FILL
+    _SSSI-VFS 8 _ssoc-span-snapshot!
+    _SSSI-VFS 8 _ssoc-vfs @ _ssoc-store-case @
+        STREAMS-SOURCE-STORE-INIT-AT SSSTORE-S-INVALID = _ssoc-assert
+    _SSSI-VFS 8 _ssoc-span-unchanged? _ssoc-assert
+    _ssoc-store-case @ STREAMS-SOURCE-STORE-SIZE 55 _ssoc-filled?
+        _ssoc-assert
+
+    \ An INIT target inside its destination descriptor is rejected before
+    \ FILL.  The complete descriptor and target spelling remain unchanged.
+    _ssoc-alias @ _SSOC-ALIAS-SIZE 66 FILL
+    S" /bad" _ssoc-alias @ 8 + SWAP CMOVE
+    _ssoc-alias-snapshot!
+    _ssoc-alias @ 8 + 4 _ssoc-vfs @ _ssoc-alias @
+        STREAMS-SOURCE-STORE-INIT-AT SSSTORE-S-INVALID = _ssoc-assert
+    _ssoc-alias-unchanged? _ssoc-assert
+
+    \ A target and later I/O buffer beginning exactly at the descriptor end
+    \ are safe.  The first SAVE proves that adjacency reaches real I/O rather
+    \ than merely passing an internal predicate.
+    _ssoc-alias @ _SSOC-ALIAS-SIZE 0 FILL
+    S" /ss-alias.bin" DUP _ssoc-path-u !
+        _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE + SWAP CMOVE
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE + _ssoc-path-u @
+        _ssoc-vfs @ _ssoc-alias @ STREAMS-SOURCE-STORE-INIT-AT
+        SSSTORE-S-OK = _ssoc-assert
+    _ssoc-alias @ STREAMS-SOURCE-STORE-VALID? _ssoc-assert
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE +
+        STREAMS-SOURCE-REGISTRY-SIZE 90 FILL
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE +
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-ABSENT = _ssoc-assert
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE +
+        STREAMS-SOURCE-REGISTRY-SIZE 90 _ssoc-filled? _ssoc-assert
+    _ssoc-registry-one @ _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE +
+        STREAMS-SOURCE-REGISTRY-SIZE CMOVE
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE + 0 _ssoc-alias @
+        STREAMS-SOURCE-STORE-SAVE SSSTORE-S-OK = _ssoc-assert
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE +
+        _ssoc-registry-one @ _ssoc-registry= _ssoc-assert
+    _ssoc-alias @ _ssoc-artifacts-clean? _ssoc-assert
+
+    \ Full and one-byte overlaps with the live descriptor reject without
+    \ changing the descriptor, candidate/output bytes, or durable target.
+    _ssoc-alias-snapshot!
+    _ssoc-alias @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-INVALID = _ssoc-assert
+    _ssoc-alias-unchanged? _ssoc-assert
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE + 1-
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-INVALID = _ssoc-assert
+    _ssoc-alias-unchanged? _ssoc-assert
+    _ssoc-alias @ 0 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-INVALID = _ssoc-assert
+    _ssoc-alias-unchanged? _ssoc-assert
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SIZE + 1-
+        0 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-INVALID = _ssoc-assert
+    _ssoc-alias-unchanged? _ssoc-assert
+    _ssoc-alias @ _ssoc-artifacts-clean? _ssoc-assert
+
+    \ Codec-scratch aliases are rejected in the public wrapper before its
+    \ ordinary privacy wipe.  This exception is what preserves aliased caller
+    \ data byte-for-byte on both LOAD and SAVE failures.
+    _ssoc-dirty-record
+    _SSSTORE-RECORD STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
+        _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
+        _ssoc-assert
+    _ssoc-registry-two @ _SSSTORE-RECORD
+        STREAMS-SOURCE-REGISTRY-SIZE CMOVE
+    _SSSTORE-RECORD 1 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD _ssoc-registry-two @ _ssoc-registry= _ssoc-assert
+    _ssoc-dirty-record
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+        1 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
+        _ssoc-assert
+
+    \ A one-byte scratch overlap protects the caller's entire declared span,
+    \ including bytes beyond scratch that wrapper globals would otherwise
+    \ mutate.  Exercise both output and fixed-size registry input contracts.
+    _ssoc-dirty-record
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+        STREAMS-SOURCE-STORE-LOAD
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-unchanged? _ssoc-assert
+    SSSTORE-S-INVALID = _ssoc-assert
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+        1 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-unchanged? _ssoc-assert
+    SSSTORE-S-INVALID = _ssoc-assert
+
+    \ The classifier is itself protected, as are the complete dependency
+    \ scratch regions reached by registry validation and durable replacement.
+    _SSSTORE-PRIVATE-RANGES 1 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _SSSTORE-PRIVATE-RANGE-N 8 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _SSRV-R STREAMS-SOURCE-REGISTRY-SIZE
+        _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _VREPL-CHECK-BUFFER _VREPL-CHECK-SIZE
+        _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+
+    \ A corruption path still validates bounded UTF-8 before it can report
+    \ CORRUPT.  A caller span ending one byte inside validator scratch must
+    \ therefore reject before the validator, preserving the complete span.
+    _ssoc-encode-two
+    255 _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+        _SSR-RECORDS + _SSO-LABEL + C!
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+        STREAMS-SOURCE-REGISTRY-SIZE
+        _STREAMS-SOURCE-STORE-PAYLOAD-CRC
+        _SSSTORE-RECORD _SSS-H-PAYLOAD-CRC + !
+    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
+        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
+    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
+        _ssoc-alias @ _ssoc-put-target
+    _UV-A 1+ STREAMS-SOURCE-REGISTRY-SIZE -
+        STREAMS-SOURCE-REGISTRY-SIZE _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _UV-A 1+ STREAMS-SOURCE-REGISTRY-SIZE -
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
+    _UV-A 1+ STREAMS-SOURCE-REGISTRY-SIZE -
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+        STREAMS-SOURCE-STORE-LOAD
+    _UV-A 1+ STREAMS-SOURCE-REGISTRY-SIZE -
+        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-unchanged? _ssoc-assert
+    SSSTORE-S-INVALID = _ssoc-assert
+    _CRC-HDST 8 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _SHA3-IPAD 1 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+
+    \ VFS context and operation scratch are part of the nested mutation
+    \ boundary too.  A valid store must reject that complete destination
+    \ before VFS-USE, resolution, wrapper arguments, or cleanup can touch it.
+    _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE
+        _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
+    _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+        STREAMS-SOURCE-STORE-LOAD
+    _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE
+        _ssoc-span-unchanged? _ssoc-assert
+    SSSTORE-S-INVALID = _ssoc-assert
+    _STREAMS-SOURCE-STORE-SCRATCH-WIPE
+    _ssoc-alias @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
+    _ssoc-alias @ _ssoc-artifacts-clean? _ssoc-assert _ssoc-stack ;
+
+: _ssoc-run  ( -- )
+    0 _ssoc-fails ! 0 _ssoc-checks ! DEPTH _ssoc-depth !
+    STREAMS-SOURCE-REGISTRY-SIZE _ssoc-registry-one _ssoc-allocate
+    STREAMS-SOURCE-REGISTRY-SIZE _ssoc-registry-two _ssoc-allocate
+    STREAMS-SOURCE-REGISTRY-SIZE _ssoc-destination _ssoc-allocate
+    STREAMS-SOURCE-SIZE _ssoc-source _ssoc-allocate
+    STREAMS-SOURCE-STORE-SIZE _ssoc-store-a _ssoc-allocate
+    STREAMS-SOURCE-STORE-SIZE _ssoc-store-cold _ssoc-allocate
+    STREAMS-SOURCE-STORE-SIZE _ssoc-store-probe _ssoc-allocate
+    STREAMS-SOURCE-STORE-SIZE _ssoc-store-case _ssoc-allocate
+    _SSOC-ALIAS-SIZE _ssoc-alias _ssoc-allocate
+    _SSOC-ALIAS-SIZE _ssoc-alias-snapshot _ssoc-allocate
+    STREAMS-SOURCE-STORE-RECORD-MAX _ssoc-span-snapshot _ssoc-allocate
+    VFS-CUR _ssoc-old-vfs !
+    524288 A-XMEM ARENA-NEW DUP 0= _ssoc-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _ssoc-vfs ! 0<> _ssoc-assert
+    _ssoc-vfs @ VFS-USE
+    _ssoc-build-registries
+    _ssoc-test-basic _ssoc-test-corrupt _ssoc-test-noncanonical-unused
+    _ssoc-test-future _ssoc-test-recovery _ssoc-test-alias-preflight
+    _ssoc-old-vfs @ VFS-USE _ssoc-vfs @ VFS-DESTROY
+    _ssoc-store-case _ssoc-free _ssoc-store-probe _ssoc-free
+    _ssoc-store-cold _ssoc-free _ssoc-store-a _ssoc-free
+    _ssoc-span-snapshot _ssoc-free
+    _ssoc-alias-snapshot _ssoc-free _ssoc-alias _ssoc-free
+    _ssoc-source _ssoc-free _ssoc-destination _ssoc-free
+    _ssoc-registry-two _ssoc-free _ssoc-registry-one _ssoc-free
+    _ssoc-stack
+    _ssoc-fails @ 0= IF
+        ." STREAMS SOURCE STORE CONTRACTS PASS " _ssoc-checks @ . CR
+    ELSE
+        ." STREAMS SOURCE STORE CONTRACTS FAIL " _ssoc-fails @ .
+            ." / " _ssoc-checks @ . CR
+    THEN ;
+
+_ssoc-run
+""",
+    ready_markers=("STREAMS SOURCE STORE CONTRACTS PASS",),
+    stable_markers=("STREAMS SOURCE STORE CONTRACTS PASS",),
+    failure_markers=("STREAMS SOURCE STORE CONTRACTS FAIL", "SSOC ASSERT"),
+    linked=True,
+    include_large_sample=False,
+)
+
 LARGE_SAMPLE = b"".join(
     f"Large fixture line {line:03d}: Pad crosses MP64FS sector boundaries.\n".encode()
     for line in range(1, 49)
@@ -18882,6 +21206,27 @@ def smoke(
                     return False
                 return True
 
+            # Keep Streams live so Desk must compile its exact sanitized
+            # observation pair into the Agent's read-only and assist facets.
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets", "Desk did not open launcher for live Streams facet"
+            ):
+                return
+            session.send_key("end")
+            if not wait_screen(
+                "Streams", "Desk launcher did not select Streams for facet proof"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen(
+                ":Streams*]",
+                "Desk did not launch the live Streams capability target",
+                step_budget=1_000_000_000,
+                wall_timeout=25.0,
+            ):
+                return
+
             session.send_key("alt+5")
             if not wait_screen(
                 "[5:Agent*]", "Desk did not focus Agent for hardening acceptance"
@@ -19447,6 +21792,8 @@ def smoke(
         def run_streams_persistence_journey() -> None:
             draft_text = "Desk ☂ café"
             draft_bytes = draft_text.encode("utf-8")
+            source_url = "https://example.test/desk-feed.json"
+            source_bytes = source_url.encode("ascii")
 
             # The production Desk profile has neither an injected timeline nor
             # a preseeded draft. Streams is discoverable but consumes no
@@ -19465,6 +21812,15 @@ def smoke(
             else:
                 journey_errors.append(
                     "desktop-streams began with a preseeded production draft"
+                )
+                return
+            try:
+                live_fs.read_file("streams-sources.bin")
+            except FileNotFoundError:
+                pass
+            else:
+                journey_errors.append(
+                    "desktop-streams began with a preseeded source registry"
                 )
                 return
 
@@ -19506,6 +21862,92 @@ def smoke(
                 journey_errors.append(
                     "an absent Streams draft was materialized merely by opening it"
                 )
+                return
+
+            # Exercise the real UIDL/Desk source manager rather than only its
+            # owner helpers: open, create without fetching, toggle, and later
+            # recover and remove the exact persisted source.
+            session.send_key("ctrl+s")
+            if not wait_screen(
+                "No sources configured",
+                "Desk Streams did not open its empty Sources view",
+            ):
+                return
+            session.send_key("f")
+            if not wait_screen(
+                "HTTPS feed URL:",
+                "Desk Streams did not open the feed-source prompt",
+            ):
+                return
+            session.send_text(source_url)
+            session.send_key("enter")
+            if not wait_screen(
+                source_url,
+                "Desk Streams did not render the newly configured feed source",
+            ):
+                return
+            if "[on ]" not in session.snapshot().text():
+                journey_errors.append(
+                    "new Desk Streams source did not begin enabled"
+                )
+                return
+            created_source_view = session.snapshot().text()
+            if (
+                "Syndication feed" not in created_source_view
+                or "revision 1" not in created_source_view
+            ):
+                journey_errors.append(
+                    "Desk Streams did not render the created source revision"
+                )
+                return
+            session.send_key("e")
+            if not wait_screen(
+                "[off]",
+                "Desk Streams did not disable the selected exact source revision",
+            ):
+                return
+            if "revision 2" not in session.snapshot().text():
+                journey_errors.append(
+                    "Desk Streams did not render the toggled source revision"
+                )
+                return
+
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                saved_source_record = live_fs.read_file("streams-sources.bin")
+            except FileNotFoundError:
+                journey_errors.append(
+                    "Desk Streams did not create its durable source registry"
+                )
+                return
+            if (
+                len(saved_source_record) != 36_712
+                or saved_source_record[:8] != b"AKSSS001"
+                or int.from_bytes(saved_source_record[8:16], "little") != 1
+                or int.from_bytes(saved_source_record[16:24], "little") != 64
+                or int.from_bytes(saved_source_record[24:32], "little") != 2
+                or int.from_bytes(saved_source_record[32:40], "little") != 36_648
+                or int.from_bytes(saved_source_record[88:96], "little") != 2
+                or int.from_bytes(saved_source_record[96:104], "little") != 1
+                or int.from_bytes(saved_source_record[136:144], "little") != 2
+                or int.from_bytes(saved_source_record[144:152], "little") != 1
+                or int.from_bytes(saved_source_record[152:160], "little") != 1
+                or int.from_bytes(saved_source_record[160:168], "little") != 0
+                or int.from_bytes(saved_source_record[232:240], "little")
+                != len(source_bytes)
+                or saved_source_record[344 : 344 + len(source_bytes)]
+                != source_bytes
+            ):
+                journey_errors.append(
+                    "Desk Streams persisted a noncanonical source create/toggle record"
+                )
+                return
+
+            session.send_key("esc")
+            if not wait_screen(
+                "No feed is loaded",
+                "Desk Streams did not return from Sources to Timeline",
+            ):
                 return
 
             session.send_key("ctrl+n")
@@ -19595,6 +22037,79 @@ def smoke(
                 journey_errors.append(
                     "Streams activation rewrote the recovered draft record"
                 )
+
+            session.send_key("ctrl+s")
+            if not wait_screen(
+                source_url,
+                "relaunched Desk Streams did not recover the configured source",
+            ):
+                return
+            if "[off]" not in session.snapshot().text():
+                journey_errors.append(
+                    "relaunched Desk Streams lost the source enabled state"
+                )
+                return
+            recovered_source_view = session.snapshot().text()
+            if (
+                "Syndication feed" not in recovered_source_view
+                or "revision 2" not in recovered_source_view
+            ):
+                journey_errors.append(
+                    "relaunched Desk Streams lost the source card revision"
+                )
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                recovered_source_record = live_fs.read_file("streams-sources.bin")
+            except FileNotFoundError:
+                journey_errors.append(
+                    "relaunch removed the durable Streams source registry"
+                )
+                return
+            if recovered_source_record != saved_source_record:
+                journey_errors.append(
+                    "Streams activation rewrote the recovered source registry"
+                )
+                return
+
+            session.send_key("d")
+            if not wait_screen(
+                "Type REMOVE to delete selected source:",
+                "Desk Streams did not open exact source-removal confirmation",
+            ):
+                return
+            session.send_text("REMOVE")
+            session.send_key("enter")
+            if not wait_screen(
+                "No sources configured",
+                "Desk Streams did not remove the confirmed exact source",
+            ):
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                removed_source_record = live_fs.read_file("streams-sources.bin")
+            except FileNotFoundError:
+                journey_errors.append(
+                    "source removal discarded the durable source registry"
+                )
+                return
+            if (
+                len(removed_source_record) != 36_712
+                or removed_source_record[:8] != b"AKSSS001"
+                or int.from_bytes(removed_source_record[24:32], "little") != 3
+                or int.from_bytes(removed_source_record[88:96], "little") != 3
+                or int.from_bytes(removed_source_record[96:104], "little") != 0
+                or any(removed_source_record[104:])
+            ):
+                journey_errors.append(
+                    "Desk Streams persisted a noncanonical source removal record"
+                )
+                return
+            session.send_key("esc")
+            wait_screen(
+                draft_text,
+                "Desk Streams did not preserve its draft after source removal",
+            )
 
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
@@ -20931,6 +23446,262 @@ def serve(
     if audio:
         command.append("--audio")
     os.execv(sys.executable, command)
+
+
+PROFILES["streams-source-ui-contracts"] = Profile(
+    roots=("utils/fs/vfs.f", "tui/applets/streams/streams.f"),
+    resources=("tui/applets/streams/streams.uidl",),
+    autoexec=r"""\ autoexec.f - focused standalone Streams source UI contracts
+ENTER-USERLAND
+." [akashic] loading Streams source UI contracts" CR
+REQUIRE utils/fs/vfs.f
+REQUIRE tui/applets/streams/streams.f
+
+VARIABLE _suc-fails
+VARIABLE _suc-checks
+VARIABLE _suc-depth
+VARIABLE _suc-old-vfs
+VARIABLE _suc-vfs
+VARIABLE _suc-i1
+VARIABLE _suc-i2
+VARIABLE _suc-i3
+VARIABLE _suc-owner-revision
+
+CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
+
+: _suc-assert  ( flag -- )
+    1 _suc-checks +! 0= IF
+        1 _suc-fails +! ." SUC ASSERT " _suc-checks @ . CR
+    THEN ;
+: _suc-stack  ( -- ) DEPTH _suc-depth @ = _suc-assert ;
+: _suc-zero?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+: _suc-scratch-zero?  ( -- flag )
+    _STM-SOURCE-UI-CANDIDATE STREAMS-SOURCE-SIZE _suc-zero?
+    _STM-SOURCE-UI-RID RID-SIZE _suc-zero? AND ;
+: _suc-pending-zero?  ( -- flag )
+    _STM-SOURCE-PENDING-RID RID-SIZE _suc-zero?
+    _STM-SOURCE-PENDING-REVISION @ 0= AND
+    _STM-SOURCE-PENDING-ARMED @ 0= AND ;
+: _suc-owner-capture  ( -- )
+    _suc-i1 @ CINST.REVISION @ _suc-owner-revision ! ;
+: _suc-owner-stable  ( -- )
+    _suc-i1 @ CINST.REVISION @ _suc-owner-revision @ = _suc-assert ;
+: _suc-owner-advanced  ( -- )
+    _suc-i1 @ CINST.REVISION @ _suc-owner-revision @ 1+ = _suc-assert
+    _suc-owner-capture ;
+: _suc-source  ( index -- source|0 )
+    _STM-SOURCE-REGISTRY STREAMS-SOURCE-NTH ;
+: _suc-count=  ( expected -- flag )
+    >R _suc-i1 @ STREAMS-SOURCES-COUNT@
+    STREAMS-SOURCE-S-OK = SWAP R> = AND ;
+
+: _suc-test-view-isolation  ( -- )
+    _suc-i1 @ _STM-ACTIVATE
+    _STM-VIEW @ _STM-V-TIMELINE = _suc-assert
+    _suc-owner-capture
+    3 _STM-SELECTED ! 1 _STM-TOP ! 2 _STM-THREAD-TOP !
+    S" retained-context" DUP _STM-THREAD-ROOT-U !
+        _STM-THREAD-ROOT-BUF SWAP MOVE
+    S" local-draft" DUP _STM-DRAFT-U ! _STM-DRAFT-BUF SWAP MOVE
+    7 _STM-DRAFT-REV !
+    _STM-V-THREAD _STM-VIEW !
+
+    _STM-OPEN-SOURCES
+    _STM-VIEW @ _STM-V-SOURCES = _suc-assert
+    _STM-SELECTED @ 3 = _suc-assert
+    _STM-TOP @ 1 = _suc-assert
+    _STM-THREAD-TOP @ 2 = _suc-assert
+    _STM-THREAD-ROOT$ S" retained-context" STR-STR= _suc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" local-draft" STR-STR= _suc-assert
+    _STM-DRAFT-REV @ 7 = _suc-assert
+    _suc-owner-stable
+
+    _STM-OPEN-TIMELINE
+    _STM-VIEW @ _STM-V-TIMELINE = _suc-assert
+    _STM-SELECTED @ 3 = _suc-assert
+    _STM-TOP @ 1 = _suc-assert
+    _STM-THREAD-TOP @ 0= _suc-assert
+    _STM-THREAD-ROOT-U @ 0= _suc-assert
+    _STM-THREAD-ROOT-BUF BFM-URI-CAP _suc-zero? _suc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" local-draft" STR-STR= _suc-assert
+    _STM-DRAFT-REV @ 7 = _suc-assert
+    _suc-owner-stable
+    _STM-OPEN-SOURCES _suc-owner-stable _suc-stack ;
+
+: _suc-test-url-admission  ( -- )
+    S" https://example.test/feed.xml" _STM-SOURCE-URL-VALID? _suc-assert
+    S" https://example.test/page?q=1" _STM-SOURCE-URL-VALID? _suc-assert
+    S" http://example.test/feed.xml" _STM-SOURCE-URL-VALID? 0= _suc-assert
+    S" https:///missing-host" _STM-SOURCE-URL-VALID? 0= _suc-assert
+    S" https://user:secret@example.test/feed" _STM-SOURCE-URL-VALID?
+        0= _suc-assert
+    S" https://example.test/a b" _STM-SOURCE-URL-VALID? 0= _suc-assert
+    S" https://example.test/a#fragment" _STM-SOURCE-URL-VALID?
+        0= _suc-assert
+    _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ 65 FILL
+    _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+
+        _STM-SOURCE-URL-VALID? 0= _suc-assert
+    _suc-stack ;
+
+: _suc-test-create  ( -- )
+    _suc-i1 @ _STM-ACTIVATE _STM-OPEN-SOURCES
+    _STM-VIEW @ _STM-V-SOURCES = _suc-assert
+    _STM-SOURCE-STORAGE-STATUS$
+        S" Sources ready / first change creates local store"
+        STR-STR= _suc-assert
+    _suc-pending-zero? _suc-assert
+    _suc-scratch-zero? _suc-assert
+    _suc-owner-capture
+
+    \ Rejected endpoints never reach the durable owner.
+    S" http://example.test/feed.xml" SSOURCE-KIND-SYNDICATION
+        _STM-APPLY-SOURCE-CREATE
+    _suc-owner-stable 0 _suc-count= _suc-assert
+    _suc-scratch-zero? _suc-assert
+
+    S" https://example.test/feed.xml" SSOURCE-KIND-SYNDICATION
+        _STM-APPLY-SOURCE-CREATE
+    _suc-owner-advanced 1 _suc-count= _suc-assert
+    _STM-SOURCE-SELECTED @ 0= _suc-assert
+    0 _suc-source DUP 0<> _suc-assert
+    DUP SSOURCE.KIND @ SSOURCE-KIND-SYNDICATION = _suc-assert
+    DUP SSOURCE.FORMAT @ SSOURCE-FORMAT-AUTO = _suc-assert
+    DUP SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND 0<> _suc-assert
+    DUP SSOURCE.REVISION @ 1 = _suc-assert
+    DUP STREAMS-SOURCE-LABEL$ S" Syndication feed" STR-STR= _suc-assert
+    STREAMS-SOURCE-ENDPOINT$ S" https://example.test/feed.xml"
+        STR-STR= _suc-assert
+    _STM-SOURCE-STORAGE-STATUS$
+        S" Sources stored locally / no fetch started" STR-STR= _suc-assert
+    _STM-REQUEST-GENERATION @ 0= _suc-assert
+    _STM-FEED-READY @ 0= _suc-assert
+    _suc-scratch-zero? _suc-assert
+
+    S" https://example.test/page" SSOURCE-KIND-PAGE
+        _STM-APPLY-SOURCE-CREATE
+    _suc-owner-advanced 2 _suc-count= _suc-assert
+    _STM-SOURCE-SELECTED @ 1 = _suc-assert
+    1 _suc-source DUP 0<> _suc-assert
+    DUP SSOURCE.KIND @ SSOURCE-KIND-PAGE = _suc-assert
+    DUP SSOURCE.FORMAT @ SSOURCE-FORMAT-AUTO = _suc-assert
+    DUP SSOURCE.REVISION @ 1 = _suc-assert
+    DUP STREAMS-SOURCE-LABEL$ S" Watched page" STR-STR= _suc-assert
+    STREAMS-SOURCE-ENDPOINT$ S" https://example.test/page"
+        STR-STR= _suc-assert
+    6 _STM-DH ! _STM-SOURCE-ENSURE-VISIBLE
+    _STM-SOURCE-TOP @ 1 = _suc-assert
+    0 _STM-SOURCE-SELECTED ! _STM-SOURCE-ENSURE-VISIBLE
+    _STM-SOURCE-TOP @ 0= _suc-assert
+    1 _STM-SOURCE-SELECTED ! 32 _STM-DH ! _STM-SOURCE-ENSURE-VISIBLE
+    _STM-SOURCE-TOP @ 0= _suc-assert
+    _suc-scratch-zero? _suc-assert _suc-stack ;
+
+: _suc-test-selection-and-toggle  ( -- )
+    \ A cold second instance gets its own UI selection while recovering the
+    \ same exact durable registry.
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _suc-assert DROP _suc-i2 !
+    _suc-i2 @ STREAMS-INIT-CB
+    _suc-i2 @ _STM-ACTIVATE
+    _STM-SOURCE-SELECTED @ 0= _suc-assert
+    _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT 2 = _suc-assert
+    _suc-i1 @ _STM-ACTIVATE
+    _STM-SOURCE-SELECTED @ 1 = _suc-assert
+
+    _suc-owner-capture _STM-SOURCE-TOGGLE _suc-owner-advanced
+    1 _suc-source DUP SSOURCE.REVISION @ 2 = _suc-assert
+    SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND 0= _suc-assert
+    _STM-REQUEST-GENERATION @ 0= _suc-assert
+    _STM-FEED-READY @ 0= _suc-assert
+    _suc-scratch-zero? _suc-assert _suc-stack ;
+
+: _suc-test-confirmed-remove  ( -- )
+    _suc-owner-capture
+    _STM-BEGIN-SOURCE-REMOVE
+    _STM-SOURCE-PENDING-ARMED @ 0<> _suc-assert
+    _STM-SOURCE-PENDING-RID RID-PRESENT? _suc-assert
+    _STM-SOURCE-PENDING-REVISION @ 2 = _suc-assert
+    S" remove" _STM-APPLY-SOURCE-REMOVE
+    _suc-owner-stable 2 _suc-count= _suc-assert
+    _suc-pending-zero? _suc-assert
+
+    \ Arm page revision 2, then emulate a concurrent exact owner update.
+    _STM-BEGIN-SOURCE-REMOVE
+    _STM-SOURCE-PENDING-REVISION @ 2 = _suc-assert
+    _STM-SOURCE-PENDING-RID 2 -1 _suc-i1 @
+        STREAMS-SOURCE-ENABLE-OWNER
+        STREAMS-SOURCE-S-OK = _suc-assert
+    _suc-owner-advanced
+    S" REMOVE" _STM-APPLY-SOURCE-REMOVE
+    _suc-owner-stable 2 _suc-count= _suc-assert
+    _suc-pending-zero? _suc-assert
+
+    \ Re-arm the exact page revision, move visible selection to the feed,
+    \ then prove confirmation still removes only the captured identity.
+    1 _STM-SOURCE-SELECTED !
+    _STM-BEGIN-SOURCE-REMOVE
+    _STM-SOURCE-PENDING-REVISION @ 3 = _suc-assert
+    0 _STM-SOURCE-SELECTED !
+    S" REMOVE" _STM-APPLY-SOURCE-REMOVE
+    _suc-owner-advanced 1 _suc-count= _suc-assert
+    _STM-SOURCE-SELECTED @ 0= _suc-assert
+    0 _suc-source DUP SSOURCE.KIND @ SSOURCE-KIND-SYNDICATION =
+        _suc-assert
+    SSOURCE.REVISION @ 1 = _suc-assert
+    _suc-pending-zero? _suc-assert
+    _STM-REQUEST-GENERATION @ 0= _suc-assert
+    _STM-FEED-READY @ 0= _suc-assert _suc-stack ;
+
+: _suc-test-fail-closed-status  ( -- )
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _suc-assert DROP _suc-i3 !
+    _suc-i3 @ _STM-ACTIVATE
+    _STM-SP-BLOCKED _STM-SOURCE-PERSIST-MODE !
+    SSSTORE-S-CORRUPT _STM-SOURCE-STORE-STATUS !
+    _STM-OPEN-SOURCES
+    _STM-SOURCE-STORAGE-STATUS$
+        S" Source storage corrupt; changes disabled" STR-STR= _suc-assert
+    _suc-i3 @ CINST.REVISION @ _suc-owner-revision !
+    _STM-BEGIN-SOURCE-SYNDICATION
+    _suc-i3 @ CINST.REVISION @ _suc-owner-revision @ = _suc-assert
+    _STM-PROMPT-MODE @ _STM-PM-NONE = _suc-assert
+    _suc-pending-zero? _suc-assert
+    _suc-scratch-zero? _suc-assert _suc-stack ;
+
+: _suc-run  ( -- )
+    0 _suc-fails ! 0 _suc-checks ! DEPTH _suc-depth !
+    VFS-CUR _suc-old-vfs !
+    1048576 A-XMEM ARENA-NEW DUP 0= _suc-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP 0<> _suc-assert DUP _suc-vfs ! VFS-USE
+    _STREAMS-COMP-SETUP
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _suc-assert DROP _suc-i1 !
+    _suc-i1 @ STREAMS-INIT-CB
+    _suc-i1 @ STREAMS-SOURCE-STORAGE-READY? _suc-assert
+    _suc-i1 @ CINST.REVISION @ 1 = _suc-assert
+    _suc-test-view-isolation
+    _suc-test-url-admission
+    _suc-test-create
+    _suc-test-selection-and-toggle
+    _suc-test-confirmed-remove
+    _suc-test-fail-closed-status
+    _suc-i1 @ CINST-FREE _suc-i2 @ CINST-FREE _suc-i3 @ CINST-FREE
+    _suc-old-vfs @ VFS-USE _suc-vfs @ VFS-DESTROY
+    _suc-stack
+    _suc-fails @ 0= IF
+        ." STREAMS SOURCE UI CONTRACTS PASS " _suc-checks @ .
+    ELSE
+        ." STREAMS SOURCE UI CONTRACTS FAIL " _suc-fails @ . ." / "
+            _suc-checks @ .
+    THEN CR ;
+
+_suc-run
+""",
+    ready_markers=("STREAMS SOURCE UI CONTRACTS PASS",),
+    stable_markers=("STREAMS SOURCE UI CONTRACTS PASS",),
+    failure_markers=("STREAMS SOURCE UI CONTRACTS FAIL", "SUC ASSERT"),
+    linked=True,
+)
 
 
 def _positive_mib(value: str) -> int:

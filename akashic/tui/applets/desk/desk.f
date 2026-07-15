@@ -1696,6 +1696,17 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
     S" org.akashic.grid" _DESK-TRUSTED-COMP
         S" grid.source" CAP-E-OBSERVE
         _DESK-AGENT-OBSERVE-FLAGS 516
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    \ Streams source discovery is deliberately read-only here.  The facet
+    \ exposes sanitized source metadata, never endpoints/configuration, and
+    \ grants no ambient refresh or registry mutation authority.
+    S" org.akashic.streams" _DESK-TRUSTED-COMP
+        S" streams.source.query" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
+    S" org.akashic.streams" _DESK-TRUSTED-COMP
+        S" streams.source.read" CAP-E-OBSERVE
+        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
         _DESK-MANDATE-CAP+ ;
 
 : _DESK-MANDATE-REVIEW-LIST  ( -- status )

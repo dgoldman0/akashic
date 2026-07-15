@@ -1,0 +1,11 @@
+{
+  "id": "ntfy-outbound-001",
+  "time": 1784116803,
+  "expires": 1784203203,
+  "event": "message",
+  "topic": "desk-fixture",
+  "title": "Streams acknowledgement",
+  "message": "The outbound qualification message was accepted.",
+  "priority": 4,
+  "tags": ["white_check_mark", "desk"]
+}

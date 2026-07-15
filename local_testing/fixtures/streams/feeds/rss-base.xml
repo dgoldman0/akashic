@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Example Desk RSS</title>
+    <link>https://example.test/rss</link>
+    <description>Qualification feed for Streams.</description>
+    <language>en-US</language>
+    <lastBuildDate>Wed, 15 Jul 2026 12:00:00 GMT</lastBuildDate>
+    <atom:link href="https://example.test/rss?page=2" rel="next" type="application/rss+xml" />
+    <item>
+      <guid isPermaLink="false">rss:item:stable</guid>
+      <title>Café 東京 status</title>
+      <link>https://example.test/items/rss-stable</link>
+      <pubDate>Wed, 15 Jul 2026 10:00:00 GMT</pubDate>
+      <author>ada@example.test (Ada Example)</author>
+      <category>qualification</category>
+      <description><![CDATA[<p>The stable item remains unchanged. 🛰️</p>]]></description>
+      <enclosure url="https://example.test/media/stable.mp3" length="1024" type="audio/mpeg" />
+    </item>
+    <item>
+      <guid isPermaLink="false">rss:item:changed</guid>
+      <title>Change record, version one</title>
+      <link>https://example.test/items/rss-changed</link>
+      <pubDate>Wed, 15 Jul 2026 11:00:00 GMT</pubDate>
+      <category>updates</category>
+      <description><![CDATA[<p>Service state: nominal.</p>]]></description>
+    </item>
+  </channel>
+</rss>

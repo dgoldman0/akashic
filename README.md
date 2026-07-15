@@ -213,6 +213,28 @@ A full HTTP server stack:
 
 `dag-cbor.f` extends the base encoder with the DAG-CBOR profile used by the AT Protocol: deterministic map key ordering and CID tag handling for content-addressed data structures.
 
+### Streams information integration
+
+Streams is a standalone Desk applet for integrating plural external information
+over time. Its first provider-neutral spine includes a bounded pointer-free
+source registry, crash-recoverable versioned source storage, a user-facing
+source manager, sanitized typed source capabilities, a bounded JSON Feed 1/1.1
+projection, and inert watched-page normalization. Desk may expose only source
+identity and declared bounds to ordinary Agent Observe facets; endpoints and
+provider configuration remain private, and agentic mutation requires an
+explicitly reviewed operator facet. The standalone source manager calls the
+same revision-safe owner mutations directly under user control.
+
+This is foundation rather than completed acquisition. Normal Streams still
+performs no startup network work, and configured RSS/Atom/JSON Feed/page or
+notification sources do not yet schedule fetches or retain observations.
+Observation storage, deduplication, rules, saved findings, outputs, Outbox, and
+Pad/Practice witnesses remain subsequent slices. See
+[`docs/tui/applets/streams/information-integration.md`](docs/tui/applets/streams/information-integration.md)
+for the target boundary and
+[`docs/tui/applets/streams/streams.md`](docs/tui/applets/streams/streams.md) for
+the exact current contract.
+
 ### atproto/ — Bluesky / AT Protocol Foundations
 
 Foundational AT Protocol pieces for interacting with Bluesky PDS servers. This

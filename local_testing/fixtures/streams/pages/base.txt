@@ -1,0 +1,6 @@
+Example service status
+Identity: page:text:status
+
+Café 東京 service
+Service state: nominal.
+All monitored systems are operating normally. 🛰️

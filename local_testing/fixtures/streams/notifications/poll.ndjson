@@ -1,0 +1,3 @@
+{"id":"ntfy-connection-001","time":1784116800,"event":"open","topic":"desk-fixture"}
+{"id":"ntfy-inbound-001","time":1784116801,"expires":1784203201,"event":"message","topic":"desk-fixture","title":"Service alert","message":"Café 東京 latency is elevated. 🛰️","priority":5,"tags":["warning","test_tube"]}
+{"id":"ntfy-inbound-002","time":1784116802,"expires":1784203202,"event":"message","topic":"desk-fixture","title":"Agent note","message":"Qualification poll completed.","priority":3,"tags":["robot","white_check_mark"]}

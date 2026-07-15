@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+  <id>urn:example:atom:feed</id>
+  <title type="text">Example Desk Atom — 東京</title>
+  <updated>2026-07-15T13:00:00Z</updated>
+  <author>
+    <name>Ada Example</name>
+    <email>ada@example.test</email>
+  </author>
+  <link rel="self" href="https://example.test/atom" type="application/atom+xml" />
+  <link rel="alternate" href="https://example.test/" type="text/html" />
+  <link rel="next" href="https://example.test/atom?page=2" type="application/atom+xml" />
+  <entry>
+    <id>urn:example:atom:item:stable</id>
+    <title type="text">Café status 🛰️</title>
+    <published>2026-07-15T10:00:00Z</published>
+    <updated>2026-07-15T10:00:00Z</updated>
+    <link rel="alternate" href="https://example.test/items/atom-stable" />
+    <link rel="enclosure" href="https://example.test/media/stable.ogg" type="audio/ogg" length="2048" />
+    <category term="qualification" label="Qualification" />
+    <summary type="text">The stable entry remains unchanged.</summary>
+  </entry>
+  <entry>
+    <id>urn:example:atom:item:changed</id>
+    <title type="html">Change record, version &lt;em&gt;two&lt;/em&gt;</title>
+    <published>2026-07-15T11:00:00Z</published>
+    <updated>2026-07-15T12:30:00Z</updated>
+    <link rel="alternate" href="https://example.test/items/atom-changed" />
+    <category term="updates" />
+    <content type="html">&lt;p&gt;Service state: degraded; investigation started.&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <id>urn:example:atom:item:new</id>
+    <title type="text">New observation 🚀</title>
+    <published>2026-07-15T12:45:00Z</published>
+    <updated>2026-07-15T12:45:00Z</updated>
+    <link rel="alternate" href="https://example.test/items/atom-new" />
+    <category term="updates" />
+    <content type="text">First appearance of the new entry.</content>
+  </entry>
+</feed>
