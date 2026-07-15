@@ -4,20 +4,25 @@ AT Protocol identity, record-addressing, XRPC client, bounded Bluesky feed
 decoding, session management, and repository CRUD. Foundation layer for
 Bluesky and any AT Protocol application.
 
+The bounded, credential-free public author-feed exchange has a separate
+[lifecycle contract](public-author-feed.md). It uses the cooperative XIO/HBUF
+path and does not share the legacy XRPC/session globals described below.
+
 ```forth
 REQUIRE aturi.f    \ AT URI parser + builder
 REQUIRE did.f      \ DID validation + method extraction
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
+REQUIRE public-author-feed.f \ cooperative public author-feed exchange
 REQUIRE session.f  \ Session auth (login/refresh/bearer)
 REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 ```
 
 `PROVIDED akashic-aturi` / `akashic-did` / `akashic-tid` /
-`akashic-xrpc` / `akashic-atproto-feed-model` / `akashic-session` /
-`akashic-repo` — safe to
-include multiple times.
+`akashic-xrpc` / `akashic-atproto-feed-model` /
+`akashic-atproto-public-author-feed` / `akashic-session` /
+`akashic-repo` — safe to include multiple times.
 
 ---
 

@@ -14674,6 +14674,463 @@ _cla-run
         "CODEX AUTH LIVE FAIL",
     ),
 )
+PROFILES["public-author-feed"] = Profile(
+    roots=("atproto/public-author-feed.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - public author-feed provider contracts
+ENTER-USERLAND
+." [akashic] loading public author-feed provider" CR
+REQUIRE atproto/public-author-feed.f
+
+VARIABLE _paf-fails
+VARIABLE _paf-checks
+VARIABLE _paf-depth
+: _paf-assert  ( flag -- )
+    1 _paf-checks +!
+    0= IF 1 _paf-fails +! ." PAF ASSERT " _paf-checks @ . CR THEN ;
+: _paf-stack  ( -- )
+    DEPTH DUP _paf-depth @ <> IF
+        ." PAF STACK " _paf-depth @ . ."  -> " DUP . CR .S CR
+    THEN
+    _paf-depth @ = _paf-assert ;
+
+CREATE _paf-provider PUBLIC-AUTHOR-FEED-SIZE ALLOT
+CREATE _paf-service XIO-SERVICE-SIZE ALLOT
+CREATE _paf-operation XIO-OP-SIZE ALLOT
+CREATE _paf-long-actor PAF-ACTOR-CAPACITY 1+ ALLOT
+CREATE _paf-sent PAF-REQUEST-CAPACITY ALLOT
+CREATE _paf-expected 1024 ALLOT
+CREATE _paf-response 2048 ALLOT
+
+VARIABLE _paf-request-generation
+VARIABLE _paf-response-mode
+VARIABLE _paf-response-u
+VARIABLE _paf-response-pos
+VARIABLE _paf-sent-u
+VARIABLE _paf-expected-u
+VARIABLE _paf-open-starts
+VARIABLE _paf-open-polls
+VARIABLE _paf-send-calls
+VARIABLE _paf-recv-calls
+VARIABLE _paf-lower-cancels
+VARIABLE _paf-lower-closes
+VARIABLE _paf-cleanup-mode
+VARIABLE _paf-io-mode
+VARIABLE _paf-io-a
+VARIABLE _paf-io-u
+VARIABLE _paf-io-n
+VARIABLE _paf-rem-a
+VARIABLE _paf-rem-u
+VARIABLE _paf-start-calls
+VARIABLE _paf-poll-calls
+VARIABLE _paf-cancel-calls
+VARIABLE _paf-wipe-calls
+VARIABLE _paf-retained-a
+VARIABLE _paf-rj-mode
+VARIABLE _paf-rj-kind
+VARIABLE _paf-rj-code
+VARIABLE _paf-rj-xerr
+VARIABLE _paf-rj-cancels
+VARIABLE _paf-rj-closes
+
+: _paf-zero?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _paf-expected,  ( addr len -- )
+    DUP >R _paf-expected _paf-expected-u @ + SWAP CMOVE
+    R> _paf-expected-u +! ;
+: _paf-response,  ( addr len -- )
+    DUP >R _paf-response _paf-response-u @ + SWAP CMOVE
+    R> _paf-response-u +! ;
+: _paf-expected-crlf,  ( -- )
+    13 _paf-expected _paf-expected-u @ + C! 1 _paf-expected-u +!
+    10 _paf-expected _paf-expected-u @ + C! 1 _paf-expected-u +! ;
+: _paf-response-crlf,  ( -- )
+    13 _paf-response _paf-response-u @ + C! 1 _paf-response-u +!
+    10 _paf-response _paf-response-u @ + C! 1 _paf-response-u +! ;
+
+: _paf-build-expected  ( -- )
+    _paf-expected 1024 0 FILL 0 _paf-expected-u !
+    S" GET /xrpc/app.bsky.feed.getAuthorFeed?actor=" _paf-expected,
+    S" did%3Aweb%3Aexample.com%253A8443" _paf-expected,
+    S" &limit=8&filter=posts_no_replies&includePins=false" _paf-expected,
+    S"  HTTP/1.1" _paf-expected, _paf-expected-crlf,
+    S" Host: public.api.bsky.app" _paf-expected, _paf-expected-crlf,
+    S" Accept: application/json" _paf-expected, _paf-expected-crlf,
+    S" Accept-Encoding: identity" _paf-expected, _paf-expected-crlf,
+    S" User-Agent: Akashic-Streams/0.3" _paf-expected, _paf-expected-crlf,
+    S" Connection: close" _paf-expected, _paf-expected-crlf,
+    _paf-expected-crlf, ;
+
+: _paf-build-response  ( -- )
+    _paf-response 2048 0 FILL 0 _paf-response-u !
+    _paf-response-mode @ 8 = IF
+        S" HTTP/1.1 nope" _paf-response, _paf-response-crlf,
+    ELSE
+        _paf-response-mode @ 2 = IF
+            S" HTTP/1.1 404 Not Found"
+        ELSE
+            S" HTTP/1.1 200 OK"
+        THEN _paf-response, _paf-response-crlf,
+    THEN
+    _paf-response-mode @ 3 <> IF
+        _paf-response-mode @ 5 = IF
+            S" Content-Type: text/plain"
+        ELSE
+            _paf-response-mode @ 0= IF
+                S" Content-Type: Application/JSON ; charset=utf-8"
+            ELSE
+                S" Content-Type: application/json"
+            THEN
+        THEN _paf-response, _paf-response-crlf,
+    THEN
+    _paf-response-mode @ 4 = IF
+        S" Content-Type: application/json" _paf-response, _paf-response-crlf,
+    THEN
+    _paf-response-mode @ 1 = IF
+        S" Content-Encoding: identity" _paf-response, _paf-response-crlf,
+    THEN
+    _paf-response-mode @ 6 = IF
+        S" Content-Encoding: gzip" _paf-response, _paf-response-crlf,
+    THEN
+    _paf-response-mode @ 7 = IF
+        S" Content-Encoding: identity" _paf-response, _paf-response-crlf,
+        S" Content-Encoding: identity" _paf-response, _paf-response-crlf,
+    THEN
+    _paf-response-mode @ 9 = IF
+        S" Content-Length: 262145"
+    ELSE
+        S" Content-Length: 2"
+    THEN _paf-response, _paf-response-crlf,
+    S" Connection: close" _paf-response, _paf-response-crlf,
+    _paf-response-crlf,
+    _paf-response-mode @ 9 <> IF S" {}" _paf-response, THEN ;
+
+: _paf-fake-open-start  ( context -- io-status )
+    DROP 1 _paf-open-starts +! NIO-S-PENDING ;
+: _paf-fake-open-poll  ( context -- io-status )
+    DROP 1 _paf-open-polls +!
+    _paf-open-polls @ 2 >= IF NIO-S-OK ELSE NIO-S-PENDING THEN ;
+: _paf-fake-send  ( buffer length context -- count io-status )
+    DROP _paf-io-u ! _paf-io-a ! 1 _paf-send-calls +!
+    _paf-io-mode @ 1 = IF 0 NIO-S-FAILED EXIT THEN
+    _paf-io-u @ 11 MIN _paf-io-n !
+    _paf-sent-u @ _paf-io-n @ + PAF-REQUEST-CAPACITY > IF
+        0 NIO-S-FAILED EXIT
+    THEN
+    _paf-io-a @ _paf-sent _paf-sent-u @ + _paf-io-n @ CMOVE
+    _paf-io-n @ _paf-sent-u +! _paf-io-n @ NIO-S-OK ;
+: _paf-fake-recv  ( buffer capacity context -- count io-status )
+    DROP _paf-io-u ! _paf-io-a ! 1 _paf-recv-calls +!
+    _paf-io-mode @ 2 = IF 0 NIO-S-FAILED EXIT THEN
+    _paf-response _paf-response-u @ _paf-response-pos @ /STRING
+    _paf-rem-u ! _paf-rem-a !
+    _paf-rem-u @ 0= IF 0 NIO-S-EOF EXIT THEN
+    _paf-rem-u @ _paf-io-u @ MIN 13 MIN _paf-io-n !
+    _paf-rem-a @ _paf-io-a @ _paf-io-n @ CMOVE
+    _paf-io-n @ _paf-response-pos +!
+    _paf-io-n @ NIO-S-OK ;
+: _paf-fake-poll  ( context -- ) DROP ;
+: _paf-fake-cancel  ( context -- )
+    DROP 1 _paf-lower-cancels +!
+    _paf-cleanup-mode @ DUP 1 = SWAP 3 = OR IF -4740 THROW THEN ;
+: _paf-fake-close  ( context -- )
+    DROP 1 _paf-lower-closes +!
+    _paf-cleanup-mode @ DUP 2 = SWAP 3 = OR IF -4741 THROW THEN ;
+
+: _paf-fake-install  ( -- )
+    _paf-sent PAF-REQUEST-CAPACITY 0 FILL 0 _paf-sent-u !
+    0 _paf-response-pos ! 0 _paf-open-starts ! 0 _paf-open-polls !
+    0 _paf-send-calls ! 0 _paf-recv-calls !
+    0 _paf-lower-cancels ! 0 _paf-lower-closes !
+    0 _paf-cleanup-mode ! 0 _paf-io-mode !
+    _paf-build-response
+    _paf-provider PAF.PORT NIO-INIT
+    _paf-provider _paf-provider PAF.PORT NIO.CONTEXT !
+    ['] _paf-fake-open-start _paf-provider PAF.PORT NIO.OPEN-START-XT !
+    ['] _paf-fake-open-poll _paf-provider PAF.PORT NIO.OPEN-POLL-XT !
+    ['] _paf-fake-send _paf-provider PAF.PORT NIO.SEND-XT !
+    ['] _paf-fake-recv _paf-provider PAF.PORT NIO.RECV-XT !
+    ['] _paf-fake-poll _paf-provider PAF.PORT NIO.POLL-XT !
+    ['] _paf-fake-cancel _paf-provider PAF.PORT NIO.CANCEL-XT !
+    ['] _paf-fake-close _paf-provider PAF.PORT NIO.CLOSE-XT ! ;
+
+: _paf-start  ( operation provider -- step-status )
+    1 _paf-start-calls +! PAF-XIO-START ;
+: _paf-poll  ( operation provider -- step-status )
+    1 _paf-poll-calls +! PAF-XIO-POLL ;
+: _paf-cancel  ( operation provider -- )
+    1 _paf-cancel-calls +! PAF-XIO-CANCEL ;
+: _paf-wipe  ( operation provider -- )
+    1 _paf-wipe-calls +! PAF-XIO-WIPE ;
+: _paf-call-provider-cancel  ( -- )
+    _paf-operation _paf-provider PAF-XIO-CANCEL ;
+: _paf-call-provider-wipe  ( -- )
+    _paf-operation _paf-provider PAF-XIO-WIPE ;
+
+: _paf-callback-counts-reset  ( -- )
+    0 _paf-start-calls ! 0 _paf-poll-calls !
+    0 _paf-cancel-calls ! 0 _paf-wipe-calls ! ;
+: _paf-operation-configure  ( -- )
+    1 _paf-request-generation +!
+    _paf-service 77 1 _paf-request-generation @ 0 _paf-provider
+    ['] _paf-start ['] _paf-poll ['] _paf-cancel ['] _paf-wipe
+    _paf-operation XIO-OP-CONFIGURE XIO-S-OK = _paf-assert ;
+: _paf-submit  ( -- )
+    _paf-service _paf-operation XIO-SUBMIT XIO-S-OK = _paf-assert ;
+: _paf-pump  ( -- )
+    2000 0 DO
+        _paf-operation XIOO.STATE @ XIO-STATE-ACTIVE <> IF
+            UNLOOP EXIT
+        THEN
+        _paf-service XIO-TICK
+    LOOP ;
+: _paf-operation-reset  ( -- )
+    _paf-service _paf-operation XIO-RESET XIO-S-OK = _paf-assert
+    _paf-operation XIOO.STATE @ XIO-STATE-RESET = _paf-assert ;
+: _paf-prepare  ( response-mode -- )
+    _paf-response-mode !
+    S" did:web:example.com%3A8443" _paf-provider PAF-CONFIGURE
+    PAF-S-OK = _paf-assert
+    _paf-fake-install _paf-callback-counts-reset
+    _paf-operation-configure ;
+
+: _paf-test-configuration  ( -- )
+    _paf-provider PAF-INIT PAF-S-OK = _paf-assert
+    _paf-provider PAF-VALID? _paf-assert
+    _paf-provider PAF.PORT NIO.OPEN-START-XT @ 0= _paf-assert
+    _paf-provider PAF.PORT NIO.OPEN-POLL-XT @ 0= _paf-assert
+    _paf-provider PAF.PORT NIO.CANCEL-XT @ 0= _paf-assert
+    S" " _paf-provider PAF-CONFIGURE PAF-S-INVALID = _paf-assert
+    S" did:plc:" _paf-provider PAF-CONFIGURE PAF-S-INVALID = _paf-assert
+    S" did:plc:abc:" _paf-provider PAF-CONFIGURE PAF-S-INVALID = _paf-assert
+    S" did:plc:abc~" _paf-provider PAF-CONFIGURE PAF-S-INVALID = _paf-assert
+    S" did:plc:ab/c" _paf-provider PAF-CONFIGURE PAF-S-INVALID = _paf-assert
+    S" did:plc:ab%XZcd" _paf-provider PAF-CONFIGURE
+        PAF-S-INVALID = _paf-assert
+    S" did:web:example.com%" _paf-provider PAF-CONFIGURE
+        PAF-S-INVALID = _paf-assert
+    _paf-long-actor PAF-ACTOR-CAPACITY 1+ [CHAR] a FILL
+    _paf-long-actor PAF-ACTOR-CAPACITY 1+ _paf-provider PAF-CONFIGURE
+        PAF-S-INVALID = _paf-assert
+    S" alice.bsky.social" _paf-provider PAF-CONFIGURE PAF-S-OK = _paf-assert
+    S" did:plc:" _paf-long-actor SWAP CMOVE
+    _paf-long-actor 8 + PAF-ACTOR-CAPACITY 8 - [CHAR] : FILL
+    [CHAR] a _paf-long-actor PAF-ACTOR-CAPACITY 1- + C!
+    _paf-long-actor PAF-ACTOR-CAPACITY _paf-provider PAF-CONFIGURE
+        PAF-S-OK = _paf-assert
+    _paf-provider _PAF-BUILD-REQUEST HREQ-S-OK = _paf-assert
+    _paf-provider PAF.PATH-U @ 6000 > _paf-assert
+    _paf-provider PAF.PATH-U @ PAF-PATH-CAPACITY <= _paf-assert
+    _paf-provider PAF.REQUEST HREQ.LENGTH @ PAF-REQUEST-CAPACITY <= _paf-assert
+    _paf-provider PAF.REQUEST HREQ.BUFFER @
+    _paf-provider PAF.REQUEST HREQ.LENGTH @ S" Authorization"
+        STR-STRI-CONTAINS 0= _paf-assert
+    _paf-stack
+    S" did:web:example.com%3A8443" _paf-provider PAF-CONFIGURE
+        PAF-S-OK = _paf-assert
+    _paf-provider PAF-ACTOR@ S" did:web:example.com%3A8443"
+        STR-STR= _paf-assert
+    _paf-stack ;
+
+: _paf-test-unsupported  ( -- )
+    _paf-callback-counts-reset _paf-operation-configure _paf-submit
+    _paf-service XIO-TICK
+    _paf-stack
+    _paf-operation XIOO.STATE @ XIO-STATE-FAILED = _paf-assert
+    _paf-operation XIOO.ERROR @ PAF-XERR-UNSUPPORTED = _paf-assert
+    _paf-provider PAF.ERROR-KIND @ PAF-ERR-UNSUPPORTED = _paf-assert
+    _paf-provider PAF.ERROR-CODE @ PAF-CODE-NONCOOPERATIVE = _paf-assert
+    _paf-provider PAF.CLEANUP-ERROR @ 0= _paf-assert
+    _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.PORT @ 0= _paf-assert
+    _paf-provider PAF.WIRE PAF-REQUEST-CAPACITY _paf-zero? _paf-assert
+    _paf-start-calls @ 1 = _paf-assert _paf-poll-calls @ 0= _paf-assert
+    _paf-cancel-calls @ 1 = _paf-assert _paf-wipe-calls @ 1 = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-RELEASED = _paf-assert
+    _paf-operation-reset _paf-stack ;
+
+: _paf-test-invalid-context  ( -- )
+    _paf-callback-counts-reset 1 _paf-request-generation +!
+    _paf-service 77 1 _paf-request-generation @ 0 0
+    ['] _paf-start ['] _paf-poll ['] _paf-cancel ['] _paf-wipe
+    _paf-operation XIO-OP-CONFIGURE XIO-S-OK = _paf-assert
+    _paf-submit _paf-service XIO-TICK _paf-stack
+    _paf-operation XIOO.STATE @ XIO-STATE-FAILED = _paf-assert
+    _paf-operation XIOO.ERROR @ PAF-XERR-INVALID = _paf-assert
+    _paf-start-calls @ 1 = _paf-assert _paf-poll-calls @ 0= _paf-assert
+    _paf-cancel-calls @ 1 = _paf-assert _paf-wipe-calls @ 1 = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-CONFIGURED = _paf-assert
+    _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-operation-reset _paf-stack ;
+
+: _paf-test-success  ( -- )
+    0 _paf-prepare _paf-submit
+    _paf-service XIO-TICK
+    _paf-stack
+    _paf-start-calls @ 1 = _paf-assert _paf-poll-calls @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.STATE @ HBUF-STATE-OPENING = _paf-assert
+    _paf-open-starts @ 1 = _paf-assert _paf-sent-u @ 0= _paf-assert
+    _paf-service XIO-TICK
+    _paf-stack
+    _paf-open-polls @ 1 = _paf-assert _paf-sent-u @ 0= _paf-assert
+    _paf-service XIO-TICK
+    _paf-stack
+    _paf-open-polls @ 2 = _paf-assert _paf-sent-u @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.STATE @ HBUF-STATE-SENDING = _paf-assert
+    _paf-service XIO-TICK _paf-stack _paf-sent-u @ 0> _paf-assert
+    _paf-pump
+    _paf-operation XIOO.STATE @ XIO-STATE-SUCCEEDED = _paf-assert
+    _paf-operation XIOO.RESULT @ _paf-provider = _paf-assert
+    _paf-service XIOS.RETAINED @ _paf-operation = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-READY = _paf-assert
+    _paf-provider PAF.HTTP-CODE @ 200 = _paf-assert
+    _paf-provider PAF-BODY@ S" {}" STR-STR= _paf-assert
+    _paf-provider PAF.BODY-A @ DUP 0<> _paf-assert _paf-retained-a !
+    _paf-build-expected
+    _paf-sent _paf-sent-u @ _paf-expected _paf-expected-u @
+        STR-STR= _paf-assert
+    _paf-sent _paf-sent-u @ S" Authorization"
+        STR-STRI-CONTAINS 0= _paf-assert
+    _paf-sent _paf-sent-u @ S" Bearer" STR-STRI-CONTAINS 0= _paf-assert
+    _paf-send-calls @ 1 > _paf-assert _paf-recv-calls @ 1 > _paf-assert
+    _paf-lower-cancels @ 0= _paf-assert _paf-lower-closes @ 1 = _paf-assert
+    _paf-cancel-calls @ 0= _paf-assert _paf-wipe-calls @ 0= _paf-assert
+    _paf-service XIO-TICK
+    _paf-provider PAF.BODY-A @ _paf-retained-a @ = _paf-assert
+    _paf-provider PAF-BODY@ S" {}" STR-STR= _paf-assert
+    _paf-operation-reset
+    _paf-wipe-calls @ 1 = _paf-assert
+    _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-provider PAF.BODY-U @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.BODY-A @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.BODY-CAP @ 0= _paf-assert
+    _paf-provider PAF.PATH-U @ 0= _paf-assert
+    _paf-provider PAF.WIRE PAF-REQUEST-CAPACITY _paf-zero? _paf-assert
+    _paf-service _paf-operation XIO-RESET XIO-S-OK = _paf-assert
+    _paf-wipe-calls @ 1 = _paf-assert
+    _paf-operation _paf-provider PAF-XIO-WIPE
+    _paf-lower-closes @ 1 = _paf-assert _paf-lower-cancels @ 0= _paf-assert
+    _paf-stack ;
+
+: _paf-test-identity-success  ( -- )
+    1 _paf-prepare _paf-submit _paf-pump
+    _paf-operation XIOO.STATE @ XIO-STATE-SUCCEEDED = _paf-assert
+    _paf-provider PAF-BODY@ S" {}" STR-STR= _paf-assert
+    _paf-operation-reset
+    _paf-wipe-calls @ 1 = _paf-assert _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-stack ;
+
+: _paf-test-cancel  ( -- )
+    0 _paf-prepare _paf-submit _paf-service XIO-TICK
+    _paf-stack
+    _paf-provider PAF.BODY-A @ 0<> _paf-assert
+    _paf-service _paf-operation XIO-CANCEL XIO-S-OK = _paf-assert
+    _paf-operation XIOO.STATE @ XIO-STATE-CANCELLED = _paf-assert
+    _paf-operation XIOO.ERROR @ XIO-E-CANCELLED = _paf-assert
+    _paf-start-calls @ 1 = _paf-assert _paf-cancel-calls @ 1 = _paf-assert
+    _paf-wipe-calls @ 1 = _paf-assert
+    _paf-lower-cancels @ 1 = _paf-assert _paf-lower-closes @ 0= _paf-assert
+    _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.BODY-A @ 0= _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-RELEASED = _paf-assert
+    _paf-service _paf-operation XIO-CANCEL XIO-S-OK = _paf-assert
+    _paf-operation _paf-provider PAF-XIO-CANCEL
+    _paf-operation _paf-provider PAF-XIO-WIPE
+    _paf-cancel-calls @ 1 = _paf-assert _paf-wipe-calls @ 1 = _paf-assert
+    _paf-lower-cancels @ 1 = _paf-assert _paf-lower-closes @ 0= _paf-assert
+    _paf-operation-reset _paf-wipe-calls @ 1 = _paf-assert
+    _paf-stack ;
+
+: _paf-reject  ( mode kind code xerr lower-cancels lower-closes -- )
+    _paf-rj-closes ! _paf-rj-cancels ! _paf-rj-xerr !
+    _paf-rj-code ! _paf-rj-kind ! _paf-rj-mode !
+    _paf-rj-mode @ _paf-prepare _paf-submit _paf-pump
+    _paf-operation XIOO.STATE @ XIO-STATE-FAILED = _paf-assert
+    _paf-operation XIOO.ERROR @ _paf-rj-xerr @ = _paf-assert
+    _paf-provider PAF.ERROR-KIND @ _paf-rj-kind @ = _paf-assert
+    _paf-provider PAF.ERROR-CODE @ _paf-rj-code @ = _paf-assert
+    _paf-provider PAF.CLEANUP-ERROR @ 0= _paf-assert
+    _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-start-calls @ 1 = _paf-assert
+    _paf-cancel-calls @ 1 = _paf-assert _paf-wipe-calls @ 1 = _paf-assert
+    _paf-lower-cancels @ _paf-rj-cancels @ = _paf-assert
+    _paf-lower-closes @ _paf-rj-closes @ = _paf-assert
+    _paf-operation-reset _paf-stack ;
+
+: _paf-test-rejections  ( -- )
+    2 PAF-ERR-HTTP 404 PAF-XERR-HTTP 0 1 _paf-reject
+    3 PAF-ERR-MEDIA-TYPE PAF-CODE-CONTENT-TYPE-MISSING
+        PAF-XERR-MEDIA-TYPE 0 1 _paf-reject
+    4 PAF-ERR-MEDIA-TYPE PAF-CODE-CONTENT-TYPE-DUPLICATE
+        PAF-XERR-MEDIA-TYPE 0 1 _paf-reject
+    5 PAF-ERR-MEDIA-TYPE PAF-CODE-CONTENT-TYPE-MISMATCH
+        PAF-XERR-MEDIA-TYPE 0 1 _paf-reject
+    6 PAF-ERR-CONTENT-ENCODING PAF-CODE-CONTENT-ENCODING-MISMATCH
+        PAF-XERR-CONTENT-ENCODING 0 1 _paf-reject
+    7 PAF-ERR-CONTENT-ENCODING PAF-CODE-CONTENT-ENCODING-DUPLICATE
+        PAF-XERR-CONTENT-ENCODING 0 1 _paf-reject
+    8 PAF-ERR-TRANSPORT HBUF-S-PROTOCOL PAF-XERR-TRANSPORT 1 0 _paf-reject
+    9 PAF-ERR-CAPACITY PAF-CODE-BODY-OVERFLOW PAF-XERR-CAPACITY
+        1 0 _paf-reject
+    _paf-stack ;
+
+: _paf-test-cleanup-failure  ( -- )
+    0 _paf-prepare 3 _paf-cleanup-mode ! _paf-submit
+    _paf-service XIO-TICK
+    _paf-service _paf-operation XIO-CANCEL XIO-S-CALLBACK = _paf-assert
+    _paf-operation XIOO.STATE @ XIO-STATE-FAILED = _paf-assert
+    _paf-operation XIOO.CLEANUP-ERROR @ PAF-XERR-CLEANUP = _paf-assert
+    _paf-provider PAF.CLEANUP-ERROR @ PAF-XERR-CLEANUP = _paf-assert
+    _paf-provider PAF.ERROR-KIND @ PAF-ERR-CLEANUP = _paf-assert
+    _paf-provider PAF.ERROR-CODE @ PAF-CODE-CLEANUP = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-FAILED = _paf-assert
+    _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.BODY-A @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.BODY-CAP @ 0= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.PORT @ 0<> _paf-assert
+    _paf-cancel-calls @ 1 = _paf-assert _paf-wipe-calls @ 1 = _paf-assert
+    _paf-lower-cancels @ 1 = _paf-assert _paf-lower-closes @ 1 = _paf-assert
+    ['] _paf-call-provider-cancel CATCH
+        PAF-XERR-CLEANUP = _paf-assert
+    ['] _paf-call-provider-wipe CATCH
+        PAF-XERR-CLEANUP = _paf-assert
+    _paf-lower-cancels @ 1 = _paf-assert _paf-lower-closes @ 1 = _paf-assert
+    _paf-operation-reset
+    S" did:plc:z72i7hdynmk6r22z27h6tvur" _paf-provider PAF-CONFIGURE
+        PAF-S-TRANSPORT = _paf-assert
+    _paf-stack ;
+
+: _paf-run  ( -- )
+    0 _paf-fails ! 0 _paf-checks ! DEPTH _paf-depth !
+    0 _paf-request-generation !
+    _paf-service XIO-SERVICE-INIT XIO-S-OK = _paf-assert
+    _paf-operation XIO-OP-INIT
+    _paf-test-configuration
+    _paf-test-invalid-context
+    _paf-test-unsupported
+    _paf-test-success
+    _paf-test-identity-success
+    _paf-test-cancel
+    _paf-test-rejections
+    _paf-test-cleanup-failure
+    _paf-service XIO-SERVICE-FINI XIO-S-OK = _paf-assert
+    _paf-stack
+    _paf-fails @ 0= IF
+        ." PUBLIC AUTHOR FEED PASS " _paf-checks @ .
+    ELSE
+        ." PUBLIC AUTHOR FEED FAIL " _paf-fails @ . ."  / " _paf-checks @ .
+    THEN CR ;
+
+_paf-run
+""",
+    ready_markers=("PUBLIC AUTHOR FEED PASS",),
+    stable_markers=("PUBLIC AUTHOR FEED PASS",),
+    failure_markers=("PUBLIC AUTHOR FEED FAIL", "PAF ASSERT", "PAF STACK"),
+    include_large_sample=False,
+)
 LARGE_SAMPLE = b"".join(
     f"Large fixture line {line:03d}: Pad crosses MP64FS sector boundaries.\n".encode()
     for line in range(1, 49)
