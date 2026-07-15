@@ -247,6 +247,22 @@ the screen width.
 S" Hello, world!" 0 0 DRW-TEXT   \ print at top-left
 ```
 
+### DRW-TEXT-UNTRUSTED
+
+```
+( addr len row col -- )
+```
+
+Draw network, document, or Agent-supplied UTF-8 without allowing terminal
+controls or multi-cell cursor movement into the screen buffer. It applies
+`CW-CELL-CP` to every decoded codepoint: controls and bidi controls, width-0
+combining/joining/format codepoints, and width-2 glyphs are painted as one
+U+FFFD cell. Isolated terminal-safe width-1 Unicode is preserved.
+
+This is a presentation transform only: it neither edits nor normalizes the
+caller-owned bytes. Use `DRW-TEXT` for trusted interface labels and
+`DRW-TEXT-UNTRUSTED` at an untrusted-content display boundary.
+
 ### DRW-TEXT-CENTER
 
 ```
@@ -312,6 +328,7 @@ advancing horizontally.  Synonym for `DRW-HLINE`.
 | `DRW-FILL-RECT` | `( cp row col h w -- )` | Fill rectangle |
 | `DRW-CLEAR-RECT` | `( row col h w -- )` | Clear rectangle |
 | `DRW-TEXT` | `( addr len row col -- )` | Draw UTF-8 text |
+| `DRW-TEXT-UNTRUSTED` | `( addr len row col -- )` | Project untrusted UTF-8 to isolated width-1 cells |
 | `DRW-TEXT-CENTER` | `( addr len row col w -- )` | Center text |
 | `DRW-TEXT-RIGHT` | `( addr len row col w -- )` | Right-align text |
 | `DRW-REPEAT` | `( cp row col n -- )` | Repeat char (= HLINE) |

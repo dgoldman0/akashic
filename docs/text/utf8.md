@@ -141,6 +141,24 @@ buf 3 UTF8-VALID?    \ valid "Aé" → -1
 bad 1 UTF8-VALID?    \ bare 0x80  → 0
 ```
 
+### UTF8-DISPLAY-UNSAFE? / UTF8-DISPLAY-CP
+
+```
+UTF8-DISPLAY-UNSAFE?  ( cp -- flag )
+UTF8-DISPLAY-CP       ( cp -- safe-cp )
+```
+
+Apply Akashic's terminal-cell presentation policy to one decoded codepoint.
+C0/C1 controls, bidi formatting controls, zero-width space, BOM, interlinear
+annotation controls, and Unicode tag controls are unsafe;
+`UTF8-DISPLAY-CP` replaces them with U+FFFD. These words do not edit or
+normalize a source buffer and are not substitutes for `UTF8-VALID?`.
+
+This codec-level filter does not classify combining or wide glyphs. Fixed-cell
+TUI code must use `CW-CELL-CP` from `text/cell-width.f`, which also rejects
+width-0 and width-2 codepoints so physical terminal movement stays aligned
+with the screen buffer.
+
 ---
 
 ## Nth Codepoint
@@ -193,6 +211,8 @@ Error conditions:
 | `UTF8-ENCODE` | `( cp buf -- buf' )` | Encode one codepoint |
 | `UTF8-LEN` | `( addr len -- n )` | Count codepoints |
 | `UTF8-VALID?` | `( addr len -- flag )` | Check validity |
+| `UTF8-DISPLAY-UNSAFE?` | `( cp -- flag )` | Detect terminal-unsafe display controls |
+| `UTF8-DISPLAY-CP` | `( cp -- safe-cp )` | Replace terminal-unsafe controls with U+FFFD |
 | `UTF8-NTH` | `( addr len n -- cp )` | Get nth codepoint |
 | `UTF8-REPLACEMENT` | `( -- 65533 )` | U+FFFD constant |
 

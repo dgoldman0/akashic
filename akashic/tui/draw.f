@@ -15,12 +15,13 @@
 \
 \  Prefix: DRW- (public), _DRW- (internal)
 \  Provider: akashic-tui-draw
-\  Dependencies: screen.f, ../text/utf8.f
+\  Dependencies: screen.f, ../text/utf8.f, ../text/cell-width.f
 
 PROVIDED akashic-tui-draw
 
 REQUIRE screen.f
 REQUIRE ../text/utf8.f
+REQUIRE ../text/cell-width.f
 
 \ =====================================================================
 \ 1. Style state — current drawing style
@@ -230,6 +231,27 @@ VARIABLE _DRW-TEXT-COL
     REPEAT
     2DROP ;
 
+\ Network, document, and Agent text must not be allowed to place terminal
+\ controls or invisible direction overrides into the screen buffer.  Keep the
+\ source bytes unchanged in their owning model and project only at this final
+\ presentation boundary.  The screen has no continuation-cell or grapheme
+\ model, so every decoded codepoint must occupy exactly one isolated cell:
+\ controls, nonspacing/joining codepoints, and wide codepoints become U+FFFD.
+: DRW-TEXT-UNTRUSTED  ( addr len row col -- )
+    _DRW-TEXT-COL !
+    _DRW-TEXT-ROW !
+    BEGIN
+        DUP 0>
+    WHILE
+        UTF8-DECODE
+        ROT CW-CELL-CP
+        _DRW-TEXT-ROW @
+        _DRW-TEXT-COL @
+        DRW-CHAR
+        1 _DRW-TEXT-COL +!
+    REPEAT
+    2DROP ;
+
 \ _DRW-UTF8-CPLEN ( addr len -- n )
 \   Count codepoints in a UTF-8 string.
 : _DRW-UTF8-CPLEN  ( addr len -- n )
@@ -301,6 +323,7 @@ GUARD _draw-guard
 ' DRW-STYLE-RESET     CONSTANT _drw-stylerst-xt
 ' DRW-CHAR            CONSTANT _drw-char-xt
 ' DRW-TEXT            CONSTANT _drw-text-xt
+' DRW-TEXT-UNTRUSTED  CONSTANT _drw-text-untrusted-xt
 ' DRW-HLINE           CONSTANT _drw-hline-xt
 ' DRW-VLINE           CONSTANT _drw-vline-xt
 ' DRW-FILL-RECT       CONSTANT _drw-fillrect-xt
@@ -316,6 +339,8 @@ GUARD _draw-guard
 : DRW-STYLE-RESET     _drw-stylerst-xt _draw-guard WITH-GUARD ;
 : DRW-CHAR            _drw-char-xt     _draw-guard WITH-GUARD ;
 : DRW-TEXT            _drw-text-xt     _draw-guard WITH-GUARD ;
+: DRW-TEXT-UNTRUSTED  _drw-text-untrusted-xt
+    _draw-guard WITH-GUARD ;
 : DRW-HLINE           _drw-hline-xt    _draw-guard WITH-GUARD ;
 : DRW-VLINE           _drw-vline-xt    _draw-guard WITH-GUARD ;
 : DRW-FILL-RECT       _drw-fillrect-xt _draw-guard WITH-GUARD ;

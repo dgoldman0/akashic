@@ -2,12 +2,12 @@
 \  crc.f  —  CRC-32 / CRC-32C / CRC-64 (hardware-accelerated)
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: CRC-
-\  Depends on: (none — uses BIOS CRC MMIO accelerator)
+\  Depends on: (none — uses the MegaPad BIOS CRC accelerator)
 \
 \  Public API — one-shot:
-\   CRC32       ( data len -- crc )    CRC-32 (ISO 3309)
-\   CRC32C      ( data len -- crc )    CRC-32C (Castagnoli / iSCSI)
-\   CRC64       ( data len -- crc )    CRC-64-ECMA
+\   CRC32       ( data len -- crc )    CRC-32/BZIP2 parameters
+\   CRC32C      ( data len -- crc )    non-reflected Castagnoli
+\   CRC64       ( data len -- crc )    CRC-64/WE parameters
 \
 \  Public API — streaming:
 \   CRC32-BEGIN   ( -- )               start streaming CRC-32
@@ -39,12 +39,11 @@
 \   CRC64-INIT-VAL   ( -- 0xFFFFFFFFFFFFFFFF )
 \
 \  BIOS primitives used:
-\   CRC-POLY!  CRC-INIT!  CRC-FEED  CRC@  CRC-FINAL
+\   CRC-POLY!  CRC-INIT!  CRC-FEED  CRC-FEED-BYTE  CRC-FINAL@
 \
-\  The hardware CRC accelerator processes data in 8-byte chunks
-\  via CRC-FEED.  This module feeds aligned chunks through hardware
-\  and handles any remaining 1–7 bytes via software bit-by-bit
-\  CRC, giving byte-exact results for all input lengths.
+\  Full 8-byte cells use CRC-FEED.  Every remaining byte uses the native
+\  CRC-FEED-BYTE instruction, so no padding or software state transition
+\  is needed.  CRC-FINAL@ returns the finalized result atomically.
 \
 \  Not reentrant.  One CRC computation at a time.
 \ =================================================================
@@ -74,186 +73,95 @@ CREATE _CRC-HEX
     0x0F AND _CRC-HEX + C@ ;
 
 \ =====================================================================
-\  Software per-byte CRC (MSB-first, bit-by-bit)
-\ =====================================================================
-\  Used for trailing 1–7 bytes that can't go through the 8-byte
-\  hardware CRC-FEED path.
-\
-\  Algorithm per byte:
-\    crc ← crc XOR (byte << (width − 8))
-\    repeat 8:
-\      if top bit set: crc ← (crc << 1) XOR polynomial
-\      else:           crc ← crc << 1
-\      crc ← crc AND width-mask
-
-\ _CRC32-SW1 ( crc byte -- crc' )  CRC-32, poly 0x04C11DB7
-: _CRC32-SW1  ( crc byte -- crc' )
-    24 LSHIFT XOR
-    8 0 DO
-        DUP 0x80000000 AND IF
-            1 LSHIFT 0x04C11DB7 XOR
-        ELSE
-            1 LSHIFT
-        THEN
-        0xFFFFFFFF AND
-    LOOP ;
-
-\ _CRC32C-SW1 ( crc byte -- crc' )  CRC-32C, poly 0x1EDC6F41
-: _CRC32C-SW1  ( crc byte -- crc' )
-    24 LSHIFT XOR
-    8 0 DO
-        DUP 0x80000000 AND IF
-            1 LSHIFT 0x1EDC6F41 XOR
-        ELSE
-            1 LSHIFT
-        THEN
-        0xFFFFFFFF AND
-    LOOP ;
-
-\ _CRC64-SW1 ( crc byte -- crc' )  CRC-64-ECMA, poly 0x42F0E1EBA9EA3693
-: _CRC64-SW1  ( crc byte -- crc' )
-    56 LSHIFT XOR
-    8 0 DO
-        DUP 0< IF
-            1 LSHIFT 0x42F0E1EBA9EA3693 XOR
-        ELSE
-            1 LSHIFT
-        THEN
-    LOOP ;
-
-\ =====================================================================
-\  Internal variables
+\  Hardware buffer feed
 \ =====================================================================
 
-VARIABLE _CRC-ADDR     \ buffer address for tail / streaming loops
-VARIABLE _CRC-REM      \ remaining byte count
-VARIABLE _CRC-SREG     \ software CRC register (streaming API)
-
-\ =====================================================================
-\  Hardware bulk feeding
-\ =====================================================================
-
-\ _CRC-FEED-BULK ( addr len -- addr' rem )
-\   Feed full 8-byte chunks to hardware CRC accelerator via @/CRC-FEED.
-\   Returns updated address and remaining byte count (0–7).
-: _CRC-FEED-BULK  ( addr len -- addr' rem )
+\ _CRC-FEED-BUFFER ( addr len -- )
+\   Feed complete 8-byte cells through CRC.Q, then feed the exact 0–7-byte
+\   remainder through CRC.B.  The byte path avoids implicit zero padding.
+: _CRC-FEED-BUFFER  ( addr len -- )
+    DUP 0< IF 2DROP -24 THROW THEN
     BEGIN DUP 8 >= WHILE
         OVER @ CRC-FEED
         SWAP 8 + SWAP 8 -
-    REPEAT ;
-
-\ =====================================================================
-\  Tail byte processing (software, reads/writes HW register)
-\ =====================================================================
-\  After hardware has processed full 8-byte chunks, these words
-\  handle the remaining 0–7 bytes in software.  They read the hw
-\  CRC register (CRC@), process bytes via per-byte software words,
-\  and write the result back via CRC-INIT! for finalization.
-
-: _CRC32-TAIL  ( addr rem -- )
-    DUP 0= IF 2DROP EXIT THEN
-    _CRC-REM ! _CRC-ADDR !
-    CRC@
-    _CRC-REM @ 0 DO
-        _CRC-ADDR @ I + C@  _CRC32-SW1
+    REPEAT
+    0 ?DO
+        DUP C@ CRC-FEED-BYTE
+        1+
     LOOP
-    CRC-INIT! ;
-
-: _CRC32C-TAIL  ( addr rem -- )
-    DUP 0= IF 2DROP EXIT THEN
-    _CRC-REM ! _CRC-ADDR !
-    CRC@
-    _CRC-REM @ 0 DO
-        _CRC-ADDR @ I + C@  _CRC32C-SW1
-    LOOP
-    CRC-INIT! ;
-
-: _CRC64-TAIL  ( addr rem -- )
-    DUP 0= IF 2DROP EXIT THEN
-    _CRC-REM ! _CRC-ADDR !
-    CRC@
-    _CRC-REM @ 0 DO
-        _CRC-ADDR @ I + C@  _CRC64-SW1
-    LOOP
-    CRC-INIT! ;
+    DROP ;
 
 \ =====================================================================
-\  One-shot API  (hardware bulk + software tail)
+\  One-shot API
 \ =====================================================================
 
-\ CRC32 ( data len -- crc )  CRC-32 (ISO 3309 / ITU-T V.42).
+\ CRC32 ( data len -- crc )  MSB-first CRC-32/BZIP2 parameters.
 : CRC32  ( data len -- crc )
     CRC-POLY-CRC32 CRC-POLY!
     CRC32-INIT-VAL CRC-INIT!
-    _CRC-FEED-BULK  _CRC32-TAIL
-    CRC-FINAL CRC@ ;
+    _CRC-FEED-BUFFER
+    CRC-FINAL@ ;
 
-\ CRC32C ( data len -- crc )  CRC-32C (Castagnoli / iSCSI).
+\ CRC32C ( data len -- crc )  MSB-first, non-reflected Castagnoli.
 : CRC32C  ( data len -- crc )
     CRC-POLY-CRC32C CRC-POLY!
     CRC32-INIT-VAL CRC-INIT!
-    _CRC-FEED-BULK  _CRC32C-TAIL
-    CRC-FINAL CRC@ ;
+    _CRC-FEED-BUFFER
+    CRC-FINAL@ ;
 
-\ CRC64 ( data len -- crc )  CRC-64-ECMA-182.
+\ CRC64 ( data len -- crc )  CRC-64/WE parameters (ECMA polynomial).
 : CRC64  ( data len -- crc )
     CRC-POLY-CRC64 CRC-POLY!
     CRC64-INIT-VAL CRC-INIT!
-    _CRC-FEED-BULK  _CRC64-TAIL
-    CRC-FINAL CRC@ ;
+    _CRC-FEED-BUFFER
+    CRC-FINAL@ ;
 
 \ =====================================================================
-\  Streaming API  —  BEGIN / ADD / END  (pure software)
+\  Streaming API  —  BEGIN / ADD / END
 \ =====================================================================
-\  Software byte-by-byte processing guarantees byte-exact results
-\  regardless of how data is split across multiple ADD calls.
+\  Each ADD feeds its complete cells and exact byte remainder directly to
+\  the accelerator.  Fragment boundaries therefore do not affect results.
 
-: CRC32-BEGIN  ( -- )   CRC32-INIT-VAL _CRC-SREG ! ;
+: CRC32-BEGIN  ( -- )
+    CRC-POLY-CRC32 CRC-POLY!
+    CRC32-INIT-VAL CRC-INIT! ;
 
 : CRC32-ADD  ( addr len -- )
-    DUP 0= IF 2DROP EXIT THEN
-    SWAP _CRC-ADDR !  _CRC-REM !
-    _CRC-REM @ 0 DO
-        _CRC-SREG @  _CRC-ADDR @ I + C@  _CRC32-SW1  _CRC-SREG !
-    LOOP ;
+    _CRC-FEED-BUFFER ;
 
 : CRC32-END  ( -- crc )
-    _CRC-SREG @ CRC32-INIT-VAL XOR ;
+    CRC-FINAL@ ;
 
-: CRC32C-BEGIN  ( -- )  CRC32-INIT-VAL _CRC-SREG ! ;
+: CRC32C-BEGIN  ( -- )
+    CRC-POLY-CRC32C CRC-POLY!
+    CRC32-INIT-VAL CRC-INIT! ;
 
 : CRC32C-ADD  ( addr len -- )
-    DUP 0= IF 2DROP EXIT THEN
-    SWAP _CRC-ADDR !  _CRC-REM !
-    _CRC-REM @ 0 DO
-        _CRC-SREG @  _CRC-ADDR @ I + C@  _CRC32C-SW1  _CRC-SREG !
-    LOOP ;
+    _CRC-FEED-BUFFER ;
 
 : CRC32C-END  ( -- crc )
-    _CRC-SREG @ CRC32-INIT-VAL XOR ;
+    CRC-FINAL@ ;
 
-: CRC64-BEGIN  ( -- )   CRC64-INIT-VAL _CRC-SREG ! ;
+: CRC64-BEGIN  ( -- )
+    CRC-POLY-CRC64 CRC-POLY!
+    CRC64-INIT-VAL CRC-INIT! ;
 
 : CRC64-ADD  ( addr len -- )
-    DUP 0= IF 2DROP EXIT THEN
-    SWAP _CRC-ADDR !  _CRC-REM !
-    _CRC-REM @ 0 DO
-        _CRC-SREG @  _CRC-ADDR @ I + C@  _CRC64-SW1  _CRC-SREG !
-    LOOP ;
+    _CRC-FEED-BUFFER ;
 
 : CRC64-END  ( -- crc )
-    _CRC-SREG @ CRC64-INIT-VAL XOR ;
+    CRC-FINAL@ ;
 
 \ =====================================================================
-\  Incremental update API  (hardware bulk + software tail)
+\  Incremental update API
 \ =====================================================================
 \  CRC32-UPDATE ( crc data len -- crc' )
 \    Continue a CRC from a previous (finalized) result.  Pass 0 as
 \    crc for the first chunk.  Example:
 \      0 buf1 n1 CRC32-UPDATE  buf2 n2 CRC32-UPDATE  ( -- final-crc )
 \
-\  Internally: XOR crc with init-val to un-finalize, feed data
-\  through hardware bulk + software tail, then re-finalize.
+\  Internally: XOR crc with xorout to recover the raw accumulator, restore
+\  it through CRC-INIT!, feed the next fragment, then finalize atomically.
 
 : CRC32-UPDATE  ( crc data len -- crc' )
     >R >R
@@ -261,8 +169,8 @@ VARIABLE _CRC-SREG     \ software CRC register (streaming API)
     CRC-POLY-CRC32 CRC-POLY!
     CRC-INIT!
     R> R>
-    _CRC-FEED-BULK  _CRC32-TAIL
-    CRC-FINAL CRC@ ;
+    _CRC-FEED-BUFFER
+    CRC-FINAL@ ;
 
 : CRC32C-UPDATE  ( crc data len -- crc' )
     >R >R
@@ -270,8 +178,8 @@ VARIABLE _CRC-SREG     \ software CRC register (streaming API)
     CRC-POLY-CRC32C CRC-POLY!
     CRC-INIT!
     R> R>
-    _CRC-FEED-BULK  _CRC32C-TAIL
-    CRC-FINAL CRC@ ;
+    _CRC-FEED-BUFFER
+    CRC-FINAL@ ;
 
 : CRC64-UPDATE  ( crc data len -- crc' )
     >R >R
@@ -279,8 +187,8 @@ VARIABLE _CRC-SREG     \ software CRC register (streaming API)
     CRC-POLY-CRC64 CRC-POLY!
     CRC-INIT!
     R> R>
-    _CRC-FEED-BULK  _CRC64-TAIL
-    CRC-FINAL CRC@ ;
+    _CRC-FEED-BUFFER
+    CRC-FINAL@ ;
 
 \ =====================================================================
 \  Hex conversion
@@ -320,7 +228,6 @@ VARIABLE _CRC-HDST
 \  Display
 \ =====================================================================
 
-\ CRC32-. ( crc -- )  Print CRC-32 as 8 lowercase hex chars.
 : CRC32-.  ( crc -- )
     4 0 DO
         DUP 24 I 8 * - RSHIFT 0xFF AND
@@ -343,6 +250,14 @@ VARIABLE _CRC-HDST
 REQUIRE ../concurrency/guard.f
 GUARD _crc-guard
 
+0 CONSTANT _CRC-STREAM-NONE
+1 CONSTANT _CRC-STREAM-CRC32
+2 CONSTANT _CRC-STREAM-CRC32C
+3 CONSTANT _CRC-STREAM-CRC64
+VARIABLE _CRC-STREAM-MODE
+VARIABLE _CRC-BEGIN-MODE
+_CRC-STREAM-NONE _CRC-STREAM-MODE !
+
 ' CRC32           CONSTANT _crc32-xt
 ' CRC32C          CONSTANT _crc32c-xt
 ' CRC64           CONSTANT _crc64-xt
@@ -363,44 +278,85 @@ GUARD _crc-guard
 ' CRC32-.         CONSTANT _crc32-dot-xt
 ' CRC64-.         CONSTANT _crc64-dot-xt
 
-: CRC32           _crc32-xt _crc-guard WITH-GUARD ;
-: CRC32C          _crc32c-xt _crc-guard WITH-GUARD ;
-: CRC64           _crc64-xt _crc-guard WITH-GUARD ;
-: CRC32-UPDATE    _crc32-update-xt _crc-guard WITH-GUARD ;
-: CRC32C-UPDATE   _crc32c-update-xt _crc-guard WITH-GUARD ;
-: CRC64-UPDATE    _crc64-update-xt _crc-guard WITH-GUARD ;
+\ A guarded hardware call that throws may already own the shared micro-core
+\ CRC transaction.  The same owner can always execute FIN, so unwind by
+\ finalizing and discarding the partial accumulator before releasing the
+\ task guard.  If FIN itself faults, preserve and rethrow the original error;
+\ the raw hardware contract then requires same-owner recovery.
+: _CRC-FINAL-DISCARD  ( -- ) CRC-FINAL@ DROP ;
+: _CRC-HARDWARE-RELEASE  ( -- )
+    ['] _CRC-FINAL-DISCARD CATCH DROP ;
+
+: _CRC-WITH-HARDWARE-GUARD  ( ... xt -- ... )
+    _crc-guard GUARD-ACQUIRE
+    _CRC-STREAM-MODE @ _CRC-STREAM-NONE <> IF
+        _crc-guard GUARD-RELEASE
+        -258 THROW
+    THEN
+    CATCH
+    DUP IF
+        >R _CRC-HARDWARE-RELEASE R>
+    THEN
+    _crc-guard GUARD-RELEASE
+    DUP IF THROW THEN
+    DROP ;
+
+: _CRC-STREAM-BEGIN  ( mode xt -- )
+    _crc-guard GUARD-ACQUIRE
+    _CRC-STREAM-MODE @ _CRC-STREAM-NONE <> IF
+        _crc-guard GUARD-RELEASE
+        2DROP -258 THROW
+    THEN
+    SWAP _CRC-BEGIN-MODE !
+    CATCH ?DUP IF
+        >R _CRC-HARDWARE-RELEASE
+        _CRC-STREAM-NONE _CRC-STREAM-MODE !
+        _crc-guard GUARD-RELEASE
+        R> THROW
+    THEN
+    _CRC-BEGIN-MODE @ _CRC-STREAM-MODE ! ;
+
+: _CRC-STREAM-ADD  ( addr len mode xt -- )
+    _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
+    OVER _CRC-STREAM-MODE @ <> IF 2DROP 2DROP -258 THROW THEN
+    SWAP DROP
+    CATCH ?DUP IF
+        >R _CRC-HARDWARE-RELEASE
+        _CRC-STREAM-NONE _CRC-STREAM-MODE !
+        _crc-guard GUARD-RELEASE
+        R> THROW
+    THEN ;
+
+: _CRC-STREAM-END  ( mode xt -- crc )
+    _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
+    OVER _CRC-STREAM-MODE @ <> IF 2DROP -258 THROW THEN
+    SWAP DROP
+    CATCH
+    DUP IF
+        >R _CRC-HARDWARE-RELEASE R>
+    THEN
+    _CRC-STREAM-NONE _CRC-STREAM-MODE !
+    _crc-guard GUARD-RELEASE
+    DUP IF THROW THEN
+    DROP ;
+
+: CRC32           _crc32-xt _CRC-WITH-HARDWARE-GUARD ;
+: CRC32C          _crc32c-xt _CRC-WITH-HARDWARE-GUARD ;
+: CRC64           _crc64-xt _CRC-WITH-HARDWARE-GUARD ;
+: CRC32-UPDATE    _crc32-update-xt _CRC-WITH-HARDWARE-GUARD ;
+: CRC32C-UPDATE   _crc32c-update-xt _CRC-WITH-HARDWARE-GUARD ;
+: CRC64-UPDATE    _crc64-update-xt _CRC-WITH-HARDWARE-GUARD ;
 : CRC32->HEX      _crc32-to-hex-xt _crc-guard WITH-GUARD ;
 : CRC64->HEX      _crc64-to-hex-xt _crc-guard WITH-GUARD ;
 : CRC32-.         _crc32-dot-xt _crc-guard WITH-GUARD ;
 : CRC64-.         _crc64-dot-xt _crc-guard WITH-GUARD ;
-: CRC32-BEGIN
-  _crc-guard GUARD-ACQUIRE
-  _crc32-begin-xt CATCH IF _crc-guard GUARD-RELEASE THROW THEN ;
-: CRC32C-BEGIN
-  _crc-guard GUARD-ACQUIRE
-  _crc32c-begin-xt CATCH IF _crc-guard GUARD-RELEASE THROW THEN ;
-: CRC64-BEGIN
-  _crc-guard GUARD-ACQUIRE
-  _crc64-begin-xt CATCH IF _crc-guard GUARD-RELEASE THROW THEN ;
-: CRC32-ADD
-  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
-  _crc32-add-xt EXECUTE ;
-: CRC32C-ADD
-  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
-  _crc32c-add-xt EXECUTE ;
-: CRC64-ADD
-  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
-  _crc64-add-xt EXECUTE ;
-: CRC32-END
-  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
-  _crc32-end-xt CATCH _crc-guard GUARD-RELEASE
-  IF THROW THEN ;
-: CRC32C-END
-  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
-  _crc32c-end-xt CATCH _crc-guard GUARD-RELEASE
-  IF THROW THEN ;
-: CRC64-END
-  _crc-guard GUARD-MINE? 0= IF -258 THROW THEN
-  _crc64-end-xt CATCH _crc-guard GUARD-RELEASE
-  IF THROW THEN ;
+: CRC32-BEGIN   _CRC-STREAM-CRC32 _crc32-begin-xt _CRC-STREAM-BEGIN ;
+: CRC32C-BEGIN  _CRC-STREAM-CRC32C _crc32c-begin-xt _CRC-STREAM-BEGIN ;
+: CRC64-BEGIN   _CRC-STREAM-CRC64 _crc64-begin-xt _CRC-STREAM-BEGIN ;
+: CRC32-ADD     _CRC-STREAM-CRC32 _crc32-add-xt _CRC-STREAM-ADD ;
+: CRC32C-ADD    _CRC-STREAM-CRC32C _crc32c-add-xt _CRC-STREAM-ADD ;
+: CRC64-ADD     _CRC-STREAM-CRC64 _crc64-add-xt _CRC-STREAM-ADD ;
+: CRC32-END     _CRC-STREAM-CRC32 _crc32-end-xt _CRC-STREAM-END ;
+: CRC32C-END    _CRC-STREAM-CRC32C _crc32c-end-xt _CRC-STREAM-END ;
+: CRC64-END     _CRC-STREAM-CRC64 _crc64-end-xt _CRC-STREAM-END ;
 [THEN] [THEN]

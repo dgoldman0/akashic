@@ -13,6 +13,7 @@
 \
 \  Public API:
 \    CW-WIDTH    ( cp -- n )    Cell width: 0, 1, or 2
+\    CW-CELL-CP  ( cp -- cp' )  Project to one isolated terminal cell
 \    CW-SWIDTH   ( addr u -- n ) String display width in cells
 \ =================================================================
 
@@ -529,6 +530,19 @@ VARIABLE _CB-LO   VARIABLE _CB-HI   VARIABLE _CB-MID
     \ Default: 1 cell
     DROP 1 ;
 
+\ CW-CELL-CP ( cp -- cp' )
+\   Project a decoded codepoint onto the screen buffer's representable cell
+\   model.  The buffer/flusher has no continuation or grapheme-composition
+\   state, so only an isolated, terminal-safe width-1 codepoint can be emitted
+\   faithfully.  Controls, bidi controls, nonspacing/joining codepoints, and
+\   wide codepoints become one visible U+FFFD cell.
+: CW-CELL-CP  ( cp -- cp' )
+    DUP 0< IF DROP UTF8-REPLACEMENT EXIT THEN
+    DUP 0x10FFFF > IF DROP UTF8-REPLACEMENT EXIT THEN
+    DUP 0xD800 0xE000 WITHIN IF DROP UTF8-REPLACEMENT EXIT THEN
+    UTF8-DISPLAY-CP
+    DUP CW-WIDTH 1 <> IF DROP UTF8-REPLACEMENT THEN ;
+
 \ CW-SWIDTH ( addr u -- n )
 \   Display width of a UTF-8 string in terminal cells.
 : CW-SWIDTH  ( addr u -- n )
@@ -548,8 +562,10 @@ REQUIRE ../concurrency/guard.f
 GUARD _cw-guard
 
 ' CW-WIDTH   CONSTANT _cw-width-xt
+' CW-CELL-CP CONSTANT _cw-cell-cp-xt
 ' CW-SWIDTH  CONSTANT _cw-swidth-xt
 
 : CW-WIDTH   _cw-width-xt  _cw-guard WITH-GUARD ;
+: CW-CELL-CP _cw-cell-cp-xt _cw-guard WITH-GUARD ;
 : CW-SWIDTH  _cw-swidth-xt _cw-guard WITH-GUARD ;
 [THEN] [THEN]

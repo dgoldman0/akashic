@@ -1,15 +1,18 @@
 \ =====================================================================
 \ feed-model.f - bounded owned app.bsky feed response model
 \ =====================================================================
-\ Decodes the subset of app.bsky.feed.defs#feedViewPost required by the
-\ text-first Streams UI.  Every retained string is copied and unescaped into
-\ caller-owned storage; no pointer into the HTTP response survives decoding.
+\ Decodes and validates the bounded subset of
+\ app.bsky.feed.defs#feedViewPost retained by the text-first Streams UI.
+\ This is not a complete Lexicon, label, or moderation validator.  Every
+\ retained string is copied and unescaped into caller-owned storage; no
+\ pointer into the HTTP response survives decoding.
 \ =====================================================================
 
 PROVIDED akashic-atproto-feed-model
 
 REQUIRE ../utils/json.f
 REQUIRE ../utils/string.f
+REQUIRE ../text/utf8.f
 
 0 CONSTANT BFM-S-OK
 1 CONSTANT BFM-S-INVALID
@@ -17,15 +20,19 @@ REQUIRE ../utils/string.f
 3 CONSTANT BFM-S-MISSING
 4 CONSTANT BFM-S-TYPE
 
+\ This is a deliberately bounded Bluesky timeline-page adapter, not a
+\ provider-neutral social model.  The limits cover the app.bsky lexical
+\ bounds retained here while keeping each decoded page finite.
 8 CONSTANT BFM-MAX-ITEMS
-128 CONSTANT BFM-CURSOR-CAP
-160 CONSTANT BFM-URI-CAP
-100 CONSTANT BFM-CID-CAP
-128 CONSTANT BFM-DID-CAP
-64 CONSTANT BFM-HANDLE-CAP
-96 CONSTANT BFM-DISPLAY-CAP
-300 CONSTANT BFM-TEXT-CAP
-40 CONSTANT BFM-CREATED-CAP
+1048576 CONSTANT BFM-DOCUMENT-CAP
+4096 CONSTANT BFM-CURSOR-CAP
+3072 CONSTANT BFM-URI-CAP
+128 CONSTANT BFM-CID-CAP
+2048 CONSTANT BFM-DID-CAP
+256 CONSTANT BFM-HANDLE-CAP
+640 CONSTANT BFM-DISPLAY-CAP
+3000 CONSTANT BFM-TEXT-CAP
+64 CONSTANT BFM-DATETIME-CAP
 
 0 CONSTANT _BFI-FLAGS
 8 CONSTANT _BFI-LIKES
@@ -33,34 +40,50 @@ REQUIRE ../utils/string.f
 24 CONSTANT _BFI-REPLIES
 32 CONSTANT _BFI-URI-U
 40 CONSTANT _BFI-URI
-200 CONSTANT _BFI-CID-U
-208 CONSTANT _BFI-CID
-312 CONSTANT _BFI-DID-U
-320 CONSTANT _BFI-DID
-448 CONSTANT _BFI-HANDLE-U
-456 CONSTANT _BFI-HANDLE
-520 CONSTANT _BFI-DISPLAY-U
-528 CONSTANT _BFI-DISPLAY
-624 CONSTANT _BFI-TEXT-U
-632 CONSTANT _BFI-TEXT
-936 CONSTANT _BFI-CREATED-U
-944 CONSTANT _BFI-CREATED
-984 CONSTANT BFM-ITEM-SIZE
+_BFI-URI BFM-URI-CAP + CONSTANT _BFI-CID-U
+_BFI-CID-U 8 + CONSTANT _BFI-CID
+_BFI-CID BFM-CID-CAP + CONSTANT _BFI-DID-U
+_BFI-DID-U 8 + CONSTANT _BFI-DID
+_BFI-DID BFM-DID-CAP + CONSTANT _BFI-HANDLE-U
+_BFI-HANDLE-U 8 + CONSTANT _BFI-HANDLE
+_BFI-HANDLE BFM-HANDLE-CAP + CONSTANT _BFI-DISPLAY-U
+_BFI-DISPLAY-U 8 + CONSTANT _BFI-DISPLAY
+_BFI-DISPLAY BFM-DISPLAY-CAP + CONSTANT _BFI-TEXT-U
+_BFI-TEXT-U 8 + CONSTANT _BFI-TEXT
+_BFI-TEXT BFM-TEXT-CAP + CONSTANT _BFI-CREATED-U
+_BFI-CREATED-U 8 + CONSTANT _BFI-CREATED
+_BFI-CREATED BFM-DATETIME-CAP + CONSTANT _BFI-INDEXED-U
+_BFI-INDEXED-U 8 + CONSTANT _BFI-INDEXED
+_BFI-INDEXED BFM-DATETIME-CAP + CONSTANT _BFI-ROOT-URI-U
+_BFI-ROOT-URI-U 8 + CONSTANT _BFI-ROOT-URI
+_BFI-ROOT-URI BFM-URI-CAP + CONSTANT _BFI-PARENT-URI-U
+_BFI-PARENT-URI-U 8 + CONSTANT _BFI-PARENT-URI
+_BFI-PARENT-URI BFM-URI-CAP + CONSTANT BFM-ITEM-SIZE
 
 1 CONSTANT BFM-F-REPLY
 2 CONSTANT BFM-F-REPOST
+4 CONSTANT BFM-F-PIN
 
 0 CONSTANT _BFF-COUNT
 8 CONSTANT _BFF-CURSOR-U
 16 CONSTANT _BFF-CURSOR
-144 CONSTANT _BFF-ITEMS
+_BFF-CURSOR BFM-CURSOR-CAP + CONSTANT _BFF-ITEMS
 _BFF-ITEMS BFM-MAX-ITEMS BFM-ITEM-SIZE * + CONSTANT BFM-FEED-SIZE
 
 : BFM.FEED.COUNT  ( feed -- a ) _BFF-COUNT + ;
 : BFM.FEED.CURSOR-U  ( feed -- a ) _BFF-CURSOR-U + ;
 : BFM.FEED.CURSOR  ( feed -- a ) _BFF-CURSOR + ;
-: BFM.FEED.ITEM  ( index feed -- item )
+: _BFM-FEED-ITEM  ( index feed -- item )
     SWAP BFM-ITEM-SIZE * _BFF-ITEMS + + ;
+
+: BFM.FEED.ITEM  ( index feed -- item | 0 )
+    >R
+    DUP 0< OVER BFM-MAX-ITEMS >= OR IF DROP R> DROP 0 EXIT THEN
+    R@ BFM.FEED.COUNT @ DUP 0< OVER BFM-MAX-ITEMS > OR IF
+        DROP DROP R> DROP 0 EXIT
+    THEN
+    OVER <= IF DROP R> DROP 0 EXIT THEN
+    R> _BFM-FEED-ITEM ;
 
 : BFM.ITEM.FLAGS  ( item -- a ) _BFI-FLAGS + ;
 : BFM.ITEM.LIKES  ( item -- a ) _BFI-LIKES + ;
@@ -73,6 +96,9 @@ _BFF-ITEMS BFM-MAX-ITEMS BFM-ITEM-SIZE * + CONSTANT BFM-FEED-SIZE
 : BFM.ITEM.DISPLAY  ( item -- a u ) DUP _BFI-DISPLAY + SWAP _BFI-DISPLAY-U + @ ;
 : BFM.ITEM.TEXT  ( item -- a u ) DUP _BFI-TEXT + SWAP _BFI-TEXT-U + @ ;
 : BFM.ITEM.CREATED  ( item -- a u ) DUP _BFI-CREATED + SWAP _BFI-CREATED-U + @ ;
+: BFM.ITEM.INDEXED  ( item -- a u ) DUP _BFI-INDEXED + SWAP _BFI-INDEXED-U + @ ;
+: BFM.ITEM.ROOT-URI  ( item -- a u ) DUP _BFI-ROOT-URI + SWAP _BFI-ROOT-URI-U + @ ;
+: BFM.ITEM.PARENT-URI  ( item -- a u ) DUP _BFI-PARENT-URI + SWAP _BFI-PARENT-URI-U + @ ;
 
 : BFM-FEED-INIT  ( feed -- ) BFM-FEED-SIZE 0 FILL ;
 
@@ -98,13 +124,30 @@ VARIABLE _BFM-SD
 VARIABLE _BFM-SMAX
 VARIABLE _BFM-SLEN
 
+: _BFM-UNESCAPE-CALL  ( -- len ior )
+    _BFM-SA @ _BFM-SU @ _BFM-SD @ _BFM-SMAX @
+    JSON-UNESCAPE-CHECKED ;
+
 : _BFM-COPY-STRING  ( value-a value-u destination max length-cell -- status )
     _BFM-SLEN ! _BFM-SMAX ! _BFM-SD ! _BFM-SU ! _BFM-SA !
+    0 _BFM-SLEN @ !
     _BFM-SA @ _BFM-SU @ JSON-STRING? 0= IF BFM-S-TYPE EXIT THEN
-    _BFM-SA @ _BFM-SU @ JSON-GET-STRING
-    _BFM-SD @ _BFM-SMAX @ JSON-UNESCAPE
-    JSON-OK? 0= IF DROP BFM-S-CAPACITY EXIT THEN
+    _BFM-SA @ _BFM-SU @ JSON-GET-STRING _BFM-SU ! _BFM-SA !
+    ['] _BFM-UNESCAPE-CALL CATCH ?DUP IF
+        DROP BFM-S-CAPACITY EXIT
+    THEN
+    ?DUP IF
+        SWAP DROP JSON-E-OVERFLOW = IF
+            BFM-S-CAPACITY
+        ELSE
+            BFM-S-INVALID
+        THEN
+        EXIT
+    THEN
     DUP _BFM-SMAX @ > IF DROP BFM-S-CAPACITY EXIT THEN
+    DUP _BFM-SD @ SWAP UTF8-VALID? 0= IF
+        DROP BFM-S-INVALID EXIT
+    THEN
     _BFM-SLEN @ ! BFM-S-OK ;
 
 VARIABLE _BFM-ROA
@@ -147,6 +190,23 @@ VARIABLE _BFM-NOU
 VARIABLE _BFM-NKA
 VARIABLE _BFM-NKU
 VARIABLE _BFM-ND
+VARIABLE _BFM-NACC
+VARIABLE _BFM-NDIGIT
+
+: _BFM-PARSE-UINT  ( addr len -- n status )
+    DUP 0= IF 2DROP 0 BFM-S-INVALID EXIT THEN
+    0 _BFM-NACC !
+    0 ?DO
+        DUP I + C@ DUP 48 < OVER 57 > OR IF
+            2DROP 0 BFM-S-INVALID UNLOOP EXIT
+        THEN
+        48 - _BFM-NDIGIT !
+        _BFM-NACC @ 0x7FFFFFFFFFFFFFFF _BFM-NDIGIT @ - 10 / > IF
+            DROP 0 BFM-S-CAPACITY UNLOOP EXIT
+        THEN
+        _BFM-NACC @ 10 * _BFM-NDIGIT @ + _BFM-NACC !
+    LOOP
+    DROP _BFM-NACC @ BFM-S-OK ;
 
 : _BFM-OPTIONAL-NUMBER  ( object-a object-u key-a key-u destination -- status )
     _BFM-ND ! _BFM-NKU ! _BFM-NKA ! _BFM-NOU ! _BFM-NOA !
@@ -155,8 +215,8 @@ VARIABLE _BFM-ND
     DUP IF >R 2DROP DROP R> EXIT THEN DROP
     0= IF 2DROP BFM-S-OK EXIT THEN
     2DUP JSON-NUMBER? 0= IF 2DROP BFM-S-TYPE EXIT THEN
-    JSON-GET-NUMBER DUP 0< IF DROP BFM-S-INVALID EXIT THEN
-    _BFM-ND @ ! BFM-S-OK ;
+    JSON-VALUE-SPAN _BFM-PARSE-UINT DUP IF NIP EXIT THEN
+    DROP _BFM-ND @ ! BFM-S-OK ;
 
 VARIABLE _BFM-IA
 VARIABLE _BFM-IU
@@ -173,6 +233,211 @@ VARIABLE _BFM-REC-U
     0= IF 2DROP 0 0 BFM-S-MISSING EXIT THEN
     2DUP JSON-OBJECT? 0= IF 2DROP 0 0 BFM-S-TYPE EXIT THEN
     BFM-S-OK ;
+
+VARIABLE _BFM-L-OA
+VARIABLE _BFM-L-OU
+VARIABLE _BFM-L-KA
+VARIABLE _BFM-L-KU
+VARIABLE _BFM-L-EA
+VARIABLE _BFM-L-EU
+
+128 CONSTANT _BFM-LITERAL-CAP
+CREATE _BFM-LITERAL-BUF _BFM-LITERAL-CAP ALLOT
+VARIABLE _BFM-LITERAL-U
+
+: _BFM-COPY-LITERAL  ( value-a value-u -- status )
+    _BFM-LITERAL-BUF _BFM-LITERAL-CAP _BFM-LITERAL-U
+    _BFM-COPY-STRING ;
+
+: _BFM-REQUIRED-LITERAL
+    ( object-a object-u key-a key-u expected-a expected-u -- status )
+    _BFM-L-EU ! _BFM-L-EA ! _BFM-L-KU ! _BFM-L-KA !
+    _BFM-L-OU ! _BFM-L-OA !
+    _BFM-L-OA @ _BFM-L-OU @ _BFM-L-KA @ _BFM-L-KU @ _BFM-FIELD
+    DUP IF >R 2DROP DROP R> EXIT THEN DROP
+    0= IF 2DROP BFM-S-MISSING EXIT THEN
+    _BFM-COPY-LITERAL ?DUP IF EXIT THEN
+    _BFM-LITERAL-BUF _BFM-LITERAL-U @
+    _BFM-L-EA @ _BFM-L-EU @ STR-STR=
+    IF BFM-S-OK ELSE BFM-S-INVALID THEN ;
+
+VARIABLE _BFM-ID-A
+VARIABLE _BFM-ID-U
+
+: _BFM-NO-CONTROL?  ( addr len -- flag )
+    _BFM-ID-U ! _BFM-ID-A !
+    _BFM-ID-U @ 0= IF 0 EXIT THEN
+    _BFM-ID-U @ 0 ?DO
+        _BFM-ID-A @ I + C@ DUP 32 <= SWAP 127 = OR IF
+            0 UNLOOP EXIT
+        THEN
+    LOOP
+    -1 ;
+
+VARIABLE _BFM-PU-A
+VARIABLE _BFM-PU-U
+VARIABLE _BFM-PU-SLASH
+
+VARIABLE _BFM-DID-A
+VARIABLE _BFM-DID-U
+VARIABLE _BFM-DID-METHOD-END
+
+: _BFM-DID-ID-CHAR?  ( char -- flag )
+    DUP [CHAR] A >= OVER [CHAR] Z <= AND >R
+    DUP [CHAR] a >= OVER [CHAR] z <= AND R> OR >R
+    DUP [CHAR] 0 >= OVER [CHAR] 9 <= AND R> OR >R
+    DUP [CHAR] . = OVER [CHAR] _ = OR
+    OVER [CHAR] : = OR OVER [CHAR] % = OR
+    SWAP [CHAR] - = OR R> OR ;
+
+: _BFM-DID-END-CHAR?  ( char -- flag )
+    DUP [CHAR] A >= OVER [CHAR] Z <= AND >R
+    DUP [CHAR] a >= OVER [CHAR] z <= AND R> OR >R
+    DUP [CHAR] 0 >= OVER [CHAR] 9 <= AND R> OR >R
+    DUP [CHAR] . = OVER [CHAR] _ = OR
+    SWAP [CHAR] - = OR R> OR ;
+
+\ Generic Lexicon DID syntax.  Method support/resolution is a separate
+\ application concern; feed identity only needs a normalized syntactic DID.
+: _BFM-DID?  ( addr len -- flag )
+    _BFM-DID-U ! _BFM-DID-A !
+    _BFM-DID-U @ 7 < _BFM-DID-U @ BFM-DID-CAP > OR IF 0 EXIT THEN
+    _BFM-DID-A @ _BFM-DID-U @ S" did:" STR-STARTS? 0= IF 0 EXIT THEN
+    -1 _BFM-DID-METHOD-END !
+    _BFM-DID-U @ 4 ?DO
+        _BFM-DID-A @ I + C@ [CHAR] : = IF
+            I _BFM-DID-METHOD-END ! LEAVE
+        THEN
+    LOOP
+    _BFM-DID-METHOD-END @ 4 <= IF 0 EXIT THEN
+    _BFM-DID-METHOD-END @ 1+ _BFM-DID-U @ >= IF 0 EXIT THEN
+    _BFM-DID-METHOD-END @ 4 ?DO
+        _BFM-DID-A @ I + C@ DUP [CHAR] a < SWAP [CHAR] z > OR IF
+            0 UNLOOP EXIT
+        THEN
+    LOOP
+    _BFM-DID-U @ _BFM-DID-METHOD-END @ 1+ ?DO
+        _BFM-DID-A @ I + C@ _BFM-DID-ID-CHAR? 0= IF
+            0 UNLOOP EXIT
+        THEN
+    LOOP
+    _BFM-DID-A @ _BFM-DID-U @ 1- + C@ _BFM-DID-END-CHAR? ;
+
+: _BFM-TID-CHAR?  ( char -- flag )
+    DUP [CHAR] 2 >= OVER [CHAR] 7 <= AND >R
+    DUP [CHAR] a >= SWAP [CHAR] z <= AND R> OR ;
+
+: _BFM-TID?  ( addr len -- flag )
+    DUP 13 <> IF 2DROP 0 EXIT THEN
+    OVER C@ DUP [CHAR] 2 >= OVER [CHAR] 7 <= AND >R
+    DUP [CHAR] a >= SWAP [CHAR] j <= AND R> OR 0= IF 2DROP 0 EXIT THEN
+    13 1 ?DO
+        OVER I + C@ _BFM-TID-CHAR? 0= IF 2DROP 0 UNLOOP EXIT THEN
+    LOOP
+    2DROP -1 ;
+
+: _BFM-POST-URI?  ( addr len -- flag )
+    _BFM-PU-U ! _BFM-PU-A !
+    _BFM-PU-A @ _BFM-PU-U @ _BFM-NO-CONTROL? 0= IF 0 EXIT THEN
+    _BFM-PU-A @ _BFM-PU-U @ S" at://did:" STR-STARTS? 0= IF 0 EXIT THEN
+    \ at:// + a non-empty did: authority + collection delimiter + rkey.
+    _BFM-PU-U @ 31 < IF 0 EXIT THEN
+    -1 _BFM-PU-SLASH !
+    _BFM-PU-U @ 5 ?DO
+        _BFM-PU-A @ I + C@ 47 = IF I _BFM-PU-SLASH ! LEAVE THEN
+    LOOP
+    _BFM-PU-SLASH @ 10 < IF 0 EXIT THEN
+    _BFM-PU-A @ 5 + _BFM-PU-SLASH @ 5 - _BFM-DID? 0= IF 0 EXIT THEN
+    _BFM-PU-A @ _BFM-PU-SLASH @ +
+    _BFM-PU-U @ _BFM-PU-SLASH @ -
+    S" /app.bsky.feed.post/" STR-STARTS? 0= IF 0 EXIT THEN
+    _BFM-PU-SLASH @ 20 + _BFM-PU-U @ >= IF 0 EXIT THEN
+    _BFM-PU-A @ _BFM-PU-SLASH @ 20 + +
+    _BFM-PU-U @ _BFM-PU-SLASH @ 20 + - _BFM-TID? ;
+
+VARIABLE _BFM-AU-UA
+VARIABLE _BFM-AU-UU
+VARIABLE _BFM-AU-DA
+VARIABLE _BFM-AU-DU
+
+: _BFM-POST-URI-AUTHOR?  ( uri-a uri-u did-a did-u -- flag )
+    _BFM-AU-DU ! _BFM-AU-DA ! _BFM-AU-UU ! _BFM-AU-UA !
+    _BFM-AU-UA @ _BFM-AU-UU @ _BFM-POST-URI? 0= IF 0 EXIT THEN
+    _BFM-AU-DA @ _BFM-AU-DU @ _BFM-NO-CONTROL? 0= IF 0 EXIT THEN
+    _BFM-AU-DA @ _BFM-AU-DU @ S" did:" STR-STARTS? 0= IF 0 EXIT THEN
+    _BFM-AU-UU @ 5 _BFM-AU-DU @ + 20 + <= IF 0 EXIT THEN
+    _BFM-AU-UA @ 5 + _BFM-AU-DU @
+    _BFM-AU-DA @ _BFM-AU-DU @ STR-STR= 0= IF 0 EXIT THEN
+    _BFM-AU-UA @ 5 + _BFM-AU-DU @ +
+    _BFM-AU-UU @ 5 - _BFM-AU-DU @ -
+    S" /app.bsky.feed.post/" STR-STARTS? ;
+
+VARIABLE _BFM-RF-OA
+VARIABLE _BFM-RF-OU
+VARIABLE _BFM-RF-KA
+VARIABLE _BFM-RF-KU
+VARIABLE _BFM-RF-D
+VARIABLE _BFM-RF-MAX
+VARIABLE _BFM-RF-LEN
+VARIABLE _BFM-RF-A
+VARIABLE _BFM-RF-U
+
+: _BFM-REQUIRED-REF-URI
+    ( object-a object-u key-a key-u destination max length-cell -- status )
+    _BFM-RF-LEN ! _BFM-RF-MAX ! _BFM-RF-D !
+    _BFM-RF-KU ! _BFM-RF-KA ! _BFM-RF-OU ! _BFM-RF-OA !
+    _BFM-RF-OA @ _BFM-RF-OU @ _BFM-RF-KA @ _BFM-RF-KU @
+    _BFM-OBJECT-FIELD DUP IF >R 2DROP R> EXIT THEN
+    DROP _BFM-RF-U ! _BFM-RF-A !
+    _BFM-RF-A @ _BFM-RF-U @ S" uri"
+    _BFM-RF-D @ _BFM-RF-MAX @ _BFM-RF-LEN @
+    _BFM-REQUIRED-STRING ?DUP IF EXIT THEN
+    _BFM-RF-D @ _BFM-RF-LEN @ @ _BFM-POST-URI?
+    IF BFM-S-OK ELSE BFM-S-INVALID THEN ;
+
+VARIABLE _BFM-REPLY-A
+VARIABLE _BFM-REPLY-U
+VARIABLE _BFM-REASON-A
+VARIABLE _BFM-REASON-U
+
+: _BFM-DECODE-REPLY  ( item-json-a item-json-u item -- status )
+    _BFM-ITEM ! _BFM-IU ! _BFM-IA !
+    _BFM-IA @ _BFM-IU @ S" reply" _BFM-FIELD
+    DUP IF >R 2DROP DROP R> EXIT THEN DROP
+    0= IF 2DROP BFM-S-OK EXIT THEN
+    2DUP JSON-OBJECT? 0= IF 2DROP BFM-S-TYPE EXIT THEN
+    _BFM-REPLY-U ! _BFM-REPLY-A !
+    _BFM-REPLY-A @ _BFM-REPLY-U @ S" root"
+    _BFM-ITEM @ _BFI-ROOT-URI + BFM-URI-CAP
+    _BFM-ITEM @ _BFI-ROOT-URI-U +
+    _BFM-REQUIRED-REF-URI ?DUP IF EXIT THEN
+    _BFM-REPLY-A @ _BFM-REPLY-U @ S" parent"
+    _BFM-ITEM @ _BFI-PARENT-URI + BFM-URI-CAP
+    _BFM-ITEM @ _BFI-PARENT-URI-U +
+    _BFM-REQUIRED-REF-URI ?DUP IF EXIT THEN
+    BFM-F-REPLY _BFM-ITEM @ BFM.ITEM.FLAGS +!
+    BFM-S-OK ;
+
+: _BFM-DECODE-REASON  ( item-json-a item-json-u item -- status )
+    _BFM-ITEM ! _BFM-IU ! _BFM-IA !
+    _BFM-IA @ _BFM-IU @ S" reason" _BFM-FIELD
+    DUP IF >R 2DROP DROP R> EXIT THEN DROP
+    0= IF 2DROP BFM-S-OK EXIT THEN
+    2DUP JSON-OBJECT? 0= IF 2DROP BFM-S-TYPE EXIT THEN
+    _BFM-REASON-U ! _BFM-REASON-A !
+    _BFM-REASON-A @ _BFM-REASON-U @ S" $type" _BFM-FIELD
+    DUP IF >R 2DROP DROP R> EXIT THEN DROP
+    0= IF 2DROP BFM-S-MISSING EXIT THEN
+    _BFM-COPY-LITERAL ?DUP IF EXIT THEN
+    _BFM-LITERAL-BUF _BFM-LITERAL-U @
+    S" app.bsky.feed.defs#reasonRepost" STR-STR= IF
+        BFM-F-REPOST _BFM-ITEM @ BFM.ITEM.FLAGS +! BFM-S-OK EXIT
+    THEN
+    _BFM-LITERAL-BUF _BFM-LITERAL-U @
+    S" app.bsky.feed.defs#reasonPin" STR-STR= IF
+        BFM-F-PIN _BFM-ITEM @ BFM.ITEM.FLAGS +! BFM-S-OK EXIT
+    THEN
+    BFM-S-INVALID ;
 
 : _BFM-DECODE-ITEM  ( item-json-a item-json-u item -- status )
     _BFM-ITEM ! _BFM-IU ! _BFM-IA !
@@ -200,12 +465,19 @@ VARIABLE _BFM-REC-U
     _BFM-AUTH-A @ _BFM-AUTH-U @ S" displayName"
         _BFM-ITEM @ _BFI-DISPLAY + BFM-DISPLAY-CAP _BFM-ITEM @ _BFI-DISPLAY-U +
         _BFM-OPTIONAL-STRING ?DUP IF EXIT THEN
+    _BFM-REC-A @ _BFM-REC-U @ S" $type" S" app.bsky.feed.post"
+        _BFM-REQUIRED-LITERAL ?DUP IF EXIT THEN
     _BFM-REC-A @ _BFM-REC-U @ S" text"
         _BFM-ITEM @ _BFI-TEXT + BFM-TEXT-CAP _BFM-ITEM @ _BFI-TEXT-U +
         _BFM-REQUIRED-STRING ?DUP IF EXIT THEN
     _BFM-REC-A @ _BFM-REC-U @ S" createdAt"
-        _BFM-ITEM @ _BFI-CREATED + BFM-CREATED-CAP _BFM-ITEM @ _BFI-CREATED-U +
+        _BFM-ITEM @ _BFI-CREATED + BFM-DATETIME-CAP _BFM-ITEM @ _BFI-CREATED-U +
         _BFM-REQUIRED-STRING ?DUP IF EXIT THEN
+    _BFM-POST-A @ _BFM-POST-U @ S" indexedAt"
+        _BFM-ITEM @ _BFI-INDEXED + BFM-DATETIME-CAP _BFM-ITEM @ _BFI-INDEXED-U +
+        _BFM-REQUIRED-STRING ?DUP IF EXIT THEN
+    _BFM-ITEM @ BFM.ITEM.URI _BFM-ITEM @ BFM.ITEM.DID
+        _BFM-POST-URI-AUTHOR? 0= IF BFM-S-INVALID EXIT THEN
     _BFM-POST-A @ _BFM-POST-U @ S" likeCount"
         _BFM-ITEM @ BFM.ITEM.LIKES _BFM-OPTIONAL-NUMBER ?DUP IF EXIT THEN
     _BFM-POST-A @ _BFM-POST-U @ S" repostCount"
@@ -213,12 +485,8 @@ VARIABLE _BFM-REC-U
     _BFM-POST-A @ _BFM-POST-U @ S" replyCount"
         _BFM-ITEM @ BFM.ITEM.REPLIES _BFM-OPTIONAL-NUMBER ?DUP IF EXIT THEN
 
-    _BFM-IA @ _BFM-IU @ S" reply" _BFM-FIELD
-    DUP IF >R 2DROP DROP R> EXIT THEN DROP
-    IF 2DROP BFM-F-REPLY _BFM-ITEM @ BFM.ITEM.FLAGS +! ELSE 2DROP THEN
-    _BFM-IA @ _BFM-IU @ S" reason" _BFM-FIELD
-    DUP IF >R 2DROP DROP R> EXIT THEN DROP
-    IF 2DROP BFM-F-REPOST _BFM-ITEM @ BFM.ITEM.FLAGS +! ELSE 2DROP THEN
+    _BFM-IA @ _BFM-IU @ _BFM-ITEM @ _BFM-DECODE-REPLY ?DUP IF EXIT THEN
+    _BFM-IA @ _BFM-IU @ _BFM-ITEM @ _BFM-DECODE-REASON ?DUP IF EXIT THEN
     BFM-S-OK ;
 
 VARIABLE _BFM-DA
@@ -233,7 +501,8 @@ VARIABLE _BFM-STATUS
 
 : _BFM-DECODE-INTO  ( json-a json-u feed -- status )
     _BFM-DEST ! _BFM-DU ! _BFM-DA !
-    _BFM-DA @ _BFM-DU @ JSON-VALID? 0= IF BFM-S-INVALID EXIT THEN
+    _BFM-DA @ _BFM-DU @ BFM-DOCUMENT-CAP JSON-VALID-LIMIT?
+    0= IF BFM-S-INVALID EXIT THEN
     _BFM-DA @ _BFM-DU @ JSON-OBJECT? 0= IF BFM-S-TYPE EXIT THEN
     _BFM-DA @ _BFM-DU @ S" feed" _BFM-FIELD
     DUP IF >R 2DROP DROP R> EXIT THEN DROP
@@ -247,7 +516,7 @@ VARIABLE _BFM-STATUS
     WHILE
         _BFM-COUNT @ BFM-MAX-ITEMS >= IF BFM-S-CAPACITY EXIT THEN
         _BFM-CUR-A @ _BFM-CUR-U @ JSON-VALUE-SPAN
-        _BFM-COUNT @ _BFM-DEST @ BFM.FEED.ITEM _BFM-DECODE-ITEM
+        _BFM-COUNT @ _BFM-DEST @ _BFM-FEED-ITEM _BFM-DECODE-ITEM
         DUP IF EXIT THEN DROP
         1 _BFM-COUNT +!
         _BFM-CUR-A @ _BFM-CUR-U @ JSON-NEXT DROP
@@ -261,19 +530,27 @@ VARIABLE _BFM-TEMP
 VARIABLE _BFM-TEMP-IOR
 
 : BFM-DECODE-FEED  ( json-a json-u feed -- status )
-    >R BFM-FEED-SIZE ALLOCATE DUP IF
-        SWAP DROP R> DROP BFM-S-CAPACITY EXIT
+    DUP 0= IF DROP 2DROP BFM-S-INVALID EXIT THEN
+    >R
+    DUP 0< IF 2DROP R> DROP BFM-S-INVALID EXIT THEN
+    DUP BFM-DOCUMENT-CAP > IF 2DROP R> DROP BFM-S-CAPACITY EXIT THEN
+    OVER 0= IF 2DROP R> DROP BFM-S-INVALID EXIT THEN
+    BFM-FEED-SIZE ALLOCATE DUP IF
+        2DROP 2DROP R> DROP BFM-S-CAPACITY EXIT
     THEN DROP _BFM-TEMP !
     _BFM-TEMP @ BFM-FEED-INIT
-    _BFM-TEMP @ _BFM-DECODE-INTO DUP _BFM-TEMP-IOR !
+    _BFM-TEMP @ _BFM-DECODE-INTO _BFM-TEMP-IOR !
     _BFM-TEMP-IOR @ BFM-S-OK = IF
         _BFM-TEMP @ R@ BFM-FEED-SIZE CMOVE
     THEN
     _BFM-TEMP @ BFM-FEED-SIZE 0 FILL _BFM-TEMP @ FREE
     R> DROP _BFM-TEMP-IOR @ ;
 
-\ Decoder navigation uses JSON's guarded global cursor helpers.  Serialize the
-\ complete transactional decode so another caller cannot interleave lookups.
+\ The ordinary applet path invokes the decoder only on its owner context.
+\ GUARDED builds additionally serialize calls to this module, but the legacy
+\ JSON/string helpers are themselves build-option guarded; live asynchronous
+\ transport must therefore return bytes to an owner-committed decode rather
+\ than invoking this global-scratch adapter concurrently.
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
 GUARD _bfm-guard

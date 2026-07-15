@@ -91,6 +91,15 @@ CAP-F-CONTEXT-DEFAULT OR CONSTANT CAP-FLAGS-MASK
     R@ CAP.FLAGS @ DUP 0< IF DROP R> DROP 0 EXIT THEN
     CAP-FLAGS-MASK INVERT AND IF R> DROP 0 EXIT THEN
     R@ CAP.MAX-MS @ 0< IF R> DROP 0 EXIT THEN
+    \ Descriptor registration is a trusted dereference boundary.  Validate
+    \ every reachable schema node now so empty inputs/results cannot conceal
+    \ malformed list-item or optional-field schemas until dispatch or export.
+    R@ CAP.IN-SCHEMA @ ?DUP IF
+        CS-SCHEMA-VALIDATE IF R> DROP 0 EXIT THEN
+    THEN
+    R@ CAP.OUT-SCHEMA @ ?DUP IF
+        CS-SCHEMA-VALIDATE IF R> DROP 0 EXIT THEN
+    THEN
     R> CAP.CONCURRENCY @ DUP CCLASS-UNSPECIFIED =
     SWAP CCLASS-VALID? OR ;
 

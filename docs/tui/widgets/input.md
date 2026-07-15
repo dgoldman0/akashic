@@ -116,6 +116,11 @@ backend (`uidl-tui.f`), the following happens:
   through UIDL-TUI, both are freed during dematerialization.
 - **UTF-8 aware.** Cursor movement, insertion, and deletion operate
   on codepoint boundaries using `_UTF8-SEQLEN` and `_INP-PREV-CP`.
+- **Untrusted-text display.** Plain input retains the caller-owned bytes but
+  projects each decoded codepoint through `CW-CELL-CP`. Terminal/bidi
+  controls, width-0 combining/joining/format codepoints, and width-2 glyphs
+  paint as one U+FFFD cell. This also applies to the character under the cursor,
+  mask codepoints, and placeholders; it does not normalize submitted text.
 - **Horizontal scroll.** When the cursor moves past the visible
   region width, `_INP-SCROLL-ADJ` shifts the scroll offset so the
   cursor remains visible.

@@ -5,6 +5,7 @@
 PROVIDED akashic-interop-value
 
 REQUIRE ../utils/string.f
+REQUIRE ../concurrency/guard.f
 
 0 CONSTANT CV-T-NULL
 1 CONSTANT CV-T-BOOL
@@ -21,6 +22,11 @@ REQUIRE ../utils/string.f
 1 CONSTANT CV-E-NOMEM
 2 CONSTANT CV-E-TYPE
 3 CONSTANT CV-E-RANGE
+
+4096 CONSTANT CV-MAX-CONTAINER-LEN
+65536 CONSTANT CV-MAX-STRING-LEN
+0x8000000000000000 CONSTANT CV-CELL-MIN
+0x7FFFFFFFFFFFFFFF CONSTANT CV-CELL-MAX
 
  0 CONSTANT _CV-TYPE
  8 CONSTANT _CV-FLAGS
@@ -46,43 +52,289 @@ REQUIRE ../utils/string.f
 : CV-MAP-KEY  ( entry -- key-value ) ;
 : CV-MAP-VALUE  ( entry -- value )  CV-SIZE + ;
 
+64 CONSTANT _CVF-LOCAL-ALLOCS
+32 CONSTANT _CVF-LOCAL-FRAMES
+40 CONSTANT _CVF-FRAME-SIZE
+
+0 CONSTANT _CVF-F-VISIT
+1 CONSTANT _CVF-F-CONTAINER
+0 CONSTANT _CVF-F-KIND
+8 CONSTANT _CVF-F-VALUE
+16 CONSTANT _CVF-F-DATA
+24 CONSTANT _CVF-F-NEXT
+32 CONSTANT _CVF-F-LEFT
+
+: _CVF-FRAME.KIND  ( frame -- address ) _CVF-F-KIND + ;
+: _CVF-FRAME.VALUE  ( frame -- address ) _CVF-F-VALUE + ;
+: _CVF-FRAME.DATA  ( frame -- address ) _CVF-F-DATA + ;
+: _CVF-FRAME.NEXT  ( frame -- address ) _CVF-F-NEXT + ;
+: _CVF-FRAME.LEFT  ( frame -- address ) _CVF-F-LEFT + ;
+
+CREATE _CVF-VISITED-LOCAL _CVF-LOCAL-ALLOCS 8 * ALLOT
+CREATE _CVF-WORK-LOCAL _CVF-LOCAL-FRAMES _CVF-FRAME-SIZE * ALLOT
+VARIABLE _CVF-VISITED-N
+VARIABLE _CVF-VISITED-A
+VARIABLE _CVF-VISITED-CAP
+VARIABLE _CVF-VISITED-DYNAMIC
+VARIABLE _CVF-VISITED-KEY
+VARIABLE _CVF-VISITED-I
+VARIABLE _CVF-VISITED-OLD-A
+VARIABLE _CVF-VISITED-OLD-CAP
+VARIABLE _CVF-VISITED-OLD-DYNAMIC
+VARIABLE _CVF-VISITED-NEW-A
+VARIABLE _CVF-WORK-N
+VARIABLE _CVF-WORK-A
+VARIABLE _CVF-WORK-CAP
+VARIABLE _CVF-WORK-DYNAMIC
+VARIABLE _CVF-WORK-OLD-A
+VARIABLE _CVF-WORK-OLD-DYNAMIC
+VARIABLE _CVF-WORK-NEW-A
+VARIABLE _CVF-PUSH-VALUE
+VARIABLE _CVF-PUSH-DATA
+VARIABLE _CVF-PUSH-LEFT
+VARIABLE _CVF-FRAME
+VARIABLE _CVF-CURRENT-VALUE
+VARIABLE _CVF-CURRENT-DATA
+VARIABLE _CVF-CURRENT-N
+VARIABLE _CVF-ROOT
+VARIABLE _CVF-PREFLIGHT
+
+\ Owned allocation addresses form a temporary open-addressed set.  It
+\ prevents a forged cycle or duplicate owner from freeing one allocation
+\ twice.  The small inline table covers ordinary values; larger graphs pay
+\ only for transaction-scoped scratch.
+: _CVF-VISITED-SLOT  ( allocation -- slot existing? )
+    _CVF-VISITED-KEY !
+    _CVF-VISITED-KEY @ 3 RSHIFT
+        _CVF-VISITED-CAP @ 1- AND _CVF-VISITED-I !
+    BEGIN
+        _CVF-VISITED-A @ _CVF-VISITED-I @ 8 * + DUP @
+        DUP 0= IF DROP 0 EXIT THEN
+        _CVF-VISITED-KEY @ = IF -1 EXIT THEN
+        DROP
+        _CVF-VISITED-I @ 1+ _CVF-VISITED-CAP @ 1- AND
+            _CVF-VISITED-I !
+    AGAIN ;
+
+: _CVF-VISITED-INSERT-RAW  ( allocation -- )
+    _CVF-VISITED-SLOT DROP
+    _CVF-VISITED-KEY @ SWAP ! ;
+
+: _CVF-VISITED-GROW  ( -- )
+    _CVF-VISITED-CAP @ CV-CELL-MAX 16 / > IF -1 THROW THEN
+    _CVF-VISITED-A @ _CVF-VISITED-OLD-A !
+    _CVF-VISITED-CAP @ _CVF-VISITED-OLD-CAP !
+    _CVF-VISITED-DYNAMIC @ _CVF-VISITED-OLD-DYNAMIC !
+    _CVF-VISITED-CAP @ 2 * DUP 8 * ALLOCATE
+    DUP IF NIP THROW THEN DROP
+    DUP _CVF-VISITED-NEW-A !
+    SWAP 8 * 0 FILL
+    _CVF-VISITED-NEW-A @ _CVF-VISITED-A !
+    _CVF-VISITED-OLD-CAP @ 2 * _CVF-VISITED-CAP !
+    -1 _CVF-VISITED-DYNAMIC !
+    _CVF-VISITED-OLD-CAP @ 0 ?DO
+        _CVF-VISITED-OLD-A @ I 8 * + @ ?DUP IF
+            _CVF-VISITED-INSERT-RAW
+        THEN
+    LOOP
+    _CVF-VISITED-OLD-DYNAMIC @ IF _CVF-VISITED-OLD-A @ FREE THEN ;
+
+: _CVF-CLAIM?  ( allocation -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _CVF-VISITED-SLOT IF 2DROP 0 EXIT THEN
+    DROP
+    _CVF-VISITED-N @ 1+ 2 * _CVF-VISITED-CAP @ > IF
+        _CVF-PREFLIGHT @ IF _CVF-VISITED-GROW ELSE -1 THROW THEN
+    THEN
+    DUP _CVF-VISITED-SLOT DROP !
+    1 _CVF-VISITED-N +! -1 ;
+
+: _CVF-WORK-GROW  ( -- )
+    _CVF-WORK-CAP @ CV-CELL-MAX _CVF-FRAME-SIZE / 2 / > IF
+        -1 THROW
+    THEN
+    _CVF-WORK-A @ _CVF-WORK-OLD-A !
+    _CVF-WORK-DYNAMIC @ _CVF-WORK-OLD-DYNAMIC !
+    _CVF-WORK-CAP @ 2 * DUP _CVF-FRAME-SIZE * ALLOCATE
+    DUP IF NIP THROW THEN DROP
+    DUP _CVF-WORK-NEW-A !
+    SWAP _CVF-FRAME-SIZE * 0 FILL
+    _CVF-WORK-OLD-A @ _CVF-WORK-NEW-A @
+        _CVF-WORK-N @ _CVF-FRAME-SIZE * CMOVE
+    _CVF-WORK-NEW-A @ _CVF-WORK-A !
+    _CVF-WORK-CAP @ 2 * _CVF-WORK-CAP !
+    -1 _CVF-WORK-DYNAMIC !
+    _CVF-WORK-OLD-DYNAMIC @ IF _CVF-WORK-OLD-A @ FREE THEN ;
+
+: _CVF-WORK-ENSURE  ( -- )
+    _CVF-WORK-N @ _CVF-WORK-CAP @ >= IF
+        _CVF-PREFLIGHT @ IF _CVF-WORK-GROW ELSE -1 THROW THEN
+    THEN ;
+
+: _CVF-WORK-NEW  ( -- frame )
+    _CVF-WORK-ENSURE
+    _CVF-WORK-A @ _CVF-WORK-N @ _CVF-FRAME-SIZE * +
+    1 _CVF-WORK-N +! ;
+
+: _CVF-WORK-TOP  ( -- frame )
+    _CVF-WORK-A @ _CVF-WORK-N @ 1- _CVF-FRAME-SIZE * + ;
+
+: _CVF-PUSH-VISIT  ( value -- )
+    _CVF-PUSH-VALUE !
+    _CVF-WORK-NEW DUP _CVF-FRAME-SIZE 0 FILL
+    _CVF-F-VISIT OVER _CVF-FRAME.KIND !
+    _CVF-PUSH-VALUE @ SWAP _CVF-FRAME.VALUE ! ;
+
+: _CVF-PUSH-CONTAINER  ( value data child-count -- )
+    _CVF-PUSH-LEFT ! _CVF-PUSH-DATA ! _CVF-PUSH-VALUE !
+    _CVF-WORK-NEW DUP _CVF-FRAME-SIZE 0 FILL
+    _CVF-F-CONTAINER OVER _CVF-FRAME.KIND !
+    _CVF-PUSH-VALUE @ OVER _CVF-FRAME.VALUE !
+    _CVF-PUSH-DATA @ OVER _CVF-FRAME.DATA !
+    _CVF-PUSH-DATA @ OVER _CVF-FRAME.NEXT !
+    _CVF-PUSH-LEFT @ SWAP _CVF-FRAME.LEFT ! ;
+
+: _CVF-VISITED-RESET  ( -- )
+    _CVF-VISITED-DYNAMIC @ IF _CVF-VISITED-A @ FREE THEN
+    _CVF-VISITED-LOCAL _CVF-VISITED-A !
+    _CVF-LOCAL-ALLOCS _CVF-VISITED-CAP !
+    0 _CVF-VISITED-DYNAMIC ! 0 _CVF-VISITED-N !
+    _CVF-VISITED-LOCAL _CVF-LOCAL-ALLOCS 8 * 0 FILL ;
+
+: _CVF-WORK-RESET  ( -- )
+    _CVF-WORK-DYNAMIC @ IF _CVF-WORK-A @ FREE THEN
+    _CVF-WORK-LOCAL _CVF-WORK-A !
+    _CVF-LOCAL-FRAMES _CVF-WORK-CAP !
+    0 _CVF-WORK-DYNAMIC ! 0 _CVF-WORK-N ! ;
+
+: _CVF-SCRATCH-REUSE  ( -- )
+    0 _CVF-WORK-N ! 0 _CVF-VISITED-N !
+    _CVF-VISITED-A @ _CVF-VISITED-CAP @ 8 * 0 FILL ;
+
+: _CVF-SCRATCH-RELEASE  ( -- )
+    _CVF-WORK-DYNAMIC @ IF _CVF-WORK-A @ FREE THEN
+    _CVF-WORK-LOCAL _CVF-WORK-A !
+    _CVF-LOCAL-FRAMES _CVF-WORK-CAP !
+    0 _CVF-WORK-DYNAMIC ! 0 _CVF-WORK-N !
+    _CVF-VISITED-DYNAMIC @ IF _CVF-VISITED-A @ FREE THEN
+    _CVF-VISITED-LOCAL _CVF-VISITED-A !
+    _CVF-LOCAL-ALLOCS _CVF-VISITED-CAP !
+    0 _CVF-VISITED-DYNAMIC ! 0 _CVF-VISITED-N ! ;
+
+: _CVF-CLEAR-CURRENT  ( -- )
+    _CVF-PREFLIGHT @ 0= IF _CVF-CURRENT-VALUE @ CV-INIT THEN ;
+
+: _CVF-BLOB  ( -- )
+    _CVF-CURRENT-VALUE @ CV-LEN@ DUP 0< IF
+        DROP _CVF-CLEAR-CURRENT EXIT
+    THEN
+    0= IF _CVF-CLEAR-CURRENT EXIT THEN
+    _CVF-CURRENT-VALUE @ CV.FLAGS @ CV-F-OWNED AND 0= IF
+        _CVF-CLEAR-CURRENT EXIT
+    THEN
+    _CVF-CURRENT-VALUE @ CV-DATA@ DUP 0= IF
+        DROP _CVF-CLEAR-CURRENT EXIT
+    THEN
+    DUP _CVF-CURRENT-DATA ! _CVF-CLAIM? 0= IF
+        _CVF-CLEAR-CURRENT EXIT
+    THEN
+    _CVF-PREFLIGHT @ IF EXIT THEN
+    _CVF-CURRENT-VALUE @ CV-INIT
+    _CVF-CURRENT-DATA @ FREE ;
+
+: _CVF-ENTER-CONTAINER  ( child-count -- )
+    _CVF-CURRENT-N !
+    _CVF-CURRENT-N @ 0= IF
+        _CVF-CLEAR-CURRENT EXIT
+    THEN
+    _CVF-CURRENT-VALUE @ CV.FLAGS @ CV-F-OWNED AND 0= IF
+        _CVF-CLEAR-CURRENT EXIT
+    THEN
+    _CVF-CURRENT-VALUE @ CV-DATA@ DUP 0= IF
+        DROP _CVF-CLEAR-CURRENT EXIT
+    THEN
+    DUP _CVF-CURRENT-DATA ! _CVF-CLAIM? 0= IF
+        _CVF-CLEAR-CURRENT EXIT
+    THEN
+    _CVF-CURRENT-VALUE @ _CVF-CURRENT-DATA @ _CVF-CURRENT-N @
+        _CVF-PUSH-CONTAINER ;
+
+: _CVF-LIST  ( -- )
+    _CVF-CURRENT-VALUE @ CV.AUX @ CV-SIZE <> IF
+        _CVF-CLEAR-CURRENT EXIT
+    THEN
+    _CVF-CURRENT-VALUE @ CV-LEN@ DUP
+    0< OVER CV-MAX-CONTAINER-LEN > OR IF
+        DROP _CVF-CLEAR-CURRENT EXIT
+    THEN
+    _CVF-ENTER-CONTAINER ;
+
+: _CVF-MAP  ( -- )
+    _CVF-CURRENT-VALUE @ CV.AUX @ CV-MAP-ENTRY-SIZE <> IF
+        _CVF-CLEAR-CURRENT EXIT
+    THEN
+    _CVF-CURRENT-VALUE @ CV-LEN@ DUP
+    0< OVER CV-MAX-CONTAINER-LEN > OR IF
+        DROP _CVF-CLEAR-CURRENT EXIT
+    THEN
+    2 * _CVF-ENTER-CONTAINER ;
+
+: _CVF-PROCESS-VISIT  ( -- )
+    _CVF-WORK-TOP _CVF-FRAME.VALUE @ _CVF-CURRENT-VALUE !
+    -1 _CVF-WORK-N +!
+    _CVF-CURRENT-VALUE @ 0= IF EXIT THEN
+    _CVF-CURRENT-VALUE @ CV-TYPE@ CASE
+        CV-T-LIST OF _CVF-LIST ENDOF
+        CV-T-MAP OF _CVF-MAP ENDOF
+        CV-T-STRING OF _CVF-BLOB ENDOF
+        CV-T-BYTES OF _CVF-BLOB ENDOF
+        CV-T-RESOURCE OF _CVF-BLOB ENDOF
+        _CVF-CLEAR-CURRENT
+    ENDCASE ;
+
+: _CVF-PROCESS-CONTAINER  ( -- )
+    _CVF-WORK-TOP _CVF-FRAME !
+    _CVF-FRAME @ _CVF-FRAME.LEFT @ IF
+        _CVF-FRAME @ _CVF-FRAME.NEXT @ _CVF-PUSH-VALUE !
+        CV-SIZE _CVF-FRAME @ _CVF-FRAME.NEXT +!
+        -1 _CVF-FRAME @ _CVF-FRAME.LEFT +!
+        _CVF-PUSH-VALUE @ _CVF-PUSH-VISIT
+        EXIT
+    THEN
+    _CVF-FRAME @ _CVF-FRAME.VALUE @ _CVF-CURRENT-VALUE !
+    _CVF-FRAME @ _CVF-FRAME.DATA @ _CVF-CURRENT-DATA !
+    -1 _CVF-WORK-N +!
+    _CVF-PREFLIGHT @ IF EXIT THEN
+    _CVF-CURRENT-VALUE @ CV-INIT
+    _CVF-CURRENT-DATA @ FREE ;
+
+: _CVF-RUN  ( -- )
+    _CVF-ROOT @ _CVF-PUSH-VISIT
+    BEGIN _CVF-WORK-N @ WHILE
+        _CVF-WORK-TOP _CVF-FRAME.KIND @ CASE
+            _CVF-F-VISIT OF _CVF-PROCESS-VISIT ENDOF
+            _CVF-F-CONTAINER OF _CVF-PROCESS-CONTAINER ENDOF
+            -1 THROW
+        ENDCASE
+    REPEAT ;
+
+: _CV-FREE-TOP  ( value -- )
+    _CVF-ROOT !
+    _CVF-VISITED-RESET _CVF-WORK-RESET
+    -1 _CVF-PREFLIGHT !
+    ['] _CVF-RUN CATCH DUP IF
+        _CVF-SCRATCH-RELEASE THROW
+    THEN DROP
+    _CVF-SCRATCH-REUSE
+    0 _CVF-PREFLIGHT !
+    ['] _CVF-RUN CATCH
+    _CVF-SCRATCH-RELEASE
+    ?DUP IF THROW THEN ;
+
+GUARD _cv-free-guard
+' _CV-FREE-TOP CONSTANT _cv-free-top-xt
 : CV-FREE  ( value -- )
-    DUP 0= IF DROP EXIT THEN
-    DUP CV-TYPE@
-    CASE
-        CV-T-LIST OF
-            DUP CV.DATA @
-            OVER CV.LEN @ 0 ?DO
-                DUP I CV-SIZE * + RECURSE
-            LOOP
-            FREE
-        ENDOF
-        CV-T-MAP OF
-            DUP CV.DATA @
-            OVER CV.LEN @ 0 ?DO
-                DUP I CV-MAP-ENTRY-SIZE * +
-                DUP CV-MAP-KEY RECURSE
-                CV-MAP-VALUE RECURSE
-            LOOP
-            FREE
-        ENDOF
-        CV-T-STRING OF
-            DUP CV.FLAGS @ CV-F-OWNED AND IF
-                DUP CV.DATA @ ?DUP IF FREE THEN
-            THEN
-        ENDOF
-        CV-T-BYTES OF
-            DUP CV.FLAGS @ CV-F-OWNED AND IF
-                DUP CV.DATA @ ?DUP IF FREE THEN
-            THEN
-        ENDOF
-        CV-T-RESOURCE OF
-            DUP CV.FLAGS @ CV-F-OWNED AND IF
-                DUP CV.DATA @ ?DUP IF FREE THEN
-            THEN
-        ENDOF
-    ENDCASE
-    CV-INIT ;
+    _cv-free-top-xt _cv-free-guard WITH-GUARD ;
 
 : CV-NULL!  ( value -- )
     DUP CV-FREE CV-T-NULL SWAP CV.TYPE ! ;
@@ -108,23 +360,33 @@ VARIABLE _CVS-V
 VARIABLE _CVS-T
 VARIABLE _CVS-P
 
-: _CV-BLOB!  ( addr len type value -- ior )
+: _CV-BLOB!-RAW  ( addr len type value -- ior )
     _CVS-V ! _CVS-T ! _CVS-U ! _CVS-A !
-    _CVS-V @ CV-FREE
+    _CVS-U @ 0< _CVS-U @ CV-MAX-STRING-LEN > OR IF
+        CV-E-RANGE EXIT
+    THEN
     _CVS-U @ 0= IF
+        _CVS-V @ CV-FREE
         _CVS-T @ _CVS-V @ CV.TYPE !
         0
         EXIT
     THEN
+    _CVS-A @ 0= IF CV-E-RANGE EXIT THEN
     _CVS-U @ ALLOCATE
     DUP IF SWAP DROP EXIT THEN
     DROP DUP _CVS-P !
     _CVS-A @ SWAP _CVS-U @ CMOVE
+    _CVS-V @ CV-FREE
     _CVS-T @ _CVS-V @ CV.TYPE !
     CV-F-OWNED _CVS-V @ CV.FLAGS !
     _CVS-P @ _CVS-V @ CV.DATA !
     _CVS-U @ _CVS-V @ CV.LEN !
     0 ;
+
+GUARD _cv-blob-guard
+' _CV-BLOB!-RAW CONSTANT _cv-blob-raw-xt
+: _CV-BLOB!  ( addr len type value -- ior )
+    _cv-blob-raw-xt _cv-blob-guard WITH-GUARD ;
 
 : CV-STRING!  ( addr len value -- ior )
     CV-T-STRING SWAP _CV-BLOB! ;
@@ -138,22 +400,38 @@ VARIABLE _CVS-P
 VARIABLE _CVC-N
 VARIABLE _CVC-V
 VARIABLE _CVC-P
+VARIABLE _CVC-T
+VARIABLE _CVC-ELEM
+VARIABLE _CVC-BYTES
 
-: _CV-CONTAINER!  ( count type elem-size value -- ior )
-    _CVC-V ! >R SWAP _CVC-N !       ( type ; R: elem-size )
-    _CVC-V @ CV-FREE
-    _CVC-N @ 0< IF R> DROP DROP CV-E-RANGE EXIT THEN
-    DUP _CVC-V @ CV.TYPE !
-    R> _CVC-V @ CV.AUX !
-    _CVC-N @ _CVC-V @ CV.LEN !
-    _CVC-N @ 0= IF DROP 0 EXIT THEN
-    _CVC-N @ _CVC-V @ CV.AUX @ * ALLOCATE
-    DUP IF SWAP DROP DROP EXIT THEN
+: _CV-CONTAINER!-RAW  ( count type elem-size value -- ior )
+    _CVC-V ! _CVC-ELEM ! _CVC-T ! _CVC-N !
+    _CVC-N @ 0< _CVC-N @ CV-MAX-CONTAINER-LEN > OR
+    _CVC-ELEM @ 1 < OR IF CV-E-RANGE EXIT THEN
+    _CVC-N @ CV-CELL-MAX _CVC-ELEM @ / > IF CV-E-RANGE EXIT THEN
+    _CVC-N @ _CVC-ELEM @ * _CVC-BYTES !
+    _CVC-N @ 0= IF
+        _CVC-V @ CV-FREE
+        _CVC-T @ _CVC-V @ CV.TYPE !
+        _CVC-ELEM @ _CVC-V @ CV.AUX !
+        0 EXIT
+    THEN
+    _CVC-BYTES @ ALLOCATE
+    DUP IF SWAP DROP EXIT THEN
     DROP DUP _CVC-P !
-    _CVC-N @ _CVC-V @ CV.AUX @ * 0 FILL
+    _CVC-BYTES @ 0 FILL
+    _CVC-V @ CV-FREE
+    _CVC-T @ _CVC-V @ CV.TYPE !
+    _CVC-ELEM @ _CVC-V @ CV.AUX !
+    _CVC-N @ _CVC-V @ CV.LEN !
     _CVC-P @ _CVC-V @ CV.DATA !
     CV-F-OWNED _CVC-V @ CV.FLAGS !
-    DROP 0 ;
+    0 ;
+
+GUARD _cv-container-guard
+' _CV-CONTAINER!-RAW CONSTANT _cv-container-raw-xt
+: _CV-CONTAINER!  ( count type elem-size value -- ior )
+    _cv-container-raw-xt _cv-container-guard WITH-GUARD ;
 
 : CV-LIST!  ( count value -- ior )
     CV-T-LIST CV-SIZE ROT _CV-CONTAINER! ;
@@ -161,45 +439,91 @@ VARIABLE _CVC-P
 : CV-MAP!  ( count value -- ior )
     CV-T-MAP CV-MAP-ENTRY-SIZE ROT _CV-CONTAINER! ;
 
-VARIABLE _CVN-I
-VARIABLE _CVN-V
-
 : CV-LIST-NTH  ( index value -- child | 0 )
-    _CVN-V ! _CVN-I !
-    _CVN-V @ CV-TYPE@ CV-T-LIST <> IF 0 EXIT THEN
-    _CVN-I @ 0< _CVN-I @ _CVN-V @ CV-LEN@ >= OR IF 0 EXIT THEN
-    _CVN-V @ CV-DATA@ _CVN-I @ CV-SIZE * + ;
+    >R
+    R@ 0= IF DROP R> DROP 0 EXIT THEN
+    R@ CV-TYPE@ CV-T-LIST <> IF DROP R> DROP 0 EXIT THEN
+    R@ CV.AUX @ CV-SIZE <> IF DROP R> DROP 0 EXIT THEN
+    R@ CV-LEN@ DUP 0< OVER CV-MAX-CONTAINER-LEN > OR IF
+        DROP DROP R> DROP 0 EXIT
+    THEN DROP
+    DUP 0< OVER R@ CV-LEN@ >= OR IF DROP R> DROP 0 EXIT THEN
+    R@ CV-DATA@ DUP 0= IF DROP DROP R> DROP 0 EXIT THEN
+    SWAP CV-SIZE * + R> DROP ;
 
 : CV-MAP-NTH  ( index value -- entry | 0 )
-    _CVN-V ! _CVN-I !
-    _CVN-V @ CV-TYPE@ CV-T-MAP <> IF 0 EXIT THEN
-    _CVN-I @ 0< _CVN-I @ _CVN-V @ CV-LEN@ >= OR IF 0 EXIT THEN
-    _CVN-V @ CV-DATA@ _CVN-I @ CV-MAP-ENTRY-SIZE * + ;
+    >R
+    R@ 0= IF DROP R> DROP 0 EXIT THEN
+    R@ CV-TYPE@ CV-T-MAP <> IF DROP R> DROP 0 EXIT THEN
+    R@ CV.AUX @ CV-MAP-ENTRY-SIZE <> IF DROP R> DROP 0 EXIT THEN
+    R@ CV-LEN@ DUP 0< OVER CV-MAX-CONTAINER-LEN > OR IF
+        DROP DROP R> DROP 0 EXIT
+    THEN DROP
+    DUP 0< OVER R@ CV-LEN@ >= OR IF DROP R> DROP 0 EXIT THEN
+    R@ CV-DATA@ DUP 0= IF DROP DROP R> DROP 0 EXIT THEN
+    SWAP CV-MAP-ENTRY-SIZE * + R> DROP ;
 
-VARIABLE _CVM-KA
-VARIABLE _CVM-KU
-VARIABLE _CVM-V
+: CV-MAP-SLOT!  ( key-a key-u index map -- child ior )
+    CV-MAP-NTH DUP 0= IF
+        DROP 2DROP 0 CV-E-RANGE EXIT
+    THEN
+    DUP >R CV-STRING! ?DUP IF
+        R> DROP 0 SWAP EXIT
+    THEN
+    R> CV-MAP-VALUE 0 ;
 
 : CV-MAP-FIND  ( key-a key-u map -- value | 0 )
-    _CVM-V ! _CVM-KU ! _CVM-KA !
-    _CVM-V @ CV-TYPE@ CV-T-MAP <> IF 0 EXIT THEN
-    _CVM-V @ CV-LEN@ 0 ?DO
-        I _CVM-V @ CV-MAP-NTH DUP CV-MAP-KEY
-        DUP CV-TYPE@ CV-T-STRING = IF
-            DUP CV-DATA@ SWAP CV-LEN@
-            _CVM-KA @ _CVM-KU @ STR-STR= IF
-                CV-MAP-VALUE UNLOOP EXIT
-            THEN
-        ELSE DROP THEN
+    \ Validate the caller's borrowed string before inspecting the map.  Empty
+    \ strings need no readable address; every positive-length string does.
+    OVER DUP 0< SWAP CV-MAX-STRING-LEN > OR IF 2DROP DROP 0 EXIT THEN
+    OVER 0> 3 PICK 0= AND IF 2DROP DROP 0 EXIT THEN
+    DUP 0= IF 2DROP DROP 0 EXIT THEN
+    DUP CV-TYPE@ CV-T-MAP <> IF 2DROP DROP 0 EXIT THEN
+    DUP CV.AUX @ CV-MAP-ENTRY-SIZE <> IF 2DROP DROP 0 EXIT THEN
+    DUP CV-LEN@ DUP 0< OVER CV-MAX-CONTAINER-LEN > OR IF
+        DROP 2DROP DROP 0 EXIT
+    THEN
+    DUP 0> IF OVER CV-DATA@ 0= IF
+        DROP 2DROP DROP 0 EXIT
+    THEN THEN DROP
+    DUP CV-LEN@ 0 ?DO
+        I OVER CV-MAP-NTH DUP 0= IF
+            DROP 2DROP DROP 0 UNLOOP EXIT
+        THEN
+        DUP CV-MAP-KEY
+        \ A malformed child makes the entire lookup fail closed.  In
+        \ particular, never pass a negative length or a null positive-length
+        \ address to STR-STR=, even when a later entry might have matched.
+        DUP CV-TYPE@ CV-T-STRING <> IF
+            2DROP 2DROP DROP 0 UNLOOP EXIT
+        THEN
+        DUP CV-LEN@ DUP 0< OVER CV-MAX-STRING-LEN > OR IF
+            2DROP 2DROP 2DROP 0 UNLOOP EXIT
+        THEN
+        DUP 0> IF OVER CV-DATA@ 0= IF
+            2DROP 2DROP 2DROP 0 UNLOOP EXIT
+        THEN THEN
+        SWAP CV-DATA@ SWAP
+        5 PICK 5 PICK STR-STR= IF
+            CV-MAP-VALUE 2SWAP 2DROP NIP UNLOOP EXIT
+        THEN
         DROP
     LOOP
-    0 ;
+    2DROP DROP 0 ;
 
 \ Deep-copy an owned interoperability value.  Container children are
 \ cloned recursively so callers never retain pointers into event buffers.
-: CV-COPY  ( source destination -- ior )
+\ Source and destination ownership graphs must not overlap.
+16 CONSTANT CV-COPY-MAX-DEPTH
+65536 CONSTANT CV-COPY-MAX-NODES
+VARIABLE _CVCP-DEPTH
+VARIABLE _CVCP-NODES
+VARIABLE _CVCP-TOP-DEST
+CREATE _CVCP-TEMP CV-SIZE ALLOT
+DEFER _CV-COPY-VALUE
+
+: _CV-COPY-BODY  ( source destination -- ior )
     2DUP = IF 2DROP 0 EXIT THEN
-    DUP CV-FREE
     OVER CV-TYPE@ CASE
         CV-T-NULL OF
             NIP CV-NULL! 0
@@ -223,40 +547,88 @@ VARIABLE _CVM-V
             >R DUP CV-DATA@ SWAP CV-LEN@ R> CV-RESOURCE!
         ENDOF
         CV-T-LIST OF
-            >R
-            DUP CV-LEN@ R@ CV-LIST! ?DUP IF
-                NIP R> DROP EXIT
+            OVER CV.AUX @ CV-SIZE <> IF 2DROP CV-E-TYPE EXIT THEN
+            OVER CV-LEN@ DUP 0< OVER CV-MAX-CONTAINER-LEN > OR IF
+                DROP 2DROP CV-E-RANGE EXIT
             THEN
-            DUP CV-LEN@ 0 ?DO
-                I OVER CV-LIST-NTH
-                I R@ CV-LIST-NTH
-                RECURSE ?DUP IF
-                    >R DROP R> R> DROP UNLOOP EXIT
+            DUP 0> IF 2 PICK CV-DATA@ 0= IF
+                DROP 2DROP CV-E-TYPE EXIT
+            THEN THEN
+            DROP
+            OVER CV-LEN@ OVER CV-LIST! ?DUP IF
+                NIP NIP EXIT
+            THEN
+            OVER CV-LEN@ 0 ?DO
+                I 2 PICK CV-LIST-NTH
+                I 2 PICK CV-LIST-NTH
+                _CV-COPY-VALUE ?DUP IF
+                    NIP NIP UNLOOP EXIT
                 THEN
             LOOP
-            DROP R> DROP 0
+            2DROP 0
         ENDOF
         CV-T-MAP OF
-            >R
-            DUP CV-LEN@ R@ CV-MAP! ?DUP IF
-                NIP R> DROP EXIT
+            OVER CV.AUX @ CV-MAP-ENTRY-SIZE <> IF
+                2DROP CV-E-TYPE EXIT
             THEN
-            DUP CV-LEN@ 0 ?DO
-                I OVER CV-MAP-NTH
-                I R@ CV-MAP-NTH
-                2 PICK CV-MAP-KEY
-                OVER CV-MAP-KEY
-                RECURSE ?DUP IF
-                    >R 2DROP DROP R> R> DROP UNLOOP EXIT
+            OVER CV-LEN@ DUP 0< OVER CV-MAX-CONTAINER-LEN > OR IF
+                DROP 2DROP CV-E-RANGE EXIT
+            THEN
+            DUP 0> IF 2 PICK CV-DATA@ 0= IF
+                DROP 2DROP CV-E-TYPE EXIT
+            THEN THEN
+            DROP
+            OVER CV-LEN@ OVER CV-MAP! ?DUP IF
+                NIP NIP EXIT
+            THEN
+            OVER CV-LEN@ 0 ?DO
+                I 2 PICK CV-MAP-NTH
+                I 2 PICK CV-MAP-NTH
+                2DUP SWAP CV-MAP-KEY
+                SWAP CV-MAP-KEY
+                _CV-COPY-VALUE ?DUP IF
+                    NIP NIP NIP NIP UNLOOP EXIT
                 THEN
-                OVER CV-MAP-VALUE
-                OVER CV-MAP-VALUE
-                RECURSE ?DUP IF
-                    >R 2DROP DROP R> R> DROP UNLOOP EXIT
+                2DUP SWAP CV-MAP-VALUE
+                SWAP CV-MAP-VALUE
+                _CV-COPY-VALUE ?DUP IF
+                    NIP NIP NIP NIP UNLOOP EXIT
                 THEN
                 2DROP
             LOOP
-            DROP R> DROP 0
+            2DROP 0
         ENDOF
         2DROP CV-E-TYPE
     ENDCASE ;
+
+: _CV-COPY-R  ( source destination -- ior )
+    2DUP 0= SWAP 0= OR IF 2DROP CV-E-TYPE EXIT THEN
+    1 _CVCP-NODES +!
+    _CVCP-NODES @ CV-COPY-MAX-NODES > IF 2DROP CV-E-RANGE EXIT THEN
+    1 _CVCP-DEPTH +!
+    _CVCP-DEPTH @ CV-COPY-MAX-DEPTH >= IF
+        2DROP -1 _CVCP-DEPTH +! CV-E-RANGE EXIT
+    THEN
+    _CV-COPY-BODY
+    -1 _CVCP-DEPTH +! ;
+
+' _CV-COPY-R IS _CV-COPY-VALUE
+
+: _CV-COPY-TOP  ( source destination -- ior )
+    2DUP 0= SWAP 0= OR IF 2DROP CV-E-TYPE EXIT THEN
+    2DUP = IF 2DROP 0 EXIT THEN
+    DUP _CVCP-TOP-DEST ! DROP
+    _CVCP-TEMP CV-INIT
+    0 _CVCP-NODES ! -1 _CVCP-DEPTH !
+    _CVCP-TEMP _CV-COPY-VALUE DUP IF
+        _CVCP-TEMP CV-FREE EXIT
+    THEN
+    DROP
+    _CVCP-TOP-DEST @ CV-FREE
+    _CVCP-TEMP _CVCP-TOP-DEST @ CV-SIZE CMOVE
+    _CVCP-TEMP CV-INIT 0 ;
+
+GUARD _cv-copy-guard
+' _CV-COPY-TOP CONSTANT _cv-copy-top-xt
+: CV-COPY  ( source destination -- ior )
+    _cv-copy-top-xt _cv-copy-guard WITH-GUARD ;

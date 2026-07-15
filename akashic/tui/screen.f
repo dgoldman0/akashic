@@ -21,13 +21,15 @@
 \
 \  Prefix: SCR- (public), _SCR- (internal)
 \  Provider: akashic-tui-screen
-\  Dependencies: cell.f, ansi.f, ../text/utf8.f
+\  Dependencies: cell.f, ansi.f, ../text/utf8.f,
+\                ../text/cell-width.f
 
 PROVIDED akashic-tui-screen
 
 REQUIRE cell.f
 REQUIRE ansi.f
 REQUIRE ../text/utf8.f
+REQUIRE ../text/cell-width.f
 REQUIRE ../utils/term.f
 
 \ =====================================================================
@@ -273,11 +275,18 @@ VARIABLE _SCR-FILL-VAL
 \ Scratch buffer for UTF-8 encoding (4 bytes is enough)
 CREATE _SCR-UTF8-BUF 4 ALLOT
 
-\ _SCR-EMIT-CHAR ( cell -- )
-\   Emit the cell's codepoint as UTF-8.
-: _SCR-EMIT-CHAR  ( cell -- )
+\ _SCR-EMIT-CP ( cell -- cp )
+\   Resolve an empty cell to space and apply the final one-physical-cell
+\   projection.  This guard applies even to raw cells written without DRW.
+: _SCR-EMIT-CP  ( cell -- cp )
     CELL-CP@
     DUP 0= IF DROP 32 THEN            \ empty → space
+    CW-CELL-CP ;
+
+\ _SCR-EMIT-CHAR ( cell -- )
+\   Emit exactly one isolated physical terminal cell as UTF-8.
+: _SCR-EMIT-CHAR  ( cell -- )
+    _SCR-EMIT-CP
     DUP 128 < IF
         EMIT                           \ ASCII fast path
     ELSE

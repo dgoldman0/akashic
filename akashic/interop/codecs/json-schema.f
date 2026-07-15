@@ -18,9 +18,7 @@ VARIABLE _CSJ-COUNT
         CV-T-NULL OF S" null" ENDOF
         CV-T-BOOL OF S" boolean" ENDOF
         CV-T-INT OF S" integer" ENDOF
-        CV-T-F32 OF S" number" ENDOF
         CV-T-STRING OF S" string" ENDOF
-        CV-T-BYTES OF S" string" ENDOF
         CV-T-LIST OF S" array" ENDOF
         CV-T-MAP OF S" object" ENDOF
         CV-T-RESOURCE OF S" string" ENDOF
@@ -30,7 +28,15 @@ VARIABLE _CSJ-COUNT
 : _CSJ-TYPE-COUNT  ( mask -- count )
     _CSJ-MASK ! 0 _CSJ-COUNT !
     9 0 DO
-        _CSJ-MASK @ I CS-TYPE-BIT AND IF 1 _CSJ-COUNT +! THEN
+        _CSJ-MASK @ I CS-TYPE-BIT AND IF
+            \ STRING and RESOURCE share JSON's string primitive.  If both
+            \ are allowed, emit that primitive once rather than a duplicate
+            \ entry in the type array.
+            I CV-T-RESOURCE =
+            _CSJ-MASK @ CV-T-STRING CS-TYPE-BIT AND 0<> AND 0= IF
+                1 _CSJ-COUNT +!
+            THEN
+        THEN
     LOOP
     _CSJ-COUNT @ ;
 
@@ -44,6 +50,26 @@ CREATE _CSJEF-S IVJSON-MAX-DEPTH 8 * ALLOT
 VARIABLE _CSJE-DEPTH
 VARIABLE _CSJE-ERROR
 VARIABLE _CSJE-STRUCTURAL
+
+: _CSJSON-SCHEMA-IOR>IVJSON  ( cs-ior -- ivjson-ior )
+    DUP CS-E-DEPTH = IF DROP IVJSON-E-DEPTH EXIT THEN
+    CS-E-CAPACITY = IF IVJSON-E-CAPACITY ELSE IVJSON-E-TYPE THEN ;
+
+\ Validate before the first builder write.  Besides preventing projection
+\ from walking malformed child pointers, compatibility rejects native CV
+\ alternatives for which IVJSON has no canonical wire form.  A null schema
+\ remains the explicit unconstrained/no-arguments projection handled by the
+\ public entry points below.
+: _CSJSON-PREFLIGHT  ( schema -- ior )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CS-SCHEMA-VALIDATE ?DUP IF
+        NIP _CSJSON-SCHEMA-IOR>IVJSON EXIT
+    THEN
+    IVJSON-SCHEMA-COMPATIBLE? 0= IF
+        IVJSON-E-UNSUPPORTED
+    ELSE
+        0
+    THEN ;
 
 : _CSJE-SLOT  ( -- address )
     _CSJEF-S _CSJE-DEPTH @ 8 * + ;
@@ -62,35 +88,43 @@ DEFER _CSJE-SCHEMA
     ELSE
         S" type" JSON-KEY: JSON-[
         9 0 DO
-            DUP I CS-TYPE-BIT AND IF I _CSJ-TYPE-NAME JSON-ESTR THEN
+            DUP I CS-TYPE-BIT AND IF
+                I CV-T-RESOURCE =
+                OVER CV-T-STRING CS-TYPE-BIT AND 0<> AND 0= IF
+                    I _CSJ-TYPE-NAME JSON-ESTR
+                THEN
+            THEN
         LOOP
         JSON-] DROP
     THEN ;
 
 : _CSJE-CONSTRAINTS  ( -- )
-    _CSJE-S@ CS.FLAGS @ CS-F-MIN AND IF
-        S" minimum" _CSJE-S@ CS.MIN @ JSON-KV-NUM
-    THEN
-    _CSJE-S@ CS.FLAGS @ CS-F-MAX AND IF
-        S" maximum" _CSJE-S@ CS.MAX @ JSON-KV-NUM
+    _CSJE-S@ CS.TYPE-MASK @ CV-T-INT CS-TYPE-BIT AND IF
+        S" minimum"
+        _CSJE-S@ CS.FLAGS @ CS-F-MIN AND IF
+            _CSJE-S@ CS.MIN @
+        ELSE
+            CV-CELL-MIN
+        THEN
+        JSON-KV-NUM
+        S" maximum"
+        _CSJE-S@ CS.FLAGS @ CS-F-MAX AND IF
+            _CSJE-S@ CS.MAX @
+        ELSE
+            CV-CELL-MAX
+        THEN
+        JSON-KV-NUM
     THEN
     _CSJE-S@ CS.FLAGS @ CS-F-MAX-LEN AND IF
         _CSJE-S@ CS.TYPE-MASK @ CV-T-LIST CS-TYPE-BIT AND IF
             S" maxItems" _CSJE-S@ CS.MAX-LEN @ JSON-KV-NUM
-        ELSE
-            _CSJE-S@ CS.TYPE-MASK @ CV-T-MAP CS-TYPE-BIT AND IF
-                S" maxProperties" _CSJE-S@ CS.MAX-LEN @ JSON-KV-NUM
-            ELSE
-                S" maxLength" _CSJE-S@ CS.MAX-LEN @ JSON-KV-NUM
-            THEN
         THEN
-    THEN
-    _CSJE-STRUCTURAL @ 0= IF
-        _CSJE-S@ CS.TYPE-MASK @ CV-T-RESOURCE CS-TYPE-BIT AND IF
-            S" format" S" uri" JSON-KV-ESTR
+        _CSJE-S@ CS.TYPE-MASK @ CV-T-MAP CS-TYPE-BIT AND IF
+            S" maxProperties" _CSJE-S@ CS.MAX-LEN @ JSON-KV-NUM
         THEN
-        _CSJE-S@ CS.TYPE-MASK @ CV-T-BYTES CS-TYPE-BIT AND IF
-            S" contentEncoding" S" base64" JSON-KV-ESTR
+        _CSJE-S@ CS.TYPE-MASK @
+            CV-T-STRING CS-TYPE-BIT CV-T-RESOURCE CS-TYPE-BIT OR AND IF
+            S" maxLength" _CSJE-S@ CS.MAX-LEN @ JSON-KV-NUM
         THEN
     THEN ;
 
@@ -142,6 +176,7 @@ DEFER _CSJE-SCHEMA
 ' _CSJE-SCHEMA-R IS _CSJE-SCHEMA
 
 : _CSJSON-WRITE  ( schema -- ior )
+    DUP _CSJSON-PREFLIGHT ?DUP IF NIP EXIT THEN
     DUP 0= IF DROP JSON-{ JSON-} 0 EXIT THEN
     -1 _CSJE-DEPTH ! 0 _CSJE-ERROR !
     _CSJE-SCHEMA
@@ -189,9 +224,13 @@ DEFER _CSJE-SCHEMA
     DROP R> DROP -1 ;
 
 \ ( schema -- flag )
-: CSJSON-STRICT?  0 _CSJSON-STRICT-R? ;
+: CSJSON-STRICT?
+    DUP 0= IF DROP -1 EXIT THEN
+    DUP _CSJSON-PREFLIGHT IF DROP 0 EXIT THEN
+    0 _CSJSON-STRICT-R? ;
 
 : _CSJSON-INPUT-WRITE  ( schema -- ior )
+    DUP _CSJSON-PREFLIGHT ?DUP IF NIP EXIT THEN
     DUP 0= IF DROP CSJSON-NO-ARGS-WRITE 0 EXIT THEN
     DUP CS.TYPE-MASK @ CV-T-NULL CS-TYPE-BIT = IF
         DROP CSJSON-NO-ARGS-WRITE 0 EXIT
@@ -215,10 +254,36 @@ DEFER _CSJE-SCHEMA
 : CSJSON-STRUCTURAL-INPUT-WRITE  ( schema -- ior )
     -1 _CSJE-STRUCTURAL ! _CSJSON-INPUT-WRITE 0 _CSJE-STRUCTURAL ! ;
 
+GUARD _csjson-guard
+' CSJSON-WRITE CONSTANT _csjson-write-xt
+' CSJSON-STRUCTURAL-WRITE CONSTANT _csjson-structural-write-xt
+' CSJSON-INPUT-WRITE CONSTANT _csjson-input-write-xt
+' CSJSON-STRUCTURAL-INPUT-WRITE CONSTANT _csjson-structural-input-write-xt
+
+: _CSJSON-WRITE-GUARDED
+    _csjson-write-xt _csjson-guard WITH-GUARD ;
+: _CSJSON-STRUCTURAL-WRITE-GUARDED
+    _csjson-structural-write-xt _csjson-guard WITH-GUARD ;
+: _CSJSON-INPUT-WRITE-GUARDED
+    _csjson-input-write-xt _csjson-guard WITH-GUARD ;
+: _CSJSON-STRUCTURAL-INPUT-WRITE-GUARDED
+    _csjson-structural-input-write-xt _csjson-guard WITH-GUARD ;
+
+\ Keep one lock order for embedded and standalone encoders: the JSON
+\ builder is always outermost, followed by the schema encoder's frames.
+: CSJSON-WRITE
+    ['] _CSJSON-WRITE-GUARDED JSON-WITH-BUILDER ;
+: CSJSON-STRUCTURAL-WRITE
+    ['] _CSJSON-STRUCTURAL-WRITE-GUARDED JSON-WITH-BUILDER ;
+: CSJSON-INPUT-WRITE
+    ['] _CSJSON-INPUT-WRITE-GUARDED JSON-WITH-BUILDER ;
+: CSJSON-STRUCTURAL-INPUT-WRITE
+    ['] _CSJSON-STRUCTURAL-INPUT-WRITE-GUARDED JSON-WITH-BUILDER ;
+
 VARIABLE _CSJE-BUF
 VARIABLE _CSJE-CAP
 
-: CSJSON-ENCODE  ( schema buffer capacity -- length ior )
+: _CSJSON-ENCODE  ( schema buffer capacity -- length ior )
     _CSJE-CAP ! _CSJE-BUF !
     JSON-BUILD-RESET
     _CSJE-BUF @ _CSJE-CAP @ JSON-SET-OUTPUT
@@ -226,7 +291,7 @@ VARIABLE _CSJE-CAP
     JSON-OUTPUT-OK? 0= IF 0 IVJSON-E-CAPACITY EXIT THEN
     JSON-OUTPUT-RESULT NIP 0 ;
 
-: CSJSON-INPUT-ENCODE  ( schema buffer capacity -- length ior )
+: _CSJSON-INPUT-ENCODE  ( schema buffer capacity -- length ior )
     _CSJE-CAP ! _CSJE-BUF !
     JSON-BUILD-RESET
     _CSJE-BUF @ _CSJE-CAP @ JSON-SET-OUTPUT
@@ -234,10 +299,25 @@ VARIABLE _CSJE-CAP
     JSON-OUTPUT-OK? 0= IF 0 IVJSON-E-CAPACITY EXIT THEN
     JSON-OUTPUT-RESULT NIP 0 ;
 
-: CSJSON-STRUCTURAL-INPUT-ENCODE  ( schema buffer capacity -- length ior )
+: _CSJSON-STRUCTURAL-INPUT-ENCODE  ( schema buffer capacity -- length ior )
     _CSJE-CAP ! _CSJE-BUF !
     JSON-BUILD-RESET
     _CSJE-BUF @ _CSJE-CAP @ JSON-SET-OUTPUT
     CSJSON-STRUCTURAL-INPUT-WRITE ?DUP IF 0 SWAP EXIT THEN
     JSON-OUTPUT-OK? 0= IF 0 IVJSON-E-CAPACITY EXIT THEN
     JSON-OUTPUT-RESULT NIP 0 ;
+
+: _CSJSON-ENCODE-CSJSON-GUARDED
+    ['] _CSJSON-ENCODE _csjson-guard WITH-GUARD ;
+: _CSJSON-INPUT-ENCODE-CSJSON-GUARDED
+    ['] _CSJSON-INPUT-ENCODE _csjson-guard WITH-GUARD ;
+: _CSJSON-STRUCTURAL-INPUT-ENCODE-CSJSON-GUARDED
+    ['] _CSJSON-STRUCTURAL-INPUT-ENCODE _csjson-guard WITH-GUARD ;
+
+: CSJSON-ENCODE
+    ['] _CSJSON-ENCODE-CSJSON-GUARDED JSON-WITH-BUILDER ;
+: CSJSON-INPUT-ENCODE
+    ['] _CSJSON-INPUT-ENCODE-CSJSON-GUARDED JSON-WITH-BUILDER ;
+: CSJSON-STRUCTURAL-INPUT-ENCODE
+    ['] _CSJSON-STRUCTURAL-INPUT-ENCODE-CSJSON-GUARDED
+        JSON-WITH-BUILDER ;

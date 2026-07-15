@@ -222,19 +222,34 @@ Execute a POST request with JSON body.  Returns response body and `ior`.
 
 ## Feed Model — feed-model.f
 
-`feed-model.f` decodes the bounded `app.bsky.feed.getTimeline` response subset
-used by Streams. `BFM-DECODE-FEED ( json-a json-u feed -- status )` validates
-the response, copies and JSON-unescapes retained strings into caller-owned
-storage, accepts at most eight posts, and commits transactionally: a rejected
-response does not alter the destination feed. The model retains stable AT URI,
-CID, author DID/handle/display name, text, creation time, counts, reply/repost
-flags, and the page cursor. It owns no HTTP buffers, credentials, or global
-pagination state.
+`feed-model.f` is a Bluesky-specific adapter for the bounded
+`app.bsky.feed.getTimeline` response subset used by Streams. It is not the
+provider-neutral domain model for future RSS, Atom, or Rabbit providers.
+`BFM-DECODE-FEED ( json-a json-u feed -- status )` requires strict JSON in a
+document of at most `BFM-DOCUMENT-CAP`, then validates the bounded projection
+that Streams actually retains. It copies and JSON-unescapes those strings into
+caller-owned storage, accepts at most eight posts, and commits transactionally:
+a rejected response does not alter the destination feed.
+
+The adapter retains the stable AT URI, CID, author DID/handle/display name,
+post text, creation and indexing times, nonnegative counts, reply root and
+parent URIs, typed repost/pin reasons, and the opaque page cursor. Its retained
+text, display-name, handle, and DID buffers reflect the relevant app.bsky/AT
+Protocol bounds; AT URIs have an explicit 3,072-byte implementation bound. It
+also verifies that each post URI names `app.bsky.feed.post` under the reported
+author DID with a syntactically valid TID record key. CID, handle, and datetime
+format normalization outside that retained identity check is still trusted to
+the AppView. The adapter is not a complete Lexicon or moderation validator: it
+owns no HTTP buffers, credentials, session, cache, or global pagination state,
+and it deliberately ignores embeds, facets, labels, moderation decisions, and
+viewer state for now. A live transport must preserve those boundaries instead
+of presenting successful projection decode as complete response validation.
 
 Call `BFM-FEED-INIT` on `BFM-FEED-SIZE` bytes before first use. Feed and item
-accessors (`BFM.FEED.ITEM`, `BFM.ITEM.URI`, `BFM.ITEM.TEXT`, and peers) return
-views into that caller-owned model. Capacity, missing-field, and type failures
-are explicit `BFM-S-*` statuses.
+accessors (`BFM.ITEM.URI`, `BFM.ITEM.TEXT`, and peers) return views into that
+caller-owned model. `BFM.FEED.ITEM` returns zero for a negative, out-of-count,
+or out-of-capacity index. Capacity, missing-field, type, identity, and malformed
+integer failures are explicit `BFM-S-*` statuses.
 
 ---
 
@@ -243,6 +258,14 @@ are explicit `BFM-S-*` statuses.
 Manages authentication with an AT Protocol PDS via `createSession`
 and `refreshSession` XRPC procedures.  Stores access + refresh JWT
 tokens and the session DID.
+
+> **Legacy boundary:** `session.f` is process-global infrastructure, not owned
+> Streams account state. `_SES-CLEAR` clears lengths but does not wipe the
+> token/DID bytes, `_SES-JBUF` can retain the serialized app password, and the
+> module has no owned logout/zeroization lifecycle. New live Streams work must
+> use per-instance session ownership and wipe prompt, request, scratch, and
+> token buffers; it must not persist an app password or silently treat these
+> globals as secure storage.
 
 ### Token Storage
 
@@ -396,9 +419,11 @@ Delete a record at the given AT URI.  Builds
 | `BFM-FEED-INIT` | `( feed -- )` | Clear caller-owned feed storage |
 | `BFM-DECODE-FEED` | `( json-a json-u feed -- status )` | Transactionally decode a bounded timeline page |
 | `BFM.FEED.COUNT` | `( feed -- a )` | Address of retained item count |
-| `BFM.FEED.ITEM` | `( index feed -- item )` | Address a retained item |
+| `BFM.FEED.ITEM` | `( index feed -- item \| 0 )` | Address a retained item with bounds checking |
 | `BFM.ITEM.URI` | `( item -- a u )` | Read the stable AT URI |
 | `BFM.ITEM.TEXT` | `( item -- a u )` | Read copied post text |
+| `BFM.ITEM.ROOT-URI` | `( item -- a u )` | Read the retained reply root URI, or an empty string |
+| `BFM.ITEM.PARENT-URI` | `( item -- a u )` | Read the retained direct parent URI, or an empty string |
 
 ### repo.f
 

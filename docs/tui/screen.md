@@ -218,8 +218,12 @@ Differential screen update.  Iterates every cell position.  Where
    first, then individual SGR codes for each set flag.  Foreground
    and background colors are emitted via `ANSI-FG256` / `ANSI-BG256`
    only when they differ from the last emitted state.
-3. **Emit the character** as UTF-8 via `EMIT` (ASCII fast path) or
-   `UTF8-ENCODE` + `TYPE` (multi-byte).
+3. **Emit exactly one physical cell** after applying `CW-CELL-CP`, so even a
+   caller that placed a raw control, combining/joining codepoint, or width-2
+   glyph in a cell cannot desynchronize the host cursor from the logical
+   buffer. Unsupported codepoints become U+FFFD; isolated safe width-1
+   characters use `EMIT` (ASCII fast path) or `UTF8-ENCODE` + `TYPE`
+   (multi-byte). The stored back-buffer value is not rewritten.
 
 After flushing every dirty cell, `back[]` is copied to `front[]`
 cell-by-cell.  The cursor is hidden during the update

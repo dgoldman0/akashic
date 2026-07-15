@@ -19,6 +19,26 @@ PROVIDED akashic-utf8
 
 0xFFFD CONSTANT UTF8-REPLACEMENT  \ U+FFFD REPLACEMENT CHARACTER
 
+\ A terminal cell is a presentation boundary, not an arbitrary Unicode byte
+\ channel.  This pure policy preserves ordinary text while making controls and
+\ invisible direction overrides visibly inert.  Source buffers remain owned
+\ and unchanged by callers.
+: UTF8-DISPLAY-UNSAFE?  ( cp -- flag )
+    DUP 0 32 WITHIN IF DROP -1 EXIT THEN       \ C0 controls
+    DUP 127 160 WITHIN IF DROP -1 EXIT THEN    \ DEL and C1 controls
+    DUP 0x061C = IF DROP -1 EXIT THEN          \ Arabic letter mark
+    DUP 0x200B = IF DROP -1 EXIT THEN          \ zero-width space
+    DUP 0x200E 0x2010 WITHIN IF DROP -1 EXIT THEN
+    DUP 0x2028 0x202F WITHIN IF DROP -1 EXIT THEN
+    DUP 0x2060 0x2070 WITHIN IF DROP -1 EXIT THEN
+    DUP 0xFEFF = IF DROP -1 EXIT THEN
+    DUP 0xFFF9 0xFFFC WITHIN IF DROP -1 EXIT THEN
+    DUP 0xE0000 0xE0080 WITHIN IF DROP -1 EXIT THEN
+    DROP 0 ;
+
+: UTF8-DISPLAY-CP  ( cp -- safe-cp )
+    DUP UTF8-DISPLAY-UNSAFE? IF DROP UTF8-REPLACEMENT THEN ;
+
 \ =====================================================================
 \  Internal: classify a leading byte
 \ =====================================================================

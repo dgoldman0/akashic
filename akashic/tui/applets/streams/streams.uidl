@@ -17,9 +17,9 @@
 </menubar>
 <region id=streams-body style=color:#eeeeee;background-color:#121212/>
 <status id=sbar style=color:white;background-color:#005f5f>
-<label id=sbar-account text=Fixture_account/>
+<label id=sbar-account text=Signed_out/>
 <label id=sbar-view text=Timeline/>
-<label id=sbar-state text=Offline_fixture/>
+<label id=sbar-state text=No_feed_loaded/>
 </status>
 <action do=search key=Ctrl+F/>
 <action do=compose key=Ctrl+N/>

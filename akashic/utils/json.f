@@ -235,7 +235,10 @@ DEFER _JV-VALUE
 ' _JV-VALUE-IMPL IS _JV-VALUE
 
 : JSON-VALID-LIMIT?  ( addr len max-len -- flag )
-    >R DUP 0= OVER R@ > OR IF 2DROP R> DROP 0 EXIT THEN
+    >R
+    OVER 0= OVER 0< OR OVER 0= OR OVER R@ > OR IF
+        2DROP R> DROP 0 EXIT
+    THEN
     R> DROP
     2DUP UTF8-VALID? 0= IF 2DROP 0 EXIT THEN
     _JV-U ! _JV-A !
@@ -539,6 +542,11 @@ CREATE _JU-UTF8 4 ALLOT
         THEN
     REPEAT
     _JU-POS @ ;
+
+\ Return the unescape status in the same guarded transaction as the decoded
+\ length.  Callers must not sample process-wide JSON-ERR in a later call.
+: JSON-UNESCAPE-CHECKED  ( src slen dest dmax -- len ior )
+    JSON-UNESCAPE JSON-ERR @ ;
 
 \ JSON-GET-NUMBER ( addr len -- n )
 \   Parse a signed integer from JSON.  Stops at first non-digit.
@@ -1005,17 +1013,21 @@ VARIABLE _JB-OVERFLOW              \ output exceeded caller capacity
 
 \ ── Comma-state stack ────────────────────────────────────────────────
 \  Each nesting level has a flag: 0 = no comma needed, 1 = need comma.
-\  Max nesting: 16 levels.
-CREATE _JC-STACK 16 ALLOT
+\ Typed values add a tag array around every native container, so their legal
+\ builder nesting is deeper than the reader's document limit.
+64 CONSTANT JSON-BUILDER-MAX-DEPTH
+CREATE _JC-STACK JSON-BUILDER-MAX-DEPTH ALLOT
 VARIABLE _JC-DEPTH
 
 : _JC-RESET  0 _JC-DEPTH ! ;
 _JC-RESET
 
 : _JC-PUSH  ( -- )
-    _JC-DEPTH @ 15 < IF
+    _JC-DEPTH @ JSON-BUILDER-MAX-DEPTH < IF
         0 _JC-STACK _JC-DEPTH @ + C!
         1 _JC-DEPTH +!
+    ELSE
+        -1 _JB-OVERFLOW !
     THEN ;
 
 : _JC-POP  ( -- )
@@ -1100,6 +1112,9 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
 
 : JSON-NUM  ( n -- )
     _JC-COMMA
+    DUP 0x8000000000000000 = IF
+        DROP S" -9223372036854775808" JSON-TYPE EXIT
+    THEN
     DUP 0< IF
         45 JSON-EMIT                 \ -
         NEGATE
@@ -1334,6 +1349,7 @@ GUARD _json-guard
 ' JSON-NULL?      CONSTANT _json-null-q-xt
 ' JSON-GET-STRING CONSTANT _json-get-string-xt
 ' JSON-UNESCAPE   CONSTANT _json-unescape-xt
+' JSON-UNESCAPE-CHECKED CONSTANT _json-unescape-checked-xt
 ' JSON-GET-NUMBER CONSTANT _json-get-number-xt
 ' JSON-GET-BOOL   CONSTANT _json-get-bool-xt
 ' JSON-ENTER      CONSTANT _json-enter-xt
@@ -1376,6 +1392,8 @@ GUARD _json-guard
 : JSON-NULL?      _json-null-q-xt _json-guard WITH-GUARD ;
 : JSON-GET-STRING _json-get-string-xt _json-guard WITH-GUARD ;
 : JSON-UNESCAPE   _json-unescape-xt _json-guard WITH-GUARD ;
+: JSON-UNESCAPE-CHECKED
+    _json-unescape-checked-xt _json-guard WITH-GUARD ;
 : JSON-GET-NUMBER _json-get-number-xt _json-guard WITH-GUARD ;
 : JSON-GET-BOOL   _json-get-bool-xt _json-guard WITH-GUARD ;
 : JSON-ENTER      _json-enter-xt _json-guard WITH-GUARD ;

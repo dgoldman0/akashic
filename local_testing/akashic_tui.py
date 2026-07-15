@@ -25,6 +25,9 @@ AKASHIC_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = AKASHIC_ROOT / "akashic"
 DEFAULT_MEGAPAD_ROOT = AKASHIC_ROOT.parent / "megapad"
 OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
+STREAMS_TIMELINE_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "atproto" / "timeline.json"
+).read_bytes()
 REQUIRE_RE = re.compile(r"^\s*REQUIRE\s+(\S+)", re.MULTILINE)
 PROVIDED_RE = re.compile(r"^\s*PROVIDED\s+(\S+)", re.MULTILINE)
 STACK_EFFECT_RE = re.compile(r"[ \t]+\([^()\r\n]*--[^()\r\n]*\)")
@@ -1301,6 +1304,7 @@ VARIABLE _oc-large-array-a
 CREATE _oc-component COMP-DESC ALLOT
 CREATE _oc-capability CAP-DESC ALLOT
 CREATE _oc-schema CS-SIZE ALLOT
+CREATE _oc-out-schema CS-SIZE ALLOT
 CREATE _oc-policy CPOLICY-SIZE ALLOT
 VARIABLE _oc-registry
 VARIABLE _oc-instance
@@ -1317,6 +1321,7 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
 : _oc-setup-tools  ( -- )
     _oc-schema CS-INIT CV-T-RESOURCE _oc-schema CS-ALLOW!
     256 _oc-schema CS-MAX-LEN!
+    _oc-out-schema CS-INIT CV-T-NULL _oc-out-schema CS-ALLOW!
     _oc-component COMP-DESC-INIT
     S" org.akashic.test.openai"
     _oc-component COMP.ID-U ! _oc-component COMP.ID-A !
@@ -1330,6 +1335,7 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     S" Capture a task in Daybook"
     _oc-capability CAP.DESC-U ! _oc-capability CAP.DESC-A !
     _oc-schema _oc-capability CAP.IN-SCHEMA !
+    _oc-out-schema _oc-capability CAP.OUT-SCHEMA !
     CAP-E-MUTATE CAP-E-PERSIST OR _oc-capability CAP.EFFECTS !
     ['] _oc-handler _oc-capability CAP.HANDLER-XT !
     _oc-capability _oc-component COMP.CAPS-A !
@@ -1946,6 +1952,7 @@ VARIABLE _op-auth-context
     S" Capture a task in Daybook"
     _op-capability CAP.DESC-U ! _op-capability CAP.DESC-A !
     _op-schema _op-capability CAP.IN-SCHEMA !
+    _op-schema _op-capability CAP.OUT-SCHEMA !
     CAP-E-MUTATE CAP-E-PERSIST OR _op-capability CAP.EFFECTS !
     ['] _op-handler _op-capability CAP.HANDLER-XT !
     _op-capability _op-component COMP.CAPS-A !
@@ -3998,6 +4005,36 @@ CREATE _ct-copy CV-SIZE ALLOT
 CREATE _ct-keybuf 3 ALLOT
 CREATE _ct-resource-schema CS-SIZE ALLOT
 CREATE _ct-null-schema CS-SIZE ALLOT
+CREATE _ct-f32-schema CS-SIZE ALLOT
+CREATE _ct-bytes-schema CS-SIZE ALLOT
+CREATE _ct-wire-int-schema CS-SIZE ALLOT
+CREATE _ct-bad-schema CS-SIZE ALLOT
+CREATE _ct-bad-list-schema CS-SIZE ALLOT
+CREATE _ct-open-list-schema CS-SIZE ALLOT
+CREATE _ct-open-map-schema CS-SIZE ALLOT
+CREATE _ct-mixed-text-schema CS-SIZE ALLOT
+
+: _ct-schema-projection-setup  ( -- )
+    _ct-f32-schema CS-INIT
+    CV-T-F32 _ct-f32-schema CS-ALLOW!
+    _ct-bytes-schema CS-INIT
+    CV-T-BYTES _ct-bytes-schema CS-ALLOW!
+    _ct-wire-int-schema CS-INIT
+    CV-T-INT _ct-wire-int-schema CS-ALLOW!
+    _ct-bad-schema CS-INIT
+    CV-T-INT _ct-bad-schema CS-ALLOW!
+    8 _ct-bad-schema CS.FLAGS !
+    _ct-bad-list-schema CS-INIT
+    CV-T-LIST _ct-bad-list-schema CS-ALLOW!
+    _ct-bad-schema _ct-bad-list-schema CS.ITEM !
+    _ct-open-list-schema CS-INIT
+    CV-T-LIST _ct-open-list-schema CS-ALLOW!
+    _ct-open-map-schema CS-INIT
+    CV-T-MAP _ct-open-map-schema CS-ALLOW!
+    _ct-mixed-text-schema CS-INIT
+    CV-T-STRING CS-TYPE-BIT CV-T-RESOURCE CS-TYPE-BIT OR
+        _ct-mixed-text-schema CS-ALLOW-MASK!
+    48 _ct-mixed-text-schema CS-MAX-LEN! ;
 
 : _ct-reset  ( -- ) 0 _ct-json-u ! ;
 : _ct-c  ( c -- ) _ct-json _ct-json-u @ + C! 1 _ct-json-u +! ;
@@ -4026,6 +4063,22 @@ CREATE _ct-null-schema CS-SIZE ALLOT
 : _ct-bad-unicode  ( -- )
     _ct-reset 34 _ct-c 92 _ct-c S" uD800" _ct-s 34 _ct-c ;
 
+: _ct-over-capacity  ( -- )
+    _ct-reset 91 _ct-c
+    65 0 DO I IF _ct-comma THEN 48 _ct-c LOOP
+    93 _ct-c ;
+
+: _ct-over-depth  ( -- )
+    _ct-reset
+    16 0 DO 91 _ct-c LOOP
+    48 _ct-c
+    16 0 DO 93 _ct-c LOOP ;
+
+: _ct-copy-text=  ( expected-a expected-u -- flag )
+    _ct-copy CV-TYPE@ CV-T-STRING = >R
+    _ct-copy DUP CV-DATA@ SWAP CV-LEN@ 2SWAP STR-STR=
+    R> AND ;
+
 : _ct-escaped-key  ( -- )
     97 _ct-keybuf C! 34 _ct-keybuf 1+ C! 98 _ct-keybuf 2 + C!
     _ct-reset 123 _ct-c 34 _ct-c 97 _ct-c 92 _ct-c 34 _ct-c
@@ -4033,6 +4086,7 @@ CREATE _ct-null-schema CS-SIZE ALLOT
 
 : _ct-run  ( -- )
     0 _ct-fails ! 0 _ct-checks ! DEPTH _ct-depth !
+    _ct-schema-projection-setup
     _ct-val CV-INIT _ct-copy CV-INIT
 
     _ct-document _ct-json _ct-json-u @ _ct-val IVJSON-DECODE
@@ -4058,11 +4112,59 @@ CREATE _ct-null-schema CS-SIZE ALLOT
     _ct-val _ct-out 4 IVJSON-ENCODE
     IVJSON-E-CAPACITY = _ct-assert DROP
 
+    S" keep-duplicate" _ct-copy CV-STRING! 0= _ct-assert
     _ct-duplicate _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
     IVJSON-E-INVALID = _ct-assert
+    S" keep-duplicate" _ct-copy-text= _ct-assert
+    _ct-stack
+    S" keep-unsupported" _ct-copy CV-STRING! 0= _ct-assert
     _ct-reset S" 1.5" _ct-s
     _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
     IVJSON-E-UNSUPPORTED = _ct-assert
+    S" keep-unsupported" _ct-copy-text= _ct-assert
+    _ct-stack
+
+    S" keep-capacity" _ct-copy CV-STRING! 0= _ct-assert
+    _ct-over-capacity
+    _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
+    IVJSON-E-CAPACITY = _ct-assert
+    S" keep-capacity" _ct-copy-text= _ct-assert
+    _ct-stack
+    S" keep-depth" _ct-copy CV-STRING! 0= _ct-assert
+    _ct-over-depth
+    _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
+    IVJSON-E-DEPTH = _ct-assert
+    S" keep-depth" _ct-copy-text= _ct-assert
+    _ct-stack
+
+    _ct-reset S" -42" _ct-s
+    _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE 0= _ct-assert
+    _ct-copy CV-TYPE@ CV-T-INT = _ct-assert
+    _ct-copy CV-DATA@ -42 = _ct-assert
+    _ct-reset S" 9223372036854775807" _ct-s
+    _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE 0= _ct-assert
+    _ct-copy CV-DATA@ 0x7FFFFFFFFFFFFFFF = _ct-assert
+    _ct-reset S" -9223372036854775808" _ct-s
+    _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE 0= _ct-assert
+    _ct-copy CV-DATA@ 0x8000000000000000 = _ct-assert
+    S" keep-range" _ct-copy CV-STRING! 0= _ct-assert
+    _ct-reset S" 9223372036854775808" _ct-s
+    _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
+    IVJSON-E-RANGE = _ct-assert
+    S" keep-range" _ct-copy-text= _ct-assert
+    _ct-stack
+    _ct-reset S" -9223372036854775809" _ct-s
+    _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE
+    IVJSON-E-RANGE = _ct-assert
+    S" keep-range" _ct-copy-text= _ct-assert
+    _ct-stack
+
+    0x8000000000000000 _ct-copy CV-INT!
+    _ct-copy _ct-out 4096 IVJSON-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ S" -9223372036854775808" STR-STR= _ct-assert
+    _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+    _ct-stack
 
     _ct-unicode _ct-json _ct-json-u @ _ct-copy IVJSON-DECODE 0= _ct-assert
     _ct-copy CV-LEN@ 4 = _ct-assert
@@ -4091,19 +4193,54 @@ CREATE _ct-null-schema CS-SIZE ALLOT
     DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
     _ct-out _ct-out-u @ JSON-VALID? _ct-assert
 
+    _ct-copy CV-FREE 2 _ct-copy CV-MAP! 0= _ct-assert
+    S" x" 0 _ct-copy CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    1 SWAP CV-INT!
+    S" x" 1 _ct-copy CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    2 SWAP CV-INT!
+    _ct-copy _ct-out 4096 IVJSON-ENCODE
+    IVJSON-E-INVALID = _ct-assert DROP
+    _ct-stack
+
     _ct-resource-schema CS-INIT
     CV-T-RESOURCE _ct-resource-schema CS-ALLOW!
+    128 _ct-resource-schema CS-MAX-LEN!
+    S" keep-schema" _ct-copy CV-STRING! 0= _ct-assert
+    4 _ct-resource-schema CS-MAX-LEN!
+    _ct-reset S" too-long" _ct-q
+    _ct-json _ct-json-u @ _ct-resource-schema _ct-copy
+    IVJSON-DECODE-AS IVJSON-E-TYPE = _ct-assert
+    S" keep-schema" _ct-copy-text= _ct-assert
+    _ct-stack
     128 _ct-resource-schema CS-MAX-LEN!
     _ct-reset S" vfs:/notes.txt" _ct-q
     _ct-json _ct-json-u @ _ct-resource-schema _ct-copy
     IVJSON-DECODE-AS 0= _ct-assert
     _ct-copy CV-TYPE@ CV-T-RESOURCE = _ct-assert
 
+    \ Typed decode validates the complete schema before looking at runtime
+    \ children.  An empty array must not conceal a malformed item graph or an
+    \ unconstrained item contract that can admit unsupported native values.
+    S" keep-bad-item" _ct-copy CV-STRING! 0= _ct-assert
+    _ct-reset 91 _ct-c 93 _ct-c
+    _ct-json _ct-json-u @ _ct-bad-list-schema _ct-copy
+    IVJSON-DECODE-AS IVJSON-E-TYPE = _ct-assert
+    S" keep-bad-item" _ct-copy-text= _ct-assert
+    _ct-stack
+    S" keep-open-item" _ct-copy CV-STRING! 0= _ct-assert
+    _ct-json _ct-json-u @ _ct-open-list-schema _ct-copy
+    IVJSON-DECODE-AS IVJSON-E-UNSUPPORTED = _ct-assert
+    S" keep-open-item" _ct-copy-text= _ct-assert
+    _ct-stack
+
     _ct-resource-schema _ct-out 4096 CSJSON-ENCODE
     DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
     _ct-out _ct-out-u @ JSON-VALID? _ct-assert
-    _ct-out _ct-out-u @ JSON-ENTER S" format" JSON-KEY
-    S" uri" JSON-STRING= _ct-assert
+    \ CV-T-RESOURCE is a semantic string tag, but CS-VALIDATE currently
+    \ enforces UTF-8 rather than generic URI syntax.  Projection must not
+    \ advertise a stronger format check than the source contract performs.
+    _ct-out _ct-out-u @ S" format" STR-STR-CONTAINS 0= _ct-assert
+    _ct-out _ct-out-u @ S" maxLength" STR-STR-CONTAINS _ct-assert
 
     _ct-resource-schema _ct-out 4096 CSJSON-INPUT-ENCODE
     DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
@@ -4126,6 +4263,77 @@ CREATE _ct-null-schema CS-SIZE ALLOT
     JSON-ENTER JSON-COUNT 0= _ct-assert
     _ct-out _ct-out-u @ JSON-ENTER S" required" JSON-KEY
     JSON-ENTER JSON-COUNT 0= _ct-assert
+
+    \ Graph-only validation is public, transactional projection checks the
+    \ complete graph before writing, and native CV alternatives without an
+    \ IVJSON representation fail explicitly instead of being advertised as
+    \ JSON numbers or base64 strings.
+    0 CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
+    _ct-resource-schema CS-SCHEMA-VALIDATE 0= _ct-assert
+    _ct-resource-schema IVJSON-SCHEMA-COMPATIBLE? _ct-assert
+    _ct-bad-schema CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
+    _ct-bad-list-schema CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
+    _ct-bad-list-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
+    165 _ct-out C!
+    _ct-bad-list-schema _ct-out 4096 CSJSON-ENCODE
+    IVJSON-E-TYPE = _ct-assert DROP
+    _ct-out C@ 165 = _ct-assert
+    _ct-bad-list-schema CSJSON-STRICT? 0= _ct-assert
+
+    _ct-f32-schema CS-SCHEMA-VALIDATE 0= _ct-assert
+    _ct-f32-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
+    _ct-f32-schema _ct-out 4096 CSJSON-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP
+    _ct-f32-schema _ct-out 4096 CSJSON-INPUT-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP
+    _ct-f32-schema CSJSON-STRICT? 0= _ct-assert
+    _ct-bytes-schema CS-SCHEMA-VALIDATE 0= _ct-assert
+    _ct-bytes-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
+    _ct-bytes-schema _ct-out 4096 CSJSON-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP
+    _ct-wire-int-schema IVJSON-SCHEMA-COMPATIBLE? _ct-assert
+    _ct-wire-int-schema _ct-out 4096 CSJSON-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ S" -9223372036854775808"
+        STR-STR-CONTAINS _ct-assert
+    _ct-out _ct-out-u @ S" 9223372036854775807"
+        STR-STR-CONTAINS _ct-assert
+
+    \ Structurally valid but unconstrained child containers can admit the
+    \ same unsupported native variants, so they are not compatibility-safe.
+    _ct-open-list-schema CS-SCHEMA-VALIDATE 0= _ct-assert
+    _ct-open-list-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
+    _ct-open-list-schema _ct-out 4096 CSJSON-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP
+    _ct-f32-schema _ct-open-list-schema CS.ITEM !
+    1 _ct-open-list-schema CS-MAX-LEN!
+    _ct-open-list-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
+    _ct-open-list-schema _ct-out 4096 CSJSON-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP
+    _ct-resource-schema _ct-open-list-schema CS.ITEM !
+    IVJSON-MAX-CHILDREN 1+ _ct-open-list-schema CS-MAX-LEN!
+    _ct-open-list-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
+    IVJSON-MAX-CHILDREN _ct-open-list-schema CS-MAX-LEN!
+    _ct-open-list-schema IVJSON-SCHEMA-COMPATIBLE? _ct-assert
+    _ct-open-list-schema _ct-out 4096 CSJSON-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ S" maxItems" STR-STR-CONTAINS _ct-assert
+    _ct-open-map-schema CS-SCHEMA-VALIDATE 0= _ct-assert
+    _ct-open-map-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
+    _ct-open-map-schema _ct-out 4096 CSJSON-ENCODE
+    IVJSON-E-UNSUPPORTED = _ct-assert DROP
+
+    \ RESOURCE and STRING collapse to one JSON primitive.  Bounds applying
+    \ to multiple primitive families are all emitted, without duplicate type
+    \ entries or silently dropping an applicable constraint.
+    _ct-mixed-text-schema IVJSON-SCHEMA-COMPATIBLE? _ct-assert
+    _ct-mixed-text-schema _ct-out 4096 CSJSON-ENCODE
+    DUP 0= _ct-assert DROP DUP _ct-out-u ! 0> _ct-assert
+    _ct-out _ct-out-u @ JSON-VALID? _ct-assert
+    _ct-out _ct-out-u @ JSON-ENTER S" type" JSON-KEY
+    S" string" JSON-STRING= _ct-assert
+    _ct-out _ct-out-u @ S" maxLength" STR-STR-CONTAINS _ct-assert
+    _ct-stack
 
     \ Unsupported native types must fail without consuming an extra stack
     \ cell in either ordinary or exact typed canonical mode.
@@ -4152,6 +4360,7 @@ _ct-run
 """,
         ready_markers=("CODEC JSON PASS",),
         stable_markers=("CODEC JSON PASS",),
+        failure_markers=("CODEC JSON FAIL",),
     ),
     "jsonrpc": Profile(
         roots=("interop/jsonrpc/dispatcher.f",),
@@ -4425,6 +4634,8 @@ VARIABLE _at-message
 
 CREATE _at-component COMP-DESC ALLOT
 CREATE _at-capability CAP-DESC ALLOT
+CREATE _at-in-schema CS-SIZE ALLOT
+CREATE _at-out-schema CS-SIZE ALLOT
 CREATE _at-policy CPOLICY-SIZE ALLOT
 CREATE _at-stale-event AGENT-EVENT-SIZE ALLOT
 CREATE _at-head PHEAD-SIZE ALLOT
@@ -4451,6 +4662,9 @@ CREATE _at-store AGENT-CONVERSATION-STORE-SIZE ALLOT
     DROP CBUS-S-OK ;
 
 : _at-tool-setup  ( -- )
+    _at-in-schema CS-INIT CV-T-STRING _at-in-schema CS-ALLOW!
+    4096 _at-in-schema CS-MAX-LEN!
+    _at-out-schema CS-INIT CV-T-INT _at-out-schema CS-ALLOW!
     _at-component COMP-DESC-INIT
     S" org.akashic.test.agent-tools"
     _at-component COMP.ID-U ! _at-component COMP.ID-A !
@@ -4462,6 +4676,8 @@ CREATE _at-store AGENT-CONVERSATION-STORE-SIZE ALLOT
     S" daybook.task.capture"
     _at-capability CAP.ID-U ! _at-capability CAP.ID-A !
     CAP-E-MUTATE CAP-E-PERSIST OR _at-capability CAP.EFFECTS !
+    _at-in-schema _at-capability CAP.IN-SCHEMA !
+    _at-out-schema _at-capability CAP.OUT-SCHEMA !
     ['] _at-tool-handler _at-capability CAP.HANDLER-XT !
     _at-capability _at-component COMP.CAPS-A !
     1 _at-component COMP.CAPS-N !
@@ -5224,6 +5440,17 @@ VARIABLE _pc-applied
         AMRUN-S-OK = _pc-assert
     1 _pc-fentry @ _pc-amrun @ AMRUN-DISCLOSE-RESERVE
         AMRUN-S-BUDGET = _pc-assert
+    7 _pc-amrun @ AMRUN-DISCLOSE-REFUND
+    _pc-amrun @ AMRUN.DISCLOSURE-USED @ 121 = _pc-assert
+    999 _pc-amrun @ AMRUN-DISCLOSE-REFUND
+    _pc-amrun @ AMRUN.DISCLOSURE-USED @ 0= _pc-assert
+    -1 _pc-amrun @ AMRUN-DISCLOSE-REFUND
+    _pc-amrun @ AMRUN.DISCLOSURE-USED @ 0= _pc-assert
+    64 _pc-fentry @ _pc-amrun @ AMRUN-DISCLOSE-RESERVE
+        AMRUN-S-OK = _pc-assert
+    _pc-amrun @ AMRUN-CLOSE
+    64 _pc-amrun @ AMRUN-DISCLOSE-REFUND
+    _pc-amrun @ AMRUN.DISCLOSURE-USED @ 0= _pc-assert
     _pc-amrun @ AMRUN-FREE
     _pc-stack
 
@@ -5712,9 +5939,16 @@ REQUIRE interop/resource.f
 
 VARIABLE _ct-fails
 VARIABLE _ct-check
+VARIABLE _ct-depth
 : _ct-assert  ( flag -- )
     1 _ct-check +!
     0= IF 1 _ct-fails +! ." ASSERT " _ct-check @ . CR THEN ;
+
+: _ct-stack  ( -- )
+    DEPTH DUP _ct-depth @ <> IF
+        ." STACK " _ct-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ct-depth @ = _ct-assert ;
 
 VARIABLE _ct-cur
 CMP-LAYOUT-BEGIN
@@ -5736,11 +5970,148 @@ VARIABLE _ct-reg
 VARIABLE _ct-bus
 VARIABLE _ct-req
 VARIABLE _ct-router
+VARIABLE _ct-nested-calls
+VARIABLE _ct-bad-output
+VARIABLE _ct-handler-req
+VARIABLE _ct-queue-handler-calls
+VARIABLE _ct-queue-complete-calls
+
+CREATE _ct-throw-policy CPOLICY-SIZE ALLOT
+: _ct-throw-decide  ( principal effects context -- decision )
+    2DROP DROP -777 THROW ;
+
+CREATE _ct-int-schema CS-SIZE ALLOT
+CREATE _ct-text-schema CS-SIZE ALLOT
+CREATE _ct-bytes-schema CS-SIZE ALLOT
+CREATE _ct-resource-schema CS-SIZE ALLOT
+CREATE _ct-list-schema CS-SIZE ALLOT
+CREATE _ct-map-schema CS-SIZE ALLOT
+CREATE _ct-map-fields 2 CS-FIELD-SIZE * ALLOT
+CREATE _ct-invalid-schema CS-SIZE ALLOT
+CREATE _ct-invalid-list-schema CS-SIZE ALLOT
+CREATE _ct-optional-map-schema CS-SIZE ALLOT
+CREATE _ct-optional-field CS-FIELD-SIZE ALLOT
+CREATE _ct-open-map-schema CS-SIZE ALLOT
+CREATE _ct-map CV-SIZE ALLOT
+CREATE _ct-other-map CV-SIZE ALLOT
+CREATE _ct-probe CV-SIZE ALLOT
+CREATE _ct-empty CV-SIZE ALLOT
+CREATE _ct-keybuf 1 ALLOT
+VARIABLE _ct-build-map
+VARIABLE _ct-walk
+VARIABLE _ct-free-snapshot
+VARIABLE _ct-xfree
+VARIABLE _ct-xlimit
+VARIABLE _ct-xfl
+VARIABLE _ct-free-ior
+
+: _ct-xmem-available  ( -- u )
+    0 _ct-xfree ! XMEM-FL @
+    BEGIN DUP WHILE
+        DUP @ _ct-xfree +! 8 + @
+    REPEAT DROP
+    XMEM-FREE _ct-xfree @ + ;
+
+: _ct-free-memory  ( -- u )
+    HEAP-FREE-BYTES _ct-xmem-available + ;
+
+: _ct-probe-text=  ( expected-a expected-u -- flag )
+    _ct-probe CV-TYPE@ CV-T-STRING <> IF 2DROP 0 EXIT THEN
+    _ct-probe DUP CV-DATA@ SWAP CV-LEN@ STR-STR= ;
+
+: _ct-build-deep  ( depth value -- )
+    _ct-walk ! 0 ?DO
+        1 _ct-walk @ CV-LIST! 0= _ct-assert
+        0 _ct-walk @ CV-LIST-NTH DUP 0<> _ct-assert _ct-walk !
+    LOOP
+    S" leaf" _ct-walk @ CV-STRING! 0= _ct-assert ;
+
+: _ct-deep-leaf  ( depth value -- leaf | 0 )
+    _ct-walk ! 0 ?DO
+        0 _ct-walk @ CV-LIST-NTH DUP 0= IF UNLOOP EXIT THEN
+        _ct-walk !
+    LOOP
+    _ct-walk @ ;
+
+: _ct-free-probe  ( -- )
+    _ct-probe CV-FREE ;
+
+: _ct-schema-setup  ( -- )
+    _ct-int-schema CS-INIT CV-T-INT _ct-int-schema CS-ALLOW!
+    0 _ct-int-schema CS-MIN! 10 _ct-int-schema CS-MAX!
+    _ct-text-schema CS-INIT CV-T-STRING _ct-text-schema CS-ALLOW!
+    8 _ct-text-schema CS-MAX-LEN!
+    _ct-bytes-schema CS-INIT CV-T-BYTES _ct-bytes-schema CS-ALLOW!
+    _ct-resource-schema CS-INIT
+    CV-T-RESOURCE _ct-resource-schema CS-ALLOW!
+    _ct-list-schema CS-INIT CV-T-LIST _ct-list-schema CS-ALLOW!
+    3 _ct-list-schema CS-MAX-LEN!
+    _ct-int-schema _ct-list-schema CS.ITEM !
+    _ct-map-schema CS-INIT CV-T-MAP _ct-map-schema CS-ALLOW!
+    2 _ct-map-schema CS-MAX-LEN!
+    _ct-map-fields 2 CS-FIELD-SIZE * 0 FILL
+    S" name" _ct-map-fields CSF.KEY-U ! _ct-map-fields CSF.KEY-A !
+    _ct-text-schema _ct-map-fields CSF.SCHEMA !
+    CSF-F-REQUIRED _ct-map-fields CSF.FLAGS !
+    S" items" _ct-map-fields CS-FIELD-SIZE +
+        DUP >R CSF.KEY-U ! R@ CSF.KEY-A !
+    _ct-list-schema R@ CSF.SCHEMA !
+    CSF-F-REQUIRED R> CSF.FLAGS !
+    _ct-map-fields _ct-map-schema CS.FIELDS !
+    2 _ct-map-schema CS.FIELD-N !
+
+    _ct-invalid-schema CS-INIT
+    CV-T-INT _ct-invalid-schema CS-ALLOW!
+    8 _ct-invalid-schema CS.FLAGS !
+    _ct-invalid-list-schema CS-INIT
+    CV-T-LIST _ct-invalid-list-schema CS-ALLOW!
+    _ct-invalid-schema _ct-invalid-list-schema CS.ITEM !
+
+    _ct-optional-map-schema CS-INIT
+    CV-T-MAP _ct-optional-map-schema CS-ALLOW!
+    _ct-optional-field CS-FIELD-SIZE 0 FILL
+    S" optional" _ct-optional-field CSF.KEY-U !
+        _ct-optional-field CSF.KEY-A !
+    _ct-invalid-schema _ct-optional-field CSF.SCHEMA !
+    _ct-optional-field _ct-optional-map-schema CS.FIELDS !
+    1 _ct-optional-map-schema CS.FIELD-N !
+
+    _ct-open-map-schema CS-INIT
+    CV-T-MAP _ct-open-map-schema CS-ALLOW! ;
+
+: _ct-good-map  ( map -- )
+    _ct-build-map ! _ct-build-map @ CV-INIT
+    2 _ct-build-map @ CV-MAP! 0= _ct-assert
+    S" name" 0 _ct-build-map @ CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    S" ok" ROT CV-STRING! 0= _ct-assert
+    S" items" 1 _ct-build-map @ CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    2 SWAP CV-LIST! 0= _ct-assert
+    S" items" _ct-build-map @ CV-MAP-FIND DUP
+    0 SWAP CV-LIST-NTH 3 SWAP CV-INT!
+    1 SWAP CV-LIST-NTH 7 SWAP CV-INT!
+    ;
+
+: _ct-nested-handler  ( request instance -- status )
+    DROP 1 _ct-nested-calls +!
+    _ct-handler-req !
+    _ct-bad-output @ IF _ct-other-map ELSE _ct-map THEN
+    _ct-handler-req @ CBR.RESULT CV-COPY
+    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
+
+: _ct-no-result-handler  ( request instance -- status )
+    2DROP CBUS-S-OK ;
+
+: _ct-failing-result-handler  ( request instance -- status )
+    DROP CBR.RESULT 123 SWAP CV-INT! CBUS-S-FAILED ;
 
 : _ct-handler  ( request instance -- status )
+    1 _ct-queue-handler-calls +!
     DUP CINST-STATE _ct-cur ! DROP
     DUP CBR.ARGS CV-DATA@ _ct-value !
     DROP CBUS-S-OK ;
+
+: _ct-queue-complete  ( request -- )
+    DROP 1 _ct-queue-complete-calls +! ;
 
 CREATE _ct-cap CAP-DESC ALLOT
 CREATE _ct-intent CINT-DESC-SIZE ALLOT
@@ -5762,24 +6133,266 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     1 _ct-comp COMP.INTENTS-N ! ;
 
 : _ct-run  ( -- )
-    0 _ct-fails ! 0 _ct-check !
+    0 _ct-fails ! 0 _ct-check ! DEPTH _ct-depth !
+    _ct-schema-setup
+    _ct-stack
+    _ct-probe CV-INIT 3 _ct-probe CV-INT!
+    _ct-probe _ct-int-schema CS-VALIDATE-DEEP 0= _ct-assert
+    _ct-probe 0 CS-VALIDATE-DEEP CS-E-SCHEMA = _ct-assert
+    _ct-empty CV-INIT 0 _ct-empty CV-LIST! 0= _ct-assert
+    _ct-empty _ct-invalid-list-schema CS-VALIDATE-DEEP
+        CS-E-SCHEMA = _ct-assert
+    _ct-empty CV-FREE 0 _ct-empty CV-MAP! 0= _ct-assert
+    _ct-empty _ct-optional-map-schema CS-VALIDATE-DEEP
+        CS-E-SCHEMA = _ct-assert
+    _ct-stack
+
+    \ Strict JSON validation rejects invalid borrowed spans before UTF-8 or
+    \ grammar scans and remains reusable after every fail-closed result.
+    S" {}" DROP -1 64 JSON-VALID-LIMIT? 0= _ct-assert
+    S" {}" DROP 0 64 JSON-VALID-LIMIT? 0= _ct-assert
+    0 2 64 JSON-VALID-LIMIT? 0= _ct-assert
+    S" {}" -1 JSON-VALID-LIMIT? 0= _ct-assert
+    S" {}" 64 JSON-VALID-LIMIT? _ct-assert
+
+    \ Schema descriptors and runtime CV graphs are independently bounded.
+    \ Forged lengths must be rejected before UTF8-VALID? or STR-STR= can
+    \ traverse the one-byte sentinel used as their nominal address.
+    _ct-map-fields CSF.KEY-U @ >R
+    CV-MAX-STRING-LEN 1+ _ct-map-fields CSF.KEY-U !
+    _ct-map _ct-map-schema CS-VALIDATE-DEEP CS-E-SCHEMA = _ct-assert
+    R> _ct-map-fields CSF.KEY-U !
+
+    _ct-probe CV-FREE CV-T-STRING _ct-probe CV.TYPE !
+    _ct-keybuf _ct-probe CV.DATA !
+    CV-MAX-STRING-LEN 1+ _ct-probe CV.LEN !
+    _ct-probe _ct-text-schema CS-VALIDATE-DEEP
+        CS-E-LENGTH = _ct-assert
+    _ct-probe CV-FREE CV-T-BYTES _ct-probe CV.TYPE !
+    _ct-keybuf _ct-probe CV.DATA !
+    CV-MAX-STRING-LEN 1+ _ct-probe CV.LEN !
+    _ct-probe _ct-bytes-schema CS-VALIDATE-DEEP
+        CS-E-LENGTH = _ct-assert
+    _ct-probe CV-FREE CV-T-RESOURCE _ct-probe CV.TYPE !
+    _ct-keybuf _ct-probe CV.DATA !
+    CV-MAX-STRING-LEN 1+ _ct-probe CV.LEN !
+    _ct-probe _ct-resource-schema CS-VALIDATE-DEEP
+        CS-E-LENGTH = _ct-assert
+    _ct-probe CV-FREE
+
+    1 _ct-other-map CV-MAP! 0= _ct-assert
+    0 _ct-other-map CV-MAP-NTH CV-MAP-KEY
+    CV-T-STRING OVER CV.TYPE !
+    _ct-keybuf OVER CV.DATA !
+    CV-MAX-STRING-LEN 1+ SWAP CV.LEN !
+    _ct-other-map _ct-open-map-schema CS-VALIDATE-DEEP
+        CS-E-LENGTH = _ct-assert
+    _ct-other-map CV-FREE
+    _ct-stack
+
+    _ct-map _ct-good-map
+    _ct-map _ct-map-schema CS-VALIDATE-DEEP 0= _ct-assert
+    S" items" _ct-map CV-MAP-FIND 1 SWAP CV-LIST-NTH
+    S" wrong" ROT CV-STRING! 0= _ct-assert
+    _ct-map _ct-map-schema CS-VALIDATE-DEEP CS-E-TYPE = _ct-assert
+    S" items" _ct-map CV-MAP-FIND 1 SWAP CV-LIST-NTH 7 SWAP CV-INT!
+
+    _ct-other-map CV-INIT 2 _ct-other-map CV-MAP! 0= _ct-assert
+    S" name" 0 _ct-other-map CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    S" ok" ROT CV-STRING! 0= _ct-assert
+    S" extra" 1 _ct-other-map CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    1 SWAP CV-INT!
+    _ct-other-map _ct-map-schema CS-VALIDATE-DEEP
+        CS-E-UNKNOWN = _ct-assert
+    _ct-other-map CV-FREE 2 _ct-other-map CV-MAP! 0= _ct-assert
+    S" name" 0 _ct-other-map CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    S" first" ROT CV-STRING! 0= _ct-assert
+    S" name" 1 _ct-other-map CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    S" second" ROT CV-STRING! 0= _ct-assert
+    _ct-other-map _ct-map-schema CS-VALIDATE-DEEP
+        CS-E-DUPLICATE = _ct-assert
+    _ct-other-map CV-FREE 1 _ct-other-map CV-MAP! 0= _ct-assert
+    S" name" 0 _ct-other-map CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    S" ok" ROT CV-STRING! 0= _ct-assert
+    _ct-other-map _ct-map-schema CS-VALIDATE-DEEP
+        CS-E-MISSING = _ct-assert
+
+    _ct-other-map CV-FREE 1 _ct-other-map CV-MAP! 0= _ct-assert
+    S" nested" 0 _ct-other-map CV-MAP-SLOT!
+        DUP 0= _ct-assert DROP
+    DUP CV-INIT CV-T-LIST OVER CV.TYPE !
+    1 OVER CV.LEN ! CV-SIZE SWAP CV.AUX !
+    _ct-other-map _ct-open-map-schema CS-VALIDATE-DEEP
+        CS-E-LENGTH = _ct-assert
+
+    S" abcdef" _ct-probe CV-STRING! 0= _ct-assert
+    _ct-probe CV-DATA@ 2 + 3 _ct-probe CV-STRING! 0= _ct-assert
+    _ct-probe DUP CV-DATA@ SWAP CV-LEN@ S" cde" STR-STR= _ct-assert
+    0 -1 _ct-probe CV-STRING! CV-E-RANGE = _ct-assert
+    _ct-probe DUP CV-DATA@ SWAP CV-LEN@ S" cde" STR-STR= _ct-assert
+    _ct-keybuf CV-MAX-STRING-LEN 1+ _ct-probe CV-STRING!
+        CV-E-RANGE = _ct-assert
+    S" cde" _ct-probe-text= _ct-assert
+    _ct-keybuf CV-MAX-STRING-LEN 1+ _ct-probe CV-BYTES!
+        CV-E-RANGE = _ct-assert
+    S" cde" _ct-probe-text= _ct-assert
+    _ct-keybuf CV-MAX-STRING-LEN 1+ _ct-probe CV-RESOURCE!
+        CV-E-RANGE = _ct-assert
+    S" cde" _ct-probe-text= _ct-assert
+    CV-MAX-CONTAINER-LEN 1+ _ct-probe CV-LIST!
+        CV-E-RANGE = _ct-assert
+    _ct-probe DUP CV-DATA@ SWAP CV-LEN@ S" cde" STR-STR= _ct-assert
+
+    \ Public container accessors must fail closed on malformed or null
+    \ borrowed graphs instead of deriving a child pointer from address zero.
+    _ct-probe CV-FREE
+    CV-T-LIST _ct-probe CV.TYPE !
+    1 _ct-probe CV.LEN ! CV-SIZE _ct-probe CV.AUX !
+    0 _ct-probe CV.DATA !
+    0 _ct-probe CV-LIST-NTH 0= _ct-assert
+    0 0 CV-LIST-NTH 0= _ct-assert
+    _ct-probe CV-FREE
+    CV-T-MAP _ct-probe CV.TYPE !
+    1 _ct-probe CV.LEN ! CV-MAP-ENTRY-SIZE _ct-probe CV.AUX !
+    0 _ct-probe CV.DATA !
+    0 _ct-probe CV-MAP-NTH 0= _ct-assert
+    S" missing" _ct-probe CV-MAP-FIND 0= _ct-assert
+    S" missing" 0 CV-MAP-FIND 0= _ct-assert
+    0 1 _ct-probe CV-MAP-FIND 0= _ct-assert
+    _ct-keybuf CV-MAX-STRING-LEN 1+ _ct-probe CV-MAP-FIND 0= _ct-assert
+    _ct-probe CV-FREE
+
+    \ Candidate keys are borrowed graph data, but lookup must validate them
+    \ before STR-STR= can read an address or enter a length-driven loop.
+    1 _ct-probe CV-MAP! 0= _ct-assert
+    0 _ct-probe CV-MAP-NTH CV-MAP-KEY
+    CV-T-STRING OVER CV.TYPE ! 1 OVER CV.LEN ! 0 SWAP CV.DATA !
+    S" x" _ct-probe CV-MAP-FIND 0= _ct-assert
+    0 _ct-probe CV-MAP-NTH CV-MAP-KEY
+    -1 OVER CV.LEN ! _ct-keybuf SWAP CV.DATA !
+    S" x" _ct-probe CV-MAP-FIND 0= _ct-assert
+    0 _ct-probe CV-MAP-NTH CV-MAP-KEY
+    CV-MAX-STRING-LEN 1+ OVER CV.LEN ! _ct-keybuf SWAP CV.DATA !
+    S" x" _ct-probe CV-MAP-FIND 0= _ct-assert
+    _ct-probe CV-FREE
+
+    \ Lookup is transactional across the complete map.  It must not skip a
+    \ malformed leading key and return a later apparently valid match.
+    2 _ct-probe CV-MAP! 0= _ct-assert
+    0 _ct-probe CV-MAP-NTH CV-MAP-KEY
+    CV-T-STRING OVER CV.TYPE ! 1 OVER CV.LEN ! 0 SWAP CV.DATA !
+    S" x" 1 _ct-probe CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    7 SWAP CV-INT!
+    S" x" _ct-probe CV-MAP-FIND 0= _ct-assert
+    _ct-probe CV-FREE
+    CV-T-LIST _ct-probe CV.TYPE !
+    CV-MAX-CONTAINER-LEN 1+ _ct-probe CV.LEN !
+    CV-SIZE _ct-probe CV.AUX !
+    0 _ct-probe CV-LIST-NTH 0= _ct-assert
+    _ct-probe CV-FREE
+
+    \ Deep valid ownership is not a malformed graph.  Traversal grows both
+    \ its explicit work stack and allocation set, then returns every byte of
+    \ graph and scratch storage; the same root remains immediately reusable.
+    _ct-free-memory _ct-free-snapshot !
+    80 _ct-probe _ct-build-deep
+    XMEM? _ct-assert
+    XMEM-LIMIT @ _ct-xlimit ! XMEM-FL @ _ct-xfl !
+    0 XMEM-FL ! XMEM-HERE @ XMEM-LIMIT !
+    ['] _ct-free-probe CATCH _ct-free-ior !
+    _ct-xlimit @ XMEM-LIMIT ! _ct-xfl @ XMEM-FL !
+    _ct-free-ior @ -1 = _ct-assert
+    _CVF-WORK-DYNAMIC @ 0= _ct-assert
+    _CVF-VISITED-DYNAMIC @ 0= _ct-assert
+    80 _ct-probe _ct-deep-leaf DUP 0<> _ct-assert
+    DUP IF
+        DUP CV-TYPE@ CV-T-STRING = _ct-assert
+        DUP CV-DATA@ SWAP CV-LEN@ S" leaf" STR-STR= _ct-assert
+    ELSE
+        DROP
+    THEN
+    _ct-probe CV-FREE
+    _ct-probe CV-TYPE@ CV-T-NULL = _ct-assert
+    _CVF-WORK-DYNAMIC @ 0= _ct-assert
+    _CVF-WORK-A @ _CVF-WORK-LOCAL = _ct-assert
+    _CVF-VISITED-DYNAMIC @ 0= _ct-assert
+    _CVF-VISITED-A @ _CVF-VISITED-LOCAL = _ct-assert
+    _ct-free-memory _ct-free-snapshot @ = _ct-assert
+    80 _ct-probe _ct-build-deep
+    _ct-probe CV-FREE
+    _ct-free-memory _ct-free-snapshot @ = _ct-assert
+
+    \ Allocation identity, rather than a recursion cutoff, closes malformed
+    \ ownership cycles without double-freeing their shared container.
+    _ct-free-memory _ct-free-snapshot !
+    1 _ct-probe CV-LIST! 0= _ct-assert
+    0 _ct-probe CV-LIST-NTH DUP
+    CV-T-LIST OVER CV.TYPE !
+    CV-F-OWNED OVER CV.FLAGS !
+    _ct-probe CV-DATA@ OVER CV.DATA !
+    1 OVER CV.LEN ! CV-SIZE SWAP CV.AUX ! DROP
+    _ct-probe CV-FREE
+    _ct-free-memory _ct-free-snapshot @ = _ct-assert
+
+    \ Seventeen maximum-sized child lists cross the former 65,536-node
+    \ cutoff with the smallest practical valid graph.  Exact allocator
+    \ recovery proves the late child containers were not merely CV-INITed.
+    _ct-free-memory _ct-free-snapshot !
+    17 _ct-probe CV-LIST! 0= _ct-assert
+    17 0 DO
+        CV-MAX-CONTAINER-LEN I _ct-probe CV-LIST-NTH CV-LIST!
+            0= _ct-assert
+    LOOP
+    _ct-probe CV-FREE
+    _ct-probe CV-TYPE@ CV-T-NULL = _ct-assert
+    _ct-free-memory _ct-free-snapshot @ = _ct-assert
+    _ct-stack
+
+    _ct-other-map CV-FREE
+    _ct-map _ct-other-map CV-COPY 0= _ct-assert
+    _ct-other-map _ct-map-schema CS-VALIDATE-DEEP 0= _ct-assert
+    S" name" _ct-map CV-MAP-FIND
+    S" changed" ROT CV-STRING! 0= _ct-assert
+    S" name" _ct-other-map CV-MAP-FIND DUP CV-DATA@ SWAP CV-LEN@
+        S" ok" STR-STR= _ct-assert
+    0 _ct-other-map CV-COPY CV-E-TYPE = _ct-assert
+    _ct-map CV-FREE _ct-map _ct-good-map
+    _ct-stack
+
     S" vfs:/example.f" IRES-VFS-PATH _ct-assert
     DUP 10 = _ct-assert
     DROP C@ [CHAR] / = _ct-assert
     S" file:/example.f" IRES-VFS-PATH 0= _ct-assert 2DROP
     S" vfs" IRES-VFS-PATH 0= _ct-assert 2DROP
+    _ct-stack
     _ct-comp-setup _ct-cap-setup _ct-intent-setup
+    _ct-stack
     _ct-cap _ct-comp COMP.CAPS-A !
     1 _ct-comp COMP.CAPS-N !
     _ct-state-size 32 = _ct-assert
     _ct-comp COMP-DESC-VALID? _ct-assert
     _ct-comp CINST-NEW DUP 0= _ct-assert DROP _ct-i1 !
     _ct-comp CINST-NEW DUP 0= _ct-assert DROP _ct-i2 !
+    _ct-stack
     _ct-i1 @ CINST-STATE _ct-cur ! 11 _ct-value !
     _ct-i2 @ CINST-STATE _ct-cur ! 22 _ct-value !
     _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 11 = _ct-assert
     _ct-i2 @ CINST-STATE _ct-cur ! _ct-value @ 22 = _ct-assert
     CREG-NEW DUP 0= _ct-assert DROP _ct-reg !
+    _ct-map-schema _ct-cap CAP.IN-SCHEMA !
+    _ct-map-schema _ct-cap CAP.OUT-SCHEMA !
+    _ct-cap CAP-DESC-VALID? _ct-assert
+    _ct-invalid-list-schema _ct-cap CAP.IN-SCHEMA !
+    _ct-cap CAP-DESC-VALID? 0= _ct-assert
+    _ct-comp COMP-CAPS-VALID? 0= _ct-assert
+    _ct-comp _ct-reg @ CREG-TYPE+ CREG-E-NOT-FOUND = _ct-assert
+    _ct-map-schema _ct-cap CAP.IN-SCHEMA !
+    _ct-optional-map-schema _ct-cap CAP.OUT-SCHEMA !
+    _ct-cap CAP-DESC-VALID? 0= _ct-assert
+    _ct-comp _ct-reg @ CREG-TYPE+ CREG-E-NOT-FOUND = _ct-assert
+    0 _ct-cap CAP.IN-SCHEMA ! 0 _ct-cap CAP.OUT-SCHEMA !
+    _ct-cap CAP-DESC-VALID? _ct-assert
+    _ct-stack
     128 _ct-cap CAP.FLAGS !
     _ct-comp _ct-reg @ CREG-TYPE+ CREG-E-NOT-FOUND = _ct-assert
     0 _ct-cap CAP.FLAGS !
@@ -5788,33 +6401,52 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     _ct-i2 @ _ct-reg @ CREG-INST+ 0= _ct-assert
     _ct-i1 @ CINST.ID @ _ct-i1 @ CINST.GENERATION @ _ct-reg @
     CREG-INST-FIND _ct-i1 @ = _ct-assert
+    _ct-stack
     CINT-NEW DUP 0= _ct-assert DROP _ct-router !
     _ct-comp _ct-router @ CINT-REGISTER-COMP 0= _ct-assert
+    _ct-stack
     S" resource.test" _ct-router @ CINT-RESOLVE
     DUP 0<> _ct-assert CIE.CAP @ _ct-cap = _ct-assert
+    _ct-stack
     _ct-reg @ 0 CBUS-NEW DUP 0= _ct-assert DROP _ct-bus !
     CBR-NEW DUP 0= _ct-assert DROP _ct-req !
+    _ct-stack
     CBR-SIZE 512 = _ct-assert
     _ct-req @ CBR.RESOURCE-ID RID-ZERO? _ct-assert
     CPRINC-AGENT _ct-req @ CBR.PRINCIPAL !
     _ct-i2 @ _ct-req @ CBR-CALLER!
     _ct-i1 @ _ct-req @ CBR-TARGET!
     _ct-cap _ct-req @ CBR.CAP !
+    0 _ct-queue-handler-calls ! 0 _ct-queue-complete-calls !
+    ['] _ct-queue-complete _ct-req @ CBR.COMPLETE-XT !
     77 _ct-req @ CBR.ARGS CV-INT!
     _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
     _ct-req @ CBR.FLAGS @ CBR-F-QUEUED AND 0<> _ct-assert
     _ct-req @ _ct-bus @ CBUS-POST CBUS-S-BUSY = _ct-assert
     _ct-bus @ CBUS.COUNT @ 1 = _ct-assert
+    _ct-stack
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-BUSY = _ct-assert
+    _ct-queue-handler-calls @ 0= _ct-assert
+    _ct-queue-complete-calls @ 0= _ct-assert
+    _ct-bus @ CBUS.COUNT @ 1 = _ct-assert
+    _ct-req @ CBR.FLAGS @ CBR-F-QUEUED AND 0<> _ct-assert
+    _ct-stack
     1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
+    _ct-stack
+    _ct-queue-handler-calls @ 1 = _ct-assert
+    _ct-queue-complete-calls @ 1 = _ct-assert
+    _ct-bus @ CBUS.COUNT @ 0= _ct-assert
     _ct-req @ CBR.FLAGS @ CBR-F-COMPLETE AND 0<> _ct-assert
     _ct-req @ CBR-LIFECYCLE-BUSY? 0= _ct-assert
     _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 77 = _ct-assert
     _ct-req @ CBR.STATUS @ CBUS-S-OK = _ct-assert
     _ct-i1 @ CINST.REVISION @ 1 = _ct-assert
+    0 _ct-req @ CBR.COMPLETE-XT !
     128 _ct-cap CAP.FLAGS !
     78 _ct-req @ CBR.ARGS CV-INT!
     _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
     1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
+    _ct-stack
     _ct-req @ CBR.STATUS @ CBUS-S-INVALID = _ct-assert
     _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 77 = _ct-assert
     _ct-i1 @ CINST.REVISION @ 1 = _ct-assert
@@ -5823,12 +6455,102 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     88 _ct-req @ CBR.ARGS CV-INT!
     _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
     1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
+    _ct-stack
     _ct-i1 @ CINST.REVISION @ 2 = _ct-assert
     CAP-E-OBSERVE _ct-cap CAP.EFFECTS !
     99 _ct-req @ CBR.ARGS CV-INT!
     _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-OK = _ct-assert
+    _ct-stack
     _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 99 = _ct-assert
     _ct-req @ CBR.FLAGS @ CBR-F-COMPLETE AND 0<> _ct-assert
+
+    \ A completed approval response remains a legitimate sequential reuse:
+    \ approval changes policy state, then the same idle envelope may run.
+    CAP-E-MUTATE _ct-cap CAP.EFFECTS !
+    100 _ct-req @ CBR.ARGS CV-INT!
+    _ct-req @ _ct-bus @ CBUS-DISPATCH
+        CBUS-S-NEEDS-APPROVAL = _ct-assert
+    _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 99 = _ct-assert
+    _ct-req @ CBR-APPROVE
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-OK = _ct-assert
+    _ct-i1 @ CINST-STATE _ct-cur ! _ct-value @ 100 = _ct-assert
+    _ct-stack
+
+    \ An exception in policy or other pre-handler owner work must still close
+    \ the claimed request exactly once.  Both direct and queued dispatch are
+    \ reusable afterwards; neither may strand an envelope in RUNNING.
+    _ct-throw-policy CPOLICY-INIT
+    ['] _ct-throw-decide _ct-throw-policy CPOL.DECIDE-XT !
+    _ct-throw-policy _ct-bus @ CBUS.POLICY !
+    _ct-req @ CBR-LIFECYCLE-RESET _ct-assert
+    0 _ct-queue-handler-calls ! 0 _ct-queue-complete-calls !
+    ['] _ct-queue-complete _ct-req @ CBR.COMPLETE-XT !
+    101 _ct-req @ CBR.ARGS CV-INT!
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-FAILED = _ct-assert
+    _ct-queue-handler-calls @ 0= _ct-assert
+    _ct-queue-complete-calls @ 1 = _ct-assert
+    _ct-req @ CBR.STATUS @ CBUS-S-FAILED = _ct-assert
+    _ct-req @ CBR.ERROR-CODE @ -777 = _ct-assert
+    _ct-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _ct-assert
+    _ct-req @ CBR-LIFECYCLE-BUSY? 0= _ct-assert
+    _ct-req @ CBR.FLAGS @ CBR-F-COMPLETE AND 0<> _ct-assert
+    _ct-stack
+
+    _ct-req @ CBR-LIFECYCLE-RESET _ct-assert
+    0 _ct-queue-complete-calls !
+    102 _ct-req @ CBR.ARGS CV-INT!
+    _ct-req @ _ct-bus @ CBUS-POST CBUS-S-OK = _ct-assert
+    1 _ct-bus @ CBUS-PUMP 1 = _ct-assert
+    _ct-bus @ CBUS.COUNT @ 0= _ct-assert
+    _ct-queue-handler-calls @ 0= _ct-assert
+    _ct-queue-complete-calls @ 1 = _ct-assert
+    _ct-req @ CBR.STATUS @ CBUS-S-FAILED = _ct-assert
+    _ct-req @ CBR.ERROR-CODE @ -777 = _ct-assert
+    _ct-req @ CBR-LIFECYCLE-BUSY? 0= _ct-assert
+    _ct-stack
+
+    0 _ct-bus @ CBUS.POLICY !
+    0 _ct-req @ CBR.COMPLETE-XT !
+    _ct-req @ CBR-LIFECYCLE-RESET _ct-assert
+
+    0 _ct-nested-calls ! 0 _ct-bad-output !
+    CAP-E-OBSERVE _ct-cap CAP.EFFECTS !
+    _ct-map-schema _ct-cap CAP.IN-SCHEMA !
+    _ct-map-schema _ct-cap CAP.OUT-SCHEMA !
+    ['] _ct-nested-handler _ct-cap CAP.HANDLER-XT !
+    _ct-map _ct-req @ CBR.ARGS CV-COPY 0= _ct-assert
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-OK = _ct-assert
+    _ct-stack
+    _ct-nested-calls @ 1 = _ct-assert
+    _ct-req @ CBR.RESULT _ct-map-schema CS-VALIDATE-DEEP 0= _ct-assert
+
+    ['] _ct-no-result-handler _ct-cap CAP.HANDLER-XT !
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-FAILED = _ct-assert
+    _ct-stack
+    _ct-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _ct-assert
+    ['] _ct-failing-result-handler _ct-cap CAP.HANDLER-XT !
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-FAILED = _ct-assert
+    _ct-stack
+    _ct-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _ct-assert
+
+    ['] _ct-nested-handler _ct-cap CAP.HANDLER-XT !
+    S" items" _ct-req @ CBR.ARGS CV-MAP-FIND 0 SWAP CV-LIST-NTH
+    S" wrong" ROT CV-STRING! 0= _ct-assert
+    _ct-stack
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-INVALID = _ct-assert
+    _ct-stack
+    _ct-nested-calls @ 1 = _ct-assert
+    _ct-map _ct-req @ CBR.ARGS CV-COPY 0= _ct-assert
+    -1 _ct-bad-output !
+    _ct-other-map CV-FREE 2 _ct-other-map CV-MAP! 0= _ct-assert
+    S" name" 0 _ct-other-map CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    S" ok" ROT CV-STRING! 0= _ct-assert
+    S" extra" 1 _ct-other-map CV-MAP-SLOT! DUP 0= _ct-assert DROP
+    1 SWAP CV-INT!
+    _ct-req @ _ct-bus @ CBUS-DISPATCH CBUS-S-FAILED = _ct-assert
+    _ct-stack
+    _ct-nested-calls @ 2 = _ct-assert
+    _ct-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _ct-assert
     _ct-req @ CBR-FREE
     _ct-bus @ CBUS-FREE
     _ct-router @ CINT-FREE
@@ -5837,6 +6559,9 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     CREG-INST-FIND 0= _ct-assert
     _ct-reg @ CREG-FREE
     _ct-i1 @ CINST-FREE _ct-i2 @ CINST-FREE
+    _ct-map CV-FREE _ct-other-map CV-FREE
+    _ct-probe CV-FREE _ct-empty CV-FREE
+    _ct-stack
     _ct-fails @ 0= IF
         ." RUNTIME INTEROP PASS"
     ELSE
@@ -5847,6 +6572,7 @@ _ct-run
 """,
         ready_markers=("RUNTIME INTEROP PASS",),
         stable_markers=("RUNTIME INTEROP PASS",),
+        failure_markers=("RUNTIME INTEROP FAIL",),
     ),
     "desktop": Profile(
         roots=(
@@ -5871,7 +6597,6 @@ _ct-run
             "tui/applets/agent/agent.uidl",
             "tui/applets/soundlab/soundlab.uidl",
             "tui/applets/streams/streams.uidl",
-            "atproto/fixtures/timeline.json",
         ),
         autoexec=r"""\ autoexec.f - Akashic desktop profile
 ENTER-USERLAND
@@ -5941,8 +6666,8 @@ _boot-soundlab-desc
 ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
 DESK-QUEUE-BUILTIN
 
-\ Streams is a discoverable built-in; its offline qualification fixture does
-\ not consume a startup tile or imply that live network authority is present.
+\ Streams is a discoverable offline built-in. It does not consume a startup
+\ tile or imply that live network authority is present.
 CREATE _boot-streams-desc APP-DESC ALLOT
 _boot-streams-desc STREAMS-ENTRY
 _boot-streams-desc
@@ -5980,12 +6705,14 @@ THEN
     ),
     "agent-widgets": Profile(
         roots=(
+            "tui/widgets/prompt.f",
             "tui/widgets/agent-auth.f",
             "tui/widgets/agent-settings.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - agent account and settings widgets
 ENTER-USERLAND
+REQUIRE tui/widgets/prompt.f
 REQUIRE tui/widgets/agent-auth.f
 REQUIRE tui/widgets/agent-settings.f
 
@@ -6010,6 +6737,19 @@ VARIABLE _aw-sync-connects
 VARIABLE _aw-region
 VARIABLE _aw-widget
 VARIABLE _aw-screen
+VARIABLE _aw-prompt-rgn
+VARIABLE _aw-prompt
+VARIABLE _aw-depth
+CREATE _aw-prompt-buf 32 ALLOT
+
+: _aw-test-prompt-constructor  ( -- )
+    DEPTH _aw-depth !
+    0 0 1 40 RGN-NEW DUP _aw-prompt-rgn !
+    _aw-prompt-buf 32 PRM-NEW _aw-prompt !
+    DEPTH _aw-depth @ = _aw-assert
+    _aw-prompt @ PRM-FREE
+    _aw-prompt-rgn @ RGN-FREE
+    DEPTH _aw-depth @ = _aw-assert ;
 
 : _aw-sync-refresh  ( context -- status )
     DROP ARSET-STATE-READY _aw-sync-settings ARSET.STATE !
@@ -6058,6 +6798,7 @@ VARIABLE _aw-screen
 
 : _aw-run  ( -- )
     0 _aw-fails ! 0 _aw-checks !
+    _aw-test-prompt-constructor
     _aw-test-sync-settings
     _aw-provider APROV-INIT
     _aw-runtime AGENT-RUNTIME-SIZE 0 FILL
@@ -6232,7 +6973,43 @@ REQUIRE tui/uidl-tui.f
 
 VARIABLE _ulc-fails VARIABLE _ulc-checks
 VARIABLE _ulc-screen VARIABLE _ulc-rgn
+VARIABLE _ulc-input VARIABLE _ulc-input-rgn
 CREATE _ulc-borrowed-widget 40 ALLOT
+CREATE _ulc-untrusted 15 ALLOT
+CREATE _ulc-cell-cases 11 ALLOT
+CREATE _ulc-cell-copy 11 ALLOT
+CREATE _ulc-input-buf 32 ALLOT
+
+: _ulc-untrusted-init  ( -- )
+    65 _ulc-untrusted C!             \ A
+    7 _ulc-untrusted 1+ C!           \ BEL
+    27 _ulc-untrusted 2 + C!         \ ESC
+    226 _ulc-untrusted 3 + C!        \ U+202E bidi override
+    128 _ulc-untrusted 4 + C!
+    174 _ulc-untrusted 5 + C!
+    226 _ulc-untrusted 6 + C!        \ U+2066 bidi isolate
+    129 _ulc-untrusted 7 + C!
+    166 _ulc-untrusted 8 + C!
+    10 _ulc-untrusted 9 + C!         \ newline
+    216 _ulc-untrusted 10 + C!       \ U+061C Arabic letter mark
+    156 _ulc-untrusted 11 + C!
+    226 _ulc-untrusted 12 + C!       \ U+2602 ordinary Unicode
+    152 _ulc-untrusted 13 + C!
+    130 _ulc-untrusted 14 + C! ;
+
+: _ulc-cell-cases-init  ( -- )
+    204 _ulc-cell-cases C!           \ U+0301 leading combining acute
+    129 _ulc-cell-cases 1+ C!
+    226 _ulc-cell-cases 2 + C!       \ U+200D zero-width joiner
+    128 _ulc-cell-cases 3 + C!
+    141 _ulc-cell-cases 4 + C!
+    239 _ulc-cell-cases 5 + C!       \ U+FE0F variation selector-16
+    184 _ulc-cell-cases 6 + C!
+    143 _ulc-cell-cases 7 + C!
+    228 _ulc-cell-cases 8 + C!       \ U+4E00 width-2 ideograph
+    184 _ulc-cell-cases 9 + C!
+    128 _ulc-cell-cases 10 + C!
+    _ulc-cell-cases _ulc-cell-copy 11 CMOVE ;
 
 : _ulc-assert  ( flag -- )
     1 _ulc-checks +! 0= IF
@@ -6260,6 +7037,77 @@ CREATE _ulc-borrowed-widget 40 ALLOT
     DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-UIDL = _ulc-assert
     _UTUI-SC-WPTR@ 0<> _ulc-assert
     ['] UTUI-DETACH CATCH 0= _ulc-assert
+
+    \ Untrusted display text retains ordinary Unicode but never places raw
+    \ terminal or bidi controls into the screen buffer.  Source bytes remain
+    \ untouched because sanitization belongs to presentation, not the model.
+    _ulc-untrusted-init
+    _ulc-untrusted 15 2 3 DRW-TEXT-UNTRUSTED
+    2 3 SCR-GET CELL-CP@ 65 = _ulc-assert
+    2 4 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    2 5 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    2 6 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    2 7 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    2 8 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    2 9 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    2 10 SCR-GET CELL-CP@ 0x2602 = _ulc-assert
+    _ulc-untrusted 1+ C@ 7 = _ulc-assert
+
+    \ The buffer/flusher has no continuation-cell or grapheme model.  A
+    \ leading combining mark, ZWJ, variation selector, and a wide glyph at
+    \ the final physical column must each become exactly one visible cell.
+    \ Projection must not mutate the owning UTF-8 bytes.
+    _ulc-cell-cases-init
+    _ulc-cell-cases 11 3 76 DRW-TEXT-UNTRUSTED
+    3 76 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    3 77 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    3 78 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    3 79 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    _ulc-cell-cases 11 _ulc-cell-copy 11 COMPARE 0= _ulc-assert
+
+    \ Raw low-level cells receive the same last-line-of-defense projection
+    \ immediately before terminal output; ordinary isolated Unicode survives.
+    0x0301 7 0 0 CELL-MAKE _SCR-EMIT-CP
+        UTF8-REPLACEMENT = _ulc-assert
+    0x200D 7 0 0 CELL-MAKE _SCR-EMIT-CP
+        UTF8-REPLACEMENT = _ulc-assert
+    0xFE0F 7 0 0 CELL-MAKE _SCR-EMIT-CP
+        UTF8-REPLACEMENT = _ulc-assert
+    0x4E00 7 0 0 CELL-MAKE _SCR-EMIT-CP
+        UTF8-REPLACEMENT = _ulc-assert
+    -1 7 0 0 CELL-MAKE _SCR-EMIT-CP
+        UTF8-REPLACEMENT = _ulc-assert
+    0xD800 7 0 0 CELL-MAKE _SCR-EMIT-CP
+        UTF8-REPLACEMENT = _ulc-assert
+    0x110000 7 0 0 CELL-MAKE _SCR-EMIT-CP
+        UTF8-REPLACEMENT = _ulc-assert
+    0x2602 7 0 0 CELL-MAKE _SCR-EMIT-CP 0x2602 = _ulc-assert
+
+    \ Programmatic/pasted input uses the same projection, which also closes
+    \ the path taken when an Agent-authored Streams draft is reopened.
+    4 2 1 12 RGN-NEW DUP _ulc-input-rgn !
+    _ulc-input-buf 32 INP-NEW DUP _ulc-input !
+    _ulc-untrusted 15 _ulc-input @ INP-SET-TEXT
+    _ulc-input @ WDG-DRAW
+    4 2 SCR-GET CELL-CP@ 65 = _ulc-assert
+    4 3 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 4 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 5 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 6 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 7 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 8 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 9 SCR-GET CELL-CP@ 0x2602 = _ulc-assert
+
+    _ulc-cell-cases 11 _ulc-input @ INP-SET-TEXT
+    _ulc-input @ WDG-DRAW
+    4 2 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 3 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 4 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    4 5 SCR-GET CELL-CP@ UTF8-REPLACEMENT = _ulc-assert
+    _ulc-input @ INP-GET-TEXT
+        _ulc-cell-copy 11 COMPARE 0= _ulc-assert
+    _ulc-cell-cases 11 _ulc-cell-copy 11 COMPARE 0= _ulc-assert
+    _ulc-input @ INP-FREE _ulc-input-rgn @ RGN-FREE
 
     _ulc-rgn @ RGN-FREE _ulc-screen @ SCR-FREE
     _ulc-fails @ 0= IF
@@ -7267,7 +8115,7 @@ CREATE _dt-vtable VFS-VT-SIZE ALLOT
     APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
     APP-CLOSE-D-CANCEL = _dt-assert
 
-    0 0 1 80 RGN-NEW DUP _dt-close-rgn ! _DB-PROMPT-RGN !
+    0 0 1 80 RGN-NEW DUP _dt-close-rgn ! DUP _DB-PROMPT-RGN !
     _DB-PROMPT-BUF _DB-PROMPT-CAP PRM-NEW
     DUP _dt-close-prompt ! _DB-PROMPT !
     0 _DB-DO-RELOAD
@@ -7800,21 +8648,56 @@ GRID-RUN
         stable_markers=("File", "Edit", "Data", "Grid"),
     ),
     "streams": Profile(
-        roots=("tui/applets/streams/streams.f",),
-        resources=("tui/applets/streams/streams.uidl", "atproto/fixtures/timeline.json"),
+        roots=("utils/fs/vfs.f", "tui/applets/streams/streams.f"),
+        resources=("tui/applets/streams/streams.uidl",),
         autoexec=r"""\ autoexec.f - standalone Streams profile
 ENTER-USERLAND
 ." [akashic] loading streams" CR
+REQUIRE utils/fs/vfs.f
 REQUIRE tui/applets/streams/streams.f
 ." [akashic] streams definitions loaded" CR
 CREATE _boot-streams-desc APP-DESC ALLOT
 _boot-streams-desc STREAMS-ENTRY
+VARIABLE _boot-streams-inst
+VARIABLE _boot-streams-fd
+VARIABLE _boot-streams-a
+VARIABLE _boot-streams-u
+VARIABLE _boot-streams-status
+: _boot-streams-load-fixture  ( instance -- status )
+    _boot-streams-inst !
+    S" /testing/streams/timeline.json" VFS-OPEN DUP _boot-streams-fd !
+    0= IF BFM-S-MISSING EXIT THEN
+    _boot-streams-fd @ VFS-SIZE DUP _boot-streams-u !
+    DUP 0< IF
+        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-INVALID EXIT
+    THEN
+    DUP BFM-DOCUMENT-CAP > IF
+        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-CAPACITY EXIT
+    THEN
+    ALLOCATE IF
+        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-CAPACITY EXIT
+    THEN
+    _boot-streams-a !
+    _boot-streams-a @ _boot-streams-u @ _boot-streams-fd @ VFS-READ-EXACT IF
+        _boot-streams-fd @ VFS-CLOSE
+        _boot-streams-a @ FREE BFM-S-INVALID EXIT
+    THEN
+    _boot-streams-fd @ VFS-CLOSE
+    _boot-streams-a @ _boot-streams-u @ _boot-streams-inst @
+        STREAMS-LOAD-FEED-JSON _boot-streams-status !
+    _boot-streams-a @ FREE _boot-streams-status @ ;
+: _boot-streams-init  ( instance -- )
+    DUP STREAMS-INIT-CB
+    _boot-streams-load-fixture BFM-S-OK <>
+        ABORT" Streams synthetic fixture load failed" ;
+' _boot-streams-init _boot-streams-desc APP.INIT-XT !
 ." [akashic] starting streams" CR
 _boot-streams-desc ASHELL-RUN
 """,
-        ready_markers=("STREAMS", "T thread", "Recorded fixtures"),
-        stable_markers=("STREAMS", "Recorded fixtures", "cached restart"),
+        ready_markers=("STREAMS", "T thread", "Injected fixtures"),
+        stable_markers=("STREAMS", "Injected fixtures", "cached restart"),
         linked=True,
+        initial_files=(("testing/streams/timeline.json", STREAMS_TIMELINE_FIXTURE),),
     ),
     "soundlab": Profile(
         roots=("tui/applets/soundlab/soundlab.f",),
@@ -7834,32 +8717,923 @@ SOUNDLAB-RUN
     ),
 }
 
+PROFILES["crc-contracts"] = Profile(
+    roots=("math/crc.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - hardware-backed Akashic CRC contracts
+ENTER-USERLAND
+-1 CONSTANT GUARDED
+REQUIRE math/crc.f
+
+VARIABLE _crc-fails
+VARIABLE _crc-checks
+VARIABLE _crc-depth
+
+: _crc-assert  ( flag -- )
+    1 _crc-checks +!
+    0= IF 1 _crc-fails +! ." CRC ASSERT " _crc-checks @ . CR THEN ;
+
+: _crc-stack  ( -- ) DEPTH _crc-depth @ = _crc-assert ;
+
+CREATE _crc-data
+    48 C, 49 C, 50 C, 51 C, 52 C, 53 C, 54 C, 55 C,
+    56 C, 57 C, 97 C, 98 C, 99 C, 100 C, 101 C, 102 C, 103 C,
+
+CREATE _crc32-vectors
+    0x00000000 , 0x65C52DDB , 0x1F494690 , 0x515FE078 ,
+    0x4B30C5B2 , 0x59C95211 , 0xE10C0CB8 , 0xB227E3A7 ,
+    0xE8DD6CCE , 0x7D00C5A2 , 0x96B0E4E0 , 0x96EC0D47 ,
+    0xC7468C9E , 0x1550FE99 , 0x057CD91B , 0x618B9DDC ,
+    0x242DCC4E , 0xA5FE58E5 ,
+
+CREATE _crc32c-vectors
+    0x00000000 , 0x81397CF8 , 0x788452B7 , 0x2ACD7147 ,
+    0x5C9E7752 , 0xF5B91326 , 0x1C169282 , 0xAFEAC123 ,
+    0xA533AA5C , 0x19F50719 , 0x8724FEA9 , 0x3FDB27E7 ,
+    0xDEB7B6D1 , 0x6500D3FA , 0x94C52B0B , 0x75011271 ,
+    0x5BA6E5D8 , 0xAA4E63F4 ,
+
+CREATE _crc64-vectors
+    0x0000000000000000 , 0x30BB6F267FA73BC9 ,
+    0x636321B2C0544A6B , 0x0715CFE749A84CAB ,
+    0x6C47EE2AD9A97C16 , 0xF34C7A9F01F1DE86 ,
+    0x36AB3B60F593E7E3 , 0x31C786D35D6256F8 ,
+    0x91A890E9F145CC01 , 0xD87A368962D724C6 ,
+    0x42BF988506D61B57 , 0x2E0FB0E3C363B293 ,
+    0x941CAD3F559C32B6 , 0x8ECBF3DF80B76F41 ,
+    0xA60D20D180261E5C , 0x7C32F24F85FBE7AF ,
+    0xD9B4DE01EAD22B8F , 0x2C2BE21491AD9843 ,
+
+: _crc-direct-feed17  ( -- )
+    _crc-data DUP @ CRC-FEED
+    8 + DUP @ CRC-FEED
+    8 + C@ CRC-FEED-BYTE ;
+
+: _crc-test-hardware  ( -- )
+    CRC-POLY-CRC32 CRC-POLY!
+    CRC32-INIT-VAL CRC-INIT!
+    _crc-direct-feed17
+    CRC-FINAL@ DUP 0xA5FE58E5 = _crc-assert
+    CRC@ = _crc-assert
+
+    CRC-POLY-CRC32 CRC-POLY!
+    0x12345678 CRC32-INIT-VAL XOR
+    DUP CRC-INIT! CRC@ = _crc-assert
+    _crc-direct-feed17
+    CRC-FINAL@ 0xC6359224 = _crc-assert ;
+
+: _crc-test-vectors  ( -- )
+    18 0 DO
+        _crc-data I CRC32
+            _crc32-vectors I CELLS + @ = _crc-assert
+        _crc-data I CRC32C
+            _crc32c-vectors I CELLS + @ = _crc-assert
+        _crc-data I CRC64
+            _crc64-vectors I CELLS + @ = _crc-assert
+    LOOP ;
+
+: _crc-test-crc32-splits  ( -- )
+    18 0 DO
+        I 1+ 0 DO
+            CRC32-BEGIN
+            _crc-data I CRC32-ADD
+            _crc-data I + J I - CRC32-ADD
+            CRC32-END _crc32-vectors J CELLS + @ = _crc-assert
+
+            0 _crc-data I CRC32-UPDATE
+            _crc-data I + J I - CRC32-UPDATE
+            _crc32-vectors J CELLS + @ = _crc-assert
+        LOOP
+    LOOP ;
+
+: _crc-test-crc32c-splits  ( -- )
+    18 0 DO
+        I 1+ 0 DO
+            CRC32C-BEGIN
+            _crc-data I CRC32C-ADD
+            _crc-data I + J I - CRC32C-ADD
+            CRC32C-END _crc32c-vectors J CELLS + @ = _crc-assert
+
+            0 _crc-data I CRC32C-UPDATE
+            _crc-data I + J I - CRC32C-UPDATE
+            _crc32c-vectors J CELLS + @ = _crc-assert
+        LOOP
+    LOOP ;
+
+: _crc-test-crc64-splits  ( -- )
+    18 0 DO
+        I 1+ 0 DO
+            CRC64-BEGIN
+            _crc-data I CRC64-ADD
+            _crc-data I + J I - CRC64-ADD
+            CRC64-END _crc64-vectors J CELLS + @ = _crc-assert
+
+            0 _crc-data I CRC64-UPDATE
+            _crc-data I + J I - CRC64-UPDATE
+            _crc64-vectors J CELLS + @ = _crc-assert
+        LOOP
+    LOOP ;
+
+: _crc-test-arbitrary-updates  ( -- )
+    0x12345678 _crc-data 17 CRC32-UPDATE
+        0xC6359224 = _crc-assert
+    0x89ABCDEF _crc-data 17 CRC32C-UPDATE
+        0xEA529F91 = _crc-assert
+    0x0123456789ABCDEF _crc-data 17 CRC64-UPDATE
+        0xCB329C618DA15A8F = _crc-assert ;
+
+: _crc-call-add-without-begin  ( -- )
+    _crc-data 1 CRC32-ADD ;
+
+: _crc-call-end-without-begin  ( -- )
+    CRC32-END DROP ;
+
+: _crc-call-negative-one-shot  ( -- )
+    _crc-data -1 CRC32 DROP ;
+
+: _crc-call-negative-stream  ( -- )
+    CRC32-BEGIN
+    _crc-data -1 CRC32-ADD ;
+
+: _crc-call-nested-begin  ( -- )
+    CRC32-BEGIN ;
+
+: _crc-call-one-shot-during-stream  ( -- )
+    _crc-data 1 CRC32 DROP ;
+
+: _crc-call-cross-family-add  ( -- )
+    _crc-data 1 CRC32C-ADD ;
+
+: _crc-call-cross-family-end  ( -- )
+    CRC32C-END DROP ;
+
+: _crc-test-stream-owner-errors  ( -- )
+    ['] _crc-call-add-without-begin CATCH -258 = _crc-assert
+    ['] _crc-call-end-without-begin CATCH -258 = _crc-assert
+    ['] _crc-call-negative-one-shot CATCH -24 = _crc-assert
+    ['] _crc-call-negative-stream CATCH -24 = _crc-assert
+    \ Rejected and fault-unwound calls must not poison either owner lock.
+    _crc-data 17 CRC32 0xA5FE58E5 = _crc-assert
+
+    CRC32-BEGIN
+    ['] _crc-call-nested-begin CATCH -258 = _crc-assert
+    ['] _crc-call-one-shot-during-stream CATCH -258 = _crc-assert
+    ['] _crc-call-cross-family-add CATCH -258 = _crc-assert
+    ['] _crc-call-cross-family-end CATCH -258 = _crc-assert
+    \ Every rejection above leaves the original stream active and unchanged.
+    _crc-data 17 CRC32-ADD
+    CRC32-END 0xA5FE58E5 = _crc-assert ;
+
+: _crc-run  ( -- )
+    0 _crc-fails ! 0 _crc-checks ! DEPTH _crc-depth !
+    _crc-test-hardware
+    _crc-test-vectors
+    _crc-test-crc32-splits
+    _crc-test-crc32c-splits
+    _crc-test-crc64-splits
+    _crc-test-arbitrary-updates
+    _crc-test-stream-owner-errors
+    _crc-stack
+    _crc-fails @ 0= IF
+        ." CRC CONTRACTS PASS " _crc-checks @ .
+    ELSE
+        ." CRC CONTRACTS FAIL " _crc-fails @ . ." / " _crc-checks @ .
+    THEN CR ;
+
+_crc-run
+""",
+    ready_markers=("CRC CONTRACTS PASS",),
+    stable_markers=("CRC CONTRACTS PASS",),
+    failure_markers=("CRC CONTRACTS FAIL",),
+    include_large_sample=False,
+)
+
+
+PROFILES["streams-draft-contracts"] = Profile(
+    roots=("tui/applets/streams/draft-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Streams draft-store persistence contracts
+ENTER-USERLAND
+." [akashic] loading Streams draft-store contracts" CR
+REQUIRE tui/applets/streams/draft-store.f
+
+VARIABLE _sdc-fails
+VARIABLE _sdc-checks
+VARIABLE _sdc-depth
+VARIABLE _sdc-vfs
+VARIABLE _sdc-other-vfs
+VARIABLE _sdc-old-vfs
+VARIABLE _sdc-old-vtable
+VARIABLE _sdc-fd
+VARIABLE _sdc-fd-head
+VARIABLE _sdc-fd-next
+VARIABLE _sdc-saved-fdfree
+VARIABLE _sdc-a
+VARIABLE _sdc-u
+VARIABLE _sdc-pa
+VARIABLE _sdc-pu
+VARIABLE _sdc-store
+VARIABLE _sdc-cap
+VARIABLE _sdc-status
+VARIABLE _sdc-revision
+VARIABLE _sdc-length
+VARIABLE _sdc-expected
+VARIABLE _sdc-byte
+VARIABLE _sdc-probe
+VARIABLE _sdc-crc-a
+VARIABLE _sdc-crc-u
+VARIABLE _sdc-crc-whole
+
+CREATE _sdc-store-a STREAMS-DRAFT-STORE-SIZE ALLOT
+CREATE _sdc-store-b STREAMS-DRAFT-STORE-SIZE ALLOT
+CREATE _sdc-store-cold STREAMS-DRAFT-STORE-SIZE ALLOT
+CREATE _sdc-store-default STREAMS-DRAFT-STORE-SIZE ALLOT
+CREATE _sdc-store-invalid STREAMS-DRAFT-STORE-SIZE ALLOT
+CREATE _sdc-destination STREAMS-DRAFT-TEXT-MAX ALLOT
+CREATE _sdc-over STREAMS-DRAFT-TEXT-MAX 1+ ALLOT
+CREATE _sdc-bad 1 ALLOT
+CREATE _sdc-fault-vtable VFS-VT-SIZE ALLOT
+CREATE _sdc-crc32-tails
+    0x6104306C , 0xC013A195 , 0x26AD0E9B , 0x596A3B55 ,
+    0x426548B8 , 0x270F9370 , 0xF275EB3B ,
+CREATE _sdc-crc32c-tails
+    0x9FE513B9 , 0xC4BF20AB , 0x49C3D1F7 , 0x3EA8FF32 ,
+    0xF7B24781 , 0x099E5AC3 , 0xAF49A676 ,
+CREATE _sdc-crc64-tails
+    0x724B8ECDD64D0D5A , 0x0B7729E569E4CED7 ,
+    0xD5F446C587EC3577 , 0xCCCFD4603DC7AA57 ,
+    0x0306C5AF9A3CD606 , 0x3DBD4712E4D9E785 ,
+    0x303CFB9F58338460 ,
+
+: _sdc-assert  ( flag -- )
+    1 _sdc-checks +! 0= IF
+        1 _sdc-fails +! ." SDC ASSERT " _sdc-checks @ . CR
+    THEN ;
+
+: _sdc-stack  ( -- ) DEPTH _sdc-depth @ = _sdc-assert ;
+
+: _sdc-crc-known-and-tails  ( -- )
+    S" 123456789" CRC32 0xFC891918 = _sdc-assert
+    S" 123456789" CRC32C 0x05440F15 = _sdc-assert
+    S" 123456789" CRC64 0x62EC59E3F1A4F00A = _sdc-assert
+    S" 123456789" DROP 0 CRC32 0= _sdc-assert
+    S" 123456789" DROP 0 CRC32C 0= _sdc-assert
+    S" 123456789" DROP 0 CRC64 0= _sdc-assert
+    7 0 DO
+        S" 1234567" DROP I 1+ CRC32
+            _sdc-crc32-tails I CELLS + @ = _sdc-assert
+        S" 1234567" DROP I 1+ CRC32C
+            _sdc-crc32c-tails I CELLS + @ = _sdc-assert
+        S" 1234567" DROP I 1+ CRC64
+            _sdc-crc64-tails I CELLS + @ = _sdc-assert
+        CRC32-BEGIN S" 1234567" DROP I 1+ CRC32-ADD CRC32-END
+            _sdc-crc32-tails I CELLS + @ = _sdc-assert
+        CRC32C-BEGIN S" 1234567" DROP I 1+ CRC32C-ADD CRC32C-END
+            _sdc-crc32c-tails I CELLS + @ = _sdc-assert
+        CRC64-BEGIN S" 1234567" DROP I 1+ CRC64-ADD CRC64-END
+            _sdc-crc64-tails I CELLS + @ = _sdc-assert
+    LOOP ;
+
+: _sdc-crc32-splits  ( -- )
+    _sdc-crc-a @ _sdc-crc-u @ CRC32 DUP _sdc-crc-whole !
+        0xA5FE58E5 = _sdc-assert
+    _sdc-crc-u @ 1+ 0 DO
+        0 _sdc-crc-a @ I CRC32-UPDATE
+        _sdc-crc-a @ I + _sdc-crc-u @ I - CRC32-UPDATE
+        _sdc-crc-whole @ = _sdc-assert
+    LOOP ;
+
+: _sdc-crc32c-splits  ( -- )
+    _sdc-crc-a @ _sdc-crc-u @ CRC32C DUP _sdc-crc-whole !
+        0xAA4E63F4 = _sdc-assert
+    _sdc-crc-u @ 1+ 0 DO
+        0 _sdc-crc-a @ I CRC32C-UPDATE
+        _sdc-crc-a @ I + _sdc-crc-u @ I - CRC32C-UPDATE
+        _sdc-crc-whole @ = _sdc-assert
+    LOOP ;
+
+: _sdc-crc64-splits  ( -- )
+    _sdc-crc-a @ _sdc-crc-u @ CRC64 DUP _sdc-crc-whole !
+        0x2C2BE21491AD9843 = _sdc-assert
+    _sdc-crc-u @ 1+ 0 DO
+        0 _sdc-crc-a @ I CRC64-UPDATE
+        _sdc-crc-a @ I + _sdc-crc-u @ I - CRC64-UPDATE
+        _sdc-crc-whole @ = _sdc-assert
+    LOOP ;
+
+: _sdc-crc-contracts  ( -- )
+    _sdc-crc-known-and-tails
+    S" 0123456789abcdefg" _sdc-crc-u ! _sdc-crc-a !
+    _sdc-crc32-splits _sdc-crc32c-splits _sdc-crc64-splits
+    _sdc-stack ;
+
+: _sdc-filled?  ( a u byte -- flag )
+    _sdc-byte ! 0 ?DO
+        DUP I + C@ _sdc-byte @ <> IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP DROP -1 ;
+
+: _sdc-record-zero?  ( -- flag )
+    _SDR-RECORD STREAMS-DRAFT-RECORD-MAX 0 _sdc-filled? ;
+
+: _sdc-vrepl-scratch-zero?  ( -- flag )
+    _VREPL-CHECK-BUFFER _VREPL-CHECK-SIZE 0 _sdc-filled? ;
+
+: _sdc-private-scratch-zero?  ( -- flag )
+    _sdc-record-zero? _sdc-vrepl-scratch-zero? AND ;
+
+: _sdc-text$  ( -- a u ) S" exact ☂ café" ;
+: _sdc-other$  ( -- a u ) S" independent draft" ;
+: _sdc-before$  ( -- a u ) S" before crash" ;
+: _sdc-after$  ( -- a u ) S" after crash" ;
+
+: _sdc-put  ( data-a data-u path-a path-u -- )
+    _sdc-pu ! _sdc-pa ! _sdc-u ! _sdc-a !
+    _sdc-pa @ _sdc-pu @ _sdc-vfs @ VFS-RESOLVE IF
+        _sdc-pa @ _sdc-pu @ _sdc-vfs @ VFS-RM 0= _sdc-assert
+    THEN
+    _sdc-pa @ _sdc-pu @ _sdc-vfs @ VFS-CREATE
+    DUP 0<> _sdc-assert DUP 0= IF DROP EXIT THEN DROP
+    _sdc-pa @ _sdc-pu @ VFS-OPEN DUP _sdc-fd ! 0<> _sdc-assert
+    _sdc-fd @ 0= IF EXIT THEN
+    _sdc-a @ _sdc-u @ _sdc-fd @ VFS-WRITE-EXACT 0= _sdc-assert
+    _sdc-fd @ VFS-CLOSE
+    _sdc-vfs @ VFS-SYNC 0= _sdc-assert ;
+
+: _sdc-put-target  ( data-a data-u store -- )
+    _sdc-store ! _sdc-u ! _sdc-a !
+    _sdc-a @ _sdc-u @ _sdc-store @ STREAMS-DRAFT-STORE-PATH$ _sdc-put ;
+
+: _sdc-artifacts-clean?  ( store -- flag )
+    _sdc-probe !
+    _sdc-probe @ STREAMS-DRAFT-STORE.REPLACE VREPL-STAGE$
+        _sdc-vfs @ VFS-RESOLVE 0=
+    _sdc-probe @ STREAMS-DRAFT-STORE.REPLACE VREPL-BACKUP$
+        _sdc-vfs @ VFS-RESOLVE 0= AND
+    _sdc-probe @ STREAMS-DRAFT-STORE.REPLACE VREPL-MARKER$
+        _sdc-vfs @ VFS-RESOLVE 0= AND ;
+
+: _sdc-zero-write  ( buf len offset inode vfs -- actual )
+    2DROP 2DROP DROP 0 ;
+
+: _sdc-throw-read  ( buf len offset inode vfs -- actual )
+    2DROP 2DROP DROP -990 THROW ;
+
+: _sdc-fault-write-on  ( -- )
+    _sdc-vfs @ V.VTABLE @ DUP _sdc-old-vtable !
+    _sdc-fault-vtable VFS-VT-SIZE CMOVE
+    ['] _sdc-zero-write
+        _sdc-fault-vtable VFS-VT-WRITE CELLS + !
+    _sdc-fault-vtable _sdc-vfs @ V.VTABLE ! ;
+
+: _sdc-fault-read-on  ( -- )
+    _sdc-vfs @ V.VTABLE @ DUP _sdc-old-vtable !
+    _sdc-fault-vtable VFS-VT-SIZE CMOVE
+    ['] _sdc-throw-read
+        _sdc-fault-vtable VFS-VT-READ CELLS + !
+    _sdc-fault-vtable _sdc-vfs @ V.VTABLE ! ;
+
+: _sdc-fault-off  ( -- )
+    _sdc-old-vtable @ _sdc-vfs @ V.VTABLE ! ;
+
+: _sdc-fd-snapshot  ( -- )
+    _sdc-vfs @ V.FDFREE @ DUP _sdc-fd-head !
+    ?DUP IF FD.FREE @ ELSE 0 THEN _sdc-fd-next ! ;
+
+: _sdc-fds-stable  ( -- )
+    _sdc-vfs @ V.FDFREE @ DUP _sdc-fd-head @ = _sdc-assert
+    ?DUP IF FD.FREE @ ELSE 0 THEN _sdc-fd-next @ = _sdc-assert ;
+
+: _sdc-load!  ( capacity store -- )
+    _sdc-store ! _sdc-cap !
+    _sdc-destination _sdc-cap @ _sdc-store @ STREAMS-DRAFT-STORE-LOAD
+    _sdc-status ! _sdc-revision ! _sdc-u ! ;
+
+: _sdc-load-failure  ( capacity store expected-status -- )
+    _sdc-expected ! _sdc-store ! _sdc-cap !
+    _sdc-destination STREAMS-DRAFT-TEXT-MAX 90 FILL
+    _sdc-cap @ _sdc-store @ _sdc-load!
+    _sdc-status @ _sdc-expected @ <> IF
+        ." SDC LOAD expected/status/u/revision/first "
+        _sdc-expected @ . _sdc-status @ . _sdc-u @ .
+        _sdc-revision @ . _sdc-destination C@ . CR
+    THEN
+    _sdc-status @ _sdc-expected @ = _sdc-assert
+    _sdc-u @ 0= _sdc-assert
+    _sdc-revision @ 0= _sdc-assert
+    _sdc-destination STREAMS-DRAFT-TEXT-MAX 90 _sdc-filled? _sdc-assert
+    _sdc-private-scratch-zero? _sdc-assert ;
+
+: _sdc-encode-main  ( -- )
+    _sdc-text$ 7 _STREAMS-DRAFT-ENCODE
+    _sdc-status ! _sdc-length !
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert ;
+
+: _sdc-header-crc!  ( -- )
+    _SDR-RECORD _STREAMS-DRAFT-HEADER-CRC
+        _SDR-RECORD _SDR-H-HEADER-CRC + ! ;
+
+: _sdc-restore-main  ( -- )
+    _sdc-text$ 7 _sdc-store-a STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-OK = _sdc-assert
+    _sdc-private-scratch-zero? _sdc-assert
+    _sdc-store-a _sdc-artifacts-clean? _sdc-assert ;
+
+: _sdc-init  ( -- )
+    VFS-CUR _sdc-old-vfs !
+    524288 A-XMEM ARENA-NEW DUP 0= _sdc-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _sdc-vfs ! VFS-USE
+    524288 A-XMEM ARENA-NEW DUP 0= _sdc-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _sdc-other-vfs ! 0<> _sdc-assert
+
+    0 2 _sdc-vfs @ _sdc-store-invalid STREAMS-DRAFT-STORE-INIT-AT
+        SDSTORE-S-INVALID = _sdc-assert
+    S" relative.bin" _sdc-vfs @ _sdc-store-invalid
+        STREAMS-DRAFT-STORE-INIT-AT SDSTORE-S-INVALID = _sdc-assert
+    S" /streams-alpha.bin" _sdc-vfs @ _sdc-store-a
+        STREAMS-DRAFT-STORE-INIT-AT SDSTORE-S-OK = _sdc-assert
+    S" /streams-beta.bin" _sdc-vfs @ _sdc-store-b
+        STREAMS-DRAFT-STORE-INIT-AT SDSTORE-S-OK = _sdc-assert
+    _sdc-vfs @ _sdc-store-default STREAMS-DRAFT-STORE-INIT
+        SDSTORE-S-OK = _sdc-assert
+    _sdc-store-default STREAMS-DRAFT-STORE-PATH$
+        STREAMS-DRAFT-STORE-TARGET$ COMPARE 0= _sdc-assert
+    12345 _SDSTORE-VREPL>STATUS SDSTORE-S-RECOVERY = _sdc-assert ;
+
+: _sdc-test-basic-and-isolation  ( -- )
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-ABSENT
+        _sdc-load-failure
+
+    0 0 1 _sdc-store-a STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-OK = _sdc-assert
+    _sdc-store-a _sdc-artifacts-clean? _sdc-assert
+    _sdc-destination STREAMS-DRAFT-TEXT-MAX 90 FILL
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a _sdc-load!
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-u @ 0= _sdc-assert _sdc-revision @ 1 = _sdc-assert
+    _sdc-destination STREAMS-DRAFT-TEXT-MAX 90 _sdc-filled? _sdc-assert
+    _sdc-private-scratch-zero? _sdc-assert
+
+    _sdc-restore-main
+    _sdc-other$ 4 _sdc-store-b STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-OK = _sdc-assert
+    _sdc-store-b _sdc-artifacts-clean? _sdc-assert
+
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a _sdc-load!
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-revision @ 7 = _sdc-assert
+    _sdc-destination _sdc-u @ _sdc-text$ COMPARE 0= _sdc-assert
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-b _sdc-load!
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-revision @ 4 = _sdc-assert
+    _sdc-destination _sdc-u @ _sdc-other$ COMPARE 0= _sdc-assert
+
+    _sdc-text$ NIP 1- _sdc-store-a SDSTORE-S-CAPACITY
+        _sdc-load-failure
+    _sdc-over STREAMS-DRAFT-TEXT-MAX 1+ 65 FILL
+    _sdc-over STREAMS-DRAFT-TEXT-MAX 1+ 8 _sdc-store-a
+        STREAMS-DRAFT-STORE-SAVE SDSTORE-S-CAPACITY = _sdc-assert
+    _sdc-private-scratch-zero? _sdc-assert
+    255 _sdc-bad C!
+    _sdc-bad 1 8 _sdc-store-a STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-INVALID = _sdc-assert
+    _sdc-private-scratch-zero? _sdc-assert
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a _sdc-load!
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-revision @ 7 = _sdc-assert
+    _sdc-destination _sdc-u @ _sdc-text$ COMPARE 0= _sdc-assert
+    _sdc-stack ;
+
+: _sdc-test-wrapper-failures  ( -- )
+    \ A contained staging write failure preserves the last-good target and
+    \ removes every replacement companion before returning.
+    _VREPL-CHECK-BUFFER _VREPL-CHECK-SIZE 91 FILL
+    _sdc-fd-snapshot _sdc-fault-write-on
+    S" rejected candidate" 8 _sdc-store-a STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-IO = _sdc-assert
+    _sdc-fault-off
+    _sdc-private-scratch-zero? _sdc-assert
+    _sdc-store-a STREAMS-DRAFT-STORE.LAST-VREPL @
+        VREPL-S-IO = _sdc-assert
+    _sdc-store-a _sdc-artifacts-clean? _sdc-assert
+    _sdc-fds-stable
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a _sdc-load!
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-revision @ 7 = _sdc-assert
+    _sdc-destination _sdc-u @ _sdc-text$ COMPARE 0= _sdc-assert
+
+    \ A binding-level read THROW is contained as IO.  The caller-selected
+    \ VFS, destination, descriptor cleanup state, FD free list, and scratch
+    \ all return exactly to their pre-call state.
+    _sdc-fd-snapshot _sdc-fault-read-on
+    _sdc-other-vfs @ VFS-USE
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-IO
+        _sdc-load-failure
+    VFS-CUR _sdc-other-vfs @ = _sdc-assert
+    _SDRR-FD @ 0= _sdc-assert
+    _SDRR-HAVE-OLD-VFS @ 0= _sdc-assert
+    _sdc-fds-stable
+    _sdc-fault-off
+    _sdc-vfs @ VFS-USE
+
+    \ VFS-OPEN also returns zero when an existing target cannot acquire an
+    \ FD.  That is IO, never the ABSENT state used for a missing target.
+    _sdc-vfs @ V.FDFREE @ _sdc-saved-fdfree !
+    0 _sdc-vfs @ V.FDFREE !
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-IO
+        _sdc-load-failure
+    _sdc-saved-fdfree @ _sdc-vfs @ V.FDFREE !
+    _SDRR-FD @ 0= _sdc-assert
+    _SDRR-HAVE-OLD-VFS @ 0= _sdc-assert
+
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a _sdc-load!
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-revision @ 7 = _sdc-assert
+    _sdc-destination _sdc-u @ _sdc-text$ COMPARE 0= _sdc-assert
+    _sdc-stack ;
+
+: _sdc-test-malformed-records  ( -- )
+    \ Payload CRC mismatch.
+    _sdc-encode-main
+    _SDR-RECORD STREAMS-DRAFT-HEADER-SIZE + DUP C@ 1 XOR SWAP C!
+    _SDR-RECORD _sdc-length @ _sdc-store-a _sdc-put-target
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-CORRUPT
+        _sdc-load-failure
+    _sdc-restore-main
+
+    \ Torn/truncated payload.
+    _sdc-encode-main
+    _SDR-RECORD _sdc-length @ 1- _sdc-store-a _sdc-put-target
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-CORRUPT
+        _sdc-load-failure
+    _sdc-restore-main
+
+    \ A valid common envelope with a future format is distinguishable.
+    _sdc-encode-main
+    2 _SDR-RECORD _SDR-H-FORMAT + ! _sdc-header-crc!
+    _SDR-RECORD _sdc-length @ _sdc-store-a _sdc-put-target
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-UNSUPPORTED
+        _sdc-load-failure
+    _sdc-restore-main
+
+    \ Invalid persisted UTF-8 with internally consistent CRCs.
+    S" x" 9 _STREAMS-DRAFT-ENCODE _sdc-status ! _sdc-length !
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    255 _SDR-RECORD STREAMS-DRAFT-HEADER-SIZE + C!
+    _SDR-RECORD STREAMS-DRAFT-HEADER-SIZE + 1 _STREAMS-DRAFT-TEXT-CRC
+        _SDR-RECORD _SDR-H-TEXT-CRC + !
+    _sdc-header-crc!
+    _SDR-RECORD _sdc-length @ _sdc-store-a _sdc-put-target
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-CORRUPT
+        _sdc-load-failure
+    _sdc-restore-main
+
+    \ A checksummed header still cannot declare an over-bound payload.
+    S" x" 9 _STREAMS-DRAFT-ENCODE _sdc-status ! _sdc-length !
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    STREAMS-DRAFT-TEXT-MAX 1+ _SDR-RECORD _SDR-H-TEXT-SIZE + !
+    _sdc-header-crc!
+    _SDR-RECORD STREAMS-DRAFT-HEADER-SIZE _sdc-store-a _sdc-put-target
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-CORRUPT
+        _sdc-load-failure
+    _sdc-restore-main
+    _sdc-stack ;
+
+: _sdc-arm-cold-rollback  ( -- )
+    _sdc-before$ 11 _sdc-store-a STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-OK = _sdc-assert
+    _sdc-after$ 12 _STREAMS-DRAFT-ENCODE
+        _sdc-status ! _sdc-length !
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-store-a STREAMS-DRAFT-STORE.REPLACE _VRO-R !
+    _SDR-RECORD _sdc-length @
+        _sdc-store-a STREAMS-DRAFT-STORE.REPLACE VREPL-STAGE$
+        _VREPL-CREATE-WRITE VREPL-S-OK = _sdc-assert
+    _SDR-RECORD _VRO-DATA ! _sdc-length @ _VRO-LEN !
+    -1 _VRO-ORIGINAL !
+    _VREPL-WRITE-MARKER VREPL-S-OK = _sdc-assert
+    _sdc-vfs @ VFS-SYNC 0= _sdc-assert
+    _VRO-TARGET>BACKUP 0= _sdc-assert
+    _sdc-vfs @ VFS-SYNC 0= _sdc-assert ;
+
+: _sdc-test-cold-recovery  ( -- )
+    _sdc-arm-cold-rollback
+    _sdc-store-a STREAMS-DRAFT-STORE-PATH$
+        _sdc-vfs @ VFS-RESOLVE 0= _sdc-assert
+    _sdc-store-a STREAMS-DRAFT-STORE.REPLACE VREPL-STAGE$
+        _sdc-vfs @ VFS-RESOLVE 0<> _sdc-assert
+    _sdc-store-a STREAMS-DRAFT-STORE.REPLACE VREPL-BACKUP$
+        _sdc-vfs @ VFS-RESOLVE 0<> _sdc-assert
+    _sdc-store-a STREAMS-DRAFT-STORE.REPLACE VREPL-MARKER$
+        _sdc-vfs @ VFS-RESOLVE 0<> _sdc-assert
+
+    \ Recreate only from the durable stable key: no live descriptor state.
+    S" /streams-alpha.bin" _sdc-vfs @ _sdc-store-cold
+        STREAMS-DRAFT-STORE-INIT-AT SDSTORE-S-OK = _sdc-assert
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-cold _sdc-load!
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-revision @ 11 = _sdc-assert
+    _sdc-destination _sdc-u @ _sdc-before$ COMPARE 0= _sdc-assert
+    _sdc-store-cold STREAMS-DRAFT-STORE.LAST-VREPL @
+        VREPL-S-ROLLED-BACK = _sdc-assert
+    _sdc-store-cold _sdc-artifacts-clean? _sdc-assert
+
+    \ Recovery and publication under alpha never disturb beta.
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-b _sdc-load!
+    _sdc-status @ SDSTORE-S-OK = _sdc-assert
+    _sdc-revision @ 4 = _sdc-assert
+    _sdc-destination _sdc-u @ _sdc-other$ COMPARE 0= _sdc-assert
+    _sdc-store-b _sdc-artifacts-clean? _sdc-assert
+    _sdc-stack ;
+
+: _sdc-run  ( -- )
+    0 _sdc-fails ! 0 _sdc-checks ! DEPTH _sdc-depth !
+    _sdc-crc-contracts
+    _sdc-init _sdc-stack
+    _sdc-test-basic-and-isolation
+    _sdc-test-wrapper-failures
+    _sdc-test-malformed-records
+    _sdc-test-cold-recovery
+    _sdc-old-vfs @ VFS-USE
+    _sdc-other-vfs @ VFS-DESTROY
+    _sdc-vfs @ VFS-DESTROY
+    _sdc-stack
+    _sdc-fails @ 0= IF
+        ." STREAMS DRAFT CONTRACTS PASS " _sdc-checks @ .
+    ELSE
+        ." STREAMS DRAFT CONTRACTS FAIL " _sdc-fails @ . ." / "
+            _sdc-checks @ .
+    THEN CR ;
+
+_sdc-run
+""",
+    ready_markers=("STREAMS DRAFT CONTRACTS PASS",),
+    stable_markers=("STREAMS DRAFT CONTRACTS PASS",),
+    failure_markers=("STREAMS DRAFT CONTRACTS FAIL", "SDC ASSERT"),
+    linked=True,
+)
+
 PROFILES["streams-contracts"] = Profile(
-    roots=("tui/applets/streams/streams.f",),
-    resources=("atproto/fixtures/timeline.json",),
+    roots=("utils/fs/vfs.f", "tui/applets/streams/streams.f"),
+    resources=(),
     autoexec=r"""\ autoexec.f - deterministic Streams capability contracts
 ENTER-USERLAND
 ." [akashic] loading Streams contracts" CR
+REQUIRE utils/fs/vfs.f
 REQUIRE tui/applets/streams/streams.f
 
 VARIABLE _stc-fails
 VARIABLE _stc-checks
 VARIABLE _stc-inst
+VARIABLE _stc-inst2
 VARIABLE _stc-req
+VARIABLE _stc-reg
+VARIABLE _stc-bus
 VARIABLE _stc-fd
 VARIABLE _stc-doc
 VARIABLE _stc-doc-u
 VARIABLE _stc-load-status
+VARIABLE _stc-depth
+VARIABLE _stc-temp-feed
+VARIABLE _stc-expected-status
+VARIABLE _stc-item-uri-a
+VARIABLE _stc-item-uri-u
+VARIABLE _stc-item-text-a
+VARIABLE _stc-item-text-u
+VARIABLE _stc-item-root-a
+VARIABLE _stc-item-root-u
+VARIABLE _stc-item-parent-a
+VARIABLE _stc-item-parent-u
+VARIABLE _stc-list
+VARIABLE _stc-replace-a
+VARIABLE _stc-replace-u
+VARIABLE _stc-replace-revision
+VARIABLE _stc-owner-rev
+VARIABLE _stc-inst2-rev
+CREATE _stc-json 32768 ALLOT
+CREATE _stc-big _STM-DRAFT-CAP 1+ ALLOT
+CREATE _stc-literal-json 160 ALLOT
+VARIABLE _stc-literal-a
+VARIABLE _stc-literal-u
+VARIABLE _stc-literal-json-u
 : _stc-assert  ( flag -- )
     1 _stc-checks +! 0= IF
         1 _stc-fails +! ." STC assertion " _stc-checks @ . ." failed" CR
     THEN ;
-: _stc-result-has  ( addr len -- flag )
-    _stc-req @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@ 2SWAP STR-STR-CONTAINS ;
+: _stc-rev-capture  ( -- )
+    _stc-inst @ CINST.REVISION @ _stc-owner-rev ! ;
+: _stc-rev-stable  ( -- )
+    _stc-inst @ CINST.REVISION @ _stc-owner-rev @ = _stc-assert ;
+: _stc-rev-advanced  ( -- )
+    _stc-inst @ CINST.REVISION @ _stc-owner-rev @ 1+ = _stc-assert
+    _stc-rev-capture ;
+: _stc-target!  ( instance -- )
+    >R
+    R@ CINST.ID @ _stc-req @ CBR.TARGET-ID !
+    R> CINST.GENERATION @ _stc-req @ CBR.TARGET-GEN ! ;
+: _stc-dispatch  ( cap instance -- )
+    _stc-target!
+    _stc-req @ CBR.CAP !
+    CPRINC-USER _stc-req @ CBR.PRINCIPAL !
+    _stc-req @ _stc-bus @ CBUS-POST CBUS-S-OK = _stc-assert
+    1 _stc-bus @ CBUS-PUMP 1 = _stc-assert ;
 : _stc-clear  ( -- )
     _stc-req @ CBR.ARGS CV-FREE _stc-req @ CBR.RESULT CV-FREE ;
+: _stc-stack  ( -- ) DEPTH _stc-depth @ = _stc-assert ;
+: _stc-zeroed?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+: _stc-ok  ( ior -- ) 0= _stc-assert ;
+: _stc-json-literal!  ( inner-a inner-u -- )
+    _stc-literal-u ! _stc-literal-a !
+    34 _stc-literal-json C!
+    _stc-literal-a @ _stc-literal-json 1+ _stc-literal-u @ CMOVE
+    34 _stc-literal-json 1+ _stc-literal-u @ + C!
+    _stc-literal-u @ 2 + _stc-literal-json-u ! ;
+: _stc-slot  ( key-a key-u index map -- child )
+    CV-MAP-SLOT! DUP 0= _stc-assert DROP ;
+: _stc-result-field  ( key-a key-u -- value )
+    _stc-req @ CBR.RESULT CV-MAP-FIND ;
+: _stc-resource=  ( value expected-a expected-u -- flag )
+    2>R DUP CV-TYPE@ CV-T-RESOURCE = IF
+        DUP CV-DATA@ SWAP CV-LEN@ 2R> STR-STR=
+    ELSE
+        DROP 2R> 2DROP 0
+    THEN ;
+: _stc-string=  ( value expected-a expected-u -- flag )
+    2>R DUP CV-TYPE@ CV-T-STRING = IF
+        DUP CV-DATA@ SWAP CV-LEN@ 2R> STR-STR=
+    ELSE
+        DROP 2R> 2DROP 0
+    THEN ;
+: _stc-create-args  ( text-a text-u -- )
+    1 _stc-req @ CBR.ARGS CV-MAP! _stc-ok
+    S" text" 0 _stc-req @ CBR.ARGS _stc-slot CV-STRING! _stc-ok ;
+: _stc-replace-args  ( text-a text-u expected-revision -- )
+    _stc-replace-revision ! _stc-replace-u ! _stc-replace-a !
+    3 _stc-req @ CBR.ARGS CV-MAP! _stc-ok
+    S" resource" 0 _stc-req @ CBR.ARGS _stc-slot
+        S" streams:draft:local" ROT CV-RESOURCE! _stc-ok
+    S" expected_revision" 1 _stc-req @ CBR.ARGS _stc-slot
+        _stc-replace-revision @ SWAP CV-INT!
+    S" text" 2 _stc-req @ CBR.ARGS _stc-slot
+        _stc-replace-a @ _stc-replace-u @ ROT CV-STRING! _stc-ok ;
+: _stc-json-begin  ( -- )
+    JSON-BUILD-RESET _stc-json 32768 JSON-SET-OUTPUT ;
+: _stc-json-item-with  ( uri-a uri-u text-a text-u -- )
+    _stc-item-text-u ! _stc-item-text-a !
+    _stc-item-uri-u ! _stc-item-uri-a !
+    JSON-{
+        S" post" JSON-KEY: JSON-{
+            S" uri" _stc-item-uri-a @ _stc-item-uri-u @ JSON-KV-ESTR
+            S" cid" S" bafyreiatest" JSON-KV-ESTR
+            S" author" JSON-KEY: JSON-{
+                S" did" S" did:plc:test" JSON-KV-ESTR
+                S" handle" S" test.invalid" JSON-KV-ESTR
+            JSON-}
+            S" record" JSON-KEY: JSON-{
+                S" $type" S" app.bsky.feed.post" JSON-KV-ESTR
+                S" text" _stc-item-text-a @ _stc-item-text-u @ JSON-KV-ESTR
+                S" createdAt" S" 2026-07-14T14:00:00Z" JSON-KV-ESTR
+            JSON-}
+            S" indexedAt" S" 2026-07-14T14:00:01Z" JSON-KV-ESTR
+        JSON-}
+    JSON-} ;
+: _stc-json-item  ( -- )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaaa"
+    S" bounded model test" _stc-json-item-with ;
+: _stc-json-reply-item-with
+    ( uri-a uri-u text-a text-u root-a root-u parent-a parent-u -- )
+    _stc-item-parent-u ! _stc-item-parent-a !
+    _stc-item-root-u ! _stc-item-root-a !
+    _stc-item-text-u ! _stc-item-text-a !
+    _stc-item-uri-u ! _stc-item-uri-a !
+    JSON-{
+        S" post" JSON-KEY: JSON-{
+            S" uri" _stc-item-uri-a @ _stc-item-uri-u @ JSON-KV-ESTR
+            S" cid" S" bafyreiatest" JSON-KV-ESTR
+            S" author" JSON-KEY: JSON-{
+                S" did" S" did:plc:test" JSON-KV-ESTR
+                S" handle" S" test.invalid" JSON-KV-ESTR
+            JSON-}
+            S" record" JSON-KEY: JSON-{
+                S" $type" S" app.bsky.feed.post" JSON-KV-ESTR
+                S" text" _stc-item-text-a @ _stc-item-text-u @ JSON-KV-ESTR
+                S" createdAt" S" 2026-07-14T14:00:00Z" JSON-KV-ESTR
+            JSON-}
+            S" indexedAt" S" 2026-07-14T14:00:01Z" JSON-KV-ESTR
+        JSON-}
+        S" reply" JSON-KEY: JSON-{
+            S" root" JSON-KEY: JSON-{
+                S" uri" _stc-item-root-a @ _stc-item-root-u @ JSON-KV-ESTR
+            JSON-}
+            S" parent" JSON-KEY: JSON-{
+                S" uri" _stc-item-parent-a @ _stc-item-parent-u @ JSON-KV-ESTR
+            JSON-}
+        JSON-}
+    JSON-} ;
+: _stc-a-root$  ( -- a u )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaaa" ;
+: _stc-x-root$  ( -- a u )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaab" ;
+: _stc-a-reply1$  ( -- a u )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaac" ;
+: _stc-b-root$  ( -- a u )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaad" ;
+: _stc-b-reply1$  ( -- a u )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaae" ;
+: _stc-y-root$  ( -- a u )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaaf" ;
+: _stc-a-reply2$  ( -- a u )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaag" ;
+: _stc-a-reply3$  ( -- a u )
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaah" ;
+: _stc-a-reply1-item  ( -- )
+    _stc-a-reply1$ S" A reply one" _stc-a-root$ _stc-a-root$
+        _stc-json-reply-item-with ;
+: _stc-a-reply2-item  ( -- )
+    _stc-a-reply2$ S" A reply two" _stc-a-root$ _stc-a-reply1$
+        _stc-json-reply-item-with ;
+: _stc-a-reply3-item  ( -- )
+    _stc-a-reply3$ S" A reply three" _stc-a-root$ _stc-a-reply2$
+        _stc-json-reply-item-with ;
+: _stc-b-reply1-item  ( -- )
+    _stc-b-reply1$ S" B reply one" _stc-b-root$ _stc-b-root$
+        _stc-json-reply-item-with ;
+: _stc-json-interleaved-threads  ( -- addr len )
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-[
+    _stc-a-root$ S" A root" _stc-json-item-with
+    _stc-x-root$ S" unrelated X" _stc-json-item-with
+    _stc-a-reply1-item
+    _stc-b-root$ S" B root" _stc-json-item-with
+    _stc-b-reply1-item
+    _stc-y-root$ S" unrelated Y" _stc-json-item-with
+    _stc-a-reply2-item
+    _stc-a-reply3-item
+    JSON-] S" cursor" S" interleaved" JSON-KV-ESTR JSON-}
+    JSON-OUTPUT-RESULT ;
+: _stc-json-retained-a-with-unrelated-tail  ( -- addr len )
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-[
+    _stc-a-root$ S" A root" _stc-json-item-with
+    _stc-a-reply1-item
+    _stc-x-root$ S" unrelated X" _stc-json-item-with
+    JSON-] JSON-} JSON-OUTPUT-RESULT ;
+: _stc-json-without-a  ( -- addr len )
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-[
+    _stc-b-root$ S" B root" _stc-json-item-with
+    _stc-b-reply1-item
+    JSON-] JSON-} JSON-OUTPUT-RESULT ;
+: _stc-json-feed  ( count -- addr len )
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-[
+    0 ?DO _stc-json-item LOOP
+    JSON-] S" cursor" S" synthetic-cursor" JSON-KV-ESTR JSON-}
+    JSON-OUTPUT-RESULT ;
+: _stc-json-late-bad-item  ( -- addr len )
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-[
+    _stc-json-item JSON-{ JSON-} JSON-]
+    S" cursor" S" replacement-cursor" JSON-KV-ESTR JSON-}
+    JSON-OUTPUT-RESULT ;
+: _stc-json-late-bad-cursor  ( -- addr len )
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-[
+    _stc-json-item JSON-] S" cursor" 7 JSON-KV-NUM JSON-}
+    JSON-OUTPUT-RESULT ;
+: _stc-json-mismatched-author  ( -- addr len )
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-[
+    S" at://did:plc:other/app.bsky.feed.post/3testaaaaaaaa"
+    S" wrong authority" _stc-json-item-with
+    JSON-] JSON-} JSON-OUTPUT-RESULT ;
+: _stc-json-overlong-text  ( -- addr len )
+    _stc-big _STM-DRAFT-CAP 1+ 65 FILL
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-[
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaaa"
+    _stc-big _STM-DRAFT-CAP 1+ _stc-json-item-with
+    JSON-] JSON-} JSON-OUTPUT-RESULT ;
+: _stc-json-missing  ( -- addr len )
+    _stc-json-begin JSON-{ S" cursor" S" unused" JSON-KV-ESTR JSON-}
+    JSON-OUTPUT-RESULT ;
+: _stc-json-wrong-feed  ( -- addr len )
+    _stc-json-begin JSON-{ S" feed" JSON-KEY: JSON-{ JSON-} JSON-}
+    JSON-OUTPUT-RESULT ;
+: _stc-decode-expect  ( json-a json-u feed expected-status -- )
+    _stc-expected-status !
+    DEPTH 3 - _stc-depth !
+    BFM-DECODE-FEED _stc-expected-status @ = _stc-assert
+    _stc-stack ;
+: _stc-check-sentinel  ( -- )
+    _stc-temp-feed @ BFM.FEED.COUNT @ 1 = _stc-assert
+    _stc-temp-feed @ BFM.FEED.CURSOR
+        _stc-temp-feed @ BFM.FEED.CURSOR-U @
+        S" synthetic-cursor" STR-STR= _stc-assert
+    0 _stc-temp-feed @ BFM.FEED.ITEM DUP 0<> _stc-assert
+    DUP 0= IF DROP EXIT THEN
+    DUP BFM.ITEM.URI
+        S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaaa"
+        STR-STR= _stc-assert
+    BFM.ITEM.TEXT S" bounded model test" STR-STR= _stc-assert ;
 : _stc-load-feed  ( -- flag )
-    S" /atproto/fixtures/timeline.json" VFS-OPEN DUP 0= IF DROP 0 EXIT THEN
+    S" /testing/streams/timeline.json" VFS-OPEN DUP 0= IF DROP 0 EXIT THEN
     DUP _stc-fd ! VFS-SIZE DUP _stc-doc-u !
     ALLOCATE IF DROP _stc-fd @ VFS-CLOSE 0 EXIT THEN _stc-doc !
     _stc-doc @ _stc-doc-u @ _stc-fd @ VFS-READ-EXACT IF
@@ -7867,8 +9641,7 @@ VARIABLE _stc-load-status
     THEN
     _stc-fd @ VFS-CLOSE
     _stc-doc @ _stc-doc-u @ _stc-inst @ STREAMS-LOAD-FEED-JSON
-    DUP _stc-load-status ! BFM-S-OK =
-    _stc-doc @ FREE ;
+    DUP _stc-load-status ! BFM-S-OK = ;
 
 : _stc-run  ( -- )
     0 _stc-fails ! 0 _stc-checks !
@@ -7876,58 +9649,715 @@ VARIABLE _stc-load-status
     _STM-CAP-COUNT 0 DO
         STREAMS-CAPS I CAP-DESC * + CAP-DESC-VALID? _stc-assert
     LOOP
+    STREAMS-CAP-DRAFT-CREATE CAP.FLAGS @ CAP-F-NEEDS-TARGET AND
+        0<> _stc-assert
+    STREAMS-CAP-DRAFT-REPLACE CAP.FLAGS @ CAP-F-NEEDS-TARGET AND
+        0<> _stc-assert
+    STREAMS-CAP-DRAFT-CREATE CAP.EFFECTS @
+        CAP-E-MUTATE CAP-E-PERSIST OR = _stc-assert
+    STREAMS-CAP-DRAFT-REPLACE CAP.EFFECTS @
+        CAP-E-MUTATE CAP-E-PERSIST OR = _stc-assert
     STREAMS-COMP-DESC CINST-NEW DUP 0= _stc-assert DROP _stc-inst !
+    _stc-inst @ _STM-ACTIVATE
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-VOLATILE = _stc-assert
     CBR-NEW DUP 0= _stc-assert DROP _stc-req !
+    DEPTH _stc-depth !
+    _stc-rev-capture
     _stc-load-feed DUP 0= IF ." Streams feed status " _stc-load-status @ . CR THEN _stc-assert
+    _stc-rev-advanced
+    _stc-stack
     _STM-FEED BFM.FEED.COUNT @ 2 = _stc-assert
     _STM-FEED BFM.FEED.CURSOR _STM-FEED BFM.FEED.CURSOR-U @ S" page-2-token" STR-STR= _stc-assert
     0 _STM-FEED BFM.FEED.ITEM DUP BFM.ITEM.HANDLE S" mira.test" STR-STR= _stc-assert
     BFM.ITEM.LIKES @ 7 = _stc-assert
     1 _STM-FEED BFM.FEED.ITEM DUP BFM.ITEM.DISPLAY S" Rowan ☂" STR-STR= _stc-assert
-    BFM.ITEM.FLAGS @ BFM-F-REPLY AND 0<> _stc-assert
+    DUP BFM.ITEM.FLAGS @ BFM-F-REPLY AND 0<> _stc-assert
+    DUP BFM.ITEM.ROOT-URI
+        S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+        STR-STR= _stc-assert
+    DUP BFM.ITEM.PARENT-URI
+        S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+        STR-STR= _stc-assert
+    BFM.ITEM.INDEXED S" 2026-07-14T14:38:02Z" STR-STR= _stc-assert
+    2 _STM-FEED BFM.FEED.ITEM 0= _stc-assert
+    -1 _STM-FEED BFM.FEED.ITEM 0= _stc-assert
     91 _stc-doc @ C!
     _stc-doc @ _stc-doc-u @ _stc-inst @ STREAMS-LOAD-FEED-JSON BFM-S-INVALID = _stc-assert
+    _stc-rev-advanced
+    _stc-doc @ _stc-doc-u @ _stc-inst @ STREAMS-LOAD-FEED-JSON BFM-S-INVALID = _stc-assert
+    _stc-rev-stable
+    _stc-stack
     123 _stc-doc @ C!
     _STM-FEED BFM.FEED.COUNT @ 2 = _stc-assert
+    1 _STM-FEED BFM.FEED.ITEM BFM.ITEM.TEXT
+        S" Does the thread retain identity across a cached restart?" STR-STR= _stc-assert
 
+    BFM-FEED-SIZE ALLOCATE DUP 0= _stc-assert DROP _stc-temp-feed !
+    _stc-temp-feed @ BFM-FEED-INIT
+    0 _stc-json-feed _stc-temp-feed @ BFM-S-OK _stc-decode-expect
+    _stc-temp-feed @ BFM.FEED.COUNT @ 0= _stc-assert
+    0 _stc-temp-feed @ BFM.FEED.ITEM 0= _stc-assert
+
+    \ The page boundary is exact, and a repeated full decode remains stable.
+    8 _stc-json-feed _stc-temp-feed @ BFM-S-OK _stc-decode-expect
+    _stc-temp-feed @ BFM.FEED.COUNT @ 8 = _stc-assert
+    7 _stc-temp-feed @ BFM.FEED.ITEM 0<> _stc-assert
+    8 _stc-temp-feed @ BFM.FEED.ITEM 0= _stc-assert
+    8 _stc-json-feed _stc-temp-feed @ BFM-S-OK _stc-decode-expect
+    _stc-temp-feed @ BFM.FEED.COUNT @ 8 = _stc-assert
+
+    \ Install a recognizable prior value.  Every late failure below must
+    \ leave all of it intact rather than publishing a partially decoded page.
+    1 _stc-json-feed _stc-temp-feed @ BFM-S-OK _stc-decode-expect
+    _stc-check-sentinel
+    91 _stc-json C!
+    _stc-check-sentinel
+    _stc-json-late-bad-item _stc-temp-feed @ BFM-S-MISSING _stc-decode-expect
+    _stc-check-sentinel
+    _stc-json-late-bad-cursor _stc-temp-feed @ BFM-S-TYPE _stc-decode-expect
+    _stc-check-sentinel
+    9 _stc-json-feed _stc-temp-feed @ BFM-S-CAPACITY _stc-decode-expect
+    _stc-check-sentinel
+    _stc-json-overlong-text _stc-temp-feed @ BFM-S-CAPACITY _stc-decode-expect
+    _stc-check-sentinel
+    _stc-json-mismatched-author _stc-temp-feed @ BFM-S-INVALID _stc-decode-expect
+    _stc-check-sentinel
+    _stc-json-missing _stc-temp-feed @ BFM-S-MISSING _stc-decode-expect
+    _stc-check-sentinel
+    _stc-json-wrong-feed _stc-temp-feed @ BFM-S-TYPE _stc-decode-expect
+    _stc-check-sentinel
+
+    ( JSON literals are compared after checked semantic unescaping. )
+    S" app.bsky.feed.\u0070ost" _stc-json-literal!
+    _stc-literal-json _stc-literal-json-u @ _BFM-COPY-LITERAL
+        BFM-S-OK = _stc-assert
+    _BFM-LITERAL-BUF _BFM-LITERAL-U @ S" app.bsky.feed.post"
+        STR-STR= _stc-assert
+    S" app.bsky.feed.defs#reasonRe\u0070ost" _stc-json-literal!
+    _stc-literal-json _stc-literal-json-u @ _BFM-COPY-LITERAL
+        BFM-S-OK = _stc-assert
+    _BFM-LITERAL-BUF _BFM-LITERAL-U @
+        S" app.bsky.feed.defs#reasonRepost" STR-STR= _stc-assert
+    S" app.bsky.feed.\u00zz" _stc-json-literal!
+    _stc-literal-json _stc-literal-json-u @ _BFM-COPY-LITERAL
+        BFM-S-INVALID = _stc-assert
+
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaaa"
+        _BFM-POST-URI? _stc-assert
+    S" at://did:web:example.com/app.bsky.feed.post/3testaaaaaaaa"
+        _BFM-POST-URI? _stc-assert
+    S" at://did:plc:test/app.bsky.feed.post/ktestaaaaaaaa"
+        _BFM-POST-URI? 0= _stc-assert
+    S" at://did:plc:test/app.bsky.feed.post/3testaaaaaaa0"
+        _BFM-POST-URI? 0= _stc-assert
+    S" at://did:plc:test/app.bsky.feed.post/short"
+        _BFM-POST-URI? 0= _stc-assert
+    S" 1.5" _BFM-PARSE-UINT NIP BFM-S-INVALID = _stc-assert
+    S" -1" _BFM-PARSE-UINT NIP BFM-S-INVALID = _stc-assert
+    S" 9223372036854775808" _BFM-PARSE-UINT NIP BFM-S-CAPACITY = _stc-assert
+    _stc-temp-feed @ FREE
+    _stc-stack
+
+    0 0 1 80 RGN-NEW DUP _STM-PROMPT-RGN !
+    _STM-PROMPT-BUF _STM-PROMPT-CAP PRM-NEW DUP _STM-PROMPT !
+    ['] _STM-PROMPT-SUBMIT OVER PRM-ON-SUBMIT
+    ['] _STM-PROMPT-CANCEL OVER PRM-ON-CANCEL
+    DROP _stc-stack
+
+    \ Aggregate capabilities expose ordered resource identities.  The full
+    \ item graph has one canonical shape behind streams.item.read.
     _stc-req @ _stc-inst @ _STM-CAP-SELECTION-H CBUS-S-OK = _stc-assert
-    _stc-req @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
-        S" at://did:plc:mira/app.bsky.feed.post/one" STR-STR= _stc-assert
-    _stc-clear
+    _stc-req @ CBR.RESULT
+        S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+        _stc-resource= _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-SELECTION CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    _stc-clear _stc-stack
 
-    S" at://did:plc:rowan/app.bsky.feed.post/two" _stc-req @ CBR.ARGS CV-RESOURCE! 0= _stc-assert
+    _stc-req @ _stc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-FEED CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" provenance" _stc-result-field S" cache" _stc-string= _stc-assert
+    S" state" _stc-result-field S" cached-after-error"
+        _stc-string= _stc-assert
+    S" items" _stc-result-field DUP CV-TYPE@ CV-T-LIST = _stc-assert
+    DUP CV-LEN@ 2 = _stc-assert _stc-list !
+    0 _stc-list @ CV-LIST-NTH
+        S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+        _stc-resource= _stc-assert
+    1 _stc-list @ CV-LIST-NTH
+        S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
+        _stc-resource= _stc-assert
+    _stc-list @ CV-LEN@ BFM-MAX-ITEMS <= _stc-assert
+    _stc-clear _stc-stack
+
+    S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
+        _stc-req @ CBR.ARGS CV-RESOURCE! _stc-ok
     _stc-req @ _stc-inst @ _STM-CAP-ITEM-H CBUS-S-OK = _stc-assert
-    S" rowan.test" _stc-result-has _stc-assert
-    S" cached restart" _stc-result-has _stc-assert
-    _stc-clear
+    _stc-req @ CBR.RESULT STREAMS-CAP-ITEM CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" resource" _stc-result-field
+        S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
+        _stc-resource= _stc-assert
+    S" provider" _stc-result-field S" bluesky" _stc-string= _stc-assert
+    S" provenance" _stc-result-field S" cache" _stc-string= _stc-assert
+    S" text" _stc-result-field
+        S" Does the thread retain identity across a cached restart?"
+        _stc-string= _stc-assert
+    S" author" _stc-result-field DUP CV-TYPE@ CV-T-MAP = _stc-assert
+        S" handle" ROT CV-MAP-FIND S" rowan.test" _stc-string= _stc-assert
+    S" counts" _stc-result-field DUP CV-TYPE@ CV-T-MAP = _stc-assert
+        S" likes" ROT CV-MAP-FIND DUP CV-TYPE@ CV-T-INT = _stc-assert
+        CV-DATA@ 3 = _stc-assert
+    S" reply" _stc-result-field DUP CV-TYPE@ CV-T-MAP = _stc-assert
+        DUP S" root" ROT CV-MAP-FIND
+            S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+            _stc-resource= _stc-assert
+        S" parent" ROT CV-MAP-FIND
+            S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+            _stc-resource= _stc-assert
+    S" reason" _stc-result-field S" none" _stc-string= _stc-assert
+    _stc-clear _stc-stack
 
-    S" at://did:plc:rowan/app.bsky.feed.post/two" _stc-req @ CBR.ARGS CV-RESOURCE! 0= _stc-assert
+    S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
+        _stc-req @ CBR.ARGS CV-RESOURCE! _stc-ok
     _stc-req @ _stc-inst @ _STM-CAP-THREAD-H CBUS-S-OK = _stc-assert
-    S" at://did:plc:rowan/app.bsky.feed.post/two" _stc-result-has _stc-assert
-    S" thread-root: at://did:plc:mira/app.bsky.feed.post/one" _stc-result-has _stc-assert
-    _stc-clear
+    _stc-req @ CBR.RESULT STREAMS-CAP-THREAD CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" focus" _stc-result-field
+        S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
+        _stc-resource= _stc-assert
+    S" root" _stc-result-field
+        S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+        _stc-resource= _stc-assert
+    S" complete" _stc-result-field DUP CV-TYPE@ CV-T-BOOL = _stc-assert
+        CV-DATA@ 0= _stc-assert
+    S" provenance" _stc-result-field
+        S" cached-partial-context" _stc-string= _stc-assert
+    S" items" _stc-result-field DUP CV-LEN@ 2 = _stc-assert _stc-list !
+    0 _stc-list @ CV-LIST-NTH
+        S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+        _stc-resource= _stc-assert
+    1 _stc-list @ CV-LIST-NTH
+        S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
+        _stc-resource= _stc-assert
+    _stc-list @ CV-LEN@ BFM-MAX-ITEMS <= _stc-assert
+    _stc-clear _stc-stack
 
-    S" identity" _stc-req @ CBR.ARGS CV-STRING! 0= _stc-assert
+    S" identity" _stc-req @ CBR.ARGS CV-STRING! _stc-ok
     _stc-req @ _stc-inst @ _STM-CAP-SEARCH-H CBUS-S-OK = _stc-assert
-    S" at://did:plc:rowan/app.bsky.feed.post/two" _stc-result-has _stc-assert
-    _stc-clear
+    _stc-req @ CBR.RESULT STREAMS-CAP-SEARCH CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" query" _stc-result-field S" identity" _stc-string= _stc-assert
+    S" scope" _stc-result-field S" cache" _stc-string= _stc-assert
+    S" items" _stc-result-field DUP CV-LEN@ 1 = _stc-assert _stc-list !
+    0 _stc-list @ CV-LIST-NTH
+        S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
+        _stc-resource= _stc-assert
+    _stc-list @ CV-LEN@ BFM-MAX-ITEMS <= _stc-assert
+    _stc-clear _stc-stack
 
-    S" A bounded local draft" _stc-req @ CBR.ARGS CV-STRING! 0= _stc-assert
+    \ The nonblocking UI search trims text, records truthful match state,
+    \ selects the first result, and scrolls a compact viewport to it.
+    7 _STM-DH ! 0 _STM-SELECTED ! 0 _STM-TOP !
+    _STM-BEGIN-SEARCH
+    _STM-PROMPT @ PRM-ACTIVE? _stc-assert
+    _STM-PROMPT-MODE @ _STM-PM-SEARCH = _stc-assert
+    S" Search cached posts:" S"   identity   " _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-SELECTED @ 1 = _stc-assert _STM-TOP @ 1 = _stc-assert
+    _STM-SEARCH-BUF _STM-SEARCH-U @ S" identity" STR-STR= _stc-assert
+    _STM-SEARCH-MATCH-N @ 1 = _stc-assert
+    _STM-PROMPT-MODE @ _STM-PM-NONE = _stc-assert
+    _STM-PROMPT @ PRM-ACTIVE? 0= _stc-assert
+    _STM-PROMPT @ PRM-GET-TEXT NIP 0= _stc-assert
+    _stc-rev-advanced _stc-stack
+
+    ( A compact timeline reserves the draft rows before counting cards. )
+    ( A zero-card body must not paint through the draft footer. )
+    1 _STM-DRAFT-REV !
+    _STM-VISIBLE-ITEMS 0= _stc-assert
+    0 _STM-TOP ! _STM-ENSURE-VISIBLE
+    _STM-TOP @ _STM-SELECTED @ = _stc-assert
+    0 _STM-DRAFT-REV ! _STM-ENSURE-VISIBLE
+    _STM-VISIBLE-ITEMS 1 = _stc-assert
+    _STM-TOP @ _STM-SELECTED @ = _stc-assert _stc-stack
+
+    \ Repeating a search that resolves to the same resource is not an owner
+    \ mutation. Empty, overlong, and unmatched searches preserve selection.
+    _STM-BEGIN-SEARCH
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
+    _STM-BEGIN-SEARCH
+    S" Search cached posts:" S"     " _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-SEARCH-U @ 0= _stc-assert
+    _STM-SEARCH-MATCH-N @ 0= _stc-assert
+    _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
+    _stc-big _STM-QUERY-CAP 1+ 97 FILL
+    _STM-BEGIN-SEARCH
+    S" Search cached posts:" _stc-big _STM-QUERY-CAP 1+
+        _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-SEARCH-U @ 0= _stc-assert
+    _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
+    _STM-BEGIN-SEARCH
+    S" Search cached posts:" S" absent" _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-SEARCH-BUF _STM-SEARCH-U @ S" absent" STR-STR= _stc-assert
+    _STM-SEARCH-MATCH-N @ 0= _stc-assert
+    _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
+
+    _STM-BEGIN-SEARCH
+    S" Search cached posts:" S" mira" _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-SELECTED @ 0= _stc-assert _STM-TOP @ 0= _stc-assert
+    _stc-rev-advanced
+    -1 _STM-MOVE
+    _STM-SELECTED @ 0= _stc-assert _STM-TOP @ 0= _stc-assert
+    _stc-rev-stable
+    1 _STM-MOVE
+    _STM-SELECTED @ 1 = _stc-assert _STM-TOP @ 1 = _stc-assert
+    _stc-rev-advanced
+    1 _STM-MOVE _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
+    -1 _STM-MOVE
+    _STM-SELECTED @ 0= _stc-assert _STM-TOP @ 0= _stc-assert
+    _stc-rev-advanced _stc-stack
+
+    \ Context navigation is anchored to the root selected at entry.  Sparse
+    \ related items skip unrelated feed indices, use an independent ordinal
+    \ viewport, and touch the owner only when selection actually changes.
+    _stc-json-interleaved-threads _stc-inst @ STREAMS-LOAD-FEED-JSON
+        BFM-S-OK = _stc-assert
+    _stc-rev-advanced
+    _STM-ITEM-COUNT 8 = _stc-assert
+    11 _STM-DH ! 2 _STM-SELECTED ! 4 _STM-TOP !
+    _stc-rev-capture _STM-OPEN-THREAD
+    _STM-THREAD-ENSURE-VISIBLE
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
+    _STM-THREAD-COUNT 4 = _stc-assert
+    _STM-THREAD-VISIBLE-ITEMS 2 = _stc-assert
+    _STM-THREAD-TOP @ 0= _stc-assert
+    _STM-TOP @ 4 = _stc-assert
+    0 _STM-THREAD-NTH _stc-assert 0= _stc-assert
+    1 _STM-THREAD-NTH _stc-assert 2 = _stc-assert
+    2 _STM-THREAD-NTH _stc-assert 6 = _stc-assert
+    3 _STM-THREAD-NTH _stc-assert 7 = _stc-assert
+    2 _STM-THREAD-POSITION _stc-assert 1 = _stc-assert
+    _stc-rev-stable
+
+    1 _STM-MOVE
+    _STM-SELECTED @ 6 = _stc-assert
+    _STM-THREAD-TOP @ 1 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
+    _stc-rev-advanced
+    1 _STM-MOVE
+    _STM-SELECTED @ 7 = _stc-assert
+    _STM-THREAD-TOP @ 2 = _stc-assert _stc-rev-advanced
+    1 _STM-MOVE
+    _STM-SELECTED @ 7 = _stc-assert
+    _STM-THREAD-TOP @ 2 = _stc-assert _stc-rev-stable
+    -1 _STM-MOVE
+    _STM-SELECTED @ 6 = _stc-assert _stc-rev-advanced
+    -1 _STM-MOVE
+    _STM-SELECTED @ 2 = _stc-assert
+    _STM-THREAD-TOP @ 1 = _stc-assert _stc-rev-advanced
+    -1 _STM-MOVE
+    _STM-SELECTED @ 0= _stc-assert
+    _STM-THREAD-TOP @ 0= _stc-assert _stc-rev-advanced
+    -1 _STM-MOVE
+    _STM-SELECTED @ 0= _stc-assert _stc-rev-stable
+
+    \ Exact card accounting permits a zero-card clipped viewport and reserves
+    \ the draft footer before selecting a scroll top.  Neither case damages
+    \ the independent timeline top.
+    7 _STM-DH ! _STM-THREAD-VISIBLE-ITEMS 0= _stc-assert
+    7 _STM-SELECTED ! _STM-THREAD-ENSURE-VISIBLE
+    _STM-THREAD-TOP @ 3 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    11 _STM-DH ! 0 _STM-DRAFT-REV !
+    _STM-THREAD-VISIBLE-ITEMS 2 = _stc-assert
+    1 _STM-DRAFT-REV !
+    _STM-THREAD-VISIBLE-ITEMS 1 = _stc-assert
+    _STM-THREAD-ENSURE-VISIBLE
+    _STM-THREAD-TOP @ 3 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    0 _STM-DRAFT-REV !
+
+    \ Reading B's explicit partial context is observational: it uses
+    \ capability-local root scratch and cannot re-anchor A's open UI context.
+    0 _STM-THREAD-TOP ! 6 _STM-SELECTED ! _STM-THREAD-ENSURE-VISIBLE
+    _stc-rev-capture
+    _stc-b-reply1$ _stc-req @ CBR.ARGS CV-RESOURCE! _stc-ok
+    _stc-req @ _stc-inst @ _STM-CAP-THREAD-H CBUS-S-OK = _stc-assert
+    S" root" _stc-result-field _stc-b-root$ _stc-resource= _stc-assert
+    S" items" _stc-result-field DUP CV-LEN@ 2 = _stc-assert _stc-list !
+    0 _stc-list @ CV-LIST-NTH _stc-b-root$ _stc-resource= _stc-assert
+    1 _stc-list @ CV-LIST-NTH _stc-b-reply1$ _stc-resource= _stc-assert
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-SELECTED @ 6 = _stc-assert
+    _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
+    _STM-THREAD-TOP @ 1 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    _stc-rev-stable _stc-clear _stc-stack
+
+    \ A successful reload retains an anchored root.  If the focused resource
+    \ disappears, reconciliation selects the first surviving member rather
+    \ than the unrelated clamped feed index.  Losing every member exits the
+    \ partial context without publishing stale root bytes.
+    _stc-json-interleaved-threads
+    2DUP DROP 91 SWAP C!
+    _stc-inst @ STREAMS-LOAD-FEED-JSON BFM-S-INVALID = _stc-assert
+    123 _stc-json C!
+    _STM-ITEM-COUNT 8 = _stc-assert
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-SELECTED @ 6 = _stc-assert
+    _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
+    _STM-THREAD-TOP @ 1 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    _stc-rev-advanced
+    _stc-json-interleaved-threads _stc-inst @ STREAMS-LOAD-FEED-JSON
+        BFM-S-OK = _stc-assert
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-SELECTED @ 6 = _stc-assert
+    _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
+    _stc-rev-advanced
+    _stc-json-retained-a-with-unrelated-tail
+        _stc-inst @ STREAMS-LOAD-FEED-JSON BFM-S-OK = _stc-assert
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-SELECTED @ 0= _stc-assert
+    _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
+    _STM-THREAD-COUNT 2 = _stc-assert _stc-rev-advanced
+    _stc-json-without-a _stc-inst @ STREAMS-LOAD-FEED-JSON
+        BFM-S-OK = _stc-assert
+    _STM-VIEW @ _STM-V-TIMELINE = _stc-assert
+    _STM-THREAD-ROOT-U @ 0= _stc-assert
+    _STM-THREAD-TOP @ 0= _stc-assert _stc-rev-advanced
+
+    \ Restore the canonical two-item harness page for the capability and bus
+    \ cases below; the fixture remains host-owned rather than library state.
+    _stc-doc @ _stc-doc-u @ _stc-inst @ STREAMS-LOAD-FEED-JSON
+        BFM-S-OK = _stc-assert
+    _STM-ITEM-COUNT 2 = _stc-assert _stc-rev-advanced
+    7 _STM-DH ! 0 _STM-TOP ! 0 _STM-SELECTED ! _stc-stack
+
+    \ UI-created drafts are discoverable through the same target-scoped
+    \ resource observer used by agents and other applets.
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-CURRENT-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-DRAFT-CURRENT CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    _stc-clear _stc-stack
+    _STM-BEGIN-DRAFT
+    _STM-PROMPT @ PRM-ACTIVE? _stc-assert
+    _STM-PROMPT-MODE @ _STM-PM-DRAFT = _stc-assert
+    _STM-PROMPT @ PRM-GET-TEXT NIP 0= _stc-assert
+    S" Draft:" S" UI-created draft" _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-DRAFT-REV @ 1 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" UI-created draft" STR-STR=
+        _stc-assert
+    _stc-rev-advanced _stc-stack
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-CURRENT-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT S" streams:draft:local" _stc-resource= _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-DRAFT-CURRENT CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    _stc-clear _stc-stack
+
+    \ Canceling an edit wipes prompt storage without changing the draft.
+    _STM-BEGIN-DRAFT
+    _STM-PROMPT @ PRM-GET-TEXT S" UI-created draft" STR-STR= _stc-assert
+    S" Draft:" S" must not commit" _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-CANCEL
+    _STM-DRAFT-REV @ 1 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" UI-created draft" STR-STR=
+        _stc-assert
+    _STM-PROMPT-MODE @ _STM-PM-NONE = _stc-assert
+    _STM-PROMPT @ PRM-GET-TEXT NIP 0= _stc-assert
+    _stc-rev-stable _stc-stack
+
+    \ Reset only the test-owned state so command capability cases can begin
+    \ from their documented no-draft precondition.
+    0 _STM-DRAFT-U ! 0 _STM-DRAFT-REV !
+    _STM-DRAFT-BUF _STM-DRAFT-CAP 0 FILL
+
+    S" A bounded local draft" _stc-create-args
     _stc-req @ _stc-inst @ _STM-CAP-DRAFT-CREATE-H CBUS-S-OK = _stc-assert
-    _stc-req @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
-        S" streams:draft:local" STR-STR= _stc-assert
-    _stc-clear
+    _stc-req @ CBR.RESULT STREAMS-CAP-DRAFT-CREATE CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" resource" _stc-result-field S" streams:draft:local"
+        _stc-resource= _stc-assert
+    S" revision" _stc-result-field DUP CV-TYPE@ CV-T-INT = _stc-assert
+        CV-DATA@ 1 = _stc-assert
+    S" text" _stc-result-field S" A bounded local draft"
+        _stc-string= _stc-assert
+    _stc-clear _stc-rev-stable _stc-stack
 
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-CURRENT-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT S" streams:draft:local" _stc-resource= _stc-assert
+    _stc-clear _stc-stack
+
+    S" duplicate draft" _stc-create-args
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-CREATE-H
+        CBUS-S-BUSY = _stc-assert
+    _STM-DRAFT-REV @ 1 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" A bounded local draft" STR-STR=
+        _stc-assert
+    _stc-clear _stc-stack
+
+    S" streams:draft:local" _stc-req @ CBR.ARGS CV-RESOURCE! _stc-ok
     _stc-req @ _stc-inst @ _STM-CAP-DRAFT-READ-H CBUS-S-OK = _stc-assert
-    S" A bounded local draft" _stc-result-has _stc-assert
-    S" revision: 1" _stc-result-has _stc-assert
-    _stc-clear
+    _stc-req @ CBR.RESULT STREAMS-CAP-DRAFT-READ CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" text" _stc-result-field S" A bounded local draft"
+        _stc-string= _stc-assert
+    _stc-clear _stc-stack
 
+    S" streams:draft:local" _stc-req @ CBR.ARGS CV-RESOURCE! _stc-ok
     _stc-req @ _stc-inst @ _STM-CAP-DRAFT-VALIDATE-H CBUS-S-OK = _stc-assert
-    S" valid: true" _stc-result-has _stc-assert
-    S" external-effect: none" _stc-result-has _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-DRAFT-VALIDATE CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" local_valid" _stc-result-field DUP CV-TYPE@ CV-T-BOOL = _stc-assert
+        CV-DATA@ _stc-assert
+    S" publishability" _stc-result-field S" unchecked"
+        _stc-string= _stc-assert
+    S" external_effect" _stc-result-field S" none"
+        _stc-string= _stc-assert
+    S" problem" _stc-result-field CV-TYPE@ CV-T-NULL = _stc-assert
+    _stc-clear _stc-stack
 
-    _stc-req @ CBR-FREE _stc-inst @ CINST-FREE
+    S" stale replacement" 0 _stc-replace-args
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-REPLACE-H
+        CBUS-S-STALE-REVISION = _stc-assert
+    _STM-DRAFT-REV @ 1 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" A bounded local draft" STR-STR=
+        _stc-assert
+    _stc-clear _stc-stack
+
+    S" A replacement draft" 1 _stc-replace-args
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-REPLACE-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-DRAFT-REPLACE CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    _STM-DRAFT-REV @ 2 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" A replacement draft" STR-STR=
+        _stc-assert
+    _stc-clear _stc-rev-stable _stc-stack
+
+    \ Bounds and UTF-8 rejection leave the successful revision untouched.
+    _stc-big _STM-DRAFT-CAP 1+ 65 FILL
+    _stc-big _STM-DRAFT-CAP 1+ 2 _stc-replace-args
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-REPLACE-H
+        CBUS-S-INVALID = _stc-assert
+    _stc-clear _stc-stack
+    255 _stc-big C!
+    _stc-big 1 2 _stc-replace-args
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-REPLACE-H
+        CBUS-S-INVALID = _stc-assert
+    _stc-clear _stc-stack
+    _STM-DRAFT-REV @ 2 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" A replacement draft" STR-STR=
+        _stc-assert
+
+    \ The UI editor starts from the current draft, commits through the same
+    \ bounded revision path, and permits an explicit empty local draft.
+    _STM-BEGIN-DRAFT
+    _STM-PROMPT @ PRM-GET-TEXT S" A replacement draft" STR-STR=
+        _stc-assert
+    S" Draft:" S" Edited through prompt" _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-DRAFT-REV @ 3 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" Edited through prompt" STR-STR=
+        _stc-assert
+    _stc-rev-advanced
+    _STM-BEGIN-DRAFT
+    S" Draft:" 0 0 _STM-PROMPT @ PRM-SHOW
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
+    _STM-DRAFT-REV @ 4 = _stc-assert _STM-DRAFT-U @ 0= _stc-assert
+    _stc-rev-advanced _stc-stack
+
+    S" streams:draft:local" _stc-req @ CBR.ARGS CV-RESOURCE! _stc-ok
+    _stc-req @ _stc-inst @ _STM-CAP-DRAFT-VALIDATE-H CBUS-S-OK = _stc-assert
+    S" local_valid" _stc-result-field DUP CV-TYPE@ CV-T-BOOL = _stc-assert
+        CV-DATA@ 0= _stc-assert
+    S" problem" _stc-result-field S" draft is empty" _stc-string= _stc-assert
+    _stc-clear _stc-stack
+
+    \ A live prompt blocks applet closure; canceling it preserves owner state.
+    _STM-BEGIN-SEARCH
+    APP-CLOSE-R-WINDOW _stc-inst @ STREAMS-REQUEST-CLOSE-CB
+        APP-CLOSE-D-CANCEL = _stc-assert
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-CANCEL
+    APP-CLOSE-R-WINDOW _stc-inst @ STREAMS-REQUEST-CLOSE-CB
+        APP-CLOSE-D-ALLOW = _stc-assert
+    _stc-rev-stable _stc-stack
+
+    0 _STM-FEED-READY !
+    _STM-V-TIMELINE _STM-VIEW !
+    _STM-OPEN-THREAD
+    _STM-VIEW @ _STM-V-TIMELINE = _stc-assert
+    _stc-rev-stable
+    _stc-req @ _stc-inst @ _STM-CAP-SELECTION-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _stc-assert
+    _stc-clear _stc-stack
+    _stc-req @ _stc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-FEED CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" state" _stc-result-field S" unavailable" _stc-string= _stc-assert
+    S" items" _stc-result-field DUP CV-TYPE@ CV-T-LIST = _stc-assert
+        CV-LEN@ 0= _stc-assert
+    _stc-clear _stc-stack
+    -1 _STM-FEED-READY !
+
+    \ Register the real component and dispatch through the queued owner bus.
+    \ This proves target resolution, deep input/output validation, and the
+    \ distinction between observing owner state and committing a mutation.
+    CREG-NEW DUP 0= _stc-assert DROP _stc-reg !
+    STREAMS-COMP-DESC _stc-reg @ CREG-TYPE+ 0= _stc-assert
+    _stc-inst @ _stc-reg @ CREG-INST+ 0= _stc-assert
+    _stc-reg @ 0 CBUS-NEW DUP 0= _stc-assert DROP _stc-bus !
+    0 _stc-req @ CBR.EXPECT-REV !
+    _stc-rev-capture
+    _stc-req @ CBR.ARGS CV-NULL!
+    STREAMS-CAP-FEED _stc-inst @ _stc-dispatch
+    _stc-req @ CBR.STATUS @ CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-FEED CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" items" _stc-result-field DUP CV-TYPE@ CV-T-LIST = _stc-assert
+        CV-LEN@ 2 = _stc-assert
+    _stc-req @ CBR.ACTUAL-REV @ _stc-owner-rev @ = _stc-assert
+    _stc-clear _stc-rev-stable _stc-stack
+
+    \ A wrong input is rejected by the descriptor schema before the handler;
+    \ it cannot advance owner state or leave a partially useful result.
+    91 _stc-req @ CBR.ARGS CV-INT!
+    STREAMS-CAP-FEED _stc-inst @ _stc-dispatch
+    _stc-req @ CBR.STATUS @ CBUS-S-INVALID = _stc-assert
+    _stc-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _stc-assert
+    _stc-clear _stc-rev-stable _stc-stack
+
+    \ A successful bus mutation advances the component revision exactly once
+    \ in addition to the draft's own revision, and reports that owner commit.
+    S" Bus-owned draft" 4 _stc-replace-args
+    _stc-owner-rev @ _stc-req @ CBR.EXPECT-REV !
+    STREAMS-CAP-DRAFT-REPLACE _stc-inst @ _stc-dispatch
+    _stc-req @ CBR.STATUS @ CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-DRAFT-REPLACE CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    _STM-DRAFT-REV @ 5 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" Bus-owned draft" STR-STR=
+        _stc-assert
+    _stc-rev-advanced
+    _stc-req @ CBR.ACTUAL-REV @ _stc-owner-rev @ = _stc-assert
+    _stc-clear _stc-stack
+
+    \ Owner-level optimistic concurrency is checked before the otherwise
+    \ valid draft replacement can reach its handler.
+    S" Must stay stale" 5 _stc-replace-args
+    _stc-owner-rev @ 1- _stc-req @ CBR.EXPECT-REV !
+    STREAMS-CAP-DRAFT-REPLACE _stc-inst @ _stc-dispatch
+    _stc-req @ CBR.STATUS @ CBUS-S-STALE-REVISION = _stc-assert
+    _STM-DRAFT-REV @ 5 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" Bus-owned draft" STR-STR=
+        _stc-assert
+    _stc-clear _stc-rev-stable _stc-stack
+
+    \ A second registered instance owns a disjoint feed, selection, draft,
+    \ and component revision even though both share the static descriptors.
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _stc-assert DROP _stc-inst2 !
+    _stc-inst2 @ _stc-reg @ CREG-INST+ 0= _stc-assert
+    _stc-inst2 @ CINST.REVISION @ 1 = _stc-assert
+    1 _stc-json-feed _stc-inst2 @ STREAMS-LOAD-FEED-JSON
+        BFM-S-OK = _stc-assert
+    _stc-inst2 @ CINST.REVISION @ 2 = _stc-assert
+    _stc-inst2 @ _STM-ACTIVATE
+    _STM-ITEM-COUNT 1 = _stc-assert
+    0 _STM-ITEM BFM.ITEM.HANDLE S" test.invalid" STR-STR= _stc-assert
+    _STM-DRAFT-REV @ 0= _stc-assert
+    _stc-inst @ _STM-ACTIVATE
+    _STM-ITEM-COUNT 2 = _stc-assert
+    0 _STM-ITEM BFM.ITEM.HANDLE S" mira.test" STR-STR= _stc-assert
+    _STM-DRAFT-REV @ 5 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" Bus-owned draft" STR-STR=
+        _stc-assert
+    _stc-stack
+
+    \ Context anchors and ordinal tops are instance state, not shared scratch.
+    \ Alternate activation cannot make either applet inherit the other's
+    \ root, view, focus, or viewport, and opening either view is revision-free.
+    8 _STM-DH ! 1 _STM-SELECTED ! _STM-OPEN-THREAD
+    _STM-THREAD-ENSURE-VISIBLE
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-THREAD-ROOT$
+        S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+        STR-STR= _stc-assert
+    _STM-THREAD-TOP @ 1 = _stc-assert _stc-rev-stable
+    _stc-inst2 @ _STM-ACTIVATE
+    0 _STM-SELECTED ! _STM-OPEN-THREAD _STM-THREAD-ENSURE-VISIBLE
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
+    _STM-THREAD-TOP @ 0= _stc-assert
+    _stc-inst2 @ CINST.REVISION @ 2 = _stc-assert
+    _stc-inst @ _STM-ACTIVATE
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-SELECTED @ 1 = _stc-assert
+    _STM-THREAD-ROOT$
+        S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
+        STR-STR= _stc-assert
+    _STM-THREAD-TOP @ 1 = _stc-assert
+    _stc-inst2 @ _STM-ACTIVATE
+    _STM-VIEW @ _STM-V-THREAD = _stc-assert
+    _STM-SELECTED @ 0= _stc-assert
+    _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
+    _STM-THREAD-TOP @ 0= _stc-assert
+    _stc-inst @ _STM-ACTIVATE 7 _STM-DH ! _stc-stack
+
+    \ Bus target resolution observes the second page, then mutates only its
+    \ draft. The first instance's model and revision remain byte-independent.
+    _stc-inst2 @ CINST.REVISION @ _stc-inst2-rev !
+    0 _stc-req @ CBR.EXPECT-REV !
+    _stc-req @ CBR.ARGS CV-NULL!
+    STREAMS-CAP-FEED _stc-inst2 @ _stc-dispatch
+    _stc-req @ CBR.STATUS @ CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-FEED CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    S" items" _stc-result-field CV-LEN@ 1 = _stc-assert
+    _stc-inst2 @ CINST.REVISION @ _stc-inst2-rev @ = _stc-assert
+    _stc-clear _stc-stack
+    S" Second instance draft" _stc-create-args
+    _stc-inst2-rev @ _stc-req @ CBR.EXPECT-REV !
+    STREAMS-CAP-DRAFT-CREATE _stc-inst2 @ _stc-dispatch
+    _stc-req @ CBR.STATUS @ CBUS-S-OK = _stc-assert
+    _stc-req @ CBR.RESULT STREAMS-CAP-DRAFT-CREATE CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _stc-ok
+    _stc-inst2 @ CINST.REVISION @ _stc-inst2-rev @ 1+ = _stc-assert
+    _stc-req @ CBR.ACTUAL-REV @ _stc-inst2 @ CINST.REVISION @ =
+        _stc-assert
+    _stc-inst2 @ _STM-ACTIVATE
+    _STM-DRAFT-REV @ 1 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" Second instance draft" STR-STR=
+        _stc-assert
+    _stc-clear
+    _stc-inst @ _STM-ACTIVATE
+    _STM-DRAFT-REV @ 5 = _stc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ S" Bus-owned draft" STR-STR=
+        _stc-assert
+    _stc-rev-stable _stc-stack
+
+    _STM-PROMPT @ DUP PRM-WIPE PRM-FREE
+    _STM-PROMPT-RGN @ RGN-FREE
+    0 _STM-PROMPT ! 0 _STM-PROMPT-RGN !
+    _stc-stack
+    STREAMS-COMP-DESC COMP.STATE-FINI-XT @ ['] _STM-STATE-FINI =
+        _stc-assert
+    _stc-inst2 @ _STM-ACTIVATE
+    _stc-inst2 @ CINST-STATE DUP _STM-STATE-FINI
+    _STM-STATE-SIZE _stc-zeroed? _stc-assert
+    _STM-CURRENT-STATE @ 0= _stc-assert
+    _STM-CURRENT-INSTANCE @ 0= _stc-assert
+    _stc-stack
+    _stc-bus @ CBUS-FREE
+    _stc-inst2 @ _stc-reg @ CREG-INST- 0= _stc-assert
+    _stc-inst @ _stc-reg @ CREG-INST- 0= _stc-assert
+    _stc-reg @ CREG-FREE
+    _stc-inst2 @ CINST-FREE
+    _stc-doc @ FREE _stc-req @ CBR-FREE _stc-inst @ CINST-FREE
     _stc-fails @ 0= IF
         ." STREAMS CONTRACTS PASS " _stc-checks @ .
     ELSE
@@ -7939,6 +10369,307 @@ _stc-run
     ready_markers=("STREAMS CONTRACTS PASS",),
     stable_markers=("STREAMS CONTRACTS PASS",),
     failure_markers=("STREAMS CONTRACTS FAIL",),
+    linked=True,
+    initial_files=(("testing/streams/timeline.json", STREAMS_TIMELINE_FIXTURE),),
+)
+
+PROFILES["streams-persistence-contracts"] = Profile(
+    roots=("utils/fs/vfs.f", "tui/applets/streams/streams.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Streams lifecycle persistence contracts
+ENTER-USERLAND
+." [akashic] loading Streams persistence contracts" CR
+REQUIRE utils/fs/vfs.f
+REQUIRE tui/applets/streams/streams.f
+
+VARIABLE _spc-fails
+VARIABLE _spc-checks
+VARIABLE _spc-depth
+VARIABLE _spc-old-vfs
+VARIABLE _spc-vfs
+VARIABLE _spc-old-vtable
+VARIABLE _spc-fd
+VARIABLE _spc-store
+VARIABLE _spc-data-a
+VARIABLE _spc-data-u
+VARIABLE _spc-path-a
+VARIABLE _spc-path-u
+VARIABLE _spc-load-u
+VARIABLE _spc-load-rev
+VARIABLE _spc-load-status
+VARIABLE _spc-record-u
+VARIABLE _spc-record-status
+VARIABLE _spc-owner-rev
+VARIABLE _spc-replace-a
+VARIABLE _spc-replace-u
+VARIABLE _spc-replace-rev
+VARIABLE _spc-req
+VARIABLE _spc-inst1
+VARIABLE _spc-inst2
+VARIABLE _spc-inst3
+VARIABLE _spc-inst4
+VARIABLE _spc-inst5
+VARIABLE _spc-inst6
+VARIABLE _spc-inst7
+
+CREATE _spc-fault-vtable VFS-VT-SIZE ALLOT
+CREATE _spc-load-buffer STREAMS-DRAFT-TEXT-MAX ALLOT
+
+: _spc-assert  ( flag -- )
+    1 _spc-checks +! 0= IF
+        1 _spc-fails +! ." SPC ASSERT " _spc-checks @ . CR
+    THEN ;
+
+: _spc-stack  ( -- ) DEPTH _spc-depth @ = _spc-assert ;
+: _spc-first$  ( -- a u ) S" persisted ☂ café" ;
+: _spc-second$  ( -- a u ) S" UI saved ☂ exactly" ;
+
+: _spc-ok  ( ior -- ) 0= _spc-assert ;
+: _spc-slot  ( key-a key-u index map -- child )
+    CV-MAP-SLOT! DUP 0= _spc-assert DROP ;
+
+: _spc-clear-request  ( -- )
+    _spc-req @ CBR.ARGS CV-FREE
+    _spc-req @ CBR.RESULT CV-FREE ;
+
+: _spc-create-args  ( text-a text-u -- )
+    1 _spc-req @ CBR.ARGS CV-MAP! _spc-ok
+    S" text" 0 _spc-req @ CBR.ARGS _spc-slot CV-STRING! _spc-ok ;
+
+: _spc-replace-args  ( text-a text-u expected-revision -- )
+    _spc-replace-rev ! _spc-replace-u ! _spc-replace-a !
+    3 _spc-req @ CBR.ARGS CV-MAP! _spc-ok
+    S" resource" 0 _spc-req @ CBR.ARGS _spc-slot
+        S" streams:draft:local" ROT CV-RESOURCE! _spc-ok
+    S" expected_revision" 1 _spc-req @ CBR.ARGS _spc-slot
+        _spc-replace-rev @ SWAP CV-INT!
+    S" text" 2 _spc-req @ CBR.ARGS _spc-slot
+        _spc-replace-a @ _spc-replace-u @ ROT CV-STRING! _spc-ok ;
+
+: _spc-result-sentinel?  ( -- flag )
+    _spc-req @ CBR.RESULT DUP CV-TYPE@ CV-T-STRING <> IF
+        DROP 0 EXIT
+    THEN
+    DUP CV-DATA@ SWAP CV-LEN@ S" result sentinel" STR-STR= ;
+
+: _spc-normal-init  ( instance -- )
+    DUP CINST.REVISION @ _spc-owner-rev !
+    DUP STREAMS-INIT-CB
+    CINST.REVISION @ _spc-owner-rev @ = _spc-assert ;
+
+: _spc-load!  ( store -- )
+    _spc-store !
+    _spc-load-buffer STREAMS-DRAFT-TEXT-MAX _spc-store @
+        STREAMS-DRAFT-STORE-LOAD
+    _spc-load-status ! _spc-load-rev ! _spc-load-u ! ;
+
+: _spc-artifacts-clean?  ( store -- flag )
+    _spc-store !
+    _spc-store @ STREAMS-DRAFT-STORE.REPLACE VREPL-STAGE$
+        _spc-vfs @ VFS-RESOLVE 0=
+    _spc-store @ STREAMS-DRAFT-STORE.REPLACE VREPL-BACKUP$
+        _spc-vfs @ VFS-RESOLVE 0= AND
+    _spc-store @ STREAMS-DRAFT-STORE.REPLACE VREPL-MARKER$
+        _spc-vfs @ VFS-RESOLVE 0= AND ;
+
+: _spc-put  ( data-a data-u path-a path-u -- )
+    _spc-path-u ! _spc-path-a ! _spc-data-u ! _spc-data-a !
+    _spc-path-a @ _spc-path-u @ _spc-vfs @ VFS-RESOLVE IF
+        _spc-path-a @ _spc-path-u @ _spc-vfs @ VFS-RM 0= _spc-assert
+    THEN
+    _spc-path-a @ _spc-path-u @ _spc-vfs @ VFS-CREATE
+    DUP 0<> _spc-assert DUP 0= IF DROP EXIT THEN DROP
+    _spc-path-a @ _spc-path-u @ VFS-OPEN DUP _spc-fd !
+        0<> _spc-assert
+    _spc-fd @ 0= IF EXIT THEN
+    _spc-data-a @ _spc-data-u @ _spc-fd @ VFS-WRITE-EXACT
+        0= _spc-assert
+    _spc-fd @ VFS-CLOSE
+    _spc-vfs @ VFS-SYNC 0= _spc-assert ;
+
+: _spc-zero-write  ( buf len offset inode vfs -- actual )
+    2DROP 2DROP DROP 0 ;
+
+: _spc-fault-on  ( -- )
+    _spc-vfs @ V.VTABLE @ DUP _spc-old-vtable !
+    _spc-fault-vtable VFS-VT-SIZE CMOVE
+    ['] _spc-zero-write _spc-fault-vtable VFS-VT-WRITE CELLS + !
+    _spc-fault-vtable _spc-vfs @ V.VTABLE ! ;
+
+: _spc-fault-off  ( -- )
+    _spc-old-vtable @ _spc-vfs @ V.VTABLE ! ;
+
+: _spc-arm-rollback  ( -- )
+    S" interrupted candidate" 3 _STREAMS-DRAFT-ENCODE
+        _spc-record-status ! _spc-record-u !
+    _spc-record-status @ SDSTORE-S-OK = _spc-assert
+    _STM-DRAFT-STORE STREAMS-DRAFT-STORE.REPLACE _VRO-R !
+    _SDR-RECORD _spc-record-u @
+        _STM-DRAFT-STORE STREAMS-DRAFT-STORE.REPLACE VREPL-STAGE$
+        _VREPL-CREATE-WRITE VREPL-S-OK = _spc-assert
+    _SDR-RECORD _VRO-DATA ! _spc-record-u @ _VRO-LEN !
+    -1 _VRO-ORIGINAL !
+    _VREPL-WRITE-MARKER VREPL-S-OK = _spc-assert
+    _spc-vfs @ VFS-SYNC 0= _spc-assert
+    _VRO-TARGET>BACKUP 0= _spc-assert
+    _spc-vfs @ VFS-SYNC 0= _spc-assert ;
+
+: _spc-install-corrupt  ( -- )
+    _spc-first$ 9 _STREAMS-DRAFT-ENCODE
+        _spc-record-status ! _spc-record-u !
+    _spc-record-status @ SDSTORE-S-OK = _spc-assert
+    _SDR-RECORD DUP C@ 1 XOR SWAP C!
+    _SDR-RECORD _spc-record-u @ _STM-DRAFT-STORE
+        STREAMS-DRAFT-STORE-PATH$ _spc-put ;
+
+: _spc-install-unsupported  ( -- )
+    _spc-first$ 10 _STREAMS-DRAFT-ENCODE
+        _spc-record-status ! _spc-record-u !
+    _spc-record-status @ SDSTORE-S-OK = _spc-assert
+    2 _SDR-RECORD _SDR-H-FORMAT + !
+    _SDR-RECORD _STREAMS-DRAFT-HEADER-CRC
+        _SDR-RECORD _SDR-H-HEADER-CRC + !
+    _SDR-RECORD _spc-record-u @ _STM-DRAFT-STORE
+        STREAMS-DRAFT-STORE-PATH$ _spc-put ;
+
+: _spc-run  ( -- )
+    0 _spc-fails ! 0 _spc-checks ! DEPTH _spc-depth !
+    VFS-CUR DUP 0<> _spc-assert _spc-old-vfs !
+    524288 A-XMEM ARENA-NEW DUP 0= _spc-assert DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _spc-vfs ! VFS-USE
+    _STREAMS-COMP-SETUP
+    CBR-NEW DUP 0= _spc-assert DROP _spc-req !
+
+    \ A direct instance remains volatile until the normal app lifecycle runs.
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _spc-assert DROP _spc-inst1 !
+    _spc-inst1 @ _STM-ACTIVATE
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-VOLATILE = _spc-assert
+    _spc-inst1 @ _spc-normal-init
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-READY = _spc-assert
+    _STM-DRAFT-STORE-STATUS @ SDSTORE-S-ABSENT = _spc-assert
+    _STM-DRAFT-U @ 0= _spc-assert _STM-DRAFT-REV @ 0= _spc-assert
+    _spc-inst1 @ CINST.REVISION @ 1 = _spc-assert
+
+    \ Capability creation writes the durable singleton before memory commit.
+    _spc-first$ _spc-create-args
+    _spc-req @ _spc-inst1 @ _STM-CAP-DRAFT-CREATE-H
+        CBUS-S-OK = _spc-assert
+    _STM-DRAFT-REV @ 1 = _spc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ _spc-first$ STR-STR= _spc-assert
+    _spc-req @ CBR.RESULT _STM-DRAFT-SCHEMA
+        CS-VALIDATE-DEEP 0= _spc-assert
+    _STM-DRAFT-STORE _spc-artifacts-clean? _spc-assert
+    _spc-clear-request _spc-stack
+
+    \ A cold normal init restores exact UTF-8 and revision without touching
+    \ the component owner's optimistic-concurrency revision.
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _spc-assert DROP _spc-inst2 !
+    _spc-inst2 @ _spc-normal-init
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-READY = _spc-assert
+    _STM-DRAFT-STORE-STATUS @ SDSTORE-S-OK = _spc-assert
+    _STM-DRAFT-REV @ 1 = _spc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ _spc-first$ STR-STR= _spc-assert
+    _spc-inst2 @ CINST.REVISION @ 1 = _spc-assert
+
+    \ The UI owner path and capability path converge on the same store.
+    _spc-second$ _STM-DRAFT-OWNER! _spc-assert
+    _STM-DRAFT-REV @ 2 = _spc-assert
+    _spc-inst2 @ CINST.REVISION @ 2 = _spc-assert
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _spc-assert DROP _spc-inst3 !
+    _spc-inst3 @ _spc-normal-init
+    _STM-DRAFT-REV @ 2 = _spc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ _spc-second$ STR-STR= _spc-assert
+    _spc-inst3 @ CINST.REVISION @ 1 = _spc-assert
+
+    \ Activation resolves a replacement interrupted after target backup and
+    \ then restores the previous complete record.
+    _spc-arm-rollback
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _spc-assert DROP _spc-inst4 !
+    _spc-inst4 @ _spc-normal-init
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-READY = _spc-assert
+    _STM-DRAFT-STORE STREAMS-DRAFT-STORE.LAST-VREPL @
+        VREPL-S-ROLLED-BACK = _spc-assert
+    _STM-DRAFT-REV @ 2 = _spc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ _spc-second$ STR-STR= _spc-assert
+    _STM-DRAFT-STORE _spc-artifacts-clean? _spc-assert
+
+    \ A contained persistence failure preserves the prior draft, caller
+    \ result, and owner revision, then blocks further uncertain overwrites.
+    S" rejected replacement" 2 _spc-replace-args
+    S" result sentinel" _spc-req @ CBR.RESULT CV-STRING! _spc-ok
+    _spc-inst4 @ CINST.REVISION @ _spc-owner-rev !
+    _spc-fault-on
+    _spc-req @ _spc-inst4 @ _STM-CAP-DRAFT-REPLACE-H
+        CBUS-S-FAILED = _spc-assert
+    _spc-fault-off
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-BLOCKED = _spc-assert
+    _STM-DRAFT-STORE-STATUS @ SDSTORE-S-IO = _spc-assert
+    _STM-DRAFT-REV @ 2 = _spc-assert
+    _STM-DRAFT-BUF _STM-DRAFT-U @ _spc-second$ STR-STR= _spc-assert
+    _spc-result-sentinel? _spc-assert
+    _spc-inst4 @ CINST.REVISION @ _spc-owner-rev @ = _spc-assert
+    _STM-DRAFT-RESULT-CANDIDATE CV-TYPE@ CV-T-NULL = _spc-assert
+    _STM-DRAFT-STORE _spc-load!
+    _spc-load-status @ SDSTORE-S-OK = _spc-assert
+    _spc-load-rev @ 2 = _spc-assert
+    _spc-load-buffer _spc-load-u @ _spc-second$ STR-STR= _spc-assert
+    _STM-DRAFT-STORE _spc-artifacts-clean? _spc-assert
+    S" blocked edit" _STM-DRAFT-OWNER! 0= _spc-assert
+    _STM-DRAFT-REV @ 2 = _spc-assert
+    _spc-inst4 @ CINST.REVISION @ _spc-owner-rev @ = _spc-assert
+    _spc-clear-request _spc-stack
+
+    \ Corrupt, future-format, and recovery-uncertain activation states are
+    \ distinguished and refuse mutation rather than replacing evidence.
+    _spc-install-corrupt
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _spc-assert DROP _spc-inst5 !
+    _spc-inst5 @ _spc-normal-init
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-BLOCKED = _spc-assert
+    _STM-DRAFT-STORE-STATUS @ SDSTORE-S-CORRUPT = _spc-assert
+    _STM-DRAFT-REV @ 0= _spc-assert
+    S" must not overwrite corrupt" _STM-DRAFT-OWNER! 0= _spc-assert
+    _spc-inst5 @ CINST.REVISION @ 1 = _spc-assert
+
+    _spc-install-unsupported
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _spc-assert DROP _spc-inst6 !
+    _spc-inst6 @ _spc-normal-init
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-BLOCKED = _spc-assert
+    _STM-DRAFT-STORE-STATUS @ SDSTORE-S-UNSUPPORTED = _spc-assert
+    S" must not replace future data" _STM-DRAFT-OWNER! 0= _spc-assert
+    _spc-inst6 @ CINST.REVISION @ 1 = _spc-assert
+
+    _spc-first$ 11 _STM-DRAFT-STORE STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-OK = _spc-assert
+    S" bad" _STM-DRAFT-STORE STREAMS-DRAFT-STORE.REPLACE VREPL-MARKER$
+        _spc-put
+    STREAMS-COMP-DESC CINST-NEW DUP 0= _spc-assert DROP _spc-inst7 !
+    _spc-inst7 @ _spc-normal-init
+    _STM-DRAFT-PERSIST-MODE @ _STM-DP-BLOCKED = _spc-assert
+    _STM-DRAFT-STORE-STATUS @ SDSTORE-S-RECOVERY = _spc-assert
+    S" must not overwrite uncertain recovery" _STM-DRAFT-OWNER!
+        0= _spc-assert
+    _spc-inst7 @ CINST.REVISION @ 1 = _spc-assert
+    _spc-stack
+
+    _spc-req @ CBR-FREE
+    _spc-inst1 @ CINST-FREE _spc-inst2 @ CINST-FREE
+    _spc-inst3 @ CINST-FREE _spc-inst4 @ CINST-FREE
+    _spc-inst5 @ CINST-FREE _spc-inst6 @ CINST-FREE
+    _spc-inst7 @ CINST-FREE
+    _spc-old-vfs @ VFS-USE _spc-vfs @ VFS-DESTROY
+    _spc-stack
+    _spc-fails @ 0= IF
+        ." STREAMS PERSISTENCE CONTRACTS PASS " _spc-checks @ .
+    ELSE
+        ." STREAMS PERSISTENCE CONTRACTS FAIL " _spc-fails @ . ." / "
+            _spc-checks @ .
+    THEN CR ;
+
+_spc-run
+""",
+    ready_markers=("STREAMS PERSISTENCE CONTRACTS PASS",),
+    stable_markers=("STREAMS PERSISTENCE CONTRACTS PASS",),
+    failure_markers=("STREAMS PERSISTENCE CONTRACTS FAIL", "SPC ASSERT"),
     linked=True,
 )
 
@@ -8709,9 +11440,25 @@ VARIABLE _ahs-original-next VARIABLE _ahs-original-revision
 VARIABLE _ahs-mf-parent VARIABLE _ahs-mf-child VARIABLE _ahs-mf-run
 VARIABLE _ahs-mf-status
 VARIABLE _ahs-unsupported-req
+VARIABLE _ahs-result-mode VARIABLE _ahs-disclosure-before
+VARIABLE _ahs-race-g1 VARIABLE _ahs-race-g2 VARIABLE _ahs-race-run
+VARIABLE _ahs-race-entry VARIABLE _ahs-race-outer VARIABLE _ahs-race-old-handler
+VARIABLE _ahs-race-entered VARIABLE _ahs-race-prepared
+VARIABLE _ahs-race-refresh-status VARIABLE _ahs-race-dispatch-status
+VARIABLE _ahs-cont-g VARIABLE _ahs-cont-mrun VARIABLE _ahs-cont-req
+VARIABLE _ahs-cont-bus VARIABLE _ahs-cont-status
+VARIABLE _ahs-race-ready VARIABLE _ahs-race-start VARIABLE _ahs-race-reserved
+VARIABLE _ahs-race-refund VARIABLE _ahs-race-tool-main
+VARIABLE _ahs-race-tool-worker VARIABLE _ahs-race-disc-main
+VARIABLE _ahs-race-disc-worker
+VARIABLE _ahs-worker-amrun-ptr VARIABLE _ahs-worker-amrun-status
+VARIABLE _ahs-worker-gateway-ptr VARIABLE _ahs-worker-gateway-status
+VARIABLE _ahs-worker-call-status
 
 CREATE _ahs-component COMP-DESC ALLOT
 CREATE _ahs-cap CAP-DESC ALLOT
+CREATE _ahs-in-schema CS-SIZE ALLOT
+CREATE _ahs-out-schema CS-SIZE ALLOT
 CREATE _ahs-policy CPOLICY-SIZE ALLOT
 CREATE _ahs-head PHEAD-SIZE ALLOT
 CREATE _ahs-mandate MAND-SIZE ALLOT
@@ -8721,10 +11468,18 @@ CREATE _ahs-digest-hex SHA3-256-LEN 2* ALLOT
 CREATE _ahs-large ATOOLG-ARGS-REVIEW-MAX ALLOT
 CREATE _ahs-container CV-SIZE ALLOT
 CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
+CREATE _ahs-race-args CV-SIZE ALLOT
+CREATE _ahs-race-expected RID-SIZE ALLOT
 
 : _ahs-assert  ( flag -- )
     1 _ahs-checks +! 0= IF 1 _ahs-fails +! ." ASSERT " _ahs-checks @ . CR THEN ;
 : _ahs-stack  ( -- ) DEPTH _ahs-depth @ = _ahs-assert ;
+: _ahs-zero?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+: _ahs-result-measure-throw  ( value -- bytes ior )
+    DROP -4242 THROW ;
 : _ahs-rid!  ( value rid -- ) DUP RID-CLEAR ! ;
 : _ahs-pump  ( count -- ) 0 ?DO 8 _ahs-runtime @ ARUNTIME-PUMP DROP LOOP ;
 
@@ -8743,9 +11498,23 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
 
 : _ahs-tool-handler  ( request instance -- status )
     DROP DUP CBR.ARGS CV-LEN@ _ahs-tool-value !
-    1 OVER CBR.RESULT CV-INT! DROP CBUS-S-OK ;
+    _ahs-result-mode @ IF
+        S" oversized" 2 PICK CBR.RESULT CV-STRING! IF
+            DROP CBUS-S-FAILED EXIT
+        THEN
+    ELSE
+        1 OVER CBR.RESULT CV-INT!
+    THEN
+    DROP CBUS-S-OK ;
 
 : _ahs-tool-setup  ( -- )
+    0 _ahs-result-mode !
+    _ahs-in-schema CS-INIT CV-T-STRING _ahs-in-schema CS-ALLOW!
+    4096 _ahs-in-schema CS-MAX-LEN!
+    _ahs-out-schema CS-INIT
+    CV-T-INT CS-TYPE-BIT CV-T-STRING CS-TYPE-BIT OR
+        _ahs-out-schema CS-ALLOW-MASK!
+    256 _ahs-out-schema CS-MAX-LEN!
     _ahs-component COMP-DESC-INIT
     S" org.akashic.test.agent-security"
         _ahs-component COMP.ID-U ! _ahs-component COMP.ID-A !
@@ -8756,6 +11525,8 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
     CAP-K-COMMAND _ahs-cap CAP.KIND !
     S" daybook.task.capture" _ahs-cap CAP.ID-U ! _ahs-cap CAP.ID-A !
     CAP-E-MUTATE CAP-E-PERSIST OR _ahs-cap CAP.EFFECTS !
+    _ahs-in-schema _ahs-cap CAP.IN-SCHEMA !
+    _ahs-out-schema _ahs-cap CAP.OUT-SCHEMA !
     ['] _ahs-tool-handler _ahs-cap CAP.HANDLER-XT !
     _ahs-cap _ahs-component COMP.CAPS-A !
     1 _ahs-component COMP.CAPS-N !
@@ -8861,6 +11632,9 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
 : _ahs-audit-envelope  ( -- )
     0 _ahs-tool-value !
     S" task audit envelope" _ahs-queued
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ DUP _ahs-live-run !
+        AMRUN.DISCLOSURE-USED @ _ahs-disclosure-before !
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 8 = _ahs-assert
     _ahs-gateway @ ATOOLG-ARGS-CANONICAL-ALLOC
     DUP 0= _ahs-assert DROP DUP _ahs-canonical-u !
     OVER >R
@@ -8872,9 +11646,16 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
     _ahs-digest-u @ SHA3-256-LEN = _ahs-assert
     _ahs-digest-a @ _ahs-digest-u @ _ahs-digest-hex FMT->HEX
         _ahs-digest-hex-u !
-    _ahs-review _ahs-audit-n _ahs-before !
+    _ahs-review
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 8 = _ahs-assert
+    _ahs-live-run @ AMRUN.DISCLOSURE-USED @
+        _ahs-disclosure-before @ = _ahs-assert
+    _ahs-audit-n _ahs-before !
     -1 _ahs-runtime @ ARUNTIME-RESOLVE 0= _ahs-assert
     8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 0= _ahs-assert
+    _ahs-live-run @ AMRUN.DISCLOSURE-USED @
+        _ahs-disclosure-before @ 7 - = _ahs-assert
     _ahs-finish
     _ahs-tool-value @ 19 = _ahs-assert
     _ahs-audit-n _ahs-before @ 1+ = _ahs-assert
@@ -8895,6 +11676,28 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
     _ahs-digest-hex _ahs-digest-hex-u @ _ahs-audit-has _ahs-assert
     S" args=" _ahs-audit-has _ahs-assert
     S" task audit envelope" _ahs-audit-has _ahs-assert ;
+
+: _ahs-result-bound  ( -- )
+    1 _ahs-result-mode ! 0 _ahs-tool-value !
+    S" task bounded result" _ahs-queued
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ DUP _ahs-live-run !
+        AMRUN.DISCLOSURE-USED @ _ahs-disclosure-before !
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 8 = _ahs-assert
+    _ahs-review
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE 0= _ahs-assert
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-COMPLETE = _ahs-assert
+    _ahs-gateway @ ATOOLG.REQUEST @ DUP CBR.STATUS @
+        CBUS-S-OK = _ahs-assert
+    DUP CBR.RESULT CV-TYPE@ CV-T-NULL = _ahs-assert
+    CBR.ERROR-CODE @ AMRUN-S-BUDGET = _ahs-assert
+    _ahs-gateway @ ATOOLG.AUDIT-FLAGS @
+        ATOOLG-AF-RESULT-SUPPRESSED AND 0<> _ahs-assert
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 0= _ahs-assert
+    _ahs-live-run @ AMRUN.DISCLOSURE-USED @
+        _ahs-disclosure-before @ 4 - = _ahs-assert
+    _ahs-tool-value @ 0> _ahs-assert
+    0 _ahs-result-mode ! _ahs-finish ;
 
 : _ahs-quiesce  ( -- )
     0 _ahs-tool-value !
@@ -8986,7 +11789,7 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
     S" task fingerprint mutation" _ahs-queued
     _ahs-gateway @ ATOOLG.REQUEST @ CBR.ARGS
     DUP CV-TYPE@ CV-T-STRING = _ahs-assert
-    CV-T-RESOURCE SWAP CV.TYPE !
+    CV-DATA@ 88 SWAP C!
     _ahs-gateway @ ATOOLG-ARGS-FINGERPRINT-MATCH? 0= _ahs-assert
     _ahs-review
     -1 _ahs-gateway @ ATOOLG-RESOLVE CBUS-S-DENIED = _ahs-assert
@@ -9001,7 +11804,10 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
 
 : _ahs-post-approval-mismatch  ( -- )
     0 _ahs-tool-value !
-    S" task post approval mutation" _ahs-queued _ahs-review
+    S" task post approval mutation" _ahs-queued
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ DUP _ahs-live-run !
+        AMRUN.DISCLOSURE-USED @ _ahs-disclosure-before !
+    _ahs-review
     -1 _ahs-runtime @ ARUNTIME-RESOLVE 0= _ahs-assert
     _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _ahs-assert
     _ahs-gateway @ ATOOLG.REQUEST @ CBR.ARGS
@@ -9009,6 +11815,9 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
     8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
     _ahs-gateway @ ATOOLG.REQUEST @ CBR.STATUS @
         CBUS-S-DENIED = _ahs-assert
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 0= _ahs-assert
+    _ahs-live-run @ AMRUN.DISCLOSURE-USED @
+        _ahs-disclosure-before @ 8 - = _ahs-assert
     _ahs-tool-value @ 0= _ahs-assert
     _ahs-finish ;
 
@@ -9090,12 +11899,41 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
     _ahs-stale-event AEV-FREE
     _ahs-gateway @ _ahs-runtime @ ARUNTIME.TOOL-GATEWAY !
 
-    \ Containers have no provider-safe projection yet and must therefore
-    \ consume an impossible disclosure size rather than a pointer value.
+    \ Disclosure charges the exact compact JSON delivered to model context,
+    \ including container structure and map keys.
     _ahs-container CV-INIT
     0 _ahs-container CV-LIST! 0= _ahs-assert
+    _ahs-container _ATOOLG-RESULT-BYTES 2 = _ahs-assert
+    _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY _ahs-zero? _ahs-assert
+    _ahs-container CV-FREE
+    1 _ahs-container CV-MAP! 0= _ahs-assert
+    S" k" 0 _ahs-container CV-MAP-SLOT! DUP 0= _ahs-assert DROP
+    2 SWAP CV-LIST! 0= _ahs-assert
+    S" k" _ahs-container CV-MAP-FIND
+    DUP 0 SWAP CV-LIST-NTH 1 SWAP CV-INT!
+    1 SWAP CV-LIST-NTH CV-NULL!
+    _ahs-container _ATOOLG-RESULT-BYTES 14 = _ahs-assert
+    0 _ahs-container CV.AUX !
     _ahs-container _ATOOLG-RESULT-BYTES
         9223372036854775807 = _ahs-assert
+    _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY _ahs-zero? _ahs-assert
+    _ahs-container CV-FREE
+
+    \ Codec failures also erase all prior bytes, not only the written prefix.
+    _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY 83 FILL
+    _ahs-container CV-INIT 7 _ahs-container CV-F32!
+    _ahs-container _ATOOLG-RESULT-JSON-SIZE
+    DUP 0<> _ahs-assert 2DROP
+    _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY _ahs-zero? _ahs-assert
+    _ahs-container CV-FREE
+
+    \ The same full-capacity wipe runs before propagating a THROW.
+    _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY 84 FILL
+    _ahs-container CV-INIT
+    _ahs-container ['] _ahs-result-measure-throw
+        ['] _ATOOLG-RESULT-JSON-SIZE-AROUND CATCH
+    -4242 = _ahs-assert 2DROP
+    _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY _ahs-zero? _ahs-assert
     _ahs-container CV-FREE
 
     \ COMPLETE and defensive unknown states take CANCEL's default arm.
@@ -9104,6 +11942,164 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
     99 _ahs-gateway @ ATOOLG.STATE !
     _ahs-gateway @ ATOOLG-CANCEL CBUS-S-OK = _ahs-assert
     ATOOLG-S-IDLE _ahs-gateway @ ATOOLG.STATE ! ;
+
+: _ahs-race-reenter-handler  ( request instance -- status )
+    DROP
+    -1 _ahs-race-entered !
+    BEGIN _ahs-race-prepared @ 0= WHILE YIELD? REPEAT
+    _ahs-race-g2 @ ATOOLG-REFRESH _ahs-race-refresh-status !
+    1 OVER CBR.RESULT CV-INT!
+    DROP CBUS-S-OK ;
+
+: _ahs-lock-worker  ( -- )
+    _ahs-race-outer @ _ahs-bus @ CBUS-DISPATCH
+        _ahs-race-dispatch-status ! ;
+
+: _ahs-lock-order  ( -- )
+    _ahs-race-args CV-INIT
+    S" lock-order args" _ahs-race-args CV-STRING! 0= _ahs-assert
+    CBR-NEW DUP 0= _ahs-assert DROP _ahs-race-outer !
+    S" outer" _ahs-race-outer @ CBR.ARGS CV-STRING! 0= _ahs-assert
+    _ahs-inst @ CINST.ID @ _ahs-race-outer @ CBR.TARGET-ID !
+    _ahs-inst @ CINST.GENERATION @ _ahs-race-outer @ CBR.TARGET-GEN !
+    _ahs-cap _ahs-race-outer @ CBR.CAP !
+    CBR-F-APPROVED _ahs-race-outer @ CBR.FLAGS !
+    _ahs-cap CAP.HANDLER-XT @ _ahs-race-old-handler !
+    ['] _ahs-race-reenter-handler _ahs-cap CAP.HANDLER-XT !
+    0 _ahs-race-entered ! 0 _ahs-race-prepared !
+    99 _ahs-race-refresh-status ! 99 _ahs-race-dispatch-status !
+
+    ['] _ahs-lock-worker 1 CORE-RUN
+    BEGIN _ahs-race-entered @ 0= WHILE YIELD? REPEAT
+    S" daybook.task.capture" _ahs-race-args 4242
+        S" lock-order-call" _ahs-race-g1 @
+        _ATOOLG-CALL-PREP-GUARDED
+    _ahs-cont-status ! _ahs-cont-bus ! _ahs-cont-req !
+        _ahs-cont-mrun ! _ahs-cont-g !
+    _ahs-cont-status @ CBUS-S-OK = _ahs-assert
+    _ahs-cont-g @ _ahs-race-g1 @ = _ahs-assert
+    _ahs-cont-mrun @ 0= _ahs-assert
+    _atoolg-state-guard GUARD-HELD? 0= _ahs-assert
+
+    SHA3-256-BEGIN
+    _ahs-race-g1 @ ATOOLG.RUN-ID 8 SHA3-256-ADD
+    S" lock-order-call" SHA3-256-ADD
+    _ahs-race-g1 @ ATOOLG.NAME DUP CV-DATA@ SWAP CV-LEN@ SHA3-256-ADD
+    _ahs-race-expected SHA3-256-END
+    _ahs-race-expected _ahs-cont-req @ CBR.INVOCATION-ID RID=
+        _ahs-assert
+
+    -1 _ahs-race-prepared !
+    _ahs-cont-g @ _ahs-cont-mrun @ _ahs-cont-req @ _ahs-cont-bus @
+        CBUS-S-OK _ATOOLG-CALL-POST CBUS-S-OK = _ahs-assert
+    1 CORE-WAIT
+    _ahs-race-old-handler @ _ahs-cap CAP.HANDLER-XT !
+    _ahs-race-refresh-status @ 0= _ahs-assert
+    _ahs-race-dispatch-status @ CBUS-S-OK = _ahs-assert
+    _ahs-bus @ CBUS.COUNT @ 1 = _ahs-assert
+    _ahs-bus @ CBUS-CANCEL-ALL 1 = _ahs-assert
+    _ahs-race-g1 @ ATOOLG.STATE @ ATOOLG-S-COMPLETE = _ahs-assert
+    _ahs-race-g1 @ ATOOLG-CLEAR CBUS-S-OK = _ahs-assert
+    _ahs-race-outer @ CBR-FREE 0 _ahs-race-outer !
+    _ahs-race-args CV-FREE ;
+
+: _ahs-race-status?  ( status -- flag )
+    DUP AMRUN-S-OK = SWAP AMRUN-S-BUDGET = OR ;
+
+: _ahs-race-one-ok?  ( status-a status-b -- flag )
+    AMRUN-S-OK = SWAP AMRUN-S-OK = XOR 0<> ;
+
+: _ahs-budget-worker  ( -- )
+    0 0 0 0 AMRUN-NEW
+    _ahs-worker-amrun-status ! _ahs-worker-amrun-ptr !
+    _ahs-reg @ _ahs-bus @ _ahs-inst @ ATOOLG-NEW
+    _ahs-worker-gateway-status ! _ahs-worker-gateway-ptr !
+    0 0 0 0 _ahs-race-g2 @ ATOOLG-CALL _ahs-worker-call-status !
+    -1 _ahs-race-ready !
+    BEGIN _ahs-race-start @ 0= WHILE YIELD? REPEAT
+    _ahs-race-run @ AMRUN-TOOL-RESERVE _ahs-race-tool-worker !
+    8 _ahs-race-entry @ _ahs-race-run @ AMRUN-DISCLOSE-RESERVE
+        _ahs-race-disc-worker !
+    _ahs-race-disc-worker @ AMRUN-S-OK = IF
+        8 _ahs-race-g2 @ ATOOLG.RESULT-RESERVED !
+    THEN
+    -1 _ahs-race-reserved !
+    BEGIN _ahs-race-refund @ 0= WHILE YIELD? REPEAT
+    _ahs-race-tool-worker @ AMRUN-S-OK = IF
+        _ahs-race-run @ AMRUN-TOOL-REFUND
+    THEN
+    _ahs-race-g2 @ _ATOOLG-DISCLOSURE-REFUND-ALL ;
+
+: _ahs-budget-race  ( -- )
+    9001 _ahs-parent @ _ahs-mandate-factory
+    DUP AMRUN-S-OK = _ahs-assert DROP _ahs-race-run !
+    1 _ahs-race-run @ AMRUN.MANDATE MAND.TOOL-BUDGET !
+    8 _ahs-race-run @ AMRUN.MANDATE MAND.DISCLOSURE-BUDGET !
+    _ahs-inst @ CINST.ID @ _ahs-inst @ CINST.GENERATION @
+        _ahs-cap _ahs-race-run @ AMRUN.FACET CFACET-CAP-FIND
+        DUP 0<> _ahs-assert _ahs-race-entry !
+    _ahs-race-run @ _ahs-race-g1 @ ATOOLG-MANDATE! 0= _ahs-assert
+    _ahs-race-run @ _ahs-race-g2 @ ATOOLG-MANDATE! 0= _ahs-assert
+    _ahs-race-run @ AMRUN.REFS @ 3 = _ahs-assert
+
+    0 _ahs-race-ready ! 0 _ahs-race-start ! 0 _ahs-race-reserved !
+    0 _ahs-race-refund !
+    ['] _ahs-budget-worker 1 CORE-RUN
+    BEGIN _ahs-race-ready @ 0= WHILE YIELD? REPEAT
+    -1 _ahs-race-start !
+    _ahs-race-run @ AMRUN-TOOL-RESERVE _ahs-race-tool-main !
+    8 _ahs-race-entry @ _ahs-race-run @ AMRUN-DISCLOSE-RESERVE
+        _ahs-race-disc-main !
+    _ahs-race-disc-main @ AMRUN-S-OK = IF
+        8 _ahs-race-g1 @ ATOOLG.RESULT-RESERVED !
+    THEN
+    BEGIN _ahs-race-reserved @ 0= WHILE YIELD? REPEAT
+
+    _ahs-race-tool-main @ _ahs-race-tool-worker @
+        _ahs-race-one-ok? _ahs-assert
+    _ahs-race-tool-main @ _ahs-race-status? _ahs-assert
+    _ahs-race-tool-worker @ _ahs-race-status? _ahs-assert
+    _ahs-race-disc-main @ _ahs-race-disc-worker @
+        _ahs-race-one-ok? _ahs-assert
+    _ahs-race-disc-main @ _ahs-race-status? _ahs-assert
+    _ahs-race-disc-worker @ _ahs-race-status? _ahs-assert
+    _ahs-race-run @ AMRUN.TOOLS-USED @ 1 = _ahs-assert
+    _ahs-race-run @ AMRUN.DISCLOSURE-USED @ 8 = _ahs-assert
+
+    -1 _ahs-race-refund !
+    _ahs-race-tool-main @ AMRUN-S-OK = IF
+        _ahs-race-run @ AMRUN-TOOL-REFUND
+    THEN
+    _ahs-race-g1 @ _ATOOLG-DISCLOSURE-REFUND-ALL
+    1 CORE-WAIT
+    _ahs-race-run @ AMRUN.TOOLS-USED @ 0= _ahs-assert
+    _ahs-race-run @ AMRUN.DISCLOSURE-USED @ 0= _ahs-assert
+    _ahs-worker-amrun-ptr @ 0= _ahs-assert
+    _ahs-worker-amrun-status @ AMRUN-S-INVALID = _ahs-assert
+    _ahs-worker-gateway-ptr @ 0= _ahs-assert
+    _ahs-worker-gateway-status @ CBUS-S-INVALID = _ahs-assert
+    _ahs-worker-call-status @ CBUS-S-INVALID = _ahs-assert
+
+    _ahs-race-run @ AMRUN-CLOSE
+    _ahs-race-run @ AMRUN-FREE
+    _ahs-race-run @ AMRUN.FREE-PENDING @ 0<> _ahs-assert
+    _ahs-race-run @ AMRUN.REFS @ 2 = _ahs-assert
+    _ahs-race-g1 @ ATOOLG-MANDATE-CLEAR 0= _ahs-assert
+    _ahs-race-run @ AMRUN.REFS @ 1 = _ahs-assert
+    _ahs-race-g2 @ ATOOLG-MANDATE-CLEAR 0= _ahs-assert
+    0 _ahs-race-run ! ;
+
+: _ahs-adversarial-concurrency  ( -- )
+    NCORES 2 >= _ahs-assert
+    _ahs-reg @ _ahs-bus @ _ahs-inst @ ATOOLG-NEW
+        DUP 0= _ahs-assert DROP _ahs-race-g1 !
+    _ahs-reg @ _ahs-bus @ _ahs-inst @ ATOOLG-NEW
+        DUP 0= _ahs-assert DROP _ahs-race-g2 !
+    _ahs-lock-order _ahs-stack
+    _ahs-budget-race _ahs-stack
+    _ahs-race-g1 @ ATOOLG-FREE
+    _ahs-race-g2 @ ATOOLG-FREE
+    0 _ahs-race-g1 ! 0 _ahs-race-g2 ! ;
 
 : _ahs-setup  ( -- )
     _ahs-store-setup _ahs-tool-setup
@@ -9139,7 +12135,9 @@ CREATE _ahs-stale-event AGENT-EVENT-SIZE ALLOT
 : _ahs-run  ( -- )
     0 _ahs-fails ! 0 _ahs-checks ! DEPTH _ahs-depth !
     _ahs-setup _ahs-stack
+    _ahs-adversarial-concurrency _ahs-stack
     _ahs-audit-envelope _ahs-stack
+    _ahs-result-bound _ahs-stack
     _ahs-quiesce _ahs-stack
     _ahs-cancel-poll-race _ahs-stack
     _ahs-audit-save-failure _ahs-stack
@@ -9464,13 +12462,15 @@ VARIABLE _ac-fails VARIABLE _ac-checks VARIABLE _ac-depth
 VARIABLE _ac-reg VARIABLE _ac-foreign VARIABLE _ac-legit
 VARIABLE _ac-bus VARIABLE _ac-gateway VARIABLE _ac-parent
 VARIABLE _ac-child VARIABLE _ac-run VARIABLE _ac-found-inst
-VARIABLE _ac-found-cap
+VARIABLE _ac-found-cap VARIABLE _ac-run-entry
 CREATE _ac-profile AGENT-ACCESS-PROFILE-SIZE ALLOT
 CREATE _ac-head PHEAD-SIZE ALLOT
 CREATE _ac-mandate MAND-SIZE ALLOT
 CREATE _ac-facet CFACET-SIZE ALLOT
 CREATE _ac-desc COMP-DESC ALLOT
 CREATE _ac-cap CAP-DESC ALLOT
+CREATE _ac-in-schema CS-SIZE ALLOT
+CREATE _ac-out-schema CS-SIZE ALLOT
 CREATE _ac-spoof-desc COMP-DESC ALLOT
 CREATE _ac-spoof-cap CAP-DESC ALLOT
 CREATE _ac-policy CPOLICY-SIZE ALLOT
@@ -9544,6 +12544,9 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     _ac-profile AAP-ID$ S" desk.practice-read" STR-STR= _ac-assert ;
 
 : _ac-collision  ( -- )
+    _ac-in-schema CS-INIT CV-T-NULL _ac-in-schema CS-ALLOW!
+    _ac-out-schema CS-INIT CV-T-STRING _ac-out-schema CS-ALLOW!
+    65536 _ac-out-schema CS-MAX-LEN!
     _ac-desc COMP-DESC-INIT
     S" org.akashic.test.agent-access"
         _ac-desc COMP.ID-U ! _ac-desc COMP.ID-A !
@@ -9552,6 +12555,8 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     CAP-K-RESOURCE _ac-cap CAP.KIND !
     S" pad.document.text" _ac-cap CAP.ID-U ! _ac-cap CAP.ID-A !
     CAP-E-OBSERVE _ac-cap CAP.EFFECTS !
+    _ac-in-schema _ac-cap CAP.IN-SCHEMA !
+    _ac-out-schema _ac-cap CAP.OUT-SCHEMA !
     ['] _ac-handler _ac-cap CAP.HANDLER-XT !
     _ac-cap _ac-desc COMP.CAPS-A ! 1 _ac-desc COMP.CAPS-N !
 
@@ -9567,6 +12572,8 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     S" pad.document.text"
         _ac-spoof-cap CAP.ID-U ! _ac-spoof-cap CAP.ID-A !
     CAP-E-OBSERVE _ac-spoof-cap CAP.EFFECTS !
+    _ac-in-schema _ac-spoof-cap CAP.IN-SCHEMA !
+    _ac-out-schema _ac-spoof-cap CAP.OUT-SCHEMA !
     ['] _ac-handler _ac-spoof-cap CAP.HANDLER-XT !
     _ac-spoof-cap _ac-spoof-desc COMP.CAPS-A !
     1 _ac-spoof-desc COMP.CAPS-N !
@@ -9629,6 +12636,43 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     _ac-found-cap ! _ac-found-inst !
     _ac-found-cap @ _ac-cap = _ac-assert
     _ac-found-inst @ _ac-legit @ = _ac-assert
+
+    \ Provider exposure and invocation share one typed boundary.  A guessed
+    \ operation name must not bypass the catalog when a descriptor loses its
+    \ output projection contract.
+    0 _ac-cap CAP.OUT-SCHEMA !
+    _ac-gateway @ ATOOLG-REFRESH 0= _ac-assert
+    _ac-gateway @ ATOOLG-TOOL-N 0= _ac-assert
+    S" pad.document.text" _ac-gateway @ ATOOLG-FIND
+    OR 0= _ac-assert
+    _ac-out-schema _ac-cap CAP.OUT-SCHEMA !
+    _ac-gateway @ ATOOLG-REFRESH 0= _ac-assert
+    _ac-gateway @ ATOOLG-TOOL-N 1 = _ac-assert
+    \ A null input descriptor remains the explicit no-arguments projection.
+    0 _ac-cap CAP.IN-SCHEMA !
+    _ac-gateway @ ATOOLG-REFRESH 0= _ac-assert
+    _ac-gateway @ ATOOLG-TOOL-N 1 = _ac-assert
+    S" pad.document.text" _ac-gateway @ ATOOLG-FIND
+    _ac-found-cap ! _ac-found-inst !
+    _ac-found-cap @ _ac-cap = _ac-assert
+    _ac-found-inst @ _ac-legit @ = _ac-assert
+    _ac-in-schema _ac-cap CAP.IN-SCHEMA !
+    _ac-gateway @ ATOOLG-REFRESH 0= _ac-assert
+
+    \ A disclosure facet too small for the bounded null fallback cannot
+    \ safely promise a terminal result and therefore cannot advertise or
+    \ resolve the operation.
+    _ac-legit @ CINST.ID @ _ac-legit @ CINST.GENERATION @
+        S" pad.document.text" _ac-run @ AMRUN.FACET CFACET-FIND
+        DUP 0<> _ac-assert _ac-run-entry !
+    3 _ac-run-entry @ CFENTRY.MAX-RESULT !
+    _ac-gateway @ ATOOLG-REFRESH 0= _ac-assert
+    _ac-gateway @ ATOOLG-TOOL-N 0= _ac-assert
+    S" pad.document.text" _ac-gateway @ ATOOLG-FIND OR 0= _ac-assert
+    65536 _ac-run-entry @ CFENTRY.MAX-RESULT !
+    _ac-gateway @ ATOOLG-REFRESH 0= _ac-assert
+    _ac-gateway @ ATOOLG-TOOL-N 1 = _ac-assert
+
     _ac-foreign @ CINST.ID @ _ac-foreign @ CINST.GENERATION @
         S" pad.document.text" _ac-facet CFACET-FIND 0= _ac-assert
     _ac-legit @ CINST.ID @ _ac-legit @ CINST.GENERATION @
@@ -9942,14 +12986,45 @@ VARIABLE _dah-hrun
 """
 
 PROFILES["desktop-agent-hardening"] = Profile(
-    roots=PROFILES["desktop"].roots,
-    resources=PROFILES["desktop"].resources,
-    autoexec=PROFILES["desktop"].autoexec.replace(
-        r''': _boot-agent-source  ( -- )
+    roots=tuple(
+        root
+        for root in PROFILES["desktop"].roots
+        if root != "tui/applets/soundlab/soundlab.f"
+    ),
+    # The journey never opens these presentation assets. Keep the built-in
+    # descriptors (including Streams after Agent) in the linked guest while
+    # leaving enough MP64FS room for the now-larger hardening source graph.
+    resources=tuple(
+        resource
+        for resource in PROFILES["desktop"].resources
+        if resource
+        not in (
+            "tui/applets/desk/desk.toml",
+            "tui/applets/soundlab/soundlab.uidl",
+        )
+    ),
+    autoexec=(
+        PROFILES["desktop"].autoexec
+        .replace("REQUIRE tui/applets/soundlab/soundlab.f\n", "", 1)
+        .replace(
+            r'''\ Sound Lab is a discoverable built-in but does not consume a startup tile.
+CREATE _boot-soundlab-desc APP-DESC ALLOT
+_boot-soundlab-desc SOUNDLAB-ENTRY
+_boot-soundlab-desc
+ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
+DESK-QUEUE-BUILTIN
+
+''',
+            "",
+            1,
+        )
+        .replace(
+            r''': _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
     DESK-AGENT-SOURCE! ;''',
-        _DESKTOP_AGENT_HARDENING_SOURCE.strip(),
-        1,
+            _DESKTOP_AGENT_HARDENING_SOURCE.strip(),
+            1,
+        )
     ),
     ready_markers=PROFILES["desktop"].ready_markers,
     # This journey deliberately closes Daybook to prove Chat-only behavior
@@ -9960,6 +13035,65 @@ PROFILES["desktop-agent-hardening"] = Profile(
         if marker != "Entry"
     ),
     linked=PROFILES["desktop"].linked,
+    include_large_sample=False,
+)
+
+PROFILES["desktop-streams"] = Profile(
+    roots=(
+        "tui/applets/desk/desk.f",
+        "tui/applets/streams/streams.f",
+    ),
+    resources=(
+        "tui/applets/desk/desk.toml",
+        "tui/applets/streams/streams.uidl",
+    ),
+    autoexec=r"""\ autoexec.f - focused Desk/Streams lifecycle profile
+ENTER-USERLAND
+." [akashic] loading focused desktop" CR
+REQUIRE tui/applets/desk/desk.f
+REQUIRE tui/applets/streams/streams.f
+
+\ Provision a normal Practice head on genuinely blank qualification media.
+CREATE _boot-practice-head PHEAD-SIZE ALLOT
+CREATE _boot-practice-out PHEAD-SIZE ALLOT
+CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
+: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _boot-practice-slot?  ( path-a path-u -- flag )
+    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+: _boot-practice-present?  ( -- flag )
+    S" /practice-head-a.bin" _boot-practice-slot?
+    S" /practice-head-b.bin" _boot-practice-slot? OR ;
+: _boot-practice-provision  ( -- )
+    _boot-practice-present? IF EXIT THEN
+    VFS-CUR _boot-practice-store PHEADVFS-INIT
+        PHEADVFS-S-OK <> ABORT" Practice store init failed"
+    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
+    _boot-practice-head PHEAD-INIT
+    1 _boot-practice-head PHEAD.ID _boot-practice-id!
+    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
+    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
+_boot-practice-provision
+
+\ Streams is production-empty and launcher-only: no feed fixture, draft
+\ seed, or startup tile is installed by this profile.
+CREATE _boot-streams-desc APP-DESC ALLOT
+_boot-streams-desc STREAMS-ENTRY
+_boot-streams-desc
+ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
+DESK-QUEUE-BUILTIN
+
+." [akashic] starting focused desktop" CR
+: _boot-run-desktop  ( -- ) DESK-RUN ;
+' _boot-run-desktop CATCH ?DUP IF
+    ." [akashic] desktop exception " . CR
+THEN
+." [akashic] desktop exited" CR
+""",
+    ready_markers=("Streams", "[Agent: offline]"),
+    stable_markers=("STREAMS", "Desk ☂ café"),
+    linked=True,
     include_large_sample=False,
 )
 
@@ -11151,7 +14285,9 @@ def smoke(
         rows=rows,
         batch_steps=500_000,
         ext_mem_size=ext_mem_mib << 20,
-        num_cores=2 if profile_name == "audio-contracts" else 1,
+        num_cores=2
+        if profile_name in ("audio-contracts", "agent-security")
+        else 1,
         nic_backend=nic_backend,
         realtime_clock=bool(nic_tap),
     ) as session:
@@ -12106,7 +15242,12 @@ def smoke(
                 "Applets", "Desk did not open the launcher to restore Agent"
             ):
                 return
-            session.send_key("end")
+            # Sound Lab and Streams follow Agent in the built-in catalog.
+            # Select Agent by its stable startup-catalog position rather than
+            # assuming the last row is the shared Agent lens.
+            session.send_key("home")
+            for _ in range(4):
+                session.send_key("down")
             session.send_key("enter")
             if not wait_screen(
                 ":Agent*]",
@@ -12449,6 +15590,158 @@ def smoke(
                 wall_timeout=30.0,
             )
 
+        def run_streams_persistence_journey() -> None:
+            draft_text = "Desk ☂ café"
+            draft_bytes = draft_text.encode("utf-8")
+
+            # The production Desk profile has neither an injected timeline nor
+            # a preseeded draft. Streams is discoverable but consumes no
+            # startup slot until the user selects it from the launcher.
+            initial = session.snapshot().text()
+            if ":Streams" in initial or "STREAMS" in initial:
+                journey_errors.append(
+                    "Streams unexpectedly consumed a normal Desk startup slot"
+                )
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                live_fs.read_file("streams-draft.bin")
+            except FileNotFoundError:
+                pass
+            else:
+                journey_errors.append(
+                    "desktop-streams began with a preseeded production draft"
+                )
+                return
+
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets", "Desk did not open the launcher for Streams"
+            ):
+                return
+            session.send_key("end")
+            if not wait_screen(
+                "Streams", "Desk launcher did not select its final Streams row"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen(
+                ":Streams*]",
+                "Desk did not launch and focus Streams from its catalog",
+                step_budget=1_000_000_000,
+                wall_timeout=25.0,
+            ):
+                return
+            if not wait_screen(
+                "No feed is loaded",
+                "Desk Streams did not begin with an empty production feed",
+            ):
+                return
+            empty_streams = session.snapshot().text()
+            if "Draft r" in empty_streams or "Injected fixtures" in empty_streams:
+                journey_errors.append(
+                    "Desk Streams exposed fixture or draft state before user input"
+                )
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                live_fs.read_file("streams-draft.bin")
+            except FileNotFoundError:
+                pass
+            else:
+                journey_errors.append(
+                    "an absent Streams draft was materialized merely by opening it"
+                )
+                return
+
+            session.send_key("ctrl+n")
+            if not wait_screen(
+                "Draft:", "Desk Streams did not open its draft editor"
+            ):
+                return
+            session.send_text(draft_text)
+            session.send_key("enter")
+            if not wait_screen(
+                draft_text,
+                "Desk Streams did not render the exact Unicode draft",
+            ):
+                return
+            wait_screen(
+                "Draft saved locally; nothing was published",
+                "Desk Streams did not report the local-only durable save",
+            )
+
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                saved_record = live_fs.read_file("streams-draft.bin")
+            except FileNotFoundError:
+                journey_errors.append(
+                    "Desk Streams did not create its durable draft record"
+                )
+                return
+            if (
+                len(saved_record) != 64 + len(draft_bytes)
+                or saved_record[:8] != b"AKSDR001"
+                or int.from_bytes(saved_record[24:32], "little") != 1
+                or saved_record[64:] != draft_bytes
+            ):
+                journey_errors.append(
+                    "Desk Streams persisted a noncanonical or inexact draft record"
+                )
+                return
+
+            session.send_key("alt+w")
+            if not wait_screen_gone(
+                ":Streams",
+                "Desk did not close the clean Streams instance",
+                step_budget=800_000_000,
+                wall_timeout=20.0,
+            ):
+                return
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets", "Desk did not reopen the launcher for Streams"
+            ):
+                return
+            session.send_key("end")
+            if not wait_screen(
+                "Streams", "Desk launcher lost Streams after closing it"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen(
+                ":Streams*]",
+                "Desk did not relaunch and focus Streams",
+                step_budget=1_000_000_000,
+                wall_timeout=25.0,
+            ):
+                return
+            if not wait_screen(
+                draft_text,
+                "relaunched Desk Streams did not recover the exact Unicode draft",
+                step_budget=800_000_000,
+                wall_timeout=20.0,
+            ):
+                return
+            recovered = session.snapshot().text()
+            if "Draft r1" not in recovered or "No feed is loaded" not in recovered:
+                journey_errors.append(
+                    "relaunched Desk Streams lost its revision or empty-feed state"
+                )
+
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                recovered_record = live_fs.read_file("streams-draft.bin")
+            except FileNotFoundError:
+                journey_errors.append(
+                    "relaunch removed the durable Streams draft record"
+                )
+                return
+            if recovered_record != saved_record:
+                journey_errors.append(
+                    "Streams activation rewrote the recovered draft record"
+                )
+
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
 
@@ -12460,6 +15753,9 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-resource":
             run_shared_resource_journey()
+
+        if initial_ready and profile_name == "desktop-streams":
+            run_streams_persistence_journey()
 
         if initial_ready and profile_name == "desktop-recovery":
             recovery_text = session.snapshot().text()
@@ -12708,20 +16004,87 @@ def smoke(
         if initial_ready and profile_name == "streams":
             session.send_key("down")
             settle_input("Streams did not settle its timeline selection")
+            session.send_key("ctrl+t")
+            if wait_screen(
+                "Cached timeline context (partial)",
+                "Streams did not open the selected item's cached partial context",
+            ):
+                wait_screen(
+                    "at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa",
+                    "Streams did not retain the reply root identity",
+                )
+                compact_cols = max(72, cols - 20)
+                compact_rows = max(12, rows - 20)
+                session.resize(compact_cols, compact_rows)
+                if wait_screen(
+                    "cached restart",
+                    "Streams did not keep the focused reply visible after a compact resize",
+                ):
+                    session.send_key("up")
+                    if wait_screen(
+                        "Injected fixtures make network behavior reviewable.",
+                        "Streams did not scroll to the related root in compact context",
+                    ):
+                        session.send_key("down")
+                        wait_screen(
+                            "Does the thread retain identity across a cached restart?",
+                            "Streams did not scroll back to the related reply",
+                        )
+                    wait_screen(
+                        "at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa",
+                        "Streams changed its anchored root during compact navigation",
+                    )
+                session.resize(cols, rows)
+                wait_screen(
+                    "Cached timeline context (partial)",
+                    "Streams did not restore its context after resizing",
+                )
+                session.send_key("ctrl+l")
+                wait_screen_gone(
+                    "Cached timeline context (partial)",
+                    "Streams did not return from context to the timeline",
+                )
             session.send_key("ctrl+f")
-            wait_screen(
-                "Found cached item matching identity",
-                "Streams did not exercise its deterministic local search",
-            )
+            if wait_screen(
+                "Search cached posts:",
+                "Streams did not open its nonblocking local-search prompt",
+            ):
+                session.send_text("mira")
+                session.send_key("enter")
+                wait_screen(
+                    "Found 1 cached item; selected it",
+                    "Streams did not select the first real local-search match",
+                )
             session.send_key("ctrl+n")
-            wait_screen(
-                "A local draft can be reviewed before any network action.",
-                "Streams did not create a local unpublished draft",
-            )
-            wait_screen(
-                "nothing was published",
-                "Streams did not distinguish local drafting from publication",
-            )
+            if wait_screen(
+                "Draft:",
+                "Streams did not open its nonblocking local-draft editor",
+            ):
+                session.send_text("Journey draft text")
+                session.send_key("enter")
+                wait_screen(
+                    "Journey draft text",
+                    "Streams did not commit the edited local draft",
+                )
+                wait_screen(
+                    "Draft saved locally; nothing was published",
+                    "Streams did not distinguish local drafting from publication",
+                )
+                session.send_key("ctrl+n")
+                if wait_screen(
+                    "Draft:",
+                    "Streams did not reopen the current draft for editing",
+                ):
+                    session.send_text(" must not commit")
+                    session.send_key("escape")
+                    wait_screen_gone(
+                        "must not commit",
+                        "Streams committed draft text after cancellation",
+                    )
+                    wait_screen(
+                        "Journey draft text",
+                        "Streams did not preserve the prior draft after cancellation",
+                    )
 
         if initial_ready and profile_name == "soundlab":
             # Exercise exact-value editing, stale/render transitions, and the

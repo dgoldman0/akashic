@@ -2,7 +2,10 @@
 
 **A standard library for KDOS / [Megapad-64 Forth Machine](https://github.com/dgoldman0/megapad/), written entirely in Forth.**
 
-Akashic is roughly 46,000 lines of Forth spread across 100 source files and 16 module directories. It provides a self-contained software stack for building applications on the 64-bit KDOS environment: numeric primitives, audio synthesis, 2D rendering with font rasterization, an HTTP client and server, a document object model, a CSS engine, a reactive UI framework, concurrency primitives, and a Bluesky (AT Protocol) client — all without leaving Forth.
+Akashic provides a self-contained Forth software stack for building applications
+on the 64-bit KDOS environment: numeric primitives, audio synthesis, 2D
+rendering with font rasterization, HTTP clients and servers, document and CSS
+engines, reactive UI, concurrency primitives, and AT Protocol foundations.
 
 Everything targets the Megapad-64 cell size (8 bytes), uses the KDOS memory model (dictionary, heap, XMEM, and hardware-banked memory), and follows a consistent set of conventions described below.
 
@@ -10,13 +13,15 @@ Everything targets the Megapad-64 cell size (8 bytes), uses the KDOS memory mode
 
 ## Status
 
-Assume everything is rough draft, both in this project and in the megapad project. 
+Assume everything is rough draft, both in this project and in the megapad project.
 
-Feel free top drop by and discuss this project in the Tinkerers Guild channel of the Barayin-Adamah server: https://discord.gg/AnrXxhs3b2
+Feel free to drop by and discuss this project in the Tinkerers Guild channel of the Barayin-Adamah server: https://discord.gg/AnrXxhs3b2
 
 ## Architecture at a Glance
 
-The modules form a layered dependency graph. Nothing is circular; higher layers pull in what they need via `REQUIRE` and never touch modules above them.
+Modules are organized as a layered dependency graph and load declared
+dependencies through `REQUIRE`. Image and package qualification validates the
+actual closure rather than relying on this overview as an acyclicity claim.
 
 ```
 atproto ─────── cbor ──────────────────────────┐
@@ -46,7 +51,7 @@ liraq (uidl, lel, state-tree, lcf, profile)    │
 concurrency (channel, event, rwlock, semaphore) ┘
 ```
 
-At the base sits **math/**, which supplies the numeric types everything else relies on. **audio/** and **render/** both draw heavily from math. **dom/**, **css/**, and **markup/** form a document processing spine. **liraq/** sits on top, consuming DOM, SML, and state-tree to drive reactive user interfaces. **net/** and **web/** provide the networking layers. **atproto/** caps the stack with a full Bluesky client that depends on net, CBOR, and JSON.
+At the base sits **math/**, which supplies the numeric types everything else relies on. **audio/** and **render/** both draw heavily from math. **dom/**, **css/**, and **markup/** form a document processing spine. **liraq/** sits on top, consuming DOM, SML, and state-tree to drive reactive user interfaces. **net/** and **web/** provide the networking layers. **atproto/** provides partial Bluesky/AT Protocol foundations over net, CBOR, and JSON; Streams owns the bounded application-facing feed model.
 
 **concurrency/** is a standalone pillar — it talks only to KDOS spinlocks and events, and any module that needs inter-task communication pulls it in independently.
 
@@ -55,8 +60,6 @@ At the base sits **math/**, which supplies the numeric types everything else rel
 ## Module Guide
 
 ### math/ — Numerics, Geometry, DSP, and Cryptography
-
-**26 files · ~9,800 lines**
 
 Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precision, 10-bit mantissa). Akashic builds the rest of the numeric tower on top of it:
 
@@ -76,8 +79,6 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
-
-**16 files · ~6,400 lines**
 
 A complete audio synthesis toolkit built on FP16 PCM buffers. The signal flow follows a classic modular architecture:
 
@@ -103,13 +104,11 @@ A complete audio synthesis toolkit built on FP16 PCM buffers. The signal flow fo
 
 ### render/ — Surfaces, Drawing, Layout, and Image Codecs
 
-**10 files · ~5,600 lines**
-
 The render pipeline turns data into pixels. At its core is the **surface** — an RGBA8888 pixel buffer described by an 80-byte descriptor (width, height, stride, data pointer, clip rectangle). All drawing operations write into surfaces.
 
 **Drawing primitives** (`draw.f`) provide filled and outlined rectangles, horizontal and vertical lines, and arbitrary pixel writes — all clip-aware. **Line drawing** (`line.f`) implements Bresenham's algorithm. **Paint** (`paint.f`) adds flood fill.
 
-**Compositing** (`composite.f`, 488 lines) is entirely integer-math — no floating-point in the inner loop. It implements the full Porter-Duff family (source-over, source-in, source-out, source-atop, XOR) plus blend modes (multiply, screen, overlay, darken, lighten). A fast-path bulk scanline operation (`COMP-SCANLINE-OVER`) composites entire rows. Monochrome glyph blitting (`COMP-BLIT-MONO`) is the bridge between the font rasterizer and the surface.
+**Compositing** (`composite.f`) is entirely integer-math — no floating-point in the inner loop. It implements the full Porter-Duff family (source-over, source-in, source-out, source-atop, XOR) plus blend modes (multiply, screen, overlay, darken, lighten). A fast-path bulk scanline operation (`COMP-SCANLINE-OVER`) composites entire rows. Monochrome glyph blitting (`COMP-BLIT-MONO`) is the bridge between the font rasterizer and the surface.
 
 **Box model** (`box.f`) builds a CSS-like box tree from DOM nodes — content, padding, border, and margin rectangles with FP16 dimensions.
 
@@ -126,23 +125,17 @@ HTML string → markup parser → DOM tree → CSS style resolution
 
 ### font/ — TrueType Parsing, Rasterization, and Caching
 
-**3 files · ~1,400 lines**
-
 **TTF parsing** (`ttf.f`) reads TrueType font files by walking the table directory and extracting the tables the rasterizer needs: `head` (units-per-em, index format), `maxp` (limits), `cmap` (character-to-glyph mapping, format 4 segment arrays), `loca` (glyph offsets), and `glyf` (glyph outlines). Composite glyphs (glyphs built from other glyphs) are supported.
 
-**Rasterization** (`raster.f`, 734 lines) converts glyph outlines to pixels using even-odd scanline fill with configurable N×N supersampling (default 6×6). The contour walker handles TrueType on-curve and off-curve points: consecutive off-curve quadratic Bézier control points generate implied on-curve midpoints per the TrueType spec, then `BZ-QUAD-FLATTEN` from math/bezier breaks curves into line segments. Each output pixel gets 0–255 coverage from the supersampling grid; the caller's alpha blending (via `COMP-BLIT-MONO`) composites the glyph onto the background.
+**Rasterization** (`raster.f`) converts glyph outlines to pixels using even-odd scanline fill with configurable N×N supersampling (default 6×6). The contour walker handles TrueType on-curve and off-curve points: consecutive off-curve quadratic Bézier control points generate implied on-curve midpoints per the TrueType spec, then `BZ-QUAD-FLATTEN` from math/bezier breaks curves into line segments. Each output pixel gets 0–255 coverage from the supersampling grid; the caller's alpha blending (via `COMP-BLIT-MONO`) composites the glyph onto the background.
 
 **Glyph cache** (`cache.f`) avoids re-rasterizing the same glyph at the same size. Keyed by glyph index and pixel size, it stores pre-rendered bitmaps and metrics for fast repeated drawing.
 
 ### text/ — UTF-8 and Text Layout
 
-**2 files · ~400 lines**
-
 `utf8.f` handles encoding, decoding, and validation of UTF-8 byte sequences — the interchange format for all string data in Akashic. `layout.f` does word-wrap text layout: given a string, a font, and a line width, it produces positioned glyph runs ready for the rasterizer.
 
 ### dom/ — Document Object Model
-
-**1 file · ~1,200 lines**
 
 An arena-backed DOM with five node types: element, text, comment, document, and document fragment. Each node is a compact fixed-size descriptor. The arena allocator avoids per-node heap allocation — the entire tree is destroyed in one `ARENA-DESTROY` call.
 
@@ -150,23 +143,17 @@ The DOM supports the usual tree operations (create, append, insert, remove, clon
 
 ### css/ — Stylesheet Parsing and Style Resolution
 
-**2 files · ~1,900 lines**
-
 `css.f` is a tokenizer and declaration parser that handles the subset of CSS needed by the render pipeline — properties like `color`, `background-color`, `margin`, `padding`, `border`, `width`, `height`, `font-size`, `display`, and `text-align`. Selector matching covers type selectors, class selectors, ID selectors, descendant combinators, and the universal selector, with full specificity calculation.
 
 `bridge.f` connects the CSS engine to the DOM. Given a DOM tree with an attached stylesheet, it walks every element, matches selectors, resolves cascading and specificity, and attaches computed style values that the box model and layout engine consume.
 
 ### markup/ — XML and HTML Parsing
 
-**3 files · ~1,800 lines**
-
 A two-layer parser. `core.f` provides the shared low-level machinery: tag scanning, attribute name/value extraction, entity decoding (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#NNN;`, `&#xHHH;`), and the cursor-based (`addr len`) parse loop.
 
 `xml.f` adds XML-specific rules (self-closing tags, namespaces). `html.f` adds HTML5 specifics — void elements (`<br>`, `<img>`, `<hr>`, `<meta>`, `<input>`, etc.) that don't require closing tags, and the HTML5 named entity set. Both produce DOM trees via the `dom/` module.
 
 ### sml/ — Sequential Markup Language
-
-**2 files · ~1,500 lines**
 
 SML is a modality-neutral document format for one-dimensional user interfaces — it describes what content exists and how it's structured, without assuming a screen. A 1D UI is inherently sequential: the user navigates forward or backward through items, optionally grouped by scope containers.
 
@@ -176,25 +163,21 @@ The spec defines 25 element types across six categories: envelopes (`<sml>`, `<h
 
 ### liraq/ — Reactive UI Framework
 
-**5 files · ~5,000 lines**
-
 LIRAQ is the declarative UI layer. It ties together SML documents, a reactive state tree, an expression evaluator, and a layout configuration system into a framework for building interactive interfaces.
 
 **State tree** (`state-tree.f`) is a hierarchical key-value store with seven value types (string, integer, boolean, null, float, array, object). Nodes are 96-byte descriptors arranged in a tree. Changes are journaled: each mutation records old and new values so listeners can react efficiently. The API supports path-based access (`ST-PATH`), array indexing, and subtree operations.
 
-**LEL** (`lel.f`, 1,639 lines) is the LIRAQ Expression Language — a Pratt parser evaluator for data-binding expressions. LEL is pure, total, and deterministic: every expression produces a value, never an error. Division by zero yields 0, a missing path yields null, and type mismatches silently coerce. It supports arithmetic, comparison, string concatenation, conditional (`?:`), property access, array indexing, and 48 built-in functions. LEL expressions bind UI elements to state tree values; when the state changes, the expressions are re-evaluated and the UI updates.
+**LEL** (`lel.f`) is the LIRAQ Expression Language — a Pratt parser evaluator for data-binding expressions. LEL is pure, total, and deterministic: every expression produces a value, never an error. Division by zero yields 0, a missing path yields null, and type mismatches silently coerce. It supports arithmetic, comparison, string concatenation, conditional (`?:`), property access, array indexing, and built-in functions. LEL expressions bind UI elements to state tree values; when the state changes, the expressions are re-evaluated and the UI updates.
 
-**UIDL** (`uidl.f`, 982 lines) parses UIDL XML documents into a static-pool element tree. It defines 16 element types and 6 arrangement modes, with an FNV-1a hash table for O(1) element lookup by ID. Each element carries optional `bind=` and `when=` attributes — LEL expressions for data binding and conditional visibility. Collections support `<template>` and `<empty>` children for list rendering.
+**UIDL** (`uidl.f`) parses UIDL XML documents into a static-pool element tree. It defines a bounded element and arrangement vocabulary, with an FNV-1a hash table for element lookup by ID. Each element carries optional `bind=` and `when=` attributes — LEL expressions for data binding and conditional visibility. Collections support `<template>` and `<empty>` children for list rendering.
 
 **LCF** (`lcf.f`) handles layout configuration, and **profile** (`profile.f`) provides performance instrumentation for the UI pipeline.
 
 ### concurrency/ — Channels, Locks, and Synchronization
 
-**4 files · ~1,200 lines**
-
 Built on KDOS spinlocks and events, the concurrency module provides four primitives:
 
-**Channels** (`channel.f`, 463 lines) are Go-style bounded CSP channels. Each channel is a 120-byte descriptor embedding a circular buffer, a per-channel spinlock, and two events (not-full, not-empty). Sending blocks when the buffer is full; receiving blocks when it's empty. Two API flavors exist: single-cell (64-bit values) and buffer-based (arbitrary element sizes). `CHAN-SELECT` polls multiple channels and returns the first one with data. Closed-channel semantics follow Go conventions: sends throw, receives on an empty closed channel return 0.
+**Channels** (`channel.f`) are Go-style bounded CSP channels. Each channel is a descriptor embedding a circular buffer, a per-channel spinlock, and two events (not-full, not-empty). Sending blocks when the buffer is full; receiving blocks when it's empty. Two API flavors exist: single-cell values and arbitrary-size buffered elements. `CHAN-SELECT` polls multiple channels and returns the first one with data. Closed-channel semantics follow Go conventions: sends throw, receives on an empty closed channel return 0.
 
 **Events** (`event.f`) provide a blocking/waking mechanism — one task waits on an event, another signals it.
 
@@ -204,9 +187,7 @@ Built on KDOS spinlocks and events, the concurrency module provides four primiti
 
 ### net/ — HTTP Client, WebSocket, and Protocol Utilities
 
-**6 files · ~2,500 lines**
-
-**HTTP client** (`http.f`, 516 lines) implements HTTP/1.1 with an 8-slot DNS cache, chunked transfer-encoding, automatic redirect following, optional bearer-token auth, configurable timeouts, and response parsing. All socket operations are vectored through execution-token variables so tests can substitute mock I/O without real network access.
+**HTTP client** (`http.f`) implements HTTP/1.1 with a bounded DNS cache, chunked transfer-encoding, automatic redirect following, optional bearer-token auth, configurable timeouts, and response parsing. All socket operations are vectored through execution-token variables so tests can substitute mock I/O without real network access.
 
 **WebSocket** (`ws.f`) handles the upgrade handshake (including inline SHA-1 for the `Sec-WebSocket-Accept` header), frame masking, ping/pong, and fragment reassembly for text and binary messages.
 
@@ -214,15 +195,13 @@ Built on KDOS spinlocks and events, the concurrency module provides four primiti
 
 ### web/ — HTTP Server
 
-**6 files · ~1,700 lines**
-
 A full HTTP server stack:
 
-**Server** (`server.f`, 330 lines) runs the accept loop — it binds a socket, listens, and for each connection runs the request→dispatch→response lifecycle. All socket operations are vectored via XT variables for testability.
+**Server** (`server.f`) runs the accept loop — it binds a socket, listens, and for each connection runs the request→dispatch→response lifecycle. All socket operations are vectored via XT variables for testability.
 
 **Request** (`request.f`) parses incoming HTTP requests: method, path, version, headers, and optional body. **Response** (`response.f`) builds HTTP responses: status line, headers, and body content.
 
-**Router** (`router.f`, 244 lines) matches incoming requests against registered routes. Routes are stored in a 64-slot table with method, pattern, and handler execution-token. Pattern matching supports path parameters (`:param` syntax) for dynamic segments.
+**Router** (`router.f`) matches incoming requests against registered routes. Routes are stored in a bounded table with method, pattern, and handler execution-token. Pattern matching supports path parameters (`:param` syntax) for dynamic segments.
 
 **Middleware** (`middleware.f`) chains request processors — each middleware word can inspect/modify the request, call the next handler, and post-process the response.
 
@@ -230,17 +209,17 @@ A full HTTP server stack:
 
 ### cbor/ — Binary Serialization
 
-**2 files · ~400 lines**
-
 `cbor.f` implements RFC 8949 CBOR encoding and decoding — integers (positive and negative), byte strings, text strings, arrays, maps, booleans, null, and tags. Decoding is zero-copy where possible, returning pointers into the input buffer.
 
 `dag-cbor.f` extends the base encoder with the DAG-CBOR profile used by the AT Protocol: deterministic map key ordering and CID tag handling for content-addressed data structures.
 
-### atproto/ — Bluesky / AT Protocol Client
+### atproto/ — Bluesky / AT Protocol Foundations
 
-**6 files · ~800 lines**
-
-A complete AT Protocol client stack for interacting with Bluesky PDS servers:
+Foundational AT Protocol pieces for interacting with Bluesky PDS servers. This
+is not yet a complete, qualified application client: the existing session,
+XRPC, and repository helpers are legacy single-context modules, while Streams'
+owned feed adapter is intentionally separate from live transport and
+credential work.
 
 **Session** (`session.f`) handles authentication — `SESS-LOGIN` calls `com.atproto.server.createSession` with a handle and app password, stores the returned access and refresh JWTs (512-byte buffers), and installs the bearer token on the HTTP client. `SESS-REFRESH` renews tokens before expiry.
 
@@ -248,9 +227,14 @@ A complete AT Protocol client stack for interacting with Bluesky PDS servers:
 
 **DID** (`did.f`) validates and parses Decentralized Identifiers. **AT-URI** (`aturi.f`) handles `at://` URI parsing. **TID** (`tid.f`) generates timestamp-based identifiers for records. **Repo** (`repo.f`) provides create/read/update/delete operations against AT Protocol repositories.
 
-### utils/ — Data Formats and Common Utilities
+**Feed model** (`feed-model.f`) transactionally decodes the bounded Bluesky
+timeline subset retained by Streams into caller-owned storage, including exact
+post, root, and parent identities. The live Streams boundary requires
+per-instance session/transport ownership, asynchronous request jobs, cache
+recovery, and credential zeroization rather than reusing the legacy globals as
+application state.
 
-**6 files · ~4,400 lines**
+### utils/ — Data Formats and Common Utilities
 
 **JSON** (`json.f`) is a full reader and builder. The reader walks a `( addr len )` cursor through JSON text, extracting values by key lookup (`JSON-KEY?`) or array indexing. The builder constructs JSON documents via a stack-based API (`JSON-OBJ-START`, `JSON-KEY`, `JSON-VAL-STR`, `JSON-OBJ-END`).
 
@@ -383,7 +367,8 @@ Source files are internally organized into numbered layers with comment banners:
 
 ## Documentation
 
-Every source file has a corresponding Markdown document in [docs/](docs/), organized in the same directory structure as `akashic/`. A typical doc file runs 250–400 lines and includes:
+Documentation under [docs/](docs/) follows the source directory structure where
+module references exist. Reference documents commonly include:
 
 - A one-line summary and dependency tree
 - A table of design principles
@@ -413,4 +398,5 @@ See [assets/fonts/README.md](assets/fonts/README.md) for full license details.
 
 ## Requirements
 
-**KDOS / Megapad-64** with its 64-bit Forth environment. No external toolchain, cross-compiler, or build system is needed — all 100 source files are plain Forth, loaded at runtime via `REQUIRE`.
+**KDOS / Megapad-64** with its 64-bit Forth environment. Akashic source is plain
+Forth loaded at runtime via `REQUIRE`.

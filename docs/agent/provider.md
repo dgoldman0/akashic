@@ -109,6 +109,30 @@ count, and an aggregate disclosure budget. Token and memory fields are zero
 because those meters are not yet implemented; the UI and documentation must
 not imply that they are enforced.
 
+One `AMRUN` is the accounting and lifetime owner for all gateways bound to that
+run. Gateways retain it while bound, so closing the owner immediately disables
+new authority but defers physical reclamation until the last gateway releases
+its reference. Tool reservations, disclosure reservations and refunds, active
+checks, and lifecycle transitions share one exception-safe accounting guard.
+Consequently, two gateways on different cores cannot each spend the last unit
+of the same budget. Heap-owning `AMRUN` and gateway construction, and gateway
+call construction, are core-0 operations; worker entry is rejected before an
+allocator-backed path is reached.
+
+The gateway reserves the operation's bounded result allowance before a request
+can run. Completion measures the exact compact IVJSON delivered to provider
+context, retains that actual charge, and refunds the unused reservation;
+terminal failure and pre-dispatch rollback refund the outstanding reservation.
+An unencodable or over-limit handler result is replaced with bounded JSON
+`null` after a successful effect rather than inviting a duplicate retry. The
+entire measurement buffer is erased on success, codec failure, and exception.
+
+Gateway state is held only while preparing or transitioning an owned request.
+The resulting request/bus continuation is carried per call, and the state guard
+is released before `CBUS-POST` or `CBUS-DISPATCH`. Completion may therefore
+enter gateway state while the capability bus is held without forming the
+opposite gateway-to-bus lock order.
+
 Agent anchors each new local or provider review at its first row. Approval with
 F6 remains locked until the viewport reaches the final review row; F7 can deny
 without granting or traversing the request.

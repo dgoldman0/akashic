@@ -154,7 +154,7 @@ GUARD _CBR-LIFECYCLE-GUARD
 
 : _CBR-LIFECYCLE-RUN  ( request -- flag )
     DUP 0= IF DROP 0 EXIT THEN
-    DUP CBR.FLAGS @ CBR-F-RUNNING AND IF DROP 0 EXIT THEN
+    DUP _CBR-LIFECYCLE-BUSY?-LOCKED IF DROP 0 EXIT THEN
     DUP CBR.FLAGS DUP @
         CBR-F-QUEUED CBR-F-COMPLETE OR INVERT AND
         CBR-F-RUNNING OR SWAP !
@@ -162,6 +162,19 @@ GUARD _CBR-LIFECYCLE-GUARD
 
 : CBR-LIFECYCLE-RUN  ( request -- flag )
     ['] _CBR-LIFECYCLE-RUN WITH-CBR-LIFECYCLE ;
+
+: _CBR-LIFECYCLE-CLAIM-QUEUED  ( request -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CBR.FLAGS @ CBR-F-BUSY-MASK AND CBR-F-QUEUED <> IF
+        DROP 0 EXIT
+    THEN
+    DUP CBR.FLAGS DUP @
+        CBR-F-QUEUED CBR-F-COMPLETE OR INVERT AND
+        CBR-F-RUNNING OR SWAP !
+    DROP -1 ;
+
+: _CBR-LIFECYCLE-CLAIM-QUEUED-GUARDED  ( request -- flag )
+    ['] _CBR-LIFECYCLE-CLAIM-QUEUED WITH-CBR-LIFECYCLE ;
 
 : _CBR-LIFECYCLE-COMPLETE  ( request -- )
     DUP 0= IF DROP EXIT THEN
@@ -364,6 +377,22 @@ VARIABLE _CBUS-OWNER-OP-DEPTH
 : _CBUS-POP  ( bus -- request | 0 )
     ['] _CBUS-POP-QUIESCED CBUS-WITH-DISPATCH-QUIESCED ;
 
+: _CBUS-POP-CLAIM-QUIESCED  ( bus -- request | 0 )
+    \ Claim QUEUED -> RUNNING before removing the ring pointer.  The caller
+    \ owns _CBUS-DISPATCH-GUARD, matching POST's dispatch/lifecycle lock
+    \ order, so a public direct dispatch cannot observe an unowned gap.
+    DUP CBUS.COUNT @ 0= IF DROP 0 EXIT THEN
+    DUP >R
+    R@ CBUS.TAIL @ 8 * R@ CBUS.RING + DUP @
+    DUP 0= IF 2DROP DROP R> DROP 0 EXIT THEN
+    DUP _CBR-LIFECYCLE-CLAIM-QUEUED-GUARDED 0= IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    SWAP 0 SWAP !
+    R@ CBUS.TAIL @ 1+ CBUS-CAPACITY MOD R@ CBUS.TAIL !
+    -1 R> CBUS.COUNT +!
+    NIP ;
+
 VARIABLE _CBD-REQ
 VARIABLE _CBD-INST
 VARIABLE _CBD-CAP
@@ -523,7 +552,19 @@ VARIABLE _CBC-DESC
     _CBD-REQ @ CBR.TURN @ PTURN-TRANSITION DROP
     MS@ _CBD-REQ @ CBR.TURN @ PTURN.COMPLETED-MS ! ;
 
+\ An exception outside the handler's ordinary status path can occur after a
+\ Practice turn began but before owner commit.  At that point the boundary
+\ cannot prove whether an external or persistent effect escaped, so a running
+\ turn is conservatively indeterminate.  Pending/completed turns are left
+\ alone.
+: _CBUS-TURN-FAIL-UNEXPECTED  ( -- )
+    _CBD-REQ @ CBR.TURN @ DUP 0= IF DROP EXIT THEN
+    DUP PTURN.STATE @ PTURN-S-RUNNING <> IF DROP EXIT THEN
+    DUP >R PTURN-S-INDETERMINATE SWAP PTURN-TRANSITION DROP
+    MS@ R> PTURN.COMPLETED-MS ! ;
+
 : _CBUS-COMPLETE  ( status -- )
+    DUP CBUS-S-OK <> IF _CBD-REQ @ CBR.RESULT CV-FREE THEN
     _CBD-REQ @ CBR.STATUS !
     MS@ _CBD-REQ @ CBR.END-MS !
     _CBD-REQ @ CBR-LIFECYCLE-COMPLETE ;
@@ -532,11 +573,10 @@ VARIABLE _CBC-DESC
     DUP 0= IF DROP EXIT THEN
     DUP CBR.COMPLETE-XT @ ?DUP IF EXECUTE ELSE DROP THEN ;
 
-: _CBUS-DISPATCH-BODY  ( request bus -- status )
+: _CBUS-DISPATCH-BODY  ( running-request bus -- status )
     _CBD-BUS ! DUP _CBD-REQ !
-    DUP 0= IF DROP CBUS-S-INVALID EXIT THEN
-    DUP CBR-LIFECYCLE-RUN 0= IF DROP CBUS-S-BUSY EXIT THEN
     DUP CBR-ERROR-CLEAR
+    DUP CBR.RESULT CV-FREE
     MS@ OVER CBR.START-MS !
     DUP CBR.FLAGS @ CBR-F-CANCELLED AND IF
         DROP CBUS-S-CANCELLED DUP _CBUS-COMPLETE EXIT
@@ -570,8 +610,8 @@ VARIABLE _CBC-DESC
         THEN
     THEN
     DUP CBR.ARGS _CBD-CAP @ CAP.IN-SCHEMA @ ?DUP IF
-        CS-VALIDATE ?DUP IF
-            DROP CBUS-S-INVALID DUP _CBUS-COMPLETE EXIT
+        CS-VALIDATE-DEEP ?DUP IF
+            2DROP CBUS-S-INVALID DUP _CBUS-COMPLETE EXIT
         THEN
     ELSE DROP THEN
     _CBD-BUS @ CBUS.AUTHORITY @
@@ -629,7 +669,7 @@ VARIABLE _CBC-DESC
     THEN
     _CBD-STATUS @ DUP CBUS-S-OK = IF
         _CBD-REQ @ CBR.RESULT _CBD-CAP @ CAP.OUT-SCHEMA @ ?DUP IF
-            CS-VALIDATE ?DUP IF
+            CS-VALIDATE-DEEP ?DUP IF
                 _CBD-REQ @ CBR.RESULT CV-TYPE@ CV-T-INT = IF
                     S" Capability output schema rejected an integer result"
                 ELSE
@@ -666,23 +706,38 @@ VARIABLE _CBC-DESC
     \ restored on both normal return and THROW.
     _CBD-REQ @ >R _CBD-INST @ >R _CBD-CAP @ >R _CBD-BUS @ >R
     ['] _CBUS-DISPATCH-BODY CATCH
+    ?DUP IF
+        \ The request was already claimed RUNNING before this frame.  Convert
+        \ every unexpected owner-boundary exception into one terminal failed
+        \ completion before restoring the caller's recursive-dispatch scratch.
+        S" Capability dispatch threw before lifecycle completion"
+        ROT _CBD-REQ @ CBR-ERROR!
+        _CBUS-TURN-FAIL-UNEXPECTED
+        CBUS-S-FAILED DUP _CBUS-COMPLETE
+        >R 2DROP R>
+    THEN
     R> _CBD-BUS ! R> _CBD-CAP ! R> _CBD-INST ! R> _CBD-REQ !
-    ?DUP IF THROW THEN ;
+    ;
 
-: _CBUS-DISPATCH-GUARDED  ( request bus -- status )
+: _CBUS-DISPATCH-CLAIMED-GUARDED  ( running-request bus -- status )
     1 _CBUS-DISPATCH-DEPTH +!
     ['] _CBUS-DISPATCH-FRAMED CATCH
     -1 _CBUS-DISPATCH-DEPTH +!
     ?DUP IF THROW THEN ;
 
-: CBUS-DISPATCH  ( request bus -- status )
-    \ Mark the request complete while serialized, then let an ordinary
-    \ top-level completion callback run after releasing the cross-core owner
-    \ boundary.  A callback may synchronously dispatch; it must not retain the
-    \ request after returning.
+: _CBUS-DISPATCH-DIRECT-GUARDED  ( request bus -- status callback-request|0 )
+    OVER 0= IF 2DROP CBUS-S-INVALID 0 EXIT THEN
+    OVER CBR-LIFECYCLE-RUN 0= IF 2DROP CBUS-S-BUSY 0 EXIT THEN
     OVER >R
-    ['] _CBUS-DISPATCH-GUARDED _CBUS-DISPATCH-GUARD WITH-GUARD
-    R> _CBUS-COMPLETE-CALLBACK ;
+    _CBUS-DISPATCH-CLAIMED-GUARDED
+    R> ;
+
+: CBUS-DISPATCH  ( request bus -- status )
+    \ A direct call may only claim an idle or completed envelope.  Callback
+    \ eligibility travels on the data stack so recursive dispatch cannot
+    \ overwrite shared scratch; rejected calls have no completion event.
+    ['] _CBUS-DISPATCH-DIRECT-GUARDED _CBUS-DISPATCH-GUARD WITH-GUARD
+    ?DUP IF _CBUS-COMPLETE-CALLBACK THEN ;
 
 VARIABLE _CBP-BUS
 VARIABLE _CBP-N
@@ -690,8 +745,9 @@ VARIABLE _CBP-N
 : _CBUS-PUMP-QUIESCED  ( max bus -- count )
     _CBP-BUS ! 0 _CBP-N !
     0 ?DO
-        _CBP-BUS @ _CBUS-POP ?DUP 0= IF LEAVE THEN
-        _CBP-BUS @ CBUS-DISPATCH DROP
+        _CBP-BUS @ _CBUS-POP-CLAIM-QUIESCED ?DUP 0= IF LEAVE THEN
+        DUP >R _CBP-BUS @ _CBUS-DISPATCH-CLAIMED-GUARDED
+        R> _CBUS-COMPLETE-CALLBACK DROP
         1 _CBP-N +!
     LOOP
     _CBP-N @ ;
@@ -719,7 +775,10 @@ VARIABLE _CBCA-N
     BEGIN
         _CBCA-BUS @ _CBUS-POP ?DUP
     WHILE
-        DUP _CBD-REQ !
+        \ WHILE consumes the duplicated truth value and leaves the request;
+        \ store that original instead of retaining one pointer per cancelled
+        \ ring entry on the caller's data stack.
+        _CBD-REQ !
         _CBCA-BUS @ _CBD-BUS !
         CBUS-S-CANCELLED _CBUS-COMPLETE
         _CBD-REQ @ _CBUS-COMPLETE-CALLBACK

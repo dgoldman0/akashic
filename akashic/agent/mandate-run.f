@@ -13,6 +13,7 @@ REQUIRE ../runtime/context.f
 REQUIRE ../runtime/practice-head.f
 REQUIRE ../interop/mandate.f
 REQUIRE ../interop/capability-facet.f
+REQUIRE ../concurrency/guard.f
 
 0 CONSTANT AMRUN-S-OK
 1 CONSTANT AMRUN-S-INVALID
@@ -39,7 +40,9 @@ REQUIRE ../interop/capability-facet.f
  72 CONSTANT _AMR-FLAGS
  80 CONSTANT _AMR-MANDATE
 _AMR-MANDATE MAND-SIZE + CONSTANT _AMR-FACET
-_AMR-FACET CFACET-SIZE + CONSTANT AGENT-MANDATE-RUN-SIZE
+_AMR-FACET CFACET-SIZE + CONSTANT _AMR-REFS
+_AMR-REFS 8 + CONSTANT _AMR-FREE-PENDING
+_AMR-FREE-PENDING 8 + CONSTANT AGENT-MANDATE-RUN-SIZE
 
 : AMRUN.MAGIC            ( run -- a ) _AMR-MAGIC + ;
 : AMRUN.ABI              ( run -- a ) _AMR-ABI + ;
@@ -53,6 +56,13 @@ _AMR-FACET CFACET-SIZE + CONSTANT AGENT-MANDATE-RUN-SIZE
 : AMRUN.FLAGS            ( run -- a ) _AMR-FLAGS + ;
 : AMRUN.MANDATE          ( run -- mandate ) _AMR-MANDATE + ;
 : AMRUN.FACET            ( run -- facet ) _AMR-FACET + ;
+: AMRUN.REFS             ( run -- a ) _AMR-REFS + ;
+: AMRUN.FREE-PENDING     ( run -- a ) _AMR-FREE-PENDING + ;
+
+\ All mutable lifecycle and accounting fields share this domain.  Gateways
+\ retain a bound run, so AMRUN-FREE can close the owner reference immediately
+\ while deferring physical reclamation until the final gateway releases it.
+GUARD _amrun-accounting-guard
 
 : AMRUN-STRUCTURAL-VALID?  ( run -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -115,6 +125,7 @@ VARIABLE _AMN-DEADLINE
     AMRUN-ABI-VERSION _AMN-RUN @ AMRUN.ABI !
     AGENT-MANDATE-RUN-SIZE _AMN-RUN @ AMRUN.SIZE !
     AMRUN-STATE-FROZEN _AMN-RUN @ AMRUN.STATE !
+    1 _AMN-RUN @ AMRUN.REFS !
     _AMN-CONTEXT @ _AMN-RUN @ AMRUN.CONTEXT !
     _AMN-MANDATE @ _AMN-RUN @ AMRUN.MANDATE MAND-SIZE MOVE
     _AMN-FACET @ _AMN-RUN @ AMRUN.FACET CFACET-SIZE MOVE
@@ -140,6 +151,13 @@ VARIABLE _AMN-DEADLINE
     THEN
     _AMN-RUN @ AMRUN-S-OK ;
 
+' AMRUN-NEW CONSTANT _amrun-new-xt
+: AMRUN-NEW  ( practice-head child-context mandate facet -- run status )
+    \ KDOS heap construction is core-0-only.  Fail before ALLOCATE on a
+    \ worker, and serialize all core-0 task construction scratch.
+    COREID IF 2DROP 2DROP 0 AMRUN-S-INVALID EXIT THEN
+    _amrun-new-xt _amrun-accounting-guard WITH-GUARD ;
+
 : AMRUN-ACTIVE?  ( run -- flag )
     DUP AMRUN-STRUCTURAL-VALID? 0= IF DROP 0 EXIT THEN
     DUP AMRUN.DEADLINE-MS @ ?DUP IF
@@ -148,14 +166,45 @@ VARIABLE _AMN-DEADLINE
     DUP AMRUN.MANDATE MAND.ACTIVATION-EPOCH @ MS@
         ROT AMRUN.MANDATE MAND-ACTIVE? ;
 
-: AMRUN-CLOSE  ( run -- )
+: _AMRUN-CLOSE  ( run -- )
     DUP 0= IF DROP EXIT THEN
     AMRUN-STATE-CLOSED SWAP AMRUN.STATE ! ;
 
-: AMRUN-FREE  ( run -- )
+: _AMRUN-DESTROY  ( run -- )
     DUP 0= IF DROP EXIT THEN
     DUP AMRUN.CONTEXT @ ?DUP IF CTX-FREE THEN
     DUP AGENT-MANDATE-RUN-SIZE 0 FILL FREE ;
+
+: _AMRUN-RECORD-VALID?  ( run -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP AMRUN.MAGIC @ AMRUN-MAGIC =
+    OVER AMRUN.ABI @ AMRUN-ABI-VERSION = AND
+    SWAP AMRUN.SIZE @ AGENT-MANDATE-RUN-SIZE >= AND ;
+
+: _AMRUN-RETAIN  ( run -- status )
+    DUP _AMRUN-RECORD-VALID? 0= IF DROP AMRUN-S-INVALID EXIT THEN
+    DUP AMRUN.FREE-PENDING @ IF DROP AMRUN-S-INACTIVE EXIT THEN
+    DUP AMRUN-ACTIVE? 0= IF DROP AMRUN-S-INACTIVE EXIT THEN
+    DUP AMRUN.REFS @ DUP 1 < OVER 0x7FFFFFFFFFFFFFFF >= OR IF
+        2DROP AMRUN-S-INVALID EXIT
+    THEN
+    DROP 1 SWAP AMRUN.REFS +! AMRUN-S-OK ;
+
+: _AMRUN-RELEASE  ( run -- )
+    DUP _AMRUN-RECORD-VALID? 0= IF DROP EXIT THEN
+    DUP AMRUN.REFS @ 0> IF -1 OVER AMRUN.REFS +! THEN
+    DUP AMRUN.FREE-PENDING @ OVER AMRUN.REFS @ 0= AND IF
+        _AMRUN-DESTROY
+    ELSE
+        DROP
+    THEN ;
+
+: _AMRUN-FREE  ( run -- )
+    DUP _AMRUN-RECORD-VALID? 0= IF DROP EXIT THEN
+    DUP AMRUN.FREE-PENDING @ IF DROP EXIT THEN
+    AMRUN-STATE-CLOSED OVER AMRUN.STATE !
+    -1 OVER AMRUN.FREE-PENDING !
+    _AMRUN-RELEASE ;
 
 VARIABLE _AMO-ID
 VARIABLE _AMO-GEN
@@ -176,7 +225,20 @@ VARIABLE _AMO-RUN
             0
         THEN ;
 
-: AMRUN-TOOL-RESERVE  ( run -- status )
+' AMRUN-ACTIVE? CONSTANT _amrun-active-xt
+' AMRUN-OP? CONSTANT _amrun-op-xt
+
+: AMRUN-ACTIVE?  ( run -- flag )
+    _amrun-active-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-OP?  ( target-id target-generation cap required-flags run -- entry | 0 )
+    _amrun-op-xt _amrun-accounting-guard WITH-GUARD ;
+
+\ Tool-count and disclosure-count changes share one transaction boundary.
+\ A run may be referenced by more than one gateway, so per-gateway locking is
+\ not sufficient here.  WITH-GUARD also releases this boundary if validation
+\ or a future accounting backend throws.
+: _AMRUN-TOOL-RESERVE  ( run -- status )
     DUP AMRUN-ACTIVE? 0= IF DROP AMRUN-S-INACTIVE EXIT THEN
     DUP AMRUN.MANDATE MAND.TOOL-BUDGET @ DUP 1 < IF
         2DROP AMRUN-S-BUDGET EXIT
@@ -184,7 +246,7 @@ VARIABLE _AMO-RUN
     OVER AMRUN.TOOLS-USED @ <= IF DROP AMRUN-S-BUDGET EXIT THEN
     1 SWAP AMRUN.TOOLS-USED +! AMRUN-S-OK ;
 
-: AMRUN-TOOL-REFUND  ( run -- )
+: _AMRUN-TOOL-REFUND  ( run -- )
     DUP AMRUN.TOOLS-USED @ 0> IF -1 SWAP AMRUN.TOOLS-USED +! ELSE DROP THEN ;
 
 VARIABLE _AMD-N
@@ -195,7 +257,7 @@ VARIABLE _AMDB-N
 VARIABLE _AMDB-RUN
 VARIABLE _AMDB-LIMIT
 
-: AMRUN-DISCLOSE-BYTES  ( bytes run -- status )
+: _AMRUN-DISCLOSE-BYTES  ( bytes run -- status )
     _AMDB-RUN ! _AMDB-N !
     _AMDB-N @ 0< IF AMRUN-S-INVALID EXIT THEN
     _AMDB-RUN @ AMRUN-ACTIVE? 0= IF AMRUN-S-INACTIVE EXIT THEN
@@ -207,7 +269,17 @@ VARIABLE _AMDB-LIMIT
     _AMDB-N @ _AMDB-RUN @ AMRUN.DISCLOSURE-USED +!
     AMRUN-S-OK ;
 
-: AMRUN-DISCLOSE-RESERVE  ( bytes entry run -- status )
+\ Release a prior disclosure reservation.  Cleanup is deliberately allowed
+\ after a run has closed, provided its record is still alive; this is budget
+\ accounting, not fresh authority.  Clamp defensively so a repeated cleanup
+\ cannot drive the counter negative.
+: _AMRUN-DISCLOSE-REFUND  ( bytes run -- )
+    DUP 0= IF 2DROP EXIT THEN >R
+    DUP 0< IF DROP R> DROP EXIT THEN
+    R@ AMRUN.DISCLOSURE-USED @ MIN NEGATE
+    R> AMRUN.DISCLOSURE-USED +! ;
+
+: _AMRUN-DISCLOSE-RESERVE  ( bytes entry run -- status )
     _AMD-RUN ! _AMD-ENTRY ! _AMD-N !
     _AMD-N @ 0< IF AMRUN-S-INVALID EXIT THEN
     _AMD-RUN @ AMRUN-ACTIVE? 0= IF AMRUN-S-INACTIVE EXIT THEN
@@ -217,4 +289,41 @@ VARIABLE _AMDB-LIMIT
     THEN
     _AMD-ENTRY @ CFENTRY.MAX-RESULT @ DUP _AMD-LIMIT !
     _AMD-N @ < IF AMRUN-S-BUDGET EXIT THEN
-    _AMD-N @ _AMD-RUN @ AMRUN-DISCLOSE-BYTES ;
+    _AMD-N @ _AMD-RUN @ _AMRUN-DISCLOSE-BYTES ;
+
+' _AMRUN-TOOL-RESERVE CONSTANT _amrun-tool-reserve-xt
+' _AMRUN-TOOL-REFUND CONSTANT _amrun-tool-refund-xt
+' _AMRUN-DISCLOSE-BYTES CONSTANT _amrun-disclose-bytes-xt
+' _AMRUN-DISCLOSE-REFUND CONSTANT _amrun-disclose-refund-xt
+' _AMRUN-DISCLOSE-RESERVE CONSTANT _amrun-disclose-reserve-xt
+' _AMRUN-CLOSE CONSTANT _amrun-close-xt
+' _AMRUN-FREE CONSTANT _amrun-free-xt
+' _AMRUN-RETAIN CONSTANT _amrun-retain-xt
+' _AMRUN-RELEASE CONSTANT _amrun-release-xt
+
+: AMRUN-CLOSE  ( run -- )
+    _amrun-close-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-FREE  ( run -- )
+    _amrun-free-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-RETAIN  ( run -- status )
+    _amrun-retain-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-RELEASE  ( run -- )
+    _amrun-release-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-TOOL-RESERVE  ( run -- status )
+    _amrun-tool-reserve-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-TOOL-REFUND  ( run -- )
+    _amrun-tool-refund-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-DISCLOSE-BYTES  ( bytes run -- status )
+    _amrun-disclose-bytes-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-DISCLOSE-REFUND  ( bytes run -- )
+    _amrun-disclose-refund-xt _amrun-accounting-guard WITH-GUARD ;
+
+: AMRUN-DISCLOSE-RESERVE  ( bytes entry run -- status )
+    _amrun-disclose-reserve-xt _amrun-accounting-guard WITH-GUARD ;

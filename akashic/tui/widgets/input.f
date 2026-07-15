@@ -29,13 +29,15 @@
 \
 \  Prefix: INP- (public), _INP- (internal)
 \  Provider: akashic-tui-input
-\  Dependencies: widget.f, draw.f, ../text/utf8.f, keys.f
+\  Dependencies: widget.f, draw.f, ../text/utf8.f,
+\                ../text/cell-width.f, keys.f
 
 PROVIDED akashic-tui-input
 
 REQUIRE ../widget.f
 REQUIRE ../draw.f
 REQUIRE ../../text/utf8.f
+REQUIRE ../../text/cell-width.f
 REQUIRE ../keys.f
 
 \ =====================================================================
@@ -271,14 +273,14 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         _INP-DRW-W @ _INP-O-CURSOR + @
         _INP-DRW-W @ _INP-O-BUF-LEN + @ < IF
             _INP-DRW-W @ _INP-O-MASK-CP + @ ?DUP IF
-                SWAP 0 SWAP DRW-CHAR
+                CW-CELL-CP SWAP 0 SWAP DRW-CHAR
             ELSE
                 \ Character under cursor — decode it
                 _INP-DRW-W @ _INP-O-BUF-A + @
                 _INP-DRW-W @ _INP-O-CURSOR + @ +
                 DUP C@ _UTF8-SEQLEN
                 DUP 0= IF DROP 1 THEN        \ ( viscol addr seqlen )
-                0 3 PICK DRW-TEXT             \ DRW-TEXT( addr len row col )
+                0 3 PICK DRW-TEXT-UNTRUSTED
                 DROP                          \ drop viscol
             THEN
         ELSE
@@ -302,7 +304,7 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         DUP _INP-O-PH-U + @ 0 > IF
             DUP _INP-O-PH-A + @
             OVER _INP-O-PH-U + @
-            0 0 DRW-TEXT
+            0 0 DRW-TEXT-UNTRUSTED
         THEN
         DROP _INP-DRAW-CURSOR EXIT
     THEN
@@ -336,6 +338,7 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         _INP-DRW-W @ _INP-O-MASK-CP + @ ?DUP IF
             SWAP DROP                        \ replace decoded cp with mask
         THEN
+        CW-CELL-CP
         OVER                                \ ( col cp col )
         0 SWAP                              \ ( col cp 0 col )
         DRW-CHAR                            \ DRW-CHAR( cp row col )

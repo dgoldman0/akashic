@@ -116,7 +116,7 @@ VARIABLE _CIF-PRI
     _CIF-R ! _CIF-U ! _CIF-A !
     0 _CIF-BEST ! -2147483648 _CIF-PRI !
     _CIF-R @ CINT.COUNT @ 0 ?DO
-        I _CIF-R @ CINT-NTH DUP >R
+        I _CIF-R @ CINT-NTH >R
         R@ CIE.ID-A @ R@ CIE.ID-U @ _CIF-A @ _CIF-U @ STR-STR= IF
             R@ CIE.PRIORITY @ _CIF-PRI @ > IF
                 R@ _CIF-BEST ! R@ CIE.PRIORITY @ _CIF-PRI !

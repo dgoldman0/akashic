@@ -58,6 +58,30 @@ Returns 0, 1, or 2 cells for a Unicode codepoint.
 0x4E00 CW-WIDTH    \ → 2  (CJK ideograph)
 ```
 
+### CW-CELL-CP
+
+```
+( cp -- cp' )
+```
+
+Project one decoded codepoint onto Akashic's currently representable screen
+cell model. The original codepoint is returned only when it is a Unicode
+scalar value, is terminal-safe, and has width 1. Negative values, surrogates,
+values above U+10FFFF, controls and bidi controls, width-0
+combining/joining/format codepoints, and width-2 glyphs return U+FFFD instead.
+
+This is deliberately stricter than `CW-WIDTH`: the screen flusher has no
+continuation-cell or grapheme-composition state, so accepting a width-0 or
+width-2 codepoint would let the physical terminal cursor diverge from the
+logical buffer. It is a presentation projection and never edits source bytes.
+
+```forth
+65 CW-CELL-CP       \ → 65      ('A')
+0x0301 CW-CELL-CP   \ → U+FFFD  (combining acute)
+0x200D CW-CELL-CP   \ → U+FFFD  (zero-width joiner)
+0x4E00 CW-CELL-CP   \ → U+FFFD  (width-2 ideograph)
+```
+
 ### CW-SWIDTH
 
 ```
@@ -124,6 +148,7 @@ cp <= end`.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `CW-WIDTH` | `( cp -- 0\|1\|2 )` | Cell width of a codepoint |
+| `CW-CELL-CP` | `( cp -- cp' )` | Project to one isolated, terminal-safe cell |
 | `CW-SWIDTH` | `( addr u -- n )` | Display width of UTF-8 string |
 
 ---
@@ -135,7 +160,8 @@ cp <= end`.
 ## Consumers
 
 - Akashic Pad — cursor positioning and line-wrap calculations
-- `tui/draw.f` — display-width aware text output (planned)
+- `tui/draw.f` — one-cell projection for untrusted text
+- `tui/screen.f` — final one-cell projection before terminal emission
 
 ## Internal State
 

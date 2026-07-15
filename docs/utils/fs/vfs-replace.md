@@ -196,7 +196,10 @@ VREPL-REPLACE  ( data length replacement -- status )
 ```
 
 Replace the target with exactly `length` bytes. The source buffer must remain
-valid until the call returns. Zero-length files are supported.
+valid until the call returns. Zero-length files are supported. The bounded
+read-back verification buffer contains caller bytes while the operation is in
+flight; public `VREPL-REPLACE` and `VREPL-RECOVER` wipe its full capacity on
+ordinary, status-failure, and exception paths before returning or rethrowing.
 
 ## Status values
 

@@ -32,6 +32,8 @@
 \  status ).  It runs immediately before staging.  The VFS has no generic
 \  per-file revision, so resource owners supply their own revision check.
 \  Callers must still serialize all direct writers through the owner.
+\  Public RECOVER and REPLACE wipe the read-back verification buffer on
+\  normal, status-failure, and exception paths.
 \ =====================================================================
 
 PROVIDED akashic-vfs-replace
@@ -860,12 +862,44 @@ VARIABLE _VRPUB-THROW
     THEN
     ['] _VREPL-REPLACE-TRANSACTION VFS-TRANSACTION ;
 
+\ The verification buffer holds caller data, not merely transaction
+\ metadata.  Public operations therefore contain it behind no-input CATCH
+\ shims and wipe all of it before returning or rethrowing.
+
+: _VREPL-CHECK-BUFFER-WIPE  ( -- )
+    _VREPL-CHECK-BUFFER _VREPL-CHECK-SIZE 0 FILL ;
+
+VARIABLE _VRCL-RECOVER-R
+
+: _VREPL-RECOVER-CLEAN-CALL  ( -- status )
+    _VRCL-RECOVER-R @ _VREPL-RECOVER ;
+
+: _VREPL-RECOVER-PUBLIC  ( replacement -- status )
+    _VRCL-RECOVER-R !
+    ['] _VREPL-RECOVER-CLEAN-CALL CATCH
+    _VREPL-CHECK-BUFFER-WIPE
+    DUP IF THROW THEN DROP ;
+
+VARIABLE _VRCL-REPLACE-DATA
+VARIABLE _VRCL-REPLACE-LEN
+VARIABLE _VRCL-REPLACE-R
+
+: _VREPL-REPLACE-CLEAN-CALL  ( -- status )
+    _VRCL-REPLACE-DATA @ _VRCL-REPLACE-LEN @ _VRCL-REPLACE-R @
+        _VREPL-REPLACE ;
+
+: _VREPL-REPLACE-PUBLIC  ( data length replacement -- status )
+    _VRCL-REPLACE-R ! _VRCL-REPLACE-LEN ! _VRCL-REPLACE-DATA !
+    ['] _VREPL-REPLACE-CLEAN-CALL CATCH
+    _VREPL-CHECK-BUFFER-WIPE
+    DUP IF THROW THEN DROP ;
+
 ' _VREPL-INIT          CONSTANT _vrepl-init-xt
 ' _VREPL-PATHS!        CONSTANT _vrepl-paths-xt
 ' _VREPL-DERIVE-PATHS! CONSTANT _vrepl-derive-paths-xt
 ' _VREPL-PRECONDITION! CONSTANT _vrepl-precondition-xt
-' _VREPL-RECOVER       CONSTANT _vrepl-recover-xt
-' _VREPL-REPLACE       CONSTANT _vrepl-replace-xt
+' _VREPL-RECOVER-PUBLIC CONSTANT _vrepl-recover-xt
+' _VREPL-REPLACE-PUBLIC CONSTANT _vrepl-replace-xt
 
 : VREPL-INIT
     _vrepl-init-xt _vrepl-guard WITH-GUARD ;

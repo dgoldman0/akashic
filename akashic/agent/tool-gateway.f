@@ -13,6 +13,7 @@ REQUIRE ../interop/capability.f
 REQUIRE ../interop/request-bus.f
 REQUIRE ../interop/codecs/json-value.f
 REQUIRE mandate-run.f
+REQUIRE ../concurrency/guard.f
 
 0 CONSTANT ATOOLG-S-IDLE
 1 CONSTANT ATOOLG-S-QUEUED
@@ -36,11 +37,20 @@ _ATG-CATALOG ATOOLG-MAX-TOOLS 8 * + CONSTANT _ATG-MANDATE-RUN
 _ATG-MANDATE-RUN 8 + CONSTANT _ATG-ARGS-LEN
 _ATG-ARGS-LEN 8 + CONSTANT _ATG-ARGS-DIGEST
 _ATG-ARGS-DIGEST SHA3-256-LEN + CONSTANT _ATG-AUDIT-FLAGS
-_ATG-AUDIT-FLAGS 8 + CONSTANT AGENT-TOOL-GATEWAY-SIZE
+_ATG-AUDIT-FLAGS 8 + CONSTANT _ATG-RESULT-RESERVED
+_ATG-RESULT-RESERVED 8 + CONSTANT AGENT-TOOL-GATEWAY-SIZE
 
 1 CONSTANT ATOOLG-AF-ARGS-FINGERPRINT
+2 CONSTANT ATOOLG-AF-RESULT-SUPPRESSED
 65536 CONSTANT ATOOLG-ARGS-CANONICAL-MAX
 4096 CONSTANT ATOOLG-ARGS-REVIEW-MAX
+32768 CONSTANT ATOOLG-RESULT-JSON-CAPACITY
+4 CONSTANT ATOOLG-RESULT-FALLBACK-BYTES       \ compact JSON `null`
+
+\ Gateway state and the module scratch used to mutate it share one recursive
+\ boundary.  No word may hold this guard while entering CBUS: completion runs
+\ from inside CBUS dispatch and acquires the guard in the opposite direction.
+GUARD _atoolg-state-guard
 
 : ATOOLG.REGISTRY  ( gateway -- a ) _ATG-REGISTRY + ;
 : ATOOLG.BUS       ( gateway -- a ) _ATG-BUS + ;
@@ -58,6 +68,25 @@ _ATG-AUDIT-FLAGS 8 + CONSTANT AGENT-TOOL-GATEWAY-SIZE
 : ATOOLG.ARGS-LEN    ( gateway -- a ) _ATG-ARGS-LEN + ;
 : ATOOLG.ARGS-DIGEST ( gateway -- a ) _ATG-ARGS-DIGEST + ;
 : ATOOLG.AUDIT-FLAGS ( gateway -- a ) _ATG-AUDIT-FLAGS + ;
+: ATOOLG.RESULT-RESERVED ( gateway -- a ) _ATG-RESULT-RESERVED + ;
+
+\ Refund some or all of a gateway's pre-dispatch result reservation.  The
+\ gateway owns at most one request, so its cell is also the exact outstanding
+\ reservation for cancellation and setup-failure cleanup.
+: _ATOOLG-DISCLOSURE-REFUND  ( bytes gateway -- )
+    >R
+    DUP 0< IF DROP R> DROP EXIT THEN
+    R@ ATOOLG.RESULT-RESERVED @ MIN
+    DUP R@ ATOOLG.MANDATE-RUN @ ?DUP IF
+        AMRUN-DISCLOSE-REFUND
+    ELSE
+        DROP
+    THEN
+    NEGATE R@ ATOOLG.RESULT-RESERVED +!
+    R> DROP ;
+
+: _ATOOLG-DISCLOSURE-REFUND-ALL  ( gateway -- )
+    DUP ATOOLG.RESULT-RESERVED @ SWAP _ATOOLG-DISCLOSURE-REFUND ;
 
 : ATOOLG-SCOPED?  ( gateway -- flag )
     ATOOLG.MANDATE-RUN @ 0<> ;
@@ -156,7 +185,15 @@ GUARD _atoolg-canonical-guard
     ATOOLG-ARGS-FINGERPRINT-MATCH? ;
 
 : _ATOOLG-EXPOSED?  ( cap -- flag )
+    DUP CAP-DESC-VALID? 0= IF DROP 0 EXIT THEN
     DUP CAP.HANDLER-XT @ 0= IF DROP 0 EXIT THEN
+    \ A null input schema is the established no-arguments `{}` projection.
+    \ When a typed input exists it must share the same bounded JSON graph.
+    DUP CAP.IN-SCHEMA @ ?DUP IF
+        IVJSON-SCHEMA-COMPATIBLE? 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP CAP.OUT-SCHEMA @ DUP 0= IF 2DROP 0 EXIT THEN
+    IVJSON-SCHEMA-COMPATIBLE? 0= IF DROP 0 EXIT THEN
     CAP.KIND @ DUP CAP-K-COMMAND = SWAP CAP-K-RESOURCE = OR ;
 
 VARIABLE _ATGH-CAP
@@ -185,7 +222,13 @@ VARIABLE _ATGS-FLAGS
     _ATGS-G @ ATOOLG.MANDATE-RUN @ ?DUP IF
         _ATGS-RUN !
         _ATGS-INST @ CINST.ID @ _ATGS-INST @ CINST.GENERATION @
-        _ATGS-CAP @ _ATGS-FLAGS @ _ATGS-RUN @ AMRUN-OP? 0<>
+        _ATGS-CAP @ _ATGS-FLAGS @ _ATGS-RUN @ AMRUN-OP? DUP IF
+            _ATGS-FLAGS @ CFENTRY-F-DISCLOSE-RESULT AND IF
+                CFENTRY.MAX-RESULT @ ATOOLG-RESULT-FALLBACK-BYTES >=
+            ELSE
+                DROP -1
+            THEN
+        THEN
     ELSE
         -1
     THEN ;
@@ -193,7 +236,8 @@ VARIABLE _ATGS-FLAGS
 : _ATOOLG-CATALOG+  ( instance cap gateway -- status )
     _ATGA-G ! _ATGA-CAP ! _ATGA-INST !
     _ATGA-CAP @ _ATOOLG-EXPOSED? 0= IF 0 EXIT THEN
-    _ATGA-INST @ _ATGA-CAP @ CFENTRY-F-VISIBLE
+    _ATGA-INST @ _ATGA-CAP @
+        CFENTRY-F-VISIBLE CFENTRY-F-DISCLOSE-RESULT OR
         _ATGA-G @ _ATOOLG-REQUIRED? 0= IF
         0 EXIT
     THEN
@@ -281,13 +325,24 @@ VARIABLE _ATGM-G
     _ATGM-G @ ATOOLG.STATE @ ATOOLG-S-IDLE <> IF
         CBUS-S-BUSY EXIT
     THEN
+    _ATGM-G @ ATOOLG.MANDATE-RUN @ _ATGM-RUN @ = IF
+        _ATGM-G @ ATOOLG-REFRESH EXIT
+    THEN
+    _ATGM-RUN @ AMRUN-RETAIN ?DUP IF
+        DROP CBUS-S-INVALID EXIT
+    THEN
+    _ATGM-G @ _ATOOLG-DISCLOSURE-REFUND-ALL
+    _ATGM-G @ ATOOLG.MANDATE-RUN @ ?DUP IF AMRUN-RELEASE THEN
     _ATGM-RUN @ _ATGM-G @ ATOOLG.MANDATE-RUN !
     _ATGM-G @ ATOOLG-REFRESH ;
 
 : ATOOLG-MANDATE-CLEAR  ( gateway -- status )
     DUP 0= IF DROP CBUS-S-INVALID EXIT THEN
     DUP ATOOLG.STATE @ ATOOLG-S-IDLE <> IF DROP CBUS-S-BUSY EXIT THEN
+    DUP _ATOOLG-DISCLOSURE-REFUND-ALL
+    DUP ATOOLG.MANDATE-RUN @ >R
     0 OVER ATOOLG.MANDATE-RUN !
+    R> ?DUP IF AMRUN-RELEASE THEN
     ATOOLG-REFRESH ;
 
 VARIABLE _ATGN-REG
@@ -308,12 +363,6 @@ VARIABLE _ATGN-CALLER
     THEN
     0 ;
 
-: ATOOLG-FREE  ( gateway -- )
-    DUP 0= IF DROP EXIT THEN
-    DUP ATOOLG.REQUEST @ ?DUP IF CBR-FREE THEN
-    DUP ATOOLG.NAME CV-FREE
-    FREE ;
-
 VARIABLE _ATGF-A
 VARIABLE _ATGF-U
 VARIABLE _ATGF-G
@@ -330,9 +379,12 @@ VARIABLE _ATGF-CAP
         DUP _ATGF-INST !
         _ATGF-A @ _ATGF-U @ ROT _ATOOLG-FIND-ON
         DUP IF
-            _ATGF-INST @ OVER CFENTRY-F-INVOKE
-                _ATGF-G @ _ATOOLG-REQUIRED? IF
-                _ATGF-INST @ SWAP EXIT
+            DUP _ATOOLG-EXPOSED? IF
+                _ATGF-INST @ OVER
+                    CFENTRY-F-INVOKE CFENTRY-F-DISCLOSE-RESULT OR
+                    _ATGF-G @ _ATOOLG-REQUIRED? IF
+                    _ATGF-INST @ SWAP EXIT
+                THEN
             THEN
         THEN DROP
     THEN
@@ -341,13 +393,47 @@ VARIABLE _ATGF-CAP
         DUP _ATGF-INST !
         _ATGF-A @ _ATGF-U @ ROT _ATOOLG-FIND-ON
         DUP IF
-            _ATGF-INST @ OVER CFENTRY-F-INVOKE
-                _ATGF-G @ _ATOOLG-REQUIRED? IF
-                _ATGF-INST @ SWAP UNLOOP EXIT
+            DUP _ATOOLG-EXPOSED? IF
+                _ATGF-INST @ OVER
+                    CFENTRY-F-INVOKE CFENTRY-F-DISCLOSE-RESULT OR
+                    _ATGF-G @ _ATOOLG-REQUIRED? IF
+                    _ATGF-INST @ SWAP UNLOOP EXIT
+                THEN
             THEN
         THEN DROP
     LOOP
     0 0 ;
+
+\ Public gateway mutations defined above are wrapped here so their complete
+\ bodies, including reservation refunds, cannot race a completion callback.
+\ Their internal calls remain safe because the guard is recursive.
+' ATOOLG-REFRESH CONSTANT _atoolg-refresh-xt
+' ATOOLG-FOCUSED! CONSTANT _atoolg-focused-store-xt
+' ATOOLG-MANDATE! CONSTANT _atoolg-mandate-store-xt
+' ATOOLG-MANDATE-CLEAR CONSTANT _atoolg-mandate-clear-xt
+' ATOOLG-FIND CONSTANT _atoolg-find-xt
+' ATOOLG-NEW CONSTANT _atoolg-new-xt
+
+: ATOOLG-REFRESH  ( gateway -- status )
+    _atoolg-refresh-xt _atoolg-state-guard WITH-GUARD ;
+
+: ATOOLG-FOCUSED!  ( instance gateway -- status )
+    _atoolg-focused-store-xt _atoolg-state-guard WITH-GUARD ;
+
+: ATOOLG-MANDATE!  ( mandate-run gateway -- status )
+    _atoolg-mandate-store-xt _atoolg-state-guard WITH-GUARD ;
+
+: ATOOLG-MANDATE-CLEAR  ( gateway -- status )
+    _atoolg-mandate-clear-xt _atoolg-state-guard WITH-GUARD ;
+
+: ATOOLG-FIND  ( id-a id-u gateway -- instance cap | 0 0 )
+    _atoolg-find-xt _atoolg-state-guard WITH-GUARD ;
+
+: ATOOLG-NEW  ( registry bus caller -- gateway ior )
+    \ CBR/gateway heap ownership is core-0-only under KDOS.  Reject worker
+    \ construction before ALLOCATE and serialize the module constructor frame.
+    COREID IF 2DROP DROP 0 CBUS-S-INVALID EXIT THEN
+    _atoolg-new-xt _atoolg-state-guard WITH-GUARD ;
 
 CREATE _ATGIG-BIND AUTH-BINDING-SIZE ALLOT
 CREATE _ATGIG-GRANT AUTH-GRANT-SIZE ALLOT
@@ -399,46 +485,105 @@ VARIABLE _ATGIG-EXPIRES
     _ATGIG-EXPIRES @ _ATGIG-GRANT AGR.EXPIRES !
     _ATGIG-GRANT _ATGIG-REQ @ CBR.HANDLE _ATGIG-AUTH @ AHT-ISSUE ;
 
+0x7FFFFFFFFFFFFFFF CONSTANT _ATOOLG-DISCLOSURE-MAX
+CREATE _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY ALLOT
+
+\ Measure the exact compact JSON representation delivered to model context.
+\ The scalar compatibility helper below saturates on a codec failure; the
+\ completion gate instead substitutes a bounded null while preserving a
+\ handler success that may already include committed owner-side effects.
+: _ATOOLG-RESULT-JSON-SIZE-RAW  ( value -- bytes ior )
+    _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY IVJSON-ENCODE ;
+
+GUARD _atoolg-result-guard
+
+\ Encoding is used only for measurement.  The scratch can contain exact tool
+\ output, including credentials or private document text, so erase the whole
+\ capacity before releasing the guard on both ordinary and exceptional exits.
+: _ATOOLG-RESULT-JSON-SIZE-AROUND  ( value xt -- bytes ior )
+    \ Keeping the cleanup frame independent of the encoder also makes the
+    \ exceptional path directly testable instead of relying on a codec bug to
+    \ throw after writing sensitive bytes.
+    CATCH
+    _ATGR-JSON ATOOLG-RESULT-JSON-CAPACITY 0 FILL
+    ?DUP IF THROW THEN ;
+
+: _ATOOLG-RESULT-JSON-SIZE-CLEAN  ( value -- bytes ior )
+    ['] _ATOOLG-RESULT-JSON-SIZE-RAW _ATOOLG-RESULT-JSON-SIZE-AROUND ;
+
+' _ATOOLG-RESULT-JSON-SIZE-CLEAN CONSTANT _atoolg-result-json-size-xt
+: _ATOOLG-RESULT-JSON-SIZE
+    _atoolg-result-json-size-xt _atoolg-result-guard WITH-GUARD ;
+
 : _ATOOLG-RESULT-BYTES  ( value -- bytes )
-    DUP CV-TYPE@ CASE
-        CV-T-NULL OF DROP 0 ENDOF
-        CV-T-BOOL OF DROP 8 ENDOF
-        CV-T-INT OF DROP 8 ENDOF
-        CV-T-F32 OF DROP 8 ENDOF
-        CV-T-STRING OF CV-LEN@ ENDOF
-        CV-T-BYTES OF CV-LEN@ ENDOF
-        CV-T-RESOURCE OF CV-LEN@ ENDOF
-        \ Nested containers are not yet projected into provider-safe bounded
-        \ schemas.  Charge an impossible size rather than under-count them.
-        NIP 9223372036854775807 SWAP
-    ENDCASE ;
+    _ATOOLG-RESULT-JSON-SIZE
+    DUP IF 2DROP _ATOOLG-DISCLOSURE-MAX ELSE DROP THEN ;
 
 VARIABLE _ATGD-REQ
 VARIABLE _ATGD-G
-VARIABLE _ATGD-RUN
-VARIABLE _ATGD-ENTRY
+VARIABLE _ATGD-BYTES
+
+: _ATOOLG-RESULT-SUPPRESS  ( error-a error-u error-code -- )
+    _ATGD-REQ @ CBR.RESULT CV-FREE
+    _ATGD-REQ @ CBR.RESULT CV-NULL!
+    _ATGD-REQ @ CBR-ERROR!
+    _ATGD-G @ ATOOLG.AUDIT-FLAGS DUP @
+        ATOOLG-AF-RESULT-SUPPRESSED OR SWAP !
+    ATOOLG-RESULT-FALLBACK-BYTES _ATGD-BYTES ! ;
 
 : _ATOOLG-DISCLOSURE-GATE  ( request gateway -- status )
     _ATGD-G ! _ATGD-REQ !
+    _ATGD-REQ @ CBR.STATUS @ CBUS-S-OK <> IF
+        \ Approval is an intermediate dispatch result; keep its reservation
+        \ across review and requeue.  Every terminal non-success refunds it.
+        _ATGD-REQ @ CBR.STATUS @ CBUS-S-NEEDS-APPROVAL <> IF
+            _ATGD-G @ _ATOOLG-DISCLOSURE-REFUND-ALL
+        THEN
+        AMRUN-S-OK EXIT
+    THEN
+    _ATGD-REQ @ CBR.RESULT _ATOOLG-RESULT-JSON-SIZE DUP IF
+        >R DROP
+        \ A handler may already have committed owner-side effects.  Preserve
+        \ success and substitute a bounded JSON null even on an unscoped
+        \ gateway, so a provider cannot interpret a projection defect as a
+        \ retryable operation failure and duplicate the effect.
+        S" Tool result was suppressed after an encoding contract breach"
+            R> _ATOOLG-RESULT-SUPPRESS
+    ELSE
+        DROP _ATGD-BYTES !
+    THEN
     _ATGD-G @ ATOOLG.MANDATE-RUN @ ?DUP 0= IF
         AMRUN-S-OK EXIT
     THEN
-    _ATGD-RUN !
-    _ATGD-REQ @ CBR.STATUS @ CBUS-S-OK <> IF AMRUN-S-OK EXIT THEN
-    _ATGD-REQ @ CBR.TARGET-ID @ _ATGD-REQ @ CBR.TARGET-GEN @
-    _ATGD-REQ @ CBR.CAP @ CFENTRY-F-DISCLOSE-RESULT _ATGD-RUN @
-    AMRUN-OP? DUP 0= IF DROP AMRUN-S-DENIED EXIT THEN
-    _ATGD-ENTRY !
-    _ATGD-REQ @ CBR.RESULT _ATOOLG-RESULT-BYTES
-        _ATGD-ENTRY @ _ATGD-RUN @ AMRUN-DISCLOSE-RESERVE ;
+    DROP
+    _ATGD-G @ ATOOLG.RESULT-RESERVED @ DUP
+        ATOOLG-RESULT-FALLBACK-BYTES < IF
+        DROP AMRUN-S-DENIED EXIT
+    THEN
+    _ATGD-BYTES @ < IF
+        S" Tool result was suppressed after exceeding its declared bound"
+            AMRUN-S-BUDGET _ATOOLG-RESULT-SUPPRESS
+    THEN
+    _ATGD-G @ ATOOLG.RESULT-RESERVED @ _ATGD-BYTES @ -
+        _ATGD-G @ _ATOOLG-DISCLOSURE-REFUND
+    \ The bytes left in AMRUN.DISCLOSURE-USED are now delivered usage, not
+    \ an outstanding reservation.  Clearing this ownership cell without a
+    \ second refund keeps CLEAR and the next call from erasing that charge.
+    0 _ATGD-G @ ATOOLG.RESULT-RESERVED !
+    AMRUN-S-OK ;
 
-: _ATOOLG-COMPLETE  ( request -- )
+: _ATOOLG-COMPLETE-BODY  ( request -- )
     DUP _ATGD-REQ ! CBR.COMPLETE-DATA @ DUP _ATGD-G ! >R
     _ATGD-REQ @ _ATGD-G @ _ATOOLG-DISCLOSURE-GATE ?DUP IF
         _ATGD-REQ @ CBR.RESULT CV-FREE
-        S" Mandate disclosure denied the tool result" ROT
-            _ATGD-REQ @ CBR-ERROR!
-        CBUS-S-DENIED _ATGD-REQ @ CBR.STATUS !
+        _ATGD-REQ @ CBR.ERROR-U @ 0= IF
+            S" Mandate disclosure denied the tool result" ROT
+                _ATGD-REQ @ CBR-ERROR!
+            CBUS-S-DENIED
+        ELSE
+            DROP CBUS-S-FAILED
+        THEN
+        _ATGD-REQ @ CBR.STATUS !
     THEN
     _ATGD-REQ @
     CBR.STATUS @ CBUS-S-NEEDS-APPROVAL = IF
@@ -448,6 +593,13 @@ VARIABLE _ATGD-ENTRY
     THEN
     R@ ATOOLG.STATE !
     1 R> ATOOLG.REVISION +! ;
+
+\ Pump callbacks run under the request-bus guard.  They enter only the gateway
+\ state guard; every public POST/DISPATCH path releases it before entering the
+\ bus, preventing an AB/BA lock cycle across cores.
+' _ATOOLG-COMPLETE-BODY CONSTANT _atoolg-complete-body-xt
+: _ATOOLG-COMPLETE  ( request -- )
+    _atoolg-complete-body-xt _atoolg-state-guard WITH-GUARD ;
 
 VARIABLE _ATGC-A
 VARIABLE _ATGC-U
@@ -459,6 +611,10 @@ VARIABLE _ATGC-CAP
 VARIABLE _ATGC-REQ
 VARIABLE _ATGC-MRUN
 VARIABLE _ATGC-RESERVED
+VARIABLE _ATGC-ENTRY
+VARIABLE _ATGC-MAX-RESULT
+VARIABLE _ATGC-CALL-A
+VARIABLE _ATGC-CALL-U
 
 : _ATOOLG-REVOKE-REQUEST-HANDLE  ( gateway -- )
     DUP ATOOLG.REQUEST @ ?DUP IF
@@ -475,7 +631,23 @@ VARIABLE _ATGC-RESERVED
         DROP
     THEN ;
 
+: ATOOLG-FREE  ( gateway -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP ATOOLG.STATE @ DUP ATOOLG-S-QUEUED =
+    SWAP ATOOLG-S-APPROVAL = OR IF
+        DROP CBUS-E-DISPATCH-ACTIVE THROW
+    THEN
+    DUP _ATOOLG-DISCLOSURE-REFUND-ALL
+    DUP _ATOOLG-REVOKE-REQUEST-HANDLE
+    DUP ATOOLG.REQUEST @ ?DUP IF CBR-FREE THEN
+    DUP ATOOLG.MANDATE-RUN @ >R
+    0 OVER ATOOLG.MANDATE-RUN !
+    R> ?DUP IF AMRUN-RELEASE THEN
+    DUP ATOOLG.NAME CV-FREE
+    FREE ;
+
 : _ATOOLG-CALL-CLEANUP  ( status -- status )
+    _ATGC-G @ _ATOOLG-DISCLOSURE-REFUND-ALL
     _ATGC-G @ _ATOOLG-REVOKE-REQUEST-HANDLE
     _ATGC-REQ @ ?DUP IF CBR-FREE THEN
     0 _ATGC-G @ ATOOLG.REQUEST !
@@ -487,30 +659,72 @@ VARIABLE _ATGC-RESERVED
         0 _ATGC-RESERVED !
     THEN ;
 
-: ATOOLG-CALL  ( id-a id-u args run-id gateway -- status )
-    _ATGC-G ! _ATGC-RUN ! _ATGC-ARGS ! _ATGC-U ! _ATGC-A !
+: _ATOOLG-CALL-ERROR  ( status -- 0 0 0 0 status )
+    >R 0 0 0 0 R> ;
+
+: _ATOOLG-CALL-CLEANUP-ERROR  ( status -- 0 0 0 0 status )
+    _ATOOLG-CALL-CLEANUP _ATOOLG-CALL-ERROR ;
+
+: _ATOOLG-CALL-PREP
+  ( id-a id-u args run-id call-a call-u gateway -- gateway mandate-run request bus status )
+    _ATGC-G ! _ATGC-CALL-U ! _ATGC-CALL-A !
+    _ATGC-RUN ! _ATGC-ARGS ! _ATGC-U ! _ATGC-A !
     0 _ATGC-REQ ! 0 _ATGC-MRUN ! 0 _ATGC-RESERVED !
-    _ATGC-G @ ATOOLG.STATE @ ATOOLG-S-IDLE <> IF
-        CBUS-S-BUSY EXIT
+    0 _ATGC-ENTRY ! 0 _ATGC-MAX-RESULT !
+    _ATGC-CALL-U @ 0<
+    _ATGC-CALL-U @ 0> _ATGC-CALL-A @ 0= AND OR IF
+        CBUS-S-INVALID _ATOOLG-CALL-ERROR EXIT
     THEN
+    _ATGC-G @ ATOOLG.STATE @ ATOOLG-S-IDLE <> IF
+        CBUS-S-BUSY _ATOOLG-CALL-ERROR EXIT
+    THEN
+    _ATGC-G @ _ATOOLG-DISCLOSURE-REFUND-ALL
     _ATGC-A @ _ATGC-U @ _ATGC-G @ ATOOLG-FIND
     _ATGC-CAP ! _ATGC-INST !
-    _ATGC-CAP @ 0= IF CBUS-S-NO-HANDLER EXIT THEN
-    _ATGC-G @ ATOOLG.MANDATE-RUN @ ?DUP IF
-        DUP _ATGC-MRUN ! AMRUN-TOOL-RESERVE ?DUP IF EXIT THEN
-        -1 _ATGC-RESERVED !
+    _ATGC-CAP @ 0= IF
+        CBUS-S-NO-HANDLER _ATOOLG-CALL-ERROR EXIT
     THEN
-    CBR-NEW DUP IF NIP _ATOOLG-CALL-CLEANUP EXIT THEN DROP
+    _ATGC-G @ ATOOLG.MANDATE-RUN @ ?DUP IF
+        DUP _ATGC-MRUN ! AMRUN-TOOL-RESERVE ?DUP IF
+            _ATOOLG-CALL-ERROR EXIT
+        THEN
+        -1 _ATGC-RESERVED !
+        \ Reserve the facet's complete declared result allowance before any
+        \ handler or reviewed effect can run.  Completion charges the actual
+        \ compact JSON size and refunds the unused remainder.
+        _ATGC-INST @ CINST.ID @ _ATGC-INST @ CINST.GENERATION @
+        _ATGC-CAP @ CFENTRY-F-DISCLOSE-RESULT _ATGC-MRUN @ AMRUN-OP?
+        DUP 0= IF
+            DROP CBUS-S-DENIED _ATOOLG-CALL-CLEANUP-ERROR EXIT
+        THEN _ATGC-ENTRY !
+        _ATGC-ENTRY @ CFENTRY.MAX-RESULT @ DUP
+        ATOOLG-RESULT-FALLBACK-BYTES < IF
+            DROP
+            CBUS-S-INVALID _ATOOLG-CALL-CLEANUP-ERROR EXIT
+        THEN
+        \ The provider projection cannot deliver more than its own bounded
+        \ JSON buffer.  A broader facet remains callable: reserve the maximum
+        \ deliverable value and suppress any larger handler result to null.
+        ATOOLG-RESULT-JSON-CAPACITY MIN _ATGC-MAX-RESULT !
+        _ATGC-MAX-RESULT @ _ATGC-ENTRY @ _ATGC-MRUN @
+            AMRUN-DISCLOSE-RESERVE ?DUP IF
+            _ATOOLG-CALL-CLEANUP-ERROR EXIT
+        THEN
+        _ATGC-MAX-RESULT @ _ATGC-G @ ATOOLG.RESULT-RESERVED !
+    THEN
+    CBR-NEW DUP IF
+        NIP _ATOOLG-CALL-CLEANUP-ERROR EXIT
+    THEN DROP
     DUP _ATGC-REQ ! _ATGC-G @ ATOOLG.REQUEST !
     _ATGC-A @ _ATGC-U @ _ATGC-G @ ATOOLG.NAME CV-STRING! ?DUP IF
-        _ATOOLG-CALL-CLEANUP EXIT
+        _ATOOLG-CALL-CLEANUP-ERROR EXIT
     THEN
     _ATGC-ARGS @ _ATGC-REQ @ CBR.ARGS CV-COPY ?DUP IF
-        DROP CBUS-S-INVALID _ATOOLG-CALL-CLEANUP EXIT
+        DROP CBUS-S-INVALID _ATOOLG-CALL-CLEANUP-ERROR EXIT
     THEN
     \ Seal the canonical deep copy before the request can enter the bus.
     _ATGC-G @ _ATOOLG-ARGS-FINGERPRINT! ?DUP IF
-        _ATOOLG-CALL-CLEANUP EXIT
+        _ATOOLG-CALL-CLEANUP-ERROR EXIT
     THEN
     CPRINC-AGENT _ATGC-REQ @ CBR.PRINCIPAL !
     _ATGC-G @ ATOOLG.CALLER @ ?DUP IF
@@ -551,104 +765,189 @@ VARIABLE _ATGC-RESERVED
     ['] _ATOOLG-COMPLETE _ATGC-REQ @ CBR.COMPLETE-XT !
     _ATGC-G @ _ATGC-REQ @ CBR.COMPLETE-DATA !
     _ATGC-RUN @ _ATGC-G @ ATOOLG.RUN-ID !
+    _ATGC-CALL-U @ IF
+        \ Fold the provider's call identity before publication.  The previous
+        \ post-then-reseal sequence let another core dispatch a provisional
+        \ invocation and consume the wrong automatic grant.
+        SHA3-256-BEGIN
+        _ATGC-G @ ATOOLG.RUN-ID 8 SHA3-256-ADD
+        _ATGC-CALL-A @ _ATGC-CALL-U @ SHA3-256-ADD
+        _ATGC-G @ ATOOLG.NAME DUP CV-DATA@ SWAP CV-LEN@ SHA3-256-ADD
+        _ATGC-REQ @ CBR.INVOCATION-ID SHA3-256-END
+    THEN
     _ATGC-MRUN @ IF
         _ATGC-INST @ _ATGC-CAP @ CFENTRY-F-AUTO-OBSERVE
             _ATGC-G @ _ATOOLG-REQUIRED? IF
             AGR-F-MANDATE-AUTO
             CFENTRY-F-INVOKE CFENTRY-F-AUTO-OBSERVE OR
             _ATGC-G @ _ATOOLG-ISSUE-GRANT ?DUP IF
-                _ATOOLG-CALL-CLEANUP EXIT
+                _ATOOLG-CALL-CLEANUP-ERROR EXIT
             THEN
         THEN
     THEN
     ATOOLG-S-QUEUED _ATGC-G @ ATOOLG.STATE !
-    _ATGC-REQ @ _ATGC-G @ ATOOLG.BUS @ CBUS-POST
-    DUP IF _ATOOLG-CALL-CLEANUP ELSE 1 _ATGC-G @ ATOOLG.REVISION +! THEN ;
+    1 _ATGC-G @ ATOOLG.REVISION +!
+    _ATGC-G @ _ATGC-MRUN @ _ATGC-REQ @
+        _ATGC-G @ ATOOLG.BUS @ CBUS-S-OK ;
 
-VARIABLE _ATGCI-A
-VARIABLE _ATGCI-U
-VARIABLE _ATGCI-G
-VARIABLE _ATGCI-STATUS
+' _ATOOLG-CALL-PREP CONSTANT _atoolg-call-prep-xt
 
-\ Preserve a provider-neutral call identity as a durable-sized digest.
-\ The provider wire remains unchanged; the event call ID, run ID, and
-\ resolved operation name are folded into the invocation identity before
-\ the owner can pump the queued request.
+: _ATOOLG-CALL-PREP-GUARDED
+  ( id-a id-u args run-id call-a call-u gateway -- gateway mandate-run request bus status )
+    _atoolg-call-prep-xt _atoolg-state-guard WITH-GUARD ;
+
+: _ATOOLG-POST-ROLLBACK-BODY  ( gateway mandate-run status -- status )
+    >R _ATGC-MRUN ! DUP _ATGC-G !
+    DUP ATOOLG.REQUEST @ _ATGC-REQ !
+    _ATGC-MRUN @ 0<> _ATGC-RESERVED !
+    R> _ATOOLG-CALL-CLEANUP ;
+
+' _ATOOLG-POST-ROLLBACK-BODY CONSTANT _atoolg-post-rollback-xt
+: _ATOOLG-POST-ROLLBACK  ( gateway mandate-run status -- status )
+    _atoolg-post-rollback-xt _atoolg-state-guard WITH-GUARD ;
+
+: _ATOOLG-CBUS-POST-CATCH  ( request bus -- status throw-code )
+    ['] CBUS-POST CATCH DUP IF
+        >R 2DROP CBUS-S-FAILED R>
+    THEN ;
+
+: _ATOOLG-CALL-POST
+  ( gateway mandate-run request bus status -- status )
+    DUP IF >R 2DROP 2DROP R> EXIT THEN DROP
+    2SWAP 2>R
+    _ATOOLG-CBUS-POST-CATCH
+    2R> 2SWAP >R
+    DUP IF
+        _ATOOLG-POST-ROLLBACK
+    ELSE
+        >R 2DROP R>
+    THEN
+    R> ?DUP IF NIP THROW THEN ;
+
+\ Build and seal under the gateway state boundary, then publish only after
+\ releasing it.  The gateway/request pair returned on the data stack is this
+\ call's owned continuation state; no module scratch is consulted by POST.
+: ATOOLG-CALL  ( id-a id-u args run-id gateway -- status )
+    \ Request construction owns KDOS heap storage and therefore remains on
+    \ the owner core just like ATOOLG-NEW.  Reject before guarded preparation
+    \ can reach CBR-NEW or any other allocator-backed path.
+    COREID IF 2DROP 2DROP DROP CBUS-S-INVALID EXIT THEN
+    >R 0 0 R> _ATOOLG-CALL-PREP-GUARDED _ATOOLG-CALL-POST ;
+
 : ATOOLG-CALL-WITH-ID
   ( id-a id-u args run-id call-a call-u gateway -- status )
-    _ATGCI-G ! _ATGCI-U ! _ATGCI-A !
-    _ATGCI-G @ ATOOLG-CALL DUP _ATGCI-STATUS !
-    IF _ATGCI-STATUS @ EXIT THEN
-    _ATGCI-U @ 0= IF CBUS-S-OK EXIT THEN
-    SHA3-256-BEGIN
-    _ATGCI-G @ ATOOLG.RUN-ID 8 SHA3-256-ADD
-    _ATGCI-A @ _ATGCI-U @ SHA3-256-ADD
-    _ATGCI-G @ ATOOLG.NAME DUP CV-DATA@ SWAP CV-LEN@
-        SHA3-256-ADD
-    _ATGCI-G @ ATOOLG.REQUEST @ CBR.INVOCATION-ID SHA3-256-END
-    \ A scoped automatic read grant was sealed against the provisional
-    \ invocation identity in ATOOLG-CALL.  Replace it before the owner can
-    \ pump the queued request now that the provider call ID is folded in.
-    _ATGCI-G @ ATOOLG.REQUEST @ CBR.HANDLE IH-VALID? IF
-        _ATGCI-G @ ATOOLG.REQUEST @ CBR.HANDLE
-            _ATGCI-G @ ATOOLG.BUS @ CBUS.AUTHORITY @ AHT-REVOKE DROP
-        _ATGCI-G @ ATOOLG.REQUEST @ CBR.HANDLE IH-INIT
-        AGR-F-MANDATE-AUTO
-        CFENTRY-F-INVOKE CFENTRY-F-AUTO-OBSERVE OR
-        _ATGCI-G @ _ATOOLG-ISSUE-GRANT DUP IF
-            _ATGCI-G @ ATOOLG.REQUEST @ CBR-CANCEL EXIT
-        THEN DROP
-    THEN
-    CBUS-S-OK ;
+    COREID IF 2DROP 2DROP 2DROP DROP CBUS-S-INVALID EXIT THEN
+    _ATOOLG-CALL-PREP-GUARDED _ATOOLG-CALL-POST ;
 
 VARIABLE _ATGR-APPROVED
 VARIABLE _ATGR-G
 
 VARIABLE _ATGR-STATUS
 
+0 CONSTANT _ATGR-ACTION-NONE
+1 CONSTANT _ATGR-ACTION-POST
+2 CONSTANT _ATGR-ACTION-DISPATCH
+
 : _ATOOLG-ISSUE-APPROVAL  ( gateway -- status )
     AGR-F-REVIEWED-COMMIT
     CFENTRY-F-INVOKE CFENTRY-F-REVIEW-COMMIT OR ROT
     _ATOOLG-ISSUE-GRANT ;
 
-: ATOOLG-RESOLVE  ( approved gateway -- status )
+: _ATOOLG-RESOLVE-ERROR  ( status -- 0 0 0 0 status )
+    >R 0 0 0 0 R> ;
+
+: _ATOOLG-RESOLVE-PREP
+  ( approved gateway -- gateway action request bus status )
     _ATGR-G ! _ATGR-APPROVED !
     _ATGR-G @ ATOOLG.STATE @ ATOOLG-S-APPROVAL <> IF
-        CBUS-S-INVALID EXIT
+        CBUS-S-INVALID _ATOOLG-RESOLVE-ERROR EXIT
     THEN
     _ATGR-APPROVED @ IF
         \ Review must authorize the exact owned arguments that were shown
         \ when the call was created.  Any mutation, codec drift, or operand
         \ too large for complete review denies, regardless of caller.
         _ATGR-G @ ATOOLG-ARGS-REVIEWABLE? 0= IF
-            CBUS-S-DENIED EXIT
+            CBUS-S-DENIED _ATOOLG-RESOLVE-ERROR EXIT
         THEN
         _ATGR-G @ ATOOLG.BUS @ CBUS.AUTHORITY @ IF
             _ATGR-G @ _ATOOLG-ISSUE-APPROVAL DUP _ATGR-STATUS !
-            IF _ATGR-STATUS @ EXIT THEN
+            IF _ATGR-STATUS @ _ATOOLG-RESOLVE-ERROR EXIT THEN
             ATOOLG-S-QUEUED _ATGR-G @ ATOOLG.STATE !
-            _ATGR-G @ ATOOLG.REQUEST @
-                _ATGR-G @ ATOOLG.BUS @ CBUS-POST
-            DUP IF
-                _ATGR-G @ ATOOLG.REQUEST @ CBR.HANDLE
-                    _ATGR-G @ ATOOLG.BUS @ CBUS.AUTHORITY @
-                    AHT-REVOKE DROP
-                ATOOLG-S-APPROVAL _ATGR-G @ ATOOLG.STATE !
-            THEN
+            1 _ATGR-G @ ATOOLG.REVISION +!
+            _ATGR-G @ _ATGR-ACTION-POST
+                _ATGR-G @ ATOOLG.REQUEST @
+                _ATGR-G @ ATOOLG.BUS @ CBUS-S-OK EXIT
         ELSE
             _ATGR-G @ ATOOLG.REQUEST @ CBR-APPROVE
             ATOOLG-S-QUEUED _ATGR-G @ ATOOLG.STATE !
-            _ATGR-G @ ATOOLG.REQUEST @
-                _ATGR-G @ ATOOLG.BUS @ CBUS-DISPATCH
-            DROP CBUS-S-OK
+            1 _ATGR-G @ ATOOLG.REVISION +!
+            _ATGR-G @ _ATGR-ACTION-DISPATCH
+                _ATGR-G @ ATOOLG.REQUEST @
+                _ATGR-G @ ATOOLG.BUS @ CBUS-S-OK EXIT
         THEN
     ELSE
         CBUS-S-DENIED _ATGR-G @ ATOOLG.REQUEST @ CBR.STATUS !
         MS@ _ATGR-G @ ATOOLG.REQUEST @ CBR.END-MS !
+        _ATGR-G @ _ATOOLG-DISCLOSURE-REFUND-ALL
         ATOOLG-S-COMPLETE _ATGR-G @ ATOOLG.STATE !
-        CBUS-S-OK
+        1 _ATGR-G @ ATOOLG.REVISION +!
+        _ATGR-G @ _ATGR-ACTION-NONE 0 0 CBUS-S-OK EXIT
     THEN
-    1 _ATGR-G @ ATOOLG.REVISION +! ;
+    CBUS-S-FAILED _ATOOLG-RESOLVE-ERROR ;
+
+' _ATOOLG-RESOLVE-PREP CONSTANT _atoolg-resolve-prep-xt
+: _ATOOLG-RESOLVE-PREP-GUARDED
+  ( approved gateway -- gateway action request bus status )
+    _atoolg-resolve-prep-xt _atoolg-state-guard WITH-GUARD ;
+
+: _ATOOLG-RESOLVE-ROLLBACK-BODY  ( gateway status -- status )
+    >R
+    DUP ATOOLG.STATE @ ATOOLG-S-QUEUED = IF
+        DUP _ATOOLG-REVOKE-REQUEST-HANDLE
+        ATOOLG-S-APPROVAL OVER ATOOLG.STATE !
+        1 SWAP ATOOLG.REVISION +!
+    ELSE
+        DROP
+    THEN
+    R> ;
+
+' _ATOOLG-RESOLVE-ROLLBACK-BODY CONSTANT _atoolg-resolve-rollback-xt
+: _ATOOLG-RESOLVE-ROLLBACK  ( gateway status -- status )
+    _atoolg-resolve-rollback-xt _atoolg-state-guard WITH-GUARD ;
+
+: _ATOOLG-CBUS-DISPATCH-CATCH  ( request bus -- status throw-code )
+    ['] CBUS-DISPATCH CATCH DUP IF
+        >R 2DROP CBUS-S-FAILED R>
+    THEN ;
+
+: _ATOOLG-RESOLVE-POST  ( gateway action request bus -- status )
+    _ATOOLG-CBUS-POST-CATCH
+    >R SWAP DROP
+    DUP IF _ATOOLG-RESOLVE-ROLLBACK ELSE NIP THEN
+    R> ?DUP IF NIP THROW THEN ;
+
+: _ATOOLG-RESOLVE-DISPATCH  ( gateway action request bus -- status )
+    _ATOOLG-CBUS-DISPATCH-CATCH
+    >R >R DROP
+    R> DROP CBUS-S-OK
+    R> ?DUP IF
+        >R DROP CBUS-S-FAILED _ATOOLG-RESOLVE-ROLLBACK DROP
+        R> THROW
+    THEN
+    NIP ;
+
+: _ATOOLG-RESOLVE-PUBLISH
+  ( gateway action request bus status -- status )
+    DUP IF >R 2DROP 2DROP R> EXIT THEN DROP
+    2 PICK CASE
+        _ATGR-ACTION-NONE OF 2DROP 2DROP CBUS-S-OK ENDOF
+        _ATGR-ACTION-POST OF _ATOOLG-RESOLVE-POST ENDOF
+        _ATGR-ACTION-DISPATCH OF _ATOOLG-RESOLVE-DISPATCH ENDOF
+        2DROP 2DROP CBUS-S-FAILED SWAP
+    ENDCASE ;
+
+: ATOOLG-RESOLVE  ( approved gateway -- status )
+    _ATOOLG-RESOLVE-PREP-GUARDED _ATOOLG-RESOLVE-PUBLISH ;
 
 : ATOOLG-CANCEL  ( gateway -- status )
     DUP ATOOLG.STATE @ CASE
@@ -660,6 +959,7 @@ VARIABLE _ATGR-STATUS
         ATOOLG-S-APPROVAL OF
             DUP ATOOLG.REQUEST @ DUP CBR-CANCEL
             CBUS-S-CANCELLED SWAP CBR.STATUS !
+            DUP _ATOOLG-DISCLOSURE-REFUND-ALL
             ATOOLG-S-COMPLETE OVER ATOOLG.STATE !
             1 SWAP ATOOLG.REVISION +! CBUS-S-OK
         ENDOF
@@ -670,6 +970,7 @@ VARIABLE _ATGR-STATUS
     DUP ATOOLG.STATE @ DUP ATOOLG-S-QUEUED =
     SWAP ATOOLG-S-APPROVAL = OR IF DROP CBUS-S-BUSY EXIT THEN
     DUP _ATOOLG-REVOKE-REQUEST-HANDLE
+    DUP _ATOOLG-DISCLOSURE-REFUND-ALL
     DUP ATOOLG.REQUEST @ ?DUP IF CBR-FREE THEN
     0 OVER ATOOLG.REQUEST !
     DUP ATOOLG.NAME CV-FREE
@@ -677,3 +978,19 @@ VARIABLE _ATGR-STATUS
     ATOOLG-S-IDLE OVER ATOOLG.STATE !
     0 OVER ATOOLG.RUN-ID !
     1 SWAP ATOOLG.REVISION +! CBUS-S-OK ;
+
+\ Lifecycle cleanup owns the same state/refund domain as preparation and
+\ completion.  FREE may release the last retained AMRUN, but the guard itself
+\ is module-owned, so WITH-GUARD never dereferences the freed gateway.
+' ATOOLG-FREE CONSTANT _atoolg-free-xt
+' ATOOLG-CANCEL CONSTANT _atoolg-cancel-xt
+' ATOOLG-CLEAR CONSTANT _atoolg-clear-xt
+
+: ATOOLG-FREE  ( gateway -- )
+    _atoolg-free-xt _atoolg-state-guard WITH-GUARD ;
+
+: ATOOLG-CANCEL  ( gateway -- status )
+    _atoolg-cancel-xt _atoolg-state-guard WITH-GUARD ;
+
+: ATOOLG-CLEAR  ( gateway -- status )
+    _atoolg-clear-xt _atoolg-state-guard WITH-GUARD ;
