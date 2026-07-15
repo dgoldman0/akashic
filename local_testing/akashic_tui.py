@@ -1822,6 +1822,66 @@ _tt-run
         failure_markers=("TLS TRUST THROW FAIL",),
         include_large_sample=False,
     ),
+    "atproto-public-trust": Profile(
+        roots=("atproto/public-trust.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - scoped public Bluesky trust contract
+ENTER-USERLAND
+." [akashic] loading public Bluesky trust contract" CR
+REQUIRE atproto/public-trust.f
+
+VARIABLE _apt-fails
+VARIABLE _apt-checks
+VARIABLE _apt-depth
+: _apt-assert  ( flag -- )
+    1 _apt-checks +!
+    0= IF 1 _apt-fails +! ." ASSERT " _apt-checks @ . CR THEN ;
+: _apt-stack  ( -- ) DEPTH _apt-depth @ = _apt-assert ;
+
+: _apt-run  ( -- )
+    0 _apt-fails ! 0 _apt-checks ! DEPTH _apt-depth !
+    TLS-TRUST-RESET
+    _APTR-DECODE-YR1 MTRUST-S-OK = _apt-assert
+    _APTR-DECODE-YR2 MTRUST-S-OK = _apt-assert
+    _APTR-YR1 C@ 48 = _apt-assert
+    _APTR-YR2 C@ 48 = _apt-assert
+    _APTR-YR1 _APTR-YR1-SIZE _APTR-YR2 _APTR-YR2-SIZE COMPARE 0<> _apt-assert
+    ATPUBLIC-TRUST-REGISTER MTRUST-S-OK = _apt-assert
+    ATPUBLIC-TRUST-REGISTER MTRUST-S-OK = _apt-assert
+    TLS-TRUST-COUNT @ 0= _apt-assert
+    MTRUST-FREEZE MTRUST-S-OK = _apt-assert
+    MTRUST-FROZEN? _apt-assert
+    MTRUST-COUNT@ 2 = _apt-assert
+    TLS-TRUST-COUNT @ 2 = _apt-assert
+    TLS-TRUST-VERSION @ 1 = _apt-assert
+    TLS-TRUST-GENERATION @ 0<> _apt-assert
+    S" public.api.bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _apt-assert
+    S" PUBLIC.API.BSKY.APP" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _apt-assert
+    S" bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
+    S" api.bsky.app" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
+    S" evil.public.api.bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
+    S" public.api.bsky.app.evil" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
+    0 TLS-TRUST@ TTA-FLAGS + @ 0= _apt-assert
+    1 TLS-TRUST@ TTA-FLAGS + @ 0= _apt-assert
+    0 TLS-TRUST@ TTA-DESC + XC.PUB-ALGO + @ X509-ALG-RSA2048 = _apt-assert
+    1 TLS-TRUST@ TTA-DESC + XC.PUB-ALGO + @ X509-ALG-RSA2048 = _apt-assert
+    0 TLS-TRUST@ TTA-DESC + XC.FLAGS + @ XCF-CA AND 0<> _apt-assert
+    1 TLS-TRUST@ TTA-DESC + XC.FLAGS + @ XCF-CA AND 0<> _apt-assert
+    ATPUBLIC-TRUST-REGISTER MTRUST-S-FROZEN = _apt-assert
+    _apt-stack
+    _apt-fails @ 0= IF
+        ." ATPROTO PUBLIC TRUST PASS " _apt-checks @ .
+    ELSE
+        ." ATPROTO PUBLIC TRUST FAIL " _apt-fails @ . ."  / " _apt-checks @ .
+    THEN CR ;
+
+_apt-run
+""",
+        ready_markers=("ATPROTO PUBLIC TRUST PASS",),
+        stable_markers=("ATPROTO PUBLIC TRUST PASS",),
+        failure_markers=("ATPROTO PUBLIC TRUST FAIL",),
+        include_large_sample=False,
+    ),
     "http-buffered": Profile(
         roots=("net/http-buffered.f",),
         resources=(),

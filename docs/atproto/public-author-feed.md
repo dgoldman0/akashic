@@ -25,6 +25,22 @@ actor syntax before applying RFC 3986 unreserved-byte rules. Actor storage is
 2048 bytes, the encoded path is 7168 bytes, the complete request is 8192
 bytes, and the transient response body is capped at 256 KiB.
 
+## Trust contribution
+
+`akashic/atproto/public-trust.f` provides the reviewed native-TLS trust needed
+by this endpoint. Trusted boot code calls `ATPUBLIC-TRUST-REGISTER` before Desk
+freezes the machine trust registry. The contribution contains Let's Encrypt's
+active RSA-2048 YR1 and YR2 intermediates, sourced from its
+[certificate inventory](https://letsencrypt.org/certificates/), and gives each
+one the exact DNS scope `public.api.bsky.app` with subdomain matching disabled.
+It grants no trust to `bsky.app`, other AT Protocol hosts, or future providers.
+
+Both intermediates are present so ordinary YR1/YR2 leaf rotation does not
+require changing the machine image. Their validity ends on 2028-09-02; a later
+release must review and replace the contribution rather than downloading or
+expanding trust at runtime. Registration is explicit and idempotent. Provider
+construction does not register an anchor or mutate KDOS trust by itself.
+
 ## Lifecycle and XIO boundary
 
 Allocate `PUBLIC-AUTHOR-FEED-SIZE` bytes, call `PAF-INIT`, then call
@@ -63,7 +79,8 @@ the production adapter currently fails this provider's cooperative-port gate
 as unsupported. The deterministic profile replaces only the embedded NIO
 callbacks with a partial-I/O fixture to qualify request bytes, parser
 admission, cancellation, and cleanup. That fixture is not evidence of live
-DNS, TLS readiness, or trust registration for `public.api.bsky.app`.
+DNS or TLS readiness. The separate `atproto-public-trust` profile validates
+the anchor bytes, exact scopes, parser admission, and registry freeze contract.
 
 Run the focused contract with:
 
