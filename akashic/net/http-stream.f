@@ -765,6 +765,46 @@ VARIABLE _HSH-VU
     REPEAT
     0 0 0 ;
 
+VARIABLE _HSHC-P
+VARIABLE _HSHC-NA
+VARIABLE _HSHC-NU
+VARIABLE _HSHC-END
+VARIABLE _HSHC-PTR
+VARIABLE _HSHC-LEND
+VARIABLE _HSHC-U
+VARIABLE _HSHC-COLON
+VARIABLE _HSHC-N
+
+: HSTR-HEADER-COUNT  ( name-a name-u parser -- count )
+    _HSHC-P ! _HSHC-NU ! _HSHC-NA ! 0 _HSHC-N !
+    _HSHC-P @ HSTR.HEADER-U @ 0= IF 0 EXIT THEN
+    _HSHC-P @ HSTR.HEADER-BUF DUP
+    _HSHC-P @ HSTR.HEADER-U @ + _HSHC-END !
+    _HSHC-END @ _HSTR-FIND-CRLF DUP 0= IF DROP 0 EXIT THEN
+    2 + _HSHC-PTR !
+    BEGIN _HSHC-PTR @ 2 + _HSHC-END @ <= WHILE
+        _HSHC-PTR @ C@ 13 = _HSHC-PTR @ 1+ C@ 10 = AND IF
+            _HSHC-END @ _HSHC-PTR !
+        ELSE
+            _HSHC-PTR @ _HSHC-END @ _HSTR-FIND-CRLF DUP 0= IF
+                DROP _HSHC-N @ EXIT
+            THEN
+            DUP _HSHC-LEND ! _HSHC-PTR @ - _HSHC-U !
+            -1 _HSHC-COLON !
+            _HSHC-U @ 0 ?DO
+                _HSHC-COLON @ 0< IF
+                    _HSHC-PTR @ I + C@ 58 = IF I _HSHC-COLON ! THEN
+                THEN
+            LOOP
+            _HSHC-COLON @ 0> IF
+                _HSHC-PTR @ _HSHC-COLON @ _HSHC-NA @ _HSHC-NU @
+                _HSTR-CIEQ? IF 1 _HSHC-N +! THEN
+            THEN
+            _HSHC-LEND @ 2 + _HSHC-PTR !
+        THEN
+    REPEAT
+    _HSHC-N @ ;
+
 0 CONSTANT HSTR-PUMP-IDLE
 1 CONSTANT HSTR-PUMP-PROGRESS
 2 CONSTANT HSTR-PUMP-DONE

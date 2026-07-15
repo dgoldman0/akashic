@@ -840,6 +840,1120 @@ _ap-run
         stable_markers=("AGENT PERSISTENCE PASS",),
         failure_markers=("AGENT PERSISTENCE FAIL",),
     ),
+    "io-port": Profile(
+        roots=("net/io-port.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - cooperative byte-stream open contracts
+ENTER-USERLAND
+." [akashic] loading I/O port" CR
+REQUIRE net/io-port.f
+
+VARIABLE _np-fails
+VARIABLE _np-checks
+VARIABLE _np-depth
+: _np-assert  ( flag -- )
+    1 _np-checks +!
+    0= IF 1 _np-fails +! ." ASSERT " _np-checks @ . CR THEN ;
+: _np-stack  ( -- )
+    DEPTH DUP _np-depth @ <> IF
+        ." STACK " _np-depth @ . ."  -> " DUP . CR .S CR
+    THEN
+    _np-depth @ = _np-assert ;
+
+CREATE _np-port NET-IO-PORT-SIZE ALLOT
+CREATE _np-port-b NET-IO-PORT-SIZE ALLOT
+CREATE _np-buffer 16 ALLOT
+VARIABLE _np-mode
+VARIABLE _np-opens
+VARIABLE _np-starts
+VARIABLE _np-polls
+VARIABLE _np-service-polls
+VARIABLE _np-cancels
+VARIABLE _np-closes
+VARIABLE _np-sends
+VARIABLE _np-recvs
+VARIABLE _np-io-limit
+VARIABLE _np-nested-a
+VARIABLE _np-nested-b
+
+: _np-open  ( context -- io-status )
+    DROP 1 _np-opens +!
+    _np-mode @ 1 = IF NIO-S-FAILED EXIT THEN
+    _np-mode @ 2 = IF -711 THROW THEN
+    _np-mode @ 11 = IF NIO-S-EOF EXIT THEN
+    _np-mode @ 12 = IF 99 EXIT THEN
+    NIO-S-OK ;
+
+: _np-start  ( context -- io-status )
+    DROP 1 _np-starts +!
+    _np-mode @ 3 = IF NIO-S-OK EXIT THEN
+    _np-mode @ 4 = IF NIO-S-CANCELLED EXIT THEN
+    _np-mode @ 5 = IF -712 THROW THEN
+    _np-mode @ 6 = IF NIO-S-EOF EXIT THEN
+    NIO-S-PENDING ;
+
+: _np-poll  ( context -- io-status )
+    DROP 1 _np-polls +!
+    _np-mode @ 7 = IF NIO-S-FAILED EXIT THEN
+    _np-mode @ 8 = IF -713 THROW THEN
+    _np-mode @ 12 = IF 99 EXIT THEN
+    _np-polls @ 2 >= IF NIO-S-OK ELSE NIO-S-PENDING THEN ;
+
+: _np-service-poll  ( context -- )
+    DROP 1 _np-service-polls +!
+    _np-mode @ 40 = IF -716 THROW THEN ;
+
+: _np-cancel  ( context -- )
+    DROP 1 _np-cancels +!
+    _np-mode @ DUP 9 = SWAP 41 = OR IF -714 THROW THEN ;
+
+: _np-close  ( context -- )
+    DROP 1 _np-closes +!
+    _np-mode @ DUP 10 = SWAP 41 = OR IF -715 THROW THEN ;
+
+: _np-send  ( buffer length context -- count io-status )
+    DROP _np-io-limit ! DROP 1 _np-sends +!
+    _np-mode @ 20 = IF -1 NIO-S-OK EXIT THEN
+    _np-mode @ 21 = IF _np-io-limit @ 1+ NIO-S-OK EXIT THEN
+    _np-mode @ 22 = IF 1 NIO-S-FAILED EXIT THEN
+    _np-mode @ 23 = IF 0 NIO-S-EOF EXIT THEN
+    _np-mode @ 24 = IF 0 NIO-S-PENDING EXIT THEN
+    _np-mode @ 25 = IF -717 THROW THEN
+    _np-io-limit @ NIO-S-OK ;
+
+: _np-recv  ( buffer capacity context -- count io-status )
+    DROP _np-io-limit ! DROP 1 _np-recvs +!
+    _np-mode @ 30 = IF -1 NIO-S-OK EXIT THEN
+    _np-mode @ 31 = IF _np-io-limit @ 1+ NIO-S-OK EXIT THEN
+    _np-mode @ 32 = IF 1 NIO-S-EOF EXIT THEN
+    _np-mode @ 33 = IF 0 NIO-S-PENDING EXIT THEN
+    _np-mode @ 34 = IF 0 NIO-S-EOF EXIT THEN
+    _np-mode @ 35 = IF -718 THROW THEN
+    _np-io-limit @ NIO-S-OK ;
+
+: _np-nested-cancel-b  ( context -- )
+    DROP 1 _np-nested-b +! ;
+: _np-nested-cancel-a  ( context -- )
+    DROP 1 _np-nested-a +! _np-port-b NIO-CANCEL DROP ;
+: _np-nested-close-b  ( context -- )
+    DROP 1 _np-nested-b +! ;
+: _np-nested-close-a  ( context -- )
+    DROP 1 _np-nested-a +! _np-port-b NIO-CLOSE-STATUS DROP ;
+
+: _np-reset  ( -- )
+    _np-port NIO-INIT
+    0 _np-mode ! 0 _np-opens ! 0 _np-starts ! 0 _np-polls !
+    0 _np-service-polls ! 0 _np-cancels ! 0 _np-closes !
+    0 _np-sends ! 0 _np-recvs ! 0 _np-nested-a ! 0 _np-nested-b !
+    _np-port _np-port NIO.CONTEXT !
+    ['] _np-open _np-port NIO.OPEN-XT !
+    ['] _np-start _np-port NIO.OPEN-START-XT !
+    ['] _np-poll _np-port NIO.OPEN-POLL-XT !
+    ['] _np-service-poll _np-port NIO.POLL-XT !
+    ['] _np-cancel _np-port NIO.CANCEL-XT !
+    ['] _np-close _np-port NIO.CLOSE-XT !
+    ['] _np-send _np-port NIO.SEND-XT !
+    ['] _np-recv _np-port NIO.RECV-XT ! ;
+
+: _np-test-legacy  ( -- )
+    _np-reset
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-CLOSED = _np-assert
+    _np-port NIO-OPEN NIO-S-OK = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-OPEN = _np-assert
+    _np-port NIO.OPEN-STATUS @ NIO-S-OK = _np-assert
+    _np-opens @ 1 = _np-assert
+    _np-port NIO-CLOSE-STATUS NIO-S-OK = _np-assert
+    _np-closes @ 1 = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-CLOSED = _np-assert
+    _np-port NIO-CLOSE
+    _np-closes @ 1 = _np-assert
+
+    _np-reset 1 _np-mode !
+    _np-port NIO-OPEN NIO-S-FAILED = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
+    _np-reset 2 _np-mode !
+    _np-port NIO-OPEN NIO-S-FAILED = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
+    _np-reset 11 _np-mode !
+    _np-port NIO-OPEN NIO-S-FAILED = _np-assert
+    _np-port NIO.OPEN-STATUS @ NIO-S-FAILED = _np-assert
+    _np-reset 12 _np-mode !
+    _np-port NIO-OPEN NIO-S-FAILED = _np-assert ;
+
+: _np-test-async  ( -- )
+    _np-reset
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-starts @ 1 = _np-assert _np-polls @ 0= _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-OPENING = _np-assert
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-starts @ 1 = _np-assert
+    _np-port NIO-OPEN-POLL NIO-S-PENDING = _np-assert
+    _np-polls @ 1 = _np-assert
+    _np-port NIO-OPEN-POLL NIO-S-OK = _np-assert
+    _np-polls @ 2 = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-OPEN = _np-assert
+    _np-port NIO-OPEN-POLL NIO-S-OK = _np-assert
+    _np-polls @ 2 = _np-assert
+
+    _np-reset 3 _np-mode !
+    _np-port NIO-OPEN-START NIO-S-OK = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-OPEN = _np-assert
+    _np-reset 4 _np-mode !
+    _np-port NIO-OPEN-START NIO-S-CANCELLED = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-CANCELLED = _np-assert
+    _np-cancels @ 0= _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-cancels @ 1 = _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-cancels @ 1 = _np-assert
+    _np-reset 5 _np-mode !
+    _np-port NIO-OPEN-START NIO-S-FAILED = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
+    _np-reset 6 _np-mode !
+    _np-port NIO-OPEN-START NIO-S-FAILED = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
+
+    _np-reset 7 _np-mode !
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-port NIO-OPEN-POLL NIO-S-FAILED = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
+    _np-reset 8 _np-mode !
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-port NIO-OPEN-POLL NIO-S-FAILED = _np-assert
+
+    _np-reset 12 _np-mode !
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-port NIO-OPEN-POLL NIO-S-FAILED = _np-assert
+    _np-port NIO.OPEN-STATUS @ NIO-S-FAILED = _np-assert
+
+    _np-reset 0 _np-port NIO.OPEN-POLL-XT !
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-port NIO-OPEN-POLL NIO-S-FAILED = _np-assert ;
+
+: _np-test-fallback-and-cancel  ( -- )
+    _np-reset 0 _np-port NIO.OPEN-START-XT !
+    _np-port NIO-OPEN-START NIO-S-OK = _np-assert
+    _np-opens @ 1 = _np-assert
+
+    _np-reset
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-cancels @ 1 = _np-assert _np-closes @ 0= _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-CANCELLED = _np-assert
+    _np-port NIO.CLEANUP-FLAGS @ NIO-CLEANUP-F-CANCEL-ATTEMPTED AND
+    0<> _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-cancels @ 1 = _np-assert
+
+    _np-reset 0 _np-port NIO.CANCEL-XT !
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-closes @ 1 = _np-assert
+    _np-port NIO-CLOSE-STATUS NIO-S-OK = _np-assert
+    _np-closes @ 1 = _np-assert
+
+    _np-reset 9 _np-mode !
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
+    _np-cancels @ 1 = _np-assert _np-closes @ 1 = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
+    _np-port NIO.CANCEL-ERROR @ -714 = _np-assert
+    _np-port NIO.CLOSE-ERROR @ 0= _np-assert
+    _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
+    _np-cancels @ 1 = _np-assert _np-closes @ 1 = _np-assert
+    _np-port NIO-OPEN-START NIO-S-FAILED = _np-assert
+    _np-starts @ 1 = _np-assert
+    _np-port NIO-OPEN NIO-S-FAILED = _np-assert
+    _np-opens @ 0= _np-assert
+    _np-port NIO.CANCEL-ERROR @ -714 = _np-assert
+
+    _np-reset 10 _np-mode !
+    _np-port NIO-CLOSE-STATUS NIO-S-FAILED = _np-assert
+    _np-closes @ 1 = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
+    _np-port NIO.OPEN-STATUS @ NIO-S-FAILED = _np-assert
+    _np-port NIO.CLOSE-ERROR @ -715 = _np-assert
+    _np-port NIO-CLOSE-STATUS NIO-S-FAILED = _np-assert
+    _np-port NIO-CLOSE
+    _np-closes @ 1 = _np-assert
+    _np-port NIO-OPEN-START NIO-S-FAILED = _np-assert
+    _np-starts @ 0= _np-assert
+    _np-port NIO.CLOSE-ERROR @ -715 = _np-assert
+
+    _np-reset 10 _np-mode ! 0 _np-port NIO.CANCEL-XT !
+    _np-port NIO-OPEN-START DROP
+    _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
+    _np-closes @ 1 = _np-assert
+    _np-port NIO.CLOSE-ERROR @ -715 = _np-assert
+    _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
+    _np-closes @ 1 = _np-assert
+
+    _np-reset 41 _np-mode !
+    _np-port NIO-OPEN-START DROP
+    _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
+    _np-port NIO.CANCEL-ERROR @ -714 = _np-assert
+    _np-port NIO.CLOSE-ERROR @ -715 = _np-assert
+    _np-cancels @ 1 = _np-assert _np-closes @ 1 = _np-assert
+    _np-port NIO-OPEN-START NIO-S-FAILED = _np-assert
+    _np-starts @ 1 = _np-assert
+
+    _np-reset
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-starts @ 1 = _np-assert ;
+
+: _np-io-failed?  ( count io-status -- flag )
+    NIO-S-FAILED = SWAP 0= AND ;
+
+: _np-test-io-normalization  ( -- )
+    _np-reset
+    _np-buffer 8 _np-port NIO-SEND
+    NIO-S-OK = SWAP 8 = AND _np-assert
+    _np-buffer 8 _np-port NIO-RECV
+    NIO-S-OK = SWAP 8 = AND _np-assert
+
+    25 20 DO
+        _np-reset I _np-mode !
+        _np-buffer 8 _np-port NIO-SEND _np-io-failed? _np-assert
+        _np-sends @ 1 = _np-assert
+    LOOP
+    34 30 DO
+        _np-reset I _np-mode !
+        _np-buffer 8 _np-port NIO-RECV _np-io-failed? _np-assert
+        _np-recvs @ 1 = _np-assert
+    LOOP
+    _np-reset 34 _np-mode !
+    _np-buffer 8 _np-port NIO-RECV
+    NIO-S-EOF = SWAP 0= AND _np-assert
+    _np-reset 35 _np-mode !
+    _np-buffer 8 _np-port NIO-RECV _np-io-failed? _np-assert
+    _np-reset 25 _np-mode !
+    _np-buffer 8 _np-port NIO-SEND _np-io-failed? _np-assert
+
+    _np-reset
+    _np-buffer -1 _np-port NIO-SEND _np-io-failed? _np-assert
+    _np-sends @ 0= _np-assert
+    0 1 _np-port NIO-SEND _np-io-failed? _np-assert
+    _np-sends @ 0= _np-assert
+    _np-buffer -1 _np-port NIO-RECV _np-io-failed? _np-assert
+    _np-recvs @ 0= _np-assert
+    0 1 _np-port NIO-RECV _np-io-failed? _np-assert
+    _np-recvs @ 0= _np-assert ;
+
+: _np-test-poll-fault  ( -- )
+    _np-reset 40 _np-mode !
+    _np-port NIO-POLL
+    _np-service-polls @ 1 = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
+    _np-port NIO.OPEN-STATUS @ NIO-S-FAILED = _np-assert ;
+
+: _np-test-reentrant-cleanup  ( -- )
+    _np-reset
+    _np-port-b NIO-INIT
+    _np-port-b _np-port-b NIO.CONTEXT !
+    ['] _np-nested-cancel-a _np-port NIO.CANCEL-XT !
+    ['] _np-nested-cancel-b _np-port-b NIO.CANCEL-XT !
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-nested-a @ 1 = _np-assert _np-nested-b @ 1 = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-CANCELLED = _np-assert
+    _np-port-b NIO.OPEN-STATE @ NIO-OPEN-STATE-CANCELLED = _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-port-b NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-nested-a @ 1 = _np-assert _np-nested-b @ 1 = _np-assert
+
+    _np-reset
+    _np-port-b NIO-INIT
+    _np-port-b _np-port-b NIO.CONTEXT !
+    ['] _np-nested-close-a _np-port NIO.CLOSE-XT !
+    ['] _np-nested-close-b _np-port-b NIO.CLOSE-XT !
+    _np-port NIO-CLOSE-STATUS NIO-S-OK = _np-assert
+    _np-nested-a @ 1 = _np-assert _np-nested-b @ 1 = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-CLOSED = _np-assert
+    _np-port-b NIO.OPEN-STATE @ NIO-OPEN-STATE-CLOSED = _np-assert
+    _np-port NIO-CLOSE-STATUS NIO-S-OK = _np-assert
+    _np-port-b NIO-CLOSE-STATUS NIO-S-OK = _np-assert
+    _np-nested-a @ 1 = _np-assert _np-nested-b @ 1 = _np-assert ;
+
+: _np-run  ( -- )
+    0 _np-fails ! 0 _np-checks ! DEPTH _np-depth !
+    _np-test-legacy
+    _np-test-async
+    _np-test-fallback-and-cancel
+    _np-test-io-normalization
+    _np-test-poll-fault
+    _np-test-reentrant-cleanup
+    _np-stack
+    _np-fails @ 0= IF
+        ." IO PORT PASS " _np-checks @ .
+    ELSE
+        ." IO PORT FAIL " _np-fails @ . ."  / " _np-checks @ .
+    THEN CR ;
+
+_np-run
+""",
+        ready_markers=("IO PORT PASS",),
+        stable_markers=("IO PORT PASS",),
+        failure_markers=("IO PORT FAIL",),
+    ),
+    "external-io": Profile(
+        roots=("net/external-io.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - owner-pumped external I/O service contracts
+ENTER-USERLAND
+." [akashic] loading external I/O service" CR
+REQUIRE net/external-io.f
+
+VARIABLE _xi-fails
+VARIABLE _xi-checks
+VARIABLE _xi-depth
+: _xi-assert  ( flag -- )
+    1 _xi-checks +!
+    0= IF 1 _xi-fails +! ." ASSERT " _xi-checks @ . CR THEN ;
+: _xi-stack  ( -- )
+    DEPTH DUP _xi-depth @ <> IF
+        ." STACK " _xi-depth @ . ."  -> " DUP . CR .S CR
+    THEN
+    _xi-depth @ = _xi-assert ;
+
+CREATE _xi-service XIO-SERVICE-SIZE ALLOT
+CREATE _xi-service-b XIO-SERVICE-SIZE ALLOT
+CREATE _xi-op-a XIO-OP-SIZE ALLOT
+CREATE _xi-op-b XIO-OP-SIZE ALLOT
+VARIABLE _xi-mode
+VARIABLE _xi-starts
+VARIABLE _xi-polls
+VARIABLE _xi-cancels
+VARIABLE _xi-wipes
+VARIABLE _xi-cb-op
+VARIABLE _xi-config-deadline
+VARIABLE _xi-config-op
+
+: _xi-start  ( operation context -- step-status )
+    DROP _xi-cb-op ! 1 _xi-starts +!
+    _xi-mode @ 1 = IF -777 THROW THEN
+    _xi-mode @ 2 = IF
+        -91 _xi-cb-op @ XIOO.ERROR ! XIO-STEP-FAILED EXIT
+    THEN
+    _xi-mode @ 3 = IF
+        MS@ _xi-cb-op @ XIOO.DEADLINE-MS !
+        XIO-STEP-PENDING EXIT
+    THEN
+    _xi-mode @ 4 = IF 99 EXIT THEN
+    _xi-mode @ 5 = IF
+        -1 _xi-cb-op @ XIOO.CANCEL-REQUESTED !
+    THEN
+    XIO-STEP-PENDING ;
+
+: _xi-poll  ( operation context -- step-status )
+    DROP _xi-cb-op ! 1 _xi-polls +!
+    _xi-polls @ 2 >= IF
+        42 _xi-cb-op @ XIOO.RESULT ! XIO-STEP-SUCCEEDED
+    ELSE
+        XIO-STEP-PENDING
+    THEN ;
+
+: _xi-cancel  ( operation context -- )
+    2DROP 1 _xi-cancels +!
+    _xi-mode @ 6 = IF -778 THROW THEN ;
+
+: _xi-wipe  ( operation context -- )
+    2DROP 1 _xi-wipes +!
+    _xi-mode @ 7 = IF -779 THROW THEN ;
+
+: _xi-counts-clear  ( -- )
+    0 _xi-starts ! 0 _xi-polls ! 0 _xi-cancels ! 0 _xi-wipes ! ;
+
+: _xi-config  ( deadline operation -- status )
+    _xi-config-op ! _xi-config-deadline !
+    _xi-service 101 7 1 _xi-config-deadline @ 0
+    ['] _xi-start ['] _xi-poll ['] _xi-cancel ['] _xi-wipe
+    _xi-config-op @ XIO-OP-CONFIGURE ;
+
+: _xi-fresh  ( -- )
+    _xi-service XIO-SERVICE-INIT XIO-S-OK = _xi-assert
+    _xi-op-a XIO-OP-INIT _xi-op-b XIO-OP-INIT
+    0 _xi-mode ! _xi-counts-clear ;
+
+: _xi-test-progress  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    0 _xi-op-b _xi-config XIO-S-OK = _xi-assert
+    101 7 1 _xi-op-a XIO-OP-MATCH? _xi-assert
+    101 7 2 _xi-op-a XIO-OP-MATCH? 0= _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-ACTIVE? _xi-assert
+    _xi-starts @ 0= _xi-assert
+
+    _xi-service XIO-TICK
+    _xi-starts @ 1 = _xi-assert _xi-polls @ 0= _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-service XIO-TICK
+    _xi-polls @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-service XIO-TICK
+    _xi-polls @ 2 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-cancels @ 0= _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-SERVICE-FINI XIO-S-BUSY = _xi-assert
+    _xi-service _xi-op-b XIO-SUBMIT XIO-S-BUSY = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-busy-cancel  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    0 _xi-op-b _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-b XIO-SUBMIT XIO-S-BUSY = _xi-assert
+    _xi-op-b XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-b XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-b XIO-CANCEL XIO-S-OK = _xi-assert ;
+
+: _xi-test-deadlines  ( -- )
+    _xi-fresh
+    MS@ _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-starts @ 0= _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-TIMED-OUT = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-DEADLINE = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+
+    _xi-fresh 3 _xi-mode !
+    MS@ 100000 + _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-starts @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-TIMED-OUT = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-DEADLINE = _xi-assert ;
+
+: _xi-test-failures  ( -- )
+    _xi-fresh 1 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ -777 = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+
+    _xi-fresh 2 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ -91 = _xi-assert
+
+    _xi-fresh 4 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-STEP = _xi-assert
+
+    _xi-fresh 5 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-cleanup-faults  ( -- )
+    _xi-fresh 6 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-CALLBACK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -778 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+
+    _xi-fresh 7 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-CALLBACK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -779 = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+
+    _xi-fresh 7 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-CALLBACK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ -779 = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -779 = _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-invalid  ( -- )
+    _xi-fresh
+    _xi-service 0 7 1 0 0
+    ['] _xi-start ['] _xi-poll ['] _xi-cancel ['] _xi-wipe
+    _xi-op-a XIO-OP-CONFIGURE XIO-S-INVALID = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-INVALID = _xi-assert
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-STATE = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert ;
+
+: _xi-test-terminal-reset-busy  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
+    0 _xi-op-b _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-b XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-BUSY = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-service _xi-op-b XIO-CANCEL XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert ;
+
+: _xi-test-machine-owner  ( -- )
+    _xi-fresh
+    _xi-service-b XIO-SERVICE-INIT XIO-S-BUSY = _xi-assert
+    _xi-service XIO-SERVICE-BOUND? _xi-assert
+    _xi-service-b XIO-SERVICE-BOUND? 0= _xi-assert
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-SERVICE-FINI XIO-S-BUSY = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-service XIO-SERVICE-FINI XIO-S-OK = _xi-assert
+    _xi-service-b XIO-SERVICE-INIT XIO-S-OK = _xi-assert
+    _xi-service-b XIO-SERVICE-FINI XIO-S-OK = _xi-assert
+    _xi-service XIO-SERVICE-INIT XIO-S-OK = _xi-assert ;
+
+: _xi-run  ( -- )
+    0 _xi-fails ! 0 _xi-checks ! DEPTH _xi-depth !
+    _xi-test-progress
+    _xi-test-busy-cancel
+    _xi-test-deadlines
+    _xi-test-failures
+    _xi-test-cleanup-faults
+    _xi-test-invalid
+    _xi-test-terminal-reset-busy
+    _xi-test-machine-owner
+    _xi-stack
+    _xi-fails @ 0= IF
+        ." EXTERNAL IO PASS " _xi-checks @ .
+    ELSE
+        ." EXTERNAL IO FAIL " _xi-fails @ . ."  / " _xi-checks @ .
+    THEN CR ;
+
+_xi-run
+""",
+        ready_markers=("EXTERNAL IO PASS",),
+        stable_markers=("EXTERNAL IO PASS",),
+        failure_markers=("EXTERNAL IO FAIL",),
+    ),
+    "desk-external-io": Profile(
+        roots=("tui/applets/desk/desk.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - Desk-owned external I/O lifecycle contracts
+ENTER-USERLAND
+." [akashic] loading Desk external I/O contracts" CR
+REQUIRE tui/applets/desk/desk.f
+
+VARIABLE _dx-fails
+VARIABLE _dx-checks
+VARIABLE _dx-depth
+: _dx-assert  ( flag -- )
+    1 _dx-checks +!
+    0= IF 1 _dx-fails +! ." ASSERT " _dx-checks @ . CR THEN ;
+: _dx-stack  ( -- )
+    DEPTH DUP _dx-depth @ <> IF
+        ." STACK " _dx-depth @ . ."  -> " DUP . CR .S CR
+    THEN
+    _dx-depth @ = _dx-assert ;
+
+CREATE _dx-child-comp COMP-DESC ALLOT
+CREATE _dx-child-app APP-DESC ALLOT
+CREATE _dx-slot _SLOT-SZ ALLOT
+CREATE _dx-op XIO-OP-SIZE ALLOT
+CREATE _dx-other-service XIO-SERVICE-SIZE ALLOT
+VARIABLE _dx-desk
+VARIABLE _dx-child
+VARIABLE _dx-service
+VARIABLE _dx-mode
+VARIABLE _dx-request-generation
+VARIABLE _dx-expected-status
+VARIABLE _dx-starts
+VARIABLE _dx-polls
+VARIABLE _dx-cancels
+VARIABLE _dx-wipes
+VARIABLE _dx-child-ticks
+
+: _dx-child-tick  ( instance -- )
+    DROP 1 _dx-child-ticks +! ;
+
+: _dx-descriptors  ( -- )
+    _dx-child-comp COMP-DESC-INIT
+    S" org.akashic.testing.external-child"
+        _dx-child-comp COMP.ID-U ! _dx-child-comp COMP.ID-A !
+    S" 1.0.0"
+        _dx-child-comp COMP.VERSION-U ! _dx-child-comp COMP.VERSION-A !
+    _dx-child-app APP-DESC-INIT
+    _dx-child-comp _dx-child-app APP.COMP-DESC !
+    ['] _dx-child-tick _dx-child-app APP.TICK-XT ! ;
+
+: _dx-start  ( operation context -- step-status )
+    DROP DROP 1 _dx-starts +!
+    _dx-mode @ IF XIO-STEP-SUCCEEDED ELSE XIO-STEP-PENDING THEN ;
+
+: _dx-poll  ( operation context -- step-status )
+    2DROP 1 _dx-polls +! XIO-STEP-PENDING ;
+
+: _dx-cancel  ( operation context -- )
+    2DROP 1 _dx-cancels +! ;
+
+: _dx-wipe  ( operation context -- )
+    2DROP 1 _dx-wipes +!
+    _dx-mode @ 2 = IF -880 THROW THEN ;
+
+: _dx-counts-clear  ( -- )
+    0 _dx-starts ! 0 _dx-polls ! 0 _dx-cancels ! 0 _dx-wipes !
+    0 _dx-child-ticks ! ;
+
+: _dx-operation-configure  ( request-generation -- status )
+    _dx-request-generation !
+    _dx-service @
+    _dx-child @ CINST.ID @ _dx-child @ CINST.GENERATION @
+    _dx-request-generation @
+    0 0 ['] _dx-start ['] _dx-poll ['] _dx-cancel ['] _dx-wipe
+    _dx-op XIO-OP-CONFIGURE ;
+
+: _dx-service-init  ( -- )
+    _dx-desk @ _DESK-USE-STATE
+    _DESK-XIO-INIT XIO-S-OK = _dx-assert
+    S" org.akashic.net.external-io" _dx-child @ CINST-SERVICE
+    DUP _dx-service ! _DESK-EXTERNAL-IO = _dx-assert
+    _dx-service @ XIO-SERVICE-BOUND? _dx-assert ;
+
+: _dx-slot-clean  ( state -- )
+    _dx-slot _SLOT-SZ 0 FILL
+    _dx-child-app _dx-slot _SL-DESC !
+    _dx-child @ _dx-slot _SL-INST !
+    _dx-slot _SL-STATE !
+    _dx-child @ CINST.REVISION @ _dx-slot _SL-SEEN-REV !
+    0 _dx-slot _SL-DIRTY ! 0 _dx-slot _SL-NEXT !
+    _dx-slot _DESK-HEAD ! ;
+
+: _dx-active-progress  ( -- )
+    _dx-counts-clear 0 _dx-mode ! _dx-op XIO-OP-INIT
+    1 _dx-operation-configure XIO-S-OK = _dx-assert
+    _dx-service @ _dx-op XIO-SUBMIT XIO-S-OK = _dx-assert
+
+    _ST-RUNNING _dx-slot-clean
+    _dx-desk @ DESK-TICK-CB
+    _dx-starts @ 1 = _dx-assert _dx-polls @ 0= _dx-assert
+    _dx-child-ticks @ 0= _dx-assert
+
+    _ST-MINIMIZED _dx-slot _SL-STATE !
+    _dx-desk @ DESK-TICK-CB
+    _dx-starts @ 1 = _dx-assert _dx-polls @ 1 = _dx-assert
+    _dx-child-ticks @ 0= _dx-assert
+
+    _ST-RUNNING _dx-slot _SL-STATE !
+    _dx-desk @ DESK-TICK-CB
+    _dx-polls @ 2 = _dx-assert _dx-child-ticks @ 0= _dx-assert
+
+    _DESK-XIO-FINI XIO-S-BUSY = _dx-assert
+    _dx-service @ XIO-SERVICE-BOUND? _dx-assert
+    S" org.akashic.net.external-io" _dx-child @ CINST-SERVICE
+        _dx-service @ = _dx-assert
+    _DESK-XIO-DRAIN XIO-S-OK = _dx-assert
+    _dx-cancels @ 1 = _dx-assert _dx-wipes @ 1 = _dx-assert
+    _dx-service @ XIO-ACTIVE? 0= _dx-assert
+    _DESK-XIO-FINI XIO-S-OK = _dx-assert
+    _dx-service @ XIO-SERVICE-BOUND? 0= _dx-assert
+    S" org.akashic.net.external-io" _dx-child @ CINST-SERVICE
+        0= _dx-assert ;
+
+: _dx-retained-release  ( mode expected-status request-generation -- )
+    >R _dx-expected-status ! _dx-mode !
+    _dx-counts-clear _dx-op XIO-OP-INIT _dx-service-init
+    R> _dx-operation-configure XIO-S-OK = _dx-assert
+    _dx-service @ _dx-op XIO-SUBMIT XIO-S-OK = _dx-assert
+    _dx-desk @ DESK-TICK-CB
+    _dx-op XIOO.STATE @ XIO-STATE-SUCCEEDED = _dx-assert
+    _DESK-XIO-FINI XIO-S-BUSY = _dx-assert
+    _dx-child @ _DESK-XIO-RELEASE-OWNER
+        _dx-expected-status @ = _dx-assert
+    _dx-cancels @ 0= _dx-assert _dx-wipes @ 1 = _dx-assert
+    _dx-service @ XIOS.RETAINED @ 0= _dx-assert
+    _DESK-XIO-FINI XIO-S-OK = _dx-assert ;
+
+: _dx-setup  ( -- )
+    _dx-descriptors _DESK-FILL-DESC
+    DESK-COMP-DESC CINST-NEW DUP 0= _dx-assert DROP _dx-desk !
+    _dx-child-comp CINST-NEW DUP 0= _dx-assert DROP _dx-child !
+    _dx-desk @ _DESK-USE-STATE
+    _DESK-ENDPOINT IENDPOINT-INIT
+    _dx-desk @ _DESK-ENDPOINT IEND.CONTEXT !
+    ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
+    _DESK-ENDPOINT _dx-child @ CINST.ENDPOINT !
+    _dx-service-init ;
+
+: _dx-cleanup  ( -- )
+    0 _DESK-HEAD !
+    _dx-child @ CINST-FREE _dx-desk @ CINST-FREE
+    0 _DESK-CURRENT-STATE !
+    _dx-other-service XIO-SERVICE-INIT XIO-S-OK = _dx-assert
+    _dx-other-service XIO-SERVICE-FINI XIO-S-OK = _dx-assert ;
+
+: _dx-run  ( -- )
+    0 _dx-fails ! 0 _dx-checks ! DEPTH _dx-depth !
+    _dx-setup _dx-stack
+    _dx-active-progress _dx-stack
+    1 XIO-S-OK 2 _dx-retained-release _dx-stack
+    2 XIO-S-CALLBACK 3 _dx-retained-release _dx-stack
+    _dx-cleanup _dx-stack
+    _dx-fails @ 0= IF
+        ." DESK EXTERNAL IO PASS " _dx-checks @ .
+    ELSE
+        ." DESK EXTERNAL IO FAIL " _dx-fails @ . ."  / " _dx-checks @ .
+    THEN CR ;
+
+_dx-run
+""",
+        ready_markers=("DESK EXTERNAL IO PASS",),
+        stable_markers=("DESK EXTERNAL IO PASS",),
+        failure_markers=("DESK EXTERNAL IO FAIL",),
+        linked=True,
+        include_large_sample=False,
+    ),
+    "http-buffered": Profile(
+        roots=("net/http-buffered.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - cooperative buffered HTTP opening contracts
+ENTER-USERLAND
+." [akashic] loading buffered HTTP exchange" CR
+REQUIRE net/http-buffered.f
+
+VARIABLE _hb-fails
+VARIABLE _hb-checks
+VARIABLE _hb-depth
+: _hb-assert  ( flag -- )
+    1 _hb-checks +!
+    0= IF 1 _hb-fails +! ." ASSERT " _hb-checks @ . CR THEN ;
+: _hb-stack  ( -- )
+    DEPTH DUP _hb-depth @ <> IF
+        ." STACK " _hb-depth @ . ."  -> " DUP . CR .S CR
+    THEN
+    _hb-depth @ = _hb-assert ;
+
+CREATE _hb-port NET-IO-PORT-SIZE ALLOT
+CREATE _hb-request HTTP-REQUEST-SIZE ALLOT
+CREATE _hb-request-buffer 512 ALLOT
+CREATE _hb-exchange HTTP-BUFFERED-SIZE ALLOT
+CREATE _hb-body 64 ALLOT
+CREATE _hb-sent 512 ALLOT
+CREATE _hb-response-buffer 128 ALLOT
+VARIABLE _hb-sent-u
+VARIABLE _hb-response-pos
+VARIABLE _hb-response-u
+VARIABLE _hb-mode
+VARIABLE _hb-io-mode
+VARIABLE _hb-cleanup-mode
+VARIABLE _hb-response-mode
+VARIABLE _hb-open-starts
+VARIABLE _hb-open-polls
+VARIABLE _hb-cancels
+VARIABLE _hb-closes
+VARIABLE _hb-a
+VARIABLE _hb-u
+VARIABLE _hb-n
+
+: _hb-response,  ( addr len -- )
+    DUP >R _hb-response-buffer _hb-response-u @ + SWAP CMOVE
+    R> _hb-response-u +! ;
+: _hb-response-crlf,  ( -- )
+    13 _hb-response-buffer _hb-response-u @ + C! 1 _hb-response-u +!
+    10 _hb-response-buffer _hb-response-u @ + C! 1 _hb-response-u +! ;
+: _hb-response-build  ( -- )
+    0 _hb-response-u !
+    S" HTTP/1.1 200 OK" _hb-response, _hb-response-crlf,
+    _hb-response-mode @ 2 <> IF
+        S" Content-Length: 5" _hb-response, _hb-response-crlf,
+    THEN
+    _hb-response-mode @ 0= IF
+        S" Connection: close" _hb-response, _hb-response-crlf,
+    THEN
+    _hb-response-mode @ 3 = IF
+        S" Connection: disclose" _hb-response, _hb-response-crlf,
+    THEN
+    _hb-response-mode @ 4 = IF
+        S" Connection: keep-alive" _hb-response, _hb-response-crlf,
+        S" Connection: close" _hb-response, _hb-response-crlf,
+    THEN
+    _hb-response-crlf, S" hello" _hb-response, ;
+: _hb-response  ( -- addr len )
+    _hb-response-buffer _hb-response-u @ ;
+
+: _hb-open-start  ( context -- io-status )
+    DROP 1 _hb-open-starts +!
+    _hb-mode @ 3 = IF NIO-S-OK EXIT THEN
+    _hb-mode @ 4 = IF NIO-S-CANCELLED EXIT THEN
+    NIO-S-PENDING ;
+
+: _hb-open-poll  ( context -- io-status )
+    DROP 1 _hb-open-polls +!
+    _hb-mode @ 1 = IF NIO-S-FAILED EXIT THEN
+    _hb-mode @ 2 = IF -721 THROW THEN
+    _hb-mode @ 5 = IF NIO-S-CANCELLED EXIT THEN
+    _hb-open-polls @ 2 >= IF NIO-S-OK ELSE NIO-S-PENDING THEN ;
+
+: _hb-send  ( buffer length context -- count io-status )
+    DROP _hb-u ! _hb-a !
+    _hb-io-mode @ 1 = IF 0 NIO-S-CANCELLED EXIT THEN
+    _hb-u @ 9 MIN _hb-n !
+    _hb-a @ _hb-sent _hb-sent-u @ + _hb-n @ CMOVE
+    _hb-n @ _hb-sent-u +!
+    _hb-n @ NIO-S-OK ;
+
+: _hb-recv  ( buffer capacity context -- count io-status )
+    DROP _hb-u ! _hb-a !
+    _hb-io-mode @ 2 = IF 0 NIO-S-CANCELLED EXIT THEN
+    _hb-response _hb-response-pos @ /STRING
+    DUP 0= IF 2DROP 0 NIO-S-EOF EXIT THEN
+    _hb-u @ MIN 7 MIN _hb-n !
+    _hb-a @ _hb-n @ CMOVE
+    _hb-n @ _hb-response-pos +!
+    _hb-n @ NIO-S-OK ;
+
+: _hb-poll  ( context -- ) DROP ;
+: _hb-cancel  ( context -- )
+    DROP 1 _hb-cancels +!
+    _hb-cleanup-mode @ DUP 1 = SWAP 3 = OR IF -722 THROW THEN ;
+: _hb-close  ( context -- )
+    DROP 1 _hb-closes +!
+    _hb-cleanup-mode @ DUP 2 = SWAP 3 = OR IF -723 THROW THEN ;
+
+: _hb-request-build  ( connection-close? -- )
+    _hb-request HREQ-CLEAR
+    _hb-request-buffer 512 _hb-request HREQ-INIT HREQ-S-OK = _hb-assert
+    S" GET" S" /feed" _hb-request HREQ-BEGIN HREQ-S-OK = _hb-assert
+    S" public.api.bsky.app" _hb-request HREQ-HOST HREQ-S-OK = _hb-assert
+    IF
+        _hb-request HREQ-CONNECTION-CLOSE HREQ-S-OK = _hb-assert
+    THEN
+    _hb-request HREQ-SEAL HREQ-S-OK = _hb-assert ;
+
+: _hb-setup  ( -- )
+    0 _hb-mode ! 0 _hb-sent-u ! 0 _hb-response-pos !
+    0 _hb-io-mode ! 0 _hb-cleanup-mode ! 0 _hb-response-mode !
+    0 _hb-open-starts ! 0 _hb-open-polls ! 0 _hb-cancels ! 0 _hb-closes !
+    _hb-response-build
+    _hb-port NIO-INIT
+    ['] _hb-open-start _hb-port NIO.OPEN-START-XT !
+    ['] _hb-open-poll _hb-port NIO.OPEN-POLL-XT !
+    ['] _hb-send _hb-port NIO.SEND-XT !
+    ['] _hb-recv _hb-port NIO.RECV-XT !
+    ['] _hb-poll _hb-port NIO.POLL-XT !
+    ['] _hb-cancel _hb-port NIO.CANCEL-XT !
+    ['] _hb-close _hb-port NIO.CLOSE-XT !
+    _hb-request-buffer 512 _hb-request HREQ-INIT HREQ-S-OK = _hb-assert
+    -1 _hb-request-build
+    _hb-body 64 _hb-exchange HBUF-INIT HBUF-S-OK = _hb-assert ;
+
+: _hb-pump-done  ( -- status )
+    100 0 DO
+        _hb-exchange HBUF-POLL DUP HBUF-S-OK = IF UNLOOP EXIT THEN
+        DUP HBUF-S-PENDING <> IF UNLOOP EXIT THEN
+        DROP
+    LOOP
+    HBUF-S-PENDING ;
+
+: _hb-test-open-and-exchange  ( -- )
+    _hb-setup
+    _hb-request _hb-port _hb-exchange HBUF-START
+    HBUF-S-PENDING = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-OPENING = _hb-assert
+    _hb-sent-u @ 0= _hb-assert _hb-open-starts @ 1 = _hb-assert
+    _hb-request _hb-port _hb-exchange HBUF-START HBUF-S-BUSY = _hb-assert
+    _hb-open-starts @ 1 = _hb-assert
+    _hb-exchange HBUF-POLL HBUF-S-PENDING = _hb-assert
+    _hb-sent-u @ 0= _hb-assert _hb-open-polls @ 1 = _hb-assert
+    _hb-exchange HBUF-POLL HBUF-S-PENDING = _hb-assert
+    _hb-sent-u @ 0= _hb-assert _hb-open-polls @ 2 = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-SENDING = _hb-assert
+    _hb-pump-done HBUF-S-OK = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-DONE = _hb-assert
+    _hb-exchange HBUF.HTTP-CODE @ 200 = _hb-assert
+    _hb-body _hb-exchange HBUF.BODY-U @ S" hello" STR-STR= _hb-assert
+    _hb-sent _hb-sent-u @
+    _hb-request HREQ.BUFFER @ _hb-request HREQ.LENGTH @ STR-STR= _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+    _hb-closes @ 1 = _hb-assert ;
+
+: _hb-test-open-cancel  ( -- )
+    _hb-setup
+    _hb-request _hb-port _hb-exchange HBUF-START
+    HBUF-S-PENDING = _hb-assert
+    _hb-exchange HBUF-CANCEL HBUF-S-OK = _hb-assert
+    _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-CANCELLED = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+    _hb-exchange HBUF-POLL HBUF-S-CANCELLED = _hb-assert
+
+    _hb-setup
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-exchange HBUF-RESET
+    _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-IDLE = _hb-assert
+
+    _hb-setup 3 _hb-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-exchange HBUF.STATE @ HBUF-STATE-SENDING = _hb-assert
+    _hb-exchange HBUF-RESET
+    _hb-cancels @ 1 = _hb-assert
+    _hb-closes @ 0= _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-IDLE = _hb-assert ;
+
+: _hb-test-open-failures  ( -- )
+    _hb-setup 1 _hb-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-exchange HBUF-POLL HBUF-S-TRANSPORT = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+    _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+
+    _hb-setup 2 _hb-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-exchange HBUF-POLL HBUF-S-TRANSPORT = _hb-assert
+    _hb-cancels @ 1 = _hb-assert
+
+    _hb-setup 3 _hb-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START
+    HBUF-S-PENDING = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-SENDING = _hb-assert
+    _hb-sent-u @ 0= _hb-assert
+
+    _hb-setup 4 _hb-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START
+    HBUF-S-CANCELLED = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-CANCELLED = _hb-assert
+    _hb-sent-u @ 0= _hb-assert
+    _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+
+    _hb-setup 5 _hb-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-exchange HBUF-POLL HBUF-S-CANCELLED = _hb-assert
+    _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert ;
+
+: _hb-test-io-cancellation  ( -- )
+    _hb-setup 3 _hb-mode ! 1 _hb-io-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START HBUF-S-PENDING = _hb-assert
+    _hb-exchange HBUF-POLL HBUF-S-CANCELLED = _hb-assert
+    _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+
+    _hb-setup 3 _hb-mode ! 2 _hb-io-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    100 0 DO
+        _hb-exchange HBUF.STATE @ HBUF-STATE-RECEIVING = IF LEAVE THEN
+        _hb-exchange HBUF-POLL HBUF-S-PENDING = _hb-assert
+    LOOP
+    _hb-exchange HBUF-POLL HBUF-S-CANCELLED = _hb-assert
+    _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert ;
+
+: _hb-test-cleanup-failure  ( -- )
+    _hb-setup 3 _hb-cleanup-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-exchange HBUF-CANCEL HBUF-S-TRANSPORT = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+    _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
+    _hb-cancels @ 1 = _hb-assert _hb-closes @ 1 = _hb-assert
+    _hb-exchange HBUF-RESET
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+    _hb-exchange HBUF.PORT @ _hb-port = _hb-assert ;
+
+: _hb-test-persistent-framing  ( -- )
+    _hb-setup 3 _hb-mode !
+    0 _hb-request-build
+    1 _hb-response-mode ! 0 _hb-response-u ! _hb-response-build
+    -1 _hb-exchange HBUF-PERSISTENT!
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-pump-done HBUF-S-OK = _hb-assert
+    _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
+    _hb-closes @ 0= _hb-assert
+
+    0 _hb-request-build 0 _hb-response-pos ! 0 _hb-sent-u !
+    _hb-request _hb-port _hb-exchange HBUF-START HBUF-S-PENDING = _hb-assert
+    _hb-open-starts @ 1 = _hb-assert
+    _hb-pump-done HBUF-S-OK = _hb-assert
+    _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
+
+    _hb-setup 3 _hb-mode !
+    0 _hb-request-build
+    2 _hb-response-mode ! 0 _hb-response-u ! _hb-response-build
+    -1 _hb-exchange HBUF-PERSISTENT!
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-pump-done HBUF-S-OK = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+    _hb-closes @ 1 = _hb-assert
+
+    _hb-setup 3 _hb-mode !
+    0 _hb-request-build
+    3 _hb-response-mode ! 0 _hb-response-u ! _hb-response-build
+    -1 _hb-exchange HBUF-PERSISTENT!
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-pump-done HBUF-S-OK = _hb-assert
+    _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
+    _hb-closes @ 0= _hb-assert
+
+    _hb-setup 3 _hb-mode !
+    0 _hb-request-build
+    4 _hb-response-mode ! 0 _hb-response-u ! _hb-response-build
+    -1 _hb-exchange HBUF-PERSISTENT!
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-pump-done HBUF-S-OK = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+    _hb-closes @ 1 = _hb-assert ;
+
+: _hb-run  ( -- )
+    0 _hb-fails ! 0 _hb-checks ! DEPTH _hb-depth !
+    _hb-test-open-and-exchange
+    _hb-test-open-cancel
+    _hb-test-open-failures
+    _hb-test-io-cancellation
+    _hb-test-cleanup-failure
+    _hb-test-persistent-framing
+    _hb-stack
+    _hb-fails @ 0= IF
+        ." HTTP BUFFERED PASS " _hb-checks @ .
+    ELSE
+        ." HTTP BUFFERED FAIL " _hb-fails @ . ."  / " _hb-checks @ .
+    THEN CR ;
+
+_hb-run
+""",
+        ready_markers=("HTTP BUFFERED PASS",),
+        stable_markers=("HTTP BUFFERED PASS",),
+        failure_markers=("HTTP BUFFERED FAIL",),
+    ),
     "http-request": Profile(
         roots=("net/http-request.f",),
         resources=(),
@@ -936,8 +2050,12 @@ VARIABLE _rt-result
     0 _rt-fails ! 0 _rt-checks ! DEPTH _rt-depth !
     _rt-build-expected _rt-request-reset _rt-build
     _rt-request HREQ.STATE @ HREQ-STATE-SEALED = _rt-assert
+    _rt-request HREQ.FLAGS @ HREQ-F-CONNECTION-CLOSE AND 0<> _rt-assert
     _rt-request HREQ.BUFFER @ _rt-request HREQ.LENGTH @
     _rt-expected _rt-expected-u @ STR-STR= _rt-assert
+    S" keep-alive, CLOSE" S" close" HTTP-COMMA-TOKEN? _rt-assert
+    S" disclose" S" close" HTTP-COMMA-TOKEN? 0= _rt-assert
+    S" xclose, keep-alive" S" close" HTTP-COMMA-TOKEN? 0= _rt-assert
 
     0 _rt-port-reset
     200 0 DO
@@ -953,6 +2071,7 @@ VARIABLE _rt-result
 
     _rt-request HREQ-CLEAR
     _rt-request HREQ.STATE @ HREQ-STATE-EMPTY = _rt-assert
+    _rt-request HREQ.FLAGS @ 0= _rt-assert
     _rt-buffer 1024 _rt-all-zero? _rt-assert
     _rt-request HREQ.BUFFER @ _rt-buffer = _rt-assert
     _rt-request HREQ.CAPACITY @ 1024 = _rt-assert

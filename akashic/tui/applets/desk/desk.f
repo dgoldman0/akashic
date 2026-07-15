@@ -69,6 +69,7 @@ REQUIRE ../../../runtime/resource-registry.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/job.f
+REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../../../interop/shared-document.f
 REQUIRE ../../../agent/runtime.f
@@ -292,6 +293,7 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-BUS
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AUTHORITY
 _DESK-CURRENT-STATE CMP-CELL: _DESK-INTENTS
 _DESK-CURRENT-STATE CMP-CELL: _DESK-JOBS
+_DESK-CURRENT-STATE XIO-SERVICE-SIZE CMP-FIELD: _DESK-EXTERNAL-IO
 _DESK-CURRENT-STATE RID-SIZE CMP-FIELD: _DESK-DAYBOOK-RID
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-STATUS
@@ -318,6 +320,78 @@ CMP-LAYOUT-SIZE CONSTANT _DESK-STATE-SIZE
 
 : _DESK-USE-STATE  ( instance -- )
     CINST-STATE _DESK-CURRENT-STATE ! ;
+
+: _DESK-XIO-READY?  ( -- flag )
+    _DESK-EXTERNAL-IO XIO-SERVICE-BOUND? ;
+
+: _DESK-XIO-INIT  ( -- status )
+    _DESK-EXTERNAL-IO XIO-SERVICE-INIT ;
+
+: _DESK-XIO-FINI  ( -- status )
+    _DESK-XIO-READY? 0= IF XIO-S-OK EXIT THEN
+    _DESK-EXTERNAL-IO XIO-SERVICE-FINI ;
+
+VARIABLE _DXIO-INST
+VARIABLE _DXIO-OP
+VARIABLE _DXIO-FIRST
+VARIABLE _DXIO-RESET-STATUS
+
+: _DESK-XIO-REMEMBER  ( status -- )
+    ?DUP IF
+        _DXIO-FIRST @ XIO-S-OK = IF _DXIO-FIRST ! ELSE DROP THEN
+    THEN ;
+
+: _DESK-XIO-OP-OWNER?  ( operation instance -- flag )
+    >R
+    DUP XIOO.OWNER-ID @ R@ CINST.ID @ =
+    SWAP XIOO.OWNER-GENERATION @ R> CINST.GENERATION @ = AND ;
+
+\ A successful operation is retained until its owner consumes or discards
+\ the result.  If its wipe callback reports a fault, XIO deliberately keeps
+\ it retained; a second reset observes the exact-once wipe flag and releases
+\ the service without invoking untrusted cleanup twice.
+: _DESK-XIO-RESET-RETAINED  ( operation -- status )
+    _DXIO-OP !
+    _DESK-EXTERNAL-IO _DXIO-OP @ XIO-RESET DUP _DXIO-RESET-STATUS !
+    XIO-S-CALLBACK = IF
+        _DESK-EXTERNAL-IO _DXIO-OP @ XIO-RESET DROP
+    THEN
+    _DXIO-RESET-STATUS @ ;
+
+\ Release only work bound to the component instance that is about to lose
+\ its state.  This is a host-lifecycle safety net; ordinary applet shutdown
+\ still gets the first opportunity to consume results and cancel its work.
+: _DESK-XIO-RELEASE-OWNER  ( instance -- status )
+    _DXIO-INST ! XIO-S-OK _DXIO-FIRST !
+    _DESK-XIO-READY? 0= IF XIO-S-OK EXIT THEN
+    _DESK-EXTERNAL-IO XIO-ACTIVE-OP ?DUP IF
+        DUP _DXIO-INST @ _DESK-XIO-OP-OWNER? IF
+            _DESK-EXTERNAL-IO SWAP XIO-CANCEL _DESK-XIO-REMEMBER
+        ELSE
+            DROP
+        THEN
+    THEN
+    _DESK-EXTERNAL-IO XIOS.RETAINED @ ?DUP IF
+        DUP _DXIO-INST @ _DESK-XIO-OP-OWNER? IF
+            _DESK-XIO-RESET-RETAINED _DESK-XIO-REMEMBER
+        ELSE
+            DROP
+        THEN
+    THEN
+    _DXIO-FIRST @ ;
+
+\ Final Desk teardown also covers work owned directly by a Desk service
+\ rather than a child.  At this point child-specific cleanup has already run.
+: _DESK-XIO-DRAIN  ( -- status )
+    XIO-S-OK _DXIO-FIRST !
+    _DESK-XIO-READY? 0= IF XIO-S-OK EXIT THEN
+    _DESK-EXTERNAL-IO XIO-ACTIVE-OP ?DUP IF
+        _DESK-EXTERNAL-IO SWAP XIO-CANCEL _DESK-XIO-REMEMBER
+    THEN
+    _DESK-EXTERNAL-IO XIOS.RETAINED @ ?DUP IF
+        _DESK-XIO-RESET-RETAINED _DESK-XIO-REMEMBER
+    THEN
+    _DXIO-FIRST @ ;
 
 : DESK-PRACTICE  ( -- practice-head | 0 )
     _DESK-PRACTICE-ACTIVATION DUP PACT-RECOVERY? IF
@@ -972,6 +1046,11 @@ VARIABLE _DCF-HOST-ONLY
         _DCF-SA @ _SL-INST @ SWAP EXECUTE
     THEN ;
 
+: _DCF-XIO-RELEASE  ( -- )
+    _DCF-INST @ ?DUP IF
+        _DESK-XIO-RELEASE-OWNER ?DUP IF THROW THEN
+    THEN ;
+
 : _DCF-DETACH  ( -- )
     _DCF-SA @ _SL-HAS-UIDL DUP @ IF
         0 SWAP !
@@ -1031,6 +1110,10 @@ VARIABLE _DCF-HOST-ONLY
         R@ _DCF-SA !
         ['] _DCF-SHUTDOWN CATCH _DCF-REMEMBER
     THEN
+    \ Even a throwing or incomplete child shutdown cannot leave the
+    \ machine service pointing into component state that is freed below.
+    R@ _DCF-SA !
+    ['] _DCF-XIO-RELEASE CATCH _DCF-REMEMBER
     \ _DCF-DETACH has its own exact active-UCTX identity check.  Thus an
     \ activation failure after a successful switch can still dematerialize
     \ UIDL, while a switch failure cannot detach some other live context.
@@ -1291,6 +1374,9 @@ VARIABLE _DSE-ID-U
 
 : _DESK-ENDPOINT-SERVICE  ( id-a id-u desk-instance -- service | 0 )
     _DESK-USE-STATE _DSE-ID-U ! _DSE-ID-A !
+    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.net.external-io" STR-STR= IF
+        _DESK-XIO-READY? IF _DESK-EXTERNAL-IO ELSE 0 THEN EXIT
+    THEN
     _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.runtime" STR-STR= IF
         _DESK-AGENT-RUNTIME @ EXIT
     THEN
@@ -1721,6 +1807,8 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
     DUP _DINI-INST ! _DESK-USE-STATE
     DESK-CONTEXT DUP 0= ABORT" desk: no active Practice Context"
     _DINI-CONTEXT !
+    _DESK-XIO-INIT XIO-S-OK <>
+    ABORT" desk: external I/O service unavailable"
     0 _DESK-INSTALLED-N !
     CREG-NEW 0<> ABORT" desk: registry allocation failed" _DESK-REGISTRY !
     CPOLICY-SIZE ALLOCATE
@@ -1782,7 +1870,18 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
     ['] _DESK-AGENT-PROMPT-CANCEL OVER PRM-ON-CANCEL
     _DTH-TBAR-FG @ _DTH-TBAR-BG @ ROT PRM-COLORS! ;
 
+VARIABLE _DIFI-XIO-STATUS
+
 : _DESK-INTEROP-FINI-QUIESCED  ( -- )
+    XIO-S-OK _DIFI-XIO-STATUS !
+    _DESK-XIO-DRAIN ?DUP IF _DIFI-XIO-STATUS ! THEN
+    _DESK-XIO-FINI ?DUP IF
+        _DIFI-XIO-STATUS @ XIO-S-OK = IF
+            _DIFI-XIO-STATUS !
+        ELSE
+            DROP
+        THEN
+    THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-FREE THEN
     _DESK-AGENT-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     _DESK-BUS @ ?DUP IF
@@ -1825,7 +1924,8 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
     0 _DESK-AGENT-RUNTIME ! 0 _DESK-AGENT-PROVIDER !
     0 _DESK-TOOL-GATEWAY !
     0 _DESK-AGENT-PROMPT ! 0 _DESK-AGENT-PROMPT-RGN !
-    _DESK-ENDPOINT IENDPOINT-SIZE 0 FILL ;
+    _DESK-ENDPOINT IENDPOINT-SIZE 0 FILL
+    _DIFI-XIO-STATUS @ ?DUP IF THROW THEN ;
 
 : _DESK-INTEROP-FINI  ( -- )
     \ Children are already closed.  Keep cancellation, owner unpublication,
@@ -2425,6 +2525,7 @@ VARIABLE _DDM-FOCUS-CHANGED
         THEN
     THEN
     _DESK-BUS @ ?DUP IF 8 SWAP CBUS-PUMP DROP THEN
+    _DESK-XIO-READY? IF _DESK-EXTERNAL-IO XIO-TICK THEN
     _DESK-HEAD @
     BEGIN ?DUP WHILE
         DUP _SL-ALIVE? IF

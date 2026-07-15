@@ -136,9 +136,12 @@ dereference selected items, compose those identities with their own
 operations, or ask for a revision-safe draft replacement. In the other
 direction, Streams should consume generally useful ecosystem services only
 when the feature needs them—for example Desk dispatch and authority, Practices
-provenance, shared resource references, or a future credential owner and
-network job service. It should not duplicate those services or become the
-center through which unrelated applets communicate.
+provenance, shared resource references, the Desk-owned external-I/O service,
+or a future credential owner. It should not duplicate those services or become
+the center through which unrelated applets communicate. The external-I/O
+service is not exposed as a Streams capability; it only advances a
+Streams-owned provider operation whose result must still pass instance and
+request-generation checks before the applet commits it.
 
 Streams currently has no live transport. A live integration must own transport
 and session state per instance, run bounded asynchronous jobs, reject stale

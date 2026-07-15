@@ -217,6 +217,7 @@ endpoint:
 | `org.akashic.runtime.resource-registry` | Activation-local `RREG` |
 | `org.akashic.interop.request-bus` | Desk request bus |
 | `org.akashic.resource.daybook` | Stable Daybook RID |
+| `org.akashic.net.external-io` | Machine-owned cooperative external-I/O service |
 
 The endpoint does not expose the owner instance. A lens resolves the RID into
 an exact `RREF`, attaches its own `LBIND`, and invokes `resource.snapshot` or
@@ -225,6 +226,16 @@ still run, but it withholds the Daybook RID. A child which can see the Desk
 Context must treat an incomplete service set as a blocked Practice resource;
 falling back to direct `/daybook.md` access would erase the distinction this
 experiment is meant to test.
+
+The external-I/O service serializes bounded machine-network operations whose
+platform implementation shares core-0 state. Desk advances it once per Desk
+tick independently of whether a child is dirty, clean, focused, or minimized.
+It is a lifecycle service, not a raw networking capability: children retain
+their own request, parser, transport, and semantic state, and agents do not
+receive its submission callbacks. Before freeing a child, Desk cancels or
+releases only operations whose instance identity and generation match that
+child. Final Desk teardown drains any remaining operation before unbinding the
+machine singleton.
 
 Desk closes every lens before entering one dispatch-quiesced teardown boundary
 which cancels requests, deactivates the owner, and frees the resource registry,
