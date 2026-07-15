@@ -5,7 +5,9 @@
 </menu>
 <menu label=Feed>
 <item text=Timeline do=timeline/>
-<item text=Find_Identity_in_Cache do=search key=Ctrl+F/>
+<item text=Search_Retained_Feed do=search key=Ctrl+F/>
+<item text=Set_Public_Actor do=actor/>
+<item text=Refresh_Public_Feed do=refresh/>
 </menu>
 <menu label=Post>
 <item text=Open_Thread do=thread/>

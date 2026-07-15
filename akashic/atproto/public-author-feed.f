@@ -6,7 +6,9 @@
 \ and commit the retained response through a separate feed-model boundary.
 \ =====================================================================
 
-PROVIDED akashic-atproto-public-author-feed
+\ KDOS module identities are bounded to 23 bytes.  Keep this identifier
+\ complete within that boundary and distinct from the public-trust module.
+PROVIDED akashic-atp-pubfeed
 
 REQUIRE ../net/external-io.f
 REQUIRE ../net/http-buffered.f
@@ -516,6 +518,26 @@ VARIABLE _PAFI-STATUS
 VARIABLE _PAFCFG-A
 VARIABLE _PAFCFG-U
 VARIABLE _PAFCFG-P
+
+: PAF-DECONFIGURE  ( provider -- status )
+    DUP PAF-VALID? 0= IF DROP PAF-S-INVALID EXIT THEN
+    DUP PAF.CLEANUP-ERROR @ IF DROP PAF-S-TRANSPORT EXIT THEN
+    DUP PAF.STATE @ DUP PAF-STATE-IDLE =
+    OVER PAF-STATE-CONFIGURED = OR
+    SWAP PAF-STATE-RELEASED = OR 0= IF DROP PAF-S-BUSY EXIT THEN
+    DUP PAF.BODY-A @ IF DROP PAF-S-BUSY EXIT THEN
+    DUP PAF.EXCHANGE HBUF.PORT @ IF DROP PAF-S-BUSY EXIT THEN
+    DUP PAF.ACTOR PAF-ACTOR-CAPACITY 0 FILL
+    DUP 0 SWAP PAF.ACTOR-U !
+    DUP PAF.PATH PAF-PATH-CAPACITY 0 FILL
+    DUP 0 SWAP PAF.PATH-U !
+    DUP PAF.REQUEST HREQ-CLEAR
+    DUP 0 SWAP PAF.BODY-U !
+    DUP 0 SWAP PAF.ERROR-KIND !
+    DUP 0 SWAP PAF.ERROR-CODE !
+    DUP 0 SWAP PAF.HTTP-CODE !
+    DUP 0 SWAP PAF.FLAGS !
+    PAF-STATE-IDLE SWAP PAF.STATE ! PAF-S-OK ;
 
 : PAF-CONFIGURE  ( actor-a actor-u provider -- status )
     _PAFCFG-P ! _PAFCFG-U ! _PAFCFG-A !

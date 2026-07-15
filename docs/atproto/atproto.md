@@ -5,8 +5,9 @@ decoding, session management, and repository CRUD. Foundation layer for
 Bluesky and any AT Protocol application.
 
 The bounded, credential-free public author-feed exchange has a separate
-[lifecycle contract](public-author-feed.md). It uses the cooperative XIO/HBUF
-path and does not share the legacy XRPC/session globals described below.
+[lifecycle contract](public-author-feed.md). It uses the XIO/HBUF provider
+contract and the shared KDOS adapter's asynchronous NIO open, close, and cancel
+callbacks. It does not share the legacy XRPC/session globals described below.
 
 ```forth
 REQUIRE aturi.f    \ AT URI parser + builder
@@ -14,14 +15,14 @@ REQUIRE did.f      \ DID validation + method extraction
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
-REQUIRE public-author-feed.f \ cooperative public author-feed exchange
+REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 REQUIRE session.f  \ Session auth (login/refresh/bearer)
 REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 ```
 
 `PROVIDED akashic-aturi` / `akashic-did` / `akashic-tid` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
-`akashic-atproto-public-author-feed` / `akashic-session` /
+`akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
 
 ---
@@ -228,8 +229,8 @@ Execute a POST request with JSON body.  Returns response body and `ior`.
 ## Feed Model — feed-model.f
 
 `feed-model.f` is a Bluesky-specific adapter for the bounded
-`app.bsky.feed.getTimeline` response subset used by Streams. It is not the
-provider-neutral domain model for future RSS, Atom, or Rabbit providers.
+author-feed/timeline response subset used by Streams. It is not a
+provider-neutral representation for RSS, Atom, Rabbit, or unrelated protocols.
 `BFM-DECODE-FEED ( json-a json-u feed -- status )` requires strict JSON in a
 document of at most `BFM-DOCUMENT-CAP`, then validates the bounded projection
 that Streams actually retains. It copies and JSON-unescapes those strings into
@@ -245,10 +246,11 @@ also verifies that each post URI names `app.bsky.feed.post` under the reported
 author DID with a syntactically valid TID record key. CID, handle, and datetime
 format normalization outside that retained identity check is still trusted to
 the AppView. The adapter is not a complete Lexicon or moderation validator: it
-owns no HTTP buffers, credentials, session, cache, or global pagination state,
-and it deliberately ignores embeds, facets, labels, moderation decisions, and
-viewer state for now. A live transport must preserve those boundaries instead
-of presenting successful projection decode as complete response validation.
+owns no HTTP buffers, credentials, session, retained app state, or global
+pagination state, and it ignores embeds, facets, labels, moderation decisions,
+and viewer state. The explicit Bluesky provider composition preserves those
+boundaries; a successful projection decode is not presented as complete
+moderation or response validation.
 
 Call `BFM-FEED-INIT` on `BFM-FEED-SIZE` bytes before first use. Feed and item
 accessors (`BFM.ITEM.URI`, `BFM.ITEM.TEXT`, and peers) return views into that
@@ -267,10 +269,10 @@ tokens and the session DID.
 > **Legacy boundary:** `session.f` is process-global infrastructure, not owned
 > Streams account state. `_SES-CLEAR` clears lengths but does not wipe the
 > token/DID bytes, `_SES-JBUF` can retain the serialized app password, and the
-> module has no owned logout/zeroization lifecycle. New live Streams work must
-> use per-instance session ownership and wipe prompt, request, scratch, and
-> token buffers; it must not persist an app password or silently treat these
-> globals as secure storage.
+> module has no owned logout/zeroization lifecycle. Streams' public-read path
+> does not load or call this module. Any authenticated applet integration must
+> instead own its session per instance, wipe prompt/request/token scratch, and
+> never persist an app password or treat these globals as secure storage.
 
 ### Token Storage
 
@@ -545,6 +547,9 @@ S" at://did:plc:abc/app.bsky.feed.post/rk42" REPO-DELETE
 - **tid.f** — standalone, uses BIOS `EPOCH@` for timestamps.
 - **xrpc.f** — requires `http.f`, `string.f`, `json.f`.
 - **feed-model.f** — requires `json.f` and `string.f`; it performs no I/O.
+- **public-author-feed.f** — requires external I/O, buffered HTTP, the KDOS TLS
+  adapter, and `did.f`. Endpoint trust is contributed separately rather than
+  loaded by the provider.
 - **session.f** — requires `xrpc.f`, `json.f`, `http.f`.
 - **repo.f** — requires `session.f`, `xrpc.f`, `json.f`, `aturi.f`.
 

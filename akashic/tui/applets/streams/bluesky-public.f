@@ -1,0 +1,127 @@
+\ =====================================================================
+\ bluesky-public.f - explicit public Bluesky composition for Streams
+\ =====================================================================
+\ This module is the only ordinary Streams composition edge to the concrete
+\ public-author-feed provider.  Runtime trust is provisioned separately by
+\ the selected networked image or live-test artifact.
+\ =====================================================================
+
+PROVIDED akashic-streams-bsky
+
+REQUIRE streams.f
+REQUIRE ../../../atproto/public-author-feed.f
+
+: _SBP-STATUS  ( paf-status -- provider-status )
+    DUP PAF-S-OK = IF DROP SPUB-S-OK EXIT THEN
+    DUP PAF-S-INVALID = IF DROP SPUB-S-INVALID EXIT THEN
+    DUP PAF-S-BUSY = IF DROP SPUB-S-BUSY EXIT THEN
+    DUP PAF-S-CAPACITY = IF DROP SPUB-S-CAPACITY EXIT THEN
+    DROP SPUB-S-TRANSPORT ;
+
+: _SBP-CONFIGURE  ( actor-a actor-u paf -- status )
+    PAF-CONFIGURE _SBP-STATUS ;
+
+: _SBP-DECONFIGURE  ( paf -- status )
+    PAF-DECONFIGURE _SBP-STATUS ;
+
+: _SBP-BODY@  ( paf -- body-a body-u )
+    PAF-BODY@ ;
+
+: _SBP-RESULT-VALID?  ( paf -- flag )
+    DUP PAF-VALID? 0= IF DROP 0 EXIT THEN
+    PAF.STATE @ PAF-STATE-READY = ;
+
+: _SBP-CLEANUP-ERROR@  ( paf -- error )
+    DUP PAF-VALID? 0= IF DROP SPUB-E-INVALID EXIT THEN
+    PAF.CLEANUP-ERROR @ ;
+
+: _SBP-RELEASABLE?  ( paf -- flag )
+    DUP PAF-VALID? 0= IF DROP 0 EXIT THEN
+    DUP PAF.CLEANUP-ERROR @ IF DROP 0 EXIT THEN
+    DUP PAF.BODY-A @ IF DROP 0 EXIT THEN
+    DUP PAF.EXCHANGE HBUF.PORT @ IF DROP 0 EXIT THEN
+    PAF.STATE @ DUP PAF-STATE-IDLE =
+    OVER PAF-STATE-CONFIGURED = OR
+    SWAP PAF-STATE-RELEASED = OR ;
+
+: _SBP-POISON  ( error paf -- )
+    PAF.CLEANUP-ERROR ! ;
+
+: _SBP-RELEASE  ( paf -- status )
+    DUP _SBP-RELEASABLE? 0= IF DROP SPUB-S-BUSY EXIT THEN
+    DUP PUBLIC-AUTHOR-FEED-SIZE 0 FILL FREE
+    SPUB-S-OK ;
+
+: _SBP-XIO-START  ( operation paf -- step-status )
+    PAF-XIO-START ;
+
+: _SBP-XIO-POLL  ( operation paf -- step-status )
+    PAF-XIO-POLL ;
+
+: _SBP-XIO-CANCEL  ( operation paf -- )
+    PAF-XIO-CANCEL ;
+
+: _SBP-XIO-WIPE  ( operation paf -- )
+    PAF-XIO-WIPE ;
+
+VARIABLE _SBP-NEW-PROVIDER
+VARIABLE _SBP-NEW-PAF
+VARIABLE _SBP-NEW-STATUS
+
+: _SBP-NEW-CLEAR  ( -- )
+    _SBP-NEW-PAF @ ?DUP IF
+        DUP PUBLIC-AUTHOR-FEED-SIZE 0 FILL FREE
+    THEN
+    _SBP-NEW-PROVIDER @ ?DUP IF
+        DUP STREAMS-PUBLIC-PROVIDER-SIZE 0 FILL FREE
+    THEN
+    0 _SBP-NEW-PAF ! 0 _SBP-NEW-PROVIDER ! ;
+
+: STREAMS-BLUESKY-PUBLIC-NEW  ( -- provider status )
+    0 _SBP-NEW-PAF ! 0 _SBP-NEW-PROVIDER !
+    STREAMS-PUBLIC-PROVIDER-SIZE ALLOCATE DUP IF
+        2DROP 0 SPUB-S-CAPACITY EXIT
+    THEN
+    DROP DUP _SBP-NEW-PROVIDER ! SPUB-INIT
+    PUBLIC-AUTHOR-FEED-SIZE ALLOCATE DUP IF
+        2DROP _SBP-NEW-CLEAR 0 SPUB-S-CAPACITY EXIT
+    THEN
+    DROP DUP _SBP-NEW-PAF !
+    PAF-INIT DUP _SBP-NEW-STATUS ! PAF-S-OK <> IF
+        _SBP-NEW-CLEAR 0 _SBP-NEW-STATUS @ _SBP-STATUS EXIT
+    THEN
+
+    _SBP-NEW-PAF @ _SBP-NEW-PROVIDER @ SPUB.CONTEXT !
+    ['] _SBP-CONFIGURE _SBP-NEW-PROVIDER @ SPUB.CONFIGURE-XT !
+    ['] _SBP-DECONFIGURE _SBP-NEW-PROVIDER @ SPUB.DECONFIGURE-XT !
+    ['] _SBP-BODY@ _SBP-NEW-PROVIDER @ SPUB.BODY-XT !
+    ['] _SBP-RESULT-VALID? _SBP-NEW-PROVIDER @ SPUB.RESULT-VALID-XT !
+    ['] _SBP-CLEANUP-ERROR@
+        _SBP-NEW-PROVIDER @ SPUB.CLEANUP-ERROR-XT !
+    ['] _SBP-RELEASABLE? _SBP-NEW-PROVIDER @ SPUB.RELEASABLE-XT !
+    ['] _SBP-POISON _SBP-NEW-PROVIDER @ SPUB.POISON-XT !
+    ['] _SBP-RELEASE _SBP-NEW-PROVIDER @ SPUB.RELEASE-XT !
+    ['] _SBP-XIO-START _SBP-NEW-PROVIDER @ SPUB.START-XT !
+    ['] _SBP-XIO-POLL _SBP-NEW-PROVIDER @ SPUB.POLL-XT !
+    ['] _SBP-XIO-CANCEL _SBP-NEW-PROVIDER @ SPUB.CANCEL-XT !
+    ['] _SBP-XIO-WIPE _SBP-NEW-PROVIDER @ SPUB.WIPE-XT !
+    _SBP-NEW-PROVIDER @ SPUB-SEAL DUP _SBP-NEW-STATUS !
+    SPUB-S-OK <> IF
+        _SBP-NEW-CLEAR 0 _SBP-NEW-STATUS @ EXIT
+    THEN
+    _SBP-NEW-PROVIDER @ SPUB-S-OK ;
+
+: _SBP-STATE-INIT  ( state -- ior )
+    ['] STREAMS-BLUESKY-PUBLIC-NEW SWAP
+        STREAMS-PUBLIC-FACTORY-STATE! ;
+
+CREATE STREAMS-BLUESKY-COMP-DESC COMP-DESC ALLOT
+
+: STREAMS-BLUESKY-COMP-SETUP  ( -- )
+    STREAMS-BLUESKY-COMP-DESC STREAMS-COMP-SETUP
+    ['] _SBP-STATE-INIT
+        STREAMS-BLUESKY-COMP-DESC COMP.STATE-INIT-XT ! ;
+
+: STREAMS-BLUESKY-ENTRY  ( app-desc -- )
+    STREAMS-BLUESKY-COMP-SETUP
+    STREAMS-BLUESKY-COMP-DESC SWAP STREAMS-ENTRY-WITH-COMP ;

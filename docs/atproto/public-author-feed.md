@@ -2,10 +2,14 @@
 
 `akashic/atproto/public-author-feed.f` is a bounded, per-instance provider for
 one credential-free Bluesky public author-feed request. It owns request
-construction, a KDOS TLS adapter, the cooperative buffered HTTP exchange, and
-the transient response allocation. It deliberately stops at wire admission:
+construction, a KDOS TLS adapter, the cooperative buffered HTTP/XIO exchange,
+and the transient response allocation. It deliberately stops at wire admission:
 it does not decode JSON, mutate a feed model, commit Streams state, own an XIO
 service, or act as a general AT Protocol session.
+
+Ordinary `streams.f` depends only on the app-local `public-provider.f` seam.
+`bluesky-public.f` explicitly adapts this concrete provider into Streams;
+`public-trust.f` remains a separate boot-profile contribution.
 
 The fixed request is:
 
@@ -56,12 +60,17 @@ provider as its context:
 
 `PAF-XIO-START` first requires nonzero `NIO.OPEN-START-XT`,
 `NIO.OPEN-POLL-XT`, and `NIO.CANCEL-XT` callbacks on the embedded port. It
-never falls back to the legacy blocking open callback. A successful operation
-retains the admitted bytes at `PAF-BODY@` until the owner calls `XIO-RESET`;
-decoding and committing those bytes belong to the caller. Cancellation and
-failure use XIO's exact-once cancel/wipe lifecycle. Wipe zeros request, path,
-parser scratch, and body storage before freeing the transient body, and clears
-all embedded response pointers.
+never falls back to the legacy blocking open callback. The shipped KDOS adapter
+supplies those callbacks. Because the request declares `Connection: close`, a
+successful buffered exchange does not publish completion until its
+`NIO-CLOSE-START`/`NIO-CLOSE-POLL` sequence reports successful lower
+detachment, either through graceful close or the connector's bounded abort
+fallback. A successful operation then retains the admitted bytes at
+`PAF-BODY@` until the owner calls `XIO-RESET`; decoding and committing those
+bytes belong to the caller. In-flight cancellation and abnormal transport or
+parser failure use XIO's exact-once cancel/wipe lifecycle and `NIO-CANCEL`.
+Wipe resets or zeros parser, request, path, and receive scratch. It zeros the
+transient body before freeing it, then clears the embedded response pointers.
 
 The provider admits only HTTP 200 with exactly one `Content-Type` whose media
 type is `application/json` (case-insensitive, with optional safe parameters).
@@ -72,15 +81,31 @@ remain distinguishable through `PAF.ERROR-KIND`, `PAF.ERROR-CODE`, and
 `PAF.CLEANUP-ERROR`; a poisoned provider remains failed and refuses
 reconfiguration instead of claiming release.
 
-## Current transport status
+`PAF-DECONFIGURE` returns a status while moving an unpoisoned `IDLE`,
+`CONFIGURED`, or `RELEASED` provider with no live body to the defined idle
+state. It clears actor, path, request staging, flags, and ordinary error
+metadata while preserving the initialized transport descriptor; active,
+retained-body, failed, cancelled, and cleanup-poisoned providers refuse this
+transition.
 
-The native KDOS TLS adapter still exposes a blocking real open path. Therefore
-the production adapter currently fails this provider's cooperative-port gate
-as unsupported. The deterministic profile replaces only the embedded NIO
-callbacks with a partial-I/O fixture to qualify request bytes, parser
-admission, cancellation, and cleanup. That fixture is not evidence of live
-DNS or TLS readiness. The separate `atproto-public-trust` profile validates
-the anchor bytes, exact scopes, parser admission, and registry freeze contract.
+## Transport and qualification
+
+The public provider and Codex sources both reach the same cooperative
+`kdos-tls.f` connector; the provider does not carry an app-specific DNS/TCP/TLS
+bypass. The `public-author-feed` profile passes with deterministic NIO callbacks
+covering request bytes, partial send/receive, HTTP admission, cooperative open,
+normal-close selection, XIO lifecycle, cancellation, and cleanup.
+`http-buffered` covers delayed asynchronous close, `tls-port` independently
+passes the native connector's phase, cancellation, and
+graceful-close/abort-fallback contracts, and `atproto-public-trust` checks
+anchor and registry contracts.
+
+These are deterministic offline gates. They do not establish that the complete
+public request succeeds through a real TAP interface, that Desk remains
+responsive throughout a live exchange, or that every certificate/signature
+cryptographic leaf has a measured per-poll CPU bound. Connector and TLS-context
+cleanup also does not yet prove sanitization of KDOS's machine-global TLS and
+cryptographic scratch.
 
 Run the focused contract with:
 

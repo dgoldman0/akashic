@@ -12,7 +12,9 @@
 \ AT Protocol modules and applet construction do not widen machine trust.
 \ =====================================================================
 
-PROVIDED akashic-atproto-public-trust
+\ KDOS module identities are bounded to 23 bytes.  Keep this identifier
+\ complete within that boundary and distinct from the public-feed module.
+PROVIDED akashic-atp-pubtrust
 
 REQUIRE ../net/base64.f
 REQUIRE ../net/tls-trust-registry.f

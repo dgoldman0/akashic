@@ -217,9 +217,10 @@ A full HTTP server stack:
 
 Foundational AT Protocol pieces for interacting with Bluesky PDS servers. This
 is not yet a complete, qualified application client: the existing session,
-XRPC, and repository helpers are legacy single-context modules, while Streams'
-owned feed adapter is intentionally separate from live transport and
-credential work.
+XRPC, and repository helpers are legacy single-context modules. Streams uses a
+separate per-instance provider and bounded model for explicit credential-free
+public author-feed reads through Desk external I/O; it does not use those
+legacy session globals.
 
 **Session** (`session.f`) handles authentication — `SESS-LOGIN` calls `com.atproto.server.createSession` with a handle and app password, stores the returned access and refresh JWTs (512-byte buffers), and installs the bearer token on the HTTP client. `SESS-REFRESH` renews tokens before expiry.
 
@@ -228,11 +229,20 @@ credential work.
 **DID** (`did.f`) validates and parses Decentralized Identifiers. **AT-URI** (`aturi.f`) handles `at://` URI parsing. **TID** (`tid.f`) generates timestamp-based identifiers for records. **Repo** (`repo.f`) provides create/read/update/delete operations against AT Protocol repositories.
 
 **Feed model** (`feed-model.f`) transactionally decodes the bounded Bluesky
-timeline subset retained by Streams into caller-owned storage, including exact
-post, root, and parent identities. The live Streams boundary requires
-per-instance session/transport ownership, asynchronous request jobs, cache
-recovery, and credential zeroization rather than reusing the legacy globals as
-application state.
+author-feed/timeline subset retained by Streams into caller-owned storage,
+including exact post, root, and parent identities. Ordinary Streams statically
+depends on that bounded model and an abstract app-local provider seam. It does
+not load the concrete public author-feed provider, KDOS TLS adapter, public
+trust contribution, or legacy session globals. `bluesky-public.f` is the
+explicit opt-in composition, while trust is provisioned separately.
+
+The explicit composition owns provider state per instance and accepts no
+credential. It reaches the same `kdos-tls.f` connector used by Codex transports;
+that adapter installs cooperative open, close, and cancellation callbacks.
+Successful `Connection: close` exchanges poll graceful TLS/TCP teardown for a
+bounded period and use the lower abort primitive only as fallback. The
+deterministic connector, provider, and Streams/XIO profiles pass offline; a
+full live TAP run and a Desk-hosted live journey have not yet been qualified.
 
 ### utils/ — Data Formats and Common Utilities
 

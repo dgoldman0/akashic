@@ -17,21 +17,67 @@ CREATE transport KDOSTLS-SIZE ALLOT
 transport KDOSTLS-INIT
 S" api.openai.com" 443 transport KDOSTLS-CONFIGURE THROW
 
-transport KDOSTLS.PORT NIO-OPEN
+transport KDOSTLS.PORT NIO-OPEN-START
+\ Poll NIO-OPEN-POLL until it returns a terminal status.
 \ Use transport KDOSTLS.PORT with HREQ-SEND-STEP or HSTR-PUMP.
-transport KDOSTLS.PORT NIO-CLOSE
+transport KDOSTLS.PORT NIO-CLOSE-START
+\ Poll NIO-CLOSE-POLL until it returns a terminal status.
 ```
 
 `KDOSTLS-CONFIGURE` accepts one validated DNS hostname of at most 64 bytes and a
-remote port from 1 through 65535. `NIO-OPEN` copies the hostname into KDOS SNI,
-resolves it, selects an ephemeral local port, requests HTTP/1.1 ALPN, and
-accepts the connection only when KDOS reports an established, peer-authenticated
-TLS context. The KDOS trust store must already contain an applicable anchor.
+remote port from 1 through 65535. `KDOSTLS-INIT` installs native
+`NIO.OPEN-START-XT`, `NIO.OPEN-POLL-XT`, `NIO.CLOSE-START-XT`,
+`NIO.CLOSE-POLL-XT`, and `NIO.CANCEL-XT` callbacks. `NIO-OPEN` and `NIO-CLOSE`
+remain blocking compatibility words, but they drive the same connector and
+close state machines rather than selecting a second transport path. The legacy
+open remains deliberately blocking and may enter `NET-IDLE` between at most
+4096 state-machine polls. Compatibility close performs at most 256 nonwaiting
+polls and aborts if teardown is still pending; new consumers use the explicit
+asynchronous callbacks for both directions.
+
+Open invokes one scheduled network or handshake phase per poll: TLS/ClientHello
+preparation, cooperative DNS and ARP, TCP establishment, at most one incoming
+frame or one reassembled handshake message, and client Finished. The connector
+has a 15-second deadline, rechecks route-cache state immediately before lower
+sends, and accepts success only while it still owns the adapter, the recorded
+TCB identity still matches, TCP and TLS are established, and peer authentication
+is set. The request uses HTTP/1.1 ALPN, and the KDOS trust store must already
+contain an applicable anchor.
+
+Normal close is also cooperative. It retains the TLS context and machine owner
+while it sends `close_notify`, waits for that alert to be acknowledged, sends
+FIN, and polls until the TCB reaches `CLOSED` or `TIME_WAIT`. At `TIME_WAIT` the
+adapter wipes and detaches its TLS context and releases its owner; the lower TCB
+remains in KDOS's global table to expire normally. A cold route is resolved
+cooperatively within the same two-second close deadline. If graceful teardown
+cannot make progress, the deadline expires, or the close-notify operation
+rejects the send, the connector falls back to `TLS-ABORT`, which uses the lower
+`TCP-ABORT` path when a matching live TCB is still present. Peer-first shutdown
+can drain authenticated plaintext, reply with `close_notify` from TCP
+`CLOSE_WAIT`, send FIN, and recognize the lower `LAST_ACK` reclamation without
+misreporting an abort fallback.
+
+Cancellation, failed open, and abnormal higher-level teardown use that abort
+path directly. `KDOSTLS-FREE` first requires `NIO-CANCEL` to report
+`NIO-S-CANCELLED`; it does not erase or free a descriptor after uncertain lower
+cleanup. Callback exceptions are retained as cleanup failure instead of being
+reported as a successful detach. Abort never initiates ARP, polls the NIC, or
+waits: its only possible wire action is a cached-route best-effort RST, followed
+by unconditional local TCB reclamation and TLS-context wipe.
 
 `NIO-SEND` and `NIO-RECV` preserve partial progress. A zero-byte receive while
-the TLS context is established is idle; a clean close alert maps to
-`NIO-S-EOF`; malformed records, authentication loss, invalid callback counts,
-and transport faults map to `NIO-S-FAILED`.
+the TLS context is established is idle; an authenticated `close_notify` maps to
+`NIO-S-EOF`. A bare TCP FIN may drain already authenticated plaintext, but the
+next receive is TLS truncation and maps to `NIO-S-FAILED`. Malformed records,
+authentication loss, invalid callback counts, and other transport faults also
+map to `NIO-S-FAILED`.
+
+Default post-open I/O never falls into KDOS's blocking ARP fallback. If the
+remote next-hop cache entry has gone cold, default `NIO-SEND` and `NIO-RECV`
+fail immediately with `KDOSTLS-E-IO`; the owner can cancel and retry through a
+fresh cooperative open. Default `NIO-POLL` performs no ARP and admits at most
+one frame, entering a TCP reply path only after both the adapter route and the
+incoming source route have cached next hops.
 
 ## Ownership
 
@@ -51,16 +97,41 @@ KDOS currently shares its TLS handshake, SNI, record, and receive scratch.
 a provider or Desk policy. Concurrent TLS requires descriptor-owned KDOS record
 state in a later KDOS change.
 
+Graceful detach and `TLS-ABORT` wipe the adapter's TLS context and the
+connector-owned staging fields. They do **not** yet prove sanitization of all
+machine-global TLS and cryptographic scratch, such as shared handshake, key
+agreement, transcript, and record buffers. The current lifecycle guarantee is
+lower ownership detachment plus context wipe, not a comprehensive machine-wide
+secret-erasure boundary.
+
 ## Diagnostics
 
-`KDOSTLS.STATE`, `KDOSTLS.LAST-ERROR`, `KDOSTLS.CONTEXT`, and `KDOSTLS.LOCAL-PORT`
-remain caller-owned and non-secret. Error constants distinguish invalid
-configuration, owner contention, absent trust, DNS failure, connect failure,
-authentication failure, I/O failure, and a thrown platform callback.
+`KDOSTLS.STATE`, `KDOSTLS.PHASE`, `KDOSTLS.LAST-ERROR`,
+`KDOSTLS.CLEANUP-ERROR`, `KDOSTLS.ABORT-STATUS`, and
+`KDOSTLS.CLOSE-FALLBACKS` expose lifecycle diagnostics. Step count and cycle
+fields make cooperative-poll measurements visible to deterministic profiles.
+Error constants distinguish invalid configuration, owner contention, absent or
+changed trust, DNS/connect/authentication failure, timeout, cancellation,
+cleanup failure, I/O failure, and a thrown platform callback.
 
-The operation slots (`KDOSTLS.DNS-XT` through `KDOSTLS.STATUS-XT`) default to real
-KDOS words. They allow deterministic guest tests of this platform adapter; they
-do not create a second product transport. The `tls-port` smoke profile verifies
-SNI, trust gating, authenticated open, partial I/O, idle/EOF behavior, owner
-release, callback faults, retries, and stack balance without external network
-access.
+TCB identity checks validate table range and alignment plus the local/remote
+tuple and initial send sequence. They reject pointer and fingerprint mismatch,
+but KDOS exposes no allocation generation: a future slot reuse that recreates
+the exact tuple and ISS remains theoretically indistinguishable.
+
+Streams' explicit public-author-feed composition and the Codex source both use
+this connector implementation through separate caller-owned descriptors. They
+do not maintain parallel application-specific TLS connection logic; the
+machine owner gate serializes their use of KDOS's shared TLS state.
+
+The deterministic offline `tls-port` gate passes with cooperative callback
+installation, exact phase progression, cancellation across open phases, trust
+drift and timeout handling, partial I/O and peer EOF, graceful close,
+backpressure, half-close, deadline and notifier abort fallback, TCB-reuse
+fingerprint-mismatch guarding, and context/owner release checks. It also
+exercises the real lower ClientHello-preparation prefix and records guest
+cycles. It has not yet measured the complete certificate-chain and
+signature-verification work inside every live handshake phase, so
+one-message-per-poll is not yet a demonstrated CPU ceiling for all cryptographic
+leaves. Nor has a full live TAP connection or a Desk-hosted live journey been
+established by that offline gate.

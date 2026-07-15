@@ -38,8 +38,27 @@ The Streams qualification path is intentionally split by boundary:
 - `streams-contracts` covers the owned feed model and typed capabilities.
 - `streams-draft-contracts` covers the draft record and replacement primitive.
 - `streams-persistence-contracts` covers normal applet load/save/recovery.
+- `streams-xio-contracts` covers the explicitly composed Streams/XIO contract
+  using injected port callbacks: submission, completion, actor rollback, stale
+  results, and cleanup. It is offline integration evidence, not live-network or
+  Desk-responsiveness evidence.
+- `public-author-feed` covers bounded request/admission behavior and cooperative
+  buffered HTTP lifecycle with deterministic partial-I/O callbacks.
+- `tls-port` covers the native connector's deterministic phase progression,
+  cancellation, graceful close, and bounded abort fallback without external
+  network access.
 - `streams` covers the standalone timeline, context, search, and draft UI.
 - `desktop-streams` covers launch, close, relaunch, and recovery through Desk.
+- `streams-live-public` is the opt-in TAP-facing component journey; it directly
+  ticks the XIO service, Streams component, and network loop.
+
+The deterministic `tls-port`, `public-author-feed`, and
+`streams-xio-contracts` gates pass in the current tree. They do not prove a
+complete live TAP exchange or a Desk-hosted responsiveness journey. The
+connector records cycles per poll and exercises the real ClientHello prefix,
+but the complete live certificate-chain and signature phases do not yet have a
+measured per-poll CPU ceiling. Context cleanup also does not prove that every
+machine-global KDOS TLS/cryptographic scratch buffer has been sanitized.
 
 The synthetic Streams page lives at
 `local_testing/fixtures/atproto/timeline.json`. The harness copies it into the
@@ -127,19 +146,31 @@ unchanged.
 ## Opt-In Live Network
 
 The live profiles require a user-owned TAP interface. From the workspace root,
-one script configures it and immediately runs the credential-free gate:
+the setup script creates or reuses `mp64tap0`, enables forwarding and
+masquerading, and then exits:
 
 ```bash
 sudo local_testing/setup_codex_live.sh
 ```
 
-The script creates or reuses `mp64tap0`, enables forwarding and masquerading,
-drops back to the account that invoked `sudo`, and runs this gate command. It
-authenticates both source-pinned hosts with the native KDOS TLS stack but sends
-no application request:
+The Streams live-public profile now uses the native cooperative open, close,
+and cancellation callbacks. It is a focused component journey, not by itself a
+full Desk responsiveness journey, and it accepts no app password or other
+credential. This work has not yet recorded a passing real-TAP run, so treat the
+command as the remaining live qualification rather than as evidence already
+established:
 
 ```bash
-python3 local_testing/akashic_tui.py smoke \
+python3 akashic/local_testing/akashic_tui.py smoke \
+  --profile streams-live-public --nic-tap mp64tap0 \
+  --max-steps 5000000000 --timeout 300
+```
+
+The separate Codex TLS gate authenticates both source-pinned hosts with the
+native KDOS TLS stack but sends no application request:
+
+```bash
+python3 akashic/local_testing/akashic_tui.py smoke \
   --profile codex-live-tls --nic-tap mp64tap0 \
   --max-steps 5000000000 --timeout 300
 ```
@@ -159,7 +190,7 @@ After that keyless gate, the focused device-flow probe can be kept alive for a
 browser authorization run:
 
 ```bash
-python3 local_testing/akashic_tui.py serve \
+python3 akashic/local_testing/akashic_tui.py serve \
   --profile codex-live-auth --nic-tap mp64tap0 \
   --socket /tmp/akashic-tui.sock
 ```

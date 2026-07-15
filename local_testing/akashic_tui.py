@@ -28,9 +28,12 @@ OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
 STREAMS_TIMELINE_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "atproto" / "timeline.json"
 ).read_bytes()
-REQUIRE_RE = re.compile(r"^\s*REQUIRE\s+(\S+)", re.MULTILINE)
-PROVIDED_RE = re.compile(r"^\s*PROVIDED\s+(\S+)", re.MULTILINE)
-STACK_EFFECT_RE = re.compile(r"[ \t]+\([^()\r\n]*--[^()\r\n]*\)")
+REQUIRE_RE = re.compile(r"^ *REQUIRE +([^ \n]+)", re.MULTILINE)
+PROVIDED_RE = re.compile(r"^ *PROVIDED +([^ \n]+)", re.MULTILINE)
+COLON_STACK_EFFECT_RE = re.compile(
+    r"^(?P<head> *: +[^ ]+) +(?P<effect>\([^()\r\n]*--[^()\r\n]*\))"
+)
+FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
 # KDOS stores a terminating NUL in its 24-byte NAMEBUF, leaving 23 key bytes.
 MODULE_KEY_BYTES = 23
 # KDOS's module loader performs one 8-bit sector-count transfer.  Leave
@@ -870,6 +873,8 @@ VARIABLE _np-polls
 VARIABLE _np-service-polls
 VARIABLE _np-cancels
 VARIABLE _np-closes
+VARIABLE _np-close-starts
+VARIABLE _np-close-polls
 VARIABLE _np-sends
 VARIABLE _np-recvs
 VARIABLE _np-io-limit
@@ -911,6 +916,19 @@ VARIABLE _np-nested-b
     DROP 1 _np-closes +!
     _np-mode @ DUP 10 = SWAP 41 = OR IF -715 THROW THEN ;
 
+: _np-close-start  ( context -- io-status )
+    DROP 1 _np-close-starts +!
+    _np-mode @ 50 = IF NIO-S-OK EXIT THEN
+    _np-mode @ 51 = IF NIO-S-FAILED EXIT THEN
+    _np-mode @ 52 = IF -719 THROW THEN
+    NIO-S-PENDING ;
+
+: _np-close-poll  ( context -- io-status )
+    DROP 1 _np-close-polls +!
+    _np-mode @ 53 = IF NIO-S-FAILED EXIT THEN
+    _np-mode @ 54 = IF -720 THROW THEN
+    _np-close-polls @ 2 >= IF NIO-S-OK ELSE NIO-S-PENDING THEN ;
+
 : _np-send  ( buffer length context -- count io-status )
     DROP _np-io-limit ! DROP 1 _np-sends +!
     _np-mode @ 20 = IF -1 NIO-S-OK EXIT THEN
@@ -944,6 +962,7 @@ VARIABLE _np-nested-b
     _np-port NIO-INIT
     0 _np-mode ! 0 _np-opens ! 0 _np-starts ! 0 _np-polls !
     0 _np-service-polls ! 0 _np-cancels ! 0 _np-closes !
+    0 _np-close-starts ! 0 _np-close-polls !
     0 _np-sends ! 0 _np-recvs ! 0 _np-nested-a ! 0 _np-nested-b !
     _np-port _np-port NIO.CONTEXT !
     ['] _np-open _np-port NIO.OPEN-XT !
@@ -952,6 +971,8 @@ VARIABLE _np-nested-b
     ['] _np-service-poll _np-port NIO.POLL-XT !
     ['] _np-cancel _np-port NIO.CANCEL-XT !
     ['] _np-close _np-port NIO.CLOSE-XT !
+    ['] _np-close-start _np-port NIO.CLOSE-START-XT !
+    ['] _np-close-poll _np-port NIO.CLOSE-POLL-XT !
     ['] _np-send _np-port NIO.SEND-XT !
     ['] _np-recv _np-port NIO.RECV-XT ! ;
 
@@ -1055,12 +1076,12 @@ VARIABLE _np-nested-b
     _np-reset 9 _np-mode !
     _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
     _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
-    _np-cancels @ 1 = _np-assert _np-closes @ 1 = _np-assert
+    _np-cancels @ 1 = _np-assert _np-closes @ 0= _np-assert
     _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-FAILED = _np-assert
     _np-port NIO.CANCEL-ERROR @ -714 = _np-assert
     _np-port NIO.CLOSE-ERROR @ 0= _np-assert
     _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
-    _np-cancels @ 1 = _np-assert _np-closes @ 1 = _np-assert
+    _np-cancels @ 1 = _np-assert _np-closes @ 0= _np-assert
     _np-port NIO-OPEN-START NIO-S-FAILED = _np-assert
     _np-starts @ 1 = _np-assert
     _np-port NIO-OPEN NIO-S-FAILED = _np-assert
@@ -1092,14 +1113,130 @@ VARIABLE _np-nested-b
     _np-port NIO-OPEN-START DROP
     _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
     _np-port NIO.CANCEL-ERROR @ -714 = _np-assert
-    _np-port NIO.CLOSE-ERROR @ -715 = _np-assert
-    _np-cancels @ 1 = _np-assert _np-closes @ 1 = _np-assert
+    _np-port NIO.CLOSE-ERROR @ 0= _np-assert
+    _np-cancels @ 1 = _np-assert _np-closes @ 0= _np-assert
     _np-port NIO-OPEN-START NIO-S-FAILED = _np-assert
     _np-starts @ 1 = _np-assert
 
     _np-reset
     _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
     _np-starts @ 1 = _np-assert ;
+
+: _np-test-async-close  ( -- )
+    _np-reset
+    _np-port NIO-OPEN NIO-S-OK = _np-assert
+    _np-port NIO-CLOSE-START NIO-S-PENDING = _np-assert
+    _np-close-starts @ 1 = _np-assert _np-close-polls @ 0= _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-CLOSING = _np-assert
+    _np-port NIO.CLOSE-STATUS @ NIO-S-PENDING = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-OPEN = _np-assert
+    _np-port NIO-CLOSE-START NIO-S-PENDING = _np-assert
+    _np-close-starts @ 1 = _np-assert
+    _np-port NIO-CLOSE-STATUS NIO-S-PENDING = _np-assert
+    _np-closes @ 0= _np-assert
+    _np-port NIO-OPEN NIO-S-FAILED = _np-assert
+    _np-opens @ 1 = _np-assert
+    _np-port NIO-CLOSE-POLL NIO-S-PENDING = _np-assert
+    _np-close-polls @ 1 = _np-assert
+    _np-port NIO-CLOSE-POLL NIO-S-OK = _np-assert
+    _np-close-polls @ 2 = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-CLOSED = _np-assert
+    _np-port NIO.CLOSE-STATUS @ NIO-S-OK = _np-assert
+    _np-port NIO.OPEN-STATE @ NIO-OPEN-STATE-CLOSED = _np-assert
+    _np-port NIO-CLOSE-POLL NIO-S-OK = _np-assert
+    _np-port NIO-CLOSE-START NIO-S-OK = _np-assert
+    _np-close-polls @ 2 = _np-assert _np-close-starts @ 1 = _np-assert
+
+    _np-port NIO-OPEN NIO-S-OK = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-IDLE = _np-assert
+    _np-port NIO.CLOSE-STATUS @ NIO-S-OK = _np-assert
+    _np-opens @ 2 = _np-assert
+    _np-port NIO-CANCEL DROP
+
+    _np-reset 50 _np-mode !
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-OK = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-CLOSED = _np-assert
+    _np-close-starts @ 1 = _np-assert _np-close-polls @ 0= _np-assert
+
+    _np-reset 51 _np-mode !
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-FAILED = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-FAILED = _np-assert
+    _np-port NIO.CLOSE-STATUS @ NIO-S-FAILED = _np-assert
+    _np-port NIO.CLOSE-ERROR @ 0= _np-assert
+    _np-port NIO-CLOSE-STATUS NIO-S-FAILED = _np-assert
+    _np-port NIO-CLOSE-START NIO-S-FAILED = _np-assert
+    _np-close-starts @ 1 = _np-assert
+
+    _np-reset 52 _np-mode !
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-FAILED = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-FAILED = _np-assert
+    _np-port NIO.CLOSE-ERROR @ -719 = _np-assert
+
+    _np-reset 53 _np-mode !
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-PENDING = _np-assert
+    _np-port NIO-CLOSE-POLL NIO-S-FAILED = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-FAILED = _np-assert
+    _np-port NIO.CLOSE-ERROR @ 0= _np-assert
+
+    _np-reset 54 _np-mode !
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-PENDING = _np-assert
+    _np-port NIO-CLOSE-POLL NIO-S-FAILED = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-FAILED = _np-assert
+    _np-port NIO.CLOSE-ERROR @ -720 = _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-port NIO.CLOSE-ERROR @ -720 = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-CANCELLED = _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-cancels @ 1 = _np-assert
+    _np-port NIO-OPEN-START NIO-S-PENDING = _np-assert
+    _np-starts @ 1 = _np-assert
+    _np-port NIO.CLOSE-ERROR @ 0= _np-assert
+
+    _np-reset
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-PENDING = _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-cancels @ 1 = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-CANCELLED = _np-assert
+    _np-port NIO.CLOSE-STATUS @ NIO-S-CANCELLED = _np-assert
+    _np-port NIO-CLOSE-STATUS NIO-S-CANCELLED = _np-assert
+    _np-port NIO-CLOSE-POLL NIO-S-CANCELLED = _np-assert
+    _np-port NIO-CANCEL NIO-S-CANCELLED = _np-assert
+    _np-cancels @ 1 = _np-assert _np-close-polls @ 0= _np-assert
+
+    \ Without a cancel callback, a pending graceful close does not prove
+    \ detachment.  Its failed fallback remains sticky on repeated cancel.
+    _np-reset
+    0 _np-port NIO.CANCEL-XT !
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-PENDING = _np-assert
+    _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-FAILED = _np-assert
+    _np-port NIO.CANCEL-ERROR @ 0= _np-assert
+    _np-port NIO.CLOSE-ERROR @ 0= _np-assert
+    _np-port NIO-CANCEL NIO-S-FAILED = _np-assert
+    _np-close-starts @ 1 = _np-assert
+    _np-close-polls @ 0= _np-assert _np-closes @ 0= _np-assert
+
+    _np-reset
+    0 _np-port NIO.CLOSE-START-XT !
+    0 _np-port NIO.CLOSE-POLL-XT !
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-OK = _np-assert
+    _np-closes @ 1 = _np-assert _np-close-starts @ 0= _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-CLOSED = _np-assert
+
+    _np-reset
+    _np-port NIO-OPEN DROP
+    _np-port NIO-CLOSE-START NIO-S-PENDING = _np-assert
+    0 _np-port NIO.CLOSE-POLL-XT !
+    _np-port NIO-CLOSE-POLL NIO-S-FAILED = _np-assert
+    _np-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-FAILED = _np-assert ;
 
 : _np-io-failed?  ( count io-status -- flag )
     NIO-S-FAILED = SWAP 0= AND ;
@@ -1178,6 +1315,7 @@ VARIABLE _np-nested-b
     _np-test-legacy
     _np-test-async
     _np-test-fallback-and-cancel
+    _np-test-async-close
     _np-test-io-normalization
     _np-test-poll-fault
     _np-test-reentrant-cleanup
@@ -1920,6 +2058,9 @@ VARIABLE _hb-open-starts
 VARIABLE _hb-open-polls
 VARIABLE _hb-cancels
 VARIABLE _hb-closes
+VARIABLE _hb-close-starts
+VARIABLE _hb-close-polls
+VARIABLE _hb-async-close-mode
 VARIABLE _hb-a
 VARIABLE _hb-u
 VARIABLE _hb-n
@@ -1989,6 +2130,18 @@ VARIABLE _hb-n
     DROP 1 _hb-closes +!
     _hb-cleanup-mode @ DUP 2 = SWAP 3 = OR IF -723 THROW THEN ;
 
+: _hb-close-start  ( context -- io-status )
+    DROP 1 _hb-close-starts +!
+    _hb-async-close-mode @ 1 = IF NIO-S-FAILED EXIT THEN
+    _hb-async-close-mode @ 2 = IF -724 THROW THEN
+    NIO-S-PENDING ;
+
+: _hb-close-poll  ( context -- io-status )
+    DROP 1 _hb-close-polls +!
+    _hb-async-close-mode @ 3 = IF NIO-S-FAILED EXIT THEN
+    _hb-async-close-mode @ 4 = IF -725 THROW THEN
+    _hb-close-polls @ 2 >= IF NIO-S-OK ELSE NIO-S-PENDING THEN ;
+
 : _hb-request-build  ( connection-close? -- )
     _hb-request HREQ-CLEAR
     _hb-request-buffer 512 _hb-request HREQ-INIT HREQ-S-OK = _hb-assert
@@ -2002,7 +2155,9 @@ VARIABLE _hb-n
 : _hb-setup  ( -- )
     0 _hb-mode ! 0 _hb-sent-u ! 0 _hb-response-pos !
     0 _hb-io-mode ! 0 _hb-cleanup-mode ! 0 _hb-response-mode !
+    0 _hb-async-close-mode !
     0 _hb-open-starts ! 0 _hb-open-polls ! 0 _hb-cancels ! 0 _hb-closes !
+    0 _hb-close-starts ! 0 _hb-close-polls !
     _hb-response-build
     _hb-port NIO-INIT
     ['] _hb-open-start _hb-port NIO.OPEN-START-XT !
@@ -2015,6 +2170,10 @@ VARIABLE _hb-n
     _hb-request-buffer 512 _hb-request HREQ-INIT HREQ-S-OK = _hb-assert
     -1 _hb-request-build
     _hb-body 64 _hb-exchange HBUF-INIT HBUF-S-OK = _hb-assert ;
+
+: _hb-async-close-install  ( -- )
+    ['] _hb-close-start _hb-port NIO.CLOSE-START-XT !
+    ['] _hb-close-poll _hb-port NIO.CLOSE-POLL-XT ! ;
 
 : _hb-pump-done  ( -- status )
     100 0 DO
@@ -2126,7 +2285,7 @@ VARIABLE _hb-n
     _hb-exchange HBUF-CANCEL HBUF-S-TRANSPORT = _hb-assert
     _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
     _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
-    _hb-cancels @ 1 = _hb-assert _hb-closes @ 1 = _hb-assert
+    _hb-cancels @ 1 = _hb-assert _hb-closes @ 0= _hb-assert
     _hb-exchange HBUF-RESET
     _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
     _hb-exchange HBUF.PORT @ _hb-port = _hb-assert ;
@@ -2146,6 +2305,10 @@ VARIABLE _hb-n
     _hb-open-starts @ 1 = _hb-assert
     _hb-pump-done HBUF-S-OK = _hb-assert
     _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
+    _hb-exchange HBUF-RESET
+    _hb-cancels @ 1 = _hb-assert _hb-closes @ 0= _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-IDLE = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
 
     _hb-setup 3 _hb-mode !
     0 _hb-request-build
@@ -2174,6 +2337,87 @@ VARIABLE _hb-n
     _hb-exchange HBUF.PORT @ 0= _hb-assert
     _hb-closes @ 1 = _hb-assert ;
 
+: _hb-enter-async-closing  ( -- )
+    _hb-setup 3 _hb-mode ! _hb-async-close-install
+    _hb-request _hb-port _hb-exchange HBUF-START
+        HBUF-S-PENDING = _hb-assert
+    100 0 DO
+        _hb-exchange HBUF-POLL HBUF-S-PENDING = _hb-assert
+        _hb-exchange HBUF.STATE @ HBUF-STATE-CLOSING = IF
+            UNLOOP EXIT
+        THEN
+    LOOP
+    0 _hb-assert ;
+
+: _hb-test-async-close  ( -- )
+    _hb-enter-async-closing
+    _hb-close-starts @ 1 = _hb-assert _hb-close-polls @ 0= _hb-assert
+    _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
+    _hb-exchange HBUF.LAST-STATUS @ HBUF-S-PENDING = _hb-assert
+    _hb-request _hb-port _hb-exchange HBUF-START
+        HBUF-S-BUSY = _hb-assert
+    _hb-close-starts @ 1 = _hb-assert
+    _hb-exchange HBUF-POLL HBUF-S-PENDING = _hb-assert
+    _hb-close-polls @ 1 = _hb-assert
+    _hb-exchange HBUF-POLL HBUF-S-OK = _hb-assert
+    _hb-close-polls @ 2 = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-DONE = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+    _hb-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-CLOSED = _hb-assert
+    _hb-exchange HBUF-POLL HBUF-S-OK = _hb-assert
+    _hb-close-starts @ 1 = _hb-assert _hb-close-polls @ 2 = _hb-assert
+
+    _hb-setup 3 _hb-mode ! _hb-async-close-install
+    1 _hb-async-close-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-pump-done HBUF-S-TRANSPORT = _hb-assert
+    _hb-close-starts @ 1 = _hb-assert _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+
+    _hb-setup 3 _hb-mode ! _hb-async-close-install
+    2 _hb-async-close-mode !
+    _hb-request _hb-port _hb-exchange HBUF-START DROP
+    _hb-pump-done HBUF-S-TRANSPORT = _hb-assert
+    _hb-port NIO.CLOSE-ERROR @ -724 = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+
+    _hb-enter-async-closing 3 _hb-async-close-mode !
+    _hb-exchange HBUF-POLL HBUF-S-TRANSPORT = _hb-assert
+    _hb-close-polls @ 1 = _hb-assert _hb-cancels @ 1 = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+
+    _hb-enter-async-closing 4 _hb-async-close-mode !
+    _hb-exchange HBUF-POLL HBUF-S-TRANSPORT = _hb-assert
+    _hb-port NIO.CLOSE-ERROR @ -725 = _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+
+    _hb-enter-async-closing
+    _hb-exchange HBUF-CANCEL HBUF-S-OK = _hb-assert
+    _hb-cancels @ 1 = _hb-assert _hb-close-polls @ 0= _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-CANCELLED = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+    _hb-port NIO.CLOSE-STATE @ NIO-CLOSE-STATE-CANCELLED = _hb-assert
+
+    _hb-enter-async-closing
+    _hb-exchange HBUF-RESET
+    _hb-cancels @ 1 = _hb-assert _hb-close-polls @ 0= _hb-assert
+    _hb-exchange HBUF.STATE @ HBUF-STATE-IDLE = _hb-assert
+    _hb-exchange HBUF.PORT @ 0= _hb-assert
+
+    \ A generic port without cancellation cannot abandon an asynchronous
+    \ close.  Repeated reset must retain the uncertain lower pointer.
+    _hb-enter-async-closing
+    0 _hb-port NIO.CANCEL-XT !
+    _hb-exchange HBUF-RESET
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+    _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
+    _hb-exchange HBUF-RESET
+    _hb-exchange HBUF.STATE @ HBUF-STATE-ERROR = _hb-assert
+    _hb-exchange HBUF.PORT @ _hb-port = _hb-assert
+    _hb-cancels @ 0= _hb-assert _hb-closes @ 0= _hb-assert
+    _hb-close-starts @ 1 = _hb-assert _hb-close-polls @ 0= _hb-assert ;
+
 : _hb-run  ( -- )
     0 _hb-fails ! 0 _hb-checks ! DEPTH _hb-depth !
     _hb-test-open-and-exchange
@@ -2182,6 +2426,7 @@ VARIABLE _hb-n
     _hb-test-io-cancellation
     _hb-test-cleanup-failure
     _hb-test-persistent-framing
+    _hb-test-async-close
     _hb-stack
     _hb-fails @ 0= IF
         ." HTTP BUFFERED PASS " _hb-checks @ .
@@ -2384,8 +2629,9 @@ CREATE _mt-a KDOSTLS-SIZE ALLOT
 CREATE _mt-b KDOSTLS-SIZE ALLOT
 CREATE _mt-recv 32 ALLOT
 CREATE _mt-sent 256 ALLOT
-CREATE _mt-native-ctx /TLS-CTX ALLOT
-CREATE _mt-native-tcb /TCB ALLOT
+VARIABLE _mt-native-ctx
+VARIABLE _mt-native-tcb
+CREATE _mt-ip 4 ALLOT
 VARIABLE _mt-sent-u
 VARIABLE _mt-in-pos
 VARIABLE _mt-dns-hits
@@ -2394,6 +2640,7 @@ VARIABLE _mt-close-hits
 VARIABLE _mt-poll-hits
 VARIABLE _mt-link
 VARIABLE _mt-old-trust
+VARIABLE _mt-old-trust-generation
 VARIABLE _mt-op-a
 VARIABLE _mt-op-b
 VARIABLE _mt-op-u
@@ -2476,6 +2723,10 @@ VARIABLE _mt-bind-a
     ['] _mt-poll _mt-bind-a @ KDOSTLS.POLL-XT !
     ['] _mt-status _mt-bind-a @ KDOSTLS.STATUS-XT ! ;
 
+: _mt-test-clear  ( -- )
+    1 2 3 4 _mt-ip IP!
+    0 _mt-close-hits ! ;
+
 : _mt-test-config  ( -- )
     _mt-b KDOSTLS-INIT
     S" bad host" 443 _mt-b KDOSTLS-CONFIGURE KDOSTLS-E-INVALID = _mt-assert
@@ -2521,13 +2772,19 @@ VARIABLE _mt-bind-a
     _mt-b KDOSTLS.PORT NIO-POLL
     _mt-poll-hits @ 1 = _mt-assert
     ['] _mt-close-throw _mt-b KDOSTLS.CLOSE-XT !
-    _mt-b KDOSTLS.PORT NIO-CLOSE
+    \ The current compatibility adapter catches and drops native close errors.
+    \ Record that behavior truthfully; cooperative cleanup is not qualified.
+    _mt-b KDOSTLS.PORT NIO-CLOSE-STATUS NIO-S-OK = _mt-assert
+    _mt-b KDOSTLS.PORT NIO.CLOSE-ERROR @ 0= _mt-assert
     _mt-b KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
+    _mt-b KDOSTLS.CONTEXT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    ['] _mt-close _mt-b KDOSTLS.CLOSE-XT !
     _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
     _mt-a KDOSTLS.PORT NIO-CLOSE ;
 
 : _mt-test-errors  ( -- )
-    _mt-a _mt-bind
+    _mt-a _mt-bind _mt-test-clear
     0 TLS-TRUST-COUNT !
     _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
@@ -2539,7 +2796,7 @@ VARIABLE _mt-bind-a
     _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
 
-    _mt-a _mt-bind 1 TLS-TRUST-COUNT !
+    _mt-a _mt-bind _mt-test-clear 1 TLS-TRUST-COUNT !
     ['] _mt-connect-zero _mt-a KDOSTLS.CONNECT-XT !
     _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-CONNECT = _mt-assert
@@ -2562,21 +2819,21 @@ VARIABLE _mt-bind-a
     _mt-a KDOSTLS.PORT NIO-CLOSE ;
 
 : _mt-test-native-link-close  ( -- )
-    _mt-native-ctx /TLS-CTX 0 FILL
-    _mt-native-tcb /TCB 0 FILL
-    TLSS-ESTABLISHED _mt-native-ctx TLS-CTX.STATE !
-    1 _mt-native-ctx TLS-CTX.PEER-AUTH !
-    _mt-native-tcb _mt-native-ctx TLS-CTX.TCB !
-    TCPS-ESTABLISHED _mt-native-tcb TCB.STATE !
-    _mt-native-ctx 0 _KDOSTLS-STATUS-DEFAULT
+    0 TLS-CTX@ DUP _mt-native-ctx ! /TLS-CTX 0 FILL
+    0 TCB-N DUP _mt-native-tcb ! /TCB 0 FILL
+    TLSS-ESTABLISHED _mt-native-ctx @ TLS-CTX.STATE !
+    1 _mt-native-ctx @ TLS-CTX.PEER-AUTH !
+    _mt-native-tcb @ _mt-native-ctx @ TLS-CTX.TCB !
+    TCPS-ESTABLISHED _mt-native-tcb @ TCB.STATE !
+    _mt-native-ctx @ 0 _KDOSTLS-STATUS-DEFAULT
     KDOSTLS-LINK-OPEN = _mt-assert
-    TCPS-CLOSED _mt-native-tcb TCB.STATE !
-    _mt-native-ctx 0 _KDOSTLS-STATUS-DEFAULT
+    TCPS-CLOSED _mt-native-tcb @ TCB.STATE !
+    _mt-native-ctx @ 0 _KDOSTLS-STATUS-DEFAULT
     KDOSTLS-LINK-CLOSED = _mt-assert
 
     _mt-a KDOSTLS-INIT
     KDOSTLS-STATE-OPEN _mt-a KDOSTLS.STATE !
-    _mt-native-ctx _mt-a KDOSTLS.CONTEXT !
+    _mt-native-ctx @ _mt-a KDOSTLS.CONTEXT !
     ['] _mt-send-zero _mt-a KDOSTLS.SEND-XT !
     S" stalled" _mt-a KDOSTLS.PORT NIO-SEND
     NIO-S-FAILED = _mt-assert 0= _mt-assert
@@ -2584,18 +2841,517 @@ VARIABLE _mt-bind-a
     0 _mt-a KDOSTLS.CONTEXT !
     _mt-a KDOSTLS.PORT NIO-CLOSE ;
 
+CREATE _mt-phase-log 32 CELLS ALLOT
+CREATE _mt-prep-mac 6 ALLOT
+VARIABLE _mt-phase-log-u
+VARIABLE _mt-prep-now
+VARIABLE _mt-prep-adapter
+VARIABLE _mt-prep-throw
+VARIABLE _mt-prep-early-ready
+VARIABLE _mt-prep-ctx
+
+: _mt-zeroed?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _mt-prep-now@  ( adapter -- ms )
+    DROP _mt-prep-now @ ;
+
+: _mt-prep-step  ( phase adapter -- prep-status )
+    _mt-prep-adapter !
+    _mt-prep-throw @ IF DROP -779 THROW THEN
+    _mt-phase-log-u @ 16 < IF
+        DUP _mt-phase-log _mt-phase-log-u @ CELLS + !
+        1 _mt-phase-log-u +!
+    THEN
+    _mt-prep-early-ready @ IF DROP KDOSTLS-PREP-S-READY EXIT THEN
+    DUP KDOSTLS-PHASE-REMOTE-ARP-READY = IF
+        DROP KDOSTLS-PREP-S-READY EXIT
+    THEN
+    1+ _mt-prep-adapter @ KDOSTLS.PHASE !
+    KDOSTLS-PREP-S-PENDING ;
+
+: _mt-prep-bind  ( adapter -- )
+    DUP KDOSTLS-INIT
+    DUP >R S" api.openai.com" 443 R> KDOSTLS-CONFIGURE
+        KDOSTLS-E-OK = _mt-assert
+    ['] _mt-prep-now@ OVER KDOSTLS.NOW-XT !
+    ['] _mt-prep-step SWAP KDOSTLS.COOP-STEP-XT ! ;
+
+: _mt-prep-fixture  ( -- )
+    1000 _mt-prep-now !
+    0 _mt-phase-log-u ! 0 _mt-prep-throw ! 0 _mt-prep-early-ready !
+    1 TLS-TRUST-COUNT ! 17 TLS-TRUST-GENERATION ! ;
+
+: _mt-test-prep-phases  ( -- )
+    _mt-prep-fixture _mt-a _mt-prep-bind
+    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPENING = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-TLS-PREP = _mt-assert
+    _mt-a KDOSTLS.TRUST-GENERATION @ 17 = _mt-assert
+    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    _mt-a KDOSTLS.PORT NIO.OPEN-START-XT @ 0= _mt-assert
+    _mt-a KDOSTLS.PORT NIO.OPEN-POLL-XT @ 0= _mt-assert
+    _mt-a KDOSTLS.PORT NIO.CANCEL-XT @ 0= _mt-assert
+    10 0 DO
+        _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
+    LOOP
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-READY = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-REMOTE-ARP-READY = _mt-assert
+    _mt-phase-log-u @ 11 = _mt-assert
+    11 0 DO
+        _mt-phase-log I CELLS + @ I 1+ = _mt-assert
+    LOOP
+    _mt-a KDOSTLS.STEP-COUNT @ 11 = _mt-assert
+    _mt-a KDOSTLS.MAX-STEP-CYCLES @
+        _mt-a KDOSTLS.LAST-STEP-CYCLES @ >= _mt-assert
+    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CANCELLED = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert ;
+
+: _mt-test-prep-failures  ( -- )
+    _mt-a KDOSTLS-INIT
+    S" api.openai.com" 443 _mt-a KDOSTLS-CONFIGURE DROP
+    0 TLS-TRUST-COUNT !
+    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind
+    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
+    18 TLS-TRUST-GENERATION !
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TRUST-CHANGED = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-FAILED = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind
+    _mt-a KDOSTLS-PREP-START DROP
+    _mt-a KDOSTLS.DEADLINE-MS @ _mt-prep-now !
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TIMEOUT = _mt-assert
+    _mt-a KDOSTLS.STEP-COUNT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind
+    -1 _mt-prep-throw !
+    _mt-a KDOSTLS-PREP-START DROP
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
+    _mt-a KDOSTLS.STEP-COUNT @ 1 = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind
+    -1 _mt-prep-early-ready !
+    _mt-a KDOSTLS-PREP-START DROP
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-INVALID = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind _mt-b _mt-prep-bind
+    _mt-a KDOSTLS-PREP-START DROP
+    _mt-b KDOSTLS-PREP-START KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
+    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    _mt-a KDOSTLS-PREP-CANCEL DROP ;
+
+: _mt-test-prep-cancel-phases  ( -- )
+    11 1 DO
+        _mt-prep-fixture _mt-a _mt-prep-bind
+        _mt-a KDOSTLS-PREP-START DROP
+        I _mt-a KDOSTLS.PHASE !
+        _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
+        _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+        _KDOSTLS-OWNER @ 0= _mt-assert
+    LOOP ;
+
+: _mt-test-prep-default-prefix  ( -- )
+    _mt-a KDOSTLS-INIT
+    S" api.openai.com" 443 _mt-a KDOSTLS-CONFIGURE
+        KDOSTLS-E-OK = _mt-assert
+    1 TLS-TRUST-COUNT ! 23 TLS-TRUST-GENERATION ! ARP-CLEAR
+    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-DNS-ARP-CHECK = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ DUP 0<> _mt-assert _mt-prep-ctx !
+    _mt-prep-ctx @ TLS-CTX.TCB @ 0= _mt-assert
+    _mt-a KDOSTLS.CLIENT-HELLO-A @ 0<> _mt-assert
+    _mt-a KDOSTLS.CLIENT-HELLO-U @ 0> _mt-assert
+    2 _mt-prep-mac C! 3 _mt-prep-mac 1+ C!
+    4 _mt-prep-mac 2 + C! 5 _mt-prep-mac 3 + C!
+    6 _mt-prep-mac 4 + C! 7 _mt-prep-mac 5 + C!
+    DNS-SERVER-IP NEXT-HOP _mt-prep-mac ARP-INSERT
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-DNS-BUILD = _mt-assert
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-DNS-SEND = _mt-assert
+    _mt-a KDOSTLS.DNS-QUERY-U @ /DNS-HDR > _mt-assert
+    _mt-a KDOSTLS.DNS-PORT @ 49152 >= _mt-assert
+    _mt-a KDOSTLS.STEP-COUNT @ 3 = _mt-assert
+    _mt-a KDOSTLS.MAX-STEP-CYCLES @ 0> _mt-assert
+    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _mt-prep-ctx @ /TLS-CTX _mt-zeroed? _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    ARP-CLEAR ;
+
+VARIABLE _mt-alert-hits
+
+: _mt-attach-authenticated  ( adapter -- )
+    _mt-prep-adapter !
+    0 TLS-CTX@ DUP _mt-native-ctx ! /TLS-CTX 0 FILL
+    0 TCB-N DUP _mt-native-tcb ! /TCB 0 FILL
+    1 2 3 4 _mt-ip IP!
+    _mt-ip _mt-prep-adapter @ KDOSTLS.REMOTE-IP 4 CMOVE
+    _mt-ip _mt-native-tcb @ TCB.REMOTE-IP 4 CMOVE
+    443 _mt-native-tcb @ TCB.REMOTE-PORT !
+    50000 DUP _mt-native-tcb @ TCB.LOCAL-PORT !
+        _mt-prep-adapter @ KDOSTLS.LOCAL-PORT !
+    12345 DUP _mt-native-tcb @ TCB.ISS !
+        _mt-prep-adapter @ KDOSTLS.TCB-ISS !
+    100 DUP _mt-native-tcb @ TCB.SND-NXT !
+        _mt-native-tcb @ TCB.SND-UNA !
+    200 _mt-native-tcb @ TCB.RCV-NXT !
+    4096 _mt-native-tcb @ TCB.RCV-WND !
+    TCPS-ESTABLISHED _mt-native-tcb @ TCB.STATE !
+    _mt-native-tcb @ _mt-native-ctx @ TLS-CTX.TCB !
+    TLSS-ESTABLISHED _mt-native-ctx @ TLS-CTX.STATE !
+    1 _mt-native-ctx @ TLS-CTX.PEER-AUTH !
+    TLS-E-OK _mt-native-ctx @ TLS-CTX.ERROR !
+    _mt-native-ctx @ _mt-prep-adapter @ KDOSTLS.CONTEXT ! ;
+
+: _mt-coop-step  ( phase adapter -- prep-status )
+    _mt-prep-adapter !
+    _mt-prep-throw @ IF DROP -779 THROW THEN
+    _mt-phase-log-u @ 32 < IF
+        DUP _mt-phase-log _mt-phase-log-u @ CELLS + !
+        1 _mt-phase-log-u +!
+    THEN
+    _mt-prep-early-ready @ IF DROP KDOSTLS-PREP-S-READY EXIT THEN
+    DUP KDOSTLS-PHASE-CLIENT-FINISHED-SEND = IF
+        DROP _mt-prep-adapter @ _mt-attach-authenticated
+        KDOSTLS-PHASE-OPEN _mt-prep-adapter @ KDOSTLS.PHASE !
+        KDOSTLS-PREP-S-PENDING EXIT
+    THEN
+    DUP KDOSTLS-PHASE-OPEN = IF
+        DROP KDOSTLS-PREP-S-READY EXIT
+    THEN
+    1+ _mt-prep-adapter @ KDOSTLS.PHASE !
+    KDOSTLS-PREP-S-PENDING ;
+
+: _mt-coop-cancel  ( phase adapter -- prep-status )
+    2DROP KDOSTLS-PREP-S-CANCELLED ;
+
+: _mt-prep-bind2  ( adapter -- )
+    DUP KDOSTLS-INIT
+    DUP >R S" api.openai.com" 443 R> KDOSTLS-CONFIGURE
+        KDOSTLS-E-OK = _mt-assert
+    ['] _mt-prep-now@ OVER KDOSTLS.NOW-XT !
+    ['] _mt-coop-step SWAP KDOSTLS.COOP-STEP-XT ! ;
+
+: _mt-force-open  ( adapter -- )
+    DUP _mt-prep-bind2 DUP _mt-attach-authenticated
+    DUP _KDOSTLS-OWNER !
+    DUP KDOSTLS-PHASE-OPEN SWAP KDOSTLS.PHASE !
+    DUP KDOSTLS-STATE-OPEN SWAP KDOSTLS.STATE !
+    DUP KDOSTLS.PORT NIO-OPEN-STATE-OPEN SWAP NIO.OPEN-STATE !
+    DUP KDOSTLS.PORT NIO-S-OK SWAP NIO.OPEN-STATUS !
+    KDOSTLS.PORT NIO-CLOSE-STATE-IDLE SWAP NIO.CLOSE-STATE ! ;
+
+: _mt-route-warm  ( -- )
+    2 _mt-prep-mac C! 3 _mt-prep-mac 1+ C!
+    4 _mt-prep-mac 2 + C! 5 _mt-prep-mac 3 + C!
+    6 _mt-prep-mac 4 + C! 7 _mt-prep-mac 5 + C!
+    _mt-ip NEXT-HOP _mt-prep-mac ARP-INSERT ;
+
+: _mt-close-notify  ( ctx adapter -- sent? )
+    DROP TLS-CTX.TCB @ DUP 0= IF DROP 0 EXIT THEN
+    5 OVER TCB.SND-NXT +! DROP
+    1 _mt-alert-hits +! -1 ;
+
+: _mt-close-notify-fail  ( ctx adapter -- sent? )
+    2DROP 0 ;
+
+: _mt-close-notify-throw  ( ctx adapter -- sent? )
+    2DROP -780 THROW ;
+
+: _mt-test-cooperative-open  ( -- )
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    _mt-a KDOSTLS.PORT NIO.OPEN-START-XT @ 0<> _mt-assert
+    _mt-a KDOSTLS.PORT NIO.OPEN-POLL-XT @ 0<> _mt-assert
+    _mt-a KDOSTLS.PORT NIO.CANCEL-XT @ 0<> _mt-assert
+    _mt-a KDOSTLS.PORT NIO.CLOSE-START-XT @ 0<> _mt-assert
+    _mt-a KDOSTLS.PORT NIO.CLOSE-POLL-XT @ 0<> _mt-assert
+    _mt-a KDOSTLS.PORT NIO-OPEN-START NIO-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.PORT NIO.OPEN-STATE @
+        NIO-OPEN-STATE-OPENING = _mt-assert
+    20 0 DO
+        _mt-a KDOSTLS.PORT NIO-OPEN-POLL
+            NIO-S-PENDING = _mt-assert
+    LOOP
+    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-OPEN = _mt-assert
+    _mt-a _KDOSTLS-OPEN-VALID? _mt-assert
+    _mt-phase-log-u @ 21 = _mt-assert
+    21 0 DO
+        _mt-phase-log I CELLS + @ I 1+ = _mt-assert
+    LOOP
+    _mt-a KDOSTLS.STEP-COUNT @ 21 = _mt-assert
+    _mt-a KDOSTLS.MAX-STEP-CYCLES @
+        _mt-a KDOSTLS.LAST-STEP-CYCLES @ >= _mt-assert
+    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    ARP-CLEAR
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert ;
+
+: _mt-test-prep-failures2  ( -- )
+    1000 _mt-prep-now ! 0 _mt-prep-throw ! 0 _mt-prep-early-ready !
+    17 TLS-TRUST-GENERATION !
+    _mt-a _mt-prep-bind2 0 TLS-TRUST-COUNT !
+    _mt-a KDOSTLS.PORT NIO-OPEN-START NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
+    18 TLS-TRUST-GENERATION !
+    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TRUST-CHANGED = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _mt-a KDOSTLS.DEADLINE-MS @ _mt-prep-now !
+    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TIMEOUT = _mt-assert
+    _mt-a KDOSTLS.STEP-COUNT @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind2 -1 _mt-prep-throw !
+    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
+    _mt-a KDOSTLS.STEP-COUNT @ 1 = _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind2 -1 _mt-prep-early-ready !
+    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-INVALID = _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    ['] _mt-coop-cancel _mt-a KDOSTLS.COOP-STEP-XT !
+    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind2 _mt-b _mt-prep-bind2
+    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _mt-b KDOSTLS.PORT NIO-OPEN-START NIO-S-FAILED = _mt-assert
+    _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
+    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CANCEL DROP
+
+    22 1 DO
+        _mt-prep-fixture _mt-a _mt-prep-bind2
+        _mt-a KDOSTLS-PREP-START DROP
+        I _mt-a KDOSTLS.PHASE !
+        _mt-a KDOSTLS-PREP-CANCEL
+            KDOSTLS-PREP-S-CANCELLED = _mt-assert
+        _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+        _KDOSTLS-OWNER @ 0= _mt-assert
+    LOOP ;
+
+: _mt-test-io-and-peer-eof  ( -- )
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
+    0 _mt-sent-u ! 0 _mt-in-pos !
+    ['] _mt-send _mt-a KDOSTLS.SEND-XT !
+    ['] _mt-recv-op _mt-a KDOSTLS.RECV-XT !
+    S" 0123456789abcdefghijkl" _mt-a KDOSTLS.PORT NIO-SEND
+    NIO-S-OK = _mt-assert 17 = _mt-assert
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
+    NIO-S-OK = _mt-assert 3 = _mt-assert
+    TCPS-CLOSE-WAIT _mt-native-tcb @ TCB.STATE !
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
+    NIO-S-OK = _mt-assert 2 = _mt-assert
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
+    NIO-S-FAILED = _mt-assert 0= _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
+    TCPS-CLOSE-WAIT _mt-native-tcb @ TCB.STATE !
+    TLSS-CLOSING _mt-native-ctx @ TLS-CTX.STATE !
+    0 _mt-native-ctx @ TLS-CTX.PEER-AUTH !
+    TLS-E-OK _mt-native-ctx @ TLS-CTX.ERROR !
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
+    NIO-S-EOF = _mt-assert 0= _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
+    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert ;
+
+: _mt-test-graceful-close  ( -- )
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
+    0 _mt-alert-hits !
+    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
+    _mt-alert-hits @ 1 = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-FIN = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
+    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    _mt-native-tcb @ TCB.SND-NXT @ _mt-native-tcb @ TCB.SND-UNA !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-PENDING = _mt-assert
+    _mt-native-tcb @ TCB.STATE @ TCPS-FIN-WAIT-1 = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-WAIT = _mt-assert
+    TCPS-TIME-WAIT _mt-native-tcb @ TCB.STATE !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    _mt-native-tcb @ TCB.STATE @ TCPS-TIME-WAIT = _mt-assert
+    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 0= _mt-assert
+    ARP-CLEAR ;
+
+: _mt-test-close-backpressure-and-peer  ( -- )
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
+    0 _mt-alert-hits !
+    101 _mt-native-tcb @ TCB.SND-NXT !
+    100 _mt-native-tcb @ TCB.SND-UNA !
+    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
+    _mt-alert-hits @ 0= _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-NOTIFY = _mt-assert
+    101 _mt-native-tcb @ TCB.SND-UNA !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-PENDING = _mt-assert
+    _mt-alert-hits @ 1 = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
+    0 _mt-alert-hits !
+    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
+    TCPS-CLOSE-WAIT _mt-native-tcb @ TCB.STATE !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
+    _mt-alert-hits @ 1 = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-FIN = _mt-assert
+    _mt-native-tcb @ TCB.STATE @ TCPS-CLOSE-WAIT = _mt-assert
+    _mt-native-tcb @ TCB.SND-NXT @ _mt-native-tcb @ TCB.SND-UNA !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-PENDING = _mt-assert
+    _mt-native-tcb @ TCB.STATE @ TCPS-LAST-ACK = _mt-assert
+    _mt-a _KDCL-A ! TCPS-LAST-ACK _KDCL-PRE-STATE !
+    _mt-native-tcb @ TCB-INIT
+    _KDOSTLS-CLOSE-POST-RECEIVE NIO-S-OK = _mt-assert
+    _mt-native-tcb @ TCB.LOCAL-PORT @ 0= _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 0= _mt-assert
+    ARP-CLEAR ;
+
+: _mt-test-close-fallbacks  ( -- )
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
+    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.DEADLINE-MS @ _mt-prep-now !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
+    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.RETRIES @ 1 = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
+    _mt-a KDOSTLS.DEADLINE-MS @ _mt-prep-now !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
+    ['] _mt-close-notify-fail _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
+    ['] _mt-close-notify-throw _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    ARP-CLEAR ;
+
+: _mt-test-default-route-guards  ( -- )
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
+    _mt-a KDOSTLS.POLL-XT @ ['] _KDOSTLS-POLL-DEFAULT = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-POLL
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
+    S" cold" _mt-a KDOSTLS.PORT NIO-SEND
+    NIO-S-FAILED = _mt-assert 0= _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
+    NIO-S-FAILED = _mt-assert 0= _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert ;
+
+: _mt-test-blocking-close-bound  ( -- )
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
+    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
+    _mt-a 2 _KDOSTLS-NIO-CLOSE-BOUNDED
+    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    ARP-CLEAR ;
+
+: _mt-test-tcb-reuse-guard  ( -- )
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
+    99999 _mt-native-tcb @ TCB.ISS !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    _mt-native-tcb @ TCB.STATE @ TCPS-ESTABLISHED = _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
+    _mt-recv _mt-native-ctx @ TLS-CTX.TCB !
+    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-OK = _mt-assert
+    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert ;
+
 : _mt-run  ( -- )
     0 _mt-fails ! 0 _mt-checks ! DEPTH _mt-depth !
+    PERF-RESET
     TLS-TRUST-COUNT @ _mt-old-trust !
+    TLS-TRUST-GENERATION @ _mt-old-trust-generation !
     0 _mt-sent-u ! 0 _mt-in-pos ! 0 _mt-dns-hits !
     0 _mt-connect-hits ! 0 _mt-close-hits ! 0 _mt-poll-hits !
     _mt-test-config
-    _mt-test-open-and-io
-    _mt-test-errors
-    _mt-test-native-link-close
-    _mt-a KDOSTLS.PORT NIO-CLOSE
-    _mt-b KDOSTLS.PORT NIO-CLOSE
+    _mt-test-cooperative-open
+    _mt-test-prep-failures2
+    _mt-test-io-and-peer-eof
+    _mt-test-graceful-close
+    _mt-test-close-backpressure-and-peer
+    _mt-test-close-fallbacks
+    _mt-test-default-route-guards
+    _mt-test-blocking-close-bound
+    _mt-test-tcb-reuse-guard
+    _mt-test-prep-default-prefix
+    ." TLS PREP MAX-CYCLES " _mt-a KDOSTLS.MAX-STEP-CYCLES @ . CR
     _mt-old-trust @ TLS-TRUST-COUNT !
+    _mt-old-trust-generation @ TLS-TRUST-GENERATION !
     _mt-stack
     _mt-fails @ 0= IF
         ." TLS PORT PASS " _mt-checks @ .
@@ -2607,6 +3363,7 @@ _mt-run
 """,
         ready_markers=("TLS PORT PASS",),
         stable_markers=("TLS PORT PASS",),
+        failure_markers=("TLS PORT FAIL",),
     ),
     "openai-codec": Profile(
         roots=(
@@ -3048,6 +3805,16 @@ CREATE _op-turn-state 1024 ALLOT
 VARIABLE _op-opens
 VARIABLE _op-closes
 VARIABLE _op-polls
+VARIABLE _op-open-starts
+VARIABLE _op-open-polls
+VARIABLE _op-open-waits
+VARIABLE _op-close-starts
+VARIABLE _op-close-polls
+VARIABLE _op-close-waits
+VARIABLE _op-cancels
+VARIABLE _op-cancel-throw
+VARIABLE _op-legacy-opens
+VARIABLE _op-legacy-closes
 VARIABLE _op-response-mode
 VARIABLE _op-send-fail-once
 VARIABLE _op-send-failures
@@ -3081,6 +3848,8 @@ VARIABLE _op-refreshes
 VARIABLE _op-auth-polls
 VARIABLE _op-auth-cb
 VARIABLE _op-auth-context
+VARIABLE _op-header-context
+CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
 
 : _op-auth-with  ( callback callback-context context -- status )
     DROP _op-auth-context ! _op-auth-cb !
@@ -3221,8 +3990,7 @@ VARIABLE _op-auth-context
     _op-crlf-r,
     _op-body _op-body-u @ _op-r, ;
 
-: _op-open  ( context -- status )
-    DROP
+: _op-complete-open  ( -- status )
     _op-response-mode @ 0= _op-opens @ 2 = AND IF
         _op-request-u @ DUP _op-retry-request-u !
         _op-request _op-retry-request ROT CMOVE
@@ -3245,7 +4013,44 @@ VARIABLE _op-auth-context
     THEN THEN
     NIO-S-OK ;
 
-: _op-close  ( context -- ) DROP 1 _op-closes +! ;
+: _op-open  ( context -- status )
+    DROP 1 _op-legacy-opens +! NIO-S-FAILED ;
+
+: _op-open-start  ( context -- status )
+    DROP 1 _op-open-starts +! 2 _op-open-waits ! NIO-S-PENDING ;
+
+: _op-open-poll  ( context -- status )
+    DROP 1 _op-open-polls +!
+    _op-provider @ APROV.CONTEXT @ DUP OAIR-C.SESSION @ 0<> _op-assert
+    OAIR-C.STATE @ OAIR-STATE-OPENING = _op-assert
+    _op-open-waits @ 1 > IF
+        -1 _op-open-waits +! NIO-S-PENDING EXIT
+    THEN
+    0 _op-open-waits ! _op-complete-open ;
+
+: _op-close  ( context -- )
+    DROP 1 _op-legacy-closes +! -790 THROW ;
+
+: _op-close-start  ( context -- status )
+    DROP 1 _op-close-starts +! 2 _op-close-waits !
+    _op-provider @ APROV.CONTEXT @ DUP OAIR-C.SESSION @ 0<> _op-assert
+    OAIR-C.STATE @ OAIR-STATE-CLOSING = _op-assert
+    NIO-S-PENDING ;
+
+: _op-close-poll  ( context -- status )
+    DROP 1 _op-close-polls +!
+    _op-provider @ APROV.CONTEXT @ DUP OAIR-C.SESSION @ 0<> _op-assert
+    OAIR-C.STATE @ OAIR-STATE-CLOSING = _op-assert
+    _op-close-waits @ 1 > IF
+        -1 _op-close-waits +! NIO-S-PENDING EXIT
+    THEN
+    0 _op-close-waits ! 1 _op-closes +! NIO-S-OK ;
+
+: _op-cancel  ( context -- )
+    DROP 1 _op-cancels +!
+    0 _op-open-waits ! 0 _op-close-waits !
+    _op-cancel-throw @ IF 0 _op-cancel-throw ! -793 THROW THEN ;
+
 : _op-poll  ( context -- ) DROP 1 _op-polls +! ;
 
 : _op-send  ( buffer length context -- count status )
@@ -3279,13 +4084,22 @@ VARIABLE _op-auth-context
 
 : _op-setup  ( -- )
     0 _op-opens ! 0 _op-closes ! 0 _op-polls ! 0 _op-handler-hits !
+    0 _op-open-starts ! 0 _op-open-polls ! 0 _op-open-waits !
+    0 _op-close-starts ! 0 _op-close-polls ! 0 _op-close-waits !
+    0 _op-cancels ! 0 _op-cancel-throw !
+    0 _op-legacy-opens ! 0 _op-legacy-closes !
     0 _op-response-mode ! 0 _op-retry-request-u !
     0 _op-send-fail-once ! 0 _op-send-failures !
     0 _op-refreshes ! 0 _op-auth-polls !
     _op-turn-state 1024 65 FILL
     _op-port NIO-INIT
     ['] _op-open _op-port NIO.OPEN-XT !
+    ['] _op-open-start _op-port NIO.OPEN-START-XT !
+    ['] _op-open-poll _op-port NIO.OPEN-POLL-XT !
     ['] _op-close _op-port NIO.CLOSE-XT !
+    ['] _op-close-start _op-port NIO.CLOSE-START-XT !
+    ['] _op-close-poll _op-port NIO.CLOSE-POLL-XT !
+    ['] _op-cancel _op-port NIO.CANCEL-XT !
     ['] _op-poll _op-port NIO.POLL-XT !
     ['] _op-send _op-port NIO.SEND-XT !
     ['] _op-recv _op-port NIO.RECV-XT !
@@ -3372,6 +4186,7 @@ VARIABLE _op-old-body-u
 VARIABLE _op-new-body-a
 VARIABLE _op-new-body-u
 VARIABLE _op-history-seen
+VARIABLE _op-old-cancels
 
 : _op-request-body  ( request-a request-u -- body-a body-u )
     _op-scan-u ! _op-scan-a !
@@ -3481,15 +4296,93 @@ VARIABLE _op-history-seen
 
     S" cancel now" _op-runtime @ ARUNTIME-SEND 0= _op-assert
     _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.STATE @
+    OAIR-STATE-OPENING = _op-assert
     DUP OAIR-S.INPUT SWAP OAIR-S.INPUT-U @ JSON-ENTER
     2DUP JSON-COUNT 6 = _op-assert
     2DUP 0 JSON-NTH JSON-ENTER S" content" JSON-KEY JSON-GET-STRING
     S" Please capture a milk task" STR-STR= _op-assert
     5 JSON-NTH JSON-ENTER S" content" JSON-KEY JSON-GET-STRING
     S" cancel now" STR-STR= _op-assert
+    _op-cancels @ _op-old-cancels !
     _op-runtime @ ARUNTIME-CANCEL 0= _op-assert
+    _op-cancels @ _op-old-cancels @ 1+ = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0= _op-assert
     4 _op-runtime @ ARUNTIME-PUMP DROP
     _op-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _op-assert ;
+
+: _op-pump-provider-until-closing  ( -- )
+    5000 0 DO
+        _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-POLL DROP
+        _op-provider @ APROV.CONTEXT @ OAIR-C.STATE @
+        OAIR-STATE-CLOSING = IF LEAVE THEN
+    LOOP
+    _op-provider @ APROV.CONTEXT @ OAIR-C.STATE @
+    OAIR-STATE-CLOSING = _op-assert ;
+
+: _op-test-cancel-closing  ( -- )
+    2 _op-response-mode !
+    0 _op-opens ! 0 _op-closes ! 0 _op-request-u !
+    S" cancel while close is pending" _op-runtime @ ARUNTIME-SEND
+    0= _op-assert
+    _op-pump-provider-until-closing
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0<> _op-assert
+    _op-close-starts @ 0> _op-assert
+    _op-cancels @ _op-old-cancels !
+    _op-runtime @ ARUNTIME-CANCEL 0= _op-assert
+    _op-cancels @ _op-old-cancels @ 1+ = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0= _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.STATE @
+    OAIR-STATE-IDLE = _op-assert
+    4 _op-runtime @ ARUNTIME-PUMP DROP
+    _op-runtime @ ARUNTIME.STATUS @ ARUN-S-CANCELLED = _op-assert ;
+
+: _op-throw-headers  ( request session callback-context -- status )
+    2DROP DROP -794 THROW ;
+
+: _op-header-turn!  ( run-id -- )
+    _op-header-turn ATURN-INIT
+    1 _op-header-turn ATURN.THREAD-ID !
+    _op-header-turn ATURN.RUN-ID !
+    S" throwing request headers"
+    _op-header-turn ATURN.PROMPT-U ! _op-header-turn ATURN.PROMPT-A !
+    _op-header-context @ _op-header-turn ATURN.CONTEXT !
+    _op-header-context @ ACTX.COUNT @ _op-header-turn ATURN.CONTEXT-N !
+    _op-header-context @ ACTX.REVISION @
+    _op-header-turn ATURN.CONTEXT-REVISION ! ;
+
+: _op-rearm-cancel  ( -- )
+    0 _op-port NIO.CLEANUP-FLAGS !
+    0 _op-port NIO.CANCEL-ERROR !
+    0 _op-port NIO.CLOSE-ERROR !
+    NIO-CLOSE-STATE-IDLE _op-port NIO.CLOSE-STATE !
+    NIO-S-OK _op-port NIO.CLOSE-STATUS ! ;
+
+: _op-test-header-throw  ( -- )
+    ACTX-NEW DUP ACTX-S-OK = _op-assert DROP _op-header-context !
+    ['] _op-throw-headers 0 _op-provider @ OPENAI-PROVIDER-HEADERS!
+    901 _op-header-turn!
+    _op-cancels @ _op-old-cancels !
+    _op-header-turn _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-START
+    OAIR-S-PROTOCOL = _op-assert
+    _op-cancels @ _op-old-cancels @ 1+ = _op-assert
+    _op-provider @ APROV.CONTEXT @ DUP OAIR-C.SESSION @ 0= _op-assert
+    OAIR-C.STATE @ OAIR-STATE-IDLE = _op-assert
+
+    902 _op-header-turn!
+    -1 _op-cancel-throw !
+    _op-header-turn _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-START
+    OAIR-S-TRANSPORT = _op-assert
+    _op-provider @ APROV.CONTEXT @ DUP OAIR-C.SESSION @ 0<> _op-assert
+    DUP OAIR-C.STATE @ OAIR-STATE-ERROR = _op-assert
+    DROP _op-port NIO.CANCEL-ERROR @ -793 = _op-assert
+    _op-rearm-cancel
+    _op-provider @ APROV.CONTEXT @ _OAIR-DROP-SESSION OAIR-S-OK = _op-assert
+    _op-provider @ APROV.CONTEXT @ DUP OAIR-C.SESSION @ 0= _op-assert
+    OAIR-STATE-IDLE SWAP OAIR-C.STATE !
+    APROV-S-READY _op-provider @ APROV.STATE !
+    0 0 _op-provider @ OPENAI-PROVIDER-HEADERS!
+    _op-header-context @ ACTX-FREE ;
 
 : _op-test-send-retry  ( -- )
     2 _op-response-mode !
@@ -3536,6 +4429,12 @@ VARIABLE _op-history-seen
     _op-opens @ 2 = _op-assert ;
 
 : _op-cleanup  ( -- )
+    _op-legacy-opens @ 0= _op-assert
+    _op-legacy-closes @ 0= _op-assert
+    _op-open-starts @ 0> _op-assert
+    _op-open-polls @ _op-open-starts @ >= _op-assert
+    _op-close-starts @ 0> _op-assert
+    _op-close-polls @ _op-closes @ >= _op-assert
     _op-runtime @ ARUNTIME-FREE
     _op-provider @ APROV-FREE
     _op-gateway @ ATOOLG-FREE
@@ -3555,6 +4454,10 @@ VARIABLE _op-history-seen
     _op-test-run
     ." [openai-provider] send retry" CR
     _op-test-send-retry
+    ." [openai-provider] cancel close" CR
+    _op-test-cancel-closing
+    ." [openai-provider] header throw" CR
+    _op-test-header-throw
     ." [openai-provider] unauthorized" CR
     _op-test-second-401
     ." [openai-provider] cleanup" CR
@@ -3592,6 +4495,8 @@ VARIABLE _om-depth
 VARIABLE _om-source
 VARIABLE _om-provider
 VARIABLE _om-runtime
+VARIABLE _om-cancels
+VARIABLE _om-closes
 
 : _om-assert  ( flag -- )
     1 _om-checks +!
@@ -3609,10 +4514,18 @@ VARIABLE _om-runtime
     LOOP
     DROP ;
 
+: _om-cancel  ( context -- ) DROP 1 _om-cancels +! ;
+: _om-close  ( context -- ) DROP 1 _om-closes +! -791 THROW ;
+
 : _om-run  ( -- )
-    0 _om-fails ! 0 _om-checks ! DEPTH _om-depth !
+    0 _om-fails ! 0 _om-checks ! 0 _om-cancels ! 0 _om-closes !
+    DEPTH _om-depth !
     OPENAI-SOURCE-NEW
     DUP APSOURCE-S-OK = _om-assert DROP _om-source !
+    ['] _om-cancel _om-source @ OPENAI-SOURCE-TRANSPORT
+        KDOSTLS.PORT NIO.CANCEL-XT !
+    ['] _om-close _om-source @ OPENAI-SOURCE-TRANSPORT
+        KDOSTLS.PORT NIO.CLOSE-XT !
     _om-source @ DUP APSOURCE.ID-A @ SWAP APSOURCE.ID-U @
     S" org.akashic.agent.source.openai" STR-STR= _om-assert
     _om-source @ OPENAI-SOURCE-CONFIG OAIC-HOST
@@ -3652,6 +4565,8 @@ VARIABLE _om-runtime
     _om-runtime @ ARUNTIME-FREE
     _om-provider @ APROV-FREE
     _om-source @ APSOURCE-FREE
+    _om-cancels @ 1 = _om-assert
+    _om-closes @ 0= _om-assert
     _om-stack
     _om-fails @ 0= IF
         ." OPENAI SOURCE PASS " _om-checks @ .
@@ -4309,6 +5224,11 @@ VARIABLE _cm-source
 VARIABLE _cm-provider
 VARIABLE _cm-runtime
 VARIABLE _cm-trust-generation
+VARIABLE _cm-cancels
+VARIABLE _cm-closes
+VARIABLE _cm-failure-source
+VARIABLE _cm-auth-cancels
+VARIABLE _cm-model-cancels
 CREATE _cm-wire 4096 ALLOT
 CREATE _cm-request HTTP-REQUEST-SIZE ALLOT
 CREATE _cm-session 200 ALLOT
@@ -4321,13 +5241,55 @@ CREATE _cm-session 200 ALLOT
     THEN
     _cm-depth @ = _cm-assert ;
 
+: _cm-cancel  ( context -- ) DROP 1 _cm-cancels +! ;
+: _cm-close  ( context -- ) DROP 1 _cm-closes +! -792 THROW ;
+: _cm-auth-cancel-fail  ( context -- )
+    DROP 1 _cm-auth-cancels +! -795 THROW ;
+: _cm-auth-cancel-ok  ( context -- ) DROP 1 _cm-auth-cancels +! ;
+: _cm-model-cancel  ( context -- ) DROP 1 _cm-model-cancels +! ;
+: _cm-free-failure-source  ( -- ) _cm-failure-source @ CODEX-SOURCE-FREE ;
+
+: _cm-test-cancel-exhaustion  ( -- )
+    0 _cm-auth-cancels ! 0 _cm-model-cancels !
+    CODEX-SOURCE-NEW
+    DUP APSOURCE-S-OK = _cm-assert DROP _cm-failure-source !
+    ['] _cm-auth-cancel-fail
+    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT
+    KDOSTLS.PORT NIO.CANCEL-XT !
+    ['] _cm-model-cancel
+    _cm-failure-source @ CODEX-SOURCE-MODEL-TRANSPORT
+    KDOSTLS.PORT NIO.CANCEL-XT !
+    ['] _cm-free-failure-source CATCH
+    KDOSTLS-E-CLEANUP NEGATE = _cm-assert
+    _cm-auth-cancels @ 1 = _cm-assert
+    _cm-model-cancels @ 1 = _cm-assert
+    _cm-failure-source @ DUP APSOURCE.ID-A @ SWAP APSOURCE.ID-U @
+    S" org.akashic.agent.source.codex" STR-STR= _cm-assert
+
+    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT KDOSTLS.PORT NIO-INIT
+    ['] _cm-auth-cancel-ok
+    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT
+    KDOSTLS.PORT NIO.CANCEL-XT !
+    _cm-failure-source @ CODEX-SOURCE-FREE
+    _cm-auth-cancels @ 2 = _cm-assert
+    _cm-model-cancels @ 1 = _cm-assert ;
+
 : _cm-run  ( -- )
-    0 _cm-fails ! 0 _cm-checks ! DEPTH _cm-depth !
+    0 _cm-fails ! 0 _cm-checks ! 0 _cm-cancels ! 0 _cm-closes !
+    DEPTH _cm-depth !
     CODEX-TRUST-REGISTER MTRUST-S-OK = _cm-assert
     CODEX-TRUST-REGISTER MTRUST-S-OK = _cm-assert
     TLS-TRUST-COUNT @ 0= _cm-assert
     CODEX-SOURCE-NEW
     DUP APSOURCE-S-OK = _cm-assert DROP _cm-source !
+    ['] _cm-cancel _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT
+        KDOSTLS.PORT NIO.CANCEL-XT !
+    ['] _cm-close _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT
+        KDOSTLS.PORT NIO.CLOSE-XT !
+    ['] _cm-cancel _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT
+        KDOSTLS.PORT NIO.CANCEL-XT !
+    ['] _cm-close _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT
+        KDOSTLS.PORT NIO.CLOSE-XT !
     TLS-TRUST-COUNT @ 0= _cm-assert
     TLS-TRUST-GENERATION @ 0= _cm-assert
     MTRUST-FREEZE MTRUST-S-OK = _cm-assert
@@ -4387,8 +5349,11 @@ CREATE _cm-session 200 ALLOT
     _cm-runtime @ ARUNTIME-FREE
     _cm-provider @ APROV-FREE
     _cm-source @ APSOURCE-FREE
+    _cm-cancels @ 2 = _cm-assert
+    _cm-closes @ 0= _cm-assert
     TLS-TRUST-COUNT @ 2 = _cm-assert
     TLS-TRUST-GENERATION @ _cm-trust-generation @ = _cm-assert
+    _cm-test-cancel-exhaustion
     _cm-stack
     _cm-fails @ 0= IF
         ." CODEX SOURCE PASS " _cm-checks @ .
@@ -8045,8 +9010,8 @@ _boot-soundlab-desc
 ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
 DESK-QUEUE-BUILTIN
 
-\ Streams is a discoverable offline built-in. It does not consume a startup
-\ tile or imply that live network authority is present.
+\ Streams is a discoverable built-in but does not consume a startup tile or
+\ start external I/O. Desk and the active Practice still gate explicit work.
 CREATE _boot-streams-desc APP-DESC ALLOT
 _boot-streams-desc STREAMS-ENTRY
 _boot-streams-desc
@@ -11156,8 +12121,8 @@ VARIABLE _stc-literal-json-u
     _stc-req @ _stc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _stc-assert
     _stc-req @ CBR.RESULT STREAMS-CAP-FEED CAP.OUT-SCHEMA @
         CS-VALIDATE-DEEP _stc-ok
-    S" provenance" _stc-result-field S" cache" _stc-string= _stc-assert
-    S" state" _stc-result-field S" cached-after-error"
+    S" provenance" _stc-result-field S" injected" _stc-string= _stc-assert
+    S" state" _stc-result-field S" retained-after-decode-error"
         _stc-string= _stc-assert
     S" items" _stc-result-field DUP CV-TYPE@ CV-T-LIST = _stc-assert
     DUP CV-LEN@ 2 = _stc-assert _stc-list !
@@ -11179,7 +12144,7 @@ VARIABLE _stc-literal-json-u
         S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
         _stc-resource= _stc-assert
     S" provider" _stc-result-field S" bluesky" _stc-string= _stc-assert
-    S" provenance" _stc-result-field S" cache" _stc-string= _stc-assert
+    S" provenance" _stc-result-field S" injected" _stc-string= _stc-assert
     S" text" _stc-result-field
         S" Does the thread retain identity across a cached restart?"
         _stc-string= _stc-assert
@@ -11212,7 +12177,7 @@ VARIABLE _stc-literal-json-u
     S" complete" _stc-result-field DUP CV-TYPE@ CV-T-BOOL = _stc-assert
         CV-DATA@ 0= _stc-assert
     S" provenance" _stc-result-field
-        S" cached-partial-context" _stc-string= _stc-assert
+        S" injected" _stc-string= _stc-assert
     S" items" _stc-result-field DUP CV-LEN@ 2 = _stc-assert _stc-list !
     0 _stc-list @ CV-LIST-NTH
         S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
@@ -11228,7 +12193,7 @@ VARIABLE _stc-literal-json-u
     _stc-req @ CBR.RESULT STREAMS-CAP-SEARCH CAP.OUT-SCHEMA @
         CS-VALIDATE-DEEP _stc-ok
     S" query" _stc-result-field S" identity" _stc-string= _stc-assert
-    S" scope" _stc-result-field S" cache" _stc-string= _stc-assert
+    S" scope" _stc-result-field S" retained" _stc-string= _stc-assert
     S" items" _stc-result-field DUP CV-LEN@ 1 = _stc-assert _stc-list !
     0 _stc-list @ CV-LIST-NTH
         S" at://did:plc:rowan/app.bsky.feed.post/3rowanaaaaaaa"
@@ -11242,7 +12207,7 @@ VARIABLE _stc-literal-json-u
     _STM-BEGIN-SEARCH
     _STM-PROMPT @ PRM-ACTIVE? _stc-assert
     _STM-PROMPT-MODE @ _STM-PM-SEARCH = _stc-assert
-    S" Search cached posts:" S"   identity   " _STM-PROMPT @ PRM-SHOW
+    S" Search retained posts:" S"   identity   " _STM-PROMPT @ PRM-SHOW
     _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
     _STM-SELECTED @ 1 = _stc-assert _STM-TOP @ 1 = _stc-assert
     _STM-SEARCH-BUF _STM-SEARCH-U @ S" identity" STR-STR= _stc-assert
@@ -11268,27 +12233,27 @@ VARIABLE _stc-literal-json-u
     _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
     _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
     _STM-BEGIN-SEARCH
-    S" Search cached posts:" S"     " _STM-PROMPT @ PRM-SHOW
+    S" Search retained posts:" S"     " _STM-PROMPT @ PRM-SHOW
     _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
     _STM-SEARCH-U @ 0= _stc-assert
     _STM-SEARCH-MATCH-N @ 0= _stc-assert
     _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
     _stc-big _STM-QUERY-CAP 1+ 97 FILL
     _STM-BEGIN-SEARCH
-    S" Search cached posts:" _stc-big _STM-QUERY-CAP 1+
+    S" Search retained posts:" _stc-big _STM-QUERY-CAP 1+
         _STM-PROMPT @ PRM-SHOW
     _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
     _STM-SEARCH-U @ 0= _stc-assert
     _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
     _STM-BEGIN-SEARCH
-    S" Search cached posts:" S" absent" _STM-PROMPT @ PRM-SHOW
+    S" Search retained posts:" S" absent" _STM-PROMPT @ PRM-SHOW
     _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
     _STM-SEARCH-BUF _STM-SEARCH-U @ S" absent" STR-STR= _stc-assert
     _STM-SEARCH-MATCH-N @ 0= _stc-assert
     _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
 
     _STM-BEGIN-SEARCH
-    S" Search cached posts:" S" mira" _STM-PROMPT @ PRM-SHOW
+    S" Search retained posts:" S" mira" _STM-PROMPT @ PRM-SHOW
     _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
     _STM-SELECTED @ 0= _stc-assert _STM-TOP @ 0= _stc-assert
     _stc-rev-advanced
@@ -11725,9 +12690,11 @@ VARIABLE _stc-literal-json-u
     _stc-stack
     STREAMS-COMP-DESC COMP.STATE-FINI-XT @ ['] _STM-STATE-FINI =
         _stc-assert
-    _stc-inst2 @ _STM-ACTIVATE
-    _stc-inst2 @ CINST-STATE DUP _STM-STATE-FINI
-    _STM-STATE-SIZE _stc-zeroed? _stc-assert
+    _stc-inst2 @ CINST-STATE >R
+    _stc-inst2 @ STREAMS-SHUTDOWN-CB
+    _STM-LIVE-RELEASE _stc-assert
+    R@ _STM-STATE-FINI
+    R> _STM-STATE-SIZE _stc-zeroed? _stc-assert
     _STM-CURRENT-STATE @ 0= _stc-assert
     _STM-CURRENT-INSTANCE @ 0= _stc-assert
     _stc-stack
@@ -11750,6 +12717,902 @@ _stc-run
     failure_markers=("STREAMS CONTRACTS FAIL",),
     linked=True,
     initial_files=(("testing/streams/timeline.json", STREAMS_TIMELINE_FIXTURE),),
+)
+
+PROFILES["streams-xio-contracts"] = Profile(
+    roots=("tui/applets/streams/bluesky-public.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - deterministic Streams/XIO composition
+ENTER-USERLAND
+." [akashic] loading Streams XIO contracts" CR
+REQUIRE tui/applets/streams/bluesky-public.f
+
+VARIABLE _slc-fails
+VARIABLE _slc-checks
+VARIABLE _slc-depth
+VARIABLE _slc-inst
+VARIABLE _slc-state
+VARIABLE _slc-req
+VARIABLE _slc-hosted
+VARIABLE _slc-provider
+
+CREATE _slc-service XIO-SERVICE-SIZE ALLOT
+CREATE _slc-endpoint IENDPOINT-SIZE ALLOT
+CREATE _slc-app APP-DESC ALLOT
+CREATE _slc-json 8192 ALLOT
+CREATE _slc-response 16384 ALLOT
+
+VARIABLE _slc-json-text-a
+VARIABLE _slc-json-text-u
+VARIABLE _slc-response-u
+VARIABLE _slc-body-a
+VARIABLE _slc-body-u
+VARIABLE _slc-response-pos
+VARIABLE _slc-open-starts
+VARIABLE _slc-open-polls
+VARIABLE _slc-send-calls
+VARIABLE _slc-recv-calls
+VARIABLE _slc-lower-cancels
+VARIABLE _slc-lower-closes
+VARIABLE _slc-io-a
+VARIABLE _slc-io-u
+VARIABLE _slc-io-n
+VARIABLE _slc-rem-a
+VARIABLE _slc-rem-u
+VARIABLE _slc-saved-generation
+VARIABLE _slc-saved-revision
+
+: _slc-assert  ( flag -- )
+    1 _slc-checks +!
+    0= IF
+        1 _slc-fails +! ." SLC assertion " _slc-checks @ . ." failed" CR
+    THEN ;
+
+: _slc-stack  ( -- )
+    DEPTH DUP _slc-depth @ <> IF
+        ." SLC stack " _slc-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _slc-depth @ = _slc-assert ;
+
+: _slc-zeroed?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _slc-no-io?  ( -- flag )
+    _slc-open-starts @ _slc-open-polls @ OR
+    _slc-send-calls @ OR _slc-recv-calls @ OR
+    _slc-lower-cancels @ OR _slc-lower-closes @ OR 0= ;
+
+: _slc-service-clear?  ( -- flag )
+    _slc-service XIO-ACTIVE? 0=
+    _slc-service XIOS.RETAINED @ 0= AND ;
+
+: _slc-ok  ( ior -- ) 0= _slc-assert ;
+
+: _slc-clear-request  ( -- )
+    _slc-req @ CBR.ARGS CV-FREE
+    _slc-req @ CBR.RESULT CV-FREE ;
+
+: _slc-arg-string  ( addr len -- )
+    _slc-req @ CBR.ARGS CV-STRING! _slc-ok ;
+
+: _slc-result-field  ( key-a key-u -- value )
+    _slc-req @ CBR.RESULT CV-MAP-FIND ;
+
+: _slc-string=  ( value expected-a expected-u -- flag )
+    2>R DUP CV-TYPE@ CV-T-STRING = IF
+        DUP CV-DATA@ SWAP CV-LEN@ 2R> STR-STR=
+    ELSE
+        DROP 2R> 2DROP 0
+    THEN ;
+
+: _slc-service-for  ( id-a id-u context -- service | 0 )
+    >R S" org.akashic.net.external-io" STR-STR= IF
+        R>
+    ELSE
+        R> DROP 0
+    THEN ;
+
+: _slc-response,  ( addr len -- )
+    DUP >R _slc-response _slc-response-u @ + SWAP CMOVE
+    R> _slc-response-u +! ;
+
+: _slc-response-crlf,  ( -- )
+    13 _slc-response _slc-response-u @ + C! 1 _slc-response-u +!
+    10 _slc-response _slc-response-u @ + C! 1 _slc-response-u +! ;
+
+: _slc-json-with-text  ( text-a text-u -- json-a json-u )
+    _slc-json-text-u ! _slc-json-text-a !
+    JSON-BUILD-RESET _slc-json 8192 JSON-SET-OUTPUT
+    JSON-{ S" feed" JSON-KEY: JSON-[
+        JSON-{ S" post" JSON-KEY: JSON-{
+            S" uri"
+                S" at://did:plc:live/app.bsky.feed.post/3liveaaaaaaaa"
+                JSON-KV-ESTR
+            S" cid" S" bafyreilive" JSON-KV-ESTR
+            S" author" JSON-KEY: JSON-{
+                S" did" S" did:plc:live" JSON-KV-ESTR
+                S" handle" S" live.test" JSON-KV-ESTR
+            JSON-}
+            S" record" JSON-KEY: JSON-{
+                S" $type" S" app.bsky.feed.post" JSON-KV-ESTR
+                S" text" _slc-json-text-a @ _slc-json-text-u @ JSON-KV-ESTR
+                S" createdAt" S" 2026-07-15T12:00:00Z" JSON-KV-ESTR
+            JSON-}
+            S" indexedAt" S" 2026-07-15T12:00:01Z" JSON-KV-ESTR
+        JSON-} JSON-}
+    JSON-] S" cursor" S" live-cursor" JSON-KV-ESTR JSON-}
+    JSON-OUTPUT-RESULT ;
+
+: _slc-response!  ( body-a body-u -- )
+    _slc-body-u ! _slc-body-a !
+    _slc-response 16384 0 FILL 0 _slc-response-u !
+    S" HTTP/1.1 200 OK" _slc-response, _slc-response-crlf,
+    S" Content-Type: application/json" _slc-response, _slc-response-crlf,
+    S" Content-Length: " _slc-response,
+    _slc-body-u @ NUM>STR _slc-response, _slc-response-crlf,
+    S" Connection: close" _slc-response, _slc-response-crlf,
+    _slc-response-crlf,
+    _slc-body-a @ _slc-body-u @ _slc-response, ;
+
+: _slc-good-response  ( text-a text-u -- )
+    _slc-json-with-text _slc-response! ;
+
+: _slc-bad-response  ( -- ) S" {}" _slc-response! ;
+
+: _slc-fake-open-start  ( context -- io-status )
+    DROP 1 _slc-open-starts +! NIO-S-PENDING ;
+
+: _slc-fake-open-poll  ( context -- io-status )
+    DROP 1 _slc-open-polls +!
+    _slc-open-polls @ 2 >= IF NIO-S-OK ELSE NIO-S-PENDING THEN ;
+
+: _slc-fake-send  ( buffer length context -- count io-status )
+    DROP NIP 1 _slc-send-calls +! NIO-S-OK ;
+
+: _slc-fake-recv  ( buffer capacity context -- count io-status )
+    DROP _slc-io-u ! _slc-io-a ! 1 _slc-recv-calls +!
+    _slc-response _slc-response-u @ _slc-response-pos @ /STRING
+    _slc-rem-u ! _slc-rem-a !
+    _slc-rem-u @ 0= IF 0 NIO-S-EOF EXIT THEN
+    _slc-rem-u @ _slc-io-u @ MIN 31 MIN _slc-io-n !
+    _slc-rem-a @ _slc-io-a @ _slc-io-n @ CMOVE
+    _slc-io-n @ _slc-response-pos +!
+    _slc-io-n @ NIO-S-OK ;
+
+: _slc-fake-poll  ( context -- ) DROP ;
+
+: _slc-fake-cancel  ( context -- )
+    DROP 1 _slc-lower-cancels +! ;
+
+: _slc-fake-close  ( context -- )
+    DROP 1 _slc-lower-closes +! ;
+
+: _slc-io-counts-clear  ( -- )
+    0 _slc-response-pos !
+    0 _slc-open-starts ! 0 _slc-open-polls !
+    0 _slc-send-calls ! 0 _slc-recv-calls !
+    0 _slc-lower-cancels ! 0 _slc-lower-closes ! ;
+
+: _slc-fake-install  ( -- )
+    _slc-io-counts-clear
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @
+        DUP _slc-provider ! PAF.PORT NIO-INIT
+    _slc-provider @ _slc-provider @ PAF.PORT NIO.CONTEXT !
+    ['] _slc-fake-open-start _slc-provider @ PAF.PORT NIO.OPEN-START-XT !
+    ['] _slc-fake-open-poll _slc-provider @ PAF.PORT NIO.OPEN-POLL-XT !
+    ['] _slc-fake-send _slc-provider @ PAF.PORT NIO.SEND-XT !
+    ['] _slc-fake-recv _slc-provider @ PAF.PORT NIO.RECV-XT !
+    ['] _slc-fake-poll _slc-provider @ PAF.PORT NIO.POLL-XT !
+    ['] _slc-fake-cancel _slc-provider @ PAF.PORT NIO.CANCEL-XT !
+    ['] _slc-fake-close _slc-provider @ PAF.PORT NIO.CLOSE-XT ! ;
+
+: _slc-pump  ( -- )
+    4000 0 DO
+        _STM-XIO-OP XIOO.STATE @ XIO-STATE-ACTIVE <> IF UNLOOP EXIT THEN
+        _slc-service XIO-TICK
+    LOOP ;
+
+: _slc-instance-new  ( hosted? -- )
+    _slc-hosted !
+    STREAMS-BLUESKY-COMP-DESC CINST-NEW
+        DUP 0= _slc-assert DROP _slc-inst !
+    _slc-inst @ CINST-STATE _slc-state !
+    _slc-hosted @ IF _slc-endpoint _slc-inst @ CINST.ENDPOINT ! THEN
+    _slc-inst @ _STM-ACTIVATE _STM-LIVE-INIT ;
+
+: _slc-finalize-instance  ( -- )
+    _STM-LIVE-RELEASE _slc-assert
+    _slc-state @ _STM-STATE-FINI
+    _slc-state @ _STM-STATE-SIZE _slc-zeroed? _slc-assert
+    _STM-CURRENT-STATE @ 0= _slc-assert
+    _STM-CURRENT-INSTANCE @ 0= _slc-assert
+    _slc-inst @ CINST-FREE 0 _slc-inst ! 0 _slc-state ! ;
+
+: _slc-shutdown-finalize  ( -- )
+    _slc-inst @ STREAMS-SHUTDOWN-CB
+    _slc-finalize-instance ;
+
+: _slc-catch-shutdown  ( -- )
+    _slc-inst @ STREAMS-SHUTDOWN-CB ;
+
+: _slc-catch-state-fini  ( -- )
+    _slc-state @ _STM-STATE-FINI ;
+
+: _slc-test-descriptors  ( -- )
+    _slc-app STREAMS-ENTRY
+    _slc-app APP.FLAGS @ APP-F-TICK-WHEN-CLEAN AND 0<> _slc-assert
+    STREAMS-CAP-FEED-REFRESH CAP-DESC-VALID? _slc-assert
+    STREAMS-CAP-FEED-REFRESH CAP.KIND @ CAP-K-COMMAND = _slc-assert
+    STREAMS-CAP-FEED-REFRESH CAP.EFFECTS @ CAP-E-EXTERNAL = _slc-assert
+    STREAMS-CAP-FEED-REFRESH CAP.FLAGS @ CAP-F-NEEDS-TARGET AND
+        0<> _slc-assert
+    STREAMS-CAP-FEED-REFRESH CAP.FLAGS @ CAP-F-IDEMPOTENT AND
+        0= _slc-assert ;
+
+: _slc-test-offline  ( -- )
+    0 _slc-instance-new
+    _STM-LIVE-STATUS @ _STM-LIVE-OFFLINE = _slc-assert
+    _STM-XIO-SERVICE @ 0= _slc-assert
+    _STM-PUBLIC-PROVIDER @ 0= _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _slc-clear-request S" alice.bsky.social" _slc-arg-string
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-REFRESH-H
+        CBUS-S-NOT-FOUND = _slc-assert
+    _slc-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _slc-assert
+    _slc-inst @ STREAMS-SHUTDOWN-CB
+    _slc-finalize-instance _slc-stack ;
+
+: _slc-test-explicit-only  ( -- )
+    -1 _slc-instance-new
+    S" unused live response" _slc-good-response _slc-fake-install
+    _STM-LIVE-STATUS @ _STM-LIVE-NEEDS-ACTOR = _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-IDLE = _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _STM-REQUEST-GENERATION @ 0= _slc-assert
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert
+    _slc-inst @ STREAMS-TICK-CB
+    _slc-clear-request _slc-req @ CBR.ARGS CV-NULL!
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _slc-assert
+    S" provenance" _slc-result-field S" none" _slc-string= _slc-assert
+    S" state" _slc-result-field S" unavailable" _slc-string= _slc-assert
+    S" request_generation" _slc-result-field
+        DUP CV-TYPE@ CV-T-INT = _slc-assert CV-DATA@ 0= _slc-assert
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-CONFIGURED = _slc-assert
+    _STM-ACTOR@ S" alice.bsky.social" STR-STR= _slc-assert
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert
+    _slc-shutdown-finalize
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert _slc-stack ;
+
+: _slc-test-capability-and-active-shutdown  ( -- )
+    -1 _slc-instance-new
+    S" capability response" _slc-good-response _slc-fake-install
+    _slc-clear-request S"   alice.bsky.social   " _slc-arg-string
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-REFRESH-H
+        CBUS-S-OK = _slc-assert
+    _slc-req @ CBR.RESULT STREAMS-CAP-FEED-REFRESH CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP _slc-ok
+    S" actor" _slc-result-field S" alice.bsky.social"
+        _slc-string= _slc-assert
+    S" accepted" _slc-result-field DUP CV-TYPE@ CV-T-BOOL = _slc-assert
+        CV-DATA@ _slc-assert
+    S" request_generation" _slc-result-field
+        DUP CV-TYPE@ CV-T-INT = _slc-assert CV-DATA@ 1 = _slc-assert
+    S" state" _slc-result-field S" started" _slc-string= _slc-assert
+    _STM-REQUEST-GENERATION @ 1 = _slc-assert
+    _slc-inst @ DUP CINST.ID @ SWAP CINST.GENERATION @ 1
+        _STM-XIO-OP XIO-OP-MATCH? _slc-assert
+    _slc-service XIO-ACTIVE-OP _STM-XIO-OP = _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-CONFIGURED = _slc-assert
+    _STM-FEED-READY @ 0= _slc-assert _slc-no-io? _slc-assert
+
+    _slc-inst @ CINST.REVISION @ _slc-saved-revision !
+    _STM-REFRESH-START CBUS-S-BUSY = _slc-assert
+    _STM-LIVE-STATUS @ _STM-LIVE-ACTIVE = _slc-assert
+    _STM-REQUEST-GENERATION @ 1 = _slc-assert
+    _slc-inst @ CINST.REVISION @ _slc-saved-revision @ = _slc-assert
+
+    _slc-clear-request S" bob.bsky.social" _slc-arg-string
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-REFRESH-H
+        CBUS-S-BUSY = _slc-assert
+    _slc-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _slc-assert
+    _STM-ACTOR@ S" alice.bsky.social" STR-STR= _slc-assert
+    _STM-REQUEST-GENERATION @ 1 = _slc-assert
+
+    _slc-service XIO-TICK
+    _slc-open-starts @ 1 = _slc-assert
+    _slc-provider @ PAF.BODY-A @ 0<> _slc-assert
+    _slc-inst @ STREAMS-SHUTDOWN-CB
+    _slc-service-clear? _slc-assert
+    _slc-lower-cancels @ 1 = _slc-assert
+    _slc-lower-closes @ 0= _slc-assert
+    _STM-PUBLIC-PROVIDER @ 0= _slc-assert
+    _STM-XIO-OP XIO-OP-SIZE _slc-zeroed? _slc-assert
+    _slc-finalize-instance
+    _slc-lower-cancels @ 1 = _slc-assert
+    _slc-lower-closes @ 0= _slc-assert _slc-stack ;
+
+: _slc-test-failed-start-preserves-actor  ( -- )
+    -1 _slc-instance-new
+    S" unused failure response" _slc-good-response _slc-fake-install
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    _slc-inst @ CINST.GENERATION @ _slc-saved-generation !
+    0 _slc-inst @ CINST.GENERATION !
+    _slc-clear-request S" bob.bsky.social" _slc-arg-string
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-REFRESH-H
+        CBUS-S-FAILED = _slc-assert
+    _slc-saved-generation @ _slc-inst @ CINST.GENERATION !
+    _slc-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _slc-assert
+    _STM-ACTOR@ S" alice.bsky.social" STR-STR= _slc-assert
+    _slc-provider @ PAF-ACTOR@
+        S" alice.bsky.social" STR-STR= _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-CONFIGURED = _slc-assert
+    _STM-REQUEST-GENERATION @ 0= _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert
+    _slc-shutdown-finalize _slc-service-clear? _slc-assert _slc-stack ;
+
+: _slc-test-first-actor-rollback  ( -- )
+    -1 _slc-instance-new
+    S" unused first-actor response" _slc-good-response _slc-fake-install
+    _slc-clear-request S" did:plc:" _slc-arg-string
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-REFRESH-H
+        CBUS-S-INVALID = _slc-assert
+    _slc-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _slc-assert
+    _STM-ACTOR@ NIP 0= _slc-assert
+    _slc-provider @ PAF-ACTOR@ NIP 0= _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-IDLE = _slc-assert
+    _slc-provider @ PAF.PATH-U @ 0= _slc-assert
+    _slc-provider @ PAF.REQUEST HREQ.LENGTH @ 0= _slc-assert
+    _slc-provider @ PAF.ERROR-KIND @ 0= _slc-assert
+    _slc-provider @ PAF.ERROR-CODE @ 0= _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _STM-REQUEST-GENERATION @ 0= _slc-assert
+    _STM-LIVE-STATUS @ _STM-LIVE-NEEDS-ACTOR = _slc-assert
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert
+    _slc-shutdown-finalize
+    _slc-service-clear? _slc-assert _slc-stack ;
+
+: _slc-test-rollback-poison  ( -- )
+    -1 _slc-instance-new
+    S" unused rollback response" _slc-good-response _slc-fake-install
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    -4799 _slc-provider @ PAF.CLEANUP-ERROR !
+    _slc-clear-request S" bob.bsky.social" _slc-arg-string
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-REFRESH-H
+        CBUS-S-FAILED = _slc-assert
+    _slc-req @ CBR.RESULT CV-TYPE@ CV-T-NULL = _slc-assert
+    _STM-LIVE-STATUS @ _STM-LIVE-FAILED = _slc-assert
+    _STM-LIVE-ERROR @ _STM-E-CLEANUP = _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _STM-ACTOR@ S" alice.bsky.social" STR-STR= _slc-assert
+    _slc-provider @ PAF-ACTOR@
+        S" alice.bsky.social" STR-STR= _slc-assert
+    _slc-provider @ PAF.CLEANUP-ERROR @ -4799 = _slc-assert
+    _STM-REQUEST-GENERATION @ 0= _slc-assert
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert
+    0 _slc-provider @ PAF.CLEANUP-ERROR !
+    _slc-shutdown-finalize _slc-service-clear? _slc-assert _slc-stack ;
+
+: _slc-test-success  ( -- )
+    -1 _slc-instance-new
+    S" live replacement" _slc-good-response _slc-fake-install
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    _STM-REFRESH-START CBUS-S-OK = _slc-assert
+    _STM-LIVE-STATUS @ _STM-LIVE-ACTIVE = _slc-assert
+    _slc-pump
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-SUCCEEDED = _slc-assert
+    _slc-service XIOS.RETAINED @ _STM-XIO-OP = _slc-assert
+    _STM-XIO-OP XIOO.RESULT @ _STM-PUBLIC-PROVIDER @ = _slc-assert
+    _STM-XIO-EXACT? _slc-assert _STM-XIO-SUCCESS-EXACT? _slc-assert
+    _STM-FEED-READY @ 0= _slc-assert
+    _slc-inst @ CINST.REVISION @ _slc-saved-revision !
+    _slc-inst @ STREAMS-TICK-CB
+    _slc-inst @ CINST.REVISION @ _slc-saved-revision @ 1+ = _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _slc-service-clear? _slc-assert
+    _slc-provider @ PAF.BODY-A @ 0= _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-RELEASED = _slc-assert
+    _STM-LIVE-STATUS @ _STM-LIVE-SUCCEEDED = _slc-assert
+    _STM-FEED-SOURCE @ _STM-SOURCE-PUBLIC = _slc-assert
+    _STM-ITEM-COUNT 1 = _slc-assert
+    0 _STM-ITEM BFM.ITEM.TEXT S" live replacement" STR-STR= _slc-assert
+
+    _slc-clear-request _slc-req @ CBR.ARGS CV-NULL!
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _slc-assert
+    S" provenance" _slc-result-field S" public.api.bsky.app"
+        _slc-string= _slc-assert
+    S" state" _slc-result-field S" public-retained" _slc-string= _slc-assert
+    S" request_generation" _slc-result-field CV-DATA@ 1 = _slc-assert
+
+    _slc-clear-request 0 _STM-URI _slc-req @ CBR.ARGS CV-RESOURCE! _slc-ok
+    _slc-req @ _slc-inst @ _STM-CAP-ITEM-H CBUS-S-OK = _slc-assert
+    S" provenance" _slc-result-field S" public.api.bsky.app"
+        _slc-string= _slc-assert
+    _slc-clear-request 0 _STM-URI _slc-req @ CBR.ARGS CV-RESOURCE! _slc-ok
+    _slc-req @ _slc-inst @ _STM-CAP-THREAD-H CBUS-S-OK = _slc-assert
+    S" provenance" _slc-result-field S" public.api.bsky.app"
+        _slc-string= _slc-assert
+    _slc-lower-cancels @ 0= _slc-assert
+    _slc-lower-closes @ 1 = _slc-assert
+    _slc-shutdown-finalize _slc-service-clear? _slc-assert _slc-stack ;
+
+: _slc-test-decode-failure-retains  ( -- )
+    -1 _slc-instance-new
+    S" retained sentinel" _slc-json-with-text
+        _slc-inst @ STREAMS-LOAD-FEED-JSON BFM-S-OK = _slc-assert
+    _STM-FEED-SOURCE @ _STM-SOURCE-INJECTED = _slc-assert
+    _slc-bad-response _slc-fake-install
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    _STM-REFRESH-START CBUS-S-OK = _slc-assert
+    _slc-clear-request _slc-req @ CBR.ARGS CV-NULL!
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _slc-assert
+    S" state" _slc-result-field S" refreshing" _slc-string= _slc-assert
+    S" provenance" _slc-result-field S" injected" _slc-string= _slc-assert
+    S" request_generation" _slc-result-field CV-DATA@ 1 = _slc-assert
+    S" items" _slc-result-field CV-LEN@ 1 = _slc-assert
+    _slc-pump
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-SUCCEEDED = _slc-assert
+    _slc-inst @ STREAMS-TICK-CB
+    _STM-LIVE-STATUS @ _STM-LIVE-FAILED = _slc-assert
+    _STM-FEED-STATUS @ BFM-S-MISSING = _slc-assert
+    _STM-FEED-SOURCE @ _STM-SOURCE-INJECTED = _slc-assert
+    _STM-ITEM-COUNT 1 = _slc-assert
+    0 _STM-ITEM BFM.ITEM.TEXT S" retained sentinel" STR-STR= _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _slc-service-clear? _slc-assert
+    _slc-clear-request _slc-req @ CBR.ARGS CV-NULL!
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _slc-assert
+    S" provenance" _slc-result-field S" injected" _slc-string= _slc-assert
+    S" state" _slc-result-field S" retained-after-decode-error"
+        _slc-string= _slc-assert
+
+    _slc-inst @ CINST.REVISION @ _slc-saved-revision !
+    S" recovered injection" _slc-json-with-text
+        _slc-inst @ STREAMS-LOAD-FEED-JSON BFM-S-OK = _slc-assert
+    _slc-inst @ CINST.REVISION @ _slc-saved-revision @ 1+ = _slc-assert
+    _STM-LIVE-STATUS @ _STM-LIVE-READY = _slc-assert
+    _STM-LIVE-ERROR @ 0= _slc-assert
+    _STM-FEED-SOURCE @ _STM-SOURCE-INJECTED = _slc-assert
+    0 _STM-ITEM BFM.ITEM.TEXT S" recovered injection" STR-STR= _slc-assert
+    _slc-clear-request _slc-req @ CBR.ARGS CV-NULL!
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _slc-assert
+    S" provenance" _slc-result-field S" injected" _slc-string= _slc-assert
+    S" state" _slc-result-field S" injected-retained"
+        _slc-string= _slc-assert
+    _slc-shutdown-finalize _slc-service-clear? _slc-assert _slc-stack ;
+
+: _slc-test-stale-completion  ( -- )
+    -1 _slc-instance-new
+    S" stale sentinel" _slc-json-with-text
+        _slc-inst @ STREAMS-LOAD-FEED-JSON BFM-S-OK = _slc-assert
+    S" must not publish" _slc-good-response _slc-fake-install
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    _STM-REFRESH-START CBUS-S-OK = _slc-assert _slc-pump
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-SUCCEEDED = _slc-assert
+    1 _STM-REQUEST-GENERATION +!
+    _STM-XIO-EXACT? 0= _slc-assert
+    _slc-inst @ STREAMS-TICK-CB
+    _STM-LIVE-STATUS @ _STM-LIVE-FAILED = _slc-assert
+    _STM-LIVE-ERROR @ XIO-S-STATE = _slc-assert
+    _STM-FEED-SOURCE @ _STM-SOURCE-INJECTED = _slc-assert
+    _STM-FEED-STATUS @ BFM-S-OK = _slc-assert
+    0 _STM-ITEM BFM.ITEM.TEXT S" stale sentinel" STR-STR= _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _slc-service-clear? _slc-assert
+    _slc-clear-request _slc-req @ CBR.ARGS CV-NULL!
+    _slc-req @ _slc-inst @ _STM-CAP-FEED-H CBUS-S-OK = _slc-assert
+    S" state" _slc-result-field S" retained-after-refresh-error"
+        _slc-string= _slc-assert
+    S" request_generation" _slc-result-field CV-DATA@ 2 = _slc-assert
+    _slc-shutdown-finalize _slc-service-clear? _slc-assert _slc-stack ;
+
+: _slc-test-retained-shutdown  ( -- )
+    -1 _slc-instance-new
+    S" unconsumed success" _slc-good-response _slc-fake-install
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    _STM-REFRESH-START CBUS-S-OK = _slc-assert _slc-pump
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-SUCCEEDED = _slc-assert
+    _slc-service XIOS.RETAINED @ _STM-XIO-OP = _slc-assert
+    _slc-provider @ PAF.BODY-A @ 0<> _slc-assert
+    _slc-inst @ STREAMS-SHUTDOWN-CB
+    _slc-service-clear? _slc-assert
+    _slc-lower-cancels @ 0= _slc-assert
+    _slc-lower-closes @ 1 = _slc-assert
+    _STM-PUBLIC-PROVIDER @ 0= _slc-assert
+    _STM-XIO-OP XIO-OP-SIZE _slc-zeroed? _slc-assert
+    _slc-finalize-instance
+    _slc-lower-cancels @ 0= _slc-assert
+    _slc-lower-closes @ 1 = _slc-assert _slc-stack ;
+
+: _slc-test-inconsistent-provider-retained  ( -- )
+    -1 _slc-instance-new
+    S" unused inconsistent response" _slc-good-response _slc-fake-install
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @ DUP _slc-provider !
+        PAF-STATE-ACTIVE SWAP PAF.STATE !
+    _STM-LIVE-RELEASE 0= _slc-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @
+        _slc-provider @ = _slc-assert
+    _STM-XIO-SERVICE @ _slc-service = _slc-assert
+    _STM-XIO-OP XIO-OP-VALID? _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _slc-provider @ PAF-VALID? _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-ACTIVE = _slc-assert
+    _slc-provider @ PAF-ACTOR@ S" alice.bsky.social" STR-STR= _slc-assert
+    _slc-inst @ CINST-STATE _slc-state @ = _slc-assert
+    _slc-state @ _STM-STATE-SIZE _slc-zeroed? 0= _slc-assert
+    PAF-STATE-CONFIGURED _slc-provider @ PAF.STATE !
+    _slc-finalize-instance
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert _slc-stack ;
+
+: _slc-test-attached-port-retained  ( -- )
+    -1 _slc-instance-new
+    S" unused attached-port response" _slc-good-response _slc-fake-install
+    S" alice.bsky.social" _STM-ACTOR! CBUS-S-OK = _slc-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @ DUP _slc-provider !
+        DUP PAF.PORT SWAP PAF.EXCHANGE HBUF.PORT !
+
+    ['] _slc-catch-shutdown CATCH _STM-E-CLEANUP = _slc-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @
+        _slc-provider @ = _slc-assert
+    _STM-XIO-SERVICE @ _slc-service = _slc-assert
+    _STM-XIO-OP XIO-OP-VALID? _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _slc-provider @ PAF-VALID? _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-CONFIGURED = _slc-assert
+    _slc-provider @ PAF-ACTOR@ S" alice.bsky.social" STR-STR= _slc-assert
+    _slc-provider @ PAF.EXCHANGE HBUF.PORT @
+        _slc-provider @ PAF.PORT = _slc-assert
+    _slc-inst @ CINST-STATE _slc-state @ = _slc-assert
+    _slc-state @ _STM-STATE-SIZE _slc-zeroed? 0= _slc-assert
+
+    ['] _slc-catch-state-fini CATCH _STM-E-CLEANUP = _slc-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @
+        _slc-provider @ = _slc-assert
+    _STM-XIO-SERVICE @ _slc-service = _slc-assert
+    _STM-XIO-OP XIO-OP-VALID? _slc-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slc-assert
+    _slc-provider @ PAF-VALID? _slc-assert
+    _slc-provider @ PAF.STATE @ PAF-STATE-CONFIGURED = _slc-assert
+    _slc-provider @ PAF-ACTOR@ S" alice.bsky.social" STR-STR= _slc-assert
+    _slc-provider @ PAF.EXCHANGE HBUF.PORT @
+        _slc-provider @ PAF.PORT = _slc-assert
+    _slc-inst @ CINST-STATE _slc-state @ = _slc-assert
+    _slc-state @ _STM-STATE-SIZE _slc-zeroed? 0= _slc-assert
+
+    0 _slc-provider @ PAF.EXCHANGE HBUF.PORT !
+    _slc-finalize-instance
+    _slc-service-clear? _slc-assert _slc-no-io? _slc-assert _slc-stack ;
+
+: _slc-run  ( -- )
+    0 _slc-fails ! 0 _slc-checks !
+    STREAMS-BLUESKY-COMP-SETUP
+    CBR-NEW DUP 0= _slc-assert DROP _slc-req !
+    DEPTH _slc-depth !
+    _slc-test-descriptors _slc-stack
+    _slc-test-offline
+
+    _slc-service XIO-SERVICE-INIT XIO-S-OK = _slc-assert
+    _slc-endpoint IENDPOINT-INIT
+    _slc-service _slc-endpoint IEND.CONTEXT !
+    ['] _slc-service-for _slc-endpoint IEND.SERVICE-XT !
+
+    _slc-test-explicit-only
+    _slc-test-first-actor-rollback
+    _slc-test-failed-start-preserves-actor
+    _slc-test-rollback-poison
+    _slc-test-capability-and-active-shutdown
+    _slc-test-success
+    _slc-test-decode-failure-retains
+    _slc-test-stale-completion
+    _slc-test-retained-shutdown
+    _slc-test-inconsistent-provider-retained
+    _slc-test-attached-port-retained
+
+    _slc-clear-request _slc-req @ CBR-FREE 0 _slc-req !
+    _slc-service XIO-SERVICE-FINI XIO-S-OK = _slc-assert
+    _slc-stack
+    _slc-fails @ 0= IF
+        ." STREAMS XIO CONTRACTS PASS " _slc-checks @ .
+    ELSE
+        ." STREAMS XIO CONTRACTS FAIL " _slc-fails @ . ." / "
+            _slc-checks @ .
+    THEN CR ;
+
+_slc-run
+""",
+    ready_markers=("STREAMS XIO CONTRACTS PASS",),
+    stable_markers=("STREAMS XIO CONTRACTS PASS",),
+    failure_markers=("STREAMS XIO CONTRACTS FAIL", "SLC assertion"),
+    linked=True,
+)
+
+PROFILES["streams-live-public"] = Profile(
+    roots=(
+        "tui/applets/streams/bluesky-public.f",
+        "atproto/public-trust.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - credential-free public Streams qualification
+ENTER-USERLAND
+." [akashic] loading public Streams qualification" CR
+REQUIRE tui/applets/streams/bluesky-public.f
+REQUIRE atproto/public-trust.f
+
+VARIABLE _slp-inst
+VARIABLE _slp-state
+VARIABLE _slp-service-live
+VARIABLE _slp-checks
+VARIABLE _slp-run-ior
+VARIABLE _slp-cleanup-fails
+VARIABLE _slp-deadline
+VARIABLE _slp-release-ok
+VARIABLE _slp-fini-ok
+VARIABLE _slp-state-zero
+
+CREATE _slp-service XIO-SERVICE-SIZE ALLOT
+CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
+
+: _slp-actor$  ( -- addr len )
+    S" did:plc:z72i7hdynmk6r22z27h6tvur" ;
+
+: _slp-service-for  ( id-a id-u context -- service | 0 )
+    >R S" org.akashic.net.external-io" STR-STR= IF
+        R>
+    ELSE
+        R> DROP 0
+    THEN ;
+
+: _slp-zeroed?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _slp-dump  ( -- )
+    ." STREAMS LIVE PUBLIC DIAG"
+    _slp-inst @ IF
+        _slp-inst @ _STM-ACTIVATE
+        ."  live=" _STM-LIVE-STATUS @ .
+        ." /" _STM-LIVE-ERROR @ .
+        ."  reqgen=" _STM-REQUEST-GENERATION @ .
+        ."  source=" _STM-FEED-SOURCE @ .
+        ."  feed=" _STM-FEED-STATUS @ .
+        ."  items=" _STM-ITEM-COUNT .
+        ."  op=" _STM-XIO-OP XIOO.STATE @ .
+        ." /" _STM-XIO-OP XIOO.ERROR @ .
+        ." /" _STM-XIO-OP XIOO.CLEANUP-ERROR @ .
+        _STM-XIO-SERVICE @ ?DUP IF
+            ."  svc=" DUP XIOS.ACTIVE @ .
+            ." /" XIOS.RETAINED @ .
+        THEN
+        _STM-PUBLIC-PROVIDER @ ?DUP IF
+            SPUB.CONTEXT @
+            ."  paf=" DUP PAF.STATE @ .
+            ." /" DUP PAF.ERROR-KIND @ .
+            ." /" DUP PAF.ERROR-CODE @ .
+            ."  http=" DUP PAF.HTTP-CODE @ .
+            ."  paf_cleanup=" DUP PAF.CLEANUP-ERROR @ .
+            ."  body=" DUP PAF.BODY-U @ .
+            ."  hbuf=" DUP PAF.EXCHANGE HBUF.STATE @ .
+            ." /" DUP PAF.EXCHANGE HBUF.LAST-STATUS @ .
+            ." /" DUP PAF.EXCHANGE HBUF.HTTP-CODE @ .
+            ."  parser=" DUP PAF.EXCHANGE HBUF.PARSER HSTR.STATUS @ .
+            ."  tls=" DUP PAF.TRANSPORT KDOSTLS.STATE @ .
+            ." /" DUP PAF.TRANSPORT KDOSTLS.LAST-ERROR @ .
+            ." /" DUP PAF.TRANSPORT KDOSTLS.NATIVE-ERROR @ .
+            ."  ctx=" PAF.TRANSPORT KDOSTLS.CONTEXT @ .
+        THEN
+    ELSE
+        ."  instance=none"
+    THEN
+    ."  native=" TLS-CONNECT-LAST-ERROR @ .
+    ." /" TLS-CERT-LAST-ERROR @ .
+    ."  tls_owner=" _KDOSTLS-OWNER @ .
+    ."  tcb=" TCB-USAGE SWAP . ." /" . CR TX-FLUSH ;
+
+: _slp-assert  ( flag -- )
+    1 _slp-checks +!
+    0= IF
+        ." STREAMS LIVE PUBLIC ASSERT FAIL check=" _slp-checks @ . CR
+        -1 THROW
+    THEN ;
+
+: _slp-exercise  ( -- )
+    10 64 0 2 IP-SET
+    10 64 0 1 GW-IP IP!
+    255 255 255 0 NET-MASK IP!
+    8 8 8 8 DNS-SERVER-IP IP!
+
+    ATPUBLIC-TRUST-REGISTER DUP MTRUST-S-OK <> IF
+        ." STREAMS LIVE PUBLIC TRUST FAIL status=" . CR -1 THROW
+    THEN DROP
+    MTRUST-FREEZE DUP MTRUST-S-OK <> IF
+        ." STREAMS LIVE PUBLIC TRUST FAIL status=" . CR -1 THROW
+    THEN DROP
+
+    _slp-service XIO-SERVICE-INIT DUP XIO-S-OK <> IF
+        ." STREAMS LIVE PUBLIC INIT FAIL service=" . CR -1 THROW
+    THEN DROP -1 _slp-service-live !
+    _slp-endpoint IENDPOINT-INIT
+    _slp-service _slp-endpoint IEND.CONTEXT !
+    ['] _slp-service-for _slp-endpoint IEND.SERVICE-XT !
+
+    STREAMS-BLUESKY-COMP-SETUP
+    STREAMS-BLUESKY-COMP-DESC CINST-NEW DUP IF
+        ." STREAMS LIVE PUBLIC INIT FAIL instance=" . CR
+        DROP -1 THROW
+    THEN DROP DUP _slp-inst ! CINST-STATE _slp-state !
+    _slp-endpoint _slp-inst @ CINST.ENDPOINT !
+    _slp-inst @ _STM-ACTIVATE _STM-LIVE-INIT
+    _STM-XIO-SERVICE @ _slp-service = _slp-assert
+    _STM-PUBLIC-PROVIDER @ 0<> _slp-assert
+    _STM-LIVE-STATUS @ _STM-LIVE-NEEDS-ACTOR = _slp-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slp-assert
+
+    _slp-actor$ _STM-ACTOR! DUP CBUS-S-OK <> IF
+        ." STREAMS LIVE PUBLIC START FAIL actor=" . CR -1 THROW
+    THEN DROP
+    _STM-LIVE-STATUS @ _STM-LIVE-READY = _slp-assert
+    _STM-REFRESH-START DUP CBUS-S-OK <> IF
+        ." STREAMS LIVE PUBLIC START FAIL refresh=" . CR -1 THROW
+    THEN DROP
+    _STM-LIVE-STATUS @ _STM-LIVE-ACTIVE = _slp-assert
+    _STM-REQUEST-GENERATION @ 1 = _slp-assert
+    _slp-actor$ _STM-ACTOR@ STR-STR= _slp-assert
+    ." STREAMS LIVE PUBLIC STARTED" CR TX-FLUSH
+
+    MS@ 75000 + _slp-deadline !
+    BEGIN
+        _slp-service XIO-TICK
+        _slp-inst @ STREAMS-TICK-CB
+        NET-IDLE
+        _STM-LIVE-STATUS @ _STM-LIVE-ACTIVE <>
+        MS@ _slp-deadline @ >= OR
+    UNTIL
+    _STM-LIVE-STATUS @ _STM-LIVE-SUCCEEDED <> IF
+        ." STREAMS LIVE PUBLIC EXCHANGE FAIL" CR -1 THROW
+    THEN
+
+    _STM-LIVE-ERROR @ 0= _slp-assert
+    _STM-REQUEST-GENERATION @ 1 = _slp-assert
+    _STM-FEED-READY @ 0<> _slp-assert
+    _STM-FEED-STATUS @ BFM-S-OK = _slp-assert
+    _STM-FEED-SOURCE @ _STM-SOURCE-PUBLIC = _slp-assert
+    _STM-ITEM-COUNT 0> _slp-assert
+    _STM-FEED-PROVENANCE$ S" public.api.bsky.app" STR-STR= _slp-assert
+    _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _slp-assert
+    _slp-service XIO-ACTIVE? 0= _slp-assert
+    _slp-service XIOS.RETAINED @ 0= _slp-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @
+        PAF.STATE @ PAF-STATE-RELEASED = _slp-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @
+        PAF.BODY-A @ 0= _slp-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @
+        PAF.BODY-U @ 0= _slp-assert
+    _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @ PAF.TRANSPORT
+        KDOSTLS.CONTEXT @ 0= _slp-assert
+    _KDOSTLS-OWNER @ 0= _slp-assert ;
+
+: _slp-shutdown-body  ( -- )
+    _slp-inst @ STREAMS-SHUTDOWN-CB ;
+
+: _slp-release-body  ( -- )
+    _STM-LIVE-RELEASE 0= IF _STM-E-CLEANUP THROW THEN ;
+
+: _slp-fini-body  ( -- )
+    _slp-state @ _STM-STATE-FINI ;
+
+: _slp-free-body  ( -- )
+    _slp-inst @ CINST-FREE ;
+
+: _slp-cleanup-error  ( ior -- )
+    1 _slp-cleanup-fails +!
+    ." STREAMS LIVE PUBLIC CLEANUP FAIL ior=" . CR
+    _slp-dump ;
+
+: _slp-detached?  ( -- flag )
+    _STM-PUBLIC-PROVIDER @ 0=
+    _STM-XIO-SERVICE @ 0= AND
+    _STM-XIO-OP XIO-OP-SIZE _slp-zeroed? AND
+    _slp-service XIOS.ACTIVE @ 0= AND
+    _slp-service XIOS.RETAINED @ 0= AND
+    _KDOSTLS-OWNER @ 0= AND ;
+
+: _slp-cleanup  ( -- )
+    0 _slp-release-ok ! 0 _slp-fini-ok ! 0 _slp-state-zero !
+    _slp-inst @ IF
+        _slp-inst @ _STM-ACTIVATE
+        ['] _slp-shutdown-body CATCH ?DUP IF _slp-cleanup-error THEN
+        ['] _slp-release-body CATCH ?DUP IF
+            _slp-cleanup-error
+        ELSE
+            -1 _slp-release-ok !
+        THEN
+        _slp-detached? 0= IF
+            1 _slp-cleanup-fails +!
+            ." STREAMS LIVE PUBLIC CLEANUP FAIL ownership-retained" CR
+            0 _slp-release-ok ! _slp-dump
+        THEN
+        _slp-release-ok @ IF
+            ['] _slp-fini-body CATCH ?DUP IF
+                _slp-cleanup-error
+            ELSE
+                -1 _slp-fini-ok !
+            THEN
+        THEN
+        _slp-fini-ok @ IF
+            _slp-state @ _STM-STATE-SIZE _slp-zeroed? DUP _slp-state-zero !
+            0= IF
+                1 _slp-cleanup-fails +!
+                ." STREAMS LIVE PUBLIC CLEANUP FAIL state-not-zero" CR
+            THEN
+        THEN
+        _slp-release-ok @ _slp-fini-ok @ AND _slp-state-zero @ AND
+        _slp-service XIOS.ACTIVE @ 0= AND
+        _slp-service XIOS.RETAINED @ 0= AND
+        _KDOSTLS-OWNER @ 0= AND IF
+            ['] _slp-free-body CATCH ?DUP IF
+                _slp-cleanup-error
+            ELSE
+                0 _slp-inst ! 0 _slp-state !
+            THEN
+        ELSE
+            1 _slp-cleanup-fails +!
+            ." STREAMS LIVE PUBLIC CLEANUP FAIL instance-retained" CR
+        THEN
+    THEN
+    _slp-service-live @ IF
+        _slp-inst @ 0=
+        _slp-service XIOS.ACTIVE @ 0= AND
+        _slp-service XIOS.RETAINED @ 0= AND IF
+            _slp-service XIO-SERVICE-FINI DUP XIO-S-OK <> IF
+                1 _slp-cleanup-fails +!
+                ." STREAMS LIVE PUBLIC CLEANUP FAIL service=" . CR
+            ELSE
+                DROP 0 _slp-service-live !
+            THEN
+        ELSE
+            1 _slp-cleanup-fails +!
+            ." STREAMS LIVE PUBLIC CLEANUP FAIL service-retained" CR
+        THEN
+    THEN
+    _KDOSTLS-OWNER @ IF
+        1 _slp-cleanup-fails +!
+        ." STREAMS LIVE PUBLIC CLEANUP FAIL tls-owner="
+            _KDOSTLS-OWNER @ . CR
+    THEN ;
+
+: _slp-run  ( -- )
+    0 _slp-inst ! 0 _slp-state ! 0 _slp-service-live !
+    0 _slp-checks ! 0 _slp-cleanup-fails !
+    ['] _slp-exercise CATCH DUP _slp-run-ior ! IF _slp-dump THEN
+    _slp-cleanup
+    _slp-run-ior @ 0= _slp-cleanup-fails @ 0= AND IF
+        ." STREAMS LIVE PUBLIC PASS checks=" _slp-checks @ . CR TX-FLUSH
+    ELSE
+        ." STREAMS LIVE PUBLIC FAIL exercise=" _slp-run-ior @ .
+        ."  cleanup=" _slp-cleanup-fails @ . CR TX-FLUSH ABORT
+    THEN ;
+
+_slp-run
+""",
+    ready_markers=("STREAMS LIVE PUBLIC PASS",),
+    stable_markers=("STREAMS LIVE PUBLIC PASS",),
+    failure_markers=(
+        "STREAMS LIVE PUBLIC TRUST FAIL",
+        "STREAMS LIVE PUBLIC INIT FAIL",
+        "STREAMS LIVE PUBLIC START FAIL",
+        "STREAMS LIVE PUBLIC EXCHANGE FAIL",
+        "STREAMS LIVE PUBLIC ASSERT FAIL",
+        "STREAMS LIVE PUBLIC CLEANUP FAIL",
+        "STREAMS LIVE PUBLIC FAIL",
+    ),
+    linked=True,
+    requires_tap=True,
 )
 
 PROFILES["streams-persistence-contracts"] = Profile(
@@ -14792,6 +16655,9 @@ VARIABLE _paf-rj-code
 VARIABLE _paf-rj-xerr
 VARIABLE _paf-rj-cancels
 VARIABLE _paf-rj-closes
+VARIABLE _paf-deconfig-state
+VARIABLE _paf-deconfig-path-u
+VARIABLE _paf-deconfig-request-u
 
 : _paf-zero?  ( addr len -- flag )
     0 ?DO
@@ -14960,9 +16826,22 @@ VARIABLE _paf-rj-closes
 : _paf-test-configuration  ( -- )
     _paf-provider PAF-INIT PAF-S-OK = _paf-assert
     _paf-provider PAF-VALID? _paf-assert
-    _paf-provider PAF.PORT NIO.OPEN-START-XT @ 0= _paf-assert
-    _paf-provider PAF.PORT NIO.OPEN-POLL-XT @ 0= _paf-assert
-    _paf-provider PAF.PORT NIO.CANCEL-XT @ 0= _paf-assert
+    \ The native provider is backed by the shared cooperative KDOS connector.
+    _paf-provider PAF.PORT NIO.OPEN-START-XT @ 0<> _paf-assert
+    _paf-provider PAF.PORT NIO.OPEN-POLL-XT @ 0<> _paf-assert
+    _paf-provider PAF.PORT NIO.CANCEL-XT @ 0<> _paf-assert
+    0 PAF-DECONFIGURE PAF-S-INVALID = _paf-assert
+    _paf-provider PAF-DECONFIGURE PAF-S-OK = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-IDLE = _paf-assert
+    _paf-provider PAF-ACTOR@ NIP 0= _paf-assert
+    _paf-provider PAF-PATH@ NIP 0= _paf-assert
+    _paf-provider PAF.REQUEST HREQ.BUFFER @ _paf-provider PAF.WIRE =
+        _paf-assert
+    _paf-provider PAF.REQUEST HREQ.CAPACITY @ PAF-REQUEST-CAPACITY =
+        _paf-assert
+    _paf-provider PAF.TRANSPORT KDOSTLS-HOST PAF-PUBLIC-HOST
+        STR-STR= _paf-assert
+    _paf-provider PAF.TRANSPORT KDOSTLS.REMOTE-PORT @ 443 = _paf-assert
     S" " _paf-provider PAF-CONFIGURE PAF-S-INVALID = _paf-assert
     S" did:plc:" _paf-provider PAF-CONFIGURE PAF-S-INVALID = _paf-assert
     S" did:plc:abc:" _paf-provider PAF-CONFIGURE PAF-S-INVALID = _paf-assert
@@ -14995,6 +16874,101 @@ VARIABLE _paf-rj-closes
         STR-STR= _paf-assert
     _paf-stack ;
 
+: _paf-deconfigure-reject-state  ( state -- )
+    DUP _paf-deconfig-state ! _paf-provider PAF.STATE !
+    _paf-provider PAF.PATH-U @ _paf-deconfig-path-u !
+    _paf-provider PAF.REQUEST HREQ.LENGTH @ _paf-deconfig-request-u !
+    _paf-provider PAF-DECONFIGURE PAF-S-BUSY = _paf-assert
+    _paf-provider PAF.STATE @ _paf-deconfig-state @ = _paf-assert
+    _paf-provider PAF-ACTOR@ S" alice.bsky.social" STR-STR= _paf-assert
+    _paf-provider PAF.PATH-U @ _paf-deconfig-path-u @ = _paf-assert
+    _paf-provider PAF.REQUEST HREQ.LENGTH @
+        _paf-deconfig-request-u @ = _paf-assert ;
+
+: _paf-test-deconfigure  ( -- )
+    \ The configured provider still contains request staging from the
+    \ configuration boundary test; deconfigure must erase all of it.
+    99 _paf-provider PAF.BODY-U !
+    PAF-ERR-HTTP _paf-provider PAF.ERROR-KIND !
+    404 _paf-provider PAF.ERROR-CODE !
+    404 _paf-provider PAF.HTTP-CODE !
+    7 _paf-provider PAF.FLAGS !
+    _paf-provider PAF-DECONFIGURE PAF-S-OK = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-IDLE = _paf-assert
+    _paf-provider PAF-ACTOR@ NIP 0= _paf-assert
+    _paf-provider PAF.ACTOR PAF-ACTOR-CAPACITY _paf-zero? _paf-assert
+    _paf-provider PAF-PATH@ NIP 0= _paf-assert
+    _paf-provider PAF.PATH PAF-PATH-CAPACITY _paf-zero? _paf-assert
+    _paf-provider PAF.REQUEST HREQ.BUFFER @ _paf-provider PAF.WIRE =
+        _paf-assert
+    _paf-provider PAF.REQUEST HREQ.CAPACITY @ PAF-REQUEST-CAPACITY =
+        _paf-assert
+    _paf-provider PAF.REQUEST HREQ.LENGTH @ 0= _paf-assert
+    _paf-provider PAF.REQUEST HREQ.SENT @ 0= _paf-assert
+    _paf-provider PAF.REQUEST HREQ.STATE @ HREQ-STATE-EMPTY = _paf-assert
+    _paf-provider PAF.REQUEST HREQ.STATUS @ HREQ-S-OK = _paf-assert
+    _paf-provider PAF.REQUEST HREQ.FLAGS @ 0= _paf-assert
+    _paf-provider PAF.WIRE PAF-REQUEST-CAPACITY _paf-zero? _paf-assert
+    _paf-provider PAF.BODY-U @ 0= _paf-assert
+    _paf-provider PAF.ERROR-KIND @ 0= _paf-assert
+    _paf-provider PAF.ERROR-CODE @ 0= _paf-assert
+    _paf-provider PAF.HTTP-CODE @ 0= _paf-assert
+    _paf-provider PAF.FLAGS @ 0= _paf-assert
+    _paf-provider PAF.TRANSPORT KDOSTLS-HOST PAF-PUBLIC-HOST
+        STR-STR= _paf-assert
+    _paf-provider PAF.TRANSPORT KDOSTLS.REMOTE-PORT @ 443 = _paf-assert
+
+    \ IDLE and RELEASED are idempotent reset states.
+    _paf-provider PAF-DECONFIGURE PAF-S-OK = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-IDLE = _paf-assert
+    PAF-STATE-RELEASED _paf-provider PAF.STATE !
+    _paf-provider PAF-DECONFIGURE PAF-S-OK = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-IDLE = _paf-assert
+
+    \ Poison, body ownership, and terminal/in-flight states are fail-closed
+    \ and must retain the complete configured staging surface.
+    S" alice.bsky.social" _paf-provider PAF-CONFIGURE
+        PAF-S-OK = _paf-assert
+    _paf-provider _PAF-BUILD-REQUEST HREQ-S-OK = _paf-assert
+    -4799 _paf-provider PAF.CLEANUP-ERROR !
+    _paf-provider PAF-DECONFIGURE PAF-S-TRANSPORT = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-CONFIGURED = _paf-assert
+    _paf-provider PAF-ACTOR@ S" alice.bsky.social" STR-STR= _paf-assert
+    _paf-provider PAF.REQUEST HREQ.LENGTH @ 0> _paf-assert
+    _paf-provider PAF.CLEANUP-ERROR @ -4799 = _paf-assert
+    0 _paf-provider PAF.CLEANUP-ERROR !
+
+    _paf-response _paf-provider PAF.BODY-A !
+    2 _paf-provider PAF.BODY-U !
+    _PAF-F-BODY-OWNED _paf-provider PAF.FLAGS !
+    _paf-provider PAF-DECONFIGURE PAF-S-BUSY = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-CONFIGURED = _paf-assert
+    _paf-provider PAF.BODY-A @ _paf-response = _paf-assert
+    _paf-provider PAF.BODY-U @ 2 = _paf-assert
+    _paf-provider PAF.FLAGS @ _PAF-F-BODY-OWNED = _paf-assert
+    0 _paf-provider PAF.BODY-A ! 0 _paf-provider PAF.BODY-U !
+    0 _paf-provider PAF.FLAGS !
+
+    _paf-provider PAF.PORT _paf-provider PAF.EXCHANGE HBUF.PORT !
+    _paf-provider PAF-DECONFIGURE PAF-S-BUSY = _paf-assert
+    _paf-provider PAF.STATE @ PAF-STATE-CONFIGURED = _paf-assert
+    _paf-provider PAF-ACTOR@ S" alice.bsky.social" STR-STR= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF.PORT @
+        _paf-provider PAF.PORT = _paf-assert
+    0 _paf-provider PAF.EXCHANGE HBUF.PORT !
+
+    PAF-STATE-ACTIVE _paf-deconfigure-reject-state
+    PAF-STATE-READY _paf-deconfigure-reject-state
+    PAF-STATE-FAILED _paf-deconfigure-reject-state
+    PAF-STATE-CANCELLED _paf-deconfigure-reject-state
+    PAF-STATE-CONFIGURED _paf-provider PAF.STATE !
+    _paf-provider PAF-DECONFIGURE PAF-S-OK = _paf-assert
+
+    \ Leave the provider configured for the remaining exchange contracts.
+    S" did:web:example.com%3A8443" _paf-provider PAF-CONFIGURE
+        PAF-S-OK = _paf-assert
+    _paf-stack ;
+
 : _paf-test-unsupported  ( -- )
     _paf-callback-counts-reset _paf-operation-configure _paf-submit
     _paf-service XIO-TICK
@@ -15010,7 +16984,8 @@ VARIABLE _paf-rj-closes
     _paf-start-calls @ 1 = _paf-assert _paf-poll-calls @ 0= _paf-assert
     _paf-cancel-calls @ 1 = _paf-assert _paf-wipe-calls @ 1 = _paf-assert
     _paf-provider PAF.STATE @ PAF-STATE-RELEASED = _paf-assert
-    _paf-operation-reset _paf-stack ;
+    _paf-operation-reset
+    _paf-stack ;
 
 : _paf-test-invalid-context  ( -- )
     _paf-callback-counts-reset 1 _paf-request-generation +!
@@ -15152,12 +17127,12 @@ VARIABLE _paf-rj-closes
     _paf-provider PAF.EXCHANGE HBUF.BODY-CAP @ 0= _paf-assert
     _paf-provider PAF.EXCHANGE HBUF.PORT @ 0<> _paf-assert
     _paf-cancel-calls @ 1 = _paf-assert _paf-wipe-calls @ 1 = _paf-assert
-    _paf-lower-cancels @ 1 = _paf-assert _paf-lower-closes @ 1 = _paf-assert
+    _paf-lower-cancels @ 1 = _paf-assert _paf-lower-closes @ 0= _paf-assert
     ['] _paf-call-provider-cancel CATCH
         PAF-XERR-CLEANUP = _paf-assert
     ['] _paf-call-provider-wipe CATCH
         PAF-XERR-CLEANUP = _paf-assert
-    _paf-lower-cancels @ 1 = _paf-assert _paf-lower-closes @ 1 = _paf-assert
+    _paf-lower-cancels @ 1 = _paf-assert _paf-lower-closes @ 0= _paf-assert
     _paf-operation-reset
     S" did:plc:z72i7hdynmk6r22z27h6tvur" _paf-provider PAF-CONFIGURE
         PAF-S-TRANSPORT = _paf-assert
@@ -15169,8 +17144,8 @@ VARIABLE _paf-rj-closes
     _paf-service XIO-SERVICE-INIT XIO-S-OK = _paf-assert
     _paf-operation XIO-OP-INIT
     _paf-test-configuration
+    _paf-test-deconfigure
     _paf-test-invalid-context
-    _paf-test-unsupported
     _paf-test-success
     _paf-test-identity-success
     _paf-test-cancel
@@ -15283,31 +17258,68 @@ def dependency_order(roots: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def _minify_forth(text: str, *, remove_requires: bool = False) -> str:
-    """Remove deployment-only comments without rewriting executable tokens."""
+def _has_forth_conditional_token(text: str) -> bool:
+    """Return whether MegaPad's raw conditional scanner observes a token."""
+    return any(
+        token.upper() in FORTH_CONDITIONAL_TOKENS
+        for token in text.split(" ")
+    )
+
+
+def _compact_forth(
+    text: str,
+    *,
+    remove_requires: bool = False,
+    remove_stack_effects: bool = False,
+) -> str:
+    """Compact only syntax whose MegaPad interpretation is unambiguous.
+
+    MegaPad separates source tokens on ASCII spaces. Its normal evaluator
+    treats every token beginning with ``\\`` as an end-of-line comment, but
+    conditional skip mode scans raw tokens without honoring comments or
+    strings. Consequently full-line comments containing conditional-control
+    tokens must remain in the linked source.
+
+    Linked Akashic modules additionally drop a conventional flat stack-effect
+    comment immediately after ``: name``. No inline comment is otherwise
+    rewritten, so defining words and other source parsers need no host-side
+    whitelist.
+    """
     lines: list[str] = []
-    for line in text.splitlines():
-        if not line.strip() or line.lstrip().startswith("\\"):
+    for line in text.split("\n"):
+        stripped = line.lstrip(" ")
+        if not stripped:
             continue
+        if stripped.startswith("\\"):
+            if not _has_forth_conditional_token(stripped):
+                continue
         if remove_requires and REQUIRE_RE.match(line):
             continue
-        lines.append(STACK_EFFECT_RE.sub("", line).rstrip())
-    return "\n".join(lines) + "\n"
+        if remove_stack_effects:
+            match = COLON_STACK_EFFECT_RE.match(line)
+            if match and not _has_forth_conditional_token(
+                match.group("effect")
+            ):
+                suffix = line[match.end() :].lstrip(" ")
+                line = match.group("head")
+                if suffix:
+                    line += " " + suffix
+        lines.append(line.lstrip(" "))
+    return "".join(line + "\n" for line in lines)
+
+
+def _minify_forth(text: str, *, remove_requires: bool = False) -> str:
+    """Compact linked Akashic source without guessing parser-word input."""
+    return _compact_forth(
+        text,
+        remove_requires=remove_requires,
+        remove_stack_effects=True,
+    )
 
 
 def _strip_forth_noncode_lines(text: str) -> str:
-    """Strip only blank and full-line backslash comments from guest source.
-
-    Unlike linked Akashic chunks, the copied KDOS source is not eligible for
-    stack-effect removal: diagnostic strings can legitimately contain text
-    that resembles a parenthesized Forth comment.  This transform leaves
-    every retained executable line byte-for-byte intact.
-    """
-    return "\n".join(
-        line
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("\\")
-    ) + "\n"
+    """Apply only blank-line, full-comment, and indentation compaction."""
+    return _compact_forth(text)
 
 
 def _linked_chunks(modules: tuple[str, ...]) -> dict[str, bytes]:
@@ -17848,8 +19860,8 @@ def smoke(
             settle_input("Streams did not settle its timeline selection")
             session.send_key("ctrl+t")
             if wait_screen(
-                "Cached timeline context (partial)",
-                "Streams did not open the selected item's cached partial context",
+                "Retained timeline context (partial)",
+                "Streams did not open the selected item's retained partial context",
             ):
                 wait_screen(
                     "at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa",
@@ -17878,23 +19890,23 @@ def smoke(
                     )
                 session.resize(cols, rows)
                 wait_screen(
-                    "Cached timeline context (partial)",
+                    "Retained timeline context (partial)",
                     "Streams did not restore its context after resizing",
                 )
                 session.send_key("ctrl+l")
                 wait_screen_gone(
-                    "Cached timeline context (partial)",
+                    "Retained timeline context (partial)",
                     "Streams did not return from context to the timeline",
                 )
             session.send_key("ctrl+f")
             if wait_screen(
-                "Search cached posts:",
+                "Search retained posts:",
                 "Streams did not open its nonblocking local-search prompt",
             ):
                 session.send_text("mira")
                 session.send_key("enter")
                 wait_screen(
-                    "Found 1 cached item; selected it",
+                    "Found 1 retained item; selected it",
                     "Streams did not select the first real local-search match",
                 )
             session.send_key("ctrl+n")
