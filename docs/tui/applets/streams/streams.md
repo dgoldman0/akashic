@@ -13,9 +13,13 @@ Ordinary `STREAMS-ENTRY` remains offline even when Desk exposes external I/O:
 it installs no concrete provider factory, and source recovery or Observe calls
 never start network work. `bluesky-public.f` supplies the explicit legacy
 Bluesky component/entry composition, while `public-trust.f` remains a separate
-trusted boot contribution. Authentication and publication are not supported.
-The complete target boundary and deliberately unimplemented portions are
-recorded in [information-integration.md](information-integration.md).
+trusted boot contribution. Trusted boot can also import a separately reviewed,
+exact-host MPTA artifact for a future configured-source composition; source
+creation and applet launch cannot add or widen trust. No general feed artifact
+or acquisition adapter is composed yet. Authentication and publication are not
+supported. The complete target boundary and deliberately unimplemented
+portions are recorded in
+[information-integration.md](information-integration.md).
 
 Normal launches start with no feed and recover the draft stored by the
 preceding launch. The host qualification harness alone injects a hand-authored
@@ -91,6 +95,15 @@ limits. The first implemented kinds are syndication, watched page,
 notification, and the existing public-Bluesky adapter shape. This registry is
 configuration authority only: it does not yet claim that ordinary Streams can
 refresh those configured sources or retain their observations.
+
+HTTPS source configuration is not TLS provisioning. A later live composition
+must prove the source's canonical host has separately reviewed provisioning;
+one supported route is an exact-host MPTA artifact imported by trusted boot
+before Desk freezes machine trust. The importer does not itself bind an
+artifact to a source RID or revision. Imported run artifacts reject global and
+include-subdomains scopes, and ordinary Streams never receives their CA bytes
+or the trust builder. The repository deliberately ships no catch-all feed root
+set and the current composition has no ambient WebPKI fallback.
 
 The owner API provides bounded count/read/create/replace/enable/remove methods.
 Creation ignores caller-supplied identity and generates a nonzero 32-byte RID;

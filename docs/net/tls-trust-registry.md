@@ -52,6 +52,71 @@ bounds, unsupported flags, exact duplicate records, stale builders, and totals
 beyond KDOS's eight-anchor and 32768-byte limits. KDOS remains the final X.509
 and CA validator at the single load boundary. An emitter error, throw, or stack
 imbalance fails the entire composition; partial trust is never retained.
+After every emitter, the registry revalidates the exact builder descriptor and
+its complete bounded record sequence before invoking another contributor or
+hashing output. A callback cannot turn corrupt count, position, capacity, or
+buffer metadata into an unbounded duplicate scan or final hash.
+
+## Reviewed run artifacts
+
+`MTRUST-MPTA+ ( bundle-a bundle-u builder -- status )` lets a trusted boot
+emitter contribute a separately reviewed MPTA v1 artifact without compiling
+its CA bytes into an applet. The operation is intentionally narrower than
+`TLS-TRUST-LOAD`:
+
+- it is accepted only on core 0 during `BUILDING` with the exact active builder;
+- the input and active output allocation must not overlap;
+- the artifact must contain one through eight complete records and no trailing
+  bytes;
+- every record must use a nonempty valid DNS scope and flags `0`, so global and
+  include-subdomains anchors are rejected;
+- duplicates within the artifact or against earlier contributors are rejected;
+  and
+- all count and byte capacity is proven before the first output byte changes.
+
+An unexpected append-pass failure rolls the builder back to its original count
+and position and clears any bytes appended by that call. KDOS still performs
+the authoritative certificate, CA, key-usage, and supported-key validation when
+the completed machine bundle is loaded. Import success alone does not prove a
+server certificate path, authorize network I/O, or make response content
+trustworthy.
+
+The artifact header's generation must equal the first 64 bits of SHA3-256 over
+the exact artifact with generation bytes 8 through 15 treated as zero. This is
+a deterministic content/corruption tag, not a signature, authenticated boot
+claim, provenance proof, freshness proof, or rollback counter. The provisioning
+path remains responsible for authenticating and reviewing the artifact and for
+associating its scopes with the intended installed services.
+
+A run composition can retain the reviewed bytes in its own bounded buffer and
+pass a two-cell descriptor as contributor context:
+
+```forth
+CREATE FEED-TRUST-DESCRIPTOR 16 ALLOT
+
+: FEED-TRUST-EMIT  ( builder descriptor -- status )
+    DUP @ SWAP 8 + @ ROT MTRUST-MPTA+ ;
+
+reviewed-bundle-a FEED-TRUST-DESCRIPTOR !
+reviewed-bundle-u FEED-TRUST-DESCRIPTOR 8 + !
+S" org.example.reviewed-feed-trust" ['] FEED-TRUST-EMIT
+    FEED-TRUST-DESCRIPTOR MTRUST-REGISTER
+MTRUST-S-OK <> ABORT" feed trust registration failed"
+```
+
+The composition owns the descriptor through registration and keeps its artifact
+bytes immutable and quiescent through the synchronous `MTRUST-FREEZE` call.
+The importer is core-0-only, uses global scratch, and is not reentrant. Ordinary
+Streams source creation and refresh never receive the builder, import artifacts,
+add anchors, or thaw the accepted snapshot.
+
+This API supplies the reviewed preboot/run-contribution alternative; it does
+not bind an artifact scope to a Streams source identity or revision. A later
+configured-source composition must separately prove that the canonical source
+host has the intended reviewed provisioning before opening it, and TLS still
+proves the presented path. The shipped composition has no ambient broad WebPKI
+fallback, although other explicitly reviewed `MTRUST-ANCHOR+` contributors may
+deliberately use `TTAF-SUBDOMAINS` for their own services.
 
 ## Bundle identity
 
@@ -71,6 +136,8 @@ Run the deterministic contracts with:
 
 ```sh
 python local_testing/akashic_tui.py smoke --profile tls-trust-registry
+python local_testing/akashic_tui.py smoke --profile tls-trust-mpta
 python local_testing/akashic_tui.py smoke --profile tls-trust-registry-error
 python local_testing/akashic_tui.py smoke --profile tls-trust-registry-throw
+python local_testing/akashic_tui.py smoke --profile tls-trust-registry-builder
 ```

@@ -67,6 +67,18 @@ state. Ordinary source reads return a sanitized projection and never disclose
 credential material. Configuring a semantic source does not grant arbitrary
 HTTP, socket, DNS, or redirect authority.
 
+TLS trust is also separate boot authority. A reviewed machine-image module may
+emit exact scoped anchors, and trusted run composition may import a reviewed
+MPTA artifact through `MTRUST-MPTA+` before Desk freezes trust. The run importer
+accepts only nonempty exact DNS scopes and rejects global or include-subdomains
+anchors. Source creation, enablement, applet launch, and refresh cannot import
+CA bytes or widen the frozen snapshot. The configured canonical host must still
+be associated with the intended reviewed provisioning by the later acquisition
+composition and pass normal certificate-path, hostname, validity, and
+address-policy checks. The importer itself does not bind a source RID or
+revision to a scope, and the artifact content tag is not proof that acquired
+content is trustworthy.
+
 ### Observation
 
 An observation is one immutable acquired version. It records:

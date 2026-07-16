@@ -1988,6 +1988,324 @@ _tr-run
         failure_markers=("TLS TRUST REGISTRY FAIL",),
         include_large_sample=False,
     ),
+    "tls-trust-mpta": Profile(
+        roots=("agent/providers/codex/trust.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - exact-host MPTA import contracts
+ENTER-USERLAND
+." [akashic] loading exact-host MPTA import contracts" CR
+REQUIRE agent/providers/codex/trust.f
+
+VARIABLE _tm-fails
+VARIABLE _tm-checks
+VARIABLE _tm-depth
+VARIABLE _tm-builder
+VARIABLE _tm-scope-a
+VARIABLE _tm-scope-u
+VARIABLE _tm-flags
+VARIABLE _tm-art-u
+VARIABLE _tm-record-u
+VARIABLE _tm-old-pos
+VARIABLE _tm-old-count
+VARIABLE _tm-generation
+
+CREATE _tm-art 4096 ALLOT
+CREATE _tm-digest 32 ALLOT
+CREATE _tm-old-output-digest 32 ALLOT
+CREATE _tm-output-digest 32 ALLOT
+CREATE _tm-empty-output-digest 32 ALLOT
+CREATE _tm-long-scope 254 ALLOT
+
+: _tm-assert  ( flag -- )
+    1 _tm-checks +!
+    0= IF 1 _tm-fails +! ." TM ASSERT " _tm-checks @ . CR THEN ;
+: _tm-stack  ( -- ) DEPTH _tm-depth @ = _tm-assert ;
+
+: _tm-be16!  ( value address -- )
+    >R DUP 8 RSHIFT 255 AND R@ C! 255 AND R> 1+ C! ;
+: _tm-be32!  ( value address -- )
+    >R
+    DUP 24 RSHIFT 255 AND R@ C!
+    DUP 16 RSHIFT 255 AND R@ 1+ C!
+    DUP 8 RSHIFT 255 AND R@ 2 + C!
+    255 AND R> 3 + C! ;
+
+: _tm-seal  ( -- )
+    _tm-art 8 + 8 0 FILL
+    _tm-art _tm-art-u @ _tm-digest SHA3-256-HASH
+    _tm-digest _tm-art 8 + 8 CMOVE ;
+
+: _tm-build-one  ( scope-a scope-u flags -- )
+    _tm-flags ! _tm-scope-u ! _tm-scope-a !
+    _tm-art 4096 0 FILL
+    _MTRUST-MPTA-MAGIC _tm-art 4 CMOVE
+    1 _tm-art 4 + _tm-be16!
+    1 _tm-art 6 + _tm-be16!
+    _tm-flags @ _tm-art 16 + _tm-be16!
+    _tm-scope-u @ _tm-art 18 + _tm-be16!
+    _CDTR-CERT-SIZE _tm-art 20 + _tm-be32!
+    _tm-scope-u @ IF
+        _tm-scope-a @ _tm-art 24 + _tm-scope-u @ CMOVE
+    THEN
+    _CDTR-CERT _tm-art 24 + _tm-scope-u @ + _CDTR-CERT-SIZE CMOVE
+    24 _tm-scope-u @ + _CDTR-CERT-SIZE + _tm-art-u !
+    _tm-seal ;
+
+: _tm-build-duplicate  ( -- )
+    S" duplicate.example" 0 _tm-build-one
+    _tm-art-u @ 16 - _tm-record-u !
+    _tm-art 16 + _tm-art _tm-art-u @ + _tm-record-u @ CMOVE
+    2 _tm-art 6 + _tm-be16!
+    _tm-record-u @ _tm-art-u +!
+    _tm-seal ;
+
+: _tm-build-two  ( -- )
+    S" first.example" 0 _tm-build-one
+    _tm-art-u @ 16 - _tm-record-u !
+    _tm-art 16 + _tm-art _tm-art-u @ + _tm-record-u @ CMOVE
+    S" other.example" _tm-art _tm-art-u @ + 8 + SWAP CMOVE
+    2 _tm-art 6 + _tm-be16!
+    _tm-record-u @ _tm-art-u +!
+    _tm-seal ;
+
+: _tm-snapshot  ( -- )
+    _tm-builder @ _MTB.POSITION @ _tm-old-pos !
+    _tm-builder @ _MTB.COUNT @ _tm-old-count !
+    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
+        _tm-old-output-digest SHA3-256-HASH ;
+
+: _tm-unchanged?  ( -- flag )
+    _tm-builder @ _MTB.POSITION @ _tm-old-pos @ =
+    _tm-builder @ _MTB.COUNT @ _tm-old-count @ = AND
+    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
+        _tm-output-digest SHA3-256-HASH
+    _tm-old-output-digest 32 _tm-output-digest 32 COMPARE 0= AND ;
+
+: _tm-expect  ( expected-status -- )
+    >R _tm-snapshot
+    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
+        R> = _tm-assert
+    _tm-unchanged? _tm-assert ;
+
+: _tm-cap-anchor  ( scope-a scope-u -- )
+    _CDTR-CERT _CDTR-CERT-SIZE 2SWAP 0 _tm-builder @ MTRUST-ANCHOR+
+        MTRUST-S-OK = _tm-assert ;
+
+: _tm-import-emit  ( builder context -- status )
+    DROP _tm-builder !
+    _CDTR-DECODE TLS-CERT-OK = _tm-assert
+
+    \ The public span predicates make exact adjacency safe and reject either
+    \ direction of one-byte overlap without dereferencing wrapping spans.
+    1000 16 1016 8 _MTRUST-RANGES-OVERLAP? 0= _tm-assert
+    1000 17 1016 8 _MTRUST-RANGES-OVERLAP? _tm-assert
+    1016 8 1000 17 _MTRUST-RANGES-OVERLAP? _tm-assert
+    -8 16 _MTRUST-SPAN-VALID? 0= _tm-assert
+
+    \ The active output allocation can never serve as its own import input,
+    \ and a null/stale builder is rejected before dereference.
+    _tm-snapshot
+    _tm-builder @ _MTB.BUFFER @ 16 _tm-builder @ MTRUST-MPTA+
+        MTRUST-S-INVALID = _tm-assert
+    _tm-unchanged? _tm-assert
+    _tm-snapshot
+    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @ + 1-
+        16 _tm-builder @ MTRUST-MPTA+ MTRUST-S-INVALID = _tm-assert
+    _tm-unchanged? _tm-assert
+    S" feeds.example" 0 _tm-build-one
+    _tm-snapshot
+    _tm-art _tm-art-u @ 0 MTRUST-MPTA+
+        MTRUST-S-INVALID = _tm-assert
+    _tm-unchanged? _tm-assert
+
+    \ Emitter-visible metadata is sealed before any duplicate scan or append.
+    \ Each malformed form remains byte-identical and is then restored so the
+    \ next independent case starts from the canonical empty builder.
+    S" feeds.example" 0 _tm-build-one
+    -1 _tm-builder @ _MTB.COUNT !
+    MTRUST-S-INVALID _tm-expect
+    0 _tm-builder @ _MTB.COUNT !
+    15 _tm-builder @ _MTB.POSITION !
+    MTRUST-S-INVALID _tm-expect
+    16 _tm-builder @ _MTB.POSITION !
+    _tm-snapshot
+    TLS-TRUST-BUNDLE-MAX 1+ _tm-builder @ _MTB.CAPACITY !
+    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
+        MTRUST-S-INVALID = _tm-assert
+    TLS-TRUST-BUNDLE-MAX _tm-builder @ _MTB.CAPACITY !
+    _tm-unchanged? _tm-assert
+    1 _tm-builder @ _MTB.COUNT !
+    MTRUST-S-INVALID _tm-expect
+    0 _tm-builder @ _MTB.COUNT !
+
+    \ All artifacts are internally self-identifying and exact.  Recompute
+    \ the digest after each structural mutation so these checks reach their
+    \ intended parser branch rather than merely failing the generation.
+    S" feeds.example" 0 _tm-build-one
+    88 _tm-art C! _tm-seal
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" 0 _tm-build-one
+    2 _tm-art 4 + _tm-be16! _tm-seal
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" 0 _tm-build-one
+    TLS-TRUST-MAX 1+ _tm-art 6 + _tm-be16! _tm-seal
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" 0 _tm-build-one
+    0 _tm-art 6 + _tm-be16! _tm-seal
+    MTRUST-S-INVALID _tm-expect
+
+    0 0 0 _tm-build-one
+    MTRUST-S-INVALID _tm-expect
+
+    S" bad..example" 0 _tm-build-one
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" TTAF-SUBDOMAINS _tm-build-one
+    MTRUST-S-INVALID _tm-expect
+
+    _tm-long-scope 254 97 FILL
+    _tm-long-scope 254 0 _tm-build-one
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" 0 _tm-build-one
+    127 _tm-art 20 + _tm-be32! _tm-seal
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" 0 _tm-build-one
+    8193 _tm-art 20 + _tm-be32! _tm-seal
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" 0 _tm-build-one
+    _tm-art-u @ 1- _tm-art-u ! _tm-seal
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" 0 _tm-build-one
+    99 _tm-art _tm-art-u @ + C! 1 _tm-art-u +! _tm-seal
+    MTRUST-S-INVALID _tm-expect
+
+    S" feeds.example" 0 _tm-build-one
+    _tm-art 8 + DUP C@ 1 XOR SWAP C!
+    MTRUST-S-INVALID _tm-expect
+
+    _tm-build-duplicate
+    MTRUST-S-CONFLICT _tm-expect
+
+    _tm-build-duplicate
+    S" Duplicate.Example" _tm-art 16 + _tm-record-u @ + 8 + SWAP CMOVE
+    _tm-seal
+    MTRUST-S-CONFLICT _tm-expect
+
+    \ White-box the append boundary after a successful full preflight.  A
+    \ second-record structural failure rolls back the already-appended first
+    \ record, and a same-shape post-hash mutation is caught by the second
+    \ generation check after copying.
+    _tm-build-two
+    _tm-art _MTBI-A ! _tm-art-u @ _MTBI-U !
+    _tm-builder @ _MTBI-BUILDER !
+    _MTBI-PREFLIGHT MTRUST-S-OK = _tm-assert
+    1 _tm-art 16 + _tm-record-u @ + _tm-be16!
+    _tm-snapshot
+    _MTBI-APPEND MTRUST-S-INVALID = _tm-assert
+    _tm-unchanged? _tm-assert
+
+    _tm-build-two
+    _tm-art _MTBI-A ! _tm-art-u @ _MTBI-U !
+    _tm-builder @ _MTBI-BUILDER !
+    _MTBI-PREFLIGHT MTRUST-S-OK = _tm-assert
+    _tm-art _tm-art-u @ + 1- DUP C@ 1 XOR SWAP C!
+    _tm-snapshot
+    _MTBI-APPEND MTRUST-S-INVALID = _tm-assert
+    _tm-unchanged? _tm-assert
+
+    \ Capacity refusal is also preflight-only.  Build eight structurally
+    \ valid distinct anchors, prove the import changes none of them, then
+    \ restore the canonical empty builder for the accepted artifact below.
+    S" capacity.example" 0 _tm-build-one
+    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
+        _tm-empty-output-digest SHA3-256-HASH
+    S" cap0.example" _tm-cap-anchor
+    S" cap1.example" _tm-cap-anchor
+    S" cap2.example" _tm-cap-anchor
+    S" cap3.example" _tm-cap-anchor
+    S" cap4.example" _tm-cap-anchor
+    S" cap5.example" _tm-cap-anchor
+    S" cap6.example" _tm-cap-anchor
+    S" cap7.example" _tm-cap-anchor
+    _tm-snapshot
+    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
+        MTRUST-S-CAPACITY = _tm-assert
+    _tm-unchanged? _tm-assert
+    _tm-builder @ _MTB.BUFFER @ 16 +
+        _tm-builder @ _MTB.POSITION @ 16 - 0 FILL
+    16 _tm-builder @ _MTB.POSITION !
+    0 _tm-builder @ _MTB.COUNT !
+    _tm-builder @ _MTB-STRUCTURE? _tm-assert
+    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
+        _tm-output-digest SHA3-256-HASH
+    _tm-empty-output-digest 32 _tm-output-digest 32 COMPARE 0=
+        _tm-assert
+
+    \ One valid two-host artifact qualifies the complete multi-record scan
+    \ and append path.  Reimport and mixed-case scope aliases are semantic
+    \ duplicate conflicts and change no output byte.
+    _tm-build-two
+    _tm-snapshot
+    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
+        MTRUST-S-OK = _tm-assert
+    _tm-builder @ _MTB.COUNT @ _tm-old-count @ 2 + = _tm-assert
+    _tm-builder @ _MTB.POSITION @ _tm-old-pos @
+        _tm-art-u @ 16 - + = _tm-assert
+    _tm-snapshot
+    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
+        MTRUST-S-CONFLICT = _tm-assert
+    _tm-unchanged? _tm-assert
+    S" FIRST.EXAMPLE" 0 _tm-build-one
+    MTRUST-S-CONFLICT _tm-expect
+    MTRUST-S-OK ;
+
+: _tm-run  ( -- )
+    0 _tm-fails ! 0 _tm-checks ! DEPTH _tm-depth !
+    TLS-TRUST-RESET
+    _CDTR-DECODE TLS-CERT-OK = _tm-assert
+    _tm-build-two
+    _tm-art 8 + _MTR-BE64@ DUP _tm-generation ! 0<> _tm-assert
+    _tm-art _tm-art-u @ _MTRUST-BUILDER MTRUST-MPTA+
+        MTRUST-S-INVALID = _tm-assert
+    S" org.akashic.testing.exact-mpta" ['] _tm-import-emit 0
+        MTRUST-REGISTER MTRUST-S-OK = _tm-assert
+    MTRUST-FREEZE MTRUST-S-OK = _tm-assert
+    MTRUST-FROZEN? _tm-assert
+    MTRUST-COUNT@ 2 = _tm-assert
+    TLS-TRUST-COUNT @ 2 = _tm-assert
+    MTRUST-GENERATION@ _tm-generation @ = _tm-assert
+    S" first.example" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _tm-assert
+    S" other.example" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _tm-assert
+    S" sub.first.example" 0 TLS-TRUST@ _TLS-SCOPE-MATCH?
+        0= _tm-assert
+    S" first.example.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH?
+        0= _tm-assert
+    0 TLS-TRUST@ TTA-FLAGS + @ 0= _tm-assert
+    1 TLS-TRUST@ TTA-FLAGS + @ 0= _tm-assert
+    MTRUST-FREEZE MTRUST-S-OK = _tm-assert
+    _tm-art _tm-art-u @ _MTRUST-BUILDER MTRUST-MPTA+
+        MTRUST-S-INVALID = _tm-assert
+    _tm-stack
+    _tm-fails @ 0= IF
+        ." TLS TRUST MPTA PASS " _tm-checks @ .
+    ELSE
+        ." TLS TRUST MPTA FAIL " _tm-fails @ . ."  / " _tm-checks @ .
+    THEN CR ;
+
+_tm-run
+""",
+        ready_markers=("TLS TRUST MPTA PASS",),
+        stable_markers=("TLS TRUST MPTA PASS",),
+        failure_markers=("TLS TRUST MPTA FAIL", "TM ASSERT"),
+        include_large_sample=False,
+    ),
     "tls-trust-registry-error": Profile(
         roots=("net/tls-trust-registry.f",),
         resources=(),
@@ -2066,6 +2384,47 @@ _tt-run
         ready_markers=("TLS TRUST THROW PASS",),
         stable_markers=("TLS TRUST THROW PASS",),
         failure_markers=("TLS TRUST THROW FAIL",),
+        include_large_sample=False,
+    ),
+    "tls-trust-registry-builder": Profile(
+        roots=("net/tls-trust-registry.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - corrupt trust-builder contributor contract
+ENTER-USERLAND
+." [akashic] loading trust builder corruption contract" CR
+REQUIRE net/tls-trust-registry.f
+
+VARIABLE _tb-fails
+VARIABLE _tb-checks
+VARIABLE _tb-depth
+: _tb-assert  ( flag -- )
+    1 _tb-checks +!
+    0= IF 1 _tb-fails +! ." ASSERT " _tb-checks @ . CR THEN ;
+: _tb-corrupt  ( builder context -- status )
+    DROP DUP 15 SWAP _MTB.POSITION !
+    -1 SWAP _MTB.BUFFER ! MTRUST-S-OK ;
+: _tb-run  ( -- )
+    0 _tb-fails ! 0 _tb-checks ! DEPTH _tb-depth !
+    S" org.akashic.testing.builder-corruption" ['] _tb-corrupt 0
+        MTRUST-REGISTER MTRUST-S-OK = _tb-assert
+    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _tb-assert
+    MTRUST-LAST-DETAIL@ MTRUST-D-EMITTER-BUILDER = _tb-assert
+    MTRUST-STATE@ MTRUST-STATE-FAILED = _tb-assert
+    TLS-TRUST-COUNT @ 0= _tb-assert
+    TLS-TRUST-VERSION @ 0= _tb-assert
+    TLS-TRUST-GENERATION @ 0= _tb-assert
+    DEPTH _tb-depth @ = _tb-assert
+    _tb-fails @ 0= IF
+        ." TLS TRUST BUILDER PASS " _tb-checks @ .
+    ELSE
+        ." TLS TRUST BUILDER FAIL " _tb-fails @ . ."  / " _tb-checks @ .
+    THEN CR ;
+
+_tb-run
+""",
+        ready_markers=("TLS TRUST BUILDER PASS",),
+        stable_markers=("TLS TRUST BUILDER PASS",),
+        failure_markers=("TLS TRUST BUILDER FAIL",),
         include_large_sample=False,
     ),
     "atproto-public-trust": Profile(
