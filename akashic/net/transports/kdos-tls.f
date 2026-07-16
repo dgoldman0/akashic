@@ -132,6 +132,9 @@ _KDOSTLS-TCB-ISS 8 + CONSTANT KDOSTLS-SIZE
 : KDOSTLS.REMOTE-PORT ( adapter -- a ) _KDOSTLS-REMOTE-PORT + ;
 : KDOSTLS.CONTEXT     ( adapter -- a ) _KDOSTLS-CONTEXT + ;
 : KDOSTLS.LAST-ERROR  ( adapter -- a ) _KDOSTLS-LAST-ERROR + ;
+\ During open this retains the TLS-CONNECT-E-* phase code.  After an open
+\ connection fails in native TLS record processing it retains TLS-E-* before
+\ cancellation wipes the context, so cleanup cannot erase the primary cause.
 : KDOSTLS.NATIVE-ERROR ( adapter -- a ) _KDOSTLS-NATIVE-ERROR + ;
 : KDOSTLS.LOCAL-PORT  ( adapter -- a ) _KDOSTLS-LOCAL-PORT + ;
 : KDOSTLS.FLAGS       ( adapter -- a ) _KDOSTLS-FLAGS + ;
@@ -1092,6 +1095,21 @@ VARIABLE _KDPP-A
 : _KDOSTLS-MARK-ERROR  ( error adapter -- )
     >R R@ KDOSTLS.LAST-ERROR ! KDOSTLS-STATE-ERROR R> KDOSTLS.STATE ! ;
 
+: _KDOSTLS-LATCH-NATIVE-TLS-ERROR  ( adapter -- )
+    \ Custom callbacks may use an opaque non-TLS context.  Inspect the context
+    \ only when both receive and link-status are the native KDOS TLS pair.
+    DUP KDOSTLS.RECV-XT @ ['] _KDOSTLS-RECV-DEFAULT <> IF DROP EXIT THEN
+    DUP KDOSTLS.STATUS-XT @ ['] _KDOSTLS-STATUS-DEFAULT <> IF DROP EXIT THEN
+    DUP KDOSTLS.CONTEXT @ ?DUP IF
+        TLS-CTX.ERROR @ ?DUP IF
+            SWAP KDOSTLS.NATIVE-ERROR !
+        ELSE
+            DROP
+        THEN
+    ELSE
+        DROP
+    THEN ;
+
 : KDOSTLS-LINK@  ( adapter -- link-status )
     DUP _KDOSTLS-TCB@ 0= IF DROP KDOSTLS-LINK-CLOSED EXIT THEN
     DUP KDOSTLS.CONTEXT @ SWAP DUP KDOSTLS.STATUS-XT @ EXECUTE ;
@@ -1419,12 +1437,14 @@ VARIABLE _KDTR-LINK
 : _KDOSTLS-NIO-RECV  ( buffer capacity adapter -- count nio-status )
     _KDTR-A ! _KDTR-U ! _KDTR-B !
     _KDTR-A @ KDOSTLS.STATE @ KDOSTLS-STATE-OPEN <> IF
+        _KDTR-A @ _KDOSTLS-LATCH-NATIVE-TLS-ERROR
         0 NIO-S-FAILED EXIT
     THEN
     _KDTR-A @ _KDOSTLS-RECV-VALID? 0= IF
         _KDTR-A @ _KDOSTLS-CLEAN-EOF? IF
             0 NIO-S-EOF
         ELSE
+            _KDTR-A @ _KDOSTLS-LATCH-NATIVE-TLS-ERROR
             0 NIO-S-FAILED
         THEN EXIT
     THEN
@@ -1440,6 +1460,7 @@ VARIABLE _KDTR-LINK
     _KDTR-A @ KDOSTLS.CONTEXT @ _KDTR-B @ _KDTR-U @ _KDTR-A @
     _KDTR-A @ KDOSTLS.RECV-XT @ EXECUTE DUP _KDTR-N !
     0< IF
+        _KDTR-A @ _KDOSTLS-LATCH-NATIVE-TLS-ERROR
         KDOSTLS-E-IO _KDTR-A @ _KDOSTLS-MARK-ERROR
         0 NIO-S-FAILED EXIT
     THEN
@@ -1451,6 +1472,7 @@ VARIABLE _KDTR-LINK
     _KDTR-A @ _KDOSTLS-CLEAN-EOF? IF 0 NIO-S-EOF EXIT THEN
     _KDTR-A @ KDOSTLS-LINK@ DUP _KDTR-LINK !
     KDOSTLS-LINK-OPEN = IF 0 NIO-S-OK EXIT THEN
+    _KDTR-A @ _KDOSTLS-LATCH-NATIVE-TLS-ERROR
     KDOSTLS-E-IO _KDTR-A @ _KDOSTLS-MARK-ERROR
     0 NIO-S-FAILED ;
 

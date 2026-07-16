@@ -246,8 +246,10 @@ applet boundary.
 
 The deterministic `streams-xio-contracts`, provider, and connector gates pass
 offline, including cooperative open/close, cancellation, stale-completion
-rejection, and cleanup. They are not evidence that the full public refresh has
-completed through a live TAP interface or through a Desk-hosted responsiveness
-journey. The connector's complete live certificate/signature phases also lack
-a measured per-poll CPU ceiling, and TLS-context cleanup is not yet proof that
-all machine-global KDOS TLS/cryptographic scratch has been sanitized.
+rejection, and cleanup. The focused `streams-live-public` component journey
+also passes through a real TAP interface across DNS, TCP, authenticated TLS
+1.3, HTTP, provider admission, feed decode, owner commit, and cleanup. It is
+not evidence of the still-pending Desk-hosted responsiveness/recovery journey.
+The connector's complete live certificate/signature phases also lack a
+measured per-poll CPU ceiling, and TLS-context cleanup is not yet proof that all
+machine-global KDOS TLS/cryptographic scratch has been sanitized.

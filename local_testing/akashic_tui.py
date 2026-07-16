@@ -72,8 +72,9 @@ COLON_STACK_EFFECT_RE = re.compile(
 FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
 # KDOS stores a terminating NUL in its 24-byte NAMEBUF, leaving 23 key bytes.
 MODULE_KEY_BYTES = 23
-# KDOS's module loader performs one 8-bit sector-count transfer.  Leave
-# headroom below its 255-sector ceiling when linking deployment chunks.
+# Keep deployment chunks modest even though KDOS now batches large module
+# transfers.  This bounds source prescan/evaluation work and leaves room for
+# profile growth without changing the generated chunk topology on every edit.
 LINK_CHUNK_BYTES = 120 * 1024
 CODEX_AUTH_CHECKPOINT_FORMAT = "akashic-local-codex-auth-checkpoint"
 
@@ -101,6 +102,12 @@ def _megapad_root() -> Path:
 
 MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 32
+# The complete Desktop closure now includes the canonical loadable MegaPad
+# networking module.  A clean linked boot reaches its ready markers at about
+# 6.9 billion guest steps on the reference emulator, so the supported
+# no-override smoke command must leave a bounded margin above that cost.
+DEFAULT_SMOKE_MAX_STEPS = 8_000_000_000
+DEFAULT_SMOKE_TIMEOUT = 120.0
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import (  # noqa: E402
@@ -146,7 +153,7 @@ MEGAPAD_NETWORKING_CONSUMERS = frozenset(
         "web/server.f",
     }
 )
-MEGAPAD_NETWORKING_BOOT_LINE = "FSLOAD networking.f"
+MEGAPAD_NETWORKING_BOOT_LINE = "REQUIRE networking.f"
 
 
 def _practice_crc32(data: bytes) -> int:
@@ -3366,7 +3373,22 @@ VARIABLE _mt-alert-hits
     _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
     NIO-S-FAILED = _mt-assert 0= _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert ;
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
+
+    \ Preserve an authenticated record-layer failure before cancellation
+    \ aborts and wipes the native TLS context.
+    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
+    TLS-RBUF-RESET
+    TLS-E-POST-HANDSHAKE _mt-native-ctx @ TLS-CTX.ERROR !
+    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
+    NIO-S-FAILED = _mt-assert 0= _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
+    _mt-a KDOSTLS.NATIVE-ERROR @ TLS-E-POST-HANDSHAKE = _mt-assert
+    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.NATIVE-ERROR @ TLS-E-POST-HANDSHAKE = _mt-assert
+    _mt-native-ctx @ /TLS-CTX _mt-zeroed? _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+    ARP-CLEAR ;
 
 : _mt-test-blocking-close-bound  ( -- )
     _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
@@ -14707,7 +14729,10 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
             ."  tls=" DUP PAF.TRANSPORT KDOSTLS.STATE @ .
             ." /" DUP PAF.TRANSPORT KDOSTLS.LAST-ERROR @ .
             ." /" DUP PAF.TRANSPORT KDOSTLS.NATIVE-ERROR @ .
-            ."  phase=" PAF.TRANSPORT KDOSTLS.PHASE @ .
+            ."  phase=" DUP PAF.TRANSPORT KDOSTLS.PHASE @ .
+            ."  steps=" DUP PAF.TRANSPORT KDOSTLS.STEP-COUNT @ .
+            ." /" DUP PAF.TRANSPORT KDOSTLS.LAST-STEP-CYCLES @ .
+            ." /" PAF.TRANSPORT KDOSTLS.MAX-STEP-CYCLES @ .
         THEN
     ELSE
         ."  instance=none"
@@ -14772,7 +14797,9 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
     BEGIN
         _slp-service XIO-TICK
         _slp-inst @ STREAMS-TICK-CB
-        NET-IDLE
+        \ Keep polling across adjacent local connector phases.  An idle here
+        \ cannot be woken by DNS/TCP input until the next phase sends it.
+        YIELD?
         _STM-LIVE-STATUS @ _STM-LIVE-ACTIVE <>
         MS@ _slp-deadline @ >= OR
     UNTIL
@@ -20278,27 +20305,64 @@ def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
     return not MEGAPAD_NETWORKING_CONSUMERS.isdisjoint(modules)
 
 
+def _forth_line_tokens(line: str) -> tuple[str, ...]:
+    """Return executable words using MegaPad's ASCII-space token rules."""
+    tokens: list[str] = []
+    for token in line.split(" "):
+        if not token:
+            continue
+        if token.startswith("\\"):
+            break
+        tokens.append(token)
+    return tuple(tokens)
+
+
+def _forth_line_contains_networking_load(
+    tokens: tuple[str, ...], command: str
+) -> bool:
+    """Find a networking load while preserving MP64FS filename case."""
+    return any(
+        tokens[index].upper() == command
+        and tokens[index + 1].lower() == "networking.f"
+        for index in range(len(tokens) - 1)
+    )
+
+
 def _with_megapad_networking(autoexec: str) -> str:
-    """Load canonical networking.f immediately after entering userland."""
+    """Require canonical networking.f immediately after entering userland."""
     lines = autoexec.splitlines()
+    token_lines = [_forth_line_tokens(line) for line in lines]
+    if any(
+        _forth_line_contains_networking_load(tokens, "FSLOAD")
+        for tokens in token_lines
+    ):
+        raise RuntimeError(
+            "FSLOAD networking.f is unsafe during KDOS autoboot; use the "
+            "KDOS module loader"
+        )
     userland_lines = [
         index
-        for index, line in enumerate(lines)
-        if line.strip() == "ENTER-USERLAND"
+        for index, tokens in enumerate(token_lines)
+        if len(tokens) == 1 and tokens[0].upper() == "ENTER-USERLAND"
     ]
     if len(userland_lines) != 1:
         raise RuntimeError(
             "Networking profiles must enter userland exactly once before "
             "loading networking.f"
-        )
+    )
     expected_index = userland_lines[0] + 1
     networking_lines = [
         index
-        for index, line in enumerate(lines)
-        if line.strip() == MEGAPAD_NETWORKING_BOOT_LINE
+        for index, tokens in enumerate(token_lines)
+        if _forth_line_contains_networking_load(tokens, "REQUIRE")
     ]
     if networking_lines:
-        if networking_lines != [expected_index]:
+        if (
+            networking_lines != [expected_index]
+            or len(token_lines[expected_index]) != 2
+            or token_lines[expected_index][0].upper() != "REQUIRE"
+            or token_lines[expected_index][1] != "networking.f"
+        ):
             raise RuntimeError(
                 "Networking profiles must load networking.f exactly once, "
                 "immediately after entering userland"
@@ -20568,10 +20632,12 @@ def build_image(
         else dependency_closure(profile.roots)
     )
     requires_networking = _requires_megapad_networking(modules)
-    if requires_networking:
-        autoexec = _with_megapad_networking(autoexec)
     resources = set(profile.resources)
     linked_chunks = _linked_chunks(modules) if profile.linked else {}
+    if profile.linked:
+        autoexec = _linked_autoexec(autoexec, tuple(linked_chunks))
+    if requires_networking:
+        autoexec = _with_megapad_networking(autoexec)
     paths = set(linked_chunks) | resources if profile.linked else set(modules) | resources
     initial_paths = {path for path, _ in profile.initial_files}
     image_paths = paths | initial_paths
@@ -20639,11 +20705,7 @@ def build_image(
 
     fs.inject_file(
         "autoexec.f",
-        (
-            _linked_autoexec(autoexec, tuple(linked_chunks))
-            if profile.linked
-            else autoexec
-        ).encode("utf-8"),
+        autoexec.encode("utf-8"),
         ftype=FTYPE_FORTH,
     )
     if profile.include_large_sample:
@@ -24809,8 +24871,12 @@ def _parser() -> argparse.ArgumentParser:
                 help="attach a preconfigured Linux TAP device",
             )
         if name == "smoke":
-            command.add_argument("--max-steps", type=int, default=4_000_000_000)
-            command.add_argument("--timeout", type=float, default=75.0)
+            command.add_argument(
+                "--max-steps", type=int, default=DEFAULT_SMOKE_MAX_STEPS
+            )
+            command.add_argument(
+                "--timeout", type=float, default=DEFAULT_SMOKE_TIMEOUT
+            )
         if name == "serve":
             command.add_argument("--socket", default="/tmp/akashic-tui.sock")
             command.add_argument(

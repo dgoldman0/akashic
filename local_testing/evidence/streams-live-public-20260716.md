@@ -1,9 +1,10 @@
 # Streams live public TAP qualification — 2026-07-16
 
-This is the first genuine `streams-live-public` TAP run made after the
-Streams information-integration foundation commit `f616011a201114cee2d51e0bd49057a2c9879df0`.
-It is retained as failure evidence rather than represented as a deterministic
-profile substitute or a live-network pass.
+This file preserves the chronological qualification of the genuine
+`streams-live-public` TAP path after the Streams information-integration
+foundation commit `f616011a201114cee2d51e0bd49057a2c9879df0`. The failed runs
+are retained as evidence; the final run is the bounded live-network pass and
+does not replace the deterministic profiles.
 
 Command, run from the workspace root without `sudo`:
 
@@ -111,7 +112,7 @@ Smoke streams-live-public: FAIL
 
 ## Classification
 
-- Both genuine runs opened TAP successfully and reported no backend errors.
+- Both initial runs opened TAP successfully and reported no backend errors.
 - Guest ARP transmission reached the host in both runs. The captured 42-byte reply is a
   unicast Ethernet/IPv4 ARP reply from `10.64.0.1` to guest `10.64.0.2` with
   matching Ethernet and ARP hardware addresses.
@@ -135,3 +136,59 @@ Smoke streams-live-public: FAIL
 
 The test did not weaken certificate or hostname verification and did not add a
 blocking fallback.
+
+## Cooperative pump repair
+
+The connector intentionally advances one local phase per poll. The live loop
+previously executed `NET-IDLE` immediately after `XIO-TICK` and the Streams
+tick. Once the ARP reply advanced the connector to DNS construction, no packet
+was pending to wake the CPU for the following poll. Replacing that idle with
+`YIELD?` retained cooperative scheduling while allowing adjacent local phases
+to run.
+
+The next real-TAP run progressed through DNS, remote ARP, TCP, the authenticated
+TLS 1.3 handshake, and the HTTP request. It then failed boundedly after the
+server sent authenticated TLS 1.3 `NewSessionTicket` handshake records:
+
+```text
+Smoke streams-live-public: FAIL
+  approximately 2.1 billion steps in 25.42s; stop=failed
+  TAP diagnostics: tx=35 frames/2462 bytes; rx=24 frames/9144 bytes
+  provider error: -4704 (TLS post-handshake message rejected)
+```
+
+This was a protocol-interoperability failure rather than a certificate or
+hostname-verification failure. MegaPad now reassembles, validates, and discards
+bounded authenticated `NewSessionTicket` messages while leaving session
+resumption unsupported. `KeyUpdate`, `CertificateRequest`, unknown handshake
+types, malformed tickets, and invalid fragmentation/interleaving continue to
+fail closed.
+
+## Passing current-tree run
+
+After the cooperative pump, TLS ticket handling, and userland networking-loader
+repairs, the exact command at the top of this file passed over `mp64tap0`:
+
+```text
+Built streams-live-public image: /home/kir/Documents/Projects/fantasy-computing/akashic/local_testing/out/akashic-streams-live-public.img
+  83 modules linked in 9 chunks, MegaPad networking, 0 resources, 1 directories
+  18 MP64FS entries, 2,097,152 bytes, 1451 free sectors
+Smoke streams-live-public: PASS
+  2,309,503,523 steps in 30.72s; screen=108x34; raw=535 bytes; stop=ready
+  captures: /home/kir/Documents/Projects/fantasy-computing/akashic/local_testing/out/smoke-streams-live-public.[txt|raw.txt|cells.json|png]
+```
+
+The guest completion marker was:
+
+```text
+STREAMS LIVE PUBLIC PASS checks=23
+```
+
+This final-tree revalidation includes general NewSessionTicket extension-type
+uniqueness and exception-safe loader cleanup. It establishes the focused
+component path through DNS, TCP, authenticated TLS 1.3, HTTP, provider
+admission, feed decoding, owner commit, and cleanup. It does not establish the
+later Desk-hosted responsiveness/recovery gate. The native TLS diagnostic latch
+also preserves a nonzero context error through connector cleanup, so a future
+bounded failure can report the native cause after ownership and sensitive
+context state have been released.

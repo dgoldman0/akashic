@@ -25,12 +25,19 @@ python3 local_testing/akashic_tui.py smoke --profile desktop
 Smoke and served sessions use 32 MiB of emulated external memory by default.
 This leaves realistic headroom for the userland dictionary and applet working
 sets as the Desk image grows; pass `--ext-mem-mib N` to test another budget.
+The default smoke gate permits 8 billion guest steps and 120 seconds so the
+complete linked Desktop can compile the canonical loadable networking module
+and still reach its ready markers. The exact no-override command passed at 6.9
+billion guest steps in 92.18 seconds on 2026-07-16. Focused profiles stop as
+soon as their own markers stabilize; `--max-steps` and `--timeout` remain
+available for explicit qualification budgets.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with
-`FSLOAD` immediately after `ENTER-USERLAND`. Parser-only and abstract-I/O
-profiles omit it. The system module is neither renamed nor linked into an
-Akashic deployment chunk.
+KDOS `REQUIRE` immediately after `ENTER-USERLAND`. This avoids re-entering the
+BIOS loader while its KDOS autoboot buffer is still live. Parser-only and
+abstract-I/O profiles omit networking. The system module is neither renamed
+nor linked into an Akashic deployment chunk.
 
 The authoritative profile registry and each journey's assertions live in
 `akashic_tui.py`; `--help` lists the accepted profile names. Profiles are
@@ -82,9 +89,11 @@ The Streams qualification path is intentionally split by boundary:
   ticks the XIO service, Streams component, and network loop.
 
 The deterministic `tls-port`, `public-author-feed`, and
-`streams-xio-contracts` gates pass in the current tree. They do not prove a
-complete live TAP exchange or a Desk-hosted responsiveness journey. The
-connector records cycles per poll and exercises the real ClientHello prefix,
+`streams-xio-contracts` gates pass in the current tree. The exact
+`streams-live-public` command below also passes over the real TAP path through
+DNS, TCP, authenticated TLS 1.3, HTTP, provider admission, feed decoding, and
+owner commit. It remains a focused component journey rather than a
+Desk-hosted responsiveness journey. The connector records cycles per poll,
 but the complete live certificate-chain and signature phases do not yet have a
 measured per-poll CPU ceiling. Context cleanup also does not prove that every
 machine-global KDOS TLS/cryptographic scratch buffer has been sanitized.
@@ -95,14 +104,15 @@ guest test namespace as `/testing/streams/timeline.json`; it is qualification
 input, not an `akashic/atproto` runtime resource or an applet fallback feed.
 
 Closures that exceed MP64FS's entry or byte limits are linked into
-dependency-ordered native Forth chunks under `/.akashic/`, each below KDOS's
-255-sector module-transfer ceiling. This includes the full Desktop and several
+dependency-ordered native Forth chunks under `/.akashic/`, each held to a
+stable 120 KiB evaluation budget. This includes the full Desktop and several
 large focused Agent/provider profiles; smaller profiles keep ordinary
-per-module `REQUIRE` loading. MegaPad's larger `networking.f` is the explicit
-exception: BIOS `FSLOAD` reads it through guarded multi-batch transfers before
-Akashic modules load. Linking and deployment-only comment stripping change
-only generated images, not source organization, executable tokens, or runtime
-ABI. The copied KDOS source receives the narrower safe transform: only blank
+per-module `REQUIRE` loading. MegaPad's larger `networking.f` remains a
+separate system module and KDOS reads its validated extents in guarded
+255-sector batches before the Akashic chunks. Linking and deployment-only
+comment stripping change only generated images, not source organization,
+executable tokens, or runtime ABI. The copied KDOS source receives the
+narrower safe transform: only blank
 and full-line backslash-comment lines are omitted.
 
 Smoke journeys assert semantic application behavior in the guest, not only boot
@@ -181,18 +191,28 @@ masquerading, and then exits:
 sudo local_testing/setup_codex_live.sh
 ```
 
-The Streams live-public profile now uses the native cooperative open, close,
-and cancellation callbacks. It is a focused component journey, not by itself a
+The Streams live-public profile uses the native cooperative open, close, and
+cancellation callbacks. It is a focused component journey, not by itself a
 full Desk responsiveness journey, and it accepts no app password or other
-credential. This work has not yet recorded a passing real-TAP run, so treat the
-command as the remaining live qualification rather than as evidence already
-established:
+credential. Its loop yields between adjacent connector phases so an admitted
+ARP or DNS response can advance into the next outbound phase without putting
+the CPU to sleep prematurely. On 2026-07-16 the exact command below passed with
+`STREAMS LIVE PUBLIC PASS checks=23` after 2,309,503,523 emulator steps in
+30.72 seconds. This is the final-tree revalidation after general ticket
+extension-uniqueness and loader exception-cleanup hardening:
 
 ```bash
 python3 akashic/local_testing/akashic_tui.py smoke \
   --profile streams-live-public --nic-tap mp64tap0 \
   --max-steps 5000000000 --timeout 300
 ```
+
+The chronological failure analysis and final bounded report are retained in
+`local_testing/evidence/streams-live-public-20260716.md`. The successful run
+keeps certificate and hostname verification enabled. It accepts bounded,
+authenticated TLS 1.3 `NewSessionTicket` messages without implementing or
+claiming session resumption; unsupported post-handshake messages still fail
+closed.
 
 The separate Codex TLS gate authenticates both source-pinned hosts with the
 native KDOS TLS stack but sends no application request:

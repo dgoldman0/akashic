@@ -263,8 +263,11 @@ credential. It reaches the same `kdos-tls.f` connector used by Codex transports;
 that adapter installs cooperative open, close, and cancellation callbacks.
 Successful `Connection: close` exchanges poll graceful TLS/TCP teardown for a
 bounded period and use the lower abort primitive only as fallback. The
-deterministic connector, provider, and Streams/XIO profiles pass offline; a
-full live TAP run and a Desk-hosted live journey have not yet been qualified.
+deterministic connector, provider, and Streams/XIO profiles pass offline. The
+focused public Streams component journey also passes over a real TAP path
+through DNS, TCP, authenticated TLS 1.3, HTTP, provider admission, feed decode,
+owner commit, and cleanup. A Desk-hosted live responsiveness/recovery journey
+has not yet been qualified.
 
 ### utils/ — Data Formats and Common Utilities
 

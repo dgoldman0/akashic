@@ -107,12 +107,17 @@ secret-erasure boundary.
 ## Diagnostics
 
 `KDOSTLS.STATE`, `KDOSTLS.PHASE`, `KDOSTLS.LAST-ERROR`,
-`KDOSTLS.CLEANUP-ERROR`, `KDOSTLS.ABORT-STATUS`, and
+`KDOSTLS.NATIVE-ERROR`, `KDOSTLS.CLEANUP-ERROR`, `KDOSTLS.ABORT-STATUS`, and
 `KDOSTLS.CLOSE-FALLBACKS` expose lifecycle diagnostics. Step count and cycle
 fields make cooperative-poll measurements visible to deterministic profiles.
-Error constants distinguish invalid configuration, owner contention, absent or
-changed trust, DNS/connect/authentication failure, timeout, cancellation,
-cleanup failure, I/O failure, and a thrown platform callback.
+`KDOSTLS.NATIVE-ERROR` carries `TLS-CONNECT-E-*` while opening; after an
+authenticated record-processing failure it instead retains the nonzero native
+`TLS-E-*` context error before cleanup wipes and releases that context. It is
+therefore a native-domain companion to the adapter-level `LAST-ERROR`, not one
+single error enumeration. Error constants distinguish invalid configuration,
+owner contention, absent or changed trust, DNS/connect/authentication failure,
+timeout, cancellation, cleanup failure, I/O failure, and a thrown platform
+callback.
 
 TCB identity checks validate table range and alignment plus the local/remote
 tuple and initial send sequence. They reject pointer and fingerprint mismatch,
@@ -134,4 +139,6 @@ cycles. It has not yet measured the complete certificate-chain and
 signature-verification work inside every live handshake phase, so
 one-message-per-poll is not yet a demonstrated CPU ceiling for all cryptographic
 leaves. Nor has a full live TAP connection or a Desk-hosted live journey been
-established by that offline gate.
+established by that offline gate. Separately, `streams-live-public` passes its
+focused real-TAP component journey; the Desk-hosted live responsiveness and
+recovery journey remains pending.

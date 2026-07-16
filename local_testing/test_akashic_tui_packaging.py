@@ -13,18 +13,46 @@ if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
 from akashic_tui import (  # noqa: E402
+    DEFAULT_SMOKE_MAX_STEPS,
+    DEFAULT_SMOKE_TIMEOUT,
     MEGAPAD_NETWORKING_BOOT_LINE,
     MEGAPAD_ROOT,
     PROFILES,
     PROVIDED_RE,
     REQUIRE_RE,
     _minify_forth,
+    _parser,
     _requires_megapad_networking,
     _with_megapad_networking,
     build_image,
     dependency_closure,
 )
 from diskutil import MP64FS, pack_forth_source  # noqa: E402
+
+
+def test_supported_desktop_smoke_defaults_cover_linked_network_boot() -> None:
+    args = _parser().parse_args(["smoke", "--profile", "desktop"])
+    assert args.max_steps == DEFAULT_SMOKE_MAX_STEPS == 8_000_000_000
+    assert args.timeout == DEFAULT_SMOKE_TIMEOUT == 120.0
+
+
+def test_live_streams_pump_does_not_idle_between_connector_steps() -> None:
+    autoexec = PROFILES["streams-live-public"].autoexec
+    loop = autoexec.split("MS@ 75000 + _slp-deadline !", 1)[1].split(
+        "UNTIL", 1
+    )[0]
+    executable_lines = [
+        code
+        for line in loop.splitlines()
+        if (code := line.split("\\", 1)[0].strip())
+    ]
+    assert "NET-IDLE" not in executable_lines
+    service_index = executable_lines.index("_slp-service XIO-TICK")
+    assert executable_lines[service_index:service_index + 3] == [
+        "_slp-service XIO-TICK",
+        "_slp-inst @ STREAMS-TICK-CB",
+        "YIELD?",
+    ]
 
 
 def test_full_line_comments_follow_megapad_prefix_rule() -> None:
@@ -144,15 +172,45 @@ def test_existing_networking_boot_load_is_idempotent() -> None:
     assert _with_megapad_networking(autoexec) == autoexec
 
 
+def test_existing_networking_boot_load_uses_forth_token_rules() -> None:
+    autoexec = (
+        "enter-userland \\ enter first\n"
+        "require  networking.f \\ canonical userland load\n"
+        "REQUIRE app.f\n"
+    )
+    assert _with_megapad_networking(autoexec) == autoexec
+
+
 @pytest.mark.parametrize(
     "autoexec",
     (
         "FSLOAD networking.f\nENTER-USERLAND\nREQUIRE app.f\n",
         "ENTER-USERLAND\nREQUIRE app.f\nFSLOAD networking.f\n",
+        "ENTER-USERLAND\nfsload  networking.f \\ unsafe\n",
+        "ENTER-USERLAND\n0 IF FSLOAD networking.f THEN\n",
         (
             "ENTER-USERLAND\n"
             "FSLOAD networking.f\n"
             "FSLOAD networking.f\n"
+        ),
+    ),
+)
+def test_networking_boot_load_rejects_legacy_fsload(autoexec: str) -> None:
+    with pytest.raises(RuntimeError, match="FSLOAD networking.f is unsafe"):
+        _with_megapad_networking(autoexec)
+
+
+@pytest.mark.parametrize(
+    "autoexec",
+    (
+        "REQUIRE networking.f\nENTER-USERLAND\nREQUIRE app.f\n",
+        "ENTER-USERLAND\nREQUIRE app.f\nREQUIRE networking.f\n",
+        "ENTER-USERLAND\nREQUIRE networking.f DROP\n",
+        "ENTER-USERLAND\nREQUIRE NETWORKING.F\n",
+        (
+            "ENTER-USERLAND\n"
+            "REQUIRE networking.f\n"
+            "REQUIRE networking.f\n"
         ),
     ),
 )
@@ -175,6 +233,7 @@ def test_abstract_http_profile_omits_native_networking(
     assert "networking.f" not in names
     autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
     assert MEGAPAD_NETWORKING_BOOT_LINE not in autoexec
+    assert "FSLOAD networking.f" not in autoexec
 
 
 def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
@@ -190,8 +249,9 @@ def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
         (MEGAPAD_ROOT / "networking.f").read_bytes()
     )
     autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
-    assert "ENTER-USERLAND\nFSLOAD networking.f\n" in autoexec
-    assert autoexec.index("FSLOAD networking.f") < autoexec.index(
+    assert "ENTER-USERLAND\nREQUIRE networking.f\n" in autoexec
+    assert "FSLOAD networking.f" not in autoexec
+    assert autoexec.index("REQUIRE networking.f") < autoexec.index(
         "REQUIRE .akashic/link-"
     )
 
