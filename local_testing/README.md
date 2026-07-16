@@ -61,16 +61,22 @@ The Streams qualification path is intentionally split by boundary:
 - `syndication-contracts` covers the reusable bounded JSON Feed 1/1.1,
   RSS 2.0, and Atom 1.0 codecs, their format-specific owned models, the narrow
   shared item projection, and transactional fixture generations.
-- `streams-page-contracts` covers exact content-type admission, inert bounded
-  HTML/text normalization, and raw/normalized hashes.
+- `media-type-contracts` covers the reusable bounded, caller-owned media-type
+  syntax model, decoded parameters, bounds, and transactional failure behavior.
+- `readable-text-contracts` covers reusable inert plain-text and strict-HTML
+  projection, UTF-8/entity behavior, overlap rejection, bounds, and failures.
+- `streams-page-contracts` covers Streams-specific media admission composed
+  over those reusable boundaries, the exact V1 snapshot ABI, tamper checks,
+  transactional raw/normalized hashes, and watched-page fixture generations.
 - `streams-source-ui-contracts` covers standalone source creation, independent
   selection, exact toggle/removal, stale-confirmation rejection, and blocked
   storage presentation.
 - `local_testing/fixtures/syndication/` is the library-owned JSON Feed, RSS,
   and Atom qualification corpus exercised by `syndication-contracts`.
 - `local_testing/fixtures/streams/` contains only Streams-owned watched-page,
-  text, and notification qualification data; fixture presence alone is not a
-  claim that every corresponding adapter is implemented.
+  text, and notification qualification data. The page and text generations are
+  exercised by `streams-page-contracts`; fixture presence alone is not a claim
+  that every corresponding adapter is implemented.
 - `streams-xio-contracts` covers the explicitly composed Streams/XIO contract
   using injected port callbacks: submission, completion, actor rollback, stale
   results, and cleanup. It is offline integration evidence, not live-network or

@@ -8,7 +8,15 @@ fixtures live separately under `local_testing/fixtures/syndication/`.
 
 ## Watched pages
 
-The harness supplies one logical source identity for each page pair. `base.html` and `nav-change.html` have the same meaningful article text, so the navigation-only change must not create a revision. `content-change.html` changes the article state and must create one revision. The text pair follows the same base/update rule. `malformed.html` must have an explicit deterministic outcome and must never replace the last good observation on failure.
+The `streams-page-contracts` profile installs all six files and treats each
+related pair as successive payloads for one logical source. The V1 snapshot
+itself intentionally contains no source identity or observation revision.
+`base.html` and `nav-change.html` have the same meaningful article text, so
+their normalized digests must match even though their raw digests differ.
+`content-change.html` changes the article state, so its normalized digest must
+differ. The text pair likewise produces distinct normalized content.
+`malformed.html` must fail deterministically and leave the last good snapshot
+byte-for-byte unchanged.
 
 ## Notifications
 

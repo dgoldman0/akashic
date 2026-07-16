@@ -28,6 +28,44 @@ OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
 STREAMS_TIMELINE_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "atproto" / "timeline.json"
 ).read_bytes()
+STREAMS_PAGE_HTML_BASE_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "streams" / "pages" / "base.html"
+).read_bytes()
+STREAMS_PAGE_HTML_NAV_FIXTURE = (
+    AKASHIC_ROOT
+    / "local_testing"
+    / "fixtures"
+    / "streams"
+    / "pages"
+    / "nav-change.html"
+).read_bytes()
+STREAMS_PAGE_HTML_CONTENT_FIXTURE = (
+    AKASHIC_ROOT
+    / "local_testing"
+    / "fixtures"
+    / "streams"
+    / "pages"
+    / "content-change.html"
+).read_bytes()
+STREAMS_PAGE_HTML_MALFORMED_FIXTURE = (
+    AKASHIC_ROOT
+    / "local_testing"
+    / "fixtures"
+    / "streams"
+    / "pages"
+    / "malformed.html"
+).read_bytes()
+STREAMS_PAGE_TEXT_BASE_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "streams" / "pages" / "base.txt"
+).read_bytes()
+STREAMS_PAGE_TEXT_CONTENT_FIXTURE = (
+    AKASHIC_ROOT
+    / "local_testing"
+    / "fixtures"
+    / "streams"
+    / "pages"
+    / "content-change.txt"
+).read_bytes()
 SYNDICATION_JSON_FEED_BASE_FIXTURE = (
     AKASHIC_ROOT
     / "local_testing"
@@ -12805,6 +12843,321 @@ _stc-run
     initial_files=(("testing/streams/timeline.json", STREAMS_TIMELINE_FIXTURE),),
 )
 
+PROFILES["media-type-contracts"] = Profile(
+    roots=("net/media-type.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - reusable bounded media-type parser contracts
+ENTER-USERLAND
+-1 CONSTANT GUARDED
+REQUIRE net/media-type.f
+
+CREATE _mtc-model MTYPE-SIZE ALLOT
+CREATE _mtc-backup MTYPE-SIZE ALLOT
+CREATE _mtc-quoted 64 ALLOT
+
+VARIABLE _mtc-fails
+VARIABLE _mtc-checks
+VARIABLE _mtc-depth
+VARIABLE _mtc-quoted-u
+VARIABLE _mtc-ena
+VARIABLE _mtc-enu
+VARIABLE _mtc-eva
+VARIABLE _mtc-evu
+VARIABLE _mtc-index
+VARIABLE _mtc-ana
+VARIABLE _mtc-anu
+VARIABLE _mtc-ava
+VARIABLE _mtc-avu
+
+: _mtc-assert  ( flag -- )
+    1 _mtc-checks +!
+    0= IF 1 _mtc-fails +! ." MTC assertion " _mtc-checks @ . CR THEN ;
+
+: _mtc-stack  ( -- )
+    DEPTH _mtc-depth @ = _mtc-assert ;
+
+: _mtc-quoted-add  ( a u -- )
+    DUP >R _mtc-quoted _mtc-quoted-u @ + SWAP CMOVE
+    R> _mtc-quoted-u +! ;
+
+: _mtc-quoted-char  ( c -- )
+    _mtc-quoted _mtc-quoted-u @ + C! 1 _mtc-quoted-u +! ;
+
+: _mtc-quoted-prefix  ( -- )
+    0 _mtc-quoted-u !
+    S" text/html; charset=" _mtc-quoted-add
+    34 _mtc-quoted-char ;
+
+: _mtc-build-quoted  ( -- a u )
+    _mtc-quoted-prefix
+    S" utf" _mtc-quoted-add
+    92 _mtc-quoted-char 45 _mtc-quoted-char
+    S" 8" _mtc-quoted-add
+    34 _mtc-quoted-char
+    _mtc-quoted _mtc-quoted-u @ ;
+
+: _mtc-build-empty-quoted  ( -- a u )
+    _mtc-quoted-prefix 34 _mtc-quoted-char
+    _mtc-quoted _mtc-quoted-u @ ;
+
+: _mtc-build-unterminated  ( -- a u )
+    _mtc-quoted-prefix S" utf-8" _mtc-quoted-add
+    _mtc-quoted _mtc-quoted-u @ ;
+
+: _mtc-build-dangling-pair  ( -- a u )
+    _mtc-quoted-prefix S" utf" _mtc-quoted-add 92 _mtc-quoted-char
+    _mtc-quoted _mtc-quoted-u @ ;
+
+: _mtc-type=  ( expected-a expected-u -- flag )
+    _mtc-model MTYPE-TYPE$ COMPARE 0= ;
+
+: _mtc-subtype=  ( expected-a expected-u -- flag )
+    _mtc-model MTYPE-SUBTYPE$ COMPARE 0= ;
+
+: _mtc-param=  ( name-a name-u value-a value-u index -- flag )
+    _mtc-index ! _mtc-evu ! _mtc-eva ! _mtc-enu ! _mtc-ena !
+    _mtc-index @ _mtc-model MTYPE-PARAM-NTH 0= IF
+        2DROP 2DROP 0 EXIT
+    THEN
+    _mtc-avu ! _mtc-ava ! _mtc-anu ! _mtc-ana !
+    _mtc-ana @ _mtc-anu @ _mtc-ena @ _mtc-enu @ COMPARE 0=
+    _mtc-ava @ _mtc-avu @ _mtc-eva @ _mtc-evu @ COMPARE 0= AND ;
+
+: _mtc-run  ( -- )
+    0 _mtc-fails ! 0 _mtc-checks ! DEPTH _mtc-depth !
+
+    MTYPE-VALUE-MAX 1024 = _mtc-assert _mtc-stack
+    MTYPE-PARAM-MAX 8 = _mtc-assert _mtc-stack
+    MTYPE-SIZE 1336 = _mtc-assert _mtc-stack
+
+    _mtc-model MTYPE-INIT
+    -1 MTYPE-INIT _mtc-stack
+    -1 MTYPE-VALID? 0= _mtc-assert _mtc-stack
+    _mtc-model MTYPE-VALID? 0= _mtc-assert _mtc-stack
+    _mtc-model MTYPE-TYPE$ OR 0= _mtc-assert _mtc-stack
+    _mtc-model MTYPE-SUBTYPE$ OR 0= _mtc-assert _mtc-stack
+    _mtc-model MTYPE-PARAM-COUNT@ 0= _mtc-assert _mtc-stack
+
+    S" Text/HTML" _mtc-model MTYPE-PARSE
+        MTYPE-S-OK = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-VALID? _mtc-assert _mtc-stack
+    S" Text" _mtc-type= _mtc-assert _mtc-stack
+    S" HTML" _mtc-subtype= _mtc-assert _mtc-stack
+    _mtc-model MTYPE-PARAM-COUNT@ 0= _mtc-assert _mtc-stack
+
+    S"   text/html ; charset=utf-8; boundary=abc   "
+        _mtc-model MTYPE-PARSE MTYPE-S-OK = _mtc-assert _mtc-stack
+    S" text" _mtc-type= _mtc-assert _mtc-stack
+    S" html" _mtc-subtype= _mtc-assert _mtc-stack
+    _mtc-model MTYPE-PARAM-COUNT@ 2 = _mtc-assert _mtc-stack
+    S" charset" S" utf-8" 0 _mtc-param= _mtc-assert _mtc-stack
+    S" boundary" S" abc" 1 _mtc-param= _mtc-assert _mtc-stack
+
+    _mtc-build-quoted _mtc-model MTYPE-PARSE
+        MTYPE-S-OK = _mtc-assert _mtc-stack
+    S" charset" S" utf-8" 0 _mtc-param= _mtc-assert _mtc-stack
+
+    _mtc-build-empty-quoted _mtc-model MTYPE-PARSE
+        MTYPE-S-OK = _mtc-assert _mtc-stack
+    S" charset" 0 0 0 _mtc-param= _mtc-assert _mtc-stack
+    _mtc-model _mtc-backup MTYPE-SIZE CMOVE
+    _mtc-build-unterminated _mtc-model MTYPE-PARSE
+        MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-SIZE _mtc-backup MTYPE-SIZE COMPARE 0=
+        _mtc-assert _mtc-stack
+    _mtc-build-dangling-pair _mtc-model MTYPE-PARSE
+        MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-SIZE _mtc-backup MTYPE-SIZE COMPARE 0=
+        _mtc-assert _mtc-stack
+
+    S" text/html;charset=utf-8;charset=us-ascii"
+        _mtc-model MTYPE-PARSE MTYPE-S-OK = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-PARAM-COUNT@ 2 = _mtc-assert _mtc-stack
+    S" charset" S" utf-8" 0 _mtc-param= _mtc-assert _mtc-stack
+    S" charset" S" us-ascii" 1 _mtc-param= _mtc-assert _mtc-stack
+    2 _mtc-model MTYPE-PARAM-NTH 0= >R 2DROP 2DROP R>
+        _mtc-assert _mtc-stack
+
+    _mtc-model _mtc-backup MTYPE-SIZE CMOVE
+    S" text/" _mtc-model MTYPE-PARSE
+        MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-SIZE _mtc-backup MTYPE-SIZE COMPARE 0=
+        _mtc-assert _mtc-stack
+
+    0 0 _mtc-model MTYPE-PARSE MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    0 -1 _mtc-model MTYPE-PARSE MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    -1 1 _mtc-model MTYPE-PARSE MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    S" text/plain" -1 MTYPE-PARSE MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    S" text/plain" 0 MTYPE-PARSE MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    0 MTYPE-VALUE-MAX 1+ _mtc-model MTYPE-PARSE
+        MTYPE-S-CAPACITY = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-SIZE _mtc-backup MTYPE-SIZE COMPARE 0=
+        _mtc-assert _mtc-stack
+    S" text /plain" _mtc-model MTYPE-PARSE
+        MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    S" text/plain;charset =utf-8" _mtc-model MTYPE-PARSE
+        MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    S" text/plain;charset=utf-8;" _mtc-model MTYPE-PARSE
+        MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    S" text/plain, text/html" _mtc-model MTYPE-PARSE
+        MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    S" text/plain;a=1;b=2;c=3;d=4;e=5;f=6;g=7;h=8"
+        _mtc-model MTYPE-PARSE MTYPE-S-OK = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-PARAM-COUNT@ 8 = _mtc-assert _mtc-stack
+    _mtc-model _mtc-backup MTYPE-SIZE CMOVE
+    S" text/plain;a=1;b=2;c=3;d=4;e=5;f=6;g=7;h=8;i=9"
+        _mtc-model MTYPE-PARSE MTYPE-S-CAPACITY = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-SIZE _mtc-backup MTYPE-SIZE COMPARE 0=
+        _mtc-assert _mtc-stack
+    S" text/plain;a=1;b=2;c=3;d=4;e=5;f=6;g=7;h=8;"
+        _mtc-model MTYPE-PARSE MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    S" text/plain;a=1;b=2;c=3;d=4;e=5;f=6;g=7;h=8;i="
+        _mtc-model MTYPE-PARSE MTYPE-S-INVALID = _mtc-assert _mtc-stack
+    _mtc-model MTYPE-SIZE _mtc-backup MTYPE-SIZE COMPARE 0=
+        _mtc-assert _mtc-stack
+
+    _mtc-fails @ 0= IF
+        ." MEDIA TYPE CONTRACTS PASS " _mtc-checks @ .
+    ELSE
+        ." MEDIA TYPE CONTRACTS FAIL " _mtc-fails @ . ." / "
+            _mtc-checks @ .
+    THEN CR ;
+
+_mtc-run
+""",
+    ready_markers=("MEDIA TYPE CONTRACTS PASS",),
+    stable_markers=("MEDIA TYPE CONTRACTS PASS",),
+    failure_markers=("MEDIA TYPE CONTRACTS FAIL", "MTC assertion"),
+    include_large_sample=False,
+)
+
+PROFILES["readable-text-contracts"] = Profile(
+    roots=("markup/readable-text.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - reusable bounded readable-text contracts
+ENTER-USERLAND
+-1 CONSTANT GUARDED
+REQUIRE markup/readable-text.f
+
+CREATE _rtc-out 8192 ALLOT
+CREATE _rtc-bad-utf8 0xC0 C, 0xAF C,
+CREATE _rtc-deep 512 ALLOT
+CREATE _rtc-alias 32 ALLOT
+
+VARIABLE _rtc-fails
+VARIABLE _rtc-checks
+VARIABLE _rtc-depth
+VARIABLE _rtc-deep-u
+
+: _rtc-assert  ( flag -- )
+    1 _rtc-checks +!
+    0= IF 1 _rtc-fails +! ." RTC assertion " _rtc-checks @ . CR THEN ;
+
+: _rtc-stack  ( -- )
+    DEPTH _rtc-depth @ = _rtc-assert ;
+
+: _rtc-result=  ( expected-a expected-u actual-u status -- flag )
+    RTEXT-S-OK <> IF 2DROP DROP 0 EXIT THEN
+    _rtc-out SWAP 2SWAP COMPARE 0= ;
+
+: _rtc-deep-add  ( a u -- )
+    DUP >R _rtc-deep _rtc-deep-u @ + SWAP CMOVE
+    R> _rtc-deep-u +! ;
+
+: _rtc-deep$  ( depth -- a u )
+    0 _rtc-deep-u !
+    DUP 0 DO S" <b>" _rtc-deep-add LOOP
+    S" x" _rtc-deep-add
+    0 DO S" </b>" _rtc-deep-add LOOP
+    _rtc-deep _rtc-deep-u @ ;
+
+: _rtc-run  ( -- )
+    0 _rtc-fails ! 0 _rtc-checks ! DEPTH _rtc-depth !
+
+    RTEXT-SOURCE-MAX 131072 = _rtc-assert _rtc-stack
+
+    S"   alpha   beta   " _rtc-out 8192 RTEXT-PLAIN
+        S" alpha beta" 2SWAP _rtc-result= _rtc-assert _rtc-stack
+    S" café 🛰" _rtc-out 8192 RTEXT-PLAIN
+        S" café 🛰" 2SWAP _rtc-result= _rtc-assert _rtc-stack
+    0 0 0 0 RTEXT-PLAIN
+        RTEXT-S-OK = SWAP 0= AND _rtc-assert _rtc-stack
+    _rtc-bad-utf8 2 _rtc-out 8192 RTEXT-PLAIN
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" abc" _rtc-out 3 RTEXT-PLAIN
+        S" abc" 2SWAP _rtc-result= _rtc-assert _rtc-stack
+    S" abc" _rtc-out 2 RTEXT-PLAIN
+        RTEXT-S-CAPACITY = SWAP 0= AND _rtc-assert _rtc-stack
+    0 1 _rtc-out 8192 RTEXT-PLAIN
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    -1 1 _rtc-out 8192 RTEXT-PLAIN
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" x" 0 1 RTEXT-PLAIN
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" x" -1 1 RTEXT-PLAIN
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" x" _rtc-out -1 RTEXT-PLAIN
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" x" 0 0 RTEXT-PLAIN
+        RTEXT-S-CAPACITY = SWAP 0= AND _rtc-assert _rtc-stack
+    S" <p>x</p>" _rtc-alias SWAP CMOVE
+        _rtc-alias 8 _rtc-alias 32 RTEXT-HTML
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" <p>x</p>" _rtc-alias 8 + SWAP CMOVE
+        _rtc-alias 8 + 8 _rtc-alias 8 RTEXT-HTML
+        RTEXT-S-OK = SWAP 1 = AND _rtc-alias C@ 120 = AND
+        _rtc-assert _rtc-stack
+    _rtc-alias 8 + 8 _rtc-alias 4 + 8 RTEXT-HTML
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    0 RTEXT-SOURCE-MAX 1+ _rtc-out 8192 RTEXT-PLAIN
+        RTEXT-S-CAPACITY = SWAP 0= AND _rtc-assert _rtc-stack
+
+    S" <!doctype html><!--c--><p title='a>b'>Hi<br>there</p>"
+        _rtc-out 8192 RTEXT-HTML
+        S" Hi there" 2SWAP _rtc-result= _rtc-assert _rtc-stack
+    S" <main>A<script>if (a < b) x();</script><style>.x{}</style><nav>N</nav><p>B</p></main>"
+        _rtc-out 8192 RTEXT-HTML
+        S" A B" 2SWAP _rtc-result= _rtc-assert _rtc-stack
+    S" <p>&amp; &lt; &gt; &apos; &nbsp; &#65; &#x1F6F0;</p>"
+        _rtc-out 8192 RTEXT-HTML
+        S" & < > ' A 🛰" 2SWAP _rtc-result= _rtc-assert _rtc-stack
+    S" <p>&quot;</p>" _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-OK = SWAP 1 = AND _rtc-out C@ 34 = AND
+        _rtc-assert _rtc-stack
+    S" <p>&copy;</p>" _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-UNSUPPORTED = SWAP 0= AND _rtc-assert _rtc-stack
+    S" <?xml version='1.0'?><p>x</p>" _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-UNSUPPORTED = SWAP 0= AND _rtc-assert _rtc-stack
+    S" <p>&#0;</p>" _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" <p>&#xD800;</p>" _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" <p>&#x110000;</p>" _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" <p>&#18446744073709551617;</p>" _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    S" <p><div>x</p></div>" _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-INVALID = SWAP 0= AND _rtc-assert _rtc-stack
+    64 _rtc-deep$ _rtc-out 8192 RTEXT-HTML
+        S" x" 2SWAP _rtc-result= _rtc-assert _rtc-stack
+    65 _rtc-deep$ _rtc-out 8192 RTEXT-HTML
+        RTEXT-S-CAPACITY = SWAP 0= AND _rtc-assert _rtc-stack
+
+    _rtc-fails @ 0= IF
+        ." READABLE TEXT CONTRACTS PASS " _rtc-checks @ .
+    ELSE
+        ." READABLE TEXT CONTRACTS FAIL " _rtc-fails @ . ." / "
+            _rtc-checks @ .
+    THEN CR ;
+
+_rtc-run
+""",
+    ready_markers=("READABLE TEXT CONTRACTS PASS",),
+    stable_markers=("READABLE TEXT CONTRACTS PASS",),
+    failure_markers=("READABLE TEXT CONTRACTS FAIL", "RTC assertion"),
+    include_large_sample=False,
+)
+
 PROFILES["streams-page-contracts"] = Profile(
     roots=("tui/applets/streams/page-snapshot.f",),
     resources=(),
@@ -12817,11 +13170,48 @@ CREATE _spc-page  STREAMS-PAGE-SNAPSHOT-SIZE ALLOT
 CREATE _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE ALLOT
 CREATE _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE ALLOT
 CREATE _spc-digest SHA3-256-LEN ALLOT
+CREATE _spc-snapshot-digest SHA3-256-LEN ALLOT
+CREATE _spc-snapshot-expected
+    0x54 C, 0xfc C, 0xf5 C, 0xcc C, 0xe9 C, 0xce C, 0x01 C, 0x6c C,
+    0x0b C, 0xd3 C, 0x53 C, 0x3c C, 0xdf C, 0x37 C, 0xf2 C, 0x39 C,
+    0x40 C, 0xde C, 0x26 C, 0x1e C, 0xc8 C, 0x15 C, 0x50 C, 0xb2 C,
+    0x49 C, 0x43 C, 0xdf C, 0xaa C, 0x2e C, 0xae C, 0x7d C, 0x8b C,
 CREATE _spc-over   STREAMS-PAGE-TEXT-MAX 1+ ALLOT
+CREATE _spc-media 64 ALLOT
+CREATE _spc-media-over MTYPE-VALUE-MAX 1+ ALLOT
 
 VARIABLE _spc-fails
 VARIABLE _spc-checks
 VARIABLE _spc-depth
+VARIABLE _spc-media-u
+VARIABLE _spc-fd
+VARIABLE _spc-load-a
+VARIABLE _spc-load-u
+VARIABLE _spc-html-base-a
+VARIABLE _spc-html-base-u
+VARIABLE _spc-html-nav-a
+VARIABLE _spc-html-nav-u
+VARIABLE _spc-html-content-a
+VARIABLE _spc-html-content-u
+VARIABLE _spc-html-bad-a
+VARIABLE _spc-html-bad-u
+VARIABLE _spc-text-base-a
+VARIABLE _spc-text-base-u
+VARIABLE _spc-text-content-a
+VARIABLE _spc-text-content-u
+
+: _spc-media-add  ( a u -- )
+    DUP >R _spc-media _spc-media-u @ + SWAP CMOVE
+    R> _spc-media-u +! ;
+
+: _spc-media-char  ( c -- )
+    _spc-media _spc-media-u @ + C! 1 _spc-media-u +! ;
+
+: _spc-media$  ( -- a u )
+    0 _spc-media-u !
+    S" TEXT/HTML; CHARSET=" _spc-media-add
+    34 _spc-media-char S" UTF-8" _spc-media-add 34 _spc-media-char
+    _spc-media _spc-media-u @ ;
 
 : _spc-base$  ( -- a u )
     S" <!doctype html><html><head><title>Status</title><style>.x{}</style><script>if (a < b) x();</script></head><body><header><nav>Old links</nav></header><main><h1>Service</h1><p>State: nominal.</p></main><footer>12:00</footer></body></html>" ;
@@ -12840,6 +13230,7 @@ VARIABLE _spc-depth
 
 : _spc-unknown$  ( -- a u ) S" <p>&copy;</p>" ;
 : _spc-badnum$   ( -- a u ) S" <p>&#x110000;</p>" ;
+: _spc-overflow$ ( -- a u ) S" <p>&#18446744073709551617;</p>" ;
 
 : _spc-assert  ( flag -- )
     1 _spc-checks +!
@@ -12848,14 +13239,118 @@ VARIABLE _spc-depth
 : _spc-stack  ( -- )
     DEPTH _spc-depth @ = _spc-assert ;
 
+: _spc-load  ( name-a name-u -- document-a document-u found? )
+    DUP 0= OVER 23 > OR IF 2DROP 0 0 0 EXIT THEN
+    NAMEBUF 24 0 FILL NAMEBUF SWAP CMOVE
+    FIND-BY-NAME DUP -1 = IF DROP 0 0 0 EXIT THEN
+    OPEN-BY-SLOT DUP 0= IF DROP 0 0 0 EXIT THEN
+    DUP _spc-fd ! FSIZE DUP _spc-load-u !
+    DUP 0= OVER 0< OR OVER STREAMS-PAGE-RAW-MAX > OR IF
+        DROP _spc-fd @ FCLOSE 0 0 0 EXIT
+    THEN
+    ALLOCATE DUP IF
+        2DROP _spc-fd @ FCLOSE 0 0 0 EXIT
+    THEN
+    DROP _spc-load-a !
+    _spc-load-a @ _spc-load-u @ _spc-fd @ FREAD
+        _spc-load-u @ <> IF
+        _spc-fd @ FCLOSE _spc-load-a @ FREE 0 0 0 EXIT
+    THEN
+    _spc-fd @ FCLOSE
+    _spc-load-a @ _spc-load-u @ -1 ;
+
+: _spc-load-fixtures  ( -- )
+    S" base.html" _spc-load _spc-assert
+        _spc-html-base-u ! _spc-html-base-a !
+    S" nav-change.html" _spc-load _spc-assert
+        _spc-html-nav-u ! _spc-html-nav-a !
+    S" content-change.html" _spc-load _spc-assert
+        _spc-html-content-u ! _spc-html-content-a !
+    S" malformed.html" _spc-load _spc-assert
+        _spc-html-bad-u ! _spc-html-bad-a !
+    S" base.txt" _spc-load _spc-assert
+        _spc-text-base-u ! _spc-text-base-a !
+    S" content-change.txt" _spc-load _spc-assert
+        _spc-text-content-u ! _spc-text-content-a ! ;
+
+: _spc-free-fixtures  ( -- )
+    _spc-html-base-a @ FREE _spc-html-nav-a @ FREE
+    _spc-html-content-a @ FREE _spc-html-bad-a @ FREE
+    _spc-text-base-a @ FREE _spc-text-content-a @ FREE ;
+
+: _spc-zeroed?  ( a u -- flag )
+    0 ?DO DUP I + C@ IF DROP 0 UNLOOP EXIT THEN LOOP DROP -1 ;
+
+: _spc-tamper-cell  ( value offset -- )
+    _spc-page _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE CMOVE
+    _spc-page2 + !
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-VALID? 0= _spc-assert _spc-stack ;
+
+: _spc-tamper-byte  ( offset -- )
+    _spc-page _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE CMOVE
+    _spc-page2 + DUP C@ 1+ SWAP C!
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-VALID? 0= _spc-assert _spc-stack ;
+
 : _spc-run  ( -- )
     0 _spc-fails ! 0 _spc-checks ! DEPTH _spc-depth !
+
+    _spc-load-fixtures _spc-stack
+
+    STREAMS-PAGE-RAW-MAX 131072 = _spc-assert _spc-stack
+    STREAMS-PAGE-TEXT-MAX 8192 = _spc-assert _spc-stack
+    STREAMS-PAGE-MEDIA-MAX 1024 = _spc-assert _spc-stack
+    STREAMS-PAGE-SNAPSHOT-SIZE 8336 = _spc-assert _spc-stack
+    STREAMS-PAGE-SNAPSHOT-V1 1 = _spc-assert _spc-stack
+    SPAGE-MEDIA-TEXT-PLAIN 1 = _spc-assert _spc-stack
+    SPAGE-MEDIA-TEXT-HTML 2 = _spc-assert _spc-stack
+    SPAGE-S-OK 0 = _spc-assert _spc-stack
+    SPAGE-S-INVALID 1 = _spc-assert _spc-stack
+    SPAGE-S-CAPACITY 2 = _spc-assert _spc-stack
+    SPAGE-S-UNSUPPORTED 3 = _spc-assert _spc-stack
+
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE 0xA5 FILL
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-INIT
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE _spc-zeroed?
+        _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-VALID? 0= _spc-assert _spc-stack
+    0 STREAMS-PAGE-SNAPSHOT-INIT _spc-stack
+    -1 STREAMS-PAGE-SNAPSHOT-INIT _spc-stack
+    0 STREAMS-PAGE-SNAPSHOT-VALID? 0= _spc-assert _spc-stack
+    -1 STREAMS-PAGE-SNAPSHOT-VALID? 0= _spc-assert _spc-stack
+
+    _spc-base$ S" text/html" -1 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-INVALID = _spc-assert _spc-stack
+    -1 1 S" text/html" _spc-page STREAMS-PAGE-NORMALIZE
+        SPAGE-S-INVALID = _spc-assert _spc-stack
+    _spc-base$ -1 1 _spc-page STREAMS-PAGE-NORMALIZE
+        SPAGE-S-INVALID = _spc-assert _spc-stack
 
     _spc-base$ S" text/html" _spc-page STREAMS-PAGE-NORMALIZE
         SPAGE-S-OK = _spc-assert _spc-stack
     _spc-page STREAMS-PAGE-SNAPSHOT-VALID? _spc-assert _spc-stack
     _spc-page STREAMS-PAGE-SNAPSHOT-TEXT$
         S" Status Service State: nominal." COMPARE 0= _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-SIZE _spc-snapshot-digest
+        SHA3-256-HASH
+    _spc-snapshot-digest _spc-snapshot-expected SHA3-256-COMPARE
+        _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-MEDIA@
+        SPAGE-MEDIA-TEXT-HTML = _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-MEDIA$
+        S" text/html" COMPARE 0= _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-RAW-SIZE@
+        _spc-base$ NIP = _spc-assert _spc-stack
+
+    0 0 _spc-tamper-cell
+    2 8 _spc-tamper-cell
+    99 16 _spc-tamper-cell
+    STREAMS-PAGE-RAW-MAX 1+ 24 _spc-tamper-cell
+    STREAMS-PAGE-TEXT-MAX 1+ 32 _spc-tamper-cell
+    1 40 _spc-tamper-cell
+    48 _spc-tamper-byte
+    80 _spc-tamper-byte
+    112 _spc-tamper-byte
+    144 _spc-tamper-byte
     _spc-page STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
         _spc-digest SHA3-256-LEN CMOVE
 
@@ -12877,12 +13372,18 @@ VARIABLE _spc-depth
         SPAGE-S-OK = _spc-assert _spc-stack
     _spc-page2 STREAMS-PAGE-SNAPSHOT-TEXT$
         S" A & B 🛰 <x> z" COMPARE 0= _spc-assert _spc-stack
+    _spc-page2 _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE CMOVE
     _spc-unknown$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
         SPAGE-S-UNSUPPORTED = _spc-assert _spc-stack
     _spc-badnum$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
         SPAGE-S-INVALID = _spc-assert _spc-stack
+    _spc-overflow$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-INVALID = _spc-assert _spc-stack
     _spc-bad$ S" text/html" _spc-page2 STREAMS-PAGE-NORMALIZE
         SPAGE-S-INVALID = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE
+        _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE COMPARE 0=
+        _spc-assert _spc-stack
 
     _spc-page _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE CMOVE
     _spc-bad$ S" text/html" _spc-page STREAMS-PAGE-NORMALIZE
@@ -12891,14 +13392,83 @@ VARIABLE _spc-depth
         _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE COMPARE 0=
         _spc-assert _spc-stack
 
-    _spc-base$ S" text/html; charset=utf-8" _spc-page
+    _spc-base$ _spc-media$ _spc-page2 STREAMS-PAGE-NORMALIZE
+        SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE
+        _spc-page STREAMS-PAGE-SNAPSHOT-SIZE COMPARE 0=
+        _spc-assert _spc-stack
+
+    _spc-page2 _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE CMOVE
+    _spc-base$ S" text/html;charset=utf-8;charset=utf-8" _spc-page2
         STREAMS-PAGE-NORMALIZE SPAGE-S-UNSUPPORTED =
         _spc-assert _spc-stack
+    _spc-base$ S" text/html;charset=us-ascii" _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-UNSUPPORTED =
+        _spc-assert _spc-stack
+    _spc-base$ S" text/html;profile=x" _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-UNSUPPORTED =
+        _spc-assert _spc-stack
+    _spc-base$ S" text/html;charset =utf-8" _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-INVALID =
+        _spc-assert _spc-stack
+    _spc-base$ S" application/xhtml+xml" _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-UNSUPPORTED =
+        _spc-assert _spc-stack
+    _spc-media-over MTYPE-VALUE-MAX 1+ 120 FILL
+    _spc-base$ _spc-media-over MTYPE-VALUE-MAX 1+ _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-CAPACITY =
+        _spc-assert _spc-stack
+    _spc-base$ 0 STREAMS-PAGE-MEDIA-MAX 1+ _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-CAPACITY =
+        _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE
+        _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE COMPARE 0=
+        _spc-assert _spc-stack
+    _spc-page _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE CMOVE
     _spc-base$ DROP STREAMS-PAGE-RAW-MAX 1+ S" text/html" _spc-page
         STREAMS-PAGE-NORMALIZE SPAGE-S-CAPACITY = _spc-assert _spc-stack
     _spc-over STREAMS-PAGE-TEXT-MAX 1+ 120 FILL
     _spc-over STREAMS-PAGE-TEXT-MAX 1+ S" text/plain" _spc-page
         STREAMS-PAGE-NORMALIZE SPAGE-S-CAPACITY = _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-SIZE
+        _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE COMPARE 0=
+        _spc-assert _spc-stack
+
+    _spc-html-base-a @ _spc-html-base-u @ S" text/html" _spc-page
+        STREAMS-PAGE-NORMALIZE SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
+        _spc-digest SHA3-256-LEN CMOVE
+    _spc-html-nav-a @ _spc-html-nav-u @ S" text/html" _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
+        _spc-digest SHA3-256-COMPARE _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-RAW-DIGEST
+        _spc-page STREAMS-PAGE-SNAPSHOT-RAW-DIGEST
+        SHA3-256-COMPARE 0= _spc-assert _spc-stack
+
+    _spc-html-content-a @ _spc-html-content-u @ S" text/html" _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
+        _spc-digest SHA3-256-COMPARE 0= _spc-assert _spc-stack
+    _spc-page2 _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE CMOVE
+    _spc-html-bad-a @ _spc-html-bad-u @ S" text/html" _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-INVALID = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-SIZE
+        _spc-backup STREAMS-PAGE-SNAPSHOT-SIZE COMPARE 0=
+        _spc-assert _spc-stack
+
+    _spc-text-base-a @ _spc-text-base-u @ S" text/plain" _spc-page
+        STREAMS-PAGE-NORMALIZE SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-MEDIA@
+        SPAGE-MEDIA-TEXT-PLAIN = _spc-assert _spc-stack
+    _spc-page STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
+        _spc-digest SHA3-256-LEN CMOVE
+    _spc-text-content-a @ _spc-text-content-u @ S" text/plain" _spc-page2
+        STREAMS-PAGE-NORMALIZE SPAGE-S-OK = _spc-assert _spc-stack
+    _spc-page2 STREAMS-PAGE-SNAPSHOT-NORMALIZED-DIGEST
+        _spc-digest SHA3-256-COMPARE 0= _spc-assert _spc-stack
+
+    _spc-free-fixtures _spc-stack
 
     _spc-fails @ 0= IF
         ." STREAMS PAGE CONTRACTS PASS " _spc-checks @ .
@@ -12913,6 +13483,14 @@ _spc-run
     stable_markers=("STREAMS PAGE CONTRACTS PASS",),
     failure_markers=("STREAMS PAGE CONTRACTS FAIL", "SPC assertion"),
     include_large_sample=False,
+    initial_files=(
+        ("base.html", STREAMS_PAGE_HTML_BASE_FIXTURE),
+        ("nav-change.html", STREAMS_PAGE_HTML_NAV_FIXTURE),
+        ("content-change.html", STREAMS_PAGE_HTML_CONTENT_FIXTURE),
+        ("malformed.html", STREAMS_PAGE_HTML_MALFORMED_FIXTURE),
+        ("base.txt", STREAMS_PAGE_TEXT_BASE_FIXTURE),
+        ("content-change.txt", STREAMS_PAGE_TEXT_CONTENT_FIXTURE),
+    ),
 )
 
 PROFILES["syndication-contracts"] = Profile(

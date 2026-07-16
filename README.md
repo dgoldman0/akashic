@@ -147,11 +147,15 @@ The DOM supports the usual tree operations (create, append, insert, remove, clon
 
 `bridge.f` connects the CSS engine to the DOM. Given a DOM tree with an attached stylesheet, it walks every element, matches selectors, resolves cascading and specificity, and attaches computed style values that the box model and layout engine consume.
 
-### markup/ — XML and HTML Parsing
+### markup/ — XML, HTML, and Inert Text Projection
 
 A two-layer parser. `core.f` provides the shared low-level machinery: tag scanning, attribute name/value extraction, entity decoding (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#NNN;`, `&#xHHH;`), and the cursor-based (`addr len`) parse loop.
 
 `xml.f` adds XML-specific rules (self-closing tags, namespaces). `html.f` adds HTML5 specifics — void elements (`<br>`, `<img>`, `<hr>`, `<meta>`, `<input>`, etc.) that don't require closing tags, and the HTML5 named entity set. Both produce DOM trees via the `dom/` module.
+
+`readable-text.f` is a separate bounded projection path for untrusted UTF-8
+plain text and a strict inert HTML subset. It allocates no DOM, executes no
+active content, and writes only folded readable text into caller-owned storage.
 
 ### sml/ — Sequential Markup Language
 
@@ -193,6 +197,10 @@ Built on KDOS spinlocks and events, the concurrency module provides four primiti
 
 **URL and URI** (`url.f`, `uri.f`) parse and decompose URLs and URIs into scheme, host, port, path, query, and fragment components. **Headers** (`headers.f`) manages HTTP header collections. **Base64** (`base64.f`) provides standard Base64 encoding and decoding.
 
+**Media type** (`media-type.f`) parses one bounded HTTP media-type field value
+into caller-owned type, subtype, and parameter views. It validates syntax and
+retains duplicate parameters without imposing an application admission policy.
+
 ### web/ — HTTP Server
 
 A full HTTP server stack:
@@ -218,12 +226,13 @@ A full HTTP server stack:
 Streams is a standalone Desk applet for integrating plural external information
 over time. Its first provider-neutral spine includes a bounded pointer-free
 source registry, crash-recoverable versioned source storage, a user-facing
-source manager, sanitized typed source capabilities, a bounded JSON Feed 1/1.1
-projection, and inert watched-page normalization. Desk may expose only source
-identity and declared bounds to ordinary Agent Observe facets; endpoints and
-provider configuration remain private, and agentic mutation requires an
-explicitly reviewed operator facet. The standalone source manager calls the
-same revision-safe owner mutations directly under user control.
+source manager, sanitized typed source capabilities, bounded JSON Feed 1/1.1,
+RSS 2.0, and Atom 1.0 codecs, and inert watched-page normalization composed
+from reusable media-type and readable-text boundaries. Desk may expose only
+source identity and declared bounds to ordinary Agent Observe facets;
+endpoints and provider configuration remain private, and agentic mutation
+requires an explicitly reviewed operator facet. The standalone source manager
+calls the same revision-safe owner mutations directly under user control.
 
 This is foundation rather than completed acquisition. Normal Streams still
 performs no startup network work, and configured RSS/Atom/JSON Feed/page or

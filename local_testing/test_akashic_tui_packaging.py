@@ -142,6 +142,26 @@ def test_ordinary_streams_excludes_public_network_composition() -> None:
     assert not _requires_megapad_networking(closure)
 
 
+def test_watched_page_composes_reusable_non_networking_boundaries() -> None:
+    closure = dependency_closure(("tui/applets/streams/page-snapshot.f",))
+    modules = set(closure)
+    assert {
+        "markup/readable-text.f",
+        "net/media-type.f",
+        "math/sha3.f",
+        "tui/applets/streams/page-snapshot.f",
+    } <= modules
+    assert not _requires_megapad_networking(closure)
+
+    for reusable_root in ("markup/readable-text.f", "net/media-type.f"):
+        reusable = set(dependency_closure((reusable_root,)))
+        assert all(not module.startswith("tui/") for module in reusable)
+        assert all(not module.startswith("agent/") for module in reusable)
+        assert all(not module.startswith("practice/") for module in reusable)
+        assert all("vfs" not in module for module in reusable)
+        assert not _requires_megapad_networking(tuple(reusable))
+
+
 def test_explicit_bluesky_composition_still_does_not_supply_trust() -> None:
     closure = dependency_closure(("tui/applets/streams/bluesky-public.f",))
     modules = set(closure)

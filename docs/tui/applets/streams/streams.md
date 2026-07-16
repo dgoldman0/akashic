@@ -3,10 +3,11 @@
 Streams is moving from a Bluesky-shaped reader toward the Desk ecosystem's
 bounded information-integration applet. The first landed spine owns a durable
 registry for several unlike source kinds, exposes sanitized source resources,
-and supplies deterministic JSON Feed and watched-page codec contracts. The
-existing retained Bluesky author-feed page, partial-thread navigation, local
-search, and crash-recoverable unpublished draft remain available while that
-new path is built alongside them; they are no longer the product definition.
+and supplies deterministic JSON Feed, RSS, Atom, and watched-page codec
+contracts. The existing retained Bluesky author-feed page, partial-thread
+navigation, local search, and crash-recoverable unpublished draft remain
+available while that new path is built alongside them; they are no longer the
+product definition.
 
 Ordinary `STREAMS-ENTRY` remains offline even when Desk exposes external I/O:
 it installs no concrete provider factory, and source recovery or Observe calls
@@ -124,14 +125,24 @@ available only to an explicitly constructed operator facet with a reviewed
 grant for the exact target and operands. Source create, general replace, and
 remove remain direct owner/UI operations in this slice.
 
-The first provider-family codec preserves JSON Feed 1/1.1 publication, entry,
-author, tag, attachment, time, URL, text, and HTML fields in a bounded owned
-model. A separate page snapshot normalizer admits only exact `text/plain` and
-`text/html`, executes no script, removes structural chrome, bounds raw input at
-128 KiB and normalized text at 8 KiB, and records raw and normalized SHA3-256
-digests. Both are transactional fixture-qualified adapters, not yet wired
-acquisition providers or evidence that RSS/Atom, HTTP admission, observation
-persistence, scheduling, notifications, outputs, or Outbox are complete.
+The reusable syndication family preserves bounded format-specific JSON Feed
+1/1.1, RSS 2.0, and Atom 1.0 models, then exposes a deliberately narrow shared
+item projection. A separate reusable media-type parser validates syntax without
+choosing policy, and a readable-text projector turns UTF-8 plain text or a
+strict inert HTML subset into caller-owned text without a DOM or active-content
+path.
+
+Streams composes those latter boundaries into its V1 watched-page snapshot. Its
+policy admits `text/plain` or `text/html`, case-insensitively, with either no
+parameters or exactly one `charset=utf-8` parameter. Raw input is capped at
+128 KiB, the media-type field at 1 KiB, and normalized text at 8 KiB. The
+snapshot records raw and normalized SHA3-256 digests plus a model seal, and
+commits only after parsing, projection, and hashing succeed. Actual watched-page
+fixtures qualify meaningful-content equivalence, content changes, plain-text
+changes, and malformed-input preservation. These are transactional codecs, not
+yet wired acquisition providers or evidence that configured HTTP acquisition,
+observation persistence, deduplication, scheduling, notifications, outputs, or
+Outbox are complete.
 
 ## Local drafts
 
