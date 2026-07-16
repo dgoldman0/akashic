@@ -11,6 +11,7 @@ if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
 from akashic_tui import (  # noqa: E402
+    PROFILES,
     PROVIDED_RE,
     REQUIRE_RE,
     _minify_forth,
@@ -121,8 +122,20 @@ def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
     tmp_path: Path,
 ) -> None:
     image = build_image("desktop", tmp_path / "akashic-desktop.img")
-    assert image.stat().st_size == 4096 * 512
+    assert image.stat().st_size == 8192 * 512
     filesystem = MP64FS(bytearray(image.read_bytes()))
     info = filesystem.info()
-    assert info["total_sectors"] == 4096
-    assert info["free_sectors"] >= 64
+    assert info["total_sectors"] == 8192
+    assert info["free_sectors"] * 512 >= 1 << 20
+
+
+def test_codex_desktop_profiles_inherit_capacity_and_build(
+    tmp_path: Path,
+) -> None:
+    for profile_name in ("desktop-codex", "desktop-codex-live"):
+        profile = PROFILES[profile_name]
+        assert profile.total_sectors == PROFILES["desktop"].total_sectors
+        image = build_image(profile_name, tmp_path / f"{profile_name}.img")
+        assert image.stat().st_size == 8192 * 512
+        filesystem = MP64FS(bytearray(image.read_bytes()))
+        assert filesystem.info()["free_sectors"] > 0

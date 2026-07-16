@@ -1,26 +1,26 @@
 \ =====================================================================
-\ json-feed.f - strict transactional JSON Feed decoder for Streams
+\ json-feed.f - strict reusable transactional JSON Feed decoder
 \ =====================================================================
 \ Supported versions are exactly https://jsonfeed.org/version/1 and
 \ https://jsonfeed.org/version/1.1.  Version 1's singular author and 1.1's
 \ authors array are both admitted; when both are present, authors wins as
 \ required by JSON Feed 1.1.  This bounded codec retains the syndication
-\ fields represented by syndication-model.f and ignores extension fields.
+\ fields represented by model.f and ignores extension fields.
 \ Attachment size_in_bytes is the bounded non-negative integer subset;
 \ duration_in_seconds retains its exact non-negative JSON number lexeme.
 \ No decoded field borrows storage from the input document.
-\ A normal commit requires a destination plus one transactional temporary:
-\ 2 * SYN-FEED-SIZE = 909632 bytes of external-arena headroom.
+\ A normal commit requires a destination plus explicit caller-owned scratch.
+\ No VFS, Desk, TUI, Streams, Practice, or Agent facility is referenced.
 \ =====================================================================
 
 PROVIDED akashic-json-feed
 
-REQUIRE syndication-model.f
-REQUIRE ../../../utils/json.f
-REQUIRE ../../../utils/string.f
-REQUIRE ../../../text/utf8.f
+REQUIRE model.f
+REQUIRE ../utils/json.f
+REQUIRE ../utils/string.f
+REQUIRE ../text/utf8.f
 
-1048576 CONSTANT JSON-FEED-DOCUMENT-CAP
+131072 CONSTANT JSON-FEED-DOCUMENT-CAP
 
 \ ---------------------------------------------------------------------
 \ Duplicate-aware object and owned-string primitives.
@@ -524,37 +524,94 @@ VARIABLE _JF-COUNT
     REPEAT
     _JF-COUNT @ _JF-DEST @ SYN.FEED.COUNT ! SYN-S-OK ;
 
-VARIABLE _JF-TEMP
+SYN-FEED-SIZE CONSTANT JSON-FEED-SCRATCH-SIZE
+
+VARIABLE _JF-ARG-A
+VARIABLE _JF-ARG-U
+VARIABLE _JF-ARG-DEST
+VARIABLE _JF-ARG-SCRATCH
+VARIABLE _JF-ARG-SCRATCH-U
 VARIABLE _JF-TEMP-STATUS
 
-: JSON-FEED-DECODE  ( json-a json-u feed -- status )
-    DUP 0= IF DROP 2DROP SYN-S-INVALID EXIT THEN
-    >R
-    DUP 0< IF 2DROP R> DROP SYN-S-INVALID EXIT THEN
-    DUP JSON-FEED-DOCUMENT-CAP > IF
-        2DROP R> DROP SYN-S-CAPACITY EXIT
-    THEN
-    OVER 0= IF 2DROP R> DROP SYN-S-INVALID EXIT THEN
-    SYN-FEED-SIZE ALLOCATE DUP IF
-        2DROP 2DROP R> DROP SYN-S-CAPACITY EXIT
-    THEN
-    DROP _JF-TEMP !
-    _JF-TEMP @ SYN-FEED-INIT
-    _JF-TEMP @ _JF-DECODE-INTO _JF-TEMP-STATUS !
+: _JF-DECODE-PREFLIGHT
+    ( json-a json-u feed scratch scratch-u -- same status )
+    3 PICK 0< IF SYN-S-INVALID EXIT THEN
+    DUP 0< IF SYN-S-INVALID EXIT THEN
+    3 PICK JSON-FEED-DOCUMENT-CAP > IF SYN-S-CAPACITY EXIT THEN
+    DUP JSON-FEED-SCRATCH-SIZE < IF SYN-S-CAPACITY EXIT THEN
+    4 PICK 4 PICK SYN-SPAN-VALID? 0= IF SYN-S-INVALID EXIT THEN
+    2 PICK SYN-FEED-SIZE SYN-SPAN-VALID? 0= IF SYN-S-INVALID EXIT THEN
+    2DUP SYN-SPAN-VALID? 0= IF SYN-S-INVALID EXIT THEN
+    4 PICK 4 PICK 3 PICK 3 PICK
+        SYN-RANGES-OVERLAP? IF SYN-S-INVALID EXIT THEN
+    2 PICK SYN-FEED-SIZE 3 PICK 3 PICK
+        SYN-RANGES-OVERLAP? IF SYN-S-INVALID EXIT THEN
+    SYN-S-OK ;
+
+: _JSON-FEED-DECODE
+    ( json-a json-u feed scratch scratch-u -- status )
+    _JF-ARG-SCRATCH-U ! _JF-ARG-SCRATCH ! _JF-ARG-DEST !
+    _JF-ARG-U ! _JF-ARG-A !
+    _JF-ARG-SCRATCH @ SYN-FEED-INIT
+    _JF-ARG-A @ _JF-ARG-U @ _JF-ARG-SCRATCH @
+        _JF-DECODE-INTO _JF-TEMP-STATUS !
     _JF-TEMP-STATUS @ SYN-S-OK = IF
-        _JF-TEMP @ R@ SYN-FEED-SIZE CMOVE
+        _JF-ARG-SCRATCH @ _JF-ARG-DEST @ SYN-FEED-SIZE CMOVE
     THEN
-    _JF-TEMP @ SYN-FEED-SIZE 0 FILL
-    \ KDOS FREE is ( addr -- ); no ANS-style ior remains on the stack.
-    _JF-TEMP @ FREE
-    R> DROP _JF-TEMP-STATUS @ ;
+    _JF-ARG-SCRATCH @ JSON-FEED-SCRATCH-SIZE 0 FILL
+    _JF-TEMP-STATUS @ ;
 
 \ JSON navigation uses bounded module scratch.  Ordinary use must decode on
 \ its owner context.  GUARDED builds serialize callers additionally; network
 \ workers should still return bytes for an owner-committed decode.
 [DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../../../concurrency/guard.f
+REQUIRE ../concurrency/guard.f
 GUARD _json-feed-guard
-' JSON-FEED-DECODE CONSTANT _json-feed-decode-xt
-: JSON-FEED-DECODE  _json-feed-decode-xt _json-feed-guard WITH-GUARD ;
+' _JSON-FEED-DECODE CONSTANT _json-feed-decode-xt
+: JSON-FEED-DECODE
+    ( json-a json-u feed scratch scratch-u -- status )
+    _JF-DECODE-PREFLIGHT DUP IF
+        _SYN-DECODE-ARGS>STATUS EXIT
+    THEN DROP
+    _json-feed-decode-xt _json-feed-guard WITH-GUARD ;
 [THEN] [THEN]
+[DEFINED] JSON-FEED-DECODE 0= [IF]
+: JSON-FEED-DECODE
+    ( json-a json-u feed scratch scratch-u -- status )
+    _JF-DECODE-PREFLIGHT DUP IF
+        _SYN-DECODE-ARGS>STATUS EXIT
+    THEN DROP
+    _JSON-FEED-DECODE ;
+[THEN]
+
+VARIABLE _JFP-ITEM
+VARIABLE _JFP-VIEW
+
+: JSON-FEED-PROJECT-ITEM  ( item view -- status )
+    _JFP-VIEW ! _JFP-ITEM !
+    _JFP-ITEM @ 0= _JFP-VIEW @ 0= OR IF SYN-S-INVALID EXIT THEN
+    _JFP-VIEW @ SYN-PROJECTION-INIT
+    SYN-FORMAT-JSON-FEED _JFP-VIEW @ _SYN-PROJ-FORMAT + !
+    _JFP-ITEM @ SYN.ENTRY.ID
+        _JFP-VIEW @ _SYN-PROJ-ID-U + ! _JFP-VIEW @ _SYN-PROJ-ID-A + !
+    _JFP-ITEM @ SYN.ENTRY.TITLE
+        _JFP-VIEW @ _SYN-PROJ-TITLE-U + ! _JFP-VIEW @ _SYN-PROJ-TITLE-A + !
+    _JFP-ITEM @ SYN.ENTRY.URL
+        _JFP-VIEW @ _SYN-PROJ-URL-U + ! _JFP-VIEW @ _SYN-PROJ-URL-A + !
+    _JFP-ITEM @ SYN.ENTRY.SUMMARY
+        _JFP-VIEW @ _SYN-PROJ-SUMMARY-U + ! _JFP-VIEW @ _SYN-PROJ-SUMMARY-A + !
+    _JFP-ITEM @ SYN.ENTRY.CONTENT-TEXT DUP IF
+        _JFP-VIEW @ _SYN-PROJ-CONTENT-U + !
+        _JFP-VIEW @ _SYN-PROJ-CONTENT-A + !
+    ELSE 2DROP
+        _JFP-ITEM @ SYN.ENTRY.CONTENT-HTML
+        _JFP-VIEW @ _SYN-PROJ-CONTENT-U + !
+        _JFP-VIEW @ _SYN-PROJ-CONTENT-A + !
+    THEN
+    _JFP-ITEM @ SYN.ENTRY.PUBLISHED
+        _JFP-VIEW @ _SYN-PROJ-PUBLISHED-U + !
+        _JFP-VIEW @ _SYN-PROJ-PUBLISHED-A + !
+    _JFP-ITEM @ SYN.ENTRY.MODIFIED
+        _JFP-VIEW @ _SYN-PROJ-MODIFIED-U + !
+        _JFP-VIEW @ _SYN-PROJ-MODIFIED-A + !
+    SYN-S-OK ;

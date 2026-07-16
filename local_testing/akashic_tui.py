@@ -28,29 +28,41 @@ OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
 STREAMS_TIMELINE_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "atproto" / "timeline.json"
 ).read_bytes()
-STREAMS_JSON_FEED_BASE_FIXTURE = (
+SYNDICATION_JSON_FEED_BASE_FIXTURE = (
     AKASHIC_ROOT
     / "local_testing"
     / "fixtures"
-    / "streams"
-    / "feeds"
+    / "syndication"
     / "jsonfeed-base.json"
 ).read_bytes()
-STREAMS_JSON_FEED_UPDATE_FIXTURE = (
+SYNDICATION_JSON_FEED_UPDATE_FIXTURE = (
     AKASHIC_ROOT
     / "local_testing"
     / "fixtures"
-    / "streams"
-    / "feeds"
+    / "syndication"
     / "jsonfeed-update.json"
 ).read_bytes()
-STREAMS_JSON_FEED_MALFORMED_FIXTURE = (
+SYNDICATION_JSON_FEED_MALFORMED_FIXTURE = (
     AKASHIC_ROOT
     / "local_testing"
     / "fixtures"
-    / "streams"
-    / "feeds"
+    / "syndication"
     / "malformed.json"
+).read_bytes()
+SYNDICATION_RSS_BASE_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "syndication" / "rss-base.xml"
+).read_bytes()
+SYNDICATION_RSS_UPDATE_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "syndication" / "rss-update.xml"
+).read_bytes()
+SYNDICATION_ATOM_BASE_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "syndication" / "atom-base.xml"
+).read_bytes()
+SYNDICATION_ATOM_UPDATE_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "syndication" / "atom-update.xml"
+).read_bytes()
+SYNDICATION_XML_MALFORMED_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "syndication" / "malformed.xml"
 ).read_bytes()
 REQUIRE_RE = re.compile(r"^ *REQUIRE +([^ \n]+)", re.MULTILINE)
 PROVIDED_RE = re.compile(r"^ *PROVIDED +([^ \n]+)", re.MULTILINE)
@@ -108,6 +120,7 @@ class Profile:
     failure_markers: tuple[str, ...] = ()
     initial_files: tuple[tuple[str, bytes], ...] = ()
     include_large_sample: bool = True
+    total_sectors: int = 4096
 
 
 def _practice_crc32(data: bytes) -> int:
@@ -9070,6 +9083,7 @@ THEN
             "Agent",
         ),
         linked=True,
+        total_sectors=8192,
     ),
     "agent-widgets": Profile(
         roots=(
@@ -12853,17 +12867,20 @@ _spc-run
     include_large_sample=False,
 )
 
-PROFILES["streams-syndication-contracts"] = Profile(
-    roots=("utils/json.f",),
-    resources=(
-        "tui/applets/streams/syndication-model.f",
-        "tui/applets/streams/json-feed.f",
+PROFILES["syndication-contracts"] = Profile(
+    roots=(
+        "syndication/json-feed.f",
+        "syndication/rss.f",
+        "syndication/atom.f",
     ),
-    autoexec=r"""\ autoexec.f - bounded owned JSON Feed syndication contracts
+    resources=(),
+    autoexec=r"""\ autoexec.f - reusable bounded syndication contracts
 ENTER-USERLAND
-." [akashic] loading Streams syndication contracts" CR
-REQUIRE tui/applets/streams/syndication-model.f
-REQUIRE tui/applets/streams/json-feed.f
+    ." [akashic] loading syndication contracts" CR
+REQUIRE syndication/model.f
+REQUIRE syndication/json-feed.f
+REQUIRE syndication/rss.f
+REQUIRE syndication/atom.f
 
 VARIABLE _ssc-fails
 VARIABLE _ssc-checks
@@ -12881,6 +12898,7 @@ VARIABLE _ssc-arena
 VARIABLE _ssc-base
 VARIABLE _ssc-replay
 VARIABLE _ssc-update
+VARIABLE _ssc-scratch
 VARIABLE _ssc-base-entry0
 VARIABLE _ssc-base-entry1
 VARIABLE _ssc-update-entry0
@@ -12894,10 +12912,36 @@ VARIABLE _ssc-id-u
 VARIABLE _ssc-range-a
 VARIABLE _ssc-range-u
 VARIABLE _ssc-range-model
+VARIABLE _ssc-rss-base-doc
+VARIABLE _ssc-rss-base-u
+VARIABLE _ssc-rss-update-doc
+VARIABLE _ssc-rss-update-u
+VARIABLE _ssc-atom-base-doc
+VARIABLE _ssc-atom-base-u
+VARIABLE _ssc-atom-update-doc
+VARIABLE _ssc-atom-update-u
+VARIABLE _ssc-xml-bad-doc
+VARIABLE _ssc-xml-bad-u
+VARIABLE _ssc-rss-base
+VARIABLE _ssc-rss-update
+VARIABLE _ssc-rss-replay
+VARIABLE _ssc-rss-scratch
+VARIABLE _ssc-atom-base
+VARIABLE _ssc-atom-update
+VARIABLE _ssc-atom-replay
+VARIABLE _ssc-atom-scratch
+VARIABLE _ssc-rss-item0
+VARIABLE _ssc-rss-item1
+VARIABLE _ssc-rss-item2
+VARIABLE _ssc-atom-entry0
+VARIABLE _ssc-atom-entry1
+VARIABLE _ssc-atom-entry2
+VARIABLE _ssc-view-item
 
 CREATE _ssc-json 8192 ALLOT
 CREATE _ssc-long SYN-TITLE-CAP 1+ ALLOT
 CREATE _ssc-bad-byte 1 ALLOT
+CREATE _ssc-view SYN-PROJECTION-SIZE ALLOT
 
 : _ssc-assert  ( flag -- )
     1 _ssc-checks +!
@@ -12916,6 +12960,55 @@ CREATE _ssc-bad-byte 1 ALLOT
     _ssc-arena @ SYN-FEED-SIZE ARENA-ALLOT? DUP 0= _ssc-assert
     ?DUP IF THROW THEN
     DUP 0<> _ssc-assert ;
+
+: _ssc-sized-new  ( size -- model )
+    _ssc-arena @ SWAP ARENA-ALLOT? DUP 0= _ssc-assert
+    ?DUP IF THROW THEN DUP 0<> _ssc-assert ;
+
+: _ssc-zeroed?  ( addr len -- flag )
+    0 ?DO DUP I + C@ IF DROP 0 UNLOOP EXIT THEN LOOP DROP -1 ;
+
+: _ssc-seeded?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ 165 <> IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _ssc-json-scratch-seed  ( -- )
+    _ssc-scratch @ JSON-FEED-SCRATCH-SIZE 165 FILL ;
+: _ssc-json-scratch-wiped  ( -- )
+    _ssc-scratch @ JSON-FEED-SCRATCH-SIZE _ssc-zeroed? _ssc-assert ;
+: _ssc-json-scratch-seeded  ( -- )
+    _ssc-scratch @ JSON-FEED-SCRATCH-SIZE _ssc-seeded? _ssc-assert ;
+: _ssc-rss-scratch-seed  ( -- )
+    _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE 165 FILL ;
+: _ssc-rss-scratch-wiped  ( -- )
+    _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE _ssc-zeroed? _ssc-assert ;
+: _ssc-rss-scratch-seeded  ( -- )
+    _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE _ssc-seeded? _ssc-assert ;
+: _ssc-atom-scratch-seed  ( -- )
+    _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE 165 FILL ;
+: _ssc-atom-scratch-wiped  ( -- )
+    _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE _ssc-zeroed? _ssc-assert ;
+: _ssc-atom-scratch-seeded  ( -- )
+    _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE _ssc-seeded? _ssc-assert ;
+
+: _ssc-check-span-contracts  ( -- )
+    1000 10 SYN-SPAN-VALID? _ssc-assert
+    -8 16 SYN-SPAN-VALID? 0= _ssc-assert
+    1000 10 1010 5 SYN-RANGES-OVERLAP? 0= _ssc-assert
+    1000 11 1010 5 SYN-RANGES-OVERLAP? _ssc-assert
+    1010 5 1000 11 SYN-RANGES-OVERLAP? _ssc-assert ;
+
+: _ssc-rss-sentinel  ( -- )
+    _ssc-rss-base @ _ssc-rss-replay @ RSS-FEED-SIZE CMOVE ;
+: _ssc-rss-unchanged  ( -- )
+    _ssc-rss-base @ RSS-FEED-SIZE _ssc-rss-replay @ RSS-FEED-SIZE
+        STR-STR= _ssc-assert ;
+: _ssc-atom-sentinel  ( -- )
+    _ssc-atom-base @ _ssc-atom-replay @ ATOM-FEED-SIZE CMOVE ;
+: _ssc-atom-unchanged  ( -- )
+    _ssc-atom-base @ ATOM-FEED-SIZE _ssc-atom-replay @ ATOM-FEED-SIZE
+        STR-STR= _ssc-assert ;
 
 : _ssc-load  ( name-a name-u -- document-a document-u status )
     DUP 0= OVER 23 > OR IF 2DROP 0 0 SYN-S-MISSING EXIT THEN
@@ -12940,7 +13033,8 @@ CREATE _ssc-bad-byte 1 ALLOT
 
 : _ssc-decode-expect  ( json-a json-u feed expected -- )
     _ssc-expected !
-    JSON-FEED-DECODE _ssc-expected @ = _ssc-assert ;
+    _ssc-scratch @ JSON-FEED-SCRATCH-SIZE JSON-FEED-DECODE
+        _ssc-expected @ = _ssc-assert ;
 
 : _ssc-model=  ( model-a model-b -- flag )
     SYN-FEED-SIZE SWAP SYN-FEED-SIZE STR-STR= ;
@@ -13215,13 +13309,15 @@ CREATE _ssc-bad-byte 1 ALLOT
         SYN-S-INVALID _ssc-decode-expect
     _ssc-unchanged
 
+    _ssc-json-scratch-seed
     _ssc-duplicate-field-feed _ssc-update @
         SYN-S-INVALID _ssc-decode-expect
-    _ssc-unchanged
+    _ssc-unchanged _ssc-json-scratch-wiped
 
+    _ssc-json-scratch-seed
     _ssc-duplicate-id-feed _ssc-update @
         SYN-S-INVALID _ssc-decode-expect
-    _ssc-unchanged
+    _ssc-unchanged _ssc-json-scratch-wiped
 
     _ssc-missing-id-feed _ssc-update @
         SYN-S-MISSING _ssc-decode-expect
@@ -13235,19 +13331,526 @@ CREATE _ssc-bad-byte 1 ALLOT
         SYN-S-INVALID _ssc-decode-expect
     _ssc-unchanged
 
+    _ssc-json-scratch-seed
     _ssc-nine-feed _ssc-update @ SYN-S-CAPACITY _ssc-decode-expect
-    _ssc-unchanged
+    _ssc-unchanged _ssc-json-scratch-wiped
 
+    _ssc-json-scratch-seed
     _ssc-overlong-feed _ssc-update @ SYN-S-CAPACITY _ssc-decode-expect
-    _ssc-unchanged
+    _ssc-unchanged _ssc-json-scratch-wiped
 
     _ssc-json JSON-FEED-DOCUMENT-CAP 1+ _ssc-update @
         SYN-S-CAPACITY _ssc-decode-expect
-    _ssc-unchanged ;
+    _ssc-unchanged
+
+    _ssc-update-doc @ _ssc-update-u @ _ssc-update @
+        _ssc-scratch @ JSON-FEED-SCRATCH-SIZE 1-
+        JSON-FEED-DECODE SYN-S-CAPACITY = _ssc-assert
+    _ssc-unchanged
+    _ssc-update-doc @ _ssc-update-u @ _ssc-update @
+        _ssc-update @ JSON-FEED-SCRATCH-SIZE
+        JSON-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-unchanged
+    _ssc-scratch @ JSON-FEED-SCRATCH-SIZE _ssc-zeroed? _ssc-assert ;
+
+: _ssc-check-json-preflight  ( -- )
+    _ssc-sentinel
+    _ssc-json-scratch-seed
+    -8 16 _ssc-update @ _ssc-scratch @ JSON-FEED-SCRATCH-SIZE
+        JSON-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-unchanged _ssc-json-scratch-seeded
+    _ssc-json-scratch-seed
+    _ssc-update-doc @ _ssc-update-u @ -8
+        _ssc-scratch @ JSON-FEED-SCRATCH-SIZE
+        JSON-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-unchanged _ssc-json-scratch-seeded
+    _ssc-update-doc @ _ssc-update-u @ _ssc-update @
+        -8 JSON-FEED-SCRATCH-SIZE
+        JSON-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-unchanged
+    _ssc-json-scratch-seed
+    _ssc-update-doc @ _ssc-update-u @ _ssc-update @ _ssc-scratch @ -1
+        JSON-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-unchanged _ssc-json-scratch-seeded ;
+
+: _ssc-check-json-aliases  ( -- )
+    _ssc-sentinel
+    _ssc-update-doc @ _ssc-update-u @ _ssc-update @
+        _ssc-update @ 8 + JSON-FEED-SCRATCH-SIZE
+        JSON-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-unchanged
+    _ssc-update-doc @ _ssc-scratch @ _ssc-update-u @ CMOVE
+    _ssc-scratch @ _ssc-update-u @ _ssc-update @
+        _ssc-scratch @ JSON-FEED-SCRATCH-SIZE
+        JSON-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-unchanged
+    _ssc-scratch @ _ssc-update-u @
+        _ssc-update-doc @ _ssc-update-u @ STR-STR= _ssc-assert
+    _ssc-update-doc @ _ssc-scratch @ 8 + _ssc-update-u @ CMOVE
+    _ssc-scratch @ 8 + _ssc-update-u @ _ssc-update @
+        _ssc-scratch @ JSON-FEED-SCRATCH-SIZE
+        JSON-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-unchanged
+    _ssc-scratch @ 8 + _ssc-update-u @
+        _ssc-update-doc @ _ssc-update-u @ STR-STR= _ssc-assert
+    _ssc-scratch @ JSON-FEED-SCRATCH-SIZE 0 FILL ;
+
+: _ssc-rss-expect  ( xml-a xml-u feed expected -- )
+    _ssc-expected !
+    _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE RSS-FEED-DECODE
+        DUP _ssc-expected @ <> IF
+            ." SSC RSS status " DUP . ." expected " _ssc-expected @ . CR
+        THEN
+        _ssc-expected @ = _ssc-assert ;
+
+: _ssc-atom-expect  ( xml-a xml-u feed expected -- )
+    _ssc-expected !
+    _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE ATOM-FEED-DECODE
+        DUP _ssc-expected @ <> IF
+            ." SSC Atom status " DUP . ." expected " _ssc-expected @ . CR
+        THEN
+        _ssc-expected @ = _ssc-assert ;
+
+VARIABLE _ssc-xml-u
+VARIABLE _ssc-copy-u
+CREATE _ssc-cp 4 ALLOT
+
+: _ssc-xml-begin  ( -- ) 0 _ssc-xml-u ! ;
+: _ssc-xml+  ( a u -- )
+    DUP _ssc-xml-u @ + 8192 > ABORT" SSC XML literal overflow"
+    DUP >R _ssc-json _ssc-xml-u @ + SWAP CMOVE R> _ssc-xml-u +! ;
+: _ssc-xml-result  ( -- a u ) _ssc-json _ssc-xml-u @ ;
+
+: _ssc-cp$  ( cp -- a u )
+    _ssc-cp UTF8-ENCODE _ssc-cp - _ssc-cp SWAP ;
+
+: _ssc-xml-expect  ( a u expected -- )
+    >R SX-VALIDATE R> = _ssc-assert ;
+
+: _ssc-child-invalid  ( child-a child-u name-a name-u flag status -- )
+    SYN-S-INVALID = _ssc-assert DROP 2DROP 2DROP ;
+
+: _ssc-child-x  ( child-a child-u name-a name-u flag status -- )
+    SYN-S-OK = _ssc-assert _ssc-assert
+    S" x" STR-STR= _ssc-assert 2DROP ;
+
+: _ssc-check-child-scanners  ( -- )
+    0 0 _RSS-CHILD _ssc-child-invalid
+    0 0 _ATOM-CHILD _ssc-child-invalid
+    _ssc-xml-begin
+    40 0 DO S" <!--bounded-comment-->" _ssc-xml+ LOOP
+    S" <x/>" _ssc-xml+ _ssc-xml-result
+    2DUP _RSS-CHILD _ssc-child-x
+    _ATOM-CHILD _ssc-child-x ;
+
+: _ssc-check-xml-chars  ( -- )
+    _ssc-xml-begin S" <x>" _ssc-xml+ 1 _ssc-cp$ _ssc-xml+
+        S" </x>" _ssc-xml+ _ssc-xml-result SYN-S-INVALID _ssc-xml-expect
+    _ssc-xml-begin S" <x a='" _ssc-xml+ 1 _ssc-cp$ _ssc-xml+
+        S" '/>" _ssc-xml+ _ssc-xml-result SYN-S-INVALID _ssc-xml-expect
+    _ssc-xml-begin S" <x><![CDATA[" _ssc-xml+ 1 _ssc-cp$ _ssc-xml+
+        S" ]]></x>" _ssc-xml+ _ssc-xml-result SYN-S-INVALID _ssc-xml-expect
+    _ssc-xml-begin S" <x>" _ssc-xml+ 0xFFFE _ssc-cp$ _ssc-xml+
+        S" </x>" _ssc-xml+ _ssc-xml-result SYN-S-INVALID _ssc-xml-expect
+    S" <x>&#1;</x>" SYN-S-INVALID _ssc-xml-expect
+    S" <x>&#9;&#x1F6F0;</x>" SYN-S-OK _ssc-xml-expect
+    S" &#1;" _ssc-long SYN-TITLE-CAP _ssc-copy-u
+        SX-COPY-XML-TEXT SYN-S-INVALID = _ssc-assert
+    S" &#9;&#x1F6F0;" _ssc-long SYN-TITLE-CAP _ssc-copy-u
+        SX-COPY-XML-TEXT SYN-S-OK = _ssc-assert
+    _ssc-copy-u @ 5 = _ssc-assert _ssc-long C@ 9 = _ssc-assert ;
+
+: _ssc-check-xml-namespaces  ( -- )
+    S" <x a='1'b='2'/>" SYN-S-INVALID _ssc-xml-expect
+    S" <x xmlns:p='urn:t' xmlns:q='urn:t' p:a='1' q:a='2'/>"
+        SYN-S-INVALID _ssc-xml-expect
+    S" <x xmlns:p='urn:p' xmlns:q='urn:q' p:a='1' q:a='2'/>"
+        SYN-S-OK _ssc-xml-expect ;
+
+: _ssc-rss-duplicate-field$  ( -- a u )
+    S" <rss version='2.0'><channel><title>one</title><title>two</title><link>https://example.test/</link><description>d</description></channel></rss>" ;
+
+: _ssc-rss-duplicate-id$  ( -- a u )
+    _ssc-xml-begin
+    S" <rss version='2.0'><channel><title>t</title><link>https://example.test/</link><description>d</description>" _ssc-xml+
+    S" <item><guid isPermaLink='false'>same</guid><title>a</title></item>" _ssc-xml+
+    S" <item><guid isPermaLink='false'>same</guid><title>b</title></item>" _ssc-xml+
+    S" </channel></rss>" _ssc-xml+ _ssc-xml-result ;
+
+: _ssc-rss-nine$  ( -- a u )
+    _ssc-xml-begin
+    S" <rss version='2.0'><channel><title>t</title><link>https://example.test/</link><description>d</description>" _ssc-xml+
+    S" <item><guid>0</guid><title>0</title></item>" _ssc-xml+
+    S" <item><guid>1</guid><title>1</title></item>" _ssc-xml+
+    S" <item><guid>2</guid><title>2</title></item>" _ssc-xml+
+    S" <item><guid>3</guid><title>3</title></item>" _ssc-xml+
+    S" <item><guid>4</guid><title>4</title></item>" _ssc-xml+
+    S" <item><guid>5</guid><title>5</title></item>" _ssc-xml+
+    S" <item><guid>6</guid><title>6</title></item>" _ssc-xml+
+    S" <item><guid>7</guid><title>7</title></item>" _ssc-xml+
+    S" <item><guid>8</guid><title>8</title></item>" _ssc-xml+
+    S" </channel></rss>" _ssc-xml+ _ssc-xml-result ;
+
+: _ssc-atom-duplicate-field$  ( -- a u )
+    S" <feed xmlns='http://www.w3.org/2005/Atom'><id>f</id><title>one</title><title>two</title><updated>2026-07-15T00:00:00Z</updated><author><name>A</name></author></feed>" ;
+
+: _ssc-atom-duplicate-id$  ( -- a u )
+    _ssc-xml-begin
+    S" <feed xmlns='http://www.w3.org/2005/Atom'><id>f</id><title>t</title><updated>2026-07-15T00:00:00Z</updated><author><name>A</name></author>" _ssc-xml+
+    S" <entry><id>same</id><title>a</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>same</id><title>b</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" </feed>" _ssc-xml+ _ssc-xml-result ;
+
+: _ssc-atom-nine$  ( -- a u )
+    _ssc-xml-begin
+    S" <feed xmlns='http://www.w3.org/2005/Atom'><id>f</id><title>t</title><updated>2026-07-15T00:00:00Z</updated><author><name>A</name></author>" _ssc-xml+
+    S" <entry><id>0</id><title>0</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>1</id><title>1</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>2</id><title>2</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>3</id><title>3</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>4</id><title>4</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>5</id><title>5</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>6</id><title>6</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>7</id><title>7</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" <entry><id>8</id><title>8</title><updated>2026-07-15T00:00:00Z</updated></entry>" _ssc-xml+
+    S" </feed>" _ssc-xml+ _ssc-xml-result ;
+
+: _ssc-rss-two-channels$  ( -- a u )
+    _ssc-xml-begin S" <rss version='2.0'>" _ssc-xml+
+    S" <channel><title>a</title><link>https://a/</link><description>a</description></channel>" _ssc-xml+
+    S" <channel><title>b</title><link>https://b/</link><description>b</description></channel>" _ssc-xml+
+    S" </rss>" _ssc-xml+ _ssc-xml-result ;
+
+: _ssc-rss-link-identity$  ( -- a u )
+    _ssc-xml-begin
+    S" <rss version='2.0'><channel><title>t</title>" _ssc-xml+
+    S" <link>https://example.test/</link><description>d</description>" _ssc-xml+
+    S" <item><link>https://example.test/link-only</link><title>link</title></item>" _ssc-xml+
+    S" </channel></rss>" _ssc-xml+ _ssc-xml-result ;
+
+: _ssc-rss-undeclared-atom$  ( -- a u )
+    _ssc-xml-begin
+    S" <rss version='2.0'><channel><title>t</title>" _ssc-xml+
+    S" <link>https://example.test/</link><description>d</description>" _ssc-xml+
+    S" <atom:link rel='next' href='https://example.test/next'/></channel></rss>" _ssc-xml+
+    _ssc-xml-result ;
+
+: _ssc-rss-wrong-atom$  ( -- a u )
+    _ssc-xml-begin
+    S" <rss version='2.0' xmlns:atom='urn:not-atom'><channel>" _ssc-xml+
+    S" <title>t</title><link>https://example.test/</link><description>d</description>" _ssc-xml+
+    S" <atom:link rel='next' href='https://example.test/next'/></channel></rss>" _ssc-xml+
+    _ssc-xml-result ;
+
+: _ssc-rss-bogus-default$  ( -- a u )
+    _ssc-xml-begin S" <rss version='2.0' xmlns='urn:not-rss'><channel>" _ssc-xml+
+    S" <title>t</title><link>https://example.test/</link>" _ssc-xml+
+    S" <description>d</description></channel></rss>" _ssc-xml+
+    _ssc-xml-result ;
+
+: _ssc-atom-reset-title$  ( -- a u )
+    _ssc-xml-begin
+    S" <feed xmlns='http://www.w3.org/2005/Atom'><id>f</id>" _ssc-xml+
+    S" <title xmlns=''>wrong namespace</title>" _ssc-xml+
+    S" <updated>2026-07-15T00:00:00Z</updated>" _ssc-xml+
+    S" <author><name>A</name></author></feed>" _ssc-xml+
+    _ssc-xml-result ;
+
+: _ssc-atom-media-title$  ( -- a u )
+    _ssc-xml-begin
+    S" <feed xmlns='http://www.w3.org/2005/Atom'><id>f</id>" _ssc-xml+
+    S" <title type='image/png'>not a text construct</title>" _ssc-xml+
+    S" <updated>2026-07-15T00:00:00Z</updated>" _ssc-xml+
+    S" <author><name>A</name></author></feed>" _ssc-xml+
+    _ssc-xml-result ;
+
+: _ssc-atom-inline-src$  ( -- a u )
+    _ssc-xml-begin
+    S" <feed xmlns='http://www.w3.org/2005/Atom'><id>f</id><title>t</title>" _ssc-xml+
+    S" <updated>2026-07-15T00:00:00Z</updated><author><name>A</name></author>" _ssc-xml+
+    S" <entry><id>e</id><title>e</title><updated>2026-07-15T00:00:00Z</updated>" _ssc-xml+
+    S" <content type='image/png' src='https://example.test/image'>inline</content>" _ssc-xml+
+    S" </entry></feed>" _ssc-xml+ _ssc-xml-result ;
+
+: _ssc-atom-external-content$  ( -- a u )
+    _ssc-xml-begin
+    S" <feed xmlns='http://www.w3.org/2005/Atom'><id>f</id><title>t</title>" _ssc-xml+
+    S" <updated>2026-07-15T00:00:00Z</updated><author><name>A</name></author>" _ssc-xml+
+    S" <entry><id>e</id><title>e</title><updated>2026-07-15T00:00:00Z</updated>" _ssc-xml+
+    S" <content type='image/png' src='https://example.test/image'/></entry></feed>" _ssc-xml+
+    _ssc-xml-result ;
+
+: _ssc-check-json-projection  ( -- )
+    _ssc-base-entry0 @ _ssc-view JSON-FEED-PROJECT-ITEM
+        SYN-S-OK = _ssc-assert
+    _ssc-view SYN.PROJECTION.FORMAT SYN-FORMAT-JSON-FEED = _ssc-assert
+    _ssc-view SYN.PROJECTION.NATIVE-ID
+        S" jsonfeed:item:stable" STR-STR= _ssc-assert
+    _ssc-view SYN.PROJECTION.CONTENT
+        S" The stable item remains unchanged." STR-STR= _ssc-assert ;
+
+: _ssc-check-rss-base  ( -- )
+    _ssc-rss-base @ RSS.FEED.COUNT @ 2 = _ssc-assert
+    _ssc-rss-base @ RSS.FEED.TITLE S" Example Desk RSS" STR-STR= _ssc-assert
+    _ssc-rss-base @ RSS.FEED.LINK
+        S" https://example.test/rss" STR-STR= _ssc-assert
+    _ssc-rss-base @ RSS.FEED.LANGUAGE S" en-US" STR-STR= _ssc-assert
+    _ssc-rss-base @ RSS.FEED.NEXT-URL
+        S" https://example.test/rss?page=2" STR-STR= _ssc-assert
+    0 _ssc-rss-base @ RSS.FEED.ITEM DUP _ssc-rss-item0 ! 0<> _ssc-assert
+    1 _ssc-rss-base @ RSS.FEED.ITEM DUP _ssc-rss-item1 ! 0<> _ssc-assert
+    _ssc-rss-item0 @ RSS.ITEM.IDENTITY-KIND @
+        RSS-IDENTITY-GUID = _ssc-assert
+    _ssc-rss-item0 @ RSS.ITEM.GUID S" rss:item:stable" STR-STR= _ssc-assert
+    _ssc-rss-item0 @ RSS.ITEM.GUID-FLAGS @ 0= _ssc-assert
+    _ssc-rss-item0 @ RSS.ITEM.TITLE S" Café 東京 status" STR-STR= _ssc-assert
+    _ssc-rss-item0 @ RSS.ITEM.AUTHOR
+        S" ada@example.test (Ada Example)" STR-STR= _ssc-assert
+    _ssc-rss-item0 @ RSS.ITEM.CATEGORY-COUNT @ 1 = _ssc-assert
+    0 _ssc-rss-item0 @ RSS.ITEM.CATEGORY RSS.CATEGORY.VALUE
+        S" qualification" STR-STR= _ssc-assert
+    _ssc-rss-item0 @ RSS.ITEM.ENCLOSURE DUP 0<> _ssc-assert
+    DUP RSS.ENCLOSURE.URL
+        S" https://example.test/media/stable.mp3" STR-STR= _ssc-assert
+    DUP RSS.ENCLOSURE.TYPE S" audio/mpeg" STR-STR= _ssc-assert
+    RSS.ENCLOSURE.LENGTH @ 1024 = _ssc-assert
+    _ssc-rss-item0 @ _ssc-view RSS-FEED-PROJECT-ITEM
+        SYN-S-OK = _ssc-assert
+    _ssc-view SYN.PROJECTION.NATIVE-ID
+        S" rss:item:stable" STR-STR= _ssc-assert ;
+
+: _ssc-check-rss-update  ( -- )
+    _ssc-rss-update @ RSS.FEED.COUNT @ 3 = _ssc-assert
+    0 _ssc-rss-update @ RSS.FEED.ITEM _ssc-rss-item2 !
+    _ssc-rss-item0 @ RSS-ITEM-SIZE
+        _ssc-rss-item2 @ RSS-ITEM-SIZE STR-STR= _ssc-assert
+    1 _ssc-rss-update @ RSS.FEED.ITEM _ssc-rss-item2 !
+    _ssc-rss-item1 @ RSS.ITEM.GUID
+        _ssc-rss-item2 @ RSS.ITEM.GUID STR-STR= _ssc-assert
+    _ssc-rss-item1 @ RSS-ITEM-SIZE
+        _ssc-rss-item2 @ RSS-ITEM-SIZE STR-STR= 0= _ssc-assert
+    2 _ssc-rss-update @ RSS.FEED.ITEM RSS.ITEM.GUID
+        S" rss:item:new" STR-STR= _ssc-assert ;
+
+: _ssc-check-rss-failures  ( -- )
+    _ssc-rss-sentinel
+    _ssc-xml-bad-doc @ _ssc-xml-bad-u @ _ssc-rss-replay @
+        SYN-S-INVALID _ssc-rss-expect
+    _ssc-rss-unchanged
+    _ssc-rss-scratch-seed
+    _ssc-rss-duplicate-field$ _ssc-rss-replay @
+        SYN-S-INVALID _ssc-rss-expect
+    _ssc-rss-unchanged _ssc-rss-scratch-wiped
+    _ssc-rss-scratch-seed
+    _ssc-rss-duplicate-id$ _ssc-rss-replay @
+        SYN-S-INVALID _ssc-rss-expect
+    _ssc-rss-unchanged _ssc-rss-scratch-wiped
+    _ssc-rss-scratch-seed
+    _ssc-rss-nine$ _ssc-rss-replay @ SYN-S-CAPACITY _ssc-rss-expect
+    _ssc-rss-unchanged _ssc-rss-scratch-wiped
+    _ssc-json SYN-XML-DOCUMENT-CAP 1+ _ssc-rss-replay @
+        SYN-S-CAPACITY _ssc-rss-expect
+    _ssc-rss-base-doc @ _ssc-rss-base-u @ _ssc-rss-replay @
+        _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE 1-
+        RSS-FEED-DECODE SYN-S-CAPACITY = _ssc-assert
+    _ssc-rss-base-doc @ _ssc-rss-base-u @ _ssc-rss-replay @
+        _ssc-rss-replay @ RSS-FEED-SCRATCH-SIZE
+        RSS-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-rss-unchanged _ssc-rss-scratch-wiped ;
+
+: _ssc-check-rss-preflight  ( -- )
+    _ssc-rss-sentinel
+    _ssc-rss-scratch-seed
+    -8 16 _ssc-rss-replay @ _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE
+        RSS-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-rss-unchanged _ssc-rss-scratch-seeded
+    _ssc-rss-scratch-seed
+    _ssc-rss-base-doc @ _ssc-rss-base-u @ -8
+        _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE
+        RSS-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-rss-unchanged _ssc-rss-scratch-seeded
+    _ssc-rss-base-doc @ _ssc-rss-base-u @ _ssc-rss-replay @
+        -8 RSS-FEED-SCRATCH-SIZE
+        RSS-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-rss-unchanged
+    _ssc-rss-scratch-seed
+    _ssc-rss-base-doc @ _ssc-rss-base-u @ _ssc-rss-replay @
+        _ssc-rss-scratch @ -1
+        RSS-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-rss-unchanged _ssc-rss-scratch-seeded ;
+
+: _ssc-check-rss-aliases  ( -- )
+    _ssc-rss-sentinel
+    _ssc-rss-base-doc @ _ssc-rss-base-u @ _ssc-rss-replay @
+        _ssc-rss-replay @ 8 + RSS-FEED-SCRATCH-SIZE
+        RSS-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-rss-unchanged
+    _ssc-rss-base-doc @ _ssc-rss-scratch @ _ssc-rss-base-u @ CMOVE
+    _ssc-rss-scratch @ _ssc-rss-base-u @ _ssc-rss-replay @
+        _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE
+        RSS-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-rss-unchanged
+    _ssc-rss-scratch @ _ssc-rss-base-u @
+        _ssc-rss-base-doc @ _ssc-rss-base-u @ STR-STR= _ssc-assert
+    _ssc-rss-base-doc @ _ssc-rss-scratch @ 8 + _ssc-rss-base-u @ CMOVE
+    _ssc-rss-scratch @ 8 + _ssc-rss-base-u @ _ssc-rss-replay @
+        _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE
+        RSS-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-rss-unchanged
+    _ssc-rss-scratch @ 8 + _ssc-rss-base-u @
+        _ssc-rss-base-doc @ _ssc-rss-base-u @ STR-STR= _ssc-assert
+    _ssc-rss-scratch @ RSS-FEED-SCRATCH-SIZE 0 FILL ;
+
+: _ssc-check-atom-base  ( -- )
+    _ssc-atom-base @ ATOM.FEED.COUNT @ 2 = _ssc-assert
+    _ssc-atom-base @ ATOM.FEED.ID
+        S" urn:example:atom:feed" STR-STR= _ssc-assert
+    _ssc-atom-base @ ATOM.FEED.TITLE
+        S" Example Desk Atom — 東京" STR-STR= _ssc-assert
+    _ssc-atom-base @ ATOM.FEED.LANG S" en" STR-STR= _ssc-assert
+    _ssc-atom-base @ ATOM.FEED.PERSON-COUNT @ 1 = _ssc-assert
+    0 _ssc-atom-base @ ATOM.FEED.PERSON ATOM.PERSON.NAME
+        S" Ada Example" STR-STR= _ssc-assert
+    _ssc-atom-base @ ATOM.FEED.LINK-COUNT @ 3 = _ssc-assert
+    2 _ssc-atom-base @ ATOM.FEED.LINK DUP ATOM.LINK.REL
+        S" next" STR-STR= _ssc-assert
+    ATOM.LINK.HREF S" https://example.test/atom?page=2" STR-STR= _ssc-assert
+    0 _ssc-atom-base @ ATOM.FEED.ENTRY DUP _ssc-atom-entry0 ! 0<> _ssc-assert
+    1 _ssc-atom-base @ ATOM.FEED.ENTRY DUP _ssc-atom-entry1 ! 0<> _ssc-assert
+    _ssc-atom-entry0 @ ATOM.ENTRY.ID
+        S" urn:example:atom:item:stable" STR-STR= _ssc-assert
+    _ssc-atom-entry0 @ ATOM.ENTRY.CATEGORY-COUNT @ 1 = _ssc-assert
+    0 _ssc-atom-entry0 @ ATOM.ENTRY.CATEGORY ATOM.CATEGORY.TERM
+        S" qualification" STR-STR= _ssc-assert
+    _ssc-atom-entry0 @ ATOM.ENTRY.LINK-COUNT @ 2 = _ssc-assert
+    1 _ssc-atom-entry0 @ ATOM.ENTRY.LINK DUP ATOM.LINK.REL
+        S" enclosure" STR-STR= _ssc-assert
+    DUP ATOM.LINK.TYPE S" audio/ogg" STR-STR= _ssc-assert
+    ATOM.LINK.LENGTH S" 2048" STR-STR= _ssc-assert
+    _ssc-atom-entry1 @ ATOM.ENTRY.TITLE
+        S" Change record, version <em>one</em>" STR-STR= _ssc-assert
+    _ssc-atom-entry1 @ ATOM.ENTRY.CONTENT
+        S" <p>Service state: nominal.</p>" STR-STR= _ssc-assert
+    _ssc-atom-entry0 @ _ssc-view ATOM-FEED-PROJECT-ITEM
+        SYN-S-OK = _ssc-assert
+    _ssc-view SYN.PROJECTION.NATIVE-ID
+        S" urn:example:atom:item:stable" STR-STR= _ssc-assert ;
+
+: _ssc-check-atom-update  ( -- )
+    _ssc-atom-update @ ATOM.FEED.COUNT @ 3 = _ssc-assert
+    0 _ssc-atom-update @ ATOM.FEED.ENTRY _ssc-atom-entry2 !
+    _ssc-atom-entry0 @ ATOM-ENTRY-SIZE
+        _ssc-atom-entry2 @ ATOM-ENTRY-SIZE STR-STR= _ssc-assert
+    1 _ssc-atom-update @ ATOM.FEED.ENTRY _ssc-atom-entry2 !
+    _ssc-atom-entry1 @ ATOM.ENTRY.ID
+        _ssc-atom-entry2 @ ATOM.ENTRY.ID STR-STR= _ssc-assert
+    _ssc-atom-entry1 @ ATOM-ENTRY-SIZE
+        _ssc-atom-entry2 @ ATOM-ENTRY-SIZE STR-STR= 0= _ssc-assert
+    2 _ssc-atom-update @ ATOM.FEED.ENTRY ATOM.ENTRY.ID
+        S" urn:example:atom:item:new" STR-STR= _ssc-assert ;
+
+: _ssc-check-rss-namespace-schema  ( -- )
+    _ssc-rss-two-channels$ _ssc-rss-replay @
+        SYN-S-INVALID _ssc-rss-expect
+    _ssc-rss-undeclared-atom$ _ssc-rss-replay @
+        SYN-S-INVALID _ssc-rss-expect
+    _ssc-rss-wrong-atom$ _ssc-rss-replay @
+        SYN-S-UNSUPPORTED _ssc-rss-expect
+    _ssc-rss-bogus-default$ _ssc-rss-replay @
+        SYN-S-UNSUPPORTED _ssc-rss-expect
+    _ssc-rss-link-identity$ _ssc-rss-replay @ SYN-S-OK _ssc-rss-expect
+    0 _ssc-rss-replay @ RSS.FEED.ITEM DUP 0<> _ssc-assert
+    DUP RSS.ITEM.IDENTITY-KIND @ RSS-IDENTITY-LINK = _ssc-assert
+    RSS.ITEM.LINK S" https://example.test/link-only" STR-STR= _ssc-assert ;
+
+: _ssc-check-atom-namespace-schema  ( -- )
+    _ssc-atom-reset-title$ _ssc-atom-replay @
+        SYN-S-UNSUPPORTED _ssc-atom-expect
+    _ssc-atom-media-title$ _ssc-atom-replay @
+        SYN-S-UNSUPPORTED _ssc-atom-expect
+    _ssc-atom-inline-src$ _ssc-atom-replay @
+        SYN-S-INVALID _ssc-atom-expect
+    _ssc-atom-external-content$ _ssc-atom-replay @
+        SYN-S-OK _ssc-atom-expect
+    0 _ssc-atom-replay @ ATOM.FEED.ENTRY DUP 0<> _ssc-assert
+    DUP ATOM.ENTRY.CONTENT-SRC
+        S" https://example.test/image" STR-STR= _ssc-assert
+    DUP ATOM.ENTRY.CONTENT-TYPE S" image/png" STR-STR= _ssc-assert
+    DUP ATOM.ENTRY.CONTENT NIP 0= _ssc-assert
+    ATOM.ENTRY.CONTENT-KIND @ ATOM-TEXT-MEDIA = _ssc-assert ;
+
+: _ssc-check-atom-failures  ( -- )
+    _ssc-atom-sentinel
+    _ssc-xml-bad-doc @ _ssc-xml-bad-u @ _ssc-atom-replay @
+        SYN-S-INVALID _ssc-atom-expect
+    _ssc-atom-unchanged
+    _ssc-atom-scratch-seed
+    _ssc-atom-duplicate-field$ _ssc-atom-replay @
+        SYN-S-INVALID _ssc-atom-expect
+    _ssc-atom-unchanged _ssc-atom-scratch-wiped
+    _ssc-atom-scratch-seed
+    _ssc-atom-duplicate-id$ _ssc-atom-replay @
+        SYN-S-INVALID _ssc-atom-expect
+    _ssc-atom-unchanged _ssc-atom-scratch-wiped
+    _ssc-atom-scratch-seed
+    _ssc-atom-nine$ _ssc-atom-replay @ SYN-S-CAPACITY _ssc-atom-expect
+    _ssc-atom-unchanged _ssc-atom-scratch-wiped
+    _ssc-json SYN-XML-DOCUMENT-CAP 1+ _ssc-atom-replay @
+        SYN-S-CAPACITY _ssc-atom-expect
+    _ssc-atom-base-doc @ _ssc-atom-base-u @ _ssc-atom-replay @
+        _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE 1-
+        ATOM-FEED-DECODE SYN-S-CAPACITY = _ssc-assert
+    _ssc-atom-base-doc @ _ssc-atom-base-u @ _ssc-atom-replay @
+        _ssc-atom-replay @ ATOM-FEED-SCRATCH-SIZE
+        ATOM-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-atom-unchanged _ssc-atom-scratch-wiped ;
+
+: _ssc-check-atom-preflight  ( -- )
+    _ssc-atom-sentinel
+    _ssc-atom-scratch-seed
+    -8 16 _ssc-atom-replay @ _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE
+        ATOM-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-atom-unchanged _ssc-atom-scratch-seeded
+    _ssc-atom-scratch-seed
+    _ssc-atom-base-doc @ _ssc-atom-base-u @ -8
+        _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE
+        ATOM-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-atom-unchanged _ssc-atom-scratch-seeded
+    _ssc-atom-base-doc @ _ssc-atom-base-u @ _ssc-atom-replay @
+        -8 ATOM-FEED-SCRATCH-SIZE
+        ATOM-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-atom-unchanged
+    _ssc-atom-scratch-seed
+    _ssc-atom-base-doc @ _ssc-atom-base-u @ _ssc-atom-replay @
+        _ssc-atom-scratch @ -1
+        ATOM-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-atom-unchanged _ssc-atom-scratch-seeded ;
+
+: _ssc-check-atom-aliases  ( -- )
+    _ssc-atom-sentinel
+    _ssc-atom-base-doc @ _ssc-atom-base-u @ _ssc-atom-replay @
+        _ssc-atom-replay @ 8 + ATOM-FEED-SCRATCH-SIZE
+        ATOM-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-atom-unchanged
+    _ssc-atom-base-doc @ _ssc-atom-scratch @ _ssc-atom-base-u @ CMOVE
+    _ssc-atom-scratch @ _ssc-atom-base-u @ _ssc-atom-replay @
+        _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE
+        ATOM-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-atom-unchanged
+    _ssc-atom-scratch @ _ssc-atom-base-u @
+        _ssc-atom-base-doc @ _ssc-atom-base-u @ STR-STR= _ssc-assert
+    _ssc-atom-base-doc @ _ssc-atom-scratch @ 8 + _ssc-atom-base-u @ CMOVE
+    _ssc-atom-scratch @ 8 + _ssc-atom-base-u @ _ssc-atom-replay @
+        _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE
+        ATOM-FEED-DECODE SYN-S-INVALID = _ssc-assert
+    _ssc-atom-unchanged
+    _ssc-atom-scratch @ 8 + _ssc-atom-base-u @
+        _ssc-atom-base-doc @ _ssc-atom-base-u @ STR-STR= _ssc-assert
+    _ssc-atom-scratch @ ATOM-FEED-SCRATCH-SIZE 0 FILL ;
 
 : _ssc-run  ( -- )
     0 _ssc-fails ! 0 _ssc-checks !
-    SYN-FEED-SIZE 454816 = _ssc-assert
+    SYN-FEED-SIZE 101360 = _ssc-assert
     SYN-MAX-ENTRIES 8 = _ssc-assert
 
     2097152 A-XMEM ARENA-NEW DUP 0= _ssc-assert
@@ -13255,6 +13858,15 @@ CREATE _ssc-bad-byte 1 ALLOT
     _ssc-model-new _ssc-base !
     _ssc-model-new _ssc-replay !
     _ssc-model-new _ssc-update !
+    _ssc-model-new _ssc-scratch !
+    RSS-FEED-SIZE _ssc-sized-new _ssc-rss-base !
+    RSS-FEED-SIZE _ssc-sized-new _ssc-rss-update !
+    RSS-FEED-SIZE _ssc-sized-new _ssc-rss-replay !
+    RSS-FEED-SCRATCH-SIZE _ssc-sized-new _ssc-rss-scratch !
+    ATOM-FEED-SIZE _ssc-sized-new _ssc-atom-base !
+    ATOM-FEED-SIZE _ssc-sized-new _ssc-atom-update !
+    ATOM-FEED-SIZE _ssc-sized-new _ssc-atom-replay !
+    ATOM-FEED-SCRATCH-SIZE _ssc-sized-new _ssc-atom-scratch !
     ." [ssc] model arena ready" CR
 
     S" jsonfeed-base.json" _ssc-load
@@ -13264,7 +13876,23 @@ CREATE _ssc-bad-byte 1 ALLOT
     S" malformed.json" _ssc-load
     DUP SYN-S-OK = _ssc-assert DROP
     _ssc-malformed-u ! _ssc-malformed-doc !
+    S" rss-base.xml" _ssc-load
+    DUP SYN-S-OK = _ssc-assert DROP _ssc-rss-base-u ! _ssc-rss-base-doc !
+    S" rss-update.xml" _ssc-load
+    DUP SYN-S-OK = _ssc-assert DROP _ssc-rss-update-u ! _ssc-rss-update-doc !
+    S" atom-base.xml" _ssc-load
+    DUP SYN-S-OK = _ssc-assert DROP _ssc-atom-base-u ! _ssc-atom-base-doc !
+    S" atom-update.xml" _ssc-load
+    DUP SYN-S-OK = _ssc-assert DROP _ssc-atom-update-u ! _ssc-atom-update-doc !
+    S" malformed.xml" _ssc-load
+    DUP SYN-S-OK = _ssc-assert DROP _ssc-xml-bad-u ! _ssc-xml-bad-doc !
     DEPTH _ssc-depth !
+
+    _ssc-check-span-contracts
+    _ssc-check-child-scanners
+    _ssc-check-xml-chars
+    _ssc-check-xml-namespaces
+    _ssc-stack
 
     _ssc-base-doc @ _ssc-base-u @ _ssc-base @
         SYN-S-OK _ssc-decode-expect
@@ -13273,6 +13901,7 @@ CREATE _ssc-bad-byte 1 ALLOT
     _ssc-base @ _ssc-replay @ _ssc-model= _ssc-assert
     _ssc-check-base
     _ssc-check-owned
+    _ssc-check-json-projection
     _ssc-stack
 
     _ssc-update-doc @ _ssc-update-u @ _ssc-update @
@@ -13301,39 +13930,69 @@ CREATE _ssc-bad-byte 1 ALLOT
     7 _ssc-update @ SYN.FEED.ENTRY 0<> _ssc-assert
     8 _ssc-update @ SYN.FEED.ENTRY 0= _ssc-assert
     _ssc-check-failures
+    _ssc-check-json-preflight
+    _ssc-check-json-aliases
+    _ssc-stack
+
+    _ssc-rss-base-doc @ _ssc-rss-base-u @ _ssc-rss-base @
+        SYN-S-OK _ssc-rss-expect
+    _ssc-rss-update-doc @ _ssc-rss-update-u @ _ssc-rss-update @
+        SYN-S-OK _ssc-rss-expect
+    _ssc-check-rss-base _ssc-check-rss-update
+    _ssc-check-rss-namespace-schema
+    _ssc-check-rss-failures _ssc-check-rss-preflight
+    _ssc-check-rss-aliases
+    _ssc-stack
+
+    _ssc-atom-base-doc @ _ssc-atom-base-u @ _ssc-atom-base @
+        SYN-S-OK _ssc-atom-expect
+    _ssc-atom-update-doc @ _ssc-atom-update-u @ _ssc-atom-update @
+        SYN-S-OK _ssc-atom-expect
+    _ssc-check-atom-base _ssc-check-atom-update
+    _ssc-check-atom-namespace-schema
+    _ssc-check-atom-failures _ssc-check-atom-preflight
+    _ssc-check-atom-aliases
     _ssc-stack
 
     _ssc-update-doc @ FREE
     _ssc-malformed-doc @ FREE
+    _ssc-rss-base-doc @ FREE _ssc-rss-update-doc @ FREE
+    _ssc-atom-base-doc @ FREE _ssc-atom-update-doc @ FREE
+    _ssc-xml-bad-doc @ FREE
     _ssc-arena @ ARENA-DESTROY
     _ssc-stack
     _ssc-fails @ 0= IF
-        ." STREAMS SYNDICATION CONTRACTS PASS " _ssc-checks @ .
+        ." SYNDICATION CONTRACTS PASS " _ssc-checks @ .
     ELSE
-        ." STREAMS SYNDICATION CONTRACTS FAIL " _ssc-fails @ . ." / "
+        ." SYNDICATION CONTRACTS FAIL " _ssc-fails @ . ." / "
             _ssc-checks @ .
     THEN CR ;
 
 _ssc-run
 """,
-    ready_markers=("STREAMS SYNDICATION CONTRACTS PASS",),
-    stable_markers=("STREAMS SYNDICATION CONTRACTS PASS",),
-    failure_markers=("STREAMS SYNDICATION CONTRACTS FAIL", "SSC assertion"),
+    ready_markers=("SYNDICATION CONTRACTS PASS",),
+    stable_markers=("SYNDICATION CONTRACTS PASS",),
+    failure_markers=("SYNDICATION CONTRACTS FAIL", "SSC assertion"),
     linked=False,
     include_large_sample=False,
     initial_files=(
         (
             "jsonfeed-base.json",
-            STREAMS_JSON_FEED_BASE_FIXTURE,
+            SYNDICATION_JSON_FEED_BASE_FIXTURE,
         ),
         (
             "jsonfeed-update.json",
-            STREAMS_JSON_FEED_UPDATE_FIXTURE,
+            SYNDICATION_JSON_FEED_UPDATE_FIXTURE,
         ),
         (
             "malformed.json",
-            STREAMS_JSON_FEED_MALFORMED_FIXTURE,
+            SYNDICATION_JSON_FEED_MALFORMED_FIXTURE,
         ),
+        ("rss-base.xml", SYNDICATION_RSS_BASE_FIXTURE),
+        ("rss-update.xml", SYNDICATION_RSS_UPDATE_FIXTURE),
+        ("atom-base.xml", SYNDICATION_ATOM_BASE_FIXTURE),
+        ("atom-update.xml", SYNDICATION_ATOM_UPDATE_FIXTURE),
+        ("malformed.xml", SYNDICATION_XML_MALFORMED_FIXTURE),
     ),
 )
 
@@ -14022,7 +14681,7 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
             ."  tls=" DUP PAF.TRANSPORT KDOSTLS.STATE @ .
             ." /" DUP PAF.TRANSPORT KDOSTLS.LAST-ERROR @ .
             ." /" DUP PAF.TRANSPORT KDOSTLS.NATIVE-ERROR @ .
-            ."  ctx=" PAF.TRANSPORT KDOSTLS.CONTEXT @ .
+            ."  phase=" PAF.TRANSPORT KDOSTLS.PHASE @ .
         THEN
     ELSE
         ."  instance=none"
@@ -16910,6 +17569,7 @@ DESK-QUEUE-BUILTIN
     ),
     linked=PROFILES["desktop"].linked,
     include_large_sample=False,
+    total_sectors=PROFILES["desktop"].total_sectors,
 )
 
 PROFILES["desktop-streams"] = Profile(
@@ -16988,6 +17648,7 @@ PROFILES["desktop-local-applet"] = Profile(
             (AKASHIC_ROOT / "examples/trusted-local/hello.f").read_bytes(),
         ),
     ),
+    total_sectors=PROFILES["desktop"].total_sectors,
 )
 PROFILES["desktop-recovery"] = Profile(
     roots=PROFILES["desktop"].roots,
@@ -17003,6 +17664,7 @@ PROFILES["desktop-recovery"] = Profile(
         ("practice-head-a.bin", b"corrupt-a"),
         ("practice-head-b.bin", b"corrupt-b"),
     ),
+    total_sectors=PROFILES["desktop"].total_sectors,
 )
 PROFILES["desktop-fallback"] = Profile(
     roots=PROFILES["desktop"].roots,
@@ -17018,6 +17680,7 @@ PROFILES["desktop-fallback"] = Profile(
         ("practice-head-a.bin", _practice_head_snapshot(1)),
         ("practice-head-b.bin", b"corrupt-newest"),
     ),
+    total_sectors=PROFILES["desktop"].total_sectors,
 )
 PROFILES["desktop-codex"] = Profile(
     roots=tuple(
@@ -17041,6 +17704,7 @@ PROFILES["desktop-codex"] = Profile(
     ready_markers=PROFILES["desktop"].ready_markers,
     stable_markers=PROFILES["desktop"].stable_markers,
     linked=True,
+    total_sectors=PROFILES["desktop"].total_sectors,
 )
 PROFILES["desktop-codex-live"] = Profile(
     roots=PROFILES["desktop-codex"].roots,
@@ -17058,6 +17722,7 @@ PROFILES["desktop-codex-live"] = Profile(
     stable_markers=PROFILES["desktop-codex"].stable_markers,
     linked=True,
     requires_tap=True,
+    total_sectors=PROFILES["desktop-codex"].total_sectors,
 )
 PROFILES["codex-live-tls"] = Profile(
     roots=(
@@ -19840,7 +20505,7 @@ def build_image(
     target = (output or default_image_path(profile_name)).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    fs = MP64FS(total_sectors=4096)
+    fs = MP64FS(total_sectors=profile.total_sectors)
     fs.format()
     fs.inject_file(
         "kdos.f",
@@ -19908,13 +20573,19 @@ def build_image(
         target.chmod(0o600)
 
     info = fs.info()
+    if profile_name == "desktop" and info["free_sectors"] * 512 < 1024 * 1024:
+        raise RuntimeError(
+            "Canonical desktop image must retain at least 1 MiB of mutable "
+            f"MP64FS space; only {info['free_sectors'] * 512:,} bytes remain"
+        )
     print(
         f"Built {profile_name} image: {target}\n"
         f"  {len(modules)} modules"
         f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
         f"{len(resources)} resources, "
         f"{len(directories)} directories\n"
-        f"  {info['files']} MP64FS entries, {target.stat().st_size:,} bytes"
+        f"  {info['files']} MP64FS entries, {target.stat().st_size:,} bytes, "
+        f"{info['free_sectors']} free sectors"
     )
     return target
 
@@ -23701,6 +24372,311 @@ _suc-run
     stable_markers=("STREAMS SOURCE UI CONTRACTS PASS",),
     failure_markers=("STREAMS SOURCE UI CONTRACTS FAIL", "SUC ASSERT"),
     linked=True,
+)
+
+
+PROFILES["http-target-contracts"] = Profile(
+    roots=("net/http-target.f", "net/public-address.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - bounded HTTPS target-admission contracts
+ENTER-USERLAND
+." [akashic] loading HTTP target contracts" CR
+REQUIRE net/http-target.f
+REQUIRE net/public-address.f
+
+VARIABLE _htc-fails
+VARIABLE _htc-checks
+VARIABLE _htc-depth
+VARIABLE _htc-u
+VARIABLE _htc-host-u
+
+CREATE _htc-a HTARGET-SIZE ALLOT
+CREATE _htc-b HTARGET-SIZE ALLOT
+CREATE _htc-c HTARGET-SIZE ALLOT
+CREATE _htc-d HTARGET-SIZE ALLOT
+CREATE _htc-e HTARGET-SIZE ALLOT
+CREATE _htc-snapshot HTARGET-SIZE ALLOT
+CREATE _htc-long 1025 ALLOT
+CREATE _htc-host 1100 ALLOT
+CREATE _htc-bad 128 ALLOT
+CREATE _htc-ip 4 ALLOT
+
+: _htc-assert  ( flag -- )
+    1 _htc-checks +!
+    0= IF 1 _htc-fails +! ." HTC ASSERT " _htc-checks @ . CR THEN ;
+
+: _htc-stack  ( -- ) DEPTH _htc-depth @ = _htc-assert ;
+
+: _htc-reject  ( uri-a uri-u expected -- )
+    >R _htc-a HTARGET-PARSE R> = _htc-assert
+    _htc-a HTARGET-VALID? 0= _htc-assert ;
+
+: _htc-long-uri  ( total -- a u )
+    DUP _htc-u !
+    _htc-long 1025 [CHAR] q FILL
+    S" https://a.test:65535?" _htc-long SWAP CMOVE
+    DROP _htc-long _htc-u @ ;
+
+: _htc-host-uri  ( host-u -- a u )
+    DUP _htc-host-u !
+    _htc-host 1100 0 FILL
+    S" https://" _htc-host SWAP CMOVE
+    _htc-host 8 + _htc-host-u @ [CHAR] a FILL
+    [CHAR] . _htc-host 39 + C!
+    [CHAR] / _htc-host 8 + _htc-host-u @ + C!
+    DROP _htc-host _htc-host-u @ 9 + ;
+
+: _htc-ip!  ( a b c d -- )
+    _htc-ip 3 + C! _htc-ip 2 + C! _htc-ip 1+ C! _htc-ip C! ;
+
+: _htc-public?  ( a b c d -- flag ) _htc-ip! _htc-ip PUBLIC-IPV4? ;
+
+: _htc-canonical-contracts  ( -- )
+    S" HTTPS://Feeds.Example.TEST:443?x=%3a" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-a HTARGET-VALID? _htc-assert
+    _htc-a HTARGET-HOST$ S" feeds.example.test" STR-STR= _htc-assert
+    _htc-a HTARGET-PORT@ 443 = _htc-assert
+    _htc-a HTARGET-REQUEST-TARGET$
+        S" /?x=%3A" STR-STR= _htc-assert
+    _htc-a HTARGET-URI$
+        S" https://feeds.example.test/?x=%3A" STR-STR= _htc-assert
+    _htc-a HTARGET-REDIRECT-COUNT@ 0= _htc-assert
+
+    S" https://Feeds.Example.TEST:8443/feed.xml?x=1" _htc-b
+        HTARGET-PARSE HTARGET-S-OK = _htc-assert
+    _htc-b HTARGET-HOST$ S" feeds.example.test" STR-STR= _htc-assert
+    _htc-b HTARGET-PORT@ 8443 = _htc-assert
+    _htc-b HTARGET-REQUEST-TARGET$
+        S" /feed.xml?x=1" STR-STR= _htc-assert
+    _htc-b HTARGET-URI$
+        S" https://feeds.example.test:8443/feed.xml?x=1"
+        STR-STR= _htc-assert
+
+    S" https://feeds.example.test/" _htc-c HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    S" https://feeds.example.test:443/" _htc-d HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-c _htc-d HTARGET-SAME-ORIGIN? _htc-assert
+    _htc-c _htc-d HTARGET-EQUAL? _htc-assert
+
+    S" https://123.example.test/" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    S" https://example.test:1/" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-a HTARGET-PORT@ 1 = _htc-assert
+    S" https://example.test:65535/" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-a HTARGET-PORT@ 65535 = _htc-assert
+    64 _htc-host-uri _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-a HTARGET-HOST$ NIP 64 = _htc-assert
+    65 _htc-host-uri HTARGET-S-HOST _htc-reject ;
+
+: _htc-authority-contracts  ( -- )
+    S" http://example.test/" HTARGET-S-SCHEME _htc-reject
+    S" ftp://example.test/" HTARGET-S-SCHEME _htc-reject
+    S" https://" HTARGET-S-AUTHORITY _htc-reject
+    S" https:///x" HTARGET-S-AUTHORITY _htc-reject
+    S" https://user@example.test/" HTARGET-S-AUTHORITY _htc-reject
+    S" https://example%2etest/" HTARGET-S-AUTHORITY _htc-reject
+    S" https://[2001:db8::1]/" HTARGET-S-AUTHORITY _htc-reject
+    S" https://192.0.2.1/" HTARGET-S-HOST _htc-reject
+    S" https://127.1/" HTARGET-S-HOST _htc-reject
+    S" https://2130706433/" HTARGET-S-HOST _htc-reject
+    S" https://1.2.3.4.5/" HTARGET-S-HOST _htc-reject
+    S" https://1.2.3.999/" HTARGET-S-HOST _htc-reject
+    S" https://.example.test/" HTARGET-S-HOST _htc-reject
+    S" https://example..test/" HTARGET-S-HOST _htc-reject
+    S" https://example.test./" HTARGET-S-HOST _htc-reject
+    S" https://-example.test/" HTARGET-S-HOST _htc-reject
+    S" https://example-.test/" HTARGET-S-HOST _htc-reject
+    S" https://example_test/" HTARGET-S-HOST _htc-reject
+    S" https://example.test:/" HTARGET-S-PORT _htc-reject
+    S" https://example.test:0/" HTARGET-S-PORT _htc-reject
+    S" https://example.test:0443/" HTARGET-S-PORT _htc-reject
+    S" https://example.test:65536/" HTARGET-S-PORT _htc-reject
+    S" https://example.test:999999/" HTARGET-S-PORT _htc-reject
+    S" https://example.test:+443/" HTARGET-S-PORT _htc-reject
+    S" https://example.test:443:443/" HTARGET-S-AUTHORITY _htc-reject ;
+
+: _htc-path-contracts  ( -- )
+    S" https://example.test/.well-known/feed" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    S" https://example.test//feed" HTARGET-S-PATH _htc-reject
+    S" https://example.test/./feed" HTARGET-S-PATH _htc-reject
+    S" https://example.test/a/../feed" HTARGET-S-PATH _htc-reject
+    S" https://example.test/a/." HTARGET-S-PATH _htc-reject
+    S" https://example.test/%" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%2" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%GG" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%2f" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%5c" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%2e" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%00" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%20" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%7f" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%25" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%252f" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%41" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%80" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%c0%af" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%e0%80%ae" HTARGET-S-PATH _htc-reject
+    S" https://example.test/%f4%90%80%80" HTARGET-S-PATH _htc-reject
+    S" https://example.test/x#fragment" HTARGET-S-INVALID _htc-reject
+    S" https://example.test/a\b" HTARGET-S-INVALID _htc-reject
+
+    S" https://example.test/x" DUP _htc-u ! _htc-bad SWAP CMOVE
+    31 _htc-bad _htc-u @ 1- + C!
+    _htc-bad _htc-u @ HTARGET-S-INVALID _htc-reject
+    S" https://example.test/x" DUP _htc-u ! _htc-bad SWAP CMOVE
+    128 _htc-bad _htc-u @ 1- + C!
+    _htc-bad _htc-u @ HTARGET-S-INVALID _htc-reject ;
+
+: _htc-capacity-contracts  ( -- )
+    1023 _htc-long-uri _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-a HTARGET-URI$ NIP HTARGET-URI-CAPACITY = _htc-assert
+    1024 _htc-long-uri HTARGET-S-CAPACITY _htc-reject
+    1025 _htc-long-uri HTARGET-S-CAPACITY _htc-reject ;
+
+: _htc-alias-contracts  ( -- )
+    \ Wrapping caller spans and target records reject before dereference.
+    -8 16 _HTARGET-INPUT-SHAPE? 0= _htc-assert
+    S" https://example.test/base" -8 HTARGET-PARSE
+        HTARGET-S-INVALID = _htc-assert
+    -8 HTARGET-INIT
+    -8 HTARGET-VALID? 0= _htc-assert
+
+    S" https://example.test/base" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-a _htc-snapshot HTARGET-SIZE CMOVE
+    _htc-a HTARGET-URI$ _htc-a HTARGET-PARSE
+        HTARGET-S-INVALID = _htc-assert
+    _htc-a HTARGET-SIZE _htc-snapshot HTARGET-SIZE
+        STR-STR= _htc-assert
+
+    S" /next" _htc-a _htc-a HTARGET-REDIRECT
+        HTARGET-S-INVALID = _htc-assert
+    _htc-a HTARGET-SIZE _htc-snapshot HTARGET-SIZE
+        STR-STR= _htc-assert
+    S" /next" _htc-a _htc-a 8 + HTARGET-REDIRECT
+        HTARGET-S-INVALID = _htc-assert
+    _htc-a HTARGET-SIZE _htc-snapshot HTARGET-SIZE
+        STR-STR= _htc-assert
+    S" /next" _htc-a -8 HTARGET-REDIRECT
+        HTARGET-S-INVALID = _htc-assert
+    S" /next" -8 _htc-b HTARGET-REDIRECT
+        HTARGET-S-INVALID = _htc-assert
+
+    S" https://example.test/other" _htc-b HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-b _htc-snapshot HTARGET-SIZE CMOVE
+    _htc-b HTARGET-URI$ _htc-a _htc-b HTARGET-REDIRECT
+        HTARGET-S-INVALID = _htc-assert
+    _htc-b HTARGET-SIZE _htc-snapshot HTARGET-SIZE
+        STR-STR= _htc-assert ;
+
+: _htc-record-validity-contracts  ( -- )
+    S" https://example.test/base" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    -1 _htc-a HTARGET.REDIRECT-COUNT !
+    _htc-a HTARGET-VALID? 0= _htc-assert
+    S" https://example.test/base" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    HTARGET-REDIRECT-MAX 1+ _htc-a HTARGET.REDIRECT-COUNT !
+    _htc-a HTARGET-VALID? 0= _htc-assert ;
+
+: _htc-redirect-contracts  ( -- )
+    S" https://feeds.example.test:8443/a" _htc-a HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    S" /b?x=1" _htc-a _htc-b HTARGET-REDIRECT
+        HTARGET-S-OK = _htc-assert
+    _htc-b HTARGET-URI$
+        S" https://feeds.example.test:8443/b?x=1" STR-STR= _htc-assert
+    _htc-b HTARGET-REDIRECT-COUNT@ 1 = _htc-assert
+
+    S" HTTPS://FEEDS.EXAMPLE.TEST:8443/c" _htc-b _htc-c
+        HTARGET-REDIRECT HTARGET-S-OK = _htc-assert
+    _htc-c HTARGET-REDIRECT-COUNT@ 2 = _htc-assert
+    S" https://other.example.test/c" _htc-c _htc-d HTARGET-REDIRECT
+        HTARGET-S-AUTHORITY-REQUIRED = _htc-assert
+    _htc-d HTARGET-VALID? 0= _htc-assert
+    S" https://feeds.example.test:9443/c" _htc-c _htc-d
+        HTARGET-REDIRECT HTARGET-S-AUTHORITY-REQUIRED = _htc-assert
+    S" //other.example.test/c" _htc-c _htc-d HTARGET-REDIRECT
+        HTARGET-S-AUTHORITY-REQUIRED = _htc-assert
+    S" next" _htc-c _htc-d HTARGET-REDIRECT
+        HTARGET-S-SCHEME = _htc-assert
+
+    S" /c" _htc-c _htc-d HTARGET-REDIRECT
+        HTARGET-S-LOOP = _htc-assert
+    S" /d" _htc-c _htc-d HTARGET-REDIRECT
+        HTARGET-S-OK = _htc-assert
+    _htc-d HTARGET-REDIRECT-COUNT@ 3 = _htc-assert
+    S" /e" _htc-d _htc-e HTARGET-REDIRECT
+        HTARGET-S-REDIRECT-LIMIT = _htc-assert
+
+    S" https://feeds.example.test:8443/a" _htc-e HTARGET-PARSE
+        HTARGET-S-OK = _htc-assert
+    _htc-a _htc-e HTARGET-EQUAL? _htc-assert ;
+
+: _htc-public-address-contracts  ( -- )
+    0 PUBLIC-IPV4? 0= _htc-assert
+    8 8 8 8 _htc-public? _htc-assert
+    1 1 1 1 _htc-public? _htc-assert
+    93 184 216 34 _htc-public? _htc-assert
+    0 1 2 3 _htc-public? 0= _htc-assert
+    10 0 0 1 _htc-public? 0= _htc-assert
+    100 64 0 1 _htc-public? 0= _htc-assert
+    100 127 255 254 _htc-public? 0= _htc-assert
+    100 128 0 1 _htc-public? _htc-assert
+    127 0 0 1 _htc-public? 0= _htc-assert
+    169 254 1 1 _htc-public? 0= _htc-assert
+    169 253 1 1 _htc-public? _htc-assert
+    172 15 255 255 _htc-public? _htc-assert
+    172 16 0 1 _htc-public? 0= _htc-assert
+    172 31 255 254 _htc-public? 0= _htc-assert
+    172 32 0 1 _htc-public? _htc-assert
+    192 0 0 9 _htc-public? 0= _htc-assert
+    192 0 2 1 _htc-public? 0= _htc-assert
+    192 88 99 1 _htc-public? 0= _htc-assert
+    192 168 1 1 _htc-public? 0= _htc-assert
+    192 175 48 1 _htc-public? 0= _htc-assert
+    198 18 0 1 _htc-public? 0= _htc-assert
+    198 19 255 254 _htc-public? 0= _htc-assert
+    198 51 100 1 _htc-public? 0= _htc-assert
+    203 0 113 1 _htc-public? 0= _htc-assert
+    224 0 0 1 _htc-public? 0= _htc-assert
+    239 255 255 255 _htc-public? 0= _htc-assert
+    240 0 0 1 _htc-public? 0= _htc-assert
+    255 255 255 255 _htc-public? 0= _htc-assert ;
+
+: _htc-run  ( -- )
+    0 _htc-fails ! 0 _htc-checks ! DEPTH _htc-depth !
+    _htc-canonical-contracts
+    _htc-authority-contracts
+    _htc-path-contracts
+    _htc-capacity-contracts
+    _htc-alias-contracts
+    _htc-record-validity-contracts
+    _htc-redirect-contracts
+    _htc-public-address-contracts
+    _htc-stack
+    _htc-fails @ 0= IF
+        ." HTTP TARGET CONTRACTS PASS " _htc-checks @ .
+    ELSE
+        ." HTTP TARGET CONTRACTS FAIL " _htc-fails @ . ." / "
+            _htc-checks @ .
+    THEN CR ;
+
+_htc-run
+""",
+    ready_markers=("HTTP TARGET CONTRACTS PASS",),
+    stable_markers=("HTTP TARGET CONTRACTS PASS",),
+    failure_markers=("HTTP TARGET CONTRACTS FAIL", "HTC ASSERT"),
+    linked=False,
+    include_large_sample=False,
 )
 
 

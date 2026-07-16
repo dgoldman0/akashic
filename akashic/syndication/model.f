@@ -1,13 +1,19 @@
 \ =====================================================================
-\ syndication-model.f - bounded owned web-syndication result model
+\ model.f - bounded format-specific web-syndication result models
 \ =====================================================================
-\ This model is deliberately specific to the RSS/Atom/JSON Feed family.
-\ It preserves publication, entry, author, category, and enclosure nouns;
-\ it is not a provider-neutral observation, message, or social-post model.
-\ Every retained string lives inside the caller-owned feed allocation.
+\ JSON Feed retains its typed owned record here; RSS 2.0 and Atom 1.0 add
+\ separate typed records in rss.f and atom.f.
+\ Shared constants cover only exact decode outcomes and storage bounds; this
+\ file deliberately does not define a mostly-null universal feed schema.
+\ Every retained string lives inside the caller-owned format allocation.
+\ Decoder spans must name mapped caller-owned storage, not stacks, MMIO, or
+\ module/dependency-private state.  The helpers below validate signed lengths
+\ and 64-bit address arithmetic; allocation ownership remains a caller
+\ capability.  Input and destination may overlap because commit is staged
+\ through scratch, while scratch must be disjoint from both.
 \ =====================================================================
 
-PROVIDED akashic-streams-synd
+PROVIDED akashic-syndication-model
 
 0 CONSTANT SYN-S-OK
 1 CONSTANT SYN-S-INVALID
@@ -18,21 +24,21 @@ PROVIDED akashic-streams-synd
 
 \ Provider-family bounds.  A feed page can retain at most eight entries.
 8 CONSTANT SYN-MAX-ENTRIES
-4 CONSTANT SYN-MAX-AUTHORS
+2 CONSTANT SYN-MAX-AUTHORS
 8 CONSTANT SYN-MAX-TAGS
-4 CONSTANT SYN-MAX-ATTACHMENTS
+2 CONSTANT SYN-MAX-ATTACHMENTS
 
-512 CONSTANT SYN-TITLE-CAP
-2048 CONSTANT SYN-URL-CAP
-2048 CONSTANT SYN-DESCRIPTION-CAP
-1024 CONSTANT SYN-ID-CAP
-2048 CONSTANT SYN-SUMMARY-CAP
-8192 CONSTANT SYN-CONTENT-CAP
+256 CONSTANT SYN-TITLE-CAP
+512 CONSTANT SYN-URL-CAP
+1024 CONSTANT SYN-DESCRIPTION-CAP
+512 CONSTANT SYN-ID-CAP
+1024 CONSTANT SYN-SUMMARY-CAP
+2048 CONSTANT SYN-CONTENT-CAP
 64 CONSTANT SYN-DATETIME-CAP
-256 CONSTANT SYN-AUTHOR-NAME-CAP
-256 CONSTANT SYN-TAG-CAP
-256 CONSTANT SYN-MIME-CAP
-64 CONSTANT SYN-NUMBER-CAP
+128 CONSTANT SYN-AUTHOR-NAME-CAP
+128 CONSTANT SYN-TAG-CAP
+128 CONSTANT SYN-MIME-CAP
+32 CONSTANT SYN-NUMBER-CAP
 
 \ Exact JSON Feed versions retained by the JSON Feed codec.
 1 CONSTANT SYN-VERSION-JSON-FEED-1
@@ -254,3 +260,73 @@ _SYN-FEED-ENTRIES SYN-MAX-ENTRIES SYN-ENTRY-SIZE * +
     R> _SYN-FEED-ENTRY ;
 
 : SYN-FEED-INIT  ( feed -- ) SYN-FEED-SIZE 0 FILL ;
+
+\ ---------------------------------------------------------------------
+\ Deliberately narrow cross-format item view.
+\ ---------------------------------------------------------------------
+\ The view borrows strings from one successfully decoded format model.  It
+\ contains only semantics genuinely shared by RSS, Atom, and JSON Feed;
+\ authors, categories, links/relations, enclosures, and feed metadata remain
+\ available exclusively through their format-specific typed records.
+
+1 CONSTANT SYN-FORMAT-JSON-FEED
+2 CONSTANT SYN-FORMAT-RSS-2
+3 CONSTANT SYN-FORMAT-ATOM-1
+
+0 CONSTANT _SYN-PROJ-FORMAT
+8 CONSTANT _SYN-PROJ-ID-A
+16 CONSTANT _SYN-PROJ-ID-U
+24 CONSTANT _SYN-PROJ-TITLE-A
+32 CONSTANT _SYN-PROJ-TITLE-U
+40 CONSTANT _SYN-PROJ-URL-A
+48 CONSTANT _SYN-PROJ-URL-U
+56 CONSTANT _SYN-PROJ-SUMMARY-A
+64 CONSTANT _SYN-PROJ-SUMMARY-U
+72 CONSTANT _SYN-PROJ-CONTENT-A
+80 CONSTANT _SYN-PROJ-CONTENT-U
+88 CONSTANT _SYN-PROJ-PUBLISHED-A
+96 CONSTANT _SYN-PROJ-PUBLISHED-U
+104 CONSTANT _SYN-PROJ-MODIFIED-A
+112 CONSTANT _SYN-PROJ-MODIFIED-U
+120 CONSTANT SYN-PROJECTION-SIZE
+
+: SYN.PROJECTION.FORMAT  ( view -- format ) _SYN-PROJ-FORMAT + @ ;
+: SYN.PROJECTION.NATIVE-ID  ( view -- a u )
+    DUP _SYN-PROJ-ID-A + @ SWAP _SYN-PROJ-ID-U + @ ;
+: SYN.PROJECTION.TITLE  ( view -- a u )
+    DUP _SYN-PROJ-TITLE-A + @ SWAP _SYN-PROJ-TITLE-U + @ ;
+: SYN.PROJECTION.URL  ( view -- a u )
+    DUP _SYN-PROJ-URL-A + @ SWAP _SYN-PROJ-URL-U + @ ;
+: SYN.PROJECTION.SUMMARY  ( view -- a u )
+    DUP _SYN-PROJ-SUMMARY-A + @ SWAP _SYN-PROJ-SUMMARY-U + @ ;
+: SYN.PROJECTION.CONTENT  ( view -- a u )
+    DUP _SYN-PROJ-CONTENT-A + @ SWAP _SYN-PROJ-CONTENT-U + @ ;
+: SYN.PROJECTION.PUBLISHED  ( view -- a u )
+    DUP _SYN-PROJ-PUBLISHED-A + @ SWAP _SYN-PROJ-PUBLISHED-U + @ ;
+: SYN.PROJECTION.MODIFIED  ( view -- a u )
+    DUP _SYN-PROJ-MODIFIED-A + @ SWAP _SYN-PROJ-MODIFIED-U + @ ;
+: SYN-PROJECTION-INIT  ( view -- ) SYN-PROJECTION-SIZE 0 FILL ;
+
+: SYN-SPAN-VALID?  ( address length -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP -1 EXIT THEN
+    >R DUP R@ + SWAP U< 0= R> DROP ;
+
+: SYN-RANGES-OVERLAP?  ( a u b v -- flag )
+    2OVER SYN-SPAN-VALID? 0= IF
+        2DROP 2DROP 0 EXIT
+    THEN
+    2DUP SYN-SPAN-VALID? 0= IF
+        2DROP 2DROP 0 EXIT
+    THEN
+    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    2 PICK 0= IF 2DROP 2DROP 0 EXIT THEN
+    \ Pure unsigned half-open comparisons keep exact adjacency disjoint and
+    \ avoid addressable scratch that a caller span could overwrite.
+    2OVER + >R OVER R> U< >R
+    + >R DROP R> U< R> AND ;
+
+: _SYN-DECODE-ARGS>STATUS
+    ( document-a document-u output scratch scratch-u status -- status )
+    >R 2DROP 2DROP DROP R> ;

@@ -35,7 +35,7 @@ Depends on `akashic-vfs`.
 | **Cached metadata** | Superblock, bitmap, and full directory are cached in arena RAM on init.  Only data sectors hit the disk on read/write. |
 | **Lazy metadata flush** | Dirty bitmap and directory caches are written back on explicit `VFS-SYNC` or `VFS-DESTROY`; data sectors are written by each write operation. |
 | **Sector-aligned DMA** | Partial-sector reads/writes use a 512-byte scratch buffer.  Full sectors bypass the scratch for direct DMA. |
-| **Matches KDOS layout** | Sector 0 = superblock, sector 1 = bitmap, sectors 2–13 = directory (128 entries × 48 bytes), sectors 14+ = data.  Compatible with `diskutil.py` and KDOS `FREAD`/`FWRITE`. |
+| **Matches KDOS layout** | Sector 0 = superblock, bitmap starts at 1, the next 12 sectors are the directory, and data follows. Geometry is derived from media capacity. |
 
 ---
 
@@ -77,10 +77,10 @@ and a bitmap free-space tracker.
 
 | Sector(s) | Content |
 |---|---|
-| 0 | **Superblock** — magic `MP64` (bytes 77 80 54 52), version u16@+4, total_sectors u32@+6, geometry |
-| 1 | **Bitmap** — 1 bit per sector (4096 sectors max with one 512-byte bitmap sector) |
-| 2–13 | **Directory** — 128 entries × 48 bytes = 6144 bytes = 12 sectors |
-| 14+ | **Data** — file content |
+| 0 | **Superblock** — magic `MP64`, marker 1, total_sectors u32@+6, derived geometry |
+| 1..`bmap_sectors` | **Bitmap** — 1 bit per sector; `ceil(total_sectors / 4096)` sectors |
+| next 12 sectors | **Directory** — 128 entries × 48 bytes = 6144 bytes |
+| remaining sectors | **Data** — file content |
 
 ### Directory Entry (48 bytes)
 
@@ -103,19 +103,19 @@ and a bitmap free-space tracker.
 
 ## Binding Context
 
-On `VMP-INIT`, the binding allocates a 7712-byte context block
+On `VMP-INIT`, the binding allocates an 8264-byte context block
 from the VFS arena (stored in `V.BCTX`):
 
 | Offset | Size | Field |
 |---|---|---|
 | +0 | 512 | Superblock cache (sector 0) |
-| +512 | 512 | Bitmap cache (sector 1) |
-| +1024 | 6144 | Directory cache (sectors 2–13) |
-| +7168 | 512 | Scratch buffer (partial sector I/O) |
-| +7680 | 8 | `total-sectors` — u32 from superblock |
-| +7688 | 8 | `data-start` — first data sector (constant 14) |
-| +7696 | 8 | `dirty-bmap` — nonzero when bitmap cache modified |
-| +7704 | 8 | `dirty-dir` — nonzero when directory cache modified |
+| +512 | 1024 | Bitmap cache (two sectors maximum) |
+| +1536 | 6144 | Directory cache (12 sectors) |
+| +7680 | 512 | Scratch buffer (partial sector I/O) |
+| +8192 | 48 | Six parsed geometry cells: total, data start, bitmap start/count, directory start/count |
+| +8240 | 8 | `dirty-bmap` — nonzero when bitmap cache modified |
+| +8248 | 8 | `dirty-dir` — nonzero when directory cache modified |
+| +8256 | 8 | `ready` — nonzero only after complete metadata validation |
 
 ---
 
@@ -140,14 +140,16 @@ VMP-INIT  ( vfs -- ior )
 Initialise the MP64FS binding for a VFS instance:
 
 1. Allocate binding context from the arena
-2. DMA-read superblock (sector 0), bitmap (sector 1), and
-   directory (12 sectors starting at 2)
-3. Parse geometry (total sectors, data start)
+2. DMA-read the superblock and validate marker 1 plus all derived geometry
+   against `DISK-SECTORS`
+3. DMA-read the complete bitmap and directory using the validated geometry
 4. Populate the VFS root inode's children from the directory
    table: for each non-free root entry (parent == 0xFF),
    allocate an inode and link it into the child list
 
-Returns `ior` = 0 on success.
+Returns `ior` = 0 on success, -1 for no disk/arena failure, -2 for bad magic,
+-3 for a non-1 marker or inconsistent geometry, and -4 when a metadata sector
+is advertised as free.  A malformed directory entry returns -5.
 
 ### VMP-VTABLE
 
@@ -225,8 +227,8 @@ _VMP-SYNC  ( inode vfs -- ior )
 ```
 
 For a non-root inode, first reflect its current name into its stable directory
-slot. If the bitmap cache is dirty, write it to sector 1; if the directory
-cache is dirty, write all 12 directory sectors. VFS also invokes the binding
+slot. If the bitmap cache is dirty, write its validated sector count; if the
+directory cache is dirty, write all validated directory sectors. VFS also invokes the binding
 once with inode 0 so metadata-only operations are flushed.
 
 ### _VMP-CREATE

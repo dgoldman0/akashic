@@ -51,6 +51,9 @@ local_testing/*
 !local_testing/akashic_tui.py
 !local_testing/test_gap_buf.py
 !local_testing/test_textarea.py
+!local_testing/evidence/
+local_testing/evidence/*
+!local_testing/evidence/*.md
 !local_testing/fixtures/
 local_testing/fixtures/*
 !local_testing/fixtures/atproto/
@@ -58,6 +61,8 @@ local_testing/fixtures/atproto/*
 !local_testing/fixtures/atproto/timeline.json
 !local_testing/fixtures/streams/
 !local_testing/fixtures/streams/**
+!local_testing/fixtures/syndication/
+!local_testing/fixtures/syndication/**
 
 # Generated system images and captures stay local.
 local_testing/out/

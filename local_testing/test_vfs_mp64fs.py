@@ -9,7 +9,7 @@ import os, sys, struct, tempfile, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+MEGAPAD_ROOT = os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 
 # Forth source paths
 EVENT_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
@@ -20,12 +20,12 @@ VFS_F     = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
 VFS_MNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
 VFS_MP_F  = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "drivers", "vfs-mp64fs.f")
 
-sys.path.insert(0, EMU_DIR)
+sys.path.insert(0, MEGAPAD_ROOT)
 from asm import assemble
 from system import MegapadSystem
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
+BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
+KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
 
 # ── Disk image builder ──────────────────────────────────────────────
 
@@ -33,7 +33,6 @@ SECTOR = 512
 DIR_ENTRY_SIZE = 48
 MAX_FILES = 128
 DIR_SECTORS = 12
-DATA_START = 14
 BMAP_START = 1
 PARENT_ROOT = 0xFF
 FTYPE_DIR = 8
@@ -59,9 +58,12 @@ def build_disk_image(files, total_sectors=2048):
     files: list of (name, parent, ftype, content_bytes)
     Returns bytes of the disk image.
     """
+    bmap_sectors = (total_sectors + 4095) // 4096
+    dir_start = BMAP_START + bmap_sectors
+    data_start = dir_start + DIR_SECTORS
     entries = []
     data_sectors = []
-    next_sec = DATA_START
+    next_sec = data_start
 
     for name, parent, ftype, content in files:
         if ftype == FTYPE_DIR:
@@ -76,19 +78,19 @@ def build_disk_image(files, total_sectors=2048):
     # Superblock
     sb = bytearray(SECTOR)
     sb[0:4] = b'MP64'
-    struct.pack_into('<H', sb, 4, 1)          # version
+    struct.pack_into('<H', sb, 4, 1)
     struct.pack_into('<I', sb, 6, total_sectors)  # total_sectors (u32)
     struct.pack_into('<H', sb, 10, BMAP_START)
-    struct.pack_into('<H', sb, 12, 1)         # bmap_sectors
-    struct.pack_into('<H', sb, 14, 2)         # dir_start
+    struct.pack_into('<H', sb, 12, bmap_sectors)
+    struct.pack_into('<H', sb, 14, dir_start)
     struct.pack_into('<H', sb, 16, DIR_SECTORS)
-    struct.pack_into('<H', sb, 18, DATA_START)
+    struct.pack_into('<H', sb, 18, data_start)
     sb[20] = MAX_FILES
     sb[21] = DIR_ENTRY_SIZE
 
     # Bitmap
-    bmap = bytearray(SECTOR)
-    for s in range(DATA_START):
+    bmap = bytearray(bmap_sectors * SECTOR)
+    for s in range(data_start):
         bmap[s // 8] |= (1 << (s % 8))
     for ss, p in data_sectors:
         for s in range(ss, ss + len(p) // SECTOR):
@@ -102,11 +104,45 @@ def build_disk_image(files, total_sectors=2048):
     ts = max(next_sec, total_sectors)
     img = bytearray(ts * SECTOR)
     img[0:SECTOR] = sb
-    img[SECTOR:2 * SECTOR] = bmap
-    img[2 * SECTOR : (2 + DIR_SECTORS) * SECTOR] = dd
+    img[SECTOR:(1 + bmap_sectors) * SECTOR] = bmap
+    img[dir_start * SECTOR : (dir_start + DIR_SECTORS) * SECTOR] = dd
     for ss, p in data_sectors:
         img[ss * SECTOR : ss * SECTOR + len(p)] = p
     return bytes(img)
+
+
+def build_malformed_entry_image(kind):
+    """Build one geometry-valid image with a specifically invalid dirent."""
+    is_dir = kind == "directory-data"
+    image = bytearray(build_disk_image([
+        ("bad-dir" if is_dir else "victim", PARENT_ROOT,
+         FTYPE_DIR if is_dir else FTYPE_RAW,
+         b"" if is_dir else b"protected"),
+    ]))
+    total = len(image) // SECTOR
+    bmap_sectors = (total + 4095) // 4096
+    data_start = 1 + bmap_sectors + DIR_SECTORS
+    de = (1 + bmap_sectors) * SECTOR
+    start = struct.unpack_from('<H', image, de + 24)[0]
+
+    if kind == "start-before-data":
+        struct.pack_into('<H', image, de + 24, data_start - 1)
+    elif kind == "end-after-media":
+        struct.pack_into('<HH', image, de + 24, total - 1, 2)
+    elif kind == "used-over-capacity":
+        struct.pack_into('<I', image, de + 28, SECTOR + 1)
+    elif kind == "secondary-zero-pair":
+        struct.pack_into('<H', image, de + 44, start + 1)
+    elif kind == "invalid-parent":
+        image[de + 34] = MAX_FILES - 1
+    elif kind == "bitmap-unclaimed":
+        image[SECTOR + start // 8] &= ~(1 << (start % 8)) & 0xFF
+    elif kind == "directory-data":
+        struct.pack_into('<HHI', image, de + 24, data_start, 1, 1)
+        image[SECTOR + data_start // 8] |= 1 << (data_start % 8)
+    else:
+        raise ValueError(kind)
+    return bytes(image)
 
 
 # ── Emulator helpers ─────────────────────────────────────────────────
@@ -270,6 +306,7 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None):
     # Restore or replace disk image
     img = disk_image if disk_image else storage_bytes
     sys_obj.storage._image_data[:len(img)] = img
+    sys_obj.storage._capacity_sectors = len(img) // SECTOR
     buf.clear()
 
     payload = "\n".join(lines) + "\nBYE\n"
@@ -342,6 +379,107 @@ def test_init_success():
         'T-VMP-NEW CONSTANT _V',
         '_V VMP-INIT . ." <ior"',
     ], "0 <ior")
+
+
+def test_init_dynamic_geometry():
+    """The binding adopts every geometry field from an 8192-sector image."""
+    img = build_disk_image([], total_sectors=8192)
+    check("init-dynamic-geometry", [
+        'T-VMP-NEW CONSTANT _V',
+        '_V VMP-INIT . ." <ior"',
+        '_V V.BCTX @ DUP _VMP-C.TOTAL + @ . DUP _VMP-C.BN + @ . DUP _VMP-C.DIRSTART + @ . _VMP-C.DSTART + @ . ." <geometry"',
+    ], "8192 2 3 15 <geometry", disk_image=img)
+
+
+def test_init_rejects_inconsistent_geometry():
+    """A shifted directory that disagrees with the bitmap is rejected."""
+    img = bytearray(build_disk_image([], total_sectors=8192))
+    struct.pack_into('<H', img, 14, 4)
+    check("init-rejects-inconsistent-geometry", [
+        'T-VMP-NEW CONSTANT _V',
+        '_V VMP-INIT . ." <ior"',
+    ], "-3 <ior", disk_image=bytes(img))
+
+
+def test_init_rejects_non_one_format_marker():
+    """The VFS binding accepts only the fixed MP64FS format marker."""
+    img = bytearray(build_disk_image([], total_sectors=8192))
+    struct.pack_into('<H', img, 4, 2)
+    check("init-rejects-non-one-format-marker", [
+        'T-VMP-NEW CONSTANT _V',
+        '_V VMP-INIT . ." <ior"',
+    ], "-3 <ior", disk_image=bytes(img))
+
+
+def test_init_rejects_unreserved_metadata_sector():
+    """Every geometry-selected metadata sector must be bitmap-reserved."""
+    img = bytearray(build_disk_image([], total_sectors=8192))
+    img[SECTOR] &= 0xFE
+    check("init-rejects-unreserved-metadata", [
+        'T-VMP-NEW CONSTANT _V',
+        '_V VMP-INIT . ." <ior"',
+    ], "-4 <ior", disk_image=bytes(img))
+
+
+def test_init_reports_arena_capacity_failure():
+    """Context allocation failure returns -1 instead of aborting the guest."""
+    check("init-arena-capacity", [
+        '524288 A-XMEM ARENA-NEW IF -1 THROW THEN CONSTANT _SMALL-AR',
+        '_SMALL-AR VMP-NEW CONSTANT _SMALL-V',
+        '_SMALL-AR ARENA-FREE 8000 - _SMALL-AR SWAP ARENA-ALLOT DROP',
+        '_SMALL-V VMP-INIT . ." <ior"',
+    ], "-1 <ior")
+
+
+def test_init_rejects_malformed_directory_entries():
+    """Every runtime dirent invariant is enforced before inode exposure."""
+    for kind in (
+        "start-before-data",
+        "end-after-media",
+        "used-over-capacity",
+        "secondary-zero-pair",
+        "invalid-parent",
+        "bitmap-unclaimed",
+        "directory-data",
+    ):
+        check(f"init-rejects-dirent-{kind}", [
+            'T-VMP-NEW CONSTANT _V',
+            '_V VMP-INIT . ." <ior"',
+        ], "-5 <ior", disk_image=build_malformed_entry_image(kind))
+
+
+def test_failed_init_blocks_public_mutation():
+    """Ignored init failure cannot create, delete, sync, or alter disk state."""
+    check("failed-init-blocks-mutation", [
+        'T-VMP-NEW CONSTANT _V',
+        ': T-BAD-MUTATE',
+        '  _V VMP-INIT . ." <ior "',
+        '  S" /bad-dir" _V VFS-RM . ." <rm "',
+        '  S" after.f" _V VFS-MKFILE 0= . ." <mk-blocked "',
+        '  _V VFS-SYNC . ." <sync "',
+        '  1 DISK-SEC! _RB DISK-DMA! 1 DISK-N! DISK-READ',
+        '  _RB 1+ C@ 64 AND 0<> . ." <bit "',
+        '  2 DISK-SEC! _RB DISK-DMA! 1 DISK-N! DISK-READ',
+        '  _RB 48 + C@ 0= . ." <slot" ;',
+        'T-BAD-MUTATE',
+    ], "-5 <ior -1 <rm -1 <mk-blocked -1 <sync -1 <bit -1 <slot",
+       disk_image=build_malformed_entry_image("directory-data"))
+
+
+def test_second_bitmap_sector_sync_and_remount():
+    """Allocation above sector 4096 survives sync and a fresh VFS mount."""
+    img = build_disk_image([
+        ("prefix.bin", PARENT_ROOT, FTYPE_RAW, bytes(4100 * SECTOR)),
+    ], total_sectors=8192)
+    check("second-bitmap-sector-sync-remount", [
+        'T-VMP-NEW CONSTANT _V',
+        '_V VMP-INIT DROP _V VFS-USE',
+        'S" high.bin" _V VFS-MKFILE DUP IN.BDATA @ . ." <high-sector" DROP',
+        '_V VFS-SYNC DROP',
+        'T-VMP-NEW CONSTANT _VR',
+        '_VR VMP-INIT DROP _VR VFS-USE',
+        'S" /high.bin" _VR VFS-RESOLVE DUP 0<> IF IN.BDATA @ . ." <remount-sector REMOUNT-OK" ELSE DROP ." REMOUNT-FAIL" THEN',
+    ], "4115 <remount-sector REMOUNT-OK", disk_image=img)
 
 
 def test_init_populates_root():
@@ -540,15 +678,15 @@ def test_destroy():
 def test_two_instances():
     """Two separate VFS instances on the same disk don't interfere."""
     check("two-instances", [
-        'T-VMP-NEW CONSTANT _V1',
-        '_V1 VMP-INIT DROP',
-        'T-VMP-NEW CONSTANT _V2',
-        '_V2 VMP-INIT DROP',
-        '_V1 VFS-USE',
-        'S" /hello.txt" _V1 VFS-RESOLVE 0<> IF ." V1-OK " ELSE ." V1-FAIL " THEN',
-        '_V2 VFS-USE',
-        'S" /hello.txt" _V2 VFS-RESOLVE 0<> IF ." V2-OK" ELSE ." V2-FAIL" THEN',
-    ], "V1-OK")
+        'T-VMP-NEW CONSTANT _VA',
+        '_VA VMP-INIT DROP',
+        'T-VMP-NEW CONSTANT _VB',
+        '_VB VMP-INIT DROP',
+        '_VA VFS-USE',
+        'S" /hello.txt" _VA VFS-RESOLVE 0<> IF ." VA-OK " ELSE ." VA-FAIL " THEN',
+        '_VB VFS-USE',
+        'S" /hello.txt" _VB VFS-RESOLVE 0<> IF ." VB-OK" ELSE ." VB-FAIL" THEN',
+    ], "VA-OK")
 
 
 def test_empty_disk():
@@ -599,6 +737,14 @@ if __name__ == "__main__":
     test_probe_valid()
     test_probe_invalid()
     test_init_success()
+    test_init_dynamic_geometry()
+    test_init_rejects_inconsistent_geometry()
+    test_init_rejects_non_one_format_marker()
+    test_init_rejects_unreserved_metadata_sector()
+    test_init_reports_arena_capacity_failure()
+    test_init_rejects_malformed_directory_entries()
+    test_failed_init_blocks_public_mutation()
+    test_second_bitmap_sector_sync_and_remount()
     test_init_populates_root()
     test_root_has_all_files()
     test_root_has_subdir()

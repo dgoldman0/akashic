@@ -795,8 +795,8 @@ VARIABLE _MI-NA  VARIABLE _MI-NL
     \ find matching close
     _MI-NA @ _MI-NL @  MU-FIND-CLOSE
     \ cursor is now at </tag>, inner ends here
-    OVER _MI-A @ -                   \ inner-len = current - start
-    _MI-A @ SWAP ;
+    OVER _MI-A @ - >R                \ inner-len = current - start
+    2DROP _MI-A @ R> ;
 
 \ MU-NEXT-SIBLING ( addr len -- addr' len' flag )
 \   Skip to the next sibling element.

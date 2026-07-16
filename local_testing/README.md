@@ -45,16 +45,19 @@ The Streams qualification path is intentionally split by boundary:
 - `streams-source-owner-contracts` covers lifecycle loading, optimistic durable
   mutations, sanitized capabilities, and actual Agent-principal authority,
   operand-seal, reviewed-commit, and replay behavior.
-- `streams-syndication-contracts` covers the bounded JSON Feed 1/1.1 owned
-  projection and its transactional fixture generations.
+- `syndication-contracts` covers the reusable bounded JSON Feed 1/1.1,
+  RSS 2.0, and Atom 1.0 codecs, their format-specific owned models, the narrow
+  shared item projection, and transactional fixture generations.
 - `streams-page-contracts` covers exact content-type admission, inert bounded
   HTML/text normalization, and raw/normalized hashes.
 - `streams-source-ui-contracts` covers standalone source creation, independent
   selection, exact toggle/removal, stale-confirmation rejection, and blocked
   storage presentation.
-- `local_testing/fixtures/streams/` is the explicit JSON Feed, RSS, Atom,
-  watched-page, text, and notification qualification corpus; fixture presence
-  is not a claim that every corresponding adapter is implemented.
+- `local_testing/fixtures/syndication/` is the library-owned JSON Feed, RSS,
+  and Atom qualification corpus exercised by `syndication-contracts`.
+- `local_testing/fixtures/streams/` contains only Streams-owned watched-page,
+  text, and notification qualification data; fixture presence alone is not a
+  claim that every corresponding adapter is implemented.
 - `streams-xio-contracts` covers the explicitly composed Streams/XIO contract
   using injected port callbacks: submission, completion, actor rollback, stale
   results, and cleanup. It is offline integration evidence, not live-network or
@@ -151,17 +154,14 @@ operand seal's canonical length, SHA3-256 digest, and seal state. A zero
 resource ID is the legacy/non-lens default. Precompiled code that allocates an
 older request-record size must be rebuilt.
 
-MP64FS test images remain limited to 4096 sectors (2 MiB) even though the host
-image builder can describe a larger disk. KDOS currently formats, reads, and
-writes one 512-byte allocation bitmap, so sectors beyond bit 4095 are not
-mountable by the guest. Raising this limit requires a versioned multi-sector
-bitmap design plus mount, allocation, recovery, and compatibility tests; it is
-tracked as substrate work rather than being folded into applet or Agent
-changes. Focused profiles may omit unrelated large-file fixtures to stay
-within the supported image format, but they must not omit production modules
-or resources in their declared scope. Generated images also omit non-executable
-blank/comment lines; production source and the declared component set remain
-unchanged.
+MP64FS test images support 15 through 8192 sectors. The guest derives a one- or
+two-sector allocation bitmap from media capacity, and the directory and data
+starts follow that bitmap uniformly. Profiles declare their required media
+capacity; the complete Desktop family uses 8192 sectors while smaller focused
+profiles retain the 4096-sector default. Focused profiles may omit unrelated
+large-file fixtures, but they must not omit production modules or resources in
+their declared scope. Generated images also omit non-executable blank/comment
+lines; production source and the declared component set remain unchanged.
 
 ## Opt-In Live Network
 

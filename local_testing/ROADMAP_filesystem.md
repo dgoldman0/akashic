@@ -94,6 +94,8 @@ sector-addressed block device at MMIO offset `0x0200`:
 | DMA_ADDR | +0x06 | 8 B LE | 64-bit RAM target for DMA |
 | SEC_COUNT | +0x0E | 1 B | Sectors per command (max 255) |
 | DATA | +0x0F | 1 B | Byte-at-a-time alternative port |
+| DMA_PUSH | +0x10 | 1 B | Push one little-endian byte into DMA_ADDR |
+| TOTAL_SECTORS | +0x11 | 4 B LE | Attached media capacity; zero when detached |
 
 Backed by a host file loaded into a `bytearray`.  512-byte sectors.
 32-bit sector addressing (~2 TiB theoretical max).  SEC_COUNT is
@@ -102,22 +104,26 @@ Backed by a host file loaded into a `bytearray`.  512-byte sectors.
 multi-batch for larger transfers.
 
 **The storage layer is completely filesystem-agnostic.**  It knows
-nothing about MP64FS — it just reads and writes sectors.  The
-emulator can also hot-swap images at runtime (`swap_image`) and
-auto-extends images on write beyond current size.
+nothing about MP64FS — it just reads and writes sectors.  Attached media has
+a fixed sector capacity reported by `TOTAL_SECTORS`; commands that cross that
+capacity set the device error and do not grow or partially alter the image.
+The emulator can hot-swap an aligned image at runtime (`swap_image`).
 
 ### BIOS Disk Primitives
 
-Six words exposed to Forth (no changes needed):
+Nine words expose the complete storage contract to Forth:
 
 | Word | Stack Effect | Function |
 |------|-------------|----------|
 | `DISK@` | ( -- status ) | Read STATUS register |
+| `DISK-SECTORS` | ( -- count ) | Read attached media capacity |
 | `DISK-SEC!` | ( sector -- ) | Set 32-bit sector number |
 | `DISK-DMA!` | ( addr -- ) | Set 64-bit DMA address |
 | `DISK-N!` | ( count -- ) | Set sector count (1–255) |
 | `DISK-READ` | ( -- ) | Issue READ command |
 | `DISK-WRITE` | ( -- ) | Issue WRITE command |
+| `DISK-FLUSH` | ( -- ) | Flush the attached image backing |
+| `MP64FS-VALID?` | ( -- flag ) | Validate marker, geometry, metadata, and directory bounds |
 
 Plus Higher-level KDOS helpers:
 
@@ -162,17 +168,17 @@ component as filename.  Up to 16 levels of nested `LOAD`/`REQUIRE`.
 
 ### MP64FS
 
-The native filesystem.  1 MiB default (2048 sectors), scalable to
-larger images with dynamic bitmap geometry.
+The native filesystem.  It uses one marker and derived bitmap geometry from
+15 through 8192 sectors; the host default remains 2048 sectors (1 MiB).
 
 **Disk layout:**
 
 | Sectors | Content |
 |---------|---------|
-| 0 | Superblock (magic `"MP64"`, version, geometry) |
-| 1 | Allocation bitmap (1 sector per 4096 sectors) |
-| 2–13 | Directory (128 entries × 48 bytes = 6144 bytes) |
-| 14+ | Data area |
+| 0 | Superblock (magic `"MP64"`, marker 1, derived geometry) |
+| 1..`bmap_sectors` | Allocation bitmap; `ceil(total_sectors / 4096)` sectors |
+| next 12 sectors | Directory (128 entries × 48 bytes = 6144 bytes) |
+| remaining sectors | Data area |
 
 **Directory entry (48 bytes):**
 
@@ -1435,11 +1441,12 @@ inode/zone concepts useful for ext2).
 
 ## Design Constraints
 
-**No emulator changes.**  The `Storage` device is already a generic
-block device.  All filesystem logic lives in Forth.
+**No filesystem logic in the emulator.**  The generic `Storage` device owns
+only truthful fixed capacity, range rejection, and block transfer.  All
+filesystem interpretation lives in Forth.
 
-**No BIOS changes.**  The six `DISK-*` words are sufficient.  All
-sector I/O goes through them.
+**No additional BIOS primitives.**  The nine current storage words are
+sufficient.  All sector I/O and MP64FS admission go through them.
 
 **VFS is opt-in.**  If `akashic-vfs` is not loaded, the existing
 MP64FS code works exactly as before — no regressions for code that

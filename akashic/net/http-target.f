@@ -1,0 +1,606 @@
+\ =====================================================================
+\  http-target.f - Bounded HTTPS resource-target admission
+\ =====================================================================
+\  This is the authority boundary for configured HTTP resources. It accepts
+\  only absolute HTTPS URIs with ASCII DNS names, copies every retained byte
+\  into a caller-owned record, and exposes canonical host, numeric port,
+\  origin-form request target, and URI views. It performs no DNS or I/O.
+\
+\  Redirect admission accepts absolute HTTPS or origin-relative locations.
+\  Absolute redirects must retain the exact canonical host and port. A
+\  distinct status reports redirects which require a new authority decision.
+\  Callers retain the redirect chain and may use HTARGET-EQUAL? to reject a
+\  candidate seen before; immediate self-redirects are rejected here.
+\ =====================================================================
+
+PROVIDED akashic-http-target
+
+REQUIRE ../utils/string.f
+
+0  CONSTANT HTARGET-S-OK
+1  CONSTANT HTARGET-S-INVALID
+2  CONSTANT HTARGET-S-CAPACITY
+3  CONSTANT HTARGET-S-SCHEME
+4  CONSTANT HTARGET-S-AUTHORITY
+5  CONSTANT HTARGET-S-HOST
+6  CONSTANT HTARGET-S-PORT
+7  CONSTANT HTARGET-S-PATH
+8  CONSTANT HTARGET-S-AUTHORITY-REQUIRED
+9  CONSTANT HTARGET-S-REDIRECT-LIMIT
+10 CONSTANT HTARGET-S-LOOP
+
+1024 CONSTANT HTARGET-URI-CAPACITY
+64   CONSTANT HTARGET-HOST-CAPACITY
+1024 CONSTANT HTARGET-REQUEST-TARGET-CAPACITY
+3    CONSTANT HTARGET-REDIRECT-MAX
+
+1 CONSTANT HTARGET-F-VALID
+
+0x54475448 CONSTANT HTARGET-MAGIC       \ "HTGT" in memory
+
+   0 CONSTANT _HT-MAGIC
+   8 CONSTANT _HT-STATUS
+  16 CONSTANT _HT-FLAGS
+  24 CONSTANT _HT-PORT
+  32 CONSTANT _HT-HOST-U
+  40 CONSTANT _HT-REQUEST-U
+  48 CONSTANT _HT-URI-U
+  56 CONSTANT _HT-REDIRECT-COUNT
+  64 CONSTANT _HT-SOURCE-U
+  72 CONSTANT _HT-WORK-POS
+  80 CONSTANT _HT-WORK-AUX
+  88 CONSTANT _HT-RESERVED
+  96 CONSTANT _HT-HOST
+_HT-HOST HTARGET-HOST-CAPACITY + CONSTANT _HT-REQUEST
+_HT-REQUEST HTARGET-REQUEST-TARGET-CAPACITY + CONSTANT _HT-URI
+_HT-URI HTARGET-URI-CAPACITY + CONSTANT _HT-SOURCE
+_HT-SOURCE HTARGET-URI-CAPACITY + CONSTANT HTARGET-SIZE
+
+: HTARGET.MAGIC          ( target -- a ) _HT-MAGIC + ;
+: HTARGET.STATUS         ( target -- a ) _HT-STATUS + ;
+: HTARGET.FLAGS          ( target -- a ) _HT-FLAGS + ;
+: HTARGET.PORT           ( target -- a ) _HT-PORT + ;
+: HTARGET.HOST-U         ( target -- a ) _HT-HOST-U + ;
+: HTARGET.REQUEST-U      ( target -- a ) _HT-REQUEST-U + ;
+: HTARGET.URI-U          ( target -- a ) _HT-URI-U + ;
+: HTARGET.REDIRECT-COUNT ( target -- a ) _HT-REDIRECT-COUNT + ;
+: _HTARGET.SOURCE-U      ( target -- a ) _HT-SOURCE-U + ;
+: _HTARGET.WORK-POS      ( target -- a ) _HT-WORK-POS + ;
+: _HTARGET.WORK-AUX      ( target -- a ) _HT-WORK-AUX + ;
+: HTARGET.HOST           ( target -- a ) _HT-HOST + ;
+: HTARGET.REQUEST        ( target -- a ) _HT-REQUEST + ;
+: HTARGET.URI            ( target -- a ) _HT-URI + ;
+: _HTARGET.SOURCE        ( target -- a ) _HT-SOURCE + ;
+
+: HTARGET-HOST$  ( target -- a u )
+    DUP HTARGET.HOST SWAP HTARGET.HOST-U @ ;
+
+: HTARGET-REQUEST-TARGET$  ( target -- a u )
+    DUP HTARGET.REQUEST SWAP HTARGET.REQUEST-U @ ;
+
+: HTARGET-URI$  ( target -- a u )
+    DUP HTARGET.URI SWAP HTARGET.URI-U @ ;
+
+: HTARGET-PORT@  ( target -- port ) HTARGET.PORT @ ;
+: HTARGET-STATUS@  ( target -- status ) HTARGET.STATUS @ ;
+: HTARGET-REDIRECT-COUNT@  ( target -- count )
+    HTARGET.REDIRECT-COUNT @ ;
+
+: _HTARGET-SPAN-VALID?  ( address length -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP -1 EXIT THEN
+    >R DUP R@ + SWAP U< 0= R> DROP ;
+
+: HTARGET-INIT  ( target -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP HTARGET-SIZE _HTARGET-SPAN-VALID? 0= IF DROP EXIT THEN
+    DUP HTARGET-SIZE 0 FILL
+    HTARGET-MAGIC SWAP HTARGET.MAGIC ! ;
+
+: HTARGET-VALID?  ( target -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP HTARGET-SIZE _HTARGET-SPAN-VALID? 0= IF DROP 0 EXIT THEN
+    DUP HTARGET.MAGIC @ HTARGET-MAGIC =
+    OVER HTARGET.STATUS @ HTARGET-S-OK = AND
+    OVER HTARGET.FLAGS @ HTARGET-F-VALID AND 0<> AND
+    OVER HTARGET.PORT @ DUP 0> SWAP 65535 <= AND AND
+    OVER HTARGET.HOST-U @ DUP 0> SWAP HTARGET-HOST-CAPACITY <= AND AND
+    OVER HTARGET.REQUEST-U @ DUP 0>
+        SWAP HTARGET-REQUEST-TARGET-CAPACITY <= AND AND
+    OVER HTARGET.URI-U @ DUP 0> SWAP HTARGET-URI-CAPACITY <= AND AND
+    SWAP HTARGET.REDIRECT-COUNT @ DUP 0>=
+        SWAP HTARGET-REDIRECT-MAX <= AND AND ;
+
+: _HTARGET-FAIL  ( status target -- status )
+    >R
+    R@ _HT-FLAGS + HTARGET-SIZE _HT-FLAGS - 0 FILL
+    DUP R@ HTARGET.STATUS !
+    HTARGET-MAGIC R@ HTARGET.MAGIC !
+    R> DROP ;
+
+: _HTARGET-INPUT-SHAPE?  ( a u -- flag )
+    2DUP _HTARGET-SPAN-VALID? 0= IF 2DROP 0 EXIT THEN
+    DUP 0> OVER HTARGET-URI-CAPACITY <= AND >R 2DROP R> ;
+
+: _HTARGET-SPAN-OVERLAP?  ( a u target -- flag )
+    DUP HTARGET-SIZE _HTARGET-SPAN-VALID? 0= IF
+        2DROP DROP -1 EXIT
+    THEN
+    >R
+    2DUP _HTARGET-SPAN-VALID? 0= IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    OVER R@ HTARGET-SIZE + U<
+    2 PICK 2 PICK + R@ SWAP U< AND
+    >R 2DROP R> R> DROP ;
+
+: _HTARGET-LC  ( c -- c' )
+    DUP [CHAR] A >= OVER [CHAR] Z <= AND IF 32 + THEN ;
+
+: _HTARGET-UC  ( c -- c' )
+    DUP [CHAR] a >= OVER [CHAR] f <= AND IF 32 - THEN ;
+
+: _HTARGET-ALNUM?  ( c -- flag )
+    DUP [CHAR] A >= OVER [CHAR] Z <= AND IF DROP -1 EXIT THEN
+    DUP [CHAR] a >= OVER [CHAR] z <= AND IF DROP -1 EXIT THEN
+    DUP [CHAR] 0 >= SWAP [CHAR] 9 <= AND ;
+
+: _HTARGET-HEX?  ( c -- flag )
+    DUP [CHAR] 0 >= OVER [CHAR] 9 <= AND IF DROP -1 EXIT THEN
+    DUP [CHAR] A >= OVER [CHAR] F <= AND IF DROP -1 EXIT THEN
+    DUP [CHAR] a >= SWAP [CHAR] f <= AND ;
+
+: _HTARGET-HEX-VALUE  ( c -- value | -1 )
+    DUP [CHAR] 0 >= OVER [CHAR] 9 <= AND IF [CHAR] 0 - EXIT THEN
+    DUP [CHAR] A >= OVER [CHAR] F <= AND IF [CHAR] A - 10 + EXIT THEN
+    DUP [CHAR] a >= OVER [CHAR] f <= AND IF [CHAR] a - 10 + EXIT THEN
+    DROP -1 ;
+
+: _HTARGET-LABEL?  ( a u -- flag )
+    DUP 0= OVER 63 > OR IF 2DROP 0 EXIT THEN
+    OVER C@ _HTARGET-ALNUM? 0= IF 2DROP 0 EXIT THEN
+    2DUP + 1- C@ _HTARGET-ALNUM? 0= IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ DUP _HTARGET-ALNUM? 0= SWAP [CHAR] - <> AND IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _HTARGET-DNS-NAME?  ( a u -- flag )
+    BEGIN
+        DUP 0= IF 2DROP 0 EXIT THEN
+        2DUP [CHAR] . STR-INDEX DUP 0< IF
+            DROP _HTARGET-LABEL? EXIT
+        THEN
+        >R
+        OVER R@ _HTARGET-LABEL? 0= IF
+            R> DROP 2DROP 0 EXIT
+        THEN
+        R> 1+ /STRING
+    AGAIN ;
+
+: _HTARGET-IP-LITERAL?  ( a u -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ DUP [CHAR] . = IF
+            DROP
+        ELSE
+            DUP [CHAR] 0 < SWAP [CHAR] 9 > OR IF
+                DROP 0 UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _HTARGET-PERCENT-BYTE-SAFE?  ( high-c low-c -- flag )
+    _HTARGET-HEX-VALUE SWAP _HTARGET-HEX-VALUE 4 LSHIFT OR
+    DUP 32 <= IF DROP 0 EXIT THEN
+    DUP 126 > IF DROP 0 EXIT THEN
+    DUP _HTARGET-ALNUM? IF DROP 0 EXIT THEN
+    DUP [CHAR] - = IF DROP 0 EXIT THEN
+    DUP [CHAR] _ = IF DROP 0 EXIT THEN
+    DUP [CHAR] ~ = IF DROP 0 EXIT THEN
+    DUP [CHAR] / = IF DROP 0 EXIT THEN
+    DUP 92 = IF DROP 0 EXIT THEN
+    DUP [CHAR] . = IF DROP 0 EXIT THEN
+    DUP [CHAR] % = IF DROP 0 EXIT THEN
+    DUP [CHAR] # = IF DROP 0 EXIT THEN
+        [CHAR] ? <> ;
+
+: _HTARGET-SEGMENT-START?  ( target index -- flag )
+    DUP 2 PICK _HTARGET.WORK-AUX @ 1+ = IF
+        2DROP -1 EXIT
+    THEN
+    1- SWAP _HTARGET.SOURCE + C@ [CHAR] / = ;
+
+: _HTARGET-SEGMENT-END?  ( target index -- flag )
+    DUP 2 PICK _HTARGET.SOURCE-U @ >= IF
+        2DROP -1 EXIT
+    THEN
+    SWAP _HTARGET.SOURCE + C@
+    DUP [CHAR] / = SWAP [CHAR] ? = OR ;
+
+: _HTARGET-DOT-SEGMENTS?  ( target -- flag )
+    DUP _HTARGET.SOURCE OVER _HTARGET.WORK-AUX @ + C@
+        [CHAR] ? = IF DROP 0 EXIT THEN
+    DUP _HTARGET.SOURCE-U @ OVER _HTARGET.WORK-AUX @ 1+ ?DO
+        DUP _HTARGET.SOURCE I + C@ [CHAR] ? = IF
+            DROP 0 UNLOOP EXIT
+        THEN
+        DUP _HTARGET.SOURCE I + C@ [CHAR] . = IF
+            DUP I _HTARGET-SEGMENT-START? IF
+                DUP I 1+ _HTARGET-SEGMENT-END? IF
+                    DROP -1 UNLOOP EXIT
+                THEN
+                I 1+ OVER _HTARGET.SOURCE-U @ < IF
+                    DUP _HTARGET.SOURCE I 1+ + C@ [CHAR] . = IF
+                        DUP I 2 + _HTARGET-SEGMENT-END? IF
+                            DROP -1 UNLOOP EXIT
+                        THEN
+                    THEN
+                THEN
+            THEN
+        THEN
+    LOOP
+    DROP 0 ;
+
+: _HTARGET-HOST-END  ( target -- index )
+    DUP _HTARGET.WORK-POS @ DUP 0< IF
+        DROP _HTARGET.WORK-AUX @
+    ELSE
+        NIP
+    THEN ;
+
+: _HTARGET-PORT-PARSE  ( target -- flag )
+    DUP _HTARGET.WORK-AUX @ OVER _HTARGET.WORK-POS @ - 1-
+    DUP 0= OVER 5 > OR IF 2DROP 0 EXIT THEN
+    DUP 1 > IF
+        OVER _HTARGET.SOURCE
+        2 PICK _HTARGET.WORK-POS @ 1+ + C@ [CHAR] 0 = IF
+            2DROP 0 EXIT
+        THEN
+    THEN
+    DROP
+    0 OVER HTARGET.PORT !
+    DUP _HTARGET.WORK-AUX @ OVER _HTARGET.WORK-POS @ 1+ ?DO
+        DUP _HTARGET.SOURCE I + C@
+        DUP [CHAR] 0 < OVER [CHAR] 9 > OR IF
+            DROP DROP 0 UNLOOP EXIT
+        THEN
+        [CHAR] 0 - OVER HTARGET.PORT @ 10 * +
+        DUP 65535 > IF DROP DROP 0 UNLOOP EXIT THEN
+        OVER HTARGET.PORT !
+    LOOP
+    DUP HTARGET.PORT @ 0> SWAP DROP ;
+
+: _HTARGET-REQUEST-C,  ( c target -- flag )
+    DUP HTARGET.REQUEST-U @ HTARGET-REQUEST-TARGET-CAPACITY >= IF
+        2DROP 0 EXIT
+    THEN
+    DUP HTARGET.REQUEST-U @ OVER HTARGET.REQUEST + >R
+    SWAP R> C!
+    1 OVER HTARGET.REQUEST-U +!
+    DROP -1 ;
+
+: _HTARGET-URI-C,  ( c target -- flag )
+    DUP HTARGET.URI-U @ HTARGET-URI-CAPACITY >= IF
+        2DROP 0 EXIT
+    THEN
+    DUP HTARGET.URI-U @ OVER HTARGET.URI + >R
+    SWAP R> C!
+    1 OVER HTARGET.URI-U +!
+    DROP -1 ;
+
+: _HTARGET-SOURCE-C,  ( c target -- flag )
+    DUP _HTARGET.SOURCE-U @ HTARGET-URI-CAPACITY >= IF
+        2DROP 0 EXIT
+    THEN
+    DUP _HTARGET.SOURCE-U @ OVER _HTARGET.SOURCE + >R
+    SWAP R> C!
+    1 OVER _HTARGET.SOURCE-U +!
+    DROP -1 ;
+
+: _HTARGET-URI+  ( a u target -- flag )
+    SWAP 0 ?DO
+        OVER I + C@ OVER _HTARGET-URI-C, 0= IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP -1 ;
+
+: _HTARGET-SOURCE+  ( a u target -- flag )
+    SWAP 0 ?DO
+        OVER I + C@ OVER _HTARGET-SOURCE-C, 0= IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP -1 ;
+
+: _HTARGET-PERCENT-VALID?  ( target start -- flag )
+    >R
+    DUP _HTARGET.SOURCE-U @ R> ?DO
+        DUP _HTARGET.SOURCE I + C@ [CHAR] % = IF
+            I 2 + OVER _HTARGET.SOURCE-U @ >= IF
+                DROP 0 UNLOOP EXIT
+            THEN
+            DUP _HTARGET.SOURCE I 1+ + C@ _HTARGET-HEX? 0=
+            OVER _HTARGET.SOURCE I 2 + + C@ _HTARGET-HEX? 0= OR IF
+                DROP 0 UNLOOP EXIT
+            THEN
+            DUP _HTARGET.SOURCE I 1+ + C@
+            OVER _HTARGET.SOURCE I 2 + + C@
+                _HTARGET-PERCENT-BYTE-SAFE? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _HTARGET-BUILD-REQUEST  ( target -- flag )
+    DUP HTARGET.REQUEST HTARGET-REQUEST-TARGET-CAPACITY 0 FILL
+    0 OVER HTARGET.REQUEST-U !
+
+    DUP _HTARGET.WORK-AUX @ OVER _HTARGET.SOURCE-U @ = IF
+        [CHAR] / OVER _HTARGET-REQUEST-C, NIP EXIT
+    THEN
+
+    DUP _HTARGET.SOURCE OVER _HTARGET.WORK-AUX @ + C@
+        [CHAR] ? = IF
+        [CHAR] / OVER _HTARGET-REQUEST-C, 0= IF DROP 0 EXIT THEN
+    ELSE
+        DUP _HTARGET.WORK-AUX @ 1+ OVER _HTARGET.SOURCE-U @ < IF
+            DUP _HTARGET.SOURCE OVER _HTARGET.WORK-AUX @ 1+ + C@
+                [CHAR] / = IF DROP 0 EXIT THEN
+        THEN
+    THEN
+
+    DUP _HTARGET-DOT-SEGMENTS? IF DROP 0 EXIT THEN
+    DUP _HTARGET.WORK-AUX @ 2DUP _HTARGET-PERCENT-VALID? 0= IF
+        2DROP 0 EXIT
+    THEN
+    DROP
+
+    DUP _HTARGET.SOURCE-U @ OVER _HTARGET.WORK-AUX @ ?DO
+        DUP _HTARGET.SOURCE I + C@
+        I 2 PICK _HTARGET.WORK-AUX @ > IF
+            OVER _HTARGET.SOURCE I 1- + C@ [CHAR] % = IF
+                _HTARGET-UC
+            ELSE
+                I 2 PICK _HTARGET.WORK-AUX @ 1+ > IF
+                    OVER _HTARGET.SOURCE I 2 - + C@ [CHAR] % = IF
+                        _HTARGET-UC
+                    THEN
+                THEN
+            THEN
+        THEN
+        OVER _HTARGET-REQUEST-C, 0= IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+: _HTARGET-DECIMAL-DIVISOR  ( n -- divisor )
+    DUP 10000 >= IF DROP 10000 EXIT THEN
+    DUP 1000 >= IF DROP 1000 EXIT THEN
+    DUP 100 >= IF DROP 100 EXIT THEN
+    DUP 10 >= IF DROP 10 EXIT THEN
+    DROP 1 ;
+
+: _HTARGET-PORT-URI+  ( target -- flag )
+    [CHAR] : OVER _HTARGET-URI-C, 0= IF DROP 0 EXIT THEN
+    DUP HTARGET.PORT @ _HTARGET-DECIMAL-DIVISOR
+    BEGIN
+        DUP 0>
+    WHILE
+        OVER HTARGET.PORT @ OVER / 10 MOD [CHAR] 0 +
+        2 PICK _HTARGET-URI-C, 0= IF 2DROP 0 EXIT THEN
+        10 /
+    REPEAT
+    2DROP -1 ;
+
+: _HTARGET-BUILD-URI  ( target -- flag )
+    DUP HTARGET.URI HTARGET-URI-CAPACITY 0 FILL
+    0 OVER HTARGET.URI-U !
+
+    DUP S" https://" ROT _HTARGET-URI+ 0= IF DROP 0 EXIT THEN
+    DUP HTARGET-HOST$ 2 PICK _HTARGET-URI+ 0= IF DROP 0 EXIT THEN
+    DUP HTARGET.PORT @ 443 <> IF
+        DUP _HTARGET-PORT-URI+ 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP HTARGET-REQUEST-TARGET$ 2 PICK _HTARGET-URI+ 0= IF
+        DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+: _HTARGET-SEAL  ( target -- status )
+    DUP _HTARGET.SOURCE HTARGET-URI-CAPACITY 0 FILL
+    0 OVER _HTARGET.SOURCE-U !
+    0 OVER _HTARGET.WORK-POS !
+    0 OVER _HTARGET.WORK-AUX !
+    HTARGET-S-OK OVER HTARGET.STATUS !
+    HTARGET-F-VALID SWAP HTARGET.FLAGS !
+    HTARGET-S-OK ;
+
+: _HTARGET-PARSE-SOURCE  ( target -- status )
+    DUP _HTARGET.SOURCE-U @ 0 ?DO
+        DUP _HTARGET.SOURCE I + C@
+        DUP 33 < OVER 126 > OR OVER 92 = OR OVER [CHAR] # = OR IF
+            DROP HTARGET-S-INVALID SWAP _HTARGET-FAIL UNLOOP EXIT
+        THEN
+        DROP
+    LOOP
+
+    DUP _HTARGET.SOURCE OVER _HTARGET.SOURCE-U @
+        S" https://" STR-STARTSI? 0= IF
+        HTARGET-S-SCHEME SWAP _HTARGET-FAIL EXIT
+    THEN
+
+    DUP _HTARGET.SOURCE-U @ OVER _HTARGET.WORK-AUX !
+    DUP _HTARGET.SOURCE-U @ 8 ?DO
+        DUP _HTARGET.SOURCE I + C@ DUP [CHAR] / = SWAP [CHAR] ? = OR IF
+            I OVER _HTARGET.WORK-AUX ! LEAVE
+        THEN
+    LOOP
+    DUP _HTARGET.WORK-AUX @ 8 <= IF
+        HTARGET-S-AUTHORITY SWAP _HTARGET-FAIL EXIT
+    THEN
+
+    -1 OVER _HTARGET.WORK-POS !
+    DUP _HTARGET.WORK-AUX @ 8 ?DO
+        DUP _HTARGET.SOURCE I + C@
+        DUP [CHAR] @ = OVER [CHAR] % = OR
+        OVER [CHAR] [ = OR OVER [CHAR] ] = OR IF
+            DROP HTARGET-S-AUTHORITY SWAP _HTARGET-FAIL UNLOOP EXIT
+        THEN
+        [CHAR] : = IF
+            DUP _HTARGET.WORK-POS @ 0>= IF
+                HTARGET-S-AUTHORITY SWAP _HTARGET-FAIL UNLOOP EXIT
+            THEN
+            I OVER _HTARGET.WORK-POS !
+        THEN
+    LOOP
+
+    DUP _HTARGET-HOST-END 8 - DUP 0=
+    OVER HTARGET-HOST-CAPACITY > OR IF
+        DROP HTARGET-S-HOST SWAP _HTARGET-FAIL EXIT
+    THEN
+    OVER HTARGET.HOST-U !
+
+    DUP _HTARGET.SOURCE 8 + OVER HTARGET.HOST-U @
+        _HTARGET-DNS-NAME? 0= IF
+        HTARGET-S-HOST SWAP _HTARGET-FAIL EXIT
+    THEN
+    DUP _HTARGET.SOURCE 8 + OVER HTARGET.HOST-U @
+        _HTARGET-IP-LITERAL? IF
+        HTARGET-S-HOST SWAP _HTARGET-FAIL EXIT
+    THEN
+
+    DUP HTARGET.HOST-U @ 0 ?DO
+        DUP _HTARGET.SOURCE 8 + I + C@ _HTARGET-LC
+        OVER HTARGET.HOST I + C!
+    LOOP
+
+    DUP _HTARGET.WORK-POS @ 0< IF
+        443 OVER HTARGET.PORT !
+    ELSE
+        DUP _HTARGET-PORT-PARSE 0= IF
+            HTARGET-S-PORT SWAP _HTARGET-FAIL EXIT
+        THEN
+    THEN
+
+    DUP _HTARGET-BUILD-REQUEST 0= IF
+        HTARGET-S-PATH SWAP _HTARGET-FAIL EXIT
+    THEN
+    DUP _HTARGET-BUILD-URI 0= IF
+        HTARGET-S-CAPACITY SWAP _HTARGET-FAIL EXIT
+    THEN
+    _HTARGET-SEAL ;
+
+: HTARGET-PARSE  ( uri-a uri-u target -- status )
+    DUP 0= IF DROP 2DROP HTARGET-S-INVALID EXIT THEN
+    DUP HTARGET-SIZE _HTARGET-SPAN-VALID? 0= IF
+        DROP 2DROP HTARGET-S-INVALID EXIT
+    THEN
+    DUP >R DROP
+    DUP HTARGET-URI-CAPACITY > IF
+        R@ HTARGET-INIT 2DROP
+        HTARGET-S-CAPACITY R> _HTARGET-FAIL EXIT
+    THEN
+    2DUP _HTARGET-INPUT-SHAPE? 0= IF
+        R@ HTARGET-INIT 2DROP
+        HTARGET-S-INVALID R> _HTARGET-FAIL EXIT
+    THEN
+    2DUP R@ _HTARGET-SPAN-OVERLAP? IF
+        2DROP R> DROP HTARGET-S-INVALID EXIT
+    THEN
+    R@ HTARGET-INIT
+    2DUP R@ _HTARGET.SOURCE SWAP CMOVE
+    DUP R@ _HTARGET.SOURCE-U !
+    2DROP R> _HTARGET-PARSE-SOURCE ;
+
+: HTARGET-SAME-ORIGIN?  ( target-a target-b -- flag )
+    2DUP HTARGET-VALID? SWAP HTARGET-VALID? AND 0= IF
+        2DROP 0 EXIT
+    THEN
+    2DUP HTARGET-PORT@ SWAP HTARGET-PORT@ = 0= IF
+        2DROP 0 EXIT
+    THEN
+    >R HTARGET-HOST$ R> HTARGET-HOST$ STR-STR= ;
+
+: HTARGET-EQUAL?  ( target-a target-b -- flag )
+    2DUP HTARGET-VALID? SWAP HTARGET-VALID? AND 0= IF
+        2DROP 0 EXIT
+    THEN
+    >R HTARGET-URI$ R> HTARGET-URI$ STR-STR= ;
+
+: _HTARGET-REDIRECT-RETURN  ( loc-a loc-u current candidate status -- status )
+    >R 2DROP 2DROP R> ;
+
+: _HTARGET-REDIRECT-FAIL  ( loc-a loc-u current candidate status -- status )
+    >R DUP HTARGET-INIT
+    R@ OVER _HTARGET-FAIL
+    R> DROP
+    _HTARGET-REDIRECT-RETURN ;
+
+: _HTARGET-REDIRECT-RELATIVE  ( loc-a loc-u current candidate -- status )
+    DUP HTARGET-INIT
+    OVER HTARGET-URI$
+    3 PICK HTARGET.REQUEST-U @ -
+    2 PICK _HTARGET-SOURCE+ 0= IF
+        HTARGET-S-CAPACITY _HTARGET-REDIRECT-FAIL EXIT
+    THEN
+    3 PICK 3 PICK 2 PICK _HTARGET-SOURCE+ 0= IF
+        HTARGET-S-CAPACITY _HTARGET-REDIRECT-FAIL EXIT
+    THEN
+    DUP _HTARGET-PARSE-SOURCE _HTARGET-REDIRECT-RETURN ;
+
+: HTARGET-REDIRECT  ( location-a location-u current candidate -- status )
+    DUP 0= IF 2DROP 2DROP HTARGET-S-INVALID EXIT THEN
+    2DUP = IF
+        2DROP 2DROP HTARGET-S-INVALID EXIT
+    THEN
+    OVER HTARGET-SIZE 2 PICK _HTARGET-SPAN-OVERLAP? IF
+        2DROP 2DROP HTARGET-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK 2 PICK _HTARGET-SPAN-OVERLAP? IF
+        2DROP 2DROP HTARGET-S-INVALID EXIT
+    THEN
+    OVER HTARGET-VALID? 0= IF
+        HTARGET-S-INVALID _HTARGET-REDIRECT-FAIL EXIT
+    THEN
+    2 PICK HTARGET-URI-CAPACITY > IF
+        HTARGET-S-CAPACITY _HTARGET-REDIRECT-FAIL EXIT
+    THEN
+    3 PICK 3 PICK _HTARGET-INPUT-SHAPE? 0= IF
+        HTARGET-S-INVALID _HTARGET-REDIRECT-FAIL EXIT
+    THEN
+    OVER HTARGET.REDIRECT-COUNT @ HTARGET-REDIRECT-MAX >= IF
+        HTARGET-S-REDIRECT-LIMIT _HTARGET-REDIRECT-FAIL EXIT
+    THEN
+
+    3 PICK C@ [CHAR] / = IF
+        2 PICK 1 > IF
+            3 PICK 1+ C@ [CHAR] / = IF
+                HTARGET-S-AUTHORITY-REQUIRED
+                    _HTARGET-REDIRECT-FAIL EXIT
+            THEN
+        THEN
+        2OVER 2OVER _HTARGET-REDIRECT-RELATIVE
+    ELSE
+        3 PICK 3 PICK 2 PICK HTARGET-PARSE
+    THEN
+    DUP HTARGET-S-OK <> IF
+        _HTARGET-REDIRECT-RETURN EXIT
+    THEN
+    DROP
+
+    2DUP HTARGET-SAME-ORIGIN? 0= IF
+        HTARGET-S-AUTHORITY-REQUIRED
+            _HTARGET-REDIRECT-FAIL EXIT
+    THEN
+    2DUP HTARGET-EQUAL? IF
+        HTARGET-S-LOOP _HTARGET-REDIRECT-FAIL EXIT
+    THEN
+    OVER HTARGET.REDIRECT-COUNT @ 1+
+        OVER HTARGET.REDIRECT-COUNT !
+    HTARGET-S-OK _HTARGET-REDIRECT-RETURN ;

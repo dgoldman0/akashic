@@ -366,7 +366,7 @@ def _build_mp64fs_boot_image(total_sectors=2048):
     """Build an empty MP64FS image.  KDOS FS-LOAD reads and recognises it."""
     sb = bytearray(SECTOR)
     sb[0:4] = b'MP64'
-    struct.pack_into('<H', sb, 4, 1)               # version
+    struct.pack_into('<H', sb, 4, 1)               # marker
     struct.pack_into('<I', sb, 6, total_sectors)    # total_sectors
     struct.pack_into('<H', sb, 10, 1)               # bmap_start
     struct.pack_into('<H', sb, 12, 1)               # bmap_sectors

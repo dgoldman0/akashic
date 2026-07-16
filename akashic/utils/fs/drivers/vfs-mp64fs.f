@@ -18,10 +18,12 @@ REQUIRE ../vfs.f
 \ =====================================================================
 
 512  CONSTANT _VMP-SECTOR
-14   CONSTANT _VMP-DATA-START
 128  CONSTANT _VMP-MAX-FILES
 48   CONSTANT _VMP-ENTRY-SIZE
 12   CONSTANT _VMP-DIR-SECTORS
+2    CONSTANT _VMP-MAX-BMAP-SECTORS
+4096 CONSTANT _VMP-BITS-PER-BMAP-SECTOR
+8192 CONSTANT _VMP-MAX-SECTORS
 255  CONSTANT _VMP-ROOT-PARENT     \ parent=0xFF means root dir
 
 \ File types
@@ -36,29 +38,38 @@ REQUIRE ../vfs.f
 \  Allocated from the VFS arena by VMP-INIT, stored in V.BCTX.
 \
 \    +0      superblock cache   (512 bytes)
-\    +512    bitmap cache        (512 bytes)
-\    +1024   directory cache     (128 × 48 = 6144 bytes)
-\    +7168   scratch buffer      (512 bytes)
-\    +7680   total-sectors cell  (8 bytes)
-\    +7688   data-start cell     (8 bytes)
-\    +7696   dirty-bmap flag     (8 bytes)
-\    +7704   dirty-dir flag      (8 bytes)
-\  = 7712 bytes
+\    +512    bitmap cache        (2 × 512 bytes maximum)
+\    +1536   directory cache     (128 × 48 = 6144 bytes)
+\    +7680   scratch buffer      (512 bytes)
+\    +8192   parsed geometry     (6 cells)
+\    +8240   dirty-bmap flag     (8 bytes)
+\    +8248   dirty-dir flag      (8 bytes)
+\    +8256   validated/ready     (8 bytes)
+\  = 8264 bytes
 
-7712 CONSTANT _VMP-CTX-SIZE
+8264 CONSTANT _VMP-CTX-SIZE
 
 \ Context field offsets
    0 CONSTANT _VMP-C.SUPER
  512 CONSTANT _VMP-C.BMAP
-1024 CONSTANT _VMP-C.DIR
-7168 CONSTANT _VMP-C.SCRATCH
-7680 CONSTANT _VMP-C.TOTAL
-7688 CONSTANT _VMP-C.DSTART
-7696 CONSTANT _VMP-C.DBMAP
-7704 CONSTANT _VMP-C.DDIR
+1536 CONSTANT _VMP-C.DIR
+7680 CONSTANT _VMP-C.SCRATCH
+8192 CONSTANT _VMP-C.TOTAL
+8200 CONSTANT _VMP-C.DSTART
+8208 CONSTANT _VMP-C.BSTART
+8216 CONSTANT _VMP-C.BN
+8224 CONSTANT _VMP-C.DIRSTART
+8232 CONSTANT _VMP-C.DIRN
+8240 CONSTANT _VMP-C.DBMAP
+8248 CONSTANT _VMP-C.DDIR
+8256 CONSTANT _VMP-C.READY
 
 \ Accessor: ( vfs -- ctx )
 : _VMP-CTX  ( vfs -- ctx )  V.BCTX @ ;
+
+: _VMP-READY?  ( vfs -- flag )
+    V.BCTX @ DUP 0= IF DROP FALSE EXIT THEN
+    _VMP-C.READY + @ 0<> ;
 
 \ =====================================================================
 \  Directory Entry Field Readers (operate on dir-cache address)
@@ -185,19 +196,133 @@ VARIABLE _VMRUN-CTX
 \ =====================================================================
 \
 \  Allocate binding-ctx from the VFS's arena.  DMA-read the
-\  superblock (sector 0), bitmap (sector 1), and directory
-\  (sectors 2–13) into the context caches.  Parse geometry
-\  fields from the superblock.
+\  superblock (sector 0), validate its disk-derived geometry, then
+\  read the complete bitmap and directory into the context caches.
 
 VARIABLE _VMI-V
 VARIABLE _VMI-CTX
+
+: _VMP-SB-MARKER   ( ctx -- n ) _VMP-C.SUPER + 4  + W@ ;
+: _VMP-SB-TOTAL    ( ctx -- n ) _VMP-C.SUPER + 6  + L@ ;
+: _VMP-SB-BSTART   ( ctx -- n ) _VMP-C.SUPER + 10 + W@ ;
+: _VMP-SB-BN       ( ctx -- n ) _VMP-C.SUPER + 12 + W@ ;
+: _VMP-SB-DIRSTART ( ctx -- n ) _VMP-C.SUPER + 14 + W@ ;
+: _VMP-SB-DIRN     ( ctx -- n ) _VMP-C.SUPER + 16 + W@ ;
+: _VMP-SB-DSTART   ( ctx -- n ) _VMP-C.SUPER + 18 + W@ ;
+
+VARIABLE _VMGV-CTX
+: _VMP-GEOMETRY?  ( ctx -- flag )
+    _VMGV-CTX !
+    _VMGV-CTX @ _VMP-SB-MARKER 1 <> IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-TOTAL DUP 15 < SWAP _VMP-MAX-SECTORS > OR
+        IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-TOTAL DISK-SECTORS <> IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-BSTART 1 <> IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-BN DUP 1 < SWAP _VMP-MAX-BMAP-SECTORS > OR
+        IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-TOTAL _VMP-BITS-PER-BMAP-SECTOR 1- +
+        _VMP-BITS-PER-BMAP-SECTOR /
+        _VMGV-CTX @ _VMP-SB-BN <> IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-DIRSTART
+        _VMGV-CTX @ _VMP-SB-BSTART _VMGV-CTX @ _VMP-SB-BN + <>
+        IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-DIRN _VMP-DIR-SECTORS <> IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-DSTART
+        _VMGV-CTX @ _VMP-SB-DIRSTART _VMGV-CTX @ _VMP-SB-DIRN + <>
+        IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-DSTART _VMGV-CTX @ _VMP-SB-TOTAL >=
+        IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-C.SUPER + 20 + C@ _VMP-MAX-FILES <>
+        IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-C.SUPER + 21 + C@ _VMP-ENTRY-SIZE <>
+        IF FALSE EXIT THEN
+    TRUE ;
+
+\ Validate every occupied directory entry before VMP-INIT exposes an inode.
+\ Later read/write/delete callbacks can then rely on bounded, bitmap-backed
+\ extents instead of reinterpreting untrusted disk fields at mutation time.
+VARIABLE _VMEV-CTX
+VARIABLE _VMEV-DE
+VARIABLE _VMEV-START
+VARIABLE _VMEV-COUNT
+VARIABLE _VMPV-CTX
+VARIABLE _VMDV-CTX
+
+: _VMP-RUN-ALLOCATED?  ( start count ctx -- flag )
+    _VMEV-CTX ! _VMEV-COUNT ! _VMEV-START !
+    _VMEV-COUNT @ 0= IF FALSE EXIT THEN
+    _VMEV-START @ _VMEV-CTX @ _VMP-C.DSTART + @ < IF FALSE EXIT THEN
+    _VMEV-START @ _VMEV-CTX @ _VMP-C.TOTAL + @ >= IF FALSE EXIT THEN
+    _VMEV-COUNT @
+        _VMEV-CTX @ _VMP-C.TOTAL + @ _VMEV-START @ - >
+        IF FALSE EXIT THEN
+    TRUE
+    _VMEV-COUNT @ 0 DO
+        _VMEV-START @ I + _VMEV-CTX @ _VMP-BIT-FREE? IF
+            DROP FALSE LEAVE
+        THEN
+    LOOP ;
+
+: _VMP-PARENT-VALID?  ( parent ctx -- flag )
+    _VMPV-CTX !
+    DUP _VMP-ROOT-PARENT = IF DROP TRUE EXIT THEN
+    DUP _VMP-MAX-FILES >= IF DROP FALSE EXIT THEN
+    _VMPV-CTX @ _VMP-DIRENT
+    DUP C@ 0<> SWAP _VMP-DE.TYPE _VMP-T-DIR = AND ;
+
+: _VMP-DIRENT-VALID?  ( de ctx -- flag )
+    _VMEV-CTX ! _VMEV-DE !
+    _VMEV-DE @ _VMP-DE.PARENT _VMEV-CTX @ _VMP-PARENT-VALID? 0=
+        IF FALSE EXIT THEN
+    _VMEV-DE @ _VMP-DE.TYPE DUP 0= SWAP 10 > OR IF FALSE EXIT THEN
+    _VMEV-DE @ _VMP-DE.TYPE _VMP-T-DIR = IF
+        _VMEV-DE @ _VMP-DE.SEC
+        _VMEV-DE @ _VMP-DE.COUNT OR
+        _VMEV-DE @ _VMP-DE.USED OR
+        _VMEV-DE @ _VMP-DE.EXT1S OR
+        _VMEV-DE @ _VMP-DE.EXT1C OR 0= EXIT
+    THEN
+    _VMEV-DE @ _VMP-DE.SEC _VMEV-DE @ _VMP-DE.COUNT _VMEV-CTX @
+        _VMP-RUN-ALLOCATED? 0= IF FALSE EXIT THEN
+    _VMEV-DE @ _VMP-DE.EXT1S 0= _VMEV-DE @ _VMP-DE.EXT1C 0= <> IF
+        FALSE EXIT
+    THEN
+    _VMEV-DE @ _VMP-DE.EXT1C IF
+        _VMEV-DE @ _VMP-DE.EXT1S _VMEV-DE @ _VMP-DE.EXT1C _VMEV-CTX @
+        _VMP-RUN-ALLOCATED? 0= IF FALSE EXIT THEN
+    THEN
+    _VMEV-DE @ _VMP-DE.USED
+    _VMEV-DE @ _VMP-DE.COUNT _VMEV-DE @ _VMP-DE.EXT1C +
+        _VMP-SECTOR * <= ;
+
+: _VMP-DIRECTORY-VALID?  ( ctx -- flag )
+    _VMDV-CTX ! TRUE
+    _VMP-MAX-FILES 0 DO
+        I _VMDV-CTX @ _VMP-DIRENT DUP C@ IF
+            _VMDV-CTX @ _VMP-DIRENT-VALID? 0= IF
+                DROP FALSE LEAVE
+            THEN
+        ELSE
+            DROP
+        THEN
+    LOOP ;
+
+: _VMP-ADOPT-GEOMETRY  ( ctx -- )
+    DUP _VMP-SB-TOTAL    OVER _VMP-C.TOTAL + !
+    DUP _VMP-SB-DSTART   OVER _VMP-C.DSTART + !
+    DUP _VMP-SB-BSTART   OVER _VMP-C.BSTART + !
+    DUP _VMP-SB-BN       OVER _VMP-C.BN + !
+    DUP _VMP-SB-DIRSTART OVER _VMP-C.DIRSTART + !
+    DUP _VMP-SB-DIRN      SWAP _VMP-C.DIRN + ! ;
 
 : _VMP-INIT  ( vfs -- ior )
     _VMI-V !
     \ Check disk present
     DISK? 0= IF  -1 EXIT  THEN
     \ Allocate context
-    _VMI-V @ V.ARENA @  _VMP-CTX-SIZE ARENA-ALLOT  _VMI-CTX !
+    _VMI-V @ V.ARENA @  _VMP-CTX-SIZE ARENA-ALLOT?
+    IF DROP -1 EXIT THEN
+    _VMI-CTX !
     \ Zero it
     _VMI-CTX @  _VMP-CTX-SIZE  0 FILL
     \ Store in VFS descriptor
@@ -210,22 +335,26 @@ VARIABLE _VMI-CTX
     _VMI-CTX @ _VMP-C.SUPER +  _VMI-V @  _VMP-PROBE 0= IF
         -2 EXIT   \ not MP64FS
     THEN
-    \ Parse geometry from superblock
-    _VMI-CTX @ _VMP-C.SUPER + 6 + L@      \ total_sectors (u32 at +6)
-    _VMI-CTX @ _VMP-C.TOTAL + !
-    _VMI-CTX @ _VMP-C.SUPER + 18 + W@     \ data_start (u16 at +18)
-    _VMI-CTX @ _VMP-C.DSTART + !
-    \ Read bitmap (sector 1)
-    1 DISK-SEC!
+    \ Validate and adopt disk geometry before any variable-size DMA.
+    _VMI-CTX @ _VMP-GEOMETRY? 0= IF -3 EXIT THEN
+    _VMI-CTX @ _VMP-ADOPT-GEOMETRY
+    \ Read the complete bitmap.
+    _VMI-CTX @ _VMP-C.BSTART + @ DISK-SEC!
     _VMI-CTX @ _VMP-C.BMAP +  DISK-DMA!
-    1 DISK-N!  DISK-READ
-    \ Read directory (sectors 2–13)
-    2 DISK-SEC!
+    _VMI-CTX @ _VMP-C.BN + @ DISK-N!  DISK-READ
+    \ Read the geometry-selected directory.
+    _VMI-CTX @ _VMP-C.DIRSTART + @ DISK-SEC!
     _VMI-CTX @ _VMP-C.DIR +  DISK-DMA!
-    _VMP-DIR-SECTORS DISK-N!  DISK-READ
+    _VMI-CTX @ _VMP-C.DIRN + @ DISK-N!  DISK-READ
+    \ Metadata sectors must all be reserved in the allocation bitmap.
+    _VMI-CTX @ _VMP-C.DSTART + @ 0 DO
+        I _VMI-CTX @ _VMP-BIT-FREE? IF -4 UNLOOP EXIT THEN
+    LOOP
+    _VMI-CTX @ _VMP-DIRECTORY-VALID? 0= IF -5 EXIT THEN
     \ Clear dirty flags
     0 _VMI-CTX @ _VMP-C.DBMAP + !
     0 _VMI-CTX @ _VMP-C.DDIR + !
+    -1 _VMI-CTX @ _VMP-C.READY + !
     0 ;   \ success
 
 \ =====================================================================
@@ -303,6 +432,7 @@ VARIABLE _VMRD-CTX
 VARIABLE _VMRD-PID    \ parent dir slot to match
 
 : _VMP-READDIR  ( inode vfs -- )
+    DUP _VMP-READY? 0= IF 2DROP EXIT THEN
     _VMRD-V !  _VMRD-IN !
     _VMRD-V @ V.BCTX @  _VMRD-CTX !
     \ The parent slot to match = this inode's binding-id
@@ -418,6 +548,7 @@ VARIABLE _VMRR-CHUNK
     DUP _VMRR-BUF +!  _VMRR-POS +! ;
 
 : _VMP-READ  ( buf len offset inode vfs -- actual )
+    DUP _VMP-READY? 0= IF 2DROP 2DROP DROP 0 EXIT THEN
     _VMRR-V !  _VMRR-IN !  _VMRR-OFF !  _VMRR-LEN !  _VMRR-BUF !
     _VMRR-V @ V.BCTX @  _VMRR-CTX !
     _VMRR-CTX @ _VMP-C.SCRATCH +  _VMRR-SCR !
@@ -575,6 +706,7 @@ VARIABLE _VMRW-CHUNK
     DUP _VMRW-BUF +!  _VMRW-POS +! ;
 
 : _VMP-WRITE  ( buf len offset inode vfs -- actual )
+    DUP _VMP-READY? 0= IF 2DROP 2DROP DROP 0 EXIT THEN
     _VMRW-V !  _VMRW-IN !  _VMRW-OFF !  _VMRW-LEN !  _VMRW-BUF !
     _VMRW-V @ V.BCTX @  _VMRW-CTX !
     _VMRW-CTX @ _VMP-C.SCRATCH +  _VMRW-SCR !
@@ -624,6 +756,7 @@ VARIABLE _VMSY-CTX
 VARIABLE _VMSY-IN
 
 : _VMP-SYNC  ( inode vfs -- ior )
+    DUP _VMP-READY? 0= IF 2DROP -1 EXIT THEN
     _VMSY-V !  _VMSY-IN !
     _VMSY-V @ V.BCTX @  _VMSY-CTX !
     _VMSY-CTX @ 0= IF  -1 EXIT  THEN
@@ -646,16 +779,16 @@ VARIABLE _VMSY-IN
     THEN
     \ Write bitmap if dirty
     _VMSY-CTX @ _VMP-C.DBMAP + @ IF
-        1 DISK-SEC!
+        _VMSY-CTX @ _VMP-C.BSTART + @ DISK-SEC!
         _VMSY-CTX @ _VMP-C.BMAP + DISK-DMA!
-        1 DISK-N!  DISK-WRITE
+        _VMSY-CTX @ _VMP-C.BN + @ DISK-N!  DISK-WRITE
         0 _VMSY-CTX @ _VMP-C.DBMAP + !
     THEN
     \ Write directory if dirty
     _VMSY-CTX @ _VMP-C.DDIR + @ IF
-        2 DISK-SEC!
+        _VMSY-CTX @ _VMP-C.DIRSTART + @ DISK-SEC!
         _VMSY-CTX @ _VMP-C.DIR + DISK-DMA!
-        _VMP-DIR-SECTORS DISK-N!  DISK-WRITE
+        _VMSY-CTX @ _VMP-C.DIRN + @ DISK-N!  DISK-WRITE
         0 _VMSY-CTX @ _VMP-C.DDIR + !
     THEN
     0 ;
@@ -684,6 +817,7 @@ VARIABLE _VMFS-CTX
     LOOP ;
 
 : _VMP-CREATE  ( inode vfs -- ior )
+    DUP _VMP-READY? 0= IF 2DROP -1 EXIT THEN
     _VMCR-V !  _VMCR-IN !
     _VMCR-V @ V.BCTX @  _VMCR-CTX !
     _VMCR-IN @ IN.NAME @ _VFS-STR-GET NIP 23 > IF -3 EXIT THEN
@@ -748,6 +882,7 @@ VARIABLE _VMDL-V
 VARIABLE _VMDL-CTX
 
 : _VMP-DELETE  ( inode vfs -- ior )
+    DUP _VMP-READY? 0= IF 2DROP -1 EXIT THEN
     _VMDL-V !  _VMDL-IN !
     _VMDL-V @ V.BCTX @  _VMDL-CTX !
     \ Free bitmap sectors in both extents.
@@ -812,6 +947,7 @@ VARIABLE _VMTR-KEEP-E
     -1 _VMTR-CTX @ _VMP-C.DDIR + ! ;
 
 : _VMP-TRUNCATE  ( inode vfs -- ior )
+    DUP _VMP-READY? 0= IF 2DROP -1 EXIT THEN
     _VMTR-V ! _VMTR-IN !
     _VMTR-IN @ IN.SIZE-LO @ _VMTR-IN @ _VMTR-V @ _VMP-ENSURE
     ?DUP IF EXIT THEN
