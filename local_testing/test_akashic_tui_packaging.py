@@ -5,20 +5,26 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 LOCAL_TESTING = Path(__file__).resolve().parent
 if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
 from akashic_tui import (  # noqa: E402
+    MEGAPAD_NETWORKING_BOOT_LINE,
+    MEGAPAD_ROOT,
     PROFILES,
     PROVIDED_RE,
     REQUIRE_RE,
     _minify_forth,
+    _requires_megapad_networking,
+    _with_megapad_networking,
     build_image,
     dependency_closure,
 )
-from diskutil import MP64FS  # noqa: E402
+from diskutil import MP64FS, pack_forth_source  # noqa: E402
 
 
 def test_full_line_comments_follow_megapad_prefix_rule() -> None:
@@ -98,24 +104,77 @@ def test_conditional_control_tokens_are_never_compacted_out() -> None:
 
 
 def test_ordinary_streams_excludes_public_network_composition() -> None:
-    modules = set(
-        dependency_closure(("tui/applets/streams/streams.f",))
-    )
+    closure = dependency_closure(("tui/applets/streams/streams.f",))
+    modules = set(closure)
     assert "tui/applets/streams/public-provider.f" in modules
     assert "tui/applets/streams/bluesky-public.f" not in modules
     assert "atproto/public-author-feed.f" not in modules
     assert "atproto/public-trust.f" not in modules
     assert "net/transports/kdos-tls.f" not in modules
+    assert not _requires_megapad_networking(closure)
 
 
 def test_explicit_bluesky_composition_still_does_not_supply_trust() -> None:
-    modules = set(
-        dependency_closure(("tui/applets/streams/bluesky-public.f",))
-    )
+    closure = dependency_closure(("tui/applets/streams/bluesky-public.f",))
+    modules = set(closure)
     assert "tui/applets/streams/streams.f" in modules
     assert "atproto/public-author-feed.f" in modules
     assert "net/transports/kdos-tls.f" in modules
     assert "atproto/public-trust.f" not in modules
+    assert _requires_megapad_networking(closure)
+
+
+def test_networking_boot_load_follows_userland_entry() -> None:
+    autoexec = "\\ test autoexec\nENTER-USERLAND\nREQUIRE app.f\n"
+    integrated = _with_megapad_networking(autoexec)
+    assert integrated == (
+        "\\ test autoexec\n"
+        "ENTER-USERLAND\n"
+        f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
+        "REQUIRE app.f\n"
+    )
+
+
+def test_existing_networking_boot_load_is_idempotent() -> None:
+    autoexec = (
+        "ENTER-USERLAND\n"
+        f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
+        "REQUIRE app.f\n"
+    )
+    assert _with_megapad_networking(autoexec) == autoexec
+
+
+@pytest.mark.parametrize(
+    "autoexec",
+    (
+        "FSLOAD networking.f\nENTER-USERLAND\nREQUIRE app.f\n",
+        "ENTER-USERLAND\nREQUIRE app.f\nFSLOAD networking.f\n",
+        (
+            "ENTER-USERLAND\n"
+            "FSLOAD networking.f\n"
+            "FSLOAD networking.f\n"
+        ),
+    ),
+)
+def test_networking_boot_load_rejects_unsafe_placement(autoexec: str) -> None:
+    with pytest.raises(RuntimeError, match="exactly once"):
+        _with_megapad_networking(autoexec)
+
+
+def test_direct_web_response_requires_native_networking() -> None:
+    closure = dependency_closure(("web/response.f",))
+    assert _requires_megapad_networking(closure)
+
+
+def test_abstract_http_profile_omits_native_networking(
+    tmp_path: Path,
+) -> None:
+    image = build_image("http-request", tmp_path / "akashic-http-request.img")
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    names = {entry.name for entry in filesystem.list_files()}
+    assert "networking.f" not in names
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    assert MEGAPAD_NETWORKING_BOOT_LINE not in autoexec
 
 
 def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
@@ -127,6 +186,14 @@ def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
     info = filesystem.info()
     assert info["total_sectors"] == 8192
     assert info["free_sectors"] * 512 >= 1 << 20
+    assert filesystem.read_file("networking.f") == pack_forth_source(
+        (MEGAPAD_ROOT / "networking.f").read_bytes()
+    )
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    assert "ENTER-USERLAND\nFSLOAD networking.f\n" in autoexec
+    assert autoexec.index("FSLOAD networking.f") < autoexec.index(
+        "REQUIRE .akashic/link-"
+    )
 
 
 def test_codex_desktop_profiles_inherit_capacity_and_build(

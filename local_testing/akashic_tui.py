@@ -82,7 +82,13 @@ def _megapad_root() -> Path:
     configured = os.environ.get("MEGAPAD_ROOT")
     root = Path(configured).expanduser() if configured else DEFAULT_MEGAPAD_ROOT
     root = root.resolve()
-    required = ("bios.asm", "kdos.f", "diskutil.py", "session.py")
+    required = (
+        "bios.asm",
+        "kdos.f",
+        "networking.f",
+        "diskutil.py",
+        "session.py",
+    )
     missing = [name for name in required if not (root / name).is_file()]
     if missing:
         detail = ", ".join(missing)
@@ -104,6 +110,7 @@ from diskutil import (  # noqa: E402
     MAX_FILES,
     MAX_NAME_LEN,
     MP64FS,
+    pack_forth_source,
 )
 from session import MachineSession  # noqa: E402
 
@@ -121,6 +128,25 @@ class Profile:
     initial_files: tuple[tuple[str, bytes], ...] = ()
     include_large_sample: bool = True
     total_sectors: int = 4096
+
+
+# Akashic modules that bind directly to the networking surface exported by
+# MegaPad's loadable networking.f module.  Checking the resolved profile
+# closure keeps parser-only and abstract-I/O net modules lightweight while
+# making each native KDOS transport pull in the one canonical system module.
+MEGAPAD_NETWORKING_CONSUMERS = frozenset(
+    {
+        "agent/providers/codex/trust.f",
+        "atproto/public-author-feed.f",
+        "net/http.f",
+        "net/tls-trust-registry.f",
+        "net/transports/kdos-tls.f",
+        "net/ws.f",
+        "web/response.f",
+        "web/server.f",
+    }
+)
+MEGAPAD_NETWORKING_BOOT_LINE = "FSLOAD networking.f"
 
 
 def _practice_crc32(data: bytes) -> int:
@@ -20247,6 +20273,42 @@ def dependency_order(roots: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
+    """Return whether an Akashic module closure consumes KDOS networking."""
+    return not MEGAPAD_NETWORKING_CONSUMERS.isdisjoint(modules)
+
+
+def _with_megapad_networking(autoexec: str) -> str:
+    """Load canonical networking.f immediately after entering userland."""
+    lines = autoexec.splitlines()
+    userland_lines = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "ENTER-USERLAND"
+    ]
+    if len(userland_lines) != 1:
+        raise RuntimeError(
+            "Networking profiles must enter userland exactly once before "
+            "loading networking.f"
+        )
+    expected_index = userland_lines[0] + 1
+    networking_lines = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == MEGAPAD_NETWORKING_BOOT_LINE
+    ]
+    if networking_lines:
+        if networking_lines != [expected_index]:
+            raise RuntimeError(
+                "Networking profiles must load networking.f exactly once, "
+                "immediately after entering userland"
+            )
+        return autoexec
+    lines.insert(expected_index, MEGAPAD_NETWORKING_BOOT_LINE)
+    suffix = "\n" if autoexec.endswith("\n") else ""
+    return "\n".join(lines) + suffix
+
+
 def _has_forth_conditional_token(text: str) -> bool:
     """Return whether MegaPad's raw conditional scanner observes a token."""
     return any(
@@ -20361,9 +20423,21 @@ def _directories(paths: set[str]) -> list[str]:
     return sorted(directories, key=lambda value: (value.count("/"), value))
 
 
-def _validate_image_paths(paths: set[str], directories: list[str]):
-    # Include kdos/autoexec and two temporary fragmentation fixtures.
-    entries = len(paths) + len(directories) + len(SAMPLE_FILES) + 4
+def _validate_image_paths(
+    paths: set[str],
+    directories: list[str],
+    *,
+    include_networking: bool = False,
+):
+    # Include kdos/autoexec, optional networking, and two temporary
+    # fragmentation fixtures.
+    entries = (
+        len(paths)
+        + len(directories)
+        + len(SAMPLE_FILES)
+        + 4
+        + int(include_networking)
+    )
     if entries > MAX_FILES:
         raise RuntimeError(
             f"Profile needs {entries} MP64FS entries; filesystem limit is "
@@ -20493,6 +20567,9 @@ def build_image(
         if profile.linked
         else dependency_closure(profile.roots)
     )
+    requires_networking = _requires_megapad_networking(modules)
+    if requires_networking:
+        autoexec = _with_megapad_networking(autoexec)
     resources = set(profile.resources)
     linked_chunks = _linked_chunks(modules) if profile.linked else {}
     paths = set(linked_chunks) | resources if profile.linked else set(modules) | resources
@@ -20500,7 +20577,11 @@ def build_image(
     image_paths = paths | initial_paths
     directories = _directories(image_paths)
     _validate_module_ids(modules)
-    _validate_image_paths(image_paths, directories)
+    _validate_image_paths(
+        image_paths,
+        directories,
+        include_networking=requires_networking,
+    )
 
     target = (output or default_image_path(profile_name)).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -20515,6 +20596,12 @@ def build_image(
         ftype=FTYPE_FORTH,
         flags=FLAG_SYSTEM,
     )
+    if requires_networking:
+        fs.inject_file(
+            "networking.f",
+            pack_forth_source((MEGAPAD_ROOT / "networking.f").read_bytes()),
+            ftype=FTYPE_FORTH,
+        )
 
     for directory in directories:
         fs.mkdir(directory)
@@ -20582,6 +20669,7 @@ def build_image(
         f"Built {profile_name} image: {target}\n"
         f"  {len(modules)} modules"
         f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
+        f"{'MegaPad networking, ' if requires_networking else ''}"
         f"{len(resources)} resources, "
         f"{len(directories)} directories\n"
         f"  {info['files']} MP64FS entries, {target.stat().st_size:,} bytes, "

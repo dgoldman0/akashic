@@ -26,6 +26,12 @@ Smoke and served sessions use 32 MiB of emulated external memory by default.
 This leaves realistic headroom for the userland dictionary and applet working
 sets as the Desk image grows; pass `--ext-mem-mib N` to test another budget.
 
+When a resolved profile closure binds directly to MegaPad networking, the
+harness injects the one canonical packed `networking.f` and loads it with
+`FSLOAD` immediately after `ENTER-USERLAND`. Parser-only and abstract-I/O
+profiles omit it. The system module is neither renamed nor linked into an
+Akashic deployment chunk.
+
 The authoritative profile registry and each journey's assertions live in
 `akashic_tui.py`; `--help` lists the accepted profile names. Profiles are
 organized around focused library/runtime contracts, standalone applet journeys,
@@ -92,10 +98,12 @@ Closures that exceed MP64FS's entry or byte limits are linked into
 dependency-ordered native Forth chunks under `/.akashic/`, each below KDOS's
 255-sector module-transfer ceiling. This includes the full Desktop and several
 large focused Agent/provider profiles; smaller profiles keep ordinary
-per-module `REQUIRE` loading. Linking and deployment-only comment stripping
-change only generated images, not source organization, executable tokens, or
-runtime ABI. The copied KDOS source receives the narrower safe transform: only
-blank and full-line backslash-comment lines are omitted.
+per-module `REQUIRE` loading. MegaPad's larger `networking.f` is the explicit
+exception: BIOS `FSLOAD` reads it through guarded multi-batch transfers before
+Akashic modules load. Linking and deployment-only comment stripping change
+only generated images, not source organization, executable tokens, or runtime
+ABI. The copied KDOS source receives the narrower safe transform: only blank
+and full-line backslash-comment lines are omitted.
 
 Smoke journeys assert semantic application behavior in the guest, not only boot
 markers or screenshots. Focused contract profiles cover bounds, ownership,
