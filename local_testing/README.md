@@ -84,6 +84,7 @@ The Streams qualification path is intentionally split by boundary:
 - `public-author-feed` covers bounded request/admission behavior and cooperative
   buffered HTTP lifecycle with deterministic partial-I/O callbacks.
 - `tls-port` covers the native connector's deterministic phase progression,
+  post-DNS public-address admission, policy override/mutation hardening,
   cancellation, graceful close, and bounded abort fallback without external
   network access.
 - `streams` covers the standalone timeline, context, search, and draft UI.

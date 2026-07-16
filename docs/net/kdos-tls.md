@@ -17,6 +17,9 @@ CREATE transport KDOSTLS-SIZE ALLOT
 transport KDOSTLS-INIT
 S" api.openai.com" 443 transport KDOSTLS-CONFIGURE THROW
 
+\ Optional only for a separately reviewed policy. The default is public IPv4.
+policy-context ['] my-address-policy transport KDOSTLS-ADDRESS-POLICY! THROW
+
 transport KDOSTLS.PORT NIO-OPEN-START
 \ Poll NIO-OPEN-POLL until it returns a terminal status.
 \ Use transport KDOSTLS.PORT with HREQ-SEND-STEP or HSTR-PUMP.
@@ -79,6 +82,30 @@ fresh cooperative open. Default `NIO-POLL` performs no ARP and admits at most
 one frame, entering a TCP reply path only after both the adapter route and the
 incoming source route have cached next hops.
 
+## Resolved-address admission
+
+Every native open copies the first selected DNS A-record address into
+descriptor-owned storage, then advances through a distinct
+`KDOSTLS-PHASE-DNS-ADMIT` poll before remote ARP or TCP can begin. The default
+policy is `PUBLIC-IPV4?`: it rejects unspecified, private, shared, loopback,
+link-local, protocol-assignment, documentation, benchmarking, multicast, and
+reserved IPv4 destinations. A rejection is terminal `KDOSTLS-E-ADDRESS`, and
+ordinary connector cleanup wipes the chosen address and releases ownership.
+
+`KDOSTLS-ADDRESS-POLICY!` has stack effect
+`( context xt adapter -- status )`; the callback has stack effect
+`( ipv4-a context -- admitted? )`. Policy can be replaced only while the
+adapter is closed. This is the explicit seam for a separately reviewed local
+network policy; source configuration and DNS data cannot change it. The
+callback receives a shadow of the exact address retained for TCP, and mutation
+of that shadow is detected and denied, so an admit callback cannot redirect
+the subsequent connection by rewriting its argument.
+
+Each new physical open resolves and admits again. Higher layers which follow a
+redirect or retry a request should use a nonpersistent connection when they
+need that fresh selection. The current KDOS resolver selects one IPv4 A record;
+the connector does not skip a rejected first result in search of a later one.
+
 ## Ownership
 
 The adapter descriptor owns configuration and connection state but not the
@@ -117,7 +144,8 @@ therefore a native-domain companion to the adapter-level `LAST-ERROR`, not one
 single error enumeration. Error constants distinguish invalid configuration,
 owner contention, absent or changed trust, DNS/connect/authentication failure,
 timeout, cancellation, cleanup failure, I/O failure, and a thrown platform
-callback.
+callback. Address-policy denial has its own `KDOSTLS-E-ADDRESS` result rather
+than being reported as DNS or TCP failure.
 
 TCB identity checks validate table range and alignment plus the local/remote
 tuple and initial send sequence. They reject pointer and fingerprint mismatch,
@@ -130,8 +158,9 @@ do not maintain parallel application-specific TLS connection logic; the
 machine owner gate serializes their use of KDOS's shared TLS state.
 
 The deterministic offline `tls-port` gate passes with cooperative callback
-installation, exact phase progression, cancellation across open phases, trust
-drift and timeout handling, partial I/O and peer EOF, graceful close,
+installation, exact phase progression, default-public address admission,
+reviewed override and mutation hardening, cancellation across open phases,
+trust drift and timeout handling, partial I/O and peer EOF, graceful close,
 backpressure, half-close, deadline and notifier abort fallback, TCB-reuse
 fingerprint-mismatch guarding, and context/owner release checks. It also
 exercises the real lower ClientHello-preparation prefix and records guest

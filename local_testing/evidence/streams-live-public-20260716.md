@@ -192,3 +192,25 @@ later Desk-hosted responsiveness/recovery gate. The native TLS diagnostic latch
 also preserves a nonzero context error through connector cleanup, so a future
 bounded failure can report the native cause after ownership and sensitive
 context state have been released.
+
+## Post-DNS address-admission requalification
+
+At 2026-07-16 14:50 EDT, the same command passed again after the native
+connector gained its default-public resolved-address policy and dedicated
+`KDOSTLS-PHASE-DNS-ADMIT` step:
+
+```text
+Built streams-live-public image: /home/kir/Documents/Projects/fantasy-computing/akashic/local_testing/out/akashic-streams-live-public.img
+  84 modules linked in 9 chunks, MegaPad networking, 0 resources, 1 directories
+  18 MP64FS entries, 2,097,152 bytes, 1449 free sectors
+Smoke streams-live-public: PASS
+  2,317,153,697 steps in 29.77s; screen=108x34; raw=535 bytes; stop=ready
+```
+
+This run proves the actual selected DNS A record passed the conservative
+public-IPv4 gate before remote ARP/TCP and that the resulting connection still
+completed authenticated TLS, HTTP admission, decode, owner commit, and lower
+cleanup. The deterministic connector gate separately proves that private
+answers, policy mutation, and throwing callbacks fail closed before the remote
+connection phase. This remains focused component evidence, not the pending
+Desk-hosted responsiveness/recovery journey.

@@ -201,6 +201,11 @@ Built on KDOS spinlocks and events, the concurrency module provides four primiti
 into caller-owned type, subtype, and parameter views. It validates syntax and
 retains duplicate parameters without imposing an application admission policy.
 
+**Public address** (`public-address.f`) provides the conservative IPv4
+predicate used by the native TLS connector after DNS and before any remote
+ARP/TCP work. The connector defaults to that policy and permits replacement
+only while closed for a separately reviewed network composition.
+
 ### web/ — HTTP Server
 
 A full HTTP server stack:

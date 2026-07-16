@@ -19,7 +19,7 @@ PROVIDED akashic-public-address
     ROT AND = ;
 
 : PUBLIC-IPV4?  ( ip-a -- flag )
-    DUP 0= IF DROP 0 EXIT THEN
+    DUP 0> 0= IF DROP 0 EXIT THEN
     _PUBLIC-IPV4@
 
     \ 0.0.0.0/8: this network and unspecified forms.

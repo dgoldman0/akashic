@@ -2957,6 +2957,22 @@ VARIABLE _mt-prep-adapter
 VARIABLE _mt-prep-throw
 VARIABLE _mt-prep-early-ready
 VARIABLE _mt-prep-ctx
+CREATE _mt-address-seen 4 ALLOT
+VARIABLE _mt-address-hits
+VARIABLE _mt-address-context-seen
+VARIABLE _mt-address-result
+
+: _mt-address-policy  ( ip-a context -- flag )
+    _mt-address-context-seen !
+    1 _mt-address-hits +!
+    _mt-address-seen 4 CMOVE
+    _mt-address-result @ ;
+
+: _mt-address-throw  ( ip-a context -- flag )
+    2DROP -781 THROW ;
+
+: _mt-address-mutate  ( ip-a context -- flag )
+    DROP DUP 10 SWAP C! DROP -1 ;
 
 : _mt-zeroed?  ( addr len -- flag )
     0 ?DO
@@ -3002,16 +3018,17 @@ VARIABLE _mt-prep-ctx
     _mt-a KDOSTLS.PORT NIO.OPEN-START-XT @ 0= _mt-assert
     _mt-a KDOSTLS.PORT NIO.OPEN-POLL-XT @ 0= _mt-assert
     _mt-a KDOSTLS.PORT NIO.CANCEL-XT @ 0= _mt-assert
-    10 0 DO
+    KDOSTLS-PHASE-REMOTE-ARP-READY 1- 0 DO
         _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
     LOOP
     _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-READY = _mt-assert
     _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-REMOTE-ARP-READY = _mt-assert
-    _mt-phase-log-u @ 11 = _mt-assert
-    11 0 DO
+    _mt-phase-log-u @ KDOSTLS-PHASE-REMOTE-ARP-READY = _mt-assert
+    KDOSTLS-PHASE-REMOTE-ARP-READY 0 DO
         _mt-phase-log I CELLS + @ I 1+ = _mt-assert
     LOOP
-    _mt-a KDOSTLS.STEP-COUNT @ 11 = _mt-assert
+    _mt-a KDOSTLS.STEP-COUNT @
+        KDOSTLS-PHASE-REMOTE-ARP-READY = _mt-assert
     _mt-a KDOSTLS.MAX-STEP-CYCLES @
         _mt-a KDOSTLS.LAST-STEP-CYCLES @ >= _mt-assert
     _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
@@ -3067,7 +3084,7 @@ VARIABLE _mt-prep-ctx
     _mt-a KDOSTLS-PREP-CANCEL DROP ;
 
 : _mt-test-prep-cancel-phases  ( -- )
-    11 1 DO
+    KDOSTLS-PHASE-REMOTE-ARP-READY 1 DO
         _mt-prep-fixture _mt-a _mt-prep-bind
         _mt-a KDOSTLS-PREP-START DROP
         I _mt-a KDOSTLS.PHASE !
@@ -3160,6 +3177,102 @@ VARIABLE _mt-alert-hits
     ['] _mt-prep-now@ OVER KDOSTLS.NOW-XT !
     ['] _mt-coop-step SWAP KDOSTLS.COOP-STEP-XT ! ;
 
+: _mt-test-address-admission  ( -- )
+    \ The production default rejects a private answer in its own phase,
+    \ before a remote route or TCP continuation is selected.
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    _mt-a KDOSTLS.ADDRESS-XT @
+        ['] _KDOSTLS-ADDRESS-DEFAULT = _mt-assert
+    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
+    10 0 0 1 _mt-ip IP!
+    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
+    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
+    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-ADDRESS = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-FAILED = _mt-assert
+    _mt-a KDOSTLS.REMOTE-IP 4 _mt-zeroed? _mt-assert
+    _mt-a KDOSTLS.AFTER-ARP-PHASE @ 0= _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    _mt-a KDOSTLS-PREP-START DROP
+    8 8 8 8 _mt-ip IP!
+    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
+    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
+    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-REMOTE-ARP-CHECK = _mt-assert
+    _mt-a KDOSTLS.REMOTE-IP C@ 8 = _mt-assert
+    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
+
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    0 _mt-address-hits ! -1 _mt-address-result !
+    12 ['] _mt-address-policy _mt-a KDOSTLS-ADDRESS-POLICY! DROP
+    _mt-a KDOSTLS-PREP-START DROP
+    8 8 4 4 _mt-ip IP!
+    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
+    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
+    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
+    _mt-address-hits @ 0= _mt-assert
+    _mt-a KDOSTLS.REMOTE-IP 8 _mt-zeroed? _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    \ A reviewed override receives the owned bytes and its exact context.
+    \ Changing the borrowed source after the copy cannot change admission.
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    0 _mt-address-hits ! 0 _mt-address-context-seen !
+    _mt-address-seen 4 0 FILL -1 _mt-address-result !
+    77 ['] _mt-address-policy _mt-a KDOSTLS-ADDRESS-POLICY!
+        KDOSTLS-E-OK = _mt-assert
+    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
+    88 ['] _mt-address-throw _mt-a KDOSTLS-ADDRESS-POLICY!
+        KDOSTLS-E-BUSY = _mt-assert
+    1 2 3 4 _mt-ip IP!
+    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
+    9 _mt-ip C!
+    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
+    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-REMOTE-ARP-CHECK = _mt-assert
+    _mt-a KDOSTLS.AFTER-ARP-PHASE @
+        KDOSTLS-PHASE-TCP-OPEN = _mt-assert
+    _mt-address-hits @ 1 = _mt-assert
+    _mt-address-context-seen @ 77 = _mt-assert
+    _mt-address-seen _mt-a KDOSTLS.REMOTE-IP 4 SAMESTR? _mt-assert
+    _mt-address-seen C@ 1 = _mt-assert
+    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
+    _mt-a KDOSTLS.ADDRESS-XT @ ['] _mt-address-policy = _mt-assert
+    _mt-a KDOSTLS.ADDRESS-CONTEXT @ 77 = _mt-assert
+
+    \ A throwing policy is a connector fault and still wipes ownership.
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    99 ['] _mt-address-throw _mt-a KDOSTLS-ADDRESS-POLICY!
+        KDOSTLS-E-OK = _mt-assert
+    _mt-a KDOSTLS-PREP-START DROP
+    8 8 8 8 _mt-ip IP!
+    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
+    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
+    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
+    _mt-a KDOSTLS.REMOTE-IP 4 _mt-zeroed? _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert
+
+    \ A policy cannot mutate its inspected copy and redirect TCP afterward.
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    0 ['] _mt-address-mutate _mt-a KDOSTLS-ADDRESS-POLICY!
+        KDOSTLS-E-OK = _mt-assert
+    _mt-a KDOSTLS-PREP-START DROP
+    8 8 4 4 _mt-ip IP!
+    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
+    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
+    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
+    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-ADDRESS = _mt-assert
+    _mt-a KDOSTLS.REMOTE-IP 8 _mt-zeroed? _mt-assert
+    _KDOSTLS-OWNER @ 0= _mt-assert ;
+
 : _mt-force-open  ( adapter -- )
     DUP _mt-prep-bind2 DUP _mt-attach-authenticated
     DUP _KDOSTLS-OWNER !
@@ -3196,7 +3309,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.PORT NIO-OPEN-START NIO-S-PENDING = _mt-assert
     _mt-a KDOSTLS.PORT NIO.OPEN-STATE @
         NIO-OPEN-STATE-OPENING = _mt-assert
-    20 0 DO
+    KDOSTLS-PHASE-OPEN 1- 0 DO
         _mt-a KDOSTLS.PORT NIO-OPEN-POLL
             NIO-S-PENDING = _mt-assert
     LOOP
@@ -3204,11 +3317,11 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
     _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-OPEN = _mt-assert
     _mt-a _KDOSTLS-OPEN-VALID? _mt-assert
-    _mt-phase-log-u @ 21 = _mt-assert
-    21 0 DO
+    _mt-phase-log-u @ KDOSTLS-PHASE-OPEN = _mt-assert
+    KDOSTLS-PHASE-OPEN 0 DO
         _mt-phase-log I CELLS + @ I 1+ = _mt-assert
     LOOP
-    _mt-a KDOSTLS.STEP-COUNT @ 21 = _mt-assert
+    _mt-a KDOSTLS.STEP-COUNT @ KDOSTLS-PHASE-OPEN = _mt-assert
     _mt-a KDOSTLS.MAX-STEP-CYCLES @
         _mt-a KDOSTLS.LAST-STEP-CYCLES @ >= _mt-assert
     _KDOSTLS-OWNER @ _mt-a = _mt-assert
@@ -3264,7 +3377,7 @@ VARIABLE _mt-alert-hits
     _KDOSTLS-OWNER @ _mt-a = _mt-assert
     _mt-a KDOSTLS.PORT NIO-CANCEL DROP
 
-    22 1 DO
+    KDOSTLS-PHASE-OPEN 1+ 1 DO
         _mt-prep-fixture _mt-a _mt-prep-bind2
         _mt-a KDOSTLS-PREP-START DROP
         I _mt-a KDOSTLS.PHASE !
@@ -3462,6 +3575,7 @@ VARIABLE _mt-alert-hits
     0 _mt-sent-u ! 0 _mt-in-pos ! 0 _mt-dns-hits !
     0 _mt-connect-hits ! 0 _mt-close-hits ! 0 _mt-poll-hits !
     _mt-test-config
+    _mt-test-address-admission
     _mt-test-cooperative-open
     _mt-test-prep-failures2
     _mt-test-io-and-peer-eof
@@ -25351,6 +25465,7 @@ CREATE _htc-ip 4 ALLOT
 
 : _htc-public-address-contracts  ( -- )
     0 PUBLIC-IPV4? 0= _htc-assert
+    -8 PUBLIC-IPV4? 0= _htc-assert
     8 8 8 8 _htc-public? _htc-assert
     1 1 1 1 _htc-public? _htc-assert
     93 184 216 34 _htc-public? _htc-assert
