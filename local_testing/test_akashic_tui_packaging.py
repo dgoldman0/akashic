@@ -162,6 +162,24 @@ def test_watched_page_composes_reusable_non_networking_boundaries() -> None:
         assert not _requires_megapad_networking(tuple(reusable))
 
 
+def test_http_resource_stays_transport_and_application_neutral() -> None:
+    closure = dependency_closure(("net/http-resource.f",))
+    modules = set(closure)
+    assert {
+        "net/external-io.f",
+        "net/http-buffered.f",
+        "net/http-resource.f",
+        "net/http-target.f",
+        "net/media-type.f",
+    } <= modules
+    assert "net/transports/kdos-tls.f" not in modules
+    assert "net/tls-trust-registry.f" not in modules
+    assert all(not module.startswith("tui/") for module in modules)
+    assert all(not module.startswith("agent/") for module in modules)
+    assert all(not module.startswith("practice/") for module in modules)
+    assert not _requires_megapad_networking(closure)
+
+
 def test_explicit_bluesky_composition_still_does_not_supply_trust() -> None:
     closure = dependency_closure(("tui/applets/streams/bluesky-public.f",))
     modules = set(closure)

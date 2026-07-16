@@ -25523,6 +25523,37 @@ _htc-run
 )
 
 
+PROFILES["http-resource-contracts"] = Profile(
+    roots=("net/http-resource.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - bounded transport-neutral HTTP resource contracts
+ENTER-USERLAND
+." [akashic] loading HTTP resource contracts" CR
+REQUIRE net/http-resource.f
+." [akashic] loaded HTTP resource module" CR
+REQUIRE local_testing/hres-contracts.f
+_hrc-run
+""",
+    ready_markers=("HTTP RESOURCE CONTRACTS PASS",),
+    stable_markers=("HTTP RESOURCE CONTRACTS PASS",),
+    failure_markers=(
+        "HTTP RESOURCE CONTRACTS FAIL",
+        "HRC ASSERT",
+        "EVALUATE depth limit exceeded",
+    ),
+    linked=False,
+    initial_files=(
+        (
+            "local_testing/hres-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "hres-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+    include_large_sample=False,
+)
+
+
 def _positive_mib(value: str) -> int:
     try:
         parsed = int(value)

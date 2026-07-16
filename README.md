@@ -206,6 +206,11 @@ predicate used by the native TLS connector after DNS and before any remote
 ARP/TCP work. The connector defaults to that policy and permits replacement
 only while closed for a separately reviewed network composition.
 
+**HTTP resource** (`http-resource.f`) owns bounded, provider-neutral HTTPS GET
+orchestration over an exact target-to-NIO lease. It retains same-origin
+redirect chains, caller-admitted media, validators, body, and separate primary
+and cleanup outcomes without depending on KDOS, Desk, Streams, or a decoder.
+
 ### web/ — HTTP Server
 
 A full HTTP server stack:
