@@ -24,7 +24,7 @@ PROFILE_NAME = "shared-document-contracts"
 AUTOEXEC = r'''\ autoexec.f - shared document owner contracts
 ENTER-USERLAND
 ." [akashic] loading shared document contracts" CR
-REQUIRE interop/shared-document.f
+REQUIRE daybook/shared-document.f
 REQUIRE interop/lens-binding.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
@@ -273,6 +273,49 @@ VARIABLE _sd-direct-u0
     _sd-context @ CTX-FREE
     _sd-stack
 
+    \ A fresh activation over the retained VFS recovers the exact committed
+    \ bytes under a new Context/registry/owner lifetime.  Component revision
+    \ restarts at the documented activation-local baseline; durable bytes do
+    \ not depend on the prior owner or either prior LBIND.
+    78 CTX-NEW DUP 0= _sd-assert DROP _sd-context !
+    _sd-head _sd-context @ CTX.PRACTICE !
+    CTX-F-ACTIVE _sd-context @ CTX.FLAGS !
+    CREG-NEW DUP 0= _sd-assert DROP _sd-creg !
+    _sd-creg @ _sd-context @ RREG-NEW
+        DUP RREG-S-OK = _sd-assert DROP _sd-rreg !
+    _sd-vfs @ _sd-rid _sd-context @ _sd-rreg @ _sd-creg @
+        SDOC-ACTIVATE
+    DUP SDOC-S-OK = _sd-assert DROP
+    DUP 0<> _sd-assert DUP _sd-owner !
+    SDOC-VALID? _sd-assert
+    _sd-owner @ CINST.REVISION @ 1 = _sd-assert
+    _sd-rreg @ RREG.COUNT @ 1 = _sd-assert
+    _sd-creg @ CREG.INST-N @ 1 = _sd-assert
+
+    _sd-owner @ _sd-ref SDOC-REF SDOC-S-OK = _sd-assert
+    _sd-ref RREF.REVISION @ 1 = _sd-assert
+    _sd-ref _sd-context @ _sd-rreg @ _sd-bind-a LBIND-ATTACH
+        LBIND-S-OK = _sd-assert
+    _sd-creg @ 0 CBUS-NEW DUP 0= _sd-assert DROP _sd-bus !
+    _sd-new-request _sd-snapshot-a !
+    _sd-bind-a SDOC-CAP-SNAPSHOT _sd-snapshot-a @ _sd-stamp
+    _sd-snapshot-a @ _sd-bus @ CBUS-DISPATCH
+        CBUS-S-OK = _sd-assert
+    _sd-snapshot-a @ S" first commit" _sd-result= _sd-assert
+    _sd-owner @ CINST.REVISION @ 1 = _sd-assert
+    S" first commit" _sd-direct-file= _sd-assert
+
+    _sd-snapshot-a @ CBR-FREE 0 _sd-snapshot-a !
+    _sd-owner @ SDOC-DEACTIVATE SDOC-S-OK = _sd-assert
+    0 _sd-owner !
+    _sd-rreg @ RREG.COUNT @ 0= _sd-assert
+    _sd-creg @ CREG.INST-N @ 0= _sd-assert
+    _sd-bus @ CBUS-FREE
+    _sd-rreg @ RREG-FREE
+    _sd-creg @ CREG-FREE
+    _sd-context @ CTX-FREE
+    _sd-stack
+
     _sd-fails @ 0= IF
         ." SHARED DOCUMENT PASS " _sd-checks @ .
     ELSE
@@ -286,7 +329,7 @@ _sd-run
 def test_shared_document_contracts(tmp_path: Path) -> None:
     PROFILES[PROFILE_NAME] = Profile(
         roots=(
-            "interop/shared-document.f",
+            "daybook/shared-document.f",
             "interop/lens-binding.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),

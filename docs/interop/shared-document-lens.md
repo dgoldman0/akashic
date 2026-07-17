@@ -9,9 +9,13 @@ initialization.
 Its landed evidence is narrower than its location suggests: it currently has
 one concrete owner/product witness, the Desk-hosted Daybook owner, and two
 Daybook-specific consumers (Daybook and Pad). It is not yet proof of a generic
-Library/Streams text-resource abstraction. Gate 2C audits it for Daybook path,
-RID, label, and policy assumptions; Gate 6A extracts or retains common
-mechanics only after the real Library owner provides an independent comparison.
+Library/Streams text-resource abstraction. The Gate 2C audit found no Daybook
+path, service label, RID, `SDOC-*` identifier, owner import, or owner policy in
+this implementation: the caller supplies the semantic service ID, and the lens
+discovers only the portable Context, registry, bus, exact binding, and canonical
+snapshot/replace descriptors. It therefore remains in `interop/` unchanged.
+Gate 6A may extract or revise mechanics only after the real Library owner
+provides an independent comparison.
 
 The lens centralizes the plumbing shared by Daybook and Pad:
 

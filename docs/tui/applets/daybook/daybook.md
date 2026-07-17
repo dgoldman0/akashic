@@ -91,8 +91,8 @@ This experiment does not make the VFS path globally exclusive. Trusted code
 and File Explorer can still write `/daybook.md` directly, outside the owner's
 revision sequence. The Daybook/Pad path therefore demonstrates coordinated
 semantic lenses by convention, not system-wide mediation or Practice
-ownership. Gate 2C relocates the concrete owner from `interop/` into the
-Daybook domain without changing this behavior.
+ownership. The concrete owner now resides in the Daybook domain; Gate 2C did
+not change this behavior.
 
 ## Durable Format
 

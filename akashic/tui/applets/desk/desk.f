@@ -72,7 +72,7 @@ REQUIRE ../../../interop/job.f
 REQUIRE ../../../net/tls-trust-registry.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
-REQUIRE ../../../interop/shared-document.f
+REQUIRE ../../../daybook/shared-document.f
 REQUIRE ../../../agent/runtime.f
 REQUIRE ../../../agent/access-profile.f
 REQUIRE ../../../agent/mandate-run.f

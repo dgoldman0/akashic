@@ -10558,13 +10558,13 @@ _pc-run
     "pad-resource-contracts": Profile(
         roots=(
             "tui/applets/pad/pad.f",
-            "interop/shared-document.f",
+            "daybook/shared-document.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - Pad semantic Daybook lens contracts
 ENTER-USERLAND
 REQUIRE tui/applets/pad/pad.f
-REQUIRE interop/shared-document.f
+REQUIRE daybook/shared-document.f
 
 VARIABLE _pr-fails VARIABLE _pr-checks VARIABLE _pr-depth
 VARIABLE _pr-call-depth VARIABLE _pr-status

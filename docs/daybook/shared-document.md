@@ -1,19 +1,17 @@
-# Daybook shared document owner (temporary location)
+# Daybook shared document owner
 
-`interop/shared-document.f` is the bounded first shared-resource witness for
-the canonical `/daybook.md` text document. Despite its current path, it is a
-concrete Daybook owner, not a domain-neutral shared-document service. Desk
-hosts it during a healthy Practice activation, publishes its one RID through
-`RREG`, and Daybook/Pad lenses attach with the existing `RREF`/`LBIND`
-contracts. Hosting is lifecycle composition: Daybook remains the semantic
-owner, and neither Desk nor a lens acquires the document. The owner does not
-depend on any lens lifecycle.
+`akashic/daybook/shared-document.f` is the bounded concrete owner for the
+canonical `/daybook.md` text document. Desk hosts it during a healthy Practice
+activation, publishes its one RID through `RREG`, and Daybook/Pad lenses attach
+with the existing `RREF`/`LBIND` contracts. Hosting is lifecycle composition:
+Daybook remains the semantic owner, and neither Desk nor a lens acquires the
+document. The owner does not depend on any lens lifecycle.
 
-Gate 2C relocates this module into the Daybook domain and updates its callers
-without changing the path, bytes, RID, capabilities, lifecycle, or public
-behavior. Gate 1 changes documentation only; code must not treat the current
-`interop/` placement as permission to reuse Daybook policy for Library,
-Streams, or a generic text owner.
+Gate 2C relocated the unchanged concrete policy into the Daybook domain. It
+preserved the path, bytes, RID, `SDOC-*` public words, descriptor/capability
+schemas, and lifecycle and left no compatibility loader in the domain-neutral
+interop package. This module is not permission to reuse Daybook policy for
+Library, Streams, or a generic text owner.
 
 This is intentionally not a general resource graph, Library projection, or
 durable Practice model. The RID-to-instance mapping, current component
@@ -23,10 +21,10 @@ qualified persistent historical-domain locator. Code is trusted native code;
 capabilities are routing and authority contracts, not a sandbox boundary.
 
 The cooperating Daybook and Pad applets use
-[`shared-document-lens.f`](shared-document-lens.md) for the common service
-discovery, exact attachment, and request-envelope lifecycle. Document parsing,
-editing policy, snapshot/replace dispatch, binding advancement, and post-commit
-handling remain with each applet.
+[`shared-document-lens.f`](../interop/shared-document-lens.md) for the common
+service discovery, exact attachment, and request-envelope lifecycle. Document
+parsing, editing policy, snapshot/replace dispatch, binding advancement, and
+post-commit handling remain with each applet.
 
 The owner target is always its one exact Daybook RID and expected revision.
 Current Daybook date/row, Pad tab/selection, focused Desk tile, and Practice

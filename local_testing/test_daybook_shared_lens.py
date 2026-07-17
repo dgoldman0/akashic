@@ -25,7 +25,7 @@ AUTOEXEC = r'''\ autoexec.f - Daybook shared lens contracts
 ENTER-USERLAND
 ." [akashic] loading Daybook shared lens contracts" CR
 REQUIRE tui/applets/daybook/daybook.f
-REQUIRE interop/shared-document.f
+REQUIRE daybook/shared-document.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _dsl-fails
@@ -265,7 +265,7 @@ def test_daybook_shared_lens_contracts(tmp_path: Path) -> None:
     PROFILES[PROFILE_NAME] = Profile(
         roots=(
             "tui/applets/daybook/daybook.f",
-            "interop/shared-document.f",
+            "daybook/shared-document.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),
         resources=(),

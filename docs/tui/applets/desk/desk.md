@@ -225,15 +225,14 @@ compiled facet for the duration of each accepted run.
 ## Desk-hosted activation-local Daybook owner
 
 On a healthy Practice activation, Desk creates one resource registry and hosts
-one headless [Daybook document owner](../../../interop/shared-document.md) for
+one headless [Daybook document owner](../../../daybook/shared-document.md) for
 the canonical Daybook document. Daybook owns the document and its planner
-semantics even though the current concrete module is temporarily misplaced in
-`interop/` and Desk constructs it. Gate 2C moves that module to the Daybook
-domain without changing behavior. Its semantic RID is the SHA3-256 digest of
-the stable Practice ID and `org.akashic.resource.daybook`; the activation epoch
-and applet instance IDs are deliberately absent. The RID therefore remains the
-same across Desk restarts while its RID-to-instance mapping and current
-component revision remain activation-local.
+semantics; its concrete owner now lives in the Daybook domain even though Desk
+constructs it. Its semantic RID is the SHA3-256 digest of the stable Practice
+ID and `org.akashic.resource.daybook`; the activation epoch and applet instance
+IDs are deliberately absent. The RID therefore remains the same across Desk
+restarts while its RID-to-instance mapping and current component revision
+remain activation-local.
 
 Children receive borrowed services through their inherited interoperability
 endpoint:

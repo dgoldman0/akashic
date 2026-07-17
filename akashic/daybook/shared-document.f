@@ -1,7 +1,7 @@
 \ =====================================================================
-\  shared-document.f - One activation-local shared text-document owner
+\  shared-document.f - Daybook activation-local text-document owner
 \ =====================================================================
-\  This is the deliberately bounded first real shared resource.  One live
+\  This is the deliberately bounded concrete Daybook resource.  One live
 \  owner instance controls the semantic RID and the canonical VFS backing
 \  path /daybook.md.  Lenses may come and go independently; they attach to
 \  the owner through RREG/LBIND and issue ordinary capability requests.
@@ -22,8 +22,8 @@
 
 PROVIDED akashic-interop-shared-document
 
-REQUIRE request-bus.f
-REQUIRE schema-common.f
+REQUIRE ../interop/request-bus.f
+REQUIRE ../interop/schema-common.f
 REQUIRE ../runtime/resource-registry.f
 REQUIRE ../utils/fs/vfs-replace.f
 REQUIRE ../concurrency/guard.f
