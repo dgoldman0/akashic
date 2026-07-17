@@ -51,6 +51,7 @@ local_testing/*
 !local_testing/README.md
 !local_testing/akashic_tui.py
 !local_testing/gate2a-contracts.f
+!local_testing/vfs-fixed-snapshot.f
 !local_testing/hres-contracts.f
 !local_testing/streams-observation.f
 !local_testing/streams-observation-store.f

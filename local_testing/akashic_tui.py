@@ -20901,6 +20901,28 @@ _srgc-run
     include_large_sample=False,
 )
 
+PROFILES["vfs-fixed-snapshot-contracts"] = Profile(
+    roots=("utils/fs/vfs-fixed-snapshot.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - fixed snapshot core contracts
+ENTER-USERLAND
+." [akashic] loading fixed snapshot core contracts" CR
+REQUIRE local_testing/vfs-fixed-snapshot.f
+_vfsnc-run
+""",
+    ready_markers=("VFS FIXED SNAPSHOT CONTRACTS PASS",),
+    stable_markers=("VFS FIXED SNAPSHOT CONTRACTS PASS",),
+    failure_markers=("VFS FIXED SNAPSHOT CONTRACTS FAIL", "VFSNC ASSERT"),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/vfs-fixed-snapshot.f",
+            (AKASHIC_ROOT / "local_testing" / "vfs-fixed-snapshot.f").read_bytes(),
+        ),
+    ),
+)
+
 PROFILES["streams-source-store-contracts"] = Profile(
     roots=("tui/applets/streams/source-store.f",),
     resources=(),
