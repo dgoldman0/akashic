@@ -1,24 +1,28 @@
 # Streams
 
 Streams is moving from a Bluesky-shaped reader toward the Desk ecosystem's
-bounded information-integration applet. The first landed spine owns a durable
-registry for several unlike source kinds, exposes sanitized source resources,
-and supplies deterministic JSON Feed, RSS, Atom, and watched-page codec
-contracts. The existing retained Bluesky author-feed page, partial-thread
-navigation, local search, and crash-recoverable unpublished draft remain
-available while that new path is built alongside them; they are no longer the
-product definition.
+bounded information-integration applet. Its first end-to-end configured-source
+slice can now manually refresh one exact enabled RSS, Atom, or JSON Feed source
+revision through Desk external I/O, retain immutable observation versions in a
+replacement store, suppress exact unchanged versions, and recover an
+interrupted accepted attempt truthfully. The durable multi-kind source
+registry, sanitized source resources, watched-page codecs, existing retained
+Bluesky page, partial-thread navigation, local search, and crash-recoverable
+unpublished draft remain alongside that path; they are no longer the product
+definition.
 
 Ordinary `STREAMS-ENTRY` remains offline even when Desk exposes external I/O:
-it installs no concrete provider factory, and source recovery or Observe calls
-never start network work. `bluesky-public.f` supplies the explicit legacy
-Bluesky component/entry composition, while `public-trust.f` remains a separate
-trusted boot contribution. Trusted boot can also import a separately reviewed,
-exact-host MPTA artifact for a future configured-source composition; source
-creation and applet launch cannot add or widen trust. No general feed artifact
-or acquisition adapter is composed yet. Authentication and publication are not
-supported. The complete target boundary and deliberately unimplemented
-portions are recorded in
+it installs no concrete configured-source provider factory, and source
+recovery or Observe calls never start network work. `streams-online.f` is the
+explicit composition edge; a live configured-source deployment must inject a
+factory constructed with its reviewed full-source and canonical-host
+authorization policy. The default factory denies every source. Trusted boot
+may separately import a reviewed exact-host MPTA artifact before freezing
+machine trust; source creation, applet launch, and refresh cannot add or widen
+trust. The repository ships neither a catch-all feed trust set nor an ambient
+WebPKI fallback. Credentials, scheduling, notification providers, outputs, and
+publication are not supported. The complete target boundary and deliberately
+unimplemented portions are recorded in
 [information-integration.md](information-integration.md).
 
 Normal launches start with no feed and recover the draft stored by the
@@ -56,6 +60,7 @@ so external text cannot be interpreted as protocol structure.
 | `streams.source.query` | `null` | ordered source-resource list | Observe |
 | `streams.source.read` | source `resource` | sanitized source map | Observe |
 | `streams.source.set-enabled` | `{resource, enabled}` | sanitized source map | Mutate + Persist |
+| `streams.source.refresh` | `{resource, expected_revision}` | `{resource, source_revision, accepted, request_generation, state}` | Persist + External |
 
 An item map contains `resource`, `provider`, `provenance`, `cid`, `author`,
 `text`, `created_at`, `indexed_at`, `counts`, `reply`, and `reason`. `author`
@@ -72,6 +77,14 @@ error state. An accepted start is not a claim that cooperative transport open,
 HTTP, graceful connection close, decode, or model commit has completed.
 Refresh returns `CBUS-S-NOT-FOUND` unless both an explicitly composed provider
 and Desk external-I/O service are present.
+
+`streams.source.refresh` accepts only an exact positive RREF whose revision
+also equals `expected_revision` and the current enabled syndication source.
+Its acknowledgement means that the exact source attempt was durably recorded
+before submission to Desk XIO; it does not claim remote success. The request
+generation identifies the serialized local operation. Later
+`streams.source.read` calls report `accepted`, `succeeded`, `failed`,
+`cancelled`, or `indeterminate` from the retained attempt head.
 
 `streams.selection.current` returns a null value when there is no valid
 selection; absence is not an error. Item, feed, and thread maps report
@@ -92,18 +105,20 @@ RID, a positive domain revision, kind and format, exact UTF-8 label, endpoint
 and provider configuration, enabled state, manual or bounded interval policy,
 and explicit redirect, response, page, observation, and retained-revision
 limits. The first implemented kinds are syndication, watched page,
-notification, and the existing public-Bluesky adapter shape. This registry is
-configuration authority only: it does not yet claim that ordinary Streams can
-refresh those configured sources or retain their observations.
+notification, and the existing public-Bluesky adapter shape. The manual
+acquisition slice supports only enabled syndication sources and deliberately
+requires its implemented one-page, sixteen-observation, four-version policy;
+other valid registry policies remain configuration-only until their retention
+semantics are implemented.
 
-HTTPS source configuration is not TLS provisioning. A later live composition
-must prove the source's canonical host has separately reviewed provisioning;
-one supported route is an exact-host MPTA artifact imported by trusted boot
-before Desk freezes machine trust. The importer does not itself bind an
-artifact to a source RID or revision. Imported run artifacts reject global and
-include-subdomains scopes, and ordinary Streams never receives their CA bytes
-or the trust builder. The repository deliberately ships no catch-all feed root
-set and the current composition has no ambient WebPKI fallback.
+HTTPS source configuration is not TLS provisioning. A live composition must
+associate the complete reviewed source snapshot with its canonical host and
+port independently of TLS trust; authorization is rechecked both during pure
+configuration and at the physical bind. One supported trust route is an
+exact-host MPTA artifact imported by trusted boot before Desk freezes machine
+trust. The importer does not itself bind an artifact to a source RID or
+revision. Imported run artifacts reject global and include-subdomains scopes,
+and ordinary Streams never receives their CA bytes or the trust builder.
 
 The owner API provides bounded count/read/create/replace/enable/remove methods.
 Creation ignores caller-supplied identity and generates a nonzero 32-byte RID;
@@ -125,8 +140,13 @@ they are not silently merged or reloaded.
 returns the exact requested revision (or current revision when the RREF uses
 revision zero) as a closed fourteen-field projection containing label, kind,
 format, enabled state, refresh policy, and declared bounds. It deliberately
-omits endpoint and provider-configuration bytes and reports acquisition state
-as `not-tracked` until the separate observation checkpoint exists.
+omits endpoint and provider-configuration bytes. Its acquisition state is
+`never refreshed` when no attempt head exists and otherwise projects the
+retained state of the latest exact-source attempt. `blocked` means the durable
+observation record could not be admitted safely and no retained attempt or
+observation is projected. `unavailable` means configured acquisition failed
+before it could establish an owned observation checkpoint. Neither state is
+reported as `never refreshed`.
 
 `streams.source.set-enabled` takes an exact positive source revision and a
 boolean. It persists and returns the same sanitized projection without
@@ -137,6 +157,13 @@ is intentionally absent from Desk's ordinary Observe and assist facets; it is
 available only to an explicitly constructed operator facet with a reviewed
 grant for the exact target and operands. Source create, general replace, and
 remove remain direct owner/UI operations in this slice.
+
+`streams.source.refresh` is likewise absent from ordinary Observe and assist
+facets. An explicit operator facet may grant the exact sealed source revision.
+The handler persists `accepted` before XIO submission. A synchronously
+terminal submission failure is still returned as an accepted local attempt so
+the caller can observe its durable terminal outcome rather than mistake it for
+an operation that never began.
 
 The reusable syndication family preserves bounded format-specific JSON Feed
 1/1.1, RSS 2.0, and Atom 1.0 models, then exposes a deliberately narrow shared
@@ -154,8 +181,60 @@ commits only after parsing, projection, and hashing succeed. Actual watched-page
 fixtures qualify meaningful-content equivalence, content changes, plain-text
 changes, and malformed-input preservation. These are transactional codecs, not
 yet wired acquisition providers or evidence that configured HTTP acquisition,
-observation persistence, deduplication, scheduling, notifications, outputs, or
-Outbox are complete.
+observation persistence, scheduling, notifications, outputs, or Outbox are
+complete.
+
+## Manual-refresh observation store
+
+Normal lifecycle now owns an exactly 131,072-byte (128 KiB), pointer-free
+observation checkpoint behind the optimistic replacement record
+`/streams-observation.bin`. Ordinary offline Streams still loads and recovers
+that state but cannot start external work. A configured online owner copies the
+checkpoint, records `accepted`, saves it, and only then submits the operation
+to Desk XIO. Terminal failure preserves prior observations. Successful decode
+is applied to another checkpoint copy, lower transport cleanup must succeed,
+and the replacement must commit before the new checkpoint is published.
+
+The checkpoint retains one latest attempt head for each of sixteen exact
+sources, forty-eight immutable observation versions with at most sixteen per
+source and four per provider-native key, sixty-four exact-key heads, and one
+owned aggregate string blob. A decoded batch contains at most eight
+candidates. The latest attempt accounts for `new`, `revised`, `unchanged`, and
+rejected candidates; there are no separate retained attempt-history or
+sighting arrays in this first slice.
+
+`BEGIN`, `TERMINAL`, and `APPLY` are transactional checkpoint operations.
+`BEGIN` creates the active accepted head. `TERMINAL` closes a failed,
+cancelled, stale, cleanup-failed, or indeterminate attempt without modifying
+last-good observations. `APPLY` closes a successful attempt while updating
+immutable versions and exact-key heads. On relaunch, a durably accepted head
+with no terminal record is changed to `indeterminate` and saved before the
+checkpoint is exposed.
+
+Each deduplication head is keyed by the source RID, exact source-identity
+namespace digest, provider kind, native-identity kind, and exact admitted
+native-identity bytes. The source identity is therefore part of equality: the
+checkpoint performs no cross-source deduplication. A changed value advances
+the same stable observation RID to its next revision; an unchanged candidate
+creates no version or duplicate body and only advances exact-key provenance.
+
+Retention uses deterministic checkpoint sequence rather than provider
+timestamps or wall-clock order. Each observation admits at most 8 KiB of
+content, but all content shares the checkpoint's aggregate blob, so declared
+per-record maxima are not promised simultaneously. If a semantically valid
+success batch cannot fit, `APPLY` rejects the candidate and the owner records a
+terminal capacity attempt while prior observations and exact-key heads remain
+unchanged. Malformed input or a rejected `APPLY` transaction preserves the
+entire current checkpoint.
+Model seals and digests detect accidental corruption; they do not authenticate
+a source, content, or acquisition result.
+
+The durable source-store V1 format still has no metadata saying that an
+observation companion was ever established. A missing observation record is
+therefore treated as the legitimate never-refreshed state; Streams cannot yet
+distinguish that case from external loss of a previously established companion
+and makes no stronger pair-loss claim. A durable pair marker and migration are
+required before that distinction can fail closed.
 
 ## Local drafts
 
@@ -198,11 +277,17 @@ bus for owner-level optimistic concurrency.
 The `Sources` menu, `S`, or `Ctrl+S` opens the standalone source manager.
 Users can add syndication feeds and watched pages using a conservative
 printable-ASCII `https://` spelling, inspect label, kind, format, enabled
-state, revision, and endpoint, move an independent per-instance selection,
-and enable or disable the selected exact revision. Creation uses manual,
-bounded defaults and explicitly does not fetch. Removal captures the selected
-RID and revision before prompting and requires the exact text `REMOVE`; a
-selection change or concurrent update cannot redirect the confirmed action.
+state, revision, endpoint, latest attempt counts, and latest retained title,
+move an independent per-instance selection, and enable or disable the selected
+exact revision. `R` and the `Refresh_Selected_Source` menu action submit the
+same exact selected-source operation used by the typed capability. Creation
+uses manual, bounded defaults and does not fetch by itself. Removal captures
+the selected RID and revision before prompting and requires the exact text
+`REMOVE`; a selection change or concurrent update cannot redirect the
+confirmed action.
+In this milestone `R` accepts only enabled syndication sources; watched pages
+remain configurable but receive a precise unsupported-kind notice and no
+refresh-owner mutation.
 Storage corruption, unsupported formats, uncertain replacement recovery, and
 I/O failure preserve the durable evidence but block source management and
 source reads until an explicit recovery or fresh lifecycle proves safe state.
@@ -250,13 +335,14 @@ Other applets can read explicit item, thread, feed, selection, draft, and
 sanitized source resources through Desk's ordinary typed capability path. They
 can retain and pass ordered resource lists, dereference exact revisions,
 compose those identities with their own operations, request a revision-safe
-draft replacement, or explicitly start the legacy public refresh when their
-Practice grants the external effect. Desk owns discovery, dispatch, authority,
-lifecycle, and machine-serialized external I/O; Practices govern typed calls
-and provenance. In the explicit Bluesky composition, Streams owns the
-provider, HTTP admission, feed decode, retained model, and draft state. A
-composed instance commits a completion only when instance and request
-generations match exactly.
+draft replacement, explicitly start the legacy public refresh, or use an
+operator-only grant to accept one exact configured-source refresh. Desk owns
+discovery, dispatch, authority, lifecycle, and machine-serialized external
+I/O; Practices govern typed calls and provenance. In an explicit configured
+composition, Streams owns provider admission, HTTP policy, feed decode,
+observation deduplication, and durable attempt/observation commit. A composed
+instance commits a completion only when instance, source, owner, and request
+generations remain exact.
 
 The external-I/O service is not itself a Streams capability, and Streams does
 not coordinate unrelated applets. When a live Streams target exists, Desk's
@@ -268,12 +354,28 @@ require no app password, and Streams accepts or stores no credential.
 Authenticated AT Protocol operations and publication remain outside this
 applet boundary.
 
-The deterministic `streams-xio-contracts`, provider, and connector gates pass
-offline, including cooperative open/close, cancellation, stale-completion
-rejection, and cleanup. The focused `streams-live-public` component journey
-also passes through a real TAP interface across DNS, TCP, authenticated TLS
-1.3, HTTP, provider admission, feed decode, owner commit, and cleanup. It is
-not evidence of the still-pending Desk-hosted responsiveness/recovery journey.
+The deterministic `streams-refresh-owner-contracts` gate covers durable
+acceptance-before-XIO, decode/apply commit, exact deduplication, stale and
+cancelled completion, cleanup quarantine, boot recovery, and releasable
+offline/factory-failure ownership. `streams-manual-refresh-contracts` composes
+the applet with Desk's real serialized XIO service and a deterministic
+provider, then proves typed and UI initiation, exact source-revision
+projection, failure retention, relaunch recovery, and offline applet teardown
+without performing network work. `streams-syndication-http-contracts` seals
+the exact configured source/host authorization boundary and bounded outbound
+HTTP request, including the generic JSON Feed media spelling.
+
+The optional `streams-configured-refresh-live` gate performs one successful
+fetch of the bounded public `foo-dogsquared.github.io` More Contentful RSS
+feed through reviewed exact-host trust, DNS, TCP,
+authenticated TLS 1.3, bounded HTTP, decode, durable owner commit, cleanup,
+and owner release/reinitialization durability. This live gate
+is deliberately provider-to-owner; `streams-manual-refresh-contracts` owns the
+separate Streams-online and Desk-XIO composition evidence. The live gate does
+not require a second public fetch to remain unchanged; deterministic contracts
+prove that case. The separate legacy `streams-live-public` journey continues
+to qualify the public Bluesky component path. Neither live gate is evidence of
+the still-pending Desk-hosted responsiveness/recovery journey.
 The connector's complete live certificate/signature phases also lack a
 measured per-poll CPU ceiling, and TLS-context cleanup is not yet proof that all
 machine-global KDOS TLS/cryptographic scratch has been sanitized.

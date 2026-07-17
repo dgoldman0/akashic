@@ -1,9 +1,12 @@
 # Streams Information Integration Contract
 
-Status: proposed target contract. This document defines the intended Streams
-information-integration boundary; it does not claim that the described
-resources, providers, capabilities, persistence, UI, or ecosystem witnesses
-are implemented. Current behavior remains documented in `streams.md`.
+Status: proposed target contract with a landed manual syndication-refresh
+slice. This document defines the larger Streams information-integration
+boundary; source configuration, exact-host authorized RSS/Atom/JSON Feed
+acquisition, durable attempt/observation state, exact deduplication, and the
+explicitly identified capabilities are implemented. Scheduling, notification
+providers, saved sets, rules, derived outputs, and Outbox delivery remain
+target work. Current behavior remains documented in `streams.md`.
 
 ## Product boundary
 
@@ -98,6 +101,46 @@ suppress a redundant retained body, but it must preserve each distinct source
 and retrieval provenance. Cross-source similarity may group findings without
 declaring them identical.
 
+#### Landed manual-refresh observation checkpoint
+
+The landed observation foundation is an exactly 131,072-byte pointer-free
+checkpoint stored through an optimistic replacement record. It models three
+bounded record families:
+
+- one latest attempt head for each of sixteen exact sources;
+- forty-eight immutable observation versions with stable logical RIDs and
+  positive revisions; and
+- sixty-four exact provider-native key heads that retain the latest version
+  and last-seen attempt sequence.
+
+`BEGIN` records an active `accepted` attempt and is durably saved before Desk
+XIO submission. `TERMINAL` records failure, cancellation, stale completion,
+cleanup failure, or recovery without changing last-good observations. `APPLY`
+validates one decoded batch and transactionally records a successful attempt,
+immutable versions, exact-key heads, and new/revised/unchanged counts. A
+durably accepted attempt found during relaunch is terminalized as
+`indeterminate` and saved before publication.
+
+Deduplication heads are exact-key state. The key includes the source RID, exact
+source-identity namespace digest, provider kind, native-identity kind, and
+exact admitted native-identity bytes. Consequently the checkpoint performs no
+cross-source deduplication, even when two sources expose the same native
+identity or bytes. A first exact key creates revision 1 of a stable observation
+RID; a changed value advances that RID's revision; an unchanged candidate
+retains the existing version without allocating another body or version.
+
+Retention is selected by deterministic checkpoint sequence, never provider
+timestamps or wall-clock order. Content is held in one aggregate blob and a
+single observation can consume at most 8 KiB of it, so the individual maxima
+cannot all be reached simultaneously. If a semantically valid terminal success
+batch cannot fit, `APPLY` rejects the candidate and the owner records a
+terminal capacity attempt while the prior observations and exact-key heads
+remain unchanged. Malformed input or a rejected `APPLY` transaction preserves
+the entire current checkpoint. Digests and seals detect accidental corruption
+of the model; they do not authenticate a source, content, or acquisition
+result. No pointer, runtime handle, handler token, or activation-local grant is
+retained.
+
 ### Saved set
 
 A saved set is mutable, revisioned, durable Streams state containing exact
@@ -120,29 +163,33 @@ output revision. Later draft edits cannot mutate a staged dispatch. Each send
 or reconciliation is a separate immutable attempt with a stable invocation or
 idempotency identity and an append-only status history.
 
-## Provisional bounds
+## First bounds
 
-The following values bound the first contract and fixture corpus. They are
-provisional until measured against the normal Desk image and representative
-providers; changing them requires capacity and recovery tests, not silent
-growth.
+The table distinguishes exact implemented bounds from proposed target bounds.
+Changing an implemented bound requires capacity and integrity tests, not silent
+growth. Target values remain provisional until measured against the normal
+Desk image and representative providers.
 
-| Domain | Provisional first bound |
-| --- | --- |
-| Sources | 16 |
-| Source configuration payload | 2 KiB of endpoint plus provider-config bytes inside one 2,288-byte registry record |
-| Redirects | 3 per operation |
-| Concurrent Streams external operations | 1 per instance |
-| Transient response body | 128 KiB per response; 256 KiB aggregate refresh budget |
-| Retained observation versions | 48 total, 16 per source |
-| Versions of one provider-native entity | 4 |
-| Compact deduplication heads | 64 provider-native entities |
-| Searchable/normalized content | 8 KiB per observation within an 80 KiB checkpoint blob |
-| Query page | 32 resource references |
-| Saved sets | 16, with 64 members each |
-| Outputs | 32, with 32 KiB text and 64 lineage references each |
-| Delivery attempts | 8 per output |
-| Agent-visible result | 4 KiB per operation; larger content is paged |
+| Domain | First bound | Status |
+| --- | --- | --- |
+| Sources | 16 | Landed registry |
+| Source configuration payload | 2 KiB of endpoint plus provider-config bytes inside one 2,288-byte registry record | Landed registry |
+| Redirects | At most 3 per operation | Landed manual syndication refresh |
+| Concurrent Streams external operations | 1 per instance | Landed manual syndication refresh |
+| Transient response body | 128 KiB per response | Landed manual syndication refresh |
+| Decoded candidate batch | 8 observations | Landed manual syndication refresh |
+| Observation checkpoint allocation | Exactly 131,072 bytes (128 KiB), pointer-free | Landed checkpoint/store |
+| Source attempt heads | 16 total, one per source | Landed checkpoint |
+| Retained attempt history | Latest head only per source | Landed checkpoint |
+| Retained observation versions | 48 total, 16 per source | Landed checkpoint |
+| Versions of one provider-native entity | 4 | Landed checkpoint |
+| Compact exact-key heads | 64 | Landed checkpoint |
+| Searchable/normalized content | 8 KiB per observation within the shared checkpoint blob | Landed checkpoint |
+| Query page | 32 resource references | Proposed target |
+| Saved sets | 16, with 64 members each | Proposed target |
+| Outputs | 32, with 32 KiB text and 64 lineage references each | Proposed target |
+| Delivery attempts | 8 per output | Proposed target |
+| Agent-visible result | 4 KiB per operation; larger content is paged | Proposed target |
 
 Every store also declares version, byte capacity, retention/eviction order,
 corruption behavior, interrupted-replacement recovery, and cleanup ownership.
@@ -150,20 +197,26 @@ Corrupt or future-format state remains available for bounded inspection or
 repair and blocks unsafe mutation; it is not replaced with a manufactured
 empty store.
 
-The first physical contract uses two independently recoverable replacement
-targets. `/streams-sources.bin` owns the source registry. A separate
-`/streams-observe.bin` acquisition checkpoint owns source attempt state,
-deduplication heads, and immutable observations, so one refresh transaction
-cannot leave cursor/result state out of step with committed observations.
-Source repair must not erase readable observations, and observation repair
-must not silently rewrite source authority. Both use checked VFS replacement;
-exactly one missing after an established pair is a recovery condition rather
-than permission to synthesize the missing half.
+The landed physical contract uses `/streams-sources.bin` for configuration
+authority and the separate `/streams-observation.bin` optimistic replacement
+record for acquisition heads, exact-key state, and immutable versions. This
+lets a refresh commit without rewriting source authority.
+
+Pair-loss recovery is not yet specified. Source-store V1 contains no durable
+indication that an observation companion was ever established, so after
+relaunch it cannot distinguish a legitimate never-refreshed source registry
+from external loss of a prior observation record. A missing observation record
+therefore initializes the never-refreshed state and is not reported as proven
+companion loss. A durable pair marker, migration, and recovery behavior are
+required before that distinction can fail closed.
 
 ## Target capability surface
 
-These operation identifiers describe the intended narrow owner surface. They
-are not an implementation inventory.
+These operation identifiers describe the intended narrow owner surface. The
+landed applet capabilities are `streams.source.query`, `streams.source.read`,
+`streams.source.set-enabled`, and `streams.source.refresh`; source create,
+replace, and remove currently exist only as direct owner/UI operations. The
+remaining rows are target work rather than an implementation inventory.
 
 | Capability | Effect | Contract |
 | --- | --- | --- |
@@ -173,7 +226,7 @@ are not an implementation inventory.
 | `streams.source.replace` | Mutate + Persist | Replace one exact source revision |
 | `streams.source.set-enabled` | Mutate + Persist | Enable or disable one exact source revision without fetching |
 | `streams.source.remove` | Destructive + Persist | Remove one source under explicit retention policy |
-| `streams.source.refresh` | External | Start refresh of one already configured source; accepts no arbitrary URL |
+| `streams.source.refresh` | Persist + External | Durably accept and start one exact configured source revision; accepts no arbitrary URL |
 | `streams.observation.query` | Observe | Search/filter a bounded retained page and return resource identities |
 | `streams.observation.read` | Observe | Read one bounded common envelope and typed extension |
 | `streams.observation.content` | Observe | Read exact admitted content through bounded pages |

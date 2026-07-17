@@ -13,6 +13,7 @@
 <item text=Manage_Sources do=sources key=Ctrl+S/>
 <item text=Add_Syndication_Source do=source-add-feed/>
 <item text=Add_Watched_Page do=source-add-page/>
+<item text=Refresh_Selected_Source do=source-refresh/>
 <item text=Toggle_Selected_Source do=source-toggle/>
 <item text=Remove_Selected_Source do=source-remove/>
 </menu>

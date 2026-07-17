@@ -50,6 +50,12 @@ local_testing/*
 !local_testing/README.md
 !local_testing/akashic_tui.py
 !local_testing/hres-contracts.f
+!local_testing/streams-observation.f
+!local_testing/streams-observation-store.f
+!local_testing/streams-syndec.f
+!local_testing/streams-syndication-http.f
+!local_testing/streams-refresh-owner.f
+!local_testing/streams-manual-refresh.f
 !local_testing/test_gap_buf.py
 !local_testing/test_textarea.py
 !local_testing/evidence/

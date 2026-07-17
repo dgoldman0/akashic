@@ -102,6 +102,65 @@ SYNDICATION_ATOM_UPDATE_FIXTURE = (
 SYNDICATION_XML_MALFORMED_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "syndication" / "malformed.xml"
 ).read_bytes()
+
+
+def _reviewed_atproto_yr2_der() -> bytes:
+    """Return the reviewed YR2 DER already carried by the public ATProto gate."""
+    import base64
+    import hashlib
+
+    source = (SOURCE_ROOT / "atproto" / "public-trust.f").read_text(
+        encoding="utf-8"
+    )
+    start = source.index(": _APTR-DECODE-YR2")
+    end = source.index(
+        "_APTR-YR2 _APTR-YR2-SIZE _APTR-DECODE ;", start
+    )
+    fragments = re.findall(
+        r'S" ([A-Za-z0-9+/=]+)" _APTR-B64,', source[start:end]
+    )
+    certificate = base64.b64decode("".join(fragments), validate=True)
+    expected_digest = (
+        "238b85a0099c65b970477d5724f1a1d475ce5058cffe4efa8733899bdb863c47"
+    )
+    if (
+        len(certificate) != 1246
+        or hashlib.sha256(certificate).hexdigest() != expected_digest
+    ):
+        raise RuntimeError("reviewed ATProto YR2 certificate changed unexpectedly")
+    return certificate
+
+
+def _streams_live_exact_host_trust_artifact() -> bytes:
+    """Return the reviewed exact-host YR2 MPTA used by the live refresh gate."""
+    import hashlib
+    import struct
+
+    scope = b"foo-dogsquared.github.io"
+    intermediates = (_reviewed_atproto_yr2_der(),)
+    artifact = bytearray(b"MPTA" + struct.pack(">HHQ", 1, len(intermediates), 0))
+    for certificate in intermediates:
+        artifact.extend(struct.pack(">HHI", 0, len(scope), len(certificate)))
+        artifact.extend(scope)
+        artifact.extend(certificate)
+    artifact[8:16] = hashlib.sha3_256(artifact).digest()[:8]
+    return bytes(artifact)
+
+
+def _streams_live_exact_host_trust_leaf() -> bytes:
+    """Render the reviewed artifact as a local Forth data-only test leaf."""
+    artifact = _streams_live_exact_host_trust_artifact()
+    lines = [
+        "\\ Generated deterministic data for the opt-in live Streams gate.",
+        "PROVIDED streams-live-trust",
+        "CREATE _lrc-artifact",
+    ]
+    for offset in range(0, len(artifact), 16):
+        lines.append(
+            " ".join(f"0x{byte:02X} C," for byte in artifact[offset : offset + 16])
+        )
+    lines.append(f"{len(artifact)} CONSTANT _lrc-artifact-u")
+    return ("\n".join(lines) + "\n").encode("ascii")
 REQUIRE_RE = re.compile(r"^ *REQUIRE +([^ \n]+)", re.MULTILINE)
 PROVIDED_RE = re.compile(r"^ *PROVIDED +([^ \n]+)", re.MULTILINE)
 COLON_STACK_EFFECT_RE = re.compile(
@@ -173,6 +232,7 @@ class Profile:
     initial_files: tuple[tuple[str, bytes], ...] = ()
     include_large_sample: bool = True
     total_sectors: int = 4096
+    link_chunk_bytes: int = LINK_CHUNK_BYTES
 
 
 # Akashic modules that bind directly to the networking surface exported by
@@ -3926,6 +3986,49 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
     _KDOSTLS-OWNER @ 0= _mt-assert ;
 
+VARIABLE _mt-default-depth
+CREATE _mt-peer-ip 4 ALLOT
+
+: _mt-test-default-open-stack  ( -- )
+    192 168 1 100 IP-SET
+    255 255 255 0 NET-MASK IP!
+    TCP-INIT-ALL ARP-CLEAR
+    192 168 1 1 _mt-peer-ip IP!
+    2 _mt-prep-mac C! 3 _mt-prep-mac 1+ C!
+    4 _mt-prep-mac 2 + C! 5 _mt-prep-mac 3 + C!
+    6 _mt-prep-mac 4 + C! 7 _mt-prep-mac 5 + C!
+    _mt-peer-ip _mt-prep-mac ARP-INSERT
+    _mt-a KDOSTLS-INIT
+    _mt-peer-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
+    443 _mt-a KDOSTLS.REMOTE-PORT !
+    0 TLS-CTX@ DUP /TLS-CTX 0 FILL _mt-a KDOSTLS.CONTEXT !
+    _mt-a _KDCP-A !
+    DEPTH _mt-default-depth !
+    _KDOSTLS-STEP-TCP-OPEN KDOSTLS-PREP-S-PENDING = _mt-assert
+    DEPTH _mt-default-depth @ = _mt-assert
+    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-TCP-WAIT = _mt-assert
+    _mt-a KDOSTLS.LOCAL-PORT @ 49152 >= _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ TLS-CTX.TCB @ 0<> _mt-assert
+    0 _mt-a KDOSTLS.CONTEXT !
+    TCP-INIT-ALL ARP-CLEAR ;
+
+: _mt-test-handshake-buffer-stack  ( -- )
+    0 TLS-CTX@ DUP /TLS-CTX 0 FILL _mt-native-ctx !
+    TLSS-HANDSHAKE _mt-native-ctx @ TLS-CTX.STATE !
+    TLSH-SERVER-HELLO-RCVD _mt-native-ctx @ TLS-CTX.HS-STATE !
+    TLS-ALPN-NONE _mt-native-ctx @ TLS-CTX.ALPN-PROFILE !
+    TLS-TR-RESET
+    TLS-HS-RBUF 6 0 FILL
+    TLSHT-ENCRYPTED-EXT TLS-HS-RBUF C!
+    2 TLS-HS-RBUF 3 + C!
+    6 TLS-HS-RBUF-LEN ! 0 TLS-HS-RBUF-ERROR !
+    DEPTH _mt-default-depth !
+    _mt-native-ctx @ _KDOSTLS-HS-PROCESS-ONE
+        _KDOSTLS-HS-S-PROCESSED = _mt-assert
+    DEPTH _mt-default-depth @ = _mt-assert
+    TLS-HS-RBUF-LEN @ 0= _mt-assert
+    _mt-native-ctx @ TLS-CTX.HS-STATE @ TLSH-EE-RCVD = _mt-assert ;
+
 : _mt-run  ( -- )
     0 _mt-fails ! 0 _mt-checks ! DEPTH _mt-depth !
     PERF-RESET
@@ -3933,6 +4036,8 @@ VARIABLE _mt-alert-hits
     TLS-TRUST-GENERATION @ _mt-old-trust-generation !
     0 _mt-sent-u ! 0 _mt-in-pos ! 0 _mt-dns-hits !
     0 _mt-connect-hits ! 0 _mt-close-hits ! 0 _mt-poll-hits !
+    _mt-test-default-open-stack
+    _mt-test-handshake-buffer-stack
     _mt-test-config
     _mt-test-address-admission
     _mt-test-cooperative-open
@@ -15072,7 +15177,7 @@ _ssc-run
     ready_markers=("SYNDICATION CONTRACTS PASS",),
     stable_markers=("SYNDICATION CONTRACTS PASS",),
     failure_markers=("SYNDICATION CONTRACTS FAIL", "SSC assertion"),
-    linked=False,
+    linked=True,
     include_large_sample=False,
     initial_files=(
         (
@@ -18679,7 +18784,7 @@ DESK-QUEUE-BUILTIN
 PROFILES["desktop-streams"] = Profile(
     roots=(
         "tui/applets/desk/desk.f",
-        "tui/applets/streams/streams.f",
+        "tui/applets/streams/streams-online.f",
     ),
     resources=(
         "tui/applets/desk/desk.toml",
@@ -18689,7 +18794,7 @@ PROFILES["desktop-streams"] = Profile(
 ENTER-USERLAND
 ." [akashic] loading focused desktop" CR
 REQUIRE tui/applets/desk/desk.f
-REQUIRE tui/applets/streams/streams.f
+REQUIRE tui/applets/streams/streams-online.f
 
 \ Provision a normal Practice head on genuinely blank qualification media.
 CREATE _boot-practice-head PHEAD-SIZE ALLOT
@@ -18733,6 +18838,7 @@ THEN
     stable_markers=("STREAMS", "Desk ☂ café"),
     linked=True,
     include_large_sample=False,
+    total_sectors=PROFILES["desktop"].total_sectors,
 )
 
 PROFILES["desktop-local-applet"] = Profile(
@@ -19838,15 +19944,33 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
     1048576 A-XMEM ARENA-NEW DUP 0= _soc-assert DROP
     VFS-RAM-VTABLE VFS-NEW DUP 0<> _soc-assert DUP _soc-vfs ! VFS-USE
     _STREAMS-COMP-SETUP
-    _STM-CAP-COUNT 14 = _soc-assert
-    STREAMS-COMP-DESC COMP.CAPS-N @ 14 = _soc-assert
+    _STM-CAP-COUNT 15 = _soc-assert
+    STREAMS-COMP-DESC COMP.CAPS-N @ 15 = _soc-assert
     STREAMS-CAP-SOURCE-QUERY CAP-DESC-VALID? _soc-assert
     STREAMS-CAP-SOURCE-READ CAP-DESC-VALID? _soc-assert
     STREAMS-CAP-SOURCE-SET-ENABLED CAP-DESC-VALID? _soc-assert
+    STREAMS-CAP-SOURCE-REFRESH CAP-DESC-VALID? _soc-assert
     STREAMS-CAP-SOURCE-QUERY CAP.EFFECTS @ CAP-E-OBSERVE = _soc-assert
     STREAMS-CAP-SOURCE-READ CAP.EFFECTS @ CAP-E-OBSERVE = _soc-assert
     STREAMS-CAP-SOURCE-SET-ENABLED CAP.EFFECTS @
         CAP-E-MUTATE CAP-E-PERSIST OR = _soc-assert
+    STREAMS-CAP-SOURCE-REFRESH CAP.EFFECTS @
+        CAP-E-PERSIST CAP-E-EXTERNAL OR = _soc-assert
+    STREAMS-CAP-SOURCE-REFRESH CAP.ID-A @
+        STREAMS-CAP-SOURCE-REFRESH CAP.ID-U @
+        S" streams.source.refresh" STR-STR= _soc-assert
+    S" streams.source.refresh" STREAMS-COMP-DESC COMP-CAP-FIND
+        STREAMS-CAP-SOURCE-REFRESH = _soc-assert
+    STREAMS-CAP-SOURCE-REFRESH CAP.KIND @
+        CAP-K-COMMAND = _soc-assert
+    STREAMS-CAP-SOURCE-REFRESH CAP.IN-SCHEMA @
+        _STM-SOURCE-REFRESH-IN-SCHEMA = _soc-assert
+    STREAMS-CAP-SOURCE-REFRESH CAP.OUT-SCHEMA @
+        _STM-SOURCE-REFRESH-ACK-SCHEMA = _soc-assert
+    STREAMS-CAP-SOURCE-REFRESH CAP.HANDLER-XT @
+        ['] _STM-CAP-SOURCE-REFRESH-H = _soc-assert
+    STREAMS-CAP-SOURCE-REFRESH CAP.FLAGS @
+        CAP-F-NEEDS-TARGET = _soc-assert
     STREAMS-CAP-SOURCE-SET-ENABLED CAP.ID-A @
         STREAMS-CAP-SOURCE-SET-ENABLED CAP.ID-U @
         S" streams.source.set-enabled" STR-STR= _soc-assert
@@ -20363,6 +20487,51 @@ _soc-run
     failure_markers=("STREAMS SOURCE OWNER CONTRACTS FAIL", "SOC ASSERT"),
     linked=True,
     include_large_sample=False,
+)
+
+PROFILES["streams-observation-state-compile"] = Profile(
+    roots=("tui/applets/streams/observation-state.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Streams observation checkpoint compile
+ENTER-USERLAND
+." [akashic] loading Streams observation state" CR
+REQUIRE tui/applets/streams/observation-state.f
+." STREAMS OBSERVATION STATE COMPILE PASS" CR
+""",
+    ready_markers=("STREAMS OBSERVATION STATE COMPILE PASS",),
+    stable_markers=("STREAMS OBSERVATION STATE COMPILE PASS",),
+    failure_markers=("exception", "EVALUATE depth limit exceeded"),
+    linked=True,
+    include_large_sample=False,
+)
+
+PROFILES["streams-observation-contracts"] = Profile(
+    roots=("tui/applets/streams/observation-state.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Streams observation checkpoint contracts
+ENTER-USERLAND
+REQUIRE tui/applets/streams/observation-state.f
+." [akashic] loading Streams observation contracts" CR
+REQUIRE local_testing/streams-observation.f
+_octx-run
+""",
+    ready_markers=("STREAMS OBSERVATION CONTRACTS PASS",),
+    stable_markers=("STREAMS OBSERVATION CONTRACTS PASS",),
+    failure_markers=(
+        "STREAMS OBSERVATION CONTRACTS FAIL",
+        "OCTX ASSERT",
+        "OCTX STACK",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    link_chunk_bytes=64 * 1024,
+    initial_files=(
+        (
+            "local_testing/streams-observation.f",
+            (AKASHIC_ROOT / "local_testing" / "streams-observation.f").read_bytes(),
+        ),
+    ),
 )
 
 PROFILES["streams-source-registry-contracts"] = Profile(
@@ -21488,7 +21657,10 @@ def _strip_forth_noncode_lines(text: str) -> str:
     return _compact_forth(text)
 
 
-def _linked_chunks(modules: tuple[str, ...]) -> dict[str, bytes]:
+def _linked_chunks(
+    modules: tuple[str, ...],
+    maximum_bytes: int = LINK_CHUNK_BYTES,
+) -> dict[str, bytes]:
     """Pack ordered modules into loader-safe native Forth source chunks."""
     chunks: list[bytearray] = []
     current = bytearray()
@@ -21497,11 +21669,11 @@ def _linked_chunks(modules: tuple[str, ...]) -> dict[str, bytes]:
             (SOURCE_ROOT / module).read_text(encoding="utf-8"),
             remove_requires=True,
         ).encode("utf-8")
-        if len(source) > LINK_CHUNK_BYTES:
+        if len(source) > maximum_bytes:
             raise RuntimeError(
-                f"Linked module exceeds {LINK_CHUNK_BYTES} bytes: {module}"
+                f"Linked module exceeds {maximum_bytes} bytes: {module}"
             )
-        if current and len(current) + len(source) > LINK_CHUNK_BYTES:
+        if current and len(current) + len(source) > maximum_bytes:
             chunks.append(current)
             current = bytearray()
         current.extend(source)
@@ -21513,12 +21685,18 @@ def _linked_chunks(modules: tuple[str, ...]) -> dict[str, bytes]:
     }
 
 
-def _linked_autoexec(autoexec: str, chunk_names: tuple[str, ...]) -> str:
-    """Replace source REQUIREs with ordered deployment-chunk REQUIREs."""
+def _linked_autoexec(
+    autoexec: str,
+    chunk_names: tuple[str, ...],
+    modules: tuple[str, ...],
+) -> str:
+    """Replace linked source REQUIREs while retaining injected test leaves."""
     lines: list[str] = []
     inserted = False
+    linked_modules = set(modules)
     for line in autoexec.splitlines():
-        if REQUIRE_RE.match(line):
+        match = REQUIRE_RE.match(line)
+        if match and match.group(1) in linked_modules:
             if not inserted:
                 lines.extend(f"REQUIRE {name}" for name in chunk_names)
                 inserted = True
@@ -21684,9 +21862,15 @@ def build_image(
     )
     requires_networking = _requires_megapad_networking(modules)
     resources = set(profile.resources)
-    linked_chunks = _linked_chunks(modules) if profile.linked else {}
+    linked_chunks = (
+        _linked_chunks(modules, profile.link_chunk_bytes)
+        if profile.linked
+        else {}
+    )
     if profile.linked:
-        autoexec = _linked_autoexec(autoexec, tuple(linked_chunks))
+        autoexec = _linked_autoexec(
+            autoexec, tuple(linked_chunks), modules
+        )
     if requires_networking:
         autoexec = _with_megapad_networking(autoexec)
     paths = set(linked_chunks) | resources if profile.linked else set(modules) | resources
@@ -23754,8 +23938,10 @@ def smoke(
             session.send_text(source_url)
             session.send_key("enter")
             if not wait_screen(
-                source_url,
+                "[on ] Syndication feed",
                 "Desk Streams did not render the newly configured feed source",
+                step_budget=1_200_000_000,
+                wall_timeout=30.0,
             ):
                 return
             if "[on ]" not in session.snapshot().text():
@@ -23830,14 +24016,17 @@ def smoke(
             session.send_text(draft_text)
             session.send_key("enter")
             if not wait_screen(
-                draft_text,
-                "Desk Streams did not render the exact Unicode draft",
-            ):
-                return
-            wait_screen(
                 "Draft saved locally; nothing was published",
                 "Desk Streams did not report the local-only durable save",
-            )
+                step_budget=600_000_000,
+                wall_timeout=20.0,
+            ):
+                return
+            if draft_text not in session.snapshot().text():
+                journey_errors.append(
+                    "Desk Streams did not render the exact Unicode draft"
+                )
+                return
 
             live_fs = MP64FS(bytearray(session.system.storage._image_data))
             try:
@@ -25910,6 +26099,535 @@ _hrc-run
         ),
     ),
     include_large_sample=False,
+)
+
+
+PROFILES["streams-observation-store-contracts"] = Profile(
+    roots=("tui/applets/streams/observation-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - durable Streams observation-store contracts
+ENTER-USERLAND
+REQUIRE tui/applets/streams/observation-store.f
+." [akashic] loading Streams observation-store contracts" CR
+REQUIRE local_testing/streams-obs-store.f
+_ostc-run
+""",
+    ready_markers=("STREAMS OBSERVATION STORE CONTRACTS PASS",),
+    stable_markers=("STREAMS OBSERVATION STORE CONTRACTS PASS",),
+    failure_markers=(
+        "STREAMS OBSERVATION STORE CONTRACTS FAIL",
+        "OSTC ASSERT",
+        "OSTC STACK",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/streams-obs-store.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "streams-observation-store.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["streams-syndec-contracts"] = Profile(
+    roots=("tui/applets/streams/syndication-decode.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - retained syndication decoder contracts
+ENTER-USERLAND
+REQUIRE tui/applets/streams/syndication-decode.f
+." [akashic] loading Streams syndication decoder contracts" CR
+REQUIRE local_testing/streams-syndec.f
+_sdt-begin
+_sdt-check-json
+_sdt-check-rss
+_sdt-check-atom
+_sdt-check-rejections
+_sdt-finish
+""",
+    ready_markers=("STREAMS SYNDEC CONTRACTS PASS",),
+    stable_markers=("STREAMS SYNDEC CONTRACTS PASS",),
+    failure_markers=(
+        "STREAMS SYNDEC CONTRACTS FAIL",
+        "SDT ASSERT",
+        "SDT STACK",
+        "exception",
+        "EVALUATE depth limit exceeded",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/streams-syndec.f",
+            (AKASHIC_ROOT / "local_testing" / "streams-syndec.f").read_bytes(),
+        ),
+        ("jsonfeed-base.json", SYNDICATION_JSON_FEED_BASE_FIXTURE),
+        ("rss-base.xml", SYNDICATION_RSS_BASE_FIXTURE),
+        ("atom-base.xml", SYNDICATION_ATOM_BASE_FIXTURE),
+        ("malformed.json", SYNDICATION_JSON_FEED_MALFORMED_FIXTURE),
+    ),
+)
+
+
+PROFILES["streams-configured-provider-compile"] = Profile(
+    roots=("tui/applets/streams/syndication-http.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - configured syndication compile gate
+ENTER-USERLAND
+REQUIRE tui/applets/streams/syndication-http.f
+." STREAMS CONFIGURED PROVIDER COMPILE PASS" CR
+""",
+    ready_markers=("STREAMS CONFIGURED PROVIDER COMPILE PASS",),
+    stable_markers=("STREAMS CONFIGURED PROVIDER COMPILE PASS",),
+    failure_markers=("exception", "EVALUATE depth limit exceeded"),
+    linked=True,
+    include_large_sample=False,
+)
+
+
+PROFILES["streams-refresh-owner-compile"] = Profile(
+    roots=("tui/applets/streams/refresh-owner.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - durable configured refresh-owner compile gate
+ENTER-USERLAND
+REQUIRE tui/applets/streams/refresh-owner.f
+." STREAMS REFRESH OWNER COMPILE PASS" CR
+""",
+    ready_markers=("STREAMS REFRESH OWNER COMPILE PASS",),
+    stable_markers=("STREAMS REFRESH OWNER COMPILE PASS",),
+    failure_markers=("exception", "EVALUATE depth limit exceeded"),
+    linked=True,
+    link_chunk_bytes=64 * 1024,
+    include_large_sample=False,
+)
+
+
+PROFILES["streams-syndication-http-contracts"] = Profile(
+    roots=("tui/applets/streams/syndication-http.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - configured syndication authorization contracts
+ENTER-USERLAND
+." [akashic] loading configured syndication authorization contracts" CR
+REQUIRE tui/applets/streams/syndication-http.f
+REQUIRE local_testing/streams-syn-http.f
+_shac-run
+""",
+    ready_markers=("STREAMS SYNDICATION HTTP CONTRACTS PASS",),
+    stable_markers=("STREAMS SYNDICATION HTTP CONTRACTS PASS",),
+    failure_markers=(
+        "STREAMS SYNDICATION HTTP CONTRACTS FAIL",
+        "SHAC ASSERT",
+        "SHAC STACK",
+        "exception",
+        "EVALUATE depth limit exceeded",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/streams-syn-http.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "streams-syndication-http.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["streams-refresh-owner-contracts"] = Profile(
+    roots=(
+        "tui/applets/streams/refresh-owner.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - durable configured refresh-owner contracts
+ENTER-USERLAND
+REQUIRE tui/applets/streams/refresh-owner.f
+." [akashic] loading Streams refresh-owner contracts" CR
+REQUIRE local_testing/streams-refresh-owner.f
+_srtc-begin
+_srtc-test-absent-init
+_srtc-test-policy-bounds
+_srtc-test-first-success
+_srtc-test-preaccept-failure
+_srtc-test-unchanged
+_srtc-test-cleanup-suppresses-success
+_srtc-test-restart-and-revision
+_srtc-test-transport-failure
+_srtc-test-semantic-failure
+_srtc-test-decode-failure
+_srtc-test-source-stale
+_srtc-test-xio-generation-stale
+_srtc-test-explicit-cancel
+_srtc-test-cancel-after-success
+_srtc-test-release
+_srtc-test-boot-recovery
+_srtc-test-factory-absent-release
+_srtc-test-service-absent-release
+_srtc-test-factory-failure-release
+_srtc-test-persist-block-metadata
+_srtc-finish
+""",
+    ready_markers=("STREAMS REFRESH OWNER CONTRACTS PASS",),
+    stable_markers=("STREAMS REFRESH OWNER CONTRACTS PASS",),
+    failure_markers=(
+        "STREAMS REFRESH OWNER CONTRACTS FAIL",
+        "SRTC ASSERT",
+        "SRTC STACK",
+        "exception",
+        "EVALUATE depth limit exceeded",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/streams-refresh-owner.f",
+            (AKASHIC_ROOT / "local_testing" / "streams-refresh-owner.f").read_bytes(),
+        ),
+        ("jsonfeed-base.json", SYNDICATION_JSON_FEED_BASE_FIXTURE),
+        ("jsonfeed-update.json", SYNDICATION_JSON_FEED_UPDATE_FIXTURE),
+        ("malformed.json", SYNDICATION_JSON_FEED_MALFORMED_FIXTURE),
+    ),
+)
+
+
+PROFILES["streams-manual-refresh-contracts"] = Profile(
+    roots=(
+        "tui/applets/desk/desk.f",
+        "tui/applets/streams/streams-online.f",
+    ),
+    resources=("tui/applets/streams/streams.uidl",),
+    autoexec=r"""\ autoexec.f - applet-level manual source refresh contracts
+ENTER-USERLAND
+." [akashic] loading Streams manual-refresh integration contracts" CR
+REQUIRE tui/applets/desk/desk.f
+REQUIRE tui/applets/streams/streams-online.f
+REQUIRE local_testing/smrc-contracts.f
+_smrc-run
+""",
+    ready_markers=("STREAMS MANUAL REFRESH CONTRACTS PASS",),
+    stable_markers=("STREAMS MANUAL REFRESH CONTRACTS PASS",),
+    failure_markers=(
+        "STREAMS MANUAL REFRESH CONTRACTS FAIL",
+        "SMRC ASSERT",
+        "SMRC STACK",
+        "exception",
+        "EVALUATE depth limit exceeded",
+    ),
+    linked=True,
+    link_chunk_bytes=192 * 1024,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/smrc-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "streams-manual-refresh.f"
+            ).read_bytes(),
+        ),
+        ("manual-feed.json", SYNDICATION_JSON_FEED_BASE_FIXTURE),
+    ),
+)
+
+
+PROFILES["streams-configured-refresh-live"] = Profile(
+    roots=(
+        "net/tls-trust-registry.f",
+        "tui/applets/streams/refresh-owner.f",
+        "tui/applets/streams/syndication-http.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - live exact-host configured refresh qualification
+ENTER-USERLAND
+." [akashic] loading live configured Streams refresh" CR TX-FLUSH
+REQUIRE net/tls-trust-registry.f
+REQUIRE tui/applets/streams/refresh-owner.f
+REQUIRE tui/applets/streams/syndication-http.f
+REQUIRE local_testing/streams-live-trust.f
+
+VARIABLE _lrc-checks
+VARIABLE _lrc-depth
+VARIABLE _lrc-run-ior
+VARIABLE _lrc-cleanup-fails
+VARIABLE _lrc-old-vfs
+VARIABLE _lrc-vfs
+VARIABLE _lrc-service-live
+VARIABLE _lrc-durable
+VARIABLE _lrc-changed
+VARIABLE _lrc-status
+VARIABLE _lrc-deadline
+VARIABLE _lrc-first-count
+VARIABLE _lrc-first-generation
+VARIABLE _lrc-auth-source
+VARIABLE _lrc-auth-target
+VARIABLE _lrc-auth-policy
+
+CREATE _lrc-service XIO-SERVICE-SIZE ALLOT
+CREATE _lrc-owner STREAMS-REFRESH-OWNER-SIZE ALLOT
+CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
+
+0x53594E444C495645 CONSTANT _LRC-POLICY  \ "SYNDLIVE"
+
+: _lrc-assert  ( flag -- )
+    1 _lrc-checks +! 0= IF
+        ." STREAMS CONFIGURED REFRESH LIVE ASSERT " _lrc-checks @ . CR
+        -1 THROW
+    THEN ;
+
+: _lrc-stack  ( -- )
+    DEPTH _lrc-depth @ <> IF
+        ." STREAMS CONFIGURED REFRESH LIVE STACK expected=" _lrc-depth @ .
+        ."  actual=" DEPTH . ."  cells=" .S CR TX-FLUSH
+    THEN
+    DEPTH _lrc-depth @ = _lrc-assert ;
+
+: _lrc-trust-emit  ( builder context -- status )
+    DROP _lrc-artifact _lrc-artifact-u ROT MTRUST-MPTA+ ;
+
+: _lrc-authorize  ( exact-source canonical-target context -- allowed? )
+    _lrc-auth-policy ! _lrc-auth-target ! _lrc-auth-source !
+    _lrc-auth-policy @ _LRC-POLICY <> IF 0 EXIT THEN
+    _lrc-auth-source @ STREAMS-SOURCE-SIZE
+        _lrc-source STREAMS-SOURCE-SIZE COMPARE IF
+        0 EXIT
+    THEN
+    _lrc-auth-target @ HTARGET-VALID? 0= IF 0 EXIT THEN
+    _lrc-auth-target @ HTARGET-HOST$ S" foo-dogsquared.github.io" STR-STRI=
+    _lrc-auth-target @ HTARGET-PORT@ 443 = AND ;
+
+: _lrc-factory  ( -- provider status )
+    ['] _lrc-authorize _LRC-POLICY
+        STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED ;
+
+: _lrc-source-init  ( -- )
+    _lrc-source STREAMS-SOURCE-INIT
+    7401 _lrc-source SSOURCE.ID !
+    S" More Contentful RSS feed" _lrc-source STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _lrc-assert
+    S" https://foo-dogsquared.github.io/hugo-theme-more-contentful/feed.rss"
+        _lrc-source STREAMS-SOURCE-ENDPOINT!
+        SSREG-S-OK = _lrc-assert
+    SSOURCE-KIND-SYNDICATION _lrc-source SSOURCE.KIND !
+    SSOURCE-FORMAT-RSS _lrc-source SSOURCE.FORMAT !
+    1 _lrc-source SSOURCE.REVISION !
+    _lrc-source STREAMS-SOURCE-VALID? _lrc-assert ;
+
+: _lrc-head  ( -- head|0 )
+    _lrc-source SSOURCE.ID
+        _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT OCHK-SOURCE-FIND ;
+
+: _lrc-pump  ( -- )
+    0 _lrc-changed ! SREF-S-OK _lrc-status !
+    MS@ 75000 + _lrc-deadline !
+    BEGIN
+        _lrc-service XIO-TICK
+        _lrc-source 9301 1 _lrc-owner STREAMS-REFRESH-OWNER-TICK
+            _lrc-status ! _lrc-changed !
+        YIELD?
+        _lrc-changed @ MS@ _lrc-deadline @ >= OR
+    UNTIL
+    _lrc-changed @ _lrc-assert
+    _lrc-status @ SREF-S-OK <> IF
+        ." STREAMS CONFIGURED REFRESH LIVE TICK FAIL status="
+            _lrc-status @ .
+        ."  phase=" _lrc-owner SREF.PHASE @ .
+        ."  owner-status=" _lrc-owner SREF.LAST-STATUS @ .
+        ."  error=" _lrc-owner SREF.LAST-ERROR @ .
+        ."  store=" _lrc-owner SREF.STORE-STATUS @ .
+        ."  revisions=" _lrc-source SSOURCE.REVISION @ .
+        ." /" _lrc-owner SREF.SOURCE SSOURCE.REVISION @ .
+        _lrc-head ?DUP IF ." /" OCS.SOURCE-REVISION @ . ELSE ." /0" THEN
+        ."  generations="
+            _lrc-owner SREF.REQUEST-GENERATION @ .
+        ." /" _lrc-owner SREF.LIVE @ OCHK.GENERATION @ .
+        ." /" _lrc-owner SREF.CANDIDATE @ OCHK.GENERATION @ .
+        ."  source-compare="
+            _lrc-source STREAMS-SOURCE-SIZE
+            _lrc-owner SREF.SOURCE STREAMS-SOURCE-SIZE COMPARE .
+        ."  xio=" _lrc-owner SREF.XIO-OP XIOO.STATE @ .
+        ." /" _lrc-owner SREF.XIO-OP XIOO.ERROR @ .
+        ." /" _lrc-owner SREF.XIO-OP XIOO.CLEANUP-ERROR @ .
+        ."  xio-id=" _lrc-owner SREF.XIO-OP XIOO.OWNER-ID @ .
+        ." /" _lrc-owner SREF.XIO-OP XIOO.OWNER-GENERATION @ .
+        ." /" _lrc-owner SREF.XIO-OP XIOO.REQUEST-GENERATION @ .
+        _lrc-owner SREF.PROVIDER @ ?DUP IF
+            ."  provider=" DUP SCONF-OUTCOME .
+            ." /" DUP SCONF-DETAIL .
+            ." /" DUP SCONF-CLEANUP-ERROR@ .
+            SCONF.CONTEXT @ DUP _SCS.C.RESOURCE @
+            ."  hres=" DUP HRES-STATE@ .
+            ." /" DUP HRES-OUTCOME@ .
+            ." /" DUP HRES-DETAIL@ .
+            ." /" HRES-CLEANUP@ .
+            _SCS.C.TLS @
+            ."  tls=" DUP KDOSTLS.STATE @ .
+            ." /" DUP KDOSTLS.LAST-ERROR @ .
+            ." /" DUP KDOSTLS.NATIVE-ERROR @ .
+            ." /" KDOSTLS.CLEANUP-ERROR @ .
+        THEN CR TX-FLUSH
+    THEN
+    _lrc-status @ SREF-S-OK = _lrc-assert ;
+
+: _lrc-durable-accepted?  ( -- flag )
+    _lrc-durable @ STREAMS-OBSERVATION-CHECKPOINT-SIZE
+        _lrc-owner SREF.STORE STREAMS-OBSERVATION-STORE-LOAD
+        OSTORE-S-OK <> IF 0 EXIT THEN
+    _lrc-source SSOURCE.ID _lrc-durable @ OCHK-SOURCE-FIND
+    DUP 0= IF DROP 0 EXIT THEN
+    OCS.STATE @ OCHK-ATTEMPT-ACCEPTED = ;
+
+: _lrc-durable=live?  ( -- flag )
+    _lrc-durable @ STREAMS-OBSERVATION-CHECKPOINT-SIZE
+        _lrc-owner SREF.STORE STREAMS-OBSERVATION-STORE-LOAD
+        OSTORE-S-OK <> IF 0 EXIT THEN
+    _lrc-durable @ STREAMS-OBSERVATION-CHECKPOINT-SIZE
+    _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT
+        STREAMS-OBSERVATION-CHECKPOINT-SIZE COMPARE 0= ;
+
+: _lrc-refresh-once  ( -- )
+    _lrc-source 9301 1 _lrc-owner STREAMS-REFRESH-OWNER-START
+        DUP _lrc-status ! SREF-S-OK <> IF
+            ." STREAMS CONFIGURED REFRESH LIVE START FAIL status="
+                _lrc-status @ .
+            ."  phase=" _lrc-owner SREF.PHASE @ .
+            ."  owner-status=" _lrc-owner SREF.LAST-STATUS @ .
+            ."  error=" _lrc-owner SREF.LAST-ERROR @ .
+            _lrc-owner SREF.PROVIDER @ ?DUP IF
+                ."  provider-outcome=" DUP SCONF-OUTCOME .
+                ."  detail=" SCONF-DETAIL .
+            THEN CR TX-FLUSH
+        THEN
+    _lrc-status @ SREF-S-OK = _lrc-assert
+    _lrc-owner STREAMS-REFRESH-OWNER-PHASE@
+        SREF-PHASE-ACTIVE = _lrc-assert
+    _lrc-head DUP 0<> _lrc-assert
+    OCS.STATE @ OCHK-ATTEMPT-ACCEPTED = _lrc-assert
+    _lrc-durable-accepted? _lrc-assert
+    _lrc-pump
+    _lrc-owner STREAMS-REFRESH-OWNER-PHASE@
+        SREF-PHASE-SUCCEEDED = _lrc-assert
+    _lrc-head DUP 0<> _lrc-assert
+    DUP OCS.STATE @ OCHK-ATTEMPT-SUCCEEDED = _lrc-assert
+    OCS.OUTCOME @ OCHK-O-OK = _lrc-assert
+    _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT
+        OCHK.OBSERVATION-COUNT @ DUP 0> _lrc-assert
+    8 <= _lrc-assert
+    _lrc-owner SREF.XIO-OP XIOO.STATE @ XIO-STATE-RESET = _lrc-assert
+    _lrc-service XIO-ACTIVE? 0= _lrc-assert
+    _lrc-service XIOS.RETAINED @ 0= _lrc-assert
+    _lrc-durable=live? _lrc-assert ;
+
+: _lrc-exercise  ( -- )
+    DEPTH _lrc-depth !
+    VFS-CUR _lrc-old-vfs !
+    S" org.akashic.trust.streams-syndication-live"
+        ['] _lrc-trust-emit 0 MTRUST-REGISTER
+        MTRUST-S-OK = _lrc-assert
+    MTRUST-FREEZE DUP _lrc-status ! MTRUST-S-OK <> IF
+        ." STREAMS CONFIGURED REFRESH LIVE TRUST FAIL status=" _lrc-status @ .
+        ."  detail=" MTRUST-LAST-DETAIL@ . CR TX-FLUSH
+        0 _lrc-assert
+    THEN
+    MTRUST-FROZEN? _lrc-assert
+    MTRUST-COUNT@ 1 = _lrc-assert
+
+    10 64 0 2 IP-SET
+    10 64 0 1 GW-IP IP!
+    255 255 255 0 NET-MASK IP!
+    8 8 8 8 DNS-SERVER-IP IP!
+
+    \ Match the owner contracts' bounded eight-MiB RAM VFS arena.  The live
+    \ gate persists both alternating checkpoint slots and their transactional
+    \ staging files, so a smaller test arena would qualify storage pressure
+    \ rather than the configured refresh lifecycle.
+    8388608 A-XMEM ARENA-NEW DUP IF 2DROP -4105 THROW THEN DROP
+    VFS-RAM-VTABLE VFS-NEW DUP _lrc-vfs ! 0= IF -4106 THROW THEN
+    _lrc-vfs @ VFS-USE
+    _lrc-service XIO-SERVICE-INIT XIO-S-OK = _lrc-assert
+    -1 _lrc-service-live !
+    _lrc-source-init
+    STREAMS-OBSERVATION-CHECKPOINT-SIZE ALLOCATE
+        DUP IF 2DROP -4107 THROW THEN DROP _lrc-durable !
+    _lrc-vfs @ _lrc-service ['] _lrc-factory _lrc-owner
+        STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _lrc-assert
+    _lrc-owner STREAMS-REFRESH-OWNER-AVAILABLE? _lrc-assert
+
+    _lrc-refresh-once
+    _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT
+        OCHK.OBSERVATION-COUNT @ _lrc-first-count !
+    _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT
+        OCHK.GENERATION @ _lrc-first-generation !
+
+    _lrc-owner STREAMS-REFRESH-OWNER-RELEASE SREF-S-OK = _lrc-assert
+    _lrc-vfs @ _lrc-service ['] _lrc-factory _lrc-owner
+        STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _lrc-assert
+    _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT OCHK-VALID? _lrc-assert
+    _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT
+        OCHK.OBSERVATION-COUNT @ _lrc-first-count @ = _lrc-assert
+    _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT
+        OCHK.GENERATION @ _lrc-first-generation @ = _lrc-assert
+    _lrc-durable=live? _lrc-assert
+    _lrc-stack ;
+
+: _lrc-cleanup  ( -- )
+    _lrc-owner STREAMS-REFRESH-OWNER-VALID? IF
+        _lrc-owner STREAMS-REFRESH-OWNER-RELEASE SREF-S-OK <> IF
+            1 _lrc-cleanup-fails +!
+        THEN
+    THEN
+    _lrc-service-live @ IF
+        _lrc-service XIO-SERVICE-FINI XIO-S-OK <> IF
+            1 _lrc-cleanup-fails +!
+        ELSE
+            0 _lrc-service-live !
+        THEN
+    THEN
+    _lrc-old-vfs @ ?DUP IF VFS-USE THEN
+    _lrc-vfs @ ?DUP IF VFS-DESTROY 0 _lrc-vfs ! THEN
+    _lrc-durable @ ?DUP IF
+        DUP STREAMS-OBSERVATION-CHECKPOINT-SIZE 0 FILL FREE
+        0 _lrc-durable !
+    THEN ;
+
+: _lrc-run  ( -- )
+    0 _lrc-checks ! 0 _lrc-cleanup-fails ! 0 _lrc-run-ior !
+    0 _lrc-vfs ! 0 _lrc-service-live ! 0 _lrc-durable !
+    _lrc-owner STREAMS-REFRESH-OWNER-SIZE 0 FILL
+    ['] _lrc-exercise CATCH _lrc-run-ior !
+    _lrc-cleanup
+    _lrc-run-ior @ 0= _lrc-cleanup-fails @ 0= AND IF
+        ." STREAMS CONFIGURED REFRESH LIVE PASS " _lrc-checks @ . CR TX-FLUSH
+    ELSE
+        ." STREAMS CONFIGURED REFRESH LIVE FAIL exercise="
+            _lrc-run-ior @ . ."  cleanup=" _lrc-cleanup-fails @ . CR
+        ." phase=" _lrc-owner SREF.PHASE @ .
+        ."  status=" _lrc-owner SREF.LAST-STATUS @ .
+        ."  error=" _lrc-owner SREF.LAST-ERROR @ .
+        ."  native=" TLS-CONNECT-LAST-ERROR @ .
+        ." /" TLS-CERT-LAST-ERROR @ . CR TX-FLUSH ABORT
+    THEN ;
+
+_lrc-run
+""",
+    ready_markers=("STREAMS CONFIGURED REFRESH LIVE PASS",),
+    stable_markers=("STREAMS CONFIGURED REFRESH LIVE PASS",),
+    failure_markers=(
+        "STREAMS CONFIGURED REFRESH LIVE ASSERT",
+        "STREAMS CONFIGURED REFRESH LIVE FAIL",
+        "exception",
+        "EVALUATE depth limit exceeded",
+    ),
+    linked=True,
+    link_chunk_bytes=64 * 1024,
+    requires_tap=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/streams-live-trust.f",
+            _streams_live_exact_host_trust_leaf(),
+        ),
+    ),
 )
 
 
