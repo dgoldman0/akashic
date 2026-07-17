@@ -5,6 +5,28 @@ Grid is Akashic's small spreadsheet and CSV workspace. It runs standalone with
 
 **Provider:** `akashic-tui-grid`
 
+## Ownership and exact targeting
+
+Grid owns workbook, sheet, cell, range, formula, recalculation, and tabular
+import/export semantics. The current implementation has one bounded worksheet
+backed by `/grid.csv`; named native workbooks and durable workbook identity are
+later Grid work, not Library or Desk state. Grid does not own Library metadata,
+corpus indexing, scheduling, provenance graphs, or a general database.
+
+The selected cell is local UI state and may be exposed only as an observation.
+It is not a consequential mutation target. A general or Agent-visible edit
+must name the exact workbook, sheet, coordinate/range, complete value/formula
+operands, and expected domain revision. The current
+`grid.cell.set-selected` compatibility surface depends on hidden selection and
+must not be widened; Gate 10A replaces it with exact-target operations. Gate 1
+changes no capability or runtime behavior.
+
+An eventual “Collect in Library” action copies one explicit admitted UTF-8
+CSV/text export into a new immutable Library capture. It neither transfers the
+Grid workbook to Library nor lets Library become a spreadsheet owner. Opening
+that capture as a workbook would be an explicit Grid import with a new
+Grid-owned identity.
+
 ## Worksheet
 
 The current worksheet has 64 rows and 16 columns (`A1:P64`). Only visible rows
@@ -119,7 +141,9 @@ of the dirty model under both faults.
 
 ## Deliberate Next Steps
 
-The larger Grid design still includes sparse pages, typed values, dependency-
-directed incremental recalculation, more aggregate functions, ranges and undo,
-multiple sheets, row/column operations, sorting/filtering, charts, and a
-versioned workbook format. CSV remains the portable boundary as those arrive.
+The larger Grid design still includes exact-target capabilities, named
+open/save-as workbooks, typed values, dependency-directed incremental
+recalculation, more aggregate functions, range selection and undo, multiple
+sheets, row/column operations, sorting/filtering, charts, and a versioned
+workbook format. CSV remains the portable interchange boundary as those
+arrive.

@@ -1,21 +1,36 @@
-# Shared document owner
+# Daybook shared document owner (temporary location)
 
 `interop/shared-document.f` is the bounded first shared-resource witness for
-the canonical `/daybook.md` text document. It is a headless component: a
-Practice activation creates it, publishes its one RID through `RREG`, and
-reusable lenses attach with the existing `RREF`/`LBIND` contracts. The owner
-does not depend on any lens lifecycle.
+the canonical `/daybook.md` text document. Despite its current path, it is a
+concrete Daybook owner, not a domain-neutral shared-document service. Desk
+hosts it during a healthy Practice activation, publishes its one RID through
+`RREG`, and Daybook/Pad lenses attach with the existing `RREF`/`LBIND`
+contracts. Hosting is lifecycle composition: Daybook remains the semantic
+owner, and neither Desk nor a lens acquires the document. The owner does not
+depend on any lens lifecycle.
 
-This is intentionally not a general resource graph or a durable Practice
-model. The RID-to-instance mapping, current revision, registries, and VFS
-handles are activation-local. Code is trusted native code; capabilities are
-routing and authority contracts, not a sandbox boundary.
+Gate 2C relocates this module into the Daybook domain and updates its callers
+without changing the path, bytes, RID, capabilities, lifecycle, or public
+behavior. Gate 1 changes documentation only; code must not treat the current
+`interop/` placement as permission to reuse Daybook policy for Library,
+Streams, or a generic text owner.
 
-Cooperating applets use
+This is intentionally not a general resource graph, Library projection, or
+durable Practice model. The RID-to-instance mapping, current component
+revision, registries, `LBIND`s, and VFS handles are activation-local. The
+current positive revision is an exact cooperating-client guard, not yet a
+qualified persistent historical-domain locator. Code is trusted native code;
+capabilities are routing and authority contracts, not a sandbox boundary.
+
+The cooperating Daybook and Pad applets use
 [`shared-document-lens.f`](shared-document-lens.md) for the common service
 discovery, exact attachment, and request-envelope lifecycle. Document parsing,
 editing policy, snapshot/replace dispatch, binding advancement, and post-commit
 handling remain with each applet.
+
+The owner target is always its one exact Daybook RID and expected revision.
+Current Daybook date/row, Pad tab/selection, focused Desk tile, and Practice
+binding are neither target nor authority.
 
 ## Open security boundary
 
@@ -25,7 +40,7 @@ VFS authority, including File Explorer, can mutate it outside the owner's
 revision sequence. Whether to enforce ownership at the VFS boundary, through
 Practice-scoped authority or mediation, or retain a documented trusted-code
 convention remains an explicit design decision. Desk orchestrates the
-activation but need not be the enforcement layer.
+activation but does not own the Daybook data or policy.
 
 ## Public interface
 

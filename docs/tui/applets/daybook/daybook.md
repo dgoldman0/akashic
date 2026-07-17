@@ -6,6 +6,30 @@ standalone through `DAYBOOK-RUN` or as an `APP-DESC` inside Desk through
 
 **Provider:** `akashic-tui-daybook`
 
+## Ownership and exact targeting
+
+Daybook owns human temporal entries and their planner semantics: dated tasks,
+events, short notes, completion, and the later explicitly gated due/deferral,
+recurrence, reminder, linked-resource, and visible automation records. It does
+not own Library documents or corpus search, Streams acquisition timing, Grid
+workbooks, Agent run history, every timestamp in the system, or a universal
+backlink/daily-note tree. Long-form text belongs in a Library document edited
+through Pad and may later be linked by an exact qualified locator.
+
+Desk currently hosts the Daybook document service and its activation-local
+registry/bus lifecycle. Daybook remains the semantic owner; hosting does not
+make `/daybook.md` Desk data. Pad is an editing lens over that owner and never
+receives Daybook authority merely by opening the text.
+
+The selected day and agenda row are local UI conveniences. A consequential
+typed or Agent-visible mutation must name the Daybook resource, exact item or
+create precondition, admitted date/time/kind/text operands, and expected domain
+revision. It may not infer the date or item from current selection. The landed
+`daybook.task.capture` compatibility path still supplies the selected UI date
+implicitly; it is therefore not the model for a general mutation and must not
+be widened. Gate 9A replaces that surface after exact schemas are qualified;
+Gate 1 changes no capability or runtime behavior.
+
 ## Current User Model
 
 The default view combines a month calendar with the selected day's agenda.
@@ -31,8 +55,8 @@ otherwise unchanged.
 Inside Desk, Daybook instead discovers the active Context, resource registry,
 request bus, and `org.akashic.resource.daybook` RID through its endpoint. It
 copies the RID and uses the common `shared-document-lens.f` client to attach an
-activation-local exact `RREF`/`LBIND` lens to the shared document owner. Loads
-request `resource.snapshot`; saves request
+activation-local exact `RREF`/`LBIND` lens to the Desk-hosted Daybook document
+owner. Loads request `resource.snapshot`; saves request
 `resource.replace` at the binding's exact revision and advance the binding only
 after a successful owner commit. Daybook never receives the owner's VFS path,
 replacement object, or private buffer.
@@ -65,10 +89,10 @@ handler—not a reusable delegation mechanism.
 
 This experiment does not make the VFS path globally exclusive. Trusted code
 and File Explorer can still write `/daybook.md` directly, outside the owner's
-revision sequence. The migrated Daybook/Pad path therefore demonstrates
-coordinated semantic lenses by convention, not system-wide mediation. That gap
-is part of the evidence for deciding whether the additional Practice machinery
-earns its complexity.
+revision sequence. The Daybook/Pad path therefore demonstrates coordinated
+semantic lenses by convention, not system-wide mediation or Practice
+ownership. Gate 2C relocates the concrete owner from `interop/` into the
+Daybook domain without changing this behavior.
 
 ## Durable Format
 
@@ -168,8 +192,10 @@ endpoint loses its Context service.
 
 ## Deliberate Next Steps
 
-The broader ecosystem design still calls for project/tag fields, deferral,
-search and backlinks, daily note files, and Pad `open-path` intents. Those
-features should build on this strict calendar, prompt, recovery, VFS, and
-responsive-layout path rather than changing the plain-text source-of-truth
-principle.
+The broader ecosystem design still calls for exact item identity, project/tag
+fields, edit/reschedule/deferral, bounded planner search, due times,
+recurrence/reminders, qualified resource links, and later visible typed
+automations. It does not authorize corpus-wide backlinks or a daily-note
+document tree inside Daybook. Those features should build on this strict
+calendar, prompt, recovery, VFS, and responsive-layout path rather than
+changing the plain-text source-of-truth principle prematurely.

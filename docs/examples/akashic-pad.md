@@ -4,6 +4,29 @@ Akashic Pad is the UIDL-based text editor applet for KDOS and MegaPad-64.
 Its implementation lives in `akashic/tui/applets/pad/`; it can run by itself
 through `PAD-RUN` or inside Desk through `PAD-ENTRY`.
 
+## Ownership and exact targeting
+
+Pad owns untitled buffers and edit-session state: cursor, selection, scroll,
+dirty state, undo/redo, open-buffer search, and editor presentation. It owns
+user-directed ordinary VFS open/save/save-as behavior where no semantic owner
+exists. When it displays a semantic resource, Pad is a lens: the Daybook,
+Library, Streams, or other domain owner retains identity, content/provenance,
+revision, and mutation policy. Opening text never transfers that ownership to
+Pad or authorizes a private copy to masquerade as the resource.
+
+The active tab and current selection are local UI conveniences. They may be
+observed through bounded Pad operations, but no general or Agent-visible
+mutation may mean “replace whatever tab is active.” A semantic mutation names
+the exact owner/resource and expected domain revision and is dispatched to
+that owner; ordinary-file mutation names the exact VFS locator and its sealed
+precondition. Pad then reflects or explicitly reloads the result.
+
+The landed semantic path below is only the concrete Daybook witness. Pad does
+not yet attach arbitrary Library or Streams resources, resolve qualified
+durable locators, or host several semantic tabs. Those changes wait for the
+generic Gate 3/Gate 6 contracts and may not be inferred from this current
+client mechanism.
+
 ## Run And Test
 
 From the Akashic repository:
@@ -150,11 +173,12 @@ before publication.
 ## Shared Daybook Resource
 
 Standalone Pad remains the ordinary-file control: an instance with no runtime
-endpoint reads and writes VFS paths directly. Inside Desk, Pad instead discovers
-the active Context, resource registry, reentrant request bus, and
-`org.akashic.resource.daybook` owner. An attached endpoint with a missing or
-invalid shared service is treated as broken runtime wiring and blocks the
-shared resource; it never silently falls back to `/daybook.md`.
+endpoint reads and writes VFS paths directly. Inside Desk, Pad discovers the
+active Context, resource registry, reentrant request bus, and the
+Desk-hosted `org.akashic.resource.daybook` service. Daybook remains the
+semantic owner. An attached endpoint with a missing or invalid shared service
+is treated as broken runtime wiring and blocks the shared resource; it never
+silently falls back to `/daybook.md`.
 
 Daybook's `Edit Source in Pad` action sends an exact semantic `RREF`. Pad
 attaches an activation-local lens through the common
@@ -183,8 +207,8 @@ protection, export, cleanup, and direct/blocked mode boundaries. The
 `desktop-resource` journey drives the real Daybook Ctrl+O route, closes Daybook
 while Pad retains an old lens, proves the later Pad save is stale and
 non-clobbering, saves an unrelated ordinary file, and relaunches Daybook against
-the current Desk-owned owner. This is a same-activation integration test; it
-does not claim a separate two-cold-boot durability result.
+the current Desk-hosted Daybook owner. This is a same-activation integration
+test; it does not claim a separate two-cold-boot durability result.
 
 ## Selection And Editing
 

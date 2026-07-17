@@ -1,443 +1,344 @@
 # Streams Information Integration Contract
 
-Status: proposed target contract with a landed manual syndication-refresh
-slice. This document defines the larger Streams information-integration
-boundary; source configuration, exact-host authorized RSS/Atom/JSON Feed
-acquisition, durable attempt/observation state, exact deduplication, and the
-explicitly identified capabilities are implemented. Scheduling, notification
-providers, saved sets, rules, derived outputs, and Outbox delivery remain
-target work. Current behavior remains documented in `streams.md`.
+Status: Gate 1 corrected product contract. The landed manual configured-source
+refresh slice is the implementation baseline; later work may deepen the
+source, acquisition, and observation product, but it must not turn Streams
+into the machine corpus, document editor, scheduler, workflow engine, or
+outbound-delivery ledger. Current UI and capability details remain in
+[`streams.md`](streams.md).
 
 ## Product boundary
 
-Streams is an independently useful applet for acquiring, retaining, comparing,
-processing, and deliberately routing internet-originated natural-language
-information over time. Its characteristic questions are:
+Streams is the bounded monitored inbox for internet-originated information.
+It owns three connected concerns:
 
+1. exact local source configuration and provider admission;
+2. explicit, recoverable acquisition attempts; and
+3. immutable retained observations, revisions, provenance, and inbox search.
+
+Its characteristic questions are:
+
+- What sources am I monitoring, and under which admitted bounds?
 - What arrived or changed?
-- What repeated, matched a rule, or was saved?
-- What was derived from which exact evidence?
-- What was staged or sent, and what remains failed or uncertain?
+- Which exact attempt and source revision produced this observation?
+- Did a refresh fail, become stale, exceed capacity, or remain indeterminate?
 
-Streams must remain useful when Bluesky, Pad, Agent, and Practice-specific
-bindings are omitted. Those integrations add lenses, analysis, and contextual
-authority; they do not supply missing core acquisition, provenance, search,
-diffing, rules, output, or recovery behavior.
+Streams remains useful without Library, Pad, Agent, or Practice-specific
+bindings. Those peers add deliberate corpus promotion, editing lenses,
+analysis proposals, and contextual nomination/authority; none supplies or
+absorbs Streams' acquisition semantics.
 
-| Owner | Responsibility |
+| Role | Boundary |
 | --- | --- |
-| Streams | Source configuration, provider admission, immutable observations, revision/change detection, deterministic local processing, saved findings, derived-output lineage, staged payloads, and the delivery ledger |
-| Desk | Applet lifecycle, typed target and intent routing, approval surfaces, serialized external I/O, and bounded operation advancement |
-| Pad | Optional deep reading of an exact snapshot and editing of an exact mutable output revision |
-| Agent | Bounded semantic analysis and proposals under a Mandate; no ambient network, stage, or dispatch authority |
-| Practice | Durable contextual bindings and separately attenuated authority; promoted knowledge only after explicit acceptance |
+| Streams | Owns source configuration, provider policy, attempt state, immutable observations, exact-key revision detection, retained inbox search, and acquisition recovery. |
+| Library | Owns deliberately collected captures, managed documents, metadata, collections, archive/tombstone lifecycle, and corpus search. |
+| Desk | Hosts applet/service lifecycles, routes typed intents, and advances serialized external I/O; it owns no Streams records. |
+| Pad | Edits ordinary files or exact mutable resources through an owner contract; it never becomes the owner merely by opening text. |
+| Agent | May read or propose under an exact bounded facet and Mandate; external text is evidence, not instruction or ambient authority. |
+| Practice | Binds stable resource/root facts and separately records authority; binding neither copies data nor grants an operation. |
+| Daybook | Owns human planner time semantics and, only after its later gate, typed schedules and occurrence history. Streams is not a scheduler. |
 
-Desk does not parse provider payloads. Pad does not schedule acquisition or own
-provenance. Agent does not perform foundational parsing, hashing, diffing,
-deduplication, routing, or delivery bookkeeping. Practice does not absorb
-Streams' evictable cache or live provider sessions.
+Desk does not parse provider payloads. Library does not read Streams' VFS
+records. Pad does not schedule acquisition or own observation provenance.
+Practice does not absorb the inbox. Cross-product work uses typed operations,
+qualified locators, and intents rather than sibling implementation imports.
+
+## Current ownership inventory
+
+The implemented source registry, source store, observation checkpoint,
+observation store, configured provider, syndication decoder/HTTP adapter, and
+refresh owner remain Streams domain code. General HTTP, media, readable-text,
+syndication-format, TLS, and external-I/O machinery remain platform modules.
+
+The current private draft is the one known ownership error:
+
+- `/streams-draft.bin` and `streams.draft.create/read/replace/validate/current`
+  are a legacy compatibility surface to migrate to a Library managed document
+  opened through Pad.
+- The validated Gate 0 revision-7 record is frozen migration input and recovery
+  evidence. It is not a template for Streams outputs, saved findings, or a
+  general document system.
+- Library must never open the path or import the codec. A later Streams-owned
+  migration adapter exports one exact validated revision through typed Library
+  operations and preserves the original bytes until separately approved
+  retirement.
+- Until that migration gate, the current owner and behavior remain unchanged.
+  Gate 1 adds no proxy, journal, store, capability, or route.
+
+The legacy public Bluesky selection/item/thread/feed/local-search/refresh
+surface also remains compatibility behavior. It converges with configured
+observations only after parity is independently proved; Gate 1 does not
+reinterpret its existing identities or schemas.
 
 ## Resource identity and ownership
 
 External addresses, provider-native identifiers, local resource identities,
-content digests, resource revisions, and component revisions are distinct
-facts. None may silently stand in for another.
+source revisions, observation revisions, store generations, component
+revisions, activation epochs, and content digests are distinct facts. None may
+silently stand in for another.
 
-Every durable resource has a stable local identity that survives relaunch and
-does not depend on its array position, UI selection, current provider label, or
-external address. A digest proves byte identity, not trustworthiness, semantic
-correctness, or authority. Aggregate operations return bounded resource lists
-and small summaries; callers dereference only the resources they need.
+Every durable semantic resource has a stable local identity that does not
+depend on array position, UI selection, provider label, external address, or a
+live component instance. A digest proves byte identity, not trustworthiness,
+semantic correctness, ownership, or invocation authority. Aggregate operations
+return bounded resource references plus small summaries; callers dereference
+only what they need.
 
-Provider-specific data remains a closed, kind-discriminated typed extension.
-The common envelope must not become a fixed map of mostly-null Bluesky, feed,
-page-watch, wiki, and notification fields.
+Selection and focus are observation conveniences. Consequential calls name an
+explicit source/observation RID and exact domain revision where required.
+Persistent cross-product references use a qualified locator or semantic
+`RREF`; activation-local `LBIND`, component instance/generation, acquisition
+token, capability pointer, callback, or grant is never durable state.
 
 ### Source
 
-A source is a mutable, revisioned local configuration owned by Streams. It
-contains:
+A source is a mutable, revisioned local configuration owned by Streams. The
+landed record contains a stable caller-supplied RID, kind/format, label,
+enabled flag, endpoint and provider configuration, redirect/response/page and
+observation bounds, refresh policy/interval fields, and a positive optimistic
+revision.
 
-- stable local identity, kind/provider, label, and enabled state;
-- exact admitted external configuration and redirect policy;
-- manual or bounded refresh policy;
-- provider-specific bounded configuration;
-- retention policy and last attempt/result; and
-- conditional-request metadata where supported.
+Strings are exact valid UTF-8. Provider code separately admits schemes, hosts,
+redirects, media, and provider-specific configuration before external work.
+Ordinary source reads are sanitized and never disclose endpoint/provider
+configuration where the operation contract excludes it. A configured source
+does not grant arbitrary HTTP, DNS, socket, redirect, credential, or trust
+authority.
 
-Credentials, if admitted by a later milestone, are separate owner-private
-state. Ordinary source reads return a sanitized projection and never disclose
-credential material. Configuring a semantic source does not grant arbitrary
-HTTP, socket, DNS, or redirect authority.
+The interval/cadence fields remain inert compatibility data. Refresh is
+explicit. They must not become a hidden timer merely because the fields exist;
+a later visible schedule belongs to Daybook and invokes a typed Streams
+operation only after its own authority gate.
 
-TLS trust is also separate boot authority. A reviewed machine-image module may
-emit exact scoped anchors, and trusted run composition may import a reviewed
-MPTA artifact through `MTRUST-MPTA+` before Desk freezes trust. The run importer
-accepts only nonempty exact DNS scopes and rejects global or include-subdomains
-anchors. Source creation, enablement, applet launch, and refresh cannot import
-CA bytes or widen the frozen snapshot. The configured canonical host must still
-be associated with the intended reviewed provisioning by the later acquisition
-composition and pass normal certificate-path, hostname, validity, and
-address-policy checks. The importer itself does not bind a source RID or
-revision to a scope, and the artifact content tag is not proof that acquired
-content is trustworthy.
+Credentials, if later admitted, remain separate owner-private state. TLS trust
+is machine boot authority: source creation, enablement, applet launch, and
+refresh cannot import CA bytes or widen a frozen trust snapshot.
+
+### Acquisition attempt
+
+The refresh owner coordinates one exact source snapshot, a configured
+provider, Desk-hosted external-I/O submission, decode, durable commit, stale
+checks, cancellation, and cleanup. It is not a scheduler or general effect
+ledger.
+
+`BEGIN` records `accepted` and is durably saved before external submission.
+`TERMINAL` records failure, cancellation, stale completion, cleanup failure,
+or recovery without changing last-good observations. `APPLY` validates one
+already-decoded batch and transactionally records success, immutable versions,
+key heads, and new/revised/unchanged counts. An accepted attempt found after
+relaunch becomes `indeterminate` before publication; the owner never guesses
+that an effect did or did not escape.
+
+A refresh acknowledgement means only that one exact bounded attempt was
+durably accepted. It does not report remote success. Provider callbacks never
+commit applet or Practice state directly; owner publication revalidates the
+instance, source RID/revision, and request generation after lower cleanup.
 
 ### Observation
 
-An observation is one immutable acquired version. It records:
+An observation is one immutable acquired version. It retains a stable logical
+RID and positive revision, exact source identity/namespace, provider-native
+identity, admitted content and metadata, attempt identity, digests, and the
+provenance the provider actually supplied. Unavailable facts remain
+unavailable rather than being reconstructed from current source state.
 
-- local observation and source identities;
-- provider kind and provider-native identity;
-- exact/canonical origin where the provider establishes one;
-- acquisition, publication, and update times when known;
-- admitted media/content type and representation;
-- raw and normalized digests where applicable;
-- explicit previous-version/revision relations;
-- retrieval provenance and result; and
-- typed provider-specific metadata and external relations.
-
-A changed external entity creates a new observation version. Deduplication may
-suppress a redundant retained body, but it must preserve each distinct source
-and retrieval provenance. Cross-source similarity may group findings without
-declaring them identical.
-
-#### Landed manual-refresh observation checkpoint
-
-The landed observation foundation is an exactly 131,072-byte pointer-free
-checkpoint stored through an optimistic replacement record. It models three
-bounded record families:
+The landed checkpoint is exactly 131,072 pointer-free bytes and contains:
 
 - one latest attempt head for each of sixteen exact sources;
-- forty-eight immutable observation versions with stable logical RIDs and
-  positive revisions; and
-- sixty-four exact provider-native key heads that retain the latest version
-  and last-seen attempt sequence.
+- forty-eight immutable observation versions, at most sixteen per source;
+- sixty-four provider-native key heads; and
+- one canonical owned string blob.
 
-`BEGIN` records an active `accepted` attempt and is durably saved before Desk
-XIO submission. `TERMINAL` records failure, cancellation, stale completion,
-cleanup failure, or recovery without changing last-good observations. `APPLY`
-validates one decoded batch and transactionally records a successful attempt,
-immutable versions, exact-key heads, and new/revised/unchanged counts. A
-durably accepted attempt found during relaunch is terminalized as
-`indeterminate` and saved before publication.
+The exact key includes source RID, source-identity namespace, provider kind,
+native-identity kind, and admitted native-identity bytes. The checkpoint does
+not perform cross-source deduplication. A first key creates revision 1 of a
+stable observation RID; changed semantic content advances that RID; an
+unchanged candidate consumes no new version/body.
 
-Deduplication heads are exact-key state. The key includes the source RID, exact
-source-identity namespace digest, provider kind, native-identity kind, and
-exact admitted native-identity bytes. Consequently the checkpoint performs no
-cross-source deduplication, even when two sources expose the same native
-identity or bytes. A first exact key creates revision 1 of a stable observation
-RID; a changed value advances that RID's revision; an unchanged candidate
-retains the existing version without allocating another body or version.
+Retention follows deterministic checkpoint sequence, never provider timestamp
+or wall-clock order. One body contributes at most 8 KiB to the shared blob. A
+valid batch that cannot fit is rejected while prior observations and key heads
+remain unchanged. There is no rolling eviction or compaction: capacity blocks
+new admission and preserves last-good evidence.
 
-Retention is selected by deterministic checkpoint sequence, never provider
-timestamps or wall-clock order. Content is held in one aggregate blob and a
-single observation can consume at most 8 KiB of it, so the individual maxima
-cannot all be reached simultaneously. If a semantically valid terminal success
-batch cannot fit, `APPLY` rejects the candidate and the owner records a
-terminal capacity attempt while the prior observations and exact-key heads
-remain unchanged. Malformed input or a rejected `APPLY` transaction preserves
-the entire current checkpoint. Digests and seals detect accidental corruption
-of the model; they do not authenticate a source, content, or acquisition
-result. No pointer, runtime handle, handler token, or activation-local grant is
-retained.
+Future observation query/read/content/revision operations must be bounded and
+explicitly source-scoped for Agent facets. Exact old-revision reads never
+advance to current. A safe text projection states its projection contract,
+media type, exact byte length, and digest and never executes untrusted markup.
 
-### Saved set
+## Durable records and asymmetric loss
 
-A saved set is mutable, revisioned, durable Streams state containing exact
-observation identities and digests. Saving either pins the required bounded
-content or fails explicitly; it must not leave a durable collection pointing
-only at content eligible for silent eviction. Annotations, user classifications,
-and collected relationships belong to saved state rather than rewriting an
-immutable observation.
-
-### Output and Outbox
-
-An output begins as a mutable, revisioned draft with exact lineage. Lineage
-records every input observation identity/digest and deterministic
-transformation. Agent-created material additionally records trusted Mandate,
-invocation, provider/model, and run provenance when those facts are available
-from an owner-controlled source.
-
-Staging freezes an exact payload, destination, disclosure set, lineage, and
-output revision. Later draft edits cannot mutate a staged dispatch. Each send
-or reconciliation is a separate immutable attempt with a stable invocation or
-idempotency identity and an append-only status history.
-
-## First bounds
-
-The table distinguishes exact implemented bounds from proposed target bounds.
-Changing an implemented bound requires capacity and integrity tests, not silent
-growth. Target values remain provisional until measured against the normal
-Desk image and representative providers.
-
-| Domain | First bound | Status |
+| Record | Current path | Meaning |
 | --- | --- | --- |
-| Sources | 16 | Landed registry |
-| Source configuration payload | 2 KiB of endpoint plus provider-config bytes inside one 2,288-byte registry record | Landed registry |
-| Redirects | At most 3 per operation | Landed manual syndication refresh |
-| Concurrent Streams external operations | 1 per instance | Landed manual syndication refresh |
-| Transient response body | 128 KiB per response | Landed manual syndication refresh |
-| Decoded candidate batch | 8 observations | Landed manual syndication refresh |
-| Observation checkpoint allocation | Exactly 131,072 bytes (128 KiB), pointer-free | Landed checkpoint/store |
-| Source attempt heads | 16 total, one per source | Landed checkpoint |
-| Retained attempt history | Latest head only per source | Landed checkpoint |
-| Retained observation versions | 48 total, 16 per source | Landed checkpoint |
-| Versions of one provider-native entity | 4 | Landed checkpoint |
-| Compact exact-key heads | 64 | Landed checkpoint |
-| Searchable/normalized content | 8 KiB per observation within the shared checkpoint blob | Landed checkpoint |
-| Query page | 32 resource references | Proposed target |
-| Saved sets | 16, with 64 members each | Proposed target |
-| Outputs | 32, with 32 KiB text and 64 lineage references each | Proposed target |
-| Delivery attempts | 8 per output | Proposed target |
-| Agent-visible result | 4 KiB per operation; larger content is paged | Proposed target |
+| Source registry snapshot | `/streams-sources.bin` | Configuration authority and optimistic source generation |
+| Observation checkpoint snapshot | `/streams-observation.bin` | Attempt heads, immutable observation versions, and exact-key heads |
+| Legacy private draft | `/streams-draft.bin` | Frozen compatibility/migration input; not part of the target Streams model |
 
-Every store also declares version, byte capacity, retention/eviction order,
-corruption behavior, interrupted-replacement recovery, and cleanup ownership.
-Corrupt or future-format state remains available for bounded inspection or
-repair and blocks unsafe mutation; it is not replaced with a manufactured
-empty store.
+Source and observation records use separate optimistic replacement envelopes
+so an acquisition commit does not rewrite configuration authority. Corrupt,
+future-format, I/O-uncertain, or ambiguous-recovery state blocks unsafe
+mutation and is never replaced by a manufactured empty value.
 
-The landed physical contract uses `/streams-sources.bin` for configuration
-authority and the separate `/streams-observation.bin` optimistic replacement
-record for acquisition heads, exact-key state, and immutable versions. This
-lets a refresh commit without rewriting source authority.
+Source-store V1 does not record that an observation companion ever existed. A
+valid nonempty source store with a missing observation record therefore means
+“never refreshed or unproven companion loss,” not a proven clean empty
+history. Gate 1 preserves that limitation. A pair marker would change format
+and recovery semantics and requires a separate migration decision.
 
-Pair-loss recovery is not yet specified. Source-store V1 contains no durable
-indication that an observation companion was ever established, so after
-relaunch it cannot distinguish a legitimate never-refreshed source registry
-from external loss of a prior observation record. A missing observation record
-therefore initializes the never-refreshed state and is not reported as proven
-companion loss. A durable pair marker, migration, and recovery behavior are
-required before that distinction can fail closed.
+## Bounds
 
-## Target capability surface
+Implemented bounds are format/behavior contracts; proposed query bounds remain
+provisional until their focused gate.
 
-These operation identifiers describe the intended narrow owner surface. The
-landed applet capabilities are `streams.source.query`, `streams.source.read`,
-`streams.source.set-enabled`, and `streams.source.refresh`; source create,
-replace, and remove currently exist only as direct owner/UI operations. The
-remaining rows are target work rather than an implementation inventory.
-
-| Capability | Effect | Contract |
+| Domain | Bound | Status |
 | --- | --- | --- |
-| `streams.source.query` | Observe | Return a bounded page of source resources and sanitized summaries |
-| `streams.source.read` | Observe | Read one sanitized source revision and last-result state |
-| `streams.source.create` | Mutate + Persist | Create one bounded provider configuration without fetching |
-| `streams.source.replace` | Mutate + Persist | Replace one exact source revision |
-| `streams.source.set-enabled` | Mutate + Persist | Enable or disable one exact source revision without fetching |
-| `streams.source.remove` | Destructive + Persist | Remove one source under explicit retention policy |
-| `streams.source.refresh` | Persist + External | Durably accept and start one exact configured source revision; accepts no arbitrary URL |
-| `streams.observation.query` | Observe | Search/filter a bounded retained page and return resource identities |
-| `streams.observation.read` | Observe | Read one bounded common envelope and typed extension |
-| `streams.observation.content` | Observe | Read exact admitted content through bounded pages |
-| `streams.observation.revisions` | Observe | Return a bounded ordered version chain |
-| `streams.saved.query` | Observe | Return bounded saved-set identities and summaries |
-| `streams.saved.read` | Observe | Read one exact saved-set revision and member identities |
-| `streams.saved.create` | Mutate + Persist | Create a bounded saved set |
-| `streams.saved.replace` | Mutate + Persist | Replace membership/metadata at an exact expected revision |
-| `streams.saved.remove` | Destructive + Persist | Remove one saved set without deleting independently retained evidence |
-| `streams.output.query` | Observe | Return bounded output/Outbox identities and summaries |
-| `streams.output.read` | Observe | Read one output revision, lineage, stage, and delivery state |
-| `streams.output.create` | Mutate + Persist | Create a local derived draft with exact lineage |
-| `streams.output.replace` | Mutate + Persist | Replace one exact unstaged draft revision |
-| `streams.output.stage` | Mutate + Persist | Freeze exact payload, destination, disclosure, and lineage |
-| `streams.output.dispatch` | External + Persist | Persist an attempt and start delivery of one exact staged revision |
-| `streams.output.reconcile` | External | Query status for one exact prior attempt where supported |
-| `streams.output.remove` | Destructive + Persist | Remove eligible local output state under retained-ledger policy |
+| Sources | 16 | Landed |
+| Source record | 2,288 bytes | Landed |
+| Label / endpoint / provider config | 96 / 1,024 / 1,024 UTF-8 bytes | Landed |
+| Redirects / response / pages | 3 / 128 KiB / 2 | Landed |
+| Concurrent configured refreshes | 1 per owner instance | Landed |
+| Decoded candidate batch | 8 | Landed |
+| Observation checkpoint | Exactly 131,072 bytes | Landed |
+| Attempt heads | 16, latest per source | Landed |
+| Observation versions | 48 total, 16 per source, 4 per key | Landed |
+| Exact-key heads | 64 | Landed |
+| Observation title / URL / summary / body | 256 / 512 / 1,024 / 8,192 bytes | Landed |
+| Observation query page | 32 small references/summaries | Proposed; not implemented |
 
-Query arguments, maps, lists, strings, and provider extensions have closed
-schemas. Mutation uses domain-resource expected revisions in addition to the
-request bus's component-instance revision. Selection and focus are never an
-adequate target for Agent or consequential calls.
+No Streams bound reserves capacity for Library collections, output documents,
+rules, schedules, or outbound attempts because Streams does not own those
+models.
 
-## Authority
+## Owner capability surface
 
-Reachability, operation description, Mandate, and invocation authority remain
-separate:
+The near target adds only explicit source/observation operations. The four
+landed configured-source capabilities are identified below; source create,
+replace, and remove currently remain direct owner/UI operations. Observation
+operations are planned and become stable only with their focused schema and
+projection tests.
 
-- A Practice binding makes a resource nameable; it grants no operation.
-- A capability facet selects exact operations on exact target generations; it
-  is not itself authority.
-- A Mandate bounds a run, effects, disclosure, tools, time, and disposition;
-  it is not itself authority.
-- A one-use owner-side grant authorizes one sealed invocation.
+| Capability | Effect | Contract/status |
+| --- | --- | --- |
+| `streams.source.query` | Observe | Landed user-principal bounded registry view; whole-registry access is not an ordinary Agent facet |
+| `streams.source.read` | Observe | Landed exact sanitized source revision |
+| `streams.source.create` | Mutate + Persist | Planned direct-owner operation; no fetch |
+| `streams.source.replace` | Mutate + Persist | Planned explicit RID and expected source revision |
+| `streams.source.set-enabled` | Mutate + Persist | Landed explicit source resource; no fetch |
+| `streams.source.remove` | Destructive + Persist | Planned explicit RID/revision and retention policy |
+| `streams.source.refresh` | Persist + External | Landed explicit configured source RID/revision; no arbitrary URL |
+| `streams.observation.query.within` | Observe | Planned bounded query over a sealed exact source-RID allowlist |
+| `streams.observation.read` | Observe | Planned exact bounded envelope/provenance read |
+| `streams.observation.content` | Observe | Planned exact admitted projection with length/digest |
+| `streams.observation.revisions` | Observe | Planned bounded exact version chain |
 
-### User control
+The current `streams.selection.current`, item/thread/feed/local-search, public
+feed refresh, and five draft capability IDs remain documented compatibility
+surface in `streams.md` and the Gate 0 manifest. They are not evidence that
+selection is an adequate mutation target or that Streams should grow a
+document/output subsystem.
 
-The standalone UI exposes the same domain operations through direct owner
-methods or typed requests. Destructive removal, stage, disclosure, dispatch,
-and unsafe retry require a preview/confirmation showing exact resource,
-revision, target, payload digest, and uncertainty. User-principal default
-policy is not a substitute for a humane consequential-action surface.
+Schemas are closed. Mutation checks domain revision in addition to generic
+component revision. Source refresh/configuration/removal and all external work
+remain outside ordinary read/assist facets. An Agent-visible query takes a
+sealed source-RID scope or one-source projection owner; the current null-input
+whole-registry query enters a facet only when the whole registry is explicitly
+authorized.
 
-### Agent control
+## Interoperation
 
-The ordinary read facet may contain only curated, bounded source summaries,
-observation query/read/content pages, saved-set reads, and output reads. Pure
-Observe calls may receive automatic per-Mandate grants within disclosure and
-tool budgets.
+### Collect in Library
 
-The ordinary assist facet may add reviewed saved-set and output
-create/replace operations. Agent material remains proposal data until the
-owning context accepts the exact mutation. External text is untrusted evidence,
-not instruction, and must not be inserted into system/tool instruction context.
+“Collect” creates a new Library identity and copies one exact admitted
+observation projection. It is not a Streams saved flag or pin. The initiating
+flow acquires the exact observation owner through the Streams root, copies one
+owner-serialized result with locator/revision, provenance, semantic digest,
+projection contract, exact bytes/length/content digest, releases its
+activation-local token on every terminal path, and asks Library to commit and
+read back the capture under a caller operation key. Library never reads the
+checkpoint or source endpoint.
 
-Source configuration/removal, refresh, stage, dispatch, reconciliation,
-destination changes, and deletion are absent from ordinary read/assist facets.
-Agent-operated versions require an explicit operator facet and a reviewed,
-sealed, one-use grant for the exact target and operands. Read authority never
-implies refresh, transform, stage, disclose, or dispatch authority.
+### Open in a lens
 
-### Practice control
+A future fixed-RID observation projection is read-only. Pad may show admitted
+text only through `resource.open` after qualified resolution/acquisition and
+`resource.snapshot`; it does not receive a writable temporary VFS copy. Any
+derived/editable document is a separately created Library managed document
+with lineage to the observation. Streams never owns that document.
 
-A Practice may bind selected sources, rules, saved sets, outputs,
-destinations, and identities. It does not bind every retained observation or
-provider session by default. Observation, transformation, staging,
-disclosure, refresh, and dispatch are distinct granted operations even where
-the current effect bitmask is coarser. Promotion of a finding to durable domain
-knowledge is explicit and does not transfer Streams cache or scheduler
-ownership.
+### Practice and authority
 
-Practice roots and activation-local references are not, by themselves, a
-completed durable binding graph. The implementation must not claim durable
-promotion until root validation, schema/version handling, reactivation, and
-recovery are proved.
+A Practice may bind a source or exact Library result, but binding only makes a
+stable resource relevant/nameable. It does not copy observations, confer read
+or refresh authority, persist an `LBIND`, or make Practice the owner. A
+separate exact facet/grant, preset attenuation, live resolution, and Mandate
+seal every invocation.
 
-## Asynchronous acceptance and delivery semantics
+## Provider scope
 
-Refresh and dispatch handlers acknowledge only that a durable bounded
-operation was accepted for cooperative advancement. They do not report remote
-success.
+The landed configured refresh supports exact-host authorized RSS, Atom, and
+JSON Feed over the shared HTTP/TLS/XIO substrate. Watched HTML/text snapshot
+admission exists as a codec/policy foundation but is not wired through the
+syndication-only owner/checkpoint format. Notification configuration shapes do
+not establish a qualified provider, immutable observation codec, subscription
+model, or outbound operation.
 
-Before external submission, the owner persists:
+Before adding a materially different provider, return with its store-format,
+authorization, polling/subscription, privacy, and failure semantics. Do not
+squeeze it through the syndication codec merely because source kind/format
+cells exist.
 
-- exact source or staged-output revision;
-- frozen request/payload and target digest;
-- invocation/idempotency identity;
-- requested time and current attempt state; and
-- enough reconciliation metadata to avoid unsafe blind replay.
+## Explicit non-ownership
 
-The durable state machine distinguishes at least:
+The following are outside the near Streams surface:
 
-1. draft/local;
-2. staged and awaiting authority;
-3. accepted for local execution;
-4. sending;
-5. accepted by the immediate provider;
-6. confirmed, where separately knowable;
-7. failed and safely retryable;
-8. rejected/non-retryable; and
-9. indeterminate after a possibly escaped effect.
+- saved sets, annotations, classifications, corpus archive/search, and durable
+  “knowledge” organization: Library collections/tags/lineage;
+- mutable drafts, derived outputs, reports, and cited documents: Library
+  managed documents edited through Pad;
+- interval execution, reminders, recurrence, and occurrence history: Daybook
+  after its schedule/authority gates;
+- generic rules and cross-applet conditional workflows: unresolved separate
+  product decision, not Practice or Desk by convenience;
+- outbound notification/publication, Outbox, reconciliation, and delivery
+  ledger: unresolved product owner and a direction gate;
+- credentials, generic HTTP/browser/crawler behavior, raw network tools,
+  arbitrary cron jobs, universal search, taxonomy/claims graph, or persisted
+  runtime pointers/grants.
 
-An HTTP success code is evidence about one protocol exchange, not universal
-delivery confirmation. Cancellation or close proves lower transport cleanup;
-it does not retroactively prove that an outward effect did not occur. A retry
-is a new recorded attempt and reuses a logical idempotency identity only where
-the provider contract supports it.
-
-Old observations remain readable during refresh and after ordinary failure.
-Provider callbacks never commit applet or Practice state directly; owner commit
-revalidates component, instance, source, request, and operation generations.
-
-## Pad witness
-
-The lowest-risk ecosystem witness is deterministic Pad interoperation:
-
-1. Pin and expose one exact retained observation as a read-only semantic text
-   resource.
-2. Post the existing `resource.open` intent with an exact RREF.
-3. Verify that Pad retains the exact revision while Streams refreshes.
-4. Expose one mutable derived output through `resource.snapshot` and
-   exact-revision `resource.replace`.
-5. Edit it in Pad and observe the new output revision in Streams without
-   changing lineage, stage, or destination state.
-
-This witness requires general substrate work and is not currently proved:
-
-- Pad's shared lens is currently initialized for the Daybook resource and
-  rejects other RIDs.
-- The current shared-document owner is a singleton tied to `/daybook.md`.
-- The resource registry currently permits one semantic RID per owner instance
-  because invocation authority does not seal resource identity.
-
-The first implementation should therefore use one bounded, store-backed
-projection-owner instance per open or explicitly promoted resource, or first
-extend and qualify authority sealing for resource identity. It must not alias
-many observation RIDs to the main Streams instance, add a Streams-specific Pad
-hook, or use a silently editable temporary VFS copy. Immutable observations
-open read-only; mutable outputs alone expose replacement.
-
-## Provider shapes for the first milestone
-
-The common contract is proved against materially unlike fixtures before any
-schema is frozen:
-
-- RSS, Atom, and JSON Feed entries and updates;
-- watched bounded public HTML/text snapshots and revisions; and
-- a simple bidirectional notification provider using bounded polling and
-  outward publication.
-
-Fixtures cover empty, Unicode, duplicate, updated, malformed, oversized,
-unsupported encoding/media, redirect, no-change, meaningful-change,
-navigation-noise, accepted, rejected, retryable, timeout, and indeterminate
-cases. Fixtures are explicit tests and never production fallback content.
-
-## Explicit exclusions
-
-- A provider-neutral timeline formed by renaming the current Bluesky model.
-- A full Bluesky client, authentication, home timeline, social actions, or
-  publication as the milestone nucleus.
-- A general browser, JavaScript runtime, crawler, arbitrary HTTP tool, raw
-  network inspector, or search-result scraper.
-- Email/JMAP or a permanently open notification subscription in the first
-  slice.
-- An unlimited archive, scheduler, rule engine, taxonomy, or revision history.
-- Agent-required parsing, hashing, diffing, deduplication, routing, or delivery
-  bookkeeping.
-- Silent disclosure or dispatch based only on read, compose, or Practice
-  binding authority.
-- A provider-private TCP/TLS/X.509 stack, trust bundle, or connector.
-- Persisted runtime pointers, handler tokens, invocation handles, or
-  activation-local grants.
-- A claim that fixture success proves live service, Desk responsiveness,
-  complete crypto timing, scratch erasure, or hardware parity.
+Pure bounded source-local filters/change predicates may remain only when they
+cannot cause cross-applet or external effects. External content is untrusted
+evidence and is never inserted into instruction/tool context by parsing it.
 
 ## Acceptance journey
 
-The information-integration milestone is complete only when a build omitting
-Bluesky, Pad, Agent, and Practice-specific bindings can:
+The configured information-integration slice is complete when a standalone
+Streams build can:
 
-1. launch with no hidden content and configure several feed/page sources plus
-   the selected notification source/destination;
-2. refresh cooperatively without freezing Desk and retain old information on
-   ordinary failure;
-3. present exact provenance, detect a meaningful page revision, and suppress
-   true duplicate/no-change content without erasing provenance;
-4. search, apply an inspectable deterministic rule, and save related exact
-   findings;
-5. generate a cited output with exact lineage;
-6. stage and send an alert through a genuine outward effect;
-7. show accepted, confirmed, failed, retryable, rejected, or indeterminate
-   state truthfully; and
-8. close and relaunch with sources, retained revisions, rules, saved sets,
-   outputs, and delivery history recovered within declared bounds.
+1. launch with no fabricated content and configure several admitted sources;
+2. explicitly refresh one exact source without freezing Desk;
+3. durably distinguish accepted, succeeded, failed, cancelled, stale,
+   capacity-blocked, cleanup-failed, and recovered-indeterminate attempts;
+4. preserve last-good observations on every rejected or ordinary-failure path;
+5. show exact source/revision/provenance and suppress true unchanged values;
+6. query/read bounded retained observation revisions without endpoint/provider
+   secrets or silent advance to current; and
+7. close and relaunch with sources, attempts, exact-key heads, and immutable
+   observations recovered within declared bounds.
 
-The Pad witness is a separate optional ecosystem gate. Agent and durable
-Practice journeys follow only after the same resource contracts work
-standalone and through Pad.
+Library collection, Pad viewing, Agent disclosure, Practice binding, and
+Daybook scheduling are separate typed ecosystem gates. None is needed to claim
+the source/acquisition/observation product is coherent.
 
 ## Evidence labels
-
-Evidence is reported with the narrowest label it actually proves:
 
 | Label | Evidence |
 | --- | --- |
 | `offline-contract` | Deterministic schemas, fixtures, bounds, lifecycle, capacity, corruption, cancellation, and recovery |
 | `live-connectivity` | One real provider exchange through the admitted network composition |
 | `cooperative-transport` | Shared DNS/TCP/TLS/HTTP progression and terminal cleanup without blocking the owner loop |
-| `cooperative-client` | Provider operation progression, cancellation, stale-completion rejection, and transactional owner commit |
-| `live-desk` | Desk-hosted responsiveness, approval, close, relaunch, and serialized external-I/O journey |
+| `cooperative-client` | Provider progression, cancellation, stale rejection, and transactional owner commit |
+| `live-desk` | Desk-hosted responsiveness, close, relaunch, and serialized external-I/O journey |
 | `hardware-parity` | Equivalent qualified behavior on the physical/RTL target |
 
 No label implies a stronger one. Optional live runs do not replace deterministic
-contracts, and deterministic fixtures do not prove a live service journey.
+contracts, and fixture success does not prove a live service or hardware path.

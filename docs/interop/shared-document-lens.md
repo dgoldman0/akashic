@@ -6,6 +6,13 @@ nothing about `/daybook.md`. A consuming applet embeds `SDLENS-SIZE` bytes in
 its instance state and supplies the semantic resource service name at
 initialization.
 
+Its landed evidence is narrower than its location suggests: it currently has
+one concrete owner/product witness, the Desk-hosted Daybook owner, and two
+Daybook-specific consumers (Daybook and Pad). It is not yet proof of a generic
+Library/Streams text-resource abstraction. Gate 2C audits it for Daybook path,
+RID, label, and policy assumptions; Gate 6A extracts or retains common
+mechanics only after the real Library owner provides an independent comparison.
+
 The lens centralizes the plumbing shared by Daybook and Pad:
 
 - endpoint-aware service discovery for Context, RREG, and CBUS;
@@ -18,6 +25,13 @@ The lens centralizes the plumbing shared by Daybook and Pad:
 It deliberately does not own parsing, serialization, editor buffers, dirty or
 stale UI state, replace approval, `LBIND-ADVANCE`, or post-commit recovery.
 Those policies differ between Daybook and Pad and remain applet-local.
+
+The lens is activation-local plumbing, not identity or authority. Its `LBIND`,
+borrowed pointers, and request envelope are never durable. A caller targets
+the exact semantic RID/reference and expected revision supplied by the owner;
+the selected Daybook row, active Pad tab, or focused Desk tile cannot retarget
+a request. Discovery or successful attachment still does not grant snapshot or
+replace authority.
 
 ## Interface
 

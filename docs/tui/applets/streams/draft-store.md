@@ -1,11 +1,26 @@
 # Streams draft store
 
+Status: frozen legacy-to-migrate compatibility surface. This document records
+the landed bytes and failure behavior so they remain recoverable; it is not a
+design for new Streams documents, saved sets, derived outputs, or Library
+storage. Gate 0 retains an exact valid revision-7 fixture in
+[`local_testing/fixtures/desk-gate0/`](../../../../local_testing/fixtures/desk-gate0/).
+Gate 1 changes no path, record, API, capability, or mutation behavior.
+
 `tui/applets/streams/draft-store.f` is a Streams-owned persistence primitive
 for one unpublished local draft. It stores exactly two application values: the
 UTF-8 draft bytes and a positive local revision. It does not store credentials,
 feeds, transport state, capability authority, or Practice state. The module is
 qualified independently and is the persistence boundary used by normal
 `streams.f` app initialization and draft mutation.
+
+The store remains Streams-owned throughout the compatibility interval.
+Library must never open `/streams-draft.bin`, import this codec, or silently
+proxy its revision-sensitive capabilities. A later Streams-owned migration
+adapter may export one exact validated revision through typed Library
+operations only after the Library owner and migration journal are separately
+qualified. The original bytes remain recovery evidence until explicit
+retirement approval.
 
 The store is applet-owned rather than a new Desk or Practices service. Desk
 continues to own lifecycle and cross-applet dispatch; Practices can govern and
@@ -22,18 +37,15 @@ STREAMS-DRAFT-STORE-INIT-AT
 ```
 
 The target must be an absolute path accepted by the bounded VREPL path rules.
-Multi-owner integration must derive it from a stable app-owned account or
-instance key so the same logical owner chooses the same path after a cold
-restart. A runtime pointer, allocation address, window handle, or other
-ephemeral instance ID is not a durable identity. Different logical owners must
-receive different paths; independent descriptors and paths do not overwrite or
-recover one another.
+`INIT-AT` remains part of the qualified legacy API. Its stable-path rules
+describe compatibility behavior only; they do not authorize new document
+owners or a multi-account draft product. A runtime pointer, allocation address,
+window handle, or other ephemeral instance ID is never durable identity.
 
 `STREAMS-DRAFT-STORE-INIT ( vfs store -- status )` selects
-`/streams-draft.bin` for the current singleton Streams lifecycle. It is not the
-initializer to use when multiple Streams accounts or instances can coexist;
-that future boundary must use stable owner-specific paths through `INIT-AT`.
-`STREAMS-DRAFT-STORE-PATH$` reports the configured target.
+`/streams-draft.bin` for the current singleton Streams lifecycle.
+`STREAMS-DRAFT-STORE-PATH$` reports the configured target. No new caller
+should adopt either initializer as a general text-storage contract.
 
 `STREAMS-INIT-CB` treats `ABSENT` as writable-ready and restores an `OK` record
 without touching the component owner revision. Corrupt, unsupported, I/O, busy,

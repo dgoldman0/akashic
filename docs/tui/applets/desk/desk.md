@@ -7,7 +7,7 @@
 [`uidl-tui.f`](../../uidl-tui.md), [`screen.f`](../../screen.md),
 [`region.f`](../../region.md), [`draw.f`](../../draw.md),
 [`keys.f`](../../keys.md), [`color.f`](../../color.md),
-[`toml.f`](../../../../utils/toml.md), [`app-catalog.f`](../../app-catalog.md),
+[`toml.f`](../../../utils/toml.md), [`app-catalog.f`](../../app-catalog.md),
 `app-loader.f`, `app-builder.f`,
 [`tls-trust-registry.f`](../../../net/tls-trust-registry.md),
 [`external-io.f`](../../../net/external-io.md),
@@ -30,6 +30,24 @@ event loop.
 
 The desk delegates all terminal ownership, event dispatch, paint
 cycling, and tick timing to the shell:
+
+## Ownership boundary
+
+Desk owns applet installation policy and lifecycle, layout/focus, activation
+sequencing, service composition, typed routing, review surfaces, and the
+machine external-I/O lifecycle. It does not own Library records, Daybook
+content or time semantics, Agent threads, Grid workbooks, Streams sources or
+observations, Practice bindings/authority, or another applet's parsing and
+storage merely because it constructs or retains a service.
+
+A focused tile, active applet, selected row/date/cell, handler match, resource
+discovery result, or Practice binding is not a mutation target and is not
+authority. Consequential routed calls carry the exact domain owner, stable
+resource/qualified locator, expected domain revision, and complete operands.
+Create/import uses its separately sealed owner/catalog precondition and
+idempotency key. Desk may resolve such a durable name to activation-local
+services and bindings for a call, but it never persists an `LBIND`, live grant,
+component pointer, or XIO handle as domain identity.
 
 ## Architecture
 
@@ -178,11 +196,15 @@ defaults.  Once persisted, the row's flags are authoritative on later boots.
 Pad's Build & Install workflow receives the live catalog only after activation;
 the builder pointer is cleared before the catalog is freed.
 
-## Desk-owned Agent composition
+## Desk-hosted Agent composition
 
-Desk owns the shared Agent provider source, runtime, tool gateway, and visible
-access profile. It starts with the exact `Chat only` preset. `Practice read
-only` adds bounded observations from trusted built-in applet instances, while
+Desk constructs, retains, and tears down the shared Agent composition for its
+activation: a host-retained provider source, an Agent-runtime instance, the
+scoped tool gateway, and the visible access profile. The Agent domain owns run,
+thread, provider-neutral execution, tool/review-ledger, and Mandate semantics;
+Desk owns the host lifecycle and policy composition, not those records. The
+composition starts with the exact `Chat only` preset. `Practice read only`
+adds bounded observations from trusted built-in applet instances, while
 `Practice assist` also adds fixed local operations that always require review.
 Each scoped run receives a freshly compiled Practice Mandate; the selected
 profile is policy input and is not itself authority.
@@ -193,22 +215,25 @@ Children can borrow the composition through the Desk interoperability endpoint:
 |------------|-------|
 | `org.akashic.agent.runtime` | Shared Agent runtime |
 | `org.akashic.agent.tool-gateway` | Shared scoped tool gateway |
-| `org.akashic.agent.provider-source` | Desk-owned provider source |
+| `org.akashic.agent.provider-source` | Host-retained provider source |
 | `org.akashic.agent.access-profile` | Current immutable profile descriptor |
 
-The source remains Desk-owned; children must not free it. A preset change is
-rejected while a run or review is active, and the runtime freezes the compiled
-facet for the duration of each accepted run.
+The source remains host-retained; children must not free it. A preset change
+is rejected while a run or review is active, and the runtime freezes the
+compiled facet for the duration of each accepted run.
 
-## Activation-local Daybook resource
+## Desk-hosted activation-local Daybook owner
 
-On a healthy Practice activation, Desk creates one resource registry and one
-headless [shared document owner](../../../interop/shared-document.md) for the
-canonical Daybook document. Its semantic RID is the SHA3-256 digest of the
-stable Practice ID and `org.akashic.resource.daybook`; the activation epoch and
-applet instance IDs are deliberately absent. The RID therefore remains the
-same across Desk restarts while its RID-to-instance mapping and revision remain
-activation-local.
+On a healthy Practice activation, Desk creates one resource registry and hosts
+one headless [Daybook document owner](../../../interop/shared-document.md) for
+the canonical Daybook document. Daybook owns the document and its planner
+semantics even though the current concrete module is temporarily misplaced in
+`interop/` and Desk constructs it. Gate 2C moves that module to the Daybook
+domain without changing behavior. Its semantic RID is the SHA3-256 digest of
+the stable Practice ID and `org.akashic.resource.daybook`; the activation epoch
+and applet instance IDs are deliberately absent. The RID therefore remains the
+same across Desk restarts while its RID-to-instance mapping and current
+component revision remain activation-local.
 
 Children receive borrowed services through their inherited interoperability
 endpoint:
@@ -254,9 +279,9 @@ freed from underneath a live owner.
 
 This is not yet enforced path ownership. File Explorer and arbitrary trusted
 native code can still write `/daybook.md` directly, outside the owner's
-revision sequence. The current claim is intentionally narrower: migrated
-Daybook and Pad lenses coordinate through one owner by convention. Whether the
-benefits justify that glue is part of the Practice experiment.
+revision sequence. The current claim is intentionally narrower: Daybook and
+Pad lenses coordinate through one Daybook owner by convention. Desk hosts and
+routes that owner but does not acquire its data or semantic authority.
 
 ## Config Loading
 

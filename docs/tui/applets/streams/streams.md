@@ -8,8 +8,9 @@ replacement store, suppress exact unchanged versions, and recover an
 interrupted accepted attempt truthfully. The durable multi-kind source
 registry, sanitized source resources, watched-page codecs, existing retained
 Bluesky page, partial-thread navigation, local search, and crash-recoverable
-unpublished draft remain alongside that path; they are no longer the product
-definition.
+unpublished draft remain alongside that path. The Bluesky surface is retained
+compatibility, and the draft is frozen legacy-to-migrate input; neither defines
+the configured-source product.
 
 Ordinary `STREAMS-ENTRY` remains offline even when Desk exposes external I/O:
 it installs no concrete configured-source provider factory, and source
@@ -30,11 +31,17 @@ preceding launch. The host qualification harness alone injects a hand-authored
 synthetic page under `/testing/streams/`; `timeline.json` is test input, not a
 runtime fallback or library data source.
 
-Streams is a peer applet, not an inter-applet coordinator. Desk remains the
-owner of target discovery, capability dispatch, authority, and applet
-lifecycle. Practices can record and govern calls made through that shared
-boundary without making Streams a special workflow substrate. Streams only
-exports operations over state it owns.
+The five `streams.draft.*` capabilities and `/streams-draft.bin` remain
+behavior-compatible only for recovery and later explicit migration. New code
+must not build output documents, saved sets, Library access, or generic text
+storage on that surface. The exact Gate 0 revision-7 record is retained as
+migration input; Library must not read the path or codec.
+
+Streams is a peer applet, not an inter-applet coordinator. Desk hosts target
+discovery, capability dispatch, review composition, and applet lifecycle.
+Practice retains durable contextual bindings and authority policy; Streams
+still validates and owns each operation over its state. This shared boundary
+does not make Streams a special workflow substrate.
 
 ## Capability surface
 
@@ -61,6 +68,10 @@ so external text cannot be interpreted as protocol structure.
 | `streams.source.read` | source `resource` | sanitized source map | Observe |
 | `streams.source.set-enabled` | `{resource, enabled}` | sanitized source map | Mutate + Persist |
 | `streams.source.refresh` | `{resource, expected_revision}` | `{resource, source_revision, accepted, request_generation, state}` | Persist + External |
+
+The draft rows above describe current compatibility behavior, not the near
+Streams capability target. They remain unchanged until the separately gated,
+verified Library migration and cutover.
 
 An item map contains `resource`, `provider`, `provenance`, `cid`, `author`,
 `text`, `created_at`, `indexed_at`, `counts`, `reply`, and `reason`. `author`
@@ -238,6 +249,12 @@ required before that distinction can fail closed.
 
 ## Local drafts
 
+This section is a compatibility record for the frozen legacy owner. The draft
+is not the model for future Streams outputs or retained findings. Migration
+must be non-destructive and idempotent, preserve the original record as
+recovery evidence, and use a Streams-owned adapter plus ordinary typed Library
+operations after Library is qualified. Gate 1 performs none of that migration.
+
 The current target-scoped draft has the stable resource
 `streams:draft:local` and the shape `{resource, revision, text}`. Creation is
 rejected with `CBUS-S-BUSY` while that resource already exists. Replacement
@@ -331,18 +348,19 @@ commit for successful mutating calls.
 
 ## Integration boundary
 
-Other applets can read explicit item, thread, feed, selection, draft, and
-sanitized source resources through Desk's ordinary typed capability path. They
-can retain and pass ordered resource lists, dereference exact revisions,
-compose those identities with their own operations, request a revision-safe
-draft replacement, explicitly start the legacy public refresh, or use an
-operator-only grant to accept one exact configured-source refresh. Desk owns
-discovery, dispatch, authority, lifecycle, and machine-serialized external
-I/O; Practices govern typed calls and provenance. In an explicit configured
-composition, Streams owns provider admission, HTTP policy, feed decode,
-observation deduplication, and durable attempt/observation commit. A composed
-instance commits a completion only when instance, source, owner, and request
-generations remain exact.
+Other applets can currently read explicit item, thread, feed, selection, draft,
+and sanitized source resources through Desk's ordinary typed capability path.
+The draft replacement and legacy public refresh paths are compatibility
+surfaces, not contracts for new integrations. New consequential operations
+must name the exact Streams target and expected domain state; current UI row or
+selection may be observed but must not retarget an Agent-visible or scheduled
+mutation. Desk owns discovery, dispatch, review composition, lifecycle, and
+machine-serialized external I/O. Practice owns durable contextual bindings and
+authority policy, while Streams validates and owns its operation semantics.
+In an explicit configured composition, Streams owns provider admission, HTTP
+policy, feed decode, observation deduplication, and durable
+attempt/observation commit. A composed instance commits a completion only when
+instance, source, owner, and request generations remain exact.
 
 The external-I/O service is not itself a Streams capability, and Streams does
 not coordinate unrelated applets. When a live Streams target exists, Desk's
