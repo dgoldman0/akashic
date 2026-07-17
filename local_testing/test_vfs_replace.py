@@ -30,6 +30,7 @@ EVENT_F = AKASHIC_ROOT / "akashic" / "concurrency" / "event.f"
 SEM_F = AKASHIC_ROOT / "akashic" / "concurrency" / "semaphore.f"
 GUARD_F = AKASHIC_ROOT / "akashic" / "concurrency" / "guard.f"
 UTF8_F = AKASHIC_ROOT / "akashic" / "text" / "utf8.f"
+MEMORY_SPAN_F = AKASHIC_ROOT / "akashic" / "utils" / "memory-span.f"
 CRC_F = AKASHIC_ROOT / "akashic" / "math" / "crc.f"
 SHA3_F = AKASHIC_ROOT / "akashic" / "math" / "sha3.f"
 VFS_F = AKASHIC_ROOT / "akashic" / "utils" / "fs" / "vfs.f"
@@ -171,7 +172,8 @@ def build_snapshot() -> None:
         "IF -1 ELSE 0 THEN ;",
     ]
     sources = [
-        EVENT_F, SEM_F, GUARD_F, UTF8_F, CRC_F, VFS_F, SHA3_F, REPLACE_F
+        EVENT_F, SEM_F, GUARD_F, UTF8_F, MEMORY_SPAN_F,
+        CRC_F, VFS_F, SHA3_F, REPLACE_F,
     ]
     payload_lines = _forth_lines(KDOS_PATH) + ["ENTER-USERLAND"]
     for source in sources:

@@ -20929,6 +20929,34 @@ _vfsnc-run
     ),
 )
 
+
+PROFILES["vfs-ram-capacity-contracts"] = Profile(
+    roots=("utils/fs/vfs.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - RAM VFS capacity and zero-tail contracts
+ENTER-USERLAND
+." [akashic] loading RAM VFS capacity contracts" CR
+REQUIRE local_testing/vfs-ram-capacity.f
+""",
+    ready_markers=("VFS RAM CAPACITY PASS",),
+    stable_markers=("VFS RAM CAPACITY PASS",),
+    failure_markers=(
+        "VFS RAM CAPACITY FAIL",
+        "VFS RAM CAPACITY ASSERT",
+        "VFS RAM CAPACITY STACK",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/vfs-ram-capacity.f",
+            (AKASHIC_ROOT / "local_testing" / "vfs-ram-capacity.f").read_bytes(),
+        ),
+    ),
+)
+
 PROFILES["observation-store-adapter-compile"] = Profile(
     roots=("tui/applets/streams/observation-store.f",),
     resources=(),

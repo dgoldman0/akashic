@@ -25,6 +25,7 @@ EVENT_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
 SEM_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
 GUARD_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 UTF8_F    = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
+MEMORY_SPAN_F = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 VFS_F     = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
 VFS_MNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
 VFS_FAT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "drivers", "vfs-fat.f")
@@ -433,7 +434,10 @@ def build_snapshot():
     kdos_lines = _load_forth_lines(KDOS_PATH)
 
     dep_lines = []
-    for path in [EVENT_F, SEM_F, GUARD_F, UTF8_F, VFS_F, VFS_MNT_F, VFS_FAT_F]:
+    for path in [
+        EVENT_F, SEM_F, GUARD_F, UTF8_F, MEMORY_SPAN_F,
+        VFS_F, VFS_MNT_F, VFS_FAT_F,
+    ]:
         dep_lines += _load_forth_lines(path)
 
     helpers = [

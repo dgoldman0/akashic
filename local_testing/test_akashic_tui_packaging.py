@@ -67,6 +67,26 @@ def test_library_store_format_profile_packages_its_exact_contract_leaf() -> None
     assert all("vfs" not in module for module in closure)
 
 
+def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
+    profile = PROFILES["vfs-ram-capacity-contracts"]
+    assert profile.roots == ("utils/fs/vfs.f",)
+    assert profile.ready_markers == ("VFS RAM CAPACITY PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert {
+        "VFS RAM CAPACITY FAIL",
+        "VFS RAM CAPACITY ASSERT",
+        "VFS RAM CAPACITY STACK",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/vfs-ram-capacity.f",
+    )
+    closure = set(dependency_closure(profile.roots))
+    assert "utils/fs/vfs.f" in closure
+    assert all(not module.startswith("library/") for module in closure)
+
+
 def test_supported_desktop_smoke_defaults_cover_linked_network_boot() -> None:
     args = _parser().parse_args(["smoke", "--profile", "desktop"])
     assert args.max_steps == DEFAULT_SMOKE_MAX_STEPS == 8_000_000_000

@@ -365,9 +365,18 @@ A binding is a vtable of 10 execution tokens passed to `VFS-NEW`:
 
 ## Ramdisk Binding
 
-`VFS-RAM-VTABLE` is provided by vfs.f itself.  `read` and `write`
-copy bytes from/to an arena-allocated content buffer stored in
-`binding-data`.  All other xts are no-ops.  No external dependency.
+`VFS-RAM-VTABLE` is provided by vfs.f itself.  Each file's two
+`binding-data` cells hold the backing-buffer pointer and its allocated
+capacity.  Capacity starts at 4096 bytes and grows geometrically inside the
+VFS arena.  Growth is transactional: the replacement is zeroed and populated
+before it is published, so allocation failure reports zero progress without
+changing the file, cursor, logical size, pointer, or capacity.
+
+Sparse gaps, newly exposed bytes after truncate, and all bytes between EOF and
+capacity read as zero.  The arena is a bump allocator, so superseded buffers
+remain charged to the arena until `VFS-DESTROY`; callers that repeatedly grow
+large RAM files should size the arena for that bounded copy-on-grow overhead.
+No external dependency is required.
 
 ---
 

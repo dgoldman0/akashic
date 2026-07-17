@@ -20,6 +20,7 @@
 
 PROVIDED akashic-vfs
 REQUIRE ../../text/utf8.f
+REQUIRE ../memory-span.f
 
 \ =====================================================================
 \  Constants — Type Tags
@@ -387,6 +388,98 @@ VARIABLE _VIA-TY
 : _VFS-RAM-INIT      ( vfs -- ior )         DROP 0 ;
 : _VFS-RAM-TEARDOWN  ( vfs -- )             DROP ;
 
+\ VFS-TRUNCATE publishes the requested logical size before dispatching to
+\ a binding.  The RAM binding uses the saved old size to preserve/zero the
+\ right byte ranges transactionally.  The public operation below owns these
+\ variables; the VFS guard makes the one active truncate visible here.
+VARIABLE _VTR-FD
+VARIABLE _VTR-SIZE
+VARIABLE _VTR-OLD-SIZE
+VARIABLE _VTR-OLD-SIZE-HI
+
+\ RAM binding-data is an allocation pair, never a logical-length pair.
+\   IN.BDATA @       backing buffer (0 only when capacity is 0)
+\   IN.BDATA 8 + @   allocated capacity in bytes
+\ Arena allocations are eight-byte aligned, so rejecting a larger request
+\ before the allocator's internal `7 +` also closes integer wraparound.
+0x7FFFFFFFFFFFFFF8 CONSTANT _VFS-RAM-CAP-MAX
+4096 CONSTANT _VFS-RAM-CAP-MIN
+
+VARIABLE _VRB-PTR
+VARIABLE _VRB-CAP
+VARIABLE _VRB-VS
+VARIABLE _VRB-BASE
+VARIABLE _VRB-END
+VARIABLE _VRB-BUF-END
+
+: _VFS-RAM-SPAN?  ( address length -- flag )
+    DUP 0<> IF OVER 0= IF 2DROP FALSE EXIT THEN THEN
+    MSPAN-NONWRAPPING? ;
+
+: _VFS-RAM-BUFFER?  ( pointer capacity vfs -- flag )
+    _VRB-VS ! _VRB-CAP ! _VRB-PTR !
+    _VRB-CAP @ 0< IF FALSE EXIT THEN
+    _VRB-PTR @ 0= IF _VRB-CAP @ 0= EXIT THEN
+    _VRB-CAP @ 0= IF FALSE EXIT THEN
+    _VRB-PTR @ _VRB-CAP @ _VFS-RAM-SPAN? 0= IF FALSE EXIT THEN
+    _VRB-VS @ V.ARENA @ A.BASE @ DUP 0= IF DROP FALSE EXIT THEN
+    _VRB-BASE !
+    _VRB-VS @ V.ARENA @ A.SIZE @ DUP 0< IF DROP FALSE EXIT THEN
+    _VRB-BASE @ + DUP _VRB-BASE @ U< IF DROP FALSE EXIT THEN
+    _VRB-END !
+    _VRB-PTR @ _VRB-BASE @ U< IF FALSE EXIT THEN
+    _VRB-PTR @ _VRB-CAP @ + _VRB-BUF-END !
+    _VRB-BUF-END @ _VRB-END @ U> 0= ;
+
+VARIABLE _VRG-REQUIRED
+VARIABLE _VRG-PRESERVE
+VARIABLE _VRG-IN
+VARIABLE _VRG-VS
+VARIABLE _VRG-PTR
+VARIABLE _VRG-CAP
+VARIABLE _VRG-NEW
+
+: _VFS-RAM-NEXT-CAP  ( required current -- capacity|0 )
+    _VRG-CAP ! _VRG-REQUIRED !
+    _VRG-REQUIRED @ DUP 0< SWAP _VFS-RAM-CAP-MAX > OR IF 0 EXIT THEN
+    _VRG-CAP @ DUP 0< SWAP _VFS-RAM-CAP-MAX > OR IF 0 EXIT THEN
+    _VRG-CAP @ 0= IF
+        _VFS-RAM-CAP-MIN
+    ELSE
+        _VRG-CAP @ _VFS-RAM-CAP-MAX 2/ > IF
+            _VRG-REQUIRED @
+        ELSE
+            _VRG-CAP @ 2*
+        THEN
+    THEN
+    _VRG-REQUIRED @ MAX
+    DUP _VFS-RAM-CAP-MAX > IF DROP 0 EXIT THEN
+    7 + -8 AND ;
+
+\ Ensure a RAM inode has `required` bytes of backing capacity.  Growth is
+\ copy-on-grow within the bump arena: the old allocation remains authoritative
+\ until a fully zeroed replacement has preserved all live bytes.  Failed
+\ allocation therefore changes neither pointer nor capacity nor content.
+: _VFS-RAM-ENSURE  ( required preserve-u inode vfs -- ior )
+    _VRG-VS ! _VRG-IN ! _VRG-PRESERVE ! _VRG-REQUIRED !
+    _VRG-REQUIRED @ 0< _VRG-PRESERVE @ 0< OR IF -1 EXIT THEN
+    _VRG-IN @ IN.BDATA @ _VRG-PTR !
+    _VRG-IN @ IN.BDATA 8 + @ _VRG-CAP !
+    _VRG-PTR @ _VRG-CAP @ _VRG-VS @ _VFS-RAM-BUFFER? 0= IF -1 EXIT THEN
+    _VRG-PRESERVE @ _VRG-CAP @ > IF -1 EXIT THEN
+    _VRG-REQUIRED @ _VRG-CAP @ <= IF 0 EXIT THEN
+    _VRG-REQUIRED @ _VRG-CAP @ _VFS-RAM-NEXT-CAP
+    DUP 0= IF DROP -1 EXIT THEN _VRG-NEW !
+    _VRG-VS @ V.ARENA @ _VRG-NEW @ ARENA-ALLOT?
+    IF DROP -1 EXIT THEN
+    DUP _VRG-NEW @ 0 FILL
+    _VRG-PTR @ ?DUP IF
+        OVER _VRG-PRESERVE @ MOVE
+    THEN
+    DUP _VRG-IN @ IN.BDATA !
+    _VRG-NEW @ _VRG-IN @ IN.BDATA 8 + !
+    DROP 0 ;
+
 \ Ramdisk READ — copy from arena buffer to user buffer.
 VARIABLE _VRR-BUF
 VARIABLE _VRR-LEN
@@ -394,17 +487,19 @@ VARIABLE _VRR-OFF
 VARIABLE _VRR-IN
 
 : _VFS-RAM-READ  ( buf len off inode vfs -- actual )
-    DROP _VRR-IN ! _VRR-OFF ! _VRR-LEN ! _VRR-BUF !
-    _VRR-IN @ IN.BDATA @
-    DUP 0= IF  DROP 0 EXIT  THEN       \ no content yet
-    \ avail = fsize - off
-    _VRR-IN @ IN.SIZE-LO @  _VRR-OFF @ -
-    DUP 0< IF  DROP DROP 0 EXIT  THEN  \ offset past EOF
-    _VRR-LEN @ MIN                      ( cptr actual )
-    DUP 0= IF  NIP EXIT  THEN
-    >R                                  ( cptr  R: actual )
-    _VRR-OFF @ +  _VRR-BUF @ R@ CMOVE  \ src → buf
-    R> ;
+    _VRB-VS ! _VRR-IN ! _VRR-OFF ! _VRR-LEN ! _VRR-BUF !
+    _VRR-LEN @ 0< _VRR-OFF @ 0< OR IF 0 EXIT THEN
+    _VRR-LEN @ 0= IF 0 EXIT THEN
+    _VRR-BUF @ _VRR-LEN @ _VFS-RAM-SPAN? 0= IF 0 EXIT THEN
+    _VRR-IN @ IN.SIZE-LO @ DUP 0< IF DROP 0 EXIT THEN
+    _VRR-IN @ IN.BDATA 8 + @ > IF 0 EXIT THEN
+    _VRR-IN @ IN.BDATA @ _VRR-IN @ IN.BDATA 8 + @
+        _VRB-VS @ _VFS-RAM-BUFFER? 0= IF 0 EXIT THEN
+    _VRR-OFF @ _VRR-IN @ IN.SIZE-LO @ >= IF 0 EXIT THEN
+    _VRR-IN @ IN.SIZE-LO @ _VRR-OFF @ - _VRR-LEN @ MIN _VRR-LEN !
+    _VRR-IN @ IN.BDATA @ DUP 0= IF DROP 0 EXIT THEN
+    _VRR-OFF @ + _VRR-BUF @ _VRR-LEN @ MOVE
+    _VRR-LEN @ ;
 
 \ Ramdisk WRITE — copy from user buffer to arena buffer.
 VARIABLE _VRW-BUF
@@ -412,28 +507,57 @@ VARIABLE _VRW-LEN
 VARIABLE _VRW-OFF
 VARIABLE _VRW-IN
 VARIABLE _VRW-VS
+VARIABLE _VRW-END
+VARIABLE _VRW-OLD-SIZE
 
 : _VFS-RAM-WRITE  ( buf len off inode vfs -- actual )
     _VRW-VS ! _VRW-IN ! _VRW-OFF ! _VRW-LEN ! _VRW-BUF !
-    \ Ensure content buffer exists
-    _VRW-IN @ IN.BDATA @
-    DUP 0= IF
-        DROP
-        \ Allocate: cap = max(off+len, 4096)
-        _VRW-OFF @ _VRW-LEN @ + 4096 MAX
-        _VRW-VS @ V.ARENA @ SWAP ARENA-ALLOT
-        DUP _VRW-IN @ IN.BDATA !
-    THEN                                    ( cptr )
-    \ Copy bytes: src=buf, dst=cptr+off
-    _VRW-OFF @ +                            ( dst )
-    _VRW-BUF @ SWAP _VRW-LEN @ CMOVE
-    _VRW-LEN @ ;                            ( actual )
+    _VRW-LEN @ 0< _VRW-OFF @ 0< OR IF 0 EXIT THEN
+    _VRW-LEN @ 0= IF 0 EXIT THEN
+    _VRW-BUF @ _VRW-LEN @ _VFS-RAM-SPAN? 0= IF 0 EXIT THEN
+    _VRW-OFF @ _VRW-LEN @ + DUP _VRW-END !
+    _VRW-OFF @ U< IF 0 EXIT THEN
+    _VRW-IN @ IN.SIZE-LO @ DUP _VRW-OLD-SIZE !
+    DUP 0< IF DROP 0 EXIT THEN
+    _VRW-IN @ IN.BDATA 8 + @ > IF 0 EXIT THEN
+    _VRW-IN @ IN.BDATA @ _VRW-IN @ IN.BDATA 8 + @
+        _VRW-VS @ _VFS-RAM-BUFFER? 0= IF 0 EXIT THEN
+    _VRW-END @ _VRW-OLD-SIZE @ _VRW-IN @ _VRW-VS @ _VFS-RAM-ENSURE
+    IF 0 EXIT THEN
+    \ The zero-tail invariant makes ordinary contiguous extension safe;
+    \ explicitly clear a sparse gap because shrink/regrow may reuse capacity.
+    _VRW-OFF @ _VRW-OLD-SIZE @ > IF
+        _VRW-IN @ IN.BDATA @ _VRW-OLD-SIZE @ +
+        _VRW-OFF @ _VRW-OLD-SIZE @ - 0 FILL
+    THEN
+    _VRW-BUF @ _VRW-IN @ IN.BDATA @ _VRW-OFF @ + _VRW-LEN @ MOVE
+    _VRW-LEN @ ;
 
 : _VFS-RAM-READDIR   ( inode vfs -- )       2DROP ;
 : _VFS-RAM-SYNC      ( inode vfs -- ior )   2DROP 0 ;
 : _VFS-RAM-CREATE    ( inode vfs -- ior )   2DROP 0 ;
 : _VFS-RAM-DELETE    ( inode vfs -- ior )   2DROP 0 ;
-: _VFS-RAM-TRUNCATE  ( inode vfs -- ior )   2DROP 0 ;
+
+VARIABLE _VRT-IN
+VARIABLE _VRT-VS
+VARIABLE _VRT-NEW-SIZE
+VARIABLE _VRT-KEEP
+
+: _VFS-RAM-TRUNCATE  ( inode vfs -- ior )
+    _VRT-VS ! _VRT-IN !
+    _VRT-IN @ IN.SIZE-LO @ _VRT-NEW-SIZE !
+    _VRT-NEW-SIZE @ 0< _VTR-OLD-SIZE @ 0< OR IF -1 EXIT THEN
+    _VRT-IN @ IN.BDATA @ _VRT-IN @ IN.BDATA 8 + @
+        _VRT-VS @ _VFS-RAM-BUFFER? 0= IF -1 EXIT THEN
+    _VTR-OLD-SIZE @ _VRT-IN @ IN.BDATA 8 + @ > IF -1 EXIT THEN
+    _VRT-NEW-SIZE @ _VTR-OLD-SIZE @ MIN _VRT-KEEP !
+    _VRT-NEW-SIZE @ _VRT-KEEP @ _VRT-IN @ _VRT-VS @ _VFS-RAM-ENSURE
+    IF -1 EXIT THEN
+    _VRT-IN @ IN.BDATA @ ?DUP IF
+        _VRT-NEW-SIZE @ +
+        _VRT-IN @ IN.BDATA 8 + @ _VRT-NEW-SIZE @ - 0 FILL
+    THEN
+    0 ;
 
 CREATE VFS-RAM-VTABLE  VFS-VT-SIZE ALLOT
 ' _VFS-RAM-PROBE     VFS-RAM-VTABLE  VFS-VT-PROBE    CELLS + !
@@ -757,17 +881,20 @@ VARIABLE _VWR-ACT
     DUP >R
     VFS-VT-WRITE R> _VFS-XT EXECUTE   ( actual )
     _VWR-ACT !
-    \ Advance cursor
-    _VWR-FD @ FD.CUR-LO @  _VWR-ACT @ +
-    _VWR-FD @ FD.CUR-LO !
-    \ Update inode size if write extended file
-    _VWR-FD @ FD.CUR-LO @
-    _VWR-FD @ FD.INODE @ IN.SIZE-LO @
-    > IF
+    \ Only actual positive progress can move the cursor or extend EOF.
+    \ In particular, RAM allocation failure is a zero-progress write after
+    \ an arbitrary seek and must not turn that seek position into file size.
+    _VWR-ACT @ 0> IF
+        _VWR-FD @ FD.CUR-LO @ _VWR-ACT @ +
+        _VWR-FD @ FD.CUR-LO !
         _VWR-FD @ FD.CUR-LO @
-        _VWR-FD @ FD.INODE @ IN.SIZE-LO !
-        VFS-IF-DIRTY
-        _VWR-FD @ FD.INODE @ IN.FLAGS DUP @ ROT OR SWAP !
+        _VWR-FD @ FD.INODE @ IN.SIZE-LO @
+        > IF
+            _VWR-FD @ FD.CUR-LO @
+            _VWR-FD @ FD.INODE @ IN.SIZE-LO !
+            VFS-IF-DIRTY
+            _VWR-FD @ FD.INODE @ IN.FLAGS DUP @ ROT OR SWAP !
+        THEN
     THEN
     _VWR-ACT @ ;
 
@@ -829,17 +956,15 @@ VARIABLE _VWE-POS
 : VFS-TELL    ( fd -- pos )      FD.CUR-LO @ ;
 : VFS-SIZE    ( fd -- size )     FD.INODE @ IN.SIZE-LO @ ;
 
-VARIABLE _VTR-FD
-VARIABLE _VTR-SIZE
-VARIABLE _VTR-OLD-SIZE
-
 \ VFS-TRUNCATE ( size fd -- ior )
 \   Set a file's logical size and notify its backing store.  The file
 \   cursor is clamped to the new end on success.
 : VFS-TRUNCATE  ( size fd -- ior )
     _VTR-FD ! _VTR-SIZE !
     _VTR-FD @ FD.VFS @ V.FLAGS @ VFS-F-RO AND IF -1 EXIT THEN
+    _VTR-SIZE @ 0< IF -1 EXIT THEN
     _VTR-FD @ FD.INODE @ IN.SIZE-LO @ _VTR-OLD-SIZE !
+    _VTR-FD @ FD.INODE @ IN.SIZE-HI @ _VTR-OLD-SIZE-HI !
     _VTR-SIZE @ _VTR-FD @ FD.INODE @ IN.SIZE-LO !
     0 _VTR-FD @ FD.INODE @ IN.SIZE-HI !
     _VTR-FD @ FD.INODE @
@@ -847,6 +972,7 @@ VARIABLE _VTR-OLD-SIZE
     DUP >R VFS-VT-TRUNCATE R> _VFS-XT EXECUTE
     DUP IF
         _VTR-OLD-SIZE @ _VTR-FD @ FD.INODE @ IN.SIZE-LO !
+        _VTR-OLD-SIZE-HI @ _VTR-FD @ FD.INODE @ IN.SIZE-HI !
         EXIT
     THEN
     VFS-IF-DIRTY
