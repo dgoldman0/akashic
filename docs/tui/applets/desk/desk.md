@@ -196,6 +196,26 @@ defaults.  Once persisted, the row's flags are authoritative on later boots.
 Pad's Build & Install workflow receives the live catalog only after activation;
 the builder pointer is cleared before the catalog is freed.
 
+## Desk-private service routing
+
+Desk's interoperability endpoint resolves services through an activation-local
+table in Desk component state. The table has a fixed capacity of 16 and Desk
+currently installs eleven entries. Each entry borrows an immutable exact service
+ID and stores a getter XT; it does not cache or own the returned service. Lookups
+are exact byte matches, and an unknown ID returns `0`.
+
+Getters evaluate owner availability at lookup time. An unbound external-I/O
+service, absent Agent composition, or inactive/unowned Daybook resource therefore
+returns `0` without changing the table. The table is private lifecycle-routing
+metadata, not a general `interop/` registry: discovery confers no authority, and
+each domain owner retains its own semantics and validation.
+
+Desk fills the table after constructing its service owners and before publishing
+the endpoint. During dispatch-quiesced teardown it zeroes every entry after
+request cancellation and before deactivating or freeing those owners. A retained
+endpoint can consequently expose neither a stale getter nor a freed service, and
+the existing owner dependency order remains unchanged.
+
 ## Desk-hosted Agent composition
 
 Desk constructs, retains, and tears down the shared Agent composition for its

@@ -1937,6 +1937,7 @@ VARIABLE _dx-child-ticks
     DESK-COMP-DESC CINST-NEW DUP 0= _dx-assert DROP _dx-desk !
     _dx-child-comp CINST-NEW DUP 0= _dx-assert DROP _dx-child !
     _dx-desk @ _DESK-USE-STATE
+    _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dx-assert
     _DESK-ENDPOINT IENDPOINT-INIT
     _dx-desk @ _DESK-ENDPOINT IEND.CONTEXT !
     ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
@@ -1945,6 +1946,7 @@ VARIABLE _dx-child-ticks
 
 : _dx-cleanup  ( -- )
     0 _DESK-HEAD !
+    _DESK-SERVICE-TABLE-FINI
     _dx-child @ CINST-FREE _dx-desk @ CINST-FREE
     0 _DESK-CURRENT-STATE !
     _dx-other-service XIO-SERVICE-INIT XIO-S-OK = _dx-assert
@@ -26239,6 +26241,236 @@ _dg0-run
         ("gate0/d-legacy.bin", DESK_GATE0_DRAFT_LEGACY_FIXTURE),
         ("streams-sources.bin", DESK_GATE0_SOURCE_VALID_FIXTURE),
     ),
+)
+
+
+PROFILES["desk-service-table-contracts"] = Profile(
+    roots=("tui/applets/desk/desk.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Desk-private bounded service table contracts
+ENTER-USERLAND
+." [akashic] loading Desk service table contracts" CR
+REQUIRE tui/applets/desk/desk.f
+
+VARIABLE _dst-fails
+VARIABLE _dst-checks
+VARIABLE _dst-depth
+VARIABLE _dst-desk
+VARIABLE _dst-dynamic
+
+CREATE _dst-runtime AGENT-RUNTIME-SIZE ALLOT
+CREATE _dst-registry 8 ALLOT
+CREATE _dst-context 8 ALLOT
+CREATE _dst-rreg 8 ALLOT
+CREATE _dst-bus 8 ALLOT
+CREATE _dst-source 8 ALLOT
+CREATE _dst-gateway 8 ALLOT
+CREATE _dst-daybook-owner 8 ALLOT
+
+: _dst-assert  ( flag -- )
+    1 _dst-checks +!
+    0= IF 1 _dst-fails +! ." ASSERT " _dst-checks @ . CR THEN ;
+
+: _dst-stack  ( -- )
+    DEPTH DUP _dst-depth @ <> IF
+        ." STACK " _dst-depth @ . ."  -> " DUP . CR .S CR
+    THEN
+    _dst-depth @ = _dst-assert ;
+
+: _dst-zero?  ( addr len -- flag )
+    -1 -ROT 0 ?DO
+        DUP I + C@ IF SWAP DROP 0 SWAP THEN
+    LOOP
+    DROP ;
+
+: _dst-value@  ( -- value ) _dst-dynamic @ ;
+
+: _dst-service  ( id-a id-u -- service | 0 )
+    _dst-desk @ CINST-SERVICE ;
+
+: _dst-add-ok  ( id-a id-u -- )
+    ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
+
+: _dst-production-ids  ( -- )
+    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.agent.runtime" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.agent.tool-gateway" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.agent.provider-source" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.agent.access-profile" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.runtime.registry" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.runtime.context" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.runtime.resource-registry"
+        _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.interop.request-bus" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.resource.daybook" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.interop.endpoint" _DESK-SERVICE-FIND 0<> _dst-assert ;
+
+: _dst-current-services  ( -- )
+    _DESK-XIO-INIT XIO-S-OK = _dst-assert
+    S" org.akashic.net.external-io" _dst-service
+        _DESK-EXTERNAL-IO = _dst-assert
+    S" org.akashic.agent.runtime" _dst-service
+        _dst-runtime = _dst-assert
+    S" org.akashic.agent.tool-gateway" _dst-service
+        _dst-gateway = _dst-assert
+    S" org.akashic.agent.provider-source" _dst-service
+        _dst-source = _dst-assert
+    S" org.akashic.agent.access-profile" _dst-service
+        _dst-runtime ARUNTIME.ACCESS-PROFILE = _dst-assert
+    S" org.akashic.runtime.registry" _dst-service
+        _dst-registry = _dst-assert
+    S" org.akashic.runtime.context" _dst-service
+        _dst-context = _dst-assert
+    S" org.akashic.runtime.resource-registry" _dst-service
+        _dst-rreg = _dst-assert
+    S" org.akashic.interop.request-bus" _dst-service
+        _dst-bus = _dst-assert
+    S" org.akashic.resource.daybook" _dst-service
+        _DESK-DAYBOOK-RID = _dst-assert
+    S" org.akashic.interop.endpoint" _dst-service
+        _DESK-ENDPOINT = _dst-assert
+    S" org.akashic.runtime.registr" _dst-service 0= _dst-assert
+    S" org.akashic.runtime.registry.extra" _dst-service 0= _dst-assert
+    S" ORG.AKASHIC.RUNTIME.REGISTRY" _dst-service 0= _dst-assert
+    S" org.akashic.unknown" _dst-service 0= _dst-assert ;
+
+: _dst-availability  ( -- )
+    _DESK-XIO-FINI XIO-S-OK = _dst-assert
+    S" org.akashic.net.external-io" _dst-service 0= _dst-assert
+    _DESK-XIO-INIT XIO-S-OK = _dst-assert
+    S" org.akashic.net.external-io" _dst-service
+        _DESK-EXTERNAL-IO = _dst-assert
+
+    0 _DESK-AGENT-RUNTIME !
+    S" org.akashic.agent.runtime" _dst-service 0= _dst-assert
+    S" org.akashic.agent.access-profile" _dst-service 0= _dst-assert
+    _dst-runtime _DESK-AGENT-RUNTIME !
+    S" org.akashic.agent.runtime" _dst-service
+        _dst-runtime = _dst-assert
+    S" org.akashic.agent.access-profile" _dst-service
+        _dst-runtime ARUNTIME.ACCESS-PROFILE = _dst-assert
+
+    0 _DESK-TOOL-GATEWAY !
+    S" org.akashic.agent.tool-gateway" _dst-service 0= _dst-assert
+    _dst-gateway _DESK-TOOL-GATEWAY !
+    S" org.akashic.agent.tool-gateway" _dst-service
+        _dst-gateway = _dst-assert
+    0 _DESK-AGENT-SOURCE !
+    S" org.akashic.agent.provider-source" _dst-service 0= _dst-assert
+    _dst-source _DESK-AGENT-SOURCE !
+    S" org.akashic.agent.provider-source" _dst-service
+        _dst-source = _dst-assert
+
+    SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
+    S" org.akashic.resource.daybook" _dst-service 0= _dst-assert
+    SDOC-S-OK _DESK-DAYBOOK-STATUS !
+    0 _DESK-DAYBOOK-OWNER !
+    S" org.akashic.resource.daybook" _dst-service 0= _dst-assert
+    _dst-daybook-owner _DESK-DAYBOOK-OWNER !
+    S" org.akashic.resource.daybook" _dst-service
+        _DESK-DAYBOOK-RID = _dst-assert ;
+
+: _dst-uniqueness  ( -- )
+    _DESK-SERVICE-TABLE-INIT
+    41 _dst-dynamic !
+    S" duplicate" _dst-add-ok
+    _DESK-SERVICE-COUNT @ 1 = _dst-assert
+    S" duplicate" ['] _dst-value@ _DESK-SERVICE+
+        _DSS-S-DUPLICATE = _dst-assert
+    _DESK-SERVICE-COUNT @ 1 = _dst-assert
+    S" duplicate" _DESK-SERVICE@ 41 = _dst-assert
+    42 _dst-dynamic !
+    S" duplicate" _DESK-SERVICE@ 42 = _dst-assert
+    S" Duplicate" _DESK-SERVICE@ 0= _dst-assert
+    S" duplicate-extra" _DESK-SERVICE@ 0= _dst-assert
+    0 1 ['] _dst-value@ _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert
+    S" invalid-getter" 0 _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert ;
+
+: _dst-full  ( -- )
+    _DESK-SERVICE-TABLE-INIT
+    S" fill-00" _dst-add-ok S" fill-01" _dst-add-ok
+    S" fill-02" _dst-add-ok S" fill-03" _dst-add-ok
+    S" fill-04" _dst-add-ok S" fill-05" _dst-add-ok
+    S" fill-06" _dst-add-ok S" fill-07" _dst-add-ok
+    S" fill-08" _dst-add-ok S" fill-09" _dst-add-ok
+    S" fill-10" _dst-add-ok S" fill-11" _dst-add-ok
+    S" fill-12" _dst-add-ok S" fill-13" _dst-add-ok
+    S" fill-14" _dst-add-ok S" fill-15" _dst-add-ok
+    _DESK-SERVICE-COUNT @ _DESK-SERVICE-CAPACITY = _dst-assert
+    S" fill-16" ['] _dst-value@ _DESK-SERVICE+
+        _DSS-S-FULL = _dst-assert
+    _DESK-SERVICE-COUNT @ _DESK-SERVICE-CAPACITY = _dst-assert
+    S" fill-16" _DESK-SERVICE@ 0= _dst-assert ;
+
+: _dst-teardown-wipe  ( -- )
+    _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
+    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-TABLE-FINI
+    _DESK-SERVICE-COUNT @ 0= _dst-assert
+    _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
+        _dst-zero? _dst-assert
+    S" org.akashic.runtime.registry" _DESK-SERVICE@ 0= _dst-assert ;
+
+: _dst-setup  ( -- )
+    _DESK-FILL-DESC
+    DESK-COMP-DESC CINST-NEW DUP 0= _dst-assert DROP _dst-desk !
+    _dst-desk @ _DESK-USE-STATE
+    _dst-runtime AGENT-RUNTIME-SIZE 0 FILL
+    AAP-PRESET-CHAT-ONLY _dst-runtime ARUNTIME.ACCESS-PROFILE AAP-PRESET!
+        AAP-S-OK = _dst-assert
+    _dst-registry _DESK-REGISTRY !
+    _dst-rreg _DESK-RREG !
+    _dst-bus _DESK-BUS !
+    _dst-source _DESK-AGENT-SOURCE !
+    _dst-runtime _DESK-AGENT-RUNTIME !
+    _dst-gateway _DESK-TOOL-GATEWAY !
+    _dst-context _DESK-PRACTICE-ACTIVATION PACT.CONTEXT !
+    _DESK-DAYBOOK-RID RID-CLEAR
+    77 _DESK-DAYBOOK-RID !
+    _dst-daybook-owner _DESK-DAYBOOK-OWNER !
+    SDOC-S-OK _DESK-DAYBOOK-STATUS !
+    _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
+    _DESK-ENDPOINT IENDPOINT-INIT
+    _dst-desk @ _DESK-ENDPOINT IEND.CONTEXT !
+    ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
+    _DESK-ENDPOINT _dst-desk @ CINST.ENDPOINT ! ;
+
+: _dst-cleanup  ( -- )
+    _DESK-XIO-FINI XIO-S-OK = _dst-assert
+    _DESK-SERVICE-TABLE-FINI
+    _dst-desk @ CINST-FREE
+    0 _DESK-CURRENT-STATE ! ;
+
+: _dst-run  ( -- )
+    0 _dst-fails ! 0 _dst-checks ! DEPTH _dst-depth !
+    _dst-setup _dst-stack
+    _dst-production-ids _dst-stack
+    _dst-current-services _dst-stack
+    _dst-availability _dst-stack
+    _dst-uniqueness _dst-stack
+    _dst-full _dst-stack
+    _dst-teardown-wipe _dst-stack
+    _dst-cleanup _dst-stack
+    _dst-fails @ 0= IF
+        ." DESK SERVICE TABLE CONTRACTS PASS " _dst-checks @ .
+    ELSE
+        ." DESK SERVICE TABLE CONTRACTS FAIL " _dst-fails @ .
+        ."  / " _dst-checks @ .
+    THEN CR ;
+
+_dst-run
+""",
+    ready_markers=("DESK SERVICE TABLE CONTRACTS PASS",),
+    stable_markers=("DESK SERVICE TABLE CONTRACTS PASS",),
+    failure_markers=(
+        "DESK SERVICE TABLE CONTRACTS FAIL",
+        "ASSERT",
+        "STACK",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
 )
 
 

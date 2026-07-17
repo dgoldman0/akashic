@@ -283,6 +283,20 @@ _DESK-CURRENT-STATE CMP-CELL: _DTH-DESK-BG
 12 CONSTANT _HB-MAX
 32 CONSTANT _DESK-MAX-INSTALLED
 
+\ Desk owns a deliberately small service namespace.  Entries borrow their
+\ immutable ID strings and late-bind each service through a getter so owner
+\ availability changes are observed without rebuilding the table.
+ 0 CONSTANT _DSS-ID-A
+ 8 CONSTANT _DSS-ID-U
+16 CONSTANT _DSS-GET-XT
+24 CONSTANT _DSS-ENTRY-SIZE
+16 CONSTANT _DESK-SERVICE-CAPACITY
+
+0 CONSTANT _DSS-S-OK
+1 CONSTANT _DSS-S-INVALID
+2 CONSTANT _DSS-S-DUPLICATE
+3 CONSTANT _DSS-S-FULL
+
 _DESK-CURRENT-STATE _HB-SZ _HB-MAX * CMP-FIELD: _HB-ENTRIES
 _DESK-CURRENT-STATE CMP-CELL: _DHBAR-COUNT
 
@@ -298,6 +312,9 @@ _DESK-CURRENT-STATE XIO-SERVICE-SIZE CMP-FIELD: _DESK-EXTERNAL-IO
 _DESK-CURRENT-STATE RID-SIZE CMP-FIELD: _DESK-DAYBOOK-RID
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-STATUS
+_DESK-CURRENT-STATE _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
+    CMP-FIELD: _DESK-SERVICES
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SERVICE-COUNT
 _DESK-CURRENT-STATE IENDPOINT-SIZE CMP-FIELD: _DESK-ENDPOINT
 _DESK-CURRENT-STATE CMP-CELL: _DESK-INSTALLED-N
 _DESK-CURRENT-STATE _DESK-MAX-INSTALLED CELLS CMP-FIELD: _DESK-INSTALLED
@@ -1370,55 +1387,126 @@ VARIABLE _DFI-INST
     _DESK-USE-STATE
     _DESK-BUS @ CBUS-POST ;
 
-VARIABLE _DSE-ID-A
-VARIABLE _DSE-ID-U
+\ The table contains only routing metadata.  Service ownership and lifetime
+\ remain with Desk; getters make those lifetimes visible at lookup time.
+: _DESK-SERVICE-ENTRY  ( index -- entry )
+    _DSS-ENTRY-SIZE * _DESK-SERVICES + ;
+
+VARIABLE _DSSF-ID-A
+VARIABLE _DSSF-ID-U
+VARIABLE _DSSF-ENTRY
+
+: _DESK-SERVICE-FIND  ( id-a id-u -- entry | 0 )
+    _DSSF-ID-U ! _DSSF-ID-A !
+    _DESK-SERVICE-COUNT @ 0 ?DO
+        I _DESK-SERVICE-ENTRY DUP _DSSF-ENTRY ! DROP
+        _DSSF-ID-A @ _DSSF-ID-U @
+        _DSSF-ENTRY @ _DSS-ID-A + @
+        _DSSF-ENTRY @ _DSS-ID-U + @ STR-STR= IF
+            _DSSF-ENTRY @ UNLOOP EXIT
+        THEN
+    LOOP
+    0 ;
+
+VARIABLE _DSSA-ID-A
+VARIABLE _DSSA-ID-U
+VARIABLE _DSSA-GET-XT
+VARIABLE _DSSA-ENTRY
+
+: _DESK-SERVICE+  ( id-a id-u getter-xt -- status )
+    _DSSA-GET-XT ! _DSSA-ID-U ! _DSSA-ID-A !
+    _DSSA-ID-A @ 0= _DSSA-ID-U @ 0> 0= OR
+    _DSSA-GET-XT @ 0= OR IF _DSS-S-INVALID EXIT THEN
+    _DSSA-ID-A @ _DSSA-ID-U @ _DESK-SERVICE-FIND IF
+        _DSS-S-DUPLICATE EXIT
+    THEN
+    _DESK-SERVICE-COUNT @ _DESK-SERVICE-CAPACITY >= IF
+        _DSS-S-FULL EXIT
+    THEN
+    _DESK-SERVICE-COUNT @ _DESK-SERVICE-ENTRY DUP _DSSA-ENTRY !
+    _DSS-ENTRY-SIZE 0 FILL
+    _DSSA-ID-A @ _DSSA-ENTRY @ _DSS-ID-A + !
+    _DSSA-ID-U @ _DSSA-ENTRY @ _DSS-ID-U + !
+    _DSSA-GET-XT @ _DSSA-ENTRY @ _DSS-GET-XT + !
+    1 _DESK-SERVICE-COUNT +!
+    _DSS-S-OK ;
+
+: _DESK-SERVICE@  ( id-a id-u -- service | 0 )
+    _DESK-SERVICE-FIND ?DUP IF
+        _DSS-GET-XT + @ EXECUTE
+    ELSE
+        0
+    THEN ;
+
+: _DESK-SERVICE-TABLE-INIT  ( -- )
+    _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY * 0 FILL
+    0 _DESK-SERVICE-COUNT ! ;
+
+: _DESK-SERVICE-TABLE-FINI  ( -- )
+    _DESK-SERVICE-TABLE-INIT ;
+
+: _DESK-SERVICE-XIO@  ( -- service | 0 )
+    _DESK-XIO-READY? IF _DESK-EXTERNAL-IO ELSE 0 THEN ;
+
+: _DESK-SERVICE-AGENT-RUNTIME@  ( -- service | 0 )
+    _DESK-AGENT-RUNTIME @ ;
+
+: _DESK-SERVICE-TOOL-GATEWAY@  ( -- service | 0 )
+    _DESK-TOOL-GATEWAY @ ;
+
+: _DESK-SERVICE-PROVIDER-SOURCE@  ( -- service | 0 )
+    _DESK-AGENT-SOURCE @ ;
+
+: _DESK-SERVICE-ACCESS-PROFILE@  ( -- service | 0 )
+    _DESK-AGENT-RUNTIME @ ?DUP IF ARUNTIME-ACCESS-PROFILE ELSE 0 THEN ;
+
+: _DESK-SERVICE-REGISTRY@  ( -- service | 0 )
+    _DESK-REGISTRY @ ;
+
+: _DESK-SERVICE-CONTEXT@  ( -- service | 0 )
+    DESK-CONTEXT ;
+
+: _DESK-SERVICE-RESOURCE-REGISTRY@  ( -- service | 0 )
+    _DESK-RREG @ ;
+
+: _DESK-SERVICE-REQUEST-BUS@  ( -- service | 0 )
+    _DESK-BUS @ ;
+
+: _DESK-SERVICE-DAYBOOK@  ( -- service | 0 )
+    _DESK-DAYBOOK-STATUS @ 0=
+    _DESK-DAYBOOK-OWNER @ 0<> AND IF _DESK-DAYBOOK-RID ELSE 0 THEN ;
+
+: _DESK-SERVICE-ENDPOINT@  ( -- service )
+    _DESK-ENDPOINT ;
+
+: _DESK-SERVICE-TABLE-SETUP  ( -- status )
+    _DESK-SERVICE-TABLE-INIT
+    S" org.akashic.net.external-io" ['] _DESK-SERVICE-XIO@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.agent.runtime" ['] _DESK-SERVICE-AGENT-RUNTIME@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.agent.tool-gateway" ['] _DESK-SERVICE-TOOL-GATEWAY@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.agent.provider-source" ['] _DESK-SERVICE-PROVIDER-SOURCE@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.agent.access-profile" ['] _DESK-SERVICE-ACCESS-PROFILE@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.runtime.registry" ['] _DESK-SERVICE-REGISTRY@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.runtime.context" ['] _DESK-SERVICE-CONTEXT@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.runtime.resource-registry"
+        ['] _DESK-SERVICE-RESOURCE-REGISTRY@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.interop.request-bus" ['] _DESK-SERVICE-REQUEST-BUS@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.resource.daybook" ['] _DESK-SERVICE-DAYBOOK@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.interop.endpoint" ['] _DESK-SERVICE-ENDPOINT@
+        _DESK-SERVICE+ ;
 
 : _DESK-ENDPOINT-SERVICE  ( id-a id-u desk-instance -- service | 0 )
-    _DESK-USE-STATE _DSE-ID-U ! _DSE-ID-A !
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.net.external-io" STR-STR= IF
-        _DESK-XIO-READY? IF _DESK-EXTERNAL-IO ELSE 0 THEN EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.runtime" STR-STR= IF
-        _DESK-AGENT-RUNTIME @ EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.tool-gateway" STR-STR= IF
-        _DESK-TOOL-GATEWAY @ EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.provider-source" STR-STR= IF
-        _DESK-AGENT-SOURCE @ EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.agent.access-profile" STR-STR= IF
-        _DESK-AGENT-RUNTIME @ ?DUP IF
-            ARUNTIME-ACCESS-PROFILE
-        ELSE
-            0
-        THEN EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.runtime.registry" STR-STR= IF
-        _DESK-REGISTRY @ EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.runtime.context" STR-STR= IF
-        DESK-CONTEXT EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @
-        S" org.akashic.runtime.resource-registry" STR-STR= IF
-        _DESK-RREG @ EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.interop.request-bus" STR-STR= IF
-        _DESK-BUS @ EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.resource.daybook" STR-STR= IF
-        _DESK-DAYBOOK-STATUS @ 0=
-        _DESK-DAYBOOK-OWNER @ 0<> AND IF
-            _DESK-DAYBOOK-RID
-        ELSE
-            0
-        THEN EXIT
-    THEN
-    _DSE-ID-A @ _DSE-ID-U @ S" org.akashic.interop.endpoint" STR-STR= IF
-        _DESK-ENDPOINT EXIT
-    THEN
-    0 ;
+    _DESK-USE-STATE _DESK-SERVICE@ ;
 
 VARIABLE _DIR-ID-A
 VARIABLE _DIR-ID-U
@@ -1863,6 +1951,8 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
         ARUNTIME-ACCESS-PRESET!
     ABORT" desk: unavailable or invalid agent access preset"
 
+    _DESK-SERVICE-TABLE-SETUP _DSS-S-OK <>
+    ABORT" desk: service table setup failed"
     _DESK-ENDPOINT IENDPOINT-INIT
     _DINI-INST @ _DESK-ENDPOINT IEND.CONTEXT !
     ['] _DESK-ENDPOINT-POST _DESK-ENDPOINT IEND.POST-XT !
@@ -1901,6 +1991,7 @@ VARIABLE _DIFI-XIO-STATUS
     _DESK-BUS @ ?DUP IF
         DUP CBUS-CANCEL-ALL DROP
     THEN
+    _DESK-SERVICE-TABLE-FINI
     _DESK-DAYBOOK-OWNER @ ?DUP IF
         SDOC-DEACTIVATE
         ABORT" desk: shared document teardown failed"
