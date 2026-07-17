@@ -1,15 +1,14 @@
 # Library product boundary
 
-Status: Gate 1 product contract and package placeholder. Library has no runtime
-module, store, capability, projection owner, applet, or UI yet. The names and
-limits below describe the ratified direction; later focused gates must seal
-formats, schemas, lifecycle behavior, and measured bounds before code relies on
-them.
+Status: Gate 4A is complete for the pure bounded model and deterministic record
+codecs. Library still has no durable store, VFS path, generation protocol,
+recovery procedure, index, capability, projection owner, applet, UI, or sibling
+integration. Those absences are contract boundaries, not implied behavior.
 
 Library is the machine-level corpus of material a user deliberately keeps. A
-Practice may bind Library resources into an activity, but the corpus and its
-records remain Library-owned. Library is useful on its own and does not depend
-on Streams, Desk, Pad, Agent, Daybook, Grid, or a Practice being active.
+Practice may eventually bind Library resources into an activity, but the corpus
+and its records remain Library-owned. Library is useful on its own and does not
+depend on Streams, Desk, Pad, Agent, Daybook, Grid, or a Practice being active.
 
 ## Ownership boundary
 
@@ -40,6 +39,65 @@ Desk may later host Library services and route intents, and the Library applet
 may show Library records, but hosting and presentation do not transfer domain
 ownership.
 
+## Gate 4A foundation now sealed
+
+`akashic/library/model.f` defines pointer-free catalog, provenance, receipt,
+lineage, and collection payloads. Its only borrowed pointer is the data address
+in the transient content view. `akashic/library/record-codec.f` defines pure
+caller-buffer V1 encoders, decoders, and validators. Neither module calls VFS,
+publishes a resource, selects a store path, or imports a sibling domain or UI.
+
+The initial limits are:
+
+| Contract | Bound |
+| --- | ---: |
+| catalog entries | 128 |
+| collections | 32 |
+| members per collection | 128 |
+| tags per entry | 16 |
+| lineage locators per entry | 4 |
+| UTF-8 content bytes | 65,536 |
+| retained managed-document revisions | 4 |
+| query page | 32 |
+| simultaneous projections (future owner) | 8 |
+
+The fixed ABI widths are 328 bytes for an origin, receipt, or lineage slot;
+2,832 bytes for a catalog payload inside a 3,072-byte record; and 224 bytes for
+a collection payload inside a 320-byte record. The transient content view is
+128 bytes. Its 160-byte record header plus at most 65,536 content bytes yields
+a 65,696-byte maximum record. All 128 catalog and 32 collection records occupy
+at most 403,456 bytes before any later store framing.
+
+Canonical validation includes the following guardrails:
+
+- bounded valid UTF-8 with zero-filled unused capacity;
+- strict bytewise sorted, unique tags and exact direct qualified lineage
+  locators;
+- canonical collection bitmaps and membership only in allocated catalog slots;
+- unique catalog RIDs and operation keys, unique collection RIDs and operation
+  keys, and global disjointness between the two sets;
+- a byte-exact immutable import/create receipt retained through archive and
+  tombstone states;
+- active-only revision-one entries, immutable capture content, frozen media,
+  managed-content non-rollback, and no same-revision length/digest
+  substitution; and
+- strict domain-revision and mutation-sequence advancement for every persisted
+  change, with tombstones terminal and byte-identical in all successors.
+
+The receipt's request seal is domain separated. It covers method, initial
+content facts, kind, title, tags, origin, lineage, import contract, source owner,
+and expected catalog generation. The operation key is compared separately. The
+seal excludes Library-generated RID, operation counters, and clocks.
+Collection create seals similarly cover the initial title, bitmap/count, and
+expected catalog generation while excluding the owner-generated RID and
+counters. Therefore an owner can distinguish a true same-key replay from a
+same-key/different-request conflict after later metadata changes or deletion.
+
+The expected catalog generation is a caller precondition, not a persisted
+commit decision. The future owner must look up an operation key first: a sealed
+matching prior request is a replay even if the catalog has since advanced; only
+an unseen key is checked against the requested generation.
+
 ## Initial identity and content classes
 
 The first bounded Library has two closed content classes:
@@ -49,16 +107,16 @@ The first bounded Library has two closed content classes:
    revision. The initial policy retains the current revision and three
    immediately preceding revisions.
 2. A **capture** has a Library-generated RID and one immutable copied content
-   revision. It records the exact admitted origin facts available at import.
-   A reference to changing external content without copied bytes is not a
-   safely retained capture.
+   revision. It records the exact admitted origin facts available at import. A
+   reference to changing external content without copied bytes is not a safely
+   retained capture.
 
-The initial admitted content is bounded valid UTF-8: plain text, Markdown,
-CSV captures, and safe observation projections whose projection contract and
-digest have already been qualified. Binary data, PDF, OCR, live/follow-latest
-links, and automatic ingestion are outside this first contract.
+The initial admitted content is bounded valid UTF-8: plain text, Markdown, CSV
+captures, and safe observation projections whose projection contract and digest
+have already been qualified. Binary data, PDF, OCR, live/follow-latest links,
+and automatic ingestion are outside this first contract.
 
-A Library RID is never copied from an origin. Domain revision, component
+A Library RID is never copied from an origin. Domain revision, content
 revision, store generation, content digest, source/observation identity, and
 activation epoch remain distinct facts. Create and import use a caller
 operation idempotency key; equal content does not imply equal operation or
@@ -66,32 +124,74 @@ identity.
 
 ## Provenance and lifecycle
 
-An imported record retains a bounded qualified semantic origin or VFS snapshot
-fact, exact origin revision and digests when available, media/projection facts,
-and import method. It never persists an activation-local `LBIND`, acquisition
-token, live grant, component pointer, or handler choice. Provenance records
-where bytes came from; it does not assert their trustworthiness.
+An imported record retains either a bounded exact qualified semantic origin or
+an exact VFS snapshot locator, along with the admitted origin revision/digest,
+source owner, locator digest, projection/import contract, and import method. It
+never persists an activation-local `LBIND`, acquisition token, live grant,
+component pointer, or handler choice. Provenance records where copied bytes came
+from; it does not assert their trustworthiness.
 
-Archiving preserves the RID, retained content, provenance, and exact-revision
-resolution while hiding the record from normal active views. Removing a
-record from a collection changes membership only. Separately confirmed
-destructive deletion tombstones the RID permanently: the RID is not reused,
-content is no longer returned, and later resolution reports the broken
-reference rather than manufacturing an empty or current replacement. A
-pruned historical revision similarly reports `gone`/`retired`; it never falls
-forward to latest.
+Ordinary VFS import policy is the source owner `vfs` plus
+`SHA3-256("org.akashic.library.vfs-snapshot.v1")`. The pure model also permits a
+different present contract digest so a later owner can admit an explicitly
+reviewed migration. The model's structural acceptance is not migration
+authority.
+
+Archiving preserves RID, retained content, provenance, and exact-revision
+resolution while hiding the record from normal active views. Removing a record
+from a collection changes membership only. Separately confirmed destructive
+deletion tombstones the RID permanently: content and mutable descriptive facts
+are erased, the RID and receipt remain, and later resolution reports a broken
+reference rather than manufacturing empty or current content. A pruned
+historical revision likewise reports `gone`/`retired`; it never falls forward
+to latest.
+
+## Record codec and borrowed views
+
+Catalog and collection records use a 64-byte fixed envelope and canonical zero
+padding. Content records are exactly eight-byte aligned. Validation covers
+magic, header CRC, V1 format, declared and actual lengths, flags, payload CRC,
+zero padding, and the complete model. Content records additionally bind the
+payload with SHA3-256 and require valid UTF-8. A checksummed future format is
+reported as unsupported; a damaged header is never trusted for dispatch.
+
+`LIB-CONTENT-RECORD-DECODE` places a borrowed pointer to payload bytes in
+`LIBCT.DATA-A`. The caller must keep the encoded record buffer alive and
+unchanged for the lifetime of that view. `LIB-CONTENT-RECORD-MEASURE` validates
+a complete header and returns the exact bounded record size, but it is not a
+payload-integrity check. Encode/decode aliases are rejected without modifying
+the aliased bytes; an invalid non-aliased decode destination is deterministically
+zeroed.
+
+## Gate 4B store handoff
+
+The pure records intentionally do not encode a VFS topology, catalog
+generation file, commit protocol, recovery scan, or index layout. Gate 4B must
+seal and qualify those choices.
+
+The store must also validate the catalog-to-content relation. A live catalog
+entry's current revision must resolve to content with the same RID, kind,
+media, content revision, length, and digest; the content record's domain
+revision must also be admissible in the store's publication history. Older
+content records may remain valid only when they are one of that entry's
+retained historical revisions. The isolated model cannot decide that relation:
+a content record with the same RID is correct or stale depending on the catalog
+generation and whether it is current or retained. This check therefore belongs
+with the atomic catalog/content publication and recovery logic rather than in a
+new persisted Gate 4A field.
+
+Indexes remain derived and rebuildable. They cannot become authority for
+identity, content, membership, provenance, or lifecycle.
 
 ## Owner and lens rule
 
 Only active/open records should later receive bounded one-RID Library
 projection owners. Acquisition is through the Library domain root, keyed by a
 stable RID rather than current UI selection. The root must validate the exact
-requested domain state and return a semantic reference plus an
-activation-local lifetime token. A client attaches an activation-local
-`LBIND`; failed attachment rolls the token back, and quiescent release is
-idempotent. Registry presence is not authority and cannot bypass owner retain
-accounting. The initial proposed pool bound is eight live projections, subject
-to focused qualification rather than Gate 1 implementation.
+requested domain state and return a semantic reference plus an activation-local
+lifetime token. A client attaches an activation-local `LBIND`; failed
+attachment rolls the token back, and quiescent release is idempotent. Registry
+presence is not authority and cannot bypass owner retain accounting.
 
 Pad is the deep-editing lens for managed documents and a read-only lens for
 captures. Library remains the semantic owner. Explorer may reveal an admitted
@@ -102,38 +202,33 @@ replace, archive, or deletion.
 
 Consequential operations name an exact Library target and expected domain
 state. They never mean the selected Library row, active Pad tab, focused
-applet, or newest revision. Create/import instead names the catalog
-precondition and operation key defined by its future sealed schema.
+applet, or newest revision.
 
-## Intended package boundary
+## Current package and gate order
 
-The reserved domain package is `akashic/library/`. Its eventual model,
-catalog/content stores, index, import semantics, and concrete projection
-adapter remain Library code. The reserved applet package is
-`akashic/tui/applets/library/`; it is a Library lens, not the owner module.
-Portable mechanics move to `interop/` or `utils/fs/` only after two materially
-independent owners prove the same contract.
+The domain package is `akashic/library/`. Model, record codecs, future
+catalog/content stores, index, import semantics, and concrete projection owner
+remain Library code. The reserved applet package is
+`akashic/tui/applets/library/`; it is a Library lens, not the owner. Portable
+mechanics move to `interop/` or `utils/fs/` only after two materially independent
+owners prove the same contract.
 
 The existing `akashic/knowledge/taxonomy.f` and `akashic/store/vault.f` are not
-Library foundations. Neither provides this bounded durable owner, revision,
+Library foundations. Neither supplies this bounded durable owner, revision,
 recovery, identity, or projection contract.
 
-## Current boundary and gate order
+The remaining order is:
 
-Gate 1 adds only these documents and placeholder directories. It deliberately
-adds no `.f`, `.uidl`, manifest, VFS path, record format, stable capability ID,
-handler registration, resource publication, or Library UI.
-
-The later order is:
-
-1. Gate 3 seals durable locator, live-binding, service, and handler contracts.
-2. Gate 4 qualifies the headless Library owner, stores, revisions, recovery,
-   archive/tombstone behavior, index rebuild, and projection lifecycle.
+1. Gate 4B seals durable store topology, atomic publication, retained content,
+   recovery, and idempotent mutation behavior.
+2. The later Gate 4 owner/index work qualifies lifecycle mutation, index
+   rebuild, exact revision resolution, and bounded projections.
 3. Gate 5 makes the standalone Library applet useful.
 4. Gate 6 connects Pad, Explorer, and Desk through typed interop without
    sibling imports.
-5. Gate 8 performs explicit observation collection and the separately
-   approved Streams-draft migration only after Library is proven.
+5. Gate 8 performs explicit observation collection and any separately approved
+   migration only after Library is proven.
 
-Until those gates land, no current component may depend on or route to a
-Library implementation.
+Until each boundary lands, no component may infer its VFS paths, register a
+Library capability, route to a selected row, or treat these pure codecs as a
+durable owner.

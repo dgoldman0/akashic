@@ -21,6 +21,7 @@ from akashic_tui import (  # noqa: E402
     PROVIDED_RE,
     REQUIRE_RE,
     _minify_forth,
+    _matched_failure_markers,
     _parser,
     _requires_megapad_networking,
     _with_megapad_networking,
@@ -28,6 +29,15 @@ from akashic_tui import (  # noqa: E402
     dependency_closure,
 )
 from diskutil import MP64FS, pack_forth_source  # noqa: E402
+
+
+def test_profile_failure_markers_are_checked_across_raw_and_screen_text() -> None:
+    profile = PROFILES["library-model-codecs-contracts"]
+    assert _matched_failure_markers(
+        profile,
+        "old raw output: LIBRARY MODEL CODECS ASSERT 9",
+        "LIBRARY MODEL CODECS PASS 99",
+    ) == ("LIBRARY MODEL CODECS ASSERT",)
 
 
 def test_supported_desktop_smoke_defaults_cover_linked_network_boot() -> None:

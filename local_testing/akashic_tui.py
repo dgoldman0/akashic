@@ -22063,6 +22063,16 @@ def _has_forth_error(raw: str) -> list[str]:
     return [line for line in raw.splitlines() if any(p.search(line) for p in patterns)]
 
 
+def _matched_failure_markers(profile: Profile, *texts: str) -> tuple[str, ...]:
+    """Return each profile failure marker present in any captured guest text."""
+
+    return tuple(
+        marker
+        for marker in profile.failure_markers
+        if any(marker in captured for captured in texts)
+    )
+
+
 @dataclass(frozen=True)
 class AudioHostQualification:
     errors: tuple[str, ...]
@@ -22637,11 +22647,11 @@ def smoke(
             stop_reason = report.reason
             screen = session.snapshot()
             screen_text = screen.text()
-            if all(marker in screen_text for marker in profile.ready_markers):
-                stop_reason = "ready"
-                break
             if any(marker in screen_text for marker in profile.failure_markers):
                 stop_reason = "failed"
+                break
+            if all(marker in screen_text for marker in profile.ready_markers):
+                stop_reason = "ready"
                 break
             if report.reason in ("halted", "stalled"):
                 break
@@ -25499,9 +25509,11 @@ def smoke(
             raw, encoding="utf-8"
         )
         errors = _has_forth_error(raw)
-        missing = [m for m in profile.stable_markers if m not in screen.text()]
+        final_screen_text = screen.text()
+        missing = [m for m in profile.stable_markers if m not in final_screen_text]
+        failure_hits = _matched_failure_markers(profile, raw, final_screen_text)
         elapsed = time.perf_counter() - started
-        ok = not errors and not missing and not journey_errors
+        ok = not errors and not missing and not failure_hits and not journey_errors
 
         print(
             f"Smoke {profile_name}: {'PASS' if ok else 'FAIL'}\n"
@@ -25515,6 +25527,8 @@ def smoke(
             print("  guest errors:")
             for line in errors[-12:]:
                 print(f"    {line}")
+        if failure_hits:
+            print(f"  guest failure markers: {', '.join(failure_hits)}")
         if journey_errors:
             print("  journey errors:")
             for error in journey_errors:
@@ -27026,6 +27040,36 @@ REQUIRE local_testing/gate3a.f
         (
             "local_testing/gate3a.f",
             (AKASHIC_ROOT / "local_testing" / "gate3a-resource-contracts.f").read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["library-model-codecs-contracts"] = Profile(
+    roots=("library/record-codec.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4A pure Library model/codec contracts
+ENTER-USERLAND
+REQUIRE library/record-codec.f
+." [akashic] loading Library model/codec contracts" CR
+REQUIRE local_testing/library-model-codecs.f
+""",
+    ready_markers=("LIBRARY MODEL CODECS PASS",),
+    stable_markers=("LIBRARY MODEL CODECS PASS",),
+    failure_markers=(
+        "LIBRARY MODEL CODECS FAIL",
+        "LIBRARY MODEL CODECS ASSERT",
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/library-model-codecs.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" / "library-model-codecs.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
         ),
     ),
 )
