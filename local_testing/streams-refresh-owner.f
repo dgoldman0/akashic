@@ -822,7 +822,9 @@ VARIABLE _srtc-factory-context
     \ Fault injection happens only after BEGIN is durable and external work
     \ has started.  The final publication save must preserve the raw store
     \ status while publishing the owner's normalized blocked/storage tuple.
-    OSTORE-S-IO _srtc-owner SREF.STORE _OSTORE-BLOCK! DROP
+    VFSNAP-S-IO _srtc-owner SREF.STORE DUP >R
+        STREAMS-OBSERVATION-STORE.CORE _VFSNAP-BLOCK!
+        R> _OSTORE-SYNC DROP
     _srtc-service XIO-TICK
     _srtc-source 5101 9 _srtc-tick-owner
         SREF-S-STORAGE = SWAP 0<> AND _srtc-assert

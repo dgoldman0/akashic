@@ -20923,6 +20923,21 @@ _vfsnc-run
     ),
 )
 
+PROFILES["observation-store-adapter-compile"] = Profile(
+    roots=("tui/applets/streams/observation-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - observation store adapter compile
+ENTER-USERLAND
+REQUIRE tui/applets/streams/observation-store.f
+." OBSERVATION STORE ADAPTER COMPILE PASS" CR
+""",
+    ready_markers=("OBSERVATION STORE ADAPTER COMPILE PASS",),
+    stable_markers=("OBSERVATION STORE ADAPTER COMPILE PASS",),
+    failure_markers=("exception", "Module not found"),
+    linked=True,
+    include_large_sample=False,
+)
+
 PROFILES["streams-source-store-contracts"] = Profile(
     roots=("tui/applets/streams/source-store.f",),
     resources=(),

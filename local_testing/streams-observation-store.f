@@ -26,9 +26,13 @@ VARIABLE _ostc-case-store
 VARIABLE _ostc-status
 VARIABLE _ostc-length
 
-CREATE _ostc-store-main STREAMS-OBSERVATION-STORE-SIZE ALLOT
-CREATE _ostc-store-cold STREAMS-OBSERVATION-STORE-SIZE ALLOT
-CREATE _ostc-store-case STREAMS-OBSERVATION-STORE-SIZE ALLOT
+VARIABLE _ostc-store-main-a
+VARIABLE _ostc-store-cold-a
+VARIABLE _ostc-store-case-a
+
+: _ostc-store-main  ( -- store ) _ostc-store-main-a @ ;
+: _ostc-store-cold  ( -- store ) _ostc-store-cold-a @ ;
+: _ostc-store-case  ( -- store ) _ostc-store-case-a @ ;
 
 : _ostc-candidate  ( -- checkpoint ) _ostc-candidate-a @ ;
 : _ostc-loaded     ( -- checkpoint ) _ostc-loaded-a @ ;
@@ -132,7 +136,7 @@ CREATE _ostc-store-case STREAMS-OBSERVATION-STORE-SIZE ALLOT
         _ostc-vfs @ VFS-RESOLVE 0<> ;
 
 : _ostc-encode-live  ( -- )
-    _ostc-live _STREAMS-OBSERVATION-STORE-ENCODE
+    _ostc-live _ostc-store-main _STREAMS-OBSERVATION-STORE-ENCODE
         _ostc-status ! _ostc-length !
     _ostc-status @ OSTORE-S-OK = _ostc-assert
     _ostc-length @ STREAMS-OBSERVATION-STORE-RECORD-MAX = _ostc-assert ;
@@ -243,8 +247,9 @@ CREATE _ostc-store-case STREAMS-OBSERVATION-STORE-SIZE ALLOT
     _ostc-raw-before _ostc-raw-after _ostc-record= _ostc-assert
 
     _ostc-encode-live
-    _OSTORE-RECORD _ostc-length @ _ostc-store-main _ostc-put-target
-    _STREAMS-OBSERVATION-STORE-SCRATCH-WIPE
+    _ostc-store-main STREAMS-OBSERVATION-STORE.SCRATCH
+        _ostc-length @ _ostc-store-main _ostc-put-target
+    _ostc-store-main _STREAMS-OBSERVATION-STORE-SCRATCH-WIPE
     _ostc-store-cold _ostc-store-init
     _ostc-loaded STREAMS-OBSERVATION-CHECKPOINT-SIZE 90 FILL
     _ostc-loaded STREAMS-OBSERVATION-CHECKPOINT-SIZE _ostc-store-cold
@@ -253,14 +258,15 @@ CREATE _ostc-store-case STREAMS-OBSERVATION-STORE-SIZE ALLOT
     _ostc-stack ;
 
 : _ostc-arm-rollback  ( -- )
-    _ostc-candidate _STREAMS-OBSERVATION-STORE-ENCODE
+    _ostc-candidate _ostc-store-main _STREAMS-OBSERVATION-STORE-ENCODE
         _ostc-status ! _ostc-length !
     _ostc-status @ OSTORE-S-OK = _ostc-assert
     _ostc-store-main STREAMS-OBSERVATION-STORE.REPLACE _VRO-R !
-    _OSTORE-RECORD _ostc-length @
+    _ostc-store-main STREAMS-OBSERVATION-STORE.SCRATCH _ostc-length @
         _ostc-store-main STREAMS-OBSERVATION-STORE.REPLACE VREPL-STAGE$
         _VREPL-CREATE-WRITE VREPL-S-OK = _ostc-assert
-    _OSTORE-RECORD _VRO-DATA ! _ostc-length @ _VRO-LEN !
+    _ostc-store-main STREAMS-OBSERVATION-STORE.SCRATCH
+        _VRO-DATA ! _ostc-length @ _VRO-LEN !
     -1 _VRO-ORIGINAL !
     _VREPL-WRITE-MARKER VREPL-S-OK = _ostc-assert
     _ostc-vfs @ VFS-SYNC 0= _ostc-assert
@@ -323,6 +329,9 @@ CREATE _ostc-store-case STREAMS-OBSERVATION-STORE-SIZE ALLOT
     STREAMS-OBSERVATION-CHECKPOINT-SIZE _ostc-live-a _ostc-allocate
     STREAMS-OBSERVATION-STORE-RECORD-MAX _ostc-raw-before-a _ostc-allocate
     STREAMS-OBSERVATION-STORE-RECORD-MAX _ostc-raw-after-a _ostc-allocate
+    STREAMS-OBSERVATION-STORE-SIZE _ostc-store-main-a _ostc-allocate
+    STREAMS-OBSERVATION-STORE-SIZE _ostc-store-cold-a _ostc-allocate
+    STREAMS-OBSERVATION-STORE-SIZE _ostc-store-case-a _ostc-allocate
     VFS-CUR _ostc-old-vfs !
     2097152 A-XMEM ARENA-NEW DUP 0= _ostc-assert DROP
     VFS-RAM-VTABLE VFS-NEW DUP _ostc-vfs ! 0<> _ostc-assert
@@ -337,6 +346,8 @@ CREATE _ostc-store-case STREAMS-OBSERVATION-STORE-SIZE ALLOT
     _ostc-test-ambiguous-recovery
 
     _ostc-old-vfs @ VFS-USE _ostc-vfs @ VFS-DESTROY
+    _ostc-store-case-a _ostc-free _ostc-store-cold-a _ostc-free
+    _ostc-store-main-a _ostc-free
     _ostc-raw-after-a _ostc-free _ostc-raw-before-a _ostc-free
     _ostc-live-a _ostc-free _ostc-loaded-a _ostc-free
     _ostc-candidate-a _ostc-free

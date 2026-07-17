@@ -154,21 +154,29 @@ VARIABLE _g0-check
     _g0-checkpoint @ 1 _g0-observation-store
         STREAMS-OBSERVATION-STORE-SAVE OSTORE-S-OK = _g0-assert
 
-    _g0-checkpoint @ _STREAMS-OBSERVATION-STORE-ENCODE
+    _g0-checkpoint @ _g0-observation-store
+        _STREAMS-OBSERVATION-STORE-ENCODE
         _g0-status ! _g0-record-u !
     _g0-status @ OSTORE-S-OK = _g0-assert
-    _OSTORE-RECORD STREAMS-OBSERVATION-STORE-HEADER-SIZE +
+    _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
+        STREAMS-OBSERVATION-STORE-HEADER-SIZE +
         DUP C@ 1 XOR SWAP C!
-    _OSTORE-RECORD _g0-record-u @ S" /o-corrupt.bin" _g0-put
+    _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
+        _g0-record-u @ S" /o-corrupt.bin" _g0-put
 
-    _g0-checkpoint @ _STREAMS-OBSERVATION-STORE-ENCODE
+    _g0-checkpoint @ _g0-observation-store
+        _STREAMS-OBSERVATION-STORE-ENCODE
         _g0-status ! _g0-record-u !
     _g0-status @ OSTORE-S-OK = _g0-assert
     STREAMS-OBSERVATION-STORE-FORMAT-V1 1+
-        _OSTORE-RECORD _OSS-H-FORMAT + !
-    _OSTORE-RECORD _STREAMS-OBSERVATION-STORE-HEADER-CRC
-        _OSTORE-RECORD _OSS-H-HEADER-CRC + !
-    _OSTORE-RECORD _g0-record-u @ S" /o-future.bin" _g0-put
+        _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
+        _OSS-H-FORMAT + !
+    _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
+        _STREAMS-OBSERVATION-STORE-HEADER-CRC
+        _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
+        _OSS-H-HEADER-CRC + !
+    _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
+        _g0-record-u @ S" /o-future.bin" _g0-put
     _g0-checkpoint @ FREE ;
 
 : _g0-draft-fixture  ( -- )
