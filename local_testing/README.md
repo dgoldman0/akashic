@@ -52,6 +52,15 @@ unsigned-wrap boundaries, empty/null policy separation, half-open overlap, exact
 schema bytes, UTF-8/type/length rejection, and the distinct 110-byte semantic
 RREF and 516-byte VFS-locator text bounds.
 
+`library-model-codecs-contracts` qualifies the Gate 4A caller-owned Library
+model and its catalog, collection, and immutable content-revision records.
+`library-store-format-contracts` qualifies the VFS-free Gate 4B arena,
+complete-bank, and head formats: fixed geometry, exact wire CRC/SHA3 vectors,
+checksum-before-future dispatch, hostile aliases and nonmutation, duplicated
+cross-seals, and the absolute-offset ordered content-frame chain. Neither
+profile selects paths, performs VFS I/O, publishes resources, or imports an
+applet or sibling domain.
+
 The Streams qualification path is intentionally split by boundary:
 
 - `streams-contracts` covers the owned feed model and typed capabilities.

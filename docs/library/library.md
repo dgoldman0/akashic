@@ -1,9 +1,11 @@
 # Library product boundary
 
 Status: Gate 4A is complete for the pure bounded model and deterministic record
-codecs. Library still has no durable store, VFS path, generation protocol,
-recovery procedure, index, capability, projection owner, applet, UI, or sibling
-integration. Those absences are contract boundaries, not implied behavior.
+codecs. The first Gate 4B landing also seals the pure arena, catalog-bank, head,
+and ordered content-chain formats. Library still has no qualified durable VFS
+owner, path lifecycle, publication/recovery procedure, index, capability,
+projection owner, applet, UI, or sibling integration. Those absences are
+contract boundaries, not implied behavior.
 
 Library is the machine-level corpus of material a user deliberately keeps. A
 Practice may eventually bind Library resources into an activity, but the corpus
@@ -163,11 +165,43 @@ payload-integrity check. Encode/decode aliases are rejected without modifying
 the aliased bytes; an invalid non-aliased decode destination is deterministically
 zeroed.
 
-## Gate 4B store handoff
+## Gate 4B pure storage format now sealed
 
-The pure records intentionally do not encode a VFS topology, catalog
-generation file, commit protocol, recovery scan, or index layout. Gate 4B must
-seal and qualify those choices.
+`akashic/library/store-format.f` remains VFS-free. It defines three bounded V1
+shapes for the future serialized owner:
+
+- a 655,360-byte immutable content arena with a 512-byte header and 654,848
+  bytes of append-only, sector-framed content;
+- two possible 403,968-byte complete catalog banks, each with a 512-byte header
+  and the full 403,456-byte catalog/collection body; and
+- a 448-byte VFS fixed-snapshot payload that names exactly one verified bank
+  and repeats the selected generation, catalog, arena, tail, count, and content
+  chain facts.
+
+The bank header seals its complete body with CRC32 and SHA3-256. The head seals
+the complete selected bank with SHA3-256 and must agree with its decoded bank
+and immutable arena facts. Arena, bank, and head headers check CRC before future
+format dispatch, require their geometry and unused bytes to be canonical, and
+refuse aliased or hostile caller spans without partial decoded output.
+
+Content publication is ordered independently of file layout. The genesis and
+step hashes use distinct `org.akashic.library.content-chain.*.v1` domains. Each
+step binds the previous chain, absolute arena byte offset, sector span, and the
+SHA3-256 digest of the complete padded record frame. Thus a chosen head can
+seal one exact committed prefix without silently adopting an orphan suffix.
+
+This is a new V1 format for a domain with no prior Library store or Library
+bytes to migrate. It does not reinterpret or retain compatibility wrappers for
+the taxonomy/vault prototypes, Streams draft, or another owner's durable state.
+No existing format/path, ownership, authority, content class, retention bound,
+or legacy surface changes here, so this landing trips none of the contract's
+mandatory return-to-user triggers.
+
+## Remaining Gate 4B VFS-owner handoff
+
+The pure formats intentionally do not choose VFS paths, perform allocation or
+I/O, publish a new head, select recovery evidence, or define an index layout.
+The remaining Gate 4B owner must seal and qualify those choices.
 
 The store must also validate the catalog-to-content relation. A live catalog
 entry's current revision must resolve to content with the same RID, kind,
@@ -219,8 +253,9 @@ recovery, identity, or projection contract.
 
 The remaining order is:
 
-1. Gate 4B seals durable store topology, atomic publication, retained content,
-   recovery, and idempotent mutation behavior.
+1. Complete Gate 4B by qualifying private VFS paths, atomic publication,
+   retained content, recovery, and idempotent mutation behavior over the sealed
+   pure formats.
 2. The later Gate 4 owner/index work qualifies lifecycle mutation, index
    rebuild, exact revision resolution, and bounded projections.
 3. Gate 5 makes the standalone Library applet useful.

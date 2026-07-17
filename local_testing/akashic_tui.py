@@ -27075,6 +27075,36 @@ REQUIRE local_testing/library-model-codecs.f
 )
 
 
+PROFILES["library-store-format-contracts"] = Profile(
+    roots=("library/store-format.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4B pure Library storage formats
+ENTER-USERLAND
+REQUIRE library/store-format.f
+." [akashic] loading Library storage-format contracts" CR
+REQUIRE local_testing/library-store-format.f
+""",
+    ready_markers=("LIBRARY STORE FORMAT PASS",),
+    stable_markers=("LIBRARY STORE FORMAT PASS",),
+    failure_markers=(
+        "LIBRARY STORE FORMAT FAIL",
+        "LIBRARY STORE FORMAT ASSERT",
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/library-store-format.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" / "library-store-format.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
 def _positive_mib(value: str) -> int:
     try:
         parsed = int(value)

@@ -40,6 +40,33 @@ def test_profile_failure_markers_are_checked_across_raw_and_screen_text() -> Non
     ) == ("LIBRARY MODEL CODECS ASSERT",)
 
 
+def test_library_store_format_profile_packages_its_exact_contract_leaf() -> None:
+    profile = PROFILES["library-store-format-contracts"]
+    assert profile.roots == ("library/store-format.f",)
+    assert profile.ready_markers == ("LIBRARY STORE FORMAT PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert {
+        "LIBRARY STORE FORMAT FAIL",
+        "LIBRARY STORE FORMAT ASSERT",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/library-store-format.f",
+    )
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+    } <= closure
+    assert all(not module.startswith("tui/") for module in closure)
+    assert all(not module.startswith("agent/") for module in closure)
+    assert all(not module.startswith("practice/") for module in closure)
+    assert all("vfs" not in module for module in closure)
+
+
 def test_supported_desktop_smoke_defaults_cover_linked_network_boot() -> None:
     args = _parser().parse_args(["smoke", "--profile", "desktop"])
     assert args.max_steps == DEFAULT_SMOKE_MAX_STEPS == 8_000_000_000

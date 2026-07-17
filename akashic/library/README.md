@@ -1,7 +1,8 @@
 # Library domain package
 
-Status: Gate 4A pure model and deterministic record codecs are implemented and
-qualified. The package still has no store, VFS topology, index, owner,
+Status: Gate 4A pure model and deterministic record codecs and the first Gate
+4B pure storage-format layer are implemented and qualified. The package still
+has no qualified VFS publication/recovery owner, index, domain owner,
 projection, applet, UI, or Streams integration.
 
 The current modules are:
@@ -11,8 +12,10 @@ The current modules are:
   cross-record transition checks.
 - `record-codec.f`: deterministic V1 envelopes for catalog entries,
   collections, and immutable content revisions.
+- `store-format.f`: deterministic V1 arena, catalog-bank, and head formats plus
+  the ordered content-frame commitment used by the future VFS owner.
 
-Neither module performs I/O, chooses a path, publishes a resource, or imports a
+These modules perform no I/O, choose no path, publish no resource, and import no
 sibling domain or applet.
 
 ## Sealed Gate 4A bounds
@@ -80,10 +83,48 @@ record size from a complete V1 header; it does not prove payload integrity.
 Source, payload, and destination aliases are rejected before modifying the
 aliased bytes.
 
-## Deliberate next-gate boundary
+## Sealed Gate 4B pure store ABI
 
-Gate 4B must choose store paths, generation/commit order, recovery, and content
-publication. That store also owns the cross-record catalog-to-content check:
+The content arena is 655,360 bytes: one 512-byte immutable header followed by
+654,848 bytes of sector-framed content. Each frame is the exact aligned content
+record padded to a 512-byte boundary and is at most 66,048 bytes. Its immutable
+arena identity, exact committed tail, record count, and ordered chain prevent
+an owner from treating uncommitted suffix bytes as published content.
+
+Each complete catalog bank is 403,968 bytes: one 512-byte header followed by
+the complete 403,456-byte fixed catalog/collection body. The body holds all 128
+catalog slots followed by all 32 collection slots. Its header seals generation,
+counts, mutation sequence, arena identity and committed content facts, body
+CRC32, and body SHA3-256. A 448-byte VFS fixed-snapshot payload seals the chosen
+bank, complete-bank SHA3-256, the same catalog/content facts, and all format
+geometry. The payload generation and selected bank generation must equal the
+outer snapshot generation.
+
+Arena, bank, and head headers have canonical zero tails. They verify CRC before
+format dispatch, so intact future evidence is reported as unsupported while a
+damaged future header remains a checksum failure. Caller-owned decoded facts
+are written only after full validation, aliases with codec-private state are
+rejected, and head-to-bank/head-to-arena comparisons require every duplicated
+generation, catalog, mutation, arena, tail, count, and chain fact to agree.
+
+The content commitment starts at
+`SHA3-256("org.akashic.library.content-chain.genesis.v1")`. Each step commits the
+prior chain, absolute arena offset, sector span, and SHA3-256 of the complete
+padded frame under the separate
+`org.akashic.library.content-chain.step.v1` domain. Absolute offsets and spans
+are bounded, sector aligned, and encoded as native little-endian 64-bit cells.
+
+There is no earlier Library store or Library on-disk state to migrate. These V1
+shapes are new and intentionally do not decode or wrap the old taxonomy/vault
+prototypes, Streams draft bytes, or another owner's files. No existing durable
+format or path changes in this landing; future Library formats remain explicit
+unsupported evidence until a separately qualified migration exists.
+
+## Deliberate VFS-owner boundary
+
+The remaining Gate 4B VFS owner must choose private paths, generation/commit
+order, recovery, and content publication. It also owns the cross-record
+catalog-to-content check:
 the catalog's current revision must resolve to its current content facts, while
 older content is valid only inside the bounded retained window. This cannot be
 decided by the isolated record codec because the same entry legitimately has
