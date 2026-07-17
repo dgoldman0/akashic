@@ -95,21 +95,27 @@ VARIABLE _g0-check
     _g0-registry 0 _g0-source-store STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-OK = _g0-assert
 
-    _g0-registry _STREAMS-SOURCE-STORE-ENCODE
+    _g0-registry _g0-source-store _STREAMS-SOURCE-STORE-ENCODE-INTO
         _g0-status ! _g0-record-u !
     _g0-status @ SSSTORE-S-OK = _g0-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+    _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
+        STREAMS-SOURCE-STORE-HEADER-SIZE +
         DUP C@ 1 XOR SWAP C!
-    _SSSTORE-RECORD _g0-record-u @ S" /s-corrupt.bin" _g0-put
+    _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
+        _g0-record-u @ S" /s-corrupt.bin" _g0-put
 
-    _g0-registry _STREAMS-SOURCE-STORE-ENCODE
+    _g0-registry _g0-source-store _STREAMS-SOURCE-STORE-ENCODE-INTO
         _g0-status ! _g0-record-u !
     _g0-status @ SSSTORE-S-OK = _g0-assert
     STREAMS-SOURCE-STORE-FORMAT-V1 1+
-        _SSSTORE-RECORD _SSS-H-FORMAT + !
-    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
-        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
-    _SSSTORE-RECORD _g0-record-u @ S" /s-future.bin" _g0-put ;
+        _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
+        _SSS-H-FORMAT + !
+    _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
+        _STREAMS-SOURCE-STORE-HEADER-CRC
+        _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
+        _SSS-H-HEADER-CRC + !
+    _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
+        _g0-record-u @ S" /s-future.bin" _g0-put ;
 
 : _g0-candidate!  ( -- )
     _g0-candidate OCHK-CANDIDATE-INIT

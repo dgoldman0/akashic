@@ -19931,23 +19931,27 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
 
 : _soc-encode-current  ( instance -- )
     _STM-ACTIVATE
-    _STM-SOURCE-REGISTRY _STREAMS-SOURCE-STORE-ENCODE
+    _STM-SOURCE-REGISTRY _STM-SOURCE-STORE
+        _STREAMS-SOURCE-STORE-ENCODE-INTO
         _soc-record-status ! _soc-record-u !
     _soc-record-status @ SSSTORE-S-OK = _soc-assert ;
 
+: _soc-record  ( -- record )
+    _STM-SOURCE-STORE STREAMS-SOURCE-STORE.SCRATCH ;
+
 : _soc-install-corrupt  ( instance -- )
     _soc-encode-current
-    _SSSTORE-RECORD DUP C@ 1 XOR SWAP C!
-    _SSSTORE-RECORD _soc-record-u @ _STM-SOURCE-STORE
+    _soc-record DUP C@ 1 XOR SWAP C!
+    _soc-record _soc-record-u @ _STM-SOURCE-STORE
         STREAMS-SOURCE-STORE-PATH$ _soc-put ;
 
 : _soc-install-future  ( instance -- )
     _soc-encode-current
     STREAMS-SOURCE-STORE-FORMAT-V1 1+
-        _SSSTORE-RECORD _SSS-H-FORMAT + !
-    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
-        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
-    _SSSTORE-RECORD _soc-record-u @ _STM-SOURCE-STORE
+        _soc-record _SSS-H-FORMAT + !
+    _soc-record _STREAMS-SOURCE-STORE-HEADER-CRC
+        _soc-record _SSS-H-HEADER-CRC + !
+    _soc-record _soc-record-u @ _STM-SOURCE-STORE
         STREAMS-SOURCE-STORE-PATH$ _soc-put ;
 
 : _soc-blocked-create  ( instance expected-store-status -- )
@@ -21014,16 +21018,22 @@ CREATE _ssoc-rid RID-SIZE ALLOT
 : _ssoc-span-unchanged?  ( a u -- flag )
     DUP >R _ssoc-span-snapshot @ R> COMPARE 0= ;
 
-: _ssoc-dirty-scratch  ( -- )
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 FILL
+: _ssoc-record  ( store -- record )
+    STREAMS-SOURCE-STORE.SCRATCH ;
+: _ssoc-encoding-record  ( -- record )
+    _ssoc-store-a @ _ssoc-record ;
+: _ssoc-alias-record  ( -- record )
+    _ssoc-alias @ _ssoc-record ;
+: _ssoc-dirty-scratch  ( store -- )
+    _ssoc-record STREAMS-SOURCE-STORE-RECORD-MAX 77 FILL
     _VREPL-CHECK-BUFFER _VREPL-CHECK-SIZE 78 FILL ;
-: _ssoc-dirty-record  ( -- )
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 FILL ;
-: _ssoc-record-zero?  ( -- flag )
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 0 _ssoc-filled? ;
+: _ssoc-dirty-record  ( store -- )
+    _ssoc-record STREAMS-SOURCE-STORE-RECORD-MAX 77 FILL ;
+: _ssoc-record-zero?  ( store -- flag )
+    _ssoc-record STREAMS-SOURCE-STORE-RECORD-MAX 0 _ssoc-filled? ;
 : _ssoc-vrepl-scratch-zero?  ( -- flag )
     _VREPL-CHECK-BUFFER _VREPL-CHECK-SIZE 0 _ssoc-filled? ;
-: _ssoc-scratch-zero?  ( -- flag )
+: _ssoc-scratch-zero?  ( store -- flag )
     _ssoc-record-zero? _ssoc-vrepl-scratch-zero? AND ;
 
 : _ssoc-artifacts-clean?  ( store -- flag )
@@ -21091,15 +21101,17 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     _ssoc-registry-two @ SSREG.GENERATION @ 2 = _ssoc-assert
     _ssoc-registry-two @ STREAMS-SOURCE-REGISTRY-VALID? _ssoc-assert ;
 
-: _ssoc-encode-two  ( -- )
-    _ssoc-registry-two @ _STREAMS-SOURCE-STORE-ENCODE
+: _ssoc-encode-two  ( store -- )
+    DUP >R _ssoc-registry-two @ SWAP _STREAMS-SOURCE-STORE-ENCODE-INTO
         _ssoc-status ! _ssoc-record-u !
     _ssoc-status @ SSSTORE-S-OK = _ssoc-assert
-    _ssoc-record-u @ STREAMS-SOURCE-STORE-RECORD-MAX = _ssoc-assert ;
+    _ssoc-record-u @ STREAMS-SOURCE-STORE-RECORD-MAX = _ssoc-assert
+    R> _ssoc-record STREAMS-SOURCE-STORE-HEADER-SIZE +
+        _SSSTORE-UNUSED-SLOTS-ZERO? _ssoc-assert ;
 
 : _ssoc-load-blocked  ( expected-status store -- )
     _ssoc-case-store ! _ssoc-expected !
-    _ssoc-destination-fill _ssoc-dirty-scratch
+    _ssoc-destination-fill _ssoc-case-store @ _ssoc-dirty-scratch
     _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE
         _ssoc-case-store @ STREAMS-SOURCE-STORE-LOAD
         _ssoc-expected @ = _ssoc-assert
@@ -21107,49 +21119,53 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     _ssoc-case-store @ STREAMS-SOURCE-STORE-BLOCKED? _ssoc-assert
     _ssoc-case-store @ STREAMS-SOURCE-STORE.LAST-STATUS @
         _ssoc-expected @ = _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert ;
+    _ssoc-case-store @ _ssoc-scratch-zero? _ssoc-assert ;
 
 : _ssoc-test-basic  ( -- )
     _ssoc-store-a @ _ssoc-store-init
-    _ssoc-destination-fill _ssoc-dirty-scratch
+    _ssoc-destination-fill _ssoc-store-a @ _ssoc-dirty-scratch
     _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-a @
         STREAMS-SOURCE-STORE-LOAD SSSTORE-S-ABSENT = _ssoc-assert
     _ssoc-destination-unchanged? _ssoc-assert
     _ssoc-store-a @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
     _ssoc-store-a @ STREAMS-SOURCE-STORE.LAST-STATUS @
         SSSTORE-S-ABSENT = _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-a @ _ssoc-scratch-zero? _ssoc-assert
     _ssoc-store-a @ _ssoc-artifacts-clean? _ssoc-assert
 
     \ A fresh generation-zero in-memory registry becomes generation one
     \ through CREATE and is the only candidate accepted with expected zero.
-    _ssoc-dirty-scratch
+    _ssoc-store-a @ _ssoc-dirty-scratch
     _ssoc-registry-one @ 0 _ssoc-store-a @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-OK = _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-a @ _ssoc-scratch-zero? _ssoc-assert
     _ssoc-store-a @ _ssoc-artifacts-clean? _ssoc-assert
     _ssoc-store-a @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
 
     _ssoc-store-cold @ _ssoc-store-init
-    _ssoc-destination-fill _ssoc-dirty-scratch
+    _ssoc-store-a @ _ssoc-record STREAMS-SOURCE-STORE-RECORD-MAX 71 FILL
+    _ssoc-destination-fill _ssoc-store-cold @ _ssoc-dirty-scratch
     _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-cold @
         STREAMS-SOURCE-STORE-LOAD SSSTORE-S-OK = _ssoc-assert
     _ssoc-destination @ _ssoc-registry-one @ _ssoc-registry=
         _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-cold @ _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-a @ _ssoc-record STREAMS-SOURCE-STORE-RECORD-MAX 71
+        _ssoc-filled? _ssoc-assert
+    _ssoc-store-a @ STREAMS-SOURCE-STORE-SCRATCH-WIPE
     _ssoc-store-cold @ _ssoc-artifacts-clean? _ssoc-assert
 
     \ A stale expected generation changes neither target nor candidate and
     \ does not poison the descriptor for the correctly sequenced next save.
     _ssoc-registry-one @ _ssoc-destination @
         STREAMS-SOURCE-REGISTRY-SIZE CMOVE
-    _ssoc-dirty-scratch
+    _ssoc-store-cold @ _ssoc-dirty-scratch
     _ssoc-registry-one @ 0 _ssoc-store-cold @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-CONFLICT = _ssoc-assert
     _ssoc-registry-one @ _ssoc-destination @ _ssoc-registry=
         _ssoc-assert
     _ssoc-store-cold @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-cold @ _ssoc-scratch-zero? _ssoc-assert
     _ssoc-store-cold @ _ssoc-artifacts-clean? _ssoc-assert
 
     _ssoc-store-probe @ _ssoc-store-init _ssoc-destination-fill
@@ -21157,92 +21173,98 @@ CREATE _ssoc-rid RID-SIZE ALLOT
         STREAMS-SOURCE-STORE-LOAD SSSTORE-S-OK = _ssoc-assert
     _ssoc-destination @ _ssoc-registry-one @ _ssoc-registry=
         _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-probe @ _ssoc-scratch-zero? _ssoc-assert
 
-    _ssoc-dirty-scratch
+    _ssoc-store-cold @ _ssoc-dirty-scratch
     _ssoc-registry-two @ 1 _ssoc-store-cold @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-OK = _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-cold @ _ssoc-scratch-zero? _ssoc-assert
     _ssoc-store-cold @ _ssoc-artifacts-clean? _ssoc-assert
     _ssoc-store-probe @ _ssoc-store-init _ssoc-destination-fill
     _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-probe @
         STREAMS-SOURCE-STORE-LOAD SSSTORE-S-OK = _ssoc-assert
     _ssoc-destination @ _ssoc-registry-two @ _ssoc-registry=
         _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert _ssoc-stack ;
+    _ssoc-store-probe @ _ssoc-scratch-zero? _ssoc-assert _ssoc-stack ;
 
 : _ssoc-test-corrupt  ( -- )
-    _ssoc-encode-two
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+    _ssoc-store-a @ _ssoc-encode-two
+    _ssoc-encoding-record STREAMS-SOURCE-STORE-HEADER-SIZE +
         DUP C@ 1 XOR SWAP C!
-    _SSSTORE-RECORD _ssoc-record-u @ _ssoc-store-a @ _ssoc-put-target
+    _ssoc-encoding-record _ssoc-record-u @
+        _ssoc-store-a @ _ssoc-put-target
     _ssoc-store-case @ _ssoc-store-init
     SSSTORE-S-CORRUPT _ssoc-store-case @ _ssoc-load-blocked
     _ssoc-store-case @ _ssoc-artifacts-clean? _ssoc-assert
-    _ssoc-dirty-record
+    _ssoc-store-case @ _ssoc-dirty-record
     _ssoc-registry-two @ 1 _ssoc-store-case @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-CORRUPT = _ssoc-assert
-    _ssoc-record-zero? _ssoc-assert _ssoc-stack ;
+    _ssoc-store-case @ _ssoc-record-zero? _ssoc-assert _ssoc-stack ;
 
 : _ssoc-test-noncanonical-unused  ( -- )
     \ Even with both CRCs recomputed, bytes hidden outside COUNT are not a
     \ canonical V1 record and must fail closed without replacing evidence.
-    _ssoc-registry-one @ _STREAMS-SOURCE-STORE-ENCODE
+    _ssoc-registry-one @ _ssoc-store-a @
+        _STREAMS-SOURCE-STORE-ENCODE-INTO
         _ssoc-status ! _ssoc-record-u !
     _ssoc-status @ SSSTORE-S-OK = _ssoc-assert
-    91 _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+    91 _ssoc-encoding-record STREAMS-SOURCE-STORE-HEADER-SIZE +
         SSREG.RECORDS STREAMS-SOURCE-SIZE + C!
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+    _ssoc-encoding-record STREAMS-SOURCE-STORE-HEADER-SIZE +
         STREAMS-SOURCE-REGISTRY-SIZE
         _STREAMS-SOURCE-STORE-PAYLOAD-CRC
-        _SSSTORE-RECORD _SSS-H-PAYLOAD-CRC + !
-    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
-        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
-    _SSSTORE-RECORD _ssoc-record-u @ _ssoc-store-a @ _ssoc-put-target
+        _ssoc-encoding-record _SSS-H-PAYLOAD-CRC + !
+    _ssoc-encoding-record _STREAMS-SOURCE-STORE-HEADER-CRC
+        _ssoc-encoding-record _SSS-H-HEADER-CRC + !
+    _ssoc-encoding-record _ssoc-record-u @
+        _ssoc-store-a @ _ssoc-put-target
     _ssoc-store-case @ _ssoc-store-init
     SSSTORE-S-CORRUPT _ssoc-store-case @ _ssoc-load-blocked
     _ssoc-store-case @ _ssoc-artifacts-clean? _ssoc-assert
     _ssoc-stack ;
 
 : _ssoc-test-future  ( -- )
-    _ssoc-encode-two
-    2 _SSSTORE-RECORD _SSS-H-FORMAT + !
-    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
-        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
-    _SSSTORE-RECORD _ssoc-record-u @ _ssoc-store-a @ _ssoc-put-target
+    _ssoc-store-a @ _ssoc-encode-two
+    2 _ssoc-encoding-record _SSS-H-FORMAT + !
+    _ssoc-encoding-record _STREAMS-SOURCE-STORE-HEADER-CRC
+        _ssoc-encoding-record _SSS-H-HEADER-CRC + !
+    _ssoc-encoding-record _ssoc-record-u @
+        _ssoc-store-a @ _ssoc-put-target
     _ssoc-store-case @ _ssoc-store-init
     SSSTORE-S-UNSUPPORTED _ssoc-store-case @ _ssoc-load-blocked
     _ssoc-store-case @ _ssoc-artifacts-clean? _ssoc-assert
-    _ssoc-dirty-record
+    _ssoc-store-case @ _ssoc-dirty-record
     _ssoc-registry-two @ 1 _ssoc-store-case @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-UNSUPPORTED = _ssoc-assert
-    _ssoc-record-zero? _ssoc-assert _ssoc-stack ;
+    _ssoc-store-case @ _ssoc-record-zero? _ssoc-assert _ssoc-stack ;
 
 : _ssoc-test-recovery  ( -- )
     \ A valid target plus a corrupt durable intent marker is ambiguous.
     \ RECOVER and all later operations preserve both pieces of evidence.
-    _ssoc-encode-two
-    _SSSTORE-RECORD _ssoc-record-u @ _ssoc-store-a @ _ssoc-put-target
+    _ssoc-store-a @ _ssoc-encode-two
+    _ssoc-encoding-record _ssoc-record-u @
+        _ssoc-store-a @ _ssoc-put-target
     S" bad" _ssoc-store-a @ STREAMS-SOURCE-STORE.REPLACE VREPL-MARKER$
         _ssoc-put
-    _ssoc-store-case @ _ssoc-store-init _ssoc-dirty-scratch
+    _ssoc-store-case @ _ssoc-store-init
+    _ssoc-store-case @ _ssoc-dirty-scratch
     _ssoc-store-case @ STREAMS-SOURCE-STORE-RECOVER
         SSSTORE-S-RECOVERY = _ssoc-assert
     _ssoc-store-case @ STREAMS-SOURCE-STORE-BLOCKED? _ssoc-assert
     _ssoc-store-case @ STREAMS-SOURCE-STORE.LAST-STATUS @
         SSSTORE-S-RECOVERY = _ssoc-assert
-    _ssoc-scratch-zero? _ssoc-assert
+    _ssoc-store-case @ _ssoc-scratch-zero? _ssoc-assert
     _ssoc-store-case @ _ssoc-stage-backup-absent? _ssoc-assert
     _ssoc-store-case @ _ssoc-marker-present? _ssoc-assert
-    _ssoc-destination-fill _ssoc-dirty-record
+    _ssoc-destination-fill _ssoc-store-case @ _ssoc-dirty-record
     _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-case @
         STREAMS-SOURCE-STORE-LOAD SSSTORE-S-RECOVERY = _ssoc-assert
     _ssoc-destination-unchanged? _ssoc-assert
-    _ssoc-record-zero? _ssoc-assert
-    _ssoc-dirty-record
+    _ssoc-store-case @ _ssoc-record-zero? _ssoc-assert
+    _ssoc-store-case @ _ssoc-dirty-record
     _ssoc-registry-two @ 1 _ssoc-store-case @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-RECOVERY = _ssoc-assert
-    _ssoc-record-zero? _ssoc-assert
+    _ssoc-store-case @ _ssoc-record-zero? _ssoc-assert
     _ssoc-store-case @ _ssoc-marker-present? _ssoc-assert _ssoc-stack ;
 
 : _ssoc-test-alias-preflight  ( -- )
@@ -21254,31 +21276,23 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     -8 16 _SSSTORE-SPAN-VALID? 0= _ssoc-assert
     _ssoc-stack
 
-    \ A descriptor may never inhabit codec scratch: INIT and RECOVER reject
-    \ before clearing either caller-visible span.
-    _ssoc-dirty-record
-    S" /scratch-store.bin" _ssoc-vfs @ _SSSTORE-RECORD
-        STREAMS-SOURCE-STORE-INIT-AT SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
-        _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECOVER
-        SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
-        _ssoc-assert
-
-    \ Even invalid caller I/O cannot disguise a descriptor placed in codec
-    \ scratch.  Both public operations reject before wrapper arguments,
-    \ guards, or privacy cleanup can change any byte of the complete span.
-    _ssoc-dirty-record
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
+    \ Each initialized descriptor owns its codec scratch.  A target or caller
+    \ I/O span inside that same descriptor rejects before INIT, LOAD, or SAVE
+    \ can clear the aliased record bytes.
+    _ssoc-store-a @ _ssoc-dirty-record
+    _ssoc-encoding-record STREAMS-SOURCE-STORE-RECORD-MAX
         _ssoc-span-snapshot!
-    0 -1 _SSSTORE-RECORD STREAMS-SOURCE-STORE-LOAD
-        SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
+    _ssoc-encoding-record 16 _ssoc-vfs @ _ssoc-store-a @
+        STREAMS-SOURCE-STORE-INIT-AT SSSTORE-S-INVALID = _ssoc-assert
+    _ssoc-encoding-record STREAMS-SOURCE-STORE-RECORD-MAX
         _ssoc-span-unchanged? _ssoc-assert
-    0 0 _SSSTORE-RECORD STREAMS-SOURCE-STORE-SAVE
+    _ssoc-encoding-record STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-a @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-INVALID = _ssoc-assert
+    _ssoc-encoding-record STREAMS-SOURCE-STORE-RECORD-MAX
+        _ssoc-span-unchanged? _ssoc-assert
+    _ssoc-encoding-record 0 _ssoc-store-a @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
+    _ssoc-encoding-record STREAMS-SOURCE-STORE-RECORD-MAX
         _ssoc-span-unchanged? _ssoc-assert
 
     \ INIT's descriptor and target may not alias its public-wrapper argument
@@ -21354,45 +21368,45 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     \ Codec-scratch aliases are rejected in the public wrapper before its
     \ ordinary privacy wipe.  This exception is what preserves aliased caller
     \ data byte-for-byte on both LOAD and SAVE failures.
-    _ssoc-dirty-record
-    _SSSTORE-RECORD STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+    _ssoc-alias @ _ssoc-dirty-record
+    _ssoc-alias-record STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
         STREAMS-SOURCE-STORE-LOAD SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
         _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX + 1-
         STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
         STREAMS-SOURCE-STORE-LOAD SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
         _ssoc-assert
-    _ssoc-registry-two @ _SSSTORE-RECORD
+    _ssoc-registry-two @ _ssoc-alias-record
         STREAMS-SOURCE-REGISTRY-SIZE CMOVE
-    _SSSTORE-RECORD 1 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
+    _ssoc-alias-record 1 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD _ssoc-registry-two @ _ssoc-registry= _ssoc-assert
-    _ssoc-dirty-record
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+    _ssoc-alias-record _ssoc-registry-two @ _ssoc-registry= _ssoc-assert
+    _ssoc-alias @ _ssoc-dirty-record
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX + 1-
         1 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX 77 _ssoc-filled?
         _ssoc-assert
 
     \ A one-byte scratch overlap protects the caller's entire declared span,
     \ including bytes beyond scratch that wrapper globals would otherwise
     \ mutate.  Exercise both output and fixed-size registry input contracts.
-    _ssoc-dirty-record
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+    _ssoc-alias @ _ssoc-dirty-record
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX + 1-
         STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX + 1-
         STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
         STREAMS-SOURCE-STORE-LOAD
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX + 1-
         STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-unchanged? _ssoc-assert
     SSSTORE-S-INVALID = _ssoc-assert
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX + 1-
         STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX + 1-
         1 _ssoc-alias @ STREAMS-SOURCE-STORE-SAVE
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX + 1-
+    _ssoc-alias-record STREAMS-SOURCE-STORE-RECORD-MAX + 1-
         STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-unchanged? _ssoc-assert
     SSSTORE-S-INVALID = _ssoc-assert
 
@@ -21409,16 +21423,16 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     \ CORRUPT.  A caller span beginning inside validator scratch must reject
     \ before the validator, preserving the complete span.  Keeping the span
     \ above Bank 0 also avoids using the live return stack as caller storage.
-    _ssoc-encode-two
-    255 _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+    _ssoc-store-a @ _ssoc-encode-two
+    255 _ssoc-encoding-record STREAMS-SOURCE-STORE-HEADER-SIZE +
         _SSR-RECORDS + _SSO-LABEL + C!
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
+    _ssoc-encoding-record STREAMS-SOURCE-STORE-HEADER-SIZE +
         STREAMS-SOURCE-REGISTRY-SIZE
         _STREAMS-SOURCE-STORE-PAYLOAD-CRC
-        _SSSTORE-RECORD _SSS-H-PAYLOAD-CRC + !
-    _SSSTORE-RECORD _STREAMS-SOURCE-STORE-HEADER-CRC
-        _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
-    _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
+        _ssoc-encoding-record _SSS-H-PAYLOAD-CRC + !
+    _ssoc-encoding-record _STREAMS-SOURCE-STORE-HEADER-CRC
+        _ssoc-encoding-record _SSS-H-HEADER-CRC + !
+    _ssoc-encoding-record STREAMS-SOURCE-STORE-RECORD-MAX
         _ssoc-alias @ _ssoc-put-target
     _UV-A STREAMS-SOURCE-REGISTRY-SIZE
         _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
@@ -21442,7 +21456,7 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE
         _ssoc-span-unchanged? _ssoc-assert
     SSSTORE-S-INVALID = _ssoc-assert
-    _STREAMS-SOURCE-STORE-SCRATCH-WIPE
+    _ssoc-alias @ STREAMS-SOURCE-STORE-SCRATCH-WIPE
     _ssoc-alias @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
     _ssoc-alias @ _ssoc-artifacts-clean? _ssoc-assert _ssoc-stack ;
 
