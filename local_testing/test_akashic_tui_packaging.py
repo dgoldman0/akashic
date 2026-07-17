@@ -67,6 +67,36 @@ def test_library_store_format_profile_packages_its_exact_contract_leaf() -> None
     assert all("vfs" not in module for module in closure)
 
 
+def test_library_vfs_store_profile_packages_its_exact_contract_leaf() -> None:
+    profile = PROFILES["library-vfs-store-contracts"]
+    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.ready_markers == ("LIBRARY VFS STORE PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert profile.total_sectors == 8192
+    assert {
+        "LIBRARY VFS STORE FAIL",
+        "LIBRARY VFS STORE ASSERT",
+        "LIBRARY VFS STORE STACK",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/library-vfs-store.f",
+    )
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+        "library/vfs-store.f",
+        "utils/fs/vfs-fixed-snapshot.f",
+    } <= closure
+    assert all(not module.startswith("tui/") for module in closure)
+    assert all(not module.startswith("agent/") for module in closure)
+    assert all(not module.startswith("practice/") for module in closure)
+
+
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
     profile = PROFILES["vfs-ram-capacity-contracts"]
     assert profile.roots == ("utils/fs/vfs.f",)

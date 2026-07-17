@@ -27133,6 +27133,38 @@ REQUIRE local_testing/library-store-format.f
 )
 
 
+PROFILES["library-vfs-store-contracts"] = Profile(
+    roots=("library/vfs-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4B Library VFS-owner contracts
+ENTER-USERLAND
+REQUIRE library/vfs-store.f
+." [akashic] loading Library VFS-store contracts" CR
+REQUIRE local_testing/library-vfs-store.f
+""",
+    ready_markers=("LIBRARY VFS STORE PASS",),
+    stable_markers=("LIBRARY VFS STORE PASS",),
+    failure_markers=(
+        "LIBRARY VFS STORE FAIL",
+        "LIBRARY VFS STORE ASSERT",
+        "LIBRARY VFS STORE STACK",
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-vfs-store.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" / "library-vfs-store.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
 def _positive_mib(value: str) -> int:
     try:
         parsed = int(value)

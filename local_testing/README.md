@@ -61,6 +61,15 @@ cross-seals, and the absolute-offset ordered content-frame chain. Neither
 profile selects paths, performs VFS I/O, publishes resources, or imports an
 applet or sibling domain.
 
+`library-vfs-store-contracts` qualifies the first Gate 4B VFS-owner slice. It
+proves the private four-file topology and sole-head commit point, exact
+selected-bank/arena/content validation before fact publication, committed-tail
+and inactive-bank isolation, absent first-use cold readback, same-arena
+idempotency, different-arena conflict, post-bank/pre-head orphan refusal,
+receipt-to-initial-content consistency, future/corrupt ordering, and exact
+cleanup plus successful retry after injected I/O failure. Public content and
+catalog mutation remain outside this profile.
+
 The Streams qualification path is intentionally split by boundary:
 
 - `streams-contracts` covers the owned feed model and typed capabilities.

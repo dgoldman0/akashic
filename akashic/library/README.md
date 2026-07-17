@@ -1,9 +1,10 @@
 # Library domain package
 
-Status: Gate 4A pure model and deterministic record codecs and the first Gate
-4B pure storage-format layer are implemented and qualified. The package still
-has no qualified VFS publication/recovery owner, index, domain owner,
-projection, applet, UI, or Streams integration.
+Status: Gate 4A's pure model and deterministic record codecs, the pure Gate 4B
+storage formats, and the first Gate 4B VFS-owner loading/provisioning slice are
+implemented and qualified. The package still has no public catalog/content
+mutation or inactive-bank publication API, index, domain owner, projection,
+applet, UI, or Streams integration.
 
 The current modules are:
 
@@ -13,10 +14,13 @@ The current modules are:
 - `record-codec.f`: deterministic V1 envelopes for catalog entries,
   collections, and immutable content revisions.
 - `store-format.f`: deterministic V1 arena, catalog-bank, and head formats plus
-  the ordered content-frame commitment used by the future VFS owner.
+  the ordered content-frame commitment used by the VFS owner.
+- `vfs-store.f`: the sole owner of Library-private VFS paths, committed-snapshot
+  loading, absent-store provisioning, and fail-closed recovery classification.
 
-These modules perform no I/O, choose no path, publish no resource, and import no
-sibling domain or applet.
+The model, record codec, and store-format modules remain VFS-free. `vfs-store.f`
+alone performs I/O and chooses the private storage topology. None publishes a
+resource or imports a sibling domain or applet.
 
 ## Sealed Gate 4A bounds
 
@@ -120,22 +124,48 @@ prototypes, Streams draft bytes, or another owner's files. No existing durable
 format or path changes in this landing; future Library formats remain explicit
 unsupported evidence until a separately qualified migration exists.
 
-## Deliberate VFS-owner boundary
+## Sealed VFS loading and first-use boundary
 
-The remaining Gate 4B VFS owner must choose private paths, generation/commit
-order, recovery, and content publication. It also owns the cross-record
-catalog-to-content check:
-the catalog's current revision must resolve to its current content facts, while
-older content is valid only inside the bounded retained window. This cannot be
-decided by the isolated record codec because the same entry legitimately has
-both a current and retained historical record.
+`vfs-store.f` privately owns `/library/head.bin`, the two complete catalog
+banks, and the fixed content arena. Callers cannot select or discover a path.
+The fixed-snapshot head is the sole commit point: loading hashes the complete
+selected bank before dispatching its format, validates the selected bank body,
+immutable arena header, committed content-frame prefix, ordered chain, catalog
+and collection constraints, and catalog-to-content relations, and publishes
+caller-visible facts only after the whole candidate and resource cleanup pass.
+An inactive bank and bytes beyond the committed content tail are not adopted.
 
-Ordinary VFS imports must be owner-qualified against
+Catalog-to-content validation requires each live current revision to resolve to
+the same RID, kind, media, revision, length, and digest; retained historical
+frames must remain inside the sealed window. Every frame for one RID is ordered
+strictly by content and domain revision. If the immutable receipt's initial
+revision is retained, its media, length, and digest must match that frame even
+after later content becomes current. These checks belong here because the same
+entry legitimately has both current and retained historical records.
+
+On an entirely absent store, provisioning creates exactly the two fixed banks
+and content arena, cold-verifies their geometry and initial evidence, writes
+the empty generation-one bank header only after its body is ready, and commits
+the head last. A retry with the same arena identity performs no write; a
+different identity conflicts. A bank written without its head is preserved as
+recovery evidence and is never silently resumed or adopted.
+
+## Remaining Gate 4B mutation boundary
+
+This slice deliberately exposes no catalog/content append or inactive-bank
+publication operation. Its internal head-save helper exists only to complete
+provisioning and qualification fixtures; it is not a public mutation contract.
+The next Gate 4B slice must define and qualify durable content-first mutation,
+inactive-bank construction/readback, head publication, interrupted-publication
+recovery, capacity behavior, and operation idempotency over these load rules.
+Indexes remain derived and rebuildable and have not landed.
+
+Ordinary VFS imports must later be owner-qualified against
 `SHA3-256("org.akashic.library.vfs-snapshot.v1")`. The pure model deliberately
 admits another present contract digest for an explicitly reviewed migration;
-the future import owner decides whether that exception is authorized.
+the import owner will decide whether that exception is authorized.
 
-No current code should infer a VFS path, generation scheme, retry lookup order,
-index policy, capability, projection owner, or UI route from these records.
+No caller should infer a VFS path, generation scheme, retry lookup order, index
+policy, capability, projection owner, or UI route from these records.
 For the broader product boundary and gate handoff, see
 [`../../docs/library/library.md`](../../docs/library/library.md).

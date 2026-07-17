@@ -54,6 +54,7 @@ local_testing/*
 !local_testing/gate3a-resource-contracts.f
 !local_testing/library-model-codecs.f
 !local_testing/library-store-format.f
+!local_testing/library-vfs-store.f
 !local_testing/vfs-ram-capacity.f
 !local_testing/vfs-fixed-snapshot.f
 !local_testing/hres-contracts.f

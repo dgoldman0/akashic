@@ -1,11 +1,12 @@
 # Library product boundary
 
 Status: Gate 4A is complete for the pure bounded model and deterministic record
-codecs. The first Gate 4B landing also seals the pure arena, catalog-bank, head,
-and ordered content-chain formats. Library still has no qualified durable VFS
-owner, path lifecycle, publication/recovery procedure, index, capability,
-projection owner, applet, UI, or sibling integration. Those absences are
-contract boundaries, not implied behavior.
+codecs. Gate 4B now has sealed pure arena, catalog-bank, head, and ordered-chain
+formats plus a qualified first VFS-owner slice for committed-snapshot loading
+and absent-store provisioning. Library still has no public catalog/content
+mutation or inactive-bank publication API, index, capability, projection owner,
+applet, UI, or sibling integration. Those absences are contract boundaries,
+not implied behavior.
 
 Library is the machine-level corpus of material a user deliberately keeps. A
 Practice may eventually bind Library resources into an activity, but the corpus
@@ -168,7 +169,7 @@ zeroed.
 ## Gate 4B pure storage format now sealed
 
 `akashic/library/store-format.f` remains VFS-free. It defines three bounded V1
-shapes for the future serialized owner:
+shapes for the serialized owner:
 
 - a 655,360-byte immutable content arena with a 512-byte header and 654,848
   bytes of append-only, sector-framed content;
@@ -197,22 +198,47 @@ No existing format/path, ownership, authority, content class, retention bound,
 or legacy surface changes here, so this landing trips none of the contract's
 mandatory return-to-user triggers.
 
-## Remaining Gate 4B VFS-owner handoff
+## Gate 4B VFS loading and provisioning now sealed
 
-The pure formats intentionally do not choose VFS paths, perform allocation or
-I/O, publish a new head, select recovery evidence, or define an index layout.
-The remaining Gate 4B owner must seal and qualify those choices.
+`akashic/library/vfs-store.f` is the sole owner of the private
+`/library/head.bin`, two complete catalog banks, and fixed content arena. It
+exposes no path accessor. The fixed-snapshot head is the only commit point;
+neither the inactive bank nor content bytes beyond the committed tail are
+selected by discovery.
 
-The store must also validate the catalog-to-content relation. A live catalog
-entry's current revision must resolve to content with the same RID, kind,
-media, content revision, length, and digest; the content record's domain
-revision must also be admissible in the store's publication history. Older
-content records may remain valid only when they are one of that entry's
-retained historical revisions. The isolated model cannot decide that relation:
-a content record with the same RID is correct or stale depending on the catalog
-generation and whether it is current or retained. This check therefore belongs
-with the atomic catalog/content publication and recovery logic rather than in a
-new persisted Gate 4A field.
+Loading keeps all decoded facts private until it has recovered and validated
+the head, hashed the complete selected bank before format dispatch, checked the
+bank body and immutable arena, scanned the exact committed content prefix and
+ordered chain, and closed every FD/hash/CRC/CWD/VFS-selector resource. Only
+then are the head, bank, arena, and generation facts published. Any corrupt,
+checksummed-future, catalog/content-mismatched, or interrupted evidence clears
+those public facts and fails closed.
+
+A live catalog entry's current revision must resolve to content with the same
+RID, kind, media, revision, length, and digest, and every revision inside its
+logical retained window must be present. Older append-only frames may remain as
+non-resolvable pruned or tombstoned evidence, but are not treated as retained;
+each RID's content and domain revisions must still increase strictly across the
+whole committed prefix. Whenever the immutable receipt's initial revision is
+present there, its media, length, and digest must match that frame. The isolated
+model cannot decide these relations because a content record with the same RID
+can be current, retained, pruned, or tombstoned under the selected publication.
+
+For an entirely absent corpus, provisioning creates exactly the two bounded
+banks and arena, performs cold readback, writes the empty generation-one active
+bank header after its body, and publishes the head last. Same-arena retries are
+write-free and idempotent; a different arena conflicts. Exact post-bank,
+pre-head evidence is preserved and reported as recovery instead of being
+silently adopted.
+
+## Remaining Gate 4B mutation handoff
+
+The VFS owner does not yet expose catalog/content append or inactive-bank
+publication. Its private head-save helper is used only by provisioning and
+qualification fixtures, not as a durable public mutation API. The remaining
+Gate 4B work must qualify content-first writes, inactive-bank construction and
+readback, sole-head commit, interrupted-publication recovery, capacity, and
+same-operation retry behavior. It must preserve all loading checks above.
 
 Indexes remain derived and rebuildable. They cannot become authority for
 identity, content, membership, provenance, or lifecycle.
@@ -253,9 +279,9 @@ recovery, identity, or projection contract.
 
 The remaining order is:
 
-1. Complete Gate 4B by qualifying private VFS paths, atomic publication,
-   retained content, recovery, and idempotent mutation behavior over the sealed
-   pure formats.
+1. Complete Gate 4B by qualifying content/catalog mutation, inactive-bank and
+   sole-head publication, interrupted-publication recovery, capacity, and
+   idempotent mutation behavior over the sealed loader and pure formats.
 2. The later Gate 4 owner/index work qualifies lifecycle mutation, index
    rebuild, exact revision resolution, and bounded projections.
 3. Gate 5 makes the standalone Library applet useful.
