@@ -5,6 +5,20 @@
 PROVIDED akashic-interop-intent
 
 REQUIRE ../runtime/registry.f
+REQUIRE ../text/utf8.f
+REQUIRE ../utils/memory-span.f
+
+\ Negotiation results are distinct from request-bus dispatch results.  An
+\ intent match nominates a handler; it never grants the handler's capability.
+0 CONSTANT CINT-S-OK
+1 CONSTANT CINT-S-INVALID
+2 CONSTANT CINT-S-NO-HANDLER
+3 CONSTANT CINT-S-AMBIGUOUS
+4 CONSTANT CINT-S-STALE-CHOICE
+5 CONSTANT CINT-S-UNAVAILABLE
+6 CONSTANT CINT-S-STALE-HANDLER
+
+128 CONSTANT CINT-TEXT-MAX
 
 \ Installed intent declaration referenced by COMP.INTENTS-A/N.
  0 CONSTANT _CID-ID-A
@@ -13,18 +27,31 @@ REQUIRE ../runtime/registry.f
 24 CONSTANT _CID-PRIORITY
 32 CONSTANT _CID-FLAGS
 40 CONSTANT _CID-RESERVED
-48 CONSTANT CINT-DESC-SIZE
+48 CONSTANT _CID-OWNER-A
+56 CONSTANT _CID-OWNER-U
+64 CONSTANT _CID-KIND-A
+72 CONSTANT _CID-KIND-U
+80 CONSTANT _CID-MEDIA-A
+88 CONSTANT _CID-MEDIA-U
+96 CONSTANT CINT-DESC-SIZE
 
 : CINTD.ID-A      ( desc -- a ) _CID-ID-A + ;
 : CINTD.ID-U      ( desc -- a ) _CID-ID-U + ;
 : CINTD.CAP       ( desc -- a ) _CID-CAP + ;
 : CINTD.PRIORITY  ( desc -- a ) _CID-PRIORITY + ;
 : CINTD.FLAGS     ( desc -- a ) _CID-FLAGS + ;
+: CINTD.RESERVED  ( desc -- a ) _CID-RESERVED + ;
+: CINTD.OWNER-A   ( desc -- a ) _CID-OWNER-A + ;
+: CINTD.OWNER-U   ( desc -- a ) _CID-OWNER-U + ;
+: CINTD.KIND-A    ( desc -- a ) _CID-KIND-A + ;
+: CINTD.KIND-U    ( desc -- a ) _CID-KIND-U + ;
+: CINTD.MEDIA-A   ( desc -- a ) _CID-MEDIA-A + ;
+: CINTD.MEDIA-U   ( desc -- a ) _CID-MEDIA-U + ;
 
 : CINT-DESC-INIT  ( desc -- ) CINT-DESC-SIZE 0 FILL ;
 
 32 CONSTANT CINT-MAX
-64 CONSTANT CINT-ENTRY-SIZE
+112 CONSTANT CINT-ENTRY-SIZE
 
  0 CONSTANT _CIE-ID-A
  8 CONSTANT _CIE-ID-U
@@ -34,6 +61,12 @@ REQUIRE ../runtime/registry.f
 40 CONSTANT _CIE-FLAGS
 48 CONSTANT _CIE-ORDER
 56 CONSTANT _CIE-RESERVED
+64 CONSTANT _CIE-OWNER-A
+72 CONSTANT _CIE-OWNER-U
+80 CONSTANT _CIE-KIND-A
+88 CONSTANT _CIE-KIND-U
+96 CONSTANT _CIE-MEDIA-A
+104 CONSTANT _CIE-MEDIA-U
 
 : CIE.ID-A       ( entry -- a ) _CIE-ID-A + ;
 : CIE.ID-U       ( entry -- a ) _CIE-ID-U + ;
@@ -41,26 +74,81 @@ REQUIRE ../runtime/registry.f
 : CIE.CAP        ( entry -- a ) _CIE-CAP + ;
 : CIE.PRIORITY   ( entry -- a ) _CIE-PRIORITY + ;
 : CIE.FLAGS      ( entry -- a ) _CIE-FLAGS + ;
+: CIE.ORDER      ( entry -- a ) _CIE-ORDER + ;
+: CIE.OWNER-A    ( entry -- a ) _CIE-OWNER-A + ;
+: CIE.OWNER-U    ( entry -- a ) _CIE-OWNER-U + ;
+: CIE.KIND-A     ( entry -- a ) _CIE-KIND-A + ;
+: CIE.KIND-U     ( entry -- a ) _CIE-KIND-U + ;
+: CIE.MEDIA-A    ( entry -- a ) _CIE-MEDIA-A + ;
+: CIE.MEDIA-U    ( entry -- a ) _CIE-MEDIA-U + ;
 
  0 CONSTANT _CIR-COUNT
  8 CONSTANT _CIR-NEXT-ORDER
 16 CONSTANT _CIR-ENTRIES
-_CIR-ENTRIES CINT-MAX CINT-ENTRY-SIZE * + CONSTANT CINT-SIZE
+_CIR-ENTRIES CINT-MAX CINT-ENTRY-SIZE * + CONSTANT _CIR-EPOCH
+_CIR-EPOCH 8 + CONSTANT CINT-SIZE
 
 : CINT.COUNT    ( router -- a ) _CIR-COUNT + ;
 : CINT.NEXT     ( router -- a ) _CIR-NEXT-ORDER + ;
 : CINT.ENTRIES  ( router -- a ) _CIR-ENTRIES + ;
+: CINT.EPOCH    ( router -- a ) _CIR-EPOCH + ;
+
+VARIABLE _CINT-NEXT-EPOCH
+1 _CINT-NEXT-EPOCH !
+
+: _CINT-FRESH-EPOCH  ( -- epoch )
+    1 _CINT-NEXT-EPOCH +!
+    _CINT-NEXT-EPOCH @ DUP 0= IF
+        DROP 1 _CINT-NEXT-EPOCH ! 1
+    THEN ;
 
 : CINT-NEW  ( -- router ior )
     CINT-SIZE ALLOCATE
     DUP IF EXIT THEN
-    DROP DUP CINT-SIZE 0 FILL 1 OVER CINT.NEXT ! 0 ;
+    DROP DUP CINT-SIZE 0 FILL
+    1 OVER CINT.NEXT !
+    _CINT-FRESH-EPOCH OVER CINT.EPOCH ! 0 ;
 
-: CINT-FREE  ( router -- ) ?DUP IF FREE THEN ;
+: CINT-FREE  ( router -- )
+    ?DUP IF DUP CINT-SIZE 0 FILL FREE THEN ;
+
+: CINT-VALID?  ( router -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CINT.COUNT @ DUP 0>= SWAP CINT-MAX <= AND
+    OVER CINT.NEXT @ 0> AND
+    SWAP CINT.EPOCH @ 0> AND ;
 
 : CINT-NTH  ( index router -- entry | 0 )
-    >R DUP 0< OVER R@ CINT.COUNT @ >= OR IF DROP R> DROP 0 EXIT THEN
+    >R R@ CINT-VALID? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP 0< OVER R@ CINT.COUNT @ >= OR IF DROP R> DROP 0 EXIT THEN
     CINT-ENTRY-SIZE * R> CINT.ENTRIES + ;
+
+: _CINT-TEXT-VALID?  ( addr len -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP CINT-TEXT-MAX > IF 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP -1 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    UTF8-VALID? ;
+
+: _CINT-ID-VALID?  ( addr len -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN _CINT-TEXT-VALID? ;
+
+VARIABLE _CIDV-D
+
+: CINT-DESC-VALID?  ( descriptor -- flag )
+    DUP 0= IF DROP 0 EXIT THEN _CIDV-D !
+    _CIDV-D @ CINTD.ID-A @ _CIDV-D @ CINTD.ID-U @
+        _CINT-ID-VALID? 0= IF 0 EXIT THEN
+    _CIDV-D @ CINTD.CAP @ CAP-DESC-VALID? 0= IF 0 EXIT THEN
+    _CIDV-D @ CINTD.FLAGS @ 0<> IF 0 EXIT THEN
+    _CIDV-D @ CINTD.RESERVED @ 0<> IF 0 EXIT THEN
+    _CIDV-D @ CINTD.OWNER-A @ _CIDV-D @ CINTD.OWNER-U @
+        _CINT-TEXT-VALID? 0= IF 0 EXIT THEN
+    _CIDV-D @ CINTD.KIND-A @ _CIDV-D @ CINTD.KIND-U @
+        _CINT-TEXT-VALID? 0= IF 0 EXIT THEN
+    _CIDV-D @ CINTD.MEDIA-A @ _CIDV-D @ CINTD.MEDIA-U @
+        _CINT-TEXT-VALID? ;
 
 VARIABLE _CIR-ID-A
 VARIABLE _CIR-ID-U
@@ -69,8 +157,29 @@ VARIABLE _CIR-CAP
 VARIABLE _CIR-PRI
 VARIABLE _CIR-R
 
+VARIABLE _CICAP-C
+VARIABLE _CICAP-P
+
+: _CINT-CAP-IN-COMP?  ( cap comp-desc -- flag )
+    _CICAP-C ! _CICAP-P !
+    _CICAP-C @ COMP-CAPS-VALID? 0= IF 0 EXIT THEN
+    _CICAP-C @ COMP.CAPS-N @ 0 ?DO
+        I _CICAP-C @ COMP-CAP-NTH _CICAP-P @ = IF
+            -1 UNLOOP EXIT
+        THEN
+    LOOP
+    0 ;
+
 : CINT-REGISTER  ( id-a id-u comp-desc cap priority router -- ior )
     _CIR-R ! _CIR-PRI ! _CIR-CAP ! _CIR-DESC ! _CIR-ID-U ! _CIR-ID-A !
+    _CIR-R @ CINT-VALID? 0= IF CREG-E-NOT-FOUND EXIT THEN
+    _CIR-ID-A @ _CIR-ID-U @ _CINT-ID-VALID? 0= IF
+        CREG-E-NOT-FOUND EXIT
+    THEN
+    _CIR-CAP @ CAP-DESC-VALID? 0= IF CREG-E-NOT-FOUND EXIT THEN
+    _CIR-CAP @ _CIR-DESC @ _CINT-CAP-IN-COMP? 0= IF
+        CREG-E-NOT-FOUND EXIT
+    THEN
     _CIR-R @ CINT.COUNT @ CINT-MAX >= IF CREG-E-FULL EXIT THEN
     _CIR-R @ CINT.COUNT @ CINT-ENTRY-SIZE *
     _CIR-R @ CINT.ENTRIES + DUP >R
@@ -87,18 +196,56 @@ VARIABLE _CIR-R
 VARIABLE _CIDR-I
 VARIABLE _CIDR-C
 VARIABLE _CIDR-R
+VARIABLE _CIDR-N
+VARIABLE _CIDR-E
 
 : CINT-REGISTER-DESC  ( intent-desc comp-desc router -- ior )
     _CIDR-R ! _CIDR-C ! _CIDR-I !
+    _CIDR-I @ CINT-DESC-VALID? 0= IF CREG-E-NOT-FOUND EXIT THEN
+    _CIDR-C @ COMP-DESC-VALID? 0= IF CREG-E-NOT-FOUND EXIT THEN
+    _CIDR-R @ CINT.COUNT @ _CIDR-N !
     _CIDR-I @ CINTD.ID-A @ _CIDR-I @ CINTD.ID-U @
     _CIDR-C @ _CIDR-I @ CINTD.CAP @ _CIDR-I @ CINTD.PRIORITY @
-    _CIDR-R @ CINT-REGISTER ;
+    _CIDR-R @ CINT-REGISTER ?DUP IF EXIT THEN
+    _CIDR-N @ _CIDR-R @ CINT-NTH DUP 0= IF
+        DROP CREG-E-NOT-FOUND EXIT
+    THEN _CIDR-E !
+    _CIDR-I @ CINTD.FLAGS @ _CIDR-E @ CIE.FLAGS !
+    _CIDR-I @ CINTD.OWNER-A @ _CIDR-E @ CIE.OWNER-A !
+    _CIDR-I @ CINTD.OWNER-U @ _CIDR-E @ CIE.OWNER-U !
+    _CIDR-I @ CINTD.KIND-A @ _CIDR-E @ CIE.KIND-A !
+    _CIDR-I @ CINTD.KIND-U @ _CIDR-E @ CIE.KIND-U !
+    _CIDR-I @ CINTD.MEDIA-A @ _CIDR-E @ CIE.MEDIA-A !
+    _CIDR-I @ CINTD.MEDIA-U @ _CIDR-E @ CIE.MEDIA-U !
+    0 ;
 
 VARIABLE _CIC-DESC
 VARIABLE _CIC-R
 
 : CINT-REGISTER-COMP  ( comp-desc router -- ior )
     _CIC-R ! _CIC-DESC !
+    _CIC-R @ CINT-VALID? 0= IF CREG-E-NOT-FOUND EXIT THEN
+    _CIC-DESC @ COMP-CAPS-VALID? 0= IF CREG-E-NOT-FOUND EXIT THEN
+    _CIC-DESC @ COMP.INTENTS-N @ DUP 0< SWAP CINT-MAX > OR IF
+        CREG-E-NOT-FOUND EXIT
+    THEN
+    _CIC-DESC @ COMP.INTENTS-N @ 0>
+    _CIC-DESC @ COMP.INTENTS-A @ 0= AND IF CREG-E-NOT-FOUND EXIT THEN
+    _CIC-DESC @ COMP.INTENTS-N @ DUP 0> IF
+        CINT-DESC-SIZE * _CIC-DESC @ COMP.INTENTS-A @ SWAP
+        MSPAN-NONWRAPPING? 0= IF CREG-E-NOT-FOUND EXIT THEN
+    ELSE DROP THEN
+    _CIC-R @ CINT.COUNT @ _CIC-DESC @ COMP.INTENTS-N @ +
+        CINT-MAX > IF CREG-E-FULL EXIT THEN
+    \ Validate the entire borrowed declaration array before mutating the
+    \ router so one bad later descriptor cannot leave a partial install.
+    _CIC-DESC @ COMP.INTENTS-N @ 0 ?DO
+        _CIC-DESC @ COMP.INTENTS-A @ I CINT-DESC-SIZE * + DUP
+        CINT-DESC-VALID? 0= IF DROP CREG-E-NOT-FOUND UNLOOP EXIT THEN
+        CINTD.CAP @ _CIC-DESC @ _CINT-CAP-IN-COMP? 0= IF
+            CREG-E-NOT-FOUND UNLOOP EXIT
+        THEN
+    LOOP
     _CIC-DESC @ COMP.INTENTS-N @ 0 ?DO
         _CIC-DESC @ COMP.INTENTS-A @ I CINT-DESC-SIZE * +
         _CIC-DESC @ _CIC-R @ CINT-REGISTER-DESC
@@ -106,22 +253,509 @@ VARIABLE _CIC-R
     LOOP
     0 ;
 
-VARIABLE _CIF-A
-VARIABLE _CIF-U
-VARIABLE _CIF-R
-VARIABLE _CIF-BEST
-VARIABLE _CIF-PRI
+\ ---------------------------------------------------------------------
+\ Activation-local explicit handler choices
+\ ---------------------------------------------------------------------
+\ A choice deliberately contains live router and instance coordinates.  It
+\ is useful only for the current activation and is neither durable identity
+\ nor authority.
 
-: CINT-RESOLVE  ( id-a id-u router -- entry | 0 )
-    _CIF-R ! _CIF-U ! _CIF-A !
-    0 _CIF-BEST ! -2147483648 _CIF-PRI !
-    _CIF-R @ CINT.COUNT @ 0 ?DO
-        I _CIF-R @ CINT-NTH >R
-        R@ CIE.ID-A @ R@ CIE.ID-U @ _CIF-A @ _CIF-U @ STR-STR= IF
-            R@ CIE.PRIORITY @ _CIF-PRI @ > IF
-                R@ _CIF-BEST ! R@ CIE.PRIORITY @ _CIF-PRI !
+0x43484F49 CONSTANT CINT-CHOICE-MAGIC       \ "CHOI"
+1          CONSTANT CINT-CHOICE-ABI
+
+ 0 CONSTANT _CICHO-MAGIC
+ 8 CONSTANT _CICHO-ABI
+16 CONSTANT _CICHO-SIZE
+24 CONSTANT _CICHO-ROUTER
+32 CONSTANT _CICHO-ROUTER-EPOCH
+40 CONSTANT _CICHO-ENTRY-ORDER
+48 CONSTANT _CICHO-INSTANCE-ID
+56 CONSTANT _CICHO-INSTANCE-GEN
+64 CONSTANT _CICHO-FLAGS
+72 CONSTANT _CICHO-RESERVED
+80 CONSTANT CINT-CHOICE-SIZE
+
+: CINTC.MAGIC        ( choice -- a ) _CICHO-MAGIC + ;
+: CINTC.ABI          ( choice -- a ) _CICHO-ABI + ;
+: CINTC.SIZE         ( choice -- a ) _CICHO-SIZE + ;
+: CINTC.ROUTER       ( choice -- a ) _CICHO-ROUTER + ;
+: CINTC.ROUTER-EPOCH ( choice -- a ) _CICHO-ROUTER-EPOCH + ;
+: CINTC.ENTRY-ORDER  ( choice -- a ) _CICHO-ENTRY-ORDER + ;
+: CINTC.INSTANCE-ID  ( choice -- a ) _CICHO-INSTANCE-ID + ;
+: CINTC.INSTANCE-GEN ( choice -- a ) _CICHO-INSTANCE-GEN + ;
+: CINTC.FLAGS        ( choice -- a ) _CICHO-FLAGS + ;
+: CINTC.RESERVED     ( choice -- a ) _CICHO-RESERVED + ;
+
+: CINT-CHOICE-INIT  ( choice -- )
+    DUP CINT-CHOICE-SIZE 0 FILL
+    CINT-CHOICE-MAGIC OVER CINTC.MAGIC !
+    CINT-CHOICE-ABI OVER CINTC.ABI !
+    CINT-CHOICE-SIZE SWAP CINTC.SIZE ! ;
+
+: CINT-CHOICE-VALID?  ( choice -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CINTC.MAGIC @ CINT-CHOICE-MAGIC =
+    OVER CINTC.ABI @ CINT-CHOICE-ABI = AND
+    OVER CINTC.SIZE @ CINT-CHOICE-SIZE = AND
+    OVER CINTC.ROUTER @ 0<> AND
+    OVER CINTC.ROUTER-EPOCH @ 0> AND
+    OVER CINTC.ENTRY-ORDER @ 0> AND
+    OVER CINTC.INSTANCE-ID @ 0> AND
+    OVER CINTC.INSTANCE-GEN @ 0> AND
+    OVER CINTC.FLAGS @ 0= AND
+    SWAP CINTC.RESERVED @ 0= AND ;
+
+VARIABLE _CICE-E
+VARIABLE _CICE-R
+
+: _CINT-ENTRY-IN?  ( entry router -- flag )
+    _CICE-R ! _CICE-E !
+    _CICE-R @ CINT-VALID? 0= IF 0 EXIT THEN
+    _CICE-R @ CINT.COUNT @ 0 ?DO
+        I _CICE-R @ CINT-NTH _CICE-E @ = IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+VARIABLE _CICH-E
+VARIABLE _CICH-I
+VARIABLE _CICH-R
+VARIABLE _CICH-C
+
+: CINT-CHOICE!  ( entry instance router choice -- status )
+    _CICH-C ! _CICH-R ! _CICH-I ! _CICH-E !
+    _CICH-C @ 0= IF CINT-S-INVALID EXIT THEN
+    _CICH-C @ CINT-CHOICE-INIT
+    _CICH-E @ 0= _CICH-I @ 0= OR IF CINT-S-INVALID EXIT THEN
+    _CICH-E @ _CICH-R @ _CINT-ENTRY-IN? 0= IF
+        CINT-S-INVALID EXIT
+    THEN
+    _CICH-I @ CINST-DESC _CICH-E @ CIE.COMP-DESC @ <> IF
+        CINT-S-INVALID EXIT
+    THEN
+    _CICH-I @ CINST.ID @ 0> 0=
+    _CICH-I @ CINST.GENERATION @ 0> 0= OR IF CINT-S-INVALID EXIT THEN
+    _CICH-R @ _CICH-C @ CINTC.ROUTER !
+    _CICH-R @ CINT.EPOCH @ _CICH-C @ CINTC.ROUTER-EPOCH !
+    _CICH-E @ CIE.ORDER @ _CICH-C @ CINTC.ENTRY-ORDER !
+    _CICH-I @ CINST.ID @ _CICH-C @ CINTC.INSTANCE-ID !
+    _CICH-I @ CINST.GENERATION @ _CICH-C @ CINTC.INSTANCE-GEN !
+    CINT-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Caller-owned selector and bounded Open With result
+\ ---------------------------------------------------------------------
+
+0x53454C49 CONSTANT CINT-SELECTOR-MAGIC     \ "SELI"
+1          CONSTANT CINT-SELECTOR-ABI
+
+  0 CONSTANT _CIS-MAGIC
+  8 CONSTANT _CIS-ABI
+ 16 CONSTANT _CIS-SIZE
+ 24 CONSTANT _CIS-ID-A
+ 32 CONSTANT _CIS-ID-U
+ 40 CONSTANT _CIS-OWNER-A
+ 48 CONSTANT _CIS-OWNER-U
+ 56 CONSTANT _CIS-KIND-A
+ 64 CONSTANT _CIS-KIND-U
+ 72 CONSTANT _CIS-MEDIA-A
+ 80 CONSTANT _CIS-MEDIA-U
+ 88 CONSTANT _CIS-CHOICE
+ 96 CONSTANT _CIS-REGISTRY
+104 CONSTANT _CIS-AVAILABLE-XT       \ ( entry data -- CINT-S-* )
+112 CONSTANT _CIS-AVAILABLE-DATA
+120 CONSTANT _CIS-FLAGS
+128 CONSTANT CINT-SELECTOR-SIZE
+
+: CINTS.MAGIC          ( selector -- a ) _CIS-MAGIC + ;
+: CINTS.ABI            ( selector -- a ) _CIS-ABI + ;
+: CINTS.SIZE           ( selector -- a ) _CIS-SIZE + ;
+: CINTS.ID-A           ( selector -- a ) _CIS-ID-A + ;
+: CINTS.ID-U           ( selector -- a ) _CIS-ID-U + ;
+: CINTS.OWNER-A        ( selector -- a ) _CIS-OWNER-A + ;
+: CINTS.OWNER-U        ( selector -- a ) _CIS-OWNER-U + ;
+: CINTS.KIND-A         ( selector -- a ) _CIS-KIND-A + ;
+: CINTS.KIND-U         ( selector -- a ) _CIS-KIND-U + ;
+: CINTS.MEDIA-A        ( selector -- a ) _CIS-MEDIA-A + ;
+: CINTS.MEDIA-U        ( selector -- a ) _CIS-MEDIA-U + ;
+: CINTS.CHOICE         ( selector -- a ) _CIS-CHOICE + ;
+: CINTS.REGISTRY       ( selector -- a ) _CIS-REGISTRY + ;
+: CINTS.AVAILABLE-XT   ( selector -- a ) _CIS-AVAILABLE-XT + ;
+: CINTS.AVAILABLE-DATA ( selector -- a ) _CIS-AVAILABLE-DATA + ;
+: CINTS.FLAGS          ( selector -- a ) _CIS-FLAGS + ;
+
+: CINT-SELECTOR-INIT  ( selector -- )
+    DUP CINT-SELECTOR-SIZE 0 FILL
+    CINT-SELECTOR-MAGIC OVER CINTS.MAGIC !
+    CINT-SELECTOR-ABI OVER CINTS.ABI !
+    CINT-SELECTOR-SIZE SWAP CINTS.SIZE ! ;
+
+VARIABLE _CISV-S
+
+: CINT-SELECTOR-VALID?  ( selector -- flag )
+    DUP 0= IF DROP 0 EXIT THEN _CISV-S !
+    _CISV-S @ CINTS.MAGIC @ CINT-SELECTOR-MAGIC <>
+    _CISV-S @ CINTS.ABI @ CINT-SELECTOR-ABI <> OR
+    _CISV-S @ CINTS.SIZE @ CINT-SELECTOR-SIZE <> OR IF 0 EXIT THEN
+    _CISV-S @ CINTS.FLAGS @ 0<> IF 0 EXIT THEN
+    _CISV-S @ CINTS.ID-A @ _CISV-S @ CINTS.ID-U @
+        _CINT-ID-VALID? 0= IF 0 EXIT THEN
+    _CISV-S @ CINTS.OWNER-A @ _CISV-S @ CINTS.OWNER-U @
+        _CINT-TEXT-VALID? 0= IF 0 EXIT THEN
+    _CISV-S @ CINTS.KIND-A @ _CISV-S @ CINTS.KIND-U @
+        _CINT-TEXT-VALID? 0= IF 0 EXIT THEN
+    _CISV-S @ CINTS.MEDIA-A @ _CISV-S @ CINTS.MEDIA-U @
+        _CINT-TEXT-VALID? 0= IF 0 EXIT THEN
+    _CISV-S @ CINTS.CHOICE @ 0<>
+    _CISV-S @ CINTS.REGISTRY @ 0= AND IF 0 EXIT THEN
+    -1 ;
+
+0x52534549 CONSTANT CINT-RESULT-MAGIC       \ "RSEI"
+1          CONSTANT CINT-RESULT-ABI
+
+ 0 CONSTANT _CIRES-MAGIC
+ 8 CONSTANT _CIRES-ABI
+16 CONSTANT _CIRES-SIZE
+24 CONSTANT _CIRES-STATUS
+32 CONSTANT _CIRES-SELECTED
+40 CONSTANT _CIRES-INSTANCE
+48 CONSTANT _CIRES-COUNT
+56 CONSTANT _CIRES-CANDIDATES
+_CIRES-CANDIDATES CINT-MAX 8 * + CONSTANT CINT-RESULT-SIZE
+
+: CINTR.MAGIC      ( result -- a ) _CIRES-MAGIC + ;
+: CINTR.ABI        ( result -- a ) _CIRES-ABI + ;
+: CINTR.SIZE       ( result -- a ) _CIRES-SIZE + ;
+: CINTR.STATUS     ( result -- a ) _CIRES-STATUS + ;
+: CINTR.SELECTED   ( result -- a ) _CIRES-SELECTED + ;
+: CINTR.INSTANCE   ( result -- a ) _CIRES-INSTANCE + ;
+: CINTR.COUNT      ( result -- a ) _CIRES-COUNT + ;
+: CINTR.CANDIDATES ( result -- a ) _CIRES-CANDIDATES + ;
+
+VARIABLE _CIRT-N
+VARIABLE _CIRT-R
+
+: _CINT-RESULT-COUNT!  ( count result -- )
+    _CIRT-R ! _CIRT-N !
+    _CIRT-N @ CINT-MAX < IF
+        _CIRT-R @ CINTR.CANDIDATES _CIRT-N @ 8 * +
+        CINT-MAX _CIRT-N @ - 8 * 0 FILL
+    THEN
+    _CIRT-N @ _CIRT-R @ CINTR.COUNT ! ;
+
+: CINT-RESULT-INIT  ( result -- )
+    DUP CINT-RESULT-SIZE 0 FILL
+    CINT-RESULT-MAGIC OVER CINTR.MAGIC !
+    CINT-RESULT-ABI OVER CINTR.ABI !
+    CINT-RESULT-SIZE OVER CINTR.SIZE !
+    CINT-S-INVALID SWAP CINTR.STATUS ! ;
+
+VARIABLE _CIRV-R
+VARIABLE _CIRV-N
+VARIABLE _CIRV-S
+
+: _CINT-RESULT-CANDIDATES-VALID?  ( result -- flag )
+    DUP _CIRV-R ! CINTR.COUNT @ _CIRV-N !
+    _CIRV-N @ 0 ?DO
+        I 8 * _CIRV-R @ CINTR.CANDIDATES + @ 0= IF
+            0 UNLOOP EXIT
+        THEN
+    LOOP
+    CINT-MAX _CIRV-N @ ?DO
+        I 8 * _CIRV-R @ CINTR.CANDIDATES + @ 0<> IF
+            0 UNLOOP EXIT
+        THEN
+    LOOP
+    -1 ;
+
+: CINT-RESULT-VALID?  ( result -- flag )
+    DUP 0= IF DROP 0 EXIT THEN _CIRV-R !
+    _CIRV-R @ CINTR.MAGIC @ CINT-RESULT-MAGIC <> IF 0 EXIT THEN
+    _CIRV-R @ CINTR.ABI @ CINT-RESULT-ABI <> IF 0 EXIT THEN
+    _CIRV-R @ CINTR.SIZE @ CINT-RESULT-SIZE <> IF 0 EXIT THEN
+    _CIRV-R @ CINTR.STATUS @ DUP _CIRV-S !
+        DUP 0< SWAP CINT-S-STALE-HANDLER > OR IF 0 EXIT THEN
+    _CIRV-R @ CINTR.COUNT @ DUP _CIRV-N !
+        DUP 0< SWAP CINT-MAX > OR IF 0 EXIT THEN
+    _CIRV-R @ _CINT-RESULT-CANDIDATES-VALID? 0= IF 0 EXIT THEN
+    _CIRV-S @ CINT-S-OK = IF
+        _CIRV-N @ 1 <> IF 0 EXIT THEN
+        _CIRV-R @ CINTR.SELECTED @ DUP 0= IF DROP 0 EXIT THEN
+        _CIRV-R @ CINTR.CANDIDATES @ = EXIT
+    THEN
+    _CIRV-R @ CINTR.SELECTED @ 0<> IF 0 EXIT THEN
+    _CIRV-R @ CINTR.INSTANCE @ 0<> IF 0 EXIT THEN
+    _CIRV-S @ CINT-S-AMBIGUOUS = IF _CIRV-N @ 1 > EXIT THEN
+    _CIRV-N @ 0= ;
+
+: _CINT-RESULT-RAW-NTH  ( index result -- entry | 0 )
+    >R DUP 0< OVER R@ CINTR.COUNT @ >= OR IF
+        DROP R> DROP 0 EXIT
+    THEN
+    8 * R> CINTR.CANDIDATES + @ ;
+
+: CINT-RESULT-NTH  ( index result -- entry | 0 )
+    >R R@ CINT-RESULT-VALID? 0= IF DROP R> DROP 0 EXIT THEN
+    R> _CINT-RESULT-RAW-NTH ;
+
+\ ---------------------------------------------------------------------
+\ Deterministic owner/kind/media negotiation
+\ ---------------------------------------------------------------------
+
+VARIABLE _CIM-EA
+VARIABLE _CIM-EU
+VARIABLE _CIM-QA
+VARIABLE _CIM-QU
+
+: _CINT-DIM-COMPATIBLE?  ( entry-a entry-u query-a query-u -- flag )
+    _CIM-QU ! _CIM-QA ! _CIM-EU ! _CIM-EA !
+    _CIM-EU @ 0= IF -1 EXIT THEN
+    _CIM-QU @ 0= IF -1 EXIT THEN
+    _CIM-EA @ _CIM-EU @ _CIM-QA @ _CIM-QU @ STR-STR= ;
+
+: _CINT-DIM-EXACT?  ( entry-a entry-u query-a query-u -- flag )
+    _CIM-QU ! _CIM-QA ! _CIM-EU ! _CIM-EA !
+    _CIM-EU @ 0= _CIM-QU @ 0= OR IF 0 EXIT THEN
+    _CIM-EA @ _CIM-EU @ _CIM-QA @ _CIM-QU @ STR-STR= ;
+
+VARIABLE _CIN-S
+VARIABLE _CIN-R
+VARIABLE _CIN-O
+VARIABLE _CIN-E
+VARIABLE _CIN-I
+VARIABLE _CIN-N
+VARIABLE _CIN-W
+VARIABLE _CIN-MAX
+VARIABLE _CIN-STATUS
+VARIABLE _CIN-SAW-STALE
+VARIABLE _CIN-BAD-AVAILABILITY
+
+: _CINT-ENTRY-MATCHES?  ( entry -- flag )
+    DUP _CIN-E !
+    DUP CIE.ID-A @ SWAP CIE.ID-U @
+        _CIN-S @ CINTS.ID-A @ _CIN-S @ CINTS.ID-U @ STR-STR= 0= IF
+        0 EXIT
+    THEN
+    _CIN-E @ CIE.OWNER-A @ _CIN-E @ CIE.OWNER-U @
+        _CIN-S @ CINTS.OWNER-A @ _CIN-S @ CINTS.OWNER-U @
+        _CINT-DIM-COMPATIBLE? 0= IF 0 EXIT THEN
+    _CIN-E @ CIE.KIND-A @ _CIN-E @ CIE.KIND-U @
+        _CIN-S @ CINTS.KIND-A @ _CIN-S @ CINTS.KIND-U @
+        _CINT-DIM-COMPATIBLE? 0= IF 0 EXIT THEN
+    _CIN-E @ CIE.MEDIA-A @ _CIN-E @ CIE.MEDIA-U @
+        _CIN-S @ CINTS.MEDIA-A @ _CIN-S @ CINTS.MEDIA-U @
+        _CINT-DIM-COMPATIBLE? ;
+
+: _CINT-OWNER-KIND-RANK  ( entry -- rank )
+    _CIN-E ! 0
+    _CIN-E @ CIE.OWNER-A @ _CIN-E @ CIE.OWNER-U @
+        _CIN-S @ CINTS.OWNER-A @ _CIN-S @ CINTS.OWNER-U @
+        _CINT-DIM-EXACT? IF 2 + THEN
+    _CIN-E @ CIE.KIND-A @ _CIN-E @ CIE.KIND-U @
+        _CIN-S @ CINTS.KIND-A @ _CIN-S @ CINTS.KIND-U @
+        _CINT-DIM-EXACT? IF 1+ THEN ;
+
+: _CINT-MEDIA-EXACT?  ( entry -- flag )
+    DUP CIE.MEDIA-A @ SWAP CIE.MEDIA-U @
+    _CIN-S @ CINTS.MEDIA-A @ _CIN-S @ CINTS.MEDIA-U @
+    _CINT-DIM-EXACT? ;
+
+: _CINT-RESULT-ADD  ( entry -- )
+    _CIN-E !
+    _CIN-O @ CINTR.COUNT @ DUP CINT-MAX >= IF DROP EXIT THEN
+    8 * _CIN-O @ CINTR.CANDIDATES + _CIN-E @ SWAP !
+    1 _CIN-O @ CINTR.COUNT +! ;
+
+: _CINT-COLLECT  ( -- )
+    _CIN-R @ CINT.COUNT @ 0 ?DO
+        I _CIN-R @ CINT-NTH DUP _CINT-ENTRY-MATCHES? IF
+            _CINT-RESULT-ADD
+        ELSE DROP THEN
+    LOOP ;
+
+: _CINT-RANK-OWNER-KIND  ( -- )
+    0 _CIN-MAX !
+    _CIN-O @ CINTR.COUNT @ 0 ?DO
+        I _CIN-O @ _CINT-RESULT-RAW-NTH _CINT-OWNER-KIND-RANK
+        _CIN-MAX @ MAX _CIN-MAX !
+    LOOP
+    0 _CIN-W ! _CIN-O @ CINTR.COUNT @ _CIN-N !
+    _CIN-N @ 0 ?DO
+        I _CIN-O @ _CINT-RESULT-RAW-NTH DUP _CINT-OWNER-KIND-RANK
+        _CIN-MAX @ = IF
+            _CIN-W @ 8 * _CIN-O @ CINTR.CANDIDATES + !
+            1 _CIN-W +!
+        ELSE DROP THEN
+    LOOP
+    _CIN-W @ _CIN-O @ _CINT-RESULT-COUNT! ;
+
+: _CINT-RANK-MEDIA  ( -- )
+    _CIN-S @ CINTS.MEDIA-U @ 0= IF EXIT THEN
+    0 _CIN-MAX !
+    _CIN-O @ CINTR.COUNT @ 0 ?DO
+        I _CIN-O @ _CINT-RESULT-RAW-NTH _CINT-MEDIA-EXACT? IF
+            -1 _CIN-MAX ! LEAVE
+        THEN
+    LOOP
+    _CIN-MAX @ 0= IF EXIT THEN
+    0 _CIN-W ! _CIN-O @ CINTR.COUNT @ _CIN-N !
+    _CIN-N @ 0 ?DO
+        I _CIN-O @ _CINT-RESULT-RAW-NTH DUP _CINT-MEDIA-EXACT? IF
+            _CIN-W @ 8 * _CIN-O @ CINTR.CANDIDATES + !
+            1 _CIN-W +!
+        ELSE DROP THEN
+    LOOP
+    _CIN-W @ _CIN-O @ _CINT-RESULT-COUNT! ;
+
+: _CINT-CANDIDATE?  ( entry -- flag )
+    _CIN-E !
+    _CIN-O @ CINTR.COUNT @ 0 ?DO
+        I _CIN-O @ _CINT-RESULT-RAW-NTH _CIN-E @ = IF
+            -1 UNLOOP EXIT
+        THEN
+    LOOP 0 ;
+
+: _CINT-AVAILABILITY  ( entry -- status )
+    _CIN-S @ CINTS.AVAILABLE-XT @ ?DUP IF
+        >R _CIN-S @ CINTS.AVAILABLE-DATA @ R> EXECUTE DUP
+        CINT-S-OK = OVER CINT-S-UNAVAILABLE = OR
+        OVER CINT-S-STALE-HANDLER = OR IF EXIT THEN
+        DROP CINT-S-INVALID EXIT
+    THEN
+    DROP CINT-S-OK ;
+
+VARIABLE _CICR-C
+VARIABLE _CICR-R
+VARIABLE _CICR-G
+VARIABLE _CICR-E
+VARIABLE _CICR-I
+
+: _CINT-CHOICE-RESOLVE  ( choice router registry -- entry instance status )
+    _CICR-G ! _CICR-R ! _CICR-C !
+    0 _CICR-E ! 0 _CICR-I !
+    _CICR-C @ CINT-CHOICE-VALID? 0= IF
+        0 0 CINT-S-STALE-CHOICE EXIT
+    THEN
+    _CICR-C @ CINTC.ROUTER @ _CICR-R @ <>
+    _CICR-C @ CINTC.ROUTER-EPOCH @ _CICR-R @ CINT.EPOCH @ <> OR IF
+        0 0 CINT-S-STALE-CHOICE EXIT
+    THEN
+    _CICR-R @ CINT.COUNT @ 0 ?DO
+        I _CICR-R @ CINT-NTH DUP CIE.ORDER @
+        _CICR-C @ CINTC.ENTRY-ORDER @ = IF
+            _CICR-E ! LEAVE
+        THEN DROP
+    LOOP
+    _CICR-E @ 0= IF 0 0 CINT-S-STALE-CHOICE EXIT THEN
+    _CICR-G @ 0= IF 0 0 CINT-S-INVALID EXIT THEN
+    _CICR-C @ CINTC.INSTANCE-ID @ _CICR-C @ CINTC.INSTANCE-GEN @
+        _CICR-G @ CREG-INST-FIND DUP _CICR-I ! IF
+        _CICR-I @ CINST-DESC _CICR-E @ CIE.COMP-DESC @ = IF
+            _CICR-E @ _CICR-I @ CINT-S-OK EXIT
+        THEN
+        0 0 CINT-S-STALE-HANDLER EXIT
+    THEN
+    _CICR-E @ CIE.COMP-DESC @ _CICR-G @ CREG-INST-BY-DESC IF
+        0 0 CINT-S-STALE-HANDLER
+    ELSE
+        0 0 CINT-S-UNAVAILABLE
+    THEN ;
+
+: _CINT-USE-EXPLICIT-CHOICE  ( -- status )
+    _CIN-S @ CINTS.CHOICE @ _CIN-R @ _CIN-S @ CINTS.REGISTRY @
+        _CINT-CHOICE-RESOLVE
+    _CIN-STATUS ! _CIN-I ! _CIN-E !
+    _CIN-STATUS @ ?DUP IF
+        0 _CIN-O @ _CINT-RESULT-COUNT! EXIT
+    THEN
+    _CIN-E @ _CINT-CANDIDATE? 0= IF
+        0 _CIN-O @ _CINT-RESULT-COUNT!
+        CINT-S-STALE-CHOICE EXIT
+    THEN
+    _CIN-E @ _CINT-AVAILABILITY ?DUP IF
+        0 _CIN-O @ _CINT-RESULT-COUNT! EXIT
+    THEN
+    1 _CIN-O @ _CINT-RESULT-COUNT!
+    _CIN-E @ _CIN-O @ CINTR.CANDIDATES !
+    _CIN-E @ _CIN-O @ CINTR.SELECTED !
+    _CIN-I @ _CIN-O @ CINTR.INSTANCE !
+    CINT-S-OK ;
+
+: _CINT-FILTER-AVAILABLE  ( -- status )
+    0 _CIN-W ! 0 _CIN-SAW-STALE ! 0 _CIN-BAD-AVAILABILITY !
+    _CIN-O @ CINTR.COUNT @ _CIN-N !
+    _CIN-N @ 0 ?DO
+        I _CIN-O @ _CINT-RESULT-RAW-NTH DUP _CINT-AVAILABILITY
+        DUP CINT-S-OK = IF
+            DROP _CIN-W @ 8 * _CIN-O @ CINTR.CANDIDATES + !
+            1 _CIN-W +!
+        ELSE
+            DUP CINT-S-STALE-HANDLER = IF
+                2DROP -1 _CIN-SAW-STALE !
+            ELSE
+                CINT-S-UNAVAILABLE = IF
+                    DROP
+                ELSE
+                    DROP -1 _CIN-BAD-AVAILABILITY !
+                THEN
             THEN
         THEN
-        R> DROP
     LOOP
-    _CIF-BEST @ ;
+    _CIN-W @ _CIN-O @ _CINT-RESULT-COUNT!
+    _CIN-BAD-AVAILABILITY @ IF
+        0 _CIN-O @ _CINT-RESULT-COUNT! CINT-S-INVALID EXIT
+    THEN
+    _CIN-W @ 0> IF CINT-S-OK EXIT THEN
+    _CIN-SAW-STALE @ IF CINT-S-STALE-HANDLER ELSE CINT-S-UNAVAILABLE THEN ;
+
+: _CINT-STATUS!  ( status -- status )
+    DUP _CIN-O @ CINTR.STATUS ! ;
+
+: CINT-NEGOTIATE  ( selector router result -- status )
+    _CIN-O ! _CIN-R ! _CIN-S !
+    _CIN-O @ 0= IF CINT-S-INVALID EXIT THEN
+    _CIN-O @ CINT-RESULT-INIT
+    _CIN-S @ CINT-SELECTOR-VALID? 0=
+    _CIN-R @ CINT-VALID? 0= OR IF
+        CINT-S-INVALID _CINT-STATUS! EXIT
+    THEN
+    _CINT-COLLECT
+    _CIN-O @ CINTR.COUNT @ 0= IF
+        CINT-S-NO-HANDLER _CINT-STATUS! EXIT
+    THEN
+    _CINT-RANK-OWNER-KIND
+    _CINT-RANK-MEDIA
+    _CIN-S @ CINTS.CHOICE @ IF
+        _CINT-USE-EXPLICIT-CHOICE _CINT-STATUS! EXIT
+    THEN
+    _CIN-S @ CINTS.AVAILABLE-XT @ IF
+        _CINT-FILTER-AVAILABLE ?DUP IF _CINT-STATUS! EXIT THEN
+    THEN
+    _CIN-O @ CINTR.COUNT @ DUP 0= IF
+        DROP CINT-S-NO-HANDLER _CINT-STATUS! EXIT
+    THEN
+    1 = IF
+        0 _CIN-O @ _CINT-RESULT-RAW-NTH _CIN-O @ CINTR.SELECTED !
+        CINT-S-OK _CINT-STATUS!
+    ELSE
+        CINT-S-AMBIGUOUS _CINT-STATUS!
+    THEN ;
+
+\ The legacy convenience call now succeeds only for one equally applicable
+\ handler.  PRIORITY remains readable for source compatibility but never
+\ resolves ambiguity.
+CREATE _CINT-LEGACY-SELECTOR CINT-SELECTOR-SIZE ALLOT
+CREATE _CINT-LEGACY-RESULT CINT-RESULT-SIZE ALLOT
+VARIABLE _CIL-A
+VARIABLE _CIL-U
+VARIABLE _CIL-R
+
+: CINT-RESOLVE-STATUS  ( id-a id-u router -- entry status )
+    _CIL-R ! _CIL-U ! _CIL-A !
+    _CINT-LEGACY-SELECTOR CINT-SELECTOR-INIT
+    _CIL-A @ _CINT-LEGACY-SELECTOR CINTS.ID-A !
+    _CIL-U @ _CINT-LEGACY-SELECTOR CINTS.ID-U !
+    _CINT-LEGACY-SELECTOR _CIL-R @ _CINT-LEGACY-RESULT CINT-NEGOTIATE
+    _CINT-LEGACY-RESULT CINTR.SELECTED @ SWAP ;
+
+: CINT-RESOLVE  ( id-a id-u router -- entry | 0 )
+    CINT-RESOLVE-STATUS DUP CINT-S-OK = IF DROP EXIT THEN
+    2DROP 0 ;
