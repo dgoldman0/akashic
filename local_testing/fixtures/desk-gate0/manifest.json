@@ -1,0 +1,656 @@
+{
+  "schema": "akashic.desk.gate0-baseline.v1",
+  "frozen_on": "2026-07-17",
+  "scope": "Gate 0 retained baseline only; no runtime format or behavior change",
+  "ratification": {
+    "status": "ratified",
+    "basis": "The user stated that the final refinement landed and directed implementation with the contract as guardrail.",
+    "contract": {
+      "workspace_path": "DESK_ECOSYSTEM_CONTRACT.md",
+      "sha256": "02725e3d36b0ee0f1fd7a238d1906fb60df8f07988776f3e0cfee247c4addedd",
+      "bytes": 186417,
+      "mtime_local": "2026-07-17T09:14:00.219220948-04:00"
+    },
+    "accepted_decisions": [
+      {
+        "id": "library-corpus-scope",
+        "decision": "Library owns one machine-level corpus; Practice stores stable bindings and authority, never Library bytes."
+      },
+      {
+        "id": "library-record-kinds",
+        "decision": "The initial Library has mutable managed documents with immutable content revisions and immutable captures."
+      },
+      {
+        "id": "library-admitted-content",
+        "decision": "The initial closed content scope is valid UTF-8 plain text, Markdown, CSV capture, and qualified safe observation-text projections."
+      },
+      {
+        "id": "library-retention",
+        "decision": "A managed document retains its current content revision and the three immediately preceding revisions."
+      },
+      {
+        "id": "library-archive-tombstone",
+        "decision": "Archive preserves content and exact resolution; destructive deletion leaves a minimal non-content tombstone and never reuses the RID."
+      },
+      {
+        "id": "projection-owner-lifecycle",
+        "decision": "Only bounded active/open records receive one-RID projection owners; every acquire retains through the owner root and returns an activation-local acquisition token."
+      },
+      {
+        "id": "qualified-locators",
+        "decision": "Persistent locators carry stable owner/domain identity, semantic RREF facts, exact domain revision and available digest/projection facts; exact failure never advances to latest."
+      },
+      {
+        "id": "live-binding-boundary",
+        "decision": "LBINDs, component instance/generation, acquisition tokens, live capabilities, and callbacks are activation-local and are never persisted or treated as authority."
+      },
+      {
+        "id": "handler-negotiation",
+        "decision": "Handler matching is typed by owner, kind, and media; selection is deterministic and a real Open With ambiguity is surfaced instead of priority-only dispatch."
+      },
+      {
+        "id": "desk-service-table",
+        "decision": "The initial bounded service table remains Desk-private until a second host proves that it is a general interop mechanism."
+      }
+    ]
+  },
+  "baseline_revisions": {
+    "akashic": "9a7a547f7b7a1dd2f701762134cfdffe1a870f4e",
+    "megapad": "d4ae18d31837fa4638b1deda9f8bf9a153bd5098"
+  },
+  "durable_contracts": {
+    "source_registry": {
+      "internal_magic_logical": "SRCREG01",
+      "abi": 1,
+      "bytes": 36648,
+      "source_record_bytes": 2288,
+      "statuses": {
+        "SSREG-S-OK": 0,
+        "SSREG-S-INVALID": 1,
+        "SSREG-S-NOT-FOUND": 2,
+        "SSREG-S-FULL": 3,
+        "SSREG-S-DUPLICATE": 4,
+        "SSREG-S-STALE": 5,
+        "SSREG-S-CAPACITY": 6,
+        "SSREG-S-UNSUPPORTED": 7
+      },
+      "bounds": {
+        "sources": 16,
+        "label_bytes": 96,
+        "endpoint_bytes": 1024,
+        "config_bytes": 1024,
+        "redirects": 3,
+        "response_bytes": 131072,
+        "pages": 2,
+        "observations_per_refresh": 16,
+        "revisions_per_observation": 4,
+        "interval_min_ms": 60000,
+        "interval_max_ms": 604800000
+      },
+      "public_words": [
+        "STREAMS-SOURCE-INIT",
+        "STREAMS-SOURCE-ID!",
+        "STREAMS-SOURCE-LABEL!",
+        "STREAMS-SOURCE-ENDPOINT!",
+        "STREAMS-SOURCE-CONFIG!",
+        "STREAMS-SOURCE-VALID?",
+        "STREAMS-SOURCE-LABEL$",
+        "STREAMS-SOURCE-ENDPOINT$",
+        "STREAMS-SOURCE-CONFIG$",
+        "STREAMS-SOURCE-REGISTRY-INIT",
+        "STREAMS-SOURCE-REGISTRY-VALID?",
+        "STREAMS-SOURCE-COUNT",
+        "STREAMS-SOURCE-NTH",
+        "STREAMS-SOURCE-FIND",
+        "STREAMS-SOURCE-CREATE",
+        "STREAMS-SOURCE-READ",
+        "STREAMS-SOURCE-REPLACE",
+        "STREAMS-SOURCE-ENABLE",
+        "STREAMS-SOURCE-REMOVE"
+      ],
+      "public_accessors": [
+        "SSOURCE.ID",
+        "SSOURCE.REVISION",
+        "SSOURCE.KIND",
+        "SSOURCE.FORMAT",
+        "SSOURCE.FLAGS",
+        "SSOURCE.REDIRECT-MAX",
+        "SSOURCE.RESPONSE-MAX",
+        "SSOURCE.PAGE-MAX",
+        "SSOURCE.OBSERVATION-MAX",
+        "SSOURCE.REVISION-MAX",
+        "SSOURCE.REFRESH-POLICY",
+        "SSOURCE.INTERVAL-MS",
+        "SSOURCE.LABEL-U",
+        "SSOURCE.ENDPOINT-U",
+        "SSOURCE.CONFIG-U",
+        "SSOURCE.LABEL",
+        "SSOURCE.ENDPOINT",
+        "SSOURCE.CONFIG",
+        "SSREG.MAGIC",
+        "SSREG.ABI",
+        "SSREG.SIZE",
+        "SSREG.GENERATION",
+        "SSREG.COUNT",
+        "SSREG.RECORDS"
+      ]
+    },
+    "source_store": {
+      "target": "/streams-sources.bin",
+      "magic_ascii": "AKSSS001",
+      "format": 1,
+      "header_bytes": 64,
+      "payload_bytes": 36648,
+      "record_bytes": 36712,
+      "statuses": {
+        "SSSTORE-S-OK": 0,
+        "SSSTORE-S-ABSENT": 1,
+        "SSSTORE-S-CORRUPT": 2,
+        "SSSTORE-S-UNSUPPORTED": 3,
+        "SSSTORE-S-INVALID": 4,
+        "SSSTORE-S-CAPACITY": 5,
+        "SSSTORE-S-IO": 6,
+        "SSSTORE-S-RECOVERY": 7,
+        "SSSTORE-S-BUSY": 8,
+        "SSSTORE-S-CONFLICT": 9
+      },
+      "public_words": [
+        "STREAMS-SOURCE-STORE-TARGET$",
+        "STREAMS-SOURCE-STORE-PATH$",
+        "STREAMS-SOURCE-STORE-BLOCKED?",
+        "STREAMS-SOURCE-STORE-VALID?",
+        "STREAMS-SOURCE-STORE-INIT-AT",
+        "STREAMS-SOURCE-STORE-INIT",
+        "STREAMS-SOURCE-STORE-LOAD",
+        "STREAMS-SOURCE-STORE-SAVE",
+        "STREAMS-SOURCE-STORE-RECOVER"
+      ]
+    },
+    "observation_checkpoint": {
+      "internal_magic_ascii": "OSYNCHK1",
+      "abi": 1,
+      "bytes": 131072,
+      "header_bytes": 256,
+      "source_record_bytes": 2368,
+      "observation_record_bytes": 320,
+      "key_record_bytes": 192,
+      "statuses": {
+        "OCHK-S-OK": 0,
+        "OCHK-S-INVALID": 1,
+        "OCHK-S-CAPACITY": 2,
+        "OCHK-S-NOT-FOUND": 3,
+        "OCHK-S-STALE": 4,
+        "OCHK-S-BUSY": 5,
+        "OCHK-S-STATE": 6,
+        "OCHK-S-CORRUPT": 7
+      },
+      "bounds": {
+        "sources": 16,
+        "observations": 48,
+        "keys": 64,
+        "batch": 8,
+        "observations_per_source": 16,
+        "versions_per_key": 4,
+        "uri_bytes": 1024,
+        "native_id_bytes": 512,
+        "title_bytes": 256,
+        "url_bytes": 512,
+        "summary_bytes": 1024,
+        "content_bytes": 8192,
+        "datetime_bytes": 64
+      },
+      "public_words": [
+        "OCHK-CANDIDATE-INIT",
+        "OCHK-SOURCE-NTH",
+        "OCHK-OBSERVATION-NTH",
+        "OCHK-KEY-NTH",
+        "OCHK-SEAL",
+        "OCHK-INIT",
+        "OCHK-VALID?",
+        "OCHK-SOURCE-FIND",
+        "OCHK-OBSERVATION-TITLE$",
+        "OCHK-OBSERVATION-URL$",
+        "OCHK-OBSERVATION-SUMMARY$",
+        "OCHK-OBSERVATION-CONTENT$",
+        "OCHK-OBSERVATION-PUBLISHED$",
+        "OCHK-OBSERVATION-MODIFIED$",
+        "OCHK-KEY-NATIVE$",
+        "OCHK-BEGIN",
+        "OCHK-RECOVER-INDETERMINATE",
+        "OCHK-TERMINAL",
+        "OCHK-APPLY"
+      ],
+      "public_accessors": [
+        "OCHK.MAGIC",
+        "OCHK.ABI",
+        "OCHK.SIZE",
+        "OCHK.GENERATION",
+        "OCHK.SEQUENCE",
+        "OCHK.SOURCE-COUNT",
+        "OCHK.OBSERVATION-COUNT",
+        "OCHK.KEY-COUNT",
+        "OCHK.BLOB-USED",
+        "OCHK.CRC",
+        "OCHK.FLAGS",
+        "OCHK.BLOB",
+        "OCS.STATE",
+        "OCS.ATTEMPT-SEQUENCE",
+        "OCS.SOURCE-REVISION",
+        "OCS.PROVIDER-KIND",
+        "OCS.ATTEMPT-ID",
+        "OCS.SOURCE-ID",
+        "OCS.NAMESPACE",
+        "OCS.REQUEST-SEAL",
+        "OCS.STARTED-MS",
+        "OCS.FINISHED-MS",
+        "OCS.OUTCOME",
+        "OCS.DETAIL",
+        "OCS.HTTP-STATUS",
+        "OCS.DECODE-STATUS",
+        "OCS.NEW-COUNT",
+        "OCS.REVISED-COUNT",
+        "OCS.UNCHANGED-COUNT",
+        "OCS.REJECTED-COUNT",
+        "OCS.XIO-ERROR",
+        "OCS.CLEANUP-ERROR",
+        "OCS.REQUESTED$",
+        "OCS.EFFECTIVE$",
+        "OCO.STATE",
+        "OCO.SEQUENCE",
+        "OCO.REVISION",
+        "OCO.FORMAT",
+        "OCO.SOURCE-ID",
+        "OCO.NAMESPACE",
+        "OCO.ID",
+        "OCO.ATTEMPT-ID",
+        "OCO.SEMANTIC-DIGEST",
+        "OCO.KEY-INDEX",
+        "OCK.STATE",
+        "OCK.LATEST-OBSERVATION",
+        "OCK.LATEST-REVISION",
+        "OCK.LAST-SEEN-SEQUENCE",
+        "OCK.SOURCE-ID",
+        "OCK.NAMESPACE",
+        "OCK.OBSERVATION-ID",
+        "OCK.NATIVE-DIGEST",
+        "OCK.FORMAT",
+        "OCK.NATIVE-KIND",
+        "OCK.NATIVE-O",
+        "OCK.NATIVE-U",
+        "OCC.FORMAT",
+        "OCC.NATIVE-KIND",
+        "OCC.NATIVE-A",
+        "OCC.NATIVE-U",
+        "OCC.TITLE-A",
+        "OCC.TITLE-U",
+        "OCC.URL-A",
+        "OCC.URL-U",
+        "OCC.SUMMARY-A",
+        "OCC.SUMMARY-U",
+        "OCC.CONTENT-A",
+        "OCC.CONTENT-U",
+        "OCC.PUBLISHED-A",
+        "OCC.PUBLISHED-U",
+        "OCC.MODIFIED-A",
+        "OCC.MODIFIED-U"
+      ]
+    },
+    "observation_store": {
+      "target": "/streams-observation.bin",
+      "magic_ascii": "AKSOC001",
+      "format": 1,
+      "header_bytes": 64,
+      "payload_bytes": 131072,
+      "record_bytes": 131136,
+      "statuses": {
+        "OSTORE-S-OK": 0,
+        "OSTORE-S-ABSENT": 1,
+        "OSTORE-S-CORRUPT": 2,
+        "OSTORE-S-UNSUPPORTED": 3,
+        "OSTORE-S-INVALID": 4,
+        "OSTORE-S-CAPACITY": 5,
+        "OSTORE-S-IO": 6,
+        "OSTORE-S-RECOVERY": 7,
+        "OSTORE-S-BUSY": 8,
+        "OSTORE-S-CONFLICT": 9
+      },
+      "public_words": [
+        "STREAMS-OBSERVATION-STORE-TARGET$",
+        "STREAMS-OBSERVATION-STORE-PATH$",
+        "STREAMS-OBSERVATION-STORE-BLOCKED?",
+        "STREAMS-OBSERVATION-STORE-VALID?",
+        "STREAMS-OBSERVATION-STORE-INIT-AT",
+        "STREAMS-OBSERVATION-STORE-INIT",
+        "STREAMS-OBSERVATION-STORE-LOAD",
+        "STREAMS-OBSERVATION-STORE-SAVE",
+        "STREAMS-OBSERVATION-STORE-RECOVER"
+      ]
+    },
+    "legacy_draft_store": {
+      "target": "/streams-draft.bin",
+      "magic_ascii": "AKSDR001",
+      "format": 1,
+      "header_bytes": 64,
+      "payload_max_bytes": 3000,
+      "record_max_bytes": 3064,
+      "statuses": {
+        "SDSTORE-S-OK": 0,
+        "SDSTORE-S-ABSENT": 1,
+        "SDSTORE-S-CORRUPT": 2,
+        "SDSTORE-S-UNSUPPORTED": 3,
+        "SDSTORE-S-INVALID": 4,
+        "SDSTORE-S-CAPACITY": 5,
+        "SDSTORE-S-IO": 6,
+        "SDSTORE-S-RECOVERY": 7,
+        "SDSTORE-S-BUSY": 8
+      },
+      "public_words": [
+        "STREAMS-DRAFT-STORE-TARGET$",
+        "STREAMS-DRAFT-STORE-PATH$",
+        "STREAMS-DRAFT-STORE-VALID?",
+        "STREAMS-DRAFT-STORE-INIT-AT",
+        "STREAMS-DRAFT-STORE-INIT",
+        "STREAMS-DRAFT-STORE-RECOVER",
+        "STREAMS-DRAFT-STORE-LOAD",
+        "STREAMS-DRAFT-STORE-SAVE"
+      ]
+    }
+  },
+  "capabilities": [
+    {
+      "id": "streams.selection.current",
+      "kind": "resource",
+      "input_schema": "_STM-NULL-SCHEMA",
+      "output_schema": "_STM-NULLABLE-RESOURCE-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.item.read",
+      "kind": "resource",
+      "input_schema": "_STM-RESOURCE-SCHEMA",
+      "output_schema": "_STM-ITEM-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.thread.read",
+      "kind": "resource",
+      "input_schema": "_STM-RESOURCE-SCHEMA",
+      "output_schema": "_STM-THREAD-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.feed.read",
+      "kind": "resource",
+      "input_schema": "_STM-NULL-SCHEMA",
+      "output_schema": "_STM-FEED-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.search.local",
+      "kind": "resource",
+      "input_schema": "_STM-QUERY-SCHEMA",
+      "output_schema": "_STM-SEARCH-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.draft.create",
+      "kind": "command",
+      "input_schema": "_STM-DRAFT-CREATE-SCHEMA",
+      "output_schema": "_STM-DRAFT-SCHEMA",
+      "effects": ["mutate", "persist"]
+    },
+    {
+      "id": "streams.draft.read",
+      "kind": "resource",
+      "input_schema": "_STM-RESOURCE-SCHEMA",
+      "output_schema": "_STM-DRAFT-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.draft.replace",
+      "kind": "command",
+      "input_schema": "_STM-DRAFT-REPLACE-SCHEMA",
+      "output_schema": "_STM-DRAFT-SCHEMA",
+      "effects": ["mutate", "persist"]
+    },
+    {
+      "id": "streams.draft.validate",
+      "kind": "resource",
+      "input_schema": "_STM-RESOURCE-SCHEMA",
+      "output_schema": "_STM-DRAFT-VALIDATION-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.draft.current",
+      "kind": "resource",
+      "input_schema": "_STM-NULL-SCHEMA",
+      "output_schema": "_STM-NULLABLE-RESOURCE-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.feed.refresh",
+      "kind": "command",
+      "input_schema": "_STM-ACTOR-SCHEMA",
+      "output_schema": "_STM-REFRESH-ACK-SCHEMA",
+      "effects": ["external"]
+    },
+    {
+      "id": "streams.source.query",
+      "kind": "resource",
+      "input_schema": "_STM-NULL-SCHEMA",
+      "output_schema": "_STM-SOURCE-RESOURCE-LIST-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.source.read",
+      "kind": "resource",
+      "input_schema": "_STM-RESOURCE-SCHEMA",
+      "output_schema": "_STM-SOURCE-READ-SCHEMA",
+      "effects": ["observe"]
+    },
+    {
+      "id": "streams.source.set-enabled",
+      "kind": "command",
+      "input_schema": "_STM-SOURCE-SET-ENABLED-SCHEMA",
+      "output_schema": "_STM-SOURCE-READ-SCHEMA",
+      "effects": ["mutate", "persist"]
+    },
+    {
+      "id": "streams.source.refresh",
+      "kind": "command",
+      "input_schema": "_STM-SOURCE-REFRESH-IN-SCHEMA",
+      "output_schema": "_STM-SOURCE-REFRESH-ACK-SCHEMA",
+      "effects": ["persist", "external"]
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "source-v1-valid.bin",
+      "bytes": 36712,
+      "sha256": "4f3aefa851d53e9fae2e9835bcf7d6db8591a7b2ff4b0656e0759dea5fa63e6a",
+      "classification": "valid-v1",
+      "magic_ascii": "AKSSS001",
+      "format": 1,
+      "generation": 1,
+      "canonical_facts": {
+        "source_count": 1,
+        "source_rid_first_cell": 257,
+        "source_revision": 1,
+        "label_utf8": "Gate 0 feed",
+        "endpoint_utf8": "https://example.test/gate0.json"
+      }
+    },
+    {
+      "path": "source-v1-corrupt.bin",
+      "bytes": 36712,
+      "sha256": "6ca041c59a26a20fa0d845e7287aa9f7bdf74ea2f20618bca91411895ad5614f",
+      "classification": "corrupt-payload-crc",
+      "magic_ascii": "AKSSS001",
+      "format": 1,
+      "generation": 1
+    },
+    {
+      "path": "source-v2-future.bin",
+      "bytes": 36712,
+      "sha256": "898a70c9fc36c0ee66c5fbbbe8f981b692a8201e7fe1f01e221c93949dbad10e",
+      "classification": "unsupported-future-with-valid-header-crc",
+      "magic_ascii": "AKSSS001",
+      "format": 2,
+      "generation": 1
+    },
+    {
+      "path": "observation-v1-valid.bin",
+      "bytes": 131136,
+      "sha256": "2c1f20a5b5a2e98979785db79d6dc38e44a39c113d4472ea062ba279ef9adf45",
+      "classification": "valid-v1",
+      "magic_ascii": "AKSOC001",
+      "format": 1,
+      "generation": 2,
+      "canonical_facts": {
+        "source_count": 1,
+        "observation_count": 1,
+        "key_count": 1,
+        "source_rid_first_cell": 257,
+        "observation_revision": 1,
+        "title_utf8": "Gate 0 observation",
+        "content_utf8": "Exact retained body",
+        "started_ms": 1000,
+        "finished_ms": 1001
+      }
+    },
+    {
+      "path": "observation-v1-corrupt.bin",
+      "bytes": 131136,
+      "sha256": "9246b9d6785b8696acbfadd8a984805bf299210da251c53cf0f1e517e294c418",
+      "classification": "corrupt-payload-crc",
+      "magic_ascii": "AKSOC001",
+      "format": 1,
+      "generation": 2
+    },
+    {
+      "path": "observation-v2-future.bin",
+      "bytes": 131136,
+      "sha256": "e1c6663ea0fb1c1faa5d255363df3c6e32a60b4580e6b3734212bc811705e5de",
+      "classification": "unsupported-future-with-valid-header-crc",
+      "magic_ascii": "AKSOC001",
+      "format": 2,
+      "generation": 2
+    },
+    {
+      "path": "draft-v1-legacy-r7.bin",
+      "bytes": 79,
+      "sha256": "d0bd86396a4c6068cbcfc3868197a4a1a7f838883a2d6bf8c6500507e21f213e",
+      "classification": "valid-v1-legacy-draft",
+      "magic_ascii": "AKSDR001",
+      "format": 1,
+      "revision": 7,
+      "text_utf8": "exact ☂ café",
+      "text_bytes": 15
+    }
+  ],
+  "deterministic_profile_matrix": {
+    "status": "green",
+    "verified_on": "2026-07-17",
+    "common_max_steps": 8000000000,
+    "common_timeout_seconds": 120,
+    "overrides": {
+      "desktop-agent-hardening": {
+        "max_steps": 16000000000,
+        "timeout_seconds": 240,
+        "measured_steps": 15210000000
+      }
+    },
+    "profiles": [
+      "practice-contracts",
+      "pad-resource-contracts",
+      "desktop-resource",
+      "daybook-contracts",
+      "grid-contracts",
+      "agent-persistence",
+      "agent-ui",
+      "desktop-agent-hardening",
+      "streams-source-registry-contracts",
+      "streams-source-store-contracts",
+      "streams-observation-contracts",
+      "streams-observation-store-contracts",
+      "streams-observation-state-compile",
+      "streams-source-owner-contracts",
+      "streams-source-ui-contracts",
+      "streams-syndec-contracts",
+      "streams-syndication-http-contracts",
+      "streams-configured-provider-compile",
+      "streams-refresh-owner-compile",
+      "streams-refresh-owner-contracts",
+      "streams-manual-refresh-contracts",
+      "streams-draft-contracts",
+      "streams-contracts",
+      "streams-page-contracts",
+      "streams-xio-contracts",
+      "streams-persistence-contracts",
+      "desktop-streams"
+    ],
+    "supplemental_evidence": [
+      "desk-gate0-baseline: 69/69 guest assertions",
+      "test_desk_gate0_baseline.py: 5/5 host checks",
+      "test_vfs_replace.py: 29/29 replacement/recovery checks"
+    ]
+  },
+  "scenario_ledger": [
+    {
+      "id": "retained-valid-corrupt-future-records",
+      "status": "frozen-and-executable",
+      "evidence": "python3 local_testing/akashic_tui.py smoke --profile desk-gate0-baseline --max-steps 8000000000 --timeout 120"
+    },
+    {
+      "id": "nonempty-source-missing-observation-companion",
+      "status": "frozen-and-executable",
+      "expected": "Source generation 1 remains visible; observation status is ABSENT; the empty checkpoint is not persisted; UI reports never refreshed, which also preserves the documented possibility of unproven companion loss.",
+      "evidence": "desk-gate0-baseline"
+    },
+    {
+      "id": "absent-first-use",
+      "status": "covered",
+      "evidence": [
+        "streams-source-store-contracts",
+        "streams-observation-store-contracts",
+        "streams-draft-contracts"
+      ]
+    },
+    {
+      "id": "stale-generation",
+      "status": "covered",
+      "evidence": [
+        "streams-source-store-contracts",
+        "streams-observation-store-contracts"
+      ]
+    },
+    {
+      "id": "interrupted-replacement",
+      "status": "covered",
+      "evidence": [
+        "streams-source-store-contracts",
+        "streams-observation-store-contracts",
+        "streams-draft-contracts"
+      ]
+    },
+    {
+      "id": "uncertain-and-committed-cleanup",
+      "status": "covered",
+      "evidence": "python3 local_testing/test_vfs_replace.py",
+      "cases": [
+        "commit-marker sync failure reports uncertain and keeps backup",
+        "post-commit cleanup sync failure reports committed cleanup"
+      ]
+    },
+    {
+      "id": "selector-and-close-after-effect-restoration",
+      "status": "covered",
+      "evidence": [
+        "daybook-contracts",
+        "grid-contracts",
+        "streams-draft-contracts"
+      ],
+      "notes": "Daybook and Grid inject throws after close and selector restore; the draft gate injects a binding read throw and proves the caller-selected VFS and descriptor cleanup state are restored."
+    }
+  ]
+}

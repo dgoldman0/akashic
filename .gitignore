@@ -56,6 +56,9 @@ local_testing/*
 !local_testing/streams-syndication-http.f
 !local_testing/streams-refresh-owner.f
 !local_testing/streams-manual-refresh.f
+!local_testing/desk-gate0-baseline.f
+!local_testing/generate_desk_gate0_fixtures.py
+!local_testing/test_desk_gate0_baseline.py
 !local_testing/test_gap_buf.py
 !local_testing/test_textarea.py
 !local_testing/evidence/
@@ -70,6 +73,8 @@ local_testing/fixtures/atproto/*
 !local_testing/fixtures/streams/**
 !local_testing/fixtures/syndication/
 !local_testing/fixtures/syndication/**
+!local_testing/fixtures/desk-gate0/
+!local_testing/fixtures/desk-gate0/**
 
 # Generated system images and captures stay local.
 local_testing/out/

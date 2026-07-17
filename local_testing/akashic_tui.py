@@ -102,6 +102,30 @@ SYNDICATION_ATOM_UPDATE_FIXTURE = (
 SYNDICATION_XML_MALFORMED_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "syndication" / "malformed.xml"
 ).read_bytes()
+DESK_GATE0_FIXTURE_ROOT = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "desk-gate0"
+)
+DESK_GATE0_SOURCE_VALID_FIXTURE = (
+    DESK_GATE0_FIXTURE_ROOT / "source-v1-valid.bin"
+).read_bytes()
+DESK_GATE0_SOURCE_CORRUPT_FIXTURE = (
+    DESK_GATE0_FIXTURE_ROOT / "source-v1-corrupt.bin"
+).read_bytes()
+DESK_GATE0_SOURCE_FUTURE_FIXTURE = (
+    DESK_GATE0_FIXTURE_ROOT / "source-v2-future.bin"
+).read_bytes()
+DESK_GATE0_OBSERVATION_VALID_FIXTURE = (
+    DESK_GATE0_FIXTURE_ROOT / "observation-v1-valid.bin"
+).read_bytes()
+DESK_GATE0_OBSERVATION_CORRUPT_FIXTURE = (
+    DESK_GATE0_FIXTURE_ROOT / "observation-v1-corrupt.bin"
+).read_bytes()
+DESK_GATE0_OBSERVATION_FUTURE_FIXTURE = (
+    DESK_GATE0_FIXTURE_ROOT / "observation-v2-future.bin"
+).read_bytes()
+DESK_GATE0_DRAFT_LEGACY_FIXTURE = (
+    DESK_GATE0_FIXTURE_ROOT / "draft-v1-legacy-r7.bin"
+).read_bytes()
 
 
 def _reviewed_atproto_yr2_der() -> bytes:
@@ -21343,8 +21367,9 @@ CREATE _ssoc-rid RID-SIZE ALLOT
         _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
 
     \ A corruption path still validates bounded UTF-8 before it can report
-    \ CORRUPT.  A caller span ending one byte inside validator scratch must
-    \ therefore reject before the validator, preserving the complete span.
+    \ CORRUPT.  A caller span beginning inside validator scratch must reject
+    \ before the validator, preserving the complete span.  Keeping the span
+    \ above Bank 0 also avoids using the live return stack as caller storage.
     _ssoc-encode-two
     255 _SSSTORE-RECORD STREAMS-SOURCE-STORE-HEADER-SIZE +
         _SSR-RECORDS + _SSO-LABEL + C!
@@ -21356,15 +21381,13 @@ CREATE _ssoc-rid RID-SIZE ALLOT
         _SSSTORE-RECORD _SSS-H-HEADER-CRC + !
     _SSSTORE-RECORD STREAMS-SOURCE-STORE-RECORD-MAX
         _ssoc-alias @ _ssoc-put-target
-    _UV-A 1+ STREAMS-SOURCE-REGISTRY-SIZE -
-        STREAMS-SOURCE-REGISTRY-SIZE _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
-    _UV-A 1+ STREAMS-SOURCE-REGISTRY-SIZE -
-        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
-    _UV-A 1+ STREAMS-SOURCE-REGISTRY-SIZE -
-        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+    _UV-A STREAMS-SOURCE-REGISTRY-SIZE
+        _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _UV-A STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
+    _UV-A STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
         STREAMS-SOURCE-STORE-LOAD
-    _UV-A 1+ STREAMS-SOURCE-REGISTRY-SIZE -
-        STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-unchanged? _ssoc-assert
+    _UV-A STREAMS-SOURCE-REGISTRY-SIZE
+        _ssoc-span-unchanged? _ssoc-assert
     SSSTORE-S-INVALID = _ssoc-assert
     _CRC-HDST 8 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
     _SHA3-IPAD 1 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
@@ -23429,11 +23452,17 @@ def smoke(
                 )
 
             if compose("cancel scoped-hardening", "scoped cancellation probe"):
-                session.send_key("escape")
-                wait_screen(
-                    "Cancelled",
-                    "Desk Agent did not cancel an active scoped run",
-                )
+                if wait_screen_gone(
+                    "Ask:",
+                    "scoped cancellation probe did not leave the composer",
+                    step_budget=800_000_000,
+                    wall_timeout=20.0,
+                ):
+                    session.send_key("escape")
+                    wait_screen(
+                        "Cancelled",
+                        "Desk Agent did not cancel an active scoped run",
+                    )
 
             select_access(0, "Chat only")
 
@@ -25199,7 +25228,12 @@ def smoke(
             ):
                 session.send_text("example.f")
                 session.send_key("enter")
-                wait_screen("SQUARE", "File Explorer could not preview /example.f")
+                wait_screen(
+                    "SQUARE",
+                    "File Explorer could not preview /example.f",
+                    step_budget=800_000_000,
+                    wall_timeout=20.0,
+                )
 
             if profile_name in (
                 "desktop",
@@ -26129,6 +26163,44 @@ _ostc-run
                 AKASHIC_ROOT / "local_testing" / "streams-observation-store.f"
             ).read_bytes(),
         ),
+    ),
+)
+
+
+PROFILES["desk-gate0-baseline"] = Profile(
+    roots=("tui/applets/streams/streams.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - retained Desk Gate 0 baseline records
+ENTER-USERLAND
+REQUIRE tui/applets/streams/streams.f
+." [akashic] loading retained Desk Gate 0 baseline" CR
+REQUIRE local_testing/desk-gate0.f
+_dg0-run
+""",
+    ready_markers=("DESK GATE0 BASELINE PASS",),
+    stable_markers=("DESK GATE0 BASELINE PASS",),
+    failure_markers=(
+        "DESK GATE0 BASELINE FAIL",
+        "DESK GATE0 ASSERT",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/desk-gate0.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "desk-gate0-baseline.f"
+            ).read_bytes(),
+        ),
+        ("gate0/s-valid.bin", DESK_GATE0_SOURCE_VALID_FIXTURE),
+        ("gate0/s-corrupt.bin", DESK_GATE0_SOURCE_CORRUPT_FIXTURE),
+        ("gate0/s-future.bin", DESK_GATE0_SOURCE_FUTURE_FIXTURE),
+        ("gate0/o-valid.bin", DESK_GATE0_OBSERVATION_VALID_FIXTURE),
+        ("gate0/o-corrupt.bin", DESK_GATE0_OBSERVATION_CORRUPT_FIXTURE),
+        ("gate0/o-future.bin", DESK_GATE0_OBSERVATION_FUTURE_FIXTURE),
+        ("gate0/d-legacy.bin", DESK_GATE0_DRAFT_LEGACY_FIXTURE),
+        ("streams-sources.bin", DESK_GATE0_SOURCE_VALID_FIXTURE),
     ),
 )
 
