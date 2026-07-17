@@ -3,8 +3,11 @@
 \ =====================================================================
 \  RREF identifies a semantic resource independently of any live lens,
 \  component instance, VFS path, Practice membership, or authority grant.
-\  Revision zero means "resolve the current revision"; a positive revision
-\  is an optimistic exact-revision requirement.
+\  Revision zero means "resolve the current live component revision"; a
+\  positive revision is an optimistic exact component-revision requirement.
+\  It is not durable domain-history evidence unless the semantic owner has an
+\  explicit contract which mirrors those revision spaces.  QLOC therefore
+\  embeds RREF with revision zero and carries domain qualification separately.
 \ =====================================================================
 
 PROVIDED akashic-runtime-rref

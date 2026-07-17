@@ -61,6 +61,11 @@ owner. Loads request `resource.snapshot`; saves request
 after a successful owner commit. Daybook never receives the owner's VFS path,
 replacement object, or private buffer.
 
+The owner also exposes portable `resource.describe` metadata. It reports the
+Daybook semantic RID but `domain_revision=0`: current component revision is an
+activation-local concurrency guard, and Daybook has no retained domain-history
+ledger from which it could honestly mint an exact qualified locator.
+
 Reference lookup and lens attachment are separate guarded registry operations.
 Daybook retries a bounded exact-reference race; repeated contention is reported
 as transient stale state, while missing or invalid services remain structural

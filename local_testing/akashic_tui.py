@@ -27009,6 +27009,28 @@ REQUIRE local_testing/gate2a.f
 )
 
 
+PROFILES["gate3a-resource-contracts"] = Profile(
+    roots=("interop/resource-client.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 3A resource foundation contracts
+ENTER-USERLAND
+REQUIRE interop/resource-client.f
+." [akashic] loading Gate 3A resource contracts" CR
+REQUIRE local_testing/gate3a.f
+""",
+    ready_markers=("GATE3A RESOURCE CONTRACTS PASS",),
+    stable_markers=("GATE3A RESOURCE CONTRACTS PASS",),
+    failure_markers=("GATE3A RESOURCE CONTRACTS FAIL", "GATE3A ASSERT", "exception"),
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/gate3a.f",
+            (AKASHIC_ROOT / "local_testing" / "gate3a-resource-contracts.f").read_bytes(),
+        ),
+    ),
+)
+
+
 def _positive_mib(value: str) -> int:
     try:
         parsed = int(value)

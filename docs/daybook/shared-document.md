@@ -16,8 +16,10 @@ Library, Streams, or a generic text owner.
 This is intentionally not a general resource graph, Library projection, or
 durable Practice model. The RID-to-instance mapping, current component
 revision, registries, `LBIND`s, and VFS handles are activation-local. The
-current positive revision is an exact cooperating-client guard, not yet a
-qualified persistent historical-domain locator. Code is trusted native code;
+current positive revision is an exact cooperating-client guard, not a
+qualified persistent historical-domain locator. `resource.describe` therefore
+reports `domain_revision=0` even when the live component revision is positive.
+Code is trusted native code;
 capabilities are routing and authority contracts, not a sandbox boundary.
 
 The cooperating Daybook and Pad applets use
@@ -51,6 +53,7 @@ SDOC-VALID?     ( instance -- flag )
 SDOC-COMP-DESC   ( -- descriptor-address ) \ CREATE data address
 SDOC-CAP-SNAPSHOT ( -- capability )
 SDOC-CAP-REPLACE  ( -- capability )
+SDOC-CAP-DESCRIBE ( -- capability )
 ```
 
 Only one owner may be live in the module at a time. `SDOC-ACTIVATE` copies the
@@ -74,6 +77,13 @@ cannot retain a freed instance.
 of the current document. An expected revision of zero means “current”; a
 positive expected revision must match.
 
+`resource.describe` accepts null and returns the portable closed common-
+resource description. It identifies the Daybook RID, owner, kind, media type,
+current size, and mutability without exposing `/daybook.md`. Its semantic RREF
+revision and `domain_revision` are both zero. This is an explicit identity-
+only description: the owner has durable bytes but no retained domain-history
+ledger and refuses to mint weaker “current” evidence as an exact locator.
+
 `resource.replace` accepts a UTF-8 string of at most `SDOC-MAX-BYTES` (32768)
 and requires a positive `CBR.EXPECT-REV`. Publication goes through
 `VREPL-REPLACE`; no public direct-write entry point exists. The handler
@@ -87,14 +97,15 @@ replace contract. If the activation is read-only, replacement returns
 `CBUS-S-DENIED` without invoking `VREPL`, changing the file, or advancing the
 owner revision. This is enforced by the owner rather than left to lens UI.
 
-An indeterminate publication or unrecoverable transaction state blocks the
-owner for the remainder of that activation. Further requests fail instead of
-exposing content under a revision which may no longer describe it. A later
+An indeterminate publication or unrecoverable transaction state blocks
+state-bearing snapshot/replace work for the remainder of that activation.
+Identity description remains unqualified and reports the resource as not
+mutable. A later
 activation performs `VREPL` recovery before establishing its fresh
 activation-local revision baseline.
 
 Normal consumers should obtain an exact `RREF`, attach an `LBIND`, stamp a
-request with `LBIND-REQUEST!`, select one of the two capability descriptors,
+request with `LBIND-REQUEST!`, select the appropriate capability descriptor,
 and dispatch through `CBUS`. After a successful replace, the committing lens
 advances with `LBIND-ADVANCE`; another lens remains stale until it refreshes.
 

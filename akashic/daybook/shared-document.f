@@ -9,6 +9,11 @@
 \  Capabilities:
 \    resource.snapshot  ( null -- string )
 \    resource.replace   ( string -- bool )
+\    resource.describe  ( null -- closed identity description )
+\
+\  Describe deliberately reports domain_revision=0.  Daybook has durable
+\  bytes but no retained domain-history ledger, so its current activation's
+\  component revision must never be advertised as durable exact evidence.
 \
 \  Replace requires a positive CBR.EXPECT-REV.  The owner rechecks it while
 \  holding its commit guard, immediately before VREPL publication.  A stale
@@ -23,6 +28,7 @@
 PROVIDED akashic-interop-shared-document
 
 REQUIRE ../interop/request-bus.f
+REQUIRE ../interop/resource-contract.f
 REQUIRE ../interop/schema-common.f
 REQUIRE ../runtime/resource-registry.f
 REQUIRE ../utils/fs/vfs-replace.f
@@ -98,9 +104,10 @@ CREATE _SDOC-NULL-SCHEMA   CS-SIZE ALLOT
 CREATE _SDOC-TEXT-SCHEMA   CS-SIZE ALLOT
 CREATE _SDOC-BOOL-SCHEMA   CS-SIZE ALLOT
 
-CREATE SDOC-CAPS 2 CAP-DESC * ALLOT
+CREATE SDOC-CAPS 3 CAP-DESC * ALLOT
 : SDOC-CAP-SNAPSHOT  ( -- cap ) SDOC-CAPS ;
 : SDOC-CAP-REPLACE   ( -- cap ) SDOC-CAPS CAP-DESC + ;
+: SDOC-CAP-DESCRIBE  ( -- cap ) SDOC-CAPS CAP-DESC 2 * + ;
 
 CREATE SDOC-COMP-DESC COMP-DESC ALLOT
 
@@ -217,6 +224,8 @@ VARIABLE _SDH-REQUEST
 VARIABLE _SDH-INSTANCE
 VARIABLE _SDH-STATE
 VARIABLE _SDH-STATUS
+VARIABLE _SDHD-CHILD
+CREATE _SDHD-REF RREF-SIZE ALLOT
 
 : _SDOC-REQUEST-EXACT?  ( -- flag )
     _SDH-REQUEST @ CBR.RESOURCE-ID RID-PRESENT?
@@ -229,6 +238,92 @@ VARIABLE _SDH-STATUS
     ELSE
         -1
     THEN ;
+
+: _SDOC-DESCRIBE-SLOT  ( key-a key-u index -- flag )
+    _SDH-REQUEST @ CBR.RESULT CV-MAP-SLOT! DUP IF
+        NIP DROP 0
+    ELSE
+        DROP _SDHD-CHILD ! -1
+    THEN ;
+
+: _SDOC-DESCRIBE-NOMEM  ( -- status )
+    _SDH-REQUEST @ CBR.RESULT CV-FREE
+    S" Could not allocate Daybook description" SDOC-S-NOMEM
+        _SDH-REQUEST @ CBR-ERROR!
+    CBUS-S-FAILED ;
+
+: _SDOC-DESCRIBE-HANDLER-LOCKED  ( request instance -- status )
+    _SDH-INSTANCE ! _SDH-REQUEST !
+    _SDH-INSTANCE @ _SDOC-STATE-VALID? 0= IF
+        CBUS-S-INVALID EXIT
+    THEN
+    _SDH-INSTANCE @ CINST-STATE _SDH-STATE !
+    _SDOC-REQUEST-EXACT? 0= IF CBUS-S-INVALID EXIT THEN
+    \ Size is current metadata, not durable qualification.  A zero domain
+    \ revision remains the explicit refusal to mint an exact locator.
+    _SDH-STATE @ _SDOC-READ DUP IF
+        S" Daybook description read failed" ROT
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN DROP
+    _SDH-STATE @ _SDOC-CURRENT-TEXT-VALID? 0= IF
+        S" Daybook source is not valid UTF-8" SDOC-S-SOURCE
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN
+    8 _SDH-REQUEST @ CBR.RESULT CV-MAP! IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" resource" 0 _SDOC-DESCRIBE-SLOT 0= IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    _SDHD-REF RREF-INIT
+    _SDH-STATE @ _SDS.RID _SDHD-REF RREF.ID RID-COPY
+    _SDHD-REF _SDHD-CHILD @ IRES-RREF! IRES-S-OK <> IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" domain_revision" 1 _SDOC-DESCRIBE-SLOT 0= IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    0 _SDHD-CHILD @ CV-INT!
+    S" kind" 2 _SDOC-DESCRIBE-SLOT 0= IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" daybook-document" _SDHD-CHILD @ CV-STRING! IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" title" 3 _SDOC-DESCRIBE-SLOT 0= IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" Daybook" _SDHD-CHILD @ CV-STRING! IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" media_type" 4 _SDOC-DESCRIBE-SLOT 0= IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" text/markdown" _SDHD-CHILD @ CV-STRING! IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" mutable" 5 _SDOC-DESCRIBE-SLOT 0= IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    _SDH-STATE @ _SDOC-BLOCKED? 0=
+    _SDH-STATE @ _SDS.CONTEXT @ CTX-READONLY? 0= AND
+        _SDHD-CHILD @ CV-BOOL!
+    S" size" 6 _SDOC-DESCRIBE-SLOT 0= IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    _SDH-STATE @ _SDS.IO-U @ _SDHD-CHILD @ CV-INT!
+    S" owner" 7 _SDOC-DESCRIBE-SLOT 0= IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    S" org.akashic.daybook" _SDHD-CHILD @ CV-STRING! IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    CBUS-S-OK ;
+
+: _SDOC-DESCRIBE-HANDLER  ( request instance -- status )
+    ['] _SDOC-DESCRIBE-HANDLER-LOCKED _SDOC-GUARD WITH-GUARD ;
 
 : _SDOC-SNAPSHOT-HANDLER-LOCKED  ( request instance -- status )
     _SDH-INSTANCE ! _SDH-REQUEST !
@@ -369,6 +464,21 @@ VARIABLE _SDH-STATUS
     CAP-F-NEEDS-TARGET SDOC-CAP-REPLACE CAP.FLAGS !
     ['] _SDOC-REPLACE-HANDLER SDOC-CAP-REPLACE CAP.HANDLER-XT !
 
+    SDOC-CAP-DESCRIBE CAP-DESC-INIT
+    CAP-K-RESOURCE SDOC-CAP-DESCRIBE CAP.KIND !
+    S" resource.describe"
+        SDOC-CAP-DESCRIBE CAP.ID-U ! SDOC-CAP-DESCRIBE CAP.ID-A !
+    S" Describe Daybook resource"
+        SDOC-CAP-DESCRIBE CAP.TITLE-U ! SDOC-CAP-DESCRIBE CAP.TITLE-A !
+    S" Describe identity without claiming durable domain qualification"
+        SDOC-CAP-DESCRIBE CAP.DESC-U ! SDOC-CAP-DESCRIBE CAP.DESC-A !
+    RCON-DESCRIBE-IN-SCHEMA SDOC-CAP-DESCRIBE CAP.IN-SCHEMA !
+    RCON-DESCRIBE-OUT-SCHEMA SDOC-CAP-DESCRIBE CAP.OUT-SCHEMA !
+    CAP-E-OBSERVE SDOC-CAP-DESCRIBE CAP.EFFECTS !
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR CAP-F-CONTEXT-DEFAULT OR
+        SDOC-CAP-DESCRIBE CAP.FLAGS !
+    ['] _SDOC-DESCRIBE-HANDLER SDOC-CAP-DESCRIBE CAP.HANDLER-XT !
+
     SDOC-COMP-DESC COMP-DESC-INIT
     S" org.akashic.shared-document-owner"
         SDOC-COMP-DESC COMP.ID-U ! SDOC-COMP-DESC COMP.ID-A !
@@ -377,7 +487,7 @@ VARIABLE _SDH-STATUS
     SDOC-STATE-SIZE SDOC-COMP-DESC COMP.STATE-SIZE !
     ['] _SDOC-STATE-FINI SDOC-COMP-DESC COMP.STATE-FINI-XT !
     SDOC-CAPS SDOC-COMP-DESC COMP.CAPS-A !
-    2 SDOC-COMP-DESC COMP.CAPS-N ! ;
+    3 SDOC-COMP-DESC COMP.CAPS-N ! ;
 
 _SDOC-DESCRIPTORS-SETUP
 

@@ -2,7 +2,9 @@
 \  lens-binding.f - Context-bound resource attachment for reusable lenses
 \ =====================================================================
 \  LBIND is pointer-free activation-local state.  It binds a stable RREF
-\  identity to one live resource-owner component target and revision.
+\  identity to one live resource-owner component target and component
+\  revision.  That revision is an activation-local concurrency guard, never
+\  implicit durable domain history; QLOC carries domain evidence separately.
 \  It carries no handler, VFS locator, facet, grant, or authority token.
 \ =====================================================================
 

@@ -26,6 +26,7 @@ ENTER-USERLAND
 ." [akashic] loading shared document contracts" CR
 REQUIRE daybook/shared-document.f
 REQUIRE interop/lens-binding.f
+REQUIRE interop/resource-client.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _sd-fails
@@ -56,6 +57,7 @@ VARIABLE _sd-creg
 VARIABLE _sd-rreg
 VARIABLE _sd-owner
 VARIABLE _sd-bus
+VARIABLE _sd-describe
 VARIABLE _sd-snapshot-a
 VARIABLE _sd-replace-a
 VARIABLE _sd-stale-b
@@ -100,6 +102,7 @@ VARIABLE _sd-direct-u0
     _sd-stamp-cap @ _sd-stamp-request @ CBR.CAP ! ;
 
 : _sd-free-requests  ( -- )
+    _sd-describe @ CBR-FREE
     _sd-snapshot-a @ CBR-FREE
     _sd-replace-a @ CBR-FREE
     _sd-stale-b @ CBR-FREE
@@ -163,6 +166,41 @@ VARIABLE _sd-direct-u0
 
     _sd-creg @ 0 CBUS-NEW DUP 0= _sd-assert DROP _sd-bus !
     DEPTH _sd-depth !
+
+    \ Daybook advertises portable identity metadata without pretending its
+    \ activation-local component revision is durable domain history.
+    SDOC-COMP-DESC COMP.CAPS-N @ 3 = _sd-assert
+    SDOC-CAP-DESCRIBE CAP-DESC-VALID? _sd-assert
+    SDOC-CAP-DESCRIBE CAP-K-RESOURCE CAP-E-OBSERVE
+        RCON-DESCRIBE-IN-SCHEMA RCON-DESCRIBE-OUT-SCHEMA
+        _RCLI-CAP-EXACT? _sd-assert
+    \ Gate 3A adds only portable identity description.  The established
+    \ null->string/string->bool snapshot and replace contracts intentionally
+    \ remain incompatible with RCLI until their owning migration gate.
+    SDOC-CAP-SNAPSHOT CAP-K-RESOURCE CAP-E-OBSERVE
+        RCON-SNAPSHOT-IN-SCHEMA RCON-SNAPSHOT-OUT-SCHEMA
+        _RCLI-CAP-EXACT? 0= _sd-assert
+    SDOC-CAP-REPLACE CAP-K-COMMAND CAP-E-MUTATE CAP-E-PERSIST OR
+        RCON-REPLACE-IN-SCHEMA RCON-REPLACE-OUT-SCHEMA
+        _RCLI-CAP-EXACT? 0= _sd-assert
+    _sd-new-request _sd-describe !
+    _sd-bind-a SDOC-CAP-DESCRIBE _sd-describe @ _sd-stamp
+    _sd-describe @ CBR.ARGS CV-NULL!
+    _sd-describe @ _sd-bus @ CBUS-DISPATCH CBUS-S-OK = _sd-assert
+    _sd-describe @ CBR.RESULT RCON-DESCRIBE-RESULT? _sd-assert
+    S" domain_revision" _sd-describe @ CBR.RESULT CV-MAP-FIND CV-DATA@
+        0= _sd-assert
+    S" resource" _sd-describe @ CBR.RESULT CV-MAP-FIND
+        _sd-ref IRES-RREF@ IRES-S-OK = _sd-assert
+    _sd-ref RREF.ID _sd-rid RID= _sd-assert
+    _sd-ref RREF.REVISION @ 0= _sd-assert
+    S" owner" _sd-describe @ CBR.RESULT CV-MAP-FIND
+        DUP CV-DATA@ SWAP CV-LEN@
+        S" org.akashic.daybook" STR-STR= _sd-assert
+    S" path" _sd-describe @ CBR.RESULT CV-MAP-FIND 0= _sd-assert
+    _sd-describe @ CBR.ACTUAL-REV @ 1 = _sd-assert
+    _sd-owner @ CINST.REVISION @ 1 = _sd-assert
+    _sd-stack
 
     \ Lens A reads the initial MP64FS file without advancing revision.
     _sd-new-request _sd-snapshot-a !
@@ -297,6 +335,17 @@ VARIABLE _sd-direct-u0
     _sd-ref _sd-context @ _sd-rreg @ _sd-bind-a LBIND-ATTACH
         LBIND-S-OK = _sd-assert
     _sd-creg @ 0 CBUS-NEW DUP 0= _sd-assert DROP _sd-bus !
+    _sd-new-request _sd-describe !
+    _sd-bind-a SDOC-CAP-DESCRIBE _sd-describe @ _sd-stamp
+    _sd-describe @ CBR.ARGS CV-NULL!
+    _sd-describe @ _sd-bus @ CBUS-DISPATCH CBUS-S-OK = _sd-assert
+    _sd-describe @ CBR.RESULT RCON-DESCRIBE-RESULT? _sd-assert
+    S" domain_revision" _sd-describe @ CBR.RESULT CV-MAP-FIND CV-DATA@
+        0= _sd-assert
+    S" resource" _sd-describe @ CBR.RESULT CV-MAP-FIND
+        _sd-ref IRES-RREF@ IRES-S-OK = _sd-assert
+    _sd-ref RREF.REVISION @ 0= _sd-assert
+    _sd-owner @ CINST.REVISION @ 1 = _sd-assert
     _sd-new-request _sd-snapshot-a !
     _sd-bind-a SDOC-CAP-SNAPSHOT _sd-snapshot-a @ _sd-stamp
     _sd-snapshot-a @ _sd-bus @ CBUS-DISPATCH
@@ -305,6 +354,7 @@ VARIABLE _sd-direct-u0
     _sd-owner @ CINST.REVISION @ 1 = _sd-assert
     S" first commit" _sd-direct-file= _sd-assert
 
+    _sd-describe @ CBR-FREE 0 _sd-describe !
     _sd-snapshot-a @ CBR-FREE 0 _sd-snapshot-a !
     _sd-owner @ SDOC-DEACTIVATE SDOC-S-OK = _sd-assert
     0 _sd-owner !
@@ -331,6 +381,7 @@ def test_shared_document_contracts(tmp_path: Path) -> None:
         roots=(
             "daybook/shared-document.f",
             "interop/lens-binding.f",
+            "interop/resource-client.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),
         resources=(),
