@@ -12,6 +12,7 @@
 PROVIDED akashic-net-tls-trust-registry
 
 REQUIRE ../math/sha3.f
+REQUIRE ../utils/memory-span.f
 
 0 CONSTANT MTRUST-S-OK
 1 CONSTANT MTRUST-S-INVALID
@@ -368,10 +369,8 @@ VARIABLE _MTBA-NEEDED
 \  unexpected invariant failure cannot leave a partial contribution behind.
 
 : _MTRUST-SPAN-VALID?  ( address length -- flag )
-    DUP 0< IF 2DROP 0 EXIT THEN
     OVER 0= IF 2DROP 0 EXIT THEN
-    DUP 0= IF 2DROP -1 EXIT THEN
-    >R DUP R@ + SWAP U< 0= R> DROP ;
+    MSPAN-NONWRAPPING? ;
 
 : _MTRUST-RANGES-OVERLAP?  ( a1 u1 a2 u2 -- flag )
     2OVER _MTRUST-SPAN-VALID? 0= IF
@@ -380,10 +379,7 @@ VARIABLE _MTBA-NEEDED
     2DUP _MTRUST-SPAN-VALID? 0= IF
         2DROP 2DROP 0 EXIT
     THEN
-    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
-    2OVER NIP 0= IF 2DROP 2DROP 0 EXIT THEN
-    2OVER + >R OVER R> U< >R
-    + >R DROP R> U< R> AND ;
+    MSPAN-OVERLAP? ;
 
 VARIABLE _MTBI-A
 VARIABLE _MTBI-U

@@ -26,6 +26,7 @@ from system import MegapadSystem  # noqa: E402
 
 BIOS_PATH = MEGAPAD_ROOT / "bios.asm"
 CLASS_F = AKASHIC_ROOT / "akashic" / "runtime" / "concurrency-class.f"
+MEMORY_SPAN_F = AKASHIC_ROOT / "akashic" / "utils" / "memory-span.f"
 WORKER_F = AKASHIC_ROOT / "akashic" / "concurrency" / "worker-job.f"
 
 
@@ -137,6 +138,7 @@ def build_snapshot() -> None:
     payload = "\n".join(
         kdos_contract
         + _forth_lines(CLASS_F)
+        + _forth_lines(MEMORY_SPAN_F)
         + _forth_lines(WORKER_F)
     ) + "\n"
     data = payload.encode()
@@ -327,8 +329,11 @@ def main() -> int:
             "_WJ WJOB-INIT",
             "' _WJ-WORK _WJ-IN 8 _WJ-IN 8 _WJ-SCRATCH 8",
             "  CCLASS-PURE 1 2 _WJ WJOB-PREPARE .",
+            "_WJ WJOB-INIT",
+            "' _WJ-WORK -8 8 _WJ-OUT 8 _WJ-SCRATCH 8",
+            "  CCLASS-PURE 1 2 _WJ WJOB-PREPARE .",
         ],
-        "1 1 ",
+        "1 1 1 ",
     )
 
     check(

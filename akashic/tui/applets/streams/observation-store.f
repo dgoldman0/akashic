@@ -39,6 +39,7 @@ PROVIDED akashic-streams-obstore
 
 REQUIRE observation-state.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/memory-span.f
 REQUIRE ../../../math/crc.f
 REQUIRE ../../../concurrency/guard.f
 
@@ -192,10 +193,8 @@ _OSS-REPLACE VREPL-SIZE + CONSTANT STREAMS-OBSERVATION-STORE-SIZE
 \ SAVE protects the complete fixed checkpoint.
 
 : _OSTORE-SPAN-VALID?  ( address length -- flag )
-    DUP 0< IF 2DROP 0 EXIT THEN
     OVER 0= IF 2DROP 0 EXIT THEN
-    DUP 0= IF 2DROP -1 EXIT THEN
-    >R DUP R@ + SWAP U< 0= R> DROP ;
+    MSPAN-NONWRAPPING? ;
 
 : _OSTORE-RANGES-OVERLAP?  ( a1 u1 a2 u2 -- flag )
     2OVER _OSTORE-SPAN-VALID? 0= IF
@@ -204,13 +203,9 @@ _OSS-REPLACE VREPL-SIZE + CONSTANT STREAMS-OBSERVATION-STORE-SIZE
     2DUP _OSTORE-SPAN-VALID? 0= IF
         2DROP 2DROP 0 EXIT
     THEN
-    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
-    2OVER NIP 0= IF 2DROP 2DROP 0 EXIT THEN
-    \ Preserve the four inputs only through the first comparison.  Reducing
-    \ them in place keeps this predicate free of addressable module scratch,
-    \ which matters when the adversarial span surrounds codec scratch itself.
-    2OVER + >R OVER R> U< >R
-    + >R DROP R> U< R> AND ;
+    \ The shared predicate also owns no addressable scratch; private-range
+    \ admission remains below in this store-specific boundary.
+    MSPAN-OVERLAP? ;
 
 : _OSTORE-PRIVATE-ALIASES?  ( address length -- flag )
     _OSTORE-PRIVATE-RANGE-N @ 0 ?DO

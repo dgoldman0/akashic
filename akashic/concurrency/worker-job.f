@@ -20,6 +20,7 @@ PROVIDED akashic-concurrency-worker-job
 
 REQUIRE event.f
 REQUIRE ../runtime/concurrency-class.f
+REQUIRE ../utils/memory-span.f
 
 0x424F4A57 CONSTANT WJOB-MAGIC       \ "WJOB" in memory
 1          CONSTANT WJOB-ABI-VERSION
@@ -109,17 +110,12 @@ REQUIRE ../runtime/concurrency-class.f
     DUP WJOB-S-SUCCEEDED >= SWAP WJOB-S-CANCELLED <= AND ;
 
 : _WJOB-SPAN-VALID?  ( addr len -- flag )
-    DUP 0< IF 2DROP 0 EXIT THEN
     DUP 0= IF 2DROP -1 EXIT THEN
     OVER 0= IF 2DROP 0 EXIT THEN
-    >R DUP R@ + SWAP U< 0= R> DROP ;
+    MSPAN-NONWRAPPING? ;
 
 : _WJOB-SPANS-OVERLAP?  ( a1 u1 a2 u2 -- flag )
-    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
-    2 PICK 0= IF 2DROP 2DROP 0 EXIT THEN
-    3 PICK 3 PICK + 2 PICK SWAP U<  \ a2 < a1+u1
-    2 PICK 2 PICK + 5 PICK SWAP U<  \ a1 < a2+u2
-    AND >R 2DROP 2DROP R> ;
+    MSPAN-OVERLAP? ;
 
 : _WJOB-FIELDS-VALID?  ( job -- flag )
     >R

@@ -29,6 +29,7 @@ REQUIRE configured-provider.f
 REQUIRE source-registry.f
 REQUIRE ../../../net/http-resource.f
 REQUIRE ../../../net/transports/kdos-tls.f
+REQUIRE ../../../utils/memory-span.f
 
 0 CONSTANT SCSYN-MEDIA-S-OK
 1 CONSTANT SCSYN-MEDIA-S-TYPE
@@ -264,8 +265,7 @@ VARIABLE _SCSCFG-STATUS
     2 PICK 0= IF 2DROP 2DROP 0 EXIT THEN
     2OVER _SCSYN-SPAN-WRAPS? IF 2DROP 2DROP -1 EXIT THEN
     2DUP _SCSYN-SPAN-WRAPS? IF 2DROP 2DROP -1 EXIT THEN
-    2OVER + >R OVER R> U< >R
-    + >R DROP R> U< R> AND ;
+    MSPAN-OVERLAP? ;
 
 : _SCSYN-SOURCE?  ( source -- flag )
     DUP STREAMS-SOURCE-VALID? 0= IF DROP 0 EXIT THEN

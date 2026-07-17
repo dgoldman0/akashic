@@ -20,6 +20,7 @@ REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../widgets/prompt.f
 REQUIRE ../../../utils/string.f
+REQUIRE ../../../utils/memory-span.f
 REQUIRE ../../../atproto/feed-model.f
 REQUIRE ../../../text/utf8.f
 REQUIRE ../../../runtime/state-layout.f
@@ -27,6 +28,7 @@ REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/request-bus.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/resource.f
+REQUIRE ../../../interop/schema-common.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../math/random.f
 REQUIRE public-provider.f
@@ -434,10 +436,9 @@ VARIABLE _STM-SRANGE-A2
 VARIABLE _STM-SRANGE-U2
 
 : _STM-SOURCE-SPAN-VALID?  ( a u -- flag )
-    DUP 0< IF 2DROP 0 EXIT THEN
     DUP 0= IF 2DROP -1 EXIT THEN
     OVER 0= IF 2DROP 0 EXIT THEN
-    >R DUP R@ + SWAP U< 0= R> DROP ;
+    MSPAN-NONWRAPPING? ;
 
 : _STM-SOURCE-RANGES-OVERLAP?  ( a1 u1 a2 u2 -- flag )
     _STM-SRANGE-U2 ! _STM-SRANGE-A2 !
@@ -448,8 +449,8 @@ VARIABLE _STM-SRANGE-U2
     _STM-SRANGE-A2 @ _STM-SRANGE-U2 @ _STM-SOURCE-SPAN-VALID? 0= IF
         0 EXIT
     THEN
-    _STM-SRANGE-A2 @ _STM-SRANGE-A1 @ _STM-SRANGE-U1 @ + U<
-    _STM-SRANGE-A1 @ _STM-SRANGE-A2 @ _STM-SRANGE-U2 @ + U< AND ;
+    _STM-SRANGE-A1 @ _STM-SRANGE-U1 @
+        _STM-SRANGE-A2 @ _STM-SRANGE-U2 @ MSPAN-OVERLAP? ;
 
 : _STM-SOURCE-OWNER-OUTPUT-SAFE?  ( address length instance -- flag )
     >R
@@ -3379,17 +3380,15 @@ VARIABLE _STM-SM-S
 VARIABLE _STM-SS-N
 VARIABLE _STM-SS-S
 : _STM-STRING-SCHEMA!  ( max-len schema -- )
-    _STM-SS-S ! _STM-SS-N !
-    _STM-SS-S @ CS-INIT CV-T-STRING _STM-SS-S @ CS-ALLOW!
-    _STM-SS-N @ _STM-SS-S @ CS-MAX-LEN! ;
+    CSC-UTF8! ;
 
 : _STM-SCHEMA-SETUP  ( -- )
-    _STM-NULL-SCHEMA CS-INIT CV-T-NULL _STM-NULL-SCHEMA CS-ALLOW!
-    _STM-BOOL-SCHEMA CS-INIT CV-T-BOOL _STM-BOOL-SCHEMA CS-ALLOW!
-    _STM-COUNT-SCHEMA CS-INIT CV-T-INT _STM-COUNT-SCHEMA CS-ALLOW!
-    0 _STM-COUNT-SCHEMA CS-MIN!
-    _STM-REVISION-SCHEMA CS-INIT CV-T-INT _STM-REVISION-SCHEMA CS-ALLOW!
-    0 _STM-REVISION-SCHEMA CS-MIN!
+    _STM-NULL-SCHEMA CSC-NULL!
+    _STM-BOOL-SCHEMA CSC-BOOL!
+    _STM-COUNT-SCHEMA CSC-NONNEG-INT!
+    \ This field historically admits zero, so it deliberately does not use
+    \ the positive semantic-revision initializer.
+    _STM-REVISION-SCHEMA CSC-NONNEG-INT!
     128 _STM-META-SCHEMA _STM-STRING-SCHEMA!
     BFM-CID-CAP _STM-CID-SCHEMA _STM-STRING-SCHEMA!
     BFM-DID-CAP _STM-DID-SCHEMA _STM-STRING-SCHEMA!

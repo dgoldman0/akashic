@@ -26703,6 +26703,29 @@ _lrc-run
 )
 
 
+PROFILES["gate2a-contracts"] = Profile(
+    roots=("utils/memory-span.f", "interop/schema-common.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 2A mechanical primitive contracts
+ENTER-USERLAND
+REQUIRE utils/memory-span.f
+REQUIRE interop/schema-common.f
+." [akashic] loading Gate 2A contracts" CR
+REQUIRE local_testing/gate2a.f
+""",
+    ready_markers=("GATE2A CONTRACTS PASS",),
+    stable_markers=("GATE2A CONTRACTS PASS",),
+    failure_markers=("GATE2A CONTRACTS FAIL", "GATE2A ASSERT", "exception"),
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/gate2a.f",
+            (AKASHIC_ROOT / "local_testing" / "gate2a-contracts.f").read_bytes(),
+        ),
+    ),
+)
+
+
 def _positive_mib(value: str) -> int:
     try:
         parsed = int(value)

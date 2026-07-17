@@ -39,6 +39,7 @@ REQUIRE external-io.f
 REQUIRE http-buffered.f
 REQUIRE http-target.f
 REQUIRE media-type.f
+REQUIRE ../utils/memory-span.f
 
 3      CONSTANT HRES-REDIRECT-MAX
 4      CONSTANT HRES-HOP-MAX
@@ -169,16 +170,14 @@ VARIABLE _HRO-BA
 VARIABLE _HRO-BU
 
 : _HRES-SPAN?  ( a u -- flag )
-    DUP 0< IF 2DROP 0 EXIT THEN
     OVER 0> 0= IF 2DROP 0 EXIT THEN
-    OVER + OVER U< 0= NIP ;
+    MSPAN-NONWRAPPING? ;
 
 : _HRES-OVERLAP?  ( aa au ba bu -- flag )
     _HRO-BU ! _HRO-BA ! _HRO-AU ! _HRO-AA !
     _HRO-AA @ _HRO-AU @ _HRES-SPAN? 0= IF 0 EXIT THEN
     _HRO-BA @ _HRO-BU @ _HRES-SPAN? 0= IF 0 EXIT THEN
-    _HRO-AA @ _HRO-BA @ _HRO-BU @ + U<
-    _HRO-BA @ _HRO-AA @ _HRO-AU @ + U< AND ;
+    _HRO-AA @ _HRO-AU @ _HRO-BA @ _HRO-BU @ MSPAN-OVERLAP? ;
 
 : _HRES-FIELD-VALUE?  ( a u -- flag )
     DUP 0= IF 2DROP 0 EXIT THEN

@@ -23,6 +23,7 @@
 PROVIDED akashic-interop-shared-document
 
 REQUIRE request-bus.f
+REQUIRE schema-common.f
 REQUIRE ../runtime/resource-registry.f
 REQUIRE ../utils/fs/vfs-replace.f
 REQUIRE ../concurrency/guard.f
@@ -335,13 +336,9 @@ VARIABLE _SDH-STATUS
 \ =====================================================================
 
 : _SDOC-DESCRIPTORS-SETUP  ( -- )
-    _SDOC-NULL-SCHEMA CS-INIT
-    CV-T-NULL _SDOC-NULL-SCHEMA CS-ALLOW!
-    _SDOC-TEXT-SCHEMA CS-INIT
-    CV-T-STRING _SDOC-TEXT-SCHEMA CS-ALLOW!
-    SDOC-MAX-BYTES _SDOC-TEXT-SCHEMA CS-MAX-LEN!
-    _SDOC-BOOL-SCHEMA CS-INIT
-    CV-T-BOOL _SDOC-BOOL-SCHEMA CS-ALLOW!
+    _SDOC-NULL-SCHEMA CSC-NULL!
+    SDOC-MAX-BYTES _SDOC-TEXT-SCHEMA CSC-UTF8!
+    _SDOC-BOOL-SCHEMA CSC-BOOL!
 
     SDOC-CAP-SNAPSHOT CAP-DESC-INIT
     CAP-K-RESOURCE SDOC-CAP-SNAPSHOT CAP.KIND !

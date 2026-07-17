@@ -15,6 +15,8 @@
 
 PROVIDED akashic-syndication-model
 
+REQUIRE ../utils/memory-span.f
+
 0 CONSTANT SYN-S-OK
 1 CONSTANT SYN-S-INVALID
 2 CONSTANT SYN-S-CAPACITY
@@ -308,10 +310,8 @@ _SYN-FEED-ENTRIES SYN-MAX-ENTRIES SYN-ENTRY-SIZE * +
 : SYN-PROJECTION-INIT  ( view -- ) SYN-PROJECTION-SIZE 0 FILL ;
 
 : SYN-SPAN-VALID?  ( address length -- flag )
-    DUP 0< IF 2DROP 0 EXIT THEN
     OVER 0= IF 2DROP 0 EXIT THEN
-    DUP 0= IF 2DROP -1 EXIT THEN
-    >R DUP R@ + SWAP U< 0= R> DROP ;
+    MSPAN-NONWRAPPING? ;
 
 : SYN-RANGES-OVERLAP?  ( a u b v -- flag )
     2OVER SYN-SPAN-VALID? 0= IF
@@ -320,12 +320,7 @@ _SYN-FEED-ENTRIES SYN-MAX-ENTRIES SYN-ENTRY-SIZE * +
     2DUP SYN-SPAN-VALID? 0= IF
         2DROP 2DROP 0 EXIT
     THEN
-    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
-    2 PICK 0= IF 2DROP 2DROP 0 EXIT THEN
-    \ Pure unsigned half-open comparisons keep exact adjacency disjoint and
-    \ avoid addressable scratch that a caller span could overwrite.
-    2OVER + >R OVER R> U< >R
-    + >R DROP R> U< R> AND ;
+    MSPAN-OVERLAP? ;
 
 : _SYN-DECODE-ARGS>STATUS
     ( document-a document-u output scratch scratch-u status -- status )
