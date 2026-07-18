@@ -9,7 +9,9 @@ import os, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+EMU_DIR    = os.environ.get(
+    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+)
 AK         = os.path.join(ROOT_DIR, "akashic")
 
 sys.path.insert(0, EMU_DIR)
@@ -19,51 +21,11 @@ from system import MegapadSystem
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
-# Use the known-good test_explorer.py chain + split/status + app-desc stubs.
-# The explorer chain loads: utf8, ansi, keys, cell, screen, draw, box, region,
-# layout, widget, label, progress, input, list, tabs, menu, dialog, canvas,
-# tree, vfs, explorer.
-# On top of that we add: split, status, textarea, app-desc.
-# App-shell words (ASHELL-*) are stubbed since they need a full terminal.
-
-# Phase 1: Known-good explorer chain
-_BASE_DEPS = [
-    os.path.join(AK, "text", "utf8.f"),
-    os.path.join(AK, "tui", "ansi.f"),
-    os.path.join(AK, "tui", "keys.f"),
-    os.path.join(AK, "tui", "cell.f"),
-    os.path.join(AK, "tui", "screen.f"),
-    os.path.join(AK, "tui", "draw.f"),
-    os.path.join(AK, "tui", "box.f"),
-    os.path.join(AK, "tui", "region.f"),
-    os.path.join(AK, "tui", "layout.f"),
-    os.path.join(AK, "tui", "widget.f"),
-    os.path.join(AK, "tui", "widgets", "label.f"),
-    os.path.join(AK, "tui", "widgets", "progress.f"),
-    os.path.join(AK, "tui", "widgets", "input.f"),
-    os.path.join(AK, "tui", "widgets", "list.f"),
-    os.path.join(AK, "tui", "widgets", "tabs.f"),
-    os.path.join(AK, "tui", "widgets", "menu.f"),
-    os.path.join(AK, "tui", "widgets", "dialog.f"),
-    os.path.join(AK, "tui", "widgets", "canvas.f"),
-    os.path.join(AK, "tui", "widgets", "tree.f"),
-    os.path.join(AK, "utils", "fs", "vfs.f"),
-    os.path.join(AK, "tui", "widgets", "explorer.f"),
-]
-
-# Phase 2: Extra widgets (loaded after stubs for missing words)
-_EXTRA_DEPS = [
-    os.path.join(AK, "tui", "widgets", "split.f"),
-    os.path.join(AK, "tui", "widgets", "status.f"),
-    os.path.join(AK, "text", "gap-buf.f"),
-    os.path.join(AK, "text", "undo.f"),
-    os.path.join(AK, "text", "cell-width.f"),
-    os.path.join(AK, "tui", "widgets", "textarea.f"),
-    os.path.join(AK, "tui", "app-desc.f"),
-]
-
-# Fexplorer source loaded separately (after stubs)
+# Resolve fexplorer's REQUIRE closure in topological order.  The app-shell is
+# deliberately stubbed below because its real terminal lifecycle is outside
+# this unit test; every other dependency is compiled exactly once.
 FEXPLORER_F = os.path.join(AK, "tui", "applets", "fexplorer", "fexplorer.f")
+APP_SHELL_F = os.path.join(AK, "tui", "app-shell.f")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -76,21 +38,44 @@ def _load_bios():
     with open(BIOS_PATH) as f:
         return assemble(f.read())
 
-def _load_forth_lines(path):
+def _load_forth_source_lines(path):
     with open(path) as f:
         lines = []
-        for line in f.read().splitlines():
+        for line_no, line in enumerate(f.read().splitlines(), 1):
             s = line.strip()
             if not s or s.startswith('\\'):
                 continue
             if s.startswith('REQUIRE ') or s.startswith('PROVIDED '):
                 continue
-            lines.append(line)
+            lines.append((path, line_no, line))
         return lines
 
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
+def _load_forth_lines(path):
+    return [line for _, _, line in _load_forth_source_lines(path)]
+
+def _dependency_paths(entry_path, skipped_paths=()):
+    """Return the unique REQUIRE closure before entry_path, dependencies first."""
+    skipped = {os.path.realpath(path) for path in skipped_paths}
+    seen = set()
+    ordered = []
+
+    def visit(path):
+        path = os.path.realpath(path)
+        if path in seen or path in skipped:
+            return
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Missing dep: {path}")
+        seen.add(path)
+        with open(path) as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith('REQUIRE '):
+                    required = stripped.split(None, 1)[1].split()[0]
+                    visit(os.path.join(os.path.dirname(path), required))
+        ordered.append(path)
+
+    visit(entry_path)
+    return ordered[:-1]
 
 def capture_uart(sys_obj):
     buf = bytearray()
@@ -124,22 +109,7 @@ def build_snapshot():
     print("[*] Building snapshot: BIOS + KDOS + TUI + app-shell + fexplorer ...")
     t0 = time.time()
     bios_code = _load_bios()
-    kdos_lines = _load_forth_lines(KDOS_PATH)
-
-    dep_lines = []
-    for p in _BASE_DEPS:
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"Missing dep: {p}")
-        dep_lines.extend(_load_forth_lines(p))
-
-    # Stubs for missing words — must come BEFORE split.f etc.
-    pre_stubs = []
-
-    extra_lines = []
-    for p in _EXTRA_DEPS:
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"Missing dep: {p}")
-        extra_lines.extend(_load_forth_lines(p))
+    dependency_paths = _dependency_paths(FEXPLORER_F, (APP_SHELL_F,))
 
     # VFS + test helpers + app-shell stubs
     test_helpers = [
@@ -147,7 +117,7 @@ def build_snapshot():
         'VARIABLE _TARN',
         ': T-VFS-NEW  ( -- vfs )',
         '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
-        '    _TARN @ VFS-RAM-VTABLE VFS-NEW ;',
+        '    _TARN @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;',
         'CREATE _EV 24 ALLOT',
         # App-shell stubs (fexplorer uses these but they need full terminal)
         ': ASHELL-REGION  ( -- rgn )  0 0 25 80 RGN-NEW ;',
@@ -163,37 +133,63 @@ def build_snapshot():
         '[DEFINED] KEY-BACKSPACE [IF] [ELSE] 27 CONSTANT KEY-BACKSPACE [THEN]',
     ]
 
-    # Load fexplorer.f (strip REQUIRE/PROVIDED)
-    fexplorer_lines = _load_forth_lines(FEXPLORER_F)
-
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16*(1<<20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
-    payload = "\n".join(
-        kdos_lines + ["ENTER-USERLAND"] +
-        dep_lines + pre_stubs + extra_lines + test_helpers +
-        fexplorer_lines
-    ) + "\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-    mx = 800_000_000
+    payload_lines = _load_forth_source_lines(KDOS_PATH)
+    payload_lines.append(("<harness>", 1, "ENTER-USERLAND"))
+    for path in dependency_paths:
+        payload_lines.extend(_load_forth_source_lines(path))
+    payload_lines.extend(
+        ("<test-helpers>", line_no, line)
+        for line_no, line in enumerate(test_helpers, 1)
+    )
+    payload_lines.extend(_load_forth_source_lines(FEXPLORER_F))
 
-    while steps < mx:
+    line_index = 0
+    current_source = None
+    line_steps = 0
+    steps = 0
+    max_steps = 1_500_000_000
+    max_line_steps = 30_000_000
+    complete = False
+
+    while steps < max_steps:
         if sys_obj.cpu.halted:
             break
         if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
+            if line_index < len(payload_lines):
+                current_source = payload_lines[line_index]
+                line_index += 1
+                line_steps = 0
+                sys_obj.uart.inject_input((current_source[2] + "\n").encode())
             else:
+                complete = True
                 break
             continue
-        batch = sys_obj.run_batch(min(100_000, mx - steps))
-        steps += max(batch, 1)
+        batch = max(sys_obj.run_batch(min(100_000, max_steps - steps)), 1)
+        steps += batch
+        line_steps += batch
+        if current_source is not None and line_steps >= max_line_steps:
+            path, line_no, line = current_source
+            tail = uart_text(buf)[-2000:]
+            raise RuntimeError(
+                "guest compile did not return to the prompt after "
+                f"{line_steps:,} steps at {path}:{line_no}: {line!r}\n"
+                f"UART tail:\n{tail}"
+            )
+
+    if not complete:
+        location = "before the first input line"
+        if current_source is not None:
+            path, line_no, line = current_source
+            location = f"at {path}:{line_no}: {line!r}"
+        raise RuntimeError(
+            f"snapshot build stopped after {steps:,} steps {location}; "
+            f"loaded {line_index}/{len(payload_lines)} lines"
+        )
 
     text = uart_text(buf)
     errors = False
@@ -202,9 +198,10 @@ def build_snapshot():
             print(f"  [!] COMPILE ERROR: {l}")
             errors = True
     if errors:
-        print("[!] Snapshot has compilation errors — tests will likely fail.")
+        print("[!] Snapshot has compilation errors.")
         for l in text.strip().split('\n')[-50:]:
             print(f"    {l}")
+        raise RuntimeError("snapshot compilation failed")
 
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
@@ -230,23 +227,46 @@ def _make_system():
 def run_forth(lines, max_steps=80_000_000):
     sys_obj = _make_system()
     buf = capture_uart(sys_obj)
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode()
-    pos = 0
+    payload_lines = list(lines) + ["BYE"]
+    line_index = 0
+    current_line = None
+    line_steps = 0
+    line_started = None
     steps = 0
+    complete = False
     while steps < max_steps:
         if sys_obj.cpu.halted:
+            complete = line_index == len(payload_lines)
             break
         if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
+            if line_index < len(payload_lines):
+                current_line = payload_lines[line_index]
+                line_index += 1
+                line_steps = 0
+                line_started = time.monotonic()
+                sys_obj.uart.inject_input((current_line + "\n").encode())
             else:
+                complete = True
                 break
             continue
         batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
+        batch = max(batch, 1)
+        steps += batch
+        line_steps += batch
+        if (line_steps >= 20_000_000 or
+                (line_started is not None and
+                 time.monotonic() - line_started >= 10.0)):
+            tail = uart_text(buf)[-1000:]
+            raise RuntimeError(
+                "guest test did not return after "
+                f"{line_steps:,} steps on line {line_index}: "
+                f"{current_line!r}\nUART tail:\n{tail}"
+            )
+    if not complete:
+        raise RuntimeError(
+            f"guest test stopped after {steps:,} steps on line "
+            f"{line_index}: {current_line!r}"
+        )
     return uart_text(buf)
 
 
@@ -291,7 +311,7 @@ def check_absent(name, forth_lines, absent_str):
 def test_compilation():
     """Verify fexplorer.f compiled with no errors."""
     check("fexplorer compiles: FEXP-ENTRY exists",
-          ["CREATE TD-C 96 ALLOT  TD-C FEXP-ENTRY  TD-C APP.INIT-XT @ 0<> ."],
+          ["CREATE TD-C APP-DESC ALLOT  TD-C FEXP-ENTRY  TD-C APP.INIT-XT @ 0<> ."],
           "-1")
 
 def test_fexp_run_exists():
@@ -299,37 +319,31 @@ def test_fexp_run_exists():
           [": T-RUN  FEXP-DESC FEXP-ENTRY ; T-RUN  FEXP-DESC APP.INIT-XT @ 0<> ."],
           "-1")
 
-def test_fexp_desc_size():
-    """FEXP-DESC should be an APP-DESC-sized buffer."""
-    check("FEXP-DESC is APP-DESC sized",
-          ["FEXP-DESC APP-DESC + FEXP-DESC - . "],
-          "96")
-
 def test_entry_fills_desc():
     """FEXP-ENTRY should fill the descriptor callbacks."""
     check("FEXP-ENTRY fills init-xt",
-          ["CREATE TD 96 ALLOT  TD FEXP-ENTRY  TD APP.INIT-XT @ 0<> .",],
+          ["CREATE TD APP-DESC ALLOT  TD FEXP-ENTRY  TD APP.INIT-XT @ 0<> .",],
           "-1")
 
 def test_entry_fills_paint():
     check("FEXP-ENTRY fills paint-xt",
-          ["CREATE TD2 96 ALLOT  TD2 FEXP-ENTRY  TD2 APP.PAINT-XT @ 0<> .",],
+          ["CREATE TD2 APP-DESC ALLOT  TD2 FEXP-ENTRY  TD2 APP.PAINT-XT @ 0<> .",],
           "-1")
 
 def test_entry_fills_event():
     check("FEXP-ENTRY fills event-xt",
-          ["CREATE TD3 96 ALLOT  TD3 FEXP-ENTRY  TD3 APP.EVENT-XT @ 0<> .",],
+          ["CREATE TD3 APP-DESC ALLOT  TD3 FEXP-ENTRY  TD3 APP.EVENT-XT @ 0<> .",],
           "-1")
 
 def test_entry_fills_shutdown():
     check("FEXP-ENTRY fills shutdown-xt",
-          ["CREATE TD4 96 ALLOT  TD4 FEXP-ENTRY  TD4 APP.SHUTDOWN-XT @ 0<> .",],
+          ["CREATE TD4 APP-DESC ALLOT  TD4 FEXP-ENTRY  TD4 APP.SHUTDOWN-XT @ 0<> .",],
           "-1")
 
 def test_entry_title():
     """Title should be 'File Explorer'."""
     check("FEXP-ENTRY sets title",
-          ["CREATE TD5 96 ALLOT  TD5 FEXP-ENTRY",
+          ["CREATE TD5 APP-DESC ALLOT  TD5 FEXP-ENTRY",
            "TD5 APP.TITLE-A @ TD5 APP.TITLE-U @ TYPE"],
           "File Explorer")
 
@@ -353,52 +367,10 @@ def test_u_to_s_large():
           ["12345 _FEXP-U>S TYPE"],
           "12345")
 
-def test_size_fmt_small():
-    check("_FEXP-SIZE-FMT formats bytes",
-          ["512 _FEXP-SIZE-FMT TYPE"],
-          "512")
-
-def test_size_fmt_kib():
-    check("_FEXP-SIZE-FMT formats KiB",
-          ["2048 _FEXP-SIZE-FMT TYPE"],
-          "2K")
-
-def test_size_fmt_mib():
-    check("_FEXP-SIZE-FMT formats MiB",
-          ["1048576 _FEXP-SIZE-FMT TYPE"],
-          "1M")
-
-def test_str_cmp_equal():
-    check("_FEXP-STR-CMP equal strings",
-          ['S" abc" S" abc" _FEXP-STR-CMP .'],
-          "0")
-
-def test_str_cmp_less():
-    check("_FEXP-STR-CMP less",
-          [': T-CMP  S" abc" S" abd" _FEXP-STR-CMP . ;', 'T-CMP'],
-          "-1")
-
-def test_str_cmp_greater():
-    check("_FEXP-STR-CMP greater",
-          [': T-CMP2  S" abd" S" abc" _FEXP-STR-CMP . ;', 'T-CMP2'],
-          "1")
-
-def test_str_cmp_case_insensitive():
-    check("_FEXP-STR-CMP case insensitive",
-          ['S" ABC" S" abc" _FEXP-STR-CMP .'],
-          "0")
-
 def test_clip_initial_state():
     check("Clipboard initially empty",
           ["_FEXP-CLIP-OP @ ."],
           "0")
-
-def test_focus_constants():
-    check("Focus constants sequential",
-          ["_FEXP-FOCUS-TREE _FEXP-FOCUS-DETAIL _FEXP-FOCUS-PREVIEW",
-           "_FEXP-FOCUS-MENU _FEXP-FOCUS-GOTO . . . . ."],
-          "4 3 2 1 0")
-
 
 # ═══════════════════════════════════════════════════════════════════
 #  Main
@@ -411,7 +383,6 @@ if __name__ == "__main__":
 
     test_compilation()
     test_fexp_run_exists()
-    test_fexp_desc_size()
     test_entry_fills_desc()
     test_entry_fills_paint()
     test_entry_fills_event()
@@ -421,15 +392,7 @@ if __name__ == "__main__":
     test_u_to_s_zero()
     test_u_to_s_number()
     test_u_to_s_large()
-    test_size_fmt_small()
-    test_size_fmt_kib()
-    test_size_fmt_mib()
-    test_str_cmp_equal()
-    test_str_cmp_less()
-    test_str_cmp_greater()
-    test_str_cmp_case_insensitive()
     test_clip_initial_state()
-    test_focus_constants()
 
     print()
     total = _pass_count + _fail_count

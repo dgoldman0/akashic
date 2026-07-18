@@ -9,12 +9,17 @@ import os, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+EMU_DIR    = os.environ.get(
+    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+)
 
 # TUI dependency chain
 ANSI_F     = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
 KEYS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "keys.f")
 UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
+CELL_WIDTH_F = os.path.join(ROOT_DIR, "akashic", "text", "cell-width.f")
+TERM_F     = os.path.join(ROOT_DIR, "akashic", "utils", "term.f")
+MEMORY_SPAN_F = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 CELL_F     = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
 SCREEN_F   = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
 DRAW_F     = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
@@ -103,6 +108,9 @@ def build_snapshot():
 
     # TUI stack
     utf8_lines     = _load_forth_lines(UTF8_F)
+    cell_width_lines = _load_forth_lines(CELL_WIDTH_F)
+    term_lines     = _load_forth_lines(TERM_F)
+    memory_span_lines = _load_forth_lines(MEMORY_SPAN_F)
     ansi_lines     = _load_forth_lines(ANSI_F)
     keys_lines     = _load_forth_lines(KEYS_F)
     cell_lines     = _load_forth_lines(CELL_F)
@@ -134,7 +142,7 @@ def build_snapshot():
         'VARIABLE _TARN',
         ': T-VFS-NEW  ( -- vfs )',
         '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
-        '    _TARN @ VFS-RAM-VTABLE VFS-NEW ;',
+        '    _TARN @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;',
     ]
 
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
@@ -144,7 +152,8 @@ def build_snapshot():
 
     payload = "\n".join(
         kdos_lines + ["ENTER-USERLAND"] +
-        utf8_lines + ansi_lines + keys_lines +
+        utf8_lines + cell_width_lines + term_lines + memory_span_lines +
+        ansi_lines + keys_lines +
         cell_lines + screen_lines +
         draw_lines + box_lines +
         region_lines + layout_lines +
@@ -377,14 +386,14 @@ def test_expl_next_callback():
 
 
 def test_expl_label_callback():
-    """_EXPL-LABEL prepends [D] for dirs."""
+    """_EXPL-LABEL returns the inode name; the tree marks directories."""
     print("\n── Explorer label callback ──")
-    check("root label starts with [D]",
+    check("root label is the inode name",
         _EXPL_SETUP + [
             '_TW @ _EXPL-CUR !',
             '_TV @ V.ROOT @ _EXPL-LABEL',
-            '4 MIN TYPE 8888 .',
-            _EXPL_CLEANUP], "[D] 8888")
+            '4 MIN TYPE SPACE 8888 .',
+            _EXPL_CLEANUP], "/ 8888")
 
 
 def test_expl_expand_root():

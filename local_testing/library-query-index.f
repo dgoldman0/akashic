@@ -667,7 +667,8 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-zero-rid LIB-DIGEST-SIZE 0 FILL
     4194304 A-XMEM ARENA-NEW DUP 0= _lqi-assert DROP
     DUP _lqi-arena !
-    VFS-RAM-VTABLE VFS-NEW DUP _lqi-vfs ! 0<> _lqi-assert
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _lqi-vfs ! 0<> _lqi-assert
     _lqi-vfs @ VFS-USE
     LIBRARY-VFS-STORE-SIZE ALLOCATE
         ABORT" LIBRARY QUERY INDEX allocation" _lqi-store-slot !

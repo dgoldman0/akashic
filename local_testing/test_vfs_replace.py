@@ -123,9 +123,15 @@ def build_snapshot() -> None:
         "CREATE _TR VREPL-SIZE ALLOT",
         "CREATE _TOUT 4096 ALLOT",
         "CREATE _BAD64 64 ALLOT _BAD64 64 88 FILL",
+        "CREATE _TV-OPS VFS-OPS-SIZE ALLOT",
+        "CREATE _TV-BINDING VFS-BINDING-DESC-SIZE ALLOT",
         "VARIABLE _TS-FD VARIABLE _TS-LEN",
-        ": T-VFS-NEW 524288 A-XMEM ARENA-NEW IF -1 THROW THEN "
-        "VFS-RAM-VTABLE VFS-NEW ;",
+        ": T-BINDING-RESET VFS-RAM-OPS _TV-OPS VFS-OPS-SIZE CMOVE "
+        "VFS-RAM-BINDING _TV-BINDING VFS-BINDING-DESC-SIZE CMOVE "
+        "_TV-OPS _TV-BINDING VB.OPS ! ;",
+        ": T-VFS-NEW T-BINDING-RESET "
+        "524288 A-XMEM ARENA-NEW IF -1 THROW THEN "
+        "_TV-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;",
         ": T-SETUP T-VFS-NEW _TV ! _TV @ VFS-USE "
         "_TV @ _TR VREPL-INIT DROP "
         'S\" /doc.txt\" S\" /doc.new\" S\" /doc.bak\" '
@@ -146,10 +152,10 @@ def build_snapshot() -> None:
         "_TP-VFS ! _TP-IN ! _TP-OFF ! _TP-LEN ! "
         "_TP-BUF ! _TP-BUF @ _TP-LEN @ 2 MIN _TP-OFF @ "
         "_TP-IN @ _TP-VFS @ _VFS-RAM-WRITE ;",
-        ": T-ZERO-XFER 2DROP 2DROP DROP 0 ;",
-        ": T-NEG-XFER 2DROP 2DROP DROP -1 ;",
+        ": T-ZERO-XFER 2DROP 2DROP DROP 0 0 ;",
+        ": T-NEG-XFER 2DROP 2DROP DROP -1 0 ;",
         ": T-LONG-XFER _TP-VFS ! _TP-IN ! _TP-OFF ! _TP-LEN ! "
-        "DROP _TP-LEN @ 1+ ;",
+        "DROP _TP-LEN @ 1+ 0 ;",
         ": T-SYNC _TV @ VFS-SYNC DROP ;",
         ": T-MARK _VRO-ORIGINAL ! S\" new\" _VRO-LEN ! _VRO-DATA ! "
         "_TR _VRO-R ! _TV @ VFS-USE _VREPL-WRITE-MARKER ;",
@@ -161,12 +167,12 @@ def build_snapshot() -> None:
         ": T-ARTIFACTS S\" /doc.new\" _TV @ VFS-RESOLVE 0<> . "
         "S\" /doc.bak\" _TV @ VFS-RESOLVE 0<> . "
         "S\" /doc.txn\" _TV @ VFS-RESOLVE 0<> . ;",
-        ": T-LIE-WRITE 2DROP DROP NIP ;",
-        ": T-FAIL-ALL-SYNC 2DROP -1 ;",
-        ": T-FAIL-COMMIT-SYNC 2DROP "
+        ": T-LIE-WRITE 2DROP DROP NIP 0 ;",
+        ": T-FAIL-ALL-SYNC DROP -1 ;",
+        ": T-FAIL-COMMIT-SYNC DROP "
         "_VRO-TARGET? 0<> _VRO-BACKUP? 0<> AND "
         "_VRO-MARKER? 0= AND IF -1 ELSE 0 THEN ;",
-        ": T-FAIL-CLEANUP-SYNC 2DROP "
+        ": T-FAIL-CLEANUP-SYNC DROP "
         "_VRO-TARGET? 0<> _VRO-BACKUP? 0= AND "
         "_VRO-MARKER? 0= AND _VRO-STAGE? 0= AND "
         "IF -1 ELSE 0 THEN ;",
@@ -394,12 +400,12 @@ def main() -> int:
         [
             "T-SETUP S\" /exact.txt\" _TV @ VFS-CREATE DROP "
             "S\" /exact.txt\" VFS-OPEN CONSTANT _EFD",
-            "0 _TP-GUARDED ! ' T-PART-WRITE VFS-RAM-VTABLE "
-            "VFS-VT-WRITE CELLS + !",
+            "0 _TP-GUARDED ! ' T-PART-WRITE _TV-OPS "
+            "VFS-OP-WRITE CELLS + !",
             'S" hello" _EFD VFS-WRITE-EXACT . _TP-GUARDED @ . '
             '_EFD VFS-TELL .',
             "_EFD VFS-REWIND 0 _TP-GUARDED ! ' T-PART-READ "
-            "VFS-RAM-VTABLE VFS-VT-READ CELLS + !",
+            "_TV-OPS VFS-OP-READ CELLS + !",
             "_TOUT 5 _EFD VFS-READ-EXACT . _TP-GUARDED @ . "
             "_TOUT 5 TYPE SPACE _EFD VFS-TELL . _EFD VFS-CLOSE",
         ],
@@ -411,23 +417,23 @@ def main() -> int:
         [
             "T-SETUP S\" /exact.txt\" _TV @ VFS-CREATE DROP "
             "S\" /exact.txt\" VFS-OPEN CONSTANT _EFD",
-            "' T-ZERO-XFER VFS-RAM-VTABLE VFS-VT-WRITE CELLS + ! "
+            "' T-ZERO-XFER _TV-OPS VFS-OP-WRITE CELLS + ! "
             'S" ab" _EFD VFS-WRITE-EXACT . _EFD VFS-TELL .',
-            "' T-NEG-XFER VFS-RAM-VTABLE VFS-VT-WRITE CELLS + ! "
+            "' T-NEG-XFER _TV-OPS VFS-OP-WRITE CELLS + ! "
             'S" ab" _EFD VFS-WRITE-EXACT . _EFD VFS-TELL .',
-            "' T-LONG-XFER VFS-RAM-VTABLE VFS-VT-WRITE CELLS + ! "
+            "' T-LONG-XFER _TV-OPS VFS-OP-WRITE CELLS + ! "
             'S" ab" _EFD VFS-WRITE-EXACT . _EFD VFS-TELL .',
             "_TOUT -1 _EFD VFS-WRITE-EXACT . "
             "0 2 _EFD VFS-WRITE-EXACT . 0 0 _EFD VFS-WRITE-EXACT .",
-            "_EFD VFS-REWIND ' T-ZERO-XFER VFS-RAM-VTABLE "
-            "VFS-VT-READ CELLS + ! _TOUT 2 _EFD VFS-READ-EXACT . "
+            "_EFD VFS-REWIND ' T-ZERO-XFER _TV-OPS "
+            "VFS-OP-READ CELLS + ! _TOUT 2 _EFD VFS-READ-EXACT . "
             "_EFD VFS-TELL .",
-            "' T-NEG-XFER VFS-RAM-VTABLE VFS-VT-READ CELLS + ! "
+            "' T-NEG-XFER _TV-OPS VFS-OP-READ CELLS + ! "
             "_TOUT 2 _EFD VFS-READ-EXACT . _EFD VFS-TELL .",
-            "' T-LONG-XFER VFS-RAM-VTABLE VFS-VT-READ CELLS + ! "
+            "' T-LONG-XFER _TV-OPS VFS-OP-READ CELLS + ! "
             "_TOUT 2 _EFD VFS-READ-EXACT . _EFD VFS-TELL .",
         ],
-        "-1 0 -1 0 -1 0 -1 -1 0 -1 0 -1 0 -1 0 ",
+        "9 0 67108874 0 67108874 0 1 1 0 9 0 67108874 0 67108874 0 ",
     )
 
     check(
@@ -545,9 +551,9 @@ def main() -> int:
         [
             "T-SETUP",
             "T-OLD-TARGET DROP T-SYNC",
-            "' T-LIE-WRITE VFS-RAM-VTABLE VFS-VT-WRITE CELLS + !",
+            "' T-LIE-WRITE _TV-OPS VFS-OP-WRITE CELLS + !",
             'S" new" _TR VREPL-REPLACE .',
-            "' _VFS-RAM-WRITE VFS-RAM-VTABLE VFS-VT-WRITE CELLS + !",
+            "' _VFS-RAM-WRITE _TV-OPS VFS-OP-WRITE CELLS + !",
             'S" /doc.txt" T-SHOW T-ARTIFACTS',
         ],
         "4 old 0 0 0 ",
@@ -557,9 +563,9 @@ def main() -> int:
         "pre-rotation sync failure retains old target",
         [
             "T-SETUP T-OLD-TARGET DROP T-SYNC",
-            "' T-FAIL-ALL-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !",
+            "' T-FAIL-ALL-SYNC _TV-OPS VFS-OP-SYNCFS CELLS + !",
             'S" new" _TR VREPL-REPLACE .',
-            "' _VFS-RAM-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !",
+            "' _VFS-RAM-SYNCFS _TV-OPS VFS-OP-SYNCFS CELLS + !",
             'S" /doc.txt" T-SHOW T-ARTIFACTS',
         ],
         "4 old 0 0 0 ",
@@ -569,9 +575,9 @@ def main() -> int:
         "commit-marker sync failure reports uncertain and keeps backup",
         [
             "T-SETUP T-OLD-TARGET DROP T-SYNC",
-            "' T-FAIL-COMMIT-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !",
+            "' T-FAIL-COMMIT-SYNC _TV-OPS VFS-OP-SYNCFS CELLS + !",
             'S" new" _TR VREPL-REPLACE .',
-            "' _VFS-RAM-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !",
+            "' _VFS-RAM-SYNCFS _TV-OPS VFS-OP-SYNCFS CELLS + !",
             'S" /doc.txt" T-SHOW T-ARTIFACTS',
         ],
         "9 new 0 -1 0 ",
@@ -581,9 +587,9 @@ def main() -> int:
         "post-commit cleanup sync failure reports committed cleanup",
         [
             "T-SETUP T-OLD-TARGET DROP T-SYNC",
-            "' T-FAIL-CLEANUP-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !",
+            "' T-FAIL-CLEANUP-SYNC _TV-OPS VFS-OP-SYNCFS CELLS + !",
             'S" new" _TR VREPL-REPLACE .',
-            "' _VFS-RAM-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !",
+            "' _VFS-RAM-SYNCFS _TV-OPS VFS-OP-SYNCFS CELLS + !",
             'S" /doc.txt" T-SHOW T-ARTIFACTS',
         ],
         "2 new 0 0 0 ",

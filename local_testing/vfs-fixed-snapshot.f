@@ -34,7 +34,6 @@ VARIABLE _vfsnc-read-store
 VARIABLE _vfsnc-read-u
 VARIABLE _vfsnc-case-store
 VARIABLE _vfsnc-case-status
-VARIABLE _vfsnc-old-vtable
 VARIABLE _vfsnc-old-read-xt
 VARIABLE _vfsnc-old-sync-xt
 VARIABLE _vfsnc-old-delete-xt
@@ -48,7 +47,8 @@ VARIABLE _vfsnc-encode-generation
 CREATE _vfsnc-record-magic
     65 C, 75 C, 86 C, 70 C, 83 C, 78 C, 48 C, 49 C,  \ "AKVFSN01"
 CREATE _vfsnc-private-adjacent 16 ALLOT
-CREATE _vfsnc-vtable VFS-VT-SIZE ALLOT
+CREATE _vfsnc-ops VFS-OPS-SIZE ALLOT
+CREATE _vfsnc-binding VFS-BINDING-DESC-SIZE ALLOT
 
 CREATE _vfsnc-callback-private-begin 0 ALLOT
 VARIABLE _vfsnc-cb-context
@@ -431,8 +431,8 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     VFSNAP-S-CORRUPT _vfsnc-record-case _vfsnc-restore-original
     _vfsnc-stack ;
 
-: _vfsnc-short-read  ( buf len offset inode vfs -- actual )
-    2DROP 2DROP DROP 1 _vfsnc-fault-count +! 0 ;
+: _vfsnc-short-read  ( buf len offset inode vfs -- actual ior )
+    2DROP 2DROP DROP 1 _vfsnc-fault-count +! 0 0 ;
 : _vfsnc-fault-delete  ( inode vfs -- ior )
     1 _vfsnc-fault-count +!
     _vfsnc-fault-count @ _vfsnc-fault-at @ = IF 2DROP -1 EXIT THEN
@@ -440,22 +440,21 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
 : _vfsnc-arm-sync-delete  ( inode vfs -- ior )
     _vfsnc-old-delete-xt @ EXECUTE
     DUP 0= IF -1 _vfsnc-sync-armed ! THEN ;
-: _vfsnc-fail-armed-sync  ( inode vfs -- ior )
+: _vfsnc-fail-armed-sync  ( vfs -- ior )
     _vfsnc-sync-armed @ IF
-        0 _vfsnc-sync-armed ! 2DROP -1 EXIT
+        0 _vfsnc-sync-armed ! DROP -1 EXIT
     THEN
     _vfsnc-old-sync-xt @ EXECUTE ;
 
-: _vfsnc-vtable-begin  ( -- )
-    _vfsnc-vfs @ V.VTABLE @ DUP _vfsnc-old-vtable !
-    DUP VFS-VT-SIZE _vfsnc-vtable SWAP CMOVE
-    DUP VFS-VT-READ CELLS + @ _vfsnc-old-read-xt !
-    DUP VFS-VT-SYNC CELLS + @ _vfsnc-old-sync-xt !
-    VFS-VT-DELETE CELLS + @ _vfsnc-old-delete-xt !
-    _vfsnc-vtable _vfsnc-vfs @ V.VTABLE !
+: _vfsnc-fault-binding-begin  ( -- )
+    _vfsnc-ops VFS-OP-READ CELLS + @ _vfsnc-old-read-xt !
+    _vfsnc-ops VFS-OP-SYNCFS CELLS + @ _vfsnc-old-sync-xt !
+    _vfsnc-ops VFS-OP-UNLINK CELLS + @ _vfsnc-old-delete-xt !
     0 _vfsnc-fault-count ! ;
-: _vfsnc-vtable-end  ( -- )
-    _vfsnc-old-vtable @ _vfsnc-vfs @ V.VTABLE ! ;
+: _vfsnc-fault-binding-end  ( -- )
+    _vfsnc-old-read-xt @ _vfsnc-ops VFS-OP-READ CELLS + !
+    _vfsnc-old-sync-xt @ _vfsnc-ops VFS-OP-SYNCFS CELLS + !
+    _vfsnc-old-delete-xt @ _vfsnc-ops VFS-OP-UNLINK CELLS + ! ;
 
 : _vfsnc-close-after  ( fd -- )
     VFS-CLOSE 1 _vfsnc-close-count +! -779 THROW ;
@@ -468,11 +467,11 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
 : _vfsnc-fault-contracts  ( -- )
     \ A zero-progress read becomes I/O, closes once, and latches.
     _vfsnc-restore-original S" /vfsnap-main.bin" _vfsnc-reset-b
-    _vfsnc-vtable-begin
-    ['] _vfsnc-short-read _vfsnc-vtable VFS-VT-READ CELLS + !
+    _vfsnc-fault-binding-begin
+    ['] _vfsnc-short-read _vfsnc-ops VFS-OP-READ CELLS + !
     VFSNAP-S-IO _vfsnc-store-b @ _vfsnc-blocking-load
     _vfsnc-fault-count @ 1 >= _vfsnc-assert
-    _vfsnc-vtable-end
+    _vfsnc-fault-binding-end
 
     \ Close-after-success and restore-after-success are each exact-once.
     S" /vfsnap-main.bin" _vfsnc-reset-b
@@ -558,8 +557,8 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-store-b @ _vfsnc-scratch-zero? _vfsnc-assert
 
     \ Failing backup deletion is committed-cleanup and still publishes gen 2.
-    _vfsnc-vtable-begin 2 _vfsnc-fault-at !
-    ['] _vfsnc-fault-delete _vfsnc-vtable VFS-VT-DELETE CELLS + !
+    _vfsnc-fault-binding-begin 2 _vfsnc-fault-at !
+    ['] _vfsnc-fault-delete _vfsnc-ops VFS-OP-UNLINK CELLS + !
     _vfsnc-context @ 1 _vfsnc-store-b @ VFSNAP-SAVE
         VFSNAP-S-OK = _vfsnc-assert
     _vfsnc-store-b @ VFSNAP-LAST-VREPL@
@@ -567,19 +566,19 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-store-b @ _vfsnc-backup-present? _vfsnc-assert
     _vfsnc-store-b @ _vfsnc-marker-present? 0= _vfsnc-assert
     _vfsnc-store-b @ _vfsnc-scratch-zero? _vfsnc-assert
-    _vfsnc-vtable-end
+    _vfsnc-fault-binding-end
     S" /vfsnap-main.bin" _vfsnc-reset-b
     _vfsnc-store-b @ VFSNAP-RECOVER VFSNAP-S-OK = _vfsnc-assert
     _vfsnc-store-b @ _vfsnc-artifacts-clean? _vfsnc-assert
 
     \ Arm on the successful marker delete, then fault the immediately
-    \ following sync callback.  This targets the commit barrier by phase,
-    \ independent of how many dirty inodes VFS-SYNC happens to visit.
-    _vfsnc-vtable-begin 0 _vfsnc-sync-armed !
+    \ following filesystem-wide sync callback.  This targets the commit
+    \ barrier by phase without changing the shared RAM binding descriptor.
+    _vfsnc-fault-binding-begin 0 _vfsnc-sync-armed !
     ['] _vfsnc-arm-sync-delete
-        _vfsnc-vtable VFS-VT-DELETE CELLS + !
+        _vfsnc-ops VFS-OP-UNLINK CELLS + !
     ['] _vfsnc-fail-armed-sync
-        _vfsnc-vtable VFS-VT-SYNC CELLS + !
+        _vfsnc-ops VFS-OP-SYNCFS CELLS + !
     _vfsnc-context @ 2 _vfsnc-store-b @ VFSNAP-SAVE
         VFSNAP-S-RECOVERY = _vfsnc-assert
     _vfsnc-store-b @ VFSNAP-LAST-VREPL@ VREPL-S-UNCERTAIN =
@@ -589,7 +588,7 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-store-b @ _vfsnc-marker-present? 0= _vfsnc-assert
     _vfsnc-store-b @ _vfsnc-scratch-zero? _vfsnc-assert
     _vfsnc-sync-armed @ 0= _vfsnc-assert
-    _vfsnc-vtable-end
+    _vfsnc-fault-binding-end
     _vfsnc-raw-b @ _vfsnc-store-b @ _vfsnc-read-target
         _VFSNC-SCRATCH-U = _vfsnc-assert
     _vfsnc-raw-b @ _VFSN-H-GENERATION + @ 3 = _vfsnc-assert
@@ -644,7 +643,11 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     40 _vfsnc-output _vfsnc-allocate
     VFS-CUR _vfsnc-old-vfs !
     1048576 A-XMEM ARENA-NEW DUP 0= _vfsnc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _vfsnc-vfs ! 0<> _vfsnc-assert
+    VFS-RAM-OPS _vfsnc-ops VFS-OPS-SIZE CMOVE
+    VFS-RAM-BINDING _vfsnc-binding VFS-BINDING-DESC-SIZE CMOVE
+    _vfsnc-ops _vfsnc-binding VB.OPS !
+    _vfsnc-binding 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _vfsnc-vfs ! 0<> _vfsnc-assert
     _vfsnc-vfs @ VFS-USE ;
 
 : _vfsnc-cleanup  ( -- )

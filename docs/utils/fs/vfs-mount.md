@@ -43,10 +43,10 @@ Depends on `akashic-vfs`.
 ```forth
 \ Create two VFS instances
 524288 A-XMEM ARENA-NEW  IF -1 THROW THEN
-    VFS-RAM-VTABLE VFS-NEW  CONSTANT sd-vfs
+    VFS-RAM-BINDING 0 VFS-NEW  THROW  CONSTANT sd-vfs
 
 524288 A-XMEM ARENA-NEW  IF -1 THROW THEN
-    VFS-RAM-VTABLE VFS-NEW  CONSTANT ram-vfs
+    VFS-RAM-BINDING 0 VFS-NEW  THROW  CONSTANT ram-vfs
 
 \ Mount them
 sd-vfs  S" /sd"  VMNT-MOUNT DROP

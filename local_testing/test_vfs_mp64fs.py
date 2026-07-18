@@ -26,6 +26,7 @@ from asm import assemble
 from devices import (
     STORAGE_CMD_FLUSH,
     STORAGE_CMD_READ,
+    STORAGE_CMD_WRITE,
     STORAGE_RESULT_FLUSH_FAILURE,
     STORAGE_RESULT_MEDIA_FAILURE,
 )
@@ -152,6 +153,63 @@ def build_malformed_entry_image(kind):
     return bytes(image)
 
 
+def build_overlapping_extent_image(kind):
+    """Build an otherwise-valid image with duplicate sector ownership."""
+    image = bytearray(build_disk_image([
+        ("first.bin", PARENT_ROOT, FTYPE_RAW, b"first"),
+        ("second.bin", PARENT_ROOT, FTYPE_RAW, b"second"),
+    ]))
+    total = len(image) // SECTOR
+    bmap_sectors = (total + 4095) // 4096
+    directory = (1 + bmap_sectors) * SECTOR
+    first = directory
+    second = directory + DIR_ENTRY_SIZE
+    first_start = struct.unpack_from('<H', image, first + 24)[0]
+    if kind == "within-file":
+        struct.pack_into('<HH', image, first + 44, first_start, 1)
+    elif kind == "between-files":
+        struct.pack_into('<H', image, second + 24, first_start)
+    else:
+        raise ValueError(kind)
+    return bytes(image)
+
+
+def build_stale_tail_image(fill=0xA5):
+    """Build a short file whose allocated-but-invisible tail is nonzero."""
+    image = bytearray(build_disk_image([
+        ("hello.txt", PARENT_ROOT, FTYPE_TEXT, b"Hello, VFS world!"),
+    ]))
+    bmap_sectors = (len(image) // SECTOR + 4095) // 4096
+    directory = (1 + bmap_sectors) * SECTOR
+    start = struct.unpack_from('<H', image, directory + 24)[0]
+    used = struct.unpack_from('<I', image, directory + 28)[0]
+    image[start * SECTOR + used:(start + 1) * SECTOR] = bytes([fill]) * (SECTOR - used)
+    return bytes(image), start, used
+
+
+def build_stale_free_sector_image(fill=0xCC):
+    """Build a volume whose first free sector contains old media bytes."""
+    image, start, _ = build_stale_tail_image()
+    image = bytearray(image)
+    free_sector = start + 1
+    image[free_sector * SECTOR:(free_sector + 1) * SECTOR] = bytes([fill]) * SECTOR
+    return bytes(image), free_sector
+
+
+def build_last_slot_image():
+    """Move one valid root entry to the final directory slot."""
+    image = bytearray(build_disk_image([
+        ("last.bin", PARENT_ROOT, FTYPE_RAW, b"last"),
+    ]))
+    bmap_sectors = (len(image) // SECTOR + 4095) // 4096
+    directory = (1 + bmap_sectors) * SECTOR
+    entry = bytes(image[directory:directory + DIR_ENTRY_SIZE])
+    image[directory:directory + DIR_ENTRY_SIZE] = bytes(DIR_ENTRY_SIZE)
+    final = directory + (MAX_FILES - 1) * DIR_ENTRY_SIZE
+    image[final:final + DIR_ENTRY_SIZE] = entry
+    return bytes(image)
+
+
 # ── Emulator helpers ─────────────────────────────────────────────────
 
 def _load_bios():
@@ -246,10 +304,22 @@ def build_snapshot():
         # Write buffer
         'CREATE _WB 4096 ALLOT',
         # VFS init helper: create MP64FS VFS
+        'CREATE _TBD /BLOCK-DEVICE ALLOT',
+        'CREATE _TVOL /VOLUME ALLOT',
+        'VARIABLE _TVOL-READY',
         'VARIABLE _TARN',
+        ': T-VOLUME  ( -- volume )',
+        '    _TVOL-READY @ 0= IF',
+        '        _TBD BD-OPEN THROW',
+        '        _TBD _TVOL VOL-RAW THROW',
+        '        -1 _TVOL-READY !',
+        '    THEN',
+        '    _TVOL ;',
+        ': T-ARENA  ( -- arena )',
+        '    524288 A-XMEM ARENA-NEW THROW ;',
         ': T-VMP-NEW  ( -- vfs )',
-        '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
-        '    _TARN @ VMP-NEW ;',
+        '    T-ARENA _TARN !',
+        '    _TARN @ T-VOLUME VMP-NEW THROW ;',
     ]
 
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20),
@@ -318,6 +388,9 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None,
     img = disk_image if disk_image else storage_bytes
     sys_obj.storage._image_data[:len(img)] = img
     sys_obj.storage._capacity_sectors = len(img) // SECTOR
+    sys_obj.storage.media_generation = (
+        sys_obj.storage.media_generation + 1
+    ) & 0xFFFF_FFFF
     for fault in storage_faults or ():
         sys_obj.storage.inject_fault(**fault)
     buf.clear()
@@ -357,10 +430,22 @@ def run_fresh_forth(image_path, lines, max_steps=800_000_000):
     load_lines += [
         'CREATE _RB 4096 ALLOT',
         'CREATE _WB 4096 ALLOT',
+        'CREATE _TBD /BLOCK-DEVICE ALLOT',
+        'CREATE _TVOL /VOLUME ALLOT',
+        'VARIABLE _TVOL-READY',
         'VARIABLE _TARN',
+        ': T-VOLUME  ( -- volume )',
+        '    _TVOL-READY @ 0= IF',
+        '        _TBD BD-OPEN THROW',
+        '        _TBD _TVOL VOL-RAW THROW',
+        '        -1 _TVOL-READY !',
+        '    THEN',
+        '    _TVOL ;',
+        ': T-ARENA  ( -- arena )',
+        '    524288 A-XMEM ARENA-NEW THROW ;',
         ': T-VMP-NEW  ( -- vfs )',
-        '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
-        '    _TARN @ VMP-NEW ;',
+        '    T-ARENA _TARN !',
+        '    _TARN @ T-VOLUME VMP-NEW THROW ;',
     ]
 
     sys_obj = MegapadSystem(
@@ -394,7 +479,6 @@ def _cold_worker(phase, image_path):
     if phase == "write":
         lines = [
             'T-VMP-NEW CONSTANT _V',
-            '_V VMP-INIT . ." <init "',
             '_V VFS-USE',
             'S" /hello.txt" VFS-OPEN CONSTANT _FD',
             'S" COLD-PERSISTED" _FD VFS-WRITE . ." <wrote "',
@@ -403,7 +487,6 @@ def _cold_worker(phase, image_path):
     elif phase == "read":
         lines = [
             'T-VMP-NEW CONSTANT _V',
-            '_V VMP-INIT . ." <init "',
             '_V VFS-USE',
             'S" /hello.txt" VFS-OPEN CONSTANT _FD',
             '_RB 14 _FD VFS-READ . ." <read "',
@@ -459,410 +542,361 @@ def check(name, forth_lines, expected, disk_image=None, storage_faults=None):
 #  Tests
 # =====================================================================
 
-def test_probe_valid():
-    """Probe returns TRUE for a valid MP64FS image."""
-    check("probe-valid", [
-        'T-VMP-NEW CONSTANT _V',
-        'CREATE _PBUF 512 ALLOT',
-        # Read sector 0 into _PBUF
-        '0 DISK-SEC!  _PBUF DISK-DMA!  1 DISK-N!  DISK-READ',
-        '_PBUF _V _VMP-PROBE IF ." PROBE-OK" ELSE ." PROBE-FAIL" THEN',
-    ], "PROBE-OK")
+def test_constructor_binds_and_mounts_volume():
+    """The public constructor is the single successful mount boundary."""
+    check("constructor binds and mounts volume", [
+        'T-ARENA CONSTANT _AR',
+        '_AR T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
+        '_IOR 0=',
+        '_V 0<> AND',
+        '_V V.LIFECYCLE @ VFS-L-MOUNTED = AND',
+        '_V V.VOLUME @ T-VOLUME = AND',
+        'VMP-BINDING VFS-BINDING-VALID? AND',
+        '_V VFS-CAPS@ VFS-CAP-PROBE AND 0<> AND',
+        '_V V.BINDING @ VB.FLAGS @ VFS-BF-STABLE-IDS AND 0= AND',
+        'IF ." CONSTRUCTOR-OK" THEN',
+    ], "CONSTRUCTOR-OK")
 
 
-def test_probe_invalid():
-    """Probe returns FALSE for a non-MP64FS image."""
-    bad_img = bytearray(2048 * 512)
-    bad_img[0:4] = b"XXXX"
-    check("probe-invalid", [
-        'T-VMP-NEW CONSTANT _V',
-        'CREATE _PBUF 512 ALLOT',
-        '0 DISK-SEC!  _PBUF DISK-DMA!  1 DISK-N!  DISK-READ',
-        '_PBUF _V _VMP-PROBE IF ." PROBE-FAIL" ELSE ." PROBE-OK" THEN',
-    ], "PROBE-OK", disk_image=bytes(bad_img))
+def test_volume_probe_match_nonmatch_and_io_error():
+    """ABI-1 PROBE reads only its volume and preserves checked failures."""
+    check("MP probe match", [
+        'VMP-BINDING T-VOLUME VFS-PROBE CONSTANT _IOR CONSTANT _SCORE',
+        '_IOR 0= _SCORE VMP-PROBE-SCORE = AND IF ." MP-PROBE-MATCH" THEN',
+    ], "MP-PROBE-MATCH")
 
+    nonmatch = bytearray(build_disk_image([]))
+    nonmatch[:4] = b"NOPE"
+    check("MP probe nonmatch", [
+        'VMP-BINDING T-VOLUME VFS-PROBE CONSTANT _IOR CONSTANT _SCORE',
+        '_IOR 0= _SCORE 0= AND IF ." MP-PROBE-NOMATCH" THEN',
+    ], "MP-PROBE-NOMATCH", disk_image=bytes(nonmatch))
 
-def test_init_success():
-    """VMP-INIT succeeds and returns ior=0."""
-    check("init-success", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT . ." <ior"',
-    ], "0 <ior")
-
-
-def test_init_propagates_checked_read_failure():
-    """Failed metadata I/O is returned before cached bytes are parsed."""
-    check("init-checked-read-failure", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT . ." <ior"',
-    ], "9 <ior", storage_faults=[{
+    check("MP probe checked I/O error", [
+        'VMP-BINDING T-VOLUME VFS-PROBE CONSTANT _IOR CONSTANT _SCORE',
+        '_SCORE 0=',
+        '_IOR VFS-IOR-REASON VFS-R-IO = AND',
+        '_IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND',
+        '_IOR VFS-IOR-DETAIL 0<> AND',
+        'IF ." MP-PROBE-IO-ERROR" THEN',
+    ], "MP-PROBE-IO-ERROR", storage_faults=[{
         "stage": "start",
         "result": STORAGE_RESULT_MEDIA_FAILURE,
         "command": STORAGE_CMD_READ,
     }])
 
 
-def test_init_dynamic_geometry():
-    """The binding adopts every geometry field from an 8192-sector image."""
-    img = build_disk_image([], total_sectors=8192)
-    check("init-dynamic-geometry", [
+def test_constructor_requires_volume():
+    """A volume-required binding rejects an absent attachment directly."""
+    check("constructor requires volume", [
+        'T-ARENA 0 VMP-NEW CONSTANT _IOR CONSTANT _V',
+        '_V 0= _IOR VFS-IOR-REASON VFS-R-NOVOLUME = AND',
+        'IF ." NOVOLUME-OK" THEN',
+    ], "NOVOLUME-OK")
+
+
+def test_constructor_propagates_checked_read_failure():
+    """Mount exposes the checked-volume error instead of parsing stale bytes."""
+    check("constructor checked-read failure", [
+        'T-ARENA T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
+        '_V 0<>',
+        '_IOR VFS-IOR-REASON VFS-R-IO = AND',
+        '_IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND',
+        '_IOR VFS-IOR-DETAIL 0<> AND',
+        'IF ." CHECKED-READ-ERROR-OK" THEN',
+    ], "CHECKED-READ-ERROR-OK", storage_faults=[{
+        "stage": "start",
+        "result": STORAGE_RESULT_MEDIA_FAILURE,
+        "command": STORAGE_CMD_READ,
+    }])
+
+
+def test_constructor_adopts_volume_geometry():
+    """Mount adopts geometry from an explicitly sized 8192-sector volume."""
+    image = build_disk_image([], total_sectors=8192)
+    check("constructor adopts geometry", [
+        'T-ARENA T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
+        '_IOR 0=',
+        '_V V.BCTX @ DUP _VMP-C.TOTAL + @ 8192 = AND',
+        'DUP _VMP-C.BN + @ 2 = AND',
+        'DUP _VMP-C.DIRSTART + @ 3 = AND',
+        '_VMP-C.DSTART + @ 15 = AND',
+        'IF ." GEOMETRY-OK" THEN',
+    ], "GEOMETRY-OK", disk_image=image)
+
+
+def test_constructor_rejects_malformed_media():
+    """Every on-disk invariant is rejected at constructor time."""
+    bad_magic = bytearray(build_disk_image([], total_sectors=8192))
+    bad_magic[:4] = b"NOPE"
+
+    bad_geometry = bytearray(build_disk_image([], total_sectors=8192))
+    struct.pack_into('<H', bad_geometry, 14, 4)
+
+    bad_marker = bytearray(build_disk_image([], total_sectors=8192))
+    struct.pack_into('<H', bad_marker, 4, 2)
+
+    unreserved = bytearray(build_disk_image([], total_sectors=8192))
+    unreserved[SECTOR] &= 0xFE
+
+    cases = [
+        ("magic", bytes(bad_magic), 11, 1),
+        ("geometry", bytes(bad_geometry), 10, 2),
+        ("marker", bytes(bad_marker), 10, 2),
+        ("unreserved-metadata", bytes(unreserved), 10, 3),
+    ]
+    cases.extend(
+        (f"dirent-{kind}", build_malformed_entry_image(kind), 10, 4)
+        for kind in (
+            "start-before-data",
+            "end-after-media",
+            "used-over-capacity",
+            "secondary-zero-pair",
+            "invalid-parent",
+            "bitmap-unclaimed",
+            "directory-data",
+        )
+    )
+    cases.extend((
+        ("extent-overlap-within-file",
+         build_overlapping_extent_image("within-file"), 10, 4),
+        ("extent-overlap-between-files",
+         build_overlapping_extent_image("between-files"), 10, 4),
+    ))
+    for name, image, reason, detail in cases:
+        corrupt_flag_check = (
+            '_IOR VFS-IOR-FLAGS VFS-IOR-F-CORRUPT AND 0<> AND'
+            if reason == 10 else ''
+        )
+        check(f"constructor rejects {name}", [
+            'T-ARENA T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
+            '_V 0<>',
+            f'_IOR VFS-IOR-REASON {reason} = AND',
+            '_IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT = AND',
+            f'_IOR VFS-IOR-DETAIL {detail} = AND',
+            corrupt_flag_check,
+            'IF ." FORMAT-REJECT-OK" THEN',
+        ], "FORMAT-REJECT-OK", disk_image=image)
+
+
+def test_constructor_reports_core_arena_exhaustion():
+    """Core allocation failure is returned as structured NOMEM."""
+    check("constructor core arena exhaustion", [
+        '8192 A-XMEM ARENA-NEW THROW CONSTANT _AR',
+        '_AR T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
+        '_V 0= _IOR VFS-IOR-REASON VFS-R-NOMEM = AND',
+        'IF ." CORE-NOMEM-OK" THEN',
+    ], "CORE-NOMEM-OK")
+
+
+def test_final_directory_slot_mounts_without_pair_loop_wrap():
+    """The overlap pair scan handles an occupied final slot safely."""
+    check("final directory slot", [
         'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT . ." <ior"',
-        '_V V.BCTX @ DUP _VMP-C.TOTAL + @ . DUP _VMP-C.BN + @ . DUP _VMP-C.DIRSTART + @ . _VMP-C.DSTART + @ . ." <geometry"',
-    ], "8192 2 3 15 <geometry", disk_image=img)
+        'S" /last.bin" _V VFS-RESOLVE DUP IF',
+        f'  IN.BID @ {MAX_FILES - 1} =',
+        'ELSE DROP FALSE THEN',
+        'IF ." FINAL-SLOT-OK" THEN',
+    ], "FINAL-SLOT-OK", disk_image=build_last_slot_image())
 
 
-def test_init_rejects_inconsistent_geometry():
-    """A shifted directory that disagrees with the bitmap is rejected."""
-    img = bytearray(build_disk_image([], total_sectors=8192))
-    struct.pack_into('<H', img, 14, 4)
-    check("init-rejects-inconsistent-geometry", [
+def test_root_and_lazy_subdirectory_reads():
+    """Mounted root and lazy subdirectory dentries resolve and read."""
+    check("root and lazy subdirectory reads", [
         'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT . ." <ior"',
-    ], "-3 <ior", disk_image=bytes(img))
+        'S" /hello.txt" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _HF',
+        '_RB 17 _HF VFS-READ? THROW 17 =',
+        '_RB 17 S" Hello, VFS world!" COMPARE 0= AND',
+        'S" /docs/readme.txt" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _RF',
+        '_RB 21 _RF VFS-READ? THROW 21 = AND',
+        '_RB 21 S" Inside docs directory" COMPARE 0= AND',
+        'IF ." TREE-READ-OK" THEN',
+    ], "TREE-READ-OK")
 
 
-def test_init_rejects_non_one_format_marker():
-    """The VFS binding accepts only the fixed MP64FS format marker."""
-    img = bytearray(build_disk_image([], total_sectors=8192))
-    struct.pack_into('<H', img, 4, 2)
-    check("init-rejects-non-one-format-marker", [
+def test_binary_read_and_offset():
+    """Binary sizes and nonzero offsets survive the binding callback ABI."""
+    check("binary read and offset", [
         'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT . ." <ior"',
-    ], "-3 <ior", disk_image=bytes(img))
+        'S" /data.bin" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _BF',
+        '_BF VFS-SIZE 1024 =',
+        '250 _BF VFS-SEEK',
+        '_RB 20 _BF VFS-READ? THROW 20 = AND',
+        '_RB C@ 250 = AND _RB 6 + C@ 0= AND',
+        'IF ." OFFSET-READ-OK" THEN',
+    ], "OFFSET-READ-OK")
 
 
-def test_init_rejects_unreserved_metadata_sector():
-    """Every geometry-selected metadata sector must be bitmap-reserved."""
-    img = bytearray(build_disk_image([], total_sectors=8192))
-    img[SECTOR] &= 0xFE
-    check("init-rejects-unreserved-metadata", [
+def test_create_write_read_delete_and_sync():
+    """The writable binding completes a normal mutation lifecycle."""
+    check("create write read delete sync", [
         'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT . ." <ior"',
-    ], "-4 <ior", disk_image=bytes(img))
+        'S" made.txt" _V VFS-MKFILE? THROW DROP',
+        'S" /made.txt" VFS-FF-READ VFS-FF-WRITE OR _V '
+        'VFS-OPEN? THROW CONSTANT _FD',
+        'S" persisted" _FD VFS-WRITE? THROW 9 =',
+        '_FD VFS-REWIND',
+        '_RB 9 _FD VFS-READ? THROW 9 = AND',
+        '_RB 9 S" persisted" COMPARE 0= AND',
+        '_FD VFS-CLOSE? THROW',
+        '_V VFS-SYNC 0= AND',
+        'S" /made.txt" _V VFS-RM 0= AND',
+        'S" /made.txt" _V VFS-RESOLVE 0= AND',
+        'IF ." MUTATION-OK" THEN',
+    ], "MUTATION-OK")
 
 
-def test_init_reports_arena_capacity_failure():
-    """Context allocation failure returns -1 instead of aborting the guest."""
-    check("init-arena-capacity", [
-        '524288 A-XMEM ARENA-NEW IF -1 THROW THEN CONSTANT _SMALL-AR',
-        '_SMALL-AR VMP-NEW CONSTANT _SMALL-V',
-        '_SMALL-AR ARENA-FREE 8000 - _SMALL-AR SWAP ARENA-ALLOT DROP',
-        '_SMALL-V VMP-INIT . ." <ior"',
-    ], "-1 <ior")
-
-
-def test_init_rejects_malformed_directory_entries():
-    """Every runtime dirent invariant is enforced before inode exposure."""
-    for kind in (
-        "start-before-data",
-        "end-after-media",
-        "used-over-capacity",
-        "secondary-zero-pair",
-        "invalid-parent",
-        "bitmap-unclaimed",
-        "directory-data",
-    ):
-        check(f"init-rejects-dirent-{kind}", [
-            'T-VMP-NEW CONSTANT _V',
-            '_V VMP-INIT . ." <ior"',
-        ], "-5 <ior", disk_image=build_malformed_entry_image(kind))
-
-
-def test_failed_init_blocks_public_mutation():
-    """Ignored init failure cannot create, delete, sync, or alter disk state."""
-    check("failed-init-blocks-mutation", [
+def test_create_zeroes_newly_allocated_sector():
+    """Create claims a sector only after old media bytes are zeroed."""
+    global _pass_count, _fail_count
+    image, free_sector = build_stale_free_sector_image()
+    output, sys_obj = run_forth([
         'T-VMP-NEW CONSTANT _V',
-        ': T-BAD-MUTATE',
-        '  _V VMP-INIT . ." <ior "',
-        '  S" /bad-dir" _V VFS-RM . ." <rm "',
-        '  S" after.f" _V VFS-MKFILE 0= . ." <mk-blocked "',
-        '  _V VFS-SYNC . ." <sync "',
-        '  1 DISK-SEC! _RB DISK-DMA! 1 DISK-N! DISK-READ',
-        '  _RB 1+ C@ 64 AND 0<> . ." <bit "',
-        '  2 DISK-SEC! _RB DISK-DMA! 1 DISK-N! DISK-READ',
-        '  _RB 48 + C@ 0= . ." <slot" ;',
-        'T-BAD-MUTATE',
-    ], "-5 <ior -1 <rm -1 <mk-blocked -1 <sync -1 <bit -1 <slot",
-       disk_image=build_malformed_entry_image("directory-data"))
+        'S" fresh.bin" _V VFS-MKFILE? THROW DUP',
+        f'IN.BDATA @ {free_sector} = IF ." CREATE-SECTOR-OK" THEN DROP',
+    ], disk_image=image)
+    media = bytes(sys_obj.storage._image_data)
+    sector = media[free_sector * SECTOR:(free_sector + 1) * SECTOR]
+    ok = "CREATE-SECTOR-OK" in output and sector == bytes(SECTOR)
+    if ok:
+        _pass_count += 1
+        print("  PASS  create zeroes allocated sector")
+    else:
+        _fail_count += 1
+        print("  FAIL  create zeroes allocated sector")
+        print("        sector zero:", sector == bytes(SECTOR))
+        print("        output:", output[-1500:])
+
+
+def test_seek_gap_and_truncate_growth_zero_visible_ranges():
+    """Neither sparse writes nor truncate growth expose an old sector tail."""
+    image, _, used = build_stale_tail_image()
+    zero_word = (
+        ': _ZERO? ( a u -- f ) TRUE -ROT 0 DO '
+        'DUP I + C@ IF 2DROP FALSE UNLOOP EXIT THEN LOOP DROP ;'
+    )
+    check("seek gap zero fill", [
+        zero_word,
+        'T-VMP-NEW CONSTANT _V',
+        'S" /hello.txt" VFS-FF-READ VFS-FF-WRITE OR _V '
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '100 _FD VFS-SEEK',
+        'S" Z" _FD VFS-WRITE? THROW 1 =',
+        '_FD VFS-REWIND',
+        '_RB 101 _FD VFS-READ? THROW 101 = AND',
+        f'_RB {used} + {100 - used} _ZERO? AND',
+        '_RB 100 + C@ [CHAR] Z = AND',
+        'IF ." SEEK-GAP-ZERO-OK" THEN',
+    ], "SEEK-GAP-ZERO-OK", disk_image=image)
+
+    check("truncate growth zero fill", [
+        zero_word,
+        'T-VMP-NEW CONSTANT _V',
+        'S" /hello.txt" VFS-FF-READ VFS-FF-WRITE OR _V '
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '1024 _FD VFS-TRUNCATE 0=',
+        '_FD VFS-REWIND',
+        '_RB 1024 _FD VFS-READ? THROW 1024 = AND',
+        f'_RB {used} + {1024 - used} _ZERO? AND',
+        'IF ." TRUNCATE-ZERO-OK" THEN',
+    ], "TRUNCATE-ZERO-OK", disk_image=image)
+
+
+def test_zeroing_failures_do_not_publish_size_or_extent():
+    """Failed gap/allocation zeroing leaves logical metadata unchanged."""
+    image, _, used = build_stale_tail_image()
+    fault = [{
+        "stage": "start",
+        "result": STORAGE_RESULT_MEDIA_FAILURE,
+        "command": STORAGE_CMD_WRITE,
+    }]
+    check("gap zero failure is not published", [
+        'T-VMP-NEW CONSTANT _V',
+        'S" /hello.txt" VFS-FF-READ VFS-FF-WRITE OR _V '
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '100 _FD VFS-SEEK',
+        'S" Z" _FD VFS-WRITE? CONSTANT _IOR CONSTANT _ACT',
+        '_ACT 0= _IOR VFS-IOR-REASON VFS-R-IO = AND',
+        f'_FD VFS-SIZE {used} = AND',
+        f'_FD FD.INODE @ IN.BID @ _V V.BCTX @ _VMP-DIRENT '
+        f'_VMP-DE.USED {used} = AND',
+        'IF ." GAP-FAIL-NOT-PUBLISHED" THEN',
+    ], "GAP-FAIL-NOT-PUBLISHED", disk_image=image, storage_faults=fault)
+
+    check("allocation zero failure is not published", [
+        'T-VMP-NEW CONSTANT _V',
+        'S" /hello.txt" VFS-FF-READ VFS-FF-WRITE OR _V '
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '1024 _FD VFS-TRUNCATE CONSTANT _IOR',
+        '_IOR VFS-IOR-REASON VFS-R-IO =',
+        f'_FD VFS-SIZE {used} = AND',
+        '_FD FD.INODE @ IN.BID @ _V V.BCTX @ _VMP-DIRENT',
+        f'DUP _VMP-DE.USED {used} = AND',
+        '_VMP-DE.COUNT 1 = AND',
+        'IF ." ALLOC-FAIL-NOT-PUBLISHED" THEN',
+    ], "ALLOC-FAIL-NOT-PUBLISHED", disk_image=image, storage_faults=fault)
 
 
 def test_second_bitmap_sector_sync_and_remount():
-    """Allocation above sector 4096 survives sync and a fresh VFS mount."""
-    img = build_disk_image([
+    """Allocation above sector 4096 survives sync and a second mount."""
+    image = build_disk_image([
         ("prefix.bin", PARENT_ROOT, FTYPE_RAW, bytes(4100 * SECTOR)),
     ], total_sectors=8192)
-    check("second-bitmap-sector-sync-remount", [
+    check("second bitmap sector sync and remount", [
         'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP _V VFS-USE',
-        'S" high.bin" _V VFS-MKFILE DUP IN.BDATA @ . ." <high-sector" DROP',
-        '_V VFS-SYNC DROP',
+        'S" high.bin" _V VFS-MKFILE? THROW DUP IN.BDATA @ 4115 = SWAP DROP',
+        '_V VFS-SYNC 0= AND',
         'T-VMP-NEW CONSTANT _VR',
-        '_VR VMP-INIT DROP _VR VFS-USE',
-        'S" /high.bin" _VR VFS-RESOLVE DUP 0<> IF IN.BDATA @ . ." <remount-sector REMOUNT-OK" ELSE DROP ." REMOUNT-FAIL" THEN',
-    ], "4115 <remount-sector REMOUNT-OK", disk_image=img)
-
-
-def test_init_populates_root():
-    """After init, VFS root has children from the disk."""
-    check("init-populates-root", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        # Check root child pointer directly
-        '_V V.ROOT @ IN.CHILD @ . ." <rchild"',
-        '_V V.CWD  @ IN.CHILD @ . ." <cwdchild"',
-        # Try to resolve hello.txt (should work)
-        'S" hello.txt" _V VFS-RESOLVE DUP 0<> IF',
-        '    ." RESOLVED-OK"',
-        'ELSE ." RESOLVED-FAIL" THEN DROP',
-    ], "RESOLVED-OK")
-
-
-def test_root_has_all_files():
-    """Root listing includes all root-level files and directories."""
-    check("root-all-files", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        ': T-WALK  _V V.ROOT @ IN.CHILD @  BEGIN DUP 0<> WHILE  DUP IN.NAME @ DUP 0<> IF DUP 16 + SWAP @ TYPE ."  " ELSE DROP THEN IN.SIBLING @  REPEAT DROP ;',
-        'T-WALK',
-    ], "data.bin")
-
-
-def test_root_has_subdir():
-    """Root listing includes the 'docs' directory."""
-    check("root-has-subdir", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        ': T-WALK2  _V V.ROOT @ IN.CHILD @  BEGIN DUP 0<> WHILE  DUP IN.NAME @ DUP 0<> IF DUP 16 + SWAP @ TYPE ."  " ELSE DROP THEN IN.SIBLING @  REPEAT DROP ;',
-        'T-WALK2',
-    ], "docs")
-
-
-def test_resolve_file():
-    """VFS-RESOLVE finds a root-level file."""
-    check("resolve-file", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" hello.txt" _V VFS-RESOLVE DUP 0<> IF ." FOUND" ELSE ." NOTFOUND" THEN DROP',
-    ], "FOUND")
-
-
-def test_resolve_absolute():
-    """VFS-RESOLVE handles absolute path /hello.txt."""
-    check("resolve-absolute", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" /hello.txt" _V VFS-RESOLVE DUP 0<> IF ." FOUND" ELSE ." NOTFOUND" THEN DROP',
-    ], "FOUND")
-
-
-def test_resolve_subdir_file():
-    """VFS-RESOLVE finds a file inside a subdirectory."""
-    check("resolve-subdir-file", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" /docs/readme.txt" _V VFS-RESOLVE DUP 0<> IF ." FOUND" ELSE ." NOTFOUND" THEN DROP',
-    ], "FOUND")
-
-
-def test_read_file():
-    """Read a file's contents through VFS-READ."""
-    check("read-file", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" /hello.txt" VFS-OPEN DUP 0<> IF',
-        '    _RB 4096 ROT VFS-READ',
-        '    _RB SWAP TYPE',    # print the read data
-        'ELSE ." OPEN-FAIL" DROP THEN',
-    ], "Hello, VFS world!")
-
-
-def test_read_binary():
-    """Read binary data and verify size."""
-    check("read-binary", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" /data.bin" VFS-OPEN DUP 0<> IF',
-        '    DUP VFS-SIZE . ." <sz"',      # should print 1024
-        '    _RB 1024 ROT VFS-READ . ." <act"',   # should print 1024
-        'ELSE ." OPEN-FAIL" DROP THEN',
-    ], "1024 <sz")
-
-
-def test_read_subdir_file():
-    """Read a file inside a subdirectory."""
-    check("read-subdir-file", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" /docs/readme.txt" VFS-OPEN DUP 0<> IF',
-        '    _RB 4096 ROT VFS-READ',
-        '    _RB SWAP TYPE',
-        'ELSE ." OPEN-FAIL" DROP THEN',
-    ], "Inside docs directory")
-
-
-def test_write_and_readback():
-    """Write data to a file and read it back."""
-    check("write-readback", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        # Open hello.txt for write
-        'S" /hello.txt" VFS-OPEN CONSTANT _FD',
-        # Write new content
-        'S" Overwritten!" _WB SWAP DUP >R CMOVE',
-        '_WB R> 0 _FD FD.INODE @ _V',
-            'VFS-VT-WRITE _V _VFS-XT EXECUTE DROP',
-        # Update inode size
-        '12 _FD FD.INODE @ IN.SIZE-LO !',
-        # Rewind and read back
-        '_FD VFS-REWIND',
-        '_RB 4096 _FD VFS-READ . ." <act"',
-        '_RB 12 TYPE',
-    ], "Overwritten!")
-
-
-def test_write_via_vfs_write():
-    """Write through VFS-WRITE (high-level) and read back."""
-    check("write-vfs-write", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" /hello.txt" VFS-OPEN CONSTANT _FD',
-        'VARIABLE _WLEN',
-        # Write using VFS-WRITE
-        'S" NEW-DATA" _WB SWAP DUP _WLEN ! CMOVE',
-        '_WB _WLEN @ _FD VFS-WRITE . ." <wact"',
-        # Rewind and read
-        '_FD VFS-REWIND',
-        '_RB 4096 _FD VFS-READ DROP',
-        '_RB _WLEN @ TYPE',
-    ], "NEW-DATA")
-
-
-def test_create_file():
-    """VFS-MKFILE creates a new file visible in directory."""
-    check("create-file", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'VARIABLE _MKR',
-        ': T-MK  S" newfile.txt" _V VFS-MKFILE DUP 0<> IF DROP 1 ELSE DROP 0 THEN _MKR ! ;',
-        'T-MK  _MKR @ . ." <mk"',
-        'S" /newfile.txt" _V VFS-RESOLVE 0<> . ." <found"',
-    ], "1 <mk")
-
-
-def test_delete_file():
-    """VFS-RM deletes a file."""
-    check("delete-file", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        # Verify it exists
-        'S" /hello.txt" _V VFS-RESOLVE 0<> IF ." PRE-OK " ELSE ." PRE-FAIL " THEN',
-        # Delete
-        'S" /hello.txt" _V VFS-RM . ." <rmior"',
-        # Verify gone
-        'S" /hello.txt" _V VFS-RESOLVE 0= IF ."  GONE" ELSE ."  STILL" THEN',
-    ], "GONE")
-
-
-def test_sync():
-    """VFS-SYNC returns ior=0."""
-    check("sync", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        '_V VFS-SYNC . ." <syncior"',
-    ], "0 <syncior")
+        'S" /high.bin" _VR VFS-RESOLVE DUP 0<> IF',
+        '  IN.BDATA @ 4115 = AND',
+        'ELSE DROP FALSE THEN',
+        'IF ." HIGH-ALLOC-OK" THEN',
+    ], "HIGH-ALLOC-OK", disk_image=image)
 
 
 def test_sync_retains_dirty_metadata_until_flush_succeeds():
-    """A failed checked FLUSH leaves metadata retryable and still dirty."""
-    check("sync-retains-dirty-on-flush-failure", [
+    """A failed checked FLUSH leaves metadata retryable and dirty."""
+    check("sync retains dirty metadata", [
         'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" /hello.txt" VFS-OPEN CONSTANT _FD',
-        'S" RETRY" _FD VFS-WRITE DROP',
+        'S" /hello.txt" VFS-FF-READ VFS-FF-WRITE OR _V '
+        'VFS-OPEN? THROW CONSTANT _FD',
+        'S" RETRY" _FD VFS-WRITE? THROW DROP',
         'VARIABLE _S1 VARIABLE _D1 VARIABLE _S2 VARIABLE _D2',
-        '_FD FD.INODE @ _V _VMP-SYNC _S1 !',
+        '_FD FD.INODE @ _V _VMP-SYNC DUP _S1 ! DROP',
         '_V V.BCTX @ _VMP-C.DDIR + @ _D1 !',
-        '_FD FD.INODE @ _V _VMP-SYNC _S2 !',
+        '_FD FD.INODE @ _V _VMP-SYNC DUP _S2 ! DROP',
         '_V V.BCTX @ _VMP-C.DDIR + @ _D2 !',
-        '_S1 @ . _D1 @ . _S2 @ . _D2 @ . ." <states"',
-    ], "13 -1 0 0 <states", storage_faults=[{
+        '_S1 @ VFS-IOR-REASON VFS-R-IO =',
+        '_S1 @ VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND',
+        '_D1 @ 0<> AND _S2 @ 0= AND _D2 @ 0= AND',
+        'IF ." FLUSH-RETRY-OK" THEN',
+    ], "FLUSH-RETRY-OK", storage_faults=[{
         "stage": "flush",
         "result": STORAGE_RESULT_FLUSH_FAILURE,
         "command": STORAGE_CMD_FLUSH,
     }])
 
 
-def test_destroy():
-    """VFS-DESTROY does not crash."""
-    check("destroy", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-DESTROY ." DESTROYED"',
-    ], "DESTROYED")
-
-
-def test_two_instances():
-    """Two cache contexts can independently read the same ambient disk."""
-    check("two-instances", [
+def test_two_instances_share_only_explicit_volume():
+    """Two contexts independently mount the same explicit volume object."""
+    check("two explicit-volume instances", [
         'T-VMP-NEW CONSTANT _VA',
-        '_VA VMP-INIT DROP',
         'T-VMP-NEW CONSTANT _VB',
-        '_VB VMP-INIT DROP',
-        '_VA VFS-USE',
-        'S" /hello.txt" _VA VFS-RESOLVE 0<> IF ." VA-OK " ELSE ." VA-FAIL " THEN',
-        '_VB VFS-USE',
-        'S" /hello.txt" _VB VFS-RESOLVE 0<> IF ." VB-OK" ELSE ." VB-FAIL" THEN',
-    ], "VA-OK")
+        '_VA V.VOLUME @ _VB V.VOLUME @ =',
+        '_VA V.BCTX @ _VB V.BCTX @ <> AND',
+        'S" /hello.txt" _VA VFS-RESOLVE 0<> AND',
+        'S" /hello.txt" _VB VFS-RESOLVE 0<> AND',
+        'IF ." TWO-VOLUME-BOUND-OK" THEN',
+    ], "TWO-VOLUME-BOUND-OK")
 
 
-def test_empty_disk():
-    """Init on an empty formatted disk succeeds."""
-    img = build_disk_image([])
-    check("empty-disk", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT . ." <ior"',
-        '_V VFS-USE',
-        '." DONE"',
-    ], "0 <ior", disk_image=img)
-
-
-def test_read_offset():
-    """Read with a non-zero offset works correctly."""
-    check("read-offset", [
-        'T-VMP-NEW CONSTANT _V',
-        '_V VMP-INIT DROP',
-        '_V VFS-USE',
-        'S" /hello.txt" VFS-OPEN CONSTANT _FD',
-        # Seek to offset 7 ("VFS world!")
-        '7 _FD VFS-SEEK',
-        '_RB 100 _FD VFS-READ DROP',
-        '_RB 10 TYPE',
-    ], "VFS world!")
-
-
-def test_vmp_new_convenience():
-    """VMP-NEW convenience word works."""
-    check("vmp-new", [
-        '524288 A-XMEM ARENA-NEW  IF -1 THROW THEN CONSTANT _AR',
-        '_AR VMP-NEW CONSTANT _V',
-        '_V VMP-INIT . ." <ior"',
-    ], "0 <ior")
+def test_empty_formatted_volume_mounts():
+    """An empty but valid MP64FS volume mounts with an empty root."""
+    check("empty formatted volume", [
+        'T-ARENA T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
+        '_IOR 0= _V V.ROOT @ IN.CHILD @ 0= AND',
+        'IF ." EMPTY-MOUNT-OK" THEN',
+    ], "EMPTY-MOUNT-OK", disk_image=build_disk_image([]))
 
 
 def test_checked_sync_survives_fresh_process_without_session_close():
@@ -879,20 +913,18 @@ def test_checked_sync_survives_fresh_process_without_session_close():
 
         first = _run_cold_subprocess("write", image_path)
         second = _run_cold_subprocess("read", image_path)
-        expected = (
-            "0 <init" in first
-            and "14 <wrote" in first
+        ok = (
+            "14 <wrote" in first
             and "0 <sync WRITE-DONE" in first
-            and "0 <init" in second
             and "14 <read" in second
             and "COLD-PERSISTED READ-DONE" in second
         )
-        if expected:
+        if ok:
             _pass_count += 1
-            print("  PASS  checked-sync-cold-process")
+            print("  PASS  checked sync cold process")
         else:
             _fail_count += 1
-            print("  FAIL  checked-sync-cold-process")
+            print("  FAIL  checked sync cold process")
             print("        writer:", first[-1000:])
             print("        reader:", second[-1000:])
     finally:
@@ -902,59 +934,201 @@ def test_checked_sync_survives_fresh_process_without_session_close():
             os.unlink(image_path)
 
 
+def test_nonzero_bounded_volume_slice_end_to_end():
+    """A nonzero VOL-SLICE bounds reads, writes, and metadata sync."""
+    global _pass_count, _fail_count
+    base = 7
+    suffix = 5
+    inner = build_disk_image([
+        ("hello.txt", PARENT_ROOT, FTYPE_TEXT, b"inside-slice"),
+    ], total_sectors=2048)
+    prefix_bytes = bytes([0xA5]) * (base * SECTOR)
+    suffix_bytes = bytes([0x5A]) * (suffix * SECTOR)
+    parent_image = prefix_bytes + inner + suffix_bytes
+    output, sys_obj = run_forth([
+        'CREATE _SBD /BLOCK-DEVICE ALLOT',
+        'CREATE _SVOL /VOLUME ALLOT',
+        '_SBD BD-OPEN THROW',
+        f'{base} 2048 VOL-SCHEME-RAW 0 _SBD _SVOL VOL-SLICE THROW',
+        'T-ARENA _SVOL VMP-NEW THROW CONSTANT _SV',
+        'S" /hello.txt" VFS-FF-READ VFS-FF-WRITE OR _SV '
+        'VFS-OPEN? THROW CONSTANT _SFD',
+        'S" SLICE" DROP 5 _SFD VFS-WRITE? THROW 5 = IF '
+        '." WRITE-OK " THEN',
+        '_SV VFS-SYNC THROW ." SYNC-OK "',
+        '_SFD VFS-REWIND',
+        '_RB 5 _SFD VFS-READ? THROW DROP _RB 5 TYPE',
+    ], disk_image=parent_image)
+    media = bytes(sys_obj.storage._image_data)
+    slice_end = (base + 2048) * SECTOR
+    guards_ok = (
+        media[:base * SECTOR] == prefix_bytes
+        and media[slice_end:slice_end + len(suffix_bytes)] == suffix_bytes
+    )
+    ok = all(marker in output for marker in ("WRITE-OK", "SYNC-OK", "SLICE"))
+    ok = ok and guards_ok
+    if ok:
+        _pass_count += 1
+        print("  PASS  nonzero bounded volume slice")
+    else:
+        _fail_count += 1
+        print("  FAIL  nonzero bounded volume slice")
+        print("        guards:", guards_ok)
+        print("        output:", output[-1500:])
+
+
+def test_open_unlink_is_busy_until_close():
+    """A reusable directory slot cannot retire while an FD references it."""
+    check("open unlink is busy", [
+        'T-VMP-NEW CONSTANT _V',
+        'VARIABLE _BUSY VARIABLE _PRESENT VARIABLE _REMOVED',
+        'S" /hello.txt" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _FD',
+        'S" /hello.txt" _V VFS-RM VFS-IOR-REASON _BUSY !',
+        'S" /hello.txt" _V VFS-RESOLVE 0<> _PRESENT !',
+        '_FD VFS-CLOSE? THROW',
+        'S" /hello.txt" _V VFS-RM _REMOVED !',
+        '_BUSY @ VFS-R-BUSY = _PRESENT @ AND _REMOVED @ 0= AND IF',
+        '  ." BUSY-GUARD-OK"',
+        'THEN',
+    ], "BUSY-GUARD-OK")
+
+
+def test_open_rename_victim_is_busy():
+    """Rename-replace cannot reuse an open victim's directory slot."""
+    check("open rename victim is busy", [
+        'T-VMP-NEW CONSTANT _V',
+        'VARIABLE _BUSY VARIABLE _SOURCE VARIABLE _VICTIM',
+        'S" source.txt" _V VFS-MKFILE? THROW CONSTANT _SRC',
+        'S" /hello.txt" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _FD',
+        'S" hello.txt" _SRC _V V.ROOT @ 0 _V VFS-RENAME-AT '
+        'VFS-IOR-REASON _BUSY !',
+        'S" /source.txt" _V VFS-RESOLVE 0<> _SOURCE !',
+        'S" /hello.txt" _V VFS-RESOLVE 0<> _VICTIM !',
+        '_BUSY @ VFS-R-BUSY = _SOURCE @ AND _VICTIM @ AND IF',
+        '  ." REPLACE-GUARD-OK"',
+        'THEN',
+    ], "REPLACE-GUARD-OK")
+
+
+def test_structured_volume_error_translation():
+    """Backend detail/flags survive translation and stale latches the VFS."""
+    check("structured volume error translation", [
+        'T-VMP-NEW CONSTANT _V',
+        '_V _VMP-IO-V !',
+        '7 7 IOR-D-BLOCK IOR-F-PARTIAL IOR-F-RETRYABLE OR '
+        'IOR-MAKE CONSTANT _BE',
+        '2 _VMP-IO-EXPECTED ! 1 _VMP-IO-COMPLETED !',
+        '_BE _VMP-MAP-IOR CONSTANT _E',
+        '_E VFS-IOR-REASON VFS-R-IO =',
+        '_E VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND',
+        '_E VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND',
+        '_E VFS-IOR-FLAGS VFS-IOR-F-RETRYABLE AND 0<> AND',
+        '_E VFS-IOR-DETAIL _BE = AND',
+        '1 _VMP-IO-EXPECTED ! 0 _VMP-IO-COMPLETED !',
+        'VOL-E-STALE _VMP-MAP-IOR CONSTANT _SE',
+        '_SE VFS-IOR-REASON VFS-R-STALE = AND',
+        '_SE VFS-IOR-FLAGS VFS-IOR-F-STALE AND 0<> AND',
+        '_V V.LIFECYCLE @ VFS-L-STALE = AND',
+        'IF ." ERROR-MAP-OK" THEN',
+    ], "ERROR-MAP-OK")
+
+
+def test_mount_population_nomem_rolls_back():
+    """Mount-time string exhaustion returns NOMEM with an empty root."""
+    check("mount population NOMEM rollback", [
+        ': _OOM-MOUNT  ( vfs -- ior )',
+        '  DUP V.STR-PTR @ OVER V.STR-END ! VMP-INIT ;',
+        'CREATE _OOM-OPS VFS-OPS-SIZE ALLOT',
+        'VMP-OPS _OOM-OPS VFS-OPS-SIZE CMOVE',
+        "' _OOM-MOUNT _OOM-OPS VFS-OP-MOUNT CELLS + !",
+        'CREATE _OOM-BINDING',
+        'VFS-BINDING-MAGIC , VFS-BINDING-ABI-MAJOR ,',
+        'VFS-BINDING-ABI-MINOR , VFS-BINDING-DESC-SIZE ,',
+        'VFS-OPS-SIZE , VMP-CAPS , VFS-BF-NEEDS-VOLUME ,',
+        '_OOM-OPS , 0 , 0 ,',
+        'T-ARENA CONSTANT _OAR',
+        '_OAR _OOM-BINDING T-VOLUME VFS-NEW CONSTANT _OI CONSTANT _OV',
+        '_OI VFS-IOR-REASON VFS-R-NOMEM =',
+        '_OV V.ROOT @ IN.CHILD @ 0= AND',
+        '_OV V.ICOUNT @ 1 = AND',
+        '_OV V.VCOUNT @ 1 = AND',
+        '_OV V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND 0= AND',
+        '_OV V.BCTX @ _VMP-C.READY + @ 0= AND',
+        'VARIABLE _AP _OAR A.PTR @ _AP !',
+        '_OV VMP-INIT _OI = AND',
+        '_OAR A.PTR @ _AP @ = AND',
+        '_OV V.LAST-IOR @ _OI = AND',
+        'IF ." MOUNT-NOMEM-ROLLBACK-OK" THEN',
+    ], "MOUNT-NOMEM-ROLLBACK-OK")
+
+
+def test_readdir_population_nomem_rolls_back():
+    """Lazy population restores children, counts, and the string cursor."""
+    check("readdir population NOMEM rollback", [
+        'T-VMP-NEW CONSTANT _V',
+        'S" /docs" _V VFS-RESOLVE CONSTANT _D',
+        'VARIABLE _IC VARIABLE _VC VARIABLE _SP',
+        '_V V.ICOUNT @ _IC ! _V V.VCOUNT @ _VC ! _V V.STR-PTR @ _SP !',
+        '_SP @ _V V.STR-END !',
+        '_D _V _VMP-READDIR VFS-IOR-REASON VFS-R-NOMEM =',
+        '_D IN.CHILD @ 0= AND',
+        '_V V.ICOUNT @ _IC @ = AND',
+        '_V V.VCOUNT @ _VC @ = AND',
+        '_V V.STR-PTR @ _SP @ = AND',
+        '_D IN.FLAGS @ VFS-IF-CHILDREN AND 0= AND',
+        'IF ." READDIR-NOMEM-ROLLBACK-OK" THEN',
+    ], "READDIR-NOMEM-ROLLBACK-OK")
+
+
 # =====================================================================
 #  Runner
 # =====================================================================
 
-if __name__ == "__main__" and len(sys.argv) >= 4 and sys.argv[1] == "--cold-worker":
-    _cold_worker(sys.argv[2], sys.argv[3])
-elif __name__ == "__main__":
+def main():
     build_snapshot()
     print()
     print("=" * 60)
-    print("  VFS-MP64FS Binding Tests")
+    print("  VFS-MP64FS Volume-Binding Tests")
     print("=" * 60)
 
-    test_probe_valid()
-    test_probe_invalid()
-    test_init_success()
-    test_init_propagates_checked_read_failure()
-    test_init_dynamic_geometry()
-    test_init_rejects_inconsistent_geometry()
-    test_init_rejects_non_one_format_marker()
-    test_init_rejects_unreserved_metadata_sector()
-    test_init_reports_arena_capacity_failure()
-    test_init_rejects_malformed_directory_entries()
-    test_failed_init_blocks_public_mutation()
+    test_constructor_binds_and_mounts_volume()
+    test_volume_probe_match_nonmatch_and_io_error()
+    test_constructor_requires_volume()
+    test_constructor_propagates_checked_read_failure()
+    test_constructor_adopts_volume_geometry()
+    test_constructor_rejects_malformed_media()
+    test_constructor_reports_core_arena_exhaustion()
+    test_final_directory_slot_mounts_without_pair_loop_wrap()
+    test_root_and_lazy_subdirectory_reads()
+    test_binary_read_and_offset()
+    test_create_write_read_delete_and_sync()
+    test_create_zeroes_newly_allocated_sector()
+    test_seek_gap_and_truncate_growth_zero_visible_ranges()
+    test_zeroing_failures_do_not_publish_size_or_extent()
     test_second_bitmap_sector_sync_and_remount()
-    test_init_populates_root()
-    test_root_has_all_files()
-    test_root_has_subdir()
-    test_resolve_file()
-    test_resolve_absolute()
-    test_resolve_subdir_file()
-    test_read_file()
-    test_read_binary()
-    test_read_subdir_file()
-    test_write_and_readback()
-    test_write_via_vfs_write()
-    test_create_file()
-    test_delete_file()
-    test_sync()
     test_sync_retains_dirty_metadata_until_flush_succeeds()
-    test_destroy()
-    test_two_instances()
-    test_read_offset()
-    test_vmp_new_convenience()
-    test_empty_disk()
+    test_two_instances_share_only_explicit_volume()
+    test_empty_formatted_volume_mounts()
     test_checked_sync_survives_fresh_process_without_session_close()
+    test_nonzero_bounded_volume_slice_end_to_end()
+    test_open_unlink_is_busy_until_close()
+    test_open_rename_victim_is_busy()
+    test_structured_volume_error_translation()
+    test_mount_population_nomem_rolls_back()
+    test_readdir_population_nomem_rolls_back()
 
     print()
-    print(f"  Results: {_pass_count} passed, {_fail_count} failed "
-          f"({_pass_count + _fail_count} total)")
+    total = _pass_count + _fail_count
+    print(f"  Results: {_pass_count} passed, {_fail_count} failed ({total} total)")
     if _fail_count:
         sys.exit(1)
 
-    # Cleanup temp image
-    if _img_path and os.path.exists(_img_path):
-        os.unlink(_img_path)
+
+if __name__ == "__main__" and len(sys.argv) >= 4 and sys.argv[1] == "--cold-worker":
+    _cold_worker(sys.argv[2], sys.argv[3])
+elif __name__ == "__main__":
+    try:
+        main()
+    finally:
+        if _img_path and os.path.exists(_img_path):
+            os.unlink(_img_path)

@@ -52,6 +52,8 @@ CREATE _sd-direct-b VREPL-SIZE ALLOT
 CREATE _sd-direct-read 128 ALLOT
 
 VARIABLE _sd-vfs
+CREATE _sd-bd /BLOCK-DEVICE ALLOT
+CREATE _sd-volume /VOLUME ALLOT
 VARIABLE _sd-context
 VARIABLE _sd-creg
 VARIABLE _sd-rreg
@@ -117,8 +119,10 @@ VARIABLE _sd-direct-u0
     11 _sd-head PHEAD.ID _sd-id!
     12 _sd-head PHEAD.CURRENT-ROOT _sd-id!
 
+    _sd-bd BD-OPEN THROW
+    _sd-bd _sd-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
-    VMP-NEW DUP _sd-vfs ! DUP VMP-INIT 0= _sd-assert VFS-USE
+    _sd-volume VMP-NEW ?DUP IF THROW THEN DUP _sd-vfs ! VFS-USE
 
     \ Control: two ordinary path clients can both publish successfully.  The
     \ second has no exact-revision contract and silently replaces the first;

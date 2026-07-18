@@ -755,8 +755,9 @@ LIB-BANK-SIZE XBUF _lvsc-bank
     VFS-CUR DUP _lvsc-old-vfs ! 0= _lvsc-assert
     4194304 A-XMEM ARENA-NEW DUP 0= _lvsc-assert DROP
     DUP _lvsc-arena !
-    VFS-RAM-VTABLE VFS-NEW DUP _lvsc-vfs ! 0<> _lvsc-assert
-    _lvsc-arena @ VFS-RAM-VTABLE VFS-NEW
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _lvsc-vfs ! 0<> _lvsc-assert
+    _lvsc-arena @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP _lvsc-other-vfs ! 0<> _lvsc-assert
     _lvsc-vfs @ VFS-USE
     LIBRARY-VFS-STORE-SIZE _lvsc-store-a-slot _lvsc-allocate

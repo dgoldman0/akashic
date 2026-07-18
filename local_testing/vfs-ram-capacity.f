@@ -167,7 +167,7 @@ VARIABLE _vrct-u2
 
 : _vrct-failure  ( -- )
     65536 A-XMEM ARENA-NEW DUP 0= _vrct-assert DROP _vrct-fail-arena !
-    _vrct-fail-arena @ VFS-RAM-VTABLE VFS-NEW
+    _vrct-fail-arena @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP 0<> _vrct-assert _vrct-fail-vfs !
     _vrct-fail-vfs @ _vrct-vfs !
     S" stable.bin" _vrct-open _vrct-fd !
@@ -237,7 +237,7 @@ VARIABLE _vrct-u2
     10000 _vrct-buffer _vrct-allocate
     10000 _vrct-output _vrct-allocate
     262144 A-XMEM ARENA-NEW DUP 0= _vrct-assert DROP _vrct-arena !
-    _vrct-arena @ VFS-RAM-VTABLE VFS-NEW
+    _vrct-arena @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP 0<> _vrct-assert DUP _vrct-vfs ! _vrct-main-vfs !
     _vrct-vfs @ VFS-USE ;
 

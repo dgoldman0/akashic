@@ -1,8 +1,9 @@
 \ vfs-fat.f — FAT16/FAT32 binding for the VFS layer
 \
-\ Bridges the abstract VFS to FAT16 and FAT32 formatted volumes.
-\ All byte transfer goes through the BIOS disk primitives
-\ (DISK-SEC!, DISK-DMA!, DISK-N!, DISK-READ, DISK-WRITE).
+\ Bridges the abstract VFS to FAT16 and FAT32 formatted volumes.  This
+\ binding is intentionally read-only: every mount owns one explicit,
+\ generation-bound KDOS volume and every byte transfer uses VOL-READ.
+\ Mutation capabilities are not advertised and no write fallback exists.
 \
 \ FAT type is auto-detected from the BPB at mount time using the
 \ Microsoft specification's data-cluster-count algorithm:
@@ -138,6 +139,75 @@ HEX 0FFFFFFF DECIMAL CONSTANT _VFAT-MARK32
 \ Accessor
 : _VFAT-CTX  ( vfs -- ctx )  V.BCTX @ ;
 
+: _VFAT-READY?  ( vfs -- flag )
+    V.BCTX @ DUP 0= IF DROP FALSE EXIT THEN
+    _VFAT-C.TYPE + @ 0<> ;
+
+\ Translate KDOS block/volume iors into the public VFS layout.  The
+\ backend's meaningful low 32 bits remain available as VFS detail.
+VARIABLE _VFAT-IO-V
+VARIABLE _VFAT-IO-EXPECTED
+VARIABLE _VFAT-IO-COMPLETED
+VARIABLE _VFAT-IO-BACKEND
+VARIABLE _VFAT-IO-FLAGS
+VARIABLE _VFAT-IO-REASON
+
+: _VFAT-LATCH-STALE  ( -- )
+    _VFAT-IO-V @ ?DUP IF VFS-L-STALE SWAP V.LIFECYCLE ! THEN ;
+
+: _VFAT-MAP-IOR  ( backend-ior -- vfs-ior )
+    DUP _VFAT-IO-BACKEND !
+    0 _VFAT-IO-FLAGS !
+    _VFS-R-IO _VFAT-IO-REASON !
+    DUP IF
+        DUP IOR>FLAGS
+        DUP IOR-F-RETRYABLE AND IF
+            VFS-IOR-F-RETRYABLE _VFAT-IO-FLAGS +!
+        THEN
+        DUP IOR-F-PARTIAL AND IF
+            VFS-IOR-F-PARTIAL _VFAT-IO-FLAGS +!
+        THEN
+        DUP IOR-F-CORRUPT AND IF
+            VFS-IOR-F-CORRUPT _VFAT-IO-FLAGS +!
+            _VFS-R-CORRUPT _VFAT-IO-REASON !
+        THEN
+        DUP IOR-F-UNSUPPORTED AND IF
+            _VFS-R-UNSUPPORTED _VFAT-IO-REASON !
+        THEN
+        DUP IOR-F-READONLY AND IF
+            VFS-IOR-F-READONLY _VFAT-IO-FLAGS +!
+            _VFS-R-READONLY _VFAT-IO-REASON !
+        THEN
+        IOR-F-STALE AND IF
+            VFS-IOR-F-STALE _VFAT-IO-FLAGS +!
+            _VFS-R-STALE _VFAT-IO-REASON !
+            _VFAT-LATCH-STALE
+        THEN
+    THEN
+    _VFAT-IO-COMPLETED @ _VFAT-IO-EXPECTED @ <> IF
+        _VFAT-IO-FLAGS @ VFS-IOR-F-PARTIAL OR _VFAT-IO-FLAGS !
+    THEN
+    _VFAT-IO-BACKEND @ 0=
+    _VFAT-IO-COMPLETED @ _VFAT-IO-EXPECTED @ = AND IF
+        DROP 0 EXIT
+    THEN
+    DROP
+    _VFAT-IO-BACKEND @ 0xFFFFFFFF AND
+    _VFAT-IO-FLAGS @ VFS-IOR-D-VOLUME _VFAT-IO-REASON @ VFS-IOR-MAKE ;
+
+: _VFAT-VOL-READ  ( dma lba count -- ior )
+    DUP _VFAT-IO-EXPECTED !
+    _VFAT-IO-V @ V.VOLUME @ VOL-READ
+    SWAP _VFAT-IO-COMPLETED ! _VFAT-MAP-IOR ;
+
+: _VFAT-FORMAT-CORRUPT  ( detail -- ior )
+    VFS-IOR-F-CORRUPT VFS-IOR-D-FORMAT _VFS-R-CORRUPT VFS-IOR-MAKE ;
+
+: _VFAT-PARTIAL-IOR  ( actual ior -- actual ior )
+    DUP IF
+        OVER 0> IF VFS-IOR-F-PARTIAL 24 LSHIFT OR THEN
+    THEN ;
+
 \ =====================================================================
 \  Geometry Helpers
 \ =====================================================================
@@ -181,6 +251,22 @@ HEX 0FFFFFFF DECIMAL CONSTANT _VFAT-MARK32
     DUP _VFAT-BPB.NFATS + C@  0= IF  DROP FALSE EXIT  THEN
     DROP TRUE ;
 
+60 CONSTANT VFAT-PROBE-SCORE
+CREATE _VFATP-BUF _VFAT-SECTOR ALLOT
+VARIABLE _VFATP-VOL
+
+: _VFAT-PROBE-VOLUME  ( volume -- score ior )
+    _VFATP-VOL !
+    _VFATP-VOL @ VOL.SECTOR-SIZE _VFAT-SECTOR <> IF
+        0 0 0 VFS-IOR-D-VOLUME VFS-R-UNSUPPORTED VFS-IOR-MAKE EXIT
+    THEN
+    0 _VFAT-IO-V !
+    1 _VFAT-IO-EXPECTED !
+    _VFATP-BUF 0 1 _VFATP-VOL @ VOL-READ
+    SWAP _VFAT-IO-COMPLETED ! _VFAT-MAP-IOR
+    DUP IF 0 SWAP EXIT THEN DROP
+    _VFATP-BUF 0 _VFAT-PROBE IF VFAT-PROBE-SCORE ELSE 0 THEN 0 ;
+
 \ =====================================================================
 \  BPB Parsing  ( ctx -- ior )
 \ =====================================================================
@@ -189,30 +275,51 @@ HEX 0FFFFFFF DECIMAL CONSTANT _VFAT-MARK32
 \  cells.  Determine FAT type from data cluster count.
 
 VARIABLE _VFP-CTX
+VARIABLE _VFP-V
+VARIABLE _VFP-FIRST
+VARIABLE _VFP-FAT-CAP
 
-: _VFAT-PARSE-BPB  ( ctx -- ior )
-    _VFP-CTX !
+: _VFAT-PARSE-BPB  ( ctx vfs -- ior )
+    _VFP-V ! _VFP-CTX !
     \ SecPerClus
     _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.SPC + C@
     _VFP-CTX @ _VFAT-C.SPC + !
+    _VFP-CTX @ _VFAT-C.SPC + @ DUP 0= IF
+        DROP 10 _VFAT-FORMAT-CORRUPT EXIT
+    THEN
+    DUP DUP 1- AND IF DROP 11 _VFAT-FORMAT-CORRUPT EXIT THEN
+    128 > IF 12 _VFAT-FORMAT-CORRUPT EXIT THEN
     \ RsvdSecCnt
     _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.RSVD + W@
     _VFP-CTX @ _VFAT-C.RSVD + !
+    _VFP-CTX @ _VFAT-C.RSVD + @ 0= IF
+        13 _VFAT-FORMAT-CORRUPT EXIT
+    THEN
     \ NumFATs
     _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.NFATS + C@
     _VFP-CTX @ _VFAT-C.NFATS + !
+    _VFP-CTX @ _VFAT-C.NFATS + @ 0= IF
+        14 _VFAT-FORMAT-CORRUPT EXIT
+    THEN
     \ FATSz: prefer FATSz16; if 0, use FATSz32
     _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.FATSZ16 + W@
     DUP 0= IF
         DROP  _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.FATSZ32 + L@
     THEN
     _VFP-CTX @ _VFAT-C.FATSZ + !
+    _VFP-CTX @ _VFAT-C.FATSZ + @ 0= IF
+        15 _VFAT-FORMAT-CORRUPT EXIT
+    THEN
     \ TotSec: prefer TotSec16; if 0, use TotSec32
     _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.TOT16 + W@
     DUP 0= IF
         DROP  _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.TOT32 + L@
     THEN
     _VFP-CTX @ _VFAT-C.TOTSEC + !
+    _VFP-CTX @ _VFAT-C.TOTSEC + @
+    _VFP-V @ V.VOLUME @ VOL.SECTORS <> IF
+        16 _VFAT-FORMAT-CORRUPT EXIT
+    THEN
     \ RootEntCnt
     _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.ROOTENT + W@
     _VFP-CTX @ _VFAT-C.RENT + !
@@ -223,7 +330,14 @@ VARIABLE _VFP-CTX
     _VFP-CTX @ _VFAT-C.RSVD + @
     _VFP-CTX @ _VFAT-C.NFATS + @  _VFP-CTX @ _VFAT-C.FATSZ + @  *  +
     _VFP-CTX @ _VFAT-C.RDSEC + @  +
+    DUP _VFP-FIRST !
     _VFP-CTX @ _VFAT-C.FDS + !
+    _VFP-FIRST @ _VFP-CTX @ _VFAT-C.RSVD + @ U< IF
+        17 _VFAT-FORMAT-CORRUPT EXIT
+    THEN
+    _VFP-FIRST @ _VFP-CTX @ _VFAT-C.TOTSEC + @ >= IF
+        18 _VFAT-FORMAT-CORRUPT EXIT
+    THEN
     \ DataClusters = (TotSec - FirstDataSector) / SecPerClus
     _VFP-CTX @ _VFAT-C.TOTSEC + @
     _VFP-CTX @ _VFAT-C.FDS + @  -
@@ -232,7 +346,7 @@ VARIABLE _VFP-CTX
     \ Determine FAT type
     _VFP-CTX @ _VFAT-C.DCLUS + @
     DUP 4085 < IF
-        DROP -3 EXIT   \ FAT12 not supported
+        DROP 1 0 VFS-IOR-D-FORMAT _VFS-R-UNSUPPORTED VFS-IOR-MAKE EXIT
     THEN
     65525 < IF
         _VFAT-TYPE-FAT16  _VFP-CTX @ _VFAT-C.TYPE + !
@@ -241,6 +355,11 @@ VARIABLE _VFP-CTX
         _VFP-CTX @ _VFAT-C.NFATS + @  _VFP-CTX @ _VFAT-C.FATSZ + @  *  +
         _VFP-CTX @ _VFAT-C.RDSTART + !
         0 _VFP-CTX @ _VFAT-C.RCLUS + !
+        _VFP-CTX @ _VFAT-C.RENT + @ 0= IF
+            19 _VFAT-FORMAT-CORRUPT EXIT
+        THEN
+        _VFP-CTX @ _VFAT-C.FATSZ + @ _VFAT-SECTOR * 2 /
+        _VFP-FAT-CAP !
     ELSE
         _VFAT-TYPE-FAT32  _VFP-CTX @ _VFAT-C.TYPE + !
         0 _VFP-CTX @ _VFAT-C.RDSEC + !
@@ -248,6 +367,20 @@ VARIABLE _VFP-CTX
         \ Root cluster from BPB
         _VFP-CTX @ _VFAT-C.BPB + _VFAT-BPB.ROOTCLUS + L@
         _VFP-CTX @ _VFAT-C.RCLUS + !
+        _VFP-CTX @ _VFAT-C.RENT + @ IF
+            20 _VFAT-FORMAT-CORRUPT EXIT
+        THEN
+        _VFP-CTX @ _VFAT-C.RCLUS + @ DUP 2 < IF
+            DROP 21 _VFAT-FORMAT-CORRUPT EXIT
+        THEN
+        _VFP-CTX @ _VFAT-C.DCLUS + @ 2 + >= IF
+            22 _VFAT-FORMAT-CORRUPT EXIT
+        THEN
+        _VFP-CTX @ _VFAT-C.FATSZ + @ _VFAT-SECTOR * 4 /
+        _VFP-FAT-CAP !
+    THEN
+    _VFP-FAT-CAP @ _VFP-CTX @ _VFAT-C.DCLUS + @ 2 + < IF
+        23 _VFAT-FORMAT-CORRUPT EXIT
     THEN
     0 ;  \ success
 
@@ -262,25 +395,22 @@ VARIABLE _VFP-CTX
 VARIABLE _VFN-CTX
 VARIABLE _VFN-SEC
 VARIABLE _VFN-OFF
+VARIABLE _VFE-CTX
+VARIABLE _VFE-SEC
 
 : _VFAT-FAT-ENSURE  ( fat-sector ctx -- )
-    \ If already cached, nothing to do
-    2DUP _VFAT-C.CFATSEC + @  = IF  2DROP EXIT  THEN
-    \ Flush dirty FAT cache first
-    DUP _VFAT-C.DFAT + @ IF
-        DUP _VFAT-C.CFATSEC + @  DISK-SEC!
-        DUP _VFAT-C.FATSEC +     DISK-DMA!
-        1 DISK-N!  DISK-WRITE
-        0 OVER _VFAT-C.DFAT + !
-    THEN
-    \ Read new FAT sector
-    OVER DISK-SEC!
-    DUP _VFAT-C.FATSEC +  DISK-DMA!
-    1 DISK-N!  DISK-READ
-    _VFAT-C.CFATSEC + ! ;
+    _VFE-CTX ! _VFE-SEC !
+    _VFE-SEC @ _VFE-CTX @ _VFAT-C.CFATSEC + @ = IF EXIT THEN
+    _VFE-CTX @ _VFAT-C.FATSEC + _VFE-SEC @ 1 _VFAT-VOL-READ
+    ?DUP IF THROW THEN
+    _VFE-SEC @ _VFE-CTX @ _VFAT-C.CFATSEC + ! ;
 
 : _VFAT-NEXT-CLUSTER  ( cluster ctx -- next-cluster )
     _VFN-CTX !
+    DUP 2 < IF DROP 30 _VFAT-FORMAT-CORRUPT THROW THEN
+    DUP _VFN-CTX @ _VFAT-C.DCLUS + @ 2 + >= IF
+        DROP 31 _VFAT-FORMAT-CORRUPT THROW
+    THEN
     _VFN-CTX @ _VFAT-C.TYPE + @  _VFAT-TYPE-FAT32 = IF
         \ FAT32: 4 bytes per entry
         DUP 4 *                        ( cluster byte-off )
@@ -303,69 +433,6 @@ VARIABLE _VFN-OFF
     THEN ;
 
 \ =====================================================================
-\  FAT Table Write
-\ =====================================================================
-
-VARIABLE _VSF-CTX
-
-: _VFAT-SET-FAT  ( value cluster ctx -- )
-    _VSF-CTX !
-    _VSF-CTX @ _VFAT-C.TYPE + @ _VFAT-TYPE-FAT32 = IF
-        4 *
-        DUP _VFAT-SECTOR /
-        _VSF-CTX @ _VFAT-C.RSVD + @ +
-        _VSF-CTX @ _VFAT-FAT-ENSURE
-        _VFAT-SECTOR MOD
-        _VSF-CTX @ _VFAT-C.FATSEC + +
-        L!
-    ELSE
-        2 *
-        DUP _VFAT-SECTOR /
-        _VSF-CTX @ _VFAT-C.RSVD + @ +
-        _VSF-CTX @ _VFAT-FAT-ENSURE
-        _VFAT-SECTOR MOD
-        _VSF-CTX @ _VFAT-C.FATSEC + +
-        W!
-    THEN
-    -1 _VSF-CTX @ _VFAT-C.DFAT + ! ;
-
-\ =====================================================================
-\  Cluster Allocation / Free
-\ =====================================================================
-
-VARIABLE _VAC-CTX
-
-: _VFAT-ALLOC-CLUSTER  ( ctx -- cluster | 0 )
-    _VAC-CTX !
-    _VAC-CTX @ _VFAT-C.DCLUS + @ 2 +   2 DO
-        I _VAC-CTX @ _VFAT-NEXT-CLUSTER  0= IF
-            _VAC-CTX @ _VFAT-C.TYPE + @ _VFAT-TYPE-FAT32 = IF
-                _VFAT-MARK32
-            ELSE
-                _VFAT-MARK16
-            THEN
-            I _VAC-CTX @ _VFAT-SET-FAT
-            I UNLOOP EXIT
-        THEN
-    LOOP
-    0 ;
-
-VARIABLE _VFFC-CTX
-VARIABLE _VFFC-CUR
-VARIABLE _VFFC-NXT
-
-: _VFAT-FREE-CHAIN  ( first-cluster ctx -- )
-    _VFFC-CTX !  _VFFC-CUR !
-    _VFFC-CUR @ 2 < IF EXIT THEN
-    BEGIN
-        _VFFC-CUR @ _VFFC-CTX @ _VFAT-NEXT-CLUSTER  _VFFC-NXT !
-        0 _VFFC-CUR @ _VFFC-CTX @ _VFAT-SET-FAT
-        _VFFC-NXT @ 2 < IF EXIT THEN
-        _VFFC-NXT @ _VFFC-CTX @ _VFAT-EOC? IF EXIT THEN
-        _VFFC-NXT @ _VFFC-CUR !
-    AGAIN ;
-
-\ =====================================================================
 \  Directory Entry Helpers
 \ =====================================================================
 
@@ -374,46 +441,8 @@ VARIABLE _VFFC-NXT
     SWAP _VFAT-DE.CLUSHI + W@  16 LSHIFT  OR ;
 
 \ =====================================================================
-\  8.3 Short Filename Helpers
+\  8.3 Short Filename Decoder
 \ =====================================================================
-
-CREATE _VFAT-SFN-BUF 11 ALLOT
-
-: _VFAT-UPCHAR  ( c -- C )
-    DUP [CHAR] a >=  OVER [CHAR] z <=  AND IF  32 -  THEN ;
-
-: _VFAT-FIND-DOT  ( c-addr u -- index | -1 )
-    0 DO
-        DUP I + C@ [CHAR] . = IF  DROP I UNLOOP EXIT  THEN
-    LOOP
-    DROP -1 ;
-
-VARIABLE _VSFN-SRC
-VARIABLE _VSFN-LEN
-VARIABLE _VSFN-DOT
-
-: _VFAT-MAKE-SFN  ( c-addr u -- flag )
-    _VFAT-SFN-BUF 11 32 FILL
-    _VSFN-LEN !  _VSFN-SRC !
-    _VSFN-SRC @  _VSFN-LEN @  _VFAT-FIND-DOT  _VSFN-DOT !
-    \ Base name (before dot, up to 8 chars)
-    _VSFN-DOT @ -1 = IF  _VSFN-LEN @  ELSE  _VSFN-DOT @  THEN
-    8 MIN
-    0 DO
-        _VSFN-SRC @ I + C@  _VFAT-UPCHAR
-        _VFAT-SFN-BUF I + C!
-    LOOP
-    \ Extension (after dot, up to 3 chars)
-    _VSFN-DOT @ -1 <> IF
-        _VSFN-LEN @  _VSFN-DOT @ -  1-   3 MIN
-        0 DO
-            _VSFN-SRC @  _VSFN-DOT @ 1+ I + +  C@
-            _VFAT-UPCHAR
-            _VFAT-SFN-BUF 8 + I + C!
-        LOOP
-    THEN
-    _VSFN-DOT @ -1 = IF  _VSFN-LEN @  ELSE  _VSFN-DOT @  THEN
-    0> ;
 
 \ SFN → readable name ("HELLO   TXT" → "HELLO.TXT")
 CREATE _VFAT-NAMEBUF 13 ALLOT
@@ -449,37 +478,15 @@ VARIABLE _VFAT-NLEN
 \  _VFAT-DIR-ENSURE loads a sector into the dir cache if not
 \  already present.
 
+VARIABLE _VFDE-CTX
+VARIABLE _VFDE-SEC
+
 : _VFAT-DIR-ENSURE  ( sector ctx -- )
-    2DUP _VFAT-C.CDIRSEC + @  = IF  2DROP EXIT  THEN
-    \ Flush dirty dir cache
-    DUP _VFAT-C.DDIR + @ IF
-        DUP _VFAT-C.CDIRSEC + @  DISK-SEC!
-        DUP _VFAT-C.DIRSEC +     DISK-DMA!
-        1 DISK-N!  DISK-WRITE
-        0 OVER _VFAT-C.DDIR + !
-    THEN
-    OVER DISK-SEC!
-    DUP _VFAT-C.DIRSEC +  DISK-DMA!
-    1 DISK-N!  DISK-READ
-    _VFAT-C.CDIRSEC + ! ;
-
-\ =====================================================================
-\  Inode → Dir Entry Accessor
-\ =====================================================================
-\
-\  Each inode stores a packed dir-entry location in IN.BDATA 8 +:
-\    packed = abs_sector * 16 + entry_index_in_sector
-\  (16 entries per 512-byte sector, each 32 bytes)
-
-VARIABLE _VFID-CTX
-
-: _VFAT-INODE-DE  ( inode ctx -- de-addr )
-    _VFID-CTX !
-    IN.BDATA 8 + @
-    DUP 16 /
-    _VFID-CTX @ _VFAT-DIR-ENSURE
-    16 MOD  _VFAT-DIRENT-SIZE *
-    _VFID-CTX @ _VFAT-C.DIRSEC + + ;
+    _VFDE-CTX ! _VFDE-SEC !
+    _VFDE-SEC @ _VFDE-CTX @ _VFAT-C.CDIRSEC + @ = IF EXIT THEN
+    _VFDE-CTX @ _VFAT-C.DIRSEC + _VFDE-SEC @ 1 _VFAT-VOL-READ
+    ?DUP IF THROW THEN
+    _VFDE-SEC @ _VFDE-CTX @ _VFAT-C.CDIRSEC + ! ;
 
 \ =====================================================================
 \  Init  ( vfs -- ior )
@@ -490,17 +497,33 @@ VARIABLE _VFI-CTX
 
 : _VFAT-INIT  ( vfs -- ior )
     _VFI-V !
-    DISK? 0= IF  -1 EXIT  THEN
-    _VFI-V @ V.ARENA @  _VFAT-CTX-SIZE ARENA-ALLOT  _VFI-CTX !
-    _VFI-CTX @  _VFAT-CTX-SIZE  0 FILL
-    _VFI-CTX @  _VFI-V @ V.BCTX !
-    0 DISK-SEC!
-    _VFI-CTX @ _VFAT-C.BPB +  DISK-DMA!
-    1 DISK-N!  DISK-READ
-    _VFI-CTX @ _VFAT-C.BPB +  _VFI-V @  _VFAT-PROBE 0= IF
-        -2 EXIT
+    _VFI-V @ _VFAT-IO-V !
+    _VFI-V @ V.VOLUME @ DUP 0= IF DROP VFS-E-NOVOLUME EXIT THEN
+    DUP VOL-STALE? IF
+        DROP _VFAT-LATCH-STALE
+        0 VFS-IOR-F-STALE VFS-IOR-D-VOLUME _VFS-R-STALE VFS-IOR-MAKE
+        EXIT
     THEN
-    _VFI-CTX @  _VFAT-PARSE-BPB
+    DUP VOL-VALID? 0= IF DROP VFS-E-NOVOLUME EXIT THEN
+    DUP VOL.SECTOR-SIZE _VFAT-SECTOR <> IF
+        DROP 0 0 VFS-IOR-D-VOLUME _VFS-R-UNSUPPORTED VFS-IOR-MAKE EXIT
+    THEN
+    DUP VOL.COOKIE _VFI-V @ V.VOL-COOKIE !
+    VOL.MEDIA-GEN _VFI-V @ V.MEDIA-GEN !
+    \ Retain at most one context allocation even when mount fails.
+    _VFI-V @ V.BCTX @ ?DUP IF
+        _VFI-CTX !
+    ELSE
+        _VFI-V @ V.ARENA @ _VFAT-CTX-SIZE ARENA-ALLOT?
+        IF DROP VFS-E-NOMEM EXIT THEN
+        DUP _VFI-CTX ! _VFI-V @ V.BCTX !
+    THEN
+    _VFI-CTX @  _VFAT-CTX-SIZE  0 FILL
+    _VFI-CTX @ _VFAT-C.BPB + 0 1 _VFAT-VOL-READ ?DUP IF EXIT THEN
+    _VFI-CTX @ _VFAT-C.BPB +  _VFI-V @  _VFAT-PROBE 0= IF
+        1 0 VFS-IOR-D-FORMAT _VFS-R-UNSUPPORTED VFS-IOR-MAKE EXIT
+    THEN
+    _VFI-CTX @ _VFI-V @ _VFAT-PARSE-BPB
     DUP 0<> IF  EXIT  THEN
     DROP
     -1  _VFI-CTX @ _VFAT-C.CFATSEC + !
@@ -520,6 +543,7 @@ VARIABLE _VFI-CTX
 VARIABLE _VFSD-IN
 VARIABLE _VFSD-V
 VARIABLE _VFSD-CTX
+VARIABLE _VFSD-NEW
 
 : _VFAT-SCAN-ONE-DE  ( de packed-loc parent-inode vfs ctx -- )
     _VFSD-CTX !  _VFSD-V !  _VFSD-IN !    ( de packed-loc )
@@ -540,8 +564,15 @@ VARIABLE _VFSD-CTX
         VFS-T-FILE
     THEN
     _VFSD-V @ _VFS-INODE-ALLOC           ( packed-loc de inode )
+    DUP 0= IF 2DROP DROP VFS-E-NOMEM THROW THEN
+    DUP _VFSD-NEW !
     OVER _VFAT-SFN>NAME
     _VFSD-V @ _VFS-STR-ALLOC
+    DUP 0= IF
+        DROP 2DROP DROP
+        _VFSD-NEW @ TRUE _VFSD-V @ _VFS-DENTRY-RELEASE
+        VFS-E-NOMEM THROW
+    THEN
     OVER IN.NAME !                         ( packed-loc de inode )
     OVER _VFAT-DE-CLUSTER
     DUP 2 PICK IN.BID !
@@ -577,6 +608,7 @@ VARIABLE _VFRS-CTX
         R> 16 * +                      ( off-in-sec packed-loc )
         SWAP _VFRS-CTX @ _VFAT-C.DIRSEC + +  ( packed-loc de-addr )
         SWAP                            ( de-addr packed-loc )
+        OVER C@ 0= IF 2DROP LEAVE THEN  \ 0x00 terminates the directory
         _VFRS-PAR @  _VFRS-V @  _VFRS-CTX @
         _VFAT-SCAN-ONE-DE
     LOOP ;
@@ -589,12 +621,21 @@ VARIABLE _VFCS-CUR
 VARIABLE _VFCS-PAR
 VARIABLE _VFCS-V
 VARIABLE _VFCS-CTX
+VARIABLE _VFCS-LEFT
+VARIABLE _VFCS-DONE
 
 : _VFAT-SCAN-CLUS-DIR  ( first-clus parent-inode vfs ctx -- )
     _VFCS-CTX !  _VFCS-V !  _VFCS-PAR !  _VFCS-CUR !
+    _VFCS-CTX @ _VFAT-C.DCLUS + @ 1+ _VFCS-LEFT !
+    0 _VFCS-DONE !
     BEGIN
-        _VFCS-CUR @ 2 < IF EXIT THEN
+        _VFCS-LEFT @ 0= IF 40 _VFAT-FORMAT-CORRUPT THROW THEN
+        -1 _VFCS-LEFT +!
+        _VFCS-CUR @ 2 < IF 41 _VFAT-FORMAT-CORRUPT THROW THEN
         _VFCS-CUR @ _VFCS-CTX @ _VFAT-EOC? IF EXIT THEN
+        _VFCS-CUR @ _VFCS-CTX @ _VFAT-C.DCLUS + @ 2 + >= IF
+            42 _VFAT-FORMAT-CORRUPT THROW
+        THEN
         _VFCS-CTX @ _VFAT-C.SPC + @ _VFAT-SECTOR *
         _VFAT-DIRENT-SIZE /             ( entries-per-cluster )
         0 DO
@@ -608,64 +649,14 @@ VARIABLE _VFCS-CTX
             R> 16 * +                      ( off-in-sec packed-loc )
             SWAP _VFCS-CTX @ _VFAT-C.DIRSEC + +  ( packed-loc de-addr )
             SWAP
+            OVER C@ 0= IF
+                2DROP -1 _VFCS-DONE ! LEAVE
+            THEN
             _VFCS-PAR @  _VFCS-V @  _VFCS-CTX @
             _VFAT-SCAN-ONE-DE
         LOOP
+        _VFCS-DONE @ IF EXIT THEN
         _VFCS-CUR @ _VFCS-CTX @ _VFAT-NEXT-CLUSTER _VFCS-CUR !
-    AGAIN ;
-
-\ =====================================================================
-\  Find Free Dir Entry (for CREATE)
-\ =====================================================================
-
-VARIABLE _VFFR-CTX
-
-: _VFAT-FIND-FREE-ROOT-16  ( ctx -- de-addr packed-loc | 0 0 )
-    _VFFR-CTX !
-    _VFFR-CTX @ _VFAT-C.RENT + @     ( max-entries )
-    0 DO
-        I _VFAT-DIRENT-SIZE *
-        DUP _VFAT-SECTOR /
-        _VFFR-CTX @ _VFAT-C.RDSTART + @ +
-        DUP >R
-        _VFFR-CTX @ _VFAT-DIR-ENSURE
-        _VFAT-SECTOR MOD
-        DUP _VFAT-DIRENT-SIZE /
-        R> 16 * +                      ( off-in-sec packed-loc )
-        SWAP _VFFR-CTX @ _VFAT-C.DIRSEC + +  ( packed-loc de-addr )
-        DUP C@ 0= IF
-            SWAP UNLOOP EXIT           ( de-addr packed-loc )
-        THEN
-        2DROP
-    LOOP
-    0 0 ;
-
-VARIABLE _VFFF-CTX
-VARIABLE _VFFF-CUR
-
-: _VFAT-FIND-FREE-CLUS-DIR  ( first-cluster ctx -- de-addr packed-loc | 0 0 )
-    _VFFF-CTX !  _VFFF-CUR !
-    BEGIN
-        _VFFF-CUR @ 2 < IF 0 0 EXIT THEN
-        _VFFF-CUR @ _VFFF-CTX @ _VFAT-EOC? IF 0 0 EXIT THEN
-        _VFFF-CTX @ _VFAT-C.SPC + @ _VFAT-SECTOR *
-        _VFAT-DIRENT-SIZE /
-        0 DO
-            I _VFAT-DIRENT-SIZE *
-            DUP _VFAT-SECTOR /
-            _VFFF-CUR @ _VFFF-CTX @ _VFAT-CLUS>SEC +
-            DUP >R
-            _VFFF-CTX @ _VFAT-DIR-ENSURE
-            _VFAT-SECTOR MOD
-            DUP _VFAT-DIRENT-SIZE /
-            R> 16 * +
-            SWAP _VFFF-CTX @ _VFAT-C.DIRSEC + +
-            DUP C@ 0= IF
-                SWAP UNLOOP EXIT       ( de-addr packed-loc )
-            THEN
-            2DROP
-        LOOP
-        _VFFF-CUR @ _VFFF-CTX @ _VFAT-NEXT-CLUSTER _VFFF-CUR !
     AGAIN ;
 
 \ =====================================================================
@@ -675,12 +666,30 @@ VARIABLE _VFFF-CUR
 VARIABLE _VFATI-V
 VARIABLE _VFATI-CTX
 
-: VFAT-INIT  ( vfs -- ior )
-    DUP _VFAT-INIT
-    DUP 0<> IF  NIP EXIT  THEN
-    DROP
-    DUP V.BCTX @  _VFATI-CTX !
-    _VFATI-V !
+VARIABLE _VFAT-TX-PARENT
+VARIABLE _VFAT-TX-V
+VARIABLE _VFAT-TX-OLD-CHILD
+VARIABLE _VFAT-TX-OLD-COUNT
+VARIABLE _VFAT-TX-OLD-STR
+
+: _VFAT-TX-BEGIN  ( parent vfs -- )
+    _VFAT-TX-V ! _VFAT-TX-PARENT !
+    _VFAT-TX-PARENT @ IN.CHILD @ _VFAT-TX-OLD-CHILD !
+    _VFAT-TX-V @ V.ICOUNT @ _VFAT-TX-OLD-COUNT !
+    _VFAT-TX-V @ V.STR-PTR @ _VFAT-TX-OLD-STR ! ;
+
+: _VFAT-TX-ROLLBACK  ( -- )
+    BEGIN
+        _VFAT-TX-PARENT @ IN.CHILD @
+        DUP _VFAT-TX-OLD-CHILD @ <>
+    WHILE
+        DUP _VFAT-TX-PARENT @ _VFS-REMOVE-CHILD
+        TRUE _VFAT-TX-V @ _VFS-DENTRY-RELEASE
+    REPEAT DROP
+    _VFAT-TX-OLD-COUNT @ _VFAT-TX-V @ V.ICOUNT !
+    _VFAT-TX-OLD-STR @ _VFAT-TX-V @ V.STR-PTR ! ;
+
+: _VFATI-SCAN-ROOT  ( -- )
     _VFATI-CTX @ _VFAT-C.TYPE + @ _VFAT-TYPE-FAT16 = IF
         _VFATI-V @ V.ROOT @
         _VFATI-V @  _VFATI-CTX @  _VFAT-SCAN-ROOT-16
@@ -688,6 +697,28 @@ VARIABLE _VFATI-CTX
         _VFATI-CTX @ _VFAT-C.RCLUS + @
         _VFATI-V @ V.ROOT @
         _VFATI-V @  _VFATI-CTX @  _VFAT-SCAN-CLUS-DIR
+    THEN ;
+
+: VFAT-INIT  ( vfs -- ior )
+    DUP V.LIFECYCLE @ VFS-L-MOUNTED = IF DROP 0 EXIT THEN
+    DUP V.LAST-IOR @ ?DUP IF NIP EXIT THEN
+    DUP _VFAT-INIT
+    DUP 0<> IF NIP EXIT THEN DROP
+    DUP V.BCTX @ _VFATI-CTX !
+    DUP _VFAT-IO-V ! _VFATI-V !
+    \ Root identity is format-specific.  Core constructs BID=1, but FAT16
+    \ uses the fixed root area (sentinel 0) and FAT32 uses BPB RootClus.
+    _VFATI-CTX @ _VFAT-C.TYPE + @ _VFAT-TYPE-FAT16 = IF
+        0
+    ELSE
+        _VFATI-CTX @ _VFAT-C.RCLUS + @
+    THEN DUP _VFATI-V @ V.ROOT @ IN.BID !
+    _VFATI-V @ V.ROOT @ IN.BDATA !
+    _VFATI-V @ V.ROOT @ _VFATI-V @ _VFAT-TX-BEGIN
+    ['] _VFATI-SCAN-ROOT CATCH ?DUP IF
+        _VFAT-TX-ROLLBACK
+        0 _VFATI-CTX @ _VFAT-C.TYPE + !
+        EXIT
     THEN
     VFS-IF-CHILDREN  _VFATI-V @ V.ROOT @ IN.FLAGS DUP @ ROT OR SWAP !
     0 ;
@@ -700,8 +731,7 @@ VARIABLE _VFRD-IN
 VARIABLE _VFRD-V
 VARIABLE _VFRD-CTX
 
-: _VFAT-READDIR  ( inode vfs -- )
-    _VFRD-V !  _VFRD-IN !
+: _VFRD-SCAN  ( -- )
     _VFRD-V @ V.BCTX @  _VFRD-CTX !
     _VFRD-IN @ IN.BID @ 0=
     _VFRD-CTX @ _VFAT-C.TYPE + @ _VFAT-TYPE-FAT16 =  AND IF
@@ -711,11 +741,21 @@ VARIABLE _VFRD-CTX
     _VFRD-IN @ IN.BID @
     _VFRD-IN @  _VFRD-V @  _VFRD-CTX @  _VFAT-SCAN-CLUS-DIR ;
 
+: _VFAT-READDIR  ( inode vfs -- ior )
+    DUP _VFAT-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
+    _VFRD-V ! _VFRD-IN !
+    _VFRD-V @ _VFAT-IO-V !
+    _VFRD-IN @ _VFRD-V @ _VFAT-TX-BEGIN
+    ['] _VFRD-SCAN CATCH
+    DUP IF _VFAT-TX-ROLLBACK THEN ;
+
 \ =====================================================================
-\  Read  ( buf len offset inode vfs -- actual )
+\  Read  ( buf len offset inode vfs -- actual ior )
 \ =====================================================================
 
 VARIABLE _VFR-BUF
+VARIABLE _VFR-LEN
+VARIABLE _VFR-OFF
 VARIABLE _VFR-REM
 VARIABLE _VFR-IN
 VARIABLE _VFR-V
@@ -728,304 +768,137 @@ VARIABLE _VFR-BPC
 VARIABLE _VFR-SEC
 VARIABLE _VFR-SOFF
 VARIABLE _VFR-CHUNK
+VARIABLE _VFR-IOR
+VARIABLE _VFR-LEFT
 
-: _VFAT-READ  ( buf len offset inode vfs -- actual )
-    _VFR-V !  _VFR-IN !
+: _VFR-VALID-CUR  ( -- )
+    _VFR-CUR @ 2 < IF 50 _VFAT-FORMAT-CORRUPT THROW THEN
+    _VFR-CUR @ _VFR-CTX @ _VFAT-EOC? IF
+        51 _VFAT-FORMAT-CORRUPT THROW
+    THEN
+    _VFR-CUR @ _VFR-CTX @ _VFAT-C.DCLUS + @ 2 + >= IF
+        52 _VFAT-FORMAT-CORRUPT THROW
+    THEN ;
+
+: _VFR-ADVANCE  ( -- )
+    _VFR-LEFT @ 0= IF 53 _VFAT-FORMAT-CORRUPT THROW THEN
+    -1 _VFR-LEFT +!
+    _VFR-CUR @ _VFR-CTX @ _VFAT-NEXT-CLUSTER _VFR-CUR ! ;
+
+: _VFR-TRANSFER  ( -- )
+    BEGIN _VFR-COFF @ _VFR-BPC @ >= WHILE
+        _VFR-VALID-CUR _VFR-ADVANCE
+        _VFR-BPC @ NEGATE _VFR-COFF +!
+    REPEAT
+    BEGIN _VFR-REM @ 0> WHILE
+        _VFR-VALID-CUR
+        _VFR-COFF @ _VFAT-SECTOR /
+        _VFR-CUR @ _VFR-CTX @ _VFAT-CLUS>SEC + _VFR-SEC !
+        _VFR-SEC @ _VFR-CTX @ _VFAT-C.TOTSEC + @ >= IF
+            54 _VFAT-FORMAT-CORRUPT THROW
+        THEN
+        _VFR-COFF @ _VFAT-SECTOR MOD _VFR-SOFF !
+        _VFAT-SECTOR _VFR-SOFF @ - _VFR-REM @ MIN _VFR-CHUNK !
+        _VFR-CHUNK @ 0= IF 55 _VFAT-FORMAT-CORRUPT THROW THEN
+        _VFR-SCR @ _VFR-SEC @ 1 _VFAT-VOL-READ _VFR-IOR !
+        _VFAT-IO-COMPLETED @ IF
+            _VFR-SCR @ _VFR-SOFF @ + _VFR-BUF @ _VFR-CHUNK @ CMOVE
+            _VFR-CHUNK @ DUP _VFR-ACT +!
+            DUP _VFR-BUF +!
+            DUP _VFR-COFF +!
+            NEGATE _VFR-REM +!
+        THEN
+        _VFR-IOR @ ?DUP IF THROW THEN
+        _VFR-COFF @ _VFR-BPC @ >= _VFR-REM @ 0> AND IF
+            _VFR-ADVANCE
+            _VFR-BPC @ NEGATE _VFR-COFF +!
+        THEN
+    REPEAT ;
+
+: _VFAT-READ  ( buf len offset inode vfs -- actual ior )
+    DUP _VFAT-READY? 0= IF 2DROP 2DROP DROP 0 VFS-E-BUSY EXIT THEN
+    _VFR-V ! _VFR-IN ! _VFR-OFF ! _VFR-LEN ! _VFR-BUF !
+    _VFR-V @ _VFAT-IO-V !
+    _VFR-OFF @ 0< _VFR-LEN @ 0< OR IF 0 VFS-E-INVALID EXIT THEN
     _VFR-V @ V.BCTX @ _VFR-CTX !
     _VFR-CTX @ _VFAT-C.SCRATCH + _VFR-SCR !
     _VFR-CTX @ _VFAT-C.SPC + @ _VFAT-SECTOR * _VFR-BPC !
     0 _VFR-ACT !
-    ( buf len offset )
-    _VFR-IN @ IN.SIZE-LO @ OVER -    ( buf len offset avail )
-    DUP 0< IF 2DROP 2DROP 0 EXIT THEN
-    ROT MIN                            ( buf offset clamped-len )
-    _VFR-REM !                         ( buf offset )
-    _VFR-REM @ 0= IF 2DROP 0 EXIT THEN
-    SWAP _VFR-BUF !                    ( offset )
-    _VFR-IN @ IN.BDATA @  _VFR-CUR !
-    DUP _VFR-COFF !
-    BEGIN _VFR-COFF @ _VFR-BPC @ >= WHILE
-        _VFR-CUR @ _VFR-CTX @ _VFAT-NEXT-CLUSTER _VFR-CUR !
-        _VFR-BPC @ NEGATE _VFR-COFF +!
-    REPEAT
-    DROP
-    BEGIN _VFR-REM @ 0> WHILE
-        _VFR-CUR @ 2 < IF _VFR-ACT @ EXIT THEN
-        _VFR-CUR @ _VFR-CTX @ _VFAT-EOC? IF _VFR-ACT @ EXIT THEN
-        _VFR-COFF @ _VFAT-SECTOR /
-        _VFR-CUR @ _VFR-CTX @ _VFAT-CLUS>SEC +  _VFR-SEC !
-        _VFR-COFF @ _VFAT-SECTOR MOD              _VFR-SOFF !
-        _VFAT-SECTOR _VFR-SOFF @ - _VFR-REM @ MIN _VFR-CHUNK !
-        _VFR-CHUNK @ 0= IF _VFR-ACT @ EXIT THEN
-        _VFR-SEC @ DISK-SEC!
-        _VFR-SCR @ DISK-DMA! 1 DISK-N! DISK-READ
-        _VFR-SCR @ _VFR-SOFF @ +  _VFR-BUF @  _VFR-CHUNK @  CMOVE
-        _VFR-CHUNK @ DUP _VFR-ACT +!
-        DUP _VFR-BUF +!
-        DUP _VFR-COFF +!
-        NEGATE _VFR-REM +!
-        _VFR-COFF @ _VFR-BPC @ >= IF
-            _VFR-CUR @ _VFR-CTX @ _VFAT-NEXT-CLUSTER _VFR-CUR !
-            _VFR-BPC @ NEGATE _VFR-COFF +!
-        THEN
-    REPEAT
-    _VFR-ACT @ ;
+    _VFR-IN @ IN.SIZE-LO @ _VFR-OFF @ -
+    DUP 0< IF DROP 0 0 EXIT THEN
+    _VFR-LEN @ MIN _VFR-REM !
+    _VFR-REM @ 0= IF 0 0 EXIT THEN
+    _VFR-IN @ IN.BDATA @ _VFR-CUR !
+    _VFR-OFF @ _VFR-COFF !
+    _VFR-CTX @ _VFAT-C.DCLUS + @ 1+ _VFR-LEFT !
+    ['] _VFR-TRANSFER CATCH _VFR-IOR !
+    _VFR-ACT @ _VFR-IOR @ _VFAT-PARTIAL-IOR ;
 
 \ =====================================================================
-\  Write  ( buf len offset inode vfs -- actual )
+\  Disabled mutation entrypoints
 \ =====================================================================
 
-VARIABLE _VFW-BUF
-VARIABLE _VFW-REM
-VARIABLE _VFW-IN
-VARIABLE _VFW-V
-VARIABLE _VFW-CTX
-VARIABLE _VFW-CUR
-VARIABLE _VFW-COFF
-VARIABLE _VFW-ACT
-VARIABLE _VFW-SCR
-VARIABLE _VFW-BPC
-VARIABLE _VFW-PREV
-VARIABLE _VFW-ORIGOFF
-VARIABLE _VFW-SEC
-VARIABLE _VFW-SOFF
-VARIABLE _VFW-CHUNK
-
-: _VFAT-WRITE-EXTEND  ( -- cluster | 0 )
-    _VFW-CTX @ _VFAT-ALLOC-CLUSTER  DUP 0= IF EXIT THEN
-    DUP _VFW-PREV @ _VFW-CTX @ _VFAT-SET-FAT ;
-
-: _VFAT-WRITE  ( buf len offset inode vfs -- actual )
-    _VFW-V !  _VFW-IN !
-    _VFW-V @ V.BCTX @ _VFW-CTX !
-    _VFW-CTX @ _VFAT-C.SCRATCH + _VFW-SCR !
-    _VFW-CTX @ _VFAT-C.SPC + @ _VFAT-SECTOR * _VFW-BPC !
-    0 _VFW-ACT !  0 _VFW-PREV !
-    ( buf len offset )
-    DUP >R
-    ROT _VFW-BUF !  SWAP _VFW-REM !    ( offset )
-    R> _VFW-ORIGOFF !
-    _VFW-REM @ 0= IF DROP 0 EXIT THEN
-    \ Ensure at least one cluster
-    _VFW-IN @ IN.BDATA @  _VFW-CUR !
-    _VFW-CUR @ 0= IF
-        _VFW-CTX @ _VFAT-ALLOC-CLUSTER  _VFW-CUR !
-        _VFW-CUR @ 0= IF DROP 0 EXIT THEN
-        _VFW-CUR @ _VFW-IN @ IN.BDATA !
-        _VFW-CUR @ _VFW-IN @ IN.BID !
-    THEN
-    DUP _VFW-COFF !  DROP
-    \ Skip full clusters (extending chain as needed)
-    BEGIN _VFW-COFF @ _VFW-BPC @ >= WHILE
-        _VFW-CUR @ _VFW-PREV !
-        _VFW-CUR @ _VFW-CTX @ _VFAT-NEXT-CLUSTER
-        DUP _VFW-CTX @ _VFAT-EOC? IF
-            DROP _VFAT-WRITE-EXTEND
-            DUP 0= IF _VFW-ACT @ EXIT THEN
-        THEN
-        _VFW-CUR !
-        _VFW-BPC @ NEGATE _VFW-COFF +!
-    REPEAT
-    \ Write loop — one sector at a time
-    BEGIN _VFW-REM @ 0> WHILE
-        _VFW-CUR @ 2 < IF _VFW-ACT @ EXIT THEN
-        _VFW-COFF @ _VFAT-SECTOR /
-        _VFW-CUR @ _VFW-CTX @ _VFAT-CLUS>SEC +  _VFW-SEC !
-        _VFW-COFF @ _VFAT-SECTOR MOD              _VFW-SOFF !
-        _VFAT-SECTOR _VFW-SOFF @ - _VFW-REM @ MIN _VFW-CHUNK !
-        _VFW-CHUNK @ 0= IF _VFW-ACT @ EXIT THEN
-        _VFW-SOFF @ 0<>  _VFW-CHUNK @ _VFAT-SECTOR <  OR IF
-            \ Partial: read-modify-write
-            _VFW-SEC @ DISK-SEC!
-            _VFW-SCR @ DISK-DMA! 1 DISK-N! DISK-READ
-            _VFW-BUF @  _VFW-SCR @ _VFW-SOFF @ +  _VFW-CHUNK @  CMOVE
-            _VFW-SEC @ DISK-SEC!
-            _VFW-SCR @ DISK-DMA! 1 DISK-N! DISK-WRITE
-        ELSE
-            \ Full sector DMA
-            _VFW-SEC @ DISK-SEC!
-            _VFW-BUF @ DISK-DMA! 1 DISK-N! DISK-WRITE
-        THEN
-        _VFW-CHUNK @ DUP _VFW-ACT +!
-        DUP _VFW-BUF +!
-        DUP _VFW-COFF +!
-        NEGATE _VFW-REM +!
-        \ Advance cluster if needed
-        _VFW-COFF @ _VFW-BPC @ >= IF
-            _VFW-CUR @ _VFW-PREV !
-            _VFW-CUR @ _VFW-CTX @ _VFAT-NEXT-CLUSTER
-            DUP _VFW-CTX @ _VFAT-EOC? IF
-                DROP
-                _VFW-REM @ 0> IF
-                    _VFAT-WRITE-EXTEND
-                    DUP 0= IF _VFW-ACT @ EXIT THEN
-                ELSE 0 THEN
-            THEN
-            _VFW-CUR !
-            _VFW-BPC @ NEGATE _VFW-COFF +!
-        THEN
-    REPEAT
-    \ Update file size in inode and dir entry
-    _VFW-ACT @ 0> IF
-        _VFW-ORIGOFF @ _VFW-ACT @ +
-        _VFW-IN @ IN.SIZE-LO @ MAX
-        DUP _VFW-IN @ IN.SIZE-LO !
-        _VFW-IN @ _VFW-CTX @ _VFAT-INODE-DE
-        _VFAT-DE.FILESZ + L!
-        -1 _VFW-CTX @ _VFAT-C.DDIR + !
-        VFS-IF-DIRTY _VFW-IN @ IN.FLAGS DUP @ ROT OR SWAP !
-    THEN
-    _VFW-ACT @ ;
+\ Mutation entrypoints exist only as explicit fail-closed documentation.
+\ They are deliberately absent from VFAT-CAPS and VFAT-OPS.
+: _VFAT-WRITE  ( buf len offset inode vfs -- actual ior )
+    2DROP 2DROP DROP 0 VFS-E-READONLY ;
+: _VFAT-CREATE    ( inode vfs -- ior )  2DROP VFS-E-READONLY ;
+: _VFAT-DELETE    ( inode vfs -- ior )  2DROP VFS-E-READONLY ;
+: _VFAT-TRUNCATE  ( inode vfs -- ior )  2DROP VFS-E-READONLY ;
 
 \ =====================================================================
-\  Sync  ( inode vfs -- ior )
+\  Read-only ABI adapters and unmount
 \ =====================================================================
 
-: _VFAT-SYNC  ( inode vfs -- ior )
-    NIP V.BCTX @                     ( ctx )
-    DUP _VFAT-C.DFAT + @ IF
-        DUP _VFAT-C.CFATSEC + @  DISK-SEC!
-        DUP _VFAT-C.FATSEC +     DISK-DMA!
-        1 DISK-N!  DISK-WRITE
-        \ Second FAT copy
-        DUP _VFAT-C.CFATSEC + @
-        OVER _VFAT-C.FATSZ + @ +   DISK-SEC!
-        DUP _VFAT-C.FATSEC +       DISK-DMA!
-        1 DISK-N!  DISK-WRITE
-        0 OVER _VFAT-C.DFAT + !
-    THEN
-    DUP _VFAT-C.DDIR + @ IF
-        DUP _VFAT-C.CDIRSEC + @  DISK-SEC!
-        DUP _VFAT-C.DIRSEC +     DISK-DMA!
-        1 DISK-N!  DISK-WRITE
-        0 OVER _VFAT-C.DDIR + !
-    THEN
-    DROP 0 ;
+: _VFAT-OPEN     ( inode vfs -- cookie ior )  2DROP 0 0 ;
+: _VFAT-RELEASE  ( cookie inode vfs -- ior )  DROP 2DROP 0 ;
+: _VFAT-GETATTR  ( inode vfs -- ior )         2DROP 0 ;
+: _VFAT-SYNCFS   ( vfs -- ior )               DROP 0 ;
+: _VFAT-FSYNC    ( inode vfs -- ior )         2DROP 0 ;
 
-\ =====================================================================
-\  Create  ( inode vfs -- ior )
-\ =====================================================================
-
-VARIABLE _VFCR-IN
-VARIABLE _VFCR-V
-VARIABLE _VFCR-CTX
-VARIABLE _VFCR-CLUS
-
-: _VFAT-CREATE  ( inode vfs -- ior )
-    _VFCR-V !  _VFCR-IN !
-    _VFCR-V @ V.BCTX @  _VFCR-CTX !
-    \ Allocate initial cluster
-    _VFCR-CTX @ _VFAT-ALLOC-CLUSTER  _VFCR-CLUS !
-    _VFCR-CLUS @ 0= IF -2 EXIT THEN
-    \ Set inode binding fields
-    _VFCR-CLUS @ _VFCR-IN @ IN.BID !
-    _VFCR-CLUS @ _VFCR-IN @ IN.BDATA !
-    \ Find free slot in parent directory
-    _VFCR-IN @ IN.PARENT @
-    DUP 0= IF DROP _VFCR-V @ V.ROOT @ THEN
-    DUP IN.BID @ 0=
-    _VFCR-CTX @ _VFAT-C.TYPE + @ _VFAT-TYPE-FAT16 =  AND IF
-        DROP
-        _VFCR-CTX @ _VFAT-FIND-FREE-ROOT-16
-    ELSE
-        IN.BID @  _VFCR-CTX @ _VFAT-FIND-FREE-CLUS-DIR
-    THEN
-    ( de-addr packed-loc | 0 0 )
-    DUP 0= IF
-        2DROP
-        _VFCR-CLUS @ _VFCR-CTX @ _VFAT-FREE-CHAIN
-        -1 EXIT
-    THEN
-    _VFCR-IN @ IN.BDATA 8 + !         ( de-addr )
-    DUP _VFAT-DIRENT-SIZE 0 FILL
-    \ Build SFN name
-    _VFCR-IN @ IN.NAME @ _VFS-STR-GET
-    _VFAT-MAKE-SFN DROP
-    _VFAT-SFN-BUF OVER 11 CMOVE       ( de )
-    \ Set attributes
-    _VFCR-IN @ IN.TYPE @ VFS-T-DIR = IF
-        _VFAT-ATTR-DIR
-    ELSE
-        _VFAT-ATTR-ARCHIVE
-    THEN  OVER _VFAT-DE.ATTR + C!     ( de )
-    \ Set cluster
-    _VFCR-CLUS @ OVER _VFAT-DE.CLUSLO + W!
-    _VFCR-CLUS @ 16 RSHIFT OVER _VFAT-DE.CLUSHI + W!
-    \ Set file size = 0
-    0 OVER _VFAT-DE.FILESZ + L!
-    DROP
-    -1 _VFCR-CTX @ _VFAT-C.DDIR + !
+VARIABLE _VFAT-UM-V
+: _VFAT-UNMOUNT  ( flags vfs -- ior )
+    _VFAT-UM-V ! DROP
+    0 _VFAT-UM-V @ V.BCTX !
     0 ;
 
 \ =====================================================================
-\  Delete  ( inode vfs -- ior )   — NO TOMBSTONES
-\ =====================================================================
-\
-\  Zeros the 32-byte directory entry entirely (byte 0 = 0x00).
-\  Does NOT use the FAT 0xE5 tombstone convention.
-
-VARIABLE _VFD-IN
-VARIABLE _VFD-V
-VARIABLE _VFD-CTX
-
-: _VFAT-DELETE  ( inode vfs -- ior )
-    _VFD-V !  _VFD-IN !
-    _VFD-V @ V.BCTX @  _VFD-CTX !
-    \ Free cluster chain
-    _VFD-IN @ IN.BDATA @  DUP 2 >= IF
-        _VFD-CTX @ _VFAT-FREE-CHAIN
-    ELSE DROP THEN
-    \ Zero the directory entry (no tombstone)
-    _VFD-IN @ _VFD-CTX @ _VFAT-INODE-DE
-    _VFAT-DIRENT-SIZE 0 FILL
-    -1 _VFD-CTX @ _VFAT-C.DDIR + !
-    0 ;
-
-\ =====================================================================
-\  Truncate  ( inode vfs -- ior )
+\  Validated read-only binding descriptor
 \ =====================================================================
 
-VARIABLE _VFT-IN
-VARIABLE _VFT-V
-VARIABLE _VFT-CTX
+VFS-CAP-PROBE VFS-CAP-MOUNT OR VFS-CAP-UNMOUNT OR
+VFS-CAP-READDIR OR VFS-CAP-OPEN OR VFS-CAP-RELEASE OR
+VFS-CAP-READ OR VFS-CAP-GETATTR OR
+VFS-CAP-SYNCFS OR VFS-CAP-FSYNC OR
+CONSTANT VFAT-CAPS
 
-: _VFAT-TRUNCATE  ( inode vfs -- ior )
-    _VFT-V !  _VFT-IN !
-    _VFT-V @ V.BCTX @  _VFT-CTX !
-    _VFT-IN @ _VFT-CTX @ _VFAT-INODE-DE
-    _VFT-IN @ IN.SIZE-LO @
-    SWAP _VFAT-DE.FILESZ + L!
-    -1 _VFT-CTX @ _VFAT-C.DDIR + !
-    0 ;
+CREATE VFAT-OPS  VFS-OPS-SIZE ALLOT
+VFAT-OPS VFS-OPS-SIZE 0 FILL
+' _VFAT-PROBE-VOLUME VFAT-OPS VFS-OP-PROBE    CELLS + !
+' VFAT-INIT       VFAT-OPS VFS-OP-MOUNT    CELLS + !
+' _VFAT-UNMOUNT   VFAT-OPS VFS-OP-UNMOUNT  CELLS + !
+' _VFAT-READDIR   VFAT-OPS VFS-OP-READDIR  CELLS + !
+' _VFAT-OPEN      VFAT-OPS VFS-OP-OPEN     CELLS + !
+' _VFAT-RELEASE   VFAT-OPS VFS-OP-RELEASE  CELLS + !
+' _VFAT-READ      VFAT-OPS VFS-OP-READ     CELLS + !
+' _VFAT-GETATTR   VFAT-OPS VFS-OP-GETATTR  CELLS + !
+' _VFAT-SYNCFS    VFAT-OPS VFS-OP-SYNCFS   CELLS + !
+' _VFAT-FSYNC     VFAT-OPS VFS-OP-FSYNC    CELLS + !
 
-\ =====================================================================
-\  Teardown  ( vfs -- )
-\ =====================================================================
-
-: _VFAT-TEARDOWN  ( vfs -- )
-    DUP V.BCTX @ 0= IF  DROP EXIT  THEN
-    0 OVER _VFAT-SYNC DROP
-    0 SWAP V.BCTX ! ;
-
-\ =====================================================================
-\  Vtable
-\ =====================================================================
-
-CREATE VFAT-VTABLE  VFS-VT-SIZE ALLOT
-' _VFAT-PROBE     VFAT-VTABLE  VFS-VT-PROBE    CELLS + !
-' VFAT-INIT       VFAT-VTABLE  VFS-VT-INIT     CELLS + !
-' _VFAT-TEARDOWN  VFAT-VTABLE  VFS-VT-TEARDOWN CELLS + !
-' _VFAT-READ      VFAT-VTABLE  VFS-VT-READ     CELLS + !
-' _VFAT-WRITE     VFAT-VTABLE  VFS-VT-WRITE    CELLS + !
-' _VFAT-READDIR   VFAT-VTABLE  VFS-VT-READDIR  CELLS + !
-' _VFAT-SYNC      VFAT-VTABLE  VFS-VT-SYNC     CELLS + !
-' _VFAT-CREATE    VFAT-VTABLE  VFS-VT-CREATE   CELLS + !
-' _VFAT-DELETE    VFAT-VTABLE  VFS-VT-DELETE    CELLS + !
-' _VFAT-TRUNCATE  VFAT-VTABLE  VFS-VT-TRUNCATE CELLS + !
+CREATE VFAT-BINDING
+VFS-BINDING-MAGIC ,
+VFS-BINDING-ABI-MAJOR ,
+VFS-BINDING-ABI-MINOR ,
+VFS-BINDING-DESC-SIZE ,
+VFS-OPS-SIZE ,
+VFAT-CAPS ,
+VFS-BF-NEEDS-VOLUME VFS-BF-READ-ONLY OR ,
+VFAT-OPS ,
+0 , 0 ,
 
 \ =====================================================================
-\  Convenience: VFAT-NEW  ( arena -- vfs )
+\  Convenience: VFAT-NEW  ( arena volume -- vfs ior )
 \ =====================================================================
 
-: VFAT-NEW  ( arena -- vfs )
-    VFAT-VTABLE VFS-NEW ;
+: VFAT-NEW  ( arena volume -- vfs ior )
+    VFAT-BINDING SWAP VFS-NEW ;

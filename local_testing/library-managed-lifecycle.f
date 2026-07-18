@@ -361,7 +361,8 @@ LIB-CONTENT-MAX XBUF _lml-bytes
     _lml-unknown-rid LIB-DIGEST-SIZE 0x72 FILL
     4194304 A-XMEM ARENA-NEW DUP 0= _lml-assert DROP
     DUP _lml-arena !
-    VFS-RAM-VTABLE VFS-NEW DUP _lml-vfs ! 0<> _lml-assert
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _lml-vfs ! 0<> _lml-assert
     _lml-vfs @ VFS-USE
     LIBRARY-VFS-STORE-SIZE ALLOCATE
         ABORT" LIBRARY MANAGED LIFECYCLE allocation" _lml-store-slot !

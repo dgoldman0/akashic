@@ -22,7 +22,6 @@ VARIABLE _lmd-write-calls
 VARIABLE _lmd-random-calls
 VARIABLE _lmd-close-calls
 VARIABLE _lmd-close-fail-at
-VARIABLE _lmd-old-vtable
 VARIABLE _lmd-old-delete-xt
 VARIABLE _lmd-old-sync-xt
 VARIABLE _lmd-head-sync-armed
@@ -41,7 +40,8 @@ CREATE _lmd-read-entry LIB-ENTRY-SIZE ALLOT
 CREATE _lmd-read-content LIB-CONTENT-SIZE ALLOT
 CREATE _lmd-summary LIBRARY-QUERY-SUMMARY-SIZE ALLOT
 CREATE _lmd-head-before LIB-HEAD-FACT-SIZE ALLOT
-CREATE _lmd-vtable VFS-VT-SIZE ALLOT
+CREATE _lmd-ops VFS-OPS-SIZE ALLOT
+CREATE _lmd-binding VFS-BINDING-DESC-SIZE ALLOT
 LIB-CONTENT-MAX XBUF _lmd-bytes
 
 : _lmd-store  ( -- store ) _lmd-store-slot @ ;
@@ -122,30 +122,28 @@ LIB-CONTENT-MAX XBUF _lmd-bytes
         -1 _lmd-head-sync-armed !
     THEN ;
 
-: _lmd-fail-armed-sync  ( inode vfs -- ior )
+: _lmd-fail-armed-sync  ( vfs -- ior )
     _lmd-head-sync-armed @ IF
         0 _lmd-head-sync-armed !
         -1 _lmd-head-sync-failed !
-        2DROP -1 EXIT
+        DROP -1 EXIT
     THEN
     _lmd-old-sync-xt @ EXECUTE ;
 
-: _lmd-head-vtable-begin  ( -- )
-    _lmd-vfs @ V.VTABLE @ DUP _lmd-old-vtable !
-    DUP VFS-VT-SIZE _lmd-vtable SWAP CMOVE
-    DUP VFS-VT-SYNC CELLS + @ _lmd-old-sync-xt !
-    VFS-VT-DELETE CELLS + @ _lmd-old-delete-xt !
-    ['] _lmd-arm-head-sync _lmd-vtable VFS-VT-DELETE CELLS + !
-    ['] _lmd-fail-armed-sync _lmd-vtable VFS-VT-SYNC CELLS + !
-    _lmd-vtable _lmd-vfs @ V.VTABLE !
+: _lmd-head-fault-begin  ( -- )
+    _lmd-ops VFS-OP-SYNCFS CELLS + @ _lmd-old-sync-xt !
+    _lmd-ops VFS-OP-UNLINK CELLS + @ _lmd-old-delete-xt !
+    ['] _lmd-arm-head-sync _lmd-ops VFS-OP-UNLINK CELLS + !
+    ['] _lmd-fail-armed-sync _lmd-ops VFS-OP-SYNCFS CELLS + !
     0 _lmd-head-sync-armed ! 0 _lmd-head-sync-failed ! ;
 
-: _lmd-head-vtable-end  ( -- )
-    _lmd-old-vtable @ _lmd-vfs @ V.VTABLE ! ;
+: _lmd-head-fault-end  ( -- )
+    _lmd-old-delete-xt @ _lmd-ops VFS-OP-UNLINK CELLS + !
+    _lmd-old-sync-xt @ _lmd-ops VFS-OP-SYNCFS CELLS + ! ;
 
 : _lmd-uncertain-checkpoint  ( stage -- status )
     DUP 1- 1 SWAP LSHIFT _lmd-stage-mask @ OR _lmd-stage-mask !
-    5 = IF _lmd-head-vtable-begin THEN
+    5 = IF _lmd-head-fault-begin THEN
     LIBSTORE-S-OK ;
 
 : _lmd-arm  ( stage status -- )
@@ -430,7 +428,7 @@ LIB-CONTENT-MAX XBUF _lmd-bytes
     _lmd-request _lmd-result-b _lmd-store
         LIBRARY-VFS-STORE-CREATE-MANAGED
         LIBSTORE-S-OK = _lmd-assert
-    _lmd-head-vtable-end
+    _lmd-head-fault-end
     _lmd-head-sync-failed @ _lmd-assert
     _lmd-stage-mask @ 31 = _lmd-assert
     _lmd-result-b LIB-ENTRY-VALID? _lmd-assert
@@ -468,7 +466,11 @@ LIB-CONTENT-MAX XBUF _lmd-bytes
     _lmd-key-d LIB-OPERATION-KEY-SIZE 0x44 FILL
     4194304 A-XMEM ARENA-NEW DUP 0= _lmd-assert DROP
     DUP _lmd-arena !
-    VFS-RAM-VTABLE VFS-NEW DUP _lmd-vfs ! 0<> _lmd-assert
+    VFS-RAM-OPS _lmd-ops VFS-OPS-SIZE CMOVE
+    VFS-RAM-BINDING _lmd-binding VFS-BINDING-DESC-SIZE CMOVE
+    _lmd-ops _lmd-binding VB.OPS !
+    _lmd-binding 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _lmd-vfs ! 0<> _lmd-assert
     _lmd-vfs @ VFS-USE
     LIBRARY-VFS-STORE-SIZE ALLOCATE
         ABORT" LIBRARY MANAGED FAIL allocation" _lmd-store-slot !

@@ -351,7 +351,8 @@ VARIABLE _srtc-factory-context
     STREAMS-OBSERVATION-CHECKPOINT-SIZE _srtc-snapshot-a _srtc-allocate
     VFS-CUR _srtc-old-vfs !
     8388608 A-XMEM ARENA-NEW DUP 0= _srtc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _srtc-vfs ! 0<> _srtc-assert
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _srtc-vfs ! 0<> _srtc-assert
     _srtc-vfs @ VFS-USE
     _srtc-service XIO-SERVICE-INIT XIO-S-OK = _srtc-assert
     _srtc-source-init

@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Test suite for vfs-fat.f — the FAT16/FAT32 VFS binding.
 
-These tests attach a formatted FAT16 or FAT32 disk image to the
-emulator, load the VFS + binding, then exercise probe, init,
-readdir, read, write, create, delete, sync, and teardown
-through the VFS API.
+These tests attach a formatted FAT16 or FAT32 image through the checked
+block-device/volume API, then exercise the read-only VFS binding.
 
 FAT images are built in-memory by Python helper functions that
 follow the Microsoft FAT specification exactly:
@@ -18,7 +16,7 @@ import os, sys, struct, tempfile, time, math
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+MEGAPAD_ROOT = os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 
 # Forth source paths
 EVENT_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
@@ -30,12 +28,13 @@ VFS_F     = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
 VFS_MNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
 VFS_FAT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "drivers", "vfs-fat.f")
 
-sys.path.insert(0, EMU_DIR)
+sys.path.insert(0, MEGAPAD_ROOT)
 from asm import assemble
+from devices import STORAGE_CMD_READ, STORAGE_RESULT_MEDIA_FAILURE
 from system import MegapadSystem
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
+BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
+KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
 
 # ═══════════════════════════════════════════════════════════════════
 #  FAT16 Disk Image Builder
@@ -305,6 +304,65 @@ def build_fat16_empty(total_sectors=32768, sectors_per_cluster=4):
                              sectors_per_cluster=sectors_per_cluster)
 
 
+def build_fat32_high_cluster_image(content=b"FAT32 high cluster data",
+                                   high_cluster=66000,
+                                   total_sectors=70000):
+    """Build a minimal real FAT32 image with a file above cluster 0xffff."""
+    reserved = 32
+    num_fats = 1
+    spc = 1
+    fat_sectors = 1
+    while True:
+        first_data = reserved + num_fats * fat_sectors
+        data_clusters = (total_sectors - first_data) // spc
+        needed = math.ceil((data_clusters + 2) * 4 / SECTOR)
+        if needed <= fat_sectors:
+            break
+        fat_sectors = needed
+    first_data = reserved + num_fats * fat_sectors
+    data_clusters = total_sectors - first_data
+    if not (2 < high_cluster < data_clusters + 2):
+        raise ValueError("high cluster is outside FAT32 data geometry")
+
+    image = bytearray(total_sectors * SECTOR)
+    image[0:3] = b'\xEB\x58\x90'
+    image[3:11] = b'AKASHIC '
+    struct.pack_into('<H', image, 11, SECTOR)
+    image[13] = spc
+    struct.pack_into('<H', image, 14, reserved)
+    image[16] = num_fats
+    struct.pack_into('<H', image, 17, 0)       # RootEntCnt
+    struct.pack_into('<H', image, 19, 0)       # TotSec16
+    image[21] = 0xF8
+    struct.pack_into('<H', image, 22, 0)       # FATSz16
+    struct.pack_into('<I', image, 32, total_sectors)
+    struct.pack_into('<I', image, 36, fat_sectors)
+    struct.pack_into('<I', image, 44, 2)       # RootClus
+    image[510:512] = b'\x55\xAA'
+
+    fat = bytearray(fat_sectors * SECTOR)
+    struct.pack_into('<I', fat, 0 * 4, 0x0FFFFFF8)
+    struct.pack_into('<I', fat, 1 * 4, 0x0FFFFFFF)
+    struct.pack_into('<I', fat, 2 * 4, 0x0FFFFFFF)
+    struct.pack_into('<I', fat, high_cluster * 4, 0x0FFFFFFF)
+    fat_start = reserved * SECTOR
+    image[fat_start:fat_start + len(fat)] = fat
+
+    root_sector = first_data
+    entry = _fat16_dir_entry("HIGH.BIN", 0x20, high_cluster, len(content))
+    image[root_sector * SECTOR:root_sector * SECTOR + 32] = entry
+    # The following all-zero entry is the required end marker.
+    file_sector = first_data + (high_cluster - 2) * spc
+    image[file_sector * SECTOR:file_sector * SECTOR + len(content)] = content
+    return bytes(image), {
+        "first_data": first_data,
+        "data_clusters": data_clusters,
+        "fat_sectors": fat_sectors,
+        "high_cluster": high_cluster,
+        "content": content,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  Emulator Helpers (same pattern as test_vfs_mp64fs.py)
 # ═══════════════════════════════════════════════════════════════════
@@ -443,10 +501,22 @@ def build_snapshot():
     helpers = [
         'CREATE _RB 4096 ALLOT',
         'CREATE _WB 4096 ALLOT',
+        'CREATE _TBD /BLOCK-DEVICE ALLOT',
+        'CREATE _TVOL /VOLUME ALLOT',
+        'VARIABLE _TVOL-READY',
         'VARIABLE _TARN',
+        ': T-VOLUME  ( -- volume )',
+        '    _TVOL-READY @ 0= IF',
+        '        _TBD BD-OPEN THROW',
+        '        _TBD _TVOL VOL-RAW THROW',
+        '        -1 _TVOL-READY !',
+        '    THEN',
+        '    _TVOL ;',
+        ': T-ARENA  ( -- arena )',
+        '    524288 A-XMEM ARENA-NEW THROW ;',
         ': T-VFAT-NEW  ( -- vfs )',
-        '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
-        '    _TARN @ VFAT-NEW ;',
+        '    T-ARENA _TARN !',
+        '    _TARN @ T-VOLUME VFAT-NEW THROW ;',
     ]
 
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20),
@@ -488,7 +558,8 @@ def build_snapshot():
     return _snapshot
 
 
-def run_forth(lines, max_steps=800_000_000, disk_image=None):
+def run_forth(lines, max_steps=800_000_000, disk_image=None,
+              storage_faults=None):
     if _snapshot is None:
         build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
@@ -517,6 +588,12 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None):
         # Zero remainder so stale MP64FS data doesn't leak
         for i in range(len(img), len(sd)):
             sd[i] = 0
+    sys_obj.storage._capacity_sectors = len(img) // SECTOR
+    sys_obj.storage.media_generation = (
+        sys_obj.storage.media_generation + 1
+    ) & 0xFFFF_FFFF
+    for fault in storage_faults or ():
+        sys_obj.storage.inject_fault(**fault)
     buf.clear()
 
     payload = "\n".join(lines) + "\nBYE\n"
@@ -543,9 +620,13 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None):
 _pass_count = 0
 _fail_count = 0
 
-def check(name, forth_lines, expected, disk_image=None):
+def check(name, forth_lines, expected, disk_image=None, storage_faults=None):
     global _pass_count, _fail_count
-    output, _ = run_forth(forth_lines, disk_image=disk_image)
+    output, _ = run_forth(
+        forth_lines,
+        disk_image=disk_image,
+        storage_faults=storage_faults,
+    )
     clean = output.strip()
     if expected in clean:
         _pass_count += 1
@@ -558,345 +639,400 @@ def check(name, forth_lines, expected, disk_image=None):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 #  Tests
 # ═══════════════════════════════════════════════════════════════════
 
-# ── Probe ──
+def test_constructor_binds_read_only_volume():
+    """The public constructor mounts once and exposes an honest descriptor."""
+    check("constructor binds read-only volume", [
+        'T-ARENA CONSTANT _AR',
+        '_AR T-VOLUME VFAT-NEW CONSTANT _IOR CONSTANT _V',
+        '_IOR 0=',
+        '_V 0<> AND',
+        '_V V.LIFECYCLE @ VFS-L-MOUNTED = AND',
+        '_V V.VOLUME @ T-VOLUME = AND',
+        '_V V.FLAGS @ VFS-F-RO AND 0<> AND',
+        'VFAT-BINDING VFS-BINDING-VALID? AND',
+        '_V VFS-CAPS@ VFS-CAP-PROBE AND 0<> AND',
+        '_V V.BINDING @ VB.FLAGS @ VFS-BF-STABLE-IDS AND 0= AND',
+        '_V V.BINDING @ VB.FLAGS @ VFS-BF-CASE-INSENSITIVE AND 0= AND',
+        'IF ." FAT-CONSTRUCTOR-OK" THEN',
+    ], "FAT-CONSTRUCTOR-OK")
 
-def test_probe_valid():
-    """Probe returns TRUE for a valid FAT16 image."""
-    check("probe-valid", [
+
+def test_volume_probe_match_nonmatch_and_io_error():
+    """FAT PROBE reads the supplied volume and returns structured failures."""
+    check("FAT probe match", [
+        'VFAT-BINDING T-VOLUME VFS-PROBE CONSTANT _IOR CONSTANT _SCORE',
+        '_IOR 0= _SCORE VFAT-PROBE-SCORE = AND IF '
+        '." FAT-PROBE-MATCH" THEN',
+    ], "FAT-PROBE-MATCH")
+
+    check("FAT probe nonmatch", [
+        'VFAT-BINDING T-VOLUME VFS-PROBE CONSTANT _IOR CONSTANT _SCORE',
+        '_IOR 0= _SCORE 0= AND IF ." FAT-PROBE-NOMATCH" THEN',
+    ], "FAT-PROBE-NOMATCH", disk_image=bytes(32768 * SECTOR))
+
+    check("FAT probe checked I/O error", [
+        'VFAT-BINDING T-VOLUME VFS-PROBE CONSTANT _IOR CONSTANT _SCORE',
+        '_SCORE 0=',
+        '_IOR VFS-IOR-REASON VFS-R-IO = AND',
+        '_IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND',
+        '_IOR VFS-IOR-DETAIL 0<> AND',
+        'IF ." FAT-PROBE-IO-ERROR" THEN',
+    ], "FAT-PROBE-IO-ERROR", storage_faults=[{
+        "stage": "start",
+        "result": STORAGE_RESULT_MEDIA_FAILURE,
+        "command": STORAGE_CMD_READ,
+    }])
+
+
+def test_constructor_requires_volume():
+    """The FAT binding cannot be created without an explicit attachment."""
+    check("constructor requires volume", [
+        'T-ARENA 0 VFAT-NEW CONSTANT _IOR CONSTANT _V',
+        '_V 0= _IOR VFS-IOR-REASON VFS-R-NOVOLUME = AND',
+        'IF ." FAT-NOVOLUME-OK" THEN',
+    ], "FAT-NOVOLUME-OK")
+
+
+def test_constructor_propagates_checked_read_failure():
+    """Mount exposes a checked volume read failure with backend detail."""
+    check("constructor checked-read failure", [
+        'T-ARENA T-VOLUME VFAT-NEW CONSTANT _IOR CONSTANT _V',
+        '_V 0<>',
+        '_IOR VFS-IOR-REASON VFS-R-IO = AND',
+        '_IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND',
+        '_IOR VFS-IOR-DETAIL 0<> AND',
+        'IF ." FAT-CHECKED-READ-ERROR-OK" THEN',
+    ], "FAT-CHECKED-READ-ERROR-OK", storage_faults=[{
+        "stage": "start",
+        "result": STORAGE_RESULT_MEDIA_FAILURE,
+        "command": STORAGE_CMD_READ,
+    }])
+
+
+def test_constructor_rejects_invalid_formats():
+    """Probe and BPB failures are reported by the constructor itself."""
+    zeroed = bytes(32768 * SECTOR)
+
+    bad_signature = bytearray(build_fat16_empty())
+    bad_signature[510:512] = b"\x00\x00"
+
+    bad_spc = bytearray(build_fat16_empty())
+    bad_spc[13] = 3
+
+    fat12 = FAT16ImageBuilder(
+        total_sectors=128,
+        sectors_per_cluster=1,
+        reserved_sectors=1,
+        num_fats=2,
+        root_entry_count=16,
+    ).build()
+
+    total_mismatch = bytearray(build_fat16_empty())
+    struct.pack_into('<H', total_mismatch, 19, 32767)
+
+    cases = (
+        ("zeroed", zeroed, 11, 1),
+        ("boot-signature", bytes(bad_signature), 11, 1),
+        ("sector-per-cluster", bytes(bad_spc), 11, 1),
+        ("fat12", fat12, 11, 1),
+        ("volume-geometry", bytes(total_mismatch), 10, 16),
+    )
+    for name, image, reason, detail in cases:
+        corrupt_flag_check = (
+            '_IOR VFS-IOR-FLAGS VFS-IOR-F-CORRUPT AND 0<> AND'
+            if reason == 10 else ''
+        )
+        check(f"constructor rejects {name}", [
+            'T-ARENA T-VOLUME VFAT-NEW CONSTANT _IOR CONSTANT _V',
+            '_V 0<>',
+            f'_IOR VFS-IOR-REASON {reason} = AND',
+            '_IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT = AND',
+            f'_IOR VFS-IOR-DETAIL {detail} = AND',
+            corrupt_flag_check,
+            'IF ." FAT-FORMAT-REJECT-OK" THEN',
+        ], "FAT-FORMAT-REJECT-OK", disk_image=image)
+
+
+def test_geometry_is_derived_from_bpb_and_volume():
+    """The mounted context stores exact FAT16 geometry."""
+    builder = FAT16ImageBuilder()
+    image = builder.build()
+    check("FAT geometry", [
+        'T-ARENA T-VOLUME VFAT-NEW CONSTANT _IOR CONSTANT _V',
+        '_IOR 0=',
+        '_V V.BCTX @ DUP _VFAT-C.TYPE + @ _VFAT-TYPE-FAT16 = AND',
+        f'DUP _VFAT-C.SPC + @ {builder.spc} = AND',
+        f'DUP _VFAT-C.FDS + @ {builder.first_data_sector} = AND',
+        f'_VFAT-C.TOTSEC + @ {builder.total_sectors} = AND',
+        'IF ." FAT-GEOMETRY-OK" THEN',
+    ], "FAT-GEOMETRY-OK", disk_image=image)
+
+
+def test_root_and_lazy_subdirectory_reads():
+    """FAT16 fixed-root and cluster-backed subdirectory scans both work."""
+    check("root and lazy subdirectory reads", [
         'T-VFAT-NEW CONSTANT _V',
-        'CREATE _SB 512 ALLOT',
-        '0 DISK-SEC!  _SB DISK-DMA!  1 DISK-N!  DISK-READ',
-        '_SB _V _VFAT-PROBE . CR',
-    ], "-1")
+        'S" /HELLO.TXT" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _HF',
+        '_RB 17 _HF VFS-READ? THROW 17 =',
+        '_RB 17 S" Hello, FAT world!" COMPARE 0= AND',
+        'S" /DOCS/README.TXT" VFS-FF-READ _V '
+        'VFS-OPEN? THROW CONSTANT _RF',
+        '_RB 21 _RF VFS-READ? THROW 21 = AND',
+        '_RB 21 S" Inside docs directory" COMPARE 0= AND',
+        'S" /hello.txt" _V VFS-RESOLVE 0= AND',
+        'IF ." FAT-TREE-READ-OK" THEN',
+    ], "FAT-TREE-READ-OK")
 
-def test_probe_invalid():
-    """Probe returns FALSE for a zeroed image."""
-    img = bytes(32768 * SECTOR)   # all zeros
-    check("probe-invalid", [
+
+def test_binary_read_offset_and_chain_navigation():
+    """Binary offsets and checked FAT16 chain lookup preserve data."""
+    check("binary offset and chain navigation", [
         'T-VFAT-NEW CONSTANT _V',
-        'CREATE _SB 512 ALLOT',
-        '0 DISK-SEC!  _SB DISK-DMA!  1 DISK-N!  DISK-READ',
-        '_SB _V _VFAT-PROBE . CR',
-    ], "0", disk_image=img)
+        'S" /DATA.BIN" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _FD',
+        '_FD VFS-SIZE 1024 =',
+        '250 _FD VFS-SEEK',
+        '_RB 20 _FD VFS-READ? THROW 20 = AND',
+        '_RB C@ 250 = AND _RB 6 + C@ 0= AND',
+        '2 _V V.BCTX @ _VFAT-NEXT-CLUSTER _VFAT-EOC16 = AND',
+        'IF ." FAT-OFFSET-OK" THEN',
+    ], "FAT-OFFSET-OK")
 
-# ── Init ──
 
-def test_init_success():
-    """VFAT-INIT returns 0 on a valid FAT16 image."""
-    check("init-success", [
+def test_multicluster_read():
+    """Reads traverse a multi-cluster FAT chain across callback calls."""
+    data = bytes(range(256)) * 32
+    image = build_fat16_image(files=[("BIG.BIN", data, None)])
+    check("multicluster read", [
         'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT . CR',
-    ], "0")
+        '2 _V V.BCTX @ _VFAT-NEXT-CLUSTER 3 =',
+        'S" /BIG.BIN" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _FD',
+        '_RB 4096 _FD VFS-READ? THROW 4096 = AND',
+        '_RB C@ 0= AND _RB 4095 + C@ 255 = AND',
+        '_RB 4096 _FD VFS-READ? THROW 4096 = AND',
+        '_RB C@ 0= AND _RB 4095 + C@ 255 = AND',
+        'IF ." FAT-MULTICLUSTER-OK" THEN',
+    ], "FAT-MULTICLUSTER-OK", disk_image=image)
 
-def test_init_sets_geometry():
-    """After init, context has correct FAT type and sec-per-cluster."""
-    check("init-geometry", [
+
+def test_zero_entry_terminates_fixed_and_cluster_directories():
+    """Entries after the first 0x00 marker are never published."""
+    builder = FAT16ImageBuilder()
+    docs = builder.add_dir("DOCS")
+    live_cluster = builder.add_file("LIVE.TXT", b"live")
+    builder.add_file("CHILD.TXT", b"child", docs)
+    image = bytearray(builder.build())
+
+    root_start = builder.reserved + builder.num_fats * builder.fat_sectors
+    root_ghost = _fat16_dir_entry("GHOST.TXT", 0x20, live_cluster, 4)
+    # Root slots 0..1 are live, slot 2 is 0x00, so slot 3 is unreachable.
+    image[root_start * SECTOR + 3 * 32:root_start * SECTOR + 4 * 32] = root_ghost
+
+    sub_start = builder._cluster_sector(docs) * SECTOR
+    sub_ghost = _fat16_dir_entry("GHOST.BIN", 0x20, live_cluster, 4)
+    # Cluster slots 0..2 are . / .. / CHILD, slot 3 is the terminator.
+    image[sub_start + 4 * 32:sub_start + 5 * 32] = sub_ghost
+
+    check("FAT 0x00 directory terminator", [
         'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V V.BCTX @  2048 + @ . CR',     # fat-type (should be 16)
-        '_V V.BCTX @  2056 + @ . CR',     # sec-per-clus (should be 4)
-    ], "16")
+        'S" /LIVE.TXT" _V VFS-RESOLVE 0<>',
+        'S" /DOCS/CHILD.TXT" _V VFS-RESOLVE 0<> AND',
+        'S" /GHOST.TXT" _V VFS-RESOLVE 0= AND',
+        'S" /DOCS/GHOST.BIN" _V VFS-RESOLVE 0= AND',
+        'IF ." FAT-TERMINATOR-OK" THEN',
+    ], "FAT-TERMINATOR-OK", disk_image=bytes(image))
 
-def test_init_first_data_sector():
-    """FirstDataSector is computed correctly."""
-    check("init-fds", [
+
+def test_fat32_root_high_cluster_and_read():
+    """Mount and read a FAT32 root file whose cluster uses high 16 bits."""
+    image, info = build_fat32_high_cluster_image()
+    content = info["content"]
+    check("FAT32 root high-cluster read", [
+        'VARIABLE _OK',
+        'T-ARENA T-VOLUME VFAT-NEW CONSTANT _IOR CONSTANT _V',
+        '_IOR 0=',
+        '_V V.BCTX @ _VFAT-C.TYPE + @ _VFAT-TYPE-FAT32 = AND',
+        '_V V.ROOT @ IN.BID @ 2 = AND',
+        '_OK !',
+        'S" /HIGH.BIN" _V VFS-RESOLVE DUP IF',
+        f'  IN.BID @ {info["high_cluster"]} = _OK @ AND _OK !',
+        'ELSE DROP 0 _OK ! THEN',
+        'S" /HIGH.BIN" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _FD',
+        f'_OK @ _RB {len(content)} _FD VFS-READ? THROW {len(content)} = AND',
+        f'_RB {len(content)} S" {content.decode()}" COMPARE 0= AND',
+        'IF ." FAT32-HIGH-READ-OK" THEN',
+    ], "FAT32-HIGH-READ-OK", disk_image=image)
+
+
+def test_read_only_caps_and_mutations_leave_media_unchanged():
+    """No mutation capability is advertised or able to alter the image."""
+    global _pass_count, _fail_count
+    before = bytes(_default_fat_img)
+    output, sys_obj = run_forth([
         'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V V.BCTX @  2096 + @ . CR',     # first-data-sector
-    ], "")  # TODO: compute expected value once init works
+        'VARIABLE _C VARIABLE _O VARIABLE _R',
+        'VFS-CAP-WRITE VFS-CAP-CREATE OR VFS-CAP-MKDIR OR',
+        'VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR VFS-CAP-RENAME OR',
+        'VFS-CAP-TRUNCATE OR _V VFS-CAPS@ AND 0=',
+        'S" NEW.TXT" _V VFS-MKFILE? NIP VFS-IOR-REASON _C !',
+        'S" /HELLO.TXT" VFS-FF-WRITE _V VFS-OPEN? NIP '
+        'VFS-IOR-REASON _O !',
+        'S" /HELLO.TXT" _V VFS-RM VFS-IOR-REASON _R !',
+        '_C @ VFS-R-READONLY = AND',
+        '_O @ VFS-R-READONLY = AND',
+        '_R @ VFS-R-READONLY = AND',
+        '_V VFS-SYNC 0= AND',
+        'IF ." FAT-READONLY-OK" THEN',
+    ])
+    after = bytes(sys_obj.storage._image_data[:len(before)])
+    ok = "FAT-READONLY-OK" in output and after == before
+    if ok:
+        _pass_count += 1
+        print("  PASS  read-only caps and immutable media")
+    else:
+        _fail_count += 1
+        print("  FAIL  read-only caps and immutable media")
+        print("        media unchanged:", after == before)
+        print("        output:", output[-1500:])
 
-# ── BPB parse on FAT32-sized image ──
 
-def test_init_rejects_fat12():
-    """Init returns -3 for a FAT12-sized image (< 4085 data clusters)."""
-    # Build a tiny image that yields < 4085 clusters
-    # 128 sectors, 1 sec/clus → ~100 data clusters → FAT12
-    img = FAT16ImageBuilder(total_sectors=128, sectors_per_cluster=1,
-                            reserved_sectors=1, num_fats=2,
-                            root_entry_count=16).build()
-    check("init-rejects-fat12", [
+def test_unmount_and_destroy_lifecycle():
+    """Required unmount support transitions cleanly before destruction."""
+    check("unmount and destroy lifecycle", [
         'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT . CR',
-    ], "-3", disk_image=img)
+        '0 _V VFS-UNMOUNT 0=',
+        '_V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND',
+        'IF _V VFS-DESTROY ." FAT-DESTROY-OK" THEN',
+    ], "FAT-DESTROY-OK")
 
-# ── Probe edge cases ──
 
-def test_probe_no_bootsig():
-    """Probe fails when boot signature is missing."""
-    img = bytearray(build_fat16_empty())
-    img[510] = 0x00  # break boot sig
-    img[511] = 0x00
-    check("probe-no-bootsig", [
+def test_nonzero_bounded_volume_slice_read():
+    """FAT reads a nonzero slice without touching either guard region."""
+    global _pass_count, _fail_count
+    base = 3
+    suffix = 4
+    inner = bytes(_default_fat_img)
+    sectors = len(inner) // SECTOR
+    prefix_bytes = bytes([0xC3]) * (base * SECTOR)
+    suffix_bytes = bytes([0x3C]) * (suffix * SECTOR)
+    parent_image = prefix_bytes + inner + suffix_bytes
+    output, sys_obj = run_forth([
+        'CREATE _SBD /BLOCK-DEVICE ALLOT',
+        'CREATE _SVOL /VOLUME ALLOT',
+        '_SBD BD-OPEN THROW',
+        f'{base} {sectors} VOL-SCHEME-RAW 0 _SBD _SVOL VOL-SLICE THROW',
+        'T-ARENA _SVOL VFAT-NEW THROW CONSTANT _SV',
+        'S" /HELLO.TXT" VFS-FF-READ _SV VFS-OPEN? THROW CONSTANT _FD',
+        '_RB 17 _FD VFS-READ? THROW DROP _RB 17 TYPE',
+    ], disk_image=parent_image)
+    media = bytes(sys_obj.storage._image_data)
+    slice_end = (base + sectors) * SECTOR
+    guards_ok = (
+        media[:base * SECTOR] == prefix_bytes
+        and media[slice_end:slice_end + len(suffix_bytes)] == suffix_bytes
+    )
+    ok = "Hello, FAT world!" in output and guards_ok
+    if ok:
+        _pass_count += 1
+        print("  PASS  nonzero bounded FAT volume slice")
+    else:
+        _fail_count += 1
+        print("  FAIL  nonzero bounded FAT volume slice")
+        print("        guards:", guards_ok)
+        print("        output:", output[-1500:])
+
+
+def test_structured_volume_error_translation():
+    """Backend detail/flags survive translation and stale latches the VFS."""
+    check("structured FAT volume error translation", [
         'T-VFAT-NEW CONSTANT _V',
-        'CREATE _SB 512 ALLOT',
-        '0 DISK-SEC!  _SB DISK-DMA!  1 DISK-N!  DISK-READ',
-        '_SB _V _VFAT-PROBE . CR',
-    ], "0", disk_image=bytes(img))
+        '_V _VFAT-IO-V !',
+        '7 7 IOR-D-BLOCK IOR-F-PARTIAL IOR-F-RETRYABLE OR '
+        'IOR-MAKE CONSTANT _BE',
+        '2 _VFAT-IO-EXPECTED ! 1 _VFAT-IO-COMPLETED !',
+        '_BE _VFAT-MAP-IOR CONSTANT _E',
+        '_E VFS-IOR-REASON VFS-R-IO =',
+        '_E VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND',
+        '_E VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND',
+        '_E VFS-IOR-FLAGS VFS-IOR-F-RETRYABLE AND 0<> AND',
+        '_E VFS-IOR-DETAIL _BE = AND',
+        '1 _VFAT-IO-EXPECTED ! 0 _VFAT-IO-COMPLETED !',
+        'VOL-E-STALE _VFAT-MAP-IOR CONSTANT _SE',
+        '_SE VFS-IOR-REASON VFS-R-STALE = AND',
+        '_SE VFS-IOR-FLAGS VFS-IOR-F-STALE AND 0<> AND',
+        '_V V.LIFECYCLE @ VFS-L-STALE = AND',
+        'IF ." FAT-ERROR-MAP-OK" THEN',
+    ], "FAT-ERROR-MAP-OK")
 
-def test_probe_bad_spc():
-    """Probe fails when SecPerClus is not a power of 2."""
-    img = bytearray(build_fat16_empty())
-    img[13] = 3  # not a power of 2
-    check("probe-bad-spc", [
+
+def test_mount_population_nomem_rolls_back():
+    """Mount reports NOMEM without publishing a partial FAT root."""
+    check("FAT mount population NOMEM rollback", [
+        ': _OOM-MOUNT  ( vfs -- ior )',
+        '  DUP V.STR-PTR @ OVER V.STR-END ! VFAT-INIT ;',
+        'CREATE _OOM-OPS VFS-OPS-SIZE ALLOT',
+        'VFAT-OPS _OOM-OPS VFS-OPS-SIZE CMOVE',
+        "' _OOM-MOUNT _OOM-OPS VFS-OP-MOUNT CELLS + !",
+        'CREATE _OOM-BINDING',
+        'VFS-BINDING-MAGIC , VFS-BINDING-ABI-MAJOR ,',
+        'VFS-BINDING-ABI-MINOR , VFS-BINDING-DESC-SIZE ,',
+        'VFS-OPS-SIZE , VFAT-CAPS ,',
+        'VFS-BF-NEEDS-VOLUME VFS-BF-READ-ONLY OR ,',
+        '_OOM-OPS , 0 , 0 ,',
+        'T-ARENA CONSTANT _OAR',
+        '_OAR _OOM-BINDING T-VOLUME VFS-NEW CONSTANT _OI CONSTANT _OV',
+        '_OI VFS-IOR-REASON VFS-R-NOMEM =',
+        '_OV V.ROOT @ IN.CHILD @ 0= AND',
+        '_OV V.ICOUNT @ 1 = AND',
+        '_OV V.VCOUNT @ 1 = AND',
+        '_OV V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND 0= AND',
+        '_OV V.BCTX @ _VFAT-C.TYPE + @ 0= AND',
+        'VARIABLE _AP _OAR A.PTR @ _AP !',
+        '_OV VFAT-INIT _OI = AND',
+        '_OAR A.PTR @ _AP @ = AND',
+        '_OV V.LAST-IOR @ _OI = AND',
+        'IF ." FAT-MOUNT-NOMEM-OK" THEN',
+    ], "FAT-MOUNT-NOMEM-OK")
+
+
+def test_readdir_population_nomem_rolls_back():
+    """A failed lazy scan restores child/count/string observations."""
+    check("FAT readdir population NOMEM rollback", [
         'T-VFAT-NEW CONSTANT _V',
-        'CREATE _SB 512 ALLOT',
-        '0 DISK-SEC!  _SB DISK-DMA!  1 DISK-N!  DISK-READ',
-        '_SB _V _VFAT-PROBE . CR',
-    ], "0", disk_image=bytes(img))
+        'S" /DOCS" _V VFS-RESOLVE CONSTANT _D',
+        'VARIABLE _IC VARIABLE _VC VARIABLE _SP',
+        '_V V.ICOUNT @ _IC ! _V V.VCOUNT @ _VC ! _V V.STR-PTR @ _SP !',
+        '_SP @ _V V.STR-END !',
+        '_D _V _VFAT-READDIR VFS-IOR-REASON VFS-R-NOMEM =',
+        '_D IN.CHILD @ 0= AND',
+        '_V V.ICOUNT @ _IC @ = AND',
+        '_V V.VCOUNT @ _VC @ = AND',
+        '_V V.STR-PTR @ _SP @ = AND',
+        '_D IN.FLAGS @ VFS-IF-CHILDREN AND 0= AND',
+        'IF ." FAT-READDIR-NOMEM-OK" THEN',
+    ], "FAT-READDIR-NOMEM-OK")
 
-# ── FAT chain navigation ──
 
-def test_next_cluster_eoc():
-    """_VFAT-NEXT-CLUSTER returns EOC for a single-cluster file."""
-    check("next-cluster-eoc", [
+def test_fat16_root_refill_uses_fixed_root_area():
+    """After invalidation, FAT16 root readdir uses BID 0, not a cluster."""
+    check("FAT16 root refill", [
         'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        # Cluster 2 should be EOC (first allocated cluster for first file/dir)
-        '2 _V V.BCTX @ _VFAT-NEXT-CLUSTER',
-        'HEX . DECIMAL CR',
-    ], "FFF")  # 0xFFFF for single-cluster EOC
-
-def test_next_cluster_chain():
-    """_VFAT-NEXT-CLUSTER follows a multi-cluster chain."""
-    # Build an image with a file spanning multiple clusters
-    big_data = bytes(range(256)) * 32  # 8192 bytes = 4 clusters at 4 spc×512
-    img = build_fat16_image(files=[("BIG.BIN", big_data, None)])
-    check("next-cluster-chain", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '2 _V V.BCTX @ _VFAT-NEXT-CLUSTER . CR',
-    ], "3", disk_image=img)  # cluster 2 → 3
-
-# ── Teardown ──
-
-def test_teardown():
-    """VFAT-TEARDOWN clears binding context."""
-    check("teardown", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-DESTROY',
-        '.\" DONE\" CR',
-    ], "DONE")
-
-# ── VFAT-NEW convenience ──
-
-def test_vfat_new():
-    """VFAT-NEW creates a usable VFS handle."""
-    check("vfat-new", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V 0<> . CR',
-    ], "-1")
-
-
-# ── Root directory scan (VFAT-INIT populates root children) ──
-
-def test_init_root_children():
-    """After VFAT-INIT, root inode has children."""
-    check("init-root-children", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V V.ROOT @ IN.CHILD @ 0<> . CR',
-    ], "-1")
-
-def test_init_resolve_file():
-    """VFS-RESOLVE finds a file in root after init."""
-    check("init-resolve-file", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /HELLO.TXT" _V VFS-RESOLVE 0<> . CR',
-    ], "-1")
-
-def test_init_resolve_dir():
-    """VFS-RESOLVE finds a subdirectory after init."""
-    check("init-resolve-dir", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /DOCS" _V VFS-RESOLVE DUP 0<> IF ." FOUND " IN.TYPE @ . ELSE ." NOTFOUND" DROP THEN CR',
-    ], "FOUND 2")   # VFS-T-DIR = 2
-
-def test_init_resolve_subdir_file():
-    """VFS-RESOLVE finds a file inside a subdirectory (lazy readdir)."""
-    check("init-resolve-subfile", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /DOCS/README.TXT" _V VFS-RESOLVE 0<> IF ." FOUND" ELSE ." NOTFOUND" THEN CR',
-    ], "FOUND")
-
-
-# ── Read ──
-
-def test_read_file():
-    """VFS-READ returns correct file content."""
-    check("read-file", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /HELLO.TXT" VFS-OPEN DUP 0<> IF',
-        '    _RB 4096 ROT VFS-READ',
-        '    _RB SWAP TYPE',
-        'ELSE ." OPEN-FAIL" DROP THEN',
-    ], "Hello, FAT world!")
-
-def test_read_binary_size():
-    """VFS-READ returns correct byte count for binary data."""
-    check("read-binary-size", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /DATA.BIN" VFS-OPEN DUP 0<> IF',
-        '    _RB 4096 ROT VFS-READ . ." <act"',
-        'ELSE ." OPEN-FAIL" DROP THEN',
-    ], "1024 <act")
-
-def test_read_subdir_file():
-    """Read a file inside a subdirectory."""
-    check("read-subdir-file", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /DOCS/README.TXT" VFS-OPEN DUP 0<> IF',
-        '    _RB 4096 ROT VFS-READ',
-        '    _RB SWAP TYPE',
-        'ELSE ." OPEN-FAIL" DROP THEN',
-    ], "Inside docs directory")
-
-def test_read_at_offset():
-    """VFS-READ after seeking reads from the correct position."""
-    check("read-at-offset", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /HELLO.TXT" VFS-OPEN CONSTANT _FD',
-        # Seek to offset 7 ("FAT world!")
-        '7 _FD FD.CUR-LO !',
-        '_RB 4096 _FD VFS-READ',
-        '_RB SWAP TYPE',
-    ], "FAT world!")
-
-def test_read_multicluster():
-    """Read a file spanning multiple clusters."""
-    # 8192 bytes = 4 clusters (at 4 spc * 512 bytes/sector = 2048 bytes/cluster)
-    big_data = bytes(range(256)) * 32  # 8192 bytes
-    img = build_fat16_image(files=[("BIG.BIN", big_data, None)])
-    check("read-multicluster", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /BIG.BIN" VFS-OPEN DUP 0<> IF',
-        '    _RB 4096 ROT VFS-READ . ." <act1"',
-        'ELSE ." OPEN-FAIL" DROP THEN',
-    ], "4096 <act1", disk_image=img)
-
-
-# ── Write ──
-
-def test_write_and_readback():
-    """Write data then read it back."""
-    check("write-readback", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /HELLO.TXT" VFS-OPEN CONSTANT _FD',
-        'VARIABLE _WLEN',
-        'S" Overwritten!" _WB SWAP DUP _WLEN ! CMOVE',
-        '_WB _WLEN @ _FD VFS-WRITE . ." <wact"',
-        '_FD VFS-REWIND',
-        '_RB 4096 _FD VFS-READ DROP',
-        '_RB _WLEN @ TYPE',
-    ], "Overwritten!")
-
-
-# ── Create ──
-
-def test_create_file():
-    """VFS-MKFILE creates a new file visible via VFS-RESOLVE."""
-    check("create-file", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" NEW.TXT" _V VFS-MKFILE 0<> . ." <mk"',
-        'S" /NEW.TXT" _V VFS-RESOLVE 0<> . ." <found"',
-    ], "-1 <mk")
-
-def test_create_write_read():
-    """Create a file, write content, then read it back."""
-    check("create-write-read", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" TEST.TXT" _V VFS-MKFILE DROP',
-        'S" /TEST.TXT" VFS-OPEN CONSTANT _FD',
-        'VARIABLE _WLEN',
-        'S" Created content!" _WB SWAP DUP _WLEN ! CMOVE',
-        '_WB _WLEN @ _FD VFS-WRITE . ." <wact"',
-        '_FD VFS-REWIND',
-        '_RB 4096 _FD VFS-READ DROP',
-        '_RB _WLEN @ TYPE',
-    ], "Created content!")
-
-
-# ── Delete (no tombstones) ──
-
-def test_delete_file():
-    """VFS-RM deletes a file; it no longer resolves."""
-    check("delete-file", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /HELLO.TXT" _V VFS-RM . ." <rmior"',
-        'S" /HELLO.TXT" _V VFS-RESOLVE 0= IF ." GONE" ELSE ." STILL" THEN',
-    ], "GONE")
-
-def test_delete_no_tombstone():
-    """Delete zeros the dir entry byte 0 (not 0xE5 tombstone)."""
-    # After deleting, re-init should not see the file (byte 0 = 0x00, not 0xE5)
-    check("delete-no-tombstone", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /HELLO.TXT" _V VFS-RM DROP',
-        # Sync to write changes to disk
-        '_V VFS-SYNC DROP',
-        # Create a new VFS and re-init from the same disk to verify persistence
-        'T-VFAT-NEW CONSTANT _V2',
-        '_V2 VFAT-INIT DROP',
-        '_V2 VFS-USE',
-        'S" /HELLO.TXT" _V2 VFS-RESOLVE 0= IF ." CLEAN" ELSE ." STALE" THEN',
-    ], "CLEAN")
-
-
-# ── Sync ──
-
-def test_sync():
-    """VFS-SYNC returns ior=0."""
-    check("sync", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        '_V VFS-SYNC . ." <syncior"',
-    ], "0 <syncior")
-
-
-# ── Truncate ──
-
-def test_truncate():
-    """After writing, file size is updated in dir entry."""
-    check("truncate-size", [
-        'T-VFAT-NEW CONSTANT _V',
-        '_V VFAT-INIT DROP',
-        '_V VFS-USE',
-        'S" /HELLO.TXT" VFS-OPEN CONSTANT _FD',
-        'S" Hi" _WB SWAP CMOVE',
-        '_WB 2 _FD VFS-WRITE DROP',
-        # Truncate to update dir entry
-        '_FD FD.INODE @ IN.SIZE-LO @ . ." <sz"',
-    ], "17 <sz")  # original 17 bytes; write of 2 at offset 0 doesn't shrink
+        ': _CLEAR-ROOT',
+        '  BEGIN _V V.ROOT @ IN.CHILD @ ?DUP WHILE',
+        '    DUP _V V.ROOT @ _VFS-REMOVE-CHILD',
+        '    TRUE _V _VFS-DENTRY-RELEASE',
+        '    -1 _V V.ICOUNT +!',
+        '  REPEAT',
+        '  _V V.ROOT @ IN.FLAGS DUP @ VFS-IF-CHILDREN INVERT AND SWAP ! ;',
+        '_CLEAR-ROOT',
+        '_V V.ROOT @ IN.BID @ 0=',
+        '_V V.ROOT @ _V _VFS-ENSURE-CHILDREN? 0= AND',
+        'S" /HELLO.TXT" _V VFS-RESOLVE 0<> AND',
+        'IF ." FAT16-ROOT-REFILL-OK" THEN',
+    ], "FAT16-ROOT-REFILL-OK")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -907,66 +1043,38 @@ def main():
     build_snapshot()
     print()
     print("=" * 60)
-    print("  VFS-FAT Binding Tests")
+    print("  VFS-FAT Read-Only Volume-Binding Tests")
     print("=" * 60)
 
-    # Probe
-    test_probe_valid()
-    test_probe_invalid()
-    test_probe_no_bootsig()
-    test_probe_bad_spc()
-
-    # Init
-    test_init_success()
-    test_init_sets_geometry()
-    test_init_first_data_sector()
-    test_init_rejects_fat12()
-
-    # FAT navigation
-    test_next_cluster_eoc()
-    test_next_cluster_chain()
-
-    # Root scan
-    test_init_root_children()
-    test_init_resolve_file()
-    test_init_resolve_dir()
-    test_init_resolve_subdir_file()
-
-    # Read
-    test_read_file()
-    test_read_binary_size()
-    test_read_subdir_file()
-    test_read_at_offset()
-    test_read_multicluster()
-
-    # Write
-    test_write_and_readback()
-
-    # Create
-    test_create_file()
-    test_create_write_read()
-
-    # Delete
-    test_delete_file()
-    test_delete_no_tombstone()
-
-    # Sync
-    test_sync()
-
-    # Truncate
-    test_truncate()
-
-    # Teardown & convenience
-    test_teardown()
-    test_vfat_new()
+    test_constructor_binds_read_only_volume()
+    test_volume_probe_match_nonmatch_and_io_error()
+    test_constructor_requires_volume()
+    test_constructor_propagates_checked_read_failure()
+    test_constructor_rejects_invalid_formats()
+    test_geometry_is_derived_from_bpb_and_volume()
+    test_root_and_lazy_subdirectory_reads()
+    test_binary_read_offset_and_chain_navigation()
+    test_multicluster_read()
+    test_zero_entry_terminates_fixed_and_cluster_directories()
+    test_fat32_root_high_cluster_and_read()
+    test_read_only_caps_and_mutations_leave_media_unchanged()
+    test_unmount_and_destroy_lifecycle()
+    test_nonzero_bounded_volume_slice_read()
+    test_structured_volume_error_translation()
+    test_mount_population_nomem_rolls_back()
+    test_readdir_population_nomem_rolls_back()
+    test_fat16_root_refill_uses_fixed_root_area()
 
     print()
-    print(f"  Results: {_pass_count} passed, {_fail_count} failed ({_pass_count + _fail_count} total)")
+    total = _pass_count + _fail_count
+    print(f"  Results: {_pass_count} passed, {_fail_count} failed ({total} total)")
     if _fail_count:
-        print("  *** FAILURES DETECTED ***")
         sys.exit(1)
-    else:
-        print("  All tests passed.")
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        if _boot_img_path and os.path.exists(_boot_img_path):
+            os.unlink(_boot_img_path)

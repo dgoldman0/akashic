@@ -207,6 +207,8 @@ REQUIRE utils/fs/drivers/vfs-mp64fs.f
 VARIABLE _lq-fails
 VARIABLE _lq-checks
 VARIABLE _lq-vfs
+CREATE _lq-bd /BLOCK-DEVICE ALLOT
+CREATE _lq-volume /VOLUME ALLOT
 VARIABLE _lq-status
 VARIABLE _lq-count
 VARIABLE _lq-next
@@ -371,9 +373,11 @@ CREATE _lq-store LIBRARY-VFS-STORE-SIZE ALLOT
     _lq-key-b LIB-OPERATION-KEY-SIZE 0x42 FILL
     _lq-key-c LIB-OPERATION-KEY-SIZE 0x53 FILL
     _lq-collection-key LIB-OPERATION-KEY-SIZE 0x64 FILL
+    _lq-bd BD-OPEN THROW
+    _lq-bd _lq-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -7811 THROW THEN
-    VMP-NEW DUP _lq-vfs ! DUP 0<> _lq-assert
-    DUP VMP-INIT 0= _lq-assert VFS-USE
+    _lq-volume VMP-NEW ?DUP IF THROW THEN
+    DUP _lq-vfs ! DUP 0<> _lq-assert VFS-USE
     _lq-vfs @ _lq-store LIBRARY-VFS-STORE-INIT
         LIBSTORE-S-OK = _lq-assert
     _lq-store LIBRARY-VFS-STORE-LOAD LIBSTORE-S-ABSENT = _lq-assert
@@ -422,6 +426,8 @@ REQUIRE utils/fs/drivers/vfs-mp64fs.f
 VARIABLE _lq-fails
 VARIABLE _lq-checks
 VARIABLE _lq-vfs
+CREATE _lq-bd /BLOCK-DEVICE ALLOT
+CREATE _lq-volume /VOLUME ALLOT
 VARIABLE _lq-status
 VARIABLE _lq-count
 VARIABLE _lq-next
@@ -458,9 +464,11 @@ CREATE _lq-store LIBRARY-VFS-STORE-SIZE ALLOT
 
 : _lq-cold-run  ( -- )
     0 _lq-fails ! 0 _lq-checks !
+    _lq-bd BD-OPEN THROW
+    _lq-bd _lq-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -7812 THROW THEN
-    VMP-NEW DUP _lq-vfs ! DUP 0<> _lq-assert
-    DUP VMP-INIT 0= _lq-assert VFS-USE
+    _lq-volume VMP-NEW ?DUP IF THROW THEN
+    DUP _lq-vfs ! DUP 0<> _lq-assert VFS-USE
     _lq-vfs @ _lq-store LIBRARY-VFS-STORE-INIT
         LIBSTORE-S-OK = _lq-assert
     _lq-store LIBRARY-VFS-STORE-LOAD LIBSTORE-S-OK = _lq-assert

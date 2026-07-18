@@ -63,6 +63,8 @@ REQUIRE utils/fs/drivers/vfs-mp64fs.f
 VARIABLE _lmf-fails
 VARIABLE _lmf-checks
 VARIABLE _lmf-vfs
+CREATE _lmf-bd /BLOCK-DEVICE ALLOT
+CREATE _lmf-volume /VOLUME ALLOT
 VARIABLE _lmf-count
 VARIABLE _lmf-next
 VARIABLE _lmf-generation
@@ -125,11 +127,11 @@ CREATE _lmf-store LIBRARY-VFS-STORE-SIZE ALLOT
     0 _lmf-fails ! 0 _lmf-checks !
     _lmf-arena-id LIB-DIGEST-SIZE 0xA4 FILL
     _lmf-operation-key LIB-OPERATION-KEY-SIZE 0x5C FILL
+    _lmf-bd BD-OPEN THROW
+    _lmf-bd _lmf-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -7701 THROW THEN
-    VMP-NEW DUP _lmf-vfs !
-    DUP 0<> _lmf-assert
-    DUP VMP-INIT 0= _lmf-assert
-    VFS-USE
+    _lmf-volume VMP-NEW ?DUP IF THROW THEN
+    DUP _lmf-vfs ! DUP 0<> _lmf-assert VFS-USE
     _lmf-vfs @ _lmf-store LIBRARY-VFS-STORE-INIT
         LIBSTORE-S-OK = _lmf-assert
     _lmf-store LIBRARY-VFS-STORE-LOAD
@@ -191,6 +193,8 @@ REQUIRE utils/fs/drivers/vfs-mp64fs.f
 VARIABLE _lmc-fails
 VARIABLE _lmc-checks
 VARIABLE _lmc-vfs
+CREATE _lmc-bd /BLOCK-DEVICE ALLOT
+CREATE _lmc-volume /VOLUME ALLOT
 VARIABLE _lmc-count
 VARIABLE _lmc-next
 VARIABLE _lmc-generation
@@ -243,11 +247,11 @@ CREATE _lmc-store LIBRARY-VFS-STORE-SIZE ALLOT
 : _lmc-run  ( -- )
     0 _lmc-fails ! 0 _lmc-checks !
     _lmc-operation-key LIB-OPERATION-KEY-SIZE 0x5C FILL
+    _lmc-bd BD-OPEN THROW
+    _lmc-bd _lmc-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -7702 THROW THEN
-    VMP-NEW DUP _lmc-vfs !
-    DUP 0<> _lmc-assert
-    DUP VMP-INIT 0= _lmc-assert
-    VFS-USE
+    _lmc-volume VMP-NEW ?DUP IF THROW THEN
+    DUP _lmc-vfs ! DUP 0<> _lmc-assert VFS-USE
     _lmc-vfs @ _lmc-store LIBRARY-VFS-STORE-INIT
         LIBSTORE-S-OK = _lmc-assert
     _lmc-store LIBRARY-VFS-STORE-LOAD

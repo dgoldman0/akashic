@@ -57,6 +57,8 @@ VARIABLE _g0-path-u
 VARIABLE _g0-record-u
 VARIABLE _g0-status
 VARIABLE _g0-check
+CREATE _g0-bd /BLOCK-DEVICE ALLOT
+CREATE _g0-volume /VOLUME ALLOT
 
 : _g0-assert  ( flag -- )
     1 _g0-check +! 0= IF
@@ -193,10 +195,11 @@ VARIABLE _g0-check
 
 : _g0-run  ( -- )
     0 _g0-check !
+    _g0-bd BD-OPEN THROW
+    _g0-bd _g0-volume VOL-RAW THROW
     1048576 A-XMEM ARENA-NEW DUP 0= _g0-assert DROP
-    VMP-NEW DUP 0<> _g0-assert
-    DUP VMP-INIT 0= _g0-assert
-    VFS-USE
+    _g0-volume VMP-NEW ?DUP IF THROW THEN
+    DUP 0<> _g0-assert VFS-USE
     VFS-CUR 0<> _g0-assert
     ." [gate0] source fixtures" CR
     _g0-source-fixtures

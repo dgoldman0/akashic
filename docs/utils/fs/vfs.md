@@ -1,441 +1,515 @@
-# akashic-vfs — Abstract Virtual Filesystem for KDOS / Megapad-64
+# akashic-vfs — validated virtual-filesystem contract
 
-An arena-backed virtual filesystem data structure.  Each VFS instance
-is a self-contained, first-class value on the Forth stack — a tree of
-typed inodes with a file-descriptor pool, path resolver, and string
-pool.  The VFS analogue of the DOM.
+`vfs.f` provides an arena-backed VFS core for KDOS. It separates namespace
+entries (dentries) from shared file identity and metadata (vnodes), dispatches
+filesystem work through a validated binding descriptor, and carries an
+explicit KDOS volume attachment when a binding needs block storage.
 
 ```forth
 REQUIRE utils/fs/vfs.f
 ```
 
-`PROVIDED akashic-vfs` — safe to include multiple times.
+The module provides `akashic-vfs`. ABI 1 is the only binding ABI: the former
+raw ten-XT table is not accepted.
 
----
-
-## Table of Contents
-
-- [Design Principles](#design-principles)
-- [Quick Start](#quick-start)
-- [Instance Lifecycle](#instance-lifecycle)
-- [Inode Layout](#inode-layout)
-- [File Descriptor Layout](#file-descriptor-layout)
-- [Path Resolution](#path-resolution)
-- [File I/O](#file-io)
-- [Directory Operations](#directory-operations)
-- [Sync & Eviction](#sync--eviction)
-- [Binding Contract](#binding-contract)
-- [Ramdisk Binding](#ramdisk-binding)
-- [Constants](#constants)
-- [Quick Reference](#quick-reference)
-
----
-
-## Design Principles
-
-| Principle | Detail |
-|---|---|
-| **First-class value** | A VFS instance is a single cell — an address.  Pass it on the stack, store in a VARIABLE, hand to any word. |
-| **Arena-backed** | All allocations (descriptor, slabs, FDs, strings, file buffers) come from a single KDOS arena.  `VFS-DESTROY` frees everything in one call. |
-| **Binding-dispatched** | The VFS knows nothing about sectors, DMA, or on-disk formats.  Actual byte transfer is delegated to a vtable of 10 execution tokens. |
-| **Lazy tree** | Directories are populated on first descent, not at mount time.  A binding for a 2 TiB volume materialises only the directories actually traversed. |
-| **No fixed limits** | Inode count, children per directory, and path depth are bounded only by arena capacity.  Slab pages chain on demand. |
-| **Concurrent-safe** | Optional guard section wraps all public words in a recursive cross-core guard when `GUARDED` is defined. Multi-call mutations use `VFS-TRANSACTION`. |
-
----
-
-## Quick Start
+## Quick start
 
 ```forth
-\ Create a 512 KB ramdisk VFS
-524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  CONSTANT my-arena
-my-arena VFS-RAM-VTABLE VFS-NEW  CONSTANT my-vfs
+524288 A-XMEM ARENA-NEW IF -1 THROW THEN CONSTANT my-arena
+my-arena VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN CONSTANT my-vfs
 
-\ Create files and directories
 S" readme.txt" my-vfs VFS-MKFILE DROP
-S" src"        my-vfs VFS-MKDIR  DROP
-
-\ Write to a file
 my-vfs VFS-USE
-S" readme.txt" VFS-OPEN  CONSTANT fd
-S" Hello, world!" DROP 13  fd VFS-WRITE DROP
+
+S" readme.txt" VFS-OPEN CONSTANT fd
+S" Hello" fd VFS-WRITE DROP
 fd VFS-REWIND
-CREATE buf 256 ALLOT
-buf 256 fd VFS-READ  ( actual-bytes )
+
+CREATE buf 64 ALLOT
+buf 64 fd VFS-READ .
 fd VFS-CLOSE
 
-\ Navigate
-S" src" my-vfs VFS-CD DROP
-my-vfs VFS-DIR
-
-\ Tear down
+0 my-vfs VFS-UNMOUNT ?DUP IF THROW THEN
 my-vfs VFS-DESTROY
 ```
 
----
-
-## Instance Lifecycle
-
-### VFS-NEW
-```forth
-VFS-NEW  ( arena vtable -- vfs )
-```
-Carve a VFS instance from `arena` using `vtable` as the binding
-dispatch table.  Allocates descriptor, initial slab page, FD pool,
-string pool, and root directory inode.  Pass `VFS-RAM-VTABLE` for
-a pure ramdisk.
-
-### VFS-DESTROY
-```forth
-VFS-DESTROY  ( vfs -- )
-```
-Call the binding's void teardown xt, then destroy the backing arena. All
-inodes, FDs, strings, and file buffers are reclaimed in bulk. Teardown is
-best-effort and cannot return a write or flush failure; callers that require a
-reportable durability boundary must call `VFS-SYNC` successfully first.
-
-### VFS-USE / VFS-CUR
-```forth
-VFS-USE  ( vfs -- )     \ set as current context
-VFS-CUR  ( -- vfs )     \ read current context
-```
-Implicit-context words (`VFS-OPEN`, `VFS-DIR`, etc.) operate on the
-instance set by `VFS-USE`.  Explicit-context variants take `vfs` on
-the stack.
-
----
-
-## Inode Layout
-
-Each inode is 112 bytes (14 cells):
-
-| Offset | Field | Notes |
-|--------|-------|-------|
-| +0 | first-child / next-free | Union: tree link or free-list chain |
-| +8 | type | `VFS-T-FILE` (1), `VFS-T-DIR` (2), `VFS-T-SYMLINK` (3), `VFS-T-SPECIAL` (4) |
-| +16 | size (2 cells) | u128 file size |
-| +32 | mode | Permission / attribute bits |
-| +40 | mtime | Modification timestamp |
-| +48 | ctime | Creation timestamp |
-| +56 | parent | Inode pointer |
-| +64 | next-sibling | Singly-linked child list |
-| +72 | name-handle | String pool handle |
-| +80 | binding-id | Stable on-disk identity (survives eviction) |
-| +88 | binding-data (2 cells) | Binding-private storage |
-| +104 | flags | `VFS-IF-DIRTY`, `VFS-IF-CHILDREN`, `VFS-IF-PINNED`, `VFS-IF-EVICTABLE` |
-
-Field accessors: `IN.TYPE`, `IN.SIZE-LO`, `IN.SIZE-HI`, `IN.MODE`,
-`IN.MTIME`, `IN.CTIME`, `IN.PARENT`, `IN.SIBLING`, `IN.NAME`,
-`IN.BID`, `IN.BDATA`, `IN.FLAGS`.
-
-Inodes are allocated from chained **slab pages**.  Each page holds
-64 inodes + a header cell linking to the next page.  Growth is
-automatic when the free-list empties.
-
----
-
-## File Descriptor Layout
-
-Each FD is 48 bytes (6 cells):
-
-| Offset | Field | Notes |
-|--------|-------|-------|
-| +0 | inode | Pointer to referenced inode |
-| +8 | cursor (2 cells) | u128 byte offset |
-| +24 | flags | `VFS-FF-READ`, `VFS-FF-WRITE`, `VFS-FF-APPEND` |
-| +32 | vfs | Back-pointer to owning VFS |
-| +40 | next-free | Free-list chain |
-
-Default pool: 256 slots (12 KB).
-
----
-
-## Path Resolution
-
-### VFS-RESOLVE
-```forth
-VFS-RESOLVE  ( c-addr u vfs -- inode | 0 )
-```
-Resolve a path string to an inode.  Paths starting with `/` begin
-at root; otherwise at cwd.  Components are `/`-delimited.  `.` =
-stay, `..` = parent.  Returns 0 if not found.
-
-The resolver is iterative (not recursive) with no fixed depth limit.
-Directories are lazily populated via the binding's `readdir` xt on
-first descent.
-
----
-
-## File I/O
-
-### VFS-OPEN
-```forth
-VFS-OPEN  ( c-addr u -- fd | 0 )
-```
-Resolve path in current VFS, allocate an FD.  Returns 0 if the path
-does not resolve.  Uses `VFS-CUR`.
-
-### VFS-CLOSE
-```forth
-VFS-CLOSE  ( fd -- )
-```
-Release the FD back to the pool.
-
-### VFS-READ
-```forth
-VFS-READ  ( buf len fd -- actual )
-```
-Read up to `len` bytes at the cursor position into `buf`.  Advances
-cursor by `actual`.  Dispatches through the binding's `read` xt.
-
-### VFS-WRITE
-```forth
-VFS-WRITE  ( buf len fd -- actual )
-```
-Write `len` bytes from `buf` at the cursor position.  Advances cursor.
-Updates inode size if the write extends the file.
-
-### VFS-READ-EXACT / VFS-WRITE-EXACT
+`VFS-RAM-BINDING` needs no volume. A disk binding sets
+`VFS-BF-NEEDS-VOLUME` and receives a valid `vol` object:
 
 ```forth
-VFS-READ-EXACT   ( buf len fd -- ior )
-VFS-WRITE-EXACT  ( buf len fd -- ior )
+arena binding vol VFS-NEW  ( -- vfs ior )
 ```
 
-Complete exactly `len` bytes by repeating the binding-dispatched operation
-while it makes legal partial progress. They return `0` only after the whole
-request completes. A zero, negative, or greater-than-requested transfer count
-before completion returns `-1`; the cursor movement from that invalid call is
-undone while prior valid progress remains advanced. A negative length, or a
-null buffer with nonzero length, also returns `-1`. Zero-length transfers are
-valid.
+## Object model
 
-These words are completion helpers, not rollback transactions: bytes and
-inode size already changed by a binding are not reverted on error. In a
-`GUARDED` build the complete loop is one recursive VFS guard region.
+A public value historically called an “inode” is now a dentry. A dentry owns
+one name and one parent and points to a shared vnode. Multiple hard-link
+dentries therefore share size, timestamps, binding identity, data, link count,
+and open-reference state.
 
-### VFS-SEEK
-```forth
-VFS-SEEK  ( pos fd -- )
-```
-Set the cursor to absolute position `pos`.
+### Dentry (`VFS-INODE-SIZE` = 64)
 
-### VFS-REWIND
-```forth
-VFS-REWIND  ( fd -- )
-```
-Reset cursor to 0.
+`VFS-INODE-SIZE` remains as a source-compatibility name for the dentry size.
 
-### VFS-TELL
-```forth
-VFS-TELL  ( fd -- u )
-```
-Return current cursor position.
+| Accessor | Offset | Meaning |
+|---|---:|---|
+| `D.CHILD` | 0 | First child or slab free-list link |
+| `D.SIBLING` | 8 | Next sibling |
+| `D.PARENT` | 16 | Parent dentry |
+| `D.VNODE` | 24 | Shared vnode |
+| `D.NAME` | 32 | Refcounted string handle |
+| `D.FLAGS` | 40 | Dentry flags |
+| `D.COOKIE` | 48 | Binding-private directory cookie |
+| `D.OWNER` | 56 | Owning VFS instance (`D.ALIAS` is a retired spelling) |
 
-### VFS-SIZE
-```forth
-VFS-SIZE  ( fd -- u )
-```
-Return the file size from the FD's inode.
+`VFS-DF-UNLINKED` marks a dentry removed from the namespace but retained by
+an open FD. It is reaped after the final close.
 
-### VFS-TRUNCATE
-```forth
-VFS-TRUNCATE  ( size fd -- ior )
-```
-Set the logical file size, update the backing-store metadata, and clamp the
-cursor to the new end. This is required before replacing a file with shorter
-content.
+### Vnode (`VFS-VNODE-SIZE` = 184)
 
----
+| Accessor | Meaning |
+|---|---|
+| `VN.TYPE` | `VFS-T-FILE`, `VFS-T-DIR`, `VFS-T-SYMLINK`, or `VFS-T-SPECIAL` |
+| `VN.SIZE-LO`, `VN.SIZE-HI` | Logical size |
+| `VN.MODE`, `VN.UID`, `VN.GID`, `VN.RDEV` | POSIX metadata |
+| `VN.ATIME`, `VN.MTIME`, `VN.CTIME` | Timestamp seconds |
+| `VN.ATIME-NS`, `VN.MTIME-NS`, `VN.CTIME-NS` | Timestamp nanoseconds |
+| `VN.NLINK` | Namespace link count |
+| `VN.BID` | Stable binding identity |
+| `VN.BDATA` | Two binding-private cells |
+| `VN.FLAGS` | Dirty/loaded/pinned state |
+| `VN.BLOCKS` | Allocated-block count |
+| `VN.OPEN-REFS`, `VN.DREFS` | Lifetime references |
+| `VN.GEN` | Binding generation |
 
-## Directory Operations
+Legacy `IN.*` accessors remain usable. Namespace accessors (`IN.CHILD`,
+`IN.PARENT`, `IN.SIBLING`, `IN.NAME`) address the dentry; metadata accessors
+such as `IN.SIZE-LO`, `IN.MODE`, `IN.BID`, `IN.BDATA`, and `IN.FLAGS`
+dereference its vnode.
 
-### VFS-MKFILE
-```forth
-VFS-MKFILE  ( c-addr u vfs -- inode )
-```
-Create an empty file in the current working directory. Returns 0 for an
-invalid/duplicate name or when the binding cannot create the entry.
+### File descriptor (`VFS-FD-SIZE` = 64)
 
-### VFS-CREATE
-```forth
-VFS-CREATE  ( path-a path-u vfs -- inode|0 )
-```
-Create a file at an absolute or relative path. Parent directories must
-already exist. The current VFS and working directory are restored before the
-word returns.
+| Accessor | Meaning |
+|---|---|
+| `FD.INODE` | Retained dentry |
+| `FD.CUR-LO`, `FD.CUR-HI` | Cursor |
+| `FD.FLAGS` | `VFS-FF-READ`, `VFS-FF-WRITE`, `VFS-FF-APPEND` |
+| `FD.VFS` | Owning VFS |
+| `FD.COOKIE` | Cookie returned by binding `OPEN` |
+| `FD.GEN` | Attachment generation captured at open |
+| `FD.FREE` | Pool free-list link |
 
-### VFS-MKDIR
-```forth
-VFS-MKDIR  ( c-addr u vfs -- ior )
-```
-Create a subdirectory in the current working directory. Returns 0 on success
-and nonzero for an invalid/duplicate name or binding failure.
+The default pool contains 256 FDs.
 
-### VFS-RENAME
-```forth
-VFS-RENAME  ( new-a new-u inode vfs -- ior )
-```
-Rename an inode within its current parent. Empty names, names containing `/`,
-and duplicate sibling names are rejected. The inode is marked dirty; call
-`VFS-SYNC` to persist the new name through the backing binding.
-
-### VFS-RM
-```forth
-VFS-RM  ( c-addr u vfs -- ior )
-```
-Remove a file or empty directory.  Returns 0 on success, -1 on error
-(not found, non-empty directory, root).
-
-### VFS-DIR
-```forth
-VFS-DIR  ( vfs -- )
-```
-List the contents of the current working directory.  Prints name,
-type, and size for each entry.
-
-### VFS-CD
-```forth
-VFS-CD  ( c-addr u vfs -- ior )
-```
-Change the working directory.  Returns 0 on success, -1 if not found
-or not a directory.
-
-### VFS-STAT
-```forth
-VFS-STAT  ( c-addr u vfs -- )
-```
-Print metadata for the named path (type, size, timestamps).
-
----
-
-## Sync & Eviction
-
-### VFS-TRANSACTION
+## Lifecycle and volume attachment
 
 ```forth
-VFS-TRANSACTION  ( xt -- ... )
+VFS-PROBE     ( binding volume -- score ior )
+VFS-NEW       ( arena binding volume -- vfs ior )
+VFS-UNMOUNT   ( flags vfs -- ior )
+VFS-DESTROY   ( vfs -- )
+VFS-USE       ( vfs -- )
+VFS-CUR       ( -- vfs )
 ```
 
-Execute `xt` as one VFS exclusion region. In a `GUARDED` build the recursive
-VFS guard remains held across every public VFS call made by `xt`, including
-changes to the process-global `VFS-CUR` selector. Results are preserved and a
-`THROW` releases the guard before it propagates. Nested public VFS calls and
-nested transactions by the same execution owner are supported.
+`VFS-NEW` validates the descriptor before allocating. A binding must advertise
+`MOUNT` and `UNMOUNT`. If it sets `VFS-BF-NEEDS-VOLUME`, `volume` must pass
+`VOL-VALID?` and must not pass `VOL-STALE?`.
 
-When `GUARDED` is absent this word is a plain `EXECUTE` compatibility
-fallback; it provides grouping but no cross-core exclusion. Components that
-can run concurrently must enable guarding in their production image.
+`VFS-PROBE` is the pre-mount format-selection call. It performs the same
+descriptor and supplied-volume validation, refuses an unadvertised `PROBE`
+without invoking its XT, and returns a score from 0 through
+`VFS-PROBE-MAX` (100). A successful callback outside that range is treated as
+corrupt. Probe must inspect only the supplied volume and must not mutate it.
 
-### VFS-SYNC
+Before mount, the core records:
+
+- `V.VOLUME`: the exact volume object;
+- `V.VOL-COOKIE`: `VOL.COOKIE` at attachment;
+- `V.MEDIA-GEN`: `VOL.MEDIA-GEN` at attachment.
+
+Every checked operation verifies the required volume, cookie, and media
+generation. Drift changes the lifecycle to `VFS-L-STALE`; that state is
+terminal and subsequent operations return `VFS-E-STALE`.
+
+Read-only authority is cumulative. `VFS-BF-READ-ONLY` or
+`VOL-F-READONLY` sets `VFS-F-RO` on the new VFS even when the other layer is
+writable. No binding can use a writable descriptor to weaken a read-only
+volume attachment.
+
+Pre-mount capacity failures return `0 VFS-E-NOMEM` and restore the arena bump
+pointer to its entry value. A mount callback failure returns the complete,
+inspectable VFS plus its ior, but does not publish it as mounted.
+
+Ordinary unmount returns `VFS-E-BUSY` while FDs are open. Pass
+`VFS-UNMOUNT-F-FORCE` only when abandoning those handles is intentional. A
+successful unmount callback runs once. A callback error restores mounted state
+except when stale was returned or latched, in which case stale remains
+terminal. Unmount checks the attachment before callback dispatch; drift latches
+stale without issuing I/O through a closed or rebound volume.
+
+`VFS-DESTROY` force-unmounts and destroys the arena. It cannot report the
+unmount result; callers needing a reportable durability boundary must call
+`VFS-SYNC` and `VFS-UNMOUNT` first. Destroying the current VFS also clears
+`VFS-CUR`, so no global handle points into the reclaimed arena.
+
+Lifecycle values are `VFS-L-NEW`, `VFS-L-MOUNTED`,
+`VFS-L-UNMOUNTING`, `VFS-L-UNMOUNTED`, and `VFS-L-STALE`.
+
+## Structured results
+
+Canonical APIs return a packed VFS ior. Zero means success.
+
+```text
+63                       32 31       24 23       16 15          0
++--------------------------+-----------+-----------+-------------+
+| backend detail (u32)     | flags u8  | domain u8 | reason u16  |
++--------------------------+-----------+-----------+-------------+
+```
+
 ```forth
-VFS-SYNC  ( vfs -- ior )
+VFS-IOR-MAKE    ( detail flags domain reason -- ior )
+VFS-IOR-DETAIL  ( ior -- u32 )
+VFS-IOR-FLAGS   ( ior -- u8 )
+VFS-IOR-DOMAIN  ( ior -- u8 )
+VFS-IOR-REASON  ( ior -- u16 )
 ```
-Walk all slab pages and call the binding's `sync` xt for every dirty inode,
-then call it once with inode 0 so metadata-only create/delete operations are
-flushed. Returns 0 only when every binding reports success. For MP64FS the
-binding writes its dirty metadata through the serialized checked block API and
-then completes the backend FLUSH durability operation; a failed write or flush
-returns nonzero and retains binding dirty state for an explicit retry.
 
-### VFS-SET-HWM
+`VFS-IOR-MAKE` masks every input to its documented width. Disk bindings
+translate KDOS block/volume results: the underlying low 32 bits belong in
+detail, while domain, reason, and flags use the VFS encoding.
+
+Domains are `VFS-IOR-D-CORE`, `VFS-IOR-D-VOLUME`,
+`VFS-IOR-D-BINDING`, and `VFS-IOR-D-FORMAT`. Flags include
+`VFS-IOR-F-RETRYABLE`, `VFS-IOR-F-PARTIAL`, `VFS-IOR-F-CORRUPT`,
+`VFS-IOR-F-STALE`, and `VFS-IOR-F-READONLY`.
+
+Stable reason constants are:
+
+| Constant | Meaning |
+|---|---|
+| `VFS-R-INVALID` | Invalid argument or operation |
+| `VFS-R-NOENT` | Entry absent |
+| `VFS-R-EXISTS` | Entry already exists |
+| `VFS-R-NOTDIR`, `VFS-R-ISDIR` | Type mismatch |
+| `VFS-R-NOTEMPTY` | Directory not empty |
+| `VFS-R-READONLY` | Mutation forbidden |
+| `VFS-R-NOSPC`, `VFS-R-NOMEM` | Storage or memory exhaustion |
+| `VFS-R-IO`, `VFS-R-CORRUPT` | I/O or integrity failure |
+| `VFS-R-UNSUPPORTED` | Capability absent |
+| `VFS-R-CONFLICT` | Incompatible replacement |
+| `VFS-R-STALE` | Attachment no longer current |
+| `VFS-R-BUSY` | Lifecycle/resource busy |
+| `VFS-R-OVERFLOW` | Range or representability failure |
+| `VFS-R-BADF` | Invalid FD/access mode |
+| `VFS-R-NAMETOOLONG` | Name exceeds contract |
+| `VFS-R-LOOP` | Link/path loop |
+| `VFS-R-XDEV` | Cross-filesystem operation |
+| `VFS-R-NOVOLUME` | Required volume absent |
+
+Prebuilt core iors use the `VFS-E-*` spelling, for example
+`VFS-E-NOENT`, `VFS-E-UNSUPPORTED`, and `VFS-E-STALE`.
+
+## Paths and file I/O
+
+### Canonical checked API
+
 ```forth
-VFS-SET-HWM  ( n vfs -- )
+VFS-RESOLVE?     ( path-a path-u vfs -- inode ior )
+VFS-LOOKUP       ( name-a name-u parent vfs -- inode ior )
+VFS-OPEN?        ( path-a path-u flags vfs -- fd ior )
+VFS-CLOSE?       ( fd -- ior )
+VFS-READ?        ( buf len fd -- actual ior )
+VFS-WRITE?       ( buf len fd -- actual ior )
+VFS-SEEK?        ( position fd -- ior )
+VFS-CD?          ( path-a path-u vfs -- ior )
+VFS-TRUNCATE     ( size fd -- ior )
+VFS-FSYNC        ( fd -- ior )
 ```
-Set the inode high-water mark.  When `inode-count` exceeds this
-threshold, `VFS-RESOLVE` and `VFS-OPEN` trigger automatic eviction
-of unreferenced inodes.
 
----
+`VFS-RESOLVE?` checks lifecycle and attachment before returning even a cached
+entry or root. It preserves errors from lazy `READDIR`, returns
+`VFS-E-NOTDIR` when an intermediate component is not a directory, and returns
+`VFS-E-NOENT` only when traversal completed without finding the entry.
+Absolute paths start at root, relative paths at cwd, and `.`/`..` have their
+usual meaning. A nonempty path requires a non-null, non-wrapping memory span;
+an empty path intentionally resolves to cwd.
 
-## Binding Contract
+On a cached-name miss, resolution uses targeted `VFS-LOOKUP` when the binding
+advertises it; otherwise it loads the complete directory through `READDIR`.
+`LOOKUP` returns `VFS-E-NOENT` for an absent name and preserves every other
+binding error. A cached hit never invokes the callback.
 
-A binding is a vtable of 10 execution tokens passed to `VFS-NEW`:
+`VFS-READ?` and `VFS-WRITE?` return progress and error together. Legal partial
+progress advances the cursor even when the same call returns a nonzero ior.
+Bindings must set `VFS-IOR-F-PARTIAL` when applicable. The core rejects a
+negative or overlong `actual` as corruption.
 
-| Index | Signature | Function |
-|-------|-----------|----------|
-| 0 | `( sector-0-buf vfs -- flag )` | **probe** — recognise format |
-| 1 | `( vfs -- ior )` | **init** — read superblock, populate ctx |
-| 2 | `( vfs -- )` | **teardown** — best-effort cleanup, free ctx |
-| 3 | `( buf len off inode vfs -- actual )` | **read** |
-| 4 | `( buf len off inode vfs -- actual )` | **write** |
-| 5 | `( inode vfs -- )` | **readdir** — populate children |
-| 6 | `( inode vfs -- ior )` | **sync** — write back dirty inode |
-| 7 | `( inode vfs -- ior )` | **create** — allocate on-disk structures |
-| 8 | `( inode vfs -- ior )` | **delete** — free on-disk structures |
-| 9 | `( inode vfs -- ior )` | **truncate** — resize data extents |
+Positions and logical sizes are currently restricted to nonnegative one-cell
+values (`0 .. 2^63-1`). `VFS-SEEK?`, truncate, checked I/O, and append reject a
+high-bit value or nonzero high cursor/size cell before dispatch. Append selects
+the vnode's current EOF under the VFS guard.
 
----
+`VFS-READ-EXACT` and `VFS-WRITE-EXACT` repeat checked calls until the requested
+length completes. Zero progress before completion returns `VFS-E-IO`; a
+binding error is returned unchanged after any legal progress.
 
-## Ramdisk Binding
+### Source-compatible conveniences
 
-`VFS-RAM-VTABLE` is provided by vfs.f itself.  Each file's two
-`binding-data` cells hold the backing-buffer pointer and its allocated
-capacity.  Capacity starts at 4096 bytes and grows geometrically inside the
-VFS arena.  Growth is transactional: the replacement is zeroed and populated
-before it is published, so allocation failure reports zero progress without
-changing the file, cursor, logical size, pointer, or capacity.
+```forth
+VFS-RESOLVE      ( path-a path-u vfs -- inode|0 )
+VFS-OPEN         ( path-a path-u -- fd|0 )
+VFS-CLOSE        ( fd -- )
+VFS-READ         ( buf len fd -- actual )
+VFS-WRITE        ( buf len fd -- actual )
+VFS-SEEK         ( position fd -- )
+VFS-CD           ( path-a path-u vfs -- 0|-1 )
+```
 
-Sparse gaps, newly exposed bytes after truncate, and all bytes between EOF and
-capacity read as zero.  The arena is a bump allocator, so superseded buffers
-remain charged to the arena until `VFS-DESTROY`; callers that repeatedly grow
-large RAM files should size the arena for that bounded copy-on-grow overhead.
-No external dependency is required.
+These retain older stack shapes. The I/O/seek/close forms throw a structured
+ior. `VFS-OPEN` requests read access only when the current VFS is read-only,
+and read/write access otherwise. New code should use the checked forms when it
+must inspect the error class.
 
----
+Cursor helpers are `VFS-REWIND`, `VFS-TELL`, and `VFS-SIZE`.
 
-## Constants
+## Namespace operations
 
-| Name | Value | Purpose |
-|------|-------|---------|
-| `VFS-INODE-SIZE` | 112 | Bytes per inode |
-| `VFS-FD-SIZE` | 48 | Bytes per file descriptor |
-| `VFS-VT-SIZE` | 80 | Bytes per vtable (10 cells) |
-| `VFS-DESC-SIZE` | 128 | VFS descriptor size |
-| `_VFS-FD-DEFAULT` | 256 | Default FD pool slots |
-| `_VFS-SLAB-SLOTS` | 64 | Inodes per slab page |
-| `VFS-T-FILE` | 1 | File type tag |
-| `VFS-T-DIR` | 2 | Directory type tag |
-| `VFS-T-SYMLINK` | 3 | Symlink type tag |
-| `VFS-T-SPECIAL` | 4 | Special node type tag |
-| `VFS-IF-DIRTY` | 1 | Inode dirty flag |
-| `VFS-IF-CHILDREN` | 2 | Children loaded flag |
-| `VFS-IF-PINNED` | 4 | Pinned (no eviction) flag |
-| `VFS-IF-EVICTABLE` | 8 | Evictable flag |
-| `VFS-FF-READ` | 1 | FD read flag |
-| `VFS-FF-WRITE` | 2 | FD write flag |
-| `VFS-FF-APPEND` | 4 | FD append flag |
+```forth
+VFS-MKFILE?    ( name-a name-u vfs -- inode ior )
+VFS-MKDIR      ( name-a name-u vfs -- ior )
+VFS-CREATE     ( path-a path-u vfs -- inode|0 )
+VFS-LINK       ( name-a name-u target parent vfs -- inode ior )
+VFS-SYMLINK    ( target-a target-u name-a name-u parent vfs -- inode ior )
+VFS-RENAME-AT  ( new-a new-u inode new-parent flags vfs -- ior )
+VFS-RENAME     ( new-a new-u inode vfs -- ior )
+VFS-RM         ( path-a path-u vfs -- ior )
+```
 
----
+Names are nonempty, at most 255 bytes, contain neither `/` nor NUL, and cannot
+be exactly `.` or `..`. Their memory span must be non-null and non-wrapping.
+Leading or trailing dots in other names are legal.
 
-## Quick Reference
+`VFS-LINK` creates a second dentry for the target vnode. Directories cannot be
+hard-linked. Removing one name decrements `VN.NLINK` without invalidating other
+names or open FDs. Every dentry carries an owner tag; link, rename, metadata,
+and cache helpers reject a dentry from another VFS with `VFS-E-XDEV` before
+binding dispatch.
 
-| Word | Stack Effect | Purpose |
-|------|-------------|---------|
-| `VFS-NEW` | `( arena vtable -- vfs )` | Create instance |
-| `VFS-DESTROY` | `( vfs -- )` | Tear down |
-| `VFS-USE` | `( vfs -- )` | Set current context |
-| `VFS-CUR` | `( -- vfs )` | Get current context |
-| `VFS-RESOLVE` | `( c-addr u vfs -- inode\|0 )` | Path → inode |
-| `VFS-OPEN` | `( c-addr u -- fd\|0 )` | Open file |
-| `VFS-CLOSE` | `( fd -- )` | Close file |
-| `VFS-READ` | `( buf len fd -- actual )` | Read bytes |
-| `VFS-WRITE` | `( buf len fd -- actual )` | Write bytes |
-| `VFS-READ-EXACT` | `( buf len fd -- ior )` | Complete an exact read across partial transfers |
-| `VFS-WRITE-EXACT` | `( buf len fd -- ior )` | Complete an exact write across partial transfers |
-| `VFS-SEEK` | `( pos fd -- )` | Set cursor |
-| `VFS-REWIND` | `( fd -- )` | Cursor → 0 |
-| `VFS-TELL` | `( fd -- u )` | Get cursor |
-| `VFS-SIZE` | `( fd -- u )` | Get file size |
-| `VFS-TRUNCATE` | `( size fd -- ior )` | Set logical size |
-| `VFS-MKFILE` | `( c-addr u vfs -- inode )` | Create file |
-| `VFS-CREATE` | `( path-a path-u vfs -- inode\|0 )` | Create file by path |
-| `VFS-MKDIR` | `( c-addr u vfs -- ior )` | Create directory |
-| `VFS-RENAME` | `( new-a new-u inode vfs -- ior )` | Rename entry |
-| `VFS-RM` | `( c-addr u vfs -- ior )` | Remove entry |
-| `VFS-DIR` | `( vfs -- )` | List cwd |
-| `VFS-CD` | `( c-addr u vfs -- ior )` | Change directory |
-| `VFS-STAT` | `( c-addr u vfs -- )` | Print metadata |
-| `VFS-TRANSACTION` | `( xt -- ... )` | Run a multi-call VFS exclusion region |
-| `VFS-SYNC` | `( vfs -- ior )` | Flush dirty inodes |
-| `VFS-SET-HWM` | `( n vfs -- )` | Set eviction threshold |
+`VFS-RENAME-AT` supports cross-directory moves, replacement, and
+`VFS-RN-NOREPLACE`. The binding operation completes before the cached tree is
+published. Replacing an open destination unlinks its dentry but retains the
+old vnode until close. Renaming onto a distinct hard-link dentry for the same
+vnode is a no-op that retains both names and the link count. Directory cycles,
+nonempty directory replacement, and file/directory type conflicts are
+rejected.
+
+`VFS-SYMLINK` is capability-gated. ABI 1 exposes the operation for ext4-class
+bindings, but the RAM binding intentionally does not advertise it. ABI 1 in
+this milestone provides symlink creation and direct `VFS-READLINK`; path
+resolution does not yet follow an intermediate or final symlink, so ordinary
+`OPEN`/`CD` through symlinks remains a named follow-on rather than an implied
+capability of the ext4-facing surface.
+
+`VFS-DIR` lists cwd and `VFS-STAT` prints cached metadata.
+
+## Metadata, symlinks, xattrs, and statfs
+
+```forth
+VFS-GETATTR      ( inode vfs -- ior )
+VFS-SETATTR      ( attr-request inode vfs -- ior )
+VFS-READLINK     ( buf capacity inode vfs -- actual ior )
+VFS-LISTXATTR    ( buf capacity inode vfs -- actual ior )
+VFS-GETXATTR     ( name-a name-u buf capacity inode vfs -- actual ior )
+VFS-SETXATTR     ( name-a name-u value-a value-u flags inode vfs -- ior )
+VFS-REMOVEXATTR  ( name-a name-u inode vfs -- ior )
+VFS-STATFS       ( statfs-buffer bytes vfs -- ior )
+```
+
+Every word checks readiness and its capability before invoking an XT.
+Mutating forms also enforce read-only policy. An absent capability returns
+`VFS-E-UNSUPPORTED` without invoking a populated-but-unadvertised slot.
+
+### SETATTR request (`VFS-SETATTR-REQ-SIZE` = 88)
+
+| Accessor | Meaning |
+|---|---|
+| `VA.MASK` | Selected fields |
+| `VA.MODE`, `VA.UID`, `VA.GID` | Mode and ownership |
+| `VA.ATIME`, `VA.ATIME-NS` | Access time |
+| `VA.MTIME`, `VA.MTIME-NS` | Modification time |
+| `VA.CTIME`, `VA.CTIME-NS` | Change time |
+| `VA.RDEV` | Special-device identity |
+
+Mask bits are `VFS-SA-MODE`, `VFS-SA-UID`, `VFS-SA-GID`,
+`VFS-SA-ATIME`, `VFS-SA-MTIME`, `VFS-SA-CTIME`, and `VFS-SA-RDEV`.
+The binding commits the request first; only after callback success does the
+core publish selected values into the shared vnode. A selected zero is an
+update, while unselected fields remain unchanged. Size changes use
+`VFS-TRUNCATE` rather than SETATTR.
+
+Xattr names are 1–255 bytes. SET flags are zero, `VFS-XATTR-CREATE`, or
+`VFS-XATTR-REPLACE`; CREATE and REPLACE cannot be combined. A null buffer with
+zero capacity is a size query for READLINK/LISTXATTR/GETXATTR, so `actual` may
+exceed zero in that case. With a nonzero capacity, `actual` cannot exceed it.
+
+### STATFS result (`VFS-STATFS-SIZE` = 96)
+
+The stable fields are `VSF.BSIZE`, `VSF.FRSIZE`, `VSF.BLOCKS`, `VSF.BFREE`,
+`VSF.BAVAIL`, `VSF.FILES`, `VSF.FFREE`, `VSF.NAMEMAX`, `VSF.FLAGS`,
+`VSF.FSID-LO`, and `VSF.FSID-HI`. `VSF.RESERVED` is zero for ABI 1.
+
+## Sync and eviction
+
+```forth
+VFS-SYNC       ( vfs -- ior )
+VFS-FSYNC      ( fd -- ior )
+VFS-SET-HWM    ( n vfs -- )
+```
+
+`VFS-SYNC` invokes the binding's `SYNCFS` exactly once. The binding owns data,
+metadata, journal, and flush ordering. Only after success does the generic
+cache clear dirty observations. `VFS-FSYNC` delegates one vnode durability
+operation and clears that vnode's dirty flag only on success. Read-only policy
+does not forbid sync of state dirtied before the policy change.
+
+The dentry slab grows in 64-slot pages. Growth uses checked allocation; an
+exhausted arena returns `VFS-E-NOMEM` without publishing a partial namespace
+mutation. Each new page retains the older-page link so sync and eviction walk
+the complete cache. Eviction removes eligible cached dentries without changing backend
+link counts. Automatic per-dentry eviction is enabled only for bindings with
+targeted `LOOKUP`; a `READDIR`-only binding keeps its complete enumeration.
+RAM-created vnodes are pinned because RAM `READDIR` cannot reconstruct them.
+
+Bindings populate lookup/readdir results through:
+
+```forth
+VFS-CACHE-DENTRY
+  ( name-a name-u type bid generation parent vfs -- dentry ior )
+VFS-CACHE-DROP
+  ( dentry vfs -- ior )
+```
+
+`VFS-CACHE-DENTRY` keys vnode identity by the nonzero `BID` plus generation.
+Loading a second on-disk hard-link name therefore attaches another dentry to
+the existing vnode rather than duplicating metadata. The helper does not
+change persistent `VN.NLINK`; the binding publishes the authoritative link
+count from disk. `VFS-CACHE-DROP` removes only the cache reference and returns
+busy for an open dentry. Once the last dentry and open reference disappears,
+the vnode is reclaimable even while its on-disk link count is nonzero.
+
+## Binding ABI 1
+
+### Descriptor (`VFS-BINDING-DESC-SIZE` = 80)
+
+| Accessor | Meaning |
+|---|---|
+| `VB.MAGIC` | `VFS-BINDING-MAGIC` (`VFSBND01`) |
+| `VB.MAJOR`, `VB.MINOR` | ABI version 1.0 |
+| `VB.DESC-SIZE` | Descriptor bytes, at least 80 |
+| `VB.OPS-SIZE` | Operation prefix bytes, at least `VFS-OPS-SIZE` |
+| `VB.CAPS` | Operation and semantic capabilities |
+| `VB.FLAGS` | Binding policy flags |
+| `VB.OPS` | 27-cell operation table |
+| `VB.NAME`, `VB.NAME-LEN` | Optional diagnostic name |
+
+Treat shared descriptors and operation tables as immutable. Tests or fault
+injectors must copy both and repoint `VB.OPS` before modification.
+
+`VFS-BINDING-VALID?` checks magic, major, minimum sizes, nonzero ops pointer,
+and every advertised operation bit. If an operation is advertised, its XT
+must be nonzero. A nonzero XT without its cap remains unreachable and returns
+unsupported through public dispatch. It also rejects contradictory semantic
+claims: rename semantics require `RENAME`, data-only fsync requires `FSYNC`,
+stable IDs require `GETATTR`, and stable handles require both stable IDs and
+`GETATTR`.
+
+The ABI major is an exact compatibility boundary. A different major is
+rejected. Minor revisions within major 1 may add descriptor or operation-table
+suffixes while preserving the ABI-1 prefix; older cores accept that prefix by
+using the minimum sizes and capability bits and ignore additions they do not
+understand. This is forward negotiation, not a second legacy runtime ABI.
+
+Binding flags are `VFS-BF-NEEDS-VOLUME`, `VFS-BF-CASE-INSENSITIVE`,
+`VFS-BF-READ-ONLY`, and `VFS-BF-STABLE-IDS`.
+
+ABI 1 cache matching is byte-sensitive. `VFS-BF-CASE-INSENSITIVE` is defined
+for a future pinned folding contract but is rejected by descriptor validation
+today; a binding must not advertise it.
+
+### Operation table
+
+The operation cap is `1 << slot` and uses the corresponding `VFS-CAP-*` name.
+
+| Slot | Operation | Callback stack effect |
+|---:|---|---|
+| 0 | `PROBE` | `( volume -- score ior )` |
+| 1 | `MOUNT` | `( vfs -- ior )` |
+| 2 | `UNMOUNT` | `( flags vfs -- ior )` |
+| 3 | `LOOKUP` | `( name-a name-u parent vfs -- dentry ior )` |
+| 4 | `READDIR` | `( directory vfs -- ior )` |
+| 5 | `OPEN` | `( inode vfs -- cookie ior )` |
+| 6 | `RELEASE` | `( cookie inode vfs -- ior )` |
+| 7 | `READ` | `( buf len offset inode vfs -- actual ior )` |
+| 8 | `WRITE` | `( buf len offset inode vfs -- actual ior )` |
+| 9 | `CREATE` | `( inode vfs -- ior )` |
+| 10 | `MKDIR` | `( inode vfs -- ior )` |
+| 11 | `UNLINK` | `( inode vfs -- ior )` |
+| 12 | `RMDIR` | `( inode vfs -- ior )` |
+| 13 | `RENAME` | `( new-a new-u inode new-parent victim flags vfs -- ior )` |
+| 14 | `TRUNCATE` | `( inode vfs -- ior )` |
+| 15 | `GETATTR` | `( inode vfs -- ior )` |
+| 16 | `SETATTR` | `( attr-request inode vfs -- ior )` |
+| 17 | `LINK` | `( new-dentry target vfs -- ior )` |
+| 18 | `SYMLINK` | `( target-a target-u new-dentry vfs -- ior )` |
+| 19 | `READLINK` | `( buf capacity inode vfs -- actual ior )` |
+| 20 | `SYNCFS` | `( vfs -- ior )` |
+| 21 | `FSYNC` | `( inode vfs -- ior )` |
+| 22 | `LISTXATTR` | `( buf capacity inode vfs -- actual ior )` |
+| 23 | `GETXATTR` | `( name-a name-u buf capacity inode vfs -- actual ior )` |
+| 24 | `SETXATTR` | `( name-a name-u value-a value-u flags inode vfs -- ior )` |
+| 25 | `REMOVEXATTR` | `( name-a name-u inode vfs -- ior )` |
+| 26 | `STATFS` | `( statfs-buffer bytes vfs -- ior )` |
+
+`PROBE` returns a score from 0 through 100 and performs no mutation. `LOOKUP`
+publishes a successful result with `VFS-CACHE-DENTRY`; the public dispatcher
+verifies that its vnode, parent, and exact byte name match the request.
+
+`READDIR` must not publish partial cache state as complete. The core sets
+`VFS-IF-CHILDREN` only when the callback returns zero; an error remains
+retryable. Mutation callbacks must either complete their backend transaction
+or return an error before the core publishes the cache change.
+
+`TRUNCATE` sees the requested logical size already staged in the vnode; the
+core restores the prior size if the callback fails. SETATTR instead receives a
+separate request and is published only after success.
+
+Semantic caps are `VFS-CAP-ATOMIC-RENAME`,
+`VFS-CAP-CROSSDIR-RENAME`, `VFS-CAP-RENAME-REPLACE`,
+`VFS-CAP-SPARSE`, `VFS-CAP-DATA-ONLY-FSYNC`, and
+`VFS-CAP-STABLE-HANDLES`. For an ext4 binding, `VN.BID` should be the inode
+number and `VN.GEN` the inode generation so cache reload and hard-link aliases
+retain one shared vnode identity.
+
+## RAM binding
+
+`VFS-RAM-BINDING` and `VFS-RAM-OPS` are defined by `vfs.f`. RAM files keep a
+buffer pointer and capacity in `IN.BDATA`. Growth is copy-on-grow: allocation
+and copying complete before the new pointer is published. Sparse gaps and
+newly exposed truncate bytes are zeroed.
+
+The RAM binding supports mount/unmount, readdir, open/release, read/write,
+create/mkdir, unlink/rmdir, rename, truncate, getattr, hard link, syncfs, and
+fsync. It truthfully leaves lookup, setattr, symlink/readlink, xattrs, and
+statfs unadvertised; public calls return `VFS-E-UNSUPPORTED`.
+
+## Concurrency
+
+When `GUARDED` is defined and true, public words are wrapped by a recursive VFS
+guard. `VFS-TRANSACTION ( xt -- ... )` holds that exclusion region across a
+multi-call operation and preserves results/throws. Without `GUARDED`, it is a
+plain `EXECUTE` compatibility fallback.
+
+Bindings must preserve their own internal lock order. A binding must not hold
+a cache/vnode lock while waiting on the controller in an order that can invert
+the VFS guard or volume/device serialization.

@@ -19,7 +19,9 @@ import os, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+EMU_DIR    = os.environ.get(
+    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+)
 
 # Dependency file paths (in topological load order)
 EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
@@ -113,7 +115,7 @@ def build_snapshot():
         'VARIABLE _TARN',
         ': T-VFS-NEW  ( -- vfs )',
         '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
-        '    _TARN @ VFS-RAM-VTABLE VFS-NEW ;',
+        '    _TARN @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;',
     ]
 
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))

@@ -26,6 +26,8 @@ REQUIRE utils/fs/drivers/vfs-mp64fs.f
 VARIABLE _cold-fails
 VARIABLE _cold-checks
 VARIABLE _cold-vfs
+CREATE _cold-bd /BLOCK-DEVICE ALLOT
+CREATE _cold-volume /VOLUME ALLOT
 VARIABLE _cold-cat
 VARIABLE _cold-entry
 VARIABLE _cold-desc
@@ -55,9 +57,11 @@ VARIABLE _cold-latest
 
 : _cold-run  ( -- )
     0 _cold-fails ! 0 _cold-checks !
+    _cold-bd BD-OPEN THROW
+    _cold-bd _cold-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
-    VMP-NEW DUP _cold-vfs !
-    DUP VMP-INIT 0= _cold-assert VFS-USE
+    _cold-volume VMP-NEW ?DUP IF THROW THEN
+        DUP _cold-vfs ! VFS-USE
     _cold-vfs @ ACAT-NEW
     DUP ACAT-S-OK = _cold-assert DROP DUP _cold-cat !
     ACAT-ACTIVATE ACAT-S-OK = _cold-assert

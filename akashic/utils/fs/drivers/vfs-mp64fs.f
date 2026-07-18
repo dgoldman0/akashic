@@ -1,9 +1,9 @@
 \ vfs-mp64fs.f — MP64FS binding for the VFS layer
 \
 \ Bridges the abstract VFS to the Megapad-64 native filesystem
-\ (MP64FS).  Production byte transfer goes through KDOS's checked,
-\ serialized block-I/O words.  Raw DISK-* register words remain a BIOS
-\ diagnostic interface and are deliberately not used by this binding.
+\ (MP64FS).  Every mount owns an explicit, generation-bound KDOS volume;
+\ there is no ambient-disk fallback.  Production byte transfer goes only
+\ through VOL-READ, VOL-WRITE, and VOL-FLUSH.
 \
 \ Prefix: VMP-   (public API)
 \         _VMP-  (internal helpers)
@@ -25,7 +25,6 @@ REQUIRE ../vfs.f
 4096 CONSTANT _VMP-BITS-PER-BMAP-SECTOR
 8192 CONSTANT _VMP-MAX-SECTORS
 255  CONSTANT _VMP-ROOT-PARENT     \ parent=0xFF means root dir
-14   CONSTANT _VMP-IO-INTERNAL     \ controller invariant/short success
 
 \ File types
 0 CONSTANT _VMP-T-FREE
@@ -72,22 +71,81 @@ REQUIRE ../vfs.f
     V.BCTX @ DUP 0= IF DROP FALSE EXIT THEN
     _VMP-C.READY + @ 0<> ;
 
-\ Convert a checked controller result into one VFS-style ior.  A zero
-\ controller status is success only when every requested sector was
-\ confirmed; a short zero-status completion is an internal controller error.
-: _VMP-IO-RESULT  ( completed status expected -- ior )
-    >R
-    DUP 0<> IF NIP R> DROP EXIT THEN
-    DROP R> = IF 0 ELSE _VMP-IO-INTERNAL THEN ;
+\ The block layer and VFS intentionally use different structured-error
+\ layouts.  Translate at this boundary, retaining the backend ior in the
+\ VFS detail field and adding PARTIAL when progress is short.  Callback
+\ bodies below use these cells to publish legal partial byte progress.
+VARIABLE _VMP-IO-V
+VARIABLE _VMP-IO-EXPECTED
+VARIABLE _VMP-IO-COMPLETED
+VARIABLE _VMP-IO-BACKEND
+VARIABLE _VMP-IO-FLAGS
+VARIABLE _VMP-IO-REASON
 
-: _VMP-DISK-READ  ( dma lba count -- ior )
-    DUP >R DISK-READ-CHECKED R> _VMP-IO-RESULT ;
+: _VMP-LATCH-STALE  ( -- )
+    _VMP-IO-V @ ?DUP IF VFS-L-STALE SWAP V.LIFECYCLE ! THEN ;
 
-: _VMP-DISK-WRITE  ( dma lba count -- ior )
-    DUP >R DISK-WRITE-CHECKED R> _VMP-IO-RESULT ;
+: _VMP-MAP-IOR  ( backend-ior -- vfs-ior )
+    DUP _VMP-IO-BACKEND !
+    0 _VMP-IO-FLAGS !
+    _VFS-R-IO _VMP-IO-REASON !
+    DUP IF
+        DUP IOR>FLAGS
+        DUP IOR-F-RETRYABLE AND IF
+            VFS-IOR-F-RETRYABLE _VMP-IO-FLAGS +!
+        THEN
+        DUP IOR-F-PARTIAL AND IF
+            VFS-IOR-F-PARTIAL _VMP-IO-FLAGS +!
+        THEN
+        DUP IOR-F-CORRUPT AND IF
+            VFS-IOR-F-CORRUPT _VMP-IO-FLAGS +!
+            _VFS-R-CORRUPT _VMP-IO-REASON !
+        THEN
+        DUP IOR-F-UNSUPPORTED AND IF
+            _VFS-R-UNSUPPORTED _VMP-IO-REASON !
+        THEN
+        DUP IOR-F-READONLY AND IF
+            VFS-IOR-F-READONLY _VMP-IO-FLAGS +!
+            _VFS-R-READONLY _VMP-IO-REASON !
+        THEN
+        IOR-F-STALE AND IF
+            VFS-IOR-F-STALE _VMP-IO-FLAGS +!
+            _VFS-R-STALE _VMP-IO-REASON !
+            _VMP-LATCH-STALE
+        THEN
+    THEN
+    _VMP-IO-COMPLETED @ _VMP-IO-EXPECTED @ <> IF
+        _VMP-IO-FLAGS @ VFS-IOR-F-PARTIAL OR _VMP-IO-FLAGS !
+    THEN
+    _VMP-IO-BACKEND @ 0=
+    _VMP-IO-COMPLETED @ _VMP-IO-EXPECTED @ = AND IF
+        DROP 0 EXIT
+    THEN
+    DROP
+    _VMP-IO-BACKEND @ 0xFFFFFFFF AND
+    _VMP-IO-FLAGS @ VFS-IOR-D-VOLUME _VMP-IO-REASON @ VFS-IOR-MAKE ;
 
-: _VMP-DISK-FLUSH  ( -- ior )
-    DISK-FLUSH-CHECKED ;
+: _VMP-VOL-READ  ( dma lba count -- ior )
+    DUP _VMP-IO-EXPECTED !
+    _VMP-IO-V @ V.VOLUME @ VOL-READ
+    SWAP _VMP-IO-COMPLETED ! _VMP-MAP-IOR ;
+
+: _VMP-VOL-WRITE  ( dma lba count -- ior )
+    DUP _VMP-IO-EXPECTED !
+    _VMP-IO-V @ V.VOLUME @ VOL-WRITE
+    SWAP _VMP-IO-COMPLETED ! _VMP-MAP-IOR ;
+
+: _VMP-VOL-FLUSH  ( -- ior )
+    0 _VMP-IO-EXPECTED ! 0 _VMP-IO-COMPLETED !
+    _VMP-IO-V @ V.VOLUME @ VOL-FLUSH _VMP-MAP-IOR ;
+
+: _VMP-FORMAT-CORRUPT  ( detail -- ior )
+    VFS-IOR-F-CORRUPT VFS-IOR-D-FORMAT _VFS-R-CORRUPT VFS-IOR-MAKE ;
+
+: _VMP-PARTIAL-IOR  ( actual ior -- actual ior )
+    DUP IF
+        OVER 0> IF VFS-IOR-F-PARTIAL 24 LSHIFT OR THEN
+    THEN ;
 
 \ =====================================================================
 \  Directory Entry Field Readers (operate on dir-cache address)
@@ -193,6 +251,20 @@ VARIABLE _VMRUN-CTX
         _VMRUN-START @ I + _VMRUN-CTX @ _VMP-BIT-CLR
     LOOP ;
 
+VARIABLE _VMZR-START
+VARIABLE _VMZR-COUNT
+VARIABLE _VMZR-CTX
+
+: _VMP-ZERO-RUN  ( start count ctx -- ior )
+    _VMZR-CTX ! _VMZR-COUNT ! _VMZR-START !
+    _VMZR-CTX @ _VMP-C.SCRATCH + _VMP-SECTOR 0 FILL
+    _VMZR-COUNT @ 0 ?DO
+        _VMZR-CTX @ _VMP-C.SCRATCH +
+        _VMZR-START @ I + 1 _VMP-VOL-WRITE
+        ?DUP IF UNLOOP EXIT THEN
+    LOOP
+    0 ;
+
 \ =====================================================================
 \  Probe  ( sector-0-buf vfs -- flag )
 \ =====================================================================
@@ -208,6 +280,22 @@ VARIABLE _VMRUN-CTX
         EXIT
     THEN THEN THEN
     DROP FALSE ;
+
+100 CONSTANT VMP-PROBE-SCORE
+CREATE _VMPP-BUF _VMP-SECTOR ALLOT
+VARIABLE _VMPP-VOL
+
+: _VMP-PROBE-VOLUME  ( volume -- score ior )
+    _VMPP-VOL !
+    _VMPP-VOL @ VOL.SECTOR-SIZE _VMP-SECTOR <> IF
+        0 0 0 VFS-IOR-D-VOLUME VFS-R-UNSUPPORTED VFS-IOR-MAKE EXIT
+    THEN
+    0 _VMP-IO-V !
+    1 _VMP-IO-EXPECTED !
+    _VMPP-BUF 0 1 _VMPP-VOL @ VOL-READ
+    SWAP _VMP-IO-COMPLETED ! _VMP-MAP-IOR
+    DUP IF 0 SWAP EXIT THEN DROP
+    _VMPP-BUF 0 _VMP-PROBE IF VMP-PROBE-SCORE ELSE 0 THEN 0 ;
 
 \ =====================================================================
 \  Init  ( vfs -- ior )
@@ -229,12 +317,14 @@ VARIABLE _VMI-CTX
 : _VMP-SB-DSTART   ( ctx -- n ) _VMP-C.SUPER + 18 + W@ ;
 
 VARIABLE _VMGV-CTX
-: _VMP-GEOMETRY?  ( ctx -- flag )
-    _VMGV-CTX !
+VARIABLE _VMGV-V
+: _VMP-GEOMETRY?  ( ctx vfs -- flag )
+    _VMGV-V ! _VMGV-CTX !
     _VMGV-CTX @ _VMP-SB-MARKER 1 <> IF FALSE EXIT THEN
     _VMGV-CTX @ _VMP-SB-TOTAL DUP 15 < SWAP _VMP-MAX-SECTORS > OR
         IF FALSE EXIT THEN
-    _VMGV-CTX @ _VMP-SB-TOTAL DISK-SECTORS <> IF FALSE EXIT THEN
+    _VMGV-CTX @ _VMP-SB-TOTAL
+        _VMGV-V @ V.VOLUME @ VOL.SECTORS <> IF FALSE EXIT THEN
     _VMGV-CTX @ _VMP-SB-BSTART 1 <> IF FALSE EXIT THEN
     _VMGV-CTX @ _VMP-SB-BN DUP 1 < SWAP _VMP-MAX-BMAP-SECTORS > OR
         IF FALSE EXIT THEN
@@ -265,6 +355,36 @@ VARIABLE _VMEV-START
 VARIABLE _VMEV-COUNT
 VARIABLE _VMPV-CTX
 VARIABLE _VMDV-CTX
+VARIABLE _VMOV-S1
+VARIABLE _VMOV-N1
+VARIABLE _VMOV-S2
+VARIABLE _VMOV-N2
+VARIABLE _VMOV-A
+VARIABLE _VMOV-B
+VARIABLE _VMDV-OK
+
+: _VMP-RANGES-OVERLAP?  ( start1 count1 start2 count2 -- flag )
+    _VMOV-N2 ! _VMOV-S2 ! _VMOV-N1 ! _VMOV-S1 !
+    _VMOV-N1 @ 0= _VMOV-N2 @ 0= OR IF FALSE EXIT THEN
+    _VMOV-S1 @ _VMOV-S2 @ _VMOV-N2 @ + <
+    _VMOV-S2 @ _VMOV-S1 @ _VMOV-N1 @ + < AND ;
+
+: _VMP-DIRENTS-OVERLAP?  ( de-a de-b -- flag )
+    _VMOV-B ! _VMOV-A !
+    _VMOV-A @ _VMP-DE.TYPE _VMP-T-DIR =
+    _VMOV-B @ _VMP-DE.TYPE _VMP-T-DIR = OR IF FALSE EXIT THEN
+    _VMOV-A @ _VMP-DE.SEC _VMOV-A @ _VMP-DE.COUNT
+    _VMOV-B @ _VMP-DE.SEC _VMOV-B @ _VMP-DE.COUNT
+    _VMP-RANGES-OVERLAP? IF TRUE EXIT THEN
+    _VMOV-A @ _VMP-DE.SEC _VMOV-A @ _VMP-DE.COUNT
+    _VMOV-B @ _VMP-DE.EXT1S _VMOV-B @ _VMP-DE.EXT1C
+    _VMP-RANGES-OVERLAP? IF TRUE EXIT THEN
+    _VMOV-A @ _VMP-DE.EXT1S _VMOV-A @ _VMP-DE.EXT1C
+    _VMOV-B @ _VMP-DE.SEC _VMOV-B @ _VMP-DE.COUNT
+    _VMP-RANGES-OVERLAP? IF TRUE EXIT THEN
+    _VMOV-A @ _VMP-DE.EXT1S _VMOV-A @ _VMP-DE.EXT1C
+    _VMOV-B @ _VMP-DE.EXT1S _VMOV-B @ _VMP-DE.EXT1C
+    _VMP-RANGES-OVERLAP? ;
 
 : _VMP-RUN-ALLOCATED?  ( start count ctx -- flag )
     _VMEV-CTX ! _VMEV-COUNT ! _VMEV-START !
@@ -308,22 +428,40 @@ VARIABLE _VMDV-CTX
     _VMEV-DE @ _VMP-DE.EXT1C IF
         _VMEV-DE @ _VMP-DE.EXT1S _VMEV-DE @ _VMP-DE.EXT1C _VMEV-CTX @
         _VMP-RUN-ALLOCATED? 0= IF FALSE EXIT THEN
+        _VMEV-DE @ _VMP-DE.SEC _VMEV-DE @ _VMP-DE.COUNT
+        _VMEV-DE @ _VMP-DE.EXT1S _VMEV-DE @ _VMP-DE.EXT1C
+        _VMP-RANGES-OVERLAP? IF FALSE EXIT THEN
     THEN
     _VMEV-DE @ _VMP-DE.USED
     _VMEV-DE @ _VMP-DE.COUNT _VMEV-DE @ _VMP-DE.EXT1C +
         _VMP-SECTOR * <= ;
 
 : _VMP-DIRECTORY-VALID?  ( ctx -- flag )
-    _VMDV-CTX ! TRUE
+    _VMDV-CTX ! TRUE _VMDV-OK !
     _VMP-MAX-FILES 0 DO
+        _VMDV-OK @ 0= IF LEAVE THEN
         I _VMDV-CTX @ _VMP-DIRENT DUP C@ IF
             _VMDV-CTX @ _VMP-DIRENT-VALID? 0= IF
-                DROP FALSE LEAVE
+                FALSE _VMDV-OK ! LEAVE
+            THEN
+            I 1+ _VMP-MAX-FILES < IF
+                _VMP-MAX-FILES I 1+ DO
+                    J _VMDV-CTX @ _VMP-DIRENT
+                    I _VMDV-CTX @ _VMP-DIRENT
+                    DUP C@ IF
+                        _VMP-DIRENTS-OVERLAP? IF
+                            FALSE _VMDV-OK ! LEAVE
+                        THEN
+                    ELSE
+                        2DROP
+                    THEN
+                LOOP
             THEN
         ELSE
             DROP
         THEN
-    LOOP ;
+    LOOP
+    _VMDV-OK @ ;
 
 : _VMP-ADOPT-GEOMETRY  ( ctx -- )
     DUP _VMP-SB-TOTAL    OVER _VMP-C.TOTAL + !
@@ -335,41 +473,61 @@ VARIABLE _VMDV-CTX
 
 : _VMP-INIT  ( vfs -- ior )
     _VMI-V !
-    \ Check disk present
-    DISK? 0= IF  -1 EXIT  THEN
-    \ Allocate context
-    _VMI-V @ V.ARENA @  _VMP-CTX-SIZE ARENA-ALLOT?
-    IF DROP -1 EXIT THEN
-    _VMI-CTX !
+    _VMI-V @ _VMP-IO-V !
+    \ Validate and snapshot the explicit attachment before allocating or I/O.
+    _VMI-V @ V.VOLUME @ DUP 0= IF DROP VFS-E-NOVOLUME EXIT THEN
+    DUP VOL-STALE? IF
+        DROP _VMP-LATCH-STALE
+        0 VFS-IOR-F-STALE VFS-IOR-D-VOLUME _VFS-R-STALE VFS-IOR-MAKE
+        EXIT
+    THEN
+    DUP VOL-VALID? 0= IF DROP VFS-E-NOVOLUME EXIT THEN
+    DUP VOL.SECTOR-SIZE _VMP-SECTOR <> IF
+        DROP 0 0 VFS-IOR-D-VOLUME _VFS-R-UNSUPPORTED VFS-IOR-MAKE EXIT
+    THEN
+    DUP VOL.COOKIE _VMI-V @ V.VOL-COOKIE !
+    VOL.MEDIA-GEN _VMI-V @ V.MEDIA-GEN !
+    \ Retain at most one context allocation even when mount fails.
+    _VMI-V @ V.BCTX @ ?DUP IF
+        _VMI-CTX !
+    ELSE
+        _VMI-V @ V.ARENA @  _VMP-CTX-SIZE ARENA-ALLOT?
+        IF DROP VFS-E-NOMEM EXIT THEN
+        DUP _VMI-CTX ! _VMI-V @ V.BCTX !
+    THEN
     \ Zero it
     _VMI-CTX @  _VMP-CTX-SIZE  0 FILL
-    \ Store in VFS descriptor
-    _VMI-CTX @  _VMI-V @ V.BCTX !
     \ Read superblock (sector 0).  Do not parse bytes after I/O failure.
-    _VMI-CTX @ _VMP-C.SUPER +  0  1  _VMP-DISK-READ
+    _VMI-CTX @ _VMP-C.SUPER +  0  1  _VMP-VOL-READ
     ?DUP IF EXIT THEN
     \ Verify magic
     _VMI-CTX @ _VMP-C.SUPER +  _VMI-V @  _VMP-PROBE 0= IF
-        -2 EXIT   \ not MP64FS
+        1 0 VFS-IOR-D-FORMAT _VFS-R-UNSUPPORTED VFS-IOR-MAKE EXIT
     THEN
     \ Validate and adopt disk geometry before any variable-size DMA.
-    _VMI-CTX @ _VMP-GEOMETRY? 0= IF -3 EXIT THEN
+    _VMI-CTX @ _VMI-V @ _VMP-GEOMETRY? 0= IF
+        2 _VMP-FORMAT-CORRUPT EXIT
+    THEN
     _VMI-CTX @ _VMP-ADOPT-GEOMETRY
     \ Read the complete bitmap.
     _VMI-CTX @ _VMP-C.BMAP +
     _VMI-CTX @ _VMP-C.BSTART + @
-    _VMI-CTX @ _VMP-C.BN + @  _VMP-DISK-READ
+    _VMI-CTX @ _VMP-C.BN + @  _VMP-VOL-READ
     ?DUP IF EXIT THEN
     \ Read the geometry-selected directory.
     _VMI-CTX @ _VMP-C.DIR +
     _VMI-CTX @ _VMP-C.DIRSTART + @
-    _VMI-CTX @ _VMP-C.DIRN + @  _VMP-DISK-READ
+    _VMI-CTX @ _VMP-C.DIRN + @  _VMP-VOL-READ
     ?DUP IF EXIT THEN
     \ Metadata sectors must all be reserved in the allocation bitmap.
     _VMI-CTX @ _VMP-C.DSTART + @ 0 DO
-        I _VMI-CTX @ _VMP-BIT-FREE? IF -4 UNLOOP EXIT THEN
+        I _VMI-CTX @ _VMP-BIT-FREE? IF
+            3 _VMP-FORMAT-CORRUPT UNLOOP EXIT
+        THEN
     LOOP
-    _VMI-CTX @ _VMP-DIRECTORY-VALID? 0= IF -5 EXIT THEN
+    _VMI-CTX @ _VMP-DIRECTORY-VALID? 0= IF
+        4 _VMP-FORMAT-CORRUPT EXIT
+    THEN
     \ Clear dirty flags
     0 _VMI-CTX @ _VMP-C.DBMAP + !
     0 _VMI-CTX @ _VMP-C.DDIR + !
@@ -385,14 +543,37 @@ VARIABLE _VMDV-CTX
 
 VARIABLE _VMPI-V
 VARIABLE _VMPI-CTX
+VARIABLE _VMPI-OLD-CHILD
+VARIABLE _VMPI-OLD-COUNT
+VARIABLE _VMPI-OLD-STR
+VARIABLE _VMPI-NEW
+
+: _VMPI-ROLLBACK  ( -- )
+    BEGIN
+        _VMPI-V @ V.ROOT @ IN.CHILD @
+        DUP _VMPI-OLD-CHILD @ <>
+    WHILE
+        DUP _VMPI-V @ V.ROOT @ _VFS-REMOVE-CHILD
+        TRUE _VMPI-V @ _VFS-DENTRY-RELEASE
+    REPEAT DROP
+    _VMPI-OLD-COUNT @ _VMPI-V @ V.ICOUNT !
+    _VMPI-OLD-STR @ _VMPI-V @ V.STR-PTR !
+    0 _VMPI-CTX @ _VMP-C.READY + ! ;
 
 : VMP-INIT  ( vfs -- ior )
+    DUP _VMP-READY? IF DROP 0 EXIT THEN
+    \ Core has no remount transition for a constructor that returned an
+    \ error.  Preserve that terminal result and avoid a misleading retry.
+    DUP V.LAST-IOR @ ?DUP IF NIP EXIT THEN
     DUP _VMP-INIT               ( vfs ior )
     DUP 0<> IF  NIP EXIT  THEN  \ init failed
     DROP                         ( vfs )
     \ Now populate root directory children
     DUP V.BCTX @  _VMPI-CTX !
     _VMPI-V !
+    _VMPI-V @ V.ROOT @ IN.CHILD @ _VMPI-OLD-CHILD !
+    _VMPI-V @ V.ICOUNT @ _VMPI-OLD-COUNT !
+    _VMPI-V @ V.STR-PTR @ _VMPI-OLD-STR !
     _VMP-MAX-FILES 0 DO
         I _VMPI-CTX @  _VMP-DIRENT   ( de )
         DUP C@ 0<> IF                \ slot occupied?
@@ -404,10 +585,21 @@ VARIABLE _VMPI-CTX
                     VFS-T-FILE
                 THEN                          ( de vfs-type )
                 _VMPI-V @  _VFS-INODE-ALLOC   ( de inode )
+                DUP 0= IF
+                    2DROP _VMPI-ROLLBACK
+                    VFS-E-NOMEM UNLOOP EXIT
+                THEN
+                DUP _VMPI-NEW !
                 \ Set name from dir entry (NUL-terminated, max 24 bytes)
                 OVER _VMP-NAMELEN             ( de inode namelen )
                 >R OVER R>                    ( de inode de namelen )
                 _VMPI-V @  _VFS-STR-ALLOC     ( de inode handle )
+                DUP 0= IF
+                    DROP 2DROP
+                    _VMPI-NEW @ TRUE _VMPI-V @ _VFS-DENTRY-RELEASE
+                    _VMPI-ROLLBACK
+                    VFS-E-NOMEM UNLOOP EXIT
+                THEN
                 OVER IN.NAME !
                 \ Set binding-id = slot index
                 I OVER IN.BID !
@@ -437,8 +629,15 @@ VARIABLE _VMPI-CTX
     _VMPI-V @ V.ROOT @ IN.FLAGS DUP @ ROT OR SWAP !
     0 ;   \ success
 
+\ The ABI requires explicit open/release hooks.  MP64FS does not need an
+\ additional per-open object: the dentry's current directory-slot id is the
+\ complete binding handle.  The slot is reusable after the dentry is retired.
+: _VMP-OPEN     ( inode vfs -- cookie ior )  2DROP 0 0 ;
+: _VMP-RELEASE  ( cookie inode vfs -- ior )  DROP 2DROP 0 ;
+: _VMP-GETATTR  ( inode vfs -- ior )         2DROP 0 ;
+
 \ =====================================================================
-\  Readdir  ( inode vfs -- )
+\  Readdir  ( inode vfs -- ior )
 \ =====================================================================
 \
 \  For a directory inode, scan the MP64FS directory table for entries
@@ -449,11 +648,28 @@ VARIABLE _VMRD-IN
 VARIABLE _VMRD-V
 VARIABLE _VMRD-CTX
 VARIABLE _VMRD-PID    \ parent dir slot to match
+VARIABLE _VMRD-OLD-CHILD
+VARIABLE _VMRD-OLD-COUNT
+VARIABLE _VMRD-OLD-STR
+VARIABLE _VMRD-NEW
 
-: _VMP-READDIR  ( inode vfs -- )
-    DUP _VMP-READY? 0= IF 2DROP EXIT THEN
+: _VMRD-ROLLBACK  ( -- )
+    BEGIN
+        _VMRD-IN @ IN.CHILD @ DUP _VMRD-OLD-CHILD @ <>
+    WHILE
+        DUP _VMRD-IN @ _VFS-REMOVE-CHILD
+        TRUE _VMRD-V @ _VFS-DENTRY-RELEASE
+    REPEAT DROP
+    _VMRD-OLD-COUNT @ _VMRD-V @ V.ICOUNT !
+    _VMRD-OLD-STR @ _VMRD-V @ V.STR-PTR ! ;
+
+: _VMP-READDIR  ( inode vfs -- ior )
+    DUP _VMP-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
     _VMRD-V !  _VMRD-IN !
     _VMRD-V @ V.BCTX @  _VMRD-CTX !
+    _VMRD-IN @ IN.CHILD @ _VMRD-OLD-CHILD !
+    _VMRD-V @ V.ICOUNT @ _VMRD-OLD-COUNT !
+    _VMRD-V @ V.STR-PTR @ _VMRD-OLD-STR !
     \ The parent slot to match = this inode's binding-id
     _VMRD-IN @ IN.BID @  _VMRD-PID !
     _VMP-MAX-FILES 0 DO
@@ -467,9 +683,20 @@ VARIABLE _VMRD-PID    \ parent dir slot to match
                     VFS-T-FILE
                 THEN                          ( de vfs-type )
                 _VMRD-V @  _VFS-INODE-ALLOC   ( de inode )
+                DUP 0= IF
+                    2DROP _VMRD-ROLLBACK
+                    VFS-E-NOMEM UNLOOP EXIT
+                THEN
+                DUP _VMRD-NEW !
                 OVER _VMP-NAMELEN             ( de inode namelen )
                 >R OVER R>                    ( de inode de namelen )
                 _VMRD-V @  _VFS-STR-ALLOC
+                DUP 0= IF
+                    DROP 2DROP
+                    _VMRD-NEW @ TRUE _VMRD-V @ _VFS-DENTRY-RELEASE
+                    _VMRD-ROLLBACK
+                    VFS-E-NOMEM UNLOOP EXIT
+                THEN
                 OVER IN.NAME !
                 I OVER IN.BID !
                 OVER _VMP-DE.SEC   OVER IN.BDATA !
@@ -487,10 +714,11 @@ VARIABLE _VMRD-PID    \ parent dir slot to match
             THEN
         THEN
         DROP
-    LOOP ;
+    LOOP
+    0 ;
 
 \ =====================================================================
-\  Read  ( buf len offset inode vfs -- actual )
+\  Read  ( buf len offset inode vfs -- actual ior )
 \ =====================================================================
 \
 \  Translate inode bdata (start_sector + sec_count) into disk DMA
@@ -511,6 +739,8 @@ VARIABLE _VMRR-ESEC    \ secondary extent start sector
 VARIABLE _VMRR-ENSEC   \ secondary extent sector count
 VARIABLE _VMRR-ACT     \ actual bytes read so far
 VARIABLE _VMRR-SCR     \ scratch buffer address
+VARIABLE _VMRR-IOR
+VARIABLE _VMRR-FULL-LEFT
 
 \ Map a logical file position to its physical sector across both extents.
 : _VMRR-DSEC  ( -- sec )
@@ -534,39 +764,53 @@ VARIABLE _VMRR-SCR     \ scratch buffer address
 VARIABLE _VMRR-CHUNK
 : _VMRR-HEAD  ( -- )
     _VMRR-POS @ _VMP-SECTOR MOD  DUP 0= IF DROP EXIT THEN  ( off )
-    _VMRR-SCR @ _VMRR-DSEC 1 _VMP-DISK-READ ?DUP IF THROW THEN
+    _VMRR-SCR @ _VMRR-DSEC 1 _VMP-VOL-READ _VMRR-IOR !
+    _VMP-IO-COMPLETED @ 0= IF
+        DROP _VMRR-IOR @ ?DUP IF THROW THEN EXIT
+    THEN
     _VMP-SECTOR OVER -  _VMRR-REM @ MIN  _VMRR-CHUNK !  ( off )
     _VMRR-SCR @ +  _VMRR-BUF @  _VMRR-CHUNK @  CMOVE
     _VMRR-CHUNK @ DUP _VMRR-BUF +!  DUP _VMRR-POS +!
-    DUP _VMRR-ACT +!  NEGATE _VMRR-REM +! ;
+    DUP _VMRR-ACT +!  NEGATE _VMRR-REM +!
+    _VMRR-IOR @ ?DUP IF THROW THEN ;
 
 \ Helper: DMA full sectors
 VARIABLE _VMRR-BATCH
 : _VMRR-FULL  ( -- )
-    _VMRR-REM @ _VMP-SECTOR /  ( n-full )
-    BEGIN DUP 0> WHILE
-        DUP 255 MIN _VMRR-RUN-SECS MIN DUP _VMRR-BATCH !
-        _VMRR-BUF @ _VMRR-DSEC _VMRR-BATCH @ _VMP-DISK-READ
-        ?DUP IF THROW THEN
-        _VMRR-BATCH @ _VMP-SECTOR *
+    _VMRR-REM @ _VMP-SECTOR / _VMRR-FULL-LEFT !
+    BEGIN _VMRR-FULL-LEFT @ 0> WHILE
+        _VMRR-FULL-LEFT @ 255 MIN _VMRR-RUN-SECS MIN DUP _VMRR-BATCH !
+        _VMRR-BUF @ _VMRR-DSEC _VMRR-BATCH @ _VMP-VOL-READ
+        _VMRR-IOR !
+        _VMP-IO-COMPLETED @ _VMP-SECTOR *
         DUP _VMRR-BUF +!
         DUP _VMRR-POS +!
         DUP _VMRR-ACT +!
         NEGATE _VMRR-REM +!
-        _VMRR-BATCH @ -
-    REPEAT DROP ;
+        _VMP-IO-COMPLETED @ NEGATE _VMRR-FULL-LEFT +!
+        _VMRR-IOR @ ?DUP IF THROW THEN
+    REPEAT ;
 
 \ Helper: read tail partial sector
 : _VMRR-TAIL  ( -- )
     _VMRR-REM @ 0= IF EXIT THEN
-    _VMRR-SCR @ _VMRR-DSEC 1 _VMP-DISK-READ ?DUP IF THROW THEN
+    _VMRR-SCR @ _VMRR-DSEC 1 _VMP-VOL-READ _VMRR-IOR !
+    _VMP-IO-COMPLETED @ 0= IF
+        _VMRR-IOR @ ?DUP IF THROW THEN EXIT
+    THEN
     _VMRR-SCR @  _VMRR-BUF @  _VMRR-REM @  CMOVE
     _VMRR-REM @ DUP _VMRR-ACT +!
-    DUP _VMRR-BUF +!  _VMRR-POS +! ;
+    DUP _VMRR-BUF +!  _VMRR-POS +!
+    _VMRR-IOR @ ?DUP IF THROW THEN ;
 
-: _VMP-READ  ( buf len offset inode vfs -- actual )
-    DUP _VMP-READY? 0= IF 2DROP 2DROP DROP 0 EXIT THEN
+: _VMRR-TRANSFER  ( -- )
+    _VMRR-HEAD _VMRR-FULL _VMRR-TAIL ;
+
+: _VMP-READ  ( buf len offset inode vfs -- actual ior )
+    DUP _VMP-READY? 0= IF 2DROP 2DROP DROP 0 VFS-E-BUSY EXIT THEN
     _VMRR-V !  _VMRR-IN !  _VMRR-OFF !  _VMRR-LEN !  _VMRR-BUF !
+    _VMRR-V @ _VMP-IO-V !
+    _VMRR-OFF @ 0< _VMRR-LEN @ 0< OR IF 0 VFS-E-INVALID EXIT THEN
     _VMRR-V @ V.BCTX @  _VMRR-CTX !
     _VMRR-CTX @ _VMP-C.SCRATCH +  _VMRR-SCR !
     0 _VMRR-ACT !
@@ -578,19 +822,19 @@ VARIABLE _VMRR-BATCH
         _VMP-DE.EXT1C _VMRR-ENSEC !
     \ Clamp len to file size - offset
     _VMRR-IN @ IN.SIZE-LO @  _VMRR-OFF @ -
-    DUP 0< IF  DROP 0 EXIT  THEN   \ offset past EOF
+    DUP 0< IF  DROP 0 0 EXIT  THEN   \ offset past EOF
     _VMRR-LEN @ MIN  _VMRR-LEN !
     \ Corrupt metadata must not read beyond allocated extents.
     _VMRR-NSEC @ _VMRR-ENSEC @ + _VMP-SECTOR * _VMRR-OFF @ -
     0 MAX _VMRR-LEN @ MIN _VMRR-LEN !
-    _VMRR-LEN @ 0= IF  0 EXIT  THEN
+    _VMRR-LEN @ 0= IF  0 0 EXIT  THEN
     _VMRR-OFF @  _VMRR-POS !
     _VMRR-LEN @  _VMRR-REM !
-    _VMRR-HEAD  _VMRR-FULL  _VMRR-TAIL
-    _VMRR-ACT @ ;
+    ['] _VMRR-TRANSFER CATCH _VMRR-IOR !
+    _VMRR-ACT @ _VMRR-IOR @ _VMP-PARTIAL-IOR ;
 
 \ =====================================================================
-\  Write  ( buf len offset inode vfs -- actual )
+\  Write  ( buf len offset inode vfs -- actual ior )
 \ =====================================================================
 
 \ Grow a file's allocation to cover a desired byte length.  Prefer an
@@ -609,7 +853,7 @@ VARIABLE _VMG-START
 
 : _VMP-ENSURE  ( bytes inode vfs -- ior )
     _VMG-V ! _VMG-IN ! _VMG-BYTES !
-    _VMG-IN @ IN.TYPE @ VFS-T-FILE <> IF -1 EXIT THEN
+    _VMG-IN @ IN.TYPE @ VFS-T-FILE <> IF VFS-E-ISDIR EXIT THEN
     _VMG-BYTES @ 0= IF 0 EXIT THEN
     _VMG-V @ V.BCTX @ _VMG-CTX !
     _VMG-IN @ IN.BID @ _VMG-CTX @ _VMP-DIRENT DUP _VMG-DE !
@@ -623,7 +867,9 @@ VARIABLE _VMG-START
     _VMG-ECOUNT @ 0> IF
         \ A two-extent file can only grow at the end of extent 1.
         _VMG-ESTART @ _VMG-ECOUNT @ +
-        _VMG-ADD @ _VMG-CTX @ _VMP-RUN-FREE? 0= IF -2 EXIT THEN
+        _VMG-ADD @ _VMG-CTX @ _VMP-RUN-FREE? 0= IF VFS-E-NOSPC EXIT THEN
+        _VMG-ESTART @ _VMG-ECOUNT @ +
+        _VMG-ADD @ _VMG-CTX @ _VMP-ZERO-RUN ?DUP IF EXIT THEN
         _VMG-ESTART @ _VMG-ECOUNT @ +
         _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
         _VMG-ECOUNT @ _VMG-ADD @ +
@@ -633,6 +879,8 @@ VARIABLE _VMG-START
         _VMG-IN @ IN.BDATA @ _VMG-PCOUNT @ +
         _VMG-ADD @ _VMG-CTX @ _VMP-RUN-FREE? IF
             _VMG-IN @ IN.BDATA @ _VMG-PCOUNT @ +
+            _VMG-ADD @ _VMG-CTX @ _VMP-ZERO-RUN ?DUP IF EXIT THEN
+            _VMG-IN @ IN.BDATA @ _VMG-PCOUNT @ +
             _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
             _VMG-PCOUNT @ _VMG-ADD @ + DUP _VMG-PCOUNT !
             DUP _VMG-IN @ IN.BDATA 8 + !
@@ -640,10 +888,12 @@ VARIABLE _VMG-START
         ELSE
             \ Fragmented growth becomes the secondary extent.
             _VMG-ADD @ _VMG-CTX @ _VMP-FIND-FREE DUP -1 = IF
-                DROP -2 EXIT
+                DROP VFS-E-NOSPC EXIT
             THEN
-            DUP _VMG-START !
-            _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
+            _VMG-START !
+            _VMG-START @ _VMG-ADD @ _VMG-CTX @ _VMP-ZERO-RUN
+            ?DUP IF EXIT THEN
+            _VMG-START @ _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
             _VMG-START @ _VMG-DE @ 44 + W!
             _VMG-ADD @   _VMG-DE @ 46 + W!
         THEN
@@ -651,6 +901,53 @@ VARIABLE _VMG-START
     -1 _VMG-CTX @ _VMP-C.DBMAP + !
     -1 _VMG-CTX @ _VMP-C.DDIR + !
     VFS-IF-DIRTY _VMG-IN @ IN.FLAGS DUP @ ROT OR SWAP !
+    0 ;
+
+\ Zero a logical range before it becomes visible through used_bytes.  Newly
+\ allocated sectors are already zero, but an existing on-disk extent may have
+\ nonzero bytes beyond its old logical end, so partial sectors use RMW.
+VARIABLE _VMZ-POS
+VARIABLE _VMZ-REM
+VARIABLE _VMZ-IN
+VARIABLE _VMZ-V
+VARIABLE _VMZ-CTX
+VARIABLE _VMZ-SCR
+VARIABLE _VMZ-SSEC
+VARIABLE _VMZ-NSEC
+VARIABLE _VMZ-ESEC
+VARIABLE _VMZ-ENSEC
+VARIABLE _VMZ-OFF
+VARIABLE _VMZ-CHUNK
+
+: _VMZ-DSEC  ( -- sector )
+    _VMZ-POS @ _VMP-SECTOR / DUP
+    _VMZ-NSEC @ < IF
+        _VMZ-SSEC @ +
+    ELSE
+        _VMZ-NSEC @ - _VMZ-ESEC @ +
+    THEN ;
+
+: _VMP-ZERO-VISIBLE  ( offset len inode vfs -- ior )
+    _VMZ-V ! _VMZ-IN ! _VMZ-REM ! _VMZ-POS !
+    _VMZ-REM @ 0= IF 0 EXIT THEN
+    _VMZ-V @ _VMP-IO-V !
+    _VMZ-V @ V.BCTX @ DUP _VMZ-CTX ! _VMP-C.SCRATCH + _VMZ-SCR !
+    _VMZ-IN @ IN.BDATA @ _VMZ-SSEC !
+    _VMZ-IN @ IN.BDATA 8 + @ _VMZ-NSEC !
+    _VMZ-IN @ IN.BID @ _VMZ-CTX @ _VMP-DIRENT
+    DUP _VMP-DE.EXT1S _VMZ-ESEC ! _VMP-DE.EXT1C _VMZ-ENSEC !
+    BEGIN _VMZ-REM @ 0> WHILE
+        _VMZ-POS @ _VMP-SECTOR MOD _VMZ-OFF !
+        _VMP-SECTOR _VMZ-OFF @ - _VMZ-REM @ MIN _VMZ-CHUNK !
+        _VMZ-OFF @ 0= _VMZ-CHUNK @ _VMP-SECTOR = AND IF
+            _VMZ-SCR @ _VMP-SECTOR 0 FILL
+        ELSE
+            _VMZ-SCR @ _VMZ-DSEC 1 _VMP-VOL-READ ?DUP IF EXIT THEN
+            _VMZ-SCR @ _VMZ-OFF @ + _VMZ-CHUNK @ 0 FILL
+        THEN
+        _VMZ-SCR @ _VMZ-DSEC 1 _VMP-VOL-WRITE ?DUP IF EXIT THEN
+        _VMZ-CHUNK @ DUP _VMZ-POS +! NEGATE _VMZ-REM +!
+    REPEAT
     0 ;
 
 VARIABLE _VMRW-BUF
@@ -667,6 +964,9 @@ VARIABLE _VMRW-ESEC
 VARIABLE _VMRW-ENSEC
 VARIABLE _VMRW-ACT
 VARIABLE _VMRW-SCR
+VARIABLE _VMRW-IOR
+VARIABLE _VMRW-FULL-LEFT
+VARIABLE _VMRW-OLD
 
 : _VMRW-DSEC  ( -- sec )
     _VMRW-POS @ _VMP-SECTOR / DUP
@@ -687,76 +987,95 @@ VARIABLE _VMRW-SCR
 VARIABLE _VMRW-CHUNK
 : _VMRW-HEAD  ( -- )
     _VMRW-POS @ _VMP-SECTOR MOD  DUP 0= IF DROP EXIT THEN
-    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-DISK-READ ?DUP IF THROW THEN
+    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-VOL-READ ?DUP IF THROW THEN
     _VMP-SECTOR OVER -  _VMRW-REM @ MIN  _VMRW-CHUNK !
     _VMRW-BUF @  OVER _VMRW-SCR @ +  _VMRW-CHUNK @  CMOVE
     DROP
-    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-DISK-WRITE ?DUP IF THROW THEN
-    _VMRW-CHUNK @ DUP _VMRW-BUF +!  DUP _VMRW-POS +!
-    DUP _VMRW-ACT +!  NEGATE _VMRW-REM +! ;
+    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-VOL-WRITE _VMRW-IOR !
+    _VMP-IO-COMPLETED @ IF
+        _VMRW-CHUNK @ DUP _VMRW-BUF +!  DUP _VMRW-POS +!
+        DUP _VMRW-ACT +!  NEGATE _VMRW-REM +!
+    THEN
+    _VMRW-IOR @ ?DUP IF THROW THEN ;
 
 VARIABLE _VMRW-BATCH
 : _VMRW-FULL  ( -- )
-    _VMRW-REM @ _VMP-SECTOR /
-    BEGIN DUP 0> WHILE
-        DUP 255 MIN _VMRW-RUN-SECS MIN DUP _VMRW-BATCH !
-        _VMRW-BUF @ _VMRW-DSEC _VMRW-BATCH @ _VMP-DISK-WRITE
-        ?DUP IF THROW THEN
-        _VMRW-BATCH @ _VMP-SECTOR *
+    _VMRW-REM @ _VMP-SECTOR / _VMRW-FULL-LEFT !
+    BEGIN _VMRW-FULL-LEFT @ 0> WHILE
+        _VMRW-FULL-LEFT @ 255 MIN _VMRW-RUN-SECS MIN DUP _VMRW-BATCH !
+        _VMRW-BUF @ _VMRW-DSEC _VMRW-BATCH @ _VMP-VOL-WRITE
+        _VMRW-IOR !
+        _VMP-IO-COMPLETED @ _VMP-SECTOR *
         DUP _VMRW-BUF +!
         DUP _VMRW-POS +!
         DUP _VMRW-ACT +!
         NEGATE _VMRW-REM +!
-        _VMRW-BATCH @ -
-    REPEAT DROP ;
+        _VMP-IO-COMPLETED @ NEGATE _VMRW-FULL-LEFT +!
+        _VMRW-IOR @ ?DUP IF THROW THEN
+    REPEAT ;
 
 : _VMRW-TAIL  ( -- )
     _VMRW-REM @ 0= IF EXIT THEN
-    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-DISK-READ ?DUP IF THROW THEN
+    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-VOL-READ ?DUP IF THROW THEN
     _VMRW-BUF @  _VMRW-SCR @  _VMRW-REM @  CMOVE
-    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-DISK-WRITE ?DUP IF THROW THEN
-    _VMRW-REM @ DUP _VMRW-ACT +!
-    DUP _VMRW-BUF +!  _VMRW-POS +! ;
+    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-VOL-WRITE _VMRW-IOR !
+    _VMP-IO-COMPLETED @ IF
+        _VMRW-REM @ DUP _VMRW-ACT +!
+        DUP _VMRW-BUF +!  _VMRW-POS +!
+        0 _VMRW-REM !
+    THEN
+    _VMRW-IOR @ ?DUP IF THROW THEN ;
 
-: _VMP-WRITE  ( buf len offset inode vfs -- actual )
-    DUP _VMP-READY? 0= IF 2DROP 2DROP DROP 0 EXIT THEN
+: _VMRW-TRANSFER  ( -- )
+    _VMRW-HEAD _VMRW-FULL _VMRW-TAIL ;
+
+: _VMRW-PUBLISH  ( -- )
+    _VMRW-ACT @ 0= IF EXIT THEN
+    \ used_bytes = max(old, offset + bytes durably accepted by volume)
+    _VMRW-OFF @ _VMRW-ACT @ +
+    _VMRW-IN @ IN.BID @ _VMRW-CTX @ _VMP-DIRENT
+    DUP _VMP-DE.USED ROT MAX OVER 28 + L! DROP
+    -1 _VMRW-CTX @ _VMP-C.DDIR + !
+    _VMRW-IN @ IN.BID @ _VMRW-CTX @ _VMP-DIRENT _VMP-DE.USED
+    _VMRW-IN @ IN.SIZE-LO !
+    VFS-IF-DIRTY _VMRW-IN @ IN.FLAGS DUP @ ROT OR SWAP ! ;
+
+: _VMP-WRITE  ( buf len offset inode vfs -- actual ior )
+    DUP _VMP-READY? 0= IF 2DROP 2DROP DROP 0 VFS-E-BUSY EXIT THEN
     _VMRW-V !  _VMRW-IN !  _VMRW-OFF !  _VMRW-LEN !  _VMRW-BUF !
+    _VMRW-V @ _VMP-IO-V !
+    _VMRW-OFF @ 0< _VMRW-LEN @ 0< OR IF 0 VFS-E-INVALID EXIT THEN
+    _VMRW-LEN @ 0= IF 0 0 EXIT THEN
     _VMRW-V @ V.BCTX @  _VMRW-CTX !
     _VMRW-CTX @ _VMP-C.SCRATCH +  _VMRW-SCR !
+    _VMRW-IN @ IN.BID @ _VMRW-CTX @ _VMP-DIRENT
+    _VMP-DE.USED _VMRW-OLD !
     0 _VMRW-ACT !
     \ Grow before clamping so ordinary writes are not limited by the
     \ file's creation-time allocation.
     _VMRW-OFF @ _VMRW-LEN @ +
-    _VMRW-IN @ _VMRW-V @ _VMP-ENSURE DROP
+    _VMRW-IN @ _VMRW-V @ _VMP-ENSURE ?DUP IF 0 SWAP EXIT THEN
     _VMRW-IN @ IN.BDATA @      _VMRW-SSEC !
     _VMRW-IN @ IN.BDATA 8 + @  _VMRW-NSEC !
     _VMRW-IN @ IN.BID @ _VMRW-CTX @ _VMP-DIRENT
     DUP _VMP-DE.EXT1S _VMRW-ESEC !
         _VMP-DE.EXT1C _VMRW-ENSEC !
+    _VMRW-OFF @ _VMRW-OLD @ > IF
+        _VMRW-OLD @ _VMRW-OFF @ _VMRW-OLD @ -
+        _VMRW-IN @ _VMRW-V @ _VMP-ZERO-VISIBLE
+        ?DUP IF 0 SWAP EXIT THEN
+    THEN
     \ If growth failed, retain VFS partial-write semantics.
     _VMRW-NSEC @ _VMRW-ENSEC @ + _VMP-SECTOR *  ( capacity )
     _VMRW-OFF @ _VMRW-LEN @ +  OVER > IF
         \ Clamp to capacity
         _VMRW-OFF @ -  0 MAX  _VMRW-LEN !
     ELSE DROP THEN
-    _VMRW-LEN @ 0= IF  0 EXIT  THEN
     _VMRW-OFF @  _VMRW-POS !
     _VMRW-LEN @  _VMRW-REM !
-    _VMRW-HEAD  _VMRW-FULL  _VMRW-TAIL
-    \ Update dir cache: used_bytes = max(old, offset+len)
-    _VMRW-OFF @ _VMRW-ACT @ +   ( new-end )
-    _VMRW-IN @ IN.BID @  _VMRW-CTX @  _VMP-DIRENT  ( new-end de )
-    DUP _VMP-DE.USED  ROT MAX                       ( de new-used )
-    OVER 28 + L!                                     \ update dir cache
-    DROP                                              \ discard dir entry
-    \ Mark dir dirty
-    -1 _VMRW-CTX @ _VMP-C.DDIR + !
-    \ Update inode size-lo
-    _VMRW-IN @ IN.BID @  _VMRW-CTX @  _VMP-DIRENT  _VMP-DE.USED
-    _VMRW-IN @ IN.SIZE-LO !
-    \ Mark inode dirty
-    VFS-IF-DIRTY  _VMRW-IN @ IN.FLAGS DUP @ ROT OR SWAP !
-    _VMRW-ACT @ ;
+    ['] _VMRW-TRANSFER CATCH _VMRW-IOR !
+    _VMRW-PUBLISH
+    _VMRW-ACT @ _VMRW-IOR @ _VMP-PARTIAL-IOR ;
 
 \ =====================================================================
 \  Sync  ( inode vfs -- ior )
@@ -769,11 +1088,12 @@ VARIABLE _VMSY-CTX
 VARIABLE _VMSY-IN
 
 : _VMP-SYNC  ( inode vfs -- ior )
-    DUP _VMP-READY? 0= IF 2DROP -1 EXIT THEN
+    DUP _VMP-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
     _VMSY-V !  _VMSY-IN !
+    _VMSY-V @ _VMP-IO-V !
     _VMSY-V @ V.BCTX @  _VMSY-CTX !
-    _VMSY-CTX @ 0= IF  -1 EXIT  THEN
-    \ Reflect mutable inode metadata, notably rename, into its stable
+    _VMSY-CTX @ 0= IF VFS-E-BUSY EXIT THEN
+    \ Reflect mutable inode metadata, notably rename, into its current
     \ directory slot before flushing the global cache.
     _VMSY-IN @ DUP 0<> IF
         DUP _VMSY-V @ V.ROOT @ <> IF
@@ -795,17 +1115,17 @@ VARIABLE _VMSY-IN
     _VMSY-CTX @ _VMP-C.DBMAP + @ IF
         _VMSY-CTX @ _VMP-C.BMAP +
         _VMSY-CTX @ _VMP-C.BSTART + @
-        _VMSY-CTX @ _VMP-C.BN + @ _VMP-DISK-WRITE
+        _VMSY-CTX @ _VMP-C.BN + @ _VMP-VOL-WRITE
         ?DUP IF EXIT THEN
     THEN
     \ Write directory if dirty
     _VMSY-CTX @ _VMP-C.DDIR + @ IF
         _VMSY-CTX @ _VMP-C.DIR +
         _VMSY-CTX @ _VMP-C.DIRSTART + @
-        _VMSY-CTX @ _VMP-C.DIRN + @ _VMP-DISK-WRITE
+        _VMSY-CTX @ _VMP-C.DIRN + @ _VMP-VOL-WRITE
         ?DUP IF EXIT THEN
     THEN
-    _VMP-DISK-FLUSH ?DUP IF EXIT THEN
+    _VMP-VOL-FLUSH ?DUP IF EXIT THEN
     0 _VMSY-CTX @ _VMP-C.DBMAP + !
     0 _VMSY-CTX @ _VMP-C.DDIR + !
     0 ;
@@ -834,13 +1154,14 @@ VARIABLE _VMFS-CTX
     LOOP ;
 
 : _VMP-CREATE  ( inode vfs -- ior )
-    DUP _VMP-READY? 0= IF 2DROP -1 EXIT THEN
+    DUP _VMP-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
     _VMCR-V !  _VMCR-IN !
+    _VMCR-V @ _VMP-IO-V !
     _VMCR-V @ V.BCTX @  _VMCR-CTX !
-    _VMCR-IN @ IN.NAME @ _VFS-STR-GET NIP 23 > IF -3 EXIT THEN
+    _VMCR-IN @ IN.NAME @ _VFS-STR-GET NIP 23 > IF VFS-E-NAMETOOLONG EXIT THEN
     \ Find free dir slot
     _VMCR-CTX @ _VMP-FIND-FREE-SLOT  _VMCR-SLOT !
-    _VMCR-SLOT @ -1 = IF  -1 EXIT  THEN  \ directory full
+    _VMCR-SLOT @ -1 = IF VFS-E-NOSPC EXIT THEN  \ directory full
     \ Determine sector allocation
     _VMCR-IN @ IN.TYPE @ VFS-T-DIR = IF
         0 _VMCR-NSEC !   \ directories don't get data sectors
@@ -849,8 +1170,10 @@ VARIABLE _VMFS-CTX
         1 _VMCR-NSEC !
         _VMCR-NSEC @ _VMCR-CTX @  _VMP-FIND-FREE  ( sector | -1 )
         DUP -1 = IF
-            DROP -2 EXIT   \ no space
+            DROP VFS-E-NOSPC EXIT
         THEN
+        DUP _VMCR-NSEC @ _VMCR-CTX @ _VMP-ZERO-RUN
+        ?DUP IF NIP EXIT THEN
         _VMCR-IN @ IN.BDATA !           \ bdata-0 = start_sector
         _VMCR-NSEC @  _VMCR-IN @ IN.BDATA 8 + !  \ bdata-1 = sec_count
         _VMCR-IN @ IN.BDATA @ _VMCR-NSEC @ _VMCR-CTX @ _VMP-RUN-SET
@@ -899,8 +1222,12 @@ VARIABLE _VMDL-V
 VARIABLE _VMDL-CTX
 
 : _VMP-DELETE  ( inode vfs -- ior )
-    DUP _VMP-READY? 0= IF 2DROP -1 EXIT THEN
+    DUP _VMP-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
     _VMDL-V !  _VMDL-IN !
+    \ A directory slot is MP64FS's only persistent identity.  It has no
+    \ generation, so freeing/reusing it while an old FD survives would alias
+    \ that FD to a different file.  Fail before changing either cache.
+    _VMDL-IN @ D.VNODE @ VN.OPEN-REFS @ IF VFS-E-BUSY EXIT THEN
     _VMDL-V @ V.BCTX @  _VMDL-CTX !
     \ Free bitmap sectors in both extents.
     _VMDL-IN @ IN.BDATA @
@@ -933,6 +1260,7 @@ VARIABLE _VMTR-PCOUNT
 VARIABLE _VMTR-ESTART
 VARIABLE _VMTR-ECOUNT
 VARIABLE _VMTR-KEEP-E
+VARIABLE _VMTR-OLD
 
 : _VMP-SHRINK  ( bytes inode vfs -- )
     _VMTR-V ! _VMTR-IN !
@@ -964,10 +1292,18 @@ VARIABLE _VMTR-KEEP-E
     -1 _VMTR-CTX @ _VMP-C.DDIR + ! ;
 
 : _VMP-TRUNCATE  ( inode vfs -- ior )
-    DUP _VMP-READY? 0= IF 2DROP -1 EXIT THEN
+    DUP _VMP-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
     _VMTR-V ! _VMTR-IN !
+    _VMTR-V @ _VMP-IO-V !
+    _VMTR-IN @ IN.BID @ _VMTR-V @ V.BCTX @ _VMP-DIRENT
+    _VMP-DE.USED _VMTR-OLD !
     _VMTR-IN @ IN.SIZE-LO @ _VMTR-IN @ _VMTR-V @ _VMP-ENSURE
     ?DUP IF EXIT THEN
+    _VMTR-IN @ IN.SIZE-LO @ _VMTR-OLD @ > IF
+        _VMTR-OLD @ _VMTR-IN @ IN.SIZE-LO @ _VMTR-OLD @ -
+        _VMTR-IN @ _VMTR-V @ _VMP-ZERO-VISIBLE
+        ?DUP IF EXIT THEN
+    THEN
     _VMTR-IN @ IN.SIZE-LO @ _VMTR-IN @ _VMTR-V @ _VMP-SHRINK
     _VMTR-IN @ IN.BID @ _VMTR-V @ V.BCTX @ _VMP-DIRENT
     _VMTR-IN @ IN.SIZE-LO @ OVER 28 + L!
@@ -976,41 +1312,115 @@ VARIABLE _VMTR-KEEP-E
     0 ;
 
 \ =====================================================================
-\  Teardown  ( vfs -- )
+\  Rename  ( new-a new-u inode new-parent victim flags vfs -- ior )
+\ =====================================================================
+
+VARIABLE _VMRN-A
+VARIABLE _VMRN-U
+VARIABLE _VMRN-IN
+VARIABLE _VMRN-PARENT
+VARIABLE _VMRN-VICTIM
+VARIABLE _VMRN-V
+VARIABLE _VMRN-CTX
+VARIABLE _VMRN-PID
+
+: _VMP-RENAME  ( new-a new-u inode new-parent victim flags vfs -- ior )
+    _VMRN-V ! DROP _VMRN-VICTIM ! _VMRN-PARENT ! _VMRN-IN !
+    _VMRN-U ! _VMRN-A !
+    _VMRN-V @ _VMP-READY? 0= IF VFS-E-BUSY EXIT THEN
+    _VMRN-U @ 0= IF VFS-E-INVALID EXIT THEN
+    _VMRN-U @ 23 > IF VFS-E-NAMETOOLONG EXIT THEN
+    _VMRN-PARENT @ IN.TYPE @ VFS-T-DIR <> IF VFS-E-NOTDIR EXIT THEN
+    _VMRN-PARENT @ _VMRN-V @ V.ROOT @ = IF
+        _VMP-ROOT-PARENT
+    ELSE
+        _VMRN-PARENT @ IN.BID @ DUP _VMP-MAX-FILES >= IF
+            DROP VFS-E-CORRUPT EXIT
+        THEN
+    THEN _VMRN-PID !
+    _VMRN-V @ V.BCTX @ _VMRN-CTX !
+    \ Replacement is safe after all source checks: freeing the victim and
+    \ publishing the source name/parent only dirties the same cached
+    \ metadata transaction that SYNCFS later orders and flushes.
+    _VMRN-VICTIM @ ?DUP IF
+        _VMRN-V @ _VMP-DELETE ?DUP IF EXIT THEN
+    THEN
+    _VMRN-IN @ IN.BID @ _VMRN-CTX @ _VMP-DIRENT
+    24 0 FILL
+    _VMRN-A @
+    _VMRN-IN @ IN.BID @ _VMRN-CTX @ _VMP-DIRENT
+    _VMRN-U @ CMOVE
+    _VMRN-PID @
+    _VMRN-IN @ IN.BID @ _VMRN-CTX @ _VMP-DIRENT 34 + C!
+    -1 _VMRN-CTX @ _VMP-C.DDIR + !
+    0 ;
+
+\ =====================================================================
+\  Unmount and operation-table adapters
+\ =====================================================================
+
+: _VMP-SYNCFS  ( vfs -- ior )       0 SWAP _VMP-SYNC ;
+: _VMP-FSYNC   ( inode vfs -- ior ) _VMP-SYNC ;
+
+VARIABLE _VMP-UM-V
+: _VMP-UNMOUNT  ( flags vfs -- ior )
+    _VMP-UM-V ! DROP
+    _VMP-UM-V @ V.BCTX @ 0= IF 0 EXIT THEN
+    0 _VMP-UM-V @ _VMP-SYNC ?DUP IF EXIT THEN
+    0 _VMP-UM-V @ V.BCTX !
+    0 ;
+
+\ =====================================================================
+\  Validated binding descriptor
+\ =====================================================================
+
+VFS-CAP-PROBE VFS-CAP-MOUNT OR VFS-CAP-UNMOUNT OR
+VFS-CAP-READDIR OR VFS-CAP-OPEN OR VFS-CAP-RELEASE OR
+VFS-CAP-READ OR VFS-CAP-WRITE OR
+VFS-CAP-CREATE OR VFS-CAP-MKDIR OR
+VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR
+VFS-CAP-RENAME OR VFS-CAP-TRUNCATE OR VFS-CAP-GETATTR OR
+VFS-CAP-SYNCFS OR VFS-CAP-FSYNC OR
+VFS-CAP-ATOMIC-RENAME OR VFS-CAP-CROSSDIR-RENAME OR
+VFS-CAP-RENAME-REPLACE OR
+CONSTANT VMP-CAPS
+
+CREATE VMP-OPS  VFS-OPS-SIZE ALLOT
+VMP-OPS VFS-OPS-SIZE 0 FILL
+' _VMP-PROBE-VOLUME VMP-OPS VFS-OP-PROBE    CELLS + !
+' VMP-INIT       VMP-OPS VFS-OP-MOUNT    CELLS + !
+' _VMP-UNMOUNT   VMP-OPS VFS-OP-UNMOUNT  CELLS + !
+' _VMP-READDIR   VMP-OPS VFS-OP-READDIR  CELLS + !
+' _VMP-OPEN      VMP-OPS VFS-OP-OPEN     CELLS + !
+' _VMP-RELEASE   VMP-OPS VFS-OP-RELEASE  CELLS + !
+' _VMP-READ      VMP-OPS VFS-OP-READ     CELLS + !
+' _VMP-WRITE     VMP-OPS VFS-OP-WRITE    CELLS + !
+' _VMP-CREATE    VMP-OPS VFS-OP-CREATE   CELLS + !
+' _VMP-CREATE    VMP-OPS VFS-OP-MKDIR    CELLS + !
+' _VMP-DELETE    VMP-OPS VFS-OP-UNLINK   CELLS + !
+' _VMP-DELETE    VMP-OPS VFS-OP-RMDIR    CELLS + !
+' _VMP-RENAME    VMP-OPS VFS-OP-RENAME   CELLS + !
+' _VMP-TRUNCATE  VMP-OPS VFS-OP-TRUNCATE CELLS + !
+' _VMP-GETATTR   VMP-OPS VFS-OP-GETATTR  CELLS + !
+' _VMP-SYNCFS    VMP-OPS VFS-OP-SYNCFS   CELLS + !
+' _VMP-FSYNC     VMP-OPS VFS-OP-FSYNC    CELLS + !
+
+CREATE VMP-BINDING
+VFS-BINDING-MAGIC ,
+VFS-BINDING-ABI-MAJOR ,
+VFS-BINDING-ABI-MINOR ,
+VFS-BINDING-DESC-SIZE ,
+VFS-OPS-SIZE ,
+VMP-CAPS ,
+VFS-BF-NEEDS-VOLUME ,
+VMP-OPS ,
+0 , 0 ,
+
+\ =====================================================================
+\  Convenience: VMP-NEW  ( arena volume -- vfs ior )
 \ =====================================================================
 \
-\  Flush all dirty caches to disk.  Context memory is reclaimed
-\  when the VFS arena is destroyed.
+\  Create and mount a VFS instance bound to exactly this volume.
 
-: _VMP-TEARDOWN  ( vfs -- )
-    DUP V.BCTX @ 0= IF  DROP EXIT  THEN
-    \ Sync everything
-    0 OVER _VMP-SYNC DROP
-    \ Clear the ctx pointer (arena handles deallocation)
-    0 SWAP V.BCTX ! ;
-
-\ =====================================================================
-\  Vtable
-\ =====================================================================
-
-CREATE VMP-VTABLE  VFS-VT-SIZE ALLOT
-' _VMP-PROBE     VMP-VTABLE  VFS-VT-PROBE    CELLS + !
-' _VMP-INIT      VMP-VTABLE  VFS-VT-INIT     CELLS + !
-' _VMP-TEARDOWN  VMP-VTABLE  VFS-VT-TEARDOWN CELLS + !
-' _VMP-READ      VMP-VTABLE  VFS-VT-READ     CELLS + !
-' _VMP-WRITE     VMP-VTABLE  VFS-VT-WRITE    CELLS + !
-' _VMP-READDIR   VMP-VTABLE  VFS-VT-READDIR  CELLS + !
-' _VMP-SYNC      VMP-VTABLE  VFS-VT-SYNC     CELLS + !
-' _VMP-CREATE    VMP-VTABLE  VFS-VT-CREATE   CELLS + !
-' _VMP-DELETE    VMP-VTABLE  VFS-VT-DELETE    CELLS + !
-' _VMP-TRUNCATE  VMP-VTABLE  VFS-VT-TRUNCATE CELLS + !
-
-\ =====================================================================
-\  Convenience: VMP-NEW  ( arena -- vfs )
-\ =====================================================================
-\
-\  Create a VFS instance pre-wired to the MP64FS binding.
-\  Caller still needs to call VMP-INIT on the returned vfs.
-
-: VMP-NEW  ( arena -- vfs )
-    VMP-VTABLE VFS-NEW ;
+: VMP-NEW  ( arena volume -- vfs ior )
+    VMP-BINDING SWAP VFS-NEW ;

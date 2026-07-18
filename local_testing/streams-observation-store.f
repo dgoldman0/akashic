@@ -334,7 +334,8 @@ VARIABLE _ostc-store-case-a
     STREAMS-OBSERVATION-STORE-SIZE _ostc-store-case-a _ostc-allocate
     VFS-CUR _ostc-old-vfs !
     2097152 A-XMEM ARENA-NEW DUP 0= _ostc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _ostc-vfs ! 0<> _ostc-assert
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _ostc-vfs ! 0<> _ostc-assert
     _ostc-vfs @ VFS-USE
 
     _ostc-test-absent

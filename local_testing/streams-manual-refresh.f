@@ -786,7 +786,8 @@ VARIABLE _smrc-args-expected
         DUP 0= _smrc-assert DROP _smrc-durable-a !
     VFS-CUR _smrc-old-vfs !
     8388608 A-XMEM ARENA-NEW DUP 0= _smrc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP 0<> _smrc-assert DUP _smrc-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP 0<> _smrc-assert DUP _smrc-vfs ! VFS-USE
     _smrc-desk-init
     _STREAMS-COMP-SETUP
     ['] _smrc-factory STREAMS-ONLINE-COMP-SETUP-WITH-CONFIGURED

@@ -635,16 +635,21 @@ VARIABLE _ASHELL-TICK-TMP
 \   VFS descriptor, inode slab, FD pool, string pool, and the
 \   VMP binding context (~28 KiB minimum).
 131072 CONSTANT _ASHELL-VFS-ARENA-SIZE
+CREATE _ASHELL-BLOCK-DEVICE /BLOCK-DEVICE ALLOT
+CREATE _ASHELL-VOLUME /VOLUME ALLOT
 
 : _ASHELL-VFS-INIT  ( -- )
     _ASHELL-VFS @ ?DUP IF  VFS-USE  EXIT  THEN   \ already created
     VFS-CUR ?DUP IF  DUP _ASHELL-VFS !  VFS-USE  EXIT  THEN  \ someone else set it
+    _ASHELL-BLOCK-DEVICE BD-OPEN
+    ABORT" ashell: block device open failed"
+    _ASHELL-BLOCK-DEVICE _ASHELL-VOLUME VOL-RAW
+    ABORT" ashell: raw volume init failed"
     _ASHELL-VFS-ARENA-SIZE A-XMEM ARENA-NEW
     ABORT" ashell: VFS arena alloc failed"
                                            ( arena )
-    VMP-NEW                                ( vfs )
-    DUP VMP-INIT
-    ABORT" ashell: VMP-INIT failed"
+    _ASHELL-VOLUME VMP-NEW                 ( vfs ior )
+    ABORT" ashell: VMP mount failed"       ( vfs )
     _ASHELL-VFS !                      \ VFS-USE already called by VFS-NEW
 ;
 

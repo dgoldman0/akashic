@@ -71,13 +71,19 @@ the commit point, no marker means the visible target wins and any remaining
 backup is cleanup state.
 
 This ordering is not a claim that the underlying filesystem is power-loss
-atomic. MP64FS writes its cached bitmap and directory regions separately, so
-a torn sector or corrupt filesystem metadata can still require lower-level
-repair. Its successful `VFS-SYNC` now means those checked metadata writes were
-confirmed and the backend FLUSH durability operation succeeded; failure keeps
-the binding dirty and prevents the protocol from advancing its commit point.
-Above that real lower boundary, the primitive guarantees checked writes and a
-deterministic recovery policy for every state it publishes.
+atomic. `VFS-SYNC` dispatches the selected binding's `SYNCFS` operation. A
+disk-backed binding owns the durability semantics of `SYNCFS`, per-file
+`FSYNC`, and lifecycle `UNMOUNT`; each successful durability path must finish
+at a successful `VOL-FLUSH`. MP64FS writes its cached bitmap and directory
+regions separately, so a torn sector or corrupt filesystem metadata can still
+require lower-level repair. A failed write or flush keeps the binding dirty
+and prevents the protocol from advancing its commit point.
+
+`VFS-RAM-BINDING` deliberately implements `SYNCFS`, `FSYNC`, and `UNMOUNT` as
+a no-op durability boundary. RAM-backed fixtures therefore verify ordering,
+error propagation, and recovery decisions, not persistence across power loss.
+Above the binding-owned lower boundary, the primitive guarantees checked
+writes and a deterministic recovery policy for every state it publishes.
 
 ## Recovery states
 

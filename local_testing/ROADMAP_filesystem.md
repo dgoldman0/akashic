@@ -1,5 +1,16 @@
 # Filesystem Support — Roadmap
 
+> **Historical planning record.**  The phase sketches below preserve the
+> original design trail and contain superseded layouts, stack effects, and
+> capability goals.  They are not the current VFS or storage contract.  The
+> implemented ABI-1 contract is documented in `docs/utils/fs/vfs.md`; current
+> MP64FS and FAT behavior is documented in
+> `docs/utils/fs/drivers/vfs-mp64fs.md` and
+> `docs/utils/fs/drivers/vfs-fat.md`.  In particular, disk bindings now take an
+> explicit generation-bound volume, MP64FS is read/write, FAT is deliberately
+> read-only, and the former raw ten-XT binding table is no longer a runtime
+> interface.
+
 Extended filesystem support for KDOS / Megapad-64.  Read (and where
 useful, write) foreign filesystem images via the existing generic
 block device, plus a VFS dispatch layer that unifies access through
@@ -132,6 +143,12 @@ Plus Higher-level KDOS helpers:
 | `DISK?` | ( -- flag ) | Is disk present? |
 | `B.LOAD` | ( desc sector -- ) | DMA read into buffer descriptor |
 | `B.SAVE` | ( desc sector -- ) | DMA write from buffer descriptor |
+
+These `DISK-*` words describe the historical controller-facing BIOS layer.
+They remain below the block-device and volume abstractions; current filesystem
+bindings do not call them directly.  Production VFS media I/O is always issued
+against the VFS instance's attached volume through `VOL-READ`, `VOL-WRITE`, and
+`VOL-FLUSH`.
 
 ### KDOS File Abstraction
 
@@ -272,13 +289,13 @@ binding implements the actual byte transfer.
               └────────┬────────┘───────────────────┘
                        │
             ┌──────────▼─────────────┐
-            │  Sector I/O Layer      │
-            │  DISK-SEC!  DISK-DMA!  │  ← global hardware,
-            │  DISK-N!   DISK-READ   │    shared by bindings
-            │  DISK-WRITE            │
+            │  Attached Volume       │
+            │  VOL-READ  VOL-WRITE   │  ← range-checked,
+            │  VOL-FLUSH             │    generation-bound
             └──────────┬─────────────┘
             ┌──────────▼─────────────┐
-            │  Storage MMIO Device   │
+            │ Block-device/controller│
+            │ adapter + storage MMIO │  ← lower-level DISK-* BIOS
             └────────────────────────┘
 
      Optional convenience layer:
@@ -326,21 +343,23 @@ stores, test fixtures, IPC buffers, cryptographic vault trees).
 ### 0.1 VFS Instance Lifecycle
 
 ```forth
-VFS-NEW      ( arena vtable -- vfs )
+VFS-NEW      ( arena binding volume -- vfs ior )
 VFS-DESTROY  ( vfs -- )
 VFS-USE      ( vfs -- )          \ set as current context
 VFS-CUR      ( -- vfs )          \ read current context
 ```
 
 `VFS-NEW` carves a VFS instance from the given KDOS arena.  The
-`vtable` is the binding's dispatch table (§0.7); pass
-`VFS-RAM-VTABLE` for a pure ramdisk with no backing store.  The
-returned `vfs` is a single cell — an address — passable, storable
-in a `CONSTANT` or `VARIABLE`, handed to any word.
+ABI-1 binding descriptor supplies metadata, capabilities, flags, and an
+operation-table pointer (§0.7). Pass `VFS-RAM-BINDING 0` for a pure ramdisk
+with no backing volume. Disk bindings set `VFS-BF-NEEDS-VOLUME` and require a
+validated volume object. On success `ior` is zero and `vfs` is a single-cell
+address passable, storable in a `CONSTANT` or `VARIABLE`, and handed to any
+VFS word.
 
-`VFS-DESTROY` flushes dirty state via the binding's sync xt, then
-frees the arena.  All inodes, FDs, and strings are reclaimed in
-bulk — no per-object teardown.
+`VFS-DESTROY` force-dispatches the binding's `UNMOUNT` operation, then frees
+the arena. Disk bindings own the final flush at that lifecycle boundary. All
+inodes, FDs, and strings are reclaimed in bulk — no per-object teardown.
 
 `VFS-USE` / `VFS-CUR` follow the DOM's `DOM-USE` / `DOM-DOC`
 pattern: a `VARIABLE _VFS-CUR` holds the active instance, and
@@ -352,22 +371,32 @@ provided.
 
 | Offset | Size | Field | Notes |
 |--------|------|-------|-------|
-| +0 | cell | vtable | 10 binding xts (§0.7) |
+| +0 | cell | binding | Validated ABI-1 binding descriptor (§0.7) |
 | +8 | cell | flags | RO, dirty, mounted, … |
 | +16 | cell | inode-slab-head | First slab page (§0.2) |
 | +24 | cell | inode-free | Free-list head across slab pages |
 | +32 | cell | inode-count | Live (allocated) inodes |
 | +40 | cell | inode-hwm | High-water mark for eviction policy |
 | +48 | cell | fd-pool | Pre-allocated FD slot array (§0.3) |
-| +56 | cell | fd-max | Number of FD slots |
-| +64 | cell | root-inode | Root directory inode |
-| +72 | cell | cwd-inode | Current working directory |
-| +80 | cell | str-pool | String pool base (bump + refcount) |
-| +88 | cell | str-ptr | Next free byte in string pool |
-| +96 | cell | str-end | String pool limit |
-| +104 | cell | binding-ctx | Opaque pointer — binding's private state |
-| +112 | cell | arena | Back-pointer to owning arena |
-= 120 bytes (15 cells)
+| +56 | cell | fd-free | Free-list head for descriptors |
+| +64 | cell | fd-max | Number of FD slots |
+| +72 | cell | root-inode | Root directory inode |
+| +80 | cell | cwd-inode | Current working directory |
+| +88 | cell | str-base | String pool base |
+| +96 | cell | str-ptr | Next free byte in string pool |
+| +104 | cell | str-end | String pool limit |
+| +112 | cell | binding-ctx | Opaque pointer — binding's private state |
+| +120 | cell | arena | Back-pointer to owning arena |
+| +128 | cell | volume | Explicit attached volume, or zero for RAM |
+| +136 | cell | volume-cookie | Immutable attachment identity |
+| +144 | cell | media-generation | Generation captured at mount |
+| +152 | cell | last-ior | Last structured backend result |
+| +160 | cell | lifecycle | New, mounted, unmounting, unmounted, or stale |
+| +168 | cell | open-count | Live file descriptor count |
+| +176 | cell | vnode-free | Reusable vnode records |
+| +184 | cell | vnode-count | Live vnode records |
+| +192 | 2 cells | reserved | ABI growth space |
+= 208 bytes (26 cells)
 
 Creation allocates the descriptor, the initial inode slab page,
 the FD pool, the string pool, and a root directory inode (type
@@ -582,51 +611,46 @@ types, and sizes.  If `children-loaded` is clear, it calls
 
 **VFS-MKDIR / VFS-MKFILE / VFS-RM** operate on the in-memory tree.
 They allocate / free inodes, update the parent's child list, and
-call the binding's `xt-sync` to persist the mutation.  For a
-ramdisk binding, `xt-sync` is a no-op.
+dispatch the binding's typed structural operation (`CREATE`, `MKDIR`,
+`UNLINK`, or `RMDIR`). For a ramdisk these callbacks only maintain arena
+state; a disk binding records the corresponding on-media mutation.
 
-**Mutation notifications:**  After any structural change (create,
-delete, rename), the abstract layer calls:
+**Durability notifications:** Callers establish a filesystem-wide barrier
+with:
 
 ```
-xt-sync   ( inode vfs -- ior )
+VFS-SYNC  ( vfs -- ior )
+VFS-FSYNC ( fd -- ior )
 ```
 
-The binding decides what to write back (directory entry, bitmap,
-FAT chain, journal record, etc.).  The abstract layer marks the
-inode clean after a successful sync.
+These dispatch `SYNCFS` and `FSYNC`. A disk binding decides what to write back
+(directory entries, bitmaps, allocation chains, journals, and data) and ends
+successful durability paths at `VOL-FLUSH`. `VFS-RAM-BINDING` exposes the same
+barriers as successful no-ops because it has no persistent medium.
 
 ### 0.7 Binding Contract
 
-A binding is a separate module that provides a **vtable** — a
-table of 10 execution tokens — and optionally a `binding-ctx`
-initialization word.  The vtable is passed to `VFS-NEW` and
-stored in the VFS descriptor.  The binding's xts are the only
-code that touches the backing store.
+A binding is a separate module that provides an immutable 80-byte ABI-1
+descriptor and a 27-slot operation table. The descriptor carries magic,
+major/minor ABI versions, descriptor/ops sizes, capability and binding flags,
+the operation-table pointer, and an optional name. `VFS-NEW` validates this
+descriptor before storing it in the VFS instance. Unsupported operations have
+both a clear capability bit and a zero execution-token slot.
 
-**Vtable layout (10 cells = 80 bytes):**
+The canonical slots are `PROBE`, `MOUNT`, `UNMOUNT`, `LOOKUP`, `READDIR`,
+`OPEN`, `RELEASE`, `READ`, `WRITE`, `CREATE`, `MKDIR`, `UNLINK`, `RMDIR`,
+`RENAME`, `TRUNCATE`, `GETATTR`, `SETATTR`, `LINK`, `SYMLINK`, `READLINK`,
+`SYNCFS`, `FSYNC`, the four xattr operations, and `STATFS`. Data callbacks
+return `( actual ior )`; mutation and lifecycle callbacks return a structured
+`ior`. Read-only and volume requirements are descriptor flags/capabilities,
+not aborting stub slots.
 
-| Index | xt Signature | Function |
-|-------|-------------|----------|
-| 0 | `( sector-0-buf vfs -- flag )` | **probe**: given sector 0 from a block device, return true if this binding recognises the format |
-| 1 | `( vfs -- ior )` | **init**: read superblock / header, populate binding-ctx, create root inode's children (or defer to readdir) |
-| 2 | `( vfs -- )` | **teardown**: flush dirty state, free binding-ctx resources |
-| 3 | `( buf len offset inode vfs -- actual )` | **read**: read `len` bytes at `offset` from the file represented by `inode` into `buf` |
-| 4 | `( buf len offset inode vfs -- actual )` | **write**: write `len` bytes at `offset` to the file represented by `inode` from `buf` |
-| 5 | `( inode vfs -- )` | **readdir**: populate the children of a directory inode (lazy load) |
-| 6 | `( inode vfs -- ior )` | **sync**: write back a dirty inode (and its associated on-disk structures) to the backing store |
-| 7 | `( inode vfs -- ior )` | **create**: allocate on-disk structures for a newly created inode (dir entry, clusters, bitmap, …) |
-| 8 | `( inode vfs -- ior )` | **delete**: free on-disk structures for a removed inode |
-| 9 | `( inode vfs -- ior )` | **truncate**: resize / free data extents when file size changes |
-
-Read-only bindings set xts 4, 7, 8, 9 to `_VFS-RO-STUB` which
-aborts with "read-only filesystem".
-
-**Ramdisk vtable (`VFS-RAM-VTABLE`):** Provided by `vfs.f` itself.
-`read` and `write` copy bytes from/to an arena-allocated content
-buffer stored in `binding-data`.  `readdir`, `sync`, `create`,
-`delete` are no-ops or trivial arena operations.  No external
-dependency.
+**Ramdisk binding (`VFS-RAM-BINDING`):** Provided by `vfs.f` itself. Its
+`VFS-RAM-OPS` table copies bytes from/to arena-allocated content buffers and
+implements the in-memory namespace. It does not require a volume. Shared
+descriptors and operation tables are immutable; tests that inject callbacks
+copy both into private storage and point the copied descriptor at the copied
+operation table.
 
 **Binding context (`binding-ctx`):**  The binding allocates its own
 private state — superblock cache, sector buffer, FAT table cache,
@@ -712,15 +736,16 @@ binding, split cleanly from the abstract layer.
 - **init:** Read superblock, bitmap, directory sectors into
   `binding-ctx`.  Create inode stubs for root directory entries
   (name + binding-id = dir slot index; children populated lazily).
-- **read:** Translate inode `binding-data` (start sector +
-  extent info) into `DISK-SEC!` / `DISK-DMA!` / `DISK-READ`
-  calls.  Handle multi-extent files.
-- **write:** Same translation for writes.  Update bitmap for
-  new allocation.  Mark inode dirty.
+- **read:** Translate inode `binding-data` (start sector + extent info) into
+  volume-relative LBAs and call `VOL-READ`.  Handle multi-extent files without
+  bypassing the volume's bounds and media-generation checks.
+- **write:** Use `VOL-WRITE` for the same volume-relative translation.  Update
+  the bitmap for new allocation and mark the inode dirty.
 - **readdir:** For subdirectory inodes, scan the MP64FS directory
   table for entries whose parent slot matches the inode's
   `binding-id`.
-- **sync:** Write back dirty directory entries, bitmap, superblock.
+- **sync:** Write back dirty directory entries, bitmap, and superblock through
+  the attached volume, then complete the durability path with `VOL-FLUSH`.
 - **create / delete:** Allocate / free directory slots + data
   sectors via the existing MP64FS bitmap logic.
 - **teardown:** Flush all dirty state, free `binding-ctx`.
@@ -728,9 +753,8 @@ binding, split cleanly from the abstract layer.
 After Phase 0, the boot sequence becomes:
 
 ```forth
-my-arena VMP-VTABLE VFS-NEW CONSTANT boot-vfs
+my-arena my-volume VMP-NEW THROW CONSTANT boot-vfs
 boot-vfs VFS-USE
-boot-vfs VMP-INIT              \ binding reads disk, populates root
 boot-vfs S" /" VMNT-MOUNT      \ register in mount table
 
 \ existing code works unchanged through VMNT-OPEN:
@@ -1414,7 +1438,7 @@ inode/zone concepts useful for ext2).
 
 | Step | Deliverable | Est. Lines | Depends On |
 |------|-------------|------------|------------|
-| 1 | VFS driver vtable + registration | ~30 | — |
+| 1 | VFS binding descriptor, ops table, and registration | ~30 | — |
 | 2 | MOUNT / UMOUNT + mount table | ~40 | Step 1 |
 | 3 | FD pool + VFS-aware OPEN/FREAD/FWRITE/FCLOSE | ~50 | Step 2 |
 | 4 | MP64FS retrofit as VFS driver | ~30 | Step 3 |

@@ -73,6 +73,8 @@ REQUIRE utils/fs/drivers/vfs-mp64fs.f
 VARIABLE _llf-fails
 VARIABLE _llf-checks
 VARIABLE _llf-vfs
+CREATE _llf-bd /BLOCK-DEVICE ALLOT
+CREATE _llf-volume /VOLUME ALLOT
 VARIABLE _llf-expected
 VARIABLE _llf-input-a
 VARIABLE _llf-input-u
@@ -217,9 +219,11 @@ CREATE _llf-store LIBRARY-VFS-STORE-SIZE ALLOT
     _llf-managed-key LIB-OPERATION-KEY-SIZE 0x51 FILL
     _llf-capture-key LIB-OPERATION-KEY-SIZE 0x62 FILL
     _llf-collection-key LIB-OPERATION-KEY-SIZE 0x73 FILL
+    _llf-bd BD-OPEN THROW
+    _llf-bd _llf-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -7801 THROW THEN
-    VMP-NEW DUP _llf-vfs ! DUP 0<> _llf-assert
-    DUP VMP-INIT 0= _llf-assert VFS-USE
+    _llf-volume VMP-NEW ?DUP IF THROW THEN
+    DUP _llf-vfs ! DUP 0<> _llf-assert VFS-USE
     _llf-vfs @ _llf-store LIBRARY-VFS-STORE-INIT
         LIBSTORE-S-OK = _llf-assert
     _llf-store LIBRARY-VFS-STORE-LOAD
@@ -273,6 +277,8 @@ REQUIRE utils/fs/drivers/vfs-mp64fs.f
 VARIABLE _llc-fails
 VARIABLE _llc-checks
 VARIABLE _llc-vfs
+CREATE _llc-bd /BLOCK-DEVICE ALLOT
+CREATE _llc-volume /VOLUME ALLOT
 VARIABLE _llc-status
 VARIABLE _llc-required
 
@@ -393,9 +399,11 @@ CREATE _llc-store LIBRARY-VFS-STORE-SIZE ALLOT
     0 _llc-fails ! 0 _llc-checks !
     _llc-managed-key LIB-OPERATION-KEY-SIZE 0x51 FILL
     _llc-capture-key LIB-OPERATION-KEY-SIZE 0x62 FILL
+    _llc-bd BD-OPEN THROW
+    _llc-bd _llc-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -7802 THROW THEN
-    VMP-NEW DUP _llc-vfs ! DUP 0<> _llc-assert
-    DUP VMP-INIT 0= _llc-assert VFS-USE
+    _llc-volume VMP-NEW ?DUP IF THROW THEN
+    DUP _llc-vfs ! DUP 0<> _llc-assert VFS-USE
     _llc-vfs @ _llc-store LIBRARY-VFS-STORE-INIT
         LIBSTORE-S-OK = _llc-assert
     _llc-store LIBRARY-VFS-STORE-LOAD LIBSTORE-S-OK = _llc-assert

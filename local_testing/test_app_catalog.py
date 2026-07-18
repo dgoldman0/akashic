@@ -60,8 +60,14 @@ def main() -> int:
             "CREATE _CTCOMP COMP-DESC ALLOT CREATE _CTAPP APP-DESC ALLOT",
             "CREATE _CPCOMP COMP-DESC ALLOT CREATE _CPAPP APP-DESC ALLOT",
             "CREATE _CBUF ACAT-FILE-MAX 1+ ALLOT",
-            ": CT-VFS-NEW 1048576 A-XMEM ARENA-NEW IF -1 THROW THEN "
-            "VFS-RAM-VTABLE VFS-NEW ;",
+            "CREATE _CT-OPS VFS-OPS-SIZE ALLOT",
+            "CREATE _CT-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+            ": CT-BINDING-RESET VFS-RAM-OPS _CT-OPS VFS-OPS-SIZE CMOVE "
+            "VFS-RAM-BINDING _CT-BINDING VFS-BINDING-DESC-SIZE CMOVE "
+            "_CT-OPS _CT-BINDING VB.OPS ! ;",
+            ": CT-VFS-NEW CT-BINDING-RESET "
+            "1048576 A-XMEM ARENA-NEW IF -1 THROW THEN "
+            "_CT-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;",
             ": CT-DESCS "
             "_CTCOMP COMP-DESC-INIT "
             'S" org.test.builtin" _CTCOMP COMP.ID-U ! _CTCOMP COMP.ID-A ! '
@@ -83,7 +89,7 @@ def main() -> int:
             ": CT-PKG3 "
             'S" org.test.package" S" Package three" S" 3.0" '
             'S" /pkg/app-v3.toml" 0 _CC1 @ ACAT-UPSERT-PACKAGE ;',
-            ": CT-FAIL-SYNC 2DROP -1 ;",
+            ": CT-FAIL-SYNC DROP -1 ;",
             ": CT-RESOLVE 2DROP _CPAPP ACAT-S-OK ;",
             ": CT-RELEASE DROP _CPAPP = IF 1 _CREL-N +! THEN ;",
             'S" CATRESULT " TYPE '
@@ -104,18 +110,18 @@ def main() -> int:
             "TYPE SPACE "
             'S" org.test.package" _CC1 @ ACAT-FIND-ID '
             "0 SWAP _CC1 @ ACAT-MARK-SLOT "
-            "' CT-FAIL-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + ! "
+            "' CT-FAIL-SYNC _CT-OPS VFS-OP-SYNCFS CELLS + ! "
             "CT-PKG3 . "
-            "' _VFS-RAM-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + ! "
+            "' _VFS-RAM-SYNCFS _CT-OPS VFS-OP-SYNCFS CELLS + ! "
             'S" org.test.package" _CC1 @ ACAT-FIND-ID ACE-TITLE$ '
             "TYPE SPACE "
             "' CT-RESOLVE 123 _CC1 @ ACAT-RESOLVER! "
             "' CT-RELEASE 456 _CC1 @ ACAT-RELEASER! "
             'S" org.test.package" _CC1 @ ACAT-FIND-ID _CC1 @ '
             "ACAT-RESOLVE SWAP _CPAPP = . . "
-            "' CT-FAIL-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + ! "
+            "' CT-FAIL-SYNC _CT-OPS VFS-OP-SYNCFS CELLS + ! "
             "CT-PKG3 . "
-            "' _VFS-RAM-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + ! "
+            "' _VFS-RAM-SYNCFS _CT-OPS VFS-OP-SYNCFS CELLS + ! "
             "_CREL-N @ . "
             'S" org.test.package" _CC1 @ ACAT-FIND-ID _CC1 @ '
             "ACAT-RESOLVE SWAP _CPAPP = . . "

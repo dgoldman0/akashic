@@ -32,6 +32,8 @@ VARIABLE _dsl-fails
 VARIABLE _dsl-checks
 VARIABLE _dsl-depth
 VARIABLE _dsl-vfs
+CREATE _dsl-bd /BLOCK-DEVICE ALLOT
+CREATE _dsl-volume /VOLUME ALLOT
 VARIABLE _dsl-context
 VARIABLE _dsl-creg
 VARIABLE _dsl-rreg
@@ -125,8 +127,10 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     42 _dsl-head PHEAD.CURRENT-ROOT _dsl-id!
     71 _dsl-rid _dsl-id!
 
+    _dsl-bd BD-OPEN THROW
+    _dsl-bd _dsl-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
-    VMP-NEW DUP _dsl-vfs ! DUP VMP-INIT 0= _dsl-assert VFS-USE
+    _dsl-volume VMP-NEW ?DUP IF THROW THEN DUP _dsl-vfs ! VFS-USE
 
     77 CTX-NEW DUP 0= _dsl-assert DROP _dsl-context !
     _dsl-head _dsl-context @ CTX.PRACTICE !

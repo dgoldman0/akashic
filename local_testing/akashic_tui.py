@@ -683,7 +683,8 @@ CREATE _ts-bad 8 ALLOT
     _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
 
     524288 A-XMEM ARENA-NEW DUP 0= _ts-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _ts-other-vfs ! DROP
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _ts-other-vfs ! DROP
 
     _ts-fault-begin ['] _ts-throw-encode-size _AVFS-ENCODE-SIZE-XT !
     _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
@@ -798,7 +799,7 @@ CREATE _ts-bad 8 ALLOT
     0 _ts-fails ! 0 _ts-checks ! DEPTH _ts-depth !
     524288 A-XMEM ARENA-NEW
     DUP 0= _ts-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _ts-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _ts-vfs ! VFS-USE
     ACONV-NEW DUP 0= _ts-assert DROP _ts-conv !
 
     AROLE-USER AMSG-S-COMPLETE 1 S" first durable message"
@@ -966,7 +967,7 @@ VARIABLE _ap-msg
 : _ap-run  ( -- )
     0 _ap-fails ! 0 _ap-checks ! DEPTH _ap-depth !
     524288 A-XMEM ARENA-NEW DUP 0= _ap-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _ap-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _ap-vfs ! VFS-USE
 
     _ap-open 2 _ap-pump
     _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ap-assert
@@ -4884,7 +4885,7 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _op-runtime @ ARUNTIME-REMOTE-VERIFIED? 0= _op-assert
     ." [openai-provider] runtime-new" CR
     524288 A-XMEM ARENA-NEW DUP 0= _op-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _op-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _op-vfs ! VFS-USE
     _op-vfs @ AVFSSTORE-NEW
     DUP ACSTORE-S-OK = _op-assert DROP DUP _op-store !
     _op-runtime @ ARUNTIME-CONVERSATION-STORE!
@@ -8218,7 +8219,7 @@ VARIABLE _pc-first-epoch
 
 : _pc-activation-run  ( -- )
     524288 A-XMEM ARENA-NEW DUP 0= _pc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _pc-avfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _pc-avfs ! VFS-USE
     _pc-ahead PHEAD-INIT
     31 _pc-ahead PHEAD.ID _pc-id!
     41 _pc-ahead PHEAD.CURRENT-ROOT _pc-id!
@@ -8291,7 +8292,7 @@ VARIABLE _pc-first-epoch
 
 : _pc-persist-run  ( -- )
     524288 A-XMEM ARENA-NEW DUP 0= _pc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _pc-pvfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _pc-pvfs ! VFS-USE
     _pc-persist-head PHEAD-INIT
     11 _pc-persist-head PHEAD.ID _pc-id!
     22 _pc-persist-head PHEAD.CURRENT-ROOT _pc-id!
@@ -10210,6 +10211,8 @@ VARIABLE _pc-fails VARIABLE _pc-checks VARIABLE _pc-depth
 CREATE _pc-state _PAD-STATE-SIZE ALLOT
 CREATE _pc-io 128 ALLOT
 CREATE _pc-desc APP-DESC ALLOT
+CREATE _pc-ops VFS-OPS-SIZE ALLOT
+CREATE _pc-binding VFS-BINDING-DESC-SIZE ALLOT
 VARIABLE _pc-vfs VARIABLE _pc-other-vfs VARIABLE _pc-screen VARIABLE _pc-rgn
 VARIABLE _pc-a VARIABLE _pc-u VARIABLE _pc-pa VARIABLE _pc-pu
 VARIABLE _pc-fd VARIABLE _pc-calls VARIABLE _pc-orig VARIABLE _pc-loaded
@@ -10248,11 +10251,11 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     2DUP _pc-a @ _pc-u @ COMPARE 0= >R
     DROP FREE R> ;
 
-: _pc-zero-read  ( buf len offset inode vfs -- actual )
-    2DROP 2DROP DROP 1 _pc-calls +! 0 ;
-: _pc-throw-read  ( buf len offset inode vfs -- actual )
+: _pc-zero-read  ( buf len offset inode vfs -- actual ior )
+    2DROP 2DROP DROP 1 _pc-calls +! 0 0 ;
+: _pc-throw-read  ( buf len offset inode vfs -- actual ior )
     2DROP 2DROP DROP 1 _pc-calls +! -91 THROW ;
-: _pc-fail-sync  ( inode vfs -- ior ) 2DROP -1 ;
+: _pc-fail-sync  ( vfs -- ior ) DROP -1 ;
 : _pc-close-after  ( fd -- )
     VFS-CLOSE 1 _pc-close-calls +! -92 THROW ;
 : _pc-use-after  ( vfs -- )
@@ -10276,7 +10279,10 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _pc-state _PAD-STATE-SIZE 0 FILL
     _pc-state _PAD-CURRENT-STATE !
     524288 A-XMEM ARENA-NEW IF -1 THROW THEN
-    VFS-RAM-VTABLE VFS-NEW DUP _pc-vfs ! VFS-USE
+    VFS-RAM-OPS _pc-ops VFS-OPS-SIZE CMOVE
+    VFS-RAM-BINDING _pc-binding VFS-BINDING-DESC-SIZE CMOVE
+    _pc-ops _pc-binding VB.OPS !
+    _pc-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _pc-vfs ! VFS-USE
     _pc-vfs @ _PAD-VFS !
     _pc-vfs @ _PAD-REPL VREPL-INIT VREPL-S-OK = _pc-assert
     ['] VFS-CLOSE _PAD-LOAD-CLOSE-XT !
@@ -10357,18 +10363,18 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     65537 ALLOCATE IF -2 THROW THEN DUP >R 65537 88 FILL
     R@ 65537 S" /huge.txt" _pc-put R> FREE
     _PAD-ACTIVE @ _pc-orig ! 0 _pc-calls !
-    ['] _pc-zero-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _pc-zero-read _pc-ops VFS-OP-READ CELLS + !
     S" /huge.txt" _PAD-OPEN-PATH -4 = _pc-assert
-    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _VFS-RAM-READ _pc-ops VFS-OP-READ CELLS + !
     _pc-calls @ 0= _pc-assert
     _PAD-ACTIVE @ _pc-orig @ = _pc-assert
     S" keep" _pc-text= _pc-assert
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pc-assert
 
     S" short" S" /short.txt" _pc-put 0 _pc-calls !
-    ['] _pc-zero-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _pc-zero-read _pc-ops VFS-OP-READ CELLS + !
     S" /short.txt" _PAD-OPEN-PATH -5 = _pc-assert
-    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _VFS-RAM-READ _pc-ops VFS-OP-READ CELLS + !
     _pc-calls @ 0> _pc-assert
     _PAD-ACTIVE @ _pc-orig @ = _pc-assert
     S" keep" _pc-text= _pc-assert
@@ -10395,16 +10401,16 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     \ caller's active-VFS selector is restored even when it names another VFS.
     _pc-vfs @ VFS-USE S" throw" S" /throw.txt" _pc-put
     524288 A-XMEM ARENA-NEW IF -3 THROW THEN
-    VFS-RAM-VTABLE VFS-NEW _pc-other-vfs !
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _pc-other-vfs !
     _pc-vfs @ V.FDFREE @ _pc-fdfree !
     HEAP-FREE-BYTES _pc-heap !
     _pc-xmem-avail _pc-xmem !
     _PAD-ARENA @ ARENA-USED _pc-arena-used !
     0 _pc-calls !
-    ['] _pc-throw-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _pc-throw-read _pc-ops VFS-OP-READ CELLS + !
     _pc-other-vfs @ VFS-USE
     S" /throw.txt" _PAD-OPEN-PATH -7 = _pc-assert
-    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _VFS-RAM-READ _pc-ops VFS-OP-READ CELLS + !
     _pc-calls @ 0> _pc-assert
     VFS-CUR _pc-other-vfs @ = _pc-assert
     _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
@@ -10464,12 +10470,12 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     \ A specific primary transfer result wins over a later restoration
     \ THROW, while cleanup still restores the selector and all ownership.
     0 _pc-calls ! 0 _pc-use-calls ! 2 _pc-use-throw-at !
-    ['] _pc-zero-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _pc-zero-read _pc-ops VFS-OP-READ CELLS + !
     ['] _pc-use-after _PAD-LOAD-USE-XT !
     _pc-other-vfs @ VFS-USE
     S" /short.txt" _PAD-OPEN-PATH -5 = _pc-assert
     ['] VFS-USE _PAD-LOAD-USE-XT !
-    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _VFS-RAM-READ _pc-ops VFS-OP-READ CELLS + !
     _pc-calls @ 0> _pc-assert _pc-use-calls @ 2 = _pc-assert
     _PIO-CLEANUP-THROW @ -93 = _pc-assert
     VFS-CUR _pc-other-vfs @ = _pc-assert
@@ -10481,9 +10487,9 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     S" old" S" /save.txt" _pc-put
     S" new" _PAD-TXTA @ TXTA-SET-TEXT
     -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
-    ['] _pc-fail-sync VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !
+    ['] _pc-fail-sync _pc-ops VFS-OP-SYNCFS CELLS + !
     S" /save.txt" _PAD-SAVE-CURRENT-AS 0<> _pc-assert
-    ['] _VFS-RAM-SYNC VFS-RAM-VTABLE VFS-VT-SYNC CELLS + !
+    ['] _VFS-RAM-SYNCFS _pc-ops VFS-OP-SYNCFS CELLS + !
     S" old" S" /save.txt" _pc-file= _pc-assert
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pc-assert
     S" /save.txt" _PAD-SAVE-CURRENT-AS 0= _pc-assert
@@ -10520,10 +10526,10 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _pc-xmem-avail _pc-xmem !
     _PAD-ARENA @ ARENA-USED _pc-arena-used !
     0 _pc-calls !
-    ['] _pc-throw-read VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _pc-throw-read _pc-ops VFS-OP-READ CELLS + !
     _pc-other-vfs @ VFS-USE
     32 0 DO S" /throw.txt" _PAD-OPEN-PATH -7 = _pc-assert LOOP
-    ['] _VFS-RAM-READ VFS-RAM-VTABLE VFS-VT-READ CELLS + !
+    ['] _VFS-RAM-READ _pc-ops VFS-OP-READ CELLS + !
     _pc-calls @ 32 = _pc-assert
     VFS-CUR _pc-other-vfs @ = _pc-assert
     _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
@@ -10735,7 +10741,7 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     0 _pr-fails ! 0 _pr-checks ! 0 _pr-request ! 0 _pr-ext-request !
     0 _pr-service-mode ! DEPTH _pr-depth !
     524288 A-XMEM ARENA-NEW IF -201 THROW THEN
-    VFS-RAM-VTABLE VFS-NEW DUP _pr-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _pr-vfs ! VFS-USE
     S" # Daybook\n" S" /daybook.md" _pr-put
 
     _pr-head PHEAD-INIT
@@ -11000,8 +11006,10 @@ VARIABLE _dt-fails
 VARIABLE _dt-checks
 VARIABLE _dt-depth
 VARIABLE _dt-inst
+VARIABLE _dt-vfs
+VARIABLE _dt-old-vfs
 VARIABLE _dt-fd
-VARIABLE _dt-old-vtable
+VARIABLE _dt-old-binding
 VARIABLE _dt-read-calls
 VARIABLE _dt-close-calls
 VARIABLE _dt-use-calls
@@ -11010,7 +11018,8 @@ VARIABLE _dt-fd-next
 VARIABLE _dt-close-prompt
 VARIABLE _dt-close-rgn
 CREATE _dt-big _DB-IO-CAP 1+ ALLOT
-CREATE _dt-vtable VFS-VT-SIZE ALLOT
+CREATE _dt-ops VFS-OPS-SIZE ALLOT
+CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 
 : _dt-assert  ( flag -- )
     1 _dt-checks +!
@@ -11032,17 +11041,19 @@ CREATE _dt-vtable VFS-VT-SIZE ALLOT
     _DB-K-TASK 0 2026 7 10 DT-YMD>EPOCH -1 S" sentinel" _DB-ADD
     0= _dt-assert
     -1 _DB-DIRTY ! ;
-: _dt-short-read  ( buf len offset inode vfs -- actual )
+: _dt-short-read  ( buf len offset inode vfs -- actual ior )
     DROP DROP DROP NIP
     1 _dt-read-calls +!
-    _dt-read-calls @ 1 = IF 1- 0 MAX ELSE DROP 0 THEN ;
+    _dt-read-calls @ 1 = IF 1- 0 MAX ELSE DROP 0 THEN 0 ;
 : _dt-short-reads-on  ( -- )
-    _DB-VFS @ V.VTABLE @ DUP _dt-old-vtable !
-    _dt-vtable VFS-VT-SIZE CMOVE
-    ['] _dt-short-read _dt-vtable VFS-VT-READ CELLS + !
-    _dt-vtable _DB-VFS @ V.VTABLE ! ;
+    _DB-VFS @ V.BINDING @ DUP _dt-old-binding !
+    DUP VB.OPS @ _dt-ops VFS-OPS-SIZE CMOVE
+    _dt-binding VFS-BINDING-DESC-SIZE CMOVE
+    _dt-ops _dt-binding VB.OPS !
+    ['] _dt-short-read _dt-ops VFS-OP-READ CELLS + !
+    _dt-binding _DB-VFS @ V.BINDING ! ;
 : _dt-short-reads-off  ( -- )
-    _dt-old-vtable @ _DB-VFS @ V.VTABLE ! ;
+    _dt-old-binding @ _DB-VFS @ V.BINDING ! ;
 : _dt-after-close  ( fd -- )
     1 _dt-close-calls +! VFS-CLOSE -801 THROW ;
 : _dt-after-restore  ( vfs -- )
@@ -11223,6 +11234,10 @@ CREATE _dt-vtable VFS-VT-SIZE ALLOT
 
 : _dt-run  ( -- )
     0 _dt-fails ! 0 _dt-checks ! DEPTH _dt-depth !
+    VFS-CUR _dt-old-vfs !
+    524288 A-XMEM ARENA-NEW IF -1 THROW THEN
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _dt-vfs ! VFS-USE
     _DAYBOOK-COMP-SETUP
     DAYBOOK-COMP-DESC CINST-NEW DUP 0= _dt-assert DROP _dt-inst !
     _dt-inst @ _DB-ACTIVATE
@@ -11235,6 +11250,7 @@ CREATE _dt-vtable VFS-VT-SIZE ALLOT
     _dt-test-load-cleanup-faults
     _dt-test-close
     _dt-inst @ CINST-FREE
+    _dt-old-vfs @ VFS-USE _dt-vfs @ VFS-DESTROY
     _dt-stack
     _dt-fails @ 0= IF
         ." DAYBOOK CONTRACTS PASS " _dt-checks @ .
@@ -11395,18 +11411,21 @@ VARIABLE _gcx-fails
 VARIABLE _gcx-checks
 VARIABLE _gcx-depth
 VARIABLE _gcx-inst
+VARIABLE _gcx-vfs
+VARIABLE _gcx-old-vfs
 VARIABLE _gcx-fd
 VARIABLE _gcx-a
 VARIABLE _gcx-u
 VARIABLE _gcx-r
 VARIABLE _gcx-c
-VARIABLE _gcx-old-vtable
+VARIABLE _gcx-old-binding
 VARIABLE _gcx-read-calls
 VARIABLE _gcx-close-calls
 VARIABLE _gcx-use-calls
 VARIABLE _gcx-fd-head
 VARIABLE _gcx-fd-next
-CREATE _gcx-vtable VFS-VT-SIZE ALLOT
+CREATE _gcx-ops VFS-OPS-SIZE ALLOT
+CREATE _gcx-binding VFS-BINDING-DESC-SIZE ALLOT
 CREATE _gcx-check 256 ALLOT
 CREATE _gcx-corrupt 7 ALLOT
 CREATE _gcx-quoted 6 ALLOT
@@ -11496,24 +11515,26 @@ CREATE _gcx-desc APP-DESC ALLOT
     _gcx-fd @ VFS-CLOSE
     _gcx-check _gcx-u @ _gcx-a @ _gcx-u @ COMPARE 0= ;
 
-: _gcx-short-read  ( buf len offset inode vfs -- actual )
+: _gcx-short-read  ( buf len offset inode vfs -- actual ior )
     DROP DROP DROP NIP
     1 _gcx-read-calls +!
-    _gcx-read-calls @ 1 = IF 1- 0 MAX ELSE DROP 0 THEN ;
-: _gcx-fail-sync  ( inode vfs -- ior ) 2DROP -1 ;
-: _gcx-vtable-save  ( -- )
-    _GRID-VFS @ V.VTABLE @ DUP _gcx-old-vtable !
-    _gcx-vtable VFS-VT-SIZE CMOVE ;
-: _gcx-vtable-restore  ( -- )
-    _gcx-old-vtable @ _GRID-VFS @ V.VTABLE ! ;
+    _gcx-read-calls @ 1 = IF 1- 0 MAX ELSE DROP 0 THEN 0 ;
+: _gcx-fail-sync  ( vfs -- ior ) DROP -1 ;
+: _gcx-binding-save  ( -- )
+    _GRID-VFS @ V.BINDING @ DUP _gcx-old-binding !
+    DUP VB.OPS @ _gcx-ops VFS-OPS-SIZE CMOVE
+    _gcx-binding VFS-BINDING-DESC-SIZE CMOVE
+    _gcx-ops _gcx-binding VB.OPS ! ;
+: _gcx-binding-restore  ( -- )
+    _gcx-old-binding @ _GRID-VFS @ V.BINDING ! ;
 : _gcx-short-reads-on  ( -- )
-    _gcx-vtable-save
-    ['] _gcx-short-read _gcx-vtable VFS-VT-READ CELLS + !
-    _gcx-vtable _GRID-VFS @ V.VTABLE ! ;
+    _gcx-binding-save
+    ['] _gcx-short-read _gcx-ops VFS-OP-READ CELLS + !
+    _gcx-binding _GRID-VFS @ V.BINDING ! ;
 : _gcx-sync-fails-on  ( -- )
-    _gcx-vtable-save
-    ['] _gcx-fail-sync _gcx-vtable VFS-VT-SYNC CELLS + !
-    _gcx-vtable _GRID-VFS @ V.VTABLE ! ;
+    _gcx-binding-save
+    ['] _gcx-fail-sync _gcx-ops VFS-OP-SYNCFS CELLS + !
+    _gcx-binding _GRID-VFS @ V.BINDING ! ;
 : _gcx-after-close  ( fd -- )
     1 _gcx-close-calls +! VFS-CLOSE -811 THROW ;
 : _gcx-after-restore  ( vfs -- )
@@ -11599,7 +11620,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     R@ _GRID-IO-CAP 1+ _gcx-put R> FREE
     90 _GRID-IO-BUF @ C! 0 _gcx-read-calls ! _gcx-short-reads-on
     _GRID-LOAD _GRID-L-S-TOO-LARGE = _gcx-assert
-    _gcx-vtable-restore
+    _gcx-binding-restore
     _gcx-read-calls @ 0= _gcx-assert
     _GRID-IO-BUF @ C@ 90 = _gcx-assert
     S" sentinel" 0 0 _gcx-cell= _gcx-assert
@@ -11609,7 +11630,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     _GRID-IO-BUF @ _GRID-IO-U @ _gcx-put
     _gcx-seed 0 _gcx-read-calls ! _gcx-short-reads-on
     _GRID-LOAD _GRID-L-S-IO = _gcx-assert
-    _gcx-vtable-restore
+    _gcx-binding-restore
     _gcx-read-calls @ 2 = _gcx-assert
     S" sentinel" 0 0 _gcx-cell= _gcx-assert
     _GRID-DIRTY @ _gcx-assert _GRID-SOURCE-BLOCKED @ _gcx-assert
@@ -11631,7 +11652,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     S" new" 0 0 _GRID-SET-CELL -1 _GRID-DIRTY !
     _gcx-sync-fails-on
     _GRID-SAVE 0<> _gcx-assert
-    _gcx-vtable-restore
+    _gcx-binding-restore
     S" old" _gcx-file= _gcx-assert
     _GRID-DIRTY @ _gcx-assert _GRID-SOURCE-BLOCKED @ 0= _gcx-assert
     _GRID-SAVE 0= _gcx-assert
@@ -11666,6 +11687,10 @@ CREATE _gcx-desc APP-DESC ALLOT
 : _gcx-run  ( -- )
     0 _gcx-fails ! 0 _gcx-checks ! DEPTH _gcx-depth !
     _gcx-artifacts-init
+    VFS-CUR _gcx-old-vfs !
+    524288 A-XMEM ARENA-NEW IF -1 THROW THEN
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _gcx-vfs ! VFS-USE
     _GRID-COMP-SETUP
     GRID-COMP-DESC CINST-NEW DUP 0= _gcx-assert DROP _gcx-inst !
     _gcx-inst @ _GRID-ACTIVATE
@@ -11692,6 +11717,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     _GRID-CELLS @ FREE 0 _GRID-CELLS !
     _GRID-IO-BUF @ FREE 0 _GRID-IO-BUF !
     _gcx-inst @ CINST-FREE
+    _gcx-old-vfs @ VFS-USE _gcx-vfs @ VFS-DESTROY
     _gcx-stack
     _gcx-fails @ 0= IF
         ." GRID CONTRACTS PASS " _gcx-checks @ .
@@ -11995,7 +12021,8 @@ VARIABLE _sdc-depth
 VARIABLE _sdc-vfs
 VARIABLE _sdc-other-vfs
 VARIABLE _sdc-old-vfs
-VARIABLE _sdc-old-vtable
+VARIABLE _sdc-old-fault-xt
+VARIABLE _sdc-fault-slot
 VARIABLE _sdc-fd
 VARIABLE _sdc-fd-head
 VARIABLE _sdc-fd-next
@@ -12024,7 +12051,8 @@ CREATE _sdc-store-invalid STREAMS-DRAFT-STORE-SIZE ALLOT
 CREATE _sdc-destination STREAMS-DRAFT-TEXT-MAX ALLOT
 CREATE _sdc-over STREAMS-DRAFT-TEXT-MAX 1+ ALLOT
 CREATE _sdc-bad 1 ALLOT
-CREATE _sdc-fault-vtable VFS-VT-SIZE ALLOT
+CREATE _sdc-ops VFS-OPS-SIZE ALLOT
+CREATE _sdc-binding VFS-BINDING-DESC-SIZE ALLOT
 CREATE _sdc-crc32-tails
     0x6104306C , 0xC013A195 , 0x26AD0E9B , 0x596A3B55 ,
     0x426548B8 , 0x270F9370 , 0xF275EB3B ,
@@ -12146,28 +12174,25 @@ CREATE _sdc-crc64-tails
     _sdc-probe @ STREAMS-DRAFT-STORE.REPLACE VREPL-MARKER$
         _sdc-vfs @ VFS-RESOLVE 0= AND ;
 
-: _sdc-zero-write  ( buf len offset inode vfs -- actual )
-    2DROP 2DROP DROP 0 ;
+: _sdc-zero-write  ( buf len offset inode vfs -- actual ior )
+    2DROP 2DROP DROP 0 0 ;
 
-: _sdc-throw-read  ( buf len offset inode vfs -- actual )
+: _sdc-throw-read  ( buf len offset inode vfs -- actual ior )
     2DROP 2DROP DROP -990 THROW ;
 
 : _sdc-fault-write-on  ( -- )
-    _sdc-vfs @ V.VTABLE @ DUP _sdc-old-vtable !
-    _sdc-fault-vtable VFS-VT-SIZE CMOVE
-    ['] _sdc-zero-write
-        _sdc-fault-vtable VFS-VT-WRITE CELLS + !
-    _sdc-fault-vtable _sdc-vfs @ V.VTABLE ! ;
+    VFS-OP-WRITE DUP _sdc-fault-slot !
+    CELLS _sdc-ops + DUP @ _sdc-old-fault-xt !
+    ['] _sdc-zero-write SWAP ! ;
 
 : _sdc-fault-read-on  ( -- )
-    _sdc-vfs @ V.VTABLE @ DUP _sdc-old-vtable !
-    _sdc-fault-vtable VFS-VT-SIZE CMOVE
-    ['] _sdc-throw-read
-        _sdc-fault-vtable VFS-VT-READ CELLS + !
-    _sdc-fault-vtable _sdc-vfs @ V.VTABLE ! ;
+    VFS-OP-READ DUP _sdc-fault-slot !
+    CELLS _sdc-ops + DUP @ _sdc-old-fault-xt !
+    ['] _sdc-throw-read SWAP ! ;
 
 : _sdc-fault-off  ( -- )
-    _sdc-old-vtable @ _sdc-vfs @ V.VTABLE ! ;
+    _sdc-old-fault-xt @
+        _sdc-ops _sdc-fault-slot @ CELLS + ! ;
 
 : _sdc-fd-snapshot  ( -- )
     _sdc-vfs @ V.FDFREE @ DUP _sdc-fd-head !
@@ -12215,9 +12240,13 @@ CREATE _sdc-crc64-tails
 : _sdc-init  ( -- )
     VFS-CUR _sdc-old-vfs !
     524288 A-XMEM ARENA-NEW DUP 0= _sdc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _sdc-vfs ! VFS-USE
+    VFS-RAM-OPS _sdc-ops VFS-OPS-SIZE CMOVE
+    VFS-RAM-BINDING _sdc-binding VFS-BINDING-DESC-SIZE CMOVE
+    _sdc-ops _sdc-binding VB.OPS !
+    _sdc-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _sdc-vfs ! VFS-USE
     524288 A-XMEM ARENA-NEW DUP 0= _sdc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _sdc-other-vfs ! 0<> _sdc-assert
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _sdc-other-vfs ! 0<> _sdc-assert
 
     0 2 _sdc-vfs @ _sdc-store-invalid STREAMS-DRAFT-STORE-INIT-AT
         SDSTORE-S-INVALID = _sdc-assert
@@ -16141,7 +16170,7 @@ VARIABLE _spc-checks
 VARIABLE _spc-depth
 VARIABLE _spc-old-vfs
 VARIABLE _spc-vfs
-VARIABLE _spc-old-vtable
+VARIABLE _spc-old-write-xt
 VARIABLE _spc-fd
 VARIABLE _spc-store
 VARIABLE _spc-data-a
@@ -16166,7 +16195,8 @@ VARIABLE _spc-inst5
 VARIABLE _spc-inst6
 VARIABLE _spc-inst7
 
-CREATE _spc-fault-vtable VFS-VT-SIZE ALLOT
+CREATE _spc-ops VFS-OPS-SIZE ALLOT
+CREATE _spc-binding VFS-BINDING-DESC-SIZE ALLOT
 CREATE _spc-load-buffer STREAMS-DRAFT-TEXT-MAX ALLOT
 
 : _spc-assert  ( flag -- )
@@ -16241,17 +16271,16 @@ CREATE _spc-load-buffer STREAMS-DRAFT-TEXT-MAX ALLOT
     _spc-fd @ VFS-CLOSE
     _spc-vfs @ VFS-SYNC 0= _spc-assert ;
 
-: _spc-zero-write  ( buf len offset inode vfs -- actual )
-    2DROP 2DROP DROP 0 ;
+: _spc-zero-write  ( buf len offset inode vfs -- actual ior )
+    2DROP 2DROP DROP 0 0 ;
 
 : _spc-fault-on  ( -- )
-    _spc-vfs @ V.VTABLE @ DUP _spc-old-vtable !
-    _spc-fault-vtable VFS-VT-SIZE CMOVE
-    ['] _spc-zero-write _spc-fault-vtable VFS-VT-WRITE CELLS + !
-    _spc-fault-vtable _spc-vfs @ V.VTABLE ! ;
+    _spc-ops VFS-OP-WRITE CELLS +
+    DUP @ _spc-old-write-xt !
+    ['] _spc-zero-write SWAP ! ;
 
 : _spc-fault-off  ( -- )
-    _spc-old-vtable @ _spc-vfs @ V.VTABLE ! ;
+    _spc-old-write-xt @ _spc-ops VFS-OP-WRITE CELLS + ! ;
 
 : _spc-arm-rollback  ( -- )
     S" interrupted candidate" 3 _STREAMS-DRAFT-ENCODE
@@ -16288,9 +16317,12 @@ CREATE _spc-load-buffer STREAMS-DRAFT-TEXT-MAX ALLOT
 
 : _spc-run  ( -- )
     0 _spc-fails ! 0 _spc-checks ! DEPTH _spc-depth !
-    VFS-CUR DUP 0<> _spc-assert _spc-old-vfs !
+    VFS-CUR _spc-old-vfs !
     524288 A-XMEM ARENA-NEW DUP 0= _spc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _spc-vfs ! VFS-USE
+    VFS-RAM-OPS _spc-ops VFS-OPS-SIZE CMOVE
+    VFS-RAM-BINDING _spc-binding VFS-BINDING-DESC-SIZE CMOVE
+    _spc-ops _spc-binding VB.OPS !
+    _spc-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _spc-vfs ! VFS-USE
     _STREAMS-COMP-SETUP
     CBR-NEW DUP 0= _spc-assert DROP _spc-req !
 
@@ -16848,6 +16880,8 @@ VARIABLE _mc-fails
 VARIABLE _mc-checks
 VARIABLE _mc-depth
 VARIABLE _mc-vfs
+CREATE _mc-bd /BLOCK-DEVICE ALLOT
+CREATE _mc-volume /VOLUME ALLOT
 VARIABLE _mc-fd
 VARIABLE _mc-doc
 VARIABLE _mc-doc-u
@@ -16908,9 +16942,11 @@ VARIABLE _mc-mft
 : _mc-run  ( -- )
     0 _mc-fails ! 0 _mc-checks ! DEPTH _mc-depth !
     MFT-SIZE 256 = _mc-assert
+    _mc-bd BD-OPEN THROW
+    _mc-bd _mc-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW
     DUP 0= _mc-assert DROP
-    VMP-NEW DUP _mc-vfs ! VMP-INIT 0= _mc-assert
+    _mc-volume VMP-NEW ?DUP IF THROW THEN _mc-vfs !
     _mc-project
     _mc-installed
     S" /bad-trust.toml" MFT-E-TRUST _mc-reject
@@ -16975,6 +17011,8 @@ VARIABLE _pkg-fails
 VARIABLE _pkg-checks
 VARIABLE _pkg-depth
 VARIABLE _pkg-vfs
+CREATE _pkg-bd /BLOCK-DEVICE ALLOT
+CREATE _pkg-volume /VOLUME ALLOT
 VARIABLE _pkg-cat
 VARIABLE _pkg-entry
 VARIABLE _pkg-status
@@ -17050,9 +17088,11 @@ VARIABLE _pkg-xfree
 
 : _pkg-run  ( -- )
     0 _pkg-fails ! 0 _pkg-checks !
+    _pkg-bd BD-OPEN THROW
+    _pkg-bd _pkg-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
-    VMP-NEW DUP _pkg-vfs !
-    DUP VMP-INIT 0= _pkg-assert VFS-USE
+    _pkg-volume VMP-NEW ?DUP IF THROW THEN
+    DUP _pkg-vfs ! VFS-USE
     _pkg-vfs @ ACAT-NEW
     DUP ACAT-S-OK = _pkg-assert DROP DUP _pkg-cat !
     ACAT-ACTIVATE
@@ -18013,11 +18053,12 @@ VARIABLE _aac-pa
 VARIABLE _aac-pu
 VARIABLE _aac-preview-fd-head
 VARIABLE _aac-preview-fd-next
-VARIABLE _aac-preview-old-vtable
+VARIABLE _aac-preview-old-read-xt
 VARIABLE _aac-preview-read-throws
 CREATE _aac-text _FEXP-CAP-TEXT-MAX 8 + ALLOT
 CREATE _aac-long-name _FEXP-PATH-CAP 8 + ALLOT
-CREATE _aac-preview-vtable VFS-VT-SIZE ALLOT
+CREATE _aac-ops VFS-OPS-SIZE ALLOT
+CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
 
 : _aac-assert  ( flag -- )
     1 _aac-checks +!
@@ -18043,7 +18084,7 @@ CREATE _aac-preview-vtable VFS-VT-SIZE ALLOT
     DUP CV-LEN@ ROT = _aac-assert
     DUP CV-DATA@ SWAP CV-LEN@ UTF8-VALID? _aac-assert ;
 
-: _aac-preview-read-throw  ( buf len offset inode vfs -- actual )
+: _aac-preview-read-throw  ( buf len offset inode vfs -- actual ior )
     2DROP 2DROP DROP
     1 _aac-preview-read-throws +! -901 THROW ;
 
@@ -18051,15 +18092,13 @@ CREATE _aac-preview-vtable VFS-VT-SIZE ALLOT
     S" cleanup" S" /aac-cleanup.txt" _aac-put _FEXP-SEL-IN !
     _aac-vfs @ V.FDFREE @ DUP _aac-preview-fd-head !
     ?DUP IF FD.FREE @ ELSE 0 THEN _aac-preview-fd-next !
-    _aac-vfs @ V.VTABLE @ DUP _aac-preview-old-vtable !
-    _aac-preview-vtable VFS-VT-SIZE CMOVE
-    ['] _aac-preview-read-throw
-        _aac-preview-vtable VFS-VT-READ CELLS + !
-    _aac-preview-vtable _aac-vfs @ V.VTABLE !
+    _aac-ops VFS-OP-READ CELLS +
+        DUP @ _aac-preview-old-read-xt !
+    ['] _aac-preview-read-throw SWAP !
     0 _aac-preview-read-throws !
     _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
     CBUS-S-FAILED = _aac-assert
-    _aac-preview-old-vtable @ _aac-vfs @ V.VTABLE !
+    _aac-preview-old-read-xt @ _aac-ops VFS-OP-READ CELLS + !
     _aac-preview-read-throws @ 1 = _aac-assert
     _FRP-FD @ 0= _aac-assert
     _FRP-THROW @ -901 = _aac-assert
@@ -18174,7 +18213,10 @@ CREATE _aac-preview-vtable VFS-VT-SIZE ALLOT
 
     VFS-CUR _aac-old-vfs !
     524288 A-XMEM ARENA-NEW DUP 0= _aac-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _aac-vfs ! VFS-USE
+    VFS-RAM-OPS _aac-ops VFS-OPS-SIZE CMOVE
+    VFS-RAM-BINDING _aac-binding VFS-BINDING-DESC-SIZE CMOVE
+    _aac-ops _aac-binding VB.OPS !
+    _aac-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _aac-vfs ! VFS-USE
     FEXP-COMP-DESC CINST-NEW
     DUP 0= _aac-assert DROP _aac-inst !
     _aac-inst @ _FEXP-ACTIVATE _aac-vfs @ _FEXP-VFS !
@@ -19739,7 +19781,7 @@ VARIABLE _soc-set-rid
 VARIABLE _soc-set-revision
 VARIABLE _soc-set-enabled
 VARIABLE _soc-old-field-schema
-VARIABLE _soc-old-vtable
+VARIABLE _soc-old-write-xt
 VARIABLE _soc-registry-generation
 VARIABLE _soc-auth
 VARIABLE _soc-agent-invocation
@@ -19751,7 +19793,8 @@ CREATE _soc-rid RID-SIZE ALLOT
 CREATE _soc-caller-rid RID-SIZE ALLOT
 CREATE _soc-rref RREF-SIZE ALLOT
 CREATE _soc-registry-snapshot STREAMS-SOURCE-REGISTRY-SIZE ALLOT
-CREATE _soc-fault-vtable VFS-VT-SIZE ALLOT
+CREATE _soc-ops VFS-OPS-SIZE ALLOT
+CREATE _soc-vfs-binding VFS-BINDING-DESC-SIZE ALLOT
 CREATE _soc-binding AUTH-BINDING-SIZE ALLOT
 CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
 
@@ -19874,18 +19917,16 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
     _soc-req @ _soc-bus @ CBUS-POST CBUS-S-OK = _soc-assert
     1 _soc-bus @ CBUS-PUMP 1 = _soc-assert ;
 
-: _soc-zero-write  ( buffer length offset inode vfs -- actual )
-    2DROP 2DROP DROP 0 ;
+: _soc-zero-write  ( buffer length offset inode vfs -- actual ior )
+    2DROP 2DROP DROP 0 0 ;
 
 : _soc-fault-on  ( -- )
-    _soc-vfs @ V.VTABLE @ DUP _soc-old-vtable !
-    _soc-fault-vtable VFS-VT-SIZE CMOVE
-    ['] _soc-zero-write
-        _soc-fault-vtable VFS-VT-WRITE CELLS + !
-    _soc-fault-vtable _soc-vfs @ V.VTABLE ! ;
+    _soc-ops VFS-OP-WRITE CELLS +
+    DUP @ _soc-old-write-xt !
+    ['] _soc-zero-write SWAP ! ;
 
 : _soc-fault-off  ( -- )
-    _soc-old-vtable @ _soc-vfs @ V.VTABLE ! ;
+    _soc-old-write-xt @ _soc-ops VFS-OP-WRITE CELLS + ! ;
 
 : _soc-candidate-init  ( -- )
     _soc-candidate STREAMS-SOURCE-INIT
@@ -19972,7 +20013,11 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
     0 _soc-fails ! 0 _soc-checks ! DEPTH _soc-depth !
     VFS-CUR _soc-old-vfs !
     1048576 A-XMEM ARENA-NEW DUP 0= _soc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP 0<> _soc-assert DUP _soc-vfs ! VFS-USE
+    VFS-RAM-OPS _soc-ops VFS-OPS-SIZE CMOVE
+    VFS-RAM-BINDING _soc-vfs-binding VFS-BINDING-DESC-SIZE CMOVE
+    _soc-ops _soc-vfs-binding VB.OPS !
+    _soc-vfs-binding 0 VFS-NEW ?DUP IF THROW THEN
+        DUP 0<> _soc-assert DUP _soc-vfs ! VFS-USE
     _STREAMS-COMP-SETUP
     _STM-CAP-COUNT 15 = _soc-assert
     STREAMS-COMP-DESC COMP.CAPS-N @ 15 = _soc-assert
@@ -21503,7 +21548,8 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     STREAMS-SOURCE-STORE-RECORD-MAX _ssoc-span-snapshot _ssoc-allocate
     VFS-CUR _ssoc-old-vfs !
     524288 A-XMEM ARENA-NEW DUP 0= _ssoc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _ssoc-vfs ! 0<> _ssoc-assert
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _ssoc-vfs ! 0<> _ssoc-assert
     _ssoc-vfs @ VFS-USE
     _ssoc-build-registries
     _ssoc-test-basic _ssoc-test-corrupt _ssoc-test-noncanonical-unused
@@ -25863,7 +25909,8 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     0 _suc-fails ! 0 _suc-checks ! DEPTH _suc-depth !
     VFS-CUR _suc-old-vfs !
     1048576 A-XMEM ARENA-NEW DUP 0= _suc-assert DROP
-    VFS-RAM-VTABLE VFS-NEW DUP 0<> _suc-assert DUP _suc-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP 0<> _suc-assert DUP _suc-vfs ! VFS-USE
     _STREAMS-COMP-SETUP
     STREAMS-COMP-DESC CINST-NEW DUP 0= _suc-assert DROP _suc-i1 !
     _suc-i1 @ STREAMS-INIT-CB
@@ -26939,7 +26986,8 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
     \ staging files, so a smaller test arena would qualify storage pressure
     \ rather than the configured refresh lifecycle.
     8388608 A-XMEM ARENA-NEW DUP IF 2DROP -4105 THROW THEN DROP
-    VFS-RAM-VTABLE VFS-NEW DUP _lrc-vfs ! 0= IF -4106 THROW THEN
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _lrc-vfs ! 0= IF -4106 THROW THEN
     _lrc-vfs @ VFS-USE
     _lrc-service XIO-SERVICE-INIT XIO-S-OK = _lrc-assert
     -1 _lrc-service-live !

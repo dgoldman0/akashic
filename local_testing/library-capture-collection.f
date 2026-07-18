@@ -353,7 +353,8 @@ LIB-CONTENT-MAX XBUF _lcc-bytes
     _lcc-build-origin
     4194304 A-XMEM ARENA-NEW DUP 0= _lcc-assert DROP
     DUP _lcc-arena !
-    VFS-RAM-VTABLE VFS-NEW DUP _lcc-vfs ! 0<> _lcc-assert
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _lcc-vfs ! 0<> _lcc-assert
     _lcc-vfs @ VFS-USE
     LIBRARY-VFS-STORE-SIZE ALLOCATE
         ABORT" LIBRARY CAPTURE COLLECTION allocation" _lcc-store-slot !

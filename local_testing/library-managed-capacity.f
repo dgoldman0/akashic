@@ -445,7 +445,8 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
     _lmc-zero-entropy LIB-DIGEST-SIZE 0 FILL
     4194304 A-XMEM ARENA-NEW DUP 0= _lmc-assert DROP
     DUP _lmc-arena !
-    VFS-RAM-VTABLE VFS-NEW DUP _lmc-vfs ! 0<> _lmc-assert
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _lmc-vfs ! 0<> _lmc-assert
     _lmc-vfs @ VFS-USE
     LIBRARY-VFS-STORE-SIZE ALLOCATE
         ABORT" LIBRARY MANAGED CAPACITY FAIL allocation"

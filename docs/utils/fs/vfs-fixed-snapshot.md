@@ -98,6 +98,19 @@ otherwise it must equal the fully validated current envelope generation. The
 core selects `expected + 1`; overflow is `VFSNAP-S-CAPACITY`. Conflict does not
 replace the target.
 
+## Durability boundary
+
+Snapshot publication inherits the selected VFS binding's durability contract.
+`VFS-SYNC` dispatches `SYNCFS`; a disk-backed binding owns `SYNCFS`, per-file
+`FSYNC`, and lifecycle `UNMOUNT`, and each successful durability path must end
+at a successful `VOL-FLUSH`. A write or flush failure remains a failed snapshot
+barrier and is normalized or latched by VREPL/VFSNAP as described below.
+
+`VFS-RAM-BINDING` has no persistent medium, so its `SYNCFS`, `FSYNC`, and
+`UNMOUNT` operations form a no-op durability boundary. The RAM fixed-snapshot
+fixture exercises exact I/O, barrier ordering, recovery, and blocked-state
+behavior; it does not model survival across power loss.
+
 ## Blocking and recovery
 
 The statuses are:
