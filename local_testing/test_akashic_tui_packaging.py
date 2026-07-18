@@ -206,6 +206,40 @@ def test_library_milestone_two_profiles_package_headless_owner_contracts(
     assert all(not module.startswith("streams/") for module in closure)
 
 
+def test_library_query_index_profile_packages_exact_headless_contract() -> None:
+    profile = PROFILES["library-query-index-contracts"]
+    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.resources == ()
+    assert profile.ready_markers == ("LIBRARY QUERY INDEX PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert profile.total_sectors == 8192
+    assert {
+        "LIBRARY QUERY INDEX FAIL",
+        "LIBRARY QUERY INDEX ASSERT",
+        "LIBRARY QUERY INDEX STACK",
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/library-query-index.f",
+    )
+    assert "REQUIRE local_testing/library-query-index.f" in profile.autoexec
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+        "library/vfs-store.f",
+        "utils/fs/vfs-fixed-snapshot.f",
+    } <= closure
+    assert all(not module.startswith("tui/") for module in closure)
+    assert all(not module.startswith("agent/") for module in closure)
+    assert all(not module.startswith("practice/") for module in closure)
+    assert all(not module.startswith("streams/") for module in closure)
+
+
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
     profile = PROFILES["vfs-ram-capacity-contracts"]
     assert profile.roots == ("utils/fs/vfs.f",)

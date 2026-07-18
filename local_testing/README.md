@@ -113,8 +113,34 @@ collection. Only the serialized MP64FS bytes and the three printed RIDs cross
 to the second process. Its fresh guest verifies generation, archived current
 bytes, retained revisions and `GONE`, both receipts, exact capture
 origin/content, and collection membership. These milestone-two profiles and
-driver do not claim the disposable index, projection lifecycle, repair/export,
-complete damage matrix, or overall Gate 4 exit.
+driver do not themselves exercise the separately qualified disposable index,
+projection lifecycle, repair/export, complete damage matrix, or overall Gate 4
+exit.
+
+`library-query-index-contracts` qualifies Gate 4's third ordered milestone. It
+proves bounded exact UTF-8 title/body/tag search, empty-term browse,
+active/archived, kind, media, and exact collection-RID filters, deterministic
+raw-slot continuation, collection enumeration, current-body replacement,
+tombstone exclusion, stale generation refusal, over-capacity output nonmutation,
+and stale-conflict output clearing. It also destroys and damages the
+activation-local index, then proves byte-identical
+authoritative result pages after rebuild while head, bank, arena, and generation
+facts remain unchanged.
+
+Run the milestone-three cold acceptance with:
+
+```bash
+python3 local_testing/library_query_two_boot.py --timeout 600
+```
+
+The first guest creates three catalog-ordered resources whose common term is
+found once in a title, once in a current body, and once as an exact tag, plus a
+collection spanning active and archived entries. Only serialized MP64FS bytes
+and printed stable RIDs cross to a fresh spawned process. The cold guest rebuilds
+the disposable index from authoritative records and proves the same ordered
+2+1 corpus pages, field/lifecycle/kind/media/collection filters, and collection
+summary. Milestone three still does not claim projection lifecycle,
+repair/export, the complete damage matrix, an applet/UI, or overall Gate 4 exit.
 
 The Streams qualification path is intentionally split by boundary:
 

@@ -1,12 +1,14 @@
 # Library product boundary
 
-Status: Gate 4A is complete for the pure bounded model and deterministic record
-codecs. Gate 4B now has sealed pure arena, catalog-bank, head, and ordered-chain
-formats plus a qualified first VFS-owner slice for committed-snapshot loading
-and absent-store provisioning. Library still has no public catalog/content
-mutation or inactive-bank publication API, index, capability, projection owner,
-applet, UI, or sibling integration. Those absences are contract boundaries,
-not implied behavior.
+Status: the pure bounded model/codecs, deterministic arena/catalog/head formats,
+sole VFS owner, and the first three ordered Gate 4 headless milestones are
+implemented and qualified. Library now owns managed-document and capture
+mutation, retained history, receipts, lifecycle, collections, a disposable
+title/body/tag index, and bounded authoritative corpus/collection queries.
+Library still has no capability or projection-owner lifecycle, repair/export
+surface, applet, UI, or sibling integration. The overall Gate 4 exit is not yet
+claimed; those remaining absences are contract boundaries, not implied
+behavior.
 
 Library is the machine-level corpus of material a user deliberately keeps. A
 Practice may eventually bind Library resources into an activity, but the corpus
@@ -231,17 +233,40 @@ write-free and idempotent; a different arena conflicts. Exact post-bank,
 pre-head evidence is preserved and reported as recovery instead of being
 silently adopted.
 
-## Remaining Gate 4B mutation handoff
+## Headless owner and disposable query milestones now sealed
 
-The VFS owner does not yet expose catalog/content append or inactive-bank
-publication. Its private head-save helper is used only by provisioning and
-qualification fixtures, not as a durable public mutation API. The remaining
-Gate 4B work must qualify content-first writes, inactive-bank construction and
-readback, sole-head commit, interrupted-publication recovery, capacity, and
-same-operation retry behavior. It must preserve all loading checks above.
+The VFS owner exposes guarded create/import, exact read and replacement,
+metadata and lifecycle mutation, retained-history read/compare/restore, receipt
+lookup, and RID-based collection create/replace/read operations. Content writes
+precede complete inactive-bank construction and readback; only the fixed head
+replacement publishes a mutation. Caller operation keys, exact expected
+catalog/domain/collection revisions, capacity preflight, uncertain-head
+reconciliation, and terminal tombstones preserve retry and conflict semantics
+without substituting a content digest for operation or resource identity.
 
-Indexes remain derived and rebuildable. They cannot become authority for
-identity, content, membership, provenance, or lifecycle.
+The third milestone adds no durable format or fifth path. During each complete
+authoritative load, Library derives fixed per-catalog-slot candidate bitsets
+from live/archived titles and tags plus each live/archived current content
+frame. The 128-slot bound consumes a fixed 57,344-byte candidate allocation.
+The activation-local index is bound to the selected store and generation,
+checksummed, and published only after the complete bank/arena/content candidate
+passes. Loss or damage is reconstructed by the next guarded refresh. An
+authoritative load failure remains an explicit error; it cannot manufacture an
+empty corpus or change identity, content, membership, provenance, lifecycle,
+receipt, generation, or mutation facts.
+
+`LIBRARY-VFS-STORE-QUERY-CORPUS` serves caller-owned pages of at most 32
+summaries in canonical catalog-slot order, with generation-pinned raw-slot
+continuation. Empty term is bounded browse. Nonempty terms are exact
+case-sensitive UTF-8 bytes: title/current-body use substring matching, tags use
+whole-value equality, and selected fields are ORed with one result per RID.
+Active/archived, managed/capture, media, and exact collection-RID filters are
+checked against authoritative facts; tombstones are excluded. Collection
+enumeration is separately bounded and generation stable. ASCII/Unicode folding,
+normalization, semantic ranking, embeddings, OCR, and automatic summaries stay
+outside this milestone. A continuation reuses the same term/filter scope and
+copies back both returned generation and raw slot; changing scope starts at
+slot zero.
 
 ## Owner and lens rule
 
@@ -266,9 +291,9 @@ applet, or newest revision.
 
 ## Current package and gate order
 
-The domain package is `akashic/library/`. Model, record codecs, future
-catalog/content stores, index, import semantics, and concrete projection owner
-remain Library code. The reserved applet package is
+The domain package is `akashic/library/`. Model, record codecs, the
+catalog/content owner, disposable index, import semantics, and future concrete
+projection owner remain Library code. The reserved applet package is
 `akashic/tui/applets/library/`; it is a Library lens, not the owner. Portable
 mechanics move to `interop/` or `utils/fs/` only after two materially independent
 owners prove the same contract.
@@ -279,11 +304,10 @@ recovery, identity, or projection contract.
 
 The remaining order is:
 
-1. Complete Gate 4B by qualifying content/catalog mutation, inactive-bank and
-   sole-head publication, interrupted-publication recovery, capacity, and
-   idempotent mutation behavior over the sealed loader and pure formats.
-2. The later Gate 4 owner/index work qualifies lifecycle mutation, index
-   rebuild, exact revision resolution, and bounded projections.
+1. Complete the Gate 4 projection-owner milestone with bounded acquire/share,
+   reference counting, exact-state validation, and quiescent release.
+2. Qualify recognized-format repair/raw export and the complete Gate 4 damage
+   and exit matrix without weakening the sealed authoritative/query boundary.
 3. Gate 5 makes the standalone Library applet useful.
 4. Gate 6 connects Pad, Explorer, and Desk through typed interop without
    sibling imports.

@@ -1,13 +1,14 @@
 # Library domain package
 
 Status: the pure model/codecs and store formats, the sole VFS owner, and the
-first two ordered Gate 4 implementation milestones are implemented and
+first three ordered Gate 4 implementation milestones are implemented and
 qualified. The public headless owner now creates and replaces managed
 documents, imports immutable captures, manages metadata and lifecycle, exposes
-retained history and receipts, and creates/replaces RID-based collections. The
-package still has no disposable search index, projection-owner lifecycle,
-repair/export surface, applet/UI, or Streams integration, so the overall Gate 4
-exit is not yet claimed.
+retained history and receipts, creates/replaces and enumerates RID-based
+collections, and serves bounded authoritative corpus queries through a
+disposable title/body/tag index. The package still has no projection-owner
+lifecycle, repair/export surface, applet/UI, or Streams integration, so the
+overall Gate 4 exit is not yet claimed.
 
 The current modules are:
 
@@ -19,8 +20,9 @@ The current modules are:
 - `store-format.f`: deterministic V1 arena, catalog-bank, and head formats plus
   the ordered content-frame commitment used by the VFS owner.
 - `vfs-store.f`: the sole owner of Library-private VFS paths, committed-snapshot
-  loading/provisioning, fail-closed recovery, and the guarded public headless
-  document/capture/history/receipt/collection mutation and read surface.
+  loading/provisioning, fail-closed recovery, the guarded public headless
+  document/capture/history/receipt/collection mutation and read surface, and
+  the activation-local disposable search index and bounded query API.
 
 The model, record codec, and store-format modules remain VFS-free. `vfs-store.f`
 alone performs I/O and chooses the private storage topology. None publishes a
@@ -194,24 +196,49 @@ complete inactive bank. Public outputs are caller-owned and remain unpublished
 until argument validation, durable reconciliation, and cleanup complete. No
 public API exposes a Library-private VFS path or persistent catalog slot.
 
+Every successful authoritative load rebuilds one activation-local per-slot
+title/body/tag candidate index while the selected bank and current content
+frames are already being validated. Its fixed candidate allocation is 57,344
+bytes for the 128-slot catalog bound. The index adds no path, sidecar, persisted
+field, or store-descriptor state. It is generation/store bound and checksummed,
+and is published only after the complete corpus passes. Missing or damaged
+index state is therefore reconstructed on the next guarded refresh; a failed
+load returns its explicit status and never turns authoritative records into an
+empty result set.
+
+`LIBRARY-VFS-STORE-QUERY-CORPUS` returns at most 32 caller-owned summaries in
+canonical catalog-slot order. Empty term is a bounded browse. Nonempty terms
+are exact case-sensitive UTF-8 bytes: title and current-body fields use
+substring matching, tags use whole-value equality, and selected fields are ORed
+without duplicating an entry. Active/archived, managed/capture, admitted media,
+and exact collection-RID filters are authoritative facts rather than index
+answers; tombstones are never discoverable. Raw slot continuation is pinned to
+the returned catalog generation. `LIBRARY-VFS-STORE-QUERY-COLLECTIONS` provides
+the corresponding bounded generation-stable collection enumeration. No ASCII
+or Unicode case folding/normalization, semantic ranking, OCR, embeddings, or
+automatic summaries are implied.
+Callers reuse the identical term and filter scope when advancing a returned raw
+slot cursor; changing scope starts a new request at slot zero.
+
 The focused emulator profiles are `library-managed-document-contracts`,
 `library-managed-capacity-contracts`, `library-managed-lifecycle-contracts`, and
-`library-capture-collection-contracts`. A separate spawn-isolated two-process
-driver proves the milestone-two managed document, capture, receipts, retained
-window, archive state, and collection across a real cold reload:
+`library-capture-collection-contracts`, plus
+`library-query-index-contracts`. Separate spawn-isolated two-process drivers
+prove the milestone-two lifecycle state and the milestone-three index rebuild
+across real cold reloads:
 
 ```bash
 python3 local_testing/library_lifecycle_two_boot.py --timeout 600
+python3 local_testing/library_query_two_boot.py --timeout 600
 ```
 
 ## Remaining Gate 4 boundary
 
-The next ordered milestone is the disposable rebuildable title/body/tag index
-and bounded authoritative queries. Projection acquire/share/reference-count/
-quiescent-release, recognized-format repair/raw export, and the complete Gate 4
-damage and exit matrix remain later milestones. No caller should infer an index
-policy, capability, projection owner, or UI route from the current records.
+The next ordered milestone is projection acquire/share/reference-count/
+quiescent-release. Recognized-format repair/raw export and the complete Gate 4
+damage and exit matrix remain later milestones. No caller should infer a
+capability, projection owner, or UI route from the current records or query
+surface.
 For the broader product boundary and gate handoff, see
 [`../../docs/library/library.md`](../../docs/library/library.md). It is the
-ratified product-boundary document; its implementation-status prose predates
-the first two ordered milestones described here.
+ratified product-boundary document.

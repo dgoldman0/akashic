@@ -27266,6 +27266,39 @@ REQUIRE local_testing/library-cc.f
 )
 
 
+PROFILES["library-query-index-contracts"] = Profile(
+    roots=("library/vfs-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4 milestone 3 query/index
+ENTER-USERLAND
+REQUIRE library/vfs-store.f
+." [akashic] loading Library query/index contracts" CR
+REQUIRE local_testing/library-query-index.f
+""",
+    ready_markers=("LIBRARY QUERY INDEX PASS",),
+    stable_markers=("LIBRARY QUERY INDEX PASS",),
+    failure_markers=(
+        "LIBRARY QUERY INDEX FAIL",
+        "LIBRARY QUERY INDEX ASSERT",
+        "LIBRARY QUERY INDEX STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-query-index.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" / "library-query-index.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
 PROFILES["library-managed-capacity-contracts"] = Profile(
     roots=("library/vfs-store.f",),
     resources=(),

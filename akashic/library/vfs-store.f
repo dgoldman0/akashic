@@ -19,6 +19,8 @@
 \    LIBRARY-CAPTURE-IMPORT-REQUEST-INIT / ...-VALID?
 \    LIBRARY-METADATA-INIT / ...-VALID?
 \    LIBRARY-COLLECTION-{CREATE,REPLACE}-REQUEST-INIT / ...-VALID?
+\    LIBRARY-CORPUS-QUERY-REQUEST-INIT / ...-TERM! / ...-COLLECTION!
+\      / ...-VALID?
 \
 \  Public document/capture owner operations:
 \    LIBRARY-VFS-STORE-CREATE-MANAGED
@@ -26,6 +28,12 @@
 \    LIBRARY-VFS-STORE-IMPORT-CAPTURE
 \      ( request result-entry store -- status )
 \    LIBRARY-VFS-STORE-QUERY-ACTIVE
+\      ( expected-catalog-generation start-slot summaries capacity store
+\        -- count next-slot catalog-generation status )
+\    LIBRARY-VFS-STORE-QUERY-CORPUS
+\      ( request summaries capacity store
+\        -- count next-slot catalog-generation status )
+\    LIBRARY-VFS-STORE-QUERY-COLLECTIONS
 \      ( expected-catalog-generation start-slot summaries capacity store
 \        -- count next-slot catalog-generation status )
 \    LIBRARY-VFS-STORE-READ-EXACT
@@ -58,14 +66,17 @@
 \    LIBRARY-VFS-STORE-READ-COLLECTION-EXACT
 \      ( rid revision collection-view store -- status )
 \
-\  QUERY-ACTIVE returns caller-owned identity references plus small summaries
-\  and uses a raw catalog-slot cursor.  Expected generation 0 starts at slot
-\  zero; every continuation passes the returned positive generation, so pages
-\  cannot mix.  Next slot -1 is terminal.  Exact reads copy bytes into the
-\  caller's buffer and return a LIB-CONTENT view borrowing that buffer.
+\  The bounded queries return caller-owned identity references plus small
+\  summaries and use raw owner-slot cursors.  Expected generation 0 starts at
+\  slot zero; every continuation passes the returned positive generation, so
+\  pages cannot mix.  Next slot -1 is terminal.  Corpus search is exact UTF-8
+\  byte search: title/body terms are substrings, tags are whole-value matches,
+\  and no case folding or normalization is implied.  Exact reads copy bytes
+\  into the caller's buffer and return a LIB-CONTENT view borrowing that buffer.
 \  Retained snapshots are addressed by the exact domain revision stored on
 \  their immutable content frame; metadata-only domain revisions are not
-\  content aliases.  No public operation exposes a private path or slot.
+\  content aliases.  No public operation exposes a private path or treats a
+\  transient raw continuation slot as durable identity.
 \ =====================================================================
 
 PROVIDED akashic-library-vfs-store
@@ -294,7 +305,7 @@ REQUIRE ../concurrency/guard.f
     LIBRARY-COLLECTION-VIEW-SIZE 0 FILL ;
 
 \ =====================================================================
-\  Caller-owned active-query summary
+\  Caller-owned catalog-query summary
 \ =====================================================================
 \  A query does not disclose the entry's full receipt, origin, tags, or
 \  lineage.  Its identity RREF has revision zero; DOMAIN-REVISION is the
@@ -329,6 +340,94 @@ REQUIRE ../concurrency/guard.f
 
 : LIBRARY-QUERY-SUMMARY-INIT  ( summary -- )
     DUP LIBRARY-QUERY-SUMMARY-SIZE 0 FILL LIBQS.REF RREF-INIT ;
+
+\ =====================================================================
+\  Caller-owned bounded corpus-query request
+\ =====================================================================
+\  An empty term is an explicit bounded browse.  A nonempty term selects one
+\  or more title/body/tag fields.  Collection is either an all-zero RID (no
+\  collection filter) or one exact collection RID.  Continuations copy both
+\  the returned generation and next raw catalog slot back into the request and
+\  retain the same term and scope masks.
+
+1 CONSTANT LIBRARY-CORPUS-LIFECYCLE-ACTIVE
+2 CONSTANT LIBRARY-CORPUS-LIFECYCLE-ARCHIVED
+3 CONSTANT LIBRARY-CORPUS-LIFECYCLE-ALL
+
+1 CONSTANT LIBRARY-CORPUS-KIND-MANAGED
+2 CONSTANT LIBRARY-CORPUS-KIND-CAPTURE
+3 CONSTANT LIBRARY-CORPUS-KIND-ALL
+
+1 CONSTANT LIBRARY-CORPUS-MEDIA-PLAIN
+2 CONSTANT LIBRARY-CORPUS-MEDIA-MARKDOWN
+4 CONSTANT LIBRARY-CORPUS-MEDIA-CSV
+7 CONSTANT LIBRARY-CORPUS-MEDIA-ALL
+
+1 CONSTANT LIBRARY-CORPUS-FIELD-TITLE
+2 CONSTANT LIBRARY-CORPUS-FIELD-BODY
+4 CONSTANT LIBRARY-CORPUS-FIELD-TAGS
+7 CONSTANT LIBRARY-CORPUS-FIELD-ALL
+
+128 CONSTANT LIBRARY-CORPUS-TERM-MAX
+
+  0 CONSTANT _LIBCQR-EXPECTED-CATALOG-GENERATION
+  8 CONSTANT _LIBCQR-START-SLOT
+ 16 CONSTANT _LIBCQR-LIFECYCLE-MASK
+ 24 CONSTANT _LIBCQR-KIND-MASK
+ 32 CONSTANT _LIBCQR-MEDIA-MASK
+ 40 CONSTANT _LIBCQR-FIELD-MASK
+ 48 CONSTANT _LIBCQR-FLAGS
+ 56 CONSTANT _LIBCQR-TERM-U
+ 64 CONSTANT _LIBCQR-COLLECTION
+ 96 CONSTANT _LIBCQR-TERM
+224 CONSTANT LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+
+: LIBCQR.EXPECTED-CATALOG-GENERATION  ( request -- a )
+    _LIBCQR-EXPECTED-CATALOG-GENERATION + ;
+: LIBCQR.START-SLOT       ( request -- a ) _LIBCQR-START-SLOT + ;
+: LIBCQR.LIFECYCLE-MASK   ( request -- a ) _LIBCQR-LIFECYCLE-MASK + ;
+: LIBCQR.KIND-MASK        ( request -- a ) _LIBCQR-KIND-MASK + ;
+: LIBCQR.MEDIA-MASK       ( request -- a ) _LIBCQR-MEDIA-MASK + ;
+: LIBCQR.FIELD-MASK       ( request -- a ) _LIBCQR-FIELD-MASK + ;
+: LIBCQR.FLAGS            ( request -- a ) _LIBCQR-FLAGS + ;
+: LIBCQR.TERM-U           ( request -- a ) _LIBCQR-TERM-U + ;
+: LIBCQR.COLLECTION       ( request -- rid ) _LIBCQR-COLLECTION + ;
+: LIBCQR.TERM             ( request -- a ) _LIBCQR-TERM + ;
+: LIBCQR-TERM$  ( request -- a u )
+    DUP LIBCQR.TERM SWAP LIBCQR.TERM-U @ ;
+
+: LIBRARY-CORPUS-QUERY-REQUEST-INIT  ( request -- )
+    DUP LIBRARY-CORPUS-QUERY-REQUEST-SIZE 0 FILL
+    DUP LIBRARY-CORPUS-LIFECYCLE-ACTIVE SWAP LIBCQR.LIFECYCLE-MASK !
+    DUP LIBRARY-CORPUS-KIND-ALL SWAP LIBCQR.KIND-MASK !
+    DUP LIBRARY-CORPUS-MEDIA-ALL SWAP LIBCQR.MEDIA-MASK !
+    LIBRARY-CORPUS-FIELD-ALL SWAP LIBCQR.FIELD-MASK ! ;
+
+\ =====================================================================
+\  Public bounded collection-query summary
+\ =====================================================================
+
+  0 CONSTANT _LIBCS-REF
+ 80 CONSTANT _LIBCS-REVISION
+ 88 CONSTANT _LIBCS-MUTATION-SEQUENCE
+ 96 CONSTANT _LIBCS-MEMBER-N
+104 CONSTANT _LIBCS-FLAGS
+112 CONSTANT _LIBCS-TITLE-U
+120 CONSTANT _LIBCS-TITLE
+184 CONSTANT LIBRARY-COLLECTION-SUMMARY-SIZE
+
+: LIBCS.REF               ( summary -- rref ) _LIBCS-REF + ;
+: LIBCS.REVISION          ( summary -- a ) _LIBCS-REVISION + ;
+: LIBCS.MUTATION-SEQUENCE ( summary -- a ) _LIBCS-MUTATION-SEQUENCE + ;
+: LIBCS.MEMBER-N          ( summary -- a ) _LIBCS-MEMBER-N + ;
+: LIBCS.FLAGS             ( summary -- a ) _LIBCS-FLAGS + ;
+: LIBCS.TITLE-U           ( summary -- a ) _LIBCS-TITLE-U + ;
+: LIBCS.TITLE             ( summary -- a ) _LIBCS-TITLE + ;
+: LIBCS-TITLE$  ( summary -- a u )
+    DUP LIBCS.TITLE SWAP LIBCS.TITLE-U @ ;
+
+: LIBRARY-COLLECTION-SUMMARY-INIT  ( summary -- )
+    DUP LIBRARY-COLLECTION-SUMMARY-SIZE 0 FILL LIBCS.REF RREF-INIT ;
 
 \ =====================================================================
 \  Sealed Library-private topology
@@ -638,6 +737,31 @@ VARIABLE _LIBMU-EQUAL
 VARIABLE _LIBMU-REQUIRE-MANAGED
 VARIABLE _LIBMU-MISSING-CONTENT-STATUS
 
+\ The disposable corpus index is one activation-local candidate cache shared
+\ by the serialized Library owner.  It is never part of a store descriptor or
+\ durable format.  A binding and CRC are published only after a complete
+\ authoritative bank/arena validation succeeds.
+VARIABLE _LIBIX-READY
+VARIABLE _LIBIX-STORE
+VARIABLE _LIBIX-GENERATION
+VARIABLE _LIBIX-CRC
+VARIABLE _LIBIX-TEXT-A
+VARIABLE _LIBIX-TEXT-U
+VARIABLE _LIBIX-BLOOM
+VARIABLE _LIBIX-BLOOM-U
+VARIABLE _LIBIX-BIT
+VARIABLE _LIBIX-SLOT
+
+\ Corpus-query verifier scratch.  The derived index may only reject a slot
+\ before these exact authoritative byte comparisons; it never supplies facts.
+VARIABLE _LIBCQ-HAY-A
+VARIABLE _LIBCQ-HAY-U
+VARIABLE _LIBCQ-NEEDLE-A
+VARIABLE _LIBCQ-NEEDLE-U
+VARIABLE _LIBCQ-ENTRY
+VARIABLE _LIBCQ-COLLECTION-FILTER
+VARIABLE _LIBCQ-READ-CONTENT-XT
+
 1 CONSTANT _LIBMU-COMMIT-ENTRY-KEY
 2 CONSTANT _LIBMU-COMMIT-ENTRY-EXACT
 3 CONSTANT _LIBMU-COMMIT-COLLECTION-EXACT
@@ -700,6 +824,19 @@ CREATE _LIBMU-CHAIN LIB-DIGEST-SIZE ALLOT
 CREATE _LIBMU-ENTROPY LIB-DIGEST-SIZE ALLOT
 CREATE _LIBMU-RID LIB-DIGEST-SIZE ALLOT
 CREATE _LIBMU-CELL 8 ALLOT
+
+ 64 CONSTANT _LIBIX-TITLE-BYTES
+128 CONSTANT _LIBIX-TAG-BYTES
+256 CONSTANT _LIBIX-BODY-BYTES
+  0 CONSTANT _LIBIX-TITLE-OFFSET
+_LIBIX-TITLE-OFFSET _LIBIX-TITLE-BYTES +
+    CONSTANT _LIBIX-TAG-OFFSET
+_LIBIX-TAG-OFFSET _LIBIX-TAG-BYTES +
+    CONSTANT _LIBIX-BODY-OFFSET
+_LIBIX-BODY-OFFSET _LIBIX-BODY-BYTES +
+    CONSTANT _LIBIX-RECORD-SIZE
+_LIBIX-RECORD-SIZE LIB-CATALOG-MAX * CONSTANT _LIBIX-BYTES
+CREATE _LIBIX-CANDIDATE _LIBIX-BYTES ALLOT
 
 \ Compact recovery-only catalog facts.  These retain no titles, provenance,
 \ payloads, or caller-visible records; they exist only for one guarded scan.
@@ -823,11 +960,199 @@ _LIBVFS-RESET-VFS-HOOKS
 _LIBVFS-RESET-MUTATION-HOOKS
 
 \ =====================================================================
-\  Checked public managed-create request construction
+\  Activation-local disposable title/body/tag candidate index
 \ =====================================================================
+\  Each catalog slot owns three fixed Bloom bitsets.  Raw three-byte grams
+\  make every term of length three or more a bounded candidate test; shorter
+\  terms fall through to an authoritative scan.  Bloom collisions are benign
+\  because every candidate is reread and byte-compared before publication.
+
+: _LIBIX-RECORD  ( slot -- a )
+    _LIBIX-RECORD-SIZE * _LIBIX-CANDIDATE + ;
+: _LIBIX-TITLE  ( slot -- a )
+    _LIBIX-RECORD _LIBIX-TITLE-OFFSET + ;
+: _LIBIX-TAGS  ( slot -- a )
+    _LIBIX-RECORD _LIBIX-TAG-OFFSET + ;
+: _LIBIX-BODY  ( slot -- a )
+    _LIBIX-RECORD _LIBIX-BODY-OFFSET + ;
+
+: _LIBIX-INVALIDATE  ( -- )
+    0 _LIBIX-READY !
+    0 _LIBIX-STORE !
+    0 _LIBIX-GENERATION !
+    0 _LIBIX-CRC ! ;
+
+: _LIBIX-CANDIDATE-CLEAR  ( -- )
+    _LIBIX-INVALIDATE
+    _LIBIX-CANDIDATE _LIBIX-BYTES 0 FILL ;
+
+: _LIBIX-GRAM-HASH  ( a -- u )
+    DUP C@ 251 *
+    OVER 1+ C@ + 251 *
+    SWAP 2 + C@ + ;
+
+: _LIBIX-SET-BIT  ( hash -- )
+    _LIBIX-BLOOM-U @ 8 * MOD DUP _LIBIX-BIT !
+    3 RSHIFT _LIBIX-BLOOM @ + DUP C@
+    1 _LIBIX-BIT @ 7 AND LSHIFT OR SWAP C! ;
+
+: _LIBIX-BIT-SET?  ( hash -- flag )
+    _LIBIX-BLOOM-U @ 8 * MOD DUP _LIBIX-BIT !
+    3 RSHIFT _LIBIX-BLOOM @ + C@
+    1 _LIBIX-BIT @ 7 AND LSHIFT AND 0<> ;
+
+: _LIBIX-ADD$  ( a u bloom bloom-u -- )
+    _LIBIX-BLOOM-U ! _LIBIX-BLOOM !
+    _LIBIX-TEXT-U ! _LIBIX-TEXT-A !
+    _LIBIX-TEXT-U @ 3 < IF EXIT THEN
+    _LIBIX-TEXT-U @ 2 - 0 ?DO
+        _LIBIX-TEXT-A @ I + _LIBIX-GRAM-HASH _LIBIX-SET-BIT
+    LOOP ;
+
+: _LIBIX-INDEX-ENTRY  ( slot -- )
+    _LIBIX-SLOT !
+    _LIBVP-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF EXIT THEN
+    _LIBVP-ENTRY LIBE-TITLE$
+        _LIBIX-SLOT @ _LIBIX-TITLE _LIBIX-TITLE-BYTES _LIBIX-ADD$
+    _LIBVP-ENTRY LIBE.TAG-N @ 0 ?DO
+        I _LIBVP-ENTRY LIBE-TAG LIB-TAG$
+            _LIBIX-SLOT @ _LIBIX-TAGS _LIBIX-TAG-BYTES _LIBIX-ADD$
+    LOOP ;
+
+: _LIBIX-INDEX-CURRENT-BODY  ( catalog-fact -- )
+    _LIBVP-CATALOG-FACTS - _LIBVCF-SIZE / DUP
+    DUP 0< SWAP LIB-CATALOG-MAX >= OR IF DROP EXIT THEN
+    _LIBIX-SLOT !
+    _LIBVP-CONTENT LIBCT-DATA$
+        _LIBIX-SLOT @ _LIBIX-BODY _LIBIX-BODY-BYTES _LIBIX-ADD$ ;
+
+: _LIBIX-COMPUTE-CRC  ( -- crc )
+    CRC32-BEGIN _LIBIX-CANDIDATE _LIBIX-BYTES CRC32-ADD CRC32-END ;
+
+: _LIBIX-PUBLISH  ( store -- )
+    0 _LIBIX-READY !
+    DUP _LIBIX-STORE !
+    LIBRARY-VFS-STORE.GENERATION @ _LIBIX-GENERATION !
+    _LIBIX-COMPUTE-CRC _LIBIX-CRC !
+    -1 _LIBIX-READY ! ;
+
+: _LIBIX-VALID?  ( store -- flag )
+    _LIBIX-READY @ 0= IF DROP 0 EXIT THEN
+    DUP _LIBIX-STORE @ <> IF DROP 0 EXIT THEN
+    LIBRARY-VFS-STORE.GENERATION @ _LIBIX-GENERATION @ <> IF
+        0 EXIT
+    THEN
+    _LIBIX-COMPUTE-CRC _LIBIX-CRC @ = ;
+
+\ Private deterministic loss/damage seams used only by the contract fixture.
+: _LIBIX-TEST-LOSE  ( -- status )
+    _LIBIX-INVALIDATE LIBSTORE-S-OK ;
+: _LIBIX-TEST-DAMAGE  ( -- status )
+    _LIBIX-CANDIDATE DUP C@ 1 XOR SWAP C! LIBSTORE-S-OK ;
 
 : _LIBMR-ZERO?  ( a u -- flag )
     0 ?DO DUP I + C@ IF DROP 0 UNLOOP EXIT THEN LOOP DROP -1 ;
+
+\ =====================================================================
+\  Checked public corpus-query request construction
+\ =====================================================================
+
+: _LIBCQR-REQUEST-SAFE?  ( request -- flag )
+    DUP LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+        _VFSNAP-SPAN-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+        _LIBVFS-PRIVATE-ALIASES? 0= NIP ;
+
+: _LIBRARY-CORPUS-QUERY-TERM!  ( a u request -- status )
+    _LIBMR-REQUEST ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBCQR-REQUEST-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-U @ 0< IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMR-U @ LIBRARY-CORPUS-TERM-MAX > IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMR-U @ IF
+        _LIBMR-A @ _LIBMR-U @ _VFSNAP-SPAN-VALID? 0= IF
+            LIBSTORE-S-INVALID EXIT
+        THEN
+        _LIBMR-A @ _LIBMR-U @ UTF8-VALID? 0= IF
+            LIBSTORE-S-INVALID EXIT
+        THEN
+    THEN
+    _LIBMR-U @ IF
+        _LIBMR-A @ _LIBMR-REQUEST @ LIBCQR.TERM _LIBMR-U @ MOVE
+    THEN
+    _LIBMR-REQUEST @ LIBCQR.TERM _LIBMR-U @ +
+        LIBRARY-CORPUS-TERM-MAX _LIBMR-U @ - 0 FILL
+    _LIBMR-U @ _LIBMR-REQUEST @ LIBCQR.TERM-U !
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-CORPUS-QUERY-COLLECTION!  ( rid request -- status )
+    _LIBMR-REQUEST ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBCQR-REQUEST-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ LIB-DIGEST-SIZE _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ RID-PRESENT? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    \ MOVE keeps an in-request, partially overlapping RID source well-defined.
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCQR.COLLECTION
+        LIB-DIGEST-SIZE MOVE
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-CORPUS-QUERY-REQUEST-VALID?  ( request -- flag )
+    DUP _LIBCQR-REQUEST-SAFE? 0= IF DROP 0 EXIT THEN _LIBMR-REQUEST !
+    _LIBMR-REQUEST @ LIBCQR.EXPECTED-CATALOG-GENERATION @ 0< IF
+        0 EXIT
+    THEN
+    _LIBMR-REQUEST @ LIBCQR.START-SLOT @ DUP 0<
+        SWAP LIB-CATALOG-MAX > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.EXPECTED-CATALOG-GENERATION @ 0=
+    _LIBMR-REQUEST @ LIBCQR.START-SLOT @ 0<> AND IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.LIFECYCLE-MASK @ DUP 1 <
+        SWAP LIBRARY-CORPUS-LIFECYCLE-ALL > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.KIND-MASK @ DUP 1 <
+        SWAP LIBRARY-CORPUS-KIND-ALL > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.MEDIA-MASK @ DUP 1 <
+        SWAP LIBRARY-CORPUS-MEDIA-ALL > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.FIELD-MASK @ DUP 0<
+        SWAP LIBRARY-CORPUS-FIELD-ALL > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.FLAGS @ IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.TERM-U @ DUP 0<
+        SWAP LIBRARY-CORPUS-TERM-MAX > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.TERM-U @ IF
+        _LIBMR-REQUEST @ LIBCQR.FIELD-MASK @ 0= IF 0 EXIT THEN
+        _LIBMR-REQUEST @ LIBCQR-TERM$ UTF8-VALID? 0= IF 0 EXIT THEN
+    THEN
+    _LIBMR-REQUEST @ LIBCQR.TERM
+        _LIBMR-REQUEST @ LIBCQR.TERM-U @ +
+        LIBRARY-CORPUS-TERM-MAX _LIBMR-REQUEST @ LIBCQR.TERM-U @ -
+        _LIBMR-ZERO? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCQR.COLLECTION DUP LIB-DIGEST-SIZE
+        _LIBMR-ZERO? IF
+        DROP
+    ELSE
+        RID-PRESENT? 0= IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+' _LIBRARY-CORPUS-QUERY-TERM! CONSTANT _libcqr-term-set-xt
+' _LIBRARY-CORPUS-QUERY-COLLECTION! CONSTANT _libcqr-collection-set-xt
+' _LIBRARY-CORPUS-QUERY-REQUEST-VALID? CONSTANT _libcqr-valid-xt
+
+: LIBRARY-CORPUS-QUERY-TERM!  ( a u request -- status )
+    _libcqr-term-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-CORPUS-QUERY-COLLECTION!  ( rid request -- status )
+    _libcqr-collection-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-CORPUS-QUERY-REQUEST-VALID?  ( request -- flag )
+    _libcqr-valid-xt _library-vfs-store-guard WITH-GUARD ;
+
+\ =====================================================================
+\  Checked public managed-create request construction
+\ =====================================================================
 
 : _LIBMR-REQUEST-SAFE?  ( request -- flag )
     DUP LIBRARY-MANAGED-CREATE-REQUEST-SIZE _VFSNAP-SPAN-VALID? 0= IF
@@ -1962,6 +2287,7 @@ VARIABLE _LIBVA-FLAGS
     -1 ;
 
 : _LIBVP-SCAN-BANK-RECORDS  ( -- status )
+    _LIBIX-CANDIDATE-CLEAR
     _LIBVP-CATALOG-FACTS LIB-CATALOG-MAX _LIBVCF-SIZE * 0 FILL
     _LIBVP-COLLECTION-FACTS LIB-COLLECTION-MAX _LIBVCCF-SIZE * 0 FILL
     0 _LIBVP-MAX-MUTATION !
@@ -1980,6 +2306,7 @@ VARIABLE _LIBVA-FLAGS
             I _LIBVP-CATALOG-UNIQUE? 0= IF
                 LIBSTORE-S-CORRUPT UNLOOP EXIT
             THEN
+            I _LIBIX-INDEX-ENTRY
         ELSE
             _LIBVP-FRAME LIB-CATALOG-RECORD-SIZE _LIBVP-ZERO? 0= IF
                 LIBSTORE-S-CORRUPT UNLOOP EXIT
@@ -2138,6 +2465,7 @@ VARIABLE _LIBVA-FLAGS
         _LIBVP-CONTENT LIBCT.DIGEST
             _LIBVP-FACT @ _LIBVCF.CONTENT-DIGEST
             SHA3-256-COMPARE 0= IF LIBSTORE-S-CORRUPT EXIT THEN
+        _LIBVP-FACT @ _LIBIX-INDEX-CURRENT-BODY
     THEN
     LIBSTORE-S-OK ;
 
@@ -2602,6 +2930,7 @@ VARIABLE _LIBVA-FLAGS
 : _LIBVP-FINISH-CORPUS-RUN  ( status -- status )
     DUP LIBSTORE-S-OK = IF
         _LIBVP-STORE @ _LIBVFS-PUBLISH-CANDIDATES
+        _LIBVP-STORE @ _LIBIX-PUBLISH
         _LIBVP-STORE @ _LIBVFS-CLEAR-CORPUS-BLOCK
     ELSE
         DUP _LIBVFS-CORPUS-BLOCKING? IF
@@ -2614,6 +2943,7 @@ VARIABLE _LIBVA-FLAGS
 : _LIBRARY-VFS-STORE-LOAD  ( store -- status )
     DUP LIBRARY-VFS-STORE-VALID? 0= IF DROP LIBSTORE-S-INVALID EXIT THEN
     DUP _LIBVP-STORE !
+    _LIBIX-INVALIDATE
     DUP _LIBVFS-CLEAR-PUBLISHED
     DUP _LIBRARY-VFS-STORE-RECOVER DUP IF
         SWAP _LIBVFS-CORPUS-RESULT EXIT
@@ -2663,6 +2993,7 @@ VARIABLE _LIBVA-FLAGS
     _LIBVP-STORE @ LIBRARY-VFS-STORE-BLOCKED? IF
         DROP _LIBVP-STORE @ LIBRARY-VFS-STORE-LAST-STATUS@ EXIT
     THEN
+    _LIBIX-INVALIDATE
     _LIBVP-STORE @ _LIBVFS-CLEAR-PUBLISHED
     0 _LIBVP-CLEANUP-EVIDENCE !
     _LIBVP-ARENA-ID LIB-DIGEST-SIZE 0 FILL
@@ -3740,6 +4071,326 @@ VARIABLE _LIBVA-FLAGS
     _libvfs-query-active-xt _library-vfs-store-guard WITH-GUARD ;
 
 \ ---------------------------------------------------------------------
+\ Disposable-indexed, authoritative bounded corpus query
+\ ---------------------------------------------------------------------
+
+: _LIBIX-MAY-CONTAIN?  ( bloom bloom-u -- flag )
+    _LIBIX-BLOOM-U ! _LIBIX-BLOOM !
+    _LIBMU-REQUEST @ LIBCQR-TERM$
+        _LIBIX-TEXT-U ! _LIBIX-TEXT-A !
+    _LIBIX-TEXT-U @ 3 < IF -1 EXIT THEN
+    _LIBIX-TEXT-U @ 2 - 0 ?DO
+        _LIBIX-TEXT-A @ I + _LIBIX-GRAM-HASH
+            _LIBIX-BIT-SET? 0= IF 0 UNLOOP EXIT THEN
+    LOOP
+    -1 ;
+
+: _LIBIX-SLOT-MAY-MATCH?  ( slot -- flag )
+    _LIBIX-SLOT !
+    _LIBMU-REQUEST @ LIBCQR.TERM-U @ 3 < IF -1 EXIT THEN
+    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-TITLE AND IF
+        _LIBIX-SLOT @ _LIBIX-TITLE _LIBIX-TITLE-BYTES
+            _LIBIX-MAY-CONTAIN? IF -1 EXIT THEN
+    THEN
+    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-TAGS AND IF
+        _LIBIX-SLOT @ _LIBIX-TAGS _LIBIX-TAG-BYTES
+            _LIBIX-MAY-CONTAIN? IF -1 EXIT THEN
+    THEN
+    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-BODY AND IF
+        _LIBIX-SLOT @ _LIBIX-BODY _LIBIX-BODY-BYTES
+            _LIBIX-MAY-CONTAIN? IF -1 EXIT THEN
+    THEN
+    0 ;
+
+: _LIBCQ-CONTAINS?  ( hay-a hay-u needle-a needle-u -- flag )
+    _LIBCQ-NEEDLE-U ! _LIBCQ-NEEDLE-A !
+    _LIBCQ-HAY-U ! _LIBCQ-HAY-A !
+    _LIBCQ-NEEDLE-U @ 0= IF -1 EXIT THEN
+    _LIBCQ-NEEDLE-U @ _LIBCQ-HAY-U @ > IF 0 EXIT THEN
+    _LIBCQ-HAY-U @ _LIBCQ-NEEDLE-U @ - 1+ 0 ?DO
+        _LIBCQ-HAY-A @ I + _LIBCQ-NEEDLE-U @
+        _LIBCQ-NEEDLE-A @ _LIBCQ-NEEDLE-U @ COMPARE 0= IF
+            -1 UNLOOP EXIT
+        THEN
+    LOOP
+    0 ;
+
+: _LIBCQ-TAGS-MATCH?  ( entry -- flag )
+    DUP _LIBCQ-ENTRY ! LIBE.TAG-N @ 0 ?DO
+        I _LIBCQ-ENTRY @ LIBE-TAG LIB-TAG$
+        _LIBMU-REQUEST @ LIBCQR-TERM$ COMPARE 0= IF
+            -1 UNLOOP EXIT
+        THEN
+    LOOP
+    0 ;
+
+: _LIBCQ-FACT-SCOPE?  ( fact -- flag )
+    _LIBVP-FACT !
+    1 _LIBVP-FACT @ _LIBVCF.LIFECYCLE @ 1- LSHIFT
+        _LIBMU-REQUEST @ LIBCQR.LIFECYCLE-MASK @ AND 0= IF 0 EXIT THEN
+    1 _LIBVP-FACT @ _LIBVCF.KIND @ 1- LSHIFT
+        _LIBMU-REQUEST @ LIBCQR.KIND-MASK @ AND 0= IF 0 EXIT THEN
+    1 _LIBVP-FACT @ _LIBVCF.MEDIA @ 1- LSHIFT
+        _LIBMU-REQUEST @ LIBCQR.MEDIA-MASK @ AND 0<> ;
+
+: _LIBCQ-COLLECTION-REQUESTED?  ( -- flag )
+    _LIBMU-REQUEST @ LIBCQR.COLLECTION LIB-DIGEST-SIZE
+        _LIBMR-ZERO? 0= ;
+
+: _LIBCQ-SLOT-ELIGIBLE?  ( slot -- flag )
+    DUP _LIBVP-CATALOG-FACT _LIBCQ-FACT-SCOPE? 0= IF DROP 0 EXIT THEN
+    _LIBCQ-COLLECTION-FILTER @ IF
+        DUP _LIBMU-FOUND-COLLECTION LIBC-MEMBER? 0= IF DROP 0 EXIT THEN
+    THEN
+    _LIBIX-SLOT-MAY-MATCH? ;
+
+: _LIBCQ-READ-CONTENT  ( -- status )
+    _LIBCQ-READ-CONTENT-XT @ ?DUP IF
+        EXECUTE
+    ELSE
+        LIBSTORE-S-RECOVERY
+    THEN ;
+
+: _LIBCQ-ENTRY-MATCH  ( -- match? status )
+    _LIBMU-REQUEST @ LIBCQR.TERM-U @ 0= IF
+        -1 LIBSTORE-S-OK EXIT
+    THEN
+    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-TITLE AND IF
+        _LIBMU-FOUND-ENTRY LIBE-TITLE$
+            _LIBMU-REQUEST @ LIBCQR-TERM$ _LIBCQ-CONTAINS? IF
+            -1 LIBSTORE-S-OK EXIT
+        THEN
+    THEN
+    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-TAGS AND IF
+        _LIBMU-FOUND-ENTRY _LIBCQ-TAGS-MATCH? IF
+            -1 LIBSTORE-S-OK EXIT
+        THEN
+    THEN
+    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-BODY AND IF
+        _LIBMU-FOUND-ENTRY LIBE.ID _LIBMU-ID !
+        LIB-CONTENT-MAX _LIBMU-CONTENT-CAP !
+        _LIBMU-CONTENT-CURRENT _LIBMU-CONTENT-MODE !
+        LIBSTORE-S-CORRUPT _LIBMU-MISSING-CONTENT-STATUS !
+        _LIBCQ-READ-CONTENT DUP IF 0 SWAP EXIT THEN DROP
+        _LIBMU-CONTENT-READBACK LIBCT-DATA$
+            _LIBMU-REQUEST @ LIBCQR-TERM$ _LIBCQ-CONTAINS?
+            LIBSTORE-S-OK EXIT
+    THEN
+    0 LIBSTORE-S-OK ;
+
+: _LIBMU-CORPUS-QUERY-ARGS  ( request summaries capacity store -- status )
+    _LIBMU-STORE ! _LIBMU-CAPACITY ! _LIBMU-ENTRIES ! _LIBMU-REQUEST !
+    0 _LIBMU-COUNT !
+    0 _LIBMU-START !
+    0 _LIBMU-NEXT !
+    0 _LIBMU-EXPECTED-CATALOG-GENERATION !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMU-REQUEST @ LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-REQUEST @ _LIBRARY-CORPUS-QUERY-REQUEST-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMU-REQUEST @ LIBCQR.START-SLOT @ DUP
+        _LIBMU-START ! _LIBMU-NEXT !
+    _LIBMU-REQUEST @ LIBCQR.EXPECTED-CATALOG-GENERATION @
+        _LIBMU-EXPECTED-CATALOG-GENERATION !
+    _LIBMU-CAPACITY @ DUP 1 < SWAP LIBRARY-QUERY-PAGE-MAX > OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMU-ENTRIES @ _LIBMU-CAPACITY @ LIBRARY-QUERY-SUMMARY-SIZE *
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-REQUEST @ LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+        _LIBMU-ENTRIES @ _LIBMU-CAPACITY @ LIBRARY-QUERY-SUMMARY-SIZE *
+        _VFSNAP-RANGES-OVERLAP? IF LIBSTORE-S-INVALID EXIT THEN
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-VFS-STORE-QUERY-CORPUS
+  ( request summaries capacity store -- count next generation status )
+    0 _LIBMU-ACTUAL-CATALOG-GENERATION !
+    _LIBMU-CORPUS-QUERY-ARGS DUP IF
+        _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? IF
+            _LIBMU-QUERY-RETURN
+        ELSE
+            DROP 0 0 0 LIBSTORE-S-INVALID
+        THEN
+        EXIT
+    THEN
+    DROP _LIBMU-CLEAR-QUERY-OUTPUT
+    _LIBMU-REFRESH DUP IF _LIBMU-QUERY-RETURN EXIT THEN DROP
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @
+        _LIBMU-ACTUAL-CATALOG-GENERATION !
+    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0<>
+    _LIBMU-EXPECTED-CATALOG-GENERATION @
+        _LIBMU-ACTUAL-CATALOG-GENERATION @ <> AND IF
+        LIBSTORE-S-CONFLICT _LIBMU-QUERY-RETURN EXIT
+    THEN
+    _LIBMU-STORE @ _LIBIX-VALID? 0= IF
+        LIBSTORE-S-CORRUPT _LIBMU-QUERY-RETURN EXIT
+    THEN
+    _LIBMU-START @
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @ > IF
+        LIBSTORE-S-INVALID _LIBMU-QUERY-RETURN EXIT
+    THEN
+    0 _LIBCQ-COLLECTION-FILTER !
+    _LIBCQ-COLLECTION-REQUESTED? IF
+        _LIBMU-REQUEST @ LIBCQR.COLLECTION _LIBMU-FIND-COLLECTION-RID
+            DUP -1 = IF
+            DROP LIBSTORE-S-NOT-FOUND _LIBMU-QUERY-RETURN EXIT
+        THEN
+        _LIBMU-READ-COLLECTION DUP IF _LIBMU-QUERY-RETURN EXIT THEN DROP
+        -1 _LIBCQ-COLLECTION-FILTER !
+    THEN
+    BEGIN
+        _LIBMU-NEXT @
+            _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
+                LIBBF.CATALOG-COUNT @ <
+        _LIBMU-COUNT @ _LIBMU-CAPACITY @ < AND
+    WHILE
+        _LIBMU-NEXT @ _LIBCQ-SLOT-ELIGIBLE? IF
+            _LIBMU-NEXT @ _LIBMU-READ-ENTRY DUP IF
+                _LIBMU-CLEAR-QUERY-OUTPUT _LIBMU-QUERY-RETURN EXIT
+            THEN
+            DROP
+            _LIBCQ-ENTRY-MATCH _LIBMU-STATUS !
+            _LIBMU-STATUS @ IF
+                DROP _LIBMU-CLEAR-QUERY-OUTPUT
+                _LIBMU-STATUS @ _LIBMU-QUERY-RETURN EXIT
+            THEN
+            IF
+                _LIBMU-FOUND-ENTRY
+                    _LIBMU-ENTRIES @ _LIBMU-COUNT @
+                        LIBRARY-QUERY-SUMMARY-SIZE * +
+                    _LIBMU-BUILD-QUERY-SUMMARY
+                1 _LIBMU-COUNT +!
+            THEN
+        THEN
+        1 _LIBMU-NEXT +!
+    REPEAT
+    _LIBMU-NEXT @
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
+            LIBBF.CATALOG-COUNT @ = IF
+        -1 _LIBMU-NEXT !
+    THEN
+    LIBSTORE-S-OK _LIBMU-QUERY-RETURN ;
+
+' _LIBRARY-VFS-STORE-QUERY-CORPUS CONSTANT _libvfs-query-corpus-xt
+
+: LIBRARY-VFS-STORE-QUERY-CORPUS
+  ( request summaries capacity store -- count next generation status )
+    _libvfs-query-corpus-xt _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Generation-stable bounded collection enumeration
+\ ---------------------------------------------------------------------
+
+: _LIBMU-COLLECTION-QUERY-ARGS
+  ( expected-generation start summaries capacity store -- status )
+    _LIBMU-STORE ! _LIBMU-CAPACITY ! _LIBMU-ENTRIES !
+    _LIBMU-START ! _LIBMU-EXPECTED-CATALOG-GENERATION !
+    0 _LIBMU-COUNT !
+    _LIBMU-START @ _LIBMU-NEXT !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0< IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMU-START @ 0< IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0=
+        _LIBMU-START @ 0<> AND IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-CAPACITY @ DUP 1 < SWAP LIBRARY-QUERY-PAGE-MAX > OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMU-ENTRIES @ _LIBMU-CAPACITY @ LIBRARY-COLLECTION-SUMMARY-SIZE *
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    LIBSTORE-S-OK ;
+
+: _LIBMU-CLEAR-COLLECTION-QUERY-OUTPUT  ( -- )
+    _LIBMU-CAPACITY @ 0 ?DO
+        _LIBMU-ENTRIES @ I LIBRARY-COLLECTION-SUMMARY-SIZE * +
+            LIBRARY-COLLECTION-SUMMARY-INIT
+    LOOP
+    0 _LIBMU-COUNT !
+    _LIBMU-START @ _LIBMU-NEXT ! ;
+
+: _LIBMU-BUILD-COLLECTION-SUMMARY  ( collection summary -- )
+    >R
+    R@ LIBRARY-COLLECTION-SUMMARY-INIT
+    DUP LIBC.ID R@ LIBCS.REF RREF.ID RID-COPY
+    DUP LIBC.REVISION @ R@ LIBCS.REVISION !
+    DUP LIBC.MUTATION-SEQUENCE @ R@ LIBCS.MUTATION-SEQUENCE !
+    DUP LIBC.MEMBER-N @ R@ LIBCS.MEMBER-N !
+    DUP LIBC.FLAGS @ R@ LIBCS.FLAGS !
+    DUP LIBC.TITLE-U @ R@ LIBCS.TITLE-U !
+    DUP LIBC.TITLE R@ LIBCS.TITLE ROT LIBC.TITLE-U @ CMOVE
+    R> DROP ;
+
+: _LIBRARY-VFS-STORE-QUERY-COLLECTIONS
+  ( expected start summaries capacity store -- count next generation status )
+    0 _LIBMU-ACTUAL-CATALOG-GENERATION !
+    _LIBMU-COLLECTION-QUERY-ARGS DUP IF
+        _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? IF
+            _LIBMU-QUERY-RETURN
+        ELSE
+            DROP 0 0 0 LIBSTORE-S-INVALID
+        THEN
+        EXIT
+    THEN
+    DROP _LIBMU-CLEAR-COLLECTION-QUERY-OUTPUT
+    _LIBMU-REFRESH DUP IF _LIBMU-QUERY-RETURN EXIT THEN DROP
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @
+        _LIBMU-ACTUAL-CATALOG-GENERATION !
+    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0<>
+    _LIBMU-EXPECTED-CATALOG-GENERATION @
+        _LIBMU-ACTUAL-CATALOG-GENERATION @ <> AND IF
+        LIBSTORE-S-CONFLICT _LIBMU-QUERY-RETURN EXIT
+    THEN
+    _LIBMU-START @
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
+            LIBBF.COLLECTION-COUNT @ > IF
+        LIBSTORE-S-INVALID _LIBMU-QUERY-RETURN EXIT
+    THEN
+    BEGIN
+        _LIBMU-NEXT @
+            _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
+                LIBBF.COLLECTION-COUNT @ <
+        _LIBMU-COUNT @ _LIBMU-CAPACITY @ < AND
+    WHILE
+        _LIBMU-NEXT @ _LIBMU-READ-COLLECTION DUP IF
+            _LIBMU-CLEAR-COLLECTION-QUERY-OUTPUT
+                _LIBMU-QUERY-RETURN EXIT
+        THEN
+        DROP
+        _LIBMU-FOUND-COLLECTION
+            _LIBMU-ENTRIES @ _LIBMU-COUNT @
+                LIBRARY-COLLECTION-SUMMARY-SIZE * +
+            _LIBMU-BUILD-COLLECTION-SUMMARY
+        1 _LIBMU-COUNT +!
+        1 _LIBMU-NEXT +!
+    REPEAT
+    _LIBMU-NEXT @
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
+            LIBBF.COLLECTION-COUNT @ = IF
+        -1 _LIBMU-NEXT !
+    THEN
+    LIBSTORE-S-OK _LIBMU-QUERY-RETURN ;
+
+' _LIBRARY-VFS-STORE-QUERY-COLLECTIONS
+    CONSTANT _libvfs-query-collections-xt
+
+: LIBRARY-VFS-STORE-QUERY-COLLECTIONS
+  ( expected start summaries capacity store -- count next generation status )
+    _libvfs-query-collections-xt _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
 \ Exact current managed-document read
 \ ---------------------------------------------------------------------
 
@@ -3888,6 +4539,8 @@ VARIABLE _LIBVA-FLAGS
     _LIBMU-STORE @ LIBRARY-VFS-STORE.VFS @ _LIBVP-VFS !
     ['] _LIBMU-READ-CONTENT-BODY _LIBVP-RUN
         _LIBMU-STORE @ _LIBVP-RESULT ;
+
+' _LIBMU-READ-CONTENT _LIBCQ-READ-CONTENT-XT !
 
 : _LIBMU-READ-RETURN  ( status -- required-u status )
     _LIBMU-STORE @ _LIBVFS-RESULT >R _LIBMU-REQUIRED-U @ R> ;
@@ -4948,7 +5601,8 @@ VARIABLE _LIBVA-FLAGS
 : _LIBRARY-VFS-STORE-FINI  ( store -- status )
     DUP LIBRARY-VFS-STORE-VALID? 0= IF DROP LIBSTORE-S-INVALID EXIT THEN
     DUP >R _LIBRARY-VFS-STORE.CORE VFSNAP-FINI DUP VFSNAP-S-OK = IF
-        DROP R> LIBRARY-VFS-STORE-SIZE 0 FILL LIBSTORE-S-OK
+        DROP R> DUP _LIBIX-STORE @ = IF _LIBIX-CANDIDATE-CLEAR THEN
+        LIBRARY-VFS-STORE-SIZE 0 FILL LIBSTORE-S-OK
     ELSE
         R> _LIBVFS-ADAPT
     THEN ;
