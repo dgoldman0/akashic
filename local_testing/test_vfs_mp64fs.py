@@ -5,7 +5,7 @@ These tests attach a formatted MP64FS disk image to the emulator,
 load the VFS + binding, then exercise probe, init, readdir, read,
 write, create, delete, sync, and teardown through the VFS API.
 """
-import os, sys, struct, tempfile, time
+import os, subprocess, sys, struct, tempfile, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -23,6 +23,12 @@ VFS_MP_F  = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "drivers", "vfs-mp6
 
 sys.path.insert(0, MEGAPAD_ROOT)
 from asm import assemble
+from devices import (
+    STORAGE_CMD_FLUSH,
+    STORAGE_CMD_READ,
+    STORAGE_RESULT_FLUSH_FAILURE,
+    STORAGE_RESULT_MEDIA_FAILURE,
+)
 from system import MegapadSystem
 
 BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
@@ -285,7 +291,8 @@ def build_snapshot():
     return _snapshot
 
 
-def run_forth(lines, max_steps=800_000_000, disk_image=None):
+def run_forth(lines, max_steps=800_000_000, disk_image=None,
+              storage_faults=None):
     """Run Forth code from the saved snapshot.
 
     If disk_image (bytes) is provided, replace the storage image before running.
@@ -311,6 +318,8 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None):
     img = disk_image if disk_image else storage_bytes
     sys_obj.storage._image_data[:len(img)] = img
     sys_obj.storage._capacity_sectors = len(img) // SECTOR
+    for fault in storage_faults or ():
+        sys_obj.storage.inject_fault(**fault)
     buf.clear()
 
     payload = "\n".join(lines) + "\nBYE\n"
@@ -330,14 +339,110 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None):
     return uart_text(buf), sys_obj
 
 
+def run_fresh_forth(image_path, lines, max_steps=800_000_000):
+    """Boot and load the complete MP64FS test stack without a saved snapshot.
+
+    This deliberately owns only ``MegapadSystem`` rather than a
+    ``MachineSession``.  Process exit therefore cannot persist storage through
+    the session-close convenience path; any bytes visible to another process
+    crossed the guest's checked FLUSH boundary.
+    """
+    bios_code = _load_bios()
+    load_lines = _load_forth_lines(KDOS_PATH) + ["ENTER-USERLAND"]
+    for path in [
+        EVENT_F, SEM_F, GUARD_F, UTF8_F, MEMORY_SPAN_F,
+        VFS_F, VFS_MNT_F, VFS_MP_F,
+    ]:
+        load_lines += _load_forth_lines(path)
+    load_lines += [
+        'CREATE _RB 4096 ALLOT',
+        'CREATE _WB 4096 ALLOT',
+        'VARIABLE _TARN',
+        ': T-VMP-NEW  ( -- vfs )',
+        '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
+        '    _TARN @ VMP-NEW ;',
+    ]
+
+    sys_obj = MegapadSystem(
+        ram_size=1024 * 1024,
+        ext_mem_size=16 * (1 << 20),
+        storage_image=image_path,
+    )
+    output = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    payload = ("\n".join(load_lines + list(lines) + ["BYE"]) + "\n").encode()
+    pos = 0
+    steps = 0
+    while steps < max_steps:
+        if sys_obj.cpu.halted:
+            break
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            if pos < len(payload):
+                chunk = _next_line_chunk(payload, pos)
+                sys_obj.uart.inject_input(chunk)
+                pos += len(chunk)
+            else:
+                break
+            continue
+        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
+        steps += max(batch, 1)
+    return uart_text(output)
+
+
+def _cold_worker(phase, image_path):
+    if phase == "write":
+        lines = [
+            'T-VMP-NEW CONSTANT _V',
+            '_V VMP-INIT . ." <init "',
+            '_V VFS-USE',
+            'S" /hello.txt" VFS-OPEN CONSTANT _FD',
+            'S" COLD-PERSISTED" _FD VFS-WRITE . ." <wrote "',
+            '_V VFS-SYNC . ." <sync WRITE-DONE"',
+        ]
+    elif phase == "read":
+        lines = [
+            'T-VMP-NEW CONSTANT _V',
+            '_V VMP-INIT . ." <init "',
+            '_V VFS-USE',
+            'S" /hello.txt" VFS-OPEN CONSTANT _FD',
+            '_RB 14 _FD VFS-READ . ." <read "',
+            '_RB 14 TYPE ."  READ-DONE"',
+        ]
+    else:
+        raise ValueError(f"unknown cold-worker phase {phase!r}")
+    print(run_fresh_forth(image_path, lines), end="")
+
+
+def _run_cold_subprocess(phase, image_path):
+    result = subprocess.run(
+        [sys.executable, os.path.abspath(__file__), "--cold-worker", phase,
+         image_path],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if result.returncode:
+        raise AssertionError(
+            f"cold {phase} worker failed ({result.returncode}):\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+    return result.stdout
+
+
 # ── Test framework ───────────────────────────────────────────────────
 
 _pass_count = 0
 _fail_count = 0
 
-def check(name, forth_lines, expected, disk_image=None):
+def check(name, forth_lines, expected, disk_image=None, storage_faults=None):
     global _pass_count, _fail_count
-    output, _ = run_forth(forth_lines, disk_image=disk_image)
+    output, _ = run_forth(
+        forth_lines,
+        disk_image=disk_image,
+        storage_faults=storage_faults,
+    )
     clean = output.strip()
     if expected in clean:
         _pass_count += 1
@@ -383,6 +488,18 @@ def test_init_success():
         'T-VMP-NEW CONSTANT _V',
         '_V VMP-INIT . ." <ior"',
     ], "0 <ior")
+
+
+def test_init_propagates_checked_read_failure():
+    """Failed metadata I/O is returned before cached bytes are parsed."""
+    check("init-checked-read-failure", [
+        'T-VMP-NEW CONSTANT _V',
+        '_V VMP-INIT . ." <ior"',
+    ], "9 <ior", storage_faults=[{
+        "stage": "start",
+        "result": STORAGE_RESULT_MEDIA_FAILURE,
+        "command": STORAGE_CMD_READ,
+    }])
 
 
 def test_init_dynamic_geometry():
@@ -670,6 +787,27 @@ def test_sync():
     ], "0 <syncior")
 
 
+def test_sync_retains_dirty_metadata_until_flush_succeeds():
+    """A failed checked FLUSH leaves metadata retryable and still dirty."""
+    check("sync-retains-dirty-on-flush-failure", [
+        'T-VMP-NEW CONSTANT _V',
+        '_V VMP-INIT DROP',
+        '_V VFS-USE',
+        'S" /hello.txt" VFS-OPEN CONSTANT _FD',
+        'S" RETRY" _FD VFS-WRITE DROP',
+        'VARIABLE _S1 VARIABLE _D1 VARIABLE _S2 VARIABLE _D2',
+        '_FD FD.INODE @ _V _VMP-SYNC _S1 !',
+        '_V V.BCTX @ _VMP-C.DDIR + @ _D1 !',
+        '_FD FD.INODE @ _V _VMP-SYNC _S2 !',
+        '_V V.BCTX @ _VMP-C.DDIR + @ _D2 !',
+        '_S1 @ . _D1 @ . _S2 @ . _D2 @ . ." <states"',
+    ], "13 -1 0 0 <states", storage_faults=[{
+        "stage": "flush",
+        "result": STORAGE_RESULT_FLUSH_FAILURE,
+        "command": STORAGE_CMD_FLUSH,
+    }])
+
+
 def test_destroy():
     """VFS-DESTROY does not crash."""
     check("destroy", [
@@ -680,7 +818,7 @@ def test_destroy():
 
 
 def test_two_instances():
-    """Two separate VFS instances on the same disk don't interfere."""
+    """Two cache contexts can independently read the same ambient disk."""
     check("two-instances", [
         'T-VMP-NEW CONSTANT _VA',
         '_VA VMP-INIT DROP',
@@ -727,11 +865,50 @@ def test_vmp_new_convenience():
     ], "0 <ior")
 
 
+def test_checked_sync_survives_fresh_process_without_session_close():
+    """Guest WRITE+FLUSH is visible after destroying the emulator process."""
+    global _pass_count, _fail_count
+    fd, image_path = tempfile.mkstemp(suffix=".img")
+    try:
+        image = build_disk_image([
+            ("hello.txt", PARENT_ROOT, FTYPE_TEXT, b"original-contents"),
+        ])
+        os.write(fd, image)
+        os.close(fd)
+        fd = -1
+
+        first = _run_cold_subprocess("write", image_path)
+        second = _run_cold_subprocess("read", image_path)
+        expected = (
+            "0 <init" in first
+            and "14 <wrote" in first
+            and "0 <sync WRITE-DONE" in first
+            and "0 <init" in second
+            and "14 <read" in second
+            and "COLD-PERSISTED READ-DONE" in second
+        )
+        if expected:
+            _pass_count += 1
+            print("  PASS  checked-sync-cold-process")
+        else:
+            _fail_count += 1
+            print("  FAIL  checked-sync-cold-process")
+            print("        writer:", first[-1000:])
+            print("        reader:", second[-1000:])
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if os.path.exists(image_path):
+            os.unlink(image_path)
+
+
 # =====================================================================
 #  Runner
 # =====================================================================
 
-if __name__ == "__main__":
+if __name__ == "__main__" and len(sys.argv) >= 4 and sys.argv[1] == "--cold-worker":
+    _cold_worker(sys.argv[2], sys.argv[3])
+elif __name__ == "__main__":
     build_snapshot()
     print()
     print("=" * 60)
@@ -741,6 +918,7 @@ if __name__ == "__main__":
     test_probe_valid()
     test_probe_invalid()
     test_init_success()
+    test_init_propagates_checked_read_failure()
     test_init_dynamic_geometry()
     test_init_rejects_inconsistent_geometry()
     test_init_rejects_non_one_format_marker()
@@ -763,11 +941,13 @@ if __name__ == "__main__":
     test_create_file()
     test_delete_file()
     test_sync()
+    test_sync_retains_dirty_metadata_until_flush_succeeds()
     test_destroy()
     test_two_instances()
     test_read_offset()
     test_vmp_new_convenience()
     test_empty_disk()
+    test_checked_sync_survives_fresh_process_without_session_close()
 
     print()
     print(f"  Results: {_pass_count} passed, {_fail_count} failed "

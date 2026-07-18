@@ -89,9 +89,10 @@ a pure ramdisk.
 ```forth
 VFS-DESTROY  ( vfs -- )
 ```
-Flush dirty state via the binding's teardown xt, then destroy the
-backing arena.  All inodes, FDs, strings, and file buffers are
-reclaimed in bulk.
+Call the binding's void teardown xt, then destroy the backing arena. All
+inodes, FDs, strings, and file buffers are reclaimed in bulk. Teardown is
+best-effort and cannot return a write or flush failure; callers that require a
+reportable durability boundary must call `VFS-SYNC` successfully first.
 
 ### VFS-USE / VFS-CUR
 ```forth
@@ -332,7 +333,10 @@ VFS-SYNC  ( vfs -- ior )
 ```
 Walk all slab pages and call the binding's `sync` xt for every dirty inode,
 then call it once with inode 0 so metadata-only create/delete operations are
-flushed. Returns 0 on success.
+flushed. Returns 0 only when every binding reports success. For MP64FS the
+binding writes its dirty metadata through the serialized checked block API and
+then completes the backend FLUSH durability operation; a failed write or flush
+returns nonzero and retains binding dirty state for an explicit retry.
 
 ### VFS-SET-HWM
 ```forth
@@ -352,7 +356,7 @@ A binding is a vtable of 10 execution tokens passed to `VFS-NEW`:
 |-------|-----------|----------|
 | 0 | `( sector-0-buf vfs -- flag )` | **probe** — recognise format |
 | 1 | `( vfs -- ior )` | **init** — read superblock, populate ctx |
-| 2 | `( vfs -- )` | **teardown** — flush, free ctx |
+| 2 | `( vfs -- )` | **teardown** — best-effort cleanup, free ctx |
 | 3 | `( buf len off inode vfs -- actual )` | **read** |
 | 4 | `( buf len off inode vfs -- actual )` | **write** |
 | 5 | `( inode vfs -- )` | **readdir** — populate children |

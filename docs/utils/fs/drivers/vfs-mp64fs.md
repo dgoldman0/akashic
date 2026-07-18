@@ -1,9 +1,10 @@
 # akashic-vfs-mp64fs — MP64FS Binding for the VFS Layer
 
 Bridges the abstract VFS to the Megapad-64 native filesystem
-(MP64FS).  All byte transfer goes through the BIOS disk
-primitives (`DISK-SEC!`, `DISK-DMA!`, `DISK-N!`, `DISK-READ`,
-`DISK-WRITE`) which are already defined by KDOS.
+(MP64FS).  Production transfer uses KDOS's serialized
+`DISK-READ-CHECKED`, `DISK-WRITE-CHECKED`, and `DISK-FLUSH-CHECKED`
+operations.  The binding does not poll the controller or translate its
+results independently.
 
 ```forth
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
@@ -31,9 +32,10 @@ Depends on `akashic-vfs`.
 
 | Principle | Detail |
 |---|---|
-| **One VFS per disk** | Each VFS instance backed by MP64FS owns a single disk image.  Multiple MP64FS disks need multiple VFS instances. |
+| **Ambient disk binding** | Each VFS instance owns independent MP64FS cache state, but every instance currently targets KDOS's singleton checked disk API. Explicit device/volume identity, multi-disk routing, and stale-media handles belong to the next block-device contract. |
 | **Cached metadata** | Superblock, bitmap, and full directory are cached in arena RAM on init.  Only data sectors hit the disk on read/write. |
-| **Lazy metadata flush** | Dirty bitmap and directory caches are written back on explicit `VFS-SYNC` or `VFS-DESTROY`; data sectors are written by each write operation. |
+| **Checked I/O** | Initialization refuses failed metadata reads. Data callbacks throw the precise nonzero block status rather than converting an I/O failure into EOF or a short success. |
+| **Durable explicit sync** | Dirty bitmap and directory caches are written on `VFS-SYNC`, followed by the checked device FLUSH. Dirty state is retained until the complete sequence succeeds. `VFS-DESTROY` has only a void, best-effort teardown hook and is not a substitute for an explicit, reportable `VFS-SYNC`. |
 | **Sector-aligned DMA** | Partial-sector reads/writes use a 512-byte scratch buffer.  Full sectors bypass the scratch for direct DMA. |
 | **Matches KDOS layout** | Sector 0 = superblock, bitmap starts at 1, the next 12 sectors are the directory, and data follows. Geometry is derived from media capacity. |
 
@@ -47,7 +49,7 @@ Depends on `akashic-vfs`.
     VMP-NEW  CONSTANT my-vfs
 
 \ Initialise: reads superblock, bitmap, and directory from disk
-my-vfs VMP-INIT DROP
+my-vfs VMP-INIT ?DUP IF THROW THEN
 
 \ Set as current VFS context
 my-vfs VFS-USE
@@ -61,7 +63,10 @@ S" /readme.txt" VFS-OPEN  CONSTANT fd
 buf 2048 fd VFS-READ  .  \ prints bytes read
 fd VFS-CLOSE
 
-\ Clean up (flushes dirty caches to disk)
+\ Make the durability boundary explicit before the void teardown callback
+my-vfs VFS-SYNC ?DUP IF THROW THEN
+
+\ Clean up
 my-vfs VFS-DESTROY
 ```
 
@@ -149,7 +154,9 @@ Initialise the MP64FS binding for a VFS instance:
 
 Returns `ior` = 0 on success, -1 for no disk/arena failure, -2 for bad magic,
 -3 for a non-1 marker or inconsistent geometry, and -4 when a metadata sector
-is advertised as free.  A malformed directory entry returns -5.
+is advertised as free.  A malformed directory entry returns -5.  A checked
+metadata-read failure returns its stable positive block-I/O status and no
+bytes from the failed read are parsed or published.
 
 ### VMP-VTABLE
 
@@ -205,7 +212,9 @@ _VMP-READ  ( buf len offset inode vfs -- actual )
 Read up to `len` bytes starting at byte `offset` within the file.
 Uses sector-aligned DMA for full sectors; a scratch buffer for
 partial head/tail sectors.  Returns actual bytes read (clamped to
-file size).
+file size). A checked block failure is thrown; it is never reported as EOF or
+zero progress. The current VFS callback does not return the controller's
+structured completed-sector count alongside that exception.
 
 ### _VMP-WRITE
 
@@ -219,6 +228,9 @@ the requested run as `ext1`; later growth extends that secondary extent in
 place. Transfers stop and restart at extent boundaries. If allocation cannot
 cover the whole request, VFS partial-write semantics apply. The callback marks
 the bitmap/directory caches and inode metadata dirty and updates `used_bytes`.
+A checked device failure throws the precise status. The current VFS callback
+does not return the controller's structured completed-sector count on that
+error, so callers must not infer that an unreported suffix succeeded.
 
 ### _VMP-SYNC
 
@@ -228,8 +240,11 @@ _VMP-SYNC  ( inode vfs -- ior )
 
 For a non-root inode, first reflect its current name into its stable directory
 slot. If the bitmap cache is dirty, write its validated sector count; if the
-directory cache is dirty, write all validated directory sectors. VFS also invokes the binding
-once with inode 0 so metadata-only operations are flushed.
+directory cache is dirty, write all validated directory sectors. Then issue
+the checked device FLUSH that orders and makes those writes durable according
+to the active backend contract. Only after all three stages succeed are the
+cache dirty flags cleared. VFS also invokes the binding once with inode 0 so
+metadata-only operations are flushed.
 
 ### _VMP-CREATE
 

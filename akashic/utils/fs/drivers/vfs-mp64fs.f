@@ -1,9 +1,9 @@
 \ vfs-mp64fs.f — MP64FS binding for the VFS layer
 \
 \ Bridges the abstract VFS to the Megapad-64 native filesystem
-\ (MP64FS).  All byte transfer goes through the BIOS disk
-\ primitives (DISK-SEC!, DISK-DMA!, DISK-N!, DISK-READ,
-\ DISK-WRITE) which are already defined by KDOS.
+\ (MP64FS).  Production byte transfer goes through KDOS's checked,
+\ serialized block-I/O words.  Raw DISK-* register words remain a BIOS
+\ diagnostic interface and are deliberately not used by this binding.
 \
 \ Prefix: VMP-   (public API)
 \         _VMP-  (internal helpers)
@@ -25,6 +25,7 @@ REQUIRE ../vfs.f
 4096 CONSTANT _VMP-BITS-PER-BMAP-SECTOR
 8192 CONSTANT _VMP-MAX-SECTORS
 255  CONSTANT _VMP-ROOT-PARENT     \ parent=0xFF means root dir
+14   CONSTANT _VMP-IO-INTERNAL     \ controller invariant/short success
 
 \ File types
 0 CONSTANT _VMP-T-FREE
@@ -70,6 +71,23 @@ REQUIRE ../vfs.f
 : _VMP-READY?  ( vfs -- flag )
     V.BCTX @ DUP 0= IF DROP FALSE EXIT THEN
     _VMP-C.READY + @ 0<> ;
+
+\ Convert a checked controller result into one VFS-style ior.  A zero
+\ controller status is success only when every requested sector was
+\ confirmed; a short zero-status completion is an internal controller error.
+: _VMP-IO-RESULT  ( completed status expected -- ior )
+    >R
+    DUP 0<> IF NIP R> DROP EXIT THEN
+    DROP R> = IF 0 ELSE _VMP-IO-INTERNAL THEN ;
+
+: _VMP-DISK-READ  ( dma lba count -- ior )
+    DUP >R DISK-READ-CHECKED R> _VMP-IO-RESULT ;
+
+: _VMP-DISK-WRITE  ( dma lba count -- ior )
+    DUP >R DISK-WRITE-CHECKED R> _VMP-IO-RESULT ;
+
+: _VMP-DISK-FLUSH  ( -- ior )
+    DISK-FLUSH-CHECKED ;
 
 \ =====================================================================
 \  Directory Entry Field Readers (operate on dir-cache address)
@@ -327,10 +345,9 @@ VARIABLE _VMDV-CTX
     _VMI-CTX @  _VMP-CTX-SIZE  0 FILL
     \ Store in VFS descriptor
     _VMI-CTX @  _VMI-V @ V.BCTX !
-    \ Read superblock (sector 0)
-    0 DISK-SEC!
-    _VMI-CTX @ _VMP-C.SUPER +  DISK-DMA!
-    1 DISK-N!  DISK-READ
+    \ Read superblock (sector 0).  Do not parse bytes after I/O failure.
+    _VMI-CTX @ _VMP-C.SUPER +  0  1  _VMP-DISK-READ
+    ?DUP IF EXIT THEN
     \ Verify magic
     _VMI-CTX @ _VMP-C.SUPER +  _VMI-V @  _VMP-PROBE 0= IF
         -2 EXIT   \ not MP64FS
@@ -339,13 +356,15 @@ VARIABLE _VMDV-CTX
     _VMI-CTX @ _VMP-GEOMETRY? 0= IF -3 EXIT THEN
     _VMI-CTX @ _VMP-ADOPT-GEOMETRY
     \ Read the complete bitmap.
-    _VMI-CTX @ _VMP-C.BSTART + @ DISK-SEC!
-    _VMI-CTX @ _VMP-C.BMAP +  DISK-DMA!
-    _VMI-CTX @ _VMP-C.BN + @ DISK-N!  DISK-READ
+    _VMI-CTX @ _VMP-C.BMAP +
+    _VMI-CTX @ _VMP-C.BSTART + @
+    _VMI-CTX @ _VMP-C.BN + @  _VMP-DISK-READ
+    ?DUP IF EXIT THEN
     \ Read the geometry-selected directory.
-    _VMI-CTX @ _VMP-C.DIRSTART + @ DISK-SEC!
-    _VMI-CTX @ _VMP-C.DIR +  DISK-DMA!
-    _VMI-CTX @ _VMP-C.DIRN + @ DISK-N!  DISK-READ
+    _VMI-CTX @ _VMP-C.DIR +
+    _VMI-CTX @ _VMP-C.DIRSTART + @
+    _VMI-CTX @ _VMP-C.DIRN + @  _VMP-DISK-READ
+    ?DUP IF EXIT THEN
     \ Metadata sectors must all be reserved in the allocation bitmap.
     _VMI-CTX @ _VMP-C.DSTART + @ 0 DO
         I _VMI-CTX @ _VMP-BIT-FREE? IF -4 UNLOOP EXIT THEN
@@ -515,34 +534,32 @@ VARIABLE _VMRR-SCR     \ scratch buffer address
 VARIABLE _VMRR-CHUNK
 : _VMRR-HEAD  ( -- )
     _VMRR-POS @ _VMP-SECTOR MOD  DUP 0= IF DROP EXIT THEN  ( off )
-    _VMRR-DSEC DISK-SEC!
-    _VMRR-SCR @ DISK-DMA!  1 DISK-N!  DISK-READ
+    _VMRR-SCR @ _VMRR-DSEC 1 _VMP-DISK-READ ?DUP IF THROW THEN
     _VMP-SECTOR OVER -  _VMRR-REM @ MIN  _VMRR-CHUNK !  ( off )
     _VMRR-SCR @ +  _VMRR-BUF @  _VMRR-CHUNK @  CMOVE
     _VMRR-CHUNK @ DUP _VMRR-BUF +!  DUP _VMRR-POS +!
     DUP _VMRR-ACT +!  NEGATE _VMRR-REM +! ;
 
 \ Helper: DMA full sectors
+VARIABLE _VMRR-BATCH
 : _VMRR-FULL  ( -- )
     _VMRR-REM @ _VMP-SECTOR /  ( n-full )
     BEGIN DUP 0> WHILE
-        _VMRR-DSEC DISK-SEC!
-        _VMRR-BUF @ DISK-DMA!
-        DUP 255 MIN _VMRR-RUN-SECS MIN  ( n-full batch )
-        DUP DISK-N!  DISK-READ
-        DUP _VMP-SECTOR *
+        DUP 255 MIN _VMRR-RUN-SECS MIN DUP _VMRR-BATCH !
+        _VMRR-BUF @ _VMRR-DSEC _VMRR-BATCH @ _VMP-DISK-READ
+        ?DUP IF THROW THEN
+        _VMRR-BATCH @ _VMP-SECTOR *
         DUP _VMRR-BUF +!
         DUP _VMRR-POS +!
         DUP _VMRR-ACT +!
         NEGATE _VMRR-REM +!
-        -
+        _VMRR-BATCH @ -
     REPEAT DROP ;
 
 \ Helper: read tail partial sector
 : _VMRR-TAIL  ( -- )
     _VMRR-REM @ 0= IF EXIT THEN
-    _VMRR-DSEC DISK-SEC!
-    _VMRR-SCR @ DISK-DMA!  1 DISK-N!  DISK-READ
+    _VMRR-SCR @ _VMRR-DSEC 1 _VMP-DISK-READ ?DUP IF THROW THEN
     _VMRR-SCR @  _VMRR-BUF @  _VMRR-REM @  CMOVE
     _VMRR-REM @ DUP _VMRR-ACT +!
     DUP _VMRR-BUF +!  _VMRR-POS +! ;
@@ -670,38 +687,34 @@ VARIABLE _VMRW-SCR
 VARIABLE _VMRW-CHUNK
 : _VMRW-HEAD  ( -- )
     _VMRW-POS @ _VMP-SECTOR MOD  DUP 0= IF DROP EXIT THEN
-    _VMRW-DSEC DISK-SEC!
-    _VMRW-SCR @ DISK-DMA!  1 DISK-N!  DISK-READ
+    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-DISK-READ ?DUP IF THROW THEN
     _VMP-SECTOR OVER -  _VMRW-REM @ MIN  _VMRW-CHUNK !
     _VMRW-BUF @  OVER _VMRW-SCR @ +  _VMRW-CHUNK @  CMOVE
     DROP
-    _VMRW-DSEC DISK-SEC!
-    _VMRW-SCR @ DISK-DMA!  1 DISK-N!  DISK-WRITE
+    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-DISK-WRITE ?DUP IF THROW THEN
     _VMRW-CHUNK @ DUP _VMRW-BUF +!  DUP _VMRW-POS +!
     DUP _VMRW-ACT +!  NEGATE _VMRW-REM +! ;
 
+VARIABLE _VMRW-BATCH
 : _VMRW-FULL  ( -- )
     _VMRW-REM @ _VMP-SECTOR /
     BEGIN DUP 0> WHILE
-        _VMRW-DSEC DISK-SEC!
-        _VMRW-BUF @ DISK-DMA!
-        DUP 255 MIN _VMRW-RUN-SECS MIN
-        DUP DISK-N!  DISK-WRITE
-        DUP _VMP-SECTOR *
+        DUP 255 MIN _VMRW-RUN-SECS MIN DUP _VMRW-BATCH !
+        _VMRW-BUF @ _VMRW-DSEC _VMRW-BATCH @ _VMP-DISK-WRITE
+        ?DUP IF THROW THEN
+        _VMRW-BATCH @ _VMP-SECTOR *
         DUP _VMRW-BUF +!
         DUP _VMRW-POS +!
         DUP _VMRW-ACT +!
         NEGATE _VMRW-REM +!
-        -
+        _VMRW-BATCH @ -
     REPEAT DROP ;
 
 : _VMRW-TAIL  ( -- )
     _VMRW-REM @ 0= IF EXIT THEN
-    _VMRW-DSEC DISK-SEC!
-    _VMRW-SCR @ DISK-DMA!  1 DISK-N!  DISK-READ
+    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-DISK-READ ?DUP IF THROW THEN
     _VMRW-BUF @  _VMRW-SCR @  _VMRW-REM @  CMOVE
-    _VMRW-DSEC DISK-SEC!
-    _VMRW-SCR @ DISK-DMA!  1 DISK-N!  DISK-WRITE
+    _VMRW-SCR @ _VMRW-DSEC 1 _VMP-DISK-WRITE ?DUP IF THROW THEN
     _VMRW-REM @ DUP _VMRW-ACT +!
     DUP _VMRW-BUF +!  _VMRW-POS +! ;
 
@@ -777,20 +790,24 @@ VARIABLE _VMSY-IN
     ELSE
         DROP
     THEN
-    \ Write bitmap if dirty
+    \ Write bitmap if dirty.  Retain both dirty flags until every required
+    \ write and the final durability operation have succeeded.
     _VMSY-CTX @ _VMP-C.DBMAP + @ IF
-        _VMSY-CTX @ _VMP-C.BSTART + @ DISK-SEC!
-        _VMSY-CTX @ _VMP-C.BMAP + DISK-DMA!
-        _VMSY-CTX @ _VMP-C.BN + @ DISK-N!  DISK-WRITE
-        0 _VMSY-CTX @ _VMP-C.DBMAP + !
+        _VMSY-CTX @ _VMP-C.BMAP +
+        _VMSY-CTX @ _VMP-C.BSTART + @
+        _VMSY-CTX @ _VMP-C.BN + @ _VMP-DISK-WRITE
+        ?DUP IF EXIT THEN
     THEN
     \ Write directory if dirty
     _VMSY-CTX @ _VMP-C.DDIR + @ IF
-        _VMSY-CTX @ _VMP-C.DIRSTART + @ DISK-SEC!
-        _VMSY-CTX @ _VMP-C.DIR + DISK-DMA!
-        _VMSY-CTX @ _VMP-C.DIRN + @ DISK-N!  DISK-WRITE
-        0 _VMSY-CTX @ _VMP-C.DDIR + !
+        _VMSY-CTX @ _VMP-C.DIR +
+        _VMSY-CTX @ _VMP-C.DIRSTART + @
+        _VMSY-CTX @ _VMP-C.DIRN + @ _VMP-DISK-WRITE
+        ?DUP IF EXIT THEN
     THEN
+    _VMP-DISK-FLUSH ?DUP IF EXIT THEN
+    0 _VMSY-CTX @ _VMP-C.DBMAP + !
+    0 _VMSY-CTX @ _VMP-C.DDIR + !
     0 ;
 
 \ =====================================================================

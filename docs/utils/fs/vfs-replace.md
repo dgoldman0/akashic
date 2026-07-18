@@ -73,8 +73,11 @@ backup is cleanup state.
 This ordering is not a claim that the underlying filesystem is power-loss
 atomic. MP64FS writes its cached bitmap and directory regions separately, so
 a torn sector or corrupt filesystem metadata can still require lower-level
-repair. The primitive guarantees checked writes and a deterministic recovery
-policy for states exposed at successful `VFS-SYNC` boundaries.
+repair. Its successful `VFS-SYNC` now means those checked metadata writes were
+confirmed and the backend FLUSH durability operation succeeded; failure keeps
+the binding dirty and prevents the protocol from advancing its commit point.
+Above that real lower boundary, the primitive guarantees checked writes and a
+deterministic recovery policy for every state it publishes.
 
 ## Recovery states
 
