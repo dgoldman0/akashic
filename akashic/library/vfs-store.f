@@ -6,31 +6,66 @@
 \  arena are never selected by path discovery or by their own generation.
 \
 \  The owner validates a complete committed snapshot before publishing
-\  any caller-visible fact.  Managed-document create is the first public
-\  mutation: it writes and verifies content first, constructs and verifies
-\  one complete inactive bank, and publishes only by replacing the head.
+\  any caller-visible fact.  Content mutations write and verify the immutable
+\  frame first; every mutation then constructs and verifies one complete
+\  inactive bank and publishes only by replacing the head.
 \
-\  Public managed-document API:
+\  Public request/view constructors:
 \    LIBRARY-MANAGED-CREATE-REQUEST-INIT  ( request -- )
 \    LIBRARY-MANAGED-CREATE-OPERATION-KEY! ( key request -- status )
 \    LIBRARY-MANAGED-CREATE-TITLE!         ( a u request -- status )
 \    LIBRARY-MANAGED-CREATE-CONTENT!       ( a u request -- status )
 \    LIBRARY-MANAGED-CREATE-REQUEST-VALID? ( request -- flag )
+\    LIBRARY-CAPTURE-IMPORT-REQUEST-INIT / ...-VALID?
+\    LIBRARY-METADATA-INIT / ...-VALID?
+\    LIBRARY-COLLECTION-{CREATE,REPLACE}-REQUEST-INIT / ...-VALID?
+\
+\  Public document/capture owner operations:
 \    LIBRARY-VFS-STORE-CREATE-MANAGED
+\      ( request result-entry store -- status )
+\    LIBRARY-VFS-STORE-IMPORT-CAPTURE
 \      ( request result-entry store -- status )
 \    LIBRARY-VFS-STORE-QUERY-ACTIVE
 \      ( expected-catalog-generation start-slot summaries capacity store
 \        -- count next-slot catalog-generation status )
+\    LIBRARY-VFS-STORE-READ-EXACT
+\      ( rid domain-revision bytes capacity entry content store
+\        -- required-u status )
 \    LIBRARY-VFS-STORE-READ-MANAGED-EXACT
 \      ( rid domain-revision bytes capacity entry content store
 \        -- required-u status )
+\    LIBRARY-VFS-STORE-REPLACE-MANAGED
+\      ( rid expected-domain a u result-entry store -- status )
+\    LIBRARY-VFS-STORE-REPLACE-METADATA
+\      ( rid expected-domain metadata result-entry store -- status )
+\    LIBRARY-VFS-STORE-{ARCHIVE,UNARCHIVE,TOMBSTONE-DESTRUCTIVE}
+\      ( rid expected-domain result-entry store -- status )
+\    LIBRARY-VFS-STORE-LOOKUP-RECEIPT
+\      ( operation-key rid-out receipt-out store -- status )
+\
+\  Public retained-history and collection operations:
+\    LIBRARY-VFS-STORE-LIST-RETAINED-REVISIONS
+\      ( rid expected-current summaries capacity store -- required-n status )
+\    LIBRARY-VFS-STORE-READ-RETAINED-EXACT
+\      ( rid content-frame-domain bytes capacity content store
+\        -- required-u status )
+\    LIBRARY-VFS-STORE-COMPARE-RETAINED
+\      ( rid left-domain right-domain store -- equal? status )
+\    LIBRARY-VFS-STORE-RESTORE-RETAINED-EXACT
+\      ( rid expected-current source-domain result-entry store -- status )
+\    LIBRARY-VFS-STORE-{CREATE,REPLACE}-COLLECTION
+\      ( request collection-view store -- status )
+\    LIBRARY-VFS-STORE-READ-COLLECTION-EXACT
+\      ( rid revision collection-view store -- status )
 \
 \  QUERY-ACTIVE returns caller-owned identity references plus small summaries
 \  and uses a raw catalog-slot cursor.  Expected generation 0 starts at slot
 \  zero; every continuation passes the returned positive generation, so pages
-\  cannot mix.  Next slot -1 is terminal.  READ-MANAGED-EXACT copies bytes
-\  into the caller's buffer, returns the required capacity, and returns a
-\  LIB-CONTENT view borrowing that buffer.  Neither API exposes a private path.
+\  cannot mix.  Next slot -1 is terminal.  Exact reads copy bytes into the
+\  caller's buffer and return a LIB-CONTENT view borrowing that buffer.
+\  Retained snapshots are addressed by the exact domain revision stored on
+\  their immutable content frame; metadata-only domain revisions are not
+\  content aliases.  No public operation exposes a private path or slot.
 \ =====================================================================
 
 PROVIDED akashic-library-vfs-store
@@ -96,6 +131,167 @@ REQUIRE ../concurrency/guard.f
 
 : LIBRARY-MANAGED-CREATE-REQUEST-INIT  ( request -- )
     LIBRARY-MANAGED-CREATE-REQUEST-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Caller-owned immutable-capture import request
+\ =====================================================================
+\  The exact origin is copied inline.  Content bytes are borrowed only for
+\  the synchronous call; the owner derives every persisted provenance and
+\  receipt fact from the closed origin union.
+
+  0 CONSTANT _LIBCIR-OPERATION-KEY
+ 32 CONSTANT _LIBCIR-EXPECTED-CATALOG-GENERATION
+ 40 CONSTANT _LIBCIR-MEDIA
+ 48 CONSTANT _LIBCIR-TITLE-U
+ 56 CONSTANT _LIBCIR-CONTENT-A
+ 64 CONSTANT _LIBCIR-CONTENT-U
+ 72 CONSTANT _LIBCIR-FLAGS
+ 80 CONSTANT _LIBCIR-TITLE
+208 CONSTANT _LIBCIR-ORIGIN
+536 CONSTANT LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE
+
+: LIBCIR.OPERATION-KEY      ( request -- key ) _LIBCIR-OPERATION-KEY + ;
+: LIBCIR.EXPECTED-CATALOG-GENERATION  ( request -- a )
+    _LIBCIR-EXPECTED-CATALOG-GENERATION + ;
+: LIBCIR.MEDIA              ( request -- a ) _LIBCIR-MEDIA + ;
+: LIBCIR.TITLE-U            ( request -- a ) _LIBCIR-TITLE-U + ;
+: LIBCIR.CONTENT-A          ( request -- a ) _LIBCIR-CONTENT-A + ;
+: LIBCIR.CONTENT-U          ( request -- a ) _LIBCIR-CONTENT-U + ;
+: LIBCIR.FLAGS              ( request -- a ) _LIBCIR-FLAGS + ;
+: LIBCIR.TITLE              ( request -- a ) _LIBCIR-TITLE + ;
+: LIBCIR.ORIGIN             ( request -- origin ) _LIBCIR-ORIGIN + ;
+: LIBCIR-TITLE$  ( request -- a u )
+    DUP LIBCIR.TITLE SWAP LIBCIR.TITLE-U @ ;
+: LIBCIR-CONTENT$  ( request -- a u )
+    DUP LIBCIR.CONTENT-A @ SWAP LIBCIR.CONTENT-U @ ;
+
+: LIBRARY-CAPTURE-IMPORT-REQUEST-INIT  ( request -- )
+    LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Caller-owned whole metadata replacement
+\ =====================================================================
+\  Metadata contains only the mutable descriptive fields.  Kind, media,
+\  content identity, origin, clocks, lifecycle, and receipt remain owner
+\  controlled and cannot be smuggled through this shape.
+
+   0 CONSTANT _LIBMD-TITLE-U
+   8 CONSTANT _LIBMD-TAG-N
+  16 CONSTANT _LIBMD-LINEAGE-N
+  24 CONSTANT _LIBMD-FLAGS
+  32 CONSTANT _LIBMD-TITLE
+ 160 CONSTANT _LIBMD-TAGS
+ 672 CONSTANT _LIBMD-LINEAGE
+1984 CONSTANT LIBRARY-METADATA-SIZE
+
+: LIBMD.TITLE-U    ( metadata -- a ) _LIBMD-TITLE-U + ;
+: LIBMD.TAG-N      ( metadata -- a ) _LIBMD-TAG-N + ;
+: LIBMD.LINEAGE-N  ( metadata -- a ) _LIBMD-LINEAGE-N + ;
+: LIBMD.FLAGS      ( metadata -- a ) _LIBMD-FLAGS + ;
+: LIBMD.TITLE      ( metadata -- a ) _LIBMD-TITLE + ;
+: LIBMD-TAG  ( index metadata -- tag )
+    _LIBMD-TAGS + SWAP LIB-TAG-SIZE * + ;
+: LIBMD-LINEAGE  ( index metadata -- lineage )
+    _LIBMD-LINEAGE + SWAP LIB-LINEAGE-SIZE * + ;
+: LIBMD-TITLE$  ( metadata -- a u )
+    DUP LIBMD.TITLE SWAP LIBMD.TITLE-U @ ;
+: LIBRARY-METADATA-INIT  ( metadata -- )
+    LIBRARY-METADATA-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Public retained-revision summary
+\ =====================================================================
+
+ 0 CONSTANT _LIBRS-DOMAIN-REVISION
+ 8 CONSTANT _LIBRS-CONTENT-REVISION
+16 CONSTANT _LIBRS-MEDIA
+24 CONSTANT _LIBRS-CONTENT-U
+32 CONSTANT _LIBRS-DIGEST
+64 CONSTANT LIBRARY-REVISION-SUMMARY-SIZE
+
+: LIBRS.DOMAIN-REVISION   ( summary -- a ) _LIBRS-DOMAIN-REVISION + ;
+: LIBRS.CONTENT-REVISION  ( summary -- a ) _LIBRS-CONTENT-REVISION + ;
+: LIBRS.MEDIA             ( summary -- a ) _LIBRS-MEDIA + ;
+: LIBRS.CONTENT-U         ( summary -- a ) _LIBRS-CONTENT-U + ;
+: LIBRS.DIGEST            ( summary -- digest ) _LIBRS-DIGEST + ;
+: LIBRARY-REVISION-SUMMARY-INIT  ( summary -- )
+    LIBRARY-REVISION-SUMMARY-SIZE 0 FILL ;
+
+\ =====================================================================
+\  RID-based collection requests and semantic view
+\ =====================================================================
+\  Persistent membership is a private slot bitmap.  Callers supply and
+\  receive stable RIDs; no catalog slot or path crosses this boundary.
+
+  0 CONSTANT _LIBCCR-OPERATION-KEY
+ 32 CONSTANT _LIBCCR-EXPECTED-CATALOG-GENERATION
+ 40 CONSTANT _LIBCCR-TITLE-U
+ 48 CONSTANT _LIBCCR-MEMBERS-A
+ 56 CONSTANT _LIBCCR-MEMBER-N
+ 64 CONSTANT _LIBCCR-FLAGS
+ 72 CONSTANT _LIBCCR-TITLE
+136 CONSTANT LIBRARY-COLLECTION-CREATE-REQUEST-SIZE
+
+: LIBCCR.OPERATION-KEY  ( request -- key ) _LIBCCR-OPERATION-KEY + ;
+: LIBCCR.EXPECTED-CATALOG-GENERATION  ( request -- a )
+    _LIBCCR-EXPECTED-CATALOG-GENERATION + ;
+: LIBCCR.TITLE-U       ( request -- a ) _LIBCCR-TITLE-U + ;
+: LIBCCR.MEMBERS-A     ( request -- a ) _LIBCCR-MEMBERS-A + ;
+: LIBCCR.MEMBER-N      ( request -- a ) _LIBCCR-MEMBER-N + ;
+: LIBCCR.FLAGS         ( request -- a ) _LIBCCR-FLAGS + ;
+: LIBCCR.TITLE         ( request -- a ) _LIBCCR-TITLE + ;
+: LIBCCR-TITLE$  ( request -- a u )
+    DUP LIBCCR.TITLE SWAP LIBCCR.TITLE-U @ ;
+: LIBCCR-MEMBERS$  ( request -- a count )
+    DUP LIBCCR.MEMBERS-A @ SWAP LIBCCR.MEMBER-N @ ;
+: LIBRARY-COLLECTION-CREATE-REQUEST-INIT  ( request -- )
+    LIBRARY-COLLECTION-CREATE-REQUEST-SIZE 0 FILL ;
+
+  0 CONSTANT _LIBCRR-ID
+ 32 CONSTANT _LIBCRR-EXPECTED-REVISION
+ 40 CONSTANT _LIBCRR-TITLE-U
+ 48 CONSTANT _LIBCRR-MEMBERS-A
+ 56 CONSTANT _LIBCRR-MEMBER-N
+ 64 CONSTANT _LIBCRR-FLAGS
+ 72 CONSTANT _LIBCRR-TITLE
+136 CONSTANT LIBRARY-COLLECTION-REPLACE-REQUEST-SIZE
+
+: LIBCRR.ID             ( request -- id ) _LIBCRR-ID + ;
+: LIBCRR.EXPECTED-REVISION  ( request -- a ) _LIBCRR-EXPECTED-REVISION + ;
+: LIBCRR.TITLE-U        ( request -- a ) _LIBCRR-TITLE-U + ;
+: LIBCRR.MEMBERS-A      ( request -- a ) _LIBCRR-MEMBERS-A + ;
+: LIBCRR.MEMBER-N       ( request -- a ) _LIBCRR-MEMBER-N + ;
+: LIBCRR.FLAGS          ( request -- a ) _LIBCRR-FLAGS + ;
+: LIBCRR.TITLE          ( request -- a ) _LIBCRR-TITLE + ;
+: LIBCRR-TITLE$  ( request -- a u )
+    DUP LIBCRR.TITLE SWAP LIBCRR.TITLE-U @ ;
+: LIBCRR-MEMBERS$  ( request -- a count )
+    DUP LIBCRR.MEMBERS-A @ SWAP LIBCRR.MEMBER-N @ ;
+: LIBRARY-COLLECTION-REPLACE-REQUEST-INIT  ( request -- )
+    LIBRARY-COLLECTION-REPLACE-REQUEST-SIZE 0 FILL ;
+
+   0 CONSTANT _LIBCV-ID
+  32 CONSTANT _LIBCV-REVISION
+  40 CONSTANT _LIBCV-MUTATION-SEQUENCE
+  48 CONSTANT _LIBCV-TITLE-U
+  56 CONSTANT _LIBCV-MEMBER-N
+  64 CONSTANT _LIBCV-FLAGS
+  72 CONSTANT _LIBCV-TITLE
+ 136 CONSTANT _LIBCV-MEMBERS
+4232 CONSTANT LIBRARY-COLLECTION-VIEW-SIZE
+
+: LIBCV.ID                 ( view -- id ) _LIBCV-ID + ;
+: LIBCV.REVISION           ( view -- a ) _LIBCV-REVISION + ;
+: LIBCV.MUTATION-SEQUENCE  ( view -- a ) _LIBCV-MUTATION-SEQUENCE + ;
+: LIBCV.TITLE-U            ( view -- a ) _LIBCV-TITLE-U + ;
+: LIBCV.MEMBER-N           ( view -- a ) _LIBCV-MEMBER-N + ;
+: LIBCV.FLAGS              ( view -- a ) _LIBCV-FLAGS + ;
+: LIBCV.TITLE              ( view -- a ) _LIBCV-TITLE + ;
+: LIBCV-MEMBER  ( index view -- rid )
+    _LIBCV-MEMBERS + SWAP LIB-DIGEST-SIZE * + ;
+: LIBCV-TITLE$  ( view -- a u ) DUP LIBCV.TITLE SWAP LIBCV.TITLE-U @ ;
+: LIBRARY-COLLECTION-VIEW-INIT  ( view -- )
+    LIBRARY-COLLECTION-VIEW-SIZE 0 FILL ;
 
 \ =====================================================================
 \  Caller-owned active-query summary
@@ -407,6 +603,48 @@ VARIABLE _LIBMU-RANDOM-XT
 VARIABLE _LIBMR-A
 VARIABLE _LIBMR-U
 VARIABLE _LIBMR-REQUEST
+VARIABLE _LIBMR-I
+VARIABLE _LIBMR-J
+VARIABLE _LIBMU-OPERATION-KEY
+VARIABLE _LIBMU-RID-DOMAIN-A
+VARIABLE _LIBMU-RID-DOMAIN-U
+VARIABLE _LIBMU-HAS-CONTENT
+VARIABLE _LIBMU-HAS-CATALOG
+VARIABLE _LIBMU-HAS-COLLECTION
+VARIABLE _LIBMU-CATALOG-INDEX
+VARIABLE _LIBMU-CATALOG-COUNT
+VARIABLE _LIBMU-COLLECTION-INDEX
+VARIABLE _LIBMU-COLLECTION-COUNT
+VARIABLE _LIBMU-PLANNED-CONTENT-U
+VARIABLE _LIBMU-COMMIT-MODE
+VARIABLE _LIBMU-METADATA
+VARIABLE _LIBMU-HISTORY
+VARIABLE _LIBMU-HISTORY-CAP
+VARIABLE _LIBMU-REQUIRED-N
+VARIABLE _LIBMU-CONTENT-MODE
+VARIABLE _LIBMU-TARGET-DOMAIN
+VARIABLE _LIBMU-TARGET-CONTENT
+VARIABLE _LIBMU-COLLECTION-REQUEST
+VARIABLE _LIBMU-COLLECTION-RESULT
+VARIABLE _LIBMU-MEMBERS
+VARIABLE _LIBMU-MEMBER-N
+VARIABLE _LIBMU-EXPECTED-COLLECTION-REVISION
+VARIABLE _LIBMU-RID-OUT
+VARIABLE _LIBMU-RECEIPT-OUT
+VARIABLE _LIBMU-TARGET-LIFECYCLE
+VARIABLE _LIBMU-INPUT-A
+VARIABLE _LIBMU-INPUT-U
+VARIABLE _LIBMU-EQUAL
+VARIABLE _LIBMU-REQUIRE-MANAGED
+VARIABLE _LIBMU-MISSING-CONTENT-STATUS
+
+1 CONSTANT _LIBMU-COMMIT-ENTRY-KEY
+2 CONSTANT _LIBMU-COMMIT-ENTRY-EXACT
+3 CONSTANT _LIBMU-COMMIT-COLLECTION-EXACT
+
+0 CONSTANT _LIBMU-CONTENT-CURRENT
+1 CONSTANT _LIBMU-CONTENT-DOMAIN
+2 CONSTANT _LIBMU-CONTENT-REVISION
 
 1 CONSTANT _LIBMU-STAGE-BEFORE-CONTENT
 2 CONSTANT _LIBMU-STAGE-AFTER-CONTENT
@@ -450,6 +688,10 @@ CREATE _LIBMU-ENTRY LIB-ENTRY-SIZE ALLOT
 CREATE _LIBMU-FOUND-ENTRY LIB-ENTRY-SIZE ALLOT
 CREATE _LIBMU-CONTENT LIB-CONTENT-SIZE ALLOT
 CREATE _LIBMU-CONTENT-READBACK LIB-CONTENT-SIZE ALLOT
+CREATE _LIBMU-COLLECTION LIB-COLLECTION-SIZE ALLOT
+CREATE _LIBMU-FOUND-COLLECTION LIB-COLLECTION-SIZE ALLOT
+CREATE _LIBMU-FIRST-SUMMARY LIBRARY-REVISION-SUMMARY-SIZE ALLOT
+CREATE _LIBMU-RESTORE-BYTES LIB-CONTENT-MAX ALLOT
 CREATE _LIBMU-BANK-FACT LIB-BANK-FACT-SIZE ALLOT
 CREATE _LIBMU-HEAD-FACT LIB-HEAD-FACT-SIZE ALLOT
 CREATE _LIBMU-BANK-SHA LIB-DIGEST-SIZE ALLOT
@@ -679,6 +921,480 @@ _LIBVFS-RESET-MUTATION-HOOKS
 
 : LIBRARY-MANAGED-CREATE-REQUEST-VALID?  ( request -- flag )
     _libmcr-valid-xt _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Capture-import request construction
+\ ---------------------------------------------------------------------
+
+: _LIBMR-CAPTURE-REQUEST-SAFE?  ( request -- flag )
+    DUP LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE
+        _VFSNAP-SPAN-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE
+        _LIBVFS-PRIVATE-ALIASES? 0= NIP ;
+
+: _LIBRARY-CAPTURE-IMPORT-OPERATION-KEY!  ( key request -- status )
+    _LIBMR-REQUEST ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-CAPTURE-REQUEST-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ LIB-OPERATION-KEY-SIZE _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ RID-PRESENT? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCIR.OPERATION-KEY RID-COPY
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-CAPTURE-IMPORT-TITLE!  ( a u request -- status )
+    _LIBMR-REQUEST ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-CAPTURE-REQUEST-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-U @ DUP 1 < SWAP LIB-TITLE-MAX > OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ UTF8-VALID? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCIR.TITLE _LIBMR-U @ MOVE
+    _LIBMR-REQUEST @ LIBCIR.TITLE _LIBMR-U @ +
+        LIB-TITLE-MAX _LIBMR-U @ - 0 FILL
+    _LIBMR-U @ _LIBMR-REQUEST @ LIBCIR.TITLE-U !
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-CAPTURE-IMPORT-CONTENT!  ( a u request -- status )
+    _LIBMR-REQUEST ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-CAPTURE-REQUEST-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-U @ DUP 0< SWAP LIB-CONTENT-MAX > OR IF
+        LIBSTORE-S-CONTENT-FULL EXIT
+    THEN
+    _LIBMR-U @ IF
+        _LIBMR-A @ _LIBMR-U @ _VFSNAP-SPAN-VALID? 0= IF
+            LIBSTORE-S-INVALID EXIT
+        THEN
+        _LIBMR-A @ _LIBMR-U @ UTF8-VALID? 0= IF
+            LIBSTORE-S-INVALID EXIT
+        THEN
+    THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCIR.CONTENT-A !
+    _LIBMR-U @ _LIBMR-REQUEST @ LIBCIR.CONTENT-U !
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-CAPTURE-IMPORT-ORIGIN!  ( origin request -- status )
+    _LIBMR-REQUEST ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-CAPTURE-REQUEST-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ LIB-ORIGIN-SIZE _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ LIB-ORIGIN-VALID? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMR-A @ LIBO.KIND @ LIB-ORIGIN-NONE = IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCIR.ORIGIN LIB-ORIGIN-SIZE MOVE
+    LIBSTORE-S-OK ;
+
+: _LIBMR-CAPTURE-CONTENT-MATCHES-ORIGIN?  ( request -- flag )
+    _LIBMR-REQUEST !
+    _LIBMR-REQUEST @ LIBCIR-CONTENT$ _LIBMU-FRAME-SHA SHA3-256-HASH
+    _LIBMR-REQUEST @ LIBCIR.ORIGIN LIBO.KIND @ CASE
+        LIB-ORIGIN-VFS-SNAPSHOT OF
+            _LIBMR-REQUEST @ LIBCIR.CONTENT-U @
+                _LIBMR-REQUEST @ LIBCIR.ORIGIN LIBO.VFS LIBV.CONTENT-U @ =
+            _LIBMU-FRAME-SHA
+                _LIBMR-REQUEST @ LIBCIR.ORIGIN LIBO.VFS
+                    LIBV.CONTENT-DIGEST
+                SHA3-256-COMPARE AND
+        ENDOF
+        LIB-ORIGIN-SEMANTIC OF
+            _LIBMR-REQUEST @ LIBCIR.ORIGIN LIBO.SEMANTIC
+                QLOC.DIGEST-KIND @ QLOC-DK-PROJECTION-CONTENT = IF
+                _LIBMU-FRAME-SHA
+                    _LIBMR-REQUEST @ LIBCIR.ORIGIN LIBO.SEMANTIC
+                        QLOC.STATE-DIGEST
+                    SHA3-256-COMPARE
+            ELSE
+                -1
+            THEN
+        ENDOF
+        0 SWAP
+    ENDCASE ;
+
+: _LIBRARY-CAPTURE-IMPORT-REQUEST-VALID?  ( request -- flag )
+    DUP _LIBMR-CAPTURE-REQUEST-SAFE? 0= IF DROP 0 EXIT THEN
+    _LIBMR-REQUEST !
+    _LIBMR-REQUEST @ LIBCIR.OPERATION-KEY RID-PRESENT? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCIR.EXPECTED-CATALOG-GENERATION @ 0< IF
+        0 EXIT
+    THEN
+    _LIBMR-REQUEST @ LIBCIR.MEDIA @ DUP LIB-MEDIA-TEXT-PLAIN =
+    OVER LIB-MEDIA-TEXT-MARKDOWN = OR
+    SWAP LIB-MEDIA-TEXT-CSV = OR 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCIR.TITLE-U @ DUP 1 <
+        SWAP LIB-TITLE-MAX > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCIR-TITLE$ UTF8-VALID? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCIR.TITLE
+        _LIBMR-REQUEST @ LIBCIR.TITLE-U @ +
+        LIB-TITLE-MAX _LIBMR-REQUEST @ LIBCIR.TITLE-U @ -
+        _LIBMR-ZERO? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCIR.CONTENT-U @ DUP 0<
+        SWAP LIB-CONTENT-MAX > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCIR.CONTENT-U @ IF
+        _LIBMR-REQUEST @ LIBCIR-CONTENT$
+            _VFSNAP-SPAN-VALID? 0= IF 0 EXIT THEN
+        _LIBMR-REQUEST @ LIBCIR-CONTENT$ UTF8-VALID? 0= IF 0 EXIT THEN
+    THEN
+    _LIBMR-REQUEST @ LIBCIR.ORIGIN LIB-ORIGIN-VALID? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCIR.ORIGIN LIBO.KIND @
+        LIB-ORIGIN-NONE = IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCIR.FLAGS @ IF 0 EXIT THEN
+    _LIBMR-REQUEST @ _LIBMR-CAPTURE-CONTENT-MATCHES-ORIGIN? ;
+
+' _LIBRARY-CAPTURE-IMPORT-OPERATION-KEY!
+    CONSTANT _libcir-operation-key-set-xt
+' _LIBRARY-CAPTURE-IMPORT-TITLE! CONSTANT _libcir-title-set-xt
+' _LIBRARY-CAPTURE-IMPORT-CONTENT! CONSTANT _libcir-content-set-xt
+' _LIBRARY-CAPTURE-IMPORT-ORIGIN! CONSTANT _libcir-origin-set-xt
+' _LIBRARY-CAPTURE-IMPORT-REQUEST-VALID? CONSTANT _libcir-valid-xt
+
+: LIBRARY-CAPTURE-IMPORT-OPERATION-KEY!  ( key request -- status )
+    _libcir-operation-key-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-CAPTURE-IMPORT-TITLE!  ( a u request -- status )
+    _libcir-title-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-CAPTURE-IMPORT-CONTENT!  ( a u request -- status )
+    _libcir-content-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-CAPTURE-IMPORT-ORIGIN!  ( origin request -- status )
+    _libcir-origin-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-CAPTURE-IMPORT-REQUEST-VALID?  ( request -- flag )
+    _libcir-valid-xt _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Metadata construction and validation
+\ ---------------------------------------------------------------------
+
+: _LIBMR-METADATA-SAFE?  ( metadata -- flag )
+    DUP LIBRARY-METADATA-SIZE _VFSNAP-SPAN-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-METADATA-SIZE _LIBVFS-PRIVATE-ALIASES? 0= NIP ;
+
+: _LIBRARY-METADATA-TITLE!  ( a u metadata -- status )
+    _LIBMR-REQUEST ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-METADATA-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-U @ DUP 1 < SWAP LIB-TITLE-MAX > OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ UTF8-VALID? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBMD.TITLE _LIBMR-U @ MOVE
+    _LIBMR-REQUEST @ LIBMD.TITLE _LIBMR-U @ +
+        LIB-TITLE-MAX _LIBMR-U @ - 0 FILL
+    _LIBMR-U @ _LIBMR-REQUEST @ LIBMD.TITLE-U !
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-METADATA-TAG!  ( a u index metadata -- status )
+    _LIBMR-REQUEST ! _LIBMU-INDEX ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-METADATA-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMU-INDEX @ DUP 0< SWAP LIB-TAG-MAX >= OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMU-INDEX @ _LIBMR-REQUEST @ LIBMD.TAG-N @ > IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-U @ DUP 1 < SWAP LIB-TAG-TEXT-MAX > OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ UTF8-VALID? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-INDEX @ _LIBMR-REQUEST @ LIBMD-TAG DUP LIB-TAG-SIZE 0 FILL
+    DUP LIB-TAG.TEXT _LIBMR-A @ SWAP _LIBMR-U @ MOVE
+    _LIBMR-U @ SWAP LIB-TAG.LEN !
+    _LIBMU-INDEX @ _LIBMR-REQUEST @ LIBMD.TAG-N @ = IF
+        1 _LIBMR-REQUEST @ LIBMD.TAG-N +!
+    THEN
+    LIBSTORE-S-OK ;
+
+: _LIBMR-SEMANTIC-EXACT?  ( qloc -- flag )
+    DUP QLOC-SIZE _VFSNAP-SPAN-VALID? 0= IF DROP 0 EXIT THEN
+    DUP QLOC-VALID? 0= IF DROP 0 EXIT THEN
+    DUP QLOC.MODE @ QLOC-M-EXACT-DOMAIN =
+    OVER QLOC.STATE-DIGEST RID-PRESENT? AND NIP ;
+
+: _LIBRARY-METADATA-LINEAGE!  ( lineage index metadata -- status )
+    _LIBMR-REQUEST ! _LIBMU-INDEX ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-METADATA-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMU-INDEX @ DUP 0< SWAP LIB-LINEAGE-MAX >= OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMU-INDEX @ _LIBMR-REQUEST @ LIBMD.LINEAGE-N @ > IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ LIB-LINEAGE-SIZE _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ LIBLN.RELATION @
+        LIB-LINEAGE-RELATION-DERIVED-FROM <> IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ LIBLN.LOCATOR _LIBMR-SEMANTIC-EXACT? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMU-INDEX @ _LIBMR-REQUEST @ LIBMD-LINEAGE
+        LIB-LINEAGE-SIZE MOVE
+    _LIBMU-INDEX @ _LIBMR-REQUEST @ LIBMD.LINEAGE-N @ = IF
+        1 _LIBMR-REQUEST @ LIBMD.LINEAGE-N +!
+    THEN
+    LIBSTORE-S-OK ;
+
+: _LIBMR-TAG-SLOT-VALID?  ( tag -- flag )
+    DUP LIB-TAG.LEN @ DUP 1 < SWAP LIB-TAG-TEXT-MAX > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP LIB-TAG$ UTF8-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIB-TAG.TEXT OVER LIB-TAG.LEN @ +
+    SWAP LIB-TAG.LEN @ LIB-TAG-TEXT-MAX SWAP - _LIBMR-ZERO? ;
+
+: _LIBRARY-METADATA-VALID?  ( metadata -- flag )
+    DUP _LIBMR-METADATA-SAFE? 0= IF DROP 0 EXIT THEN _LIBMR-REQUEST !
+    _LIBMR-REQUEST @ LIBMD.TITLE-U @ DUP 1 <
+        SWAP LIB-TITLE-MAX > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBMD-TITLE$ UTF8-VALID? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBMD.TITLE
+        _LIBMR-REQUEST @ LIBMD.TITLE-U @ +
+        LIB-TITLE-MAX _LIBMR-REQUEST @ LIBMD.TITLE-U @ -
+        _LIBMR-ZERO? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBMD.TAG-N @ DUP 0<
+        SWAP LIB-TAG-MAX > OR IF 0 EXIT THEN
+    LIB-TAG-MAX 0 ?DO
+        I _LIBMR-REQUEST @ LIBMD-TAG
+        I _LIBMR-REQUEST @ LIBMD.TAG-N @ < IF
+            DUP _LIBMR-TAG-SLOT-VALID? 0= IF DROP 0 UNLOOP EXIT THEN
+            I IF
+                I 1- _LIBMR-REQUEST @ LIBMD-TAG LIB-TAG$
+                I _LIBMR-REQUEST @ LIBMD-TAG LIB-TAG$ COMPARE
+                0< 0= IF DROP 0 UNLOOP EXIT THEN
+            THEN
+            DROP
+        ELSE
+            LIB-TAG-SIZE _LIBMR-ZERO? 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP
+    _LIBMR-REQUEST @ LIBMD.LINEAGE-N @ DUP 0<
+        SWAP LIB-LINEAGE-MAX > OR IF 0 EXIT THEN
+    LIB-LINEAGE-MAX 0 ?DO
+        I _LIBMR-REQUEST @ LIBMD-LINEAGE
+        I _LIBMR-REQUEST @ LIBMD.LINEAGE-N @ < IF
+            DUP LIBLN.RELATION @
+                LIB-LINEAGE-RELATION-DERIVED-FROM <> IF
+                DROP 0 UNLOOP EXIT
+            THEN
+            DUP LIBLN.LOCATOR _LIBMR-SEMANTIC-EXACT? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN
+            I IF
+                I 1- _LIBMR-REQUEST @ LIBMD-LINEAGE LIBLN.LOCATOR QLOC-SIZE
+                I _LIBMR-REQUEST @ LIBMD-LINEAGE LIBLN.LOCATOR QLOC-SIZE
+                COMPARE 0< 0= IF DROP 0 UNLOOP EXIT THEN
+            THEN
+            DROP
+        ELSE
+            LIB-LINEAGE-SIZE _LIBMR-ZERO? 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP
+    _LIBMR-REQUEST @ LIBMD.FLAGS @ 0= ;
+
+' _LIBRARY-METADATA-TITLE! CONSTANT _libmd-title-set-xt
+' _LIBRARY-METADATA-TAG! CONSTANT _libmd-tag-set-xt
+' _LIBRARY-METADATA-LINEAGE! CONSTANT _libmd-lineage-set-xt
+' _LIBRARY-METADATA-VALID? CONSTANT _libmd-valid-xt
+
+: LIBRARY-METADATA-TITLE!  ( a u metadata -- status )
+    _libmd-title-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-METADATA-TAG!  ( a u index metadata -- status )
+    _libmd-tag-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-METADATA-LINEAGE!  ( lineage index metadata -- status )
+    _libmd-lineage-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-METADATA-VALID?  ( metadata -- flag )
+    _libmd-valid-xt _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Collection request construction
+\ ---------------------------------------------------------------------
+
+: _LIBMR-MEMBER-ARRAY-VALID?  ( members count -- flag )
+    _LIBMR-U ! _LIBMR-A !
+    _LIBMR-U @ DUP 0< SWAP LIB-COLLECTION-MEMBER-MAX > OR IF 0 EXIT THEN
+    _LIBMR-U @ 0= IF _LIBMR-A @ 0= EXIT THEN
+    _LIBMR-A @ _LIBMR-U @ LIB-DIGEST-SIZE *
+        _VFSNAP-SPAN-VALID? 0= IF 0 EXIT THEN
+    0 _LIBMR-I !
+    BEGIN _LIBMR-I @ _LIBMR-U @ < WHILE
+        _LIBMR-A @ _LIBMR-I @ LIB-DIGEST-SIZE * +
+            RID-PRESENT? 0= IF 0 EXIT THEN
+        0 _LIBMR-J !
+        BEGIN _LIBMR-J @ _LIBMR-I @ < WHILE
+            _LIBMR-A @ _LIBMR-J @ LIB-DIGEST-SIZE * +
+            _LIBMR-A @ _LIBMR-I @ LIB-DIGEST-SIZE * + RID= IF
+                0 EXIT
+            THEN
+            1 _LIBMR-J +!
+        REPEAT
+        1 _LIBMR-I +!
+    REPEAT
+    -1 ;
+
+: _LIBMR-COLLECTION-CREATE-SAFE?  ( request -- flag )
+    DUP LIBRARY-COLLECTION-CREATE-REQUEST-SIZE
+        _VFSNAP-SPAN-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-COLLECTION-CREATE-REQUEST-SIZE
+        _LIBVFS-PRIVATE-ALIASES? 0= NIP ;
+
+: _LIBMR-COLLECTION-REPLACE-SAFE?  ( request -- flag )
+    DUP LIBRARY-COLLECTION-REPLACE-REQUEST-SIZE
+        _VFSNAP-SPAN-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-COLLECTION-REPLACE-REQUEST-SIZE
+        _LIBVFS-PRIVATE-ALIASES? 0= NIP ;
+
+: _LIBRARY-COLLECTION-CREATE-OPERATION-KEY!  ( key request -- status )
+    _LIBMR-REQUEST ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-COLLECTION-CREATE-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ LIB-DIGEST-SIZE _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ RID-PRESENT? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCCR.OPERATION-KEY RID-COPY
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-COLLECTION-CREATE-TITLE!  ( a u request -- status )
+    _LIBMR-REQUEST ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-COLLECTION-CREATE-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-U @ DUP 1 < SWAP LIB-COLLECTION-TITLE-MAX > OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ UTF8-VALID? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCCR.TITLE _LIBMR-U @ MOVE
+    _LIBMR-REQUEST @ LIBCCR.TITLE _LIBMR-U @ +
+        LIB-COLLECTION-TITLE-MAX _LIBMR-U @ - 0 FILL
+    _LIBMR-U @ _LIBMR-REQUEST @ LIBCCR.TITLE-U !
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-COLLECTION-REPLACE-TITLE!  ( a u request -- status )
+    _LIBMR-REQUEST ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-COLLECTION-REPLACE-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-U @ DUP 1 < SWAP LIB-COLLECTION-TITLE-MAX > OR IF
+        LIBSTORE-S-OUTPUT-CAPACITY EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ _VFSNAP-SPAN-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ UTF8-VALID? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCRR.TITLE _LIBMR-U @ MOVE
+    _LIBMR-REQUEST @ LIBCRR.TITLE _LIBMR-U @ +
+        LIB-COLLECTION-TITLE-MAX _LIBMR-U @ - 0 FILL
+    _LIBMR-U @ _LIBMR-REQUEST @ LIBCRR.TITLE-U !
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-COLLECTION-CREATE-MEMBERS!  ( members count request -- status )
+    _LIBMR-REQUEST ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-COLLECTION-CREATE-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ _LIBMR-MEMBER-ARRAY-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCCR.MEMBERS-A !
+    _LIBMR-U @ _LIBMR-REQUEST @ LIBCCR.MEMBER-N !
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-COLLECTION-REPLACE-MEMBERS!  ( members count request -- status )
+    _LIBMR-REQUEST ! _LIBMR-U ! _LIBMR-A !
+    _LIBMR-REQUEST @ _LIBMR-COLLECTION-REPLACE-SAFE? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-U @ _LIBMR-MEMBER-ARRAY-VALID? 0= IF
+        LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMR-A @ _LIBMR-REQUEST @ LIBCRR.MEMBERS-A !
+    _LIBMR-U @ _LIBMR-REQUEST @ LIBCRR.MEMBER-N !
+    LIBSTORE-S-OK ;
+
+: _LIBRARY-COLLECTION-CREATE-REQUEST-VALID?  ( request -- flag )
+    DUP _LIBMR-COLLECTION-CREATE-SAFE? 0= IF DROP 0 EXIT THEN
+    _LIBMR-REQUEST !
+    _LIBMR-REQUEST @ LIBCCR.OPERATION-KEY RID-PRESENT? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCCR.EXPECTED-CATALOG-GENERATION @ 0< IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCCR.TITLE-U @ DUP 1 <
+        SWAP LIB-COLLECTION-TITLE-MAX > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCCR-TITLE$ UTF8-VALID? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCCR.TITLE
+        _LIBMR-REQUEST @ LIBCCR.TITLE-U @ +
+        LIB-COLLECTION-TITLE-MAX _LIBMR-REQUEST @ LIBCCR.TITLE-U @ -
+        _LIBMR-ZERO? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCCR-MEMBERS$ _LIBMR-MEMBER-ARRAY-VALID? 0= IF
+        0 EXIT
+    THEN
+    _LIBMR-REQUEST @ LIBCCR.FLAGS @ 0= ;
+
+: _LIBRARY-COLLECTION-REPLACE-REQUEST-VALID?  ( request -- flag )
+    DUP _LIBMR-COLLECTION-REPLACE-SAFE? 0= IF DROP 0 EXIT THEN
+    _LIBMR-REQUEST !
+    _LIBMR-REQUEST @ LIBCRR.ID RID-PRESENT? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCRR.EXPECTED-REVISION @ 0> 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCRR.TITLE-U @ DUP 1 <
+        SWAP LIB-COLLECTION-TITLE-MAX > OR IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCRR-TITLE$ UTF8-VALID? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCRR.TITLE
+        _LIBMR-REQUEST @ LIBCRR.TITLE-U @ +
+        LIB-COLLECTION-TITLE-MAX _LIBMR-REQUEST @ LIBCRR.TITLE-U @ -
+        _LIBMR-ZERO? 0= IF 0 EXIT THEN
+    _LIBMR-REQUEST @ LIBCRR-MEMBERS$ _LIBMR-MEMBER-ARRAY-VALID? 0= IF
+        0 EXIT
+    THEN
+    _LIBMR-REQUEST @ LIBCRR.FLAGS @ 0= ;
+
+' _LIBRARY-COLLECTION-CREATE-OPERATION-KEY!
+    CONSTANT _libccr-operation-key-set-xt
+' _LIBRARY-COLLECTION-CREATE-TITLE! CONSTANT _libccr-title-set-xt
+' _LIBRARY-COLLECTION-CREATE-MEMBERS! CONSTANT _libccr-members-set-xt
+' _LIBRARY-COLLECTION-CREATE-REQUEST-VALID? CONSTANT _libccr-valid-xt
+' _LIBRARY-COLLECTION-REPLACE-TITLE! CONSTANT _libcrr-title-set-xt
+' _LIBRARY-COLLECTION-REPLACE-MEMBERS! CONSTANT _libcrr-members-set-xt
+' _LIBRARY-COLLECTION-REPLACE-REQUEST-VALID? CONSTANT _libcrr-valid-xt
+
+: LIBRARY-COLLECTION-CREATE-OPERATION-KEY!  ( key request -- status )
+    _libccr-operation-key-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-COLLECTION-CREATE-TITLE!  ( a u request -- status )
+    _libccr-title-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-COLLECTION-CREATE-MEMBERS!  ( members count request -- status )
+    _libccr-members-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-COLLECTION-CREATE-REQUEST-VALID?  ( request -- flag )
+    _libccr-valid-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-COLLECTION-REPLACE-TITLE!  ( a u request -- status )
+    _libcrr-title-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-COLLECTION-REPLACE-MEMBERS!  ( members count request -- status )
+    _libcrr-members-set-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-COLLECTION-REPLACE-REQUEST-VALID?  ( request -- flag )
+    _libcrr-valid-xt _library-vfs-store-guard WITH-GUARD ;
 
 \ =====================================================================
 \  VFSNAP adaptation and retained evidence
@@ -1174,8 +1890,16 @@ VARIABLE _LIBVA-FLAGS
             I _LIBVP-CATALOG-FACT _LIBVCF.ID RID= IF
             0 UNLOOP EXIT
         THEN
+        _LIBVP-FACT @ _LIBVCF.ID
+            I _LIBVP-CATALOG-FACT _LIBVCF.OPERATION-KEY RID= IF
+            0 UNLOOP EXIT
+        THEN
         _LIBVP-FACT @ _LIBVCF.OPERATION-KEY
             I _LIBVP-CATALOG-FACT _LIBVCF.OPERATION-KEY RID= IF
+            0 UNLOOP EXIT
+        THEN
+        _LIBVP-FACT @ _LIBVCF.OPERATION-KEY
+            I _LIBVP-CATALOG-FACT _LIBVCF.ID RID= IF
             0 UNLOOP EXIT
         THEN
     LOOP
@@ -1198,8 +1922,16 @@ VARIABLE _LIBVA-FLAGS
             I _LIBVP-CATALOG-FACT _LIBVCF.ID RID= IF
             0 UNLOOP EXIT
         THEN
+        _LIBVP-FACT @ _LIBVCCF.ID
+            I _LIBVP-CATALOG-FACT _LIBVCF.OPERATION-KEY RID= IF
+            0 UNLOOP EXIT
+        THEN
         _LIBVP-FACT @ _LIBVCCF.OPERATION-KEY
             I _LIBVP-CATALOG-FACT _LIBVCF.OPERATION-KEY RID= IF
+            0 UNLOOP EXIT
+        THEN
+        _LIBVP-FACT @ _LIBVCCF.OPERATION-KEY
+            I _LIBVP-CATALOG-FACT _LIBVCF.ID RID= IF
             0 UNLOOP EXIT
         THEN
     LOOP
@@ -1208,8 +1940,16 @@ VARIABLE _LIBVA-FLAGS
             I _LIBVP-COLLECTION-FACT _LIBVCCF.ID RID= IF
             0 UNLOOP EXIT
         THEN
+        _LIBVP-FACT @ _LIBVCCF.ID
+            I _LIBVP-COLLECTION-FACT _LIBVCCF.OPERATION-KEY RID= IF
+            0 UNLOOP EXIT
+        THEN
         _LIBVP-FACT @ _LIBVCCF.OPERATION-KEY
             I _LIBVP-COLLECTION-FACT _LIBVCCF.OPERATION-KEY RID= IF
+            0 UNLOOP EXIT
+        THEN
+        _LIBVP-FACT @ _LIBVCCF.OPERATION-KEY
+            I _LIBVP-COLLECTION-FACT _LIBVCCF.ID RID= IF
             0 UNLOOP EXIT
         THEN
     LOOP
@@ -2060,6 +2800,9 @@ VARIABLE _LIBVA-FLAGS
 : _LIBMU-COLLECTION-KEY-CONFLICT?  ( key -- flag )
     _LIBMU-ID !
     _LIBVP-BANK-FACT LIBBF.COLLECTION-COUNT @ 0 ?DO
+        _LIBMU-ID @ I _LIBVP-COLLECTION-FACT _LIBVCCF.ID RID= IF
+            -1 UNLOOP EXIT
+        THEN
         _LIBMU-ID @ I _LIBVP-COLLECTION-FACT _LIBVCCF.OPERATION-KEY RID= IF
             -1 UNLOOP EXIT
         THEN
@@ -2075,9 +2818,30 @@ VARIABLE _LIBVA-FLAGS
     LOOP
     -1 ;
 
+: _LIBMU-FIND-COLLECTION-KEY  ( key -- slot|-1 )
+    _LIBMU-ID !
+    _LIBVP-BANK-FACT LIBBF.COLLECTION-COUNT @ 0 ?DO
+        _LIBMU-ID @ I _LIBVP-COLLECTION-FACT
+            _LIBVCCF.OPERATION-KEY RID= IF I UNLOOP EXIT THEN
+    LOOP
+    -1 ;
+
+: _LIBMU-FIND-COLLECTION-RID  ( rid -- slot|-1 )
+    _LIBMU-ID !
+    _LIBVP-BANK-FACT LIBBF.COLLECTION-COUNT @ 0 ?DO
+        _LIBMU-ID @ I _LIBVP-COLLECTION-FACT _LIBVCCF.ID RID= IF
+            I UNLOOP EXIT
+        THEN
+    LOOP
+    -1 ;
+
 : _LIBMU-RID-IN-USE?  ( rid -- flag )
     _LIBMU-ID !
-    _LIBMU-ID @ _LIBMU-REQUEST @ LIBMCR.OPERATION-KEY RID= IF -1 EXIT THEN
+    _LIBMU-OPERATION-KEY @ DUP IF
+        _LIBMU-ID @ SWAP RID= IF -1 EXIT THEN
+    ELSE
+        DROP
+    THEN
     _LIBVP-BANK-FACT LIBBF.CATALOG-COUNT @ 0 ?DO
         _LIBMU-ID @ I _LIBVP-CATALOG-FACT _LIBVCF.ID RID= IF
             -1 UNLOOP EXIT
@@ -2127,6 +2891,25 @@ VARIABLE _LIBVA-FLAGS
     _LIBMU-INDEX !
     _LIBMU-STORE @ LIBRARY-VFS-STORE.VFS @ _LIBVP-VFS !
     ['] _LIBMU-READ-ENTRY-BODY _LIBVP-RUN
+        _LIBMU-STORE @ _LIBVP-RESULT ;
+
+: _LIBMU-READ-COLLECTION-BODY  ( -- status )
+    _LIBMU-FOUND-COLLECTION LIB-COLLECTION-INIT
+    _LIBMU-ACTIVE-BANK$ LIB-BANK-SIZE _LIBVP-OPEN-COMMITTED
+        DUP IF EXIT THEN DROP
+    LIBSTORE-S-IO _LIBVP-THROW-STATUS !
+    _LIBMU-INDEX @ LIB-COLLECTION-RECORD-SIZE *
+        LIB-BANK-COLLECTION-OFFSET + _LIBVP-FD @ _LIBVFS-SEEK
+    _LIBVP-FRAME LIB-COLLECTION-RECORD-SIZE
+        _LIBVP-FD @ _LIBVFS-READ-EXACT IF LIBSTORE-S-IO EXIT THEN
+    _LIBVP-CLOSE-NOW DUP IF EXIT THEN DROP
+    _LIBVP-FRAME LIB-COLLECTION-RECORD-SIZE _LIBMU-FOUND-COLLECTION
+        LIB-COLLECTION-RECORD-DECODE _LIBVFS-FORMAT-READ>STATUS ;
+
+: _LIBMU-READ-COLLECTION  ( slot -- status )
+    _LIBMU-INDEX !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.VFS @ _LIBVP-VFS !
+    ['] _LIBMU-READ-COLLECTION-BODY _LIBVP-RUN
         _LIBMU-STORE @ _LIBVP-RESULT ;
 
 : _LIBMU-BUILD-CONTENT  ( rid -- status )
@@ -2183,7 +2966,7 @@ VARIABLE _LIBVA-FLAGS
         4 0 DO _LIBMU-RANDOM _LIBMU-ENTROPY I 8 * + ! LOOP
         _LIBMU-ATTEMPT @ _LIBMU-CELL !
         SHA3-256-BEGIN
-        S" org.akashic.library.managed-document-rid.v1" SHA3-256-ADD
+        _LIBMU-RID-DOMAIN-A @ _LIBMU-RID-DOMAIN-U @ SHA3-256-ADD
         _LIBMU-STORE @ LIBRARY-VFS-STORE.ARENA LIBAF.ARENA-ID
             LIB-DIGEST-SIZE SHA3-256-ADD
         _LIBMU-ENTROPY LIB-DIGEST-SIZE SHA3-256-ADD
@@ -2196,15 +2979,11 @@ VARIABLE _LIBVA-FLAGS
     LIBSTORE-S-ALLOCATION ;
 
 : _LIBMU-PREFLIGHT-CAPACITY  ( -- status )
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
-        LIB-CATALOG-MAX >= IF LIBSTORE-S-CATALOG-FULL EXIT THEN
-    _LIBMU-REQUEST @ LIBMCR.CONTENT-U @ LIB-CONTENT-RECORD-SIZE
-        DUP -1 = IF DROP LIBSTORE-S-INVALID EXIT THEN _LIBMU-RECORD-U !
-    _LIBMU-RECORD-U @ LIB-CONTENT-FRAME-SIZE
-        DUP -1 = IF DROP LIBSTORE-S-INVALID EXIT THEN _LIBMU-FRAME-U !
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CONTENT-TAIL @
-        LIB-ARENA-SIZE _LIBMU-FRAME-U @ - > IF
-        LIBSTORE-S-CONTENT-FULL EXIT
+    _LIBMU-CATALOG-COUNT @ DUP 0< SWAP LIB-CATALOG-MAX > OR IF
+        LIBSTORE-S-CATALOG-FULL EXIT
+    THEN
+    _LIBMU-COLLECTION-COUNT @ DUP 0< SWAP LIB-COLLECTION-MAX > OR IF
+        LIBSTORE-S-COLLECTION-FULL EXIT
     THEN
     _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @ 1+
         DUP 0> 0= IF DROP LIBSTORE-S-CONTENT-FULL EXIT THEN
@@ -2213,10 +2992,27 @@ VARIABLE _LIBVA-FLAGS
         DUP 0> 0= IF DROP LIBSTORE-S-CATALOG-FULL EXIT THEN
         _LIBMU-NEW-MUTATION !
     _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CONTENT-TAIL @
-        _LIBMU-FRAME-U @ + _LIBMU-NEW-TAIL !
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CONTENT-RECORD-COUNT @ 1+
-        DUP 0> 0= IF DROP LIBSTORE-S-CONTENT-FULL EXIT THEN
+        _LIBMU-NEW-TAIL !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CONTENT-RECORD-COUNT @
         _LIBMU-NEW-RECORD-COUNT !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CONTENT-CHAIN
+        _LIBMU-CHAIN LIB-DIGEST-SIZE CMOVE
+    _LIBMU-HAS-CONTENT @ IF
+        _LIBMU-PLANNED-CONTENT-U @ LIB-CONTENT-RECORD-SIZE
+            DUP -1 = IF DROP LIBSTORE-S-INVALID EXIT THEN _LIBMU-RECORD-U !
+        _LIBMU-RECORD-U @ LIB-CONTENT-FRAME-SIZE
+            DUP -1 = IF DROP LIBSTORE-S-INVALID EXIT THEN _LIBMU-FRAME-U !
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CONTENT-TAIL @
+            LIB-ARENA-SIZE _LIBMU-FRAME-U @ - > IF
+            LIBSTORE-S-CONTENT-FULL EXIT
+        THEN
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CONTENT-TAIL @
+            _LIBMU-FRAME-U @ + _LIBMU-NEW-TAIL !
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
+            LIBBF.CONTENT-RECORD-COUNT @ 1+
+            DUP 0> 0= IF DROP LIBSTORE-S-CONTENT-FULL EXIT THEN
+            _LIBMU-NEW-RECORD-COUNT !
+    THEN
     LIBSTORE-S-OK ;
 
 : _LIBMU-CONTENT-MATCH?  ( decoded -- flag )
@@ -2299,25 +3095,36 @@ VARIABLE _LIBVA-FLAGS
         _LIBVP-CHUNK @ NEGATE _LIBVP-REMAINING +!
     REPEAT
     _LIBMU-CLOSE-SOURCE-NOW DUP IF EXIT THEN DROP
-    _LIBMU-ENTRY _LIBVP-FRAME LIB-CATALOG-RECORD-SIZE
-        LIB-CATALOG-RECORD-ENCODE
-    DUP IF NIP _LIBVFS-FORMAT>STATUS EXIT THEN
-    DROP LIB-CATALOG-RECORD-SIZE <> IF LIBSTORE-S-RECOVERY EXIT THEN
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
-        LIB-CATALOG-RECORD-SIZE * LIB-BANK-CATALOG-OFFSET +
-        _LIBVP-FD @ _LIBVFS-SEEK
-    _LIBVP-FRAME LIB-CATALOG-RECORD-SIZE _LIBVP-FD @
-        _LIBVFS-WRITE-EXACT IF LIBSTORE-S-IO EXIT THEN
+    _LIBMU-HAS-CATALOG @ IF
+        _LIBMU-ENTRY _LIBVP-FRAME LIB-CATALOG-RECORD-SIZE
+            LIB-CATALOG-RECORD-ENCODE
+        DUP IF NIP _LIBVFS-FORMAT>STATUS EXIT THEN
+        DROP LIB-CATALOG-RECORD-SIZE <> IF LIBSTORE-S-RECOVERY EXIT THEN
+        _LIBMU-CATALOG-INDEX @ LIB-CATALOG-RECORD-SIZE *
+            LIB-BANK-CATALOG-OFFSET + _LIBVP-FD @ _LIBVFS-SEEK
+        _LIBVP-FRAME LIB-CATALOG-RECORD-SIZE _LIBVP-FD @
+            _LIBVFS-WRITE-EXACT IF LIBSTORE-S-IO EXIT THEN
+    THEN
+    _LIBMU-HAS-COLLECTION @ IF
+        _LIBMU-COLLECTION _LIBVP-FRAME LIB-COLLECTION-RECORD-SIZE
+            LIB-COLLECTION-RECORD-ENCODE
+        DUP IF NIP _LIBVFS-FORMAT>STATUS EXIT THEN
+        DROP LIB-COLLECTION-RECORD-SIZE <> IF
+            LIBSTORE-S-RECOVERY EXIT
+        THEN
+        _LIBMU-COLLECTION-INDEX @ LIB-COLLECTION-RECORD-SIZE *
+            LIB-BANK-COLLECTION-OFFSET + _LIBVP-FD @ _LIBVFS-SEEK
+        _LIBVP-FRAME LIB-COLLECTION-RECORD-SIZE _LIBVP-FD @
+            _LIBVFS-WRITE-EXACT IF LIBSTORE-S-IO EXIT THEN
+    THEN
     _LIBVP-CLOSE-NOW DUP IF EXIT THEN DROP
     _LIBVP-SYNC ;
 
 : _LIBMU-BUILD-BANK-FACT  ( -- status )
     _LIBMU-BANK-FACT LIB-BANK-FACT-INIT
     _LIBMU-NEW-GENERATION @ _LIBMU-BANK-FACT LIBBF.GENERATION !
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @ 1+
-        _LIBMU-BANK-FACT LIBBF.CATALOG-COUNT !
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.COLLECTION-COUNT @
-        _LIBMU-BANK-FACT LIBBF.COLLECTION-COUNT !
+    _LIBMU-CATALOG-COUNT @ _LIBMU-BANK-FACT LIBBF.CATALOG-COUNT !
+    _LIBMU-COLLECTION-COUNT @ _LIBMU-BANK-FACT LIBBF.COLLECTION-COUNT !
     _LIBMU-NEW-MUTATION @ _LIBMU-BANK-FACT LIBBF.MUTATION-SEQUENCE !
     _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.ARENA-ID
         _LIBMU-BANK-FACT LIBBF.ARENA-ID LIB-DIGEST-SIZE CMOVE
@@ -2398,7 +3205,9 @@ VARIABLE _LIBVA-FLAGS
     _LIBMU-FULL-CANDIDATE-READBACK ;
 
 : _LIBMU-PREPARE-PUBLICATION-BODY  ( -- status )
-    _LIBMU-WRITE-CONTENT-BODY DUP IF EXIT THEN DROP
+    _LIBMU-HAS-CONTENT @ IF
+        _LIBMU-WRITE-CONTENT-BODY DUP IF EXIT THEN DROP
+    THEN
     _LIBMU-WRITE-BANK-BODY ;
 
 : _LIBMU-PREPARE-PUBLICATION  ( -- status )
@@ -2437,14 +3246,85 @@ VARIABLE _LIBVA-FLAGS
         _LIBMU-REFRESH
     THEN
     DUP IF EXIT THEN DROP
-    _LIBMU-REQUEST @ LIBMCR.OPERATION-KEY _LIBMU-FIND-OPERATION-KEY
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-OPERATION-KEY
         DUP -1 = IF DROP LIBSTORE-S-NOT-FOUND EXIT THEN
     _LIBMU-READ-ENTRY DUP IF EXIT THEN DROP
     _LIBMU-FOUND-ENTRY LIBE.RECEIPT _LIBMU-ENTRY LIBE.RECEIPT
         LIB-RECEIPT-RETRY= 0= IF
         LIBSTORE-S-IDEMPOTENCY-MISMATCH EXIT
     THEN
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF LIBSTORE-S-TOMBSTONED EXIT THEN
     LIBSTORE-S-OK ;
+
+: _LIBMU-RELOAD-AND-MATCH-ENTRY  ( -- status )
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-BLOCKED? IF
+        _LIBMU-REOPEN-BLOCKED-STORE
+    ELSE
+        _LIBMU-REFRESH
+    THEN
+    DUP IF EXIT THEN DROP
+    _LIBMU-ENTRY LIBE.ID _LIBMU-FIND-RID
+        DUP -1 = IF DROP LIBSTORE-S-NOT-FOUND EXIT THEN
+    _LIBMU-READ-ENTRY DUP IF EXIT THEN DROP
+    _LIBMU-FOUND-ENTRY LIB-ENTRY-SIZE
+        _LIBMU-ENTRY LIB-ENTRY-SIZE COMPARE IF
+        LIBSTORE-S-NOT-FOUND EXIT
+    THEN
+    LIBSTORE-S-OK ;
+
+: _LIBMU-RELOAD-AND-MATCH-COLLECTION  ( -- status )
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-BLOCKED? IF
+        _LIBMU-REOPEN-BLOCKED-STORE
+    ELSE
+        _LIBMU-REFRESH
+    THEN
+    DUP IF EXIT THEN DROP
+    _LIBMU-COLLECTION LIBC.ID _LIBMU-FIND-COLLECTION-RID
+        DUP -1 = IF DROP LIBSTORE-S-NOT-FOUND EXIT THEN
+    _LIBMU-READ-COLLECTION DUP IF EXIT THEN DROP
+    _LIBMU-FOUND-COLLECTION LIB-COLLECTION-SIZE
+        _LIBMU-COLLECTION LIB-COLLECTION-SIZE COMPARE IF
+        LIBSTORE-S-NOT-FOUND EXIT
+    THEN
+    LIBSTORE-S-OK ;
+
+: _LIBMU-RECONCILE-CANDIDATE  ( -- status )
+    _LIBMU-COMMIT-MODE @ CASE
+        _LIBMU-COMMIT-ENTRY-KEY OF _LIBMU-RELOAD-AND-FIND-KEY ENDOF
+        _LIBMU-COMMIT-ENTRY-EXACT OF _LIBMU-RELOAD-AND-MATCH-ENTRY ENDOF
+        _LIBMU-COMMIT-COLLECTION-EXACT OF
+            _LIBMU-RELOAD-AND-MATCH-COLLECTION
+        ENDOF
+        LIBSTORE-S-RECOVERY SWAP
+    ENDCASE ;
+
+: _LIBMU-COMMIT-PREPARED  ( -- status )
+    _LIBMU-STAGE-BEFORE-HEAD _LIBMU-CHECKPOINT DUP IF EXIT THEN DROP
+    _LIBMU-HEAD-FACT _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @
+        _LIBMU-STORE @ _LIBRARY-VFS-STORE-SAVE-HEAD
+    DUP LIBSTORE-S-OK <> IF
+        _LIBMU-ORIGINAL-STATUS !
+        _LIBMU-STORE @ LIBRARY-VFS-STORE-LAST-VFSNAP@
+            _LIBMU-ORIGINAL-VFSNAP !
+        _LIBMU-STORE @ LIBRARY-VFS-STORE-LAST-VREPL@
+            _LIBMU-ORIGINAL-VREPL !
+        _LIBMU-RECONCILE-CANDIDATE DUP LIBSTORE-S-OK = IF
+            DROP LIBSTORE-S-OK EXIT
+        THEN
+        DUP LIBSTORE-S-NOT-FOUND = IF
+            DROP
+            _LIBMU-ORIGINAL-VFSNAP @
+                _LIBMU-STORE @ LIBRARY-VFS-STORE.LAST-VFSNAP !
+            _LIBMU-ORIGINAL-VREPL @
+                _LIBMU-STORE @ LIBRARY-VFS-STORE.LAST-VREPL !
+            _LIBMU-ORIGINAL-STATUS @ EXIT
+        THEN
+        EXIT
+    THEN
+    DROP
+    _LIBMU-RECONCILE-CANDIDATE DUP IF EXIT THEN DROP
+    _LIBMU-STAGE-AFTER-HEAD _LIBMU-CHECKPOINT ;
 
 : _LIBRARY-VFS-STORE-CREATE-MANAGED
   ( request result-entry store -- status )
@@ -2453,6 +3333,7 @@ VARIABLE _LIBVA-FLAGS
     _LIBMU-REFRESH DUP IF
         _LIBMU-STORE @ _LIBVFS-RESULT EXIT
     THEN DROP
+    _LIBMU-REQUEST @ LIBMCR.OPERATION-KEY _LIBMU-OPERATION-KEY !
     \ Retry lookup precedes generation, capacity, and owner RID generation.
     _LIBMU-REQUEST @ LIBMCR.OPERATION-KEY _LIBMU-FIND-OPERATION-KEY
         DUP -1 <> IF
@@ -2464,6 +3345,10 @@ VARIABLE _LIBVA-FLAGS
         _LIBMU-FOUND-ENTRY LIBE.RECEIPT _LIBMU-ENTRY LIBE.RECEIPT
             LIB-RECEIPT-RETRY= IF
             _LIBMU-FOUND-ENTRY _LIBMU-RESULT @ LIB-ENTRY-SIZE CMOVE
+            _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+                LIB-LIFECYCLE-TOMBSTONED = IF
+                LIBSTORE-S-TOMBSTONED _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+            THEN
             LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT EXIT
         THEN
         LIBSTORE-S-IDEMPOTENCY-MISMATCH
@@ -2474,10 +3359,23 @@ VARIABLE _LIBVA-FLAGS
         _LIBMU-COLLECTION-KEY-CONFLICT? IF
         LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
     THEN
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-RID -1 <> IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
     _LIBMU-REQUEST @ LIBMCR.EXPECTED-CATALOG-GENERATION @
         _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @ <> IF
         LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
     THEN
+    -1 _LIBMU-HAS-CONTENT !
+    -1 _LIBMU-HAS-CATALOG !
+    0 _LIBMU-HAS-COLLECTION !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
+        DUP _LIBMU-CATALOG-INDEX ! 1+ _LIBMU-CATALOG-COUNT !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.COLLECTION-COUNT @
+        _LIBMU-COLLECTION-COUNT !
+    _LIBMU-REQUEST @ LIBMCR.CONTENT-U @ _LIBMU-PLANNED-CONTENT-U !
+    S" org.akashic.library.managed-document-rid.v1"
+        _LIBMU-RID-DOMAIN-U ! _LIBMU-RID-DOMAIN-A !
     _LIBMU-PREFLIGHT-CAPACITY DUP IF
         _LIBMU-STORE @ _LIBVFS-RESULT EXIT
     THEN DROP
@@ -2531,6 +3429,203 @@ VARIABLE _LIBVA-FLAGS
 : LIBRARY-VFS-STORE-CREATE-MANAGED
   ( request result-entry store -- status )
     _libvfs-create-managed-xt _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Immutable copied-snapshot capture import
+\ ---------------------------------------------------------------------
+
+: _LIBMU-CAPTURE-ARGS?  ( request result store -- flag )
+    _LIBMU-STORE ! _LIBMU-RESULT ! _LIBMU-REQUEST !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-REQUEST @ LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-REQUEST @ _LIBRARY-CAPTURE-IMPORT-REQUEST-VALID? 0= IF
+        0 EXIT
+    THEN
+    _LIBMU-RESULT @ LIB-ENTRY-SIZE _LIBMU-OWNER-SPAN-SAFE? 0= IF
+        0 EXIT
+    THEN
+    _LIBMU-RESULT @ LIB-ENTRY-SIZE _LIBMU-REQUEST @
+        LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE
+        _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    _LIBMU-REQUEST @ LIBCIR.CONTENT-U @ IF
+        _LIBMU-REQUEST @ LIBCIR-CONTENT$
+            _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+        _LIBMU-REQUEST @ LIBCIR-CONTENT$
+            _LIBMU-REQUEST @ LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+        _LIBMU-REQUEST @ LIBCIR-CONTENT$
+            _LIBMU-RESULT @ LIB-ENTRY-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+: _LIBMU-BUILD-CAPTURE-CONTENT  ( rid -- status )
+    _LIBMU-ID !
+    _LIBMU-CONTENT LIB-CONTENT-INIT
+    _LIBMU-ID @ _LIBMU-CONTENT LIBCT.ID RID-COPY
+    1 _LIBMU-CONTENT LIBCT.DOMAIN-REVISION !
+    1 _LIBMU-CONTENT LIBCT.CONTENT-REVISION !
+    LIB-KIND-CAPTURE _LIBMU-CONTENT LIBCT.KIND !
+    _LIBMU-REQUEST @ LIBCIR.MEDIA @ _LIBMU-CONTENT LIBCT.MEDIA !
+    _LIBMU-REQUEST @ LIBCIR.CONTENT-A @ _LIBMU-CONTENT LIBCT.DATA-A !
+    _LIBMU-REQUEST @ LIBCIR.CONTENT-U @ _LIBMU-CONTENT LIBCT.DATA-U !
+    _LIBMU-CONTENT LIB-CONTENT-DIGEST! _LIBVFS-FORMAT>STATUS ;
+
+: _LIBMU-FILL-CAPTURE-RECEIPT  ( -- status )
+    _LIBMU-REQUEST @ LIBCIR.OPERATION-KEY
+        _LIBMU-ENTRY LIBE.RECEIPT LIBR.OPERATION-KEY RID-COPY
+    1 _LIBMU-ENTRY LIBE.RECEIPT LIBR.INITIAL-CONTENT-REVISION !
+    _LIBMU-REQUEST @ LIBCIR.CONTENT-U @
+        _LIBMU-ENTRY LIBE.RECEIPT LIBR.INITIAL-CONTENT-U !
+    _LIBMU-REQUEST @ LIBCIR.MEDIA @
+        _LIBMU-ENTRY LIBE.RECEIPT LIBR.INITIAL-MEDIA !
+    _LIBMU-CONTENT LIBCT.DIGEST
+        _LIBMU-ENTRY LIBE.RECEIPT LIBR.INITIAL-CONTENT-DIGEST
+        LIB-DIGEST-SIZE CMOVE
+    _LIBMU-REQUEST @ LIBCIR.ORIGIN LIB-ORIGIN-SIZE
+        _LIBMU-ENTRY LIBE.RECEIPT LIBR.LOCATOR-DIGEST SHA3-256-HASH
+    _LIBMU-REQUEST @ LIBCIR.EXPECTED-CATALOG-GENERATION @
+        _LIBMU-ENTRY LIBE.RECEIPT LIBR.EXPECTED-CATALOG-GENERATION !
+    _LIBMU-REQUEST @ LIBCIR.ORIGIN LIBO.KIND @ CASE
+        LIB-ORIGIN-VFS-SNAPSHOT OF
+            LIB-IMPORT-VFS-SNAPSHOT
+                _LIBMU-ENTRY LIBE.RECEIPT LIBR.METHOD !
+            _LIBMU-REQUEST @ LIBCIR.ORIGIN LIBO.VFS LIBV.DIGEST-KIND @
+                _LIBMU-ENTRY LIBE.RECEIPT LIBR.ORIGIN-DIGEST-KIND !
+            _LIBMU-REQUEST @ LIBCIR.ORIGIN LIBO.VFS LIBV.CONTENT-DIGEST
+                _LIBMU-ENTRY LIBE.RECEIPT LIBR.ORIGIN-STATE-DIGEST
+                LIB-DIGEST-SIZE CMOVE
+            LIB-VFS-SOURCE-OWNER$ _LIBMR-U ! _LIBMR-A !
+            _LIBMR-U @ _LIBMU-ENTRY LIBE.RECEIPT LIBR.SOURCE-OWNER-U !
+            _LIBMR-A @ _LIBMU-ENTRY LIBE.RECEIPT LIBR.SOURCE-OWNER
+                _LIBMR-U @ CMOVE
+            LIB-VFS-IMPORT-CONTRACT$
+                _LIBMU-ENTRY LIBE.RECEIPT LIBR.IMPORT-CONTRACT-DIGEST
+                SHA3-256-HASH
+        ENDOF
+        LIB-ORIGIN-SEMANTIC OF
+            LIB-IMPORT-SEMANTIC-SNAPSHOT
+                _LIBMU-ENTRY LIBE.RECEIPT LIBR.METHOD !
+            _LIBMU-REQUEST @ LIBCIR.ORIGIN LIBO.SEMANTIC
+                DUP QLOC.DOMAIN-REVISION @
+                    _LIBMU-ENTRY LIBE.RECEIPT LIBR.ORIGIN-REVISION !
+                DUP QLOC.DIGEST-KIND @
+                    _LIBMU-ENTRY LIBE.RECEIPT LIBR.ORIGIN-DIGEST-KIND !
+                DUP QLOC.STATE-DIGEST
+                    _LIBMU-ENTRY LIBE.RECEIPT LIBR.ORIGIN-STATE-DIGEST
+                    LIB-DIGEST-SIZE CMOVE
+                DUP QLOC-OWNER$ _LIBMR-U ! _LIBMR-A !
+                _LIBMR-U @
+                    _LIBMU-ENTRY LIBE.RECEIPT LIBR.SOURCE-OWNER-U !
+                _LIBMR-A @ _LIBMU-ENTRY LIBE.RECEIPT LIBR.SOURCE-OWNER
+                    _LIBMR-U @ CMOVE
+                QLOC-PROJECTION$
+                    _LIBMU-ENTRY LIBE.RECEIPT LIBR.IMPORT-CONTRACT-DIGEST
+                    SHA3-256-HASH
+        ENDOF
+        DROP LIBSTORE-S-INVALID EXIT
+    ENDCASE
+    LIBSTORE-S-OK ;
+
+: _LIBMU-BUILD-CAPTURE-ENTRY  ( rid mutation-sequence -- status )
+    _LIBMU-NEW-MUTATION ! _LIBMU-ID !
+    _LIBMU-ENTRY LIB-ENTRY-INIT
+    _LIBMU-ID @ _LIBMU-ENTRY LIBE.ID RID-COPY
+    1 _LIBMU-ENTRY LIBE.DOMAIN-REVISION !
+    LIB-KIND-CAPTURE _LIBMU-ENTRY LIBE.KIND !
+    LIB-LIFECYCLE-ACTIVE _LIBMU-ENTRY LIBE.LIFECYCLE !
+    _LIBMU-REQUEST @ LIBCIR.MEDIA @ _LIBMU-ENTRY LIBE.MEDIA !
+    1 _LIBMU-ENTRY LIBE.CURRENT-CONTENT-REVISION !
+    1 _LIBMU-ENTRY LIBE.OLDEST-CONTENT-REVISION !
+    _LIBMU-REQUEST @ LIBCIR.CONTENT-U @ _LIBMU-ENTRY LIBE.CONTENT-U !
+    _LIBMU-CONTENT LIBCT.DIGEST _LIBMU-ENTRY LIBE.CONTENT-DIGEST
+        LIB-DIGEST-SIZE CMOVE
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MUTATION-SEQUENCE !
+    LIB-CLOCK-MUTATION-SEQUENCE _LIBMU-ENTRY LIBE.CREATED-CLOCK !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.CREATED-VALUE !
+    LIB-CLOCK-MUTATION-SEQUENCE _LIBMU-ENTRY LIBE.IMPORTED-CLOCK !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.IMPORTED-VALUE !
+    LIB-CLOCK-MUTATION-SEQUENCE _LIBMU-ENTRY LIBE.MODIFIED-CLOCK !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MODIFIED-VALUE !
+    _LIBMU-REQUEST @ LIBCIR.TITLE-U @ _LIBMU-ENTRY LIBE.TITLE-U !
+    _LIBMU-REQUEST @ LIBCIR.TITLE _LIBMU-ENTRY LIBE.TITLE
+        _LIBMU-REQUEST @ LIBCIR.TITLE-U @ CMOVE
+    _LIBMU-REQUEST @ LIBCIR.ORIGIN _LIBMU-ENTRY LIBE.ORIGIN
+        LIB-ORIGIN-SIZE CMOVE
+    _LIBMU-FILL-CAPTURE-RECEIPT DUP IF EXIT THEN DROP
+    _LIBMU-ENTRY LIB-ENTRY-REQUEST-SEAL! _LIBVFS-FORMAT>STATUS ;
+
+: _LIBRARY-VFS-STORE-IMPORT-CAPTURE
+  ( request result-entry store -- status )
+    _LIBMU-CAPTURE-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-RESULT @ LIB-ENTRY-INIT
+    _LIBMU-REFRESH DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-REQUEST @ LIBCIR.OPERATION-KEY _LIBMU-OPERATION-KEY !
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-OPERATION-KEY DUP -1 <> IF
+        _LIBMU-READ-ENTRY DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN
+        DROP
+        _LIBMU-FOUND-ENTRY LIBE.ID _LIBMU-BUILD-CAPTURE-CONTENT
+            DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+        _LIBMU-FOUND-ENTRY LIBE.ID 1 _LIBMU-BUILD-CAPTURE-ENTRY
+            DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+        _LIBMU-FOUND-ENTRY LIBE.RECEIPT _LIBMU-ENTRY LIBE.RECEIPT
+            LIB-RECEIPT-RETRY= 0= IF
+            LIBSTORE-S-IDEMPOTENCY-MISMATCH
+                _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+        THEN
+        _LIBMU-FOUND-ENTRY _LIBMU-RESULT @ LIB-ENTRY-SIZE CMOVE
+        _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+            LIB-LIFECYCLE-TOMBSTONED = IF
+            LIBSTORE-S-TOMBSTONED _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+        THEN
+        LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    DROP
+    _LIBMU-OPERATION-KEY @ _LIBMU-COLLECTION-KEY-CONFLICT? IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-RID -1 <> IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-REQUEST @ LIBCIR.EXPECTED-CATALOG-GENERATION @
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @ <> IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    -1 _LIBMU-HAS-CONTENT ! -1 _LIBMU-HAS-CATALOG !
+    0 _LIBMU-HAS-COLLECTION !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
+        DUP _LIBMU-CATALOG-INDEX ! 1+ _LIBMU-CATALOG-COUNT !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.COLLECTION-COUNT @
+        _LIBMU-COLLECTION-COUNT !
+    _LIBMU-REQUEST @ LIBCIR.CONTENT-U @ _LIBMU-PLANNED-CONTENT-U !
+    S" org.akashic.library.capture-rid.v1"
+        _LIBMU-RID-DOMAIN-U ! _LIBMU-RID-DOMAIN-A !
+    _LIBMU-PREFLIGHT-CAPACITY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-GENERATE-RID DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-RID _LIBMU-BUILD-CAPTURE-CONTENT DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-RID _LIBMU-NEW-MUTATION @ _LIBMU-BUILD-CAPTURE-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-PREPARE-PUBLICATION DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-COMMIT-ENTRY-KEY _LIBMU-COMMIT-MODE !
+    _LIBMU-COMMIT-PREPARED DUP IF
+        _LIBMU-RESULT @ LIB-ENTRY-INIT
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-FOUND-ENTRY _LIBMU-RESULT @ LIB-ENTRY-SIZE CMOVE
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+' _LIBRARY-VFS-STORE-IMPORT-CAPTURE CONSTANT _libvfs-import-capture-xt
+: LIBRARY-VFS-STORE-IMPORT-CAPTURE
+  ( request result-entry store -- status )
+    _libvfs-import-capture-xt _library-vfs-store-guard WITH-GUARD ;
 
 \ ---------------------------------------------------------------------
 \ Generation-stable authoritative active-catalog query
@@ -2701,20 +3796,39 @@ VARIABLE _LIBVA-FLAGS
     _LIBMU-CONTENT-OUT @ LIB-CONTENT-INIT ;
 
 : _LIBMU-CONTENT-TARGET?  ( -- flag )
-    _LIBMU-CONTENT-READBACK LIBCT.ID _LIBMU-ID @ RID=
-    _LIBMU-CONTENT-READBACK LIBCT.CONTENT-REVISION @
-        _LIBMU-FOUND-ENTRY LIBE.CURRENT-CONTENT-REVISION @ = AND ;
+    _LIBMU-CONTENT-READBACK LIBCT.ID _LIBMU-ID @ RID= 0= IF 0 EXIT THEN
+    _LIBMU-CONTENT-MODE @ CASE
+        _LIBMU-CONTENT-CURRENT OF
+            _LIBMU-CONTENT-READBACK LIBCT.CONTENT-REVISION @
+                _LIBMU-FOUND-ENTRY LIBE.CURRENT-CONTENT-REVISION @ =
+        ENDOF
+        _LIBMU-CONTENT-DOMAIN OF
+            _LIBMU-CONTENT-READBACK LIBCT.DOMAIN-REVISION @
+                _LIBMU-TARGET-DOMAIN @ =
+        ENDOF
+        _LIBMU-CONTENT-REVISION OF
+            _LIBMU-CONTENT-READBACK LIBCT.CONTENT-REVISION @
+                _LIBMU-TARGET-CONTENT @ =
+        ENDOF
+        0 SWAP
+    ENDCASE ;
 
 : _LIBMU-CONTENT-MATCHES-ENTRY?  ( -- flag )
     _LIBMU-CONTENT-READBACK LIBCT.KIND @
         _LIBMU-FOUND-ENTRY LIBE.KIND @ =
     _LIBMU-CONTENT-READBACK LIBCT.MEDIA @
         _LIBMU-FOUND-ENTRY LIBE.MEDIA @ = AND
-    _LIBMU-CONTENT-READBACK LIBCT.DATA-U @
-        _LIBMU-FOUND-ENTRY LIBE.CONTENT-U @ = AND
-    _LIBMU-CONTENT-READBACK LIBCT.DIGEST
-        _LIBMU-FOUND-ENTRY LIBE.CONTENT-DIGEST
-        SHA3-256-COMPARE AND ;
+    _LIBMU-CONTENT-READBACK LIBCT.CONTENT-REVISION @
+        _LIBMU-FOUND-ENTRY LIBE.OLDEST-CONTENT-REVISION @ >= AND
+    _LIBMU-CONTENT-READBACK LIBCT.CONTENT-REVISION @
+        _LIBMU-FOUND-ENTRY LIBE.CURRENT-CONTENT-REVISION @ <= AND
+    _LIBMU-CONTENT-MODE @ _LIBMU-CONTENT-CURRENT = IF
+        _LIBMU-CONTENT-READBACK LIBCT.DATA-U @
+            _LIBMU-FOUND-ENTRY LIBE.CONTENT-U @ = AND
+        _LIBMU-CONTENT-READBACK LIBCT.DIGEST
+            _LIBMU-FOUND-ENTRY LIBE.CONTENT-DIGEST
+            SHA3-256-COMPARE AND
+    THEN ;
 
 : _LIBMU-READ-CONTENT-BODY  ( -- status )
     _LIBVFS-CONTENT-PATH$ LIB-ARENA-SIZE _LIBVP-OPEN-COMMITTED
@@ -2752,6 +3866,11 @@ VARIABLE _LIBVA-FLAGS
             LIB-CONTENT-RECORD-DECODE _LIBVFS-FORMAT-READ>STATUS
             DUP IF EXIT THEN DROP
         _LIBMU-CONTENT-TARGET? IF
+            _LIBMU-CONTENT-MODE @ _LIBMU-CONTENT-CURRENT <>
+            _LIBMU-CONTENT-READBACK LIBCT.CONTENT-REVISION @
+                _LIBMU-FOUND-ENTRY LIBE.OLDEST-CONTENT-REVISION @ < AND IF
+                _LIBMU-MISSING-CONTENT-STATUS @ EXIT
+            THEN
             _LIBMU-CONTENT-MATCHES-ENTRY? 0= IF
                 LIBSTORE-S-CORRUPT EXIT
             THEN
@@ -2763,7 +3882,7 @@ VARIABLE _LIBVA-FLAGS
         THEN
         _LIBVP-FRAME-U @ _LIBVP-OFFSET +!
     REPEAT
-    LIBSTORE-S-CORRUPT ;
+    _LIBMU-MISSING-CONTENT-STATUS @ ;
 
 : _LIBMU-READ-CONTENT  ( -- status )
     _LIBMU-STORE @ LIBRARY-VFS-STORE.VFS @ _LIBVP-VFS !
@@ -2773,7 +3892,7 @@ VARIABLE _LIBVA-FLAGS
 : _LIBMU-READ-RETURN  ( status -- required-u status )
     _LIBMU-STORE @ _LIBVFS-RESULT >R _LIBMU-REQUIRED-U @ R> ;
 
-: _LIBRARY-VFS-STORE-READ-MANAGED-EXACT
+: _LIBRARY-VFS-STORE-READ-EXACT-BODY
   ( rid revision bytes capacity entry content store -- required-u status )
     0 _LIBMU-REQUIRED-U !
     _LIBMU-READ-ARGS DUP IF
@@ -2793,12 +3912,14 @@ VARIABLE _LIBVA-FLAGS
         _LIBMU-READ-RETURN EXIT
     THEN
     DROP
+    _LIBMU-REQUIRE-MANAGED @
     _LIBMU-FOUND-ENTRY LIBE.KIND @
-        LIB-KIND-MANAGED-DOCUMENT <> IF
+        LIB-KIND-MANAGED-DOCUMENT <> AND IF
         LIBSTORE-S-NOT-FOUND _LIBMU-READ-RETURN EXIT
     THEN
     _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
         LIB-LIFECYCLE-TOMBSTONED = IF
+        _LIBMU-FOUND-ENTRY _LIBMU-ENTRY-OUT @ LIB-ENTRY-SIZE CMOVE
         LIBSTORE-S-TOMBSTONED _LIBMU-READ-RETURN EXIT
     THEN
     _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @
@@ -2810,6 +3931,8 @@ VARIABLE _LIBVA-FLAGS
         _LIBMU-CONTENT-CAP @ > IF
         LIBSTORE-S-OUTPUT-CAPACITY _LIBMU-READ-RETURN EXIT
     THEN
+    _LIBMU-CONTENT-CURRENT _LIBMU-CONTENT-MODE !
+    LIBSTORE-S-CORRUPT _LIBMU-MISSING-CONTENT-STATUS !
     _LIBMU-READ-CONTENT DUP IF
         _LIBMU-CLEAR-READ-OUTPUT
         _LIBMU-READ-RETURN EXIT
@@ -2825,12 +3948,1002 @@ VARIABLE _LIBVA-FLAGS
     _LIBMU-FOUND-ENTRY _LIBMU-ENTRY-OUT @ LIB-ENTRY-SIZE CMOVE
     LIBSTORE-S-OK _LIBMU-READ-RETURN ;
 
+: _LIBRARY-VFS-STORE-READ-MANAGED-EXACT
+  ( rid revision bytes capacity entry content store -- required-u status )
+    -1 _LIBMU-REQUIRE-MANAGED !
+    _LIBRARY-VFS-STORE-READ-EXACT-BODY ;
+
+: _LIBRARY-VFS-STORE-READ-EXACT
+  ( rid revision bytes capacity entry content store -- required-u status )
+    0 _LIBMU-REQUIRE-MANAGED !
+    _LIBRARY-VFS-STORE-READ-EXACT-BODY ;
+
 ' _LIBRARY-VFS-STORE-READ-MANAGED-EXACT
     CONSTANT _libvfs-read-managed-exact-xt
+' _LIBRARY-VFS-STORE-READ-EXACT CONSTANT _libvfs-read-document-exact-xt
 
 : LIBRARY-VFS-STORE-READ-MANAGED-EXACT
   ( rid revision bytes capacity entry content store -- required-u status )
     _libvfs-read-managed-exact-xt _library-vfs-store-guard WITH-GUARD ;
+
+: LIBRARY-VFS-STORE-READ-EXACT
+  ( rid revision bytes capacity entry content store -- required-u status )
+    _libvfs-read-document-exact-xt
+        _library-vfs-store-guard WITH-GUARD ;
+
+\ =====================================================================
+\  Exact entry mutations and retained managed-document history
+\ =====================================================================
+
+: _LIBMU-TARGET-ENTRY-SPANS?  ( -- flag )
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ RID-PRESENT? 0= IF 0 EXIT THEN
+    _LIBMU-REVISION @ 0> 0= IF 0 EXIT THEN
+    _LIBMU-RESULT @ LIB-ENTRY-SIZE _LIBMU-OWNER-SPAN-SAFE? 0= IF
+        0 EXIT
+    THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE _LIBMU-RESULT @ LIB-ENTRY-SIZE
+        _VFSNAP-RANGES-OVERLAP? 0= ;
+
+: _LIBMU-LOAD-TARGET-ENTRY  ( -- status )
+    _LIBMU-REFRESH DUP IF EXIT THEN DROP
+    _LIBMU-ID @ _LIBMU-FIND-RID DUP -1 = IF
+        DROP LIBSTORE-S-NOT-FOUND EXIT
+    THEN
+    _LIBMU-READ-ENTRY DUP IF EXIT THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF LIBSTORE-S-TOMBSTONED EXIT THEN
+    _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @
+        _LIBMU-REVISION @ <> IF LIBSTORE-S-CONFLICT EXIT THEN
+    LIBSTORE-S-OK ;
+
+: _LIBMU-CONFIGURE-ENTRY-OVERWRITE  ( content? planned-u -- status )
+    _LIBMU-PLANNED-CONTENT-U ! _LIBMU-HAS-CONTENT !
+    -1 _LIBMU-HAS-CATALOG ! 0 _LIBMU-HAS-COLLECTION !
+    _LIBMU-INDEX @ _LIBMU-CATALOG-INDEX !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
+        _LIBMU-CATALOG-COUNT !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.COLLECTION-COUNT @
+        _LIBMU-COLLECTION-COUNT !
+    _LIBMU-PREFLIGHT-CAPACITY ;
+
+: _LIBMU-ENTRY-TRANSITION-VALID?  ( -- flag )
+    _LIBMU-ENTRY LIB-ENTRY-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-FOUND-ENTRY 1 _LIBMU-ENTRY 1
+        LIB-CATALOG-IDENTITIES-PRESERVED? ;
+
+: _LIBMU-PUBLISH-ENTRY-CANDIDATE  ( -- status )
+    _LIBMU-PREPARE-PUBLICATION DUP IF EXIT THEN DROP
+    _LIBMU-COMMIT-ENTRY-EXACT _LIBMU-COMMIT-MODE !
+    _LIBMU-COMMIT-PREPARED DUP IF EXIT THEN DROP
+    _LIBMU-FOUND-ENTRY _LIBMU-RESULT @ LIB-ENTRY-SIZE CMOVE
+    LIBSTORE-S-OK ;
+
+: _LIBMU-REPLACE-ARGS?
+  ( rid expected a u result store -- flag )
+    _LIBMU-STORE ! _LIBMU-RESULT ! _LIBMU-INPUT-U ! _LIBMU-INPUT-A !
+    _LIBMU-REVISION ! _LIBMU-ID !
+    _LIBMU-TARGET-ENTRY-SPANS? 0= IF 0 EXIT THEN
+    _LIBMU-INPUT-U @ DUP 0< SWAP LIB-CONTENT-MAX > OR IF 0 EXIT THEN
+    _LIBMU-INPUT-U @ IF
+        _LIBMU-INPUT-A @ _LIBMU-INPUT-U @
+            _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+        _LIBMU-INPUT-A @ _LIBMU-INPUT-U @ UTF8-VALID? 0= IF 0 EXIT THEN
+        _LIBMU-INPUT-A @ _LIBMU-INPUT-U @
+            _LIBMU-ID @ LIB-DIGEST-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+        _LIBMU-INPUT-A @ _LIBMU-INPUT-U @
+            _LIBMU-RESULT @ LIB-ENTRY-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+: _LIBMU-BUILD-REPLACEMENT-CONTENT  ( -- status )
+    _LIBMU-CONTENT LIB-CONTENT-INIT
+    _LIBMU-FOUND-ENTRY LIBE.ID _LIBMU-CONTENT LIBCT.ID RID-COPY
+    _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @ 1+ DUP 0> 0= IF
+        DROP LIBSTORE-S-CONTENT-FULL EXIT
+    THEN
+    _LIBMU-CONTENT LIBCT.DOMAIN-REVISION !
+    _LIBMU-FOUND-ENTRY LIBE.CURRENT-CONTENT-REVISION @ 1+
+        DUP 0> 0= IF DROP LIBSTORE-S-CONTENT-FULL EXIT THEN
+        _LIBMU-CONTENT LIBCT.CONTENT-REVISION !
+    LIB-KIND-MANAGED-DOCUMENT _LIBMU-CONTENT LIBCT.KIND !
+    _LIBMU-FOUND-ENTRY LIBE.MEDIA @ _LIBMU-CONTENT LIBCT.MEDIA !
+    _LIBMU-INPUT-A @ _LIBMU-CONTENT LIBCT.DATA-A !
+    _LIBMU-INPUT-U @ _LIBMU-CONTENT LIBCT.DATA-U !
+    _LIBMU-CONTENT LIB-CONTENT-DIGEST! _LIBVFS-FORMAT>STATUS ;
+
+: _LIBMU-BUILD-REPLACEMENT-ENTRY  ( -- status )
+    _LIBMU-FOUND-ENTRY _LIBMU-ENTRY LIB-ENTRY-SIZE CMOVE
+    _LIBMU-CONTENT LIBCT.DOMAIN-REVISION @
+        _LIBMU-ENTRY LIBE.DOMAIN-REVISION !
+    _LIBMU-CONTENT LIBCT.CONTENT-REVISION @ DUP
+        _LIBMU-ENTRY LIBE.CURRENT-CONTENT-REVISION !
+    DUP LIB-RETAINED-REVISION-MAX 1- > IF
+        LIB-RETAINED-REVISION-MAX 1- -
+    ELSE
+        DROP 1
+    THEN
+    _LIBMU-ENTRY LIBE.OLDEST-CONTENT-REVISION !
+    _LIBMU-CONTENT LIBCT.DATA-U @ _LIBMU-ENTRY LIBE.CONTENT-U !
+    _LIBMU-CONTENT LIBCT.DIGEST _LIBMU-ENTRY LIBE.CONTENT-DIGEST
+        LIB-DIGEST-SIZE CMOVE
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MUTATION-SEQUENCE !
+    LIB-CLOCK-MUTATION-SEQUENCE _LIBMU-ENTRY LIBE.MODIFIED-CLOCK !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MODIFIED-VALUE !
+    _LIBMU-ENTRY-TRANSITION-VALID? IF
+        LIBSTORE-S-OK
+    ELSE
+        LIBSTORE-S-RECOVERY
+    THEN ;
+
+: _LIBRARY-VFS-STORE-REPLACE-MANAGED
+  ( rid expected-domain-revision a u result-entry store -- status )
+    _LIBMU-REPLACE-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-RESULT @ LIB-ENTRY-INIT
+    _LIBMU-LOAD-TARGET-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.KIND @
+        LIB-KIND-MANAGED-DOCUMENT <> IF
+        LIBSTORE-S-INVALID _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    -1 _LIBMU-INPUT-U @ _LIBMU-CONFIGURE-ENTRY-OVERWRITE DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-BUILD-REPLACEMENT-CONTENT DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-BUILD-REPLACEMENT-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-PUBLISH-ENTRY-CANDIDATE DUP IF
+        _LIBMU-RESULT @ LIB-ENTRY-INIT
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+' _LIBRARY-VFS-STORE-REPLACE-MANAGED
+    CONSTANT _libvfs-replace-managed-xt
+: LIBRARY-VFS-STORE-REPLACE-MANAGED
+  ( rid expected-domain-revision a u result-entry store -- status )
+    _libvfs-replace-managed-xt _library-vfs-store-guard WITH-GUARD ;
+
+: _LIBMU-METADATA-ARGS?
+  ( rid expected metadata result store -- flag )
+    _LIBMU-STORE ! _LIBMU-RESULT ! _LIBMU-METADATA !
+    _LIBMU-REVISION ! _LIBMU-ID !
+    _LIBMU-TARGET-ENTRY-SPANS? 0= IF 0 EXIT THEN
+    _LIBMU-METADATA @ LIBRARY-METADATA-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-METADATA @ _LIBRARY-METADATA-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-METADATA @ LIBRARY-METADATA-SIZE
+        _LIBMU-ID @ LIB-DIGEST-SIZE
+        _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    _LIBMU-METADATA @ LIBRARY-METADATA-SIZE
+        _LIBMU-RESULT @ LIB-ENTRY-SIZE
+        _VFSNAP-RANGES-OVERLAP? 0= ;
+
+: _LIBMU-BUILD-METADATA-ENTRY  ( -- status )
+    _LIBMU-FOUND-ENTRY _LIBMU-ENTRY LIB-ENTRY-SIZE CMOVE
+    _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @ 1+
+        DUP 0> 0= IF DROP LIBSTORE-S-CATALOG-FULL EXIT THEN
+        _LIBMU-ENTRY LIBE.DOMAIN-REVISION !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MUTATION-SEQUENCE !
+    LIB-CLOCK-MUTATION-SEQUENCE _LIBMU-ENTRY LIBE.MODIFIED-CLOCK !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MODIFIED-VALUE !
+    _LIBMU-METADATA @ LIBMD.TITLE-U @ _LIBMU-ENTRY LIBE.TITLE-U !
+    _LIBMU-ENTRY LIBE.TITLE LIB-TITLE-MAX 0 FILL
+    _LIBMU-METADATA @ LIBMD.TITLE _LIBMU-ENTRY LIBE.TITLE
+        _LIBMU-METADATA @ LIBMD.TITLE-U @ CMOVE
+    _LIBMU-METADATA @ LIBMD.TAG-N @ _LIBMU-ENTRY LIBE.TAG-N !
+    _LIBMU-METADATA @ _LIBMD-TAGS + _LIBMU-ENTRY _LIBE-TAGS +
+        LIB-TAG-MAX LIB-TAG-SIZE * CMOVE
+    _LIBMU-METADATA @ LIBMD.LINEAGE-N @ _LIBMU-ENTRY LIBE.LINEAGE-N !
+    _LIBMU-METADATA @ _LIBMD-LINEAGE + _LIBMU-ENTRY _LIBE-LINEAGE +
+        LIB-LINEAGE-MAX LIB-LINEAGE-SIZE * CMOVE
+    _LIBMU-ENTRY-TRANSITION-VALID? IF LIBSTORE-S-OK
+    ELSE LIBSTORE-S-RECOVERY THEN ;
+
+: _LIBRARY-VFS-STORE-REPLACE-METADATA
+  ( rid expected-domain-revision metadata result-entry store -- status )
+    _LIBMU-METADATA-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-RESULT @ LIB-ENTRY-INIT
+    _LIBMU-LOAD-TARGET-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    0 0 _LIBMU-CONFIGURE-ENTRY-OVERWRITE DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-BUILD-METADATA-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-PUBLISH-ENTRY-CANDIDATE DUP IF
+        _LIBMU-RESULT @ LIB-ENTRY-INIT
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+' _LIBRARY-VFS-STORE-REPLACE-METADATA
+    CONSTANT _libvfs-replace-metadata-xt
+: LIBRARY-VFS-STORE-REPLACE-METADATA
+  ( rid expected-domain-revision metadata result-entry store -- status )
+    _libvfs-replace-metadata-xt _library-vfs-store-guard WITH-GUARD ;
+
+: _LIBMU-LIFECYCLE-ARGS?  ( rid expected result store -- flag )
+    _LIBMU-STORE ! _LIBMU-RESULT ! _LIBMU-REVISION ! _LIBMU-ID !
+    _LIBMU-TARGET-ENTRY-SPANS? ;
+
+: _LIBMU-BUILD-LIFECYCLE-ENTRY  ( -- status )
+    _LIBMU-FOUND-ENTRY _LIBMU-ENTRY LIB-ENTRY-SIZE CMOVE
+    _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @ 1+
+        DUP 0> 0= IF DROP LIBSTORE-S-CATALOG-FULL EXIT THEN
+        _LIBMU-ENTRY LIBE.DOMAIN-REVISION !
+    _LIBMU-TARGET-LIFECYCLE @ _LIBMU-ENTRY LIBE.LIFECYCLE !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MUTATION-SEQUENCE !
+    LIB-CLOCK-MUTATION-SEQUENCE _LIBMU-ENTRY LIBE.MODIFIED-CLOCK !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MODIFIED-VALUE !
+    _LIBMU-ENTRY-TRANSITION-VALID? IF LIBSTORE-S-OK
+    ELSE LIBSTORE-S-RECOVERY THEN ;
+
+: _LIBMU-LIFECYCLE-MUTATE  ( -- status )
+    _LIBMU-RESULT @ LIB-ENTRY-INIT
+    _LIBMU-LOAD-TARGET-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @ _LIBMU-TARGET-LIFECYCLE @ = IF
+        _LIBMU-FOUND-ENTRY _LIBMU-RESULT @ LIB-ENTRY-SIZE CMOVE
+        LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    0 0 _LIBMU-CONFIGURE-ENTRY-OVERWRITE DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-BUILD-LIFECYCLE-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-PUBLISH-ENTRY-CANDIDATE DUP IF
+        _LIBMU-RESULT @ LIB-ENTRY-INIT
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+: _LIBRARY-VFS-STORE-ARCHIVE
+  ( rid expected-domain-revision result-entry store -- status )
+    _LIBMU-LIFECYCLE-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    LIB-LIFECYCLE-ARCHIVED _LIBMU-TARGET-LIFECYCLE !
+    _LIBMU-LIFECYCLE-MUTATE ;
+
+: _LIBRARY-VFS-STORE-UNARCHIVE
+  ( rid expected-domain-revision result-entry store -- status )
+    _LIBMU-LIFECYCLE-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    LIB-LIFECYCLE-ACTIVE _LIBMU-TARGET-LIFECYCLE !
+    _LIBMU-LIFECYCLE-MUTATE ;
+
+' _LIBRARY-VFS-STORE-ARCHIVE CONSTANT _libvfs-archive-xt
+' _LIBRARY-VFS-STORE-UNARCHIVE CONSTANT _libvfs-unarchive-xt
+: LIBRARY-VFS-STORE-ARCHIVE
+  ( rid expected-domain-revision result-entry store -- status )
+    _libvfs-archive-xt _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-VFS-STORE-UNARCHIVE
+  ( rid expected-domain-revision result-entry store -- status )
+    _libvfs-unarchive-xt _library-vfs-store-guard WITH-GUARD ;
+
+: _LIBMU-BUILD-TOMBSTONE-ENTRY  ( -- status )
+    _LIBMU-ENTRY LIB-ENTRY-INIT
+    _LIBMU-FOUND-ENTRY LIBE.ID _LIBMU-ENTRY LIBE.ID RID-COPY
+    _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @ 1+
+        DUP 0> 0= IF DROP LIBSTORE-S-CATALOG-FULL EXIT THEN
+        _LIBMU-ENTRY LIBE.DOMAIN-REVISION !
+    _LIBMU-FOUND-ENTRY LIBE.KIND @ _LIBMU-ENTRY LIBE.KIND !
+    LIB-LIFECYCLE-TOMBSTONED _LIBMU-ENTRY LIBE.LIFECYCLE !
+    LIB-MEDIA-NONE _LIBMU-ENTRY LIBE.MEDIA !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.MUTATION-SEQUENCE !
+    LIB-CLOCK-MUTATION-SEQUENCE _LIBMU-ENTRY LIBE.DELETED-CLOCK !
+    _LIBMU-NEW-MUTATION @ _LIBMU-ENTRY LIBE.DELETED-VALUE !
+    _LIBMU-FOUND-ENTRY LIBE.RECEIPT _LIBMU-ENTRY LIBE.RECEIPT
+        LIB-RECEIPT-SIZE CMOVE
+    _LIBMU-ENTRY-TRANSITION-VALID? IF LIBSTORE-S-OK
+    ELSE LIBSTORE-S-RECOVERY THEN ;
+
+: _LIBRARY-VFS-STORE-TOMBSTONE-DESTRUCTIVE
+  ( rid expected-domain-revision result-entry store -- status )
+    _LIBMU-LIFECYCLE-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-RESULT @ LIB-ENTRY-INIT
+    _LIBMU-REFRESH DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-ID @ _LIBMU-FIND-RID DUP -1 = IF
+        DROP LIBSTORE-S-NOT-FOUND _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-READ-ENTRY DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF
+        _LIBMU-FOUND-ENTRY _LIBMU-RESULT @ LIB-ENTRY-SIZE CMOVE
+        LIBSTORE-S-TOMBSTONED _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @
+        _LIBMU-REVISION @ <> IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    0 0 _LIBMU-CONFIGURE-ENTRY-OVERWRITE DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-BUILD-TOMBSTONE-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-PUBLISH-ENTRY-CANDIDATE DUP IF
+        _LIBMU-RESULT @ LIB-ENTRY-INIT
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+' _LIBRARY-VFS-STORE-TOMBSTONE-DESTRUCTIVE
+    CONSTANT _libvfs-tombstone-destructive-xt
+: LIBRARY-VFS-STORE-TOMBSTONE-DESTRUCTIVE
+  ( rid expected-domain-revision result-entry store -- status )
+    _libvfs-tombstone-destructive-xt
+        _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Retained content-revision list/read/compare and restore-as-new
+\ ---------------------------------------------------------------------
+
+: _LIBMU-HISTORY-RETURN  ( status -- required-n status )
+    _LIBMU-STORE @ _LIBVFS-RESULT >R _LIBMU-REQUIRED-N @ R> ;
+
+: _LIBMU-HISTORY-ARGS?
+  ( rid expected-current summaries capacity store -- flag )
+    _LIBMU-STORE ! _LIBMU-HISTORY-CAP ! _LIBMU-HISTORY !
+    _LIBMU-REVISION ! _LIBMU-ID !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ RID-PRESENT? 0= IF 0 EXIT THEN
+    _LIBMU-REVISION @ 0> 0= IF 0 EXIT THEN
+    _LIBMU-HISTORY-CAP @ DUP 0<
+        SWAP LIB-RETAINED-REVISION-MAX > OR IF 0 EXIT THEN
+    _LIBMU-HISTORY-CAP @ IF
+        _LIBMU-HISTORY @ _LIBMU-HISTORY-CAP @
+            LIBRARY-REVISION-SUMMARY-SIZE *
+            _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+        _LIBMU-HISTORY @ _LIBMU-HISTORY-CAP @
+            LIBRARY-REVISION-SUMMARY-SIZE *
+            _LIBMU-ID @ LIB-DIGEST-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    ELSE
+        _LIBMU-HISTORY @ IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+: _LIBMU-CLEAR-HISTORY  ( -- )
+    _LIBMU-HISTORY-CAP @ 0 ?DO
+        _LIBMU-HISTORY @ I LIBRARY-REVISION-SUMMARY-SIZE * +
+            LIBRARY-REVISION-SUMMARY-INIT
+    LOOP ;
+
+: _LIBMU-CONTENT>SUMMARY  ( content summary -- )
+    >R
+    R@ LIBRARY-REVISION-SUMMARY-INIT
+    DUP LIBCT.DOMAIN-REVISION @ R@ LIBRS.DOMAIN-REVISION !
+    DUP LIBCT.CONTENT-REVISION @ R@ LIBRS.CONTENT-REVISION !
+    DUP LIBCT.MEDIA @ R@ LIBRS.MEDIA !
+    DUP LIBCT.DATA-U @ R@ LIBRS.CONTENT-U !
+    LIBCT.DIGEST R> LIBRS.DIGEST LIB-DIGEST-SIZE CMOVE ;
+
+: _LIBRARY-VFS-STORE-LIST-RETAINED-REVISIONS
+  ( rid expected-current summaries capacity store -- required-n status )
+    0 _LIBMU-REQUIRED-N !
+    _LIBMU-HISTORY-ARGS? 0= IF 0 LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-CLEAR-HISTORY
+    _LIBMU-REFRESH DUP IF _LIBMU-HISTORY-RETURN EXIT THEN DROP
+    _LIBMU-ID @ _LIBMU-FIND-RID DUP -1 = IF
+        DROP LIBSTORE-S-NOT-FOUND _LIBMU-HISTORY-RETURN EXIT
+    THEN
+    _LIBMU-READ-ENTRY DUP IF _LIBMU-HISTORY-RETURN EXIT THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF
+        LIBSTORE-S-TOMBSTONED _LIBMU-HISTORY-RETURN EXIT
+    THEN
+    _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @
+        _LIBMU-REVISION @ <> IF
+        LIBSTORE-S-CONFLICT _LIBMU-HISTORY-RETURN EXIT
+    THEN
+    _LIBMU-FOUND-ENTRY LIBE.CURRENT-CONTENT-REVISION @
+        _LIBMU-FOUND-ENTRY LIBE.OLDEST-CONTENT-REVISION @ - 1+
+        DUP _LIBMU-REQUIRED-N !
+    _LIBMU-HISTORY-CAP @ > IF
+        LIBSTORE-S-OUTPUT-CAPACITY _LIBMU-HISTORY-RETURN EXIT
+    THEN
+    LIB-CONTENT-MAX _LIBMU-CONTENT-CAP !
+    LIBSTORE-S-NOT-FOUND _LIBMU-MISSING-CONTENT-STATUS !
+    _LIBMU-REQUIRED-N @ 0 ?DO
+        _LIBMU-FOUND-ENTRY LIBE.CURRENT-CONTENT-REVISION @ I -
+            _LIBMU-TARGET-CONTENT !
+        _LIBMU-CONTENT-REVISION _LIBMU-CONTENT-MODE !
+        _LIBMU-READ-CONTENT DUP IF
+            _LIBMU-CLEAR-HISTORY _LIBMU-HISTORY-RETURN UNLOOP EXIT
+        THEN
+        DROP
+        _LIBMU-CONTENT-READBACK
+            _LIBMU-HISTORY @ I LIBRARY-REVISION-SUMMARY-SIZE * +
+            _LIBMU-CONTENT>SUMMARY
+    LOOP
+    LIBSTORE-S-OK _LIBMU-HISTORY-RETURN ;
+
+' _LIBRARY-VFS-STORE-LIST-RETAINED-REVISIONS
+    CONSTANT _libvfs-list-retained-revisions-xt
+: LIBRARY-VFS-STORE-LIST-RETAINED-REVISIONS
+  ( rid expected-current summaries capacity store -- required-n status )
+    _libvfs-list-retained-revisions-xt
+        _library-vfs-store-guard WITH-GUARD ;
+
+: _LIBMU-RETAINED-READ-ARGS?
+  ( rid domain bytes capacity content store -- flag )
+    _LIBMU-STORE ! _LIBMU-CONTENT-OUT ! _LIBMU-CONTENT-CAP !
+    _LIBMU-BYTES ! _LIBMU-TARGET-DOMAIN ! _LIBMU-ID !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ RID-PRESENT? 0= IF 0 EXIT THEN
+    _LIBMU-TARGET-DOMAIN @ 0> 0= IF 0 EXIT THEN
+    _LIBMU-CONTENT-CAP @ DUP 0< SWAP LIB-CONTENT-MAX > OR IF 0 EXIT THEN
+    _LIBMU-CONTENT-CAP @ IF
+        _LIBMU-BYTES @ _LIBMU-CONTENT-CAP @
+            _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    ELSE
+        _LIBMU-BYTES @ IF 0 EXIT THEN
+    THEN
+    _LIBMU-CONTENT-OUT @ LIB-CONTENT-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE _LIBMU-CONTENT-OUT @ LIB-CONTENT-SIZE
+        _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    _LIBMU-CONTENT-CAP @ IF
+        _LIBMU-BYTES @ _LIBMU-CONTENT-CAP @
+            _LIBMU-ID @ LIB-DIGEST-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+        _LIBMU-BYTES @ _LIBMU-CONTENT-CAP @
+            _LIBMU-CONTENT-OUT @ LIB-CONTENT-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+: _LIBMU-RETAINED-READ-RETURN  ( status -- required-u status )
+    _LIBMU-STORE @ _LIBVFS-RESULT >R _LIBMU-REQUIRED-U @ R> ;
+
+: _LIBRARY-VFS-STORE-READ-RETAINED-EXACT
+  ( rid retained-domain bytes capacity content store -- required-u status )
+    0 _LIBMU-REQUIRED-U !
+    _LIBMU-RETAINED-READ-ARGS? 0= IF 0 LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-CONTENT-OUT @ LIB-CONTENT-INIT
+    _LIBMU-REFRESH DUP IF _LIBMU-RETAINED-READ-RETURN EXIT THEN DROP
+    _LIBMU-ID @ _LIBMU-FIND-RID DUP -1 = IF
+        DROP LIBSTORE-S-NOT-FOUND _LIBMU-RETAINED-READ-RETURN EXIT
+    THEN
+    _LIBMU-READ-ENTRY DUP IF _LIBMU-RETAINED-READ-RETURN EXIT THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF
+        LIBSTORE-S-TOMBSTONED _LIBMU-RETAINED-READ-RETURN EXIT
+    THEN
+    _LIBMU-TARGET-DOMAIN @
+        _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @ > IF
+        LIBSTORE-S-NOT-FOUND _LIBMU-RETAINED-READ-RETURN EXIT
+    THEN
+    _LIBMU-CONTENT-DOMAIN _LIBMU-CONTENT-MODE !
+    LIBSTORE-S-NOT-FOUND _LIBMU-MISSING-CONTENT-STATUS !
+    _LIBMU-READ-CONTENT DUP
+    DUP LIBSTORE-S-NOT-FOUND = IF
+        2DROP LIBSTORE-S-GONE _LIBMU-RETAINED-READ-RETURN EXIT
+    THEN
+    DUP IF
+        DUP LIBSTORE-S-OUTPUT-CAPACITY = IF
+            _LIBMU-CONTENT-READBACK LIBCT.DATA-U @ _LIBMU-REQUIRED-U !
+        THEN
+        NIP _LIBMU-RETAINED-READ-RETURN EXIT
+    THEN
+    2DROP
+    _LIBMU-CONTENT-READBACK LIBCT.DATA-U @ _LIBMU-REQUIRED-U !
+    _LIBMU-CONTENT-READBACK LIBCT.DATA-U @ IF
+        _LIBMU-CONTENT-READBACK LIBCT-DATA$
+            _LIBMU-BYTES @ SWAP CMOVE
+    THEN
+    _LIBMU-CONTENT-READBACK _LIBMU-CONTENT-OUT @
+        LIB-CONTENT-SIZE CMOVE
+    _LIBMU-BYTES @ _LIBMU-CONTENT-OUT @ LIBCT.DATA-A !
+    LIBSTORE-S-OK _LIBMU-RETAINED-READ-RETURN ;
+
+' _LIBRARY-VFS-STORE-READ-RETAINED-EXACT
+    CONSTANT _libvfs-read-retained-domain-exact-xt
+: LIBRARY-VFS-STORE-READ-RETAINED-EXACT
+  ( rid retained-domain bytes capacity content store -- required-u status )
+    _libvfs-read-retained-domain-exact-xt
+        _library-vfs-store-guard WITH-GUARD ;
+
+: _LIBMU-COMPARE-RETURN  ( equal? status -- equal? status )
+    _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+: _LIBRARY-VFS-STORE-COMPARE-RETAINED
+  ( rid left-domain right-domain store -- equal? status )
+    _LIBMU-STORE ! _LIBMU-TARGET-DOMAIN ! _LIBMU-REVISION ! _LIBMU-ID !
+    0 _LIBMU-EQUAL !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF
+        0 LIBSTORE-S-INVALID EXIT
+    THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE _LIBMU-OWNER-SPAN-SAFE? 0=
+    _LIBMU-ID @ RID-PRESENT? 0= OR
+    _LIBMU-REVISION @ 0> 0= OR
+    _LIBMU-TARGET-DOMAIN @ 0> 0= OR IF 0 LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-REFRESH DUP IF 0 SWAP _LIBMU-COMPARE-RETURN EXIT THEN DROP
+    _LIBMU-ID @ _LIBMU-FIND-RID DUP -1 = IF
+        DROP 0 LIBSTORE-S-NOT-FOUND _LIBMU-COMPARE-RETURN EXIT
+    THEN
+    _LIBMU-READ-ENTRY DUP IF 0 SWAP _LIBMU-COMPARE-RETURN EXIT THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF
+        0 LIBSTORE-S-TOMBSTONED _LIBMU-COMPARE-RETURN EXIT
+    THEN
+    _LIBMU-REVISION @ _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @ >
+    _LIBMU-TARGET-DOMAIN @
+        _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @ > OR IF
+        0 LIBSTORE-S-NOT-FOUND _LIBMU-COMPARE-RETURN EXIT
+    THEN
+    LIB-CONTENT-MAX _LIBMU-CONTENT-CAP !
+    LIBSTORE-S-NOT-FOUND _LIBMU-MISSING-CONTENT-STATUS !
+    _LIBMU-REVISION @ _LIBMU-TARGET-DOMAIN !
+    _LIBMU-CONTENT-DOMAIN _LIBMU-CONTENT-MODE !
+    _LIBMU-READ-CONTENT DUP LIBSTORE-S-NOT-FOUND = IF
+        DROP 0 LIBSTORE-S-GONE _LIBMU-COMPARE-RETURN EXIT
+    THEN
+    DUP IF 0 SWAP _LIBMU-COMPARE-RETURN EXIT THEN DROP
+    _LIBMU-CONTENT-READBACK _LIBMU-FIRST-SUMMARY
+        _LIBMU-CONTENT>SUMMARY
+    \ Recover the original right domain from the copy retained by the small
+    \ wrapper while TARGET-DOMAIN names the left scan.
+    _LIBMU-INPUT-U @ _LIBMU-TARGET-DOMAIN !
+    _LIBMU-READ-CONTENT DUP LIBSTORE-S-NOT-FOUND = IF
+        DROP 0 LIBSTORE-S-GONE _LIBMU-COMPARE-RETURN EXIT
+    THEN
+    DUP IF 0 SWAP _LIBMU-COMPARE-RETURN EXIT THEN DROP
+    _LIBMU-FIRST-SUMMARY LIBRS.CONTENT-U @
+        _LIBMU-CONTENT-READBACK LIBCT.DATA-U @ =
+    _LIBMU-FIRST-SUMMARY LIBRS.DIGEST
+        _LIBMU-CONTENT-READBACK LIBCT.DIGEST SHA3-256-COMPARE AND
+    LIBSTORE-S-OK _LIBMU-COMPARE-RETURN ;
+
+: _LIBRARY-VFS-STORE-COMPARE-RETAINED-WRAPPER
+  ( rid left-domain right-domain store -- equal? status )
+    1 PICK _LIBMU-INPUT-U !
+    _LIBRARY-VFS-STORE-COMPARE-RETAINED ;
+
+' _LIBRARY-VFS-STORE-COMPARE-RETAINED-WRAPPER
+    CONSTANT _libvfs-compare-retained-xt
+: LIBRARY-VFS-STORE-COMPARE-RETAINED
+  ( rid left-domain right-domain store -- equal? status )
+    _libvfs-compare-retained-xt _library-vfs-store-guard WITH-GUARD ;
+
+: _LIBMU-RESTORE-ARGS?
+  ( rid expected-current source-domain result store -- flag )
+    _LIBMU-STORE ! _LIBMU-RESULT ! _LIBMU-TARGET-DOMAIN !
+    _LIBMU-REVISION ! _LIBMU-ID !
+    _LIBMU-TARGET-ENTRY-SPANS? 0= IF 0 EXIT THEN
+    _LIBMU-TARGET-DOMAIN @ 0> ;
+
+: _LIBRARY-VFS-STORE-RESTORE-RETAINED-EXACT
+  ( rid expected-current source-domain result-entry store -- status )
+    _LIBMU-RESTORE-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-RESULT @ LIB-ENTRY-INIT
+    _LIBMU-LOAD-TARGET-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.KIND @
+        LIB-KIND-MANAGED-DOCUMENT <> IF
+        LIBSTORE-S-INVALID _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-TARGET-DOMAIN @
+        _LIBMU-FOUND-ENTRY LIBE.DOMAIN-REVISION @ > IF
+        LIBSTORE-S-NOT-FOUND _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    LIB-CONTENT-MAX _LIBMU-CONTENT-CAP !
+    _LIBMU-CONTENT-DOMAIN _LIBMU-CONTENT-MODE !
+    LIBSTORE-S-NOT-FOUND _LIBMU-MISSING-CONTENT-STATUS !
+    _LIBMU-READ-CONTENT DUP LIBSTORE-S-NOT-FOUND = IF
+        DROP LIBSTORE-S-GONE _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-CONTENT-READBACK LIBCT.CONTENT-REVISION @
+        _LIBMU-FOUND-ENTRY LIBE.CURRENT-CONTENT-REVISION @ >= IF
+        LIBSTORE-S-INVALID _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-CONTENT-READBACK LIBCT.DATA-U @ DUP _LIBMU-INPUT-U !
+    _LIBMU-CONTENT-READBACK LIBCT.DATA-A @ _LIBMU-RESTORE-BYTES
+        ROT CMOVE
+    _LIBMU-RESTORE-BYTES _LIBMU-INPUT-A !
+    -1 _LIBMU-INPUT-U @ _LIBMU-CONFIGURE-ENTRY-OVERWRITE DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-BUILD-REPLACEMENT-CONTENT DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-BUILD-REPLACEMENT-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-PUBLISH-ENTRY-CANDIDATE DUP IF
+        _LIBMU-RESULT @ LIB-ENTRY-INIT
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+' _LIBRARY-VFS-STORE-RESTORE-RETAINED-EXACT
+    CONSTANT _libvfs-restore-retained-domain-exact-xt
+: LIBRARY-VFS-STORE-RESTORE-RETAINED-EXACT
+  ( rid expected-current source-domain result-entry store -- status )
+    _libvfs-restore-retained-domain-exact-xt
+        _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Public durable operation/import-receipt lookup
+\ ---------------------------------------------------------------------
+
+: _LIBMU-RECEIPT-LOOKUP-ARGS?
+  ( operation-key rid-out receipt-out store -- flag )
+    _LIBMU-STORE ! _LIBMU-RECEIPT-OUT ! _LIBMU-RID-OUT !
+    _LIBMU-OPERATION-KEY !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-OPERATION-KEY @ LIB-DIGEST-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-OPERATION-KEY @ RID-PRESENT? 0= IF 0 EXIT THEN
+    _LIBMU-RID-OUT @ LIB-DIGEST-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-RECEIPT-OUT @ LIB-RECEIPT-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-OPERATION-KEY @ LIB-DIGEST-SIZE
+        _LIBMU-RID-OUT @ LIB-DIGEST-SIZE
+        _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    _LIBMU-OPERATION-KEY @ LIB-DIGEST-SIZE
+        _LIBMU-RECEIPT-OUT @ LIB-RECEIPT-SIZE
+        _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    _LIBMU-RID-OUT @ LIB-DIGEST-SIZE
+        _LIBMU-RECEIPT-OUT @ LIB-RECEIPT-SIZE
+        _VFSNAP-RANGES-OVERLAP? 0= ;
+
+: _LIBRARY-VFS-STORE-LOOKUP-RECEIPT
+  ( operation-key rid-out receipt-out store -- status )
+    _LIBMU-RECEIPT-LOOKUP-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-RID-OUT @ LIB-DIGEST-SIZE 0 FILL
+    _LIBMU-RECEIPT-OUT @ LIB-RECEIPT-SIZE 0 FILL
+    _LIBMU-REFRESH DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-OPERATION-KEY DUP -1 = IF
+        DROP LIBSTORE-S-NOT-FOUND _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-READ-ENTRY DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-FOUND-ENTRY LIBE.ID _LIBMU-RID-OUT @ RID-COPY
+    _LIBMU-FOUND-ENTRY LIBE.RECEIPT _LIBMU-RECEIPT-OUT @
+        LIB-RECEIPT-SIZE CMOVE
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF
+        LIBSTORE-S-TOMBSTONED _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+' _LIBRARY-VFS-STORE-LOOKUP-RECEIPT
+    CONSTANT _libvfs-lookup-receipt-public-xt
+: LIBRARY-VFS-STORE-LOOKUP-RECEIPT
+  ( operation-key rid-out receipt-out store -- status )
+    _libvfs-lookup-receipt-public-xt
+        _library-vfs-store-guard WITH-GUARD ;
+
+\ =====================================================================
+\  RID-based collection create/replace/exact read
+\ =====================================================================
+
+: _LIBMU-COLLECTION-MEMBER-SET  ( slot -- )
+    _LIBMU-INDEX !
+    _LIBMU-INDEX @ 7 AND 1 SWAP LSHIFT
+    _LIBMU-INDEX @ 3 RSHIFT _LIBMU-COLLECTION LIBC.MEMBERS +
+    DUP C@ ROT OR SWAP C! ;
+
+: _LIBMU-RESOLVE-COLLECTION-MEMBERS  ( -- status )
+    _LIBMU-COLLECTION LIBC.MEMBERS LIB-CATALOG-MAX 8 / 0 FILL
+    _LIBMU-MEMBER-N @ _LIBMU-COLLECTION LIBC.MEMBER-N !
+    _LIBMU-MEMBER-N @ 0 ?DO
+        _LIBMU-MEMBERS @ I LIB-DIGEST-SIZE * +
+            _LIBMU-FIND-RID DUP -1 = IF
+            DROP LIBSTORE-S-NOT-FOUND UNLOOP EXIT
+        THEN
+        _LIBMU-COLLECTION-MEMBER-SET
+    LOOP
+    LIBSTORE-S-OK ;
+
+: _LIBMU-COLLECTION>VIEW  ( collection view -- status )
+    _LIBMU-COLLECTION-RESULT ! _LIBMU-REQUEST !
+    _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-INIT
+    _LIBMU-REQUEST @ LIBC.ID _LIBMU-COLLECTION-RESULT @ LIBCV.ID RID-COPY
+    _LIBMU-REQUEST @ LIBC.REVISION @
+        _LIBMU-COLLECTION-RESULT @ LIBCV.REVISION !
+    _LIBMU-REQUEST @ LIBC.MUTATION-SEQUENCE @
+        _LIBMU-COLLECTION-RESULT @ LIBCV.MUTATION-SEQUENCE !
+    _LIBMU-REQUEST @ LIBC.TITLE-U @
+        _LIBMU-COLLECTION-RESULT @ LIBCV.TITLE-U !
+    _LIBMU-REQUEST @ LIBC.MEMBER-N @
+        _LIBMU-COLLECTION-RESULT @ LIBCV.MEMBER-N !
+    _LIBMU-REQUEST @ LIBC.TITLE _LIBMU-COLLECTION-RESULT @ LIBCV.TITLE
+        _LIBMU-REQUEST @ LIBC.TITLE-U @ CMOVE
+    0 _LIBMU-COUNT !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @ 0 ?DO
+        I _LIBMU-REQUEST @ LIBC-MEMBER? IF
+            I _LIBVP-CATALOG-FACT _LIBVCF.ID
+                _LIBMU-COUNT @ _LIBMU-COLLECTION-RESULT @ LIBCV-MEMBER
+                RID-COPY
+            1 _LIBMU-COUNT +!
+        THEN
+    LOOP
+    _LIBMU-COUNT @ _LIBMU-REQUEST @ LIBC.MEMBER-N @ = IF
+        LIBSTORE-S-OK
+    ELSE
+        _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-INIT
+        LIBSTORE-S-RECOVERY
+    THEN ;
+
+: _LIBMU-COLLECTION-VIEW-SAFE?  ( view -- flag )
+    LIBRARY-COLLECTION-VIEW-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? ;
+
+: _LIBMU-COLLECTION-CREATE-ARGS?  ( request view store -- flag )
+    _LIBMU-STORE ! _LIBMU-COLLECTION-RESULT ! _LIBMU-COLLECTION-REQUEST !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-COLLECTION-REQUEST @ LIBRARY-COLLECTION-CREATE-REQUEST-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-COLLECTION-REQUEST @
+        _LIBRARY-COLLECTION-CREATE-REQUEST-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-COLLECTION-RESULT @ _LIBMU-COLLECTION-VIEW-SAFE? 0= IF
+        0 EXIT
+    THEN
+    _LIBMU-COLLECTION-REQUEST @ LIBRARY-COLLECTION-CREATE-REQUEST-SIZE
+        _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-SIZE
+        _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.MEMBER-N @ IF
+        _LIBMU-COLLECTION-REQUEST @ LIBCCR-MEMBERS$
+            LIB-DIGEST-SIZE * _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+        _LIBMU-COLLECTION-REQUEST @ LIBCCR.MEMBERS-A @
+            _LIBMU-COLLECTION-REQUEST @ LIBCCR.MEMBER-N @
+                LIB-DIGEST-SIZE *
+            _LIBMU-COLLECTION-REQUEST @
+                LIBRARY-COLLECTION-CREATE-REQUEST-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+        _LIBMU-COLLECTION-REQUEST @ LIBCCR.MEMBERS-A @
+            _LIBMU-COLLECTION-REQUEST @ LIBCCR.MEMBER-N @
+                LIB-DIGEST-SIZE *
+            _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+: _LIBMU-COLLECTION-REPLACE-ARGS?  ( request view store -- flag )
+    _LIBMU-STORE ! _LIBMU-COLLECTION-RESULT ! _LIBMU-COLLECTION-REQUEST !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-COLLECTION-REQUEST @ LIBRARY-COLLECTION-REPLACE-REQUEST-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-COLLECTION-REQUEST @
+        _LIBRARY-COLLECTION-REPLACE-REQUEST-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-COLLECTION-RESULT @ _LIBMU-COLLECTION-VIEW-SAFE? 0= IF
+        0 EXIT
+    THEN
+    _LIBMU-COLLECTION-REQUEST @ LIBRARY-COLLECTION-REPLACE-REQUEST-SIZE
+        _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-SIZE
+        _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBER-N @ IF
+        _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBERS-A @
+            _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBER-N @
+                LIB-DIGEST-SIZE * _LIBMU-OWNER-SPAN-SAFE? 0= IF
+            0 EXIT
+        THEN
+        _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBERS-A @
+            _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBER-N @
+                LIB-DIGEST-SIZE *
+            _LIBMU-COLLECTION-REQUEST @
+                LIBRARY-COLLECTION-REPLACE-REQUEST-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+        _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBERS-A @
+            _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBER-N @
+                LIB-DIGEST-SIZE *
+            _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-SIZE
+            _VFSNAP-RANGES-OVERLAP? IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+: _LIBMU-CONFIGURE-COLLECTION-WRITE  ( index new-count -- status )
+    _LIBMU-COLLECTION-COUNT ! _LIBMU-COLLECTION-INDEX !
+    0 _LIBMU-HAS-CONTENT ! 0 _LIBMU-HAS-CATALOG !
+    -1 _LIBMU-HAS-COLLECTION !
+    0 _LIBMU-PLANNED-CONTENT-U !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
+        _LIBMU-CATALOG-COUNT !
+    _LIBMU-PREFLIGHT-CAPACITY ;
+
+: _LIBMU-BUILD-COLLECTION-CREATE  ( rid mutation -- status )
+    _LIBMU-NEW-MUTATION ! _LIBMU-ID !
+    _LIBMU-COLLECTION LIB-COLLECTION-INIT
+    _LIBMU-ID @ _LIBMU-COLLECTION LIBC.ID RID-COPY
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.OPERATION-KEY
+        _LIBMU-COLLECTION LIBC.OPERATION-KEY RID-COPY
+    1 _LIBMU-COLLECTION LIBC.REVISION !
+    _LIBMU-NEW-MUTATION @ _LIBMU-COLLECTION LIBC.MUTATION-SEQUENCE !
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.TITLE-U @
+        _LIBMU-COLLECTION LIBC.TITLE-U !
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.TITLE _LIBMU-COLLECTION LIBC.TITLE
+        _LIBMU-COLLECTION-REQUEST @ LIBCCR.TITLE-U @ CMOVE
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.MEMBERS-A @ _LIBMU-MEMBERS !
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.MEMBER-N @ _LIBMU-MEMBER-N !
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.EXPECTED-CATALOG-GENERATION @
+        _LIBMU-COLLECTION LIBC.EXPECTED-CATALOG-GENERATION !
+    _LIBMU-RESOLVE-COLLECTION-MEMBERS DUP IF EXIT THEN DROP
+    _LIBMU-COLLECTION LIB-COLLECTION-REQUEST-SEAL!
+        _LIBVFS-FORMAT>STATUS ;
+
+: _LIBMU-COLLECTION-TRANSITION-VALID?  ( -- flag )
+    _LIBMU-COLLECTION LIB-COLLECTION-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-FOUND-COLLECTION 1 _LIBMU-COLLECTION 1
+        LIB-COLLECTION-IDENTITIES-PRESERVED? ;
+
+: _LIBMU-PUBLISH-COLLECTION-CANDIDATE  ( -- status )
+    _LIBMU-PREPARE-PUBLICATION DUP IF EXIT THEN DROP
+    _LIBMU-COMMIT-COLLECTION-EXACT _LIBMU-COMMIT-MODE !
+    _LIBMU-COMMIT-PREPARED ;
+
+: _LIBRARY-VFS-STORE-CREATE-COLLECTION
+  ( request collection-view store -- status )
+    _LIBMU-COLLECTION-CREATE-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-INIT
+    _LIBMU-REFRESH DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.OPERATION-KEY
+        _LIBMU-OPERATION-KEY !
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-COLLECTION-KEY DUP -1 <> IF
+        _LIBMU-READ-COLLECTION DUP IF
+            _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+        THEN DROP
+        _LIBMU-FOUND-COLLECTION LIBC.ID 1 _LIBMU-BUILD-COLLECTION-CREATE
+            DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+        _LIBMU-FOUND-COLLECTION _LIBMU-COLLECTION LIB-COLLECTION-RETRY=
+            0= IF
+            LIBSTORE-S-IDEMPOTENCY-MISMATCH
+                _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+        THEN
+        _LIBMU-FOUND-COLLECTION _LIBMU-COLLECTION-RESULT @
+            _LIBMU-COLLECTION>VIEW DUP IF
+            _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+        THEN DROP
+        LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    DROP
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-OPERATION-KEY -1 <>
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-RID -1 <> OR
+    _LIBMU-OPERATION-KEY @ _LIBMU-FIND-COLLECTION-RID -1 <> OR IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-COLLECTION-REQUEST @ LIBCCR.EXPECTED-CATALOG-GENERATION @
+        _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @ <> IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.COLLECTION-COUNT @
+        DUP 1+ _LIBMU-CONFIGURE-COLLECTION-WRITE DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    S" org.akashic.library.collection-rid.v1"
+        _LIBMU-RID-DOMAIN-U ! _LIBMU-RID-DOMAIN-A !
+    _LIBMU-GENERATE-RID DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-RID _LIBMU-NEW-MUTATION @ _LIBMU-BUILD-COLLECTION-CREATE
+        DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-PUBLISH-COLLECTION-CANDIDATE DUP IF
+        _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-INIT
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-FOUND-COLLECTION _LIBMU-COLLECTION-RESULT @
+        _LIBMU-COLLECTION>VIEW DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+: _LIBMU-BUILD-COLLECTION-REPLACEMENT  ( -- status )
+    _LIBMU-FOUND-COLLECTION _LIBMU-COLLECTION LIB-COLLECTION-SIZE CMOVE
+    _LIBMU-FOUND-COLLECTION LIBC.REVISION @ 1+
+        DUP 0> 0= IF DROP LIBSTORE-S-COLLECTION-FULL EXIT THEN
+        _LIBMU-COLLECTION LIBC.REVISION !
+    _LIBMU-NEW-MUTATION @ _LIBMU-COLLECTION LIBC.MUTATION-SEQUENCE !
+    _LIBMU-COLLECTION LIBC.TITLE LIB-COLLECTION-TITLE-MAX 0 FILL
+    _LIBMU-COLLECTION-REQUEST @ LIBCRR.TITLE-U @
+        _LIBMU-COLLECTION LIBC.TITLE-U !
+    _LIBMU-COLLECTION-REQUEST @ LIBCRR.TITLE _LIBMU-COLLECTION LIBC.TITLE
+        _LIBMU-COLLECTION-REQUEST @ LIBCRR.TITLE-U @ CMOVE
+    _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBERS-A @ _LIBMU-MEMBERS !
+    _LIBMU-COLLECTION-REQUEST @ LIBCRR.MEMBER-N @ _LIBMU-MEMBER-N !
+    _LIBMU-RESOLVE-COLLECTION-MEMBERS DUP IF EXIT THEN DROP
+    _LIBMU-COLLECTION-TRANSITION-VALID? IF LIBSTORE-S-OK
+    ELSE LIBSTORE-S-RECOVERY THEN ;
+
+: _LIBRARY-VFS-STORE-REPLACE-COLLECTION
+  ( request collection-view store -- status )
+    _LIBMU-COLLECTION-REPLACE-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-INIT
+    _LIBMU-REFRESH DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-COLLECTION-REQUEST @ LIBCRR.ID
+        _LIBMU-FIND-COLLECTION-RID DUP -1 = IF
+        DROP LIBSTORE-S-NOT-FOUND _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-READ-COLLECTION DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN
+    DROP
+    _LIBMU-FOUND-COLLECTION LIBC.REVISION @
+        _LIBMU-COLLECTION-REQUEST @ LIBCRR.EXPECTED-REVISION @ <> IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-INDEX @
+    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.COLLECTION-COUNT @
+        _LIBMU-CONFIGURE-COLLECTION-WRITE DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-BUILD-COLLECTION-REPLACEMENT DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-PUBLISH-COLLECTION-CANDIDATE DUP IF
+        _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-INIT
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    _LIBMU-FOUND-COLLECTION _LIBMU-COLLECTION-RESULT @
+        _LIBMU-COLLECTION>VIEW DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+: _LIBMU-COLLECTION-READ-ARGS?
+  ( rid revision view store -- flag )
+    _LIBMU-STORE ! _LIBMU-COLLECTION-RESULT !
+    _LIBMU-EXPECTED-COLLECTION-REVISION ! _LIBMU-ID !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ RID-PRESENT? 0= IF 0 EXIT THEN
+    _LIBMU-EXPECTED-COLLECTION-REVISION @ 0> 0= IF 0 EXIT THEN
+    _LIBMU-COLLECTION-RESULT @ _LIBMU-COLLECTION-VIEW-SAFE? 0= IF
+        0 EXIT
+    THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE
+        _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-SIZE
+        _VFSNAP-RANGES-OVERLAP? 0= ;
+
+: _LIBRARY-VFS-STORE-READ-COLLECTION-EXACT
+  ( rid revision collection-view store -- status )
+    _LIBMU-COLLECTION-READ-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-COLLECTION-RESULT @ LIBRARY-COLLECTION-VIEW-INIT
+    _LIBMU-REFRESH DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN DROP
+    _LIBMU-ID @ _LIBMU-FIND-COLLECTION-RID DUP -1 = IF
+        DROP LIBSTORE-S-NOT-FOUND _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-READ-COLLECTION DUP IF _LIBMU-STORE @ _LIBVFS-RESULT EXIT THEN
+    DROP
+    _LIBMU-FOUND-COLLECTION LIBC.REVISION @
+        _LIBMU-EXPECTED-COLLECTION-REVISION @ <> IF
+        LIBSTORE-S-CONFLICT _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-FOUND-COLLECTION _LIBMU-COLLECTION-RESULT @
+        _LIBMU-COLLECTION>VIEW DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN DROP
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+' _LIBRARY-VFS-STORE-CREATE-COLLECTION
+    CONSTANT _libvfs-create-collection-public-xt
+' _LIBRARY-VFS-STORE-REPLACE-COLLECTION
+    CONSTANT _libvfs-replace-collection-public-xt
+' _LIBRARY-VFS-STORE-READ-COLLECTION-EXACT
+    CONSTANT _libvfs-read-collection-public-exact-xt
+
+: LIBRARY-VFS-STORE-CREATE-COLLECTION
+  ( request collection-view store -- status )
+    _libvfs-create-collection-public-xt
+        _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-VFS-STORE-REPLACE-COLLECTION
+  ( request collection-view store -- status )
+    _libvfs-replace-collection-public-xt
+        _library-vfs-store-guard WITH-GUARD ;
+: LIBRARY-VFS-STORE-READ-COLLECTION-EXACT
+  ( rid revision collection-view store -- status )
+    _libvfs-read-collection-public-exact-xt
+        _library-vfs-store-guard WITH-GUARD ;
 
 : _LIBRARY-VFS-STORE-FINI  ( store -- status )
     DUP LIBRARY-VFS-STORE-VALID? 0= IF DROP LIBSTORE-S-INVALID EXIT THEN

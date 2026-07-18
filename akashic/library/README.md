@@ -1,10 +1,13 @@
 # Library domain package
 
-Status: Gate 4A's pure model and deterministic record codecs, the pure Gate 4B
-storage formats, and the first Gate 4B VFS-owner loading/provisioning slice are
-implemented and qualified. The package still has no public catalog/content
-mutation or inactive-bank publication API, index, domain owner, projection,
-applet, UI, or Streams integration.
+Status: the pure model/codecs and store formats, the sole VFS owner, and the
+first two ordered Gate 4 implementation milestones are implemented and
+qualified. The public headless owner now creates and replaces managed
+documents, imports immutable captures, manages metadata and lifecycle, exposes
+retained history and receipts, and creates/replaces RID-based collections. The
+package still has no disposable search index, projection-owner lifecycle,
+repair/export surface, applet/UI, or Streams integration, so the overall Gate 4
+exit is not yet claimed.
 
 The current modules are:
 
@@ -16,7 +19,8 @@ The current modules are:
 - `store-format.f`: deterministic V1 arena, catalog-bank, and head formats plus
   the ordered content-frame commitment used by the VFS owner.
 - `vfs-store.f`: the sole owner of Library-private VFS paths, committed-snapshot
-  loading, absent-store provisioning, and fail-closed recovery classification.
+  loading/provisioning, fail-closed recovery, and the guarded public headless
+  document/capture/history/receipt/collection mutation and read surface.
 
 The model, record codec, and store-format modules remain VFS-free. `vfs-store.f`
 alone performs I/O and chooses the private storage topology. None publishes a
@@ -150,22 +154,64 @@ the head last. A retry with the same arena identity performs no write; a
 different identity conflicts. A bank written without its head is preserved as
 recovery evidence and is never silently resumed or adopted.
 
-## Remaining Gate 4B mutation boundary
+## Public headless owner surface
 
-This slice deliberately exposes no catalog/content append or inactive-bank
-publication operation. Its internal head-save helper exists only to complete
-provisioning and qualification fixtures; it is not a public mutation contract.
-The next Gate 4B slice must define and qualify durable content-first mutation,
-inactive-bank construction/readback, head publication, interrupted-publication
-recovery, capacity behavior, and operation idempotency over these load rules.
-Indexes remain derived and rebuildable and have not landed.
+Managed create and capture import accept caller operation keys and an expected
+catalog generation. Library generates a globally disjoint RID, retains the
+immutable receipt, and resolves a same-key/same-request retry to the original
+RID even after later publication. A changed request under that key is an
+idempotency mismatch, while a new operation key that equals any existing RID is
+a conflict. Crossed identity/key collisions are also rejected by the pure model
+and cold loader even when every containing record is otherwise resealed. Two
+identical captures deliberately imported with two keys receive distinct Library
+RIDs. VFS capture origins are copied exactly and qualified against
+`SHA3-256("org.akashic.library.vfs-snapshot.v1")`; the implemented semantic
+origin branch remains the closed exact-qualified-locator variant defined by the
+model.
 
-Ordinary VFS imports must later be owner-qualified against
-`SHA3-256("org.akashic.library.vfs-snapshot.v1")`. The pure model deliberately
-admits another present contract digest for an explicitly reviewed migration;
-the import owner will decide whether that exception is authorized.
+Managed replacement accepts only the exact current domain revision and appends
+one immutable content frame. The logical window retains the current content
+revision plus its three predecessors. History summaries expose both the exact
+content-frame domain revision and the independent content revision; reads,
+compare, and restore address the former. Metadata and lifecycle changes advance
+the domain revision without inventing content frames. A frame below the logical
+window is `GONE`, never silently redirected to current, and restore writes the
+selected retained bytes as a new current revision.
 
-No caller should infer a VFS path, generation scheme, retry lookup order, index
-policy, capability, projection owner, or UI route from these records.
+Archive preserves the RID, receipt, retained content, provenance, and exact
+reads. Destructive tombstone is separately named, terminal, clears content and
+sensitive descriptive state, preserves minimal identity/deletion/receipt
+evidence, and never permits the original operation key to allocate a replacement
+RID. Collection persistence remains a private catalog-slot bitmap, while every
+public request and view uses stable member RIDs. Collection removal never
+deletes a resource, and resource lifecycle changes do not rewrite independent
+collection membership.
+
+All mutations reuse the same ordered commitment: content first when present,
+then a complete inactive bank, full readback, and the sole head replacement.
+Bank-only metadata/lifecycle/collection changes still rebuild and verify the
+complete inactive bank. Public outputs are caller-owned and remain unpublished
+until argument validation, durable reconciliation, and cleanup complete. No
+public API exposes a Library-private VFS path or persistent catalog slot.
+
+The focused emulator profiles are `library-managed-document-contracts`,
+`library-managed-capacity-contracts`, `library-managed-lifecycle-contracts`, and
+`library-capture-collection-contracts`. A separate spawn-isolated two-process
+driver proves the milestone-two managed document, capture, receipts, retained
+window, archive state, and collection across a real cold reload:
+
+```bash
+python3 local_testing/library_lifecycle_two_boot.py --timeout 600
+```
+
+## Remaining Gate 4 boundary
+
+The next ordered milestone is the disposable rebuildable title/body/tag index
+and bounded authoritative queries. Projection acquire/share/reference-count/
+quiescent-release, recognized-format repair/raw export, and the complete Gate 4
+damage and exit matrix remain later milestones. No caller should infer an index
+policy, capability, projection owner, or UI route from the current records.
 For the broader product boundary and gate handoff, see
-[`../../docs/library/library.md`](../../docs/library/library.md).
+[`../../docs/library/library.md`](../../docs/library/library.md). It is the
+ratified product-boundary document; its implementation-status prose predates
+the first two ordered milestones described here.

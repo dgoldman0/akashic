@@ -42,6 +42,7 @@ VARIABLE _lvsc-bank-generation
 CREATE _lvsc-arena-id-a LIB-DIGEST-SIZE ALLOT
 CREATE _lvsc-arena-id-b LIB-DIGEST-SIZE ALLOT
 CREATE _lvsc-entry LIB-ENTRY-SIZE ALLOT
+CREATE _lvsc-entry2 LIB-ENTRY-SIZE ALLOT
 CREATE _lvsc-collection LIB-COLLECTION-SIZE ALLOT
 CREATE _lvsc-content LIB-CONTENT-SIZE ALLOT
 CREATE _lvsc-frame LIB-STORE-SECTOR-SIZE 2 * ALLOT
@@ -234,6 +235,17 @@ LIB-BANK-SIZE XBUF _lvsc-bank
         LIB-STORE-SECTOR-SIZE _lvsc-frame-sha _lvsc-chain-next
         LIB-CONTENT-CHAIN-STEP LIB-S-OK = _lvsc-assert ;
 
+: _lvsc-seal-bank  ( -- )
+    _lvsc-bank LIB-BANK-HEADER-SIZE + LIB-BANK-BODY-SIZE CRC32
+        0xFFFFFFFF AND _lvsc-bank-fact LIBBF.BODY-CRC !
+    _lvsc-bank LIB-BANK-HEADER-SIZE + LIB-BANK-BODY-SIZE
+        _lvsc-bank-fact LIBBF.BODY-SHA SHA3-256-HASH
+    _lvsc-bank-fact _lvsc-bank LIB-BANK-HEADER-SIZE
+        LIB-BANK-HEADER-ENCODE
+    LIB-S-OK = _lvsc-assert
+    LIB-BANK-HEADER-SIZE = _lvsc-assert
+    _lvsc-bank LIB-BANK-SIZE _lvsc-bank-sha SHA3-256-HASH ;
+
 : _lvsc-build-bank  ( -- )
     _lvsc-bank LIB-BANK-SIZE 0 FILL
     _lvsc-entry _lvsc-bank LIB-BANK-CATALOG-OFFSET +
@@ -256,15 +268,49 @@ LIB-BANK-SIZE XBUF _lvsc-bank
     2 _lvsc-bank-fact LIBBF.CONTENT-RECORD-COUNT !
     _lvsc-chain-next _lvsc-bank-fact LIBBF.CONTENT-CHAIN
         LIB-DIGEST-SIZE CMOVE
-    _lvsc-bank LIB-BANK-HEADER-SIZE + LIB-BANK-BODY-SIZE CRC32
-        0xFFFFFFFF AND _lvsc-bank-fact LIBBF.BODY-CRC !
-    _lvsc-bank LIB-BANK-HEADER-SIZE + LIB-BANK-BODY-SIZE
-        _lvsc-bank-fact LIBBF.BODY-SHA SHA3-256-HASH
-    _lvsc-bank-fact _lvsc-bank LIB-BANK-HEADER-SIZE
-        LIB-BANK-HEADER-ENCODE
+    _lvsc-seal-bank ;
+
+: _lvsc-tombstone-entry2  ( -- )
+    3 _lvsc-entry2 LIBE.DOMAIN-REVISION !
+    LIB-LIFECYCLE-TOMBSTONED _lvsc-entry2 LIBE.LIFECYCLE !
+    LIB-MEDIA-NONE _lvsc-entry2 LIBE.MEDIA !
+    0 _lvsc-entry2 LIBE.CURRENT-CONTENT-REVISION !
+    0 _lvsc-entry2 LIBE.OLDEST-CONTENT-REVISION !
+    0 _lvsc-entry2 LIBE.CONTENT-U !
+    _lvsc-entry2 LIBE.CONTENT-DIGEST LIB-DIGEST-SIZE 0 FILL
+    3 _lvsc-entry2 LIBE.MUTATION-SEQUENCE !
+    _lvsc-entry2 LIBE.CREATED-CLOCK 48 0 FILL
+    LIB-CLOCK-MUTATION-SEQUENCE _lvsc-entry2 LIBE.DELETED-CLOCK !
+    3 _lvsc-entry2 LIBE.DELETED-VALUE !
+    0 _lvsc-entry2 LIBE.TITLE-U !
+    _lvsc-entry2 LIBE.TITLE LIB-TITLE-MAX 0 FILL
+    0 _lvsc-entry2 LIBE.TAG-N !
+    _lvsc-entry2 _LIBE-TAGS + LIB-TAG-MAX LIB-TAG-SIZE * 0 FILL
+    _lvsc-entry2 LIBE.ORIGIN LIB-ORIGIN-SIZE 0 FILL
+    0 _lvsc-entry2 LIBE.LINEAGE-N !
+    _lvsc-entry2 _LIBE-LINEAGE +
+        LIB-LINEAGE-MAX LIB-LINEAGE-SIZE * 0 FILL ;
+
+: _lvsc-build-catalog-cross-bank  ( -- )
+    _lvsc-build-bank
+    _lvsc-entry _lvsc-entry2 LIB-ENTRY-SIZE CMOVE
+    _lvsc-entry LIBE.RECEIPT LIBR.OPERATION-KEY
+        _lvsc-entry2 LIBE.ID RID-COPY
+    0xA2 _lvsc-entry2 LIBE.RECEIPT LIBR.OPERATION-KEY _lvsc-id!
+    _lvsc-tombstone-entry2
+    _lvsc-entry2 LIB-ENTRY-VALID? _lvsc-assert
+    _lvsc-entry2
+        _lvsc-bank LIB-BANK-CATALOG-OFFSET + LIB-CATALOG-RECORD-SIZE +
+        LIB-CATALOG-RECORD-SIZE LIB-CATALOG-RECORD-ENCODE
     LIB-S-OK = _lvsc-assert
-    LIB-BANK-HEADER-SIZE = _lvsc-assert
-    _lvsc-bank LIB-BANK-SIZE _lvsc-bank-sha SHA3-256-HASH ;
+    LIB-CATALOG-RECORD-SIZE = _lvsc-assert
+    2 _lvsc-bank-fact LIBBF.CATALOG-COUNT !
+    _lvsc-seal-bank ;
+
+: _lvsc-build-collection-cross-bank  ( -- )
+    _lvsc-entry LIBE.ID _lvsc-collection LIBC.OPERATION-KEY RID-COPY
+    _lvsc-collection LIB-COLLECTION-VALID? _lvsc-assert
+    _lvsc-build-bank ;
 
 : _lvsc-build-head  ( generation bank-sha -- )
     _lvsc-head-sha ! _lvsc-head-generation !
@@ -632,6 +678,48 @@ LIB-BANK-SIZE XBUF _lvsc-bank
     _lvsc-store-a LIBRARY-VFS-STORE-LOAD
         LIBSTORE-S-OK = _lvsc-assert
     _lvsc-store-a LIBRARY-VFS-STORE.GENERATION @ 6 = _lvsc-assert
+
+    \ Whole-bank integrity cannot make crossed identity/key namespaces
+    \ canonical.  The cold loader rejects both catalog-to-catalog and
+    \ catalog-to-collection collisions after every record is resealed.
+    7 _lvsc-bank-generation !
+    _lvsc-build-catalog-cross-bank
+    _lvsc-bank LIB-BANK-SIZE 0 _LIBVFS-BANK-B-PATH$
+        _lvsc-write-at _lvsc-assert
+    _lvsc-vfs @ VFS-SYNC 0= _lvsc-assert
+    7 6 _lvsc-bank-sha _lvsc-save-head LIBSTORE-S-OK = _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-CORRUPT = _lvsc-assert
+    _lvsc-unpublished-contracts
+    _lvsc-store-a LIBRARY-VFS-STORE-BLOCKED? _lvsc-assert
+
+    _lvsc-build-entry
+    _lvsc-build-collection
+    8 _lvsc-bank-generation !
+    _lvsc-build-collection-cross-bank
+    _lvsc-bank LIB-BANK-SIZE 0 _LIBVFS-BANK-B-PATH$
+        _lvsc-write-at _lvsc-assert
+    _lvsc-vfs @ VFS-SYNC 0= _lvsc-assert
+    _lvsc-reinit
+    8 7 _lvsc-bank-sha _lvsc-save-head LIBSTORE-S-OK = _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-CORRUPT = _lvsc-assert
+    _lvsc-unpublished-contracts
+    _lvsc-store-a LIBRARY-VFS-STORE-BLOCKED? _lvsc-assert
+
+    \ Restore a canonical selected bank before the orphan evidence case.
+    _lvsc-build-entry
+    _lvsc-build-collection
+    9 _lvsc-bank-generation !
+    _lvsc-build-bank
+    _lvsc-bank LIB-BANK-SIZE 0 _LIBVFS-BANK-B-PATH$
+        _lvsc-write-at _lvsc-assert
+    _lvsc-vfs @ VFS-SYNC 0= _lvsc-assert
+    _lvsc-reinit
+    9 8 _lvsc-bank-sha _lvsc-save-head LIBSTORE-S-OK = _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-OK = _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE.GENERATION @ 9 = _lvsc-assert
 
     \ Exact post-bank/pre-head evidence is an orphan, never resumable
     \ pristine preparation.  LOAD preserves it and leaves the head absent.

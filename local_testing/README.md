@@ -88,6 +88,34 @@ session each; only serialized MP64FS bytes and the first boot's printed RID
 cross the boundary. These profiles establish milestone 1, not the overall Gate
 4 exit.
 
+`library-managed-lifecycle-contracts` qualifies Gate 4's second ordered
+implementation milestone for managed resources: five exact replacements, the
+four-revision logical window and explicit `GONE`, stale refusal, metadata,
+including a typed lineage locator, archive/unarchive, archived exact reads,
+active-query hide/reappearance, history list/read/compare and diagnostic-status
+readback, restore-as-new, public receipt survival, destructive tombstone, and
+terminal same-key non-reuse. `library-capture-collection-contracts` qualifies
+exact VFS capture provenance and copied bytes, negative managed-replacement
+refusal, same-key retry/mismatch, distinct-key identical imports, operation-key
+versus RID collision refusal, RID-only collection create/retry/read/replace,
+stale collection refusal, collection-removal versus deletion, archive
+preservation, and tombstone behavior without rewriting membership.
+
+Run the milestone-two cold acceptance with:
+
+```bash
+python3 local_testing/library_lifecycle_two_boot.py --timeout 600
+```
+
+The first spawn-isolated guest creates a managed document, advances it through
+five replacements and archive, imports a capture, and creates a two-member
+collection. Only the serialized MP64FS bytes and the three printed RIDs cross
+to the second process. Its fresh guest verifies generation, archived current
+bytes, retained revisions and `GONE`, both receipts, exact capture
+origin/content, and collection membership. These milestone-two profiles and
+driver do not claim the disposable index, projection lifecycle, repair/export,
+complete damage matrix, or overall Gate 4 exit.
+
 The Streams qualification path is intentionally split by boundary:
 
 - `streams-contracts` covers the owned feed model and typed capabilities.

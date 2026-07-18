@@ -157,6 +157,55 @@ def test_library_managed_capacity_profile_packages_hard_limit_contracts() -> Non
     assert all(not module.startswith("practice/") for module in closure)
 
 
+@pytest.mark.parametrize(
+    ("profile_name", "marker", "guest_fixture"),
+    (
+        (
+            "library-managed-lifecycle-contracts",
+            "LIBRARY MANAGED LIFECYCLE PASS",
+            "local_testing/library-lifecycle.f",
+        ),
+        (
+            "library-capture-collection-contracts",
+            "LIBRARY CAPTURE COLLECTION PASS",
+            "local_testing/library-cc.f",
+        ),
+    ),
+)
+def test_library_milestone_two_profiles_package_headless_owner_contracts(
+    profile_name: str,
+    marker: str,
+    guest_fixture: str,
+) -> None:
+    profile = PROFILES[profile_name]
+    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.ready_markers == (marker,)
+    assert profile.stable_markers == profile.ready_markers
+    assert profile.total_sectors == 8192
+    assert {
+        marker.replace(" PASS", " FAIL"),
+        marker.replace(" PASS", " ASSERT"),
+        marker.replace(" PASS", " STACK"),
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (guest_fixture,)
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+        "library/vfs-store.f",
+        "utils/fs/vfs-fixed-snapshot.f",
+    } <= closure
+    assert all(not module.startswith("tui/") for module in closure)
+    assert all(not module.startswith("agent/") for module in closure)
+    assert all(not module.startswith("practice/") for module in closure)
+    assert all(not module.startswith("streams/") for module in closure)
+
+
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
     profile = PROFILES["vfs-ram-capacity-contracts"]
     assert profile.roots == ("utils/fs/vfs.f",)

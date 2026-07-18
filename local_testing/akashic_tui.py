@@ -27198,6 +27198,74 @@ REQUIRE local_testing/library-managed.f
 )
 
 
+PROFILES["library-managed-lifecycle-contracts"] = Profile(
+    roots=("library/vfs-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4 milestone 2 managed lifecycle
+ENTER-USERLAND
+REQUIRE library/vfs-store.f
+." [akashic] loading Library managed-lifecycle contracts" CR
+REQUIRE local_testing/library-lifecycle.f
+""",
+    ready_markers=("LIBRARY MANAGED LIFECYCLE PASS",),
+    stable_markers=("LIBRARY MANAGED LIFECYCLE PASS",),
+    failure_markers=(
+        "LIBRARY MANAGED LIFECYCLE FAIL",
+        "LIBRARY MANAGED LIFECYCLE ASSERT",
+        "LIBRARY MANAGED LIFECYCLE STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-lifecycle.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" /
+                "library-managed-lifecycle.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
+PROFILES["library-capture-collection-contracts"] = Profile(
+    roots=("library/vfs-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4 milestone 2 captures/collections
+ENTER-USERLAND
+REQUIRE library/vfs-store.f
+." [akashic] loading Library capture/collection contracts" CR
+REQUIRE local_testing/library-cc.f
+""",
+    ready_markers=("LIBRARY CAPTURE COLLECTION PASS",),
+    stable_markers=("LIBRARY CAPTURE COLLECTION PASS",),
+    failure_markers=(
+        "LIBRARY CAPTURE COLLECTION FAIL",
+        "LIBRARY CAPTURE COLLECTION ASSERT",
+        "LIBRARY CAPTURE COLLECTION STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-cc.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" /
+                "library-capture-collection.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
 PROFILES["library-managed-capacity-contracts"] = Profile(
     roots=("library/vfs-store.f",),
     resources=(),
