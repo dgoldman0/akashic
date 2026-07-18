@@ -20,6 +20,7 @@ from akashic_tui import (  # noqa: E402
     PROFILES,
     PROVIDED_RE,
     REQUIRE_RE,
+    _linked_autoexec,
     _minify_forth,
     _matched_failure_markers,
     _parser,
@@ -258,6 +259,15 @@ def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
     closure = set(dependency_closure(profile.roots))
     assert "utils/fs/vfs.f" in closure
     assert all(not module.startswith("library/") for module in closure)
+
+    linked_autoexec = _linked_autoexec(
+        profile.autoexec,
+        (".akashic/link-00.f",),
+        ("utils/fs/vfs.f",),
+    )
+    assert linked_autoexec.index("ENTER-USERLAND") < linked_autoexec.index(
+        "REQUIRE .akashic/link-00.f"
+    ) < linked_autoexec.index("REQUIRE local_testing/vfs-ram-capacity.f")
 
 
 def test_supported_desktop_smoke_defaults_cover_linked_network_boot() -> None:

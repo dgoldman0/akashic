@@ -20981,6 +20981,7 @@ PROFILES["vfs-ram-capacity-contracts"] = Profile(
     autoexec=r"""\ autoexec.f - RAM VFS capacity and zero-tail contracts
 ENTER-USERLAND
 ." [akashic] loading RAM VFS capacity contracts" CR
+REQUIRE utils/fs/vfs.f
 REQUIRE local_testing/vfs-ram-capacity.f
 """,
     ready_markers=("VFS RAM CAPACITY PASS",),

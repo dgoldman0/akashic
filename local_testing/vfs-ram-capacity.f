@@ -66,6 +66,12 @@ VARIABLE _vrct-u2
     2DUP _vrct-vfs @ VFS-MKFILE DUP 0<> _vrct-assert _vrct-in !
     _vrct-vfs @ VFS-USE VFS-OPEN DUP 0<> _vrct-assert ;
 
+: _vrct-write-error  ( buffer length fd reason -- )
+    >R VFS-WRITE?
+    DUP VFS-IOR-REASON R> = _vrct-assert
+    SWAP 0= _vrct-assert
+    DROP ;
+
 : _vrct-growth  ( -- )
     S" growth.bin" _vrct-open _vrct-fd !
     _vrct-buffer @ 3000 65 FILL
@@ -181,14 +187,15 @@ VARIABLE _vrct-u2
     _vrct-fail-arena @ ARENA-FREE _vrct-free !
 
     5000 _vrct-fd @ VFS-SEEK
-    S" X" _vrct-fd @ VFS-WRITE 0= _vrct-assert
+    S" X" _vrct-fd @ VFS-R-NOMEM _vrct-write-error
     _vrct-fd @ VFS-TELL 5000 = _vrct-assert
     _vrct-fd @ VFS-SIZE 6 = _vrct-assert
     _vrct-in @ IN.BDATA @ _vrct-pointer @ = _vrct-assert
     _vrct-in @ IN.BDATA 8 + @ _vrct-capacity @ = _vrct-assert
     _vrct-fail-arena @ ARENA-FREE _vrct-free @ = _vrct-assert
     77 _vrct-in @ IN.SIZE-HI !
-    9000 _vrct-fd @ VFS-TRUNCATE -1 = _vrct-assert
+    9000 _vrct-fd @ VFS-TRUNCATE
+        VFS-IOR-REASON VFS-R-NOMEM = _vrct-assert
     _vrct-fd @ VFS-SIZE 6 = _vrct-assert
     _vrct-in @ IN.SIZE-HI @ 77 = _vrct-assert
     _vrct-fd @ VFS-TELL 5000 = _vrct-assert
@@ -196,26 +203,29 @@ VARIABLE _vrct-u2
     _vrct-in @ IN.BDATA 8 + @ _vrct-capacity @ = _vrct-assert
     _vrct-fail-arena @ ARENA-FREE _vrct-free @ = _vrct-assert
 
-    -1 _vrct-fd @ VFS-TRUNCATE -1 = _vrct-assert
+    -1 _vrct-fd @ VFS-TRUNCATE
+        VFS-IOR-REASON VFS-R-OVERFLOW = _vrct-assert
     _vrct-fd @ VFS-SIZE 6 = _vrct-assert
     _vrct-in @ IN.SIZE-HI @ 77 = _vrct-assert
     _vrct-fd @ VFS-TELL 5000 = _vrct-assert
     _vrct-fail-arena @ ARENA-FREE _vrct-free @ = _vrct-assert
 
     _vrct-buffer @ 1 -1 _vrct-in @ _vrct-fail-vfs @
-        _VFS-RAM-WRITE 0= _vrct-assert
+        _VFS-RAM-WRITE
+    DUP VFS-IOR-REASON VFS-R-NOMEM = _vrct-assert
+    SWAP 0= _vrct-assert DROP
     _vrct-fd @ VFS-SIZE 6 = _vrct-assert
     _vrct-in @ IN.BDATA @ _vrct-pointer @ = _vrct-assert
     _vrct-in @ IN.BDATA 8 + @ _vrct-capacity @ = _vrct-assert
     _vrct-fail-arena @ ARENA-FREE _vrct-free @ = _vrct-assert
 
     2 _vrct-fd @ VFS-SEEK
-    _vrct-buffer @ -1 _vrct-fd @ VFS-WRITE 0= _vrct-assert
+    _vrct-buffer @ -1 _vrct-fd @ VFS-R-INVALID _vrct-write-error
     _vrct-fd @ VFS-TELL 2 = _vrct-assert
-    0 1 _vrct-fd @ VFS-WRITE 0= _vrct-assert
+    0 1 _vrct-fd @ VFS-R-INVALID _vrct-write-error
     _vrct-fd @ VFS-TELL 2 = _vrct-assert
     0x7FFFFFFFFFFFFFFC _vrct-fd @ VFS-SEEK
-    _vrct-buffer @ 8 _vrct-fd @ VFS-WRITE 0= _vrct-assert
+    _vrct-buffer @ 8 _vrct-fd @ VFS-R-OVERFLOW _vrct-write-error
     _vrct-fd @ VFS-TELL 0x7FFFFFFFFFFFFFFC = _vrct-assert
     _vrct-fd @ VFS-SIZE 6 = _vrct-assert
     _vrct-in @ IN.BDATA @ _vrct-pointer @ = _vrct-assert

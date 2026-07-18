@@ -766,6 +766,19 @@ def test_invalid_offsets_never_reach_binding():
         'T-BAD-OFFSETS CR',
     ], "SEEK? CURSOR0 THROW READ WRITE READ-CAP WRITE-CAP CEILING APPEND APPEND-CURSOR TRUNC SIZE NO-CALL")
 
+def test_successful_truncate_preserves_stack():
+    """A successful one-ior callback leaves exactly one public result."""
+    check("successful truncate preserves stack", [
+        'T-VFS-NEW CONSTANT _V1 S" t.bin" _V1 VFS-MKFILE DROP _V1 VFS-USE',
+        'S" t.bin" VFS-OPEN CONSTANT _FD S" data" _FD VFS-WRITE DROP',
+        'VARIABLE _TR-DEPTH',
+        ': T-TRUNC-STACK  DEPTH _TR-DEPTH !',
+        '  2 _FD VFS-TRUNCATE 0= IF ." OK " THEN',
+        '  DEPTH _TR-DEPTH @ = IF ." STACK " THEN',
+        '  _FD VFS-SIZE 2 = IF ." SIZE" THEN ;',
+        'T-TRUNC-STACK CR _FD VFS-CLOSE',
+    ], "OK STACK SIZE")
+
 # ── VFS-RESOLVE ──
 
 def test_resolve_root():
@@ -1390,6 +1403,7 @@ def main():
         test_seek_read,
         test_rewind,
         test_invalid_offsets_never_reach_binding,
+        test_successful_truncate_preserves_stack,
         # RESOLVE
         test_resolve_root,
         test_resolve_absolute,
