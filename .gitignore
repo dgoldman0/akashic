@@ -55,6 +55,9 @@ local_testing/*
 !local_testing/library-model-codecs.f
 !local_testing/library-store-format.f
 !local_testing/library-vfs-store.f
+!local_testing/library-managed-document.f
+!local_testing/library-managed-capacity.f
+!local_testing/library_managed_two_boot.py
 !local_testing/vfs-ram-capacity.f
 !local_testing/vfs-fixed-snapshot.f
 !local_testing/hres-contracts.f

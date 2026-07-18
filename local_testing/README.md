@@ -52,23 +52,41 @@ unsigned-wrap boundaries, empty/null policy separation, half-open overlap, exact
 schema bytes, UTF-8/type/length rejection, and the distinct 110-byte semantic
 RREF and 516-byte VFS-locator text bounds.
 
-`library-model-codecs-contracts` qualifies the Gate 4A caller-owned Library
+`library-model-codecs-contracts` qualifies the foundational caller-owned Library
 model and its catalog, collection, and immutable content-revision records.
-`library-store-format-contracts` qualifies the VFS-free Gate 4B arena,
+`library-store-format-contracts` qualifies the foundational VFS-free arena,
 complete-bank, and head formats: fixed geometry, exact wire CRC/SHA3 vectors,
 checksum-before-future dispatch, hostile aliases and nonmutation, duplicated
 cross-seals, and the absolute-offset ordered content-frame chain. Neither
 profile selects paths, performs VFS I/O, publishes resources, or imports an
 applet or sibling domain.
 
-`library-vfs-store-contracts` qualifies the first Gate 4B VFS-owner slice. It
+`library-vfs-store-contracts` qualifies the foundational VFS-owner slice. It
 proves the private four-file topology and sole-head commit point, exact
 selected-bank/arena/content validation before fact publication, committed-tail
-and inactive-bank isolation, absent first-use cold readback, same-arena
+and inactive-bank isolation, absent first-use full readback, same-arena
 idempotency, different-arena conflict, post-bank/pre-head orphan refusal,
 receipt-to-initial-content consistency, future/corrupt ordering, and exact
 cleanup plus successful retry after injected I/O failure. Public content and
 catalog mutation remain outside this profile.
+
+`library-managed-document-contracts` qualifies Gate 4's first implementation
+milestone through the public owner API: managed create with a caller operation
+key and expected generation, owner RID allocation, content-first/inactive-bank/
+sole-head publication, generation-pinned query, exact read, idempotent retry,
+mutation-boundary faults, uncertain-head reconciliation, and output isolation.
+`library-managed-capacity-contracts` adds valid fully loaded catalog-full,
+content-full, and owner-RID-collision snapshots and proves each refusal occurs
+before mutation. Run the separate true cold-relaunch acceptance with:
+
+```bash
+python3 local_testing/library_managed_two_boot.py --timeout 180
+```
+
+That driver starts two spawn-isolated Python processes with one fresh emulator
+session each; only serialized MP64FS bytes and the first boot's printed RID
+cross the boundary. These profiles establish milestone 1, not the overall Gate
+4 exit.
 
 The Streams qualification path is intentionally split by boundary:
 

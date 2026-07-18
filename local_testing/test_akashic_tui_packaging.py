@@ -97,6 +97,66 @@ def test_library_vfs_store_profile_packages_its_exact_contract_leaf() -> None:
     assert all(not module.startswith("practice/") for module in closure)
 
 
+def test_library_managed_document_profile_packages_public_vertical_slice() -> None:
+    profile = PROFILES["library-managed-document-contracts"]
+    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.ready_markers == ("LIBRARY MANAGED PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert profile.total_sectors == 8192
+    assert {
+        "LIBRARY MANAGED FAIL",
+        "LIBRARY MANAGED ASSERT",
+        "LIBRARY MANAGED STACK",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/library-managed.f",
+    )
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+        "library/vfs-store.f",
+        "utils/fs/vfs-fixed-snapshot.f",
+    } <= closure
+    assert all(not module.startswith("tui/") for module in closure)
+    assert all(not module.startswith("agent/") for module in closure)
+    assert all(not module.startswith("practice/") for module in closure)
+
+
+def test_library_managed_capacity_profile_packages_hard_limit_contracts() -> None:
+    profile = PROFILES["library-managed-capacity-contracts"]
+    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.ready_markers == ("LIBRARY MANAGED CAPACITY PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert profile.total_sectors == 8192
+    assert {
+        "LIBRARY MANAGED CAPACITY FAIL",
+        "LIBRARY MANAGED CAPACITY ASSERT",
+        "LIBRARY MANAGED CAPACITY STACK",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/library-capacity.f",
+    )
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+        "library/vfs-store.f",
+        "utils/fs/vfs-fixed-snapshot.f",
+    } <= closure
+    assert all(not module.startswith("tui/") for module in closure)
+    assert all(not module.startswith("agent/") for module in closure)
+    assert all(not module.startswith("practice/") for module in closure)
+
+
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
     profile = PROFILES["vfs-ram-capacity-contracts"]
     assert profile.roots == ("utils/fs/vfs.f",)

@@ -339,6 +339,7 @@ LIB-BANK-SIZE XBUF _lvsc-bank
     LIBSTORE-S-RETIRED 16 = _lvsc-assert
     LIBSTORE-S-TOMBSTONED 17 = _lvsc-assert
     LIBSTORE-S-GONE 18 = _lvsc-assert
+    LIBSTORE-S-OUTPUT-CAPACITY 19 = _lvsc-assert
     _lvsc-stack ;
 
 : _lvsc-init-contracts  ( -- )

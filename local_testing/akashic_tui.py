@@ -27165,6 +27165,72 @@ REQUIRE local_testing/library-vfs-store.f
 )
 
 
+PROFILES["library-managed-document-contracts"] = Profile(
+    roots=("library/vfs-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4 milestone 1 managed document
+ENTER-USERLAND
+REQUIRE library/vfs-store.f
+." [akashic] loading Library managed-document contracts" CR
+REQUIRE local_testing/library-managed.f
+""",
+    ready_markers=("LIBRARY MANAGED PASS",),
+    stable_markers=("LIBRARY MANAGED PASS",),
+    failure_markers=(
+        "LIBRARY MANAGED FAIL",
+        "LIBRARY MANAGED ASSERT",
+        "LIBRARY MANAGED STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-managed.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" / "library-managed-document.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
+PROFILES["library-managed-capacity-contracts"] = Profile(
+    roots=("library/vfs-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4 milestone 1 capacity limits
+ENTER-USERLAND
+REQUIRE library/vfs-store.f
+." [akashic] loading Library managed-create capacity contracts" CR
+REQUIRE local_testing/library-capacity.f
+""",
+    ready_markers=("LIBRARY MANAGED CAPACITY PASS",),
+    stable_markers=("LIBRARY MANAGED CAPACITY PASS",),
+    failure_markers=(
+        "LIBRARY MANAGED CAPACITY FAIL",
+        "LIBRARY MANAGED CAPACITY ASSERT",
+        "LIBRARY MANAGED CAPACITY STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-capacity.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" / "library-managed-capacity.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
 def _positive_mib(value: str) -> int:
     try:
         parsed = int(value)
