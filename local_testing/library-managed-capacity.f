@@ -419,6 +419,33 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
 : _lmc-content-full-case  ( -- )
     _lmc-build-content-full
     3 0 2 _lmc-publish
+    _lmc-data LIB-CONTENT-MAX 0 FILL
+    _LIBPQ-RESET
+    _lmc-entry LIBE.ID 9 _lmc-data LIB-CONTENT-MAX
+        _lmc-result _lmc-content
+        _lmc-store LIBRARY-VFS-STORE-READ-MANAGED-EXACT
+        _lmc-status ! _lmc-length !
+    ." LIBRARY DIRECT 64K status=" _lmc-status @ .
+    ."  required=" _lmc-length @ .
+    ."  full=" _LIBPQ-FULL-VALIDATION@ .
+    ."  warm=" _LIBPQ-WARM-ASSURANCE@ .
+    ."  index=" _LIBPQ-INDEX-REBUILD@ .
+    ."  entry=" _LIBPQ-ENTRY-READ@ .
+    ."  direct=" _LIBPQ-DIRECT-FRAME-READ@ .
+    ."  direct-bytes=" _LIBPQ-DIRECT-FRAME-BYTES@ .
+    ."  scans=" _LIBPQ-ARENA-SCAN@ . CR
+    _lmc-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-length @ LIB-CONTENT-MAX = _lmc-assert
+    _lmc-content LIBCT.CONTENT-REVISION @ 9 = _lmc-assert
+    _lmc-data C@ 0x78 = _lmc-assert
+    _lmc-data LIB-CONTENT-MAX 1- + C@ 0x78 = _lmc-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lmc-assert
+    _LIBPQ-ENTRY-READ@ 1 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 1 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@ LIB-CONTENT-FRAME-MAX = _lmc-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lmc-assert
     _lmc-create-key LIB-DIGEST-SIZE 0xD2 FILL
     _lmc-create-key 3 _lmc-data LIB-CONTENT-MAX _lmc-request!
     LIBSTORE-S-CONTENT-FULL 3 0 _lmc-create-failure

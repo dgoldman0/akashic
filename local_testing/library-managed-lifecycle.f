@@ -1,10 +1,9 @@
 \ =====================================================================
 \  Gate 4 milestone 2: managed-document lifecycle and retained history
 \ =====================================================================
-\  This fixture stays entirely on the public Library owner surface.  It
-\  proves the four-revision logical window across five replacements, then
-\  carries the same resource through metadata, archive, restore-as-new,
-\  and destructive tombstone transitions without losing its receipt.
+\  Domain behavior stays entirely on the public Library owner surface.  One
+\  narrow private seam installs a checksummed wrong locator to prove direct
+\  frame verification cannot be redirected to another retained revision.
 
 VARIABLE _lml-fails
 VARIABLE _lml-checks
@@ -22,6 +21,9 @@ VARIABLE _lml-input-u
 VARIABLE _lml-query-count
 VARIABLE _lml-query-next
 VARIABLE _lml-query-generation
+VARIABLE _lml-early-cycles
+VARIABLE _lml-late-cycles
+VARIABLE _lml-current-cycles
 
 CREATE _lml-arena-id LIB-DIGEST-SIZE ALLOT
 CREATE _lml-key LIB-OPERATION-KEY-SIZE ALLOT
@@ -83,6 +85,9 @@ LIB-CONTENT-MAX XBUF _lml-bytes
         LIBRARY-VFS-STORE-QUERY-ACTIVE
     _lml-status ! _lml-query-generation !
     _lml-query-next ! _lml-query-count ! ;
+
+: _lml-profile-start  ( -- )
+    _LIBPQ-RESET PERF-RESET ;
 
 : _lml-replace  ( expected-domain-revision a u -- )
     _lml-input-u ! _lml-input-a ! _lml-expected !
@@ -153,12 +158,89 @@ LIB-CONTENT-MAX XBUF _lml-bytes
     LIBSTORE-S-OK _lml-check-receipt
     _lml-stack ;
 
+: _lml-direct-retained-profile  ( -- )
+    _lml-profile-start 3 _lml-read-retained
+        PERF-CYCLES _lml-early-cycles !
+    _lml-status @ LIBSTORE-S-OK = _lml-assert
+    _lml-retained-content LIBCT-DATA$
+        S" revision three" COMPARE 0= _lml-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lml-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lml-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lml-assert
+    _LIBPQ-ENTRY-READ@ 1 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 1 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@ 512 = _lml-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lml-assert
+
+    _lml-profile-start 6 _lml-read-retained
+        PERF-CYCLES _lml-late-cycles !
+    _lml-status @ LIBSTORE-S-OK = _lml-assert
+    _lml-retained-content LIBCT-DATA$
+        S" revision six" COMPARE 0= _lml-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lml-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lml-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lml-assert
+    _LIBPQ-ENTRY-READ@ 1 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 1 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@ 512 = _lml-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lml-assert
+
+    _lml-profile-start 6 _lml-read-current
+        PERF-CYCLES _lml-current-cycles !
+    _lml-status @ LIBSTORE-S-OK = _lml-assert
+    _lml-read-content LIBCT-DATA$
+        S" revision six" COMPARE 0= _lml-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lml-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lml-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lml-assert
+    _LIBPQ-ENTRY-READ@ 1 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 1 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@ 512 = _lml-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lml-assert
+
+    _lml-early-cycles @ _lml-late-cycles @ MAX
+    _lml-early-cycles @ _lml-late-cycles @ MIN 2 * <= _lml-assert
+    ." LIBRARY DIRECT RETAINED early=" _lml-early-cycles @ .
+    ."  late=" _lml-late-cycles @ .
+    ."  current=" _lml-current-cycles @ . CR
+    _lml-stack ;
+
+: _lml-stale-locator-contract  ( -- )
+    0 0 0 3 _LIBLOC-TEST-RETARGET-AND-RESEAL
+        LIBSTORE-S-OK = _lml-assert
+    6 _lml-read-current
+    _lml-status @ LIBSTORE-S-CORRUPT = _lml-assert
+    _lml-read-entry LIBE.ID RID-PRESENT? 0= _lml-assert
+    _lml-read-content LIBCT.DATA-U @ 0= _lml-assert
+    _lml-store LIBRARY-VFS-STORE-BLOCKED? _lml-assert
+
+    _lml-store LIBRARY-VFS-STORE-FINI
+        LIBSTORE-S-OK = _lml-assert
+    _lml-vfs @ _lml-store LIBRARY-VFS-STORE-INIT
+        LIBSTORE-S-OK = _lml-assert
+    _lml-arena-id _lml-store LIBRARY-VFS-STORE-PROVISION
+        LIBSTORE-S-OK = _lml-assert
+    _lml-store LIBRARY-VFS-STORE.GENERATION @ 7 = _lml-assert
+    6 _lml-read-current
+    _lml-status @ LIBSTORE-S-OK = _lml-assert
+    _lml-read-content LIBCT-DATA$
+        S" revision six" COMPARE 0= _lml-assert
+    _lml-stack ;
+
 : _lml-retained-window  ( -- )
+    _LIBPQ-RESET
     _lml-rid 6 _lml-history LIB-RETAINED-REVISION-MAX _lml-store
         LIBRARY-VFS-STORE-LIST-RETAINED-REVISIONS
     _lml-status ! _lml-required !
     _lml-status @ LIBSTORE-S-OK = _lml-assert
     _lml-required @ LIB-RETAINED-REVISION-MAX = _lml-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lml-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lml-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lml-assert
+    _LIBPQ-ENTRY-READ@ 1 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 4 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@ 2048 = _lml-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lml-assert
     0 _lml-summary LIBRS.DOMAIN-REVISION @ 6 = _lml-assert
     0 _lml-summary LIBRS.CONTENT-REVISION @ 6 = _lml-assert
     1 _lml-summary LIBRS.DOMAIN-REVISION @ 5 = _lml-assert
@@ -181,10 +263,18 @@ LIB-CONTENT-MAX XBUF _lml-bytes
     _lml-required @ 0= _lml-assert
     _lml-retained-content LIB-CONTENT-SIZE _lml-zero? _lml-assert
 
+    _LIBPQ-RESET
     _lml-rid 6 3 _lml-store LIBRARY-VFS-STORE-COMPARE-RETAINED
         _lml-status ! _lml-equal !
     _lml-status @ LIBSTORE-S-OK = _lml-assert
     _lml-equal @ 0= _lml-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lml-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lml-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lml-assert
+    _LIBPQ-ENTRY-READ@ 1 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 2 = _lml-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@ 1024 = _lml-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lml-assert
     _lml-rid 3 3 _lml-store LIBRARY-VFS-STORE-COMPARE-RETAINED
         _lml-status ! _lml-equal !
     _lml-status @ LIBSTORE-S-OK = _lml-assert
@@ -372,6 +462,8 @@ LIB-CONTENT-MAX XBUF _lml-bytes
         LIBSTORE-S-OK = _lml-assert
     _lml-create
     _lml-five-replacements
+    _lml-direct-retained-profile
+    _lml-stale-locator-contract
     _lml-retained-window
     _lml-metadata-and-archive
     _lml-unarchive-and-restore
