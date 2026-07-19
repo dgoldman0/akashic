@@ -32,6 +32,28 @@ billion guest steps in 92.18 seconds on 2026-07-16. Focused profiles stop as
 soon as their own markers stabilize; `--max-steps` and `--timeout` remain
 available for explicit qualification budgets.
 
+## Ext4 compatibility profile
+
+The pre-driver ext4 format contract is pinned in
+`docs/utils/fs/ext4-compatibility-profile.md` and mirrored by the
+machine-readable `fixtures/ext4-profile/manifest.json`.  It requires one
+source-built e2fsprogs v1.47.4 prefix; ambient `PATH` tools are deliberately
+rejected.  Generate all four external-tool images and run the profile gates
+with:
+
+```bash
+python3 local_testing/generate_ext4_profile_fixtures.py \
+  --tool-dir /absolute/e2fsprogs-1.47.4-prefix/sbin \
+  --output-dir local_testing/out/ext4-profile
+
+AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
+  python3 -m pytest -q local_testing/test_ext4_profile.py
+```
+
+This is host-side format/fixture qualification only.  It is intentionally not
+an `akashic_tui` guest profile until an ext4 binding can mount the images and
+emit a truthful marker.
+
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with
 KDOS `REQUIRE` immediately after `ENTER-USERLAND`. This avoids re-entering the

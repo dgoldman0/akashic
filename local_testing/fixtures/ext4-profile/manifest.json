@@ -1,0 +1,324 @@
+{
+  "schema": "akashic.ext4-compatibility-profile.v1",
+  "profile_id": "akashic-ext4-rw-v1",
+  "ratified_on": "2026-07-18",
+  "scope": "Pinned ext4 format and host-fixture contract; no Akashic ext4 driver is claimed",
+  "authorities": {
+    "linux_ext4": {
+      "tag": "v6.18",
+      "annotated_tag_object": "f7b88edb52c8dd01b7e576390d658ae6eef0e134",
+      "peeled_commit": "7d0a66e4bb9081d75c82ec4957c50034cb0ea449",
+      "documentation": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/filesystems/ext4?h=v6.18",
+      "source": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ext4?h=v6.18"
+    },
+    "e2fsprogs": {
+      "tag": "v1.47.4",
+      "annotated_tag_object": "ece89fac4603e400155b7bbf6326284f8511bca9",
+      "peeled_commit": "7ee1d505ef3b37831215f490411f346fe57e9053",
+      "release_archive_published_on": "2026-03-06",
+      "source_archive": "https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.4/e2fsprogs-1.47.4.tar.xz",
+      "source_archive_sha256": "fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b",
+      "version_banner": "1.47.4 (6-Mar-2025)",
+      "required_tools": [
+        "mke2fs",
+        "e2fsck",
+        "debugfs",
+        "dumpe2fs"
+      ]
+    }
+  },
+  "generator": {
+    "environment": {
+      "LC_ALL": "C",
+      "TZ": "UTC",
+      "E2FSPROGS_FAKE_TIME": "1704067200",
+      "MKE2FS_CONFIG": "{repo}/local_testing/fixtures/ext4-profile/mke2fs.conf"
+    },
+    "mke2fs_config_sha256": "9e7b22a404e44d07cc74d07b38e39308ec305f75dbf177ddaee773431bad211e",
+    "mkfs_argv": [
+      "{tool_dir}/mke2fs",
+      "-F",
+      "-q",
+      "-t",
+      "ext4",
+      "-b",
+      "{block_size}",
+      "-I",
+      "{inode_size}",
+      "-i",
+      "16384",
+      "-g",
+      "{blocks_per_group}",
+      "-G",
+      "16",
+      "-J",
+      "size=4",
+      "-m",
+      "0",
+      "-e",
+      "remount-ro",
+      "-o",
+      "linux",
+      "-U",
+      "{uuid}",
+      "-L",
+      "{label}",
+      "-O",
+      "none,{feature_names}",
+      "-E",
+      "lazy_itable_init=0,lazy_journal_init=0,nodiscard,root_owner=0:0,hash_seed={hash_seed}",
+      "{image}",
+      "{block_count}"
+    ],
+    "e2fsck_argv": [
+      "{tool_dir}/e2fsck",
+      "-f",
+      "-n",
+      "{image}"
+    ],
+    "population": {
+      "payload_utf8": "Akashic ext4 profile v1\nexternal-tool fixture payload\n",
+      "large_xattr_value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "slow_symlink_target": "../target/that/is/intentionally/longer/than/the/sixty/byte/fast/symlink/storage/limit/profile-v1",
+      "debugfs_commands": [
+        "mkdir /fixture",
+        "write {payload} /fixture/payload.txt",
+        "ln /fixture/payload.txt /fixture/hardlink.txt",
+        "set_inode_field /fixture/payload.txt links_count 2",
+        "symlink /fixture/fast-link payload.txt",
+        "symlink /fixture/slow-link {slow_symlink_target}",
+        "write {sparse_payload} /fixture/sparse.bin",
+        "punch /fixture/sparse.bin 1 1",
+        "ea_set /fixture/payload.txt user.akashic profile-v1",
+        "ea_set /fixture/payload.txt user.akashic.large {large_xattr_value}"
+      ]
+    }
+  },
+  "platform_bounds": {
+    "device_sector_bytes": 512,
+    "volume_lba_bits": 32,
+    "maximum_volume_sectors": 4294967295,
+    "maximum_volume_bytes": 2199023255040,
+    "filesystem_block_bytes": [
+      1024,
+      2048,
+      4096
+    ],
+    "maximum_name_bytes": 255,
+    "maximum_xattr_name_bytes": 255,
+    "maximum_vfs_offset": 9223372036854775807,
+    "ext4_byte_order": "little",
+    "jbd2_byte_order": "big"
+  },
+  "profiles": {
+    "primary": {
+      "revision": 1,
+      "inode_size": 256,
+      "inode_extra_size": 32,
+      "group_descriptor_size": 64,
+      "flex_groups": 16,
+      "cluster_ratio": 1,
+      "journal": "internal inode 8, 4 MiB, ordered-data metadata journaling",
+      "feature_names": [
+        "has_journal",
+        "ext_attr",
+        "resize_inode",
+        "dir_index",
+        "orphan_file",
+        "sparse_super",
+        "large_file",
+        "huge_file",
+        "dir_nlink",
+        "extra_isize",
+        "metadata_csum",
+        "filetype",
+        "extent",
+        "64bit",
+        "flex_bg",
+        "metadata_csum_seed"
+      ],
+      "feature_masks": {
+        "compat": 4156,
+        "compat_hex": "0x0000103c",
+        "ro_compat": 1131,
+        "ro_compat_hex": "0x0000046b",
+        "incompat": 8898,
+        "incompat_hex": "0x000022c2"
+      }
+    },
+    "legacy_inode_128": {
+      "basis": "Primary profile with 128-byte inodes and extra_isize absent",
+      "inode_size": 128,
+      "inode_extra_size": 0,
+      "feature_names_remove": [
+        "extra_isize"
+      ],
+      "feature_masks": {
+        "compat": 4156,
+        "compat_hex": "0x0000103c",
+        "ro_compat": 1067,
+        "ro_compat_hex": "0x0000042b",
+        "incompat": 8898,
+        "incompat_hex": "0x000022c2"
+      }
+    }
+  },
+  "images": [
+    {
+      "id": "primary-1k-i256",
+      "profile": "primary",
+      "filename": "primary-1k-i256.img",
+      "expected_sha256": "4f1408f2388b14935d4f749021c5c588faa582249ee780ce3f3e36051d7e10a0",
+      "image_bytes": 67108864,
+      "block_size": 1024,
+      "block_count": 65536,
+      "blocks_per_group": 8192,
+      "expected_groups": 8,
+      "expected_inodes": 4096,
+      "inode_size": 256,
+      "uuid": "11111111-1111-4111-8111-111111111111",
+      "hash_seed": "21111111-1111-4111-8111-111111111111",
+      "label": "AKEXT4P1-1K"
+    },
+    {
+      "id": "primary-2k-i256",
+      "profile": "primary",
+      "filename": "primary-2k-i256.img",
+      "expected_sha256": "de3c1970f6a3fc5ee0a1f684130bcfd477b211106a85d745fe174bef12d3d016",
+      "image_bytes": 134217728,
+      "block_size": 2048,
+      "block_count": 65536,
+      "blocks_per_group": 16384,
+      "expected_groups": 4,
+      "expected_inodes": 8192,
+      "inode_size": 256,
+      "uuid": "22222222-2222-4222-8222-222222222222",
+      "hash_seed": "32222222-2222-4222-8222-222222222222",
+      "label": "AKEXT4P1-2K"
+    },
+    {
+      "id": "primary-4k-i256",
+      "profile": "primary",
+      "filename": "primary-4k-i256.img",
+      "expected_sha256": "11ac071f3590ff06aa3a22928e0dbdb22affecb1d25203181c1d61d342732920",
+      "image_bytes": 536870912,
+      "block_size": 4096,
+      "block_count": 131072,
+      "blocks_per_group": 32768,
+      "expected_groups": 4,
+      "expected_inodes": 32768,
+      "inode_size": 256,
+      "uuid": "33333333-3333-4333-8333-333333333333",
+      "hash_seed": "43333333-3333-4333-8333-333333333333",
+      "label": "AKEXT4P1-4K"
+    },
+    {
+      "id": "legacy-1k-i128",
+      "profile": "legacy_inode_128",
+      "filename": "legacy-1k-i128.img",
+      "expected_sha256": "2aca099d7d024a47e0411a528adc55c75b6ad0ba5a28882dbfa24f906cd811b5",
+      "image_bytes": 67108864,
+      "block_size": 1024,
+      "block_count": 65536,
+      "blocks_per_group": 8192,
+      "expected_groups": 8,
+      "expected_inodes": 4096,
+      "inode_size": 128,
+      "uuid": "44444444-4444-4444-8444-444444444444",
+      "hash_seed": "54444444-4444-4444-8444-444444444444",
+      "label": "AKEXT4P1-I128"
+    }
+  ],
+  "feature_policy": {
+    "unknown": {
+      "compat": "refuse",
+      "ro_compat": "read_only_only_when_clean_and_recovery_free",
+      "incompat": "refuse"
+    },
+    "compat": [
+      {"bit": 1, "hex": "0x00000001", "name": "dir_prealloc", "disposition": "refuse"},
+      {"bit": 2, "hex": "0x00000002", "name": "imagic_inodes", "disposition": "refuse"},
+      {"bit": 4, "hex": "0x00000004", "name": "has_journal", "disposition": "read_write", "required": true},
+      {"bit": 8, "hex": "0x00000008", "name": "ext_attr", "disposition": "read_write", "required": true},
+      {"bit": 16, "hex": "0x00000010", "name": "resize_inode", "disposition": "read_write", "required": true},
+      {"bit": 32, "hex": "0x00000020", "name": "dir_index", "disposition": "read_write", "required": true},
+      {"bit": 64, "hex": "0x00000040", "name": "lazy_bg", "disposition": "refuse"},
+      {"bit": 128, "hex": "0x00000080", "name": "exclude_inode", "disposition": "refuse"},
+      {"bit": 256, "hex": "0x00000100", "name": "exclude_bitmap", "disposition": "refuse"},
+      {"bit": 512, "hex": "0x00000200", "name": "sparse_super2", "disposition": "refuse"},
+      {"bit": 1024, "hex": "0x00000400", "name": "fast_commit", "disposition": "refuse"},
+      {"bit": 2048, "hex": "0x00000800", "name": "stable_inodes", "disposition": "refuse"},
+      {"bit": 4096, "hex": "0x00001000", "name": "orphan_file", "disposition": "read_write", "required": true}
+    ],
+    "ro_compat": [
+      {"bit": 1, "hex": "0x00000001", "name": "sparse_super", "disposition": "read_write", "required": true},
+      {"bit": 2, "hex": "0x00000002", "name": "large_file", "disposition": "read_write", "required": true},
+      {"bit": 4, "hex": "0x00000004", "name": "btree_dir", "disposition": "refuse"},
+      {"bit": 8, "hex": "0x00000008", "name": "huge_file", "disposition": "read_write", "required": true},
+      {"bit": 16, "hex": "0x00000010", "name": "gdt_csum", "disposition": "refuse"},
+      {"bit": 32, "hex": "0x00000020", "name": "dir_nlink", "disposition": "read_write", "required": true},
+      {"bit": 64, "hex": "0x00000040", "name": "extra_isize", "disposition": "read_write", "required": true, "optional_in": ["legacy_inode_128"]},
+      {"bit": 128, "hex": "0x00000080", "name": "has_snapshot", "disposition": "refuse"},
+      {"bit": 256, "hex": "0x00000100", "name": "quota", "disposition": "refuse"},
+      {"bit": 512, "hex": "0x00000200", "name": "bigalloc", "disposition": "refuse"},
+      {"bit": 1024, "hex": "0x00000400", "name": "metadata_csum", "disposition": "read_write", "required": true},
+      {"bit": 2048, "hex": "0x00000800", "name": "replica", "disposition": "refuse"},
+      {"bit": 4096, "hex": "0x00001000", "name": "readonly", "disposition": "read_only"},
+      {"bit": 8192, "hex": "0x00002000", "name": "project", "disposition": "refuse"},
+      {"bit": 16384, "hex": "0x00004000", "name": "shared_blocks", "disposition": "refuse"},
+      {"bit": 32768, "hex": "0x00008000", "name": "verity", "disposition": "refuse"},
+      {"bit": 65536, "hex": "0x00010000", "name": "orphan_present", "disposition": "read_write_recovery", "transient": true}
+    ],
+    "incompat": [
+      {"bit": 1, "hex": "0x00000001", "name": "compression", "disposition": "refuse"},
+      {"bit": 2, "hex": "0x00000002", "name": "filetype", "disposition": "read_write", "required": true},
+      {"bit": 4, "hex": "0x00000004", "name": "recover", "disposition": "read_write_recovery", "transient": true},
+      {"bit": 8, "hex": "0x00000008", "name": "journal_dev", "disposition": "refuse"},
+      {"bit": 16, "hex": "0x00000010", "name": "meta_bg", "disposition": "refuse"},
+      {"bit": 64, "hex": "0x00000040", "name": "extent", "disposition": "read_write", "required": true},
+      {"bit": 128, "hex": "0x00000080", "name": "64bit", "disposition": "read_write", "required": true},
+      {"bit": 256, "hex": "0x00000100", "name": "mmp", "disposition": "refuse"},
+      {"bit": 512, "hex": "0x00000200", "name": "flex_bg", "disposition": "read_write", "required": true},
+      {"bit": 1024, "hex": "0x00000400", "name": "ea_inode", "disposition": "refuse"},
+      {"bit": 4096, "hex": "0x00001000", "name": "dirdata", "disposition": "refuse"},
+      {"bit": 8192, "hex": "0x00002000", "name": "metadata_csum_seed", "disposition": "read_write", "required": true},
+      {"bit": 16384, "hex": "0x00004000", "name": "largedir", "disposition": "refuse"},
+      {"bit": 32768, "hex": "0x00008000", "name": "inline_data", "disposition": "refuse"},
+      {"bit": 65536, "hex": "0x00010000", "name": "encrypt", "disposition": "refuse"},
+      {"bit": 131072, "hex": "0x00020000", "name": "casefold", "disposition": "refuse"}
+    ]
+  },
+  "journal_feature_policy": {
+    "clean_mkfs_masks": {"compat": 0, "ro_compat": 0, "incompat": 0},
+    "writer_initial_incompat_mask": 18,
+    "writer_initial_incompat_hex": "0x00000012",
+    "writer_with_revoke_incompat_mask": 19,
+    "writer_with_revoke_incompat_hex": "0x00000013",
+    "checksum_type": 4,
+    "compat": [
+      {"bit": 1, "hex": "0x00000001", "name": "checksum_v1", "disposition": "refuse"}
+    ],
+    "ro_compat": [],
+    "incompat": [
+      {"bit": 1, "hex": "0x00000001", "name": "revoke", "disposition": "read_write"},
+      {"bit": 2, "hex": "0x00000002", "name": "64bit", "disposition": "read_write"},
+      {"bit": 4, "hex": "0x00000004", "name": "async_commit", "disposition": "refuse"},
+      {"bit": 8, "hex": "0x00000008", "name": "checksum_v2", "disposition": "refuse"},
+      {"bit": 16, "hex": "0x00000010", "name": "checksum_v3", "disposition": "read_write"},
+      {"bit": 32, "hex": "0x00000020", "name": "fast_commit", "disposition": "refuse"}
+    ],
+    "unknown": "refuse"
+  },
+  "mount_policy": {
+    "writable_requires_internal_journal": true,
+    "dirty_read_only_volume": "refuse because replay writes are required",
+    "ordered_data": "data blocks durable before journal commit exposes metadata",
+    "unknown_compat": "refuse because pinned e2fsck cannot safely qualify it",
+    "unknown_ro_compat": "clean recovery-free images may mount read-only only",
+    "unknown_incompat": "refuse before mutation",
+    "case_sensitivity": "byte-sensitive",
+    "symlinks": "direct readlink required; generic resolver traversal remains implementation work",
+    "special_inodes": "preserve metadata; device I/O without a binding returns unsupported",
+    "acl": "preserve and expose raw POSIX ACL xattrs; enforcement is not claimed by profile ratification"
+  }
+}

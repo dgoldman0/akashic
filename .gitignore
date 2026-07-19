@@ -70,6 +70,8 @@ local_testing/*
 !local_testing/desk-gate0-baseline.f
 !local_testing/generate_desk_gate0_fixtures.py
 !local_testing/test_desk_gate0_baseline.py
+!local_testing/generate_ext4_profile_fixtures.py
+!local_testing/test_ext4_profile.py
 !local_testing/test_gap_buf.py
 !local_testing/test_textarea.py
 !local_testing/evidence/
@@ -86,6 +88,8 @@ local_testing/fixtures/atproto/*
 !local_testing/fixtures/syndication/**
 !local_testing/fixtures/desk-gate0/
 !local_testing/fixtures/desk-gate0/**
+!local_testing/fixtures/ext4-profile/
+!local_testing/fixtures/ext4-profile/**
 
 # Generated system images and captures stay local.
 local_testing/out/

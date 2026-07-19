@@ -6,10 +6,11 @@
 > implemented ABI-1 contract is documented in `docs/utils/fs/vfs.md`; current
 > MP64FS and FAT behavior is documented in
 > `docs/utils/fs/drivers/vfs-mp64fs.md` and
-> `docs/utils/fs/drivers/vfs-fat.md`.  In particular, disk bindings now take an
-> explicit generation-bound volume, MP64FS is read/write, FAT is deliberately
-> read-only, and the former raw ten-XT binding table is no longer a runtime
-> interface.
+> `docs/utils/fs/drivers/vfs-fat.md`; the authoritative ext4 profile is
+> `docs/utils/fs/ext4-compatibility-profile.md`.  In particular, disk bindings
+> now take an explicit generation-bound volume, MP64FS is read/write, FAT is
+> deliberately read-only, and the former raw ten-XT binding table is no longer
+> a runtime interface.
 
 Extended filesystem support for KDOS / Megapad-64.  Read (and where
 useful, write) foreign filesystem images via the existing generic
