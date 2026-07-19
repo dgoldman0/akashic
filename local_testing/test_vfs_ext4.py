@@ -29,7 +29,16 @@ with MANIFEST.open("r", encoding="utf-8") as source:
     PROFILE = json.load(source)
 
 IMAGE_ROWS = {row["id"]: row for row in PROFILE["images"]}
-IMAGE_IDS = tuple(IMAGE_ROWS)
+IMAGE_IDS = tuple(
+    image_id
+    for image_id, row in IMAGE_ROWS.items()
+    if row.get("fixture_role") != "read_side"
+)
+READ_SIDE_IMAGE_IDS = tuple(
+    image_id
+    for image_id, row in IMAGE_ROWS.items()
+    if row.get("fixture_role") == "read_side"
+)
 
 _snapshot = None
 
@@ -194,7 +203,8 @@ def _assert_emitted(output: str, marker: str) -> None:
 def canonical_images() -> dict[str, Path]:
     paths: dict[str, Path] = {}
     missing = []
-    for image_id, row in IMAGE_ROWS.items():
+    for image_id in IMAGE_IDS:
+        row = IMAGE_ROWS[image_id]
         path = IMAGE_DIR / row["filename"]
         if not path.is_file():
             missing.append(str(path))
@@ -209,6 +219,22 @@ def canonical_images() -> dict[str, Path]:
             + ", ".join(missing)
         )
     return paths
+
+
+@pytest.fixture(scope="session")
+def read_side_image() -> Path:
+    assert READ_SIDE_IMAGE_IDS == ("read-side-1k-i256",)
+    image_id = READ_SIDE_IMAGE_IDS[0]
+    row = IMAGE_ROWS[image_id]
+    path = IMAGE_DIR / row["filename"]
+    if not path.is_file():
+        pytest.skip(
+            "the supplemental ext4 read-side image is absent; run "
+            "generate_ext4_profile_fixtures.py with --image " + image_id
+        )
+    assert path.stat().st_size == row["image_bytes"]
+    assert _sha256(path) == row["expected_sha256"]
+    return path
 
 
 def test_binding_descriptor_is_valid_and_truthfully_read_only(
@@ -304,7 +330,91 @@ def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> N
     _assert_emitted(output, "EXT4-TIMESTAMP-SIGN-OK")
 
 
-def test_indexed_directory_flag_is_an_explicit_unsupported_structure(
+def test_htree_and_internal_extent_parser_semantics_are_total(
+    tmp_path: Path,
+) -> None:
+    blank = tmp_path / "tree-parser-storage.img"
+    blank.write_bytes(bytes(4 * 512))
+    output = run_forth(
+        blank,
+        [
+            "CREATE _TREECTX _EXT4-CTX-SIZE ALLOT",
+            "_TREECTX _EXT4-CTX-SIZE 0 FILL",
+            "CREATE _DXENTRIES 32 ALLOT",
+            "_DXENTRIES 32 0 FILL",
+            "4 _DXENTRIES W! 3 _DXENTRIES 2 + W!",
+            "1 _DXENTRIES 4 + L!",
+            "0x1000 _DXENTRIES 8 + L! 2 _DXENTRIES 12 + L!",
+            "0x1001 _DXENTRIES 16 + L! 3 _DXENTRIES 20 + L!",
+            (
+                "_DXENTRIES 4 8 _TREECTX _EXT4-VALIDATE-DX-ENTRIES "
+                "CONSTANT _DX-VALID"
+            ),
+            "0x1000 _DXENTRIES 16 + L!",
+            (
+                "_DXENTRIES 4 8 _TREECTX _EXT4-VALIDATE-DX-ENTRIES "
+                "CONSTANT _DX-BROKEN-CONT"
+            ),
+            "0x0800 _DXENTRIES 16 + L!",
+            (
+                "_DXENTRIES 4 8 _TREECTX _EXT4-VALIDATE-DX-ENTRIES "
+                "CONSTANT _DX-UNORDERED"
+            ),
+            "0x2000 _DXENTRIES 16 + L! 2 _DXENTRIES 20 + L!",
+            (
+                "_DXENTRIES 4 8 _TREECTX _EXT4-VALIDATE-DX-ENTRIES "
+                "CONSTANT _DX-DUP-BLOCK"
+            ),
+            "8 _DXENTRIES 20 + L!",
+            (
+                "_DXENTRIES 4 8 _TREECTX _EXT4-VALIDATE-DX-ENTRIES "
+                "CONSTANT _DX-OOB-BLOCK"
+            ),
+            "1024 _TREECTX _EXT4-C.BSIZE + !",
+            "11 _EXT4-DX-DIRINO ! 2 _EXT4-DX-PARINO !",
+            "11 _TREECTX _EXT4-C.DIR-BLOCK + L!",
+            "12 _TREECTX _EXT4-C.DIR-BLOCK + 4 + W!",
+            "1 _TREECTX _EXT4-C.DIR-BLOCK + 6 + C!",
+            "2 _TREECTX _EXT4-C.DIR-BLOCK + 7 + C!",
+            "46 _TREECTX _EXT4-C.DIR-BLOCK + 8 + C!",
+            "2 _TREECTX _EXT4-C.DIR-BLOCK + 12 + L!",
+            "1012 _TREECTX _EXT4-C.DIR-BLOCK + 16 + W!",
+            "2 _TREECTX _EXT4-C.DIR-BLOCK + 18 + C!",
+            "2 _TREECTX _EXT4-C.DIR-BLOCK + 19 + C!",
+            "46 _TREECTX _EXT4-C.DIR-BLOCK + 20 + C!",
+            "46 _TREECTX _EXT4-C.DIR-BLOCK + 21 + C!",
+            "1 _TREECTX _EXT4-C.DIR-BLOCK + 28 + C!",
+            "8 _TREECTX _EXT4-C.DIR-BLOCK + 29 + C!",
+            "2 _TREECTX _EXT4-C.DIR-BLOCK + 30 + C!",
+            (
+                "_TREECTX 8 _EXT4-VALIDATE-DX-ROOT "
+                "CONSTANT _DX-DEEP-ROOT"
+            ),
+            "CREATE _EMPTY-INDEX 60 ALLOT",
+            "_EMPTY-INDEX 60 0 FILL",
+            "_EXT4-EXTENT-MAGIC _EMPTY-INDEX W!",
+            "4 _EMPTY-INDEX 4 + W! 1 _EMPTY-INDEX 6 + W!",
+            (
+                "_EMPTY-INDEX 4 1 _TREECTX _EXT4-VALIDATE-EXTENT-NODE "
+                "CONSTANT _EMPTY-INDEX-IOR"
+            ),
+            (
+                "_DX-VALID 0= "
+                "_DX-BROKEN-CONT VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_DX-BROKEN-CONT VFS-IOR-DETAIL EXT4-D-DIRECTORY = AND "
+                "_DX-UNORDERED VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_DX-DUP-BLOCK VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_DX-OOB-BLOCK VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_DX-DEEP-ROOT VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_EMPTY-INDEX-IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                'IF ." EXT4-TREE-PARSER-SEMANTICS-OK" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-TREE-PARSER-SEMANTICS-OK")
+
+
+def test_indexed_flag_is_admitted_only_on_directories(
     canonical_images: dict[str, Path],
 ) -> None:
     path = canonical_images["primary-1k-i256"]
@@ -312,24 +422,35 @@ def test_indexed_directory_flag_is_an_explicit_unsupported_structure(
         path,
         [
             "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
-            "2 _V _EXT4-CTX _EXT4-LOAD-INODE CONSTANT _L-IOR",
+            "2 _V _EXT4-CTX _EXT4-LOAD-INODE CONSTANT _ROOT-L-IOR",
             (
                 "_V _EXT4-CTX _EXT4-C.INODE + _EXT4-I.FLAGS + "
                 "DUP @ _EXT4-INDEX-FL OR SWAP !"
             ),
             (
                 "_V _EXT4-CTX _EXT4-STAGE-CURRENT-INODE "
-                "CONSTANT _S-IOR CONSTANT _TYPE"
+                "CONSTANT _ROOT-S-IOR CONSTANT _ROOT-TYPE"
+            ),
+            "14 _V _EXT4-CTX _EXT4-LOAD-INODE CONSTANT _FILE-L-IOR",
+            (
+                "_V _EXT4-CTX _EXT4-C.INODE + _EXT4-I.FLAGS + "
+                "DUP @ _EXT4-INDEX-FL OR SWAP !"
             ),
             (
-                "_M-IOR 0= _L-IOR 0= AND _TYPE 0= AND "
-                "_S-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED = AND "
-                "_S-IOR VFS-IOR-DETAIL EXT4-D-FEATURE = AND "
-                'IF ." EXT4-HTREE-REFUSAL-OK" THEN'
+                "_V _EXT4-CTX _EXT4-STAGE-CURRENT-INODE "
+                "CONSTANT _FILE-S-IOR CONSTANT _FILE-TYPE"
+            ),
+            (
+                "_M-IOR 0= _ROOT-L-IOR 0= AND "
+                "_ROOT-S-IOR 0= AND _ROOT-TYPE VFS-T-DIR = AND "
+                "_FILE-L-IOR 0= AND _FILE-TYPE 0= AND "
+                "_FILE-S-IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_FILE-S-IOR VFS-IOR-DETAIL EXT4-D-FEATURE = AND "
+                'IF ." EXT4-HTREE-FLAG-POLICY-OK" THEN'
             ),
         ],
     )
-    _assert_emitted(output, "EXT4-HTREE-REFUSAL-OK")
+    _assert_emitted(output, "EXT4-HTREE-FLAG-POLICY-OK")
 
 
 def _canonical_lines(row: dict) -> list[str]:
@@ -386,9 +507,15 @@ def _canonical_lines(row: dict) -> list[str]:
             'IF ." EXT4-SPARSE-OK" THEN'
         ),
         "_SFD VFS-CLOSE? DROP",
-        'S" /fixture/fast-link" _V VFS-RESOLVE? DROP CONSTANT _FL',
+        (
+            'S" /fixture/fast-link" VFS-RP-NOFOLLOW-FINAL _V '
+            "VFS-RESOLVE-POLICY? DROP CONSTANT _FL"
+        ),
         "_E4BUF 128 _FL _V VFS-READLINK CONSTANT _FL-IOR CONSTANT _FLN",
-        'S" /fixture/slow-link" _V VFS-RESOLVE? DROP CONSTANT _SL',
+        (
+            'S" /fixture/slow-link" VFS-RP-NOFOLLOW-FINAL _V '
+            "VFS-RESOLVE-POLICY? DROP CONSTANT _SL"
+        ),
         "_E4BUF 128 _SL _V VFS-READLINK CONSTANT _SL-IOR CONSTANT _SLN",
         (
             "_FL-IOR 0= _FLN 11 = AND _SL-IOR 0= AND _SLN 96 = AND "
@@ -451,6 +578,230 @@ def test_canonical_images_are_fully_inspectable(
     ):
         _assert_emitted(output, marker)
     assert _sha256(path) == before
+
+
+def _read_side_lines() -> list[str]:
+    read_side = PROFILE["generator"]["read_side_population"]
+    acl_access = bytes.fromhex(read_side["acl_access_value_hex"])
+    acl_default = bytes.fromhex(read_side["acl_default_value_hex"])
+    acl_access_create = "CREATE _ACL-ACCESS " + " ".join(
+        f"0x{byte:02X} C," for byte in acl_access
+    )
+    acl_default_create = "CREATE _ACL-DEFAULT " + " ".join(
+        f"0x{byte:02X} C," for byte in acl_default
+    )
+    return [
+        "CREATE _E4BUF 16384 ALLOT",
+        acl_access_create,
+        acl_default_create,
+        "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+        (
+            "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+            '_V V.FLAGS @ VFS-F-RO AND 0<> AND IF ." EXT4-READ-SIDE-MOUNT-OK" THEN'
+        ),
+        'S" /fixture/payload.txt" _V VFS-RESOLVE? CONSTANT _P-IOR CONSTANT _P',
+        (
+            'S" /fixture/indexed/collision-068446" _V VFS-RESOLVE? '
+            "CONSTANT _HC1-IOR CONSTANT _HC1"
+        ),
+        (
+            'S" /fixture/indexed/collision-083826" _V VFS-RESOLVE? '
+            "CONSTANT _HC2-IOR CONSTANT _HC2"
+        ),
+        (
+            'S" /fixture/indexed/candidate-000069" _V VFS-RESOLVE? '
+            "CONSTANT _HL-IOR CONSTANT _HL"
+        ),
+        (
+            'S" /fixture/indexed/candidate-000064" _V VFS-RESOLVE? '
+            "CONSTANT _HH-IOR CONSTANT _HH"
+        ),
+        (
+            "_P-IOR 0= _HC1-IOR 0= AND _HC2-IOR 0= AND "
+            "_HL-IOR 0= AND _HH-IOR 0= AND "
+            "_HC1 D.VNODE @ _HC2 D.VNODE @ = AND "
+            "_HC1 D.VNODE @ _HL D.VNODE @ = AND "
+            "_HC1 D.VNODE @ _HH D.VNODE @ = AND "
+            "_HC1 D.VNODE @ VN.NLINK @ 100 = AND "
+            'IF ." EXT4-HTREE-OK" THEN'
+        ),
+        (
+            'S" /fixture/extent-tree.bin" VFS-FF-READ _V VFS-OPEN? '
+            "CONSTANT _ET-IOR CONSTANT _ETFD"
+        ),
+        "_E4BUF 12288 _ETFD VFS-READ? CONSTANT _ER-IOR CONSTANT _ERN",
+        (
+            "_ET-IOR 0= _ER-IOR 0= AND _ERN 12288 = AND "
+            "_E4BUF C@ 65 = AND _E4BUF 1024 + C@ 0= AND "
+            "_E4BUF 2048 + C@ 67 = AND _E4BUF 3072 + C@ 0= AND "
+            "_E4BUF 4096 + C@ 69 = AND _E4BUF 5120 + C@ 0= AND "
+            "_E4BUF 6144 + C@ 71 = AND _E4BUF 7168 + C@ 0= AND "
+            "_E4BUF 8192 + C@ 73 = AND _E4BUF 9216 + C@ 0= AND "
+            "_E4BUF 10240 + C@ 75 = AND _E4BUF 11264 + C@ 76 = AND "
+            "_E4BUF 12287 + C@ 76 = AND "
+            'IF ." EXT4-EXTERNAL-EXTENTS-OK" THEN'
+        ),
+        "_ETFD VFS-CLOSE? DROP",
+        (
+            'S" /fixture/legacy-map.bin" VFS-FF-READ _V VFS-OPEN? '
+            "CONSTANT _LM-IOR CONSTANT _LMFD"
+        ),
+        "0 _LMFD VFS-SEEK? CONSTANT _LS0",
+        "_E4BUF 1 _LMFD VFS-READ? CONSTANT _LR0-IOR CONSTANT _LR0-N",
+        "_E4BUF C@ CONSTANT _LB0",
+        "1024 _LMFD VFS-SEEK? CONSTANT _LSH",
+        "_E4BUF 1 _LMFD VFS-READ? CONSTANT _LRH-IOR CONSTANT _LRH-N",
+        "_E4BUF C@ CONSTANT _LBH",
+        "12288 _LMFD VFS-SEEK? CONSTANT _LS1",
+        "_E4BUF 1 _LMFD VFS-READ? CONSTANT _LR1-IOR CONSTANT _LR1-N",
+        "_E4BUF C@ CONSTANT _LB1",
+        "274432 _LMFD VFS-SEEK? CONSTANT _LS2",
+        "_E4BUF 1 _LMFD VFS-READ? CONSTANT _LR2-IOR CONSTANT _LR2-N",
+        "_E4BUF C@ CONSTANT _LB2",
+        "67383296 _LMFD VFS-SEEK? CONSTANT _LS3",
+        "_E4BUF 1 _LMFD VFS-READ? CONSTANT _LR3-IOR CONSTANT _LR3-N",
+        "_E4BUF C@ CONSTANT _LB3",
+        "67384320 _LMFD VFS-SEEK? CONSTANT _LS4",
+        "_E4BUF 1 _LMFD VFS-READ? CONSTANT _LR4-IOR CONSTANT _LR4-N",
+        "_E4BUF C@ CONSTANT _LB4",
+        (
+            "_LM-IOR 0= _LMFD VFS-SIZE 67385344 = AND "
+            "_LS0 0= AND _LR0-IOR 0= AND _LR0-N 1 = AND _LB0 65 = AND "
+            "_LSH 0= AND _LRH-IOR 0= AND _LRH-N 1 = AND _LBH 0= AND "
+            "_LS1 0= AND _LR1-IOR 0= AND _LR1-N 1 = AND _LB1 83 = AND "
+            "_LS2 0= AND _LR2-IOR 0= AND _LR2-N 1 = AND _LB2 68 = AND "
+            "_LS3 0= AND _LR3-IOR 0= AND _LR3-N 1 = AND _LB3 84 = AND "
+            "_LS4 0= AND _LR4-IOR 0= AND _LR4-N 1 = AND _LB4 85 = AND "
+            'IF ." EXT4-LEGACY-MAP-OK" THEN'
+        ),
+        "_LMFD VFS-CLOSE? DROP",
+        'S" /fixture/char-old" _V VFS-RESOLVE? DROP CONSTANT _CHAR',
+        'S" /fixture/block-new" _V VFS-RESOLVE? DROP CONSTANT _BLOCK',
+        'S" /fixture/fifo" _V VFS-RESOLVE? DROP CONSTANT _FIFO',
+        (
+            "_CHAR IN.TYPE @ VFS-T-SPECIAL = "
+            "_CHAR D.VNODE @ VN.RDEV @ VFS-RDEV-MAJOR 5 = AND "
+            "_CHAR D.VNODE @ VN.RDEV @ VFS-RDEV-MINOR 1 = AND "
+            "_BLOCK IN.TYPE @ VFS-T-SPECIAL = AND "
+            "_BLOCK D.VNODE @ VN.RDEV @ VFS-RDEV-MAJOR 259 = AND "
+            "_BLOCK D.VNODE @ VN.RDEV @ VFS-RDEV-MINOR 513 = AND "
+            "_FIFO IN.TYPE @ VFS-T-SPECIAL = AND "
+            "_FIFO D.VNODE @ VN.RDEV @ 0= AND "
+            'IF ." EXT4-SPECIAL-METADATA-OK" THEN'
+        ),
+        (
+            'S" /fixture/char-old" VFS-FF-READ _V VFS-OPEN? '
+            "CONSTANT _COPEN-IOR CONSTANT _CFD"
+        ),
+        (
+            "_CFD 0= _COPEN-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED = AND "
+            'IF ." EXT4-SPECIAL-OPEN-UNSUPPORTED" THEN'
+        ),
+        "0 0 _P _V VFS-LISTXATTR CONSTANT _XL-IOR CONSTANT _XL-N",
+        (
+            'S" user.akashic" _E4BUF 400 _P _V VFS-GETXATTR '
+            "CONSTANT _XU-IOR CONSTANT _XU-N"
+        ),
+        (
+            "_XU-IOR 0= _XU-N 10 = AND "
+            'S" profile-v1" DROP _E4BUF 10 _EXT4-BYTES=? AND '
+            "CONSTANT _XU-OK"
+        ),
+        (
+            'S" user.akashic.large2" _E4BUF 400 _P _V VFS-GETXATTR '
+            "CONSTANT _XY-IOR CONSTANT _XY-N"
+        ),
+        (
+            "_XY-IOR 0= _XY-N 260 = AND _E4BUF C@ 121 = AND "
+            "_E4BUF 259 + C@ 121 = AND CONSTANT _XY-OK"
+        ),
+        (
+            'S" trusted.akashic" _E4BUF 400 _P _V VFS-GETXATTR '
+            "CONSTANT _XT-IOR CONSTANT _XT-N"
+        ),
+        (
+            "_XT-IOR 0= _XT-N 10 = AND "
+            'S" trusted-v1" DROP _E4BUF 10 _EXT4-BYTES=? AND '
+            "CONSTANT _XT-OK"
+        ),
+        (
+            'S" security.akashic" _E4BUF 400 _P _V VFS-GETXATTR '
+            "CONSTANT _XS-IOR CONSTANT _XS-N"
+        ),
+        (
+            "_XS-IOR 0= _XS-N 11 = AND "
+            'S" security-v1" DROP _E4BUF 11 _EXT4-BYTES=? AND '
+            "CONSTANT _XS-OK"
+        ),
+        (
+            'S" system.posix_acl_access" _E4BUF 400 _P _V VFS-GETXATTR '
+            "CONSTANT _XA-IOR CONSTANT _XA-N"
+        ),
+        (
+            f"_XA-IOR 0= _XA-N {len(acl_access)} = AND "
+            f"_ACL-ACCESS _E4BUF {len(acl_access)} _EXT4-BYTES=? AND "
+            "CONSTANT _XA-OK"
+        ),
+        'S" /fixture" _V VFS-RESOLVE? DROP CONSTANT _FIXTURE',
+        (
+            'S" system.posix_acl_default" _E4BUF 400 _FIXTURE _V '
+            "VFS-GETXATTR CONSTANT _XD-IOR CONSTANT _XD-N"
+        ),
+        (
+            f"_XD-IOR 0= _XD-N {len(acl_default)} = AND "
+            f"_ACL-DEFAULT _E4BUF {len(acl_default)} _EXT4-BYTES=? AND "
+            "CONSTANT _XD-OK"
+        ),
+        (
+            "_XL-IOR 0= _XL-N 109 = AND _XU-OK AND _XY-OK AND "
+            "_XT-OK AND _XS-OK AND _XA-OK AND _XD-OK AND "
+            'IF ." EXT4-XATTR-NAMESPACES-OK" THEN'
+        ),
+        'S" /fixture/fast-link" _V VFS-RESOLVE? DROP CONSTANT _SF',
+        'S" /fixture/absolute-link" _V VFS-RESOLVE? DROP CONSTANT _SA',
+        'S" /fixture/chain-a" _V VFS-RESOLVE? DROP CONSTANT _SC',
+        'S" /fixture/live-slow-link" _V VFS-RESOLVE? DROP CONSTANT _SSL',
+        'S" /fixture-dir/payload.txt" _V VFS-RESOLVE? DROP CONSTANT _SD',
+        (
+            'S" /fixture/fast-link" VFS-RP-NOFOLLOW-FINAL _V '
+            "VFS-RESOLVE-POLICY? DROP CONSTANT _SNF"
+        ),
+        "_E4BUF 128 _SNF _V VFS-READLINK CONSTANT _SR-IOR CONSTANT _SR-N",
+        'S" /fixture/dangling-link" _V VFS-RESOLVE? CONSTANT _DG-IOR CONSTANT _DG',
+        'S" /fixture/loop-a" _V VFS-RESOLVE? CONSTANT _LOOP-IOR CONSTANT _LOOP',
+        (
+            "_SF D.VNODE @ _P D.VNODE @ = "
+            "_SA D.VNODE @ _P D.VNODE @ = AND "
+            "_SC D.VNODE @ _P D.VNODE @ = AND "
+            "_SSL D.VNODE @ _P D.VNODE @ = AND "
+            "_SD D.VNODE @ _P D.VNODE @ = AND "
+            "_SNF IN.TYPE @ VFS-T-SYMLINK = AND "
+            "_SR-IOR 0= AND _SR-N 11 = AND "
+            'S" payload.txt" DROP _E4BUF 11 _EXT4-BYTES=? AND '
+            "_DG 0= AND _DG-IOR VFS-IOR-REASON VFS-R-NOENT = AND "
+            "_LOOP 0= AND _LOOP-IOR VFS-IOR-REASON VFS-R-LOOP = AND "
+            'IF ." EXT4-GENERIC-SYMLINKS-OK" THEN'
+        ),
+    ]
+
+
+def test_supplemental_image_closes_read_side_structural_gaps(
+    read_side_image: Path,
+) -> None:
+    before = _sha256(read_side_image)
+    output = run_forth(read_side_image, _read_side_lines(), max_steps=1_600_000_000)
+    for marker in (
+        "EXT4-READ-SIDE-MOUNT-OK",
+        "EXT4-HTREE-OK",
+        "EXT4-EXTERNAL-EXTENTS-OK",
+        "EXT4-LEGACY-MAP-OK",
+        "EXT4-SPECIAL-METADATA-OK",
+        "EXT4-SPECIAL-OPEN-UNSUPPORTED",
+        "EXT4-XATTR-NAMESPACES-OK",
+        "EXT4-GENERIC-SYMLINKS-OK",
+    ):
+        _assert_emitted(output, marker)
+    assert _sha256(read_side_image) == before
 
 
 def _crc32c_raw(data: bytes, seed: int = 0xFFFF_FFFF) -> int:
@@ -565,6 +916,24 @@ def _one_byte_xor(path: Path, offset: int, expected: int) -> tuple[int, bytes]:
     return offset, bytes((expected ^ 1,))
 
 
+def _verified_patches(
+    path: Path,
+    edits: tuple[tuple[int, bytes, bytes], ...],
+) -> tuple[tuple[int, bytes], ...]:
+    patches = []
+    with path.open("rb") as source:
+        for offset, expected, replacement in edits:
+            source.seek(offset)
+            actual = source.read(len(expected))
+            assert actual == expected, (
+                f"fixture bytes at 0x{offset:x} changed: "
+                f"expected {expected.hex()}, observed {actual.hex()}"
+            )
+            assert len(replacement) == len(expected)
+            patches.append((offset, replacement))
+    return tuple(patches)
+
+
 @pytest.mark.parametrize(("offset", "expected", "detail"), MOUNT_CORRUPTION_CASES)
 def test_mount_rejects_independently_corrupted_metadata(
     canonical_images: dict[str, Path],
@@ -677,6 +1046,208 @@ def test_external_xattr_checksum_failure_is_reported_at_access_time(
         patches=(_one_byte_xor(path, 0x151410, 0xB6),),
     )
     _assert_emitted(output, "EXT4-XATTR-CHECKSUM-OK")
+
+
+def test_checksum_valid_data_bitmap_disagreement_is_rejected_on_lookup(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _verified_patches(
+        path,
+        (
+            (0x40CA8, b"\x3f", b"\x7d"),
+            (0x818, b"\xc4\x3f", b"\x65\x60"),
+            (0x838, b"\xa2\xaf", b"\x2e\x0c"),
+            (0x81E, b"\xf1\x49", b"\x3d\x3b"),
+        ),
+    )
+    output = run_forth(
+        path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                'S" /fixture/payload.txt" _V VFS-RESOLVE? '
+                "CONSTANT _IOR CONSTANT _P"
+            ),
+            (
+                "_M-IOR 0= _P 0= AND "
+                "_IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP = AND "
+                'IF ." EXT4-DATA-BITMAP-CROSSCHECK-OK" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-DATA-BITMAP-CROSSCHECK-OK")
+
+
+def test_checksum_valid_xattr_bitmap_disagreement_is_rejected_on_access(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _verified_patches(
+        path,
+        (
+            (0x40CA8, b"\x3f", b"\x6f"),
+            (0x818, b"\xc4\x3f", b"\xcb\xf8"),
+            (0x838, b"\xa2\xaf", b"\x71\x9f"),
+            (0x81E, b"\xf1\x49", b"\x4e\xc4"),
+        ),
+    )
+    output = run_forth(
+        path,
+        [
+            "CREATE _E4BUF 400 ALLOT",
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            'S" /fixture/payload.txt" _V VFS-RESOLVE? DROP CONSTANT _P',
+            (
+                'S" user.akashic.large" _E4BUF 400 _P _V VFS-GETXATTR '
+                "CONSTANT _IOR CONSTANT _N"
+            ),
+            (
+                "_M-IOR 0= _N 0= AND "
+                "_IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_IOR VFS-IOR-DETAIL EXT4-D-XATTR = AND "
+                'IF ." EXT4-XATTR-BITMAP-CROSSCHECK-OK" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-XATTR-BITMAP-CROSSCHECK-OK")
+
+
+def test_duplicate_xattr_across_inline_and_external_storage_is_corrupt(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    original_entry = bytes.fromhex(
+        "0d01d402000000002c01000083c6ab37"
+        "616b61736869632e6c61726765000000"
+    )
+    duplicate_entry = bytes.fromhex(
+        "0701d402000000002c01000000000000"
+        "616b6173686963000000000000000000"
+    )
+    patches = _verified_patches(
+        path,
+        (
+            (0x151420, original_entry, duplicate_entry),
+            (0x151410, b"\xb6\xad\xf2\x86", b"\x8e\x44\x4a\xac"),
+        ),
+    )
+    output = run_forth(
+        path,
+        [
+            "CREATE _E4BUF 400 ALLOT",
+            "T-ARENA T-VOLUME EXT4-NEW DROP CONSTANT _V",
+            'S" /fixture/payload.txt" _V VFS-RESOLVE? DROP CONSTANT _P',
+            (
+                'S" user.akashic" _E4BUF 400 _P _V VFS-GETXATTR '
+                "CONSTANT _IOR CONSTANT _N"
+            ),
+            (
+                "_N 0= _IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_IOR VFS-IOR-DETAIL EXT4-D-XATTR = AND "
+                'IF ." EXT4-XATTR-DUPLICATE-OK" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-XATTR-DUPLICATE-OK")
+
+
+@pytest.mark.parametrize(
+    ("replacement", "checksum"),
+    (
+        (
+            bytes.fromhex("0701d4020000000001000000000000006f7665726c617000"),
+            bytes.fromhex("5e79177c"),
+        ),
+        (
+            bytes.fromhex("070140000000000001000000000000006f7665726c617000"),
+            bytes.fromhex("092df811"),
+        ),
+    ),
+)
+def test_checksum_valid_xattr_value_overlaps_are_corrupt(
+    canonical_images: dict[str, Path], replacement: bytes, checksum: bytes
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _verified_patches(
+        path,
+        (
+            (0x151440, bytes(24), replacement),
+            (0x151410, b"\xb6\xad\xf2\x86", checksum),
+        ),
+    )
+    output = run_forth(
+        path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW DROP CONSTANT _V",
+            'S" /fixture/payload.txt" _V VFS-RESOLVE? DROP CONSTANT _P',
+            "0 0 _P _V VFS-LISTXATTR CONSTANT _IOR CONSTANT _N",
+            (
+                "_N 0= _IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_IOR VFS-IOR-DETAIL EXT4-D-XATTR = AND "
+                'IF ." EXT4-XATTR-OVERLAP-OK" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-XATTR-OVERLAP-OK")
+
+
+def test_external_extent_node_checksum_failure_is_detected(
+    read_side_image: Path,
+) -> None:
+    # The qualified fixture oracle pins ETB0 at physical block 1353. Mutate an
+    # otherwise-unused byte so semantic fields remain valid and checksum
+    # verification is the only possible rejection path.
+    offset = 1353 * 1024 + 100
+    output = run_forth(
+        read_side_image,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                'S" /fixture/extent-tree.bin" _V VFS-RESOLVE? '
+                "CONSTANT _IOR CONSTANT _IN"
+            ),
+            (
+                "_M-IOR 0= _IN 0= AND "
+                "_IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP = AND "
+                'IF ." EXT4-EXTENT-NODE-CHECKSUM-OK" THEN'
+            ),
+        ],
+        patches=(_one_byte_xor(read_side_image, offset, 0),),
+    )
+    _assert_emitted(output, "EXT4-EXTENT-NODE-CHECKSUM-OK")
+
+
+def test_htree_root_checksum_failure_rolls_back_directory_publication(
+    read_side_image: Path,
+) -> None:
+    # The qualified fixture oracle maps indexed logical block zero to physical
+    # block 1355; byte 40 is the first continuation hash covered by dx checksum.
+    offset = 1355 * 1024 + 40
+    output = run_forth(
+        read_side_image,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                'S" /fixture/indexed/collision-068446" _V VFS-RESOLVE? '
+                "CONSTANT _IOR CONSTANT _IN"
+            ),
+            (
+                "_M-IOR 0= _IN 0= AND "
+                "_IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_IOR VFS-IOR-DETAIL EXT4-D-DIRECTORY = AND "
+                'IF ." EXT4-HTREE-CHECKSUM-OK" THEN'
+            ),
+        ],
+        patches=(_one_byte_xor(read_side_image, offset, 0x81),),
+    )
+    _assert_emitted(output, "EXT4-HTREE-CHECKSUM-OK")
 
 
 def test_probe_nonmatch_and_checked_io_error(

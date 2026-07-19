@@ -2,7 +2,7 @@
   "schema": "akashic.ext4-compatibility-profile.v1",
   "profile_id": "akashic-ext4-rw-v1",
   "ratified_on": "2026-07-18",
-  "scope": "Pinned ext4 format and host-fixture contract; no Akashic ext4 driver is claimed",
+  "scope": "Pinned ext4 format and external-tool fixture contract consumed by the Akashic binding",
   "authorities": {
     "linux_ext4": {
       "tag": "v6.18",
@@ -76,6 +76,13 @@
       "-n",
       "{image}"
     ],
+    "directory_index_argv": [
+      "{tool_dir}/e2fsck",
+      "-f",
+      "-y",
+      "-D",
+      "{image}"
+    ],
     "population": {
       "payload_utf8": "Akashic ext4 profile v1\nexternal-tool fixture payload\n",
       "large_xattr_value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -91,6 +98,44 @@
         "punch /fixture/sparse.bin 1 1",
         "ea_set /fixture/payload.txt user.akashic profile-v1",
         "ea_set /fixture/payload.txt user.akashic.large {large_xattr_value}"
+      ]
+    },
+    "read_side_population": {
+      "live_slow_symlink_target": "././././././././././././././././././././././././././././././././payload.txt",
+      "second_large_xattr_value": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      "trusted_xattr_value": "trusted-v1",
+      "security_xattr_value": "security-v1",
+      "acl_access_value_hex": "010000000100060004000600080004002a0000001000060020000400",
+      "acl_default_value_hex": "010000000100070004000500080005002a0000001000050020000500",
+      "extent_tree_patterns": [65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76],
+      "legacy_map_patterns": [65, 83, 68, 84, 85],
+      "htree_lower_entries": 33,
+      "htree_higher_entries": 64,
+      "htree_collision_names": ["collision-068446", "collision-083826"],
+      "htree_collision_hash": 1085404544,
+      "debugfs_commands": [
+        "symlink /fixture/absolute-link /fixture/payload.txt",
+        "symlink /fixture/live-slow-link {live_slow_symlink_target}",
+        "symlink /fixture/chain-a chain-b",
+        "symlink /fixture/chain-b payload.txt",
+        "symlink /fixture/dangling-link missing-target",
+        "symlink /fixture/loop-a loop-b",
+        "symlink /fixture/loop-b loop-a",
+        "symlink /fixture-dir fixture",
+        "write {extent_payload} /fixture/extent-tree.bin",
+        "punch /fixture/extent-tree.bin 1 1",
+        "punch /fixture/extent-tree.bin 3 3",
+        "punch /fixture/extent-tree.bin 5 5",
+        "punch /fixture/extent-tree.bin 7 7",
+        "punch /fixture/extent-tree.bin 9 9",
+        "ea_set /fixture/payload.txt user.akashic.large2 {second_large_xattr_value}",
+        "ea_set /fixture/payload.txt trusted.akashic {trusted_xattr_value}",
+        "ea_set /fixture/payload.txt security.akashic {security_xattr_value}",
+        "ea_set -f {acl_access_value} -r /fixture/payload.txt system.posix_acl_access",
+        "ea_set -f {acl_default_value} -r /fixture system.posix_acl_default",
+        "mkdir /fixture/indexed",
+        "write /dev/null /fixture/indexed-target",
+        "write /dev/null /fixture/legacy-map.bin"
       ]
     }
   },
@@ -227,6 +272,23 @@
       "uuid": "44444444-4444-4444-8444-444444444444",
       "hash_seed": "54444444-4444-4444-8444-444444444444",
       "label": "AKEXT4P1-I128"
+    },
+    {
+      "id": "read-side-1k-i256",
+      "fixture_role": "read_side",
+      "profile": "primary",
+      "filename": "read-side-1k-i256.img",
+      "expected_sha256": "451cfdb193da88b034ff2615e80eb85fb73c23c0a57cc1122fa5f197de1b71be",
+      "image_bytes": 67108864,
+      "block_size": 1024,
+      "block_count": 65536,
+      "blocks_per_group": 8192,
+      "expected_groups": 8,
+      "expected_inodes": 4096,
+      "inode_size": 256,
+      "uuid": "55555555-5555-4555-8555-555555555555",
+      "hash_seed": "21111111-1111-4111-8111-111111111111",
+      "label": "AKEXT4P1-RD"
     }
   ],
   "feature_policy": {
@@ -317,8 +379,8 @@
     "unknown_ro_compat": "clean recovery-free images may mount read-only only",
     "unknown_incompat": "refuse before mutation",
     "case_sensitivity": "byte-sensitive",
-    "symlinks": "direct readlink required; generic resolver traversal remains implementation work",
-    "special_inodes": "preserve metadata; device I/O without a binding returns unsupported",
+    "symlinks": "bounded generic traversal follows intermediate and final links by default; explicit nofollow-final policy preserves direct readlink and namespace behavior",
+    "special_inodes": "preserve metadata with VFS rdev packed as major in the high 32 bits and minor in the low 32 bits; device I/O without a binding returns unsupported",
     "acl": "preserve and expose raw POSIX ACL xattrs; enforcement is not claimed by profile ratification"
   }
 }

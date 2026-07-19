@@ -72,6 +72,23 @@ CONSTANT VFS-SA-ALL
 VFS-ATTR-SIZE CONSTANT VFS-SETATTR-REQ-SIZE
 96  CONSTANT VFS-STATFS-SIZE
 
+\ Path resolution has one bounded expansion workspace and follows at most
+\ forty symbolic links, matching the conventional POSIX traversal ceiling.
+4096 CONSTANT VFS-PATH-MAX
+40   CONSTANT VFS-SYMLINK-MAX
+
+\ Final-component policy for VFS-RESOLVE-POLICY?.  Intermediate symbolic
+\ links are always followed; only the terminal component is selectable.
+0 CONSTANT VFS-RP-FOLLOW-FINAL
+1 CONSTANT VFS-RP-NOFOLLOW-FINAL
+
+\ Binding-neutral special-device identity.  Filesystem drivers translate
+\ their native encoding into this stable 32-bit-major/32-bit-minor form.
+: VFS-RDEV-MAKE   ( major minor -- rdev )
+    0xFFFFFFFF AND SWAP 0xFFFFFFFF AND 32 LSHIFT OR ;
+: VFS-RDEV-MAJOR  ( rdev -- major )  32 RSHIFT 0xFFFFFFFF AND ;
+: VFS-RDEV-MINOR  ( rdev -- minor )  0xFFFFFFFF AND ;
+
 \ Binding ABI 1 is a validated descriptor plus a fixed operation-table
 \ prefix.  There is deliberately no compatibility path for the former raw
 \ ten-XT table.
@@ -1275,15 +1292,16 @@ VARIABLE _VUM-V
 \
 \  VFS-RESOLVE ( c-addr u vfs -- inode | 0 )
 \
-\  Iterative path resolver.  Walks "/"-delimited components from
-\  root (if leading "/") or cwd.  Calls xt-readdir lazily on
-\  unloaded directories.  Returns the final inode or 0 if any
-\  component is not found.
+\  Iterative path resolver.  Walks "/"-delimited components from root (if
+\  leading "/") or cwd, lazily populates directories, and expands bounded
+\  symbolic-link targets.  The checked policy API selects whether the final
+\  symbolic link is followed; intermediate links are always followed.
 
 \ -- Forward reference for auto-eviction hook --
 \    _VFS-EVICT is defined later; we defer through a variable.
 VARIABLE _VFS-EVICT-XT   \ filled once _VFS-EVICT exists
 VARIABLE _VFS-LOOKUP-XT  \ filled once VFS-LOOKUP exists
+VARIABLE _VFS-READLINK-XT \ filled once VFS-READLINK exists
 : _VFS-MAYBE-EVICT  ( vfs -- )
     DUP V.ICOUNT @
     OVER V.IHWM @  > IF
@@ -1348,127 +1366,222 @@ VARIABLE _VRCF-V
     _VRCF-DIR @ _VRCF-V @ _VFS-ENSURE-CHILDREN
     _VRCF-A @ _VRCF-U @ _VRCF-DIR @ _VFS-FIND-CHILD ;
 
-\ -- Path resolution temporaries --
-VARIABLE _VR-S       \ scan pointer into path string
-VARIABLE _VR-E       \ end of path string
+\ -- Path-resolution state.  Expansion alternates between two fixed buffers,
+\    so a READLINK target can be joined to the unconsumed suffix without
+\    overwriting either source.  The public guard serializes this state in
+\    guarded builds, matching the rest of the core's temporary variables.
+CREATE _VR-PATH-A VFS-PATH-MAX ALLOT
+CREATE _VR-PATH-B VFS-PATH-MAX ALLOT
+VARIABLE _VR-A       \ original path address
+VARIABLE _VR-U       \ original path length
+VARIABLE _VR-BUF     \ active expansion buffer
+VARIABLE _VR-S       \ scan pointer into active path
+VARIABLE _VR-E       \ end of active path
 VARIABLE _VR-V       \ vfs
-VARIABLE _VR-IN      \ current inode
+VARIABLE _VR-IN      \ current directory/dentry
 VARIABLE _VR-CS      \ component start
 VARIABLE _VR-CL      \ component length
+VARIABLE _VR-POLICY  \ terminal-link policy
+VARIABLE _VR-LINKS   \ followed links in this resolution
+VARIABLE _VR-CHILD   \ component lookup result
+VARIABLE _VR-NEXT    \ inactive expansion buffer
+VARIABLE _VR-REM-U   \ unconsumed suffix length
+VARIABLE _VR-TARGET-U
+VARIABLE _VR-JOIN-U
+VARIABLE _VR-NEW-U
+VARIABLE _VR-RL-ACT
+VARIABLE _VR-RL-IOR
 VARIABLE _VR-IOR     \ checked resolver's structural failure
 
-: VFS-RESOLVE  ( c-addr u vfs -- inode | 0 )
-    _VR-V !
-    0 _VR-IOR !
-    _VR-V @ _VFS-MAYBE-EVICT
-    OVER + _VR-E !               \ end = addr + len
-    _VR-S !                      \ scan = addr
-
-    \ Choose starting inode
-    _VR-S @ _VR-E @ < IF
-        _VR-S @ C@ [CHAR] / = IF
-            _VR-V @ V.ROOT @  _VR-IN !
-            _VR-S @ 1+ _VR-S !  \ skip leading /
+: _VFS-RESOLVE-TRIM  ( -- )
+    BEGIN _VR-E @ _VR-S @ > WHILE
+        _VR-E @ 1- C@ [CHAR] / = IF
+            -1 _VR-E +!
         ELSE
-            _VR-V @ V.CWD @  _VR-IN !
+            EXIT
         THEN
+    REPEAT ;
+
+: _VFS-RESOLVE-NEXT-BUFFER  ( -- address )
+    _VR-BUF @ _VR-PATH-A = IF _VR-PATH-B ELSE _VR-PATH-A THEN ;
+
+: _VFS-RESOLVE-DOT?  ( -- flag )
+    _VR-CL @ 1 = IF _VR-CS @ C@ [CHAR] . = ELSE FALSE THEN ;
+
+: _VFS-RESOLVE-DOTDOT?  ( -- flag )
+    _VR-CL @ 2 = IF
+        _VR-CS @ C@ [CHAR] . =
+        _VR-CS @ 1+ C@ [CHAR] . = AND
     ELSE
-        _VR-V @ V.CWD @  _VR-IN !
-        _VR-IN @ EXIT            \ empty path = cwd
+        FALSE
+    THEN ;
+
+\ Replace the active path with link-target[/]unconsumed-suffix.  Relative
+\ targets continue at the link's containing directory (_VR-IN); absolute
+\ targets restart from root.  Returning false leaves a structured reason in
+\ _VR-IOR.
+: _VFS-RESOLVE-FOLLOW?  ( -- flag )
+    _VR-LINKS @ VFS-SYMLINK-MAX >= IF
+        VFS-E-LOOP _VR-IOR ! FALSE EXIT
+    THEN
+    1 _VR-LINKS +!
+    _VFS-READLINK-XT @ 0= IF
+        VFS-E-UNSUPPORTED _VR-IOR ! FALSE EXIT
     THEN
 
-    \ Consume trailing slashes
-    BEGIN
-        _VR-E @ _VR-S @ > IF
-            _VR-E @ 1- C@ [CHAR] / = IF
-                _VR-E @ 1-  _VR-E !
-                FALSE            \ continue trimming
-            ELSE TRUE THEN
-        ELSE TRUE THEN
-    UNTIL
+    0 0 _VR-CHILD @ _VR-V @ _VFS-READLINK-XT @ EXECUTE
+    _VR-RL-IOR ! _VR-TARGET-U !
+    _VR-RL-IOR @ IF
+        _VR-RL-IOR @ _VR-IOR ! FALSE EXIT
+    THEN
+    _VR-TARGET-U @ 0= IF
+        VFS-E-NOENT _VR-IOR ! FALSE EXIT
+    THEN
+    _VR-TARGET-U @ VFS-PATH-MAX > IF
+        VFS-E-NAMETOOLONG _VR-IOR ! FALSE EXIT
+    THEN
 
-    \ Walk components
-    BEGIN  _VR-S @ _VR-E @ <  WHILE
-        \ Find next "/"
-        _VR-S @  _VR-CS !
-        0  _VR-CL !
+    _VFS-RESOLVE-NEXT-BUFFER DUP _VR-NEXT !
+    _VR-TARGET-U @ _VR-CHILD @ _VR-V @
+    _VFS-READLINK-XT @ EXECUTE
+    _VR-RL-IOR ! _VR-RL-ACT !
+    _VR-RL-IOR @ IF
+        _VR-RL-IOR @ _VR-IOR ! FALSE EXIT
+    THEN
+    _VR-RL-ACT @ _VR-TARGET-U @ <> IF
+        VFS-E-CORRUPT _VR-IOR ! FALSE EXIT
+    THEN
+
+    _VR-E @ _VR-S @ - _VR-REM-U !
+    0 _VR-JOIN-U !
+    _VR-REM-U @ 0> IF
+        _VR-NEXT @ _VR-TARGET-U @ 1- + C@ [CHAR] / <>
+        _VR-S @ C@ [CHAR] / <> AND IF
+            1 _VR-JOIN-U !
+        THEN
+    THEN
+    _VR-TARGET-U @ _VR-JOIN-U @ + _VR-REM-U @ + DUP _VR-NEW-U !
+    VFS-PATH-MAX > IF
+        VFS-E-NAMETOOLONG _VR-IOR ! FALSE EXIT
+    THEN
+    _VR-JOIN-U @ IF
+        [CHAR] / _VR-NEXT @ _VR-TARGET-U @ + C!
+    THEN
+    _VR-REM-U @ IF
+        _VR-S @
+        _VR-NEXT @ _VR-TARGET-U @ + _VR-JOIN-U @ +
+        _VR-REM-U @ MOVE
+    THEN
+
+    _VR-NEXT @ C@ [CHAR] / = IF
+        _VR-V @ V.ROOT @ _VR-IN !
+    THEN
+    _VR-NEXT @ DUP _VR-BUF ! DUP _VR-S !
+    _VR-NEW-U @ + _VR-E !
+    _VFS-RESOLVE-TRIM
+    TRUE ;
+
+\ Resolve one ordinary component, following it when it is an intermediate
+\ symbolic link or the selected policy follows a terminal symbolic link.
+: _VFS-RESOLVE-COMPONENT?  ( -- flag )
+    _VR-IN @ IN.TYPE @ VFS-T-DIR <> IF
+        VFS-E-NOTDIR _VR-IOR ! FALSE EXIT
+    THEN
+    _VR-CS @ _VR-CL @ _VR-IN @ _VR-V @ _VFS-RESOLVE-CHILD
+    DUP 0= IF DROP FALSE EXIT THEN _VR-CHILD !
+    _VR-CHILD @ IN.TYPE @ VFS-T-SYMLINK = IF
+        _VR-S @ _VR-E @ <
+        _VR-POLICY @ VFS-RP-FOLLOW-FINAL = OR IF
+            _VFS-RESOLVE-FOLLOW? EXIT
+        THEN
+    THEN
+    _VR-CHILD @ _VR-IN ! TRUE ;
+
+: _VFS-RESOLVE-POLICY  ( c-addr u policy vfs -- inode | 0 )
+    _VR-V ! _VR-POLICY ! _VR-U ! _VR-A !
+    0 _VR-IOR ! 0 _VR-LINKS !
+    _VR-POLICY @ VFS-RP-FOLLOW-FINAL <
+    _VR-POLICY @ VFS-RP-NOFOLLOW-FINAL > OR IF
+        VFS-E-INVALID _VR-IOR ! 0 EXIT
+    THEN
+    _VR-U @ 0< IF VFS-E-INVALID _VR-IOR ! 0 EXIT THEN
+    _VR-U @ VFS-PATH-MAX > IF VFS-E-NAMETOOLONG _VR-IOR ! 0 EXIT THEN
+    _VR-U @ 0> IF
+        _VR-A @ 0= IF VFS-E-INVALID _VR-IOR ! 0 EXIT THEN
+        _VR-A @ _VR-U @ MSPAN-NONWRAPPING? 0= IF
+            VFS-E-INVALID _VR-IOR ! 0 EXIT
+        THEN
+    THEN
+    _VR-V @ _VFS-MAYBE-EVICT
+    _VR-U @ 0= IF _VR-V @ V.CWD @ EXIT THEN
+
+    _VR-A @ _VR-PATH-A _VR-U @ MOVE
+    _VR-PATH-A DUP _VR-BUF ! DUP _VR-S !
+    _VR-U @ + _VR-E !
+    _VR-S @ C@ [CHAR] / = IF
+        _VR-V @ V.ROOT @ _VR-IN !
+    ELSE
+        _VR-V @ V.CWD @ _VR-IN !
+    THEN
+    _VFS-RESOLVE-TRIM
+
+    BEGIN _VR-S @ _VR-E @ < WHILE
+        _VR-S @ _VR-CS !
+        0 _VR-CL !
         BEGIN
             _VR-S @ _VR-E @ < IF
                 _VR-S @ C@ [CHAR] / <> IF
-                    _VR-CL @ 1+  _VR-CL !
-                    _VR-S @ 1+  _VR-S !
+                    1 _VR-CL +!
+                    1 _VR-S +!
                     FALSE
-                ELSE TRUE THEN
-            ELSE TRUE THEN
-        UNTIL
-
-        \ Skip the "/" separator
-        _VR-S @ _VR-E @ < IF
-            _VR-S @ C@ [CHAR] / = IF
-                _VR-S @ 1+  _VR-S !
+                ELSE
+                    TRUE
+                THEN
+            ELSE
+                TRUE
             THEN
+        UNTIL
+        _VR-S @ _VR-E @ < IF
+            _VR-S @ C@ [CHAR] / = IF 1 _VR-S +! THEN
         THEN
 
-        \ Empty component (double slash) — skip
-        _VR-CL @ 0= IF  ELSE
-
-        \ Handle "." — stay at current
-        _VR-CL @ 1 = IF
-            _VR-CS @ C@ [CHAR] . = IF  ELSE
-                \ single char, not dot — look up
-                _VR-IN @ IN.TYPE @ VFS-T-DIR <> IF
-                    VFS-E-NOTDIR _VR-IOR ! 0 EXIT
-                THEN
-                _VR-CS @ _VR-CL @ _VR-IN @ _VR-V @ _VFS-RESOLVE-CHILD
-                DUP 0= IF  EXIT  THEN
-                _VR-IN !
-            THEN
-        ELSE
-
-        \ Handle ".." — go to parent
-        _VR-CL @ 2 = IF
-            _VR-CS @     C@ [CHAR] . = IF
-            _VR-CS @ 1+  C@ [CHAR] . = IF
-                _VR-IN @ IN.PARENT @
-                DUP 0= IF  DROP  _VR-V @ V.ROOT @  THEN
-                _VR-IN !
+        _VR-CL @ IF
+            _VFS-RESOLVE-DOT? IF
+                \ Dot retains the current directory.
             ELSE
-                \ two chars, second not dot — normal lookup
-                _VR-IN @ IN.TYPE @ VFS-T-DIR <> IF
-                    VFS-E-NOTDIR _VR-IOR ! 0 EXIT
+                _VFS-RESOLVE-DOTDOT? IF
+                    _VR-IN @ IN.PARENT @
+                    DUP 0= IF DROP _VR-V @ V.ROOT @ THEN
+                    _VR-IN !
+                ELSE
+                    _VFS-RESOLVE-COMPONENT? 0= IF 0 EXIT THEN
                 THEN
-                _VR-CS @ _VR-CL @ _VR-IN @ _VR-V @ _VFS-RESOLVE-CHILD
-                DUP 0= IF  EXIT  THEN  _VR-IN !
-            THEN ELSE
-                \ two chars, first not dot — normal lookup
-                _VR-IN @ IN.TYPE @ VFS-T-DIR <> IF
-                    VFS-E-NOTDIR _VR-IOR ! 0 EXIT
-                THEN
-                _VR-CS @ _VR-CL @ _VR-IN @ _VR-V @ _VFS-RESOLVE-CHILD
-                DUP 0= IF  EXIT  THEN  _VR-IN !
             THEN
-        ELSE
-            \ Normal component (3+ chars or 1-2 non-special)
-            _VR-IN @ IN.TYPE @ VFS-T-DIR <> IF
-                VFS-E-NOTDIR _VR-IOR ! 0 EXIT
-            THEN
-            _VR-CS @ _VR-CL @ _VR-IN @ _VR-V @ _VFS-RESOLVE-CHILD
-            DUP 0= IF  EXIT  THEN  _VR-IN !
-        THEN THEN THEN
+        THEN
     REPEAT
     _VR-IN @ ;
 
+: VFS-RESOLVE  ( c-addr u vfs -- inode | 0 )
+    >R VFS-RP-FOLLOW-FINAL R> _VFS-RESOLVE-POLICY ;
+
 VARIABLE _VRQ-A
 VARIABLE _VRQ-U
+VARIABLE _VRQ-POLICY
 VARIABLE _VRQ-V
 VARIABLE _VRQ-IN
 
 : _VFS-RESOLVE?-BODY  ( -- )
-    _VRQ-A @ _VRQ-U @ _VRQ-V @ VFS-RESOLVE _VRQ-IN ! ;
+    _VRQ-A @ _VRQ-U @ _VRQ-POLICY @ _VRQ-V @
+    _VFS-RESOLVE-POLICY _VRQ-IN ! ;
 
-: VFS-RESOLVE?  ( c-addr u vfs -- inode ior )
-    _VRQ-V ! _VRQ-U ! _VRQ-A !
+: VFS-RESOLVE-POLICY?  ( c-addr u policy vfs -- inode ior )
+    _VRQ-V ! _VRQ-POLICY ! _VRQ-U ! _VRQ-A !
+    _VRQ-POLICY @ VFS-RP-FOLLOW-FINAL <
+    _VRQ-POLICY @ VFS-RP-NOFOLLOW-FINAL > OR IF
+        0 VFS-E-INVALID EXIT
+    THEN
     _VRQ-U @ 0< IF 0 VFS-E-INVALID EXIT THEN
+    _VRQ-U @ VFS-PATH-MAX > IF 0 VFS-E-NAMETOOLONG EXIT THEN
     _VRQ-U @ 0> IF
         _VRQ-A @ 0= IF 0 VFS-E-INVALID EXIT THEN
         _VRQ-A @ _VRQ-U @ MSPAN-NONWRAPPING? 0= IF
@@ -1480,7 +1593,12 @@ VARIABLE _VRQ-IN
     ['] _VFS-RESOLVE?-BODY CATCH ?DUP IF 0 SWAP EXIT THEN
     _VRQ-IN @ DUP 0= IF
         DROP 0 _VR-IOR @ DUP 0= IF DROP VFS-E-NOENT THEN
-    ELSE 0 THEN ;
+    ELSE
+        0
+    THEN ;
+
+: VFS-RESOLVE?  ( c-addr u vfs -- inode ior )
+    >R VFS-RP-FOLLOW-FINAL R> VFS-RESOLVE-POLICY? ;
 
 \ =====================================================================
 \  VFS-OPEN / VFS-CLOSE
@@ -2366,6 +2484,8 @@ VARIABLE _VRL-IOR
     _VRL-IOR @ _VRL-V @ _VFS-RESULT DROP
     _VRL-ACT @ _VRL-IOR @ ;
 
+' VFS-READLINK _VFS-READLINK-XT !
+
 VARIABLE _VLX-BUF
 VARIABLE _VLX-CAP
 VARIABLE _VLX-IN
@@ -2513,7 +2633,8 @@ VARIABLE _VCR-PARENT
     VFS-CUR _VCR-OLD-V !
     _VCR-V @ V.CWD @ _VCR-OLD-CWD !
     _VCR-V @ VFS-USE
-    _VCR-A @ _VCR-U @ _VCR-V @ VFS-RESOLVE ?DUP IF
+    _VCR-A @ _VCR-U @ VFS-RP-NOFOLLOW-FINAL _VCR-V @
+    _VFS-RESOLVE-POLICY ?DUP IF
         DROP _VCR-RESTORE 0 EXIT
     THEN
     -1 _VCR-SPLIT !
@@ -2551,7 +2672,7 @@ VARIABLE _VRM-IOR
     _VRM-V !
     _VRM-V @ _VFS-READY ?DUP IF >R 2DROP R> EXIT THEN
     _VRM-V @ V.FLAGS @ VFS-F-RO AND IF 2DROP VFS-E-READONLY EXIT THEN
-    _VRM-V @ VFS-RESOLVE?
+    VFS-RP-NOFOLLOW-FINAL _VRM-V @ VFS-RESOLVE-POLICY?
     DUP IF NIP EXIT THEN DROP _VRM-IN !
     \ Don't delete root
     _VRM-IN @ _VRM-V @ V.ROOT @ = IF VFS-E-INVALID EXIT THEN
@@ -2623,7 +2744,8 @@ VARIABLE _VCD-V
     VFS-CD? IF -1 ELSE 0 THEN ;
 
 : VFS-STAT  ( c-addr u vfs -- )
-    DUP >R VFS-RESOLVE          ( inode | 0  R: vfs )
+    >R VFS-RP-NOFOLLOW-FINAL R@ _VFS-RESOLVE-POLICY
+                                ( inode | 0  R: vfs )
     R> DROP
     DUP 0= IF  DROP ." not found" CR EXIT  THEN
     ." Name:  " DUP IN.NAME @ _VFS-STR-GET TYPE CR
@@ -2883,6 +3005,7 @@ GUARD _vfs-guard
 ' VFS-UNMOUNT      CONSTANT _vfs-unmount-xt
 ' VFS-RESOLVE      CONSTANT _vfs-resolve-xt
 ' VFS-RESOLVE?     CONSTANT _vfs-resolveq-xt
+' VFS-RESOLVE-POLICY? CONSTANT _vfs-resolve-policyq-xt
 ' VFS-OPEN         CONSTANT _vfs-open-xt
 ' VFS-OPEN?        CONSTANT _vfs-openq-xt
 ' VFS-CLOSE        CONSTANT _vfs-close-xt
@@ -2936,6 +3059,7 @@ GUARD _vfs-guard
 : VFS-UNMOUNT      _vfs-unmount-xt  _vfs-guard WITH-GUARD ;
 : VFS-RESOLVE      _vfs-resolve-xt  _vfs-guard WITH-GUARD ;
 : VFS-RESOLVE?     _vfs-resolveq-xt _vfs-guard WITH-GUARD ;
+: VFS-RESOLVE-POLICY? _vfs-resolve-policyq-xt _vfs-guard WITH-GUARD ;
 : VFS-OPEN         _vfs-open-xt     _vfs-guard WITH-GUARD ;
 : VFS-OPEN?        _vfs-openq-xt    _vfs-guard WITH-GUARD ;
 : VFS-CLOSE        _vfs-close-xt    _vfs-guard WITH-GUARD ;

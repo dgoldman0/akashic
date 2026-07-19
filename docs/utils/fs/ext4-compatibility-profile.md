@@ -2,7 +2,7 @@
 
 This document ratifies the exact ext4 format that the Akashic ext4 binding
 must implement. It closes the format-selection milestone independently of
-implementation status. The first checksummed read-only reader now lives in
+implementation status. The checksummed clean read-only reader now lives in
 `utils/fs/drivers/vfs-ext4.f`; its implemented structures and remaining
 limits are tracked in [the binding documentation](drivers/vfs-ext4.md).
 Until replay, recovery, mutation, and the complete bidirectional gates below
@@ -253,7 +253,10 @@ direct, single-, double-, and triple-indirect legacy maps are in profile.
 Extent trees support depths through 5, holes, unwritten extents, safe
 split/merge, and checksummed external nodes.  Every header count/max/depth,
 logical range, physical range, and child pointer is validated and traversal
-is bounded.
+is bounded.  The clean reader implements every legacy map level and extent
+depth through 5; the supplemental external-tool image qualifies a real
+depth-1 external extent node, while deeper real-image qualification remains
+to be added.
 
 ### Directories, links, and names
 
@@ -267,10 +270,12 @@ Names are 1–255 uninterpreted bytes excluding NUL and `/`.  No Unicode
 normalization, folding, locale collation, or case-insensitive comparison is
 performed.
 
-ABI-1 exposes `SYMLINK` and direct `READLINK`, but the current generic resolver
-does not follow intermediate or final symbolic links.  Implementing bounded
-symlink traversal and loop detection is a required ext4-binding landing, not
-a capability implied by this profile document.
+The generic resolver follows intermediate symbolic links and, where the
+operation permits it, the final symbolic link.  Traversal is bounded to a
+4096-byte path and 40 followed links, detects loops through that bound, and
+handles both relative and absolute targets.  Direct `READLINK` and namespace
+operations retain a nofollow-final policy.  The supplemental real image
+qualifies this path through a live block-backed symbolic link.
 
 ### Extended attributes and ACLs
 
@@ -278,6 +283,11 @@ Support xattrs stored in the inode body or one external xattr block, including
 standard shared-xattr-block reference counts.  `ea_inode` is refused, so a
 value that cannot fit those forms returns a stable capacity error.  Admit the
 `user`, `trusted`, `security`, and POSIX ACL access/default namespaces.
+
+The clean reader exposes `user`, `trusted`, and `security` values plus raw
+POSIX ACL access/default bytes.  It rejects duplicate names, overlapping
+records, and external xattr blocks whose allocation bitmap disagrees with the
+inode reference.
 
 ABI-1 can expose and preserve ACL xattrs, but generic permission enforcement
 has not been ratified.  Until that semantic layer exists, the binding must not
@@ -298,16 +308,18 @@ required volume flushes, clears transient recovery/orphan state, writes a
 clean superblock, and flushes again.  Detach, timeout, or media error cannot
 produce a false clean-success result.
 
-## Canonical external fixtures
+## Canonical and supplemental external fixtures
 
-The committed generator creates four real, multi-group images:
+The committed generator creates four real, multi-group geometry images and
+one supplemental read-side image:
 
-| Image | Size | Block size | Groups | Inode size | Feature mask |
-| --- | ---: | ---: | ---: | ---: | --- |
-| `primary-1k-i256.img` | 64 MiB | 1 KiB | 8 | 256 | primary |
-| `primary-2k-i256.img` | 128 MiB | 2 KiB | 4 | 256 | primary |
-| `primary-4k-i256.img` | 512 MiB | 4 KiB | 4 | 256 | primary |
-| `legacy-1k-i128.img` | 64 MiB | 1 KiB | 8 | 128 | primary minus `extra_isize` |
+| Image | Role | Size | Block size | Groups | Inode size | Feature mask |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `primary-1k-i256.img` | geometry | 64 MiB | 1 KiB | 8 | 256 | primary |
+| `primary-2k-i256.img` | geometry | 128 MiB | 2 KiB | 4 | 256 | primary |
+| `primary-4k-i256.img` | geometry | 512 MiB | 4 KiB | 4 | 256 | primary |
+| `legacy-1k-i128.img` | geometry | 64 MiB | 1 KiB | 8 | 128 | primary minus `extra_isize` |
+| `read-side-1k-i256.img` | supplemental read side | 64 MiB | 1 KiB | 8 | 256 | primary |
 
 Creation fixes the tool suite, private configuration, UUID, label, directory
 hash seed, 16 KiB inode ratio, blocks/group, flex size, internal 4 MiB journal,
@@ -315,13 +327,21 @@ error policy, root owner, clock, locale, and timezone.  It explicitly clears
 all features with `-O none` and adds exactly the profile list.  Lazy inode and
 journal initialization and discard are disabled.
 
-Pinned `debugfs` creates an ordinary payload, a hard link with correct link
-count, fast and block-backed symlinks, a three-block sparse file with a middle
-hole, and inline/external-sized user xattrs.  Pinned read-only `e2fsck -f -n`
-must return exactly zero.  Pinned `dumpe2fs` and `debugfs`, plus an independent
-Python decoder of the raw superblock at volume offset 1024, must agree on the
-pinned geometry and feature fields.  The generator records complete argv,
-tool and image hashes, observed facts, and output hashes in ignored
+Pinned `debugfs` creates the baseline payload, hard link with correct link
+count, fast and block-backed symlinks, three-block sparse file with a middle
+hole, and inline/external-sized user xattrs in each geometry image.  The
+supplemental image adds a checksummed HTree with a real hash-collision pair,
+a depth-1 external extent tree, sparse legacy direct/single/double/triple
+maps, FIFO/character/block special inodes, `user`/`trusted`/`security` and raw
+POSIX ACL xattrs, and live generic traversal through a block-backed symlink.
+Pinned mutating `e2fsck -f -y -D` constructs and checks the supplemental
+directory index; this exact argv is profile data.  A final pinned read-only
+`e2fsck -f -n` must return exactly zero for every image.
+
+Pinned `dumpe2fs` and `debugfs`, plus an independent Python decoder of the raw
+superblock at volume offset 1024, must agree on the pinned geometry and feature
+fields.  The generator records complete argv, tool hashes, all five image
+hashes, observed facts, and output hashes in ignored
 `local_testing/out/ext4-profile/qualification.json`.
 
 Run:
@@ -344,10 +364,18 @@ boot-image or automount profile.
 The ext4 binding milestone starts with read-only admission and inspection of
 every admitted clean format above, stable refusal for every known refused
 flag, checksum and corruption validation, and comparison with the external
-oracles. The current reader covers all four canonical images and keeps its
-remaining structural limits explicit in the driver documentation. It must
-close those fixture/structure gaps, then add journal replay/orphan recovery,
-before exposing any unsafe write path.
+oracles.  The current reader covers the four geometry images and supplemental
+read-side image, including checked HTree lookup, external extents, all legacy
+map levels, allocation-bitmap cross-checks, special metadata, namespaced raw
+xattrs, and bounded generic symlink traversal.
+
+The bounded clean read-side landing does not implement journal replay, legacy
+or modern orphan recovery, or mutation; an image requiring recovery is still
+refused.  Clean orphan-file admission remains bounded to 4096 filesystem
+blocks, ACLs are exposed but not enforced, the real extent fixture reaches
+depth 1 rather than the implemented profile limit of 5, and the special-inode
+fixture does not yet contain a socket.  Those qualification and semantic
+limits remain explicit before any write path can be advertised.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

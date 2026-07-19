@@ -38,8 +38,8 @@ The ext4 format contract is pinned in
 `docs/utils/fs/ext4-compatibility-profile.md` and mirrored by the
 machine-readable `fixtures/ext4-profile/manifest.json`.  It requires one
 source-built e2fsprogs v1.47.4 prefix; ambient `PATH` tools are deliberately
-rejected.  Generate all four external-tool images and run the profile gates
-with:
+rejected.  Generate the four geometry images plus the supplemental
+`read-side-1k-i256` image and run the profile gates with:
 
 ```bash
 python3 local_testing/generate_ext4_profile_fixtures.py \
@@ -50,10 +50,17 @@ AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
   python3 -m pytest -q local_testing/test_ext4_profile.py
 ```
 
-`test_vfs_ext4.py` then mounts those same images through the read-only ABI-1
-binding and checks their namespace, data, links, sparse ranges, xattrs,
-metadata, and corruption refusals. This remains an explicit-volume emulator
-suite rather than a default boot-image or automount profile.
+`test_vfs_ext4.py` then mounts those same images through the clean read-only
+ABI-1 binding.  It covers checksummed linear and HTree directories, depth-1
+real external extents and bounded traversal through the profile depth limit,
+legacy direct/single/double/triple maps, allocation-bitmap cross-checks,
+special-inode metadata and unsupported opens, namespaced/raw-ACL xattrs, and
+bounded generic symlink traversal including a live block-backed target.  Its
+corruption cases include HTree and extent-node checksums, allocation
+disagreement, and duplicate/overlapping xattr records.  Journal replay,
+orphan recovery, ACL enforcement, and every mutation operation remain outside
+this read-side gate.  This remains an explicit-volume emulator suite rather
+than a default boot-image or automount profile.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

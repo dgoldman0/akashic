@@ -70,15 +70,32 @@ number plus generation is used as the VFS identity. `VFS-CACHE-DENTRY`
 therefore makes hard-link aliases share one vnode and preserves the
 authoritative on-disk link count.
 
-The implemented reader handles the structures exercised by all four
-canonical external fixtures:
+The implemented reader handles the clean read-side structures exercised by
+the four geometry fixtures and the supplemental `read-side-1k-i256` fixture:
 
-- checksummed linear directory blocks;
-- depth-zero extent roots, including sparse holes and unwritten-zero
-  semantics;
-- regular files and fast or block-backed symlinks;
+- checksummed linear directories and checksummed HTree directories with
+  `indirect_levels` 0 or 1, including signed half-MD4 collision continuation;
+  `largedir` remains refused, so a level of 2 is invalid;
+- extent trees through the profile depth limit of 5, with checked external
+  nodes, sparse holes, and unwritten-zero semantics; the supplemental real
+  image exercises a depth-1 tree while deeper depths are covered by bounded
+  structural traversal;
+- legacy direct, single-indirect, double-indirect, and triple-indirect block
+  maps on an extents-enabled filesystem;
+- allocation-bitmap cross-checks before data, extent-tree, indirect-map, and
+  external-xattr blocks are consumed, in addition to the mount-time bitmap
+  CRC32C checks;
+- regular files, fast and block-backed symlinks, and bounded generic path
+  traversal through intermediate and final links, with a nofollow-final
+  policy retained for direct `READLINK` and namespace operations;
 - 128-byte legacy and 256-byte primary inode checksums and metadata;
-- inline and external-block `user.*` xattrs, including external-block CRC32C;
+- FIFO, character-device, and block-device metadata. `VN.RDEV` uses
+  `VFS-RDEV-MAKE`: major occupies the high 32 bits and minor the low 32 bits;
+  opening a special inode without a device binding returns stable
+  unsupported behavior;
+- inline and external-block `user.*`, `trusted.*`, `security.*`, and raw
+  `system.posix_acl_access`/`system.posix_acl_default` xattrs, including
+  external-block CRC32C and rejection of duplicate or overlapping records;
 - concatenated NUL-terminated `LISTXATTR` names and raw `GETXATTR` values;
   and
 - read-only `STATFS` geometry/counters and UUID-derived FSID cells.
@@ -94,22 +111,19 @@ There are no `VOL-WRITE` or `VOL-FLUSH` paths in this module.
 
 ## Deliberate remaining limits
 
-This is an implementation landing, not completion of the writable profile.
-The following admitted structures still return stable unsupported behavior
-and require supplemental real-image fixtures before the compatibility gate is
-complete:
+This is completion of the bounded clean read side, not completion of the
+writable profile. The remaining boundaries are:
 
-- HTree directory index traversal;
-- external extent-tree nodes and legacy direct/indirect block maps;
-- special-device inode metadata (encountering one is currently refused rather
-  than publishing an invented device number);
-- non-`user.*` xattr namespaces and POSIX ACL decoding;
-- orphan files larger than 4096 filesystem blocks;
-- the supplemental corruption matrix for duplicate/overlapping xattr records
-  and data/xattr blocks that disagree with their allocation bitmaps;
-- journal replay, orphan recovery, and every mutation operation; and
-- generic path-level symlink following (ABI 1 currently exposes direct
-  `READLINK`, but its resolver does not follow links).
+- clean orphan-file admission remains bounded to 4096 filesystem blocks;
+- POSIX ACL xattrs are returned as raw bytes, but generic permission
+  enforcement is not claimed;
+- the real external-tool extent fixture has depth 1 even though the reader
+  validates and traverses the profile limit through depth 5;
+- the real special-inode fixture covers FIFO, character, and block devices,
+  but not a socket inode; and
+- journal replay, legacy/modern orphan recovery, and every mutation operation
+  remain unimplemented. Images requiring recovery are still refused before
+  mount publication.
 
 No write capability will be advertised until replay/recovery, ordered-data
 journaling, external-tool mutation checks, and power-cut qualification land.

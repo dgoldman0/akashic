@@ -87,6 +87,11 @@ an open FD. It is reaped after the final close.
 | `VN.OPEN-REFS`, `VN.DREFS` | Lifetime references |
 | `VN.GEN` | Binding generation |
 
+`VN.RDEV` uses a binding-neutral representation: the unsigned major number is
+stored in bits 32–63 and the unsigned minor number in bits 0–31. Filesystem
+drivers translate their native device encoding with `VFS-RDEV-MAKE`; consumers
+can use `VFS-RDEV-MAJOR` and `VFS-RDEV-MINOR` without knowing that encoding.
+
 Legacy `IN.*` accessors remain usable. Namespace accessors (`IN.CHILD`,
 `IN.PARENT`, `IN.SIBLING`, `IN.NAME`) address the dentry; metadata accessors
 such as `IN.SIZE-LO`, `IN.MODE`, `IN.BID`, `IN.BDATA`, and `IN.FLAGS`
@@ -220,16 +225,17 @@ Prebuilt core iors use the `VFS-E-*` spelling, for example
 ### Canonical checked API
 
 ```forth
-VFS-RESOLVE?     ( path-a path-u vfs -- inode ior )
-VFS-LOOKUP       ( name-a name-u parent vfs -- inode ior )
-VFS-OPEN?        ( path-a path-u flags vfs -- fd ior )
-VFS-CLOSE?       ( fd -- ior )
-VFS-READ?        ( buf len fd -- actual ior )
-VFS-WRITE?       ( buf len fd -- actual ior )
-VFS-SEEK?        ( position fd -- ior )
-VFS-CD?          ( path-a path-u vfs -- ior )
-VFS-TRUNCATE     ( size fd -- ior )
-VFS-FSYNC        ( fd -- ior )
+VFS-RESOLVE?          ( path-a path-u vfs -- inode ior )
+VFS-RESOLVE-POLICY?   ( path-a path-u policy vfs -- inode ior )
+VFS-LOOKUP            ( name-a name-u parent vfs -- inode ior )
+VFS-OPEN?             ( path-a path-u flags vfs -- fd ior )
+VFS-CLOSE?            ( fd -- ior )
+VFS-READ?             ( buf len fd -- actual ior )
+VFS-WRITE?            ( buf len fd -- actual ior )
+VFS-SEEK?             ( position fd -- ior )
+VFS-CD?               ( path-a path-u vfs -- ior )
+VFS-TRUNCATE          ( size fd -- ior )
+VFS-FSYNC             ( fd -- ior )
 ```
 
 `VFS-RESOLVE?` checks lifecycle and attachment before returning even a cached
@@ -238,7 +244,23 @@ entry or root. It preserves errors from lazy `READDIR`, returns
 `VFS-E-NOENT` only when traversal completed without finding the entry.
 Absolute paths start at root, relative paths at cwd, and `.`/`..` have their
 usual meaning. A nonempty path requires a non-null, non-wrapping memory span;
-an empty path intentionally resolves to cwd.
+an empty path intentionally resolves to cwd. Paths and expanded link targets
+are bounded by `VFS-PATH-MAX` (4096 bytes).
+
+`VFS-RESOLVE?` follows both intermediate and terminal symbolic links. Relative
+targets start at the directory containing the link, absolute targets restart
+at root, and the unconsumed path suffix is then resolved against that target.
+Traversal follows at most `VFS-SYMLINK-MAX` (40) links and returns
+`VFS-E-LOOP` at the bound. `READLINK` failures are preserved; an empty target
+resolves as `VFS-E-NOENT`, and an expansion beyond `VFS-PATH-MAX` returns
+`VFS-E-NAMETOOLONG`.
+
+`VFS-RESOLVE-POLICY?` makes terminal-link treatment explicit. Pass
+`VFS-RP-FOLLOW-FINAL` for the default behavior or
+`VFS-RP-NOFOLLOW-FINAL` to return the terminal symlink dentry itself.
+Intermediate links are followed under both policies. `OPEN` and `CD` follow
+their terminal link; unlink, create-existence checks, and `VFS-STAT` select
+no-follow so they continue to address the named namespace object.
 
 On a cached-name miss, resolution uses targeted `VFS-LOOKUP` when the binding
 advertises it; otherwise it loads the complete directory through `READDIR`.
@@ -271,9 +293,10 @@ VFS-SEEK         ( position fd -- )
 VFS-CD           ( path-a path-u vfs -- 0|-1 )
 ```
 
-These retain older stack shapes. The I/O/seek/close forms throw a structured
-ior. `VFS-OPEN` requests read access only when the current VFS is read-only,
-and read/write access otherwise. New code should use the checked forms when it
+These retain older stack shapes. `VFS-RESOLVE` uses the same terminal-follow
+policy as `VFS-RESOLVE?`. The I/O/seek/close forms throw a structured ior.
+`VFS-OPEN` requests read access only when the current VFS is read-only, and
+read/write access otherwise. New code should use the checked forms when it
 must inspect the error class.
 
 Cursor helpers are `VFS-REWIND`, `VFS-TELL`, and `VFS-SIZE`.
@@ -310,11 +333,11 @@ nonempty directory replacement, and file/directory type conflicts are
 rejected.
 
 `VFS-SYMLINK` is capability-gated. ABI 1 exposes the operation for ext4-class
-bindings, but the RAM binding intentionally does not advertise it. ABI 1 in
-this milestone provides symlink creation and direct `VFS-READLINK`; path
-resolution does not yet follow an intermediate or final symlink, so ordinary
-`OPEN`/`CD` through symlinks remains a named follow-on rather than an implied
-capability of the ext4-facing surface.
+bindings, but the RAM binding intentionally does not advertise it. Bindings
+that publish symlink dentries must advertise `VFS-CAP-READLINK` for traversal;
+otherwise resolving through one returns `VFS-E-UNSUPPORTED`. To inspect a
+link without following it, resolve with `VFS-RP-NOFOLLOW-FINAL` and pass the
+returned dentry to `VFS-READLINK`.
 
 `VFS-DIR` lists cwd and `VFS-STAT` prints cached metadata.
 

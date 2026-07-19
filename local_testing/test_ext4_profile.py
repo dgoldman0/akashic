@@ -1,4 +1,4 @@
-"""Contract tests for the pinned pre-driver ext4 compatibility profile."""
+"""Contract tests for the pinned ext4 compatibility and fixture profile."""
 
 from __future__ import annotations
 
@@ -97,6 +97,7 @@ EXPECTED_IMAGE_SHA256 = {
     "primary-2k-i256": "de3c1970f6a3fc5ee0a1f684130bcfd477b211106a85d745fe174bef12d3d016",
     "primary-4k-i256": "11ac071f3590ff06aa3a22928e0dbdb22affecb1d25203181c1d61d342732920",
     "legacy-1k-i128": "2aca099d7d024a47e0411a528adc55c75b6ad0ba5a28882dbfa24f906cd811b5",
+    "read-side-1k-i256": "451cfdb193da88b034ff2615e80eb85fb73c23c0a57cc1122fa5f197de1b71be",
 }
 
 
@@ -167,6 +168,13 @@ def test_private_mke2fs_config_and_environment_are_pinned(manifest: dict) -> Non
         "{tool_dir}/e2fsck",
         "-f",
         "-n",
+        "{image}",
+    ]
+    assert manifest["generator"]["directory_index_argv"] == [
+        "{tool_dir}/e2fsck",
+        "-f",
+        "-y",
+        "-D",
         "{image}",
     ]
 
@@ -293,8 +301,39 @@ def test_mount_policy_does_not_overclaim_current_vfs(manifest: dict) -> None:
     assert mount["writable_requires_internal_journal"] is True
     assert "replay writes" in mount["dirty_read_only_volume"]
     assert mount["case_sensitivity"] == "byte-sensitive"
-    assert "resolver traversal remains implementation work" in mount["symlinks"]
+    assert "bounded generic traversal" in mount["symlinks"]
+    assert "nofollow-final" in mount["symlinks"]
+    assert "major in the high 32 bits" in mount["special_inodes"]
     assert "enforcement is not claimed" in mount["acl"]
+
+
+def test_read_side_supplement_is_externally_structured(manifest: dict) -> None:
+    rows = [
+        row for row in manifest["images"] if row.get("fixture_role") == "read_side"
+    ]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "read-side-1k-i256"
+    assert row["block_size"] == 1024
+    assert row["inode_size"] == 256
+
+    population = manifest["generator"]["read_side_population"]
+    assert population["htree_collision_names"] == [
+        "collision-068446",
+        "collision-083826",
+    ]
+    assert population["htree_collision_hash"] == 0x40B1F580
+    assert population["htree_lower_entries"] == 33
+    assert len(population["extent_tree_patterns"]) == 12
+    assert population["legacy_map_patterns"] == [65, 83, 68, 84, 85]
+    assert len(bytes.fromhex(population["acl_access_value_hex"])) == 28
+    assert len(bytes.fromhex(population["acl_default_value_hex"])) == 28
+    assert len(population["live_slow_symlink_target"]) > 60
+    assert population["live_slow_symlink_target"].endswith("payload.txt")
+    assert any(
+        command.startswith("symlink /fixture/live-slow-link ")
+        for command in population["debugfs_commands"]
+    )
 
 
 def _pinned_tool_dir() -> Path:
@@ -336,6 +375,28 @@ def test_canonical_generation_is_byte_reproducible(tmp_path: Path) -> None:
         {"primary-1k-i256"},
     )
     assert first["images"][0]["sha256"] == second["images"][0]["sha256"]
+
+
+def test_read_side_supplement_is_byte_reproducible(tmp_path: Path) -> None:
+    tool_dir = _pinned_tool_dir()
+    first = generate(
+        DEFAULT_MANIFEST,
+        tool_dir,
+        tmp_path / "read-side-first",
+        {"read-side-1k-i256"},
+    )
+    second = generate(
+        DEFAULT_MANIFEST,
+        tool_dir,
+        tmp_path / "read-side-second",
+        {"read-side-1k-i256"},
+    )
+    first_image = first["images"][0]
+    second_image = second["images"][0]
+    assert first_image["sha256"] == EXPECTED_IMAGE_SHA256["read-side-1k-i256"]
+    assert second_image["sha256"] == first_image["sha256"]
+    assert first_image["evidence"]["directory_index_exit"] in {0, 1}
+    assert first_image["evidence"]["e2fsck_exit"] == 0
 
 
 def test_generator_rejects_noncanonical_tool_version(tmp_path: Path) -> None:

@@ -11,7 +11,9 @@ suite.  The repository-owned `mke2fs.conf`, explicit `-O none,...` feature
 list, geometry arguments, fixed UUIDs/hash seeds, fixed clock, and disabled
 lazy initialization keep host defaults out of the profile.  The generator
 uses absolute tool paths and rejects the mixed Android/Ubuntu tools currently
-visible through this workspace's `PATH`.
+visible through this workspace's `PATH`.  It generates four multi-group
+geometry images plus the supplemental `read-side-1k-i256.img`; the manifest
+pins the SHA-256 of all five images.
 
 Build all four tools from the official v1.47.4 source archive into one staged
 prefix. `DESTDIR` keeps the upstream install targets out of the host system:
@@ -44,7 +46,22 @@ AKASHIC_E2FSPROGS_TOOL_DIR=/path/to/e2fsprogs-1.47.4-prefix/sbin \
 ```
 
 The generated images and `qualification.json` stay under the ignored
-`local_testing/out/` tree.  Every image is created only by pinned `mke2fs`,
-populated only through pinned `debugfs`, decoded independently by the Python
-superblock oracle, and required to pass pinned `e2fsck -f -n` with exit status
-zero.  No in-repository code constructs ext4 metadata.
+`local_testing/out/` tree.  Every image is created by pinned `mke2fs` and
+populated through pinned `debugfs`.  The four geometry images cover the three
+profile block sizes and both admitted inode sizes.  The supplemental 1 KiB,
+256-byte-inode image adds a checksummed HTree directory, a real depth-1
+external extent tree, direct/single/double/triple legacy maps, FIFO/character/
+block special inodes, `user`/`trusted`/`security` and raw POSIX ACL xattrs,
+and live generic traversal through a block-backed symlink.
+
+Pinned `e2fsck -f -y -D` constructs and checks the supplemental HTree; its
+exact argv is recorded in the manifest.  Every resulting image is decoded
+independently by the Python superblock oracle and must then pass pinned
+read-only `e2fsck -f -n` with exit status zero.  No in-repository code
+constructs ext4 metadata.
+
+To regenerate or inspect only the supplemental image, add:
+
+```sh
+--image read-side-1k-i256
+```

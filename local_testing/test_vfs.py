@@ -10,7 +10,8 @@ Tests:
   - VFS-OPEN / VFS-CLOSE / VFS-READ / VFS-WRITE file I/O round-trip
   - VFS-SEEK / VFS-REWIND / VFS-TELL cursor management
   - VFS-SIZE returns correct file size
-  - VFS-RESOLVE path resolution (absolute, relative, dot, dotdot)
+  - VFS-RESOLVE path resolution (absolute, relative, dot, dotdot, symlinks)
+  - bounded symlink traversal and explicit terminal-link policy
   - VFS-DIR lists directory contents
   - VFS-CD changes cwd
   - VFS-STAT prints file/dir metadata
@@ -236,6 +237,52 @@ def check_fn(name, forth_lines, predicate, desc=""):
         print(f"  FAIL  {name}  ({desc})")
         for l in clean.split('\n')[-6:]:
             print(f"        got:      '{l}'")
+
+def check_emitted(name, forth_lines, markers):
+    """Require markers emitted on their own lines, not merely echoed source."""
+    def emitted(clean):
+        diagnostics = ("Stack underflow", "Branch offset overflow",
+                       "dictionary full", "eval depth limit", "? (not found)")
+        return (all(f"\r\n{marker}\r\n" in clean for marker in markers)
+                and not any(diagnostic in clean for diagnostic in diagnostics))
+    check_fn(name, forth_lines, emitted,
+             "expected emitted markers: " + ", ".join(markers))
+
+def _symlink_binding_lines():
+    """Build a RAM-derived binding whose cached symlinks have fixed targets."""
+    return [
+        'VARIABLE _SRL-BUF VARIABLE _SRL-CAP VARIABLE _SRL-IN VARIABLE _SRL-V',
+        'VARIABLE _SRL-TA VARIABLE _SRL-TU VARIABLE _SRL-CALLS',
+        ': T-SRL-RETURN  _SRL-TU ! _SRL-TA !',
+        '  _SRL-CAP @ 0= IF _SRL-TU @ 0 EXIT THEN',
+        '  _SRL-TU @ _SRL-CAP @ > IF 0 VFS-E-OVERFLOW EXIT THEN',
+        '  _SRL-TA @ _SRL-BUF @ _SRL-TU @ MOVE _SRL-TU @ 0 ;',
+        ': T-SRL  _SRL-V ! _SRL-IN ! _SRL-CAP ! _SRL-BUF !',
+        '  1 _SRL-CALLS +! _SRL-IN @ IN.BID @',
+        '  DUP 100 = IF DROP S" real" T-SRL-RETURN EXIT THEN',
+        '  DUP 101 = IF DROP S" real/file" T-SRL-RETURN EXIT THEN',
+        '  DUP 102 = IF DROP S" ../dest" T-SRL-RETURN EXIT THEN',
+        '  DUP 103 = IF DROP S" /dest" T-SRL-RETURN EXIT THEN',
+        '  DUP 104 = IF DROP S" loop" T-SRL-RETURN EXIT THEN',
+        '  DUP 105 = IF DROP S" cycle-b" T-SRL-RETURN EXIT THEN',
+        '  DUP 106 = IF DROP S" cycle-a" T-SRL-RETURN EXIT THEN',
+        '  DUP 108 = IF DROP S" missing" T-SRL-RETURN EXIT THEN',
+        '  DUP 110 = IF DROP S" target" T-SRL-RETURN EXIT THEN',
+        '  DUP 111 = IF DROP 0 VFS-E-IO EXIT THEN',
+        '  DUP 112 = IF DROP VFS-PATH-MAX 1+ 0 EXIT THEN',
+        '  DUP 113 = IF DROP 0 0 EXIT THEN',
+        '  DROP 0 VFS-E-CORRUPT ;',
+        'VARIABLE _SCL-A VARIABLE _SCL-U VARIABLE _SCL-BID',
+        'VARIABLE _SCL-PARENT VARIABLE _SCL-V',
+        ': T-CACHE-SYMLINK  _SCL-V ! _SCL-PARENT ! _SCL-BID !',
+        '  _SCL-U ! _SCL-A !',
+        '  _SCL-A @ _SCL-U @ VFS-T-SYMLINK _SCL-BID @ 1',
+        '  _SCL-PARENT @ _SCL-V @ VFS-CACHE-DENTRY ?DUP IF THROW THEN ;',
+        'T-BINDING-CLONE CONSTANT _SL-BIND',
+        "' T-SRL _SL-BIND VB.OPS @ VFS-OP-READLINK CELLS + !",
+        '_SL-BIND VB.CAPS DUP @ VFS-CAP-READLINK OR SWAP !',
+        '_SL-BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+    ]
 
 # ═══════════════════════════════════════════════════════════════════
 #  Test Cases
@@ -827,6 +874,129 @@ def test_resolve_nonexistent():
         '. CR',
     ], "0")
 
+def test_symlink_following_and_terminal_policy():
+    """Resolution follows links by default while exposing terminal nofollow."""
+    lines = _symlink_binding_lines() + [
+        'S" real" _V1 VFS-MKDIR DROP',
+        'S" real" _V1 VFS-RESOLVE? ?DUP IF THROW THEN CONSTANT _REAL',
+        '_REAL _V1 V.CWD ! S" file" _V1 VFS-MKFILE CONSTANT _FILE',
+        '_V1 V.ROOT @ _V1 V.CWD !',
+        'S" alias" 100 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK CONSTANT _ALIAS',
+        'S" leaf" 101 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK CONSTANT _LEAF',
+        'VARIABLE _SY-DEPTH : T-SYMLINK-FOLLOW  DEPTH _SY-DEPTH !',
+        '  S" /alias/file" _V1 VFS-RESOLVE? ?DUP IF THROW THEN',
+        '  _FILE = IF ." INTERMEDIATE" CR THEN',
+        '  S" leaf" _V1 VFS-RESOLVE? ?DUP IF THROW THEN',
+        '  _FILE = IF ." FINAL" CR THEN',
+        '  S" leaf" VFS-RP-NOFOLLOW-FINAL _V1 VFS-RESOLVE-POLICY?',
+        '  ?DUP IF THROW THEN _LEAF = IF ." NOFOLLOW" CR THEN',
+        '  S" /alias/file" VFS-RP-NOFOLLOW-FINAL _V1 VFS-RESOLVE-POLICY?',
+        '  ?DUP IF THROW THEN _FILE = IF ." INTERMEDIATE-NOFOLLOW" CR THEN',
+        '  _RB 32 _LEAF _V1 VFS-READLINK ?DUP IF THROW THEN',
+        '  9 = IF ." DIRECT-READLINK" CR THEN',
+        '  S" leaf" VFS-FF-READ _V1 VFS-OPEN? ?DUP IF THROW THEN',
+        '  DUP 0<> IF ." OPEN-FOLLOWS" CR THEN VFS-CLOSE? ?DUP IF THROW THEN',
+        '  S" alias" _V1 VFS-CD? ?DUP IF THROW THEN',
+        '  _V1 V.CWD @ _REAL = IF ." CD-FOLLOWS" CR THEN',
+        '  DEPTH _SY-DEPTH @ = IF ." STACK-CLEAN" CR THEN ;',
+        'T-SYMLINK-FOLLOW',
+    ]
+    check_emitted("symlink following and terminal policy", lines, [
+        "INTERMEDIATE", "FINAL", "NOFOLLOW", "INTERMEDIATE-NOFOLLOW",
+        "DIRECT-READLINK", "OPEN-FOLLOWS", "CD-FOLLOWS", "STACK-CLEAN",
+    ])
+
+def test_symlink_relative_and_absolute_target_bases():
+    """Relative links start at their parent; absolute links restart at root."""
+    lines = _symlink_binding_lines() + [
+        'S" dest" _V1 VFS-MKDIR DROP S" a" _V1 VFS-MKDIR DROP',
+        'S" dest" _V1 VFS-RESOLVE? ?DUP IF THROW THEN CONSTANT _DEST',
+        'S" a" _V1 VFS-RESOLVE? ?DUP IF THROW THEN CONSTANT _A',
+        '_DEST _V1 V.CWD ! S" file" _V1 VFS-MKFILE CONSTANT _FILE',
+        '_V1 V.ROOT @ _V1 V.CWD !',
+        'S" rel" 102 _A _V1 T-CACHE-SYMLINK CONSTANT _REL',
+        'S" abs" 103 _A _V1 T-CACHE-SYMLINK CONSTANT _ABS',
+        'VARIABLE _SY-DEPTH : T-SYMLINK-BASES  DEPTH _SY-DEPTH !',
+        '  S" /a/rel/file" _V1 VFS-RESOLVE? ?DUP IF THROW THEN',
+        '  _FILE = IF ." RELATIVE-PARENT" CR THEN',
+        '  S" /a/abs/file" _V1 VFS-RESOLVE? ?DUP IF THROW THEN',
+        '  _FILE = IF ." ABSOLUTE-ROOT" CR THEN',
+        '  S" /a/rel/.." _V1 VFS-RESOLVE? ?DUP IF THROW THEN',
+        '  _V1 V.ROOT @ = IF ." DOTDOT-AFTER-LINK" CR THEN',
+        '  DEPTH _SY-DEPTH @ = IF ." STACK-CLEAN" CR THEN ;',
+        'T-SYMLINK-BASES',
+    ]
+    check_emitted("relative and absolute symlink bases", lines, [
+        "RELATIVE-PARENT", "ABSOLUTE-ROOT", "DOTDOT-AFTER-LINK", "STACK-CLEAN",
+    ])
+
+def test_symlink_loops_and_readlink_failures_are_bounded():
+    """Cycles stop at forty traversals and READLINK errors remain distinct."""
+    lines = _symlink_binding_lines() + [
+        'S" loop" 104 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK DROP',
+        'S" cycle-a" 105 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK DROP',
+        'S" cycle-b" 106 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK DROP',
+        'S" io-link" 111 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK DROP',
+        'S" huge-link" 112 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK DROP',
+        'S" empty-link" 113 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK DROP',
+        'CREATE _LONG-PATH VFS-PATH-MAX 1+ ALLOT',
+        'VARIABLE _SY-DEPTH : T-SYMLINK-ERRORS  DEPTH _SY-DEPTH !',
+        '  S" loop" _V1 VFS-RESOLVE? DUP VFS-IOR-REASON 18 =',
+        '  IF ." SELF-LOOP" CR THEN 2DROP',
+        '  S" cycle-a" _V1 VFS-RESOLVE? DUP VFS-IOR-REASON 18 =',
+        '  IF ." TWO-LINK-LOOP" CR THEN 2DROP',
+        '  S" io-link" _V1 VFS-RESOLVE? DUP VFS-IOR-REASON 9 =',
+        '  IF ." READLINK-IO" CR THEN 2DROP',
+        '  S" huge-link" _V1 VFS-RESOLVE? DUP VFS-IOR-REASON 17 =',
+        '  IF ." TARGET-TOO-LONG" CR THEN 2DROP',
+        '  S" empty-link" _V1 VFS-RESOLVE? DUP VFS-IOR-REASON 2 =',
+        '  IF ." EMPTY-NOENT" CR THEN 2DROP',
+        '  _LONG-PATH VFS-PATH-MAX 1+ VFS-RP-FOLLOW-FINAL _V1',
+        '  VFS-RESOLVE-POLICY? DUP VFS-IOR-REASON 17 =',
+        '  IF ." PATH-TOO-LONG" CR THEN 2DROP',
+        '  S" /" 2 _V1 VFS-RESOLVE-POLICY? DUP VFS-IOR-REASON 1 =',
+        '  IF ." BAD-POLICY" CR THEN 2DROP',
+        '  _SL-BIND VB.CAPS DUP @ VFS-CAP-READLINK INVERT AND SWAP !',
+        '  S" loop" _V1 VFS-RESOLVE? DUP VFS-IOR-REASON 11 =',
+        '  IF ." NO-READLINK-CAP" CR THEN 2DROP',
+        '  _SRL-CALLS @ 200 < IF ." BOUNDED" CR THEN',
+        '  DEPTH _SY-DEPTH @ = IF ." STACK-CLEAN" CR THEN ;',
+        'T-SYMLINK-ERRORS',
+    ]
+    check_emitted("bounded symlink loops and errors", lines, [
+        "SELF-LOOP", "TWO-LINK-LOOP", "READLINK-IO", "TARGET-TOO-LONG",
+        "EMPTY-NOENT", "PATH-TOO-LONG", "BAD-POLICY", "NO-READLINK-CAP",
+        "BOUNDED", "STACK-CLEAN",
+    ])
+
+def test_namespace_operations_do_not_follow_terminal_symlinks():
+    """Unlink and create-existence checks operate on the terminal dentry."""
+    lines = _symlink_binding_lines() + [
+        'S" target" _V1 VFS-MKFILE CONSTANT _TARGET',
+        'S" alias" 110 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK CONSTANT _ALIAS',
+        'S" dangling" 108 _V1 V.ROOT @ _V1 T-CACHE-SYMLINK CONSTANT _DANGLING',
+        'VARIABLE _SY-DEPTH : T-NAMESPACE-NOFOLLOW  DEPTH _SY-DEPTH !',
+        '  S" alias" _V1 VFS-RM 0= IF ." UNLINK-LINK" CR THEN',
+        '  S" target" _V1 VFS-RESOLVE? ?DUP IF THROW THEN',
+        '  _TARGET = IF ." TARGET-REMAINS" CR THEN',
+        '  S" alias" VFS-RP-NOFOLLOW-FINAL _V1 VFS-RESOLVE-POLICY?',
+        '  DUP VFS-IOR-REASON 2 = IF ." LINK-GONE" CR THEN 2DROP',
+        '  S" dangling" _V1 VFS-CREATE 0= IF ." CREATE-REFUSES" CR THEN',
+        '  S" dangling" VFS-RP-NOFOLLOW-FINAL _V1 VFS-RESOLVE-POLICY?',
+        '  ?DUP IF THROW THEN _DANGLING = IF ." DANGLING-REMAINS" CR THEN',
+        '  S" dangling" _V1 VFS-STAT',
+        '  DEPTH _SY-DEPTH @ = IF ." STACK-CLEAN" CR THEN ;',
+        'T-NAMESPACE-NOFOLLOW',
+    ]
+    def emitted(clean):
+        markers = ("UNLINK-LINK", "TARGET-REMAINS", "LINK-GONE",
+                   "CREATE-REFUSES", "DANGLING-REMAINS", "STACK-CLEAN")
+        return (all(f"\r\n{marker}\r\n" in clean for marker in markers)
+                and "\r\nType:  symlink\r\n" in clean
+                and "Stack underflow" not in clean)
+    check_fn("namespace operations nofollow terminal links", lines, emitted,
+             "terminal symlink must remain the namespace object")
+
 def test_readdir_failure_does_not_publish_completion():
     """A failed readdir remains retryable; only success marks children loaded."""
     check("readdir failure does not publish completion", [
@@ -947,6 +1117,16 @@ def test_stat_nonexistent():
         'T-VFS-NEW  CONSTANT _V1',
         'S" nope" _V1 VFS-STAT',
     ], "not found")
+
+def test_rdev_helpers_pin_binding_neutral_encoding():
+    """Special-device identities use stable high-major/low-minor packing."""
+    check("RDEV helpers", [
+        '259 513 VFS-RDEV-MAKE CONSTANT _RDEV',
+        ': T-RDEV  _RDEV VFS-RDEV-MAJOR 259 = IF ." MAJOR " THEN',
+        '  _RDEV VFS-RDEV-MINOR 513 = IF ." MINOR " THEN',
+        '  _RDEV 259 32 LSHIFT 513 OR = IF ." PACKED" THEN ;',
+        'T-RDEV CR',
+    ], "MAJOR MINOR PACKED")
 
 # ── VFS-RM ──
 
@@ -1410,6 +1590,10 @@ def main():
         test_resolve_dot,
         test_resolve_dotdot,
         test_resolve_nonexistent,
+        test_symlink_following_and_terminal_policy,
+        test_symlink_relative_and_absolute_target_bases,
+        test_symlink_loops_and_readlink_failures_are_bounded,
+        test_namespace_operations_do_not_follow_terminal_symlinks,
         test_readdir_failure_does_not_publish_completion,
         test_checked_resolve_preserves_errors_and_lifecycle,
         test_lookup_backed_eviction_reloads_entry,
@@ -1424,6 +1608,7 @@ def main():
         test_stat_file,
         test_stat_dir,
         test_stat_nonexistent,
+        test_rdev_helpers_pin_binding_neutral_encoding,
         # RM
         test_rm_file,
         test_rm_then_resolve,
