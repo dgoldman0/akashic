@@ -2,8 +2,8 @@
 \  Gate 4 milestone 3: disposable index and bounded corpus queries
 \ =====================================================================
 \  Corpus construction and every observed domain fact use the public
-\  Library owner surface.  The only private operations are the two narrow
-\  deterministic loss/damage seams for the activation-local index.
+\  Library owner surface.  The only private operations are three narrow
+\  deterministic loss/damage seams for activation-local acceleration state.
 
 VARIABLE _lqi-fails
 VARIABLE _lqi-checks
@@ -96,6 +96,10 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
         LIBRARY-VFS-STORE-QUERY-CORPUS
     _lqi-status ! _lqi-generation ! _lqi-next ! _lqi-count ! ;
 
+: _lqi-query-active  ( expected start -- )
+    _lqi-page 4 _lqi-store LIBRARY-VFS-STORE-QUERY-ACTIVE
+    _lqi-status ! _lqi-generation ! _lqi-next ! _lqi-count ! ;
+
 : _lqi-query-collections  ( expected start summaries capacity -- )
     _lqi-store LIBRARY-VFS-STORE-QUERY-COLLECTIONS
     _lqi-status ! _lqi-generation ! _lqi-next ! _lqi-count ! ;
@@ -170,6 +174,7 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 1 = _lqi-assert
     _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
     _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
     S" title-first" _lqi-profile-line
 
@@ -177,6 +182,7 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 1 = _lqi-assert
     _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
     _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
     S" title-repeat" _lqi-profile-line
 
@@ -186,6 +192,7 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 2 = _lqi-assert
     _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
     _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
     S" collections" _lqi-profile-line
 
@@ -195,6 +202,7 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 1 = _lqi-assert
     _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
     _LIBPQ-ARENA-SCAN@ 1 = _lqi-assert
     S" body-hit" _lqi-profile-line
 
@@ -204,12 +212,31 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 0= _lqi-assert
     _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
     _LIBPQ-ARENA-SCAN@ 3 = _lqi-assert
     S" body-short-miss" _lqi-profile-line
 
+    _lqi-profile-start 0 0 _lqi-query-active _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 3 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
+    _lqi-generation @ 8 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-ENTRY-READ@ 3 = _lqi-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
+    S" active-warm" _lqi-profile-line
+
     _lqi-profile-start _lqi-rid-a 3 _lqi-read _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
-    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _lqi-required @ 23 = _lqi-assert
+    _lqi-read-content LIBCT-DATA$
+        S" newbody bodyonly needle" COMPARE 0= _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-ENTRY-READ@ 1 = _lqi-assert
     _LIBPQ-ARENA-SCAN@ 1 = _lqi-assert
     S" exact-current" _lqi-profile-line
     _lqi-stack ;
@@ -230,6 +257,33 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-store LIBRARY-VFS-STORE.ARENA LIB-ARENA-FACT-SIZE
         _lqi-arena-before LIB-ARENA-FACT-SIZE COMPARE 0= _lqi-assert
     _lqi-store LIBRARY-VFS-STORE.GENERATION @ 8 = _lqi-assert ;
+
+: _lqi-authority-recovery-contracts  ( -- )
+    _lqi-authority-snapshot
+    _LIBAUTH-TEST-DAMAGE LIBSTORE-S-OK = _lqi-assert
+    _lqi-profile-start 0 0 _lqi-query-active _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 3 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
+    _lqi-generation @ 8 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    _LIBPQ-ENTRY-READ@ 3 = _lqi-assert
+    _lqi-authority-unchanged
+    S" authority-recover" _lqi-profile-line
+
+    _lqi-profile-start 0 0 _lqi-query-active _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 3 = _lqi-assert
+    _lqi-generation @ 8 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-ENTRY-READ@ 3 = _lqi-assert
+    _lqi-authority-unchanged
+    S" authority-repeat" _lqi-profile-line
+    _lqi-stack ;
 
 \ ---------------------------------------------------------------------
 \ Deterministic authoritative corpus
@@ -766,6 +820,7 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-create-c
     _lqi-create-collections
     _lqi-efficiency-baseline
+    _lqi-authority-recovery-contracts
     _lqi-request-contracts
     _lqi-field-contracts
     _lqi-filter-contracts
