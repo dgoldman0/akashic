@@ -11,7 +11,9 @@ VARIABLE _lmc-fails
 VARIABLE _lmc-checks
 VARIABLE _lmc-depth
 VARIABLE _lmc-store-slot
+VARIABLE _lmc-store-b-slot
 VARIABLE _lmc-vfs
+VARIABLE _lmc-replacement-vfs
 VARIABLE _lmc-old-vfs
 VARIABLE _lmc-arena
 VARIABLE _lmc-fd
@@ -29,8 +31,17 @@ VARIABLE _lmc-catalog-count
 VARIABLE _lmc-mutation
 VARIABLE _lmc-content-tail
 VARIABLE _lmc-content-count
+VARIABLE _lmc-collection-count
 VARIABLE _lmc-record-u
 VARIABLE _lmc-frame-u
+VARIABLE _lmc-scale-slot
+VARIABLE _lmc-query-status
+VARIABLE _lmc-query-count
+VARIABLE _lmc-query-next
+VARIABLE _lmc-query-generation
+VARIABLE _lmc-perf-cycles
+VARIABLE _lmc-perf-stalls
+VARIABLE _lmc-perf-extmem
 VARIABLE _lmc-attempt
 VARIABLE _lmc-entry-id
 VARIABLE _lmc-entry-key
@@ -44,6 +55,13 @@ VARIABLE _lmc-write-calls
 VARIABLE _lmc-checkpoint-calls
 VARIABLE _lmc-random-calls
 
+\ Fixed from the f782632 MP64FS baseline and the handoff's 5x/10% gates.
+171490000 CONSTANT _LMC-COLD-32X4K-CYCLE-MAX
+ 33460000 CONSTANT _LMC-WARM-PAGE-CYCLE-MAX
+ 31360000 CONSTANT _LMC-WARM-MISS-CYCLE-MAX
+172680000 CONSTANT _LMC-BODY-HIT-CYCLE-MAX
+177280000 CONSTANT _LMC-SHORT-BODY-CYCLE-MAX
+
 CREATE _lmc-arena-id LIB-DIGEST-SIZE ALLOT
 CREATE _lmc-id LIB-DIGEST-SIZE ALLOT
 CREATE _lmc-key LIB-OPERATION-KEY-SIZE ALLOT
@@ -53,18 +71,25 @@ CREATE _lmc-attempt-cell 8 ALLOT
 CREATE _lmc-request LIBRARY-MANAGED-CREATE-REQUEST-SIZE ALLOT
 CREATE _lmc-result LIB-ENTRY-SIZE ALLOT
 CREATE _lmc-entry LIB-ENTRY-SIZE ALLOT
+CREATE _lmc-collection LIB-COLLECTION-SIZE ALLOT
 CREATE _lmc-content LIB-CONTENT-SIZE ALLOT
+CREATE _lmc-query-request LIBRARY-CORPUS-QUERY-REQUEST-SIZE ALLOT
 CREATE _lmc-bank-fact LIB-BANK-FACT-SIZE ALLOT
 CREATE _lmc-head-fact LIB-HEAD-FACT-SIZE ALLOT
 CREATE _lmc-bank-sha LIB-DIGEST-SIZE ALLOT
 CREATE _lmc-frame-sha LIB-DIGEST-SIZE ALLOT
 CREATE _lmc-chain LIB-DIGEST-SIZE ALLOT
 CREATE _lmc-chain-next LIB-DIGEST-SIZE ALLOT
+CREATE _lmc-scale-collection-id LIB-DIGEST-SIZE ALLOT
 LIB-BANK-SIZE XBUF _lmc-bank
 LIB-CONTENT-MAX XBUF _lmc-data
 LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
+LIBRARY-QUERY-SUMMARY-SIZE LIBRARY-QUERY-PAGE-MAX * XBUF _lmc-query-page
+LIBRARY-QUERY-SUMMARY-SIZE LIBRARY-QUERY-PAGE-MAX * XBUF _lmc-query-baseline
+LIBRARY-COLLECTION-SUMMARY-SIZE XBUF _lmc-collection-page
 
 : _lmc-store  ( -- store ) _lmc-store-slot @ ;
+: _lmc-store-b  ( -- store ) _lmc-store-b-slot @ ;
 
 : _lmc-assert  ( flag -- )
     1 _lmc-checks +!
@@ -194,18 +219,28 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
     _lmc-status @ LIB-S-OK = _lmc-assert
     _lmc-length @ LIB-CATALOG-RECORD-SIZE = _lmc-assert ;
 
+: _lmc-encode-collection  ( slot -- )
+    LIB-COLLECTION-RECORD-SIZE * LIB-BANK-COLLECTION-OFFSET +
+    _lmc-bank +
+    _lmc-collection SWAP LIB-COLLECTION-RECORD-SIZE
+        LIB-COLLECTION-RECORD-ENCODE
+    _lmc-status ! _lmc-length !
+    _lmc-status @ LIB-S-OK = _lmc-assert
+    _lmc-length @ LIB-COLLECTION-RECORD-SIZE = _lmc-assert ;
+
 : _lmc-empty-content  ( -- )
     LIB-ARENA-HEADER-SIZE _lmc-content-tail !
     0 _lmc-content-count !
     _lmc-chain LIB-CONTENT-CHAIN-GENESIS
         LIB-S-OK = _lmc-assert ;
 
-: _lmc-build-bank  ( generation catalog-count mutation -- )
-    _lmc-mutation ! _lmc-catalog-count ! _lmc-generation !
+: _lmc-build-bank  ( generation catalog-count collection-count mutation -- )
+    _lmc-mutation ! _lmc-collection-count !
+    _lmc-catalog-count ! _lmc-generation !
     _lmc-bank-fact LIB-BANK-FACT-INIT
     _lmc-generation @ _lmc-bank-fact LIBBF.GENERATION !
     _lmc-catalog-count @ _lmc-bank-fact LIBBF.CATALOG-COUNT !
-    0 _lmc-bank-fact LIBBF.COLLECTION-COUNT !
+    _lmc-collection-count @ _lmc-bank-fact LIBBF.COLLECTION-COUNT !
     _lmc-mutation @ _lmc-bank-fact LIBBF.MUTATION-SEQUENCE !
     _lmc-arena-id _lmc-bank-fact LIBBF.ARENA-ID
         LIB-DIGEST-SIZE CMOVE
@@ -275,6 +310,20 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
     _lmc-store LIBRARY-VFS-STORE.GENERATION @
         _lmc-generation @ = _lmc-assert ;
 
+: _lmc-publish-through-second  ( generation selector expected -- )
+    _lmc-expected ! _lmc-selector ! _lmc-generation !
+    _lmc-selector @ IF
+        _lmc-bank LIB-BANK-SIZE 0 _LIBVFS-BANK-B-PATH$
+    ELSE
+        _lmc-bank LIB-BANK-SIZE 0 _LIBVFS-BANK-A-PATH$
+    THEN
+    _lmc-write-at _lmc-assert
+    _lmc-vfs @ VFS-SYNC 0= _lmc-assert
+    _lmc-generation @ _lmc-selector @ _lmc-build-head
+    _lmc-head-fact _lmc-expected @ _lmc-store-b
+        _LIBRARY-VFS-STORE-SAVE-HEAD
+        LIBSTORE-S-OK = _lmc-assert ;
+
 : _lmc-build-catalog-full  ( -- )
     _lmc-bank LIB-BANK-SIZE 0 FILL
     _lmc-empty-content
@@ -284,7 +333,7 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
         _lmc-id _lmc-key I 1+ _lmc-build-tombstone
         I _lmc-encode-entry
     LOOP
-    2 LIB-CATALOG-MAX LIB-CATALOG-MAX _lmc-build-bank ;
+    2 LIB-CATALOG-MAX 0 LIB-CATALOG-MAX _lmc-build-bank ;
 
 : _lmc-build-live-entry  ( -- )
     _lmc-entry LIB-ENTRY-INIT
@@ -365,7 +414,206 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
     LOOP
     9 _lmc-content-count !
     _lmc-content-tail @ LIB-ARENA-SIZE < _lmc-assert
-    3 1 9 _lmc-build-bank ;
+    3 1 0 9 _lmc-build-bank ;
+
+: _lmc-build-scale-entry  ( slot -- )
+    _lmc-scale-slot !
+    _lmc-entry LIB-ENTRY-INIT
+    _lmc-scale-slot @ 0x100 + _lmc-entry LIBE.ID _lmc-id!
+    1 _lmc-entry LIBE.DOMAIN-REVISION !
+    LIB-KIND-MANAGED-DOCUMENT _lmc-entry LIBE.KIND !
+    LIB-LIFECYCLE-ACTIVE _lmc-entry LIBE.LIFECYCLE !
+    LIB-MEDIA-TEXT-PLAIN _lmc-entry LIBE.MEDIA !
+    1 _lmc-entry LIBE.CURRENT-CONTENT-REVISION !
+    1 _lmc-entry LIBE.OLDEST-CONTENT-REVISION !
+    4096 _lmc-entry LIBE.CONTENT-U !
+    _lmc-data 4096 _lmc-entry LIBE.CONTENT-DIGEST SHA3-256-HASH
+    _lmc-scale-slot @ 1+ DUP
+        _lmc-entry LIBE.MUTATION-SEQUENCE !
+    LIB-CLOCK-MUTATION-SEQUENCE _lmc-entry LIBE.CREATED-CLOCK !
+    DUP _lmc-entry LIBE.CREATED-VALUE !
+    LIB-CLOCK-MUTATION-SEQUENCE _lmc-entry LIBE.MODIFIED-CLOCK !
+    _lmc-entry LIBE.MODIFIED-VALUE !
+    15 _lmc-entry LIBE.TITLE-U !
+    S" scale-title-hit" DROP _lmc-entry LIBE.TITLE 15 CMOVE
+    1 _lmc-entry LIBE.TAG-N !
+    13 0 _lmc-entry LIBE-TAG LIB-TAG.LEN !
+    S" scale-tag-hit" DROP
+        0 _lmc-entry LIBE-TAG LIB-TAG.TEXT 13 CMOVE
+    _lmc-scale-slot @ 0x1000 +
+        _lmc-entry LIBE.RECEIPT LIBR.OPERATION-KEY _lmc-id!
+    LIB-IMPORT-CREATED _lmc-entry LIBE.RECEIPT LIBR.METHOD !
+    1 _lmc-entry LIBE.RECEIPT LIBR.INITIAL-CONTENT-REVISION !
+    4096 _lmc-entry LIBE.RECEIPT LIBR.INITIAL-CONTENT-U !
+    LIB-MEDIA-TEXT-PLAIN
+        _lmc-entry LIBE.RECEIPT LIBR.INITIAL-MEDIA !
+    _lmc-data 4096
+        _lmc-entry LIBE.RECEIPT LIBR.INITIAL-CONTENT-DIGEST
+        SHA3-256-HASH
+    _lmc-scale-slot @
+        _lmc-entry LIBE.RECEIPT
+            LIBR.EXPECTED-CATALOG-GENERATION !
+    _lmc-entry LIB-ENTRY-REQUEST-SEAL!
+        LIB-S-OK = _lmc-assert
+    _lmc-entry LIB-ENTRY-VALID? _lmc-assert ;
+
+: _lmc-append-scale-content  ( slot -- )
+    _lmc-scale-slot !
+    _lmc-content LIB-CONTENT-INIT
+    _lmc-scale-slot @ 0x100 + _lmc-content LIBCT.ID _lmc-id!
+    1 _lmc-content LIBCT.DOMAIN-REVISION !
+    1 _lmc-content LIBCT.CONTENT-REVISION !
+    LIB-KIND-MANAGED-DOCUMENT _lmc-content LIBCT.KIND !
+    LIB-MEDIA-TEXT-PLAIN _lmc-content LIBCT.MEDIA !
+    _lmc-data _lmc-content LIBCT.DATA-A !
+    4096 _lmc-content LIBCT.DATA-U !
+    _lmc-content LIB-CONTENT-DIGEST!
+        LIB-S-OK = _lmc-assert
+    _lmc-frame LIB-CONTENT-FRAME-MAX 0 FILL
+    _lmc-content _lmc-frame LIB-CONTENT-FRAME-MAX
+        LIB-CONTENT-RECORD-ENCODE
+    _lmc-status ! _lmc-record-u !
+    _lmc-status @ LIB-S-OK = _lmc-assert
+    _lmc-record-u @ LIB-CONTENT-FRAME-SIZE _lmc-frame-u !
+    _lmc-frame _lmc-frame-u @ _lmc-content-tail @
+        _LIBVFS-CONTENT-PATH$ _lmc-write-at _lmc-assert
+    _lmc-frame _lmc-frame-u @ _lmc-frame-sha
+        LIB-CONTENT-FRAME-DIGEST LIB-S-OK = _lmc-assert
+    _lmc-chain _lmc-content-tail @ _lmc-frame-u @
+        _lmc-frame-sha _lmc-chain-next
+        LIB-CONTENT-CHAIN-STEP LIB-S-OK = _lmc-assert
+    _lmc-chain-next _lmc-chain LIB-DIGEST-SIZE CMOVE
+    _lmc-frame-u @ _lmc-content-tail +! ;
+
+: _lmc-build-scale-collection  ( -- )
+    _lmc-collection LIB-COLLECTION-INIT
+    0x4000 _lmc-scale-collection-id _lmc-id!
+    _lmc-scale-collection-id _lmc-collection LIBC.ID RID-COPY
+    0x4001 _lmc-collection LIBC.OPERATION-KEY _lmc-id!
+    1 _lmc-collection LIBC.REVISION !
+    33 _lmc-collection LIBC.MUTATION-SEQUENCE !
+    16 _lmc-collection LIBC.TITLE-U !
+    S" Scale collection" DROP _lmc-collection LIBC.TITLE 16 CMOVE
+    32 _lmc-collection LIBC.MEMBER-N !
+    4 0 DO 0xFF _lmc-collection LIBC.MEMBERS I + C! LOOP
+    4 _lmc-collection LIBC.EXPECTED-CATALOG-GENERATION !
+    _lmc-collection LIB-COLLECTION-REQUEST-SEAL!
+        LIB-S-OK = _lmc-assert
+    _lmc-collection LIB-COLLECTION-VALID? _lmc-assert
+    0 _lmc-encode-collection ;
+
+: _lmc-build-query-scale  ( -- )
+    _lmc-data 4096 [CHAR] x FILL
+    S" scale-body-hit" DROP _lmc-data 14 CMOVE
+    _lmc-bank LIB-BANK-SIZE 0 FILL
+    _lmc-chain LIB-CONTENT-CHAIN-GENESIS
+        LIB-S-OK = _lmc-assert
+    LIB-ARENA-HEADER-SIZE _lmc-content-tail !
+    32 0 DO
+        I _lmc-build-scale-entry
+        I _lmc-encode-entry
+        I _lmc-append-scale-content
+    LOOP
+    32 _lmc-content-count !
+    _lmc-build-scale-collection
+    _lmc-content-tail @ LIB-ARENA-SIZE < _lmc-assert
+    5 32 1 33 _lmc-build-bank ;
+
+: _lmc-build-live-catalog-full  ( -- )
+    _lmc-data 4096 [CHAR] x FILL
+    S" scale-body-hit" DROP _lmc-data 14 CMOVE
+    _lmc-bank LIB-BANK-SIZE 0 FILL
+    _lmc-chain LIB-CONTENT-CHAIN-GENESIS
+        LIB-S-OK = _lmc-assert
+    LIB-ARENA-HEADER-SIZE _lmc-content-tail !
+    LIB-CATALOG-MAX 0 DO
+        I _lmc-build-scale-entry
+        I _lmc-encode-entry
+        I _lmc-append-scale-content
+    LOOP
+    LIB-CATALOG-MAX _lmc-content-count !
+    _lmc-content-tail @ LIB-ARENA-SIZE < _lmc-assert
+    6 LIB-CATALOG-MAX 0 LIB-CATALOG-MAX _lmc-build-bank ;
+
+: _lmc-profile-start  ( -- )
+    _LIBPQ-RESET
+    PERF-RESET ;
+
+: _lmc-profile-stop  ( -- )
+    PERF-CYCLES _lmc-perf-cycles !
+    PERF-STALLS _lmc-perf-stalls !
+    PERF-EXTMEM _lmc-perf-extmem ! ;
+
+: _lmc-cycle-at-most  ( maximum -- )
+    _lmc-perf-cycles @ SWAP <= _lmc-assert ;
+
+: _lmc-profile-line  ( label-a label-u -- )
+    ." LIBRARY SCALE " TYPE
+    ."  cycles=" _lmc-perf-cycles @ .
+    ."  stalls=" _lmc-perf-stalls @ .
+    ."  extmem=" _lmc-perf-extmem @ .
+    ."  full=" _LIBPQ-FULL-VALIDATION@ .
+    ."  warm=" _LIBPQ-WARM-ASSURANCE@ .
+    ."  index=" _LIBPQ-INDEX-REBUILD@ .
+    ."  entry=" _LIBPQ-ENTRY-READ@ .
+    ."  collection=" _LIBPQ-COLLECTION-READ@ .
+    ."  direct=" _LIBPQ-DIRECT-FRAME-READ@ .
+    ."  direct-bytes=" _LIBPQ-DIRECT-FRAME-BYTES@ .
+    ."  scans=" _LIBPQ-ARENA-SCAN@ .
+    ."  frames=" _LIBPQ-ARENA-SCAN-FRAME@ .
+    ."  scan-bytes=" _LIBPQ-ARENA-SCAN-BYTES@ . CR ;
+
+: _lmc-scale-summary  ( slot -- summary )
+    LIBRARY-QUERY-SUMMARY-SIZE * _lmc-query-page + ;
+
+: _lmc-scale-query!  ( term-a term-u field-mask -- )
+    >R
+    _lmc-query-request LIBRARY-CORPUS-QUERY-REQUEST-INIT
+    _lmc-query-request LIBRARY-CORPUS-QUERY-TERM!
+        LIBSTORE-S-OK = _lmc-assert
+    R> _lmc-query-request LIBCQR.FIELD-MASK !
+    _lmc-query-request LIBRARY-CORPUS-QUERY-REQUEST-VALID?
+        _lmc-assert ;
+
+: _lmc-scale-query  ( -- )
+    _lmc-query-request _lmc-query-page LIBRARY-QUERY-PAGE-MAX
+        _lmc-store LIBRARY-VFS-STORE-QUERY-CORPUS
+    _lmc-query-status ! _lmc-query-generation !
+    _lmc-query-next ! _lmc-query-count ! ;
+
+: _lmc-scale-query-ok  ( count -- )
+    _lmc-query-count @ = _lmc-assert
+    _lmc-query-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-query-next @ -1 = _lmc-assert
+    _lmc-query-generation @ 5 = _lmc-assert ;
+
+: _lmc-scale-page-exact  ( -- )
+    32 0 DO
+        I 0x100 + _lmc-id _lmc-id!
+        _lmc-id I _lmc-scale-summary LIBQS.REF RREF.ID RID=
+            _lmc-assert
+        I _lmc-scale-summary LIBQS.DOMAIN-REVISION @ 1 = _lmc-assert
+        I _lmc-scale-summary LIBQS.KIND @
+            LIB-KIND-MANAGED-DOCUMENT = _lmc-assert
+        I _lmc-scale-summary LIBQS.LIFECYCLE @
+            LIB-LIFECYCLE-ACTIVE = _lmc-assert
+        I _lmc-scale-summary LIBQS.MEDIA @
+            LIB-MEDIA-TEXT-PLAIN = _lmc-assert
+        I _lmc-scale-summary LIBQS.CONTENT-U @ 4096 = _lmc-assert
+        I _lmc-scale-summary LIBQS.MUTATION-SEQUENCE @
+            I 1+ = _lmc-assert
+        I _lmc-scale-summary LIBQS.CONTENT-DIGEST
+            _lmc-entry LIBE.CONTENT-DIGEST SHA3-256-COMPARE
+            _lmc-assert
+        I _lmc-scale-summary LIBQS-TITLE$
+            S" scale-title-hit" COMPARE 0= _lmc-assert
+    LOOP ;
+
+: _lmc-scale-warm-counters  ( -- )
+    _LIBPQ-FULL-VALIDATION@ 0= _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lmc-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lmc-assert ;
 
 : _lmc-rid-candidate!  ( attempt destination -- )
     _lmc-entry-id ! _lmc-attempt !
@@ -387,7 +635,7 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
         _lmc-id _lmc-key I 1+ _lmc-build-tombstone
         I _lmc-encode-entry
     LOOP
-    4 16 16 _lmc-build-bank ;
+    4 16 0 16 _lmc-build-bank ;
 
 : _lmc-create-failure  ( expected-status expected-generation expected-rng -- )
     _lmc-expected-rng ! _lmc-generation ! _lmc-expected-status !
@@ -465,6 +713,383 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
         16 = _lmc-assert
     _lmc-stack ;
 
+: _lmc-scale-cold-load  ( -- )
+    _lmc-store LIBRARY-VFS-STORE-FINI
+        LIBSTORE-S-OK = _lmc-assert
+    _lmc-vfs @ _lmc-store LIBRARY-VFS-STORE-INIT
+        LIBSTORE-S-OK = _lmc-assert
+    _lmc-profile-start
+    _lmc-store LIBRARY-VFS-STORE-LOAD _lmc-status !
+    _lmc-profile-stop
+    _lmc-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.GENERATION @ 5 = _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
+        32 = _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.BANK LIBBF.COLLECTION-COUNT @
+        1 = _lmc-assert
+    _LIBPQ-FULL-VALIDATION@ 1 = _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lmc-assert
+    _LMC-COLD-32X4K-CYCLE-MAX _lmc-cycle-at-most
+    S" cold-load-32x4k" _lmc-profile-line ;
+
+: _lmc-scale-browse-profile  ( -- )
+    0 0 LIBRARY-CORPUS-FIELD-ALL _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-page-exact
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    _LMC-WARM-PAGE-CYCLE-MAX _lmc-cycle-at-most
+    S" empty-browse-32x4k" _lmc-profile-line ;
+
+: _lmc-scale-title-profiles  ( -- )
+    S" scale-title-hit" LIBRARY-CORPUS-FIELD-TITLE
+        _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-page-exact
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    _LMC-WARM-PAGE-CYCLE-MAX _lmc-cycle-at-most
+    _lmc-query-page _lmc-query-baseline
+        LIBRARY-QUERY-SUMMARY-SIZE 32 * CMOVE
+    S" title-first-32x4k" _lmc-profile-line
+
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-page-exact
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    _LMC-WARM-PAGE-CYCLE-MAX _lmc-cycle-at-most
+    _lmc-query-page LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        _lmc-query-baseline LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        COMPARE 0= _lmc-assert
+    S" title-repeat-32x4k" _lmc-profile-line
+
+    S" zzz" LIBRARY-CORPUS-FIELD-TITLE _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    0 _lmc-scale-query-ok
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 0= _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    _LMC-WARM-MISS-CYCLE-MAX _lmc-cycle-at-most
+    S" title-miss-32x4k" _lmc-profile-line ;
+
+: _lmc-scale-tag-profiles  ( -- )
+    S" scale-tag-hit" LIBRARY-CORPUS-FIELD-TAGS _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-page-exact
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    _LMC-WARM-PAGE-CYCLE-MAX _lmc-cycle-at-most
+    _lmc-query-page LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        _lmc-query-baseline LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        COMPARE 0= _lmc-assert
+    S" tag-hit-32x4k" _lmc-profile-line
+
+    S" zzz" LIBRARY-CORPUS-FIELD-TAGS _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    0 _lmc-scale-query-ok
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 0= _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    _LMC-WARM-MISS-CYCLE-MAX _lmc-cycle-at-most
+    S" tag-miss-32x4k" _lmc-profile-line ;
+
+: _lmc-scale-collection-profiles  ( -- )
+    _lmc-profile-start
+    0 0 _lmc-collection-page 1 _lmc-store
+        LIBRARY-VFS-STORE-QUERY-COLLECTIONS
+    _lmc-query-status ! _lmc-query-generation !
+    _lmc-query-next ! _lmc-query-count !
+    _lmc-profile-stop
+    1 _lmc-scale-query-ok
+    _lmc-scale-collection-id
+        _lmc-collection-page LIBCS.REF RREF.ID RID= _lmc-assert
+    _lmc-collection-page LIBCS.REVISION @ 1 = _lmc-assert
+    _lmc-collection-page LIBCS.MEMBER-N @ 32 = _lmc-assert
+    _lmc-collection-page LIBCS-TITLE$
+        S" Scale collection" COMPARE 0= _lmc-assert
+    _lmc-scale-warm-counters
+    _LIBPQ-COLLECTION-READ@ 1 = _lmc-assert
+    _LIBPQ-ENTRY-READ@ 0= _lmc-assert
+    _LMC-WARM-PAGE-CYCLE-MAX _lmc-cycle-at-most
+    S" collection-enum-32x4k" _lmc-profile-line
+
+    S" scale-title-hit" LIBRARY-CORPUS-FIELD-TITLE
+        _lmc-scale-query!
+    _lmc-scale-collection-id _lmc-query-request
+        LIBRARY-CORPUS-QUERY-COLLECTION!
+        LIBSTORE-S-OK = _lmc-assert
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-page-exact
+    _lmc-scale-warm-counters
+    _LIBPQ-COLLECTION-READ@ 1 = _lmc-assert
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    _LMC-WARM-PAGE-CYCLE-MAX _lmc-cycle-at-most
+    _lmc-query-page LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        _lmc-query-baseline LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        COMPARE 0= _lmc-assert
+    S" collection-filter-32x4k" _lmc-profile-line ;
+
+: _lmc-scale-body-profiles  ( -- )
+    S" zzz" LIBRARY-CORPUS-FIELD-BODY _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    0 _lmc-scale-query-ok
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 0= _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    _LMC-WARM-MISS-CYCLE-MAX _lmc-cycle-at-most
+    S" body-bloom-miss-32x4k" _lmc-profile-line
+
+    S" scale-body-hit" LIBRARY-CORPUS-FIELD-BODY _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-page-exact
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@
+        4096 LIB-CONTENT-RECORD-SIZE LIB-CONTENT-FRAME-SIZE 32 *
+        = _lmc-assert
+    _LMC-BODY-HIT-CYCLE-MAX _lmc-cycle-at-most
+    _lmc-query-page LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        _lmc-query-baseline LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        COMPARE 0= _lmc-assert
+    S" body-hit-32x4k" _lmc-profile-line
+
+    S" z" LIBRARY-CORPUS-FIELD-BODY _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    0 _lmc-scale-query-ok
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@
+        4096 LIB-CONTENT-RECORD-SIZE LIB-CONTENT-FRAME-SIZE 32 *
+        = _lmc-assert
+    _LMC-SHORT-BODY-CYCLE-MAX _lmc-cycle-at-most
+    S" body-1byte-miss-32x4k" _lmc-profile-line
+
+    S" zz" LIBRARY-CORPUS-FIELD-BODY _lmc-scale-query!
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    0 _lmc-scale-query-ok
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-BYTES@
+        4096 LIB-CONTENT-RECORD-SIZE LIB-CONTENT-FRAME-SIZE 32 *
+        = _lmc-assert
+    _LMC-SHORT-BODY-CYCLE-MAX _lmc-cycle-at-most
+    S" body-2byte-miss-32x4k" _lmc-profile-line ;
+
+: _lmc-scale-index-profiles  ( -- )
+    S" scale-title-hit" LIBRARY-CORPUS-FIELD-TITLE
+        _lmc-scale-query!
+    _LIBIX-TEST-LOSE LIBSTORE-S-OK = _lmc-assert
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-page-exact
+    _LIBPQ-FULL-VALIDATION@ 0= _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lmc-assert
+    _LIBPQ-ENTRY-READ@ 64 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 32 = _lmc-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lmc-assert
+    _lmc-query-page LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        _lmc-query-baseline LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        COMPARE 0= _lmc-assert
+    S" index-loss-32x4k" _lmc-profile-line
+
+    _LIBIX-TEST-DAMAGE LIBSTORE-S-OK = _lmc-assert
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-page-exact
+    _LIBPQ-FULL-VALIDATION@ 0= _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lmc-assert
+    _LIBPQ-ENTRY-READ@ 64 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 32 = _lmc-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lmc-assert
+    _lmc-query-page LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        _lmc-query-baseline LIBRARY-QUERY-SUMMARY-SIZE 32 *
+        COMPARE 0= _lmc-assert
+    S" index-damage-32x4k" _lmc-profile-line
+
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    32 _lmc-scale-query-ok
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ 32 = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    S" index-repeat-32x4k" _lmc-profile-line ;
+
+: _lmc-query-scale-case  ( -- )
+    _lmc-build-query-scale
+    5 0 4 _lmc-publish
+    _lmc-vfs @ _lmc-store-b LIBRARY-VFS-STORE-INIT
+        LIBSTORE-S-OK = _lmc-assert
+    ." LIBRARY SCALE SHAPE records=32 body-bytes=131072 tail="
+        _lmc-content-tail @ .
+    ."  frame-bytes="
+        4096 LIB-CONTENT-RECORD-SIZE LIB-CONTENT-FRAME-SIZE . CR
+    ." LIBRARY SCALE FOOTPRINT index=" _LIBIX-BYTES .
+    ."  locators=" _LIBLOC-BYTES .
+    ."  authority="
+        LIB-HEAD-FACT-SIZE
+        LIB-CATALOG-MAX _LIBVCF-SIZE * +
+        LIB-COLLECTION-MAX _LIBVCCF-SIZE * +
+        LIB-CATALOG-MAX LIB-DIGEST-SIZE * +
+        LIB-COLLECTION-MAX LIB-DIGEST-SIZE * + . CR
+    _lmc-scale-cold-load
+    _lmc-scale-browse-profile
+    _lmc-scale-title-profiles
+    _lmc-scale-tag-profiles
+    _lmc-scale-collection-profiles
+    _lmc-scale-body-profiles
+    _lmc-scale-index-profiles
+    _lmc-stack ;
+
+: _lmc-live-catalog-full-case  ( -- )
+    _lmc-build-live-catalog-full
+    6 1 5 _lmc-publish-through-second
+    ." LIBRARY SCALE SHAPE records=128 body-bytes=524288 tail="
+        _lmc-content-tail @ .
+    ."  arena-limit=" LIB-ARENA-SIZE . CR
+
+    0 0 LIBRARY-CORPUS-FIELD-ALL _lmc-scale-query!
+    _lmc-profile-start
+    _lmc-scale-query
+    _lmc-profile-stop
+    _lmc-query-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-query-count @ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _lmc-query-next @ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _lmc-query-generation @ 6 = _lmc-assert
+    _lmc-scale-page-exact
+    _LIBPQ-FULL-VALIDATION@ 1 = _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lmc-assert
+    _LIBPQ-ENTRY-READ@ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    S" second-descriptor-head-128x4k" _lmc-profile-line
+
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    _lmc-query-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-query-count @ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _lmc-query-next @ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _lmc-query-generation @ 6 = _lmc-assert
+    _lmc-scale-page-exact
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    S" second-descriptor-repeat-128x4k" _lmc-profile-line
+
+    \ Reseal a different complete cached head while retaining generation six.
+    \ The durable head is unchanged, so only the full-head comparison can
+    \ distinguish it from the integrity-valid cached identity.
+    _LIBAUTH-TEST-RESEAL-HEAD-MISMATCH
+        LIBSTORE-S-OK = _lmc-assert
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    _lmc-query-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-query-count @ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _lmc-query-next @ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _lmc-query-generation @ 6 = _lmc-assert
+    _lmc-scale-page-exact
+    _LIBPQ-FULL-VALIDATION@ 1 = _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lmc-assert
+    _LIBPQ-ENTRY-READ@ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    S" same-generation-head-change-128x4k" _lmc-profile-line
+
+    _lmc-profile-start _lmc-scale-query _lmc-profile-stop
+    _lmc-query-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-query-count @ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _lmc-query-next @ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    _lmc-query-generation @ 6 = _lmc-assert
+    _lmc-scale-warm-counters
+    _LIBPQ-ENTRY-READ@ LIBRARY-QUERY-PAGE-MAX = _lmc-assert
+    S" same-generation-repeat-128x4k" _lmc-profile-line
+
+    _lmc-store LIBRARY-VFS-STORE-FINI
+        LIBSTORE-S-OK = _lmc-assert
+    _lmc-vfs @ _lmc-store LIBRARY-VFS-STORE-INIT
+        LIBSTORE-S-OK = _lmc-assert
+    _lmc-profile-start
+    _lmc-store LIBRARY-VFS-STORE-LOAD _lmc-status !
+    _lmc-profile-stop
+    _lmc-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.GENERATION @ 6 = _lmc-assert
+    _LIBPQ-FULL-VALIDATION@ 1 = _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lmc-assert
+    S" cold-load-128x4k" _lmc-profile-line
+
+    _lmc-create-key LIB-DIGEST-SIZE 0xD4 FILL
+    _lmc-create-key 6 S" new" _lmc-request!
+    LIBSTORE-S-CATALOG-FULL 6 0 _lmc-create-failure
+    _lmc-store LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
+        LIB-CATALOG-MAX = _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.BANK LIBBF.CONTENT-TAIL @
+        _lmc-content-tail @ = _lmc-assert
+    _lmc-stack ;
+
+: _lmc-store-replacement-case  ( -- )
+    \ The populated generation-six snapshot must not survive descriptor
+    \ reinitialization onto a distinct, newly provisioned empty VFS.
+    _LIBAUTH-READY @ 0<> _lmc-assert
+    _LIBIX-READY @ 0<> _lmc-assert
+    _lmc-replacement-vfs @ _lmc-store-b LIBRARY-VFS-STORE-INIT
+        LIBSTORE-S-OK = _lmc-assert
+    _LIBAUTH-READY @ 0= _lmc-assert
+    _LIBIX-READY @ 0= _lmc-assert
+
+    _lmc-arena-id LIB-DIGEST-SIZE 0xB7 FILL
+    _lmc-arena-id _lmc-store-b LIBRARY-VFS-STORE-PROVISION
+        LIBSTORE-S-OK = _lmc-assert
+    _lmc-store-b LIBRARY-VFS-STORE.GENERATION @ 1 = _lmc-assert
+
+    0 0 LIBRARY-CORPUS-FIELD-ALL _lmc-scale-query!
+    _lmc-query-page
+        LIBRARY-QUERY-SUMMARY-SIZE LIBRARY-QUERY-PAGE-MAX *
+        0xA5 FILL
+    _lmc-profile-start
+    _lmc-query-request _lmc-query-page LIBRARY-QUERY-PAGE-MAX
+        _lmc-store-b LIBRARY-VFS-STORE-QUERY-CORPUS
+    _lmc-query-status ! _lmc-query-generation !
+    _lmc-query-next ! _lmc-query-count !
+    _lmc-profile-stop
+    ." LIBRARY REPLACEMENT RESULT status=" _lmc-query-status @ .
+    ."  count=" _lmc-query-count @ .
+    ."  next=" _lmc-query-next @ .
+    ."  generation=" _lmc-query-generation @ . CR
+    _lmc-query-status @ LIBSTORE-S-OK = _lmc-assert
+    _lmc-query-count @ 0= _lmc-assert
+    _lmc-query-next @ -1 = _lmc-assert
+    _lmc-query-generation @ 1 = _lmc-assert
+    LIBRARY-QUERY-PAGE-MAX 0 DO
+        _lmc-query-baseline I LIBRARY-QUERY-SUMMARY-SIZE * +
+            LIBRARY-QUERY-SUMMARY-INIT
+    LOOP
+    _lmc-query-page
+        LIBRARY-QUERY-SUMMARY-SIZE LIBRARY-QUERY-PAGE-MAX *
+        _lmc-query-baseline
+        LIBRARY-QUERY-SUMMARY-SIZE LIBRARY-QUERY-PAGE-MAX *
+        COMPARE 0= _lmc-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lmc-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lmc-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lmc-assert
+    _LIBPQ-ENTRY-READ@ 0= _lmc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lmc-assert
+    S" replacement-empty-query" _lmc-profile-line
+    _lmc-stack ;
+
 : _lmc-run  ( -- )
     0 _lmc-fails ! 0 _lmc-checks ! DEPTH _lmc-depth !
     VFS-CUR _lmc-old-vfs !
@@ -474,10 +1099,15 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
     DUP _lmc-arena !
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP _lmc-vfs ! 0<> _lmc-assert
+    _lmc-arena @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+        DUP _lmc-replacement-vfs ! 0<> _lmc-assert
     _lmc-vfs @ VFS-USE
     LIBRARY-VFS-STORE-SIZE ALLOCATE
         ABORT" LIBRARY MANAGED CAPACITY FAIL allocation"
         _lmc-store-slot !
+    LIBRARY-VFS-STORE-SIZE ALLOCATE
+        ABORT" LIBRARY MANAGED CAPACITY FAIL second allocation"
+        _lmc-store-b-slot !
     _lmc-vfs @ _lmc-store LIBRARY-VFS-STORE-INIT
         LIBSTORE-S-OK = _lmc-assert
     _lmc-arena-id _lmc-store LIBRARY-VFS-STORE-PROVISION
@@ -485,12 +1115,19 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
     _lmc-catalog-full-case
     _lmc-content-full-case
     _lmc-allocation-case
+    _lmc-query-scale-case
+    _lmc-live-catalog-full-case
+    _lmc-store-replacement-case
     _lmc-disarm
+    _lmc-store-b LIBRARY-VFS-STORE-FINI
+        LIBSTORE-S-OK = _lmc-assert
     _lmc-store LIBRARY-VFS-STORE-FINI
         LIBSTORE-S-OK = _lmc-assert
+    _lmc-store-b-slot @ FREE 0 _lmc-store-b-slot !
     _lmc-store-slot @ FREE 0 _lmc-store-slot !
     _lmc-old-vfs @ VFS-USE
     _lmc-vfs @ VFS-DESTROY
+    _lmc-replacement-vfs @ VFS-DESTROY
     _lmc-stack
     _lmc-fails @ ?DUP IF
         ." LIBRARY MANAGED CAPACITY FAIL " .

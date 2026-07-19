@@ -165,26 +165,68 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     ."  frames=" _LIBPQ-ARENA-SCAN-FRAME@ .
     ."  scan-bytes=" _LIBPQ-ARENA-SCAN-BYTES@ . CR ;
 
-\ Deterministic pre-rework cost witness.  These assertions intentionally
-\ capture the needless full validation/index rebuild so each rework landing
-\ must replace them with its new structural acceptance values.
+: _lqi-empty-provisioned-baseline  ( -- )
+    \ Reopen the just-provisioned four-file corpus so the fixed cold cost and
+    \ both first/repeated empty warm calls are independently visible.
+    _lqi-store LIBRARY-VFS-STORE-FINI
+        LIBSTORE-S-OK = _lqi-assert
+    _lqi-vfs @ _lqi-store LIBRARY-VFS-STORE-INIT
+        LIBSTORE-S-OK = _lqi-assert
+    _lqi-profile-start
+    _lqi-store LIBRARY-VFS-STORE-LOAD _lqi-status !
+    _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-store LIBRARY-VFS-STORE.GENERATION @ 1 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    S" empty-cold-load" _lqi-profile-line
+
+    0 0 _lqi-query-request!
+    _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 0= _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
+    _lqi-generation @ 1 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-ENTRY-READ@ 0= _lqi-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lqi-assert
+    S" empty-first" _lqi-profile-line
+
+    _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 0= _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
+    _lqi-generation @ 1 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-ENTRY-READ@ 0= _lqi-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lqi-assert
+    S" empty-repeat" _lqi-profile-line
+    _lqi-stack ;
+
+\ Deterministic warm-path cost witness.  Every unchanged operation must retain
+\ exact public results without another full validation or index publication.
 : _lqi-efficiency-baseline  ( -- )
     S" titleonly" _lqi-query-request!
     LIBRARY-CORPUS-FIELD-TITLE _lqi-query-request LIBCQR.FIELD-MASK !
     _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 1 = _lqi-assert
-    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
-    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
-    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
     S" title-first" _lqi-profile-line
 
     _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 1 = _lqi-assert
-    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
-    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
-    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
     S" title-repeat" _lqi-profile-line
 
     _lqi-profile-start
@@ -192,18 +234,31 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 2 = _lqi-assert
-    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
-    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
-    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
     S" collections" _lqi-profile-line
+
+    0 0 _lqi-query-request!
+    _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 3 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-ENTRY-READ@ 3 = _lqi-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lqi-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
+    S" empty-browse" _lqi-profile-line
 
     S" newbody" _lqi-query-request!
     LIBRARY-CORPUS-FIELD-BODY _lqi-query-request LIBCQR.FIELD-MASK !
     _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 1 = _lqi-assert
-    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
-    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
     _LIBPQ-DIRECT-FRAME-READ@ 1 = _lqi-assert
     _LIBPQ-DIRECT-FRAME-BYTES@ 512 = _lqi-assert
     _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
@@ -214,8 +269,9 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 0= _lqi-assert
-    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
-    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
     _LIBPQ-DIRECT-FRAME-READ@ 0= _lqi-assert
     _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
     S" body-bloom-miss" _lqi-profile-line
@@ -225,8 +281,9 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 0= _lqi-assert
-    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
-    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
     _LIBPQ-DIRECT-FRAME-READ@ 3 = _lqi-assert
     _LIBPQ-DIRECT-FRAME-BYTES@ 1536 = _lqi-assert
     _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
@@ -294,6 +351,7 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-profile-start 0 0 _lqi-query-active _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 3 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
     _lqi-generation @ 8 = _lqi-assert
     _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
     _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
@@ -330,6 +388,53 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
     _lqi-authority-unchanged
     S" locator-repeat" _lqi-profile-line
+    _lqi-stack ;
+
+: _lqi-fact-recovery-contracts  ( -- )
+    _lqi-authority-snapshot
+    _LIBAUTH-TEST-CATALOG-FACT-DAMAGE
+        LIBSTORE-S-OK = _lqi-assert
+    _lqi-profile-start 0 0 _lqi-query-active _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 3 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
+    _lqi-generation @ 8 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    _LIBPQ-ENTRY-READ@ 3 = _lqi-assert
+    _lqi-authority-unchanged
+    S" catalog-fact-recover" _lqi-profile-line
+
+    _LIBAUTH-TEST-COLLECTION-FACT-DAMAGE
+        LIBSTORE-S-OK = _lqi-assert
+    _lqi-profile-start
+    0 0 _lqi-collection-page 2 _lqi-query-collections
+    _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 2 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
+    _lqi-generation @ 8 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 1 = _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 0= _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    _LIBPQ-COLLECTION-READ@ 2 = _lqi-assert
+    _lqi-authority-unchanged
+    S" collection-fact-recover" _lqi-profile-line
+
+    _lqi-profile-start
+    0 0 _lqi-collection-page 2 _lqi-query-collections
+    _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 2 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
+    _lqi-generation @ 8 = _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-COLLECTION-READ@ 2 = _lqi-assert
+    _lqi-authority-unchanged
+    S" collection-fact-repeat" _lqi-profile-line
     _lqi-stack ;
 
 \ ---------------------------------------------------------------------
@@ -740,25 +845,53 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
 
     _LIBIX-TEST-LOSE LIBSTORE-S-OK = _lqi-assert
     _lqi-authority-unchanged
-    _lqi-page 4 _lqi-query
+    _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 3 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
     _lqi-generation @ 8 = _lqi-assert
     _lqi-page LIBRARY-QUERY-SUMMARY-SIZE 4 *
         _lqi-baseline LIBRARY-QUERY-SUMMARY-SIZE 4 *
         COMPARE 0= _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
     _lqi-authority-unchanged
+    S" index-loss-rebuild" _lqi-profile-line
 
     _LIBIX-TEST-DAMAGE LIBSTORE-S-OK = _lqi-assert
     _lqi-authority-unchanged
-    _lqi-page 4 _lqi-query
+    _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-count @ 3 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
     _lqi-generation @ 8 = _lqi-assert
     _lqi-page LIBRARY-QUERY-SUMMARY-SIZE 4 *
         _lqi-baseline LIBRARY-QUERY-SUMMARY-SIZE 4 *
         COMPARE 0= _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 1 = _lqi-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
     _lqi-authority-unchanged
+    S" index-damage-rebuild" _lqi-profile-line
+
+    _lqi-profile-start _lqi-page 4 _lqi-query _lqi-profile-stop
+    _lqi-status @ LIBSTORE-S-OK = _lqi-assert
+    _lqi-count @ 3 = _lqi-assert
+    _lqi-next @ -1 = _lqi-assert
+    _lqi-generation @ 8 = _lqi-assert
+    _lqi-page LIBRARY-QUERY-SUMMARY-SIZE 4 *
+        _lqi-baseline LIBRARY-QUERY-SUMMARY-SIZE 4 *
+        COMPARE 0= _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lqi-assert
+    _lqi-authority-unchanged
+    S" index-repeat" _lqi-profile-line
+
     _lqi-rid-a 3 _lqi-read
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
     _lqi-read-content LIBCT-DATA$
@@ -782,11 +915,21 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-saved-generation @ _lqi-query-request
         LIBCQR.EXPECTED-CATALOG-GENERATION !
     _lqi-saved-next @ _lqi-query-request LIBCQR.START-SLOT !
-    _lqi-page 1 _lqi-query
+    _lqi-baseline LIBRARY-QUERY-SUMMARY-INIT
+    _lqi-page LIBRARY-QUERY-SUMMARY-SIZE 165 FILL
+    _lqi-profile-start _lqi-page 1 _lqi-query _lqi-profile-stop
     _lqi-status @ LIBSTORE-S-CONFLICT = _lqi-assert
     _lqi-count @ 0= _lqi-assert
     _lqi-generation @ 9 = _lqi-assert
     _lqi-page LIBQS.REF RREF.ID RID-PRESENT? 0= _lqi-assert
+    _lqi-page LIBRARY-QUERY-SUMMARY-SIZE
+        _lqi-baseline LIBRARY-QUERY-SUMMARY-SIZE
+        COMPARE 0= _lqi-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lqi-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lqi-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lqi-assert
+    _LIBPQ-ENTRY-READ@ 0= _lqi-assert
+    S" post-mutation-stale-conflict" _lqi-profile-line
 
     LIBRARY-CORPUS-LIFECYCLE-ACTIVE _lqi-lifecycle-query
     _lqi-status @ LIBSTORE-S-OK = _lqi-assert
@@ -859,6 +1002,8 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-arena-id _lqi-store LIBRARY-VFS-STORE-PROVISION
         LIBSTORE-S-OK = _lqi-assert
 
+    _lqi-empty-provisioned-baseline
+
     _lqi-create-a
     _lqi-old-body-before-replace
     _lqi-replace-a
@@ -869,6 +1014,7 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-efficiency-baseline
     _lqi-authority-recovery-contracts
     _lqi-locator-recovery-contracts
+    _lqi-fact-recovery-contracts
     _lqi-request-contracts
     _lqi-field-contracts
     _lqi-filter-contracts
@@ -877,9 +1023,13 @@ LIB-CONTENT-MAX XBUF _lqi-bytes
     _lqi-index-rebuild-contracts
     _lqi-stale-and-lifecycle-contracts
 
-    _LIBIX-TEST-LOSE LIBSTORE-S-OK = _lqi-assert
+    _LIBAUTH-READY @ 0<> _lqi-assert
+    _LIBIX-READY @ 0<> _lqi-assert
     _lqi-store LIBRARY-VFS-STORE-FINI
         LIBSTORE-S-OK = _lqi-assert
+    _LIBAUTH-READY @ 0= _lqi-assert
+    _LIBIX-READY @ 0= _lqi-assert
+
     _lqi-store-slot @ FREE 0 _lqi-store-slot !
     _lqi-old-vfs @ VFS-USE
     _lqi-vfs @ VFS-DESTROY
