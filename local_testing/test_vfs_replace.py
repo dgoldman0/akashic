@@ -126,9 +126,27 @@ def build_snapshot() -> None:
         "CREATE _TV-OPS VFS-OPS-SIZE ALLOT",
         "CREATE _TV-BINDING VFS-BINDING-DESC-SIZE ALLOT",
         "VARIABLE _TS-FD VARIABLE _TS-LEN",
+        "VARIABLE _TSL-BUF VARIABLE _TSL-CAP VARIABLE _TSL-IN VARIABLE _TSL-V",
+        "VARIABLE _TSL-TA VARIABLE _TSL-TU",
+        ": T-SYMLINK-RETURN _TSL-TU ! _TSL-TA ! "
+        "_TSL-CAP @ 0= IF _TSL-TU @ 0 EXIT THEN "
+        "_TSL-TU @ _TSL-CAP @ > IF 0 VFS-E-OVERFLOW EXIT THEN "
+        "_TSL-TA @ _TSL-BUF @ _TSL-TU @ MOVE _TSL-TU @ 0 ;",
+        ": T-READLINK _TSL-V ! _TSL-IN ! _TSL-CAP ! _TSL-BUF ! "
+        "_TSL-IN @ IN.BID @ DUP 900 = IF DROP S\" /real.txt\" "
+        "T-SYMLINK-RETURN EXIT THEN "
+        "901 = IF S\" /real\" T-SYMLINK-RETURN EXIT THEN "
+        "0 VFS-E-CORRUPT ;",
+        "VARIABLE _TCL-A VARIABLE _TCL-U VARIABLE _TCL-BID "
+        "VARIABLE _TCL-PARENT",
+        ": T-CACHE-SYMLINK _TCL-PARENT ! _TCL-BID ! _TCL-U ! _TCL-A ! "
+        "_TCL-A @ _TCL-U @ VFS-T-SYMLINK _TCL-BID @ 1 "
+        "_TCL-PARENT @ _TV @ VFS-CACHE-DENTRY ?DUP IF THROW THEN ;",
         ": T-BINDING-RESET VFS-RAM-OPS _TV-OPS VFS-OPS-SIZE CMOVE "
         "VFS-RAM-BINDING _TV-BINDING VFS-BINDING-DESC-SIZE CMOVE "
-        "_TV-OPS _TV-BINDING VB.OPS ! ;",
+        "_TV-OPS _TV-BINDING VB.OPS ! "
+        "['] T-READLINK _TV-OPS VFS-OP-READLINK CELLS + ! "
+        "_TV-BINDING VB.CAPS DUP @ VFS-CAP-READLINK OR SWAP ! ;",
         ": T-VFS-NEW T-BINDING-RESET "
         "524288 A-XMEM ARENA-NEW IF -1 THROW THEN "
         "_TV-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;",
@@ -544,6 +562,57 @@ def main() -> int:
             'S" /doc.txt" _TV @ VFS-RESOLVE IN.TYPE @ . T-ARTIFACTS',
         ],
         "0 7 2 0 0 0 ",
+    )
+
+    check(
+        "missing transaction parent is recovery state, not target absence",
+        [
+            "T-VFS-NEW _TV ! _TV @ VFS-USE _TV @ _TR VREPL-INIT DROP",
+            ': TMP S" /missing/doc.txt" S" /missing/doc.new" '
+            'S" /missing/doc.bak" S" /missing/doc.txn" '
+            '_TR VREPL-PATHS! . ; TMP',
+            "_TR VREPL-RECOVER .",
+            'S" new" _TR VREPL-REPLACE .',
+        ],
+        "0 7 7 ",
+    )
+
+    check(
+        "target and every companion reject terminal symlink redirects",
+        [
+            ': T-LINK-TYPE VFS-RP-NOFOLLOW-FINAL _TV @ '
+            'VFS-RESOLVE-POLICY? ?DUP IF THROW THEN IN.TYPE @ . ;',
+            "T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
+            "S\" doc.txt\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP",
+            "_TR VREPL-RECOVER . S\" /doc.txt\" T-LINK-TYPE",
+            "T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
+            "S\" doc.new\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP",
+            "_TR VREPL-RECOVER . S\" /doc.new\" T-LINK-TYPE",
+            "T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
+            "S\" doc.bak\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP",
+            "_TR VREPL-RECOVER . S\" /doc.bak\" T-LINK-TYPE",
+            "T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
+            "S\" doc.txn\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP",
+            "_TR VREPL-RECOVER . S\" /doc.txn\" T-LINK-TYPE",
+        ],
+        "7 3 7 3 7 3 7 3 ",
+    )
+
+    check(
+        "symlinked shared parent retains ordinary intermediate traversal",
+        [
+            "T-VFS-NEW _TV ! _TV @ VFS-USE _TV @ _TR VREPL-INIT DROP",
+            'S" real" _TV @ VFS-MKDIR DROP '
+            'S" alias" 901 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP',
+            ': TPP S" /alias/doc.txt" S" /alias/doc.new" '
+            'S" /alias/doc.bak" S" /alias/doc.txn" '
+            '_TR VREPL-PATHS! . ; TPP',
+            'S" new" _TR VREPL-REPLACE .',
+            'S" /real/doc.txt" T-SHOW',
+            'S" /alias" VFS-RP-NOFOLLOW-FINAL _TV @ '
+            'VFS-RESOLVE-POLICY? ?DUP IF THROW THEN IN.TYPE @ .',
+        ],
+        "0 0 new 3 ",
     )
 
     check(

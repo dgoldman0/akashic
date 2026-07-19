@@ -33,6 +33,13 @@ not open them as ordinary resources or share them between targets.
 Any existing target or companion must be a regular VFS file; a directory or
 special-inode collision fails closed without mutation.
 
+Resolution follows intermediate symbolic links under the ordinary VFS path
+contract, but it never follows the terminal target, stage, backup, or marker
+name.  Before a missing terminal name can be treated as absent, the shared
+lexical parent must resolve successfully to a directory.  A terminal symbolic
+link, a non-directory parent, or an unresolved parent therefore reports
+recovery state without reading, renaming, or deleting the redirected object.
+
 The marker checksum is corruption detection, not a MAC. A sandbox must deny
 untrusted applets direct mutation of all companion paths; otherwise an applet
 that can rewrite transaction metadata can defeat the recovery protocol. The

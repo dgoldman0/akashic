@@ -204,9 +204,11 @@ mandatory return-to-user triggers.
 
 `akashic/library/vfs-store.f` is the sole owner of the private
 `/library/head.bin`, two complete catalog banks, and fixed content arena. It
-exposes no path accessor. The fixed-snapshot head is the only commit point;
-neither the inactive bank nor content bytes beyond the committed tail are
-selected by discovery.
+exposes no path accessor. The owner inspects `/library` and each reserved
+terminal name without following a symbolic link; namespace/type collisions
+fail closed rather than redirecting authority. The fixed-snapshot head is the
+only commit point; neither the inactive bank nor content bytes beyond the
+committed tail are selected by discovery.
 
 Loading keeps all decoded facts private until it has recovered and validated
 the head, hashed the complete selected bank before format dispatch, checked the

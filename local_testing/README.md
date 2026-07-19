@@ -172,6 +172,31 @@ the disposable index from authoritative records and proves the same ordered
 summary. Milestone three still does not claim projection lifecycle,
 repair/export, the complete damage matrix, an applet/UI, or overall Gate 4 exit.
 
+The milestones 1–3 efficiency rework extends the query and capacity contracts
+with warm-authority, direct-frame, index-loss/damage, full-head-change,
+distinct-store replacement, 32×4 KiB, 64 KiB, and exact-full 128-identity
+evidence. Run the apples-to-apples MP64FS profiler with:
+
+```bash
+MEGAPAD_ROOT=/absolute/path/to/megapad \
+  python3 local_testing/library_query_efficiency.py --timeout 600
+```
+
+For each empty, one-64-KiB, and 32×4-KiB corpus, setup and profiling run in
+separate spawn-isolated processes with only serialized disk bytes crossing the
+boundary. `PERF-CYCLES` is the exact acceptance metric; host event timing is an
+approximate 250,000-step sampled wrapper, and whole-phase timing includes boot
+and compilation plus the small measurement handshakes. The driver enforces the
+handoff's fixed 5× warm-path and 10% cold-load cycle gates at 32×4 KiB. Tag
+hit/miss coverage lives in
+`library-managed-capacity-contracts`, whose synthetic corpus can set exact
+catalog tags without doubling the public-mutation setup time.
+
+The printed 100 MHz and 50 MHz values are clock-rate projections, not measured
+FPGA latency. The emulator currently reports zero modeled stalls and does not
+model shared-BRAM arbitration, 6–10-cycle external-memory access, or SPI-SD
+latency; board synthesis and measurement remain required.
+
 The Streams qualification path is intentionally split by boundary:
 
 - `streams-contracts` covers the owned feed model and typed capabilities.

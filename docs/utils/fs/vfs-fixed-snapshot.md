@@ -98,6 +98,13 @@ otherwise it must equal the fully validated current envelope generation. The
 core selects `expected + 1`; overflow is `VFSNAP-S-CAPACITY`. Conflict does not
 replace the target.
 
+Snapshot paths retain VREPL's namespace rules.  Exact reads first require the
+shared parent to resolve to a directory, then inspect the terminal target with
+the VFS no-follow policy before opening it.  Only a proven missing terminal
+name is `VFSNAP-S-ABSENT`; a terminal symbolic link or other type collision is
+blocking recovery state.  Failure to establish the parent is also recovery
+state, while a non-absence terminal lookup error or open failure remains I/O.
+
 ## Durability boundary
 
 Snapshot publication inherits the selected VFS binding's durability contract.

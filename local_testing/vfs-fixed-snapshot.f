@@ -43,6 +43,11 @@ VARIABLE _vfsnc-sync-armed
 VARIABLE _vfsnc-close-count
 VARIABLE _vfsnc-restore-count
 VARIABLE _vfsnc-encode-generation
+VARIABLE _vfsnc-link-a
+VARIABLE _vfsnc-link-u
+VARIABLE _vfsnc-link-bid
+VARIABLE _vfsnc-link-parent
+VARIABLE _vfsnc-link
 
 CREATE _vfsnc-record-magic
     65 C, 75 C, 86 C, 70 C, 83 C, 78 C, 48 C, 49 C,  \ "AKVFSN01"
@@ -153,6 +158,13 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
 
 : _vfsnc-file-present?  ( path-a path-u -- flag )
     _vfsnc-vfs @ VFS-RESOLVE 0<> ;
+
+: _vfsnc-cache-symlink  ( name-a name-u bid parent -- dentry )
+    _vfsnc-link-parent ! _vfsnc-link-bid !
+    _vfsnc-link-u ! _vfsnc-link-a !
+    _vfsnc-link-a @ _vfsnc-link-u @ VFS-T-SYMLINK _vfsnc-link-bid @ 1
+        _vfsnc-link-parent @ _vfsnc-vfs @ VFS-CACHE-DENTRY
+        ?DUP IF THROW THEN ;
 : _vfsnc-stage-present?  ( store -- flag )
     VFSNAP.REPLACE VREPL-STAGE$ _vfsnc-file-present? ;
 : _vfsnc-backup-present?  ( store -- flag )
@@ -358,6 +370,23 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
         _vfsnc-store-a @ VFSNAP-LOAD VFSNAP-S-OK = _vfsnc-assert
     _vfsnc-output @ _VFSNC-PAYLOAD-U + @ 1 = _vfsnc-assert
     _vfsnc-output @ @ 1 = _vfsnc-assert
+    _vfsnc-stack ;
+
+: _vfsnc-namespace-contracts  ( -- )
+    \ Exercise the read gate directly, without letting VREPL recovery reject
+    \ the same collision first.  A terminal link is reserved namespace state,
+    \ not a readable snapshot reached through its target.
+    S" /redirect.bin" _vfsnc-reset-b
+    S" redirect.bin" 900 _vfsnc-vfs @ V.ROOT @ _vfsnc-cache-symlink
+        DUP _vfsnc-link ! IN.TYPE @ VFS-T-SYMLINK = _vfsnc-assert
+    _vfsnc-store-b @ _VFSOP-STORE !
+    _VFSNAP-READ VFSNAP-S-RECOVERY = _vfsnc-assert
+    _vfsnc-link @ _vfsnc-vfs @ VFS-CACHE-DROP 0= _vfsnc-assert
+
+    \ Full-path NOENT is absence only after the lexical parent resolves.
+    S" /missing/redirect.bin" _vfsnc-reset-b
+    _vfsnc-store-b @ _VFSOP-STORE !
+    _VFSNAP-READ VFSNAP-S-RECOVERY = _vfsnc-assert
     _vfsnc-stack ;
 
 : _vfsnc-restore-original  ( -- )
@@ -678,6 +707,7 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-setup
     _vfsnc-spec-contracts
     _vfsnc-basic-contracts
+    _vfsnc-namespace-contracts
     _vfsnc-alias-contracts
     _vfsnc-record-contracts
     _vfsnc-fault-contracts

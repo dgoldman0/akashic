@@ -38,6 +38,20 @@ VARIABLE _lvsc-cwd-before
 VARIABLE _lvsc-bank-format
 VARIABLE _lvsc-initial-mismatch
 VARIABLE _lvsc-bank-generation
+VARIABLE _lvsc-link-buf
+VARIABLE _lvsc-link-cap
+VARIABLE _lvsc-link-in
+VARIABLE _lvsc-link-target-a
+VARIABLE _lvsc-link-target-u
+VARIABLE _lvsc-rename-path-a
+VARIABLE _lvsc-rename-path-u
+VARIABLE _lvsc-rename-name-a
+VARIABLE _lvsc-rename-name-u
+VARIABLE _lvsc-rename-in
+VARIABLE _lvsc-alias-target
+
+CREATE _lvsc-link-ops VFS-OPS-SIZE ALLOT
+CREATE _lvsc-link-binding VFS-BINDING-DESC-SIZE ALLOT
 
 CREATE _lvsc-arena-id-a LIB-DIGEST-SIZE ALLOT
 CREATE _lvsc-arena-id-b LIB-DIGEST-SIZE ALLOT
@@ -59,6 +73,32 @@ CREATE _lvsc-discard-sha LIB-DIGEST-SIZE ALLOT
 CREATE _lvsc-io-byte 1 ALLOT
 CREATE _lvsc-hash-block 16384 ALLOT
 LIB-BANK-SIZE XBUF _lvsc-bank
+
+: _lvsc-link-return  ( target-a target-u -- actual ior )
+    _lvsc-link-target-u ! _lvsc-link-target-a !
+    _lvsc-link-cap @ 0= IF _lvsc-link-target-u @ 0 EXIT THEN
+    _lvsc-link-target-u @ _lvsc-link-cap @ > IF
+        0 VFS-E-OVERFLOW EXIT
+    THEN
+    _lvsc-link-target-a @ _lvsc-link-buf @ _lvsc-link-target-u @ MOVE
+    _lvsc-link-target-u @ 0 ;
+
+: _lvsc-readlink  ( buffer capacity inode vfs -- actual ior )
+    DROP _lvsc-link-in ! _lvsc-link-cap ! _lvsc-link-buf !
+    _lvsc-link-in @ IN.BID @
+    DUP 900 = IF DROP S" library-target" _lvsc-link-return EXIT THEN
+    DUP 901 = IF DROP S" head-target.bin" _lvsc-link-return EXIT THEN
+    DUP 902 = IF DROP S" catalog-a-target.bin" _lvsc-link-return EXIT THEN
+    DUP 903 = IF DROP S" content-target.bin" _lvsc-link-return EXIT THEN
+    DROP 0 VFS-E-CORRUPT ;
+
+: _lvsc-link-binding-init  ( -- )
+    VFS-RAM-OPS _lvsc-link-ops VFS-OPS-SIZE MOVE
+    VFS-RAM-BINDING _lvsc-link-binding VFS-BINDING-DESC-SIZE MOVE
+    _lvsc-link-ops _lvsc-link-binding VB.OPS !
+    _lvsc-link-binding VB.CAPS DUP @ VFS-CAP-READLINK OR SWAP !
+    ['] _lvsc-readlink
+        _lvsc-link-ops VFS-OP-READLINK CELLS + ! ;
 
 : _lvsc-store-a  ( -- store ) _lvsc-store-a-slot @ ;
 : _lvsc-store-b  ( -- store ) _lvsc-store-b-slot @ ;
@@ -84,6 +124,35 @@ LIB-BANK-SIZE XBUF _lvsc-bank
 
 : _lvsc-free  ( variable -- )
     DUP @ ?DUP IF FREE 0 SWAP ! ELSE DROP THEN ;
+
+: _lvsc-rename-path  ( path-a path-u new-a new-u -- inode | 0 )
+    _lvsc-rename-name-u ! _lvsc-rename-name-a !
+    _lvsc-rename-path-u ! _lvsc-rename-path-a !
+    _lvsc-rename-path-a @ _lvsc-rename-path-u @
+        VFS-RP-NOFOLLOW-FINAL _lvsc-vfs @ VFS-RESOLVE-POLICY?
+    ?DUP IF 2DROP 0 EXIT THEN
+    ?DUP 0= IF 0 EXIT THEN _lvsc-rename-in !
+    _lvsc-rename-name-a @ _lvsc-rename-name-u @
+        _lvsc-rename-in @ _lvsc-vfs @ VFS-RENAME IF 0 EXIT THEN
+    _lvsc-rename-in @ ;
+
+: _lvsc-cache-link  ( name-a name-u bid parent -- flag )
+    >R VFS-T-SYMLINK SWAP 1 R> _lvsc-vfs @ VFS-CACHE-DENTRY
+    ?DUP IF 2DROP 0 EXIT THEN
+    0<> ;
+
+: _lvsc-nofollow-link?  ( path-a path-u -- flag )
+    VFS-RP-NOFOLLOW-FINAL _lvsc-vfs @ VFS-RESOLVE-POLICY?
+    ?DUP IF 2DROP 0 EXIT THEN
+    ?DUP 0= IF 0 EXIT THEN IN.TYPE @ VFS-T-SYMLINK = ;
+
+: _lvsc-alias-target?  ( path-a path-u target -- flag )
+    _lvsc-alias-target !
+    _lvsc-vfs @ VFS-RESOLVE _lvsc-alias-target @ = ;
+
+: _lvsc-direct-bank-open-body  ( -- status )
+    _LIBVFS-BANK-A-PATH$ LIB-BANK-SIZE _LIBVP-OPEN-COMMITTED
+    DUP IF EXIT THEN DROP _LIBVP-CLOSE-NOW ;
 
 : _lvsc-exact-file?  ( path-a path-u expected-u -- flag )
     >R VFS-CUR VFS-RESOLVE ?DUP 0= IF R> DROP 0 EXIT THEN
@@ -517,6 +586,118 @@ LIB-BANK-SIZE XBUF _lvsc-bank
         LIBSTORE-S-OK = _lvsc-assert
     _lvsc-stack ;
 
+: _lvsc-namespace-contracts  ( -- )
+    _lvsc-vfs @ VFS-USE
+    _lvsc-vfs @ _lvsc-store-a LIBRARY-VFS-STORE-INIT
+        LIBSTORE-S-OK = _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-OK = _lvsc-assert
+    _LIBAUTH-READY @ _lvsc-assert
+
+    \ A valid complete store behind a /library symlink is not Library's
+    \ sealed namespace.  The Library parent preflight rejects before the
+    \ public VFSNAP call and clears published warm authority; terminal-name
+    \ atomicity remains inside VFSNAP/VREPL.
+    _LIBVFS-DIRECTORY$ S" library-target" _lvsc-rename-path
+        DUP _lvsc-alias-target ! 0<> _lvsc-assert
+    S" library" 900 _lvsc-vfs @ V.ROOT @ _lvsc-cache-link _lvsc-assert
+    _LIBVFS-DIRECTORY$ _lvsc-nofollow-link? _lvsc-assert
+    _LIBVFS-DIRECTORY$ _lvsc-alias-target @
+        _lvsc-alias-target? _lvsc-assert
+    _lvsc-vfs @ _LIBVP-VFS !
+    ['] _lvsc-direct-bank-open-body _LIBVP-RUN
+        LIBSTORE-S-RECOVERY = _lvsc-assert
+    _LIBVP-FD @ 0= _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-RECOVERY = _lvsc-assert
+    _lvsc-unpublished-contracts
+    _LIBAUTH-READY @ 0= _lvsc-assert
+    _LIBVFS-DIRECTORY$ _lvsc-vfs @ VFS-RM 0= _lvsc-assert
+
+    \ An absent parent must not erase a durability core's latched damage.
+    \ RECOVER and LOAD-HEAD delegate to blocked VFSNAP before considering
+    \ their normal first-use parent shortcuts.
+    _lvsc-store-a _LIBRARY-VFS-STORE.CORE DUP
+        VFSNAP-S-CORRUPT SWAP VFSNAP.LAST-STATUS !
+    VFSNAP.FLAGS DUP @ _VFSNAP-STORE-F-BLOCKED OR SWAP !
+    _lvsc-store-a _LIBRARY-VFS-STORE-RECOVER
+        LIBSTORE-S-CORRUPT = _lvsc-assert
+    _lvsc-store-a _LIBRARY-VFS-STORE-LOAD-HEAD
+        LIBSTORE-S-CORRUPT = _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LAST-VFSNAP@
+        VFSNAP-S-CORRUPT = _lvsc-assert
+
+    S" library" _lvsc-alias-target @ _lvsc-vfs @ VFS-RENAME
+        0= _lvsc-assert
+    _lvsc-reinit
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-OK = _lvsc-assert
+
+    \ VFSNAP/VREPL owns the terminal head classification.  Library adapts
+    \ its RECOVERY result and never accepts the valid redirected envelope.
+    _LIBVFS-HEAD-PATH$ S" head-target.bin" _lvsc-rename-path
+        DUP _lvsc-alias-target ! 0<> _lvsc-assert
+    _LIBVFS-DIRECTORY$ VFS-RP-NOFOLLOW-FINAL _lvsc-vfs @
+        VFS-RESOLVE-POLICY? ?DUP IF THROW THEN
+    >R S" head.bin" 901 R> _lvsc-cache-link _lvsc-assert
+    _LIBVFS-HEAD-PATH$ _lvsc-nofollow-link? _lvsc-assert
+    _LIBVFS-HEAD-PATH$ _lvsc-alias-target @
+        _lvsc-alias-target? _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-RECOVERY = _lvsc-assert
+    _lvsc-unpublished-contracts
+    _LIBAUTH-READY @ 0= _lvsc-assert
+    _LIBVFS-HEAD-PATH$ _lvsc-vfs @ VFS-RM 0= _lvsc-assert
+    S" head.bin" _lvsc-alias-target @ _lvsc-vfs @ VFS-RENAME
+        0= _lvsc-assert
+    _lvsc-reinit
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-OK = _lvsc-assert
+
+    \ Direct bank and content names are inspected nofollow inside the same
+    \ serialized read transaction.  A valid target does not become corpus
+    \ authority, and the ordinary corruption path invalidates warm state.
+    _LIBVFS-BANK-A-PATH$ S" catalog-a-target.bin" _lvsc-rename-path
+        DUP _lvsc-alias-target ! 0<> _lvsc-assert
+    _LIBVFS-DIRECTORY$ VFS-RP-NOFOLLOW-FINAL _lvsc-vfs @
+        VFS-RESOLVE-POLICY? ?DUP IF THROW THEN
+    >R S" catalog-a.bin" 902 R> _lvsc-cache-link _lvsc-assert
+    _LIBVFS-BANK-A-PATH$ _lvsc-nofollow-link? _lvsc-assert
+    _LIBVFS-BANK-A-PATH$ _lvsc-alias-target @
+        _lvsc-alias-target? _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-CORRUPT = _lvsc-assert
+    _lvsc-unpublished-contracts
+    _LIBAUTH-READY @ 0= _lvsc-assert
+    _LIBVFS-BANK-A-PATH$ _lvsc-vfs @ VFS-RM 0= _lvsc-assert
+    S" catalog-a.bin" _lvsc-alias-target @ _lvsc-vfs @ VFS-RENAME
+        0= _lvsc-assert
+    _lvsc-reinit
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-OK = _lvsc-assert
+
+    _LIBVFS-CONTENT-PATH$ S" content-target.bin" _lvsc-rename-path
+        DUP _lvsc-alias-target ! 0<> _lvsc-assert
+    _LIBVFS-DIRECTORY$ VFS-RP-NOFOLLOW-FINAL _lvsc-vfs @
+        VFS-RESOLVE-POLICY? ?DUP IF THROW THEN
+    >R S" content.bin" 903 R> _lvsc-cache-link _lvsc-assert
+    _LIBVFS-CONTENT-PATH$ _lvsc-nofollow-link? _lvsc-assert
+    _LIBVFS-CONTENT-PATH$ _lvsc-alias-target @
+        _lvsc-alias-target? _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-CORRUPT = _lvsc-assert
+    _lvsc-unpublished-contracts
+    _LIBAUTH-READY @ 0= _lvsc-assert
+    _LIBVFS-CONTENT-PATH$ _lvsc-vfs @ VFS-RM 0= _lvsc-assert
+    S" content.bin" _lvsc-alias-target @ _lvsc-vfs @ VFS-RENAME
+        0= _lvsc-assert
+    _lvsc-reinit
+    _lvsc-store-a LIBRARY-VFS-STORE-LOAD
+        LIBSTORE-S-OK = _lvsc-assert
+    _lvsc-store-a LIBRARY-VFS-STORE-FINI
+        LIBSTORE-S-OK = _lvsc-assert
+    _lvsc-stack ;
+
 : _lvsc-nonempty-contracts  ( -- )
     _lvsc-vfs @ VFS-USE
     _lvsc-vfs @ _lvsc-store-a LIBRARY-VFS-STORE-INIT
@@ -755,7 +936,8 @@ LIB-BANK-SIZE XBUF _lvsc-bank
     VFS-CUR DUP _lvsc-old-vfs ! 0= _lvsc-assert
     4194304 A-XMEM ARENA-NEW DUP 0= _lvsc-assert DROP
     DUP _lvsc-arena !
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
+    _lvsc-link-binding-init
+    _lvsc-link-binding 0 VFS-NEW ?DUP IF THROW THEN
         DUP _lvsc-vfs ! 0<> _lvsc-assert
     _lvsc-arena @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP _lvsc-other-vfs ! 0<> _lvsc-assert
@@ -765,6 +947,7 @@ LIB-BANK-SIZE XBUF _lvsc-bank
     _lvsc-status-contracts
     _lvsc-init-contracts
     _lvsc-provision-contracts
+    _lvsc-namespace-contracts
     _lvsc-nonempty-contracts
     _lvsc-store-b-slot _lvsc-free
     _lvsc-store-a-slot _lvsc-free

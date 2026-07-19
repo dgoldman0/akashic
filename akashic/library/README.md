@@ -134,6 +134,9 @@ unsupported evidence until a separately qualified migration exists.
 
 `vfs-store.f` privately owns `/library/head.bin`, the two complete catalog
 banks, and the fixed content arena. Callers cannot select or discover a path.
+The `/library` directory and every reserved terminal name are checked as
+namespace objects: a symbolic-link or nonmatching-type collision fails closed
+and is never opened through its referent.
 The fixed-snapshot head is the sole commit point: loading hashes the complete
 selected bank before dispatching its format, validates the selected bank body,
 immutable arena header, committed content-frame prefix, ordered chain, catalog

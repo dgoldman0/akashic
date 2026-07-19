@@ -411,17 +411,50 @@ VARIABLE _VRO-MUTATED
 
 : _VRO-VFS  ( -- vfs ) _VRO-R @ VREPL.VFS @ ;
 
+: _VRO-RESOLVE-NOFOLLOW  ( path-a path-u -- inode|0 )
+    VFS-RP-NOFOLLOW-FINAL _VRO-VFS VFS-RESOLVE-POLICY?
+    DUP IF
+        DUP VFS-IOR-REASON VFS-R-NOENT = IF 2DROP 0 EXIT THEN
+        NIP THROW
+    THEN DROP
+    DUP IF
+        DUP IN.TYPE @ VFS-T-FILE <> IF DROP VFS-E-CORRUPT THROW THEN
+    THEN ;
+
 : _VRO-TARGET?  ( -- inode|0 )
-    _VRO-R @ VREPL-TARGET$ _VRO-VFS VFS-RESOLVE ;
+    _VRO-R @ VREPL-TARGET$ _VRO-RESOLVE-NOFOLLOW ;
 
 : _VRO-STAGE?  ( -- inode|0 )
-    _VRO-R @ VREPL-STAGE$ _VRO-VFS VFS-RESOLVE ;
+    _VRO-R @ VREPL-STAGE$ _VRO-RESOLVE-NOFOLLOW ;
 
 : _VRO-BACKUP?  ( -- inode|0 )
-    _VRO-R @ VREPL-BACKUP$ _VRO-VFS VFS-RESOLVE ;
+    _VRO-R @ VREPL-BACKUP$ _VRO-RESOLVE-NOFOLLOW ;
 
 : _VRO-MARKER?  ( -- inode|0 )
-    _VRO-R @ VREPL-MARKER$ _VRO-VFS VFS-RESOLVE ;
+    _VRO-R @ VREPL-MARKER$ _VRO-RESOLVE-NOFOLLOW ;
+
+\ A missing reserved leaf is valid state only after its shared lexical parent
+\ resolves to a directory.  Intermediate links retain ordinary VFS traversal
+\ semantics; only a transaction role's terminal name is never followed.
+: _VRO-PARENT-VALID?  ( -- flag )
+    _VRO-R @ DUP VREPL.TARGET
+    SWAP VREPL.TARGET-BASE @ _VREPL-PARENT-LEN
+    VFS-RP-FOLLOW-FINAL _VRO-VFS VFS-RESOLVE-POLICY?
+    IF DROP 0 EXIT THEN
+    DUP 0= IF DROP 0 EXIT THEN
+    IN.TYPE @ VFS-T-DIR = ;
+
+: _VRO-REGULAR-OR-ABSENT?  ( path-a path-u -- flag )
+    _VRO-RESOLVE-NOFOLLOW
+    DUP 0= IF DROP -1 EXIT THEN
+    IN.TYPE @ VFS-T-FILE = ;
+
+: _VRO-NAMESPACE-VALID?  ( -- flag )
+    _VRO-PARENT-VALID? 0= IF 0 EXIT THEN
+    _VRO-R @ VREPL-TARGET$ _VRO-REGULAR-OR-ABSENT? 0= IF 0 EXIT THEN
+    _VRO-R @ VREPL-STAGE$ _VRO-REGULAR-OR-ABSENT? 0= IF 0 EXIT THEN
+    _VRO-R @ VREPL-BACKUP$ _VRO-REGULAR-OR-ABSENT? 0= IF 0 EXIT THEN
+    _VRO-R @ VREPL-MARKER$ _VRO-REGULAR-OR-ABSENT? ;
 
 : _VRO-TARGET-NAME$  ( -- a u )
     _VRO-R @ DUP VREPL.TARGET
@@ -721,20 +754,7 @@ VARIABLE _VRM-FD
     VREPL-S-OK ;
 
 : _VREPL-RECOVER-BODY  ( -- status )
-    \ Transaction companions are always regular files.  Refuse to rename or
-    \ delete a directory/special inode that collided with a reserved path.
-    _VRO-TARGET? DUP IF
-        IN.TYPE @ VFS-T-FILE <> IF VREPL-S-RECOVERY EXIT THEN
-    ELSE DROP THEN
-    _VRO-STAGE? DUP IF
-        IN.TYPE @ VFS-T-FILE <> IF VREPL-S-RECOVERY EXIT THEN
-    ELSE DROP THEN
-    _VRO-BACKUP? DUP IF
-        IN.TYPE @ VFS-T-FILE <> IF VREPL-S-RECOVERY EXIT THEN
-    ELSE DROP THEN
-    _VRO-MARKER? DUP IF
-        IN.TYPE @ VFS-T-FILE <> IF VREPL-S-RECOVERY EXIT THEN
-    ELSE DROP THEN
+    _VRO-NAMESPACE-VALID? 0= IF VREPL-S-RECOVERY EXIT THEN
     _VRO-MARKER? IF
         _VREPL-RECOVER-MARKED
     ELSE
