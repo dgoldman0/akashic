@@ -1,11 +1,13 @@
 # Akashic ext4 compatibility profile v1
 
-This document ratifies the exact ext4 format that the first Akashic ext4
-binding must implement.  It closes the format-selection milestone; it does
-not claim that an ext4 parser, binding, journal replayer, or writer already
-exists.  Until those components pass the gates below, MP64FS remains the
-working native storage binding and FAT remains read-only interoperability
-work.
+This document ratifies the exact ext4 format that the Akashic ext4 binding
+must implement. It closes the format-selection milestone independently of
+implementation status. The first checksummed read-only reader now lives in
+`utils/fs/drivers/vfs-ext4.f`; its implemented structures and remaining
+limits are tracked in [the binding documentation](drivers/vfs-ext4.md).
+Until replay, recovery, mutation, and the complete bidirectional gates below
+pass, MP64FS remains the working native storage binding and FAT/ext4 remain
+read-only interoperability work.
 
 The profile ID is `akashic-ext4-rw-v1`.  Its feature decisions are durable:
 the driver must not silently admit a refused bit because a host tool happens
@@ -333,16 +335,19 @@ AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
   python3 -m pytest -q local_testing/test_ext4_profile.py
 ```
 
-The host profile deliberately does not enter `akashic_tui.PROFILES`: there is
-no guest driver capable of producing a truthful mount marker yet.
+The host profile deliberately does not enter `akashic_tui.PROFILES`: the
+read-only driver is explicit-volume qualification work, not yet a default
+boot-image or automount profile.
 
-## Next implementation gate
+## Current implementation gate
 
-The next milestone starts the ext4 binding.  Its first landing must implement
-read-only admission and inspection of every admitted clean format above,
-stable refusal for every known refused flag, checksum and corruption
-validation, and comparison with the external oracles.  It must then add
-journal replay/orphan recovery before exposing any unsafe write path.
+The ext4 binding milestone starts with read-only admission and inspection of
+every admitted clean format above, stable refusal for every known refused
+flag, checksum and corruption validation, and comparison with the external
+oracles. The current reader covers all four canonical images and keeps its
+remaining structural limits explicit in the driver documentation. It must
+close those fixture/structure gaps, then add journal replay/orphan recovery,
+before exposing any unsafe write path.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

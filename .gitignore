@@ -72,6 +72,7 @@ local_testing/*
 !local_testing/test_desk_gate0_baseline.py
 !local_testing/generate_ext4_profile_fixtures.py
 !local_testing/test_ext4_profile.py
+!local_testing/test_vfs_ext4.py
 !local_testing/test_gap_buf.py
 !local_testing/test_textarea.py
 !local_testing/evidence/

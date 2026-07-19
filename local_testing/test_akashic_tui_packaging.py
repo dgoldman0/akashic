@@ -270,6 +270,18 @@ def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
     ) < linked_autoexec.index("REQUIRE local_testing/vfs-ram-capacity.f")
 
 
+def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
+    assert tuple(dependency_closure(("utils/fs/drivers/vfs-ext4.f",))) == (
+        "concurrency/event.f",
+        "concurrency/guard.f",
+        "concurrency/semaphore.f",
+        "text/utf8.f",
+        "utils/fs/drivers/vfs-ext4.f",
+        "utils/fs/vfs.f",
+        "utils/memory-span.f",
+    )
+
+
 def test_supported_desktop_smoke_defaults_cover_linked_network_boot() -> None:
     args = _parser().parse_args(["smoke", "--profile", "desktop"])
     assert args.max_steps == DEFAULT_SMOKE_MAX_STEPS == 8_000_000_000

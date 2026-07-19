@@ -34,7 +34,7 @@ available for explicit qualification budgets.
 
 ## Ext4 compatibility profile
 
-The pre-driver ext4 format contract is pinned in
+The ext4 format contract is pinned in
 `docs/utils/fs/ext4-compatibility-profile.md` and mirrored by the
 machine-readable `fixtures/ext4-profile/manifest.json`.  It requires one
 source-built e2fsprogs v1.47.4 prefix; ambient `PATH` tools are deliberately
@@ -50,9 +50,10 @@ AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
   python3 -m pytest -q local_testing/test_ext4_profile.py
 ```
 
-This is host-side format/fixture qualification only.  It is intentionally not
-an `akashic_tui` guest profile until an ext4 binding can mount the images and
-emit a truthful marker.
+`test_vfs_ext4.py` then mounts those same images through the read-only ABI-1
+binding and checks their namespace, data, links, sparse ranges, xattrs,
+metadata, and corruption refusals. This remains an explicit-volume emulator
+suite rather than a default boot-image or automount profile.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

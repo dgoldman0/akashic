@@ -6,8 +6,10 @@
 > implemented ABI-1 contract is documented in `docs/utils/fs/vfs.md`; current
 > MP64FS and FAT behavior is documented in
 > `docs/utils/fs/drivers/vfs-mp64fs.md` and
-> `docs/utils/fs/drivers/vfs-fat.md`; the authoritative ext4 profile is
-> `docs/utils/fs/ext4-compatibility-profile.md`.  In particular, disk bindings
+> `docs/utils/fs/drivers/vfs-fat.md`; the current read-only ext4 landing is
+> documented in `docs/utils/fs/drivers/vfs-ext4.md`, and its authoritative
+> writable profile is `docs/utils/fs/ext4-compatibility-profile.md`. In
+> particular, disk bindings
 > now take an explicit generation-bound volume, MP64FS is read/write, FAT is
 > deliberately read-only, and the former raw ten-XT binding table is no longer
 > a runtime interface.

@@ -1,9 +1,9 @@
 # Ext4 profile-v1 qualification fixtures
 
-This directory ratifies the host-side input contract for the future Akashic
-ext4 binding.  It does not contain an ext4 driver and is not runtime data,
-startup data, a fallback filesystem, or evidence that Akashic can mount ext4
-yet.  The normative human contract is
+This directory ratifies the host-side input contract consumed by the Akashic
+ext4 binding. It does not contain the driver and is not runtime data, startup
+data, or a fallback filesystem; runtime mount evidence belongs to
+`local_testing/test_vfs_ext4.py`. The normative human contract is
 [`docs/utils/fs/ext4-compatibility-profile.md`](../../../docs/utils/fs/ext4-compatibility-profile.md).
 
 `manifest.json` pins Linux v6.18 and the complete upstream e2fsprogs v1.47.4

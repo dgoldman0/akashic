@@ -12,9 +12,10 @@ REQUIRE utils/fs/vfs.f
 The module provides `akashic-vfs`. ABI 1 is the only binding ABI: the former
 raw ten-XT table is not accepted.
 
-The future ext4 binding is constrained by the ratified
-[`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md). That profile
-does not itself claim that an ext4 binding has been implemented.
+The first ext4 implementation slice is the checksummed, read-only
+[`akashic-vfs-ext4` binding](drivers/vfs-ext4.md). It is constrained by the
+ratified [`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md) and does
+not yet claim completion of that writable profile.
 
 ## Quick start
 
