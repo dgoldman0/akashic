@@ -50,6 +50,11 @@ local_testing/*
 !local_testing/test_phase6_suite.py
 !local_testing/README.md
 !local_testing/akashic_tui.py
+# Refactor architecture inventory and ratchet
+!local_testing/forth_dependencies.py
+!local_testing/refactor_inventory.py
+!local_testing/refactor_architecture.json
+!local_testing/test_refactor_inventory.py
 !local_testing/gate2a-contracts.f
 !local_testing/gate3a-resource-contracts.f
 !local_testing/library-model-codecs.f

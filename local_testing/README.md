@@ -15,6 +15,24 @@ fantasy-computing/
 
 Set `MEGAPAD_ROOT` when using a different layout.
 
+## Refactor architecture ratchet
+
+Landing L0's host-only architecture inventory is independent of MegaPad images
+and filesystem drivers:
+
+```bash
+python3 local_testing/refactor_inventory.py --check
+python3 -m pytest -q local_testing/test_refactor_inventory.py
+```
+
+Use `--format json` for the complete machine-readable dependency, ownership,
+capacity, and mutable-state report. The reviewed policy lives in
+`local_testing/refactor_architecture.json`; its rationale, current debt, units,
+and update rule are documented in `docs/refactor/l0-architecture-baseline.md`.
+Unknown source packages and any unreviewed widening of dependency, placement,
+unresolved-import, or global-state debt fail the ratchet. Ext4 is not a
+prerequisite for these checks or the planned storage refactor.
+
 ## Build And Smoke Test
 
 ```bash

@@ -12,13 +12,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import posixpath
 import re
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+
+from forth_dependencies import (
+    PROVIDED_RE,
+    REQUIRE_RE,
+    dependency_closure as _shared_dependency_closure,
+    dependency_order as _shared_dependency_order,
+    module_key,
+    normalize_module as _shared_normalize_module,
+)
 
 
 AKASHIC_ROOT = Path(__file__).resolve().parents[1]
@@ -185,14 +193,10 @@ def _streams_live_exact_host_trust_leaf() -> bytes:
         )
     lines.append(f"{len(artifact)} CONSTANT _lrc-artifact-u")
     return ("\n".join(lines) + "\n").encode("ascii")
-REQUIRE_RE = re.compile(r"^ *REQUIRE +([^ \n]+)", re.MULTILINE)
-PROVIDED_RE = re.compile(r"^ *PROVIDED +([^ \n]+)", re.MULTILINE)
 COLON_STACK_EFFECT_RE = re.compile(
     r"^(?P<head> *: +[^ ]+) +(?P<effect>\([^()\r\n]*--[^()\r\n]*\))"
 )
 FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
-# KDOS stores a terminating NUL in its 24-byte NAMEBUF, leaving 23 key bytes.
-MODULE_KEY_BYTES = 23
 # Keep deployment chunks modest even though KDOS now batches large module
 # transfers.  This bounds source prescan/evaluation work and leaves room for
 # profile growth without changing the generated chunk topology on every edit.
@@ -21751,65 +21755,17 @@ SAMPLE_FILES = {
 
 
 def _normalize_module(module: str, requiring: str | None = None) -> str:
-    if module.startswith("/"):
-        normalized = posixpath.normpath(module.lstrip("/"))
-    else:
-        base = posixpath.dirname(requiring) if requiring else ""
-        normalized = posixpath.normpath(posixpath.join(base, module))
-    if normalized == ".." or normalized.startswith("../"):
-        raise ValueError(f"REQUIRE escapes Akashic source root: {module!r}")
-    return normalized
+    return _shared_normalize_module(module, requiring)
 
 
 def dependency_closure(roots: tuple[str, ...]) -> tuple[str, ...]:
     """Return the deterministic transitive REQUIRE closure for *roots*."""
-    pending = [_normalize_module(root) for root in reversed(roots)]
-    seen: set[str] = set()
-
-    while pending:
-        module = pending.pop()
-        if module in seen:
-            continue
-        host_path = SOURCE_ROOT / module
-        if not host_path.is_file():
-            raise FileNotFoundError(f"Missing Akashic module: {module}")
-        seen.add(module)
-        text = host_path.read_text(encoding="utf-8")
-        dependencies = [
-            _normalize_module(match.group(1), module)
-            for match in REQUIRE_RE.finditer(text)
-        ]
-        pending.extend(reversed(dependencies))
-
-    return tuple(sorted(seen))
+    return _shared_dependency_closure(SOURCE_ROOT, roots)
 
 
 def dependency_order(roots: tuple[str, ...]) -> tuple[str, ...]:
     """Return dependencies before their requiring modules."""
-    ordered: list[str] = []
-    visited: set[str] = set()
-    visiting: set[str] = set()
-
-    def visit(module: str, requiring: str | None = None):
-        normalized = _normalize_module(module, requiring)
-        if normalized in visited:
-            return
-        if normalized in visiting:
-            raise RuntimeError(f"Cyclic linked REQUIRE dependency: {normalized}")
-        host_path = SOURCE_ROOT / normalized
-        if not host_path.is_file():
-            raise FileNotFoundError(f"Missing Akashic module: {normalized}")
-        visiting.add(normalized)
-        text = host_path.read_text(encoding="utf-8")
-        for match in REQUIRE_RE.finditer(text):
-            visit(match.group(1), normalized)
-        visiting.remove(normalized)
-        visited.add(normalized)
-        ordered.append(normalized)
-
-    for root in roots:
-        visit(root)
-    return tuple(ordered)
+    return _shared_dependency_order(SOURCE_ROOT, roots)
 
 
 def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
@@ -22081,9 +22037,7 @@ def _validate_module_ids(modules: tuple[str, ...]):
         if not match:
             continue
         module_id = match.group(1)
-        key = module_id.encode("utf-8")[:MODULE_KEY_BYTES].ljust(
-            MODULE_KEY_BYTES, b"\0"
-        )
+        key = module_key(module_id)
         previous = keys.get(key)
         if previous and previous != (module, module_id):
             other_module, other_id = previous

@@ -1,0 +1,815 @@
+{
+  "schema": "akashic.refactor.l0",
+  "baseline": {
+    "name": "post-gate4-refactor-baseline-20260720",
+    "commit": "ce340fc8bef0b2c1331339f6ceaf4c02d4c020f5",
+    "expected": {
+      "module_count": 380,
+      "resolved_require_occurrence_count": 1284,
+      "unique_resolved_edge_count": 1283,
+      "unresolved_require_count": 78,
+      "cycle_count": 0,
+      "layer_violation_count": 7,
+      "placement_debt_count": 40,
+      "provided_issue_count": 2,
+      "addressability_issue_count": 1,
+      "marker_issue_count": 0,
+      "graph_sha256": "20eefc019d64986760e8d982c33e98e4f2f86a822a1dbd729c5b5451aa7aa797",
+      "state_sha256": "3d704bc38ab715a4caaad331f3cb1446964feac17cb596b6de2c40b497f98f5e",
+      "placement_sha256": "f149cde98be995c68fdf6ea2b65955507479160609f98a0cbe350604f10b3490",
+      "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
+      "cycles": [],
+      "layer_violations": [
+        [
+          "applet-imports-sibling",
+          "tui/applets/desk/desk.f",
+          "agent/access-profile.f"
+        ],
+        [
+          "applet-imports-sibling",
+          "tui/applets/desk/desk.f",
+          "agent/mandate-run.f"
+        ],
+        [
+          "applet-imports-sibling",
+          "tui/applets/desk/desk.f",
+          "agent/providers/offline.f"
+        ],
+        [
+          "applet-imports-sibling",
+          "tui/applets/desk/desk.f",
+          "agent/runtime.f"
+        ],
+        [
+          "applet-imports-sibling",
+          "tui/applets/desk/desk.f",
+          "agent/storage/vfs-conversation.f"
+        ],
+        [
+          "applet-imports-sibling",
+          "tui/applets/desk/desk.f",
+          "daybook/shared-document.f"
+        ],
+        [
+          "shared-host-hardcodes-vfs-driver",
+          "tui/app-shell.f",
+          "utils/fs/drivers/vfs-mp64fs.f"
+        ]
+      ],
+      "provided_issues": [
+        {
+          "identity": "akashic-tui-fexplorer",
+          "kind": "duplicate-provided-identity",
+          "modules": [
+            "tui/applets/fexplorer/fexplorer copy.f",
+            "tui/applets/fexplorer/fexplorer.f"
+          ]
+        },
+        {
+          "key_hex": "616b61736869632d7475692d666578706c6f7265720000",
+          "kind": "bounded-provided-key-collision",
+          "providers": [
+            [
+              "tui/applets/fexplorer/fexplorer copy.f",
+              "akashic-tui-fexplorer"
+            ],
+            [
+              "tui/applets/fexplorer/fexplorer.f",
+              "akashic-tui-fexplorer"
+            ]
+          ]
+        }
+      ],
+      "addressability_issues": [
+        {
+          "kind": "whitespace-in-module-path",
+          "module": "tui/applets/fexplorer/fexplorer copy.f"
+        }
+      ],
+      "marker_issues": []
+    }
+  },
+  "filesystem": {
+    "required_abstraction": "akashic/utils/fs/vfs.f",
+    "ext4_prerequisite": false,
+    "note": "Scale and architecture qualification use the generic VFS contract; ext4 is an optional integration backend."
+  },
+  "ownership": {
+    "exact": [
+      {
+        "module": "tui/widgets/agent-auth.f",
+        "class": "applet",
+        "owner": "agent",
+        "placement": "misplaced-applet",
+        "target": "tui/applets/agent/widgets/agent-auth.f"
+      },
+      {
+        "module": "tui/widgets/agent-settings.f",
+        "class": "applet",
+        "owner": "agent",
+        "placement": "misplaced-applet",
+        "target": "tui/applets/agent/widgets/agent-settings.f"
+      },
+      {
+        "module": "interop/shared-document-lens.f",
+        "class": "desk-ecosystem",
+        "owner": "shared-document-session",
+        "placement": "split-required",
+        "target": "tui/services/shared-document-session.f"
+      },
+      {
+        "module": "agent/access-profile.f",
+        "class": "applet",
+        "owner": "agent",
+        "placement": "split-required",
+        "target": "tui/applets/agent/access-profile.f",
+        "split_targets": [
+          "tui/applets/agent/access-profile.f",
+          "tui/applets/desk/agent-access-policy.f"
+        ]
+      }
+    ],
+    "prefixes": [
+      {
+        "prefix": "library/",
+        "class": "applet",
+        "owner": "library",
+        "placement": "misplaced-applet",
+        "target_prefix": "tui/applets/library/"
+      },
+      {
+        "prefix": "daybook/",
+        "class": "applet",
+        "owner": "daybook",
+        "placement": "misplaced-applet",
+        "target_prefix": "tui/applets/daybook/"
+      },
+      {
+        "prefix": "agent/",
+        "class": "applet",
+        "owner": "agent",
+        "placement": "misplaced-applet",
+        "target_prefix": "tui/applets/agent/"
+      }
+    ],
+    "independent_prefixes": [
+      "atproto/",
+      "audio/",
+      "cbor/",
+      "concurrency/",
+      "consensus/",
+      "css/",
+      "dom/",
+      "font/",
+      "game/",
+      "interop/",
+      "knowledge/",
+      "liraq/",
+      "markup/",
+      "math/",
+      "net/",
+      "node/",
+      "persistence/",
+      "render/",
+      "runtime/",
+      "security/",
+      "sml/",
+      "store/",
+      "syndication/",
+      "testing/",
+      "text/",
+      "utils/",
+      "web/"
+    ]
+  },
+  "dependency_constraints": [
+    {
+      "rule": "shared-host-hardcodes-vfs-driver",
+      "from": "tui/app-shell.f",
+      "forbid_target_prefix": "utils/fs/drivers/",
+      "removal_landing": "L8"
+    }
+  ],
+  "scale_profiles": {
+    "workstation": {
+      "primary_records": 100000,
+      "revisions_or_relationship_edges": 1000000,
+      "content_bytes_must_exceed": 65536,
+      "runtime_routes": 100000,
+      "purpose": "interactive local corpus and ordinary performance qualification"
+    },
+    "large_host_model": {
+      "primary_records": 1000000,
+      "revisions": 10000000,
+      "relationship_edges": 10000000,
+      "purpose": "prove index geometry, amplification, and bounded working memory without aggregate target allocation"
+    },
+    "emulator": {
+      "cardinality": "representative-reduced",
+      "must_preserve": [
+        "index-height and page-count invariants",
+        "write-amplification invariants",
+        "working-set bounds",
+        "fault and publication semantics"
+      ]
+    },
+    "query_workloads": [
+      {
+        "id": "point-lookup",
+        "required_complexity": "O(log n)",
+        "required_behavior": "bounded index-page reads independent of corpus cardinality"
+      },
+      {
+        "id": "ordered-and-compound-range",
+        "required_complexity": "O(log n + candidates + results)",
+        "required_behavior": "index seek followed by bounded candidate verification"
+      },
+      {
+        "id": "relationship-neighborhood",
+        "required_complexity": "O(log n + incident edges)",
+        "required_behavior": "no catalog-wide bitmap rewrite or scan"
+      },
+      {
+        "id": "text-candidate-plus-exact",
+        "required_complexity": "O(index candidates + exact verification)",
+        "required_behavior": "false positives are verified without a mandatory corpus scan"
+      },
+      {
+        "id": "deep-keyset-pagination",
+        "required_complexity": "O(log n + page size)",
+        "required_behavior": "no offset walk; unrelated mutations do not silently retarget a pinned cursor"
+      }
+    ],
+    "model_workload": {
+      "per_record_cardinality": "variable tags, lineage facts, and revisions without fixed inline aggregate ceilings",
+      "relationship_distribution": "sparse, skewed, and high-degree nodes",
+      "content_shape": "variable-size and chunked content, including documents beyond whole-buffer limits"
+    },
+    "instance_workload": {
+      "same_type_applets": 2,
+      "interleaved_stores": 4,
+      "interleaved_request_buses": 4,
+      "interleaved_long_jobs": 4,
+      "hidden_process_global_current_instance": false
+    }
+  },
+  "hot_path_budgets": {
+    "cold_open_max_metadata_pages": 64,
+    "large_profile_point_lookup_max_index_pages": 6,
+    "metadata_mutation_max_pages": 32,
+    "metadata_mutation_max_bytes_excluding_payload": 262144,
+    "ui_max_collection_pages": 3,
+    "ordinary_operation_corpus_proportional_allocation": false,
+    "required_measurements": [
+      "logical page reads and writes",
+      "bytes read and written",
+      "comparisons",
+      "allocation events and peak live bytes",
+      "cache hits and misses",
+      "guest cycles and stalls",
+      "peak working memory"
+    ]
+  },
+  "hot_path_baseline": {
+    "evidence": [
+      "local_testing/evidence/library-gate4-close-20260720.md",
+      "local_testing/evidence/library-projection-owner-20260720.md",
+      "local_testing/library_query_efficiency.py",
+      "local_testing/library_projection_efficiency.py",
+      "local_testing/library_maintenance_efficiency.py"
+    ],
+    "existing_guest_counters": [
+      "PERF-CYCLES",
+      "PERF-STALLS",
+      "PERF-EXTMEM",
+      "Library full validation count",
+      "Library warm assurance count",
+      "Library index rebuild count",
+      "Library entry and collection reads",
+      "Library direct frame reads and bytes",
+      "Library arena scans and frames"
+    ],
+    "missing_instrumentation": [
+      "logical persistence page reads and writes",
+      "allocation event count",
+      "peak live allocation bytes"
+    ],
+    "clarification": "PERF-EXTMEM counts external-memory traffic; it is not an allocation counter. Current 512-byte VFS sectors must not be relabelled as future logical persistence pages.",
+    "coverage": [
+      {
+        "area": "Library",
+        "status": "measured",
+        "operations": [
+          "cold load",
+          "query",
+          "projection acquire/describe/snapshot/replace/release",
+          "maintenance inspect/export/repair"
+        ]
+      },
+      {
+        "area": "Streams",
+        "status": "functional-and-capacity-only",
+        "missing": "isolated refresh, apply, persistence, and query operation telemetry"
+      },
+      {
+        "area": "Agent",
+        "status": "functional-and-capacity-only",
+        "missing": "isolated conversation append/load/query operation telemetry"
+      },
+      {
+        "area": "Daybook/Pad/Grid/FExplorer",
+        "status": "functional-and-capacity-only",
+        "missing": "isolated large-data operation telemetry"
+      },
+      {
+        "area": "Desk/TUI",
+        "status": "journey-only",
+        "missing": "isolated launch, close, relayout, dispatch, and repaint telemetry"
+      }
+    ],
+    "representative_measurements": [
+      {
+        "operation": "projection replace",
+        "shape": "65536-byte content",
+        "cycles": 495847848
+      },
+      {
+        "operation": "maintenance repair",
+        "shape": "9 x 65536-byte payloads",
+        "cycles": 1627300611
+      },
+      {
+        "operation": "maintenance inspect",
+        "shape": "9 x 65536-byte payloads",
+        "cycles": 546637946
+      }
+    ]
+  },
+  "complexity_ledger": [
+    {
+      "id": "library.metadata-mutation",
+      "module": "library/vfs-store.f",
+      "operation": "metadata mutation and publication",
+      "current_structure": "dual complete fixed-capacity metadata banks",
+      "current_complexity": "O(catalog capacity) copied, written, and read back per mutation",
+      "scale_risk": "write cost and temporary I/O scale with the complete catalog rather than the changed records",
+      "replacement_requirement": "copy-on-write indexed pages plus atomic root publication",
+      "target_landing": "L15",
+      "evidence_symbols": ["_LIBMU-COPY-BANK-BODY", "_LIBMU-FULL-CANDIDATE-READBACK"]
+    },
+    {
+      "id": "library.corpus-query",
+      "module": "library/vfs-store.f",
+      "operation": "ordered and filtered corpus query",
+      "current_structure": "fixed catalog slots with optional reject accelerator",
+      "current_complexity": "O(catalog slots + candidate content verification)",
+      "scale_risk": "ordinary queries retain a corpus-wide scan path",
+      "replacement_requirement": "ordered/compound indexes and opaque keyset cursors",
+      "target_landing": "L15",
+      "evidence_symbols": ["_LIBRARY-VFS-STORE-QUERY-CORPUS", "_LIBCQ-INDEX-REQUIRED?"]
+    },
+    {
+      "id": "streams.observation-checkpoint",
+      "module": "tui/applets/streams/observation-store.f",
+      "operation": "observation load and save",
+      "current_structure": "one checksummed whole-corpus checkpoint",
+      "current_complexity": "O(sources + observations + keys) bytes per load/save",
+      "scale_risk": "every mutation rewrites and verifies aggregate state",
+      "replacement_requirement": "indexed source/observation records and retained attempts",
+      "target_landing": "L16",
+      "evidence_symbols": ["_OSTORE-ENCODE-PAYLOAD", "_STREAMS-OBSERVATION-STORE-SAVE"]
+    },
+    {
+      "id": "agent.conversation-snapshot",
+      "module": "agent/storage/thread-codec.f",
+      "operation": "conversation encode and decode",
+      "current_structure": "bounded complete conversation snapshot",
+      "current_complexity": "O(messages + context items + content bytes)",
+      "scale_risk": "append/load cost and memory grow with the complete retained conversation",
+      "replacement_requirement": "paged records, ranged content, and indexed conversation access",
+      "target_landing": "L19",
+      "evidence_symbols": ["ATHREAD-ENCODE-SIZE", "ATHREAD-ENCODE", "ATHREAD-DECODE"]
+    },
+    {
+      "id": "daybook.document-parse",
+      "module": "tui/applets/daybook/daybook.f",
+      "operation": "load, parse, and find entries",
+      "current_structure": "one whole text document plus fixed entry array",
+      "current_complexity": "O(document bytes + entry count) per reload",
+      "scale_risk": "the full journal is reparsed and materialized",
+      "replacement_requirement": "chunked text or indexed entry records with date/tag indexes",
+      "target_landing": "L19",
+      "evidence_symbols": ["_DB-PARSE-FILE", "_DB-LOAD", "_DB-HAS-ENTRY?"]
+    },
+    {
+      "id": "pad.open-documents",
+      "module": "tui/applets/pad/pad.f",
+      "operation": "open, find, load, and search documents",
+      "current_structure": "fixed array of complete document buffers",
+      "current_complexity": "O(open buffers + complete document bytes)",
+      "scale_risk": "large documents and many tabs consume fixed whole-buffer slots",
+      "replacement_requirement": "per-document piece/gap state, ranged VFS I/O, and incremental search",
+      "target_landing": "L19",
+      "evidence_symbols": ["_PAD-FIND-BUFFER", "_PAD-LOAD-FILE", "_PAD-SEARCH-NEXT-OPEN"]
+    },
+    {
+      "id": "fexplorer.directory-sort",
+      "module": "tui/applets/fexplorer/fexplorer.f",
+      "operation": "directory materialization and sort",
+      "current_structure": "fixed materialized inode/item arrays with pairwise swap sort",
+      "current_complexity": "O(directory entries squared) sort after O(entries) materialization",
+      "scale_risk": "large directories overflow the array and sort quadratically",
+      "replacement_requirement": "paged directory source with stable IDs and scalable ordering",
+      "target_landing": "L20",
+      "evidence_symbols": ["_FEXP-SORT-LIST", "_FEXP-SWAP-ITEMS"]
+    },
+    {
+      "id": "grid.fixed-sheet",
+      "module": "tui/applets/grid/grid.f",
+      "operation": "CSV load and sheet evaluation",
+      "current_structure": "fixed dense row-by-column matrix",
+      "current_complexity": "O(file bytes + fixed matrix cells) parse/materialization",
+      "scale_risk": "sparse or large sheets pay dense storage and hard row/column ceilings",
+      "replacement_requirement": "sparse tiled cells and dependency-indexed incremental recalculation",
+      "target_landing": "L20",
+      "evidence_symbols": ["_GRID-SCAN-CSV", "_GRID-PARSE-CSV"]
+    },
+    {
+      "id": "desk.host-catalogs",
+      "module": "tui/applets/desk/desk.f",
+      "operation": "app/service lookup and relayout",
+      "current_structure": "fixed catalogs and linear visible-order traversal",
+      "current_complexity": "O(apps + services + visible slots) host operations",
+      "scale_risk": "launch, lookup, and layout work grow through repeated linear scans",
+      "replacement_requirement": "indexed host slots plus explicit visible order and incremental layout",
+      "target_landing": "L8",
+      "evidence_symbols": ["_DESK-INSTALLED-FIND", "_DESK-SERVICE-FIND", "DESK-RELAYOUT"]
+    },
+    {
+      "id": "runtime.component-registry",
+      "module": "runtime/registry.f",
+      "operation": "component type and instance lookup",
+      "current_structure": "fixed inline pointer arrays",
+      "current_complexity": "O(types) or O(instances) lookup",
+      "scale_risk": "lookup latency and hard capacity grow with the complete registry",
+      "replacement_requirement": "caller-sized indexed registries",
+      "target_landing": "L17",
+      "evidence_symbols": ["CREG-TYPE-FIND", "CREG-INST-FIND"]
+    },
+    {
+      "id": "runtime.resource-registry",
+      "module": "runtime/resource-registry.f",
+      "operation": "resource identity lookup",
+      "current_structure": "fixed entry array",
+      "current_complexity": "O(resources) lookup",
+      "scale_risk": "resource resolution scans the complete live registry",
+      "replacement_requirement": "caller-sized identity index",
+      "target_landing": "L17",
+      "evidence_symbols": ["_RREG-FIND-ID", "_RREG-CINST-FIND"]
+    },
+    {
+      "id": "interop.request-bus",
+      "module": "interop/request-bus.f",
+      "operation": "queue and synchronous owner dispatch",
+      "current_structure": "fixed pointer ring plus globally guarded dispatch scratch",
+      "current_complexity": "bounded O(1) queueing but fixed aggregate capacity and shared serialization",
+      "scale_risk": "independent buses contend through process-global guards and cannot express caller-selected backpressure",
+      "replacement_requirement": "per-instance queues/guards with explicit capacity and bounded scheduling",
+      "target_landing": "L17",
+      "evidence_symbols": ["CBUS-POST", "CBUS-DISPATCH", "_CBUS-DISPATCH-GUARD"]
+    },
+    {
+      "id": "uidl.document",
+      "module": "liraq/uidl.f",
+      "operation": "UIDL parse and element-by-ID lookup",
+      "current_structure": "fixed complete element/attribute arrays",
+      "current_complexity": "O(document bytes) parse and O(elements) ID lookup",
+      "scale_risk": "large UI documents hit aggregate limits and repeated linear lookup",
+      "replacement_requirement": "per-instance arenas with indexed IDs and bounded render caches",
+      "target_landing": "L17",
+      "evidence_symbols": ["UIDL-PARSE", "_UDL-ID-FIND", "UIDL-BY-ID"]
+    }
+  ],
+  "capacities": [
+    {
+      "id": "library.catalog",
+      "module": "library/model.f",
+      "symbol": "LIB-CATALOG-MAX",
+      "value": 128,
+      "scope": "aggregate-corpus",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "library.collections",
+      "module": "library/model.f",
+      "symbol": "LIB-COLLECTION-MAX",
+      "value": 32,
+      "scope": "aggregate-corpus",
+      "scale_axis": "relationship-cardinality"
+    },
+    {
+      "id": "library.collection-members",
+      "module": "library/model.f",
+      "symbol": "LIB-COLLECTION-MEMBER-MAX",
+      "value": 128,
+      "scope": "aggregate-relationship",
+      "scale_axis": "relationship-cardinality"
+    },
+    {
+      "id": "library.tags",
+      "module": "library/model.f",
+      "symbol": "LIB-TAG-MAX",
+      "value": 16,
+      "scope": "per-record-inline",
+      "scale_axis": "model-complexity"
+    },
+    {
+      "id": "library.lineage",
+      "module": "library/model.f",
+      "symbol": "LIB-LINEAGE-MAX",
+      "value": 4,
+      "scope": "per-record-inline",
+      "scale_axis": "model-complexity"
+    },
+    {
+      "id": "library.content-bytes",
+      "module": "library/model.f",
+      "symbol": "LIB-CONTENT-MAX",
+      "value": 65536,
+      "scope": "whole-record-buffer",
+      "scale_axis": "content-bytes"
+    },
+    {
+      "id": "library.retained-revisions",
+      "module": "library/model.f",
+      "symbol": "LIB-RETAINED-REVISION-MAX",
+      "value": 4,
+      "scope": "per-record-inline",
+      "scale_axis": "revision-cardinality"
+    },
+    {
+      "id": "library.query-page",
+      "module": "library/model.f",
+      "symbol": "LIB-QUERY-PAGE-MAX",
+      "value": 32,
+      "scope": "working-set",
+      "scale_axis": "ui-window"
+    },
+    {
+      "id": "library.live-projections",
+      "module": "library/model.f",
+      "symbol": "LIB-PROJECTION-MAX",
+      "value": 8,
+      "scope": "instance-pool",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "library.projection-leases",
+      "module": "library/projection-owner.f",
+      "symbol": "LIBRARY-PROJECTION-LEASE-MAX",
+      "value": 64,
+      "scope": "instance-pool",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "streams.sources",
+      "module": "tui/applets/streams/observation-state.f",
+      "symbol": "OCHK-SOURCE-MAX",
+      "value": 16,
+      "scope": "aggregate-corpus",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "streams.observations",
+      "module": "tui/applets/streams/observation-state.f",
+      "symbol": "OCHK-OBSERVATION-MAX",
+      "value": 48,
+      "scope": "aggregate-corpus",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "streams.keys",
+      "module": "tui/applets/streams/observation-state.f",
+      "symbol": "OCHK-KEY-MAX",
+      "value": 64,
+      "scope": "aggregate-corpus",
+      "scale_axis": "index-cardinality"
+    },
+    {
+      "id": "streams.checkpoint-bytes",
+      "module": "tui/applets/streams/observation-state.f",
+      "symbol": "STREAMS-OBSERVATION-CHECKPOINT-SIZE",
+      "value": 131072,
+      "scope": "whole-corpus-buffer",
+      "scale_axis": "content-bytes"
+    },
+    {
+      "id": "streams.source-registry",
+      "module": "tui/applets/streams/source-registry.f",
+      "symbol": "STREAMS-SOURCE-MAX",
+      "value": 16,
+      "scope": "aggregate-corpus",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "agent.messages",
+      "module": "agent/conversation.f",
+      "symbol": "ACONV-MAX-MESSAGES",
+      "value": 64,
+      "scope": "aggregate-conversation",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "agent.snapshot-bytes",
+      "module": "agent/storage/thread-codec.f",
+      "symbol": "ATHREAD-MAX-SNAPSHOT",
+      "value": 262144,
+      "scope": "whole-conversation-buffer",
+      "scale_axis": "content-bytes"
+    },
+    {
+      "id": "daybook.entries",
+      "module": "tui/applets/daybook/daybook.f",
+      "symbol": "_DB-MAX-ENTRIES",
+      "value": 96,
+      "scope": "aggregate-document",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "daybook.io-bytes",
+      "module": "tui/applets/daybook/daybook.f",
+      "symbol": "_DB-IO-CAP",
+      "value": 32768,
+      "scope": "whole-document-buffer",
+      "scale_axis": "content-bytes"
+    },
+    {
+      "id": "pad.open-buffers",
+      "module": "tui/applets/pad/pad.f",
+      "symbol": "_PAD-MAX-BUFS",
+      "value": 16,
+      "scope": "instance-pool",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "pad.buffer-bytes",
+      "module": "tui/applets/pad/pad.f",
+      "symbol": "_PAD-BUF-CAP",
+      "value": 65536,
+      "scope": "whole-document-buffer",
+      "scale_axis": "content-bytes"
+    },
+    {
+      "id": "pad.arena-bytes",
+      "module": "tui/applets/pad/pad.f",
+      "symbol": "_PAD-ARENA-SIZE",
+      "value": 2097152,
+      "scope": "instance-working-set",
+      "scale_axis": "working-memory"
+    },
+    {
+      "id": "fexplorer.directory-entries",
+      "module": "tui/applets/fexplorer/fexplorer.f",
+      "symbol": "_FEXP-MAX-DIR",
+      "value": 256,
+      "scope": "materialized-result",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "grid.rows",
+      "module": "tui/applets/grid/grid.f",
+      "symbol": "_GRID-ROWS",
+      "value": 64,
+      "scope": "aggregate-sheet",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "grid.columns",
+      "module": "tui/applets/grid/grid.f",
+      "symbol": "_GRID-COLS",
+      "value": 16,
+      "scope": "aggregate-sheet",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "desk.builtins",
+      "module": "tui/applets/desk/desk.f",
+      "symbol": "_DESK-BUILTIN-MAX",
+      "value": 32,
+      "scope": "aggregate-catalog",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "desk.pending-startup",
+      "module": "tui/applets/desk/desk.f",
+      "symbol": "_DESK-PEND-MAX",
+      "value": 8,
+      "scope": "queue",
+      "scale_axis": "work-scheduling"
+    },
+    {
+      "id": "desk.installed-apps",
+      "module": "tui/applets/desk/desk.f",
+      "symbol": "_DESK-MAX-INSTALLED",
+      "value": 32,
+      "scope": "aggregate-catalog",
+      "scale_axis": "primary-record-cardinality"
+    },
+    {
+      "id": "desk.services",
+      "module": "tui/applets/desk/desk.f",
+      "symbol": "_DESK-SERVICE-CAPACITY",
+      "value": 16,
+      "scope": "instance-pool",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "desk.visible-slots",
+      "module": "tui/applets/desk/desk.f",
+      "symbol": "_DESK-MAX-VIS",
+      "value": 64,
+      "scope": "materialized-result",
+      "scale_axis": "ui-window"
+    },
+    {
+      "id": "runtime.component-types",
+      "module": "runtime/registry.f",
+      "symbol": "CREG-MAX-TYPES",
+      "value": 32,
+      "scope": "aggregate-registry",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "runtime.component-instances",
+      "module": "runtime/registry.f",
+      "symbol": "CREG-MAX-INSTANCES",
+      "value": 64,
+      "scope": "aggregate-registry",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "runtime.resources",
+      "module": "runtime/resource-registry.f",
+      "symbol": "RREG-CAPACITY",
+      "value": 64,
+      "scope": "aggregate-registry",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "interop.request-bus",
+      "module": "interop/request-bus.f",
+      "symbol": "CBUS-CAPACITY",
+      "value": 32,
+      "scope": "queue",
+      "scale_axis": "work-scheduling"
+    },
+    {
+      "id": "uidl.elements",
+      "module": "liraq/uidl.f",
+      "symbol": "_UDL-MAX-ELEMS",
+      "value": 256,
+      "scope": "aggregate-document",
+      "scale_axis": "model-complexity"
+    },
+    {
+      "id": "uidl.attributes",
+      "module": "liraq/uidl.f",
+      "symbol": "_UDL-MAX-ATTRS",
+      "value": 512,
+      "scope": "aggregate-document",
+      "scale_axis": "model-complexity"
+    },
+    {
+      "id": "tui.contexts-per-arena",
+      "module": "tui/uidl-tui.f",
+      "symbol": "_UCTX-PER-ARENA",
+      "value": 4,
+      "scope": "instance-pool",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "tui.context-arenas",
+      "module": "tui/uidl-tui.f",
+      "symbol": "_UCTX-MAX-ARENAS",
+      "value": 4,
+      "scope": "instance-pool",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "tui.deferred-actions",
+      "module": "tui/app-shell.f",
+      "symbol": "_ASHELL-POST-MAX",
+      "value": 16,
+      "scope": "queue",
+      "scale_axis": "work-scheduling"
+    },
+    {
+      "id": "tui.tree-nodes",
+      "module": "tui/widgets/tree.f",
+      "symbol": "_TREE-MAX-NODES",
+      "value": 512,
+      "scope": "materialized-result",
+      "scale_axis": "ui-window"
+    }
+  ]
+}
