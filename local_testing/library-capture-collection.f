@@ -23,6 +23,7 @@ CREATE _lcc-key-b LIB-OPERATION-KEY-SIZE ALLOT
 CREATE _lcc-collection-key LIB-OPERATION-KEY-SIZE ALLOT
 CREATE _lcc-rid-a LIB-DIGEST-SIZE ALLOT
 CREATE _lcc-rid-b LIB-DIGEST-SIZE ALLOT
+CREATE _lcc-unknown-rid LIB-DIGEST-SIZE ALLOT
 CREATE _lcc-collection-rid LIB-DIGEST-SIZE ALLOT
 CREATE _lcc-rid-out LIB-DIGEST-SIZE ALLOT
 CREATE _lcc-origin LIB-ORIGIN-SIZE ALLOT
@@ -31,6 +32,8 @@ CREATE _lcc-request-b LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE ALLOT
 CREATE _lcc-managed-request LIBRARY-MANAGED-CREATE-REQUEST-SIZE ALLOT
 CREATE _lcc-entry LIB-ENTRY-SIZE ALLOT
 CREATE _lcc-entry2 LIB-ENTRY-SIZE ALLOT
+CREATE _lcc-identity-entry LIB-ENTRY-SIZE ALLOT
+CREATE _lcc-store-before LIBRARY-VFS-STORE-SIZE ALLOT
 CREATE _lcc-read-entry LIB-ENTRY-SIZE ALLOT
 CREATE _lcc-read-content LIB-CONTENT-SIZE ALLOT
 CREATE _lcc-receipt LIB-RECEIPT-SIZE ALLOT
@@ -97,6 +100,16 @@ LIB-CONTENT-MAX XBUF _lcc-bytes
     _lcc-bytes LIB-CONTENT-MAX _lcc-read-entry _lcc-read-content
         _lcc-store LIBRARY-VFS-STORE-READ-EXACT
     _lcc-status ! _lcc-required ! ;
+
+: _lcc-read-identity  ( rid -- )
+    _lcc-identity-entry _lcc-store
+        LIBRARY-VFS-STORE-READ-IDENTITY _lcc-status ! ;
+
+: _lcc-fail-catalog-read  ( destination length fd -- ior )
+    OVER LIB-CATALOG-RECORD-SIZE = IF
+        DROP 2DROP -1 EXIT
+    THEN
+    VFS-READ-EXACT ;
 
 : _lcc-assert-view-member  ( rid index view -- )
     LIBCV-MEMBER RID= _lcc-assert ;
@@ -195,6 +208,64 @@ LIB-CONTENT-MAX XBUF _lcc-bytes
         LIBSTORE-S-INVALID = _lcc-assert
     _lcc-entry2 LIB-ENTRY-SIZE _lcc-zero? _lcc-assert
     _lcc-store LIBRARY-VFS-STORE.GENERATION @ 3 = _lcc-assert
+    _lcc-stack ;
+
+: _lcc-identity-read-contract  ( -- )
+    \ A targeted capture lookup uses only warm authority assurance and the
+    \ exact catalog record; it neither enumerates query pages nor consults
+    \ or rebuilds the disposable corpus index.
+    _LIBPQ-RESET
+    _lcc-identity-entry LIB-ENTRY-SIZE 165 FILL
+    _lcc-rid-a _lcc-read-identity
+    _lcc-status @ LIBSTORE-S-OK = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-VALID? _lcc-assert
+    _lcc-identity-entry LIBE.ID _lcc-rid-a RID= _lcc-assert
+    _lcc-identity-entry LIBE.KIND @ LIB-KIND-CAPTURE = _lcc-assert
+    _lcc-identity-entry LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-ACTIVE = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE
+        _lcc-entry LIB-ENTRY-SIZE COMPARE 0= _lcc-assert
+    _LIBPQ-FULL-VALIDATION@ 0= _lcc-assert
+    _LIBPQ-WARM-ASSURANCE@ 1 = _lcc-assert
+    _LIBPQ-INDEX-REBUILD@ 0= _lcc-assert
+    _LIBPQ-ENTRY-READ@ 1 = _lcc-assert
+    _LIBPQ-DIRECT-FRAME-READ@ 0= _lcc-assert
+    _LIBPQ-ARENA-SCAN@ 0= _lcc-assert
+
+    \ Unknown and semantically invalid identities leave no stale entry.
+    _lcc-identity-entry LIB-ENTRY-SIZE 165 FILL
+    _lcc-unknown-rid _lcc-read-identity
+    _lcc-status @ LIBSTORE-S-NOT-FOUND = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE _lcc-zero? _lcc-assert
+    _lcc-rid-out RID-CLEAR
+    _lcc-identity-entry LIB-ENTRY-SIZE 165 FILL
+    _lcc-rid-out _lcc-read-identity
+    _lcc-status @ LIBSTORE-S-INVALID = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE _lcc-zero? _lcc-assert
+
+    \ Input/output overlap and owner-store aliases are rejected before any
+    \ unsafe output write.  A self-aliased entry therefore remains intact.
+    _lcc-entry _lcc-identity-entry LIB-ENTRY-SIZE CMOVE
+    _lcc-identity-entry _lcc-identity-entry _lcc-store
+        LIBRARY-VFS-STORE-READ-IDENTITY
+        LIBSTORE-S-INVALID = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE
+        _lcc-entry LIB-ENTRY-SIZE COMPARE 0= _lcc-assert
+    _lcc-store _lcc-store-before LIBRARY-VFS-STORE-SIZE CMOVE
+    _lcc-rid-a _lcc-store _lcc-store
+        LIBRARY-VFS-STORE-READ-IDENTITY
+        LIBSTORE-S-INVALID = _lcc-assert
+    _lcc-store LIBRARY-VFS-STORE-SIZE
+        _lcc-store-before LIBRARY-VFS-STORE-SIZE COMPARE 0= _lcc-assert
+
+    \ A touched-record I/O failure is explicit and cannot expose the stale
+    \ successful entry that occupied the caller buffer before the call.
+    _lcc-identity-entry LIB-ENTRY-SIZE 165 FILL
+    ['] _lcc-fail-catalog-read _LIBVFS-READ-EXACT-XT !
+    _lcc-rid-a _lcc-read-identity
+    _lcc-status @ LIBSTORE-S-IO = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE _lcc-zero? _lcc-assert
+    ['] VFS-READ-EXACT _LIBVFS-READ-EXACT-XT !
     _lcc-stack ;
 
 : _lcc-receipt-a  ( -- )
@@ -297,6 +368,13 @@ LIB-CONTENT-MAX XBUF _lcc-bytes
     _lcc-entry LIBE.DOMAIN-REVISION @ 2 = _lcc-assert
     _lcc-entry LIBE.LIFECYCLE @
         LIB-LIFECYCLE-ARCHIVED = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE 165 FILL
+    _lcc-rid-b _lcc-read-identity
+    _lcc-status @ LIBSTORE-S-OK = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE
+        _lcc-entry LIB-ENTRY-SIZE COMPARE 0= _lcc-assert
+    _lcc-identity-entry LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-ARCHIVED = _lcc-assert
     _lcc-rid-b 2 _lcc-read
     _lcc-status @ LIBSTORE-S-OK = _lcc-assert
     _lcc-read-entry LIBE.LIFECYCLE @
@@ -315,6 +393,13 @@ LIB-CONTENT-MAX XBUF _lcc-bytes
         LIBSTORE-S-OK = _lcc-assert
     _lcc-entry LIBE.DOMAIN-REVISION @ 3 = _lcc-assert
     _lcc-entry LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE 165 FILL
+    _lcc-rid-b _lcc-read-identity
+    _lcc-status @ LIBSTORE-S-TOMBSTONED = _lcc-assert
+    _lcc-identity-entry LIB-ENTRY-SIZE
+        _lcc-entry LIB-ENTRY-SIZE COMPARE 0= _lcc-assert
+    _lcc-identity-entry LIBE.LIFECYCLE @
         LIB-LIFECYCLE-TOMBSTONED = _lcc-assert
     _lcc-rid-b 3 _lcc-read
     _lcc-status @ LIBSTORE-S-TOMBSTONED = _lcc-assert
@@ -349,6 +434,7 @@ LIB-CONTENT-MAX XBUF _lcc-bytes
     _lcc-arena-id LIB-DIGEST-SIZE 0xA6 FILL
     _lcc-key-a LIB-OPERATION-KEY-SIZE 0x61 FILL
     _lcc-key-b LIB-OPERATION-KEY-SIZE 0x62 FILL
+    _lcc-unknown-rid LIB-DIGEST-SIZE 0x71 FILL
     _lcc-collection-key LIB-OPERATION-KEY-SIZE 0x63 FILL
     _lcc-build-origin
     4194304 A-XMEM ARENA-NEW DUP 0= _lcc-assert DROP
@@ -363,6 +449,7 @@ LIB-CONTENT-MAX XBUF _lcc-bytes
     _lcc-arena-id _lcc-store LIBRARY-VFS-STORE-PROVISION
         LIBSTORE-S-OK = _lcc-assert
     _lcc-imports
+    _lcc-identity-read-contract
     _lcc-receipt-a
     _lcc-create-collection
     _lcc-replace-collection

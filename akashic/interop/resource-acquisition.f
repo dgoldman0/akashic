@@ -18,6 +18,7 @@ PROVIDED akashic-interop-racq
 REQUIRE qualified-locator.f
 REQUIRE lens-binding.f
 REQUIRE ../concurrency/guard.f
+REQUIRE ../utils/memory-span.f
 
 0  CONSTANT RACQ-S-OK
 1  CONSTANT RACQ-S-INVALID
@@ -306,6 +307,46 @@ VARIABLE _RAA-S
 VARIABLE _RAA-LS
 VARIABLE _RAA-PRIMARY
 
+: _RACQ-ATTACH-SPAN?  ( address length -- flag )
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _RACQ-ATTACH-SPANS-SAFE?  ( -- flag )
+    _RAA-L @ QLOC-SIZE _RACQ-ATTACH-SPAN? 0= IF 0 EXIT THEN
+    _RAA-R @ RACQ-ROOT-SIZE _RACQ-ATTACH-SPAN? 0= IF 0 EXIT THEN
+    _RAA-C @ CTX-SIZE _RACQ-ATTACH-SPAN? 0= IF 0 EXIT THEN
+    _RAA-RG @ RREG-SIZE _RACQ-ATTACH-SPAN? 0= IF 0 EXIT THEN
+    _RAA-B @ LBIND-SIZE _RACQ-ATTACH-SPAN? 0= IF 0 EXIT THEN
+    _RAA-O @ RACQ-RESULT-SIZE _RACQ-ATTACH-SPAN? 0= IF 0 EXIT THEN
+
+    \ Both public outputs are written during a successful attach.  They must
+    \ be disjoint from each other and from every fixed-size input whose span
+    \ this generic layer owns.  Perform this preflight before RESULT-INIT or
+    \ any owner callback so a hostile alias cannot corrupt authority-bearing
+    \ input state or manufacture a retain that the caller cannot release.
+    _RAA-B @ LBIND-SIZE _RAA-O @ RACQ-RESULT-SIZE MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    _RAA-B @ LBIND-SIZE _RAA-L @ QLOC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RAA-B @ LBIND-SIZE _RAA-R @ RACQ-ROOT-SIZE MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    _RAA-B @ LBIND-SIZE _RAA-C @ CTX-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RAA-B @ LBIND-SIZE _RAA-RG @ RREG-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RAA-O @ RACQ-RESULT-SIZE _RAA-L @ QLOC-SIZE MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    _RAA-O @ RACQ-RESULT-SIZE _RAA-R @ RACQ-ROOT-SIZE MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    _RAA-O @ RACQ-RESULT-SIZE _RAA-C @ CTX-SIZE MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    _RAA-O @ RACQ-RESULT-SIZE _RAA-RG @ RREG-SIZE MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    -1 ;
+
 : _RACQ-RESULT-STATUS!  ( status detail -- status )
     _RAA-O @ RACQ.RESULT-DETAIL !
     DUP _RAA-O @ RACQ.RESULT-STATUS ! ;
@@ -336,7 +377,7 @@ VARIABLE _RAA-PRIMARY
 
 : RACQ-ATTACH  ( locator root context rreg binding result -- status )
     _RAA-O ! _RAA-B ! _RAA-RG ! _RAA-C ! _RAA-R ! _RAA-L !
-    _RAA-O @ 0= IF RACQ-S-INVALID EXIT THEN
+    _RACQ-ATTACH-SPANS-SAFE? 0= IF RACQ-S-INVALID EXIT THEN
     _RAA-O @ RACQ-RESULT-INIT
     _RAA-L @ QLOC-VALID? 0= _RAA-R @ RACQ-ROOT-VALID? 0= OR IF
         RACQ-S-INVALID 0 _RACQ-RESULT-STATUS! EXIT

@@ -27525,6 +27525,45 @@ REQUIRE local_testing/library-query-index.f
 )
 
 
+PROFILES["library-projection-owner-contracts"] = Profile(
+    roots=("library/projection-owner.f", "interop/resource-client.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4 milestone 4 projection owner
+ENTER-USERLAND
+REQUIRE concurrency/guard.f
+REQUIRE interop/request-bus.f
+REQUIRE interop/resource-acquisition.f
+REQUIRE interop/resource-client.f
+REQUIRE library/vfs-store.f
+REQUIRE library/projection-owner.f
+." [akashic] loading Library projection-owner contracts" CR
+REQUIRE local_testing/library-projection.f
+""",
+    ready_markers=("LIBRARY PROJECTION OWNER PASS",),
+    stable_markers=("LIBRARY PROJECTION OWNER PASS",),
+    failure_markers=(
+        "LIBRARY PROJECTION OWNER FAIL",
+        "LIBRARY PROJECTION OWNER ASSERT",
+        "LIBRARY PROJECTION OWNER STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-projection.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" / "library-projection.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
 PROFILES["library-managed-capacity-contracts"] = Profile(
     roots=("library/vfs-store.f",),
     resources=(),

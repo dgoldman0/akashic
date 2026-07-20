@@ -169,8 +169,9 @@ collection spanning active and archived entries. Only serialized MP64FS bytes
 and printed stable RIDs cross to a fresh spawned process. The cold guest rebuilds
 the disposable index from authoritative records and proves the same ordered
 2+1 corpus pages, field/lifecycle/kind/media/collection filters, and collection
-summary. Milestone three still does not claim projection lifecycle,
-repair/export, the complete damage matrix, an applet/UI, or overall Gate 4 exit.
+summary. That milestone-three profile does not by itself claim projection
+lifecycle, repair/export, the complete damage matrix, an applet/UI, or overall
+Gate 4 exit.
 
 The milestones 1–3 efficiency rework extends the query and capacity contracts
 with warm-authority, direct-frame, index-loss/damage, full-head-change,
@@ -196,6 +197,55 @@ The printed 100 MHz and 50 MHz values are clock-rate projections, not measured
 FPGA latency. The emulator currently reports zero modeled stalls and does not
 model shared-BRAM arbitration, 6–10-cycle external-memory access, or SPI-SD
 latency; board synthesis and measurement remain required.
+
+### Gate 4 milestone 4: projection lifecycle
+
+`library-projection-owner-contracts` qualifies Gate 4's fourth ordered
+milestone. It links the complete production Library/projection closure in six
+top-level chunks; the contract fixture remains an ordinary separately injected
+Forth file. Run the focused contract with:
+
+```bash
+MEGAPAD_ROOT=/absolute/path/to/megapad \
+  python3 local_testing/akashic_tui.py smoke \
+    --profile library-projection-owner-contracts \
+    --max-steps 15000000000 --timeout 600
+```
+
+The 723-assertion matrix covers full-root and reachable-span alias rejection,
+always-through-root validation, same-RID owner sharing, distinct lease tokens,
+failed-`LBIND` rollback, copied/stale-token refusal, retryable release,
+dispatch-`BUSY` quiescence, idempotent repeat release, active identity,
+immutable exact archived reads, tombstone/pruned terminal behavior, refusal of
+ambient-VFS fallback, capture read-only behavior, the eight-owner and 64-lease
+bounds, ninth-owner and 65th-lease refusal, slot reuse without retargeting, and
+root teardown.
+
+Run the two-process cold acceptance and the bound-scale profiler with:
+
+```bash
+MEGAPAD_ROOT=/absolute/path/to/megapad \
+  python3 local_testing/library_projection_two_boot.py --timeout 600
+MEGAPAD_ROOT=/absolute/path/to/megapad \
+  python3 local_testing/library_projection_efficiency.py --timeout 600
+```
+
+The cold driver verifies and reuses the exact linked chunk manifest in two
+fresh emulator processes. Only serialized disk bytes plus the printed RID,
+domain revision, and digest cross the process boundary; no root, registry,
+component, binding, or token state survives. The profiler covers a
+representative 128-byte resource, one 64-KiB byte-bound resource, all eight
+live owners plus a ninth-owner refusal, all 64 leases plus the 65th refusal,
+and successful plus repeated-stale `resource.replace`. It enforces bounded
+unchanged-call cost, direct exact-frame reads without arena fallback or index
+reconstruction on unchanged calls, the deliberate complete publication
+readback on successful replace, and zero modeled stalls. Final measurements
+and the clock-model caveat are in
+[`evidence/library-projection-owner-20260720.md`](evidence/library-projection-owner-20260720.md).
+
+These results qualify milestone four only. Recognized-format repair, bounded
+opaque raw export, and the complete Gate 4 damage/cold-exit matrix remain
+milestone five; overall Gate 4 is not yet claimed.
 
 The Streams qualification path is intentionally split by boundary:
 

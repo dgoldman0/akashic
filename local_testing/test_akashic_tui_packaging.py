@@ -244,6 +244,87 @@ def test_library_query_index_profile_packages_exact_headless_contract() -> None:
     assert all(not module.startswith("streams/") for module in closure)
 
 
+def test_library_projection_owner_profile_packages_exact_headless_contract() -> None:
+    profile = PROFILES["library-projection-owner-contracts"]
+    assert profile.roots == (
+        "library/projection-owner.f",
+        "interop/resource-client.f",
+    )
+    assert profile.resources == ()
+    assert profile.ready_markers == ("LIBRARY PROJECTION OWNER PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert profile.total_sectors == 8192
+    assert profile.include_large_sample is False
+    assert profile.linked is True
+    assert {
+        "LIBRARY PROJECTION OWNER FAIL",
+        "LIBRARY PROJECTION OWNER ASSERT",
+        "LIBRARY PROJECTION OWNER STACK",
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/library-projection.f",
+    )
+    assert "REQUIRE library/projection-owner.f" in profile.autoexec
+    assert "REQUIRE interop/resource-client.f" in profile.autoexec
+    assert "REQUIRE library/vfs-store.f" in profile.autoexec
+    assert "REQUIRE concurrency/guard.f" in profile.autoexec
+    assert "REQUIRE interop/request-bus.f" in profile.autoexec
+    assert "REQUIRE interop/resource-acquisition.f" in profile.autoexec
+    assert profile.autoexec.index("REQUIRE concurrency/guard.f") < (
+        profile.autoexec.index("REQUIRE interop/request-bus.f")
+    )
+    assert profile.autoexec.index("REQUIRE interop/request-bus.f") < (
+        profile.autoexec.index("REQUIRE interop/resource-acquisition.f")
+    )
+    assert profile.autoexec.index("REQUIRE interop/resource-acquisition.f") < (
+        profile.autoexec.index("REQUIRE interop/resource-client.f")
+    )
+    assert profile.autoexec.index("REQUIRE interop/resource-client.f") < (
+        profile.autoexec.index("REQUIRE library/vfs-store.f")
+    )
+    assert profile.autoexec.index("REQUIRE library/vfs-store.f") < (
+        profile.autoexec.index("REQUIRE library/projection-owner.f")
+    )
+    assert "REQUIRE local_testing/library-projection.f" in profile.autoexec
+    fixture = profile.initial_files[0][1].decode("utf-8")
+    assert ": _lpo-run" in fixture
+    assert "_lpo-run\n" in fixture
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+        "library/vfs-store.f",
+        "library/projection-owner.f",
+        "interop/resource-acquisition.f",
+        "interop/resource-client.f",
+        "interop/resource-contract.f",
+        "interop/request-bus.f",
+        "runtime/resource-registry.f",
+        "utils/fs/vfs-fixed-snapshot.f",
+    } <= closure
+    production_closure = set(dependency_closure(("library/projection-owner.f",)))
+    assert "library/projection-owner.f" in production_closure
+    assert "interop/resource-client.f" not in production_closure
+    assert production_closure <= closure
+    assert all(
+        not module.startswith("tui/applets/library/") for module in closure
+    )
+    assert all(
+        not module.startswith("tui/applets/desk/") for module in closure
+    )
+    assert all(
+        not module.startswith("tui/applets/pad/") for module in closure
+    )
+    assert all(
+        not module.startswith("tui/applets/streams/") for module in closure
+    )
+
+
 def test_library_applet_profiles_package_a_standalone_public_lens() -> None:
     root = "tui/applets/library/library.f"
     resource = "tui/applets/library/library.uidl"

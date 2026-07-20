@@ -1,15 +1,16 @@
 # Library domain package
 
 Status: the pure model/codecs and store formats, the sole VFS owner, and the
-first three ordered Gate 4 implementation milestones are implemented and
+first four ordered Gate 4 implementation milestones are implemented and
 qualified. The public headless owner now creates and replaces managed
 documents, imports immutable captures, manages metadata and lifecycle, exposes
 retained history and receipts, creates/replaces and enumerates RID-based
 collections, and serves bounded authoritative corpus queries through a
-disposable title/body/tag index. A bounded standalone applet now presents that
-public surface as a functional corpus lens, but the package still has no
-projection-owner lifecycle, repair/export surface, Desktop integration, or
-Streams integration, so the overall Gate 4 exit is not yet claimed.
+disposable title/body/tag index. The Library domain root now also acquires,
+shares, and quiescently releases bounded one-RID projection owners. A bounded
+standalone applet presents the storage surface as a functional corpus lens, but
+recognized-format repair/raw export, Desktop integration, and Streams
+integration remain absent, so the overall Gate 4 exit is not yet claimed.
 
 The current modules are:
 
@@ -24,12 +25,16 @@ The current modules are:
   loading/provisioning, fail-closed recovery, the guarded public headless
   document/capture/history/receipt/collection mutation and read surface, and
   the activation-local disposable search index and bounded query API.
+- `projection-owner.f`: the Library domain acquisition root and bounded pool of
+  fixed-RID resource projections over an explicitly supplied VFS-store
+  instance.
 
 The model, record codec, and store-format modules remain VFS-free. `vfs-store.f`
-alone performs I/O and chooses the private storage topology. None publishes a
-resource or imports a sibling domain or applet.
+alone performs I/O and chooses the private storage topology. Only
+`projection-owner.f` publishes activation-local resource projections; none
+imports a sibling domain or applet.
 
-## Sealed Gate 4A bounds
+## Initial Library bounds
 
 The initial catalog holds at most 128 entries and 32 collections. A collection
 uses a canonical 128-bit membership bitmap. Entries admit at most 16 tags and
@@ -94,7 +99,7 @@ record size from a complete V1 header; it does not prove payload integrity.
 Source, payload, and destination aliases are rejected before modifying the
 aliased bytes.
 
-## Sealed Gate 4B pure store ABI
+## Pure store ABI
 
 The content arena is 655,360 bytes: one 512-byte immutable header followed by
 654,848 bytes of sector-framed content. Each frame is the exact aligned content
@@ -200,6 +205,16 @@ complete inactive bank. Public outputs are caller-owned and remain unpublished
 until argument validation, durable reconciliation, and cleanup complete. No
 public API exposes a Library-private VFS path or persistent catalog slot.
 
+`LIBRARY-VFS-STORE-READ-IDENTITY ( rid entry store -- status )` performs one
+authoritative RID lookup without query/index discovery or reconstruction. It
+returns the active or archived catalog entry with `OK`, returns the terminal
+entry with `TOMBSTONED`, and distinguishes an unknown RID as `NOT_FOUND`.
+After safe arguments are admitted, every nonterminal failure clears caller
+output; `TOMBSTONED` is the deliberate exception because it returns the
+terminal entry. Alias rejection is nonmutating. This store-level archived
+metadata read does not make archived identity acquirable as an active
+projection.
+
 Every successful authoritative load rebuilds one activation-local per-slot
 title/body/tag candidate index while the selected bank and current content
 frames are already being validated. Its fixed candidate allocation is 57,344
@@ -224,6 +239,50 @@ automatic summaries are implied.
 Callers reuse the identical term and filter scope when advancing a returned raw
 slot cursor; changing scope starts a new request at slot zero.
 
+## Projection-owner boundary
+
+`projection-owner.f` owns the Library acquisition root
+`LIBRARY-PROJECTION-OWNER$` (`org.akashic.library`) and publishes UTF-8
+resource projections under `LIBRARY-PROJECTION-CONTRACT$`
+(`org.akashic.library.utf8-content.v1`). It validates every requested exact
+RID/domain state through its explicitly configured store, including when that
+RID already has a registry entry. A successful acquisition returns a semantic
+resource reference and an activation-local lifetime token. The owner never
+consults `VFS-CUR`, UI selection, or another ambient store selector.
+
+`LIBRARY-PROJECTION-ROOT-INIT ( store context creg rreg bus root -- status )`
+borrows the supplied store and runtime graph, including the request bus, until
+successful `LIBRARY-PROJECTION-ROOT-FINI`. The embedded RACQ prefix is the
+portable callback/token ABI; it does not authorize direct generic
+`RACQ-ATTACH`, which cannot validate the full 4,072-byte owner root or its
+reachable borrows. `LIBRARY-PROJECTION-ATTACH ( locator root context rreg
+binding result -- status )` is the only supported acquire-and-attach entry.
+Binding and result are distinct caller-owned buffers and must be disjoint from
+all inputs and protected owner state.
+
+The activation may publish at most eight distinct live RID owners
+(`LIB-PROJECTION-MAX`) and may hold at most 64 activation-local leases
+(`LIBRARY-PROJECTION-LEASE-MAX`). Acquisitions of one RID share its fixed
+component instance while receiving independently validated lifetime tokens.
+Managed-document projections expose exact describe/snapshot/replace behavior;
+capture projections expose describe/snapshot only. Identity acquisition means
+active current state: archived identity is unavailable, while a qualified
+exact archived locator remains readable and immutable. Tombstoned RIDs and
+pruned exact states retain their distinct terminal statuses. Failed lens
+attachment rolls back the new lease.
+
+Tokens are activation-local, non-authoritative outside their owner ledger, and
+never persistent. Public release is idempotent. It waits for dispatch
+quiescence, decrements owner accounting exactly once, preserves the original
+token and binding on retryable cleanup failure, and unpublishes/wipes the
+fixed-RID slot only after a successful final release. A full pool refuses
+another distinct RID rather than evicting or retargeting an owner.
+
+The focused emulator profile is
+`library-projection-owner-contracts`. It packages the headless Library store,
+Gate 3 resource interop, and production projection owner without any Library
+applet, Desk, Pad, or Streams source.
+
 ## Standalone applet lens
 
 `akashic/tui/applets/library/library.f` and `library.uidl` implement a bounded
@@ -238,7 +297,7 @@ Desktop integration is complete. It does not yet provide deep Pad editing,
 capture import, destructive deletion, recognized-format repair, raw export, or
 a Desktop-hosted route.
 
-The focused emulator profiles are `library-managed-document-contracts`,
+The other focused emulator profiles are `library-managed-document-contracts`,
 `library-managed-capacity-contracts`, `library-managed-lifecycle-contracts`, and
 `library-capture-collection-contracts`, plus
 `library-query-index-contracts`. Separate spawn-isolated two-process drivers
@@ -252,12 +311,12 @@ python3 local_testing/library_query_two_boot.py --timeout 600
 
 ## Remaining Gate 4 boundary
 
-The next ordered milestone is projection acquire/share/reference-count/
-quiescent-release. Recognized-format repair/raw export and the complete Gate 4
-damage and exit matrix remain later milestones. No caller should infer a
-capability, projection owner, or Desktop route from the current records or
-query surface; the standalone applet route is explicit and remains bounded as
-described above.
+The remaining ordered milestone is recognized-format inspection/repair,
+bounded opaque raw export for future-format evidence, and the complete Gate 4
+damage and cold-relaunch exit matrix. None of that maintenance/export surface
+is implemented by the projection owner. No caller should infer a Desktop route
+from registry presence or from the standalone applet; the applet route remains
+explicit and bounded as described above.
 For the broader product boundary and gate handoff, see
 [`../../docs/library/library.md`](../../docs/library/library.md). It is the
 ratified product-boundary document.

@@ -36,6 +36,8 @@
 \    LIBRARY-VFS-STORE-QUERY-COLLECTIONS
 \      ( expected-catalog-generation start-slot summaries capacity store
 \        -- count next-slot catalog-generation status )
+\    LIBRARY-VFS-STORE-READ-IDENTITY
+\      ( rid entry store -- status )
 \    LIBRARY-VFS-STORE-READ-EXACT
 \      ( rid domain-revision bytes capacity entry content store
 \        -- required-u status )
@@ -73,6 +75,8 @@
 \  byte search: title/body terms are substrings, tags are whole-value matches,
 \  and no case folding or normalization is implied.  Exact reads copy bytes
 \  into the caller's buffer and return a LIB-CONTENT view borrowing that buffer.
+\  Targeted identity reads bypass query/index discovery and return the exact
+\  authoritative active, archived, or explanatory tombstone entry for one RID.
 \  Retained snapshots are addressed by the exact domain revision stored on
 \  their immutable content frame; metadata-only domain revisions are not
 \  content aliases.  No public operation exposes a private path or treats a
@@ -4918,6 +4922,63 @@ VARIABLE _LIBVA-FLAGS
 : LIBRARY-VFS-STORE-QUERY-COLLECTIONS
   ( expected start summaries capacity store -- count next generation status )
     _libvfs-query-collections-xt _library-vfs-store-guard WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Targeted authoritative identity read
+\ ---------------------------------------------------------------------
+\ This entry-only read is the domain-root lookup surface used before a
+\ projection is acquired.  It deliberately does not consult query pages or
+\ the disposable corpus index.  The activation-local RID fact selects one
+\ slot only after warm authority assurance; the complete authoritative record
+\ is then read, hashed, and decoded before it is copied to caller-owned memory.
+
+: _LIBMU-IDENTITY-READ-ARGS?
+  ( rid entry store -- flag )
+    _LIBMU-STORE ! _LIBMU-ENTRY-OUT ! _LIBMU-ID !
+    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE _LIBMU-OWNER-SPAN-SAFE? 0= IF
+        0 EXIT
+    THEN
+    _LIBMU-ENTRY-OUT @ LIB-ENTRY-SIZE
+        _LIBMU-OWNER-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _LIBMU-ID @ LIB-DIGEST-SIZE
+        _LIBMU-ENTRY-OUT @ LIB-ENTRY-SIZE
+        _VFSNAP-RANGES-OVERLAP? 0= ;
+
+: _LIBRARY-VFS-STORE-READ-IDENTITY  ( rid entry store -- status )
+    _LIBMU-IDENTITY-READ-ARGS? 0= IF LIBSTORE-S-INVALID EXIT THEN
+    _LIBMU-ENTRY-OUT @ LIB-ENTRY-INIT
+    _LIBMU-ID @ RID-PRESENT? 0= IF
+        LIBSTORE-S-INVALID _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-ASSURE-WARM DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    DROP
+    _LIBMU-ID @ _LIBMU-FIND-RID DUP -1 = IF
+        DROP LIBSTORE-S-NOT-FOUND _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    _LIBMU-READ-ENTRY DUP IF
+        _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    DROP
+    _LIBMU-FOUND-ENTRY LIBE.ID _LIBMU-ID @ RID= 0= IF
+        _LIBAUTH-INVALIDATE
+        LIBSTORE-S-CORRUPT _LIBMU-STORE @ _LIBVFS-CORPUS-RESULT EXIT
+    THEN
+    _LIBMU-FOUND-ENTRY _LIBMU-ENTRY-OUT @ LIB-ENTRY-SIZE CMOVE
+    _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
+        LIB-LIFECYCLE-TOMBSTONED = IF
+        LIBSTORE-S-TOMBSTONED _LIBMU-STORE @ _LIBVFS-RESULT EXIT
+    THEN
+    LIBSTORE-S-OK _LIBMU-STORE @ _LIBVFS-RESULT ;
+
+' _LIBRARY-VFS-STORE-READ-IDENTITY
+    CONSTANT _libvfs-read-identity-public-xt
+
+: LIBRARY-VFS-STORE-READ-IDENTITY  ( rid entry store -- status )
+    _libvfs-read-identity-public-xt
+        _library-vfs-store-guard WITH-GUARD ;
 
 \ ---------------------------------------------------------------------
 \ Exact current managed-document read

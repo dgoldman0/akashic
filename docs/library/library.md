@@ -1,17 +1,17 @@
 # Library product boundary
 
 Status: the pure bounded model/codecs, deterministic arena/catalog/head formats,
-sole VFS owner, and the first three ordered Gate 4 headless milestones are
+sole VFS owner, and the first four ordered Gate 4 headless milestones are
 implemented and qualified. Library now owns managed-document and capture
 mutation, retained history, receipts, lifecycle, collections, a disposable
-title/body/tag index, and bounded authoritative corpus/collection queries.
-Library still has no capability or projection-owner lifecycle or repair/export
-surface. A bounded standalone applet now exercises the public headless surface
-as a user-facing corpus lens: it can browse and search active/archived records,
-preview exact content, create and rename managed documents, archive/unarchive,
-inspect retained history, browse/filter collections, and page results. It does
-not provide Desktop hosting, sibling integration, deep Pad editing, capture
-import, destructive deletion, repair, or export. The overall Gate 4 exit and
+title/body/tag index, bounded authoritative corpus/collection queries, and an
+activation-local projection-owner lifecycle. A bounded standalone applet now
+exercises the public storage surface as a user-facing corpus lens: it can browse
+and search active/archived records, preview exact content, create and rename
+managed documents, archive/unarchive, inspect retained history, browse/filter
+collections, and page results. It does not provide Desktop hosting, sibling
+integration, deep Pad editing, capture import, destructive deletion,
+recognized-format repair, or opaque raw export. The overall Gate 4 exit and
 complete Gate 5 experience are not yet claimed; those remaining absences are
 contract boundaries, not implied behavior.
 
@@ -50,7 +50,7 @@ Library applet shows Library records through the public headless owner surface,
 but presentation does not transfer domain ownership and does not establish a
 Desktop route or capability.
 
-## Gate 4A foundation now sealed
+## Bounded Library foundation
 
 `akashic/library/model.f` defines pointer-free catalog, provenance, receipt,
 lineage, and collection payloads. Its only borrowed pointer is the data address
@@ -70,7 +70,8 @@ The initial limits are:
 | UTF-8 content bytes | 65,536 |
 | retained managed-document revisions | 4 |
 | query page | 32 |
-| simultaneous projections (future owner) | 8 |
+| simultaneous live RID projection owners | 8 |
+| activation-local projection leases | 64 |
 
 The fixed ABI widths are 328 bytes for an origin, receipt, or lineage slot;
 2,832 bytes for a catalog payload inside a 3,072-byte record; and 224 bytes for
@@ -105,7 +106,7 @@ counters. Therefore an owner can distinguish a true same-key replay from a
 same-key/different-request conflict after later metadata changes or deletion.
 
 The expected catalog generation is a caller precondition, not a persisted
-commit decision. The future owner must look up an operation key first: a sealed
+commit decision. The owner must look up an operation key first: a sealed
 matching prior request is a replay even if the catalog has since advanced; only
 an unseen key is checked against the requested generation.
 
@@ -174,7 +175,7 @@ payload-integrity check. Encode/decode aliases are rejected without modifying
 the aliased bytes; an invalid non-aliased decode destination is deterministically
 zeroed.
 
-## Gate 4B pure storage format now sealed
+## Pure storage format
 
 `akashic/library/store-format.f` remains VFS-free. It defines three bounded V1
 shapes for the serialized owner:
@@ -206,7 +207,7 @@ No existing format/path, ownership, authority, content class, retention bound,
 or legacy surface changes here, so this landing trips none of the contract's
 mandatory return-to-user triggers.
 
-## Gate 4B VFS loading and provisioning now sealed
+## VFS loading and provisioning
 
 `akashic/library/vfs-store.f` is the sole owner of the private
 `/library/head.bin`, two complete catalog banks, and fixed content arena. It
@@ -241,7 +242,7 @@ write-free and idempotent; a different arena conflicts. Exact post-bank,
 pre-head evidence is preserved and reported as recovery instead of being
 silently adopted.
 
-## Headless owner and disposable query milestones now sealed
+## Headless owner and disposable queries
 
 The VFS owner exposes guarded create/import, exact read and replacement,
 metadata and lifecycle mutation, retained-history read/compare/restore, receipt
@@ -251,6 +252,15 @@ replacement publishes a mutation. Caller operation keys, exact expected
 catalog/domain/collection revisions, capacity preflight, uncertain-head
 reconciliation, and terminal tombstones preserve retry and conflict semantics
 without substituting a content digest for operation or resource identity.
+
+`LIBRARY-VFS-STORE-READ-IDENTITY ( rid entry store -- status )` performs one
+authoritative RID lookup without query/index discovery or reconstruction. It
+returns active or archived metadata with `OK`, returns terminal metadata with
+`TOMBSTONED`, and reports an unknown RID as `NOT_FOUND`. After safe arguments
+are admitted, every nonterminal failure clears output; `TOMBSTONED` instead
+returns the terminal entry. Alias rejection is nonmutating. This store-level
+archived metadata read is separate from projection identity acquisition, which
+admits active current state only.
 
 The third milestone adds no durable format or fifth path. During each complete
 authoritative load, Library derives fixed per-catalog-slot candidate bitsets
@@ -276,15 +286,45 @@ outside this milestone. A continuation reuses the same term/filter scope and
 copies back both returned generation and raw slot; changing scope starts at
 slot zero.
 
-## Owner and lens rule
+## Projection owner and lens rule
 
-Only active/open records should later receive bounded one-RID Library
-projection owners. Acquisition is through the Library domain root, keyed by a
-stable RID rather than current UI selection. The root must validate the exact
-requested domain state and return a semantic reference plus an activation-local
-lifetime token. A client attaches an activation-local `LBIND`; failed
-attachment rolls the token back, and quiescent release is idempotent. Registry
-presence is not authority and cannot bypass owner retain accounting.
+`akashic/library/projection-owner.f` implements the Library domain acquisition
+root `LIBRARY-PROJECTION-OWNER$` (`org.akashic.library`). Its fixed-RID
+resource projections use `LIBRARY-PROJECTION-CONTRACT$`
+(`org.akashic.library.utf8-content.v1`). The activation can publish at most
+eight distinct live RID owners and can track at most 64 activation-local
+leases. Same-RID acquisitions share one fixed component instance but return
+distinct validated lifetime tokens alongside their semantic resource
+references.
+
+Every acquisition passes through the root even if the RID is already present
+in the resource registry. The root validates the exact requested RID/domain
+state through its explicitly supplied VFS-store instance; it never consults
+`VFS-CUR`, UI selection, history position, or another ambient store selector.
+
+`LIBRARY-PROJECTION-ROOT-INIT ( store context creg rreg bus root -- status )`
+borrows that complete runtime graph, including the request bus, until
+successful root finalization. Its embedded RACQ header is only the portable
+callback/token ABI. Generic `RACQ-ATTACH` cannot validate the full 4,072-byte
+root and reachable borrows, so `LIBRARY-PROJECTION-ATTACH ( locator root
+context rreg binding result -- status )` is the only supported attachment
+entry. Binding and result must be distinct caller-owned buffers disjoint from
+all inputs and protected owner state.
+
+Managed-document descriptors expose describe, exact-locator snapshot, and
+current-exact replace; immutable-capture descriptors omit replace. Identity
+acquisition means active current state. Archived identity is unavailable, but
+a qualified exact archived locator stays readable and immutable; tombstoned
+and pruned states retain distinct terminal outcomes. Failed `LBIND` attachment
+rolls back the new lease.
+
+Tokens are activation-local, non-authoritative outside the private owner
+ledger, and never persistent. Public release is idempotent: it waits for
+request-dispatch quiescence, decrements accounting exactly once, preserves the
+original token and binding after a retryable cleanup failure, and unpublishes
+and wipes the slot only after successful final release. At capacity,
+acquisition refuses another distinct RID instead of evicting or retargeting an
+owner. Registry presence is not authority and cannot bypass retain accounting.
 
 Pad is the deep-editing lens for managed documents and a read-only lens for
 captures. Library remains the semantic owner. Explorer may reveal an admitted
@@ -300,7 +340,7 @@ applet, or newest revision.
 ## Current package and gate order
 
 The domain package is `akashic/library/`. Model, record codecs, the
-catalog/content owner, disposable index, import semantics, and future concrete
+catalog/content owner, disposable index, import semantics, and concrete
 projection owner remain Library code. The implemented standalone applet package
 is `akashic/tui/applets/library/`; it is a bounded Library lens over the public
 owner API, not the owner, a projection owner, or a Desktop registration.
@@ -313,15 +353,13 @@ recovery, identity, or projection contract.
 
 The remaining order is:
 
-1. Complete the Gate 4 projection-owner milestone with bounded acquire/share,
-   reference counting, exact-state validation, and quiescent release.
-2. Qualify recognized-format repair/raw export and the complete Gate 4 damage
+1. Qualify recognized-format repair/raw export and the complete Gate 4 damage
    and exit matrix without weakening the sealed authoritative/query boundary.
-3. Gate 5 expands and qualifies the present bounded standalone Library lens
+2. Gate 5 expands and qualifies the present bounded standalone Library lens
    into the complete applet experience without transferring domain ownership.
-4. Gate 6 connects Pad, Explorer, and Desk through typed interop without
+3. Gate 6 connects Pad, Explorer, and Desk through typed interop without
    sibling imports.
-5. Gate 8 performs explicit observation collection and any separately approved
+4. Gate 8 performs explicit observation collection and any separately approved
    migration only after Library is proven.
 
 Until each boundary lands, no component may infer its VFS paths, register a

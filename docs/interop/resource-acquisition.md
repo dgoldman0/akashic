@@ -11,6 +11,16 @@ self-bound token in a caller-owned result. `RACQ-ATTACH` then attaches an
 LBIND through the normal live registry. If attachment fails, acquisition
 rolls the owner retain back.
 
+Before initializing either output or invoking an owner callback,
+`RACQ-ATTACH` validates the nonwrapping fixed spans it knows for locator, RACQ
+root, Context, resource registry, binding, and result. Binding and result must
+be disjoint from one another and from every known input span. This generic
+preflight deliberately knows only the 88-byte RACQ root ABI. An owner whose
+RACQ header prefixes a larger root or whose safety depends on a reachable
+borrowed graph must expose an owner-specific wrapper that validates those
+larger spans before delegating to `RACQ-ATTACH`; the Library projection owner
+does so with `LIBRARY-PROJECTION-ATTACH`.
+
 Tokens contain live root and self pointers, a private-owner cookie, and a
 generation, so they are never persistent. Copying token bytes changes their
 self address and makes the copy stale. The owner must additionally compare the
