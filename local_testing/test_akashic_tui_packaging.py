@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -15,11 +16,13 @@ if str(LOCAL_TESTING) not in sys.path:
 from akashic_tui import (  # noqa: E402
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
+    LINK_CHUNK_BYTES,
     MEGAPAD_NETWORKING_BOOT_LINE,
     MEGAPAD_ROOT,
     PROFILES,
     PROVIDED_RE,
     REQUIRE_RE,
+    SOURCE_ROOT,
     _linked_autoexec,
     _minify_forth,
     _matched_failure_markers,
@@ -239,6 +242,188 @@ def test_library_query_index_profile_packages_exact_headless_contract() -> None:
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
     assert all(not module.startswith("streams/") for module in closure)
+
+
+def test_library_applet_profiles_package_a_standalone_public_lens() -> None:
+    root = "tui/applets/library/library.f"
+    resource = "tui/applets/library/library.uidl"
+    interactive = PROFILES["library"]
+    contracts = PROFILES["library-applet-contracts"]
+    functional = PROFILES["library-applet-functional-contracts"]
+
+    for profile in (interactive, contracts, functional):
+        assert profile.roots == (root,)
+        assert profile.resources == (resource,)
+        assert profile.total_sectors == 8192
+        assert profile.linked is True
+        assert profile.link_chunk_bytes == LINK_CHUNK_BYTES
+        assert profile.include_large_sample is False
+
+    assert "LIBRARY-APPLET-RUN" in interactive.autoexec
+    assert contracts.ready_markers == ("LIBRARY APPLET CONTRACTS PASS",)
+    assert contracts.stable_markers == contracts.ready_markers
+    assert {
+        "LIBRARY APPLET CONTRACTS FAIL",
+        "LIBRARY APPLET ASSERT",
+        "LIBRARY APPLET STACK",
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    } <= set(contracts.failure_markers)
+    assert "LIBRARY-APPLET-ENTRY" in contracts.autoexec
+    assert "LIBRARY-APPLET-RUN" not in contracts.autoexec
+    assert functional.ready_markers == (
+        "LIBRARY APPLET FUNCTIONAL PASS",
+    )
+    assert functional.stable_markers == functional.ready_markers
+    assert tuple(path for path, _ in functional.initial_files) == (
+        "local_testing/library-app-func.f",
+    )
+    assert {
+        "LIBRARY APPLET FUNCTIONAL FAIL",
+        "LIBRARY APPLET FUNCTIONAL ASSERT",
+        "LIBRARY APPLET FUNCTIONAL STACK",
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    } <= set(functional.failure_markers)
+    assert "REQUIRE local_testing/library-app-func.f" in (
+        functional.autoexec
+    )
+
+    closure = set(dependency_closure((root,)))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+        "library/vfs-store.f",
+        "tui/app-desc.f",
+        "tui/app-shell.f",
+        root,
+    } <= closure
+    assert all(
+        module == root or not module.startswith("tui/applets/")
+        for module in closure
+    )
+    assert all(not module.startswith("agent/") for module in closure)
+    assert all(not module.startswith("practice/") for module in closure)
+    assert all(not module.startswith("streams/") for module in closure)
+
+    # The probe supplies only a TUI lens.  It must not silently become part
+    # of the canonical Desktop image before projection ownership and image
+    # capacity have their own explicit integration milestone.
+    assert root not in PROFILES["desktop"].roots
+    assert resource not in PROFILES["desktop"].resources
+
+
+def test_library_applet_functional_fixture_drives_controller_not_store() -> None:
+    source = (
+        LOCAL_TESTING / "library-applet-functional.f"
+    ).read_text(encoding="utf-8")
+
+    assert all(
+        word in source
+        for word in (
+            "LIBRARY-APPLET-ENTRY",
+            "LIBRARY-APPLET-INIT-CB",
+            "ASHELL-RUN",
+            "_LAPP-CONFIGURE-CREATE",
+            "_LAPP-DISPATCH-PENDING-CREATE",
+            "_LAPP-CREATE-PREPARED",
+            "_LAPP-RESET-PAGE",
+            "_LAPP-PREVIEW-BYTES",
+            "_LAPP-DO-ARCHIVE",
+            "_LAPP-DO-SHOW-ARCHIVED",
+        )
+    )
+    assert "LIBRARY-VFS-STORE-" not in source
+
+
+def test_library_applet_source_stays_above_public_storage_boundary() -> None:
+    source = (SOURCE_ROOT / "tui/applets/library/library.f").read_text(
+        encoding="utf-8"
+    )
+    direct_requires = set(REQUIRE_RE.findall(source))
+
+    assert "../../../library/vfs-store.f" in direct_requires
+    assert {
+        requirement
+        for requirement in direct_requires
+        if requirement.startswith("../../../library/")
+    } == {"../../../library/vfs-store.f"}
+    assert not any(
+        requirement.startswith("../../../utils/fs/")
+        for requirement in direct_requires
+    )
+    assert all(
+        word not in source
+        for word in (
+            " VFS-OPEN",
+            " VFS-CREATE",
+            " VFS-READ",
+            " VFS-WRITE",
+            " VFS-REPLACE",
+            " DESK-",
+            " PAD-",
+            " FEXP-",
+            " STREAMS-",
+        )
+    )
+    assert "DRW-TEXT-UNTRUSTED" in source
+
+
+def test_library_applet_uidl_actions_have_exact_controller_bindings() -> None:
+    source = (SOURCE_ROOT / "tui/applets/library/library.f").read_text(
+        encoding="utf-8"
+    )
+    uidl = (SOURCE_ROOT / "tui/applets/library/library.uidl").read_text(
+        encoding="utf-8"
+    )
+    declared_actions = set(re.findall(r"\bdo=([A-Za-z0-9-]+)", uidl))
+    bound_actions = set(
+        re.findall(
+            r'S" ([a-z0-9-]+)" \[\'\] _LAPP-[A-Z0-9-]+ UTUI-DO!',
+            source,
+        )
+    )
+
+    assert declared_actions == bound_actions
+    assert {"library-body", "sbar-view", "sbar-page", "sbar-state"} <= set(
+        re.findall(r"\bid=([A-Za-z0-9-]+)", uidl)
+    )
+
+
+def test_library_applet_functional_image_links_controller_and_keeps_uidl(
+    tmp_path: Path,
+) -> None:
+    image = build_image(
+        "library-applet-functional-contracts",
+        tmp_path / "akashic-library-applet-functional-contracts.img",
+    )
+    assert image.stat().st_size == 8192 * 512
+
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    library_parent = filesystem.resolve_path("/tui/applets/library")
+    assert filesystem.find_file("library.f", parent=library_parent) is None
+    assert filesystem.read_file("library.uidl", parent=library_parent) == (
+        SOURCE_ROOT / "tui/applets/library/library.uidl"
+    ).read_bytes()
+    linked_parent = filesystem.resolve_path("/.akashic")
+    assert any(
+        entry.name.startswith("link-")
+        for entry in filesystem.list_files(parent=linked_parent)
+    )
+    fixture_parent = filesystem.resolve_path("/local_testing")
+    assert filesystem.read_file(
+        "library-app-func.f", parent=fixture_parent
+    ) == _minify_forth((
+        LOCAL_TESTING / "library-applet-functional.f"
+    ).read_text(encoding="utf-8")).encode("utf-8")
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    assert "REQUIRE tui/applets/library/library.f" not in autoexec
+    assert "REQUIRE .akashic/link-" in autoexec
+    assert "REQUIRE local_testing/library-app-func.f" in autoexec
+    assert filesystem.info()["free_sectors"] > 0
 
 
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:

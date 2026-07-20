@@ -6,9 +6,10 @@ qualified. The public headless owner now creates and replaces managed
 documents, imports immutable captures, manages metadata and lifecycle, exposes
 retained history and receipts, creates/replaces and enumerates RID-based
 collections, and serves bounded authoritative corpus queries through a
-disposable title/body/tag index. The package still has no projection-owner
-lifecycle, repair/export surface, applet/UI, or Streams integration, so the
-overall Gate 4 exit is not yet claimed.
+disposable title/body/tag index. A bounded standalone applet now presents that
+public surface as a functional corpus lens, but the package still has no
+projection-owner lifecycle, repair/export surface, Desktop integration, or
+Streams integration, so the overall Gate 4 exit is not yet claimed.
 
 The current modules are:
 
@@ -223,6 +224,20 @@ automatic summaries are implied.
 Callers reuse the identical term and filter scope when advancing a returned raw
 slot cursor; changing scope starts a new request at slot zero.
 
+## Standalone applet lens
+
+`akashic/tui/applets/library/library.f` and `library.uidl` implement a bounded
+single-instance lens over the public headless owner API. The lens browses and
+searches active/archived records, previews exact content, creates and renames
+managed documents, archives and unarchives them, exposes retained history,
+browses and filters collections, and pages bounded query results. It publishes
+no Library capability, projection owner, private path, or cross-applet binding.
+
+This lens is an explicit standalone UX probe, not a claim that Gate 5 or
+Desktop integration is complete. It does not yet provide deep Pad editing,
+capture import, destructive deletion, recognized-format repair, raw export, or
+a Desktop-hosted route.
+
 The focused emulator profiles are `library-managed-document-contracts`,
 `library-managed-capacity-contracts`, `library-managed-lifecycle-contracts`, and
 `library-capture-collection-contracts`, plus
@@ -240,8 +255,9 @@ python3 local_testing/library_query_two_boot.py --timeout 600
 The next ordered milestone is projection acquire/share/reference-count/
 quiescent-release. Recognized-format repair/raw export and the complete Gate 4
 damage and exit matrix remain later milestones. No caller should infer a
-capability, projection owner, or UI route from the current records or query
-surface.
+capability, projection owner, or Desktop route from the current records or
+query surface; the standalone applet route is explicit and remains bounded as
+described above.
 For the broader product boundary and gate handoff, see
 [`../../docs/library/library.md`](../../docs/library/library.md). It is the
 ratified product-boundary document.

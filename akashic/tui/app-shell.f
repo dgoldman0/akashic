@@ -270,32 +270,60 @@ VARIABLE _ASHELL-CLOSE-REASON
 : ASHELL-MOUSE?     ( ev -- flag ) @ KEY-T-MOUSE = ;
 
 \ ASHELL-LOAD-UIDL ( path-a path-u rgn -- buf | 0 )
-\   Open a VFS file, read its contents into an XMEM buffer, then
-\   feed the content to UTUI-LOAD.  Returns the buffer address
-\   (caller must XMEM-FREE-BLOCK with _ASHELL-UIDL-FILE-MAX) or 0
-\   on failure.
+\   Storage DMA reaches Bank 0 only.  Read through a 512-byte DMA bounce
+\   into retained XMEM, parse it, and return that XMEM buffer to the caller.
 8192 CONSTANT _ASHELL-UIDL-FILE-MAX
+ 512 CONSTANT _ASHELL-UIDL-DMA-SIZE
 
 VARIABLE _ALUF-RGN
 VARIABLE _ALUF-FD
 VARIABLE _ALUF-BUF
+VARIABLE _ALUF-DMA
+VARIABLE _ALUF-TOTAL
+
+: _ALUF-FREE-BUF  ( -- 0 )
+    _ALUF-BUF @ _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK 0 ;
+
+: _ALUF-REJECT-PARSE  ( -- 0 )
+    UIDL-RESET _ALUF-FREE-BUF ;
+
+: _ALUF-REJECT-THROW  ( -- 0 )
+    ['] UTUI-DETACH CATCH DROP UIDL-RESET _ALUF-FREE-BUF ;
+
+: _ALUF-READ  ( -- ior )
+    0 _ALUF-TOTAL !
+    BEGIN _ALUF-TOTAL @ _ASHELL-UIDL-FILE-MAX < WHILE
+        _ALUF-DMA @
+        _ASHELL-UIDL-FILE-MAX _ALUF-TOTAL @ -
+        _ASHELL-UIDL-DMA-SIZE MIN _ALUF-FD @ VFS-READ?
+        DUP IF NIP EXIT THEN DROP
+        DUP 0= IF DROP 0 EXIT THEN
+        >R _ALUF-DMA @ _ALUF-BUF @ _ALUF-TOTAL @ + R@ CMOVE
+        R> _ALUF-TOTAL +!
+    REPEAT
+    0 ;
+
+: _ALUF-PARSE  ( -- flag )
+    _ALUF-BUF @ _ALUF-TOTAL @ _ALUF-RGN @ UTUI-LOAD ;
 
 : ASHELL-LOAD-UIDL  ( path-a path-u rgn -- buf | 0 )
     _ALUF-RGN !
-    VFS-OPEN                          ( fd | 0 )
-    DUP 0= IF EXIT THEN
-    _ALUF-FD !
+    VFS-OPEN DUP 0= IF EXIT THEN _ALUF-FD !
     _ASHELL-UIDL-FILE-MAX XMEM-ALLOT? IF
-        _ALUF-FD @ VFS-CLOSE  0 EXIT
+        DROP _ALUF-FD @ VFS-CLOSE? DROP 0 EXIT
     THEN
     _ALUF-BUF !
-    \ Read file into buffer
-    _ALUF-BUF @  _ASHELL-UIDL-FILE-MAX  _ALUF-FD @ VFS-READ  ( actual )
-    _ALUF-FD @ VFS-CLOSE
-    \ Feed to UTUI-LOAD
-    _ALUF-BUF @ SWAP  _ALUF-RGN @    ( buf-a actual rgn )
-    UTUI-LOAD DROP
-    _ALUF-BUF @ ;
+    _ASHELL-UIDL-DMA-SIZE DMA-ALLOCATE IF
+        DROP _ALUF-FD @ VFS-CLOSE? DROP _ALUF-FREE-BUF EXIT
+    THEN
+    _ALUF-DMA !
+    _ALUF-READ _ALUF-FD @ VFS-CLOSE? OR
+    _ALUF-DMA @ DMA-FREE
+    IF _ALUF-FREE-BUF EXIT THEN
+    ['] _ALUF-PARSE CATCH ?DUP IF
+        DROP _ALUF-REJECT-THROW EXIT
+    THEN
+    IF _ALUF-BUF @ ELSE _ALUF-REJECT-PARSE THEN ;
 
 \ ASHELL-TICK-MS! ( ms -- )
 \   Set the tick callback interval.
@@ -641,8 +669,10 @@ CREATE _ASHELL-VOLUME /VOLUME ALLOT
 : _ASHELL-VFS-INIT  ( -- )
     _ASHELL-VFS @ ?DUP IF  VFS-USE  EXIT  THEN   \ already created
     VFS-CUR ?DUP IF  DUP _ASHELL-VFS !  VFS-USE  EXIT  THEN  \ someone else set it
+    0 _ASHELL-BLOCK-DEVICE !
     _ASHELL-BLOCK-DEVICE BD-OPEN
     ABORT" ashell: block device open failed"
+    0 _ASHELL-VOLUME !
     _ASHELL-BLOCK-DEVICE _ASHELL-VOLUME VOL-RAW
     ABORT" ashell: raw volume init failed"
     _ASHELL-VFS-ARENA-SIZE A-XMEM ARENA-NEW

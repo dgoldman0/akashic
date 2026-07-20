@@ -222,7 +222,7 @@ def _megapad_root() -> Path:
 
 
 MEGAPAD_ROOT = _megapad_root()
-DEFAULT_EXT_MEM_MIB = 32
+DEFAULT_EXT_MEM_MIB = 128
 # The complete Desktop closure now includes the canonical loadable MegaPad
 # networking module.  A clean linked boot reaches its ready markers at about
 # 6.9 billion guest steps on the reference emulator, so the supported
@@ -11815,6 +11815,147 @@ SOUNDLAB-RUN
     ),
 }
 
+PROFILES["library"] = Profile(
+    roots=("tui/applets/library/library.f",),
+    resources=("tui/applets/library/library.uidl",),
+    autoexec=r"""\ autoexec.f - standalone Library applet probe
+ENTER-USERLAND
+." [akashic] loading library" CR
+REQUIRE tui/applets/library/library.f
+." [akashic] starting library" CR
+LIBRARY-APPLET-RUN
+." [akashic] library exited" CR
+""",
+    ready_markers=("File", "Browse", "Active"),
+    stable_markers=("File", "Browse", "Active"),
+    failure_markers=(
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    total_sectors=8192,
+)
+
+PROFILES["library-applet-contracts"] = Profile(
+    roots=("tui/applets/library/library.f",),
+    resources=("tui/applets/library/library.uidl",),
+    autoexec=r"""\ autoexec.f - standalone Library descriptor contracts
+ENTER-USERLAND
+." [akashic] loading Library applet contracts" CR
+REQUIRE tui/applets/library/library.f
+
+VARIABLE _lac-fails
+VARIABLE _lac-checks
+VARIABLE _lac-depth
+VARIABLE _lac-inst
+VARIABLE _lac-shell-init-called
+CREATE _lac-desc APP-DESC ALLOT
+
+: _lac-assert  ( flag -- )
+    1 _lac-checks +!
+    0= IF
+        1 _lac-fails +! ." LIBRARY APPLET ASSERT " _lac-checks @ . CR
+    THEN ;
+
+: _lac-stack  ( -- )
+    DEPTH DUP _lac-depth @ <> IF
+        ." LIBRARY APPLET STACK " _lac-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _lac-depth @ = _lac-assert ;
+
+: _lac-comp  ( -- desc ) _lac-desc APP.COMP-DESC @ ;
+
+: _lac-id?  ( -- flag )
+    _lac-comp DUP COMP.ID-A @ SWAP COMP.ID-U @
+        S" org.akashic.library.applet" STR-STR= ;
+
+: _lac-version?  ( -- flag )
+    _lac-comp DUP COMP.VERSION-A @ SWAP COMP.VERSION-U @
+        S" 0.1.0" STR-STR= ;
+
+: _lac-title?  ( -- flag )
+    _lac-desc DUP APP.TITLE-A @ SWAP APP.TITLE-U @
+        S" Library" STR-STR= ;
+
+: _lac-uidl-file?  ( -- flag )
+    _lac-desc DUP APP.UIDL-FILE-A @ SWAP APP.UIDL-FILE-U @
+        S" tui/applets/library/library.uidl" STR-STR= ;
+
+: _lac-new-instance  ( -- )
+    0 _lac-inst !
+    _lac-comp CINST-NEW
+    DUP 0= _lac-assert
+    IF DROP EXIT THEN
+    DUP 0<> _lac-assert _lac-inst ! ;
+
+: _lac-close-contract  ( -- )
+    _lac-inst @ 0= IF EXIT THEN
+    _lac-inst @ _lac-desc APP.ACTIVATE-XT @ EXECUTE
+    APP-CLOSE-R-WINDOW _lac-inst @
+        _lac-desc APP.REQUEST-CLOSE-XT @ EXECUTE
+        APP-CLOSE-D-ALLOW = _lac-assert
+    _lac-inst @ CINST-FREE 0 _lac-inst ! ;
+
+: _lac-shell-init  ( instance -- )
+    DROP -1 _lac-shell-init-called ! ASHELL-QUIT ;
+
+: _lac-shell-contract  ( -- )
+    0 _lac-shell-init-called !
+    ['] _lac-shell-init _lac-desc APP.INIT-XT !
+    _lac-desc ASHELL-RUN
+    _lac-shell-init-called @ _lac-assert ;
+
+: _lac-run  ( -- )
+    0 _lac-fails ! 0 _lac-checks ! DEPTH _lac-depth !
+    _lac-desc LIBRARY-APPLET-ENTRY
+    _lac-desc APP-DESC-VALID? _lac-assert
+    _lac-id? _lac-assert
+    _lac-version? _lac-assert
+    _lac-title? _lac-assert
+    _lac-uidl-file? _lac-assert
+    _lac-comp COMP.STATE-SIZE @ LIBRARY-VFS-STORE-SIZE > _lac-assert
+    _lac-comp COMP.CAPS-N @ 0= _lac-assert
+    _lac-comp COMP.INTENTS-N @ 0= _lac-assert
+    _lac-desc APP.INIT-XT @ 0<> _lac-assert
+    _lac-desc APP.EVENT-XT @ 0<> _lac-assert
+    _lac-desc APP.TICK-XT @ 0= _lac-assert
+    _lac-desc APP.PAINT-XT @ 0<> _lac-assert
+    _lac-desc APP.SHUTDOWN-XT @ 0<> _lac-assert
+    _lac-desc APP.ACTIVATE-XT @ 0<> _lac-assert
+    _lac-desc APP.REQUEST-CLOSE-XT @ 0<> _lac-assert
+    _lac-desc APP.WIDTH @ 0= _lac-assert
+    _lac-desc APP.HEIGHT @ 0= _lac-assert
+    _lac-new-instance _lac-close-contract
+    _lac-shell-contract
+    _lac-stack
+    _lac-fails @ 0= IF
+        ." LIBRARY APPLET CONTRACTS PASS " _lac-checks @ . CR
+    ELSE
+        ." LIBRARY APPLET CONTRACTS FAIL " _lac-fails @ .
+            ." / " _lac-checks @ . CR
+    THEN ;
+
+_lac-run
+""",
+    ready_markers=("LIBRARY APPLET CONTRACTS PASS",),
+    stable_markers=("LIBRARY APPLET CONTRACTS PASS",),
+    failure_markers=(
+        "LIBRARY APPLET CONTRACTS FAIL",
+        "LIBRARY APPLET ASSERT",
+        "LIBRARY APPLET STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    total_sectors=8192,
+)
+
 PROFILES["crc-contracts"] = Profile(
     roots=("math/crc.f",),
     resources=(),
@@ -21812,7 +21953,14 @@ def _linked_chunks(
     modules: tuple[str, ...],
     maximum_bytes: int = LINK_CHUNK_BYTES,
 ) -> dict[str, bytes]:
-    """Pack ordered modules into loader-safe native Forth source chunks."""
+    """Pack ordered source units into loader-safe native Forth chunks.
+
+    Oversized modules may cross chunk boundaries only while the interpreter
+    is back at top level: never inside a colon definition or a conditional
+    compilation region.  KDOS retains dictionary state between loads, so
+    top-level data declarations remain contiguous without exposing a partial
+    definition to the next chunk's ``REQUIRE`` line.
+    """
     chunks: list[bytearray] = []
     current = bytearray()
     for module in modules:
@@ -21820,14 +21968,43 @@ def _linked_chunks(
             (SOURCE_ROOT / module).read_text(encoding="utf-8"),
             remove_requires=True,
         ).encode("utf-8")
-        if len(source) > maximum_bytes:
-            raise RuntimeError(
-                f"Linked module exceeds {maximum_bytes} bytes: {module}"
-            )
-        if current and len(current) + len(source) > maximum_bytes:
-            chunks.append(current)
-            current = bytearray()
-        current.extend(source)
+        units: list[bytearray] = []
+        unit = bytearray()
+        definition_depth = 0
+        conditional_depth = 0
+        for line in source.splitlines(keepends=True):
+            unit.extend(line)
+            text = line.decode("utf-8").rstrip("\r\n")
+            tokens = _forth_line_tokens(text)
+            if tokens and (tokens[0] == ":" or tokens[0].upper() == ":NONAME"):
+                definition_depth = 1
+            if definition_depth and any(
+                token == ";"
+                and (index == 0 or tokens[index - 1].upper() not in {"CHAR", "[CHAR]"})
+                for index, token in enumerate(tokens)
+            ):
+                definition_depth = 0
+            for token in text.split(" "):
+                upper = token.upper()
+                if upper == "[IF]":
+                    conditional_depth += 1
+                elif upper == "[THEN]" and conditional_depth:
+                    conditional_depth -= 1
+            if definition_depth == 0 and conditional_depth == 0:
+                units.append(unit)
+                unit = bytearray()
+        if unit:
+            raise RuntimeError(f"Linked module ends inside source unit: {module}")
+        for source_unit in units:
+            if len(source_unit) > maximum_bytes:
+                raise RuntimeError(
+                    f"Linked source unit exceeds {maximum_bytes} bytes: "
+                    f"{module}"
+                )
+            if current and len(current) + len(source_unit) > maximum_bytes:
+                chunks.append(current)
+                current = bytearray()
+            current.extend(source_unit)
     if current:
         chunks.append(current)
     return {
@@ -27381,6 +27558,41 @@ REQUIRE local_testing/library-capacity.f
 )
 
 
+PROFILES["library-applet-functional-contracts"] = Profile(
+    roots=("tui/applets/library/library.f",),
+    resources=("tui/applets/library/library.uidl",),
+    autoexec=r"""\ autoexec.f - Library applet functional controller contract
+ENTER-USERLAND
+." [akashic] loading Library applet functional contracts" CR
+REQUIRE tui/applets/library/library.f
+REQUIRE local_testing/library-app-func.f
+""",
+    ready_markers=("LIBRARY APPLET FUNCTIONAL PASS",),
+    stable_markers=("LIBRARY APPLET FUNCTIONAL PASS",),
+    failure_markers=(
+        "LIBRARY APPLET FUNCTIONAL FAIL",
+        "LIBRARY APPLET FUNCTIONAL ASSERT",
+        "LIBRARY APPLET FUNCTIONAL STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-app-func.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" /
+                "library-applet-functional.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
 def _positive_mib(value: str) -> int:
     try:
         parsed = int(value)
@@ -27413,7 +27625,7 @@ def _parser() -> argparse.ArgumentParser:
                 "--ext-mem-mib",
                 type=_positive_mib,
                 default=DEFAULT_EXT_MEM_MIB,
-                help="emulated external memory in MiB (default: 32)",
+                help="emulated external memory in MiB (default: 128)",
             )
             command.add_argument(
                 "--nic-tap",

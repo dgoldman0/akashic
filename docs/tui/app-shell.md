@@ -90,7 +90,7 @@ that field within the descriptor, suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `ASHELL-LOAD-UIDL` | `( path-a path-u rgn -- buf \| 0 )` | Open a VFS file, parse as UIDL into `rgn`.  Returns heap buffer (caller must FREE) or 0. |
+| `ASHELL-LOAD-UIDL` | `( path-a path-u rgn -- buf \| 0 )` | Open a VFS file, read it through a 512-byte DMA-safe bounce buffer, and parse it as UIDL into `rgn`. Returns retained XMEM (caller frees `_ASHELL-UIDL-FILE-MAX` bytes with `XMEM-FREE-BLOCK`) or 0. |
 
 ### Toast
 

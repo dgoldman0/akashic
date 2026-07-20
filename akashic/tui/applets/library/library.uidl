@@ -1,0 +1,53 @@
+<uidl arrange=stack>
+<menubar id=mbar>
+<menu label=File>
+<item text=Reload do=reload key=Ctrl+R/>
+<separator/>
+<item text=New_Managed_Document do=new-managed key=Ctrl+N/>
+<item text=Retry_Pending_Create do=retry-create key=Ctrl+Shift+R/>
+<separator/>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+<menu label=Browse>
+<item text=Search do=search key=Ctrl+F/>
+<item text=Clear_Search do=clear-search key=Ctrl+Shift+F/>
+<separator/>
+<item text=Active do=show-active/>
+<item text=Archived do=show-archived/>
+<item text=All do=show-all/>
+<separator/>
+<item text=Collections do=collections/>
+<item text=Retained_History do=history key=Ctrl+H/>
+<item text=Back do=back key=Backspace/>
+</menu>
+<menu label=Document>
+<item text=Rename_Title do=rename-title key=F2/>
+<item text=Archive do=archive/>
+<item text=Unarchive do=unarchive/>
+</menu>
+<menu label=Page>
+<item text=Previous_Page do=previous-page key=PageUp/>
+<item text=Next_Page do=next-page key=PageDown/>
+</menu>
+<menu label=Help>
+<item text=About_Library do=about/>
+</menu>
+</menubar>
+<region id=library-body style=color:#eeeeee;background-color:#121212/>
+<status id=sbar style=color:white;background-color:#005f5f>
+<label id=sbar-view text=Active/>
+<label id=sbar-page text=Page_1/>
+<label id=sbar-state text=Ready/>
+</status>
+<action do=reload key=Ctrl+R/>
+<action do=new-managed key=Ctrl+N/>
+<action do=retry-create key=Ctrl+Shift+R/>
+<action do=search key=Ctrl+F/>
+<action do=clear-search key=Ctrl+Shift+F/>
+<action do=history key=Ctrl+H/>
+<action do=back key=Backspace/>
+<action do=rename-title key=F2/>
+<action do=previous-page key=PageUp/>
+<action do=next-page key=PageDown/>
+<action do=quit key=Ctrl+Q/>
+</uidl>

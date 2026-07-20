@@ -22,7 +22,7 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
-Smoke and served sessions use 32 MiB of emulated external memory by default.
+Smoke and served sessions use 128 MiB of emulated external memory by default.
 This leaves realistic headroom for the userland dictionary and applet working
 sets as the Desk image grows; pass `--ext-mem-mib N` to test another budget.
 The default smoke gate permits 8 billion guest steps and 120 seconds so the

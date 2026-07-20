@@ -1,27 +1,103 @@
-# Library applet placeholder
+# Library applet
 
-Status: Gate 1 documentation only. There is no Library applet descriptor,
-UIDL, manifest, runtime module, capability, handler, or store in this package.
+Status: an intentionally bounded user-experience probe is implemented over the
+first three headless Library milestones. It makes the current owner useful
+enough to test real browsing and document-management flows, but it does not
+claim completion of Gate 5. The projection-owner and repair/export milestones
+remain ordered Gate 4 work, and this probe must not silently invent their
+contracts.
 
-The future Library applet is the human lens over the Library domain described
-in [`../../../library/library.md`](../../../library/library.md). It may browse,
-search, preview, organize, archive, import, export, and inspect exact Library
-resources after the headless owner is qualified. It does not own the corpus
-merely because it presents it, and it does not become a second text editor.
-Managed documents open in Pad for deep editing; captures open read-only unless
-the user deliberately derives a separate managed document.
+The applet is a human lens over the Library domain described in
+[`../../../library/library.md`](../../../library/library.md). It is a
+single-instance standalone applet, owns only activation-local view state, and
+calls the public Library owner API. It does not infer or open `/library` paths,
+parse the private store, retain a second authoritative catalog, or import
+sibling applet/domain internals.
 
-UI selection, filters, sort order, preview state, and History position are
-local lens state. A future consequential request must name the stable Library
-RID and exact expected domain revision (or the sealed create/import
-precondition and idempotency key). “Selected row,” “current preview,” and
-“latest” are never mutation targets for Agent-visible, scheduled, or routed
-operations.
+## Implemented probe
 
-The first standalone UI is intended to expose bounded All, Recent, Archived,
-Collections, History, search, create/import, preview/details/provenance,
-metadata, revision compare/restore-as-new, archive/unarchive, export, and
-exactly confirmed tombstone workflows. Those are target requirements, not
-implemented behavior in Gate 1. Streams collection, general Pad semantic tabs,
-Explorer origins, and Desk routing wait for their ordered interoperability
-gates.
+The default Active view presents one bounded corpus page and one local row
+selection. The user can:
+
+- reload authoritative state and page forward or backward;
+- browse Active, Archived, or All records;
+- run the current exact, case-sensitive Library search or clear it;
+- list collections, select one, and apply its exact RID as a corpus filter;
+- create a managed text document and rename the selected record's title;
+- archive an active record or unarchive an archived record; and
+- inspect the selected managed document's retained content-revision history,
+  then return to the preceding corpus or collection view.
+
+The body, selection, search term, lifecycle filter, collection filter, paging
+cursor, and history position are local lens state. Mutation calls copy the
+selected summary's stable Library RID and exact domain revision into the
+immediate public owner request. Selection itself is never exported as ambient
+mutation authority.
+
+This slice intentionally does not make the applet a text editor. Initial
+managed content is collected through the applet's bounded prompt flow, while
+deep editing through Pad waits for projection-owner and typed interoperation
+work. History is retained-content inspection only: it does not restore,
+compare, or mutate a historical revision.
+
+## Creation and retry
+
+A create first becomes a protected prepared request with its generated
+operation key before first-use provisioning begins. Before the request reaches
+the mutation API, the applet authoritatively reloads the owner, provisions only
+after a fresh `ABSENT` result, and seals the resulting catalog generation. Once
+dispatched, `Retry Pending Create` resubmits that same operation key and
+byte-identical request, allowing the owner's idempotency contract to return the
+original document instead of manufacturing a duplicate. It does not rebuild a
+dispatched request from current prompts or treat matching content as identity.
+Starting a distinct create uses a new operation key.
+
+The applet reports conflicts, capacity limits, invalid requests, unavailable
+history, and blocked/recovery states rather than converting them into an empty
+view or optimistic success. Reload is an explicit authoritative refresh; it
+does not retry a pending mutation implicitly.
+
+## Development arena identity
+
+The standalone probe provisions and reopens one corpus with a fixed,
+source-defined development arena ID. Keeping that value stable makes repeated
+boots of this development applet address the same already-provisioned corpus.
+It is not a user ID, account ID, configurable library selector,
+synchronization identity, or durable migration scheme. Changing it while old
+Library storage is present is expected to conflict rather than adopt or
+rewrite that corpus. A production identity/provisioning policy must be designed
+separately.
+
+## Commands
+
+| Key | Action |
+| --- | --- |
+| Ctrl+R | Reload authoritative Library state |
+| Ctrl+F | Search the current corpus scope |
+| Ctrl+Shift+F | Clear search and restart at the first page |
+| Ctrl+N | Create a managed document |
+| Ctrl+Shift+R | Retry the exact pending create request |
+| F2 | Rename the selected record's title |
+| Ctrl+H | Inspect retained content history for the selected managed document |
+| Backspace | Return from History or Collections |
+| Page Up / Page Down | Move to the previous or next bounded page |
+| Shift+Up / Shift+Down | Scroll the selected item's content preview |
+| Ctrl+Q | Quit the standalone applet |
+
+Active/Archived/All, Collections, Archive/Unarchive, and About are also
+available from the menu bar.
+
+## Deliberately deferred
+
+The probe does not implement Pad or projection-owner integration, capture
+import, VFS import, export/raw export, provenance/details surfaces,
+recognized-format repair, revision compare or restore-as-new, destructive
+tombstones, Desk routing, Explorer reveal, Streams collection, capabilities,
+or Practice bindings. It also does not promise semantic ranking,
+normalization, unbounded results, multi-library selection, or multiple
+concurrent applet instances.
+
+Those omissions are active boundaries. The purpose of this early applet is to
+discover whether the public headless shapes support a coherent user workflow;
+any pressure to bypass the owner or duplicate durable state is evidence for a
+backend contract change, not permission for a UI-only workaround.

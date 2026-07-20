@@ -9,7 +9,10 @@ import os, subprocess, sys, struct, tempfile, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-MEGAPAD_ROOT = os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+MEGAPAD_ROOT = os.environ.get(
+    "MEGAPAD_ROOT",
+    os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad")),
+)
 
 # Forth source paths
 EVENT_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
@@ -47,6 +50,7 @@ FTYPE_DIR = 8
 FTYPE_RAW = 1
 FTYPE_TEXT = 2
 FTYPE_FORTH = 3
+USERLAND_EXT_MEM_MIB = 64
 
 def make_entry(name, start_sec, sec_count, used_bytes, ftype, parent):
     """Build a 48-byte directory entry."""
@@ -322,8 +326,11 @@ def build_snapshot():
         '    _TARN @ T-VOLUME VMP-NEW THROW ;',
     ]
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20),
-                            storage_image=_img_path)
+    sys_obj = MegapadSystem(
+        ram_size=1024 * 1024,
+        ext_mem_size=USERLAND_EXT_MEM_MIB * (1 << 20),
+        storage_image=_img_path,
+    )
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -372,8 +379,11 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None,
         build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes, storage_bytes = _snapshot
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20),
-                            storage_image=_img_path)
+    sys_obj = MegapadSystem(
+        ram_size=1024 * 1024,
+        ext_mem_size=USERLAND_EXT_MEM_MIB * (1 << 20),
+        storage_image=_img_path,
+    )
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -450,7 +460,7 @@ def run_fresh_forth(image_path, lines, max_steps=800_000_000):
 
     sys_obj = MegapadSystem(
         ram_size=1024 * 1024,
-        ext_mem_size=16 * (1 << 20),
+        ext_mem_size=USERLAND_EXT_MEM_MIB * (1 << 20),
         storage_image=image_path,
     )
     output = capture_uart(sys_obj)
@@ -725,6 +735,38 @@ def test_binary_read_and_offset():
         '_RB C@ 250 = AND _RB 6 + C@ 0= AND',
         'IF ." OFFSET-READ-OK" THEN',
     ], "OFFSET-READ-OK")
+
+
+def test_full_sector_reads_preserve_stack_depth():
+    """Each full-sector batch consumes its internal sector count."""
+    check("full-sector read stack depth", [
+        'T-VMP-NEW CONSTANT _V',
+        'S" /data.bin" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _BF',
+        'DEPTH CONSTANT _BEFORE',
+        '_RB 1024 _BF VFS-READ? THROW 1024 =',
+        'DEPTH _BEFORE = AND',
+        '_RB C@ 0= AND _RB 511 + C@ 255 = AND',
+        '_RB 512 + C@ 0= AND _RB 1023 + C@ 255 = AND',
+        'IF ." FULL-READ-STACK-OK" THEN',
+    ], "FULL-READ-STACK-OK")
+
+
+def test_full_sector_writes_preserve_stack_depth():
+    """Each full-sector write batch consumes its internal sector count."""
+    check("full-sector write stack depth", [
+        'T-VMP-NEW CONSTANT _V',
+        'S" full.bin" _V VFS-MKFILE? THROW DROP',
+        'S" /full.bin" VFS-FF-READ VFS-FF-WRITE OR _V '
+        'VFS-OPEN? THROW CONSTANT _BF',
+        '_WB 1024 0xA5 FILL',
+        'DEPTH CONSTANT _BEFORE',
+        '_WB 1024 _BF VFS-WRITE? THROW 1024 =',
+        'DEPTH _BEFORE = AND',
+        '_BF VFS-REWIND',
+        '_RB 1024 _BF VFS-READ? THROW 1024 = AND',
+        '_RB C@ 0xA5 = AND _RB 1023 + C@ 0xA5 = AND',
+        'IF ." FULL-WRITE-STACK-OK" THEN',
+    ], "FULL-WRITE-STACK-OK")
 
 
 def test_create_write_read_delete_and_sync():
@@ -1101,6 +1143,8 @@ def main():
     test_final_directory_slot_mounts_without_pair_loop_wrap()
     test_root_and_lazy_subdirectory_reads()
     test_binary_read_and_offset()
+    test_full_sector_reads_preserve_stack_depth()
+    test_full_sector_writes_preserve_stack_depth()
     test_create_write_read_delete_and_sync()
     test_create_zeroes_newly_allocated_sector()
     test_seek_gap_and_truncate_growth_zero_visible_ranges()

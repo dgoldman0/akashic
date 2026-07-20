@@ -5,10 +5,15 @@ sole VFS owner, and the first three ordered Gate 4 headless milestones are
 implemented and qualified. Library now owns managed-document and capture
 mutation, retained history, receipts, lifecycle, collections, a disposable
 title/body/tag index, and bounded authoritative corpus/collection queries.
-Library still has no capability or projection-owner lifecycle, repair/export
-surface, applet, UI, or sibling integration. The overall Gate 4 exit is not yet
-claimed; those remaining absences are contract boundaries, not implied
-behavior.
+Library still has no capability or projection-owner lifecycle or repair/export
+surface. A bounded standalone applet now exercises the public headless surface
+as a user-facing corpus lens: it can browse and search active/archived records,
+preview exact content, create and rename managed documents, archive/unarchive,
+inspect retained history, browse/filter collections, and page results. It does
+not provide Desktop hosting, sibling integration, deep Pad editing, capture
+import, destructive deletion, repair, or export. The overall Gate 4 exit and
+complete Gate 5 experience are not yet claimed; those remaining absences are
+contract boundaries, not implied behavior.
 
 Library is the machine-level corpus of material a user deliberately keeps. A
 Practice may eventually bind Library resources into an activity, but the corpus
@@ -40,9 +45,10 @@ Library does not own:
   synchronization service, collaboration server, or universal
   citation/claim/backlink graph.
 
-Desk may later host Library services and route intents, and the Library applet
-may show Library records, but hosting and presentation do not transfer domain
-ownership.
+Desk may later host Library services and route intents. The current standalone
+Library applet shows Library records through the public headless owner surface,
+but presentation does not transfer domain ownership and does not establish a
+Desktop route or capability.
 
 ## Gate 4A foundation now sealed
 
@@ -295,10 +301,11 @@ applet, or newest revision.
 
 The domain package is `akashic/library/`. Model, record codecs, the
 catalog/content owner, disposable index, import semantics, and future concrete
-projection owner remain Library code. The reserved applet package is
-`akashic/tui/applets/library/`; it is a Library lens, not the owner. Portable
-mechanics move to `interop/` or `utils/fs/` only after two materially independent
-owners prove the same contract.
+projection owner remain Library code. The implemented standalone applet package
+is `akashic/tui/applets/library/`; it is a bounded Library lens over the public
+owner API, not the owner, a projection owner, or a Desktop registration.
+Portable mechanics move to `interop/` or `utils/fs/` only after two materially
+independent owners prove the same contract.
 
 The existing `akashic/knowledge/taxonomy.f` and `akashic/store/vault.f` are not
 Library foundations. Neither supplies this bounded durable owner, revision,
@@ -310,7 +317,8 @@ The remaining order is:
    reference counting, exact-state validation, and quiescent release.
 2. Qualify recognized-format repair/raw export and the complete Gate 4 damage
    and exit matrix without weakening the sealed authoritative/query boundary.
-3. Gate 5 makes the standalone Library applet useful.
+3. Gate 5 expands and qualifies the present bounded standalone Library lens
+   into the complete applet experience without transferring domain ownership.
 4. Gate 6 connects Pad, Explorer, and Desk through typed interop without
    sibling imports.
 5. Gate 8 performs explicit observation collection and any separately approved
