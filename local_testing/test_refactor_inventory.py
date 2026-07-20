@@ -121,7 +121,7 @@ def test_unresolved_imports_are_named_debt_not_external_dependencies() -> None:
     assert "external_edges" not in report
 
 
-def test_every_module_has_a_settled_responsibility_class() -> None:
+def test_every_module_has_a_reviewed_responsibility_class() -> None:
     report = _report()
     assert all(
         module["class"] in {"independent", "desk-ecosystem", "applet"}
@@ -141,8 +141,21 @@ def test_every_module_has_a_settled_responsibility_class() -> None:
         "tui/applets/agent/access-profile.f",
         "tui/applets/desk/agent-access-policy.f",
     ]
-    assert by_path["interop/shared-document-lens.f"]["class"] == (
-        "desk-ecosystem"
+    assert by_path["interop/shared-document-lens.f"]["class"] == "independent"
+    assert by_path["interop/shared-document-lens.f"]["target"] == (
+        "interop/resource-session.f"
+    )
+    assert by_path["game/ecs.f"]["class"] == "independent"
+    assert by_path["tui/game/game-applet.f"]["class"] == "desk-ecosystem"
+    assert by_path["game/ecs.f"]["ownership_decision"] == (
+        "deferred-current-placement"
+    )
+    assert by_path["tui/game/game-applet.f"]["ownership_decision"] == (
+        "deferred-current-placement"
+    )
+    assert by_path["game/ecs.f"]["target"] == "game/ecs.f"
+    assert by_path["tui/game/game-applet.f"]["target"] == (
+        "tui/game/game-applet.f"
     )
     assert by_path["tui/applets/streams/observation-state.f"]["class"] == (
         "applet"
@@ -246,6 +259,17 @@ def test_structure_and_complexity_ledger_is_source_anchored() -> None:
         "uidl",
     }
     assert all("O(" in item["current_complexity"] for item in ledger)
+    target_landings = {item["id"]: item["target_landing"] for item in ledger}
+    assert target_landings["library.metadata-mutation"] == "L12"
+    assert target_landings["library.corpus-query"] == "L12"
+    assert target_landings["streams.observation-checkpoint"] == "L13"
+    assert target_landings["desk.host-catalogs"] == "deferred"
+    assert {
+        landing
+        for item_id, landing in target_landings.items()
+        if item_id.startswith(("agent.", "daybook.", "pad.", "fexplorer."))
+        or item_id.startswith(("grid.", "runtime.", "interop.", "uidl."))
+    } == {"deferred"}
 
 
 def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
@@ -255,12 +279,29 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         "ext4_prerequisite": False,
         "note": "Scale and architecture qualification use the generic VFS contract; ext4 is an optional integration backend.",
     }
-    assert policy["scale_profiles"]["workstation"]["primary_records"] == 100000
-    assert policy["scale_profiles"]["large_host_model"] == {
-        "primary_records": 1000000,
+    assert policy["scale_profiles"]["library"]["workstation"] == {
+        "documents": 100000,
+        "revisions_or_relationship_edges": 1000000,
+        "content_bytes_must_exceed": 65536,
+        "purpose": "interactive Library corpus and ordinary performance qualification",
+    }
+    assert policy["scale_profiles"]["library"]["large_host_model"] == {
+        "documents": 1000000,
         "revisions": 10000000,
         "relationship_edges": 10000000,
-        "purpose": "prove index geometry, amplification, and bounded working memory without aggregate target allocation",
+        "purpose": "prove Library index geometry, amplification, and bounded working memory without aggregate target allocation",
+    }
+    assert policy["scale_profiles"]["streams"]["workstation"] == {
+        "sources": 10000,
+        "observations": 1000000,
+        "retained_attempts": 2000000,
+        "purpose": "interactive Streams source, refresh, timeline, thread, and search qualification",
+    }
+    assert policy["scale_profiles"]["streams"]["large_host_model"] == {
+        "sources": 100000,
+        "observations": 10000000,
+        "retained_attempts": 20000000,
+        "purpose": "prove skewed source histories, deep continuation, amplification, and bounded working memory",
     }
     assert {
         workload["id"]
@@ -272,15 +313,23 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         "text-candidate-plus-exact",
         "deep-keyset-pagination",
     }
-    assert policy["scale_profiles"]["instance_workload"] == {
-        "same_type_applets": 2,
+    assert policy["scale_profiles"]["persistence_instance_workload"] == {
         "interleaved_stores": 4,
-        "interleaved_request_buses": 4,
-        "interleaved_long_jobs": 4,
-        "hidden_process_global_current_instance": False,
+        "hidden_process_global_current_store": False,
     }
-    assert "high-degree" in policy["scale_profiles"]["model_workload"][
+    assert "instance_workload" not in policy["scale_profiles"]
+    assert all(
+        "runtime_routes" not in profile
+        for applet in ("library", "streams")
+        for profile in policy["scale_profiles"][applet].values()
+    )
+    assert "high-degree" in policy["scale_profiles"][
+        "library_model_workload"
+    ][
         "relationship_distribution"
+    ]
+    assert "thread" in policy["scale_profiles"]["streams_model_workload"][
+        "query_shape"
     ]
     baseline = policy["hot_path_baseline"]
     assert "PERF-CYCLES" in baseline["existing_guest_counters"]

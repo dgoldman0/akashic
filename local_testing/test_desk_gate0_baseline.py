@@ -14,6 +14,9 @@ FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "desk-gate0"
 MANIFEST_PATH = FIXTURE_ROOT / "manifest.json"
 STREAMS_ROOT = AKASHIC_ROOT / "akashic" / "tui" / "applets" / "streams"
 PINNED_CONTRACT_SHA256 = (
+    "19a41390312d1eeea6d62c9d2c2a6f29dd5274bfb264a53aef3c60e36464664a"
+)
+PRE_AMENDMENT_CONTRACT_SHA256 = (
     "02725e3d36b0ee0f1fd7a238d1906fb60df8f07988776f3e0cfee247c4addedd"
 )
 
@@ -36,7 +39,13 @@ def test_contract_pin_and_ratified_decisions() -> None:
     assert manifest["ratification"]["status"] == "ratified"
     contract = manifest["ratification"]["contract"]
     assert contract["sha256"] == PINNED_CONTRACT_SHA256
-    assert contract["bytes"] == 186417
+    assert contract["bytes"] == 186989
+    assert manifest["ratification"]["scope_amendment"] == {
+        "date": "2026-07-20",
+        "kind": "refactor-direction-supersession-banner",
+        "previous_sha256": PRE_AMENDMENT_CONTRACT_SHA256,
+        "production_behavior_change": False,
+    }
     assert len(manifest["ratification"]["accepted_decisions"]) == 10
 
     # The workspace contract is intentionally outside the nested repository.

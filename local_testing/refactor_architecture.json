@@ -16,7 +16,7 @@
       "marker_issue_count": 0,
       "graph_sha256": "20eefc019d64986760e8d982c33e98e4f2f86a822a1dbd729c5b5451aa7aa797",
       "state_sha256": "3d704bc38ab715a4caaad331f3cb1446964feac17cb596b6de2c40b497f98f5e",
-      "placement_sha256": "f149cde98be995c68fdf6ea2b65955507479160609f98a0cbe350604f10b3490",
+      "placement_sha256": "9f39f57a56f0f9e7c3c43740b9f226b077e839139dce92d7f389e1e386202c6b",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
       "layer_violations": [
@@ -112,10 +112,10 @@
       },
       {
         "module": "interop/shared-document-lens.f",
-        "class": "desk-ecosystem",
-        "owner": "shared-document-session",
+        "class": "independent",
+        "owner": "resource-session",
         "placement": "split-required",
-        "target": "tui/services/shared-document-session.f"
+        "target": "interop/resource-session.f"
       },
       {
         "module": "agent/access-profile.f",
@@ -130,6 +130,22 @@
       }
     ],
     "prefixes": [
+      {
+        "prefix": "game/",
+        "class": "independent",
+        "owner": "unsettled-game-direction",
+        "placement": "correct",
+        "target_prefix": "game/",
+        "ownership_decision": "deferred-current-placement"
+      },
+      {
+        "prefix": "tui/game/",
+        "class": "desk-ecosystem",
+        "owner": "unsettled-game-direction",
+        "placement": "correct",
+        "target_prefix": "tui/game/",
+        "ownership_decision": "deferred-current-placement"
+      },
       {
         "prefix": "library/",
         "class": "applet",
@@ -161,7 +177,6 @@
       "css/",
       "dom/",
       "font/",
-      "game/",
       "interop/",
       "knowledge/",
       "liraq/",
@@ -187,22 +202,37 @@
       "rule": "shared-host-hardcodes-vfs-driver",
       "from": "tui/app-shell.f",
       "forbid_target_prefix": "utils/fs/drivers/",
-      "removal_landing": "L8"
+      "removal_landing": "L9"
     }
   ],
   "scale_profiles": {
-    "workstation": {
-      "primary_records": 100000,
-      "revisions_or_relationship_edges": 1000000,
-      "content_bytes_must_exceed": 65536,
-      "runtime_routes": 100000,
-      "purpose": "interactive local corpus and ordinary performance qualification"
+    "library": {
+      "workstation": {
+        "documents": 100000,
+        "revisions_or_relationship_edges": 1000000,
+        "content_bytes_must_exceed": 65536,
+        "purpose": "interactive Library corpus and ordinary performance qualification"
+      },
+      "large_host_model": {
+        "documents": 1000000,
+        "revisions": 10000000,
+        "relationship_edges": 10000000,
+        "purpose": "prove Library index geometry, amplification, and bounded working memory without aggregate target allocation"
+      }
     },
-    "large_host_model": {
-      "primary_records": 1000000,
-      "revisions": 10000000,
-      "relationship_edges": 10000000,
-      "purpose": "prove index geometry, amplification, and bounded working memory without aggregate target allocation"
+    "streams": {
+      "workstation": {
+        "sources": 10000,
+        "observations": 1000000,
+        "retained_attempts": 2000000,
+        "purpose": "interactive Streams source, refresh, timeline, thread, and search qualification"
+      },
+      "large_host_model": {
+        "sources": 100000,
+        "observations": 10000000,
+        "retained_attempts": 20000000,
+        "purpose": "prove skewed source histories, deep continuation, amplification, and bounded working memory"
+      }
     },
     "emulator": {
       "cardinality": "representative-reduced",
@@ -240,17 +270,19 @@
         "required_behavior": "no offset walk; unrelated mutations do not silently retarget a pinned cursor"
       }
     ],
-    "model_workload": {
+    "library_model_workload": {
       "per_record_cardinality": "variable tags, lineage facts, and revisions without fixed inline aggregate ceilings",
       "relationship_distribution": "sparse, skewed, and high-degree nodes",
       "content_shape": "variable-size and chunked content, including documents beyond whole-buffer limits"
     },
-    "instance_workload": {
-      "same_type_applets": 2,
+    "streams_model_workload": {
+      "source_distribution": "skewed observation and retained-attempt histories across enabled and disabled sources",
+      "query_shape": "deep time, source, thread, and text-candidate continuation",
+      "content_shape": "variable-size summaries and content separated from indexed observation metadata"
+    },
+    "persistence_instance_workload": {
       "interleaved_stores": 4,
-      "interleaved_request_buses": 4,
-      "interleaved_long_jobs": 4,
-      "hidden_process_global_current_instance": false
+      "hidden_process_global_current_store": false
     }
   },
   "hot_path_budgets": {
@@ -354,7 +386,7 @@
       "current_complexity": "O(catalog capacity) copied, written, and read back per mutation",
       "scale_risk": "write cost and temporary I/O scale with the complete catalog rather than the changed records",
       "replacement_requirement": "copy-on-write indexed pages plus atomic root publication",
-      "target_landing": "L15",
+      "target_landing": "L12",
       "evidence_symbols": ["_LIBMU-COPY-BANK-BODY", "_LIBMU-FULL-CANDIDATE-READBACK"]
     },
     {
@@ -365,7 +397,7 @@
       "current_complexity": "O(catalog slots + candidate content verification)",
       "scale_risk": "ordinary queries retain a corpus-wide scan path",
       "replacement_requirement": "ordered/compound indexes and opaque keyset cursors",
-      "target_landing": "L15",
+      "target_landing": "L12",
       "evidence_symbols": ["_LIBRARY-VFS-STORE-QUERY-CORPUS", "_LIBCQ-INDEX-REQUIRED?"]
     },
     {
@@ -376,7 +408,7 @@
       "current_complexity": "O(sources + observations + keys) bytes per load/save",
       "scale_risk": "every mutation rewrites and verifies aggregate state",
       "replacement_requirement": "indexed source/observation records and retained attempts",
-      "target_landing": "L16",
+      "target_landing": "L13",
       "evidence_symbols": ["_OSTORE-ENCODE-PAYLOAD", "_STREAMS-OBSERVATION-STORE-SAVE"]
     },
     {
@@ -387,7 +419,7 @@
       "current_complexity": "O(messages + context items + content bytes)",
       "scale_risk": "append/load cost and memory grow with the complete retained conversation",
       "replacement_requirement": "paged records, ranged content, and indexed conversation access",
-      "target_landing": "L19",
+      "target_landing": "deferred",
       "evidence_symbols": ["ATHREAD-ENCODE-SIZE", "ATHREAD-ENCODE", "ATHREAD-DECODE"]
     },
     {
@@ -398,7 +430,7 @@
       "current_complexity": "O(document bytes + entry count) per reload",
       "scale_risk": "the full journal is reparsed and materialized",
       "replacement_requirement": "chunked text or indexed entry records with date/tag indexes",
-      "target_landing": "L19",
+      "target_landing": "deferred",
       "evidence_symbols": ["_DB-PARSE-FILE", "_DB-LOAD", "_DB-HAS-ENTRY?"]
     },
     {
@@ -409,7 +441,7 @@
       "current_complexity": "O(open buffers + complete document bytes)",
       "scale_risk": "large documents and many tabs consume fixed whole-buffer slots",
       "replacement_requirement": "per-document piece/gap state, ranged VFS I/O, and incremental search",
-      "target_landing": "L19",
+      "target_landing": "deferred",
       "evidence_symbols": ["_PAD-FIND-BUFFER", "_PAD-LOAD-FILE", "_PAD-SEARCH-NEXT-OPEN"]
     },
     {
@@ -420,7 +452,7 @@
       "current_complexity": "O(directory entries squared) sort after O(entries) materialization",
       "scale_risk": "large directories overflow the array and sort quadratically",
       "replacement_requirement": "paged directory source with stable IDs and scalable ordering",
-      "target_landing": "L20",
+      "target_landing": "deferred",
       "evidence_symbols": ["_FEXP-SORT-LIST", "_FEXP-SWAP-ITEMS"]
     },
     {
@@ -431,7 +463,7 @@
       "current_complexity": "O(file bytes + fixed matrix cells) parse/materialization",
       "scale_risk": "sparse or large sheets pay dense storage and hard row/column ceilings",
       "replacement_requirement": "sparse tiled cells and dependency-indexed incremental recalculation",
-      "target_landing": "L20",
+      "target_landing": "deferred",
       "evidence_symbols": ["_GRID-SCAN-CSV", "_GRID-PARSE-CSV"]
     },
     {
@@ -442,7 +474,7 @@
       "current_complexity": "O(apps + services + visible slots) host operations",
       "scale_risk": "launch, lookup, and layout work grow through repeated linear scans",
       "replacement_requirement": "indexed host slots plus explicit visible order and incremental layout",
-      "target_landing": "L8",
+      "target_landing": "deferred",
       "evidence_symbols": ["_DESK-INSTALLED-FIND", "_DESK-SERVICE-FIND", "DESK-RELAYOUT"]
     },
     {
@@ -453,7 +485,7 @@
       "current_complexity": "O(types) or O(instances) lookup",
       "scale_risk": "lookup latency and hard capacity grow with the complete registry",
       "replacement_requirement": "caller-sized indexed registries",
-      "target_landing": "L17",
+      "target_landing": "deferred",
       "evidence_symbols": ["CREG-TYPE-FIND", "CREG-INST-FIND"]
     },
     {
@@ -464,7 +496,7 @@
       "current_complexity": "O(resources) lookup",
       "scale_risk": "resource resolution scans the complete live registry",
       "replacement_requirement": "caller-sized identity index",
-      "target_landing": "L17",
+      "target_landing": "deferred",
       "evidence_symbols": ["_RREG-FIND-ID", "_RREG-CINST-FIND"]
     },
     {
@@ -475,7 +507,7 @@
       "current_complexity": "bounded O(1) queueing but fixed aggregate capacity and shared serialization",
       "scale_risk": "independent buses contend through process-global guards and cannot express caller-selected backpressure",
       "replacement_requirement": "per-instance queues/guards with explicit capacity and bounded scheduling",
-      "target_landing": "L17",
+      "target_landing": "deferred",
       "evidence_symbols": ["CBUS-POST", "CBUS-DISPATCH", "_CBUS-DISPATCH-GUARD"]
     },
     {
@@ -486,7 +518,7 @@
       "current_complexity": "O(document bytes) parse and O(elements) ID lookup",
       "scale_risk": "large UI documents hit aggregate limits and repeated linear lookup",
       "replacement_requirement": "per-instance arenas with indexed IDs and bounded render caches",
-      "target_landing": "L17",
+      "target_landing": "deferred",
       "evidence_symbols": ["UIDL-PARSE", "_UDL-ID-FIND", "UIDL-BY-ID"]
     }
   ],

@@ -190,7 +190,7 @@ def _lexical_definitions(text: str) -> dict[str, list[str]]:
 
 
 def classify_module(module: str, policy: dict[str, Any]) -> dict[str, Any]:
-    """Return the settled ownership class and target placement for a module."""
+    """Return the reviewed ownership class and current/target placement."""
     ownership = policy["ownership"]
     for rule in ownership["exact"]:
         if module == rule["module"]:
@@ -200,6 +200,9 @@ def classify_module(module: str, policy: dict[str, Any]) -> dict[str, Any]:
                 "placement": rule["placement"],
                 "target": rule.get("target", module),
                 "split_targets": rule.get("split_targets", []),
+                "ownership_decision": rule.get(
+                    "ownership_decision", "settled"
+                ),
             }
 
     for rule in ownership["prefixes"]:
@@ -213,6 +216,9 @@ def classify_module(module: str, policy: dict[str, Any]) -> dict[str, Any]:
                 "placement": rule["placement"],
                 "target": f"{target_prefix}{suffix}",
                 "split_targets": [],
+                "ownership_decision": rule.get(
+                    "ownership_decision", "settled"
+                ),
             }
 
     if module.startswith("tui/applets/"):
@@ -224,6 +230,7 @@ def classify_module(module: str, policy: dict[str, Any]) -> dict[str, Any]:
             "placement": "correct",
             "target": module,
             "split_targets": [],
+            "ownership_decision": "settled",
         }
     if module.startswith("tui/"):
         return {
@@ -232,6 +239,7 @@ def classify_module(module: str, policy: dict[str, Any]) -> dict[str, Any]:
             "placement": "correct",
             "target": module,
             "split_targets": [],
+            "ownership_decision": "settled",
         }
     if any(
         module.startswith(prefix)
@@ -243,6 +251,7 @@ def classify_module(module: str, policy: dict[str, Any]) -> dict[str, Any]:
             "placement": "correct",
             "target": module,
             "split_targets": [],
+            "ownership_decision": "settled",
         }
     return {
         "class": "unclassified",
@@ -250,6 +259,7 @@ def classify_module(module: str, policy: dict[str, Any]) -> dict[str, Any]:
         "placement": "unclassified",
         "target": module,
         "split_targets": [],
+        "ownership_decision": "unsettled",
     }
 
 
@@ -505,6 +515,7 @@ def build_report(policy: dict[str, Any] | None = None) -> dict[str, Any]:
                 "placement": classification["placement"],
                 "target": classification["target"],
                 "split_targets": classification["split_targets"],
+                "ownership_decision": classification["ownership_decision"],
                 "lines": len(text.splitlines()),
                 "bytes": len(raw),
                 "requires": sorted(dependencies),

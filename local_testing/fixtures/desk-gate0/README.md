@@ -1,8 +1,11 @@
 # Desk Gate 0 retained baseline
 
 These files freeze the durable Streams records that existed when the final
-Desk ecosystem contract was ratified. They are compatibility evidence, not a
-new format and not seed data for ordinary users.
+Desk ecosystem contract was ratified. The 2026-07-20 scope amendment adds only
+a pinned supersession banner directing refactor placement, scale, and landing
+order to the root refactor plan; the retained decisions and runtime fixtures are
+unchanged. They are compatibility evidence, not a new format and not seed data
+for ordinary users.
 
 The valid records are produced through the production Forth encoders and
 stores on a temporary MP64FS image. Each corrupt record differs from its valid

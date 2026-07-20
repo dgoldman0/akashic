@@ -5,11 +5,17 @@
   "ratification": {
     "status": "ratified",
     "basis": "The user stated that the final refinement landed and directed implementation with the contract as guardrail.",
+    "scope_amendment": {
+      "date": "2026-07-20",
+      "kind": "refactor-direction-supersession-banner",
+      "previous_sha256": "02725e3d36b0ee0f1fd7a238d1906fb60df8f07988776f3e0cfee247c4addedd",
+      "production_behavior_change": false
+    },
     "contract": {
       "workspace_path": "DESK_ECOSYSTEM_CONTRACT.md",
-      "sha256": "02725e3d36b0ee0f1fd7a238d1906fb60df8f07988776f3e0cfee247c4addedd",
-      "bytes": 186417,
-      "mtime_local": "2026-07-17T09:14:00.219220948-04:00"
+      "sha256": "19a41390312d1eeea6d62c9d2c2a6f29dd5274bfb264a53aef3c60e36464664a",
+      "bytes": 186989,
+      "mtime_local": "2026-07-20T17:52:37.272295207-04:00"
     },
     "accepted_decisions": [
       {
