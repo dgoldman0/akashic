@@ -33,6 +33,20 @@ Unknown source packages and any unreviewed widening of dependency, placement,
 unresolved-import, or global-state debt fail the ratchet. Ext4 is not a
 prerequisite for these checks or the planned storage refactor.
 
+Landing L1's functional-preservation ledger is also host-only:
+
+```bash
+python3 local_testing/refactor_functional_baseline.py --check
+python3 -m pytest -q local_testing/test_refactor_functional_baseline.py
+```
+
+It pins the current UIDL, direct-input, capability and Desk service surfaces and
+maps each preserved behavior group to exact profiles, tests or drivers.
+Partially characterized groups name the test prerequisite and trigger that must
+be satisfied before a later landing touches the uncovered edge. See
+`docs/refactor/l1-functional-preservation-baseline.md` for scope and update
+rules.
+
 ## Build And Smoke Test
 
 ```bash

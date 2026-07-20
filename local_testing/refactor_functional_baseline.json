@@ -1,0 +1,720 @@
+{
+  "schema": "akashic.refactor.functional-preservation.v1",
+  "baseline_commit": "fc291d60ab76239cded3e5654df446d8737f5d0b",
+  "landing": "L1",
+  "production_behavior_change": false,
+  "required_facets": [
+    "actions",
+    "interfaces",
+    "providers",
+    "persistence",
+    "failures",
+    "journeys"
+  ],
+  "scope": {
+    "included_applets": [
+      "library",
+      "streams",
+      "agent",
+      "daybook",
+      "pad",
+      "grid",
+      "fexplorer",
+      "desk",
+      "soundlab"
+    ],
+    "excluded": {
+      "game": "Current placement and future architecture are deferred; no active landing touches Game.",
+      "worlds": "Worlds remains an idea rather than an implemented applet or active refactor workload."
+    }
+  },
+  "applets": [
+    {
+      "id": "library",
+      "active_landings": ["L2", "L3", "L4", "L5", "L6", "L8", "L9", "L10", "L11", "L12", "L13", "L14"],
+      "uidl_surface": {
+        "path": "akashic/tui/applets/library/library.uidl",
+        "menus": ["File", "Browse", "Document", "Page", "Help"],
+        "actions": ["about", "archive", "back", "clear-search", "collections", "history", "new-managed", "next-page", "previous-page", "quit", "reload", "rename-title", "retry-create", "search", "show-active", "show-all", "show-archived", "unarchive"],
+        "shortcuts": {
+          "back": "Backspace",
+          "clear-search": "Ctrl+Shift+F",
+          "history": "Ctrl+H",
+          "new-managed": "Ctrl+N",
+          "next-page": "PageDown",
+          "previous-page": "PageUp",
+          "quit": "Ctrl+Q",
+          "reload": "Ctrl+R",
+          "rename-title": "F2",
+          "retry-create": "Ctrl+Shift+R",
+          "search": "Ctrl+F"
+        },
+        "element_ids": ["library-body", "mbar", "sbar", "sbar-page", "sbar-state", "sbar-view"]
+      },
+      "direct_input_contracts": [
+        {
+          "path": "akashic/tui/applets/library/library.f",
+          "word": "_LAPP-PANEL-HANDLE",
+          "sha256": "68f02aaae8dfebde4c8dc26fb8cd5c9d90fb55aefde4ca8f83981c0b178d9430",
+          "bindings": ["Shift+Up -> preview up 8", "Shift+Down -> preview down 8", "Up -> previous row", "Down -> next row", "PageUp -> previous page", "PageDown -> next page", "Home -> first row", "End -> last row", "Left -> previous page", "Right -> next page", "Enter -> activate selection", "Escape -> back", "/ -> search", "n -> new managed document", "r -> rename", "a -> archive", "u -> unarchive", "c -> collections", "h -> retained history", "b -> back"]
+        }
+      ],
+      "capability_surface": {"path": "akashic/tui/applets/library/library.f", "literal_prefix": "library.", "ids": []},
+      "source_contracts": [
+        {
+          "path": "akashic/tui/applets/library/library.f",
+          "required_literals": ["org.akashic.library.applet", "LIBRARY-APPLET-INIT-CB", "LIBRARY-APPLET-REQUEST-CLOSE-CB", "LIBRARY-APPLET-SHUTDOWN-CB", "LIBRARY-APPLET-ENTRY", "LIBRARY-APPLET-RUN"]
+        },
+        {
+          "path": "akashic/library/projection-owner.f",
+          "required_literals": ["resource.describe", "resource.snapshot", "resource.replace"]
+        }
+      ],
+      "not_applicable": {
+        "providers": "Library has no selectable provider surface. Its applet descriptor intentionally publishes zero capabilities and intents; the separately tested projection owner provides its resource service."
+      },
+      "behaviors": [
+        {
+          "id": "library.applet-surface",
+          "coverage": "partial",
+          "prerequisite_ids": ["library.controller-edges"],
+          "facets": ["actions", "interfaces", "journeys"],
+          "preserve": ["Applet entry exercised through the focused shell profile, descriptor identity, title, UIDL, callbacks, lifecycle and clean close", "Active, Archived and All views; exact search; collections; retained history; back navigation; paging and preview", "Managed create/retry, rename, archive and unarchive controller actions"],
+          "evidence": ["profile:library", "profile:library-applet-contracts", "profile:library-applet-functional-contracts", "pytest:local_testing/test_akashic_tui_packaging.py::test_library_applet_uidl_actions_have_exact_controller_bindings"]
+        },
+        {
+          "id": "library.model-and-durable-semantics",
+          "coverage": "covered",
+          "facets": ["persistence", "failures"],
+          "preserve": ["Managed documents, immutable captures, receipts, provenance, exact revisions, operation-key idempotency and collection semantics", "Content-first inactive-bank publication, sole-head authority, exact corruption/future/orphan distinctions, cleanup and retry", "Catalog/content/relationship/RID bounds continue to refuse without partial mutation until the scalable successor replaces them"],
+          "evidence": ["profile:library-model-codecs-contracts", "profile:library-store-format-contracts", "profile:library-vfs-store-contracts", "profile:library-managed-document-contracts", "profile:library-managed-lifecycle-contracts", "profile:library-capture-collection-contracts", "profile:library-managed-capacity-contracts"]
+        },
+        {
+          "id": "library.query-and-projection",
+          "coverage": "covered",
+          "facets": ["interfaces", "failures", "journeys"],
+          "preserve": ["Exact title/body/tag search, lifecycle/kind/media/collection filters and deterministic continuation", "Disposable-index loss or damage rebuilds to authoritative identical results", "Projection describe/snapshot/managed replace, immutable capture reads, exact locators, leases, stale and forged token refusal, quiescence and capacity"],
+          "evidence": ["profile:library-query-index-contracts", "profile:library-projection-owner-contracts", "driver:local_testing/library_query_two_boot.py", "driver:local_testing/library_projection_two_boot.py"]
+        },
+        {
+          "id": "library.maintenance-and-cold-faults",
+          "coverage": "partial",
+          "prerequisite_ids": ["library.applet-cold-reopen", "library.blocked-ui"],
+          "facets": ["persistence", "failures", "journeys"],
+          "preserve": ["Inspection, sealed evidence, bounded raw export and recognized repair", "Future, corrupt, ambiguous and orphan evidence remains fail-closed and export-only", "Fresh-process reopen preserves managed lifecycle, captures, collections, queries, projections and the complete Gate 4 damage matrix"],
+          "evidence": ["profile:library-maintenance-contracts", "driver:local_testing/library_managed_two_boot.py", "driver:local_testing/library_lifecycle_two_boot.py", "driver:local_testing/library_gate4_exit_two_boot.py"]
+        }
+      ],
+      "prerequisites": [
+        {
+          "id": "library.controller-edges",
+          "before_landing": "L8",
+          "trigger": "Any decomposition or shared-controller change that touches Library actions or view state.",
+          "characterization": "Drive rename, All, collection enumeration/filter/back, page forward/back and continuation conflict, clear-search/cancel, authoritative reload, exact pending-create retry, and pending-create close/discard.",
+          "reason": "The UIDL surface is pinned and owner semantics are strong, but the current applet functional fixture exercises only a subset of these controller paths."
+        },
+        {
+          "id": "library.applet-cold-reopen",
+          "before_landing": "L12",
+          "trigger": "Applet repository cutover or initialization changes.",
+          "characterization": "Start LIBRARY-APPLET-INIT-CB over an existing corpus and prove reconstruction of the same view/lens state.",
+          "reason": "Current cold-process drivers prove the owner, not applet initialization over pre-existing state."
+        },
+        {
+          "id": "library.blocked-ui",
+          "before_landing": "L12",
+          "trigger": "Applet repository cutover, recovery presentation or writable-state changes.",
+          "characterization": "Show corrupt, future and recovery evidence as visibly nonempty and nonwritable at applet level.",
+          "reason": "Fail-closed headless behavior is exact, while its UI presentation is currently inferred."
+        }
+      ]
+    },
+    {
+      "id": "streams",
+      "active_landings": ["L2", "L3", "L4", "L9", "L13", "L14"],
+      "uidl_surface": {
+        "path": "akashic/tui/applets/streams/streams.uidl",
+        "menus": ["File", "Feed", "Sources", "Post", "Help"],
+        "actions": ["about", "actor", "compose", "quit", "refresh", "search", "source-add-feed", "source-add-page", "source-refresh", "source-remove", "source-toggle", "sources", "thread", "timeline"],
+        "shortcuts": {"compose": "Ctrl+N", "quit": "Ctrl+Q", "search": "Ctrl+F", "sources": "Ctrl+S", "thread": "Ctrl+T", "timeline": "Ctrl+L"},
+        "element_ids": ["mbar", "sbar", "sbar-account", "sbar-state", "sbar-view", "streams-body"]
+      },
+      "direct_input_contracts": [
+        {
+          "path": "akashic/tui/applets/streams/streams.f",
+          "word": "_STM-PANEL-HANDLE",
+          "sha256": "64f95c51fb8eb8fc48f76f6fa197904f26a885d32b192fc6e69219113f64153e",
+          "bindings": ["Up -> previous row", "Down -> next row", "Enter in Sources -> toggle source", "Enter outside Sources -> open thread", "Escape -> timeline", "f/F in Sources -> add syndication source", "p/P in Sources -> add watched page", "e/E in Sources -> toggle source", "r/R in Sources -> refresh source", "d/D in Sources -> remove source", "t/T outside Sources -> open thread", "/ outside Sources -> search", "c/C outside Sources -> create draft", "a/A outside Sources -> set public actor", "r/R outside Sources -> refresh public feed", "s/S outside Sources -> source manager"]
+        }
+      ],
+      "capability_surface": {"path": "akashic/tui/applets/streams/streams.f", "literal_prefix": "streams.", "ids": ["streams.draft.create", "streams.draft.current", "streams.draft.read", "streams.draft.replace", "streams.draft.validate", "streams.feed.read", "streams.feed.refresh", "streams.item.read", "streams.search.local", "streams.selection.current", "streams.source.query", "streams.source.read", "streams.source.refresh", "streams.source.set-enabled", "streams.thread.read"]},
+      "source_contracts": [
+        {
+          "path": "akashic/tui/applets/streams/streams.f",
+          "required_literals": ["org.akashic.streams", "STREAMS-ENTRY", "STREAMS-RUN", "streams.selection.current", "streams.item.read", "streams.thread.read", "streams.feed.read", "streams.search.local", "streams.draft.create", "streams.draft.read", "streams.draft.replace", "streams.draft.validate", "streams.draft.current", "streams.feed.refresh", "streams.source.query", "streams.source.read", "streams.source.set-enabled", "streams.source.refresh"]
+        },
+        {
+          "path": "akashic/tui/applets/streams/streams-online.f",
+          "required_literals": ["STREAMS-ONLINE-ENTRY", "STREAMS-ONLINE-ENTRY-WITH-CONFIGURED"]
+        }
+      ],
+      "behaviors": [
+        {
+          "id": "streams.views-drafts-and-actions",
+          "coverage": "partial",
+          "prerequisite_ids": ["streams.refresh-card-rendering"],
+          "facets": ["actions", "journeys"],
+          "preserve": ["Timeline, retained search and partial-thread navigation", "Local draft create, read, edit, validate and cancel without implicit publication", "Source manager creation, independent selection, enable/disable, exact confirmed removal and manual refresh"],
+          "evidence": ["profile:streams", "profile:streams-contracts", "profile:streams-source-ui-contracts", "profile:desktop-streams"]
+        },
+        {
+          "id": "streams.capabilities-and-providers",
+          "coverage": "covered",
+          "facets": ["interfaces", "providers", "failures"],
+          "preserve": ["All fifteen current capability IDs, schemas, effects, target rules and handlers", "Offline entry plus explicit Bluesky and configured syndication compositions", "JSON Feed, RSS and Atom decoding; configured HTTP authorization, redirects, media and request bounds; explicit XIO trust boundary"],
+          "evidence": ["profile:streams-contracts", "profile:streams-source-owner-contracts", "profile:streams-xio-contracts", "profile:streams-syndec-contracts", "profile:streams-syndication-http-contracts", "profile:syndication-contracts", "profile:media-type-contracts", "profile:readable-text-contracts", "profile:streams-page-contracts"]
+        },
+        {
+          "id": "streams.observation-truth-and-recovery",
+          "coverage": "partial",
+          "prerequisite_ids": ["streams.observation-capacity", "streams.observation-future-format"],
+          "facets": ["persistence", "failures"],
+          "preserve": ["Accepted attempts, success, unchanged, revision, terminal failure and recovered-indeterminate truth", "Deduplication, retained last-good observations and exact stale/cancel/transport/HTTP/decode distinctions", "Source, observation and draft replacement recovery; corrupt/future/blocked records do not become writable authority"],
+          "evidence": ["profile:streams-draft-contracts", "profile:streams-persistence-contracts", "profile:streams-source-registry-contracts", "profile:streams-source-store-contracts", "profile:streams-observation-contracts", "profile:streams-observation-store-contracts", "profile:streams-refresh-owner-contracts"]
+        },
+        {
+          "id": "streams.desk-manual-refresh",
+          "coverage": "partial",
+          "prerequisite_ids": ["streams.combined-cold-process"],
+          "facets": ["providers", "journeys", "persistence", "failures"],
+          "preserve": ["Offline refusal and typed/UI manual refresh through the real Desk XIO service", "Accepted, busy, success, unchanged and accepted-to-indeterminate recovery", "Desk source/draft persistence across close and relaunch; ordinary Agent sees only sanitized source query/read capabilities"],
+          "evidence": ["profile:streams-manual-refresh-contracts", "profile:desktop-streams", "profile:desktop-agent-hardening"]
+        }
+      ],
+      "supplemental_evidence": ["profile:streams-live-public", "profile:streams-configured-refresh-live"],
+      "prerequisites": [
+        {
+          "id": "streams.combined-cold-process",
+          "before_landing": "L13",
+          "trigger": "Production persistence cutover.",
+          "characterization": "Run a spawn-isolated MP64FS journey containing a source registry, draft, successful observations and a durably accepted attempt that reopens as indeterminate.",
+          "reason": "Current descriptor reopens and desktop relaunches occur inside one guest process."
+        },
+        {
+          "id": "streams.observation-capacity",
+          "before_landing": "L13",
+          "trigger": "Observation/attempt storage or retention cutover.",
+          "characterization": "Exhaust observation/blob retention and prove capacity is reported, the terminal attempt is recorded and all last-good observations/key heads remain unchanged.",
+          "reason": "No current test reaches the production OCHK-S-CAPACITY and SREF-S-CAPACITY path."
+        },
+        {
+          "id": "streams.observation-future-format",
+          "before_landing": "L13",
+          "trigger": "Observation-store format replacement.",
+          "characterization": "Prove a valid future observation-store record is preserved and refused through both the store and owner projection.",
+          "reason": "Source and draft future records are covered; observation-store future format is not."
+        },
+        {
+          "id": "streams.refresh-card-rendering",
+          "before_landing": "L13",
+          "trigger": "Source-card rendering is changed by the bounded UI conversion.",
+          "characterization": "Assert rendered accepted, succeeded, failed and recovered-indeterminate source-card states.",
+          "reason": "Semantic projections are tested, but the exact visible state distinctions are not."
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "active_landings": ["L3", "L4", "L7", "L9", "L14"],
+      "uidl_surface": {
+        "path": "akashic/tui/applets/agent/agent.uidl",
+        "menus": ["Agent", "Run", "Connection", "Access", "Review", "Help"],
+        "actions": ["about", "access-assist", "access-chat", "access-read", "account", "approve", "cancel", "clear", "clear-credential", "credential", "deny", "prompt", "quit", "reconnect", "refresh-models", "settings"],
+        "shortcuts": {"account": "F9", "approve": "F6", "cancel": "Escape", "clear-credential": "Ctrl+Shift+K", "credential": "Ctrl+K", "deny": "F7", "prompt": "Ctrl+L", "quit": "Ctrl+Q", "settings": "F8"},
+        "element_ids": ["access", "agent-body", "effort", "mbar", "meta", "model", "provider", "sbar", "source-class", "state"]
+      },
+      "direct_input_contracts": [
+        {
+          "path": "akashic/tui/applets/agent/agent.f",
+          "word": "_AG-PANEL-HANDLE",
+          "sha256": "75deadc721266061ce62cae71e1cf2b6131f63a41476f7d65f36da81a9034d28",
+          "bindings": ["Enter -> prompt", "Up -> scroll one visual row older", "Down -> scroll one visual row newer", "PageUp -> scroll one viewport older", "PageDown -> scroll one viewport newer", "Escape -> cancel run"]
+        },
+        {
+          "path": "akashic/tui/applets/agent/agent.f",
+          "word": "AGENT-EVENT-CB",
+          "sha256": "14ec492edddb11ed490c7315737032197e1267675ae1aa227324864ff24731e1",
+          "bindings": ["F6 -> approve review", "F7 -> deny review", "F8 -> settings", "F9 -> account", "Ctrl+L -> prompt", "Ctrl+K -> credential", "Ctrl+Shift+K -> clear credential"]
+        }
+      ],
+      "capability_surface": {"path": "akashic/tui/applets/agent/agent.f", "literal_prefix": "agent.", "ids": []},
+      "source_contracts": [
+        {"path": "akashic/tui/applets/agent/agent.f", "required_literals": ["org.akashic.agent", "org.akashic.agent.runtime", "org.akashic.agent.provider-source", "AGENT-INIT-CB", "AGENT-REQUEST-CLOSE-CB", "AGENT-SHUTDOWN-CB", "AGENT-ENTRY", "AGENT-RUN"]},
+        {"path": "akashic/agent/providers/offline.f", "required_literals": ["org.akashic.agent.offline", "org.akashic.agent.source.offline"]},
+        {"path": "akashic/agent/providers/devtools/scripted.f", "required_literals": ["org.akashic.agent.testing.scripted", "org.akashic.agent.source.testing.scripted"]},
+        {"path": "akashic/agent/providers/openai/source.f", "required_literals": ["org.akashic.agent.source.openai"]},
+        {"path": "akashic/agent/providers/codex/source.f", "required_literals": ["org.akashic.agent.source.codex"]},
+        {"path": "akashic/agent/access-profile.f", "required_literals": ["desk.chat-only", "desk.practice-read", "desk.practice-assist"]}
+      ],
+      "behaviors": [
+        {
+          "id": "agent.chat-review-and-layout",
+          "coverage": "partial",
+          "prerequisite_ids": ["agent.active-close-ownership"],
+          "facets": ["actions", "interfaces", "journeys"],
+          "preserve": ["Prompt/send, streaming, cancel and recovery", "Locked review with approve/deny and complete audit presentation", "Unicode/cell-aware wrapping, visual-row scrolling, bottom anchoring and resize reflow"],
+          "evidence": ["profile:agent-ui", "profile:agent-layout-ui", "profile:agent", "profile:agent-context"]
+        },
+        {
+          "id": "agent.access-and-tool-security",
+          "coverage": "covered",
+          "facets": ["interfaces", "failures", "journeys"],
+          "preserve": ["Chat-only, Practice read-only and Practice assist presets with exact targets and budgets", "Tool approval/denial, operand seals, audit, races, quiescence and capacity", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
+          "evidence": ["profile:agent-access", "profile:agent-security", "profile:desktop-agent-hardening", "profile:desktop"]
+        },
+        {
+          "id": "agent.providers-and-account",
+          "coverage": "partial",
+          "prerequisite_ids": ["agent.provider-ui-commands"],
+          "facets": ["providers", "actions", "failures"],
+          "preserve": ["Offline and scripted providers", "OpenAI provider/source and Codex provider/source/catalog/auth paths", "Masked credential cancel/submit/clear, device authorization and model/effort/tier/verbosity settings"],
+          "evidence": ["profile:agent", "profile:openai-codec", "profile:openai-provider", "profile:openai-source", "profile:codex-auth", "profile:codex-catalog", "profile:codex-source", "profile:desktop-codex", "profile:agent-auth-ui", "profile:agent-device-ui", "profile:agent-widgets"]
+        },
+        {
+          "id": "agent.transcript-persistence",
+          "coverage": "covered",
+          "facets": ["persistence", "failures", "journeys"],
+          "preserve": ["Durable transcript and audit entries", "Clear, interrupted-run normalization, corrupt-candidate fallback and recovery", "Provider-neutral runtime state remains consistent through reopen and Desk relaunch"],
+          "evidence": ["profile:conversation-store", "profile:agent-persistence", "profile:desktop-agent-hardening"]
+        }
+      ],
+      "prerequisites": [
+        {
+          "id": "agent.provider-ui-commands",
+          "before_landing": "L7",
+          "trigger": "Provider/source re-homing or applet action wiring changes.",
+          "characterization": "Drive UI Clear, Reconnect and Refresh Models and pin their visible success/failure state.",
+          "reason": "The actions are statically pinned, but only runtime clear and lower provider contracts currently execute these semantics."
+        },
+        {
+          "id": "agent.active-close-ownership",
+          "before_landing": "L9",
+          "trigger": "Host close/lifecycle extraction.",
+          "characterization": "Distinguish a standalone-owned active run, which must confirm or cancel, from a Desk-shared lens close, which must not cancel shared work.",
+          "reason": "Active-run close ownership is not characterized by current shell or Desk journeys."
+        }
+      ]
+    },
+    {
+      "id": "daybook",
+      "active_landings": ["L2", "L3", "L5", "L6", "L7", "L9", "L14"],
+      "uidl_surface": {
+        "path": "akashic/tui/applets/daybook/daybook.uidl",
+        "menus": ["File", "Entry", "Go", "Help"],
+        "actions": ["about", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reveal-source", "save", "today", "toggle"],
+        "shortcuts": {"delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "save": "Ctrl+S", "today": "Home"},
+        "element_ids": ["daybook-body", "mbar", "sbar", "sbar-date", "sbar-state"]
+      },
+      "direct_input_contracts": [
+        {
+          "path": "akashic/tui/applets/daybook/daybook.f",
+          "word": "_DB-PANEL-HANDLE",
+          "sha256": "486c4569542dd224b1b4b890a0f142e2a7e4a44fcca81781fba0b08f0852b3c1",
+          "bindings": ["Left -> previous day", "Right -> next day", "PageUp -> previous week", "PageDown -> next week", "Up -> previous entry", "Down -> next entry", "Home -> today", "Enter -> toggle selected task", "Delete -> delete selected entry", "Space -> toggle selected task", "t -> today"]
+        }
+      ],
+      "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.source", "daybook.task.capture"]},
+      "source_contracts": [
+        {"path": "akashic/tui/applets/daybook/daybook.f", "required_literals": ["org.akashic.daybook", "org.akashic.resource.daybook", "DAYBOOK-INIT-CB", "DAYBOOK-REQUEST-CLOSE-CB", "DAYBOOK-SHUTDOWN-CB", "DAYBOOK-ENTRY", "DAYBOOK-RUN", "daybook.task.capture", "daybook.source", "daybook.agenda.markdown"]},
+        {"path": "akashic/daybook/shared-document.f", "required_literals": ["resource.describe", "resource.snapshot", "resource.replace"]}
+      ],
+      "not_applicable": {"providers": "Daybook owns a concrete Markdown document and resource owner; it has no selectable provider surface."},
+      "behaviors": [
+        {
+          "id": "daybook.model-actions-and-markdown",
+          "coverage": "partial",
+          "prerequisite_ids": ["daybook.controller-edges"],
+          "facets": ["actions", "persistence", "failures", "journeys"],
+          "preserve": ["Calendar/agenda navigation and task, event and note capture, completion and deletion", "Strict Markdown remains source of truth with exact malformed, unknown, UTF-8, entry, field and file-size distinctions", "Exact save/reload, blocked-source/dirty preservation, recovery and close reload/discard negotiation"],
+          "evidence": ["profile:daybook", "profile:daybook-contracts"]
+        },
+        {
+          "id": "daybook.resource-owner-and-contracts",
+          "coverage": "partial",
+          "prerequisite_ids": ["daybook.capability-failure-edges", "daybook.binding-advance-failure"],
+          "facets": ["interfaces", "persistence", "failures"],
+          "preserve": ["daybook.task.capture, daybook.source and daybook.agenda.markdown capability identities", "Semantic Daybook RID and exact describe/snapshot/replace revisions", "Two lenses, stale refusal, explicit reload/reattach, wrong-resource/read-only refusal and cold owner reactivation"],
+          "evidence": ["pytest:local_testing/test_daybook_shared_lens.py::test_daybook_shared_lens_contracts", "pytest:local_testing/test_shared_document.py::test_shared_document_contracts", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
+        },
+        {
+          "id": "daybook.pad-and-agent-journeys",
+          "coverage": "covered",
+          "facets": ["interfaces", "journeys", "failures"],
+          "preserve": ["Edit Source routes to Pad through the semantic resource lens", "Competing commit yields stale refusal without clobber, owner survives Daybook close and relaunch", "Agent gets exact Daybook facets and approved/denied task capture"],
+          "evidence": ["profile:desktop-resource", "profile:desktop-agent-hardening", "pytest:local_testing/test_daybook_owner_dependency.py::test_concrete_owner_lives_only_in_the_daybook_domain"]
+        }
+      ],
+      "prerequisites": [
+        {
+          "id": "daybook.capability-failure-edges",
+          "before_landing": "L5",
+          "trigger": "Capability/result-builder conversion.",
+          "characterization": "Dispatch daybook.agenda.markdown directly and inject persistence failure into daybook.task.capture to prove result rollback and unchanged model/dirty state.",
+          "reason": "Descriptors are pinned and success is covered, but these handler edges are not."
+        },
+        {
+          "id": "daybook.binding-advance-failure",
+          "before_landing": "L6",
+          "trigger": "Canonical resource-session conversion.",
+          "characterization": "Commit through the owner, then fail local binding advance and prove the committed revision can be recovered without duplicate mutation.",
+          "reason": "Pad has the analogous case; Daybook does not."
+        },
+        {
+          "id": "daybook.controller-edges",
+          "before_landing": "L9",
+          "trigger": "Prompt, menu, selection or navigation controller extraction touches these actions.",
+          "characterization": "Drive event/note prompts, delete/navigation, explicit Save/Reload and Reveal Source before changing their dispatch path.",
+          "reason": "Model behavior and the exact UIDL surface are covered, but these visible controller routes are not all driven."
+        }
+      ]
+    },
+    {
+      "id": "pad",
+      "active_landings": ["L2", "L3", "L6", "L9", "L14"],
+      "uidl_surface": {
+        "path": "akashic/tui/applets/pad/pad.uidl",
+        "menus": ["File", "Build", "Edit", "Selection", "View", "Go", "Help"],
+        "actions": ["about", "build-install", "close-all", "close-tab", "copy", "cut", "delete-line", "find", "find-next", "find-open", "goto-build-error", "goto-file", "goto-line", "new", "next-tab", "open", "paste", "prev-tab", "quit", "redo", "replace", "save", "save-all", "save-as", "select-all", "select-line", "select-word", "shortcuts", "toggle-hidden", "toggle-output", "toggle-sidebar", "undo"],
+        "shortcuts": {"build-install": "Ctrl+Shift+B", "close-tab": "Ctrl+W", "copy": "Ctrl+C", "cut": "Ctrl+X", "delete-line": "Ctrl+Shift+K", "find": "Ctrl+F", "find-next": "F3", "find-open": "Ctrl+Shift+F", "goto-build-error": "F4", "goto-file": "Ctrl+P", "goto-line": "Ctrl+G", "new": "Ctrl+N", "next-tab": "Ctrl+PageDown", "open": "Ctrl+O", "paste": "Ctrl+V", "prev-tab": "Ctrl+PageUp", "quit": "Ctrl+Q", "redo": "Ctrl+Y", "replace": "Ctrl+H", "save": "Ctrl+S", "save-as": "Ctrl+Shift+S", "select-all": "Ctrl+A", "select-line": "Ctrl+L", "select-word": "Ctrl+D", "toggle-output": "Ctrl+J", "toggle-sidebar": "Ctrl+B", "undo": "Ctrl+Z"},
+        "element_ids": ["editor-area", "eo-split", "main-split", "mbar", "output", "output-scroll", "sbar", "sbar-enc", "sbar-file", "sbar-pos", "sbar-tabs", "sidebar", "sidebar-scroll"]
+      },
+      "direct_input_contracts": [
+        {
+          "path": "akashic/tui/applets/pad/pad.f",
+          "word": "PAD-EVENT-CB",
+          "sha256": "7b2615a567abfb354acda2b1e9e10f7c076f02405b40b848479ce1c87327b892",
+          "bindings": ["active prompt -> prompt owns input", "focus outside editor -> UIDL owns input", "Ctrl/Alt-modified input -> UIDL shortcut priority", "unshifted Tab in editor -> insert tab-stop spaces", "ordinary editor input -> direct textarea fast path", "unhandled direct input -> fall through to UIDL"]
+        },
+        {
+          "path": "akashic/tui/applets/pad/pad.f",
+          "word": "_PAD-INSERT-TAB",
+          "sha256": "ffebee9368f090b4aeaa7ddab75c7e684a8dcb078b32f3074f54600f49921dc6",
+          "bindings": ["Tab -> insert spaces through the next configured tab stop"]
+        },
+        {
+          "path": "akashic/tui/applets/pad/pad.f",
+          "word": "_PAD-HANDLE-EDITOR",
+          "sha256": "2cff7e88589b0e18e2e1bdc6a886a5eac97c956ef5de2549fe694cfc982af2be",
+          "bindings": ["unmodified printable input without selection -> textarea plus single-row fast repaint", "Enter at the last visible line -> textarea plus two-row fast repaint", "all other ordinary editor input -> textarea widget handling"]
+        }
+      ],
+      "capability_surface": {"path": "akashic/tui/applets/pad/pad.f", "literal_prefix": "pad.", "ignored_literals": ["pad.theme"], "ids": ["pad.document.active", "pad.document.open", "pad.document.text"]},
+      "source_contracts": [
+        {"path": "akashic/tui/applets/pad/pad.f", "required_literals": ["org.akashic.pad", "PAD-INIT-CB", "PAD-REQUEST-CLOSE-CB", "PAD-SHUTDOWN-CB", "PAD-ENTRY", "PAD-RUN", "pad.document.open", "pad.document.active", "pad.document.text", "resource.open"]}
+      ],
+      "not_applicable": {"providers": "Pad consumes VFS and semantic resource sessions; it has no selectable provider surface."},
+      "behaviors": [
+        {
+          "id": "pad.editor-actions-and-files",
+          "coverage": "partial",
+          "prerequisite_ids": ["pad.dirty-close-save-all", "pad.remaining-controller-routes"],
+          "facets": ["actions", "persistence", "journeys"],
+          "preserve": ["Multi-buffer editing, selection, undo/redo, cut/copy/paste and current/open-buffer search", "New/open/save/save-as/save-all, exact large fragmented writes and file identity", "Go-to line/file, tab navigation, view toggles and build-diagnostic navigation"],
+          "evidence": ["profile:pad", "profile:pad-contracts", "pytest:local_testing/test_gap_buf.py::test_incremental_line_index", "pytest:local_testing/test_textarea.py::test_gap_buffer_textarea_scroll_and_newline_caret", "profile:desktop-local-applet"]
+        },
+        {
+          "id": "pad.io-fault-and-capacity",
+          "coverage": "covered",
+          "facets": ["persistence", "failures"],
+          "preserve": ["Canonical/traversal path handling, oversize/short/throw reads and source blocking", "Atomic replacement recovery, save failure rollback, exact cleanup and retry", "All sixteen newline-dense 64-KiB buffers with selector/free-list cleanup"],
+          "evidence": ["profile:pad-contracts"]
+        },
+        {
+          "id": "pad.resource-session",
+          "coverage": "covered",
+          "facets": ["interfaces", "failures", "journeys"],
+          "preserve": ["pad.document.open, pad.document.active and pad.document.text capability identities and resource.open intent", "Semantic snapshot/replace, stale dirty refusal, safe reload, post-commit local-advance recovery and export", "Daybook-to-Pad route, competing commit non-clobber, ordinary VFS route from FExplorer and Desk relaunch"],
+          "evidence": ["profile:pad-resource-contracts", "profile:agent-applet-capabilities", "profile:desktop-resource", "profile:desktop"]
+        }
+      ],
+      "prerequisites": [
+        {
+          "id": "pad.dirty-close-save-all",
+          "before_landing": "L9",
+          "trigger": "Host close, prompt or applet-controller extraction.",
+          "characterization": "Drive Save All and dirty applet close through cancel, save/discard and final close outcomes.",
+          "reason": "Storage and resource-session semantics are strong, but these visible lifecycle paths are not directly driven."
+        },
+        {
+          "id": "pad.remaining-controller-routes",
+          "before_landing": "L9",
+          "trigger": "A shared menu, prompt, textarea or tab facility changes one of these dispatch paths.",
+          "characterization": "Before the relevant touch, drive Close Tab/All, copy/cut/paste, delete line, replace, go-to-file, pane/hidden toggles and next/previous tab.",
+          "reason": "Their exact UIDL actions and shortcuts are pinned, but current smoke does not execute every route."
+        }
+      ]
+    },
+    {
+      "id": "grid",
+      "active_landings": ["L2", "L3", "L9", "L14"],
+      "uidl_surface": {
+        "path": "akashic/tui/applets/grid/grid.uidl",
+        "menus": ["File", "Edit", "Data", "Help"],
+        "actions": ["about", "clear-cell", "clear-sheet", "edit-cell", "edit-source", "goto", "quit", "recalculate", "reload", "reveal-source", "save"],
+        "shortcuts": {"clear-cell": "Delete", "edit-cell": "F2", "goto": "Ctrl+G", "quit": "Ctrl+Q", "recalculate": "F9", "reload": "Ctrl+R", "save": "Ctrl+S"},
+        "element_ids": ["grid-body", "mbar", "sbar", "sbar-cell", "sbar-state"]
+      },
+      "direct_input_contracts": [
+        {
+          "path": "akashic/tui/applets/grid/grid.f",
+          "word": "_GRID-PANEL-HANDLE",
+          "sha256": "c04a018d622ec68efb985dd884fb73f44667c457beef7a8f5abecacde5172a02",
+          "bindings": ["Left -> previous column", "Right -> next column", "Up -> previous row", "Down -> next row", "PageUp -> previous visible page", "PageDown -> next visible page", "Home -> first column", "End -> last used column", "Tab -> next column", "Shift+Tab -> previous column", "Enter -> edit cell", "F2 -> edit cell", "Delete -> clear cell", "printable ASCII -> replace cell and edit"]
+        }
+      ],
+      "capability_surface": {"path": "akashic/tui/applets/grid/grid.f", "literal_prefix": "grid.", "ids": ["grid.cell.selected", "grid.cell.set-selected", "grid.source", "grid.workbook.csv", "grid.workbook.save"]},
+      "source_contracts": [
+        {"path": "akashic/tui/applets/grid/grid.f", "required_literals": ["org.akashic.grid", "GRID-INIT-CB", "GRID-REQUEST-CLOSE-CB", "GRID-SHUTDOWN-CB", "GRID-ENTRY", "GRID-RUN", "grid.cell.set-selected", "grid.cell.selected", "grid.workbook.csv", "grid.source", "grid.workbook.save"]}
+      ],
+      "not_applicable": {"providers": "Grid owns one local CSV-backed sheet and has no selectable provider surface."},
+      "behaviors": [
+        {
+          "id": "grid.formulas-csv-and-actions",
+          "coverage": "partial",
+          "prerequisite_ids": ["grid.dirty-close-and-controller-edges"],
+          "facets": ["actions", "persistence", "failures", "journeys"],
+          "preserve": ["Current A1 formula grammar, dependency results, depth, cycle and error behavior", "Strict single-sheet CSV parse/serialize and current editing, navigation and recalculation shortcuts", "Exact save/reload, corrupt-source blocking, recovery, rollback and resize behavior"],
+          "evidence": ["profile:grid", "profile:grid-eval", "profile:grid-contracts"]
+        },
+        {
+          "id": "grid.capability-surface",
+          "coverage": "partial",
+          "prerequisite_ids": ["grid.capability-execution"],
+          "facets": ["interfaces"],
+          "preserve": ["Five current Grid capability IDs, kinds, schemas, effects, flags and handlers", "resource.open and resource.reveal source intents remain available"],
+          "evidence": ["profile:desktop-agent-hardening", "profile:grid-contracts"]
+        }
+      ],
+      "prerequisites": [
+        {
+          "id": "grid.capability-execution",
+          "before_landing": "L9",
+          "trigger": "Any Grid capability or routing code is changed.",
+          "characterization": "Execute all five handlers: cell.set-selected, cell.selected, workbook.csv, source and workbook.save.",
+          "reason": "Current Agent hardening pins descriptor exposure, not handler parity."
+        },
+        {
+          "id": "grid.dirty-close-and-controller-edges",
+          "before_landing": "L9",
+          "trigger": "Host close or Grid input dispatch is changed.",
+          "characterization": "Prove dirty close/defer/confirm/discard; add only the touched Tab, Shift-Tab, Page, Home/End, F2 or printable-replace controller cases.",
+          "reason": "The Grid contract proves clean close and the smoke drives the main path, not every controller edge."
+        }
+      ]
+    },
+    {
+      "id": "fexplorer",
+      "active_landings": ["L3", "L9", "L14"],
+      "uidl_surface": {
+        "path": "akashic/tui/applets/fexplorer/fexplorer.uidl",
+        "menus": ["File", "Edit", "View", "Tools"],
+        "actions": ["collapse-all", "copy", "cut", "delete", "expand-all", "goto", "new-dir", "new-file", "open", "parent-dir", "paste", "props", "quit", "refresh", "rename", "show-details", "show-preview", "sort-name", "sort-size", "sort-type", "toggle-hidden"],
+        "shortcuts": {"copy": "Ctrl+C", "cut": "Ctrl+X", "delete": "Delete", "goto": "Ctrl+G", "new-dir": "Ctrl+Shift+N", "new-file": "Ctrl+N", "open": "Ctrl+O", "parent-dir": "Backspace", "paste": "Ctrl+V", "props": "Ctrl+I", "quit": "Ctrl+Q", "refresh": "F5", "rename": "F2", "show-details": "Alt+1", "show-preview": "Alt+2", "toggle-hidden": "Ctrl+H"},
+        "element_ids": ["detail", "mbar", "preview", "sbar", "sbar-left", "sbar-right", "scroller", "sidebar", "tabs"]
+      },
+      "capability_surface": {"path": "akashic/tui/applets/fexplorer/fexplorer.f", "literal_prefix": "fexplorer.", "ids": ["fexplorer.preview.text", "fexplorer.resource.reveal", "fexplorer.resource.selected"]},
+      "source_contracts": [
+        {"path": "akashic/tui/applets/fexplorer/fexplorer.f", "required_literals": ["org.akashic.fexplorer", "FEXP-INIT-CB", "FEXP-SHUTDOWN-CB", "FEXP-ENTRY", "FEXP-RUN", "fexplorer.resource.reveal", "fexplorer.resource.selected", "fexplorer.preview.text", "resource.open"]}
+      ],
+      "not_applicable": {"providers": "FExplorer operates on its injected VFS and publishes resource capabilities; it has no selectable provider surface."},
+      "behaviors": [
+        {
+          "id": "fexplorer.views-and-file-actions",
+          "coverage": "partial",
+          "prerequisite_ids": ["fexplorer.small-mutation-faults", "fexplorer.controller-edges"],
+          "facets": ["actions", "persistence", "journeys"],
+          "preserve": ["Tree/details/preview, sort variants, hidden toggle, goto, properties and parent navigation", "Create, rename, delete, copy, cut and paste with exact UI menus/keys", "Standalone Go To/preview/create/rename/copy/paste/delete and Desk pointer/focus plus FExplorer-to-Pad route"],
+          "evidence": ["profile:fexplorer", "profile:desktop", "pytest:local_testing/test_explorer.py::test_expl_expand_all", "pytest:local_testing/test_explorer.py::test_expl_show_hidden", "pytest:local_testing/test_explorer.py::test_expl_rename_esc_cancels"]
+        },
+        {
+          "id": "fexplorer.verified-transfer-failures",
+          "coverage": "covered",
+          "facets": ["persistence", "failures"],
+          "preserve": ["Chunked read-back verified copy and cut delete ordering", "Guard, context, FD, CWD and VFS-selector cleanup", "Progress, sync, corruption, throw and cleanup-after-effect failures preserve committed/residue facts exactly"],
+          "evidence": ["driver:local_testing/test_explorer_transactions.py"]
+        },
+        {
+          "id": "fexplorer.resource-capabilities",
+          "coverage": "partial",
+          "prerequisite_ids": ["fexplorer.reveal-handler"],
+          "facets": ["interfaces", "failures", "journeys"],
+          "preserve": ["Reveal, selected-resource and bounded UTF-8 preview capability identities", "Null selection, malformed bytes, overlong path and read-throw exact-once cleanup behavior", "Selected resources route through Desk to Pad"],
+          "evidence": ["profile:agent-applet-capabilities", "profile:desktop"]
+        }
+      ],
+      "prerequisites": [
+        {
+          "id": "fexplorer.small-mutation-faults",
+          "before_landing": "L3",
+          "trigger": "Scoped VFS conversion touches create, rename or delete rather than the already-gated transfer/preview paths.",
+          "characterization": "Inject failures into the touched create/rename/delete operation and pin its visible status plus cleanup/residue facts.",
+          "reason": "Transfer faults are strong; these smaller mutation fault edges are not equivalent evidence."
+        },
+        {
+          "id": "fexplorer.reveal-handler",
+          "before_landing": "L9",
+          "trigger": "resource.reveal handling or routing changes.",
+          "characterization": "Dispatch fexplorer.resource.reveal for valid, absent and invalid resources and prove selection/view results.",
+          "reason": "The descriptor is exposed but its handler is not currently executed."
+        },
+        {
+          "id": "fexplorer.controller-edges",
+          "before_landing": "L9",
+          "trigger": "Shared menu/list/tab/controller extraction touches these actions.",
+          "characterization": "Drive the touched sort, Properties, Backspace, hidden-toggle, cut and menu route before changing it.",
+          "reason": "The exact UIDL surface is pinned, while modern end-to-end coverage is partial."
+        }
+      ]
+    },
+    {
+      "id": "desk",
+      "active_landings": ["L2", "L3", "L7", "L9", "L14"],
+      "direct_input_contracts": [
+        {
+          "path": "akashic/tui/applets/desk/desk.f",
+          "word": "_DESK-SHORTCUT?",
+          "sha256": "fc31c07439caa58a2c207c8e2e1048390c19954f8cc396ff923beed100519212",
+          "bindings": ["Ctrl+Space -> Agent composer", "Alt+1..9 -> focus slot", "Alt+Tab -> cycle focus", "Alt+M -> minimize focused slot", "Alt+R -> restore", "Alt+F -> toggle full frame", "Alt+L -> toggle vertical/horizontal layout", "Alt+W -> close focused slot", "Alt+H -> applet launcher", "Alt+A -> Agent composer"]
+        }
+      ],
+      "capability_surface": {"path": "akashic/tui/applets/desk/desk.f", "literal_prefix": "desk.", "ignored_literals": ["desk.agent.facet", "desk.agent.mandate", "desk.hotbar", "desk.theme"], "ids": []},
+      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]},
+      "source_contracts": [
+        {"path": "akashic/tui/applets/desk/desk.f", "required_literals": ["org.akashic.desk", "DESK-RUN", "DESK-TRY-LAUNCH", "DESK-REQUEST-CLOSE-ID", "DESK-FOCUS-ID", "DESK-MINIMIZE-ID", "DESK-RESTORE", "DESK-FULLFRAME!", "DESK-TOGGLE-VH", "org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]}
+      ],
+      "not_applicable": {"providers": "Desk composes and retains provider sources for child applets, but it is a host/product composition rather than a selectable domain provider."},
+      "behaviors": [
+        {
+          "id": "desk.workspace-surface",
+          "coverage": "partial",
+          "prerequisite_ids": ["desk.child-close-context-faults", "desk.layout-state"],
+          "facets": ["actions", "journeys"],
+          "preserve": ["Alt+1..9 focus, Alt+Tab cycling, Alt+M minimize, Alt+R restore, Alt+F full frame, Alt+L layout, Alt+W close, Alt+H launcher and Alt+A/Ctrl+Space Agent composer", "Dynamic vertical/horizontal tiling, focus, minimize/restore, full-frame, taskbar pointer activation and focus-before-child pointer delivery", "Terminal resize preserves child state and leaves one exact live taskbar projection"],
+          "evidence": ["profile:desktop"]
+        },
+        {
+          "id": "desk.catalog-launch-and-lifecycle",
+          "coverage": "partial",
+          "prerequisite_ids": ["desk.launch-rollback"],
+          "facets": ["actions", "persistence", "failures", "journeys"],
+          "preserve": ["Durable catalog, hotbar and nonblocking launcher; enabled/pinned/autostart/quarantine policy", "Transactional child launch, close/relaunch, component/resource cleanup and borrowed UIDL ownership", "Build and Install resolves and launches a local applet without evaluating catalog text"],
+          "evidence": ["profile:desktop-local-applet", "driver:local_testing/test_app_catalog.py", "driver:local_testing/test_applet_close.py"]
+        },
+        {
+          "id": "desk.service-and-product-composition",
+          "coverage": "covered",
+          "facets": ["interfaces", "journeys", "failures"],
+          "preserve": ["Exact eleven Desk-private service IDs, exact lookup, dynamic availability, duplicate/full statuses and teardown wipe", "Agent provider/runtime/tool/access policy, Daybook resource owner, request bus, XIO and frozen trust composition", "Practice recovery/fallback, Daybook/Pad shared resource, Agent hardening and Streams close/relaunch journeys"],
+          "evidence": ["profile:desk-service-table-contracts", "profile:desktop-resource", "profile:desktop-agent-hardening", "profile:desktop-streams", "profile:desktop-recovery", "profile:desktop-fallback", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
+        }
+      ],
+      "prerequisites": [
+        {
+          "id": "desk.launch-rollback",
+          "before_landing": "L9",
+          "trigger": "Desk child-host extraction begins.",
+          "characterization": "Inject failure at descriptor, instance, registry, slot, UIDL-context and UIDL-load stages of DESK-TRY-LAUNCH; prove first error and complete cleanup.",
+          "reason": "Current launch journeys exercise success and some package failures, not every acquisition boundary."
+        },
+        {
+          "id": "desk.child-close-context-faults",
+          "before_landing": "L9",
+          "trigger": "Desk child-host extraction begins.",
+          "characterization": "Modernize and activate the dormant Desk close fixture: request/shutdown context, CANCEL/DEFER preservation, exact-once ALLOW, activation-entry failure, all-child negotiation and force-clean after shutdown throw.",
+          "reason": "Only the app-shell prefix of test_applet_close.py currently runs; its Desk-specific half is not evidence."
+        },
+        {
+          "id": "desk.layout-state",
+          "before_landing": "L9",
+          "trigger": "Layout, focus, minimization or UIDL context state moves into the shared host.",
+          "characterization": "Add a focused current-host characterization for vertical/horizontal tiling, full-frame, focus/minimize/restore and per-child UIDL-context isolation.",
+          "reason": "Desktop smoke proves an observable subset, not exact host state transitions."
+        }
+      ]
+    },
+    {
+      "id": "soundlab",
+      "active_landings": ["L2", "L3", "L5", "L9", "L14"],
+      "uidl_surface": {
+        "path": "akashic/tui/applets/soundlab/soundlab.uidl",
+        "menus": ["File", "Signal", "Render", "Help"],
+        "actions": ["about", "edit", "next-shape", "play", "previous-shape", "quit", "render", "reset", "reveal-output", "save"],
+        "shortcuts": {"edit": "F2", "quit": "Ctrl+Q", "render": "F5", "save": "Ctrl+S"},
+        "element_ids": ["mbar", "sbar", "sbar-playback", "sbar-signal", "sbar-state", "soundlab-body"]
+      },
+      "direct_input_contracts": [
+        {
+          "path": "akashic/tui/applets/soundlab/soundlab.f",
+          "word": "_SL-PANEL-HANDLE",
+          "sha256": "d83bb6b9d4dc5f34459e8a62cc325a8d2841e761661d43b4b0552713109c739f",
+          "bindings": ["Up -> previous control", "Down -> next control", "Left -> decrement selected value", "Right -> increment selected value", "Enter -> edit selected value", "F2 -> edit selected value", "F5 -> render", "r -> render", "s -> save WAV", "p -> play current render", "Space -> render"]
+        }
+      ],
+      "capability_surface": {"path": "akashic/tui/applets/soundlab/soundlab.f", "literal_prefix": "soundlab.", "ids": ["soundlab.amplitude.set", "soundlab.analysis", "soundlab.duration.set", "soundlab.frequency.set", "soundlab.output", "soundlab.play", "soundlab.playback.status", "soundlab.render", "soundlab.shape.set", "soundlab.wav.save"]},
+      "source_contracts": [
+        {"path": "akashic/tui/applets/soundlab/soundlab.f", "required_literals": ["org.akashic.soundlab", "SOUNDLAB-INIT-CB", "SOUNDLAB-REQUEST-CLOSE-CB", "SOUNDLAB-SHUTDOWN-CB", "SOUNDLAB-ENTRY", "SOUNDLAB-RUN", "soundlab.shape.set", "soundlab.frequency.set", "soundlab.amplitude.set", "soundlab.duration.set", "soundlab.render", "soundlab.analysis", "soundlab.wav.save", "soundlab.output", "soundlab.playback.status", "soundlab.play"]}
+      ],
+      "not_applicable": {"providers": "SoundLab composes neutral audio engines and the machine AudioOut service; it has no selectable provider surface."},
+      "selection_policy": "Do not select SoundLab as an L2, L3 or L5 proving consumer unless the matching prerequisite is characterized first.",
+      "behaviors": [
+        {
+          "id": "soundlab.render-save-playback",
+          "coverage": "partial",
+          "prerequisite_ids": ["soundlab.output-faults", "soundlab.close-and-audio-ownership"],
+          "facets": ["actions", "persistence", "journeys"],
+          "preserve": ["Shape/frequency/amplitude/duration controls, stale indication and transactional render/analysis", "Waveform, landmarks, frequency/centroid metrics, exact WAV save and reveal", "AudioOut submit status, generation, rate/channels/frames, nonzero PCM and responsive resize"],
+          "evidence": ["profile:soundlab", "profile:audio-contracts"]
+        },
+        {
+          "id": "soundlab.capability-surface",
+          "coverage": "prerequisite",
+          "prerequisite_ids": ["soundlab.capability-contract"],
+          "facets": ["interfaces"],
+          "preserve": ["Ten current soundlab.* capability IDs and the applet component/entry surface"],
+          "evidence": []
+        },
+        {
+          "id": "soundlab.known-failure-contract",
+          "coverage": "prerequisite",
+          "prerequisite_ids": ["soundlab.output-faults", "soundlab.close-and-audio-ownership"],
+          "facets": ["failures"],
+          "preserve": ["Failed work must not replace the last successful render", "Atomic WAV output, unsaved-close negotiation and stop-only-owned AudioOut generation remain required semantics"],
+          "evidence": []
+        }
+      ],
+      "prerequisites": [
+        {
+          "id": "soundlab.output-faults",
+          "before_landing": "L2",
+          "trigger": "SoundLab is selected as a checked-writer or scoped-VFS consumer in L2/L3.",
+          "characterization": "Prove failed render retains prior PCM; inject replacement interruption, ambiguity, save failure and output-blocked states with exact status/recovery.",
+          "reason": "The current smoke is a strong happy path, not output failure coverage."
+        },
+        {
+          "id": "soundlab.capability-contract",
+          "before_landing": "L5",
+          "trigger": "SoundLab is selected for interop builder conversion.",
+          "characterization": "Pin and execute all ten capability descriptors, schemas, effects, flags and status translations.",
+          "reason": "Capability IDs are source-pinned but none has execution parity."
+        },
+        {
+          "id": "soundlab.close-and-audio-ownership",
+          "before_landing": "L9",
+          "trigger": "Host close or lifecycle extraction touches SoundLab.",
+          "characterization": "Drive unsaved close and shutdown; prove stop affects only SoundLab's owned generation, including after-effect host starts and absent/device-failure states.",
+          "reason": "Current smoke does not exercise close or ownership failure edges."
+        }
+      ]
+    }
+  ]
+}

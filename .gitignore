@@ -55,6 +55,9 @@ local_testing/*
 !local_testing/refactor_inventory.py
 !local_testing/refactor_architecture.json
 !local_testing/test_refactor_inventory.py
+!local_testing/refactor_functional_baseline.py
+!local_testing/refactor_functional_baseline.json
+!local_testing/test_refactor_functional_baseline.py
 !local_testing/gate2a-contracts.f
 !local_testing/gate3a-resource-contracts.f
 !local_testing/library-model-codecs.f
