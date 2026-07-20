@@ -27317,6 +27317,7 @@ REQUIRE local_testing/library-model-codecs.f
         "dictionary full",
         "exception",
     ),
+    linked=True,
     include_large_sample=False,
     initial_files=(
         (
@@ -27347,6 +27348,7 @@ REQUIRE local_testing/library-store-format.f
         "dictionary full",
         "exception",
     ),
+    linked=True,
     include_large_sample=False,
     initial_files=(
         (
@@ -27378,6 +27380,7 @@ REQUIRE local_testing/library-vfs-store.f
         "dictionary full",
         "exception",
     ),
+    linked=True,
     include_large_sample=False,
     total_sectors=8192,
     initial_files=(
@@ -27411,6 +27414,7 @@ REQUIRE local_testing/library-managed.f
         "dictionary full",
         "exception",
     ),
+    linked=True,
     include_large_sample=False,
     total_sectors=8192,
     initial_files=(
@@ -27444,6 +27448,7 @@ REQUIRE local_testing/library-lifecycle.f
         "dictionary full",
         "exception",
     ),
+    linked=True,
     include_large_sample=False,
     total_sectors=8192,
     initial_files=(
@@ -27478,6 +27483,7 @@ REQUIRE local_testing/library-cc.f
         "dictionary full",
         "exception",
     ),
+    linked=True,
     include_large_sample=False,
     total_sectors=8192,
     initial_files=(
@@ -27512,6 +27518,7 @@ REQUIRE local_testing/library-query-index.f
         "dictionary full",
         "exception",
     ),
+    linked=True,
     include_large_sample=False,
     total_sectors=8192,
     initial_files=(
@@ -27564,6 +27571,41 @@ REQUIRE local_testing/library-projection.f
 )
 
 
+PROFILES["library-maintenance-contracts"] = Profile(
+    roots=("library/vfs-store.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - Gate 4 milestone 5 maintenance owner
+ENTER-USERLAND
+REQUIRE library/vfs-store.f
+." [akashic] loading Library maintenance contracts" CR
+REQUIRE local_testing/library-maintenance.f
+""",
+    ready_markers=("LIBRARY MAINTENANCE PASS",),
+    stable_markers=("LIBRARY MAINTENANCE PASS",),
+    failure_markers=(
+        "LIBRARY MAINTENANCE FAIL",
+        "LIBRARY MAINTENANCE ASSERT",
+        "LIBRARY MAINTENANCE STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    total_sectors=8192,
+    initial_files=(
+        (
+            "local_testing/library-maintenance.f",
+            _minify_forth((
+                AKASHIC_ROOT / "local_testing" /
+                "library-maintenance.f"
+            ).read_text(encoding="utf-8")).encode("utf-8"),
+        ),
+    ),
+)
+
+
 PROFILES["library-managed-capacity-contracts"] = Profile(
     roots=("library/vfs-store.f",),
     resources=(),
@@ -27584,6 +27626,7 @@ REQUIRE local_testing/library-capacity.f
         "dictionary full",
         "exception",
     ),
+    linked=True,
     include_large_sample=False,
     total_sectors=8192,
     initial_files=(

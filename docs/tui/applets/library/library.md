@@ -1,11 +1,11 @@
 # Library applet
 
 Status: an intentionally bounded user-experience probe is implemented over the
-first three headless Library milestones. It makes the current owner useful
-enough to test real browsing and document-management flows, but it does not
-claim completion of Gate 5. The projection-owner and repair/export milestones
-remain ordered Gate 4 work, and this probe must not silently invent their
-contracts.
+qualified headless Library owner. It makes the owner useful enough to test real
+browsing and document-management flows, but it does not claim completion of
+Gate 5. Gate 4's projection and maintenance contracts are independently
+implemented and qualified; this probe does not silently turn them into UI or
+integration behavior.
 
 The applet is a human lens over the Library domain described in
 [`../../../library/library.md`](../../../library/library.md). It is a
@@ -36,9 +36,9 @@ mutation authority.
 
 This slice intentionally does not make the applet a text editor. Initial
 managed content is collected through the applet's bounded prompt flow, while
-deep editing through Pad waits for projection-owner and typed interoperation
-work. History is retained-content inspection only: it does not restore,
-compare, or mutate a historical revision.
+deep editing through Pad waits for typed Gate 6 interoperation over the
+qualified projection owner. History is retained-content inspection only: it
+does not restore, compare, or mutate a historical revision.
 
 ## Creation and retry
 
@@ -89,11 +89,11 @@ available from the menu bar.
 
 ## Deliberately deferred
 
-The probe does not implement Pad or projection-owner integration, capture
-import, VFS import, export/raw export, provenance/details surfaces,
-recognized-format repair, revision compare or restore-as-new, destructive
-tombstones, Desk routing, Explorer reveal, Streams collection, capabilities,
-or Practice bindings. It also does not promise semantic ranking,
+The probe does not implement Pad/projection integration, capture import, VFS
+import, export/raw-export UI, provenance/details surfaces, maintenance/repair
+UI, revision compare or restore-as-new, destructive tombstones, Desk routing,
+Explorer reveal, Streams collection, capabilities, or Practice bindings. It
+also does not promise semantic ranking,
 normalization, unbounded results, multi-library selection, or multiple
 concurrent applet instances.
 

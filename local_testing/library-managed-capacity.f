@@ -69,6 +69,8 @@ CREATE _lmc-create-key LIB-OPERATION-KEY-SIZE ALLOT
 CREATE _lmc-zero-entropy LIB-DIGEST-SIZE ALLOT
 CREATE _lmc-attempt-cell 8 ALLOT
 CREATE _lmc-request LIBRARY-MANAGED-CREATE-REQUEST-SIZE ALLOT
+CREATE _lmc-collection-request
+    LIBRARY-COLLECTION-CREATE-REQUEST-SIZE ALLOT
 CREATE _lmc-result LIB-ENTRY-SIZE ALLOT
 CREATE _lmc-entry LIB-ENTRY-SIZE ALLOT
 CREATE _lmc-collection LIB-COLLECTION-SIZE ALLOT
@@ -87,6 +89,7 @@ LIB-CONTENT-FRAME-MAX XBUF _lmc-frame
 LIBRARY-QUERY-SUMMARY-SIZE LIBRARY-QUERY-PAGE-MAX * XBUF _lmc-query-page
 LIBRARY-QUERY-SUMMARY-SIZE LIBRARY-QUERY-PAGE-MAX * XBUF _lmc-query-baseline
 LIBRARY-COLLECTION-SUMMARY-SIZE XBUF _lmc-collection-page
+LIBRARY-COLLECTION-VIEW-SIZE XBUF _lmc-collection-view
 
 : _lmc-store  ( -- store ) _lmc-store-slot @ ;
 : _lmc-store-b  ( -- store ) _lmc-store-b-slot @ ;
@@ -519,6 +522,29 @@ LIBRARY-COLLECTION-SUMMARY-SIZE XBUF _lmc-collection-page
     _lmc-content-tail @ LIB-ARENA-SIZE < _lmc-assert
     5 32 1 33 _lmc-build-bank ;
 
+: _lmc-build-full-collection  ( slot -- )
+    _lmc-scale-slot !
+    _lmc-collection LIB-COLLECTION-INIT
+    _lmc-scale-slot @ 0x5000 + _lmc-collection LIBC.ID _lmc-id!
+    _lmc-scale-slot @ 0x6000 +
+        _lmc-collection LIBC.OPERATION-KEY _lmc-id!
+    1 _lmc-collection LIBC.REVISION !
+    _lmc-scale-slot @ 1+
+        _lmc-collection LIBC.MUTATION-SEQUENCE !
+    8 _lmc-collection LIBC.TITLE-U !
+    S" capacity" DROP _lmc-collection LIBC.TITLE 8 CMOVE
+    6 _lmc-collection LIBC.EXPECTED-CATALOG-GENERATION !
+    _lmc-collection LIB-COLLECTION-REQUEST-SEAL!
+        LIB-S-OK = _lmc-assert
+    _lmc-collection LIB-COLLECTION-VALID? _lmc-assert
+    _lmc-scale-slot @ _lmc-encode-collection ;
+
+: _lmc-build-collection-full  ( -- )
+    _lmc-bank LIB-BANK-SIZE 0 FILL
+    _lmc-empty-content
+    LIB-COLLECTION-MAX 0 DO I _lmc-build-full-collection LOOP
+    7 0 LIB-COLLECTION-MAX LIB-COLLECTION-MAX _lmc-build-bank ;
+
 : _lmc-build-live-catalog-full  ( -- )
     _lmc-data 4096 [CHAR] x FILL
     S" scale-body-hit" DROP _lmc-data 14 CMOVE
@@ -653,6 +679,19 @@ LIBRARY-COLLECTION-SUMMARY-SIZE XBUF _lmc-collection-page
     _lmc-store LIBRARY-VFS-STORE.HEAD LIBHF.GENERATION @
         _lmc-generation @ = _lmc-assert
     _lmc-disarm ;
+
+: _lmc-collection-create-request!  ( -- )
+    _lmc-collection-request LIBRARY-COLLECTION-CREATE-REQUEST-INIT
+    7 _lmc-collection-request LIBCCR.EXPECTED-CATALOG-GENERATION !
+    _lmc-create-key LIB-DIGEST-SIZE 0xD5 FILL
+    _lmc-create-key _lmc-collection-request
+        LIBRARY-COLLECTION-CREATE-OPERATION-KEY!
+        LIBSTORE-S-OK = _lmc-assert
+    S" overflow" _lmc-collection-request
+        LIBRARY-COLLECTION-CREATE-TITLE!
+        LIBSTORE-S-OK = _lmc-assert
+    _lmc-collection-request LIBRARY-COLLECTION-CREATE-REQUEST-VALID?
+        _lmc-assert ;
 
 : _lmc-catalog-full-case  ( -- )
     _lmc-build-catalog-full
@@ -1040,8 +1079,32 @@ LIBRARY-COLLECTION-SUMMARY-SIZE XBUF _lmc-collection-page
         _lmc-content-tail @ = _lmc-assert
     _lmc-stack ;
 
+: _lmc-collection-full-case  ( -- )
+    _lmc-build-collection-full
+    7 0 6 _lmc-publish
+    _lmc-collection-create-request!
+    _lmc-collection-view LIBRARY-COLLECTION-VIEW-SIZE 165 FILL
+    _lmc-arm-observers
+    _lmc-collection-request _lmc-collection-view _lmc-store
+        LIBRARY-VFS-STORE-CREATE-COLLECTION
+        LIBSTORE-S-COLLECTION-FULL = _lmc-assert
+    _lmc-write-calls @ 0= _lmc-assert
+    _lmc-checkpoint-calls @ 0= _lmc-assert
+    _lmc-random-calls @ 0= _lmc-assert
+    _lmc-collection-view LIBRARY-COLLECTION-VIEW-SIZE
+        _lmc-zero? _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.GENERATION @ 7 = _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.HEAD LIBHF.GENERATION @
+        7 = _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.BANK LIBBF.COLLECTION-COUNT @
+        LIB-COLLECTION-MAX = _lmc-assert
+    _lmc-store LIBRARY-VFS-STORE.BANK LIBBF.MUTATION-SEQUENCE @
+        LIB-COLLECTION-MAX = _lmc-assert
+    _lmc-disarm
+    _lmc-stack ;
+
 : _lmc-store-replacement-case  ( -- )
-    \ The populated generation-six snapshot must not survive descriptor
+    \ The populated source snapshot must not survive descriptor
     \ reinitialization onto a distinct, newly provisioned empty VFS.
     _LIBAUTH-READY @ 0<> _lmc-assert
     _LIBIX-READY @ 0<> _lmc-assert
@@ -1117,6 +1180,7 @@ LIBRARY-COLLECTION-SUMMARY-SIZE XBUF _lmc-collection-page
     _lmc-allocation-case
     _lmc-query-scale-case
     _lmc-live-catalog-full-case
+    _lmc-collection-full-case
     _lmc-store-replacement-case
     _lmc-disarm
     _lmc-store-b LIBRARY-VFS-STORE-FINI

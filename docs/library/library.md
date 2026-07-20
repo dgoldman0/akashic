@@ -1,19 +1,20 @@
 # Library product boundary
 
 Status: the pure bounded model/codecs, deterministic arena/catalog/head formats,
-sole VFS owner, and the first four ordered Gate 4 headless milestones are
-implemented and qualified. Library now owns managed-document and capture
+sole VFS owner, and all five ordered Gate 4 headless milestones are implemented
+and qualified. Library owns managed-document and capture
 mutation, retained history, receipts, lifecycle, collections, a disposable
 title/body/tag index, bounded authoritative corpus/collection queries, and an
-activation-local projection-owner lifecycle. A bounded standalone applet now
+activation-local projection-owner lifecycle. Its maintenance surface provides
+recognized-format inspection, deterministic head-transaction repair, and
+bounded coherent opaque evidence export. A bounded standalone applet
 exercises the public storage surface as a user-facing corpus lens: it can browse
 and search active/archived records, preview exact content, create and rename
 managed documents, archive/unarchive, inspect retained history, browse/filter
-collections, and page results. It does not provide Desktop hosting, sibling
-integration, deep Pad editing, capture import, destructive deletion,
-recognized-format repair, or opaque raw export. The overall Gate 4 exit and
-complete Gate 5 experience are not yet claimed; those remaining absences are
-contract boundaries, not implied behavior.
+collections, and page results. The literal headless Gate 4 cold/damage exit is
+green. The applet still does not provide Desktop hosting, sibling integration,
+deep Pad editing, capture import, destructive deletion, or maintenance/export
+UI, so the complete Gate 5 experience is not claimed.
 
 Library is the machine-level corpus of material a user deliberately keeps. A
 Practice may eventually bind Library resources into an activity, but the corpus
@@ -242,6 +243,34 @@ write-free and idempotent; a different arena conflicts. Exact post-bank,
 pre-head evidence is preserved and reported as recovery instead of being
 silently adopted.
 
+## Inspection, repair, and opaque evidence
+
+The caller-owned maintenance report is 832 bytes: a 160-byte summary plus seven
+fixed 96-byte object records for the committed head, its stage/backup/marker
+replacement artifacts, both banks, and the arena. Inspection hashes every
+present object and classifies only checksum-verified envelope/header facts.
+Complete semantic facts are exposed only when the ordinary V1 loader validates
+the exact candidate corpus. Future, corrupt, and ambiguous records are marked
+opaque and are never interpreted as catalog or content authority.
+
+The report carries a SHA3-256 evidence seal over the role, state, byte length,
+and raw digest of every object. Opaque export treats this as an optimistic
+token, repeats inspection under the Library guard, and concatenates the exact
+objects in role order. Normal V1 files already occupy their fixed maximum raw
+span, so the explicit export bound is 1,464,896 bytes. Each materialized object
+is re-hashed against the sealed report; conflict, I/O, or any later failure
+zeros the complete negotiated caller span rather than exposing a partial
+bundle.
+
+Repair is deliberately narrower than export. A fresh seal comparison may
+authorize only the already-defined deterministic VFS replacement recovery for
+a fully recognized head transaction. It never reconstructs banks, salvages an
+orphan content suffix, resets a corpus, or mutates future/corrupt/ambiguous
+evidence. Successful recovery reinitializes and fully reloads the owner,
+compares the resulting evidence with the inspection's repaired seal, and uses
+a fresh VFS durability barrier before an idempotent retry can acknowledge the
+completed repair.
+
 ## Headless owner and disposable queries
 
 The VFS owner exposes guarded create/import, exact read and replacement,
@@ -351,15 +380,17 @@ The existing `akashic/knowledge/taxonomy.f` and `akashic/store/vault.f` are not
 Library foundations. Neither supplies this bounded durable owner, revision,
 recovery, identity, or projection contract.
 
-The remaining order is:
+The focused, capacity, performance, clean-cold, and damage-branch results that
+close the headless gate are recorded in
+[`../../local_testing/evidence/library-gate4-close-20260720.md`](../../local_testing/evidence/library-gate4-close-20260720.md).
 
-1. Qualify recognized-format repair/raw export and the complete Gate 4 damage
-   and exit matrix without weakening the sealed authoritative/query boundary.
-2. Gate 5 expands and qualifies the present bounded standalone Library lens
+With the bounded Gate 4 headless exit qualified, the remaining order is:
+
+1. Gate 5 expands and qualifies the present bounded standalone Library lens
    into the complete applet experience without transferring domain ownership.
-3. Gate 6 connects Pad, Explorer, and Desk through typed interop without
+2. Gate 6 connects Pad, Explorer, and Desk through typed interop without
    sibling imports.
-4. Gate 8 performs explicit observation collection and any separately approved
+3. Gate 8 performs explicit observation collection and any separately approved
    migration only after Library is proven.
 
 Until each boundary lands, no component may infer its VFS paths, register a

@@ -1,16 +1,18 @@
 # Library domain package
 
-Status: the pure model/codecs and store formats, the sole VFS owner, and the
-first four ordered Gate 4 implementation milestones are implemented and
-qualified. The public headless owner now creates and replaces managed
+Status: the pure model/codecs and store formats, the sole VFS owner, and all
+five ordered Gate 4 implementation milestones are implemented and qualified.
+The public headless owner creates and replaces managed
 documents, imports immutable captures, manages metadata and lifecycle, exposes
 retained history and receipts, creates/replaces and enumerates RID-based
 collections, and serves bounded authoritative corpus queries through a
 disposable title/body/tag index. The Library domain root now also acquires,
 shares, and quiescently releases bounded one-RID projection owners. A bounded
-standalone applet presents the storage surface as a functional corpus lens, but
-recognized-format repair/raw export, Desktop integration, and Streams
-integration remain absent, so the overall Gate 4 exit is not yet claimed.
+standalone applet presents the storage surface as a functional corpus lens.
+Recognized-format inspection and narrowly planned repair plus coherent bounded
+opaque raw export complete the headless recovery surface. The literal Gate 4
+cold/damage exit is green; the complete Gate 5 applet, Desktop integration,
+and Streams integration remain later work.
 
 The current modules are:
 
@@ -24,7 +26,8 @@ The current modules are:
 - `vfs-store.f`: the sole owner of Library-private VFS paths, committed-snapshot
   loading/provisioning, fail-closed recovery, the guarded public headless
   document/capture/history/receipt/collection mutation and read surface, and
-  the activation-local disposable search index and bounded query API.
+  the activation-local disposable search index, bounded query API, and sealed
+  inspection/repair/raw-evidence API.
 - `projection-owner.f`: the Library domain acquisition root and bounded pool of
   fixed-RID resource projections over an explicitly supplied VFS-store
   instance.
@@ -239,6 +242,35 @@ automatic summaries are implied.
 Callers reuse the identical term and filter scope when advancing a returned raw
 slot cursor; changing scope starts a new request at slot zero.
 
+## Maintenance and raw-evidence boundary
+
+`LIBRARY-VFS-STORE-INSPECT` returns one staged 832-byte report covering the
+committed head, all three possible VFS replacement artifacts, both catalog
+banks, and the content arena. Each of the seven role-based object records
+contains presence/state flags, checked format facts when available, its exact
+raw offset and length, and a SHA3-256 digest. The report publishes catalog,
+collection, generation, mutation, and committed-content facts only after one
+complete recognized V1 corpus passes the ordinary authoritative validator.
+Checksummed future headers and damaged or ambiguous objects remain opaque;
+unknown payloads are never decoded as domain facts.
+
+The report's evidence seal is an optimistic token. Given that exact token,
+`LIBRARY-VFS-STORE-RAW-EXPORT` re-inspects under the owner guard and returns the
+seven objects concatenated in role order with no invented framing. The maximum
+bundle is 1,464,896 bytes. A size probe and short buffer report the exact
+requirement without writing. Materialization re-hashes each copied object
+against the sealed inspection, so a changed or nondeterministic second read is
+`CONFLICT`; every failure after copying starts zeros the full negotiated span.
+
+`LIBRARY-VFS-STORE-REPAIR` is intentionally not a salvage search or reset. It
+re-inspects the supplied evidence token and authorizes only a deterministic,
+fully recognized VFS replacement cleanup/rollback for the head. Future,
+corrupt, orphan, ambiguous, or stale evidence is preserved and returned with
+its explicit status. A successful repair reopens and fully validates the
+owner, verifies the planned repaired seal, and makes idempotent acknowledgement
+conditional on a fresh durability barrier. There is no repair path that
+rewrites a bank, content record, unknown format, or unaccepted evidence.
+
 ## Projection-owner boundary
 
 `projection-owner.f` owns the Library acquisition root
@@ -294,29 +326,33 @@ no Library capability, projection owner, private path, or cross-applet binding.
 
 This lens is an explicit standalone UX probe, not a claim that Gate 5 or
 Desktop integration is complete. It does not yet provide deep Pad editing,
-capture import, destructive deletion, recognized-format repair, raw export, or
-a Desktop-hosted route.
+capture import, destructive deletion, maintenance/export UI, or a
+Desktop-hosted route.
 
-The other focused emulator profiles are `library-managed-document-contracts`,
-`library-managed-capacity-contracts`, `library-managed-lifecycle-contracts`, and
-`library-capture-collection-contracts`, plus
-`library-query-index-contracts`. Separate spawn-isolated two-process drivers
-prove the milestone-two lifecycle state and the milestone-three index rebuild
-across real cold reloads:
+The focused emulator profiles include `library-managed-document-contracts`,
+`library-managed-capacity-contracts`, `library-managed-lifecycle-contracts`,
+`library-capture-collection-contracts`, `library-query-index-contracts`,
+`library-projection-owner-contracts`, and `library-maintenance-contracts`.
+Separate spawn-isolated drivers prove the milestone-two lifecycle state, the
+milestone-three index rebuild, projection reacquisition, and the literal Gate 4
+exit across real cold reloads:
 
 ```bash
 python3 local_testing/library_lifecycle_two_boot.py --timeout 600
 python3 local_testing/library_query_two_boot.py --timeout 600
+python3 local_testing/library_projection_two_boot.py --timeout 600
+python3 local_testing/library_gate4_exit_two_boot.py --timeout 600
 ```
 
-## Remaining Gate 4 boundary
+## Gate 4 qualification boundary
 
-The remaining ordered milestone is recognized-format inspection/repair,
-bounded opaque raw export for future-format evidence, and the complete Gate 4
-damage and cold-relaunch exit matrix. None of that maintenance/export surface
-is implemented by the projection owner. No caller should infer a Desktop route
-from registry presence or from the standalone applet; the applet route remains
-explicit and bounded as described above.
+Gate 4 is complete at this bounded headless boundary. The focused maintenance
+matrix, full earlier-milestone regressions, spawn-isolated cold drivers, and
+literal clean/damaged Gate 4 exit are recorded in
+[`../../local_testing/evidence/library-gate4-close-20260720.md`](../../local_testing/evidence/library-gate4-close-20260720.md).
+This claim does not complete Gate 5 or infer a Desktop route from registry
+presence or from the standalone applet. The applet route remains explicit and
+bounded as described above.
 For the broader product boundary and gate handoff, see
 [`../../docs/library/library.md`](../../docs/library/library.md). It is the
 ratified product-boundary document.

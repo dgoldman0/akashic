@@ -243,9 +243,57 @@ readback on successful replace, and zero modeled stalls. Final measurements
 and the clock-model caveat are in
 [`evidence/library-projection-owner-20260720.md`](evidence/library-projection-owner-20260720.md).
 
-These results qualify milestone four only. Recognized-format repair, bounded
-opaque raw export, and the complete Gate 4 damage/cold-exit matrix remain
-milestone five; overall Gate 4 is not yet claimed.
+These results qualify milestone four. Milestone five and the complete Gate 4
+exit are qualified separately below; projection tests do not stand in for that
+maintenance and damage evidence.
+
+### Gate 4 milestone 5 and complete headless exit
+
+`library-maintenance-contracts` qualifies the caller-owned inspection report,
+sealed optimistic evidence token, recognized head-transaction repair, and
+bounded opaque raw export. Run it with:
+
+```bash
+MEGAPAD_ROOT=/absolute/path/to/megapad \
+  python3 local_testing/akashic_tui.py smoke \
+    --profile library-maintenance-contracts \
+    --max-steps 15000000000 --timeout 600
+```
+
+The 219-assertion linked profile covers complete healthy V1 semantics; size,
+short-buffer, and exact seven-object export; byte/SHA identity; report/output
+alias rejection; read, close, and durability failure cleanup; stale evidence;
+recognized replacement residue repair and idempotent retry; future and corrupt
+heads; and a preserved orphan content suffix. A successful but silently
+changed second read is rejected as `CONFLICT` and the entire negotiated output
+is zeroed. Future, corrupt, ambiguous, and orphan evidence remains export-only;
+repair never guesses or resets it.
+
+Run the literal Gate 4 exit and maintenance cost profiler with:
+
+```bash
+MEGAPAD_ROOT=/absolute/path/to/megapad \
+  python3 local_testing/library_gate4_exit_two_boot.py --timeout 600
+MEGAPAD_ROOT=/absolute/path/to/megapad \
+  python3 local_testing/library_maintenance_efficiency.py --timeout 600
+```
+
+The exit driver uses fresh spawned emulator processes with only serialized
+MP64FS bytes and printed stable evidence crossing each process boundary. Its
+clean relaunch proves an archived managed document with six immutable content
+revisions, an active immutable capture, and a distinct tombstoned RID. It then
+clones that verified disk and proves fail-closed, byte-preserving maintenance
+behavior for a damaged head, damaged selected bank, damaged committed content
+frame, and checksum-valid future head. Both the dependency closure and each
+generated proof leaf use the linked loader path.
+
+The complete command/result ledger, fixed memory and byte bounds, emulator
+cycles, and target-clock interpretation are in
+[`evidence/library-gate4-close-20260720.md`](evidence/library-gate4-close-20260720.md).
+Together with the preceding focused/capacity profiles and the managed,
+lifecycle, query, and projection cold drivers, this satisfies the literal
+headless Gate 4 exit. It does not claim the complete Gate 5 applet or any
+Desktop, Pad, Explorer, Streams, Agent, or Practice integration.
 
 The Streams qualification path is intentionally split by boundary:
 

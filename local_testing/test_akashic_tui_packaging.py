@@ -35,6 +35,27 @@ from akashic_tui import (  # noqa: E402
 from diskutil import MP64FS, pack_forth_source  # noqa: E402
 
 
+GATE4_HEADLESS_PROFILES = (
+    "library-model-codecs-contracts",
+    "library-store-format-contracts",
+    "library-vfs-store-contracts",
+    "library-managed-document-contracts",
+    "library-managed-lifecycle-contracts",
+    "library-capture-collection-contracts",
+    "library-query-index-contracts",
+    "library-projection-owner-contracts",
+    "library-maintenance-contracts",
+    "library-managed-capacity-contracts",
+)
+
+
+@pytest.mark.parametrize("profile_name", GATE4_HEADLESS_PROFILES)
+def test_gate4_headless_profiles_use_linked_loader(profile_name: str) -> None:
+    profile = PROFILES[profile_name]
+    assert profile.linked is True
+    assert profile.link_chunk_bytes == LINK_CHUNK_BYTES
+
+
 def test_profile_failure_markers_are_checked_across_raw_and_screen_text() -> None:
     profile = PROFILES["library-model-codecs-contracts"]
     assert _matched_failure_markers(
@@ -229,6 +250,42 @@ def test_library_query_index_profile_packages_exact_headless_contract() -> None:
         "local_testing/library-query-index.f",
     )
     assert "REQUIRE local_testing/library-query-index.f" in profile.autoexec
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "library/model.f",
+        "library/record-codec.f",
+        "library/store-format.f",
+        "library/vfs-store.f",
+        "utils/fs/vfs-fixed-snapshot.f",
+    } <= closure
+    assert all(not module.startswith("tui/") for module in closure)
+    assert all(not module.startswith("agent/") for module in closure)
+    assert all(not module.startswith("practice/") for module in closure)
+    assert all(not module.startswith("streams/") for module in closure)
+
+
+def test_library_maintenance_profile_packages_exact_headless_contract() -> None:
+    profile = PROFILES["library-maintenance-contracts"]
+    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.resources == ()
+    assert profile.ready_markers == ("LIBRARY MAINTENANCE PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert profile.total_sectors == 8192
+    assert profile.include_large_sample is False
+    assert {
+        "LIBRARY MAINTENANCE FAIL",
+        "LIBRARY MAINTENANCE ASSERT",
+        "LIBRARY MAINTENANCE STACK",
+        "EVALUATE depth limit exceeded",
+        "dictionary full",
+        "exception",
+    } <= set(profile.failure_markers)
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/library-maintenance.f",
+    )
+    assert "REQUIRE library/vfs-store.f" in profile.autoexec
+    assert "REQUIRE local_testing/library-maintenance.f" in profile.autoexec
 
     closure = set(dependency_closure(profile.roots))
     assert {
