@@ -469,6 +469,16 @@ VARIABLE _G3A-EX-LOC
     _G3A-ALIAS-UNCHANGED ;
 
 : _G3A-ATTACH-SPAN-CONTRACTS  ( -- )
+    \ The generic preflight protects outputs from the borrowed input graph;
+    \ it does not require borrowed inputs themselves to be disjoint.
+    _G3A-LOC _RAA-L !
+    _G3A-LOC 8 + _RAA-R !
+    _G3A-CONTEXT @ _RAA-C !
+    _G3A-RREG @ _RAA-RG !
+    _G3A-BIND _RAA-B !
+    _G3A-RESULT _RAA-O !
+    _RACQ-ATTACH-SPANS-SAFE? _G3A-ASSERT
+
     \ Every public span must have a nonzero, nonwrapping base.  Rejection is
     \ pre-owner and therefore cannot create a retain or alter any output.
     0 _G3A-ROOT _G3A-CONTEXT @ _G3A-RREG @

@@ -11434,6 +11434,7 @@ CREATE _gcx-check 256 ALLOT
 CREATE _gcx-corrupt 7 ALLOT
 CREATE _gcx-quoted 6 ALLOT
 CREATE _gcx-saved 4 ALLOT
+CREATE _gcx-writer-small 4 ALLOT
 CREATE _gcx-desc APP-DESC ALLOT
 
 : _gcx-assert  ( flag -- )
@@ -11474,7 +11475,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     10 _gcx-saved 3 + C! ;
 
 : _gcx-canonical-io  ( -- )
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     S" alpha," _GIO-APPEND
     [CHAR] " _GIO-CHAR S" be,ta" _GIO-APPEND [CHAR] " _GIO-CHAR
     13 _GIO-CHAR 10 _GIO-CHAR
@@ -11482,6 +11483,36 @@ CREATE _gcx-desc APP-DESC ALLOT
     [CHAR] " _GIO-CHAR [CHAR] " _GIO-CHAR
     S" uote" _GIO-APPEND [CHAR] " _GIO-CHAR
     [CHAR] , _GIO-CHAR S" =A1" _GIO-APPEND 10 _GIO-CHAR ;
+
+: _gcx-writer-small=  ( -- flag )
+    S" abcd" _gcx-writer-small 4 COMPARE 0= ;
+
+: _gcx-test-writer  ( -- )
+    _gcx-writer-small 4 _GRID-IO-WRITER CBW-INIT
+    CBW-S-OK = _gcx-assert
+    _GIO-RESET S" abcd" _GIO-APPEND
+    _GRID-IO-U @ 4 = _gcx-assert
+    _GRID-IO-WRITER CBW-STATUS@ CBW-S-OK = _gcx-assert
+    _gcx-writer-small= _gcx-assert
+
+    [CHAR] e _GIO-CHAR
+    _GRID-IO-U @ 4 = _gcx-assert
+    _GRID-IO-WRITER CBW-STATUS@ CBW-S-CAPACITY = _gcx-assert
+    _gcx-writer-small= _gcx-assert
+    S" ignored" _GIO-APPEND
+    _GRID-IO-U @ 4 = _gcx-assert
+    _GRID-IO-WRITER CBW-STATUS@ CBW-S-CAPACITY = _gcx-assert
+    _gcx-writer-small= _gcx-assert
+
+    _GRID-CLEAR-MODEL S" abcde" 0 0 _GRID-SET-CELL
+    _GRID-SERIALIZE _GRID-L-S-CAPACITY = _gcx-assert
+    _GRID-IO-U @ 0= _gcx-assert
+    _GRID-IO-WRITER CBW-STATUS@ CBW-S-CAPACITY = _gcx-assert
+    _gcx-writer-small= _gcx-assert
+
+    _GRID-IO-BUF @ _GRID-IO-CAP _GRID-IO-WRITER CBW-INIT
+    CBW-S-OK = _gcx-assert
+    0 _GRID-IO-U ! _GRID-CLEAR-MODEL _gcx-stack ;
 
 : _gcx-seed  ( -- )
     _GRID-CLEAR-MODEL
@@ -11564,42 +11595,42 @@ CREATE _gcx-desc APP-DESC ALLOT
     _gcx-model-canonical? _gcx-assert
     -1 _GRID-DIRTY ! 0 _GRID-SOURCE-BLOCKED !
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     41 0 DO [CHAR] a _GIO-CHAR LOOP
     _GRID-IO-BUF @ _GRID-IO-U @ 0 0 _GRID-SET-CELL
     _gcx-model-canonical? _gcx-assert
     _GRID-L-S-FIELD _gcx-invalid
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     16 0 DO [CHAR] , _GIO-CHAR LOOP [CHAR] x _GIO-CHAR
     _GRID-L-S-CAPACITY _gcx-invalid
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     65 0 DO S" x" _GIO-APPEND 10 _GIO-CHAR LOOP
     _GRID-L-S-CAPACITY _gcx-invalid
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     _gcx-corrupt 7 _GIO-APPEND
     _GRID-L-S-INVALID _gcx-invalid
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     [CHAR] " _GIO-CHAR S" x" _GIO-APPEND
     _GRID-L-S-INVALID _gcx-invalid
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     S" a" _GIO-APPEND [CHAR] " _GIO-CHAR S" b" _GIO-APPEND
     _GRID-L-S-INVALID _gcx-invalid
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     S" a" _GIO-APPEND 13 _GIO-CHAR S" b" _GIO-APPEND
     _GRID-L-S-INVALID _gcx-invalid
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     [CHAR] " _GIO-CHAR S" x" _GIO-APPEND [CHAR] " _GIO-CHAR
     BL _GIO-CHAR
     _GRID-L-S-INVALID _gcx-invalid
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     _GRID-ROWS 0 DO
         _GRID-COLS 0 DO
             S" x" _GIO-APPEND
@@ -11611,7 +11642,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     _GRID-MAX-ROW @ _GRID-ROWS 1- = _gcx-assert
     _GRID-MAX-COL @ _GRID-COLS 1- = _gcx-assert
 
-    0 _GRID-IO-ERROR ! _GIO-RESET
+    _GIO-RESET
     _GRID-SOURCE-CAP 0 DO [CHAR] z _GIO-CHAR LOOP
     _GRID-PARSE-CSV _GRID-L-S-OK = _gcx-assert
     0 0 _GRID-CELL _GC-LEN + @ _GRID-SOURCE-CAP = _gcx-assert
@@ -11701,12 +11732,15 @@ CREATE _gcx-desc APP-DESC ALLOT
     _GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * ALLOCATE
     IF -2 THROW THEN _GRID-CELLS !
     _GRID-IO-CAP ALLOCATE IF -2 THROW THEN _GRID-IO-BUF !
+    _GRID-IO-BUF @ _GRID-IO-CAP _GRID-IO-WRITER CBW-INIT
+    CBW-S-OK = _gcx-assert
     VFS-CUR DUP 0<> _gcx-assert _GRID-VFS !
     _GRID-VFS @ _GRID-REPLACE VREPL-INIT VREPL-S-OK = _gcx-assert
     S" /grid.csv" _GRID-REPLACE VREPL-DERIVE-PATHS!
     VREPL-S-OK = _gcx-assert
     _GRID-CLEAR-MODEL 0 _GRID-DIRTY ! 0 _GRID-SOURCE-BLOCKED !
 
+    _gcx-test-writer
     _gcx-test-parser
     _gcx-test-load-save
     _gcx-test-load-cleanup-faults
@@ -17172,6 +17206,7 @@ VARIABLE _pkg-byte
 VARIABLE _pkg-here
 VARIABLE _pkg-latest
 VARIABLE _pkg-xfree
+CREATE _pkg-writer-small 4 ALLOT
 
 : _pkg-assert  ( flag -- )
     1 _pkg-checks +!
@@ -17180,6 +17215,35 @@ VARIABLE _pkg-xfree
     DEPTH _pkg-depth @ -
     DUP IF ." DEPTH DELTA " DUP . CR THEN
     0= _pkg-assert ;
+
+: _pkg-writer-small=  ( -- flag )
+    S" abcd" _pkg-writer-small 4 COMPARE 0= ;
+
+: _pkg-test-builder-writer  ( -- )
+    _pkg-writer-small 4 _ab-manifest-writer CBW-INIT
+    CBW-S-OK = _pkg-assert
+    S" abcd" _AB-APPEND
+    _ab-manifest-writer CBW-LENGTH@ 4 = _pkg-assert
+    _ab-manifest-writer CBW-STATUS@ CBW-S-OK = _pkg-assert
+    _pkg-writer-small= _pkg-assert
+
+    [CHAR] e _AB-CHAR+
+    _ab-manifest-writer CBW-LENGTH@ 4 = _pkg-assert
+    _ab-manifest-writer CBW-STATUS@ CBW-S-CAPACITY = _pkg-assert
+    _pkg-writer-small= _pkg-assert
+    S" ignored" _AB-APPEND
+    _ab-manifest-writer CBW-LENGTH@ 4 = _pkg-assert
+    _ab-manifest-writer CBW-STATUS@ CBW-S-CAPACITY = _pkg-assert
+    _pkg-writer-small= _pkg-assert
+    _AB-SERIAL-STATUS ABUILD-E-SERIALIZE = _pkg-assert
+
+    _AB-SERIAL-RESET CBW-S-OK = _pkg-assert
+    S" n = " -42 _AB-NUMBER-LINE
+    _ab-manifest-writer CBW-LENGTH@ 8 = _pkg-assert
+    S" n = -42" _ab-manifest-buf 7 COMPARE 0= _pkg-assert
+    _ab-manifest-buf 7 + C@ 10 = _pkg-assert
+    _AB-SERIAL-STATUS ABUILD-S-OK = _pkg-assert
+    _pkg-stack ;
 
 : _pkg-read-installed  ( -- status )
     ABUILD-INSTALLED-PATH VFS-OPEN DUP _pkg-fd ! 0= IF -1 EXIT THEN
@@ -17244,6 +17308,8 @@ VARIABLE _pkg-xfree
     DUP ACAT-S-MISSING = SWAP ACAT-S-OK = OR _pkg-assert
     _pkg-cat @ ABUILD-CATALOG!
     DEPTH _pkg-depth !
+
+    _pkg-test-builder-writer
 
     S" /hello.toml" ABUILD-INSTALL _pkg-status ! _pkg-entry !
     _pkg-status @ ABUILD-S-OK = _pkg-assert
@@ -27209,11 +27275,16 @@ _lrc-run
 
 
 PROFILES["gate2a-contracts"] = Profile(
-    roots=("utils/memory-span.f", "interop/schema-common.f"),
+    roots=(
+        "utils/memory-span.f",
+        "utils/buffer-writer.f",
+        "interop/schema-common.f",
+    ),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 2A mechanical primitive contracts
 ENTER-USERLAND
 REQUIRE utils/memory-span.f
+REQUIRE utils/buffer-writer.f
 REQUIRE interop/schema-common.f
 ." [akashic] loading Gate 2A contracts" CR
 REQUIRE local_testing/gate2a.f

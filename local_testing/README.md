@@ -108,11 +108,13 @@ and linked Desk journeys. Run the narrow profile for the behavior being changed
 and the linked profile that owns its production lifecycle. Generated images,
 terminal text, cell JSON, and PNG captures go under `local_testing/out/`.
 
-`gate2a-contracts` isolates the policy-neutral memory-span predicates and the
-caller-owned scalar/locator schema initializers. It covers signed-length and
-unsigned-wrap boundaries, empty/null policy separation, half-open overlap, exact
-schema bytes, UTF-8/type/length rejection, and the distinct 110-byte semantic
-RREF and 516-byte VFS-locator text bounds.
+`gate2a-contracts` isolates the policy-neutral memory-span predicates, inline
+caller-owned span sets, checked buffer writer, and caller-owned scalar/locator
+schema initializers. It covers signed-length and unsigned-wrap boundaries,
+empty/null policy separation, half-open overlap and adjacency, borrowed span
+geometry, independent bounded sets and writers, sticky all-or-nothing capacity
+failure, decimal cell extrema, exact schema bytes, UTF-8/type/length rejection,
+and the distinct 110-byte semantic RREF and 516-byte VFS-locator text bounds.
 
 `library-model-codecs-contracts` qualifies the foundational caller-owned Library
 model and its catalog, collection, and immutable content-revision records.

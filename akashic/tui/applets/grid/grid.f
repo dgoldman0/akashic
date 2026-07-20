@@ -23,6 +23,7 @@ REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-replace.f
 REQUIRE ../../../utils/string.f
+REQUIRE ../../../utils/buffer-writer.f
 REQUIRE ../../../text/utf8.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/capability.f
@@ -85,7 +86,7 @@ _GRID-CURRENT-STATE CMP-CELL: _GRID-DIRTY
 _GRID-CURRENT-STATE CMP-CELL: _GRID-VFS
 _GRID-CURRENT-STATE VREPL-SIZE CMP-FIELD: _GRID-REPLACE
 _GRID-CURRENT-STATE CMP-CELL: _GRID-SOURCE-BLOCKED
-_GRID-CURRENT-STATE CMP-CELL: _GRID-IO-ERROR
+_GRID-CURRENT-STATE CBW-SIZE CMP-FIELD: _GRID-IO-WRITER
 
 : _GRID-CELL  ( row col -- cell )
     SWAP _GRID-COLS * + _GRID-CELL-SZ * _GRID-CELLS @ + ;
@@ -651,27 +652,20 @@ VARIABLE _GP-RESULT-OK
 \ CSV writer
 \ ---------------------------------------------------------------------
 
-VARIABLE _GIO-A
-VARIABLE _GIO-U
-VARIABLE _GIO-N
+: _GIO-SYNC-LENGTH  ( -- )
+    _GRID-IO-WRITER CBW-LENGTH@ _GRID-IO-U ! ;
 
-: _GIO-RESET  ( -- ) 0 _GRID-IO-U ! ;
+: _GIO-RESET  ( -- )
+    _GRID-IO-WRITER CBW-RESET DROP
+    _GIO-SYNC-LENGTH ;
 
 : _GIO-APPEND  ( addr len -- )
-    _GIO-U ! _GIO-A !
-    _GRID-IO-ERROR @ IF EXIT THEN
-    _GIO-U @ _GRID-IO-CAP _GRID-IO-U @ - > IF
-        -1 _GRID-IO-ERROR ! EXIT
-    THEN
-    _GIO-U @ _GIO-N !
-    _GIO-A @ _GRID-IO-BUF @ _GRID-IO-U @ + _GIO-N @ CMOVE
-    _GIO-N @ _GRID-IO-U +! ;
+    _GRID-IO-WRITER CBW-APPEND DROP
+    _GIO-SYNC-LENGTH ;
 
 : _GIO-CHAR  ( c -- )
-    _GRID-IO-ERROR @ IF DROP EXIT THEN
-    _GRID-IO-U @ _GRID-IO-CAP < IF
-        _GRID-IO-BUF @ _GRID-IO-U @ + C! 1 _GRID-IO-U +!
-    ELSE DROP -1 _GRID-IO-ERROR ! THEN ;
+    _GRID-IO-WRITER CBW-CHAR DROP
+    _GIO-SYNC-LENGTH ;
 
 VARIABLE _GQ-A
 VARIABLE _GQ-U
@@ -705,7 +699,7 @@ VARIABLE _GQ-U
     LOOP ;
 
 : _GRID-SERIALIZE  ( -- status )
-    0 _GRID-IO-ERROR ! _GIO-RESET _GRID-RECALC-MAX
+    _GIO-RESET _GRID-RECALC-MAX
     _GRID-MAX-ROW @ 1+ 0 ?DO
         _GRID-MAX-COL @ 1+ 0 ?DO
             J I _GRID-CELL DUP _GC-SOURCE + SWAP _GC-LEN + @
@@ -714,8 +708,11 @@ VARIABLE _GQ-U
         LOOP
         10 _GIO-CHAR
     LOOP
-    _GRID-IO-ERROR @ IF
-        _GRID-L-S-CAPACITY ELSE _GRID-L-S-OK
+    _GRID-IO-WRITER CBW-STATUS@ DUP CBW-S-OK = IF
+        DROP _GRID-L-S-OK EXIT
+    THEN
+    CBW-S-CAPACITY = IF
+        _GRID-L-S-CAPACITY ELSE _GRID-L-S-INVALID
     THEN ;
 
 VARIABLE _GRID-SAVE-IOR
@@ -1190,11 +1187,13 @@ VARIABLE _GRID-INIT-LOAD-STATUS
     0<> ABORT" grid: cell allocation failed" _GRID-CELLS !
     _GRID-IO-CAP ALLOCATE
     0<> ABORT" grid: I/O allocation failed" _GRID-IO-BUF !
+    _GRID-IO-BUF @ _GRID-IO-CAP _GRID-IO-WRITER CBW-INIT
+    0<> ABORT" grid: I/O writer initialization failed"
     0 _GRID-PROMPT ! 0 _GRID-PROMPT-RGN ! 0 _GRID-PANEL-RGN !
     _GRID-PRM-NONE _GRID-PROMPT-MODE !
     0 _GRID-SEL-ROW ! 0 _GRID-SEL-COL !
     0 _GRID-SCROLL-ROW ! 0 _GRID-SCROLL-COL ! 0 _GRID-DIRTY !
-    0 _GRID-SOURCE-BLOCKED ! 0 _GRID-IO-ERROR !
+    0 _GRID-SOURCE-BLOCKED ! 0 _GRID-IO-U !
     1 _GRID-VIS-COLS ! 1 _GRID-VIS-ROWS !
     VFS-CUR DUP 0= ABORT" grid: no VFS available" _GRID-VFS !
     _GRID-VFS @ _GRID-REPLACE VREPL-INIT

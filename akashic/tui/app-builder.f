@@ -34,7 +34,7 @@ REQUIRE app-manifest.f
 REQUIRE app-catalog.f
 REQUIRE ../utils/binimg.f
 REQUIRE ../utils/fmt.f
-REQUIRE ../utils/string.f
+REQUIRE ../utils/buffer-writer.f
 REQUIRE ../utils/fs/vfs-replace.f
 REQUIRE ../math/sha3.f
 
@@ -105,9 +105,7 @@ CREATE _ab-source-path MFT-PATH-MAX ALLOT
 VARIABLE _ab-source-path-u
 
 CREATE _ab-manifest-buf _AB-MANIFEST-BUF-MAX ALLOT
-VARIABLE _ab-manifest-u
-VARIABLE _ab-serial-error
-CREATE _ab-char 1 ALLOT
+CREATE _ab-manifest-writer CBW-SIZE ALLOT
 CREATE _ab-check-buf _AB-CHECK-BUF-SIZE ALLOT
 CREATE _ab-find-buf 24 ALLOT
 
@@ -189,20 +187,15 @@ VARIABLE _abr-buf
 \ Installed-manifest serializer
 \ ---------------------------------------------------------------------
 
-: _AB-SERIAL-RESET  ( -- )
-    0 _ab-manifest-u ! 0 _ab-serial-error ! ;
+: _AB-SERIAL-RESET  ( -- writer-status )
+    _ab-manifest-buf _AB-MANIFEST-BUF-MAX
+        _ab-manifest-writer CBW-INIT ;
 
 : _AB-APPEND  ( addr len -- )
-    _ab-serial-error @ IF 2DROP EXIT THEN
-    DUP _ab-manifest-u @ + _AB-MANIFEST-BUF-MAX > IF
-        2DROP ABUILD-E-SERIALIZE _ab-serial-error ! EXIT
-    THEN
-    DUP >R
-    _ab-manifest-buf _ab-manifest-u @ + SWAP CMOVE
-    R> _ab-manifest-u +! ;
+    _ab-manifest-writer CBW-APPEND DROP ;
 
 : _AB-CHAR+  ( c -- )
-    _ab-char C! _ab-char 1 _AB-APPEND ;
+    _ab-manifest-writer CBW-CHAR DROP ;
 
 : _AB-NL  ( -- ) 10 _AB-CHAR+ ;
 
@@ -210,10 +203,14 @@ VARIABLE _abr-buf
     [CHAR] " _AB-CHAR+ _AB-APPEND [CHAR] " _AB-CHAR+ _AB-NL ;
 
 : _AB-NUMBER-LINE  ( prefix-a prefix-u n -- )
-    >R _AB-APPEND R> NUM>STR _AB-APPEND _AB-NL ;
+    >R _AB-APPEND R> _ab-manifest-writer CBW-NUMBER DROP _AB-NL ;
+
+: _AB-SERIAL-STATUS  ( -- status )
+    _ab-manifest-writer CBW-STATUS@
+    IF ABUILD-E-SERIALIZE ELSE ABUILD-S-OK THEN ;
 
 : _AB-SERIALIZE-INSTALLED  ( -- status )
-    _AB-SERIAL-RESET
+    _AB-SERIAL-RESET IF ABUILD-E-SERIALIZE EXIT THEN
     S" [package]" _AB-APPEND _AB-NL
     S" format = " 1 _AB-NUMBER-LINE
     S" trust = " _AB-APPEND S" local" _AB-QUOTED
@@ -241,7 +238,7 @@ VARIABLE _abr-buf
     ELSE
         2DROP
     THEN
-    _ab-serial-error @ ;
+    _AB-SERIAL-STATUS ;
 
 \ ---------------------------------------------------------------------
 \ Content-addressed names
@@ -372,14 +369,14 @@ VARIABLE _ab-entry-xt
     _AB-MAKE-IMAGE-PATH
     _AB-SERIALIZE-INSTALLED DUP IF EXIT THEN DROP
 
-    _ab-manifest-buf _ab-manifest-u @ MFT-PARSE
+    _ab-manifest-buf _ab-manifest-writer CBW-LENGTH@ MFT-PARSE
     DUP IF ABUILD-E-SERIALIZE _AB-FAIL >R DROP R> EXIT THEN
     DROP _ab-installed-mft !
     _ab-installed-mft @ MFT-VALIDATE-INSTALLED DUP IF
         ABUILD-E-SERIALIZE _AB-FAIL EXIT
     THEN DROP
 
-    _ab-manifest-buf _ab-manifest-u @
+    _ab-manifest-buf _ab-manifest-writer CBW-LENGTH@
         _ab-manifest-digest SHA3-256-HASH
     _AB-MAKE-MANIFEST-PATH
 
@@ -390,7 +387,7 @@ VARIABLE _ab-entry-xt
         ABUILD-E-PUBLISH _AB-FAIL EXIT
     THEN DROP
 
-    _ab-manifest-buf _ab-manifest-u @
+    _ab-manifest-buf _ab-manifest-writer CBW-LENGTH@
         _ab-manifest-path _ab-manifest-path-u @ _AB-PUBLISH-IMMUTABLE
     DUP IF
         DUP ABUILD-E-COLLISION = IF EXIT THEN

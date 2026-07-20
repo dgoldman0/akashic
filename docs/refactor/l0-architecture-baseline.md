@@ -233,3 +233,23 @@ or mutable symbol changed. The reviewed expected digest is updated only when:
 Unknown top-level source prefixes classify as `unclassified` and fail the
 responsibility test. Existing debt is exact, so deleting it is encouraged while
 reintroducing or widening it fails.
+
+## L2 reviewed ratchet update
+
+Landing L2 adds the neutral `utils/buffer-writer.f` module and two net resolved
+edges: the writer's dependency on the existing memory-span API and Grid's use
+of the writer. App-builder replaces its old direct string-formatting dependency
+with the writer, so that conversion changes an edge without increasing the
+total. The reviewed graph is therefore 381 modules, 1,286 resolved `REQUIRE`
+occurrences, and 1,285 unique resolved edges.
+
+The state digest changes because the conversions remove three Grid serializer
+scratch globals and two net app-builder serializer globals. VFSNAP exchanges
+one private-registry scratch global for the RACQ consumer's bounded span-set
+workspace, leaving the independent-library global count unchanged. Current
+class totals are 2,763 applet, 1,100 Desk-ecosystem, and 7,065 independent
+lexical globals.
+
+No placement debt, target-layer violation, unresolved import, identity issue,
+addressability issue, dependency cycle, or capacity policy changes in L2. The
+placement and unresolved-import digests consequently remain unchanged.

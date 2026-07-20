@@ -307,6 +307,10 @@ VARIABLE _RAA-S
 VARIABLE _RAA-LS
 VARIABLE _RAA-PRIMARY
 
+5 CONSTANT _RACQ-ATTACH-SPAN-CAPACITY
+CREATE _RAA-ATTACH-SPANS
+    _RACQ-ATTACH-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT
+
 : _RACQ-ATTACH-SPAN?  ( address length -- flag )
     OVER 0= IF 2DROP 0 EXIT THEN
     MSPAN-NONWRAPPING? ;
@@ -319,33 +323,24 @@ VARIABLE _RAA-PRIMARY
     _RAA-B @ LBIND-SIZE _RACQ-ATTACH-SPAN? 0= IF 0 EXIT THEN
     _RAA-O @ RACQ-RESULT-SIZE _RACQ-ATTACH-SPAN? 0= IF 0 EXIT THEN
 
-    \ Both public outputs are written during a successful attach.  They must
-    \ be disjoint from each other and from every fixed-size input whose span
-    \ this generic layer owns.  Perform this preflight before RESULT-INIT or
-    \ any owner callback so a hostile alias cannot corrupt authority-bearing
-    \ input state or manufacture a retain that the caller cannot release.
-    _RAA-B @ LBIND-SIZE _RAA-O @ RACQ-RESULT-SIZE MSPAN-OVERLAP? IF
-        0 EXIT
-    THEN
-    _RAA-B @ LBIND-SIZE _RAA-L @ QLOC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RAA-B @ LBIND-SIZE _RAA-R @ RACQ-ROOT-SIZE MSPAN-OVERLAP? IF
-        0 EXIT
-    THEN
-    _RAA-B @ LBIND-SIZE _RAA-C @ CTX-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RAA-B @ LBIND-SIZE _RAA-RG @ RREG-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RAA-O @ RACQ-RESULT-SIZE _RAA-L @ QLOC-SIZE MSPAN-OVERLAP? IF
-        0 EXIT
-    THEN
-    _RAA-O @ RACQ-RESULT-SIZE _RAA-R @ RACQ-ROOT-SIZE MSPAN-OVERLAP? IF
-        0 EXIT
-    THEN
-    _RAA-O @ RACQ-RESULT-SIZE _RAA-C @ CTX-SIZE MSPAN-OVERLAP? IF
-        0 EXIT
-    THEN
-    _RAA-O @ RACQ-RESULT-SIZE _RAA-RG @ RREG-SIZE MSPAN-OVERLAP? IF
-        0 EXIT
-    THEN
-    -1 ;
+    \ Borrowed inputs may legally alias one another, so collect them with
+    \ PUSH.  ADD makes the first output disjoint from that borrowed graph;
+    \ querying the second then covers the same nine output-facing pairs as
+    \ the former handwritten matrix, including output-versus-output.
+    _RACQ-ATTACH-SPAN-CAPACITY _RAA-ATTACH-SPANS MSPAN-SET-INIT
+        MSPAN-SET-S-OK <> IF 0 EXIT THEN
+    _RAA-L @ QLOC-SIZE _RAA-ATTACH-SPANS MSPAN-SET-PUSH
+        MSPAN-SET-S-OK <> IF 0 EXIT THEN
+    _RAA-R @ RACQ-ROOT-SIZE _RAA-ATTACH-SPANS MSPAN-SET-PUSH
+        MSPAN-SET-S-OK <> IF 0 EXIT THEN
+    _RAA-C @ CTX-SIZE _RAA-ATTACH-SPANS MSPAN-SET-PUSH
+        MSPAN-SET-S-OK <> IF 0 EXIT THEN
+    _RAA-RG @ RREG-SIZE _RAA-ATTACH-SPANS MSPAN-SET-PUSH
+        MSPAN-SET-S-OK <> IF 0 EXIT THEN
+    _RAA-B @ LBIND-SIZE _RAA-ATTACH-SPANS MSPAN-SET-ADD
+        MSPAN-SET-S-OK <> IF 0 EXIT THEN
+    _RAA-O @ RACQ-RESULT-SIZE _RAA-ATTACH-SPANS
+        MSPAN-SET-OVERLAP? 0= ;
 
 : _RACQ-RESULT-STATUS!  ( status detail -- status )
     _RAA-O @ RACQ.RESULT-DETAIL !
