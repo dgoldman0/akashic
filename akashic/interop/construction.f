@@ -1,0 +1,880 @@
+\ =====================================================================
+\  construction.f - Transactional interoperability construction
+\ =====================================================================
+\  Schema fields, values, and capability descriptors are assembled in
+\  caller-owned workspaces.  A destination is not touched until the staged
+\  object has passed its final validation.  The module has no mutable
+\  process-global scratch and invokes no caller callback.
+\
+\  Schema field names and child schemas, and capability text and schemas,
+\  remain borrowed after publication.  CVB alone owns dynamic storage: its
+\  candidate is recursively released by ABORT or transferred, without an
+\  allocation, by PUBLISH.
+\ =====================================================================
+
+PROVIDED akashic-interop-construction
+
+REQUIRE capability.f
+REQUIRE ../utils/memory-span.f
+
+0 CONSTANT CBUILD-S-OK
+1 CONSTANT CBUILD-S-INVALID
+2 CONSTANT CBUILD-S-BUSY
+3 CONSTANT CBUILD-S-CAPACITY
+4 CONSTANT CBUILD-S-NOMEM
+5 CONSTANT CBUILD-S-SCHEMA
+6 CONSTANT CBUILD-S-VALUE
+7 CONSTANT CBUILD-S-CAPABILITY
+
+: CBUILD-STATUS-VALID?  ( status -- flag )
+    DUP CBUILD-S-OK >= SWAP CBUILD-S-CAPABILITY <= AND ;
+
+: _CBUILD-READ-SPAN?  ( address length -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP -1 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _CBUILD-BLOB?  ( address length -- flag )
+    DUP CV-MAX-STRING-LEN > IF 2DROP 0 EXIT THEN
+    _CBUILD-READ-SPAN? ;
+
+: _CBUILD-STRING?  ( address length -- flag )
+    2DUP _CBUILD-BLOB? 0= IF 2DROP 0 EXIT THEN
+    UTF8-VALID? ;
+
+: _CBUILD-DROP7  ( x1 x2 x3 x4 x5 x6 x7 -- )
+    2DROP 2DROP 2DROP DROP ;
+
+\ =====================================================================
+\  Closed-map schema builder
+\ =====================================================================
+
+0x43534255494C4431 CONSTANT _CSB-MAGIC-VALUE  \ "CSBUILD1"
+
+0 CONSTANT _CSB-MAGIC
+8 CONSTANT _CSB-SELF
+16 CONSTANT _CSB-STATE
+24 CONSTANT _CSB-STATUS
+32 CONSTANT _CSB-FIELDS
+40 CONSTANT _CSB-CAPACITY
+48 CONSTANT _CSB-COUNT
+56 CONSTANT _CSB-CANDIDATE
+120 CONSTANT CSB-SIZE
+
+0 CONSTANT _CSB-STATE-IDLE
+1 CONSTANT _CSB-STATE-ACTIVE
+
+: _CSB.MAGIC      ( builder -- a ) _CSB-MAGIC + ;
+: _CSB.SELF       ( builder -- a ) _CSB-SELF + ;
+: _CSB.STATE      ( builder -- a ) _CSB-STATE + ;
+: _CSB.STATUS     ( builder -- a ) _CSB-STATUS + ;
+: _CSB.FIELDS     ( builder -- a ) _CSB-FIELDS + ;
+: _CSB.CAPACITY   ( builder -- a ) _CSB-CAPACITY + ;
+: _CSB.COUNT      ( builder -- a ) _CSB-COUNT + ;
+: _CSB.CANDIDATE  ( builder -- schema ) _CSB-CANDIDATE + ;
+
+: CSB-STATUS@  ( builder -- status )
+    DUP 0= IF DROP CBUILD-S-INVALID EXIT THEN _CSB.STATUS @ ;
+
+: CSB-COUNT@  ( builder -- count )
+    DUP 0= IF DROP 0 EXIT THEN _CSB.COUNT @ ;
+
+: _CSB-FIELDS-VALID?  ( fields capacity builder -- flag )
+    >R
+    DUP 0< OVER CS-MAX-FIELDS > OR IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    DUP 0= IF 2DROP R> DROP -1 EXIT THEN
+    OVER 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP CS-FIELD-SIZE * MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP CS-FIELD-SIZE * R@ CSB-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DROP R> DROP -1 ;
+
+: CSB-VALID?  ( builder -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CSB-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _CSB.MAGIC @ _CSB-MAGIC-VALUE <> IF DROP 0 EXIT THEN
+    DUP _CSB.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _CSB.STATE @ DUP _CSB-STATE-IDLE <
+        SWAP _CSB-STATE-ACTIVE > OR IF DROP 0 EXIT THEN
+    DUP _CSB.STATUS @ CBUILD-STATUS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _CSB.STATE @ _CSB-STATE-IDLE = IF
+        DUP _CSB.STATUS @ 0=
+        OVER _CSB.FIELDS @ 0= AND
+        OVER _CSB.CAPACITY @ 0= AND
+        SWAP _CSB.COUNT @ 0= AND EXIT
+    THEN
+    DUP _CSB.COUNT @ DUP 0< IF 2DROP 0 EXIT THEN DROP
+    DUP _CSB.COUNT @ OVER _CSB.CAPACITY @ > IF DROP 0 EXIT THEN
+    DUP _CSB.FIELDS @ OVER _CSB.CAPACITY @ 2 PICK
+        _CSB-FIELDS-VALID? NIP ;
+
+: CSB-INIT  ( builder -- status )
+    DUP 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP CSB-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP CBUILD-S-INVALID EXIT
+    THEN
+    DUP CSB-SIZE 0 FILL
+    _CSB-MAGIC-VALUE OVER _CSB.MAGIC !
+    DUP OVER _CSB.SELF !
+    DROP CBUILD-S-OK ;
+
+: _CSB-LATCH  ( status builder -- status )
+    >R
+    R@ _CSB.STATUS @ DUP IF
+        NIP
+    ELSE
+        DROP DUP R@ _CSB.STATUS !
+    THEN
+    R> DROP ;
+
+: _CSB-READY  ( builder -- status )
+    DUP CSB-VALID? 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP _CSB.STATE @ _CSB-STATE-ACTIVE <> IF
+        DROP CBUILD-S-INVALID EXIT
+    THEN
+    _CSB.STATUS @ ;
+
+: CSB-BEGIN  ( fields capacity builder -- status )
+    >R
+    R@ CSB-VALID? 0= IF
+        2DROP R> DROP CBUILD-S-INVALID EXIT
+    THEN
+    R@ _CSB.STATE @ _CSB-STATE-ACTIVE = IF
+        2DROP R> DROP CBUILD-S-BUSY EXIT
+    THEN
+    DUP 0< IF
+        2DROP R> DROP CBUILD-S-INVALID EXIT
+    THEN
+    DUP CS-MAX-FIELDS > IF
+        2DROP R> DROP CBUILD-S-CAPACITY EXIT
+    THEN
+    2DUP R@ _CSB-FIELDS-VALID? 0= IF
+        2DROP R> DROP CBUILD-S-INVALID EXIT
+    THEN
+    OVER R@ _CSB.FIELDS !
+    DUP R@ _CSB.CAPACITY !
+    0 R@ _CSB.COUNT ! 0 R@ _CSB.STATUS !
+    R@ _CSB.CANDIDATE CS-INIT
+    2DUP CS-FIELD-SIZE * 0 FILL
+    2DROP
+    _CSB-STATE-ACTIVE R@ _CSB.STATE !
+    R> DROP CBUILD-S-OK ;
+
+: _CSB-NTH  ( index builder -- field )
+    _CSB.FIELDS @ SWAP CS-FIELD-SIZE * + ;
+
+: _CSB-DUPLICATE?  ( key-a key-u builder -- flag )
+    DUP _CSB.COUNT @ 0 ?DO
+        2 PICK 2 PICK I 3 PICK _CSB-NTH
+        DUP CSF.KEY-A @ SWAP CSF.KEY-U @ STR-STR= IF
+            DROP 2DROP -1 UNLOOP EXIT
+        THEN
+    LOOP
+    DROP 2DROP 0 ;
+
+: _CSB-FAIL4  ( x1 x2 x3 x4 status builder -- status )
+    >R R@ _CSB-LATCH >R
+    2DROP 2DROP
+    R> R> DROP ;
+
+: _CSB-ADD  ( key-a key-u schema flags builder -- status )
+    >R
+    R@ _CSB-READY ?DUP IF
+        R> _CSB-FAIL4 EXIT
+    THEN
+    3 PICK 3 PICK _CBUILD-STRING? 0= IF
+        CBUILD-S-INVALID R> _CSB-FAIL4 EXIT
+    THEN
+    DUP DUP 0<> SWAP CSF-F-REQUIRED <> AND IF
+        CBUILD-S-INVALID R> _CSB-FAIL4 EXIT
+    THEN
+    OVER CS-SCHEMA-VALIDATE IF
+        CBUILD-S-SCHEMA R> _CSB-FAIL4 EXIT
+    THEN
+    R@ _CSB.COUNT @ R@ _CSB.CAPACITY @ >= IF
+        CBUILD-S-CAPACITY R> _CSB-FAIL4 EXIT
+    THEN
+    3 PICK 3 PICK R@ _CSB-DUPLICATE? IF
+        CBUILD-S-SCHEMA R> _CSB-FAIL4 EXIT
+    THEN
+    R@ _CSB.COUNT @ R@ _CSB-NTH >R
+    DUP R@ CSF.FLAGS !
+    OVER R@ CSF.SCHEMA !
+    3 PICK R@ CSF.KEY-A !
+    2 PICK R@ CSF.KEY-U !
+    2DROP 2DROP
+    R> DROP
+    1 R@ _CSB.COUNT +!
+    R> DROP CBUILD-S-OK ;
+
+: CSB-REQUIRED  ( key-a key-u schema builder -- status )
+    CSF-F-REQUIRED SWAP _CSB-ADD ;
+
+: CSB-OPTIONAL  ( key-a key-u schema builder -- status )
+    0 SWAP _CSB-ADD ;
+
+: _CSB-PUBLISH-DESCRIPTION  ( destination builder -- )
+    >R
+    R@ _CSB.CANDIDATE OVER CS-SIZE MOVE
+    DROP
+    R@ _CSB.CANDIDATE CS-INIT
+    0 R@ _CSB.FIELDS ! 0 R@ _CSB.CAPACITY ! 0 R@ _CSB.COUNT !
+    0 R@ _CSB.STATUS ! _CSB-STATE-IDLE R@ _CSB.STATE !
+    R> DROP ;
+
+: CSB-SEAL-CLOSED-MAP  ( destination builder -- status )
+    >R
+    R@ _CSB-READY ?DUP IF
+        NIP R> DROP EXIT
+    THEN
+    DUP 0= IF
+        DROP CBUILD-S-INVALID R@ _CSB-LATCH R> DROP EXIT
+    THEN
+    DUP CS-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP CBUILD-S-INVALID R@ _CSB-LATCH R> DROP EXIT
+    THEN
+    DUP CS-SIZE R@ CSB-SIZE MSPAN-OVERLAP? IF
+        DROP CBUILD-S-INVALID R@ _CSB-LATCH R> DROP EXIT
+    THEN
+    DUP CS-SIZE
+        R@ _CSB.FIELDS @ R@ _CSB.CAPACITY @ CS-FIELD-SIZE *
+        MSPAN-OVERLAP? IF
+        DROP CBUILD-S-INVALID R@ _CSB-LATCH R> DROP EXIT
+    THEN
+    R@ _CSB.CANDIDATE CS-INIT
+    CV-T-MAP R@ _CSB.CANDIDATE CS-ALLOW!
+    R@ _CSB.COUNT @ R@ _CSB.CANDIDATE CS-MAX-LEN!
+    R@ _CSB.FIELDS @ R@ _CSB.CANDIDATE CS.FIELDS !
+    R@ _CSB.COUNT @ R@ _CSB.CANDIDATE CS.FIELD-N !
+    R@ _CSB.CANDIDATE CS-SCHEMA-VALIDATE IF
+        DROP CBUILD-S-SCHEMA R@ _CSB-LATCH R> DROP EXIT
+    THEN
+    R@ _CSB-PUBLISH-DESCRIPTION
+    CBUILD-S-OK R> DROP ;
+
+: CSB-ABORT  ( builder -- status )
+    DUP CSB-VALID? 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP _CSB.STATE @ _CSB-STATE-ACTIVE = IF
+        DUP _CSB.FIELDS @ OVER _CSB.CAPACITY @ CS-FIELD-SIZE * 0 FILL
+    THEN
+    DUP _CSB.CANDIDATE CS-INIT
+    0 OVER _CSB.FIELDS ! 0 OVER _CSB.CAPACITY ! 0 OVER _CSB.COUNT !
+    0 OVER _CSB.STATUS ! _CSB-STATE-IDLE SWAP _CSB.STATE !
+    CBUILD-S-OK ;
+
+\ =====================================================================
+\  Owned value builder
+\ =====================================================================
+
+0x43564255494C4431 CONSTANT _CVB-MAGIC-VALUE  \ "CVBUILD1"
+
+0 CONSTANT _CVB-MAGIC
+8 CONSTANT _CVB-SELF
+16 CONSTANT _CVB-STATE
+24 CONSTANT _CVB-STATUS
+32 CONSTANT _CVB-CANDIDATE
+72 CONSTANT CVB-SIZE
+
+0 CONSTANT _CVB-STATE-IDLE
+1 CONSTANT _CVB-STATE-BUILDING
+2 CONSTANT _CVB-STATE-SEALED
+16 CONSTANT CVB-MAX-DEPTH
+
+: _CVB.MAGIC      ( builder -- a ) _CVB-MAGIC + ;
+: _CVB.SELF       ( builder -- a ) _CVB-SELF + ;
+: _CVB.STATE      ( builder -- a ) _CVB-STATE + ;
+: _CVB.STATUS     ( builder -- a ) _CVB-STATUS + ;
+: _CVB.CANDIDATE  ( builder -- value ) _CVB-CANDIDATE + ;
+
+: CVB-STATUS@  ( builder -- status )
+    DUP 0= IF DROP CBUILD-S-INVALID EXIT THEN _CVB.STATUS @ ;
+
+: CVB-VALID?  ( builder -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CVB-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _CVB.MAGIC @ _CVB-MAGIC-VALUE <> IF DROP 0 EXIT THEN
+    DUP _CVB.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _CVB.STATE @ DUP _CVB-STATE-IDLE <
+        SWAP _CVB-STATE-SEALED > OR IF DROP 0 EXIT THEN
+    DUP _CVB.STATUS @ CBUILD-STATUS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _CVB.STATE @ _CVB-STATE-IDLE = IF
+        DUP _CVB.STATUS @ 0=
+        SWAP _CVB.CANDIDATE CV-TYPE@ CV-T-NULL = AND EXIT
+    THEN
+    DROP -1 ;
+
+: CVB-INIT  ( builder -- status )
+    DUP 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP CVB-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP CBUILD-S-INVALID EXIT
+    THEN
+    DUP CVB-SIZE 0 FILL
+    _CVB-MAGIC-VALUE OVER _CVB.MAGIC !
+    DUP OVER _CVB.SELF !
+    DUP _CVB.CANDIDATE CV-INIT
+    DROP CBUILD-S-OK ;
+
+: _CVB-LATCH  ( status builder -- status )
+    >R
+    R@ _CVB.STATUS @ DUP IF
+        NIP
+    ELSE
+        DROP DUP R@ _CVB.STATUS !
+    THEN
+    R> DROP ;
+
+: _CVB-READY-BUILD  ( builder -- status )
+    DUP CVB-VALID? 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP _CVB.STATE @ _CVB-STATE-BUILDING <> IF
+        DROP CBUILD-S-INVALID EXIT
+    THEN
+    _CVB.STATUS @ ;
+
+: _CVB-COUNT-STATUS  ( count -- status )
+    DUP 0< IF DROP CBUILD-S-INVALID EXIT THEN
+    CV-MAX-CONTAINER-LEN > IF CBUILD-S-CAPACITY ELSE CBUILD-S-OK THEN ;
+
+: CVB-BEGIN-MAP  ( count builder -- status )
+    >R
+    R@ CVB-VALID? 0= IF DROP R> DROP CBUILD-S-INVALID EXIT THEN
+    R@ _CVB.STATE @ _CVB-STATE-IDLE <> IF
+        DROP R> DROP CBUILD-S-BUSY EXIT
+    THEN
+    DUP _CVB-COUNT-STATUS ?DUP IF
+        NIP R> DROP EXIT
+    THEN
+    0 R@ _CVB.STATUS ! _CVB-STATE-BUILDING R@ _CVB.STATE !
+    R@ _CVB.CANDIDATE CV-INIT
+    R@ _CVB.CANDIDATE CV-MAP! IF
+        CBUILD-S-NOMEM R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    R> DROP CBUILD-S-OK ;
+
+: CVB-BEGIN-LIST  ( count builder -- status )
+    >R
+    R@ CVB-VALID? 0= IF DROP R> DROP CBUILD-S-INVALID EXIT THEN
+    R@ _CVB.STATE @ _CVB-STATE-IDLE <> IF
+        DROP R> DROP CBUILD-S-BUSY EXIT
+    THEN
+    DUP _CVB-COUNT-STATUS ?DUP IF
+        NIP R> DROP EXIT
+    THEN
+    0 R@ _CVB.STATUS ! _CVB-STATE-BUILDING R@ _CVB.STATE !
+    R@ _CVB.CANDIDATE CV-INIT
+    R@ _CVB.CANDIDATE CV-LIST! IF
+        CBUILD-S-NOMEM R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    R> DROP CBUILD-S-OK ;
+
+: CVB-CANDIDATE  ( builder -- value | 0 )
+    DUP CVB-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _CVB.STATE @ _CVB-STATE-IDLE = IF DROP 0 EXIT THEN
+    _CVB.CANDIDATE ;
+
+\ Candidate reachability makes every public mutator local to its workspace.
+\ The builder creates an acyclic owned tree; the depth bound also fails closed
+\ if a caller corrupts that tree through a previously returned child pointer.
+: _CVB-REACHABLE-R  ( node target depth -- flag )
+    2 PICK 0= IF 2DROP DROP 0 EXIT THEN
+    2 PICK CV-SIZE MSPAN-NONWRAPPING? 0= IF 2DROP DROP 0 EXIT THEN
+    2 PICK 2 PICK = IF 2DROP DROP -1 EXIT THEN
+    DUP CVB-MAX-DEPTH >= IF 2DROP DROP 0 EXIT THEN
+    2 PICK CV-TYPE@ DUP CV-T-LIST = IF
+        DROP
+        2 PICK CV.AUX @ CV-SIZE <> IF 2DROP DROP 0 EXIT THEN
+        2 PICK CV-LEN@ DUP 0< OVER CV-MAX-CONTAINER-LEN > OR IF
+            DROP 2DROP DROP 0 EXIT
+        THEN
+        DUP 0> IF 3 PICK CV-DATA@ 0= IF
+            DROP 2DROP DROP 0 EXIT
+        THEN THEN
+        0 ?DO
+            I 3 PICK CV-LIST-NTH DUP IF
+                2 PICK 2 PICK 1+ RECURSE
+            ELSE
+                DROP 0
+            THEN
+            IF 2DROP DROP -1 UNLOOP EXIT THEN
+        LOOP
+        2DROP DROP 0 EXIT
+    THEN
+    CV-T-MAP = IF
+        2 PICK CV.AUX @ CV-MAP-ENTRY-SIZE <> IF
+            2DROP DROP 0 EXIT
+        THEN
+        2 PICK CV-LEN@ DUP 0< OVER CV-MAX-CONTAINER-LEN > OR IF
+            DROP 2DROP DROP 0 EXIT
+        THEN
+        DUP 0> IF 3 PICK CV-DATA@ 0= IF
+            DROP 2DROP DROP 0 EXIT
+        THEN THEN
+        0 ?DO
+            I 3 PICK CV-MAP-NTH DUP 0= IF
+                DROP 2DROP DROP 0 UNLOOP EXIT
+            THEN
+            DUP CV-MAP-KEY
+            3 PICK 3 PICK 1+ RECURSE IF
+                2DROP 2DROP -1 UNLOOP EXIT
+            THEN
+            DUP CV-MAP-VALUE
+            3 PICK 3 PICK 1+ RECURSE IF
+                2DROP 2DROP -1 UNLOOP EXIT
+            THEN
+            DROP
+        LOOP
+        2DROP DROP 0 EXIT
+    THEN
+    2DROP DROP 0 ;
+
+: _CVB-REACHABLE?  ( value builder -- flag )
+    >R R@ _CVB.CANDIDATE SWAP 0 _CVB-REACHABLE-R R> DROP ;
+
+: _CVB-TARGET-READY  ( value builder -- status )
+    >R
+    R@ _CVB-READY-BUILD ?DUP IF NIP R> DROP EXIT THEN
+    DUP R@ _CVB-REACHABLE? 0= IF
+        DROP CBUILD-S-INVALID R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    DROP R> DROP CBUILD-S-OK ;
+
+: _CVB-EMPTY-TARGET?  ( value -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CV-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    CV-TYPE@ CV-T-NULL = ;
+
+: _CVB-FAIL1  ( x status builder -- status )
+    >R R@ _CVB-LATCH >R DROP R> R> DROP ;
+
+: _CVB-FAIL2  ( x1 x2 status builder -- status )
+    >R R@ _CVB-LATCH >R 2DROP R> R> DROP ;
+
+: _CVB-FAIL3  ( x1 x2 x3 status builder -- status )
+    >R R@ _CVB-LATCH >R 2DROP DROP R> R> DROP ;
+
+: _CVB-FAIL4-PAIR  ( x1 x2 x3 x4 status builder -- 0 status )
+    >R R@ _CVB-LATCH >R 2DROP 2DROP 0 R> R> DROP ;
+
+: _CVB-FAIL2-PAIR  ( x1 x2 status builder -- 0 status )
+    >R R@ _CVB-LATCH >R 2DROP 0 R> R> DROP ;
+
+: CVB-MAP!  ( count value builder -- status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL2 EXIT
+    THEN
+    DUP _CVB-EMPTY-TARGET? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL2 EXIT
+    THEN
+    OVER _CVB-COUNT-STATUS ?DUP IF
+        R> _CVB-FAIL2 EXIT
+    THEN
+    CV-MAP! IF
+        CBUILD-S-NOMEM R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    R> DROP CBUILD-S-OK ;
+
+: CVB-LIST!  ( count value builder -- status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL2 EXIT
+    THEN
+    DUP _CVB-EMPTY-TARGET? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL2 EXIT
+    THEN
+    OVER _CVB-COUNT-STATUS ?DUP IF
+        R> _CVB-FAIL2 EXIT
+    THEN
+    CV-LIST! IF
+        CBUILD-S-NOMEM R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    R> DROP CBUILD-S-OK ;
+
+: _CVB-MAP-SLOT-RAW  ( key-a key-u index map -- child status )
+    2DUP CV-MAP-NTH DUP 0= IF
+        DROP 2DROP 2DROP 0 CBUILD-S-INVALID EXIT
+    THEN
+    DUP CV-MAP-KEY CV-TYPE@ DUP CV-T-NULL = IF
+        DROP DROP CV-MAP-SLOT! DUP IF
+            DROP DROP 0 CBUILD-S-NOMEM
+        ELSE
+            DROP CBUILD-S-OK
+        THEN
+        EXIT
+    THEN
+    CV-T-STRING = IF
+        DUP CV-MAP-KEY DUP CV-DATA@ SWAP CV-LEN@
+        6 PICK 6 PICK STR-STR= IF
+            CV-MAP-VALUE >R 2DROP 2DROP R> CBUILD-S-OK
+        ELSE
+            DROP 2DROP 2DROP 0 CBUILD-S-INVALID
+        THEN
+        EXIT
+    THEN
+    DROP 2DROP 2DROP 0 CBUILD-S-INVALID ;
+
+: CVB-MAP-SLOT!  ( key-a key-u index map builder -- child status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL4-PAIR EXIT
+    THEN
+    3 PICK 3 PICK _CBUILD-STRING? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL4-PAIR EXIT
+    THEN
+    _CVB-MAP-SLOT-RAW
+    DUP IF
+        >R DROP R> R@ _CVB-LATCH >R 0 R> R> DROP EXIT
+    THEN
+    R> DROP ;
+
+: CVB-MAP-NTH  ( index map builder -- child status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL2-PAIR EXIT
+    THEN
+    CV-MAP-NTH DUP 0= IF
+        DROP CBUILD-S-INVALID R@ _CVB-LATCH >R
+        0 R> R> DROP EXIT
+    THEN
+    CBUILD-S-OK R> DROP ;
+
+: CVB-LIST-NTH  ( index list builder -- child status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL2-PAIR EXIT
+    THEN
+    CV-LIST-NTH DUP 0= IF
+        DROP CBUILD-S-INVALID R@ _CVB-LATCH >R
+        0 R> R> DROP EXIT
+    THEN
+    CBUILD-S-OK R> DROP ;
+
+: CVB-NULL!  ( value builder -- status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL1 EXIT
+    THEN
+    DUP _CVB-EMPTY-TARGET? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL1 EXIT
+    THEN
+    CV-NULL! R> DROP CBUILD-S-OK ;
+
+: CVB-BOOL!  ( flag value builder -- status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL2 EXIT
+    THEN
+    DUP _CVB-EMPTY-TARGET? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL2 EXIT
+    THEN
+    CV-BOOL! R> DROP CBUILD-S-OK ;
+
+: CVB-INT!  ( n value builder -- status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL2 EXIT
+    THEN
+    DUP _CVB-EMPTY-TARGET? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL2 EXIT
+    THEN
+    CV-INT! R> DROP CBUILD-S-OK ;
+
+: CVB-F32!  ( bits value builder -- status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL2 EXIT
+    THEN
+    DUP _CVB-EMPTY-TARGET? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL2 EXIT
+    THEN
+    CV-F32! R> DROP CBUILD-S-OK ;
+
+: _CVB-BLOB-PREPARE
+  ( address length value builder -- address length value status | status )
+    >R
+    DUP R@ _CVB-TARGET-READY ?DUP IF
+        R> _CVB-FAIL3 EXIT
+    THEN
+    DUP _CVB-EMPTY-TARGET? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL3 EXIT
+    THEN
+    2 PICK 2 PICK _CBUILD-BLOB? 0= IF
+        CBUILD-S-INVALID R> _CVB-FAIL3 EXIT
+    THEN
+    R> DROP CBUILD-S-OK ;
+
+: CVB-STRING!  ( address length value builder -- status )
+    DUP >R _CVB-BLOB-PREPARE ?DUP IF R> DROP EXIT THEN
+    2 PICK 2 PICK UTF8-VALID? 0= IF
+        CBUILD-S-INVALID R@ _CVB-LATCH >R
+        2DROP DROP R> R> DROP EXIT
+    THEN
+    CV-STRING! IF CBUILD-S-NOMEM R@ _CVB-LATCH ELSE CBUILD-S-OK THEN
+    R> DROP ;
+
+: CVB-BYTES!  ( address length value builder -- status )
+    DUP >R _CVB-BLOB-PREPARE ?DUP IF R> DROP EXIT THEN
+    CV-BYTES! IF CBUILD-S-NOMEM R@ _CVB-LATCH ELSE CBUILD-S-OK THEN
+    R> DROP ;
+
+: CVB-RESOURCE!  ( address length value builder -- status )
+    DUP >R _CVB-BLOB-PREPARE ?DUP IF R> DROP EXIT THEN
+    2 PICK 2 PICK UTF8-VALID? 0= IF
+        CBUILD-S-INVALID R@ _CVB-LATCH >R
+        2DROP DROP R> R> DROP EXIT
+    THEN
+    CV-RESOURCE! IF CBUILD-S-NOMEM R@ _CVB-LATCH ELSE CBUILD-S-OK THEN
+    R> DROP ;
+
+: CVB-SEAL  ( schema-or-zero builder -- status )
+    >R
+    R@ _CVB-READY-BUILD ?DUP IF NIP R> DROP EXIT THEN
+    DUP IF
+        DUP CS-SCHEMA-VALIDATE IF
+            DROP CBUILD-S-SCHEMA R@ _CVB-LATCH R> DROP EXIT
+        THEN
+        R@ _CVB.CANDIDATE OVER CS-VALIDATE-DEEP IF
+            DROP CBUILD-S-VALUE R@ _CVB-LATCH R> DROP EXIT
+        THEN
+    THEN
+    DROP _CVB-STATE-SEALED R@ _CVB.STATE !
+    R> DROP CBUILD-S-OK ;
+
+: CVB-PUBLISH  ( destination builder -- status )
+    >R
+    R@ CVB-VALID? 0= IF DROP R> DROP CBUILD-S-INVALID EXIT THEN
+    R@ _CVB.STATE @ _CVB-STATE-SEALED <> IF
+        DROP R> DROP CBUILD-S-INVALID EXIT
+    THEN
+    R@ _CVB.STATUS @ ?DUP IF NIP R> DROP EXIT THEN
+    DUP 0= IF
+        DROP CBUILD-S-INVALID R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    DUP CV-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP CBUILD-S-INVALID R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    DUP CV-SIZE R@ CVB-SIZE MSPAN-OVERLAP? IF
+        DROP CBUILD-S-INVALID R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    DUP R@ _CVB-REACHABLE? IF
+        DROP CBUILD-S-INVALID R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    >R
+    R@ ['] CV-FREE CATCH ?DUP IF
+        DROP R> DROP
+        CBUILD-S-NOMEM R@ _CVB-LATCH R> DROP EXIT
+    THEN
+    R>
+    R@ _CVB.CANDIDATE OVER CV-SIZE MOVE
+    R@ _CVB.CANDIDATE CV-INIT
+    0 R@ _CVB.STATUS ! _CVB-STATE-IDLE R@ _CVB.STATE !
+    DROP R> DROP CBUILD-S-OK ;
+
+: CVB-ABORT  ( builder -- status )
+    DUP CVB-VALID? 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP _CVB.STATE @ _CVB-STATE-IDLE = IF
+        DROP CBUILD-S-OK EXIT
+    THEN
+    DUP >R _CVB.CANDIDATE ['] CV-FREE CATCH ?DUP IF
+        DROP R> DROP CBUILD-S-NOMEM EXIT
+    THEN
+    R@ _CVB.CANDIDATE CV-INIT
+    0 R@ _CVB.STATUS ! _CVB-STATE-IDLE R@ _CVB.STATE !
+    R> DROP CBUILD-S-OK ;
+
+\ =====================================================================
+\  Capability descriptor builder
+\ =====================================================================
+
+0x4341504255494C31 CONSTANT _CAPB-MAGIC-VALUE  \ "CAPBUIL1"
+
+0 CONSTANT _CAPB-MAGIC
+8 CONSTANT _CAPB-SELF
+16 CONSTANT _CAPB-STATE
+24 CONSTANT _CAPB-STATUS
+32 CONSTANT _CAPB-CANDIDATE
+160 CONSTANT CAPB-SIZE
+
+0 CONSTANT _CAPB-STATE-IDLE
+1 CONSTANT _CAPB-STATE-ACTIVE
+
+: _CAPB.MAGIC      ( builder -- a ) _CAPB-MAGIC + ;
+: _CAPB.SELF       ( builder -- a ) _CAPB-SELF + ;
+: _CAPB.STATE      ( builder -- a ) _CAPB-STATE + ;
+: _CAPB.STATUS     ( builder -- a ) _CAPB-STATUS + ;
+: _CAPB.CANDIDATE  ( builder -- descriptor ) _CAPB-CANDIDATE + ;
+
+: CAPB-STATUS@  ( builder -- status )
+    DUP 0= IF DROP CBUILD-S-INVALID EXIT THEN _CAPB.STATUS @ ;
+
+: CAPB-VALID?  ( builder -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CAPB-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _CAPB.MAGIC @ _CAPB-MAGIC-VALUE <> IF DROP 0 EXIT THEN
+    DUP _CAPB.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _CAPB.STATE @ DUP _CAPB-STATE-IDLE <
+        SWAP _CAPB-STATE-ACTIVE > OR IF DROP 0 EXIT THEN
+    DUP _CAPB.STATUS @ CBUILD-STATUS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _CAPB.STATE @ _CAPB-STATE-IDLE = IF
+        DUP _CAPB.STATUS @ 0=
+        SWAP _CAPB.CANDIDATE CAP.KIND @ 0= AND EXIT
+    THEN
+    DROP -1 ;
+
+: CAPB-INIT  ( builder -- status )
+    DUP 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP CAPB-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP CBUILD-S-INVALID EXIT
+    THEN
+    DUP CAPB-SIZE 0 FILL
+    _CAPB-MAGIC-VALUE OVER _CAPB.MAGIC !
+    DUP OVER _CAPB.SELF !
+    DUP _CAPB.CANDIDATE CAP-DESC-INIT
+    DROP CBUILD-S-OK ;
+
+: _CAPB-LATCH  ( status builder -- status )
+    >R
+    R@ _CAPB.STATUS @ DUP IF
+        NIP
+    ELSE
+        DROP DUP R@ _CAPB.STATUS !
+    THEN
+    R> DROP ;
+
+: _CAPB-READY  ( builder -- status )
+    DUP CAPB-VALID? 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP _CAPB.STATE @ _CAPB-STATE-ACTIVE <> IF
+        DROP CBUILD-S-INVALID EXIT
+    THEN
+    _CAPB.STATUS @ ;
+
+: CAPB-BEGIN  ( builder -- status )
+    DUP CAPB-VALID? 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP _CAPB.STATE @ _CAPB-STATE-IDLE <> IF
+        DROP CBUILD-S-BUSY EXIT
+    THEN
+    DUP _CAPB.CANDIDATE CAP-DESC-INIT
+    0 OVER _CAPB.STATUS ! _CAPB-STATE-ACTIVE SWAP _CAPB.STATE !
+    CBUILD-S-OK ;
+
+: _CAPB-KIND?  ( kind -- flag )
+    DUP CAP-K-COMMAND >= SWAP CAP-K-INTENT <= AND ;
+
+: CAPB-META
+  ( kind id-a id-u title-a title-u desc-a desc-u builder -- status )
+    >R
+    R@ _CAPB-READY ?DUP IF
+        >R _CBUILD-DROP7 R> R> DROP EXIT
+    THEN
+    6 PICK _CAPB-KIND? 0= IF
+        CBUILD-S-CAPABILITY R@ _CAPB-LATCH >R
+        _CBUILD-DROP7 R> R> DROP EXIT
+    THEN
+    5 PICK 5 PICK _CBUILD-STRING? 0= IF
+        CBUILD-S-CAPABILITY R@ _CAPB-LATCH >R
+        _CBUILD-DROP7 R> R> DROP EXIT
+    THEN
+    4 PICK DUP 0> SWAP CAP-ID-MAX <= AND 0= IF
+        CBUILD-S-CAPABILITY R@ _CAPB-LATCH >R
+        _CBUILD-DROP7 R> R> DROP EXIT
+    THEN
+    3 PICK 3 PICK _CBUILD-STRING? 0= IF
+        CBUILD-S-CAPABILITY R@ _CAPB-LATCH >R
+        _CBUILD-DROP7 R> R> DROP EXIT
+    THEN
+    OVER OVER _CBUILD-STRING? 0= IF
+        CBUILD-S-CAPABILITY R@ _CAPB-LATCH >R
+        _CBUILD-DROP7 R> R> DROP EXIT
+    THEN
+    R@ _CAPB.CANDIDATE >R
+    6 PICK R@ CAP.KIND !
+    5 PICK R@ CAP.ID-A ! 4 PICK R@ CAP.ID-U !
+    3 PICK R@ CAP.TITLE-A ! 2 PICK R@ CAP.TITLE-U !
+    OVER R@ CAP.DESC-A ! DUP R@ CAP.DESC-U !
+    _CBUILD-DROP7
+    R> DROP R> DROP CBUILD-S-OK ;
+
+: _CAPB-CONTRACT-FAIL  ( x1 x2 x3 x4 x5 x6 status builder -- status )
+    >R R@ _CAPB-LATCH >R
+    2DROP 2DROP 2DROP
+    R> R> DROP ;
+
+: CAPB-CONTRACT
+  ( input-schema output-schema effects flags max-ms concurrency builder -- status )
+    >R
+    R@ _CAPB-READY ?DUP IF
+        R> _CAPB-CONTRACT-FAIL EXIT
+    THEN
+    5 PICK ?DUP IF CS-SCHEMA-VALIDATE IF
+        CBUILD-S-SCHEMA R> _CAPB-CONTRACT-FAIL EXIT
+    THEN THEN
+    4 PICK ?DUP IF CS-SCHEMA-VALIDATE IF
+        CBUILD-S-SCHEMA R> _CAPB-CONTRACT-FAIL EXIT
+    THEN THEN
+    3 PICK DUP 0< IF
+        DROP CBUILD-S-CAPABILITY R> _CAPB-CONTRACT-FAIL EXIT
+    THEN
+    CAP-EFFECTS-MASK INVERT AND IF
+        CBUILD-S-CAPABILITY R> _CAPB-CONTRACT-FAIL EXIT
+    THEN
+    2 PICK DUP 0< IF
+        DROP CBUILD-S-CAPABILITY R> _CAPB-CONTRACT-FAIL EXIT
+    THEN
+    CAP-FLAGS-MASK INVERT AND IF
+        CBUILD-S-CAPABILITY R> _CAPB-CONTRACT-FAIL EXIT
+    THEN
+    OVER 0< IF
+        CBUILD-S-CAPABILITY R> _CAPB-CONTRACT-FAIL EXIT
+    THEN
+    DUP DUP CCLASS-UNSPECIFIED = SWAP CCLASS-VALID? OR 0= IF
+        CBUILD-S-CAPABILITY R> _CAPB-CONTRACT-FAIL EXIT
+    THEN
+    R@ _CAPB.CANDIDATE >R
+    5 PICK R@ CAP.IN-SCHEMA ! 4 PICK R@ CAP.OUT-SCHEMA !
+    3 PICK R@ CAP.EFFECTS ! 2 PICK R@ CAP.FLAGS !
+    OVER R@ CAP.MAX-MS ! DUP R@ CAP.CONCURRENCY !
+    2DROP 2DROP 2DROP
+    R> DROP R> DROP CBUILD-S-OK ;
+
+: CAPB-CALLBACKS  ( handler-xt preview-xt undo-xt builder -- status )
+    >R
+    R@ _CAPB-READY ?DUP IF
+        >R 2DROP DROP R> R> DROP EXIT
+    THEN
+    R@ _CAPB.CANDIDATE >R
+    2 PICK R@ CAP.HANDLER-XT !
+    OVER R@ CAP.PREVIEW-XT !
+    DUP R@ CAP.UNDO-XT !
+    2DROP DROP
+    R> DROP R> DROP CBUILD-S-OK ;
+
+: CAPB-SEAL  ( destination builder -- status )
+    >R
+    R@ _CAPB-READY ?DUP IF NIP R> DROP EXIT THEN
+    DUP 0= IF
+        DROP CBUILD-S-INVALID R@ _CAPB-LATCH R> DROP EXIT
+    THEN
+    DUP CAP-DESC MSPAN-NONWRAPPING? 0= IF
+        DROP CBUILD-S-INVALID R@ _CAPB-LATCH R> DROP EXIT
+    THEN
+    DUP CAP-DESC R@ CAPB-SIZE MSPAN-OVERLAP? IF
+        DROP CBUILD-S-INVALID R@ _CAPB-LATCH R> DROP EXIT
+    THEN
+    R@ _CAPB.CANDIDATE CAP-DESC-VALID? 0= IF
+        DROP CBUILD-S-CAPABILITY R@ _CAPB-LATCH R> DROP EXIT
+    THEN
+    R@ _CAPB.CANDIDATE OVER CAP-DESC MOVE
+    R@ _CAPB.CANDIDATE CAP-DESC-INIT
+    0 R@ _CAPB.STATUS ! _CAPB-STATE-IDLE R@ _CAPB.STATE !
+    DROP R> DROP CBUILD-S-OK ;
+
+: CAPB-ABORT  ( builder -- status )
+    DUP CAPB-VALID? 0= IF DROP CBUILD-S-INVALID EXIT THEN
+    DUP _CAPB.CANDIDATE CAP-DESC-INIT
+    0 OVER _CAPB.STATUS ! _CAPB-STATE-IDLE SWAP _CAPB.STATE !
+    CBUILD-S-OK ;

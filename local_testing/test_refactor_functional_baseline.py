@@ -29,8 +29,8 @@ def test_live_functional_ledger_is_complete_and_source_anchored() -> None:
         "fully_covered_groups": 10,
         "partial_groups": 17,
         "prerequisite_only_groups": 2,
-        "prerequisites": 25,
-        "evidence_references": 108,
+        "prerequisites": 24,
+        "evidence_references": 109,
     }
 
 

@@ -67,6 +67,10 @@
         },
         {
           "path": "akashic/library/projection-owner.f",
+          "required_literals": ["RCON-DESCRIBE-CAP!", "RCON-SNAPSHOT-CAP!", "RCON-REPLACE-CAP!"]
+        },
+        {
+          "path": "akashic/interop/resource-contract.f",
           "required_literals": ["resource.describe", "resource.snapshot", "resource.replace"]
         }
       ],
@@ -341,10 +345,10 @@
         {
           "id": "daybook.resource-owner-and-contracts",
           "coverage": "partial",
-          "prerequisite_ids": ["daybook.capability-failure-edges", "daybook.binding-advance-failure"],
+          "prerequisite_ids": ["daybook.binding-advance-failure"],
           "facets": ["interfaces", "persistence", "failures"],
           "preserve": ["daybook.task.capture, daybook.source and daybook.agenda.markdown capability identities", "Semantic Daybook RID and exact describe/snapshot/replace revisions", "Two lenses, stale refusal, explicit reload/reattach, wrong-resource/read-only refusal and cold owner reactivation"],
-          "evidence": ["pytest:local_testing/test_daybook_shared_lens.py::test_daybook_shared_lens_contracts", "pytest:local_testing/test_shared_document.py::test_shared_document_contracts", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
+          "evidence": ["profile:daybook-contracts", "pytest:local_testing/test_daybook_shared_lens.py::test_daybook_shared_lens_contracts", "pytest:local_testing/test_shared_document.py::test_shared_document_contracts", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
         },
         {
           "id": "daybook.pad-and-agent-journeys",
@@ -355,13 +359,6 @@
         }
       ],
       "prerequisites": [
-        {
-          "id": "daybook.capability-failure-edges",
-          "before_landing": "L5",
-          "trigger": "Capability/result-builder conversion.",
-          "characterization": "Dispatch daybook.agenda.markdown directly and inject persistence failure into daybook.task.capture to prove result rollback and unchanged model/dirty state.",
-          "reason": "Descriptors are pinned and success is covered, but these handler edges are not."
-        },
         {
           "id": "daybook.binding-advance-failure",
           "before_landing": "L6",

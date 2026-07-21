@@ -360,6 +360,14 @@ a qualified exact archived locator stays readable and immutable; tombstoned
 and pruned states retain distinct terminal outcomes. Failed `LBIND` attachment
 rolls back the new lease.
 
+The owner now delegates the mechanical closed-map argument decoding, result
+construction, digest relation checks, and canonical resource capability
+descriptors to `interop/resource-contract.f`. Library still owns RID admission,
+qualification, retained-history policy, media/kind meaning, UTF-8 policy,
+storage errors, and commit order. In particular, replace constructs and
+validates the complete response before `LIBRARY-VFS-STORE-REPLACE-MANAGED`;
+after a durable commit there is no remaining fallible result allocation.
+
 Tokens are activation-local, non-authoritative outside the private owner
 ledger, and never persistent. Public release is idempotent: it waits for
 request-dispatch quiescence, decrements accounting exactly once, preserves the

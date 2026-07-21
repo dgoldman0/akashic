@@ -47,6 +47,22 @@ be satisfied before a later landing touches the uncovered edge. See
 `docs/refactor/l1-functional-preservation-baseline.md` for scope and update
 rules.
 
+The L5 neutral-construction profile qualifies the caller-owned transactional
+schema, value, and capability builders independently of any applet or resource
+owner:
+
+```bash
+python3 local_testing/akashic_tui.py smoke \
+  --profile interop-construction-contracts \
+  --max-steps 350000000 --timeout 60
+```
+
+Its 120 guest assertions cover malformed contracts, sticky failure, same- and
+independent-workspace behavior, destination nonmutation, zero-copy value
+publication, deterministic root/key/nested allocation denial, recursive abort,
+and exact available-memory restoration. The API and borrowed/owned lifetime
+rules are documented in `docs/interop/construction.md`.
+
 ## Build And Smoke Test
 
 ```bash

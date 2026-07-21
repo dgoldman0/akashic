@@ -50,13 +50,13 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | Library | 4 | 2 | 2 | 0 | 3 | 19 |
 | Streams | 4 | 1 | 3 | 0 | 4 | 23 |
 | Agent | 4 | 2 | 2 | 0 | 2 | 22 |
-| Daybook | 3 | 1 | 2 | 0 | 3 | 8 |
+| Daybook | 3 | 1 | 2 | 0 | 2 | 9 |
 | Pad | 3 | 2 | 1 | 0 | 2 | 10 |
 | Grid | 2 | 0 | 2 | 0 | 2 | 5 |
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
 | Desk | 3 | 1 | 2 | 0 | 3 | 11 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **29** | **10** | **17** | **2** | **25** | **108** |
+| **Total** | **29** | **10** | **17** | **2** | **24** | **109** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -67,8 +67,10 @@ and a broad test-writing project for code an active landing may never touch.
 ## Important evidence decisions
 
 - Library's Gate 4 owner, storage, query, projection, maintenance and
-  fresh-process evidence is retained. Applet controller gaps are not confused
-  with headless owner gaps.
+  fresh-process evidence is retained. Its source ratchet now pins both the
+  projection owner's calls to the canonical RCON descriptor constructors and
+  the capability identities owned by that neutral contract module; moving the
+  repeated construction mechanics does not weaken the Library surface check.
 - Streams live-network profiles are supplemental. Deterministic offline, XIO,
   owner, codec, persistence and Desk journeys are the preservation gate.
 - Agent retains offline, scripted, OpenAI and Codex providers, all access
@@ -77,6 +79,11 @@ and a broad test-writing project for code an active landing may never touch.
 - Daybook and Pad retain the current semantic shared-document journey even
   though L6 will replace its implementation with the canonical resource
   session.
+- Daybook's L5 capability edge is now characterized in `daybook-contracts`:
+  direct agenda dispatch returns the exact serialized model, while forced task
+  capture persistence failure clears the result and restores the model, dirty
+  state, discard state and allocator balance. Its remaining binding-advance
+  failure prerequisite belongs to L6.
 - Grid and FExplorer already have strong evaluator/storage and verified-transfer
   evidence. Their prerequisites are limited to controller or handler edges that
   those tests do not execute.

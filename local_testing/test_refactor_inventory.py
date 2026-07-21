@@ -92,9 +92,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 384,
-        "resolved_require_occurrence_count": 1295,
-        "unique_resolved_edge_count": 1295,
+        "module_count": 385,
+        "resolved_require_occurrence_count": 1301,
+        "unique_resolved_edge_count": 1301,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 7,

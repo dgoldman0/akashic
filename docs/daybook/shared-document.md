@@ -84,6 +84,13 @@ revision and `domain_revision` are both zero. This is an explicit identity-
 only description: the owner has durable bytes but no retained domain-history
 ledger and refuses to mint weaker “current” evidence as an exact locator.
 
+The description result and its canonical descriptor use the neutral
+resource-contract constructors. Daybook's snapshot and replace capabilities
+deliberately remain the compact activation-revision protocol described here:
+null to string and string to bool. They use the neutral capability builder for
+transactional descriptor assembly, but L5 does not reinterpret them as
+historical QLOC operations or introduce a resource session.
+
 `resource.replace` accepts a UTF-8 string of at most `SDOC-MAX-BYTES` (32768)
 and requires a positive `CBR.EXPECT-REV`. Publication goes through
 `VREPL-REPLACE`; no public direct-write entry point exists. The handler

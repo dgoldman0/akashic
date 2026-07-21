@@ -71,6 +71,7 @@ local_testing/*
 !local_testing/vfs-access-contracts.f
 !local_testing/checked-record-contracts.f
 !local_testing/generation-pair-contracts.f
+!local_testing/interop-construction-contracts.f
 !local_testing/hres-contracts.f
 !local_testing/streams-observation.f
 !local_testing/streams-observation-store.f

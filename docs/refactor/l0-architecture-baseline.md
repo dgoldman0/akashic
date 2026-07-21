@@ -299,3 +299,28 @@ changes in L4. The placement and unresolved-import digests consequently remain
 unchanged. The manual-refresh fixture narrows an overbroad unused online
 provider closure under its existing 4,096-sector test-image bound; production
 storage capacities are untouched.
+
+## L5 reviewed ratchet update
+
+Landing L5 adds the neutral `interop/construction.f` module. It depends only on
+the existing capability/value/schema stack and memory-span checks. Qualified
+locators, common resource contracts, the concrete Daybook owner, and the
+Daybook applet are direct construction consumers. Those two module dependencies
+and four consumer edges bring the reviewed graph to 385 modules, 1,301 resolved
+`REQUIRE` occurrences, and 1,301 unique resolved edges.
+
+The construction module declares no lexical mutable state. Qualified-locator
+and resource-contract delete their private field/value builder globals; their
+replacement transaction state belongs to explicit builder or owner-workspace
+records. The independent-library lexical total consequently falls from 7,072
+to 7,057. Library and Daybook own the guarded workspaces required by their
+current singleton handler paths, so the conservative applet total rises from
+2,752 to 2,758; the Desk-ecosystem total remains 1,100. These are bounded
+control-message workspaces, not applet corpus storage or a raised data limit.
+
+No placement debt, target-layer violation, unresolved import, identity issue,
+addressability issue, dependency cycle, product capacity, scale policy, or
+ext4 dependency changes in L5. The placement and unresolved-import digests
+remain unchanged. Library and Daybook stay applet-owned; the new independent
+code is only the contract-construction mechanism shared by their materially
+different protocols.

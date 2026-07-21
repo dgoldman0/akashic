@@ -561,9 +561,9 @@
     "common_timeout_seconds": 120,
     "overrides": {
       "desktop-agent-hardening": {
-        "max_steps": 16000000000,
+        "max_steps": 17000000000,
         "timeout_seconds": 240,
-        "measured_steps": 15210000000
+        "measured_steps": 16370000000
       }
     },
     "profiles": [

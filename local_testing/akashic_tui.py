@@ -11215,9 +11215,19 @@ VARIABLE _dt-close-calls
 VARIABLE _dt-use-calls
 VARIABLE _dt-fd-head
 VARIABLE _dt-fd-next
+VARIABLE _dt-agenda-request
+VARIABLE _dt-capture-request
+VARIABLE _dt-cap-count-before
+VARIABLE _dt-cap-dirty-before
+VARIABLE _dt-cap-discard-before
+VARIABLE _dt-cap-heap-before
+VARIABLE _dt-agenda-u
 VARIABLE _dt-close-prompt
 VARIABLE _dt-close-rgn
 CREATE _dt-big _DB-IO-CAP 1+ ALLOT
+CREATE _dt-agenda-before 256 ALLOT
+CREATE _dt-entry-before _DB-ENTRY-SZ ALLOT
+CREATE _dt-next-before _DB-ENTRY-SZ ALLOT
 CREATE _dt-ops VFS-OPS-SIZE ALLOT
 CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 
@@ -11279,6 +11289,21 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     0 _DB-ENTRY _DB-E-KIND + @ _DB-K-EVENT = AND
     1 _DB-ENTRY _DB-E-KIND + @ _DB-K-TASK = AND
     2 _DB-ENTRY _DB-E-KIND + @ _DB-K-NOTE = AND ;
+: _dt-cap-model-snapshot  ( -- )
+    _DB-COUNT @ _dt-cap-count-before !
+    _DB-DIRTY @ _dt-cap-dirty-before !
+    _DB-DISCARD-ARMED @ _dt-cap-discard-before !
+    0 _DB-ENTRY _dt-entry-before _DB-ENTRY-SZ CMOVE
+    _dt-cap-count-before @ _DB-ENTRY
+        _dt-next-before _DB-ENTRY-SZ CMOVE ;
+: _dt-cap-model-unchanged?  ( -- flag )
+    _DB-COUNT @ _dt-cap-count-before @ =
+    _DB-DIRTY @ _dt-cap-dirty-before @ = AND
+    _DB-DISCARD-ARMED @ _dt-cap-discard-before @ = AND
+    0 _DB-ENTRY _DB-ENTRY-SZ
+        _dt-entry-before _DB-ENTRY-SZ STR-STR= AND
+    _dt-cap-count-before @ _DB-ENTRY _DB-ENTRY-SZ
+        _dt-next-before _DB-ENTRY-SZ STR-STR= AND ;
 
 : _dt-test-strict-import  ( -- )
     _dt-seed _dt-canonical _DB-PARSE-FILE _DB-L-S-OK = _dt-assert
@@ -11393,6 +11418,57 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     _DB-LOAD _DB-L-S-OK = _dt-assert
     _DB-SOURCE-BLOCKED @ 0= _dt-assert ;
 
+: _dt-test-capability-failure-edges  ( -- )
+    CBR-NEW DUP 0= _dt-assert DROP _dt-agenda-request !
+    CBR-NEW DUP 0= _dt-assert DROP _dt-capture-request !
+    S" must roll back" _dt-capture-request @ CBR.ARGS CV-STRING!
+        0= _dt-assert
+
+    \ The agenda capability returns the exact serialized model directly.
+    _dt-seed 0 _DB-SOURCE-BLOCKED ! -1 _DB-DISCARD-ARMED !
+    _dt-cap-model-snapshot
+    _DB-SERIALIZE
+    _DB-IO-U @ DUP 256 <= _dt-assert _dt-agenda-u !
+    _DB-IO-BUF _dt-agenda-before _dt-agenda-u @ CMOVE
+    _dt-agenda-request @ _dt-inst @
+        DAYBOOK-CAP-AGENDA CAP.HANDLER-XT @ EXECUTE
+        CBUS-S-OK = _dt-assert
+    _dt-agenda-request @ CBR.RESULT CV-TYPE@ CV-T-STRING =
+        _dt-assert
+    _dt-agenda-request @ CBR.RESULT
+        DAYBOOK-CAP-AGENDA CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP 0= _dt-assert
+    _dt-agenda-request @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
+        _dt-agenda-before _dt-agenda-u @ STR-STR= _dt-assert
+    _dt-cap-model-unchanged? _dt-assert
+    _DB-SOURCE-BLOCKED @ 0= _dt-assert
+
+    \ A blocked source forces capture persistence to fail after the handler
+    \ has appended an entry and populated its result.  Both must roll back.
+    0 _DB-DIRTY ! -1 _DB-DISCARD-ARMED ! -1 _DB-SOURCE-BLOCKED !
+    _dt-cap-model-snapshot
+    HEAP-FREE-BYTES _dt-cap-heap-before !
+    _dt-capture-request @ _dt-inst @
+        DAYBOOK-CAP-CAPTURE CAP.HANDLER-XT @ EXECUTE
+        CBUS-S-FAILED = _dt-assert
+    _dt-capture-request @ CBR.ERROR-CODE @ _DB-L-S-RECOVERY =
+        _dt-assert
+    _dt-capture-request @ DUP CBR.ERROR-A @ SWAP CBR.ERROR-U @
+        S" Daybook persistence failed" STR-STR= _dt-assert
+    _dt-capture-request @ CBR.RESULT DUP CV-TYPE@ CV-T-NULL =
+        _dt-assert
+    DUP CV-DATA@ 0= _dt-assert
+    CV-LEN@ 0= _dt-assert
+    _dt-cap-model-unchanged? _dt-assert
+    _DB-SOURCE-BLOCKED @ _dt-assert
+    _DB-CAPTURE-HOP @ 0= _dt-assert
+    HEAP-FREE-BYTES _dt-cap-heap-before @ = _dt-assert
+
+    _dt-agenda-request @ CBR-FREE 0 _dt-agenda-request !
+    _dt-capture-request @ CBR-FREE 0 _dt-capture-request !
+    0 _DB-SOURCE-BLOCKED ! 0 _DB-DISCARD-ARMED !
+    _dt-stack ;
+
 : _dt-test-close  ( -- )
     0 _DB-DIRTY !
     APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
@@ -11452,6 +11528,7 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     _dt-test-strict-import
     _dt-test-load-and-replace
     _dt-test-load-cleanup-faults
+    _dt-test-capability-failure-edges
     _dt-test-close
     _dt-inst @ CINST-FREE
     _dt-old-vfs @ VFS-USE _dt-vfs @ VFS-DESTROY
@@ -27618,6 +27695,40 @@ REQUIRE local_testing/gate3a.f
         (
             "local_testing/gate3a.f",
             (AKASHIC_ROOT / "local_testing" / "gate3a-resource-contracts.f").read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["interop-construction-contracts"] = Profile(
+    roots=("interop/construction.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - transactional interoperability builders
+ENTER-USERLAND
+REQUIRE interop/construction.f
+." [akashic] loading interoperability construction contracts" CR
+REQUIRE local_testing/construct-contracts.f
+""",
+    ready_markers=("INTEROP CONSTRUCTION CONTRACTS PASS",),
+    stable_markers=("INTEROP CONSTRUCTION CONTRACTS PASS",),
+    failure_markers=(
+        "INTEROP CONSTRUCTION CONTRACTS FAIL",
+        "INTEROP CONSTRUCTION ASSERT",
+        "INTEROP CONSTRUCTION STACK",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/construct-contracts.f",
+            (
+                AKASHIC_ROOT
+                / "local_testing"
+                / "interop-construction-contracts.f"
+            ).read_bytes(),
         ),
     ),
 )

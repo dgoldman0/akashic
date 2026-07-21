@@ -186,9 +186,9 @@ def test_deterministic_profile_matrix_is_exact() -> None:
     assert matrix["common_max_steps"] == 8_000_000_000
     assert matrix["common_timeout_seconds"] == 120
     assert matrix["overrides"]["desktop-agent-hardening"] == {
-        "max_steps": 16_000_000_000,
+        "max_steps": 17_000_000_000,
         "timeout_seconds": 240,
-        "measured_steps": 15_210_000_000,
+        "measured_steps": 16_370_000_000,
     }
     assert matrix["profiles"] == [
         "practice-contracts",
