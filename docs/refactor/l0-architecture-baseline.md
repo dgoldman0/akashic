@@ -253,3 +253,21 @@ lexical globals.
 No placement debt, target-layer violation, unresolved import, identity issue,
 addressability issue, dependency cycle, or capacity policy changes in L2. The
 placement and unresolved-import digests consequently remain unchanged.
+
+## L3 reviewed ratchet update
+
+Landing L3 adds the neutral `utils/fs/vfs-access.f` module. Its dependency on
+the generic VFS plus the Grid, Daybook, and FExplorer consumer edges add four
+resolved occurrences and four unique edges. The reviewed graph is therefore
+382 modules, 1,290 resolved `REQUIRE` occurrences, and 1,289 unique resolved
+edges.
+
+The applet global count falls from 2,763 to 2,746 because the three consumers
+delete their private selector, FD, and cleanup scratch while embedding the
+caller-owned scope in component state. One VFS callback-result cell raises the
+independent-library total from 7,065 to 7,066; the access module itself has no
+lexical mutable state. The Desk-ecosystem total remains 1,100.
+
+No placement debt, target-layer violation, unresolved import, identity issue,
+addressability issue, dependency cycle, or capacity policy changes in L3. The
+placement and unresolved-import digests consequently remain unchanged.

@@ -227,11 +227,12 @@ def _megapad_root() -> Path:
 
 MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
-# The complete Desktop closure now includes the canonical loadable MegaPad
-# networking module.  A clean linked boot reaches its ready markers at about
-# 6.9 billion guest steps on the reference emulator, so the supported
-# no-override smoke command must leave a bounded margin above that cost.
-DEFAULT_SMOKE_MAX_STEPS = 8_000_000_000
+# This is a qualification-instruction ceiling, not a product capacity limit.
+# The complete Desktop closure, including scoped VFS access, reaches its ready
+# markers at about 8.41 billion guest steps on the reference emulator.  Keep a
+# narrow deterministic margin so the supported no-override smoke command can
+# finish without making the ceiling stand in for a scalability claim.
+DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
 DEFAULT_SMOKE_TIMEOUT = 120.0
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
@@ -11058,7 +11059,7 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     _dt-binding _DB-VFS @ V.BINDING ! ;
 : _dt-short-reads-off  ( -- )
     _dt-old-binding @ _DB-VFS @ V.BINDING ! ;
-: _dt-after-close  ( fd -- )
+: _dt-after-close  ( fd -- ior )
     1 _dt-close-calls +! VFS-CLOSE -801 THROW ;
 : _dt-after-restore  ( vfs -- )
     1 _dt-use-calls +!
@@ -11068,10 +11069,11 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 : _dt-fd-snapshot  ( -- )
     _DB-VFS @ V.FDFREE @ DUP _dt-fd-head !
     ?DUP IF FD.FREE @ ELSE 0 THEN _dt-fd-next ! ;
-: _dt-load-failure-clean?  ( -- )
+: _dt-load-failure-clean?  ( cleanup-x -- )
     VFS-CUR 0= _dt-assert
-    _DB-LOAD-FD @ 0= _dt-assert
-    _DB-LOAD-HAVE-OLD-VFS @ 0= _dt-assert
+    _DB-LOAD-SCOPE VFA-SCOPE-FD@ 0= _dt-assert
+    _DB-LOAD-SCOPE VFA-SCOPE-PRIMARY@ 0= _dt-assert
+    _DB-LOAD-SCOPE VFA-SCOPE-CLEANUP@ = _dt-assert
     _DB-VFS @ V.FDFREE @ DUP _dt-fd-head @ = _dt-assert
     ?DUP IF FD.FREE @ ELSE 0 THEN _dt-fd-next @ = _dt-assert
     _DB-COUNT @ 1 = _dt-assert
@@ -11176,20 +11178,22 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 : _dt-test-load-cleanup-faults  ( -- )
     _dt-seed 0 _DB-SOURCE-BLOCKED ! _dt-fd-snapshot
     0 _dt-close-calls ! 0 VFS-USE
-    ['] _dt-after-close _DB-LOAD-CLOSE-XT !
+    ['] _dt-after-close _DB-LOAD-SCOPE VFA-SCOPE-CLOSE-XT!
+    0= _dt-assert
     _DB-LOAD _DB-L-S-IO = _dt-assert
-    _DB-RESET-LOAD-DEPENDENCIES
     _dt-close-calls @ 1 = _dt-assert
-    _dt-load-failure-clean? _dt-stack
+    -801 _dt-load-failure-clean? _dt-stack
+    _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT 0= _dt-assert
     _DB-VFS @ VFS-USE
 
     _dt-seed 0 _DB-SOURCE-BLOCKED ! _dt-fd-snapshot
     0 _dt-use-calls ! 0 VFS-USE
-    ['] _dt-after-restore _DB-LOAD-USE-XT !
+    ['] _dt-after-restore _DB-LOAD-SCOPE VFA-SCOPE-USE-XT!
+    0= _dt-assert
     _DB-LOAD _DB-L-S-IO = _dt-assert
-    _DB-RESET-LOAD-DEPENDENCIES
     _dt-use-calls @ 2 = _dt-assert
-    _dt-load-failure-clean? _dt-stack
+    -802 _dt-load-failure-clean? _dt-stack
+    _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT 0= _dt-assert
     _DB-VFS @ VFS-USE
     _DB-LOAD _DB-L-S-OK = _dt-assert
     _DB-SOURCE-BLOCKED @ 0= _dt-assert ;
@@ -11246,6 +11250,7 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     DAYBOOK-COMP-DESC CINST-NEW DUP 0= _dt-assert DROP _dt-inst !
     _dt-inst @ _DB-ACTIVATE
     VFS-CUR DUP 0<> _dt-assert _DB-VFS !
+    _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT 0= _dt-assert
     _DB-VFS @ _DB-REPLACE VREPL-INIT VREPL-S-OK = _dt-assert
     S" /daybook.md" _DB-REPLACE VREPL-DERIVE-PATHS!
     VREPL-S-OK = _dt-assert
@@ -11570,7 +11575,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     _gcx-binding-save
     ['] _gcx-fail-sync _gcx-ops VFS-OP-SYNCFS CELLS + !
     _gcx-binding _GRID-VFS @ V.BINDING ! ;
-: _gcx-after-close  ( fd -- )
+: _gcx-after-close  ( fd -- ior )
     1 _gcx-close-calls +! VFS-CLOSE -811 THROW ;
 : _gcx-after-restore  ( vfs -- )
     1 _gcx-use-calls +!
@@ -11580,10 +11585,11 @@ CREATE _gcx-desc APP-DESC ALLOT
 : _gcx-fd-snapshot  ( -- )
     _GRID-VFS @ V.FDFREE @ DUP _gcx-fd-head !
     ?DUP IF FD.FREE @ ELSE 0 THEN _gcx-fd-next ! ;
-: _gcx-load-failure-clean?  ( -- )
+: _gcx-load-failure-clean?  ( cleanup-x -- )
     VFS-CUR 0= _gcx-assert
-    _GRID-LOAD-FD @ 0= _gcx-assert
-    _GRID-LOAD-HAVE-OLD-VFS @ 0= _gcx-assert
+    _GRID-LOAD-SCOPE VFA-SCOPE-FD@ 0= _gcx-assert
+    _GRID-LOAD-SCOPE VFA-SCOPE-PRIMARY@ 0= _gcx-assert
+    _GRID-LOAD-SCOPE VFA-SCOPE-CLEANUP@ = _gcx-assert
     _GRID-VFS @ V.FDFREE @ DUP _gcx-fd-head @ = _gcx-assert
     ?DUP IF FD.FREE @ ELSE 0 THEN _gcx-fd-next @ = _gcx-assert
     S" sentinel" 0 0 _gcx-cell= _gcx-assert
@@ -11701,20 +11707,22 @@ CREATE _gcx-desc APP-DESC ALLOT
 : _gcx-test-load-cleanup-faults  ( -- )
     _gcx-seed _gcx-fd-snapshot
     0 _gcx-close-calls ! 0 VFS-USE
-    ['] _gcx-after-close _GRID-LOAD-CLOSE-XT !
+    ['] _gcx-after-close _GRID-LOAD-SCOPE VFA-SCOPE-CLOSE-XT!
+    0= _gcx-assert
     _GRID-LOAD _GRID-L-S-IO = _gcx-assert
-    _GRID-RESET-LOAD-DEPENDENCIES
     _gcx-close-calls @ 1 = _gcx-assert
-    _gcx-load-failure-clean? _gcx-stack
+    -811 _gcx-load-failure-clean? _gcx-stack
+    _GRID-VFS @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT 0= _gcx-assert
     _GRID-VFS @ VFS-USE
 
     _gcx-seed _gcx-fd-snapshot
     0 _gcx-use-calls ! 0 VFS-USE
-    ['] _gcx-after-restore _GRID-LOAD-USE-XT !
+    ['] _gcx-after-restore _GRID-LOAD-SCOPE VFA-SCOPE-USE-XT!
+    0= _gcx-assert
     _GRID-LOAD _GRID-L-S-IO = _gcx-assert
-    _GRID-RESET-LOAD-DEPENDENCIES
     _gcx-use-calls @ 2 = _gcx-assert
-    _gcx-load-failure-clean? _gcx-stack
+    -812 _gcx-load-failure-clean? _gcx-stack
+    _GRID-VFS @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT 0= _gcx-assert
     _GRID-VFS @ VFS-USE
     _GRID-LOAD _GRID-L-S-OK = _gcx-assert
     _GRID-SOURCE-BLOCKED @ 0= _gcx-assert ;
@@ -11735,6 +11743,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     _GRID-IO-BUF @ _GRID-IO-CAP _GRID-IO-WRITER CBW-INIT
     CBW-S-OK = _gcx-assert
     VFS-CUR DUP 0<> _gcx-assert _GRID-VFS !
+    _GRID-VFS @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT 0= _gcx-assert
     _GRID-VFS @ _GRID-REPLACE VREPL-INIT VREPL-S-OK = _gcx-assert
     S" /grid.csv" _GRID-REPLACE VREPL-DERIVE-PATHS!
     VREPL-S-OK = _gcx-assert
@@ -18311,9 +18320,9 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     CBUS-S-FAILED = _aac-assert
     _aac-preview-old-read-xt @ _aac-ops VFS-OP-READ CELLS + !
     _aac-preview-read-throws @ 1 = _aac-assert
-    _FRP-FD @ 0= _aac-assert
-    _FRP-THROW @ -901 = _aac-assert
-    _FRP-CLEANUP-THROW @ 0= _aac-assert
+    _FEXP-PREVIEW-SCOPE VFA-SCOPE-FD@ 0= _aac-assert
+    _FEXP-PREVIEW-SCOPE VFA-SCOPE-PRIMARY@ -901 = _aac-assert
+    _FEXP-PREVIEW-SCOPE VFA-SCOPE-CLEANUP@ 0= _aac-assert
     _aac-vfs @ V.FDFREE @ DUP _aac-preview-fd-head @ = _aac-assert
     ?DUP IF FD.FREE @ ELSE 0 THEN _aac-preview-fd-next @ = _aac-assert ;
 
@@ -18431,6 +18440,7 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     FEXP-COMP-DESC CINST-NEW
     DUP 0= _aac-assert DROP _aac-inst !
     _aac-inst @ _FEXP-ACTIVATE _aac-vfs @ _FEXP-VFS !
+    _FEXP-VFS @ _FEXP-PREVIEW-SCOPE VFA-SCOPE-INIT 0= _aac-assert
     CBR-NEW DUP 0= _aac-assert DROP _aac-request !
     _aac-null-results
     _aac-text-integrity
@@ -21213,6 +21223,37 @@ REQUIRE local_testing/vfs-ram-capacity.f
         ),
     ),
 )
+
+
+PROFILES["vfs-access-contracts"] = Profile(
+    roots=("utils/fs/vfs-access.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral scoped VFS access contracts
+ENTER-USERLAND
+." [akashic] loading VFS access contracts" CR
+REQUIRE utils/fs/vfs-access.f
+REQUIRE local_testing/vfs-access-contracts.f
+_vfac-run
+""",
+    ready_markers=("VFS ACCESS CONTRACTS PASS",),
+    stable_markers=("VFS ACCESS CONTRACTS PASS",),
+    failure_markers=(
+        "VFS ACCESS CONTRACTS FAIL",
+        "VFAC ASSERT",
+        "VFAC STACK",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/vfs-access-contracts.f",
+            (AKASHIC_ROOT / "local_testing" / "vfs-access-contracts.f").read_bytes(),
+        ),
+    ),
+)
+
 
 PROFILES["observation-store-adapter-compile"] = Profile(
     roots=("tui/applets/streams/observation-store.f",),

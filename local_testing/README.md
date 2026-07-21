@@ -57,12 +57,14 @@ python3 local_testing/akashic_tui.py smoke --profile desktop
 Smoke and served sessions use 128 MiB of emulated external memory by default.
 This leaves realistic headroom for the userland dictionary and applet working
 sets as the Desk image grows; pass `--ext-mem-mib N` to test another budget.
-The default smoke gate permits 8 billion guest steps and 120 seconds so the
-complete linked Desktop can compile the canonical loadable networking module
-and still reach its ready markers. The exact no-override command passed at 6.9
-billion guest steps in 92.18 seconds on 2026-07-16. Focused profiles stop as
-soon as their own markers stabilize; `--max-steps` and `--timeout` remain
-available for explicit qualification budgets.
+The default smoke gate permits 9 billion guest steps and 120 seconds so the
+complete linked Desktop can compile its canonical loadable networking and
+scoped VFS-access modules and still reach its ready markers. This guest-step
+ceiling is emulator qualification headroom, not a product capacity or
+scalability parameter. The exact no-override command passed at 8.41 billion
+guest steps in 101.27 seconds on 2026-07-21. Focused profiles stop as soon as
+their own markers stabilize; `--max-steps` and `--timeout` remain available
+for explicit qualification budgets.
 
 ## Ext4 compatibility profile
 
@@ -107,6 +109,19 @@ organized around focused library/runtime contracts, standalone applet journeys,
 and linked Desk journeys. Run the narrow profile for the behavior being changed
 and the linked profile that owns its production lifecycle. Generated images,
 terminal text, cell JSON, and PNG captures go under `local_testing/out/`.
+
+`vfs-access-contracts` qualifies the neutral caller-owned access layer over two
+independent RAM VFS instances. It covers exact range geometry, complete versus
+prefix reads, streamed chunk offsets and early stop, callback and backend
+failures, nested/interleaved scopes, selector and CWD restoration, exact-once
+cleanup under after-effect faults, separate primary and cleanup results, busy
+re-entry, idempotent close, and descriptor-leak checks. It deliberately does
+not import an applet, a replacement protocol, a record envelope, or a durable
+publication policy. Run it with:
+
+```bash
+python3 local_testing/akashic_tui.py smoke --profile vfs-access-contracts
+```
 
 `gate2a-contracts` isolates the policy-neutral memory-span predicates, inline
 caller-owned span sets, checked buffer writer, and caller-owned scalar/locator

@@ -607,7 +607,7 @@ def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
 
 def test_supported_desktop_smoke_defaults_cover_linked_network_boot() -> None:
     args = _parser().parse_args(["smoke", "--profile", "desktop"])
-    assert args.max_steps == DEFAULT_SMOKE_MAX_STEPS == 8_000_000_000
+    assert args.max_steps == DEFAULT_SMOKE_MAX_STEPS == 9_000_000_000
     assert args.timeout == DEFAULT_SMOKE_TIMEOUT == 120.0
 
 

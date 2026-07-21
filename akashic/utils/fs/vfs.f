@@ -1611,6 +1611,12 @@ VARIABLE _VOQ-V
 VARIABLE _VOQ-IN
 VARIABLE _VOQ-FD
 VARIABLE _VOQ-COOKIE
+VARIABLE _VOQ-IOR
+
+: _VFS-OPEN?-CALL  ( -- )
+    _VOQ-IN @ _VOQ-V @
+    VFS-OP-OPEN _VOQ-V @ _VFS-XT EXECUTE
+    _VOQ-IOR ! _VOQ-COOKIE ! ;
 
 : VFS-OPEN?  ( c-addr u flags vfs -- fd ior )
     _VOQ-V ! _VOQ-FLAGS ! _VOQ-U ! _VOQ-A !
@@ -1634,13 +1640,15 @@ VARIABLE _VOQ-COOKIE
         0 VFS-E-UNSUPPORTED EXIT
     THEN
     _VOQ-V @ _VFS-FD-ALLOC DUP 0= IF 0 VFS-E-NOMEM EXIT THEN _VOQ-FD !
-    _VOQ-IN @ _VOQ-V @
-    VFS-OP-OPEN _VOQ-V @ _VFS-XT EXECUTE
-    DUP IF
-        NIP _VOQ-FD @ _VOQ-V @ _VFS-FD-FREE
+    0 _VOQ-COOKIE ! 0 _VOQ-IOR !
+    ['] _VFS-OPEN?-CALL CATCH ?DUP IF
+        _VOQ-FD @ _VOQ-V @ _VFS-FD-FREE
         0 SWAP EXIT
     THEN
-    DROP _VOQ-COOKIE !
+    _VOQ-IOR @ ?DUP IF
+        _VOQ-FD @ _VOQ-V @ _VFS-FD-FREE
+        0 SWAP EXIT
+    THEN
     _VOQ-IN @ _VOQ-FD @ FD.INODE !
     _VOQ-FLAGS @ VFS-FF-APPEND AND IF
         _VOQ-IN @ IN.SIZE-LO @
@@ -1684,14 +1692,17 @@ VARIABLE _VCQ-V
 VARIABLE _VCQ-IN
 VARIABLE _VCQ-IOR
 
+: _VFS-CLOSE?-CALL  ( -- )
+    _VCQ-FD @ FD.COOKIE @ _VCQ-IN @ _VCQ-V @
+    VFS-OP-RELEASE _VCQ-V @ _VFS-XT EXECUTE _VCQ-IOR ! ;
+
 : VFS-CLOSE?  ( fd -- ior )
     DUP 0= IF DROP VFS-E-BADF EXIT THEN _VCQ-FD !
     _VCQ-FD @ FD.VFS @ DUP 0= IF DROP VFS-E-BADF EXIT THEN _VCQ-V !
     _VCQ-FD @ FD.INODE @ DUP 0= IF DROP VFS-E-BADF EXIT THEN _VCQ-IN !
     0 _VCQ-IOR !
     VFS-OP-RELEASE _VCQ-V @ _VFS-HAS-OP? IF
-        _VCQ-FD @ FD.COOKIE @ _VCQ-IN @ _VCQ-V @
-        VFS-OP-RELEASE _VCQ-V @ _VFS-XT EXECUTE _VCQ-IOR !
+        ['] _VFS-CLOSE?-CALL CATCH ?DUP IF _VCQ-IOR ! THEN
     THEN
     -1 _VCQ-IN @ D.VNODE @ VN.OPEN-REFS +!
     -1 _VCQ-V @ V.OPEN-COUNT +!
@@ -2829,6 +2840,7 @@ VARIABLE _VFY-V
 \  Called automatically by VFS-OPEN / VFS-RESOLVE when inode-count
 \  exceeds inode-hwm.  Walks all slab pages; for each live inode
 \  that is:
+\     - NOT the active CWD
 \     - NOT pinned (VFS-IF-PINNED clear)
 \     - NOT dirty  (VFS-IF-DIRTY clear) — already sync'd
 \     - A leaf directory whose children were loaded from binding
@@ -2863,6 +2875,9 @@ VARIABLE _VEV-EVICTED \ evicted so far
 \   Attempt to evict a single inode.  Returns TRUE if evicted.
 : _VFS-EVICT-INODE  ( inode vfs -- flag )
     >R
+    DUP R@ V.CWD @ = IF
+        R> 2DROP FALSE EXIT       \ active CWD is a live VFS reference
+    THEN
     DUP IN.FLAGS @  VFS-IF-PINNED AND IF
         R> 2DROP FALSE EXIT       \ pinned — skip
     THEN

@@ -51,6 +51,7 @@ REQUIRE ../../draw.f
 REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../../utils/fs/vfs.f
+REQUIRE ../../../utils/fs/vfs-access.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/toml.f
 REQUIRE ../../color.f
@@ -151,6 +152,7 @@ _FEXP-CURRENT-STATE _FEXP-PROMPT-CAP CMP-FIELD: _FEXP-PROMPT-BUF
 
 \ Business state
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-VFS           \ VFS instance
+_FEXP-CURRENT-STATE VFA-SCOPE-SIZE CMP-FIELD: _FEXP-PREVIEW-SCOPE
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-SORT          \ sort mode (0=name, 1=size, 2=type)
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CUR-DIR       \ inode of currently displayed directory
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-SEL-IN        \ active inode from either pane
@@ -1267,6 +1269,8 @@ VARIABLE _FSUB-MODE
     \ Get VFS
     VFS-CUR DUP 0= ABORT" fexplorer: no VFS available"
     _FEXP-VFS !
+    _FEXP-VFS @ _FEXP-PREVIEW-SCOPE VFA-SCOPE-INIT
+    0<> ABORT" fexplorer: preview scope initialization failed"
 
     \ Find UIDL elements by ID
     S" sidebar"    UTUI-BY-ID _FEXP-E-SIDEBAR !
@@ -1444,7 +1448,6 @@ VARIABLE _FRH-U
 VARIABLE _FRS-REQ
 VARIABLE _FRP-REQ
 VARIABLE _FRP-IN
-VARIABLE _FRP-FD
 VARIABLE _FRP-LEN
 VARIABLE _FRP-SIZE
 VARIABLE _FRP-STATUS
@@ -1454,8 +1457,6 @@ VARIABLE _FRP-TEXT-TRUNC
 VARIABLE _FRP-TEXT-CHECK
 VARIABLE _FRP-TEXT-OUT
 VARIABLE _FRP-TEXT-EDGE-OK
-VARIABLE _FRP-THROW
-VARIABLE _FRP-CLEANUP-THROW
 
 : _FEXP-CAP-TEXT-LEN?  ( addr len truncated? -- preview-len flag )
     _FRP-TEXT-TRUNC ! _FRP-TEXT-U ! _FRP-TEXT-A !
@@ -1516,63 +1517,44 @@ VARIABLE _FRP-CLEANUP-THROW
     _FEXP-ACTIVATE _FRS-REQ !
     ['] _FEXP-CAP-SELECTED-BODY VFS-TRANSACTION ;
 
-: _FEXP-CAP-PREVIEW-CLOSE  ( -- )
-    _FRP-FD @ ?DUP IF 0 _FRP-FD ! VFS-CLOSE THEN ;
-
-: _FEXP-CAP-PREVIEW-BODY  ( -- status )
+: _FEXP-CAP-PREVIEW-BODY  ( -- )
     \ Keep identity verification, reopen, and read in one VFS exclusion
     \ region.  A rename cannot redirect the verified path between calls.
     _FEXP-SELECTED DUP 0= IF
         DROP _FRP-REQ @ CBR.RESULT CV-NULL!
-        CBUS-S-OK EXIT
+        CBUS-S-OK _FRP-STATUS ! EXIT
     THEN
     DUP _FRP-IN ! IN.TYPE @ VFS-T-FILE <> IF
         _FRP-REQ @ CBR.RESULT CV-NULL!
-        CBUS-S-OK EXIT
+        CBUS-S-OK _FRP-STATUS ! EXIT
     THEN
-    _FRP-IN @ _FEXP-BUILD-PATH-EXACT? 0= IF CBUS-S-FAILED EXIT THEN
-    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FEXP-OPEN-VFS
-    DUP 0= IF DROP CBUS-S-NOT-FOUND EXIT THEN _FRP-FD !
-    _FRP-FD @ VFS-SIZE DUP 0< IF
-        DROP CBUS-S-FAILED EXIT
-    THEN DUP _FRP-SIZE !
-    _FEXP-CAP-TEXT-MAX 3 + MIN DUP _FRP-LEN !
-    _FEXP-PREV-BUF SWAP _FRP-FD @ VFS-READ-EXACT IF
-        CBUS-S-FAILED EXIT
+    _FRP-IN @ _FEXP-BUILD-PATH-EXACT? 0= IF EXIT THEN
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ VFS-FF-READ
+    _FEXP-PREVIEW-SCOPE VFA-SCOPE-OPEN?
+    DUP IF
+        VFS-IOR-REASON VFS-R-NOENT = IF
+            CBUS-S-NOT-FOUND _FRP-STATUS !
+        THEN
+        DROP EXIT
     THEN
+    DROP
+    _FEXP-PREV-BUF _FEXP-CAP-TEXT-MAX 3 + ROT VFA-READ-PREFIX?
+    DUP IF 2DROP 2DROP EXIT THEN
+    DROP DROP _FRP-SIZE ! _FRP-LEN !
     _FEXP-PREV-BUF _FRP-LEN @
     _FRP-SIZE @ _FEXP-CAP-TEXT-MAX > _FEXP-CAP-TEXT-LEN? 0= IF
-        DROP CBUS-S-FAILED EXIT
+        DROP EXIT
     THEN
     _FRP-LEN !
     _FEXP-PREV-BUF _FRP-LEN @ _FRP-REQ @ CBR.RESULT CV-STRING!
-    IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
-
-: _FEXP-CAP-PREVIEW-TRANSACTION  ( -- status )
-    \ CBR dispatch catches handler exceptions, but by then an acquired VFS
-    \ descriptor would no longer be reachable.  Normalize the body here so
-    \ descriptor cleanup still runs inside the same exclusion region.  The
-    \ close helper clears ownership before calling VFS-CLOSE, preventing an
-    \ after-effect THROW from recycling the same descriptor twice.
-    CBUS-S-FAILED _FRP-STATUS !
-    0 _FRP-THROW ! 0 _FRP-CLEANUP-THROW !
-    ['] _FEXP-CAP-PREVIEW-BODY CATCH ?DUP IF
-        _FRP-THROW !
-    ELSE
-        _FRP-STATUS !
-    THEN
-    ['] _FEXP-CAP-PREVIEW-CLOSE CATCH ?DUP IF
-        _FRP-CLEANUP-THROW !
-    THEN
-    _FRP-THROW @ _FRP-CLEANUP-THROW @ OR IF
-        CBUS-S-FAILED
-    ELSE
-        _FRP-STATUS @
-    THEN ;
+    IF EXIT THEN
+    CBUS-S-OK _FRP-STATUS ! ;
 
 : _FEXP-CAP-PREVIEW-HANDLER  ( request instance -- status )
-    _FEXP-ACTIVATE _FRP-REQ ! 0 _FRP-FD !
-    ['] _FEXP-CAP-PREVIEW-TRANSACTION VFS-TRANSACTION ;
+    _FEXP-ACTIVATE _FRP-REQ !
+    CBUS-S-FAILED _FRP-STATUS !
+    ['] _FEXP-CAP-PREVIEW-BODY _FEXP-PREVIEW-SCOPE VFA-SCOPE-CALL
+    OR IF CBUS-S-FAILED ELSE _FRP-STATUS @ THEN ;
 
 : _FEXP-CAP-SETUP  ( -- )
     _FEXP-RESOURCE-SCHEMA CS-INIT

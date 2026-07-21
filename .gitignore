@@ -68,6 +68,7 @@ local_testing/*
 !local_testing/library_managed_two_boot.py
 !local_testing/vfs-ram-capacity.f
 !local_testing/vfs-fixed-snapshot.f
+!local_testing/vfs-access-contracts.f
 !local_testing/hres-contracts.f
 !local_testing/streams-observation.f
 !local_testing/streams-observation-store.f

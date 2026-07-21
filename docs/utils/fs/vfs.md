@@ -12,6 +12,11 @@ REQUIRE utils/fs/vfs.f
 The module provides `akashic-vfs`. ABI 1 is the only binding ABI: the former
 raw ten-XT table is not accepted.
 
+Callers that need exact selector/CWD/FD cleanup plus complete, prefix, ranged,
+or callback-streamed reads should use the policy-neutral
+[`vfs-access.f` layer](vfs-access.md). Replacement protocols, fixed record
+envelopes, and domain stores remain separate higher-level concerns.
+
 The first ext4 implementation slice is the checksummed, read-only
 [`akashic-vfs-ext4` binding](drivers/vfs-ext4.md). It is constrained by the
 ratified [`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md) and does
@@ -271,6 +276,14 @@ binding error. A cached hit never invokes the callback.
 progress advances the cursor even when the same call returns a nonzero ior.
 Bindings must set `VFS-IOR-F-PARTIAL` when applicable. The core rejects a
 negative or overlong `actual` as corruption.
+
+`VFS-OPEN?` catches a binding `OPEN` exception and returns its exact nonzero
+code only after returning the provisional FD to the pool; no descriptor or
+open reference is published. `VFS-CLOSE?` likewise catches a binding
+`RELEASE` exception, retires the open reference, returns the FD to the pool,
+and then reports the exact code. A release exception may have happened after
+the backend took effect, so callers must not retry the same FD. The scoped
+access layer applies that exact-once rule across selector and CWD restoration.
 
 Positions and logical sizes are currently restricted to nonnegative one-cell
 values (`0 .. 2^63-1`). `VFS-SEEK?`, truncate, checked I/O, and append reject a
