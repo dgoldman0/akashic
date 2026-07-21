@@ -174,25 +174,28 @@ before publication.
 
 Standalone Pad remains the ordinary-file control: an instance with no runtime
 endpoint reads and writes VFS paths directly. Inside Desk, Pad discovers the
-active Context, resource registry, reentrant request bus, and the
-Desk-hosted `org.akashic.resource.daybook` service. Daybook remains the
+active Context, resource registry, reentrant request bus, and the Desk-hosted
+`org.akashic.resource.daybook` service. That named service lends the Daybook
+owner's neutral `ROFFER`; the session validates and copies its exact RID and
+owning pool rather than discovering a global pool service. Daybook remains the
 semantic owner. An attached endpoint with a missing or invalid shared service
 is treated as broken runtime wiring and blocks the shared resource; it never
 silently falls back to `/daybook.md`.
 
-Daybook's `Edit Source in Pad` action sends an exact semantic `RREF`. Pad
-attaches an activation-local lens through the common
-`shared-document-lens.f` client, requests `resource.snapshot` through the
-same bus, and retains the copied reference and binding for the lifetime of the
-shared tab. At most one such tab exists. Its active-resource capability returns
-that semantic reference rather than exposing the owner's backing path.
+Daybook's `Edit Source in Pad` action sends an exact semantic `RREF`. Pad uses
+the common `resource-session.f` client to retain the owner, attach the exact
+candidate, request `resource.snapshot` through the same bus, and commit the
+candidate only when the new shared tab is ready. It retains the copied
+reference and binding for the lifetime of the shared tab. At most one such tab
+exists. Its active-resource capability returns that semantic reference rather
+than exposing the owner's backing path.
 
 Saving the shared tab requests `resource.replace` at the binding's exact
-revision and advances the binding only after the owner commits. If another lens
-commits first, Pad leaves its text dirty and reports exactly
+revision and advances the binding only after the owner commits. If another
+session commits first, Pad leaves its text dirty and reports exactly
 `changed elsewhere; reload before saving`; the rejected write cannot clobber
 the newer owner bytes. A successful owner commit remains authoritative even if
-Pad cannot advance its local binding afterward: Pad clears the unusable lens
+Pad cannot advance its local binding afterward: Pad clears the unusable session
 and requires a reload instead of claiming that an already-durable write failed.
 
 Within the shared Desk runtime, opening `/daybook.md` resolves the current
@@ -201,11 +204,11 @@ canonical path. Save As from the shared tab to any other path is an explicit
 export and converts that tab back to an ordinary VFS buffer. Other Pad tabs and
 their Save All behavior remain independent of a stale shared tab.
 
-`pad-resource-contracts` exercises the exact lens, nested bus dispatch,
+`pad-resource-contracts` exercises the retained session, nested bus dispatch,
 successful and stale replaces, post-commit local failure, canonical-path
 protection, export, cleanup, and direct/blocked mode boundaries. The
 `desktop-resource` journey drives the real Daybook Ctrl+O route, closes Daybook
-while Pad retains an old lens, proves the later Pad save is stale and
+while Pad retains an old session, proves the later Pad save is stale and
 non-clobbering, saves an unrelated ordinary file, and relaunches Daybook against
 the current Desk-hosted Daybook owner. This is a same-activation integration
 test; it does not claim a separate two-cold-boot durability result.

@@ -2,10 +2,11 @@
 
 `akashic/daybook/shared-document.f` is the bounded concrete owner for the
 canonical `/daybook.md` text document. Desk hosts it during a healthy Practice
-activation, publishes its one RID through `RREG`, and Daybook/Pad lenses attach
-with the existing `RREF`/`LBIND` contracts. Hosting is lifecycle composition:
-Daybook remains the semantic owner, and neither Desk nor a lens acquires the
-document. The owner does not depend on any lens lifecycle.
+activation and exposes its owner-lent resource offer to Daybook and Pad
+sessions. The offer carries that exact RID and its neutral resource-owner pool;
+Desk does not publish a separate global pool service. Hosting is lifecycle
+composition: Daybook remains the semantic owner, and Desk does not acquire
+document policy or content authority.
 
 Gate 2C relocated the unchanged concrete policy into the Daybook domain. It
 preserved the path, bytes, RID, `SDOC-*` public words, descriptor/capability
@@ -22,11 +23,14 @@ reports `domain_revision=0` even when the live component revision is positive.
 Code is trusted native code;
 capabilities are routing and authority contracts, not a sandbox boundary.
 
-The cooperating Daybook and Pad applets use
-[`shared-document-lens.f`](../interop/shared-document-lens.md) for the common
-service discovery, exact attachment, and request-envelope lifecycle. Document
-parsing, editing policy, snapshot/replace dispatch, binding advancement, and
-post-commit handling remain with each applet.
+The owner delegates component publication, leases, generation/refcount
+validation, inflight quiescence, and retryable release to the neutral
+[`resource-owner-pool.f`](../interop/resource-owner-pool.md). The cooperating
+Daybook and Pad applets use
+[`resource-session.f`](../interop/resource-session.md) for retained discovery,
+exact attachment, candidate binding, and request-envelope lifecycle. Document
+parsing, editing policy, request arguments/results, and post-commit UI handling
+remain with each applet.
 
 The owner target is always its one exact Daybook RID and expected revision.
 Current Daybook date/row, Pad tab/selection, focused Desk tile, and Practice
@@ -34,7 +38,7 @@ binding are neither target nor authority.
 
 ## Open security boundary
 
-Exact-revision protection currently covers cooperating semantic lenses, not
+Exact-revision protection currently covers cooperating semantic consumers, not
 every VFS writer. The VFS does not reserve `/daybook.md`, so code with ambient
 VFS authority, including File Explorer, can mutate it outside the owner's
 revision sequence. Whether to enforce ownership at the VFS boundary, through
@@ -46,9 +50,12 @@ activation but does not own the Daybook data or policy.
 
 ```forth
 SDOC-ACTIVATE   ( vfs rid context rreg creg -- instance status )
+SDOC-ACTIVATION-CLEANUP ( context rreg creg -- status )
 SDOC-DEACTIVATE ( instance -- status )
 SDOC-REF        ( instance destination-rref -- status )
 SDOC-VALID?     ( instance -- flag )
+SDOC-SERVICE    ( -- offer | 0 )
+SDOC-POOL       ( -- resource-owner-pool | 0 )
 
 SDOC-COMP-DESC   ( -- descriptor-address ) \ CREATE data address
 SDOC-CAP-SNAPSHOT ( -- capability )
@@ -56,22 +63,40 @@ SDOC-CAP-REPLACE  ( -- capability )
 SDOC-CAP-DESCRIBE ( -- capability )
 ```
 
-Only one owner may be live in the module at a time. `SDOC-ACTIVATE` copies the
-RID, uses `/daybook.md` as its canonical VFS backing path, recovers its `VREPL`
-transaction namespace,
-validates the existing bounded UTF-8 source, registers the component
-instance, and publishes the RID. `SDOC-DEACTIVATE` unpublishes before it
-removes and frees the instance. Lens bindings are neither accepted nor
-retained by either operation. The activation must deactivate the owner before
-freeing its Context, resource registry, or component registry.
+Only one owner may be live in the module at a time. `SDOC-ACTIVATE` configures
+a one-slot caller-owned pool, acquires an identity locator as the owner's
+anchor, copies the RID, uses `/daybook.md` as its canonical VFS backing path,
+recovers its `VREPL` transaction namespace, validates the existing bounded
+UTF-8 source, publishes the pool-created component, and initializes its
+caller-owned `ROFFER`. `SDOC-SERVICE` lends that offer as the public named-
+service seam. Sessions validate it, copy its RID and pool, and do not retain
+the offer pointer. `SDOC-POOL` remains available for direct owner composition
+and diagnostics; Desk does not expose it as an independent service. Neither
+word exposes VFS state.
+
+If activation fails after the pool has acquired its anchor, a retryable
+release fault can leave that unpublished pool holding the exact borrowed
+Context and registries. `SDOC-ACTIVATION-CLEANUP` is the dependency owner's
+bounded rollback seam: it acts only when those three addresses exactly match
+the unpublished pool. Desk retries that cleanup before freeing any of them.
+It neither deactivates a live owner nor reaches a pool belonging to a different
+activation.
+
+Every active Daybook or Pad session holds another pool lease. Consequently
+`SDOC-DEACTIVATE` returns busy while any session remains, leaving the anchor
+and owner intact for retry. Once the anchor is the final reference, release
+quiesces dispatch, unpublishes, removes, and frees the component before the
+pool is finalized. The activation must close child sessions before freeing its
+Context, resource registry, or component registry.
 
 Synchronous request dispatch is serialized through the request bus's recursive
-cross-core dispatch boundary. That boundary spans the handler publication,
-output validation, and generic component-revision advance, so two exact-N
-replacements cannot both commit before either revision changes. Deactivation
-rejects a call made from inside dispatch and otherwise quiesces that boundary
-before unpublishing or freeing the owner; post-handler bus work therefore
-cannot retain a freed instance.
+cross-core dispatch boundary. The pool adds a guarded constant-time member/
+slot check and inflight pin around each concrete handler; it does not perform a
+whole-registry validation per request. The bus boundary spans handler
+publication, output validation, and generic component-revision advance, so two
+exact-N replacements cannot both commit before either revision changes.
+Closing prevents new handler entry and waits for inflight work before the
+component can be unpublished or freed.
 
 `resource.snapshot` accepts a null argument and returns an owned string copy
 of the current document. An expected revision of zero means “current”; a
@@ -88,8 +113,8 @@ The description result and its canonical descriptor use the neutral
 resource-contract constructors. Daybook's snapshot and replace capabilities
 deliberately remain the compact activation-revision protocol described here:
 null to string and string to bool. They use the neutral capability builder for
-transactional descriptor assembly, but L5 does not reinterpret them as
-historical QLOC operations or introduce a resource session.
+transactional descriptor assembly, and the protocol-neutral resource session
+uses them without reinterpreting them as historical QLOC operations.
 
 `resource.replace` accepts a UTF-8 string of at most `SDOC-MAX-BYTES` (32768)
 and requires a positive `CBR.EXPECT-REV`. Publication goes through
@@ -111,10 +136,11 @@ mutable. A later
 activation performs `VREPL` recovery before establishing its fresh
 activation-local revision baseline.
 
-Normal consumers should obtain an exact `RREF`, attach an `LBIND`, stamp a
-request with `LBIND-REQUEST!`, select the appropriate capability descriptor,
-and dispatch through `CBUS`. After a successful replace, the committing lens
-advances with `LBIND-ADVANCE`; another lens remains stale until it refreshes.
+Normal applet consumers initialize an `RSES` through their endpoint, select the
+appropriate concrete capability descriptor, prepare and dispatch through
+`CBUS`, and explicitly advance or refresh. The retained token keeps the exact
+owner alive throughout that session. After a successful replace, another
+session remains stale until it refreshes.
 
 The focused contract includes an explicit ordinary-file control on the same
 real MP64FS path. Two independent `VREPL` clients both publish successfully and

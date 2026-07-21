@@ -92,13 +92,13 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 385,
-        "resolved_require_occurrence_count": 1301,
-        "unique_resolved_edge_count": 1301,
+        "module_count": 386,
+        "resolved_require_occurrence_count": 1308,
+        "unique_resolved_edge_count": 1308,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 7,
-        "placement_debt_count": 40,
+        "placement_debt_count": 39,
         "provided_issue_count": 2,
         "addressability_issue_count": 1,
         "marker_issue_count": 0,
@@ -141,10 +141,10 @@ def test_every_module_has_a_reviewed_responsibility_class() -> None:
         "tui/applets/agent/access-profile.f",
         "tui/applets/desk/agent-access-policy.f",
     ]
-    assert by_path["interop/shared-document-lens.f"]["class"] == "independent"
-    assert by_path["interop/shared-document-lens.f"]["target"] == (
-        "interop/resource-session.f"
-    )
+    assert by_path["interop/resource-owner-pool.f"]["class"] == "independent"
+    assert by_path["interop/resource-owner-pool.f"]["placement"] == "correct"
+    assert by_path["interop/resource-session.f"]["class"] == "independent"
+    assert by_path["interop/resource-session.f"]["placement"] == "correct"
     assert by_path["game/ecs.f"]["class"] == "independent"
     assert by_path["tui/game/game-applet.f"]["class"] == "desk-ecosystem"
     assert by_path["game/ecs.f"]["ownership_decision"] == (

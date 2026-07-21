@@ -12,8 +12,11 @@ SOURCE = ROOT / "akashic"
 INTEROP = SOURCE / "interop"
 OWNER = SOURCE / "daybook" / "shared-document.f"
 OLD_OWNER = INTEROP / ("shared-" + "document.f")
-LENS = INTEROP / "shared-document-lens.f"
+POOL = INTEROP / "resource-owner-pool.f"
+SESSION = INTEROP / "resource-session.f"
+OLD_LENS = INTEROP / ("shared-document-" + "lens.f")
 DESK = SOURCE / "tui" / "applets" / "desk" / "desk.f"
+DAYBOOK_APPLET = SOURCE / "tui" / "applets" / "daybook" / "daybook.f"
 
 REQUIRE = re.compile(r"^\s*REQUIRE\s+(\S+)", re.MULTILINE)
 TEXT_SUFFIXES = {
@@ -77,21 +80,27 @@ def test_interop_neither_imports_nor_forwards_daybook_owner_policy() -> None:
             assert daybook_root not in dependency.parents, module
 
 
-def test_shared_document_lens_contains_only_portable_mechanics() -> None:
-    text = LENS.read_text(encoding="utf-8")
-    for value in (
-        "/daybook.md",
-        "org.akashic.resource.daybook",
-        "SDOC-",
-        "akashic-interop-shared-document",
-    ):
-        assert value not in text
+def test_resource_pool_and_session_contain_only_portable_mechanics() -> None:
+    assert POOL.is_file()
+    assert SESSION.is_file()
+    assert not OLD_LENS.exists()
 
-    dependencies = set(_requires(LENS))
-    assert dependencies == {
+    for module in (POOL, SESSION):
+        text = module.read_text(encoding="utf-8")
+        for value in (
+            "/daybook.md",
+            "org.akashic.resource.daybook",
+            "SDOC-",
+            "akashic-interop-shared-document",
+        ):
+            assert value not in text
+
+    assert set(_requires(SESSION)) == {
         (INTEROP / "endpoint.f").resolve(),
-        (INTEROP / "lens-binding.f").resolve(),
+        (INTEROP / "resource-client.f").resolve(),
+        POOL.resolve(),
     }
+    assert OWNER.resolve() not in set(_requires(POOL))
 
 
 def test_no_old_owner_path_reference_remains() -> None:
@@ -102,3 +111,24 @@ def test_no_old_owner_path_reference_remains() -> None:
         if old_path in text:
             references.append(path.relative_to(ROOT))
     assert references == []
+
+
+def test_no_transitional_lens_reference_remains() -> None:
+    old_name = "shared-document-" + "lens"
+    references = []
+    for path in _repo_text_files():
+        text = path.read_text(encoding="utf-8")
+        if old_name in text:
+            references.append(path.relative_to(ROOT))
+    assert references == []
+
+
+def test_daybook_releases_embedded_session_before_ui_teardown() -> None:
+    text = DAYBOOK_APPLET.read_text(encoding="utf-8")
+    match = re.search(r": DAYBOOK-SHUTDOWN-CB\b(.*?);", text, re.DOTALL)
+    assert match is not None
+    shutdown = match.group(1)
+    release = shutdown.index("_DB-SHARED-FINI")
+    assert release < shutdown.index("UTUI-WIDGET-SET")
+    assert release < shutdown.index("PRM-FREE")
+    assert release < shutdown.index("RGN-FREE")

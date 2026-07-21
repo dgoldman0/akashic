@@ -1,0 +1,1417 @@
+\ =====================================================================
+\  resource-owner-pool.f - Caller-owned semantic resource lifetimes
+\ =====================================================================
+\  This module contains no resource-domain policy and owns no capacity.
+\  A caller supplies bounded slot and lease arrays plus three callbacks:
+\
+\    admit       ( locator owner-data -- tag status )
+\    descriptor  ( tag owner-data -- component-descriptor | 0 )
+\    state-init  ( locator tag instance owner-data -- status )
+\
+\  The pool owns the mechanical lifetime around those decisions: component
+\  allocation/registration, RID publication and rollback, exact token
+\  ledgers, shared-RID refcounts, inflight/closing quiescence, final
+\  unpublication, deregistration, and destruction.  Component state begins
+\  with ROPOOL-MEMBER-SIZE bytes so handlers can recover their exact pool,
+\  slot, generation, and caller-defined tag without applet-specific roots.
+\
+\  Lifecycle and observation words share a bounded cold-path scratch
+\  trampoline.  Owner callbacks may throw, but must not recursively enter
+\  ROPOOL control-plane words on this or another pool.  Handler begin/end is
+\  stack-local, constant-time, and guarded only by the exact member's pool.
+\ =====================================================================
+
+PROVIDED akashic-resource-owner-pool
+
+REQUIRE resource-acquisition.f
+REQUIRE request-bus.f
+REQUIRE ../runtime/resource-registry.f
+REQUIRE ../runtime/registry.f
+REQUIRE ../concurrency/guard.f
+REQUIRE ../utils/memory-span.f
+
+0x4C4F5052 CONSTANT ROPOOL-MAGIC             \ "RPOL"
+1          CONSTANT ROPOOL-ABI-VERSION
+0x46434F52 CONSTANT ROPOOL-CONFIG-MAGIC      \ "ROCF"
+1          CONSTANT ROPOOL-CONFIG-ABI-VERSION
+0x4D454D52 CONSTANT ROPOOL-MEMBER-MAGIC      \ "RMEM"
+
+\ ---------------------------------------------------------------------
+\ Caller-filled configuration
+\ ---------------------------------------------------------------------
+
+  0 CONSTANT _ROPC-MAGIC
+  8 CONSTANT _ROPC-ABI
+ 16 CONSTANT _ROPC-SIZE
+ 24 CONSTANT _ROPC-OWNER-A
+ 32 CONSTANT _ROPC-OWNER-U
+ 40 CONSTANT _ROPC-OWNER-DATA
+ 48 CONSTANT _ROPC-CONTEXT
+ 56 CONSTANT _ROPC-CREG
+ 64 CONSTANT _ROPC-RREG
+ 72 CONSTANT _ROPC-SLOTS
+ 80 CONSTANT _ROPC-SLOT-CAP
+ 88 CONSTANT _ROPC-LEASES
+ 96 CONSTANT _ROPC-LEASE-CAP
+104 CONSTANT _ROPC-ADMIT-XT
+112 CONSTANT _ROPC-DESCRIPTOR-XT
+120 CONSTANT _ROPC-STATE-INIT-XT
+128 CONSTANT _ROPC-FLAGS
+136 CONSTANT _ROPC-RESERVED
+144 CONSTANT ROPOOL-CONFIG-SIZE
+
+: ROPC.MAGIC          ( config -- a ) _ROPC-MAGIC + ;
+: ROPC.ABI            ( config -- a ) _ROPC-ABI + ;
+: ROPC.SIZE           ( config -- a ) _ROPC-SIZE + ;
+: ROPC.OWNER-A        ( config -- a ) _ROPC-OWNER-A + ;
+: ROPC.OWNER-U        ( config -- a ) _ROPC-OWNER-U + ;
+: ROPC.OWNER-DATA     ( config -- a ) _ROPC-OWNER-DATA + ;
+: ROPC.CONTEXT        ( config -- a ) _ROPC-CONTEXT + ;
+: ROPC.CREG           ( config -- a ) _ROPC-CREG + ;
+: ROPC.RREG           ( config -- a ) _ROPC-RREG + ;
+: ROPC.SLOTS          ( config -- a ) _ROPC-SLOTS + ;
+: ROPC.SLOT-CAP       ( config -- a ) _ROPC-SLOT-CAP + ;
+: ROPC.LEASES         ( config -- a ) _ROPC-LEASES + ;
+: ROPC.LEASE-CAP      ( config -- a ) _ROPC-LEASE-CAP + ;
+: ROPC.ADMIT-XT       ( config -- a ) _ROPC-ADMIT-XT + ;
+: ROPC.DESCRIPTOR-XT  ( config -- a ) _ROPC-DESCRIPTOR-XT + ;
+: ROPC.STATE-INIT-XT  ( config -- a ) _ROPC-STATE-INIT-XT + ;
+: ROPC.FLAGS          ( config -- a ) _ROPC-FLAGS + ;
+
+: ROPOOL-CONFIG-INIT  ( config -- )
+    DUP ROPOOL-CONFIG-SIZE 0 FILL
+    ROPOOL-CONFIG-MAGIC OVER ROPC.MAGIC !
+    ROPOOL-CONFIG-ABI-VERSION OVER ROPC.ABI !
+    ROPOOL-CONFIG-SIZE SWAP ROPC.SIZE ! ;
+
+\ ---------------------------------------------------------------------
+\ Caller-owned slot, lease, and member layouts
+\ ---------------------------------------------------------------------
+
+ 0 CONSTANT _ROS-ACTIVE
+ 8 CONSTANT _ROS-TAG
+16 CONSTANT _ROS-GENERATION
+24 CONSTANT _ROS-REF-N
+32 CONSTANT _ROS-INFLIGHT
+40 CONSTANT _ROS-INSTANCE
+48 CONSTANT _ROS-RID
+80 CONSTANT _ROS-FLAGS
+88 CONSTANT _ROS-RESERVED
+96 CONSTANT ROPOOL-SLOT-SIZE
+
+1 CONSTANT ROS-F-CLOSING
+
+: ROS.ACTIVE      ( slot -- a ) _ROS-ACTIVE + ;
+: ROS.TAG         ( slot -- a ) _ROS-TAG + ;
+: ROS.GENERATION  ( slot -- a ) _ROS-GENERATION + ;
+: ROS.REF-N       ( slot -- a ) _ROS-REF-N + ;
+: ROS.INFLIGHT    ( slot -- a ) _ROS-INFLIGHT + ;
+: ROS.INSTANCE    ( slot -- a ) _ROS-INSTANCE + ;
+: ROS.RID         ( slot -- rid ) _ROS-RID + ;
+: ROS.FLAGS       ( slot -- a ) _ROS-FLAGS + ;
+: ROS.RESERVED    ( slot -- a ) _ROS-RESERVED + ;
+
+ 0 CONSTANT _ROL-TOKEN
+ 8 CONSTANT _ROL-COOKIE
+16 CONSTANT _ROL-GENERATION
+24 CONSTANT _ROL-SLOT-I
+32 CONSTANT _ROL-FLAGS
+40 CONSTANT _ROL-RESERVED
+48 CONSTANT ROPOOL-LEASE-SIZE
+
+1 CONSTANT ROL-F-ANCHOR
+
+: ROL.TOKEN       ( lease -- a ) _ROL-TOKEN + ;
+: ROL.COOKIE      ( lease -- a ) _ROL-COOKIE + ;
+: ROL.GENERATION  ( lease -- a ) _ROL-GENERATION + ;
+: ROL.SLOT-I      ( lease -- a ) _ROL-SLOT-I + ;
+: ROL.FLAGS       ( lease -- a ) _ROL-FLAGS + ;
+
+ 0 CONSTANT _ROM-MAGIC
+ 8 CONSTANT _ROM-POOL
+16 CONSTANT _ROM-SLOT-I
+24 CONSTANT _ROM-GENERATION
+32 CONSTANT _ROM-TAG
+40 CONSTANT _ROM-FLAGS
+48 CONSTANT ROPOOL-MEMBER-SIZE
+
+: ROMEM.MAGIC       ( member -- a ) _ROM-MAGIC + ;
+: ROMEM.POOL        ( member -- a ) _ROM-POOL + ;
+: ROMEM.SLOT-I      ( member -- a ) _ROM-SLOT-I + ;
+: ROMEM.GENERATION  ( member -- a ) _ROM-GENERATION + ;
+: ROMEM.TAG         ( member -- a ) _ROM-TAG + ;
+: ROMEM.FLAGS       ( member -- a ) _ROM-FLAGS + ;
+
+: ROPOOL-MEMBER-CLEAR  ( member -- )
+    ROPOOL-MEMBER-SIZE 0 FILL ;
+
+\ ---------------------------------------------------------------------
+\ Fixed pool header.  Slots and leases remain external caller storage.
+\ ---------------------------------------------------------------------
+
+  0 CONSTANT _ROP-RACQ                 \ RACQ-ROOT-SIZE-byte prefix
+ 88 CONSTANT _ROP-MAGIC
+ 96 CONSTANT _ROP-ABI
+104 CONSTANT _ROP-SIZE
+112 CONSTANT _ROP-OWNER-DATA
+120 CONSTANT _ROP-CONTEXT
+128 CONSTANT _ROP-CREG
+136 CONSTANT _ROP-RREG
+144 CONSTANT _ROP-SLOTS
+152 CONSTANT _ROP-SLOT-CAP
+160 CONSTANT _ROP-LEASES
+168 CONSTANT _ROP-LEASE-CAP
+176 CONSTANT _ROP-ADMIT-XT
+184 CONSTANT _ROP-DESCRIPTOR-XT
+192 CONSTANT _ROP-STATE-INIT-XT
+200 CONSTANT _ROP-LIVE-N
+208 CONSTANT _ROP-LEASE-N
+216 CONSTANT _ROP-NEXT-GENERATION
+224 CONSTANT _ROP-NEXT-COOKIE
+232 CONSTANT _ROP-ACQUIRE-CALLS
+240 CONSTANT _ROP-RELEASE-CALLS
+248 CONSTANT _ROP-QUIESCENT-CALLS
+256 CONSTANT _ROP-FLAGS
+264 CONSTANT _ROP-TEST-BUSY
+272 CONSTANT _ROP-TEST-RELEASE-FAIL
+280 CONSTANT _ROP-GUARD                 \ _GRD-SIZE-SPIN bytes
+312 CONSTANT ROPOOL-SIZE
+
+: ROPOOL.RACQ             ( pool -- root ) _ROP-RACQ + ;
+: ROPOOL.MAGIC            ( pool -- a ) _ROP-MAGIC + ;
+: ROPOOL.ABI              ( pool -- a ) _ROP-ABI + ;
+: ROPOOL.SIZE             ( pool -- a ) _ROP-SIZE + ;
+: ROPOOL.OWNER-DATA       ( pool -- a ) _ROP-OWNER-DATA + ;
+: ROPOOL.CONTEXT          ( pool -- a ) _ROP-CONTEXT + ;
+: ROPOOL.CREG             ( pool -- a ) _ROP-CREG + ;
+: ROPOOL.RREG             ( pool -- a ) _ROP-RREG + ;
+: ROPOOL.SLOTS            ( pool -- a ) _ROP-SLOTS + ;
+: ROPOOL.SLOT-CAP         ( pool -- a ) _ROP-SLOT-CAP + ;
+: ROPOOL.LEASES           ( pool -- a ) _ROP-LEASES + ;
+: ROPOOL.LEASE-CAP        ( pool -- a ) _ROP-LEASE-CAP + ;
+: ROPOOL.ADMIT-XT         ( pool -- a ) _ROP-ADMIT-XT + ;
+: ROPOOL.DESCRIPTOR-XT    ( pool -- a ) _ROP-DESCRIPTOR-XT + ;
+: ROPOOL.STATE-INIT-XT    ( pool -- a ) _ROP-STATE-INIT-XT + ;
+: ROPOOL.LIVE-N           ( pool -- a ) _ROP-LIVE-N + ;
+: ROPOOL.LEASE-N          ( pool -- a ) _ROP-LEASE-N + ;
+: ROPOOL.NEXT-GENERATION  ( pool -- a ) _ROP-NEXT-GENERATION + ;
+: ROPOOL.NEXT-COOKIE      ( pool -- a ) _ROP-NEXT-COOKIE + ;
+: ROPOOL.ACQUIRE-CALLS    ( pool -- a ) _ROP-ACQUIRE-CALLS + ;
+: ROPOOL.RELEASE-CALLS    ( pool -- a ) _ROP-RELEASE-CALLS + ;
+: ROPOOL.QUIESCENT-CALLS  ( pool -- a ) _ROP-QUIESCENT-CALLS + ;
+: ROPOOL.FLAGS            ( pool -- a ) _ROP-FLAGS + ;
+: ROPOOL.TEST-BUSY        ( pool -- a ) _ROP-TEST-BUSY + ;
+: ROPOOL.TEST-RELEASE-FAIL ( pool -- a ) _ROP-TEST-RELEASE-FAIL + ;
+: ROPOOL.GUARD            ( pool -- guard ) _ROP-GUARD + ;
+
+: ROPOOL-RACQ       ( pool -- root ) ROPOOL.RACQ ;
+: ROPOOL-OWNER-DATA@ ( pool -- data ) ROPOOL.OWNER-DATA @ ;
+: ROPOOL-CONTEXT@   ( pool -- context ) ROPOOL.CONTEXT @ ;
+: ROPOOL-CREG@      ( pool -- creg ) ROPOOL.CREG @ ;
+: ROPOOL-RREG@      ( pool -- rreg ) ROPOOL.RREG @ ;
+: ROPOOL-SLOT-CAP@  ( pool -- count ) ROPOOL.SLOT-CAP @ ;
+: ROPOOL-LEASE-CAP@ ( pool -- count ) ROPOOL.LEASE-CAP @ ;
+
+-1 1 RSHIFT ROPOOL-SLOT-SIZE / CONSTANT _ROPOOL-SLOT-CAP-MAX
+-1 1 RSHIFT ROPOOL-LEASE-SIZE / CONSTANT _ROPOOL-LEASE-CAP-MAX
+
+: ROPOOL-SLOT-BYTES  ( capacity -- bytes|0 )
+    DUP 1 < IF DROP 0 EXIT THEN
+    DUP _ROPOOL-SLOT-CAP-MAX U> IF DROP 0 EXIT THEN
+    ROPOOL-SLOT-SIZE * ;
+
+: ROPOOL-LEASE-BYTES  ( capacity -- bytes|0 )
+    DUP 1 < IF DROP 0 EXIT THEN
+    DUP _ROPOOL-LEASE-CAP-MAX U> IF DROP 0 EXIT THEN
+    ROPOOL-LEASE-SIZE * ;
+
+: _ROPOOL-SLOT  ( index pool -- slot )
+    ROPOOL.SLOTS @ SWAP ROPOOL-SLOT-SIZE * + ;
+
+: _ROPOOL-LEASE  ( index pool -- lease )
+    ROPOOL.LEASES @ SWAP ROPOOL-LEASE-SIZE * + ;
+
+\ Scratch is never owner state.  Every cold/control-plane use shares this
+\ one trampoline guard, and live-pool operations additionally hold the exact
+\ caller-owned pool guard.  Config validation and construction deliberately
+\ use the same domain: they reuse the same cells and must not race another
+\ pool's observation, retain, release, or offer construction.  Handler
+\ begin/end remains stack-local and uses only the exact pool guard.
+GUARD _ROPOOL-SCRATCH-GUARD
+
+VARIABLE _ROP-A
+VARIABLE _ROP-B
+VARIABLE _ROP-C
+VARIABLE _ROP-D
+VARIABLE _ROP-E
+VARIABLE _ROP-F
+VARIABLE _ROP-I
+VARIABLE _ROP-J
+VARIABLE _ROP-N
+VARIABLE _ROP-STATUS
+VARIABLE _ROP-POOL
+VARIABLE _ROP-SLOT
+VARIABLE _ROP-LEASE
+VARIABLE _ROP-INSTANCE
+VARIABLE _ROP-MEMBER
+VARIABLE _ROP-TOKEN
+VARIABLE _ROP-LOCATOR
+VARIABLE _ROP-RESULT
+VARIABLE _ROP-TAG
+CREATE _ROP-REF RREF-SIZE ALLOT
+
+: _ROPOOL-ZERO?  ( a u -- flag )
+    0 ?DO DUP I + C@ IF DROP 0 UNLOOP EXIT THEN LOOP DROP -1 ;
+
+: _ROPOOL-HEADER?  ( pool -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ROPOOL-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP ROPOOL.MAGIC @ ROPOOL-MAGIC =
+    OVER ROPOOL.ABI @ ROPOOL-ABI-VERSION = AND
+    OVER ROPOOL.SIZE @ ROPOOL-SIZE = AND
+    OVER ROPOOL.FLAGS @ 0= AND
+    OVER RACQ.ROOT-MAGIC @ RACQ-ROOT-MAGIC = AND
+    OVER RACQ.ROOT-ABI @ RACQ-ROOT-ABI-VERSION = AND
+    OVER RACQ.ROOT-SIZE @ RACQ-ROOT-SIZE = AND
+    OVER RACQ.ROOT-CONTEXT @ 2 PICK = AND
+    OVER ROPOOL.GUARD _GRD-MODE @ 0= AND
+    SWAP DROP ;
+
+: _ROPOOL-SLOT-I?  ( index pool -- flag )
+    >R DUP 0>= SWAP R> ROPOOL.SLOT-CAP @ < AND ;
+
+: _ROPOOL-LEASE-I?  ( index pool -- flag )
+    >R DUP 0>= SWAP R> ROPOOL.LEASE-CAP @ < AND ;
+
+: _ROPOOL-NEXT  ( field -- value )
+    DUP @ DUP >R 1+ DUP 0> 0= IF DROP 1 THEN SWAP ! R> ;
+
+: _ROPOOL-RUNTIME?  ( pool -- flag )
+    DUP _ROPOOL-HEADER? 0= IF DROP 0 EXIT THEN _ROP-POOL !
+    _ROP-POOL @ RACQ-ROOT-VALID? 0= IF 0 EXIT THEN
+    _ROP-POOL @ RACQ.ROOT-CONTEXT @ _ROP-POOL @ <> IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.OWNER-DATA @ 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.ADMIT-XT @ 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.DESCRIPTOR-XT @ 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.STATE-INIT-XT @ 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.SLOTS @ 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.SLOT-CAP @ ROPOOL-SLOT-BYTES DUP 0= IF
+        DROP 0 EXIT
+    THEN
+    _ROP-POOL @ ROPOOL.SLOTS @ SWAP MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.LEASES @ 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.LEASE-CAP @ ROPOOL-LEASE-BYTES DUP 0= IF
+        DROP 0 EXIT
+    THEN
+    _ROP-POOL @ ROPOOL.LEASES @ SWAP MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.CONTEXT @ DUP CTX-VALID? 0= IF DROP 0 EXIT THEN
+    DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF DROP 0 EXIT THEN DROP
+    _ROP-POOL @ ROPOOL.CREG @ DUP 0= IF DROP 0 EXIT THEN
+    DUP CREG.TYPE-N @ DUP 0< SWAP CREG-MAX-TYPES > OR IF DROP 0 EXIT THEN
+    CREG.INST-N @ DUP 0< SWAP CREG-MAX-INSTANCES > OR IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.RREG @ DUP RREG-VALID? 0= IF DROP 0 EXIT THEN
+    DUP RREG.COMPONENTS @ _ROP-POOL @ ROPOOL.CREG @ <> IF DROP 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.CONTEXT @ SWAP RREG-CONTEXT? 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.LIVE-N @ DUP 0>= SWAP
+        _ROP-POOL @ ROPOOL.SLOT-CAP @ <= AND
+    _ROP-POOL @ ROPOOL.LEASE-N @ DUP 0>= SWAP
+        _ROP-POOL @ ROPOOL.LEASE-CAP @ <= AND AND ;
+
+: _ROPOOL-SLOT-FIND-RAW  ( rid pool -- index|-1 )
+    _ROP-POOL ! _ROP-A !
+    _ROP-A @ RID-PRESENT? 0= IF -1 EXIT THEN
+    _ROP-POOL @ ROPOOL.SLOT-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-SLOT DUP ROS.ACTIVE @ IF
+            ROS.RID _ROP-A @ RID= IF I UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP -1 ;
+
+: _ROPOOL-SLOT-FREE-RAW  ( pool -- index|-1 )
+    DUP _ROP-POOL ! ROPOOL.SLOT-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-SLOT ROS.ACTIVE @ 0= IF I UNLOOP EXIT THEN
+    LOOP -1 ;
+
+: _ROPOOL-LEASE-FREE-RAW  ( pool -- index|-1 )
+    DUP _ROP-POOL ! ROPOOL.LEASE-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-LEASE ROL.TOKEN @ 0= IF I UNLOOP EXIT THEN
+    LOOP -1 ;
+
+: _ROPOOL-LEASE-FIND-RAW  ( token pool -- index|-1 )
+    _ROP-POOL ! _ROP-TOKEN !
+    _ROP-POOL @ ROPOOL.LEASE-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-LEASE ROL.TOKEN @ _ROP-TOKEN @ = IF
+            I UNLOOP EXIT
+        THEN
+    LOOP -1 ;
+
+: _ROPOOL-ADMIT-CALL  ( locator pool -- tag status )
+    DUP ROPOOL.OWNER-DATA @ SWAP ROPOOL.ADMIT-XT @ CATCH
+    ?DUP IF DROP 2DROP 0 RACQ-S-INVALID THEN ;
+
+: _ROPOOL-DESC  ( tag pool -- descriptor|0 )
+    DUP ROPOOL.OWNER-DATA @ SWAP ROPOOL.DESCRIPTOR-XT @ CATCH
+    ?DUP IF DROP 2DROP 0 THEN ;
+
+: _ROPOOL-STATE-INIT-CALL  ( locator tag instance pool -- status )
+    DUP ROPOOL.OWNER-DATA @ SWAP ROPOOL.STATE-INIT-XT @ CATCH
+    ?DUP IF DROP 2DROP 2DROP RACQ-S-INVALID THEN ;
+
+: _ROPOOL-SLOT-PUBLISHED?  ( slot pool -- flag )
+    _ROP-POOL ! _ROP-SLOT !
+    _ROP-SLOT @ ROS.ACTIVE @ 0= IF 0 EXIT THEN
+    _ROP-SLOT @ ROS.INSTANCE @ DUP 0= IF DROP 0 EXIT THEN _ROP-INSTANCE !
+    _ROP-INSTANCE @ CINST.ID @ _ROP-INSTANCE @ CINST.GENERATION @
+        _ROP-POOL @ ROPOOL.CREG @ CREG-INST-FIND
+        _ROP-INSTANCE @ <> IF 0 EXIT THEN
+    _ROP-SLOT @ ROS.RID _ROP-POOL @ ROPOOL.CONTEXT @ _ROP-REF
+        _ROP-POOL @ ROPOOL.RREG @ RREG-REF RREG-S-OK <> IF 0 EXIT THEN
+    _ROP-REF _ROP-POOL @ ROPOOL.CONTEXT @ _ROP-POOL @ ROPOOL.RREG @
+        RREG-RESOLVE DUP RREG-S-OK <> IF 2DROP 0 EXIT THEN
+    DROP _ROP-INSTANCE @ = ;
+
+: _ROPOOL-MEMBER-RAW?  ( member -- flag )
+    DUP 0= IF DROP 0 EXIT THEN _ROP-MEMBER !
+    _ROP-MEMBER @ ROMEM.MAGIC @ ROPOOL-MEMBER-MAGIC <> IF 0 EXIT THEN
+    _ROP-MEMBER @ ROMEM.FLAGS @ IF 0 EXIT THEN
+    _ROP-MEMBER @ ROMEM.POOL @ DUP _ROPOOL-RUNTIME? 0= IF DROP 0 EXIT THEN
+        _ROP-POOL !
+    _ROP-MEMBER @ ROMEM.SLOT-I @ DUP _ROP-I !
+        _ROP-POOL @ _ROPOOL-SLOT-I? 0= IF 0 EXIT THEN
+    _ROP-I @ _ROP-POOL @ _ROPOOL-SLOT DUP _ROP-SLOT !
+    ROS.ACTIVE @ 0= IF 0 EXIT THEN
+    _ROP-SLOT @ ROS.GENERATION @ _ROP-MEMBER @ ROMEM.GENERATION @ =
+    _ROP-SLOT @ ROS.TAG @ _ROP-MEMBER @ ROMEM.TAG @ = AND
+    _ROP-SLOT @ ROS.INSTANCE @ DUP 0= IF 2DROP 0 EXIT THEN
+    CINST-STATE _ROP-MEMBER @ = AND ;
+
+\ Dispatch already pins the target through CBUS, and an acquired lease pins
+\ it for direct callers.  This bounded predicate therefore checks only the
+\ member/pool/slot relationship needed by a handler; it deliberately avoids
+\ RREG-VALID?'s whole-registry uniqueness walk on every request.  It is
+\ entirely stack-local: independent pools never meet a module-global scratch
+\ lock on the per-request path, and recursive callbacks cannot overwrite an
+\ outer handler's validation state.
+: _ROPOOL-MEMBER-FOR-POOL?  ( member pool -- flag )
+    DUP _ROPOOL-HEADER? 0= IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP SWAP ROMEM.POOL @ <> IF 2DROP 0 EXIT THEN
+    OVER ROMEM.MAGIC @ ROPOOL-MEMBER-MAGIC <> IF 2DROP 0 EXIT THEN
+    OVER ROMEM.FLAGS @ IF 2DROP 0 EXIT THEN
+    DUP ROPOOL.SLOT-CAP @ ROPOOL-SLOT-BYTES DUP 0= IF
+        DROP 2DROP 0 EXIT
+    THEN
+    OVER ROPOOL.SLOTS @ SWAP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    OVER ROMEM.SLOT-I @ DUP 0< IF DROP 2DROP 0 EXIT THEN
+    OVER ROPOOL.SLOT-CAP @ >= IF 2DROP 0 EXIT THEN
+    OVER ROMEM.SLOT-I @ OVER _ROPOOL-SLOT
+    DUP ROS.ACTIVE @ 0= IF DROP 2DROP 0 EXIT THEN
+    DUP ROS.GENERATION @ 3 PICK ROMEM.GENERATION @ <> IF
+        DROP 2DROP 0 EXIT
+    THEN
+    DUP ROS.TAG @ 3 PICK ROMEM.TAG @ <> IF DROP 2DROP 0 EXIT THEN
+    DUP ROS.INSTANCE @ DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    CINST-STATE 3 PICK = NIP NIP NIP ;
+
+: _ROPOOL-MEMBER-FAST?  ( member -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.POOL @ _ROPOOL-MEMBER-FOR-POOL? ;
+
+: _ROPOOL-INSTANCE-MEMBER-RAW  ( instance -- member|0 )
+    DUP 0= IF DROP 0 EXIT THEN _ROP-INSTANCE !
+    _ROP-INSTANCE @ CINST-DESC DUP COMP-DESC-VALID? 0= IF DROP 0 EXIT THEN
+    COMP.STATE-SIZE @ ROPOOL-MEMBER-SIZE < IF 0 EXIT THEN
+    _ROP-INSTANCE @ CINST-STATE DUP _ROPOOL-MEMBER-RAW? 0= IF DROP 0 THEN ;
+
+\ Shallow instance discovery is stack-local and does not trust member fields.
+\ Exact member/pool/slot validation happens under the discovered pool guard.
+: _ROPOOL-INSTANCE-MEMBER-SHALLOW  ( instance -- member|0 )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CINST-DESC DUP COMP-DESC-VALID? 0= IF 2DROP 0 EXIT THEN
+    COMP.STATE-SIZE @ ROPOOL-MEMBER-SIZE < IF DROP 0 EXIT THEN
+    CINST-STATE ;
+
+: _ROPOOL-INSTANCE-MEMBER-FAST  ( instance -- member|0 )
+    _ROPOOL-INSTANCE-MEMBER-SHALLOW DUP 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.POOL @ _ROPOOL-MEMBER-FOR-POOL? 0= IF DROP 0 THEN ;
+
+: _ROPOOL-INSTANCE-POOL-SHALLOW  ( instance -- pool|0 )
+    _ROPOOL-INSTANCE-MEMBER-SHALLOW DUP 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.MAGIC @ ROPOOL-MEMBER-MAGIC <> IF DROP 0 EXIT THEN
+    DUP ROMEM.POOL @ DUP _ROPOOL-HEADER? 0= IF 2DROP 0 EXIT THEN
+    NIP ;
+
+\ ---------------------------------------------------------------------
+\ Creation, publication, lease commit, and rollback
+\ ---------------------------------------------------------------------
+
+: _ROPOOL-CREATE-ROLLBACK  ( in-creg? -- )
+    IF _ROP-INSTANCE @ _ROP-POOL @ ROPOOL.CREG @ CREG-INST- DROP THEN
+    _ROP-INSTANCE @ ?DUP IF CINST-FREE THEN
+    0 _ROP-INSTANCE !
+    _ROP-SLOT @ ?DUP IF ROPOOL-SLOT-SIZE 0 FILL THEN ;
+
+: _ROPOOL-CREATE-SLOT  ( locator tag index pool -- status )
+    _ROP-POOL ! _ROP-I ! _ROP-TAG ! _ROP-LOCATOR !
+    _ROP-LOCATOR @ QLOC.REF RREF.ID _ROP-A !
+    _ROP-I @ _ROP-POOL @ _ROPOOL-SLOT DUP _ROP-SLOT !
+        ROPOOL-SLOT-SIZE 0 FILL
+    _ROP-TAG @ _ROP-POOL @ _ROPOOL-DESC DUP 0= IF
+        DROP RACQ-S-UNQUALIFIED EXIT
+    THEN DUP _ROP-D !
+    COMP-CAPS-VALID? 0= IF RACQ-S-UNQUALIFIED EXIT THEN
+    _ROP-D @ COMP.STATE-SIZE @ ROPOOL-MEMBER-SIZE < IF
+        RACQ-S-UNQUALIFIED EXIT
+    THEN
+    _ROP-D @ COMP.STATE-INIT-XT @ IF RACQ-S-UNQUALIFIED EXIT THEN
+    _ROP-D @ DUP COMP.ID-A @ SWAP COMP.ID-U @
+        _ROP-POOL @ ROPOOL.CREG @ CREG-TYPE-FIND ?DUP IF
+            _ROP-D @ <> IF RACQ-S-UNQUALIFIED EXIT THEN
+    ELSE
+        _ROP-D @ _ROP-POOL @ ROPOOL.CREG @ CREG-TYPE-ENSURE IF
+            RACQ-S-CAPACITY EXIT
+        THEN
+    THEN
+    _ROP-D @ CINST-NEW _ROP-STATUS ! _ROP-INSTANCE !
+    _ROP-STATUS @ IF 0 _ROPOOL-CREATE-ROLLBACK RACQ-S-CAPACITY EXIT THEN
+    _ROP-POOL @ ROPOOL.NEXT-GENERATION _ROPOOL-NEXT
+        _ROP-SLOT @ ROS.GENERATION !
+    _ROP-TAG @ _ROP-SLOT @ ROS.TAG !
+    _ROP-A @ _ROP-SLOT @ ROS.RID RID-COPY
+    _ROP-INSTANCE @ _ROP-SLOT @ ROS.INSTANCE !
+    _ROP-INSTANCE @ CINST-STATE DUP _ROP-MEMBER !
+        ROPOOL-MEMBER-SIZE 0 FILL
+    ROPOOL-MEMBER-MAGIC _ROP-MEMBER @ ROMEM.MAGIC !
+    _ROP-POOL @ _ROP-MEMBER @ ROMEM.POOL !
+    _ROP-I @ _ROP-MEMBER @ ROMEM.SLOT-I !
+    _ROP-SLOT @ ROS.GENERATION @ _ROP-MEMBER @ ROMEM.GENERATION !
+    _ROP-TAG @ _ROP-MEMBER @ ROMEM.TAG !
+    _ROP-LOCATOR @ _ROP-TAG @ _ROP-INSTANCE @ _ROP-POOL @
+        _ROPOOL-STATE-INIT-CALL DUP _ROP-STATUS !
+    DUP RACQ-STATUS-VALID? 0= IF
+        DROP 0 _ROPOOL-CREATE-ROLLBACK RACQ-S-INVALID EXIT
+    THEN
+    RACQ-S-OK <> IF
+        0 _ROPOOL-CREATE-ROLLBACK _ROP-STATUS @ EXIT
+    THEN
+    _ROP-INSTANCE @ _ROP-POOL @ ROPOOL.CREG @ CREG-INST+
+    DUP IF DROP 0 _ROPOOL-CREATE-ROLLBACK RACQ-S-CAPACITY EXIT THEN DROP
+    _ROP-A @ _ROP-INSTANCE @ _ROP-POOL @ ROPOOL.CONTEXT @
+        _ROP-POOL @ ROPOOL.RREG @ RREG-PUBLISH DUP _ROP-STATUS !
+    DUP RREG-S-OK <> IF
+        DROP -1 _ROPOOL-CREATE-ROLLBACK
+        _ROP-STATUS @ RREG-S-FULL = IF RACQ-S-CAPACITY
+        ELSE RACQ-S-UNAVAILABLE THEN EXIT
+    THEN DROP
+    -1 _ROP-SLOT @ ROS.ACTIVE !
+    1 _ROP-POOL @ ROPOOL.LIVE-N +!
+    RACQ-S-OK ;
+
+: _ROPOOL-DESTROY-SLOT  ( slot-index pool -- status )
+    _ROP-POOL ! _ROP-I !
+    _ROP-I @ _ROP-POOL @ _ROPOOL-SLOT DUP _ROP-SLOT !
+    ROS.ACTIVE @ 0= IF RACQ-S-STALE-TOKEN EXIT THEN
+    _ROP-SLOT @ ROS.INFLIGHT @ IF RACQ-S-BUSY EXIT THEN
+    _ROP-SLOT @ ROS.INSTANCE @ DUP 0= IF DROP RACQ-S-UNAVAILABLE EXIT THEN
+        _ROP-INSTANCE !
+    _ROP-SLOT @ _ROP-POOL @ _ROPOOL-SLOT-PUBLISHED? 0= IF
+        RACQ-S-RELEASE-FAILED EXIT
+    THEN
+    _ROP-SLOT @ ROS.RID _ROP-POOL @ ROPOOL.CONTEXT @
+        _ROP-POOL @ ROPOOL.RREG @ RREG-UNPUBLISH
+    DUP RREG-S-OK <> IF DROP RACQ-S-RELEASE-FAILED EXIT THEN DROP
+    _ROP-INSTANCE @ _ROP-POOL @ ROPOOL.CREG @ CREG-INST- DUP IF
+        DROP
+        _ROP-SLOT @ ROS.RID _ROP-INSTANCE @
+            _ROP-POOL @ ROPOOL.CONTEXT @ _ROP-POOL @ ROPOOL.RREG @
+            RREG-PUBLISH DROP
+        RACQ-S-RELEASE-FAILED EXIT
+    THEN DROP
+    _ROP-INSTANCE @ CINST-FREE
+    _ROP-SLOT @ ROPOOL-SLOT-SIZE 0 FILL
+    -1 _ROP-POOL @ ROPOOL.LIVE-N +!
+    RACQ-S-OK ;
+
+: _ROPOOL-COMMIT-LEASE  ( result slot-index lease-index pool -- status )
+    _ROP-POOL ! _ROP-J ! _ROP-I ! _ROP-RESULT !
+    _ROP-I @ _ROP-POOL @ _ROPOOL-SLOT DUP _ROP-SLOT !
+    ROS.ACTIVE @ 0= IF RACQ-S-UNAVAILABLE EXIT THEN
+    _ROP-J @ _ROP-POOL @ _ROPOOL-LEASE DUP _ROP-LEASE !
+    ROL.TOKEN @ IF RACQ-S-CAPACITY EXIT THEN
+    _ROP-REF RREF-INIT
+    _ROP-SLOT @ ROS.RID _ROP-REF RREF.ID RID-COPY
+    _ROP-REF _ROP-RESULT @ RACQ-RESULT-REF!
+        RACQ-S-OK <> IF RACQ-S-INVALID EXIT THEN
+    _ROP-RESULT @ RACQ.RESULT-TOKEN DUP _ROP-TOKEN ! DROP
+    _ROP-POOL @ ROPOOL.NEXT-COOKIE _ROPOOL-NEXT _ROP-N !
+    _ROP-N @ _ROP-SLOT @ ROS.GENERATION @ _ROP-POOL @ _ROP-TOKEN @
+        RACQ-TOKEN-ACTIVATE! RACQ-S-OK <> IF RACQ-S-INVALID EXIT THEN
+    _ROP-LEASE @ ROPOOL-LEASE-SIZE 0 FILL
+    _ROP-TOKEN @ _ROP-LEASE @ ROL.TOKEN !
+    _ROP-N @ _ROP-LEASE @ ROL.COOKIE !
+    _ROP-SLOT @ ROS.GENERATION @ _ROP-LEASE @ ROL.GENERATION !
+    _ROP-I @ _ROP-LEASE @ ROL.SLOT-I !
+    1 _ROP-SLOT @ ROS.REF-N +!
+    1 _ROP-POOL @ ROPOOL.LEASE-N +!
+    RACQ-S-OK ;
+
+: _ROPOOL-ACQUIRE-LOCKED  ( locator result pool -- status )
+    _ROP-POOL ! _ROP-RESULT ! _ROP-LOCATOR !
+    0 _ROP-F !
+    _ROP-POOL @ _ROPOOL-RUNTIME? 0= IF RACQ-S-INVALID EXIT THEN
+    1 _ROP-POOL @ ROPOOL.ACQUIRE-CALLS +!
+    _ROP-LOCATOR @ QLOC-VALID? 0= IF RACQ-S-INVALID EXIT THEN
+    _ROP-LOCATOR @ _ROP-POOL @ _ROPOOL-ADMIT-CALL DUP _ROP-STATUS !
+    DUP RACQ-STATUS-VALID? 0= IF 2DROP RACQ-S-INVALID EXIT THEN
+    RACQ-S-OK <> IF DROP _ROP-STATUS @ EXIT THEN _ROP-TAG !
+    _ROP-TAG @ _ROP-POOL @ _ROPOOL-DESC DUP 0= IF
+        DROP RACQ-S-UNQUALIFIED EXIT
+    THEN
+    DUP COMP-CAPS-VALID? 0= IF DROP RACQ-S-UNQUALIFIED EXIT THEN
+    DUP COMP.STATE-INIT-XT @ IF DROP RACQ-S-UNQUALIFIED EXIT THEN
+    COMP.STATE-SIZE @ ROPOOL-MEMBER-SIZE < IF RACQ-S-UNQUALIFIED EXIT THEN
+    _ROP-POOL @ _ROPOOL-LEASE-FREE-RAW DUP _ROP-J !
+        0< IF RACQ-S-CAPACITY EXIT THEN
+    _ROP-LOCATOR @ QLOC.REF RREF.ID _ROP-POOL @
+        _ROPOOL-SLOT-FIND-RAW DUP _ROP-I !
+    0< IF
+        _ROP-POOL @ ROPOOL.LIVE-N @
+            _ROP-POOL @ ROPOOL.SLOT-CAP @ >= IF RACQ-S-CAPACITY EXIT THEN
+        _ROP-POOL @ _ROPOOL-SLOT-FREE-RAW DUP _ROP-I !
+            0< IF RACQ-S-CAPACITY EXIT THEN
+        _ROP-LOCATOR @ _ROP-TAG @ _ROP-I @ _ROP-POOL @
+            _ROPOOL-CREATE-SLOT DUP RACQ-S-OK <> IF EXIT THEN DROP
+        -1 _ROP-F !
+    ELSE
+        _ROP-I @ _ROP-POOL @ _ROPOOL-SLOT DUP _ROP-SLOT !
+        DUP ROS.FLAGS @ ROS-F-CLOSING AND IF DROP RACQ-S-BUSY EXIT THEN
+        ROS.TAG @ _ROP-TAG @ <> IF RACQ-S-UNQUALIFIED EXIT THEN
+        _ROP-SLOT @ _ROP-POOL @ _ROPOOL-SLOT-PUBLISHED? 0= IF
+            RACQ-S-UNAVAILABLE EXIT
+        THEN
+    THEN
+    _ROP-RESULT @ _ROP-I @ _ROP-J @ _ROP-POOL @
+        _ROPOOL-COMMIT-LEASE _ROP-STATUS !
+    _ROP-STATUS @ RACQ-S-OK <> _ROP-F @ AND IF
+        _ROP-I @ _ROP-POOL @ _ROPOOL-DESTROY-SLOT
+        RACQ-S-OK <> IF RACQ-S-RELEASE-FAILED EXIT THEN
+    THEN
+    _ROP-STATUS @ ;
+
+: _ROPOOL-ROOT-ACQUIRE  ( locator result pool -- status )
+    ['] _ROPOOL-ACQUIRE-LOCKED _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-ROOT-ACQUIRE-CALLBACK  ( locator result pool -- status )
+    DUP ROPOOL.GUARD >R
+    ['] _ROPOOL-ROOT-ACQUIRE R> WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Exact token ledger, quiescence, and retryable release
+\ ---------------------------------------------------------------------
+
+: _ROPOOL-TOKEN-LOCAL?  ( token pool -- flag )
+    _ROP-POOL ! _ROP-TOKEN !
+    _ROP-TOKEN @ 0= IF 0 EXIT THEN
+    _ROP-TOKEN @ RACQ.TOKEN-MAGIC @ RACQ-TOKEN-MAGIC =
+    _ROP-TOKEN @ RACQ.TOKEN-ABI @ RACQ-TOKEN-ABI-VERSION = AND
+    _ROP-TOKEN @ RACQ.TOKEN-SIZE @ RACQ-TOKEN-SIZE = AND
+    _ROP-TOKEN @ RACQ.TOKEN-SELF @ _ROP-TOKEN @ = AND
+    _ROP-TOKEN @ RACQ.TOKEN-ROOT @ _ROP-POOL @ = AND
+    _ROP-TOKEN @ RACQ.TOKEN-COOKIE @ 0> AND
+    _ROP-TOKEN @ RACQ.TOKEN-GENERATION @ 0> AND
+    _ROP-TOKEN @ RACQ.TOKEN-FLAGS @ 0= AND
+    _ROP-TOKEN @ _RAT-RESERVED + @ 0= AND
+    _ROP-TOKEN @ RACQ.TOKEN-STATE @ DUP RACQ-TOKEN-S-ACTIVE =
+        SWAP RACQ-TOKEN-S-RELEASING = OR AND ;
+
+: _ROPOOL-TOKEN-LEASE?  ( token pool -- lease slot flag )
+    _ROP-POOL ! _ROP-TOKEN !
+    _ROP-POOL @ _ROPOOL-RUNTIME? 0= IF 0 0 0 EXIT THEN
+    _ROP-TOKEN @ _ROP-POOL @ _ROPOOL-TOKEN-LOCAL? 0= IF 0 0 0 EXIT THEN
+    _ROP-TOKEN @ _ROP-POOL @ _ROPOOL-LEASE-FIND-RAW DUP _ROP-J !
+        0< IF 0 0 0 EXIT THEN
+    _ROP-J @ _ROP-POOL @ _ROPOOL-LEASE DUP _ROP-LEASE !
+    ROL.TOKEN @ _ROP-TOKEN @ <> IF 0 0 0 EXIT THEN
+    _ROP-LEASE @ ROL.COOKIE @ _ROP-TOKEN @ RACQ.TOKEN-COOKIE @ <>
+        IF 0 0 0 EXIT THEN
+    _ROP-LEASE @ ROL.GENERATION @ _ROP-TOKEN @ RACQ.TOKEN-GENERATION @ <>
+        IF 0 0 0 EXIT THEN
+    _ROP-LEASE @ ROL.FLAGS @ ROL-F-ANCHOR INVERT AND IF 0 0 0 EXIT THEN
+    _ROP-LEASE @ _ROL-RESERVED + @ IF 0 0 0 EXIT THEN
+    _ROP-LEASE @ ROL.SLOT-I @ DUP _ROP-I ! _ROP-POOL @
+        _ROPOOL-SLOT-I? 0= IF 0 0 0 EXIT THEN
+    _ROP-I @ _ROP-POOL @ _ROPOOL-SLOT DUP _ROP-SLOT !
+    ROS.ACTIVE @ 0= IF 0 0 0 EXIT THEN
+    _ROP-SLOT @ ROS.GENERATION @ _ROP-LEASE @ ROL.GENERATION @ <>
+        IF 0 0 0 EXIT THEN
+    _ROP-SLOT @ ROS.REF-N @ 0> 0= IF 0 0 0 EXIT THEN
+    _ROP-LEASE @ _ROP-SLOT @ -1 ;
+
+: _ROPOOL-QUIESCENT-LOCKED  ( token pool -- final? status )
+    _ROP-POOL ! _ROP-TOKEN !
+    _ROP-POOL @ _ROPOOL-RUNTIME? 0= IF 0 RACQ-S-INVALID EXIT THEN
+    1 _ROP-POOL @ ROPOOL.QUIESCENT-CALLS +!
+    _ROP-TOKEN @ _ROP-POOL @ _ROPOOL-TOKEN-LEASE? 0= IF
+        2DROP 0 RACQ-S-STALE-TOKEN EXIT
+    THEN
+    _ROP-SLOT ! _ROP-LEASE !
+    0 _ROP-F !
+    _ROP-SLOT @ ROS.REF-N @ 1 = IF
+        _ROP-SLOT @ ROS.FLAGS DUP @ ROS-F-CLOSING OR SWAP !
+        -1 _ROP-F !
+    THEN
+    _ROP-POOL @ ROPOOL.TEST-BUSY @ ?DUP IF
+        DROP -1 _ROP-POOL @ ROPOOL.TEST-BUSY +!
+        _ROP-F @ RACQ-S-BUSY EXIT
+    THEN
+    _ROP-F @ 0= IF 0 RACQ-S-OK EXIT THEN
+    -1 _ROP-SLOT @ ROS.INFLIGHT @ IF RACQ-S-BUSY ELSE RACQ-S-OK THEN ;
+
+: _ROPOOL-QUIESCENT-PREP-INNER  ( token pool -- final? status )
+    ['] _ROPOOL-QUIESCENT-LOCKED _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-QUIESCENT-PREP  ( token pool -- final? status )
+    DUP ROPOOL.GUARD >R
+    ['] _ROPOOL-QUIESCENT-PREP-INNER R> WITH-GUARD ;
+
+: _ROPOOL-QUIESCENT-CHECK-LOCKED  ( token pool -- status )
+    _ROP-POOL ! _ROP-TOKEN !
+    _ROP-TOKEN @ _ROP-POOL @ _ROPOOL-TOKEN-LEASE? 0= IF
+        2DROP RACQ-S-STALE-TOKEN EXIT
+    THEN
+    _ROP-SLOT ! _ROP-LEASE !
+    _ROP-SLOT @ ROS.REF-N @ 1 <> IF RACQ-S-STALE-TOKEN EXIT THEN
+    _ROP-SLOT @ ROS.FLAGS @ ROS-F-CLOSING AND 0= IF
+        RACQ-S-STALE-TOKEN EXIT
+    THEN
+    _ROP-SLOT @ ROS.INFLIGHT @ IF RACQ-S-BUSY ELSE RACQ-S-OK THEN ;
+
+: _ROPOOL-QUIESCENT-CHECK-INNER  ( token pool -- status )
+    ['] _ROPOOL-QUIESCENT-CHECK-LOCKED
+        _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-QUIESCENT-CHECK  ( token pool -- status )
+    DUP ROPOOL.GUARD >R
+    ['] _ROPOOL-QUIESCENT-CHECK-INNER R> WITH-GUARD ;
+
+\ A final release coordinates with CBUS without retaining a bus pointer in
+\ the pool.  Try-only acquisition preserves the global lock order
+\ CBUS -> pool -> scratch and turns contention into a retryable owner error.
+: _ROPOOL-CBUS-TRY  ( token pool xt -- status )
+    _CBUS-DISPATCH-GUARD GUARD-TRY-ACQUIRE 0= IF
+        DROP 2DROP RACQ-S-RELEASE-FAILED EXIT
+    THEN
+    CATCH
+    _CBUS-DISPATCH-GUARD GUARD-RELEASE
+    ?DUP IF DROP 2DROP RACQ-S-RELEASE-FAILED THEN ;
+
+: _ROPOOL-ROOT-QUIESCENT  ( token pool -- status )
+    CBUS-DISPATCHING? IF 2DROP RACQ-S-RELEASE-FAILED EXIT THEN
+    2DUP _ROPOOL-QUIESCENT-PREP
+    DUP RACQ-S-OK <> IF >R DROP 2DROP R> EXIT THEN DROP
+    0= IF 2DROP RACQ-S-OK EXIT THEN
+    ['] _ROPOOL-QUIESCENT-CHECK _ROPOOL-CBUS-TRY ;
+
+: _ROPOOL-CLEAR-CLOSING  ( slot -- )
+    ROS.FLAGS DUP @ ROS-F-CLOSING INVERT AND SWAP ! ;
+
+: _ROPOOL-RELEASE-LOCKED  ( token pool -- status )
+    _ROP-POOL ! _ROP-TOKEN !
+    _ROP-POOL @ _ROPOOL-RUNTIME? 0= IF RACQ-S-INVALID EXIT THEN
+    1 _ROP-POOL @ ROPOOL.RELEASE-CALLS +!
+    _ROP-TOKEN @ _ROP-POOL @ _ROPOOL-TOKEN-LEASE? 0= IF
+        2DROP RACQ-S-STALE-TOKEN EXIT
+    THEN
+    _ROP-SLOT ! _ROP-LEASE !
+    _ROP-LEASE @ ROL.SLOT-I @ _ROP-I !
+    _ROP-LEASE @ ROL.FLAGS @ ROL-F-ANCHOR AND
+    _ROP-SLOT @ ROS.REF-N @ 1 > AND IF RACQ-S-BUSY EXIT THEN
+    _ROP-POOL @ ROPOOL.TEST-RELEASE-FAIL @ ?DUP IF
+        DROP -1 _ROP-POOL @ ROPOOL.TEST-RELEASE-FAIL +!
+        _ROP-SLOT @ ROS.REF-N @ 1 = IF
+            _ROP-SLOT @ _ROPOOL-CLEAR-CLOSING
+        THEN
+        RACQ-S-RELEASE-FAILED EXIT
+    THEN
+    _ROP-SLOT @ ROS.REF-N @ 1 > IF
+        _ROP-LEASE @ ROPOOL-LEASE-SIZE 0 FILL
+        -1 _ROP-SLOT @ ROS.REF-N +!
+        -1 _ROP-POOL @ ROPOOL.LEASE-N +!
+        RACQ-S-OK EXIT
+    THEN
+    _ROP-SLOT @ ROS.FLAGS @ ROS-F-CLOSING AND 0= IF
+        RACQ-S-RELEASE-FAILED EXIT
+    THEN
+    _ROP-SLOT @ ROS.INFLIGHT @ IF RACQ-S-BUSY EXIT THEN
+    _ROP-I @ _ROP-POOL @ _ROPOOL-DESTROY-SLOT DUP RACQ-S-OK <> IF
+        _ROP-SLOT @ _ROPOOL-CLEAR-CLOSING EXIT
+    THEN DROP
+    _ROP-LEASE @ ROPOOL-LEASE-SIZE 0 FILL
+    -1 _ROP-POOL @ ROPOOL.LEASE-N +!
+    RACQ-S-OK ;
+
+: _ROPOOL-ROOT-RELEASE-INNER  ( token pool -- status )
+    ['] _ROPOOL-RELEASE-LOCKED _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-ROOT-RELEASE-POOL  ( token pool -- status )
+    DUP ROPOOL.GUARD >R
+    ['] _ROPOOL-ROOT-RELEASE-INNER R> WITH-GUARD ;
+
+: _ROPOOL-ROOT-RELEASE  ( token pool -- status )
+    CBUS-DISPATCHING? IF 2DROP RACQ-S-RELEASE-FAILED EXIT THEN
+    ['] _ROPOOL-ROOT-RELEASE-POOL _ROPOOL-CBUS-TRY ;
+
+\ ---------------------------------------------------------------------
+\ Deep validation
+\ ---------------------------------------------------------------------
+
+: _ROPOOL-SLOT-LEASE-N  ( slot-index pool -- count )
+    _ROP-POOL ! _ROP-I ! 0 _ROP-N !
+    _ROP-POOL @ ROPOOL.LEASE-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-LEASE DUP ROL.TOKEN @ IF
+            ROL.SLOT-I @ _ROP-I @ = IF 1 _ROP-N +! THEN
+        ELSE DROP THEN
+    LOOP _ROP-N @ ;
+
+: _ROPOOL-SLOT-ANCHOR-N  ( slot-index pool -- count )
+    _ROP-POOL ! _ROP-I ! 0 _ROP-N !
+    _ROP-POOL @ ROPOOL.LEASE-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-LEASE DUP ROL.TOKEN @ IF
+            DUP ROL.SLOT-I @ _ROP-I @ =
+            SWAP ROL.FLAGS @ ROL-F-ANCHOR AND 0<> AND IF
+                1 _ROP-N +!
+            THEN
+        ELSE DROP THEN
+    LOOP _ROP-N @ ;
+
+: _ROPOOL-SLOT-MEMBER?  ( index slot pool -- flag )
+    _ROP-POOL ! _ROP-SLOT ! _ROP-I !
+    _ROP-SLOT @ ROS.INSTANCE @ DUP 0= IF DROP 0 EXIT THEN _ROP-INSTANCE !
+    _ROP-SLOT @ ROS.TAG @ _ROP-POOL @ _ROPOOL-DESC
+        _ROP-INSTANCE @ CINST-DESC <> IF 0 EXIT THEN
+    _ROP-INSTANCE @ CINST-DESC COMP.STATE-SIZE @
+        ROPOOL-MEMBER-SIZE < IF 0 EXIT THEN
+    _ROP-INSTANCE @ CINST-STATE DUP _ROP-MEMBER !
+    ROMEM.MAGIC @ ROPOOL-MEMBER-MAGIC =
+    _ROP-MEMBER @ ROMEM.POOL @ _ROP-POOL @ = AND
+    _ROP-MEMBER @ ROMEM.SLOT-I @ _ROP-I @ = AND
+    _ROP-MEMBER @ ROMEM.GENERATION @ _ROP-SLOT @ ROS.GENERATION @ = AND
+    _ROP-MEMBER @ ROMEM.TAG @ _ROP-SLOT @ ROS.TAG @ = AND
+    _ROP-MEMBER @ ROMEM.FLAGS @ 0= AND ;
+
+: _ROPOOL-SLOT-UNIQUE?  ( index slot pool -- flag )
+    _ROP-POOL ! _ROP-SLOT ! _ROP-I !
+    _ROP-I @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-SLOT DUP ROS.ACTIVE @ IF
+            DUP ROS.RID _ROP-SLOT @ ROS.RID RID= IF DROP 0 UNLOOP EXIT THEN
+            ROS.INSTANCE @ _ROP-SLOT @ ROS.INSTANCE @ = IF 0 UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP -1 ;
+
+: _ROPOOL-DEEP?  ( pool -- flag )
+    DUP _ROPOOL-RUNTIME? 0= IF DROP 0 EXIT THEN _ROP-POOL !
+    _ROP-POOL @ RACQ.ROOT-ACQUIRE-XT @ ['] _ROPOOL-ROOT-ACQUIRE-CALLBACK =
+    _ROP-POOL @ RACQ.ROOT-QUIESCENT-XT @ ['] _ROPOOL-ROOT-QUIESCENT = AND
+    _ROP-POOL @ RACQ.ROOT-RELEASE-XT @ ['] _ROPOOL-ROOT-RELEASE = AND
+        0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.NEXT-GENERATION @ 0> 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.NEXT-COOKIE @ 0> 0= IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.ACQUIRE-CALLS @ 0< IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.RELEASE-CALLS @ 0< IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.QUIESCENT-CALLS @ 0< IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.TEST-BUSY @ 0< IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.TEST-RELEASE-FAIL @ 0< IF 0 EXIT THEN
+    0 _ROP-A ! 0 _ROP-B !
+    _ROP-POOL @ ROPOOL.SLOT-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-SLOT DUP _ROP-SLOT ! ROS.ACTIVE @ IF
+            1 _ROP-A +!
+            _ROP-SLOT @ ROS.GENERATION @ 0> 0= IF 0 UNLOOP EXIT THEN
+            _ROP-SLOT @ ROS.REF-N @ DUP 0> 0= IF DROP 0 UNLOOP EXIT THEN
+            DUP _ROP-B +!
+            I _ROP-POOL @ _ROPOOL-SLOT-LEASE-N <> IF 0 UNLOOP EXIT THEN
+            I _ROP-POOL @ _ROPOOL-SLOT-ANCHOR-N 1 > IF 0 UNLOOP EXIT THEN
+            _ROP-SLOT @ ROS.INFLIGHT @ 0< IF 0 UNLOOP EXIT THEN
+            _ROP-SLOT @ ROS.RID RID-PRESENT? 0= IF 0 UNLOOP EXIT THEN
+            _ROP-SLOT @ ROS.RESERVED @ IF 0 UNLOOP EXIT THEN
+            _ROP-SLOT @ ROS.FLAGS @ ROS-F-CLOSING INVERT AND IF
+                0 UNLOOP EXIT
+            THEN
+            _ROP-SLOT @ ROS.FLAGS @ ROS-F-CLOSING AND IF
+                _ROP-SLOT @ ROS.REF-N @ 1 <> IF 0 UNLOOP EXIT THEN
+            THEN
+            _ROP-SLOT @ _ROP-POOL @ _ROPOOL-SLOT-PUBLISHED? 0= IF
+                0 UNLOOP EXIT
+            THEN
+            I _ROP-SLOT @ _ROP-POOL @ _ROPOOL-SLOT-MEMBER? 0= IF
+                0 UNLOOP EXIT
+            THEN
+            I _ROP-SLOT @ _ROP-POOL @ _ROPOOL-SLOT-UNIQUE? 0= IF
+                0 UNLOOP EXIT
+            THEN
+        ELSE
+            _ROP-SLOT @ ROPOOL-SLOT-SIZE _ROPOOL-ZERO? 0= IF
+                0 UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    _ROP-A @ _ROP-POOL @ ROPOOL.LIVE-N @ <> IF 0 EXIT THEN
+    0 _ROP-C !
+    _ROP-POOL @ ROPOOL.LEASE-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-LEASE DUP _ROP-LEASE ! ROL.TOKEN @ IF
+            1 _ROP-C +!
+            _ROP-LEASE @ ROL.TOKEN @ _ROP-POOL @
+                _ROPOOL-TOKEN-LEASE? 0= IF 2DROP 0 UNLOOP EXIT THEN
+            DROP _ROP-LEASE @ <> IF 0 UNLOOP EXIT THEN
+        ELSE
+            _ROP-LEASE @ ROPOOL-LEASE-SIZE _ROPOOL-ZERO? 0= IF
+                0 UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    _ROP-C @ _ROP-POOL @ ROPOOL.LEASE-N @ =
+    _ROP-B @ _ROP-C @ = AND ;
+
+: _ROPOOL-VALID-INNER  ( pool -- flag )
+    ['] _ROPOOL-DEEP? _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: ROPOOL-VALID?  ( pool -- flag )
+    DUP _ROPOOL-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP ROPOOL.GUARD >R ['] _ROPOOL-VALID-INNER R> WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Config validation and construction
+\ ---------------------------------------------------------------------
+
+: _ROPOOL-CONFIG-HEADER?  ( config -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ROPOOL-CONFIG-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP ROPC.MAGIC @ ROPOOL-CONFIG-MAGIC =
+    OVER ROPC.ABI @ ROPOOL-CONFIG-ABI-VERSION = AND
+    OVER ROPC.SIZE @ ROPOOL-CONFIG-SIZE = AND
+    OVER ROPC.FLAGS @ 0= AND
+    SWAP _ROPC-RESERVED + @ 0= AND ;
+
+: _ROPOOL-CONFIG-VALID  ( config -- flag )
+    DUP _ROPOOL-CONFIG-HEADER? 0= IF DROP 0 EXIT THEN _ROP-A !
+    _ROP-A @ ROPC.OWNER-A @ 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.OWNER-U @ DUP 1 < SWAP RACQ-OWNER-MAX > OR IF 0 EXIT THEN
+    _ROP-A @ ROPC.OWNER-A @ _ROP-A @ ROPC.OWNER-U @
+        MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.OWNER-A @ _ROP-A @ ROPC.OWNER-U @ UTF8-VALID? 0= IF
+        0 EXIT
+    THEN
+    _ROP-A @ ROPC.OWNER-DATA @ 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.CONTEXT @ DUP CTX-VALID? 0= IF DROP 0 EXIT THEN
+    DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF DROP 0 EXIT THEN DROP
+    _ROP-A @ ROPC.CREG @ DUP 0= IF DROP 0 EXIT THEN
+    DUP CREG.TYPE-N @ DUP 0< SWAP CREG-MAX-TYPES > OR IF DROP 0 EXIT THEN
+    CREG.INST-N @ DUP 0< SWAP CREG-MAX-INSTANCES > OR IF 0 EXIT THEN
+    _ROP-A @ ROPC.RREG @ DUP RREG-VALID? 0= IF DROP 0 EXIT THEN
+    DUP RREG.COMPONENTS @ _ROP-A @ ROPC.CREG @ <> IF DROP 0 EXIT THEN
+    _ROP-A @ ROPC.CONTEXT @ SWAP RREG-CONTEXT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.SLOTS @ 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.SLOT-CAP @ ROPOOL-SLOT-BYTES DUP 0= IF DROP 0 EXIT THEN
+    _ROP-A @ ROPC.SLOTS @ SWAP MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.LEASES @ 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.LEASE-CAP @ ROPOOL-LEASE-BYTES DUP 0= IF DROP 0 EXIT THEN
+    _ROP-A @ ROPC.LEASES @ SWAP MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.ADMIT-XT @ 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.DESCRIPTOR-XT @ 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.STATE-INIT-XT @ 0<> ;
+
+: ROPOOL-CONFIG-VALID?  ( config -- flag )
+    ['] _ROPOOL-CONFIG-VALID _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-DISJOINT?  ( a1 u1 a2 u2 -- flag )
+    MSPAN-OVERLAP? 0= ;
+
+: _ROPOOL-CONFIG-SPANS?  ( config pool -- flag )
+    _ROP-B ! _ROP-A !
+    _ROP-B @ 0= IF 0 EXIT THEN
+    _ROP-B @ ROPOOL-SIZE MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.SLOT-CAP @ ROPOOL-SLOT-BYTES _ROP-C !
+    _ROP-A @ ROPC.LEASE-CAP @ ROPOOL-LEASE-BYTES _ROP-D !
+    _ROP-A @ ROPC.OWNER-A @ _ROP-E !
+    _ROP-A @ ROPC.OWNER-U @ _ROP-F !
+    _ROP-E @ _ROP-F @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    \ Owner text is another borrowed construction span.  Check it against
+    \ every structural span before the remaining pairwise matrix.
+    _ROP-E @ _ROP-F @ _ROP-A @ ROPOOL-CONFIG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-E @ _ROP-F @ _ROP-B @ ROPOOL-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-E @ _ROP-F @ _ROP-A @ ROPC.SLOTS @ _ROP-C @
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-E @ _ROP-F @ _ROP-A @ ROPC.LEASES @ _ROP-D @
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-E @ _ROP-F @ _ROP-A @ ROPC.CONTEXT @ CTX-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-E @ _ROP-F @ _ROP-A @ ROPC.CREG @ CREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-E @ _ROP-F @ _ROP-A @ ROPC.RREG @ RREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    \ All eight caller and borrowed runtime spans must be pairwise disjoint.
+    \ The complete read-only matrix finishes before INIT clears one byte.
+    _ROP-A @ ROPOOL-CONFIG-SIZE _ROP-B @ ROPOOL-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPOOL-CONFIG-SIZE _ROP-A @ ROPC.SLOTS @ _ROP-C @
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPOOL-CONFIG-SIZE _ROP-A @ ROPC.LEASES @ _ROP-D @
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPOOL-CONFIG-SIZE _ROP-A @ ROPC.CONTEXT @ CTX-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPOOL-CONFIG-SIZE _ROP-A @ ROPC.CREG @ CREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPOOL-CONFIG-SIZE _ROP-A @ ROPC.RREG @ RREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-B @ ROPOOL-SIZE _ROP-A @ ROPC.SLOTS @ _ROP-C @
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-B @ ROPOOL-SIZE _ROP-A @ ROPC.LEASES @ _ROP-D @
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-B @ ROPOOL-SIZE _ROP-A @ ROPC.CONTEXT @ CTX-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-B @ ROPOOL-SIZE _ROP-A @ ROPC.CREG @ CREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-B @ ROPOOL-SIZE _ROP-A @ ROPC.RREG @ RREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.SLOTS @ _ROP-C @ _ROP-A @ ROPC.LEASES @ _ROP-D @
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.SLOTS @ _ROP-C @ _ROP-A @ ROPC.CONTEXT @ CTX-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.SLOTS @ _ROP-C @ _ROP-A @ ROPC.CREG @ CREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.SLOTS @ _ROP-C @ _ROP-A @ ROPC.RREG @ RREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.LEASES @ _ROP-D @ _ROP-A @ ROPC.CONTEXT @ CTX-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.LEASES @ _ROP-D @ _ROP-A @ ROPC.CREG @ CREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.LEASES @ _ROP-D @ _ROP-A @ ROPC.RREG @ RREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.CONTEXT @ CTX-SIZE _ROP-A @ ROPC.CREG @ CREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.CONTEXT @ CTX-SIZE _ROP-A @ ROPC.RREG @ RREG-SIZE
+        _ROPOOL-DISJOINT? 0= IF 0 EXIT THEN
+    _ROP-A @ ROPC.CREG @ CREG-SIZE _ROP-A @ ROPC.RREG @ RREG-SIZE
+        _ROPOOL-DISJOINT? ;
+
+: _ROPOOL-INIT  ( config pool -- status )
+    _ROP-B ! _ROP-A !
+    _ROP-A @ _ROPOOL-CONFIG-VALID 0= IF RACQ-S-INVALID EXIT THEN
+    _ROP-A @ _ROP-B @ _ROPOOL-CONFIG-SPANS? 0= IF RACQ-S-INVALID EXIT THEN
+    _ROP-B @ _ROPOOL-HEADER? IF RACQ-S-BUSY EXIT THEN
+    _ROP-B @ ROPOOL-SIZE 0 FILL
+    _ROP-A @ ROPC.SLOTS @
+        _ROP-A @ ROPC.SLOT-CAP @ ROPOOL-SLOT-BYTES 0 FILL
+    _ROP-A @ ROPC.LEASES @
+        _ROP-A @ ROPC.LEASE-CAP @ ROPOOL-LEASE-BYTES 0 FILL
+    ROPOOL-MAGIC _ROP-B @ ROPOOL.MAGIC !
+    ROPOOL-ABI-VERSION _ROP-B @ ROPOOL.ABI !
+    ROPOOL-SIZE _ROP-B @ ROPOOL.SIZE !
+    _ROP-A @ ROPC.OWNER-DATA @ _ROP-B @ ROPOOL.OWNER-DATA !
+    _ROP-A @ ROPC.CONTEXT @ _ROP-B @ ROPOOL.CONTEXT !
+    _ROP-A @ ROPC.CREG @ _ROP-B @ ROPOOL.CREG !
+    _ROP-A @ ROPC.RREG @ _ROP-B @ ROPOOL.RREG !
+    _ROP-A @ ROPC.SLOTS @ _ROP-B @ ROPOOL.SLOTS !
+    _ROP-A @ ROPC.SLOT-CAP @ _ROP-B @ ROPOOL.SLOT-CAP !
+    _ROP-A @ ROPC.LEASES @ _ROP-B @ ROPOOL.LEASES !
+    _ROP-A @ ROPC.LEASE-CAP @ _ROP-B @ ROPOOL.LEASE-CAP !
+    _ROP-A @ ROPC.ADMIT-XT @ _ROP-B @ ROPOOL.ADMIT-XT !
+    _ROP-A @ ROPC.DESCRIPTOR-XT @ _ROP-B @ ROPOOL.DESCRIPTOR-XT !
+    _ROP-A @ ROPC.STATE-INIT-XT @ _ROP-B @ ROPOOL.STATE-INIT-XT !
+    1 _ROP-B @ ROPOOL.NEXT-GENERATION !
+    1 _ROP-B @ ROPOOL.NEXT-COOKIE !
+    _ROP-A @ ROPC.OWNER-A @ _ROP-A @ ROPC.OWNER-U @ _ROP-B @
+        ['] _ROPOOL-ROOT-ACQUIRE-CALLBACK ['] _ROPOOL-ROOT-QUIESCENT
+        ['] _ROPOOL-ROOT-RELEASE _ROP-B @ ROPOOL.RACQ RACQ-ROOT-INIT
+    DUP RACQ-S-OK <> IF
+        DROP _ROP-B @ ROPOOL-SIZE 0 FILL RACQ-S-INVALID EXIT
+    THEN DROP
+    \ The public validator would reacquire the one cold-path guard.  INIT
+    \ already owns that serialization domain and this pool is unpublished,
+    \ so perform the same deep predicate directly before returning it.
+    _ROP-B @ _ROPOOL-DEEP? 0= IF
+        _ROP-B @ ROPOOL-SIZE 0 FILL RACQ-S-INVALID EXIT
+    THEN
+    RACQ-S-OK ;
+
+: ROPOOL-INIT  ( config pool -- status )
+    ['] _ROPOOL-INIT _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-FINI-LOCKED  ( pool -- status )
+    DUP _ROPOOL-DEEP? 0= IF DROP RACQ-S-INVALID EXIT THEN
+    DUP ROPOOL.LIVE-N @ OVER ROPOOL.LEASE-N @ OR IF
+        DROP RACQ-S-BUSY EXIT
+    THEN
+    DUP ROPOOL.SLOTS @ OVER ROPOOL.SLOT-CAP @ ROPOOL-SLOT-BYTES 0 FILL
+    DUP ROPOOL.LEASES @ OVER ROPOOL.LEASE-CAP @ ROPOOL-LEASE-BYTES 0 FILL
+    \ Leave the currently-held embedded guard intact until WITH-GUARD has
+    \ released it; zeroing an owned guard would strand the release path.
+    _ROP-GUARD 0 FILL RACQ-S-OK ;
+
+: _ROPOOL-FINI-INNER  ( pool -- status )
+    ['] _ROPOOL-FINI-LOCKED _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-FINI-QUIESCED  ( pool -- status )
+    DUP >R DUP ROPOOL.GUARD >R
+    ['] _ROPOOL-FINI-INNER R> WITH-GUARD
+    R> OVER RACQ-S-OK = IF
+        ROPOOL.GUARD _GRD-SIZE-SPIN 0 FILL
+    ELSE
+        DROP
+    THEN ;
+
+: ROPOOL-FINI  ( pool -- status )
+    DUP _ROPOOL-HEADER? 0= IF DROP RACQ-S-INVALID EXIT THEN
+    CBUS-DISPATCHING? IF DROP RACQ-S-BUSY EXIT THEN
+    ['] _ROPOOL-FINI-QUIESCED CBUS-WITH-DISPATCH-QUIESCED ;
+
+\ ---------------------------------------------------------------------
+\ Member discovery and handler inflight scope
+\ ---------------------------------------------------------------------
+
+: _ROPOOL-MEMBER-VALID-INNER  ( member -- flag )
+    ['] _ROPOOL-MEMBER-RAW? _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-MEMBER-FAST-INNER  ( member -- flag )
+    _ROPOOL-MEMBER-FAST? ;
+
+: ROPOOL-MEMBER-VALID?  ( member -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.POOL @ DUP _ROPOOL-HEADER? 0= IF 2DROP 0 EXIT THEN
+    ROPOOL.GUARD >R ['] _ROPOOL-MEMBER-VALID-INNER R> WITH-GUARD ;
+
+: ROPOOL-MEMBER  ( instance -- member|0 )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CINST-DESC DUP COMP-DESC-VALID? 0= IF 2DROP 0 EXIT THEN
+    COMP.STATE-SIZE @ ROPOOL-MEMBER-SIZE < IF DROP 0 EXIT THEN
+    CINST-STATE DUP ROPOOL-MEMBER-VALID? 0= IF DROP 0 THEN ;
+
+: ROPOOL-MEMBER-POOL@  ( instance -- pool|0 )
+    ROPOOL-MEMBER DUP IF ROMEM.POOL @ ELSE DROP 0 THEN ;
+
+: ROPOOL-MEMBER-OWNER@  ( member -- pool|0 )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.POOL @ DUP _ROPOOL-HEADER? 0= IF 2DROP 0 EXIT THEN
+    ROPOOL.GUARD >R
+    DUP
+    ['] _ROPOOL-MEMBER-FAST-INNER R> WITH-GUARD
+    IF ROMEM.POOL @ ELSE DROP 0 THEN ;
+
+: ROPOOL-MEMBER-TAG@  ( member -- tag|0 )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.POOL @ DUP _ROPOOL-HEADER? 0= IF 2DROP 0 EXIT THEN
+    ROPOOL.GUARD >R
+    DUP
+    ['] _ROPOOL-MEMBER-FAST-INNER R> WITH-GUARD
+    IF ROMEM.TAG @ ELSE DROP 0 THEN ;
+
+: ROPOOL-MEMBER-RID  ( member -- rid|0 )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.POOL @ DUP _ROPOOL-HEADER? 0= IF 2DROP 0 EXIT THEN
+    ROPOOL.GUARD >R
+    DUP
+    ['] _ROPOOL-MEMBER-FAST-INNER R> WITH-GUARD 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.SLOT-I @ SWAP ROMEM.POOL @ _ROPOOL-SLOT ROS.RID ;
+
+: _ROPOOL-HANDLER-BEGIN-LOCKED  ( request instance pool -- member flag )
+    OVER _ROPOOL-INSTANCE-MEMBER-SHALLOW DUP 0= IF
+        DROP 2DROP DROP 0 0 EXIT
+    THEN
+    DUP 2 PICK _ROPOOL-MEMBER-FOR-POOL? 0= IF
+        2DROP 2DROP 0 0 EXIT
+    THEN
+    >R DROP DROP R>
+    OVER 0= IF 2DROP 0 0 EXIT THEN
+    DUP ROMEM.SLOT-I @ OVER ROMEM.POOL @ _ROPOOL-SLOT
+    2 PICK CBR.RESOURCE-ID OVER ROS.RID RID= 0= IF
+        DROP 2DROP 0 0 EXIT
+    THEN
+    DUP ROS.FLAGS @ ROS-F-CLOSING AND IF DROP 2DROP 0 0 EXIT THEN
+    1 OVER ROS.INFLIGHT +!
+    DROP NIP -1 ;
+
+: ROPOOL-HANDLER-BEGIN  ( request instance -- member flag )
+    DUP _ROPOOL-INSTANCE-POOL-SHALLOW DUP 0= IF DROP 2DROP 0 0 EXIT THEN
+    DUP ROPOOL.GUARD >R
+    ['] _ROPOOL-HANDLER-BEGIN-LOCKED R> WITH-GUARD ;
+
+: _ROPOOL-HANDLER-END-LOCKED  ( member pool -- status )
+    2DUP _ROPOOL-MEMBER-FOR-POOL? 0= IF
+        2DROP RACQ-S-STALE-TOKEN EXIT
+    THEN
+    OVER ROMEM.SLOT-I @ SWAP _ROPOOL-SLOT NIP DUP ROS.INFLIGHT @
+        0> 0= IF DROP RACQ-S-STALE-TOKEN EXIT THEN
+    -1 SWAP ROS.INFLIGHT +! RACQ-S-OK ;
+
+: ROPOOL-HANDLER-END  ( member -- status )
+    DUP 0= IF DROP RACQ-S-INVALID EXIT THEN
+    DUP ROMEM.POOL @ DUP _ROPOOL-HEADER? 0= IF 2DROP RACQ-S-INVALID EXIT THEN
+    DUP ROPOOL.GUARD >R
+    ['] _ROPOOL-HANDLER-END-LOCKED R> WITH-GUARD ;
+
+\ ---------------------------------------------------------------------
+\ Stable observations, iteration, and deterministic fault hooks
+\ ---------------------------------------------------------------------
+
+: _ROPOOL-SLOT-FIND-PUBLIC  ( rid pool -- index|-1 )
+    DUP _ROPOOL-RUNTIME? 0= IF 2DROP -1 EXIT THEN _ROPOOL-SLOT-FIND-RAW ;
+
+: _ROPOOL-SLOT-INSTANCE-PUBLIC  ( index pool -- instance|0 )
+    2DUP _ROPOOL-SLOT-I? 0= IF 2DROP 0 EXIT THEN
+    _ROPOOL-SLOT DUP ROS.ACTIVE @ IF ROS.INSTANCE @ ELSE DROP 0 THEN ;
+
+: _ROPOOL-REFS-PUBLIC  ( rid pool -- refs )
+    2DUP _ROPOOL-SLOT-FIND-RAW DUP 0< IF DROP 2DROP 0 EXIT THEN
+    >R NIP R> SWAP _ROPOOL-SLOT ROS.REF-N @ ;
+
+: _ROPOOL-LIVE-PUBLIC  ( pool -- count )
+    DUP _ROPOOL-RUNTIME? IF ROPOOL.LIVE-N @ ELSE DROP 0 THEN ;
+: _ROPOOL-LEASES-PUBLIC  ( pool -- count )
+    DUP _ROPOOL-RUNTIME? IF ROPOOL.LEASE-N @ ELSE DROP 0 THEN ;
+: _ROPOOL-ACQUIRE-CALLS-PUBLIC  ( pool -- count )
+    DUP _ROPOOL-RUNTIME? IF ROPOOL.ACQUIRE-CALLS @ ELSE DROP 0 THEN ;
+: _ROPOOL-RELEASE-CALLS-PUBLIC  ( pool -- count )
+    DUP _ROPOOL-RUNTIME? IF ROPOOL.RELEASE-CALLS @ ELSE DROP 0 THEN ;
+: _ROPOOL-QUIESCENT-CALLS-PUBLIC  ( pool -- count )
+    DUP _ROPOOL-RUNTIME? IF ROPOOL.QUIESCENT-CALLS @ ELSE DROP 0 THEN ;
+
+: _ROPOOL-FAULT!  ( count field -- status )
+    SWAP DUP 0< IF 2DROP RACQ-S-INVALID EXIT THEN SWAP ! RACQ-S-OK ;
+
+: _ROPOOL-BUSY-PUBLIC  ( count pool -- status )
+    DUP _ROPOOL-RUNTIME? 0= IF 2DROP RACQ-S-INVALID EXIT THEN
+    ROPOOL.TEST-BUSY _ROPOOL-FAULT! ;
+
+: _ROPOOL-FAIL-PUBLIC  ( count pool -- status )
+    DUP _ROPOOL-RUNTIME? 0= IF 2DROP RACQ-S-INVALID EXIT THEN
+    ROPOOL.TEST-RELEASE-FAIL _ROPOOL-FAULT! ;
+
+: _ROPOOL-LEASE-TOKEN-PUBLIC  ( index pool -- token|0 )
+    2DUP _ROPOOL-LEASE-I? 0= IF 2DROP 0 EXIT THEN _ROPOOL-LEASE ROL.TOKEN @ ;
+
+: _ROPOOL-ANCHOR-PUBLIC  ( token pool -- status )
+    _ROP-POOL ! _ROP-TOKEN !
+    _ROP-TOKEN @ _ROP-POOL @ _ROPOOL-TOKEN-LEASE? 0= IF
+        2DROP RACQ-S-STALE-TOKEN EXIT
+    THEN
+    _ROP-SLOT ! _ROP-LEASE !
+    _ROP-LEASE @ ROL.FLAGS @ ROL-F-ANCHOR AND IF RACQ-S-OK EXIT THEN
+    _ROP-LEASE @ ROL.SLOT-I @ _ROP-POOL @
+        _ROPOOL-SLOT-ANCHOR-N IF RACQ-S-BUSY EXIT THEN
+    ROL-F-ANCHOR _ROP-LEASE @ ROL.FLAGS !
+    RACQ-S-OK ;
+
+: _ROPOOL-PUBLIC-INNER  ( i*x xt -- j*x )
+    _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: _ROPOOL-PUBLIC-GUARDED  ( i*x xt pool -- j*x )
+    ROPOOL.GUARD >R
+    ['] _ROPOOL-PUBLIC-INNER R> WITH-GUARD ;
+
+: ROPOOL-SLOT-FIND  ( rid pool -- index|-1 )
+    DUP >R ['] _ROPOOL-SLOT-FIND-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-SLOT-INSTANCE@  ( index pool -- instance|0 )
+    DUP >R ['] _ROPOOL-SLOT-INSTANCE-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-REFS@  ( rid pool -- refs )
+    DUP >R ['] _ROPOOL-REFS-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-LIVE@  ( pool -- count )
+    DUP >R ['] _ROPOOL-LIVE-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-LEASES@  ( pool -- count )
+    DUP >R ['] _ROPOOL-LEASES-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-ACQUIRE-CALLS@  ( pool -- count )
+    DUP >R ['] _ROPOOL-ACQUIRE-CALLS-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-RELEASE-CALLS@  ( pool -- count )
+    DUP >R ['] _ROPOOL-RELEASE-CALLS-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-QUIESCENT-CALLS@  ( pool -- count )
+    DUP >R ['] _ROPOOL-QUIESCENT-CALLS-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-QUIESCENT-BUSY!  ( count pool -- status )
+    DUP >R ['] _ROPOOL-BUSY-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-RELEASE-FAILURES!  ( count pool -- status )
+    DUP >R ['] _ROPOOL-FAIL-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-LEASE-TOKEN@  ( index pool -- token|0 )
+    DUP >R ['] _ROPOOL-LEASE-TOKEN-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+: ROPOOL-ANCHOR!  ( token pool -- status )
+    DUP >R ['] _ROPOOL-ANCHOR-PUBLIC R> _ROPOOL-PUBLIC-GUARDED ;
+
+\ ---------------------------------------------------------------------
+\ Full-pool attachment boundary
+\ ---------------------------------------------------------------------
+
+: _ROPOOL-OUTPUT-SPAN-SAFE?  ( address length pool -- flag )
+    _ROP-POOL ! _ROP-B ! _ROP-A !
+    _ROP-A @ 0= IF 0 EXIT THEN
+    _ROP-A @ _ROP-B @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _ROP-A @ _ROP-B @ _ROP-POOL @ ROPOOL-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _ROP-POOL @ ROPOOL.RACQ RACQ-ROOT-OWNER$ _ROP-D ! _ROP-C !
+    _ROP-A @ _ROP-B @ _ROP-C @ _ROP-D @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _ROP-A @ _ROP-B @ _ROP-POOL @ ROPOOL.SLOTS @
+        _ROP-POOL @ ROPOOL.SLOT-CAP @ ROPOOL-SLOT-BYTES MSPAN-OVERLAP?
+        IF 0 EXIT THEN
+    _ROP-A @ _ROP-B @ _ROP-POOL @ ROPOOL.LEASES @
+        _ROP-POOL @ ROPOOL.LEASE-CAP @ ROPOOL-LEASE-BYTES MSPAN-OVERLAP?
+        IF 0 EXIT THEN
+    _ROP-A @ _ROP-B @ _ROP-POOL @ ROPOOL.CONTEXT @ CTX-SIZE MSPAN-OVERLAP?
+        IF 0 EXIT THEN
+    _ROP-A @ _ROP-B @ _ROP-POOL @ ROPOOL.CREG @ CREG-SIZE MSPAN-OVERLAP?
+        IF 0 EXIT THEN
+    _ROP-A @ _ROP-B @ _ROP-POOL @ ROPOOL.RREG @ RREG-SIZE MSPAN-OVERLAP?
+        IF 0 EXIT THEN
+    \ Outputs are written by RACQ before returning.  Reject every active
+    \ component header, descriptor, reachable capability table, and state
+    \ span as well as the pool's fixed ledgers.  The descriptors remain live
+    \ borrowed metadata for dispatch and must be protected just as strictly
+    \ as the allocated instance/member bytes.
+    _ROP-POOL @ ROPOOL.SLOT-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-SLOT DUP ROS.ACTIVE @ IF
+            ROS.INSTANCE @ DUP 0= IF DROP 0 UNLOOP EXIT THEN
+            DUP COMP-INST MSPAN-NONWRAPPING? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN
+            DUP _ROP-INSTANCE !
+            _ROP-A @ _ROP-B @ ROT COMP-INST MSPAN-OVERLAP? IF
+                0 UNLOOP EXIT
+            THEN
+            _ROP-INSTANCE @ CINST-DESC DUP _ROP-D !
+            DUP COMP-DESC MSPAN-NONWRAPPING? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN
+            _ROP-A @ _ROP-B @ ROT COMP-DESC MSPAN-OVERLAP? IF
+                0 UNLOOP EXIT
+            THEN
+            _ROP-D @ COMP-CAPS-VALID? 0= IF 0 UNLOOP EXIT THEN
+            _ROP-D @ COMP.CAPS-N @ ?DUP IF
+                CAP-DESC * _ROP-N !
+                _ROP-D @ COMP.CAPS-A @ DUP _ROP-C !
+                    _ROP-N @ MSPAN-NONWRAPPING? 0= IF
+                        0 UNLOOP EXIT
+                    THEN
+                _ROP-A @ _ROP-B @ _ROP-C @ _ROP-N @ MSPAN-OVERLAP? IF
+                    0 UNLOOP EXIT
+                THEN
+            THEN
+            _ROP-D @ COMP.STATE-SIZE @ DUP ROPOOL-MEMBER-SIZE < IF
+                DROP 0 UNLOOP EXIT
+            THEN _ROP-N !
+            _ROP-INSTANCE @ CINST-STATE DUP _ROP-C !
+                _ROP-N @ MSPAN-NONWRAPPING? 0= IF 0 UNLOOP EXIT THEN
+            _ROP-A @ _ROP-B @ _ROP-C @ _ROP-N @ MSPAN-OVERLAP? IF
+                0 UNLOOP EXIT
+            THEN
+        ELSE DROP THEN
+    LOOP
+    _ROP-POOL @ ROPOOL.LEASE-CAP @ 0 ?DO
+        I _ROP-POOL @ _ROPOOL-LEASE ROL.TOKEN @ ?DUP IF
+            _ROP-A @ _ROP-B @ ROT RACQ-TOKEN-SIZE MSPAN-OVERLAP? IF
+                0 UNLOOP EXIT
+            THEN
+        THEN
+    LOOP -1 ;
+
+: _ROPOOL-ATTACH-PREFLIGHT
+  ( locator pool context rreg binding result -- flag )
+    _ROP-F ! _ROP-E ! _ROP-D ! _ROP-C ! _ROP-POOL ! _ROP-LOCATOR !
+    _ROP-POOL @ _ROPOOL-RUNTIME? 0= IF 0 EXIT THEN
+    _ROP-LOCATOR @ QLOC-VALID? 0= IF 0 EXIT THEN
+    _ROP-C @ CTX-VALID? 0= IF 0 EXIT THEN
+    _ROP-C @ CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF 0 EXIT THEN
+    _ROP-D @ RREG-VALID? 0= IF 0 EXIT THEN
+    _ROP-D @ _ROP-POOL @ ROPOOL.RREG @ <> IF 0 EXIT THEN
+    _ROP-E @ LBIND-SIZE _ROP-POOL @ _ROPOOL-OUTPUT-SPAN-SAFE? 0= IF
+        0 EXIT
+    THEN
+    _ROP-F @ RACQ-RESULT-SIZE _ROP-POOL @
+        _ROPOOL-OUTPUT-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _ROP-E @ LBIND-SIZE _ROP-F @ RACQ-RESULT-SIZE MSPAN-OVERLAP? 0= ;
+
+: _ROPOOL-ATTACH-PREFLIGHT-INNER
+  ( locator pool context rreg binding result -- flag )
+    ['] _ROPOOL-ATTACH-PREFLIGHT _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: ROPOOL-ATTACH
+  ( locator pool context rreg binding result -- status )
+    4 PICK DUP _ROPOOL-HEADER? 0= IF
+        DROP 2DROP 2DROP 2DROP RACQ-S-INVALID EXIT
+    THEN ROPOOL.GUARD >R
+    5 PICK 5 PICK 5 PICK 5 PICK 5 PICK 5 PICK
+        ['] _ROPOOL-ATTACH-PREFLIGHT-INNER R> WITH-GUARD 0= IF
+        2DROP 2DROP 2DROP RACQ-S-INVALID EXIT
+    THEN
+    RACQ-ATTACH ;
+
+\ ---------------------------------------------------------------------
+\ Per-resource pool offers
+\ ---------------------------------------------------------------------
+\ A resource service publishes one caller-owned offer for one exact RID.
+\ The descriptor is only a neutral discovery value: it contains no global
+\ pool selection policy, performs no handler scan, and is never retained by
+\ consumers.  Service clients validate their own runtime graph before use.
+
+0x52464F52 CONSTANT ROFFER-MAGIC          \ "ROFR"
+1          CONSTANT ROFFER-ABI-VERSION
+
+ 0 CONSTANT _ROF-MAGIC
+ 8 CONSTANT _ROF-ABI
+16 CONSTANT _ROF-SIZE
+24 CONSTANT _ROF-RID
+56 CONSTANT _ROF-POOL
+64 CONSTANT _ROF-FLAGS
+72 CONSTANT _ROF-RESERVED
+80 CONSTANT ROFFER-SIZE
+
+: ROFFER.MAGIC  ( offer -- a ) _ROF-MAGIC + ;
+: ROFFER.ABI    ( offer -- a ) _ROF-ABI + ;
+: ROFFER.SIZE   ( offer -- a ) _ROF-SIZE + ;
+: ROFFER.RID    ( offer -- rid ) _ROF-RID + ;
+: ROFFER.POOL   ( offer -- a ) _ROF-POOL + ;
+: ROFFER.FLAGS  ( offer -- a ) _ROF-FLAGS + ;
+
+: ROFFER-VALID?  ( offer -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP ROFFER-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP ROFFER.MAGIC @ ROFFER-MAGIC =
+    OVER ROFFER.ABI @ ROFFER-ABI-VERSION = AND
+    OVER ROFFER.SIZE @ ROFFER-SIZE = AND
+    OVER ROFFER.FLAGS @ 0= AND
+    OVER _ROF-RESERVED + @ 0= AND
+    OVER ROFFER.RID RID-PRESENT? AND
+    SWAP ROFFER.POOL @ _ROPOOL-HEADER? AND ;
+
+: ROFFER-RID  ( offer -- rid|0 )
+    DUP ROFFER-VALID? IF ROFFER.RID ELSE DROP 0 THEN ;
+
+: ROFFER-POOL@  ( offer -- pool|0 )
+    DUP ROFFER-VALID? IF ROFFER.POOL @ ELSE DROP 0 THEN ;
+
+VARIABLE _ROFI-RID
+VARIABLE _ROFI-POOL
+VARIABLE _ROFI-OFFER
+
+: _ROFFER-INIT-LOCKED  ( rid pool offer -- status )
+    _ROFI-OFFER ! _ROFI-POOL ! _ROFI-RID !
+    _ROFI-RID @ RID-PRESENT? 0= IF RACQ-S-INVALID EXIT THEN
+    _ROFI-OFFER @ 0= IF RACQ-S-INVALID EXIT THEN
+    _ROFI-OFFER @ ROFFER-SIZE MSPAN-NONWRAPPING? 0= IF
+        RACQ-S-INVALID EXIT
+    THEN
+    _ROFI-POOL @ _ROPOOL-DEEP? 0= IF RACQ-S-UNAVAILABLE EXIT THEN
+    _ROFI-OFFER @ ROFFER-SIZE _ROFI-POOL @
+        _ROPOOL-OUTPUT-SPAN-SAFE? 0= IF RACQ-S-INVALID EXIT THEN
+    _ROFI-OFFER @ ROFFER-SIZE _ROFI-RID @ RID-SIZE MSPAN-OVERLAP? IF
+        RACQ-S-INVALID EXIT
+    THEN
+    _ROFI-OFFER @ ROFFER-SIZE 0 FILL
+    ROFFER-MAGIC _ROFI-OFFER @ ROFFER.MAGIC !
+    ROFFER-ABI-VERSION _ROFI-OFFER @ ROFFER.ABI !
+    ROFFER-SIZE _ROFI-OFFER @ ROFFER.SIZE !
+    _ROFI-RID @ _ROFI-OFFER @ ROFFER.RID RID-COPY
+    _ROFI-POOL @ _ROFI-OFFER @ ROFFER.POOL !
+    RACQ-S-OK ;
+
+: _ROFFER-INIT-INNER  ( rid pool offer -- status )
+    ['] _ROFFER-INIT-LOCKED _ROPOOL-SCRATCH-GUARD WITH-GUARD ;
+
+: ROFFER-INIT  ( rid pool offer -- status )
+    1 PICK DUP _ROPOOL-HEADER? 0= IF
+        DROP 2DROP DROP RACQ-S-INVALID EXIT
+    THEN
+    ROPOOL.GUARD >R ['] _ROFFER-INIT-INNER R> WITH-GUARD ;

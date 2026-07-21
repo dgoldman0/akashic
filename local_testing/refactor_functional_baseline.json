@@ -344,8 +344,7 @@
         },
         {
           "id": "daybook.resource-owner-and-contracts",
-          "coverage": "partial",
-          "prerequisite_ids": ["daybook.binding-advance-failure"],
+          "coverage": "covered",
           "facets": ["interfaces", "persistence", "failures"],
           "preserve": ["daybook.task.capture, daybook.source and daybook.agenda.markdown capability identities", "Semantic Daybook RID and exact describe/snapshot/replace revisions", "Two lenses, stale refusal, explicit reload/reattach, wrong-resource/read-only refusal and cold owner reactivation"],
           "evidence": ["profile:daybook-contracts", "pytest:local_testing/test_daybook_shared_lens.py::test_daybook_shared_lens_contracts", "pytest:local_testing/test_shared_document.py::test_shared_document_contracts", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
@@ -359,13 +358,6 @@
         }
       ],
       "prerequisites": [
-        {
-          "id": "daybook.binding-advance-failure",
-          "before_landing": "L6",
-          "trigger": "Canonical resource-session conversion.",
-          "characterization": "Commit through the owner, then fail local binding advance and prove the committed revision can be recovered without duplicate mutation.",
-          "reason": "Pad has the analogous case; Daybook does not."
-        },
         {
           "id": "daybook.controller-edges",
           "before_landing": "L9",
@@ -611,7 +603,7 @@
           "id": "desk.service-and-product-composition",
           "coverage": "covered",
           "facets": ["interfaces", "journeys", "failures"],
-          "preserve": ["Exact eleven Desk-private service IDs, exact lookup, dynamic availability, duplicate/full statuses and teardown wipe", "Agent provider/runtime/tool/access policy, Daybook resource owner, request bus, XIO and frozen trust composition", "Practice recovery/fallback, Daybook/Pad shared resource, Agent hardening and Streams close/relaunch journeys"],
+          "preserve": ["Exact eleven Desk-private service IDs, exact lookup, dynamic availability, duplicate/full statuses and teardown wipe", "Agent provider/runtime/tool/access policy, Daybook resource offer, request bus, XIO and frozen trust composition", "Practice recovery/fallback, Daybook/Pad shared resource, Agent hardening and Streams close/relaunch journeys"],
           "evidence": ["profile:desk-service-table-contracts", "profile:desktop-resource", "profile:desktop-agent-hardening", "profile:desktop-streams", "profile:desktop-recovery", "profile:desktop-fallback", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
         }
       ],

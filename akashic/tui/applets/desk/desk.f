@@ -1474,7 +1474,7 @@ VARIABLE _DSSA-ENTRY
 
 : _DESK-SERVICE-DAYBOOK@  ( -- service | 0 )
     _DESK-DAYBOOK-STATUS @ 0=
-    _DESK-DAYBOOK-OWNER @ 0<> AND IF _DESK-DAYBOOK-RID ELSE 0 THEN ;
+    _DESK-DAYBOOK-OWNER @ 0<> AND IF SDOC-SERVICE ELSE 0 THEN ;
 
 : _DESK-SERVICE-ENDPOINT@  ( -- service )
     _DESK-ENDPOINT ;
@@ -1982,6 +1982,33 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
 
 VARIABLE _DIFI-XIO-STATUS
 
+: _DESK-DAYBOOK-ACTIVATION-CLEANUP  ( -- )
+    \ Failed owner publication leaves no instance for SDOC-DEACTIVATE, but
+    \ its retryable rollback can still own a pool which borrows this exact
+    \ Context and both registries.  Finish that rollback before freeing any
+    \ of those dependencies.
+    BEGIN
+        DESK-CONTEXT _DESK-RREG @ _DESK-REGISTRY @
+            SDOC-ACTIVATION-CLEANUP
+        DUP SDOC-S-RESOURCE =
+    WHILE
+        DROP YIELD?
+    REPEAT
+    SDOC-S-OK <> ABORT" desk: shared document activation cleanup failed" ;
+
+: _DESK-DAYBOOK-DEACTIVATE  ( -- )
+    _DESK-DAYBOOK-OWNER @ ?DUP 0= IF EXIT THEN
+    \ A failed final anchor release preserves the exact live owner and token.
+    \ Finish that retry while Desk still owns the borrowed runtime graph.
+    BEGIN
+        DUP SDOC-DEACTIVATE
+        DUP SDOC-S-RESOURCE =
+    WHILE
+        DROP YIELD?
+    REPEAT
+    NIP SDOC-S-OK <>
+        ABORT" desk: shared document teardown failed" ;
+
 : _DESK-INTEROP-FINI-QUIESCED  ( -- )
     XIO-S-OK _DIFI-XIO-STATUS !
     _DESK-XIO-DRAIN ?DUP IF _DIFI-XIO-STATUS ! THEN
@@ -1998,10 +2025,8 @@ VARIABLE _DIFI-XIO-STATUS
         DUP CBUS-CANCEL-ALL DROP
     THEN
     _DESK-SERVICE-TABLE-FINI
-    _DESK-DAYBOOK-OWNER @ ?DUP IF
-        SDOC-DEACTIVATE
-        ABORT" desk: shared document teardown failed"
-    THEN
+    _DESK-DAYBOOK-DEACTIVATE
+    _DESK-DAYBOOK-ACTIVATION-CLEANUP
     _DESK-RREG @ ?DUP IF RREG-FREE THEN
     _DESK-AGENT-RUNTIME @ ?DUP IF
         DUP ARUNTIME-ACCESS-PROFILE ?DUP IF

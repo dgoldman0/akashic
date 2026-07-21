@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused end-to-end contracts for the headless shared document owner.
+"""Focused end-to-end contracts for the renderer-free Daybook document owner.
 
 The test registers a private profile with the supported Akashic/MegaPad
 harness rather than adding another permanent branch to ``akashic_tui.py``.
@@ -155,6 +155,10 @@ VARIABLE _sd-direct-u0
     _sd-owner @ CINST.REVISION @ 1 = _sd-assert
     _sd-rreg @ RREG.COUNT @ 1 = _sd-assert
     _sd-creg @ CREG.INST-N @ 1 = _sd-assert
+    SDOC-POOL DUP ROPOOL-VALID? _sd-assert
+    DUP ROPOOL-LIVE@ 1 = _sd-assert
+    DUP ROPOOL-LEASES@ 1 = _sd-assert
+    _sd-rid SWAP ROPOOL-REFS@ 1 = _sd-assert
 
     \ A second owner cannot claim the activation or backing path.
     _sd-vfs @ _sd-rid _sd-context @ _sd-rreg @ _sd-creg @
@@ -301,6 +305,7 @@ VARIABLE _sd-direct-u0
     \ Owner teardown does not inspect or mutate either lens binding.
     _sd-owner @ SDOC-DEACTIVATE SDOC-S-OK = _sd-assert
     0 _sd-owner !
+    SDOC-POOL 0= _sd-assert
     _sd-rreg @ RREG.COUNT @ 0= _sd-assert
     _sd-creg @ CREG.INST-N @ 0= _sd-assert
     _sd-bind-a LBIND-VALID? _sd-assert
@@ -330,6 +335,8 @@ VARIABLE _sd-direct-u0
     DUP SDOC-S-OK = _sd-assert DROP
     DUP 0<> _sd-assert DUP _sd-owner !
     SDOC-VALID? _sd-assert
+    SDOC-POOL DUP ROPOOL-VALID? _sd-assert
+    ROPOOL-LEASES@ 1 = _sd-assert
     _sd-owner @ CINST.REVISION @ 1 = _sd-assert
     _sd-rreg @ RREG.COUNT @ 1 = _sd-assert
     _sd-creg @ CREG.INST-N @ 1 = _sd-assert
@@ -362,6 +369,7 @@ VARIABLE _sd-direct-u0
     _sd-snapshot-a @ CBR-FREE 0 _sd-snapshot-a !
     _sd-owner @ SDOC-DEACTIVATE SDOC-S-OK = _sd-assert
     0 _sd-owner !
+    SDOC-POOL 0= _sd-assert
     _sd-rreg @ RREG.COUNT @ 0= _sd-assert
     _sd-creg @ CREG.INST-N @ 0= _sd-assert
     _sd-bus @ CBUS-FREE

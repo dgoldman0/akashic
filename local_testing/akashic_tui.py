@@ -10849,7 +10849,7 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     THEN
     _pr-service-a @ _pr-service-u @
         S" org.akashic.resource.daybook" STR-STR= IF
-        _pr-rid EXIT
+        SDOC-SERVICE EXIT
     THEN
     0 ;
 
@@ -10878,6 +10878,9 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
 : _pr-fail-advance  ( request context binding -- status )
     2DROP DROP LBIND-S-MISMATCH ;
 
+: _pr-fail-candidate-commit  ( session -- status )
+    DROP RSES-S-STALE ;
+
 : _pr-owner-snapshot  ( -- )
     _pr-ext-bind _pr-context @ _pr-ext-request @ LBIND-REQUEST!
         LBIND-S-OK = _pr-assert
@@ -10904,7 +10907,7 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     _PAD-DUMMY-BUF _PAD-DUMMY-CAP TXTA-NEW _PAD-TXTA !
     _PAD-BUF-OPEN DUP 0= _pr-assert DROP
     _PAD-SHARED-INIT
-    _PAD-RESOURCE-MODE @ SDLENS-M-SHARED = _pr-assert ;
+    _PAD-RESOURCE-MODE @ RSES-M-ACTIVE = _pr-assert ;
 
 : _pr-pad-storage-free  ( -- )
     _pr-pad @ _PAD-ACTIVATE
@@ -10922,17 +10925,17 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
     _pr-endpoint R@ CINST.ENDPOINT !
     R@ _PAD-ACTIVATE _PAD-SHARED-INIT
-    _PAD-RESOURCE-MODE @ SDLENS-M-BLOCKED = _pr-assert
+    _PAD-RESOURCE-MODE @ RSES-M-BLOCKED = _pr-assert
     _PAD-SHARED-FINI R> CINST-FREE
     2 _pr-service-mode !
     PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
     _pr-endpoint R@ CINST.ENDPOINT !
     R@ _PAD-ACTIVATE _PAD-SHARED-INIT
-    _PAD-RESOURCE-MODE @ SDLENS-M-BLOCKED = _pr-assert
+    _PAD-RESOURCE-MODE @ RSES-M-BLOCKED = _pr-assert
     _PAD-SHARED-FINI R> CINST-FREE
     PAD-COMP-DESC CINST-NEW DUP 0= _pr-assert DROP >R
     R@ _PAD-ACTIVATE _PAD-SHARED-INIT
-    _PAD-RESOURCE-MODE @ SDLENS-M-DIRECT = _pr-assert
+    _PAD-RESOURCE-MODE @ RSES-M-DIRECT = _pr-assert
     _PAD-SHARED-FINI R> CINST-FREE
     0 _pr-service-mode !
     _pr-pad @ _PAD-ACTIVATE ;
@@ -10976,6 +10979,24 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     \ synchronously dispatches resource.snapshot on that same bus.
     _pr-rid _pr-context @ _pr-ref _pr-rreg @ RREG-REF
         RREG-S-OK = _pr-assert
+
+    \ A correlation failure after the snapshot must roll back the provisional
+    \ buffer allocation and restore the previously active ordinary tab.  A
+    \ retry starts from the same bounded state instead of leaking one tab per
+    \ failed candidate commit.
+    S" ordinary sentinel" _PAD-TXTA @ TXTA-SET-TEXT
+    ['] _pr-fail-candidate-commit _PAD-SHARED-COMMIT-XT !
+    3 0 DO
+        _pr-ref _pr-open-request!
+        _pr-dispatch-open CBUS-S-STALE-REVISION = _pr-assert
+        _PAD-BUF-CNT @ 1 = _pr-assert
+        _PAD-ACTIVE @ 0= _pr-assert
+        _PAD-FIND-SHARED-BUFFER -1 = _pr-assert
+        S" ordinary sentinel" _pr-text= _pr-assert
+    LOOP
+    ['] RSES-CANDIDATE-COMMIT _PAD-SHARED-COMMIT-XT !
+    _PAD-RESOURCE-MODE @ RSES-M-ACTIVE = _pr-assert
+
     _pr-ref _pr-open-request!
     _pr-dispatch-open CBUS-S-OK = _pr-assert
     _pr-request @ CBR.RESULT _pr-result-ref IRES-RREF@
@@ -10988,6 +11009,37 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + @ 0<> _pr-assert
     _PAD-SHARED-BIND LBIND.REVISION @
         _pr-opened-ref RREF.REVISION @ = _pr-assert
+
+    \ The other rollback branch reuses a clean shared buffer.  Force a newer
+    \ exact candidate, switch from the ordinary tab, fail the final commit,
+    \ and prove both buffers plus the authoritative session remain exact.
+    1 _pr-owner @ CINST.REVISION +!
+    _pr-rid _pr-context @ _pr-ref _pr-rreg @ RREG-REF
+        RREG-S-OK = _pr-assert
+    0 _PAD-BUF-SWITCH
+    _PAD-ACTIVE @ 0= _pr-assert
+    S" ordinary sentinel" _pr-text= _pr-assert
+    ['] _pr-fail-candidate-commit _PAD-SHARED-COMMIT-XT !
+    _pr-ref _pr-open-request!
+    _pr-dispatch-open CBUS-S-STALE-REVISION = _pr-assert
+    ['] RSES-CANDIDATE-COMMIT _PAD-SHARED-COMMIT-XT !
+    _PAD-BUF-CNT @ 2 = _pr-assert
+    _PAD-ACTIVE @ 0= _pr-assert
+    _PAD-FIND-SHARED-BUFFER _pr-shared-index @ = _pr-assert
+    S" ordinary sentinel" _pr-text= _pr-assert
+    _PAD-SHARED-REF _pr-opened-ref RREF= _pr-assert
+    _PAD-SHARED-BIND LBIND.REVISION @
+        _pr-opened-ref RREF.REVISION @ = _pr-assert
+    _pr-shared-index @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0= _pr-assert
+    _PAD-RESOURCE-MODE @ RSES-M-ACTIVE = _pr-assert
+    -1 _pr-owner @ CINST.REVISION +!
+    _pr-opened-ref _PAD-RESOURCE-SESSION RSES-CANDIDATE-ATTACH
+        RSES-S-OK = _pr-assert
+    _PAD-RESOURCE-SESSION RSES-CANDIDATE-COMMIT
+        RSES-S-OK = _pr-assert
+    _PAD-BUF-CNT @ 2 = _pr-assert
+    _pr-shared-index @ _PAD-BUF-SWITCH
+    S" # Daybook\n" _pr-text= _pr-assert
 
     \ The public active-document capability reports the same exact semantic
     \ identity retained by the shared buffer, never its VFS backing path.
@@ -11114,15 +11166,19 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pr-assert
     S" # Daybook\n\n> 2026-07-13 | post-commit Pad edit\n"
         S" /daybook.md" _pr-file= _pr-assert
-    SDLENS-M-BLOCKED _PAD-RESOURCE-MODE !
+    RSES-M-BLOCKED _PAD-RESOURCE-MODE !
     S" /daybook.md" _PAD-SAVE-CURRENT-AS
         _PAD-E-SHARED-UNAVAILABLE = _pr-assert
-    SDLENS-M-SHARED _PAD-RESOURCE-MODE !
+    RSES-M-ACTIVE _PAD-RESOURCE-MODE !
 
     _pr-stack
     _pr-request @ ?DUP IF CBR-FREE THEN
     _pr-ext-request @ ?DUP IF CBR-FREE THEN
+    \ Pad shutdown consumes retryable release failures before Desk can free
+    \ the component state containing its exact acquisition token.
+    1 SDOC-POOL ROPOOL-RELEASE-FAILURES! RACQ-S-OK = _pr-assert
     _pr-pad-storage-free
+    SDOC-POOL ROPOOL-LEASES@ 1 = _pr-assert
     _pr-pad @ _pr-creg @ CREG-INST- 0= _pr-assert
     _pr-pad @ CINST-FREE
     _pr-owner @ SDOC-DEACTIVATE SDOC-S-OK = _pr-assert
@@ -26980,6 +27036,8 @@ CREATE _dst-daybook-owner 8 ALLOT
     S" org.akashic.runtime.resource-registry"
         _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.interop.request-bus" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.interop.resource-owner-pool"
+        _DESK-SERVICE-FIND 0= _dst-assert
     S" org.akashic.resource.daybook" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.interop.endpoint" _DESK-SERVICE-FIND 0<> _dst-assert ;
 
@@ -27004,7 +27062,7 @@ CREATE _dst-daybook-owner 8 ALLOT
     S" org.akashic.interop.request-bus" _dst-service
         _dst-bus = _dst-assert
     S" org.akashic.resource.daybook" _dst-service
-        _DESK-DAYBOOK-RID = _dst-assert
+        0= _dst-assert
     S" org.akashic.interop.endpoint" _dst-service
         _DESK-ENDPOINT = _dst-assert
     S" org.akashic.runtime.registr" _dst-service 0= _dst-assert
@@ -27046,7 +27104,7 @@ CREATE _dst-daybook-owner 8 ALLOT
     S" org.akashic.resource.daybook" _dst-service 0= _dst-assert
     _dst-daybook-owner _DESK-DAYBOOK-OWNER !
     S" org.akashic.resource.daybook" _dst-service
-        _DESK-DAYBOOK-RID = _dst-assert ;
+        0= _dst-assert ;
 
 : _dst-uniqueness  ( -- )
     _DESK-SERVICE-TABLE-INIT

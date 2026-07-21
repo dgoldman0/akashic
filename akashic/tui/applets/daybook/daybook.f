@@ -34,7 +34,7 @@ REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/lens-binding.f
 REQUIRE ../../../interop/resource.f
-REQUIRE ../../../interop/shared-document-lens.f
+REQUIRE ../../../interop/resource-session.f
 
 86400 CONSTANT _DB-SECONDS-DAY
 96    CONSTANT _DB-MAX-ENTRIES
@@ -93,10 +93,10 @@ _DB-CURRENT-STATE CMP-CELL: _DB-DISCARD-ARMED
 _DB-CURRENT-STATE CMP-CELL: _DB-SOURCE-BLOCKED
 _DB-CURRENT-STATE CMP-CELL: _DB-SAVE-STALE
 
-\ A Daybook instance is either a standalone VFS client or a lens onto the
+\ A Daybook instance is either a standalone VFS client or a session onto the
 \ activation-local semantic owner.  Service pointers are borrowed; identity,
 \ reference, and binding state are copied into the instance allocation.
-_DB-CURRENT-STATE SDLENS-SIZE CMP-FIELD: _DB-SHARED-LENS
+_DB-CURRENT-STATE RSES-SIZE CMP-FIELD: _DB-RESOURCE-SESSION
 _DB-CURRENT-STATE CMP-CELL: _DB-CAPTURE-HOP
 
 _DB-CURRENT-STATE CMP-CELL: _DB-E-BODY
@@ -121,32 +121,42 @@ _DB-CURRENT-STATE CMP-CELL: _DB-STATUS-U
 CMP-LAYOUT-SIZE CONSTANT _DB-STATE-SIZE
 
 \ Private compatibility accessors keep the Daybook model code readable while
-\ the shared discovery, exact binding, and request lifecycle live in SDLENS.
-: _DB-RESOURCE-MODE       ( -- a ) _DB-SHARED-LENS SDLENS.MODE ;
-: _DB-SHARED-CONTEXT      ( -- a ) _DB-SHARED-LENS SDLENS.CONTEXT ;
-: _DB-SHARED-BUS          ( -- a ) _DB-SHARED-LENS SDLENS.BUS ;
-: _DB-SHARED-REF          ( -- ref ) _DB-SHARED-LENS SDLENS.REF ;
-: _DB-SHARED-BIND         ( -- bind ) _DB-SHARED-LENS SDLENS.BIND ;
-: _DB-SHARED-SNAPSHOT-CAP ( -- a ) _DB-SHARED-LENS SDLENS.SNAPSHOT-CAP ;
-: _DB-SHARED-REPLACE-CAP  ( -- a ) _DB-SHARED-LENS SDLENS.REPLACE-CAP ;
-: _DB-SHARED-REQUEST      ( -- a ) _DB-SHARED-LENS SDLENS.REQUEST ;
+\ the retained discovery, exact binding, and request lifecycle live in RSES.
+: _DB-RESOURCE-MODE       ( -- a ) _DB-RESOURCE-SESSION RSES.MODE ;
+: _DB-SHARED-REF          ( -- ref ) _DB-RESOURCE-SESSION RSES.REF ;
+: _DB-SHARED-BIND         ( -- bind ) _DB-RESOURCE-SESSION RSES.BIND ;
+: _DB-SHARED-SNAPSHOT-CAP ( -- a ) _DB-RESOURCE-SESSION RSES.SNAPSHOT ;
+: _DB-SHARED-REPLACE-CAP  ( -- a ) _DB-RESOURCE-SESSION RSES.REPLACE ;
+: _DB-SHARED-REQUEST      ( -- a ) _DB-RESOURCE-SESSION RSES.REQUEST ;
+
+VARIABLE _DB-SHARED-ADVANCE-XT
+' LBIND-ADVANCE _DB-SHARED-ADVANCE-XT !
+
+: _DB-SHARED-ADVANCE  ( request context binding -- status )
+    _DB-SHARED-ADVANCE-XT @ EXECUTE ;
 
 : _DB-ACTIVATE  ( instance -- )
     DUP _DB-CURRENT-INSTANCE !
     CINST-STATE _DB-CURRENT-STATE ! ;
 
 : _DB-SHARED-BLOCK!  ( -- )
-    SDLENS-M-BLOCKED _DB-RESOURCE-MODE !
+    _DB-RESOURCE-SESSION RSES-HELD? IF
+        RSES-M-STALE
+    ELSE
+        RSES-M-BLOCKED
+    THEN _DB-RESOURCE-MODE !
     -1 _DB-SOURCE-BLOCKED ! ;
 
 : _DB-SHARED-REFRESH  ( -- status )
-    _DB-SHARED-LENS SDLENS-REFRESH ;
+    _DB-RESOURCE-SESSION RSES-REFRESH ;
 
 : _DB-SHARED-INIT  ( -- )
     0 _DB-CAPTURE-HOP !
     S" org.akashic.resource.daybook" _DB-CURRENT-INSTANCE @
-        _DB-SHARED-LENS SDLENS-INIT
-    _DB-RESOURCE-MODE @ SDLENS-M-BLOCKED = IF
+        _DB-RESOURCE-SESSION RSES-INIT DROP
+    ['] _DB-SHARED-ADVANCE _DB-RESOURCE-SESSION RSES.ADVANCE-XT !
+    _DB-RESOURCE-MODE @ DUP RSES-M-BLOCKED =
+        SWAP RSES-M-STALE = OR IF
         -1 _DB-SOURCE-BLOCKED !
     ELSE
         0 _DB-SOURCE-BLOCKED !
@@ -154,7 +164,15 @@ CMP-LAYOUT-SIZE CONSTANT _DB-STATE-SIZE
 
 : _DB-SHARED-FINI  ( -- )
     0 _DB-CAPTURE-HOP !
-    _DB-SHARED-LENS SDLENS-FINI ;
+    \ Desk frees applet component state after this callback returns, so a
+    \ retryable pool release must complete while the embedded token is live.
+    BEGIN
+        _DB-RESOURCE-SESSION RSES-FINI
+        DUP RSES-S-RELEASE =
+    WHILE
+        DROP YIELD?
+    REPEAT
+    RSES-S-OK <> IF RSES-S-INVALID THROW THEN ;
 
 : _DB-ENTRY  ( index -- addr )
     _DB-ENTRY-SZ * _DB-ENTRIES + ;
@@ -445,15 +463,11 @@ VARIABLE _DB-SRQ-PRINCIPAL
 
 : _DB-SHARED-REQUEST!  ( capability principal -- status )
     _DB-SRQ-PRINCIPAL ! _DB-SRQ-CAP !
-    _DB-SHARED-BIND _DB-SHARED-CONTEXT @ _DB-SHARED-REQUEST @
-        LBIND-REQUEST! DUP IF EXIT THEN DROP
-    _DB-SRQ-PRINCIPAL @ _DB-SHARED-REQUEST @ CBR.PRINCIPAL !
-    _DB-SRQ-CAP @ _DB-SHARED-REQUEST @ CBR.CAP !
-    LBIND-S-OK ;
+    _DB-SRQ-CAP @ _DB-SRQ-PRINCIPAL @ _DB-RESOURCE-SESSION RSES-PREPARE ;
 
 : _DB-SHARED-SNAPSHOT  ( -- status )
     _DB-SHARED-REFRESH DUP IF
-        DUP SDLENS-S-STALE = IF
+        DUP RSES-S-STALE = IF
             DROP _DB-L-S-STALE EXIT
         THEN
         DROP _DB-SHARED-BLOCK! _DB-L-S-SHARED EXIT
@@ -462,7 +476,7 @@ VARIABLE _DB-SRQ-PRINCIPAL
     DUP IF DROP _DB-SHARED-BLOCK! _DB-L-S-SHARED EXIT THEN DROP
     \ LBIND stamps identity; this operation still chooses null arguments.
     _DB-SHARED-REQUEST @ CBR.ARGS CV-NULL!
-    _DB-SHARED-REQUEST @ _DB-SHARED-BUS @ CBUS-DISPATCH
+    _DB-RESOURCE-SESSION RSES-DISPATCH
     DUP CBUS-S-STALE-REVISION = IF DROP _DB-L-S-STALE EXIT THEN
     DUP IF DROP _DB-L-S-IO EXIT THEN DROP
     _DB-SHARED-REQUEST @ CBR.RESULT
@@ -486,8 +500,9 @@ VARIABLE _DB-SRQ-PRINCIPAL
 
 : _DB-LOAD  ( -- status )
     _DB-RESOURCE-MODE @ CASE
-        SDLENS-M-SHARED OF _DB-LOAD-SHARED ENDOF
-        SDLENS-M-BLOCKED OF
+        RSES-M-ACTIVE OF _DB-LOAD-SHARED ENDOF
+        RSES-M-STALE OF _DB-LOAD-SHARED ENDOF
+        RSES-M-BLOCKED OF
             -1 _DB-SOURCE-BLOCKED ! _DB-L-S-SHARED
         ENDOF
         _DB-LOAD-DIRECT SWAP
@@ -568,27 +583,26 @@ VARIABLE _DB-SAVE-IOR
     THEN
     _DB-IO-BUF _DB-IO-U @ _DB-SHARED-REQUEST @ CBR.ARGS CV-STRING!
     IF _DB-W-S-SHARED EXIT THEN
-    _DB-SHARED-REQUEST @ _DB-SHARED-BUS @ CBUS-DISPATCH
+    _DB-RESOURCE-SESSION RSES-DISPATCH
     DUP CBUS-S-STALE-REVISION = IF
         DROP -1 _DB-SAVE-STALE ! CBUS-S-STALE-REVISION EXIT
     THEN
     DUP IF EXIT THEN DROP
-    _DB-SHARED-REQUEST @ _DB-SHARED-CONTEXT @ _DB-SHARED-BIND
-        LBIND-ADVANCE DUP IF
+    _DB-RESOURCE-SESSION RSES-ADVANCE DUP IF
         \ The owner has already committed and advanced.  Never report this as
         \ an unsaved failure or roll a captured entry back.  Invalidate the
-        \ local lens, preserve the committed model, and require an explicit
+        \ local session, preserve the committed model, and require an explicit
         \ reload before another write.
-        DROP _DB-SHARED-BIND LBIND-CLEAR
-        -1 _DB-SOURCE-BLOCKED ! 0 EXIT
+        DROP -1 _DB-SOURCE-BLOCKED ! 0 EXIT
     THEN DROP
     0 ;
 
 : _DB-WRITE  ( -- ior )
     0 _DB-SAVE-STALE !
     _DB-RESOURCE-MODE @ CASE
-        SDLENS-M-SHARED OF _DB-WRITE-SHARED ENDOF
-        SDLENS-M-BLOCKED OF _DB-W-S-SHARED ENDOF
+        RSES-M-ACTIVE OF _DB-WRITE-SHARED ENDOF
+        RSES-M-STALE OF _DB-W-S-SHARED ENDOF
+        RSES-M-BLOCKED OF _DB-W-S-SHARED ENDOF
         _DB-WRITE-DIRECT SWAP
     ENDCASE ;
 
@@ -649,7 +663,7 @@ VARIABLE _DB-ST-N
     _DB-ST-RESET
     _DB-DAY-COUNT NUM>STR _DB-ST-APPEND
     S"  entries  |  " _DB-ST-APPEND
-    _DB-RESOURCE-MODE @ SDLENS-M-BLOCKED = IF
+    _DB-RESOURCE-MODE @ RSES-M-BLOCKED = IF
         S" Shared resource blocked"
     ELSE _DB-SOURCE-BLOCKED @ IF
         S" Source blocked"
@@ -680,7 +694,7 @@ VARIABLE _DB-ST-N
     _DB-SAVE-STALE @ IF
         S" Daybook changed elsewhere; reload before saving"
         3000 ASHELL-TOAST
-    ELSE _DB-RESOURCE-MODE @ SDLENS-M-BLOCKED = IF
+    ELSE _DB-RESOURCE-MODE @ RSES-M-BLOCKED = IF
         S" Shared Daybook resource is unavailable; saving is blocked"
         3000 ASHELL-TOAST
     ELSE _DB-SOURCE-BLOCKED @ IF
@@ -1102,13 +1116,14 @@ VARIABLE _DB-SOURCE-VALUE
 : _DB-SOURCE-VALUE!  ( value -- status )
     _DB-SOURCE-VALUE !
     _DB-RESOURCE-MODE @ CASE
-        SDLENS-M-SHARED OF
+        RSES-M-ACTIVE OF
             _DB-SHARED-BIND _DB-SHARED-REF LBIND-REF DUP IF
                 DROP IRES-S-INVALID EXIT
             THEN DROP
             _DB-SHARED-REF _DB-SOURCE-VALUE @ IRES-RREF!
         ENDOF
-        SDLENS-M-BLOCKED OF IRES-S-INVALID ENDOF
+        RSES-M-STALE OF IRES-S-INVALID ENDOF
+        RSES-M-BLOCKED OF IRES-S-INVALID ENDOF
         S" /daybook.md" _DB-SOURCE-VALUE @ IRES-VFS! SWAP
     ENDCASE ;
 
@@ -1126,7 +1141,8 @@ VARIABLE _DB-SOURCE-VALUE
     CPRINC-COMPONENT _DB-SOURCE-REQ @ CBR.PRINCIPAL !
     _DB-SOURCE-REQ @ CBR.ARGS _DB-SOURCE-VALUE! IF
         2DROP _DB-SOURCE-REQ @ CBR-FREE
-        _DB-RESOURCE-MODE @ SDLENS-M-BLOCKED = IF
+        _DB-RESOURCE-MODE @ DUP RSES-M-BLOCKED =
+            SWAP RSES-M-STALE = OR IF
             S" Shared Daybook resource is unavailable" 2200 ASHELL-TOAST
         THEN EXIT
     THEN
@@ -1145,6 +1161,8 @@ VARIABLE _DB-SOURCE-VALUE
 
 : DAYBOOK-INIT-CB  ( instance -- )
     _DB-ACTIVATE
+    \ Launch rollback may call shutdown after any later step throws.
+    _DB-RESOURCE-SESSION RSES-CLEAR
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! _DB-PRM-NONE _DB-PROMPT-MODE !
     0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! 0 _DB-SOURCE-BLOCKED !
     0 _DB-SAVE-STALE !
@@ -1153,7 +1171,7 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT
     0<> ABORT" daybook: access scope initialization failed"
     _DB-SHARED-INIT
-    _DB-RESOURCE-MODE @ SDLENS-M-DIRECT = IF
+    _DB-RESOURCE-MODE @ RSES-M-DIRECT = IF
         _DB-VFS @ _DB-REPLACE VREPL-INIT
         0<> ABORT" daybook: replacement initialization failed"
         S" /daybook.md" _DB-REPLACE VREPL-DERIVE-PATHS!
@@ -1238,12 +1256,14 @@ VARIABLE _DB-SOURCE-VALUE
 
 : DAYBOOK-SHUTDOWN-CB  ( instance -- )
     _DB-ACTIVATE
+    \ The exact pool lease lives inside this component state.  Release it
+    \ before any UI teardown that can throw during close or launch rollback.
+    _DB-SHARED-FINI
     _DB-E-BODY @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
     _DB-PROMPT @ ?DUP IF PRM-FREE THEN
     _DB-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     _DB-PANEL-RGN @ ?DUP IF RGN-FREE THEN
-    0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! 0 _DB-PANEL-RGN !
-    _DB-SHARED-FINI ;
+    0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! 0 _DB-PANEL-RGN ! ;
 
 CREATE _DB-TEXT-SCHEMA CS-SIZE ALLOT
 CREATE _DB-AGENDA-SCHEMA CS-SIZE ALLOT

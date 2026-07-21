@@ -53,11 +53,13 @@ path. The genuine standalone behavior and its recovery contracts are
 otherwise unchanged.
 
 Inside Desk, Daybook instead discovers the active Context, resource registry,
-request bus, and `org.akashic.resource.daybook` RID through its endpoint. It
-copies the RID and uses the common `shared-document-lens.f` client to attach an
-activation-local exact `RREF`/`LBIND` lens to the Desk-hosted Daybook document
-owner. Loads request `resource.snapshot`; saves request
-`resource.replace` at the binding's exact revision and advance the binding only
+request bus, and `org.akashic.resource.daybook` through its endpoint. That
+named service lends an owner-held neutral `ROFFER`; the common
+`resource-session.f` client validates it, copies its exact RID and owning pool,
+and does not retain the offer pointer. It then retains the Desk-hosted owner and
+attaches an activation-local exact `RREF`/`LBIND`. Loads request
+`resource.snapshot`; saves request
+`resource.replace` at the binding's exact revision and advances the binding only
 after a successful owner commit. Daybook never receives the owner's VFS path,
 replacement object, or private buffer.
 
@@ -66,10 +68,11 @@ Daybook semantic RID but `domain_revision=0`: current component revision is an
 activation-local concurrency guard, and Daybook has no retained domain-history
 ledger from which it could honestly mint an exact qualified locator.
 
-Reference lookup and lens attachment are separate guarded registry operations.
-Daybook retries a bounded exact-reference race; repeated contention is reported
-as transient stale state, while missing or invalid services remain structural
-and block rather than being confused with stale status codes.
+The session retains and revalidates the owner before borrowing its descriptor.
+Explicit refresh retries only a bounded exact-reference race; repeated
+contention is reported as transient stale state, while missing or invalid
+services remain structural and block rather than being confused with stale
+status codes.
 
 If the owner reports a successful commit but the local binding cannot advance,
 the commit remains authoritative: Daybook does not claim the save failed or
@@ -188,8 +191,8 @@ descriptor close and VFS-selector restoration, proving that both cleanup
 stages are attempted exactly once, the descriptor free list remains intact,
 the previous selector is restored, and no failed load publishes a model.
 
-`python3 local_testing/test_daybook_shared_lens.py` supplies the four Desk
-services to two headless Daybook instances. It verifies snapshot/replace,
+`python3 local_testing/test_daybook_shared_lens.py` supplies the four required
+Desk services to two Daybook applet instances. It verifies snapshot/replace,
 revision advancement, stale overwrite refusal, reload/reattach, semantic source
 URI emission, nested task-capture persistence, and fail-closed behavior when a
 valid Context exposes an incomplete shared-resource service set or an attached

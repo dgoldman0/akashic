@@ -205,10 +205,13 @@ ID and stores a getter XT; it does not cache or own the returned service. Lookup
 are exact byte matches, and an unknown ID returns `0`.
 
 Getters evaluate owner availability at lookup time. An unbound external-I/O
-service, absent Agent composition, or inactive/unowned Daybook resource therefore
-returns `0` without changing the table. The table is private lifecycle-routing
-metadata, not a general `interop/` registry: discovery confers no authority, and
-each domain owner retains its own semantics and validation.
+service, absent Agent composition, or inactive/unowned Daybook resource
+therefore returns `0` without changing the table. The Daybook getter lends the
+owner's `ROFFER`, which pairs that named resource's exact RID with its owning
+pool. There is no separate global resource-pool service. The table is private
+lifecycle-routing metadata, not a general `interop/` registry: discovery
+confers no authority, and each domain owner retains its own semantics and
+validation.
 
 Desk fills the table after constructing its service owners and before publishing
 the endpoint. During dispatch-quiesced teardown it zeroes every entry after
@@ -245,7 +248,7 @@ compiled facet for the duration of each accepted run.
 ## Desk-hosted activation-local Daybook owner
 
 On a healthy Practice activation, Desk creates one resource registry and hosts
-one headless [Daybook document owner](../../../daybook/shared-document.md) for
+one [Daybook document resource](../../../daybook/shared-document.md) for
 the canonical Daybook document. Daybook owns the document and its planner
 semantics; its concrete owner now lives in the Daybook domain even though Desk
 constructs it. Its semantic RID is the SHA3-256 digest of the stable Practice
@@ -262,13 +265,14 @@ endpoint:
 | `org.akashic.runtime.context` | Active root Context |
 | `org.akashic.runtime.resource-registry` | Activation-local `RREG` |
 | `org.akashic.interop.request-bus` | Desk request bus |
-| `org.akashic.resource.daybook` | Stable Daybook RID |
+| `org.akashic.resource.daybook` | Owner-lent Daybook `ROFFER` (exact RID + owning pool) |
 | `org.akashic.net.external-io` | Machine-owned cooperative external-I/O service |
 
-The endpoint does not expose the owner instance. A lens resolves the RID into
-an exact `RREF`, attaches its own `LBIND`, and invokes `resource.snapshot` or
+The endpoint does not expose the owner instance or a pool independently. A
+resource session validates the named offer, copies its RID and pool, retains
+the RID, attaches its own exact `LBIND`, and invokes `resource.snapshot` or
 `resource.replace` through the bus. If resource activation fails, Desk can
-still run, but it withholds the Daybook RID. A child which can see the Desk
+still run, but it withholds the Daybook offer. A child which can see the Desk
 Context must treat an incomplete service set as a blocked Practice resource;
 falling back to direct `/daybook.md` access would erase the distinction this
 experiment is meant to test.
@@ -289,18 +293,21 @@ register their scoped contributions before Desk activation; source constructors
 and applet launch do not modify trust. Desk teardown unbinds external I/O but
 does not reset or thaw the accepted machine snapshot.
 
-Desk closes every lens before entering one dispatch-quiesced teardown boundary
-which cancels requests, deactivates the owner, and frees the resource registry,
-bus, and component registry in dependency order. No new synchronous dispatch
-can enter between owner unpublication and bus free. Practice deactivation is
-skipped if dependent interoperability teardown throws, so the Context is not
-freed from underneath a live owner.
+Desk closes every retained resource session before entering one dispatch-
+quiesced teardown boundary which cancels requests, deactivates the owner, and
+finishes any unpublished activation rollback before freeing the resource
+registry, bus, and component registry in dependency order. That rollback is
+matched to Desk's exact Context/RREG/CREG tuple and consumes retryable anchor-
+release failures while those dependencies are still live. No new synchronous
+dispatch can enter between owner unpublication and bus free. Practice
+deactivation is skipped if dependent interoperability teardown throws, so the
+Context is not freed from underneath a live or rollback-pending owner.
 
 This is not yet enforced path ownership. File Explorer and arbitrary trusted
 native code can still write `/daybook.md` directly, outside the owner's
 revision sequence. The current claim is intentionally narrower: Daybook and
-Pad lenses coordinate through one Daybook owner by convention. Desk hosts and
-routes that owner but does not acquire its data or semantic authority.
+Pad sessions coordinate through one Daybook owner by convention. Desk hosts
+and routes that owner but does not acquire its data or semantic authority.
 
 ## Config Loading
 

@@ -38,6 +38,8 @@ local_testing/*
 !local_testing/test_desk_shared_document.py
 !local_testing/test_daybook_shared_lens.py
 !local_testing/test_daybook_owner_dependency.py
+!local_testing/test_resource_owner_pool.py
+!local_testing/test_resource_session.py
 !local_testing/test_request_bus_reentrancy.py
 !local_testing/test_vfs_mount.py
 !local_testing/test_vfs_mp64fs.py

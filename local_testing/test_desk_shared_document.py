@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Supported Desk-boundary contract for the shared Daybook document.
 
-The probe is an ordinary queued ``APP-DESC``.  It receives only the endpoint
+The probe is an ordinary queued ``APP-DESC``. It receives only the endpoint
 which Desk gives every launched child and discovers the activation-local
-Context, resource registry, request bus, and semantic Daybook RID through
-that endpoint.  It then attaches its own lens binding and reads the initial
-MP64FS document through the generic ``resource.snapshot`` capability.
+Context, resource registry, request bus, and Daybook resource offer through
+that endpoint. The offer identifies both the semantic RID and its owning pool;
+the probe retains the owner through a neutral resource session and reads the
+initial MP64FS document through the existing compact ``resource.snapshot``
+capability.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ AUTOEXEC = r'''\ autoexec.f - Desk shared Daybook boundary contract
 ENTER-USERLAND
 ." [akashic] loading Desk shared document contract" CR
 REQUIRE tui/applets/desk/desk.f
-REQUIRE interop/lens-binding.f
+REQUIRE interop/resource-session.f
 
 \ Provision the same healthy, durable Practice head used by the desktop.
 \ Existing media is never rewritten by this development-image step.
@@ -63,11 +65,11 @@ _dsc-practice-provision
  8 CONSTANT _DSC-S-CHECKS
 16 CONSTANT _DSC-S-FAILS
 24 CONSTANT _DSC-S-QUIT
-32 CONSTANT _DSC-STATE-SIZE
+32 CONSTANT _DSC-S-SESSION
+32 RSES-SIZE + CONSTANT _DSC-STATE-SIZE
 
-CREATE _dsc-ref RREF-SIZE ALLOT
-CREATE _dsc-binding LBIND-SIZE ALLOT
 CREATE _dsc-expected-rid RID-SIZE ALLOT
+CREATE _dsc-rid RID-SIZE ALLOT
 
 VARIABLE _dsc-state
 VARIABLE _dsc-instance
@@ -75,19 +77,21 @@ VARIABLE _dsc-context
 VARIABLE _dsc-creg
 VARIABLE _dsc-rreg
 VARIABLE _dsc-bus
-VARIABLE _dsc-rid
+VARIABLE _dsc-pool
+VARIABLE _dsc-offer
 VARIABLE _dsc-owner
 VARIABLE _dsc-cap
-VARIABLE _dsc-request
 VARIABLE _dsc-depth
 VARIABLE _dsc-final-pass
+VARIABLE _dsc-run-count
+VARIABLE _dsc-rollback-forced
+VARIABLE _dsc-live-retry-forced
+
+: _dsc-session  ( -- session ) _dsc-state @ _DSC-S-SESSION + ;
 
 : _dsc-check  ( flag -- )
     1 _dsc-state @ _DSC-S-CHECKS + +!
     0= IF 1 _dsc-state @ _DSC-S-FAILS + +! THEN ;
-
-: _dsc-request-free  ( -- )
-    _dsc-request DUP @ SWAP 0 SWAP ! ?DUP IF CBR-FREE THEN ;
 
 : _dsc-expected-rid!  ( -- )
     SHA3-256-BEGIN
@@ -96,9 +100,9 @@ VARIABLE _dsc-final-pass
     _dsc-expected-rid SHA3-256-END ;
 
 : _dsc-init  ( instance -- )
+    1 _dsc-run-count +!
     DUP _dsc-instance ! CINST-STATE DUP _dsc-state !
     _DSC-STATE-SIZE 0 FILL
-    0 _dsc-request !
     DEPTH _dsc-depth !
 
     \ A normal child receives a live endpoint before its INIT callback.
@@ -125,68 +129,67 @@ VARIABLE _dsc-final-pass
     _dsc-bus @ CBUS.REGISTRY @ _dsc-creg @ = _dsc-check
 
     S" org.akashic.resource.daybook" _dsc-instance @ CINST-SERVICE
-        DUP _dsc-rid ! 0<> DUP _dsc-check 0= IF EXIT THEN
-    _dsc-rid @ RID-PRESENT? _dsc-check
+        DUP _dsc-offer ! 0<> DUP _dsc-check 0= IF EXIT THEN
+    _dsc-offer @ ROFFER-VALID? _dsc-check
+    _dsc-offer @ ROFFER-POOL@ DUP _dsc-pool !
+        ROPOOL-VALID? _dsc-check
+    _dsc-offer @ ROFFER-RID DUP RID-PRESENT? _dsc-check
+        _dsc-rid RID-COPY
     _dsc-expected-rid!
-    _dsc-rid @ _dsc-expected-rid RID= _dsc-check
+    _dsc-rid _dsc-expected-rid RID= _dsc-check
     S" org.akashic.resource.daybook" _dsc-instance @ CINST-SERVICE
-        _dsc-rid @ = _dsc-check
+        _dsc-offer @ = _dsc-check
 
-    \ Resolve the semantic RID without receiving the owner's private state.
-    _dsc-rid @ _dsc-context @ _dsc-ref _dsc-rreg @ RREG-REF
-        DUP RREG-S-OK = _dsc-check
+    \ Retention precedes owner resolution and descriptor borrowing.
+    S" org.akashic.resource.daybook" _dsc-instance @ _dsc-session RSES-INIT
+        DUP RSES-S-OK = _dsc-check
     ?DUP IF DROP EXIT THEN
-    _dsc-ref _dsc-context @ _dsc-rreg @ RREG-RESOLVE
-        DUP RREG-S-OK = _dsc-check
-    DUP IF 2DROP EXIT THEN
-    DROP _dsc-owner !
+    _dsc-session RSES-ACTIVE? _dsc-check
+    _dsc-session RSES-HELD? _dsc-check
+    _dsc-session RSES-VALID? _dsc-check
+    _dsc-session RSES.POOL @ _dsc-pool @ = _dsc-check
+    _dsc-session RSES.RID _dsc-rid RID= _dsc-check
+    _dsc-pool @ ROPOOL-LEASES@ 2 >= _dsc-check
+
+    _dsc-session RSES.OWNER @ _dsc-owner !
     _dsc-owner @ 0<> _dsc-check
     _dsc-owner @ _dsc-instance @ <> _dsc-check
     _dsc-owner @ CINST-DESC SDOC-COMP-DESC = _dsc-check
     _dsc-owner @ SDOC-VALID? _dsc-check
 
-    \ The probe creates an independent pointer-free lens binding.
-    _dsc-ref _dsc-context @ _dsc-rreg @ _dsc-binding LBIND-ATTACH
-        DUP LBIND-S-OK = _dsc-check
-    ?DUP IF DROP EXIT THEN
-    _dsc-binding LBIND-VALID? _dsc-check
-    _dsc-binding LBIND.RESOURCE-ID _dsc-rid @ RID= _dsc-check
-    _dsc-binding LBIND.TARGET-ID @ _dsc-owner @ CINST.ID @ = _dsc-check
-    _dsc-binding LBIND.TARGET-GEN @
+    _dsc-session RSES.BIND LBIND-VALID? _dsc-check
+    _dsc-session RSES.BIND LBIND.RESOURCE-ID _dsc-rid RID= _dsc-check
+    _dsc-session RSES.BIND LBIND.TARGET-ID @
+        _dsc-owner @ CINST.ID @ = _dsc-check
+    _dsc-session RSES.BIND LBIND.TARGET-GEN @
         _dsc-owner @ CINST.GENERATION @ = _dsc-check
 
     S" resource.snapshot" _dsc-owner @ CINST-DESC COMP-CAP-FIND
         DUP _dsc-cap ! 0<> DUP _dsc-check 0= IF EXIT THEN
     _dsc-cap @ CAP.EFFECTS @ CAP-E-OBSERVE = _dsc-check
 
-    CBR-NEW DUP 0= _dsc-check
-    DUP IF 2DROP EXIT THEN
-    DROP DUP _dsc-request ! 0<> _dsc-check
-    _dsc-binding _dsc-context @ _dsc-request @ LBIND-REQUEST!
-        DUP LBIND-S-OK = _dsc-check
-    ?DUP IF DROP _dsc-request-free EXIT THEN
-    CPRINC-COMPONENT _dsc-request @ CBR.PRINCIPAL !
-    _dsc-instance @ _dsc-request @ CBR-CALLER!
-    _dsc-cap @ _dsc-request @ CBR.CAP !
-    _dsc-request @ _dsc-bus @ CBUS-DISPATCH
-        DUP CBUS-S-OK = _dsc-check
-    ?DUP IF DROP _dsc-request-free EXIT THEN
+    _dsc-cap @ CPRINC-COMPONENT _dsc-session RSES-PREPARE
+        DUP RSES-S-OK = _dsc-check
+    ?DUP IF DROP EXIT THEN
+    _dsc-session RSES.REQUEST @ DUP 0<> _dsc-check
+    DUP CBR.ARGS CV-NULL!
+    _dsc-instance @ SWAP CBR-CALLER!
+    _dsc-session RSES-DISPATCH DUP CBUS-S-OK = _dsc-check
+    ?DUP IF DROP EXIT THEN
 
-    _dsc-request @ CBR.RESULT CV-TYPE@ CV-T-STRING = _dsc-check
-    _dsc-request @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
+    _dsc-session RSES.REQUEST @ CBR.RESULT CV-TYPE@ CV-T-STRING = _dsc-check
+    _dsc-session RSES.REQUEST @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
         S" # Daybook" STR-STR-CONTAINS _dsc-check
-    _dsc-request @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
+    _dsc-session RSES.REQUEST @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
         S" Project review" STR-STR-CONTAINS _dsc-check
-    _dsc-request @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
+    _dsc-session RSES.REQUEST @ CBR.RESULT DUP CV-DATA@ SWAP CV-LEN@
         S" Plan the next release" STR-STR-CONTAINS _dsc-check
-    _dsc-request @ CBR.ACTUAL-REV @
+    _dsc-session RSES.REQUEST @ CBR.ACTUAL-REV @
         _dsc-owner @ CINST.REVISION @ = _dsc-check
     _dsc-owner @ CINST.REVISION @ 1 = _dsc-check
-    _dsc-request @ _dsc-context @ _dsc-binding LBIND-ADVANCE
-        LBIND-S-OK = _dsc-check
-    _dsc-binding LBIND.REVISION @ 1 = _dsc-check
+    _dsc-session RSES-ADVANCE RSES-S-OK = _dsc-check
+    _dsc-session RSES.BIND LBIND.REVISION @ 1 = _dsc-check
     _dsc-owner @ _dsc-instance @ <> _dsc-check
-    _dsc-request-free
 
     DEPTH _dsc-depth @ = _dsc-check
     _dsc-state @ _DSC-S-FAILS + @ 0= IF
@@ -212,12 +215,43 @@ VARIABLE _dsc-final-pass
     THEN
     1 2 DRW-TEXT
     250 17 0 DRW-STYLE!
-    S" endpoint -> RID -> owner -> independent lens snapshot"
+    S" endpoint -> RID -> retained resource session snapshot"
         3 2 DRW-TEXT
     DRW-STYLE-RESTORE
     DROP ;
 
-: _dsc-shutdown  ( instance -- ) DROP _dsc-request-free ;
+: _dsc-shutdown  ( instance -- )
+    CINST-STATE DUP _dsc-state ! _DSC-S-SESSION +
+    RSES-FINI RSES-S-OK = DUP _dsc-check
+    0= IF 0 _dsc-final-pass ! THEN
+
+    \ Model the exact unpublished-owner state left by an activation whose
+    \ rollback hit a retryable anchor-release failure.  Desk has no owner
+    \ instance to deactivate, while the retained pool still borrows this
+    \ activation's Context and registries.  Two forced failures make Desk's
+    \ cleanup boundary itself observe and retry the second one.
+    _dsc-run-count @ 1 = IF
+        0 _SDOC-LIVE !
+        0 _DESK-DAYBOOK-OWNER !
+        _SDOC-OFFER ROFFER-SIZE 0 FILL
+        2 _dsc-pool @ ROPOOL-RELEASE-FAILURES!
+            RACQ-S-OK = _dsc-check
+        _SDOC-ACTIVATE-RELEASE
+        _SDOC-POOL ROPOOL-VALID? _dsc-check
+        _SDOC-POOL ROPOOL-CONTEXT@ _dsc-context @ = _dsc-check
+        _SDOC-POOL ROPOOL-RREG@ _dsc-rreg @ = _dsc-check
+        _SDOC-POOL ROPOOL-CREG@ _dsc-creg @ = _dsc-check
+        _SDOC-ANCHOR-RESULT RACQ.RESULT-TOKEN
+            RACQ-TOKEN-ACTIVE? _dsc-check
+        -1 _dsc-rollback-forced !
+    ELSE
+        \ The ordinary live-owner path must also consume a retryable final
+        \ anchor-release failure before Desk frees the borrowed graph.
+        1 _dsc-pool @ ROPOOL-RELEASE-FAILURES!
+            RACQ-S-OK = _dsc-check
+        -1 _dsc-live-retry-forced !
+    THEN
+    _dsc-state @ _DSC-S-FAILS + @ IF 0 _dsc-final-pass ! THEN ;
 
 CREATE _dsc-comp COMP-DESC ALLOT
 CREATE _dsc-desc APP-DESC ALLOT
@@ -242,9 +276,21 @@ CREATE _dsc-desc APP-DESC ALLOT
 
 _dsc-descriptors
 
+0 _dsc-final-pass ! 0 _dsc-run-count ! 0 _dsc-rollback-forced !
+0 _dsc-live-retry-forced !
+_dsc-desc DESK-QUEUE-LAUNCH
+DESK-RUN
+_dsc-final-pass @ 0= ABORT" first Desk resource pass failed"
+_dsc-rollback-forced @ 0= ABORT" activation rollback was not forced"
+_SDOC-POOL ROPOOL-VALID? ABORT" Desk freed dependencies before rollback"
+
+\ A second complete Desk activation proves that the static Daybook owner did
+\ not retain dangling dependencies from the first activation.
 0 _dsc-final-pass !
 _dsc-desc DESK-QUEUE-LAUNCH
 DESK-RUN
+_dsc-run-count @ 2 <> ABORT" second Desk activation did not launch probe"
+_dsc-live-retry-forced @ 0= ABORT" live owner release retry was not forced"
 _dsc-final-pass @ IF
     ." DESK SHARED DOCUMENT SHUTDOWN PASS" CR
 ELSE
@@ -257,7 +303,7 @@ def test_desk_shared_document_contract(tmp_path: Path) -> None:
     PROFILES[PROFILE_NAME] = Profile(
         roots=(
             "tui/applets/desk/desk.f",
-            "interop/lens-binding.f",
+            "interop/resource-session.f",
         ),
         resources=(),
         autoexec=AUTOEXEC,

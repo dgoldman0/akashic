@@ -4,19 +4,19 @@
     "name": "post-gate4-refactor-baseline-20260720",
     "commit": "ce340fc8bef0b2c1331339f6ceaf4c02d4c020f5",
     "expected": {
-      "module_count": 385,
-      "resolved_require_occurrence_count": 1301,
-      "unique_resolved_edge_count": 1301,
+      "module_count": 386,
+      "resolved_require_occurrence_count": 1308,
+      "unique_resolved_edge_count": 1308,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 7,
-      "placement_debt_count": 40,
+      "placement_debt_count": 39,
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "95cf830759940a51d3a7a01a946c9234291993f62ccd547015aabac30613cab0",
-      "state_sha256": "9d26f2c5f2721ac52f68852cbcba6a2c89aadb1fac86022335e15c0ffa6b9a46",
-      "placement_sha256": "9f39f57a56f0f9e7c3c43740b9f226b077e839139dce92d7f389e1e386202c6b",
+      "graph_sha256": "d5783340b00f35a60d8adfa1b34052bac03bcafa34e29662b689d0c8b65fa7e5",
+      "state_sha256": "3d62627065e838443a98b3fa17951fa2482d7a5a7306ceb0dbf84e542f6a2089",
+      "placement_sha256": "12e80168718dceb99dc12f99af627a22df4fd15ce8356c0b4078cd2e0d129870",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
       "layer_violations": [
@@ -109,13 +109,6 @@
         "owner": "agent",
         "placement": "misplaced-applet",
         "target": "tui/applets/agent/widgets/agent-settings.f"
-      },
-      {
-        "module": "interop/shared-document-lens.f",
-        "class": "independent",
-        "owner": "resource-session",
-        "placement": "split-required",
-        "target": "interop/resource-session.f"
       },
       {
         "module": "agent/access-profile.f",
@@ -511,6 +504,17 @@
       "evidence_symbols": ["CBUS-POST", "CBUS-DISPATCH", "_CBUS-DISPATCH-GUARD"]
     },
     {
+      "id": "interop.resource-owner-pool",
+      "module": "interop/resource-owner-pool.f",
+      "operation": "resource acquisition, retained dispatch, and release",
+      "current_structure": "caller-sized slot/lease arrays with direct member-to-slot dispatch metadata and a shared cold-control-plane scratch trampoline",
+      "current_complexity": "O(slots + leases) lifecycle lookup with cross-pool lifecycle serialization, and O(1) per-pool guarded handler entry/exit",
+      "scale_risk": "very large simultaneous owner sets still scan caller storage and high-rate acquisition/release across independent pools still contends, though request dispatch is independent of registry and pool cardinality",
+      "replacement_requirement": "add caller-supplied slot/lease indexes and per-pool lifecycle workspaces only when measured concurrent-owner or lifecycle throughput exceeds the bounded design",
+      "target_landing": "deferred",
+      "evidence_symbols": ["_ROPOOL-SLOT-FIND-RAW", "_ROPOOL-HANDLER-BEGIN-LOCKED", "_ROPOOL-HANDLER-END-LOCKED"]
+    },
+    {
       "id": "uidl.document",
       "module": "liraq/uidl.f",
       "operation": "UIDL parse and element-by-ID lookup",
@@ -599,6 +603,14 @@
       "id": "library.projection-leases",
       "module": "library/projection-owner.f",
       "symbol": "LIBRARY-PROJECTION-LEASE-MAX",
+      "value": 64,
+      "scope": "instance-pool",
+      "scale_axis": "simultaneous-instances"
+    },
+    {
+      "id": "daybook.resource-session-leases",
+      "module": "daybook/shared-document.f",
+      "symbol": "_SDOC-LEASE-CAP",
       "value": 64,
       "scope": "instance-pool",
       "scale_axis": "simultaneous-instances"

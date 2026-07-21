@@ -18,8 +18,17 @@ be disjoint from one another and from every known input span. This generic
 preflight deliberately knows only the 88-byte RACQ root ABI. An owner whose
 RACQ header prefixes a larger root or whose safety depends on a reachable
 borrowed graph must expose an owner-specific wrapper that validates those
-larger spans before delegating to `RACQ-ATTACH`; the Library projection owner
-does so with `LIBRARY-PROJECTION-ATTACH`.
+larger spans before delegating to `RACQ-ATTACH`. The neutral resource-owner
+pool does so for its complete header and caller-owned slot/lease arrays with
+`ROPOOL-ATTACH`; the Library projection owner adds its larger root and borrowed
+store/runtime graph checks before delegating to that pool boundary.
+
+The pool's `ROFFER` is only the discovery descriptor for one named resource:
+it pairs an exact RID with the pool that owns it. It does not replace the RACQ
+root, token ledger, or attachment check and grants no retain by itself. A
+resource session validates an owner-lent offer against its discovered runtime,
+copies those two values, and performs the ordinary `ROPOOL-ATTACH` transaction.
+No global-pool service participates in acquisition.
 
 Tokens contain live root and self pointers, a private-owner cookie, and a
 generation, so they are never persistent. Copying token bytes changes their

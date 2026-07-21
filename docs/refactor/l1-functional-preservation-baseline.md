@@ -37,7 +37,9 @@ UIDL is recorded as a human-readable key-to-action map and anchored to the
 normalized handler body, so dropping or remapping a key requires a reviewed
 ledger update. Every applet also pins its current component identity, public
 lifecycle entry words, exact capability-ID set and named provider identities;
-Desk's exact eleven service IDs are parsed from its setup word.
+Desk's exact eleven service IDs are parsed from its setup word. The named
+Daybook resource service now returns the owner-lent offer containing its exact
+RID and owning pool; no extra global-pool service changes that service set.
 
 Those structural checks prevent a move or decomposition from silently dropping
 a route, but they are not counted as behavioral execution. A source comment can
@@ -50,13 +52,13 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | Library | 4 | 2 | 2 | 0 | 3 | 19 |
 | Streams | 4 | 1 | 3 | 0 | 4 | 23 |
 | Agent | 4 | 2 | 2 | 0 | 2 | 22 |
-| Daybook | 3 | 1 | 2 | 0 | 2 | 9 |
+| Daybook | 3 | 2 | 1 | 0 | 1 | 9 |
 | Pad | 3 | 2 | 1 | 0 | 2 | 10 |
 | Grid | 2 | 0 | 2 | 0 | 2 | 5 |
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
 | Desk | 3 | 1 | 2 | 0 | 3 | 11 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **29** | **10** | **17** | **2** | **24** | **109** |
+| **Total** | **29** | **11** | **16** | **2** | **23** | **109** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -76,14 +78,15 @@ and a broad test-writing project for code an active landing may never touch.
 - Agent retains offline, scripted, OpenAI and Codex providers, all access
   presets, authentication/device/settings behavior and durable transcript
   semantics.
-- Daybook and Pad retain the current semantic shared-document journey even
-  though L6 will replace its implementation with the canonical resource
+- Daybook and Pad retain the current semantic shared-document journey while L6
+  replaces its transport plumbing with the retained, protocol-neutral resource
   session.
-- Daybook's L5 capability edge is now characterized in `daybook-contracts`:
+- Daybook's L5 capability edge is characterized in `daybook-contracts`:
   direct agenda dispatch returns the exact serialized model, while forced task
   capture persistence failure clears the result and restores the model, dirty
-  state, discard state and allocator balance. Its remaining binding-advance
-  failure prerequisite belongs to L6.
+  state, discard state and allocator balance. The L6 prerequisite is also
+  closed: a forced post-commit binding-advance failure proves one authoritative
+  revision is recoverable without duplicating the mutation.
 - Grid and FExplorer already have strong evaluator/storage and verified-transfer
   evidence. Their prerequisites are limited to controller or handler edges that
   those tests do not execute.

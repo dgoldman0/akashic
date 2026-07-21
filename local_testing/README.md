@@ -63,6 +63,30 @@ publication, deterministic root/key/nested allocation denial, recursive abort,
 and exact available-memory restoration. The API and borrowed/owned lifetime
 rules are documented in `docs/interop/construction.md`.
 
+L6 independently qualifies the caller-owned owner pool and retained resource
+session before their applet integrations:
+
+```bash
+python3 -m pytest -q -s \
+  local_testing/test_resource_owner_pool.py \
+  local_testing/test_resource_session.py
+```
+
+The pool fixture covers 282 assertions across publication rollback,
+generation/refcount/inflight/close, exact token ledgers, retryable release,
+callback containment, output aliasing, per-resource offers, and independent
+pools. The session fixture covers 231 assertions across two named offers and
+distinct pools, raw nested-span alias nonmutation, exact one-call service
+discovery with the named offer last, copied-offer lifetime, compact and
+canonical protocols, candidate switching (including same-address input), stale
+recovery, committed-stale behavior, rollback, and retryable finalization. The
+applet qualification additionally runs `daybook-contracts`,
+`pad-resource-contracts`, `desk-service-table-contracts`, `desktop-resource`,
+and `desktop-agent-hardening`, plus the focused shared-document pytests and
+Library's projection two-boot gate. None of these checks requires ext4. See
+`docs/refactor/l6-resource-owner-pool-and-session.md` for the exact boundary
+and final evidence.
+
 ## Build And Smoke Test
 
 ```bash

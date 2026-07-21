@@ -1,8 +1,8 @@
 # Library product boundary
 
 Status: the pure bounded model/codecs, deterministic arena/catalog/head formats,
-sole VFS owner, and all five ordered Gate 4 headless milestones are implemented
-and qualified. Library owns managed-document and capture
+sole VFS owner, and all five ordered Gate 4 owner/storage milestones are
+implemented and qualified. Library owns managed-document and capture
 mutation, retained history, receipts, lifecycle, collections, a disposable
 title/body/tag index, bounded authoritative corpus/collection queries, and an
 activation-local projection-owner lifecycle. Its maintenance surface provides
@@ -11,7 +11,7 @@ bounded coherent opaque evidence export. A bounded non-Desktop applet executable
 exercises the public storage surface as a user-facing corpus lens: it can browse
 and search active/archived records, preview exact content, create and rename
 managed documents, archive/unarchive, inspect retained history, browse/filter
-collections, and page results. The literal headless Gate 4 cold/damage exit is
+collections, and page results. The renderer-free Gate 4 cold/damage exit is
 green. The applet still does not provide Desktop hosting, sibling integration,
 deep Pad editing, capture import, destructive deletion, or maintenance/export
 UI; those remain separate product/integration work. Every currently implemented
@@ -50,7 +50,7 @@ Library does not own:
   citation/claim/backlink graph.
 
 Desk is Library's owning product ecosystem. The current non-Desktop applet
-executable shows Library records through the public headless owner surface, but
+executable shows Library records through the public owner surface, but
 presentation does not transfer domain ownership or by itself establish a
 Desktop route or capability.
 
@@ -339,6 +339,13 @@ leases. Same-RID acquisitions share one fixed component instance but return
 distinct validated lifetime tokens alongside their semantic resource
 references.
 
+The root embeds the neutral `interop/resource-owner-pool.f` and supplies its
+own caller-owned eight-slot/64-lease storage. The pool now owns component
+creation, publication rollback, token/generation/refcount accounting, inflight
+quiescence, and final destruction. Library's adapter still decides locator
+admission, managed-document versus capture descriptors, retained-history
+qualification, and every domain/storage status.
+
 Every acquisition passes through the root even if the RID is already present
 in the resource registry. The root validates the exact requested RID/domain
 state through its explicitly supplied VFS-store instance; it never consults
@@ -347,7 +354,7 @@ state through its explicitly supplied VFS-store instance; it never consults
 `LIBRARY-PROJECTION-ROOT-INIT ( store context creg rreg bus root -- status )`
 borrows that complete runtime graph, including the request bus, until
 successful root finalization. Its embedded RACQ header is only the portable
-callback/token ABI. Generic `RACQ-ATTACH` cannot validate the full 4,072-byte
+callback/token ABI. Generic `RACQ-ATTACH` cannot validate the full 4,192-byte
 root and reachable borrows, so `LIBRARY-PROJECTION-ATTACH ( locator root
 context rreg binding result -- status )` is the only supported attachment
 entry. Binding and result must be distinct caller-owned buffers disjoint from
@@ -368,13 +375,16 @@ storage errors, and commit order. In particular, replace constructs and
 validates the complete response before `LIBRARY-VFS-STORE-REPLACE-MANAGED`;
 after a durable commit there is no remaining fallible result allocation.
 
-Tokens are activation-local, non-authoritative outside the private owner
-ledger, and never persistent. Public release is idempotent: it waits for
-request-dispatch quiescence, decrements accounting exactly once, preserves the
-original token and binding after a retryable cleanup failure, and unpublishes
-and wipes the slot only after successful final release. At capacity,
-acquisition refuses another distinct RID instead of evicting or retargeting an
-owner. Registry presence is not authority and cannot bypass retain accounting.
+Tokens are activation-local, non-authoritative outside the neutral pool's
+private lease ledger, and never persistent. Public release is idempotent: it
+waits for request-dispatch quiescence, decrements accounting exactly once,
+preserves the original token and binding after a retryable cleanup failure,
+and unpublishes and wipes the slot only after successful final release. At
+capacity, acquisition refuses another distinct RID instead of evicting or
+retargeting an owner. Registry presence is not authority and cannot bypass
+retain accounting. Ordinary projection handlers use the pool's constant-time
+member/inflight scope; deep pool and registry walks remain explicit validation
+or lifecycle operations rather than per-request work.
 
 Pad is the deep-editing lens for managed documents and a read-only lens for
 captures. Library remains the semantic owner. Explorer may reveal an admitted
@@ -396,15 +406,16 @@ mechanics are extracted. The package is transitional placement, not a
 standalone product. The implemented applet package is
 `akashic/tui/applets/library/`; it is a bounded Library lens over the public
 owner API, not the owner, a projection owner, or a Desktop registration.
-Portable mechanics move to `interop/` or `utils/fs/` only after two materially
-independent owners prove the same contract.
+The owner-pool mechanics have moved to `interop/` after Library and Daybook
+proved the same lifetime contract. Remaining Library model, storage,
+qualification, and projection policy stays applet-owned.
 
 The existing `akashic/knowledge/taxonomy.f` and `akashic/store/vault.f` are not
 Library foundations. Neither supplies this bounded durable owner, revision,
 recovery, identity, or projection contract.
 
 The focused, capacity, performance, clean-cold, and damage-branch results that
-close the headless gate are recorded in
+close the Gate 4 owner/storage gate are recorded in
 [`../../local_testing/evidence/library-gate4-close-20260720.md`](../../local_testing/evidence/library-gate4-close-20260720.md).
 
 The repository-root refactoring plan governs the remaining order. It schedules

@@ -324,3 +324,36 @@ ext4 dependency changes in L5. The placement and unresolved-import digests
 remain unchanged. Library and Daybook stay applet-owned; the new independent
 code is only the contract-construction mechanism shared by their materially
 different protocols.
+
+## L6 reviewed ratchet update
+
+Landing L6 deletes the two-edge transitional Daybook client module and adds
+the neutral owner-pool and retained-session modules. The pool contributes six
+dependencies and the session three; the Library owner exchanges
+resource-acquisition for the pool, the Daybook owner exchanges its direct
+resource-registry edge for the pool,
+and Daybook/Pad exchange the old lens edge for the session. The net reviewed
+graph is therefore 386 modules, 1,308 resolved `REQUIRE` occurrences, and
+1,308 unique resolved edges. Removing the transitional lens target reduces
+placement debt from 40 modules to 39 without changing the seven existing
+layer violations.
+
+Current responsibility totals are 62 applet modules / 48,004 lines / 2,729
+lexical globals, 59 Desk-ecosystem modules / 24,138 lines / 1,100 lexical
+globals, and 265 independent modules / 128,735 lines / 7,075 lexical globals.
+The applet total falls by 29 from L5 as Library deletes its private owner-pool
+machinery and Daybook/Pad replace duplicate session state with embedded
+`RSES`. The independent total rises by 18 after the old lens is removed: RSES
+itself has caller-owned state and no lexical scratch, while the pool owns its
+bounded cold-control-plane trampoline and validation scratch. Handler
+begin/end remains stack-local and guarded by the exact caller-owned pool; the
+shared lifecycle scratch and its cross-pool serialization remain explicitly
+recorded scale debt rather than being described as a throughput gain.
+
+No target-layer violation, unresolved import, identity issue, addressability
+issue, dependency cycle, storage format, product corpus bound, or ext4
+dependency changes in L6. Daybook's 64-lease capacity is now explicit in the
+machine ledger, and the owner-pool complexity entry records both its linear
+caller arrays and cold cross-pool serialization. Library and Daybook policy
+remain applet-owned; only lifecycle and protocol-neutral session mechanics
+move into independent code.

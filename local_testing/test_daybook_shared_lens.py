@@ -2,7 +2,7 @@
 """Focused contracts for Daybook as a shared-document lens.
 
 The ordinary ``daybook-contracts`` profile remains the standalone VFS/VREPL
-control.  This fixture supplies the same four services that Desk lends to an
+control.  This fixture supplies the retained resource services that Desk lends to an
 applet and exercises Daybook through the semantic owner without starting the
 TUI shell.
 """
@@ -81,7 +81,7 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
         2DROP _dsl-bus @ EXIT
     THEN
     S" org.akashic.resource.daybook" STR-STR= IF
-        _dsl-rid EXIT
+        SDOC-SERVICE EXIT
     THEN
     0 ;
 
@@ -114,6 +114,9 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
 
 : _dsl-write  ( -- status )
     _DB-SERIALIZE _DB-WRITE ;
+
+: _dsl-advance-fail  ( request context binding -- status )
+    2DROP DROP LBIND-S-INVALID ;
 
 : _dsl-free-daybook  ( instance -- )
     DUP _DB-ACTIVATE _DB-SHARED-FINI
@@ -148,6 +151,16 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
         SDOC-ACTIVATE
     DUP SDOC-S-OK = _dsl-assert DROP _dsl-owner !
 
+    \ Pending-activation cleanup is exact-dependency scoped.  A foreign tuple
+    \ is a no-op, while the matching tuple may not tear down a live owner.
+    0 0 0 SDOC-ACTIVATION-CLEANUP SDOC-S-OK = _dsl-assert
+    _dsl-owner @ SDOC-VALID? _dsl-assert
+    _dsl-context @ _dsl-rreg @ _dsl-creg @ SDOC-ACTIVATION-CLEANUP
+        SDOC-S-BUSY = _dsl-assert
+    _dsl-owner @ SDOC-VALID? _dsl-assert
+    SDOC-SERVICE ROFFER-VALID? _dsl-assert
+    SDOC-POOL ROPOOL-LEASES@ 1 = _dsl-assert
+
     _dsl-endpoint IENDPOINT-INIT
     ['] _dsl-service _dsl-endpoint IEND.SERVICE-XT !
     _dsl-blocked-endpoint IENDPOINT-INIT
@@ -157,7 +170,7 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     DEPTH _dsl-depth !
 
     _dsl-endpoint _dsl-new-daybook DUP _dsl-a ! _dsl-lens-init
-    _DB-RESOURCE-MODE @ SDLENS-M-SHARED = _dsl-assert
+    _DB-RESOURCE-MODE @ RSES-M-ACTIVE = _dsl-assert
     _DB-LOAD _DB-L-S-OK = _dsl-assert
     _DB-COUNT @ DUP _dsl-base-count ! 0>= _dsl-assert
     _DB-SHARED-BIND LBIND.REVISION @ 1 = _dsl-assert
@@ -167,6 +180,11 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     _dsl-stack
     _DB-LOAD _DB-L-S-OK = _dsl-assert
     _DB-SHARED-BIND LBIND.REVISION @ 1 = _dsl-assert
+    SDOC-POOL DUP ROPOOL-VALID? _dsl-assert
+    DUP ROPOOL-LIVE@ 1 = _dsl-assert
+    ROPOOL-LEASES@ 3 = _dsl-assert
+    _dsl-owner @ SDOC-DEACTIVATE SDOC-S-BUSY = _dsl-assert
+    _dsl-owner @ SDOC-VALID? _dsl-assert
     _dsl-stack
 
     \ Lens A publishes revision two.
@@ -219,11 +237,32 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     _DB-COUNT @ _dsl-base-count @ 2 + = _dsl-assert
     _dsl-stack
 
+    \ The owner commit remains authoritative if the lens cannot advance its
+    \ activation-local binding afterward.  A blocked retry cannot duplicate
+    \ the mutation, and an explicit load recovers the one committed revision.
+    S" advance recovery" _dsl-add
+    _DB-SERIALIZE
+    ['] _dsl-advance-fail _DB-SHARED-ADVANCE-XT !
+    _DB-WRITE 0= _dsl-assert
+    ['] LBIND-ADVANCE _DB-SHARED-ADVANCE-XT !
+    _dsl-owner @ CINST.REVISION @ 4 = _dsl-assert
+    _DB-SHARED-BIND LBIND-VALID? 0= _dsl-assert
+    _DB-SOURCE-BLOCKED @ _dsl-assert
+    _DB-WRITE 0<> _dsl-assert
+    _dsl-owner @ CINST.REVISION @ 4 = _dsl-assert
+    _DB-LOAD _DB-L-S-OK = _dsl-assert
+    _DB-COUNT @ _dsl-base-count @ 3 + = _dsl-assert
+    _dsl-base-count @ 2 + _DB-ENTRY _DB-E-TEXT + 16
+        S" advance recovery" STR-STR= _dsl-assert
+    _DB-SHARED-BIND LBIND.REVISION @ 4 = _dsl-assert
+    _DB-SOURCE-BLOCKED @ 0= _dsl-assert
+    _dsl-stack
+
     \ A valid Practice Context with an incomplete service set is blocked.
     \ It cannot silently use the ordinary backing path.
     _dsl-blocked-endpoint _dsl-new-daybook
         DUP _dsl-blocked ! _dsl-lens-init
-    _DB-RESOURCE-MODE @ SDLENS-M-BLOCKED = _dsl-assert
+    _DB-RESOURCE-MODE @ RSES-M-BLOCKED = _dsl-assert
     _DB-SOURCE-BLOCKED @ _dsl-assert
     _dsl-owner @ CINST.REVISION @ _dsl-owner-rev !
     _DB-IO-RESET S" must not publish" _DB-IO-APPEND
@@ -236,7 +275,7 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     \ instead of falling open to direct /daybook.md access.
     _dsl-no-context-endpoint _dsl-new-daybook
         DUP _dsl-no-context ! _dsl-lens-init
-    _DB-RESOURCE-MODE @ SDLENS-M-BLOCKED = _dsl-assert
+    _DB-RESOURCE-MODE @ RSES-M-BLOCKED = _dsl-assert
     _DB-SOURCE-BLOCKED @ _dsl-assert
     _DB-IO-RESET S" endpoint must not publish" _DB-IO-APPEND
     _DB-WRITE 0<> _dsl-assert
@@ -244,11 +283,25 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     _dsl-stack
     _dsl-capture @ CBR-FREE
     _dsl-source CV-FREE
+    \ Applet teardown must consume a retryable release while its embedded
+    \ acquisition token is still allocated.
+    1 SDOC-POOL ROPOOL-RELEASE-FAILURES! RACQ-S-OK = _dsl-assert
     _dsl-a @ _dsl-free-daybook
+    SDOC-POOL ROPOOL-LEASES@ 2 = _dsl-assert
     _dsl-b @ _dsl-free-daybook
     _dsl-blocked @ _dsl-free-daybook
     _dsl-no-context @ _dsl-free-daybook
+    SDOC-POOL ROPOOL-LEASES@ 1 = _dsl-assert
+    \ A failed anchor release preserves the owner, service offer, and exact
+    \ retry handles instead of leaving an unserviceable live pool.
+    1 SDOC-POOL ROPOOL-RELEASE-FAILURES! RACQ-S-OK = _dsl-assert
+    _dsl-owner @ SDOC-DEACTIVATE SDOC-S-RESOURCE = _dsl-assert
+    _dsl-owner @ SDOC-VALID? _dsl-assert
+    SDOC-SERVICE DUP ROFFER-VALID? _dsl-assert
+    ROFFER-POOL@ SDOC-POOL = _dsl-assert
+    SDOC-POOL ROPOOL-LEASES@ 1 = _dsl-assert
     _dsl-owner @ SDOC-DEACTIVATE SDOC-S-OK = _dsl-assert
+    SDOC-POOL 0= _dsl-assert
     _dsl-bus @ CBUS-FREE
     _dsl-rreg @ RREG-FREE
     _dsl-creg @ CREG-FREE
