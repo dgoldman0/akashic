@@ -502,6 +502,7 @@ VARIABLE _ts-store
 VARIABLE _ts-store2
 VARIABLE _ts-store3
 VARIABLE _ts-store4
+VARIABLE _ts-split-store
 VARIABLE _ts-fd
 VARIABLE _ts-snapshot-u
 VARIABLE _ts-other-vfs
@@ -520,6 +521,11 @@ VARIABLE _ts-probe-conv
 VARIABLE _ts-read-conv
 VARIABLE _ts-read-generation
 VARIABLE _ts-read-status
+VARIABLE _ts-a-copy
+VARIABLE _ts-a-copy-u
+VARIABLE _ts-b-copy
+VARIABLE _ts-b-copy-u
+VARIABLE _ts-pair-heap
 CREATE _ts-bad 8 ALLOT
 
 : _ts-assert  ( flag -- )
@@ -530,6 +536,11 @@ CREATE _ts-bad 8 ALLOT
         ." STACK " _ts-depth @ . ." -> " DUP . CR .S CR
     THEN
     _ts-depth @ = _ts-assert ;
+
+: _ts-selected-stable?  ( store -- )
+    AVFSSTORE.PAIR GPAIR-SELECTED@
+    DUP 0<> _ts-assert
+    DUP GPAIR-CANDIDATE-VALUE@ = _ts-assert ;
 
 : _ts-new-store  ( -- store )
     _ts-vfs @ AVFSSTORE-NEW
@@ -543,6 +554,82 @@ CREATE _ts-bad 8 ALLOT
     _ts-bad 8 _ts-fd @ VFS-WRITE 8 = _ts-assert
     _ts-fd @ VFS-CLOSE
     _ts-vfs @ VFS-SYNC 0= _ts-assert ;
+
+: _ts-generation!  ( generation path-a path-u -- )
+    _ts-vfs @ VFS-USE
+    VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-bad !
+    16 _ts-fd @ VFS-SEEK? 0= _ts-assert
+    _ts-bad 8 _ts-fd @ VFS-WRITE-EXACT 0= _ts-assert
+    _ts-fd @ VFS-CLOSE
+    _ts-vfs @ VFS-SYNC 0= _ts-assert ;
+
+: _ts-read-copy  ( path-a path-u -- bytes-a bytes-u )
+    _ts-vfs @ VFS-USE
+    VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-fd @ VFS-SIZE DUP ALLOCATE
+    DUP 0= _ts-assert ?DUP IF THROW THEN
+    SWAP
+    2DUP _ts-fd @ VFS-READ-EXACT 0= _ts-assert
+    _ts-fd @ VFS-CLOSE ;
+
+: _ts-write-copy  ( bytes-a bytes-u path-a path-u -- )
+    _ts-vfs @ VFS-USE
+    VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-fd @ VFS-REWIND
+    0 _ts-fd @ VFS-TRUNCATE 0= _ts-assert
+    _ts-fd @ VFS-WRITE-EXACT 0= _ts-assert
+    _ts-fd @ VFS-CLOSE
+    _ts-vfs @ VFS-SYNC 0= _ts-assert ;
+
+: _ts-test-equal-generation-identical  ( -- )
+    HEAP-FREE-BYTES _ts-pair-heap !
+    _AVFS-PATH-A _ts-read-copy _ts-a-copy-u ! _ts-a-copy !
+    _AVFS-PATH-B _ts-read-copy _ts-b-copy-u ! _ts-b-copy !
+    _ts-b-copy @ _ts-b-copy-u @ _AVFS-PATH-A _ts-write-copy
+
+    _ts-new-store DUP _ts-split-store ! ACSTORE-LOAD
+    DUP ACSTORE-S-OK = _ts-assert DROP
+    DUP 0<> _ts-assert _ts-loaded !
+    _ts-split-store @ AVFSSTORE.GENERATION @ 2 = _ts-assert
+    \ Equal verified bytes deterministically make physical slot A the
+    \ in-memory authority; B and both retained source buffers are released.
+    _ts-split-store @ AVFSSTORE.ACTIVE-SLOT @ 0= _ts-assert
+    _ts-split-store @ _ts-selected-stable?
+    _ts-loaded @ ACONV.COUNT @ 3 = _ts-assert
+    _ts-loaded @ ACONV-FREE 0 _ts-loaded !
+    _ts-split-store @ ACSTORE-FREE 0 _ts-split-store !
+
+    _ts-a-copy @ _ts-a-copy-u @ _AVFS-PATH-A _ts-write-copy
+    _ts-b-copy @ FREE 0 _ts-b-copy ! 0 _ts-b-copy-u !
+    _ts-a-copy @ FREE 0 _ts-a-copy ! 0 _ts-a-copy-u !
+    _AVL-A-CONV @ 0= _ts-assert _AVL-B-CONV @ 0= _ts-assert
+    _AVL-A-BUF @ 0= _ts-assert _AVL-B-BUF @ 0= _ts-assert
+    VFS-CUR _ts-vfs @ = _ts-assert
+    HEAP-FREE-BYTES _ts-pair-heap @ = _ts-assert
+    _ts-stack ;
+
+: _ts-test-equal-generation-split-brain  ( -- )
+    \ Slot A still contains the first conversation while slot B contains the
+    \ second.  Giving both valid snapshots generation two must fail closed;
+    \ a generation tie is not permission to choose an arbitrary payload.
+    HEAP-FREE-BYTES _ts-pair-heap !
+    2 _AVFS-PATH-A _ts-generation!
+    _ts-store @ ACSTORE-LOAD
+    DUP ACSTORE-S-INVALID = _ts-assert DROP 0= _ts-assert
+    _ts-store @ AVFSSTORE.GENERATION @ 0= _ts-assert
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @ -1 = _ts-assert
+    _ts-new-store DUP _ts-split-store ! ACSTORE-LOAD
+    DUP ACSTORE-S-INVALID = _ts-assert DROP 0= _ts-assert
+    _ts-split-store @ AVFSSTORE.GENERATION @ 0= _ts-assert
+    _ts-split-store @ AVFSSTORE.ACTIVE-SLOT @ -1 = _ts-assert
+    _ts-split-store @ ACSTORE-FREE 0 _ts-split-store !
+    1 _AVFS-PATH-A _ts-generation!
+    _AVL-A-CONV @ 0= _ts-assert _AVL-B-CONV @ 0= _ts-assert
+    _AVL-A-BUF @ 0= _ts-assert _AVL-B-BUF @ 0= _ts-assert
+    VFS-CUR _ts-vfs @ = _ts-assert
+    HEAP-FREE-BYTES _ts-pair-heap @ = _ts-assert
+    _ts-stack ;
 
 : _ts-buffer-reusable?  ( size -- flag )
     ALLOCATE DUP IF 2DROP 0 EXIT THEN DROP
@@ -571,7 +658,8 @@ CREATE _ts-bad 8 ALLOT
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @
     _ts-fault-slot @ = _ts-assert ;
 
-: _ts-read-clean?  ( -- )
+: _ts-read-clean?  ( store -- )
+    >R
     VFS-CUR _ts-other-vfs @ = _ts-assert
     _AVR-FD @ 0= _ts-assert
     _AVR-BUF @ 0= _ts-assert
@@ -580,10 +668,8 @@ CREATE _ts-bad 8 ALLOT
     ?DUP IF FD.FREE @ ELSE 0 THEN
     _ts-fault-fd-next @ = _ts-assert
     HEAP-FREE-BYTES _ts-fault-heap @ = _ts-assert
-    _ts-store @ AVFSSTORE.GENERATION @
-    _ts-fault-generation @ = _ts-assert
-    _ts-store @ AVFSSTORE.ACTIVE-SLOT @
-    _ts-fault-slot @ = _ts-assert ;
+    R@ AVFSSTORE.GENERATION @ 0= _ts-assert
+    R> AVFSSTORE.ACTIVE-SLOT @ -1 = _ts-assert ;
 
 : _ts-save-published-clean?  ( -- )
     VFS-CUR _ts-other-vfs @ = _ts-assert
@@ -670,11 +756,8 @@ CREATE _ts-bad 8 ALLOT
     ['] _ts-throw-guard-release _AVFS-GUARD-RELEASE-XT !
     _ts-probe-store @ ACSTORE-LOAD
     DUP ACSTORE-S-IO = _ts-assert DROP 0= _ts-assert
-    _AVFS-RESET-DEPENDENCIES _ts-read-clean?
-    _ts-probe-store @ AVFSSTORE.GENERATION @
-    _ts-fault-generation @ 1+ = _ts-assert
-    _ts-probe-store @ AVFSSTORE.ACTIVE-SLOT @
-    _ts-fault-slot @ = 0= _ts-assert
+    _AVFS-RESET-DEPENDENCIES
+    _ts-probe-store @ _ts-read-clean?
     _ts-probe-store @ ACSTORE-FREE 0 _ts-probe-store !
     _ts-stack ;
 
@@ -711,7 +794,9 @@ CREATE _ts-bad 8 ALLOT
     ['] _ts-throw-use-on-restore _AVFS-USE-XT !
     _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
     ACSTORE-S-UNCERTAIN = _ts-assert
-    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
+    \ Sync crossed the durability boundary before selector restoration
+    \ threw, so the pair retains the published generation in RAM.
+    _AVFS-RESET-DEPENDENCIES _ts-save-published-clean?
     _ts-fault-buffer @ 0<> _ts-assert
     _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
 
@@ -724,7 +809,11 @@ CREATE _ts-bad 8 ALLOT
     _ts-fault-begin
     ['] _ts-open-missing _AVFS-OPEN-XT !
     ['] _ts-throw-create _AVFS-CREATE-XT !
-    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
+    \ The inactive-path create is itself an external effect.  A throw from
+    \ that boundary is conservatively uncertain even though no generation
+    \ has been adopted in memory.
+    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
+    ACSTORE-S-UNCERTAIN = _ts-assert
     _AVFS-RESET-DEPENDENCIES _ts-save-clean?
     _ts-fault-buffer @ 0<> _ts-assert
     _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
@@ -761,7 +850,7 @@ CREATE _ts-bad 8 ALLOT
     _ts-store @ ACSTORE-LOAD
     DUP ACSTORE-S-IO = _ts-assert DROP 0= _ts-assert
     _AVFS-RESET-DEPENDENCIES
-    _ts-read-clean?
+    _ts-store @ _ts-read-clean?
     _ts-fault-buffer @ 0<> _ts-assert
     _ts-stack
 
@@ -770,14 +859,14 @@ CREATE _ts-bad 8 ALLOT
     _ts-store @ ACSTORE-LOAD
     DUP ACSTORE-S-IO = _ts-assert DROP 0= _ts-assert
     _AVFS-RESET-DEPENDENCIES
-    _ts-read-clean?
+    _ts-store @ _ts-read-clean?
     _ts-fault-buffer @ 0<> _ts-assert
     _ts-stack
 
     _ts-fault-begin ['] _ts-throw-conv-free _AVFS-CONV-FREE-XT !
     _ts-store @ ACSTORE-LOAD
     DUP ACSTORE-S-IO = _ts-assert DROP 0= _ts-assert
-    _AVFS-RESET-DEPENDENCIES _ts-read-clean? _ts-stack
+    _AVFS-RESET-DEPENDENCIES _ts-store @ _ts-read-clean? _ts-stack
 
     _ts-test-load-guard-release
 
@@ -829,6 +918,10 @@ CREATE _ts-bad 8 ALLOT
     DUP ATHREAD-S-OK = _ts-assert DROP DUP _ts-snapshot-u !
     ATHREAD-HEADER-SIZE > _ts-assert
     _ts-new-store DUP _ts-store !
+    _ts-store @ ACSTORE-LOAD
+    DUP ACSTORE-S-NOT-FOUND = _ts-assert DROP 0= _ts-assert
+    _ts-store @ AVFSSTORE.GENERATION @ 0= _ts-assert
+    _ts-store @ AVFSSTORE.ACTIVE-SLOT @ -1 = _ts-assert
     _ts-conv @ SWAP ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
     _ts-store @ AVFSSTORE.GENERATION @ 1 = _ts-assert
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @ 0= _ts-assert
@@ -848,6 +941,7 @@ CREATE _ts-bad 8 ALLOT
     _ts-new-store DUP _ts-store2 ! ACSTORE-LOAD
     DUP ACSTORE-S-OK = _ts-assert DROP DUP _ts-loaded ! DROP
     _ts-store2 @ AVFSSTORE.GENERATION @ 2 = _ts-assert
+    _ts-store2 @ _ts-selected-stable?
     _ts-loaded @ ACONV.COUNT @ 3 = _ts-assert
     _ts-loaded @ ACONV.MODEL-CONTEXT @ ACTX.COUNT @ 5 = _ts-assert
     1 _ts-loaded @ ACONV.MODEL-CONTEXT @ ACTX-NTH
@@ -860,10 +954,14 @@ CREATE _ts-bad 8 ALLOT
     S" interrupted before completion" STR-STR-CONTAINS _ts-assert
     _ts-loaded @ ACONV-FREE
 
+    _ts-test-equal-generation-identical
+    _ts-test-equal-generation-split-brain
+
     _AVFS-PATH-B _ts-corrupt
     _ts-new-store DUP _ts-store3 ! ACSTORE-LOAD
     DUP ACSTORE-S-OK = _ts-assert DROP DUP _ts-loaded ! DROP
     _ts-store3 @ AVFSSTORE.GENERATION @ 1 = _ts-assert
+    _ts-store3 @ _ts-selected-stable?
     _ts-loaded @ ACONV.COUNT @ 1 = _ts-assert
     _ts-loaded @ ACONV.MODEL-CONTEXT @ ACTX.COUNT @ 5 = _ts-assert
     0 _ts-loaded @ ACONV-NTH AMSG-TEXT
@@ -895,6 +993,7 @@ _ts-run
 """,
         ready_markers=("CONVERSATION STORE PASS",),
         stable_markers=("CONVERSATION STORE PASS",),
+        failure_markers=("CONVERSATION STORE FAIL",),
     ),
     "agent-persistence": Profile(
         roots=(
@@ -8181,6 +8280,11 @@ VARIABLE _pc-depth
     THEN
     _pc-depth @ = _pc-assert ;
 
+: _pc-selected-stable?  ( store -- )
+    _PHEADVFS.PAIR GPAIR-SELECTED@
+    DUP 0<> _pc-assert
+    DUP GPAIR-CANDIDATE-VALUE@ = _pc-assert ;
+
 : _pc-id!  ( value id -- )
     DUP RID-CLEAR ! ;
 
@@ -8208,6 +8312,10 @@ CREATE _pc-pstore3 PHEADVFS-SIZE ALLOT
 CREATE _pc-persist-head PHEAD-SIZE ALLOT
 CREATE _pc-persist-out PHEAD-SIZE ALLOT
 CREATE _pc-persist-bad 8 ALLOT
+CREATE _pc-persist-snapshot PHEADVFS-SNAPSHOT-SIZE ALLOT
+VARIABLE _pc-persist-generation
+VARIABLE _pc-persist-revision
+VARIABLE _pc-persist-vfs-flags
 
 VARIABLE _pc-avfs
 CREATE _pc-astore PHEADVFS-SIZE ALLOT
@@ -8243,6 +8351,12 @@ VARIABLE _pc-first-epoch
         PHEADVFS-S-OK = _pc-assert
     _pc-astore PHEADVFS-FALLBACK? _pc-assert
     _pc-astore PHEADVFS.GENERATION @ 1 = _pc-assert
+    _pc-astore PHEADVFS.ACTIVE-SLOT @ GPAIR-SLOT-A = _pc-assert
+    _pc-astore _PHEADVFS.PAIR GPAIR-RESULT@
+        GPAIR-R-FALLBACK = _pc-assert
+    _pc-astore _PHEADVFS.PAIR GPAIR-SELECTED@
+        _pc-astore _PHEADVFS.CANDIDATE-A = _pc-assert
+    _pc-astore _pc-selected-stable?
     _pc-astore PHEADVFS.REJECTED-GENERATION @ 2 = _pc-assert
     _pc-astore PHEADVFS.REJECTED-STATUS @ 91 = _pc-assert
     _pc-aout PHEAD.REVISION @ 1 = _pc-assert
@@ -8295,6 +8409,23 @@ VARIABLE _pc-first-epoch
     _pc-persist-bad 8 _pc-pvfs-fd @ VFS-WRITE 8 = _pc-assert
     _pc-pvfs-fd @ VFS-CLOSE ;
 
+: _pc-persist-record!  ( path-a path-u generation revision -- )
+    _pc-persist-revision ! _pc-persist-generation !
+    _pc-pvfs @ VFS-USE VFS-OPEN DUP _pc-pvfs-fd ! 0<> _pc-assert
+    _pc-persist-snapshot PHEADVFS-SNAPSHOT-SIZE _pc-pvfs-fd @ VFS-READ
+        PHEADVFS-SNAPSHOT-SIZE = _pc-assert
+    _pc-persist-generation @
+        _pc-persist-snapshot _PHSV-H-GENERATION + !
+    _pc-persist-revision @
+        _pc-persist-snapshot PHEADVFS-HEADER-SIZE + PHEAD.REVISION !
+    _pc-persist-snapshot _PHEADVFS-CHECKSUM
+        _pc-persist-snapshot _PHSV-H-CRC32 + !
+    _pc-pvfs-fd @ VFS-REWIND
+    _pc-persist-snapshot PHEADVFS-SNAPSHOT-SIZE _pc-pvfs-fd @ VFS-WRITE
+        PHEADVFS-SNAPSHOT-SIZE = _pc-assert
+    _pc-pvfs-fd @ VFS-CLOSE
+    _pc-pvfs @ VFS-SYNC 0= _pc-assert ;
+
 : _pc-persist-run  ( -- )
     524288 A-XMEM ARENA-NEW DUP 0= _pc-assert DROP
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _pc-pvfs ! VFS-USE
@@ -8303,6 +8434,7 @@ VARIABLE _pc-first-epoch
     22 _pc-persist-head PHEAD.CURRENT-ROOT _pc-id!
     _pc-pvfs @ _pc-pstore PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
+    _pc-pstore _PHEADVFS.PAIR GPAIR-VALID? _pc-assert
     _pc-persist-head _pc-pstore PHEADVFS-SAVE
         PHEADVFS-S-OK = _pc-assert
     _pc-pstore PHEADVFS.GENERATION @ 1 = _pc-assert
@@ -8314,12 +8446,66 @@ VARIABLE _pc-first-epoch
     _pc-pstore PHEADVFS.GENERATION @ 2 = _pc-assert
     _pc-pstore PHEADVFS.ACTIVE-SLOT @ 1 = _pc-assert
     _pc-pstore PHEADVFS-FALLBACK? 0= _pc-assert
+
+    \ A VFS-side write refusal keeps the old RAM authority and retains the
+    \ established Practice I/O status.  The pair records that an external
+    \ boundary was attempted but does not adopt generation three.
+    _pc-pvfs @ V.FLAGS @ _pc-persist-vfs-flags !
+    _pc-pvfs @ V.FLAGS DUP @ VFS-F-RO OR SWAP !
+    _pc-persist-head _pc-pstore PHEADVFS-SAVE
+        PHEADVFS-S-IO = _pc-assert
+    _pc-pstore PHEADVFS.GENERATION @ 2 = _pc-assert
+    _pc-pstore PHEADVFS.ACTIVE-SLOT @ GPAIR-SLOT-B = _pc-assert
+    _pc-pstore _PHEADVFS.PAIR GPAIR-OUTCOME@
+        GPAIR-W-MAYBE = _pc-assert
+    _pc-pstore _PHEADVFS.PAIR GPAIR-DETAIL@
+        PHEADVFS-S-IO = _pc-assert
+    _pc-persist-vfs-flags @ _pc-pvfs @ V.FLAGS !
+
     _pc-pvfs @ _pc-pstore2 PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-persist-out _pc-pstore2 PHEADVFS-LOAD
         PHEADVFS-S-OK = _pc-assert
     _pc-pstore2 PHEADVFS.GENERATION @ 2 = _pc-assert
     _pc-persist-out PHEAD.REVISION @ 2 = _pc-assert
+    _pc-pstore2 _PHEADVFS.PAIR GPAIR-RESULT@
+        GPAIR-R-NEWEST = _pc-assert
+    _pc-pstore2 _pc-selected-stable?
+
+    \ The same generation and same decoded payload deterministically select
+    \ physical slot A without claiming a fallback.
+    S" /practice-head-a.bin" 2 2 _pc-persist-record!
+    _pc-pvfs @ _pc-pstore3 PHEADVFS-INIT
+        PHEADVFS-S-OK = _pc-assert
+    _pc-persist-out _pc-pstore3 PHEADVFS-LOAD
+        PHEADVFS-S-OK = _pc-assert
+    _pc-pstore3 PHEADVFS.GENERATION @ 2 = _pc-assert
+    _pc-pstore3 PHEADVFS.ACTIVE-SLOT @ GPAIR-SLOT-A = _pc-assert
+    _pc-pstore3 PHEADVFS-FALLBACK? 0= _pc-assert
+    _pc-pstore3 _PHEADVFS.PAIR GPAIR-RESULT@
+        GPAIR-R-EQUAL = _pc-assert
+    _pc-pstore3 _pc-selected-stable?
+    _pc-persist-out PHEAD.REVISION @ 2 = _pc-assert
+
+    \ Keep both checksums valid while forcing an equal-generation payload
+    \ divergence.  Neither slot may win this structurally split-brain tie.
+    S" /practice-head-a.bin" 2 1 _pc-persist-record!
+    _pc-pvfs @ _pc-pstore3 PHEADVFS-INIT
+        PHEADVFS-S-OK = _pc-assert
+    _pc-persist-out _pc-pstore3 PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY = _pc-assert
+    _pc-pstore3 PHEADVFS-READONLY? _pc-assert
+    _pc-pstore3 PHEADVFS-RECOVERY? _pc-assert
+    _pc-pstore3 PHEADVFS.GENERATION @ 0= _pc-assert
+    _pc-pstore3 PHEADVFS.ACTIVE-SLOT @ -1 = _pc-assert
+    _pc-pstore3 PHEADVFS.REJECTED-GENERATION @ 2 = _pc-assert
+    _pc-pstore3 PHEADVFS.REJECTED-STATUS @
+        PHEADVFS-S-INVALID = _pc-assert
+    _pc-pstore3 _PHEADVFS.PAIR GPAIR-RESULT@
+        GPAIR-R-AMBIGUOUS = _pc-assert
+    _pc-pstore3 _PHEADVFS.PAIR GPAIR-SELECTED@ 0= _pc-assert
+    S" /practice-head-a.bin" 1 1 _pc-persist-record!
+
     S" /practice-head-b.bin" _pc-persist-corrupt
     _pc-pvfs @ _pc-pstore3 PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
@@ -8327,6 +8513,9 @@ VARIABLE _pc-first-epoch
         PHEADVFS-S-OK = _pc-assert
     _pc-pstore3 PHEADVFS-FALLBACK? _pc-assert
     _pc-pstore3 PHEADVFS.GENERATION @ 1 = _pc-assert
+    _pc-pstore3 _PHEADVFS.PAIR GPAIR-RESULT@
+        GPAIR-R-FALLBACK = _pc-assert
+    _pc-pstore3 _pc-selected-stable?
     S" /practice-head-a.bin" _pc-persist-corrupt
     _pc-persist-out _pc-pstore3 PHEADVFS-LOAD
         PHEADVFS-S-RECOVERY = _pc-assert
@@ -8337,12 +8526,17 @@ VARIABLE _pc-first-epoch
     _pc-persist-head _pc-pstore3 PHEADVFS-REINITIALIZE
         PHEADVFS-S-OK = _pc-assert
     _pc-pstore3 PHEADVFS.GENERATION @ 2 = _pc-assert
+    _pc-pstore3 PHEADVFS.ACTIVE-SLOT @ GPAIR-SLOT-B = _pc-assert
+    _pc-pstore3 _PHEADVFS.PAIR GPAIR-RESULT@
+        GPAIR-R-NONE = _pc-assert
+    _pc-pstore3 _PHEADVFS.PAIR GPAIR-SELECTED@ 0= _pc-assert
     _pc-pstore3 PHEADVFS-FALLBACK? 0= _pc-assert
     _pc-pvfs @ _pc-pstore2 PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-persist-out _pc-pstore2 PHEADVFS-LOAD
         PHEADVFS-S-OK = _pc-assert
     _pc-pstore2 PHEADVFS.GENERATION @ 2 = _pc-assert
+    _pc-pstore2 _pc-selected-stable?
     _pc-persist-out PHEAD.REVISION @ 2 = _pc-assert
     _pc-pvfs @ VFS-DESTROY ;
 
@@ -8626,6 +8820,7 @@ _pc-run
 """,
         ready_markers=("PRACTICE CONTRACTS PASS",),
         stable_markers=("PRACTICE CONTRACTS PASS",),
+        failure_markers=("PRACTICE CONTRACTS FAIL", "ASSERT", "STACK"),
     ),
     "resource-contracts": Profile(
         roots=(
@@ -20069,6 +20264,12 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
         DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
     LOOP DROP -1 ;
 
+: _soc-crec-header-crc  ( record -- crc32 )
+    CRC32-BEGIN
+    DUP CREC-H-HEADER-CRC CRC32-ADD
+    CREC-H-FLAGS + 8 CRC32-ADD
+    CRC32-END ;
+
 : _soc-source-cap-scratch-clean?  ( instance -- flag )
     _STM-ACTIVATE
     _STM-SOURCE-CANDIDATE-REGISTRY STREAMS-SOURCE-REGISTRY-SIZE
@@ -20210,9 +20411,9 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
 : _soc-install-future  ( instance -- )
     _soc-encode-current
     STREAMS-SOURCE-STORE-FORMAT-V1 1+
-        _soc-record _SSS-H-FORMAT + !
-    _soc-record _STREAMS-SOURCE-STORE-HEADER-CRC
-        _soc-record _SSS-H-HEADER-CRC + !
+        _soc-record CREC-H-FORMAT + !
+    _soc-record _soc-crec-header-crc
+        _soc-record CREC-H-HEADER-CRC + !
     _soc-record _soc-record-u @ _STM-SOURCE-STORE
         STREAMS-SOURCE-STORE-PATH$ _soc-put ;
 
@@ -21196,6 +21397,60 @@ _vfsnc-run
 )
 
 
+PROFILES["generation-pair-contracts"] = Profile(
+    roots=("utils/generation-pair.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral generation-pair contracts
+ENTER-USERLAND
+." [akashic] loading generation-pair contracts" CR
+REQUIRE local_testing/gpair-contracts.f
+""",
+    ready_markers=("GENERATION PAIR PASS",),
+    stable_markers=("GENERATION PAIR PASS",),
+    failure_markers=("GENERATION PAIR FAIL", "GPT ASSERT", "GPT STACK"),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/gpair-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "generation-pair-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["checked-record-contracts"] = Profile(
+    roots=("utils/checked-record.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral checked-record contracts
+ENTER-USERLAND
+." [akashic] loading checked-record contracts" CR
+REQUIRE local_testing/crec-contracts.f
+""",
+    ready_markers=("CHECKED RECORD CONTRACTS PASS",),
+    stable_markers=("CHECKED RECORD CONTRACTS PASS",),
+    failure_markers=(
+        "CHECKED RECORD CONTRACTS FAIL",
+        "CRECC ASSERT",
+        "CRECC STACK",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/crec-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "checked-record-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["vfs-ram-capacity-contracts"] = Profile(
     roots=("utils/fs/vfs.f",),
     resources=(),
@@ -21317,6 +21572,11 @@ CREATE _ssoc-rid RID-SIZE ALLOT
         1 _ssoc-fails +! ." SSOC ASSERT " _ssoc-checks @ . CR
     THEN ;
 : _ssoc-stack  ( -- ) DEPTH _ssoc-depth @ = _ssoc-assert ;
+: _ssoc-crec-header-crc  ( record -- crc32 )
+    CRC32-BEGIN
+    DUP CREC-H-HEADER-CRC CRC32-ADD
+    CREC-H-FLAGS + 8 CRC32-ADD
+    CRC32-END ;
 : _ssoc-allocate  ( size variable -- )
     >R ALLOCATE ABORT" STREAMS SOURCE STORE CONTRACTS FAIL allocation"
     R> ! ;
@@ -21538,10 +21798,9 @@ CREATE _ssoc-rid RID-SIZE ALLOT
         SSREG.RECORDS STREAMS-SOURCE-SIZE + C!
     _ssoc-encoding-record STREAMS-SOURCE-STORE-HEADER-SIZE +
         STREAMS-SOURCE-REGISTRY-SIZE
-        _STREAMS-SOURCE-STORE-PAYLOAD-CRC
-        _ssoc-encoding-record _SSS-H-PAYLOAD-CRC + !
-    _ssoc-encoding-record _STREAMS-SOURCE-STORE-HEADER-CRC
-        _ssoc-encoding-record _SSS-H-HEADER-CRC + !
+        CRC32 _ssoc-encoding-record CREC-H-PAYLOAD-CRC + !
+    _ssoc-encoding-record _ssoc-crec-header-crc
+        _ssoc-encoding-record CREC-H-HEADER-CRC + !
     _ssoc-encoding-record _ssoc-record-u @
         _ssoc-store-a @ _ssoc-put-target
     _ssoc-store-case @ _ssoc-store-init
@@ -21551,9 +21810,9 @@ CREATE _ssoc-rid RID-SIZE ALLOT
 
 : _ssoc-test-future  ( -- )
     _ssoc-store-a @ _ssoc-encode-two
-    2 _ssoc-encoding-record _SSS-H-FORMAT + !
-    _ssoc-encoding-record _STREAMS-SOURCE-STORE-HEADER-CRC
-        _ssoc-encoding-record _SSS-H-HEADER-CRC + !
+    2 _ssoc-encoding-record CREC-H-FORMAT + !
+    _ssoc-encoding-record _ssoc-crec-header-crc
+        _ssoc-encoding-record CREC-H-HEADER-CRC + !
     _ssoc-encoding-record _ssoc-record-u @
         _ssoc-store-a @ _ssoc-put-target
     _ssoc-store-case @ _ssoc-store-init
@@ -21754,10 +22013,9 @@ CREATE _ssoc-rid RID-SIZE ALLOT
         _SSR-RECORDS + _SSO-LABEL + C!
     _ssoc-encoding-record STREAMS-SOURCE-STORE-HEADER-SIZE +
         STREAMS-SOURCE-REGISTRY-SIZE
-        _STREAMS-SOURCE-STORE-PAYLOAD-CRC
-        _ssoc-encoding-record _SSS-H-PAYLOAD-CRC + !
-    _ssoc-encoding-record _STREAMS-SOURCE-STORE-HEADER-CRC
-        _ssoc-encoding-record _SSS-H-HEADER-CRC + !
+        CRC32 _ssoc-encoding-record CREC-H-PAYLOAD-CRC + !
+    _ssoc-encoding-record _ssoc-crec-header-crc
+        _ssoc-encoding-record CREC-H-HEADER-CRC + !
     _ssoc-encoding-record STREAMS-SOURCE-STORE-RECORD-MAX
         _ssoc-alias @ _ssoc-put-target
     _UV-A STREAMS-SOURCE-REGISTRY-SIZE
@@ -26979,14 +27237,14 @@ _srtc-finish
 PROFILES["streams-manual-refresh-contracts"] = Profile(
     roots=(
         "tui/applets/desk/desk.f",
-        "tui/applets/streams/streams-online.f",
+        "tui/applets/streams/streams.f",
     ),
     resources=("tui/applets/streams/streams.uidl",),
     autoexec=r"""\ autoexec.f - applet-level manual source refresh contracts
 ENTER-USERLAND
 ." [akashic] loading Streams manual-refresh integration contracts" CR
 REQUIRE tui/applets/desk/desk.f
-REQUIRE tui/applets/streams/streams-online.f
+REQUIRE tui/applets/streams/streams.f
 REQUIRE local_testing/smrc-contracts.f
 _smrc-run
 """,

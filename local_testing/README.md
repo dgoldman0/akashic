@@ -123,6 +123,31 @@ publication policy. Run it with:
 python3 local_testing/akashic_tui.py smoke --profile vfs-access-contracts
 ```
 
+`checked-record-contracts` qualifies the allocation-free fixed/framed record
+envelope independently of VFS and every applet schema. It covers sealed
+caller-owned specifications and workspaces, checked geometry, exact and future
+format classification, header and payload checksums, canonical fixed tails and
+framed padding, semantic callbacks, callback containment, nonmutation, hostile
+aliases, same-workspace re-entry refusal, and independent nested workspaces.
+
+`generation-pair-contracts` qualifies the path- and format-neutral A/B
+selection/publication primitive. It covers absent/corrupt/fallback/newest
+classification, byte-equal and divergent equal-generation candidates,
+authority revocation, candidate/pair aliases, overflow, re-entry, callback
+faults, inactive-slot choice, and the no-effect/maybe/durable publication
+milestones. Run either focused contract with:
+
+```bash
+python3 local_testing/akashic_tui.py smoke --profile checked-record-contracts
+python3 local_testing/akashic_tui.py smoke --profile generation-pair-contracts
+```
+
+The proving consumers retain their own meanings: VFSNAP owns replacement and
+recovery, Library owns record schemas, Agent owns transcript paths and status
+mapping, and Practice owns its head schema and readonly recovery policy. The
+neutral modules do not create a generic applet, repository, or compatibility
+format stack.
+
 `gate2a-contracts` isolates the policy-neutral memory-span predicates, inline
 caller-owned span sets, checked buffer writer, and caller-owned scalar/locator
 schema initializers. It covers signed-length and unsigned-wrap boundaries,

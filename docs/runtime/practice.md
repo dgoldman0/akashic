@@ -1,8 +1,8 @@
 # Practice ownership and current boundary
 
-Status: Gate 1 contract correction. The current runtime persists one minimal
-accepted Practice head; it does not yet implement a catalog of named Practices
-or the complete product surface described here.
+Status: current prototype boundary. The runtime persists one minimal accepted
+Practice head; it does not yet implement a catalog of named Practices or the
+complete product surface described here.
 
 A Practice answers: what activity am I in, what resources and roots are bound
 into it, and what exact attenuated authority may act? It is durable contextual
@@ -54,10 +54,32 @@ forward to latest or ambient VFS access.
 The landed runtime uses the fixed `/practice-head-a.bin` and
 `/practice-head-b.bin` pair for one minimal accepted head. It carries identity
 and revision plus current/previous, binding, cell, grant, manifest, schema,
-export-root, and policy roots. This is not a multi-Practice catalog, naming UI,
-layout store, domain database, or general resource browser.
+export root, retention policy, and activation policy. This is not a
+multi-Practice catalog, naming UI, layout store, domain database, or general
+resource browser.
 
-Gate 1 changes no Practice bytes, paths, APIs, activation order, authority, or
-runtime behavior. Multiple Practices, catalog/path design, selection UI,
-entry-lens restoration, and richer inspection require their later focused
-gates and migrations.
+The store delegates only two-slot generation ordering and inactive publication
+to `utils/generation-pair.f`. Practice still owns its exact record bytes,
+paths, semantic head validation, status translation, fallback evidence, and
+readonly recovery policy. Equal-generation records are accepted only when the
+decoded heads are identical and deterministically select slot A; divergent
+valid records fail closed as split-brain recovery evidence without publishing
+either generation as authority. Semantic rejection records its generation in
+the dedicated evidence field; when the older candidate is accepted, the
+generation pair reclassifies and publishes that fallback consistently. A save
+adopts the next generation in memory only after the inactive file has been
+written and the VFS durability barrier succeeds.
+Pair candidates retain stable descriptor identity while decoded heads remain
+transient Practice-owned buffers used only for comparison and copying. Thus a
+published selection cannot expose a head pointer after that buffer is freed.
+
+L4 changes no persisted Practice bytes, paths, public word signatures,
+activation order, or applet functionality. `PHEADVFS-SIZE` grows because the
+current adapter directly embeds its caller-owned pair and candidates; callers
+recompile against that current size, with no obsolete-size facade. RAM
+authority now fails closed: split-brain evidence is separate from the
+generation pair, and semantic fallback leaves every pair publication field
+describing the accepted candidate. Multiple Practices, catalog/path design,
+selection UI, entry-lens restoration, and richer inspection remain later
+focused work; the prototype does not retain an obsolete parallel generation
+implementation or a legacy compatibility path.

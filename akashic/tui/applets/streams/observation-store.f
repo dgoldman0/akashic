@@ -3,9 +3,9 @@
 \ =====================================================================
 \  The shared fixed-snapshot core owns the exact 64-byte envelope, CRCs,
 \  exact read, recovery, optimistic replacement, latch, and scratch wipe.
-\  This adapter owns the unchanged path, eight-byte magic, status names,
-\  canonical OCHK payload validation, and historical first 40 descriptor
-\  bytes.  Its VREPL accessor remains exactly store + 40.
+\  This adapter owns the unchanged path, status names, canonical OCHK
+\  validation, and typed scratch.  The shared VFSNAP descriptor is embedded
+\  at offset zero; typed accessors are direct views of that core state.
 \ =====================================================================
 
 PROVIDED akashic-streams-obstore
@@ -37,47 +37,29 @@ STREAMS-OBSERVATION-STORE-HEADER-SIZE STREAMS-OBSERVATION-CHECKPOINT-SIZE +
 CREATE _OSTORE-RECORD-MAGIC
 65 C, 75 C, 83 C, 79 C, 67 C, 48 C, 48 C, 49 C,  \ "AKSOC001"
 
-\ Retain the historical private envelope names for byte-level contracts.
- 0 CONSTANT _OSS-H-MAGIC
- 8 CONSTANT _OSS-H-FORMAT
-16 CONSTANT _OSS-H-HEADER-SIZE
-24 CONSTANT _OSS-H-GENERATION
-32 CONSTANT _OSS-H-PAYLOAD-SIZE
-40 CONSTANT _OSS-H-PAYLOAD-CRC
-48 CONSTANT _OSS-H-HEADER-CRC
-56 CONSTANT _OSS-H-FLAGS
-
-: _STREAMS-OBSERVATION-STORE-HEADER-CRC  ( record -- crc32 )
-    _VFSNAP-HEADER-CRC ;
-: _STREAMS-OBSERVATION-STORE-PAYLOAD-CRC  ( a u -- crc32 )
-    _VFSNAP-PAYLOAD-CRC ;
-
 \ =====================================================================
-\  Descriptor: historical prefix, embedded core, per-instance scratch
+\  Descriptor: embedded core, per-instance scratch
 \ =====================================================================
 
-0x4F42534353544F31 CONSTANT _OSTORE-MAGIC  \ "OBSCSTO1"
-1 CONSTANT _OSTORE-F-BLOCKED
-
- 0 CONSTANT _OSS-MAGIC
- 8 CONSTANT _OSS-VFS
-16 CONSTANT _OSS-FLAGS
-24 CONSTANT _OSS-LAST-STATUS
-32 CONSTANT _OSS-LAST-VREPL
-40 CONSTANT _OSS-CORE
+0 CONSTANT _OSS-CORE
 _OSS-CORE VFSNAP-STORE-SIZE + CONSTANT _OSS-SCRATCH
 _OSS-SCRATCH STREAMS-OBSERVATION-STORE-RECORD-MAX +
     CONSTANT _OSS-LOAD-GENERATION
 _OSS-LOAD-GENERATION 8 + CONSTANT STREAMS-OBSERVATION-STORE-SIZE
 
-: STREAMS-OBSERVATION-STORE.MAGIC       ( store -- a ) _OSS-MAGIC + ;
-: STREAMS-OBSERVATION-STORE.VFS         ( store -- a ) _OSS-VFS + ;
-: STREAMS-OBSERVATION-STORE.FLAGS       ( store -- a ) _OSS-FLAGS + ;
-: STREAMS-OBSERVATION-STORE.LAST-STATUS ( store -- a ) _OSS-LAST-STATUS + ;
-: STREAMS-OBSERVATION-STORE.LAST-VREPL  ( store -- a ) _OSS-LAST-VREPL + ;
 : STREAMS-OBSERVATION-STORE.CORE        ( store -- core ) _OSS-CORE + ;
+: STREAMS-OBSERVATION-STORE.MAGIC       ( store -- a )
+    STREAMS-OBSERVATION-STORE.CORE VFSNAP.MAGIC ;
+: STREAMS-OBSERVATION-STORE.VFS         ( store -- a )
+    STREAMS-OBSERVATION-STORE.CORE VFSNAP.VFS ;
+: STREAMS-OBSERVATION-STORE.FLAGS       ( store -- a )
+    STREAMS-OBSERVATION-STORE.CORE VFSNAP.FLAGS ;
+: STREAMS-OBSERVATION-STORE.LAST-STATUS ( store -- a )
+    STREAMS-OBSERVATION-STORE.CORE VFSNAP.LAST-STATUS ;
+: STREAMS-OBSERVATION-STORE.LAST-VREPL  ( store -- a )
+    STREAMS-OBSERVATION-STORE.CORE VFSNAP.LAST-VREPL ;
 : STREAMS-OBSERVATION-STORE.REPLACE     ( store -- replacement )
-    _OSS-CORE + ;
+    STREAMS-OBSERVATION-STORE.CORE VFSNAP.REPLACE ;
 : STREAMS-OBSERVATION-STORE.SCRATCH     ( store -- scratch )
     _OSS-SCRATCH + ;
 : STREAMS-OBSERVATION-STORE.LOAD-GENERATION  ( store -- a )
@@ -92,7 +74,7 @@ _OSS-LOAD-GENERATION 8 + CONSTANT STREAMS-OBSERVATION-STORE-SIZE
 : STREAMS-OBSERVATION-STORE-PATH$  ( store -- a u )
     STREAMS-OBSERVATION-STORE.CORE VFSNAP-PATH$ ;
 : STREAMS-OBSERVATION-STORE-BLOCKED?  ( store -- flag )
-    STREAMS-OBSERVATION-STORE.FLAGS @ _OSTORE-F-BLOCKED AND 0<> ;
+    STREAMS-OBSERVATION-STORE.CORE VFSNAP-BLOCKED? ;
 
 \ =====================================================================
 \  Static typed specification and callback-private state
@@ -108,8 +90,6 @@ VARIABLE _OSCB-PAYLOAD
 VARIABLE _OSCB-PAYLOAD-U
 VARIABLE _OSCB-GENERATION
 
-VARIABLE _OSAD-STORE
-VARIABLE _OSAD-STATUS
 VARIABLE _OSSI-VFS
 VARIABLE _OSSI-STORE
 VARIABLE _OSSI-TARGET-A
@@ -172,18 +152,7 @@ VARIABLE _OSSS-STORE
     ENDCASE ;
 
 : _OSTORE-SYNC  ( snapshot-status store -- observation-status )
-    _OSAD-STORE ! _OSAD-STATUS !
-    _OSAD-STORE @ STREAMS-OBSERVATION-STORE.CORE
-        VFSNAP-LAST-STATUS@ _OSTORE-VFSNAP>STATUS
-        _OSAD-STORE @ STREAMS-OBSERVATION-STORE.LAST-STATUS !
-    _OSAD-STORE @ STREAMS-OBSERVATION-STORE.CORE VFSNAP-LAST-VREPL@
-        _OSAD-STORE @ STREAMS-OBSERVATION-STORE.LAST-VREPL !
-    _OSAD-STORE @ STREAMS-OBSERVATION-STORE.CORE VFSNAP-BLOCKED? IF
-        _OSTORE-F-BLOCKED
-    ELSE
-        0
-    THEN _OSAD-STORE @ STREAMS-OBSERVATION-STORE.FLAGS !
-    _OSAD-STATUS @ _OSTORE-VFSNAP>STATUS ;
+    DROP _OSTORE-VFSNAP>STATUS ;
 
 \ =====================================================================
 \  Hostile-alias preflight
@@ -236,15 +205,7 @@ VARIABLE _OSSS-STORE
 
 : STREAMS-OBSERVATION-STORE-VALID?  ( store -- flag )
     DUP _OSTORE-STORE-SPAN-SAFE? 0= IF DROP 0 EXIT THEN
-    DUP STREAMS-OBSERVATION-STORE.MAGIC @ _OSTORE-MAGIC <> IF
-        DROP 0 EXIT
-    THEN
-    DUP STREAMS-OBSERVATION-STORE.VFS @ 0= IF DROP 0 EXIT THEN
-    DUP STREAMS-OBSERVATION-STORE.CORE VFSNAP-VALID? 0= IF
-        DROP 0 EXIT
-    THEN
-    DUP STREAMS-OBSERVATION-STORE.VFS @ SWAP
-        STREAMS-OBSERVATION-STORE.CORE VFSNAP.VFS @ = ;
+    STREAMS-OBSERVATION-STORE.CORE VFSNAP-VALID? ;
 
 \ =====================================================================
 \  Lifecycle and unchanged typed operations
@@ -260,10 +221,6 @@ VARIABLE _OSSS-STORE
     _OSSI-TARGET-A @ _OSSI-TARGET-U @ _OSSI-STORE @
         _OSTORE-TARGET-SPAN-SAFE? 0= IF OSTORE-S-INVALID EXIT THEN
     _OSSI-STORE @ STREAMS-OBSERVATION-STORE-SIZE 0 FILL
-    _OSTORE-MAGIC _OSSI-STORE @ STREAMS-OBSERVATION-STORE.MAGIC !
-    _OSSI-VFS @ _OSSI-STORE @ STREAMS-OBSERVATION-STORE.VFS !
-    OSTORE-S-ABSENT _OSSI-STORE @
-        STREAMS-OBSERVATION-STORE.LAST-STATUS !
     _OSSI-TARGET-A @ _OSSI-TARGET-U @
         _OSSI-STORE @ STREAMS-OBSERVATION-STORE.SCRATCH
         STREAMS-OBSERVATION-STORE-RECORD-MAX

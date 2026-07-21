@@ -7,19 +7,22 @@ mutation, retained history, receipts, lifecycle, collections, a disposable
 title/body/tag index, bounded authoritative corpus/collection queries, and an
 activation-local projection-owner lifecycle. Its maintenance surface provides
 recognized-format inspection, deterministic head-transaction repair, and
-bounded coherent opaque evidence export. A bounded standalone applet
+bounded coherent opaque evidence export. A bounded non-Desktop applet executable
 exercises the public storage surface as a user-facing corpus lens: it can browse
 and search active/archived records, preview exact content, create and rename
 managed documents, archive/unarchive, inspect retained history, browse/filter
 collections, and page results. The literal headless Gate 4 cold/damage exit is
 green. The applet still does not provide Desktop hosting, sibling integration,
 deep Pad editing, capture import, destructive deletion, or maintenance/export
-UI, so the complete Gate 5 experience is not claimed.
+UI; those remain separate product/integration work. Every currently implemented
+lens action listed above remains part of the preserved applet surface.
 
 Library is the machine-level corpus of material a user deliberately keeps. A
 Practice may eventually bind Library resources into an activity, but the corpus
-and its records remain Library-owned. Library is useful on its own and does not
-depend on Streams, Desk, Pad, Agent, Daybook, Grid, or a Practice being active.
+and its records remain Library-owned. Its renderer-free owner can be qualified
+without starting Desk, but that is a testability boundary, not a standalone
+product identity: Library remains a Desk-applet domain and does not absorb
+Streams, Pad, Agent, Daybook, Grid, or Practice policy.
 
 ## Ownership boundary
 
@@ -46,9 +49,9 @@ Library does not own:
   synchronization service, collaboration server, or universal
   citation/claim/backlink graph.
 
-Desk may later host Library services and route intents. The current standalone
-Library applet shows Library records through the public headless owner surface,
-but presentation does not transfer domain ownership and does not establish a
+Desk is Library's owning product ecosystem. The current non-Desktop applet
+executable shows Library records through the public headless owner surface, but
+presentation does not transfer domain ownership or by itself establish a
 Desktop route or capability.
 
 ## Bounded Library foundation
@@ -56,8 +59,12 @@ Desktop route or capability.
 `akashic/library/model.f` defines pointer-free catalog, provenance, receipt,
 lineage, and collection payloads. Its only borrowed pointer is the data address
 in the transient content view. `akashic/library/record-codec.f` defines pure
-caller-buffer V1 encoders, decoders, and validators. Neither module calls VFS,
-publishes a resource, selects a store path, or imports a sibling domain or UI.
+caller-buffer V1 encoders, decoders, and validators by adapting the independent
+`utils/checked-record.f` envelope. Checked-record owns mechanical geometry,
+checksums, padding, callback containment, and header inspection; Library owns
+every catalog, collection, content, digest, UTF-8, revision, and identity rule.
+Neither Library module calls VFS, publishes a resource, selects a store path,
+or imports a sibling domain or UI.
 
 The initial limits are:
 
@@ -77,9 +84,10 @@ The initial limits are:
 The fixed ABI widths are 328 bytes for an origin, receipt, or lineage slot;
 2,832 bytes for a catalog payload inside a 3,072-byte record; and 224 bytes for
 a collection payload inside a 320-byte record. The transient content view is
-128 bytes. Its 160-byte record header plus at most 65,536 content bytes yields
-a 65,696-byte maximum record. All 128 catalog and 32 collection records occupy
-at most 403,456 bytes before any later store framing.
+128 bytes. A content record uses the 64-byte common envelope followed by 96
+bytes of Library-owned semantic metadata, so content still begins at byte 160
+and the maximum record remains 65,696 bytes. All 128 catalog and 32 collection
+records occupy at most 403,456 bytes before any later store framing.
 
 Canonical validation includes the following guardrails:
 
@@ -147,8 +155,8 @@ from; it does not assert their trustworthiness.
 Ordinary VFS import policy is the source owner `vfs` plus
 `SHA3-256("org.akashic.library.vfs-snapshot.v1")`. The pure model also permits a
 different present contract digest so a later owner can admit an explicitly
-reviewed migration. The model's structural acceptance is not migration
-authority.
+reviewed alternate projection/import contract. The model's structural
+acceptance is not admission authority.
 
 Archiving preserves RID, retained content, provenance, and exact-revision
 resolution while hiding the record from normal active views. Removing a record
@@ -162,11 +170,12 @@ to latest.
 ## Record codec and borrowed views
 
 Catalog and collection records use a 64-byte fixed envelope and canonical zero
-padding. Content records are exactly eight-byte aligned. Validation covers
-magic, header CRC, V1 format, declared and actual lengths, flags, payload CRC,
-zero padding, and the complete model. Content records additionally bind the
-payload with SHA3-256 and require valid UTF-8. A checksummed future format is
-reported as unsupported; a damaged header is never trusted for dispatch.
+padding. Content records are exactly eight-byte aligned. The checked-record
+core verifies magic, header CRC, V1 format, declared and actual lengths, flags,
+payload CRC, and zero padding before invoking Library validation. Library then
+validates the complete model; content additionally binds its bytes with
+SHA3-256 and requires valid UTF-8. A checksummed future format is reported as
+unsupported; a damaged header is never trusted for dispatch.
 
 `LIB-CONTENT-RECORD-DECODE` places a borrowed pointer to payload bytes in
 `LIBCT.DATA-A`. The caller must keep the encoded record buffer alive and
@@ -201,12 +210,14 @@ step binds the previous chain, absolute arena byte offset, sector span, and the
 SHA3-256 digest of the complete padded record frame. Thus a chosen head can
 seal one exact committed prefix without silently adopting an orphan suffix.
 
-This is a new V1 format for a domain with no prior Library store or Library
-bytes to migrate. It does not reinterpret or retain compatibility wrappers for
-the taxonomy/vault prototypes, Streams draft, or another owner's durable state.
-No existing format/path, ownership, authority, content class, retention bound,
-or legacy surface changes here, so this landing trips none of the contract's
-mandatory return-to-user triggers.
+There is no released Library store or earlier Library state to migrate. The
+current layout does not reinterpret or wrap the taxonomy/vault prototypes,
+Streams draft, or another owner's durable bytes. L4 keeps fixed catalog and
+collection records, store paths, content data offset, record maxima, and outer
+arena/bank/head geometry stable while replacing the content record's private
+160-byte envelope in place with the common 64-byte checked envelope plus a
+96-byte Library semantic prefix. The prototype has one current reader and no
+legacy reader or migration facade.
 
 ## VFS loading and provisioning
 
@@ -248,7 +259,9 @@ silently adopted.
 The caller-owned maintenance report is 832 bytes: a 160-byte summary plus seven
 fixed 96-byte object records for the committed head, its stage/backup/marker
 replacement artifacts, both banks, and the arena. Inspection hashes every
-present object and classifies only checksum-verified envelope/header facts.
+present object and classifies head bytes through public checked-record
+inspection rather than VFSNAP-private offsets or CRC helpers. It exposes only
+checksum-verified envelope/header facts.
 Complete semantic facts are exposed only when the ordinary V1 loader validates
 the exact candidate corpus. Future, corrupt, and ambiguous records are marked
 opaque and are never interpreted as catalog or content authority.
@@ -366,12 +379,14 @@ Consequential operations name an exact Library target and expected domain
 state. They never mean the selected Library row, active Pad tab, focused
 applet, or newest revision.
 
-## Current package and gate order
+## Current package and refactor handoff
 
-The domain package is `akashic/library/`. Model, record codecs, the
-catalog/content owner, disposable index, import semantics, and concrete
-projection owner remain Library code. The implemented standalone applet package
-is `akashic/tui/applets/library/`; it is a bounded Library lens over the public
+The current top-level implementation package is `akashic/library/`. Model,
+record codecs, the catalog/content owner, disposable index, import semantics,
+and concrete projection owner remain Library-applet code while neutral
+mechanics are extracted. The package is transitional placement, not a
+standalone product. The implemented applet package is
+`akashic/tui/applets/library/`; it is a bounded Library lens over the public
 owner API, not the owner, a projection owner, or a Desktop registration.
 Portable mechanics move to `interop/` or `utils/fs/` only after two materially
 independent owners prove the same contract.
@@ -384,14 +399,11 @@ The focused, capacity, performance, clean-cold, and damage-branch results that
 close the headless gate are recorded in
 [`../../local_testing/evidence/library-gate4-close-20260720.md`](../../local_testing/evidence/library-gate4-close-20260720.md).
 
-With the bounded Gate 4 headless exit qualified, the remaining order is:
-
-1. Gate 5 expands and qualifies the present bounded standalone Library lens
-   into the complete applet experience without transferring domain ownership.
-2. Gate 6 connects Pad, Explorer, and Desk through typed interop without
-   sibling imports.
-3. Gate 8 performs explicit observation collection and any separately approved
-   migration only after Library is proven.
+The repository-root refactoring plan governs the remaining order. It schedules
+neutral extraction before re-homing the top-level implementation beneath the
+Library applet, and treats interop plus indexed/streamed scale work as separate
+reviewed landings. This document creates no standalone Library product or
+storage-migration gate of its own.
 
 Until each boundary lands, no component may infer its VFS paths, register a
 Library capability, route to a selected row, or treat these pure codecs as a

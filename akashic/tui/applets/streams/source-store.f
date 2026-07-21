@@ -3,9 +3,9 @@
 \ =====================================================================
 \  The shared fixed-snapshot core owns the exact 64-byte envelope, CRCs,
 \  exact read, recovery, optimistic replacement, latch, and scratch wipe.
-\  This adapter owns the unchanged path, magic, status names, canonical
-\  source-registry codec, and historical first 40 descriptor bytes.  Its
-\  VREPL accessor remains exactly store + 40.
+\  This adapter owns the unchanged path, status names, canonical registry
+\  codec, and typed scratch.  The shared VFSNAP descriptor is embedded at
+\  offset zero; typed accessors are direct views of that core state.
 \ =====================================================================
 
 PROVIDED akashic-streams-srcstore
@@ -37,45 +37,29 @@ STREAMS-SOURCE-STORE-HEADER-SIZE STREAMS-SOURCE-REGISTRY-SIZE +
 CREATE _SSSTORE-RECORD-MAGIC
 65 C, 75 C, 83 C, 83 C, 83 C, 48 C, 48 C, 49 C,  \ "AKSSS001"
 
- 0 CONSTANT _SSS-H-MAGIC
- 8 CONSTANT _SSS-H-FORMAT
-16 CONSTANT _SSS-H-HEADER-SIZE
-24 CONSTANT _SSS-H-GENERATION
-32 CONSTANT _SSS-H-PAYLOAD-SIZE
-40 CONSTANT _SSS-H-PAYLOAD-CRC
-48 CONSTANT _SSS-H-HEADER-CRC
-56 CONSTANT _SSS-H-FLAGS
-
-: _STREAMS-SOURCE-STORE-HEADER-CRC  ( record -- crc32 )
-    _VFSNAP-HEADER-CRC ;
-: _STREAMS-SOURCE-STORE-PAYLOAD-CRC  ( a u -- crc32 )
-    _VFSNAP-PAYLOAD-CRC ;
-
 \ =====================================================================
-\  Descriptor: historical prefix, embedded core, per-instance scratch
+\  Descriptor: embedded core, per-instance scratch
 \ =====================================================================
 
-0x53534353544F5231 CONSTANT _SSSTORE-MAGIC  \ "SSCSTOR1"
-1 CONSTANT _SSSTORE-F-BLOCKED
-
- 0 CONSTANT _SSS-MAGIC
- 8 CONSTANT _SSS-VFS
-16 CONSTANT _SSS-FLAGS
-24 CONSTANT _SSS-LAST-STATUS
-32 CONSTANT _SSS-LAST-VREPL
-40 CONSTANT _SSS-CORE
+0 CONSTANT _SSS-CORE
 _SSS-CORE VFSNAP-STORE-SIZE + CONSTANT _SSS-SCRATCH
 _SSS-SCRATCH STREAMS-SOURCE-STORE-RECORD-MAX +
     CONSTANT _SSS-LOAD-GENERATION
 _SSS-LOAD-GENERATION 8 + CONSTANT STREAMS-SOURCE-STORE-SIZE
 
-: STREAMS-SOURCE-STORE.MAGIC       ( store -- a ) _SSS-MAGIC + ;
-: STREAMS-SOURCE-STORE.VFS         ( store -- a ) _SSS-VFS + ;
-: STREAMS-SOURCE-STORE.FLAGS       ( store -- a ) _SSS-FLAGS + ;
-: STREAMS-SOURCE-STORE.LAST-STATUS ( store -- a ) _SSS-LAST-STATUS + ;
-: STREAMS-SOURCE-STORE.LAST-VREPL  ( store -- a ) _SSS-LAST-VREPL + ;
 : STREAMS-SOURCE-STORE.CORE        ( store -- core ) _SSS-CORE + ;
-: STREAMS-SOURCE-STORE.REPLACE     ( store -- replacement ) _SSS-CORE + ;
+: STREAMS-SOURCE-STORE.MAGIC       ( store -- a )
+    STREAMS-SOURCE-STORE.CORE VFSNAP.MAGIC ;
+: STREAMS-SOURCE-STORE.VFS         ( store -- a )
+    STREAMS-SOURCE-STORE.CORE VFSNAP.VFS ;
+: STREAMS-SOURCE-STORE.FLAGS       ( store -- a )
+    STREAMS-SOURCE-STORE.CORE VFSNAP.FLAGS ;
+: STREAMS-SOURCE-STORE.LAST-STATUS ( store -- a )
+    STREAMS-SOURCE-STORE.CORE VFSNAP.LAST-STATUS ;
+: STREAMS-SOURCE-STORE.LAST-VREPL  ( store -- a )
+    STREAMS-SOURCE-STORE.CORE VFSNAP.LAST-VREPL ;
+: STREAMS-SOURCE-STORE.REPLACE     ( store -- replacement )
+    STREAMS-SOURCE-STORE.CORE VFSNAP.REPLACE ;
 : STREAMS-SOURCE-STORE.SCRATCH     ( store -- scratch ) _SSS-SCRATCH + ;
 : STREAMS-SOURCE-STORE.LOAD-GENERATION  ( store -- a )
     _SSS-LOAD-GENERATION + ;
@@ -87,7 +71,7 @@ _SSS-LOAD-GENERATION 8 + CONSTANT STREAMS-SOURCE-STORE-SIZE
 : STREAMS-SOURCE-STORE-PATH$  ( store -- a u )
     STREAMS-SOURCE-STORE.CORE VFSNAP-PATH$ ;
 : STREAMS-SOURCE-STORE-BLOCKED?  ( store -- flag )
-    STREAMS-SOURCE-STORE.FLAGS @ _SSSTORE-F-BLOCKED AND 0<> ;
+    STREAMS-SOURCE-STORE.CORE VFSNAP-BLOCKED? ;
 
 \ =====================================================================
 \  Static typed specification and callback-private state
@@ -104,8 +88,6 @@ VARIABLE _SSCB-CONTEXT
 VARIABLE _SSCB-PAYLOAD
 VARIABLE _SSCB-PAYLOAD-U
 VARIABLE _SSCB-GENERATION
-VARIABLE _SSAD-STORE
-VARIABLE _SSAD-STATUS
 VARIABLE _SSSI-VFS
 VARIABLE _SSSI-STORE
 VARIABLE _SSSI-TARGET-A
@@ -182,16 +164,7 @@ VARIABLE _SSSS-STORE
     ENDCASE ;
 
 : _SSSTORE-SYNC  ( snapshot-status store -- source-status )
-    _SSAD-STORE ! _SSAD-STATUS !
-    _SSAD-STORE @ STREAMS-SOURCE-STORE.CORE
-        VFSNAP-LAST-STATUS@ _SSSTORE-VFSNAP>STATUS
-        _SSAD-STORE @ STREAMS-SOURCE-STORE.LAST-STATUS !
-    _SSAD-STORE @ STREAMS-SOURCE-STORE.CORE VFSNAP-LAST-VREPL@
-        _SSAD-STORE @ STREAMS-SOURCE-STORE.LAST-VREPL !
-    _SSAD-STORE @ STREAMS-SOURCE-STORE.CORE VFSNAP-BLOCKED? IF
-        _SSSTORE-F-BLOCKED
-    ELSE 0 THEN _SSAD-STORE @ STREAMS-SOURCE-STORE.FLAGS !
-    _SSAD-STATUS @ _SSSTORE-VFSNAP>STATUS ;
+    DROP _SSSTORE-VFSNAP>STATUS ;
 
 \ =====================================================================
 \  Hostile-alias preflight
@@ -240,11 +213,7 @@ VARIABLE _SSSS-STORE
 
 : STREAMS-SOURCE-STORE-VALID?  ( store -- flag )
     DUP _SSSTORE-STORE-SPAN-SAFE? 0= IF DROP 0 EXIT THEN
-    DUP STREAMS-SOURCE-STORE.MAGIC @ _SSSTORE-MAGIC <> IF DROP 0 EXIT THEN
-    DUP STREAMS-SOURCE-STORE.VFS @ 0= IF DROP 0 EXIT THEN
-    DUP STREAMS-SOURCE-STORE.CORE VFSNAP-VALID? 0= IF DROP 0 EXIT THEN
-    DUP STREAMS-SOURCE-STORE.VFS @ SWAP
-        STREAMS-SOURCE-STORE.CORE VFSNAP.VFS @ = ;
+    STREAMS-SOURCE-STORE.CORE VFSNAP-VALID? ;
 
 \ =====================================================================
 \  Lifecycle and unchanged typed operations
@@ -258,9 +227,6 @@ VARIABLE _SSSS-STORE
     _SSSI-TARGET-A @ _SSSI-TARGET-U @ _SSSI-STORE @
         _SSSTORE-TARGET-SPAN-SAFE? 0= IF SSSTORE-S-INVALID EXIT THEN
     _SSSI-STORE @ STREAMS-SOURCE-STORE-SIZE 0 FILL
-    _SSSTORE-MAGIC _SSSI-STORE @ STREAMS-SOURCE-STORE.MAGIC !
-    _SSSI-VFS @ _SSSI-STORE @ STREAMS-SOURCE-STORE.VFS !
-    SSSTORE-S-ABSENT _SSSI-STORE @ STREAMS-SOURCE-STORE.LAST-STATUS !
     _SSSI-TARGET-A @ _SSSI-TARGET-U @
         _SSSI-STORE @ STREAMS-SOURCE-STORE.SCRATCH
         STREAMS-SOURCE-STORE-RECORD-MAX

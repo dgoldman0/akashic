@@ -271,3 +271,31 @@ lexical mutable state. The Desk-ecosystem total remains 1,100.
 No placement debt, target-layer violation, unresolved import, identity issue,
 addressability issue, dependency cycle, or capacity policy changes in L3. The
 placement and unresolved-import digests consequently remain unchanged.
+
+## L4 reviewed ratchet update
+
+Landing L4 adds the neutral `utils/checked-record.f` and
+`utils/generation-pair.f` modules. Checked-record depends only on memory spans
+and CRC; generation-pair depends only on memory spans. Agent and Practice add
+generation-pair consumer edges, and Library maintenance adds a direct
+checked-record edge. VFSNAP and Library record-codec each exchange an old
+direct CRC edge for checked-record. The old duplicate guard import in
+record-codec is deleted, so the reviewed graph is 384 modules, 1,295 resolved
+`REQUIRE` occurrences, and 1,295 unique resolved edges.
+
+Neither neutral module declares lexical mutable state. The independent total
+rises from 7,066 to 7,072 for Practice's serialized adapter cells used to keep
+transient decoded heads and pair publication evidence separate. The applet
+total rises from 2,746 to 2,752: Agent and the Library adapters add exact
+consumer-side comparison/status work, while the two Streams typed stores
+delete four old status mirrors and the complete obsolete 40-byte descriptor
+prefixes. The Desk-ecosystem total remains 1,100. Pair authority and
+checked-record operation state themselves live in caller-owned descriptors and
+workspaces rather than module-global neutral scratch.
+
+No placement debt, target-layer violation, unresolved import, identity issue,
+addressability issue, dependency cycle, product capacity, or scale policy
+changes in L4. The placement and unresolved-import digests consequently remain
+unchanged. The manual-refresh fixture narrows an overbroad unused online
+provider closure under its existing 4,096-sector test-image bound; production
+storage capacities are untouched.

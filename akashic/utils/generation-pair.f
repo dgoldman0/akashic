@@ -1,0 +1,515 @@
+\ =====================================================================
+\  generation-pair.f - Policy-neutral two-generation publication state
+\ =====================================================================
+\  This module owns no paths, payload bytes, allocation, VFS operation,
+\  checksum, semantic schema, or domain status.  Callers describe the two
+\  already-inspected candidates, then ask the pair to classify/select them.
+\  A save callback owns every external effect and reports its progress with
+\  the exact NO-EFFECT -> MAYBE -> DURABLE transition words below.
+\
+\  Callback ABI:
+\    equal ( value-a value-b context -- equal? detail )
+\    save  ( payload target-slot next-generation pair context -- detail )
+\
+\  DETAIL is opaque caller information.  A callback THROW is retained
+\  separately and never collapsed into DETAIL.  The save callback must call
+\  GPAIR-SAVE-MAYBE! before its first possible external effect and
+\  GPAIR-SAVE-DURABLE! only after its durability boundary succeeds.
+\ =====================================================================
+
+PROVIDED akashic-generation-pair
+
+REQUIRE memory-span.f
+
+\ =====================================================================
+\  Public status, classification and publication outcomes
+\ =====================================================================
+
+0 CONSTANT GPAIR-S-OK
+1 CONSTANT GPAIR-S-INVALID
+2 CONSTANT GPAIR-S-BUSY
+3 CONSTANT GPAIR-S-CALLBACK
+4 CONSTANT GPAIR-S-CAPACITY
+5 CONSTANT GPAIR-S-PROTOCOL
+
+0 CONSTANT GPAIR-C-ABSENT
+1 CONSTANT GPAIR-C-VALID
+2 CONSTANT GPAIR-C-CORRUPT
+
+0 CONSTANT GPAIR-R-NONE
+1 CONSTANT GPAIR-R-ABSENT
+2 CONSTANT GPAIR-R-CORRUPT
+3 CONSTANT GPAIR-R-FALLBACK
+4 CONSTANT GPAIR-R-NEWEST
+5 CONSTANT GPAIR-R-EQUAL
+6 CONSTANT GPAIR-R-AMBIGUOUS
+
+0 CONSTANT GPAIR-W-NO-EFFECT
+1 CONSTANT GPAIR-W-MAYBE
+2 CONSTANT GPAIR-W-DURABLE
+
+0 CONSTANT GPAIR-SLOT-A
+1 CONSTANT GPAIR-SLOT-B
+
+\ =====================================================================
+\  Caller-owned candidate descriptors
+\ =====================================================================
+
+0x475043414E443031 CONSTANT _GPAIR-CANDIDATE-MAGIC  \ "GPCAND01"
+
+ 0 CONSTANT _GPC-MAGIC
+ 8 CONSTANT _GPC-CLASS
+16 CONSTANT _GPC-GENERATION
+24 CONSTANT _GPC-VALUE
+32 CONSTANT _GPC-DETAIL
+40 CONSTANT GPAIR-CANDIDATE-SIZE
+
+: GPAIR-CANDIDATE.CLASS       ( candidate -- a ) _GPC-CLASS + ;
+: GPAIR-CANDIDATE.GENERATION  ( candidate -- a ) _GPC-GENERATION + ;
+: GPAIR-CANDIDATE.VALUE       ( candidate -- a ) _GPC-VALUE + ;
+: GPAIR-CANDIDATE.DETAIL      ( candidate -- a ) _GPC-DETAIL + ;
+
+: GPAIR-CANDIDATE-CLASS@  ( candidate -- class )
+    GPAIR-CANDIDATE.CLASS @ ;
+
+: GPAIR-CANDIDATE-GENERATION@  ( candidate -- generation )
+    GPAIR-CANDIDATE.GENERATION @ ;
+
+: GPAIR-CANDIDATE-VALUE@  ( candidate -- value )
+    GPAIR-CANDIDATE.VALUE @ ;
+
+: GPAIR-CANDIDATE-DETAIL@  ( candidate -- detail )
+    GPAIR-CANDIDATE.DETAIL @ ;
+
+: GPAIR-CANDIDATE-VALID?  ( candidate -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP GPAIR-CANDIDATE-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _GPC-MAGIC + @ _GPAIR-CANDIDATE-MAGIC <> IF DROP 0 EXIT THEN
+    DUP GPAIR-CANDIDATE-CLASS@ DUP GPAIR-C-ABSENT <
+        SWAP GPAIR-C-CORRUPT > OR IF DROP 0 EXIT THEN
+    DUP GPAIR-CANDIDATE-CLASS@ GPAIR-C-VALID = IF
+        GPAIR-CANDIDATE-GENERATION@ 0>
+    ELSE
+        GPAIR-CANDIDATE-GENERATION@ 0=
+    THEN ;
+
+: GPAIR-CANDIDATE-INIT  ( candidate -- status )
+    DUP 0= IF DROP GPAIR-S-INVALID EXIT THEN
+    DUP GPAIR-CANDIDATE-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP GPAIR-S-INVALID EXIT
+    THEN
+    DUP GPAIR-CANDIDATE-SIZE 0 FILL
+    _GPAIR-CANDIDATE-MAGIC OVER _GPC-MAGIC + !
+    GPAIR-C-ABSENT SWAP GPAIR-CANDIDATE.CLASS !
+    GPAIR-S-OK ;
+
+: GPAIR-CANDIDATE-ABSENT!  ( detail candidate -- status )
+    DUP 0= IF 2DROP GPAIR-S-INVALID EXIT THEN
+    DUP GPAIR-CANDIDATE-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP GPAIR-S-INVALID EXIT
+    THEN
+    >R
+    R@ GPAIR-CANDIDATE-INIT DROP
+    R@ GPAIR-CANDIDATE.DETAIL !
+    R> DROP GPAIR-S-OK ;
+
+: GPAIR-CANDIDATE-CORRUPT!  ( detail candidate -- status )
+    DUP 0= IF 2DROP GPAIR-S-INVALID EXIT THEN
+    DUP GPAIR-CANDIDATE-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP GPAIR-S-INVALID EXIT
+    THEN
+    >R
+    R@ GPAIR-CANDIDATE-INIT DROP
+    GPAIR-C-CORRUPT R@ GPAIR-CANDIDATE.CLASS !
+    R@ GPAIR-CANDIDATE.DETAIL !
+    R> DROP GPAIR-S-OK ;
+
+: GPAIR-CANDIDATE-VALUE!  ( value generation detail candidate -- status )
+    DUP 0= IF DROP DROP DROP DROP GPAIR-S-INVALID EXIT THEN
+    DUP GPAIR-CANDIDATE-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP 2DROP GPAIR-S-INVALID EXIT
+    THEN
+    2 PICK 0> 0= IF DROP DROP DROP DROP GPAIR-S-INVALID EXIT THEN
+    >R
+    R@ GPAIR-CANDIDATE-INIT DROP
+    GPAIR-C-VALID R@ GPAIR-CANDIDATE.CLASS !
+    R@ GPAIR-CANDIDATE.DETAIL !
+    R@ GPAIR-CANDIDATE.GENERATION !
+    R@ GPAIR-CANDIDATE.VALUE !
+    R> DROP GPAIR-S-OK ;
+
+\ =====================================================================
+\  Caller-owned pair descriptor
+\ =====================================================================
+
+0x4750414952303031 CONSTANT _GPAIR-MAGIC  \ "GPAIR001"
+
+1 CONSTANT _GPAIR-F-ACTIVE
+
+0 CONSTANT _GPAIR-OP-NONE
+1 CONSTANT _GPAIR-OP-SELECT
+2 CONSTANT _GPAIR-OP-SAVE
+
+  0 CONSTANT _GP-MAGIC
+  8 CONSTANT _GP-FLAGS
+ 16 CONSTANT _GP-EQUAL-XT
+ 24 CONSTANT _GP-SAVE-XT
+ 32 CONSTANT _GP-CONTEXT
+ 40 CONSTANT _GP-GENERATION
+ 48 CONSTANT _GP-ACTIVE-SLOT
+ 56 CONSTANT _GP-RESULT
+ 64 CONSTANT _GP-SELECTED
+ 72 CONSTANT _GP-DETAIL
+ 80 CONSTANT _GP-CALLBACK-THROW
+ 88 CONSTANT _GP-LAST-STATUS
+ 96 CONSTANT _GP-OP
+104 CONSTANT _GP-CANDIDATE-A
+112 CONSTANT _GP-CANDIDATE-B
+120 CONSTANT _GP-EQUAL-RESULT
+128 CONSTANT _GP-PAYLOAD
+136 CONSTANT _GP-NEXT-GENERATION
+144 CONSTANT _GP-TARGET-SLOT
+152 CONSTANT _GP-OUTCOME
+160 CONSTANT GPAIR-SIZE
+
+: _GPAIR.FLAGS            ( pair -- a ) _GP-FLAGS + ;
+: _GPAIR.EQUAL-XT         ( pair -- a ) _GP-EQUAL-XT + ;
+: _GPAIR.SAVE-XT          ( pair -- a ) _GP-SAVE-XT + ;
+: _GPAIR.CONTEXT          ( pair -- a ) _GP-CONTEXT + ;
+: _GPAIR.GENERATION       ( pair -- a ) _GP-GENERATION + ;
+: _GPAIR.ACTIVE-SLOT      ( pair -- a ) _GP-ACTIVE-SLOT + ;
+: _GPAIR.RESULT           ( pair -- a ) _GP-RESULT + ;
+: _GPAIR.SELECTED         ( pair -- a ) _GP-SELECTED + ;
+: _GPAIR.DETAIL           ( pair -- a ) _GP-DETAIL + ;
+: _GPAIR.CALLBACK-THROW   ( pair -- a ) _GP-CALLBACK-THROW + ;
+: _GPAIR.LAST-STATUS      ( pair -- a ) _GP-LAST-STATUS + ;
+: _GPAIR.OP               ( pair -- a ) _GP-OP + ;
+: _GPAIR.CANDIDATE-A      ( pair -- a ) _GP-CANDIDATE-A + ;
+: _GPAIR.CANDIDATE-B      ( pair -- a ) _GP-CANDIDATE-B + ;
+: _GPAIR.EQUAL-RESULT     ( pair -- a ) _GP-EQUAL-RESULT + ;
+: _GPAIR.PAYLOAD          ( pair -- a ) _GP-PAYLOAD + ;
+: _GPAIR.NEXT-GENERATION  ( pair -- a ) _GP-NEXT-GENERATION + ;
+: _GPAIR.TARGET-SLOT      ( pair -- a ) _GP-TARGET-SLOT + ;
+: _GPAIR.OUTCOME          ( pair -- a ) _GP-OUTCOME + ;
+
+: GPAIR.GENERATION   ( pair -- a ) _GPAIR.GENERATION ;
+: GPAIR.ACTIVE-SLOT  ( pair -- a ) _GPAIR.ACTIVE-SLOT ;
+
+: GPAIR-GENERATION@  ( pair -- generation ) _GPAIR.GENERATION @ ;
+: GPAIR-ACTIVE-SLOT@ ( pair -- slot|-1 ) _GPAIR.ACTIVE-SLOT @ ;
+: GPAIR-RESULT@      ( pair -- result ) _GPAIR.RESULT @ ;
+: GPAIR-SELECTED@    ( pair -- candidate|0 ) _GPAIR.SELECTED @ ;
+: GPAIR-DETAIL@      ( pair -- detail ) _GPAIR.DETAIL @ ;
+: GPAIR-CALLBACK-THROW@  ( pair -- throw-code|0 )
+    _GPAIR.CALLBACK-THROW @ ;
+: GPAIR-LAST-STATUS@ ( pair -- status ) _GPAIR.LAST-STATUS @ ;
+: GPAIR-OUTCOME@     ( pair -- outcome ) _GPAIR.OUTCOME @ ;
+: GPAIR-TARGET-SLOT@ ( pair -- slot ) _GPAIR.TARGET-SLOT @ ;
+: GPAIR-NEXT-GENERATION@  ( pair -- generation )
+    _GPAIR.NEXT-GENERATION @ ;
+: GPAIR-CONTEXT@     ( pair -- context ) _GPAIR.CONTEXT @ ;
+
+: GPAIR-ACTIVE?  ( pair -- flag )
+    _GPAIR.FLAGS @ _GPAIR-F-ACTIVE AND 0<> ;
+
+: GPAIR-VALID?  ( pair -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP GPAIR-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _GP-MAGIC + @ _GPAIR-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _GPAIR.EQUAL-XT @ 0= IF DROP 0 EXIT THEN
+    DUP _GPAIR.SAVE-XT @ 0= IF DROP 0 EXIT THEN
+    DUP GPAIR-GENERATION@ 0< IF DROP 0 EXIT THEN
+    DUP GPAIR-ACTIVE-SLOT@ DUP -1 < SWAP GPAIR-SLOT-B > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP GPAIR-RESULT@ DUP GPAIR-R-NONE <
+        SWAP GPAIR-R-AMBIGUOUS > OR IF DROP 0 EXIT THEN
+    DUP GPAIR-OUTCOME@ DUP GPAIR-W-NO-EFFECT <
+        SWAP GPAIR-W-DURABLE > OR IF DROP 0 EXIT THEN
+    DUP _GPAIR.OP @ DUP _GPAIR-OP-NONE <
+        SWAP _GPAIR-OP-SAVE > OR IF DROP 0 EXIT THEN
+    _GPAIR.FLAGS @ _GPAIR-F-ACTIVE INVERT AND 0= ;
+
+: GPAIR-INIT  ( equal-xt save-xt context pair -- status )
+    DUP 0= IF DROP DROP DROP DROP GPAIR-S-INVALID EXIT THEN
+    DUP GPAIR-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP 2DROP GPAIR-S-INVALID EXIT
+    THEN
+    >R
+    2 PICK 0= 2 PICK 0= OR IF
+        DROP DROP DROP R> DROP GPAIR-S-INVALID EXIT
+    THEN
+    R@ GPAIR-SIZE 0 FILL
+    _GPAIR-MAGIC R@ _GP-MAGIC + !
+    R@ _GPAIR.CONTEXT !
+    R@ _GPAIR.SAVE-XT !
+    R@ _GPAIR.EQUAL-XT !
+    -1 R@ _GPAIR.ACTIVE-SLOT !
+    GPAIR-R-NONE R@ _GPAIR.RESULT !
+    GPAIR-W-NO-EFFECT R@ _GPAIR.OUTCOME !
+    GPAIR-S-OK R@ _GPAIR.LAST-STATUS !
+    R> DROP GPAIR-S-OK ;
+
+: _GPAIR-RESET-STATE  ( pair -- )
+    0 OVER _GPAIR.GENERATION !
+    -1 OVER _GPAIR.ACTIVE-SLOT !
+    GPAIR-R-NONE OVER _GPAIR.RESULT !
+    0 OVER _GPAIR.SELECTED !
+    0 OVER _GPAIR.DETAIL !
+    0 OVER _GPAIR.CALLBACK-THROW !
+    GPAIR-S-OK OVER _GPAIR.LAST-STATUS !
+    0 OVER _GPAIR.CANDIDATE-A !
+    0 OVER _GPAIR.CANDIDATE-B !
+    0 OVER _GPAIR.EQUAL-RESULT !
+    0 OVER _GPAIR.PAYLOAD !
+    0 OVER _GPAIR.NEXT-GENERATION !
+    GPAIR-SLOT-A OVER _GPAIR.TARGET-SLOT !
+    GPAIR-W-NO-EFFECT SWAP _GPAIR.OUTCOME ! ;
+
+: GPAIR-RESET  ( pair -- status )
+    DUP GPAIR-VALID? 0= IF DROP GPAIR-S-INVALID EXIT THEN
+    DUP GPAIR-ACTIVE? IF DROP GPAIR-S-BUSY EXIT THEN
+    _GPAIR-RESET-STATE
+    GPAIR-S-OK ;
+
+: GPAIR-INACTIVE-SLOT?  ( pair -- slot status )
+    DUP GPAIR-VALID? 0= IF DROP GPAIR-SLOT-A GPAIR-S-INVALID EXIT THEN
+    GPAIR-ACTIVE-SLOT@ GPAIR-SLOT-A = IF
+        GPAIR-SLOT-B
+    ELSE
+        GPAIR-SLOT-A
+    THEN
+    GPAIR-S-OK ;
+
+: GPAIR-NEXT-GENERATION?  ( pair -- generation status )
+    DUP GPAIR-VALID? 0= IF DROP 0 GPAIR-S-INVALID EXIT THEN
+    GPAIR-GENERATION@ 1+ DUP 0> 0= IF DROP 0 GPAIR-S-CAPACITY EXIT THEN
+    GPAIR-S-OK ;
+
+\ =====================================================================
+\  Selection
+\ =====================================================================
+
+: _GPAIR-ENTER  ( operation pair -- )
+    DUP _GPAIR.FLAGS DUP @ _GPAIR-F-ACTIVE OR SWAP !
+    SWAP OVER _GPAIR.OP ! DROP ;
+
+: _GPAIR-LEAVE  ( pair -- pair )
+    DUP _GPAIR.FLAGS DUP @ _GPAIR-F-ACTIVE INVERT AND SWAP !
+    _GPAIR-OP-NONE OVER _GPAIR.OP ! ;
+
+: _GPAIR-SELECT-END  ( pair status -- result status )
+    >R
+    _GPAIR-LEAVE
+    R@ OVER _GPAIR.LAST-STATUS !
+    GPAIR-RESULT@ R> ;
+
+: _GPAIR-SAVE-END  ( pair status -- outcome status )
+    >R
+    _GPAIR-LEAVE
+    R@ OVER _GPAIR.LAST-STATUS !
+    GPAIR-OUTCOME@ R> ;
+
+: _GPAIR-CANDIDATE-A-VALID?  ( pair -- flag )
+    _GPAIR.CANDIDATE-A @ GPAIR-CANDIDATE-CLASS@ GPAIR-C-VALID = ;
+
+: _GPAIR-CANDIDATE-B-VALID?  ( pair -- flag )
+    _GPAIR.CANDIDATE-B @ GPAIR-CANDIDATE-CLASS@ GPAIR-C-VALID = ;
+
+: _GPAIR-BOTH-ABSENT?  ( pair -- flag )
+    DUP _GPAIR.CANDIDATE-A @ GPAIR-CANDIDATE-CLASS@
+        GPAIR-C-ABSENT =
+    SWAP _GPAIR.CANDIDATE-B @ GPAIR-CANDIDATE-CLASS@
+        GPAIR-C-ABSENT = AND ;
+
+: _GPAIR-ADOPT  ( candidate slot result pair -- pair )
+    >R
+    R@ _GPAIR.RESULT !
+    DUP R@ _GPAIR.ACTIVE-SLOT ! DROP
+    DUP R@ _GPAIR.SELECTED !
+    GPAIR-CANDIDATE-GENERATION@ R@ _GPAIR.GENERATION !
+    R> ;
+
+: _GPAIR-ADOPT-A  ( result pair -- pair )
+    >R
+    R@ _GPAIR.CANDIDATE-A @ GPAIR-SLOT-A ROT R>
+    _GPAIR-ADOPT ;
+
+: _GPAIR-ADOPT-B  ( result pair -- pair )
+    >R
+    R@ _GPAIR.CANDIDATE-B @ GPAIR-SLOT-B ROT R>
+    _GPAIR-ADOPT ;
+
+: _GPAIR-EQUAL-CALL  ( pair -- pair )
+    DUP >R
+    R@ _GPAIR.CANDIDATE-A @ GPAIR-CANDIDATE-VALUE@
+    R@ _GPAIR.CANDIDATE-B @ GPAIR-CANDIDATE-VALUE@
+    R@ GPAIR-CONTEXT@
+    R@ _GPAIR.EQUAL-XT @ EXECUTE
+    R@ _GPAIR.DETAIL !
+    R@ _GPAIR.EQUAL-RESULT !
+    R> DROP ;
+
+: _GPAIR-EQUAL-SELECT  ( pair -- pair status )
+    ['] _GPAIR-EQUAL-CALL CATCH
+    DUP IF
+        DUP 2 PICK _GPAIR.CALLBACK-THROW !
+        DROP
+        GPAIR-R-NONE OVER _GPAIR.RESULT !
+        0 OVER _GPAIR.SELECTED !
+        GPAIR-S-CALLBACK EXIT
+    THEN
+    DROP
+    DUP _GPAIR.EQUAL-RESULT @ IF
+        GPAIR-R-EQUAL SWAP _GPAIR-ADOPT-A GPAIR-S-OK
+    ELSE
+        GPAIR-R-AMBIGUOUS OVER _GPAIR.RESULT !
+        0 OVER _GPAIR.SELECTED !
+        GPAIR-S-OK
+    THEN ;
+
+: _GPAIR-SELECT-BODY  ( pair -- pair status )
+    DUP _GPAIR-CANDIDATE-A-VALID? IF
+        DUP _GPAIR-CANDIDATE-B-VALID? IF
+            DUP _GPAIR.CANDIDATE-A @ GPAIR-CANDIDATE-GENERATION@
+            OVER _GPAIR.CANDIDATE-B @ GPAIR-CANDIDATE-GENERATION@
+            2DUP > IF
+                2DROP GPAIR-R-NEWEST SWAP _GPAIR-ADOPT-A
+                GPAIR-S-OK EXIT
+            THEN
+            < IF
+                GPAIR-R-NEWEST SWAP _GPAIR-ADOPT-B
+                GPAIR-S-OK EXIT
+            THEN
+            _GPAIR-EQUAL-SELECT EXIT
+        THEN
+        GPAIR-R-FALLBACK SWAP _GPAIR-ADOPT-A GPAIR-S-OK EXIT
+    THEN
+    DUP _GPAIR-CANDIDATE-B-VALID? IF
+        GPAIR-R-FALLBACK SWAP _GPAIR-ADOPT-B GPAIR-S-OK EXIT
+    THEN
+    DUP _GPAIR-BOTH-ABSENT? IF
+        GPAIR-R-ABSENT OVER _GPAIR.RESULT !
+    ELSE
+        GPAIR-R-CORRUPT OVER _GPAIR.RESULT !
+    THEN
+    0 OVER _GPAIR.SELECTED !
+    GPAIR-S-OK ;
+
+: GPAIR-SELECT  ( candidate-a candidate-b pair -- result status )
+    DUP GPAIR-VALID? 0= IF
+        DROP 2DROP GPAIR-R-NONE GPAIR-S-INVALID EXIT
+    THEN
+    DUP GPAIR-ACTIVE? IF
+        DROP 2DROP GPAIR-R-NONE GPAIR-S-BUSY EXIT
+    THEN
+    >R
+    OVER GPAIR-CANDIDATE-VALID? 0= IF
+        2DROP R> DROP GPAIR-R-NONE GPAIR-S-INVALID EXIT
+    THEN
+    DUP GPAIR-CANDIDATE-VALID? 0= IF
+        2DROP R> DROP GPAIR-R-NONE GPAIR-S-INVALID EXIT
+    THEN
+    OVER GPAIR-CANDIDATE-SIZE
+    2 PICK GPAIR-CANDIDATE-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP GPAIR-R-NONE GPAIR-S-INVALID EXIT
+    THEN
+    OVER GPAIR-CANDIDATE-SIZE
+    R@ GPAIR-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP GPAIR-R-NONE GPAIR-S-INVALID EXIT
+    THEN
+    DUP GPAIR-CANDIDATE-SIZE
+    R@ GPAIR-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP GPAIR-R-NONE GPAIR-S-INVALID EXIT
+    THEN
+    R@ _GPAIR.CANDIDATE-B !
+    R@ _GPAIR.CANDIDATE-A !
+    GPAIR-R-NONE R@ _GPAIR.RESULT !
+    0 R@ _GPAIR.SELECTED !
+    0 R@ _GPAIR.GENERATION !
+    -1 R@ _GPAIR.ACTIVE-SLOT !
+    0 R@ _GPAIR.DETAIL !
+    0 R@ _GPAIR.CALLBACK-THROW !
+    GPAIR-S-OK R@ _GPAIR.LAST-STATUS !
+    0 R@ _GPAIR.EQUAL-RESULT !
+    _GPAIR-OP-SELECT R@ _GPAIR-ENTER
+    R> _GPAIR-SELECT-BODY _GPAIR-SELECT-END ;
+
+\ =====================================================================
+\  Callback-driven inactive publication
+\ =====================================================================
+
+: GPAIR-SAVE-MAYBE!  ( pair -- status )
+    DUP GPAIR-VALID? 0= IF DROP GPAIR-S-INVALID EXIT THEN
+    DUP GPAIR-ACTIVE? 0= IF DROP GPAIR-S-PROTOCOL EXIT THEN
+    DUP _GPAIR.OP @ _GPAIR-OP-SAVE <> IF DROP GPAIR-S-PROTOCOL EXIT THEN
+    DUP GPAIR-OUTCOME@ GPAIR-W-NO-EFFECT <> IF
+        DROP GPAIR-S-PROTOCOL EXIT
+    THEN
+    GPAIR-W-MAYBE SWAP _GPAIR.OUTCOME !
+    GPAIR-S-OK ;
+
+: GPAIR-SAVE-DURABLE!  ( pair -- status )
+    DUP GPAIR-VALID? 0= IF DROP GPAIR-S-INVALID EXIT THEN
+    DUP GPAIR-ACTIVE? 0= IF DROP GPAIR-S-PROTOCOL EXIT THEN
+    DUP _GPAIR.OP @ _GPAIR-OP-SAVE <> IF DROP GPAIR-S-PROTOCOL EXIT THEN
+    DUP GPAIR-OUTCOME@ GPAIR-W-MAYBE <> IF
+        DROP GPAIR-S-PROTOCOL EXIT
+    THEN
+    GPAIR-W-DURABLE SWAP _GPAIR.OUTCOME !
+    GPAIR-S-OK ;
+
+: _GPAIR-SAVE-CALL  ( pair -- pair )
+    DUP >R
+    R@ _GPAIR.PAYLOAD @
+    R@ GPAIR-TARGET-SLOT@
+    R@ GPAIR-NEXT-GENERATION@
+    R@
+    R@ GPAIR-CONTEXT@
+    R@ _GPAIR.SAVE-XT @ EXECUTE
+    R@ _GPAIR.DETAIL !
+    R> DROP ;
+
+: _GPAIR-ADOPT-SAVE  ( pair -- pair )
+    DUP GPAIR-OUTCOME@ GPAIR-W-DURABLE = IF
+        DUP GPAIR-NEXT-GENERATION@ OVER _GPAIR.GENERATION !
+        DUP GPAIR-TARGET-SLOT@ OVER _GPAIR.ACTIVE-SLOT !
+    THEN ;
+
+: _GPAIR-SAVE-OVERFLOW  ( pair -- outcome status )
+    GPAIR-W-NO-EFFECT OVER _GPAIR.OUTCOME !
+    GPAIR-S-CAPACITY OVER _GPAIR.LAST-STATUS !
+    DROP GPAIR-W-NO-EFFECT GPAIR-S-CAPACITY ;
+
+: GPAIR-SAVE  ( payload pair -- outcome status )
+    DUP GPAIR-VALID? 0= IF
+        2DROP GPAIR-W-NO-EFFECT GPAIR-S-INVALID EXIT
+    THEN
+    DUP GPAIR-ACTIVE? IF
+        2DROP GPAIR-W-NO-EFFECT GPAIR-S-BUSY EXIT
+    THEN
+    >R
+    R@ _GPAIR.PAYLOAD !
+    GPAIR-W-NO-EFFECT R@ _GPAIR.OUTCOME !
+    0 R@ _GPAIR.DETAIL !
+    0 R@ _GPAIR.CALLBACK-THROW !
+    GPAIR-S-OK R@ _GPAIR.LAST-STATUS !
+    0 R@ _GPAIR.NEXT-GENERATION !
+    R@ GPAIR-ACTIVE-SLOT@ GPAIR-SLOT-A = IF
+        GPAIR-SLOT-B
+    ELSE
+        GPAIR-SLOT-A
+    THEN R@ _GPAIR.TARGET-SLOT !
+    R@ GPAIR-GENERATION@ 1+ DUP 0> 0= IF
+        DROP R> _GPAIR-SAVE-OVERFLOW EXIT
+    THEN
+    R@ _GPAIR.NEXT-GENERATION !
+    _GPAIR-OP-SAVE R@ _GPAIR-ENTER
+    R> ['] _GPAIR-SAVE-CALL CATCH
+    DUP IF
+        DUP 2 PICK _GPAIR.CALLBACK-THROW !
+        DROP GPAIR-S-CALLBACK
+    ELSE
+        DROP GPAIR-S-OK
+    THEN
+    >R _GPAIR-ADOPT-SAVE R> _GPAIR-SAVE-END ;

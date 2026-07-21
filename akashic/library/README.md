@@ -8,19 +8,27 @@ retained history and receipts, creates/replaces and enumerates RID-based
 collections, and serves bounded authoritative corpus queries through a
 disposable title/body/tag index. The Library domain root now also acquires,
 shares, and quiescently releases bounded one-RID projection owners. A bounded
-standalone applet presents the storage surface as a functional corpus lens.
+non-Desktop applet executable presents the storage surface as a functional
+corpus lens.
 Recognized-format inspection and narrowly planned repair plus coherent bounded
 opaque raw export complete the headless recovery surface. The literal Gate 4
-cold/damage exit is green; the complete Gate 5 applet, Desktop integration,
-and Streams integration remain later work.
+cold/damage exit is green; Desktop hosting and Streams integration remain
+separate work under the repository-root refactoring plan. Renderer-free
+qualification does not give this Desk-applet domain a standalone product
+identity.
+
+The current top-level `akashic/library/` path is transitional placement for
+Library-applet implementation. It is independently testable, but its domain
+meaning remains inside the Desk ecosystem; neutral mechanics move out before
+the remainder is re-homed beneath the applet.
 
 The current modules are:
 
 - `model.f`: bounded caller-owned Library records, canonical validators,
   initial-request seals, retry comparisons, and pure catalog/collection
   cross-record transition checks.
-- `record-codec.f`: deterministic V1 envelopes for catalog entries,
-  collections, and immutable content revisions.
+- `record-codec.f`: Library payload adapters over the neutral checked-record
+  envelope for catalog entries, collections, and immutable content revisions.
 - `store-format.f`: deterministic V1 arena, catalog-bank, and head formats plus
   the ordered content-frame commitment used by the VFS owner.
 - `vfs-store.f`: the sole owner of Library-private VFS paths, committed-snapshot
@@ -57,7 +65,7 @@ The persisted widths are fixed for V1:
 | collection payload | 224 |
 | collection record | 320 |
 | transient content view | 128 |
-| content header | 160 |
+| content data offset (64-byte envelope + 96-byte semantic prefix) | 160 |
 | largest content record | 65,696 |
 
 A full set of fixed catalog and collection records occupies at most 403,456
@@ -89,11 +97,13 @@ advance whenever a persisted entry or collection changes.
 ## Codec and lifetime rules
 
 Fixed records have a 64-byte envelope and canonical zero padding. Content
-records have a 160-byte header, an exact eight-byte-aligned record length, and
-zero padding. Decoders validate magic, header CRC, format, lengths, flags,
-payload CRC, canonical padding, and the model. Content additionally validates
-SHA3-256 identity and UTF-8. A checksummed future format is reported as
-unsupported rather than malformed.
+records have the same 64-byte checked envelope followed by a 96-byte
+Library-owned semantic prefix, so content begins at absolute byte 160; record
+length is exactly eight-byte aligned with zero padding. Checked-record validates
+magic, header CRC, format, geometry, payload CRC, and canonical padding before
+Library validates identity, revisions, media, SHA3-256 content identity, UTF-8,
+and the complete model. A checksummed future format is reported as unsupported
+rather than malformed.
 
 `LIB-CONTENT-RECORD-DECODE` returns `LIBCT.DATA-A` as a borrowed pointer into
 the caller's encoded record buffer. The view is valid only while that buffer is
@@ -133,11 +143,13 @@ padded frame under the separate
 `org.akashic.library.content-chain.step.v1` domain. Absolute offsets and spans
 are bounded, sector aligned, and encoded as native little-endian 64-bit cells.
 
-There is no earlier Library store or Library on-disk state to migrate. These V1
-shapes are new and intentionally do not decode or wrap the old taxonomy/vault
-prototypes, Streams draft bytes, or another owner's files. No existing durable
-format or path changes in this landing; future Library formats remain explicit
-unsupported evidence until a separately qualified migration exists.
+There is no released Library store or earlier Library state to migrate. The
+current layout does not decode or wrap the old taxonomy/vault prototypes,
+Streams draft bytes, or another owner's files. L4 keeps fixed catalog and
+collection records, store paths, content data offset, record maxima, and outer
+arena/bank/head geometry stable while replacing the private content envelope in
+place with checked-record plus the Library semantic prefix. There is one
+current reader, with no legacy reader or migration facade.
 
 ## Sealed VFS loading and first-use boundary
 
@@ -315,7 +327,7 @@ The focused emulator profile is
 Gate 3 resource interop, and production projection owner without any Library
 applet, Desk, Pad, or Streams source.
 
-## Standalone applet lens
+## Applet executable lens
 
 `akashic/tui/applets/library/library.f` and `library.uidl` implement a bounded
 single-instance lens over the public headless owner API. The lens browses and
@@ -324,10 +336,12 @@ managed documents, archives and unarchives them, exposes retained history,
 browses and filters collections, and pages bounded query results. It publishes
 no Library capability, projection owner, private path, or cross-applet binding.
 
-This lens is an explicit standalone UX probe, not a claim that Gate 5 or
-Desktop integration is complete. It does not yet provide deep Pad editing,
-capture import, destructive deletion, maintenance/export UI, or a
-Desktop-hosted route.
+This non-Desktop executable is an explicit UX probe, not a standalone Library
+product or a claim that Desktop integration is complete. It does not yet
+provide deep Pad editing, capture import, destructive deletion,
+maintenance/export UI, or a Desktop-hosted route. Its currently implemented
+browse, search, preview, mutation, history, collection, and paging actions
+remain preserved applet functionality.
 
 The focused emulator profiles include `library-managed-document-contracts`,
 `library-managed-capacity-contracts`, `library-managed-lifecycle-contracts`,
@@ -350,9 +364,9 @@ Gate 4 is complete at this bounded headless boundary. The focused maintenance
 matrix, full earlier-milestone regressions, spawn-isolated cold drivers, and
 literal clean/damaged Gate 4 exit are recorded in
 [`../../local_testing/evidence/library-gate4-close-20260720.md`](../../local_testing/evidence/library-gate4-close-20260720.md).
-This claim does not complete Gate 5 or infer a Desktop route from registry
-presence or from the standalone applet. The applet route remains explicit and
-bounded as described above.
+This claim does not infer a Desktop route from registry presence or from the
+test executable. The applet route remains explicit and bounded as described
+above.
 For the broader product boundary and gate handoff, see
 [`../../docs/library/library.md`](../../docs/library/library.md). It is the
 ratified product-boundary document.

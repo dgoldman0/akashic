@@ -4,9 +4,9 @@
 \ pumped through Desk's external-I/O service as exposed by Desk's component
 \ endpoint.  Its START callback reloads the observation store, proving that
 \ an ACCEPTED attempt was durable before any external callback ran.  The
-\ concrete configured provider is never constructed, and neither provider
-\ submits XIO during lifecycle setup, so the suite performs no network work
-\ even though the online composition and Desk dependency closures are linked.
+\ fixture installs that provider through Streams' public factory-state seam;
+\ concrete online providers are outside this manual-refresh contract, so the
+\ suite performs no network work during lifecycle setup or execution.
 
 PROVIDED streams-manual-refresh-tests
 
@@ -268,6 +268,7 @@ VARIABLE _smrc-provider-operation
     THEN
     DROP DUP _smrc-desk ! _DESK-USE-STATE
     _DESK-XIO-INIT XIO-S-OK = _smrc-assert
+    _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _smrc-assert
     _DESK-ENDPOINT IENDPOINT-INIT
     _smrc-desk @ _DESK-ENDPOINT IEND.CONTEXT !
     ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
@@ -294,8 +295,14 @@ VARIABLE _smrc-provider-operation
     0 _smrc-document-a ! 0 _smrc-document-u ! ;
 
 : _smrc-instance-new  ( configured? -- instance|0 )
-    IF STREAMS-ONLINE-COMP-DESC ELSE STREAMS-COMP-DESC THEN
-    CINST-NEW DUP IF 2DROP 0 EXIT THEN DROP
+    >R STREAMS-COMP-DESC
+    CINST-NEW DUP IF R> DROP 2DROP 0 EXIT THEN DROP
+    DUP CINST-STATE R> IF
+        ['] _smrc-factory SWAP STREAMS-CONFIGURED-FACTORY-STATE!
+        DUP SCONF-S-OK <> IF DROP CINST-FREE 0 EXIT THEN DROP
+    ELSE
+        DROP
+    THEN
     >R _smrc-endpoint R@ CINST.ENDPOINT !
     R@ STREAMS-INIT-CB R> ;
 
@@ -790,16 +797,11 @@ VARIABLE _smrc-args-expected
         DUP 0<> _smrc-assert DUP _smrc-vfs ! VFS-USE
     _smrc-desk-init
     _STREAMS-COMP-SETUP
-    ['] _smrc-factory STREAMS-ONLINE-COMP-SETUP-WITH-CONFIGURED
-    STREAMS-ONLINE-COMP-DESC COMP.STATE-INIT-XT @
-        ['] _STREAMS-ONLINE-STATE-INIT = _smrc-assert
     -1 _smrc-instance-new DUP 0<> _smrc-assert DUP _smrc-inst !
     DUP CINST.GENERATION @ DUP 0<> _smrc-assert _smrc-fixed-generation !
     CINST.REVISION @ 1 = _smrc-assert
     _smrc-inst @ _STM-ACTIVATE
-    _STM-PUBLIC-FACTORY-XT @ ['] STREAMS-BLUESKY-PUBLIC-NEW = _smrc-assert
     _STM-CONFIGURED-FACTORY-XT @ ['] _smrc-factory = _smrc-assert
-    _STM-PUBLIC-PROVIDER @ DUP 0<> _smrc-assert SPUB-VALID? _smrc-assert
     _STM-XIO-SERVICE @ _smrc-service = _smrc-assert
     _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET = _smrc-assert
     _STM-CONFIGURED-REFRESH STREAMS-REFRESH-OWNER-AVAILABLE? _smrc-assert
@@ -824,6 +826,7 @@ VARIABLE _smrc-args-expected
     _smrc-service XIOS.RETAINED @ 0= _smrc-assert
     _smrc-desk @ _DESK-USE-STATE
     _DESK-XIO-FINI XIO-S-OK = _smrc-assert
+    _DESK-SERVICE-TABLE-FINI
     _smrc-desk @ CINST-FREE 0 _smrc-desk !
     _smrc-plan _SMRF-FACTORY-COUNT + @ 3 = _smrc-assert
     _smrc-plan _SMRF-RELEASE-COUNT + @ 3 = _smrc-assert

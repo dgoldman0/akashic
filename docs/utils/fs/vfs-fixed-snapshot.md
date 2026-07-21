@@ -2,9 +2,12 @@
 
 `akashic/utils/fs/vfs-fixed-snapshot.f` provides the mechanical part of a
 fixed-capacity, crash-recoverable snapshot store over `vfs-replace.f`. It owns
-the 64-byte envelope, exact reads, CRC checks, optimistic generation changes,
-VREPL recovery, blocked-state latch, and scratch hygiene. Typed owners retain
-their paths, payload formats, semantic validation, and public status adapters.
+exact VFS reads, optimistic generation changes, VREPL recovery, the
+blocked-state latch, and scratch hygiene. The neutral
+`akashic/utils/checked-record.f` library owns the 64-byte envelope, fixed-record
+geometry, CRCs, canonical padding, and callback containment. Typed owners
+retain their paths, payload formats, semantic validation, and public status
+adapters.
 
 This module is for fixed-size payloads only. Variable-size records, dual-slot
 heads, and stores with different recovery semantics are not admitted by this
@@ -12,7 +15,9 @@ contract.
 
 ## Record format
 
-Every target is exactly `64 + payload-u` bytes:
+Every target is exactly `64 + payload-u` bytes. VFSNAP configures a sealed
+fixed-mode checked-record specification with a positive tag policy, and uses
+the checked-record tag as its generation:
 
 | Offset | Bytes | Field |
 | ---: | ---: | --- |
@@ -27,9 +32,12 @@ Every target is exactly `64 + payload-u` bytes:
 | 64 | fixed | typed payload |
 
 Read validation is ordered: exact target resolution/open, minimum header size,
-eight-byte magic, header CRC, supported format, header shape/generation/payload
-size, exact total file size, exact payload read, payload CRC, then the typed
-validator. A destination is published only after all checks pass.
+checked-record header inspection, exact total file size, exact payload read,
+then complete checked-record validation. Header inspection checks the
+eight-byte magic, header CRC, supported format, header shape, positive
+generation, and fixed payload geometry. Complete validation checks the payload
+CRC and invokes the typed validator. A destination is published only after all
+checks pass.
 
 ## Specification lifecycle
 
@@ -41,10 +49,13 @@ VFSNAP-SPEC-SEAL         ( spec -- status )
 ```
 
 `magic-u` must be exactly eight. Payload size must be positive and must not
-overflow when the envelope is added. Callback execution tokens must be
-nonzero. A specification can register up to `VFSNAP-SPEC-PRIVATE-MAX` disjoint
-private spans and must be sealed before a store can use it. Registration after
-seal returns `VFSNAP-S-BUSY`.
+overflow when the envelope is added. Format must be positive and callback
+execution tokens must be nonzero. `VFSNAP-SPEC-INIT` embeds, configures, and
+seals one address-bound CREC fixed specification. The outer VFSNAP
+specification can then register up to `VFSNAP-SPEC-PRIVATE-MAX` disjoint private
+spans and must be sealed before a store can use it. Registration after the
+outer seal returns `VFSNAP-S-BUSY`. An initialized specification must not be
+copied or moved because the embedded CREC descriptor is self-bound.
 
 The encode callback has this exact ABI:
 
@@ -52,9 +63,9 @@ The encode callback has this exact ABI:
 ( opaque-context payload-a payload-u next-generation -- status )
 ```
 
-The core supplies an exact, all-zero payload span and selects the optimistic
-next generation. The callback must write only the payload and cannot see or
-rewrite the envelope.
+Checked-record supplies an exact, all-zero payload span and VFSNAP selects the
+optimistic next generation. The callback must write only the payload and cannot
+see or rewrite the envelope.
 
 The validation callback has this exact ABI:
 
@@ -65,7 +76,11 @@ The validation callback has this exact ABI:
 It owns semantic validity, canonical unused bytes, and any redundant internal
 generation comparison. It must not mutate the payload. Callback statuses use
 the `VFSNAP-S-*` domain; typed wrappers explicitly translate them to their
-public status names.
+public status names. The per-store adapter context retains an exact nonzero
+callback return while checked-record contains the callback. VFSNAP then returns
+that original status. A callback throw, checked-record callback fault, or
+checked-record internal fault maps to the existing blocking `VFSNAP-S-IO`
+status.
 
 ## Store lifecycle
 
@@ -83,15 +98,19 @@ VFSNAP-PATH$    ( store -- a u )
 
 The caller owns `VFSNAP-STORE-SIZE` bytes and an exclusive scratch span of
 exactly `VFSNAP-HEADER-SIZE + payload-u` bytes for the complete initialized
-lifetime. The store contains VREPL at offset zero, followed by core state and
-the caller scratch pointer. This permits typed adapters to place the core at a
-legacy VREPL offset without moving their accessor.
+lifetime. The store contains VREPL at offset zero, followed by VFSNAP state,
+the caller scratch pointer, one caller-owned CREC workspace, and one bounded
+callback-adapter context. VREPL remains at offset zero, so
+`VFSNAP.REPLACE` stays a direct view of the replacement descriptor. An
+initialized store must not be copied or moved because its embedded CREC
+workspace is self-bound.
 
 `INIT-AT` derives and owns all VREPL paths. `LOAD`, `SAVE`, and `RECOVER` wipe
 the complete caller scratch on every terminal status and caught exception.
-`FINI` refuses an active store, wipes scratch, clears the core descriptor, and
-makes later operations invalid. Typed adapters must clear their own prefix and
-per-instance adapter cells after successful `FINI`.
+They also clear the callback-adapter transient cells and reset the CREC
+workspace result. `FINI` refuses an active store, wipes scratch, clears the
+core descriptor, and makes later operations invalid. Typed adapters must clear
+their own per-instance adapter cells after successful `FINI`.
 
 `SAVE` is optimistic. Expected generation zero admits only an absent target;
 otherwise it must equal the fully validated current envelope generation. The
@@ -126,11 +145,17 @@ The statuses are:
 OK ABSENT CORRUPT UNSUPPORTED INVALID CAPACITY IO RECOVERY BUSY CONFLICT
 ```
 
-Corrupt, unsupported, I/O, and uncertain recovery results latch the descriptor
+`CORRUPT`, `UNSUPPORTED`, `IO`, and every `RECOVERY` result latch the descriptor
 blocked. Later loads and saves return the latched status and do not manufacture
 an empty payload or replace evidence. A fresh lifecycle is required. VREPL
-rollback and committed-cleanup results normalize to success; marker corruption
-and uncertain publication normalize to recovery failure.
+rollback and committed-cleanup results normalize to success; namespace/type
+collisions, marker corruption, and uncertain publication normalize to recovery
+failure.
+
+Checked-record checksum and structural-corruption statuses map to
+`VFSNAP-S-CORRUPT`; checked-record unsupported format maps to
+`VFSNAP-S-UNSUPPORTED`; capacity, invalid, and busy retain their VFSNAP
+counterparts. Typed callback returns are restored exactly as described above.
 
 Open descriptors and the process VFS selector are restored exactly once on
 normal, status-failure, and caught-exception paths. Actual VREPL/VFS activity
@@ -145,9 +170,11 @@ All public mutating operations perform overflow-safe, half-open span checks
 before acquiring a guard or writing module state. Store memory, scratch, path
 input, load destination, generation destination, specification memory, core
 and dependency private state, and every caller-registered private span must be
-disjoint where the operation requires it. Exact adjacency is allowed. Alias
-rejection is nonmutating, including when a rejected caller span surrounds
-scratch or guard state.
+disjoint where the operation requires it. The embedded CREC specification,
+workspace, and adapter context inherit that geometry and are mutually disjoint
+from callback-visible record bytes. Exact adjacency is allowed. Alias rejection
+is nonmutating, including when a rejected caller span surrounds scratch or
+guard state.
 
 Typed adapters remain responsible for spans the generic ABI cannot describe,
 notably the complete typed descriptor and the fixed extent behind an opaque

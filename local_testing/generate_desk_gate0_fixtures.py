@@ -66,6 +66,12 @@ CREATE _g0-volume /VOLUME ALLOT
         ABORT
     THEN ;
 
+: _g0-crec-header-crc  ( record -- crc32 )
+    CRC32-BEGIN
+    DUP CREC-H-HEADER-CRC CRC32-ADD
+    CREC-H-FLAGS + 8 CRC32-ADD
+    CRC32-END ;
+
 : _g0-put  ( data-a data-u path-a path-u -- )
     _g0-path-u ! _g0-path-a ! _g0-data-u ! _g0-data-a !
     _g0-path-a @ _g0-path-u @ VFS-CUR VFS-CREATE
@@ -111,11 +117,11 @@ CREATE _g0-volume /VOLUME ALLOT
     _g0-status @ SSSTORE-S-OK = _g0-assert
     STREAMS-SOURCE-STORE-FORMAT-V1 1+
         _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
-        _SSS-H-FORMAT + !
+        CREC-H-FORMAT + !
     _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
-        _STREAMS-SOURCE-STORE-HEADER-CRC
+        _g0-crec-header-crc
         _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
-        _SSS-H-HEADER-CRC + !
+        CREC-H-HEADER-CRC + !
     _g0-source-store STREAMS-SOURCE-STORE.SCRATCH
         _g0-record-u @ S" /s-future.bin" _g0-put ;
 
@@ -178,11 +184,11 @@ CREATE _g0-volume /VOLUME ALLOT
     _g0-status @ OSTORE-S-OK = _g0-assert
     STREAMS-OBSERVATION-STORE-FORMAT-V1 1+
         _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
-        _OSS-H-FORMAT + !
+        CREC-H-FORMAT + !
     _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
-        _STREAMS-OBSERVATION-STORE-HEADER-CRC
+        _g0-crec-header-crc
         _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
-        _OSS-H-HEADER-CRC + !
+        CREC-H-HEADER-CRC + !
     _g0-observation-store STREAMS-OBSERVATION-STORE.SCRATCH
         _g0-record-u @ S" /o-future.bin" _g0-put
     _g0-checkpoint @ FREE ;

@@ -33,6 +33,8 @@ CREATE _lmc-report-b LIBRARY-INSPECTION-SIZE ALLOT
 CREATE _lmc-report-c LIBRARY-INSPECTION-SIZE ALLOT
 CREATE _lmc-head-original 512 ALLOT
 CREATE _lmc-head-work 512 ALLOT
+CREATE _lmc-future-spec CREC-SPEC-SIZE ALLOT
+CREATE _lmc-future-crec-work CREC-WORK-SIZE ALLOT
 CREATE _lmc-io-byte 1 ALLOT
 CREATE _lmc-digest LIB-DIGEST-SIZE ALLOT
 CREATE _lmc-compare-block 16384 ALLOT
@@ -53,6 +55,24 @@ LIBRARY-RAW-EXPORT-MAX XBUF _lmc-export
         .S CR
     THEN
     _lmc-depth @ = _lmc-assert ;
+
+: _lmc-future-encode
+  ( source-a source-u payload-a payload-u tag -- checked-status )
+    DROP
+    DUP 3 PICK <> IF 2DROP 2DROP CREC-S-SEMANTIC EXIT THEN
+    DROP SWAP CMOVE CREC-S-OK ;
+
+: _lmc-future-validate
+  ( context-a context-u payload-a payload-u tag -- checked-status )
+    2DROP 2DROP DROP CREC-S-OK ;
+
+_LIBVFS-HEAD-RECORD-MAGIC 8 2 CREC-TAG-POSITIVE
+    ' _lmc-future-encode ' _lmc-future-validate _lmc-future-spec
+    CREC-SPEC-INIT IF -4915 THROW THEN
+LIB-HEAD-PAYLOAD-SIZE CREC-HEADER-SIZE LIB-HEAD-PAYLOAD-SIZE +
+    _lmc-future-spec CREC-SPEC-FIXED! IF -4915 THROW THEN
+_lmc-future-spec CREC-SPEC-SEAL IF -4915 THROW THEN
+_lmc-future-crec-work CREC-WORK-INIT IF -4915 THROW THEN
 
 : _lmc-allocate  ( size variable -- )
     >R ALLOCATE ABORT" LIBRARY MAINTENANCE FAIL allocation" R> ! ;
@@ -393,10 +413,13 @@ LIBRARY-RAW-EXPORT-MAX XBUF _lmc-export
     _lmc-stack ;
 
 : _lmc-future-contracts  ( -- )
-    _lmc-head-original _lmc-head-work 512 CMOVE
-    2 _lmc-head-work _VFSN-H-FORMAT + !
-    _lmc-head-work _VFSNAP-HEADER-CRC
-        _lmc-head-work _VFSN-H-HEADER-CRC + !
+    _lmc-head-original CREC-HEADER-SIZE + LIB-HEAD-PAYLOAD-SIZE
+        LIB-HEAD-PAYLOAD-SIZE
+        _lmc-head-original CREC-H-TAG + @
+        _lmc-head-work 512 _lmc-future-spec _lmc-future-crec-work
+        CREC-ENCODE
+    CREC-S-OK = _lmc-assert
+    512 = _lmc-assert
     _lmc-head-work 512 _LIBVFS-HEAD-PATH$ _lmc-put
 
     _lmc-report-a LIBRARY-INSPECTION-INIT
@@ -429,7 +452,7 @@ LIBRARY-RAW-EXPORT-MAX XBUF _lmc-export
 
 : _lmc-corrupt-contracts  ( -- )
     _lmc-head-original _lmc-head-work 512 CMOVE
-    1 _lmc-head-work _VFSN-H-HEADER-CRC + +!
+    1 _lmc-head-work CREC-H-HEADER-CRC + +!
     _lmc-head-work 512 _LIBVFS-HEAD-PATH$ _lmc-put
 
     _lmc-report-a LIBRARY-INSPECTION-INIT

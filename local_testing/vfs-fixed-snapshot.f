@@ -89,6 +89,15 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     LOOP DROP -1 ;
 : _vfsnc-scratch-zero?  ( store -- flag )
     VFSNAP-SCRATCH$ 0 _vfsnc-filled? ;
+: _vfsnc-crec-context-zero?  ( store -- flag )
+    VFSNAP.CREC-CONTEXT _VFSC-ENCODE-CONTEXT +
+        _VFSNAP-CREC-CONTEXT-SIZE _VFSC-ENCODE-CONTEXT -
+        0 _vfsnc-filled? ;
+: _vfsnc-header-crc  ( record -- crc32 )
+    CRC32-BEGIN
+    DUP CREC-H-HEADER-CRC CRC32-ADD
+    CREC-H-FLAGS + 8 CRC32-ADD
+    CRC32-END ;
 
 : _vfsnc-encode  ( context payload-a payload-u next-generation -- status )
     _vfsnc-cb-generation ! _vfsnc-cb-payload-u !
@@ -231,6 +240,11 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-record-magic 8 1 0
         ['] _vfsnc-encode ['] _vfsnc-validate _vfsnc-spec-probe @
         VFSNAP-SPEC-INIT VFSNAP-S-INVALID = _vfsnc-assert
+    _vfsnc-record-magic 8 0 _VFSNC-PAYLOAD-U
+        ['] _vfsnc-encode ['] _vfsnc-validate _vfsnc-spec-probe @
+        VFSNAP-SPEC-INIT VFSNAP-S-INVALID = _vfsnc-assert
+    _vfsnc-spec-probe @ VFSNAP-SPEC-SIZE 90 _vfsnc-filled?
+        _vfsnc-assert
     _vfsnc-record-magic 8 1 _VFSNC-PAYLOAD-U
         0 ['] _vfsnc-validate _vfsnc-spec-probe @
         VFSNAP-SPEC-INIT VFSNAP-S-INVALID = _vfsnc-assert
@@ -240,6 +254,18 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
         VFSNAP-SPEC-INIT VFSNAP-S-OK = _vfsnc-assert
     _vfsnc-spec @ VFSNAP-SPEC.RECORD-MAGIC 8
         _vfsnc-record-magic 8 COMPARE 0= _vfsnc-assert
+    _vfsnc-spec @ VFSNAP-SPEC.CREC CREC-SPEC-SEALED? _vfsnc-assert
+    _vfsnc-spec @ VFSNAP-SPEC.CREC CREC-SPEC-MODE@
+        CREC-MODE-FIXED = _vfsnc-assert
+    _vfsnc-spec @ VFSNAP-SPEC.CREC CREC-SPEC-FORMAT@ 1 = _vfsnc-assert
+    _vfsnc-spec @ VFSNAP-SPEC.CREC CREC-SPEC-PAYLOAD-MIN@
+        _VFSNC-PAYLOAD-U = _vfsnc-assert
+    _vfsnc-spec @ VFSNAP-SPEC.CREC CREC-SPEC-PAYLOAD-MAX@
+        _VFSNC-PAYLOAD-U = _vfsnc-assert
+    _vfsnc-spec @ VFSNAP-SPEC.CREC CREC-SPEC-TAG-POLICY@
+        CREC-TAG-POSITIVE = _vfsnc-assert
+    _VFSNC-PAYLOAD-U _vfsnc-spec @ VFSNAP-SPEC.CREC CREC-MEASURE
+        CREC-S-OK = SWAP _VFSNC-SCRATCH-U = AND _vfsnc-assert
     _vfsnc-private-adjacent 8 _vfsnc-spec @ VFSNAP-SPEC-PRIVATE-ADD
         VFSNAP-S-OK = _vfsnc-assert
     _vfsnc-private-adjacent 8 + 8 _vfsnc-spec @
@@ -259,6 +285,10 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
 : _vfsnc-basic-contracts  ( -- )
     S" /vfsnap-main.bin" _vfsnc-reset-a
     _vfsnc-store-a @ VFSNAP-VALID? _vfsnc-assert
+    _vfsnc-store-a @ VFSNAP.CREC-WORK CREC-WORK-VALID? _vfsnc-assert
+    _vfsnc-store-a @ VFSNAP.CREC-CONTEXT _VFSNAP-CONTEXT.SPEC @
+        _vfsnc-spec @ = _vfsnc-assert
+    _vfsnc-store-a @ _vfsnc-crec-context-zero? _vfsnc-assert
     _vfsnc-store-a @ VFSNAP-PATH$ S" /vfsnap-main.bin" COMPARE 0=
         _vfsnc-assert
     _vfsnc-store-a @ _vfsnc-scratch-zero? _vfsnc-assert
@@ -285,6 +315,14 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-destination @ @ 1 = _vfsnc-assert
     _vfsnc-destination @ 8 + _VFSNC-PAYLOAD-U 8 - 165
         _vfsnc-filled? _vfsnc-assert
+    _vfsnc-store-a @ VFSNAP.CREC-WORK CREC-RESULT-KIND@
+        CREC-RESULT-NONE = _vfsnc-assert
+    _vfsnc-store-a @ _vfsnc-crec-context-zero? _vfsnc-assert
+    0 1 _vfsnc-store-a @ VFSNAP-SAVE
+        VFSNAP-S-INVALID = _vfsnc-assert
+    _vfsnc-store-a @ VFSNAP-BLOCKED? 0= _vfsnc-assert
+    _vfsnc-store-a @ _vfsnc-scratch-zero? _vfsnc-assert
+    _vfsnc-store-a @ _vfsnc-crec-context-zero? _vfsnc-assert
     _vfsnc-context @ 0 _vfsnc-store-a @ VFSNAP-SAVE
         VFSNAP-S-CONFLICT = _vfsnc-assert
     _vfsnc-store-a @ VFSNAP-BLOCKED? 0= _vfsnc-assert
@@ -307,6 +345,18 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
 
     _vfsnc-raw-a @ _vfsnc-store-a @ _vfsnc-read-target
         _VFSNC-SCRATCH-U = _vfsnc-assert
+    _vfsnc-raw-a @ 8 _vfsnc-record-magic 8 COMPARE 0= _vfsnc-assert
+    _vfsnc-raw-a @ CREC-H-FORMAT + @ 1 = _vfsnc-assert
+    _vfsnc-raw-a @ CREC-H-HEADER-U + @ VFSNAP-HEADER-SIZE =
+        _vfsnc-assert
+    _vfsnc-raw-a @ CREC-H-TAG + @ 1 = _vfsnc-assert
+    _vfsnc-raw-a @ CREC-H-PAYLOAD-U + @ _VFSNC-PAYLOAD-U =
+        _vfsnc-assert
+    _vfsnc-raw-a @ VFSNAP-HEADER-SIZE + _VFSNC-PAYLOAD-U CRC32
+        _vfsnc-raw-a @ CREC-H-PAYLOAD-CRC + @ = _vfsnc-assert
+    _vfsnc-raw-a @ _vfsnc-header-crc
+        _vfsnc-raw-a @ CREC-H-HEADER-CRC + @ = _vfsnc-assert
+    _vfsnc-raw-a @ CREC-H-FLAGS + @ 0= _vfsnc-assert
     _vfsnc-stack ;
 
 : _vfsnc-alias-contracts  ( -- )
@@ -400,8 +450,8 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     >R
     _vfsnc-raw-a @ _vfsnc-raw-b @ _VFSNC-SCRATCH-U CMOVE
     _vfsnc-raw-b @ R> + !
-    _vfsnc-raw-b @ _VFSNAP-HEADER-CRC
-        _vfsnc-raw-b @ _VFSN-H-HEADER-CRC + !
+    _vfsnc-raw-b @ _vfsnc-header-crc
+        _vfsnc-raw-b @ CREC-H-HEADER-CRC + !
     _vfsnc-raw-b @ _VFSNC-SCRATCH-U _vfsnc-store-a @ _vfsnc-put-target
     VFSNAP-S-CORRUPT _vfsnc-record-case
     _vfsnc-restore-original ;
@@ -410,23 +460,23 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     \ Exact eight-byte magic remains distinct even with a valid header CRC.
     _vfsnc-raw-a @ _vfsnc-raw-b @ _VFSNC-SCRATCH-U CMOVE
     90 _vfsnc-raw-b @ C!
-    _vfsnc-raw-b @ _VFSNAP-HEADER-CRC
-        _vfsnc-raw-b @ _VFSN-H-HEADER-CRC + !
+    _vfsnc-raw-b @ _vfsnc-header-crc
+        _vfsnc-raw-b @ CREC-H-HEADER-CRC + !
     _vfsnc-raw-b @ _VFSNC-SCRATCH-U _vfsnc-store-a @ _vfsnc-put-target
     VFSNAP-S-CORRUPT _vfsnc-record-case
     _vfsnc-restore-original
 
     \ Header CRC, payload CRC, semantic generation, and future format.
     _vfsnc-raw-a @ _vfsnc-raw-b @ _VFSNC-SCRATCH-U CMOVE
-    1 _vfsnc-raw-b @ _VFSN-H-HEADER-CRC + +!
+    1 _vfsnc-raw-b @ CREC-H-HEADER-CRC + +!
     _vfsnc-raw-b @ _VFSNC-SCRATCH-U _vfsnc-store-a @ _vfsnc-put-target
     VFSNAP-S-CORRUPT _vfsnc-record-case _vfsnc-restore-original
 
     \ A valid header CRC cannot bless invalid structural fields.
-    63 _VFSN-H-HEADER-SIZE _vfsnc-shape-case
-    0 _VFSN-H-GENERATION _vfsnc-shape-case
-    _VFSNC-PAYLOAD-U 1- _VFSN-H-PAYLOAD-SIZE _vfsnc-shape-case
-    1 _VFSN-H-FLAGS _vfsnc-shape-case
+    63 CREC-H-HEADER-U _vfsnc-shape-case
+    0 CREC-H-TAG _vfsnc-shape-case
+    _VFSNC-PAYLOAD-U 1- CREC-H-PAYLOAD-U _vfsnc-shape-case
+    1 CREC-H-FLAGS _vfsnc-shape-case
 
     _vfsnc-raw-a @ _vfsnc-raw-b @ _VFSNC-SCRATCH-U CMOVE
     _vfsnc-raw-b @ VFSNAP-HEADER-SIZE + 8 + DUP C@ 1+ SWAP C!
@@ -436,16 +486,16 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-raw-a @ _vfsnc-raw-b @ _VFSNC-SCRATCH-U CMOVE
     2 _vfsnc-raw-b @ VFSNAP-HEADER-SIZE + !
     _vfsnc-raw-b @ VFSNAP-HEADER-SIZE + _VFSNC-PAYLOAD-U
-        _VFSNAP-PAYLOAD-CRC _vfsnc-raw-b @ _VFSN-H-PAYLOAD-CRC + !
-    _vfsnc-raw-b @ _VFSNAP-HEADER-CRC
-        _vfsnc-raw-b @ _VFSN-H-HEADER-CRC + !
+        CRC32 _vfsnc-raw-b @ CREC-H-PAYLOAD-CRC + !
+    _vfsnc-raw-b @ _vfsnc-header-crc
+        _vfsnc-raw-b @ CREC-H-HEADER-CRC + !
     _vfsnc-raw-b @ _VFSNC-SCRATCH-U _vfsnc-store-a @ _vfsnc-put-target
     VFSNAP-S-CORRUPT _vfsnc-record-case _vfsnc-restore-original
 
     _vfsnc-raw-a @ _vfsnc-raw-b @ _VFSNC-SCRATCH-U CMOVE
-    2 _vfsnc-raw-b @ _VFSN-H-FORMAT + !
-    _vfsnc-raw-b @ _VFSNAP-HEADER-CRC
-        _vfsnc-raw-b @ _VFSN-H-HEADER-CRC + !
+    2 _vfsnc-raw-b @ CREC-H-FORMAT + !
+    _vfsnc-raw-b @ _vfsnc-header-crc
+        _vfsnc-raw-b @ CREC-H-HEADER-CRC + !
     _vfsnc-raw-b @ _VFSNC-SCRATCH-U _vfsnc-store-a @ _vfsnc-put-target
     VFSNAP-S-UNSUPPORTED _vfsnc-record-case _vfsnc-restore-original
 
@@ -620,7 +670,7 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-fault-binding-end
     _vfsnc-raw-b @ _vfsnc-store-b @ _vfsnc-read-target
         _VFSNC-SCRATCH-U = _vfsnc-assert
-    _vfsnc-raw-b @ _VFSN-H-GENERATION + @ 3 = _vfsnc-assert
+    _vfsnc-raw-b @ CREC-H-TAG + @ 3 = _vfsnc-assert
 
     \ A fresh descriptor deterministically accepts target and cleans backup.
     S" /vfsnap-main.bin" _vfsnc-reset-a
@@ -702,6 +752,10 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
 : _vfsnc-run  ( -- )
     0 _vfsnc-fails ! 0 _vfsnc-checks ! DEPTH _vfsnc-depth !
     VFSNAP-HEADER-SIZE 64 = _vfsnc-assert
+    VFSNAP-HEADER-SIZE CREC-HEADER-SIZE = _vfsnc-assert
+    CREC-H-TAG 24 = _vfsnc-assert
+    CREC-H-PAYLOAD-CRC 40 = _vfsnc-assert
+    CREC-H-HEADER-CRC 48 = _vfsnc-assert
     VFSNAP-S-OK 0= _vfsnc-assert
     VFSNAP-S-CONFLICT 9 = _vfsnc-assert
     _vfsnc-setup
