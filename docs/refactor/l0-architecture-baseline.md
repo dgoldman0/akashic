@@ -357,3 +357,36 @@ machine ledger, and the owner-pool complexity entry records both its linear
 caller arrays and cold cross-pool serialization. Library and Daybook policy
 remain applet-owned; only lifecycle and protocol-neutral session mechanics
 move into independent code.
+
+## L7 reviewed ratchet update
+
+Landing L7 moves the complete top-level Agent tree, the remaining concrete
+Daybook owner, and Agent authentication/settings widgets beneath their owning
+applets. It also splits the former access-profile module: Agent retains the
+structural profile record while Desk owns exact `desk.*` identities, effects,
+dispositions and budgets. A new Agent `service.f` is the sole public
+composition import for that domain. No compatibility module remains at an old
+path.
+
+The policy admits exactly two cross-applet product-composition edges: Desk's
+access-policy module to Agent's public service, and Desk to Daybook's public
+resource-owner service. Exact negative checks still reject the corresponding
+private Agent runtime and Daybook applet imports. This removes all six former
+private/concrete Desk sibling-import violations; the only remaining layer
+violation is the already scheduled L9 app-shell dependency on the concrete
+MP64FS driver.
+
+The access-policy split and public Agent seam add two production modules. The
+reviewed graph is therefore 388 modules, 1,307 resolved `REQUIRE` occurrences
+and 1,307 unique resolved edges, with 78 unchanged reviewed unresolved imports,
+no cycle, one layer violation, and five placement-debt modules. Those five are
+exactly the pre-L8 Library package; Agent, Daybook, and their widgets contribute
+no remaining placement debt.
+
+Current responsibility totals are 64 applet modules / 48,106 lines / 2,734
+lexical globals, 59 Desk-ecosystem modules / 24,138 lines / 1,100 lexical
+globals, and 265 independent modules / 128,735 lines / 7,075 lexical globals.
+The independent class is byte-for-byte unchanged by L7. Agent's staged access
+candidate and Desk's exact policy scratch account for the bounded applet-state
+change; no corpus capacity, storage format, filesystem backend, deferred
+applet, or ext4 dependency changes.

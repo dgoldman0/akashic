@@ -268,6 +268,7 @@ def _dependency_violation(
     target: str,
     source_class: dict[str, Any],
     target_class: dict[str, Any],
+    policy: dict[str, Any],
 ) -> str | None:
     source_kind = source_class["class"]
     target_kind = target_class["class"]
@@ -287,6 +288,12 @@ def _dependency_violation(
             and target_owner
             and source_owner != target_owner
         ):
+            public_seams = policy.get("public_applet_seams", ())
+            if any(
+                source == seam.get("from") and target == seam.get("to")
+                for seam in public_seams
+            ):
+                return None
             return "applet-imports-sibling"
     return None
 
@@ -472,6 +479,7 @@ def build_report(policy: dict[str, Any] | None = None) -> dict[str, Any]:
                     dependency,
                     classification,
                     classifications[dependency],
+                    policy,
                 )
                 if violation:
                     layer_violations.append(

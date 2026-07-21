@@ -51,14 +51,14 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Library | 4 | 2 | 2 | 0 | 3 | 19 |
 | Streams | 4 | 1 | 3 | 0 | 4 | 23 |
-| Agent | 4 | 2 | 2 | 0 | 2 | 22 |
+| Agent | 4 | 3 | 1 | 0 | 1 | 23 |
 | Daybook | 3 | 2 | 1 | 0 | 1 | 9 |
 | Pad | 3 | 2 | 1 | 0 | 2 | 10 |
 | Grid | 2 | 0 | 2 | 0 | 2 | 5 |
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
 | Desk | 3 | 1 | 2 | 0 | 3 | 11 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **29** | **11** | **16** | **2** | **23** | **109** |
+| **Total** | **29** | **12** | **15** | **2** | **22** | **110** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -77,7 +77,12 @@ and a broad test-writing project for code an active landing may never touch.
   owner, codec, persistence and Desk journeys are the preservation gate.
 - Agent retains offline, scripted, OpenAI and Codex providers, all access
   presets, authentication/device/settings behavior and durable transcript
-  semantics.
+  semantics. L7's `agent-provider-ui-commands` profile closes the provider
+  action prerequisite by driving the real Clear, Reconnect and Refresh Models
+  callbacks through parsed UIDL state, pinning rendered idle/running/loading/
+  error text, exact success/failure toasts, dirtying and one provider callback
+  per action. The same fixture proves atomic access-profile replacement and
+  exact Desk-policy rejection after malformed construction or later tampering.
 - Daybook and Pad retain the current semantic shared-document journey while L6
   replaces its transport plumbing with the retained, protocol-neutral resource
   session.

@@ -1,0 +1,62 @@
+\ =====================================================================
+\  api-key.f - Provider-auth adapter for a bounded security credential
+\ =====================================================================
+
+PROVIDED akashic-agent-api-key-auth
+
+REQUIRE ../provider-auth.f
+REQUIRE ../../../../security/credential.f
+
+0 CONSTANT _AAK-AUTH
+_AAK-AUTH AGENT-PROVIDER-AUTH-SIZE + CONSTANT _AAK-CREDENTIAL
+_AAK-CREDENTIAL 8 + CONSTANT APIKEY-AUTH-SIZE
+
+: APIKEY-AUTH.PORT    ( adapter -- auth ) _AAK-AUTH + ;
+: APIKEY-AUTH.CREDENTIAL ( adapter -- a ) _AAK-CREDENTIAL + ;
+
+VARIABLE _AAK-ADAPTER
+VARIABLE _AAK-CRED
+VARIABLE _AAK-AUTH
+VARIABLE _AAK-CB
+VARIABLE _AAK-CB-CONTEXT
+
+: _AAK-SET  ( secret-a secret-u adapter -- status )
+    DUP _AAK-ADAPTER ! DUP APIKEY-AUTH.PORT _AAK-AUTH !
+    APIKEY-AUTH.CREDENTIAL @ DUP _AAK-CRED ! >R R@ CRED-SET CASE
+        CRED-S-OK OF
+            AAUTH-STATE-READY _AAK-AUTH @ AAUTH.STATE !
+            AAUTH-S-OK
+        ENDOF
+        CRED-S-TOO-LONG OF AAUTH-S-CAPACITY ENDOF
+        DROP AAUTH-S-INVALID
+    ENDCASE
+    R> DROP
+    DUP _AAK-AUTH @ AAUTH.LAST-STATUS !
+    1 _AAK-AUTH @ AAUTH.REVISION +! ;
+
+: _AAK-LOGOUT  ( adapter -- status )
+    DUP APIKEY-AUTH.PORT _AAK-AUTH !
+    APIKEY-AUTH.CREDENTIAL @ CRED-CLEAR
+    AAUTH-STATE-SIGNED-OUT _AAK-AUTH @ AAUTH.STATE !
+    AAUTH-S-OK DUP _AAK-AUTH @ AAUTH.LAST-STATUS !
+    1 _AAK-AUTH @ AAUTH.REVISION +! ;
+
+: _AAK-WITH  ( callback callback-context adapter -- status )
+    APIKEY-AUTH.CREDENTIAL @ _AAK-CRED !
+    _AAK-CB-CONTEXT ! _AAK-CB !
+    _AAK-CB @ _AAK-CB-CONTEXT @ _AAK-CRED @ CRED-WITH
+    CRED-S-OK = IF AAUTH-S-OK ELSE AAUTH-S-INVALID THEN ;
+
+: APIKEY-AUTH-INIT  ( credential adapter -- status )
+    DUP 0= IF 2DROP AAUTH-S-INVALID EXIT THEN
+    OVER 0= IF 2DROP AAUTH-S-INVALID EXIT THEN
+    DUP _AAK-ADAPTER ! DUP APIKEY-AUTH.PORT DUP _AAK-AUTH ! AAUTH-INIT
+    AAUTH-M-SECRET _AAK-AUTH @ AAUTH.METHODS !
+    OVER _AAK-ADAPTER @ APIKEY-AUTH.CREDENTIAL !
+    _AAK-ADAPTER @ _AAK-AUTH @ AAUTH.CONTEXT !
+    ['] _AAK-SET _AAK-AUTH @ AAUTH.SECRET-SET-XT !
+    ['] _AAK-LOGOUT _AAK-AUTH @ AAUTH.LOGOUT-XT !
+    ['] _AAK-WITH _AAK-AUTH @ AAUTH.WITH-ACCESS-XT !
+    OVER CRED-PRESENT? IF AAUTH-STATE-READY ELSE AAUTH-STATE-SIGNED-OUT THEN
+    _AAK-AUTH @ AAUTH.STATE !
+    2DROP AAUTH-S-OK ;

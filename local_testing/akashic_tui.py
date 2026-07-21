@@ -270,7 +270,7 @@ class Profile:
 # making each native KDOS transport pull in the one canonical system module.
 MEGAPAD_NETWORKING_CONSUMERS = frozenset(
     {
-        "agent/providers/codex/trust.f",
+        "tui/applets/agent/providers/codex/trust.f",
         "atproto/public-author-feed.f",
         "net/http.f",
         "net/tls-trust-registry.f",
@@ -402,13 +402,13 @@ _ct-run
         stable_markers=("CREDENTIAL PASS",),
     ),
     "agent-context": Profile(
-        roots=("agent/turn-request.f", "agent/providers/devtools/scripted.f"),
+        roots=("tui/applets/agent/turn-request.f", "tui/applets/agent/providers/devtools/scripted.f"),
         resources=(),
         autoexec=r"""\ autoexec.f - model context and structured turn contract
 ENTER-USERLAND
 ." [akashic] loading agent context" CR
-REQUIRE agent/turn-request.f
-REQUIRE agent/providers/devtools/scripted.f
+REQUIRE tui/applets/agent/turn-request.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
 
 VARIABLE _cx-fails
 VARIABLE _cx-checks
@@ -485,12 +485,12 @@ _cx-run
         stable_markers=("AGENT CONTEXT PASS",),
     ),
     "conversation-store": Profile(
-        roots=("agent/storage/vfs-conversation.f",),
+        roots=("tui/applets/agent/storage/vfs-conversation.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - durable conversation snapshots
 ENTER-USERLAND
 ." [akashic] loading conversation store" CR
-REQUIRE agent/storage/vfs-conversation.f
+REQUIRE tui/applets/agent/storage/vfs-conversation.f
 
 VARIABLE _ts-fails
 VARIABLE _ts-checks
@@ -997,17 +997,17 @@ _ts-run
     ),
     "agent-persistence": Profile(
         roots=(
-            "agent/storage/vfs-conversation.f",
-            "agent/runtime.f",
-            "agent/providers/devtools/scripted.f",
+            "tui/applets/agent/storage/vfs-conversation.f",
+            "tui/applets/agent/runtime.f",
+            "tui/applets/agent/providers/devtools/scripted.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - durable agent runtime lifecycle
 ENTER-USERLAND
 ." [akashic] loading agent persistence lifecycle" CR
-REQUIRE agent/storage/vfs-conversation.f
-REQUIRE agent/providers/devtools/scripted.f
-REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/storage/vfs-conversation.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
+REQUIRE tui/applets/agent/runtime.f
 
 VARIABLE _ap-fails
 VARIABLE _ap-checks
@@ -2079,12 +2079,12 @@ _dx-run
         include_large_sample=False,
     ),
     "tls-trust-registry": Profile(
-        roots=("agent/providers/codex/trust.f",),
+        roots=("tui/applets/agent/providers/codex/trust.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - composed machine TLS trust contracts
 ENTER-USERLAND
 ." [akashic] loading machine TLS trust contracts" CR
-REQUIRE agent/providers/codex/trust.f
+REQUIRE tui/applets/agent/providers/codex/trust.f
 
 VARIABLE _tr-fails
 VARIABLE _tr-checks
@@ -2180,12 +2180,12 @@ _tr-run
         include_large_sample=False,
     ),
     "tls-trust-mpta": Profile(
-        roots=("agent/providers/codex/trust.f",),
+        roots=("tui/applets/agent/providers/codex/trust.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - exact-host MPTA import contracts
 ENTER-USERLAND
 ." [akashic] loading exact-host MPTA import contracts" CR
-REQUIRE agent/providers/codex/trust.f
+REQUIRE tui/applets/agent/providers/codex/trust.f
 
 VARIABLE _tm-fails
 VARIABLE _tm-checks
@@ -4199,24 +4199,24 @@ _mt-run
     ),
     "openai-codec": Profile(
         roots=(
-            "agent/auth/api-key.f",
-            "agent/providers/openai/request-codec.f",
-            "agent/providers/openai/event-codec.f",
-            "agent/providers/openai/responses.f",
-            "agent/runtime.f",
+            "tui/applets/agent/auth/api-key.f",
+            "tui/applets/agent/providers/openai/request-codec.f",
+            "tui/applets/agent/providers/openai/event-codec.f",
+            "tui/applets/agent/providers/openai/responses.f",
+            "tui/applets/agent/runtime.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - native OpenAI Responses codec tests
 ENTER-USERLAND
 ." [akashic] loading OpenAI Responses codecs" CR
-REQUIRE agent/providers/openai/config.f
-REQUIRE agent/auth/api-key.f
-REQUIRE agent/tool-gateway.f
+REQUIRE tui/applets/agent/providers/openai/config.f
+REQUIRE tui/applets/agent/auth/api-key.f
+REQUIRE tui/applets/agent/tool-gateway.f
 REQUIRE interop/codecs/json-schema.f
-REQUIRE agent/providers/openai/request-codec.f
-REQUIRE agent/providers/openai/event-codec.f
-REQUIRE agent/providers/openai/responses.f
-REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/providers/openai/request-codec.f
+REQUIRE tui/applets/agent/providers/openai/event-codec.f
+REQUIRE tui/applets/agent/providers/openai/responses.f
+REQUIRE tui/applets/agent/runtime.f
 
 VARIABLE _oc-fails
 VARIABLE _oc-checks
@@ -4594,18 +4594,18 @@ _oc-run
     "openai-provider": Profile(
         roots=(
             "security/credential.f",
-            "agent/storage/vfs-conversation.f",
-            "agent/providers/openai/responses.f",
-            "agent/runtime.f",
+            "tui/applets/agent/storage/vfs-conversation.f",
+            "tui/applets/agent/providers/openai/responses.f",
+            "tui/applets/agent/runtime.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - native OpenAI provider fixture
 ENTER-USERLAND
 ." [akashic] loading OpenAI provider fixture" CR
 REQUIRE security/credential.f
-REQUIRE agent/storage/vfs-conversation.f
-REQUIRE agent/providers/openai/responses.f
-REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/storage/vfs-conversation.f
+REQUIRE tui/applets/agent/providers/openai/responses.f
+REQUIRE tui/applets/agent/runtime.f
 
 VARIABLE _op-fails
 VARIABLE _op-checks
@@ -5309,16 +5309,16 @@ _op-run
     ),
     "openai-source": Profile(
         roots=(
-            "agent/providers/openai/source.f",
-            "agent/runtime.f",
+            "tui/applets/agent/providers/openai/source.f",
+            "tui/applets/agent/runtime.f",
             "utils/string.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - owned OpenAI provider source
 ENTER-USERLAND
 ." [akashic] loading OpenAI provider source" CR
-REQUIRE agent/providers/openai/source.f
-REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/providers/openai/source.f
+REQUIRE tui/applets/agent/runtime.f
 REQUIRE utils/string.f
 
 VARIABLE _om-fails
@@ -5412,12 +5412,12 @@ _om-run
         stable_markers=("OPENAI SOURCE PASS",),
     ),
     "codex-auth": Profile(
-        roots=("agent/providers/codex/auth.f",),
+        roots=("tui/applets/agent/providers/codex/auth.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - native Codex device authentication fixture
 ENTER-USERLAND
 ." [akashic] loading Codex device authentication" CR
-REQUIRE agent/providers/codex/auth.f
+REQUIRE tui/applets/agent/providers/codex/auth.f
 
 VARIABLE _ca-fails
 VARIABLE _ca-checks
@@ -5683,12 +5683,12 @@ _ca-run
         stable_markers=("CODEX AUTH PASS",),
     ),
     "codex-catalog": Profile(
-        roots=("agent/providers/codex/model-catalog.f",),
+        roots=("tui/applets/agent/providers/codex/model-catalog.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - native Codex model catalog fixture
 ENTER-USERLAND
 ." [akashic] loading Codex model catalog" CR
-REQUIRE agent/providers/codex/model-catalog.f
+REQUIRE tui/applets/agent/providers/codex/model-catalog.f
 
 VARIABLE _cc-fails
 VARIABLE _cc-checks
@@ -6037,17 +6037,17 @@ _cc-run
     ),
     "codex-source": Profile(
         roots=(
-            "agent/providers/codex/source.f",
-            "agent/providers/codex/trust.f",
-            "agent/runtime.f",
+            "tui/applets/agent/providers/codex/source.f",
+            "tui/applets/agent/providers/codex/trust.f",
+            "tui/applets/agent/runtime.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - owned Codex provider source
 ENTER-USERLAND
 ." [akashic] loading Codex provider source" CR
-REQUIRE agent/providers/codex/source.f
-REQUIRE agent/providers/codex/trust.f
-REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/providers/codex/source.f
+REQUIRE tui/applets/agent/providers/codex/trust.f
+REQUIRE tui/applets/agent/runtime.f
 
 VARIABLE _cm-fails
 VARIABLE _cm-checks
@@ -7762,20 +7762,22 @@ _jt-run
     ),
     "agent": Profile(
         roots=(
-            "agent/event.f",
-            "agent/provider.f",
-            "agent/conversation.f",
-            "agent/runtime.f",
-            "agent/providers/offline.f",
-            "agent/providers/devtools/scripted.f",
+            "tui/applets/agent/event.f",
+            "tui/applets/agent/provider.f",
+            "tui/applets/agent/conversation.f",
+            "tui/applets/agent/runtime.f",
+            "tui/applets/agent/providers/offline.f",
+            "tui/applets/agent/providers/devtools/scripted.f",
+            "tui/applets/desk/agent-access-policy.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - provider-neutral agent runtime
 ENTER-USERLAND
 ." [akashic] loading agent runtime" CR
-REQUIRE agent/providers/offline.f
-REQUIRE agent/providers/devtools/scripted.f
-REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/providers/offline.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
+REQUIRE tui/applets/agent/runtime.f
+REQUIRE tui/applets/desk/agent-access-policy.f
 
 VARIABLE _at-fails
 VARIABLE _at-check
@@ -8123,7 +8125,9 @@ CREATE _at-store AGENT-CONVERSATION-STORE-SIZE ALLOT
     AAP-PRESET-CHAT-ONLY _at-runtime @ ARUNTIME-ACCESS-PRESET!
     AAP-S-UNAVAILABLE = _at-assert
     _at-runtime @ ARUNTIME-ACCESS-PROFILE 0= _at-assert
-    AAP-PRESET-CHAT-ONLY _at-runtime @ ARUNTIME.ACCESS-PROFILE AAP-PRESET!
+    ['] DAP-RUNTIME-POLICY ['] DAP-RUNTIME-VALID? 0 _at-runtime @
+        ARUNTIME-ACCESS-POLICY! AAP-S-OK = _at-assert
+    AAP-PRESET-CHAT-ONLY _at-runtime @ ARUNTIME.ACCESS-PROFILE DAP-PRESET!
         AAP-S-OK = _at-assert
     _at-history-contract
     _at-unscoped
@@ -8251,7 +8255,7 @@ _at-run
             "interop/authority.f",
             "interop/practice-turn.f",
             "interop/request-bus.f",
-            "agent/mandate-run.f",
+            "tui/applets/agent/mandate-run.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - Practice authority and Turn contracts
@@ -8266,7 +8270,7 @@ REQUIRE interop/capability-facet.f
 REQUIRE interop/authority.f
 REQUIRE interop/practice-turn.f
 REQUIRE interop/request-bus.f
-REQUIRE agent/mandate-run.f
+REQUIRE tui/applets/agent/mandate-run.f
 
 VARIABLE _pc-fails
 VARIABLE _pc-checks
@@ -9856,7 +9860,7 @@ _ct-run
             "tui/applets/agent/agent.f",
             "tui/applets/soundlab/soundlab.f",
             "tui/applets/streams/streams.f",
-            "agent/providers/devtools/scripted.f",
+            "tui/applets/agent/providers/devtools/scripted.f",
         ),
         resources=(
             "tui/applets/desk/desk.toml",
@@ -9881,7 +9885,7 @@ REQUIRE tui/applets/grid/grid.f
 REQUIRE tui/applets/agent/agent.f
 REQUIRE tui/applets/soundlab/soundlab.f
 REQUIRE tui/applets/streams/streams.f
-REQUIRE agent/providers/devtools/scripted.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
     DESK-AGENT-SOURCE! ;
@@ -9979,15 +9983,15 @@ THEN
     "agent-widgets": Profile(
         roots=(
             "tui/widgets/prompt.f",
-            "tui/widgets/agent-auth.f",
-            "tui/widgets/agent-settings.f",
+            "tui/applets/agent/widgets/agent-auth.f",
+            "tui/applets/agent/widgets/agent-settings.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - agent account and settings widgets
 ENTER-USERLAND
 REQUIRE tui/widgets/prompt.f
-REQUIRE tui/widgets/agent-auth.f
-REQUIRE tui/widgets/agent-settings.f
+REQUIRE tui/applets/agent/widgets/agent-auth.f
+REQUIRE tui/applets/agent/widgets/agent-settings.f
 
 VARIABLE _aw-fails
 VARIABLE _aw-checks
@@ -10113,14 +10117,14 @@ _aw-run
     "agent-ui": Profile(
         roots=(
             "tui/applets/agent/agent.f",
-            "agent/providers/devtools/scripted.f",
+            "tui/applets/agent/providers/devtools/scripted.f",
         ),
         resources=("tui/applets/agent/agent.uidl",),
         autoexec=r"""\ autoexec.f - standalone Agent applet profile
 ENTER-USERLAND
 ." [akashic] loading Agent applet" CR
-REQUIRE agent/providers/devtools/scripted.f
-REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
+REQUIRE tui/applets/agent/runtime.f
 REQUIRE tui/applets/agent/agent.f
 
 CREATE _aui-state _AG-STATE-SIZE ALLOT
@@ -10193,13 +10197,13 @@ AGENT-RUN
     "agent-auth-ui": Profile(
         roots=(
             "tui/applets/agent/agent.f",
-            "agent/providers/openai/source.f",
+            "tui/applets/agent/providers/openai/source.f",
         ),
         resources=("tui/applets/agent/agent.uidl",),
         autoexec=r"""\ autoexec.f - native provider credential UI
 ENTER-USERLAND
 ." [akashic] loading Agent credential UI" CR
-REQUIRE agent/providers/openai/source.f
+REQUIRE tui/applets/agent/providers/openai/source.f
 REQUIRE tui/applets/agent/agent.f
 : _boot-openai-source  ( -- )
     OPENAI-SOURCE-NEW
@@ -10217,13 +10221,13 @@ AGENT-RUN
     "agent-device-ui": Profile(
         roots=(
             "tui/applets/agent/agent.f",
-            "agent/providers/devtools/device-flow.f",
+            "tui/applets/agent/providers/devtools/device-flow.f",
         ),
         resources=("tui/applets/agent/agent.uidl",),
         autoexec=r"""\ autoexec.f - native device-flow and model-settings UI
 ENTER-USERLAND
 ." [akashic] loading Agent device-flow UI" CR
-REQUIRE agent/providers/devtools/device-flow.f
+REQUIRE tui/applets/agent/providers/devtools/device-flow.f
 REQUIRE tui/applets/agent/agent.f
 : _boot-device-source  ( -- )
     DEVFLOW-SOURCE-NEW
@@ -10766,13 +10770,13 @@ _pc-run
     "pad-resource-contracts": Profile(
         roots=(
             "tui/applets/pad/pad.f",
-            "daybook/shared-document.f",
+            "tui/applets/daybook/shared-document.f",
         ),
         resources=(),
         autoexec=r"""\ autoexec.f - Pad semantic Daybook lens contracts
 ENTER-USERLAND
 REQUIRE tui/applets/pad/pad.f
-REQUIRE daybook/shared-document.f
+REQUIRE tui/applets/daybook/shared-document.f
 
 VARIABLE _pr-fails VARIABLE _pr-checks VARIABLE _pr-depth
 VARIABLE _pr-call-depth VARIABLE _pr-status
@@ -17764,8 +17768,9 @@ PROFILES["agent-security"] = Profile(
     autoexec=r"""\ autoexec.f - Agent authority and lifecycle hardening
 ENTER-USERLAND
 ." [akashic] loading Agent security contracts" CR
-REQUIRE agent/providers/devtools/scripted.f
-REQUIRE agent/runtime.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
+REQUIRE tui/applets/agent/runtime.f
+REQUIRE tui/applets/desk/agent-access-policy.f
 
 VARIABLE _ahs-fails VARIABLE _ahs-checks VARIABLE _ahs-depth
 VARIABLE _ahs-source VARIABLE _ahs-provider VARIABLE _ahs-runtime
@@ -18449,6 +18454,8 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
     _ahs-source @ APSOURCE-PROVIDER-NEW
         DUP 0= _ahs-assert DROP _ahs-provider !
     _ahs-provider @ ARUNTIME-NEW DUP 0= _ahs-assert DROP _ahs-runtime !
+    ['] DAP-RUNTIME-POLICY ['] DAP-RUNTIME-VALID? 0 _ahs-runtime @
+        ARUNTIME-ACCESS-POLICY! AAP-S-OK = _ahs-assert
     _ahs-store _ahs-runtime @ ARUNTIME-CONVERSATION-STORE!
         ACSTORE-S-OK = _ahs-assert
     CREG-NEW DUP 0= _ahs-assert DROP _ahs-reg !
@@ -18506,7 +18513,35 @@ _ahs-run
     linked=True,
 )
 
-# Same production-shaped image as desktop, with a focused agent/interop
+PROFILES["agent-provider-ui-commands"] = Profile(
+    roots=(
+        "tui/applets/agent/agent.f",
+        "tui/applets/desk/agent-access-policy.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - L7 Agent action and Desk policy contracts
+ENTER-USERLAND
+." [akashic] loading Agent provider UI command contracts" CR
+REQUIRE tui/applets/agent/agent.f
+REQUIRE tui/applets/desk/agent-access-policy.f
+REQUIRE local_testing/l7-agent-actions.f
+""",
+    ready_markers=("L7 AGENT ACTIONS PASS",),
+    stable_markers=("L7 AGENT ACTIONS PASS",),
+    failure_markers=("L7 AGENT ACTIONS FAIL", "L7 AGENT ASSERT"),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/l7-agent-actions.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "l7-agent-actions.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+# Same production-shaped image as desktop, with a focused Agent/interop
 # journey instead of the full applet regression tour.
 PROFILES["desktop-agent"] = PROFILES["desktop"]
 PROFILES["desktop-resource"] = PROFILES["desktop"]
@@ -18793,15 +18828,17 @@ _aac-run
 
 PROFILES["agent-access"] = Profile(
     roots=(
-        "agent/access-profile.f",
-        "agent/tool-gateway.f",
+        "tui/applets/agent/access-profile.f",
+        "tui/applets/agent/tool-gateway.f",
+        "tui/applets/desk/agent-access-policy.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - access preset and exact target-pin contracts
 ENTER-USERLAND
 ." [akashic] loading Agent access contracts" CR
-REQUIRE agent/access-profile.f
-REQUIRE agent/tool-gateway.f
+REQUIRE tui/applets/agent/access-profile.f
+REQUIRE tui/applets/agent/tool-gateway.f
+REQUIRE tui/applets/desk/agent-access-policy.f
 
 VARIABLE _ac-fails VARIABLE _ac-checks VARIABLE _ac-depth
 VARIABLE _ac-reg VARIABLE _ac-foreign VARIABLE _ac-legit
@@ -18832,8 +18869,9 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     SWAP AAP.TOKEN-BUDGET @ 0= AND ;
 
 : _ac-presets  ( -- )
-    AAP-PRESET-CHAT-ONLY _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    AAP-PRESET-CHAT-ONLY _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
     _ac-profile AAP-VALID? _ac-assert
+    _ac-profile DAP-PROFILE-VALID? _ac-assert
     _ac-profile AAP-ID$ S" desk.chat-only" STR-STR= _ac-assert
     _ac-profile AAP-LABEL$ S" Chat only" STR-STR= _ac-assert
     _ac-profile AAP.FLAGS @ AAP-F-CHAT-HISTORY = _ac-assert
@@ -18843,8 +18881,9 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     _ac-profile AAP.TOOL-BUDGET @ 0= _ac-assert
     _ac-profile AAP.DISCLOSURE-BUDGET @ 8192 = _ac-assert
 
-    AAP-PRESET-PRACTICE-READ _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    AAP-PRESET-PRACTICE-READ _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
     _ac-profile AAP-VALID? _ac-assert
+    _ac-profile DAP-PROFILE-VALID? _ac-assert
     _ac-profile AAP-ID$ S" desk.practice-read" STR-STR= _ac-assert
     _ac-profile AAP-LABEL$ S" Practice read only" STR-STR= _ac-assert
     _ac-profile AAP.FLAGS @
@@ -18855,8 +18894,9 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     _ac-profile AAP.TOOL-BUDGET @ 4 = _ac-assert
     _ac-profile AAP.DISCLOSURE-BUDGET @ 32768 = _ac-assert
 
-    AAP-PRESET-PRACTICE-ASSIST _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    AAP-PRESET-PRACTICE-ASSIST _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
     _ac-profile AAP-VALID? _ac-assert
+    _ac-profile DAP-PROFILE-VALID? _ac-assert
     _ac-profile AAP-ID$ S" desk.practice-assist" STR-STR= _ac-assert
     _ac-profile AAP-LABEL$ S" Practice assist" STR-STR= _ac-assert
     _ac-profile AAP.FLAGS @ AAP-F-CHAT-HISTORY
@@ -18872,7 +18912,7 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
 
     \ A structurally coherent mutation must not smuggle Assist authority
     \ under the trusted Chat-only preset identity.
-    AAP-PRESET-CHAT-ONLY _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
+    AAP-PRESET-CHAT-ONLY _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
     AAP-F-CHAT-HISTORY AAP-F-CONTEXT-OBSERVE OR
         AAP-F-REVIEW-CHANGES OR _ac-profile AAP.FLAGS !
     CAP-E-OBSERVE CAP-E-NAVIGATE OR CAP-E-MUTATE OR CAP-E-PERSIST OR
@@ -18880,12 +18920,14 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     MAND-D-COMMIT _ac-profile AAP.DISPOSITION !
     8 _ac-profile AAP.TOOL-BUDGET !
     49152 _ac-profile AAP.DISCLOSURE-BUDGET !
-    _ac-profile AAP-VALID? 0= _ac-assert
+    _ac-profile AAP-VALID? _ac-assert
+    _ac-profile DAP-PROFILE-VALID? 0= _ac-assert
 
     \ Invalid setter input preserves the last valid profile.
-    AAP-PRESET-PRACTICE-READ _ac-profile AAP-PRESET! AAP-S-OK = _ac-assert
-    99 _ac-profile AAP-PRESET! AAP-S-INVALID = _ac-assert
+    AAP-PRESET-PRACTICE-READ _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
+    99 _ac-profile DAP-PRESET! AAP-S-INVALID = _ac-assert
     _ac-profile AAP-VALID? _ac-assert
+    _ac-profile DAP-PROFILE-VALID? _ac-assert
     _ac-profile AAP-ID$ S" desk.practice-read" STR-STR= _ac-assert ;
 
 : _ac-collision  ( -- )
@@ -19511,8 +19553,8 @@ PROFILES["desktop-fallback"] = Profile(
 )
 PROFILES["desktop-codex"] = Profile(
     roots=tuple(
-        "agent/providers/codex/source.f"
-        if root == "agent/providers/devtools/scripted.f"
+        "tui/applets/agent/providers/codex/source.f"
+        if root == "tui/applets/agent/providers/devtools/scripted.f"
         else root
         for root in PROFILES["desktop"].roots
     ),
@@ -19520,8 +19562,8 @@ PROFILES["desktop-codex"] = Profile(
     autoexec=(
         PROFILES["desktop"].autoexec
         .replace(
-            "REQUIRE agent/providers/devtools/scripted.f",
-            "REQUIRE agent/providers/codex/source.f",
+            "REQUIRE tui/applets/agent/providers/devtools/scripted.f",
+            "REQUIRE tui/applets/agent/providers/codex/source.f",
         )
         .replace(
             "SCRIPTED-SOURCE-NEW 0<> ABORT\" scripted source allocation failed\"",
@@ -19553,18 +19595,18 @@ PROFILES["desktop-codex-live"] = Profile(
 )
 PROFILES["codex-live-tls"] = Profile(
     roots=(
-        "agent/providers/codex/auth.f",
-        "agent/providers/codex/config.f",
-        "agent/providers/codex/trust.f",
+        "tui/applets/agent/providers/codex/auth.f",
+        "tui/applets/agent/providers/codex/config.f",
+        "tui/applets/agent/providers/codex/trust.f",
         "net/transports/kdos-tls.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - credential-free native Codex TLS gate
 ENTER-USERLAND
 ." [akashic] loading Codex live TLS gate" CR
-REQUIRE agent/providers/codex/auth.f
-REQUIRE agent/providers/codex/config.f
-REQUIRE agent/providers/codex/trust.f
+REQUIRE tui/applets/agent/providers/codex/auth.f
+REQUIRE tui/applets/agent/providers/codex/config.f
+REQUIRE tui/applets/agent/providers/codex/trust.f
 REQUIRE net/transports/kdos-tls.f
 
 CREATE _clt-auth KDOSTLS-SIZE ALLOT
@@ -19619,16 +19661,16 @@ CODEX-BACKEND-HOST _clt-backend _clt-connect
 )
 PROFILES["codex-live-auth"] = Profile(
     roots=(
-        "agent/providers/codex/auth.f",
-        "agent/providers/codex/trust.f",
+        "tui/applets/agent/providers/codex/auth.f",
+        "tui/applets/agent/providers/codex/trust.f",
         "net/transports/kdos-tls.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - native Codex device-flow diagnostic
 ENTER-USERLAND
 ." [akashic] loading Codex live authentication probe" CR
-REQUIRE agent/providers/codex/auth.f
-REQUIRE agent/providers/codex/trust.f
+REQUIRE tui/applets/agent/providers/codex/auth.f
+REQUIRE tui/applets/agent/providers/codex/trust.f
 REQUIRE net/transports/kdos-tls.f
 
 CREATE _cla-tls KDOSTLS-SIZE ALLOT
@@ -27152,7 +27194,9 @@ CREATE _dst-daybook-owner 8 ALLOT
     DESK-COMP-DESC CINST-NEW DUP 0= _dst-assert DROP _dst-desk !
     _dst-desk @ _DESK-USE-STATE
     _dst-runtime AGENT-RUNTIME-SIZE 0 FILL
-    AAP-PRESET-CHAT-ONLY _dst-runtime ARUNTIME.ACCESS-PROFILE AAP-PRESET!
+    ['] DAP-RUNTIME-POLICY ['] DAP-RUNTIME-VALID? 0 _dst-runtime
+        ARUNTIME-ACCESS-POLICY! AAP-S-OK = _dst-assert
+    AAP-PRESET-CHAT-ONLY _dst-runtime ARUNTIME.ACCESS-PROFILE DAP-PRESET!
         AAP-S-OK = _dst-assert
     _dst-registry _DESK-REGISTRY !
     _dst-rreg _DESK-RREG !

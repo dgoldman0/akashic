@@ -4,52 +4,22 @@
     "name": "post-gate4-refactor-baseline-20260720",
     "commit": "ce340fc8bef0b2c1331339f6ceaf4c02d4c020f5",
     "expected": {
-      "module_count": 386,
-      "resolved_require_occurrence_count": 1308,
-      "unique_resolved_edge_count": 1308,
+      "module_count": 388,
+      "resolved_require_occurrence_count": 1307,
+      "unique_resolved_edge_count": 1307,
       "unresolved_require_count": 78,
       "cycle_count": 0,
-      "layer_violation_count": 7,
-      "placement_debt_count": 39,
+      "layer_violation_count": 1,
+      "placement_debt_count": 5,
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "d5783340b00f35a60d8adfa1b34052bac03bcafa34e29662b689d0c8b65fa7e5",
-      "state_sha256": "3d62627065e838443a98b3fa17951fa2482d7a5a7306ceb0dbf84e542f6a2089",
-      "placement_sha256": "12e80168718dceb99dc12f99af627a22df4fd15ce8356c0b4078cd2e0d129870",
+      "graph_sha256": "c9886aa3538e3b72468a2b223dba034b647981bb217c8e21e013a5f1e50d9f2e",
+      "state_sha256": "6e3b6b6fc6f69c12cef9f8be203b970ad7e8dc58f8114e0390658386d8ad713a",
+      "placement_sha256": "c540ef260753879f91579cc1480a47b4e9ae50f3d4dd335fa0a07378fb50745c",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
       "layer_violations": [
-        [
-          "applet-imports-sibling",
-          "tui/applets/desk/desk.f",
-          "agent/access-profile.f"
-        ],
-        [
-          "applet-imports-sibling",
-          "tui/applets/desk/desk.f",
-          "agent/mandate-run.f"
-        ],
-        [
-          "applet-imports-sibling",
-          "tui/applets/desk/desk.f",
-          "agent/providers/offline.f"
-        ],
-        [
-          "applet-imports-sibling",
-          "tui/applets/desk/desk.f",
-          "agent/runtime.f"
-        ],
-        [
-          "applet-imports-sibling",
-          "tui/applets/desk/desk.f",
-          "agent/storage/vfs-conversation.f"
-        ],
-        [
-          "applet-imports-sibling",
-          "tui/applets/desk/desk.f",
-          "daybook/shared-document.f"
-        ],
         [
           "shared-host-hardcodes-vfs-driver",
           "tui/app-shell.f",
@@ -95,33 +65,7 @@
     "note": "Scale and architecture qualification use the generic VFS contract; ext4 is an optional integration backend."
   },
   "ownership": {
-    "exact": [
-      {
-        "module": "tui/widgets/agent-auth.f",
-        "class": "applet",
-        "owner": "agent",
-        "placement": "misplaced-applet",
-        "target": "tui/applets/agent/widgets/agent-auth.f"
-      },
-      {
-        "module": "tui/widgets/agent-settings.f",
-        "class": "applet",
-        "owner": "agent",
-        "placement": "misplaced-applet",
-        "target": "tui/applets/agent/widgets/agent-settings.f"
-      },
-      {
-        "module": "agent/access-profile.f",
-        "class": "applet",
-        "owner": "agent",
-        "placement": "split-required",
-        "target": "tui/applets/agent/access-profile.f",
-        "split_targets": [
-          "tui/applets/agent/access-profile.f",
-          "tui/applets/desk/agent-access-policy.f"
-        ]
-      }
-    ],
+    "exact": [],
     "prefixes": [
       {
         "prefix": "game/",
@@ -145,20 +89,6 @@
         "owner": "library",
         "placement": "misplaced-applet",
         "target_prefix": "tui/applets/library/"
-      },
-      {
-        "prefix": "daybook/",
-        "class": "applet",
-        "owner": "daybook",
-        "placement": "misplaced-applet",
-        "target_prefix": "tui/applets/daybook/"
-      },
-      {
-        "prefix": "agent/",
-        "class": "applet",
-        "owner": "agent",
-        "placement": "misplaced-applet",
-        "target_prefix": "tui/applets/agent/"
       }
     ],
     "independent_prefixes": [
@@ -190,6 +120,18 @@
       "web/"
     ]
   },
+  "public_applet_seams": [
+    {
+      "from": "tui/applets/desk/agent-access-policy.f",
+      "to": "tui/applets/agent/service.f",
+      "purpose": "Desk-owned access policy composes the public Agent service without importing Agent internals."
+    },
+    {
+      "from": "tui/applets/desk/desk.f",
+      "to": "tui/applets/daybook/shared-document.f",
+      "purpose": "Desk product composition borrows Daybook's public resource-owner service."
+    }
+  ],
   "dependency_constraints": [
     {
       "rule": "shared-host-hardcodes-vfs-driver",
@@ -406,7 +348,7 @@
     },
     {
       "id": "agent.conversation-snapshot",
-      "module": "agent/storage/thread-codec.f",
+      "module": "tui/applets/agent/storage/thread-codec.f",
       "operation": "conversation encode and decode",
       "current_structure": "bounded complete conversation snapshot",
       "current_complexity": "O(messages + context items + content bytes)",
@@ -609,7 +551,7 @@
     },
     {
       "id": "daybook.resource-session-leases",
-      "module": "daybook/shared-document.f",
+      "module": "tui/applets/daybook/shared-document.f",
       "symbol": "_SDOC-LEASE-CAP",
       "value": 64,
       "scope": "instance-pool",
@@ -657,7 +599,7 @@
     },
     {
       "id": "agent.messages",
-      "module": "agent/conversation.f",
+      "module": "tui/applets/agent/conversation.f",
       "symbol": "ACONV-MAX-MESSAGES",
       "value": 64,
       "scope": "aggregate-conversation",
@@ -665,7 +607,7 @@
     },
     {
       "id": "agent.snapshot-bytes",
-      "module": "agent/storage/thread-codec.f",
+      "module": "tui/applets/agent/storage/thread-codec.f",
       "symbol": "ATHREAD-MAX-SNAPSHOT",
       "value": 262144,
       "scope": "whole-conversation-buffer",

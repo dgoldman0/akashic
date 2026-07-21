@@ -6,8 +6,8 @@ PROVIDED akashic-tui-agent
 
 REQUIRE ../../widgets/prompt.f
 REQUIRE ../../widgets/dialog.f
-REQUIRE ../../widgets/agent-auth.f
-REQUIRE ../../widgets/agent-settings.f
+REQUIRE widgets/agent-auth.f
+REQUIRE widgets/agent-settings.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../uidl-tui.f
@@ -18,9 +18,7 @@ REQUIRE ../../widget.f
 REQUIRE ../../../text/cell-width.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/endpoint.f
-REQUIRE ../../../agent/runtime.f
-REQUIRE ../../../agent/providers/offline.f
-REQUIRE ../../../agent/storage/vfs-conversation.f
+REQUIRE service.f
 
 512 CONSTANT _AG-PROMPT-CAP
 0 CONSTANT _AG-PRM-ASK
@@ -1238,8 +1236,26 @@ VARIABLE _AG-REVIEW-APPROVED
 
 : _AG-DO-APPROVE ( elem -- ) DROP -1 _AG-RESOLVE-REVIEW ;
 : _AG-DO-DENY    ( elem -- ) DROP 0 _AG-RESOLVE-REVIEW ;
-: _AG-DO-CLEAR   ( elem -- ) DROP _AG-RUNTIME @ ARUNTIME-CLEAR DROP 0 _AG-SCROLL ! _AG-INVALIDATE ;
-: _AG-DO-RECONNECT ( elem -- ) DROP _AG-RUNTIME @ ARUNTIME-RECONNECT DROP _AG-INVALIDATE ;
+
+: _AG-CLEAR-STATUS-TOAST  ( ior -- )
+    IF
+        S" Finish or cancel the active run before clearing" 2200
+    ELSE
+        S" Conversation cleared" 1200
+    THEN
+    ASHELL-TOAST ;
+
+: _AG-RECONNECT-STATUS-TOAST  ( ior -- )
+    IF S" Agent reconnect failed" 1800 ELSE S" Reconnect requested" 1200 THEN
+    ASHELL-TOAST ;
+
+: _AG-DO-CLEAR  ( elem -- )
+    DROP _AG-RUNTIME @ ARUNTIME-CLEAR _AG-CLEAR-STATUS-TOAST
+    0 _AG-SCROLL ! _AG-INVALIDATE ;
+
+: _AG-DO-RECONNECT  ( elem -- )
+    DROP _AG-RUNTIME @ ARUNTIME-RECONNECT _AG-RECONNECT-STATUS-TOAST
+    _AG-INVALIDATE ;
 : _AG-DO-CREDENTIAL ( elem -- ) DROP _AG-SHOW-AUTH-PROMPT ;
 : _AG-DO-ACCOUNT ( elem -- ) DROP _AG-SHOW-ACCOUNT ;
 : _AG-DO-SETTINGS ( elem -- ) DROP _AG-SHOW-SETTINGS ;

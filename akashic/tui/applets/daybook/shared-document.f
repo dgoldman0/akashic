@@ -1,0 +1,824 @@
+\ =====================================================================
+\  shared-document.f - Daybook activation-local text-document owner
+\ =====================================================================
+\  This is the deliberately bounded concrete Daybook resource.  One live
+\  owner instance controls the semantic RID and the canonical VFS backing
+\  path /daybook.md.  Retained consumer sessions may come and go
+\  independently; they attach through the neutral resource contracts and
+\  issue ordinary capability requests.
+\
+\  Capabilities:
+\    resource.snapshot  ( null -- string )
+\    resource.replace   ( string -- bool )
+\    resource.describe  ( null -- closed identity description )
+\
+\  Describe deliberately reports domain_revision=0.  Daybook has durable
+\  bytes but no retained domain-history ledger, so its current activation's
+\  component revision must never be advertised as durable exact evidence.
+\
+\  Replace requires a positive CBR.EXPECT-REV.  The owner rechecks it while
+\  holding its commit guard, immediately before VREPL publication.  A stale
+\  request returns CBUS-S-STALE-REVISION without touching the VFS.  The
+\  handler never calls CINST-TOUCH: request-bus.f advances the instance
+\  revision exactly once after a successful mutating/persisting handler.
+\
+\  This module is trusted-native, activation-local machinery.  It does not
+\  claim sandboxing, durable resource graphs, facets, or Practice storage.
+\ =====================================================================
+
+PROVIDED akashic-interop-shared-document
+
+REQUIRE ../../../interop/request-bus.f
+REQUIRE ../../../interop/resource-contract.f
+REQUIRE ../../../interop/resource-owner-pool.f
+REQUIRE ../../../interop/schema-common.f
+REQUIRE ../../../interop/construction.f
+REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../concurrency/guard.f
+REQUIRE ../../../text/utf8.f
+
+\ =====================================================================
+\  Public status and bounds
+\ =====================================================================
+
+0 CONSTANT SDOC-S-OK
+1 CONSTANT SDOC-S-INVALID
+2 CONSTANT SDOC-S-BUSY
+3 CONSTANT SDOC-S-NOMEM
+4 CONSTANT SDOC-S-RECOVERY
+5 CONSTANT SDOC-S-SOURCE
+6 CONSTANT SDOC-S-REGISTRY
+7 CONSTANT SDOC-S-RESOURCE
+8 CONSTANT SDOC-S-IO
+9 CONSTANT SDOC-S-READONLY
+
+32768 CONSTANT SDOC-MAX-BYTES
+
+1 CONSTANT _SDOC-F-CONFIGURED
+2 CONSTANT _SDOC-F-BLOCKED
+
+0x434F4453 CONSTANT _SDOC-STATE-MAGIC       \ "SDOC"
+
+\ =====================================================================
+\  Owner state
+\ =====================================================================
+\  VFS, Context, and registries are borrowed for the activation lifetime.
+\  RID and path are copied.  VREPL and the bounded snapshot buffer are
+\  owner-private; no consumer session receives either address.
+
+  48 CONSTANT _SDS-MAGIC
+  56 CONSTANT _SDS-FLAGS
+  64 CONSTANT _SDS-VFS
+  72 CONSTANT _SDS-PATH-U
+  80 CONSTANT _SDS-RID                    \ RID-SIZE bytes
+ 112 CONSTANT _SDS-CONTEXT
+ 120 CONSTANT _SDS-RREG
+ 128 CONSTANT _SDS-CREG
+ 136 CONSTANT _SDS-PATH                   \ VREPL path capacity
+ 392 CONSTANT _SDS-REPLACE                \ VREPL-SIZE bytes
+1544 CONSTANT _SDS-IO-U
+1552 CONSTANT _SDS-IO
+1552 SDOC-MAX-BYTES + CONSTANT SDOC-STATE-SIZE
+
+: _SDS.MAGIC    ( state -- a ) _SDS-MAGIC + ;
+: _SDS.FLAGS    ( state -- a ) _SDS-FLAGS + ;
+: _SDS.VFS      ( state -- a ) _SDS-VFS + ;
+: _SDS.PATH-U   ( state -- a ) _SDS-PATH-U + ;
+: _SDS.RID      ( state -- id ) _SDS-RID + ;
+: _SDS.CONTEXT  ( state -- a ) _SDS-CONTEXT + ;
+: _SDS.RREG     ( state -- a ) _SDS-RREG + ;
+: _SDS.CREG     ( state -- a ) _SDS-CREG + ;
+: _SDS.PATH     ( state -- a ) _SDS-PATH + ;
+: _SDS.REPLACE  ( state -- replacement ) _SDS-REPLACE + ;
+: _SDS.IO-U     ( state -- a ) _SDS-IO-U + ;
+: _SDS.IO       ( state -- a ) _SDS-IO + ;
+
+: _SDS-PATH$  ( state -- a u )
+    DUP _SDS.PATH SWAP _SDS.PATH-U @ ;
+
+\ =====================================================================
+\  Static generic capability/component descriptors
+\ =====================================================================
+
+CREATE _SDOC-NULL-SCHEMA   CS-SIZE ALLOT
+CREATE _SDOC-TEXT-SCHEMA   CS-SIZE ALLOT
+CREATE _SDOC-BOOL-SCHEMA   CS-SIZE ALLOT
+
+CREATE SDOC-CAPS 3 CAP-DESC * ALLOT
+: SDOC-CAP-SNAPSHOT  ( -- cap ) SDOC-CAPS ;
+: SDOC-CAP-REPLACE   ( -- cap ) SDOC-CAPS CAP-DESC + ;
+: SDOC-CAP-DESCRIBE  ( -- cap ) SDOC-CAPS CAP-DESC 2 * + ;
+
+CREATE _SDOC-CAP-BUILDER CAPB-SIZE ALLOT
+CREATE _SDOC-DESCRIBE-CONFIG RCON-CAP-CONFIG-SIZE ALLOT
+CREATE _SDOC-DESCRIBE-CAP-WORKSPACE RCON-CAP-WORKSPACE-SIZE ALLOT
+
+CREATE SDOC-COMP-DESC COMP-DESC ALLOT
+
+GUARD _SDOC-GUARD
+VARIABLE _SDOC-LIVE
+0 _SDOC-LIVE !
+
+: _SDOC-STATE-FINI  ( state -- )
+    SDOC-STATE-SIZE 0 FILL ;
+
+: _SDOC-STATE-LOCAL?  ( instance -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CINST-DESC SDOC-COMP-DESC <> IF DROP 0 EXIT THEN
+    CINST-STATE DUP 0= IF DROP 0 EXIT THEN
+    DUP ROMEM.MAGIC @ ROPOOL-MEMBER-MAGIC =
+    OVER ROMEM.FLAGS @ 0= AND
+    OVER _SDS.MAGIC @ _SDOC-STATE-MAGIC = AND
+    OVER _SDS.FLAGS @ _SDOC-F-CONFIGURED AND 0<> AND
+    OVER _SDS.VFS @ 0<> AND
+    OVER _SDS.RID RID-PRESENT? AND
+    OVER _SDS-PATH$ S" /daybook.md" STR-STR= AND
+    SWAP _SDS.REPLACE VREPL-CONFIGURED? AND ;
+
+: _SDOC-STATE-VALID?  ( instance -- flag )
+    DUP _SDOC-STATE-LOCAL? 0= IF DROP 0 EXIT THEN
+    CINST-STATE ROPOOL-MEMBER-VALID? ;
+
+\ =====================================================================
+\  Exception-safe bounded snapshot read
+\ =====================================================================
+
+VARIABLE _SDR-STATE
+VARIABLE _SDR-OLD-VFS
+VARIABLE _SDR-FD
+VARIABLE _SDR-CLEAN-FD
+VARIABLE _SDR-HAVE-OLD
+VARIABLE _SDR-STATUS
+VARIABLE _SDR-CLEAN-FAILED
+
+: _SDOC-READ-CLOSE-CALL  ( -- )
+    _SDR-CLEAN-FD @ VFS-CLOSE ;
+
+: _SDOC-READ-RESTORE-CALL  ( -- )
+    _SDR-OLD-VFS @ VFS-USE ;
+
+: _SDOC-READ-CLEANUP  ( -- failed? )
+    0 _SDR-CLEAN-FAILED !
+    _SDR-FD @ ?DUP IF
+        _SDR-CLEAN-FD ! 0 _SDR-FD !
+        ['] _SDOC-READ-CLOSE-CALL CATCH IF
+            -1 _SDR-CLEAN-FAILED !
+        THEN
+    THEN
+    _SDR-HAVE-OLD @ IF
+        0 _SDR-HAVE-OLD !
+        ['] _SDOC-READ-RESTORE-CALL CATCH IF
+            -1 _SDR-CLEAN-FAILED !
+        THEN
+    THEN
+    _SDR-CLEAN-FAILED @ ;
+
+: _SDOC-READ-BODY  ( -- status )
+    _SDR-STATE @ _SDS-PATH$ VFS-OPEN DUP 0= IF
+        DROP 0 _SDR-STATE @ _SDS.IO-U ! SDOC-S-OK EXIT
+    THEN
+    _SDR-FD !
+    _SDR-FD @ VFS-SIZE DUP 0< IF
+        DROP SDOC-S-IO EXIT
+    THEN
+    DUP SDOC-MAX-BYTES > IF
+        DROP SDOC-S-SOURCE EXIT
+    THEN
+    DUP _SDR-STATE @ _SDS.IO-U !
+    _SDR-STATE @ _SDS.IO SWAP _SDR-FD @ VFS-READ-EXACT
+    IF SDOC-S-IO ELSE SDOC-S-OK THEN ;
+
+: _SDOC-READ-OP  ( -- )
+    VFS-CUR _SDR-OLD-VFS !
+    -1 _SDR-HAVE-OLD !
+    _SDR-STATE @ _SDS.VFS @ VFS-USE
+    _SDOC-READ-BODY _SDR-STATUS ! ;
+
+: _SDOC-READ-TRANSACTION  ( -- status )
+    0 _SDR-FD ! 0 _SDR-HAVE-OLD !
+    SDOC-S-IO _SDR-STATUS !
+    ['] _SDOC-READ-OP CATCH IF SDOC-S-IO _SDR-STATUS ! THEN
+    _SDOC-READ-CLEANUP IF SDOC-S-IO EXIT THEN
+    _SDR-STATUS @ ;
+
+: _SDOC-READ-TRANSACTION-CALL  ( -- status )
+    ['] _SDOC-READ-TRANSACTION VFS-TRANSACTION ;
+
+: _SDOC-READ  ( state -- status )
+    _SDR-STATE !
+    ['] _SDOC-READ-TRANSACTION-CALL CATCH ?DUP IF
+        DROP SDOC-S-IO
+    THEN ;
+
+: _SDOC-CURRENT-TEXT-VALID?  ( state -- flag )
+    DUP _SDS.IO-U @ DUP 0= IF 2DROP -1 EXIT THEN
+    SWAP _SDS.IO SWAP UTF8-VALID? ;
+
+: _SDOC-RECOVERY-OK?  ( vrepl-status -- flag )
+    DUP VREPL-S-OK =
+    OVER VREPL-S-ROLLED-BACK = OR
+    SWAP VREPL-S-COMMITTED-CLEANUP = OR ;
+
+: _SDOC-RECOVER  ( state -- status )
+    _SDS.REPLACE VREPL-RECOVER
+    _SDOC-RECOVERY-OK? IF SDOC-S-OK ELSE SDOC-S-RECOVERY THEN ;
+
+: _SDOC-BLOCKED?  ( state -- flag )
+    _SDS.FLAGS @ _SDOC-F-BLOCKED AND 0<> ;
+
+\ =====================================================================
+\  Capability handlers
+\ =====================================================================
+
+VARIABLE _SDH-REQUEST
+VARIABLE _SDH-INSTANCE
+VARIABLE _SDH-STATE
+VARIABLE _SDH-STATUS
+CREATE _SDHD-REF RREF-SIZE ALLOT
+CREATE _SDHD-VIEW RCON-DESCRIBE-VIEW-SIZE ALLOT
+CREATE _SDHD-WORKSPACE RCON-RESULT-WORKSPACE-SIZE ALLOT
+
+VARIABLE _SDPH-REQUEST
+VARIABLE _SDPH-INSTANCE
+VARIABLE _SDPH-XT
+VARIABLE _SDPH-MEMBER
+VARIABLE _SDPH-STATUS
+VARIABLE _SDPH-THROW
+
+: _SDOC-HANDLER-BODY  ( -- )
+    _SDPH-REQUEST @ _SDPH-INSTANCE @ _SDPH-XT @ EXECUTE
+    _SDPH-STATUS ! ;
+
+: _SDOC-HANDLER-SCOPE  ( request instance handler-xt -- status )
+    _SDPH-XT ! _SDPH-INSTANCE ! _SDPH-REQUEST !
+    _SDPH-REQUEST @ _SDPH-INSTANCE @ ROPOOL-HANDLER-BEGIN 0= IF
+        DROP CBUS-S-INVALID EXIT
+    THEN
+    _SDPH-MEMBER !
+    CBUS-S-FAILED _SDPH-STATUS !
+    ['] _SDOC-HANDLER-BODY CATCH _SDPH-THROW !
+    _SDPH-MEMBER @ ROPOOL-HANDLER-END RACQ-S-OK <> IF
+        _SDPH-THROW @ ?DUP IF THROW THEN
+        CBUS-S-FAILED EXIT
+    THEN
+    _SDPH-THROW @ ?DUP IF THROW THEN
+    _SDPH-STATUS @ ;
+
+: _SDOC-HANDLER-CALL  ( request instance handler-xt -- status )
+    ['] _SDOC-HANDLER-SCOPE _SDOC-GUARD WITH-GUARD ;
+
+: _SDOC-REQUEST-EXACT?  ( -- flag )
+    _SDH-REQUEST @ CBR.RESOURCE-ID RID-PRESENT?
+    _SDH-REQUEST @ CBR.RESOURCE-ID
+        _SDH-STATE @ _SDS.RID RID= AND ;
+
+: _SDOC-EXPECTED-CURRENT?  ( -- flag )
+    _SDH-REQUEST @ CBR.EXPECT-REV @ ?DUP IF
+        _SDH-INSTANCE @ CINST.REVISION @ =
+    ELSE
+        -1
+    THEN ;
+
+: _SDOC-DESCRIBE-NOMEM  ( -- status )
+    _SDH-REQUEST @ CBR.RESULT CV-FREE
+    S" Could not allocate Daybook description" SDOC-S-NOMEM
+        _SDH-REQUEST @ CBR-ERROR!
+    CBUS-S-FAILED ;
+
+: _SDOC-DESCRIBE-HANDLER-LOCKED  ( request instance -- status )
+    _SDH-INSTANCE ! _SDH-REQUEST !
+    _SDH-INSTANCE @ _SDOC-STATE-LOCAL? 0= IF
+        CBUS-S-INVALID EXIT
+    THEN
+    _SDH-INSTANCE @ CINST-STATE _SDH-STATE !
+    _SDOC-REQUEST-EXACT? 0= IF CBUS-S-INVALID EXIT THEN
+    \ Size is current metadata, not durable qualification.  A zero domain
+    \ revision remains the explicit refusal to mint an exact locator.
+    _SDH-STATE @ _SDOC-READ DUP IF
+        S" Daybook description read failed" ROT
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN DROP
+    _SDH-STATE @ _SDOC-CURRENT-TEXT-VALID? 0= IF
+        S" Daybook source is not valid UTF-8" SDOC-S-SOURCE
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN
+    _SDHD-VIEW RCON-DESCRIBE-VIEW-INIT
+    _SDHD-REF RREF-INIT
+    _SDH-STATE @ _SDS.RID _SDHD-REF RREF.ID RID-COPY
+    _SDHD-REF _SDHD-VIEW RCONDV.RESOURCE !
+    0 _SDHD-VIEW RCONDV.DOMAIN-REVISION !
+    S" daybook-document"
+        _SDHD-VIEW RCONDV.KIND-U ! _SDHD-VIEW RCONDV.KIND-A !
+    S" Daybook"
+        _SDHD-VIEW RCONDV.TITLE-U ! _SDHD-VIEW RCONDV.TITLE-A !
+    S" text/markdown"
+        _SDHD-VIEW RCONDV.MEDIA-U ! _SDHD-VIEW RCONDV.MEDIA-A !
+    _SDH-STATE @ _SDOC-BLOCKED? 0=
+    _SDH-STATE @ _SDS.CONTEXT @ CTX-READONLY? 0= AND
+        _SDHD-VIEW RCONDV.MUTABLE !
+    _SDH-STATE @ _SDS.IO-U @ _SDHD-VIEW RCONDV.SIZE !
+    S" org.akashic.daybook"
+        _SDHD-VIEW RCONDV.OWNER-U ! _SDHD-VIEW RCONDV.OWNER-A !
+    _SDHD-VIEW _SDH-REQUEST @ CBR.RESULT _SDHD-WORKSPACE
+        RCON-DESCRIBE-RESULT! RCON-S-OK <> IF
+        _SDOC-DESCRIBE-NOMEM EXIT
+    THEN
+    CBUS-S-OK ;
+
+: _SDOC-DESCRIBE-HANDLER  ( request instance -- status )
+    ['] _SDOC-DESCRIBE-HANDLER-LOCKED _SDOC-HANDLER-CALL ;
+
+: _SDOC-SNAPSHOT-HANDLER-LOCKED  ( request instance -- status )
+    _SDH-INSTANCE ! _SDH-REQUEST !
+    _SDH-INSTANCE @ _SDOC-STATE-LOCAL? 0= IF
+        CBUS-S-INVALID EXIT
+    THEN
+    _SDH-INSTANCE @ CINST-STATE _SDH-STATE !
+    _SDOC-REQUEST-EXACT? 0= IF CBUS-S-INVALID EXIT THEN
+    _SDH-STATE @ _SDOC-BLOCKED? IF
+        S" Document owner requires reactivation" SDOC-S-RECOVERY
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN
+    _SDOC-EXPECTED-CURRENT? 0= IF
+        CBUS-S-STALE-REVISION EXIT
+    THEN
+    _SDH-STATE @ _SDOC-RECOVER IF
+        _SDH-STATE @ _SDS.FLAGS DUP @ _SDOC-F-BLOCKED OR SWAP !
+        S" Document recovery failed" SDOC-S-RECOVERY
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN
+    _SDH-STATE @ _SDOC-READ DUP IF
+        S" Document snapshot failed" ROT _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN DROP
+    _SDH-STATE @ _SDOC-CURRENT-TEXT-VALID? 0= IF
+        S" Document source is not valid UTF-8" SDOC-S-SOURCE
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN
+    _SDH-STATE @ DUP _SDS.IO SWAP _SDS.IO-U @
+        _SDH-REQUEST @ CBR.RESULT CV-STRING! IF
+        S" Could not allocate document snapshot" SDOC-S-NOMEM
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN
+    CBUS-S-OK ;
+
+: _SDOC-SNAPSHOT-HANDLER  ( request instance -- status )
+    ['] _SDOC-SNAPSHOT-HANDLER-LOCKED _SDOC-HANDLER-CALL ;
+
+: _SDOC-REPLACE-HANDLER-LOCKED  ( request instance -- status )
+    _SDH-INSTANCE ! _SDH-REQUEST !
+    _SDH-INSTANCE @ _SDOC-STATE-LOCAL? 0= IF
+        CBUS-S-INVALID EXIT
+    THEN
+    _SDH-INSTANCE @ CINST-STATE _SDH-STATE !
+    _SDOC-REQUEST-EXACT? 0= IF CBUS-S-INVALID EXIT THEN
+    _SDH-STATE @ _SDOC-BLOCKED? IF
+        S" Document owner requires reactivation" SDOC-S-RECOVERY
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-FAILED EXIT
+    THEN
+    _SDH-STATE @ _SDS.CONTEXT @ CTX-READONLY? IF
+        S" Practice is read-only" SDOC-S-READONLY
+            _SDH-REQUEST @ CBR-ERROR!
+        CBUS-S-DENIED EXIT
+    THEN
+    _SDH-REQUEST @ CBR.EXPECT-REV @ 0> 0= IF
+        CBUS-S-INVALID EXIT
+    THEN
+    _SDOC-EXPECTED-CURRENT? 0= IF
+        CBUS-S-STALE-REVISION EXIT
+    THEN
+    _SDH-REQUEST @ CBR.ARGS DUP CV-TYPE@ CV-T-STRING <> IF
+        DROP CBUS-S-INVALID EXIT
+    THEN
+    DUP CV-LEN@ DUP 0< OVER SDOC-MAX-BYTES > OR IF
+        2DROP CBUS-S-INVALID EXIT
+    THEN
+    OVER CV-DATA@ OVER 0> SWAP 0= AND IF
+        2DROP CBUS-S-INVALID EXIT
+    THEN
+    2DROP
+    _SDH-REQUEST @ CBR.ARGS DUP CV-LEN@ IF
+        DUP CV-DATA@ SWAP CV-LEN@ UTF8-VALID? 0= IF
+            CBUS-S-INVALID EXIT
+        THEN
+    ELSE DROP THEN
+    _SDH-REQUEST @ CBR.ARGS DUP CV-DATA@ SWAP CV-LEN@
+        _SDH-STATE @ _SDS.REPLACE VREPL-REPLACE DUP _SDH-STATUS !
+    DUP VREPL-S-OK = SWAP VREPL-S-COMMITTED-CLEANUP = OR IF
+        -1 _SDH-REQUEST @ CBR.RESULT CV-BOOL!
+        CBUS-S-OK EXIT
+    THEN
+    _SDH-STATUS @ VREPL-S-UNCERTAIN =
+    _SDH-STATUS @ VREPL-S-RECOVERY = OR
+    _SDH-STATUS @ VREPL-S-MARKER-CORRUPT = OR IF
+        _SDH-STATE @ _SDS.FLAGS DUP @ _SDOC-F-BLOCKED OR SWAP !
+    THEN
+    S" Document publication failed" _SDH-STATUS @
+        _SDH-REQUEST @ CBR-ERROR!
+    _SDH-STATUS @ VREPL-S-BUSY = IF
+        CBUS-S-BUSY
+    ELSE
+        CBUS-S-FAILED
+    THEN ;
+
+: _SDOC-REPLACE-HANDLER  ( request instance -- status )
+    ['] _SDOC-REPLACE-HANDLER-LOCKED _SDOC-HANDLER-CALL ;
+
+\ =====================================================================
+\  Descriptor initialization
+\ =====================================================================
+
+: _SDOC-BUILD-CHECK  ( status -- )
+    ?DUP IF THROW THEN ;
+
+: _SDOC-DESCRIPTORS-SETUP  ( -- )
+    _SDOC-NULL-SCHEMA CSC-NULL!
+    SDOC-MAX-BYTES _SDOC-TEXT-SCHEMA CSC-UTF8!
+    _SDOC-BOOL-SCHEMA CSC-BOOL!
+
+    _SDOC-CAP-BUILDER CAPB-INIT _SDOC-BUILD-CHECK
+    _SDOC-DESCRIBE-CAP-WORKSPACE RCON-CAP-WORKSPACE-INIT
+        _SDOC-BUILD-CHECK
+    _SDHD-WORKSPACE RCON-RESULT-WORKSPACE-INIT _SDOC-BUILD-CHECK
+
+    _SDOC-CAP-BUILDER CAPB-BEGIN _SDOC-BUILD-CHECK
+    CAP-K-RESOURCE S" resource.snapshot" S" Document snapshot"
+        S" Copy the exact current shared document text"
+        _SDOC-CAP-BUILDER CAPB-META _SDOC-BUILD-CHECK
+    _SDOC-NULL-SCHEMA _SDOC-TEXT-SCHEMA CAP-E-OBSERVE
+    CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR CAP-F-CONTEXT-DEFAULT OR
+        0 CCLASS-OWNER-COMMIT _SDOC-CAP-BUILDER CAPB-CONTRACT
+        _SDOC-BUILD-CHECK
+    ['] _SDOC-SNAPSHOT-HANDLER 0 0 _SDOC-CAP-BUILDER CAPB-CALLBACKS
+        _SDOC-BUILD-CHECK
+    SDOC-CAP-SNAPSHOT _SDOC-CAP-BUILDER CAPB-SEAL _SDOC-BUILD-CHECK
+
+    _SDOC-CAP-BUILDER CAPB-BEGIN _SDOC-BUILD-CHECK
+    CAP-K-COMMAND S" resource.replace" S" Replace document"
+        S" Replace the shared document at one exact expected revision"
+        _SDOC-CAP-BUILDER CAPB-META _SDOC-BUILD-CHECK
+    _SDOC-TEXT-SCHEMA _SDOC-BOOL-SCHEMA
+        CAP-E-MUTATE CAP-E-PERSIST OR CAP-F-NEEDS-TARGET
+        0 CCLASS-OWNER-COMMIT _SDOC-CAP-BUILDER CAPB-CONTRACT
+        _SDOC-BUILD-CHECK
+    ['] _SDOC-REPLACE-HANDLER 0 0 _SDOC-CAP-BUILDER CAPB-CALLBACKS
+        _SDOC-BUILD-CHECK
+    SDOC-CAP-REPLACE _SDOC-CAP-BUILDER CAPB-SEAL _SDOC-BUILD-CHECK
+
+    ['] _SDOC-DESCRIBE-HANDLER
+        CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR CAP-F-CONTEXT-DEFAULT OR
+        _SDOC-DESCRIBE-CONFIG RCON-CAP-CONFIG-INIT _SDOC-BUILD-CHECK
+    S" Describe Daybook resource"
+        _SDOC-DESCRIBE-CONFIG RCONCC.TITLE-U !
+        _SDOC-DESCRIBE-CONFIG RCONCC.TITLE-A !
+    S" Describe identity without claiming durable domain qualification"
+        _SDOC-DESCRIBE-CONFIG RCONCC.DESC-U !
+        _SDOC-DESCRIBE-CONFIG RCONCC.DESC-A !
+    _SDOC-DESCRIBE-CONFIG SDOC-CAP-DESCRIBE
+        _SDOC-DESCRIBE-CAP-WORKSPACE RCON-DESCRIBE-CAP!
+        _SDOC-BUILD-CHECK
+
+    SDOC-COMP-DESC COMP-DESC-INIT
+    S" org.akashic.shared-document-owner"
+        SDOC-COMP-DESC COMP.ID-U ! SDOC-COMP-DESC COMP.ID-A !
+    S" 1.0.0"
+        SDOC-COMP-DESC COMP.VERSION-U ! SDOC-COMP-DESC COMP.VERSION-A !
+    SDOC-STATE-SIZE SDOC-COMP-DESC COMP.STATE-SIZE !
+    ['] _SDOC-STATE-FINI SDOC-COMP-DESC COMP.STATE-FINI-XT !
+    SDOC-CAPS SDOC-COMP-DESC COMP.CAPS-A !
+    3 SDOC-COMP-DESC COMP.CAPS-N ! ;
+
+_SDOC-DESCRIPTORS-SETUP
+
+\ =====================================================================
+\  Activation-local lifecycle
+\ =====================================================================
+
+1  CONSTANT _SDOC-SLOT-CAP
+64 CONSTANT _SDOC-LEASE-CAP
+1  CONSTANT _SDOC-TAG
+
+0x414F4453 CONSTANT _SDOC-OWNER-DATA-MAGIC  \ "SDOA"
+
+ 0 CONSTANT _SDOA-MAGIC
+ 8 CONSTANT _SDOA-VFS
+16 CONSTANT _SDOA-RID                       \ RID-SIZE bytes
+48 CONSTANT _SDOA-CONTEXT
+56 CONSTANT _SDOA-RREG
+64 CONSTANT _SDOA-CREG
+72 CONSTANT _SDOA-INIT-STATUS
+80 CONSTANT _SDOC-OWNER-DATA-SIZE
+
+: _SDOA.MAGIC       ( data -- a ) _SDOA-MAGIC + ;
+: _SDOA.VFS         ( data -- a ) _SDOA-VFS + ;
+: _SDOA.RID         ( data -- rid ) _SDOA-RID + ;
+: _SDOA.CONTEXT     ( data -- a ) _SDOA-CONTEXT + ;
+: _SDOA.RREG        ( data -- a ) _SDOA-RREG + ;
+: _SDOA.CREG        ( data -- a ) _SDOA-CREG + ;
+: _SDOA.INIT-STATUS ( data -- a ) _SDOA-INIT-STATUS + ;
+
+CREATE _SDOC-OWNER-DATA _SDOC-OWNER-DATA-SIZE ALLOT
+CREATE _SDOC-POOL ROPOOL-SIZE ALLOT
+CREATE _SDOC-POOL-CONFIG ROPOOL-CONFIG-SIZE ALLOT
+CREATE _SDOC-SLOTS _SDOC-SLOT-CAP ROPOOL-SLOT-SIZE * ALLOT
+CREATE _SDOC-LEASES _SDOC-LEASE-CAP ROPOOL-LEASE-SIZE * ALLOT
+CREATE _SDOC-ANCHOR-LOCATOR QLOC-SIZE ALLOT
+CREATE _SDOC-ANCHOR-REF RREF-SIZE ALLOT
+CREATE _SDOC-ANCHOR-BIND LBIND-SIZE ALLOT
+CREATE _SDOC-ANCHOR-RESULT RACQ-RESULT-SIZE ALLOT
+CREATE _SDOC-OFFER ROFFER-SIZE ALLOT
+_SDOC-OFFER ROFFER-SIZE 0 FILL
+
+: SDOC-OWNER$  ( -- a u ) S" org.akashic.daybook" ;
+
+: _SDOC-OWNER-DATA-VALID?  ( data -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _SDOA.MAGIC @ _SDOC-OWNER-DATA-MAGIC =
+    OVER _SDOA.VFS @ 0<> AND
+    OVER _SDOA.RID RID-PRESENT? AND
+    OVER _SDOA.CONTEXT @ DUP 0<> SWAP CTX-VALID? AND AND
+    OVER _SDOA.RREG @ DUP 0<> SWAP RREG-VALID? AND AND
+    OVER _SDOA.CREG @ 0<> AND
+    SWAP _SDOA.INIT-STATUS @ DUP SDOC-S-OK >=
+        SWAP SDOC-S-READONLY <= AND AND ;
+
+VARIABLE _SDAO-LOCATOR
+VARIABLE _SDAO-DATA
+VARIABLE _SDAO-TAG
+VARIABLE _SDAO-INSTANCE
+VARIABLE _SDAO-STATE
+
+: _SDOC-ADMIT  ( locator owner-data -- tag status )
+    _SDAO-DATA ! _SDAO-LOCATOR !
+    _SDAO-DATA @ _SDOC-OWNER-DATA-VALID? 0= IF
+        0 RACQ-S-INVALID EXIT
+    THEN
+    _SDAO-LOCATOR @ QLOC.MODE @ QLOC-M-IDENTITY <> IF
+        0 RACQ-S-UNQUALIFIED EXIT
+    THEN
+    _SDAO-LOCATOR @ QLOC.REF RREF.ID _SDAO-DATA @ _SDOA.RID
+        RID= 0= IF 0 RACQ-S-RID-MISMATCH EXIT THEN
+    _SDOC-TAG RACQ-S-OK ;
+
+: _SDOC-DESCRIPTOR  ( tag owner-data -- descriptor | 0 )
+    SWAP _SDOC-TAG = SWAP _SDOC-OWNER-DATA-VALID? AND
+    IF SDOC-COMP-DESC ELSE 0 THEN ;
+
+: _SDOC-STATE-FAIL  ( daybook-status -- racq-status )
+    _SDAO-DATA @ _SDOA.INIT-STATUS !
+    RACQ-S-UNAVAILABLE ;
+
+: _SDOC-STATE-INIT  ( locator tag instance owner-data -- status )
+    _SDAO-DATA ! _SDAO-INSTANCE ! _SDAO-TAG ! _SDAO-LOCATOR !
+    _SDAO-DATA @ _SDOC-OWNER-DATA-VALID? 0= IF RACQ-S-INVALID EXIT THEN
+    _SDAO-TAG @ _SDOC-TAG <> IF RACQ-S-UNQUALIFIED EXIT THEN
+    _SDAO-LOCATOR @ QLOC.REF RREF.ID _SDAO-DATA @ _SDOA.RID
+        RID= 0= IF RACQ-S-RID-MISMATCH EXIT THEN
+    _SDAO-INSTANCE @ CINST-DESC SDOC-COMP-DESC <> IF
+        RACQ-S-UNQUALIFIED EXIT
+    THEN
+    _SDAO-INSTANCE @ CINST-STATE DUP _SDAO-STATE !
+    ROPOOL-MEMBER-SIZE +
+        SDOC-STATE-SIZE ROPOOL-MEMBER-SIZE - 0 FILL
+    _SDOC-STATE-MAGIC _SDAO-STATE @ _SDS.MAGIC !
+    _SDAO-DATA @ _SDOA.VFS @ _SDAO-STATE @ _SDS.VFS !
+    _SDAO-DATA @ _SDOA.RID _SDAO-STATE @ _SDS.RID RID-COPY
+    _SDAO-DATA @ _SDOA.CONTEXT @ _SDAO-STATE @ _SDS.CONTEXT !
+    _SDAO-DATA @ _SDOA.RREG @ _SDAO-STATE @ _SDS.RREG !
+    _SDAO-DATA @ _SDOA.CREG @ _SDAO-STATE @ _SDS.CREG !
+    S" /daybook.md" DUP _SDAO-STATE @ _SDS.PATH-U !
+        _SDAO-STATE @ _SDS.PATH SWAP CMOVE
+    _SDAO-DATA @ _SDOA.VFS @ _SDAO-STATE @ _SDS.REPLACE VREPL-INIT
+        IF SDOC-S-INVALID _SDOC-STATE-FAIL EXIT THEN
+    S" /daybook.md" _SDAO-STATE @ _SDS.REPLACE VREPL-DERIVE-PATHS!
+        IF SDOC-S-INVALID _SDOC-STATE-FAIL EXIT THEN
+    _SDOC-F-CONFIGURED _SDAO-STATE @ _SDS.FLAGS !
+    _SDAO-STATE @ _SDOC-RECOVER DUP IF _SDOC-STATE-FAIL EXIT THEN DROP
+    _SDAO-STATE @ _SDOC-READ DUP IF _SDOC-STATE-FAIL EXIT THEN DROP
+    _SDAO-STATE @ _SDOC-CURRENT-TEXT-VALID? 0= IF
+        SDOC-S-SOURCE _SDOC-STATE-FAIL EXIT
+    THEN
+    SDOC-S-OK _SDAO-DATA @ _SDOA.INIT-STATUS !
+    RACQ-S-OK ;
+
+VARIABLE _SDA-VFS
+VARIABLE _SDA-RID
+VARIABLE _SDA-CONTEXT
+VARIABLE _SDA-RREG
+VARIABLE _SDA-CREG
+VARIABLE _SDA-INSTANCE
+VARIABLE _SDA-STATUS
+
+: _SDOC-POOL-RELEASE  ( -- status )
+    _SDOC-ANCHOR-RESULT RACQ.RESULT-TOKEN RACQ-TOKEN-ACTIVE? IF
+        _SDOC-ANCHOR-BIND _SDOC-ANCHOR-RESULT RACQ-DETACH
+        DUP RACQ-S-OK <> IF EXIT THEN DROP
+        _SDOC-OFFER ROFFER-SIZE 0 FILL
+    THEN
+    _SDOC-POOL ROPOOL-VALID? IF
+        _SDOC-POOL ROPOOL-FINI DUP RACQ-S-OK <> IF EXIT THEN DROP
+    THEN
+    RACQ-S-OK ;
+
+: _SDOC-ACTIVATE-CLEAR  ( -- )
+    _SDOC-OFFER ROFFER-SIZE 0 FILL
+    _SDOC-OWNER-DATA _SDOC-OWNER-DATA-SIZE 0 FILL
+    _SDOC-ANCHOR-LOCATOR QLOC-INIT
+    _SDOC-ANCHOR-REF RREF-INIT
+    _SDOC-ANCHOR-BIND LBIND-INIT
+    _SDOC-ANCHOR-RESULT RACQ-RESULT-INIT
+    0 _SDA-INSTANCE ! ;
+
+: _SDOC-ACTIVATE-RELEASE-STATUS  ( -- status )
+    _SDOC-POOL-RELEASE DUP RACQ-S-OK <> IF EXIT THEN DROP
+    _SDOC-ACTIVATE-CLEAR
+    RACQ-S-OK ;
+
+: _SDOC-ACTIVATE-RELEASE  ( -- )
+    _SDOC-ACTIVATE-RELEASE-STATUS DROP ;
+
+: _SDOC-POOL-CONFIGURE  ( -- status )
+    _SDOC-POOL-CONFIG ROPOOL-CONFIG-INIT
+    SDOC-OWNER$
+        _SDOC-POOL-CONFIG ROPC.OWNER-U !
+        _SDOC-POOL-CONFIG ROPC.OWNER-A !
+    _SDOC-OWNER-DATA _SDOC-POOL-CONFIG ROPC.OWNER-DATA !
+    _SDA-CONTEXT @ _SDOC-POOL-CONFIG ROPC.CONTEXT !
+    _SDA-CREG @ _SDOC-POOL-CONFIG ROPC.CREG !
+    _SDA-RREG @ _SDOC-POOL-CONFIG ROPC.RREG !
+    _SDOC-SLOTS _SDOC-POOL-CONFIG ROPC.SLOTS !
+    _SDOC-SLOT-CAP _SDOC-POOL-CONFIG ROPC.SLOT-CAP !
+    _SDOC-LEASES _SDOC-POOL-CONFIG ROPC.LEASES !
+    _SDOC-LEASE-CAP _SDOC-POOL-CONFIG ROPC.LEASE-CAP !
+    ['] _SDOC-ADMIT _SDOC-POOL-CONFIG ROPC.ADMIT-XT !
+    ['] _SDOC-DESCRIPTOR _SDOC-POOL-CONFIG ROPC.DESCRIPTOR-XT !
+    ['] _SDOC-STATE-INIT _SDOC-POOL-CONFIG ROPC.STATE-INIT-XT !
+    _SDOC-POOL-CONFIG _SDOC-POOL ROPOOL-INIT ;
+
+: _SDOC-ACTIVATE-STATUS  ( racq-status -- daybook-status )
+    _SDOC-OWNER-DATA _SDOA.INIT-STATUS @ ?DUP IF NIP EXIT THEN
+    DUP RACQ-S-CAPACITY = IF DROP SDOC-S-NOMEM EXIT THEN
+    DUP RACQ-S-INVALID = IF DROP SDOC-S-INVALID EXIT THEN
+    DROP SDOC-S-RESOURCE ;
+
+: _SDOC-ACTIVATE-LOCKED  ( vfs rid context rreg creg -- instance status )
+    _SDA-CREG ! _SDA-RREG ! _SDA-CONTEXT ! _SDA-RID ! _SDA-VFS !
+    _SDOC-LIVE @ IF 0 SDOC-S-BUSY EXIT THEN
+    \ A failed activation rollback retains its exact token and pool until a
+    \ later activation can retry cleanup; never overwrite those handles.
+    _SDOC-POOL ROPOOL-VALID? IF
+        _SDOC-ACTIVATE-RELEASE
+        _SDOC-POOL ROPOOL-VALID? IF 0 SDOC-S-BUSY EXIT THEN
+    THEN
+    _SDA-VFS @ 0= _SDA-RID @ RID-PRESENT? 0= OR
+    _SDA-CREG @ 0= OR IF 0 SDOC-S-INVALID EXIT THEN
+    _SDA-CONTEXT @ CTX-VALID? 0= IF 0 SDOC-S-INVALID EXIT THEN
+    _SDA-CONTEXT @ CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
+        0 SDOC-S-INVALID EXIT
+    THEN
+    _SDA-RREG @ RREG-VALID? 0= IF 0 SDOC-S-INVALID EXIT THEN
+    _SDA-CONTEXT @ _SDA-RREG @ RREG-CONTEXT? 0= IF
+        0 SDOC-S-INVALID EXIT
+    THEN
+    _SDOC-OWNER-DATA _SDOC-OWNER-DATA-SIZE 0 FILL
+    _SDOC-OWNER-DATA-MAGIC _SDOC-OWNER-DATA _SDOA.MAGIC !
+    _SDA-VFS @ _SDOC-OWNER-DATA _SDOA.VFS !
+    _SDA-RID @ _SDOC-OWNER-DATA _SDOA.RID RID-COPY
+    _SDA-CONTEXT @ _SDOC-OWNER-DATA _SDOA.CONTEXT !
+    _SDA-RREG @ _SDOC-OWNER-DATA _SDOA.RREG !
+    _SDA-CREG @ _SDOC-OWNER-DATA _SDOA.CREG !
+    SDOC-S-OK _SDOC-OWNER-DATA _SDOA.INIT-STATUS !
+    _SDOC-POOL-CONFIGURE DUP RACQ-S-OK <> IF
+        _SDOC-ACTIVATE-STATUS _SDA-STATUS !
+        _SDOC-ACTIVATE-RELEASE 0 _SDA-STATUS @ EXIT
+    THEN DROP
+    _SDOC-ANCHOR-REF RREF-INIT
+    _SDA-RID @ _SDOC-ANCHOR-REF RREF.ID RID-COPY
+    SDOC-OWNER$ _SDOC-ANCHOR-REF _SDOC-ANCHOR-LOCATOR
+        QLOC-IDENTITY! QLOC-S-OK <> IF
+        _SDOC-ACTIVATE-RELEASE 0 SDOC-S-INVALID EXIT
+    THEN
+    _SDOC-ANCHOR-BIND LBIND-INIT
+    _SDOC-ANCHOR-RESULT RACQ-RESULT-INIT
+    _SDOC-ANCHOR-LOCATOR _SDOC-POOL _SDA-CONTEXT @ _SDA-RREG @
+        _SDOC-ANCHOR-BIND _SDOC-ANCHOR-RESULT ROPOOL-ATTACH
+    DUP RACQ-S-OK <> IF
+        _SDOC-ACTIVATE-STATUS _SDA-STATUS !
+        _SDOC-ACTIVATE-RELEASE 0 _SDA-STATUS @ EXIT
+    THEN DROP
+    _SDOC-ANCHOR-RESULT RACQ.RESULT-TOKEN _SDOC-POOL ROPOOL-ANCHOR!
+        RACQ-S-OK <> IF
+        _SDOC-ACTIVATE-RELEASE 0 SDOC-S-RESOURCE EXIT
+    THEN
+    0 _SDOC-POOL ROPOOL-SLOT-INSTANCE@ DUP 0= IF
+        DROP _SDOC-ACTIVATE-RELEASE 0 SDOC-S-RESOURCE EXIT
+    THEN _SDA-INSTANCE !
+    _SDA-RID @ _SDOC-POOL _SDOC-OFFER ROFFER-INIT
+        RACQ-S-OK <> IF
+        _SDOC-ACTIVATE-RELEASE 0 SDOC-S-RESOURCE EXIT
+    THEN
+    _SDA-INSTANCE @ DUP _SDOC-LIVE ! SDOC-S-OK ;
+
+: SDOC-ACTIVATE  ( vfs rid context rreg creg -- instance status )
+    ['] _SDOC-ACTIVATE-LOCKED _SDOC-GUARD WITH-GUARD ;
+
+VARIABLE _SDAC-CONTEXT
+VARIABLE _SDAC-RREG
+VARIABLE _SDAC-CREG
+
+: _SDOC-ACTIVATION-OWNED-BY?  ( -- flag )
+    _SDOC-POOL ROPOOL-CONTEXT@ _SDAC-CONTEXT @ =
+    _SDOC-POOL ROPOOL-RREG@ _SDAC-RREG @ = AND
+    _SDOC-POOL ROPOOL-CREG@ _SDAC-CREG @ = AND ;
+
+: _SDOC-ACTIVATION-CLEANUP-LOCKED  ( context rreg creg -- status )
+    _SDAC-CREG ! _SDAC-RREG ! _SDAC-CONTEXT !
+    _SDOC-POOL ROPOOL-VALID? 0= IF SDOC-S-OK EXIT THEN
+    _SDOC-ACTIVATION-OWNED-BY? 0= IF SDOC-S-OK EXIT THEN
+    _SDOC-LIVE @ IF SDOC-S-BUSY EXIT THEN
+    _SDOC-ACTIVATE-RELEASE-STATUS
+    DUP RACQ-S-OK = IF DROP SDOC-S-OK EXIT THEN
+    RACQ-S-BUSY = IF SDOC-S-BUSY ELSE SDOC-S-RESOURCE THEN ;
+
+: SDOC-ACTIVATION-CLEANUP  ( context rreg creg -- status )
+    \ A failed activation can retain its pool and anchor token after a
+    \ retryable release fault.  The dependency owner calls this before it
+    \ frees the exact Context and registries borrowed by that attempt.
+    ['] _SDOC-ACTIVATION-CLEANUP-LOCKED _SDOC-GUARD WITH-GUARD ;
+
+VARIABLE _SDD-INSTANCE
+
+: _SDOC-DEACTIVATE-LOCKED  ( instance -- status )
+    DUP _SDD-INSTANCE !
+    _SDOC-LIVE @ <> IF SDOC-S-INVALID EXIT THEN
+    _SDOC-POOL-RELEASE
+    DUP RACQ-S-BUSY = IF DROP SDOC-S-BUSY EXIT THEN
+    RACQ-S-OK <> IF SDOC-S-RESOURCE EXIT THEN
+    0 _SDOC-LIVE !
+    _SDOC-OFFER ROFFER-SIZE 0 FILL
+    _SDOC-OWNER-DATA _SDOC-OWNER-DATA-SIZE 0 FILL
+    _SDOC-ANCHOR-LOCATOR QLOC-INIT
+    _SDOC-ANCHOR-REF RREF-INIT
+    _SDOC-ANCHOR-BIND LBIND-INIT
+    _SDOC-ANCHOR-RESULT RACQ-RESULT-INIT
+    SDOC-S-OK ;
+
+: _SDOC-DEACTIVATE-OWNER-GUARDED  ( instance -- status )
+    ['] _SDOC-DEACTIVATE-LOCKED _SDOC-GUARD WITH-GUARD ;
+
+: SDOC-DEACTIVATE  ( instance -- status )
+    \ Dispatch continues to validate output and commit the generic component
+    \ revision after a handler returns.  Reject teardown requested from inside
+    \ that dispatch, and otherwise quiesce all synchronous dispatch before the
+    \ owner can be unpublished or freed.
+    CBUS-DISPATCHING? IF DROP SDOC-S-BUSY EXIT THEN
+    ['] _SDOC-DEACTIVATE-OWNER-GUARDED
+        CBUS-WITH-DISPATCH-QUIESCED ;
+
+VARIABLE _SDF-INSTANCE
+VARIABLE _SDF-REF
+
+: _SDOC-REF-LOCKED  ( instance destination -- status )
+    _SDF-REF ! _SDF-INSTANCE !
+    _SDF-REF @ 0= IF SDOC-S-INVALID EXIT THEN
+    _SDF-REF @ RREF-INIT
+    _SDF-INSTANCE @ _SDOC-LIVE @ <> IF SDOC-S-INVALID EXIT THEN
+    _SDOC-OFFER ROFFER-VALID? 0= IF SDOC-S-INVALID EXIT THEN
+    _SDF-INSTANCE @ _SDOC-STATE-VALID? 0= IF SDOC-S-INVALID EXIT THEN
+    _SDOC-OWNER-DATA _SDOA.RID
+        _SDF-REF @ RREF.ID RID-COPY
+    _SDF-INSTANCE @ CINST.REVISION @ _SDF-REF @ RREF.REVISION !
+    SDOC-S-OK ;
+
+: SDOC-REF  ( instance destination -- status )
+    ['] _SDOC-REF-LOCKED _SDOC-GUARD WITH-GUARD ;
+
+: _SDOC-VALID-LOCKED  ( instance -- flag )
+    DUP _SDOC-LIVE @ <> IF DROP 0 EXIT THEN
+    _SDOC-OFFER ROFFER-VALID? 0= IF DROP 0 EXIT THEN
+    _SDOC-STATE-VALID? ;
+
+: SDOC-VALID?  ( instance -- flag )
+    ['] _SDOC-VALID-LOCKED _SDOC-GUARD WITH-GUARD ;
+
+: _SDOC-POOL-LOCKED  ( -- pool | 0 )
+    _SDOC-LIVE @ 0<> _SDOC-OFFER ROFFER-VALID? AND
+    _SDOC-POOL ROPOOL-VALID? AND
+    IF _SDOC-POOL ELSE 0 THEN ;
+
+: SDOC-POOL  ( -- pool | 0 )
+    ['] _SDOC-POOL-LOCKED _SDOC-GUARD WITH-GUARD ;
+
+: _SDOC-SERVICE-LOCKED  ( -- offer | 0 )
+    _SDOC-LIVE @ 0<> _SDOC-OFFER ROFFER-VALID? AND
+    IF _SDOC-OFFER ELSE 0 THEN ;
+
+: SDOC-SERVICE  ( -- offer | 0 )
+    ['] _SDOC-SERVICE-LOCKED _SDOC-GUARD WITH-GUARD ;

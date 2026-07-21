@@ -24,7 +24,7 @@ PROFILE_NAME = "shared-document-contracts"
 AUTOEXEC = r'''\ autoexec.f - shared document owner contracts
 ENTER-USERLAND
 ." [akashic] loading shared document contracts" CR
-REQUIRE daybook/shared-document.f
+REQUIRE tui/applets/daybook/shared-document.f
 REQUIRE interop/lens-binding.f
 REQUIRE interop/resource-client.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
@@ -391,7 +391,7 @@ _sd-run
 def test_shared_document_contracts(tmp_path: Path) -> None:
     PROFILES[PROFILE_NAME] = Profile(
         roots=(
-            "daybook/shared-document.f",
+            "tui/applets/daybook/shared-document.f",
             "interop/lens-binding.f",
             "interop/resource-client.f",
             "utils/fs/drivers/vfs-mp64fs.f",

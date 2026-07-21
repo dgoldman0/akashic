@@ -248,7 +248,7 @@ compiled facet for the duration of each accepted run.
 ## Desk-hosted activation-local Daybook owner
 
 On a healthy Practice activation, Desk creates one resource registry and hosts
-one [Daybook document resource](../../../daybook/shared-document.md) for
+one [Daybook document resource](../daybook/shared-document.md) for
 the canonical Daybook document. Daybook owns the document and its planner
 semantics; its concrete owner now lives in the Daybook domain even though Desk
 constructs it. Its semantic RID is the SHA3-256 digest of the stable Practice

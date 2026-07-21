@@ -65,6 +65,29 @@ def test_profile_failure_markers_are_checked_across_raw_and_screen_text() -> Non
     ) == ("LIBRARY MODEL CODECS ASSERT",)
 
 
+def test_agent_provider_ui_command_profile_uses_public_applet_seams() -> None:
+    profile = PROFILES["agent-provider-ui-commands"]
+    assert profile.roots == (
+        "tui/applets/agent/agent.f",
+        "tui/applets/desk/agent-access-policy.f",
+    )
+    assert profile.resources == ()
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/l7-agent-actions.f",
+    )
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "tui/applets/agent/service.f",
+        "tui/applets/agent/runtime.f",
+        "tui/applets/agent/widgets/agent-auth.f",
+        "tui/applets/agent/widgets/agent-settings.f",
+        "tui/applets/desk/agent-access-policy.f",
+    } <= closure
+    assert all(not module.startswith("agent/") for module in closure)
+    assert "tui/widgets/agent-auth.f" not in closure
+    assert "tui/widgets/agent-settings.f" not in closure
+
+
 def test_library_store_format_profile_packages_its_exact_contract_leaf() -> None:
     profile = PROFILES["library-store-format-contracts"]
     assert profile.roots == ("library/store-format.f",)

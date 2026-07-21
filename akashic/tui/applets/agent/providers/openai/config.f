@@ -1,0 +1,205 @@
+\ =====================================================================
+\  config.f - Native OpenAI Responses provider configuration
+\ =====================================================================
+\  Configuration owns only non-secret endpoint and model text. Authentication
+\  is supplied independently through the provider-auth port.
+\ =====================================================================
+
+PROVIDED akashic-agent-openai-config
+
+REQUIRE ../../../../../text/utf8.f
+
+0 CONSTANT OAIC-S-OK
+1 CONSTANT OAIC-S-INVALID
+2 CONSTANT OAIC-S-CAPACITY
+
+1 CONSTANT OAIC-F-STORE
+2 CONSTANT OAIC-F-TOOLS
+4 CONSTANT OAIC-F-RESPONSES-LITE
+
+64   CONSTANT OAIC-HOST-CAPACITY
+128  CONSTANT OAIC-PATH-CAPACITY
+96   CONSTANT OAIC-MODEL-CAPACITY
+32   CONSTANT OAIC-EFFORT-CAPACITY
+16   CONSTANT OAIC-SUMMARY-CAPACITY
+32   CONSTANT OAIC-TIER-CAPACITY
+16   CONSTANT OAIC-VERBOSITY-CAPACITY
+32768 CONSTANT OAIC-INSTRUCTIONS-CAPACITY
+
+  0 CONSTANT _OAIC-HOST-U
+  8 CONSTANT _OAIC-PATH-U
+ 16 CONSTANT _OAIC-MODEL-U
+ 24 CONSTANT _OAIC-INSTRUCTIONS-U
+ 32 CONSTANT _OAIC-EFFORT-U
+ 40 CONSTANT _OAIC-SUMMARY-U
+ 48 CONSTANT _OAIC-TIER-U
+ 56 CONSTANT _OAIC-VERBOSITY-U
+ 64 CONSTANT _OAIC-PORT
+ 72 CONSTANT _OAIC-TLS
+ 80 CONSTANT _OAIC-FLAGS
+ 88 CONSTANT _OAIC-MAX-REQUEST
+ 96 CONSTANT _OAIC-MAX-OUTPUT
+104 CONSTANT _OAIC-RESERVED
+112 CONSTANT _OAIC-HOST-BUF
+_OAIC-HOST-BUF OAIC-HOST-CAPACITY + CONSTANT _OAIC-PATH-BUF
+_OAIC-PATH-BUF OAIC-PATH-CAPACITY + CONSTANT _OAIC-MODEL-BUF
+_OAIC-MODEL-BUF OAIC-MODEL-CAPACITY + CONSTANT _OAIC-EFFORT-BUF
+_OAIC-EFFORT-BUF OAIC-EFFORT-CAPACITY + CONSTANT _OAIC-SUMMARY-BUF
+_OAIC-SUMMARY-BUF OAIC-SUMMARY-CAPACITY + CONSTANT _OAIC-TIER-BUF
+_OAIC-TIER-BUF OAIC-TIER-CAPACITY + CONSTANT _OAIC-VERBOSITY-BUF
+_OAIC-VERBOSITY-BUF OAIC-VERBOSITY-CAPACITY +
+CONSTANT _OAIC-INSTRUCTIONS-BUF
+_OAIC-INSTRUCTIONS-BUF OAIC-INSTRUCTIONS-CAPACITY +
+CONSTANT OPENAI-CONFIG-SIZE
+
+: OAIC.HOST-U         ( config -- a ) _OAIC-HOST-U + ;
+: OAIC.PATH-U         ( config -- a ) _OAIC-PATH-U + ;
+: OAIC.MODEL-U        ( config -- a ) _OAIC-MODEL-U + ;
+: OAIC.INSTRUCTIONS-U ( config -- a ) _OAIC-INSTRUCTIONS-U + ;
+: OAIC.EFFORT-U       ( config -- a ) _OAIC-EFFORT-U + ;
+: OAIC.SUMMARY-U      ( config -- a ) _OAIC-SUMMARY-U + ;
+: OAIC.TIER-U         ( config -- a ) _OAIC-TIER-U + ;
+: OAIC.VERBOSITY-U    ( config -- a ) _OAIC-VERBOSITY-U + ;
+: OAIC.PORT           ( config -- a ) _OAIC-PORT + ;
+: OAIC.TLS            ( config -- a ) _OAIC-TLS + ;
+: OAIC.FLAGS          ( config -- a ) _OAIC-FLAGS + ;
+: OAIC.MAX-REQUEST    ( config -- a ) _OAIC-MAX-REQUEST + ;
+: OAIC.MAX-OUTPUT     ( config -- a ) _OAIC-MAX-OUTPUT + ;
+: OAIC.HOST-BUF       ( config -- a ) _OAIC-HOST-BUF + ;
+: OAIC.PATH-BUF       ( config -- a ) _OAIC-PATH-BUF + ;
+: OAIC.MODEL-BUF      ( config -- a ) _OAIC-MODEL-BUF + ;
+: OAIC.EFFORT-BUF     ( config -- a ) _OAIC-EFFORT-BUF + ;
+: OAIC.SUMMARY-BUF    ( config -- a ) _OAIC-SUMMARY-BUF + ;
+: OAIC.TIER-BUF       ( config -- a ) _OAIC-TIER-BUF + ;
+: OAIC.VERBOSITY-BUF  ( config -- a ) _OAIC-VERBOSITY-BUF + ;
+: OAIC.INSTRUCTIONS-BUF ( config -- a ) _OAIC-INSTRUCTIONS-BUF + ;
+
+: OAIC-HOST  ( config -- addr len )
+    DUP OAIC.HOST-BUF SWAP OAIC.HOST-U @ ;
+
+: OAIC-PATH  ( config -- addr len )
+    DUP OAIC.PATH-BUF SWAP OAIC.PATH-U @ ;
+
+: OAIC-MODEL  ( config -- addr len )
+    DUP OAIC.MODEL-BUF SWAP OAIC.MODEL-U @ ;
+
+: OAIC-INSTRUCTIONS  ( config -- addr len )
+    DUP OAIC.INSTRUCTIONS-BUF SWAP OAIC.INSTRUCTIONS-U @ ;
+
+: OAIC-EFFORT  ( config -- addr len )
+    DUP OAIC.EFFORT-BUF SWAP OAIC.EFFORT-U @ ;
+
+: OAIC-SUMMARY  ( config -- addr len )
+    DUP OAIC.SUMMARY-BUF SWAP OAIC.SUMMARY-U @ ;
+
+: OAIC-TIER  ( config -- addr len )
+    DUP OAIC.TIER-BUF SWAP OAIC.TIER-U @ ;
+
+: OAIC-VERBOSITY  ( config -- addr len )
+    DUP OAIC.VERBOSITY-BUF SWAP OAIC.VERBOSITY-U @ ;
+
+: OAIC-RESPONSES-LITE?  ( config -- flag )
+    OAIC.FLAGS @ OAIC-F-RESPONSES-LITE AND 0<> ;
+
+: _OAIC-HOST-CHAR?  ( c -- flag )
+    DUP 48 >= OVER 57 <= AND IF DROP -1 EXIT THEN
+    DUP 65 >= OVER 90 <= AND IF DROP -1 EXIT THEN
+    DUP 97 >= OVER 122 <= AND IF DROP -1 EXIT THEN
+    DUP 45 = SWAP 46 = OR ;
+
+: _OAIC-HOST?  ( addr len -- flag )
+    DUP 0= OVER OAIC-HOST-CAPACITY > OR IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ _OAIC-HOST-CHAR? 0= IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+: _OAIC-PATH?  ( addr len -- flag )
+    DUP 0= OVER OAIC-PATH-CAPACITY > OR IF 2DROP 0 EXIT THEN
+    OVER C@ 47 <> IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ DUP 33 < SWAP 126 > OR IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+VARIABLE _OAICS-A
+VARIABLE _OAICS-U
+VARIABLE _OAICS-D
+VARIABLE _OAICS-CAP
+VARIABLE _OAICS-LEN
+
+: _OAIC-STRING!  ( source-a source-u dest capacity length-cell -- status )
+    _OAICS-LEN ! _OAICS-CAP ! _OAICS-D ! _OAICS-U ! _OAICS-A !
+    _OAICS-U @ _OAICS-CAP @ > IF OAIC-S-CAPACITY EXIT THEN
+    _OAICS-A @ 0= _OAICS-U @ 0> AND IF OAIC-S-INVALID EXIT THEN
+    _OAICS-U @ IF
+        _OAICS-A @ _OAICS-U @ UTF8-VALID? 0= IF OAIC-S-INVALID EXIT THEN
+    THEN
+    _OAICS-D @ _OAICS-CAP @ 0 FILL
+    _OAICS-U @ IF _OAICS-A @ _OAICS-D @ _OAICS-U @ CMOVE THEN
+    _OAICS-U @ _OAICS-LEN @ !
+    OAIC-S-OK ;
+
+VARIABLE _OAICV-C
+VARIABLE _OAICV-A
+VARIABLE _OAICV-U
+
+: OAIC-HOST!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAIC-HOST? 0= IF OAIC-S-INVALID EXIT THEN
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.HOST-BUF
+    OAIC-HOST-CAPACITY _OAICV-C @ OAIC.HOST-U _OAIC-STRING! ;
+
+: OAIC-PATH!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAIC-PATH? 0= IF OAIC-S-INVALID EXIT THEN
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.PATH-BUF
+    OAIC-PATH-CAPACITY _OAICV-C @ OAIC.PATH-U _OAIC-STRING! ;
+
+: OAIC-MODEL!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-U @ 0= IF OAIC-S-INVALID EXIT THEN
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.MODEL-BUF
+    OAIC-MODEL-CAPACITY _OAICV-C @ OAIC.MODEL-U _OAIC-STRING! ;
+
+: OAIC-INSTRUCTIONS!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.INSTRUCTIONS-BUF
+    OAIC-INSTRUCTIONS-CAPACITY _OAICV-C @ OAIC.INSTRUCTIONS-U
+    _OAIC-STRING! ;
+
+: OAIC-EFFORT!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.EFFORT-BUF
+    OAIC-EFFORT-CAPACITY _OAICV-C @ OAIC.EFFORT-U _OAIC-STRING! ;
+
+: OAIC-SUMMARY!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.SUMMARY-BUF
+    OAIC-SUMMARY-CAPACITY _OAICV-C @ OAIC.SUMMARY-U _OAIC-STRING! ;
+
+: OAIC-TIER!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.TIER-BUF
+    OAIC-TIER-CAPACITY _OAICV-C @ OAIC.TIER-U _OAIC-STRING! ;
+
+: OAIC-VERBOSITY!  ( addr len config -- status )
+    _OAICV-C ! _OAICV-U ! _OAICV-A !
+    _OAICV-A @ _OAICV-U @ _OAICV-C @ OAIC.VERBOSITY-BUF
+    OAIC-VERBOSITY-CAPACITY _OAICV-C @ OAIC.VERBOSITY-U
+    _OAIC-STRING! ;
+
+VARIABLE _OAICI-C
+
+: OAIC-INIT  ( config -- )
+    DUP _OAICI-C ! OPENAI-CONFIG-SIZE 0 FILL
+    S" api.openai.com" _OAICI-C @ OAIC-HOST! DROP
+    S" /v1/responses" _OAICI-C @ OAIC-PATH! DROP
+    S" gpt-5.5" _OAICI-C @ OAIC-MODEL! DROP
+    443 _OAICI-C @ OAIC.PORT !
+    -1 _OAICI-C @ OAIC.TLS !
+    OAIC-F-TOOLS _OAICI-C @ OAIC.FLAGS !
+    196608 _OAICI-C @ OAIC.MAX-REQUEST !
+    \ Keep one valid response composable with the bounded transcript and its
+    \ model-context copy inside the 256 KiB conversation snapshot envelope.
+    49152 _OAICI-C @ OAIC.MAX-OUTPUT ! ;

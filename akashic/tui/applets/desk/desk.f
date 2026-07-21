@@ -72,12 +72,8 @@ REQUIRE ../../../interop/job.f
 REQUIRE ../../../net/tls-trust-registry.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
-REQUIRE ../../../daybook/shared-document.f
-REQUIRE ../../../agent/runtime.f
-REQUIRE ../../../agent/access-profile.f
-REQUIRE ../../../agent/mandate-run.f
-REQUIRE ../../../agent/providers/offline.f
-REQUIRE ../../../agent/storage/vfs-conversation.f
+REQUIRE ../daybook/shared-document.f
+REQUIRE agent-access-policy.f
 
 \ =====================================================================
 \  §1 — Slot Struct (linked list, heap-allocated)
@@ -1849,7 +1845,9 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
     _DMF-DESK @ _DESK-USE-STATE
     DESK-RECOVERY? DESK-PRACTICE 0= OR IF 0 AMRUN-S-DENIED EXIT THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME-ACCESS-PROFILE
-        DUP _DMF-PROFILE ! 0= IF 0 AMRUN-S-DENIED EXIT THEN
+        DUP 0= IF DROP 0 AMRUN-S-DENIED EXIT THEN
+    DUP DAP-PROFILE-VALID? 0= IF DROP 0 AMRUN-S-DENIED EXIT THEN
+    _DMF-PROFILE !
     \ Built-in targets are optional.  An empty exact facet is a legitimate
     \ chat-only run and never expands into the gateway's ambient catalog.
     DESK-CONTEXT CTX-CHILD-NEW DUP IF
@@ -1951,6 +1949,9 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
     _DESK-AGENT-RUNTIME @ ARUNTIME-TOOL-GATEWAY!
     ['] _DESK-MANDATE-FACTORY _DINI-INST @
         _DESK-AGENT-RUNTIME @ ARUNTIME-MANDATE-FACTORY!
+    ['] DAP-RUNTIME-POLICY ['] DAP-RUNTIME-VALID? 0
+        _DESK-AGENT-RUNTIME @ ARUNTIME-ACCESS-POLICY!
+    ABORT" desk: agent access policy binding failed"
     _DESK-TOOL-GATEWAY @ _DESK-AGENT-PROVIDER @ APROV-BIND-TOOLS
     ABORT" desk: provider tool binding failed"
     _DESK-PENDING-AGENT-ACCESS @ _DESK-AGENT-RUNTIME @
@@ -2855,9 +2856,7 @@ VARIABLE _DASSET-ACCESS
 
 : DESK-AGENT-ACCESS-PRESET!  ( preset -- status )
     DUP _DASSET-ACCESS !
-    DUP AAP-PRESET-CHAT-ONLY =
-    OVER AAP-PRESET-PRACTICE-READ = OR
-    OVER AAP-PRESET-PRACTICE-ASSIST = OR 0= IF DROP AAP-S-INVALID EXIT THEN
+    DUP DAP-PRESET? 0= IF DROP AAP-S-INVALID EXIT THEN
     _DESK-CURRENT-STATE @ IF
         _DESK-AGENT-RUNTIME @ ?DUP 0= IF DROP AAP-S-INVALID EXIT THEN
         ARUNTIME-ACCESS-PRESET!

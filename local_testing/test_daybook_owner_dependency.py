@@ -10,7 +10,9 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "akashic"
 INTEROP = SOURCE / "interop"
-OWNER = SOURCE / "daybook" / "shared-document.f"
+DAYBOOK_DOMAIN = SOURCE / "tui" / "applets" / "daybook"
+OWNER = DAYBOOK_DOMAIN / "shared-document.f"
+OLD_DOMAIN = SOURCE / "daybook"
 OLD_OWNER = INTEROP / ("shared-" + "document.f")
 POOL = INTEROP / "resource-owner-pool.f"
 SESSION = INTEROP / "resource-session.f"
@@ -58,7 +60,8 @@ def test_concrete_owner_lives_only_in_the_daybook_domain() -> None:
     assert "PROVIDED akashic-interop-shared-document" in OWNER.read_text(
         encoding="utf-8"
     )
-    assert "REQUIRE ../../../daybook/shared-document.f" in DESK.read_text(
+    assert not any(OLD_DOMAIN.rglob("*.f"))
+    assert "REQUIRE ../daybook/shared-document.f" in DESK.read_text(
         encoding="utf-8"
     )
 
@@ -70,7 +73,7 @@ def test_interop_neither_imports_nor_forwards_daybook_owner_policy() -> None:
         "SDOC-",
         "akashic-interop-shared-document",
     )
-    daybook_root = (SOURCE / "daybook").resolve()
+    daybook_root = DAYBOOK_DOMAIN.resolve()
 
     for module in INTEROP.rglob("*.f"):
         text = module.read_text(encoding="utf-8")

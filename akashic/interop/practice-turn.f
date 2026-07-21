@@ -1,7 +1,7 @@
 \ =====================================================================
 \  practice-turn.f - Versioned owner-serialized semantic mutation Turn
 \ =====================================================================
-\  This is distinct from agent/turn-request.f.  A Practice Turn records
+\  This is distinct from the Agent applet's turn-request.f.  A Practice Turn records
 \  one revision-checked attempt to publish Context-owned state.  It holds
 \  stable identities only: no handler XT, component pointer, or UI object.
 \ =====================================================================

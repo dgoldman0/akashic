@@ -87,6 +87,25 @@ Library's projection two-boot gate. None of these checks requires ext4. See
 `docs/refactor/l6-resource-owner-pool-and-session.md` for the exact boundary
 and final evidence.
 
+L7 re-homes Agent and Daybook product code without changing their applet
+surfaces. Its new prerequisite-closing profile drives the real Agent Clear,
+Reconnect, and Refresh Models actions through parsed UIDL state and also
+qualifies atomic Desk access-policy injection and tamper rejection:
+
+```bash
+python3 local_testing/akashic_tui.py smoke \
+  --profile agent-provider-ui-commands \
+  --max-steps 5000000000 --timeout 180
+```
+
+The landing additionally runs `agent`, `agent-access`, `agent-security`,
+`agent-persistence`, `agent-widgets`, `daybook-contracts`,
+`desk-service-table-contracts`, `desktop-agent-hardening`, and
+`desktop-resource`, plus the focused L7/Daybook pytests and both refactor
+ratchets. These are MP64FS/generic-VFS qualifications; ext4 remains unrelated.
+See `docs/refactor/l7-daybook-agent-rehoming.md` for the ownership boundary and
+final evidence.
+
 ## Build And Smoke Test
 
 ```bash

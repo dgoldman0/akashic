@@ -21,6 +21,7 @@ from forth_dependencies import (
 )
 from refactor_inventory import (
     SOURCE_ROOT,
+    _dependency_violation,
     _lexical_definitions,
     build_report,
     check_report,
@@ -92,13 +93,13 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 386,
-        "resolved_require_occurrence_count": 1308,
-        "unique_resolved_edge_count": 1308,
+        "module_count": 388,
+        "resolved_require_occurrence_count": 1307,
+        "unique_resolved_edge_count": 1307,
         "unresolved_require_count": 78,
         "cycle_count": 0,
-        "layer_violation_count": 7,
-        "placement_debt_count": 39,
+        "layer_violation_count": 1,
+        "placement_debt_count": 5,
         "provided_issue_count": 2,
         "addressability_issue_count": 1,
         "marker_issue_count": 0,
@@ -130,17 +131,20 @@ def test_every_module_has_a_reviewed_responsibility_class() -> None:
     by_path = {module["path"]: module for module in report["modules"]}
     assert by_path["library/model.f"]["class"] == "applet"
     assert by_path["library/model.f"]["owner"] == "library"
-    assert by_path["daybook/shared-document.f"]["class"] == "applet"
-    assert by_path["agent/runtime.f"]["class"] == "applet"
-    assert by_path["agent/runtime.f"]["owner"] == "agent"
-    assert by_path["agent/runtime.f"]["target"] == (
-        "tui/applets/agent/runtime.f"
+    assert by_path["tui/applets/daybook/shared-document.f"]["class"] == (
+        "applet"
     )
-    assert by_path["agent/access-profile.f"]["placement"] == "split-required"
-    assert by_path["agent/access-profile.f"]["split_targets"] == [
-        "tui/applets/agent/access-profile.f",
-        "tui/applets/desk/agent-access-policy.f",
-    ]
+    assert by_path["tui/applets/agent/runtime.f"]["class"] == "applet"
+    assert by_path["tui/applets/agent/runtime.f"]["owner"] == "agent"
+    assert by_path["tui/applets/agent/runtime.f"]["placement"] == "correct"
+    assert by_path["tui/applets/agent/access-profile.f"]["owner"] == "agent"
+    assert by_path["tui/applets/agent/access-profile.f"]["placement"] == (
+        "correct"
+    )
+    assert by_path["tui/applets/agent/service.f"]["owner"] == "agent"
+    assert by_path["tui/applets/desk/agent-access-policy.f"]["owner"] == (
+        "desk"
+    )
     assert by_path["interop/resource-owner-pool.f"]["class"] == "independent"
     assert by_path["interop/resource-owner-pool.f"]["placement"] == "correct"
     assert by_path["interop/resource-session.f"]["class"] == "independent"
@@ -165,39 +169,71 @@ def test_every_module_has_a_reviewed_responsibility_class() -> None:
     )
 
 
+def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
+    policy = _policy()
+    assert policy["public_applet_seams"] == [
+        {
+            "from": "tui/applets/desk/agent-access-policy.f",
+            "to": "tui/applets/agent/service.f",
+            "purpose": (
+                "Desk-owned access policy composes the public Agent service "
+                "without importing Agent internals."
+            ),
+        },
+        {
+            "from": "tui/applets/desk/desk.f",
+            "to": "tui/applets/daybook/shared-document.f",
+            "purpose": (
+                "Desk product composition borrows Daybook's public "
+                "resource-owner service."
+            ),
+        },
+    ]
+    desk_policy = classify_module(
+        "tui/applets/desk/agent-access-policy.f", policy
+    )
+    agent_service = classify_module("tui/applets/agent/service.f", policy)
+    agent_runtime = classify_module("tui/applets/agent/runtime.f", policy)
+    desk = classify_module("tui/applets/desk/desk.f", policy)
+    daybook_service = classify_module(
+        "tui/applets/daybook/shared-document.f", policy
+    )
+    daybook_private = classify_module(
+        "tui/applets/daybook/daybook.f", policy
+    )
+    assert _dependency_violation(
+        "tui/applets/desk/agent-access-policy.f",
+        "tui/applets/agent/service.f",
+        desk_policy,
+        agent_service,
+        policy,
+    ) is None
+    assert _dependency_violation(
+        "tui/applets/desk/agent-access-policy.f",
+        "tui/applets/agent/runtime.f",
+        desk_policy,
+        agent_runtime,
+        policy,
+    ) == "applet-imports-sibling"
+    assert _dependency_violation(
+        "tui/applets/desk/desk.f",
+        "tui/applets/daybook/shared-document.f",
+        desk,
+        daybook_service,
+        policy,
+    ) is None
+    assert _dependency_violation(
+        "tui/applets/desk/desk.f",
+        "tui/applets/daybook/daybook.f",
+        desk,
+        daybook_private,
+        policy,
+    ) == "applet-imports-sibling"
+
+
 def test_current_layer_and_addressability_debt_is_exact() -> None:
     report = _report()
     assert report["layer_violations"] == [
-        {
-            "rule": "applet-imports-sibling",
-            "from": "tui/applets/desk/desk.f",
-            "to": "agent/access-profile.f",
-        },
-        {
-            "rule": "applet-imports-sibling",
-            "from": "tui/applets/desk/desk.f",
-            "to": "agent/mandate-run.f",
-        },
-        {
-            "rule": "applet-imports-sibling",
-            "from": "tui/applets/desk/desk.f",
-            "to": "agent/providers/offline.f",
-        },
-        {
-            "rule": "applet-imports-sibling",
-            "from": "tui/applets/desk/desk.f",
-            "to": "agent/runtime.f",
-        },
-        {
-            "rule": "applet-imports-sibling",
-            "from": "tui/applets/desk/desk.f",
-            "to": "agent/storage/vfs-conversation.f",
-        },
-        {
-            "rule": "applet-imports-sibling",
-            "from": "tui/applets/desk/desk.f",
-            "to": "daybook/shared-document.f",
-        },
         {
             "rule": "shared-host-hardcodes-vfs-driver",
             "from": "tui/app-shell.f",

@@ -254,11 +254,12 @@
       "capability_surface": {"path": "akashic/tui/applets/agent/agent.f", "literal_prefix": "agent.", "ids": []},
       "source_contracts": [
         {"path": "akashic/tui/applets/agent/agent.f", "required_literals": ["org.akashic.agent", "org.akashic.agent.runtime", "org.akashic.agent.provider-source", "AGENT-INIT-CB", "AGENT-REQUEST-CLOSE-CB", "AGENT-SHUTDOWN-CB", "AGENT-ENTRY", "AGENT-RUN"]},
-        {"path": "akashic/agent/providers/offline.f", "required_literals": ["org.akashic.agent.offline", "org.akashic.agent.source.offline"]},
-        {"path": "akashic/agent/providers/devtools/scripted.f", "required_literals": ["org.akashic.agent.testing.scripted", "org.akashic.agent.source.testing.scripted"]},
-        {"path": "akashic/agent/providers/openai/source.f", "required_literals": ["org.akashic.agent.source.openai"]},
-        {"path": "akashic/agent/providers/codex/source.f", "required_literals": ["org.akashic.agent.source.codex"]},
-        {"path": "akashic/agent/access-profile.f", "required_literals": ["desk.chat-only", "desk.practice-read", "desk.practice-assist"]}
+        {"path": "akashic/tui/applets/agent/providers/offline.f", "required_literals": ["org.akashic.agent.offline", "org.akashic.agent.source.offline"]},
+        {"path": "akashic/tui/applets/agent/providers/devtools/scripted.f", "required_literals": ["org.akashic.agent.testing.scripted", "org.akashic.agent.source.testing.scripted"]},
+        {"path": "akashic/tui/applets/agent/providers/openai/source.f", "required_literals": ["org.akashic.agent.source.openai"]},
+        {"path": "akashic/tui/applets/agent/providers/codex/source.f", "required_literals": ["org.akashic.agent.source.codex"]},
+        {"path": "akashic/tui/applets/agent/access-profile.f", "required_literals": ["AAP-PRESET-CHAT-ONLY", "AAP-PRESET-PRACTICE-READ", "AAP-PRESET-PRACTICE-ASSIST", "AAP-VALID?"]},
+        {"path": "akashic/tui/applets/desk/agent-access-policy.f", "required_literals": ["desk.chat-only", "desk.practice-read", "desk.practice-assist", "DAP-PROFILE-VALID?", "DAP-RUNTIME-POLICY", "DAP-RUNTIME-VALID?"]}
       ],
       "behaviors": [
         {
@@ -278,11 +279,10 @@
         },
         {
           "id": "agent.providers-and-account",
-          "coverage": "partial",
-          "prerequisite_ids": ["agent.provider-ui-commands"],
+          "coverage": "covered",
           "facets": ["providers", "actions", "failures"],
           "preserve": ["Offline and scripted providers", "OpenAI provider/source and Codex provider/source/catalog/auth paths", "Masked credential cancel/submit/clear, device authorization and model/effort/tier/verbosity settings"],
-          "evidence": ["profile:agent", "profile:openai-codec", "profile:openai-provider", "profile:openai-source", "profile:codex-auth", "profile:codex-catalog", "profile:codex-source", "profile:desktop-codex", "profile:agent-auth-ui", "profile:agent-device-ui", "profile:agent-widgets"]
+          "evidence": ["profile:agent", "profile:agent-provider-ui-commands", "profile:openai-codec", "profile:openai-provider", "profile:openai-source", "profile:codex-auth", "profile:codex-catalog", "profile:codex-source", "profile:desktop-codex", "profile:agent-auth-ui", "profile:agent-device-ui", "profile:agent-widgets"]
         },
         {
           "id": "agent.transcript-persistence",
@@ -293,13 +293,6 @@
         }
       ],
       "prerequisites": [
-        {
-          "id": "agent.provider-ui-commands",
-          "before_landing": "L7",
-          "trigger": "Provider/source re-homing or applet action wiring changes.",
-          "characterization": "Drive UI Clear, Reconnect and Refresh Models and pin their visible success/failure state.",
-          "reason": "The actions are statically pinned, but only runtime clear and lower provider contracts currently execute these semantics."
-        },
         {
           "id": "agent.active-close-ownership",
           "before_landing": "L9",
@@ -330,7 +323,7 @@
       "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.source", "daybook.task.capture"]},
       "source_contracts": [
         {"path": "akashic/tui/applets/daybook/daybook.f", "required_literals": ["org.akashic.daybook", "org.akashic.resource.daybook", "DAYBOOK-INIT-CB", "DAYBOOK-REQUEST-CLOSE-CB", "DAYBOOK-SHUTDOWN-CB", "DAYBOOK-ENTRY", "DAYBOOK-RUN", "daybook.task.capture", "daybook.source", "daybook.agenda.markdown"]},
-        {"path": "akashic/daybook/shared-document.f", "required_literals": ["resource.describe", "resource.snapshot", "resource.replace"]}
+        {"path": "akashic/tui/applets/daybook/shared-document.f", "required_literals": ["resource.describe", "resource.snapshot", "resource.replace"]}
       ],
       "not_applicable": {"providers": "Daybook owns a concrete Markdown document and resource owner; it has no selectable provider surface."},
       "behaviors": [
