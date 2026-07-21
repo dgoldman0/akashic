@@ -42,15 +42,18 @@ def test_shared_dependency_grammar_matches_kdos_ascii_space_rules() -> None:
     assert PROVIDED_RE.match("PROVIDED module-id")
     assert REQUIRE_RE.match("REQUIRE\tmodule.f") is None
     assert PROVIDED_RE.match("PROVIDED\tmodule-id") is None
-    assert normalize_module("../math/sha3.f", "library/model.f") == (
+    assert normalize_module(
+        "../../../math/sha3.f", "tui/applets/library/model.f"
+    ) == (
         "math/sha3.f"
     )
     markers = dependency_markers(
-        "REQUIRE ../math/sha3.f\nREQUIRE model.f\n", "library/store.f"
+        "REQUIRE ../../../math/sha3.f\nREQUIRE model.f\n",
+        "tui/applets/library/store.f",
     )
     assert [(marker.raw, marker.normalized, marker.line) for marker in markers] == [
-        ("../math/sha3.f", "math/sha3.f", 1),
-        ("model.f", "library/model.f", 2),
+        ("../../../math/sha3.f", "math/sha3.f", 1),
+        ("model.f", "tui/applets/library/model.f", 2),
     ]
     assert len(module_key("x")) == MODULE_KEY_BYTES
 
@@ -93,13 +96,13 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 388,
-        "resolved_require_occurrence_count": 1307,
-        "unique_resolved_edge_count": 1307,
+        "module_count": 392,
+        "resolved_require_occurrence_count": 1311,
+        "unique_resolved_edge_count": 1311,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 1,
-        "placement_debt_count": 5,
+        "placement_debt_count": 0,
         "provided_issue_count": 2,
         "addressability_issue_count": 1,
         "marker_issue_count": 0,
@@ -124,13 +127,45 @@ def test_unresolved_imports_are_named_debt_not_external_dependencies() -> None:
 
 def test_every_module_has_a_reviewed_responsibility_class() -> None:
     report = _report()
+    assert report["placement_debt"] == []
     assert all(
         module["class"] in {"independent", "desk-ecosystem", "applet"}
         for module in report["modules"]
     )
     by_path = {module["path"]: module for module in report["modules"]}
-    assert by_path["library/model.f"]["class"] == "applet"
-    assert by_path["library/model.f"]["owner"] == "library"
+    library_modules = {
+        module["path"]: module
+        for module in report["modules"]
+        if module["path"].startswith("tui/applets/library/")
+    }
+    assert {path.rsplit("/", 1)[-1] for path in library_modules} == {
+        "controller.f",
+        "library.f",
+        "model.f",
+        "projection-adapter.f",
+        "query.f",
+        "record-codec.f",
+        "repository.f",
+        "service.f",
+        "store-format.f",
+        "view.f",
+    }
+    assert all(
+        module["class"] == "applet"
+        for module in library_modules.values()
+    )
+    assert all(
+        module["owner"] == "library"
+        for module in library_modules.values()
+    )
+    assert all(
+        module["placement"] == "correct"
+        for module in library_modules.values()
+    )
+    assert all(
+        rule["prefix"] != "library/"
+        for rule in _policy()["ownership"]["prefixes"]
+    )
     assert by_path["tui/applets/daybook/shared-document.f"]["class"] == (
         "applet"
     )
@@ -388,10 +423,12 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
 def test_live_module_inventory_includes_exact_mutable_symbols() -> None:
     report = _report()
     by_path = {module["path"]: module for module in report["modules"]}
-    store = by_path["library/vfs-store.f"]["lexical_definitions"]
-    assert "_library-vfs-store-guard" in store["guard"]
-    assert "_LIBVP-FRAME" in store["create"]
-    assert "_LIBVP-CATALOG-FACTS" in store["create"]
+    repository = by_path[
+        "tui/applets/library/repository.f"
+    ]["lexical_definitions"]
+    assert "_library-vfs-store-guard" in repository["guard"]
+    assert "_LIBVP-FRAME" in repository["create"]
+    assert "_LIBVP-CATALOG-FACTS" in repository["create"]
     bus = by_path["interop/request-bus.f"]["lexical_definitions"]
     assert "_CBUS-DISPATCH-DEPTH" in bus["variable"]
     assert "_CBUS-OWNER-OP-DEPTH" in bus["variable"]

@@ -154,7 +154,7 @@ DAMAGE_CASES: Final = (
 
 FIRST_AUTOEXEC = r"""\ autoexec.f - seed the literal Gate 4 exit corpus
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _g4f-fails
@@ -349,7 +349,7 @@ def _cold_autoexec(evidence: SeedEvidence) -> str:
     tombstone = _forth_bytes(evidence.tombstone_rid)
     return rf"""\ autoexec.f - literal Gate 4 cold semantic exit
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _g4c-fails
@@ -624,7 +624,7 @@ def _damage_autoexec(case: DamageCase, selected_bank: int) -> str:
     marker = f"LIBRARY GATE4 DAMAGE {case.label} PASS"
     return rf"""\ autoexec.f - isolated Gate 4 {case.slug} evidence damage
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _g4d-fails
@@ -727,7 +727,7 @@ def _profile() -> Profile:
     """Return the linked closure shared by every isolated process."""
     return Profile(
         roots=(
-            "library/vfs-store.f",
+            "tui/applets/library/service.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),
         resources=(),

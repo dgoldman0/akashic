@@ -12197,7 +12197,7 @@ SOUNDLAB-RUN
 PROFILES["library"] = Profile(
     roots=("tui/applets/library/library.f",),
     resources=("tui/applets/library/library.uidl",),
-    autoexec=r"""\ autoexec.f - standalone Library applet probe
+        autoexec=r"""\ autoexec.f - directly testable Desk Library applet probe
 ENTER-USERLAND
 ." [akashic] loading library" CR
 REQUIRE tui/applets/library/library.f
@@ -12221,7 +12221,7 @@ LIBRARY-APPLET-RUN
 PROFILES["library-applet-contracts"] = Profile(
     roots=("tui/applets/library/library.f",),
     resources=("tui/applets/library/library.uidl",),
-    autoexec=r"""\ autoexec.f - standalone Library descriptor contracts
+        autoexec=r"""\ autoexec.f - directly testable Desk Library descriptor contracts
 ENTER-USERLAND
 ." [akashic] loading Library applet contracts" CR
 REQUIRE tui/applets/library/library.f
@@ -27837,11 +27837,11 @@ REQUIRE local_testing/construct-contracts.f
 
 
 PROFILES["library-model-codecs-contracts"] = Profile(
-    roots=("library/record-codec.f",),
+    roots=("tui/applets/library/record-codec.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4A pure Library model/codec contracts
 ENTER-USERLAND
-REQUIRE library/record-codec.f
+REQUIRE tui/applets/library/record-codec.f
 ." [akashic] loading Library model/codec contracts" CR
 REQUIRE local_testing/library-model-codecs.f
 """,
@@ -27868,11 +27868,11 @@ REQUIRE local_testing/library-model-codecs.f
 
 
 PROFILES["library-store-format-contracts"] = Profile(
-    roots=("library/store-format.f",),
+    roots=("tui/applets/library/store-format.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4B pure Library storage formats
 ENTER-USERLAND
-REQUIRE library/store-format.f
+REQUIRE tui/applets/library/store-format.f
 ." [akashic] loading Library storage-format contracts" CR
 REQUIRE local_testing/library-store-format.f
 """,
@@ -27899,11 +27899,11 @@ REQUIRE local_testing/library-store-format.f
 
 
 PROFILES["library-vfs-store-contracts"] = Profile(
-    roots=("library/vfs-store.f",),
+    roots=("tui/applets/library/service.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4B Library VFS-owner contracts
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 ." [akashic] loading Library VFS-store contracts" CR
 REQUIRE local_testing/library-vfs-store.f
 """,
@@ -27932,11 +27932,11 @@ REQUIRE local_testing/library-vfs-store.f
 
 
 PROFILES["library-managed-document-contracts"] = Profile(
-    roots=("library/vfs-store.f",),
+    roots=("tui/applets/library/service.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4 milestone 1 managed document
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 ." [akashic] loading Library managed-document contracts" CR
 REQUIRE local_testing/library-managed.f
 """,
@@ -27966,11 +27966,11 @@ REQUIRE local_testing/library-managed.f
 
 
 PROFILES["library-managed-lifecycle-contracts"] = Profile(
-    roots=("library/vfs-store.f",),
+    roots=("tui/applets/library/service.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4 milestone 2 managed lifecycle
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 ." [akashic] loading Library managed-lifecycle contracts" CR
 REQUIRE local_testing/library-lifecycle.f
 """,
@@ -28001,11 +28001,11 @@ REQUIRE local_testing/library-lifecycle.f
 
 
 PROFILES["library-capture-collection-contracts"] = Profile(
-    roots=("library/vfs-store.f",),
+    roots=("tui/applets/library/service.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4 milestone 2 captures/collections
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 ." [akashic] loading Library capture/collection contracts" CR
 REQUIRE local_testing/library-cc.f
 """,
@@ -28036,11 +28036,11 @@ REQUIRE local_testing/library-cc.f
 
 
 PROFILES["library-query-index-contracts"] = Profile(
-    roots=("library/vfs-store.f",),
+    roots=("tui/applets/library/service.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4 milestone 3 query/index
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 ." [akashic] loading Library query/index contracts" CR
 REQUIRE local_testing/library-query-index.f
 """,
@@ -28070,7 +28070,7 @@ REQUIRE local_testing/library-query-index.f
 
 
 PROFILES["library-projection-owner-contracts"] = Profile(
-    roots=("library/projection-owner.f", "interop/resource-client.f"),
+    roots=("tui/applets/library/projection-adapter.f", "interop/resource-client.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4 milestone 4 projection owner
 ENTER-USERLAND
@@ -28078,8 +28078,8 @@ REQUIRE concurrency/guard.f
 REQUIRE interop/request-bus.f
 REQUIRE interop/resource-acquisition.f
 REQUIRE interop/resource-client.f
-REQUIRE library/vfs-store.f
-REQUIRE library/projection-owner.f
+REQUIRE tui/applets/library/service.f
+REQUIRE tui/applets/library/projection-adapter.f
 ." [akashic] loading Library projection-owner contracts" CR
 REQUIRE local_testing/library-projection.f
 """,
@@ -28109,11 +28109,11 @@ REQUIRE local_testing/library-projection.f
 
 
 PROFILES["library-maintenance-contracts"] = Profile(
-    roots=("library/vfs-store.f",),
+    roots=("tui/applets/library/service.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4 milestone 5 maintenance owner
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 ." [akashic] loading Library maintenance contracts" CR
 REQUIRE local_testing/library-maintenance.f
 """,
@@ -28144,11 +28144,11 @@ REQUIRE local_testing/library-maintenance.f
 
 
 PROFILES["library-managed-capacity-contracts"] = Profile(
-    roots=("library/vfs-store.f",),
+    roots=("tui/applets/library/service.f",),
     resources=(),
     autoexec=r"""\ autoexec.f - Gate 4 milestone 1 capacity limits
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 ." [akashic] loading Library managed-create capacity contracts" CR
 REQUIRE local_testing/library-capacity.f
 """,

@@ -67,7 +67,7 @@ COLLECTION_RID_RE: Final = re.compile(
 
 FIRST_AUTOEXEC = r"""\ autoexec.f - first Library milestone-two persistence boot
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _llf-fails
@@ -271,7 +271,7 @@ def _cold_autoexec(managed_rid: bytes, capture_rid: bytes, collection_rid: bytes
     collection_cells = _rid_definition(collection_rid)
     return rf"""\ autoexec.f - cold Library milestone-two public readback
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _llc-fails
@@ -428,7 +428,7 @@ def _profile() -> Profile:
     """Return the exact build closure used by both isolated processes."""
     return Profile(
         roots=(
-            "library/vfs-store.f",
+            "tui/applets/library/service.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),
         resources=(),

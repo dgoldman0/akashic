@@ -7,13 +7,13 @@
 \  are pointer-free; only LIB-CONTENT is a transient borrowed-byte view.
 \ =====================================================================
 
-PROVIDED akashic-library-model
+PROVIDED akashic-tui-library-model
 
-REQUIRE ../concurrency/guard.f
-REQUIRE ../math/sha3.f
-REQUIRE ../text/utf8.f
-REQUIRE ../interop/qualified-locator.f
-REQUIRE ../utils/memory-span.f
+REQUIRE ../../../concurrency/guard.f
+REQUIRE ../../../math/sha3.f
+REQUIRE ../../../text/utf8.f
+REQUIRE ../../../interop/qualified-locator.f
+REQUIRE ../../../utils/memory-span.f
 
 \ ---------------------------------------------------------------------
 \ Statuses and sealed qualification bounds

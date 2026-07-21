@@ -53,7 +53,7 @@
       },
       "direct_input_contracts": [
         {
-          "path": "akashic/tui/applets/library/library.f",
+          "path": "akashic/tui/applets/library/view.f",
           "word": "_LAPP-PANEL-HANDLE",
           "sha256": "68f02aaae8dfebde4c8dc26fb8cd5c9d90fb55aefde4ca8f83981c0b178d9430",
           "bindings": ["Shift+Up -> preview up 8", "Shift+Down -> preview down 8", "Up -> previous row", "Down -> next row", "PageUp -> previous page", "PageDown -> next page", "Home -> first row", "End -> last row", "Left -> previous page", "Right -> next page", "Enter -> activate selection", "Escape -> back", "/ -> search", "n -> new managed document", "r -> rename", "a -> archive", "u -> unarchive", "c -> collections", "h -> retained history", "b -> back"]
@@ -66,7 +66,7 @@
           "required_literals": ["org.akashic.library.applet", "LIBRARY-APPLET-INIT-CB", "LIBRARY-APPLET-REQUEST-CLOSE-CB", "LIBRARY-APPLET-SHUTDOWN-CB", "LIBRARY-APPLET-ENTRY", "LIBRARY-APPLET-RUN"]
         },
         {
-          "path": "akashic/library/projection-owner.f",
+          "path": "akashic/tui/applets/library/projection-adapter.f",
           "required_literals": ["RCON-DESCRIBE-CAP!", "RCON-SNAPSHOT-CAP!", "RCON-REPLACE-CAP!"]
         },
         {
@@ -80,8 +80,7 @@
       "behaviors": [
         {
           "id": "library.applet-surface",
-          "coverage": "partial",
-          "prerequisite_ids": ["library.controller-edges"],
+          "coverage": "covered",
           "facets": ["actions", "interfaces", "journeys"],
           "preserve": ["Applet entry exercised through the focused shell profile, descriptor identity, title, UIDL, callbacks, lifecycle and clean close", "Active, Archived and All views; exact search; collections; retained history; back navigation; paging and preview", "Managed create/retry, rename, archive and unarchive controller actions"],
           "evidence": ["profile:library", "profile:library-applet-contracts", "profile:library-applet-functional-contracts", "pytest:local_testing/test_akashic_tui_packaging.py::test_library_applet_uidl_actions_have_exact_controller_bindings"]
@@ -110,13 +109,6 @@
         }
       ],
       "prerequisites": [
-        {
-          "id": "library.controller-edges",
-          "before_landing": "L8",
-          "trigger": "Any decomposition or shared-controller change that touches Library actions or view state.",
-          "characterization": "Drive rename, All, collection enumeration/filter/back, page forward/back and continuation conflict, clear-search/cancel, authoritative reload, exact pending-create retry, and pending-create close/discard.",
-          "reason": "The UIDL surface is pinned and owner semantics are strong, but the current applet functional fixture exercises only a subset of these controller paths."
-        },
         {
           "id": "library.applet-cold-reopen",
           "before_landing": "L12",

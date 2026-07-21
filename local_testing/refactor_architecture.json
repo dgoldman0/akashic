@@ -4,19 +4,19 @@
     "name": "post-gate4-refactor-baseline-20260720",
     "commit": "ce340fc8bef0b2c1331339f6ceaf4c02d4c020f5",
     "expected": {
-      "module_count": 388,
-      "resolved_require_occurrence_count": 1307,
-      "unique_resolved_edge_count": 1307,
+      "module_count": 392,
+      "resolved_require_occurrence_count": 1311,
+      "unique_resolved_edge_count": 1311,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 1,
-      "placement_debt_count": 5,
+      "placement_debt_count": 0,
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "c9886aa3538e3b72468a2b223dba034b647981bb217c8e21e013a5f1e50d9f2e",
-      "state_sha256": "6e3b6b6fc6f69c12cef9f8be203b970ad7e8dc58f8114e0390658386d8ad713a",
-      "placement_sha256": "c540ef260753879f91579cc1480a47b4e9ae50f3d4dd335fa0a07378fb50745c",
+      "graph_sha256": "84931025e194826c255bcb53a922e863a730a2948ea385cb06f5011e15d73f93",
+      "state_sha256": "65a4dba68faf0f77057c1a2ecbca3bfa7d2f39eb47bed2016c65ed7bdefa1dc3",
+      "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
       "layer_violations": [
@@ -82,13 +82,6 @@
         "placement": "correct",
         "target_prefix": "tui/game/",
         "ownership_decision": "deferred-current-placement"
-      },
-      {
-        "prefix": "library/",
-        "class": "applet",
-        "owner": "library",
-        "placement": "misplaced-applet",
-        "target_prefix": "tui/applets/library/"
       }
     ],
     "independent_prefixes": [
@@ -315,7 +308,7 @@
   "complexity_ledger": [
     {
       "id": "library.metadata-mutation",
-      "module": "library/vfs-store.f",
+      "module": "tui/applets/library/repository.f",
       "operation": "metadata mutation and publication",
       "current_structure": "dual complete fixed-capacity metadata banks",
       "current_complexity": "O(catalog capacity) copied, written, and read back per mutation",
@@ -326,7 +319,7 @@
     },
     {
       "id": "library.corpus-query",
-      "module": "library/vfs-store.f",
+      "module": "tui/applets/library/query.f",
       "operation": "ordered and filtered corpus query",
       "current_structure": "fixed catalog slots with optional reject accelerator",
       "current_complexity": "O(catalog slots + candidate content verification)",
@@ -471,7 +464,7 @@
   "capacities": [
     {
       "id": "library.catalog",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-CATALOG-MAX",
       "value": 128,
       "scope": "aggregate-corpus",
@@ -479,7 +472,7 @@
     },
     {
       "id": "library.collections",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-COLLECTION-MAX",
       "value": 32,
       "scope": "aggregate-corpus",
@@ -487,7 +480,7 @@
     },
     {
       "id": "library.collection-members",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-COLLECTION-MEMBER-MAX",
       "value": 128,
       "scope": "aggregate-relationship",
@@ -495,7 +488,7 @@
     },
     {
       "id": "library.tags",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-TAG-MAX",
       "value": 16,
       "scope": "per-record-inline",
@@ -503,7 +496,7 @@
     },
     {
       "id": "library.lineage",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-LINEAGE-MAX",
       "value": 4,
       "scope": "per-record-inline",
@@ -511,7 +504,7 @@
     },
     {
       "id": "library.content-bytes",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-CONTENT-MAX",
       "value": 65536,
       "scope": "whole-record-buffer",
@@ -519,7 +512,7 @@
     },
     {
       "id": "library.retained-revisions",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-RETAINED-REVISION-MAX",
       "value": 4,
       "scope": "per-record-inline",
@@ -527,7 +520,7 @@
     },
     {
       "id": "library.query-page",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-QUERY-PAGE-MAX",
       "value": 32,
       "scope": "working-set",
@@ -535,7 +528,7 @@
     },
     {
       "id": "library.live-projections",
-      "module": "library/model.f",
+      "module": "tui/applets/library/model.f",
       "symbol": "LIB-PROJECTION-MAX",
       "value": 8,
       "scope": "instance-pool",
@@ -543,7 +536,7 @@
     },
     {
       "id": "library.projection-leases",
-      "module": "library/projection-owner.f",
+      "module": "tui/applets/library/projection-adapter.f",
       "symbol": "LIBRARY-PROJECTION-LEASE-MAX",
       "value": 64,
       "scope": "instance-pool",

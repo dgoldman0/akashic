@@ -106,7 +106,7 @@ def setup_source(shape: Shape) -> str:
     member_bytes = max(1, shape.documents * 32)
     return rf'''\ deterministic MP64FS Library-maintenance corpus
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 {shape.documents} CONSTANT _lme-document-count
@@ -225,7 +225,7 @@ def profile_source(shape: Shape) -> str:
     """Return the fresh-activation maintenance profiling program."""
     return rf'''\ fresh-process bounded Library-maintenance profile
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 {shape.documents} CONSTANT _lme-expected-documents
@@ -1016,7 +1016,7 @@ def run_shape(shape: Shape, timeout: float, keep_image: bool) -> None:
     )
     previous = PROFILES.get(PROFILE_NAME)
     profile = Profile(
-        roots=("library/vfs-store.f", "utils/fs/drivers/vfs-mp64fs.f"),
+        roots=("tui/applets/library/service.f", "utils/fs/drivers/vfs-mp64fs.f"),
         resources=(),
         autoexec=setup_source(shape),
         ready_markers=(SETUP_DONE,),

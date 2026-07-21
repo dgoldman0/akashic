@@ -81,7 +81,7 @@ def setup_source(shape: Shape) -> str:
     member_alloc = max(1, shape.documents * 32)
     return rf'''\ deterministic MP64FS Library efficiency corpus
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 {shape.documents} CONSTANT _lqe-document-count
@@ -198,7 +198,7 @@ _lqe-setup
 def profile_source(shape: Shape) -> str:
     return rf'''\ fresh-process MP64FS Library efficiency profile
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 {shape.documents} CONSTANT _lqe-document-count
@@ -708,7 +708,7 @@ def run_shape(shape: Shape, timeout: float, keep_image: bool) -> None:
     )
     previous = PROFILES.get(PROFILE_NAME)
     PROFILES[PROFILE_NAME] = Profile(
-        roots=("library/vfs-store.f", "utils/fs/drivers/vfs-mp64fs.f"),
+        roots=("tui/applets/library/service.f", "utils/fs/drivers/vfs-mp64fs.f"),
         resources=(),
         autoexec=setup_source(shape),
         ready_markers=(SETUP_DONE,),

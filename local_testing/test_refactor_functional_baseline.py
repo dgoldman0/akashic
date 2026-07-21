@@ -26,17 +26,17 @@ def test_live_functional_ledger_is_complete_and_source_anchored() -> None:
     assert summary(ledger) == {
         "applets": 9,
         "behavior_groups": 29,
-        "fully_covered_groups": 12,
-        "partial_groups": 15,
+        "fully_covered_groups": 13,
+        "partial_groups": 14,
         "prerequisite_only_groups": 2,
-        "prerequisites": 22,
+        "prerequisites": 21,
         "evidence_references": 110,
     }
 
 
 def test_partial_behavior_must_name_a_reviewable_prerequisite() -> None:
     ledger = copy.deepcopy(load_ledger())
-    behavior = ledger["applets"][0]["behaviors"][0]
+    behavior = ledger["applets"][0]["behaviors"][3]
     assert behavior["coverage"] == "partial"
     behavior["prerequisite_ids"] = []
     errors = check_ledger(ledger)

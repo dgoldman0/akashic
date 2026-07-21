@@ -201,7 +201,7 @@ QUERY_PROOF_WORDS = r"""
 
 FIRST_AUTOEXEC = rf"""\ autoexec.f - first Library milestone-three query boot
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _lq-fails
@@ -420,7 +420,7 @@ def _cold_autoexec(results: tuple[bytes, bytes, bytes], collection: bytes) -> st
     collection_rid = _rid_definition(collection)
     return rf"""\ autoexec.f - cold Library milestone-three query rebuild boot
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _lq-fails
@@ -494,7 +494,7 @@ def _profile() -> Profile:
     """Return the exact build closure used by both isolated processes."""
     return Profile(
         roots=(
-            "library/vfs-store.f",
+            "tui/applets/library/service.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),
         resources=(),

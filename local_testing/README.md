@@ -106,6 +106,38 @@ ratchets. These are MP64FS/generic-VFS qualifications; ext4 remains unrelated.
 See `docs/refactor/l7-daybook-agent-rehoming.md` for the ownership boundary and
 final evidence.
 
+L8 re-homes and decomposes Library without changing its product surface or
+fixed current storage behavior. Renderer-free profiles now load Library-owned
+modules beneath `tui/applets/library/`; that is a direct test boundary, not a
+standalone product package. The focused split gate is:
+
+```bash
+python3 local_testing/akashic_tui.py smoke \
+  --profile library-model-codecs-contracts
+python3 local_testing/akashic_tui.py smoke \
+  --profile library-store-format-contracts
+python3 local_testing/akashic_tui.py smoke \
+  --profile library-vfs-store-contracts
+python3 local_testing/akashic_tui.py smoke \
+  --profile library-query-index-contracts
+python3 local_testing/akashic_tui.py smoke \
+  --profile library-projection-owner-contracts
+python3 local_testing/akashic_tui.py smoke \
+  --profile library-applet-functional-contracts
+```
+
+The applet profile now executes 162 assertions through the real controller
+implementation, closing the L1 controller-edge prerequisite. It does not claim
+that every UI callback wrapper is separately invoked. The landing also runs
+the existing Library lifecycle, maintenance, capacity, cold-reopen, efficiency,
+and complete Gate 4 drivers, plus packaging, both refactor ratchets, and the
+normal host practical gate. Repository is the sole `/library/*` authority;
+query, service, projection, controller, view, and lifecycle are separate
+Library-owned responsibilities. Every cross-file private reach retained by the
+fixed backend is marked for deletion with that backend in L12. No old-path
+facade, version/migration stack, raised capacity, or ext4 dependency is added.
+See `docs/refactor/l8-library-rehoming-and-decomposition.md`.
+
 ## Build And Smoke Test
 
 ```bash
@@ -164,7 +196,7 @@ nor linked into an Akashic deployment chunk.
 
 The authoritative profile registry and each journey's assertions live in
 `akashic_tui.py`; `--help` lists the accepted profile names. Profiles are
-organized around focused library/runtime contracts, standalone applet journeys,
+organized around focused library/runtime contracts, direct applet journeys,
 and linked Desk journeys. Run the narrow profile for the behavior being changed
 and the linked profile that owns its production lifecycle. Generated images,
 terminal text, cell JSON, and PNG captures go under `local_testing/out/`.
@@ -380,7 +412,7 @@ These results qualify milestone four. Milestone five and the complete Gate 4
 exit are qualified separately below; projection tests do not stand in for that
 maintenance and damage evidence.
 
-### Gate 4 milestone 5 and complete headless exit
+### Gate 4 milestone 5 and complete renderer-free exit
 
 `library-maintenance-contracts` qualifies the caller-owned inspection report,
 sealed optimistic evidence token, recognized head-transaction repair, and
@@ -393,7 +425,7 @@ MEGAPAD_ROOT=/absolute/path/to/megapad \
     --max-steps 15000000000 --timeout 600
 ```
 
-The 219-assertion linked profile covers complete healthy V1 semantics; size,
+The 221-assertion linked profile covers complete healthy V1 semantics; size,
 short-buffer, and exact seven-object export; byte/SHA identity; report/output
 alias rejection; read, close, and durability failure cleanup; stale evidence;
 recognized replacement residue repair and idempotent retry; future and corrupt
@@ -425,7 +457,7 @@ cycles, and target-clock interpretation are in
 [`evidence/library-gate4-close-20260720.md`](evidence/library-gate4-close-20260720.md).
 Together with the preceding focused/capacity profiles and the managed,
 lifecycle, query, and projection cold drivers, this satisfies the literal
-headless Gate 4 exit. It does not claim the complete Gate 5 applet or any
+renderer-free Gate 4 exit. It does not claim the complete Gate 5 applet or any
 Desktop, Pad, Explorer, Streams, Agent, or Practice integration.
 
 The Streams qualification path is intentionally split by boundary:

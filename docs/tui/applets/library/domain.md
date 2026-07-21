@@ -1,13 +1,14 @@
-# Library product boundary
+# Library applet product boundary
 
-Status: the pure bounded model/codecs, deterministic arena/catalog/head formats,
-sole VFS owner, and all five ordered Gate 4 owner/storage milestones are
-implemented and qualified. Library owns managed-document and capture
+Status: the applet-owned bounded model/codecs, deterministic
+arena/catalog/head formats, repository, query and service modules, projection
+adapter, and all five ordered Gate 4 owner/storage milestones are implemented
+and qualified. Library owns managed-document and capture
 mutation, retained history, receipts, lifecycle, collections, a disposable
 title/body/tag index, bounded authoritative corpus/collection queries, and an
 activation-local projection-owner lifecycle. Its maintenance surface provides
 recognized-format inspection, deterministic head-transaction repair, and
-bounded coherent opaque evidence export. A bounded non-Desktop applet executable
+bounded coherent opaque evidence export. A bounded direct applet test assembly
 exercises the public storage surface as a user-facing corpus lens: it can browse
 and search active/archived records, preview exact content, create and rename
 managed documents, archive/unarchive, inspect retained history, browse/filter
@@ -20,8 +21,8 @@ lens action listed above remains part of the preserved applet surface.
 Library is the machine-level corpus of material a user deliberately keeps. A
 Practice may eventually bind Library resources into an activity, but the corpus
 and its records remain Library-owned. Its renderer-free owner can be qualified
-without starting Desk, but that is a testability boundary, not a standalone
-product identity: Library remains a Desk-applet domain and does not absorb
+without instantiating Desk in that focused fixture, but that is only a
+testability boundary: Library remains a Desk-applet domain and does not absorb
 Streams, Pad, Agent, Daybook, Grid, or Practice policy.
 
 ## Ownership boundary
@@ -49,16 +50,16 @@ Library does not own:
   synchronization service, collaboration server, or universal
   citation/claim/backlink graph.
 
-Desk is Library's owning product ecosystem. The current non-Desktop applet
-executable shows Library records through the public owner surface, but
+Desk is Library's owning product ecosystem. The current direct applet test
+assembly shows Library records through the public owner surface, but
 presentation does not transfer domain ownership or by itself establish a
 Desktop route or capability.
 
 ## Bounded Library foundation
 
-`akashic/library/model.f` defines pointer-free catalog, provenance, receipt,
+`akashic/tui/applets/library/model.f` defines pointer-free catalog, provenance, receipt,
 lineage, and collection payloads. Its only borrowed pointer is the data address
-in the transient content view. `akashic/library/record-codec.f` defines pure
+in the transient content view. `akashic/tui/applets/library/record-codec.f` defines pure
 caller-buffer V1 encoders, decoders, and validators by adapting the independent
 `utils/checked-record.f` envelope. Checked-record owns mechanical geometry,
 checksums, padding, callback containment, and header inspection; Library owns
@@ -187,7 +188,7 @@ zeroed.
 
 ## Pure storage format
 
-`akashic/library/store-format.f` remains VFS-free. It defines three bounded V1
+`akashic/tui/applets/library/store-format.f` remains VFS-free. It defines three bounded V1
 shapes for the serialized owner:
 
 - a 655,360-byte immutable content arena with a 512-byte header and 654,848
@@ -221,7 +222,7 @@ legacy reader or migration facade.
 
 ## VFS loading and provisioning
 
-`akashic/library/vfs-store.f` is the sole owner of the private
+`akashic/tui/applets/library/repository.f` is the sole owner of the private
 `/library/head.bin`, two complete catalog banks, and fixed content arena. It
 exposes no path accessor. The owner inspects `/library` and each reserved
 terminal name without following a symbolic link; namespace/type collisions
@@ -330,7 +331,7 @@ slot zero.
 
 ## Projection owner and lens rule
 
-`akashic/library/projection-owner.f` implements the Library domain acquisition
+`akashic/tui/applets/library/projection-adapter.f` implements the Library domain acquisition
 root `LIBRARY-PROJECTION-OWNER$` (`org.akashic.library`). Its fixed-RID
 resource projections use `LIBRARY-PROJECTION-CONTRACT$`
 (`org.akashic.library.utf8-content.v1`). The activation can publish at most
@@ -397,18 +398,37 @@ Consequential operations name an exact Library target and expected domain
 state. They never mean the selected Library row, active Pad tab, focused
 applet, or newest revision.
 
-## Current package and refactor handoff
+## Current package boundary
 
-The current top-level implementation package is `akashic/library/`. Model,
-record codecs, the catalog/content owner, disposable index, import semantics,
-and concrete projection owner remain Library-applet code while neutral
-mechanics are extracted. The package is transitional placement, not a
-standalone product. The implemented applet package is
-`akashic/tui/applets/library/`; it is a bounded Library lens over the public
-owner API, not the owner, a projection owner, or a Desktop registration.
-The owner-pool mechanics have moved to `interop/` after Library and Daybook
-proved the same lifetime contract. Remaining Library model, storage,
-qualification, and projection policy stays applet-owned.
+All Library product code lives in `akashic/tui/applets/library/`. The model,
+record codecs and formats feed `repository.f`; `query.f` owns bounded query
+semantics; `service.f` owns commands, exact reads, history, collections and
+maintenance; `projection-adapter.f` adapts that service to resource interop;
+and `controller.f`, `view.f`, and `library.f` separate applet state/actions,
+rendering/input, and lifecycle composition. There is no top-level Library
+package or compatibility facade.
+
+`repository.f` is the sole owner of Library path strings, topology, and
+durable authority. The current `service.f` directly orchestrates its private
+I/O and VFSNAP machinery only through the explicitly temporary L12 seam; this
+does not create a second repository.
+
+The owner-pool mechanics live in `interop/` because Library and Daybook proved
+the same lifetime contract. Library identity, storage, qualification, query,
+projection and UX policy remain applet-owned.
+
+The temporary L8 seams are explicitly marked `L12-DELETION` in source. They
+cover the fixed-bank/process-global repository and its contract hooks; direct
+query access to the `_LIBCQ/_LIBIX/_LIBMR/_LIBMU/_LIBRARY/_LIBVCF/_LIBVFS/
+_LIBVP` families; service access to those plus `_LIBAUTH/_LIBLOC/_LIBMA/
+_LIBMD/_LIBPQ`; the model/codec/format private owner-span sentinels and the
+repository-to-service `_LIBVFS-PRIVATE-BEGIN/END` split; the fixed format's
+private layout offsets; projection and controller dependence on the
+storage-shaped service; and the view/lifecycle reach into `_LAPP-*` state
+before the settled paged item-source, view-model, and lifecycle boundary
+exists. L12 deletes those seams after successor parity. The model, domain
+semantics, projection policy, and applet composition are not compatibility
+layers.
 
 The existing `akashic/knowledge/taxonomy.f` and `akashic/store/vault.f` are not
 Library foundations. Neither supplies this bounded durable owner, revision,
@@ -416,14 +436,12 @@ recovery, identity, or projection contract.
 
 The focused, capacity, performance, clean-cold, and damage-branch results that
 close the Gate 4 owner/storage gate are recorded in
-[`../../local_testing/evidence/library-gate4-close-20260720.md`](../../local_testing/evidence/library-gate4-close-20260720.md).
+[`../../../../local_testing/evidence/library-gate4-close-20260720.md`](../../../../local_testing/evidence/library-gate4-close-20260720.md).
 
-The repository-root refactoring plan governs the remaining order. It schedules
-neutral extraction before re-homing the top-level implementation beneath the
-Library applet, and treats interop plus indexed/streamed scale work as separate
-reviewed landings. This document creates no standalone Library product or
-storage-migration gate of its own.
+The repository-root refactoring plan governs the remaining order. Indexed and
+streamed scale work is a later reviewed landing; this placement change creates
+no Library product boundary outside Desk and no storage-migration gate of its
+own.
 
-Until each boundary lands, no component may infer its VFS paths, register a
-Library capability, route to a selected row, or treat these pure codecs as a
-durable owner.
+No component may infer Library VFS paths, register a capability by discovery,
+route to a selected row as authority, or treat pure codecs as a durable owner.

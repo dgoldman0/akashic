@@ -49,7 +49,7 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 
 | Applet | Groups | Covered | Partial | Prerequisite-only | Named prerequisites | Evidence references |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Library | 4 | 2 | 2 | 0 | 3 | 19 |
+| Library | 4 | 3 | 1 | 0 | 2 | 19 |
 | Streams | 4 | 1 | 3 | 0 | 4 | 23 |
 | Agent | 4 | 3 | 1 | 0 | 1 | 23 |
 | Daybook | 3 | 2 | 1 | 0 | 1 | 9 |
@@ -58,7 +58,7 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
 | Desk | 3 | 1 | 2 | 0 | 3 | 11 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **29** | **12** | **15** | **2** | **22** | **110** |
+| **Total** | **29** | **13** | **14** | **2** | **21** | **110** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -73,6 +73,12 @@ and a broad test-writing project for code an active landing may never touch.
   projection owner's calls to the canonical RCON descriptor constructors and
   the capability identities owned by that neutral contract module; moving the
   repeated construction mechanics does not weaken the Library surface check.
+  L8's expanded 162-assertion applet fixture closes the controller-edge
+  prerequisite through the real controller implementation: it covers lifecycle
+  scopes, search reset/cancel, collection filtering and return, paging, conflicts,
+  authoritative reload, prepared-create failure and byte-exact retry, and
+  close/discard behavior. The ledger therefore promotes the existing Library
+  applet-surface group to covered without adding or removing a product action.
 - Streams live-network profiles are supplemental. Deterministic offline, XIO,
   owner, codec, persistence and Desk journeys are the preservation gate.
 - Agent retains offline, scripted, OpenAI and Codex providers, all access

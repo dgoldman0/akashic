@@ -8,15 +8,19 @@
 \  V1 is native little-endian MegaPad-64.  Every serialized tail and flag
 \  is canonical zero.  Header CRC is checked before format dispatch, so a
 \  checksummed future format is distinguishable from corrupt evidence.
+\
+\  L12-DELETION: repository.f currently reaches five private layout offsets
+\  here while validating the fixed-bank backend. That bounded format-adapter
+\  seam is deleted with the old backend in L12; it is not a public format API.
 \ =====================================================================
 
-PROVIDED akashic-library-store-format
+PROVIDED akashic-tui-library-store-format
 
 REQUIRE record-codec.f
-REQUIRE ../math/crc.f
-REQUIRE ../math/sha3.f
-REQUIRE ../utils/memory-span.f
-REQUIRE ../concurrency/guard.f
+REQUIRE ../../../math/crc.f
+REQUIRE ../../../math/sha3.f
+REQUIRE ../../../utils/memory-span.f
+REQUIRE ../../../concurrency/guard.f
 
 1 CONSTANT LIB-STORE-FORMAT-V1
 1 CONSTANT LIB-CONTENT-CHAIN-ALGORITHM-V1

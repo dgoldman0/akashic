@@ -1,26 +1,19 @@
-# Library domain package
+# Library applet domain package
 
-Status: the pure model/codecs and store formats, the sole VFS owner, and all
-five ordered Gate 4 implementation milestones are implemented and qualified.
-The public headless owner creates and replaces managed
+Status: the applet-owned model/codecs and store formats, repository, service,
+query policy, and all five ordered Gate 4 implementation milestones are
+implemented and qualified. The renderer-free service creates and replaces managed
 documents, imports immutable captures, manages metadata and lifecycle, exposes
 retained history and receipts, creates/replaces and enumerates RID-based
 collections, and serves bounded authoritative corpus queries through a
 disposable title/body/tag index. The Library domain root now also acquires,
 shares, and quiescently releases bounded one-RID projection owners. A bounded
-non-Desktop applet executable presents the storage surface as a functional
-corpus lens.
+direct applet test assembly presents the storage surface as a functional corpus
+lens.
 Recognized-format inspection and narrowly planned repair plus coherent bounded
-opaque raw export complete the headless recovery surface. The literal Gate 4
-cold/damage exit is green; Desktop hosting and Streams integration remain
-separate work under the repository-root refactoring plan. Renderer-free
-qualification does not give this Desk-applet domain a standalone product
-identity.
-
-The current top-level `akashic/library/` path is transitional placement for
-Library-applet implementation. It is independently testable, but its domain
-meaning remains inside the Desk ecosystem; neutral mechanics move out before
-the remainder is re-homed beneath the applet.
+opaque raw export complete the renderer-free recovery surface. The literal
+Gate 4 cold/damage exit is green. Renderer-free qualification is only a test
+boundary; every module here belongs to the Library applet inside Desk.
 
 The current modules are:
 
@@ -31,19 +24,56 @@ The current modules are:
   envelope for catalog entries, collections, and immutable content revisions.
 - `store-format.f`: deterministic V1 arena, catalog-bank, and head formats plus
   the ordered content-frame commitment used by the VFS owner.
-- `vfs-store.f`: the sole owner of Library-private VFS paths, committed-snapshot
-  loading/provisioning, fail-closed recovery, the guarded public headless
-  document/capture/history/receipt/collection mutation and read surface, and
-  the activation-local disposable search index, bounded query API, and sealed
-  inspection/repair/raw-evidence API.
-- `projection-owner.f`: the Library domain acquisition root and bounded pool of
-  fixed-RID resource projections over an explicitly supplied VFS-store
-  instance.
+- `repository.f`: the sole owner of Library-private VFS paths, topology,
+  committed-snapshot loading/provisioning, fail-closed recovery, transaction
+  machinery, and activation-local disposable index state.
+- `query.f`: bounded corpus and collection query execution, generation-pinned
+  continuation, exact verification, and Library lifecycle/filter semantics.
+- `service.f`: the public command/read surface for documents, captures,
+  history, receipts, collections, inspection, repair, and raw evidence.
+- `projection-adapter.f`: the Library acquisition adapter and bounded pool of
+  fixed-RID resource projections over an explicitly supplied repository.
+- `controller.f`, `view.f`, and `library.f`: activation state and actions,
+  rendering/panel input, and lifecycle/composition respectively.
 
-The model, record codec, and store-format modules remain VFS-free. `vfs-store.f`
-alone performs I/O and chooses the private storage topology. Only
-`projection-owner.f` publishes activation-local resource projections; none
-imports a sibling domain or applet.
+The model, record codec, and store-format modules remain VFS-free.
+`repository.f` alone owns Library paths, private storage topology, and durable
+authority. `service.f` temporarily drives its private I/O and VFSNAP machinery
+through the L12 deletion seam named below. Only `projection-adapter.f`
+publishes activation-local resource projections; none imports a sibling domain
+or applet.
+
+## L12 deletion ledger
+
+L8 preserves one current storage implementation while making its ownership
+visible. The temporary seams are exhaustively named in source:
+
+- `repository.f` retains the fixed-bank backend, process-global transaction
+  workspace, and `_LIBMU`/`_LIBAUTH`/`_LIBLOC`/`_LIBIX` coupling;
+- `query.f` reaches repository-private `_LIBCQ`, `_LIBIX`, `_LIBMR`, `_LIBMU`,
+  `_LIBRARY`, `_LIBVCF`, `_LIBVFS`, and `_LIBVP` prefix families for the
+  current disposable-index and raw-slot query implementation;
+- `service.f` reaches repository-private `_LIBAUTH`, `_LIBCQ`, `_LIBIX`,
+  `_LIBLOC`, `_LIBMA`, `_LIBMD`, `_LIBMR`, `_LIBMU`, `_LIBPQ`, `_LIBRARY`,
+  `_LIBVCF`, `_LIBVFS`, and `_LIBVP` families for current commands and reads;
+- the service owner-span guard reaches model `_LIBM-PRIVATE-BEGIN` and
+  `_LIBE-TAGS`/`_LIBE-LINEAGE`, codec `_LIBRC-PRIVATE-BEGIN`, and format
+  `_LIBSF-PRIVATE-BEGIN/END`; the repository's `_LIBVFS-PRIVATE-BEGIN` sentinel
+  is temporarily closed by `_LIBVFS-PRIVATE-END` in `service.f`;
+- `projection-adapter.f` calls the current `LIBRARY-VFS-STORE-*` service
+  surface;
+- `store-format.f` exposes five private layout offsets to the fixed repository;
+- `controller.f` calls the storage-shaped current service directly; and
+- `view.f` and `library.f` reach controller/view `_LAPP-*` internals before the
+  settled paged item-source, view-model, and lifecycle boundary exists.
+
+These are bounded scaffolds for the L10-L11 vertical slices. L12 must delete
+the old backend and every cross-module private reach listed above, then retarget
+the preserved query, service, and projection policy to the scalable repository.
+The fixed repository's contract-only authority/locator/index damage hooks are
+also deleted with that backend in L12 rather than promoted into its successor.
+No other L8 module boundary is designated temporary, and none is a legacy or
+compatibility facade.
 
 ## Initial Library bounds
 
@@ -153,7 +183,7 @@ current reader, with no legacy reader or migration facade.
 
 ## Sealed VFS loading and first-use boundary
 
-`vfs-store.f` privately owns `/library/head.bin`, the two complete catalog
+`repository.f` privately owns `/library/head.bin`, the two complete catalog
 banks, and the fixed content arena. Callers cannot select or discover a path.
 The `/library` directory and every reserved terminal name are checked as
 namespace objects: a symbolic-link or nonmatching-type collision fails closed
@@ -180,7 +210,7 @@ the head last. A retry with the same arena identity performs no write; a
 different identity conflicts. A bank written without its head is preserved as
 recovery evidence and is never silently resumed or adopted.
 
-## Public headless owner surface
+## Public applet service surface
 
 Managed create and capture import accept caller operation keys and an expected
 catalog generation. Library generates a globally disjoint RID, retains the
@@ -285,7 +315,7 @@ rewrites a bank, content record, unknown format, or unaccepted evidence.
 
 ## Projection-owner boundary
 
-`projection-owner.f` owns the Library acquisition root
+`projection-adapter.f` owns the Library acquisition root
 `LIBRARY-PROJECTION-OWNER$` (`org.akashic.library`) and publishes UTF-8
 resource projections under `LIBRARY-PROJECTION-CONTRACT$`
 (`org.akashic.library.utf8-content.v1`). It validates every requested exact
@@ -323,21 +353,21 @@ fixed-RID slot only after a successful final release. A full pool refuses
 another distinct RID rather than evicting or retargeting an owner.
 
 The focused emulator profile is
-`library-projection-owner-contracts`. It packages the headless Library store,
+`library-projection-owner-contracts`. It packages the renderer-free Library service,
 Gate 3 resource interop, and production projection owner without any Library
 applet, Desk, Pad, or Streams source.
 
-## Applet executable lens
+## Directly testable applet lens
 
-`akashic/tui/applets/library/library.f` and `library.uidl` implement a bounded
-single-instance lens over the public headless owner API. The lens browses and
+`controller.f`, `view.f`, `library.f`, and `library.uidl` implement a bounded
+single-instance lens over the applet service API. The lens browses and
 searches active/archived records, previews exact content, creates and renames
 managed documents, archives and unarchives them, exposes retained history,
 browses and filters collections, and pages bounded query results. It publishes
 no Library capability, projection owner, private path, or cross-applet binding.
 
-This non-Desktop executable is an explicit UX probe, not a standalone Library
-product or a claim that Desktop integration is complete. It does not yet
+This minimal test-host assembly is an explicit UX probe, not a product boundary
+outside Desk or a claim that Desktop integration is complete. It does not yet
 provide deep Pad editing, capture import, destructive deletion,
 maintenance/export UI, or a Desktop-hosted route. Its currently implemented
 browse, search, preview, mutation, history, collection, and paging actions
@@ -360,13 +390,13 @@ python3 local_testing/library_gate4_exit_two_boot.py --timeout 600
 
 ## Gate 4 qualification boundary
 
-Gate 4 is complete at this bounded headless boundary. The focused maintenance
+Gate 4 is complete at this bounded renderer-free boundary. The focused maintenance
 matrix, full earlier-milestone regressions, spawn-isolated cold drivers, and
 literal clean/damaged Gate 4 exit are recorded in
-[`../../local_testing/evidence/library-gate4-close-20260720.md`](../../local_testing/evidence/library-gate4-close-20260720.md).
+[`../../../../local_testing/evidence/library-gate4-close-20260720.md`](../../../../local_testing/evidence/library-gate4-close-20260720.md).
 This claim does not infer a Desktop route from registry presence or from the
 test executable. The applet route remains explicit and bounded as described
 above.
 For the broader product boundary and gate handoff, see
-[`../../docs/library/library.md`](../../docs/library/library.md). It is the
+[`../../../../docs/tui/applets/library/domain.md`](../../../../docs/tui/applets/library/domain.md). It is the
 ratified product-boundary document.

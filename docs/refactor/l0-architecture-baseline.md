@@ -390,3 +390,32 @@ The independent class is byte-for-byte unchanged by L7. Agent's staged access
 candidate and Desk's exact policy scratch account for the bounded applet-state
 change; no corpus capacity, storage format, filesystem backend, deferred
 applet, or ext4 dependency changes.
+
+## L8 reviewed ratchet update
+
+Landing L8 deletes the five remaining top-level Library source modules and
+re-homes their responsibilities beneath `tui/applets/library/`. The former
+store is divided into repository, query, and service modules, the projection
+owner becomes an applet-owned adapter, and the applet implementation is divided
+into controller, view, and lifecycle/composition modules. There is no old-path
+loader or second authority. Four net modules and four net dependency edges make
+the reviewed graph 392 modules, 1,311 resolved `REQUIRE` occurrences, and 1,311
+unique resolved edges.
+
+The move removes all five remaining placement-debt modules. The graph retains
+78 unchanged reviewed unresolved imports, no cycle, and one layer violation:
+the already scheduled L9 app-shell dependency on the concrete MP64FS driver.
+The graph digest is
+`84931025e194826c255bcb53a922e863a730a2948ea385cb06f5011e15d73f93`;
+the placement digest is
+`4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`.
+
+Current responsibility totals are 68 applet modules / 48,187 lines / 2,734
+lexical globals, 59 Desk-ecosystem modules / 24,138 lines / 1,100 lexical
+globals, and 265 independent modules / 128,735 lines / 7,075 lexical globals.
+The independent and Desk classes are unchanged; decomposition adds 81 source
+lines of explicit boundary and L12-deletion documentation without adding a
+lexical mutable global. The state digest becomes
+`65a4dba68faf0f77057c1a2ecbca3bfa7d2f39eb47bed2016c65ed7bdefa1dc3`.
+No product capacity, storage format, filesystem backend, applet behavior,
+deferred-app scope, or ext4 dependency changes in L8.

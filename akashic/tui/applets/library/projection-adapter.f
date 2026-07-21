@@ -1,5 +1,5 @@
 \ =====================================================================
-\  projection-owner.f - Bounded Library semantic projection owner
+\  projection-adapter.f - Library resource projection adapter
 \ =====================================================================
 \  One activation-local owner root retains at most eight Library RIDs.
 \  Every acquisition returns a distinct non-durable lease token, even when
@@ -10,6 +10,10 @@
 \  bus for its complete lifetime.  No operation consults VFS-CUR or discovers
 \  a store by path.  Library domain revisions remain separate from CINST
 \  revisions.
+\
+\  L12-DELETION: the adapter's direct LIBRARY-VFS-STORE-* dependency is the
+\  temporary fixed-repository seam. L12 retargets the same projection policy
+\  to the scalable Library service and deletes the old dependency.
 \
 \  Public surface:
 \    LIBRARY-PROJECTION-OWNER$        ( -- a u )
@@ -29,14 +33,14 @@
 \  reject every owner-private and reachable borrowed span they can enumerate.
 \ =====================================================================
 
-PROVIDED akashic-library-projection-owner
+PROVIDED akashic-tui-library-projection-adapter
 
-REQUIRE vfs-store.f
-REQUIRE ../interop/resource-owner-pool.f
-REQUIRE ../interop/resource-contract.f
-REQUIRE ../interop/request-bus.f
-REQUIRE ../runtime/resource-registry.f
-REQUIRE ../runtime/registry.f
+REQUIRE service.f
+REQUIRE ../../../interop/resource-owner-pool.f
+REQUIRE ../../../interop/resource-contract.f
+REQUIRE ../../../interop/request-bus.f
+REQUIRE ../../../runtime/resource-registry.f
+REQUIRE ../../../runtime/registry.f
 
 CREATE _LPR-PRIVATE-BEGIN 0 ALLOT
 VARIABLE _LPR-PRIVATE-LIMIT

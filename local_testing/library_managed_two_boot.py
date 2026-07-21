@@ -57,7 +57,7 @@ RID_RE: Final = re.compile(r"LIBRARY MANAGED FIRST RID +([0-9A-F]{64})")
 
 FIRST_AUTOEXEC = r"""\ autoexec.f - first managed-document persistence boot
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _lmf-fails
@@ -187,7 +187,7 @@ def _cold_autoexec(expected_rid: bytes) -> str:
     )
     return rf"""\ autoexec.f - cold managed-document public readback
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _lmc-fails
@@ -319,7 +319,7 @@ def _profile() -> Profile:
     """Return the exact build closure needed by both cold processes."""
     return Profile(
         roots=(
-            "library/vfs-store.f",
+            "tui/applets/library/service.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),
         resources=(),

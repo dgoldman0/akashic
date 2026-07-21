@@ -88,8 +88,8 @@ ENTER-USERLAND
 REQUIRE concurrency/guard.f
 REQUIRE interop/request-bus.f
 REQUIRE interop/resource-acquisition.f
-REQUIRE library/vfs-store.f
-REQUIRE library/projection-owner.f
+REQUIRE tui/applets/library/service.f
+REQUIRE tui/applets/library/projection-adapter.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _lpf-fails
@@ -296,8 +296,8 @@ REQUIRE concurrency/guard.f
 REQUIRE interop/request-bus.f
 REQUIRE interop/resource-acquisition.f
 REQUIRE interop/resource-client.f
-REQUIRE library/vfs-store.f
-REQUIRE library/projection-owner.f
+REQUIRE tui/applets/library/service.f
+REQUIRE tui/applets/library/projection-adapter.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _lpc-fails
@@ -480,7 +480,7 @@ def _profile() -> Profile:
     """Return the exact build closure needed by both cold processes."""
     return Profile(
         roots=(
-            "library/projection-owner.f",
+            "tui/applets/library/projection-adapter.f",
             "interop/resource-client.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),

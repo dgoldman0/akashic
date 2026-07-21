@@ -48,12 +48,40 @@ GATE4_HEADLESS_PROFILES = (
     "library-managed-capacity-contracts",
 )
 
+LIBRARY_HEADLESS_APPLET_MODULES = frozenset(
+    {
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/repository.f",
+        "tui/applets/library/query.f",
+        "tui/applets/library/service.f",
+        "tui/applets/library/projection-adapter.f",
+    }
+)
+LIBRARY_UI_APPLET_MODULES = frozenset(
+    {
+        "tui/applets/library/controller.f",
+        "tui/applets/library/view.f",
+        "tui/applets/library/library.f",
+    }
+)
+
+
+def _assert_library_headless_closure(closure: set[str]) -> None:
+    tui_modules = {
+        module for module in closure if module.startswith("tui/")
+    }
+    assert tui_modules <= LIBRARY_HEADLESS_APPLET_MODULES
+    assert tui_modules.isdisjoint(LIBRARY_UI_APPLET_MODULES)
+
 
 @pytest.mark.parametrize("profile_name", GATE4_HEADLESS_PROFILES)
 def test_gate4_headless_profiles_use_linked_loader(profile_name: str) -> None:
     profile = PROFILES[profile_name]
     assert profile.linked is True
     assert profile.link_chunk_bytes == LINK_CHUNK_BYTES
+    _assert_library_headless_closure(set(dependency_closure(profile.roots)))
 
 
 def test_profile_failure_markers_are_checked_across_raw_and_screen_text() -> None:
@@ -90,7 +118,7 @@ def test_agent_provider_ui_command_profile_uses_public_applet_seams() -> None:
 
 def test_library_store_format_profile_packages_its_exact_contract_leaf() -> None:
     profile = PROFILES["library-store-format-contracts"]
-    assert profile.roots == ("library/store-format.f",)
+    assert profile.roots == ("tui/applets/library/store-format.f",)
     assert profile.ready_markers == ("LIBRARY STORE FORMAT PASS",)
     assert profile.stable_markers == profile.ready_markers
     assert {
@@ -105,11 +133,11 @@ def test_library_store_format_profile_packages_its_exact_contract_leaf() -> None
 
     closure = set(dependency_closure(profile.roots))
     assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
     } <= closure
-    assert all(not module.startswith("tui/") for module in closure)
+    _assert_library_headless_closure(closure)
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
     assert all("vfs" not in module for module in closure)
@@ -117,7 +145,7 @@ def test_library_store_format_profile_packages_its_exact_contract_leaf() -> None
 
 def test_library_vfs_store_profile_packages_its_exact_contract_leaf() -> None:
     profile = PROFILES["library-vfs-store-contracts"]
-    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.roots == ("tui/applets/library/service.f",)
     assert profile.ready_markers == ("LIBRARY VFS STORE PASS",)
     assert profile.stable_markers == profile.ready_markers
     assert profile.total_sectors == 8192
@@ -134,20 +162,20 @@ def test_library_vfs_store_profile_packages_its_exact_contract_leaf() -> None:
 
     closure = set(dependency_closure(profile.roots))
     assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
-        "library/vfs-store.f",
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/service.f",
         "utils/fs/vfs-fixed-snapshot.f",
     } <= closure
-    assert all(not module.startswith("tui/") for module in closure)
+    _assert_library_headless_closure(closure)
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
 
 
 def test_library_managed_document_profile_packages_public_vertical_slice() -> None:
     profile = PROFILES["library-managed-document-contracts"]
-    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.roots == ("tui/applets/library/service.f",)
     assert profile.ready_markers == ("LIBRARY MANAGED PASS",)
     assert profile.stable_markers == profile.ready_markers
     assert profile.total_sectors == 8192
@@ -164,20 +192,20 @@ def test_library_managed_document_profile_packages_public_vertical_slice() -> No
 
     closure = set(dependency_closure(profile.roots))
     assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
-        "library/vfs-store.f",
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/service.f",
         "utils/fs/vfs-fixed-snapshot.f",
     } <= closure
-    assert all(not module.startswith("tui/") for module in closure)
+    _assert_library_headless_closure(closure)
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
 
 
 def test_library_managed_capacity_profile_packages_hard_limit_contracts() -> None:
     profile = PROFILES["library-managed-capacity-contracts"]
-    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.roots == ("tui/applets/library/service.f",)
     assert profile.ready_markers == ("LIBRARY MANAGED CAPACITY PASS",)
     assert profile.stable_markers == profile.ready_markers
     assert profile.total_sectors == 8192
@@ -194,13 +222,13 @@ def test_library_managed_capacity_profile_packages_hard_limit_contracts() -> Non
 
     closure = set(dependency_closure(profile.roots))
     assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
-        "library/vfs-store.f",
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/service.f",
         "utils/fs/vfs-fixed-snapshot.f",
     } <= closure
-    assert all(not module.startswith("tui/") for module in closure)
+    _assert_library_headless_closure(closure)
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
 
@@ -226,7 +254,7 @@ def test_library_milestone_two_profiles_package_headless_owner_contracts(
     guest_fixture: str,
 ) -> None:
     profile = PROFILES[profile_name]
-    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.roots == ("tui/applets/library/service.f",)
     assert profile.ready_markers == (marker,)
     assert profile.stable_markers == profile.ready_markers
     assert profile.total_sectors == 8192
@@ -242,13 +270,13 @@ def test_library_milestone_two_profiles_package_headless_owner_contracts(
 
     closure = set(dependency_closure(profile.roots))
     assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
-        "library/vfs-store.f",
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/service.f",
         "utils/fs/vfs-fixed-snapshot.f",
     } <= closure
-    assert all(not module.startswith("tui/") for module in closure)
+    _assert_library_headless_closure(closure)
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
     assert all(not module.startswith("streams/") for module in closure)
@@ -256,7 +284,7 @@ def test_library_milestone_two_profiles_package_headless_owner_contracts(
 
 def test_library_query_index_profile_packages_exact_headless_contract() -> None:
     profile = PROFILES["library-query-index-contracts"]
-    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.roots == ("tui/applets/library/service.f",)
     assert profile.resources == ()
     assert profile.ready_markers == ("LIBRARY QUERY INDEX PASS",)
     assert profile.stable_markers == profile.ready_markers
@@ -276,13 +304,13 @@ def test_library_query_index_profile_packages_exact_headless_contract() -> None:
 
     closure = set(dependency_closure(profile.roots))
     assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
-        "library/vfs-store.f",
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/service.f",
         "utils/fs/vfs-fixed-snapshot.f",
     } <= closure
-    assert all(not module.startswith("tui/") for module in closure)
+    _assert_library_headless_closure(closure)
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
     assert all(not module.startswith("streams/") for module in closure)
@@ -290,7 +318,7 @@ def test_library_query_index_profile_packages_exact_headless_contract() -> None:
 
 def test_library_maintenance_profile_packages_exact_headless_contract() -> None:
     profile = PROFILES["library-maintenance-contracts"]
-    assert profile.roots == ("library/vfs-store.f",)
+    assert profile.roots == ("tui/applets/library/service.f",)
     assert profile.resources == ()
     assert profile.ready_markers == ("LIBRARY MAINTENANCE PASS",)
     assert profile.stable_markers == profile.ready_markers
@@ -307,18 +335,18 @@ def test_library_maintenance_profile_packages_exact_headless_contract() -> None:
     assert tuple(path for path, _ in profile.initial_files) == (
         "local_testing/library-maintenance.f",
     )
-    assert "REQUIRE library/vfs-store.f" in profile.autoexec
+    assert "REQUIRE tui/applets/library/service.f" in profile.autoexec
     assert "REQUIRE local_testing/library-maintenance.f" in profile.autoexec
 
     closure = set(dependency_closure(profile.roots))
     assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
-        "library/vfs-store.f",
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/service.f",
         "utils/fs/vfs-fixed-snapshot.f",
     } <= closure
-    assert all(not module.startswith("tui/") for module in closure)
+    _assert_library_headless_closure(closure)
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
     assert all(not module.startswith("streams/") for module in closure)
@@ -327,7 +355,7 @@ def test_library_maintenance_profile_packages_exact_headless_contract() -> None:
 def test_library_projection_owner_profile_packages_exact_headless_contract() -> None:
     profile = PROFILES["library-projection-owner-contracts"]
     assert profile.roots == (
-        "library/projection-owner.f",
+        "tui/applets/library/projection-adapter.f",
         "interop/resource-client.f",
     )
     assert profile.resources == ()
@@ -347,9 +375,9 @@ def test_library_projection_owner_profile_packages_exact_headless_contract() -> 
     assert tuple(path for path, _ in profile.initial_files) == (
         "local_testing/library-projection.f",
     )
-    assert "REQUIRE library/projection-owner.f" in profile.autoexec
+    assert "REQUIRE tui/applets/library/projection-adapter.f" in profile.autoexec
     assert "REQUIRE interop/resource-client.f" in profile.autoexec
-    assert "REQUIRE library/vfs-store.f" in profile.autoexec
+    assert "REQUIRE tui/applets/library/service.f" in profile.autoexec
     assert "REQUIRE concurrency/guard.f" in profile.autoexec
     assert "REQUIRE interop/request-bus.f" in profile.autoexec
     assert "REQUIRE interop/resource-acquisition.f" in profile.autoexec
@@ -363,10 +391,10 @@ def test_library_projection_owner_profile_packages_exact_headless_contract() -> 
         profile.autoexec.index("REQUIRE interop/resource-client.f")
     )
     assert profile.autoexec.index("REQUIRE interop/resource-client.f") < (
-        profile.autoexec.index("REQUIRE library/vfs-store.f")
+        profile.autoexec.index("REQUIRE tui/applets/library/service.f")
     )
-    assert profile.autoexec.index("REQUIRE library/vfs-store.f") < (
-        profile.autoexec.index("REQUIRE library/projection-owner.f")
+    assert profile.autoexec.index("REQUIRE tui/applets/library/service.f") < (
+        profile.autoexec.index("REQUIRE tui/applets/library/projection-adapter.f")
     )
     assert "REQUIRE local_testing/library-projection.f" in profile.autoexec
     fixture = profile.initial_files[0][1].decode("utf-8")
@@ -375,11 +403,11 @@ def test_library_projection_owner_profile_packages_exact_headless_contract() -> 
 
     closure = set(dependency_closure(profile.roots))
     assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
-        "library/vfs-store.f",
-        "library/projection-owner.f",
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/service.f",
+        "tui/applets/library/projection-adapter.f",
         "interop/resource-acquisition.f",
         "interop/resource-client.f",
         "interop/resource-contract.f",
@@ -387,25 +415,16 @@ def test_library_projection_owner_profile_packages_exact_headless_contract() -> 
         "runtime/resource-registry.f",
         "utils/fs/vfs-fixed-snapshot.f",
     } <= closure
-    production_closure = set(dependency_closure(("library/projection-owner.f",)))
-    assert "library/projection-owner.f" in production_closure
+    production_closure = set(
+        dependency_closure(("tui/applets/library/projection-adapter.f",))
+    )
+    assert "tui/applets/library/projection-adapter.f" in production_closure
     assert "interop/resource-client.f" not in production_closure
     assert production_closure <= closure
-    assert all(
-        not module.startswith("tui/applets/library/") for module in closure
-    )
-    assert all(
-        not module.startswith("tui/applets/desk/") for module in closure
-    )
-    assert all(
-        not module.startswith("tui/applets/pad/") for module in closure
-    )
-    assert all(
-        not module.startswith("tui/applets/streams/") for module in closure
-    )
+    _assert_library_headless_closure(closure)
 
 
-def test_library_applet_profiles_package_a_standalone_public_lens() -> None:
+def test_library_applet_profiles_package_the_desk_owned_applet() -> None:
     root = "tui/applets/library/library.f"
     resource = "tui/applets/library/library.uidl"
     interactive = PROFILES["library"]
@@ -453,31 +472,37 @@ def test_library_applet_profiles_package_a_standalone_public_lens() -> None:
     )
 
     closure = set(dependency_closure((root,)))
-    assert {
-        "library/model.f",
-        "library/record-codec.f",
-        "library/store-format.f",
-        "library/vfs-store.f",
+    expected_library_modules = {
+        "tui/applets/library/model.f",
+        "tui/applets/library/record-codec.f",
+        "tui/applets/library/store-format.f",
+        "tui/applets/library/repository.f",
+        "tui/applets/library/query.f",
+        "tui/applets/library/service.f",
+        "tui/applets/library/controller.f",
+        "tui/applets/library/view.f",
+        root,
+    }
+    assert expected_library_modules | {
         "tui/app-desc.f",
         "tui/app-shell.f",
-        root,
     } <= closure
-    assert all(
-        module == root or not module.startswith("tui/applets/")
+    assert {
+        module
         for module in closure
-    )
+        if module.startswith("tui/applets/")
+    } == expected_library_modules
     assert all(not module.startswith("agent/") for module in closure)
     assert all(not module.startswith("practice/") for module in closure)
     assert all(not module.startswith("streams/") for module in closure)
 
-    # The probe supplies only a TUI lens.  It must not silently become part
-    # of the canonical Desktop image before projection ownership and image
-    # capacity have their own explicit integration milestone.
+    # This direct test assembly exercises the Desk-owned applet; it is not a
+    # standalone product.  Desktop composition remains an explicit milestone.
     assert root not in PROFILES["desktop"].roots
     assert resource not in PROFILES["desktop"].resources
 
 
-def test_library_applet_functional_fixture_drives_controller_not_store() -> None:
+def test_library_applet_functional_fixture_uses_bounded_store_setup() -> None:
     source = (
         LOCAL_TESTING / "library-applet-functional.f"
     ).read_text(encoding="utf-8")
@@ -497,40 +522,92 @@ def test_library_applet_functional_fixture_drives_controller_not_store() -> None
             "_LAPP-DO-SHOW-ARCHIVED",
         )
     )
-    assert "LIBRARY-VFS-STORE-" not in source
-
-
-def test_library_applet_source_stays_above_public_storage_boundary() -> None:
-    source = (SOURCE_ROOT / "tui/applets/library/library.f").read_text(
-        encoding="utf-8"
+    store_calls = re.findall(r"\bLIBRARY-VFS-STORE-[A-Z0-9-]+\b", source)
+    store_fields = re.findall(r"\bLIBRARY-VFS-STORE\.[A-Z0-9-]+\b", source)
+    private_fault_words = re.findall(
+        r"\b_LIB(?:MU|VFS)-[A-Z0-9-]+\b",
+        source,
     )
-    direct_requires = set(REQUIRE_RE.findall(source))
+    assert store_calls == ["LIBRARY-VFS-STORE-CREATE-COLLECTION"]
+    assert set(store_fields) == {"LIBRARY-VFS-STORE.GENERATION"}
+    assert len(store_fields) == 4
+    assert set(private_fault_words) == {
+        "_LIBMU-CHECKPOINT-XT",
+        "_LIBMU-STAGE-AFTER-HEAD",
+        "_LIBVFS-RESET-MUTATION-HOOKS",
+    }
+    assert len(private_fault_words) == 3
 
-    assert "../../../library/vfs-store.f" in direct_requires
-    assert {
-        requirement
-        for requirement in direct_requires
-        if requirement.startswith("../../../library/")
-    } == {"../../../library/vfs-store.f"}
-    assert not any(
-        requirement.startswith("../../../utils/fs/")
-        for requirement in direct_requires
+    collection_setup, retry_setup = source.split(
+        ": _laf-exact-pending-retry", 1
     )
-    assert all(
-        word not in source
-        for word in (
-            " VFS-OPEN",
-            " VFS-CREATE",
-            " VFS-READ",
-            " VFS-WRITE",
-            " VFS-REPLACE",
-            " DESK-",
-            " PAD-",
-            " FEXP-",
-            " STREAMS-",
+    collection_setup = collection_setup.split(
+        ": _laf-collection-filter-and-back", 1
+    )[1]
+    retry_setup = retry_setup.split(
+        ": _laf-paging-conflict-and-reload", 1
+    )[0]
+    assert "LIBRARY-VFS-STORE-CREATE-COLLECTION" in collection_setup
+    assert "_LIBMU-CHECKPOINT-XT" not in collection_setup
+    assert "_LIBVFS-RESET-MUTATION-HOOKS" not in collection_setup
+    assert "LIBRARY-VFS-STORE-CREATE-COLLECTION" not in retry_setup
+    assert "_LIBMU-CHECKPOINT-XT" in retry_setup
+    assert "_LIBVFS-RESET-MUTATION-HOOKS" in retry_setup
+
+
+def test_library_dependency_chain_and_ui_storage_boundary() -> None:
+    sources = {
+        name: (SOURCE_ROOT / f"tui/applets/library/{name}").read_text(
+            encoding="utf-8"
         )
+        for name in (
+            "library.f",
+            "view.f",
+            "controller.f",
+            "service.f",
+            "query.f",
+            "repository.f",
+        )
+    }
+    direct_requires = {
+        name: set(REQUIRE_RE.findall(source))
+        for name, source in sources.items()
+    }
+
+    assert direct_requires["library.f"] == {"view.f"}
+    assert direct_requires["view.f"] == {"controller.f"}
+    assert "service.f" in direct_requires["controller.f"]
+    assert not ({"query.f", "repository.f"} & direct_requires["controller.f"])
+    assert direct_requires["service.f"] == {"query.f"}
+    assert direct_requires["query.f"] == {"repository.f"}
+    assert "store-format.f" in direct_requires["repository.f"]
+    assert "../../../utils/fs/vfs-fixed-snapshot.f" in (
+        direct_requires["repository.f"]
     )
-    assert "DRW-TEXT-UNTRUSTED" in source
+    for name in ("library.f", "view.f", "controller.f", "service.f", "query.f"):
+        assert not any(
+            requirement.startswith("../../../utils/fs/")
+            for requirement in direct_requires[name]
+        )
+
+    ui_sources = "\n".join(
+        sources[name] for name in ("library.f", "view.f", "controller.f")
+    )
+    assert set(
+        re.findall(r"(?<![A-Z0-9_-])VFS-[A-Z0-9-]+\b", ui_sources)
+    ) <= {"VFS-CUR"}
+    assert "VFSNAP-" not in ui_sources
+    assert "_LIBVFS-" not in ui_sources
+    assert all(
+        word not in ui_sources
+        for word in (" DESK-", " PAD-", " FEXP-", " STREAMS-")
+    )
+    for name in ("service.f", "query.f"):
+        assert "L12-DELETION" in sources[name]
+        assert "_LIBVFS-" in sources[name]
+    assert "DRW-TEXT-UNTRUSTED" not in sources["library.f"]
+    assert "DRW-TEXT-UNTRUSTED" not in sources["controller.f"]
+    assert "DRW-TEXT-UNTRUSTED" in sources["view.f"]
 
 
 def test_library_applet_uidl_actions_have_exact_controller_bindings() -> None:

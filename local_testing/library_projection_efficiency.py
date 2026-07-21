@@ -121,7 +121,7 @@ def setup_source(shape: Shape) -> str:
     """Build a deterministic durable corpus without profiling setup writes."""
     return rf'''\ deterministic MP64FS projection-efficiency corpus
 ENTER-USERLAND
-REQUIRE library/vfs-store.f
+REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 {shape.documents} CONSTANT _lpe-document-count
@@ -210,7 +210,7 @@ def profile_source(shape: Shape) -> str:
 ENTER-USERLAND
 \ Loading the resource client first keeps linked EVALUATE nesting shallow.
 REQUIRE interop/resource-client.f
-REQUIRE library/projection-owner.f
+REQUIRE tui/applets/library/projection-adapter.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 
 {shape.documents} CONSTANT _lpe-document-count
@@ -1185,7 +1185,7 @@ def _profile() -> Profile:
     return Profile(
         roots=(
             "interop/resource-client.f",
-            "library/projection-owner.f",
+            "tui/applets/library/projection-adapter.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),
         resources=(),

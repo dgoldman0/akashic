@@ -1,15 +1,13 @@
 # Library applet
 
 Status: an intentionally bounded user-experience probe is implemented over the
-qualified headless Library owner. It makes the owner useful enough to test real
-browsing and document-management flows, but it does not claim completion of
-Gate 5. Gate 4's projection and maintenance contracts are independently
-implemented and qualified; this probe does not silently turn them into UI or
-integration behavior.
+applet-owned renderer-free Library service. Gate 4's projection and maintenance
+contracts are independently implemented and qualified; this probe does not
+silently turn them into UI or integration behavior.
 
 The applet is a human lens over the Library domain described in
-[`../../../library/library.md`](../../../library/library.md). It is a
-single-instance standalone applet, owns only activation-local view state, and
+[`domain.md`](domain.md). It is a single-instance executable lens, owns only
+activation-local view state, and
 calls the public Library owner API. It does not infer or open `/library` paths,
 parse the private store, retain a second authoritative catalog, or import
 sibling applet/domain internals.
@@ -59,7 +57,7 @@ does not retry a pending mutation implicitly.
 
 ## Development arena identity
 
-The standalone probe provisions and reopens one corpus with a fixed,
+The executable probe provisions and reopens one corpus with a fixed,
 source-defined development arena ID. Keeping that value stable makes repeated
 boots of this development applet address the same already-provisioned corpus.
 It is not a user ID, account ID, configurable library selector,
@@ -82,7 +80,7 @@ separately.
 | Backspace | Return from History or Collections |
 | Page Up / Page Down | Move to the previous or next bounded page |
 | Shift+Up / Shift+Down | Scroll the selected item's content preview |
-| Ctrl+Q | Quit the standalone applet |
+| Ctrl+Q | Quit the executable lens |
 
 Active/Archived/All, Collections, Archive/Unarchive, and About are also
 available from the menu bar.
@@ -98,6 +96,6 @@ normalization, unbounded results, multi-library selection, or multiple
 concurrent applet instances.
 
 Those omissions are active boundaries. The purpose of this early applet is to
-discover whether the public headless shapes support a coherent user workflow;
+discover whether the applet service shapes support a coherent user workflow;
 any pressure to bypass the owner or duplicate durable state is evidence for a
 backend contract change, not permission for a UI-only workaround.

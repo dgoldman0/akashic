@@ -10,18 +10,18 @@
 \  adapter owns only Library payload geometry and model translation.
 \ =====================================================================
 
-PROVIDED akashic-library-record-codec
+PROVIDED akashic-tui-library-record-codec
 
 \ Preload the model's sealed dependencies in a shallow order so a cold
 \ direct REQUIRE stays below KDOS's bounded nested-EVALUATE depth.  model.f
 \ still declares the same dependencies and remains independently loadable.
-REQUIRE ../concurrency/guard.f
-REQUIRE ../math/sha3.f
-REQUIRE ../text/utf8.f
-REQUIRE ../interop/qualified-locator.f
+REQUIRE ../../../concurrency/guard.f
+REQUIRE ../../../math/sha3.f
+REQUIRE ../../../text/utf8.f
+REQUIRE ../../../interop/qualified-locator.f
 REQUIRE model.f
-REQUIRE ../utils/memory-span.f
-REQUIRE ../utils/checked-record.f
+REQUIRE ../../../utils/memory-span.f
+REQUIRE ../../../utils/checked-record.f
 
 1 CONSTANT LIB-RECORD-FORMAT-V1
 
