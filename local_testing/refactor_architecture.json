@@ -4,9 +4,9 @@
     "name": "post-gate4-refactor-baseline-20260720",
     "commit": "ce340fc8bef0b2c1331339f6ceaf4c02d4c020f5",
     "expected": {
-      "module_count": 400,
-      "resolved_require_occurrence_count": 1335,
-      "unique_resolved_edge_count": 1335,
+      "module_count": 404,
+      "resolved_require_occurrence_count": 1343,
+      "unique_resolved_edge_count": 1343,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -14,8 +14,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "6d72f55a9b650f158dc9ca80e2285d42bec4f3aa05c5fd7bda859fda5f88a1c9",
-      "state_sha256": "194aa68c6935e32b74313b26f2bc7f774888098621d1dd020f5d5be79b206887",
+      "graph_sha256": "1c147bad01623ba7f963303f7f19eddf51f5096449d435a2f10e3775579b198a",
+      "state_sha256": "51c7ab7629b763146f44626f63a1d65aa6960a5a8b60e58c0a6217998b9ce5ca",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -213,9 +213,15 @@
   },
   "hot_path_budgets": {
     "cold_open_max_metadata_pages": 64,
-    "large_profile_point_lookup_max_index_pages": 6,
-    "metadata_mutation_max_pages": 32,
-    "metadata_mutation_max_bytes_excluding_payload": 262144,
+    "large_profile_point_lookup_max_index_pages": 9,
+    "large_profile_32_result_keyset_max_index_page_reads": 66,
+    "large_profile_250000_edge_range_max_index_page_reads": 515658,
+    "metadata_mutation_representative_pages": 77,
+    "metadata_mutation_representative_checked_page_bytes": 315392,
+    "metadata_mutation_structural_ceiling_pages": 139,
+    "metadata_mutation_structural_ceiling_checked_page_bytes": 569344,
+    "metadata_mutation_reclaim_step_calls": 66,
+    "reclaim_maintenance_max_page_writes_per_step": 1,
     "ui_max_collection_pages": 3,
     "ordinary_operation_corpus_proportional_allocation": false,
     "required_measurements": [
@@ -226,6 +232,35 @@
       "cache hits and misses",
       "guest cycles and stalls",
       "peak working memory"
+    ]
+  },
+  "hot_path_budget_amendment": {
+    "landing": "L11",
+    "prior_provisional": {
+      "large_profile_point_lookup_max_index_pages": 6,
+      "metadata_mutation_max_pages": 32,
+      "metadata_mutation_max_bytes_excluding_payload": 262144
+    },
+    "settled": {
+      "large_profile_point_lookup_max_index_pages": 9,
+      "large_profile_32_result_keyset_max_index_page_reads": 66,
+      "large_profile_250000_edge_range_max_index_page_reads": 515658,
+      "metadata_mutation_representative_pages": 77,
+      "metadata_mutation_representative_checked_page_bytes": 315392,
+      "metadata_mutation_structural_ceiling_pages": 139,
+      "metadata_mutation_structural_ceiling_checked_page_bytes": 569344,
+      "metadata_mutation_reclaim_step_calls": 66,
+      "reclaim_maintenance_max_page_writes_per_step": 1
+    },
+    "evidence": [
+      "nine-level churn-retained B+tree bound",
+      "7,813 independently prepared 32-result relationship slices",
+      "65 copy-on-write index page writes",
+      "two application-root writes",
+      "six reclaim-finalization bucket writes",
+      "four representative steady two-bucket reclaim maintenance writes",
+      "one reclaim maintenance page write maximum per step",
+      "139 checked-page writes across the unconditional 66-step ceiling"
     ]
   },
   "hot_path_baseline": {

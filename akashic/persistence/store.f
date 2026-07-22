@@ -2,8 +2,10 @@
 \  store.f - Transactional composition of neutral persistence primitives
 \ =====================================================================
 \  The store owns policy only for one atomic physical transaction.  It
-\  composes an immutable page file, an append-only checked-record segment,
-\  and an A/B atomic root.  It has no application vocabulary and chooses no
+\  composes a proposal-fenced page file, an append-only checked-record
+\  segment, and an A/B atomic root.  Reachable logical nodes are COW while
+\  physical pages may be safely reused and rewritten behind that fence.  It
+\  has no application vocabulary and chooses no
 \  paths: all four absolute paths, the store identity, VFS, cache, counters,
 \  spin guard, fault callback, and work memory are supplied by the caller.
 \
@@ -209,6 +211,7 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
 \ and has no size contract, so it is deliberately outside this predicate.
 : PSTORE-SPAN-DISJOINT?  ( address length store -- flag )
     >R
+    DUP IF OVER 0= IF 2DROP R> DROP 0 EXIT THEN THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP R> DROP 0 EXIT THEN
     R@ PSTORE-VALID? 0= IF 2DROP R> DROP 0 EXIT THEN
     2DUP R@ PSTORE-SIZE MSPAN-OVERLAP? IF
@@ -530,6 +533,16 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     DUP PSTORE-WORK-VALID? 0= IF DROP 0 0 EXIT THEN
     _PSW.SEGMENT-WORK DUP _PSEG-W.BUFFER @ SWAP _PSEG-W.CAPACITY @ ;
 
+\ Public alias boundary for a specific PSTORE workspace and its caller-owned
+\ record buffer.  Unlike PSTORE-SPAN-DISJOINT?, this remains complete before
+\ the work object is bound as store authority or transaction state.
+: PSTORE-WORK-SPAN-DISJOINT?  ( address length work -- flag )
+    >R
+    DUP IF OVER 0= IF 2DROP R> DROP 0 EXIT THEN THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R@ PSTORE-WORK-VALID? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R> _PSTORE-SPAN-DISJOINT-WORK? ;
+
 : PSTORE-UNCERTAIN?  ( store -- flag )
     DUP PSTORE-VALID? 0= IF DROP -1 EXIT THEN
     _PST.FLAGS @ _PSTORE-F-UNCERTAIN AND 0<> ;
@@ -541,6 +554,17 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
 : _PSTORE-MARK-UNCERTAIN  ( store -- )
     DUP _PST.FLAGS DUP @ _PSTORE-F-UNCERTAIN OR SWAP !
     PERSIST-S-UNCERTAIN SWAP _PST.STATUS ! ;
+
+\ Any nested persistence layer can discover that cleanup left durable state
+\ ambiguous.  The outer store owns the operation boundary, so it must adopt
+\ that uncertainty rather than merely copying the returned status.
+: _PSTORE-ADOPT-UNCERTAIN  ( status store -- status )
+    >R
+    DUP PERSIST-S-UNCERTAIN = IF R@ _PSTORE-MARK-UNCERTAIN THEN
+    R@ _PST.FLAGS @ _PSTORE-F-UNCERTAIN AND IF
+        DROP PERSIST-S-UNCERTAIN
+    THEN
+    R> DROP ;
 
 : _PSTORE-LOCK-TRY-RUN  ( store -- status )
     _PST.LOCK @ GUARD-TRY-ACQUIRE IF
@@ -628,6 +652,7 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     0 R@ _PSW.BUSY !
     0 R@ _PSW.STORE !
     DUP >R _PSTORE-LOCK-RELEASE
+    R@ _PSTORE-ADOPT-UNCERTAIN
     DUP R@ _PST.STATUS !
     R> DROP
     DUP R@ _PSW.STATUS !
@@ -642,6 +667,7 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     0 R@ _PSW.STORE !
     0 OVER _PST.TRANSACTION-WORK !
     DUP >R _PSTORE-LOCK-RELEASE
+    R@ _PSTORE-ADOPT-UNCERTAIN
     DUP R@ _PST.STATUS !
     R> DROP
     DUP R@ _PSW.STATUS !
@@ -661,8 +687,33 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     DUP _PSW.FAILED @ IF 2DROP 0 EXIT THEN
     OVER _PST.FLAGS @ _PSTORE-F-UNCERTAIN AND 0= >R 2DROP R> ;
 
+: PSTORE-TX-READY?  ( store work -- flag )
+    _PSTORE-TX-READY? ;
+
+\ Mark an owned active transaction unusable after a failure discovered by a
+\ layer above PSTORE.  This is deliberately a memory-only state transition:
+\ the layered operation keeps its original status while every subsequent
+\ transaction operation and commit is rejected until explicit abort.
+: PSTORE-TX-POISON  ( failure-status store work -- failure-status )
+    2 PICK DUP PERSIST-S-OK <= SWAP PERSIST-S-FAULT > OR IF
+        2DROP DROP PERSIST-S-INVALID EXIT
+    THEN
+    2DUP _PSTORE-TX-OWNED? 0= IF
+        2DROP DROP PERSIST-S-BUSY EXIT
+    THEN
+    DUP _PSW.BUSY @ IF
+        2DROP DROP PERSIST-S-BUSY EXIT
+    THEN
+    ROT >R
+    R@ PERSIST-S-UNCERTAIN = IF OVER _PSTORE-MARK-UNCERTAIN THEN
+    -1 OVER _PSW.FAILED !
+    R@ OVER _PSW.STATUS !
+    R@ 2 PICK _PST.STATUS !
+    2DROP R> ;
+
 : _PSTORE-TX-OP-END  ( status work -- status )
     >R
+    R@ _PSW.STORE @ _PSTORE-ADOPT-UNCERTAIN
     DUP IF -1 R@ _PSW.FAILED ! THEN
     DUP R@ _PSW.STATUS !
     DUP R@ _PSW.STORE @ _PST.STATUS !
@@ -894,18 +945,28 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     R@ _PSTORE-TX-OP-END
     >R _PSTORE-DROP4 R> R> DROP ;
 
-: _PSTORE-APPEND-PAGE-RUN  ( work -- status )
+: _PSTORE-WRITE-PAGE-RUN  ( work -- status )
     >R
     R@ _PSW.ARG-U @ PERSIST-PAGE-PAYLOAD-SIZE <> IF
         R> DROP PERSIST-S-INVALID EXIT
     THEN
     R@ _PSTORE-ARG-SPAN? 0= IF R> DROP PERSIST-S-INVALID EXIT THEN
-    R@ _PSW.PROPOSED PROOTV.PAGE-COUNT @ DUP R@ _PSW.RESULT !
-    1 _PSTORE-ADD? 0= IF DROP R> DROP PERSIST-S-CAPACITY EXIT THEN
-    R@ _PSW.TEMP !
+    R@ _PSW.RESULT @ DUP 0< IF
+        DROP R> DROP PERSIST-S-NOT-FOUND EXIT
+    THEN
+    R@ _PSW.PROPOSED PROOTV.PAGE-COUNT @ 2DUP > IF
+        2DROP R> DROP PERSIST-S-NOT-FOUND EXIT
+    THEN
+    DUP R@ _PSW.TEMP !
+    = IF
+        R@ _PSW.TEMP @ 1 _PSTORE-ADD?
+        0= IF DROP R> DROP PERSIST-S-CAPACITY EXIT THEN
+        R@ _PSW.TEMP !
+    THEN
     R@ _PSW.ARG-A @ R@ _PSW.ARG-U @ R@ _PSW.RESULT @
+        R@ _PSW.PROPOSED PROOTV.PAGE-COUNT @
         R@ _PSW.STORE @ _PST.PAGE-FILE R@ _PSW.PAGE-WORK
-        PPAGE-WRITE DUP IF R> DROP EXIT THEN DROP
+        PPAGE-WRITE-AT DUP IF R> DROP EXIT THEN DROP
     PERSIST-FAULT-PAGE-WRITTEN R@ _PSW.RESULT @
         R@ _PSW.STORE @ _PSTORE-FAULT DUP IF R> DROP EXIT THEN DROP
     R@ _PSW.RESULT @ R@ _PSW.TEMP @
@@ -923,6 +984,10 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     -1 R@ _PSW.DIRTY !
     R> DROP PERSIST-S-OK ;
 
+: _PSTORE-APPEND-PAGE-RUN  ( work -- status )
+    DUP _PSW.PROPOSED PROOTV.PAGE-COUNT @ OVER _PSW.RESULT !
+    _PSTORE-WRITE-PAGE-RUN ;
+
 : PSTORE-APPEND-PAGE  ( payload-a payload-u store work -- page-id status )
     >R
     DUP R@ _PSTORE-TX-READY? 0= IF
@@ -936,6 +1001,20 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     >R _PSTORE-DROP3
     R> DUP IF -1 SWAP ELSE R@ _PSW.RESULT @ SWAP THEN
     R> DROP ;
+
+: PSTORE-WRITE-PAGE-TX
+  ( payload-a payload-u page-id store work -- status )
+    >R
+    DUP R@ _PSTORE-TX-READY? 0= IF
+        _PSTORE-DROP4 R> DROP PERSIST-S-BUSY EXIT
+    THEN
+    1 PICK R@ _PSW.RESULT !
+    2 PICK R@ _PSW.ARG-U !
+    3 PICK R@ _PSW.ARG-A !
+    -1 R@ _PSW.BUSY !
+    R@ ['] _PSTORE-WRITE-PAGE-RUN _PSTORE-WORK-CATCH
+    R@ _PSTORE-TX-OP-END
+    >R _PSTORE-DROP4 R> R> DROP ;
 
 : PSTORE-APPLICATION-ROOT!  ( page-id store work -- status )
     >R
@@ -1002,6 +1081,9 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     2DUP _PSTORE-TX-OWNED? 0= IF
         PERSIST-S-BUSY _PSTORE-REJECT EXIT
     THEN
+    DUP _PSW.FAILED @ IF
+        2DROP PERSIST-S-CONFLICT EXIT
+    THEN
     -1 OVER _PSW.BUSY !
     DUP ['] _PSTORE-COMMIT-RUN _PSTORE-WORK-CATCH
     ROT ROT _PSTORE-TX-LEAVE ;
@@ -1012,6 +1094,31 @@ PROOT-WORK-SIZE _PSW-ROOT-WORK + CONSTANT PSTORE-WORK-SIZE
     THEN
     -1 OVER _PSW.BUSY !
     PERSIST-S-OK ROT ROT _PSTORE-TX-LEAVE ;
+
+\ Read directly through the workspace that owns an active transaction.  This
+\ deliberately does not reacquire the store guard: it verifies against the
+\ proposed page bound, including pages appended earlier in the same proposal.
+: _PSTORE-READ-PAGE-TX-RUN  ( work -- status )
+    >R
+    R@ _PSW.RESULT @ DUP 0< IF
+        DROP R> DROP PERSIST-S-NOT-FOUND EXIT
+    THEN
+    R@ _PSW.PROPOSED PROOTV.PAGE-COUNT @ 2DUP >= IF
+        2DROP R> DROP PERSIST-S-NOT-FOUND EXIT
+    THEN
+    R@ _PSW.STORE @ _PST.PAGE-FILE R@ _PSW.PAGE-WORK
+        PPAGE-VERIFY R> DROP ;
+
+: PSTORE-READ-PAGE-TX  ( page-id store work -- status )
+    >R
+    DUP R@ _PSTORE-TX-READY? 0= IF
+        2DROP R> DROP PERSIST-S-BUSY EXIT
+    THEN
+    1 PICK R@ _PSW.RESULT !
+    -1 R@ _PSW.BUSY !
+    R@ ['] _PSTORE-READ-PAGE-TX-RUN _PSTORE-WORK-CATCH
+    R@ _PSTORE-TX-OP-END
+    >R 2DROP R> R> DROP ;
 
 \ =====================================================================
 \ Current-authority bounded reads

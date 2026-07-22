@@ -22,20 +22,24 @@ CONTRACT_FILES = (
     "persist-segment-test.f",
     "persist-store-test.f",
     "library-persist-test.f",
+    "library-index-keys.f",
 )
 
 AUTOEXEC = r'''\ autoexec.f - neutral persistence and Library slice contracts
 ENTER-USERLAND
 REQUIRE persistence/store.f
 REQUIRE tui/applets/library/persistence-adapter.f
+REQUIRE tui/applets/library/index-keys.f
 REQUIRE local_testing/persist-page-test.f
 REQUIRE local_testing/persist-segment-test.f
 REQUIRE local_testing/persist-store-test.f
 REQUIRE local_testing/library-persist-test.f
+REQUIRE local_testing/library-index-keys.f
 _PSC-RUN
 _PSCT-RUN
 _PSTC-RUN
 _LPSC-RUN
+_LIK-RUN
 '''
 
 
@@ -55,6 +59,7 @@ def main() -> int:
         roots=(
             "persistence/store.f",
             "tui/applets/library/persistence-adapter.f",
+            "tui/applets/library/index-keys.f",
         ),
         resources=(),
         autoexec=AUTOEXEC,
@@ -63,8 +68,9 @@ def main() -> int:
             "PERSISTENCE SEGMENT PASS",
             "PERSISTENCE STORE PASS",
             "LIBRARY PERSISTENCE SLICE PASS",
+            "LIBRARY INDEX KEYS PASS",
         ),
-        stable_markers=("LIBRARY PERSISTENCE SLICE PASS",),
+        stable_markers=("LIBRARY INDEX KEYS PASS",),
         failure_markers=(
             "PERSISTENCE PAGE FAIL",
             "PERSISTENCE PAGE ASSERT",
@@ -78,6 +84,9 @@ def main() -> int:
             "LIBRARY PERSISTENCE SLICE FAIL",
             "LIBRARY PERSISTENCE SLICE ASSERT",
             "LIBRARY PERSISTENCE SLICE STACK",
+            "LIBRARY INDEX KEYS FAIL",
+            "LIBRARY INDEX KEY ASSERT",
+            "LIBRARY INDEX KEY STACK",
             "DRIVER THROW",
             "dictionary full",
             "exception",
@@ -93,7 +102,7 @@ def main() -> int:
         image,
         cols=120,
         rows=40,
-        max_steps=3_000_000_000,
+        max_steps=12_000_000_000,
         timeout=args.timeout,
     )
     return 0 if ok else 1

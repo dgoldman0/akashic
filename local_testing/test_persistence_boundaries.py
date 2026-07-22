@@ -16,6 +16,9 @@ NEUTRAL_MODULES = (
     "persistence/segment.f",
     "persistence/atomic-root.f",
     "persistence/store.f",
+    "persistence/btree.f",
+    "persistence/blob.f",
+    "persistence/reclaim.f",
 )
 LIBRARY_ADAPTER = "tui/applets/library/persistence-adapter.f"
 
@@ -29,6 +32,8 @@ def test_neutral_persistence_has_no_applet_or_backend_policy() -> None:
         source = _source(module)
         assert re.search(r"\bLIB(?:RARY)?[-_.]", source, re.IGNORECASE) is None
         assert re.search(r"\bSTREAMS?[-_.]", source, re.IGNORECASE) is None
+        assert re.search(r"\blibrary\b", source, re.IGNORECASE) is None
+        assert re.search(r"\bstreams\b", source, re.IGNORECASE) is None
         assert re.search(r'S"\s*/', source) is None
         assert "ext4" not in source.lower()
         assert all(
@@ -98,6 +103,56 @@ def test_segment_descriptor_rejects_vfs_stats_aliases() -> None:
     ]
     assert "_PSEG-VFS-STATS-DISJOINT?" in init_guard
     assert "_PSEG-VFS-STATS-DISJOINT?" in valid_guard
+
+
+def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
+    btree = _source("persistence/btree.f")
+    assert "PBTREE-LEAF-CAPACITY" in btree
+    assert "PBTREE-BRANCH-CAPACITY" in btree
+    assert "PBTREE-THEORETICAL-CAPACITY-FOR-HEIGHT" in btree
+    assert "PBTREE-BALANCED-CAPACITY-FOR-HEIGHT" in btree
+    assert "PBTREE-HEIGHT-FOR" in btree
+    assert "PBTREE-HIGH-WATER-ALLOCATE" in btree
+    assert "PBTREE-RETIRED-PAGES$" in btree
+    assert "PSTORE-WRITE-PAGE-TX" in btree
+    assert "PSTORE-READ-PAGE-TX" in btree
+    assert re.search(r"\b_PBTN[-.]NEXT", btree) is None
+    assert "REQUIRE reclaim.f" not in btree
+
+    blob = _source("persistence/blob.f")
+    assert re.search(r"(?m)^32768\s+CONSTANT PBLOB-CHUNK-SIZE$", blob)
+    assert "PBLOB-READ-RANGE" in blob
+    assert "PBLOB-STREAM" in blob
+    assert "PSTORE-APPEND-RECORD" in blob
+    assert "PSTORE-BEGIN" not in blob
+    assert "PSTORE-COMMIT" not in blob
+
+    reclaim = _source("persistence/reclaim.f")
+    assert re.search(r"(?m)^32\s+CONSTANT RECLAIM-MAX-BATCH$", reclaim)
+    assert re.search(r"(?m)^64\s+CONSTANT RECLAIM-RETIRED-MAX$", reclaim)
+    assert re.search(r"(?m)^64\s+CONSTANT RECLAIM-DISCARD-MAX$", reclaim)
+    assert re.search(r"(?m)^128\s+CONSTANT RECLAIM-ALLOCATED-MAX$", reclaim)
+    for word in (
+        "RECLAIM-TX-BEGIN",
+        "RECLAIM-ALLOCATE",
+        "RECLAIM-RETIRE-BATCH",
+        "RECLAIM-DISCARD-BATCH",
+        "RECLAIM-RELEASE-BATCH",
+        "RECLAIM-STEP",
+        "RECLAIM-FINALIZE",
+        "RECLAIM-ADOPT",
+        "RECLAIM-ABORT",
+    ):
+        assert word in reclaim
+    assert "PROOT-SLOT-GENERATION@" in reclaim
+    assert "GPAIR-SLOT-A" in reclaim
+    assert "GPAIR-SLOT-B" in reclaim
+    assert re.search(r"\b_PROOT[-.]", reclaim) is None
+    assert re.search(r"(?m)^(?:VARIABLE|CREATE|VALUE|DEFER)\b", reclaim) is None
+    assert "PSTORE-BEGIN" not in reclaim
+    assert "PSTORE-COMMIT" not in reclaim
+    assert "PSTORE-ABORT" not in reclaim
+    assert "library" not in reclaim.lower()
 
 
 def test_l10_library_slice_is_applet_owned_and_non_authoritative() -> None:

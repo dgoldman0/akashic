@@ -99,9 +99,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 400,
-        "resolved_require_occurrence_count": 1335,
-        "unique_resolved_edge_count": 1335,
+        "module_count": 404,
+        "resolved_require_occurrence_count": 1343,
+        "unique_resolved_edge_count": 1343,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -143,6 +143,7 @@ def test_every_module_has_a_reviewed_responsibility_class() -> None:
     }
     assert {path.rsplit("/", 1)[-1] for path in library_modules} == {
         "controller.f",
+        "index-keys.f",
         "library.f",
         "model.f",
         "persistence-adapter.f",
@@ -485,6 +486,58 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
     assert policy["scale_profiles"]["persistence_instance_workload"] == {
         "interleaved_stores": 4,
         "hidden_process_global_current_store": False,
+    }
+    assert policy["hot_path_budgets"] == {
+        "cold_open_max_metadata_pages": 64,
+        "large_profile_point_lookup_max_index_pages": 9,
+        "large_profile_32_result_keyset_max_index_page_reads": 66,
+        "large_profile_250000_edge_range_max_index_page_reads": 515658,
+        "metadata_mutation_representative_pages": 77,
+        "metadata_mutation_representative_checked_page_bytes": 315392,
+        "metadata_mutation_structural_ceiling_pages": 139,
+        "metadata_mutation_structural_ceiling_checked_page_bytes": 569344,
+        "metadata_mutation_reclaim_step_calls": 66,
+        "reclaim_maintenance_max_page_writes_per_step": 1,
+        "ui_max_collection_pages": 3,
+        "ordinary_operation_corpus_proportional_allocation": False,
+        "required_measurements": [
+            "logical page reads and writes",
+            "bytes read and written",
+            "comparisons",
+            "allocation events and peak live bytes",
+            "cache hits and misses",
+            "guest cycles and stalls",
+            "peak working memory",
+        ],
+    }
+    assert policy["hot_path_budget_amendment"] == {
+        "landing": "L11",
+        "prior_provisional": {
+            "large_profile_point_lookup_max_index_pages": 6,
+            "metadata_mutation_max_pages": 32,
+            "metadata_mutation_max_bytes_excluding_payload": 262144,
+        },
+        "settled": {
+            "large_profile_point_lookup_max_index_pages": 9,
+            "large_profile_32_result_keyset_max_index_page_reads": 66,
+            "large_profile_250000_edge_range_max_index_page_reads": 515658,
+            "metadata_mutation_representative_pages": 77,
+            "metadata_mutation_representative_checked_page_bytes": 315392,
+            "metadata_mutation_structural_ceiling_pages": 139,
+            "metadata_mutation_structural_ceiling_checked_page_bytes": 569344,
+            "metadata_mutation_reclaim_step_calls": 66,
+            "reclaim_maintenance_max_page_writes_per_step": 1,
+        },
+        "evidence": [
+            "nine-level churn-retained B+tree bound",
+            "7,813 independently prepared 32-result relationship slices",
+            "65 copy-on-write index page writes",
+            "two application-root writes",
+            "six reclaim-finalization bucket writes",
+            "four representative steady two-bucket reclaim maintenance writes",
+            "one reclaim maintenance page write maximum per step",
+            "139 checked-page writes across the unconditional 66-step ceiling",
+        ],
     }
     assert "instance_workload" not in policy["scale_profiles"]
     assert all(

@@ -1,5 +1,5 @@
 \ =====================================================================
-\  page-file.f - Checked immutable 4 KiB pages over an explicit VFS
+\  page-file.f - Checked 4 KiB page records over an explicit VFS
 \ =====================================================================
 \  Paths, descriptors, workspaces, statistics, and cache storage are all
 \  supplied by the caller.  This layer neither chooses names nor publishes
@@ -565,6 +565,12 @@ PERSIST-PAGE-SIZE _PPW-RECORD + CONSTANT PERSIST-PAGE-WORK-SIZE
     R@ _PPW.PAGE-ID @ _PPAGE-ID>OFFSET? 0= IF
         DROP R> DROP PERSIST-S-CAPACITY EXIT
     THEN DROP
+    R@ _PPW.MODE @ IF
+        R@ _PPW.COMMITTED @ DUP 0< IF
+            DROP R> DROP PERSIST-S-INVALID EXIT
+        THEN
+        R@ _PPW.PAGE-ID @ < IF R> DROP PERSIST-S-NOT-FOUND EXIT THEN
+    THEN
     R@ _PPW.SOURCE-A @ R@ _PPW.SOURCE-U @
         PERSIST-PAGE-PAYLOAD-SIZE R@ _PPW.PAGE-ID @ 1+
         R@ _PPW.RECORD PERSIST-PAGE-SIZE R@ _PPW.FILE @ _PPG.SPEC
@@ -580,23 +586,41 @@ PERSIST-PAGE-SIZE _PPW-RECORD + CONSTANT PERSIST-PAGE-WORK-SIZE
     DUP PERSIST-PAGE-SIZE MOD IF
         2DROP PERSIST-S-CORRUPT R@ _PPAGE-CLOSE R> DROP EXIT
     THEN
-    R@ _PPW.PAGE-ID @ _PPAGE-ID>OFFSET? 0= IF
-        DROP 2DROP PERSIST-S-CAPACITY R@ _PPAGE-CLOSE R> DROP EXIT
-    THEN                                 ( fd size offset )
-    2DUP <> IF
-        _PPAGE-DROP3 PERSIST-S-CONFLICT R@ _PPAGE-CLOSE R> DROP EXIT
+    R@ _PPW.MODE @ IF
+        R@ _PPW.COMMITTED @ _PPAGE-COUNT>SIZE?
+    ELSE
+        R@ _PPW.PAGE-ID @ _PPAGE-ID>OFFSET?
     THEN
-    ROT >R NIP R>                        ( offset fd )
+    0= IF
+        _PPAGE-DROP3 PERSIST-S-CAPACITY R@ _PPAGE-CLOSE R> DROP EXIT
+    THEN
+    <> IF
+        DROP PERSIST-S-CONFLICT R@ _PPAGE-CLOSE R> DROP EXIT
+    THEN                                 ( fd )
+    R@ _PPW.PAGE-ID @ _PPAGE-ID>OFFSET? 0= IF
+        2DROP PERSIST-S-CAPACITY R@ _PPAGE-CLOSE R> DROP EXIT
+    THEN                                 ( fd offset )
+    SWAP                                 ( offset fd )
     2DUP VFS-SEEK? DUP IF
         DROP 2DROP PERSIST-S-IO R@ _PPAGE-CLOSE R> DROP EXIT
     THEN DROP NIP                        ( fd )
+    \ A rewrite can have partial effect even when exact-write later reports
+    \ I/O failure.  Drop any pre-write cache entry before touching the slot.
+    R@ _PPW.MODE @ IF
+        R@ _PPW.PAGE-ID @ R@ _PPW.COMMITTED @ < IF
+            R@ _PPW.FILE @ PPAGE.CACHE @ ?DUP IF
+                PPAGE-CACHE-INVALIDATE DROP
+            THEN
+        THEN
+    THEN
     R@ _PPW.RECORD PERSIST-PAGE-SIZE ROT VFS-WRITE-EXACT DUP IF
         DROP PERSIST-S-IO R@ _PPAGE-CLOSE R> DROP EXIT
     THEN DROP
     PERSIST-PAGE-SIZE R@ _PPAGE-STATS ?DUP IF
         _PSTAT-NOTE-PAGE-WRITE
     ELSE DROP THEN
-    PERSIST-S-OK R@ _PPAGE-CLOSE R> DROP ;
+    PERSIST-S-OK R@ _PPAGE-CLOSE
+    R> DROP ;
 
 : PPAGE-WRITE  ( payload-a payload-u page-id file work -- status )
     >R
@@ -606,6 +630,31 @@ PERSIST-PAGE-SIZE _PPW-RECORD + CONSTANT PERSIST-PAGE-WORK-SIZE
     R@ _PPW.PAGE-ID !
     R@ _PPW.SOURCE-U !
     R@ _PPW.SOURCE-A !
+    0 R@ _PPW.COMMITTED !
+    0 R@ _PPW.MODE !
+    -1 R@ _PPW.BUSY !
+    PERSIST-S-INVALID R@ _PPW.STATUS !
+    R@ ['] _PPAGE-WRITE-RUN _PPAGE-RUN-CATCH
+    DUP R@ _PPW.STATUS !
+    0 R@ _PPW.BUSY !
+    R> DROP ;
+
+\ Write either an existing slot below proposed-count or the exact append slot
+\ equal to proposed-count.  The physical file must contain exactly that many
+\ complete pages before the write; gaps and suffix disagreement are rejected.
+: PPAGE-WRITE-AT
+  ( payload-a payload-u page-id proposed-count file work -- status )
+    >R
+    DUP R@ _PPAGE-FILE-WORK? 0= IF
+        _PPAGE-DROP5 R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    R@ _PPW.BUSY @ IF _PPAGE-DROP5 R> DROP PERSIST-S-BUSY EXIT THEN
+    R@ _PPW.FILE !
+    R@ _PPW.COMMITTED !
+    R@ _PPW.PAGE-ID !
+    R@ _PPW.SOURCE-U !
+    R@ _PPW.SOURCE-A !
+    1 R@ _PPW.MODE !
     -1 R@ _PPW.BUSY !
     PERSIST-S-INVALID R@ _PPW.STATUS !
     R@ ['] _PPAGE-WRITE-RUN _PPAGE-RUN-CATCH

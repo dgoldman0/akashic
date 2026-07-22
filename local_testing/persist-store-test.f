@@ -14,6 +14,8 @@ VARIABLE _PSTC-page-id
 VARIABLE _PSTC-fault-at
 VARIABLE _PSTC-old-generation
 VARIABLE _PSTC-old-pages
+VARIABLE _PSTC-seam-fault
+VARIABLE _PSTC-old-release-xt
 
 CREATE _PSTC-ops VFS-OPS-SIZE ALLOT
 CREATE _PSTC-binding VFS-BINDING-DESC-SIZE ALLOT
@@ -107,6 +109,16 @@ GUARD _PSTC-guard-i3
     _PSTC-identity-i3 256 _PSTC-vfs @ 0 0 _PSTC-guard-i3
     ['] _PSTC-fault 0 _PSTC-store-i3 PSTORE-INIT ;
 
+: _PSTC-store-i1-as-i0-init  ( -- status )
+    S" /i0-pages" S" /i0-segment" S" /i0-root-a" S" /i0-root-b"
+    _PSTC-identity-i0 256 _PSTC-vfs @ 0 0 _PSTC-guard-i1
+    ['] _PSTC-fault 0 _PSTC-store-i1 PSTORE-INIT ;
+
+: _PSTC-release-uncertain  ( cookie inode vfs -- ior )
+    _PSTC-old-release-xt @ EXECUTE
+    DUP IF EXIT THEN
+    DROP -912 ;
+
 : _PSTC-setup  ( -- )
     VFS-CUR _PSTC-old-vfs !
     VFS-RAM-OPS _PSTC-ops VFS-OPS-SIZE MOVE
@@ -184,6 +196,24 @@ GUARD _PSTC-guard-i3
         PSTORE-SPAN-DISJOINT? 0= _PSTC-assert
     _PSTC-record 20 _PSTC-store-a PSTORE-SPAN-DISJOINT? _PSTC-assert
     0 0 _PSTC-store-a PSTORE-SPAN-DISJOINT? _PSTC-assert
+    0 1 _PSTC-store-a PSTORE-SPAN-DISJOINT? 0= _PSTC-assert
+    _PSTC-record 0 _PSTC-store-a PSTORE-SPAN-DISJOINT? _PSTC-assert
+    _PSTC-record -1 _PSTC-store-a PSTORE-SPAN-DISJOINT? 0= _PSTC-assert
+    -8 16 _PSTC-store-a PSTORE-SPAN-DISJOINT? 0= _PSTC-assert
+    _PSTC-work-a PSTORE-WORK-SIZE _PSTC-work-a
+        PSTORE-WORK-SPAN-DISJOINT? 0= _PSTC-assert
+    _PSTC-record-buffer-a 512 _PSTC-work-a
+        PSTORE-WORK-SPAN-DISJOINT? 0= _PSTC-assert
+    _PSTC-record-buffer-a 512 + 1 _PSTC-work-a
+        PSTORE-WORK-SPAN-DISJOINT? _PSTC-assert
+    0 0 _PSTC-work-a PSTORE-WORK-SPAN-DISJOINT? _PSTC-assert
+    0 1 _PSTC-work-a PSTORE-WORK-SPAN-DISJOINT? 0= _PSTC-assert
+    _PSTC-record 0 _PSTC-work-a PSTORE-WORK-SPAN-DISJOINT? _PSTC-assert
+    _PSTC-record -1 _PSTC-work-a
+        PSTORE-WORK-SPAN-DISJOINT? 0= _PSTC-assert
+    -8 16 _PSTC-work-a PSTORE-WORK-SPAN-DISJOINT? 0= _PSTC-assert
+    _PSTC-record 1 _PSTC-record
+        PSTORE-WORK-SPAN-DISJOINT? 0= _PSTC-assert
     _PSTC-stack ;
 
 : _PSTC-readback  ( -- )
@@ -216,6 +246,96 @@ GUARD _PSTC-guard-i3
     0 _PSTC-store-b _PSTC-work-b PSTORE-READ-PAGE PERSIST-S-OK _PSTC-status
     _PSTC-work-b PSTORE-PAGE-PAYLOAD$
         _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE COMPARE 0= _PSTC-assert _PSTC-stack ;
+
+: _PSTC-tx-page-seams  ( -- )
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-TX-READY? _PSTC-assert _PSTC-stack
+    _PSTC-store-a _PSTC-work-b PSTORE-TX-READY? 0= _PSTC-assert _PSTC-stack
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 55 FILL
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 1
+        _PSTC-store-b _PSTC-work-b PSTORE-WRITE-PAGE-TX
+        PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @ 2 = _PSTC-assert
+    1 _PSTC-store-b _PSTC-work-b PSTORE-READ-PAGE-TX
+        PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-PAGE-PAYLOAD$ DROP C@ 55 = _PSTC-assert
+
+    \ Rewriting the transaction-local slot does not grow the proposed bound.
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 66 FILL
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 1
+        _PSTC-store-b _PSTC-work-b PSTORE-WRITE-PAGE-TX
+        PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @ 2 = _PSTC-assert
+    1 _PSTC-store-b _PSTC-work-b PSTORE-READ-PAGE-TX
+        PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-PAGE-PAYLOAD$ DROP C@ 66 = _PSTC-assert
+    0 _PSTC-store-b _PSTC-work-b PSTORE-READ-PAGE-TX
+        PERSIST-S-OK _PSTC-status
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 3
+        _PSTC-store-b _PSTC-work-b PSTORE-WRITE-PAGE-TX
+        PERSIST-S-NOT-FOUND _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-TX-READY? 0= _PSTC-assert _PSTC-stack
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status
+
+    \ Abort leaves authority at one page; the next begin reconciles the suffix.
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @ 1 = _PSTC-assert
+    1 _PSTC-store-b _PSTC-work-b PSTORE-READ-PAGE-TX
+        PERSIST-S-NOT-FOUND _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status ;
+
+\ A layered failure can invalidate an otherwise ready proposal without doing
+\ more I/O.  Commit must leave that poisoned transaction owned so only ABORT
+\ can release it and the next BEGIN can reconcile any proposal suffix.
+: _PSTC-layer-poison  ( -- )
+    _PSTC-store-b PSTORE-GENERATION@ _PSTC-old-generation !
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    _PSTC-stats-b PSTAT.BYTES-WRITTEN @ _PSTC-old-pages !
+    PERSIST-S-OK _PSTC-store-b _PSTC-work-b PSTORE-TX-POISON
+        PERSIST-S-INVALID _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-TX-READY? _PSTC-assert _PSTC-stack
+    PERSIST-S-CAPACITY _PSTC-store-b _PSTC-work-b PSTORE-TX-POISON
+        PERSIST-S-CAPACITY _PSTC-status
+    _PSTC-stats-b PSTAT.BYTES-WRITTEN @ _PSTC-old-pages @ = _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-TX-READY? 0= _PSTC-assert
+    _PSTC-store-b PSTORE-STATUS@ PERSIST-S-CAPACITY _PSTC-status
+    _PSTC-work-b PSTORE-WORK-STATUS@ PERSIST-S-CAPACITY _PSTC-status
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE _PSTC-store-b _PSTC-work-b
+        PSTORE-APPEND-PAGE
+        SWAP -1 = SWAP PERSIST-S-BUSY = AND _PSTC-assert _PSTC-stack
+    _PSTC-store-b _PSTC-work-b PSTORE-COMMIT
+        PERSIST-S-CONFLICT _PSTC-status
+    _PSTC-store-b PSTORE-STATUS@ PERSIST-S-CAPACITY _PSTC-status
+    _PSTC-work-b PSTORE-WORK-STATUS@ PERSIST-S-CAPACITY _PSTC-status
+    _PSTC-store-b PSTORE-GENERATION@ _PSTC-old-generation @ = _PSTC-assert
+    _PSTC-stats-b PSTAT.BYTES-WRITTEN @ _PSTC-old-pages @ = _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @
+        _PSTC-store-b PSTORE-CURRENT-ROOT@ PROOTV.PAGE-COUNT @ = _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status ;
+
+: _PSTC-tx-rewrite-fault-at  ( point -- )
+    _PSTC-seam-fault !
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 77 FILL
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 1
+        _PSTC-store-b _PSTC-work-b PSTORE-WRITE-PAGE-TX
+        PERSIST-S-OK _PSTC-status
+    _PSTC-seam-fault @ _PSTC-fault-at !
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 88 FILL
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 1
+        _PSTC-store-b _PSTC-work-b PSTORE-WRITE-PAGE-TX
+        PERSIST-S-FAULT _PSTC-status
+    0 _PSTC-fault-at !
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @ 1 = _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status ;
+
+: _PSTC-tx-rewrite-faults  ( -- )
+    PERSIST-FAULT-PAGE-WRITTEN _PSTC-tx-rewrite-fault-at
+    PERSIST-FAULT-PAGE-VERIFIED _PSTC-tx-rewrite-fault-at ;
 
 : _PSTC-segment-fault-at  ( point -- )
     _PSTC-fault-at !
@@ -376,6 +496,59 @@ GUARD _PSTC-guard-i3
     33 _PSTC-store-i2 _PSTC-work-i2 _PSTC-interleave-read-byte
     44 _PSTC-store-i3 _PSTC-work-i3 _PSTC-interleave-read-byte ;
 
+\ A layered UNCERTAIN result has the same sticky meaning as uncertainty
+\ discovered inside PSTORE.  Commit still refuses the owned proposal, while
+\ abort releases it without pretending that durable state became certain.
+: _PSTC-layer-uncertain  ( -- )
+    _PSTC-store-i2 PSTORE-GENERATION@ _PSTC-old-generation !
+    _PSTC-store-i2 _PSTC-work-i2 PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    PERSIST-S-UNCERTAIN _PSTC-store-i2 _PSTC-work-i2 PSTORE-TX-POISON
+        PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-store-i2 PSTORE-UNCERTAIN? _PSTC-assert _PSTC-stack
+    _PSTC-store-i2 PSTORE-STATUS@ PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-work-i2 PSTORE-WORK-STATUS@ PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-store-i2 _PSTC-work-i2 PSTORE-COMMIT
+        PERSIST-S-CONFLICT _PSTC-status
+    _PSTC-store-i2 PSTORE-STATUS@ PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-work-i2 PSTORE-WORK-STATUS@ PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-store-i2 PSTORE-GENERATION@ _PSTC-old-generation @ = _PSTC-assert
+    _PSTC-store-i2 _PSTC-work-i2 PSTORE-ABORT
+        PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-store-i2 PSTORE-STATUS@ PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-store-i2 _PSTC-work-i2 PSTORE-BEGIN
+        PERSIST-S-UNCERTAIN _PSTC-status ;
+
+\ Cleanup uncertainty returned by a nested page operation becomes sticky at
+\ the store boundary.  A fresh descriptor can still recover solely from the
+\ durable roots once the uncertain transaction has released its authority.
+: _PSTC-cleanup-uncertain  ( -- )
+    _PSTC-ops VFS-OP-RELEASE CELLS + @ _PSTC-old-release-xt !
+    _PSTC-store-i0 _PSTC-work-i0 PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    ['] _PSTC-release-uncertain
+        _PSTC-ops VFS-OP-RELEASE CELLS + !
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 77 FILL
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 1
+        _PSTC-store-i0 _PSTC-work-i0 PSTORE-WRITE-PAGE-TX
+        PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-old-release-xt @ _PSTC-ops VFS-OP-RELEASE CELLS + !
+    _PSTC-store-i0 PSTORE-UNCERTAIN? _PSTC-assert _PSTC-stack
+    _PSTC-store-i0 PSTORE-STATUS@ PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-store-i0 _PSTC-work-i0 PSTORE-ABORT
+        PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-store-i0 PSTORE-STATUS@ PERSIST-S-UNCERTAIN _PSTC-status
+    _PSTC-store-i0 _PSTC-work-i0 PSTORE-BEGIN
+        PERSIST-S-UNCERTAIN _PSTC-status
+    0 _PSTC-store-i0 _PSTC-work-i0 PSTORE-READ-PAGE
+        PERSIST-S-UNCERTAIN _PSTC-status
+
+    _PSTC-store-i1-as-i0-init PERSIST-S-OK _PSTC-status
+    _PSTC-buffer-i1 512 _PSTC-work-i1 PSTORE-WORK-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-store-i1 _PSTC-work-i1 PSTORE-PROVISION PERSIST-S-OK _PSTC-status
+    _PSTC-store-i1 _PSTC-work-i1 PSTORE-OPEN PERSIST-S-OK _PSTC-status
+    _PSTC-store-i1 PSTORE-GENERATION@ 1 = _PSTC-assert
+    11 _PSTC-store-i1 _PSTC-work-i1 _PSTC-interleave-read-byte ;
+
 : _PSTC-run  ( -- )
     0 _PSTC-fails ! 0 _PSTC-checks ! DEPTH _PSTC-depth ! 0 _PSTC-fault-at !
     _PSTC-setup
@@ -384,11 +557,16 @@ GUARD _PSTC-guard-i3
     _PSTC-readback
     _PSTC-suffix-reconcile
     _PSTC-cold-open
+    _PSTC-tx-page-seams
+    _PSTC-layer-poison
+    _PSTC-tx-rewrite-faults
     _PSTC-mutation-faults
     _PSTC-root-durable-fault
     _PSTC-data-sync-fault
     _PSTC-root-maybe-faults
     _PSTC-four-store-interleave
+    _PSTC-layer-uncertain
+    _PSTC-cleanup-uncertain
     _PSTC-old-vfs @ VFS-USE
     _PSTC-vfs @ VFS-DESTROY
     _PSTC-stack
