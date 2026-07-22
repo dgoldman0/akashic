@@ -76,6 +76,12 @@ local_testing/*
 !local_testing/vfs-access-contracts.f
 !local_testing/checked-record-contracts.f
 !local_testing/generation-pair-contracts.f
+!local_testing/test_persistence_storage.py
+!local_testing/test_persistence_boundaries.py
+!local_testing/persist-page-test.f
+!local_testing/persist-segment-test.f
+!local_testing/persist-store-test.f
+!local_testing/library-persist-test.f
 !local_testing/interop-construction-contracts.f
 !local_testing/hres-contracts.f
 !local_testing/streams-observation.f

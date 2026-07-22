@@ -49,6 +49,12 @@ PROVIDED akashic-guard
 32 CONSTANT _GRD-SIZE-SPIN
 72 CONSTANT _GRD-SIZE-BLOCK
 
+\ Object geometry is public for callers that supply guard storage instead of
+\ defining it lexically.  Flavor inspection remains separate from ownership
+\ and acquisition; it is only a shape check for initialized storage.
+_GRD-SIZE-SPIN CONSTANT GUARD-SPIN-SIZE
+_GRD-SIZE-BLOCK CONSTANT GUARD-BLOCKING-SIZE
+
 \ Guard metadata shares event.f's hardware synchronization lock.  Guard
 \ code never calls an event/semaphore/yield word while this lock is held.
 EVT-LOCK CONSTANT _GRD-META-LOCK
@@ -303,6 +309,12 @@ EVT-LOCK CONSTANT _GRD-META-LOCK
 
 : GUARD-HELD?  ( guard -- flag )
     _GRD-DEPTH @ 0<> ;
+
+: GUARD-SPIN?  ( guard -- flag )
+    _GRD-MODE @ 0= ;
+
+: GUARD-BLOCKING?  ( guard -- flag )
+    _GRD-MODE @ 1 = ;
 
 : GUARD-MINE?  ( guard -- flag )
     _GRD-META-LOCK LOCK

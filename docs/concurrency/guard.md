@@ -33,6 +33,9 @@ backdoors.
 
 ### Spinning guard — 4 cells / 32 bytes
 
+`GUARD-SPIN-SIZE` publishes this geometry for callers that provide guard
+storage inside a larger caller-owned object.
+
 | Offset | Field | Meaning |
 |---:|---|---|
 | 0 | depth | `0` when free; positive recursive depth while held |
@@ -43,7 +46,8 @@ backdoors.
 ### Blocking guard — 9 cells / 72 bytes
 
 The first four cells are identical. At offset 32 is an embedded five-cell,
-one-count semaphore; mode is `1`.
+one-count semaphore; mode is `1`. `GUARD-BLOCKING-SIZE` publishes the complete
+object size.
 
 The old internal names `_GRD-FLAG` and `_GRD-OWNER` remain compatibility
 aliases for `_GRD-DEPTH` and `_GRD-OWNER-TASK`. Code outside the guard module
@@ -151,6 +155,8 @@ otherwise block while the guard holder is suspended and unschedulable.
 ```forth
 GUARD-HELD? ( guard -- flag )
 GUARD-MINE? ( guard -- flag )
+GUARD-SPIN? ( guard -- flag )
+GUARD-BLOCKING? ( guard -- flag )
 GUARD-INFO  ( guard -- )
 ```
 
@@ -159,6 +165,11 @@ check before an unguarded claim; only the acquisition words make that decision
 atomically.
 
 `GUARD-MINE?` takes the short metadata lock and compares both owner fields.
+
+`GUARD-SPIN?` and `GUARD-BLOCKING?` classify initialized guard storage without
+acquiring it. A caller that accepts externally supplied storage must first
+establish that the complete `GUARD-SPIN-SIZE` or `GUARD-BLOCKING-SIZE` span is
+addressable; these flavor queries do not validate an arbitrary pointer.
 
 `GUARD-INFO` takes a coherent metadata snapshot, releases the lock, and only
 then prints. Example output:
@@ -248,7 +259,12 @@ provide a worker completion boundary.
 | `WITH-GUARD` | `( xt guard -- )` | Exception-safe scoped execution |
 | `GUARD-HELD?` | `( guard -- flag )` | Lock-free status snapshot |
 | `GUARD-MINE?` | `( guard -- flag )` | Test the complete execution owner |
+| `GUARD-SPIN?` | `( guard -- flag )` | Classify initialized spinning storage |
+| `GUARD-BLOCKING?` | `( guard -- flag )` | Classify initialized blocking storage |
 | `GUARD-INFO` | `( guard -- )` | Print a coherent metadata snapshot |
+
+Object-size constants are `GUARD-SPIN-SIZE` (32 bytes) and
+`GUARD-BLOCKING-SIZE` (72 bytes).
 
 ### Error code
 

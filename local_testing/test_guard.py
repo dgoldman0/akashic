@@ -200,6 +200,21 @@ if __name__ == '__main__':
            ': _T _G2 GUARD-MINE? . ; _T'],
           "0 ")
 
+    check("public guard geometry matches declared objects",
+          ['GUARD _GS',
+           'GUARD-BLOCKING _GB',
+           ': _T GUARD-SPIN-SIZE . GUARD-BLOCKING-SIZE . ; _T'],
+          "32 72 ")
+
+    check("public guard flavor queries distinguish storage",
+          ['GUARD _GSQ',
+           'GUARD-BLOCKING _GBQ',
+           ': _T',
+           '  _GSQ GUARD-SPIN? . _GSQ GUARD-BLOCKING? .',
+           '  _GBQ GUARD-SPIN? . _GBQ GUARD-BLOCKING? .',
+           '; _T'],
+          "-1 0 0 -1 ")
+
     # ────────────────────────────────────────────────────────────────
     print("\n── GUARD-ACQUIRE / GUARD-RELEASE ──\n")
 
