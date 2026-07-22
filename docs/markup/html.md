@@ -169,7 +169,9 @@ REPEAT
 
 > **Note:** Use `_HTML-SKIP-ELEMENT` (not `MU-SKIP-ELEMENT`) when
 > iterating HTML children — it handles void elements and raw text
-> elements correctly.
+> elements correctly. Its depth scan also consumes an unterminated nested
+> `<...` remainder, preserving forward progress while retaining the core
+> parser's recovery semantics.
 
 ---
 

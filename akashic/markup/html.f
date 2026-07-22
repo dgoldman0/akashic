@@ -168,7 +168,8 @@ VARIABLE _HSE-D   VARIABLE _HSE-NA  VARIABLE _HSE-NL
         ELSE DUP MU-T-COMMENT = IF
             DROP MU-SKIP-COMMENT
         ELSE
-            DROP MU-SKIP-TO-TAG
+            \ MU-T-TEXT can be an unterminated '<...'; consume it first.
+            DROP MU-SKIP-TAG MU-SKIP-TO-TAG
         THEN THEN THEN THEN
     REPEAT ;
 
@@ -247,7 +248,8 @@ VARIABLE _HFC-TA  VARIABLE _HFC-TL
         ELSE DUP MU-T-COMMENT = IF
             DROP MU-SKIP-COMMENT
         ELSE
-            DROP MU-SKIP-TO-TAG
+            \ MU-T-TEXT can be an unterminated '<...'; consume it first.
+            DROP MU-SKIP-TAG MU-SKIP-TO-TAG
         THEN THEN THEN THEN
     REPEAT ;
 

@@ -341,6 +341,11 @@ Depth-aware navigation through element hierarchies.
 | `MU-NEXT-SIBLING` | `( addr len -- addr' len' flag )` | Skip to the next sibling element. Cursor at an opening tag. Returns flag = `-1` if sibling found, `0` if end reached. |
 | `MU-FIND-TAG` | `( addr len name-a name-u -- addr' len' flag )` | Find next opening tag with the given name at the same depth. Skips non-matching elements entirely. Case-sensitive. Flag = `-1` found, `0` not found. |
 
+Depth-aware scans consume the remainder of an unterminated `<...` before
+continuing, so malformed nested input cannot leave their cursor stationary.
+This is recovery behavior, not a new parse error: `MU-TAG-TYPE` still classifies
+that input as text, and `MU-SKIP-TO-TAG` still stops at `<` by contract.
+
 ### Example
 
 ```forth

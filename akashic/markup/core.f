@@ -733,7 +733,8 @@ VARIABLE _MSE-NA   VARIABLE _MSE-NL   \ tag name saved
         ELSE DUP MU-T-CDATA = IF
             DROP MU-SKIP-CDATA
         ELSE
-            DROP MU-SKIP-TO-TAG      \ skip text
+            \ MU-T-TEXT can be an unterminated '<...'; consume it first.
+            DROP MU-SKIP-TAG MU-SKIP-TO-TAG
         THEN THEN THEN THEN THEN THEN
     REPEAT ;
 
@@ -775,7 +776,8 @@ VARIABLE _MFC-TA   VARIABLE _MFC-TL   \ temp tag name
         ELSE DUP MU-T-CDATA = IF
             DROP MU-SKIP-CDATA
         ELSE
-            DROP MU-SKIP-TO-TAG
+            \ MU-T-TEXT can be an unterminated '<...'; consume it first.
+            DROP MU-SKIP-TAG MU-SKIP-TO-TAG
         THEN THEN THEN THEN THEN THEN
     REPEAT ;
 
