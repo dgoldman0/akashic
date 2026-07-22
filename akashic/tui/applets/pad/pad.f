@@ -440,7 +440,7 @@ VARIABLE _PAD-SHARED-COMMIT-XT
 VARIABLE _PDT-COL  \ column accumulator during tab draw
 
 : _PAD-DRAW-TABS  ( -- )
-    _PAD-PANEL 8 + @ RGN-W          ( panel-w )
+    _PAD-PANEL WDG-REGION RGN-W          ( panel-w )
     \ Set default tab colours
     _PTH-TABS-FG @ DRW-FG!  _PTH-TABS-BG @ DRW-BG!
     \ Clear header row 0
@@ -477,9 +477,9 @@ VARIABLE _PDT-COL  \ column accumulator during tab draw
 
 \ Sync textarea sub-region from panel region (call before drawing)
 : _PAD-SYNC-TXTA-RGN  ( panel-widget -- )
-    8 + @                              ( panel-rgn )
+    WDG-REGION                          ( panel-rgn )
     _PAD-TXTA @ ?DUP 0= IF DROP EXIT THEN
-    8 + @                              ( panel-rgn txta-rgn )
+    WDG-REGION                          ( panel-rgn txta-rgn )
     OVER RGN-ROW 2 + OVER  0 + !
     OVER RGN-COL     OVER  8 + !
     OVER RGN-H 2 -   0 MAX OVER 16 + !
@@ -487,9 +487,8 @@ VARIABLE _PDT-COL  \ column accumulator during tab draw
 
 : _PAD-SYNC-TXTA-FOCUS  ( -- )
     _PAD-TXTA @ ?DUP IF
-        DUP 32 + @ WDG-F-FOCUSED INVERT AND
-        _PAD-PANEL 32 + @ WDG-F-FOCUSED AND IF WDG-F-FOCUSED OR THEN
-        SWAP 32 + !
+        DUP WDG-FOCUS-CLR
+        _PAD-PANEL WDG-FOCUSED? IF WDG-FOCUS-SET ELSE DROP THEN
     THEN ;
 
 VARIABLE _PDC-W
@@ -505,7 +504,7 @@ VARIABLE _PDC-ACOL
     _PDC-W @ _PTO-SCROLL-Y + @ - _PDC-ROW !
     _PDC-W @ TXTA-CURSOR-COL
     _PDC-W @ _PTO-SCROLL-X + @ - _PAD-GUTTER-W + _PDC-COL !
-    _PDC-W @ 8 + @ _PDC-RGN !
+    _PDC-W @ WDG-REGION _PDC-RGN !
     _PDC-ROW @ 0< _PDC-COL @ 0< OR IF EXIT THEN
     _PDC-ROW @ _PDC-RGN @ RGN-H >= IF EXIT THEN
     _PDC-COL @ _PDC-RGN @ RGN-W >= IF EXIT THEN
@@ -526,7 +525,7 @@ VARIABLE _PDC-ACOL
 
 : _PAD-PANEL-HANDLE  ( event widget -- consumed? )
     \ Reaching this handler proves the mounted editor region owns focus.
-    DUP 32 + DUP @ WDG-F-FOCUSED OR SWAP !
+    DUP WDG-FOCUS-SET
     DROP
     _PAD-SYNC-TXTA-FOCUS
     _PAD-TXTA @ ?DUP IF
@@ -534,12 +533,8 @@ VARIABLE _PDC-ACOL
     ELSE DROP 0 THEN ;
 
 : _PAD-PANEL-INIT  ( rgn -- )
-    _PAD-PANEL
-    20 OVER  0 + !                     \ type = 20 (custom)
-    SWAP OVER  8 + !                   \ region
-    ['] _PAD-PANEL-DRAW  OVER 16 + !  \ draw-xt
-    ['] _PAD-PANEL-HANDLE OVER 24 + ! \ handle-xt
-    1 4 OR  SWAP 32 + ! ;             \ flags = VISIBLE | DIRTY
+    _PAD-PANEL 20 ROT
+    ['] _PAD-PANEL-DRAW ['] _PAD-PANEL-HANDLE WDG-INIT ;
 
 \ =====================================================================
 \  S7 -- Gutter (Line Numbers)
@@ -2324,7 +2319,7 @@ VARIABLE _PSW-BYTE
         _PAD-PANEL-INIT
 
         \ Create the shared textarea (sub-region of panel, row 2+)
-        _PAD-PANEL 8 + @  DUP >R         ( panel-rgn  R: panel-rgn )
+        _PAD-PANEL WDG-REGION DUP >R      ( panel-rgn  R: panel-rgn )
         2 0  R@ RGN-H 2 - 0 MAX  R> RGN-W
         RGN-SUB                            ( content-rgn )
         _PAD-DUMMY-BUF _PAD-DUMMY-CAP

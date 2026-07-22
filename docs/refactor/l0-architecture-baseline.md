@@ -85,8 +85,9 @@ The seven existing target-layer violations are:
 - shared `tui/app-shell.f` directly requiring the MP64FS driver.
 
 The concrete-driver fact is why ext4 completion is not a prerequisite. Shared
-host code must receive an injected generic VFS/backend rather than exchange one
-concrete driver dependency for another.
+host code must depend only on the generic VFS contract, with concrete backend
+selection left to platform composition rather than exchanged for another
+driver dependency.
 
 The stale `tui/applets/fexplorer/fexplorer copy.f` both contains whitespace that
 makes it impossible to address with the loader grammar and duplicates
@@ -419,3 +420,54 @@ lexical mutable global. The state digest becomes
 `65a4dba68faf0f77057c1a2ecbca3bfa7d2f39eb47bed2016c65ed7bdefa1dc3`.
 No product capacity, storage format, filesystem backend, applet behavior,
 deferred-app scope, or ext4 dependency changes in L8.
+
+## L9 reviewed ratchet update
+
+Landing L9 adds two Desk-ecosystem modules with deliberately different
+responsibilities. `tui/applet-host/host.f` is a caller-owned host for child
+slots, transactional launch and rollback, close negotiation and drain, focus,
+fault containment, UIDL contexts, and event/tick/paint dispatch.
+`tui/platform/mp64fs-vfs.f` is the concrete MP64FS composition point. Desk
+continues to own its chrome, catalog, tiling policy, product composition, and
+service namespace.
+
+The dependency policy now has no target-layer violation. The transitive
+`app-shell.f` closure contains the abstract `utils/fs/vfs.f` contract and no
+filesystem driver. The applet-host closure contains no concrete applet,
+platform module, or filesystem driver. The platform module is the only TUI
+module with an edge into `utils/fs/drivers/`, and the architecture tests pin
+that edge exactly to `vfs-mp64fs.f`. Desk reaches neither `_ASHELL-*` nor
+`_AHOST-*` private words.
+
+The exact eleven service IDs remain Desk-owned:
+
+- `org.akashic.net.external-io`
+- `org.akashic.agent.runtime`
+- `org.akashic.agent.tool-gateway`
+- `org.akashic.agent.provider-source`
+- `org.akashic.agent.access-profile`
+- `org.akashic.runtime.registry`
+- `org.akashic.runtime.context`
+- `org.akashic.runtime.resource-registry`
+- `org.akashic.interop.request-bus`
+- `org.akashic.resource.daybook`
+- `org.akashic.interop.endpoint`
+
+The two new modules and seven net dependency edges make the reviewed graph 394
+modules, 1,318 resolved `REQUIRE` occurrences, and 1,318 unique resolved
+edges. It retains 78 unchanged reviewed unresolved imports, no cycle, no layer
+violation, and no placement debt. The graph digest is
+`fcdd0e822e6438160a0e5599452273bc261e0d9c3b852c7d7f2e4235bc46a15d`;
+the state digest is
+`bcd679995dca9721dd03f7fd51cc7adcc8a96d7dab82d2aeb2c93ade21f716d9`;
+the unchanged empty-placement digest is
+`4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`;
+and the unchanged unresolved-import digest is
+`98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb`.
+
+Current responsibility totals are 68 applet modules / 47,595 lines / 2,703
+lexical globals, 61 Desk-ecosystem modules / 24,895 lines / 1,154 lexical
+globals, and 265 independent modules / 128,735 lines / 7,075 lexical globals.
+The independent class remains unchanged. L9 redistributes existing Desk/TUI
+mechanics and concrete backend composition; it changes no product capacity,
+storage format, applet identity, deferred-app scope, or ext4 prerequisite.

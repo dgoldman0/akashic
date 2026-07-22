@@ -3,7 +3,8 @@
 **Prefix:** `DESK-` (public), `_DESK-` / `_DTH-` / `_HB-` / `_DHBAR-` (internal)  
 **Provider:** `akashic-tui-desk`  
 **Location:** `akashic/tui/applets/desk/desk.f`  
-**Dependencies:** [`app-shell.f`](../../app-shell.md), [`app-desc.f`](../../app-desc.md),
+**Dependencies:** [`app-shell.f`](../../app-shell.md),
+[`applet-host/host.f`](../../applet-host.md), [`app-desc.f`](../../app-desc.md),
 [`uidl-tui.f`](../../uidl-tui.md), [`screen.f`](../../screen.md),
 [`region.f`](../../region.md), [`draw.f`](../../draw.md),
 [`keys.f`](../../keys.md), [`color.f`](../../color.md),
@@ -33,9 +34,11 @@ cycling, and tick timing to the shell:
 
 ## Ownership boundary
 
-Desk owns applet installation policy and lifecycle, layout/focus, activation
-sequencing, service composition, typed routing, review surfaces, and the
-machine external-I/O lifecycle. It does not own Library records, Daybook
+Desk owns applet installation and catalog policy, tiling/chrome, product
+activation sequencing, service composition, typed routing, review surfaces,
+and the machine external-I/O lifecycle. Generic child lifecycle, focus state,
+UIDL context handling, and dispatch live in the caller-owned
+[`applet-host/host.f`](../../applet-host.md). Desk does not own Library records, Daybook
 content or time semantics, Agent threads, Grid workbooks, Streams sources or
 observations, Practice bindings/authority, or another applet's parsing and
 storage merely because it constructs or retains a service.
@@ -54,12 +57,8 @@ component pointer, or XIO handle as domain identity.
 ```
   app-shell.f           (terminal via term-init.f, event loop, paint cycle)
     └── DESK-DESC       (APP-DESC callbacks)
-          ├── DESK-INIT-CB     → reset state
-          ├── DESK-EVENT-CB    → shortcuts, route to focused sub-app
-          ├── DESK-TICK-CB     → tick all alive sub-apps
-          ├── DESK-PAINT-CB    → bg fill*, paint tiles, dividers, taskbar
-          ├── DESK-REQUEST-CLOSE-CB → negotiate every child
-          └── DESK-SHUTDOWN-CB → close all sub-apps
+          ├── Desk policy      → catalog/install, tiling, chrome, services
+          └── AHOST state      → child lifecycle, focus, dispatch, UIDL
 ```
 
 \* Background fill only runs when `_DESK-BG-DIRTY` is set (init,
@@ -87,8 +86,10 @@ only the focused app and hides dividers.
 
 ## Slot Structure
 
-Each sub-app occupies a heap-allocated 88-byte slot, linked in a singly
-linked list.  Slot IDs are monotonic (1, 2, 3, …).
+The embedded applet host owns one heap-allocated 88-byte `AHS` slot per
+sub-app, linked in a singly linked list. Slot IDs are monotonic
+(1, 2, 3, …). Desk reads these public fields to assign regions and paint
+chrome; it does not implement a second slot lifecycle.
 
 | Offset | Field | Description |
 |--------|-------|-------------|
@@ -106,8 +107,8 @@ linked list.  Slot IDs are monotonic (1, 2, 3, …).
 
 ## ASHELL-QUIT Interception
 
-When a sub-app calls `ASHELL-QUIT`, `DESK-EVENT-CB` intercepts it
-via the public API:
+When a sub-app calls `ASHELL-QUIT`, the generic child dispatcher used by
+`DESK-EVENT-CB` intercepts it via the public shell API:
 
 1. Checks `ASHELL-QUIT-PENDING?` (returns true when quit is pending)
 2. Calls `ASHELL-CANCEL-QUIT` (re-arms the event loop)
@@ -118,7 +119,7 @@ ALLOW shuts down and removes the tile.  CANCEL and DEFER preserve its entire
 slot, component instance, and UIDL context.  The request and later shutdown
 callbacks both run with that child's UIDL context and activation binding live.
 Context entry, callback, save, and exit are fault boundaries: any failure while
-negotiating is normalized to CANCEL, and Desk attempts to leave the child
+negotiating is normalized to CANCEL, and the host attempts to leave the child
 context before returning.
 
 Closing Desk itself is two-phase.  `DESK-REQUEST-CLOSE-CB` queries every
@@ -126,10 +127,10 @@ child with `APP-CLOSE-R-HOST-SHUTDOWN` without destroying any of them.  CANCEL
 wins over DEFER, and DEFER wins over ALLOW.  Only an all-ALLOW pass lets the
 shell enter `DESK-SHUTDOWN-CB`; shutdown then force-cleans those approved
 children without prompting again, so it cannot loop forever on a refusal.
-Force-close catches shutdown, UIDL detach, context-exit, and resource-release
+Host force-close catches shutdown, UIDL detach, context-exit, and resource-release
 faults independently.  It unlinks the slot and attempts every known release
 before returning its first cleanup error.  Top-level Desk shutdown drains all
-children and completes Desk cleanup before surfacing the first such error to
+children before Desk completes its own cleanup and surfaces the first error to
 the shell.  If context entry/activation itself fails, Desk suppresses the
 child-owned shutdown callback rather than invoke it against an uncertain
 context.  UIDL detach has a stricter identity check of its own: it runs only
@@ -449,26 +450,26 @@ The UCTX system (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-SAVE`, `UCTX-RESTORE`,
 `UCTX-CLEAR`, `UCTX-TOTAL`) is defined in `uidl-tui.f` §18b, which owns
 the private variables being serialised.
 
-Context switch (`_DESK-CTX-SWITCH`) saves the current sub-app's globals
-via `CMOVE` and restores the target's.  Only one sub-app's context is
-live at a time.  Desk delegates to `ASHELL-CTX-SWITCH` and
-`ASHELL-CTX-SAVE` — it never calls `UCTX-SAVE`/`UCTX-RESTORE` directly.
+Context switch (`_DESK-CTX-SWITCH`) is a compatibility view of the embedded
+host operation. Only one sub-app's context is live at a time. The host uses
+the public `ASHELL-CTX-SWITCH` and `ASHELL-CTX-SAVE` APIs; Desk never reaches
+shell-private context state or calls `UCTX-SAVE`/`UCTX-RESTORE` directly.
 
 ## Internal Sections
 
 | § | Title | Description |
 |---|-------|-------------|
-| 1 | Slot Struct | 88-byte linked-list node, state enum |
-| 2 | DESK Global State | Head, focus, ID counter, layout prefs |
+| 1 | Host aliases | Public `AHS` slot fields used by Desk layout/chrome |
+| 2 | DESK Global State | Embedded caller-owned host plus Desk layout prefs |
 | 2b | Theme | 15 colour slot variables, defaults, TOML loader |
 | 2c | Hotbar | Pinned catalog projection and legacy TOML compatibility |
 | 2d | Config Loader | `DESK-LOAD-CONFIG` master loader |
-| 3 | Linked-List Helpers | Find, unlink, append, count |
+| 3 | Host views | Find and count delegation for Desk callers |
 | 4 | Visible Collection Buffer | Up to 64 visible slots |
 | 5 | Tiling Layout Engine | Grid, tile sizes, region assignment, dividers |
-| 6 | Context Switching | Save/restore/switch helpers (delegates to shell) |
-| 7 | Launch & Close | transactional `DESK-TRY-LAUNCH`, rollback, close negotiation |
-| 8 | Focus/Minimize/Restore | State transitions, auto-focus |
+| 6 | Context Switching | Compatibility views over applet-host context APIs |
+| 7 | Launch & Close | Desk install/catalog policy around host transactions |
+| 8 | Focus/Minimize/Restore | Delegation to embedded host state transitions |
 | 9 | Taskbar Painter | Shared live-label geometry, per-item styled painting, hotbar + divider |
 | 10 | APP-DESC Callbacks | Init, event, tick, paint, shutdown |
 | 10b | Mouse Dispatch | Live-taskbar activation + focus-before-forward tile routing |

@@ -26,11 +26,11 @@ def test_live_functional_ledger_is_complete_and_source_anchored() -> None:
     assert summary(ledger) == {
         "applets": 9,
         "behavior_groups": 29,
-        "fully_covered_groups": 13,
-        "partial_groups": 14,
+        "fully_covered_groups": 15,
+        "partial_groups": 12,
         "prerequisite_only_groups": 2,
-        "prerequisites": 21,
-        "evidence_references": 110,
+        "prerequisites": 18,
+        "evidence_references": 113,
     }
 
 

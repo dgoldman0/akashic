@@ -288,9 +288,9 @@
         {
           "id": "agent.active-close-ownership",
           "before_landing": "L9",
-          "trigger": "Host close/lifecycle extraction.",
+          "trigger": "Applet-specific Agent close/lifecycle ownership changes.",
           "characterization": "Distinguish a standalone-owned active run, which must confirm or cancel, from a Desk-shared lens close, which must not cancel shared work.",
-          "reason": "Active-run close ownership is not characterized by current shell or Desk journeys."
+          "reason": "L9 preserves the existing opaque callback boundary and does not change Agent's close/lifecycle ownership; current journeys still do not characterize an active-run close."
         }
       ]
     },
@@ -415,9 +415,9 @@
         {
           "id": "pad.dirty-close-save-all",
           "before_landing": "L9",
-          "trigger": "Host close, prompt or applet-controller extraction.",
+          "trigger": "Applet-specific Pad close, prompt or controller ownership changes.",
           "characterization": "Drive Save All and dirty applet close through cancel, save/discard and final close outcomes.",
-          "reason": "Storage and resource-session semantics are strong, but these visible lifecycle paths are not directly driven."
+          "reason": "L9 preserves Pad's callback and controller implementation; current storage and resource-session evidence does not directly drive these visible lifecycle paths."
         },
         {
           "id": "pad.remaining-controller-routes",
@@ -480,9 +480,9 @@
         {
           "id": "grid.dirty-close-and-controller-edges",
           "before_landing": "L9",
-          "trigger": "Host close or Grid input dispatch is changed.",
+          "trigger": "Applet-specific Grid close or input dispatch changes.",
           "characterization": "Prove dirty close/defer/confirm/discard; add only the touched Tab, Shift-Tab, Page, Home/End, F2 or printable-replace controller cases.",
-          "reason": "The Grid contract proves clean close and the smoke drives the main path, not every controller edge."
+          "reason": "L9 preserves Grid's callback and input implementation; the Grid contract proves clean close and the smoke drives the main path, not every controller edge."
         }
       ]
     },
@@ -570,19 +570,17 @@
       "behaviors": [
         {
           "id": "desk.workspace-surface",
-          "coverage": "partial",
-          "prerequisite_ids": ["desk.child-close-context-faults", "desk.layout-state"],
+          "coverage": "covered",
           "facets": ["actions", "journeys"],
           "preserve": ["Alt+1..9 focus, Alt+Tab cycling, Alt+M minimize, Alt+R restore, Alt+F full frame, Alt+L layout, Alt+W close, Alt+H launcher and Alt+A/Ctrl+Space Agent composer", "Dynamic vertical/horizontal tiling, focus, minimize/restore, full-frame, taskbar pointer activation and focus-before-child pointer delivery", "Terminal resize preserves child state and leaves one exact live taskbar projection"],
-          "evidence": ["profile:desktop"]
+          "evidence": ["profile:desktop", "driver:local_testing/test_applet_close.py", "driver:local_testing/test_desk_host_characterization.py"]
         },
         {
           "id": "desk.catalog-launch-and-lifecycle",
-          "coverage": "partial",
-          "prerequisite_ids": ["desk.launch-rollback"],
+          "coverage": "covered",
           "facets": ["actions", "persistence", "failures", "journeys"],
           "preserve": ["Durable catalog, hotbar and nonblocking launcher; enabled/pinned/autostart/quarantine policy", "Transactional child launch, close/relaunch, component/resource cleanup and borrowed UIDL ownership", "Build and Install resolves and launches a local applet without evaluating catalog text"],
-          "evidence": ["profile:desktop-local-applet", "driver:local_testing/test_app_catalog.py", "driver:local_testing/test_applet_close.py"]
+          "evidence": ["profile:desktop-local-applet", "driver:local_testing/test_app_catalog.py", "driver:local_testing/test_applet_close.py", "driver:local_testing/test_desk_host_characterization.py"]
         },
         {
           "id": "desk.service-and-product-composition",
@@ -592,29 +590,7 @@
           "evidence": ["profile:desk-service-table-contracts", "profile:desktop-resource", "profile:desktop-agent-hardening", "profile:desktop-streams", "profile:desktop-recovery", "profile:desktop-fallback", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
         }
       ],
-      "prerequisites": [
-        {
-          "id": "desk.launch-rollback",
-          "before_landing": "L9",
-          "trigger": "Desk child-host extraction begins.",
-          "characterization": "Inject failure at descriptor, instance, registry, slot, UIDL-context and UIDL-load stages of DESK-TRY-LAUNCH; prove first error and complete cleanup.",
-          "reason": "Current launch journeys exercise success and some package failures, not every acquisition boundary."
-        },
-        {
-          "id": "desk.child-close-context-faults",
-          "before_landing": "L9",
-          "trigger": "Desk child-host extraction begins.",
-          "characterization": "Modernize and activate the dormant Desk close fixture: request/shutdown context, CANCEL/DEFER preservation, exact-once ALLOW, activation-entry failure, all-child negotiation and force-clean after shutdown throw.",
-          "reason": "Only the app-shell prefix of test_applet_close.py currently runs; its Desk-specific half is not evidence."
-        },
-        {
-          "id": "desk.layout-state",
-          "before_landing": "L9",
-          "trigger": "Layout, focus, minimization or UIDL context state moves into the shared host.",
-          "characterization": "Add a focused current-host characterization for vertical/horizontal tiling, full-frame, focus/minimize/restore and per-child UIDL-context isolation.",
-          "reason": "Desktop smoke proves an observable subset, not exact host state transitions."
-        }
-      ]
+      "prerequisites": []
     },
     {
       "id": "soundlab",
@@ -684,9 +660,9 @@
         {
           "id": "soundlab.close-and-audio-ownership",
           "before_landing": "L9",
-          "trigger": "Host close or lifecycle extraction touches SoundLab.",
+          "trigger": "Applet-specific SoundLab close, lifecycle or AudioOut ownership changes.",
           "characterization": "Drive unsaved close and shutdown; prove stop affects only SoundLab's owned generation, including after-effect host starts and absent/device-failure states.",
-          "reason": "Current smoke does not exercise close or ownership failure edges."
+          "reason": "L9 deliberately leaves SoundLab for the later MediaLab rebuild and preserves its opaque callback boundary; current smoke does not exercise close or ownership failure edges."
         }
       ]
     }

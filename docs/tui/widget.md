@@ -61,6 +61,7 @@ widgets generically without knowing the concrete type.
 
 | Word | Stack | Description |
 |------|-------|-------------|
+| `WDG-INIT` | `( addr type rgn draw-xt handle-xt -- )` | Fill a caller-owned header; sets flags to VISIBLE \| DIRTY |
 | `WDG-TYPE` | `( widget -- type )` | Get type constant |
 | `WDG-REGION` | `( widget -- rgn )` | Get region |
 | `WDG-FLAGS` | `( widget -- flags )` | Get raw flags bitmask |
@@ -84,6 +85,8 @@ widgets generically without knowing the concrete type.
 | `WDG-DISABLE` | `( widget -- )` | Set DISABLED + DIRTY |
 | `WDG-DIRTY` | `( widget -- )` | Set DIRTY flag |
 | `WDG-CLEAN` | `( widget -- )` | Clear DIRTY flag |
+| `WDG-FOCUS-SET` | `( widget -- )` | Set FOCUSED + DIRTY without changing focus-chain membership |
+| `WDG-FOCUS-CLR` | `( widget -- )` | Clear FOCUSED and set DIRTY without changing focus-chain membership |
 
 ### Polymorphic Dispatch
 
@@ -91,12 +94,6 @@ widgets generically without knowing the concrete type.
 |------|-------|-------------|
 | `WDG-DRAW` | `( widget -- )` | If visible: activate region, call draw-xt, clear dirty |
 | `WDG-HANDLE` | `( event widget -- consumed? )` | If not disabled: call handle-xt |
-
-### Internal
-
-| Word | Stack | Description |
-|------|-------|-------------|
-| `_WDG-INIT` | `( addr type rgn draw-xt handle-xt -- )` | Fill header at addr; sets flags = VISIBLE \| DIRTY |
 
 ## Design Notes
 

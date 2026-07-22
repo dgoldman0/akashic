@@ -131,8 +131,8 @@ def build_snapshot():
         'VARIABLE _HIT-ID',
         'CREATE _EV 24 ALLOT',
         ': _MOCK-DRAW ( wdg -- ) DROP ;',
-        # handle-xt: ( ev wdg -- consumed? ) — stores wdg _WDG-O-TYPE val in _HIT-ID, returns -1
-        ': _MOCK-HANDLE ( ev wdg -- flag ) _WDG-O-TYPE + @ _HIT-ID ! DROP -1 ;',
+        # handle-xt: ( ev wdg -- consumed? ) — stores the widget type in _HIT-ID, returns -1
+        ': _MOCK-HANDLE ( ev wdg -- flag ) WDG-TYPE _HIT-ID ! DROP -1 ;',
         # _MK-MOCK ( row col h w id -- wdg )
         #   Creates a region, allocates widget (40 bytes), inits header
         ': _MK-MOCK',
@@ -143,7 +143,7 @@ def build_snapshot():
         '  3 PICK                     \\ ( rgn wdg wdg id rgn )',
         "  ['] _MOCK-DRAW",
         "  ['] _MOCK-HANDLE",
-        '  _WDG-INIT                  \\ ( rgn wdg ) — header filled',
+        '  WDG-INIT                   \\ ( rgn wdg ) — header filled',
         '  NIP                        \\ ( wdg )',
         ';',
     ]

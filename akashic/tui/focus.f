@@ -170,7 +170,7 @@ FOC-CLEAR   \ Initialize on load
     THEN
 
     \ Clear old focus flag on the widget being removed
-    DUP _FOC-W@ _WDG-FOCUS-CLR
+    DUP _FOC-W@ WDG-FOCUS-CLR
 
     \ Free slot
     0 SWAP _FOC-W!
@@ -190,12 +190,12 @@ FOC-CLEAR   \ Initialize on load
 
     \ Clear old focus
     _FOC-CUR @ DUP 0<> IF
-        _FOC-W@ _WDG-FOCUS-CLR
+        _FOC-W@ WDG-FOCUS-CLR
     ELSE DROP THEN
 
     \ Set new focus
     DUP _FOC-CUR !
-    _FOC-W@ _WDG-FOCUS-SET ;
+    _FOC-W@ WDG-FOCUS-SET ;
 
 \ =====================================================================
 \  §7 — FOC-NEXT / FOC-PREV
@@ -205,25 +205,25 @@ FOC-CLEAR   \ Initialize on load
     _FOC-CUR @ DUP 0= IF DROP EXIT THEN
 
     \ Clear old
-    DUP _FOC-W@ _WDG-FOCUS-CLR
+    DUP _FOC-W@ WDG-FOCUS-CLR
 
     \ Advance
     _FOC-N@ DUP _FOC-CUR !
 
     \ Set new
-    _FOC-W@ _WDG-FOCUS-SET ;
+    _FOC-W@ WDG-FOCUS-SET ;
 
 : FOC-PREV  ( -- )
     _FOC-CUR @ DUP 0= IF DROP EXIT THEN
 
     \ Clear old
-    DUP _FOC-W@ _WDG-FOCUS-CLR
+    DUP _FOC-W@ WDG-FOCUS-CLR
 
     \ Walk backwards: find pred of current
     _FOC-PRED DUP _FOC-CUR !
 
     \ Set new
-    _FOC-W@ _WDG-FOCUS-SET ;
+    _FOC-W@ WDG-FOCUS-SET ;
 
 \ =====================================================================
 \  §8 — FOC-DISPATCH

@@ -56,9 +56,9 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | Pad | 3 | 2 | 1 | 0 | 2 | 10 |
 | Grid | 2 | 0 | 2 | 0 | 2 | 5 |
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
-| Desk | 3 | 1 | 2 | 0 | 3 | 11 |
+| Desk | 3 | 3 | 0 | 0 | 0 | 14 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **29** | **13** | **14** | **2** | **21** | **110** |
+| **Total** | **29** | **15** | **12** | **2** | **18** | **113** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -98,21 +98,36 @@ and a broad test-writing project for code an active landing may never touch.
   state, discard state and allocator balance. The L6 prerequisite is also
   closed: a forced post-commit binding-advance failure proves one authoritative
   revision is recoverable without duplicating the mutation.
+- Agent and Pad retain their active-close and dirty-close/Save-All
+  prerequisites. L9 moves the generic host side of the descriptor callback
+  boundary and replaces Pad's raw widget-header access with the public
+  equivalent, but does not change applet ownership or the uncovered
+  close/Save-All/menu routes. Their existing active-run, storage, and Desk
+  journeys are not mislabeled as direct coverage of the missing close
+  branches.
 - Grid and FExplorer already have strong evaluator/storage and verified-transfer
-  evidence. Their prerequisites are limited to controller or handler edges that
-  those tests do not execute.
+  evidence. Their prerequisites remain limited to controller or handler edges
+  that those tests do not execute. L9 leaves Grid's callback and input
+  implementation intact, so generic host mocks are not presented as proof of
+  Grid's dirty-close branches.
 - SoundLab's happy path is real, but capability, output-fault, unsaved-close and
-  AudioOut-ownership claims are not. The ledger prevents selecting it as an
-  early consumer without first adding the relevant evidence.
-- Desk's visible smoke journeys are retained, but they do not prove every host
-  state transition. Transactional launch rollback and child close/context/fault
-  characterization are hard prerequisites before L9.
+  AudioOut-ownership claims are not. L9 deliberately leaves its applet-specific
+  lifecycle and raw widget header alone for the later MediaLab rebuild; neither
+  a generic host fixture nor the happy-path audio smoke closes those gaps.
+- L9 closes Desk's three host-specific prerequisites with two focused drivers.
+  `test_desk_host_characterization.py` covers transactional launch rollback,
+  tiling, focus/minimize/restore, full-frame state, and child UIDL-context
+  isolation. The Desk profile in `test_applet_close.py` covers close decisions,
+  callback context, activation-entry failure, shutdown-fault containment,
+  all-child negotiation, and draining. The ledger names those executable
+  contracts without itself claiming a particular guest run result.
 
 The legacy `local_testing/test_desk.py` is not evidence because it imports the
 removed `local_testing/emu` package. `test_app_compositor.py` targets a deleted
-module. The Desk-specific suffix in `test_applet_close.py` is currently dormant;
-only its app-shell prefix runs, so the dormant cases are described as an L9
-prerequisite rather than cited as passing coverage.
+module. `test_applet_close.py` now exposes separate shell and fully linked Desk
+profiles, while `test_desk_host_characterization.py` owns the complementary
+launch/layout fixture. Run results are recorded by the L9 landing qualification,
+not inferred from a driver's presence in this ledger.
 
 ## Commands
 
@@ -134,6 +149,18 @@ python3 -m pytest -q \
   local_testing/test_akashic_tui_packaging.py \
   local_testing/test_desk_gate0_baseline.py
 ```
+
+The focused L9 host qualification runs the generic host, Desk launch/layout,
+and shell/Desk close contracts as real linked guest images:
+
+```bash
+python3 local_testing/test_applet_host.py
+python3 local_testing/test_desk_host_characterization.py
+python3 local_testing/test_applet_close.py --profile all
+```
+
+These profiles use the composed MP64FS-backed abstract VFS and do not require
+ext4.
 
 ## Update rule
 

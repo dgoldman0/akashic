@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from forth_dependencies import (
     MODULE_KEY_BYTES,
     PROVIDED_RE,
     REQUIRE_RE,
+    dependency_closure,
     dependency_markers,
     module_key,
     normalize_module,
@@ -28,6 +30,7 @@ from refactor_inventory import (
     classify_module,
     load_policy,
 )
+
 
 def _policy() -> dict:
     return load_policy()
@@ -96,12 +99,12 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 392,
-        "resolved_require_occurrence_count": 1311,
-        "unique_resolved_edge_count": 1311,
+        "module_count": 394,
+        "resolved_require_occurrence_count": 1318,
+        "unique_resolved_edge_count": 1318,
         "unresolved_require_count": 78,
         "cycle_count": 0,
-        "layer_violation_count": 1,
+        "layer_violation_count": 0,
         "placement_debt_count": 0,
         "provided_issue_count": 2,
         "addressability_issue_count": 1,
@@ -268,13 +271,7 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
 
 def test_current_layer_and_addressability_debt_is_exact() -> None:
     report = _report()
-    assert report["layer_violations"] == [
-        {
-            "rule": "shared-host-hardcodes-vfs-driver",
-            "from": "tui/app-shell.f",
-            "to": "utils/fs/drivers/vfs-mp64fs.f",
-        },
-    ]
+    assert report["layer_violations"] == []
     assert report["addressability_issues"] == [
         {
             "kind": "whitespace-in-module-path",
@@ -285,6 +282,106 @@ def test_current_layer_and_addressability_debt_is_exact() -> None:
         "duplicate-provided-identity",
         "bounded-provided-key-collision",
     }
+
+
+def test_l9_host_and_platform_dependency_boundaries_are_ratchets() -> None:
+    policy = _policy()
+    assert policy["dependency_constraints"] == [
+        {
+            "rule": "shared-host-hardcodes-vfs-driver",
+            "from": "tui/app-shell.f",
+            "forbid_target_prefix": "utils/fs/drivers/",
+        },
+        {
+            "rule": "shared-applet-host-hardcodes-vfs-driver",
+            "from_prefix": "tui/applet-host/",
+            "forbid_target_prefix": "utils/fs/drivers/",
+        },
+    ]
+
+    app_shell_closure = set(
+        dependency_closure(SOURCE_ROOT, ("tui/app-shell.f",))
+    )
+    assert "utils/fs/vfs.f" in app_shell_closure
+    assert not {
+        module
+        for module in app_shell_closure
+        if module.startswith("tui/platform/")
+    }
+    assert not {
+        module
+        for module in app_shell_closure
+        if module.startswith("utils/fs/drivers/")
+    }
+
+    host_closure = set(
+        dependency_closure(SOURCE_ROOT, ("tui/applet-host/host.f",))
+    )
+    assert not {
+        module
+        for module in host_closure
+        if module.startswith("tui/applets/")
+        or module.startswith("tui/platform/")
+        or module.startswith("utils/fs/drivers/")
+    }
+
+    report = _report()
+    by_path = {module["path"]: module for module in report["modules"]}
+    assert "utils/fs/vfs.f" in by_path["tui/app-shell.f"]["requires"]
+    assert by_path["tui/platform/mp64fs-vfs.f"]["requires"] == [
+        "utils/fs/drivers/vfs-mp64fs.f"
+    ]
+    assert [
+        (edge["from"], edge["to"])
+        for edge in report["edges"]
+        if edge["from"].startswith("tui/")
+        and edge["to"].startswith("utils/fs/drivers/")
+    ] == [
+        (
+            "tui/platform/mp64fs-vfs.f",
+            "utils/fs/drivers/vfs-mp64fs.f",
+        )
+    ]
+
+
+def test_l9_desk_uses_only_public_shell_and_host_apis() -> None:
+    desk = (SOURCE_ROOT / "tui/applets/desk/desk.f").read_text(
+        encoding="utf-8"
+    )
+    assert "_ASHELL-" not in desk
+    assert "_AHOST-" not in desk
+
+
+def test_l9_desk_keeps_the_exact_service_namespace() -> None:
+    desk = (SOURCE_ROOT / "tui/applets/desk/desk.f").read_text(
+        encoding="utf-8"
+    )
+    _, setup_marker, setup_tail = desk.partition(
+        ": _DESK-SERVICE-TABLE-SETUP"
+    )
+    assert setup_marker
+    setup, next_marker, _ = setup_tail.partition("\n:")
+    assert next_marker
+    service_ids = tuple(re.findall(r'S" ([^"]+)"', setup))
+    assert service_ids == (
+        "org.akashic.net.external-io",
+        "org.akashic.agent.runtime",
+        "org.akashic.agent.tool-gateway",
+        "org.akashic.agent.provider-source",
+        "org.akashic.agent.access-profile",
+        "org.akashic.runtime.registry",
+        "org.akashic.runtime.context",
+        "org.akashic.runtime.resource-registry",
+        "org.akashic.interop.request-bus",
+        "org.akashic.resource.daybook",
+        "org.akashic.interop.endpoint",
+    )
+
+    host = (SOURCE_ROOT / "tui/applet-host/host.f").read_text(
+        encoding="utf-8"
+    )
+    assert "_DESK-SERVICE" not in host
+    assert all(service_id not in host for service_id in service_ids)
 
 
 def test_capacity_ledger_is_live_and_distinguishes_scope() -> None:

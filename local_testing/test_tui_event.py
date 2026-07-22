@@ -145,7 +145,7 @@ def build_snapshot():
         # Draw xt: increments _DRAW-COUNT
         ': _MOCK-DRAW ( wdg -- ) DROP  _DRAW-COUNT @ 1+ _DRAW-COUNT ! ;',
         # Handle xt: stores widget type-id in _HIT-ID, returns -1 (consumed)
-        ': _MOCK-HANDLE ( ev wdg -- flag ) _WDG-O-TYPE + @ _HIT-ID ! DROP -1 ;',
+        ': _MOCK-HANDLE ( ev wdg -- flag ) WDG-TYPE _HIT-ID ! DROP -1 ;',
         # _MK-MOCK ( row col h w id -- wdg )
         ': _MK-MOCK',
         '  >R',
@@ -155,7 +155,7 @@ def build_snapshot():
         '  3 PICK',
         "  ['] _MOCK-DRAW",
         "  ['] _MOCK-HANDLE",
-        '  _WDG-INIT',
+        '  WDG-INIT',
         '  NIP',
         ';',
         # Screen creation helper (needed for SCR-FLUSH in event loop)
@@ -473,7 +473,7 @@ def test_draw_dirty_widget():
         '0 _DRAW-COUNT !',
     ] + _mk_named('_WA', 0, 0, 1, 10, 1) + [
         '_WA @ FOC-ADD',
-        # Widget starts VISIBLE|DIRTY from _WDG-INIT
+        # Widget starts VISIBLE|DIRTY from WDG-INIT
         '_TUI-EVT-DRAW-DIRTY',
         '." R=" _DRAW-COUNT @ . CR',
     ], "R=1 ")

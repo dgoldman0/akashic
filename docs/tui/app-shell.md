@@ -1,11 +1,11 @@
 # akashic/tui/app-shell.f — TUI Application Shell Runtime
 
 **Layer:** 7 (above term-init.f)  
-**Lines:** ~580  
+**Lines:** ~900
 **Prefix:** `ASHELL-` (public), `_ASHELL-` (internal)  
 **Provider:** `akashic-tui-app-shell`  
 **Dependencies:** `app-desc.f`, [`cogs/term-init.f`](cogs/term-init.md), `keys.f`, `screen.f`, `region.f`, `draw.f`,
-`focus.f`, `uidl-tui.f`, `utils/term.f`
+`focus.f`, `uidl-tui.f`, `utils/term.f`, `utils/fs/vfs.f`
 
 ## Overview
 
@@ -25,6 +25,11 @@ host-owned releases, and resets shell ownership even if an app shutdown
 callback throws.
 
 Not reentrant.  One app at a time.
+
+The shell consumes the abstract `utils/fs/vfs.f` interface for UIDL file
+loading.  It does not choose or mount a storage driver.  MegaPad-64 product
+images compose [`platform/mp64fs-vfs.f`](platform/mp64fs-vfs.md) before
+loading applet modules; other hosts may supply a different active VFS.
 
 > **Standalone vs Applet.**  Standalone TUI apps use [`app.f`](app.md)
 > directly (they own the event loop via `APP-RUN`).  Applets are hosted
@@ -67,9 +72,11 @@ that field within the descriptor, suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
+| `ASHELL-ACTIVE-CTX` | `( -- uctx )` | Return the active child UIDL context identity, or 0. |
+| `ASHELL-CTX-FORGET` | `( uctx -- )` | Clear the active identity only if it still equals `uctx`; does not save, restore, or free it. |
 | `ASHELL-CTX-SWITCH` | `( uctx -- )` | Save the current UIDL context (if any), then restore `uctx`.  Pass 0 to deactivate without loading a new context.  No-op if `uctx` is already active. |
 | `ASHELL-CTX-SAVE` | `( uctx -- )` | Force-save the current globals into `uctx`.  Used when a sub-app event handler has mutated state and the caller wants to persist changes (no switch happens). |
-| `ASHELL-PAINT-CHILD` | `( uctx rgn has-uidl desc -- )` | Per-child paint primitive.  Context-switches to `uctx`, sets the region, calls `UTUI-PAINT` (if `has-uidl`), then calls the descriptor's `PAINT-XT` (if any). |
+| `ASHELL-PAINT-CHILD` | `( uctx rgn has-uidl desc instance -- )` | Per-child paint primitive. Context-switches to `uctx`, selects the region, activates `instance`, calls `UTUI-PAINT` (if `has-uidl`), then calls the descriptor's `PAINT-XT` (if any). |
 
 ### State Queries
 
@@ -90,7 +97,8 @@ that field within the descriptor, suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `ASHELL-LOAD-UIDL` | `( path-a path-u rgn -- buf \| 0 )` | Open a VFS file, read it through a 512-byte DMA-safe bounce buffer, and parse it as UIDL into `rgn`. Returns retained XMEM (caller frees `_ASHELL-UIDL-FILE-MAX` bytes with `XMEM-FREE-BLOCK`) or 0. |
+| `ASHELL-LOAD-UIDL` | `( path-a path-u rgn -- buf \| 0 )` | Open a file through the active VFS, read it through a 512-byte DMA-safe bounce buffer, and parse it as UIDL into `rgn`. Returns retained XMEM or 0. |
+| `ASHELL-FREE-UIDL-BUF` | `( buf -- )` | Release retained storage returned by `ASHELL-LOAD-UIDL`; 0 is a no-op. Callers do not depend on the shell's private allocation size. |
 
 ### Toast
 
@@ -349,13 +357,20 @@ Cross-core code posts lifecycle work to the owner.  `ASHELL-QUIT` and
 `ASHELL-CANCEL-QUIT` are lock-free aligned lifecycle signals, not general
 cross-core synchronization primitives.
 
-`ASHELL-DIRTY!`, `ASHELL-REGION`, `ASHELL-TICK-MS!`, `ASHELL-POST`,
+The bounded guarded operations are `ASHELL-DIRTY!`, `ASHELL-REGION`,
+`ASHELL-TICK-MS!`, `ASHELL-POST`,
 `ASHELL-UIDL?`, `ASHELL-DESC`, `ASHELL-INSTANCE`, `ASHELL-TOAST`,
 `ASHELL-TOAST-VISIBLE?`.
 
-`ASHELL-REQUEST-CLOSE`, `ASHELL-QUIT-PENDING?`, `ASHELL-CANCEL-QUIT`, and
-`ASHELL-LOAD-UIDL` are **not** guarded.  Close negotiation is an owner-core
-lifecycle dispatch; the others are lightweight accessors/helpers.
+`ASHELL-REQUEST-CLOSE`, `ASHELL-QUIT-PENDING?`, `ASHELL-CANCEL-QUIT`,
+`ASHELL-LOAD-UIDL`, `ASHELL-ACTIVE-CTX`, `ASHELL-CTX-FORGET`,
+`ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`, `ASHELL-PAINT-CHILD`, and
+`ASHELL-FREE-UIDL-BUF` are **not** guarded. Close negotiation, context
+switch/save/forget, child painting, and buffer release are owner-core lifecycle
+work. The remaining words are lightweight accessors or owner-loop helpers. In
+particular, callers must not infer cross-core safety from the public
+context/paint/release seams; the applet host uses them only while serialized on
+its owner core.
 
 The event loop and all descriptor callbacks remain serialized on the host
 owner core.  Worker jobs publish results for that owner to apply; they do not

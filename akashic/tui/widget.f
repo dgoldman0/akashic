@@ -146,12 +146,14 @@ REQUIRE region.f
 : WDG-CLEAN  ( widget -- )
     DUP WDG-FLAGS WDG-F-DIRTY INVERT AND SWAP _WDG-FLAGS! ;
 
-\ _WDG-FOCUS-SET ( widget -- )  Set FOCUSED flag, mark dirty.
-: _WDG-FOCUS-SET  ( widget -- )
+\ WDG-FOCUS-SET ( widget -- )  Set FOCUSED flag, mark dirty.
+\ Public for focus managers and composed widgets that forward focus to a
+\ mounted child; it does not alter any focus-chain membership.
+: WDG-FOCUS-SET  ( widget -- )
     DUP WDG-FLAGS WDG-F-FOCUSED OR WDG-F-DIRTY OR SWAP _WDG-FLAGS! ;
 
-\ _WDG-FOCUS-CLR ( widget -- )  Clear FOCUSED flag, mark dirty.
-: _WDG-FOCUS-CLR  ( widget -- )
+\ WDG-FOCUS-CLR ( widget -- )  Clear FOCUSED flag, mark dirty.
+: WDG-FOCUS-CLR  ( widget -- )
     DUP WDG-FLAGS WDG-F-FOCUSED INVERT AND WDG-F-DIRTY OR
     SWAP _WDG-FLAGS! ;
 
@@ -185,10 +187,10 @@ REQUIRE region.f
 \ 7. Header initialization helper (used by widget constructors)
 \ =====================================================================
 
-\ _WDG-INIT ( addr type rgn draw-xt handle-xt -- )
+\ WDG-INIT ( addr type rgn draw-xt handle-xt -- )
 \   Fill the 5-cell header at addr.
 \   Sets flags to VISIBLE | DIRTY by default.
-: _WDG-INIT  ( addr type rgn draw-xt handle-xt -- )
+: WDG-INIT  ( addr type rgn draw-xt handle-xt -- )
     4 PICK _WDG-O-HANDLE-XT + !       \ handle-xt
     3 PICK _WDG-O-DRAW-XT   + !       \ draw-xt
     2 PICK _WDG-O-REGION    + !       \ region
@@ -219,7 +221,9 @@ GUARD _wdg-guard
 ' WDG-CLEAN       CONSTANT _wdg-clean-xt
 ' WDG-DRAW        CONSTANT _wdg-draw-xt
 ' WDG-HANDLE      CONSTANT _wdg-handle-xt
-' _WDG-INIT       CONSTANT _wdg-init-xt
+' WDG-FOCUS-SET   CONSTANT _wdg-focus-set-xt
+' WDG-FOCUS-CLR   CONSTANT _wdg-focus-clr-xt
+' WDG-INIT        CONSTANT _wdg-init-xt
 
 : WDG-TYPE        _wdg-type-xt      _wdg-guard WITH-GUARD ;
 : WDG-REGION      _wdg-region-xt    _wdg-guard WITH-GUARD ;
@@ -234,10 +238,12 @@ GUARD _wdg-guard
 : WDG-DISABLE     _wdg-disable-xt   _wdg-guard WITH-GUARD ;
 : WDG-DIRTY       _wdg-dirty2-xt    _wdg-guard WITH-GUARD ;
 : WDG-CLEAN       _wdg-clean-xt     _wdg-guard WITH-GUARD ;
+: WDG-FOCUS-SET   _wdg-focus-set-xt _wdg-guard WITH-GUARD ;
+: WDG-FOCUS-CLR   _wdg-focus-clr-xt _wdg-guard WITH-GUARD ;
 \ Polymorphic dispatch executes widget-provided code.  Drawing and input
 \ handling are UI-owner lifecycle work, so never retain _wdg-guard across a
 \ draw/handle callback; cross-core callers must post work to the UI owner.
 : WDG-DRAW        _wdg-draw-xt EXECUTE ;
 : WDG-HANDLE      _wdg-handle-xt EXECUTE ;
-: _WDG-INIT       _wdg-init-xt      _wdg-guard WITH-GUARD ;
+: WDG-INIT        _wdg-init-xt      _wdg-guard WITH-GUARD ;
 [THEN] [THEN]

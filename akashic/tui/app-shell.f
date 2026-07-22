@@ -44,6 +44,9 @@
 \    ASHELL-POST      ( xt -- )        Enqueue deferred action
 \    ASHELL-UIDL?     ( -- flag )      Is a UIDL document loaded?
 \    ASHELL-DESC      ( -- desc )      Current app descriptor
+\    ASHELL-ACTIVE-CTX ( -- uctx )     Active child UIDL context
+\    ASHELL-CTX-FORGET ( uctx -- )     Forget a matching active context
+\    ASHELL-FREE-UIDL-BUF ( buf -- )   Release ASHELL-LOAD-UIDL storage
 \    ASHELL-REQUEST-CLOSE ( reason -- decision )  Negotiate a close
 \
 \  The shell guarantees APP-SHUTDOWN runs even on THROW.
@@ -60,7 +63,7 @@ REQUIRE focus.f
 REQUIRE uidl-tui.f
 REQUIRE ../utils/term.f
 REQUIRE app-desc.f
-REQUIRE ../utils/fs/drivers/vfs-mp64fs.f
+REQUIRE ../utils/fs/vfs.f
 
 \ =====================================================================
 \  §1 — Context Switch & Child Painting  (browser API)
@@ -72,6 +75,19 @@ REQUIRE ../utils/fs/drivers/vfs-mp64fs.f
 
 VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
 0 _ASHELL-ACTIVE-CTX !
+
+\ ASHELL-ACTIVE-CTX ( -- uctx )
+\   Return the currently active UIDL context, or 0 when no child context
+\   is active.  Hosts use this to preserve context identity without
+\   reaching into shell-private state.
+: ASHELL-ACTIVE-CTX  ( -- uctx )
+    _ASHELL-ACTIVE-CTX @ ;
+
+\ ASHELL-CTX-FORGET ( uctx -- )
+\   Clear the shell's active-context identity only when it still names
+\   uctx.  This does not save, restore, or free the context.
+: ASHELL-CTX-FORGET  ( uctx -- )
+    _ASHELL-ACTIVE-CTX @ = IF 0 _ASHELL-ACTIVE-CTX ! THEN ;
 
 \ ASHELL-CTX-SWITCH ( uctx -- )
 \   Save the current UIDL context (if any), then restore the given
@@ -115,9 +131,6 @@ VARIABLE _ASPC-INST
 
 VARIABLE _ASHELL-RGN          \ Root region (0 = not created)
 0 _ASHELL-RGN !
-
-VARIABLE _ASHELL-VFS          \ Shared VFS instance (0 = not yet created)
-0 _ASHELL-VFS !
 
 VARIABLE _ASHELL-DESC         \ Current app descriptor (0 = not running)
 0 _ASHELL-DESC !
@@ -275,6 +288,13 @@ VARIABLE _ASHELL-CLOSE-REASON
 8192 CONSTANT _ASHELL-UIDL-FILE-MAX
  512 CONSTANT _ASHELL-UIDL-DMA-SIZE
 
+\ ASHELL-FREE-UIDL-BUF ( buf -- )
+\   Release a retained buffer returned by ASHELL-LOAD-UIDL.  The shell
+\   owns the allocation size so callers do not depend on private bounds.
+\   A zero buffer is accepted as a no-op.
+: ASHELL-FREE-UIDL-BUF  ( buf -- )
+    ?DUP IF _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK THEN ;
+
 VARIABLE _ALUF-RGN
 VARIABLE _ALUF-FD
 VARIABLE _ALUF-BUF
@@ -282,7 +302,7 @@ VARIABLE _ALUF-DMA
 VARIABLE _ALUF-TOTAL
 
 : _ALUF-FREE-BUF  ( -- 0 )
-    _ALUF-BUF @ _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK 0 ;
+    _ALUF-BUF @ ASHELL-FREE-UIDL-BUF 0 ;
 
 : _ALUF-REJECT-PARSE  ( -- 0 )
     UIDL-RESET _ALUF-FREE-BUF ;
@@ -656,37 +676,6 @@ VARIABLE _ASHELL-TICK-TMP
 \  §10 — Lifecycle: Init
 \ =====================================================================
 
-\ _ASHELL-VFS-INIT ( -- )
-\   Lazy-create a shared VFS backed by the MP64FS boot disk.
-\   Safe to call multiple times — only creates on first call.
-\   Uses a 131072-byte XMEM arena (128 KiB), which covers the
-\   VFS descriptor, inode slab, FD pool, string pool, and the
-\   VMP binding context (~28 KiB minimum).
-131072 CONSTANT _ASHELL-VFS-ARENA-SIZE
-CREATE _ASHELL-BLOCK-DEVICE /BLOCK-DEVICE ALLOT
-CREATE _ASHELL-VOLUME /VOLUME ALLOT
-
-: _ASHELL-VFS-INIT  ( -- )
-    _ASHELL-VFS @ ?DUP IF  VFS-USE  EXIT  THEN   \ already created
-    VFS-CUR ?DUP IF  DUP _ASHELL-VFS !  VFS-USE  EXIT  THEN  \ someone else set it
-    0 _ASHELL-BLOCK-DEVICE !
-    _ASHELL-BLOCK-DEVICE BD-OPEN
-    ABORT" ashell: block device open failed"
-    0 _ASHELL-VOLUME !
-    _ASHELL-BLOCK-DEVICE _ASHELL-VOLUME VOL-RAW
-    ABORT" ashell: raw volume init failed"
-    _ASHELL-VFS-ARENA-SIZE A-XMEM ARENA-NEW
-    ABORT" ashell: VFS arena alloc failed"
-                                           ( arena )
-    _ASHELL-VOLUME VMP-NEW                 ( vfs ior )
-    ABORT" ashell: VMP mount failed"       ( vfs )
-    _ASHELL-VFS !                      \ VFS-USE already called by VFS-NEW
-;
-
-\ Run eagerly at load time so VFS is available before any applet
-\ launches (e.g. DESK-LAUNCH happens before ASHELL-RUN).
-_ASHELL-VFS-INIT
-
 \ _ASHELL-LOAD-UIDL-FILE ( path-a path-u -- flag )
 \   Thin wrapper around ASHELL-LOAD-UIDL that uses the shell's root
 \   region and stashes the buffer for _ASHELL-TEARDOWN to FREE.
@@ -701,9 +690,8 @@ _ASHELL-VFS-INIT
     DUP APP.COMP-DESC @ CINST-NEW
     0<> ABORT" ashell: component instance allocation failed"
     _ASHELL-INST !
-    \ 0. VFS — ensure a shared filesystem is available for applets
-    _ASHELL-VFS-INIT
-    \ 1. Terminal init
+    \ 1. Terminal init.  Filesystem composition is supplied by the host;
+    \    app-shell consumes only the active abstract VFS.
     DUP APP.WIDTH @ OVER APP.HEIGHT @  APP-INIT
     \ 2. Terminal title
     DUP APP.TITLE-A @ ?DUP IF
@@ -778,7 +766,7 @@ VARIABLE _ASHELL-TD-IOR
 
 : _ASHELL-TD-UIDL-BUF  ( -- )
     _ASHELL-UIDL-BUF DUP @ SWAP 0 SWAP ! ?DUP IF
-        _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK
+        ASHELL-FREE-UIDL-BUF
     THEN ;
 
 : _ASHELL-TD-REGION  ( -- )

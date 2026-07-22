@@ -26,6 +26,8 @@ local_testing/*
 !local_testing/test_node.py
 !local_testing/test_tui.py
 !local_testing/test_akashic_tui_packaging.py
+!local_testing/test_applet_host.py
+!local_testing/test_desk_host_characterization.py
 !local_testing/test_uidl_tui.py
 !local_testing/test_focus.py
 !local_testing/ROADMAP_tui.md

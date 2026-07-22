@@ -4,28 +4,22 @@
     "name": "post-gate4-refactor-baseline-20260720",
     "commit": "ce340fc8bef0b2c1331339f6ceaf4c02d4c020f5",
     "expected": {
-      "module_count": 392,
-      "resolved_require_occurrence_count": 1311,
-      "unique_resolved_edge_count": 1311,
+      "module_count": 394,
+      "resolved_require_occurrence_count": 1318,
+      "unique_resolved_edge_count": 1318,
       "unresolved_require_count": 78,
       "cycle_count": 0,
-      "layer_violation_count": 1,
+      "layer_violation_count": 0,
       "placement_debt_count": 0,
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "84931025e194826c255bcb53a922e863a730a2948ea385cb06f5011e15d73f93",
-      "state_sha256": "65a4dba68faf0f77057c1a2ecbca3bfa7d2f39eb47bed2016c65ed7bdefa1dc3",
+      "graph_sha256": "fcdd0e822e6438160a0e5599452273bc261e0d9c3b852c7d7f2e4235bc46a15d",
+      "state_sha256": "bcd679995dca9721dd03f7fd51cc7adcc8a96d7dab82d2aeb2c93ade21f716d9",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
-      "layer_violations": [
-        [
-          "shared-host-hardcodes-vfs-driver",
-          "tui/app-shell.f",
-          "utils/fs/drivers/vfs-mp64fs.f"
-        ]
-      ],
+      "layer_violations": [],
       "provided_issues": [
         {
           "identity": "akashic-tui-fexplorer",
@@ -129,8 +123,12 @@
     {
       "rule": "shared-host-hardcodes-vfs-driver",
       "from": "tui/app-shell.f",
-      "forbid_target_prefix": "utils/fs/drivers/",
-      "removal_landing": "L9"
+      "forbid_target_prefix": "utils/fs/drivers/"
+    },
+    {
+      "rule": "shared-applet-host-hardcodes-vfs-driver",
+      "from_prefix": "tui/applet-host/",
+      "forbid_target_prefix": "utils/fs/drivers/"
     }
   ],
   "scale_profiles": {

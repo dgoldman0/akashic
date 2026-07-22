@@ -14,23 +14,29 @@ if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
 from akashic_tui import (  # noqa: E402
+    APP_SHELL_MODULE,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
     LINK_CHUNK_BYTES,
     MEGAPAD_NETWORKING_BOOT_LINE,
     MEGAPAD_ROOT,
+    MP64FS_VFS_PLATFORM_BOOT_LINE,
+    MP64FS_VFS_PLATFORM_MODULE,
     PROFILES,
     PROVIDED_RE,
     REQUIRE_RE,
     SOURCE_ROOT,
+    _has_forth_error,
     _linked_autoexec,
     _minify_forth,
     _matched_failure_markers,
     _parser,
     _requires_megapad_networking,
     _with_megapad_networking,
+    _with_mp64fs_vfs_platform,
     build_image,
     dependency_closure,
+    dependency_order,
 )
 from diskutil import MP64FS, pack_forth_source  # noqa: E402
 
@@ -74,6 +80,91 @@ def _assert_library_headless_closure(closure: set[str]) -> None:
     }
     assert tui_modules <= LIBRARY_HEADLESS_APPLET_MODULES
     assert tui_modules.isdisjoint(LIBRARY_UI_APPLET_MODULES)
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Module not found: tui",
+        "Path component not found: tui",
+    ),
+)
+def test_smoke_rejects_module_loader_failures(message: str) -> None:
+    assert _has_forth_error(message) == [message]
+
+
+def test_app_shell_is_vfs_abstract_and_mp64fs_is_platform_composition() -> None:
+    shell = (SOURCE_ROOT / APP_SHELL_MODULE).read_text(encoding="utf-8")
+    platform = (SOURCE_ROOT / MP64FS_VFS_PLATFORM_MODULE).read_text(
+        encoding="utf-8"
+    )
+
+    assert "REQUIRE ../utils/fs/vfs.f" in shell
+    assert "vfs-mp64fs.f" not in shell
+    assert "_ASHELL-VFS" not in shell
+    assert "REQUIRE ../../utils/fs/drivers/vfs-mp64fs.f" in platform
+    assert "131072 CONSTANT _MP64VFS-ARENA-SIZE" in platform
+    assert platform.rstrip().endswith("MP64VFS-ENSURE")
+
+
+def test_mp64fs_platform_boot_load_is_early_and_idempotent() -> None:
+    autoexec = "ENTER-USERLAND\nREQUIRE tui/applets/pad/pad.f\n"
+    integrated = _with_mp64fs_vfs_platform(autoexec)
+    assert integrated == (
+        "ENTER-USERLAND\n"
+        f"{MP64FS_VFS_PLATFORM_BOOT_LINE}\n"
+        "REQUIRE tui/applets/pad/pad.f\n"
+    )
+    assert _with_mp64fs_vfs_platform(integrated) == integrated
+
+    networked = (
+        "ENTER-USERLAND\n"
+        f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
+        "REQUIRE tui/applets/desk/desk.f\n"
+    )
+    integrated = _with_mp64fs_vfs_platform(networked)
+    assert integrated.index(MEGAPAD_NETWORKING_BOOT_LINE) < integrated.index(
+        MP64FS_VFS_PLATFORM_BOOT_LINE
+    ) < integrated.index("REQUIRE tui/applets/desk/desk.f")
+
+
+def test_every_app_shell_profile_composes_the_platform_provider() -> None:
+    app_shell_profiles = 0
+    linked_profiles = 0
+    unlinked_profiles = 0
+    for profile in PROFILES.values():
+        base_modules = (
+            dependency_order(profile.roots)
+            if profile.linked
+            else dependency_closure(profile.roots)
+        )
+        if APP_SHELL_MODULE not in base_modules:
+            continue
+        app_shell_profiles += 1
+        linked_profiles += int(profile.linked)
+        unlinked_profiles += int(not profile.linked)
+        autoexec = _with_mp64fs_vfs_platform(profile.autoexec)
+        assert autoexec.count(MP64FS_VFS_PLATFORM_BOOT_LINE) == 1
+
+        composition_roots = (MP64FS_VFS_PLATFORM_MODULE,) + tuple(
+            root
+            for root in profile.roots
+            if root != MP64FS_VFS_PLATFORM_MODULE
+        )
+        modules = (
+            dependency_order(composition_roots)
+            if profile.linked
+            else dependency_closure(composition_roots)
+        )
+        assert MP64FS_VFS_PLATFORM_MODULE in modules
+        if profile.linked:
+            assert modules.index(MP64FS_VFS_PLATFORM_MODULE) < modules.index(
+                APP_SHELL_MODULE
+            )
+
+    assert app_shell_profiles > 0
+    assert linked_profiles > 0
+    assert unlinked_profiles > 0
 
 
 @pytest.mark.parametrize("profile_name", GATE4_HEADLESS_PROFILES)
@@ -647,9 +738,22 @@ def test_library_applet_functional_image_links_controller_and_keeps_uidl(
         SOURCE_ROOT / "tui/applets/library/library.uidl"
     ).read_bytes()
     linked_parent = filesystem.resolve_path("/.akashic")
-    assert any(
-        entry.name.startswith("link-")
-        for entry in filesystem.list_files(parent=linked_parent)
+    linked_entries = sorted(
+        (
+            entry
+            for entry in filesystem.list_files(parent=linked_parent)
+            if entry.name.startswith("link-")
+        ),
+        key=lambda entry: entry.name,
+    )
+    assert linked_entries
+    linked_source = b"".join(
+        filesystem.read_file(entry.name, parent=linked_parent)
+        for entry in linked_entries
+    ).decode("utf-8")
+    assert "PROVIDED akashic-tui-mp64fs-vfs" in linked_source
+    assert linked_source.index("PROVIDED akashic-tui-mp64fs-vfs") < (
+        linked_source.index("PROVIDED akashic-tui-app-shell")
     )
     fixture_parent = filesystem.resolve_path("/local_testing")
     assert filesystem.read_file(
@@ -659,9 +763,32 @@ def test_library_applet_functional_image_links_controller_and_keeps_uidl(
     ).read_text(encoding="utf-8")).encode("utf-8")
     autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
     assert "REQUIRE tui/applets/library/library.f" not in autoexec
+    assert MP64FS_VFS_PLATFORM_BOOT_LINE not in autoexec
     assert "REQUIRE .akashic/link-" in autoexec
+    assert autoexec.index("ENTER-USERLAND") < autoexec.index(
+        "REQUIRE .akashic/link-"
+    ) < autoexec.index("REQUIRE local_testing/library-app-func.f")
     assert "REQUIRE local_testing/library-app-func.f" in autoexec
     assert filesystem.info()["free_sectors"] > 0
+
+
+def test_unlinked_app_shell_profile_packages_and_loads_platform_provider(
+    tmp_path: Path,
+) -> None:
+    image = build_image(
+        "pad-contracts",
+        tmp_path / "akashic-pad-contracts.img",
+    )
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    platform_parent = filesystem.resolve_path("/tui/platform")
+    assert filesystem.read_file("mp64fs-vfs.f", parent=platform_parent) == (
+        SOURCE_ROOT / MP64FS_VFS_PLATFORM_MODULE
+    ).read_bytes()
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    assert autoexec.count(MP64FS_VFS_PLATFORM_BOOT_LINE) == 1
+    assert autoexec.index("ENTER-USERLAND") < autoexec.index(
+        MP64FS_VFS_PLATFORM_BOOT_LINE
+    ) < autoexec.index("REQUIRE tui/applets/pad/pad.f")
 
 
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
@@ -966,6 +1093,22 @@ def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
     assert "FSLOAD networking.f" not in autoexec
     assert autoexec.index("REQUIRE networking.f") < autoexec.index(
         "REQUIRE .akashic/link-"
+    )
+    assert autoexec.index("REQUIRE .akashic/link-") < autoexec.index(
+        "_boot-practice-provision"
+    ) < autoexec.index("DESK-RUN")
+
+    linked_parent = filesystem.resolve_path("/.akashic")
+    linked_source = b"".join(
+        filesystem.read_file(entry.name, parent=linked_parent)
+        for entry in sorted(
+            filesystem.list_files(parent=linked_parent),
+            key=lambda entry: entry.name,
+        )
+        if entry.name.startswith("link-")
+    ).decode("utf-8")
+    assert linked_source.index("PROVIDED akashic-tui-mp64fs-vfs") < (
+        linked_source.index("PROVIDED akashic-tui-app-shell")
     )
 
 

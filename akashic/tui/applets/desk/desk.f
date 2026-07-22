@@ -2,7 +2,8 @@
 \  desk.f — TUI Multi-App Desktop (APP-DESC Application)
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: DESK- / _DESK-
-\  Depends on: akashic-tui-app-shell, akashic-tui-app-desc,
+\  Depends on: akashic-tui-app-shell, akashic-tui-applet-host,
+\              akashic-tui-app-desc,
 \              akashic-tui-uidl-tui, akashic-tui-screen,
 \              akashic-tui-region, akashic-tui-draw,
 \              akashic-tui-keys, akashic-liraq-uidl
@@ -50,6 +51,7 @@
 PROVIDED akashic-tui-desk
 
 REQUIRE ../../app-shell.f
+REQUIRE ../../applet-host/host.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../uidl-tui.f
 REQUIRE ../../screen.f
@@ -76,11 +78,11 @@ REQUIRE ../daybook/shared-document.f
 REQUIRE agent-access-policy.f
 
 \ =====================================================================
-\  §1 — Slot Struct (linked list, heap-allocated)
+\  §1 — Host Slot Compatibility Views
 \ =====================================================================
 \
-\  Same struct as compositor.  Each slot is ALLOCATE'd and linked
-\  via _SL-NEXT.  Slot IDs are monotonic (1, 2, 3, …).
+\  The generic host owns allocation and lifecycle. Desk keeps these aliases
+\  for its layout/chrome code and focused compatibility fixtures.
 \
 \  State values:
 \    0 = empty (should not appear in live list)
@@ -88,45 +90,31 @@ REQUIRE agent-access-policy.f
 \    2 = minimized (alive but hidden)
 \    3 = focused (visible + receives input)
 
- 0 CONSTANT _SLOT-O-DESC       \ APP-DESC pointer
- 8 CONSTANT _SLOT-O-INST       \ generic component instance
-16 CONSTANT _SLOT-O-RGN        \ region handle (0 if no region)
-24 CONSTANT _SLOT-O-STATE      \ state enum
-32 CONSTANT _SLOT-O-UCTX       \ UIDL context pointer (0 = no UIDL)
-40 CONSTANT _SLOT-O-HAS-UIDL   \ flag: app has UIDL?
-48 CONSTANT _SLOT-O-NEXT       \ -> next slot in list (0 = tail)
-56 CONSTANT _SLOT-O-ID         \ unique Desk ID (monotonic)
-64 CONSTANT _SLOT-O-UIDL-BUF   \ shell-loaded UIDL file buffer (0 = none)
-72 CONSTANT _SLOT-O-DIRTY      \ child surface needs repaint
-80 CONSTANT _SLOT-O-SEEN-REV   \ last painted component revision
-88 CONSTANT _SLOT-SZ
+AHS-SIZE CONSTANT _SLOT-SZ
 
-0 CONSTANT _ST-EMPTY
-1 CONSTANT _ST-RUNNING
-2 CONSTANT _ST-MINIMIZED
-3 CONSTANT _ST-FOCUSED
+AHS-S-EMPTY     CONSTANT _ST-EMPTY
+AHS-S-RUNNING   CONSTANT _ST-RUNNING
+AHS-S-MINIMIZED CONSTANT _ST-MINIMIZED
+AHS-S-FOCUSED   CONSTANT _ST-FOCUSED
 
 CREATE DESK-COMP-DESC COMP-DESC ALLOT
 CREATE DESK-DESC      APP-DESC ALLOT
 
 \ Slot field access helpers  ( slot-addr -- field-addr )
-: _SL-DESC     ( sa -- a )  _SLOT-O-DESC     + ;
-: _SL-INST     ( sa -- a )  _SLOT-O-INST     + ;
-: _SL-RGN      ( sa -- a )  _SLOT-O-RGN      + ;
-: _SL-STATE    ( sa -- a )  _SLOT-O-STATE    + ;
-: _SL-UCTX     ( sa -- a )  _SLOT-O-UCTX     + ;
-: _SL-HAS-UIDL ( sa -- a )  _SLOT-O-HAS-UIDL + ;
-: _SL-NEXT     ( sa -- a )  _SLOT-O-NEXT     + ;
-: _SL-ID       ( sa -- a )  _SLOT-O-ID       + ;
-: _SL-UIDL-BUF ( sa -- a )  _SLOT-O-UIDL-BUF + ;
-: _SL-DIRTY    ( sa -- a )  _SLOT-O-DIRTY    + ;
-: _SL-SEEN-REV ( sa -- a )  _SLOT-O-SEEN-REV + ;
+: _SL-DESC     ( sa -- a ) AHS.DESC ;
+: _SL-INST     ( sa -- a ) AHS.INST ;
+: _SL-RGN      ( sa -- a ) AHS.RGN ;
+: _SL-STATE    ( sa -- a ) AHS.STATE ;
+: _SL-UCTX     ( sa -- a ) AHS.UCTX ;
+: _SL-HAS-UIDL ( sa -- a ) AHS.HAS-UIDL ;
+: _SL-NEXT     ( sa -- a ) AHS.NEXT ;
+: _SL-ID       ( sa -- a ) AHS.ID ;
+: _SL-UIDL-BUF ( sa -- a ) AHS.UIDL-BUF ;
+: _SL-DIRTY    ( sa -- a ) AHS.DIRTY ;
+: _SL-SEEN-REV ( sa -- a ) AHS.SEEN-REV ;
 
-: _SL-VISIBLE?  ( sa -- flag )
-    _SL-STATE @ DUP _ST-RUNNING = SWAP _ST-FOCUSED = OR ;
-
-: _SL-ALIVE?  ( sa -- flag )
-    _SL-STATE @ _ST-EMPTY <> ;
+: _SL-VISIBLE?  ( sa -- flag ) AHS-VISIBLE? ;
+: _SL-ALIVE?    ( sa -- flag ) AHS-ALIVE? ;
 
 \ =====================================================================
 \  §2 — DESK Global State
@@ -139,12 +127,15 @@ VARIABLE _DESK-CURRENT-STATE
 0 _DESK-CURRENT-STATE !
 CMP-LAYOUT-BEGIN
 
-_DESK-CURRENT-STATE CMP-CELL: _DESK-HEAD       \ first live slot
-_DESK-CURRENT-STATE CMP-CELL: _DESK-FOCUS-SA   \ focused slot
-_DESK-CURRENT-STATE CMP-CELL: _DESK-NEXT-ID    \ monotonic slot ID
+_DESK-CURRENT-STATE AHOST-SIZE CMP-FIELD: _DESK-HOST
+
+: _DESK-HEAD        ( -- a ) _DESK-HOST AHOST.HEAD ;
+: _DESK-FOCUS-SA    ( -- a ) _DESK-HOST AHOST.FOCUS ;
+: _DESK-NEXT-ID     ( -- a ) _DESK-HOST AHOST.NEXT-ID ;
+: _DESK-LAST-MIN-SA ( -- a ) _DESK-HOST AHOST.LAST-MIN ;
+
 _DESK-CURRENT-STATE CMP-CELL: _DESK-VH         \ tiling preference
 _DESK-CURRENT-STATE CMP-CELL: _DESK-FULLFRAME
-_DESK-CURRENT-STATE CMP-CELL: _DESK-LAST-MIN-SA
 
 \ Active UIDL context tracking lives in the shell.
 \ Desk delegates via ASHELL-CTX-SWITCH.
@@ -648,54 +639,15 @@ VARIABLE _DHBC-LABEL-U
 
 \ Count all live slots.
 : DESK-SLOT-COUNT  ( -- n )
-    0  _DESK-HEAD @
-    BEGIN ?DUP WHILE  SWAP 1+ SWAP  _SL-NEXT @  REPEAT ;
+    _DESK-HOST AHOST-SLOT-COUNT ;
 
 \ Count visible (non-minimized) slots.
 : DESK-VCOUNT  ( -- n )
-    0  _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP _SL-VISIBLE? IF SWAP 1+ SWAP THEN
-        _SL-NEXT @
-    REPEAT ;
+    _DESK-HOST AHOST-VCOUNT ;
 
 \ Find slot by ID.  Returns slot address or 0.
 : _DESK-FIND-ID  ( id -- sa | 0 )
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP _SL-ID @ 2 PICK = IF NIP EXIT THEN
-        _SL-NEXT @
-    REPEAT
-    DROP 0 ;
-
-\ Unlink a slot from the list.  Does NOT free.
-VARIABLE _DUL-PREV   VARIABLE _DUL-SA
-: _DESK-UNLINK  ( sa -- )
-    _DUL-SA !
-    _DESK-HEAD @ _DUL-SA @ = IF
-        _DUL-SA @ _SL-NEXT @  _DESK-HEAD !
-        EXIT
-    THEN
-    _DESK-HEAD @ _DUL-PREV !
-    BEGIN _DUL-PREV @ WHILE
-        _DUL-PREV @ _SL-NEXT @  _DUL-SA @ = IF
-            _DUL-SA @ _SL-NEXT @
-            _DUL-PREV @ _SL-NEXT !
-            EXIT
-        THEN
-        _DUL-PREV @ _SL-NEXT @  _DUL-PREV !
-    REPEAT ;
-
-\ Append a slot at the tail of the list.
-: _DESK-APPEND  ( sa -- )
-    0 OVER _SL-NEXT !
-    _DESK-HEAD @ 0= IF
-        _DESK-HEAD !
-        EXIT
-    THEN
-    _DESK-HEAD @
-    BEGIN DUP _SL-NEXT @ WHILE _SL-NEXT @ REPEAT
-    _SL-NEXT ! ;
+    _DESK-HOST AHOST-FIND-ID ;
 
 \ =====================================================================
 \  §4 — Visible Slot Collection Buffer
@@ -757,11 +709,7 @@ VARIABLE _DL-LW    VARIABLE _DL-LH
     REPEAT ;
 
 : _DESK-MARK-ALL-CHILDREN  ( -- )
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        -1 OVER _SL-DIRTY !
-        _SL-NEXT @
-    REPEAT ;
+    _DESK-HOST AHOST-MARK-ALL ;
 
 \ Compute grid dimensions for N visible apps.
 : _DESK-GRID  ( n -- )
@@ -844,16 +792,13 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 \ =====================================================================
 
 : _DESK-CTX-SAVE  ( sa -- )
-    _SL-UCTX @ ASHELL-CTX-SAVE ;
+    AHS-CTX-SAVE ;
 
 : _DESK-ACTIVATE-CHILD  ( sa -- )
-    DUP _SL-DESC @ APP.ACTIVATE-XT @ ?DUP IF
-        SWAP _SL-INST @ SWAP EXECUTE
-    ELSE DROP THEN ;
+    AHS-ACTIVATE ;
 
 : _DESK-CTX-SWITCH  ( sa -- )
-    DUP _SL-UCTX @ ASHELL-CTX-SWITCH
-    _DESK-ACTIVATE-CHILD ;
+    AHS-CTX-SWITCH ;
 
 \ Master relayout.
 : DESK-RELAYOUT  ( -- )
@@ -892,357 +837,50 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 \  owns the terminal.  Sub-app INIT-XT is called, but terminal
 \  setup is not the sub-app's job.
 
-VARIABLE _DL-DESC
-VARIABLE _DL-INST
-VARIABLE _DL-SLOT
-VARIABLE _DL-REGISTERED
-VARIABLE _DL-APPENDED
-VARIABLE _DL-INIT-STARTED
-VARIABLE _DL-ID
-VARIABLE _DL-IOR
+AHOST-LAUNCH-E-DESC     CONSTANT DESK-LAUNCH-E-DESC
+AHOST-LAUNCH-E-INSTANCE CONSTANT DESK-LAUNCH-E-INSTANCE
+AHOST-LAUNCH-E-REGISTRY CONSTANT DESK-LAUNCH-E-REGISTRY
+AHOST-LAUNCH-E-SLOT     CONSTANT DESK-LAUNCH-E-SLOT
+AHOST-LAUNCH-E-CONTEXT  CONSTANT DESK-LAUNCH-E-CONTEXT
+AHOST-LAUNCH-E-UIDL     CONSTANT DESK-LAUNCH-E-UIDL
 
--1400 CONSTANT DESK-LAUNCH-E-DESC
--1401 CONSTANT DESK-LAUNCH-E-INSTANCE
--1402 CONSTANT DESK-LAUNCH-E-REGISTRY
--1403 CONSTANT DESK-LAUNCH-E-SLOT
--1404 CONSTANT DESK-LAUNCH-E-CONTEXT
--1405 CONSTANT DESK-LAUNCH-E-UIDL
+\ The generic host owns child mechanics. Desk injects only the product
+\ projections and resources which remain Desk-specific.
+: _DESK-HOST-RELAYOUT  ( desk-instance -- )
+    _DESK-USE-STATE DESK-RELAYOUT ;
 
-DEFER _DESK-LAUNCH-ROLLBACK  ( -- )
-' NOOP IS _DESK-LAUNCH-ROLLBACK
+: _DESK-HOST-RELEASE  ( child-instance desk-instance -- ior )
+    _DESK-USE-STATE _DESK-XIO-RELEASE-OWNER ;
 
-: _DESK-LAUNCH-BODY  ( -- )
-    _DL-DESC @ APP-DESC-VALID? 0= IF DESK-LAUNCH-E-DESC THROW THEN
-    _DL-DESC @ DESK-INSTALL ?DUP IF THROW THEN
-    _DL-DESC @ APP.COMP-DESC @ CINST-NEW
-    DUP IF NIP THROW THEN DROP DUP 0= IF DESK-LAUNCH-E-INSTANCE THROW THEN
-    _DL-INST !
-    _DESK-ENDPOINT _DL-INST @ CINST.ENDPOINT !
-    _DL-INST @ _DESK-REGISTRY @ CREG-INST+ ?DUP IF THROW THEN
-    -1 _DL-REGISTERED !
-    _SLOT-SZ ALLOCATE DUP IF NIP THROW THEN DROP
-    DUP 0= IF DESK-LAUNCH-E-SLOT THROW THEN
-    DUP _DL-SLOT ! _SLOT-SZ 0 FILL
-    _DL-DESC @ _DL-SLOT @ _SL-DESC !
-    _DL-INST @ _DL-SLOT @ _SL-INST !
-    _ST-RUNNING _DL-SLOT @ _SL-STATE !
-    _DESK-NEXT-ID @ DUP _DL-ID ! _DL-SLOT @ _SL-ID !
-    1 _DESK-NEXT-ID +!
-    \ Allocate UIDL context if app declares UIDL (inline or file).
-    _DL-DESC @ APP.UIDL-A @ _DL-DESC @ APP.UIDL-FILE-A @ OR IF
-        UCTX-ALLOC DUP 0= IF DROP DESK-LAUNCH-E-CONTEXT THROW THEN
-        DUP UCTX-CLEAR _DL-SLOT @ _SL-UCTX !
-        -1 _DL-SLOT @ _SL-HAS-UIDL !
-    ELSE
-        0 _DL-SLOT @ _SL-UCTX !
-        0 _DL-SLOT @ _SL-HAS-UIDL !
+: _DESK-HOST-CLOSED  ( slot-id desk-instance -- )
+    _DESK-USE-STATE
+    DUP _DESK-HOTBAR-SLOT-CLOSED
+    _DESK-CATALOG @ ?DUP IF ACAT-SLOT-CLOSED ELSE DROP THEN ;
+
+VARIABLE _DTL-DESC
+
+: _DTL-PREFLIGHT  ( -- )
+    _DTL-DESC @ APP-DESC-VALID? 0= IF
+        DESK-LAUNCH-E-DESC THROW
     THEN
-    _DL-SLOT @ _DESK-APPEND
-    -1 _DL-APPENDED !
-    \ Auto-focus if this is the first slot.
-    _DESK-FOCUS-SA @ 0= IF
-        _ST-FOCUSED _DL-SLOT @ _SL-STATE !
-        _DL-SLOT @ _DESK-FOCUS-SA !
-    THEN
-    DESK-RELAYOUT
-    \ Load UIDL document into the new child context.
-    _DL-SLOT @ _SL-HAS-UIDL @ IF
-        _DL-SLOT @ _DESK-CTX-SWITCH
-        _DL-DESC @ APP.UIDL-A @ IF
-            _DL-DESC @ APP.UIDL-A @
-            _DL-DESC @ APP.UIDL-U @
-            _DL-SLOT @ _SL-RGN @
-            UTUI-LOAD 0= IF DESK-LAUNCH-E-UIDL THROW THEN
-        ELSE _DL-DESC @ APP.UIDL-FILE-A @ IF
-            _DL-DESC @ APP.UIDL-FILE-A @
-            _DL-DESC @ APP.UIDL-FILE-U @
-            _DL-SLOT @ _SL-RGN @
-            ASHELL-LOAD-UIDL DUP 0= IF DROP DESK-LAUNCH-E-UIDL THROW THEN
-            _DL-SLOT @ _SL-UIDL-BUF !
-        THEN THEN
-    THEN
-    \ Init runs with the child's context live.  Mark the boundary before
-    \ invoking app code so rollback may give a partially initialized app
-    \ one best-effort shutdown call.
-    _DL-DESC @ APP.INIT-XT @ ?DUP IF
-        -1 _DL-INIT-STARTED !
-        _DL-INST @ SWAP EXECUTE
-    THEN
-    _DL-SLOT @ _SL-HAS-UIDL @ IF _DL-SLOT @ _DESK-CTX-SAVE THEN ;
+    _DTL-DESC @ DESK-INSTALL ?DUP IF
+        THROW
+    THEN ;
 
 : DESK-TRY-LAUNCH  ( desc -- id ior )
-    _DL-DESC !
-    0 _DL-INST ! 0 _DL-SLOT ! 0 _DL-REGISTERED ! 0 _DL-APPENDED !
-    0 _DL-INIT-STARTED ! -1 _DL-ID ! 0 _DL-IOR !
-    ['] _DESK-LAUNCH-BODY CATCH ?DUP IF
-        _DL-IOR !
-        ['] _DESK-LAUNCH-ROLLBACK CATCH ?DUP IF
-            _DL-IOR @ 0= IF _DL-IOR ! ELSE DROP THEN
-        THEN
-        -1 _DL-IOR @ EXIT
-    THEN
-    _DL-DESC @ _DL-ID @ _DESK-CATALOG-MARK-DESC
-    _DL-ID @ 0 ;
+    _DTL-DESC !
+    ['] _DTL-PREFLIGHT CATCH ?DUP IF -1 SWAP EXIT THEN
+    _DTL-DESC @ _DESK-HOST AHOST-TRY-LAUNCH
+    DUP 0= IF
+        _DTL-DESC @ 2 PICK _DESK-CATALOG-MARK-DESC
+    THEN ;
 
 : DESK-LAUNCH  ( desc -- id )
     DESK-TRY-LAUNCH DUP IF 2DROP -1 ELSE DROP THEN ;
 
-VARIABLE _DRCS-SA
-VARIABLE _DRCS-REASON
-VARIABLE _DRCS-DECISION
-
-: _DESK-CALL-REQUEST-CLOSE  ( -- decision )
-    _DRCS-SA @ _SL-DESC @ APP.REQUEST-CLOSE-XT @ ?DUP 0= IF
-        APP-CLOSE-D-ALLOW EXIT
-    THEN
-    _DRCS-REASON @ _DRCS-SA @ _SL-INST @ ROT EXECUTE ;
-
-: _DESK-REQUEST-CLOSE-ENTER  ( -- )
-    _DRCS-SA @ _DESK-CTX-SWITCH ;
-
-: _DESK-REQUEST-CLOSE-SAVE  ( -- )
-    \ Only save when entry reached this child's actual UIDL context.
-    \ If a context restore failed earlier, saving arbitrary live globals
-    \ into the child's buffer would corrupt the preserved applet.
-    _DRCS-SA @ _SL-HAS-UIDL @ IF
-        _ASHELL-ACTIVE-CTX @ _DRCS-SA @ _SL-UCTX @ = IF
-            _DRCS-SA @ _DESK-CTX-SAVE
-        THEN
-    THEN ;
-
-: _DESK-REQUEST-CLOSE-EXIT  ( -- )
-    0 ASHELL-CTX-SWITCH ;
-
-\ _DESK-REQUEST-CLOSE-SA ( sa reason -- decision )
-\   Query one child with its UIDL context and activation binding live.
-\   Missing callbacks allow; THROW and invalid decisions fail closed.
-: _DESK-REQUEST-CLOSE-SA  ( sa reason -- decision )
-    _DRCS-REASON ! _DRCS-SA !
-    APP-CLOSE-D-CANCEL _DRCS-DECISION !
-    ['] _DESK-REQUEST-CLOSE-ENTER CATCH 0= IF
-        ['] _DESK-CALL-REQUEST-CLOSE CATCH ?DUP IF
-            DROP
-        ELSE
-            DUP APP-CLOSE-DECISION-VALID? IF
-                _DRCS-DECISION !
-            ELSE
-                DROP
-            THEN
-        THEN
-    THEN
-    \ Saving and leaving the child context are part of negotiation.  A
-    \ failure in either step vetoes the close just like a callback fault.
-    ['] _DESK-REQUEST-CLOSE-SAVE CATCH IF
-        APP-CLOSE-D-CANCEL _DRCS-DECISION !
-    THEN
-    ['] _DESK-REQUEST-CLOSE-EXIT CATCH IF
-        0 _ASHELL-ACTIVE-CTX !
-        APP-CLOSE-D-CANCEL _DRCS-DECISION !
-    THEN
-    _DRCS-DECISION @ ;
-
-VARIABLE _DCF-SA
-VARIABLE _DCF-IOR
-VARIABLE _DCF-INST
-VARIABLE _DCF-ENTERED
-VARIABLE _DCF-HOST-ONLY
-
-: _DCF-REMEMBER  ( ior -- )
-    ?DUP IF
-        _DCF-IOR @ 0= IF _DCF-IOR ! ELSE DROP THEN
-    THEN ;
-
-: _DCF-ENTER  ( -- )
-    _DCF-SA @ _DESK-CTX-SWITCH ;
-
-: _DCF-SHUTDOWN  ( -- )
-    _DCF-SA @ _SL-DESC @ APP.SHUTDOWN-XT @ ?DUP IF
-        _DCF-SA @ _SL-INST @ SWAP EXECUTE
-    THEN ;
-
-: _DCF-XIO-RELEASE  ( -- )
-    _DCF-INST @ ?DUP IF
-        _DESK-XIO-RELEASE-OWNER ?DUP IF THROW THEN
-    THEN ;
-
-: _DCF-DETACH  ( -- )
-    _DCF-SA @ _SL-HAS-UIDL DUP @ IF
-        0 SWAP !
-        \ Detach only if context entry actually selected this child.
-        _ASHELL-ACTIVE-CTX @ _DCF-SA @ _SL-UCTX @ = IF
-            UTUI-DETACH
-        THEN
-    ELSE
-        DROP
-    THEN ;
-
-: _DCF-EXIT  ( -- )
-    0 ASHELL-CTX-SWITCH ;
-
-: _DCF-FREE-UIDL-BUF  ( -- )
-    _DCF-SA @ _SL-UIDL-BUF DUP @ SWAP 0 SWAP ! ?DUP IF
-        _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK
-    THEN ;
-
-: _DCF-FREE-UCTX  ( -- )
-    _DCF-SA @ _SL-UCTX DUP @ SWAP 0 SWAP ! ?DUP IF UCTX-FREE THEN ;
-
-: _DCF-FREE-REGION  ( -- )
-    _DCF-SA @ _SL-RGN DUP @ SWAP 0 SWAP ! ?DUP IF RGN-FREE THEN ;
-
-: _DCF-UNREGISTER-INST  ( -- )
-    _DCF-INST @ ?DUP IF
-        _DESK-REGISTRY @ ?DUP IF CREG-INST- DROP ELSE DROP THEN
-    THEN ;
-
-: _DCF-FREE-INST  ( -- )
-    0 _DCF-SA @ _SL-INST !
-    _DCF-INST @ ?DUP IF CINST-FREE THEN ;
-
-: _DCF-FREE-SLOT  ( -- )
-    _DCF-SA @ FREE ;
-
-\ _DESK-CLOSE-SA-FORCE ( sa -- ior )
-\   Finalize an already-approved child without asking again.  Callback,
-\   context, and release failures are contained until the slot is unlinked
-\   and every known resource has had one release attempt.  The first error
-\   is returned after structural cleanup.
-: _DESK-CLOSE-SA-FORCE  ( sa -- ior )
-    >R
-    R@ _DCF-SA !
-    R@ _SL-INST @ _DCF-INST !
-    0 _DCF-IOR !
-    _DCF-HOST-ONLY @ IF
-        0 _DCF-ENTERED !
-    ELSE
-        ['] _DCF-ENTER CATCH DUP 0= _DCF-ENTERED ! _DCF-REMEMBER
-    THEN
-    \ Entry includes context selection and child activation.  If it failed,
-    \ do not run app-owned shutdown against a context whose identity is
-    \ uncertain; host-owned unlink/release still proceeds below.
-    _DCF-ENTERED @ IF
-        R@ _DCF-SA !
-        ['] _DCF-SHUTDOWN CATCH _DCF-REMEMBER
-    THEN
-    \ Even a throwing or incomplete child shutdown cannot leave the
-    \ machine service pointing into component state that is freed below.
-    R@ _DCF-SA !
-    ['] _DCF-XIO-RELEASE CATCH _DCF-REMEMBER
-    \ _DCF-DETACH has its own exact active-UCTX identity check.  Thus an
-    \ activation failure after a successful switch can still dematerialize
-    \ UIDL, while a switch failure cannot detach some other live context.
-    R@ _DCF-SA !
-    ['] _DCF-DETACH CATCH _DCF-REMEMBER
-    R@ _DCF-SA !
-    ['] _DCF-EXIT     CATCH _DCF-REMEMBER
-    \ A failed context save/exit must not leave the soon-to-be-freed UCTX
-    \ advertised as active.
-    _ASHELL-ACTIVE-CTX @ R@ _SL-UCTX @ = IF
-        0 _ASHELL-ACTIVE-CTX !
-    THEN
-    \ Fixup focus / last-minimized pointers
-    R@ _DESK-FOCUS-SA @ = IF
-        0 _DESK-FOCUS-SA !
-    THEN
-    R@ _DESK-LAST-MIN-SA @ = IF
-        0 _DESK-LAST-MIN-SA !
-    THEN
-    R@ _SL-ID @ _DESK-HOTBAR-SLOT-CLOSED
-    _DESK-CATALOG @ ?DUP IF R@ _SL-ID @ SWAP ACAT-SLOT-CLOSED THEN
-    R@ _DESK-UNLINK
-    R@ _DCF-SA !
-    ['] _DCF-FREE-UIDL-BUF CATCH _DCF-REMEMBER
-    R@ _DCF-SA !
-    ['] _DCF-FREE-UCTX CATCH _DCF-REMEMBER
-    R@ _DCF-SA !
-    ['] _DCF-FREE-REGION CATCH _DCF-REMEMBER
-    R@ _DCF-SA !
-    ['] _DCF-UNREGISTER-INST CATCH _DCF-REMEMBER
-    R@ _DCF-SA !
-    ['] _DCF-FREE-INST CATCH _DCF-REMEMBER
-    R@ _DCF-SA !
-    ['] _DCF-FREE-SLOT CATCH _DCF-REMEMBER
-    R> DROP
-    \ Auto-focus next visible slot if focus was lost
-    _DESK-FOCUS-SA @ 0= IF
-        _DESK-HEAD @
-        BEGIN ?DUP WHILE
-            DUP _SL-VISIBLE? IF
-                DUP _DESK-FOCUS-SA !
-                _ST-FOCUSED SWAP _SL-STATE !
-                0
-            ELSE
-                _SL-NEXT @
-            THEN
-        REPEAT
-    THEN
-    _DCF-IOR @ ;
-
-VARIABLE _DLR-IOR
-
-: _DLR-REMEMBER  ( ior -- )
-    ?DUP IF
-        _DLR-IOR @ 0= IF _DLR-IOR ! ELSE DROP THEN
-    THEN ;
-
-: _DLR-EXIT  ( -- )
-    0 ASHELL-CTX-SWITCH ;
-
-: _DLR-UNREGISTER  ( -- )
-    _DL-INST @ ?DUP IF
-        _DESK-REGISTRY @ ?DUP IF CREG-INST- DROP ELSE DROP THEN
-    THEN ;
-
-: _DLR-FREE-INST  ( -- )
-    _DL-INST @ ?DUP IF CINST-FREE THEN ;
-
-: _DLR-RELAYOUT  ( -- )
-    DESK-RELAYOUT ;
-
-: _DESK-LAUNCH-ROLLBACK-CALL  ( -- )
-    0 _DLR-IOR !
-    _DL-SLOT @ ?DUP IF
-        _DL-INIT-STARTED @ 0= _DCF-HOST-ONLY !
-        _DESK-CLOSE-SA-FORCE _DLR-REMEMBER
-        0 _DCF-HOST-ONLY !
-    ELSE
-        _DL-REGISTERED @ IF ['] _DLR-UNREGISTER CATCH _DLR-REMEMBER THEN
-        ['] _DLR-FREE-INST CATCH _DLR-REMEMBER
-    THEN
-    ['] _DLR-EXIT CATCH _DLR-REMEMBER
-    ['] _DLR-RELAYOUT CATCH _DLR-REMEMBER
-    0 _DL-INST ! 0 _DL-SLOT ! 0 _DL-REGISTERED ! 0 _DL-APPENDED !
-    0 _DL-INIT-STARTED !
-    _DLR-IOR @ ?DUP IF THROW THEN ;
-
-' _DESK-LAUNCH-ROLLBACK-CALL IS _DESK-LAUNCH-ROLLBACK
-
-VARIABLE _DRCI-REASON
-VARIABLE _DRCI-IOR
-
-: _DRCI-REMEMBER  ( ior -- )
-    ?DUP IF
-        _DRCI-IOR @ 0= IF _DRCI-IOR ! ELSE DROP THEN
-    THEN ;
-
-\ DESK-REQUEST-CLOSE-ID ( id reason -- decision )
-\   Negotiate a child close.  ALLOW performs shutdown/removal before
-\   returning; CANCEL and DEFER preserve the complete live slot.
 : DESK-REQUEST-CLOSE-ID  ( id reason -- decision )
-    _DRCI-REASON !
-    _DESK-FIND-ID DUP 0= IF DROP APP-CLOSE-D-ALLOW EXIT THEN
-    DUP >R _DRCI-REASON @ _DESK-REQUEST-CLOSE-SA
-    DUP APP-CLOSE-D-ALLOW = IF
-        0 _DRCI-IOR !
-        0 _DCF-HOST-ONLY !
-        R@ _DESK-CLOSE-SA-FORCE _DRCI-REMEMBER
-        ['] DESK-RELAYOUT CATCH _DRCI-REMEMBER
-        _DRCI-IOR @ ?DUP IF THROW THEN
-    THEN
-    R> DROP ;
+    _DESK-HOST AHOST-REQUEST-CLOSE-ID ;
 
-\ Compatibility entry point: a tile/window close request.  Callers that
-\ need to distinguish CANCEL from DEFER use DESK-REQUEST-CLOSE-ID.
 : DESK-CLOSE-ID  ( id -- )
     APP-CLOSE-R-WINDOW DESK-REQUEST-CLOSE-ID DROP ;
 
@@ -1250,57 +888,14 @@ VARIABLE _DRCI-IOR
 \  §8 — Focus, Minimize, Restore
 \ =====================================================================
 
-VARIABLE _DFOCUS-RELAYOUT
-
 : DESK-FOCUS-ID  ( id -- )
-    0 _DFOCUS-RELAYOUT !
-    _DESK-FIND-ID DUP 0= IF DROP EXIT THEN
-    DUP _SL-STATE @ _ST-MINIMIZED = IF
-        -1 _DFOCUS-RELAYOUT !
-        DUP _DESK-LAST-MIN-SA @ = IF 0 _DESK-LAST-MIN-SA ! THEN
-        _ST-RUNNING OVER _SL-STATE !
-    THEN
-    _DESK-FOCUS-SA @ ?DUP IF
-        DUP _SL-STATE @ _ST-FOCUSED = IF
-            _ST-RUNNING SWAP _SL-STATE !
-        ELSE DROP THEN
-    THEN
-    _ST-FOCUSED OVER _SL-STATE !
-    _DESK-FOCUS-SA !
-    _DFOCUS-RELAYOUT @ IF DESK-RELAYOUT ELSE ASHELL-DIRTY! THEN ;
+    _DESK-HOST AHOST-FOCUS-ID ;
 
 : DESK-MINIMIZE-ID  ( id -- )
-    _DESK-FIND-ID DUP 0= IF DROP EXIT THEN
-    DUP _SL-STATE @ _ST-MINIMIZED = IF DROP EXIT THEN
-    _ST-MINIMIZED OVER _SL-STATE !
-    DUP _DESK-LAST-MIN-SA !
-    DUP _DESK-FOCUS-SA @ = IF
-        0 _DESK-FOCUS-SA !
-        _DESK-HEAD @
-        BEGIN ?DUP WHILE
-            DUP _SL-VISIBLE? IF
-                DUP _DESK-FOCUS-SA !
-                _ST-FOCUSED SWAP _SL-STATE !
-                0
-            ELSE
-                _SL-NEXT @
-            THEN
-        REPEAT
-    THEN
-    DROP
-    DESK-RELAYOUT ;
+    _DESK-HOST AHOST-MINIMIZE-ID ;
 
 : DESK-RESTORE  ( -- )
-    _DESK-LAST-MIN-SA @ DUP 0= IF DROP EXIT THEN
-    DUP _SL-STATE @ _ST-MINIMIZED <> IF DROP EXIT THEN
-    _ST-RUNNING OVER _SL-STATE !
-    0 _DESK-LAST-MIN-SA !
-    _DESK-FOCUS-SA @ 0= IF
-        _ST-FOCUSED OVER _SL-STATE !
-        DUP _DESK-FOCUS-SA !
-    THEN
-    DROP
-    DESK-RELAYOUT ;
+    _DESK-HOST AHOST-RESTORE ;
 
 : DESK-FULLFRAME!  ( flag -- )
     _DESK-FULLFRAME !
@@ -2223,12 +1818,13 @@ VARIABLE _DTS-END
 \ --- Init ---
 : DESK-INIT-CB  ( instance -- )
     DUP _DINI-INST ! _DESK-USE-STATE
-    0 _DESK-HEAD !
-    0 _DESK-FOCUS-SA !
-    1 _DESK-NEXT-ID !
+    _DESK-HOST AHOST-INIT
+    _DINI-INST @ _DESK-HOST AHOST-CONTEXT!
+    ['] _DESK-HOST-RELAYOUT _DESK-HOST AHOST-RELAYOUT!
+    ['] _DESK-HOST-RELEASE _DESK-HOST AHOST-RELEASE!
+    ['] _DESK-HOST-CLOSED _DESK-HOST AHOST-CLOSED!
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
-    0 _DESK-LAST-MIN-SA !
     0 _DESK-CATALOG !
     0 _DESK-LAUNCHER-ACTIVE !
     0 _DESK-LAUNCHER-SELECTED !
@@ -2254,6 +1850,8 @@ VARIABLE _DTS-END
         0 _DESK-PEND-N ! EXIT
     THEN
     _DINI-INST @ _DESK-INTEROP-INIT
+    _DESK-REGISTRY @ _DESK-HOST AHOST-REGISTRY!
+    _DESK-ENDPOINT _DESK-HOST AHOST-ENDPOINT!
     \ DESK-QUEUE-LAUNCH rows were migrated by _DESK-CATALOG-INIT.
     \ Autostart now honors their persisted enabled/quarantine flags.
     _DESK-AUTOSTART-CATALOG
@@ -2522,39 +2120,9 @@ VARIABLE _DLA-STATUS-U
     DROP 0 ;
 
 \ _DESK-TILE-AT ( row col -- slot | 0 )
-\   Find the visible slot whose region contains (row, col).
-\   Walks the slot list; returns the first match or 0.
-VARIABLE _DTA-ROW  VARIABLE _DTA-COL
-VARIABLE _DTA-RR   VARIABLE _DTA-RC
-VARIABLE _DTA-RH   VARIABLE _DTA-RW
-
+\   Compatibility view of the generic host hit test.
 : _DESK-TILE-AT  ( row col -- slot | 0 )
-    _DTA-COL !  _DTA-ROW !
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP _SL-VISIBLE? IF
-            DUP _SL-RGN @ ?DUP IF        ( slot rgn )
-                DUP RGN-ROW _DTA-RR !
-                DUP RGN-COL _DTA-RC !
-                DUP RGN-H   _DTA-RH !
-                    RGN-W   _DTA-RW !     ( slot )
-                _DTA-RR @ _DTA-ROW @ <=
-                _DTA-RC @ _DTA-COL @ <= AND
-                _DTA-RR @ _DTA-RH @ + _DTA-ROW @ > AND
-                _DTA-RC @ _DTA-RW @ + _DTA-COL @ > AND
-                IF EXIT THEN              ( slot — match )
-            THEN
-        THEN
-        _SL-NEXT @
-    REPEAT
-    0 ;
-
-\ _DESK-DISPATCH-MOUSE ( ev -- flag )
-\   Handle a synthetic mouse event from the shell cursor.
-\   Activate live taskbar entries or hit-test tiles, focus on a left press,
-\   context-switch, and forward to UTUI-DISPATCH-MOUSE.
-VARIABLE _DDM-EV
-VARIABLE _DDM-FOCUS-CHANGED
+    _DESK-HOST AHOST-TILE-AT ;
 
 : _DESK-DISPATCH-TASKBAR  ( ev -- handled? )
     DUP ASHELL-MOUSE-BTN KEY-MOUSE-LEFT <> IF DROP 0 EXIT THEN
@@ -2565,32 +2133,9 @@ VARIABLE _DDM-FOCUS-CHANGED
         0
     THEN ;
 
-: _DESK-DISPATCH-MOUSE  ( ev -- flag )
-    DUP _DDM-EV !
+: _DESK-DISPATCH-MOUSE  ( ev -- handled? )
     DUP _DESK-DISPATCH-TASKBAR IF DROP -1 EXIT THEN
-    0 _DDM-FOCUS-CHANGED !
-    DUP ASHELL-MOUSE-ROW OVER ASHELL-MOUSE-COL   ( ev row col )
-    2DUP _DESK-TILE-AT                             ( ev row col slot|0 )
-    DUP 0= IF DROP 2DROP DROP 0 EXIT THEN
-    >R 2DROP DROP                                  ( R: slot )
-    _DDM-EV @ ASHELL-MOUSE-BTN KEY-MOUSE-LEFT = IF
-        R@ _DESK-FOCUS-SA @ <> IF -1 _DDM-FOCUS-CHANGED ! THEN
-        R@ _SL-ID @ DESK-FOCUS-ID
-    THEN
-    R@ _SL-HAS-UIDL @ IF
-        R@ _DESK-CTX-SWITCH
-        _DDM-EV @ ASHELL-MOUSE-ROW
-        _DDM-EV @ ASHELL-MOUSE-COL
-        _DDM-EV @ ASHELL-MOUSE-BTN        ( row col btn )
-        UTUI-DISPATCH-MOUSE               ( handled? )
-        IF
-            -1 R@ _SL-DIRTY !
-            R> DROP
-            -1 EXIT
-        THEN
-    THEN
-    R> DROP
-    _DDM-FOCUS-CHANGED @ ;
+    _DESK-HOST AHOST-DISPATCH-MOUSE ;
 
 \ --- Event ---
 \
@@ -2604,53 +2149,16 @@ VARIABLE _DDM-FOCUS-CHANGED
     _DESK-AGENT-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
     THEN
-    \ 0. Mouse events → tile hit-test routing
     DUP ASHELL-MOUSE? IF
         _DESK-DISPATCH-MOUSE EXIT
     THEN
-    \ 1. Desktop-global shortcuts take precedence over child input.
     DUP _DESK-SHORTCUT? IF DROP -1 EXIT THEN
-    \ 2. Route to focused sub-app
-    _DESK-FOCUS-SA @ ?DUP IF
-        >R
-        R@ _SL-HAS-UIDL @ IF
-            R@ _DESK-CTX-SWITCH
-        THEN
-        \ Match ASHELL routing: the app callback owns modal input such
-        \ as command bars before the focused UIDL widget sees the key.
-        R@ _SL-DESC @ ?DUP IF
-            APP.EVENT-XT @ ?DUP IF
-                OVER R@ _SL-INST @ ROT EXECUTE  ( ev consumed? )
-                \ Intercept sub-app ASHELL-QUIT
-                ASHELL-QUIT-PENDING? IF
-                    ASHELL-CANCEL-QUIT
-                    R@ _SL-ID @ APP-CLOSE-R-QUIT
-                    DESK-REQUEST-CLOSE-ID DROP
-                    R> DROP
-                    2DROP -1 EXIT
-                THEN
-                IF
-                    -1 R@ _SL-DIRTY !
-                    R> DROP
-                    ASHELL-DIRTY! DROP -1 EXIT
-                THEN
-            THEN
-        THEN
-        R@ _SL-HAS-UIDL @ IF
-            DUP UTUI-DISPATCH-KEY IF
-                -1 R@ _SL-DIRTY !
-                R> DROP
-                ASHELL-DIRTY! DROP -1 EXIT
-            THEN
-        THEN
-        R> DROP
-    THEN
-    DROP 0 ;
+    _DESK-HOST AHOST-DISPATCH-KEY ;
 
 \ --- Tick ---
 : DESK-TICK-CB  ( instance -- )
     _DESK-USE-STATE
-    _DESK-FOCUS-SA @ ?DUP IF _SL-INST @ ELSE 0 THEN
+    _DESK-HOST AHOST-FOCUSED-INSTANCE
     _DESK-TOOL-GATEWAY @ ?DUP IF
         ATOOLG-FOCUSED! DROP
     ELSE
@@ -2663,24 +2171,7 @@ VARIABLE _DDM-FOCUS-CHANGED
     THEN
     _DESK-BUS @ ?DUP IF 8 SWAP CBUS-PUMP DROP THEN
     _DESK-XIO-READY? IF _DESK-EXTERNAL-IO XIO-TICK THEN
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP _SL-ALIVE? IF
-            DUP >R
-            R@ _SL-INST @ CINST.REVISION @
-            R@ _SL-SEEN-REV @ <> IF -1 R@ _SL-DIRTY ! THEN
-            R@ _SL-DIRTY @
-            R@ _SL-DESC @ APP.FLAGS @ APP-F-TICK-WHEN-CLEAN AND OR IF
-                R@ _SL-HAS-UIDL @ IF R@ _DESK-CTX-SWITCH THEN
-                R@ _DESK-ACTIVATE-CHILD
-                R@ _SL-DESC @ ?DUP IF
-                    APP.TICK-XT @ ?DUP IF R@ _SL-INST @ SWAP EXECUTE THEN
-                THEN
-            THEN
-            R> DROP
-        THEN
-        _SL-NEXT @
-    REPEAT ;
+    _DESK-HOST AHOST-TICK ;
 
 \ --- Paint ---
 \
@@ -2693,8 +2184,7 @@ VARIABLE _DPC-PAINT-ALL
     _DESK-USE-STATE
     _DESK-SYNC-GEOMETRY
     RGN-ROOT
-    \ Layer 0: fill tile area with desk background colour
-    \ Only runs when geometry changed (relayout / init / resize)
+    \ Layer 0: fill tile area with desk background colour.
     _DESK-BG-DIRTY @ DUP _DPC-PAINT-ALL ! IF
         0 _DESK-BG-DIRTY !
         DRW-STYLE-SAVE
@@ -2702,32 +2192,7 @@ VARIABLE _DPC-PAINT-ALL
         32 0 0 SCR-H 1- SCR-W DRW-FILL-RECT
         DRW-STYLE-RESTORE
     THEN
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP _SL-VISIBLE? IF
-            _DESK-FULLFRAME @ IF
-                DUP _DESK-FOCUS-SA @ <>
-            ELSE
-                0
-            THEN
-            0= IF
-                DUP _SL-DIRTY @ _DPC-PAINT-ALL @ OR IF
-                    DUP _SL-RGN @ IF
-                        DUP _SL-UCTX @
-                        OVER _SL-RGN @
-                        2 PICK _SL-HAS-UIDL @
-                        3 PICK _SL-DESC @
-                        4 PICK _SL-INST @
-                        ASHELL-PAINT-CHILD
-                        DUP _SL-INST @ CINST.REVISION @
-                        OVER _SL-SEEN-REV !
-                        0 OVER _SL-DIRTY !
-                    THEN
-                THEN
-            THEN
-        THEN
-        _SL-NEXT @
-    REPEAT
+    _DPC-PAINT-ALL @ _DESK-FULLFRAME @ _DESK-HOST AHOST-PAINT
     RGN-ROOT
     _DESK-FULLFRAME @ 0= IF _DESK-DRAW-DIVIDERS THEN
     _DESK-PAINT-TASKBAR
@@ -2740,36 +2205,9 @@ VARIABLE _DPC-PAINT-ALL
     THEN ;
 
 \ --- Close negotiation and shutdown ---
-VARIABLE _DRCT-DECISION
-
-: _DESK-MERGE-CLOSE-DECISION  ( decision -- )
-    DUP APP-CLOSE-D-CANCEL = IF
-        DROP APP-CLOSE-D-CANCEL _DRCT-DECISION ! EXIT
-    THEN
-    APP-CLOSE-D-DEFER = IF
-        _DRCT-DECISION @ APP-CLOSE-D-CANCEL <> IF
-            APP-CLOSE-D-DEFER _DRCT-DECISION !
-        THEN
-    THEN ;
-
-\ DESK-REQUEST-CLOSE-CB ( reason instance -- decision )
-\   A Desk close is a host-shutdown request to every child.  This pass
-\   only negotiates: no child is torn down unless every child allows.
-\   CANCEL wins over DEFER, which wins over ALLOW.
 : DESK-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _DESK-USE-STATE
-    APP-CLOSE-D-ALLOW _DRCT-DECISION !
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP APP-CLOSE-R-HOST-SHUTDOWN _DESK-REQUEST-CLOSE-SA
-        _DESK-MERGE-CLOSE-DECISION
-        _SL-NEXT @
-    REPEAT
-    ['] _DESK-REQUEST-CLOSE-EXIT CATCH IF
-        0 _ASHELL-ACTIVE-CTX !
-        APP-CLOSE-D-CANCEL _DRCT-DECISION !
-    THEN
-    _DRCT-DECISION @ ;
+    APP-CLOSE-R-HOST-SHUTDOWN _DESK-HOST AHOST-REQUEST-CLOSE-ALL ;
 
 VARIABLE _DSD-IOR
 
@@ -2787,15 +2225,7 @@ VARIABLE _DSD-IOR
 : DESK-SHUTDOWN-CB  ( instance -- )
     _DESK-USE-STATE
     0 _DSD-IOR !
-    0 _DCF-HOST-ONLY !
-    \ ASHELL already received ALLOW from DESK-REQUEST-CLOSE-CB.  Force
-    \ finalization here so callbacks are not re-prompted and a prior
-    \ CANCEL/DEFER can never leave this loop stuck on the head slot.  Each
-    \ force-close unlinks even after a callback fault, so shutdown drains
-    \ the complete list before surfacing the first cleanup error.
-    BEGIN _DESK-HEAD @ ?DUP WHILE
-        _DESK-CLOSE-SA-FORCE _DSD-REMEMBER
-    REPEAT
+    _DESK-HOST AHOST-DRAIN _DSD-REMEMBER
     ['] _DSD-INTEROP-FINI CATCH DUP _DSD-REMEMBER
     0= IF
         ['] _DSD-PRACTICE-FINI CATCH _DSD-REMEMBER

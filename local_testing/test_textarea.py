@@ -193,7 +193,7 @@ def _textarea_program() -> list[str]:
         "_TT-RGN @ _TT-FLAT 1 TXTA-NEW _TT-W !",
         "_TT-GB @ _TT-W @ TXTA-BIND-GB",
         "0 2 _TT-W @ TXTA-GUTTER!",
-        "_TT-W @ _WDG-FOCUS-SET",
+        "_TT-W @ WDG-FOCUS-SET",
         'S" abcdefghijklmnopqrst" _TT-W @ TXTA-SET-TEXT',
         "SCR-CLEAR _TT-W @ WDG-DRAW",
         "_TT-W @ TXTA-SCROLL-X@ 0> _TT-ASSERT",

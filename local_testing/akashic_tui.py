@@ -281,6 +281,9 @@ MEGAPAD_NETWORKING_CONSUMERS = frozenset(
     }
 )
 MEGAPAD_NETWORKING_BOOT_LINE = "REQUIRE networking.f"
+APP_SHELL_MODULE = "tui/app-shell.f"
+MP64FS_VFS_PLATFORM_MODULE = "tui/platform/mp64fs-vfs.f"
+MP64FS_VFS_PLATFORM_BOOT_LINE = f"REQUIRE {MP64FS_VFS_PLATFORM_MODULE}"
 
 
 def _practice_crc32(data: bytes) -> int:
@@ -22336,6 +22339,54 @@ def _forth_line_contains_networking_load(
     )
 
 
+def _with_mp64fs_vfs_platform(autoexec: str) -> str:
+    """Compose the eager MP64FS VFS before any applet module is loaded."""
+    lines = autoexec.splitlines()
+    token_lines = [_forth_line_tokens(line) for line in lines]
+    userland_lines = [
+        index
+        for index, tokens in enumerate(token_lines)
+        if len(tokens) == 1 and tokens[0].upper() == "ENTER-USERLAND"
+    ]
+    if len(userland_lines) != 1:
+        raise RuntimeError(
+            "App-shell profiles must enter userland exactly once before "
+            "loading the MP64FS VFS platform"
+        )
+    platform_lines = [
+        index
+        for index, tokens in enumerate(token_lines)
+        if len(tokens) == 2
+        and tokens[0].upper() == "REQUIRE"
+        and tokens[1] == MP64FS_VFS_PLATFORM_MODULE
+    ]
+    if len(platform_lines) > 1:
+        raise RuntimeError(
+            "App-shell profiles must load the MP64FS VFS platform exactly once"
+        )
+    if platform_lines:
+        old_index = platform_lines[0]
+        lines.pop(old_index)
+        token_lines.pop(old_index)
+
+    userland_index = next(
+        index
+        for index, tokens in enumerate(token_lines)
+        if len(tokens) == 1 and tokens[0].upper() == "ENTER-USERLAND"
+    )
+    insert_index = userland_index + 1
+    if (
+        insert_index < len(token_lines)
+        and len(token_lines[insert_index]) == 2
+        and token_lines[insert_index][0].upper() == "REQUIRE"
+        and token_lines[insert_index][1].lower() == "networking.f"
+    ):
+        insert_index += 1
+    lines.insert(insert_index, MP64FS_VFS_PLATFORM_BOOT_LINE)
+    suffix = "\n" if autoexec.endswith("\n") else ""
+    return "\n".join(lines) + suffix
+
+
 def _with_megapad_networking(autoexec: str) -> str:
     """Require canonical networking.f immediately after entering userland."""
     lines = autoexec.splitlines()
@@ -22677,10 +22728,24 @@ def build_image(
     autoexec = profile.autoexec
     if codex_auth_checkpoint is not None:
         autoexec = _with_codex_auth_checkpoint(autoexec, codex_auth_checkpoint)
-    modules = (
+    profile_modules = (
         dependency_order(profile.roots)
         if profile.linked
         else dependency_closure(profile.roots)
+    )
+    uses_app_shell = APP_SHELL_MODULE in profile_modules
+    composition_roots = profile.roots
+    if uses_app_shell:
+        composition_roots = (MP64FS_VFS_PLATFORM_MODULE,) + tuple(
+            root
+            for root in profile.roots
+            if _normalize_module(root) != MP64FS_VFS_PLATFORM_MODULE
+        )
+        autoexec = _with_mp64fs_vfs_platform(autoexec)
+    modules = (
+        dependency_order(composition_roots)
+        if profile.linked
+        else dependency_closure(composition_roots)
     )
     requires_networking = _requires_megapad_networking(modules)
     resources = set(profile.resources)
@@ -22802,7 +22867,8 @@ def _has_forth_error(raw: str) -> list[str]:
         re.compile(r"(?i)\b(abort|undefined word|stack underflow)\b"),
         re.compile(
             r"(?i)(\?\s+\(not found\)|branch offset overflow|"
-            r"evaluate depth limit exceeded|dictionary full)"
+            r"evaluate depth limit exceeded|dictionary full|"
+            r"module not found|path component not found)"
         ),
         re.compile(r"(?m)^\s*\?\s*$"),
     )
