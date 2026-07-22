@@ -120,7 +120,9 @@ and a broad test-writing project for code an active landing may never touch.
   isolation. The Desk profile in `test_applet_close.py` covers close decisions,
   callback context, activation-entry failure, shutdown-fault containment,
   all-child negotiation, and draining. The ledger names those executable
-  contracts without itself claiming a particular guest run result.
+  contracts without itself claiming a particular guest run result. Both host
+  drivers require exact heap and XMEM restoration at their failure, drain, and
+  close gates; no allocator-loss tolerance remains.
 
 The legacy `local_testing/test_desk.py` is not evidence because it imports the
 removed `local_testing/emu` package. `test_app_compositor.py` targets a deleted

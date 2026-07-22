@@ -45,7 +45,6 @@ VARIABLE _ah-heap-before
 VARIABLE _ah-xmem-before
 VARIABLE _ah-xfree
 VARIABLE _ah-xwalk
-VARIABLE _ah-xloss
 
 VARIABLE _ah-inst-a
 VARIABLE _ah-inst-b
@@ -101,13 +100,6 @@ VARIABLE _ah-relayout-before
         ." APPLET HOST XMEM " DUP . ." expected " _ah-xmem-before @ . CR
     THEN
     _ah-xmem-before @ = _ah-assert ;
-: _ah-memory-clean-bounded  ( -- )
-    HEAP-FREE-BYTES _ah-heap-before @ = _ah-assert
-    \ KDOS first-fit may consume an unrecyclable tail smaller than its
-    \ 16-byte free-node minimum.  Bound that allocator effect to one cell;
-    \ a leaked host slot, component instance, region, or state is larger.
-    _ah-xmem-before @ _ah-xmem-available - DUP _ah-xloss !
-    DUP 0< 0= SWAP 8 <= AND _ah-assert ;
 
 \ The host owns no layout policy.  This injected policy frees superseded
 \ regions, then assigns two deliberately nonadjacent caller-chosen tiles.
@@ -485,12 +477,11 @@ VARIABLE _ah-ew
     _ah-shutdowns-b @ 1 = _ah-assert
     _ah-releases-b @ 1 = _ah-assert
     _ah-closed-b @ 1 = _ah-assert
-    _ah-memory-clean-bounded
+    _ah-memory-clean
     _ah-stack
 
     \ A callback that returns without publishing the new child region is
-    \ also a relayout failure.  Run this allocator-shaping case last so its
-    \ bounded KDOS free-list tail cannot perturb the exact lifecycle cases.
+    \ also a relayout failure.
     _ah-memory-snapshot
     _ah-relayouts @ _ah-relayout-before !
     ['] _ah-relayout-without-region _ah-host AHOST-RELAYOUT!
@@ -507,7 +498,7 @@ VARIABLE _ah-ew
     _ah-state-inits @ 4 = _ah-assert
     _ah-state-finis @ 4 = _ah-assert
     _ah-relayouts @ _ah-relayout-before @ 2 + = _ah-assert
-    _ah-memory-clean-bounded
+    _ah-memory-clean
     _ah-stack
     ." AH-M9-REGION-FAIL" CR
 

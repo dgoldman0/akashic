@@ -72,7 +72,6 @@ VARIABLE _dh-regn
 VARIABLE _dh-next
 VARIABLE _dh-xfree
 VARIABLE _dh-xwalk
-VARIABLE _dh-xloss
 
 : _dh-xmem-available  ( -- u )
     0 _dh-xfree ! 0 _dh-xwalk ! XMEM-FL @
@@ -102,14 +101,10 @@ VARIABLE _dh-xloss
     _dh-heap @ = _dh-assert ;
 : _dh-memory-clean  ( -- )
     _dh-structural-clean
-    \ KDOS first-fit may consume one tail cell that is smaller than its
-    \ 16-byte recyclable-node minimum.  Anything larger would expose a
-    \ leaked Desk slot, component instance, region, state, or UCTX arena.
-    _dh-xmem @ _dh-xmem-available - _dh-xloss !
-    _dh-xloss @ DUP 0< SWAP 8 > OR IF
-        ." DH-XMEM LOSS " _dh-xloss @ . CR
+    _dh-xmem-available DUP _dh-xmem @ <> IF
+        ." DH-XMEM " DUP . ." expected " _dh-xmem @ . CR
     THEN
-    _dh-xloss @ DUP 0< 0= SWAP 8 <= AND _dh-assert ;
+    _dh-xmem @ = _dh-assert ;
 
 CREATE _dh-comp COMP-DESC ALLOT
 CREATE _dh-app APP-DESC ALLOT
