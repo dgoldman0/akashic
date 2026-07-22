@@ -269,8 +269,8 @@ VARIABLE _HI-NA  VARIABLE _HI-NL
     ELSE
         _HI-NA @ _HI-NL @ _HTML-FIND-CLOSE
     THEN
-    OVER _HI-A @ -
-    _HI-A @ SWAP ;
+    OVER _HI-A @ - >R
+    2DROP _HI-A @ R> ;
 
 \ =====================================================================
 \  HTML5 Reader

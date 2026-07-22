@@ -77,6 +77,15 @@ VARIABLE _mp-uidl-reached
     S" text<br></DIV>tail" S" div" _HTML-FIND-CLOSE
         S" </DIV>tail" STR-STR= _mp-assert
 
+    \ HTML-INNER must return only its documented pair for both ordinary and
+    \ raw-text elements; the internal close cursor is not caller-visible.
+    S" <DIV>Hello <b>World</b></div>tail" HTML-INNER
+        S" Hello <b>World</b>" STR-STR= _mp-assert
+    _mp-stack
+    S" <script>if (a < b) x();</SCRIPT>tail" HTML-INNER
+        S" if (a < b) x();" STR-STR= _mp-assert
+    _mp-stack
+
     \ UIDL keeps its current recovery result while proving the real parser
     \ reaches completion instead of spinning on the nested '<label' suffix.
     0 _mp-uidl-result ! 0 _mp-uidl-reached !
