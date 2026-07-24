@@ -12,6 +12,7 @@ PROVIDED akashic-streams-obstore
 
 REQUIRE observation-state.f
 REQUIRE ../../../utils/fs/vfs-fixed-snapshot.f
+REQUIRE ../../../math/sha3.f
 REQUIRE ../../../concurrency/guard.f
 
 \ =====================================================================
@@ -97,9 +98,15 @@ VARIABLE _OSSI-TARGET-U
 VARIABLE _OSSL-DESTINATION
 VARIABLE _OSSL-CAPACITY
 VARIABLE _OSSL-STORE
+VARIABLE _OSLE-DESTINATION
+VARIABLE _OSLE-CAPACITY
+VARIABLE _OSLE-DIGEST
+VARIABLE _OSLE-STORE
 VARIABLE _OSSS-CHECKPOINT
 VARIABLE _OSSS-EXPECTED
 VARIABLE _OSSS-STORE
+
+0 _OSLE-DIGEST !
 
 : _OSTORE-ENCODE-PAYLOAD
   ( checkpoint payload-a payload-u next-generation -- status )
@@ -117,6 +124,14 @@ VARIABLE _OSSS-STORE
         CMOVE
     VFSNAP-S-OK ;
 
+: _OSTORE-CAPTURE-EVIDENCE  ( payload-a -- )
+    _OSLE-DIGEST @ ?DUP IF
+        >R STREAMS-OBSERVATION-STORE-HEADER-SIZE -
+        STREAMS-OBSERVATION-STORE-RECORD-MAX R> SHA3-256-HASH
+    ELSE
+        DROP
+    THEN ;
+
 : _OSTORE-VALIDATE-PAYLOAD
   ( payload-a payload-u envelope-generation -- status )
     _OSCB-GENERATION ! _OSCB-PAYLOAD-U ! _OSCB-PAYLOAD !
@@ -133,6 +148,9 @@ VARIABLE _OSSS-STORE
     _OSCB-PAYLOAD @ OCHK.GENERATION @ _OSCB-GENERATION @ <> IF
         VFSNAP-S-CORRUPT EXIT
     THEN
+    \ CREC has already proved the exact envelope, CRCs, and fixed extent.
+    \ Capture the complete checked record while it is still in VFSNAP scratch.
+    _OSCB-PAYLOAD @ _OSTORE-CAPTURE-EVIDENCE
     VFSNAP-S-OK ;
 
 \ Explicit adapter even though the current numeric domains coincide.
@@ -194,6 +212,21 @@ VARIABLE _OSSS-STORE
         2DROP R> DROP 0 EXIT
     THEN
     R> _OSTORE-IO-ALIASES? 0= ;
+
+: _OSTORE-EVIDENCE-SPANS-SAFE?
+  ( destination capacity digest-destination store -- flag )
+    >R
+    2 PICK 2 PICK R@ _OSTORE-IO-SPAN-SAFE? 0= IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    DUP SHA3-256-LEN R@ _OSTORE-IO-SPAN-SAFE? 0= IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    2 PICK 2 PICK 2 PICK SHA3-256-LEN
+        _OSTORE-RANGES-OVERLAP? IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    2DROP DROP R> DROP -1 ;
 
 : _OSTORE-TARGET-SPAN-SAFE?  ( target-a target-u store -- flag )
     >R
@@ -272,6 +305,53 @@ VARIABLE _OSSS-STORE
         2DROP DROP OSTORE-S-INVALID EXIT
     THEN
     _ostore-load-xt _streams-observation-store-guard WITH-GUARD ;
+
+: _OSLE-CALL  ( -- status )
+    _OSLE-DESTINATION @ _OSLE-CAPACITY @ _OSLE-STORE @
+        _STREAMS-OBSERVATION-STORE-LOAD ;
+
+: _STREAMS-OBSERVATION-STORE-LOAD-EVIDENCE-TERMINAL
+  ( destination capacity digest-destination store -- record-u generation status )
+    _OSLE-STORE ! _OSLE-DIGEST ! _OSLE-CAPACITY ! _OSLE-DESTINATION !
+    _OSLE-DIGEST @ SHA3-256-LEN 0 FILL
+    ['] _OSLE-CALL CATCH
+    _OSLE-STORE @ DUP STREAMS-OBSERVATION-STORE-VALID? IF
+        _STREAMS-OBSERVATION-STORE-SCRATCH-WIPE
+    ELSE
+        DROP
+    THEN
+    DUP IF
+        _OSLE-DIGEST @ SHA3-256-LEN 0 FILL
+        0 _OSLE-DIGEST !
+        THROW
+    THEN
+    DROP
+    DUP OSTORE-S-OK = IF
+        DROP
+        0 _OSLE-DIGEST !
+        STREAMS-OBSERVATION-STORE-RECORD-MAX
+        _OSLE-STORE @ STREAMS-OBSERVATION-STORE.LOAD-GENERATION @
+        OSTORE-S-OK EXIT
+    THEN
+    >R
+    _OSLE-DIGEST @ SHA3-256-LEN 0 FILL
+    0 _OSLE-DIGEST !
+    0 0 R> ;
+
+' _STREAMS-OBSERVATION-STORE-LOAD-EVIDENCE-TERMINAL
+    CONSTANT _ostore-load-evidence-xt
+
+\ Cold-migration evidence is emitted only for one fully checked, semantically
+\ valid V1 record.  On success the digest covers the exact 64-byte envelope
+\ plus fixed payload; every non-OK result returns zero length/generation and,
+\ once its span has passed preflight, a zero digest.
+: STREAMS-OBSERVATION-STORE-LOAD-EVIDENCE
+  ( destination capacity digest-destination store -- record-u generation status )
+    3 PICK 3 PICK 3 PICK 3 PICK
+        _OSTORE-EVIDENCE-SPANS-SAFE? 0= IF
+        2DROP 2DROP 0 0 OSTORE-S-INVALID EXIT
+    THEN
+    _ostore-load-evidence-xt _streams-observation-store-guard WITH-GUARD ;
 
 : _STREAMS-OBSERVATION-STORE-SAVE
   ( checkpoint expected-generation store -- status )

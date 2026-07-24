@@ -12,6 +12,7 @@ PROVIDED akashic-streams-srcstore
 
 REQUIRE source-registry.f
 REQUIRE ../../../utils/fs/vfs-fixed-snapshot.f
+REQUIRE ../../../math/sha3.f
 REQUIRE ../../../concurrency/guard.f
 
 \ =====================================================================
@@ -95,9 +96,15 @@ VARIABLE _SSSI-TARGET-U
 VARIABLE _SSSL-DESTINATION
 VARIABLE _SSSL-CAPACITY
 VARIABLE _SSSL-STORE
+VARIABLE _SSLE-DESTINATION
+VARIABLE _SSLE-CAPACITY
+VARIABLE _SSLE-DIGEST
+VARIABLE _SSLE-STORE
 VARIABLE _SSSS-REGISTRY
 VARIABLE _SSSS-EXPECTED
 VARIABLE _SSSS-STORE
+
+0 _SSLE-DIGEST !
 
 : _SSSTORE-UNUSED-SLOTS-ZERO?  ( registry -- flag )
     DUP SSREG.COUNT @ >R
@@ -125,6 +132,14 @@ VARIABLE _SSSS-STORE
         _SSCB-CONTEXT @ SSREG.COUNT @ STREAMS-SOURCE-SIZE * CMOVE
     VFSNAP-S-OK ;
 
+: _SSSTORE-CAPTURE-EVIDENCE  ( payload-a -- )
+    _SSLE-DIGEST @ ?DUP IF
+        >R STREAMS-SOURCE-STORE-HEADER-SIZE -
+        STREAMS-SOURCE-STORE-RECORD-MAX R> SHA3-256-HASH
+    ELSE
+        DROP
+    THEN ;
+
 : _SSSTORE-VALIDATE-PAYLOAD
   ( payload-a payload-u envelope-generation -- status )
     _SSCB-GENERATION ! _SSCB-PAYLOAD-U ! _SSCB-PAYLOAD !
@@ -146,6 +161,9 @@ VARIABLE _SSSS-STORE
     _SSCB-PAYLOAD @ SSREG.GENERATION @ _SSCB-GENERATION @ <> IF
         VFSNAP-S-CORRUPT EXIT
     THEN
+    \ CREC has already proved the exact envelope, CRCs, and fixed extent.
+    \ Capture the complete checked record while it is still in VFSNAP scratch.
+    _SSCB-PAYLOAD @ _SSSTORE-CAPTURE-EVIDENCE
     VFSNAP-S-OK ;
 
 : _SSSTORE-VFSNAP>STATUS  ( snapshot-status -- source-status )
@@ -203,6 +221,21 @@ VARIABLE _SSSS-STORE
         2DROP R> DROP 0 EXIT
     THEN
     R> _SSSTORE-IO-ALIASES? 0= ;
+
+: _SSSTORE-EVIDENCE-SPANS-SAFE?
+  ( destination capacity digest-destination store -- flag )
+    >R
+    2 PICK 2 PICK R@ _SSSTORE-IO-SPAN-SAFE? 0= IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    DUP SHA3-256-LEN R@ _SSSTORE-IO-SPAN-SAFE? 0= IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    2 PICK 2 PICK 2 PICK SHA3-256-LEN
+        _SSSTORE-RANGES-OVERLAP? IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    2DROP DROP R> DROP -1 ;
 
 : _SSSTORE-TARGET-SPAN-SAFE?  ( target-a target-u store -- flag )
     >R
@@ -281,6 +314,53 @@ VARIABLE _SSLT-STORE
         2DROP DROP SSSTORE-S-INVALID EXIT
     THEN
     _ssstore-load-xt _streams-source-store-guard WITH-GUARD ;
+
+: _SSLE-CALL  ( -- status )
+    _SSLE-DESTINATION @ _SSLE-CAPACITY @ _SSLE-STORE @
+        _STREAMS-SOURCE-STORE-LOAD ;
+
+: _STREAMS-SOURCE-STORE-LOAD-EVIDENCE-TERMINAL
+  ( destination capacity digest-destination store -- record-u generation status )
+    _SSLE-STORE ! _SSLE-DIGEST ! _SSLE-CAPACITY ! _SSLE-DESTINATION !
+    _SSLE-DIGEST @ SHA3-256-LEN 0 FILL
+    ['] _SSLE-CALL CATCH
+    _SSLE-STORE @ DUP STREAMS-SOURCE-STORE-VALID? IF
+        STREAMS-SOURCE-STORE-SCRATCH-WIPE
+    ELSE
+        DROP
+    THEN
+    DUP IF
+        _SSLE-DIGEST @ SHA3-256-LEN 0 FILL
+        0 _SSLE-DIGEST !
+        THROW
+    THEN
+    DROP
+    DUP SSSTORE-S-OK = IF
+        DROP
+        0 _SSLE-DIGEST !
+        STREAMS-SOURCE-STORE-RECORD-MAX
+        _SSLE-STORE @ STREAMS-SOURCE-STORE.LOAD-GENERATION @
+        SSSTORE-S-OK EXIT
+    THEN
+    >R
+    _SSLE-DIGEST @ SHA3-256-LEN 0 FILL
+    0 _SSLE-DIGEST !
+    0 0 R> ;
+
+' _STREAMS-SOURCE-STORE-LOAD-EVIDENCE-TERMINAL
+    CONSTANT _ssstore-load-evidence-xt
+
+\ Cold-migration evidence is emitted only for one fully checked, semantically
+\ valid V1 record.  On success the digest covers the exact 64-byte envelope
+\ plus fixed payload; every non-OK result returns zero length/generation and,
+\ once its span has passed preflight, a zero digest.
+: STREAMS-SOURCE-STORE-LOAD-EVIDENCE
+  ( destination capacity digest-destination store -- record-u generation status )
+    3 PICK 3 PICK 3 PICK 3 PICK
+        _SSSTORE-EVIDENCE-SPANS-SAFE? 0= IF
+        2DROP 2DROP 0 0 SSSTORE-S-INVALID EXIT
+    THEN
+    _ssstore-load-evidence-xt _streams-source-store-guard WITH-GUARD ;
 
 : _STREAMS-SOURCE-STORE-SAVE  ( registry expected-generation store -- status )
     _SSSS-STORE ! _SSSS-EXPECTED ! _SSSS-REGISTRY !
