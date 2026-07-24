@@ -45,9 +45,11 @@ REQUIRE ../vfs.f
 \    +8240   dirty-bmap flag     (8 bytes)
 \    +8248   dirty-dir flag      (8 bytes)
 \    +8256   validated/ready     (8 bytes)
-\  = 8264 bytes
+\    +8264   deferred-free map   (2 × 512 bytes maximum)
+\    +9288   deferred-free flag  (8 bytes)
+\  = 9296 bytes
 
-8264 CONSTANT _VMP-CTX-SIZE
+9296 CONSTANT _VMP-CTX-SIZE
 
 \ Context field offsets
    0 CONSTANT _VMP-C.SUPER
@@ -63,6 +65,8 @@ REQUIRE ../vfs.f
 8240 CONSTANT _VMP-C.DBMAP
 8248 CONSTANT _VMP-C.DDIR
 8256 CONSTANT _VMP-C.READY
+8264 CONSTANT _VMP-C.PFREE
+9288 CONSTANT _VMP-C.DFREE
 
 \ Accessor: ( vfs -- ctx )
 : _VMP-CTX  ( vfs -- ctx )  V.BCTX @ ;
@@ -250,6 +254,43 @@ VARIABLE _VMRUN-CTX
     _VMRUN-COUNT @ 0 ?DO
         _VMRUN-START @ I + _VMRUN-CTX @ _VMP-BIT-CLR
     LOOP ;
+
+\ Deallocation is deferred until the directory version that drops the
+\ reference is durable.  The pending map has the same bit geometry as BMAP,
+\ but set bits mean "clear after the directory publication boundary".
+: _VMP-PFREE-BIT-SET  ( sector ctx -- )
+    _VMP-C.PFREE +
+    SWAP DUP 8 / ROT +
+    DUP C@
+    ROT 8 MOD 1 SWAP LSHIFT
+    OR SWAP C! ;
+
+VARIABLE _VMPF-START
+VARIABLE _VMPF-COUNT
+VARIABLE _VMPF-CTX
+
+: _VMP-RUN-DEFER-FREE  ( start count ctx -- )
+    _VMPF-CTX ! _VMPF-COUNT ! _VMPF-START !
+    _VMPF-COUNT @ 0= IF EXIT THEN
+    _VMPF-COUNT @ 0 ?DO
+        _VMPF-START @ I + _VMPF-CTX @ _VMP-PFREE-BIT-SET
+    LOOP
+    -1 _VMPF-CTX @ _VMP-C.DFREE + ! ;
+
+VARIABLE _VMPA-CTX
+
+: _VMP-APPLY-DEFERRED-FREES  ( ctx -- )
+    DUP _VMP-C.DFREE + @ 0= IF DROP EXIT THEN
+    _VMPA-CTX !
+    _VMPA-CTX @ _VMP-C.BN + @ _VMP-SECTOR * 0 ?DO
+        _VMPA-CTX @ _VMP-C.BMAP + I + DUP C@
+        _VMPA-CTX @ _VMP-C.PFREE + I + C@ INVERT AND
+        SWAP C!
+    LOOP
+    _VMPA-CTX @ _VMP-C.PFREE +
+    _VMPA-CTX @ _VMP-C.BN + @ _VMP-SECTOR * 0 FILL
+    0 _VMPA-CTX @ _VMP-C.DFREE + !
+    -1 _VMPA-CTX @ _VMP-C.DBMAP + ! ;
 
 VARIABLE _VMZR-START
 VARIABLE _VMZR-COUNT
@@ -850,6 +891,145 @@ VARIABLE _VMG-ESTART
 VARIABLE _VMG-ECOUNT
 VARIABLE _VMG-ADD
 VARIABLE _VMG-START
+VARIABLE _VMG-TARGET
+VARIABLE _VMG-OLDSTART
+VARIABLE _VMG-IOR
+VARIABLE _VMM-CTX
+
+\ Relocation has to cross two separately written metadata regions.  These
+\ helpers publish one dirty cache and its durability boundary at a time,
+\ retaining the dirty bit whenever either the write or FLUSH fails.
+: _VMP-PUBLISH-BMAP-CACHE  ( ctx -- ior )
+    _VMM-CTX !
+    _VMM-CTX @ _VMP-C.DBMAP + @ 0= IF 0 EXIT THEN
+    _VMM-CTX @ _VMP-C.BMAP +
+    _VMM-CTX @ _VMP-C.BSTART + @
+    _VMM-CTX @ _VMP-C.BN + @ _VMP-VOL-WRITE
+    ?DUP IF EXIT THEN
+    _VMP-VOL-FLUSH ?DUP IF EXIT THEN
+    0 _VMM-CTX @ _VMP-C.DBMAP + !
+    0 ;
+
+: _VMP-PUBLISH-DIR-CACHE  ( ctx -- ior )
+    _VMM-CTX !
+    _VMM-CTX @ _VMP-C.DDIR + @ 0= IF 0 EXIT THEN
+    _VMM-CTX @ _VMP-C.DIR +
+    _VMM-CTX @ _VMP-C.DIRSTART + @
+    _VMM-CTX @ _VMP-C.DIRN + @ _VMP-VOL-WRITE
+    ?DUP IF EXIT THEN
+    _VMP-VOL-FLUSH ?DUP IF EXIT THEN
+    0 _VMM-CTX @ _VMP-C.DDIR + !
+    0 ;
+
+: _VMP-SETTLE-METADATA  ( ctx -- ior )
+    DUP _VMP-PUBLISH-BMAP-CACHE ?DUP IF NIP EXIT THEN
+    DUP _VMP-PUBLISH-DIR-CACHE ?DUP IF NIP EXIT THEN
+    DUP _VMP-APPLY-DEFERRED-FREES
+    _VMP-PUBLISH-BMAP-CACHE ;
+
+: _VMP-RELOCATE-SELECT-NEW  ( -- )
+    _VMG-START @ DUP _VMG-IN @ IN.BDATA !
+        _VMG-DE @ 24 + W!
+    _VMG-TARGET @ DUP _VMG-IN @ IN.BDATA 8 + !
+        _VMG-DE @ 26 + W!
+    0 _VMG-DE @ 44 + W!
+    0 _VMG-DE @ 46 + W!
+    -1 _VMG-CTX @ _VMP-C.DDIR + !
+    VFS-IF-DIRTY _VMG-IN @ IN.FLAGS DUP @ ROT OR SWAP ! ;
+
+: _VMP-RELOCATE-SELECT-OLD  ( -- )
+    _VMG-OLDSTART @ DUP _VMG-IN @ IN.BDATA !
+        _VMG-DE @ 24 + W!
+    _VMG-PCOUNT @ DUP _VMG-IN @ IN.BDATA 8 + !
+        _VMG-DE @ 26 + W!
+    _VMG-ESTART @ _VMG-DE @ 44 + W!
+    _VMG-ECOUNT @ _VMG-DE @ 46 + W!
+    -1 _VMG-CTX @ _VMP-C.DDIR + !
+    VFS-IF-DIRTY _VMG-IN @ IN.FLAGS DUP @ ROT OR SWAP ! ;
+
+\ A growing persistence file can exhaust both extent positions while the
+\ volume still has ample free space: page and segment files naturally grow
+\ in alternating bursts.  Relocate such a file into one larger free run.  The
+\ three durable metadata phases always retain every extent referenced by either
+\ possible on-disk directory version:
+\   1. claim the new run while retaining the old runs,
+\   2. switch directory authority to the copied run,
+\   3. retire the old runs.
+: _VMP-RELOCATE  ( target-sectors -- ior )
+    \ Isolate the relocation protocol from unrelated cached mutations.
+    _VMG-CTX @ _VMP-SETTLE-METADATA ?DUP IF
+        NIP EXIT
+    THEN
+    DUP _VMG-CTX @ _VMP-FIND-FREE DUP -1 = IF
+        2DROP VFS-E-NOSPC EXIT
+    THEN
+    _VMG-START ! _VMG-TARGET !
+    _VMG-IN @ IN.BDATA @ _VMG-OLDSTART !
+    _VMG-START @ _VMG-TARGET @ _VMG-CTX @ _VMP-ZERO-RUN
+    ?DUP IF EXIT THEN
+    _VMG-PCOUNT @ _VMG-ECOUNT @ + 0 ?DO
+        I _VMG-PCOUNT @ < IF
+            _VMG-IN @ IN.BDATA @ I +
+        ELSE
+            _VMG-ESTART @ I _VMG-PCOUNT @ - +
+        THEN
+        _VMG-CTX @ _VMP-C.SCRATCH + SWAP 1 _VMP-VOL-READ
+        ?DUP IF UNLOOP EXIT THEN
+        _VMG-CTX @ _VMP-C.SCRATCH +
+        _VMG-START @ I + 1 _VMP-VOL-WRITE
+        ?DUP IF UNLOOP EXIT THEN
+    LOOP
+
+    \ Phase one: copied data and the conservative old+new bitmap become
+    \ durable together.  A failure rolls back only the cached new claim; the
+    \ dirty bit remains set so a later sync can repair a maybe-written bitmap.
+    _VMG-START @ _VMG-TARGET @ _VMG-CTX @ _VMP-RUN-SET
+    -1 _VMG-CTX @ _VMP-C.DBMAP + !
+    _VMG-CTX @ _VMP-PUBLISH-BMAP-CACHE DUP IF
+        >R
+        _VMG-START @ _VMG-TARGET @ _VMG-CTX @ _VMP-RUN-CLR
+        -1 _VMG-CTX @ _VMP-C.DBMAP + !
+        R> EXIT
+    THEN DROP
+
+    \ Phase two: publish the new directory authority while both runs remain
+    \ allocated.  On failure, restore the old cached authority and make a
+    \ best-effort compensating publication before reclaiming the new run.
+    _VMP-RELOCATE-SELECT-NEW
+    _VMG-CTX @ _VMP-PUBLISH-DIR-CACHE DUP IF
+        _VMG-IOR !
+        _VMP-RELOCATE-SELECT-OLD
+        _VMG-CTX @ _VMP-PUBLISH-DIR-CACHE DUP IF
+            DROP
+        ELSE
+            DROP
+            _VMG-START @ _VMG-TARGET @ _VMG-CTX @ _VMP-RUN-CLR
+            -1 _VMG-CTX @ _VMP-C.DBMAP + !
+            _VMG-CTX @ _VMP-PUBLISH-BMAP-CACHE DROP
+        THEN
+        _VMG-IOR @ EXIT
+    THEN DROP
+
+    \ Phase three: only after the new directory is durable may the old
+    \ allocation be retired.  A failed cleanup is safe and remains retryable.
+    _VMG-OLDSTART @ _VMG-PCOUNT @ _VMG-CTX @ _VMP-RUN-CLR
+    _VMG-ECOUNT @ IF
+        _VMG-ESTART @ _VMG-ECOUNT @ _VMG-CTX @ _VMP-RUN-CLR
+    THEN
+    -1 _VMG-CTX @ _VMP-C.DBMAP + !
+    _VMG-CTX @ _VMP-PUBLISH-BMAP-CACHE ;
+
+: _VMP-RELOCATE-GROWTH  ( -- ior )
+    _VMG-PCOUNT @ _VMG-ECOUNT @ +
+    DUP _VMP-MAX-SECTORS 2 / <= IF 2* THEN
+    _VMG-WANT @ MAX DUP _VMG-TARGET !
+    _VMP-RELOCATE DUP VFS-IOR-REASON VFS-R-NOSPC = IF
+        DROP
+        _VMG-TARGET @ _VMG-WANT @ <> IF
+            _VMG-WANT @ _VMP-RELOCATE EXIT
+        THEN
+        VFS-E-NOSPC
+    THEN ;
 
 : _VMP-ENSURE  ( bytes inode vfs -- ior )
     _VMG-V ! _VMG-IN ! _VMG-BYTES !
@@ -867,7 +1047,9 @@ VARIABLE _VMG-START
     _VMG-ECOUNT @ 0> IF
         \ A two-extent file can only grow at the end of extent 1.
         _VMG-ESTART @ _VMG-ECOUNT @ +
-        _VMG-ADD @ _VMG-CTX @ _VMP-RUN-FREE? 0= IF VFS-E-NOSPC EXIT THEN
+        _VMG-ADD @ _VMG-CTX @ _VMP-RUN-FREE? 0= IF
+            _VMP-RELOCATE-GROWTH EXIT
+        THEN
         _VMG-ESTART @ _VMG-ECOUNT @ +
         _VMG-ADD @ _VMG-CTX @ _VMP-ZERO-RUN ?DUP IF EXIT THEN
         _VMG-ESTART @ _VMG-ECOUNT @ +
@@ -1081,7 +1263,8 @@ VARIABLE _VMRW-BATCH
 \  Sync  ( inode vfs -- ior )
 \ =====================================================================
 \
-\  Write the bitmap and directory caches back to disk if dirty.
+\  Publish allocation claims, directory authority, and deferred frees in that
+\  order, with a checked durability boundary between each phase.
 
 VARIABLE _VMSY-V
 VARIABLE _VMSY-CTX
@@ -1110,25 +1293,7 @@ VARIABLE _VMSY-IN
     ELSE
         DROP
     THEN
-    \ Write bitmap if dirty.  Retain both dirty flags until every required
-    \ write and the final durability operation have succeeded.
-    _VMSY-CTX @ _VMP-C.DBMAP + @ IF
-        _VMSY-CTX @ _VMP-C.BMAP +
-        _VMSY-CTX @ _VMP-C.BSTART + @
-        _VMSY-CTX @ _VMP-C.BN + @ _VMP-VOL-WRITE
-        ?DUP IF EXIT THEN
-    THEN
-    \ Write directory if dirty
-    _VMSY-CTX @ _VMP-C.DDIR + @ IF
-        _VMSY-CTX @ _VMP-C.DIR +
-        _VMSY-CTX @ _VMP-C.DIRSTART + @
-        _VMSY-CTX @ _VMP-C.DIRN + @ _VMP-VOL-WRITE
-        ?DUP IF EXIT THEN
-    THEN
-    _VMP-VOL-FLUSH ?DUP IF EXIT THEN
-    0 _VMSY-CTX @ _VMP-C.DBMAP + !
-    0 _VMSY-CTX @ _VMP-C.DDIR + !
-    0 ;
+    _VMSY-CTX @ _VMP-SETTLE-METADATA ;
 
 \ =====================================================================
 \  Create  ( inode vfs -- ior )
@@ -1229,15 +1394,14 @@ VARIABLE _VMDL-CTX
     \ that FD to a different file.  Fail before changing either cache.
     _VMDL-IN @ D.VNODE @ VN.OPEN-REFS @ IF VFS-E-BUSY EXIT THEN
     _VMDL-V @ V.BCTX @  _VMDL-CTX !
-    \ Free bitmap sectors in both extents.
+    \ Keep bitmap ownership until the cleared directory entry is durable.
     _VMDL-IN @ IN.BDATA @
     _VMDL-IN @ IN.BDATA 8 + @
-    _VMDL-CTX @ _VMP-RUN-CLR
+    _VMDL-CTX @ _VMP-RUN-DEFER-FREE
     _VMDL-IN @ IN.BID @ _VMDL-CTX @ _VMP-DIRENT
     DUP _VMP-DE.EXT1S
     SWAP _VMP-DE.EXT1C
-    _VMDL-CTX @ _VMP-RUN-CLR
-    -1 _VMDL-CTX @ _VMP-C.DBMAP + !     \ bitmap dirty
+    _VMDL-CTX @ _VMP-RUN-DEFER-FREE
     \ Clear directory entry
     _VMDL-IN @ IN.BID @  _VMDL-CTX @  _VMP-DIRENT
     _VMP-ENTRY-SIZE 0 FILL
@@ -1275,20 +1439,20 @@ VARIABLE _VMTR-OLD
         _VMTR-WANT @ _VMTR-PCOUNT @ - _VMTR-KEEP-E !
         _VMTR-ESTART @ _VMTR-KEEP-E @ +
         _VMTR-ECOUNT @ _VMTR-KEEP-E @ -
-        _VMTR-CTX @ _VMP-RUN-CLR
+        _VMTR-CTX @ _VMP-RUN-DEFER-FREE
         _VMTR-KEEP-E @ DUP _VMTR-DE @ 46 + W!
         0= IF 0 _VMTR-DE @ 44 + W! THEN
     ELSE
         _VMTR-IN @ IN.BDATA @ _VMTR-WANT @ +
         _VMTR-PCOUNT @ _VMTR-WANT @ -
-        _VMTR-CTX @ _VMP-RUN-CLR
-        _VMTR-ESTART @ _VMTR-ECOUNT @ _VMTR-CTX @ _VMP-RUN-CLR
+        _VMTR-CTX @ _VMP-RUN-DEFER-FREE
+        _VMTR-ESTART @ _VMTR-ECOUNT @
+            _VMTR-CTX @ _VMP-RUN-DEFER-FREE
         _VMTR-WANT @ DUP _VMTR-IN @ IN.BDATA 8 + !
             _VMTR-DE @ 26 + W!
         0 _VMTR-DE @ 44 + W!
         0 _VMTR-DE @ 46 + W!
     THEN
-    -1 _VMTR-CTX @ _VMP-C.DBMAP + !
     -1 _VMTR-CTX @ _VMP-C.DDIR + ! ;
 
 : _VMP-TRUNCATE  ( inode vfs -- ior )

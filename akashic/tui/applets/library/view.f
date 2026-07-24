@@ -2,9 +2,6 @@
 \  view.f - Library drawing and direct panel input
 \ =====================================================================
 \  Rendering and panel interaction over controller-owned activation state.
-\  L12-DELETION: direct _LAPP-* state reach is the bounded pre-virtual-list
-\  view/controller seam. L12 replaces it with the settled paged item-source
-\  and view-model boundary after functional parity, then deletes this reach.
 \ =====================================================================
 
 PROVIDED akashic-tui-library-view
@@ -111,8 +108,8 @@ VARIABLE _LAPP-DRAW-MAX
     32 3 0 _LAPP-DH @ 3 - _LAPP-LIST-W @ DRW-FILL-RECT
     _LAPP-ROW-COUNT @ 0= IF
         244 234 CELL-A-DIM DRW-STYLE!
-        _LAPP-LAST-STATUS @ LIBSTORE-S-ABSENT = IF
-            S" No store yet; create initializes it"
+        _LAPP-LAST-STATUS @ LIBRARY-SERVICE-S-ABSENT = IF
+            S" Library is not initialized; create starts it"
         ELSE
             S" No matching Library records"
         THEN
@@ -200,7 +197,7 @@ VARIABLE _LAPP-PV-CP
     THEN
     255 234 1 DRW-STYLE!
     _LAPP-VIEW @ _LAPP-V-COLLECTIONS = IF
-        _LAPP-COLLECTION-VIEW LIBCV-TITLE$
+        _LAPP-COLLECTION LIBPAC-TITLE$
     ELSE
         _LAPP-ENTRY LIBE-TITLE$
     THEN
@@ -209,7 +206,7 @@ VARIABLE _LAPP-PV-CP
     244 234 0 DRW-STYLE!
     _LAPP-VIEW @ _LAPP-V-COLLECTIONS = IF
         S" Collection  |  members " 4 _LAPP-PV-COL @ 1+ DRW-TEXT
-        _LAPP-COLLECTION-VIEW LIBCV.MEMBER-N @ NUM>STR
+        _LAPP-COLLECTION LIBPAC.MEMBER-N @ NUM>STR
             4 _LAPP-PV-COL @ 25 + DRW-TEXT
         S" Enter filters the corpus by this collection"
             6 _LAPP-PV-COL @ 1+ DRW-TEXT
@@ -223,8 +220,18 @@ VARIABLE _LAPP-PV-CP
         ELSE S" Immutable capture" THEN
         4 _LAPP-PV-COL @ 1+ DRW-TEXT
     THEN
-    S" bytes " 5 _LAPP-PV-COL @ 1+ DRW-TEXT
-    _LAPP-PREVIEW-U @ NUM>STR 5 _LAPP-PV-COL @ 7 + DRW-TEXT
+    _LAPP-ST-RESET
+    S" Preview " _LAPP-ST-APPEND
+    _LAPP-PREVIEW-U @ NUM>STR _LAPP-ST-APPEND
+    S" / " _LAPP-ST-APPEND
+    _LAPP-PREVIEW-TOTAL @ NUM>STR _LAPP-ST-APPEND
+    S" bytes" _LAPP-ST-APPEND
+    _LAPP-PREVIEW-U @ _LAPP-PREVIEW-TOTAL @ < IF
+        S"  (prefix)" _LAPP-ST-APPEND
+    THEN
+    _LAPP-STATUS-BUF _LAPP-STATUS-U @
+        _LAPP-PV-W @ 2 - 1 MAX _LAPP-UTF8-PREFIX
+        5 _LAPP-PV-COL @ 1+ DRW-TEXT-UNTRUSTED
     253 234 0 DRW-STYLE!
     7 _LAPP-DRAW-CONTENT-LINES ;
 

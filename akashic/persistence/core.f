@@ -84,14 +84,25 @@ REQUIRE ../utils/memory-span.f
 \ Atomic root value
 \ ---------------------------------------------------------------------
 \  The root knows only committed physical bounds and one opaque application
-\  page.  Index, blob, applet, schema, and path policy live above it.
+\  page.  DATA-BANK is the bounded 0/1 physical-bank selector carried by
+\  every checked authority snapshot.  A store may expose only bank zero or
+\  explicitly configure bank one for bounded authority replacement without
+\  changing this one accepted root layout.  Index, blob, applet, schema, and
+\  path policy live above it.
+
+0 CONSTANT PERSIST-DATA-BANK-0
+1 CONSTANT PERSIST-DATA-BANK-1
+
+: PERSIST-DATA-BANK-VALID?  ( bank -- flag )
+    DUP PERSIST-DATA-BANK-0 =
+    SWAP PERSIST-DATA-BANK-1 = OR ;
 
  0 CONSTANT _PROOTV-IDENTITY
 32 CONSTANT _PROOTV-PAGE-COUNT
 40 CONSTANT _PROOTV-SEGMENT-TAIL
 48 CONSTANT _PROOTV-RECORD-COUNT
 56 CONSTANT _PROOTV-APPLICATION-ROOT
-64 CONSTANT _PROOTV-FLAGS
+64 CONSTANT _PROOTV-DATA-BANK
 72 CONSTANT _PROOTV-RESERVED
 96 CONSTANT PERSIST-ROOT-VALUE-SIZE
 
@@ -100,7 +111,7 @@ REQUIRE ../utils/memory-span.f
 : PROOTV.SEGMENT-TAIL      ( root -- a ) _PROOTV-SEGMENT-TAIL + ;
 : PROOTV.RECORD-COUNT      ( root -- a ) _PROOTV-RECORD-COUNT + ;
 : PROOTV.APPLICATION-ROOT  ( root -- a ) _PROOTV-APPLICATION-ROOT + ;
-: PROOTV.FLAGS             ( root -- a ) _PROOTV-FLAGS + ;
+: PROOTV.DATA-BANK         ( root -- a ) _PROOTV-DATA-BANK + ;
 : PROOTV.RESERVED          ( root -- a ) _PROOTV-RESERVED + ;
 
 : PERSIST-ROOT-VALUE-INIT  ( root -- )
@@ -129,7 +140,7 @@ REQUIRE ../utils/memory-span.f
     DUP PROOTV.PAGE-COUNT @ 0< IF DROP 0 EXIT THEN
     DUP PROOTV.SEGMENT-TAIL @ 0< IF DROP 0 EXIT THEN
     DUP PROOTV.RECORD-COUNT @ 0< IF DROP 0 EXIT THEN
-    DUP PROOTV.FLAGS @ IF DROP 0 EXIT THEN
+    DUP PROOTV.DATA-BANK @ PERSIST-DATA-BANK-VALID? 0= IF DROP 0 EXIT THEN
     DUP PROOTV.RESERVED 24 _PERSIST-ZERO? 0= IF DROP 0 EXIT THEN
     DUP PROOTV.RECORD-COUNT @ 0= IF
         DUP PROOTV.SEGMENT-TAIL @ IF DROP 0 EXIT THEN

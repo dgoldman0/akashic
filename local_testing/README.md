@@ -83,7 +83,7 @@ recovery, committed-stale behavior, rollback, and retryable finalization. The
 applet qualification additionally runs `daybook-contracts`,
 `pad-resource-contracts`, `desk-service-table-contracts`, `desktop-resource`,
 and `desktop-agent-hardening`, plus the focused shared-document pytests and
-Library's projection two-boot gate. None of these checks requires ext4. See
+Library's linked projection-owner gate. None of these checks requires ext4. See
 `docs/refactor/l6-resource-owner-pool-and-session.md` for the exact boundary
 and final evidence.
 
@@ -106,37 +106,32 @@ ratchets. These are MP64FS/generic-VFS qualifications; ext4 remains unrelated.
 See `docs/refactor/l7-daybook-agent-rehoming.md` for the ownership boundary and
 final evidence.
 
-L8 re-homes and decomposes Library without changing its product surface or
-fixed current storage behavior. Renderer-free profiles now load Library-owned
-modules beneath `tui/applets/library/`; that is a direct test boundary, not a
-standalone product package. The focused split gate is:
+L8 re-homed Library beneath `tui/applets/library/`; its landing document remains
+historical evidence. L12 replaces the temporary fixed backend with the current
+Library model/document-value/index-key/persistence-adapter/repository/query/
+service split over neutral persistence. Documents, collections, membership,
+history, and postings are indexed populations; content and metadata are
+chunked blobs. The current prototype has one layout with no legacy reader or
+migration stack. The final acceptance boundary and measured current-tree
+matrix are recorded in
+[`evidence/library-l12-close-20260724.md`](evidence/library-l12-close-20260724.md).
+
+The linked projection and executable-lens profiles are:
 
 ```bash
 python3 local_testing/akashic_tui.py smoke \
-  --profile library-model-codecs-contracts
+  --profile library-projection-owner-contracts \
+  --max-steps 70000000000 --timeout 1200
 python3 local_testing/akashic_tui.py smoke \
-  --profile library-store-format-contracts
-python3 local_testing/akashic_tui.py smoke \
-  --profile library-vfs-store-contracts
-python3 local_testing/akashic_tui.py smoke \
-  --profile library-query-index-contracts
-python3 local_testing/akashic_tui.py smoke \
-  --profile library-projection-owner-contracts
-python3 local_testing/akashic_tui.py smoke \
-  --profile library-applet-functional-contracts
+  --profile library-applet-functional-contracts \
+  --max-steps 55000000000 --timeout 1200
 ```
 
-The applet profile now executes 162 assertions through the real controller
-implementation, closing the L1 controller-edge prerequisite. It does not claim
-that every UI callback wrapper is separately invoked. The landing also runs
-the existing Library lifecycle, maintenance, capacity, cold-reopen, efficiency,
-and complete Gate 4 drivers, plus packaging, both refactor ratchets, and the
-normal host practical gate. Repository is the sole `/library/*` authority;
-query, service, projection, controller, view, and lifecycle are separate
-Library-owned responsibilities. Every cross-file private reach retained by the
-fixed backend is marked for deletion with that backend in L12. No old-path
-facade, version/migration stack, raised capacity, or ext4 dependency is added.
-See `docs/refactor/l8-library-rehoming-and-decomposition.md`.
+The functional applet fixture exercises the real shell/controller lifecycle,
+including reopening an existing corpus and visibly blocking corrupt and future
+authority without writes. Renderer-free profiles are a testability boundary,
+not a standalone Library product. The current L12 wrapper matrix is documented
+under “Library L12 qualification” below. None of it requires ext4.
 
 ## Build And Smoke Test
 
@@ -247,218 +242,105 @@ geometry, independent bounded sets and writers, sticky all-or-nothing capacity
 failure, decimal cell extrema, exact schema bytes, UTF-8/type/length rejection,
 and the distinct 110-byte semantic RREF and 516-byte VFS-locator text bounds.
 
-`library-model-codecs-contracts` qualifies the foundational caller-owned Library
-model and its catalog, collection, and immutable content-revision records.
-`library-store-format-contracts` qualifies the foundational VFS-free arena,
-complete-bank, and head formats: fixed geometry, exact wire CRC/SHA3 vectors,
-checksum-before-future dispatch, hostile aliases and nonmutation, duplicated
-cross-seals, and the absolute-offset ordered content-frame chain. Neither
-profile selects paths, performs VFS I/O, publishes resources, or imports an
-applet or sibling domain.
+### Library L12 qualification
 
-`library-vfs-store-contracts` qualifies the foundational VFS-owner slice. It
-proves the private four-file topology and sole-head commit point, exact
-selected-bank/arena/content validation before fact publication, committed-tail
-and inactive-bank isolation, absent first-use full readback, same-arena
-idempotency, different-arena conflict, post-bank/pre-head orphan refusal,
-receipt-to-initial-content consistency, future/corrupt ordering, and exact
-cleanup plus successful retry after injected I/O failure. Public content and
-catalog mutation remain outside this profile.
-
-`library-managed-document-contracts` qualifies Gate 4's first implementation
-milestone through the public owner API: managed create with a caller operation
-key and expected generation, owner RID allocation, content-first/inactive-bank/
-sole-head publication, generation-pinned query, exact read, idempotent retry,
-mutation-boundary faults, uncertain-head reconciliation, and output isolation.
-`library-managed-capacity-contracts` adds valid fully loaded catalog-full,
-content-full, and owner-RID-collision snapshots and proves each refusal occurs
-before mutation. Run the separate true cold-relaunch acceptance with:
+The L12 gates target the current implementation directly. The pure/value/key
+layer is:
 
 ```bash
+python3 local_testing/test_library_model_l12.py
+python3 local_testing/test_library_metadata_l12.py
+python3 local_testing/test_library_document_values_l12.py
+python3 local_testing/test_library_index_keys.py
+```
+
+These wrappers cover canonical entries and transitions, streamed metadata
+facts, value preparation, and every ordered key family. They contain no
+Library VFS path or UI.
+
+The persistence, repository, query, and semantic-service layer is:
+
+```bash
+python3 local_testing/test_library_persistence_l12.py
+python3 local_testing/test_library_repository_l12.py
+python3 local_testing/test_library_repository_paths_l12.py
+python3 local_testing/test_library_query_l12.py
+python3 local_testing/test_library_service_l12.py
+python3 local_testing/test_library_service_scale_l12.py
+python3 local_testing/test_library_collection_l12.py
+python3 local_testing/test_library_restore_l12.py
+```
+
+This matrix exercises current checked records/application roots, growing
+ordered indexes, chunked content and metadata, exact identity/operation
+directories, semantic keyset paging, streamed body verification, exact
+mutations and retries, retained history, captures, tombstones, and collection
+membership beyond the former fixed catalog shape. The scale fixture is
+disposable synthetic setup around the unchanged public collection/service
+surface; ordinary semantic and index parity remain covered by the focused
+gates.
+
+Maintenance and cold authority are:
+
+```bash
+python3 local_testing/test_library_compaction_l12.py
+python3 local_testing/test_library_maintenance_l12.py
 python3 local_testing/library_managed_two_boot.py --timeout 180
 ```
 
-That driver starts two spawn-isolated Python processes with one fresh emulator
-session each; only serialized MP64FS bytes and the first boot's printed RID
-cross the boundary. These profiles establish milestone 1, not the overall Gate
-4 exit.
+Compaction is a budgeted semantic rebuild into the other physical bank, with
+explicit finalize/publish/mirror/cleanup and recovery states. Maintenance
+inspection and raw export seal all eight current physical roles; repair is
+limited to a fully recognized root mirror. The two-boot driver crosses a real
+spawn boundary with only serialized MP64FS bytes and the printed RID, then
+reopens query/read/content/receipt authority and proves an exact stale-
+generation operation replay does not duplicate the document.
 
-`library-managed-lifecycle-contracts` qualifies Gate 4's second ordered
-implementation milestone for managed resources: five exact replacements, the
-four-revision logical window and explicit `GONE`, stale refusal, metadata,
-including a typed lineage locator, archive/unarchive, archived exact reads,
-active-query hide/reappearance, history list/read/compare and diagnostic-status
-readback, restore-as-new, public receipt survival, destructive tombstone, and
-terminal same-key non-reuse. `library-capture-collection-contracts` qualifies
-exact VFS capture provenance and copied bytes, negative managed-replacement
-refusal, same-key retry/mismatch, distinct-key identical imports, operation-key
-versus RID collision refusal, RID-only collection create/retry/read/replace,
-stale collection refusal, collection-removal versus deletion, archive
-preservation, and tombstone behavior without rewriting membership.
-
-Run the milestone-two cold acceptance with:
+The Library projection and applet gates remain linked production closures:
 
 ```bash
-python3 local_testing/library_lifecycle_two_boot.py --timeout 600
+python3 local_testing/akashic_tui.py smoke \
+  --profile library-projection-owner-contracts \
+  --max-steps 70000000000 --timeout 1200
+python3 local_testing/akashic_tui.py smoke \
+  --profile library-applet-functional-contracts \
+  --max-steps 55000000000 --timeout 1200
 ```
 
-The first spawn-isolated guest creates a managed document, advances it through
-five replacements and archive, imports a capture, and creates a two-member
-collection. Only the serialized MP64FS bytes and the three printed RIDs cross
-to the second process. Its fresh guest verifies generation, archived current
-bytes, retained revisions and `GONE`, both receipts, exact capture
-origin/content, and collection membership. These milestone-two profiles and
-driver do not themselves exercise the separately qualified disposable index,
-projection lifecycle, repair/export, complete damage matrix, or overall Gate 4
-exit.
+The projection profile covers service-backed describe/snapshot/replace,
+qualified exact reads, capture read-only behavior, lease lifecycle, quiescence,
+and the eight-owner/64-lease activation bounds. The applet profile drives the
+real shell, UIDL, controller, and service through create/retry, search,
+preview, rename, lifecycle, history, collection filtering, bidirectional
+keyset paging, reload, existing-corpus activation, and corrupt/future
+nonwritable presentation.
 
-`library-query-index-contracts` qualifies Gate 4's third ordered milestone. It
-proves bounded exact UTF-8 title/body/tag search, empty-term browse,
-active/archived, kind, media, and exact collection-RID filters, deterministic
-raw-slot continuation, collection enumeration, current-body replacement,
-tombstone exclusion, stale generation refusal, over-capacity output nonmutation,
-and stale-conflict output clearing. It also destroys and damages the
-activation-local index, then proves byte-identical
-authoritative result pages after rebuild while head, bank, arena, and generation
-facts remain unchanged.
-
-Run the milestone-three cold acceptance with:
+Run the remaining persistence contracts, then the host-side storage scale and
+packaging ratchets, with:
 
 ```bash
-python3 local_testing/library_query_two_boot.py --timeout 600
+python3 local_testing/test_persistence_storage.py
+python3 local_testing/test_persistence_atomic_root.py
+python3 local_testing/test_persistence_btree.py
+python3 local_testing/test_persistence_blob.py
+python3 local_testing/test_persistence_reclaim.py
+python3 local_testing/test_persistence_compaction.py
+python3 -m pytest -q \
+  local_testing/test_persistence_boundaries.py \
+  local_testing/test_persistence_scale_model.py \
+  local_testing/test_vfs_mp64fs.py \
+  local_testing/test_akashic_tui_packaging.py \
+  local_testing/test_refactor_inventory.py \
+  local_testing/test_refactor_functional_baseline.py
+python3 local_testing/refactor_inventory.py --check
+python3 local_testing/refactor_functional_baseline.py --check
 ```
 
-The first guest creates three catalog-ordered resources whose common term is
-found once in a title, once in a current body, and once as an exact tag, plus a
-collection spanning active and archived entries. Only serialized MP64FS bytes
-and printed stable RIDs cross to a fresh spawned process. The cold guest rebuilds
-the disposable index from authoritative records and proves the same ordered
-2+1 corpus pages, field/lifecycle/kind/media/collection filters, and collection
-summary. That milestone-three profile does not by itself claim projection
-lifecycle, repair/export, the complete damage matrix, an applet/UI, or overall
-Gate 4 exit.
-
-The milestones 1–3 efficiency rework extends the query and capacity contracts
-with warm-authority, direct-frame, index-loss/damage, full-head-change,
-distinct-store replacement, 32×4 KiB, 64 KiB, and exact-full 128-identity
-evidence. Run the apples-to-apples MP64FS profiler with:
-
-```bash
-MEGAPAD_ROOT=/absolute/path/to/megapad \
-  python3 local_testing/library_query_efficiency.py --timeout 600
-```
-
-For each empty, one-64-KiB, and 32×4-KiB corpus, setup and profiling run in
-separate spawn-isolated processes with only serialized disk bytes crossing the
-boundary. `PERF-CYCLES` is the exact acceptance metric; host event timing is an
-approximate 250,000-step sampled wrapper, and whole-phase timing includes boot
-and compilation plus the small measurement handshakes. The driver enforces the
-handoff's fixed 5× warm-path and 10% cold-load cycle gates at 32×4 KiB. Tag
-hit/miss coverage lives in
-`library-managed-capacity-contracts`, whose synthetic corpus can set exact
-catalog tags without doubling the public-mutation setup time.
-
-The printed 100 MHz and 50 MHz values are clock-rate projections, not measured
-FPGA latency. The emulator currently reports zero modeled stalls and does not
-model shared-BRAM arbitration, 6–10-cycle external-memory access, or SPI-SD
-latency; board synthesis and measurement remain required.
-
-### Gate 4 milestone 4: projection lifecycle
-
-`library-projection-owner-contracts` qualifies Gate 4's fourth ordered
-milestone. It links the complete production Library/projection closure in six
-top-level chunks; the contract fixture remains an ordinary separately injected
-Forth file. Run the focused contract with:
-
-```bash
-MEGAPAD_ROOT=/absolute/path/to/megapad \
-  python3 local_testing/akashic_tui.py smoke \
-    --profile library-projection-owner-contracts \
-    --max-steps 15000000000 --timeout 600
-```
-
-The 723-assertion matrix covers full-root and reachable-span alias rejection,
-always-through-root validation, same-RID owner sharing, distinct lease tokens,
-failed-`LBIND` rollback, copied/stale-token refusal, retryable release,
-dispatch-`BUSY` quiescence, idempotent repeat release, active identity,
-immutable exact archived reads, tombstone/pruned terminal behavior, refusal of
-ambient-VFS fallback, capture read-only behavior, the eight-owner and 64-lease
-bounds, ninth-owner and 65th-lease refusal, slot reuse without retargeting, and
-root teardown.
-
-Run the two-process cold acceptance and the bound-scale profiler with:
-
-```bash
-MEGAPAD_ROOT=/absolute/path/to/megapad \
-  python3 local_testing/library_projection_two_boot.py --timeout 600
-MEGAPAD_ROOT=/absolute/path/to/megapad \
-  python3 local_testing/library_projection_efficiency.py --timeout 600
-```
-
-The cold driver verifies and reuses the exact linked chunk manifest in two
-fresh emulator processes. Only serialized disk bytes plus the printed RID,
-domain revision, and digest cross the process boundary; no root, registry,
-component, binding, or token state survives. The profiler covers a
-representative 128-byte resource, one 64-KiB byte-bound resource, all eight
-live owners plus a ninth-owner refusal, all 64 leases plus the 65th refusal,
-and successful plus repeated-stale `resource.replace`. It enforces bounded
-unchanged-call cost, direct exact-frame reads without arena fallback or index
-reconstruction on unchanged calls, the deliberate complete publication
-readback on successful replace, and zero modeled stalls. Final measurements
-and the clock-model caveat are in
-[`evidence/library-projection-owner-20260720.md`](evidence/library-projection-owner-20260720.md).
-
-These results qualify milestone four. Milestone five and the complete Gate 4
-exit are qualified separately below; projection tests do not stand in for that
-maintenance and damage evidence.
-
-### Gate 4 milestone 5 and complete renderer-free exit
-
-`library-maintenance-contracts` qualifies the caller-owned inspection report,
-sealed optimistic evidence token, recognized head-transaction repair, and
-bounded opaque raw export. Run it with:
-
-```bash
-MEGAPAD_ROOT=/absolute/path/to/megapad \
-  python3 local_testing/akashic_tui.py smoke \
-    --profile library-maintenance-contracts \
-    --max-steps 15000000000 --timeout 600
-```
-
-The 221-assertion linked profile covers complete healthy V1 semantics; size,
-short-buffer, and exact seven-object export; byte/SHA identity; report/output
-alias rejection; read, close, and durability failure cleanup; stale evidence;
-recognized replacement residue repair and idempotent retry; future and corrupt
-heads; and a preserved orphan content suffix. A successful but silently
-changed second read is rejected as `CONFLICT` and the entire negotiated output
-is zeroed. Future, corrupt, ambiguous, and orphan evidence remains export-only;
-repair never guesses or resets it.
-
-Run the literal Gate 4 exit and maintenance cost profiler with:
-
-```bash
-MEGAPAD_ROOT=/absolute/path/to/megapad \
-  python3 local_testing/library_gate4_exit_two_boot.py --timeout 600
-MEGAPAD_ROOT=/absolute/path/to/megapad \
-  python3 local_testing/library_maintenance_efficiency.py --timeout 600
-```
-
-The exit driver uses fresh spawned emulator processes with only serialized
-MP64FS bytes and printed stable evidence crossing each process boundary. Its
-clean relaunch proves an archived managed document with six immutable content
-revisions, an active immutable capture, and a distinct tombstoned RID. It then
-clones that verified disk and proves fail-closed, byte-preserving maintenance
-behavior for a damaged head, damaged selected bank, damaged committed content
-frame, and checksum-valid future head. Both the dependency closure and each
-generated proof leaf use the linked loader path.
-
-The complete command/result ledger, fixed memory and byte bounds, emulator
-cycles, and target-clock interpretation are in
-[`evidence/library-gate4-close-20260720.md`](evidence/library-gate4-close-20260720.md).
-Together with the preceding focused/capacity profiles and the managed,
-lifecycle, query, and projection cold drivers, this satisfies the literal
-renderer-free Gate 4 exit. It does not claim the complete Gate 5 applet or any
-Desktop, Pad, Explorer, Streams, Agent, or Practice integration.
+The scale model distinguishes corpus size from bounded RAM work and checks
+tree height, point/range work, streamed content, page reclamation, and
+compaction budgets. Emulator cycle counts remain model measurements rather
+than FPGA or storage-device latency. No current Library qualification requires
+ext4.
 
 The Streams qualification path is intentionally split by boundary:
 

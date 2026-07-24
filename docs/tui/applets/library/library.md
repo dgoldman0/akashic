@@ -1,70 +1,53 @@
 # Library applet
 
-Status: an intentionally bounded user-experience probe is implemented over the
-applet-owned renderer-free Library service. Gate 4's projection and maintenance
-contracts are independently implemented and qualified; this probe does not
-silently turn them into UI or integration behavior.
+Library is a single-instance Desk lens over the applet-owned semantic service.
+It owns activation-local view and working state, not a second catalog or
+storage implementation. The controller never discovers `/library/*` paths or
+uses a selected row as ambient mutation authority.
 
-The applet is a human lens over the Library domain described in
-[`domain.md`](domain.md). It is a single-instance executable lens, owns only
-activation-local view state, and
-calls the public Library owner API. It does not infer or open `/library` paths,
-parse the private store, retain a second authoritative catalog, or import
-sibling applet/domain internals.
+## Implemented lens
 
-## Implemented probe
-
-The default Active view presents one bounded corpus page and one local row
+The default Active view presents one bounded semantic page and a local
 selection. The user can:
 
 - reload authoritative state and page forward or backward;
-- browse Active, Archived, or All records;
-- run the current exact, case-sensitive Library search or clear it;
-- list collections, select one, and apply its exact RID as a corpus filter;
-- create a managed text document and rename the selected record's title;
-- archive an active record or unarchive an archived record; and
-- inspect the selected managed document's retained content-revision history,
-  then return to the preceding corpus or collection view.
+- browse Active, Archived, or All documents;
+- run exact, case-sensitive title/body/tag search or clear it;
+- list collections and filter the corpus by an exact collection RID;
+- create a managed text document and rename its title;
+- archive or unarchive it; and
+- inspect its retained content-revision history.
 
-The body, selection, search term, lifecycle filter, collection filter, paging
-cursor, and history position are local lens state. Mutation calls copy the
-selected summary's stable Library RID and exact domain revision into the
-immediate public owner request. Selection itself is never exported as ambient
-mutation authority.
+Selection, search text, filters, keyset continuation, preview offset, and
+history position are lens state. A mutation copies the selected summary's
+stable RID and exact domain revision into a service request. Pages carry
+semantic creation/revision keys rather than persistence cursors, so unrelated
+mutations do not invalidate navigation.
 
-This slice intentionally does not make the applet a text editor. Initial
-managed content is collected through the applet's bounded prompt flow, while
-deep editing through Pad waits for typed Gate 6 interoperation over the
-qualified projection owner. History is retained-content inspection only: it
-does not restore, compare, or mutate a historical revision.
+Preview is deliberately bounded: the controller reads a prefix into its
+activation working set while retaining the complete content size. The service
+can deliver larger content by bounded range or stream; this applet is not a
+deep editor.
 
-## Creation and retry
+## Creation, reopen, and blocked state
 
-A create first becomes a protected prepared request with its generated
-operation key before first-use provisioning begins. Before the request reaches
-the mutation API, the applet authoritatively reloads the owner, provisions only
-after a fresh `ABSENT` result, and seals the resulting catalog generation. Once
-dispatched, `Retry Pending Create` resubmits that same operation key and
-byte-identical request, allowing the owner's idempotency contract to return the
-original document instead of manufacturing a duplicate. It does not rebuild a
-dispatched request from current prompts or treat matching content as identity.
-Starting a distinct create uses a new operation key.
+A create becomes a complete prepared request with its generated operation key
+before provisioning or dispatch. `Retry Pending Create` resubmits that exact
+request. It neither rebuilds a request from changed prompts nor treats equal
+content as equal identity.
 
-The applet reports conflicts, capacity limits, invalid requests, unavailable
-history, and blocked/recovery states rather than converting them into an empty
-view or optimistic success. Reload is an explicit authoritative refresh; it
-does not retry a pending mutation implicitly.
+Initialization opens the existing repository before considering first-use
+provisioning. A later applet activation reconstructs its first page, selection,
+exact target revision, and preview from durable Library authority. Corrupt or
+checksummed-future authority remains visibly blocked and nonwritable; it is not
+presented as an empty new corpus. `UNCERTAIN` is an operation/cleanup result or
+in-memory compaction state, not a durable cold-open mode. Reload is an explicit
+authoritative refresh and never implicitly retries a pending mutation.
 
-## Development arena identity
-
-The executable probe provisions and reopens one corpus with a fixed,
-source-defined development arena ID. Keeping that value stable makes repeated
-boots of this development applet address the same already-provisioned corpus.
-It is not a user ID, account ID, configurable library selector,
-synchronization identity, or durable migration scheme. Changing it while old
-Library storage is present is expected to conflict rather than adopt or
-rewrite that corpus. A production identity/provisioning policy must be designed
-separately.
+The source-defined bootstrap ID makes development activations address the same
+prototype corpus. It is not a user, account, synchronization, or migration
+identity. The current prototype has one storage layout and no compatibility or
+legacy reader.
 
 ## Commands
 
@@ -85,17 +68,18 @@ separately.
 Active/Archived/All, Collections, Archive/Unarchive, and About are also
 available from the menu bar.
 
-## Deliberately deferred
+## Deferred UI and integration
 
-The probe does not implement Pad/projection integration, capture import, VFS
-import, export/raw-export UI, provenance/details surfaces, maintenance/repair
-UI, revision compare or restore-as-new, destructive tombstones, Desk routing,
-Explorer reveal, Streams collection, capabilities, or Practice bindings. It
-also does not promise semantic ranking,
-normalization, unbounded results, multi-library selection, or multiple
-concurrent applet instances.
+The service already owns capture import, tombstones, retained restore/compare,
+inspection, mirror repair, coherent raw export, and bounded compaction. The
+current lens does not expose those operations. Pad/projection routing, Explorer
+reveal, Streams collection, Practice bindings, multi-library selection, and
+multiple concurrent applet instances also remain separate work.
 
-Those omissions are active boundaries. The purpose of this early applet is to
-discover whether the applet service shapes support a coherent user workflow;
-any pressure to bypass the owner or duplicate durable state is evidence for a
-backend contract change, not permission for a UI-only workaround.
+Search remains exact and case-sensitive; there is no normalization, semantic
+ranking, OCR, embedding search, or unbounded result materialization. Pressure
+to bypass the service or duplicate durable state is a backend-contract issue,
+not permission for a UI-only workaround.
+
+See [`domain.md`](domain.md) for the ownership, storage, scale, and failure
+boundaries.

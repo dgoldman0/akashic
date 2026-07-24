@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded analytical reference model for the L11 persistence mechanics.
+"""Bounded analytical reference model for the live L12 persistence mechanics.
 
 This module deliberately models counts and page geometry, not a synthetic
 corpus.  A million documents and tens of millions of dependent records remain
@@ -7,12 +7,11 @@ integers throughout the model.  The only sampled values are explicitly capped,
 fixed-seed ranks used to exercise deep positions.
 
 The page arithmetic mirrors the neutral L10 store contract: a 4096-byte page
-contains a 64-byte checked-record envelope and a 4032-byte opaque payload.  L11
-owns the B+tree node layout inside that payload.  None of the types below has
-Library vocabulary in its storage mechanics.  The named seven-index profile is
-an explicit L12 target projection used to size the neutral L11 mechanisms; it
-is not a claim that L11's create-only five-index adapter already implements the
-complete Library repository.
+contains a 64-byte checked-record envelope and a 4032-byte opaque payload.  The
+neutral B+tree owns its node layout inside that payload.  The Library profile
+names the exact fifteen applet-owned roots in the current adapter and keeps
+their large-host cardinalities scalar.  No target-sized collection is
+materialized.
 """
 
 from __future__ import annotations
@@ -32,7 +31,8 @@ ATOMIC_ROOT_RECORD_BYTES = 160
 NODE_HEADER_BYTES = 64
 CELL_BYTES = 8
 PAGE_ID_BYTES = CELL_BYTES
-MAX_BTREE_HEIGHT = 9
+MAX_SIGNED_CELL = (1 << 63) - 1
+MAX_BTREE_HEIGHT = 12
 
 BTREE_KEY_MAX_BYTES = 256
 BTREE_VALUE_MAX_BYTES = 64
@@ -42,19 +42,56 @@ LEAF_CAPACITY = (PAGE_PAYLOAD_BYTES - NODE_HEADER_BYTES) // LEAF_ENTRY_BYTES
 BRANCH_CAPACITY = (PAGE_PAYLOAD_BYTES - NODE_HEADER_BYTES) // BRANCH_ENTRY_BYTES
 
 BLOB_CHUNK_BYTES = 32 * 1024
-BLOB_WORKSPACE_BYTES = 46_936
-LIBRARY_INDEX_WORKSPACE_BYTES = 84_624
+BLOB_WORKSPACE_BYTES = 46_960
+LIBRARY_INDEX_WORKSPACE_BYTES = 119_840
+LIBRARY_INDEX_TREE_COUNT = 15
 MAX_ANALYTIC_SAMPLES = 256
 MAX_RECLAIM_BATCH = 32
 MAX_RETIRED_PAGES_PER_TRANSACTION = 64
 MAX_ALLOCATED_PAGES_PER_TRANSACTION = 128
 MAX_DISCARDED_PAGES_PER_TRANSACTION = 64
 RECLAIM_MAINTENANCE_MAX_PAGE_WRITES_PER_STEP = 1
+RECLAIM_MAINTENANCE_MAX_RETIREMENTS_PER_STEP = 2
+PBTREE_MUTATION_PAGE_MAX = 2 * MAX_BTREE_HEIGHT + 1
+APPLICATION_ROOT_PAGE_ALLOCATIONS = 1
+RECLAIM_FINALIZER_METADATA_PAGE_MAX = (
+    (MAX_RETIRED_PAGES_PER_TRANSACTION + MAX_RECLAIM_BATCH - 1)
+    // MAX_RECLAIM_BATCH
+    + (MAX_DISCARDED_PAGES_PER_TRANSACTION + MAX_RECLAIM_BATCH - 1)
+    // MAX_RECLAIM_BATCH
+)
+LIBRARY_HIGH_WATER_MUTATIONS_BEFORE_ROLLOVER = (
+    MAX_ALLOCATED_PAGES_PER_TRANSACTION - APPLICATION_ROOT_PAGE_ALLOCATIONS
+) // PBTREE_MUTATION_PAGE_MAX
 
 LIBRARY_DOCUMENTS = 1_000_000
+LIBRARY_COLLECTIONS = 100_000
 LIBRARY_REVISIONS = 10_000_000
-LIBRARY_EDGES = 10_000_000
-LIBRARY_INDEX_SLICE_MAX = 32
+LIBRARY_MEMBERSHIPS = 10_000_000
+LIBRARY_REPRESENTATIVE_TAGS_PER_DOCUMENT = 16
+LIBRARY_CURRENT_TAG_POSTINGS = (
+    LIBRARY_DOCUMENTS * LIBRARY_REPRESENTATIVE_TAGS_PER_DOCUMENT
+)
+LIBRARY_QUERY_PAGE_MAX = 32
+LIBRARY_TEXT_REPRESENTATIVE_BODY_BYTES = 4 * 1024
+LIBRARY_TEXT_REPRESENTATIVE_TITLE_BYTES = 128
+
+
+def short_text_posting_position_ceiling(representative_bytes: int) -> int:
+    """Count 1/2/3-byte window positions before any per-document deduplication."""
+
+    if representative_bytes < 0:
+        raise ValueError("representative_bytes must be non-negative")
+    return sum(max(0, representative_bytes - width + 1) for width in (1, 2, 3))
+
+
+LIBRARY_CURRENT_TEXT_POSTING_POSITIONS_PER_DOCUMENT = (
+    short_text_posting_position_ceiling(LIBRARY_TEXT_REPRESENTATIVE_BODY_BYTES)
+    + short_text_posting_position_ceiling(LIBRARY_TEXT_REPRESENTATIVE_TITLE_BYTES)
+)
+LIBRARY_CURRENT_TEXT_POSTING_POSITION_CEILING = (
+    LIBRARY_DOCUMENTS * LIBRARY_CURRENT_TEXT_POSTING_POSITIONS_PER_DOCUMENT
+)
 
 
 def _ceil_div(numerator: int, denominator: int) -> int:
@@ -63,10 +100,6 @@ def _ceil_div(numerator: int, denominator: int) -> int:
     if denominator <= 0:
         raise ValueError("denominator must be positive")
     return (numerator + denominator - 1) // denominator
-
-
-def _align_up(value: int, alignment: int) -> int:
-    return _ceil_div(value, alignment) * alignment
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,11 +160,16 @@ class BTreeGeometry:
         return self.branch_fanout // 2
 
     def capacity_for_height(self, height: int) -> int:
-        """Return the theoretical fully packed capacity for one height."""
+        """Return the signed-cell-saturated fully packed capacity."""
 
         if height < 1:
             raise ValueError("height must include at least the root/leaf page")
-        return self.leaf_capacity * self.branch_fanout ** (height - 1)
+        capacity = self.leaf_capacity
+        for _ in range(1, height):
+            if capacity > MAX_SIGNED_CELL // self.branch_fanout:
+                return MAX_SIGNED_CELL
+            capacity *= self.branch_fanout
+        return capacity
 
     def balanced_capacity_for_height(self, height: int) -> int:
         """Return the cardinality guaranteed to fit without another root split.
@@ -146,13 +184,19 @@ class BTreeGeometry:
 
         if height < 1:
             raise ValueError("height must include at least the root/leaf page")
-        next_root_split = self.leaf_capacity + 1
+        capacity = self.leaf_capacity
         for _ in range(1, height):
-            next_root_split = (
-                next_root_split * self.minimum_branch_fanout
-                + self.minimum_leaf_occupancy
+            if (
+                capacity
+                > (MAX_SIGNED_CELL - 2 * self.minimum_leaf_occupancy)
+                // self.minimum_branch_fanout
+            ):
+                return MAX_SIGNED_CELL
+            capacity = (
+                capacity * self.minimum_branch_fanout
+                + 2 * self.minimum_leaf_occupancy
             )
-        return next_root_split - 1
+        return capacity
 
     def minimum_cardinality_for_height(self, height: int) -> int:
         """Return the first monotonic-build cardinality requiring this height."""
@@ -283,8 +327,11 @@ class LibraryScaleProfile:
     """Scalar-only description of the large Library proving workload."""
 
     documents: int
+    collections: int
     revisions: int
-    edges: int
+    memberships: int
+    tag_postings: int
+    body_postings: int
     indexes: tuple[IndexProfile, ...]
     materialized_target_items: int = 0
 
@@ -295,54 +342,113 @@ class LibraryScaleProfile:
         raise KeyError(name)
 
 
-# These are the exact Library-owned key/value widths layered over the neutral
-# fixed-slot tree.  Scope lives in the tree/root descriptors rather than being
-# repeated in every key.  Directory/history values are 24-byte PERSIST-REFs;
-# ordered indexes carry the stable 32-byte RID; an edge needs no value because
-# both endpoint identities are present in its key.
-DOCUMENT_BY_RID_GEOMETRY = BTreeGeometry(key_bytes=32, inline_value_bytes=24)
-DOCUMENT_BY_CREATION_GEOMETRY = BTreeGeometry(key_bytes=40, inline_value_bytes=32)
-REVISION_BY_DOCUMENT_GEOMETRY = BTreeGeometry(key_bytes=40, inline_value_bytes=24)
-EDGE_BY_SUBJECT_GEOMETRY = BTreeGeometry(key_bytes=64, inline_value_bytes=0)
+# Exact Library-owned key/value widths layered over the neutral fixed-slot
+# tree.  Scope lives in each tree descriptor rather than every key.  Values are
+# either an inline RID/flag or a 24-byte PERSIST-REF.
+SHARED_DIRECTORY_GEOMETRY = BTreeGeometry(key_bytes=33, inline_value_bytes=0)
+RID_DIRECTORY_GEOMETRY = BTreeGeometry(key_bytes=32, inline_value_bytes=24)
+OPERATION_RECEIPTS_GEOMETRY = BTreeGeometry(key_bytes=32, inline_value_bytes=40)
+ORDER_GEOMETRY = BTreeGeometry(key_bytes=40, inline_value_bytes=32)
+STATE_ORDER_GEOMETRY = BTreeGeometry(key_bytes=43, inline_value_bytes=32)
 # The applet encodes 129 order symbols (128 title bytes plus an explicit
 # terminator) as one MSB-first 9-bit stream, then appends the 32-byte RID.
 # ceil(129 * 9 / 8) + 32 = 178 bytes.  This keeps embedded U+0000 and prefix
 # titles distinct without narrowing the existing Library text contract.
-TITLE_BY_BYTES_GEOMETRY = BTreeGeometry(key_bytes=178, inline_value_bytes=32)
-LIFECYCLE_ORDER_GEOMETRY = BTreeGeometry(key_bytes=41, inline_value_bytes=32)
+TITLE_ORDER_GEOMETRY = BTreeGeometry(key_bytes=178, inline_value_bytes=32)
+TAG_POSTINGS_GEOMETRY = BTreeGeometry(key_bytes=69, inline_value_bytes=32)
+BODY_POSTINGS_GEOMETRY = BTreeGeometry(key_bytes=45, inline_value_bytes=1)
+COLLECTION_DIRECTORY_GEOMETRY = BTreeGeometry(
+    key_bytes=32,
+    inline_value_bytes=24,
+)
+COLLECTION_ORDER_GEOMETRY = BTreeGeometry(key_bytes=40, inline_value_bytes=32)
+COLLECTION_TITLE_GEOMETRY = BTreeGeometry(key_bytes=106, inline_value_bytes=32)
+MEMBERSHIP_GEOMETRY = BTreeGeometry(key_bytes=72, inline_value_bytes=0)
+HISTORY_GEOMETRY = BTreeGeometry(key_bytes=40, inline_value_bytes=24)
 
 
 LARGE_LIBRARY_PROFILE = LibraryScaleProfile(
     documents=LIBRARY_DOCUMENTS,
+    collections=LIBRARY_COLLECTIONS,
     revisions=LIBRARY_REVISIONS,
-    edges=LIBRARY_EDGES,
+    memberships=LIBRARY_MEMBERSHIPS,
+    tag_postings=LIBRARY_CURRENT_TAG_POSTINGS,
+    body_postings=LIBRARY_CURRENT_TEXT_POSTING_POSITION_CEILING,
     indexes=(
         IndexProfile(
-            "record-directory",
-            LIBRARY_DOCUMENTS + LIBRARY_REVISIONS + LIBRARY_EDGES,
-            DOCUMENT_BY_RID_GEOMETRY,
+            "shared-directory",
+            2 * (LIBRARY_DOCUMENTS + LIBRARY_COLLECTIONS),
+            SHARED_DIRECTORY_GEOMETRY,
         ),
-        IndexProfile("document-by-rid", LIBRARY_DOCUMENTS, DOCUMENT_BY_RID_GEOMETRY),
         IndexProfile(
-            "document-by-creation",
+            "rid-directory",
             LIBRARY_DOCUMENTS,
-            DOCUMENT_BY_CREATION_GEOMETRY,
+            RID_DIRECTORY_GEOMETRY,
         ),
         IndexProfile(
-            "revision-by-document",
+            "operation-receipts",
+            LIBRARY_DOCUMENTS + LIBRARY_COLLECTIONS,
+            OPERATION_RECEIPTS_GEOMETRY,
+        ),
+        IndexProfile(
+            "creation-order",
+            LIBRARY_DOCUMENTS,
+            ORDER_GEOMETRY,
+        ),
+        IndexProfile(
+            "recency-order",
+            LIBRARY_DOCUMENTS,
+            ORDER_GEOMETRY,
+        ),
+        IndexProfile(
+            "state-order",
+            LIBRARY_DOCUMENTS,
+            STATE_ORDER_GEOMETRY,
+        ),
+        IndexProfile(
+            "title-order",
+            LIBRARY_DOCUMENTS,
+            TITLE_ORDER_GEOMETRY,
+        ),
+        IndexProfile(
+            "tag-postings",
+            LIBRARY_CURRENT_TAG_POSTINGS,
+            TAG_POSTINGS_GEOMETRY,
+        ),
+        IndexProfile(
+            "body-postings",
+            LIBRARY_CURRENT_TEXT_POSTING_POSITION_CEILING,
+            BODY_POSTINGS_GEOMETRY,
+        ),
+        IndexProfile(
+            "collection-directory",
+            LIBRARY_COLLECTIONS,
+            COLLECTION_DIRECTORY_GEOMETRY,
+        ),
+        IndexProfile(
+            "collection-order",
+            LIBRARY_COLLECTIONS,
+            COLLECTION_ORDER_GEOMETRY,
+        ),
+        IndexProfile(
+            "collection-title",
+            LIBRARY_COLLECTIONS,
+            COLLECTION_TITLE_GEOMETRY,
+        ),
+        IndexProfile(
+            "membership",
+            LIBRARY_MEMBERSHIPS,
+            MEMBERSHIP_GEOMETRY,
+        ),
+        IndexProfile(
+            "history",
             LIBRARY_REVISIONS,
-            REVISION_BY_DOCUMENT_GEOMETRY,
-        ),
-        IndexProfile("edge-by-subject", LIBRARY_EDGES, EDGE_BY_SUBJECT_GEOMETRY),
-        IndexProfile(
-            "title-by-bytes",
-            LIBRARY_DOCUMENTS,
-            TITLE_BY_BYTES_GEOMETRY,
+            HISTORY_GEOMETRY,
         ),
         IndexProfile(
-            "lifecycle-order",
+            "state-recency",
             LIBRARY_DOCUMENTS,
-            LIFECYCLE_ORDER_GEOMETRY,
+            STATE_ORDER_GEOMETRY,
         ),
     ),
 )
@@ -382,6 +488,7 @@ class OperationWorkspace:
     mutation_control_bytes: int = 5 * CELL_BYTES
     retired_page_ids_bytes: int = (2 * MAX_BTREE_HEIGHT + 1) * PAGE_ID_BYTES
     terminal_control_bytes: int = 4 * CELL_BYTES
+    range_control_bytes: int = 6 * CELL_BYTES
     allocation_events_per_operation: int = 0
     corpus_proportional_bytes: int = 0
 
@@ -397,6 +504,7 @@ class OperationWorkspace:
             + self.mutation_control_bytes
             + self.retired_page_ids_bytes
             + self.terminal_control_bytes
+            + self.range_control_bytes
         )
 
 
@@ -457,15 +565,16 @@ def keyset_page_cost(
     *,
     exclusive: bool = True,
 ) -> KeysetCost:
-    """Bound a seek/resume followed by the current public cursor walk.
+    """Bound one cache-preserving B+tree range operation.
 
     ``start_rank`` determines only the remaining result count; the bound does
     not pretend rank identifies a physical leaf in a variably occupied tree.
-    Every public ``NEXT`` currently resets the Btree's one-page cache, so each
-    later row rereads its leaf.  Crossing a leaf boundary reads both the saved
-    ancestor path and the new descent.  ``exclusive`` also allows RESUME's
-    first result to cross a boundary after the stable last key.  The result is
-    independent of how deep the rank lies in the corpus.
+    Rows within a range retain the one-page cache, so advancing inside one leaf
+    adds no page read. Crossing a leaf boundary reads the saved ancestor and
+    the new descent, with one additional pair for each higher-level carry.
+    ``exclusive`` also allows RESUME's first result to cross a boundary after
+    the stable last key. The result is independent of how deep the rank lies
+    in the corpus.
     """
 
     if cardinality < 0:
@@ -492,11 +601,11 @@ def keyset_page_cost(
         comparison_bound = 40 * height - 9
     elif exhaustion_probe and returned < geometry.minimum_leaf_occupancy:
         # The final fewer-than-six rows must share the terminal leaf.  A caller
-        # filling a larger window then makes one terminal NEXT: it rereads that
-        # leaf and ascends the complete path to prove EOF.
+        # filling a larger window then advances once more from the cached leaf
+        # and ascends the complete path to prove EOF.
         leaf_pages = 1
         internal_boundary_reads = max(0, height - 1)
-        page_reads = 2 * height + returned - 1
+        page_reads = 2 * height - 1
         comparison_bound = (
             27 * max(0, height - 1)
             + 31
@@ -519,16 +628,11 @@ def keyset_page_cost(
             for level in range(1, max(1, height - 1))
         ) if height > 2 and leaf_transitions else 0
 
-        # The first seek reads one root-to-leaf path.  Each later public NEXT
-        # rereads the leaf after its per-call cache reset.  Every transition
-        # reads one ancestor/new-descendant pair, plus such a pair for every
-        # higher-level carry in the bounded cursor path.
-        page_reads = (
-            height
-            + returned
-            - 1
-            + 2 * (leaf_transitions + internal_boundary_reads)
-        )
+        # The first seek reads one root-to-leaf path. The range retains the
+        # leaf cache between callbacks. Every transition reads one
+        # ancestor/new-descendant pair, plus such a pair for every higher-level
+        # carry in the bounded cursor path.
+        page_reads = height + 2 * (leaf_transitions + internal_boundary_reads)
 
         # Validation linearly proves canonical order within every fixed-slot
         # node.  The initial seek costs at most 27 comparisons per branch and
@@ -544,7 +648,7 @@ def keyset_page_cost(
             + 26 * internal_boundary_reads
         )
         if exhaustion_probe:
-            page_reads += height
+            page_reads += max(0, height - 1)
             comparison_bound += 10 + 13 * max(0, height - 1)
     return KeysetCost(
         cardinality=cardinality,
@@ -556,6 +660,43 @@ def keyset_page_cost(
         internal_boundary_reads=internal_boundary_reads,
         page_reads=page_reads,
         comparison_bound=comparison_bound,
+    )
+
+
+def reverse_keyset_page_cost(
+    geometry: BTreeGeometry,
+    cardinality: int,
+    start_rank: int,
+    result_count: int,
+    *,
+    exclusive: bool = True,
+) -> KeysetCost:
+    """Return the symmetric bound for a descending seek/range.
+
+    ``start_rank`` is the forward rank of the supplied stable key. An
+    exclusive reverse range can return rows below it; an inclusive range may
+    also return that row. Mirroring the available prefix into a forward suffix
+    is exact for the neutral fixed-slot geometry and cache/path mechanics.
+    """
+
+    if cardinality < 0:
+        raise ValueError("cardinality must be non-negative")
+    if cardinality == 0:
+        if start_rank != 0:
+            raise ValueError("empty indexes accept only rank zero")
+        return keyset_page_cost(
+            geometry, cardinality, 0, result_count, exclusive=exclusive
+        )
+    if start_rank < 0 or start_rank >= cardinality:
+        raise ValueError("start_rank must identify a row in the index")
+    available = start_rank if exclusive else start_rank + 1
+    mirrored_start_rank = cardinality - available
+    return keyset_page_cost(
+        geometry,
+        cardinality,
+        mirrored_start_rank,
+        result_count,
+        exclusive=exclusive,
     )
 
 
@@ -582,24 +723,24 @@ def relationship_range_cost(
 ) -> RelationshipRangeCost:
     """Bound a contiguous edge range through the public sliced Library API.
 
-    Library returns at most ``LIBRARY_INDEX_SLICE_MAX`` rows per call and
-    prepares a fresh cursor for every continuation.  Charge every call the
-    worst-case full-window seek/walk bound, including the final partial call.
-    This remains a scalar calculation while accounting for the repeated seeks
-    that an unbounded single-cursor model would incorrectly omit.
+    Library returns at most ``LIBRARY_QUERY_PAGE_MAX`` rows per call and
+    prepares a fresh range for every continuation. Charge every call the
+    worst-case full-window range bound, including the final partial call. This
+    remains a scalar calculation while accounting for the repeated seeks that
+    an unbounded single-operation model would incorrectly omit.
     """
 
     if degree < 0:
         raise ValueError("degree must be non-negative")
     if first_edge_rank < 0 or first_edge_rank + degree > total_edges:
         raise ValueError("relationship range must be contained in the edge index")
-    slice_calls = _ceil_div(degree, LIBRARY_INDEX_SLICE_MAX)
+    slice_calls = _ceil_div(degree, LIBRARY_QUERY_PAGE_MAX)
     if slice_calls:
         window = keyset_page_cost(
             geometry,
             total_edges,
             first_edge_rank,
-            LIBRARY_INDEX_SLICE_MAX,
+            LIBRARY_QUERY_PAGE_MAX,
             exclusive=False,
         )
     else:
@@ -624,255 +765,102 @@ def relationship_range_cost(
 
 
 @dataclass(frozen=True, slots=True)
-class MutationComponent:
-    name: str
-    page_write_bound: int
+class StagingMutationBudget:
+    """Live-ledger reservation for one more mutation and safe publication."""
 
+    tree_height: int
+    mutation_page_max: int
+    application_root_pages: int
+    maintenance_retirement_pages: int
+    finalizer_metadata_pages: int
+    allocated_page_ledger: int
+    retired_page_ledger: int
+    discarded_page_ledger: int
 
-@dataclass(frozen=True, slots=True)
-class MetadataMutationCost:
-    components: tuple[MutationComponent, ...]
-    cow_index_page_writes: int
-    application_root_page_writes: int
-    reclaim_bucket_page_writes: int
-    representative_reclaim_maintenance_page_writes: int
-    reclaim_maintenance_max_page_writes_per_step: int
-    representative_metadata_page_writes: int
-    structural_metadata_page_write_ceiling: int
-    appended_record_bytes: int
-    appended_record_physical_bytes: int
-    authority_record_bytes: int
-    representative_checked_page_bytes_written: int
-    structural_checked_page_bytes_write_ceiling: int
-    representative_total_bytes_written: int
-    structural_total_bytes_write_ceiling: int
-    peak_workspace_bytes: int
-    allocation_events: int = 0
-    corpus_proportional_allocation_bytes: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class MetadataTransactionCost:
-    """Representative accounting plus the unconditional step-write ceiling."""
-
-    btree_page_allocations: int
-    application_root_allocations: int
-    reclaim_bucket_allocations: int
-    reclaim_bucket_page_writes: int
-    reclaim_maintenance_step_calls: int
-    representative_reclaim_maintenance_bucket_allocations: int
-    representative_reclaim_maintenance_page_writes: int
-    representative_reclaim_maintenance_metadata_retirements: int
-    committed_page_retirements: int
-    current_generation_discards: int
-
-    @property
-    def consumer_issued_pages(self) -> int:
-        """Pages recorded in RECLAIM's consumer-issued ledger."""
-
-        return self.btree_page_allocations + self.application_root_allocations
-
-    @property
-    def representative_total_page_allocations(self) -> int:
-        """Physical allocations in the settled two-pending-bucket scenario."""
-
+    def page_allocation_bound(self, index_mutations: int) -> int:
+        if index_mutations < 0:
+            raise ValueError("index_mutations must be non-negative")
         return (
-            self.consumer_issued_pages
-            + self.reclaim_bucket_allocations
-            + self.representative_reclaim_maintenance_bucket_allocations
+            index_mutations * self.mutation_page_max
+            + self.application_root_pages
         )
 
     @property
-    def representative_total_staged_retirements(self) -> int:
-        """Committed pages plus metadata retired in the settled scenario."""
+    def allocation_reserve(self) -> int:
+        return self.mutation_page_max + self.application_root_pages
 
+    @property
+    def retirement_reserve(self) -> int:
+        # Staging pages are strict high-water claims and cannot drain reusable
+        # buckets. Publication can retire two metadata pages while taking one
+        # maintenance step, one while allocating the application root, and one
+        # per bounded pending/discard metadata allocation during finalization.
         return (
-            self.committed_page_retirements
-            + self.representative_reclaim_maintenance_metadata_retirements
+            self.maintenance_retirement_pages
+            + self.application_root_pages
+            + self.finalizer_metadata_pages
         )
 
     @property
-    def representative_total_page_writes(self) -> int:
-        """Checked-page writes in the settled two-pending-bucket scenario."""
+    def discard_reserve(self) -> int:
+        return 0
 
-        # The application-root allocation is first claimed with a checked
-        # placeholder write so reclaim finalization cannot independently use
-        # the same high-water slot, then rewritten with the serialized root.
+    def room(
+        self,
+        *,
+        allocated: int = 0,
+        retired: int = 0,
+        discarded: int = 0,
+    ) -> bool:
+        if min(allocated, retired, discarded) < 0:
+            raise ValueError("ledger counts must be non-negative")
         return (
-            self.consumer_issued_pages
-            + self.application_root_allocations
-            + self.reclaim_bucket_page_writes
-            + self.representative_reclaim_maintenance_page_writes
+            allocated + self.allocation_reserve
+            <= self.allocated_page_ledger
+            and retired + self.retirement_reserve
+            <= self.retired_page_ledger
+            and discarded + self.discard_reserve
+            <= self.discarded_page_ledger
         )
 
     @property
-    def structural_reclaim_maintenance_page_write_ceiling(self) -> int:
-        """One possible output-bucket write for every bounded step call."""
-
-        return (
-            self.reclaim_maintenance_step_calls
-            * RECLAIM_MAINTENANCE_MAX_PAGE_WRITES_PER_STEP
-        )
+    def fresh_stage_has_room(self) -> bool:
+        return self.room()
 
     @property
-    def structural_total_page_write_ceiling(self) -> int:
-        """Unconditional checked-page ceiling across all maintenance calls."""
-
+    def high_water_mutations_before_rollover(self) -> int:
         return (
-            self.consumer_issued_pages
-            + self.application_root_allocations
-            + self.reclaim_bucket_page_writes
-            + self.structural_reclaim_maintenance_page_write_ceiling
-        )
+            self.allocated_page_ledger - self.application_root_pages
+        ) // self.mutation_page_max
 
 
-def _replace_path_page_writes(index: IndexProfile) -> int:
-    return index.height
-
-
-def _rekey_page_write_bound(index: IndexProfile) -> int:
-    # Deleting the old key may rebalance every non-root level (2h-1 writes),
-    # then inserting the new key may split every level and add a root (2h+1).
-    # They are two operations inside one adapter transaction, so both bounded
-    # COW paths count even though pages superseded by the second are discarded.
-    return 4 * index.height
-
-
-def representative_metadata_mutation(
+def live_staging_mutation_budget(
     profile: LibraryScaleProfile = LARGE_LIBRARY_PROFILE,
-    appended_record_bytes: int = 3072,
-) -> MetadataMutationCost:
-    """Conservative COW write envelope for a metadata/title/status replacement.
+) -> StagingMutationBudget:
+    """Derive the live reservation used before/after each staged mutation.
 
-    This is the explicitly deferred L12 seven-index re-key projection, not a
-    claim about L11's create-only adapter.  It accounts separately for checked
-    page traffic, the aligned segment record, and the atomic root record.  No
-    corpus bank or aggregate edge array is copied.
+    A worst-case B+tree put/delete can claim ``2h + 1`` strict high-water pages.
+    Publication also reserves one consumer-issued application-root page.
+    Retirement room covers the maintenance source/output pair, application
+    root allocation, and bounded pending/discard metadata allocations.
+    The adapter checks these reservations against the transaction's *current*
+    public reclaim ledgers and physically publishes before another mutation
+    when room is exhausted; there is no fixed mutation-count trigger.
     """
 
-    if appended_record_bytes <= 0 or appended_record_bytes > PAGE_PAYLOAD_BYTES:
-        raise ValueError("representative metadata record must fit one page payload")
-    directory = profile.index("record-directory")
-    title = profile.index("title-by-bytes")
-    lifecycle = profile.index("lifecycle-order")
-    components = (
-        MutationComponent("record-directory-replace", _replace_path_page_writes(directory)),
-        MutationComponent("title-rekey", _rekey_page_write_bound(title)),
-        MutationComponent("lifecycle-rekey", _rekey_page_write_bound(lifecycle)),
-    )
-    cow_page_writes = sum(component.page_write_bound for component in components)
-    transaction = representative_metadata_transaction(profile)
-    representative_metadata_page_writes = (
-        transaction.representative_total_page_writes
-    )
-    structural_metadata_page_write_ceiling = (
-        transaction.structural_total_page_write_ceiling
-    )
-    appended_record_physical_bytes = _align_up(
-        appended_record_bytes + CHECKED_RECORD_ENVELOPE_BYTES,
-        SEGMENT_ALIGNMENT_BYTES,
-    )
-    representative_checked_page_bytes_written = (
-        representative_metadata_page_writes * PAGE_BYTES
-    )
-    structural_checked_page_bytes_write_ceiling = (
-        structural_metadata_page_write_ceiling * PAGE_BYTES
-    )
-    return MetadataMutationCost(
-        components=components,
-        cow_index_page_writes=cow_page_writes,
-        application_root_page_writes=2 * transaction.application_root_allocations,
-        reclaim_bucket_page_writes=transaction.reclaim_bucket_page_writes,
-        representative_reclaim_maintenance_page_writes=(
-            transaction.representative_reclaim_maintenance_page_writes
+    tree_height = max(index.height for index in profile.indexes)
+    mutation_page_max = 2 * tree_height + 1
+    return StagingMutationBudget(
+        tree_height=tree_height,
+        mutation_page_max=mutation_page_max,
+        application_root_pages=APPLICATION_ROOT_PAGE_ALLOCATIONS,
+        maintenance_retirement_pages=(
+            RECLAIM_MAINTENANCE_MAX_RETIREMENTS_PER_STEP
         ),
-        reclaim_maintenance_max_page_writes_per_step=(
-            RECLAIM_MAINTENANCE_MAX_PAGE_WRITES_PER_STEP
-        ),
-        representative_metadata_page_writes=(
-            representative_metadata_page_writes
-        ),
-        structural_metadata_page_write_ceiling=(
-            structural_metadata_page_write_ceiling
-        ),
-        appended_record_bytes=appended_record_bytes,
-        appended_record_physical_bytes=appended_record_physical_bytes,
-        authority_record_bytes=ATOMIC_ROOT_RECORD_BYTES,
-        representative_checked_page_bytes_written=(
-            representative_checked_page_bytes_written
-        ),
-        structural_checked_page_bytes_write_ceiling=(
-            structural_checked_page_bytes_write_ceiling
-        ),
-        representative_total_bytes_written=(
-            representative_checked_page_bytes_written
-            + appended_record_physical_bytes
-            + ATOMIC_ROOT_RECORD_BYTES
-        ),
-        structural_total_bytes_write_ceiling=(
-            structural_checked_page_bytes_write_ceiling
-            + appended_record_physical_bytes
-            + ATOMIC_ROOT_RECORD_BYTES
-        ),
-        peak_workspace_bytes=LIBRARY_INDEX_WORKSPACE_BYTES,
-    )
-
-
-def representative_metadata_transaction(
-    profile: LibraryScaleProfile = LARGE_LIBRARY_PROFILE,
-) -> MetadataTransactionCost:
-    """Account issued, retired, and discarded pages across one metadata re-key.
-
-    The directory overwrite retires and replaces one committed path.  Each
-    ordered re-key first performs a potentially balanced delete, then inserts
-    through the current-generation root.  A different insert path can still
-    retire up to ``height - 1`` untouched committed pages; a same-path insert
-    can instead discard up to ``height`` pages written earlier in the proposal.
-    These independent maxima size both ledgers without assuming they coincide.
-    Reclaim bucket pages are internal physical allocations, not entries in the
-    consumer's issued-page ledger.  Finalization prepares and then links each
-    new bucket.  The adapter also makes one bounded maintenance call before
-    every consumer allocation.  In the steady two-bucket envelope those calls
-    rotate two pending buckets and promote their two payload batches, while the
-    remaining calls are write-free because a ready bucket is already present.
-    """
-
-    directory = profile.index("record-directory")
-    title = profile.index("title-by-bytes")
-    lifecycle = profile.index("lifecycle-order")
-    rekeys = (title, lifecycle)
-    btree_allocations = directory.height + sum(4 * index.height for index in rekeys)
-    committed_retirements = (
-        directory.height
-        + sum(3 * index.height - 2 for index in rekeys)
-        + 1  # old application root
-    )
-    current_discards = sum(index.height for index in rekeys)
-    pending_buckets = _ceil_div(committed_retirements, MAX_RECLAIM_BATCH)
-    discard_buckets = _ceil_div(current_discards, MAX_RECLAIM_BATCH)
-    reclaim_buckets = pending_buckets + discard_buckets
-    maintenance_bucket_writes = 2 * pending_buckets
-    # Two old input buckets and their two rotated output buckets become
-    # unreachable.  The preceding 14-page discard bucket and both promoted
-    # ready buckets are also exhausted by the 66 consumer allocations.
-    maintenance_metadata_retirements = 2 * pending_buckets + 3
-    return MetadataTransactionCost(
-        btree_page_allocations=btree_allocations,
-        application_root_allocations=1,
-        reclaim_bucket_allocations=reclaim_buckets,
-        reclaim_bucket_page_writes=2 * reclaim_buckets,
-        reclaim_maintenance_step_calls=btree_allocations + 1,
-        representative_reclaim_maintenance_bucket_allocations=(
-            maintenance_bucket_writes
-        ),
-        representative_reclaim_maintenance_page_writes=(
-            maintenance_bucket_writes
-        ),
-        representative_reclaim_maintenance_metadata_retirements=(
-            maintenance_metadata_retirements
-        ),
-        committed_page_retirements=committed_retirements,
-        current_generation_discards=current_discards,
+        finalizer_metadata_pages=RECLAIM_FINALIZER_METADATA_PAGE_MAX,
+        allocated_page_ledger=MAX_ALLOCATED_PAGES_PER_TRANSACTION,
+        retired_page_ledger=MAX_RETIRED_PAGES_PER_TRANSACTION,
+        discarded_page_ledger=MAX_DISCARDED_PAGES_PER_TRANSACTION,
     )
 
 
@@ -1119,19 +1107,25 @@ __all__ = [
     "BlobRangeCost",
     "CHECKED_ENVELOPE_BYTES",
     "CHECKED_RECORD_ENVELOPE_BYTES",
+    "COLLECTION_DIRECTORY_GEOMETRY",
+    "COLLECTION_ORDER_GEOMETRY",
+    "COLLECTION_TITLE_GEOMETRY",
     "DEFAULT_OPERATION_WORKSPACE",
-    "DOCUMENT_BY_CREATION_GEOMETRY",
-    "DOCUMENT_BY_RID_GEOMETRY",
-    "EDGE_BY_SUBJECT_GEOMETRY",
+    "BODY_POSTINGS_GEOMETRY",
+    "HISTORY_GEOMETRY",
     "IndexProfile",
     "KeysetCost",
     "LARGE_LIBRARY_PROFILE",
+    "LIBRARY_COLLECTIONS",
+    "LIBRARY_CURRENT_TAG_POSTINGS",
     "LIBRARY_DOCUMENTS",
-    "LIBRARY_EDGES",
-    "LIBRARY_INDEX_SLICE_MAX",
+    "LIBRARY_QUERY_PAGE_MAX",
+    "LIBRARY_INDEX_TREE_COUNT",
     "LIBRARY_INDEX_WORKSPACE_BYTES",
+    "LIBRARY_HIGH_WATER_MUTATIONS_BEFORE_ROLLOVER",
+    "LIBRARY_MEMBERSHIPS",
+    "LIBRARY_REPRESENTATIVE_TAGS_PER_DOCUMENT",
     "LIBRARY_REVISIONS",
-    "LIFECYCLE_ORDER_GEOMETRY",
     "LibraryScaleProfile",
     "MAX_ANALYTIC_SAMPLES",
     "MAX_ALLOCATED_PAGES_PER_TRANSACTION",
@@ -1139,17 +1133,24 @@ __all__ = [
     "MAX_DISCARDED_PAGES_PER_TRANSACTION",
     "MAX_RECLAIM_BATCH",
     "MAX_RETIRED_PAGES_PER_TRANSACTION",
+    "MEMBERSHIP_GEOMETRY",
+    "OPERATION_RECEIPTS_GEOMETRY",
+    "ORDER_GEOMETRY",
+    "PBTREE_MUTATION_PAGE_MAX",
     "RECLAIM_MAINTENANCE_MAX_PAGE_WRITES_PER_STEP",
-    "MetadataMutationCost",
-    "MetadataTransactionCost",
-    "MutationComponent",
+    "RECLAIM_MAINTENANCE_MAX_RETIREMENTS_PER_STEP",
+    "RECLAIM_FINALIZER_METADATA_PAGE_MAX",
+    "RID_DIRECTORY_GEOMETRY",
+    "SHARED_DIRECTORY_GEOMETRY",
+    "STATE_ORDER_GEOMETRY",
+    "StagingMutationBudget",
+    "TAG_POSTINGS_GEOMETRY",
     "NODE_HEADER_BYTES",
     "OperationWorkspace",
     "PAGE_BYTES",
     "PAGE_ID_BYTES",
     "PAGE_PAYLOAD_BYTES",
     "PointLookupCost",
-    "REVISION_BY_DOCUMENT_GEOMETRY",
     "RelationshipRangeCost",
     "SEGMENT_ALIGNMENT_BYTES",
     "BRANCH_CAPACITY",
@@ -1159,14 +1160,20 @@ __all__ = [
     "CELL_BYTES",
     "LEAF_CAPACITY",
     "LEAF_ENTRY_BYTES",
-    "TITLE_BY_BYTES_GEOMETRY",
+    "LIBRARY_CURRENT_TEXT_POSTING_POSITION_CEILING",
+    "LIBRARY_CURRENT_TEXT_POSTING_POSITIONS_PER_DOCUMENT",
+    "LIBRARY_TEXT_REPRESENTATIVE_BODY_BYTES",
+    "LIBRARY_TEXT_REPRESENTATIVE_TITLE_BYTES",
+    "MAX_SIGNED_CELL",
+    "TITLE_ORDER_GEOMETRY",
     "TwoRootReclamation",
     "keyset_page_cost",
     "library_large_profile",
+    "live_staging_mutation_budget",
     "point_lookup_cost",
+    "reverse_keyset_page_cost",
     "relationship_range_cost",
-    "representative_metadata_mutation",
-    "representative_metadata_transaction",
     "sample_ranks",
+    "short_text_posting_position_ceiling",
     "workspace_for_operation",
 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast analytical qualification for the L11 persistence scale model."""
+"""Fast analytical qualification for the live L12 persistence scale model."""
 
 from __future__ import annotations
 
@@ -45,10 +45,10 @@ def test_analytical_geometry_is_ratcheted_to_production_constants() -> None:
     assert "PBTREE-MUTATION-PAGE-MAX CONSTANT PBTREE-RETIREMENT-MAX" in btree_source
     assert "PBTREE-BALANCED-CAPACITY-FOR-HEIGHT" in btree_source
     assert re.search(
-        r"_PBTW-DEFERRED-OFF\s+8\s+\+\s+CONSTANT\s+PBTREE-WORK-SIZE",
+        r"_PBTW-RANGE-CURSOR-OFF\s+8\s+\+\s+CONSTANT\s+PBTREE-WORK-SIZE",
         btree_source,
     )
-    assert model.DEFAULT_OPERATION_WORKSPACE.total_bytes == 17_480
+    assert model.DEFAULT_OPERATION_WORKSPACE.total_bytes == 17_672
 
     blob = "persistence/blob.f"
     assert _forth_decimal_constant(blob, "PBLOB-CHUNK-SIZE") == model.BLOB_CHUNK_BYTES
@@ -59,14 +59,39 @@ def test_analytical_geometry_is_ratcheted_to_production_constants() -> None:
     ref_size = _forth_decimal_constant("persistence/core.f", "PERSIST-REF-SIZE")
     calculated_blob_work = frontier + 9 * 64 * ref_size + model.BLOB_CHUNK_BYTES
     assert calculated_blob_work == model.BLOB_WORKSPACE_BYTES
-    assert model.LIBRARY_INDEX_WORKSPACE_BYTES == 84_624
+    assert model.BLOB_WORKSPACE_BYTES == 46_960
+    assert model.LIBRARY_INDEX_WORKSPACE_BYTES == 119_840
+    assert (
+        _forth_decimal_constant(
+            "tui/applets/library/model.f",
+            "LIB-QUERY-PAGE-MAX",
+        )
+        == model.LIBRARY_QUERY_PAGE_MAX
+    )
+    query_source = (
+        SOURCE_ROOT / "tui/applets/library/query.f"
+    ).read_text(encoding="utf-8")
+    assert (
+        "LIB-QUERY-PAGE-MAX CONSTANT LIBRARY-QUERY-PAGE-MAX"
+        in query_source
+    )
+    adapter_source = (
+        SOURCE_ROOT / "tui/applets/library/persistence-adapter.f"
+    ).read_text(encoding="utf-8")
     assert (
         _forth_decimal_constant(
             "tui/applets/library/persistence-adapter.f",
-            "LIBPA-INDEX-SLICE-MAX",
+            "_LIBPIX-TREE-COUNT",
         )
-        == model.LIBRARY_INDEX_SLICE_MAX
+        == model.LIBRARY_INDEX_TREE_COUNT
     )
+    assert "_LIBPIX-TREE-COUNT 0 ?DO" in adapter_source
+    assert "LIBPA-INDEX-PAGE-READS@" in adapter_source
+    assert "LIBPA-INDEX-PAGE-WRITES@" in adapter_source
+    assert "LIBPA-INDEX-COMPARISONS@" in adapter_source
+    assert "LIBPA-STAGING-MUTATION-MAX" not in adapter_source
+    assert "RECLAIM-TX-ROOM?" in adapter_source
+    assert "_LIBPIX-STAGE-NEXT-ROOM?" in adapter_source
 
     index_keys_source = (
         SOURCE_ROOT / "tui/applets/library/index-keys.f"
@@ -74,7 +99,7 @@ def test_analytical_geometry_is_ratcheted_to_production_constants() -> None:
     assert "LIB-TITLE-MAX 1+ CONSTANT _LIBPI-TITLE-SYMBOLS" in index_keys_source
     assert "_LIBPI-TITLE-SYMBOLS 9 * 7 + 8 / CONSTANT _LIBPI-TITLE-BYTES" in index_keys_source
     assert "_LIBPI-TITLE-BYTES RID-SIZE + CONSTANT LIBPI-TITLE-KEY-SIZE" in index_keys_source
-    assert model.TITLE_BY_BYTES_GEOMETRY.key_bytes == 178
+    assert model.TITLE_ORDER_GEOMETRY.key_bytes == 178
 
     reclaim = "persistence/reclaim.f"
     assert _forth_decimal_constant(reclaim, "RECLAIM-MAX-BATCH") == model.MAX_RECLAIM_BATCH
@@ -109,34 +134,30 @@ def test_exact_checked_page_and_btree_geometry() -> None:
     assert model.LEAF_CAPACITY == 11
     assert model.BRANCH_CAPACITY == 14
 
-    assert (
-        model.DOCUMENT_BY_RID_GEOMETRY.key_bytes,
-        model.DOCUMENT_BY_RID_GEOMETRY.inline_value_bytes,
-    ) == (32, 24)
-    assert (
-        model.DOCUMENT_BY_CREATION_GEOMETRY.key_bytes,
-        model.DOCUMENT_BY_CREATION_GEOMETRY.inline_value_bytes,
-    ) == (40, 32)
-    assert (
-        model.REVISION_BY_DOCUMENT_GEOMETRY.key_bytes,
-        model.REVISION_BY_DOCUMENT_GEOMETRY.inline_value_bytes,
-    ) == (40, 24)
-    assert (
-        model.EDGE_BY_SUBJECT_GEOMETRY.key_bytes,
-        model.EDGE_BY_SUBJECT_GEOMETRY.inline_value_bytes,
-    ) == (64, 0)
-    assert (
-        model.TITLE_BY_BYTES_GEOMETRY.key_bytes,
-        model.TITLE_BY_BYTES_GEOMETRY.inline_value_bytes,
-    ) == (178, 32)
+    geometries = {
+        "shared-directory": (model.SHARED_DIRECTORY_GEOMETRY, 33, 0),
+        "rid-directory": (model.RID_DIRECTORY_GEOMETRY, 32, 24),
+        "operation-receipts": (model.OPERATION_RECEIPTS_GEOMETRY, 32, 40),
+        "creation/recency-order": (model.ORDER_GEOMETRY, 40, 32),
+        "state-order/recency": (model.STATE_ORDER_GEOMETRY, 43, 32),
+        "title-order": (model.TITLE_ORDER_GEOMETRY, 178, 32),
+        "tag-postings": (model.TAG_POSTINGS_GEOMETRY, 69, 32),
+        "body-postings": (model.BODY_POSTINGS_GEOMETRY, 45, 1),
+        "collection-directory": (model.COLLECTION_DIRECTORY_GEOMETRY, 32, 24),
+        "collection-order": (model.COLLECTION_ORDER_GEOMETRY, 40, 32),
+        "collection-title": (model.COLLECTION_TITLE_GEOMETRY, 106, 32),
+        "membership": (model.MEMBERSHIP_GEOMETRY, 72, 0),
+        "history": (model.HISTORY_GEOMETRY, 40, 24),
+    }
+    for geometry, key_bytes, value_bytes in geometries.values():
+        assert (geometry.key_bytes, geometry.inline_value_bytes) == (
+            key_bytes,
+            value_bytes,
+        )
 
-    expected = (
-        (model.DOCUMENT_BY_RID_GEOMETRY, 11, 14, 14),
-        (model.DOCUMENT_BY_CREATION_GEOMETRY, 11, 14, 14),
-        (model.REVISION_BY_DOCUMENT_GEOMETRY, 11, 14, 14),
-        (model.EDGE_BY_SUBJECT_GEOMETRY, 11, 14, 14),
-        (model.TITLE_BY_BYTES_GEOMETRY, 11, 14, 14),
-        (model.LIFECYCLE_ORDER_GEOMETRY, 11, 14, 14),
+    expected = tuple(
+        (geometry, 11, 14, 14)
+        for geometry, _, _ in geometries.values()
     )
     for geometry, leaves, separators, fanout in expected:
         assert geometry.leaf_capacity == leaves
@@ -157,7 +178,7 @@ def test_exact_checked_page_and_btree_geometry() -> None:
         assert branch_used + geometry.branch_entry_bytes > model.PAGE_PAYLOAD_BYTES
 
     assert tuple(
-        model.DOCUMENT_BY_RID_GEOMETRY.balanced_capacity_for_height(height)
+        model.RID_DIRECTORY_GEOMETRY.balanced_capacity_for_height(height)
         for height in range(1, model.MAX_BTREE_HEIGHT + 1)
     ) == (
         11,
@@ -169,9 +190,12 @@ def test_exact_checked_page_and_btree_geometry() -> None:
         1_529_435,
         10_706_057,
         74_942_411,
+        524_596_889,
+        3_672_178_235,
+        25_705_247_657,
     )
     assert tuple(
-        model.DOCUMENT_BY_RID_GEOMETRY.minimum_cardinality_for_height(height)
+        model.RID_DIRECTORY_GEOMETRY.minimum_cardinality_for_height(height)
         for height in range(1, model.MAX_BTREE_HEIGHT + 1)
     ) == (
         1,
@@ -183,9 +207,12 @@ def test_exact_checked_page_and_btree_geometry() -> None:
         218_490,
         1_529_436,
         10_706_058,
+        74_942_412,
+        524_596_890,
+        3_672_178_236,
     )
     assert tuple(
-        model.DOCUMENT_BY_RID_GEOMETRY.minimum_resident_cardinality(height)
+        model.RID_DIRECTORY_GEOMETRY.minimum_resident_cardinality(height)
         for height in range(1, model.MAX_BTREE_HEIGHT + 1)
     ) == (
         1,
@@ -197,28 +224,67 @@ def test_exact_checked_page_and_btree_geometry() -> None:
         201_684,
         1_411_788,
         9_882_516,
+        69_177_612,
+        484_243_284,
+        3_389_702_988,
     )
-    assert model.DOCUMENT_BY_RID_GEOMETRY.monotonic_build_height_for(10_000_000) == 8
-    assert model.DOCUMENT_BY_RID_GEOMETRY.height_for(10_000_000) == 9
+    assert model.RID_DIRECTORY_GEOMETRY.monotonic_build_height_for(10_000_000) == 8
+    assert model.RID_DIRECTORY_GEOMETRY.height_for(10_000_000) == 9
+    assert (
+        model.BODY_POSTINGS_GEOMETRY.monotonic_build_height_for(
+            model.LIBRARY_CURRENT_TEXT_POSTING_POSITION_CEILING
+        )
+        == 12
+    )
+    assert (
+        model.BODY_POSTINGS_GEOMETRY.height_for(
+            model.LIBRARY_CURRENT_TEXT_POSTING_POSITION_CEILING
+        )
+        == 12
+    )
+
+
+def test_current_text_profile_is_an_explicit_representative_not_a_content_cap() -> None:
+    assert model.LIBRARY_TEXT_REPRESENTATIVE_BODY_BYTES == 4_096
+    assert model.LIBRARY_TEXT_REPRESENTATIVE_TITLE_BYTES == 128
+    assert model.short_text_posting_position_ceiling(4_096) == 12_285
+    assert model.short_text_posting_position_ceiling(128) == 381
+    assert model.LIBRARY_CURRENT_TEXT_POSTING_POSITIONS_PER_DOCUMENT == 12_666
+    assert model.LIBRARY_CURRENT_TEXT_POSTING_POSITION_CEILING == 12_666_000_000
+    assert model.LIBRARY_TEXT_REPRESENTATIVE_BODY_BYTES < model.BLOB_CHUNK_BYTES
+    with pytest.raises(ValueError):
+        model.short_text_posting_position_ceiling(-1)
 
 
 def test_large_profile_is_scalar_and_all_point_paths_fit_height_limit() -> None:
     profile = model.library_large_profile()
-    assert model.DOCUMENT_BY_RID_GEOMETRY.height_for(0) == 0
+    assert model.RID_DIRECTORY_GEOMETRY.height_for(0) == 0
     assert profile.documents == 1_000_000
+    assert profile.collections == 100_000
     assert profile.revisions == 10_000_000
-    assert profile.edges == 10_000_000
+    assert profile.memberships == 10_000_000
+    assert profile.tag_postings == 16_000_000
+    assert profile.body_postings == 12_666_000_000
     assert profile.materialized_target_items == 0
     assert model.library_large_profile() is profile
+    assert len(profile.indexes) == model.LIBRARY_INDEX_TREE_COUNT == 15
 
     expected_heights = {
-        "record-directory": 9,
-        "document-by-rid": 7,
-        "document-by-creation": 7,
-        "revision-by-document": 9,
-        "edge-by-subject": 9,
-        "title-by-bytes": 7,
-        "lifecycle-order": 7,
+        "shared-directory": 8,
+        "rid-directory": 7,
+        "operation-receipts": 7,
+        "creation-order": 7,
+        "recency-order": 7,
+        "state-order": 7,
+        "title-order": 7,
+        "tag-postings": 9,
+        "body-postings": 12,
+        "collection-directory": 6,
+        "collection-order": 6,
+        "collection-title": 6,
+        "membership": 9,
+        "history": 9,
+        "state-recency": 7,
     }
     assert {index.name: index.height for index in profile.indexes} == expected_heights
 
@@ -241,19 +307,33 @@ def test_large_profile_is_scalar_and_all_point_paths_fit_height_limit() -> None:
 def test_large_profile_index_storage_is_an_explicit_scalar_bound() -> None:
     profile = model.library_large_profile()
     expected_pages = {
-        "record-directory": 4_083_331,
-        "document-by-rid": 194_440,
-        "document-by-creation": 194_440,
-        "revision-by-document": 1_944_443,
-        "edge-by-subject": 1_944_443,
-        "title-by-bytes": 194_440,
-        "lifecycle-order": 194_440,
+        "shared-directory": 427_773,
+        "rid-directory": 194_440,
+        "operation-receipts": 213_885,
+        "creation-order": 194_440,
+        "recency-order": 194_440,
+        "state-order": 194_440,
+        "title-order": 194_440,
+        "tag-postings": 3_111_107,
+        "body-postings": 2_462_833_328,
+        "collection-directory": 19_441,
+        "collection-order": 19_441,
+        "collection-title": 19_441,
+        "membership": 1_944_443,
+        "history": 1_944_443,
+        "state-recency": 194_440,
     }
     assert {
         index.name: index.page_count_upper_bound for index in profile.indexes
     } == expected_pages
-    assert sum(index.page_count_upper_bound for index in profile.indexes) == 8_749_977
-    assert sum(index.storage_bytes_upper_bound for index in profile.indexes) == 35_839_905_792
+    assert (
+        sum(index.page_count_upper_bound for index in profile.indexes)
+        == 2_471_699_942
+    )
+    assert (
+        sum(index.storage_bytes_upper_bound for index in profile.indexes)
+        == 10_124_082_962_432
+    )
     assert profile.materialized_target_items == 0
 
 
@@ -291,10 +371,10 @@ def test_fixed_seed_large_profile_samples_drive_bounded_costs() -> None:
                 requested,
             )
             assert window.returned_results == requested
-            assert window.page_reads <= 66
+            assert window.page_reads <= 44
             assert window.allocation_events == 0
 
-    edge_index = profile.index("edge-by-subject")
+    edge_index = profile.index("membership")
     edge_ranks = model.sample_ranks(edge_index.cardinality, 64, seed=0xE66E)
     for ordinal, rank in enumerate(edge_ranks):
         requested_degree = 1 + ((rank ^ (ordinal * 0x9E37)) % 250_000)
@@ -327,8 +407,20 @@ def test_deep_keyset_windows_cost_height_plus_bounded_output_pages() -> None:
         assert cost.page_reads == cost.height + cost.result_page_reads
         assert cost.leaf_pages_touched == 7
         assert cost.internal_boundary_reads == cost.height - 2
-        assert cost.page_reads == (60 if cost.height == 7 else 66)
-        assert cost.comparison_bound == (1_091 if cost.height == 7 else 1_197)
+        assert cost.page_reads == {
+            6: 26,
+            7: 29,
+            8: 32,
+            9: 35,
+            12: 44,
+        }[cost.height]
+        assert cost.comparison_bound == {
+            6: 1_038,
+            7: 1_091,
+            8: 1_144,
+            9: 1_197,
+            12: 1_356,
+        }[cost.height]
         assert cost.page_reads < index.geometry.leaf_pages(index.cardinality)
         assert cost.allocation_events == 0
         assert cost.corpus_proportional_allocation_bytes == 0
@@ -351,7 +443,7 @@ def test_deep_keyset_windows_cost_height_plus_bounded_output_pages() -> None:
         assert deep.page_reads == shallow.page_reads
         assert deep.internal_boundary_reads == shallow.internal_boundary_reads
 
-    revision_index = profile.index("revision-by-document")
+    revision_index = profile.index("history")
     eof_window = model.keyset_page_cost(
         revision_index.geometry,
         revision_index.cardinality,
@@ -359,11 +451,43 @@ def test_deep_keyset_windows_cost_height_plus_bounded_output_pages() -> None:
         32,
     )
     assert eof_window.returned_results == 5
-    assert eof_window.page_reads == 22
+    assert eof_window.page_reads == 17
+
+
+def test_reverse_keyset_cost_is_symmetric_with_the_mirrored_forward_range() -> None:
+    index = model.library_large_profile().index("body-postings")
+    reverse_start = index.cardinality - 123_456
+    reverse = model.reverse_keyset_page_cost(
+        index.geometry,
+        index.cardinality,
+        reverse_start,
+        32,
+        exclusive=True,
+    )
+    mirrored = model.keyset_page_cost(
+        index.geometry,
+        index.cardinality,
+        index.cardinality - reverse_start,
+        32,
+        exclusive=True,
+    )
+    assert reverse == mirrored
+    assert reverse.height == 12
+    assert reverse.page_reads == 44
+
+    inclusive = model.reverse_keyset_page_cost(
+        index.geometry,
+        index.cardinality,
+        4,
+        32,
+        exclusive=False,
+    )
+    assert inclusive.returned_results == 5
+    assert inclusive.page_reads == 23
 
 
 def test_high_degree_relationship_range_never_scans_the_edge_corpus() -> None:
-    edge_index = model.library_large_profile().index("edge-by-subject")
+    edge_index = model.library_large_profile().index("membership")
     first_rank = 9_000_003
     degree = 250_000
     cost = model.relationship_range_cost(
@@ -376,7 +500,7 @@ def test_high_degree_relationship_range_never_scans_the_edge_corpus() -> None:
     assert cost.slice_calls == 7_813
     assert cost.leaf_pages_touched == 54_691
     assert cost.internal_boundary_reads == 54_691
-    assert cost.page_reads == 515_658
+    assert cost.page_reads == 273_455
     assert cost.full_scan_leaf_pages == 909_091
     assert cost.page_reads < cost.full_scan_leaf_pages
     assert cost.allocation_events == 0
@@ -389,65 +513,35 @@ def test_high_degree_relationship_range_never_scans_the_edge_corpus() -> None:
         32,
     )
     assert one_window.slice_calls == 1
-    assert one_window.page_reads == 66
+    assert one_window.page_reads == 35
 
 
-def test_metadata_mutation_separates_representative_and_structural_budgets() -> None:
-    mutation = model.representative_metadata_mutation()
-    assert {component.name: component.page_write_bound for component in mutation.components} == {
-        "record-directory-replace": 9,
-        "title-rekey": 28,
-        "lifecycle-rekey": 28,
-    }
-    assert mutation.cow_index_page_writes == 65
-    assert mutation.application_root_page_writes == 2
-    assert mutation.reclaim_bucket_page_writes == 6
-    assert mutation.representative_reclaim_maintenance_page_writes == 4
-    assert mutation.reclaim_maintenance_max_page_writes_per_step == 1
-    assert mutation.representative_metadata_page_writes == 77
-    assert mutation.structural_metadata_page_write_ceiling == 139
-    assert mutation.appended_record_bytes == 3072
-    assert mutation.appended_record_physical_bytes == 3136
-    assert mutation.authority_record_bytes == 160
-    assert mutation.representative_checked_page_bytes_written == 315_392
-    assert mutation.structural_checked_page_bytes_write_ceiling == 569_344
-    assert mutation.representative_total_bytes_written == 318_688
-    assert mutation.structural_total_bytes_write_ceiling == 572_640
-    assert mutation.peak_workspace_bytes == 84_624
-    assert mutation.allocation_events == 0
-    assert mutation.corpus_proportional_allocation_bytes == 0
-
-
-def test_representative_metadata_transaction_fits_reclaim_ledgers() -> None:
-    transaction = model.representative_metadata_transaction()
-    assert transaction.btree_page_allocations == 65
-    assert transaction.application_root_allocations == 1
-    assert transaction.reclaim_bucket_allocations == 3
-    assert transaction.reclaim_bucket_page_writes == 6
-    assert transaction.reclaim_maintenance_step_calls == 66
-    assert transaction.representative_reclaim_maintenance_bucket_allocations == 4
-    assert transaction.representative_reclaim_maintenance_page_writes == 4
-    assert transaction.representative_reclaim_maintenance_metadata_retirements == 7
-    assert transaction.structural_reclaim_maintenance_page_write_ceiling == 66
-    assert transaction.consumer_issued_pages == 66
-    assert transaction.representative_total_page_allocations == 73
-    assert transaction.representative_total_page_writes == 77
-    assert transaction.structural_total_page_write_ceiling == 139
-    assert transaction.committed_page_retirements == 48
-    assert transaction.representative_total_staged_retirements == 55
-    assert transaction.current_generation_discards == 14
-    assert (
-        transaction.consumer_issued_pages
-        <= model.MAX_ALLOCATED_PAGES_PER_TRANSACTION
-    )
-    assert (
-        transaction.representative_total_staged_retirements
-        <= model.MAX_RETIRED_PAGES_PER_TRANSACTION
-    )
-    assert (
-        transaction.current_generation_discards
-        <= model.MAX_DISCARDED_PAGES_PER_TRANSACTION
-    )
+def test_live_stage_uses_current_page_ledgers_at_height_twelve() -> None:
+    budget = model.live_staging_mutation_budget()
+    assert budget.tree_height == model.MAX_BTREE_HEIGHT == 12
+    assert budget.mutation_page_max == model.PBTREE_MUTATION_PAGE_MAX == 25
+    assert budget.application_root_pages == 1
+    assert budget.maintenance_retirement_pages == 2
+    assert budget.finalizer_metadata_pages == (
+        model.RECLAIM_FINALIZER_METADATA_PAGE_MAX
+    ) == 4
+    assert budget.allocated_page_ledger == 128
+    assert budget.retired_page_ledger == 64
+    assert budget.discarded_page_ledger == 64
+    assert budget.allocation_reserve == 26
+    assert budget.retirement_reserve == 7
+    assert budget.discard_reserve == 0
+    assert budget.fresh_stage_has_room is True
+    assert budget.high_water_mutations_before_rollover == (
+        model.LIBRARY_HIGH_WATER_MUTATIONS_BEFORE_ROLLOVER
+    ) == 5
+    assert budget.page_allocation_bound(5) == 126
+    assert budget.page_allocation_bound(6) == 151
+    assert budget.room(allocated=102) is True
+    assert budget.room(allocated=103) is False
+    assert budget.room(retired=57) is True
+    assert budget.room(retired=58) is False
+    assert budget.room(discarded=64) is True
 
 
 @pytest.mark.parametrize(
@@ -484,7 +578,7 @@ def test_32kib_blob_range_touch_counts(
     assert cost.manifest_records_read == touched
     assert cost.data_records_read == touched
     assert cost.record_reads == touched * 2
-    assert cost.peak_workspace_bytes == 46_936
+    assert cost.peak_workspace_bytes == 46_960
     assert cost.allocation_events == 0
     assert cost.corpus_proportional_allocation_bytes == 0
 
@@ -600,18 +694,17 @@ def test_every_ordinary_cost_uses_fixed_caller_owned_workspace() -> None:
         for cardinality in (0, 1, 1_000_000, 10_000_000, 10**18)
     )
     assert all(workspace is model.DEFAULT_OPERATION_WORKSPACE for workspace in workspaces)
-    assert {workspace.total_bytes for workspace in workspaces} == {17_480}
+    assert {workspace.total_bytes for workspace in workspaces} == {17_672}
     assert all(workspace.allocation_events_per_operation == 0 for workspace in workspaces)
     assert all(workspace.corpus_proportional_bytes == 0 for workspace in workspaces)
 
     profile = model.library_large_profile()
-    index = profile.index("edge-by-subject")
+    index = profile.index("membership")
     costs = (
         model.point_lookup_cost(index),
         model.keyset_page_cost(index.geometry, index.cardinality, 9_000_000, 32),
         model.relationship_range_cost(index.geometry, index.cardinality, 8_000_000, 1000),
         model.BlobGeometry().range_cost(10**12, 10**12 - 100, 32),
-        model.representative_metadata_mutation(profile),
     )
     assert all(cost.allocation_events == 0 for cost in costs)
     assert all(cost.corpus_proportional_allocation_bytes == 0 for cost in costs)
@@ -621,12 +714,14 @@ def test_invalid_ranges_and_geometry_fail_closed() -> None:
     with pytest.raises(ValueError):
         model.BTreeGeometry(key_bytes=4000, inline_value_bytes=100)
     with pytest.raises(ValueError):
-        model.keyset_page_cost(model.DOCUMENT_BY_RID_GEOMETRY, 100, 101, 1)
+        model.keyset_page_cost(model.RID_DIRECTORY_GEOMETRY, 100, 101, 1)
     with pytest.raises(ValueError):
-        model.relationship_range_cost(model.EDGE_BY_SUBJECT_GEOMETRY, 100, 90, 11)
+        model.relationship_range_cost(model.MEMBERSHIP_GEOMETRY, 100, 90, 11)
     with pytest.raises(ValueError):
         model.BlobGeometry().range_cost(100, 101, 1)
     with pytest.raises(ValueError):
-        model.representative_metadata_mutation(appended_record_bytes=4096)
+        model.live_staging_mutation_budget().page_allocation_bound(-1)
     with pytest.raises(ValueError):
-        model.DOCUMENT_BY_RID_GEOMETRY.height_for(74_942_412)
+        model.live_staging_mutation_budget().room(retired=-1)
+    with pytest.raises(ValueError):
+        model.RID_DIRECTORY_GEOMETRY.height_for(25_705_247_658)

@@ -1,447 +1,226 @@
 # Library applet product boundary
 
-Status: the applet-owned bounded model/codecs, deterministic
-arena/catalog/head formats, repository, query and service modules, projection
-adapter, and all five ordered Gate 4 owner/storage milestones are implemented
-and qualified. Library owns managed-document and capture
-mutation, retained history, receipts, lifecycle, collections, a disposable
-title/body/tag index, bounded authoritative corpus/collection queries, and an
-activation-local projection-owner lifecycle. Its maintenance surface provides
-recognized-format inspection, deterministic head-transaction repair, and
-bounded coherent opaque evidence export. A bounded direct applet test assembly
-exercises the public storage surface as a user-facing corpus lens: it can browse
-and search active/archived records, preview exact content, create and rename
-managed documents, archive/unarchive, inspect retained history, browse/filter
-collections, and page results. The renderer-free Gate 4 cold/damage exit is
-green. The applet still does not provide Desktop hosting, sibling integration,
-deep Pad editing, capture import, destructive deletion, or maintenance/export
-UI; those remain separate product/integration work. Every currently implemented
-lens action listed above remains part of the preserved applet surface.
+Library is the Desk-owned corpus of material a user deliberately keeps. It owns
+managed documents, immutable captures, metadata, provenance, retained history,
+collections, lifecycle, query policy, and resource projections. Its domain and
+service can run without a renderer in focused tests; that does not make Library
+a standalone product outside Desk.
 
-Library is the machine-level corpus of material a user deliberately keeps. A
-Practice may eventually bind Library resources into an activity, but the corpus
-and its records remain Library-owned. Its renderer-free owner can be qualified
-without instantiating Desk in that focused fixture, but that is only a
-testability boundary: Library remains a Desk-applet domain and does not absorb
-Streams, Pad, Agent, Daybook, Grid, or Practice policy.
+The current prototype uses scalable ordered indexes and chunked blobs over the
+neutral persistence framework. The removed fixed catalog, collection bitmap,
+complete-bank, and content-arena design is not retained behind a facade.
+There is one current Library layout, no legacy reader, and no migration or
+compatibility stack.
 
-## Ownership boundary
+## Ownership
 
 Library owns:
 
-- stable Library identities for managed documents and immutable captures;
-- copied content, exact managed-document revisions, content identity, and
-  explicit provenance and bounded typed lineage;
-- titles, admitted media type, tags, collections, archive state, tombstones,
-  and the distinction between archiving, collection removal, and destructive
-  deletion;
-- authoritative catalog/content records and disposable rebuildable
-  title/body/tag indexes; and
-- bounded corpus query and projection-acquisition policy.
+- stable Library identities for managed documents, captures, and collections;
+- copied content, exact content revisions, content identity, and retained
+  history;
+- titles, canonical tag/origin/lineage metadata, immutable operation receipts,
+  archive state, and terminal tombstones;
+- collection membership as stable Library RIDs;
+- authoritative Library record/index/blob meanings and logical generations;
+- exact corpus, collection, and history query semantics;
+- inspection, coherent raw evidence, narrow repair, and semantic compaction;
+  and
+- admission and lifetime policy for Library resource projections.
 
 Library does not own:
 
-- network acquisition, provider parsing, source configuration, credentials, or
-  refresh state;
-- Pad editing mechanics, Grid calculation, Explorer file navigation, Daybook
-  time semantics, Agent conversations, or Practice authority;
-- every file, observation, transcript, or note automatically; or
-- a rule engine, workflow/outbound ledger, OCR/PDF pipeline, vector database,
-  synchronization service, collaboration server, or universal
-  citation/claim/backlink graph.
+- network acquisition, provider parsing, source credentials, or refresh state;
+- Pad editing mechanics, Explorer navigation, Streams source policy, Daybook
+  time semantics, Agent conversations, Grid calculation, or Practice
+  authority;
+- a universal graph, workflow engine, synchronization service, collaboration
+  server, OCR/PDF pipeline, or vector database; or
+- the neutral mechanics of atomic roots, checked pages/segments, ordered
+  indexes, chunked blobs, page reclamation, or two-bank compaction.
 
-Desk is Library's owning product ecosystem. The current direct applet test
-assembly shows Library records through the public owner surface, but
-presentation does not transfer domain ownership or by itself establish a
-Desktop route or capability.
+Those neutral mechanics live under `akashic/persistence/` and contain no Desk
+or Library vocabulary. Library-specific model and persistence adapters remain
+under `akashic/tui/applets/library/`.
 
-## Bounded Library foundation
+## Product values
 
-`akashic/tui/applets/library/model.f` defines pointer-free catalog, provenance, receipt,
-lineage, and collection payloads. Its only borrowed pointer is the data address
-in the transient content view. `akashic/tui/applets/library/record-codec.f` defines pure
-caller-buffer V1 encoders, decoders, and validators by adapting the independent
-`utils/checked-record.f` envelope. Checked-record owns mechanical geometry,
-checksums, padding, callback containment, and header inspection; Library owns
-every catalog, collection, content, digest, UTF-8, revision, and identity rule.
-Neither Library module calls VFS, publishes a resource, selects a store path,
-or imports a sibling domain or UI.
-
-The initial limits are:
-
-| Contract | Bound |
-| --- | ---: |
-| catalog entries | 128 |
-| collections | 32 |
-| members per collection | 128 |
-| tags per entry | 16 |
-| lineage locators per entry | 4 |
-| UTF-8 content bytes | 65,536 |
-| retained managed-document revisions | 4 |
-| query page | 32 |
-| simultaneous live RID projection owners | 8 |
-| activation-local projection leases | 64 |
-
-The fixed ABI widths are 328 bytes for an origin, receipt, or lineage slot;
-2,832 bytes for a catalog payload inside a 3,072-byte record; and 224 bytes for
-a collection payload inside a 320-byte record. The transient content view is
-128 bytes. A content record uses the 64-byte common envelope followed by 96
-bytes of Library-owned semantic metadata, so content still begins at byte 160
-and the maximum record remains 65,696 bytes. All 128 catalog and 32 collection
-records occupy at most 403,456 bytes before any later store framing.
-
-Canonical validation includes the following guardrails:
-
-- bounded valid UTF-8 with zero-filled unused capacity;
-- strict bytewise sorted, unique tags and exact direct qualified lineage
-  locators;
-- canonical collection bitmaps and membership only in allocated catalog slots;
-- unique catalog RIDs and operation keys, unique collection RIDs and operation
-  keys, and global disjointness between the two sets;
-- a byte-exact immutable import/create receipt retained through archive and
-  tombstone states;
-- active-only revision-one entries, immutable capture content, frozen media,
-  managed-content non-rollback, and no same-revision length/digest
-  substitution; and
-- strict domain-revision and mutation-sequence advancement for every persisted
-  change, with tombstones terminal and byte-identical in all successors.
-
-The receipt's request seal is domain separated. It covers method, initial
-content facts, kind, title, tags, origin, lineage, import contract, source owner,
-and expected catalog generation. The operation key is compared separately. The
-seal excludes Library-generated RID, operation counters, and clocks.
-Collection create seals similarly cover the initial title, bitmap/count, and
-expected catalog generation while excluding the owner-generated RID and
-counters. Therefore an owner can distinguish a true same-key replay from a
-same-key/different-request conflict after later metadata changes or deletion.
-
-The expected catalog generation is a caller precondition, not a persisted
-commit decision. The owner must look up an operation key first: a sealed
-matching prior request is a replay even if the catalog has since advanced; only
-an unseen key is checked against the requested generation.
-
-## Initial identity and content classes
-
-The first bounded Library has two closed content classes:
-
-1. A **managed document** has a Library-generated RID and mutable current
-   content. Every successful exact replacement creates an immutable content
-   revision. The initial policy retains the current revision and three
-   immediately preceding revisions.
-2. A **capture** has a Library-generated RID and one immutable copied content
-   revision. It records the exact admitted origin facts available at import. A
-   reference to changing external content without copied bytes is not a safely
-   retained capture.
-
-The initial admitted content is bounded valid UTF-8: plain text, Markdown, CSV
-captures, and safe observation projections whose projection contract and digest
-have already been qualified. Binary data, PDF, OCR, live/follow-latest links,
-and automatic ingestion are outside this first contract.
-
-A Library RID is never copied from an origin. Domain revision, content
-revision, store generation, content digest, source/observation identity, and
-activation epoch remain distinct facts. Create and import use a caller
-operation idempotency key; equal content does not imply equal operation or
+A managed document has a Library-generated RID and mutable current content. A
+capture has a Library-generated RID and immutable copied content plus admitted
+origin facts. Content equality never substitutes for identity or operation
 identity.
 
-## Provenance and lifecycle
+Create/import and collection creation use caller-generated operation keys. The
+receipt seals the exact initial request. A same-key, same-request retry returns
+the original object even after later mutation; a changed request under that key
+is an idempotency mismatch. Document RIDs, collection RIDs, and receipt keys
+share one collision directory.
 
-An imported record retains either a bounded exact qualified semantic origin or
-an exact VFS snapshot locator, along with the admitted origin revision/digest,
-source owner, locator digest, projection/import contract, and import method. It
-never persists an activation-local `LBIND`, acquisition token, live grant,
-component pointer, or handler choice. Provenance records where copied bytes came
-from; it does not assert their trustworthiness.
+Metadata is a canonical immutable fact stream rather than fixed tag/lineage
+slots. Facts are strictly ordered by kind and payload; duplicate or alternate
+encodings are rejected. It admits any number of distinct tags and derived-from
+lineage facts, at most one origin, and retains a compact count/digest summary
+with the current entry.
 
-Ordinary VFS import policy is the source owner `vfs` plus
-`SHA3-256("org.akashic.library.vfs-snapshot.v1")`. The pure model also permits a
-different present contract digest so a later owner can admit an explicitly
-reviewed alternate projection/import contract. The model's structural
-acceptance is not admission authority.
+Managed history exposes current content plus three predecessors. Metadata and
+lifecycle changes advance domain revision without inventing content revisions.
+A pruned revision is `GONE`; it never falls forward to latest. Restore
+publishes retained bytes as a new current revision.
 
-Archiving preserves RID, retained content, provenance, and exact-revision
-resolution while hiding the record from normal active views. Removing a record
-from a collection changes membership only. Separately confirmed destructive
-deletion tombstones the RID permanently: content and mutable descriptive facts
-are erased, the RID and receipt remain, and later resolution reports a broken
-reference rather than manufacturing empty or current content. A pruned
-historical revision likewise reports `gone`/`retired`; it never falls forward
-to latest.
+Archive preserves identity, content, receipt, provenance, history, and
+collection membership while excluding the document from active views.
+Tombstone is a separate terminal operation that clears content and sensitive
+description while preserving enough identity, deletion, and receipt evidence
+to keep references and retries honest.
 
-## Record codec and borrowed views
+A collection stores its aggregate member count and an ordered membership
+keyset. It has no fixed membership bitmap. Removing membership does not delete
+a document; archiving or tombstoning a document does not silently rewrite the
+independent collection.
 
-Catalog and collection records use a 64-byte fixed envelope and canonical zero
-padding. Content records are exactly eight-byte aligned. The checked-record
-core verifies magic, header CRC, V1 format, declared and actual lengths, flags,
-payload CRC, and zero padding before invoking Library validation. Library then
-validates the complete model; content additionally binds its bytes with
-SHA3-256 and requires valid UTF-8. A checksummed future format is reported as
-unsupported; a damaged header is never trusted for dispatch.
+## Scale model
 
-`LIB-CONTENT-RECORD-DECODE` places a borrowed pointer to payload bytes in
-`LIBCT.DATA-A`. The caller must keep the encoded record buffer alive and
-unchanged for the lifetime of that view. `LIB-CONTENT-RECORD-MEASURE` validates
-a complete header and returns the exact bounded record size, but it is not a
-payload-integrity check. Encode/decode aliases are rejected without modifying
-the aliased bytes; an invalid non-aliased decode destination is deterministically
-zeroed.
+The corpus is not bounded by a compiled document, collection, or relationship
+count. Durable populations grow through copy-on-write B+tree pages,
+append-only checked records, and immutable 32 KiB blob chunks. Physical page
+reuse is fenced by both atomic roots and advanced through bounded reclamation
+buckets.
 
-## Pure storage format
+The remaining limits are explicit work and interaction bounds:
 
-`akashic/tui/applets/library/store-format.f` remains VFS-free. It defines three bounded V1
-shapes for the serialized owner:
+| Surface | Current bound or behavior |
+| --- | --- |
+| title | 128 UTF-8 bytes |
+| one tag value | 24 UTF-8 bytes |
+| collection title | 64 UTF-8 bytes |
+| retained content | current plus three predecessors |
+| query page | at most 32 rows |
+| content materialization | bounded range; larger values stream |
+| collection membership | ordered keyset, reconciled in bounded batches |
+| compaction | caller-supplied byte/work budget per step |
+| live projection owners | 8 RIDs and 64 activation-local leases |
 
-- a 655,360-byte immutable content arena with a 512-byte header and 654,848
-  bytes of append-only, sector-framed content;
-- two possible 403,968-byte complete catalog banks, each with a 512-byte header
-  and the full 403,456-byte catalog/collection body; and
-- a 448-byte VFS fixed-snapshot payload that names exactly one verified bank
-  and repeats the selected generation, catalog, arena, tail, count, and content
-  chain facts.
+These are not enlarged fixed arrays standing in for enterprise data. Query
+pages use semantic keyset continuation, body verification streams immutable
+content, and compaction copies bounded semantic units into the inactive data
+bank.
 
-The bank header seals its complete body with CRC32 and SHA3-256. The head seals
-the complete selected bank with SHA3-256 and must agree with its decoded bank
-and immutable arena facts. Arena, bank, and head headers check CRC before future
-format dispatch, require their geometry and unused bytes to be canonical, and
-refuse aliased or hostile caller spans without partial decoded output.
+Large multi-index mutations are staged according to actual page and
+reclamation room. Before each step the adapter reserves for the tallest
+copy-on-write path, application-root publication, and reclaim finalization. It
+may publish intermediate physical roots without changing visible Library
+state, then advances the logical generation exactly once at final publication.
+This avoids both corpus-proportional memory and an arbitrary fixed mutation
+row limit.
 
-Content publication is ordered independently of file layout. The genesis and
-step hashes use distinct `org.akashic.library.content-chain.*.v1` domains. Each
-step binds the previous chain, absolute arena byte offset, sector span, and the
-SHA3-256 digest of the complete padded record frame. Thus a chosen head can
-seal one exact committed prefix without silently adopting an orphan suffix.
+## Durable owner
 
-There is no released Library store or earlier Library state to migrate. The
-current layout does not reinterpret or wrap the taxonomy/vault prototypes,
-Streams draft, or another owner's durable bytes. L4 keeps fixed catalog and
-collection records, store paths, content data offset, record maxima, and outer
-arena/bank/head geometry stable while replacing the content record's private
-160-byte envelope in place with the common 64-byte checked envelope plus a
-96-byte Library semantic prefix. The prototype has one current reader and no
-legacy reader or migration facade.
+`repository.f` is the sole owner of Library's private topology:
 
-## VFS loading and provisioning
+```text
+/library/root-0             /library/root-1
+/library/pages-0            /library/pages-1
+/library/segments-0         /library/segments-1
+/library/compact-root-0     /library/compact-root-1
+```
 
-`akashic/tui/applets/library/repository.f` is the sole owner of the private
-`/library/head.bin`, two complete catalog banks, and fixed content arena. It
-exposes no path accessor. The owner inspects `/library` and each reserved
-terminal name without following a symbolic link; namespace/type collisions
-fail closed rather than redirecting authority. The fixed-snapshot head is the
-only commit point; neither the inactive bank nor content bytes beyond the
-committed tail are selected by discovery.
+The validated A/B root selects one data bank. The application-root page names
+Library's logical generation, mutation sequence, aggregate counts, bootstrap
+identity, ordered-index roots, and reclamation state. Documents, collections,
+receipts, membership, history, and search postings are index populations;
+content and metadata are immutable blobs.
 
-Loading keeps all decoded facts private until it has recovered and validated
-the head, hashed the complete selected bank before format dispatch, checked the
-bank body and immutable arena, scanned the exact committed content prefix and
-ordered chain, and closed every FD/hash/CRC/CWD/VFS-selector resource. Only
-then are the head, bank, arena, and generation facts published. Any corrupt,
-checksummed-future, catalog/content-mismatched, or interrupted evidence clears
-those public facts and fails closed.
+Publication follows the neutral transaction fence: append/check records,
+write/read back copy-on-write pages, write/read back the application root, then
+replace the atomic root. A failed transaction leaves no new logical authority.
+An uncertain publication is reconciled against the selected root before a
+caller may retry.
 
-A live catalog entry's current revision must resolve to content with the same
-RID, kind, media, revision, length, and digest, and every revision inside its
-logical retained window must be present. Older append-only frames may remain as
-non-resolvable pruned or tombstoned evidence, but are not treated as retained;
-each RID's content and domain revisions must still increase strictly across the
-whole committed prefix. Whenever the immutable receipt's initial revision is
-present there, its media, length, and digest must match that frame. The isolated
-model cannot decide these relations because a content record with the same RID
-can be current, retained, pruned, or tombstoned under the selected publication.
+Provisioning happens only when every reserved role is absent. Namespace/type
+collisions, partial stores, unknown bootstrap identities, corrupt checked
+records, and unsupported future roots fail closed rather than being adopted as
+empty state.
 
-For an entirely absent corpus, provisioning creates exactly the two bounded
-banks and arena, performs cold readback, writes the empty generation-one active
-bank header after its body, and publishes the head last. Same-arena retries are
-write-free and idempotent; a different arena conflicts. Exact post-bank,
-pre-head evidence is preserved and reported as recovery instead of being
-silently adopted.
+## Query and service
 
-## Inspection, repair, and opaque evidence
+Search is exact and case-sensitive. Titles and bodies use substring matching;
+tags use whole-value equality. Durable candidate indexes narrow the scan, then
+Library verifies the current authoritative title, metadata, body, lifecycle,
+kind, media, and collection facts before returning a row.
 
-The caller-owned maintenance report is 832 bytes: a 160-byte summary plus seven
-fixed 96-byte object records for the committed head, its stage/backup/marker
-replacement artifacts, both banks, and the arena. Inspection hashes every
-present object and classifies head bytes through public checked-record
-inspection rather than VFSNAP-private offsets or CRC helpers. It exposes only
-checksum-verified envelope/header facts.
-Complete semantic facts are exposed only when the ordinary V1 loader validates
-the exact candidate corpus. Future, corrupt, and ambiguous records are marked
-opaque and are never interpreted as catalog or content authority.
+Corpus and collection pages are ordered by creation sequence and RID; history
+is ordered by revision and RID. Continuations contain those semantic boundary
+keys. The observed logical generation is diagnostic, not a physical cursor or
+an optimistic lock, so unrelated mutations do not force page conflicts.
 
-The report carries a SHA3-256 evidence seal over the role, state, byte length,
-and raw digest of every object. Opaque export treats this as an optimistic
-token, repeats inspection under the Library guard, and concatenates the exact
-objects in role order. Normal V1 files already occupy their fixed maximum raw
-span, so the explicit export bound is 1,464,896 bytes. Each materialized object
-is re-hashed against the sealed report; conflict, I/O, or any later failure
-zeros the complete negotiated caller span rather than exposing a partial
-bundle.
+The semantic service exposes:
 
-Repair is deliberately narrower than export. A fresh seal comparison may
-authorize only the already-defined deterministic VFS replacement recovery for
-a fully recognized head transaction. It never reconstructs banks, salvages an
-orphan content suffix, resets a corpus, or mutates future/corrupt/ambiguous
-evidence. Successful recovery reinitializes and fully reloads the owner,
-compares the resulting evidence with the inspection's repaired seal, and uses
-a fresh VFS durability barrier before an idempotent retry can acknowledge the
-completed repair.
+- managed create and capture import;
+- exact content, metadata, lifecycle, and tombstone mutations;
+- current, exact, retained, receipt, and collection reads;
+- retained compare and restore;
+- first/after/before corpus, collection, and history pages;
+- bounded content range/stream delivery;
+- inspection, mirror repair, and coherent raw export; and
+- explicit begin/step/finalize/publish/mirror/cleanup compaction.
 
-## Headless owner and disposable queries
+Every consequential mutation names a stable RID and expected exact state.
+Caller-owned outputs are published only after complete validation, durable
+reconciliation, and cleanup. Service APIs expose no VFS path, tree key, page
+identifier, or storage cursor.
 
-The VFS owner exposes guarded create/import, exact read and replacement,
-metadata and lifecycle mutation, retained-history read/compare/restore, receipt
-lookup, and RID-based collection create/replace/read operations. Content writes
-precede complete inactive-bank construction and readback; only the fixed head
-replacement publishes a mutation. Caller operation keys, exact expected
-catalog/domain/collection revisions, capacity preflight, uncertain-head
-reconciliation, and terminal tombstones preserve retry and conflict semantics
-without substituting a content digest for operation or resource identity.
+## Failure and maintenance policy
 
-`LIBRARY-VFS-STORE-READ-IDENTITY ( rid entry store -- status )` performs one
-authoritative RID lookup without query/index discovery or reconstruction. It
-returns active or archived metadata with `OK`, returns terminal metadata with
-`TOMBSTONED`, and reports an unknown RID as `NOT_FOUND`. After safe arguments
-are admitted, every nonterminal failure clears output; `TOMBSTONED` instead
-returns the terminal entry. Alias rejection is nonmutating. This store-level
-archived metadata read is separate from projection identity acquisition, which
-admits active current state only.
+Repository inspection classifies `OK`, `ABSENT`, recognized root `FALLBACK`,
+`CORRUPT`, in-memory/operation `UNCERTAIN`, and checksummed `FUTURE` evidence.
+It reports each sealed physical role with exact presence, length, and digest.
 
-The third milestone adds no durable format or fifth path. During each complete
-authoritative load, Library derives fixed per-catalog-slot candidate bitsets
-from live/archived titles and tags plus each live/archived current content
-frame. The 128-slot bound consumes a fixed 57,344-byte candidate allocation.
-The activation-local index is bound to the selected store and generation,
-checksummed, and published only after the complete bank/arena/content candidate
-passes. Loss or damage is reconstructed by the next guarded refresh. An
-authoritative load failure remains an explicit error; it cannot manufacture an
-empty corpus or change identity, content, membership, provenance, lifecycle,
-receipt, generation, or mutation facts.
+Raw export revalidates an inspection seal and copies the exact evidence in
+bounded chunks. Changed evidence fails without publishing a partial output.
+Repair is intentionally limited to mirroring a fully validated fallback root.
+It never guesses through corruption, reinterprets future bytes, adopts an
+orphan suffix, resets a corpus, or fabricates domain records.
 
-`LIBRARY-VFS-STORE-QUERY-CORPUS` serves caller-owned pages of at most 32
-summaries in canonical catalog-slot order, with generation-pinned raw-slot
-continuation. Empty term is bounded browse. Nonempty terms are exact
-case-sensitive UTF-8 bytes: title/current-body use substring matching, tags use
-whole-value equality, and selected fields are ORed with one result per RID.
-Active/archived, managed/capture, media, and exact collection-RID filters are
-checked against authoritative facts; tombstones are excluded. Collection
-enumeration is separately bounded and generation stable. ASCII/Unicode folding,
-normalization, semantic ranking, embeddings, OCR, and automatic summaries stay
-outside this milestone. A continuation reuses the same term/filter scope and
-copies back both returned generation and raw slot; changing scope starts at
-slot zero.
+Compaction rebuilds live semantic evidence into the other data bank under
+explicit budgets. Publication changes shared authority once, then mirrors it
+before the retired bank can be cleaned. Failed or uncertain compaction remains
+blocked until explicit abort or recovery reaches a safe state.
 
-## Projection owner and lens rule
+At applet initialization, the durable cold states that can be presented are
+healthy/fallback, absent, corrupt, or future. `UNCERTAIN` is an operation or
+in-memory compaction state, not a durable cold repository health mode; the
+applet must not pretend otherwise.
 
-`akashic/tui/applets/library/projection-adapter.f` implements the Library domain acquisition
-root `LIBRARY-PROJECTION-OWNER$` (`org.akashic.library`). Its fixed-RID
-resource projections use `LIBRARY-PROJECTION-CONTRACT$`
-(`org.akashic.library.utf8-content.v1`). The activation can publish at most
-eight distinct live RID owners and can track at most 64 activation-local
-leases. Same-RID acquisitions share one fixed component instance but return
-distinct validated lifetime tokens alongside their semantic resource
-references.
+## Projection and other lenses
 
-The root embeds the neutral `interop/resource-owner-pool.f` and supplies its
-own caller-owned eight-slot/64-lease storage. The pool now owns component
-creation, publication rollback, token/generation/refcount accounting, inflight
-quiescence, and final destruction. Library's adapter still decides locator
-admission, managed-document versus capture descriptors, retained-history
-qualification, and every domain/storage status.
+`projection-adapter.f` exposes `org.akashic.library` resources using
+`org.akashic.library.utf8-content.v1`. It receives one explicit Library
+service and never consults ambient VFS or UI selection. Managed resources
+support describe, snapshot, and exact replace; captures are read-only.
+Archived exact locators remain readable while identity acquisition is active
+current state only. Tombstoned and pruned locators keep distinct terminal
+results.
 
-Every acquisition passes through the root even if the RID is already present
-in the resource registry. The root validates the exact requested RID/domain
-state through its explicitly supplied VFS-store instance; it never consults
-`VFS-CUR`, UI selection, history position, or another ambient store selector.
+Pad may become the deep-editing lens and Explorer may reveal a qualified
+physical origin, but Library remains semantic owner. A Practice binding can
+make a Library resource relevant without copying it or granting implicit
+mutation authority. Consequential actions never mean “the selected Library
+row” or “the active Pad tab.”
 
-`LIBRARY-PROJECTION-ROOT-INIT ( store context creg rreg bus root -- status )`
-borrows that complete runtime graph, including the request bus, until
-successful root finalization. Its embedded RACQ header is only the portable
-callback/token ABI. Generic `RACQ-ATTACH` cannot validate the full 4,192-byte
-root and reachable borrows, so `LIBRARY-PROJECTION-ATTACH ( locator root
-context rreg binding result -- status )` is the only supported attachment
-entry. Binding and result must be distinct caller-owned buffers disjoint from
-all inputs and protected owner state.
+## Current applet surface
 
-Managed-document descriptors expose describe, exact-locator snapshot, and
-current-exact replace; immutable-capture descriptors omit replace. Identity
-acquisition means active current state. Archived identity is unavailable, but
-a qualified exact archived locator stays readable and immutable; tombstoned
-and pruned states retain distinct terminal outcomes. Failed `LBIND` attachment
-rolls back the new lease.
+The executable applet browses and searches active/archived/all documents,
+previews a bounded content prefix, creates and renames managed documents,
+archives/unarchives, browses and filters collections, inspects retained
+history, and pages in both directions. It reconstructs the first page and
+preview from existing authority on a later activation. Corrupt and future
+authority are visibly blocked and nonwritable rather than shown as an empty
+corpus.
 
-The owner now delegates the mechanical closed-map argument decoding, result
-construction, digest relation checks, and canonical resource capability
-descriptors to `interop/resource-contract.f`. Library still owns RID admission,
-qualification, retained-history policy, media/kind meaning, UTF-8 policy,
-storage errors, and commit order. In particular, replace constructs and
-validates the complete response before `LIBRARY-VFS-STORE-REPLACE-MANAGED`;
-after a durable commit there is no remaining fallible result allocation.
+Capture import, tombstone, retained restore/compare, maintenance/raw export,
+deep Pad editing, and sibling routing remain deferred UI/integration work. The
+service behavior is preserved; it has not been stripped to match the small
+current lens.
 
-Tokens are activation-local, non-authoritative outside the neutral pool's
-private lease ledger, and never persistent. Public release is idempotent: it
-waits for request-dispatch quiescence, decrements accounting exactly once,
-preserves the original token and binding after a retryable cleanup failure,
-and unpublishes and wipes the slot only after successful final release. At
-capacity, acquisition refuses another distinct RID instead of evicting or
-retargeting an owner. Registry presence is not authority and cannot bypass
-retain accounting. Ordinary projection handlers use the pool's constant-time
-member/inflight scope; deep pool and registry walks remain explicit validation
-or lifecycle operations rather than per-request work.
-
-Pad is the deep-editing lens for managed documents and a read-only lens for
-captures. Library remains the semantic owner. Explorer may reveal an admitted
-physical origin and Desk may route a qualified locator, but neither receives
-Library ownership or authority by discovery. A Practice binding makes a
-resource relevant and nameable; it neither copies the record nor grants read,
-replace, archive, or deletion.
-
-Consequential operations name an exact Library target and expected domain
-state. They never mean the selected Library row, active Pad tab, focused
-applet, or newest revision.
-
-## Current package boundary
-
-All Library product code lives in `akashic/tui/applets/library/`. The model,
-record codecs and formats feed `repository.f`; `query.f` owns bounded query
-semantics; `service.f` owns commands, exact reads, history, collections and
-maintenance; `projection-adapter.f` adapts that service to resource interop;
-and `controller.f`, `view.f`, and `library.f` separate applet state/actions,
-rendering/input, and lifecycle composition. There is no top-level Library
-package or compatibility facade.
-
-`repository.f` is the sole owner of Library path strings, topology, and
-durable authority. The current `service.f` directly orchestrates its private
-I/O and VFSNAP machinery only through the explicitly temporary L12 seam; this
-does not create a second repository.
-
-The owner-pool mechanics live in `interop/` because Library and Daybook proved
-the same lifetime contract. Library identity, storage, qualification, query,
-projection and UX policy remain applet-owned.
-
-The temporary L8 seams are explicitly marked `L12-DELETION` in source. They
-cover the fixed-bank/process-global repository and its contract hooks; direct
-query access to the `_LIBCQ/_LIBIX/_LIBMR/_LIBMU/_LIBRARY/_LIBVCF/_LIBVFS/
-_LIBVP` families; service access to those plus `_LIBAUTH/_LIBLOC/_LIBMA/
-_LIBMD/_LIBPQ`; the model/codec/format private owner-span sentinels and the
-repository-to-service `_LIBVFS-PRIVATE-BEGIN/END` split; the fixed format's
-private layout offsets; projection and controller dependence on the
-storage-shaped service; and the view/lifecycle reach into `_LAPP-*` state
-before the settled paged item-source, view-model, and lifecycle boundary
-exists. L12 deletes those seams after successor parity. The model, domain
-semantics, projection policy, and applet composition are not compatibility
-layers.
-
-The existing `akashic/knowledge/taxonomy.f` and `akashic/store/vault.f` are not
-Library foundations. Neither supplies this bounded durable owner, revision,
-recovery, identity, or projection contract.
-
-The focused, capacity, performance, clean-cold, and damage-branch results that
-close the Gate 4 owner/storage gate are recorded in
-[`../../../../local_testing/evidence/library-gate4-close-20260720.md`](../../../../local_testing/evidence/library-gate4-close-20260720.md).
-
-The repository-root refactoring plan governs the remaining order. Indexed and
-streamed scale work is a later reviewed landing; this placement change creates
-no Library product boundary outside Desk and no storage-migration gate of its
-own.
-
-No component may infer Library VFS paths, register a capability by discovery,
-route to a selected row as authority, or treat pure codecs as a durable owner.
+For implementation details, see
+[`../../../../akashic/tui/applets/library/domain.md`](../../../../akashic/tui/applets/library/domain.md).

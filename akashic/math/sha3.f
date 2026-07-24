@@ -30,6 +30,8 @@
 \  Comparison:
 \   SHA3-256-COMPARE ( a b -- flag )  constant-time 32-byte compare
 \   SHA3-512-COMPARE ( a b -- flag )  constant-time 64-byte compare
+\   SHA3-256-HASH-COMPARE ( src len expected -- flag )
+\   SHA3-256-END-COMPARE ( expected -- flag )
 \
 \  Constants:
 \   SHA3-256-LEN    ( -- 32 )
@@ -299,6 +301,20 @@ VARIABLE _SHA3-HDST
     >R 2DROP R>
     0= IF TRUE ELSE FALSE THEN ;
 
+\ Neutral scratch for compare-only hashing.  Guarded builds serialize this
+\ buffer with the accelerator, so domains do not need private digest globals.
+CREATE _SHA3-COMPARE-DIGEST SHA3-256-LEN ALLOT
+
+: SHA3-256-HASH-COMPARE  ( src len expected -- flag )
+    >R
+    _SHA3-COMPARE-DIGEST SHA3-256-HASH
+    _SHA3-COMPARE-DIGEST R> SHA3-256-COMPARE ;
+
+: SHA3-256-END-COMPARE  ( expected -- flag )
+    >R
+    _SHA3-COMPARE-DIGEST SHA3-256-END
+    _SHA3-COMPARE-DIGEST R> SHA3-256-COMPARE ;
+
 \ ── Concurrency Guard ─────────────────────────────────────
 \ Spinning GUARD serialises all access to the shared Keccak
 \ state and hex-conversion buffer (_SHA3-HDST).
@@ -325,6 +341,8 @@ GUARD _sha3-guard
 ' SHA3-512-ADD     CONSTANT _s3-512-add-xt
 ' SHA3-256-END     CONSTANT _s3-256-end-xt
 ' SHA3-512-END     CONSTANT _s3-512-end-xt
+' SHA3-256-HASH-COMPARE CONSTANT _s3-256-hash-compare-xt
+' SHA3-256-END-COMPARE CONSTANT _s3-256-end-compare-xt
 
 \ ── one-shot entry points ──
 : SHA3-256-HASH   _s3-256-hash-xt   _sha3-guard WITH-GUARD ;
@@ -334,6 +352,8 @@ GUARD _sha3-guard
 : SHA3-256-HMAC   _s3-256-hmac-xt   _sha3-guard WITH-GUARD ;
 : SHA3-256->HEX   _s3-256-hex-xt    _sha3-guard WITH-GUARD ;
 : SHA3-512->HEX   _s3-512-hex-xt    _sha3-guard WITH-GUARD ;
+: SHA3-256-HASH-COMPARE
+    _s3-256-hash-compare-xt _sha3-guard WITH-GUARD ;
 
 \ ── streaming BEGIN (acquire guard) ──
 : SHA3-256-BEGIN  ( -- )
@@ -365,6 +385,12 @@ GUARD _sha3-guard
 : SHA3-512-END  ( dst -- )
     _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
     _s3-512-end-xt CATCH
+    _sha3-guard GUARD-RELEASE
+    ?DUP IF THROW THEN ;
+
+: SHA3-256-END-COMPARE  ( expected -- flag )
+    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
+    _s3-256-end-compare-xt CATCH
     _sha3-guard GUARD-RELEASE
     ?DUP IF THROW THEN ;
 

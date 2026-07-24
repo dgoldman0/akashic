@@ -43,7 +43,8 @@ CREATE _RB-ids 129 CELLS ALLOT
 
 : _RB-s  ( actual expected -- )
     2DUP <> IF
-        ." PERSISTENCE RECLAIM STATUS actual/expected " 2DUP . . CR
+        ." PERSISTENCE RECLAIM STATUS actual/expected "
+        2DUP SWAP . . CR
     THEN
     = _RB-a ;
 
@@ -84,6 +85,14 @@ CREATE _RB-ids 129 CELLS ALLOT
         _PSTC-store-a _PSTC-work-a PSTORE-WRITE-PAGE-TX
         PERSIST-S-OK _RB-s ;
 
+: _RB-claim-write  ( byte -- page-id )
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE ROT FILL
+    _PSTC-work-a PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @
+    DUP _RB-work RECLAIM-CLAIM-HIGH-WATER PERSIST-S-OK _RB-s
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 2 PICK
+        _PSTC-store-a _PSTC-work-a PSTORE-WRITE-PAGE-TX
+        PERSIST-S-OK _RB-s ;
+
 : _RB-finish  ( root -- )
     _RB-work RECLAIM-FINALIZE PERSIST-S-OK _RB-s
     _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 0 FILL
@@ -111,6 +120,66 @@ CREATE _RB-ids 129 CELLS ALLOT
     _PSTC-store-a _PSTC-work-a PSTORE-COMMIT PERSIST-S-OK _RB-s
     _PSTC-store-a PSTORE-GENERATION@ 2 = _RB-a
     _PSTC-store-a PSTORE-CURRENT-ROOT@ PROOTV.PAGE-COUNT @ 70 = _RB-a ;
+
+\ Page-budgeting consumers reserve against all three live ledgers through the
+\ public work API; inactive, negative, and over-capacity requests fail without
+\ changing transaction state.
+: _RB-room-contract  ( -- )
+    0 0 0 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    0 0 0 0 RECLAIM-TX-ROOM? 0= _RB-a
+    _RB-begin
+    128 64 64 _RB-work RECLAIM-TX-ROOM? _RB-a
+    -1 0 0 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    0 -1 0 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    0 0 -1 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    91 _RB-alloc-write DUP _RB-reserved ! DROP
+    127 64 64 _RB-work RECLAIM-TX-ROOM? _RB-a
+    128 0 0 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    0 0 _RB-id !
+    _RB-ids 1 _RB-work RECLAIM-RETIRE-BATCH PERSIST-S-OK _RB-s
+    0 63 64 _RB-work RECLAIM-TX-ROOM? _RB-a
+    0 64 0 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    _RB-reserved @ 0 _RB-id !
+    _RB-ids 1 _RB-work RECLAIM-DISCARD-BATCH PERSIST-S-OK _RB-s
+    0 0 63 _RB-work RECLAIM-TX-ROOM? _RB-a
+    0 0 64 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+    0 0 0 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    _RB-stack ;
+
+\ Hidden copy-on-write owners may insist on the current high-water id while
+\ still joining the same bounded consumer-issued ledger.  Only that exact id
+\ is admitted; a wrong claim poisons the proposal, and the 128th live claim is
+\ the last one accepted.
+: _RB-high-water-claim-contract  ( -- )
+    0 0 RECLAIM-CLAIM-HIGH-WATER PERSIST-S-INVALID _RB-s
+    0 _RB-work RECLAIM-CLAIM-HIGH-WATER PERSIST-S-BUSY _RB-s
+
+    _RB-begin
+    93 _RB-claim-write DUP 70 = _RB-a DROP
+    _RB-work _RCW.ALLOCATED-COUNT @ 1 = _RB-a
+    127 64 64 _RB-work RECLAIM-TX-ROOM? _RB-a
+    128 0 0 _RB-work RECLAIM-TX-ROOM? 0= _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+
+    _RB-begin
+    _PSTC-work-a PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @ 1+
+        _RB-work RECLAIM-CLAIM-HIGH-WATER PERSIST-S-CONFLICT _RB-s
+    _PSTC-store-a _PSTC-work-a PSTORE-TX-READY? 0= _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+
+    _RB-begin
+    128 0 ?DO I 1+ _RB-claim-write DROP LOOP
+    _RB-work _RCW.ALLOCATED-COUNT @ RECLAIM-ALLOCATED-MAX = _RB-a
+    _PSTC-work-a PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @
+        _RB-work RECLAIM-CLAIM-HIGH-WATER PERSIST-S-CAPACITY _RB-s
+    _PSTC-store-a _PSTC-work-a PSTORE-TX-READY? 0= _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+    _RB-stack ;
 
 \ Refused begin paths do not partially initialize a reclaim work object.
 \ One exact runtime owner fences OPEN, reentry, and a second work object while
@@ -816,6 +885,8 @@ CREATE _RB-ids 129 CELLS ALLOT
     _RB-state RECLAIM-STATE-SIZE _PSTC-store-a _RB-reclaim RECLAIM-OPEN
         PERSIST-S-OK _RB-s
     _RB-work RECLAIM-WORK-INIT PERSIST-S-OK _RB-s
+    _RB-room-contract
+    _RB-high-water-claim-contract
     _RB-ready-state-biconditional
     _RB-begin-ownership
     _RB-prebegin-append

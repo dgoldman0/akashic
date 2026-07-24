@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""Prove the public Library managed-document slice across two cold processes.
+"""Prove a current Library seed and exact replay across two cold processes.
 
-The first guest creates, queries, and exactly reads one managed document on
-the real MP64FS-backed VFS.  Its owner-generated RID is printed as test
-evidence.  The parent retains only the serialized disk image and that printed
-RID, replaces ``autoexec.f`` with a cold-readback program, and starts a second
-Python process containing a fresh emulator session.  No guest dictionary,
-VFS descriptor, Library descriptor, or RAM arena crosses the boundary.
+The first guest provisions the current MP64FS-backed repository, creates one
+managed document through the semantic service, and verifies bounded query,
+exact read, content delivery, and its operation receipt.  The parent keeps
+only serialized disk bytes and the printed RID, replaces ``autoexec.f``, and
+starts a second Python process with a fresh emulator and Forth dictionary.
+
+The cold guest reconstructs the exact public request, reopens and repeats the
+semantic readback, then replays the create key with deliberately stale expected
+logical generation zero.  Replay must return the original value without
+physical, logical, mutation-sequence, or document-count change.
+
+Broader lifecycle, retained-history, capture, collection, query, applet, and
+projection-owner parity stays in focused same-VFS gates.  This test supplies
+their bounded missing fact: current repository/service state survives a real
+fresh-process boundary before those higher layers consume it.
 """
 
 from __future__ import annotations
@@ -21,17 +30,23 @@ from pathlib import Path
 from typing import Final
 
 from akashic_tui import (
+    DEFAULT_EXT_MEM_MIB,
     FTYPE_FORTH,
     MEGAPAD_ROOT,
     MP64FS,
     PROFILES,
     MachineSession,
     Profile,
+    _linked_autoexec,
+    _linked_chunks,
     build_image,
+    dependency_order,
 )
 
 
+LOCAL_TESTING: Final = Path(__file__).resolve().parent
 PROFILE_NAME: Final = "_library-managed-two-cold-processes"
+GUEST_FIXTURE: Final = "local_testing/lib-cold-l12-test.f"
 FIRST_MARKER: Final = "LIBRARY MANAGED FIRST BOOT PASS"
 COLD_MARKER: Final = "LIBRARY MANAGED COLD BOOT PASS"
 FIRST_FAILURES: Final = (
@@ -55,268 +70,43 @@ COLD_FAILURES: Final = (
 RID_RE: Final = re.compile(r"LIBRARY MANAGED FIRST RID +([0-9A-F]{64})")
 
 
-FIRST_AUTOEXEC = r"""\ autoexec.f - first managed-document persistence boot
+FIRST_AUTOEXEC = rf"""\ autoexec.f - first current Library persistence boot
 ENTER-USERLAND
 REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
-
-VARIABLE _lmf-fails
-VARIABLE _lmf-checks
-VARIABLE _lmf-vfs
-CREATE _lmf-bd /BLOCK-DEVICE ALLOT
-CREATE _lmf-volume /VOLUME ALLOT
-VARIABLE _lmf-count
-VARIABLE _lmf-next
-VARIABLE _lmf-generation
-VARIABLE _lmf-status
-VARIABLE _lmf-required
-
-CREATE _lmf-arena-id LIB-DIGEST-SIZE ALLOT
-CREATE _lmf-operation-key LIB-OPERATION-KEY-SIZE ALLOT
-CREATE _lmf-request LIBRARY-MANAGED-CREATE-REQUEST-SIZE ALLOT
-CREATE _lmf-result LIB-ENTRY-SIZE ALLOT
-CREATE _lmf-summary LIBRARY-QUERY-SUMMARY-SIZE ALLOT
-CREATE _lmf-read-entry LIB-ENTRY-SIZE ALLOT
-CREATE _lmf-read-content LIB-CONTENT-SIZE ALLOT
-CREATE _lmf-read-bytes 64 ALLOT
-CREATE _lmf-store LIBRARY-VFS-STORE-SIZE ALLOT
-
-: _lmf-assert  ( flag -- )
-    1 _lmf-checks +!
-    0= IF
-        1 _lmf-fails +!
-        ." LIBRARY MANAGED FIRST ASSERT " _lmf-checks @ . CR
-    THEN ;
-
-: _lmf-request!  ( -- )
-    _lmf-request LIBRARY-MANAGED-CREATE-REQUEST-INIT
-    1 _lmf-request LIBMCR.EXPECTED-CATALOG-GENERATION !
-    LIB-MEDIA-TEXT-MARKDOWN _lmf-request LIBMCR.MEDIA !
-    _lmf-operation-key _lmf-request
-        LIBRARY-MANAGED-CREATE-OPERATION-KEY!
-        LIBSTORE-S-OK = _lmf-assert
-    S" Cold-process note" _lmf-request LIBRARY-MANAGED-CREATE-TITLE!
-        LIBSTORE-S-OK = _lmf-assert
-    S" durable managed content" _lmf-request
-        LIBRARY-MANAGED-CREATE-CONTENT!
-        LIBSTORE-S-OK = _lmf-assert
-    _lmf-request LIBRARY-MANAGED-CREATE-REQUEST-VALID? _lmf-assert ;
-
-: _lmf-query  ( -- )
-    0 0 _lmf-summary 1 _lmf-store
-        LIBRARY-VFS-STORE-QUERY-ACTIVE
-    _lmf-status ! _lmf-generation ! _lmf-next ! _lmf-count ! ;
-
-: _lmf-read  ( -- )
-    _lmf-summary LIBQS.REF RREF.ID
-    _lmf-summary LIBQS.DOMAIN-REVISION @
-    _lmf-read-bytes 64 _lmf-read-entry _lmf-read-content _lmf-store
-        LIBRARY-VFS-STORE-READ-MANAGED-EXACT
-    _lmf-status ! _lmf-required ! ;
-
-: _lmf-hex-digit  ( nibble -- )
-    DUP 10 < IF [CHAR] 0 + ELSE 10 - [CHAR] A + THEN EMIT ;
-
-: _lmf-hex-byte  ( byte -- )
-    DUP 16 / _lmf-hex-digit 15 AND _lmf-hex-digit ;
-
-: _lmf-rid.  ( rid -- )
-    LIB-DIGEST-SIZE 0 DO DUP I + C@ _lmf-hex-byte LOOP DROP ;
-
-: _lmf-run  ( -- )
-    0 _lmf-fails ! 0 _lmf-checks !
-    _lmf-arena-id LIB-DIGEST-SIZE 0xA4 FILL
-    _lmf-operation-key LIB-OPERATION-KEY-SIZE 0x5C FILL
-    _lmf-bd BD-OPEN THROW
-    _lmf-bd _lmf-volume VOL-RAW THROW
-    2097152 A-XMEM ARENA-NEW IF -7701 THROW THEN
-    _lmf-volume VMP-NEW ?DUP IF THROW THEN
-    DUP _lmf-vfs ! DUP 0<> _lmf-assert VFS-USE
-    _lmf-vfs @ _lmf-store LIBRARY-VFS-STORE-INIT
-        LIBSTORE-S-OK = _lmf-assert
-    _lmf-store LIBRARY-VFS-STORE-LOAD
-        LIBSTORE-S-ABSENT = _lmf-assert
-    _lmf-arena-id _lmf-store LIBRARY-VFS-STORE-PROVISION
-        LIBSTORE-S-OK = _lmf-assert
-    _lmf-request!
-    _lmf-request _lmf-result _lmf-store
-        LIBRARY-VFS-STORE-CREATE-MANAGED
-        LIBSTORE-S-OK = _lmf-assert
-    _lmf-result LIB-ENTRY-VALID? _lmf-assert
-    _lmf-result LIBE.ID RID-PRESENT? _lmf-assert
-    _lmf-result LIBE.RECEIPT LIBR.OPERATION-KEY
-        _lmf-operation-key RID= _lmf-assert
-    _lmf-store LIBRARY-VFS-STORE.GENERATION @ 2 = _lmf-assert
-    _lmf-query
-    _lmf-status @ LIBSTORE-S-OK = _lmf-assert
-    _lmf-count @ 1 = _lmf-assert
-    _lmf-next @ -1 = _lmf-assert
-    _lmf-generation @ 2 = _lmf-assert
-    _lmf-summary LIBQS.REF RREF-VALID? _lmf-assert
-    _lmf-summary LIBQS.REF RREF.ID
-        _lmf-result LIBE.ID RID= _lmf-assert
-    _lmf-summary LIBQS-TITLE$ S" Cold-process note"
-        COMPARE 0= _lmf-assert
-    _lmf-read
-    _lmf-status @ LIBSTORE-S-OK = _lmf-assert
-    _lmf-required @ S" durable managed content" NIP = _lmf-assert
-    _lmf-read-entry LIB-ENTRY-SIZE _lmf-result LIB-ENTRY-SIZE
-        COMPARE 0= _lmf-assert
-    _lmf-read-content LIB-CONTENT-VALID? _lmf-assert
-    _lmf-read-content LIBCT-DATA$ S" durable managed content"
-        COMPARE 0= _lmf-assert
-    _lmf-vfs @ VFS-SYNC 0= _lmf-assert
-    _lmf-fails @ 0= IF
-        ." LIBRARY MANAGED FIRST RID " _lmf-result LIBE.ID _lmf-rid. CR
-        ." LIBRARY MANAGED FIRST BOOT PASS " _lmf-checks @ . CR
-    ELSE
-        ." LIBRARY MANAGED FIRST BOOT FAIL "
-            _lmf-fails @ . ." / " _lmf-checks @ . CR
-    THEN ;
-
-_lmf-run
+REQUIRE {GUEST_FIXTURE}
+_LC12-FIRST-RUN
+0 0xFFFFFF0000000006 C!
 """
+
+
+def _forth_bytes(data: bytes) -> str:
+    """Return bounded bytes as readable ``C,`` rows for generated Forth."""
+    return "\n".join(
+        " ".join(f"0x{byte:02X} C," for byte in data[offset : offset + 8])
+        for offset in range(0, len(data), 8)
+    )
 
 
 def _cold_autoexec(expected_rid: bytes) -> str:
     if len(expected_rid) != 32:
         raise ValueError("a Library RID must contain exactly 32 bytes")
-    rid_cells = "\n".join(
-        " ".join(f"0x{byte:02X} C," for byte in expected_rid[offset : offset + 8])
-        for offset in range(0, len(expected_rid), 8)
-    )
-    return rf"""\ autoexec.f - cold managed-document public readback
+    return rf"""\ autoexec.f - cold current Library persistence readback
 ENTER-USERLAND
 REQUIRE tui/applets/library/service.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
+REQUIRE {GUEST_FIXTURE}
 
-VARIABLE _lmc-fails
-VARIABLE _lmc-checks
-VARIABLE _lmc-vfs
-CREATE _lmc-bd /BLOCK-DEVICE ALLOT
-CREATE _lmc-volume /VOLUME ALLOT
-VARIABLE _lmc-count
-VARIABLE _lmc-next
-VARIABLE _lmc-generation
-VARIABLE _lmc-status
-VARIABLE _lmc-required
+CREATE _lmc-expected-rid
+{_forth_bytes(expected_rid)}
 
-CREATE _lmc-expected-rid {rid_cells}
-CREATE _lmc-operation-key LIB-OPERATION-KEY-SIZE ALLOT
-CREATE _lmc-request LIBRARY-MANAGED-CREATE-REQUEST-SIZE ALLOT
-CREATE _lmc-summary LIBRARY-QUERY-SUMMARY-SIZE ALLOT
-CREATE _lmc-entry LIB-ENTRY-SIZE ALLOT
-CREATE _lmc-content LIB-CONTENT-SIZE ALLOT
-CREATE _lmc-retry-entry LIB-ENTRY-SIZE ALLOT
-CREATE _lmc-bytes 64 ALLOT
-CREATE _lmc-store LIBRARY-VFS-STORE-SIZE ALLOT
-
-: _lmc-assert  ( flag -- )
-    1 _lmc-checks +!
-    0= IF
-        1 _lmc-fails +!
-        ." LIBRARY MANAGED COLD ASSERT " _lmc-checks @ . CR
-    THEN ;
-
-: _lmc-request!  ( -- )
-    _lmc-request LIBRARY-MANAGED-CREATE-REQUEST-INIT
-    \ This is deliberately stale after the first boot's generation-2 commit.
-    1 _lmc-request LIBMCR.EXPECTED-CATALOG-GENERATION !
-    LIB-MEDIA-TEXT-MARKDOWN _lmc-request LIBMCR.MEDIA !
-    _lmc-operation-key _lmc-request
-        LIBRARY-MANAGED-CREATE-OPERATION-KEY!
-        LIBSTORE-S-OK = _lmc-assert
-    S" Cold-process note" _lmc-request LIBRARY-MANAGED-CREATE-TITLE!
-        LIBSTORE-S-OK = _lmc-assert
-    S" durable managed content" _lmc-request
-        LIBRARY-MANAGED-CREATE-CONTENT!
-        LIBSTORE-S-OK = _lmc-assert
-    _lmc-request LIBRARY-MANAGED-CREATE-REQUEST-VALID? _lmc-assert ;
-
-: _lmc-query  ( expected-generation -- )
-    0 _lmc-summary 1 _lmc-store LIBRARY-VFS-STORE-QUERY-ACTIVE
-    _lmc-status ! _lmc-generation ! _lmc-next ! _lmc-count ! ;
-
-: _lmc-read  ( -- )
-    _lmc-summary LIBQS.REF RREF.ID
-    _lmc-summary LIBQS.DOMAIN-REVISION @
-    _lmc-bytes 64 _lmc-entry _lmc-content _lmc-store
-        LIBRARY-VFS-STORE-READ-MANAGED-EXACT
-    _lmc-status ! _lmc-required ! ;
-
-: _lmc-run  ( -- )
-    0 _lmc-fails ! 0 _lmc-checks !
-    _lmc-operation-key LIB-OPERATION-KEY-SIZE 0x5C FILL
-    _lmc-bd BD-OPEN THROW
-    _lmc-bd _lmc-volume VOL-RAW THROW
-    2097152 A-XMEM ARENA-NEW IF -7702 THROW THEN
-    _lmc-volume VMP-NEW ?DUP IF THROW THEN
-    DUP _lmc-vfs ! DUP 0<> _lmc-assert VFS-USE
-    _lmc-vfs @ _lmc-store LIBRARY-VFS-STORE-INIT
-        LIBSTORE-S-OK = _lmc-assert
-    _lmc-store LIBRARY-VFS-STORE-LOAD
-        LIBSTORE-S-OK = _lmc-assert
-    _lmc-store LIBRARY-VFS-STORE.GENERATION @ 2 = _lmc-assert
-    0 _lmc-query
-    _lmc-status @ LIBSTORE-S-OK = _lmc-assert
-    _lmc-count @ 1 = _lmc-assert
-    _lmc-next @ -1 = _lmc-assert
-    _lmc-generation @ 2 = _lmc-assert
-    _lmc-summary LIBQS.REF RREF-VALID? _lmc-assert
-    _lmc-summary LIBQS.REF RREF.ID
-        _lmc-expected-rid RID= _lmc-assert
-    _lmc-summary LIBQS.DOMAIN-REVISION @ 1 = _lmc-assert
-    _lmc-summary LIBQS.KIND @
-        LIB-KIND-MANAGED-DOCUMENT = _lmc-assert
-    _lmc-summary LIBQS.LIFECYCLE @
-        LIB-LIFECYCLE-ACTIVE = _lmc-assert
-    _lmc-summary LIBQS-TITLE$ S" Cold-process note"
-        COMPARE 0= _lmc-assert
-    _lmc-read
-    _lmc-status @ LIBSTORE-S-OK = _lmc-assert
-    _lmc-required @ S" durable managed content" NIP = _lmc-assert
-    _lmc-entry LIB-ENTRY-VALID? _lmc-assert
-    _lmc-entry LIBE.ID _lmc-expected-rid RID= _lmc-assert
-    _lmc-entry LIBE.RECEIPT LIBR.OPERATION-KEY
-        _lmc-operation-key RID= _lmc-assert
-    _lmc-entry LIBE.RECEIPT LIBR.EXPECTED-CATALOG-GENERATION @
-        1 = _lmc-assert
-    _lmc-content LIB-CONTENT-VALID? _lmc-assert
-    _lmc-content LIBCT.DATA-A @ _lmc-bytes = _lmc-assert
-    _lmc-content LIBCT-DATA$ S" durable managed content"
-        COMPARE 0= _lmc-assert
-
-    \ Same-key retry must win over the stale generation and return the
-    \ original owner RID without publishing another generation.
-    _lmc-request!
-    _lmc-request _lmc-retry-entry _lmc-store
-        LIBRARY-VFS-STORE-CREATE-MANAGED
-        LIBSTORE-S-OK = _lmc-assert
-    _lmc-retry-entry LIBE.ID _lmc-expected-rid RID= _lmc-assert
-    _lmc-retry-entry LIB-ENTRY-SIZE _lmc-entry LIB-ENTRY-SIZE
-        COMPARE 0= _lmc-assert
-    _lmc-store LIBRARY-VFS-STORE.GENERATION @ 2 = _lmc-assert
-    2 _lmc-query
-    _lmc-status @ LIBSTORE-S-OK = _lmc-assert
-    _lmc-count @ 1 = _lmc-assert
-    _lmc-next @ -1 = _lmc-assert
-    _lmc-generation @ 2 = _lmc-assert
-    _lmc-summary LIBQS.REF RREF.ID
-        _lmc-expected-rid RID= _lmc-assert
-    _lmc-vfs @ VFS-SYNC 0= _lmc-assert
-    _lmc-fails @ 0= IF
-        ." LIBRARY MANAGED COLD BOOT PASS " _lmc-checks @ . CR
-    ELSE
-        ." LIBRARY MANAGED COLD BOOT FAIL "
-            _lmc-fails @ . ." / " _lmc-checks @ . CR
-    THEN ;
-
-_lmc-run
+_lmc-expected-rid _LC12-COLD-RUN
+0 0xFFFFFF0000000006 C!
 """
 
 
 def _profile() -> Profile:
-    """Return the exact build closure needed by both cold processes."""
+    """Return the current linked Library closure used by both processes."""
     return Profile(
         roots=(
             "tui/applets/library/service.f",
@@ -327,9 +117,63 @@ def _profile() -> Profile:
         ready_markers=(FIRST_MARKER,),
         stable_markers=(FIRST_MARKER,),
         failure_markers=FIRST_FAILURES,
+        initial_files=(
+            (
+                GUEST_FIXTURE,
+                (LOCAL_TESTING / Path(GUEST_FIXTURE).name).read_bytes(),
+            ),
+        ),
+        linked=True,
         include_large_sample=False,
         total_sectors=8192,
     )
+
+
+def _linked_layout(
+    profile: Profile,
+) -> tuple[tuple[str, ...], dict[str, bytes]]:
+    """Reproduce the deterministic linked module layout built for both boots."""
+    if not profile.linked:
+        raise ValueError("Library managed two-boot profile must be linked")
+    modules = dependency_order(profile.roots)
+    chunks = _linked_chunks(modules, profile.link_chunk_bytes)
+    if not chunks:
+        raise RuntimeError("Library managed linked closure produced no chunks")
+    return modules, chunks
+
+
+def _assert_linked_manifest(
+    filesystem: MP64FS,
+    chunks: dict[str, bytes],
+) -> tuple[str, ...]:
+    """Verify and return the exact persisted linked chunks from the first boot."""
+    parent = filesystem.resolve_path("/.akashic")
+    expected_names = tuple(Path(path).name for path in chunks)
+    actual_names = tuple(
+        sorted(entry.name for entry in filesystem.list_files(parent=parent))
+    )
+    if actual_names != tuple(sorted(expected_names)):
+        raise RuntimeError(
+            "first-boot linked chunk manifest changed: "
+            f"expected {expected_names!r}, found {actual_names!r}"
+        )
+    for path, expected_content in chunks.items():
+        name = Path(path).name
+        actual_content = filesystem.read_file(name, parent=parent)
+        if actual_content != expected_content:
+            raise RuntimeError(f"first-boot linked chunk content changed: {path}")
+    return tuple(chunks)
+
+
+def _linked_cold_autoexec(
+    filesystem: MP64FS,
+    profile: Profile,
+    expected_rid: bytes,
+) -> str:
+    """Link the cold script against the exact verified first-boot chunks."""
+    modules, chunks = _linked_layout(profile)
+    chunk_names = _assert_linked_manifest(filesystem, chunks)
+    return _linked_autoexec(_cold_autoexec(expected_rid), chunk_names, modules)
 
 
 def _run_until(
@@ -337,8 +181,9 @@ def _run_until(
     marker: str,
     failures: tuple[str, ...],
     timeout: float,
-) -> tuple[bytes, str]:
+) -> tuple[bytes, str, int, float]:
     """Run one fresh emulator until its guest reports a terminal marker."""
+    started = time.monotonic()
     deadline = time.monotonic() + timeout
     steps = 0
     with MachineSession.from_bios(
@@ -347,9 +192,11 @@ def _run_until(
         cols=108,
         rows=34,
         batch_steps=500_000,
+        ext_mem_size=DEFAULT_EXT_MEM_MIB << 20,
+        num_cores=1,
     ) as session:
         session.boot()
-        while time.monotonic() < deadline and steps < 5_000_000_000:
+        while time.monotonic() < deadline and steps < 12_000_000_000:
             report = session.run(
                 max_steps=50_000_000,
                 wall_timeout_s=min(2.0, max(0.05, deadline - time.monotonic())),
@@ -359,14 +206,27 @@ def _run_until(
             screen = session.snapshot().text()
             failure = next((item for item in failures if item in screen), None)
             if failure is not None:
-                raise RuntimeError(f"guest reported {failure!r}\n{screen}")
+                raise RuntimeError(
+                    f"guest reported {failure!r} after {steps:,} steps "
+                    f"in {time.monotonic() - started:.2f}s\n{screen}"
+                )
             if marker in screen:
                 raw = session.raw_text()
-                return bytes(session.system.storage._image_data), screen + "\n" + raw
+                return (
+                    bytes(session.system.storage._image_data),
+                    screen + "\n" + raw,
+                    steps,
+                    time.monotonic() - started,
+                )
             if report.reason in ("halted", "stalled"):
                 break
         raw = session.raw_text()
-        raise RuntimeError(f"timed out waiting for {marker!r}\n{raw[-4000:]}")
+        screen = session.snapshot().text()
+        raise RuntimeError(
+            f"timed out waiting for {marker!r} after {steps:,} steps "
+            f"in {time.monotonic() - started:.2f}s\n"
+            f"{screen}\n{raw[-4000:]}"
+        )
 
 
 def _worker(
@@ -376,10 +236,12 @@ def _worker(
     timeout: float,
     sender: Connection,
 ) -> None:
-    """Run one boot in a spawned process and return only serialized evidence."""
+    """Run one boot in a spawned process and return serialized evidence."""
     try:
-        disk, output = _run_until(Path(image), marker, failures, timeout)
-        sender.send(("ok", disk, output))
+        disk, output, steps, elapsed = _run_until(
+            Path(image), marker, failures, timeout
+        )
+        sender.send(("ok", disk, output, steps, elapsed))
     except BaseException:  # Preserve the child traceback for the CLI caller.
         sender.send(("error", traceback.format_exc()))
     finally:
@@ -391,7 +253,7 @@ def _run_in_fresh_process(
     marker: str,
     failures: tuple[str, ...],
     timeout: float,
-) -> tuple[bytes, str]:
+) -> tuple[bytes, str, int, float]:
     """Start one spawn-isolated process containing exactly one machine boot."""
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(duplex=False)
@@ -428,20 +290,25 @@ def _run_in_fresh_process(
         )
     if payload[0] == "error":
         raise RuntimeError(str(payload[1]))
-    if payload[0] != "ok" or len(payload) != 3:
+    if payload[0] != "ok" or len(payload) != 5:
         raise RuntimeError(f"invalid cold-boot worker result: {payload[0]!r}")
-    disk, output = payload[1], payload[2]
-    if not isinstance(disk, bytes) or not isinstance(output, str):
+    disk, output, steps, elapsed = payload[1:]
+    if (
+        not isinstance(disk, bytes)
+        or not isinstance(output, str)
+        or not isinstance(steps, int)
+        or not isinstance(elapsed, float)
+    ):
         raise RuntimeError("cold-boot worker returned malformed evidence")
     if process.exitcode != 0:
         raise RuntimeError(f"cold-boot worker exited with status {process.exitcode}")
-    return disk, output
+    return disk, output, steps, elapsed
 
 
 def _first_rid(output: str) -> bytes:
     match = RID_RE.search(output)
     if match is None:
-        raise RuntimeError("first boot passed without printing its generated RID")
+        raise RuntimeError("first boot passed without printing its durable RID")
     return bytes.fromhex(match.group(1))
 
 
@@ -452,13 +319,18 @@ def main() -> int:
         type=Path,
         default=Path("/tmp/akashic-library-managed-two-boot.img"),
     )
-    parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument("--timeout", type=float, default=360.0)
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be greater than zero")
 
+    fixture_name = Path(GUEST_FIXTURE).name
+    if len(fixture_name) > 23:
+        raise AssertionError(f"MP64FS fixture component is too long: {fixture_name}")
+
+    profile = _profile()
     previous = PROFILES.get(PROFILE_NAME)
-    PROFILES[PROFILE_NAME] = _profile()
+    PROFILES[PROFILE_NAME] = profile
     try:
         image = build_image(PROFILE_NAME, args.image)
     finally:
@@ -467,26 +339,33 @@ def main() -> int:
         else:
             PROFILES[PROFILE_NAME] = previous
 
-    first_disk, first_output = _run_in_fresh_process(
-        image, FIRST_MARKER, FIRST_FAILURES, args.timeout
+    first_disk, first_output, first_steps, first_elapsed = (
+        _run_in_fresh_process(
+            image, FIRST_MARKER, FIRST_FAILURES, args.timeout
+        )
     )
     expected_rid = _first_rid(first_output)
 
-    fs = MP64FS(bytearray(first_disk))
-    if fs.find_file("autoexec.f") is None:
+    filesystem = MP64FS(bytearray(first_disk))
+    if filesystem.find_file("autoexec.f") is None:
         raise RuntimeError("first-boot image has no autoexec.f to replace")
-    fs.delete_file("autoexec.f")
-    fs.inject_file(
+    cold_autoexec = _linked_cold_autoexec(filesystem, profile, expected_rid)
+    filesystem.delete_file("autoexec.f")
+    filesystem.inject_file(
         "autoexec.f",
-        _cold_autoexec(expected_rid).encode("utf-8"),
+        cold_autoexec.encode("utf-8"),
         ftype=FTYPE_FORTH,
     )
-    fs.save(image)
+    filesystem.save(image)
 
-    _run_in_fresh_process(image, COLD_MARKER, COLD_FAILURES, args.timeout)
+    _, _, cold_steps, cold_elapsed = _run_in_fresh_process(
+        image, COLD_MARKER, COLD_FAILURES, args.timeout
+    )
     print(
-        "Library managed-document two-process cold acceptance: PASS "
-        f"({image}, RID {expected_rid.hex()})"
+        "Library current-format two-process cold acceptance: PASS "
+        f"({image}, RID {expected_rid.hex()}; "
+        f"first {first_steps:,} steps/{first_elapsed:.2f}s, "
+        f"cold {cold_steps:,} steps/{cold_elapsed:.2f}s)"
     )
     return 0
 

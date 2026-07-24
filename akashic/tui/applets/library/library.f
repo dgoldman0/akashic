@@ -3,9 +3,6 @@
 \ =====================================================================
 \  Public applet descriptor callbacks compose the controller and view.
 \  Entry: LIBRARY-APPLET-ENTRY / LIBRARY-APPLET-RUN.
-\  L12-DELETION: lifecycle callbacks directly reach _LAPP-* controller/view
-\  internals as bounded scaffolding. L12 replaces this with their settled
-\  applet-owned lifecycle interface after parity and deletes the private reach.
 \ =====================================================================
 
 PROVIDED akashic-tui-library
@@ -38,23 +35,27 @@ REQUIRE view.f
 
 : LIBRARY-APPLET-INIT-CB  ( instance -- )
     _LAPP-ACTIVATE
-    0 _LAPP-OWNS-LIVE ! 0 _LAPP-STORE-INITIALIZED ! 0 _LAPP-READY !
-    0 _LAPP-PREVIEW-BUFFER !
-    LIBSTORE-S-ABSENT _LAPP-LAST-STATUS !
+    0 _LAPP-OWNS-LIVE ! 0 _LAPP-OWNER-INITIALIZED ! 0 _LAPP-READY !
+    0 _LAPP-RUNTIME !
+    LIBRARY-SERVICE-S-ABSENT _LAPP-LAST-STATUS !
     _LAPP-V-ACTIVE _LAPP-VIEW ! _LAPP-V-ACTIVE _LAPP-RETURN-VIEW !
     0 _LAPP-PROMPT ! 0 _LAPP-PROMPT-RGN !
     _LAPP-PRM-NONE _LAPP-PROMPT-MODE !
     0 _LAPP-PENDING-CREATE ! 0 _LAPP-DISCARD-ARMED !
     0 _LAPP-FILTER-ACTIVE ! 0 _LAPP-TERM-U !
     _LAPP-ENTRY LIB-ENTRY-INIT
-    _LAPP-CONTENT LIB-CONTENT-INIT
-    _LAPP-COLLECTION-VIEW LIBRARY-COLLECTION-VIEW-INIT
-    LIB-CONTENT-MAX XMEM-ALLOT? IF
-        DROP LIBSTORE-S-ALLOCATION _LAPP-LAST-STATUS !
+    _LAPP-NEXT-ENTRY LIB-ENTRY-INIT
+    _LAPP-RESULT-ENTRY LIB-ENTRY-INIT
+    _LAPP-CREATE-ENTRY LIB-ENTRY-INIT
+    _LAPP-CREATE-CONTENT LIB-CONTENT-INIT
+    _LAPP-COLLECTION LIBPA-COLLECTION-INIT
+    _LAPP-RUNTIME-SIZE XMEM-ALLOT? IF
+        DROP LIBRARY-SERVICE-S-CAPACITY _LAPP-LAST-STATUS !
     ELSE
-        _LAPP-PREVIEW-BUFFER !
+        DUP _LAPP-RUNTIME !
+        _LAPP-RUNTIME-SIZE 0 FILL
     THEN
-    _LAPP-ARENA-ID!
+    _LAPP-BOOTSTRAP-ID!
     S" library-body" UTUI-BY-ID _LAPP-E-BODY !
     S" sbar" UTUI-BY-ID _LAPP-E-SBAR !
     S" sbar-view" UTUI-BY-ID _LAPP-E-SBAR-VIEW !
@@ -73,11 +74,11 @@ REQUIRE view.f
     THEN
     _LAPP-BIND-ACTIONS
     _LAPP-CLEAR-PAGES _LAPP-CLEAR-PREVIEW
-    _LAPP-PREVIEW-BUFFER @ 0= IF
-        \ The UI remains available to report the allocation failure, but no
-        \ owner operation runs without its exact-read output buffer.
+    _LAPP-RUNTIME@ 0= IF
+        \ The UI remains available to report allocation failure, but no owner
+        \ operation runs without its activation-local working set.
     ELSE _LAPP-LIVE-INSTANCE @ IF
-        LIBSTORE-S-BUSY _LAPP-LAST-STATUS !
+        LIBRARY-SERVICE-S-BUSY _LAPP-LAST-STATUS !
     ELSE
         _LAPP-CURRENT-INSTANCE @ _LAPP-LIVE-INSTANCE !
         -1 _LAPP-OWNS-LIVE !
@@ -130,13 +131,11 @@ REQUIRE view.f
     _LAPP-PROMPT @ ?DUP IF PRM-FREE THEN
     _LAPP-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     _LAPP-PANEL-RGN @ ?DUP IF RGN-FREE THEN
-    _LAPP-STORE-INITIALIZED @ IF
-        _LAPP-STORE LIBRARY-VFS-STORE-FINI DROP
-    THEN
-    _LAPP-PREVIEW-BYTES ?DUP IF
-        DUP LIB-CONTENT-MAX 0 FILL
-        LIB-CONTENT-MAX XMEM-FREE-BLOCK
-        0 _LAPP-PREVIEW-BUFFER !
+    _LAPP-OWNER-CLOSE
+    _LAPP-RUNTIME@ ?DUP IF
+        DUP _LAPP-RUNTIME-SIZE 0 FILL
+        _LAPP-RUNTIME-SIZE XMEM-FREE-BLOCK
+        0 _LAPP-RUNTIME !
     THEN
     _LAPP-CLEAR-PENDING
     _LAPP-PROMPT-BUF _LAPP-PROMPT-CAP 0 FILL

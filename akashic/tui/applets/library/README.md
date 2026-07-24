@@ -1,27 +1,40 @@
 # Library applet
 
-Status: bounded user-experience probe over the applet-owned Library service.
-The executable lens is deliberately single-instance and calls only public
-Library APIs; it neither opens Library-private VFS paths nor duplicates the
-catalog, index, or mutation authority. Renderer-free service tests do not give
-Library a product identity outside Desk.
+Library is a Desk applet and corpus owner. Its renderer-free modules are
+independently testable, but they are not a standalone Library product.
 
-The current slice can browse and search active, archived, or all records; page
-through bounded results; create a managed document; rename its title;
-archive/unarchive it; inspect and filter by collections; and inspect retained
-managed-content history. A create is protected before first-use provisioning;
-after its first owner dispatch, an explicit retry preserves the operation
-identity and byte-exact request rather than risking a duplicate document after
-an uncertain result.
+The executable lens can browse and search active, archived, or all documents;
+page forward and backward; preview bounded content; create a managed document;
+rename, archive, and unarchive it; browse and filter collections; and inspect
+retained content history. An uncertain create remains an exact prepared
+request: retry reuses its operation key and bytes instead of manufacturing a
+second document.
 
-Pad/projection integration, capture import, export, repair, restore, revision
-comparison, and destructive tombstoning remain deferred UI work. The fixed
-development arena identity is stable enough to reopen this probe's corpus, but
-is not a user/profile identity or a migration policy.
+The applet-owned code is divided by responsibility:
 
-The source is deliberately divided into `model.f`, applet-owned codecs and
-formats, `repository.f`, `query.f`, `service.f`,
-`projection-adapter.f`, `controller.f`, `view.f`, and the lifecycle/composition
-entry `library.f`. There is no top-level Library product package or facade.
+- `model.f` and `document-values.f` define and prepare Library values;
+- `index-keys.f` and `persistence-adapter.f` map those meanings onto neutral
+  checked pages, ordered indexes, immutable chunked blobs, reclamation, and
+  compaction;
+- `repository.f` alone selects `/library/*` topology and owns physical
+  lifecycle and recovery;
+- `query.f` and `service.f` expose semantic keyset pages, commands, exact
+  reads, maintenance, and bounded content delivery;
+- `projection-adapter.f` provides activation-local resource projections; and
+- `controller.f`, `view.f`, and `library.f` own applet state, rendering, input,
+  and lifecycle composition.
 
-See the [full applet notes](../../../../docs/tui/applets/library/library.md).
+Documents, collections, and collection membership are indexed populations,
+not fixed catalog arrays. Content is chunked and streamable; queries and
+compaction use caller-supplied bounded working sets. Multi-index mutations
+stage according to actual page/reclamation room and advance the logical
+generation once. The prototype has one current layout and no legacy decoder,
+compatibility facade, or migration stack.
+
+Pad routing, capture import, destructive tombstoning, restore/compare,
+maintenance, and raw export are implemented service capabilities but remain
+deferred applet UI work. The source-defined bootstrap identity only reopens
+this development corpus; it is not an account, profile, or migration policy.
+
+See the [domain notes](domain.md) and
+[applet notes](../../../../docs/tui/applets/library/library.md).

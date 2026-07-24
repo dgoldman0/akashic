@@ -16,7 +16,12 @@ VARIABLE _PBLC-sink-bytes
 VARIABLE _PBLC-sink-calls
 VARIABLE _PBLC-sink-errors
 VARIABLE _PBLC-store-fault-at
+VARIABLE _PBLC-store-fault-ordinal
 VARIABLE _PBLC-old-generation
+VARIABLE _PBLC-inc-done
+VARIABLE _PBLC-inc-used
+VARIABLE _PBLC-inc-before-bytes
+VARIABLE _PBLC-inc-before-callbacks
 
 CREATE _PBLC-ops VFS-OPS-SIZE ALLOT
 CREATE _PBLC-binding VFS-BINDING-DESC-SIZE ALLOT
@@ -84,7 +89,7 @@ GUARD _PBLC-guard-i3
 
 : _PBLC-status  ( actual expected -- )
     2DUP <> IF
-        ." PERSISTENCE BLOB STATUS actual/expected " 2DUP . . CR
+        ." PERSISTENCE BLOB STATUS actual/expected " 2DUP SWAP . . CR
     THEN
     = _PBLC-assert _PBLC-stack ;
 
@@ -96,8 +101,13 @@ GUARD _PBLC-guard-i3
     LOOP
     2DROP -1 ;
 
+: _PBLC-fault-ordinal?  ( ordinal -- flag )
+    _PBLC-store-fault-ordinal @ ?DUP IF = ELSE DROP -1 THEN ;
+
 : _PBLC-fault  ( point ordinal context -- status )
-    2DROP _PBLC-store-fault-at @ = IF PERSIST-S-FAULT ELSE PERSIST-S-OK THEN ;
+    DROP SWAP _PBLC-store-fault-at @ =
+    SWAP _PBLC-fault-ordinal? AND
+    IF PERSIST-S-FAULT ELSE PERSIST-S-OK THEN ;
 
 \ Context is a byte seed.  Mode 1 fails at the second logical chunk and
 \ mode 2 throws there.  Successful calls fill exactly the requested span.
@@ -190,6 +200,7 @@ GUARD _PBLC-guard-i3
     _PBLC-vfs @ 0<> _PBLC-assert
     _PBLC-identity PERSIST-IDENTITY-SIZE 91 FILL
     0 _PBLC-store-fault-at !
+    0 _PBLC-store-fault-ordinal !
     _PBLC-store-init PERSIST-S-OK _PBLC-status
     _PBLC-record-buffer 33000 _PBLC-store-work PSTORE-WORK-INIT
         PERSIST-S-OK _PBLC-status
@@ -222,6 +233,95 @@ GUARD _PBLC-guard-i3
     _PBLC-empty PBLOB-ROOT@ 0= _PBLC-assert
     _PBLC-blob-work PBLOB-CHUNK-WRITES@ 0= _PBLC-assert
     _PBLC-blob-work PBLOB-MANIFEST-WRITES@ 0= _PBLC-assert
+    _PBLC-store _PBLC-store-work PSTORE-ABORT PERSIST-S-OK _PBLC-status
+    _PBLC-stack ;
+
+: _PBLC-incremental-step  ( allowance -- status )
+    >R ['] _PBLC-source 7 R> _PBLC-blob-work PBLOB-WRITE-STEP
+    >R _PBLC-inc-used ! _PBLC-inc-done ! R> ;
+
+: _PBLC-incremental-contracts  ( -- )
+    0 _PBLC-source-mode !
+    _PBLC-store _PBLC-store-work PSTORE-BEGIN PERSIST-S-OK _PBLC-status
+    PBLOB-CHUNK-SIZE 2 * 19 + _PBLC-empty _PBLC-store
+        _PBLC-store-work _PBLC-blob-work PBLOB-WRITE-BEGIN
+        PERSIST-S-OK _PBLC-status
+
+    7 _PBLC-incremental-step PERSIST-S-OK _PBLC-status
+    _PBLC-inc-done @ 0= _PBLC-assert
+    _PBLC-inc-used @ 7 = _PBLC-assert
+    40000 _PBLC-incremental-step PERSIST-S-OK _PBLC-status
+    _PBLC-inc-done @ 0= _PBLC-assert
+    _PBLC-inc-used @ 40000 = _PBLC-assert
+    40000 _PBLC-incremental-step PERSIST-S-OK _PBLC-status
+    _PBLC-inc-done @ _PBLC-assert
+    _PBLC-inc-used @ PBLOB-CHUNK-SIZE 2 * 19 + 40007 - =
+        _PBLC-assert
+    _PBLC-empty PBLOB-VALID? _PBLC-assert
+    _PBLC-empty PBLOB-TOTAL@ PBLOB-CHUNK-SIZE 2 * 19 + =
+        _PBLC-assert
+    _PBLC-blob-work PBLOB-CHUNK-WRITES@ 3 = _PBLC-assert
+    _PBLC-blob-work PBLOB-MANIFEST-WRITES@ 1 = _PBLC-assert
+    _PBLC-blob-work PBLOB-BYTES@ PBLOB-CHUNK-SIZE 2 * 19 + =
+        _PBLC-assert
+    _PBLC-blob-work PBLOB-CALLBACKS@ 5 = _PBLC-assert
+    _PBLC-store _PBLC-store-work PSTORE-ABORT PERSIST-S-OK _PBLC-status
+
+    \ A failure while the final manifest record is emitted must retain the
+    \ completed logical-byte count without treating the saved status as the
+    \ PBLOB workspace address.  The chunk is the first proposed record and
+    \ the manifest is the second.
+    _PBLC-store PSTORE-CURRENT-ROOT@ PROOTV.RECORD-COUNT @ 2 +
+        _PBLC-store-fault-ordinal !
+    PERSIST-FAULT-SEGMENT-WRITTEN _PBLC-store-fault-at !
+    _PBLC-store _PBLC-store-work PSTORE-BEGIN PERSIST-S-OK _PBLC-status
+    8 _PBLC-empty _PBLC-store _PBLC-store-work _PBLC-blob-work
+        PBLOB-WRITE-BEGIN PERSIST-S-OK _PBLC-status
+    8 _PBLC-incremental-step PERSIST-S-FAULT _PBLC-status
+    _PBLC-inc-done @ 0= _PBLC-assert
+    _PBLC-inc-used @ 8 = _PBLC-assert
+    _PBLC-empty PBLOB-VALID? 0= _PBLC-assert
+    _PBLC-blob-work _PBW.BUSY @ 0= _PBLC-assert
+    _PBLC-store _PBLC-store-work PSTORE-TX-READY? 0= _PBLC-assert
+    _PBLC-store _PBLC-store-work PSTORE-ABORT PERSIST-S-OK _PBLC-status
+    0 _PBLC-store-fault-at !
+    0 _PBLC-store-fault-ordinal !
+
+    \ A caller may stop between bounded steps.  Once the surrounding
+    \ transaction is aborted, STEP must reject before invoking the source or
+    \ advancing either logical position or reported bytes.
+    _PBLC-store _PBLC-store-work PSTORE-BEGIN PERSIST-S-OK _PBLC-status
+    40 _PBLC-empty _PBLC-store _PBLC-store-work _PBLC-blob-work
+        PBLOB-WRITE-BEGIN PERSIST-S-OK _PBLC-status
+    7 _PBLC-incremental-step PERSIST-S-OK _PBLC-status
+    _PBLC-blob-work PBLOB-BYTES@ _PBLC-inc-before-bytes !
+    _PBLC-blob-work PBLOB-CALLBACKS@ _PBLC-inc-before-callbacks !
+    _PBLC-store _PBLC-store-work PSTORE-ABORT PERSIST-S-OK _PBLC-status
+    7 _PBLC-incremental-step PERSIST-S-BUSY _PBLC-status
+    _PBLC-inc-done @ 0= _PBLC-assert
+    _PBLC-inc-used @ 0= _PBLC-assert
+    _PBLC-blob-work PBLOB-BYTES@
+        _PBLC-inc-before-bytes @ = _PBLC-assert
+    _PBLC-blob-work PBLOB-CALLBACKS@
+        _PBLC-inc-before-callbacks @ = _PBLC-assert
+
+    \ Poisoning keeps transaction ownership but makes it unusable.  The same
+    \ pre-callback fence applies, and explicit abort remains the release path.
+    _PBLC-store _PBLC-store-work PSTORE-BEGIN PERSIST-S-OK _PBLC-status
+    40 _PBLC-empty _PBLC-store _PBLC-store-work _PBLC-blob-work
+        PBLOB-WRITE-BEGIN PERSIST-S-OK _PBLC-status
+    7 _PBLC-incremental-step PERSIST-S-OK _PBLC-status
+    _PBLC-blob-work PBLOB-BYTES@ _PBLC-inc-before-bytes !
+    _PBLC-blob-work PBLOB-CALLBACKS@ _PBLC-inc-before-callbacks !
+    PERSIST-S-CAPACITY _PBLC-store _PBLC-store-work PSTORE-TX-POISON
+        PERSIST-S-CAPACITY _PBLC-status
+    7 _PBLC-incremental-step PERSIST-S-BUSY _PBLC-status
+    _PBLC-inc-done @ 0= _PBLC-assert
+    _PBLC-inc-used @ 0= _PBLC-assert
+    _PBLC-blob-work PBLOB-BYTES@
+        _PBLC-inc-before-bytes @ = _PBLC-assert
+    _PBLC-blob-work PBLOB-CALLBACKS@
+        _PBLC-inc-before-callbacks @ = _PBLC-assert
     _PBLC-store _PBLC-store-work PSTORE-ABORT PERSIST-S-OK _PBLC-status
     _PBLC-stack ;
 
@@ -268,6 +368,7 @@ GUARD _PBLC-guard-i3
 
 : _PBLC-storage-fault-at  ( fault-point -- )
     _PBLC-store-fault-at !
+    0 _PBLC-store-fault-ordinal !
     _PBLC-reopen-store _PBLC-reopen-work PSTORE-BEGIN PERSIST-S-OK _PBLC-status
     8 ['] _PBLC-source 51 _PBLC-empty _PBLC-reopen-store
         _PBLC-reopen-work _PBLC-blob-work PBLOB-WRITE
@@ -277,6 +378,7 @@ GUARD _PBLC-guard-i3
     _PBLC-reopen-store _PBLC-reopen-work PSTORE-ABORT
         PERSIST-S-OK _PBLC-status
     0 _PBLC-store-fault-at !
+    0 _PBLC-store-fault-ordinal !
     _PBLC-vfs @ V.OPEN-COUNT @ 0= _PBLC-assert
     _PBLC-stack ;
 
@@ -308,6 +410,63 @@ GUARD _PBLC-guard-i3
         PERSIST-S-OK _PBLC-status
     _PBLC-store _PBLC-store-work PSTORE-COMMIT PERSIST-S-OK _PBLC-status
     _PBLC-store PSTORE-CURRENT-ROOT@ PROOTV.RECORD-COUNT @ 4 = _PBLC-assert
+    _PBLC-stack ;
+
+: _PBLC-transaction-read-contracts  ( -- )
+    \ Transaction-scoped reads use the already-owned PSTORE workspace and
+    \ can resolve a descriptor whose records exist only in the proposal.
+    0 _PBLC-source-mode !
+    _PBLC-store _PBLC-store-work PSTORE-BEGIN PERSIST-S-OK _PBLC-status
+    8 ['] _PBLC-source 17 _PBLC-empty
+        _PBLC-store _PBLC-store-work _PBLC-blob-work PBLOB-WRITE
+        PERSIST-S-OK _PBLC-status
+    0 _PBLC-sink-mode ! 0 _PBLC-sink-bytes ! 0 _PBLC-sink-calls !
+    0 _PBLC-sink-errors !
+    _PBLC-empty 0 8 ['] _PBLC-sink 17
+        _PBLC-store _PBLC-store-work _PBLC-read-work
+        PBLOB-READ-RANGE-TX PERSIST-S-OK _PBLC-status
+    _PBLC-sink-bytes @ 8 = _PBLC-assert
+    _PBLC-sink-calls @ 1 = _PBLC-assert
+    _PBLC-sink-errors @ 0= _PBLC-assert
+    _PBLC-store _PBLC-store-work PSTORE-TX-READY? _PBLC-assert
+
+    \ Callback failure is blob-local: it clears PBLOB ownership without
+    \ poisoning an otherwise ready transaction.
+    2 _PBLC-sink-mode !
+    _PBLC-empty 0 1 ['] _PBLC-sink 17
+        _PBLC-store _PBLC-store-work _PBLC-read-work
+        PBLOB-READ-RANGE-TX PERSIST-S-FAULT _PBLC-status
+    _PBLC-read-work _PBW.BUSY @ 0= _PBLC-assert
+    _PBLC-store _PBLC-store-work PSTORE-TX-READY? _PBLC-assert
+    0 _PBLC-sink-mode !
+
+    \ The current-authority surface does not silently borrow an active
+    \ transaction.
+    0 _PBLC-sink-bytes ! 0 _PBLC-sink-calls ! 0 _PBLC-sink-errors !
+    _PBLC-blob 0 1 ['] _PBLC-sink 7
+        _PBLC-store _PBLC-store-work _PBLC-read-work
+        PBLOB-READ-RANGE PERSIST-S-BUSY _PBLC-status
+    _PBLC-sink-calls @ 0= _PBLC-assert
+
+    \ A poisoned proposal remains owned but is rejected before delivery,
+    \ preserving the original poison until explicit abort.
+    PERSIST-S-CAPACITY _PBLC-store _PBLC-store-work PSTORE-TX-POISON
+        PERSIST-S-CAPACITY _PBLC-status
+    0 _PBLC-sink-calls !
+    _PBLC-empty 0 1 ['] _PBLC-sink 17
+        _PBLC-store _PBLC-store-work _PBLC-read-work
+        PBLOB-READ-RANGE-TX PERSIST-S-BUSY _PBLC-status
+    _PBLC-sink-calls @ 0= _PBLC-assert
+    _PBLC-read-work _PBW.BUSY @ 0= _PBLC-assert
+    _PBLC-store PSTORE-STATUS@ PERSIST-S-CAPACITY _PBLC-status
+    _PBLC-store _PBLC-store-work PSTORE-ABORT PERSIST-S-OK _PBLC-status
+
+    \ The explicit transaction surface requires an active owner even for an
+    \ otherwise valid descriptor.
+    _PBLC-blob 0 1 ['] _PBLC-sink 7
+        _PBLC-store _PBLC-store-work _PBLC-read-work
+        PBLOB-READ-RANGE-TX PERSIST-S-BUSY _PBLC-status
+    _PBLC-sink-calls @ 0= _PBLC-assert
     _PBLC-stack ;
 
 : _PBLC-range-contracts  ( -- )
@@ -604,7 +763,9 @@ GUARD _PBLC-guard-i3
     0 _PBLC-source-mode ! 0 _PBLC-sink-mode !
     _PBLC-setup
     _PBLC-descriptor-contracts
+    _PBLC-incremental-contracts
     _PBLC-write-and-commit
+    _PBLC-transaction-read-contracts
     _PBLC-range-contracts
     _PBLC-level-one-contracts
     _PBLC-corruption-and-alias-contracts

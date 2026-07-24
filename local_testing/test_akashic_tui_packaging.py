@@ -41,24 +41,16 @@ from akashic_tui import (  # noqa: E402
 from diskutil import MP64FS, pack_forth_source  # noqa: E402
 
 
-GATE4_HEADLESS_PROFILES = (
-    "library-model-codecs-contracts",
-    "library-store-format-contracts",
-    "library-vfs-store-contracts",
-    "library-managed-document-contracts",
-    "library-managed-lifecycle-contracts",
-    "library-capture-collection-contracts",
-    "library-query-index-contracts",
+LIBRARY_RENDERER_FREE_PROFILES = (
     "library-projection-owner-contracts",
-    "library-maintenance-contracts",
-    "library-managed-capacity-contracts",
 )
 
-LIBRARY_HEADLESS_APPLET_MODULES = frozenset(
+LIBRARY_RENDERER_FREE_APPLET_MODULES = frozenset(
     {
         "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
+        "tui/applets/library/index-keys.f",
+        "tui/applets/library/document-values.f",
+        "tui/applets/library/persistence-adapter.f",
         "tui/applets/library/repository.f",
         "tui/applets/library/query.f",
         "tui/applets/library/service.f",
@@ -74,11 +66,11 @@ LIBRARY_UI_APPLET_MODULES = frozenset(
 )
 
 
-def _assert_library_headless_closure(closure: set[str]) -> None:
+def _assert_library_renderer_free_closure(closure: set[str]) -> None:
     tui_modules = {
         module for module in closure if module.startswith("tui/")
     }
-    assert tui_modules <= LIBRARY_HEADLESS_APPLET_MODULES
+    assert tui_modules <= LIBRARY_RENDERER_FREE_APPLET_MODULES
     assert tui_modules.isdisjoint(LIBRARY_UI_APPLET_MODULES)
 
 
@@ -167,21 +159,23 @@ def test_every_app_shell_profile_composes_the_platform_provider() -> None:
     assert unlinked_profiles > 0
 
 
-@pytest.mark.parametrize("profile_name", GATE4_HEADLESS_PROFILES)
-def test_gate4_headless_profiles_use_linked_loader(profile_name: str) -> None:
+@pytest.mark.parametrize("profile_name", LIBRARY_RENDERER_FREE_PROFILES)
+def test_library_renderer_free_profiles_use_linked_loader(
+    profile_name: str,
+) -> None:
     profile = PROFILES[profile_name]
     assert profile.linked is True
     assert profile.link_chunk_bytes == LINK_CHUNK_BYTES
-    _assert_library_headless_closure(set(dependency_closure(profile.roots)))
+    _assert_library_renderer_free_closure(set(dependency_closure(profile.roots)))
 
 
 def test_profile_failure_markers_are_checked_across_raw_and_screen_text() -> None:
-    profile = PROFILES["library-model-codecs-contracts"]
+    profile = PROFILES["library-projection-owner-contracts"]
     assert _matched_failure_markers(
         profile,
-        "old raw output: LIBRARY MODEL CODECS ASSERT 9",
-        "LIBRARY MODEL CODECS PASS 99",
-    ) == ("LIBRARY MODEL CODECS ASSERT",)
+        "old raw output: LIBRARY PROJECTION OWNER ASSERT 9",
+        "LIBRARY PROJECTION OWNER PASS 99",
+    ) == ("LIBRARY PROJECTION OWNER ASSERT",)
 
 
 def test_agent_provider_ui_command_profile_uses_public_applet_seams() -> None:
@@ -207,243 +201,7 @@ def test_agent_provider_ui_command_profile_uses_public_applet_seams() -> None:
     assert "tui/widgets/agent-settings.f" not in closure
 
 
-def test_library_store_format_profile_packages_its_exact_contract_leaf() -> None:
-    profile = PROFILES["library-store-format-contracts"]
-    assert profile.roots == ("tui/applets/library/store-format.f",)
-    assert profile.ready_markers == ("LIBRARY STORE FORMAT PASS",)
-    assert profile.stable_markers == profile.ready_markers
-    assert {
-        "LIBRARY STORE FORMAT FAIL",
-        "LIBRARY STORE FORMAT ASSERT",
-        "dictionary full",
-        "exception",
-    } <= set(profile.failure_markers)
-    assert tuple(path for path, _ in profile.initial_files) == (
-        "local_testing/library-store-format.f",
-    )
-
-    closure = set(dependency_closure(profile.roots))
-    assert {
-        "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
-    } <= closure
-    _assert_library_headless_closure(closure)
-    assert all(not module.startswith("agent/") for module in closure)
-    assert all(not module.startswith("practice/") for module in closure)
-    assert all("vfs" not in module for module in closure)
-
-
-def test_library_vfs_store_profile_packages_its_exact_contract_leaf() -> None:
-    profile = PROFILES["library-vfs-store-contracts"]
-    assert profile.roots == ("tui/applets/library/service.f",)
-    assert profile.ready_markers == ("LIBRARY VFS STORE PASS",)
-    assert profile.stable_markers == profile.ready_markers
-    assert profile.total_sectors == 8192
-    assert {
-        "LIBRARY VFS STORE FAIL",
-        "LIBRARY VFS STORE ASSERT",
-        "LIBRARY VFS STORE STACK",
-        "dictionary full",
-        "exception",
-    } <= set(profile.failure_markers)
-    assert tuple(path for path, _ in profile.initial_files) == (
-        "local_testing/library-vfs-store.f",
-    )
-
-    closure = set(dependency_closure(profile.roots))
-    assert {
-        "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
-        "tui/applets/library/service.f",
-        "utils/fs/vfs-fixed-snapshot.f",
-    } <= closure
-    _assert_library_headless_closure(closure)
-    assert all(not module.startswith("agent/") for module in closure)
-    assert all(not module.startswith("practice/") for module in closure)
-
-
-def test_library_managed_document_profile_packages_public_vertical_slice() -> None:
-    profile = PROFILES["library-managed-document-contracts"]
-    assert profile.roots == ("tui/applets/library/service.f",)
-    assert profile.ready_markers == ("LIBRARY MANAGED PASS",)
-    assert profile.stable_markers == profile.ready_markers
-    assert profile.total_sectors == 8192
-    assert {
-        "LIBRARY MANAGED FAIL",
-        "LIBRARY MANAGED ASSERT",
-        "LIBRARY MANAGED STACK",
-        "dictionary full",
-        "exception",
-    } <= set(profile.failure_markers)
-    assert tuple(path for path, _ in profile.initial_files) == (
-        "local_testing/library-managed.f",
-    )
-
-    closure = set(dependency_closure(profile.roots))
-    assert {
-        "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
-        "tui/applets/library/service.f",
-        "utils/fs/vfs-fixed-snapshot.f",
-    } <= closure
-    _assert_library_headless_closure(closure)
-    assert all(not module.startswith("agent/") for module in closure)
-    assert all(not module.startswith("practice/") for module in closure)
-
-
-def test_library_managed_capacity_profile_packages_hard_limit_contracts() -> None:
-    profile = PROFILES["library-managed-capacity-contracts"]
-    assert profile.roots == ("tui/applets/library/service.f",)
-    assert profile.ready_markers == ("LIBRARY MANAGED CAPACITY PASS",)
-    assert profile.stable_markers == profile.ready_markers
-    assert profile.total_sectors == 8192
-    assert {
-        "LIBRARY MANAGED CAPACITY FAIL",
-        "LIBRARY MANAGED CAPACITY ASSERT",
-        "LIBRARY MANAGED CAPACITY STACK",
-        "dictionary full",
-        "exception",
-    } <= set(profile.failure_markers)
-    assert tuple(path for path, _ in profile.initial_files) == (
-        "local_testing/library-capacity.f",
-    )
-
-    closure = set(dependency_closure(profile.roots))
-    assert {
-        "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
-        "tui/applets/library/service.f",
-        "utils/fs/vfs-fixed-snapshot.f",
-    } <= closure
-    _assert_library_headless_closure(closure)
-    assert all(not module.startswith("agent/") for module in closure)
-    assert all(not module.startswith("practice/") for module in closure)
-
-
-@pytest.mark.parametrize(
-    ("profile_name", "marker", "guest_fixture"),
-    (
-        (
-            "library-managed-lifecycle-contracts",
-            "LIBRARY MANAGED LIFECYCLE PASS",
-            "local_testing/library-lifecycle.f",
-        ),
-        (
-            "library-capture-collection-contracts",
-            "LIBRARY CAPTURE COLLECTION PASS",
-            "local_testing/library-cc.f",
-        ),
-    ),
-)
-def test_library_milestone_two_profiles_package_headless_owner_contracts(
-    profile_name: str,
-    marker: str,
-    guest_fixture: str,
-) -> None:
-    profile = PROFILES[profile_name]
-    assert profile.roots == ("tui/applets/library/service.f",)
-    assert profile.ready_markers == (marker,)
-    assert profile.stable_markers == profile.ready_markers
-    assert profile.total_sectors == 8192
-    assert {
-        marker.replace(" PASS", " FAIL"),
-        marker.replace(" PASS", " ASSERT"),
-        marker.replace(" PASS", " STACK"),
-        "EVALUATE depth limit exceeded",
-        "dictionary full",
-        "exception",
-    } <= set(profile.failure_markers)
-    assert tuple(path for path, _ in profile.initial_files) == (guest_fixture,)
-
-    closure = set(dependency_closure(profile.roots))
-    assert {
-        "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
-        "tui/applets/library/service.f",
-        "utils/fs/vfs-fixed-snapshot.f",
-    } <= closure
-    _assert_library_headless_closure(closure)
-    assert all(not module.startswith("agent/") for module in closure)
-    assert all(not module.startswith("practice/") for module in closure)
-    assert all(not module.startswith("streams/") for module in closure)
-
-
-def test_library_query_index_profile_packages_exact_headless_contract() -> None:
-    profile = PROFILES["library-query-index-contracts"]
-    assert profile.roots == ("tui/applets/library/service.f",)
-    assert profile.resources == ()
-    assert profile.ready_markers == ("LIBRARY QUERY INDEX PASS",)
-    assert profile.stable_markers == profile.ready_markers
-    assert profile.total_sectors == 8192
-    assert {
-        "LIBRARY QUERY INDEX FAIL",
-        "LIBRARY QUERY INDEX ASSERT",
-        "LIBRARY QUERY INDEX STACK",
-        "EVALUATE depth limit exceeded",
-        "dictionary full",
-        "exception",
-    } <= set(profile.failure_markers)
-    assert tuple(path for path, _ in profile.initial_files) == (
-        "local_testing/library-query-index.f",
-    )
-    assert "REQUIRE local_testing/library-query-index.f" in profile.autoexec
-
-    closure = set(dependency_closure(profile.roots))
-    assert {
-        "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
-        "tui/applets/library/service.f",
-        "utils/fs/vfs-fixed-snapshot.f",
-    } <= closure
-    _assert_library_headless_closure(closure)
-    assert all(not module.startswith("agent/") for module in closure)
-    assert all(not module.startswith("practice/") for module in closure)
-    assert all(not module.startswith("streams/") for module in closure)
-
-
-def test_library_maintenance_profile_packages_exact_headless_contract() -> None:
-    profile = PROFILES["library-maintenance-contracts"]
-    assert profile.roots == ("tui/applets/library/service.f",)
-    assert profile.resources == ()
-    assert profile.ready_markers == ("LIBRARY MAINTENANCE PASS",)
-    assert profile.stable_markers == profile.ready_markers
-    assert profile.total_sectors == 8192
-    assert profile.include_large_sample is False
-    assert {
-        "LIBRARY MAINTENANCE FAIL",
-        "LIBRARY MAINTENANCE ASSERT",
-        "LIBRARY MAINTENANCE STACK",
-        "EVALUATE depth limit exceeded",
-        "dictionary full",
-        "exception",
-    } <= set(profile.failure_markers)
-    assert tuple(path for path, _ in profile.initial_files) == (
-        "local_testing/library-maintenance.f",
-    )
-    assert "REQUIRE tui/applets/library/service.f" in profile.autoexec
-    assert "REQUIRE local_testing/library-maintenance.f" in profile.autoexec
-
-    closure = set(dependency_closure(profile.roots))
-    assert {
-        "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
-        "tui/applets/library/service.f",
-        "utils/fs/vfs-fixed-snapshot.f",
-    } <= closure
-    _assert_library_headless_closure(closure)
-    assert all(not module.startswith("agent/") for module in closure)
-    assert all(not module.startswith("practice/") for module in closure)
-    assert all(not module.startswith("streams/") for module in closure)
-
-
-def test_library_projection_owner_profile_packages_exact_headless_contract() -> None:
+def test_library_projection_owner_profile_packages_renderer_free_contract() -> None:
     profile = PROFILES["library-projection-owner-contracts"]
     assert profile.roots == (
         "tui/applets/library/projection-adapter.f",
@@ -495,8 +253,11 @@ def test_library_projection_owner_profile_packages_exact_headless_contract() -> 
     closure = set(dependency_closure(profile.roots))
     assert {
         "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
+        "tui/applets/library/index-keys.f",
+        "tui/applets/library/document-values.f",
+        "tui/applets/library/persistence-adapter.f",
+        "tui/applets/library/repository.f",
+        "tui/applets/library/query.f",
         "tui/applets/library/service.f",
         "tui/applets/library/projection-adapter.f",
         "interop/resource-acquisition.f",
@@ -504,7 +265,6 @@ def test_library_projection_owner_profile_packages_exact_headless_contract() -> 
         "interop/resource-contract.f",
         "interop/request-bus.f",
         "runtime/resource-registry.f",
-        "utils/fs/vfs-fixed-snapshot.f",
     } <= closure
     production_closure = set(
         dependency_closure(("tui/applets/library/projection-adapter.f",))
@@ -512,7 +272,7 @@ def test_library_projection_owner_profile_packages_exact_headless_contract() -> 
     assert "tui/applets/library/projection-adapter.f" in production_closure
     assert "interop/resource-client.f" not in production_closure
     assert production_closure <= closure
-    _assert_library_headless_closure(closure)
+    _assert_library_renderer_free_closure(closure)
 
 
 def test_library_applet_profiles_package_the_desk_owned_applet() -> None:
@@ -525,10 +285,12 @@ def test_library_applet_profiles_package_the_desk_owned_applet() -> None:
     for profile in (interactive, contracts, functional):
         assert profile.roots == (root,)
         assert profile.resources == (resource,)
-        assert profile.total_sectors == 8192
         assert profile.linked is True
         assert profile.link_chunk_bytes == LINK_CHUNK_BYTES
         assert profile.include_large_sample is False
+    assert interactive.total_sectors == 8192
+    assert contracts.total_sectors == 8192
+    assert functional.total_sectors == 8192
 
     assert "LIBRARY-APPLET-RUN" in interactive.autoexec
     assert contracts.ready_markers == ("LIBRARY APPLET CONTRACTS PASS",)
@@ -565,8 +327,9 @@ def test_library_applet_profiles_package_the_desk_owned_applet() -> None:
     closure = set(dependency_closure((root,)))
     expected_library_modules = {
         "tui/applets/library/model.f",
-        "tui/applets/library/record-codec.f",
-        "tui/applets/library/store-format.f",
+        "tui/applets/library/index-keys.f",
+        "tui/applets/library/document-values.f",
+        "tui/applets/library/persistence-adapter.f",
         "tui/applets/library/repository.f",
         "tui/applets/library/query.f",
         "tui/applets/library/service.f",
@@ -593,7 +356,7 @@ def test_library_applet_profiles_package_the_desk_owned_applet() -> None:
     assert resource not in PROFILES["desktop"].resources
 
 
-def test_library_applet_functional_fixture_uses_bounded_store_setup() -> None:
+def test_library_applet_functional_fixture_covers_cold_and_blocked_open() -> None:
     source = (
         LOCAL_TESTING / "library-applet-functional.f"
     ).read_text(encoding="utf-8")
@@ -611,39 +374,79 @@ def test_library_applet_functional_fixture_uses_bounded_store_setup() -> None:
             "_LAPP-PREVIEW-BYTES",
             "_LAPP-DO-ARCHIVE",
             "_LAPP-DO-SHOW-ARCHIVED",
+            "LIBRARY-REPOSITORY-INSPECT",
+            "LIBRARY-REPOSITORY-HEALTH-CORRUPT",
+            "LIBRARY-REPOSITORY-HEALTH-FUTURE",
+            "_LIBREPO-FUTURE-ROOT-RECORD?",
         )
     )
-    store_calls = re.findall(r"\bLIBRARY-VFS-STORE-[A-Z0-9-]+\b", source)
-    store_fields = re.findall(r"\bLIBRARY-VFS-STORE\.[A-Z0-9-]+\b", source)
-    private_fault_words = re.findall(
+    assert not re.findall(r"\bLIBRARY-VFS-STORE-[A-Z0-9-]+\b", source)
+    assert not re.findall(r"\bLIBRARY-VFS-STORE\.[A-Z0-9-]+\b", source)
+    assert not re.findall(
         r"\b_LIB(?:MU|VFS)-[A-Z0-9-]+\b",
         source,
     )
-    assert store_calls == ["LIBRARY-VFS-STORE-CREATE-COLLECTION"]
-    assert set(store_fields) == {"LIBRARY-VFS-STORE.GENERATION"}
-    assert len(store_fields) == 4
-    assert set(private_fault_words) == {
-        "_LIBMU-CHECKPOINT-XT",
-        "_LIBMU-STAGE-AFTER-HEAD",
-        "_LIBVFS-RESET-MUTATION-HOOKS",
-    }
-    assert len(private_fault_words) == 3
 
-    collection_setup, retry_setup = source.split(
-        ": _laf-exact-pending-retry", 1
-    )
-    collection_setup = collection_setup.split(
-        ": _laf-collection-filter-and-back", 1
-    )[1]
-    retry_setup = retry_setup.split(
-        ": _laf-paging-conflict-and-reload", 1
+    cold = source.split(": _laf-cold-shell-init", 1)[1].split(
+        ": _laf-assert-blocked-ui", 1
     )[0]
-    assert "LIBRARY-VFS-STORE-CREATE-COLLECTION" in collection_setup
-    assert "_LIBMU-CHECKPOINT-XT" not in collection_setup
-    assert "_LIBVFS-RESET-MUTATION-HOOKS" not in collection_setup
-    assert "LIBRARY-VFS-STORE-CREATE-COLLECTION" not in retry_setup
-    assert "_LIBMU-CHECKPOINT-XT" in retry_setup
-    assert "_LIBVFS-RESET-MUTATION-HOOKS" in retry_setup
+    blocked_ui = source.split(": _laf-assert-blocked-ui", 1)[1].split(
+        ": _laf-refuse-blocked-writes", 1
+    )[0]
+    refusal = source.split(": _laf-refuse-blocked-writes", 1)[1].split(
+        ": _laf-blocked-shell-init", 1
+    )[0]
+    corrupt_init = source.split(": _laf-blocked-shell-init", 1)[1].split(
+        ": _laf-future-shell-init", 1
+    )[0]
+    future_init = source.split(": _laf-future-shell-init", 1)[1].split(
+        ": _laf-outer-stack", 1
+    )[0]
+    corrupt_roots = source.split(": _laf-corrupt-roots", 1)[1].split(
+        ": _laf-future-roots", 1
+    )[0]
+    future_roots = source.split(": _laf-future-roots", 1)[1].split(
+        ": _laf-restore-roots", 1
+    )[0]
+    runner = source.split(": _laf-run", 1)[1]
+
+    assert "LIBRARY-APPLET-INIT-CB" in cold
+    assert "_LAPP-ROW-COUNT @ 2 =" in cold
+    assert "_LAPP-SELECTED @ 0=" in cold
+    assert "_laf-preview-body?" in cold
+
+    assert "Corrupt - writes blocked" in blocked_ui
+    assert "_LAPP-READY? 0=" in blocked_ui
+    assert "_LAPP-ROW-COUNT @ 0=" in blocked_ui
+    assert "_LAPP-STATUS-U @ 0>" in blocked_ui
+    assert "_LAPP-ENSURE-PROVISIONED" in refusal
+    assert "_LAPP-DISPATCH-PENDING-CREATE" in refusal
+    assert "_laf-inspection-before LRI.SEAL" in refusal
+    assert "_laf-inspection-after LRI.SEAL" in refusal
+
+    assert "LIBRARY-APPLET-INIT-CB" in corrupt_init
+    assert "_laf-assert-blocked-ui" in corrupt_init
+    assert (
+        "LIBRARY-REPOSITORY-HEALTH-CORRUPT "
+        "_laf-refuse-blocked-writes"
+    ) in corrupt_init
+    assert "LIBRARY-APPLET-INIT-CB" in future_init
+    assert "_laf-assert-blocked-ui" in future_init
+    assert (
+        "LIBRARY-REPOSITORY-HEALTH-FUTURE "
+        "_laf-refuse-blocked-writes"
+    ) in future_init
+
+    assert "_LIBREPO-ROOT-0$" in corrupt_roots
+    assert "_LIBREPO-ROOT-1$" in corrupt_roots
+    assert corrupt_roots.count("_laf-copy-corrupt") == 2
+    assert future_roots.count("_laf-copy-future") == 2
+    assert future_roots.count("_LIBREPO-FUTURE-ROOT-RECORD?") == 2
+    assert runner.count("_laf-desc ASHELL-RUN") == 5
+    assert runner.count("['] _laf-cold-shell-init") == 2
+    assert "_laf-ran @ 5 =" in runner
+    assert "_laf-restore-roots" in runner
+    assert "_LAPP-LAST-STATUS !" not in source
 
 
 def test_library_dependency_chain_and_ui_storage_boundary() -> None:
@@ -658,6 +461,9 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
             "service.f",
             "query.f",
             "repository.f",
+            "persistence-adapter.f",
+            "index-keys.f",
+            "document-values.f",
         )
     }
     direct_requires = {
@@ -669,13 +475,34 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
     assert direct_requires["view.f"] == {"controller.f"}
     assert "service.f" in direct_requires["controller.f"]
     assert not ({"query.f", "repository.f"} & direct_requires["controller.f"])
-    assert direct_requires["service.f"] == {"query.f"}
-    assert direct_requires["query.f"] == {"repository.f"}
-    assert "store-format.f" in direct_requires["repository.f"]
-    assert "../../../utils/fs/vfs-fixed-snapshot.f" in (
-        direct_requires["repository.f"]
-    )
-    for name in ("library.f", "view.f", "controller.f", "service.f", "query.f"):
+    assert direct_requires["service.f"] == {
+        "repository.f",
+        "query.f",
+        "document-values.f",
+    }
+    assert direct_requires["query.f"] == {"persistence-adapter.f"}
+    assert direct_requires["repository.f"] == {
+        "persistence-adapter.f",
+        "../../../persistence/compaction.f",
+        "../../../math/sha3.f",
+    }
+    assert direct_requires["persistence-adapter.f"] == {
+        "../../../persistence/store.f",
+        "../../../persistence/btree.f",
+        "../../../persistence/blob.f",
+        "../../../persistence/reclaim.f",
+        "index-keys.f",
+        "document-values.f",
+    }
+    for name in (
+        "library.f",
+        "view.f",
+        "controller.f",
+        "service.f",
+        "query.f",
+        "index-keys.f",
+        "document-values.f",
+    ):
         assert not any(
             requirement.startswith("../../../utils/fs/")
             for requirement in direct_requires[name]
@@ -693,9 +520,12 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
         word not in ui_sources
         for word in (" DESK-", " PAD-", " FEXP-", " STREAMS-")
     )
-    for name in ("service.f", "query.f"):
-        assert "L12-DELETION" in sources[name]
-        assert "_LIBVFS-" in sources[name]
+    all_library_sources = "\n".join(sources.values())
+    all_library_requires = set().union(*direct_requires.values())
+    assert "record-codec.f" not in all_library_requires
+    assert "store-format.f" not in all_library_requires
+    assert "L12-DELETION" not in all_library_sources
+    assert "_LIBVFS-" not in all_library_sources
     assert "DRW-TEXT-UNTRUSTED" not in sources["library.f"]
     assert "DRW-TEXT-UNTRUSTED" not in sources["controller.f"]
     assert "DRW-TEXT-UNTRUSTED" in sources["view.f"]

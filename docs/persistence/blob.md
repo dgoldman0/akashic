@@ -20,7 +20,7 @@ full nonnegative signed byte range without a larger-content special case.
 ## Ownership and transactions
 
 One `PBLOB-WORK-SIZE` object is initialized with `PBLOB-WORK-INIT`. Its fixed
-46,936-byte footprint contains one 32 KiB transfer buffer, a bounded manifest
+46,960-byte footprint contains one 32 KiB transfer buffer, a bounded manifest
 frontier, temporary references, and operation counters. There is no mutable
 module state. Work objects, descriptors, callbacks, stores, and store
 workspaces may therefore be interleaved by independent callers.
@@ -49,13 +49,22 @@ suffix.
 
 ## Bounded reads
 
-`PBLOB-READ-RANGE` performs current-authority reads outside or inside the
-caller's broader workflow:
+`PBLOB-READ-RANGE` performs current-authority reads when the supplied PSTORE
+workspace does not own an active transaction:
 
 ```forth
 ( blob offset requested-u sink-xt sink-context store store-work blob-work
   -- status )
 ```
+
+`PBLOB-READ-RANGE-TX` has the same stack contract and traversal bounds, but
+reads through the exact already-owned transaction with
+`PSTORE-READ-RECORD-TX`. It can therefore resolve immutable manifest and
+content records appended earlier in the same proposal without trying to
+reacquire the store guard. It rejects an inactive, poisoned, busy, mismatched,
+or otherwise unready transaction before invoking the sink, including for an
+empty range. The two spellings are explicit so a caller cannot accidentally
+switch authority domains merely because a transaction happens to be active.
 
 Offsets beyond EOF return `PERSIST-S-NOT-FOUND`. A valid request is clamped at
 EOF, including a zero-byte result at exactly EOF. Negative offsets or request
@@ -67,10 +76,15 @@ lengths are invalid; clamping uses remaining length rather than overflowing an
 ```
 
 The payload view is borrowed from the supplied store workspace. `PBLOB-STREAM`
-is the convenience form that requests all remaining bytes from an offset.
+is the current-authority convenience form that requests all remaining bytes
+from an offset.
 Sink delivery is intentionally progressive: if a later storage or callback
 failure occurs, earlier successful sink calls are not rolled back. Consumers
 therefore publish their own accumulated result only after the final success.
+On the transaction-scoped surface, a failed underlying PSTORE transaction read
+poisons the proposal under the store contract. Blob-local validation failures
+and sink failures or throws do not implicitly poison a previously ready
+proposal; the caller decides whether to continue or abort it.
 
 The current range walker resolves each touched chunk independently, reading
 one complete manifest path and one data record per chunk. `PBLOB-BYTES@`
@@ -85,5 +99,6 @@ of a 65-chunk level-one tree, cross-chunk ranges, progressive second-callback
 failure, cold reopen,
 malformed descriptors and manifest targets, storage and callback faults,
 alias/busy cleanup, mismatched active store/work ownership without callback,
+transaction-scoped reads of proposal-only records,
 exact stacks and descriptors, file-descriptor cleanup, and four independently
 interleaved stores.

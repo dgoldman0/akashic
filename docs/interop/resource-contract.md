@@ -8,7 +8,9 @@ continue to carry the independent live component-revision guard.
 `resource.describe` accepts null and returns exactly:
 
 `resource`, `domain_revision`, `kind`, `title`, `media_type`, `mutable`,
-`size`, and `owner`.
+`size`, and `owner`. `size` is the complete nonnegative resource length and is
+not capped by the synchronous content window: a large resource remains
+describable even when its bytes require a ranged or streamed owner API.
 
 The resource is a semantic RREF with revision zero. A positive
 `domain_revision` is an owner claim about current or retained domain history;
@@ -33,9 +35,11 @@ content digest must equal the caller's submitted digest. For
 projection-content, new state and content digests must be equal. Replace is
 optional; absence means read-only portable interoperation.
 
-All maps reject missing or additional fields. Text and content are bounded,
-digests are exactly 32 bytes where required, RREF revision is zero, and
-projection-content results are verified rather than trusted by shape alone.
+All maps reject missing or additional fields. Text and snapshot/replace
+content are bounded by `RCON-CONTENT-MAX`; describe size is bounded only by
+`RCON-SIZE-MAX`. Digests are exactly 32 bytes where required, RREF revision is
+zero, and projection-content results are verified rather than trusted by shape
+alone.
 The builders never grant authority; they only construct typed operands.
 `RCON-REPLACE-RESULT?` takes the old locator, submitted content digest, and
 returned map; shape alone cannot authenticate a replacement.

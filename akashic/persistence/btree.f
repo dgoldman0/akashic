@@ -17,7 +17,7 @@ REQUIRE store.f
 
 256 CONSTANT PBTREE-KEY-MAX
 64  CONSTANT PBTREE-VALUE-MAX
-9   CONSTANT PBTREE-HEIGHT-MAX
+12  CONSTANT PBTREE-HEIGHT-MAX
 PBTREE-HEIGHT-MAX 2 * 1+ CONSTANT PBTREE-MUTATION-PAGE-MAX
 PBTREE-MUTATION-PAGE-MAX CONSTANT PBTREE-ALLOCATION-MAX
 PBTREE-MUTATION-PAGE-MAX CONSTANT PBTREE-RETIREMENT-MAX
@@ -190,11 +190,19 @@ PBTREE-MUTATION-PAGE-MAX CONSTANT PBTREE-RETIREMENT-MAX
 
 \ Monotonic-build capacity under the deterministic half-split insertion policy.
 \ Values are one less than the next root-split thresholds: 11, 89, 635, 4457,
-\ ... through bounded height 9.  Deletion may retain a taller balanced tree at
-\ a lower cardinality, so this is not a post-churn resident-height ceiling.
+\ ... through the bounded maximum height. Deletion may retain a taller balanced
+\ tree at a lower cardinality, so this is not a post-churn resident-height
+\ ceiling. Saturation keeps the public arithmetic defined if a later height
+\ limit would exceed the positive signed cell range.
+: _PBT-BALANCED-CAPACITY-NEXT  ( cardinality -- cardinality )
+    DUP PERSIST-MAX-SIGNED 12 - 7 / > IF
+        DROP PERSIST-MAX-SIGNED EXIT
+    THEN
+    7 * 12 + ;
+
 : PBTREE-BALANCED-CAPACITY-FOR-HEIGHT  ( height -- cardinality )
     DUP 1 < OVER PBTREE-HEIGHT-MAX > OR IF DROP 0 EXIT THEN
-    12 SWAP 1 ?DO 7 * 6 + LOOP 1- ;
+    11 SWAP 1 ?DO _PBT-BALANCED-CAPACITY-NEXT LOOP ;
 
 \ Minimum height required by those monotonic-build thresholds.  A persisted
 \ root remains the authority for its actual height after balanced churn.
@@ -262,6 +270,43 @@ PBTREE-MUTATION-PAGE-MAX CONSTANT PBTREE-RETIREMENT-MAX
     THEN
     PBTREE-ROOT-SIZE MOVE PERSIST-S-OK ;
 
+: PBTREE-ROOT-REBASE
+  ( source target-generation out-root tree -- status )
+    >R
+    R@ PBTREE-VALID? 0= IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    2 PICK R@ PBTREE-ROOT-VALID? 0= IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    1 PICK DUP 0> SWAP PERSIST-MAX-SIGNED <= AND 0= IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    DUP 0= IF 2DROP DROP R> DROP PERSIST-S-INVALID EXIT THEN
+    DUP PBTREE-ROOT-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    DUP PBTREE-ROOT-SIZE 4 PICK PBTREE-ROOT-SIZE MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    DUP PBTREE-ROOT-SIZE R@ PBTREE-SIZE MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    DUP PBTREE-ROOT-SIZE R@ _PBTD.STORE @
+        PSTORE-SPAN-DISJOINT? 0= IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    2 PICK PBTREE-ROOT-SIZE R@ PBTREE-SIZE MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    2 PICK PBTREE-ROOT-SIZE R@ _PBTD.STORE @
+        PSTORE-SPAN-DISJOINT? 0= IF
+        2DROP DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    2 PICK OVER PBTREE-ROOT-SIZE MOVE
+    1 PICK OVER _PBTR.GENERATION !
+    2DROP DROP R> DROP PERSIST-S-OK ;
+
 \ ---------------------------------------------------------------------
 \ Fixed caller workspace
 \ ---------------------------------------------------------------------
@@ -319,7 +364,13 @@ _PBTW-RETIRED-OFF PBTREE-RETIREMENT-MAX 8 * +
 _PBTW-RETIRED-COUNT-OFF 8 + CONSTANT _PBTW-BUSY-OFF
 _PBTW-BUSY-OFF 8 + CONSTANT _PBTW-CHILD-MODE-OFF
 _PBTW-CHILD-MODE-OFF 8 + CONSTANT _PBTW-DEFERRED-OFF
-_PBTW-DEFERRED-OFF 8 + CONSTANT PBTREE-WORK-SIZE
+_PBTW-DEFERRED-OFF 8 + CONSTANT _PBTW-RANGE-LIMIT-OFF
+_PBTW-RANGE-LIMIT-OFF 8 + CONSTANT _PBTW-RANGE-COUNT-OFF
+_PBTW-RANGE-COUNT-OFF 8 + CONSTANT _PBTW-VISITOR-XT-OFF
+_PBTW-VISITOR-XT-OFF 8 + CONSTANT _PBTW-VISITOR-CONTEXT-OFF
+_PBTW-VISITOR-CONTEXT-OFF 8 + CONSTANT _PBTW-VISITOR-STATUS-OFF
+_PBTW-VISITOR-STATUS-OFF 8 + CONSTANT _PBTW-RANGE-CURSOR-OFF
+_PBTW-RANGE-CURSOR-OFF 8 + CONSTANT PBTREE-WORK-SIZE
 
 : _PBTW.BUF0             ( work -- a ) _PBTW-BUF0-OFF + ;
 : _PBTW.BUF1             ( work -- a ) _PBTW-BUF1-OFF + ;
@@ -361,6 +412,12 @@ _PBTW-DEFERRED-OFF 8 + CONSTANT PBTREE-WORK-SIZE
 : _PBTW.BUSY             ( work -- a ) _PBTW-BUSY-OFF + ;
 : _PBTW.CHILD-MODE       ( work -- a ) _PBTW-CHILD-MODE-OFF + ;
 : _PBTW.DEFERRED         ( work -- a ) _PBTW-DEFERRED-OFF + ;
+: _PBTW.RANGE-LIMIT      ( work -- a ) _PBTW-RANGE-LIMIT-OFF + ;
+: _PBTW.RANGE-COUNT      ( work -- a ) _PBTW-RANGE-COUNT-OFF + ;
+: _PBTW.VISITOR-XT       ( work -- a ) _PBTW-VISITOR-XT-OFF + ;
+: _PBTW.VISITOR-CONTEXT  ( work -- a ) _PBTW-VISITOR-CONTEXT-OFF + ;
+: _PBTW.VISITOR-STATUS   ( work -- a ) _PBTW-VISITOR-STATUS-OFF + ;
+: _PBTW.RANGE-CURSOR     ( work -- a ) _PBTW-RANGE-CURSOR-OFF + ;
 : _PBTW-ALLOCATED        ( index work -- a ) SWAP 8 * _PBTW-ALLOCATED-OFF + + ;
 : _PBTW-RETIRED          ( index work -- a ) SWAP 8 * _PBTW-RETIRED-OFF + + ;
 
@@ -1612,6 +1669,15 @@ _PBTCR-PATH-OFF PBTREE-HEIGHT-MAX _PBTCR-PATH-ENTRY-SIZE * +
 : _PBTCR-SEAL!  ( cursor -- )
     DUP _PBTCR-SEAL-CALCULATE SWAP _PBTCR.SEAL ! ;
 
+: _PBTCR-EMPTY-EOF!  ( cursor -- )
+    0 OVER _PBTCR.STARTED !
+    -1 OVER _PBTCR.EOF !
+    0 OVER _PBTCR.LAST-U !
+    DUP _PBTCR.LAST-KEY PBTREE-KEY-MAX 0 FILL
+    DUP _PBTCR-PATH-OFF +
+        PBTREE-HEIGHT-MAX _PBTCR-PATH-ENTRY-SIZE * 0 FILL
+    DUP _PBTCR-SEAL! DROP ;
+
 : _PBTCR-FLAG?  ( x -- flag ) DUP 0= SWAP -1 = OR ;
 
 : _PBTCR-PATH-CANONICAL?  ( cursor -- flag )
@@ -1814,6 +1880,89 @@ _PBTCR-PATH-OFF PBTREE-HEIGHT-MAX _PBTCR-PATH-ENTRY-SIZE * +
     -1 OVER _PBTCR.EOF ! DUP _PBTCR-SEAL! DROP
     0 0 0 0 PERSIST-S-NOT-FOUND R> DROP ;
 
+: _PBTCR-DESCEND-RIGHTMOST
+  ( start-page start-level cursor work -- status )
+    >R
+    DUP R@ _PBTW.TEMP0 ! DROP
+    SWAP R@ _PBTW.CURRENT-PAGE !
+    R@ _PBTW.LEVEL !
+    BEGIN
+        R@ _PBTW.LEVEL @ R@ _PBTW.TEMP0 @ _PBTCR.HEIGHT @ 1- <
+    WHILE
+        R@ _PBTW.CURRENT-PAGE @ R@ _PBT-READ
+        DUP IF R> DROP EXIT THEN DROP
+        R@ _PBTW.BUF0
+        R@ _PBTW.TEMP0 @ _PBTCR.HEIGHT @ R@ _PBTW.LEVEL @ -
+        R@ _PBT-NODE-VALID? 0= IF R> DROP PERSIST-S-CORRUPT EXIT THEN
+        R@ _PBTW.CURRENT-PAGE @
+            R@ _PBTW.LEVEL @ R@ _PBTW.TEMP0 @ _PBTCR-PATH-PAGE !
+        R@ _PBTW.BUF0 _PBTN.COUNT @ 1- DUP
+            R@ _PBTW.LEVEL @ R@ _PBTW.TEMP0 @ _PBTCR-PATH-INDEX !
+        R@ _PBTW.BUF0 _PBTB-CHILD@ R@ _PBTW.CURRENT-PAGE !
+        1 R@ _PBTW.LEVEL +!
+    REPEAT
+    R@ _PBTW.CURRENT-PAGE @ R@ _PBT-READ
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _PBTW.BUF0 1 R@ _PBT-NODE-VALID? 0= IF
+        R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _PBTW.BUF0 _PBTN.COUNT @ 0= IF R> DROP PERSIST-S-CORRUPT EXIT THEN
+    R@ _PBTW.CURRENT-PAGE @
+        R@ _PBTW.LEVEL @ R@ _PBTW.TEMP0 @ _PBTCR-PATH-PAGE !
+    R@ _PBTW.BUF0 _PBTN.COUNT @ 1-
+        R@ _PBTW.LEVEL @ R@ _PBTW.TEMP0 @ _PBTCR-PATH-INDEX !
+    R> DROP PERSIST-S-OK ;
+
+: _PBTCR-LAST  ( cursor work -- key-a key-u value-a value-u status )
+    >R
+    DUP _PBTCR.ROOT-PAGE @ -1 = IF
+        -1 OVER _PBTCR.EOF ! DUP _PBTCR-SEAL! DROP
+        0 0 0 0 PERSIST-S-NOT-FOUND R> DROP EXIT
+    THEN
+    DUP _PBTCR.ROOT-PAGE @ 0 2 PICK R@ _PBTCR-DESCEND-RIGHTMOST
+    DUP IF >R DROP 0 0 0 0 R> R> DROP EXIT THEN DROP
+    R@ _PBTCR-EMIT R> DROP ;
+
+: _PBTCR-RETREAT  ( cursor work -- key-a key-u value-a value-u status )
+    >R
+    DUP _PBTCR.EOF @ IF
+        DROP 0 0 0 0 PERSIST-S-NOT-FOUND R> DROP EXIT
+    THEN
+    DUP _PBTCR.HEIGHT @ 1- OVER _PBTCR-PATH-PAGE @ R@ _PBT-READ
+    DUP IF >R DROP 0 0 0 0 R> R> DROP EXIT THEN DROP
+    R@ _PBTW.BUF0 1 R@ _PBT-NODE-VALID? 0= IF
+        DROP 0 0 0 0 PERSIST-S-CORRUPT R> DROP EXIT
+    THEN
+    DUP _PBTCR.HEIGHT @ 1- OVER _PBTCR-PATH-INDEX DUP @
+    0> IF
+        -1 SWAP +!
+        R@ _PBTCR-EMIT R> DROP EXIT
+    THEN
+    DROP
+    DUP _PBTCR.HEIGHT @ 2 - R@ _PBTW.LEVEL !
+    BEGIN R@ _PBTW.LEVEL @ 0< 0= WHILE
+        R@ _PBTW.LEVEL @ OVER _PBTCR-PATH-PAGE @ R@ _PBT-READ
+        DUP IF >R DROP 0 0 0 0 R> R> DROP EXIT THEN DROP
+        R@ _PBTW.BUF0
+        OVER _PBTCR.HEIGHT @ R@ _PBTW.LEVEL @ -
+        R@ _PBT-NODE-VALID? 0= IF
+            DROP 0 0 0 0 PERSIST-S-CORRUPT R> DROP EXIT
+        THEN
+        R@ _PBTW.LEVEL @ OVER _PBTCR-PATH-INDEX DUP @
+        0> IF
+            -1 SWAP +!
+            R@ _PBTW.LEVEL @ OVER _PBTCR-PATH-INDEX @
+                R@ _PBTW.BUF0 _PBTB-CHILD@
+            R@ _PBTW.LEVEL @ 1+ 2 PICK R@ _PBTCR-DESCEND-RIGHTMOST
+            DUP IF >R DROP 0 0 0 0 R> R> DROP EXIT THEN DROP
+            R@ _PBTCR-EMIT R> DROP EXIT
+        THEN
+        DROP
+        -1 R@ _PBTW.LEVEL +!
+    REPEAT
+    -1 OVER _PBTCR.EOF ! DUP _PBTCR-SEAL! DROP
+    0 0 0 0 PERSIST-S-NOT-FOUND R> DROP ;
+
 : _PBTCR-SEEK-RUN  ( exclusive? cursor work -- key-a key-u value-a value-u status )
     >R
     OVER R@ _PBTW.TEMP1 !
@@ -1857,7 +2006,62 @@ _PBTCR-PATH-OFF PBTREE-HEIGHT-MAX _PBTCR-PATH-ENTRY-SIZE * +
     THEN
     R@ _PBTW.BUF0 _PBTN.COUNT @ 1-
         R@ _PBTW.LEVEL @ 2 PICK _PBTCR-PATH-INDEX !
-    NIP R@ _PBTCR-ADVANCE R> DROP ;
+    NIP DUP R@ _PBTW.TEMP0 ! R@ _PBTCR-ADVANCE
+    DUP PERSIST-S-NOT-FOUND = IF
+        R@ _PBTW.TEMP0 @ _PBTCR-EMPTY-EOF!
+    THEN
+    R> DROP ;
+
+: _PBTCR-SEEK-BACK-RUN
+  ( exclusive? cursor work -- key-a key-u value-a value-u status )
+    >R
+    OVER R@ _PBTW.TEMP1 !
+    DUP _PBTCR.ROOT-PAGE @ -1 = IF
+        -1 OVER _PBTCR.EOF ! DUP _PBTCR-SEAL! 2DROP
+        0 0 0 0 PERSIST-S-NOT-FOUND R> DROP EXIT
+    THEN
+    DUP _PBTCR.ROOT-PAGE @ R@ _PBTW.CURRENT-PAGE !
+    0 R@ _PBTW.LEVEL !
+    BEGIN R@ _PBTW.LEVEL @ OVER _PBTCR.HEIGHT @ 1- < WHILE
+        R@ _PBTW.CURRENT-PAGE @ R@ _PBT-READ
+        DUP IF >R 2DROP 0 0 0 0 R> R> DROP EXIT THEN DROP
+        R@ _PBTW.BUF0 OVER _PBTCR.HEIGHT @ R@ _PBTW.LEVEL @ -
+            R@ _PBT-NODE-VALID? 0= IF
+            2DROP 0 0 0 0 PERSIST-S-CORRUPT R> DROP EXIT
+        THEN
+        R@ _PBTW.BUF0 R@ _PBT-BRANCH-CHOOSE R@ _PBTW.INDEX !
+        R@ _PBTW.CURRENT-PAGE @
+            R@ _PBTW.LEVEL @ 2 PICK _PBTCR-PATH-PAGE !
+        R@ _PBTW.INDEX @ R@ _PBTW.LEVEL @ 2 PICK _PBTCR-PATH-INDEX !
+        R@ _PBTW.INDEX @ R@ _PBTW.BUF0 _PBTB-CHILD@
+            R@ _PBTW.CURRENT-PAGE !
+        1 R@ _PBTW.LEVEL +!
+    REPEAT
+    R@ _PBTW.CURRENT-PAGE @ R@ _PBT-READ
+    DUP IF >R 2DROP 0 0 0 0 R> R> DROP EXIT THEN DROP
+    R@ _PBTW.BUF0 1 R@ _PBT-NODE-VALID? 0= IF
+        2DROP 0 0 0 0 PERSIST-S-CORRUPT R> DROP EXIT
+    THEN
+    R@ _PBTW.CURRENT-PAGE @ R@ _PBTW.LEVEL @ 2 PICK _PBTCR-PATH-PAGE !
+    R@ _PBTW.BUF0 R@ _PBT-LEAF-LOWER       ( exclusive cursor index found )
+    SWAP R@ _PBTW.INDEX !                   ( exclusive cursor found )
+    R@ _PBTW.TEMP1 @ IF
+        DROP R@ _PBTW.INDEX @ 1-
+    ELSE
+        IF R@ _PBTW.INDEX @ ELSE R@ _PBTW.INDEX @ 1- THEN
+    THEN
+    ROT DROP                                 ( cursor candidate-index )
+    DUP 0>= IF
+        R@ _PBTW.LEVEL @ 2 PICK _PBTCR-PATH-INDEX !
+        R@ _PBTCR-EMIT R> DROP EXIT
+    THEN
+    DROP
+    0 R@ _PBTW.LEVEL @ 2 PICK _PBTCR-PATH-INDEX !
+    DUP R@ _PBTW.TEMP0 ! R@ _PBTCR-RETREAT
+    DUP PERSIST-S-NOT-FOUND = IF
+        R@ _PBTW.TEMP0 @ _PBTCR-EMPTY-EOF!
+    THEN
+    R> DROP ;
 
 : _PBTCR-PREPARE-SEEK  ( key-a key-u root tree cursor work -- status )
     >R
@@ -1905,6 +2109,30 @@ _PBTCR-PATH-OFF PBTREE-HEIGHT-MAX _PBTCR-PATH-ENTRY-SIZE * +
     THEN DROP
     -1 _PBTCR-SEEK-PUBLIC ;
 
+: _PBTCR-SEEK-BACK-PUBLIC
+  ( key-a key-u root tree cursor work exclusive? -- key-a key-u value-a value-u status )
+    >R
+    DUP >R _PBTCR-PREPARE-SEEK
+    DUP IF
+        R@ _PBT-END-OP >R 0 0 0 0 R> R> DROP R> DROP EXIT
+    THEN DROP
+    R> R> OVER _PBTW.TEMP0 @ ROT DUP >R _PBTCR-SEEK-BACK-RUN
+    DUP R@ _PBT-END-OP >R DROP R> R> DROP ;
+
+: PBTREE-SEEK-AT-OR-BEFORE
+  ( key-a key-u root tree cursor work -- key-a key-u value-a value-u status )
+    DUP _PBT-WORK-ENTRY-STATUS DUP IF
+        >R 2DROP 2DROP 2DROP 0 0 0 0 R> EXIT
+    THEN DROP
+    0 _PBTCR-SEEK-BACK-PUBLIC ;
+
+: PBTREE-SEEK-BEFORE
+  ( key-a key-u root tree cursor work -- key-a key-u value-a value-u status )
+    DUP _PBT-WORK-ENTRY-STATUS DUP IF
+        >R 2DROP 2DROP 2DROP 0 0 0 0 R> EXIT
+    THEN DROP
+    -1 _PBTCR-SEEK-BACK-PUBLIC ;
+
 : _PBTCR-PREPARE-NEXT  ( root tree cursor work -- status )
     >R
     2 PICK 2 PICK R@ _PBT-BEGIN-OP DUP IF
@@ -1938,3 +2166,220 @@ _PBTCR-PATH-OFF PBTREE-HEIGHT-MAX _PBTCR-PATH-ENTRY-SIZE * +
         R@ _PBTCR-FIRST
     THEN
     DUP R@ _PBT-END-OP >R DROP R> R> DROP ;
+
+: PBTREE-PREV
+  ( root tree cursor work -- key-a key-u value-a value-u status )
+    DUP _PBT-WORK-ENTRY-STATUS DUP IF
+        >R 2DROP 2DROP 0 0 0 0 R> EXIT
+    THEN DROP
+    DUP >R _PBTCR-PREPARE-NEXT
+    DUP IF
+        R@ _PBT-END-OP >R 0 0 0 0 R> R> DROP EXIT
+    THEN DROP
+    R@ _PBTW.TEMP0 @ DUP _PBTCR.STARTED @ IF
+        R@ _PBTCR-RETREAT
+    ELSE
+        R@ _PBTCR-LAST
+    THEN
+    DUP R@ _PBT-END-OP >R DROP R> R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Bounded callback ranges
+\ ---------------------------------------------------------------------
+\ A range retains the cursor path and the workspace's one-page cache for
+\ several rows inside one operation.  The general operation entry still
+\ invalidates that cache because BUF0 is shared mutation scratch.
+\
+\ The visitor receives borrowed row spans and its opaque context:
+\   ( key-a key-u value-a value-u context -- status )
+\ Only PERSIST statuses are accepted.  A throw or an out-of-domain result is
+\ contained as PERSIST-S-FAULT.  The returned count includes only callbacks
+\ that returned PERSIST-S-OK.  Ordinary tree exhaustion is a successful short
+\ range; a visitor's PERSIST-S-NOT-FOUND remains a visitor failure for the
+\ caller to interpret at its own policy boundary.
+
+0 CONSTANT _PBT-RANGE-NEXT
+1 CONSTANT _PBT-RANGE-SEEK
+2 CONSTANT _PBT-RANGE-RESUME
+3 CONSTANT _PBT-RANGE-PREV
+4 CONSTANT _PBT-RANGE-SEEK-AT-OR-BEFORE
+5 CONSTANT _PBT-RANGE-SEEK-BEFORE
+
+: _PBT-STATUS?  ( status -- flag )
+    DUP PERSIST-S-OK >= SWAP PERSIST-S-FAULT <= AND ;
+
+: _PBTCR-VISITOR-BODY  ( work -- )
+    >R
+    R@ _PBTW.RANGE-CURSOR @
+    DUP _PBTCR.LAST-KEY SWAP _PBTCR.LAST-U @
+    R@ _PBTW.VALUE R@ _PBTW.VALUE-U @
+    R@ _PBTW.VISITOR-CONTEXT @
+    R@ _PBTW.VISITOR-XT @ EXECUTE
+    R@ _PBTW.VISITOR-STATUS !
+    R> DROP ;
+
+: _PBTCR-CALL-VISITOR  ( work -- status )
+    >R
+    PERSIST-S-FAULT R@ _PBTW.VISITOR-STATUS !
+    R@ ['] _PBTCR-VISITOR-BODY CATCH
+    DUP IF
+        2DROP R> DROP PERSIST-S-FAULT EXIT
+    THEN
+    DROP
+    R@ _PBTW.VISITOR-STATUS @ DUP _PBT-STATUS? 0= IF
+        DROP PERSIST-S-FAULT
+    THEN
+    R> DROP ;
+
+: _PBTCR-RANGE-LOOP
+  ( key-a key-u value-a value-u status work -- count status )
+    >R
+    BEGIN
+        DUP PERSIST-S-NOT-FOUND = IF
+            DROP 2DROP 2DROP
+            R@ _PBTW.RANGE-COUNT @ PERSIST-S-OK R> DROP EXIT
+        THEN
+        DUP IF
+            >R 2DROP 2DROP
+            R>
+            R@ _PBTW.RANGE-COUNT @ SWAP R> DROP EXIT
+        THEN
+        DROP 2DROP 2DROP
+        R@ _PBTCR-CALL-VISITOR
+        DUP IF
+            R@ _PBTW.RANGE-COUNT @ SWAP R> DROP EXIT
+        THEN
+        DROP
+        1 R@ _PBTW.RANGE-COUNT +!
+        R@ _PBTW.RANGE-COUNT @ R@ _PBTW.RANGE-LIMIT @ >= IF
+            R@ _PBTW.RANGE-COUNT @ PERSIST-S-OK R> DROP EXIT
+        THEN
+        R@ _PBTW.TEMP1 @ IF
+            R@ _PBTW.RANGE-CURSOR @ R@ _PBTCR-RETREAT
+        ELSE
+            R@ _PBTW.RANGE-CURSOR @ R@ _PBTCR-ADVANCE
+        THEN
+    AGAIN ;
+
+: _PBTCR-RANGE-RUN  ( mode work -- count status )
+    >R
+    0 R@ _PBTW.RANGE-COUNT !
+    R@ _PBTW.RANGE-LIMIT @ 0= IF
+        DROP 0 PERSIST-S-OK R> DROP EXIT
+    THEN
+    DUP _PBT-RANGE-NEXT = IF
+        DROP
+        0 R@ _PBTW.TEMP1 !
+        R@ _PBTW.RANGE-CURSOR @ DUP _PBTCR.STARTED @ IF
+            R@ _PBTCR-ADVANCE
+        ELSE
+            R@ _PBTCR-FIRST
+        THEN
+        R@ _PBTCR-RANGE-LOOP R> DROP EXIT
+    THEN
+    DUP _PBT-RANGE-PREV = IF
+        DROP
+        -1 R@ _PBTW.TEMP1 !
+        R@ _PBTW.RANGE-CURSOR @ DUP _PBTCR.STARTED @ IF
+            R@ _PBTCR-RETREAT
+        ELSE
+            R@ _PBTCR-LAST
+        THEN
+        R@ _PBTCR-RANGE-LOOP R> DROP EXIT
+    THEN
+    DUP _PBT-RANGE-SEEK-AT-OR-BEFORE =
+    OVER _PBT-RANGE-SEEK-BEFORE = OR IF
+        _PBT-RANGE-SEEK-BEFORE = IF -1 ELSE 0 THEN
+        R@ _PBTW.RANGE-CURSOR @ R@ _PBTCR-SEEK-BACK-RUN
+        -1 R@ _PBTW.TEMP1 !
+        R@ _PBTCR-RANGE-LOOP R> DROP EXIT
+    THEN
+    _PBT-RANGE-RESUME = IF -1 ELSE 0 THEN
+    R@ _PBTW.RANGE-CURSOR @ R@ _PBTCR-SEEK-RUN
+    0 R@ _PBTW.TEMP1 !
+    R@ _PBTCR-RANGE-LOOP R> DROP ;
+
+: _PBTCR-RANGE-ARGS  ( cursor limit visitor-xt visitor-context work -- status )
+    >R
+    2 PICK 0< IF
+        2DROP 2DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    2 PICK 0> 2 PICK 0= AND IF
+        2DROP 2DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    DUP R@ _PBTW.VISITOR-CONTEXT ! DROP
+    DUP R@ _PBTW.VISITOR-XT ! DROP
+    DUP R@ _PBTW.RANGE-LIMIT ! DROP
+    DUP R@ _PBTW.RANGE-CURSOR ! DROP
+    R> DROP PERSIST-S-OK ;
+
+: _PBTCR-RANGE-FINISH  ( mode work -- count status )
+    >R
+    R@ _PBTCR-RANGE-RUN
+    DUP R@ _PBT-END-OP >R DROP R> R> DROP ;
+
+: _PBTCR-RANGE-CURSOR-PUBLIC
+  ( root tree cursor limit visitor-xt visitor-context work mode -- count status )
+    >R
+    DUP _PBT-WORK-ENTRY-STATUS DUP IF
+        >R 2DROP 2DROP 2DROP DROP 0 R> R> DROP EXIT
+    THEN
+    DROP
+    DUP >R
+    4 PICK 4 PICK 4 PICK 4 PICK R@ _PBTCR-RANGE-ARGS
+    DUP IF
+        >R 2DROP 2DROP 2DROP DROP 0 R> R> DROP R> DROP EXIT
+    THEN
+    DROP
+    DROP 2DROP DROP
+    R@ _PBTCR-PREPARE-NEXT
+    DUP IF
+        R@ _PBT-END-OP >R 0 R> R> DROP R> DROP EXIT
+    THEN
+    DROP
+    R> R> SWAP _PBTCR-RANGE-FINISH ;
+
+: PBTREE-RANGE-NEXT
+  ( root tree cursor limit visitor-xt visitor-context work -- count status )
+    _PBT-RANGE-NEXT _PBTCR-RANGE-CURSOR-PUBLIC ;
+
+: PBTREE-RANGE-PREV
+  ( root tree cursor limit visitor-xt visitor-context work -- count status )
+    _PBT-RANGE-PREV _PBTCR-RANGE-CURSOR-PUBLIC ;
+
+: _PBTCR-RANGE-SEEK-PUBLIC
+  ( key-a key-u root tree cursor limit visitor-xt visitor-context work mode -- count status )
+    >R
+    DUP _PBT-WORK-ENTRY-STATUS DUP IF
+        >R 2DROP 2DROP 2DROP 2DROP DROP 0 R> R> DROP EXIT
+    THEN
+    DROP
+    DUP >R
+    4 PICK 4 PICK 4 PICK 4 PICK R@ _PBTCR-RANGE-ARGS
+    DUP IF
+        >R 2DROP 2DROP 2DROP 2DROP DROP 0 R> R> DROP R> DROP EXIT
+    THEN
+    DROP
+    DROP 2DROP DROP
+    R@ _PBTCR-PREPARE-SEEK
+    DUP IF
+        R@ _PBT-END-OP >R 0 R> R> DROP R> DROP EXIT
+    THEN
+    DROP
+    R> R> SWAP _PBTCR-RANGE-FINISH ;
+
+: PBTREE-RANGE-SEEK
+  ( key-a key-u root tree cursor limit visitor-xt visitor-context work -- count status )
+    _PBT-RANGE-SEEK _PBTCR-RANGE-SEEK-PUBLIC ;
+
+: PBTREE-RANGE-RESUME
+  ( last-key-a last-key-u root tree cursor limit visitor-xt visitor-context work -- count status )
+    _PBT-RANGE-RESUME _PBTCR-RANGE-SEEK-PUBLIC ;
+
+: PBTREE-RANGE-SEEK-AT-OR-BEFORE
+  ( key-a key-u root tree cursor limit visitor-xt visitor-context work -- count status )
+    _PBT-RANGE-SEEK-AT-OR-BEFORE _PBTCR-RANGE-SEEK-PUBLIC ;
+
+: PBTREE-RANGE-SEEK-BEFORE
+  ( key-a key-u root tree cursor limit visitor-xt visitor-context work -- count status )
+    _PBT-RANGE-SEEK-BEFORE _PBTCR-RANGE-SEEK-PUBLIC ;

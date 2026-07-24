@@ -24,9 +24,11 @@ its page is read.
 Insertion uses deterministic half splits. Deletion merges or redistributes
 with an adjacent sibling, keeps every non-root leaf at least 6 entries and
 every non-root branch at least 7 entries, and collapses a one-child root. The
-root may be at most nine pages high. The monotonic-build cardinalities before
+root may be at most twelve pages high. The monotonic-build cardinalities before
 the next root split begin 11, 89, 635, and 4,457; height nine reaches
-74,942,411 entries. `PBTREE-BALANCED-CAPACITY-FOR-HEIGHT` and
+74,942,411 entries, height eleven reaches 3,672,178,235, and height twelve
+reaches 25,705,247,657. `PBTREE-BALANCED-CAPACITY-FOR-HEIGHT` uses
+signed-cell-saturating arithmetic, and it and
 `PBTREE-HEIGHT-FOR` expose those build thresholds without materializing a tree.
 They do not infer the current height of a tree after deletion: balanced churn
 can retain a taller root at a lower cardinality, and the persisted root remains
@@ -35,8 +37,8 @@ authoritative for that height.
 The implementation keeps no full-dataset arrays and performs no whole-index
 rewrite. Point operations read one root-to-leaf path. Mutations copy only that
 path plus at most one adjacent sibling per underfull level. The fixed
-`PBTREE-WORK-SIZE` is 17,480 bytes, independent of dataset size; a mutation can
-allocate or retire at most 19 pages. `PBTREE-PAGE-READS@`,
+`PBTREE-WORK-SIZE` is 17,672 bytes, independent of dataset size; a mutation can
+allocate or retire at most 25 pages. `PBTREE-PAGE-READS@`,
 `PBTREE-PAGE-WRITES@`, `PBTREE-COMPARISONS@`, and
 `PBTREE-WORKING-BYTES@` expose actual operation costs. For a nonempty tree of
 height `h`, the implementation-bound qualification checks at most `2h-1` page
@@ -95,6 +97,21 @@ generation. `PBTREE-GET` reads committed pages and requires a current root;
 `PBTREE-GET-TX` reads transaction-visible pages and accepts current or
 next-generation roots while the paired transaction is active.
 
+Fresh-bank builders can use:
+
+```forth
+( source target-generation out-root tree -- status ) PBTREE-ROOT-REBASE
+```
+
+to copy a structurally valid root and stamp one exact positive publication
+generation. This is a finalization operation, not a format/version migration:
+the private build may have consumed several provisional generations while the
+shared application authority must publish at one caller-selected generation.
+The source need not match the currently open store generation. The target must
+be in `1..PERSIST-MAX-SIGNED`; source and output must not overlap; and the
+output remains byte-for-byte unchanged on every rejected generation, root,
+tree, span, or alias.
+
 After a successful mutation, `PBTREE-RETIRED-PAGES$` returns the unique pages
 made unreachable by that operation. The view is borrowed from the workspace
 and is replaced by the next operation. Pages from a committed input root are
@@ -106,7 +123,7 @@ committed pages. The B+tree itself never mutates reclamation state.
 ## Ordered traversal
 
 Leaves deliberately have no sibling links, avoiding another copy-on-write
-update path. A sealed 472-byte caller-owned cursor stores a bounded ancestor
+update path. A sealed 520-byte caller-owned cursor stores a bounded ancestor
 path and the last emitted key:
 
 ```forth
@@ -116,15 +133,63 @@ path and the last emitted key:
     PBTREE-SEEK
 ( last-key-a last-key-u root tree cursor work
   -- key-a key-u value-a value-u status ) PBTREE-RESUME
+( root tree cursor work -- key-a key-u value-a value-u status ) PBTREE-PREV
+( key-a key-u root tree cursor work -- key-a key-u value-a value-u status )
+    PBTREE-SEEK-AT-OR-BEFORE
+( key-a key-u root tree cursor work -- key-a key-u value-a value-u status )
+    PBTREE-SEEK-BEFORE
 ```
 
 `SEEK` is inclusive and `RESUME` is exclusive. `NEXT` walks the saved path, so
-a full scan does not restart at the root for every row. Cursor seals cover the
-root identity, scope, generation, flags, last key, and complete bounded path.
-A cursor used with another or newer root returns `PERSIST-S-CONFLICT`.
+a full scan does not restart at the root for every row. The reverse family is
+symmetric: `PREV` starts at the greatest key and retreats, `SEEK-AT-OR-BEFORE`
+is inclusive, and `SEEK-BEFORE` is exclusive. Cursor seals cover the root
+identity, scope, generation, flags, last key, and complete bounded path. A
+cursor used with another or newer root returns `PERSIST-S-CONFLICT`.
 Traversal can update the saved path before a later page or validation failure;
 after any result other than success or ordinary end-of-index, callers discard
 the cursor and initialize or resume a new one from their last accepted key.
+
+Callers that want a bounded window without reopening the B+tree operation for
+every row use the callback range family:
+
+```forth
+( root tree cursor limit visitor-xt visitor-context work -- count status )
+    PBTREE-RANGE-NEXT
+( key-a key-u root tree cursor limit visitor-xt visitor-context work
+  -- count status ) PBTREE-RANGE-SEEK
+( last-key-a last-key-u root tree cursor limit visitor-xt visitor-context work
+  -- count status ) PBTREE-RANGE-RESUME
+( root tree cursor limit visitor-xt visitor-context work -- count status )
+    PBTREE-RANGE-PREV
+( key-a key-u root tree cursor limit visitor-xt visitor-context work
+  -- count status ) PBTREE-RANGE-SEEK-AT-OR-BEFORE
+( key-a key-u root tree cursor limit visitor-xt visitor-context work
+  -- count status ) PBTREE-RANGE-SEEK-BEFORE
+```
+
+The limit must be nonnegative. A zero limit succeeds without requiring or
+calling a visitor. Forward `RANGE-SEEK` is inclusive and `RANGE-RESUME` is
+exclusive. Reverse `RANGE-SEEK-AT-OR-BEFORE` is inclusive and
+`RANGE-SEEK-BEFORE` is exclusive; callbacks arrive in descending key order.
+The visitor receives borrowed spans valid only for that callback:
+
+```forth
+( key-a key-u value-a value-u visitor-context -- status )
+```
+
+The returned count includes exactly the callbacks that returned
+`PERSIST-S-OK`. A visitor's first non-OK persistence status is returned
+unchanged, while a throw or an out-of-domain result is contained as
+`PERSIST-S-FAULT`. End-of-index is instead an ordinary successful short
+window. Busy state rejects visitor reentry and is cleared on every exit.
+
+All rows in one range share a single operation and its one-page cache. This
+removes the mandatory leaf reread imposed by separate public `NEXT` calls:
+cost is the initial root-to-leaf path plus only the leaf and ancestor
+boundaries crossed. The direct height-three qualification returns each of two
+successive 32-row windows in no more than 17 page reads, with no corpus-sized
+allocation or restart from the root.
 
 All descriptors, roots, workspaces, cursors, input keys, output roots, and the
 complete nested `PSTORE` object graph have explicit non-overlap boundaries.

@@ -37,6 +37,17 @@ VARIABLE _PBTC-trace-rounds
 VARIABLE _PBTC-trace-value-base
 VARIABLE _PBTC-trace-key
 VARIABLE _PBTC-trace-update-key
+VARIABLE _PBTC-range-key-a
+VARIABLE _PBTC-range-key-u
+VARIABLE _PBTC-range-value-a
+VARIABLE _PBTC-range-value-u
+VARIABLE _PBTC-range-expect
+VARIABLE _PBTC-range-step
+VARIABLE _PBTC-range-calls
+VARIABLE _PBTC-range-mode
+VARIABLE _PBTC-range-fail-at
+VARIABLE _PBTC-range-nested-count
+VARIABLE _PBTC-range-nested-status
 
 96 CONSTANT _PBTC-ORACLE-LIMIT
 CREATE _PBTC-oracle-present _PBTC-ORACLE-LIMIT ALLOT
@@ -55,6 +66,7 @@ CREATE _PBTC-root-a PBTREE-ROOT-SIZE ALLOT
 CREATE _PBTC-root-b PBTREE-ROOT-SIZE ALLOT
 CREATE _PBTC-root-c PBTREE-ROOT-SIZE ALLOT
 CREATE _PBTC-cursor PBTREE-CURSOR-SIZE ALLOT
+CREATE _PBTC-cursor-snapshot PBTREE-CURSOR-SIZE ALLOT
 CREATE _PBTC-app-page PERSIST-PAGE-PAYLOAD-SIZE ALLOT
 CREATE _PBTC-key 2 ALLOT
 CREATE _PBTC-value 8 ALLOT
@@ -78,7 +90,8 @@ CREATE _PBTC-i0-pwork PSTORE-WORK-SIZE ALLOT
 CREATE _PBTC-i1-pwork PSTORE-WORK-SIZE ALLOT
 CREATE _PBTC-i2-pwork PSTORE-WORK-SIZE ALLOT
 CREATE _PBTC-i3-pwork PSTORE-WORK-SIZE ALLOT
-CREATE _PBTC-i0-record 512 ALLOT
+512 PBTREE-CURSOR-SIZE MAX CONSTANT _PBTC-i0-record-storage-size
+CREATE _PBTC-i0-record _PBTC-i0-record-storage-size ALLOT
 CREATE _PBTC-i1-record 512 ALLOT
 CREATE _PBTC-i2-record 512 ALLOT
 CREATE _PBTC-i3-record 512 ALLOT
@@ -118,7 +131,9 @@ GUARD _PBTC-i3-guard
     _PBTC-depth @ = _PBTC-assert ;
 
 : _PBTC-status  ( actual expected -- )
-    2DUP <> IF ." PERSISTENCE BTREE STATUS actual/expected " 2DUP . . CR THEN
+    2DUP <> IF
+        ." PERSISTENCE BTREE STATUS actual/expected " 2DUP SWAP . . CR
+    THEN
     = _PBTC-assert _PBTC-stack ;
 
 : _PBTC-store-fault  ( point ordinal context -- status )
@@ -176,7 +191,9 @@ GUARD _PBTC-i3-guard
     R> AND R> AND _PBTC-assert _PBTC-stack ;
 
 : _PBTC-no-row  ( key-a key-u value-a value-u status expected -- )
-    2DUP <> IF ." CURSOR NO-ROW STATUS actual/expected " 2DUP . . CR THEN
+    2DUP <> IF
+        ." CURSOR NO-ROW STATUS actual/expected " 2DUP SWAP . . CR
+    THEN
     = >R 2DROP 2DROP R> _PBTC-assert _PBTC-stack ;
 
 : _PBTC-cursor-one  ( -- )
@@ -190,7 +207,17 @@ GUARD _PBTC-i3-guard
     S" alpha" _PBTC-root-b _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-SEEK
         _PBTC-alpha-row
     S" alpha" _PBTC-root-b _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-RESUME
-        PERSIST-S-NOT-FOUND _PBTC-no-row ;
+        PERSIST-S-NOT-FOUND _PBTC-no-row
+    _PBTC-root-b _PBTC-tree _PBTC-cursor PBTREE-CURSOR-INIT
+        PERSIST-S-OK _PBTC-status
+    _PBTC-root-b _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-PREV
+        _PBTC-alpha-row
+    _PBTC-root-b _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-PREV
+        PERSIST-S-NOT-FOUND _PBTC-no-row
+    S" alpha" _PBTC-root-b _PBTC-tree _PBTC-cursor _PBTC-work
+        PBTREE-SEEK-AT-OR-BEFORE _PBTC-alpha-row
+    S" alpha" _PBTC-root-b _PBTC-tree _PBTC-cursor _PBTC-work
+        PBTREE-SEEK-BEFORE PERSIST-S-NOT-FOUND _PBTC-no-row ;
 
 : _PBTC-key!  ( n -- key-a key-u )
     DUP 8 RSHIFT _PBTC-key C!
@@ -451,25 +478,37 @@ GUARD _PBTC-i3-guard
     _PBTC-retired-bounded
     _PBTC-finish-root-b
     _PBTC-root-a PBTREE-ROOT-CARDINALITY@ 0= _PBTC-assert
-    _PBTC-root-a PBTREE-ROOT-HEIGHT@ 0= _PBTC-assert _PBTC-stack ;
+    _PBTC-root-a PBTREE-ROOT-HEIGHT@ 0= _PBTC-assert
+    _PBTC-root-a _PBTC-tree _PBTC-cursor PBTREE-CURSOR-INIT
+        PERSIST-S-OK _PBTC-status
+    _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-PREV
+        PERSIST-S-NOT-FOUND _PBTC-no-row
+    S" alpha" _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work
+        PBTREE-SEEK-AT-OR-BEFORE PERSIST-S-NOT-FOUND _PBTC-no-row
+    _PBTC-stack ;
 
 : _PBTC-geometry  ( -- )
-    PBTREE-HEIGHT-MAX 9 = _PBTC-assert
-    PBTREE-MUTATION-PAGE-MAX 19 = _PBTC-assert
-    PBTREE-ALLOCATION-MAX 19 = _PBTC-assert
-    PBTREE-RETIREMENT-MAX 19 = _PBTC-assert
-    PBTREE-WORK-SIZE 17480 = _PBTC-assert
-    PBTREE-CURSOR-SIZE 472 = _PBTC-assert
+    PBTREE-HEIGHT-MAX 12 = _PBTC-assert
+    PBTREE-MUTATION-PAGE-MAX 25 = _PBTC-assert
+    PBTREE-ALLOCATION-MAX 25 = _PBTC-assert
+    PBTREE-RETIREMENT-MAX 25 = _PBTC-assert
+    PBTREE-WORK-SIZE 17672 = _PBTC-assert
+    PBTREE-CURSOR-SIZE 520 = _PBTC-assert
     1 PBTREE-BALANCED-CAPACITY-FOR-HEIGHT 11 = _PBTC-assert
     2 PBTREE-BALANCED-CAPACITY-FOR-HEIGHT 89 = _PBTC-assert
     3 PBTREE-BALANCED-CAPACITY-FOR-HEIGHT 635 = _PBTC-assert
     8 PBTREE-BALANCED-CAPACITY-FOR-HEIGHT 10706057 = _PBTC-assert
     9 PBTREE-BALANCED-CAPACITY-FOR-HEIGHT 74942411 = _PBTC-assert
+    10 PBTREE-BALANCED-CAPACITY-FOR-HEIGHT 524596889 = _PBTC-assert
+    11 PBTREE-BALANCED-CAPACITY-FOR-HEIGHT 3672178235 = _PBTC-assert
+    12 PBTREE-BALANCED-CAPACITY-FOR-HEIGHT 25705247657 = _PBTC-assert
     11 PBTREE-HEIGHT-FOR 1 = _PBTC-assert
     12 PBTREE-HEIGHT-FOR 2 = _PBTC-assert
     89 PBTREE-HEIGHT-FOR 2 = _PBTC-assert
     90 PBTREE-HEIGHT-FOR 3 = _PBTC-assert
-    21000000 PBTREE-HEIGHT-FOR 9 = _PBTC-assert _PBTC-stack ;
+    21000000 PBTREE-HEIGHT-FOR 9 = _PBTC-assert
+    12666000000 PBTREE-HEIGHT-FOR 12 = _PBTC-assert
+    25705247658 PBTREE-HEIGHT-FOR 0= _PBTC-assert _PBTC-stack ;
 
 : _PBTC-build-height-three  ( -- )
     1000 _PBTC-value-bias !
@@ -548,6 +587,293 @@ GUARD _PBTC-i3-guard
     _PBTC-tree PBTREE-WORKING-BYTES@ PBTREE-WORK-SIZE =
         _PBTC-assert _PBTC-stack ;
 
+: _PBTC-range-reset  ( expected mode fail-at -- )
+    _PBTC-range-fail-at !
+    _PBTC-range-mode !
+    _PBTC-range-expect !
+    1 _PBTC-range-step !
+    0 _PBTC-range-calls !
+    -1 _PBTC-range-nested-count !
+    -1 _PBTC-range-nested-status ! ;
+
+: _PBTC-range-reverse-reset  ( expected mode fail-at -- )
+    _PBTC-range-reset -1 _PBTC-range-step ! ;
+
+: _PBTC-range-result  ( count status expected-count expected-status -- )
+    >R _PBTC-n !
+    R> = _PBTC-assert
+    _PBTC-n @ = _PBTC-assert
+    _PBTC-stack ;
+
+: _PBTC-range-trigger?  ( -- flag )
+    _PBTC-range-fail-at @ 0>
+    _PBTC-range-calls @ _PBTC-range-fail-at @ = AND ;
+
+: _PBTC-range-visitor
+  ( key-a key-u value-a value-u context -- status )
+    DROP
+    _PBTC-range-value-u !
+    _PBTC-range-value-a !
+    _PBTC-range-key-u !
+    _PBTC-range-key-a !
+    1 _PBTC-range-calls +!
+    _PBTC-range-key-u @ 2 = _PBTC-assert
+    _PBTC-range-key-a @ _PBTC-key@
+        _PBTC-range-expect @ = _PBTC-assert
+    _PBTC-range-value-u @ 8 = _PBTC-assert
+    _PBTC-range-value-a @ @
+        _PBTC-range-expect @ 1000 + = _PBTC-assert
+    _PBTC-range-step @ _PBTC-range-expect +!
+    _PBTC-range-mode @ CASE
+        1 OF
+            _PBTC-range-trigger? IF PERSIST-S-IO EXIT THEN
+        ENDOF
+        2 OF
+            _PBTC-range-trigger? IF -777 THROW THEN
+        ENDOF
+        3 OF
+            _PBTC-range-trigger? IF PERSIST-S-FAULT 1+ EXIT THEN
+        ENDOF
+        4 OF
+            _PBTC-root-a _PBTC-tree _PBTC-cursor 1
+                ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-NEXT
+            _PBTC-range-nested-status !
+            _PBTC-range-nested-count !
+        ENDOF
+        5 OF
+            _PBTC-range-trigger? IF PERSIST-S-NOT-FOUND EXIT THEN
+        ENDOF
+    ENDCASE
+    PERSIST-S-OK ;
+
+: _PBTC-range-next  ( limit -- count status )
+    >R
+    _PBTC-root-a _PBTC-tree _PBTC-cursor R>
+    ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-NEXT ;
+
+: _PBTC-range-seek  ( key limit -- count status )
+    >R _PBTC-key!
+    _PBTC-root-a _PBTC-tree _PBTC-cursor R>
+    ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-SEEK ;
+
+: _PBTC-range-resume  ( key limit -- count status )
+    >R _PBTC-key!
+    _PBTC-root-a _PBTC-tree _PBTC-cursor R>
+    ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-RESUME ;
+
+: _PBTC-range-prev  ( limit -- count status )
+    >R
+    _PBTC-root-a _PBTC-tree _PBTC-cursor R>
+    ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-PREV ;
+
+: _PBTC-range-seek-at-or-before  ( key limit -- count status )
+    >R _PBTC-key!
+    _PBTC-root-a _PBTC-tree _PBTC-cursor R>
+    ['] _PBTC-range-visitor 0 _PBTC-work
+        PBTREE-RANGE-SEEK-AT-OR-BEFORE ;
+
+: _PBTC-range-seek-before  ( key limit -- count status )
+    >R _PBTC-key!
+    _PBTC-root-a _PBTC-tree _PBTC-cursor R>
+    ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-SEEK-BEFORE ;
+
+: _PBTC-range-contracts  ( -- )
+    _PBTC-root-a _PBTC-tree _PBTC-cursor PBTREE-CURSOR-INIT
+        PERSIST-S-OK _PBTC-status
+    _PBTC-tree PBTREE-METRICS-RESET PERSIST-S-OK _PBTC-status
+    0 0 0 _PBTC-range-reset
+    32 _PBTC-range-next 32 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 32 = _PBTC-assert
+    _PBTC-range-expect @ 32 = _PBTC-assert
+    _PBTC-tree PBTREE-PAGE-READS@ DUP 0> SWAP 17 <= AND _PBTC-assert
+    _PBTC-stack
+
+    _PBTC-tree PBTREE-METRICS-RESET PERSIST-S-OK _PBTC-status
+    32 0 0 _PBTC-range-reset
+    32 _PBTC-range-next 32 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 32 = _PBTC-assert
+    _PBTC-range-expect @ 64 = _PBTC-assert
+    _PBTC-tree PBTREE-PAGE-READS@ DUP 0> SWAP 17 <= AND _PBTC-assert
+    _PBTC-stack
+
+    64 0 0 _PBTC-range-reset
+    32 _PBTC-range-next 26 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 26 = _PBTC-assert
+    _PBTC-range-expect @ 90 = _PBTC-assert
+    90 0 0 _PBTC-range-reset
+    32 _PBTC-range-next 0 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 0= _PBTC-assert
+    _PBTC-stack
+
+    45 0 0 _PBTC-range-reset
+    45 3 _PBTC-range-seek 3 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-expect @ 48 = _PBTC-assert
+    46 0 0 _PBTC-range-reset
+    45 3 _PBTC-range-resume 3 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-expect @ 49 = _PBTC-assert
+    _PBTC-stack
+
+    _PBTC-cursor _PBTC-cursor-snapshot PBTREE-CURSOR-SIZE MOVE
+    _PBTC-root-a _PBTC-tree _PBTC-cursor -1
+        ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-NEXT
+        0 PERSIST-S-INVALID _PBTC-range-result
+    _PBTC-cursor PBTREE-CURSOR-SIZE
+        _PBTC-cursor-snapshot PBTREE-CURSOR-SIZE
+        COMPARE 0= _PBTC-assert
+    _PBTC-root-a _PBTC-tree _PBTC-cursor 1
+        0 0 _PBTC-work PBTREE-RANGE-NEXT
+        0 PERSIST-S-INVALID _PBTC-range-result
+    _PBTC-root-a _PBTC-tree _PBTC-cursor 0
+        0 0 _PBTC-work PBTREE-RANGE-NEXT
+        0 PERSIST-S-OK _PBTC-range-result
+    _PBTC-cursor PBTREE-CURSOR-SIZE
+        _PBTC-cursor-snapshot PBTREE-CURSOR-SIZE
+        COMPARE 0= _PBTC-assert
+    _PBTC-stack
+
+    10 1 2 _PBTC-range-reset
+    10 5 _PBTC-range-seek 1 PERSIST-S-IO _PBTC-range-result
+    _PBTC-range-calls @ 2 = _PBTC-assert
+    _PBTC-work PBTREE-WORK-VALID? _PBTC-assert
+    _PBTC-cursor PBTREE-CURSOR-VALID? _PBTC-assert
+
+    20 2 2 _PBTC-range-reset
+    20 5 _PBTC-range-seek 1 PERSIST-S-FAULT _PBTC-range-result
+    _PBTC-range-calls @ 2 = _PBTC-assert
+    _PBTC-work PBTREE-WORK-VALID? _PBTC-assert
+
+    30 3 1 _PBTC-range-reset
+    30 5 _PBTC-range-seek 0 PERSIST-S-FAULT _PBTC-range-result
+    _PBTC-range-calls @ 1 = _PBTC-assert
+    _PBTC-work PBTREE-WORK-VALID? _PBTC-assert
+
+    40 5 1 _PBTC-range-reset
+    40 5 _PBTC-range-seek 0 PERSIST-S-NOT-FOUND _PBTC-range-result
+    _PBTC-range-calls @ 1 = _PBTC-assert
+
+    50 4 0 _PBTC-range-reset
+    50 1 _PBTC-range-seek 1 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-nested-count @ 0= _PBTC-assert
+    _PBTC-range-nested-status @ PERSIST-S-BUSY = _PBTC-assert
+    _PBTC-work PBTREE-WORK-VALID? _PBTC-assert
+    _PBTC-tree PBTREE-VALID? _PBTC-assert
+    _PBTC-stack ;
+
+: _PBTC-reverse-contracts  ( -- )
+    \ Empty reverse traversal is an ordinary short result.
+    _PBTC-tree _PBTC-root-c PBTREE-ROOT-INIT PERSIST-S-OK _PBTC-status
+    _PBTC-root-c _PBTC-tree _PBTC-cursor PBTREE-CURSOR-INIT
+        PERSIST-S-OK _PBTC-status
+    0 0 0 _PBTC-range-reverse-reset
+    _PBTC-root-c _PBTC-tree _PBTC-cursor 32
+        ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-PREV
+        0 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 0= _PBTC-assert
+
+    \ Two independent cursors may walk opposite directions without leakage.
+    _PBTC-root-a _PBTC-tree _PBTC-cursor PBTREE-CURSOR-INIT
+        PERSIST-S-OK _PBTC-status
+    _PBTC-root-a _PBTC-tree _PBTC-cursor-snapshot PBTREE-CURSOR-INIT
+        PERSIST-S-OK _PBTC-status
+    89 1089 _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-PREV
+        _PBTC-number-row
+    0 1000 _PBTC-root-a _PBTC-tree _PBTC-cursor-snapshot _PBTC-work
+        PBTREE-NEXT _PBTC-number-row
+    88 1088 _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-PREV
+        _PBTC-number-row
+    1 1001 _PBTC-root-a _PBTC-tree _PBTC-cursor-snapshot _PBTC-work
+        PBTREE-NEXT _PBTC-number-row
+
+    45 1045 45 _PBTC-key!
+        _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work
+        PBTREE-SEEK-AT-OR-BEFORE _PBTC-number-row
+    44 1044 45 _PBTC-key!
+        _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work
+        PBTREE-SEEK-BEFORE _PBTC-number-row
+    89 1089 90 _PBTC-key!
+        _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work
+        PBTREE-SEEK-AT-OR-BEFORE _PBTC-number-row
+    0 _PBTC-key! _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work
+        PBTREE-SEEK-BEFORE PERSIST-S-NOT-FOUND _PBTC-no-row
+
+    \ Descending windows retain the same bounded path/cache geometry.
+    _PBTC-root-a _PBTC-tree _PBTC-cursor PBTREE-CURSOR-INIT
+        PERSIST-S-OK _PBTC-status
+    _PBTC-tree PBTREE-METRICS-RESET PERSIST-S-OK _PBTC-status
+    89 0 0 _PBTC-range-reverse-reset
+    32 _PBTC-range-prev 32 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 32 = _PBTC-assert
+    _PBTC-range-expect @ 57 = _PBTC-assert
+    _PBTC-tree PBTREE-PAGE-READS@ DUP 0> SWAP 17 <= AND _PBTC-assert
+
+    _PBTC-tree PBTREE-METRICS-RESET PERSIST-S-OK _PBTC-status
+    57 0 0 _PBTC-range-reverse-reset
+    32 _PBTC-range-prev 32 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 32 = _PBTC-assert
+    _PBTC-range-expect @ 25 = _PBTC-assert
+    _PBTC-tree PBTREE-PAGE-READS@ DUP 0> SWAP 17 <= AND _PBTC-assert
+
+    25 0 0 _PBTC-range-reverse-reset
+    32 _PBTC-range-prev 26 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 26 = _PBTC-assert
+    _PBTC-range-expect @ -1 = _PBTC-assert
+    -1 0 0 _PBTC-range-reverse-reset
+    32 _PBTC-range-prev 0 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 0= _PBTC-assert
+
+    45 0 0 _PBTC-range-reverse-reset
+    45 3 _PBTC-range-seek-at-or-before
+        3 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-expect @ 42 = _PBTC-assert
+    44 0 0 _PBTC-range-reverse-reset
+    45 3 _PBTC-range-seek-before 3 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-expect @ 41 = _PBTC-assert
+    0 0 0 _PBTC-range-reverse-reset
+    0 3 _PBTC-range-seek-before 0 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-calls @ 0= _PBTC-assert
+
+    \ Argument rejection and zero limits preserve the bounded public contract.
+    _PBTC-cursor _PBTC-cursor-snapshot PBTREE-CURSOR-SIZE MOVE
+    _PBTC-root-a _PBTC-tree _PBTC-cursor -1
+        ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-PREV
+        0 PERSIST-S-INVALID _PBTC-range-result
+    _PBTC-cursor PBTREE-CURSOR-SIZE
+        _PBTC-cursor-snapshot PBTREE-CURSOR-SIZE
+        COMPARE 0= _PBTC-assert
+    _PBTC-root-a _PBTC-tree _PBTC-cursor 1
+        0 0 _PBTC-work PBTREE-RANGE-PREV
+        0 PERSIST-S-INVALID _PBTC-range-result
+    _PBTC-root-a _PBTC-tree _PBTC-cursor 0
+        0 0 _PBTC-work PBTREE-RANGE-PREV
+        0 PERSIST-S-OK _PBTC-range-result
+
+    \ Reverse callbacks preserve exact count/status and containment.
+    80 1 2 _PBTC-range-reverse-reset
+    80 5 _PBTC-range-seek-at-or-before
+        1 PERSIST-S-IO _PBTC-range-result
+    _PBTC-range-calls @ 2 = _PBTC-assert
+    70 2 2 _PBTC-range-reverse-reset
+    70 5 _PBTC-range-seek-at-or-before
+        1 PERSIST-S-FAULT _PBTC-range-result
+    _PBTC-range-calls @ 2 = _PBTC-assert
+    60 3 1 _PBTC-range-reverse-reset
+    60 5 _PBTC-range-seek-at-or-before
+        0 PERSIST-S-FAULT _PBTC-range-result
+    _PBTC-range-calls @ 1 = _PBTC-assert
+    50 5 1 _PBTC-range-reverse-reset
+    50 5 _PBTC-range-seek-at-or-before
+        0 PERSIST-S-NOT-FOUND _PBTC-range-result
+    _PBTC-range-calls @ 1 = _PBTC-assert
+    40 4 0 _PBTC-range-reverse-reset
+    40 1 _PBTC-range-seek-at-or-before
+        1 PERSIST-S-OK _PBTC-range-result
+    _PBTC-range-nested-count @ 0= _PBTC-assert
+    _PBTC-range-nested-status @ PERSIST-S-BUSY = _PBTC-assert
+    _PBTC-work PBTREE-WORK-VALID? _PBTC-assert
+    _PBTC-cursor PBTREE-CURSOR-VALID? _PBTC-assert
+    _PBTC-tree PBTREE-VALID? _PBTC-assert
+    _PBTC-stack ;
+
 : _PBTC-update-and-stale  ( -- )
     _PBTC-root-a _PBTC-tree _PBTC-cursor PBTREE-CURSOR-INIT
         PERSIST-S-OK _PBTC-status
@@ -558,6 +884,18 @@ GUARD _PBTC-i3-guard
     900 _PBTC-put-n
     _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-NEXT
         PERSIST-S-CONFLICT _PBTC-no-row
+    _PBTC-root-a _PBTC-tree _PBTC-cursor _PBTC-work PBTREE-PREV
+        PERSIST-S-CONFLICT _PBTC-no-row
+    0 0 0 _PBTC-range-reset
+    _PBTC-root-a _PBTC-tree _PBTC-cursor 2
+        ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-NEXT
+        0 PERSIST-S-CONFLICT _PBTC-range-result
+    _PBTC-range-calls @ 0= _PBTC-assert
+    0 0 0 _PBTC-range-reverse-reset
+    _PBTC-root-a _PBTC-tree _PBTC-cursor 2
+        ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-PREV
+        0 PERSIST-S-CONFLICT _PBTC-range-result
+    _PBTC-range-calls @ 0= _PBTC-assert
     _PBTC-root-a _PBTC-tree _PBTC-cursor PBTREE-CURSOR-INIT
         PERSIST-S-OK _PBTC-status
     45 1045 44 _PBTC-key!
@@ -737,6 +1075,74 @@ GUARD _PBTC-i3-guard
     _PBTC-root-b PBTREE-ROOT-SIZE
         _PBTC-root-snapshot PBTREE-ROOT-SIZE COMPARE 0= _PBTC-assert
     _PBTC-work PBTREE-RETIRED-PAGES$ NIP 0= _PBTC-assert ;
+
+: _PBTC-rebase-output-unchanged  ( -- )
+    _PBTC-root-b PBTREE-ROOT-SIZE
+        _PBTC-root-snapshot PBTREE-ROOT-SIZE COMPARE 0= _PBTC-assert ;
+
+: _PBTC-root-rebase  ( -- )
+    _PBTC-root-a _PBTC-root-c PBTREE-ROOT-COPY PERSIST-S-OK _PBTC-status
+    _PBTC-store PSTORE-GENERATION@ 7 +
+        _PBTC-root-c _PBTR.GENERATION !
+    _PBTC-root-c _PBTC-tree PBTREE-ROOT-VALID? _PBTC-assert
+
+    _PBTC-sentinel-root
+    _PBTC-root-c 0 _PBTC-root-b _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+    _PBTC-rebase-output-unchanged
+    _PBTC-root-c -1 _PBTC-root-b _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+    _PBTC-rebase-output-unchanged
+    _PBTC-root-c 1 0 _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+    _PBTC-root-c 1 -32 _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+    _PBTC-root-c 1 _PBTC-tree _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+    _PBTC-root-c 1 _PBTC-store _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+
+    _PBTC-root-c _PBTC-root-snapshot PBTREE-ROOT-SIZE MOVE
+    _PBTC-root-c 1 _PBTC-root-c _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+    _PBTC-root-c PBTREE-ROOT-SIZE
+        _PBTC-root-snapshot PBTREE-ROOT-SIZE COMPARE 0= _PBTC-assert
+    _PBTC-root-c 1 _PBTC-root-c 8 + _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+    _PBTC-root-c PBTREE-ROOT-SIZE
+        _PBTC-root-snapshot PBTREE-ROOT-SIZE COMPARE 0= _PBTC-assert
+
+    PBTREE-HEIGHT-MAX 1+ _PBTC-root-c _PBTR.HEIGHT !
+    _PBTC-sentinel-root
+    _PBTC-root-c 1 _PBTC-root-b _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-INVALID _PBTC-status
+    _PBTC-rebase-output-unchanged
+    _PBTC-root-a _PBTC-root-c PBTREE-ROOT-COPY PERSIST-S-OK _PBTC-status
+    _PBTC-store PSTORE-GENERATION@ 7 +
+        _PBTC-root-c _PBTR.GENERATION !
+
+    _PBTC-root-c PERSIST-MAX-SIGNED _PBTC-root-b _PBTC-tree
+        PBTREE-ROOT-REBASE PERSIST-S-OK _PBTC-status
+    _PBTC-root-b PBTREE-ROOT-GENERATION@
+        PERSIST-MAX-SIGNED = _PBTC-assert
+    _PBTC-root-b _PBTC-tree PBTREE-ROOT-VALID? _PBTC-assert
+
+    _PBTC-root-c _PBTC-store PSTORE-GENERATION@
+        _PBTC-root-b _PBTC-tree PBTREE-ROOT-REBASE
+        PERSIST-S-OK _PBTC-status
+    _PBTC-root-b _PBTC-tree PBTREE-ROOT-VALID? _PBTC-assert
+    _PBTC-root-b _PBTC-root-snapshot PBTREE-ROOT-SIZE MOVE
+    _PBTC-root-c PBTREE-ROOT-GENERATION@
+        _PBTC-root-snapshot _PBTR.GENERATION !
+    _PBTC-root-c PBTREE-ROOT-SIZE
+        _PBTC-root-snapshot PBTREE-ROOT-SIZE COMPARE 0= _PBTC-assert
+
+    101 ['] PBTREE-HIGH-WATER-ALLOCATE 0
+        _PBTC-store _PBTC-fault-tree PBTREE-INIT PERSIST-S-OK _PBTC-status
+    _PBTC-root-b _PBTC-fault-tree PBTREE-ROOT-VALID? _PBTC-assert
+    3089 89 _PBTC-key! _PBTC-root-b _PBTC-fault-tree _PBTC-work
+        PBTREE-GET _PBTC-value-result
+    _PBTC-stack ;
 
 : _PBTC-failing-put  ( expected-status -- )
     _PBTC-n !
@@ -1009,18 +1415,21 @@ GUARD _PBTC-i3-guard
     6 _PBTC-phase ! _PBTC-build-height-three
     7 _PBTC-phase ! _PBTC-scan-numbers
     8 _PBTC-phase ! _PBTC-measured-read-bounds
-    9 _PBTC-phase ! _PBTC-update-and-stale
-    10 _PBTC-phase ! _PBTC-mixed-at-height-three
-    11 _PBTC-phase ! _PBTC-cold-reopen-oracle
-    12 _PBTC-phase ! _PBTC-delete-churn
-    13 _PBTC-phase ! _PBTC-reinsert-after-churn
-    14 _PBTC-phase ! _PBTC-cold-reopen
-    15 _PBTC-phase ! _PBTC-root-advance
-    16 _PBTC-phase ! _PBTC-tx-lookups
-    17 _PBTC-phase ! _PBTC-faults-and-reentry
-    18 _PBTC-phase ! _PBTC-generation-capacity
-    19 _PBTC-phase ! _PBTC-alias-boundaries
-    20 _PBTC-phase ! _PBTC-four-store-isolation
+    9 _PBTC-phase ! _PBTC-range-contracts
+    10 _PBTC-phase ! _PBTC-reverse-contracts
+    11 _PBTC-phase ! _PBTC-update-and-stale
+    12 _PBTC-phase ! _PBTC-mixed-at-height-three
+    13 _PBTC-phase ! _PBTC-cold-reopen-oracle
+    14 _PBTC-phase ! _PBTC-delete-churn
+    15 _PBTC-phase ! _PBTC-reinsert-after-churn
+    16 _PBTC-phase ! _PBTC-cold-reopen
+    17 _PBTC-phase ! _PBTC-root-advance
+    18 _PBTC-phase ! _PBTC-root-rebase
+    19 _PBTC-phase ! _PBTC-tx-lookups
+    20 _PBTC-phase ! _PBTC-faults-and-reentry
+    21 _PBTC-phase ! _PBTC-generation-capacity
+    22 _PBTC-phase ! _PBTC-alias-boundaries
+    23 _PBTC-phase ! _PBTC-four-store-isolation
     _PBTC-old-vfs @ VFS-USE
     _PBTC-vfs @ VFS-DESTROY
     _PBTC-stack

@@ -19,6 +19,7 @@ NEUTRAL_MODULES = (
     "persistence/btree.f",
     "persistence/blob.f",
     "persistence/reclaim.f",
+    "persistence/compaction.f",
 )
 LIBRARY_ADAPTER = "tui/applets/library/persistence-adapter.f"
 
@@ -122,8 +123,10 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
     blob = _source("persistence/blob.f")
     assert re.search(r"(?m)^32768\s+CONSTANT PBLOB-CHUNK-SIZE$", blob)
     assert "PBLOB-READ-RANGE" in blob
+    assert "PBLOB-READ-RANGE-TX" in blob
     assert "PBLOB-STREAM" in blob
     assert "PSTORE-APPEND-RECORD" in blob
+    assert "PSTORE-READ-RECORD-TX" in blob
     assert "PSTORE-BEGIN" not in blob
     assert "PSTORE-COMMIT" not in blob
 
@@ -134,6 +137,8 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
     assert re.search(r"(?m)^128\s+CONSTANT RECLAIM-ALLOCATED-MAX$", reclaim)
     for word in (
         "RECLAIM-TX-BEGIN",
+        "RECLAIM-TX-ROOM?",
+        "RECLAIM-CLAIM-HIGH-WATER",
         "RECLAIM-ALLOCATE",
         "RECLAIM-RETIRE-BATCH",
         "RECLAIM-DISCARD-BATCH",
@@ -155,7 +160,46 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
     assert "library" not in reclaim.lower()
 
 
-def test_l10_library_slice_is_applet_owned_and_non_authoritative() -> None:
+def test_l12_compaction_is_neutral_bounded_and_journal_free() -> None:
+    source = _source("persistence/compaction.f")
+    markers = {
+        marker.normalized
+        for marker in dependency_markers(source, "persistence/compaction.f")
+    }
+    assert markers == {"persistence/store.f"}
+
+    for word in (
+        "PCOMPACT-INIT",
+        "PCOMPACT-WORK-INIT",
+        "PCOMPACT-BEGIN",
+        "PCOMPACT-STEP",
+        "PCOMPACT-FINALIZE",
+        "PCOMPACT-PUBLISH",
+        "PCOMPACT-MIRROR",
+        "PCOMPACT-CLEANUP",
+        "PCOMPACT-ABORT",
+        "PCOMPACT-RECOVER",
+        "PCOMPACT-CLEANUP-ELIGIBLE?",
+    ):
+        assert word in source
+
+    assert (
+        "( source-root builder-store builder-work byte-allowance context"
+        in source
+    )
+    assert (
+        "( exact-next-generation builder-store builder-work context -- status )"
+        in source
+    )
+    assert "PROOT-MIRROR" in source
+    assert "PCOMPACT-STATE-UNCERTAIN" in source
+    assert "PERSIST-S-CAPACITY" in source
+    assert "phase journal" in source
+    assert "REQUIRE btree.f" not in source
+    assert "REQUIRE reclaim.f" not in source
+
+
+def test_l12_library_slice_is_applet_owned_with_bounded_consumers() -> None:
     adapter = _source(LIBRARY_ADAPTER)
     definitions = _lexical_definitions(adapter)
     assert definitions["variable"] == []
@@ -170,7 +214,8 @@ def test_l10_library_slice_is_applet_owned_and_non_authoritative() -> None:
         for marker in dependency_markers(adapter, LIBRARY_ADAPTER)
     }
     assert "persistence/store.f" in markers
-    assert "tui/applets/library/record-codec.f" in markers
+    assert "tui/applets/library/index-keys.f" in markers
+    assert "tui/applets/library/record-codec.f" not in markers
     assert "tui/applets/library/repository.f" not in markers
     assert "tui/applets/library/service.f" not in markers
 
@@ -184,4 +229,7 @@ def test_l10_library_slice_is_applet_owned_and_non_authoritative() -> None:
             for marker in dependency_markers(path.read_text(encoding="utf-8"), module)
         ):
             production_importers.append(module)
-    assert production_importers == []
+    assert sorted(production_importers) == [
+        "tui/applets/library/query.f",
+        "tui/applets/library/repository.f",
+    ]

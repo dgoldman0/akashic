@@ -993,6 +993,18 @@ VARIABLE _G3A-OR-XMEM-FL
     _G3A-OR-RESULT CV-FREE
     _G3A-OR-RESULT CV-TYPE@ CV-T-NULL = _G3A-ASSERT
 
+    \ Total resource size is independent of the bounded synchronous
+    \ snapshot/replace window.  A large resource remains describable even
+    \ though its complete value must be delivered through another bounded
+    \ mechanism.
+    RCON-CONTENT-MAX 1+ _G3A-OR-DESCRIBE RCONDV.SIZE !
+    _G3A-OR-DESCRIBE RCON-DESCRIBE-VIEW-VALID? _G3A-ASSERT
+    _G3A-OR-DESCRIBE _G3A-OR-RESULT _G3A-OR-RESULT-WORKSPACE
+        RCON-DESCRIBE-RESULT! RCON-S-OK = _G3A-ASSERT
+    S" size" _G3A-OR-RESULT CV-MAP-FIND CV-DATA@
+        RCON-CONTENT-MAX 1+ = _G3A-ASSERT
+    _G3A-OR-RESULT CV-FREE
+
     _G3A-OR-RESULT-SENTINEL!
     -1 _G3A-OR-DESCRIBE RCONDV.SIZE !
     _G3A-OR-DESCRIBE _G3A-OR-RESULT _G3A-OR-RESULT-WORKSPACE

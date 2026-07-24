@@ -8,9 +8,10 @@
 \
 \  Construction is streaming and must be enclosed by a caller's existing
 \  PSTORE transaction.  This layer never begins, commits, aborts, or changes
-\  the application root.  Reads are current-authority scoped PSTORE reads
-\  and do not require a transaction.  One caller-owned workspace contains
-\  one chunk buffer and the bounded manifest frontier.
+\  the application root.  Reads explicitly choose either current authority
+\  or an already-owned transaction, including records appended by that
+\  proposal.  One caller-owned workspace contains one chunk buffer and the
+\  bounded manifest frontier.
 \ =====================================================================
 
 PROVIDED akashic-persist-blob
@@ -28,9 +29,13 @@ _PBLOB-NODE-HEADER-SIZE
 
 0x50424C4F424D4554 CONSTANT _PBLOB-MAGIC       \ "PBLOBMET"
 0x50424C4F424E4F44 CONSTANT _PBLOB-NODE-MAGIC  \ "PLOBNOD"
+0x50424C4F42494E43 CONSTANT _PBLOB-INCREMENTAL \ "PLOBINC"
 
+: _PBLOB-DROP3  ( x1 x2 x3 -- ) 2DROP DROP ;
+: _PBLOB-DROP4  ( x1 x2 x3 x4 -- ) 2DROP 2DROP ;
 : _PBLOB-DROP6  ( x1 .. x6 -- ) 2DROP 2DROP 2DROP ;
 : _PBLOB-DROP7  ( x1 .. x7 -- ) 2DROP 2DROP 2DROP DROP ;
+: _PBLOB-DROP8  ( x1 .. x8 -- ) 2DROP 2DROP 2DROP 2DROP ;
 
 : _PBLOB-CEIL/  ( nonnegative-n positive-d -- quotient )
     /MOD SWAP 0<> IF 1+ THEN ;
@@ -160,10 +165,13 @@ _PBLOB-NODE-HEADER-SIZE
 200 CONSTANT _PBW-BYTES
 208 CONSTANT _PBW-CALLBACKS
 216 CONSTANT _PBW-PEAK
-224 CONSTANT _PBW-SELECTED-REF
-248 CONSTANT _PBW-TEMP-REF
-272 CONSTANT _PBW-COUNTS
-344 CONSTANT _PBW-FRONTIER
+224 CONSTANT _PBW-ALLOWANCE
+232 CONSTANT _PBW-STEP-USED
+240 CONSTANT _PBW-READ-TX
+248 CONSTANT _PBW-SELECTED-REF
+272 CONSTANT _PBW-TEMP-REF
+296 CONSTANT _PBW-COUNTS
+368 CONSTANT _PBW-FRONTIER
 _PBW-FRONTIER
     _PBLOB-BUCKETS PBLOB-MANIFEST-FANOUT * PERSIST-REF-SIZE * +
     CONSTANT _PBW-CHUNK
@@ -197,6 +205,9 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
 : _PBW.BYTES              ( work -- a ) _PBW-BYTES + ;
 : _PBW.CALLBACKS          ( work -- a ) _PBW-CALLBACKS + ;
 : _PBW.PEAK               ( work -- a ) _PBW-PEAK + ;
+: _PBW.ALLOWANCE          ( work -- a ) _PBW-ALLOWANCE + ;
+: _PBW.STEP-USED          ( work -- a ) _PBW-STEP-USED + ;
+: _PBW.READ-TX            ( work -- a ) _PBW-READ-TX + ;
 : _PBW.SELECTED-REF       ( work -- ref ) _PBW-SELECTED-REF + ;
 : _PBW.TEMP-REF           ( work -- ref ) _PBW-TEMP-REF + ;
 : _PBW.COUNTS             ( work -- a ) _PBW-COUNTS + ;
@@ -216,6 +227,7 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
     DUP _PBW.MAGIC @ _PBLOB-WORK-MAGIC <> IF DROP 0 EXIT THEN
     DUP _PBW.SELF @ OVER <> IF DROP 0 EXIT THEN
     DUP _PBW.BUSY @ DUP 0= SWAP -1 = OR 0= IF DROP 0 EXIT THEN
+    DUP _PBW.READ-TX @ DUP 0= SWAP -1 = OR 0= IF DROP 0 EXIT THEN
     _PBW.STATUS @ _PBLOB-STATUS? ;
 
 : PBLOB-WORK-INIT  ( work -- status )
@@ -318,7 +330,7 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
 : _PBLOB-SOURCE-BODY  ( work -- )
     >R
     R@ _PBW.POSITION @
-    R@ _PBW.CHUNK
+    R@ _PBW.PAYLOAD-A @
     R@ _PBW.REQUESTED @
     R@ _PBW.CALLBACK-CONTEXT @
     R@ _PBW.CALLBACK-XT @ EXECUTE
@@ -532,6 +544,7 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
     BEGIN R@ _PBW.POSITION @ R@ _PBW.TOTAL @ < WHILE
         R@ _PBW.TOTAL @ R@ _PBW.POSITION @ -
         PBLOB-CHUNK-SIZE MIN R@ _PBW.REQUESTED !
+        R@ _PBW.CHUNK R@ _PBW.PAYLOAD-A !
         R@ _PBLOB-CALL-SOURCE DUP IF R> DROP EXIT THEN DROP
         R@ _PBW.CHUNK R@ _PBW.REQUESTED @ R@ _PBW.TEMP-REF
         R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-APPEND-RECORD
@@ -567,8 +580,171 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
     R@ _PBLOB-WRITE-END R> DROP ;
 
 \ =====================================================================
+\ Externally budgeted incremental construction
+\ =====================================================================
+\ The ordinary PBLOB-WRITE surface remains the concise one-call API.  These
+\ words expose the same bounded frontier as a caller-owned session so a
+\ higher-level compactor can stop after an exact byte allowance.  The caller
+\ keeps the surrounding PSTORE transaction open from BEGIN through the step
+\ that reports done.  A partial logical chunk lives only in PBLOB-WORK.
+
+: _PBLOB-INCREMENTAL-SESSION?  ( work -- flag )
+    DUP PBLOB-WORK-VALID? IF
+        _PBW.RETURNED @ _PBLOB-INCREMENTAL =
+    ELSE
+        DROP 0
+    THEN ;
+
+: _PBLOB-WRITE-BEGIN-RUN  ( work -- status )
+    >R
+    R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-TX-READY? 0= IF
+        R> DROP PERSIST-S-BUSY EXIT
+    THEN
+    R@ _PBW.BLOB @ PBLOB-SIZE 0 FILL
+    R@ _PBW.TOTAL @ DUP 0< IF DROP R> DROP PERSIST-S-INVALID EXIT THEN
+    DUP _PBLOB-CHUNKS R@ _PBW.EXPECTED-COVERED !
+    0 R@ _PBW.PAYLOAD-U !
+    _PBLOB-INCREMENTAL R@ _PBW.RETURNED !
+    0= IF R> _PBLOB-INSTALL-EMPTY EXIT THEN
+    R> DROP PERSIST-S-OK ;
+
+: PBLOB-WRITE-BEGIN  ( total-u output-blob store store-work blob-work -- status )
+    >R
+    R@ PBLOB-WORK-VALID? 0= IF
+        _PBLOB-DROP4 R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    R@ _PBW.BUSY @ IF
+        _PBLOB-DROP4 R> DROP PERSIST-S-BUSY EXIT
+    THEN
+    R@ _PBLOB-WORK-RESET
+    3 PICK R@ _PBW.TOTAL !
+    2 PICK R@ _PBW.BLOB !
+    1 PICK R@ _PBW.STORE !
+    DUP R@ _PBW.STORE-WORK !
+    R@ _PBLOB-BOUND? 0= IF
+        _PBLOB-DROP4 PERSIST-S-INVALID R@ _PBLOB-OP-END R> DROP EXIT
+    THEN
+    -1 R@ _PBW.BUSY !
+    _PBLOB-DROP4
+    R@ ['] _PBLOB-WRITE-BEGIN-RUN _PBLOB-RUN-CATCH
+    R@ _PBLOB-WRITE-END R> DROP ;
+
+: _PBLOB-INCREMENTAL-FLUSH  ( work -- status )
+    >R
+    R@ _PBW.PAYLOAD-U @ DUP 0> 0= IF
+        DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _PBW.CHUNK SWAP R@ _PBW.TEMP-REF
+    R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-APPEND-RECORD
+    DUP IF R> DROP EXIT THEN DROP
+    1 R@ _PBW.CHUNK-WRITES +!
+    0 R@ _PBW.PAYLOAD-U !
+    0 R@ _PBLOB-ADD-TEMP
+    R> DROP ;
+
+: _PBLOB-WRITE-STEP-RUN  ( work -- done? bytes-used status )
+    >R
+    R@ _PBW.RETURNED @ _PBLOB-INCREMENTAL <> IF
+        R> DROP 0 0 PERSIST-S-CONFLICT EXIT
+    THEN
+    R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-TX-READY? 0= IF
+        R> DROP 0 0 PERSIST-S-BUSY EXIT
+    THEN
+    R@ _PBW.POSITION @ R@ _PBW.TOTAL @ = IF
+        R@ _PBW.BLOB @ PBLOB-VALID? IF
+            R> DROP -1 0 PERSIST-S-OK EXIT
+        THEN
+        R> DROP 0 0 PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _PBW.CALLBACK-XT @ 0= IF
+        R> DROP 0 0 PERSIST-S-INVALID EXIT
+    THEN
+    0 R@ _PBW.STEP-USED !
+    BEGIN
+        R@ _PBW.STEP-USED @ R@ _PBW.ALLOWANCE @ <
+        R@ _PBW.POSITION @ R@ _PBW.TOTAL @ < AND
+    WHILE
+        R@ _PBW.TOTAL @ R@ _PBW.POSITION @ -
+        PBLOB-CHUNK-SIZE R@ _PBW.PAYLOAD-U @ -
+        MIN
+        R@ _PBW.ALLOWANCE @ R@ _PBW.STEP-USED @ - MIN
+        DUP 0> 0= IF
+            DROP R> DROP 0 0 PERSIST-S-CORRUPT EXIT
+        THEN
+        R@ _PBW.LOCAL-INDEX !
+        R@ _PBW.CHUNK R@ _PBW.PAYLOAD-U @ +
+            R@ _PBW.PAYLOAD-A !
+        R@ _PBW.LOCAL-INDEX @ R@ _PBW.REQUESTED !
+        R@ _PBLOB-CALL-SOURCE DUP IF
+            R@ _PBW.STEP-USED @ SWAP R> DROP 0 -ROT EXIT
+        THEN DROP
+        R@ _PBW.LOCAL-INDEX @ DUP R@ _PBW.BYTES +!
+        DUP R@ _PBW.POSITION +!
+        DUP R@ _PBW.PAYLOAD-U +!
+        R@ _PBW.STEP-USED +!
+        R@ _PBW.PAYLOAD-U @ PBLOB-CHUNK-SIZE =
+        R@ _PBW.POSITION @ R@ _PBW.TOTAL @ = OR IF
+            R@ _PBLOB-INCREMENTAL-FLUSH DUP IF
+                R@ _PBW.STEP-USED @ SWAP R> DROP 0 -ROT EXIT
+            THEN DROP
+        THEN
+    REPEAT
+    R@ _PBW.POSITION @ R@ _PBW.TOTAL @ = IF
+        R@ _PBLOB-FINALIZE-MANIFEST
+        DUP IF
+            NIP R@ _PBW.STEP-USED @ SWAP R> DROP 0 -ROT EXIT
+        THEN DROP
+        R@ _PBLOB-INSTALL-DESCRIPTOR
+        DUP IF
+            R@ _PBW.STEP-USED @ SWAP R> DROP 0 -ROT EXIT
+        THEN DROP
+        -1
+    ELSE
+        0
+    THEN
+    R@ _PBW.STEP-USED @ PERSIST-S-OK
+    R> DROP ;
+
+: _PBLOB-INCREMENTAL-STEP-CATCH  ( work -- done? bytes-used status )
+    ['] _PBLOB-WRITE-STEP-RUN CATCH
+    DUP IF
+        >R DROP R> DROP 0 0 PERSIST-S-FAULT
+    ELSE
+        DROP
+    THEN ;
+
+: PBLOB-WRITE-STEP  ( source-xt source-context allowance work -- done? used status )
+    >R
+    R@ _PBLOB-INCREMENTAL-SESSION? 0= IF
+        _PBLOB-DROP3 R> DROP 0 0 PERSIST-S-CONFLICT EXIT
+    THEN
+    R@ _PBW.BUSY @ IF
+        _PBLOB-DROP3 R> DROP 0 0 PERSIST-S-BUSY EXIT
+    THEN
+    DUP 0> 0= IF
+        _PBLOB-DROP3 R> DROP 0 0 PERSIST-S-INVALID EXIT
+    THEN
+    2 PICK R@ _PBW.CALLBACK-XT !
+    1 PICK R@ _PBW.CALLBACK-CONTEXT !
+    DUP R@ _PBW.ALLOWANCE !
+    -1 R@ _PBW.BUSY !
+    _PBLOB-DROP3
+    R@ _PBLOB-INCREMENTAL-STEP-CATCH
+    R@ _PBLOB-WRITE-END
+    R> DROP ;
+
+\ =====================================================================
 \ Manifest traversal and bounded ranged reads
 \ =====================================================================
+
+: _PBLOB-READ-RECORD  ( ref work -- status )
+    >R
+    R@ _PBW.READ-TX @ IF
+        R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-READ-RECORD-TX
+    ELSE
+        R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-READ-RECORD
+    THEN
+    R> DROP ;
 
 : _PBLOB-NODE-VALID?  ( work -- flag )
     >R
@@ -611,8 +787,7 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
     R@ _PBW.BLOB @ _PBL.LEVEL @ R@ _PBW.EXPECTED-LEVEL !
     R@ _PBW.BLOB @ _PBL.ROOT R@ _PBW.SELECTED-REF PERSIST-REF-COPY
     BEGIN
-        R@ _PBW.SELECTED-REF
-        R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-READ-RECORD
+        R@ _PBW.SELECTED-REF R@ _PBLOB-READ-RECORD
         DUP IF R> DROP EXIT THEN DROP
         1 R@ _PBW.MANIFEST-READS +!
         R@ _PBW.STORE-WORK @ PSTORE-RECORD-PAYLOAD$
@@ -643,6 +818,11 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
 
 : _PBLOB-READ-RANGE-RUN  ( work -- status )
     >R
+    R@ _PBW.READ-TX @ IF
+        R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-TX-READY? 0= IF
+            R> DROP PERSIST-S-BUSY EXIT
+        THEN
+    THEN
     R@ _PBW.BLOB @ PBLOB-VALID? 0= IF R> DROP PERSIST-S-INVALID EXIT THEN
     R@ _PBW.POSITION @ DUP 0< IF
         DROP R> DROP PERSIST-S-INVALID EXIT
@@ -664,8 +844,7 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
             >R DROP R> R> DROP EXIT
         THEN DROP
         R@ _PBLOB-EXPECTED-CHUNK-U R@ _PBW.ACTUAL !
-        R@ _PBW.SELECTED-REF
-        R@ _PBW.STORE @ R@ _PBW.STORE-WORK @ PSTORE-READ-RECORD
+        R@ _PBW.SELECTED-REF R@ _PBLOB-READ-RECORD
         DUP IF R> DROP EXIT THEN DROP
         1 R@ _PBW.CHUNK-READS +!
         R@ _PBW.STORE-WORK @ PSTORE-RECORD-PAYLOAD$
@@ -685,27 +864,40 @@ _PBW-CHUNK PBLOB-CHUNK-SIZE + CONSTANT PBLOB-WORK-SIZE
     REPEAT
     R> DROP PERSIST-S-OK ;
 
-: PBLOB-READ-RANGE  ( blob offset requested-u sink-xt sink-context store store-work blob-work -- status )
+: _PBLOB-READ-RANGE
+  ( blob offset requested-u sink-xt sink-context store store-work read-tx? blob-work -- status )
     >R
     R@ PBLOB-WORK-VALID? 0= IF
-        _PBLOB-DROP7 R> DROP PERSIST-S-INVALID EXIT
+        _PBLOB-DROP8 R> DROP PERSIST-S-INVALID EXIT
     THEN
-    R@ _PBW.BUSY @ IF _PBLOB-DROP7 R> DROP PERSIST-S-BUSY EXIT THEN
+    R@ _PBW.BUSY @ IF _PBLOB-DROP8 R> DROP PERSIST-S-BUSY EXIT THEN
+    DUP DUP 0= SWAP -1 = OR 0= IF
+        _PBLOB-DROP8 R> DROP PERSIST-S-INVALID EXIT
+    THEN
     R@ _PBLOB-WORK-RESET
-    6 PICK R@ _PBW.BLOB !
-    5 PICK R@ _PBW.POSITION !
-    4 PICK R@ _PBW.REQUESTED !
-    3 PICK R@ _PBW.CALLBACK-XT !
-    2 PICK R@ _PBW.CALLBACK-CONTEXT !
-    1 PICK R@ _PBW.STORE !
-    DUP R@ _PBW.STORE-WORK !
+    7 PICK R@ _PBW.BLOB !
+    6 PICK R@ _PBW.POSITION !
+    5 PICK R@ _PBW.REQUESTED !
+    4 PICK R@ _PBW.CALLBACK-XT !
+    3 PICK R@ _PBW.CALLBACK-CONTEXT !
+    2 PICK R@ _PBW.STORE !
+    1 PICK R@ _PBW.STORE-WORK !
+    DUP R@ _PBW.READ-TX !
     R@ _PBLOB-BOUND? 0= IF
-        _PBLOB-DROP7 PERSIST-S-INVALID R@ _PBLOB-OP-END R> DROP EXIT
+        _PBLOB-DROP8 PERSIST-S-INVALID R@ _PBLOB-OP-END R> DROP EXIT
     THEN
     -1 R@ _PBW.BUSY !
-    _PBLOB-DROP7
+    _PBLOB-DROP8
     R@ ['] _PBLOB-READ-RANGE-RUN _PBLOB-RUN-CATCH
     R@ _PBLOB-OP-END R> DROP ;
+
+: PBLOB-READ-RANGE
+  ( blob offset requested-u sink-xt sink-context store store-work blob-work -- status )
+    >R 0 R> _PBLOB-READ-RANGE ;
+
+: PBLOB-READ-RANGE-TX
+  ( blob offset requested-u sink-xt sink-context store store-work blob-work -- status )
+    >R -1 R> _PBLOB-READ-RANGE ;
 
 : PBLOB-STREAM
   ( blob offset sink-xt sink-context store store-work blob-work -- status )

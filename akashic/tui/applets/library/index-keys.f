@@ -6,27 +6,90 @@
 \  persistence/btree.f knows only unsigned byte keys and opaque values.
 \
 \  Numeric order fields use fixed big-endian bytes so bytewise comparison
-\  agrees with nonnegative sequence/revision order.  Titles keep their exact
-\  current bytes; there is no normalization, collation, or search policy here.
-\  Each title byte b is represented by the fixed-width 9-bit symbol b+1 and
-\  followed by the zero end symbol.  This preserves unsigned bytewise order,
-\  distinguishes every prefix (including embedded U+0000), and still leaves
-\  room for the RID tie-breaker below the neutral 256-byte key ceiling.
+\  agrees with nonnegative sequence/revision order.  Text keys keep their
+\  exact current bytes; there is no normalization, collation, or search policy
+\  here.  Each text byte b is represented by the fixed-width 9-bit symbol b+1
+\  and followed by the zero end symbol.  This preserves unsigned bytewise
+\  order, distinguishes every prefix (including embedded U+0000), and still
+\  leaves room for RID tie-breakers below the neutral 256-byte key ceiling.
+\  A fixed encoded text prefix includes that zero end symbol, so it selects
+\  only the exact text rather than every longer value beginning with it.
 \ =====================================================================
 
 PROVIDED akashic-tui-library-index-keys
 
 REQUIRE model.f
 
+256 CONSTANT LIBPI-KEY-MAX
+
 RID-SIZE CONSTANT LIBPI-RID-KEY-SIZE
+RID-SIZE CONSTANT LIBPI-OPERATION-KEY-SIZE
+LIBPI-OPERATION-KEY-SIZE CONSTANT LIBPI-OPERATION-PREFIX-SIZE
+
+8 CONSTANT LIBPI-ORDER-PREFIX-SIZE
 8 RID-SIZE + CONSTANT LIBPI-ORDER-KEY-SIZE
+LIBPI-ORDER-PREFIX-SIZE CONSTANT LIBPI-RECENCY-PREFIX-SIZE
+LIBPI-ORDER-KEY-SIZE CONSTANT LIBPI-RECENCY-KEY-SIZE
+
 LIB-TITLE-MAX 1+ CONSTANT _LIBPI-TITLE-SYMBOLS
 _LIBPI-TITLE-SYMBOLS 9 * 7 + 8 / CONSTANT _LIBPI-TITLE-BYTES
+_LIBPI-TITLE-BYTES CONSTANT LIBPI-TITLE-PREFIX-SIZE
 _LIBPI-TITLE-BYTES RID-SIZE + CONSTANT LIBPI-TITLE-KEY-SIZE
+
+LIB-TAG-TEXT-MAX 1+ CONSTANT _LIBPI-TAG-SYMBOLS
+_LIBPI-TAG-SYMBOLS 9 * 7 + 8 / CONSTANT _LIBPI-TAG-BYTES
+_LIBPI-TAG-BYTES CONSTANT LIBPI-TAG-PREFIX-SIZE
+_LIBPI-TAG-BYTES 8 + CONSTANT LIBPI-TAG-ORDER-PREFIX-SIZE
+LIBPI-TAG-ORDER-PREFIX-SIZE RID-SIZE + CONSTANT LIBPI-TAG-KEY-SIZE
+
+4 CONSTANT _LIBPI-BODY-SYMBOLS
+_LIBPI-BODY-SYMBOLS 9 * 7 + 8 / CONSTANT _LIBPI-BODY-BYTES
+_LIBPI-BODY-BYTES CONSTANT LIBPI-BODY-PREFIX-SIZE
+_LIBPI-BODY-BYTES 8 + CONSTANT LIBPI-BODY-ORDER-PREFIX-SIZE
+LIBPI-BODY-ORDER-PREFIX-SIZE RID-SIZE + CONSTANT LIBPI-BODY-KEY-SIZE
+
 RID-SIZE 2 * CONSTANT LIBPI-EDGE-KEY-SIZE
+RID-SIZE 8 + RID-SIZE + CONSTANT LIBPI-MEMBERSHIP-KEY-SIZE
+RID-SIZE CONSTANT LIBPI-MEMBERSHIP-PREFIX-SIZE
 RID-SIZE 8 + CONSTANT LIBPI-HISTORY-KEY-SIZE
+LIBPI-HISTORY-KEY-SIZE CONSTANT LIBPI-HISTORY-DOMAIN-KEY-SIZE
+
+1 CONSTANT LIBPI-STATE-LIFECYCLE-PREFIX-SIZE
+2 CONSTANT LIBPI-STATE-KIND-PREFIX-SIZE
+3 CONSTANT LIBPI-STATE-MEDIA-PREFIX-SIZE
+11 CONSTANT LIBPI-STATE-MUTATION-PREFIX-SIZE
+LIBPI-STATE-MUTATION-PREFIX-SIZE RID-SIZE +
+    CONSTANT LIBPI-STATE-ORDER-KEY-SIZE
+LIBPI-STATE-MUTATION-PREFIX-SIZE
+    CONSTANT LIBPI-STATE-CREATION-PREFIX-SIZE
+LIBPI-STATE-MUTATION-PREFIX-SIZE
+    CONSTANT LIBPI-STATE-RECENCY-PREFIX-SIZE
+LIBPI-STATE-ORDER-KEY-SIZE CONSTANT LIBPI-STATE-CREATION-KEY-SIZE
+LIBPI-STATE-ORDER-KEY-SIZE CONSTANT LIBPI-STATE-RECENCY-KEY-SIZE
+
+RID-SIZE CONSTANT LIBPI-COLLECTION-KEY-SIZE
+LIBPI-ORDER-PREFIX-SIZE CONSTANT LIBPI-COLLECTION-ORDER-PREFIX-SIZE
+LIBPI-ORDER-KEY-SIZE CONSTANT LIBPI-COLLECTION-ORDER-KEY-SIZE
+LIB-COLLECTION-TITLE-MAX 1+ CONSTANT _LIBPI-COLLECTION-TITLE-SYMBOLS
+_LIBPI-COLLECTION-TITLE-SYMBOLS 9 * 7 + 8 /
+    CONSTANT _LIBPI-COLLECTION-TITLE-BYTES
+_LIBPI-COLLECTION-TITLE-BYTES
+    CONSTANT LIBPI-COLLECTION-TITLE-PREFIX-SIZE
+_LIBPI-COLLECTION-TITLE-BYTES RID-SIZE +
+    CONSTANT LIBPI-COLLECTION-TITLE-KEY-SIZE
+
+\ One shared identity directory admits exactly these Library-owned classes.
+\ The external 32-byte token comes first, making it a prefix over every class
+\ and therefore allowing one bounded seek to detect cross-class collisions.
+1 CONSTANT LIBPI-DIRECTORY-DOCUMENT
+2 CONSTANT LIBPI-DIRECTORY-COLLECTION
+3 CONSTANT LIBPI-DIRECTORY-RECEIPT
+RID-SIZE CONSTANT LIBPI-DIRECTORY-PREFIX-SIZE
+RID-SIZE 1+ CONSTANT LIBPI-DIRECTORY-KEY-SIZE
 
 : _LIBPI-DROP3  ( x1 x2 x3 -- ) 2DROP DROP ;
+: _LIBPI-DROP4  ( x1 x2 x3 x4 -- ) 2DROP 2DROP ;
+: _LIBPI-DROP5  ( x1 x2 x3 x4 x5 -- ) 2DROP 2DROP DROP ;
 
 : _LIBPI-U64-BE!  ( nonnegative-u destination -- )
     >R
@@ -41,8 +104,44 @@ RID-SIZE 8 + CONSTANT LIBPI-HISTORY-KEY-SIZE
     R> DROP ;
 
 : _LIBPI-DEST?  ( destination bytes -- flag )
+    DUP 0> OVER LIBPI-KEY-MAX <= AND 0= IF 2DROP 0 EXIT THEN
     OVER 0= IF 2DROP 0 EXIT THEN
     MSPAN-NONWRAPPING? ;
+
+: LIBPI-KEY-SIZE?  ( bytes -- flag )
+    DUP 0> SWAP LIBPI-KEY-MAX <= AND ;
+
+: _LIBPI-RID?  ( rid -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP RID-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    RID-PRESENT? ;
+
+: _LIBPI-TEXT?  ( source-a source-u maximum-u -- flag )
+    >R
+    OVER 0= IF 2DROP R> DROP 0 EXIT THEN
+    DUP 0> OVER R@ <= AND 0= IF 2DROP R> DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING?
+    R> DROP ;
+
+: _LIBPI-DIRECTORY-CLASS?  ( class -- flag )
+    DUP LIBPI-DIRECTORY-DOCUMENT =
+    OVER LIBPI-DIRECTORY-COLLECTION = OR
+    SWAP LIBPI-DIRECTORY-RECEIPT = OR ;
+
+: _LIBPI-LIFECYCLE?  ( lifecycle -- flag )
+    DUP LIB-LIFECYCLE-ACTIVE =
+    OVER LIB-LIFECYCLE-ARCHIVED = OR
+    SWAP LIB-LIFECYCLE-TOMBSTONED = OR ;
+
+: _LIBPI-KIND?  ( kind -- flag )
+    DUP LIB-KIND-MANAGED-DOCUMENT =
+    SWAP LIB-KIND-CAPTURE = OR ;
+
+: _LIBPI-MEDIA?  ( media -- flag )
+    DUP LIB-MEDIA-NONE =
+    OVER LIB-MEDIA-TEXT-PLAIN = OR
+    OVER LIB-MEDIA-TEXT-MARKDOWN = OR
+    SWAP LIB-MEDIA-TEXT-CSV = OR ;
 
 : _LIBPI-9BIT!  ( symbol symbol-index destination -- )
     >R
@@ -52,18 +151,43 @@ RID-SIZE 8 + CONSTANT LIBPI-HISTORY-KEY-SIZE
     255 AND R@ 1+ C@ OR R@ 1+ C!
     R> DROP R> DROP ;
 
+: _LIBPI-TEXT!  ( source-a source-u destination -- )
+    ROT ROT
+    0 ?DO
+        DUP I + C@ 1+ I 3 PICK _LIBPI-9BIT!
+    LOOP
+    2DROP ;
+
 : LIBPI-RID-KEY  ( rid destination -- status )
     >R
-    DUP RID-PRESENT? 0= IF DROP R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-RID? 0= IF DROP R> DROP LIB-S-INVALID EXIT THEN
     R@ LIBPI-RID-KEY-SIZE _LIBPI-DEST? 0= IF
+        DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP RID-SIZE R@ LIBPI-RID-KEY-SIZE MSPAN-OVERLAP? IF
         DROP R> DROP LIB-S-INVALID EXIT
     THEN
     R@ RID-COPY R> DROP LIB-S-OK ;
 
+: LIBPI-OPERATION-KEY  ( operation-key destination -- status )
+    LIBPI-RID-KEY ;
+
+: LIBPI-OPERATION-PREFIX  ( operation-key destination -- status )
+    LIBPI-OPERATION-KEY ;
+
+: LIBPI-ORDER-PREFIX  ( created-sequence destination -- status )
+    >R
+    DUP 0> 0= IF DROP R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-ORDER-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP R@ _LIBPI-U64-BE!
+    DROP R> DROP LIB-S-OK ;
+
 : LIBPI-ORDER-KEY  ( created-sequence rid destination -- status )
     >R
     OVER 0> 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
-    DUP RID-PRESENT? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-RID? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
     R@ LIBPI-ORDER-KEY-SIZE _LIBPI-DEST? 0= IF
         2DROP R> DROP LIB-S-INVALID EXIT
     THEN
@@ -75,16 +199,33 @@ RID-SIZE 8 + CONSTANT LIBPI-HISTORY-KEY-SIZE
     DUP R@ 8 + RID-COPY
     2DROP R> DROP LIB-S-OK ;
 
+: LIBPI-RECENCY-PREFIX  ( mutation-sequence destination -- status )
+    LIBPI-ORDER-PREFIX ;
+
+: LIBPI-RECENCY-KEY  ( mutation-sequence rid destination -- status )
+    LIBPI-ORDER-KEY ;
+
+: LIBPI-TITLE-PREFIX  ( title-a title-u destination -- status )
+    >R
+    2DUP LIB-TITLE-MAX _LIBPI-TEXT? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-TITLE-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    2DUP R@ LIBPI-TITLE-PREFIX-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-TITLE-PREFIX-SIZE 0 FILL
+    R> _LIBPI-TEXT!
+    LIB-S-OK ;
+
 : LIBPI-TITLE-KEY  ( title-a title-u rid destination -- status )
     >R
-    2 PICK 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
-    1 PICK DUP 0> SWAP LIB-TITLE-MAX <= AND 0= IF
+    2 PICK 2 PICK LIB-TITLE-MAX _LIBPI-TEXT? 0= IF
         _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
     THEN
-    DUP RID-PRESENT? 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
-    2 PICK 2 PICK MSPAN-NONWRAPPING? 0= IF
-        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
-    THEN
+    DUP _LIBPI-RID? 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
     R@ LIBPI-TITLE-KEY-SIZE _LIBPI-DEST? 0= IF
         _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
     THEN
@@ -104,8 +245,8 @@ RID-SIZE 8 + CONSTANT LIBPI-HISTORY-KEY-SIZE
 
 : LIBPI-EDGE-KEY  ( collection-rid member-rid destination -- status )
     >R
-    OVER RID-PRESENT? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
-    DUP RID-PRESENT? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
+    OVER _LIBPI-RID? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-RID? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
     R@ LIBPI-EDGE-KEY-SIZE _LIBPI-DEST? 0= IF
         2DROP R> DROP LIB-S-INVALID EXIT
     THEN
@@ -123,17 +264,370 @@ RID-SIZE 8 + CONSTANT LIBPI-HISTORY-KEY-SIZE
 : LIBPI-EDGE-PREFIX  ( collection-rid destination -- status )
     LIBPI-RID-KEY ;
 
-: LIBPI-HISTORY-KEY  ( document-rid content-revision destination -- status )
+: LIBPI-MEMBERSHIP-KEY
+    ( collection-rid member-created-sequence member-rid destination -- status )
     >R
-    OVER RID-PRESENT? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
+    2 PICK _LIBPI-RID? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    OVER 0> 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-RID? 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-MEMBERSHIP-KEY-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    2 PICK RID-SIZE R@ LIBPI-MEMBERSHIP-KEY-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP RID-SIZE R@ LIBPI-MEMBERSHIP-KEY-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-MEMBERSHIP-KEY-SIZE 0 FILL
+    2 PICK R@ RID-COPY
+    OVER R@ RID-SIZE + _LIBPI-U64-BE!
+    DUP R@ RID-SIZE 8 + + RID-COPY
+    _LIBPI-DROP3 R> DROP LIB-S-OK ;
+
+: LIBPI-MEMBERSHIP-PREFIX  ( collection-rid destination -- status )
+    LIBPI-RID-KEY ;
+
+: LIBPI-HISTORY-PREFIX  ( document-rid destination -- status )
+    LIBPI-RID-KEY ;
+
+: LIBPI-HISTORY-DOMAIN-KEY
+    ( document-rid exact-domain-revision destination -- status )
+    >R
+    OVER _LIBPI-RID? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
     DUP 0> 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
-    R@ LIBPI-HISTORY-KEY-SIZE _LIBPI-DEST? 0= IF
+    R@ LIBPI-HISTORY-DOMAIN-KEY-SIZE _LIBPI-DEST? 0= IF
         2DROP R> DROP LIB-S-INVALID EXIT
     THEN
-    OVER RID-SIZE R@ LIBPI-HISTORY-KEY-SIZE MSPAN-OVERLAP? IF
+    OVER RID-SIZE R@ LIBPI-HISTORY-DOMAIN-KEY-SIZE MSPAN-OVERLAP? IF
         2DROP R> DROP LIB-S-INVALID EXIT
     THEN
-    R@ LIBPI-HISTORY-KEY-SIZE 0 FILL
+    R@ LIBPI-HISTORY-DOMAIN-KEY-SIZE 0 FILL
     OVER R@ RID-COPY
     DUP R@ RID-SIZE + _LIBPI-U64-BE!
     2DROP R> DROP LIB-S-OK ;
+
+\ Kept as the existing spelling while callers move to the explicit semantic
+\ name.  The bytes remain RID || exact-domain-revision-be64.
+: LIBPI-HISTORY-KEY
+    ( document-rid exact-domain-revision destination -- status )
+    LIBPI-HISTORY-DOMAIN-KEY ;
+
+\ ---------------------------------------------------------------------
+\ Exact tag and short-body candidate postings
+\ ---------------------------------------------------------------------
+
+: LIBPI-TAG-PREFIX  ( tag-a tag-u destination -- status )
+    >R
+    2DUP LIB-TAG-TEXT-MAX _LIBPI-TEXT? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-TAG-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    2DUP R@ LIBPI-TAG-PREFIX-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-TAG-PREFIX-SIZE 0 FILL
+    R> _LIBPI-TEXT!
+    LIB-S-OK ;
+
+: LIBPI-TAG-ORDER-PREFIX
+    ( tag-a tag-u created-sequence destination -- status )
+    >R
+    2 PICK 2 PICK LIB-TAG-TEXT-MAX _LIBPI-TEXT? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP 0> 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-TAG-ORDER-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    2 PICK 2 PICK R@ LIBPI-TAG-ORDER-PREFIX-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-TAG-ORDER-PREFIX-SIZE 0 FILL
+    R>
+    OVER OVER _LIBPI-TAG-BYTES + _LIBPI-U64-BE!
+    3 PICK 3 PICK 2 PICK _LIBPI-TEXT!
+    2DROP 2DROP LIB-S-OK ;
+
+: LIBPI-TAG-KEY
+    ( tag-a tag-u created-sequence document-rid destination -- status )
+    >R
+    3 PICK 3 PICK LIB-TAG-TEXT-MAX _LIBPI-TEXT? 0= IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    OVER 0> 0= IF _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-RID? 0= IF _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-TAG-KEY-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK R@ LIBPI-TAG-KEY-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP RID-SIZE R@ LIBPI-TAG-KEY-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-TAG-KEY-SIZE 0 FILL
+    R>
+    2 PICK OVER _LIBPI-TAG-BYTES + _LIBPI-U64-BE!
+    OVER OVER LIBPI-TAG-ORDER-PREFIX-SIZE + RID-COPY
+    4 PICK 4 PICK 2 PICK _LIBPI-TEXT!
+    _LIBPI-DROP5 LIB-S-OK ;
+
+: LIBPI-BODY-PREFIX  ( candidate-a candidate-u destination -- status )
+    >R
+    2DUP 3 _LIBPI-TEXT? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-BODY-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    2DUP R@ LIBPI-BODY-PREFIX-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-BODY-PREFIX-SIZE 0 FILL
+    R> _LIBPI-TEXT!
+    LIB-S-OK ;
+
+: LIBPI-BODY-ORDER-PREFIX
+    ( candidate-a candidate-u created-sequence destination -- status )
+    >R
+    2 PICK 2 PICK 3 _LIBPI-TEXT? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP 0> 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-BODY-ORDER-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    2 PICK 2 PICK R@ LIBPI-BODY-ORDER-PREFIX-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-BODY-ORDER-PREFIX-SIZE 0 FILL
+    R>
+    OVER OVER _LIBPI-BODY-BYTES + _LIBPI-U64-BE!
+    3 PICK 3 PICK 2 PICK _LIBPI-TEXT!
+    2DROP 2DROP LIB-S-OK ;
+
+: LIBPI-BODY-KEY  ( candidate-a candidate-u created rid dst -- status )
+    >R
+    3 PICK 3 PICK 3 _LIBPI-TEXT? 0= IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    OVER 0> 0= IF _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-RID? 0= IF _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-BODY-KEY-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK R@ LIBPI-BODY-KEY-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP RID-SIZE R@ LIBPI-BODY-KEY-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-BODY-KEY-SIZE 0 FILL
+    R>
+    2 PICK OVER _LIBPI-BODY-BYTES + _LIBPI-U64-BE!
+    OVER OVER LIBPI-BODY-ORDER-PREFIX-SIZE + RID-COPY
+    4 PICK 4 PICK 2 PICK _LIBPI-TEXT!
+    _LIBPI-DROP5 LIB-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ State-filtered mutation order
+\ ---------------------------------------------------------------------
+
+: LIBPI-STATE-LIFECYCLE-PREFIX
+    ( lifecycle destination -- status )
+    >R
+    DUP _LIBPI-LIFECYCLE? 0= IF DROP R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-STATE-LIFECYCLE-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP R@ C!
+    DROP R> DROP LIB-S-OK ;
+
+: LIBPI-STATE-KIND-PREFIX
+    ( lifecycle kind destination -- status )
+    >R
+    OVER _LIBPI-LIFECYCLE? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-KIND? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-STATE-KIND-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    OVER R@ C!
+    DUP R@ 1+ C!
+    2DROP R> DROP LIB-S-OK ;
+
+: LIBPI-STATE-MEDIA-PREFIX
+    ( lifecycle kind media destination -- status )
+    >R
+    2 PICK _LIBPI-LIFECYCLE? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    OVER _LIBPI-KIND? 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-MEDIA? 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-STATE-MEDIA-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    2 PICK R@ C!
+    OVER R@ 1+ C!
+    DUP R@ 2 + C!
+    _LIBPI-DROP3 R> DROP LIB-S-OK ;
+
+: LIBPI-STATE-MUTATION-PREFIX
+    ( lifecycle kind media created-sequence destination -- status )
+    >R
+    3 PICK _LIBPI-LIFECYCLE? 0= IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    2 PICK _LIBPI-KIND? 0= IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    OVER _LIBPI-MEDIA? 0= IF _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT THEN
+    DUP 0> 0= IF _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-STATE-MUTATION-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP4 R> DROP LIB-S-INVALID EXIT
+    THEN
+    3 PICK R@ C!
+    2 PICK R@ 1+ C!
+    OVER R@ 2 + C!
+    DUP R@ 3 + _LIBPI-U64-BE!
+    _LIBPI-DROP4 R> DROP LIB-S-OK ;
+
+: LIBPI-STATE-ORDER-KEY  ( lifecycle kind media created rid dst -- status )
+    >R
+    4 PICK _LIBPI-LIFECYCLE? 0= IF
+        _LIBPI-DROP5 R> DROP LIB-S-INVALID EXIT
+    THEN
+    3 PICK _LIBPI-KIND? 0= IF
+        _LIBPI-DROP5 R> DROP LIB-S-INVALID EXIT
+    THEN
+    2 PICK _LIBPI-MEDIA? 0= IF
+        _LIBPI-DROP5 R> DROP LIB-S-INVALID EXIT
+    THEN
+    OVER 0> 0= IF _LIBPI-DROP5 R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-RID? 0= IF _LIBPI-DROP5 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-STATE-ORDER-KEY-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP5 R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP RID-SIZE R@ LIBPI-STATE-ORDER-KEY-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP5 R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-STATE-ORDER-KEY-SIZE 0 FILL
+    4 PICK R@ C!
+    3 PICK R@ 1+ C!
+    2 PICK R@ 2 + C!
+    OVER R@ 3 + _LIBPI-U64-BE!
+    DUP R@ LIBPI-STATE-MUTATION-PREFIX-SIZE + RID-COPY
+    _LIBPI-DROP5 R> DROP LIB-S-OK ;
+
+: LIBPI-STATE-CREATION-PREFIX
+    ( lifecycle kind media created-sequence destination -- status )
+    LIBPI-STATE-MUTATION-PREFIX ;
+
+: LIBPI-STATE-RECENCY-PREFIX
+    ( lifecycle kind media mutation-sequence destination -- status )
+    LIBPI-STATE-MUTATION-PREFIX ;
+
+: LIBPI-STATE-CREATION-KEY
+    ( lifecycle kind media created-sequence rid destination -- status )
+    LIBPI-STATE-ORDER-KEY ;
+
+: LIBPI-STATE-RECENCY-KEY
+    ( lifecycle kind media mutation-sequence rid destination -- status )
+    LIBPI-STATE-ORDER-KEY ;
+
+\ ---------------------------------------------------------------------
+\ Collection identity and ordering
+\ ---------------------------------------------------------------------
+
+: LIBPI-COLLECTION-KEY  ( collection-rid destination -- status )
+    LIBPI-RID-KEY ;
+
+: LIBPI-COLLECTION-ORDER-PREFIX
+    ( created-sequence destination -- status )
+    LIBPI-ORDER-PREFIX ;
+
+: LIBPI-COLLECTION-ORDER-KEY
+    ( created-sequence collection-rid destination -- status )
+    LIBPI-ORDER-KEY ;
+
+: LIBPI-COLLECTION-TITLE-PREFIX
+    ( title-a title-u destination -- status )
+    >R
+    2DUP LIB-COLLECTION-TITLE-MAX _LIBPI-TEXT? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-COLLECTION-TITLE-PREFIX-SIZE _LIBPI-DEST? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    2DUP R@ LIBPI-COLLECTION-TITLE-PREFIX-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-COLLECTION-TITLE-PREFIX-SIZE 0 FILL
+    R> _LIBPI-TEXT!
+    LIB-S-OK ;
+
+: LIBPI-COLLECTION-TITLE-KEY
+    ( title-a title-u collection-rid destination -- status )
+    >R
+    2 PICK 2 PICK LIB-COLLECTION-TITLE-MAX _LIBPI-TEXT? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP _LIBPI-RID? 0= IF _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT THEN
+    R@ LIBPI-COLLECTION-TITLE-KEY-SIZE _LIBPI-DEST? 0= IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    2 PICK 2 PICK R@ LIBPI-COLLECTION-TITLE-KEY-SIZE
+        MSPAN-OVERLAP? IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    DUP RID-SIZE R@ LIBPI-COLLECTION-TITLE-KEY-SIZE MSPAN-OVERLAP? IF
+        _LIBPI-DROP3 R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-COLLECTION-TITLE-KEY-SIZE 0 FILL
+    R>
+    2 PICK 0 ?DO
+        3 PICK I + C@ 1+ I 2 PICK _LIBPI-9BIT!
+    LOOP
+    DUP _LIBPI-COLLECTION-TITLE-BYTES + 2 PICK SWAP RID-COPY
+    2DROP 2DROP LIB-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Shared document / collection / receipt identity directory
+\ ---------------------------------------------------------------------
+
+: LIBPI-DIRECTORY-PREFIX  ( external-token destination -- status )
+    LIBPI-RID-KEY ;
+
+: LIBPI-DIRECTORY-KEY
+    ( external-token directory-class destination -- status )
+    >R
+    OVER _LIBPI-RID? 0= IF 2DROP R> DROP LIB-S-INVALID EXIT THEN
+    DUP _LIBPI-DIRECTORY-CLASS? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-DIRECTORY-KEY-SIZE _LIBPI-DEST? 0= IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    OVER RID-SIZE R@ LIBPI-DIRECTORY-KEY-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP LIB-S-INVALID EXIT
+    THEN
+    R@ LIBPI-DIRECTORY-KEY-SIZE 0 FILL
+    OVER R@ RID-COPY
+    DUP R@ RID-SIZE + C!
+    2DROP R> DROP LIB-S-OK ;
+
+: LIBPI-DOCUMENT-DIRECTORY-KEY
+    ( document-rid destination -- status )
+    >R LIBPI-DIRECTORY-DOCUMENT R> LIBPI-DIRECTORY-KEY ;
+
+: LIBPI-COLLECTION-DIRECTORY-KEY
+    ( collection-rid destination -- status )
+    >R LIBPI-DIRECTORY-COLLECTION R> LIBPI-DIRECTORY-KEY ;
+
+: LIBPI-RECEIPT-DIRECTORY-KEY
+    ( operation-key destination -- status )
+    >R LIBPI-DIRECTORY-RECEIPT R> LIBPI-DIRECTORY-KEY ;

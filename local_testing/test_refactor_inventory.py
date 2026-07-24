@@ -100,8 +100,8 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     assert check_report(report, policy) == []
     expected_summary = {
         "module_count": 404,
-        "resolved_require_occurrence_count": 1343,
-        "unique_resolved_edge_count": 1343,
+        "resolved_require_occurrence_count": 1333,
+        "unique_resolved_edge_count": 1333,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -143,16 +143,15 @@ def test_every_module_has_a_reviewed_responsibility_class() -> None:
     }
     assert {path.rsplit("/", 1)[-1] for path in library_modules} == {
         "controller.f",
+        "document-values.f",
         "index-keys.f",
         "library.f",
         "model.f",
         "persistence-adapter.f",
         "projection-adapter.f",
         "query.f",
-        "record-codec.f",
         "repository.f",
         "service.f",
-        "store-format.f",
         "view.f",
     }
     assert all(
@@ -429,9 +428,11 @@ def test_structure_and_complexity_ledger_is_source_anchored() -> None:
         "uidl",
     }
     assert all("O(" in item["current_complexity"] for item in ledger)
+    statuses = {item["id"]: item.get("status", "open") for item in ledger}
+    assert statuses["library.metadata-mutation"] == "resolved"
     target_landings = {item["id"]: item["target_landing"] for item in ledger}
     assert target_landings["library.metadata-mutation"] == "L12"
-    assert target_landings["library.corpus-query"] == "L12"
+    assert "library.corpus-query" not in target_landings
     assert target_landings["streams.observation-checkpoint"] == "L13"
     assert target_landings["desk.host-catalogs"] == "deferred"
     assert {
@@ -457,9 +458,13 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
     }
     assert policy["scale_profiles"]["library"]["large_host_model"] == {
         "documents": 1000000,
+        "collections": 100000,
         "revisions": 10000000,
         "relationship_edges": 10000000,
-        "purpose": "prove Library index geometry, amplification, and bounded working memory without aggregate target allocation",
+        "representative_current_tag_postings": 16000000,
+        "representative_current_text_postings": 12666000000,
+        "index_tree_count": 15,
+        "purpose": "prove the live Library index geometry, amplification, and bounded working memory without aggregate target allocation",
     }
     assert policy["scale_profiles"]["streams"]["workstation"] == {
         "sources": 10000,
@@ -489,14 +494,22 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
     }
     assert policy["hot_path_budgets"] == {
         "cold_open_max_metadata_pages": 64,
-        "large_profile_point_lookup_max_index_pages": 9,
-        "large_profile_32_result_keyset_max_index_page_reads": 66,
-        "large_profile_250000_edge_range_max_index_page_reads": 515658,
-        "metadata_mutation_representative_pages": 77,
-        "metadata_mutation_representative_checked_page_bytes": 315392,
-        "metadata_mutation_structural_ceiling_pages": 139,
-        "metadata_mutation_structural_ceiling_checked_page_bytes": 569344,
-        "metadata_mutation_reclaim_step_calls": 66,
+        "large_profile_point_lookup_max_index_pages": 12,
+        "large_profile_32_result_keyset_max_index_page_reads": 44,
+        "large_profile_250000_edge_range_max_index_page_reads": 273455,
+        "library_index_tree_count": 15,
+        "library_index_workspace_bytes": 119840,
+        "btree_mutation_max_allocated_pages": 25,
+        "allocated_page_ledger": 128,
+        "staging_admission_policy": "dynamic public-ledger page reservation",
+        "staging_mutation_page_reservation": (
+            "2h+1 pages at the tallest current staging root"
+        ),
+        "staging_publication_reservation": (
+            "one application-root page plus bounded reclaim-step and "
+            "reclaim-finalizer retirement/discard pages"
+        ),
+        "stage_policy_within_page_ledger": True,
         "reclaim_maintenance_max_page_writes_per_step": 1,
         "ui_max_collection_pages": 3,
         "ordinary_operation_corpus_proportional_allocation": False,
@@ -511,32 +524,51 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         ],
     }
     assert policy["hot_path_budget_amendment"] == {
-        "landing": "L11",
-        "prior_provisional": {
-            "large_profile_point_lookup_max_index_pages": 6,
-            "metadata_mutation_max_pages": 32,
-            "metadata_mutation_max_bytes_excluding_payload": 262144,
-        },
-        "settled": {
+        "landing": "L12",
+        "superseded_l11_projection": {
+            "index_tree_count": 7,
+            "library_index_workspace_bytes": 84672,
             "large_profile_point_lookup_max_index_pages": 9,
             "large_profile_32_result_keyset_max_index_page_reads": 66,
             "large_profile_250000_edge_range_max_index_page_reads": 515658,
             "metadata_mutation_representative_pages": 77,
-            "metadata_mutation_representative_checked_page_bytes": 315392,
             "metadata_mutation_structural_ceiling_pages": 139,
-            "metadata_mutation_structural_ceiling_checked_page_bytes": 569344,
-            "metadata_mutation_reclaim_step_calls": 66,
-            "reclaim_maintenance_max_page_writes_per_step": 1,
         },
+        "live_topology": {
+            "index_tree_count": 15,
+            "library_index_workspace_bytes": 119840,
+            "large_profile_point_lookup_max_index_pages": 12,
+            "large_profile_32_result_keyset_max_index_page_reads": 44,
+            "large_profile_250000_edge_range_max_index_page_reads": 273455,
+            "btree_mutation_max_allocated_pages": 25,
+            "allocated_page_ledger": 128,
+            "staging_admission_policy": (
+                "dynamic public-ledger page reservation"
+            ),
+            "staging_mutation_page_reservation": (
+                "2h+1 pages at the tallest current staging root"
+            ),
+            "staging_publication_reservation": (
+                "one application-root page plus bounded reclaim-step and "
+                "reclaim-finalizer retirement/discard pages"
+            ),
+        },
+        "resolved": (
+            "L12 admits each staged mutation only when the public allocation, "
+            "retirement, and discard ledgers can absorb its dynamic tree-height "
+            "reservation and the remaining publication/finalization reserves; "
+            "physical publications split long logical operations without "
+            "advancing their logical generation."
+        ),
         "evidence": [
-            "nine-level churn-retained B+tree bound",
-            "7,813 independently prepared 32-result relationship slices",
-            "65 copy-on-write index page writes",
-            "two application-root writes",
-            "six reclaim-finalization bucket writes",
-            "four representative steady two-bucket reclaim maintenance writes",
-            "one reclaim maintenance page write maximum per step",
-            "139 checked-page writes across the unconditional 66-step ceiling",
+            "exact fifteen-root Library adapter topology",
+            "twelve-level churn-retained body-postings bound",
+            "7,813 cache-preserving 32-result membership slices",
+            "119,840-byte caller-owned Library index workspace",
+            "all-tree page-read, page-write, and comparison telemetry",
+            "2h+1 mutation-page reservation from the tallest current staging root",
+            "public-ledger admission through RECLAIM-TX-ROOM?",
+            "physical and final publication paths with distinct logical-generation semantics",
         ],
     }
     assert "instance_workload" not in policy["scale_profiles"]
@@ -555,15 +587,24 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
     ]
     baseline = policy["hot_path_baseline"]
     assert "PERF-CYCLES" in baseline["existing_guest_counters"]
+    assert "Library aggregate fifteen-tree page reads" in baseline[
+        "existing_guest_counters"
+    ]
+    assert "Library aggregate fifteen-tree page writes" in baseline[
+        "existing_guest_counters"
+    ]
+    assert "Library aggregate fifteen-tree comparisons" in baseline[
+        "existing_guest_counters"
+    ]
     assert "allocation event count" in baseline["missing_instrumentation"]
-    assert "logical persistence page reads and writes" in baseline[
+    assert "logical persistence page reads and writes" not in baseline[
         "missing_instrumentation"
     ]
     assert "not an allocation counter" in baseline["clarification"]
-    assert "must not be relabelled" in baseline["clarification"]
+    assert "logical page telemetry" in baseline["clarification"]
     coverage = {entry["area"]: entry["status"] for entry in baseline["coverage"]}
     assert coverage == {
-        "Library": "measured",
+        "Library": "analytical-and-focused-guest",
         "Streams": "functional-and-capacity-only",
         "Agent": "functional-and-capacity-only",
         "Daybook/Pad/Grid/FExplorer": "functional-and-capacity-only",
@@ -577,9 +618,11 @@ def test_live_module_inventory_includes_exact_mutable_symbols() -> None:
     repository = by_path[
         "tui/applets/library/repository.f"
     ]["lexical_definitions"]
-    assert "_library-vfs-store-guard" in repository["guard"]
-    assert "_LIBVP-FRAME" in repository["create"]
-    assert "_LIBVP-CATALOG-FACTS" in repository["create"]
+    assert repository["guard"] == []
+    assert repository["create"] == []
+    assert {"_LR-GUARD", "_LR-BUILDER-GUARD"} <= set(
+        repository["constant"]
+    )
     bus = by_path["interop/request-bus.f"]["lexical_definitions"]
     assert "_CBUS-DISPATCH-DEPTH" in bus["variable"]
     assert "_CBUS-OWNER-OP-DEPTH" in bus["variable"]

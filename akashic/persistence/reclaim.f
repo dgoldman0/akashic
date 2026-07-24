@@ -124,6 +124,16 @@ REQUIRE store.f
     THEN
     _RECLAIM-STATE-EMPTY PERSIST-S-OK ;
 
+\ Compaction finalizers know the next shared authority generation before
+\ publishing their application-root page.  Reclaim's serialized empty state
+\ is intentionally generation-free; this entry point validates that exact
+\ positive binding while producing the canonical empty state which
+\ RECLAIM-OPEN will bind to the subsequently opened PSTORE generation.
+: RECLAIM-EMPTY-STATE-FOR-GENERATION
+  ( exact-generation state-a state-u -- status )
+    2 PICK 0> 0= IF _RECLAIM-DROP3 PERSIST-S-INVALID EXIT THEN
+    ROT DROP RECLAIM-STATE-INIT ;
+
 \ ---------------------------------------------------------------------
 \ Persistent bucket payload
 \ ---------------------------------------------------------------------
@@ -416,6 +426,42 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
 : RECLAIM-REUSABLE-COUNT@  ( reclaim -- count|-1 )
     DUP RECLAIM-VALID? IF _RCL.STATE _RCS.REUSABLE-COUNT @ ELSE DROP -1 THEN ;
 
+\ Report whether an active transaction can absorb caller-supplied worst-case
+\ ledger reservations without relying on private work-object offsets.  The
+\ caller remains responsible for including allocator-side metadata effects
+\ (for example a consumed ready bucket) in the retirement reservation.
+: _RECLAIM-RESERVE-FITS?  ( reserve current maximum -- flag )
+    >R
+    OVER 0< IF 2DROP R> DROP 0 EXIT THEN
+    DUP 0< IF 2DROP R> DROP 0 EXIT THEN
+    DUP R@ > IF 2DROP R> DROP 0 EXIT THEN
+    R> SWAP - <= ;
+
+: RECLAIM-TX-ROOM?
+  ( allocation-reserve retirement-reserve discard-reserve work -- flag )
+    >R
+    R@ RECLAIM-WORK-VALID? 0= IF
+        _RECLAIM-DROP3 R> DROP 0 EXIT
+    THEN
+    R@ _RCW.ACTIVE @ -1 <>
+    R@ _RCW.FINALIZED @ 0<> OR
+    R@ _RCW.STATUS @ PERSIST-S-OK <> OR IF
+        _RECLAIM-DROP3 R> DROP 0 EXIT
+    THEN
+    2 PICK R@ _RCW.ALLOCATED-COUNT @ RECLAIM-ALLOCATED-MAX
+        _RECLAIM-RESERVE-FITS? 0= IF
+        _RECLAIM-DROP3 R> DROP 0 EXIT
+    THEN
+    1 PICK R@ _RCW.STAGED-COUNT @ RECLAIM-RETIRED-MAX
+        _RECLAIM-RESERVE-FITS? 0= IF
+        _RECLAIM-DROP3 R> DROP 0 EXIT
+    THEN
+    DUP R@ _RCW.DISCARD-COUNT @ RECLAIM-DISCARD-MAX
+        _RECLAIM-RESERVE-FITS? 0= IF
+        _RECLAIM-DROP3 R> DROP 0 EXIT
+    THEN
+    _RECLAIM-DROP3 R> DROP -1 ;
+
 : _RECLAIM-STORE-FENCE  ( store -- generation|0 )
     DUP PSTORE-ROOT-FILE@ DUP 0= IF 2DROP 0 EXIT THEN
     >R DROP
@@ -466,12 +512,12 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     PERSIST-S-OK ;
 
 : _RCW-SEED-ISSUED  ( base count work -- )
-    >R
-    DUP R@ _RCW.ALLOCATED-COUNT !
+    OVER OVER _RCW.ALLOCATED-COUNT !
+    -ROT
     0 ?DO
-        DUP I + I R@ _RCW.ALLOCATED-ENTRY !
+        DUP I + I 3 PICK _RCW.ALLOCATED-ENTRY !
     LOOP
-    DROP R> DROP ;
+    2DROP ;
 
 : RECLAIM-TX-BEGIN  ( store pstore-work reclaim reclaim-work -- status )
     >R
@@ -641,6 +687,31 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     R@ _RCW.ALLOCATED-COUNT @ R@ _RCW.ALLOCATED-ENTRY !
     1 R@ _RCW.ALLOCATED-COUNT +!
     R> DROP PERSIST-S-OK ;
+
+: _RCW-CLAIM-END  ( page-id work status -- status )
+    >R
+    DUP R> SWAP _RCW-SET-STATUS
+    >R 2DROP R> ;
+
+\ Admit the current PSTORE high-water id into the consumer-issued allocation
+\ ledger without choosing a reusable id.  This is the neutral bridge for
+\ copy-on-write owners that must allocate hidden pages strictly above the
+\ durable page range while still sharing the reclaimer's bounded transaction
+\ accounting.  The caller must claim immediately before writing that id.
+: RECLAIM-CLAIM-HIGH-WATER  ( page-id reclaim-work -- status )
+    DUP RECLAIM-WORK-VALID? 0= IF
+        2DROP PERSIST-S-INVALID EXIT
+    THEN
+    DUP DUP _RCW.STORE @ 2 PICK _RCW.PSTORE-WORK @
+        _RCW-ACTIVE? 0= IF
+        2DROP PERSIST-S-BUSY EXIT
+    THEN
+    OVER 0< IF PERSIST-S-INVALID _RCW-CLAIM-END EXIT THEN
+    OVER OVER _RCW-PROPOSED-PAGE-COUNT <> IF
+        PERSIST-S-CONFLICT _RCW-CLAIM-END EXIT
+    THEN
+    OVER OVER _RCW-RECORD-ALLOCATION
+    _RCW-CLAIM-END ;
 
 : _RCW-DISCARD-ID  ( page-id work -- status )
     >R

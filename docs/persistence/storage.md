@@ -12,6 +12,7 @@ application adapter
         +------ ordered indexes / keyset cursors
         +------ immutable chunked blobs
         +------ two-root-fenced page reclamation
+        +------ bounded two-bank compaction callbacks
         |
 transactional store
    |        |        |
@@ -20,12 +21,13 @@ pages     segments  root records
         generic VFS
 ```
 
-The initial proving consumer is
+The first proving consumer is
 `tui/applets/library/persistence-adapter.f`. That adapter remains inside the
-Library applet and is deliberately non-authoritative until Library's complete
-cutover. Its nested use of the old Library record codec is temporary L10
-scaffolding scheduled for deletion in L12; the neutral package contains no
-Library vocabulary.
+Library applet because it owns the Library-specific records, relationships,
+paths, and authority rules mapped onto the neutral mechanisms. It is the
+Library prototype's sole durable authority; the displaced record-codec and
+store-format layers have been deleted rather than retained as compatibility
+readers. The neutral package contains no Library vocabulary.
 
 ## Ownership and concurrency
 
@@ -38,7 +40,10 @@ allocates:
 - an optional page cache and its frame memory;
 - optional `PERSIST-STATS-SIZE` counters;
 - one initialized spinning guard per store; and
-- four distinct absolute paths: page file, segment file, root A, and root B.
+- four distinct absolute paths for an ordinary single-bank store: page file,
+  segment file, root A, and root B; and
+- an explicit second page/segment descriptor pair when two-bank compaction is
+  enabled.
 
 Descriptors copy paths and the 32-byte store identity. Workspaces and all
 borrowed buffers must remain alive and disjoint for their documented lifetime.
@@ -78,12 +83,11 @@ A `PERSIST-REF-SIZE` reference is an immutable segment tuple:
 ```
 
 The exact 96-byte root value contains the 32-byte store identity, committed
-page count, committed segment tail, committed record count, and one opaque
-application page id. Its remaining 32 bytes are one zero flags cell and 24
-zero reserved bytes; both are validated as part of this single current
-format, not used as a compatibility or migration ladder. Index roots, blob
-meaning, relationship policy, retention, and applet schemas belong above this
-layer.
+page count, committed segment tail, committed record count, one opaque
+application page id, and a physical data-bank selector restricted to zero or
+one. Its final 24 bytes remain zero and validated. This is one current format,
+not a compatibility or migration ladder. Index roots, blob meaning,
+relationship policy, retention, and applet schemas belong above this layer.
 
 The package's internal counter-update paths saturate rather than wrap. Page
 reads count physical fetches while cache hits are separate; segment reads
@@ -170,8 +174,21 @@ candidate is an explicit fallback, not silent repair.
 reads the bytes back, validates their tag and payload, and only then marks the
 new generation durable. A fault after that durability boundary returns a fault
 status while retaining the newly durable generation in caller state. Slot
-generation accessors expose both observed slot generation numbers for the
-later reclamation fence.
+generation and data-bank accessors expose both independently observed
+snapshots for reclamation and compaction fences.
+
+An ordinary `PROOT-INIT` descriptor configures bank zero. A caller may add one
+distinct bank-one page/segment pair with `PROOT-BANK1-CONFIGURE`. Candidate and
+proposed-root validation follows each root value's `DATA-BANK`; a root naming
+an unconfigured bank fails closed. `PROOT-MIRROR` writes the already selected
+authority byte-for-byte at the same generation into the other root slot. It
+does not publish a new value or advance the generation.
+
+`PSTORE-BANK1-CONFIGURE` additionally requires both candidate descriptors and
+the page cache descriptor/backing memory to be disjoint from the entire
+enclosing `PSTORE`, including its cells after the inline root. Rejection is
+nonmutating; a failed postcondition rolls both root and store bank pointers
+back to the single-bank shape.
 
 The workspace used for publication must first have completed `PROOT-LOAD` for
 that descriptor. This keeps the active slot and generation explicit and
@@ -186,6 +203,7 @@ PSTORE-INIT
 PSTORE-WORK-INIT
 PSTORE-PROVISION
 PSTORE-OPEN
+\ or PSTORE-OPEN-ACTIVE after configuring both physical banks
 
 PSTORE-BEGIN
 PSTORE-APPEND-RECORD
@@ -197,7 +215,25 @@ PSTORE-COMMIT          \ or PSTORE-ABORT
 
 `PSTORE-PROVISION` creates only the neutral page and segment files. It does
 not invent an application record. `PSTORE-OPEN` returns `PERSIST-S-ABSENT`
-for a clean empty store and otherwise installs one validated root authority.
+for a clean empty store and otherwise installs one validated root authority
+only when its data bank matches the caller's configured expectation.
+`PSTORE-OPEN-ACTIVE` performs the same single checked-root load but adopts the
+selected configured bank. It is the cold-open entry point after a bank
+cutover; it does not probe private roots or trial-open both files. Before
+installing a different selected bank, it verifies that bank's maximum physical
+record fits the caller's workspace. A capacity failure leaves the store
+unloaded and its previous expected-bank geometry intact.
+
+`PSTORE-STAGING-RESET ( store work -- status )` is a destructive offline
+staging operation, not an ordinary data-store lifecycle call. Under the
+store's guard, and only when no transaction or uncertain state is active, it
+removes that store's private A/B root files, syncs the VFS, invalidates each
+configured bank cache, and returns the descriptor to unloaded generation
+zero. A valid single-bank store is supported: the absent optional bank is a
+no-op during cache invalidation. The configured page/segment banks, private
+root paths, identity, guard, and workspace remain reusable. A rejection before
+guard acquisition removes nothing. Callers must establish their independent
+durable authority fence before resetting staging roots.
 
 At begin, physical suffixes are truncated back to the committed root before a
 proposal is copied. Record and page proposal bounds advance only after direct
@@ -226,6 +262,7 @@ An active transaction has a separate checked-page surface:
 ```forth
 PSTORE-WRITE-PAGE-TX  ( payload-a payload-u page-id store work -- status )
 PSTORE-READ-PAGE-TX   ( page-id store work -- status )
+PSTORE-READ-RECORD-TX ( ref store work -- status )
 PSTORE-TX-READY?      ( store work -- flag )
 PSTORE-TX-POISON      ( failure-status store work -- failure-status )
 ```
@@ -257,9 +294,9 @@ resulting 64-byte roots in its own application-root payload.
 
 Nodes use canonical fixed slots: an 11-entry leaf contains keys up to 256 bytes
 and values up to 64 bytes, while a branch has at most 14 children. The bounded
-height is nine. Fully packed capacity is used only as a corruption ceiling;
+height is twelve. Fully packed capacity is used only as a corruption ceiling;
 the deterministic monotonic-build thresholds are 11, 89, 635, 4,457, ...
-through 74,942,411 entries. Leaf overflow splits 6/6, branch overflow splits
+through 25,705,247,657 entries. Leaf overflow splits 6/6, branch overflow splits
 7/8, and delete performs copy-on-write adjacent-sibling merge or
 redistribution. A churned tree can legitimately retain a taller root at a
 lower cardinality, but the half-full invariant bounds that retention; the
@@ -272,23 +309,40 @@ PBTREE-WORK-INIT
 PBTREE-GET
 PBTREE-PUT
 PBTREE-DELETE
+PBTREE-ROOT-REBASE
+PBTREE-RANGE-NEXT
+PBTREE-RANGE-SEEK
+PBTREE-RANGE-RESUME
+PBTREE-RANGE-PREV
+PBTREE-RANGE-SEEK-AT-OR-BEFORE
+PBTREE-RANGE-SEEK-BEFORE
 PBTREE-RETIRED-PAGES$
 ```
 
-One mutation has fixed 17,480-byte scratch. Its allocation and retirement
-ledgers each hold 19 page ids, derived from `2 * height + 1`; a balanced delete
-uses at most 17. The output root is copied to caller memory only after every
+One operation has fixed 17,672-byte scratch. Its allocation and retirement
+ledgers each hold 25 page ids, derived from `2 * height + 1`; a height-twelve
+balanced delete uses at most 23. The output root is copied to caller memory only after every
 required page write succeeds. The caller then classifies pages from a committed
 input root as retired and pages from a root already stamped with the proposed
 generation as current-transaction discards.
 
-Leaves have no mutable sibling links. A 472-byte cursor instead seals the exact
+Leaves have no mutable sibling links. A 520-byte cursor instead seals the exact
 tree scope, root page, generation, height, bounded path, state, and last key.
 `PBTREE-NEXT` advances that path, `PBTREE-SEEK` starts at a key, and
 `PBTREE-RESUME` starts strictly after a stable last key. Supplying a different
 root or generation reports conflict rather than silently continuing through
 changed order. A traversal failure can invalidate a partially advanced cursor;
-the caller resumes a fresh cursor from its last accepted key.
+the caller resumes a fresh cursor from its last accepted key. Their bounded
+`PBTREE-RANGE-*` counterparts invoke a caller visitor over several rows inside
+one operation, retain the one-page cache, and return the exact accepted count
+and first non-OK visitor status.
+
+`PBTREE-PREV`, `PBTREE-SEEK-AT-OR-BEFORE`, and
+`PBTREE-SEEK-BEFORE` provide symmetric descending traversal, with matching
+bounded range forms. `PBTREE-ROOT-REBASE` copies a valid private-build root
+with one explicit positive target generation so a fresh bank can be finalized
+at the shared authority's exact next generation without retaining provisional
+build-generation policy in the neutral tree.
 
 ## Immutable blobs
 
@@ -310,12 +364,15 @@ be selected by cold recovery and may still reference that page.
 RECLAIM-STATE-INIT
 RECLAIM-OPEN
 RECLAIM-TX-BEGIN
+RECLAIM-TX-ROOM?
+RECLAIM-CLAIM-HIGH-WATER
 RECLAIM-ALLOCATE
 RECLAIM-RETIRE-BATCH
 RECLAIM-DISCARD-BATCH
 RECLAIM-RELEASE-BATCH
 RECLAIM-STEP
 RECLAIM-FINALIZE
+RECLAIM-EMPTY-STATE-FOR-GENERATION
 RECLAIM-STATE!
 RECLAIM-ADOPT       \ or RECLAIM-ABORT
 ```
@@ -344,6 +401,12 @@ immediately reusable discard buckets and may rewrite each once to link it, for
 at most eight bucket page writes. It exports the proposed state before the
 application root is published. Bucket pages are internal metadata and do not
 appear in the consumer's 128-entry issued-page ledger.
+`RECLAIM-TX-ROOM?` checks caller-supplied worst-case reservations against all
+three live ledgers. `RECLAIM-CLAIM-HIGH-WATER` lets a hidden copy-on-write
+owner insist on PSTORE's exact current high-water id while admitting that id
+to the same consumer-issued ledger before the page is written. Wrong,
+duplicate, or over-capacity claims poison the proposal just like an ordinary
+allocation failure.
 The ready cursor is exact: an empty head requires index zero and is equivalent
 to a zero reusable count; a nonempty head requires a positive count. Rotation
 preserves its pending source before allocating output metadata, because that
@@ -386,83 +449,115 @@ publication is not adopted: the live descriptor is discarded and cold open
 reconstructs both store and reclamation state from whichever root is selected.
 There is no legacy free-list reader, version dispatch, or migration layer.
 
+## Bounded two-bank compaction
+
+`compaction.f` coordinates an offline rebuild between two caller-configured
+physical page/segment banks. It does not know record liveness, index shapes,
+application-root fields, or retention policy. A consumer callback copies one
+bounded unit from the selected source snapshot into a private staging store;
+a separate finalizer receives the shared authority's exact next generation
+and writes the final application root after rebasing any generation-bound
+metadata.
+
+The coordinator advances shared authority exactly once, mirrors that exact
+snapshot into the other root slot, and only then permits the old bank to be
+truncated. Its recovery operation derives safe convergence from checked root
+slots and physical bounds alone. It uses no phase journal, format version,
+legacy reader, or migration ladder. Writers and readers must be externally
+serialized for the offline interval. The complete topology, budgets, callback
+ABIs, state machine, publication fence, abort rules, and crash windows are
+documented in [`compaction.md`](compaction.md).
+
 ## Library proving consumer
 
-L11 keeps all Library meaning under `tui/applets/library/`. Its one current
-application root contains five neutral trees—for RID lookup, creation order,
-title order, explicit membership edges, and exact revision history—plus the
-reclaim state. The applet-owned adapter exercises point lookup, bounded stable
-key slices, membership lookup and enumeration, history descriptors, and ranged
-or streamed content. The existing create/read calls route through this same
-indexed authority, so the proving surface does not create a second durable
-truth.
+Library meaning remains under `tui/applets/library/`; the neutral persistence
+modules know only byte keys, opaque values, immutable blobs, reclamation, and
+atomic roots. The applet-owned adapter is the current Library authority. Its
+application root contains fifteen neutral trees plus reclaim state:
 
-This remains a non-authoritative, create-oriented vertical slice. It neither
-removes current Library behavior nor claims that update/re-key, lifecycle,
-text-candidate, repository, projection, or TUI paging conversion is complete.
-Those parity and cutover tasks remain L12, after which the temporary current
-record-codec seam can be deleted. There is one accepted root shape and no old
-format reader or migration ladder.
+1. shared identity directory;
+2. document RID directory;
+3. operation receipts;
+4. creation order;
+5. recency order;
+6. lifecycle/kind/media creation order;
+7. title order;
+8. tag postings;
+9. short-text candidate postings;
+10. collection directory;
+11. collection order;
+12. collection title order;
+13. collection membership;
+14. exact document history;
+15. lifecycle/kind/media recency order.
+
+The adapter implements complete document and collection create/replace/read
+paths, exact lifecycle and history behavior, bounded stable-key ranges, and
+ranged or streamed content over that one authority. Segment compaction copies
+these same fifteen roots and their reachable immutable records; it is not a
+second Library backend.
 
 ## Scale evidence
 
 The host-only analytical profile holds only scalar geometry; it does not
-allocate a synthetic million-document corpus. Its seven indexes describe the
-settled L12 target—1,000,000 documents, 10,000,000 revisions, and 10,000,000
-relationship edges—and size the L11 neutral mechanics rather than claiming
-that the current five-index adapter has already completed L12.
+allocate a synthetic large corpus. Its fifteen indexes are the exact live
+adapter topology. The proving workload has 1,000,000 documents, 100,000
+collections, 10,000,000 retained revisions, 10,000,000 membership edges,
+16,000,000 representative current tag postings, and the explicit conservative
+short-text candidate workload below. The three collection-record indexes
+require six levels, ordinary million-row document indexes require seven, the
+shared directory requires eight, tag/membership/history indexes require nine,
+and the body-postings tree requires twelve.
 
-The earlier policy values of six pages for a point lookup and 32 pages /
-262,144 bytes for a metadata mutation were provisional, pre-geometry
-placeholders. Settled node occupancy and churn retain up to nine index levels.
-The explicit representative steady-state transaction totals 65 copy-on-write
-index writes, two writes of one allocated application-root page, six reclaim
-finalization writes, and four demand-coupled maintenance writes produced by 66
-bounded reclaim steps when two prior pending buckets are available. The
-machine policy records that representative scenario as nine lookup pages and
-77 mutation pages / 315,392 checked-page bytes. It separately records the
-unconditional 66-step structural ceiling as 139 pages / 569,344 checked-page
-bytes: arbitrary pre-existing reclaim backlog can require one maintenance
-output write on every step, never more than one. These values replace the
-placeholders with settled geometry and explicitly labeled scenario and ceiling
-accounting; they are not larger constants standing in for the old
-aggregate-bank algorithm.
+One million documents, a representative 4 KiB streamed-body window, and the
+existing 128-byte title contain at most
+`(4096+4095+4094)+(128+127+126) = 12,666` 1/2/3-byte window positions per
+document, or 12.666 billion posting attempts before per-document
+deduplication. The actual number of distinct candidates is lower; this
+conservative pre-dedup ceiling is what sizes the tree. Height twelve guarantees
+25,705,247,657 monotonic-build rows. The 4 KiB window is an analytical
+representative, not a product content limit; content beyond 64 KiB remains
+separately streamed and qualified.
 
-After balanced churn, the target indexes require at most nine levels and have
-an 8,749,977-page conservative live-tree envelope (35,839,905,792 bytes). This
-is not a physical-file bound under churn. A cold point lookup reads at most
-nine index pages. With the current public per-call cache reset, a deep
-32-result keyset window reads at most 66 index pages; 7,813 such windows cover
-a 250,000-edge contiguous relationship range in at most 515,658 index reads,
+Together these scalar profiles have a 2,471,699,942-page conservative live-tree
+envelope (10,124,082,962,432 bytes). This is not a physical-file bound under
+churn. A cold point lookup reads at most twelve index pages. With the cache
+reset once at range entry, a
+deep 32-result keyset window uses one cache-preserving B+tree operation and
+reads at most 44 index pages (35 on the nine-level edge index). Descending
+windows have the same bound. 7,813 edge windows cover a 250,000-edge contiguous
+relationship range in at most 273,455 index reads,
 well below the 909,091-leaf full scan. That is a bounded no-full-scan
-qualification, not an enterprise-throughput claim: it is about 2.06 index
-reads per returned edge because every public window re-prepares traversal and
-resets the per-operation cache. Cursor- and cache-preserving range traversal
-is an explicit L12 measurement and optimization trigger. Blob ranges account
-for one complete manifest path per touched chunk.
+qualification, not an enterprise-throughput claim: it is about 1.09 index
+reads per returned edge. Every public window still prepares one bounded
+traversal, but callbacks within that window retain the cursor path and
+one-page cache instead of reopening an operation for every row. Blob ranges
+account for one complete manifest path per touched chunk.
 
-In that same steady-state scenario, the deferred L12 representative directory
-replacement plus two ordered re-keys consumes 66 consumer-issued pages, three
-finalization-bucket allocations, and four maintenance-bucket allocations: 73
-physical page allocations in all. Its 77 checked-page writes total 315,392
-bytes. It retires 48 committed consumer pages and seven metadata pages, and
-discards 14 proposal-local pages. The 3,136-byte aligned segment record and
-160-byte atomic authority record are accounted separately, for 318,688 total
-bytes.
+The Library index workspace is exactly 119,840 bytes. Its largest constituents
+are one 17,672-byte B+tree workspace, one 46,960-byte blob workspace, one
+10,800-byte reclaim workspace, fifteen 80-byte tree descriptors, two arrays of
+fifteen 64-byte roots, the current/old document and collection stages, one
+4,032-byte page scratch area, and one 32 KiB content scratch window. The
+caller-owned `PSTORE` workspace, record buffer, cache, and cache frames remain
+separate. `allocation_events = 0` means no dynamic or corpus-proportional
+memory allocation during an ordinary operation; copy-on-write transactions
+still allocate physical pages.
 
-The Library index workspace is exactly 84,624 bytes. It includes one 17,480-
-byte B-tree workspace, one 46,936-byte blob workspace, and one 10,800-byte
-reclaim workspace; the caller-owned `PSTORE` workspace, record buffer, cache,
-and cache frames remain separate objects. In this evidence,
-`allocation_events = 0` means no dynamic or corpus-proportional memory
-allocation during an ordinary operation; it does not mean that a copy-on-write
-transaction allocates no physical pages.
+`LIBPA-INDEX-PAGE-READS@`, `LIBPA-INDEX-PAGE-WRITES@`, and
+`LIBPA-INDEX-COMPARISONS@` sum the cumulative neutral B+tree counters across
+all fifteen roots. Blob byte/chunk/manifest counters and reclaim progress remain
+available from their respective caller-owned workspaces.
 
-Current reclamation bounds the checked page file only. Immutable segment
-records retired by index changes are not yet compacted or reclaimed, so the
-physical segment file can continue to grow under churn even when the page
-high-water mark plateaus. Eventual bounded segment compaction is therefore a
-separate later requirement, not an L11 claim.
+Staged mutation admission is page-budget-aware. Before another index mutation,
+the adapter derives the largest possible allocation from the current tree
+height, reserves the application-root and reclaim finalization pages, and asks
+the public reclaim transaction ledger whether that complete reserve fits. If
+it does not, the adapter physically publishes the current stage before
+continuing. A height-12 B+tree mutation can allocate at most `2h+1 = 25`
+checked pages, so at most five such index mutations plus one application root
+fit in the 128-page consumer ledger (`5*25+1 = 126`); the live decision also
+accounts for allocations already consumed by blob work.
 
 ## Fault and cleanup contract
 

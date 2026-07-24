@@ -89,41 +89,25 @@
           "id": "library.model-and-durable-semantics",
           "coverage": "covered",
           "facets": ["persistence", "failures"],
-          "preserve": ["Managed documents, immutable captures, receipts, provenance, exact revisions, operation-key idempotency and collection semantics", "Content-first inactive-bank publication, sole-head authority, exact corruption/future/orphan distinctions, cleanup and retry", "Catalog/content/relationship/RID bounds continue to refuse without partial mutation until the scalable successor replaces them"],
-          "evidence": ["profile:library-model-codecs-contracts", "profile:library-store-format-contracts", "profile:library-vfs-store-contracts", "profile:library-managed-document-contracts", "profile:library-managed-lifecycle-contracts", "profile:library-capture-collection-contracts", "profile:library-managed-capacity-contracts"]
+          "preserve": ["Managed documents, immutable captures, receipts, provenance, exact revisions, operation-key idempotency, terminal tombstones and collection semantics", "Canonical streamed metadata, chunked content and retained history remain exact across create, replacement, restore and retry", "Atomic-root publication, growing ordered indexes, page-budget-aware staging, bounded reclamation and fail-closed corruption/future handling"],
+          "evidence": ["driver:local_testing/test_library_model_l12.py", "driver:local_testing/test_library_metadata_l12.py", "driver:local_testing/test_library_document_values_l12.py", "driver:local_testing/test_library_index_keys.py", "driver:local_testing/test_library_persistence_l12.py", "driver:local_testing/test_library_repository_l12.py", "driver:local_testing/test_library_service_l12.py"]
         },
         {
           "id": "library.query-and-projection",
           "coverage": "covered",
           "facets": ["interfaces", "failures", "journeys"],
-          "preserve": ["Exact title/body/tag search, lifecycle/kind/media/collection filters and deterministic continuation", "Disposable-index loss or damage rebuilds to authoritative identical results", "Projection describe/snapshot/managed replace, immutable capture reads, exact locators, leases, stale and forged token refusal, quiescence and capacity"],
-          "evidence": ["profile:library-query-index-contracts", "profile:library-projection-owner-contracts", "driver:local_testing/library_query_two_boot.py", "driver:local_testing/library_projection_two_boot.py"]
+          "preserve": ["Exact title/body/tag search, lifecycle/kind/media/collection filters and stable semantic keyset continuation", "Durable candidate indexes narrow work while every result is verified against authoritative current metadata and streamed content", "Projection describe/snapshot/managed replace, immutable capture reads, exact locators, leases, stale and forged token refusal, quiescence and capacity"],
+          "evidence": ["driver:local_testing/test_library_query_l12.py", "driver:local_testing/test_library_collection_l12.py", "driver:local_testing/test_library_service_scale_l12.py", "profile:library-projection-owner-contracts"]
         },
         {
           "id": "library.maintenance-and-cold-faults",
-          "coverage": "partial",
-          "prerequisite_ids": ["library.applet-cold-reopen", "library.blocked-ui"],
+          "coverage": "covered",
           "facets": ["persistence", "failures", "journeys"],
-          "preserve": ["Inspection, sealed evidence, bounded raw export and recognized repair", "Future, corrupt, ambiguous and orphan evidence remains fail-closed and export-only", "Fresh-process reopen preserves managed lifecycle, captures, collections, queries, projections and the complete Gate 4 damage matrix"],
-          "evidence": ["profile:library-maintenance-contracts", "driver:local_testing/library_managed_two_boot.py", "driver:local_testing/library_lifecycle_two_boot.py", "driver:local_testing/library_gate4_exit_two_boot.py"]
+          "preserve": ["Inspection, sealed evidence, bounded raw export, recognized root-mirror repair and budgeted semantic compaction", "Corrupt and checksummed-future durable authority remains visibly blocked and nonwritable at applet initialization; operation-only uncertain state is not misrepresented as a cold repository mode", "A fresh emulator process reopens managed query/read/content/receipt authority and exact stale-generation operation retry, while a later applet activation reconstructs the same first page and preview"],
+          "evidence": ["driver:local_testing/test_library_compaction_l12.py", "driver:local_testing/test_library_maintenance_l12.py", "driver:local_testing/library_managed_two_boot.py", "profile:library-applet-functional-contracts"]
         }
       ],
-      "prerequisites": [
-        {
-          "id": "library.applet-cold-reopen",
-          "before_landing": "L12",
-          "trigger": "Applet repository cutover or initialization changes.",
-          "characterization": "Start LIBRARY-APPLET-INIT-CB over an existing corpus and prove reconstruction of the same view/lens state.",
-          "reason": "Current cold-process drivers prove the owner, not applet initialization over pre-existing state."
-        },
-        {
-          "id": "library.blocked-ui",
-          "before_landing": "L12",
-          "trigger": "Applet repository cutover, recovery presentation or writable-state changes.",
-          "characterization": "Show corrupt, future and recovery evidence as visibly nonempty and nonwritable at applet level.",
-          "reason": "Fail-closed headless behavior is exact, while its UI presentation is currently inferred."
-        }
-      ]
+      "prerequisites": []
     },
     {
       "id": "streams",

@@ -288,7 +288,8 @@ Each call acquires the guard, runs the original implementation inside
 `CATCH` (releasing on any throw), then releases:
 
 `SHA3-256-HASH`, `SHA3-512-HASH`, `SHAKE-128`, `SHAKE-256`,
-`SHA3-256-HMAC`, `SHA3-256->HEX`, `SHA3-512->HEX`.
+`SHA3-256-HMAC`, `SHA3-256-HASH-COMPARE`, `SHA3-256->HEX`,
+`SHA3-512->HEX`.
 
 ### Streaming words
 
@@ -297,6 +298,7 @@ Each call acquires the guard, runs the original implementation inside
 | `SHA3-256-BEGIN` / `SHA3-512-BEGIN` | **Acquire** the guard (blocking). |
 | `SHA3-256-ADD` / `SHA3-512-ADD` | **Assert** ownership (`GUARD-MINE?`). Throws **-258** if the caller does not hold the guard. |
 | `SHA3-256-END` / `SHA3-512-END` | Assert ownership, run original via `CATCH`, then **release** (always, even on error). |
+| `SHA3-256-END-COMPARE` | Assert ownership, finalize into neutral scratch, compare, then **release** (always, even on error). |
 
 ### Unguarded words
 
@@ -315,12 +317,14 @@ left unguarded: `SHA3-256-COMPARE`, `SHA3-512-COMPARE`,
 | `SHA3-512-LEN` | `( -- 64 )` | Hash length in bytes |
 | `SHA3-512-HEX-LEN` | `( -- 128 )` | Hex string length |
 | `SHA3-256-HASH` | `( src len dst -- )` | One-shot SHA3-256 |
+| `SHA3-256-HASH-COMPARE` | `( src len expected -- flag )` | Hash and constant-time compare without a caller digest buffer |
 | `SHA3-512-HASH` | `( src len dst -- )` | One-shot SHA3-512 |
 | `SHAKE-128` | `( src len dst dlen -- )` | SHAKE-128 XOF |
 | `SHAKE-256` | `( src len dst dlen -- )` | SHAKE-256 XOF |
 | `SHA3-256-BEGIN` | `( -- )` | Start streaming SHA3-256 |
 | `SHA3-256-ADD` | `( addr len -- )` | Feed data |
 | `SHA3-256-END` | `( dst -- )` | Finalize to dst |
+| `SHA3-256-END-COMPARE` | `( expected -- flag )` | Finalize and constant-time compare, releasing the streaming guard |
 | `SHA3-512-BEGIN` | `( -- )` | Start streaming SHA3-512 |
 | `SHA3-512-ADD` | `( addr len -- )` | Feed data |
 | `SHA3-512-END` | `( dst -- )` | Finalize to dst |

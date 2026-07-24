@@ -138,6 +138,12 @@ entries target L12 and Streams targets L13. Agent, Daybook, Pad, FExplorer,
 Grid, Desk-catalog, runtime-registry, request-bus, and UIDL scale directions
 remain recorded but explicitly deferred.
 
+`target_landing` records the landing responsible for an item; it is not itself
+an open/closed flag. Resolved items carry an explicit `status`. The Library
+metadata-publication entry therefore remains attributed to L12 while its
+`resolved` status and replacement text record that the dynamic-ledger
+admission work has landed.
+
 ## Scale profiles and units
 
 The active qualification targets are applet-specific:
@@ -471,3 +477,36 @@ globals, and 265 independent modules / 128,735 lines / 7,075 lexical globals.
 The independent class remains unchanged. L9 redistributes existing Desk/TUI
 mechanics and concrete backend composition; it changes no product capacity,
 storage format, applet identity, deferred-app scope, or ext4 prerequisite.
+
+## L12 reviewed ratchet update
+
+L12 replaces Library's temporary fixed catalog/content backend with one
+current scalable topology over neutral checked pages, B+trees, chunked blobs,
+reclamation, atomic application roots, and two-bank compaction. The applet
+owns document and collection values, fifteen ordered indexes, semantic
+keysets, repository paths, service operations, and projection adaptation; the
+neutral persistence modules do not acquire Library paths or meanings. The old
+Library store format, record codec, fixed-store fixtures, compatibility
+facades, and cold drivers are deleted rather than retained as a second
+authority or migration stack.
+
+The metadata-publication complexity item remains attributed to its responsible
+landing, L12, and is explicitly `resolved`. Admission reserves dynamic
+tree-height mutation room plus application-root and reclaim-finalization room;
+long logical operations may publish physical roots without falsely advancing
+their logical generation. Query, membership, content, and compaction work use
+bounded caller-owned working sets instead of aggregate corpus allocation.
+
+The reviewed graph now contains 404 modules, 1,333 resolved `REQUIRE`
+occurrences and unique edges, 78 unchanged reviewed unresolved imports, no
+cycle, no layer violation, and no placement debt. Its graph digest is
+`8022e4ecb92e66e75eadb821ba01842ca09e72ae143f28201cf69e0356992473`;
+the mutable-state digest is
+`d4f1056d9e157bf8e13337d6fb2217ac24414887ea6959476609a2837bd9b602`;
+the empty-placement and unchanged unresolved-import digests remain
+`4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`
+and
+`98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb`.
+The final executable, persistence, scale-model, packaging, and cold-reopen
+results are recorded in
+`local_testing/evidence/library-l12-close-20260724.md`.

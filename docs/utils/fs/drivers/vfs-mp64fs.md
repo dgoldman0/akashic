@@ -102,9 +102,17 @@ structured ior without throwing.
 
 The binding caches the superblock, allocation bitmap, directory table, and one
 scratch sector in its arena context. File growth prefers the primary extent
-and uses the format's single secondary extent when necessary. Rename updates
-the existing reusable directory slot and parent byte in the same cached metadata
-transaction.
+and uses the format's single secondary extent when necessary. If both extents
+are present and blocked, growth relocates the file into a larger free run:
+bytes are copied first, then relocation crosses three checked durability
+boundaries. It claims the new run while retaining the old extents, switches
+directory authority, and only then retires the old extents. A crash or checked
+I/O failure at any prefix therefore leaves every extent referenced by the
+possible on-disk directory allocated. If directory publication and its
+best-effort compensating rollback both fail, the conservative bitmap may retain
+the copied run as unreachable allocation rather than risk reusing live data.
+Rename updates the existing reusable directory slot and parent byte in the
+same cached metadata transaction.
 
 Free sectors are zeroed through `VOL-WRITE` before the bitmap or extent fields
 claim them. A seek gap and truncate growth are likewise zeroed before
@@ -113,10 +121,17 @@ sector. If zeroing fails, the old logical size remains published; harmless
 zeroed free space or extra zeroed allocation may remain cached, but stale bytes
 cannot become readable.
 
-`VFS-SYNC` dispatches `SYNCFS`, which writes the dirty bitmap and directory
-caches through `VOL-WRITE`, then issues `VOL-FLUSH`. Dirty flags are cleared
-only after every required write and the flush succeed. Unmount reports sync
-failure rather than silently discarding it.
+Delete and shrink record removed sectors in a mount-local deferred-free bitmap
+instead of immediately clearing their allocation bits. `VFS-SYNC` dispatches
+`SYNCFS`, which publishes current and newly added allocation claims, then the
+directory cache, then deferred allocation retirements, with a checked
+`VOL-FLUSH` boundary after every dirty phase. Thus mixed create/delete batches
+also pass through a conservative bitmap that claims every extent referenced by
+either directory version. A failed phase retains the remaining dirty or
+deferred state for retry. If the mount itself is lost after directory
+publication but before retirement, those now-unreachable sectors remain
+conservatively allocated rather than becoming unsafe reusable space. Unmount
+reports sync failure rather than silently discarding it.
 
 ## On-disk layout
 

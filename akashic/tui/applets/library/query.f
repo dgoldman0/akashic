@@ -1,55 +1,1264 @@
 \ =====================================================================
-\  query.f - Bounded Library corpus and collection queries
+\  query.f - Bounded Library query domain and keyset paging
 \ =====================================================================
-\  Library-owned query policy over one loaded repository. Results,
-\  cursors, index verification, lifecycle filtering, and exact-match
-\  semantics remain unchanged; repository mechanics live below this file.
+\  Library-owned query policy over the scalable persistence adapter.  This
+\  file owns the public request, summary, continuation, and page shapes; none
+\  of those types expose persistence pages, tree keys, repository slots, VFS
+\  paths, or a generation-pinned conflict token.
 \
-\  L12-DELETION: direct use of repository-private _LIBCQ, _LIBIX, _LIBMR,
-\  _LIBMU, _LIBRARY, _LIBVCF, _LIBVFS, and _LIBVP prefix families is the
-\  temporary fixed-store query seam. L12 replaces it with the scalable indexed
-\  repository API and deletes this cross-module private coupling.
+\  Adapter binding contract
+\  ------------------------
+\  Execution below this public domain layer binds only through the following
+\  sealed public seams from persistence-adapter.f:
+\
+\  * FIRST, AFTER, and BEFORE traversal for creation/state, exact-tag,
+\    text-candidate, collection-order, membership, and history families;
+\  * every range row reports its stable semantic order sequence and RID, and a
+\    public semantic seeder reconstructs a family/prefix continuation from
+\    first/last sequence-plus-RID boundaries;
+\  * exact current-document read plus its current immutable-content
+\    descriptor, exact collection read by RID, and logical-generation
+\    observation;
+\  * prefix/family validation inside the adapter, with forward and reverse
+\    traversal preserving one cursor/cache walk for the whole bounded range.
+\
+\  A continuation is caller-owned semantic keyset state.  Corpus and
+\  collection pages use creation sequence plus RID; a history page uses the
+\  same ORDER-SEQUENCE cells for its positive revision order and repeats its
+\  document RID.  OBSERVED-LOGICAL-GENERATION is diagnostic page provenance,
+\  not an optimistic lock: AFTER/BEFORE reopen the latest authority at the
+\  captured stable key.  Unrelated mutations therefore neither conflict nor
+\  turn a continuation into a raw physical cursor.  Reverse traversal is
+\  reordered before publication so every page retains canonical display
+\  order.
 \ =====================================================================
 
 PROVIDED akashic-tui-library-query
 
-REQUIRE repository.f
+REQUIRE persistence-adapter.f
 
 \ ---------------------------------------------------------------------
-\ Generation-stable authoritative active-catalog query
+\ Small private structural helpers
 \ ---------------------------------------------------------------------
 
-: _LIBMU-QUERY-ARGS
-  ( expected-generation start summaries capacity store -- status )
-    _LIBMU-STORE ! _LIBMU-CAPACITY ! _LIBMU-ENTRIES !
-    _LIBMU-START ! _LIBMU-EXPECTED-CATALOG-GENERATION !
-    0 _LIBMU-COUNT !
-    _LIBMU-START @ _LIBMU-NEXT !
-    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF
-        LIBSTORE-S-INVALID EXIT
-    THEN
-    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0< IF
-        LIBSTORE-S-INVALID EXIT
-    THEN
-    _LIBMU-START @ 0< IF LIBSTORE-S-INVALID EXIT THEN
-    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0=
-        _LIBMU-START @ 0<> AND IF LIBSTORE-S-INVALID EXIT THEN
-    _LIBMU-CAPACITY @ DUP 1 < SWAP LIBRARY-QUERY-PAGE-MAX > OR IF
-        LIBSTORE-S-OUTPUT-CAPACITY EXIT
-    THEN
-    _LIBMU-ENTRIES @ _LIBMU-CAPACITY @ LIBRARY-QUERY-SUMMARY-SIZE *
-        _LIBMU-OWNER-SPAN-SAFE? 0= IF LIBSTORE-S-INVALID EXIT THEN
-    LIBSTORE-S-OK ;
+: _LIBQ-DROP3  ( x1 x2 x3 -- ) 2DROP DROP ;
+: _LIBQ-DROP4  ( x1 x2 x3 x4 -- ) 2DROP 2DROP ;
+: _LIBQ-DROP5  ( x1 x2 x3 x4 x5 -- ) 2DROP 2DROP DROP ;
 
-: _LIBMU-CLEAR-QUERY-OUTPUT  ( -- )
-    _LIBMU-CAPACITY @ 0 ?DO
-        _LIBMU-ENTRIES @ I LIBRARY-QUERY-SUMMARY-SIZE * +
-            LIBRARY-QUERY-SUMMARY-INIT
+: _LIBQ-ZERO?  ( a u -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
     LOOP
-    0 _LIBMU-COUNT !
-    _LIBMU-START @ _LIBMU-NEXT ! ;
+    DROP -1 ;
 
-: _LIBMU-BUILD-QUERY-SUMMARY  ( entry summary -- )
+: _LIBQ-STABLE-KEY<=?
+  ( first-sequence first-rid last-sequence last-rid -- flag )
+    >R >R
+    OVER R@ < IF
+        2DROP R> DROP R> DROP -1 EXIT
+    THEN
+    OVER R@ > IF
+        2DROP R> DROP R> DROP 0 EXIT
+    THEN
+    NIP R> DROP R>
+    SWAP RID-SIZE ROT RID-SIZE COMPARE
+    DUP 0< SWAP 0= OR ;
+
+\ ---------------------------------------------------------------------
+\ Caller-owned corpus-query summary
+\ ---------------------------------------------------------------------
+\ The identity RREF always has revision zero.  DOMAIN-REVISION is the exact
+\ durable Library revision used by a later exact read.
+
+LIB-QUERY-PAGE-MAX CONSTANT LIBRARY-QUERY-PAGE-MAX
+
+  0 CONSTANT _LIBQS-REF
+ 80 CONSTANT _LIBQS-DOMAIN-REVISION
+ 88 CONSTANT _LIBQS-KIND
+ 96 CONSTANT _LIBQS-LIFECYCLE
+104 CONSTANT _LIBQS-MEDIA
+112 CONSTANT _LIBQS-CONTENT-U
+120 CONSTANT _LIBQS-MUTATION-SEQUENCE
+128 CONSTANT _LIBQS-CONTENT-DIGEST
+160 CONSTANT _LIBQS-TITLE-U
+168 CONSTANT _LIBQS-TITLE
+296 CONSTANT LIBRARY-QUERY-SUMMARY-SIZE
+
+: LIBQS.REF               ( summary -- rref ) _LIBQS-REF + ;
+: LIBQS.DOMAIN-REVISION   ( summary -- a ) _LIBQS-DOMAIN-REVISION + ;
+: LIBQS.KIND              ( summary -- a ) _LIBQS-KIND + ;
+: LIBQS.LIFECYCLE         ( summary -- a ) _LIBQS-LIFECYCLE + ;
+: LIBQS.MEDIA             ( summary -- a ) _LIBQS-MEDIA + ;
+: LIBQS.CONTENT-U         ( summary -- a ) _LIBQS-CONTENT-U + ;
+: LIBQS.MUTATION-SEQUENCE ( summary -- a ) _LIBQS-MUTATION-SEQUENCE + ;
+: LIBQS.CONTENT-DIGEST    ( summary -- digest ) _LIBQS-CONTENT-DIGEST + ;
+: LIBQS.TITLE-U           ( summary -- a ) _LIBQS-TITLE-U + ;
+: LIBQS.TITLE             ( summary -- a ) _LIBQS-TITLE + ;
+
+: LIBQS-TITLE$  ( summary -- a u )
+    DUP LIBQS.TITLE SWAP LIBQS.TITLE-U @ ;
+
+: LIBRARY-QUERY-SUMMARY-INIT  ( summary -- )
+    DUP LIBRARY-QUERY-SUMMARY-SIZE 0 FILL
+    LIBQS.REF RREF-INIT ;
+
+: _LIBQ-KIND-MEDIA?  ( kind media -- flag )
+    OVER LIB-KIND-MANAGED-DOCUMENT = IF
+        NIP DUP LIB-MEDIA-TEXT-PLAIN =
+        SWAP LIB-MEDIA-TEXT-MARKDOWN = OR EXIT
+    THEN
+    SWAP LIB-KIND-CAPTURE = IF
+        DUP LIB-MEDIA-TEXT-PLAIN =
+        OVER LIB-MEDIA-TEXT-MARKDOWN = OR
+        SWAP LIB-MEDIA-TEXT-CSV = OR
+    ELSE
+        DROP 0
+    THEN ;
+
+: LIBRARY-QUERY-SUMMARY-VALID?  ( summary -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-QUERY-SUMMARY-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP LIBQS.REF RREF-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBQS.REF RREF.REVISION @ IF DROP 0 EXIT THEN
+    DUP LIBQS.DOMAIN-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP LIBQS.KIND @ DUP LIB-KIND-MANAGED-DOCUMENT <
+        SWAP LIB-KIND-CAPTURE > OR IF DROP 0 EXIT THEN
+    DUP LIBQS.LIFECYCLE @ DUP LIB-LIFECYCLE-ACTIVE <
+        SWAP LIB-LIFECYCLE-ARCHIVED > OR IF DROP 0 EXIT THEN
+    DUP LIBQS.MEDIA @ DUP LIB-MEDIA-TEXT-PLAIN <
+        SWAP LIB-MEDIA-TEXT-CSV > OR IF DROP 0 EXIT THEN
+    DUP LIBQS.KIND @ OVER LIBQS.MEDIA @
+        _LIBQ-KIND-MEDIA? 0= IF DROP 0 EXIT THEN
+    DUP LIBQS.CONTENT-U @ DUP 0<
+        SWAP LIB-CONTENT-LENGTH-MAX > OR IF DROP 0 EXIT THEN
+    DUP LIBQS.MUTATION-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP LIBQS.CONTENT-DIGEST RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP LIBQS.TITLE-U @ DUP 1 <
+        SWAP LIB-TITLE-MAX > OR IF DROP 0 EXIT THEN
+    DUP LIBQS-TITLE$ UTF8-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBQS.TITLE OVER LIBQS.TITLE-U @ +
+    LIB-TITLE-MAX 2 PICK LIBQS.TITLE-U @ -
+        _LIBQ-ZERO? NIP ;
+
+\ ---------------------------------------------------------------------
+\ Canonical bounded corpus-query request
+\ ---------------------------------------------------------------------
+\ An empty term is an explicit bounded browse.  A nonempty term selects one
+\ or more title/body/tag fields.  Selected fields are ORed.  Collection is
+\ either an all-zero RID (no collection filter) or one exact collection RID.
+\ There is deliberately no expected generation or raw starting slot.
+
+1 CONSTANT LIBRARY-CORPUS-LIFECYCLE-ACTIVE
+2 CONSTANT LIBRARY-CORPUS-LIFECYCLE-ARCHIVED
+3 CONSTANT LIBRARY-CORPUS-LIFECYCLE-ALL
+
+1 CONSTANT LIBRARY-CORPUS-KIND-MANAGED
+2 CONSTANT LIBRARY-CORPUS-KIND-CAPTURE
+3 CONSTANT LIBRARY-CORPUS-KIND-ALL
+
+1 CONSTANT LIBRARY-CORPUS-MEDIA-PLAIN
+2 CONSTANT LIBRARY-CORPUS-MEDIA-MARKDOWN
+4 CONSTANT LIBRARY-CORPUS-MEDIA-CSV
+7 CONSTANT LIBRARY-CORPUS-MEDIA-ALL
+
+1 CONSTANT LIBRARY-CORPUS-FIELD-TITLE
+2 CONSTANT LIBRARY-CORPUS-FIELD-BODY
+4 CONSTANT LIBRARY-CORPUS-FIELD-TAGS
+7 CONSTANT LIBRARY-CORPUS-FIELD-ALL
+
+128 CONSTANT LIBRARY-CORPUS-TERM-MAX
+
+  0 CONSTANT _LIBCQR-LIFECYCLE-MASK
+  8 CONSTANT _LIBCQR-KIND-MASK
+ 16 CONSTANT _LIBCQR-MEDIA-MASK
+ 24 CONSTANT _LIBCQR-FIELD-MASK
+ 32 CONSTANT _LIBCQR-FLAGS
+ 40 CONSTANT _LIBCQR-TERM-U
+ 48 CONSTANT _LIBCQR-COLLECTION
+ 80 CONSTANT _LIBCQR-TERM
+208 CONSTANT LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+
+: LIBCQR.LIFECYCLE-MASK  ( request -- a ) _LIBCQR-LIFECYCLE-MASK + ;
+: LIBCQR.KIND-MASK       ( request -- a ) _LIBCQR-KIND-MASK + ;
+: LIBCQR.MEDIA-MASK      ( request -- a ) _LIBCQR-MEDIA-MASK + ;
+: LIBCQR.FIELD-MASK      ( request -- a ) _LIBCQR-FIELD-MASK + ;
+: LIBCQR.FLAGS           ( request -- a ) _LIBCQR-FLAGS + ;
+: LIBCQR.TERM-U          ( request -- a ) _LIBCQR-TERM-U + ;
+: LIBCQR.COLLECTION      ( request -- rid ) _LIBCQR-COLLECTION + ;
+: LIBCQR.TERM            ( request -- a ) _LIBCQR-TERM + ;
+
+: LIBCQR-TERM$  ( request -- a u )
+    DUP LIBCQR.TERM SWAP LIBCQR.TERM-U @ ;
+
+: LIBRARY-CORPUS-QUERY-REQUEST-INIT  ( request -- )
+    DUP LIBRARY-CORPUS-QUERY-REQUEST-SIZE 0 FILL
+    DUP LIBRARY-CORPUS-LIFECYCLE-ACTIVE SWAP LIBCQR.LIFECYCLE-MASK !
+    DUP LIBRARY-CORPUS-KIND-ALL SWAP LIBCQR.KIND-MASK !
+    DUP LIBRARY-CORPUS-MEDIA-ALL SWAP LIBCQR.MEDIA-MASK !
+    LIBRARY-CORPUS-FIELD-ALL SWAP LIBCQR.FIELD-MASK ! ;
+
+: LIBRARY-CORPUS-QUERY-REQUEST-VALID?  ( request -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP LIBCQR.LIFECYCLE-MASK @ DUP
+        LIBRARY-CORPUS-LIFECYCLE-ACTIVE <
+        SWAP LIBRARY-CORPUS-LIFECYCLE-ALL > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP LIBCQR.KIND-MASK @ DUP LIBRARY-CORPUS-KIND-MANAGED <
+        SWAP LIBRARY-CORPUS-KIND-ALL > OR IF DROP 0 EXIT THEN
+    DUP LIBCQR.MEDIA-MASK @ DUP LIBRARY-CORPUS-MEDIA-PLAIN <
+        SWAP LIBRARY-CORPUS-MEDIA-ALL > OR IF DROP 0 EXIT THEN
+    DUP LIBCQR.FIELD-MASK @ DUP 0<
+        SWAP LIBRARY-CORPUS-FIELD-ALL > OR IF DROP 0 EXIT THEN
+    DUP LIBCQR.FLAGS @ IF DROP 0 EXIT THEN
+    DUP LIBCQR.TERM-U @ DUP 0<
+        SWAP LIBRARY-CORPUS-TERM-MAX > OR IF DROP 0 EXIT THEN
+    DUP LIBCQR.TERM-U @ IF
+        DUP LIBCQR.FIELD-MASK @ 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP LIBCQR.COLLECTION DUP RID-ZERO?
+        SWAP RID-PRESENT? OR 0= IF DROP 0 EXIT THEN
+    DUP LIBCQR-TERM$ UTF8-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBCQR.TERM OVER LIBCQR.TERM-U @ +
+    LIBRARY-CORPUS-TERM-MAX 2 PICK LIBCQR.TERM-U @ -
+        _LIBQ-ZERO? NIP ;
+
+: LIBRARY-CORPUS-QUERY-TERM!  ( a u request -- status )
+    >R
+    DUP 0< OVER LIBRARY-CORPUS-TERM-MAX > OR IF
+        2DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    2DUP UTF8-VALID? 0= IF
+        2DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ 0= IF 2DROP R> DROP LIBPA-S-INVALID EXIT THEN
+    R@ LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+        MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    2DUP R@ LIBCQR.TERM SWAP MOVE
+    NIP R@ LIBCQR.TERM-U !
+    R@ LIBCQR.TERM R@ LIBCQR.TERM-U @ +
+    LIBRARY-CORPUS-TERM-MAX R@ LIBCQR.TERM-U @ - 0 FILL
+    R> DROP LIBPA-S-OK ;
+
+: LIBRARY-CORPUS-QUERY-COLLECTION!  ( rid request -- status )
+    >R
+    DUP 0= IF DROP R> DROP LIBPA-S-INVALID EXIT THEN
+    DUP RID-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ 0= IF DROP R> DROP LIBPA-S-INVALID EXIT THEN
+    R@ LIBRARY-CORPUS-QUERY-REQUEST-SIZE
+        MSPAN-NONWRAPPING? 0= IF
+        DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ LIBCQR.COLLECTION RID-COPY
+    R> DROP LIBPA-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Public bounded collection summary and enumeration request
+\ ---------------------------------------------------------------------
+
+  0 CONSTANT _LIBCS-REF
+ 80 CONSTANT _LIBCS-REVISION
+ 88 CONSTANT _LIBCS-MUTATION-SEQUENCE
+ 96 CONSTANT _LIBCS-MEMBER-N
+104 CONSTANT _LIBCS-FLAGS
+112 CONSTANT _LIBCS-TITLE-U
+120 CONSTANT _LIBCS-TITLE
+184 CONSTANT LIBRARY-COLLECTION-SUMMARY-SIZE
+
+: LIBCS.REF               ( summary -- rref ) _LIBCS-REF + ;
+: LIBCS.REVISION          ( summary -- a ) _LIBCS-REVISION + ;
+: LIBCS.MUTATION-SEQUENCE ( summary -- a ) _LIBCS-MUTATION-SEQUENCE + ;
+: LIBCS.MEMBER-N          ( summary -- a ) _LIBCS-MEMBER-N + ;
+: LIBCS.FLAGS             ( summary -- a ) _LIBCS-FLAGS + ;
+: LIBCS.TITLE-U           ( summary -- a ) _LIBCS-TITLE-U + ;
+: LIBCS.TITLE             ( summary -- a ) _LIBCS-TITLE + ;
+
+: LIBCS-TITLE$  ( summary -- a u )
+    DUP LIBCS.TITLE SWAP LIBCS.TITLE-U @ ;
+
+: LIBRARY-COLLECTION-SUMMARY-INIT  ( summary -- )
+    DUP LIBRARY-COLLECTION-SUMMARY-SIZE 0 FILL
+    LIBCS.REF RREF-INIT ;
+
+: LIBRARY-COLLECTION-SUMMARY-VALID?  ( summary -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-COLLECTION-SUMMARY-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP LIBCS.REF RREF-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBCS.REF RREF.REVISION @ IF DROP 0 EXIT THEN
+    DUP LIBCS.REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP LIBCS.MUTATION-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP LIBCS.MEMBER-N @ 0< IF DROP 0 EXIT THEN
+    DUP LIBCS.FLAGS @ IF DROP 0 EXIT THEN
+    DUP LIBCS.TITLE-U @ DUP 1 <
+        SWAP LIB-COLLECTION-TITLE-MAX > OR IF DROP 0 EXIT THEN
+    DUP LIBCS-TITLE$ UTF8-VALID? 0= IF DROP 0 EXIT THEN
+    DUP LIBCS.TITLE OVER LIBCS.TITLE-U @ +
+    LIB-COLLECTION-TITLE-MAX 2 PICK LIBCS.TITLE-U @ -
+        _LIBQ-ZERO? NIP ;
+
+0 CONSTANT _LIBCOLQR-FLAGS
+8 CONSTANT LIBRARY-COLLECTION-QUERY-REQUEST-SIZE
+
+: LIBCOLQR.FLAGS  ( request -- a ) _LIBCOLQR-FLAGS + ;
+
+: LIBRARY-COLLECTION-QUERY-REQUEST-INIT  ( request -- )
+    LIBRARY-COLLECTION-QUERY-REQUEST-SIZE 0 FILL ;
+
+: LIBRARY-COLLECTION-QUERY-REQUEST-VALID?  ( request -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-COLLECTION-QUERY-REQUEST-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    LIBCOLQR.FLAGS @ 0= ;
+
+\ ---------------------------------------------------------------------
+\ Public bounded history request and revision summary
+\ ---------------------------------------------------------------------
+
+ 0 CONSTANT _LIBRS-DOMAIN-REVISION
+ 8 CONSTANT _LIBRS-CONTENT-REVISION
+16 CONSTANT _LIBRS-MEDIA
+24 CONSTANT _LIBRS-CONTENT-U
+32 CONSTANT _LIBRS-DIGEST
+64 CONSTANT LIBRARY-REVISION-SUMMARY-SIZE
+
+: LIBRS.DOMAIN-REVISION   ( summary -- a ) _LIBRS-DOMAIN-REVISION + ;
+: LIBRS.CONTENT-REVISION  ( summary -- a ) _LIBRS-CONTENT-REVISION + ;
+: LIBRS.MEDIA             ( summary -- a ) _LIBRS-MEDIA + ;
+: LIBRS.CONTENT-U         ( summary -- a ) _LIBRS-CONTENT-U + ;
+: LIBRS.DIGEST            ( summary -- digest ) _LIBRS-DIGEST + ;
+
+: LIBRARY-REVISION-SUMMARY-INIT  ( summary -- )
+    LIBRARY-REVISION-SUMMARY-SIZE 0 FILL ;
+
+: LIBRARY-REVISION-SUMMARY-VALID?  ( summary -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-REVISION-SUMMARY-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP LIBRS.DOMAIN-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP LIBRS.CONTENT-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP LIBRS.DOMAIN-REVISION @
+        OVER LIBRS.CONTENT-REVISION @ < IF DROP 0 EXIT THEN
+    DUP LIBRS.MEDIA @ DUP LIB-MEDIA-TEXT-PLAIN <
+        SWAP LIB-MEDIA-TEXT-CSV > OR IF DROP 0 EXIT THEN
+    DUP LIBRS.CONTENT-U @ DUP 0<
+        SWAP LIB-CONTENT-LENGTH-MAX > OR IF DROP 0 EXIT THEN
+    LIBRS.DIGEST RID-PRESENT? ;
+
+ 0 CONSTANT _LIBHQR-RID
+32 CONSTANT _LIBHQR-FLAGS
+40 CONSTANT LIBRARY-HISTORY-QUERY-REQUEST-SIZE
+
+: LIBHQR.RID    ( request -- rid ) _LIBHQR-RID + ;
+: LIBHQR.FLAGS  ( request -- a ) _LIBHQR-FLAGS + ;
+
+: LIBRARY-HISTORY-QUERY-REQUEST-INIT  ( request -- )
+    LIBRARY-HISTORY-QUERY-REQUEST-SIZE 0 FILL ;
+
+: LIBRARY-HISTORY-QUERY-RID!  ( rid request -- status )
+    >R
+    DUP 0= IF DROP R> DROP LIBPA-S-INVALID EXIT THEN
+    DUP RID-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    DUP RID-PRESENT? 0= IF DROP R> DROP LIBPA-S-INVALID EXIT THEN
+    R@ 0= IF DROP R> DROP LIBPA-S-INVALID EXIT THEN
+    R@ LIBRARY-HISTORY-QUERY-REQUEST-SIZE
+        MSPAN-NONWRAPPING? 0= IF
+        DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ LIBHQR.RID RID-COPY
+    R> DROP LIBPA-S-OK ;
+
+: LIBRARY-HISTORY-QUERY-REQUEST-VALID?  ( request -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-HISTORY-QUERY-REQUEST-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP LIBHQR.RID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    LIBHQR.FLAGS @ 0= ;
+
+\ ---------------------------------------------------------------------
+\ Stable, caller-owned query continuation
+\ ---------------------------------------------------------------------
+
+0x4C494251434F4E54 CONSTANT _LIBQC-MAGIC  \ "LIBQCONT"
+
+1 CONSTANT LIBRARY-QUERY-CONTINUATION-F-READY
+2 CONSTANT LIBRARY-QUERY-CONTINUATION-F-ROWS
+4 CONSTANT LIBRARY-QUERY-CONTINUATION-F-BEFORE
+8 CONSTANT LIBRARY-QUERY-CONTINUATION-F-AFTER
+15 CONSTANT _LIBQC-FLAGS-ALL
+
+  0 CONSTANT _LIBQC-MAGIC-OFF
+  8 CONSTANT _LIBQC-FLAGS
+ 16 CONSTANT _LIBQC-FINGERPRINT
+ 48 CONSTANT _LIBQC-OBSERVED-LOGICAL-GENERATION
+ 56 CONSTANT _LIBQC-FIRST-ORDER-SEQUENCE
+ 64 CONSTANT _LIBQC-FIRST-RID
+ 96 CONSTANT _LIBQC-LAST-ORDER-SEQUENCE
+104 CONSTANT _LIBQC-LAST-RID
+136 CONSTANT LIBRARY-QUERY-CONTINUATION-SIZE
+
+: LIBQC.MAGIC      ( continuation -- a ) _LIBQC-MAGIC-OFF + ;
+: LIBQC.FLAGS      ( continuation -- a ) _LIBQC-FLAGS + ;
+: LIBQC.FINGERPRINT  ( continuation -- digest ) _LIBQC-FINGERPRINT + ;
+: LIBQC.OBSERVED-LOGICAL-GENERATION  ( continuation -- a )
+    _LIBQC-OBSERVED-LOGICAL-GENERATION + ;
+: LIBQC.FIRST-ORDER-SEQUENCE  ( continuation -- a )
+    _LIBQC-FIRST-ORDER-SEQUENCE + ;
+: LIBQC.FIRST-RID  ( continuation -- rid ) _LIBQC-FIRST-RID + ;
+: LIBQC.LAST-ORDER-SEQUENCE  ( continuation -- a )
+    _LIBQC-LAST-ORDER-SEQUENCE + ;
+: LIBQC.LAST-RID   ( continuation -- rid ) _LIBQC-LAST-RID + ;
+
+: LIBRARY-QUERY-CONTINUATION-INIT  ( continuation -- )
+    DUP LIBRARY-QUERY-CONTINUATION-SIZE 0 FILL
+    _LIBQC-MAGIC SWAP LIBQC.MAGIC ! ;
+
+: _LIBQC-KEYS-ZERO?  ( continuation -- flag )
+    DUP LIBQC.FIRST-ORDER-SEQUENCE @ 0=
+    OVER LIBQC.FIRST-RID RID-ZERO? AND
+    OVER LIBQC.LAST-ORDER-SEQUENCE @ 0= AND
+    SWAP LIBQC.LAST-RID RID-ZERO? AND ;
+
+: _LIBQC-BLANK?  ( continuation -- flag )
+    DUP LIBQC.FLAGS @ 0=
+    OVER LIBQC.FINGERPRINT RID-ZERO? AND
+    OVER LIBQC.OBSERVED-LOGICAL-GENERATION @ 0= AND
+    SWAP _LIBQC-KEYS-ZERO? AND ;
+
+: _LIBQC-ORDERED-KEYS?  ( continuation -- flag )
+    DUP LIBQC.FIRST-ORDER-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP LIBQC.LAST-ORDER-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP LIBQC.FIRST-RID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP LIBQC.LAST-RID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP LIBQC.FIRST-ORDER-SEQUENCE @
+    OVER LIBQC.FIRST-RID
+    2 PICK LIBQC.LAST-ORDER-SEQUENCE @
+    3 PICK LIBQC.LAST-RID
+    _LIBQ-STABLE-KEY<=? NIP ;
+
+: LIBRARY-QUERY-CONTINUATION-VALID?  ( continuation -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-QUERY-CONTINUATION-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP LIBQC.MAGIC @ _LIBQC-MAGIC <> IF DROP 0 EXIT THEN
+    DUP LIBQC.FLAGS @ DUP 0<
+        SWAP _LIBQC-FLAGS-ALL INVERT AND 0<> OR IF DROP 0 EXIT THEN
+    DUP LIBQC.OBSERVED-LOGICAL-GENERATION @ 0< IF DROP 0 EXIT THEN
+    DUP LIBQC.FLAGS @
+        LIBRARY-QUERY-CONTINUATION-F-READY AND 0= IF
+        _LIBQC-BLANK? EXIT
+    THEN
+    DUP LIBQC.FINGERPRINT RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP LIBQC.FLAGS @
+        LIBRARY-QUERY-CONTINUATION-F-ROWS AND 0= IF
+        DUP LIBQC.FLAGS @
+            LIBRARY-QUERY-CONTINUATION-F-BEFORE
+            LIBRARY-QUERY-CONTINUATION-F-AFTER OR AND IF
+            DROP 0 EXIT
+        THEN
+        _LIBQC-KEYS-ZERO? EXIT
+    THEN
+    _LIBQC-ORDERED-KEYS? ;
+
+: LIBRARY-QUERY-CONTINUATION-READY?  ( continuation -- flag )
+    DUP LIBRARY-QUERY-CONTINUATION-VALID? IF
+        LIBQC.FLAGS @ LIBRARY-QUERY-CONTINUATION-F-READY AND 0<>
+    ELSE
+        DROP 0
+    THEN ;
+
+: LIBRARY-QUERY-CONTINUATION-HAS-ROWS?  ( continuation -- flag )
+    DUP LIBRARY-QUERY-CONTINUATION-VALID? IF
+        LIBQC.FLAGS @ LIBRARY-QUERY-CONTINUATION-F-ROWS AND 0<>
+    ELSE
+        DROP 0
+    THEN ;
+
+: LIBRARY-QUERY-CONTINUATION-HAS-BEFORE?  ( continuation -- flag )
+    DUP LIBRARY-QUERY-CONTINUATION-VALID? IF
+        LIBQC.FLAGS @ LIBRARY-QUERY-CONTINUATION-F-BEFORE AND 0<>
+    ELSE
+        DROP 0
+    THEN ;
+
+: LIBRARY-QUERY-CONTINUATION-HAS-AFTER?  ( continuation -- flag )
+    DUP LIBRARY-QUERY-CONTINUATION-VALID? IF
+        LIBQC.FLAGS @ LIBRARY-QUERY-CONTINUATION-F-AFTER AND 0<>
+    ELSE
+        DROP 0
+    THEN ;
+
+: LIBRARY-QUERY-CONTINUATION-COPY  ( source destination -- status )
+    DUP 0= IF 2DROP LIBPA-S-INVALID EXIT THEN
+    DUP LIBRARY-QUERY-CONTINUATION-SIZE
+        MSPAN-NONWRAPPING? 0= IF 2DROP LIBPA-S-INVALID EXIT THEN
+    OVER LIBRARY-QUERY-CONTINUATION-VALID? 0= IF
+        2DROP LIBPA-S-INVALID EXIT
+    THEN
+    2DUP = IF 2DROP LIBPA-S-OK EXIT THEN
+    LIBRARY-QUERY-CONTINUATION-SIZE MOVE
+    LIBPA-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Caller-owned bounded page descriptor
+\ ---------------------------------------------------------------------
+\ A page borrows a caller-owned row span.  Its descriptor is self-identifying
+\ through an absolute self pointer, so it cannot be copied accidentally.  The
+\ stable continuation is embedded by value and remains pointer-free.
+
+0x4C49425150414745 CONSTANT _LIBQP-MAGIC  \ "LIBQPAGE"
+
+1 CONSTANT LIBRARY-QUERY-PAGE-CORPUS
+2 CONSTANT LIBRARY-QUERY-PAGE-COLLECTIONS
+3 CONSTANT LIBRARY-QUERY-PAGE-HISTORY
+
+  0 CONSTANT _LIBQP-MAGIC-OFF
+  8 CONSTANT _LIBQP-SELF
+ 16 CONSTANT _LIBQP-KIND
+ 24 CONSTANT _LIBQP-COUNT
+ 32 CONSTANT _LIBQP-CAPACITY
+ 40 CONSTANT _LIBQP-ROWS
+ 48 CONSTANT _LIBQP-ROW-SIZE
+ 56 CONSTANT _LIBQP-CONTINUATION
+192 CONSTANT LIBRARY-QUERY-PAGE-SIZE
+
+: LIBQP.MAGIC        ( page -- a ) _LIBQP-MAGIC-OFF + ;
+: LIBQP.SELF         ( page -- a ) _LIBQP-SELF + ;
+: LIBQP.KIND         ( page -- a ) _LIBQP-KIND + ;
+: LIBQP.COUNT        ( page -- a ) _LIBQP-COUNT + ;
+: LIBQP.CAPACITY     ( page -- a ) _LIBQP-CAPACITY + ;
+: LIBQP.ROWS         ( page -- a ) _LIBQP-ROWS + ;
+: LIBQP.ROW-SIZE     ( page -- a ) _LIBQP-ROW-SIZE + ;
+: LIBQP.CONTINUATION ( page -- continuation ) _LIBQP-CONTINUATION + ;
+
+: _LIBQP-KIND-ROW-SIZE  ( kind -- bytes|0 )
+    CASE
+        LIBRARY-QUERY-PAGE-CORPUS OF
+            LIBRARY-QUERY-SUMMARY-SIZE ENDOF
+        LIBRARY-QUERY-PAGE-COLLECTIONS OF
+            LIBRARY-COLLECTION-SUMMARY-SIZE ENDOF
+        LIBRARY-QUERY-PAGE-HISTORY OF
+            LIBRARY-REVISION-SUMMARY-SIZE ENDOF
+        0 SWAP
+    ENDCASE ;
+
+: LIBRARY-QUERY-PAGE-VALID?  ( page -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-QUERY-PAGE-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP LIBQP.MAGIC @ _LIBQP-MAGIC <> IF DROP 0 EXIT THEN
+    DUP LIBQP.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP LIBQP.KIND @ _LIBQP-KIND-ROW-SIZE
+        OVER LIBQP.ROW-SIZE @ <> IF DROP 0 EXIT THEN
+    DUP LIBQP.CAPACITY @ DUP 1 <
+        SWAP LIBRARY-QUERY-PAGE-MAX > OR IF DROP 0 EXIT THEN
+    DUP LIBQP.COUNT @ DUP 0< IF 2DROP 0 EXIT THEN
+    OVER LIBQP.CAPACITY @ > IF DROP 0 EXIT THEN
+    >R
+    R@ LIBQP.ROWS @ DUP 0= IF DROP R> DROP 0 EXIT THEN
+    R@ LIBQP.CAPACITY @ R@ LIBQP.ROW-SIZE @ *
+        MSPAN-NONWRAPPING? 0= IF R> DROP 0 EXIT THEN
+    R@ LIBRARY-QUERY-PAGE-SIZE
+    R@ LIBQP.ROWS @ R@ LIBQP.CAPACITY @
+        R@ LIBQP.ROW-SIZE @ * MSPAN-OVERLAP? IF
+        R> DROP 0 EXIT
+    THEN
+    R@ LIBQP.CONTINUATION
+        LIBRARY-QUERY-CONTINUATION-VALID? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ LIBQP.COUNT @ 0>
+    R@ LIBQP.CONTINUATION
+        LIBRARY-QUERY-CONTINUATION-HAS-ROWS? =
+    R> DROP ;
+
+: LIBRARY-CORPUS-PAGE-VALID?  ( page -- flag )
+    DUP LIBRARY-QUERY-PAGE-VALID? IF
+        LIBQP.KIND @ LIBRARY-QUERY-PAGE-CORPUS =
+    ELSE
+        DROP 0
+    THEN ;
+
+: LIBRARY-COLLECTION-PAGE-VALID?  ( page -- flag )
+    DUP LIBRARY-QUERY-PAGE-VALID? IF
+        LIBQP.KIND @ LIBRARY-QUERY-PAGE-COLLECTIONS =
+    ELSE
+        DROP 0
+    THEN ;
+
+: LIBRARY-HISTORY-PAGE-VALID?  ( page -- flag )
+    DUP LIBRARY-QUERY-PAGE-VALID? IF
+        LIBQP.KIND @ LIBRARY-QUERY-PAGE-HISTORY =
+    ELSE
+        DROP 0
+    THEN ;
+
+: _LIBQP-INIT-ARGS?
+  ( rows capacity kind row-size page -- flag )
+    DUP 0= IF _LIBQ-DROP5 0 EXIT THEN
+    DUP LIBRARY-QUERY-PAGE-SIZE MSPAN-NONWRAPPING? 0= IF
+        _LIBQ-DROP5 0 EXIT
+    THEN
+    4 PICK 0= IF _LIBQ-DROP5 0 EXIT THEN
+    3 PICK DUP 1 < SWAP LIBRARY-QUERY-PAGE-MAX > OR IF
+        _LIBQ-DROP5 0 EXIT
+    THEN
+    2 PICK _LIBQP-KIND-ROW-SIZE 2 PICK <> IF
+        _LIBQ-DROP5 0 EXIT
+    THEN
+    3 PICK 2 PICK * 5 PICK SWAP MSPAN-NONWRAPPING? 0= IF
+        _LIBQ-DROP5 0 EXIT
+    THEN
+    DUP LIBRARY-QUERY-PAGE-SIZE
+    6 PICK 6 PICK 5 PICK * MSPAN-OVERLAP? IF
+        _LIBQ-DROP5 0 EXIT
+    THEN
+    _LIBQ-DROP5 -1 ;
+
+: _LIBQP-INIT
+  ( rows capacity kind row-size page -- status )
+    4 PICK 4 PICK 4 PICK 4 PICK 4 PICK
+        _LIBQP-INIT-ARGS? 0= IF
+        _LIBQ-DROP5 LIBPA-S-INVALID EXIT
+    THEN
+    DUP LIBRARY-QUERY-PAGE-SIZE 0 FILL
+    DUP _LIBQP-MAGIC SWAP LIBQP.MAGIC !
+    DUP DUP LIBQP.SELF !
+    2 PICK OVER LIBQP.KIND !
+    3 PICK OVER LIBQP.CAPACITY !
+    4 PICK OVER LIBQP.ROWS !
+    1 PICK OVER LIBQP.ROW-SIZE !
+    DUP LIBQP.CONTINUATION LIBRARY-QUERY-CONTINUATION-INIT
+    4 PICK 4 PICK 3 PICK * 0 FILL
+    _LIBQ-DROP5 LIBPA-S-OK ;
+
+: LIBRARY-CORPUS-PAGE-INIT  ( rows capacity page -- status )
+    >R LIBRARY-QUERY-PAGE-CORPUS LIBRARY-QUERY-SUMMARY-SIZE
+    R> _LIBQP-INIT ;
+
+: LIBRARY-COLLECTION-PAGE-INIT  ( rows capacity page -- status )
+    >R LIBRARY-QUERY-PAGE-COLLECTIONS LIBRARY-COLLECTION-SUMMARY-SIZE
+    R> _LIBQP-INIT ;
+
+: LIBRARY-HISTORY-PAGE-INIT  ( rows capacity page -- status )
+    >R LIBRARY-QUERY-PAGE-HISTORY LIBRARY-REVISION-SUMMARY-SIZE
+    R> _LIBQP-INIT ;
+
+: _LIBQP-ROW  ( index page expected-kind -- row|0 )
+    >R
+    DUP LIBRARY-QUERY-PAGE-VALID? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    DUP LIBQP.KIND @ R@ <> IF 2DROP R> DROP 0 EXIT THEN
+    OVER 0< IF 2DROP R> DROP 0 EXIT THEN
+    OVER OVER LIBQP.COUNT @ >= IF 2DROP R> DROP 0 EXIT THEN
+    DUP LIBQP.ROW-SIZE @ ROT * SWAP LIBQP.ROWS @ +
+    R> DROP ;
+
+: LIBRARY-CORPUS-PAGE-ROW  ( index page -- summary|0 )
+    LIBRARY-QUERY-PAGE-CORPUS _LIBQP-ROW ;
+
+: LIBRARY-COLLECTION-PAGE-ROW  ( index page -- summary|0 )
+    LIBRARY-QUERY-PAGE-COLLECTIONS _LIBQP-ROW ;
+
+: LIBRARY-HISTORY-PAGE-ROW  ( index page -- summary|0 )
+    LIBRARY-QUERY-PAGE-HISTORY _LIBQP-ROW ;
+
+\ ---------------------------------------------------------------------
+\ Canonical request fingerprints
+\ ---------------------------------------------------------------------
+
+: _LIBQ-FINGERPRINT
+  ( request request-u destination -- status )
+    >R
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ 0= IF 2DROP R> DROP LIBPA-S-INVALID EXIT THEN
+    R@ LIB-DIGEST-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    2DUP R@ LIB-DIGEST-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ SHA3-256-HASH
+    R> DROP LIBPA-S-OK ;
+
+: LIBRARY-CORPUS-QUERY-FINGERPRINT
+  ( request destination -- status )
+    OVER LIBRARY-CORPUS-QUERY-REQUEST-VALID? 0= IF
+        2DROP LIBPA-S-INVALID EXIT
+    THEN
+    >R LIBRARY-CORPUS-QUERY-REQUEST-SIZE R>
+    _LIBQ-FINGERPRINT ;
+
+: LIBRARY-COLLECTION-QUERY-FINGERPRINT
+  ( request destination -- status )
+    OVER LIBRARY-COLLECTION-QUERY-REQUEST-VALID? 0= IF
+        2DROP LIBPA-S-INVALID EXIT
+    THEN
+    >R LIBRARY-COLLECTION-QUERY-REQUEST-SIZE R>
+    _LIBQ-FINGERPRINT ;
+
+: LIBRARY-HISTORY-QUERY-FINGERPRINT
+  ( request destination -- status )
+    OVER LIBRARY-HISTORY-QUERY-REQUEST-VALID? 0= IF
+        2DROP LIBPA-S-INVALID EXIT
+    THEN
+    >R LIBRARY-HISTORY-QUERY-REQUEST-SIZE R>
+    _LIBQ-FINGERPRINT ;
+
+\ ---------------------------------------------------------------------
+\ Caller-owned execution workspace and exact-verification machinery
+\ ---------------------------------------------------------------------
+\ Range cursors and their row batches are embedded later in this same object.
+\ The deliberately round allocation leaves that private tail opaque while
+\ keeping all query mutation caller-owned and independently interleavable.
+
+0x4C494251574F524B CONSTANT _LIBQW-MAGIC  \ "LIBQWORK"
+
+   0 CONSTANT _LIBQW-MAGIC-OFF
+   8 CONSTANT _LIBQW-SELF
+  16 CONSTANT _LIBQW-BUSY
+  24 CONSTANT _LIBQW-STATUS
+  32 CONSTANT _LIBQW-MODE
+  40 CONSTANT _LIBQW-REQUEST
+  48 CONSTANT _LIBQW-PAGE
+  56 CONSTANT _LIBQW-ADAPTER
+  64 CONSTANT _LIBQW-INDEX-WORK
+  72 CONSTANT _LIBQW-SOURCE-N
+  80 CONSTANT _LIBQW-TEMP-ORDER
+  88 CONSTANT _LIBQW-TEMP-RID
+ 120 CONSTANT _LIBQW-FINGERPRINT
+ 152 CONSTANT _LIBQW-PRIOR-CONTINUATION
+ 288 CONSTANT _LIBQW-ENTRY
+3120 CONSTANT _LIBQW-CONTENT-DESCRIPTOR
+3320 CONSTANT _LIBQW-COLLECTION
+3536 CONSTANT _LIBQW-KMP
+4560 CONSTANT _LIBQW-MATCH-INDEX
+4568 CONSTANT _LIBQW-MATCH-HIT
+4576 CONSTANT _LIBQW-SELECTED
+4584 CONSTANT _LIBQW-TEMP-VALID
+4592 CONSTANT _LIBQW-RESULT-FIRST-ORDER
+4600 CONSTANT _LIBQW-RESULT-FIRST-RID
+4632 CONSTANT _LIBQW-RESULT-LAST-ORDER
+4640 CONSTANT _LIBQW-RESULT-LAST-RID
+4672 CONSTANT _LIBQW-SOURCE-AREA
+23296 CONSTANT _LIBQW-STAGED-ROWS
+
+\ The largest browse is the exact cross-product of two visible lifecycle
+\ states, two kinds, and three media kinds.  Twelve embedded adapter
+\ continuation-plus-batch states keep that merge cursor-preserving without
+\ allocations, raw physical cursors, or a whole-corpus intermediate.
+32768 CONSTANT LIBRARY-QUERY-WORK-SIZE
+
+: _LIBQW.MAGIC       ( work -- a ) _LIBQW-MAGIC-OFF + ;
+: _LIBQW.SELF        ( work -- a ) _LIBQW-SELF + ;
+: _LIBQW.BUSY        ( work -- a ) _LIBQW-BUSY + ;
+: _LIBQW.STATUS      ( work -- a ) _LIBQW-STATUS + ;
+: _LIBQW.MODE        ( work -- a ) _LIBQW-MODE + ;
+: _LIBQW.REQUEST     ( work -- a ) _LIBQW-REQUEST + ;
+: _LIBQW.PAGE        ( work -- a ) _LIBQW-PAGE + ;
+: _LIBQW.ADAPTER     ( work -- a ) _LIBQW-ADAPTER + ;
+: _LIBQW.INDEX-WORK  ( work -- a ) _LIBQW-INDEX-WORK + ;
+: _LIBQW.SOURCE-N    ( work -- a ) _LIBQW-SOURCE-N + ;
+: _LIBQW.TEMP-ORDER  ( work -- a ) _LIBQW-TEMP-ORDER + ;
+: _LIBQW.TEMP-RID    ( work -- rid ) _LIBQW-TEMP-RID + ;
+: _LIBQW.FINGERPRINT ( work -- digest ) _LIBQW-FINGERPRINT + ;
+: _LIBQW.PRIOR-CONTINUATION  ( work -- continuation )
+    _LIBQW-PRIOR-CONTINUATION + ;
+: _LIBQW.ENTRY       ( work -- entry ) _LIBQW-ENTRY + ;
+: _LIBQW.CONTENT-DESCRIPTOR  ( work -- descriptor )
+    _LIBQW-CONTENT-DESCRIPTOR + ;
+: _LIBQW.COLLECTION  ( work -- collection ) _LIBQW-COLLECTION + ;
+: _LIBQW.KMP         ( work -- cells ) _LIBQW-KMP + ;
+: _LIBQW.MATCH-INDEX ( work -- a ) _LIBQW-MATCH-INDEX + ;
+: _LIBQW.MATCH-HIT   ( work -- a ) _LIBQW-MATCH-HIT + ;
+: _LIBQW.SELECTED    ( work -- a ) _LIBQW-SELECTED + ;
+: _LIBQW.TEMP-VALID  ( work -- a ) _LIBQW-TEMP-VALID + ;
+: _LIBQW.RESULT-FIRST-ORDER  ( work -- a )
+    _LIBQW-RESULT-FIRST-ORDER + ;
+: _LIBQW.RESULT-FIRST-RID  ( work -- rid )
+    _LIBQW-RESULT-FIRST-RID + ;
+: _LIBQW.RESULT-LAST-ORDER  ( work -- a )
+    _LIBQW-RESULT-LAST-ORDER + ;
+: _LIBQW.RESULT-LAST-RID  ( work -- rid )
+    _LIBQW-RESULT-LAST-RID + ;
+: _LIBQW.SOURCE-AREA ( work -- a ) _LIBQW-SOURCE-AREA + ;
+: _LIBQW.STAGED-ROWS ( work -- rows ) _LIBQW-STAGED-ROWS + ;
+
+: LIBRARY-QUERY-WORK-VALID?  ( work -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP LIBRARY-QUERY-WORK-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _LIBQW.MAGIC @ _LIBQW-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _LIBQW.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _LIBQW.BUSY @ DUP 0= SWAP -1 = OR 0= IF DROP 0 EXIT THEN
+    DUP _LIBQW.BUSY @ IF DROP -1 EXIT THEN
+    _LIBQW.STATUS @ DUP LIBPA-S-OK >=
+        SWAP LIBPA-S-FAULT <= AND ;
+
+: LIBRARY-QUERY-WORK-INIT  ( work -- status )
+    DUP 0= IF DROP LIBPA-S-INVALID EXIT THEN
+    DUP LIBRARY-QUERY-WORK-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP LIBPA-S-INVALID EXIT THEN
+    \ Execution initializes every embedded batch/continuation before use.
+    \ Clearing only the public control header avoids an O(workspace) startup
+    \ tax for a deliberately reusable, caller-owned scratch object.
+    DUP _LIBQW-TEMP-ORDER 0 FILL
+    DUP _LIBQW-MAGIC SWAP _LIBQW.MAGIC !
+    DUP DUP _LIBQW.SELF !
+    LIBPA-S-OK SWAP _LIBQW.STATUS !
+    LIBPA-S-OK ;
+
+: LIBRARY-QUERY-WORK-STATUS@  ( work -- status )
+    DUP LIBRARY-QUERY-WORK-VALID? IF
+        DUP _LIBQW.BUSY @ IF
+            DROP LIBPA-S-BUSY
+        ELSE
+            _LIBQW.STATUS @
+        THEN
+    ELSE
+        DROP LIBPA-S-INVALID
+    THEN ;
+
+: _LIBQ-CONTAINS?  ( hay-a hay-u needle-a needle-u -- flag )
+    DUP 0< IF _LIBQ-DROP4 0 EXIT THEN
+    2 PICK 0< IF _LIBQ-DROP4 0 EXIT THEN
+    DUP 0= IF _LIBQ-DROP4 -1 EXIT THEN
+    DUP 3 PICK > IF _LIBQ-DROP4 0 EXIT THEN
+    2 PICK OVER - 1+ 0 ?DO
+        3 PICK I + 1 PICK
+        3 PICK 3 PICK COMPARE 0= IF
+            _LIBQ-DROP4 -1 UNLOOP EXIT
+        THEN
+    LOOP
+    _LIBQ-DROP4 0 ;
+
+: _LIBQ-TAGS-MATCH?  ( entry request work -- flag status )
+    >R
+    DUP LIBCQR-TERM$
+    3 PICK
+    R@ _LIBQW.ADAPTER @ R@ _LIBQW.INDEX-WORK @
+    LIBPA-INDEX-TAG?
+    >R >R 2DROP R> R> R> DROP ;
+
+: _LIBQ-SCOPE-MATCH?  ( entry request -- flag )
+    1 2 PICK LIBE.LIFECYCLE @ 1- LSHIFT
+    OVER LIBCQR.LIFECYCLE-MASK @ AND 0= IF 2DROP 0 EXIT THEN
+    1 2 PICK LIBE.KIND @ 1- LSHIFT
+    OVER LIBCQR.KIND-MASK @ AND 0= IF 2DROP 0 EXIT THEN
+    1 2 PICK LIBE.MEDIA @ 1- LSHIFT
+    OVER LIBCQR.MEDIA-MASK @ AND 0<>
+    >R 2DROP R> ;
+
+: _LIBQW-TERM$  ( work -- a u )
+    _LIBQW.REQUEST @ LIBCQR-TERM$ ;
+
+: _LIBQW-KMP-CELL  ( index work -- a )
+    _LIBQW.KMP SWAP 8 * + ;
+
+: _LIBQ-KMP-PREFIX?  ( final-index prefix-u work -- flag )
+    2 PICK 1+ 2 PICK - >R
+    DUP _LIBQW-TERM$ DROP
+    2 PICK
+    1 PICK R> +
+    1 PICK
+    COMPARE
+    >R _LIBQ-DROP3 R> 0= ;
+
+: _LIBQ-KMP-BEST  ( final-index work -- prefix-u )
+    >R DUP
+    BEGIN DUP 0> WHILE
+        2DUP R@ _LIBQ-KMP-PREFIX? IF
+            NIP R> DROP EXIT
+        THEN
+        1-
+    REPEAT
+    NIP R> DROP ;
+
+: _LIBQ-KMP-BUILD  ( work -- )
+    DUP _LIBQW.KMP LIBRARY-CORPUS-TERM-MAX 8 * 0 FILL
+    0 OVER _LIBQW.MATCH-INDEX !
+    0 OVER _LIBQW.MATCH-HIT !
+    DUP _LIBQW-TERM$ NIP 1 ?DO
+        I OVER _LIBQ-KMP-BEST
+        I 2 PICK _LIBQW-KMP-CELL !
+    LOOP
+    DROP ;
+
+\ PBLOB supplies logical-offset/source/span/context.  The matcher preserves
+\ KMP state across every bounded chunk, so exact body verification never
+\ materializes or truncates large immutable content.
+: _LIBQ-KMP-SINK
+  ( logical-offset source-a source-u context -- persist-status )
+    DUP _LIBQW.MATCH-HIT @ IF
+        _LIBQ-DROP4 PERSIST-S-OK EXIT
+    THEN
+    SWAP >R ROT DROP R> 0 ?DO
+        DUP _LIBQW.MATCH-INDEX @
+        BEGIN
+            DUP 0> IF
+                2 PICK I + C@
+                OVER 3 PICK _LIBQW-TERM$ DROP + C@ <>
+            ELSE
+                0
+            THEN
+        WHILE
+            1- 1 PICK _LIBQW-KMP-CELL @
+        REPEAT
+        2 PICK I + C@
+        OVER 3 PICK _LIBQW-TERM$ DROP + C@ = IF 1+ THEN
+        DUP 2 PICK _LIBQW-TERM$ NIP = IF
+            DUP 2 PICK _LIBQW.MATCH-INDEX !
+            DROP
+            -1 OVER _LIBQW.MATCH-HIT !
+            LEAVE
+        THEN
+        OVER _LIBQW.MATCH-INDEX !
+    LOOP
+    2DROP PERSIST-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Cursor-preserving adapter range sources
+\ ---------------------------------------------------------------------
+
+0 CONSTANT _LIBQ-MODE-FIRST
+1 CONSTANT _LIBQ-MODE-AFTER
+2 CONSTANT _LIBQ-MODE-BEFORE
+
+16 CONSTANT _LIBQ-SOURCE-BATCH
+12 CONSTANT _LIBQ-SOURCE-MAX
+
+   0 CONSTANT _LIBQSR-FAMILY
+   8 CONSTANT _LIBQSR-PREFIX-U
+  16 CONSTANT _LIBQSR-PREFIX
+ 144 CONSTANT _LIBQSR-CONTINUATION
+ 752 CONSTANT _LIBQSR-ROWS
+1520 CONSTANT _LIBQSR-COUNT
+1528 CONSTANT _LIBQSR-INDEX
+1536 CONSTANT _LIBQSR-END
+1544 CONSTANT _LIBQSR-STARTED
+1552 CONSTANT _LIBQSR-SIZE
+
+: _LIBQSR.FAMILY       ( source -- a ) _LIBQSR-FAMILY + ;
+: _LIBQSR.PREFIX-U     ( source -- a ) _LIBQSR-PREFIX-U + ;
+: _LIBQSR.PREFIX       ( source -- a ) _LIBQSR-PREFIX + ;
+: _LIBQSR.CONTINUATION ( source -- continuation )
+    _LIBQSR-CONTINUATION + ;
+: _LIBQSR.ROWS         ( source -- rows ) _LIBQSR-ROWS + ;
+: _LIBQSR.COUNT        ( source -- a ) _LIBQSR-COUNT + ;
+: _LIBQSR.INDEX        ( source -- a ) _LIBQSR-INDEX + ;
+: _LIBQSR.END          ( source -- a ) _LIBQSR-END + ;
+: _LIBQSR.STARTED      ( source -- a ) _LIBQSR-STARTED + ;
+
+: _LIBQW-SOURCE  ( index work -- source )
+    _LIBQW.SOURCE-AREA SWAP _LIBQSR-SIZE * + ;
+
+: _LIBQSR-CURRENT-ROW  ( source -- row )
+    DUP _LIBQSR.INDEX @ LIBPA-RANGE-ROW-SIZE *
+    SWAP _LIBQSR.ROWS + ;
+
+: _LIBQSR-SEED  ( source work -- status )
+    >R
+    DUP _LIBQSR.FAMILY @
+    OVER _LIBQSR.PREFIX
+    2 PICK _LIBQSR.PREFIX-U @
+    R@ _LIBQW.PRIOR-CONTINUATION
+        LIBQC.FIRST-ORDER-SEQUENCE @
+    R@ _LIBQW.PRIOR-CONTINUATION LIBQC.FIRST-RID
+    R@ _LIBQW.PRIOR-CONTINUATION
+        LIBQC.LAST-ORDER-SEQUENCE @
+    R@ _LIBQW.PRIOR-CONTINUATION LIBQC.LAST-RID
+    7 PICK _LIBQSR.CONTINUATION
+    LIBPA-CONTINUATION-SEED
+    NIP R> DROP ;
+
+: _LIBQ-SOURCE-APPEND
+  ( family prefix-a prefix-u work -- status )
+    >R
+    DUP 0< OVER LIBRARY-CORPUS-TERM-MAX > OR IF
+        _LIBQ-DROP3 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    DUP IF
+        OVER 0= IF _LIBQ-DROP3 R> DROP LIBPA-S-INVALID EXIT THEN
+        OVER OVER MSPAN-NONWRAPPING? 0= IF
+            _LIBQ-DROP3 R> DROP LIBPA-S-INVALID EXIT
+        THEN
+    THEN
+    R@ _LIBQW.SOURCE-N @ DUP _LIBQ-SOURCE-MAX >= IF
+        DROP _LIBQ-DROP3 R> DROP LIBPA-S-CAPACITY EXIT
+    THEN
+    R@ _LIBQW-SOURCE
+    3 PICK OVER _LIBQSR.FAMILY !
+    1 PICK OVER _LIBQSR.PREFIX-U !
+    2 PICK OVER _LIBQSR.PREFIX
+    3 PICK MOVE
+    0 OVER _LIBQSR.COUNT !
+    0 OVER _LIBQSR.INDEX !
+    0 OVER _LIBQSR.END !
+    0 OVER _LIBQSR.STARTED !
+    R@ _LIBQW.MODE @ _LIBQ-MODE-FIRST <> IF
+        DUP R@ _LIBQSR-SEED
+        DUP IF >R _LIBQ-DROP4 R> R> DROP EXIT THEN
+        DROP
+    THEN
+    DROP
+    1 R@ _LIBQW.SOURCE-N +!
+    _LIBQ-DROP3 R> DROP LIBPA-S-OK ;
+
+: _LIBQ-MASK-SELECTED?  ( value mask -- flag )
+    SWAP 1- 1 SWAP LSHIFT AND 0<> ;
+
+: _LIBQ-STATE-SOURCE-MAYBE
+  ( lifecycle kind media work -- status )
+    >R
+    2 PICK R@ _LIBQW.REQUEST @ LIBCQR.LIFECYCLE-MASK @
+        _LIBQ-MASK-SELECTED? 0= IF
+        _LIBQ-DROP3 R> DROP LIBPA-S-OK EXIT
+    THEN
+    1 PICK R@ _LIBQW.REQUEST @ LIBCQR.KIND-MASK @
+        _LIBQ-MASK-SELECTED? 0= IF
+        _LIBQ-DROP3 R> DROP LIBPA-S-OK EXIT
+    THEN
+    DUP R@ _LIBQW.REQUEST @ LIBCQR.MEDIA-MASK @
+        _LIBQ-MASK-SELECTED? 0= IF
+        _LIBQ-DROP3 R> DROP LIBPA-S-OK EXIT
+    THEN
+    2 PICK R@ _LIBQW.TEMP-RID C!
+    1 PICK R@ _LIBQW.TEMP-RID 1+ C!
+    DUP R@ _LIBQW.TEMP-RID 2 + C!
+    _LIBQ-DROP3
+    LIBPA-RANGE-DOCUMENT-STATE-CREATION
+    R@ _LIBQW.TEMP-RID 3 R@
+    _LIBQ-SOURCE-APPEND
+    R> DROP ;
+
+: _LIBQ-CORPUS-BROWSE-SOURCES  ( work -- status )
+    >R
+    LIB-LIFECYCLE-ACTIVE LIB-KIND-MANAGED-DOCUMENT
+        LIB-MEDIA-TEXT-PLAIN R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ACTIVE LIB-KIND-MANAGED-DOCUMENT
+        LIB-MEDIA-TEXT-MARKDOWN R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ACTIVE LIB-KIND-MANAGED-DOCUMENT
+        LIB-MEDIA-TEXT-CSV R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ACTIVE LIB-KIND-CAPTURE
+        LIB-MEDIA-TEXT-PLAIN R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ACTIVE LIB-KIND-CAPTURE
+        LIB-MEDIA-TEXT-MARKDOWN R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ACTIVE LIB-KIND-CAPTURE
+        LIB-MEDIA-TEXT-CSV R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ARCHIVED LIB-KIND-MANAGED-DOCUMENT
+        LIB-MEDIA-TEXT-PLAIN R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ARCHIVED LIB-KIND-MANAGED-DOCUMENT
+        LIB-MEDIA-TEXT-MARKDOWN R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ARCHIVED LIB-KIND-MANAGED-DOCUMENT
+        LIB-MEDIA-TEXT-CSV R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ARCHIVED LIB-KIND-CAPTURE
+        LIB-MEDIA-TEXT-PLAIN R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ARCHIVED LIB-KIND-CAPTURE
+        LIB-MEDIA-TEXT-MARKDOWN R@ _LIBQ-STATE-SOURCE-MAYBE
+    DUP IF R> DROP EXIT THEN DROP
+    LIB-LIFECYCLE-ARCHIVED LIB-KIND-CAPTURE
+        LIB-MEDIA-TEXT-CSV R@ _LIBQ-STATE-SOURCE-MAYBE
+    R> DROP ;
+
+: _LIBQSR-RANGE-ARGS  ( source work -- source plus adapter range arguments )
+    >R
+    DUP _LIBQSR.FAMILY @
+    OVER _LIBQSR.PREFIX
+    2 PICK _LIBQSR.PREFIX-U @
+    3 PICK _LIBQSR.ROWS
+    _LIBQ-SOURCE-BATCH
+    5 PICK _LIBQSR.CONTINUATION
+    R@ _LIBQW.ADAPTER @
+    R@ _LIBQW.INDEX-WORK @
+    R> DROP ;
+
+: _LIBQSR-FETCH  ( source work -- status )
+    >R
+    DUP _LIBQSR.END @ IF DROP R> DROP LIBPA-S-OK EXIT THEN
+    DUP _LIBQSR.STARTED @ IF
+        R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+            R@ _LIBQSR-RANGE-ARGS LIBPA-RANGE-BEFORE
+        ELSE
+            R@ _LIBQSR-RANGE-ARGS LIBPA-RANGE-AFTER
+        THEN
+    ELSE
+        R@ _LIBQW.MODE @ CASE
+            _LIBQ-MODE-FIRST OF
+                R@ _LIBQSR-RANGE-ARGS LIBPA-RANGE-FIRST
+            ENDOF
+            _LIBQ-MODE-AFTER OF
+                R@ _LIBQSR-RANGE-ARGS LIBPA-RANGE-AFTER
+            ENDOF
+            _LIBQ-MODE-BEFORE OF
+                R@ _LIBQSR-RANGE-ARGS LIBPA-RANGE-BEFORE
+            ENDOF
+            DROP R> DROP LIBPA-S-INVALID EXIT
+        ENDCASE
+    THEN
+    DUP IF >R 2DROP R> R> DROP EXIT THEN DROP
+    OVER _LIBQSR.COUNT !
+    -1 OVER _LIBQSR.STARTED !
+    DUP _LIBQSR.COUNT @ 0= IF
+        -1 OVER _LIBQSR.END !
+        0 OVER _LIBQSR.INDEX !
+    ELSE
+        R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+            DUP _LIBQSR.COUNT @ 1-
+        ELSE
+            0
+        THEN
+        OVER _LIBQSR.INDEX !
+    THEN
+    DROP R> DROP LIBPA-S-OK ;
+
+: _LIBQSR-ENSURE  ( source work -- has-row? status )
+    >R
+    BEGIN
+        DUP _LIBQSR.END @ IF
+            DROP 0 LIBPA-S-OK R> DROP EXIT
+        THEN
+        DUP _LIBQSR.INDEX @ DUP 0>=
+        2 PICK _LIBQSR.COUNT @ ROT > AND IF
+            DROP -1 LIBPA-S-OK R> DROP EXIT
+        THEN
+        DUP R@ _LIBQSR-FETCH
+        DUP IF NIP 0 SWAP R> DROP EXIT THEN DROP
+    AGAIN ;
+
+: _LIBQSR-ADVANCE  ( source work -- )
+    _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+        -1 SWAP _LIBQSR.INDEX +!
+    ELSE
+        1 SWAP _LIBQSR.INDEX +!
+    THEN ;
+
+: _LIBQ-RANGE-ROW-COMPARE  ( row-a row-b -- -1|0|1 )
+    OVER LIBPA-RANGE-ROW-ORDER@
+    OVER LIBPA-RANGE-ROW-ORDER@ -
+    DUP IF >R 2DROP R> EXIT THEN DROP
+    OVER LIBPA-RANGE-ROW-RID@ RID-SIZE
+    3 PICK LIBPA-RANGE-ROW-RID@ RID-SIZE COMPARE
+    >R 2DROP R> ;
+
+: _LIBQ-SELECT-SOURCE  ( work -- source|0 status )
+    >R
+    0 R@ _LIBQW.SELECTED !
+    0
+    BEGIN DUP R@ _LIBQW.SOURCE-N @ < WHILE
+        DUP R@ _LIBQW-SOURCE
+        DUP R@ _LIBQSR-ENSURE
+        DUP IF
+            >R DROP 2DROP 0 R> R> DROP EXIT
+        THEN
+        DROP IF
+            R@ _LIBQW.SELECTED @ DUP 0= IF
+                DROP DUP R@ _LIBQW.SELECTED !
+            ELSE
+                OVER _LIBQSR-CURRENT-ROW
+                SWAP _LIBQSR-CURRENT-ROW
+                _LIBQ-RANGE-ROW-COMPARE
+                R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+                    0>
+                ELSE
+                    0<
+                THEN
+                IF DUP R@ _LIBQW.SELECTED ! THEN
+            THEN
+        THEN
+        DROP 1+
+    REPEAT
+    DROP R@ _LIBQW.SELECTED @ LIBPA-S-OK R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Query source selection and exact verification
+\ ---------------------------------------------------------------------
+
+: _LIBQ-COLLECTION-REQUESTED?  ( request -- flag )
+    LIBCQR.COLLECTION RID-PRESENT? ;
+
+: _LIBQ-CORPUS-SOURCES  ( work -- status )
+    >R
+    R@ _LIBQW.REQUEST @ LIBCQR.TERM-U @ 0= IF
+        R@ _LIBQW.REQUEST @ _LIBQ-COLLECTION-REQUESTED? IF
+            R@ _LIBQW.REQUEST @ LIBCQR.COLLECTION
+            R@ _LIBQW.COLLECTION
+            R@ _LIBQW.ADAPTER @ R@ _LIBQW.INDEX-WORK @
+            LIBPA-COLLECTION-READ
+            DUP IF R> DROP EXIT THEN DROP
+            LIBPA-RANGE-MEMBERSHIP
+            R@ _LIBQW.REQUEST @ LIBCQR.COLLECTION RID-SIZE R@
+            _LIBQ-SOURCE-APPEND
+            R> DROP EXIT
+        THEN
+        R@ _LIBQ-CORPUS-BROWSE-SOURCES R> DROP EXIT
+    THEN
+    R@ _LIBQW.REQUEST @ LIBCQR.FIELD-MASK @
+    LIBRARY-CORPUS-FIELD-TITLE LIBRARY-CORPUS-FIELD-BODY OR
+        AND IF
+        LIBPA-RANGE-CANDIDATE
+        R@ _LIBQW.REQUEST @ LIBCQR-TERM$
+        DUP 3 MIN >R DROP R>
+        R@ _LIBQ-SOURCE-APPEND
+        DUP IF R> DROP EXIT THEN DROP
+    THEN
+    R@ _LIBQW.REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-TAGS AND
+    R@ _LIBQW.REQUEST @ LIBCQR.TERM-U @ LIB-TAG-TEXT-MAX <= AND IF
+        LIBPA-RANGE-EXACT-TAG
+        R@ _LIBQW.REQUEST @ LIBCQR-TERM$ R@
+        _LIBQ-SOURCE-APPEND
+        DUP IF R> DROP EXIT THEN DROP
+    THEN
+    R@ _LIBQW.REQUEST @ _LIBQ-COLLECTION-REQUESTED? IF
+        R@ _LIBQW.REQUEST @ LIBCQR.COLLECTION
+        R@ _LIBQW.COLLECTION
+        R@ _LIBQW.ADAPTER @ R@ _LIBQW.INDEX-WORK @
+        LIBPA-COLLECTION-READ
+        DUP IF R> DROP EXIT THEN DROP
+    THEN
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-COLLECTION-SOURCES  ( work -- status )
+    >R
+    LIBPA-RANGE-COLLECTION-ORDER 0 0 R@
+    _LIBQ-SOURCE-APPEND
+    R> DROP ;
+
+: _LIBQ-HISTORY-SOURCES  ( work -- status )
+    >R
+    LIBPA-RANGE-HISTORY
+    R@ _LIBQW.REQUEST @ LIBHQR.RID RID-SIZE R@
+    _LIBQ-SOURCE-APPEND
+    R> DROP ;
+
+: _LIBQ-BUILD-CORPUS-SUMMARY  ( entry summary -- )
     >R
     R@ LIBRARY-QUERY-SUMMARY-INIT
     DUP LIBE.ID R@ LIBQS.REF RREF.ID RID-COPY
@@ -60,431 +1269,677 @@ REQUIRE repository.f
     DUP LIBE.CONTENT-U @ R@ LIBQS.CONTENT-U !
     DUP LIBE.MUTATION-SEQUENCE @ R@ LIBQS.MUTATION-SEQUENCE !
     DUP LIBE.CONTENT-DIGEST R@ LIBQS.CONTENT-DIGEST
-        LIB-DIGEST-SIZE CMOVE
+        LIB-DIGEST-SIZE MOVE
     DUP LIBE.TITLE-U @ R@ LIBQS.TITLE-U !
-    DUP LIBE.TITLE R@ LIBQS.TITLE ROT LIBE.TITLE-U @ CMOVE
+    DUP LIBE.TITLE R@ LIBQS.TITLE ROT LIBE.TITLE-U @ MOVE
     R> DROP ;
 
-: _LIBMU-QUERY-RETURN  ( status -- count next generation status )
-    _LIBMU-STORE @ _LIBVFS-RESULT >R
-    _LIBMU-COUNT @ _LIBMU-NEXT @
-    _LIBMU-ACTUAL-CATALOG-GENERATION @ R> ;
-
-: _LIBRARY-VFS-STORE-QUERY-ACTIVE
-  ( expected start summaries capacity store -- count next generation status )
-    0 _LIBMU-ACTUAL-CATALOG-GENERATION !
-    _LIBMU-QUERY-ARGS DUP IF
-        _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? IF
-            _LIBMU-QUERY-RETURN
-        ELSE
-            DROP 0 0 0 LIBSTORE-S-INVALID
-        THEN
-        EXIT
-    THEN
-    DROP _LIBMU-CLEAR-QUERY-OUTPUT
-    _LIBMU-ASSURE-WARM DUP IF _LIBMU-QUERY-RETURN EXIT THEN DROP
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @
-        _LIBMU-ACTUAL-CATALOG-GENERATION !
-    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0<>
-    _LIBMU-EXPECTED-CATALOG-GENERATION @
-        _LIBMU-ACTUAL-CATALOG-GENERATION @ <> AND IF
-        LIBSTORE-S-CONFLICT _LIBMU-QUERY-RETURN EXIT
-    THEN
-    _LIBMU-START @
-        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @ > IF
-        LIBSTORE-S-INVALID _LIBMU-QUERY-RETURN EXIT
-    THEN
-    BEGIN
-        _LIBMU-NEXT @
-            _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
-                LIBBF.CATALOG-COUNT @ <
-        _LIBMU-COUNT @ _LIBMU-CAPACITY @ < AND
-    WHILE
-        _LIBMU-NEXT @ _LIBMU-READ-ENTRY DUP IF
-            _LIBMU-CLEAR-QUERY-OUTPUT _LIBMU-QUERY-RETURN EXIT
-        THEN
-        DROP
-        _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
-            LIB-LIFECYCLE-ACTIVE = IF
-            _LIBMU-FOUND-ENTRY
-                _LIBMU-ENTRIES @ _LIBMU-COUNT @
-                    LIBRARY-QUERY-SUMMARY-SIZE * +
-                _LIBMU-BUILD-QUERY-SUMMARY
-            1 _LIBMU-COUNT +!
-        THEN
-        1 _LIBMU-NEXT +!
-    REPEAT
-    _LIBMU-NEXT @
-        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
-            LIBBF.CATALOG-COUNT @ = IF
-        -1 _LIBMU-NEXT !
-    THEN
-    LIBSTORE-S-OK _LIBMU-QUERY-RETURN ;
-
-' _LIBRARY-VFS-STORE-QUERY-ACTIVE CONSTANT _libvfs-query-active-xt
-
-: LIBRARY-VFS-STORE-QUERY-ACTIVE
-  ( expected start summaries capacity store -- count next generation status )
-    _libvfs-query-active-xt _library-vfs-store-guard WITH-GUARD ;
-
-\ ---------------------------------------------------------------------
-\ Disposable-indexed, authoritative bounded corpus query
-\ ---------------------------------------------------------------------
-
-: _LIBIX-MAY-CONTAIN?  ( bloom bloom-u -- flag )
-    _LIBIX-BLOOM-U ! _LIBIX-BLOOM !
-    _LIBMU-REQUEST @ LIBCQR-TERM$
-        _LIBIX-TEXT-U ! _LIBIX-TEXT-A !
-    _LIBIX-TEXT-U @ 3 < IF -1 EXIT THEN
-    _LIBIX-TEXT-U @ 2 - 0 ?DO
-        _LIBIX-TEXT-A @ I + _LIBIX-GRAM-HASH
-            _LIBIX-BIT-SET? 0= IF 0 UNLOOP EXIT THEN
-    LOOP
-    -1 ;
-
-: _LIBIX-SLOT-MAY-MATCH?  ( slot -- flag )
-    _LIBIX-SLOT !
-    _LIBMU-REQUEST @ LIBCQR.TERM-U @ 3 < IF -1 EXIT THEN
-    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
-        LIBRARY-CORPUS-FIELD-TITLE AND IF
-        _LIBIX-SLOT @ _LIBIX-TITLE _LIBIX-TITLE-BYTES
-            _LIBIX-MAY-CONTAIN? IF -1 EXIT THEN
-    THEN
-    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
-        LIBRARY-CORPUS-FIELD-TAGS AND IF
-        _LIBIX-SLOT @ _LIBIX-TAGS _LIBIX-TAG-BYTES
-            _LIBIX-MAY-CONTAIN? IF -1 EXIT THEN
-    THEN
-    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
-        LIBRARY-CORPUS-FIELD-BODY AND IF
-        _LIBIX-SLOT @ _LIBIX-BODY _LIBIX-BODY-BYTES
-            _LIBIX-MAY-CONTAIN? IF -1 EXIT THEN
-    THEN
-    0 ;
-
-: _LIBCQ-CONTAINS?  ( hay-a hay-u needle-a needle-u -- flag )
-    _LIBCQ-NEEDLE-U ! _LIBCQ-NEEDLE-A !
-    _LIBCQ-HAY-U ! _LIBCQ-HAY-A !
-    _LIBCQ-NEEDLE-U @ 0= IF -1 EXIT THEN
-    _LIBCQ-NEEDLE-U @ _LIBCQ-HAY-U @ > IF 0 EXIT THEN
-    _LIBCQ-HAY-U @ _LIBCQ-NEEDLE-U @ - 1+ 0 ?DO
-        _LIBCQ-HAY-A @ I + _LIBCQ-NEEDLE-U @
-        _LIBCQ-NEEDLE-A @ _LIBCQ-NEEDLE-U @ COMPARE 0= IF
-            -1 UNLOOP EXIT
-        THEN
-    LOOP
-    0 ;
-
-: _LIBCQ-TAGS-MATCH?  ( entry -- flag )
-    DUP _LIBCQ-ENTRY ! LIBE.TAG-N @ 0 ?DO
-        I _LIBCQ-ENTRY @ LIBE-TAG LIB-TAG$
-        _LIBMU-REQUEST @ LIBCQR-TERM$ COMPARE 0= IF
-            -1 UNLOOP EXIT
-        THEN
-    LOOP
-    0 ;
-
-: _LIBCQ-FACT-SCOPE?  ( fact -- flag )
-    _LIBVP-FACT !
-    1 _LIBVP-FACT @ _LIBVCF.LIFECYCLE @ 1- LSHIFT
-        _LIBMU-REQUEST @ LIBCQR.LIFECYCLE-MASK @ AND 0= IF 0 EXIT THEN
-    1 _LIBVP-FACT @ _LIBVCF.KIND @ 1- LSHIFT
-        _LIBMU-REQUEST @ LIBCQR.KIND-MASK @ AND 0= IF 0 EXIT THEN
-    1 _LIBVP-FACT @ _LIBVCF.MEDIA @ 1- LSHIFT
-        _LIBMU-REQUEST @ LIBCQR.MEDIA-MASK @ AND 0<> ;
-
-: _LIBCQ-COLLECTION-REQUESTED?  ( -- flag )
-    _LIBMU-REQUEST @ LIBCQR.COLLECTION LIB-DIGEST-SIZE
-        _LIBMR-ZERO? 0= ;
-
-: _LIBCQ-SLOT-ELIGIBLE?  ( slot -- flag )
-    DUP _LIBVP-CATALOG-FACT _LIBCQ-FACT-SCOPE? 0= IF DROP 0 EXIT THEN
-    _LIBCQ-COLLECTION-FILTER @ IF
-        DUP _LIBMU-FOUND-COLLECTION LIBC-MEMBER? 0= IF DROP 0 EXIT THEN
-    THEN
-    _LIBIX-SLOT-MAY-MATCH? ;
-
-: _LIBCQ-READ-CONTENT  ( -- status )
-    _LIBCQ-READ-CONTENT-XT @ ?DUP IF
-        EXECUTE
-    ELSE
-        LIBSTORE-S-RECOVERY
-    THEN ;
-
-: _LIBIX-RESET-USED-UNDER-AUTH  ( -- status )
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @
-        DUP 0< OVER LIB-CATALOG-MAX > OR IF
-        DROP _LIBIX-INVALIDATE LIBSTORE-S-CORRUPT EXIT
-    THEN
-    _LIBIX-SLOT !
-    _LIBIX-INVALIDATE
-    _LIBIX-CANDIDATE _LIBIX-SLOT @ _LIBIX-RECORD-SIZE * 0 FILL
-    LIBSTORE-S-OK ;
-
-\ Reconstruct only the independently disposable Bloom index.  Authority,
-\ compact facts, raw-record commitments, and locators remain pinned to the
-\ exact warm-assured generation; publication occurs once after every exact
-\ catalog record and current content frame has been reverified.
-: _LIBIX-REBUILD-UNDER-AUTH  ( -- status )
-    _LIBIX-RESET-USED-UNDER-AUTH DUP IF EXIT THEN DROP
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @ 0 ?DO
-        I _LIBMU-READ-ENTRY DUP IF UNLOOP EXIT THEN DROP
-        _LIBMU-FOUND-ENTRY LIBE.LIFECYCLE @
-            LIB-LIFECYCLE-TOMBSTONED <> IF
-            _LIBMU-FOUND-ENTRY I _LIBIX-INDEX-ENTRY-FROM
-            _LIBMU-FOUND-ENTRY LIBE.ID _LIBMU-ID !
-            LIB-CONTENT-MAX _LIBMU-CONTENT-CAP !
-            _LIBMU-CONTENT-CURRENT _LIBMU-CONTENT-MODE !
-            LIBSTORE-S-CORRUPT _LIBMU-MISSING-CONTENT-STATUS !
-            _LIBCQ-READ-CONTENT DUP IF UNLOOP EXIT THEN DROP
-            _LIBMU-CONTENT-READBACK I
-                _LIBIX-INDEX-CURRENT-BODY-FROM
-        THEN
-    LOOP
-    _LIBMU-STORE @ _LIBIX-PUBLISH
-    LIBSTORE-S-OK ;
-
-: _LIBCQ-INDEX-REQUIRED?  ( -- flag )
-    _LIBMU-REQUEST @ LIBCQR.TERM-U @ 3 >= ;
-
-: _LIBCQ-ENTRY-MATCH  ( -- match? status )
-    _LIBMU-REQUEST @ LIBCQR.TERM-U @ 0= IF
-        -1 LIBSTORE-S-OK EXIT
-    THEN
-    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
-        LIBRARY-CORPUS-FIELD-TITLE AND IF
-        _LIBMU-FOUND-ENTRY LIBE-TITLE$
-            _LIBMU-REQUEST @ LIBCQR-TERM$ _LIBCQ-CONTAINS? IF
-            -1 LIBSTORE-S-OK EXIT
-        THEN
-    THEN
-    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
-        LIBRARY-CORPUS-FIELD-TAGS AND IF
-        _LIBMU-FOUND-ENTRY _LIBCQ-TAGS-MATCH? IF
-            -1 LIBSTORE-S-OK EXIT
-        THEN
-    THEN
-    _LIBMU-REQUEST @ LIBCQR.FIELD-MASK @
-        LIBRARY-CORPUS-FIELD-BODY AND IF
-        _LIBMU-FOUND-ENTRY LIBE.ID _LIBMU-ID !
-        LIB-CONTENT-MAX _LIBMU-CONTENT-CAP !
-        _LIBMU-CONTENT-CURRENT _LIBMU-CONTENT-MODE !
-        LIBSTORE-S-CORRUPT _LIBMU-MISSING-CONTENT-STATUS !
-        _LIBCQ-READ-CONTENT DUP IF 0 SWAP EXIT THEN DROP
-        _LIBMU-CONTENT-READBACK LIBCT-DATA$
-            _LIBMU-REQUEST @ LIBCQR-TERM$ _LIBCQ-CONTAINS?
-            LIBSTORE-S-OK EXIT
-    THEN
-    0 LIBSTORE-S-OK ;
-
-: _LIBMU-CORPUS-QUERY-ARGS  ( request summaries capacity store -- status )
-    _LIBMU-STORE ! _LIBMU-CAPACITY ! _LIBMU-ENTRIES ! _LIBMU-REQUEST !
-    0 _LIBMU-COUNT !
-    0 _LIBMU-START !
-    0 _LIBMU-NEXT !
-    0 _LIBMU-EXPECTED-CATALOG-GENERATION !
-    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF
-        LIBSTORE-S-INVALID EXIT
-    THEN
-    _LIBMU-REQUEST @ LIBRARY-CORPUS-QUERY-REQUEST-SIZE
-        _LIBMU-OWNER-SPAN-SAFE? 0= IF LIBSTORE-S-INVALID EXIT THEN
-    _LIBMU-REQUEST @ _LIBRARY-CORPUS-QUERY-REQUEST-VALID? 0= IF
-        LIBSTORE-S-INVALID EXIT
-    THEN
-    _LIBMU-REQUEST @ LIBCQR.START-SLOT @ DUP
-        _LIBMU-START ! _LIBMU-NEXT !
-    _LIBMU-REQUEST @ LIBCQR.EXPECTED-CATALOG-GENERATION @
-        _LIBMU-EXPECTED-CATALOG-GENERATION !
-    _LIBMU-CAPACITY @ DUP 1 < SWAP LIBRARY-QUERY-PAGE-MAX > OR IF
-        LIBSTORE-S-OUTPUT-CAPACITY EXIT
-    THEN
-    _LIBMU-ENTRIES @ _LIBMU-CAPACITY @ LIBRARY-QUERY-SUMMARY-SIZE *
-        _LIBMU-OWNER-SPAN-SAFE? 0= IF LIBSTORE-S-INVALID EXIT THEN
-    _LIBMU-REQUEST @ LIBRARY-CORPUS-QUERY-REQUEST-SIZE
-        _LIBMU-ENTRIES @ _LIBMU-CAPACITY @ LIBRARY-QUERY-SUMMARY-SIZE *
-        _VFSNAP-RANGES-OVERLAP? IF LIBSTORE-S-INVALID EXIT THEN
-    LIBSTORE-S-OK ;
-
-: _LIBRARY-VFS-STORE-QUERY-CORPUS
-  ( request summaries capacity store -- count next generation status )
-    0 _LIBMU-ACTUAL-CATALOG-GENERATION !
-    _LIBMU-CORPUS-QUERY-ARGS DUP IF
-        _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? IF
-            _LIBMU-QUERY-RETURN
-        ELSE
-            DROP 0 0 0 LIBSTORE-S-INVALID
-        THEN
-        EXIT
-    THEN
-    DROP _LIBMU-CLEAR-QUERY-OUTPUT
-    _LIBMU-ASSURE-WARM DUP IF _LIBMU-QUERY-RETURN EXIT THEN DROP
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @
-        _LIBMU-ACTUAL-CATALOG-GENERATION !
-    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0<>
-    _LIBMU-EXPECTED-CATALOG-GENERATION @
-        _LIBMU-ACTUAL-CATALOG-GENERATION @ <> AND IF
-        LIBSTORE-S-CONFLICT _LIBMU-QUERY-RETURN EXIT
-    THEN
-    _LIBCQ-INDEX-REQUIRED? IF
-        _LIBMU-STORE @ _LIBIX-VALID-UNDER-AUTH? 0= IF
-            _LIBIX-REBUILD-UNDER-AUTH DUP IF
-                _LIBMU-CLEAR-QUERY-OUTPUT
-                _LIBMU-QUERY-RETURN EXIT
-            THEN
-            DROP
-        THEN
-    THEN
-    _LIBMU-START @
-        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK LIBBF.CATALOG-COUNT @ > IF
-        LIBSTORE-S-INVALID _LIBMU-QUERY-RETURN EXIT
-    THEN
-    0 _LIBCQ-COLLECTION-FILTER !
-    _LIBCQ-COLLECTION-REQUESTED? IF
-        _LIBMU-REQUEST @ LIBCQR.COLLECTION _LIBMU-FIND-COLLECTION-RID
-            DUP -1 = IF
-            DROP LIBSTORE-S-NOT-FOUND _LIBMU-QUERY-RETURN EXIT
-        THEN
-        _LIBMU-READ-COLLECTION DUP IF _LIBMU-QUERY-RETURN EXIT THEN DROP
-        -1 _LIBCQ-COLLECTION-FILTER !
-    THEN
-    BEGIN
-        _LIBMU-NEXT @
-            _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
-                LIBBF.CATALOG-COUNT @ <
-        _LIBMU-COUNT @ _LIBMU-CAPACITY @ < AND
-    WHILE
-        _LIBMU-NEXT @ _LIBCQ-SLOT-ELIGIBLE? IF
-            _LIBMU-NEXT @ _LIBMU-READ-ENTRY DUP IF
-                _LIBMU-CLEAR-QUERY-OUTPUT _LIBMU-QUERY-RETURN EXIT
-            THEN
-            DROP
-            _LIBCQ-ENTRY-MATCH _LIBMU-STATUS !
-            _LIBMU-STATUS @ IF
-                DROP _LIBMU-CLEAR-QUERY-OUTPUT
-                _LIBMU-STATUS @ _LIBMU-QUERY-RETURN EXIT
-            THEN
-            IF
-                _LIBMU-FOUND-ENTRY
-                    _LIBMU-ENTRIES @ _LIBMU-COUNT @
-                        LIBRARY-QUERY-SUMMARY-SIZE * +
-                    _LIBMU-BUILD-QUERY-SUMMARY
-                1 _LIBMU-COUNT +!
-            THEN
-        THEN
-        1 _LIBMU-NEXT +!
-    REPEAT
-    _LIBMU-NEXT @
-        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
-            LIBBF.CATALOG-COUNT @ = IF
-        -1 _LIBMU-NEXT !
-    THEN
-    LIBSTORE-S-OK _LIBMU-QUERY-RETURN ;
-
-' _LIBRARY-VFS-STORE-QUERY-CORPUS CONSTANT _libvfs-query-corpus-xt
-
-: LIBRARY-VFS-STORE-QUERY-CORPUS
-  ( request summaries capacity store -- count next generation status )
-    _libvfs-query-corpus-xt _library-vfs-store-guard WITH-GUARD ;
-
-\ ---------------------------------------------------------------------
-\ Generation-stable bounded collection enumeration
-\ ---------------------------------------------------------------------
-
-: _LIBMU-COLLECTION-QUERY-ARGS
-  ( expected-generation start summaries capacity store -- status )
-    _LIBMU-STORE ! _LIBMU-CAPACITY ! _LIBMU-ENTRIES !
-    _LIBMU-START ! _LIBMU-EXPECTED-CATALOG-GENERATION !
-    0 _LIBMU-COUNT !
-    _LIBMU-START @ _LIBMU-NEXT !
-    _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? 0= IF
-        LIBSTORE-S-INVALID EXIT
-    THEN
-    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0< IF
-        LIBSTORE-S-INVALID EXIT
-    THEN
-    _LIBMU-START @ 0< IF LIBSTORE-S-INVALID EXIT THEN
-    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0=
-        _LIBMU-START @ 0<> AND IF LIBSTORE-S-INVALID EXIT THEN
-    _LIBMU-CAPACITY @ DUP 1 < SWAP LIBRARY-QUERY-PAGE-MAX > OR IF
-        LIBSTORE-S-OUTPUT-CAPACITY EXIT
-    THEN
-    _LIBMU-ENTRIES @ _LIBMU-CAPACITY @ LIBRARY-COLLECTION-SUMMARY-SIZE *
-        _LIBMU-OWNER-SPAN-SAFE? 0= IF LIBSTORE-S-INVALID EXIT THEN
-    LIBSTORE-S-OK ;
-
-: _LIBMU-CLEAR-COLLECTION-QUERY-OUTPUT  ( -- )
-    _LIBMU-CAPACITY @ 0 ?DO
-        _LIBMU-ENTRIES @ I LIBRARY-COLLECTION-SUMMARY-SIZE * +
-            LIBRARY-COLLECTION-SUMMARY-INIT
-    LOOP
-    0 _LIBMU-COUNT !
-    _LIBMU-START @ _LIBMU-NEXT ! ;
-
-: _LIBMU-BUILD-COLLECTION-SUMMARY  ( collection summary -- )
+: _LIBQ-BUILD-COLLECTION-SUMMARY  ( collection summary -- )
     >R
     R@ LIBRARY-COLLECTION-SUMMARY-INIT
-    DUP LIBC.ID R@ LIBCS.REF RREF.ID RID-COPY
-    DUP LIBC.REVISION @ R@ LIBCS.REVISION !
-    DUP LIBC.MUTATION-SEQUENCE @ R@ LIBCS.MUTATION-SEQUENCE !
-    DUP LIBC.MEMBER-N @ R@ LIBCS.MEMBER-N !
-    DUP LIBC.FLAGS @ R@ LIBCS.FLAGS !
-    DUP LIBC.TITLE-U @ R@ LIBCS.TITLE-U !
-    DUP LIBC.TITLE R@ LIBCS.TITLE ROT LIBC.TITLE-U @ CMOVE
+    DUP LIBPAC.ID R@ LIBCS.REF RREF.ID RID-COPY
+    DUP LIBPAC.REVISION @ R@ LIBCS.REVISION !
+    DUP LIBPAC.MUTATION-SEQUENCE @ R@ LIBCS.MUTATION-SEQUENCE !
+    DUP LIBPAC.MEMBER-N @ R@ LIBCS.MEMBER-N !
+    DUP LIBPAC.FLAGS @ R@ LIBCS.FLAGS !
+    DUP LIBPAC.TITLE-U @ R@ LIBCS.TITLE-U !
+    DUP LIBPAC.TITLE R@ LIBCS.TITLE ROT LIBPAC.TITLE-U @ MOVE
     R> DROP ;
 
-: _LIBRARY-VFS-STORE-QUERY-COLLECTIONS
-  ( expected start summaries capacity store -- count next generation status )
-    0 _LIBMU-ACTUAL-CATALOG-GENERATION !
-    _LIBMU-COLLECTION-QUERY-ARGS DUP IF
-        _LIBMU-STORE @ LIBRARY-VFS-STORE-VALID? IF
-            _LIBMU-QUERY-RETURN
-        ELSE
-            DROP 0 0 0 LIBSTORE-S-INVALID
+: _LIBQ-BUILD-REVISION-SUMMARY  ( descriptor summary -- status )
+    >R
+    R@ LIBRARY-REVISION-SUMMARY-INIT
+    DUP LIBPA-CONTENT-DOMAIN-REVISION@
+    DUP 0> 0= IF 2DROP R> DROP LIBPA-S-CORRUPT EXIT THEN
+    R@ LIBRS.DOMAIN-REVISION !
+    DUP LIBPA-CONTENT-REVISION@
+    DUP 0> 0= IF 2DROP R> DROP LIBPA-S-CORRUPT EXIT THEN
+    R@ LIBRS.CONTENT-REVISION !
+    DUP LIBPA-CONTENT-MEDIA@
+    DUP LIB-MEDIA-TEXT-PLAIN <
+    OVER LIB-MEDIA-TEXT-CSV > OR IF
+        2DROP R> DROP LIBPA-S-CORRUPT EXIT
+    THEN
+    R@ LIBRS.MEDIA !
+    DUP LIBPA-CONTENT-SIZE@
+    DUP 0< IF 2DROP R> DROP LIBPA-S-CORRUPT EXIT THEN
+    R@ LIBRS.CONTENT-U !
+    LIBPA-CONTENT-DIGEST@ DUP 0= IF
+        DROP R> DROP LIBPA-S-CORRUPT EXIT
+    THEN
+    R@ LIBRS.DIGEST RID-COPY
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-CORPUS-TERM-MATCH  ( work -- match? status )
+    >R
+    R@ _LIBQW.REQUEST @ LIBCQR.TERM-U @ 0= IF
+        -1 LIBPA-S-OK R> DROP EXIT
+    THEN
+    R@ _LIBQW.REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-TITLE AND IF
+        R@ _LIBQW.ENTRY LIBE-TITLE$
+        R@ _LIBQW.REQUEST @ LIBCQR-TERM$
+        _LIBQ-CONTAINS? IF -1 LIBPA-S-OK R> DROP EXIT THEN
+    THEN
+    R@ _LIBQW.REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-TAGS AND IF
+        R@ _LIBQW.ENTRY R@ _LIBQW.REQUEST @ R@
+        _LIBQ-TAGS-MATCH?
+        DUP IF NIP 0 SWAP R> DROP EXIT THEN DROP
+        IF -1 LIBPA-S-OK R> DROP EXIT THEN
+    THEN
+    R@ _LIBQW.REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-BODY AND IF
+        0 R@ _LIBQW.MATCH-INDEX !
+        0 R@ _LIBQW.MATCH-HIT !
+        R@ _LIBQW.CONTENT-DESCRIPTOR 0
+        ['] _LIBQ-KMP-SINK R@
+        R@ _LIBQW.ADAPTER @ R@ _LIBQW.INDEX-WORK @
+        LIBPA-CONTENT-STREAM
+        DUP IF 0 SWAP R> DROP EXIT THEN DROP
+        R@ _LIBQW.MATCH-HIT @ 0<>
+        LIBPA-S-OK R> DROP EXIT
+    THEN
+    0 LIBPA-S-OK R> DROP ;
+
+: _LIBQ-CORPUS-EXACT  ( rid work -- match? status )
+    >R
+    DUP
+    R@ _LIBQW.ENTRY R@ _LIBQW.CONTENT-DESCRIPTOR
+    R@ _LIBQW.ADAPTER @ R@ _LIBQW.INDEX-WORK @
+    LIBPA-DOCUMENT-READ
+    DUP IF >R DROP 0 R> R> DROP EXIT THEN DROP
+    R@ _LIBQW.ENTRY R@ _LIBQW.REQUEST @
+        _LIBQ-SCOPE-MATCH? 0= IF
+        DROP 0 LIBPA-S-OK R> DROP EXIT
+    THEN
+    R@ _LIBQW.REQUEST @ _LIBQ-COLLECTION-REQUESTED? IF
+        R@ _LIBQW.REQUEST @ LIBCQR.COLLECTION
+        OVER R@ _LIBQW.ADAPTER @ R@ _LIBQW.INDEX-WORK @
+        LIBPA-INDEX-MEMBER?
+        DUP IF
+            >R DROP DROP 0 R> R> DROP EXIT
         THEN
-        EXIT
+        DROP 0= IF DROP 0 LIBPA-S-OK R> DROP EXIT THEN
     THEN
-    DROP _LIBMU-CLEAR-COLLECTION-QUERY-OUTPUT
-    _LIBMU-ASSURE-WARM DUP IF _LIBMU-QUERY-RETURN EXIT THEN DROP
-    _LIBMU-STORE @ LIBRARY-VFS-STORE.GENERATION @
-        _LIBMU-ACTUAL-CATALOG-GENERATION !
-    _LIBMU-EXPECTED-CATALOG-GENERATION @ 0<>
-    _LIBMU-EXPECTED-CATALOG-GENERATION @
-        _LIBMU-ACTUAL-CATALOG-GENERATION @ <> AND IF
-        LIBSTORE-S-CONFLICT _LIBMU-QUERY-RETURN EXIT
+    DROP R@ _LIBQ-CORPUS-TERM-MATCH R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Bounded output construction
+\ ---------------------------------------------------------------------
+
+: _LIBQ-PAGE-NEXT-ROW  ( work -- row )
+    DUP _LIBQW.PAGE @ DUP LIBQP.COUNT @
+    SWAP LIBQP.ROW-SIZE @ *
+    SWAP _LIBQW.STAGED-ROWS + ;
+
+: _LIBQ-TEMP=ROW?  ( row work -- flag )
+    >R
+    R@ _LIBQW.TEMP-VALID @ 0= IF DROP R> DROP 0 EXIT THEN
+    DUP LIBPA-RANGE-ROW-ORDER@
+    R@ _LIBQW.TEMP-ORDER @ <> IF DROP R> DROP 0 EXIT THEN
+    LIBPA-RANGE-ROW-RID@
+    R@ _LIBQW.TEMP-RID RID=
+    R> DROP ;
+
+: _LIBQ-CAPTURE-ROW-KEY  ( row work -- )
+    >R
+    DUP LIBPA-RANGE-ROW-ORDER@ R@ _LIBQW.TEMP-ORDER !
+    LIBPA-RANGE-ROW-RID@ R@ _LIBQW.TEMP-RID RID-COPY
+    -1 R@ _LIBQW.TEMP-VALID !
+    R> DROP ;
+
+: _LIBQ-NOTE-OUTPUT-KEY  ( work -- )
+    >R
+    R@ _LIBQW.PAGE @ LIBQP.COUNT @ 0=
+    R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+        IF
+            R@ _LIBQW.TEMP-ORDER @
+            R@ _LIBQW.RESULT-LAST-ORDER !
+            R@ _LIBQW.TEMP-RID
+            R@ _LIBQW.RESULT-LAST-RID RID-COPY
+        THEN
+        R@ _LIBQW.TEMP-ORDER @
+        R@ _LIBQW.RESULT-FIRST-ORDER !
+        R@ _LIBQW.TEMP-RID
+        R@ _LIBQW.RESULT-FIRST-RID RID-COPY
+        R> DROP EXIT
     THEN
-    _LIBMU-START @
-        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
-            LIBBF.COLLECTION-COUNT @ > IF
-        LIBSTORE-S-INVALID _LIBMU-QUERY-RETURN EXIT
+    IF
+        R@ _LIBQW.TEMP-ORDER @
+        R@ _LIBQW.RESULT-FIRST-ORDER !
+        R@ _LIBQW.TEMP-RID
+        R@ _LIBQW.RESULT-FIRST-RID RID-COPY
     THEN
+    R@ _LIBQW.TEMP-ORDER @
+    R@ _LIBQW.RESULT-LAST-ORDER !
+    R@ _LIBQW.TEMP-RID
+    R@ _LIBQW.RESULT-LAST-RID RID-COPY
+    R> DROP ;
+
+: _LIBQ-COUNT-OUTPUT  ( work -- )
+    1 SWAP _LIBQW.PAGE @ LIBQP.COUNT +! ;
+
+: _LIBQ-OUTPUT-CORPUS  ( work -- status )
+    >R
+    R@ _LIBQW.TEMP-RID R@ _LIBQ-CORPUS-EXACT
+    DUP IF NIP R> DROP EXIT THEN DROP
+    0= IF R> DROP LIBPA-S-OK EXIT THEN
+    R@ _LIBQW.ENTRY R@ _LIBQ-PAGE-NEXT-ROW
+    _LIBQ-BUILD-CORPUS-SUMMARY
+    R@ _LIBQ-NOTE-OUTPUT-KEY
+    R@ _LIBQ-COUNT-OUTPUT
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-OUTPUT-COLLECTION  ( work -- status )
+    >R
+    R@ _LIBQW.TEMP-RID R@ _LIBQW.COLLECTION
+    R@ _LIBQW.ADAPTER @ R@ _LIBQW.INDEX-WORK @
+    LIBPA-COLLECTION-READ
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQW.COLLECTION R@ _LIBQ-PAGE-NEXT-ROW
+    _LIBQ-BUILD-COLLECTION-SUMMARY
+    R@ _LIBQ-NOTE-OUTPUT-KEY
+    R@ _LIBQ-COUNT-OUTPUT
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-OUTPUT-HISTORY  ( work -- status )
+    >R
+    R@ _LIBQW.TEMP-RID R@ _LIBQW.TEMP-ORDER @
+    R@ _LIBQW.CONTENT-DESCRIPTOR
+    R@ _LIBQW.ADAPTER @ R@ _LIBQW.INDEX-WORK @
+    LIBPA-HISTORY-READ
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQW.CONTENT-DESCRIPTOR R@ _LIBQ-PAGE-NEXT-ROW
+    _LIBQ-BUILD-REVISION-SUMMARY
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-NOTE-OUTPUT-KEY
+    R@ _LIBQ-COUNT-OUTPUT
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-OUTPUT-CURRENT  ( work -- status )
+    DUP _LIBQW.PAGE @ LIBQP.KIND @ CASE
+        LIBRARY-QUERY-PAGE-CORPUS OF
+            _LIBQ-OUTPUT-CORPUS
+        ENDOF
+        LIBRARY-QUERY-PAGE-COLLECTIONS OF
+            _LIBQ-OUTPUT-COLLECTION
+        ENDOF
+        LIBRARY-QUERY-PAGE-HISTORY OF
+            _LIBQ-OUTPUT-HISTORY
+        ENDOF
+        DROP LIBPA-S-INVALID SWAP
+    ENDCASE ;
+
+: _LIBQ-FILL-PAGE  ( work -- status )
+    >R
     BEGIN
-        _LIBMU-NEXT @
-            _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
-                LIBBF.COLLECTION-COUNT @ <
-        _LIBMU-COUNT @ _LIBMU-CAPACITY @ < AND
+        R@ _LIBQW.PAGE @ DUP LIBQP.COUNT @
+        SWAP LIBQP.CAPACITY @ <
     WHILE
-        _LIBMU-NEXT @ _LIBMU-READ-COLLECTION DUP IF
-            _LIBMU-CLEAR-COLLECTION-QUERY-OUTPUT
-                _LIBMU-QUERY-RETURN EXIT
+        R@ _LIBQ-SELECT-SOURCE
+        DUP IF NIP R> DROP EXIT THEN DROP
+        DUP 0= IF DROP R> DROP LIBPA-S-OK EXIT THEN
+        DUP _LIBQSR-CURRENT-ROW
+        DUP R@ _LIBQ-TEMP=ROW? IF
+            DROP R@ _LIBQSR-ADVANCE
+        ELSE
+            DUP R@ _LIBQ-CAPTURE-ROW-KEY
+            DROP R@ _LIBQSR-ADVANCE
+            R@ _LIBQ-OUTPUT-CURRENT
+            DUP IF R> DROP EXIT THEN DROP
         THEN
-        DROP
-        _LIBMU-FOUND-COLLECTION
-            _LIBMU-ENTRIES @ _LIBMU-COUNT @
-                LIBRARY-COLLECTION-SUMMARY-SIZE * +
-            _LIBMU-BUILD-COLLECTION-SUMMARY
-        1 _LIBMU-COUNT +!
-        1 _LIBMU-NEXT +!
     REPEAT
-    _LIBMU-NEXT @
-        _LIBMU-STORE @ LIBRARY-VFS-STORE.BANK
-            LIBBF.COLLECTION-COUNT @ = IF
-        -1 _LIBMU-NEXT !
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-CURRENT-QUALIFIES?  ( work -- match? status )
+    DUP _LIBQW.PAGE @ LIBQP.KIND @
+    DUP LIBRARY-QUERY-PAGE-CORPUS = IF
+        DROP DUP _LIBQW.TEMP-RID SWAP _LIBQ-CORPUS-EXACT EXIT
     THEN
-    LIBSTORE-S-OK _LIBMU-QUERY-RETURN ;
+    DUP LIBRARY-QUERY-PAGE-COLLECTIONS =
+    SWAP LIBRARY-QUERY-PAGE-HISTORY = OR IF
+        DROP -1 LIBPA-S-OK EXIT
+    THEN
+    DROP 0 LIBPA-S-INVALID ;
 
-' _LIBRARY-VFS-STORE-QUERY-COLLECTIONS
-    CONSTANT _libvfs-query-collections-xt
+: _LIBQ-HAS-MORE?  ( work -- more? status )
+    >R
+    BEGIN
+        R@ _LIBQ-SELECT-SOURCE
+        DUP IF NIP 0 SWAP R> DROP EXIT THEN DROP
+        DUP 0= IF DROP 0 LIBPA-S-OK R> DROP EXIT THEN
+        DUP _LIBQSR-CURRENT-ROW
+        DUP R@ _LIBQ-TEMP=ROW? IF
+            DROP R@ _LIBQSR-ADVANCE
+        ELSE
+            DUP R@ _LIBQ-CAPTURE-ROW-KEY
+            DROP R@ _LIBQSR-ADVANCE
+            R@ _LIBQ-CURRENT-QUALIFIES?
+            DUP IF NIP 0 SWAP R> DROP EXIT THEN DROP
+            IF -1 LIBPA-S-OK R> DROP EXIT THEN
+        THEN
+    AGAIN ;
 
-: LIBRARY-VFS-STORE-QUERY-COLLECTIONS
-  ( expected start summaries capacity store -- count next generation status )
-    _libvfs-query-collections-xt _library-vfs-store-guard WITH-GUARD ;
+: _LIBQ-REVERSE-PAGE  ( work -- )
+    >R
+    0
+    BEGIN
+        DUP R@ _LIBQW.PAGE @ LIBQP.COUNT @ 2 / <
+    WHILE
+        R@ _LIBQW.STAGED-ROWS
+        OVER R@ _LIBQW.PAGE @ LIBQP.ROW-SIZE @ * +
+        R@ _LIBQW.ENTRY
+        R@ _LIBQW.PAGE @ LIBQP.ROW-SIZE @ MOVE
+        R@ _LIBQW.STAGED-ROWS
+        R@ _LIBQW.PAGE @ LIBQP.COUNT @ 1- 2 PICK -
+        R@ _LIBQW.PAGE @ LIBQP.ROW-SIZE @ *
+        +
+        R@ _LIBQW.STAGED-ROWS
+        2 PICK R@ _LIBQW.PAGE @ LIBQP.ROW-SIZE @ * +
+        R@ _LIBQW.PAGE @ LIBQP.ROW-SIZE @ MOVE
+        R@ _LIBQW.ENTRY
+        R@ _LIBQW.STAGED-ROWS
+        R@ _LIBQW.PAGE @ LIBQP.COUNT @ 1- 3 PICK -
+        R@ _LIBQW.PAGE @ LIBQP.ROW-SIZE @ *
+        +
+        R@ _LIBQW.PAGE @ LIBQP.ROW-SIZE @ MOVE
+        1+
+    REPEAT
+    DROP R> DROP ;
+
+: _LIBQ-PUBLISH-PAGE  ( work -- status )
+    >R
+    R@ _LIBQW.INDEX-WORK @ LIBPA-INDEX-LOGICAL-GENERATION@
+    DUP 0< IF DROP R> DROP LIBPA-S-CORRUPT EXIT THEN
+    R@ _LIBQW.TEMP-ORDER !
+    R@ _LIBQW.MODE @ _LIBQ-MODE-FIRST <>
+    R@ _LIBQW.PAGE @ LIBQP.COUNT @ 0= AND IF
+        R> DROP LIBPA-S-ABSENT EXIT
+    THEN
+    R@ _LIBQW.PAGE @ DUP LIBQP.ROWS @
+    SWAP DUP LIBQP.CAPACITY @ SWAP LIBQP.ROW-SIZE @ * 0 FILL
+    R@ _LIBQW.STAGED-ROWS
+    R@ _LIBQW.PAGE @ LIBQP.ROWS @
+    R@ _LIBQW.PAGE @ DUP LIBQP.COUNT @
+        SWAP LIBQP.ROW-SIZE @ * MOVE
+    R@ _LIBQW.PAGE @ LIBQP.CONTINUATION
+        LIBRARY-QUERY-CONTINUATION-INIT
+    R@ _LIBQW.FINGERPRINT
+    R@ _LIBQW.PAGE @ LIBQP.CONTINUATION LIBQC.FINGERPRINT
+    LIB-DIGEST-SIZE MOVE
+    R@ _LIBQW.TEMP-ORDER @
+    R@ _LIBQW.PAGE @ LIBQP.CONTINUATION
+        LIBQC.OBSERVED-LOGICAL-GENERATION !
+    LIBRARY-QUERY-CONTINUATION-F-READY
+    R@ _LIBQW.PAGE @ LIBQP.COUNT @ IF
+        R@ _LIBQW.RESULT-FIRST-ORDER @
+        R@ _LIBQW.PAGE @ LIBQP.CONTINUATION
+            LIBQC.FIRST-ORDER-SEQUENCE !
+        R@ _LIBQW.RESULT-FIRST-RID
+        R@ _LIBQW.PAGE @ LIBQP.CONTINUATION
+            LIBQC.FIRST-RID RID-COPY
+        R@ _LIBQW.RESULT-LAST-ORDER @
+        R@ _LIBQW.PAGE @ LIBQP.CONTINUATION
+            LIBQC.LAST-ORDER-SEQUENCE !
+        R@ _LIBQW.RESULT-LAST-RID
+        R@ _LIBQW.PAGE @ LIBQP.CONTINUATION
+            LIBQC.LAST-RID RID-COPY
+        LIBRARY-QUERY-CONTINUATION-F-ROWS OR
+        R@ _LIBQW.MODE @ _LIBQ-MODE-FIRST <> IF
+            R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+                LIBRARY-QUERY-CONTINUATION-F-AFTER OR
+            ELSE
+                LIBRARY-QUERY-CONTINUATION-F-BEFORE OR
+            THEN
+        THEN
+        R@ _LIBQW.MATCH-HIT @ IF
+            R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+                LIBRARY-QUERY-CONTINUATION-F-BEFORE OR
+            ELSE
+                LIBRARY-QUERY-CONTINUATION-F-AFTER OR
+            THEN
+        THEN
+    THEN
+    R@ _LIBQW.PAGE @ LIBQP.CONTINUATION LIBQC.FLAGS !
+    R> DROP LIBPA-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Checked execution lifetime and public paging calls
+\ ---------------------------------------------------------------------
+
+: _LIBQ-REQUEST-SIZE  ( page-kind -- bytes|0 )
+    CASE
+        LIBRARY-QUERY-PAGE-CORPUS OF
+            LIBRARY-CORPUS-QUERY-REQUEST-SIZE ENDOF
+        LIBRARY-QUERY-PAGE-COLLECTIONS OF
+            LIBRARY-COLLECTION-QUERY-REQUEST-SIZE ENDOF
+        LIBRARY-QUERY-PAGE-HISTORY OF
+            LIBRARY-HISTORY-QUERY-REQUEST-SIZE ENDOF
+        0 SWAP
+    ENDCASE ;
+
+: _LIBQ-SPANS-DISJOINT?  ( a u b v -- flag )
+    MSPAN-OVERLAP? 0= ;
+
+: _LIBQ-SPAN-OUTSIDE-WORK?  ( a u work -- flag )
+    >R
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R@ LIBRARY-QUERY-WORK-SIZE _LIBQ-SPANS-DISJOINT?
+    R> DROP ;
+
+: _LIBQ-REQUEST-PAGE-DISJOINT?  ( request page -- flag )
+    >R
+    R@ LIBQP.KIND @ _LIBQ-REQUEST-SIZE
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ LIBRARY-QUERY-PAGE-SIZE
+        _LIBQ-SPANS-DISJOINT? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ LIBQP.ROWS @
+    R@ LIBQP.CAPACITY @ R@ LIBQP.ROW-SIZE @ *
+        _LIBQ-SPANS-DISJOINT?
+    R> DROP ;
+
+: _LIBQ-PAGE-OUTSIDE?  ( page external-a external-u -- flag )
+    2 PICK LIBRARY-QUERY-PAGE-SIZE
+    3 PICK 3 PICK _LIBQ-SPANS-DISJOINT? 0= IF
+        2DROP DROP 0 EXIT
+    THEN
+    2 PICK LIBQP.ROWS @
+    3 PICK DUP LIBQP.CAPACITY @ SWAP LIBQP.ROW-SIZE @ *
+    3 PICK 3 PICK _LIBQ-SPANS-DISJOINT?
+    >R 2DROP DROP R> ;
+
+: _LIBQ-REQUEST-OUTSIDE?  ( request page external-a external-u -- flag )
+    2SWAP
+    LIBQP.KIND @ _LIBQ-REQUEST-SIZE
+    2SWAP _LIBQ-SPANS-DISJOINT? ;
+
+: _LIBQ-BEGIN-GEOMETRY?  ( work -- flag )
+    >R
+    R@ _LIBQW.REQUEST @ R@ _LIBQW.PAGE @
+        _LIBQ-REQUEST-PAGE-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.REQUEST @
+    R@ _LIBQW.PAGE @ LIBQP.KIND @ _LIBQ-REQUEST-SIZE R@
+        _LIBQ-SPAN-OUTSIDE-WORK? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.PAGE @ LIBRARY-QUERY-PAGE-SIZE R@
+        _LIBQ-SPAN-OUTSIDE-WORK? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.PAGE @ LIBQP.ROWS @
+    R@ _LIBQW.PAGE @ LIBQP.CAPACITY @
+    R@ _LIBQW.PAGE @ LIBQP.ROW-SIZE @ * R@
+        _LIBQ-SPAN-OUTSIDE-WORK? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.ADAPTER @ LIBPA-SIZE R@
+        _LIBQ-SPAN-OUTSIDE-WORK? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.INDEX-WORK @ LIBPA-INDEX-WORK-SIZE R@
+        _LIBQ-SPAN-OUTSIDE-WORK? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.REQUEST @ R@ _LIBQW.PAGE @
+    R@ _LIBQW.ADAPTER @ LIBPA-SIZE
+        _LIBQ-REQUEST-OUTSIDE? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.REQUEST @ R@ _LIBQW.PAGE @
+    R@ _LIBQW.INDEX-WORK @ LIBPA-INDEX-WORK-SIZE
+        _LIBQ-REQUEST-OUTSIDE? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.PAGE @ R@ _LIBQW.ADAPTER @ LIBPA-SIZE
+        _LIBQ-PAGE-OUTSIDE? 0= IF R> DROP 0 EXIT THEN
+    R@ _LIBQW.PAGE @ R@ _LIBQW.INDEX-WORK @
+    LIBPA-INDEX-WORK-SIZE _LIBQ-PAGE-OUTSIDE? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R> DROP -1 ;
+
+: _LIBQ-BEGIN-POINTERS-CLEAR  ( work -- )
+    0 OVER _LIBQW.REQUEST !
+    0 OVER _LIBQW.PAGE !
+    0 OVER _LIBQW.ADAPTER !
+    0 SWAP _LIBQW.INDEX-WORK ! ;
+
+: _LIBQ-BEGIN  ( request page adapter index-work work -- status )
+    >R
+    R@ LIBRARY-QUERY-WORK-VALID? 0= IF
+        _LIBQ-DROP4 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ _LIBQW.BUSY @ IF
+        _LIBQ-DROP4 R> DROP LIBPA-S-BUSY EXIT
+    THEN
+    DUP LIBPA-INDEX-WORK-VALID? 0= IF
+        _LIBQ-DROP4 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    OVER LIBPA-VALID? 0= IF
+        _LIBQ-DROP4 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    2 PICK LIBRARY-QUERY-PAGE-VALID? 0= IF
+        _LIBQ-DROP4 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    3 PICK R@ _LIBQW.REQUEST !
+    2 PICK R@ _LIBQW.PAGE !
+    OVER R@ _LIBQW.ADAPTER !
+    DUP R@ _LIBQW.INDEX-WORK !
+    _LIBQ-DROP4
+    R@ _LIBQ-BEGIN-GEOMETRY? 0= IF
+        R@ _LIBQ-BEGIN-POINTERS-CLEAR
+        R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ _LIBQW.PAGE @ LIBQP.COUNT @ R@ _LIBQW.STATUS !
+    -1 R@ _LIBQW.BUSY !
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-CLEAR-PAGE  ( work -- )
+    _LIBQW.PAGE @ >R
+    R@ LIBQP.ROWS @
+    R@ LIBQP.CAPACITY @ R@ LIBQP.ROW-SIZE @ * 0 FILL
+    0 R@ LIBQP.COUNT !
+    R> LIBQP.CONTINUATION LIBRARY-QUERY-CONTINUATION-INIT ;
+
+: _LIBQ-LEAVE  ( status work -- status )
+    >R
+    DUP R@ _LIBQW.STATUS !
+    0 R@ _LIBQW.BUSY !
+    0 R@ _LIBQW.REQUEST !
+    0 R@ _LIBQW.PAGE !
+    0 R@ _LIBQW.ADAPTER !
+    0 R@ _LIBQW.INDEX-WORK !
+    R> DROP ;
+
+: _LIBQ-WORK-CATCH  ( work body-xt -- status )
+    >R DUP R> CATCH
+    DUP IF
+        2DROP LIBPA-S-FAULT
+    ELSE
+        DROP NIP
+    THEN ;
+
+: _LIBQ-SNAPSHOT-CONTINUATION  ( work -- status )
+    >R
+    R@ _LIBQW.PAGE @ LIBQP.CONTINUATION
+    R@ _LIBQW.PRIOR-CONTINUATION
+    LIBRARY-QUERY-CONTINUATION-COPY
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQW.MODE @ _LIBQ-MODE-FIRST = IF
+        R> DROP LIBPA-S-OK EXIT
+    THEN
+    R@ _LIBQW.PRIOR-CONTINUATION
+    DUP LIBRARY-QUERY-CONTINUATION-READY? 0= IF
+        DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    DUP LIBRARY-QUERY-CONTINUATION-HAS-ROWS? 0= IF
+        DROP R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    R@ _LIBQW.MODE @ _LIBQ-MODE-AFTER = IF
+        DUP LIBRARY-QUERY-CONTINUATION-HAS-AFTER? 0= IF
+            DROP R> DROP LIBPA-S-INVALID EXIT
+        THEN
+    ELSE
+        DUP LIBRARY-QUERY-CONTINUATION-HAS-BEFORE? 0= IF
+            DROP R> DROP LIBPA-S-INVALID EXIT
+        THEN
+    THEN
+    DROP
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-PREPARED?  ( work -- status )
+    >R
+    R@ _LIBQ-SNAPSHOT-CONTINUATION
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQW.MODE @ _LIBQ-MODE-FIRST <> IF
+        R@ _LIBQW.PRIOR-CONTINUATION LIBQC.FINGERPRINT
+        R@ _LIBQW.FINGERPRINT SHA3-256-COMPARE 0= IF
+            R> DROP LIBPA-S-INVALID EXIT
+        THEN
+    THEN
+    0 R@ _LIBQW.PAGE @ LIBQP.COUNT !
+    0 R@ _LIBQW.SOURCE-N !
+    0 R@ _LIBQW.TEMP-VALID !
+    0 R@ _LIBQW.SELECTED !
+    0 R@ _LIBQW.MATCH-HIT !
+    R@ _LIBQW.RESULT-FIRST-ORDER 80 0 FILL
+    R> DROP LIBPA-S-OK ;
+
+: _LIBQ-CORPUS-RUN  ( work -- status )
+    >R
+    R@ _LIBQW.REQUEST @ R@ _LIBQW.FINGERPRINT
+    LIBRARY-CORPUS-QUERY-FINGERPRINT
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-PREPARED?
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQW.REQUEST @ LIBCQR.TERM-U @
+    R@ _LIBQW.REQUEST @ LIBCQR.FIELD-MASK @
+        LIBRARY-CORPUS-FIELD-BODY AND 0<> AND IF
+        R@ _LIBQ-KMP-BUILD
+    THEN
+    R@ _LIBQ-CORPUS-SOURCES
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-FILL-PAGE
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-HAS-MORE?
+    DUP IF NIP R> DROP EXIT THEN DROP
+    R@ _LIBQW.MATCH-HIT !
+    R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+        R@ _LIBQ-REVERSE-PAGE
+    THEN
+    R@ _LIBQ-PUBLISH-PAGE R> DROP ;
+
+: _LIBQ-COLLECTION-RUN  ( work -- status )
+    >R
+    R@ _LIBQW.REQUEST @ R@ _LIBQW.FINGERPRINT
+    LIBRARY-COLLECTION-QUERY-FINGERPRINT
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-PREPARED?
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-COLLECTION-SOURCES
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-FILL-PAGE
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-HAS-MORE?
+    DUP IF NIP R> DROP EXIT THEN DROP
+    R@ _LIBQW.MATCH-HIT !
+    R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+        R@ _LIBQ-REVERSE-PAGE
+    THEN
+    R@ _LIBQ-PUBLISH-PAGE R> DROP ;
+
+: _LIBQ-HISTORY-RUN  ( work -- status )
+    >R
+    R@ _LIBQW.REQUEST @ R@ _LIBQW.FINGERPRINT
+    LIBRARY-HISTORY-QUERY-FINGERPRINT
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-PREPARED?
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-HISTORY-SOURCES
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-FILL-PAGE
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _LIBQ-HAS-MORE?
+    DUP IF NIP R> DROP EXIT THEN DROP
+    R@ _LIBQW.MATCH-HIT !
+    R@ _LIBQW.MODE @ _LIBQ-MODE-BEFORE = IF
+        R@ _LIBQ-REVERSE-PAGE
+    THEN
+    R@ _LIBQ-PUBLISH-PAGE R> DROP ;
+
+: _LIBQ-RESTORE-PAGE  ( work -- )
+    DUP _LIBQW.STATUS @
+    SWAP _LIBQW.PAGE @ LIBQP.COUNT ! ;
+
+: _LIBQ-RUN-OPEN  ( work mode body-xt -- status )
+    >R
+    OVER _LIBQW.MODE !
+    DUP R> _LIBQ-WORK-CATCH
+    DUP IF
+        OVER _LIBQ-RESTORE-PAGE
+    THEN
+    SWAP _LIBQ-LEAVE ;
+
+: _LIBQ-CORPUS-PUBLIC  ( request page adapter index-work work mode -- status )
+    >R
+    4 PICK LIBRARY-CORPUS-QUERY-REQUEST-VALID? 0= IF
+        _LIBQ-DROP5 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    3 PICK LIBRARY-CORPUS-PAGE-VALID? 0= IF
+        _LIBQ-DROP5 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    DUP >R _LIBQ-BEGIN
+    DUP IF R> DROP R> DROP EXIT THEN DROP
+    R> R> ['] _LIBQ-CORPUS-RUN _LIBQ-RUN-OPEN ;
+
+: _LIBQ-COLLECTION-PUBLIC
+  ( request page adapter index-work work mode -- status )
+    >R
+    4 PICK LIBRARY-COLLECTION-QUERY-REQUEST-VALID? 0= IF
+        _LIBQ-DROP5 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    3 PICK LIBRARY-COLLECTION-PAGE-VALID? 0= IF
+        _LIBQ-DROP5 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    DUP >R _LIBQ-BEGIN
+    DUP IF R> DROP R> DROP EXIT THEN DROP
+    R> R> ['] _LIBQ-COLLECTION-RUN _LIBQ-RUN-OPEN ;
+
+: _LIBQ-HISTORY-PUBLIC  ( request page adapter index-work work mode -- status )
+    >R
+    4 PICK LIBRARY-HISTORY-QUERY-REQUEST-VALID? 0= IF
+        _LIBQ-DROP5 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    3 PICK LIBRARY-HISTORY-PAGE-VALID? 0= IF
+        _LIBQ-DROP5 R> DROP LIBPA-S-INVALID EXIT
+    THEN
+    DUP >R _LIBQ-BEGIN
+    DUP IF R> DROP R> DROP EXIT THEN DROP
+    R> R> ['] _LIBQ-HISTORY-RUN _LIBQ-RUN-OPEN ;
+
+: LIBRARY-CORPUS-QUERY-FIRST
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-FIRST _LIBQ-CORPUS-PUBLIC ;
+
+: LIBRARY-CORPUS-QUERY-AFTER
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-AFTER _LIBQ-CORPUS-PUBLIC ;
+
+: LIBRARY-CORPUS-QUERY-BEFORE
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-BEFORE _LIBQ-CORPUS-PUBLIC ;
+
+: LIBRARY-COLLECTION-QUERY-FIRST
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-FIRST _LIBQ-COLLECTION-PUBLIC ;
+
+: LIBRARY-COLLECTION-QUERY-AFTER
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-AFTER _LIBQ-COLLECTION-PUBLIC ;
+
+: LIBRARY-COLLECTION-QUERY-BEFORE
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-BEFORE _LIBQ-COLLECTION-PUBLIC ;
+
+: LIBRARY-HISTORY-QUERY-FIRST
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-FIRST _LIBQ-HISTORY-PUBLIC ;
+
+: LIBRARY-HISTORY-QUERY-AFTER
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-AFTER _LIBQ-HISTORY-PUBLIC ;
+
+: LIBRARY-HISTORY-QUERY-BEFORE
+  ( request page adapter index-work work -- status )
+    _LIBQ-MODE-BEFORE _LIBQ-HISTORY-PUBLIC ;

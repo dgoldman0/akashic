@@ -16,6 +16,8 @@ VARIABLE _PSTC-old-generation
 VARIABLE _PSTC-old-pages
 VARIABLE _PSTC-seam-fault
 VARIABLE _PSTC-old-release-xt
+VARIABLE _PSTC-direct-generation
+VARIABLE _PSTC-direct-slot
 
 CREATE _PSTC-ops VFS-OPS-SIZE ALLOT
 CREATE _PSTC-binding VFS-BINDING-DESC-SIZE ALLOT
@@ -37,6 +39,54 @@ CREATE _PSTC-ref PERSIST-REF-SIZE ALLOT
 CREATE _PSTC-ref-2 PERSIST-REF-SIZE ALLOT
 CREATE _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE ALLOT
 CREATE _PSTC-identity PERSIST-IDENTITY-SIZE ALLOT
+CREATE _PSTC-direct-root PROOT-FILE-SIZE ALLOT
+CREATE _PSTC-direct-work PROOT-WORK-SIZE ALLOT
+CREATE _PSTC-direct-value PERSIST-ROOT-VALUE-SIZE ALLOT
+CREATE _PSTC-direct-loaded PERSIST-ROOT-VALUE-SIZE ALLOT
+CREATE _PSTC-bank1-page-file PERSIST-PAGE-FILE-SIZE ALLOT
+CREATE _PSTC-bank1-segment-file PSEG-FILE-SIZE ALLOT
+CREATE _PSTC-bank1-page-work PERSIST-PAGE-WORK-SIZE ALLOT
+CREATE _PSTC-bank1-segment-work PSEG-WORK-SIZE ALLOT
+CREATE _PSTC-bank1-segment-buffer 512 ALLOT
+CREATE _PSTC-bank1-ref PERSIST-REF-SIZE ALLOT
+CREATE _PSTC-geometry-store PSTORE-SIZE ALLOT
+CREATE _PSTC-geometry-work PSTORE-WORK-SIZE ALLOT
+CREATE _PSTC-geometry-buffer 128 ALLOT
+GUARD _PSTC-geometry-guard
+CREATE _PSTC-single-store PSTORE-SIZE ALLOT
+CREATE _PSTC-single-work PSTORE-WORK-SIZE ALLOT
+CREATE _PSTC-single-buffer 256 ALLOT
+CREATE _PSTC-single-identity PERSIST-IDENTITY-SIZE ALLOT
+GUARD _PSTC-single-guard
+CREATE _PSTC-tail-region
+    PSTORE-SIZE PERSIST-PAGE-CACHE-FRAME-SIZE 2 * + ALLOT
+_PSTC-tail-region CONSTANT _PSTC-tail-store
+_PSTC-tail-region _PST-BANK1-PAGE-FILE + CONSTANT _PSTC-tail-cache-memory
+CREATE _PSTC-tail-cache PERSIST-PAGE-CACHE-SIZE ALLOT
+CREATE _PSTC-tail-page PERSIST-PAGE-FILE-SIZE ALLOT
+CREATE _PSTC-tail-segment PSEG-FILE-SIZE ALLOT
+CREATE _PSTC-tail-identity PERSIST-IDENTITY-SIZE ALLOT
+GUARD _PSTC-tail-guard
+
+CREATE _PSTC-alias-cache0 PERSIST-PAGE-CACHE-SIZE ALLOT
+CREATE _PSTC-alias-cache1 PERSIST-PAGE-CACHE-SIZE ALLOT
+CREATE _PSTC-alias-cache-memory
+    PERSIST-PAGE-CACHE-FRAME-SIZE 3 * ALLOT
+CREATE _PSTC-alias-page0 PERSIST-PAGE-FILE-SIZE ALLOT
+CREATE _PSTC-alias-page1 PERSIST-PAGE-FILE-SIZE ALLOT
+CREATE _PSTC-alias-segment0 PSEG-FILE-SIZE ALLOT
+CREATE _PSTC-alias-segment1 PSEG-FILE-SIZE ALLOT
+CREATE _PSTC-alias-root PROOT-FILE-SIZE ALLOT
+
+CREATE _PSTC-span-cache1 PERSIST-PAGE-CACHE-SIZE ALLOT
+CREATE _PSTC-span-cache-memory
+    PERSIST-PAGE-CACHE-FRAME-SIZE 2 * ALLOT
+CREATE _PSTC-span-page0 PERSIST-PAGE-FILE-SIZE ALLOT
+CREATE _PSTC-span-page1 PERSIST-PAGE-FILE-SIZE ALLOT
+CREATE _PSTC-span-segment0 PSEG-FILE-SIZE ALLOT
+CREATE _PSTC-span-segment1 PSEG-FILE-SIZE ALLOT
+CREATE _PSTC-span-root PROOT-FILE-SIZE ALLOT
+CREATE _PSTC-span-root-before PROOT-FILE-SIZE ALLOT
 CREATE _PSTC-store-i0 PSTORE-SIZE ALLOT
 CREATE _PSTC-store-i1 PSTORE-SIZE ALLOT
 CREATE _PSTC-store-i2 PSTORE-SIZE ALLOT
@@ -71,7 +121,9 @@ GUARD _PSTC-guard-i3
     _PSTC-depth @ = _PSTC-assert ;
 
 : _PSTC-status  ( actual expected -- )
-    2DUP <> IF ." PERSISTENCE STORE STATUS actual/expected " 2DUP . . CR THEN
+    2DUP <> IF
+        ." PERSISTENCE STORE STATUS actual/expected " 2DUP SWAP . . CR
+    THEN
     = _PSTC-assert _PSTC-stack ;
 
 : _PSTC-fault  ( point ordinal context -- status )
@@ -88,6 +140,23 @@ GUARD _PSTC-guard-i3
     S" /pstore-root-a" S" /pstore-root-b"
     _PSTC-identity 256 _PSTC-vfs @ _PSTC-stats-b _PSTC-cache-b _PSTC-guard-b
     ['] _PSTC-fault 0 _PSTC-store-b PSTORE-INIT ;
+
+: _PSTC-direct-root-init  ( -- )
+    S" /pstore-bank-root-a" S" /pstore-bank-root-b"
+    _PSTC-store-a PSTORE-PAGE-FILE@
+    _PSTC-store-a PSTORE-SEGMENT-FILE@
+    _PSTC-stats-a ['] _PSTC-fault 0 _PSTC-direct-root PROOT-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-page-file _PSTC-bank1-segment-file _PSTC-direct-root
+        PROOT-BANK1-CONFIGURE PERSIST-S-OK _PSTC-status
+    _PSTC-direct-work PROOT-WORK-INIT PERSIST-S-OK _PSTC-status ;
+
+: _PSTC-direct-root-load  ( expected-status -- )
+    >R
+    _PSTC-direct-root-init
+    _PSTC-direct-loaded _PSTC-direct-root _PSTC-direct-work PROOT-LOAD
+    SWAP _PSTC-direct-generation !
+    R> _PSTC-status ;
 
 : _PSTC-store-i0-init  ( -- status )
     S" /i0-pages" S" /i0-segment" S" /i0-root-a" S" /i0-root-b"
@@ -134,6 +203,13 @@ GUARD _PSTC-guard-i3
         PPAGE-CACHE-INIT PERSIST-S-OK _PSTC-status
     _PSTC-cache-mem-b PERSIST-PAGE-CACHE-FRAME-SIZE 2 * 2 _PSTC-cache-b
         PPAGE-CACHE-INIT PERSIST-S-OK _PSTC-status
+    S" /pstore-bank1-pages" _PSTC-vfs @ _PSTC-stats-a 0
+        _PSTC-bank1-page-file PPAGE-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /pstore-bank1-segment" 256 _PSTC-vfs @ _PSTC-stats-a
+        _PSTC-bank1-segment-file PSEG-FILE-INIT PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-page-work PPAGE-WORK-INIT PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-segment-buffer 512 _PSTC-bank1-segment-work
+        PSEG-WORK-INIT PERSIST-S-OK _PSTC-status
     _PSTC-identity PERSIST-IDENTITY-SIZE 61 FILL
     _PSTC-record 256 0 FILL
     S" exact neutral record" _PSTC-record SWAP MOVE
@@ -144,17 +220,169 @@ GUARD _PSTC-guard-i3
     _PSTC-identity-i1 PERSIST-IDENTITY-SIZE 2 FILL
     _PSTC-identity-i2 PERSIST-IDENTITY-SIZE 3 FILL
     _PSTC-identity-i3 PERSIST-IDENTITY-SIZE 4 FILL
+    _PSTC-single-identity PERSIST-IDENTITY-SIZE 5 FILL
+    _PSTC-tail-identity PERSIST-IDENTITY-SIZE 6 FILL
     _PSTC-ref PERSIST-REF-INIT
-    _PSTC-ref-2 PERSIST-REF-INIT ;
+    _PSTC-ref-2 PERSIST-REF-INIT
+    _PSTC-bank1-ref PERSIST-REF-INIT ;
+
+: _PSTC-single-bank-staging-reset  ( -- )
+    S" /single-pages" S" /single-segment"
+    S" /single-root-a" S" /single-root-b"
+    _PSTC-single-identity 128 _PSTC-vfs @ 0 0 _PSTC-single-guard
+    ['] _PSTC-fault 0 _PSTC-single-store PSTORE-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-single-buffer 256 _PSTC-single-work PSTORE-WORK-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-single-store _PSTC-single-work PSTORE-PROVISION
+        PERSIST-S-OK _PSTC-status
+    _PSTC-single-store _PSTC-single-work PSTORE-OPEN
+        PERSIST-S-ABSENT _PSTC-status
+    _PSTC-single-store _PSTC-single-work PSTORE-BEGIN
+        PERSIST-S-OK _PSTC-status
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE
+        _PSTC-single-store _PSTC-single-work PSTORE-APPEND-PAGE
+        SWAP 0= SWAP PERSIST-S-OK = AND _PSTC-assert _PSTC-stack
+    0 _PSTC-single-store _PSTC-single-work PSTORE-APPLICATION-ROOT!
+        PERSIST-S-OK _PSTC-status
+    _PSTC-single-store _PSTC-single-work PSTORE-COMMIT
+        PERSIST-S-OK _PSTC-status
+    PERSIST-DATA-BANK-1 _PSTC-single-store _PST.ROOT-FILE
+        PROOT-BANK-CONFIGURED? 0= _PSTC-assert
+
+    \ A missing optional bank must not fail after private roots are removed.
+    _PSTC-single-store _PSTC-single-work PSTORE-STAGING-RESET
+        PERSIST-S-OK _PSTC-status
+    _PSTC-single-store PSTORE-VALID? _PSTC-assert
+    _PSTC-single-store PSTORE-GENERATION@ 0= _PSTC-assert
+    _PSTC-single-store _PSTC-single-work PSTORE-OPEN
+        PERSIST-S-ABSENT _PSTC-status
+    _PSTC-stack ;
+
+: _PSTC-enclosing-tail-alias  ( -- )
+    \ This valid cache backing starts exactly after inline PROOT.  PROOT's
+    \ half-open boundary cannot see the overlap with PSTORE's three tail cells.
+    _PSTC-tail-cache-memory PERSIST-PAGE-CACHE-FRAME-SIZE 2 * 2
+        _PSTC-tail-cache PPAGE-CACHE-INIT PERSIST-S-OK _PSTC-status
+    S" /tail-bank1-pages" _PSTC-vfs @ 0 _PSTC-tail-cache
+        _PSTC-tail-page PPAGE-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /tail-bank1-segment" 128 _PSTC-vfs @ 0 _PSTC-tail-segment
+        PSEG-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /tail-pages" S" /tail-segment"
+    S" /tail-root-a" S" /tail-root-b"
+    _PSTC-tail-identity 128 _PSTC-vfs @ 0 0 _PSTC-tail-guard
+    ['] _PSTC-fault 0 _PSTC-tail-store PSTORE-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-tail-page PPAGE-FILE-VALID? _PSTC-assert
+    _PSTC-tail-store PSTORE-VALID? _PSTC-assert
+
+    _PSTC-tail-page _PSTC-tail-segment _PSTC-tail-store
+        PSTORE-BANK1-CONFIGURE PERSIST-S-INVALID _PSTC-status
+    _PSTC-tail-store PSTORE-VALID? _PSTC-assert
+    _PSTC-tail-store _PST.BANK1-PAGE @ 0= _PSTC-assert
+    _PSTC-tail-store _PST.BANK1-SEGMENT @ 0= _PSTC-assert
+    PERSIST-DATA-BANK-1 _PSTC-tail-store _PST.ROOT-FILE
+        PROOT-BANK-CONFIGURED? 0= _PSTC-assert
+    _PSTC-tail-page PPAGE-FILE-VALID? _PSTC-assert
+    _PSTC-stack ;
+
+: _PSTC-cache-alias-contracts  ( -- )
+    \ Independently valid page caches may not share any backing frames across
+    \ the two configured banks.
+    _PSTC-alias-cache-memory PERSIST-PAGE-CACHE-FRAME-SIZE 2 * 2
+        _PSTC-alias-cache0 PPAGE-CACHE-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-alias-cache-memory PERSIST-PAGE-CACHE-FRAME-SIZE +
+        PERSIST-PAGE-CACHE-FRAME-SIZE 2 * 2
+        _PSTC-alias-cache1 PPAGE-CACHE-INIT
+        PERSIST-S-OK _PSTC-status
+    S" /alias-b0-page" _PSTC-vfs @ 0 _PSTC-alias-cache0
+        _PSTC-alias-page0 PPAGE-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /alias-b1-page" _PSTC-vfs @ 0 _PSTC-alias-cache1
+        _PSTC-alias-page1 PPAGE-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /alias-b0-segment" 64 _PSTC-vfs @ 0 _PSTC-alias-segment0
+        PSEG-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /alias-b1-segment" 64 _PSTC-vfs @ 0 _PSTC-alias-segment1
+        PSEG-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /alias-root-a" S" /alias-root-b"
+        _PSTC-alias-page0 _PSTC-alias-segment0
+        0 0 0 _PSTC-alias-root PROOT-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-alias-page1 _PSTC-alias-segment1 _PSTC-alias-root
+        PROOT-BANK1-CONFIGURE PERSIST-S-INVALID _PSTC-status
+    _PSTC-alias-root PROOT-VALID? _PSTC-assert
+
+    \ The check is symmetric: a bank-zero descriptor is also forbidden from
+    \ living inside bank one's cache backing.
+    _PSTC-span-cache-memory PERSIST-PAGE-CACHE-FRAME-SIZE 2 * 2
+        _PSTC-span-cache1 PPAGE-CACHE-INIT
+        PERSIST-S-OK _PSTC-status
+    S" /span-b1-page" _PSTC-vfs @ 0 _PSTC-span-cache1
+        _PSTC-span-page1 PPAGE-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /span-b0-page" _PSTC-vfs @ 0 0
+        _PSTC-span-page0 PPAGE-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /span-segment0" 64 _PSTC-vfs @ 0 _PSTC-span-segment0
+        PSEG-FILE-INIT PERSIST-S-OK _PSTC-status
+    S" /span-b0-segment" 64 _PSTC-vfs @ 0
+        _PSTC-span-cache-memory 64 + PSEG-FILE-INIT
+        PERSIST-S-OK _PSTC-status
+    S" /span-b1-segment" 64 _PSTC-vfs @ 0 _PSTC-span-segment1
+        PSEG-FILE-INIT PERSIST-S-OK _PSTC-status
+
+    \ Standalone PROOT initialization must reject a segment descriptor inside
+    \ its own page-cache frames before touching the destination descriptor.
+    _PSTC-span-root PROOT-FILE-SIZE 0xA5 FILL
+    _PSTC-span-root _PSTC-span-root-before PROOT-FILE-SIZE MOVE
+    S" /span-self-root-a" S" /span-self-root-b"
+        _PSTC-span-page1 _PSTC-span-cache-memory 64 +
+        0 0 0 _PSTC-span-root PROOT-INIT
+        PERSIST-S-INVALID _PSTC-status
+    _PSTC-span-root _PSTC-span-root-before PROOT-FILE-SIZE
+        _PSTORE-BYTES= _PSTC-assert
+
+    \ The same unsafe pair must be rejected as bank one without changing a
+    \ previously valid single-bank descriptor.
+    S" /span-root-a" S" /span-root-b"
+        _PSTC-span-page0 _PSTC-span-segment0
+        0 0 0 _PSTC-span-root PROOT-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-span-root _PSTC-span-root-before PROOT-FILE-SIZE MOVE
+    _PSTC-span-page1 _PSTC-span-cache-memory 64 + _PSTC-span-root
+        PROOT-BANK1-CONFIGURE PERSIST-S-INVALID _PSTC-status
+    _PSTC-span-root _PSTC-span-root-before PROOT-FILE-SIZE
+        _PSTORE-BYTES= _PSTC-assert
+    _PSTC-span-root PROOT-VALID? _PSTC-assert
+    PERSIST-DATA-BANK-1 _PSTC-span-root
+        PROOT-BANK-CONFIGURED? 0= _PSTC-assert
+
+    \ Cross-bank symmetry remains enforced as well: bank zero's segment
+    \ descriptor cannot live inside bank one's cache backing.
+    S" /span-root-a" S" /span-root-b"
+        _PSTC-span-page0 _PSTC-span-cache-memory 64 +
+        0 0 0 _PSTC-span-root PROOT-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-span-page1 _PSTC-span-segment1 _PSTC-span-root
+        PROOT-BANK1-CONFIGURE PERSIST-S-INVALID _PSTC-status
+    _PSTC-span-root PROOT-VALID? _PSTC-assert
+    _PSTC-stack ;
 
 : _PSTC-first-commit  ( -- )
     _PSTC-store-a-init PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-page-file _PSTC-bank1-segment-file _PSTC-store-a
+        PSTORE-BANK1-CONFIGURE PERSIST-S-OK _PSTC-status
+    _PSTC-store-a PSTORE-EXPECTED-DATA-BANK@
+        PERSIST-DATA-BANK-0 = _PSTC-assert
     _PSTC-store-a PSTORE-VALID? _PSTC-assert _PSTC-stack
     _PSTC-record-buffer-a 512 _PSTC-work-a PSTORE-WORK-INIT
         PERSIST-S-OK _PSTC-status
     _PSTC-work-a PSTORE-WORK-RECORD-BUFFER$
         SWAP _PSTC-record-buffer-a = SWAP 512 = AND _PSTC-assert _PSTC-stack
     _PSTC-store-a _PSTC-work-a PSTORE-PROVISION PERSIST-S-OK _PSTC-status
+    _PSTC-store-a _PST.ROOT-FILE _PSTC-work-a _PSW.ROOT-WORK
+        _PROOT-ROOT-WORK? _PSTC-assert _PSTC-stack
+    _PSTC-work-a _PSW.PROPOSED
+        _PSTC-store-a _PST.ROOT-FILE _PSTC-work-a _PSW.ROOT-WORK
+        _PROOT-VALUE-DISJOINT? _PSTC-assert _PSTC-stack
     _PSTC-store-a _PSTC-work-a PSTORE-OPEN PERSIST-S-ABSENT _PSTC-status
     _PSTC-store-a PSTORE-GENERATION@ 0= _PSTC-assert
     _PSTC-store-a _PSTC-work-a PSTORE-BEGIN PERSIST-S-OK _PSTC-status
@@ -171,6 +399,200 @@ GUARD _PSTC-guard-i3
     _PSTC-store-a PSTORE-GENERATION@ 1 = _PSTC-assert
     _PSTC-store-a PSTORE-CURRENT-ROOT@ PROOTV.PAGE-COUNT @ 1 = _PSTC-assert
     _PSTC-store-a PSTORE-CURRENT-ROOT@ PROOTV.RECORD-COUNT @ 1 = _PSTC-assert
+    _PSTC-stack ;
+
+: _PSTC-data-bank-contract  ( -- )
+    _PSTC-store-a PSTORE-CURRENT-ROOT@ PROOTV.DATA-BANK @
+        PERSIST-DATA-BANK-0 = _PSTC-assert
+    _PSTC-store-a PSTORE-CURRENT-ROOT@
+        _PSTC-direct-value PERSIST-ROOT-VALUE-COPY
+    PERSIST-DATA-BANK-0 _PSTC-direct-value PROOTV.DATA-BANK !
+    _PSTC-direct-value PERSIST-ROOT-VALUE-VALID? _PSTC-assert
+    PERSIST-DATA-BANK-1 _PSTC-direct-value PROOTV.DATA-BANK !
+    _PSTC-direct-value PERSIST-ROOT-VALUE-VALID? _PSTC-assert
+    2 _PSTC-direct-value PROOTV.DATA-BANK !
+    _PSTC-direct-value PERSIST-ROOT-VALUE-VALID? 0= _PSTC-assert
+    -1 _PSTC-direct-value PROOTV.DATA-BANK !
+    _PSTC-direct-value PERSIST-ROOT-VALUE-VALID? 0= _PSTC-assert
+    PERSIST-DATA-BANK-1 _PSTC-direct-value PROOTV.DATA-BANK !
+    _PSTC-stack ;
+
+: _PSTC-build-bank1-copy  ( -- )
+    _PSTC-bank1-page-file _PSTC-bank1-page-work PPAGE-ENSURE
+        PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-segment-file _PSTC-bank1-segment-work PSEG-ENSURE
+        PERSIST-S-OK _PSTC-status
+    _PSTC-record 20 1 0 _PSTC-bank1-ref
+        _PSTC-bank1-segment-file _PSTC-bank1-segment-work PSEG-WRITE
+        PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-ref _PSTC-ref PERSIST-REF-SIZE
+        _PSTORE-BYTES= _PSTC-assert
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 0
+        _PSTC-bank1-page-file _PSTC-bank1-page-work PPAGE-WRITE
+        PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-page-file PPAGE-SYNC PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-segment-file PSEG-SYNC PERSIST-S-OK _PSTC-status
+    _PSTC-stack ;
+
+: _PSTC-direct-root-basics  ( -- )
+    _PSTC-direct-root-init
+    _PSTC-direct-root _PSTC-direct-work PROOT-MIRROR
+        PERSIST-S-INVALID _PSTC-status
+    _PSTC-direct-work PROOT-LAST-OUTCOME@
+        GPAIR-W-NO-EFFECT = _PSTC-assert
+    _PSTC-direct-loaded _PSTC-direct-root _PSTC-direct-work PROOT-LOAD
+        SWAP 0= SWAP PERSIST-S-ABSENT = AND _PSTC-assert _PSTC-stack
+
+    _PSTC-direct-value _PSTC-direct-root _PSTC-direct-work PROOT-PUBLISH
+        PERSIST-S-OK _PSTC-status
+    _PSTC-direct-work PROOT-GENERATION@ 1 = _PSTC-assert
+    _PSTC-direct-work PROOT-LAST-OUTCOME@
+        GPAIR-W-DURABLE = _PSTC-assert
+    _PSTC-direct-work PROOT-ACTIVE-SLOT@ GPAIR-SLOT-A = _PSTC-assert
+    GPAIR-SLOT-A _PSTC-direct-root PROOT-SLOT-GENERATION@ 1 =
+        _PSTC-assert
+    GPAIR-SLOT-A _PSTC-direct-root PROOT-SLOT-DATA-BANK@
+        PERSIST-DATA-BANK-1 = _PSTC-assert
+    GPAIR-SLOT-B _PSTC-direct-root PROOT-SLOT-GENERATION@ 0 =
+        _PSTC-assert
+    GPAIR-SLOT-B _PSTC-direct-root PROOT-SLOT-DATA-BANK@ -1 =
+        _PSTC-assert
+
+    _PSTC-direct-root _PSTC-direct-work PROOT-MIRROR
+        PERSIST-S-OK _PSTC-status
+    _PSTC-direct-work PROOT-LAST-OUTCOME@
+        GPAIR-W-DURABLE = _PSTC-assert
+    _PSTC-direct-work PROOT-GENERATION@ 1 = _PSTC-assert
+    _PSTC-direct-work PROOT-ACTIVE-SLOT@ GPAIR-SLOT-A = _PSTC-assert
+    GPAIR-SLOT-A _PSTC-direct-root PROOT-SLOT-GENERATION@ 1 =
+        _PSTC-assert
+    GPAIR-SLOT-B _PSTC-direct-root PROOT-SLOT-GENERATION@ 1 =
+        _PSTC-assert
+    GPAIR-SLOT-A _PSTC-direct-root PROOT-SLOT-DATA-BANK@
+        PERSIST-DATA-BANK-1 = _PSTC-assert
+    GPAIR-SLOT-B _PSTC-direct-root PROOT-SLOT-DATA-BANK@
+        PERSIST-DATA-BANK-1 = _PSTC-assert
+
+    _PSTC-direct-root _PSTC-direct-work PROOT-MIRROR
+        PERSIST-S-OK _PSTC-status
+    _PSTC-direct-work PROOT-LAST-OUTCOME@
+        GPAIR-W-NO-EFFECT = _PSTC-assert
+    PERSIST-S-OK _PSTC-direct-root-load
+    _PSTC-direct-generation @ 1 = _PSTC-assert
+    _PSTC-direct-loaded PROOTV.DATA-BANK @
+        PERSIST-DATA-BANK-1 = _PSTC-assert
+    GPAIR-SLOT-A _PSTC-direct-root PROOT-SLOT-GENERATION@ 1 =
+        _PSTC-assert
+    GPAIR-SLOT-B _PSTC-direct-root PROOT-SLOT-GENERATION@ 1 =
+        _PSTC-assert
+    _PSTC-direct-loaded PERSIST-ROOT-VALUE-SIZE
+        _PSTC-direct-value PERSIST-ROOT-VALUE-SIZE
+        COMPARE 0= _PSTC-assert
+    _PSTC-stack ;
+
+: _PSTC-active-bank-geometry  ( -- )
+    \ Bank zero fits the caller's workspace, while the selected bank-one
+    \ segment does not.  OPEN-ACTIVE must reject before installing bank one.
+    S" /pstore-pages" S" /pstore-segment"
+    S" /pstore-bank-root-a" S" /pstore-bank-root-b"
+    _PSTC-identity 64 _PSTC-vfs @ 0 0 _PSTC-geometry-guard
+    ['] _PSTC-fault 0 _PSTC-geometry-store PSTORE-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-bank1-page-file _PSTC-bank1-segment-file _PSTC-geometry-store
+        PSTORE-BANK1-CONFIGURE PERSIST-S-OK _PSTC-status
+    _PSTC-geometry-buffer 128 _PSTC-geometry-work PSTORE-WORK-INIT
+        PERSIST-S-OK _PSTC-status
+    _PSTC-geometry-store _PSTC-geometry-work PSTORE-OPEN-ACTIVE
+        PERSIST-S-CAPACITY _PSTC-status
+    _PSTC-geometry-store PSTORE-EXPECTED-DATA-BANK@
+        PERSIST-DATA-BANK-0 = _PSTC-assert
+    _PSTC-geometry-store PSTORE-GENERATION@ 0= _PSTC-assert
+    _PSTC-geometry-store PSTORE-CURRENT-ROOT@ PROOTV.DATA-BANK @
+        PERSIST-DATA-BANK-0 = _PSTC-assert
+    _PSTC-geometry-store PSTORE-VALID? _PSTC-assert
+    _PSTC-stack ;
+
+: _PSTC-direct-mirror-maybe-at  ( point -- )
+    _PSTC-seam-fault !
+    _PSTC-direct-value _PSTC-direct-root _PSTC-direct-work PROOT-PUBLISH
+        PERSIST-S-OK _PSTC-status
+    _PSTC-direct-work PROOT-GENERATION@ _PSTC-direct-generation !
+    _PSTC-direct-work PROOT-ACTIVE-SLOT@ _PSTC-direct-slot !
+    _PSTC-seam-fault @ _PSTC-fault-at !
+    _PSTC-direct-root _PSTC-direct-work PROOT-MIRROR
+        PERSIST-S-FAULT _PSTC-status
+    _PSTC-direct-work PROOT-LAST-OUTCOME@
+        GPAIR-W-MAYBE = _PSTC-assert
+    0 _PSTC-fault-at !
+    _PSTC-direct-work PROOT-GENERATION@
+        _PSTC-direct-generation @ = _PSTC-assert
+    _PSTC-direct-work PROOT-ACTIVE-SLOT@
+        _PSTC-direct-slot @ = _PSTC-assert
+    _PSTC-direct-slot @ _PSTC-direct-root PROOT-SLOT-GENERATION@
+        _PSTC-direct-generation @ = _PSTC-assert
+    _PSTC-direct-slot @ _PSTC-direct-root PROOT-SLOT-DATA-BANK@
+        PERSIST-DATA-BANK-1 = _PSTC-assert
+    _PSTC-direct-slot @ GPAIR-SLOT-A = IF
+        GPAIR-SLOT-B
+    ELSE
+        GPAIR-SLOT-A
+    THEN
+    _PSTC-direct-root PROOT-SLOT-GENERATION@
+        _PSTC-direct-generation @ 1- = _PSTC-assert
+
+    _PSTC-direct-generation @ _PSTC-old-generation !
+    PERSIST-S-OK _PSTC-direct-root-load
+    _PSTC-direct-generation @ _PSTC-old-generation @ = _PSTC-assert
+    GPAIR-SLOT-A _PSTC-direct-root PROOT-SLOT-GENERATION@
+        _PSTC-direct-generation @ = _PSTC-assert
+    GPAIR-SLOT-B _PSTC-direct-root PROOT-SLOT-GENERATION@
+        _PSTC-direct-generation @ = _PSTC-assert
+    _PSTC-stack ;
+
+: _PSTC-direct-mirror-faults  ( -- )
+    PERSIST-FAULT-ROOT-WRITTEN _PSTC-direct-mirror-maybe-at
+    PERSIST-FAULT-ROOT-SIZED _PSTC-direct-mirror-maybe-at
+    PERSIST-FAULT-ROOT-SYNCED _PSTC-direct-mirror-maybe-at
+    PERSIST-FAULT-ROOT-VERIFIED _PSTC-direct-mirror-maybe-at
+
+    _PSTC-direct-value _PSTC-direct-root _PSTC-direct-work PROOT-PUBLISH
+        PERSIST-S-OK _PSTC-status
+    _PSTC-direct-work PROOT-GENERATION@ _PSTC-direct-generation !
+    _PSTC-direct-work PROOT-ACTIVE-SLOT@ _PSTC-direct-slot !
+    PERSIST-FAULT-ROOT-PUBLISHED _PSTC-fault-at !
+    _PSTC-direct-root _PSTC-direct-work PROOT-MIRROR
+        PERSIST-S-FAULT _PSTC-status
+    0 _PSTC-fault-at !
+    _PSTC-direct-work PROOT-LAST-OUTCOME@
+        GPAIR-W-DURABLE = _PSTC-assert
+    _PSTC-direct-work PROOT-GENERATION@
+        _PSTC-direct-generation @ = _PSTC-assert
+    _PSTC-direct-work PROOT-ACTIVE-SLOT@
+        _PSTC-direct-slot @ = _PSTC-assert
+    GPAIR-SLOT-A _PSTC-direct-root PROOT-SLOT-GENERATION@
+        _PSTC-direct-generation @ = _PSTC-assert
+    GPAIR-SLOT-B _PSTC-direct-root PROOT-SLOT-GENERATION@
+        _PSTC-direct-generation @ = _PSTC-assert
+    _PSTC-direct-root _PSTC-direct-work PROOT-MIRROR
+        PERSIST-S-OK _PSTC-status
+    _PSTC-direct-work PROOT-LAST-OUTCOME@
+        GPAIR-W-NO-EFFECT = _PSTC-assert
+    _PSTC-direct-generation @ _PSTC-old-generation !
+    PERSIST-S-OK _PSTC-direct-root-load
+    _PSTC-direct-generation @ _PSTC-old-generation @ = _PSTC-assert
+    _PSTC-stack ;
+
+: _PSTC-store-bank-zero-only  ( -- )
+    _PSTC-store-a _PSTC-work-a PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    0 _PSTC-store-a _PSTC-work-a PSTORE-APPLICATION-ROOT!
+        PERSIST-S-OK _PSTC-status
+    PERSIST-DATA-BANK-1
+        _PSTC-work-a PSTORE-PROPOSED-ROOT@ PROOTV.DATA-BANK !
+    _PSTC-store-a _PSTC-work-a PSTORE-COMMIT
+        PERSIST-S-CONFLICT _PSTC-status
+    _PSTC-store-a PSTORE-CURRENT-ROOT@ PROOTV.DATA-BANK @
+        PERSIST-DATA-BANK-0 = _PSTC-assert
+    _PSTC-store-a PSTORE-VALID? _PSTC-assert
     _PSTC-stack ;
 
 : _PSTC-span-boundaries  ( -- )
@@ -552,7 +974,16 @@ GUARD _PSTC-guard-i3
 : _PSTC-run  ( -- )
     0 _PSTC-fails ! 0 _PSTC-checks ! DEPTH _PSTC-depth ! 0 _PSTC-fault-at !
     _PSTC-setup
+    _PSTC-single-bank-staging-reset
+    _PSTC-enclosing-tail-alias
+    _PSTC-cache-alias-contracts
     _PSTC-first-commit
+    _PSTC-data-bank-contract
+    _PSTC-build-bank1-copy
+    _PSTC-direct-root-basics
+    _PSTC-active-bank-geometry
+    _PSTC-direct-mirror-faults
+    _PSTC-store-bank-zero-only
     _PSTC-span-boundaries
     _PSTC-readback
     _PSTC-suffix-reconcile

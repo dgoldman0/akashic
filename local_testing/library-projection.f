@@ -5,37 +5,78 @@
 VARIABLE _lpo-fails
 VARIABLE _lpo-checks
 VARIABLE _lpo-depth
-VARIABLE _lpo-store-slot
 VARIABLE _lpo-vfs
 VARIABLE _lpo-other-vfs
 VARIABLE _lpo-old-vfs
 VARIABLE _lpo-arena
 VARIABLE _lpo-other-arena
+VARIABLE _lpo-ior
 VARIABLE _lpo-context
 VARIABLE _lpo-cold-context
 VARIABLE _lpo-creg
 VARIABLE _lpo-rreg
 VARIABLE _lpo-bus
 VARIABLE _lpo-request
-VARIABLE _lpo-status
+VARIABLE _lpo-expected-status
 VARIABLE _lpo-required
 VARIABLE _lpo-before
 VARIABLE _lpo-instance
 VARIABLE _lpo-text-a
 VARIABLE _lpo-text-u
+VARIABLE _lpo-index
+VARIABLE _lpo-target
+VARIABLE _lpo-data-a
+VARIABLE _lpo-data-u
+VARIABLE _lpo-compact-steps
 
 PHEAD-SIZE XBUF _lpo-head
 LIB-DIGEST-SIZE XBUF _lpo-arena-id
 LIB-OPERATION-KEY-SIZE XBUF _lpo-key
-LIB-DIGEST-SIZE 10 * XBUF _lpo-rids
+LIB-DIGEST-SIZE 11 * XBUF _lpo-rids
 LIB-DIGEST-SIZE XBUF _lpo-unknown-rid
-LIBRARY-MANAGED-CREATE-REQUEST-SIZE XBUF _lpo-create
-LIBRARY-CAPTURE-IMPORT-REQUEST-SIZE XBUF _lpo-import
+
+CREATE _lpo-vfs-ops VFS-OPS-SIZE ALLOT
+CREATE _lpo-vfs-binding VFS-BINDING-DESC-SIZE ALLOT
+CREATE _lpo-cache-0 PERSIST-PAGE-CACHE-SIZE ALLOT
+CREATE _lpo-cache-1 PERSIST-PAGE-CACHE-SIZE ALLOT
+CREATE _lpo-builder-cache-0 PERSIST-PAGE-CACHE-SIZE ALLOT
+CREATE _lpo-builder-cache-1 PERSIST-PAGE-CACHE-SIZE ALLOT
+PERSIST-PAGE-CACHE-FRAME-SIZE 2 * XBUF _lpo-cache-0-memory
+PERSIST-PAGE-CACHE-FRAME-SIZE 2 * XBUF _lpo-cache-1-memory
+PERSIST-PAGE-CACHE-FRAME-SIZE 2 * XBUF _lpo-builder-cache-0-memory
+PERSIST-PAGE-CACHE-FRAME-SIZE 2 * XBUF _lpo-builder-cache-1-memory
+GUARD _lpo-repository-guard
+GUARD _lpo-builder-guard
+
+LIBRARY-REPOSITORY-SIZE XBUF _lpo-repository
+LIBRARY-REPOSITORY-WORK-SIZE XBUF _lpo-repository-work
+LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _lpo-record-buffer
+LIBRARY-REPOSITORY-STAGE-BUFFER-MIN XBUF _lpo-stage-buffer
+LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _lpo-builder-record-buffer
+512 XBUF _lpo-compact-buffer
+LIBRARY-SERVICE-SIZE XBUF _lpo-service
+LIBRARY-SERVICE-WORK-SIZE XBUF _lpo-service-work
+
+LIBRARY-DOCUMENT-INITIAL-DRAFT-SIZE XBUF _lpo-draft
+LIBRARY-DOCUMENT-CREATE-REQUEST-SIZE XBUF _lpo-create-request
+LIBRARY-DOCUMENT-READ-REQUEST-SIZE XBUF _lpo-read-request
+LIBRARY-DOCUMENT-REPLACE-REQUEST-SIZE XBUF _lpo-replace-request
+LIBRARY-COMPACTION-BIND-REQUEST-SIZE XBUF _lpo-compaction-request
+LIBRARY-SERVICE-CONTENT-DESCRIPTOR-SIZE XBUF _lpo-descriptor
 LIB-ORIGIN-SIZE XBUF _lpo-origin
+LIB-METADATA-FACT-HEADER-SIZE LIB-ORIGIN-SIZE +
+    CONSTANT _LPO-CAPTURE-FACTS-U
+_LPO-CAPTURE-FACTS-U XBUF _lpo-capture-facts
 LIB-ENTRY-SIZE XBUF _lpo-entry
 LIB-ENTRY-SIZE XBUF _lpo-capture-entry
+LIB-ENTRY-SIZE XBUF _lpo-next-entry
+LIB-ENTRY-SIZE XBUF _lpo-result-entry
+LIB-CONTENT-SIZE XBUF _lpo-create-content
+LIB-CONTENT-SIZE XBUF _lpo-next-content
 16 XBUF _lpo-content
 8 XBUF _lpo-prune-content
+70000 CONSTANT _LPO-LARGE-CONTENT-U
+VARIABLE _lpo-large-content
 RREF-SIZE XBUF _lpo-ref
 QLOC-SIZE XBUF _lpo-loc-a
 QLOC-SIZE XBUF _lpo-loc-b
@@ -61,7 +102,6 @@ LIB-PROJECTION-MAX 8 * XBUF _lpo-cap-instances
 CREATE _lpo-cap-rid-map
     0 , 3 , 4 , 5 , 6 , 7 , 8 , 9 ,
 
-: _lpo-store  ( -- store ) _lpo-store-slot @ ;
 : _lpo-rid  ( index -- rid ) LIB-DIGEST-SIZE * _lpo-rids + ;
 : _lpo-cap-bind  ( index -- bind ) LBIND-SIZE * _lpo-cap-binds @ + ;
 : _lpo-cap-result  ( index -- result )
@@ -82,6 +122,13 @@ CREATE _lpo-cap-rid-map
         _lpo-depth @ . ."  -> " DUP . CR .S CR
     THEN
     _lpo-depth @ = _lpo-assert ;
+
+: _lpo-status  ( actual expected -- )
+    2DUP <> IF
+        ." LIBRARY PROJECTION OWNER STATUS actual/expected "
+        2DUP SWAP . . CR
+    THEN
+    = _lpo-assert ;
 
 : _lpo-zero?  ( a u -- flag )
     0 ?DO DUP I + C@ IF DROP 0 UNLOOP EXIT THEN LOOP DROP -1 ;
@@ -127,29 +174,64 @@ VARIABLE _lpo-exact-locator
     DUP CV-DATA@ SWAP CV-LEN@
     _lpo-text-a @ _lpo-text-u @ STR-STR= ;
 
-: _lpo-create-documents  ( -- )
+: _lpo-cache-init  ( memory cache -- )
+    >R
+    PERSIST-PAGE-CACHE-FRAME-SIZE 2 * 2 R> PPAGE-CACHE-INIT
+        LIBRARY-REPOSITORY-S-OK _lpo-status ;
+
+: _lpo-create-request!  ( -- )
+    _lpo-create-request LIBRARY-DOCUMENT-CREATE-REQUEST-INIT
+    _lpo-entry _lpo-create-request LSDCR.ENTRY !
+    _lpo-create-content _lpo-create-request LSDCR.CONTENT !
+    _lpo-draft LSDID.FACTS-A @ _lpo-create-request LSDCR.FACTS-A !
+    _lpo-draft LSDID.FACTS-U @ _lpo-create-request LSDCR.FACTS-U !
+    _lpo-service-work LIBRARY-SERVICE-LOGICAL-GENERATION@
+        _lpo-create-request LSDCR.EXPECTED-LOGICAL !
+    _lpo-result-entry _lpo-create-request LSDCR.RESULT !
+    _lpo-create-request
+        LIBRARY-DOCUMENT-CREATE-REQUEST-VALID? _lpo-assert ;
+
+: _lpo-create-document  ( index -- )
+    _lpo-index !
     S" managed-0" _lpo-content SWAP CMOVE
-    9 0 ?DO
-        [CHAR] 0 I + _lpo-content 8 + C!
-        _lpo-key LIB-OPERATION-KEY-SIZE I 1+ FILL
-        _lpo-create LIBRARY-MANAGED-CREATE-REQUEST-INIT
-        I 1+ _lpo-create LIBMCR.EXPECTED-CATALOG-GENERATION !
-        _lpo-key _lpo-create LIBRARY-MANAGED-CREATE-OPERATION-KEY!
-            LIBSTORE-S-OK = _lpo-assert
-        S" Projection fixture" _lpo-create
-            LIBRARY-MANAGED-CREATE-TITLE!
-            LIBSTORE-S-OK = _lpo-assert
-        _lpo-content 9 _lpo-create LIBRARY-MANAGED-CREATE-CONTENT!
-            LIBSTORE-S-OK = _lpo-assert
-        LIB-MEDIA-TEXT-PLAIN _lpo-create LIBMCR.MEDIA !
-        _lpo-create _lpo-entry _lpo-store
-            LIBRARY-VFS-STORE-CREATE-MANAGED
-            LIBSTORE-S-OK = _lpo-assert
-        _lpo-entry LIB-ENTRY-VALID? _lpo-assert
-        _lpo-entry LIBE.ID I _lpo-rid RID-COPY
-        I _lpo-rid RID-PRESENT? _lpo-assert
-        _lpo-entry LIBE.KIND @
-            LIB-KIND-MANAGED-DOCUMENT = _lpo-assert
+    [CHAR] 0 _lpo-index @ + _lpo-content 8 + C!
+    _lpo-draft LIBRARY-DOCUMENT-INITIAL-DRAFT-INIT
+    _lpo-draft LSDID.ID RID-CLEAR
+    _lpo-index @ 1+ _lpo-draft LSDID.ID !
+    _lpo-draft LSDID.OPERATION-KEY RID-CLEAR
+    _lpo-index @ 101 + _lpo-draft LSDID.OPERATION-KEY !
+    LIB-KIND-MANAGED-DOCUMENT _lpo-draft LSDID.KIND !
+    LIB-MEDIA-TEXT-PLAIN _lpo-draft LSDID.MEDIA !
+    _lpo-service-work LIBRARY-SERVICE-NEXT-MUTATION@
+        _lpo-draft LSDID.MUTATION-SEQUENCE !
+    _lpo-content _lpo-draft LSDID.CONTENT-A !
+    9 _lpo-draft LSDID.CONTENT-U !
+    S" Projection fixture"
+        DUP _lpo-draft LSDID.TITLE-U !
+        _lpo-draft LSDID.TITLE SWAP CMOVE
+    _lpo-draft _lpo-entry _lpo-create-content
+        LIBRARY-SERVICE-PREPARE-MANAGED-CREATE
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-create-request!
+    _lpo-create-request _lpo-service _lpo-service-work
+        LIBRARY-SERVICE-CREATE-MANAGED
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-result-entry LIB-ENTRY-VALID? _lpo-assert
+    _lpo-result-entry LIBE.ID _lpo-index @ _lpo-rid RID-COPY
+    _lpo-index @ _lpo-rid RID-PRESENT? _lpo-assert
+    _lpo-result-entry LIBE.KIND @
+        LIB-KIND-MANAGED-DOCUMENT = _lpo-assert
+    _lpo-stack ;
+
+: _lpo-create-documents-first  ( -- )
+    3 0 ?DO
+        I _lpo-create-document
+    LOOP
+    _lpo-stack ;
+
+: _lpo-create-documents-rest  ( -- )
+    9 4 ?DO
+        I _lpo-create-document
     LOOP
     9 0 ?DO
         I 0 ?DO
@@ -173,53 +255,200 @@ VARIABLE _lpo-exact-locator
 
 : _lpo-create-capture  ( -- )
     _lpo-build-origin
-    _lpo-key LIB-OPERATION-KEY-SIZE 0xA0 FILL
-    _lpo-import LIBRARY-CAPTURE-IMPORT-REQUEST-INIT
-    10 _lpo-import LIBCIR.EXPECTED-CATALOG-GENERATION !
-    _lpo-key _lpo-import LIBRARY-CAPTURE-IMPORT-OPERATION-KEY!
-        LIBSTORE-S-OK = _lpo-assert
-    S" Projection capture" _lpo-import LIBRARY-CAPTURE-IMPORT-TITLE!
-        LIBSTORE-S-OK = _lpo-assert
-    S" capture bytes" _lpo-import LIBRARY-CAPTURE-IMPORT-CONTENT!
-        LIBSTORE-S-OK = _lpo-assert
-    LIB-MEDIA-TEXT-PLAIN _lpo-import LIBCIR.MEDIA !
-    _lpo-origin _lpo-import LIBRARY-CAPTURE-IMPORT-ORIGIN!
-        LIBSTORE-S-OK = _lpo-assert
-    _lpo-import _lpo-capture-entry _lpo-store
-        LIBRARY-VFS-STORE-IMPORT-CAPTURE
-        LIBSTORE-S-OK = _lpo-assert
-    _lpo-capture-entry LIBE.ID 9 _lpo-rid RID-COPY
+    _lpo-draft LIBRARY-DOCUMENT-INITIAL-DRAFT-INIT
+    _lpo-draft LSDID.ID RID-CLEAR
+    10 _lpo-draft LSDID.ID !
+    _lpo-draft LSDID.OPERATION-KEY RID-CLEAR
+    110 _lpo-draft LSDID.OPERATION-KEY !
+    LIB-KIND-CAPTURE _lpo-draft LSDID.KIND !
+    LIB-MEDIA-TEXT-PLAIN _lpo-draft LSDID.MEDIA !
+    _lpo-service-work LIBRARY-SERVICE-NEXT-MUTATION@
+        _lpo-draft LSDID.MUTATION-SEQUENCE !
+    S" capture bytes"
+        DUP _lpo-draft LSDID.CONTENT-U !
+        OVER _lpo-draft LSDID.CONTENT-A !
+        2DROP
+    S" Projection capture"
+        DUP _lpo-draft LSDID.TITLE-U !
+        _lpo-draft LSDID.TITLE SWAP CMOVE
+    _lpo-capture-facts _LPO-CAPTURE-FACTS-U 0 FILL
+    LIB-METADATA-FACT-ORIGIN _lpo-capture-facts LIBMF.KIND !
+    LIB-ORIGIN-SIZE _lpo-capture-facts LIBMF.PAYLOAD-U !
+    _lpo-origin _lpo-capture-facts LIBMF.PAYLOAD
+        LIB-ORIGIN-SIZE MOVE
+    _lpo-capture-facts _LPO-CAPTURE-FACTS-U _lpo-draft
+        LIBRARY-DOCUMENT-INITIAL-DRAFT-FACTS!
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-draft _lpo-entry _lpo-create-content
+        LIBRARY-SERVICE-PREPARE-CAPTURE-IMPORT
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-create-request!
+    _lpo-create-request _lpo-service _lpo-service-work
+        LIBRARY-SERVICE-IMPORT-CAPTURE
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-result-entry _lpo-capture-entry LIB-ENTRY-SIZE MOVE
+    _lpo-result-entry LIBE.ID 9 _lpo-rid RID-COPY
     _lpo-capture-entry LIBE.KIND @ LIB-KIND-CAPTURE = _lpo-assert
     9 _lpo-rid RID-PRESENT? _lpo-assert
     _lpo-stack ;
 
-: _lpo-seed-lifecycle  ( -- )
-    \ Keep document zero active but advance its domain revision independently
-    \ of its content revision before a projection instance exists.
-    0 _lpo-rid 1 _lpo-entry _lpo-store LIBRARY-VFS-STORE-ARCHIVE
-        LIBSTORE-S-OK = _lpo-assert
-    0 _lpo-rid 2 _lpo-entry _lpo-store LIBRARY-VFS-STORE-UNARCHIVE
-        LIBSTORE-S-OK = _lpo-assert
-    _lpo-entry LIBE.DOMAIN-REVISION @ 3 = _lpo-assert
-    _lpo-entry LIBE.CURRENT-CONTENT-REVISION @ 1 = _lpo-assert
+: _lpo-create-large  ( -- )
+    _lpo-large-content @ _LPO-LARGE-CONTENT-U [CHAR] L FILL
+    _lpo-draft LIBRARY-DOCUMENT-INITIAL-DRAFT-INIT
+    _lpo-draft LSDID.ID RID-CLEAR
+    11 _lpo-draft LSDID.ID !
+    _lpo-draft LSDID.OPERATION-KEY RID-CLEAR
+    111 _lpo-draft LSDID.OPERATION-KEY !
+    LIB-KIND-MANAGED-DOCUMENT _lpo-draft LSDID.KIND !
+    LIB-MEDIA-TEXT-PLAIN _lpo-draft LSDID.MEDIA !
+    _lpo-service-work LIBRARY-SERVICE-NEXT-MUTATION@
+        _lpo-draft LSDID.MUTATION-SEQUENCE !
+    _lpo-large-content @ _lpo-draft LSDID.CONTENT-A !
+    _LPO-LARGE-CONTENT-U _lpo-draft LSDID.CONTENT-U !
+    S" Large projection"
+        DUP _lpo-draft LSDID.TITLE-U !
+        _lpo-draft LSDID.TITLE SWAP CMOVE
+    _lpo-draft _lpo-entry _lpo-create-content
+        LIBRARY-SERVICE-PREPARE-MANAGED-CREATE
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-create-request!
+    _lpo-create-request _lpo-service _lpo-service-work
+        LIBRARY-SERVICE-CREATE-MANAGED
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-result-entry LIBE.ID 10 _lpo-rid RID-COPY
+    _lpo-result-entry LIBE.CONTENT-U @
+        _LPO-LARGE-CONTENT-U = _lpo-assert
+    _lpo-stack ;
 
-    1 _lpo-rid 1 _lpo-entry _lpo-store LIBRARY-VFS-STORE-ARCHIVE
-        LIBSTORE-S-OK = _lpo-assert
-    _lpo-entry LIBE.LIFECYCLE @ LIB-LIFECYCLE-ARCHIVED = _lpo-assert
+: _lpo-read-identity  ( index -- status )
+    _lpo-read-request LIBRARY-DOCUMENT-READ-REQUEST-INIT
+    _lpo-rid _lpo-read-request LSDQR.RID RID-COPY
+    _lpo-entry _lpo-read-request LSDQR.ENTRY !
+    _lpo-descriptor _lpo-read-request LSDQR.DESCRIPTOR !
+    _lpo-read-request _lpo-service _lpo-service-work
+        LIBRARY-SERVICE-READ-CURRENT ;
 
+: _lpo-replace-finish  ( content|0 service-xt -- status )
+    >R
+    _lpo-replace-request LIBRARY-DOCUMENT-REPLACE-REQUEST-INIT
+    _lpo-next-entry _lpo-replace-request LSDRR.NEXT !
+    _lpo-replace-request LSDRR.CONTENT !
+    _lpo-service-work LIBRARY-SERVICE-LOGICAL-GENERATION@
+        _lpo-replace-request LSDRR.EXPECTED-LOGICAL !
+    _lpo-entry LIBE.DOMAIN-REVISION @
+        _lpo-replace-request LSDRR.EXPECTED-DOMAIN !
+    _lpo-result-entry _lpo-replace-request LSDRR.RESULT !
+    _lpo-replace-request _lpo-service _lpo-service-work R> EXECUTE
+    DUP IF EXIT THEN DROP
+    _lpo-result-entry _lpo-entry LIB-ENTRY-SIZE MOVE
+    LIBRARY-SERVICE-S-OK ;
+
+: _lpo-lifecycle!  ( index lifecycle -- status )
+    _lpo-target ! _lpo-index !
+    _lpo-index @ _lpo-read-identity DUP IF EXIT THEN DROP
+    _lpo-entry _lpo-target @
+    _lpo-service-work LIBRARY-SERVICE-NEXT-MUTATION@
+    _lpo-next-entry LIBRARY-SERVICE-PREPARE-LIFECYCLE-NEXT
+    DUP IF EXIT THEN DROP
+    0 ['] LIBRARY-SERVICE-REPLACE-LIFECYCLE _lpo-replace-finish ;
+
+: _lpo-content!  ( index data-a data-u -- status )
+    _lpo-data-u ! _lpo-data-a ! _lpo-index !
+    _lpo-index @ _lpo-read-identity DUP IF EXIT THEN DROP
+    _lpo-entry _lpo-data-a @ _lpo-data-u @
+    _lpo-service-work LIBRARY-SERVICE-NEXT-MUTATION@
+    _lpo-next-entry _lpo-next-content
+        LIBRARY-SERVICE-PREPARE-CONTENT-NEXT
+    DUP IF EXIT THEN DROP
+    _lpo-next-content ['] LIBRARY-SERVICE-REPLACE-CONTENT
+        _lpo-replace-finish ;
+
+: _lpo-tombstone!  ( index -- status )
+    DUP _lpo-index !
+    _lpo-read-identity DUP IF EXIT THEN DROP
+    _lpo-entry
+    _lpo-service-work LIBRARY-SERVICE-NEXT-MUTATION@
+    _lpo-next-entry LIBRARY-SERVICE-PREPARE-TOMBSTONE-NEXT
+    DUP IF EXIT THEN DROP
+    0 ['] LIBRARY-SERVICE-TOMBSTONE _lpo-replace-finish ;
+
+: _lpo-seed-pruning  ( -- )
+    \ Build the retained-history fixture while its document is the only
+    \ indexed value.  The RAM VFS is deliberately bounded, so this keeps
+    \ projection coverage from depending on unrelated copy-on-write pressure.
     S" prune-2" _lpo-prune-content SWAP CMOVE
     5 0 ?DO
         [CHAR] 2 I + _lpo-prune-content 6 + C!
-        3 _lpo-rid I 1+ _lpo-prune-content 7 _lpo-entry _lpo-store
-            LIBRARY-VFS-STORE-REPLACE-MANAGED
-            LIBSTORE-S-OK = _lpo-assert
+        3 _lpo-prune-content 7 _lpo-content!
+            LIBRARY-SERVICE-S-OK _lpo-status
     LOOP
     _lpo-entry LIBE.DOMAIN-REVISION @ 6 = _lpo-assert
     _lpo-entry LIBE.OLDEST-CONTENT-REVISION @ 3 = _lpo-assert
     _lpo-stack ;
 
+: _lpo-seed-lifecycle  ( -- )
+    \ Keep document zero active but advance its domain revision independently
+    \ of its content revision before a projection instance exists.
+    0 LIB-LIFECYCLE-ARCHIVED _lpo-lifecycle!
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    0 LIB-LIFECYCLE-ACTIVE _lpo-lifecycle!
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-entry LIBE.DOMAIN-REVISION @ 3 = _lpo-assert
+    _lpo-entry LIBE.CURRENT-CONTENT-REVISION @ 1 = _lpo-assert
+
+    1 LIB-LIFECYCLE-ARCHIVED _lpo-lifecycle!
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-entry LIBE.LIFECYCLE @ LIB-LIFECYCLE-ARCHIVED = _lpo-assert
+    _lpo-stack ;
+
+: _lpo-compact-seed-storage  ( -- )
+    _lpo-service-work LIBRARY-SERVICE-LOGICAL-GENERATION@
+        _lpo-before !
+    _lpo-compaction-request LIBRARY-COMPACTION-BIND-REQUEST-INIT
+    16777216 _lpo-compaction-request LSCBR.BYTE-BUDGET !
+    4096 _lpo-compaction-request LSCBR.WORK-BUDGET !
+    1048576 _lpo-compaction-request LSCBR.STEP-BYTE-BUDGET !
+    _lpo-compaction-request
+        LIBRARY-COMPACTION-BIND-REQUEST-VALID? _lpo-assert
+    _lpo-compaction-request _lpo-service _lpo-service-work
+        LIBRARY-SERVICE-COMPACTION-BIND
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-service-work LIBRARY-SERVICE-COMPACTION-STATE@
+        PCOMPACT-STATE-IDLE = _lpo-assert
+    _lpo-service _lpo-service-work LIBRARY-SERVICE-COMPACTION-BEGIN
+        LIBRARY-SERVICE-S-OK _lpo-status
+
+    0 _lpo-compact-steps !
+    BEGIN
+        _lpo-service-work LIBRARY-SERVICE-COMPACTION-STATE@
+            PCOMPACT-STATE-BUILDING =
+    WHILE
+        _lpo-compact-steps @ 4096 >= IF
+            0 _lpo-assert EXIT
+        THEN
+        _lpo-service _lpo-service-work
+            LIBRARY-SERVICE-COMPACTION-STEP
+            LIBRARY-SERVICE-S-OK _lpo-status
+        1 _lpo-compact-steps +!
+    REPEAT
+    _lpo-service-work LIBRARY-SERVICE-COMPACTION-STATE@
+        PCOMPACT-STATE-READY = DUP _lpo-assert 0= IF EXIT THEN
+    _lpo-service _lpo-service-work LIBRARY-SERVICE-COMPACTION-FINALIZE
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-service _lpo-service-work LIBRARY-SERVICE-COMPACTION-PUBLISH
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-service _lpo-service-work LIBRARY-SERVICE-COMPACTION-MIRROR
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-service _lpo-service-work LIBRARY-SERVICE-COMPACTION-CLEANUP
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-service-work LIBRARY-SERVICE-COMPACTION-STATE@
+        PCOMPACT-STATE-CLEANED = _lpo-assert
+    _lpo-service-work LIBRARY-SERVICE-LOGICAL-GENERATION@
+        _lpo-before @ = _lpo-assert
+    _lpo-stack ;
+
 : _lpo-capacity-buffers-setup  ( -- )
-    0 _lpo-cap-binds ! 0 _lpo-cap-results !
+    0 _lpo-cap-binds ! 0 _lpo-cap-results ! 0 _lpo-large-content !
     _LPO-CAP-BINDS-SIZE ALLOCATE DUP IF NIP THROW THEN
         DROP _lpo-cap-binds !
     _LPO-CAP-RESULTS-SIZE ALLOCATE DUP IF
@@ -228,11 +457,23 @@ VARIABLE _lpo-exact-locator
         R> THROW
     THEN
     DROP _lpo-cap-results !
+    _LPO-LARGE-CONTENT-U ALLOCATE DUP IF
+        NIP >R
+        _lpo-cap-results @ FREE 0 _lpo-cap-results !
+        _lpo-cap-binds @ FREE 0 _lpo-cap-binds !
+        R> THROW
+    THEN
+    DROP _lpo-large-content !
     _lpo-cap-binds @ _LPO-CAP-BINDS-SIZE 0 FILL
     _lpo-cap-results @ _LPO-CAP-RESULTS-SIZE 0 FILL
+    _lpo-large-content @ _LPO-LARGE-CONTENT-U 0 FILL
     _lpo-stack ;
 
 : _lpo-capacity-buffers-free  ( -- )
+    _lpo-large-content @ ?DUP IF
+        DUP _LPO-LARGE-CONTENT-U 0 FILL FREE
+        0 _lpo-large-content !
+    THEN
     _lpo-cap-results @ ?DUP IF
         DUP _LPO-CAP-RESULTS-SIZE 0 FILL FREE
         0 _lpo-cap-results !
@@ -242,31 +483,72 @@ VARIABLE _lpo-exact-locator
         0 _lpo-cap-binds !
     THEN ;
 
-: _lpo-store-setup  ( -- )
+: _lpo-repository-init  ( -- )
+    _lpo-cache-0-memory _lpo-cache-0 _lpo-cache-init
+    _lpo-cache-1-memory _lpo-cache-1 _lpo-cache-init
+    _lpo-builder-cache-0-memory
+        _lpo-builder-cache-0 _lpo-cache-init
+    _lpo-builder-cache-1-memory
+        _lpo-builder-cache-1 _lpo-cache-init
+    _lpo-vfs @
+    _lpo-cache-0 _lpo-cache-1
+    _lpo-builder-cache-0 _lpo-builder-cache-1
+    _lpo-repository-guard _lpo-builder-guard
+    0 0 _lpo-repository LIBRARY-REPOSITORY-INIT
+        LIBRARY-REPOSITORY-S-OK _lpo-status
+    _lpo-record-buffer LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
+    _lpo-stage-buffer LIBRARY-REPOSITORY-STAGE-BUFFER-MIN
+    _lpo-builder-record-buffer LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
+    _lpo-compact-buffer 512
+    _lpo-repository _lpo-repository-work
+        LIBRARY-REPOSITORY-WORK-INIT
+        LIBRARY-REPOSITORY-S-OK _lpo-status ;
+
+: _lpo-service-init  ( -- )
+    _lpo-repository _lpo-repository-work _lpo-service
+        LIBRARY-SERVICE-INIT
+        LIBRARY-SERVICE-S-OK _lpo-status
+    _lpo-service _lpo-service-work LIBRARY-SERVICE-WORK-INIT
+        LIBRARY-SERVICE-S-OK _lpo-status ;
+
+: _lpo-repository-setup  ( -- )
     VFS-CUR _lpo-old-vfs !
     _lpo-arena-id LIB-DIGEST-SIZE 0xB4 FILL
     _lpo-unknown-rid LIB-DIGEST-SIZE 0xEE FILL
-    4194304 A-XMEM ARENA-NEW DUP 0= _lpo-assert DROP
-    DUP _lpo-arena !
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-        DUP _lpo-vfs ! 0<> _lpo-assert
+    VFS-RAM-OPS _lpo-vfs-ops VFS-OPS-SIZE MOVE
+    VFS-RAM-BINDING _lpo-vfs-binding VFS-BINDING-DESC-SIZE MOVE
+    _lpo-vfs-ops _lpo-vfs-binding VB.OPS !
+    67108864 A-XMEM ARENA-NEW DUP 0= _lpo-assert
+        DROP _lpo-arena !
+    _lpo-arena @ _lpo-vfs-binding 0 VFS-NEW
+        _lpo-ior ! _lpo-vfs !
+    _lpo-ior @ 0= _lpo-assert
+    _lpo-vfs @ 0<> _lpo-assert
     _lpo-vfs @ VFS-USE
-    LIBRARY-VFS-STORE-SIZE ALLOCATE
-        ABORT" LIBRARY PROJECTION OWNER store allocation"
-        _lpo-store-slot !
-    _lpo-vfs @ _lpo-store LIBRARY-VFS-STORE-INIT
-        LIBSTORE-S-OK = _lpo-assert
-    _lpo-arena-id _lpo-store LIBRARY-VFS-STORE-PROVISION
-        LIBSTORE-S-OK = _lpo-assert
-    _lpo-create-documents
-    _lpo-create-capture
+    _lpo-repository-init
+    _lpo-repository _lpo-repository-work
+        LIBRARY-REPOSITORY-PROVISION
+        LIBRARY-REPOSITORY-S-OK _lpo-status
+    _lpo-arena-id _lpo-repository _lpo-repository-work
+        LIBRARY-REPOSITORY-BOOTSTRAP
+        LIBRARY-REPOSITORY-S-OK _lpo-status
+    _lpo-service-init
+    _lpo-stack
+    3 _lpo-create-document
+    _lpo-seed-pruning
+    _lpo-compact-seed-storage
+    _lpo-create-documents-first
     _lpo-seed-lifecycle
+    _lpo-create-documents-rest
+    _lpo-create-capture
 
     \ The unrelated empty VFS is selected only by the ambient-fallback test.
     4194304 A-XMEM ARENA-NEW DUP 0= _lpo-assert DROP
-    DUP _lpo-other-arena !
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-        DUP _lpo-other-vfs ! 0<> _lpo-assert
+        _lpo-other-arena !
+    _lpo-other-arena @ _lpo-vfs-binding 0 VFS-NEW
+        _lpo-ior ! _lpo-other-vfs !
+    _lpo-ior @ 0= _lpo-assert
+    _lpo-other-vfs @ 0<> _lpo-assert
     _lpo-vfs @ VFS-USE
     _lpo-stack ;
 
@@ -285,7 +567,7 @@ VARIABLE _lpo-exact-locator
         DUP 0= _lpo-assert DROP _lpo-rreg !
     _lpo-creg @ 0 CBUS-NEW DUP 0= _lpo-assert DROP _lpo-bus !
     _lpo-bus @ _lpo-context @ CTX.QUEUE !
-    _lpo-store _lpo-context @ _lpo-creg @ _lpo-rreg @ _lpo-bus @
+    _lpo-service _lpo-context @ _lpo-creg @ _lpo-rreg @ _lpo-bus @
         _lpo-root LIBRARY-PROJECTION-ROOT-INIT
         RACQ-S-OK = _lpo-assert
     CBR-NEW DUP 0= _lpo-assert DROP _lpo-request !
@@ -326,7 +608,7 @@ VARIABLE _lpo-exact-locator
     \ Root initialization rejects a caller output placed over the Context's
     \ borrowed Practice head before any zero-fill or descriptor mutation.
     _lpo-creg @ CREG.TYPE-N @ _lpo-before !
-    _lpo-store _lpo-context @ _lpo-creg @ _lpo-rreg @ _lpo-bus @
+    _lpo-service _lpo-context @ _lpo-creg @ _lpo-rreg @ _lpo-bus @
         _lpo-head LIBRARY-PROJECTION-ROOT-INIT
         RACQ-S-INVALID = _lpo-assert
     _lpo-head PHEAD-VALID? _lpo-assert
@@ -354,9 +636,9 @@ VARIABLE _lpo-exact-locator
         RACQ-S-INVALID = _lpo-assert
     _lpo-root LIBRARY-PROJECTION-ROOT-VALID? _lpo-assert
     _lpo-loc-a _lpo-root _lpo-context @ _lpo-rreg @ _lpo-bind-fail
-        _lpo-store LIBRARY-PROJECTION-ATTACH
+        _lpo-repository LIBRARY-PROJECTION-ATTACH
         RACQ-S-INVALID = _lpo-assert
-    _lpo-store LIBRARY-VFS-STORE-VALID? _lpo-assert
+    _lpo-repository LIBRARY-REPOSITORY-VALID? _lpo-assert
     _lpo-loc-a _lpo-root _lpo-context @ _lpo-rreg @ _lpo-bind-fail
         _lpo-head LIBRARY-PROJECTION-ATTACH
         RACQ-S-INVALID = _lpo-assert
@@ -375,7 +657,7 @@ VARIABLE _lpo-exact-locator
     0 _lpo-rid _lpo-loc-a _lpo-identity-loc!
         QLOC-S-OK = _lpo-assert
     _lpo-loc-a _lpo-bind-a _lpo-result-a _lpo-attach
-        RACQ-S-OK = _lpo-assert
+        RACQ-S-OK _lpo-status
     _lpo-result-a RACQ-RESULT-VALID? _lpo-assert
     _lpo-result-a RACQ.RESULT-REF RREF.ID
         0 _lpo-rid RID= _lpo-assert
@@ -471,10 +753,6 @@ VARIABLE _lpo-exact-locator
     _lpo-rreg @ RREG.COUNT @ 0= _lpo-assert
     _lpo-stack ;
 
-: _lpo-read-identity  ( index -- status )
-    _lpo-rid _lpo-entry _lpo-store
-        LIBRARY-VFS-STORE-READ-IDENTITY ;
-
 : _lpo-managed-client?  ( client -- flag )
     DUP RCLI-VALID? 0= IF DROP 0 EXIT THEN
     DUP RCLI-REPLACE? 0= IF DROP 0 EXIT THEN
@@ -531,7 +809,7 @@ VARIABLE _lpo-exact-locator
     _lpo-text-a @ _lpo-text-u @ _lpo-result-content? _lpo-assert ;
 
 : _lpo-current-retained-replace  ( -- )
-    0 _lpo-read-identity LIBSTORE-S-OK = _lpo-assert
+    0 _lpo-read-identity LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.DOMAIN-REVISION @ 3 = _lpo-assert
     _lpo-entry LIBE.CURRENT-CONTENT-REVISION @ 1 = _lpo-assert
     _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a RID-COPY
@@ -572,7 +850,7 @@ VARIABLE _lpo-exact-locator
         CBUS-S-STALE-REVISION = _lpo-assert
     _lpo-client RCLI.BIND LBIND.REVISION @ 2 = _lpo-assert
 
-    0 _lpo-read-identity LIBSTORE-S-OK = _lpo-assert
+    0 _lpo-read-identity LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.DOMAIN-REVISION @ 4 = _lpo-assert
     _lpo-entry LIBE.CURRENT-CONTENT-REVISION @ 2 = _lpo-assert
     _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-b
@@ -588,7 +866,7 @@ VARIABLE _lpo-exact-locator
     _lpo-stack ;
 
 : _lpo-archived-ambient  ( -- )
-    1 _lpo-read-identity LIBSTORE-S-OK = _lpo-assert
+    1 _lpo-read-identity LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.LIFECYCLE @ LIB-LIFECYCLE-ARCHIVED = _lpo-assert
     _lpo-entry LIBE.DOMAIN-REVISION @ 2 = _lpo-assert
     _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a RID-COPY
@@ -597,7 +875,7 @@ VARIABLE _lpo-exact-locator
     1 _lpo-rid 2 _lpo-digest-a _lpo-loc-b _lpo-exact-loc!
         QLOC-S-OK = _lpo-assert
 
-    \ The root remains bound to its configured store when an unrelated empty
+    \ The root remains bound to its configured service when an unrelated empty
     \ VFS becomes ambient.  Archived identity is unavailable because identity
     \ means active-current; the exact archived state remains readable.
     _lpo-other-vfs @ VFS-USE
@@ -653,7 +931,7 @@ VARIABLE _lpo-exact-locator
         _lpo-request @ _lpo-client RCLI-REPLACE-CALL
         CBUS-S-DENIED = _lpo-assert
     _lpo-client RCLI.BIND LBIND.REVISION @ 1 = _lpo-assert
-    1 _lpo-read-identity LIBSTORE-S-OK = _lpo-assert
+    1 _lpo-read-identity LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.LIFECYCLE @ LIB-LIFECYCLE-ARCHIVED = _lpo-assert
     _lpo-entry LIBE.DOMAIN-REVISION @ 2 = _lpo-assert
     _lpo-entry LIBE.CURRENT-CONTENT-REVISION @ 1 = _lpo-assert
@@ -668,10 +946,16 @@ VARIABLE _lpo-exact-locator
     _lpo-stack ;
 
 : _lpo-published-tombstone  ( -- )
-    \ Publication is never durable authority.  Once the configured store
+    \ Publication is never durable authority.  Once the configured service
     \ tombstones this RID, new acquisition and calls through the already
     \ published instance both fail closed.  Its existing lease remains an
     \ ordinary releasable lifetime token so final teardown cannot leak.
+    2 _lpo-read-identity
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a RID-COPY
+    2 _lpo-rid _lpo-entry LIBE.DOMAIN-REVISION @
+        _lpo-digest-a _lpo-loc-b _lpo-exact-loc!
+        QLOC-S-OK = _lpo-assert
     2 _lpo-rid _lpo-loc-a _lpo-identity-loc!
         QLOC-S-OK = _lpo-assert
     _lpo-loc-a _lpo-bind-a _lpo-result-a _lpo-attach
@@ -683,14 +967,13 @@ VARIABLE _lpo-exact-locator
         1 = _lpo-assert
     _lpo-rreg @ RREG.COUNT @ 1 = _lpo-assert
 
-    2 _lpo-rid 1 _lpo-entry _lpo-store
-        LIBRARY-VFS-STORE-TOMBSTONE-DESTRUCTIVE
-        LIBSTORE-S-OK = _lpo-assert
+    2 _lpo-tombstone!
+        LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.LIFECYCLE @
         LIB-LIFECYCLE-TOMBSTONED = _lpo-assert
     CPRINC-USER _lpo-request @ _lpo-client RCLI-DESCRIBE
         CBUS-S-OK <> _lpo-assert
-    _lpo-loc-a CPRINC-USER _lpo-request @ _lpo-client
+    _lpo-loc-b CPRINC-USER _lpo-request @ _lpo-client
         RCLI-SNAPSHOT-CALL CBUS-S-OK <> _lpo-assert
 
     _lpo-bind-fail LBIND-INIT
@@ -710,7 +993,7 @@ VARIABLE _lpo-exact-locator
     _lpo-stack ;
 
 : _lpo-capture-snapshot  ( -- )
-    9 _lpo-read-identity LIBSTORE-S-OK = _lpo-assert
+    9 _lpo-read-identity LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.KIND @ LIB-KIND-CAPTURE = _lpo-assert
     _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a RID-COPY
     9 _lpo-rid _lpo-entry LIBE.DOMAIN-REVISION @ _lpo-digest-a
@@ -755,21 +1038,63 @@ VARIABLE _lpo-exact-locator
     _lpo-root LIBRARY-PROJECTION-ROOT-LIVE@ 0= _lpo-assert
     _lpo-stack ;
 
+: _lpo-large-bounded-snapshot  ( -- )
+    10 _lpo-read-identity
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-entry LIBE.CONTENT-U @
+        _LPO-LARGE-CONTENT-U = _lpo-assert
+    _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a RID-COPY
+    10 _lpo-rid _lpo-entry LIBE.DOMAIN-REVISION @
+        _lpo-digest-a _lpo-loc-a _lpo-exact-loc!
+        QLOC-S-OK = _lpo-assert
+    _lpo-loc-a _lpo-bind-a _lpo-result-a _lpo-attach
+        RACQ-S-OK = _lpo-assert
+    _lpo-result-a _lpo-bind-a _lpo-client-init
+        CBUS-S-OK = _lpo-assert
+    _lpo-client _lpo-managed-client? _lpo-assert
+
+    CPRINC-USER _lpo-request @ _lpo-client RCLI-DESCRIBE
+        CBUS-S-OK = _lpo-assert
+    _lpo-request @ CBR.RESULT RCON-DESCRIBE-RESULT? _lpo-assert
+    S" size" _lpo-request @ CBR.RESULT CV-MAP-FIND
+        CV-DATA@ _LPO-LARGE-CONTENT-U = _lpo-assert
+
+    \ Projection interop is intentionally bounded to 64 KiB.  Describe
+    \ reports the complete durable size, while snapshot refuses atomically
+    \ instead of returning a misleading prefix.
+    _lpo-loc-a CPRINC-USER _lpo-request @ _lpo-client
+        RCLI-SNAPSHOT-CALL CBUS-S-FAILED = _lpo-assert
+    _lpo-loc-a _lpo-request @ CBR.RESULT
+        RCON-SNAPSHOT-RESULT? 0= _lpo-assert
+    S" content" _lpo-request @ CBR.RESULT CV-MAP-FIND
+        0= _lpo-assert
+
+    10 _lpo-read-identity
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-entry LIBE.CONTENT-U @
+        _LPO-LARGE-CONTENT-U = _lpo-assert
+    _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a
+        SHA3-256-COMPARE _lpo-assert
+    _lpo-client RCLI-FINI CBUS-S-OK = _lpo-assert
+    _lpo-bind-a LBIND-CLEAR
+    _lpo-root LIBRARY-PROJECTION-ROOT-LIVE@ 0= _lpo-assert
+    _lpo-stack ;
+
 : _lpo-rejected  ( locator expected-status -- )
-    _lpo-status !
+    _lpo-expected-status !
     _lpo-bind-fail LBIND-INIT
     _lpo-result-fail RACQ-RESULT-INIT
     _lpo-bind-fail _lpo-result-fail _lpo-attach
-        _lpo-status @ = _lpo-assert
+        _lpo-expected-status @ = _lpo-assert
     _lpo-result-fail RACQ.RESULT-STATUS @
-        _lpo-status @ = _lpo-assert
+        _lpo-expected-status @ = _lpo-assert
     _lpo-result-fail RACQ.RESULT-TOKEN RACQ-TOKEN-ACTIVE?
         0= _lpo-assert
     _lpo-root LIBRARY-PROJECTION-ROOT-LIVE@ 0= _lpo-assert
     _lpo-root LIBRARY-PROJECTION-ROOT-LEASES@ 0= _lpo-assert ;
 
 : _lpo-acquire-failures  ( -- )
-    0 _lpo-read-identity LIBSTORE-S-OK = _lpo-assert
+    0 _lpo-read-identity LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.DOMAIN-REVISION @ 4 = _lpo-assert
     _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a RID-COPY
 
@@ -838,7 +1163,7 @@ VARIABLE _lpo-exact-locator
     \ A ninth distinct RID cannot evict or retarget any fixed-RID owner.
     \ The ninth request is an exact archived state because archived identity
     \ is deliberately unavailable.
-    1 _lpo-read-identity LIBSTORE-S-OK = _lpo-assert
+    1 _lpo-read-identity LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a RID-COPY
     1 _lpo-rid 2 _lpo-digest-a _lpo-loc-b _lpo-exact-loc!
         QLOC-S-OK = _lpo-assert
@@ -983,6 +1308,39 @@ VARIABLE _lpo-exact-locator
     _lpo-rreg @ RREG.COUNT @ 0= _lpo-assert
     _lpo-stack ;
 
+: _lpo-cold-reopen-contract  ( -- )
+    \ Close every storage/service descriptor, reconstruct them over the same
+    \ RAM-VFS, and prove an exact retained locator is still projectable.
+    _lpo-service _lpo-service-work LIBRARY-SERVICE-FINI
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-repository _lpo-repository-work LIBRARY-REPOSITORY-FINI
+        LIBRARY-REPOSITORY-S-OK = _lpo-assert
+    _lpo-repository-init
+    _lpo-repository _lpo-repository-work LIBRARY-REPOSITORY-LOAD
+        LIBRARY-REPOSITORY-S-OK = _lpo-assert
+    _lpo-service-init
+    _lpo-service _lpo-context @ _lpo-creg @ _lpo-rreg @ _lpo-bus @
+        _lpo-root LIBRARY-PROJECTION-ROOT-INIT
+        RACQ-S-OK = _lpo-assert
+
+    0 _lpo-read-identity
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-entry LIBE.DOMAIN-REVISION @ 4 = _lpo-assert
+    _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a RID-COPY
+    0 _lpo-rid 4 _lpo-digest-a _lpo-loc-a _lpo-exact-loc!
+        QLOC-S-OK = _lpo-assert
+    _lpo-loc-a _lpo-bind-a _lpo-result-a _lpo-attach
+        RACQ-S-OK = _lpo-assert
+    _lpo-result-a _lpo-bind-a _lpo-client-init
+        CBUS-S-OK = _lpo-assert
+    _lpo-loc-a S" managed-updated" _lpo-snapshot
+    _lpo-client RCLI-FINI CBUS-S-OK = _lpo-assert
+    _lpo-bind-a LBIND-CLEAR
+    _lpo-root LIBRARY-PROJECTION-ROOT-FINI
+        RACQ-S-OK = _lpo-assert
+    _lpo-root LIBRARY-PROJECTION-ROOT-SIZE _lpo-zero? _lpo-assert
+    _lpo-stack ;
+
 : _lpo-teardown  ( -- )
     _lpo-request @ CBR-FREE
     0 _lpo-request !
@@ -992,9 +1350,10 @@ VARIABLE _lpo-exact-locator
     _lpo-cold-context @ CTX-FREE
     _lpo-context @ CTX-FREE
     _lpo-vfs @ VFS-USE
-    _lpo-store LIBRARY-VFS-STORE-FINI
-        LIBSTORE-S-OK = _lpo-assert
-    _lpo-store-slot @ FREE 0 _lpo-store-slot !
+    _lpo-service _lpo-service-work LIBRARY-SERVICE-FINI
+        LIBRARY-SERVICE-S-OK = _lpo-assert
+    _lpo-repository _lpo-repository-work LIBRARY-REPOSITORY-FINI
+        LIBRARY-REPOSITORY-S-OK = _lpo-assert
     _lpo-old-vfs @ VFS-USE
     _lpo-other-vfs @ VFS-DESTROY
     _lpo-vfs @ VFS-DESTROY
@@ -1004,7 +1363,7 @@ VARIABLE _lpo-exact-locator
 : _lpo-run  ( -- )
     0 _lpo-fails ! 0 _lpo-checks ! DEPTH _lpo-depth !
     _lpo-capacity-buffers-setup
-    _lpo-store-setup
+    _lpo-repository-setup
     _lpo-runtime-setup
     _lpo-root-contract
     _lpo-attach-alias-contract
@@ -1016,7 +1375,10 @@ VARIABLE _lpo-exact-locator
     _lpo-acquire-failures
     _lpo-capacity-contract
     _lpo-lease-capacity-contract
+    _lpo-create-large
+    _lpo-large-bounded-snapshot
     _lpo-root-fini-contract
+    _lpo-cold-reopen-contract
     _lpo-teardown
     _lpo-stack
     _lpo-fails @ ?DUP IF

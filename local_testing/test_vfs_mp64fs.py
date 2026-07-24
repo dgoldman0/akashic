@@ -32,6 +32,7 @@ from devices import (
     STORAGE_CMD_WRITE,
     STORAGE_RESULT_FLUSH_FAILURE,
     STORAGE_RESULT_MEDIA_FAILURE,
+    STORAGE_RESULT_OK,
 )
 from system import MegapadSystem
 
@@ -198,6 +199,30 @@ def build_stale_free_sector_image(fill=0xCC):
     free_sector = start + 1
     image[free_sector * SECTOR:(free_sector + 1) * SECTOR] = bytes([fill]) * SECTOR
     return bytes(image), free_sector
+
+
+def build_blocked_two_extent_image():
+    """Build a file whose primary and secondary extents cannot grow in place."""
+    image = bytearray(build_disk_image([
+        ("grow.bin", PARENT_ROOT, FTYPE_RAW, b"A" * SECTOR),
+        ("primary-block.bin", PARENT_ROOT, FTYPE_RAW, b"P" * SECTOR),
+        ("secondary.bin", PARENT_ROOT, FTYPE_RAW, b"B" * SECTOR),
+        ("secondary-block.bin", PARENT_ROOT, FTYPE_RAW, b"Q" * SECTOR),
+    ]))
+    bmap_sectors = (len(image) // SECTOR + 4095) // 4096
+    directory = (1 + bmap_sectors) * SECTOR
+    grow = directory
+    secondary = directory + 2 * DIR_ENTRY_SIZE
+    primary_start = struct.unpack_from("<H", image, grow + 24)[0]
+    secondary_start = struct.unpack_from("<H", image, secondary + 24)[0]
+
+    # Transfer the third file's sector to grow.bin as its secondary extent.
+    # Its directory slot becomes free while the allocation bitmap remains
+    # correct because the same sector still has exactly one owner.
+    struct.pack_into("<I", image, grow + 28, 2 * SECTOR)
+    struct.pack_into("<HH", image, grow + 44, secondary_start, 1)
+    image[secondary:secondary + DIR_ENTRY_SIZE] = bytes(DIR_ENTRY_SIZE)
+    return bytes(image), primary_start, secondary_start
 
 
 def build_last_slot_image():
@@ -788,6 +813,56 @@ def test_create_write_read_delete_and_sync():
     ], "MUTATION-OK")
 
 
+def test_delete_and_shrink_defer_frees_past_directory_durability():
+    """Directory authority becomes durable before removed sectors are freed."""
+    flush_fault = [{
+        "stage": "flush",
+        "result": STORAGE_RESULT_FLUSH_FAILURE,
+        "command": STORAGE_CMD_FLUSH,
+    }]
+
+    check("delete crash prefix retains allocation then retries retirement", [
+        'T-VMP-NEW CONSTANT _V',
+        'S" /hello.txt" _V VFS-RESOLVE IN.BDATA @ CONSTANT _OLDSEC',
+        'S" /hello.txt" _V VFS-RM 0=',
+        '_V VFS-SYNC CONSTANT _S1',
+        '_S1 VFS-IOR-REASON VFS-R-IO = AND',
+        '_V V.BCTX @ DUP _VMP-C.DFREE + @ 0<>',
+        'SWAP _VMP-C.DDIR + @ 0<> AND AND',
+        'T-VMP-NEW CONSTANT _VR',
+        'S" /hello.txt" _VR VFS-RESOLVE 0= AND',
+        '_OLDSEC _VR V.BCTX @ _VMP-BIT-FREE? 0= AND',
+        '_V VFS-SYNC 0= AND',
+        'T-VMP-NEW CONSTANT _VR2',
+        'S" /hello.txt" _VR2 VFS-RESOLVE 0= AND',
+        '_OLDSEC _VR2 V.BCTX @ _VMP-BIT-FREE? AND',
+        'IF ." DELETE-DEFERRED-FREE-OK" THEN',
+    ], "DELETE-DEFERRED-FREE-OK", storage_faults=flush_fault)
+
+    check("shrink crash prefix retains tail then retries retirement", [
+        'T-VMP-NEW CONSTANT _V',
+        'S" /data.bin" _V VFS-RESOLVE IN.BDATA @ CONSTANT _OLDSEC',
+        'S" /data.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '512 _FD VFS-TRUNCATE 0=',
+        '_FD VFS-SIZE 512 = AND',
+        '_V VFS-SYNC CONSTANT _S1',
+        '_S1 VFS-IOR-REASON VFS-R-IO = AND',
+        '_V V.BCTX @ DUP _VMP-C.DFREE + @ 0<>',
+        'SWAP _VMP-C.DDIR + @ 0<> AND AND',
+        'T-VMP-NEW CONSTANT _VR',
+        'S" /data.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
+        '_RFD VFS-SIZE 512 = AND',
+        '_OLDSEC 1+ _VR V.BCTX @ _VMP-BIT-FREE? 0= AND',
+        '_V VFS-SYNC 0= AND',
+        'T-VMP-NEW CONSTANT _VR2',
+        'S" /data.bin" VFS-FF-READ _VR2 VFS-OPEN? THROW CONSTANT _RFD2',
+        '_RFD2 VFS-SIZE 512 = AND',
+        '_OLDSEC 1+ _VR2 V.BCTX @ _VMP-BIT-FREE? AND',
+        'IF ." SHRINK-DEFERRED-FREE-OK" THEN',
+    ], "SHRINK-DEFERRED-FREE-OK", storage_faults=flush_fault)
+
+
 def test_create_zeroes_newly_allocated_sector():
     """Create claims a sector only after old media bytes are zeroed."""
     global _pass_count, _fail_count
@@ -879,8 +954,171 @@ def test_zeroing_failures_do_not_publish_size_or_extent():
     ], "ALLOC-FAIL-NOT-PUBLISHED", disk_image=image, storage_faults=fault)
 
 
+def test_blocked_two_extent_growth_relocates_transactionally():
+    """A blocked two-extent file relocates without losing bytes or stack cells."""
+    image, primary_start, secondary_start = build_blocked_two_extent_image()
+    check("blocked two-extent growth relocates and remounts", [
+        ': _SAME-BYTE? ( a u byte -- flag )',
+        '  >R 0 ?DO DUP I + C@ R@ <> IF',
+        '    DROP R> DROP FALSE UNLOOP EXIT',
+        '  THEN LOOP DROP R> DROP TRUE ;',
+        'T-VMP-NEW CONSTANT _V',
+        'DEPTH CONSTANT _BASE-DEPTH',
+        'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '1024 _FD VFS-SEEK',
+        'S" C" _FD VFS-WRITE? THROW 1 =',
+        'DEPTH _BASE-DEPTH = AND',
+        '_FD VFS-REWIND',
+        '_RB 1025 _FD VFS-READ? THROW 1025 = AND',
+        '_RB 512 [CHAR] A _SAME-BYTE? AND',
+        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
+        '_RB 1024 + C@ [CHAR] C = AND',
+        '_FD FD.INODE @ DUP IN.BDATA @ '
+        f'{primary_start} <>',
+        'SWAP IN.BDATA 8 + @ 4 = AND AND',
+        '_FD FD.INODE @ IN.BID @ _V V.BCTX @ _VMP-DIRENT',
+        'DUP _VMP-DE.COUNT 4 =',
+        'OVER _VMP-DE.EXT1S 0= AND',
+        'SWAP _VMP-DE.EXT1C 0= AND AND',
+        f'{primary_start} 1 _V V.BCTX @ _VMP-RUN-FREE? AND',
+        f'{secondary_start} 1 _V V.BCTX @ _VMP-RUN-FREE? AND',
+        '_FD VFS-CLOSE? 0= AND',
+        '_V VFS-SYNC 0= AND',
+        'T-VMP-NEW CONSTANT _VR',
+        'S" /grow.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
+        '_RB 1025 _RFD VFS-READ? THROW 1025 = AND',
+        '_RB 512 [CHAR] A _SAME-BYTE? AND',
+        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
+        '_RB 1024 + C@ [CHAR] C = AND',
+        'IF ." TWO-EXTENT-RELOCATE-OK" THEN',
+    ], "TWO-EXTENT-RELOCATE-OK", disk_image=image)
+
+    fault = [{
+        "stage": "start",
+        "result": STORAGE_RESULT_MEDIA_FAILURE,
+        "command": STORAGE_CMD_WRITE,
+    }]
+    check("failed two-extent relocation keeps old authority", [
+        'T-VMP-NEW CONSTANT _V',
+        'DEPTH CONSTANT _BASE-DEPTH',
+        'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '1536 _FD VFS-TRUNCATE CONSTANT _IOR',
+        '_IOR VFS-IOR-REASON VFS-R-IO =',
+        'DEPTH _BASE-DEPTH = AND',
+        '_FD VFS-SIZE 1024 = AND',
+        '_FD FD.INODE @ DUP IN.BDATA @ '
+        f'{primary_start} =',
+        'SWAP IN.BDATA 8 + @ 1 = AND AND',
+        '_FD FD.INODE @ IN.BID @ _V V.BCTX @ _VMP-DIRENT',
+        'DUP _VMP-DE.COUNT 1 =',
+        'OVER _VMP-DE.EXT1S '
+        f'{secondary_start} = AND',
+        'SWAP _VMP-DE.EXT1C 1 = AND AND',
+        'IF ." TWO-EXTENT-FAIL-NOT-PUBLISHED" THEN',
+    ], "TWO-EXTENT-FAIL-NOT-PUBLISHED",
+       disk_image=image, storage_faults=fault)
+
+    check("relocation bitmap-flush failure remounts old authority", [
+        ': _SAME-BYTE? ( a u byte -- flag )',
+        '  >R 0 ?DO DUP I + C@ R@ <> IF',
+        '    DROP R> DROP FALSE UNLOOP EXIT',
+        '  THEN LOOP DROP R> DROP TRUE ;',
+        'T-VMP-NEW CONSTANT _V',
+        'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '1536 _FD VFS-TRUNCATE CONSTANT _IOR',
+        '_IOR VFS-IOR-REASON VFS-R-IO =',
+        '_FD FD.INODE @ DUP IN.BDATA @ '
+        f'{primary_start} =',
+        'SWAP IN.BDATA 8 + @ 1 = AND AND',
+        'T-VMP-NEW CONSTANT _VR',
+        'S" /grow.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
+        '_RB 1024 _RFD VFS-READ? THROW 1024 = AND',
+        '_RB 512 [CHAR] A _SAME-BYTE? AND',
+        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
+        'IF ." RELOCATE-BMAP-FAIL-REMOUNT-OK" THEN',
+    ], "RELOCATE-BMAP-FAIL-REMOUNT-OK",
+       disk_image=image, storage_faults=[{
+           "stage": "flush",
+           "result": STORAGE_RESULT_FLUSH_FAILURE,
+           "command": STORAGE_CMD_FLUSH,
+       }])
+
+    # Every earlier relocation write is a one-sector request, as is this
+    # image's bitmap.  Sector index one therefore selects the multi-sector
+    # directory publication after the conservative bitmap is durable.
+    check("relocation directory failure compensates and remounts", [
+        ': _SAME-BYTE? ( a u byte -- flag )',
+        '  >R 0 ?DO DUP I + C@ R@ <> IF',
+        '    DROP R> DROP FALSE UNLOOP EXIT',
+        '  THEN LOOP DROP R> DROP TRUE ;',
+        'T-VMP-NEW CONSTANT _V',
+        'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '1536 _FD VFS-TRUNCATE CONSTANT _IOR',
+        '_IOR VFS-IOR-REASON VFS-R-IO =',
+        '_FD FD.INODE @ DUP IN.BDATA @ '
+        f'{primary_start} =',
+        'SWAP IN.BDATA 8 + @ 1 = AND AND',
+        'T-VMP-NEW CONSTANT _VR',
+        'S" /grow.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
+        '_RB 1024 _RFD VFS-READ? THROW 1024 = AND',
+        '_RB 512 [CHAR] A _SAME-BYTE? AND',
+        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
+        'IF ." RELOCATE-DIR-FAIL-REMOUNT-OK" THEN',
+    ], "RELOCATE-DIR-FAIL-REMOUNT-OK",
+       disk_image=image, storage_faults=[{
+           "stage": "media",
+           "sector_index": 1,
+           "result": STORAGE_RESULT_MEDIA_FAILURE,
+           "command": STORAGE_CMD_WRITE,
+       }])
+
+    check("relocation retirement-flush failure remounts new authority", [
+        ': _SAME-BYTE? ( a u byte -- flag )',
+        '  >R 0 ?DO DUP I + C@ R@ <> IF',
+        '    DROP R> DROP FALSE UNLOOP EXIT',
+        '  THEN LOOP DROP R> DROP TRUE ;',
+        'T-VMP-NEW CONSTANT _V',
+        'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
+        'VFS-OPEN? THROW CONSTANT _FD',
+        '1536 _FD VFS-TRUNCATE CONSTANT _IOR',
+        '_IOR VFS-IOR-REASON VFS-R-IO =',
+        '_FD VFS-SIZE 1024 = AND',
+        '_FD FD.INODE @ DUP IN.BDATA @ '
+        f'{primary_start} <>',
+        'SWAP IN.BDATA 8 + @ 4 = AND AND',
+        '_V V.BCTX @ _VMP-C.DBMAP + @ 0<> AND',
+        'T-VMP-NEW CONSTANT _VR',
+        'S" /grow.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
+        '_RB 1024 _RFD VFS-READ? THROW 1024 = AND',
+        '_RB 512 [CHAR] A _SAME-BYTE? AND',
+        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
+        'IF ." RELOCATE-RETIRE-FAIL-REMOUNT-OK" THEN',
+    ], "RELOCATE-RETIRE-FAIL-REMOUNT-OK",
+       disk_image=image, storage_faults=[
+           {
+               "stage": "flush",
+               "result": STORAGE_RESULT_OK,
+               "command": STORAGE_CMD_FLUSH,
+           },
+           {
+               "stage": "flush",
+               "result": STORAGE_RESULT_OK,
+               "command": STORAGE_CMD_FLUSH,
+           },
+           {
+               "stage": "flush",
+               "result": STORAGE_RESULT_FLUSH_FAILURE,
+               "command": STORAGE_CMD_FLUSH,
+           },
+       ])
+
+
 def test_second_bitmap_sector_sync_and_remount():
-    """Allocation above sector 4096 survives sync and a second mount."""
+    """Allocation and deferred retirement above sector 4096 both survive sync."""
     image = build_disk_image([
         ("prefix.bin", PARENT_ROOT, FTYPE_RAW, bytes(4100 * SECTOR)),
     ], total_sectors=8192)
@@ -892,6 +1130,11 @@ def test_second_bitmap_sector_sync_and_remount():
         'S" /high.bin" _VR VFS-RESOLVE DUP 0<> IF',
         '  IN.BDATA @ 4115 = AND',
         'ELSE DROP FALSE THEN',
+        'S" /high.bin" _VR VFS-RM 0= AND',
+        '_VR VFS-SYNC 0= AND',
+        'T-VMP-NEW CONSTANT _VR2',
+        'S" /high.bin" _VR2 VFS-RESOLVE 0= AND',
+        '4115 _VR2 V.BCTX @ _VMP-BIT-FREE? AND',
         'IF ." HIGH-ALLOC-OK" THEN',
     ], "HIGH-ALLOC-OK", disk_image=image)
 
@@ -1146,9 +1389,11 @@ def main():
     test_full_sector_reads_preserve_stack_depth()
     test_full_sector_writes_preserve_stack_depth()
     test_create_write_read_delete_and_sync()
+    test_delete_and_shrink_defer_frees_past_directory_durability()
     test_create_zeroes_newly_allocated_sector()
     test_seek_gap_and_truncate_growth_zero_visible_ranges()
     test_zeroing_failures_do_not_publish_size_or_extent()
+    test_blocked_two_extent_growth_relocates_transactionally()
     test_second_bitmap_sector_sync_and_remount()
     test_sync_retains_dirty_metadata_until_flush_succeeds()
     test_two_instances_share_only_explicit_volume()

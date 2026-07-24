@@ -5,8 +5,8 @@
     "commit": "ce340fc8bef0b2c1331339f6ceaf4c02d4c020f5",
     "expected": {
       "module_count": 404,
-      "resolved_require_occurrence_count": 1343,
-      "unique_resolved_edge_count": 1343,
+      "resolved_require_occurrence_count": 1333,
+      "unique_resolved_edge_count": 1333,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -14,8 +14,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "1c147bad01623ba7f963303f7f19eddf51f5096449d435a2f10e3775579b198a",
-      "state_sha256": "51c7ab7629b763146f44626f63a1d65aa6960a5a8b60e58c0a6217998b9ce5ca",
+      "graph_sha256": "8022e4ecb92e66e75eadb821ba01842ca09e72ae143f28201cf69e0356992473",
+      "state_sha256": "d4f1056d9e157bf8e13337d6fb2217ac24414887ea6959476609a2837bd9b602",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -141,9 +141,13 @@
       },
       "large_host_model": {
         "documents": 1000000,
+        "collections": 100000,
         "revisions": 10000000,
         "relationship_edges": 10000000,
-        "purpose": "prove Library index geometry, amplification, and bounded working memory without aggregate target allocation"
+        "representative_current_tag_postings": 16000000,
+        "representative_current_text_postings": 12666000000,
+        "index_tree_count": 15,
+        "purpose": "prove the live Library index geometry, amplification, and bounded working memory without aggregate target allocation"
       }
     },
     "streams": {
@@ -213,14 +217,17 @@
   },
   "hot_path_budgets": {
     "cold_open_max_metadata_pages": 64,
-    "large_profile_point_lookup_max_index_pages": 9,
-    "large_profile_32_result_keyset_max_index_page_reads": 66,
-    "large_profile_250000_edge_range_max_index_page_reads": 515658,
-    "metadata_mutation_representative_pages": 77,
-    "metadata_mutation_representative_checked_page_bytes": 315392,
-    "metadata_mutation_structural_ceiling_pages": 139,
-    "metadata_mutation_structural_ceiling_checked_page_bytes": 569344,
-    "metadata_mutation_reclaim_step_calls": 66,
+    "large_profile_point_lookup_max_index_pages": 12,
+    "large_profile_32_result_keyset_max_index_page_reads": 44,
+    "large_profile_250000_edge_range_max_index_page_reads": 273455,
+    "library_index_tree_count": 15,
+    "library_index_workspace_bytes": 119840,
+    "btree_mutation_max_allocated_pages": 25,
+    "allocated_page_ledger": 128,
+    "staging_admission_policy": "dynamic public-ledger page reservation",
+    "staging_mutation_page_reservation": "2h+1 pages at the tallest current staging root",
+    "staging_publication_reservation": "one application-root page plus bounded reclaim-step and reclaim-finalizer retirement/discard pages",
+    "stage_policy_within_page_ledger": true,
     "reclaim_maintenance_max_page_writes_per_step": 1,
     "ui_max_collection_pages": 3,
     "ordinary_operation_corpus_proportional_allocation": false,
@@ -235,68 +242,74 @@
     ]
   },
   "hot_path_budget_amendment": {
-    "landing": "L11",
-    "prior_provisional": {
-      "large_profile_point_lookup_max_index_pages": 6,
-      "metadata_mutation_max_pages": 32,
-      "metadata_mutation_max_bytes_excluding_payload": 262144
-    },
-    "settled": {
+    "landing": "L12",
+    "superseded_l11_projection": {
+      "index_tree_count": 7,
+      "library_index_workspace_bytes": 84672,
       "large_profile_point_lookup_max_index_pages": 9,
       "large_profile_32_result_keyset_max_index_page_reads": 66,
       "large_profile_250000_edge_range_max_index_page_reads": 515658,
       "metadata_mutation_representative_pages": 77,
-      "metadata_mutation_representative_checked_page_bytes": 315392,
-      "metadata_mutation_structural_ceiling_pages": 139,
-      "metadata_mutation_structural_ceiling_checked_page_bytes": 569344,
-      "metadata_mutation_reclaim_step_calls": 66,
-      "reclaim_maintenance_max_page_writes_per_step": 1
+      "metadata_mutation_structural_ceiling_pages": 139
     },
+    "live_topology": {
+      "index_tree_count": 15,
+      "library_index_workspace_bytes": 119840,
+      "large_profile_point_lookup_max_index_pages": 12,
+      "large_profile_32_result_keyset_max_index_page_reads": 44,
+      "large_profile_250000_edge_range_max_index_page_reads": 273455,
+      "btree_mutation_max_allocated_pages": 25,
+      "allocated_page_ledger": 128,
+      "staging_admission_policy": "dynamic public-ledger page reservation",
+      "staging_mutation_page_reservation": "2h+1 pages at the tallest current staging root",
+      "staging_publication_reservation": "one application-root page plus bounded reclaim-step and reclaim-finalizer retirement/discard pages"
+    },
+    "resolved": "L12 admits each staged mutation only when the public allocation, retirement, and discard ledgers can absorb its dynamic tree-height reservation and the remaining publication/finalization reserves; physical publications split long logical operations without advancing their logical generation.",
     "evidence": [
-      "nine-level churn-retained B+tree bound",
-      "7,813 independently prepared 32-result relationship slices",
-      "65 copy-on-write index page writes",
-      "two application-root writes",
-      "six reclaim-finalization bucket writes",
-      "four representative steady two-bucket reclaim maintenance writes",
-      "one reclaim maintenance page write maximum per step",
-      "139 checked-page writes across the unconditional 66-step ceiling"
+      "exact fifteen-root Library adapter topology",
+      "twelve-level churn-retained body-postings bound",
+      "7,813 cache-preserving 32-result membership slices",
+      "119,840-byte caller-owned Library index workspace",
+      "all-tree page-read, page-write, and comparison telemetry",
+      "2h+1 mutation-page reservation from the tallest current staging root",
+      "public-ledger admission through RECLAIM-TX-ROOM?",
+      "physical and final publication paths with distinct logical-generation semantics"
     ]
   },
   "hot_path_baseline": {
     "evidence": [
-      "local_testing/evidence/library-gate4-close-20260720.md",
-      "local_testing/evidence/library-projection-owner-20260720.md",
-      "local_testing/library_query_efficiency.py",
-      "local_testing/library_projection_efficiency.py",
-      "local_testing/library_maintenance_efficiency.py"
+      "local_testing/test_persistence_scale_model.py",
+      "local_testing/test_library_persistence_l12.py",
+      "local_testing/test_library_query_l12.py",
+      "local_testing/test_library_compaction_l12.py"
     ],
     "existing_guest_counters": [
       "PERF-CYCLES",
       "PERF-STALLS",
       "PERF-EXTMEM",
-      "Library full validation count",
-      "Library warm assurance count",
-      "Library index rebuild count",
-      "Library entry and collection reads",
-      "Library direct frame reads and bytes",
-      "Library arena scans and frames"
+      "Library aggregate fifteen-tree page reads",
+      "Library aggregate fifteen-tree page writes",
+      "Library aggregate fifteen-tree comparisons",
+      "PBLOB chunk and manifest reads and writes",
+      "PBLOB transferred bytes and peak working memory",
+      "Library reclaim steps and moved pages"
     ],
     "missing_instrumentation": [
-      "logical persistence page reads and writes",
       "allocation event count",
-      "peak live allocation bytes"
+      "peak live allocation bytes",
+      "cache hits and misses"
     ],
-    "clarification": "PERF-EXTMEM counts external-memory traffic; it is not an allocation counter. Current 512-byte VFS sectors must not be relabelled as future logical persistence pages.",
+    "clarification": "Library B+tree counters report logical 4,096-byte checked-page activity across all fifteen live trees. PERF-EXTMEM remains external-memory traffic, not an allocation counter or a substitute for logical page telemetry.",
     "coverage": [
       {
         "area": "Library",
-        "status": "measured",
+        "status": "analytical-and-focused-guest",
         "operations": [
-          "cold load",
-          "query",
-          "projection acquire/describe/snapshot/replace/release",
-          "maintenance inspect/export/repair"
+          "fifteen-tree point and keyset queries",
+          "high-degree membership ranges",
+          "chunked-content range reads",
+          "staged publication",
+          "bounded compaction"
         ]
       },
       {
@@ -320,46 +333,41 @@
         "missing": "isolated launch, close, relayout, dispatch, and repaint telemetry"
       }
     ],
-    "representative_measurements": [
+    "representative_bounds": [
       {
-        "operation": "projection replace",
-        "shape": "65536-byte content",
-        "cycles": 495847848
+        "operation": "point lookup",
+        "shape": "large-host body-postings tree",
+        "logical_index_page_reads_max": 12
       },
       {
-        "operation": "maintenance repair",
-        "shape": "9 x 65536-byte payloads",
-        "cycles": 1627300611
+        "operation": "keyset query",
+        "shape": "32 results from the large-host body-postings tree",
+        "logical_index_page_reads_max": 44
       },
       {
-        "operation": "maintenance inspect",
-        "shape": "9 x 65536-byte payloads",
-        "cycles": 546637946
+        "operation": "membership range",
+        "shape": "250,000 results in 7,813 cache-preserving slices",
+        "logical_index_page_reads_max": 273455
+      },
+      {
+        "operation": "staged publication admission",
+        "shape": "dynamic tallest-root mutation reservation plus application-root and reclaim-finalization reserves",
+        "admission": "checked against the live public allocation, retirement, and discard ledgers before each mutation"
       }
     ]
   },
   "complexity_ledger": [
     {
       "id": "library.metadata-mutation",
-      "module": "tui/applets/library/repository.f",
-      "operation": "metadata mutation and publication",
-      "current_structure": "dual complete fixed-capacity metadata banks",
-      "current_complexity": "O(catalog capacity) copied, written, and read back per mutation",
-      "scale_risk": "write cost and temporary I/O scale with the complete catalog rather than the changed records",
-      "replacement_requirement": "copy-on-write indexed pages plus atomic root publication",
+      "module": "tui/applets/library/persistence-adapter.f",
+      "operation": "staged document, collection, and posting mutation publication",
+      "current_structure": "fifteen copy-on-write indexes with each staged mutation admitted against the public allocation, retirement, and discard ledgers",
+      "current_complexity": "O((changed keys + candidate postings) log n)",
+      "scale_risk": "transaction ledgers remain deliberately bounded, so long logical operations may require multiple physical publications whose count follows live tree height and reclaim pressure",
+      "replacement_requirement": "delivered in L12: reserve mutation, application-root, reclaim-step, and reclaim-finalizer ledger room before admission, publishing physical roots when the next mutation would not fit",
+      "status": "resolved",
       "target_landing": "L12",
-      "evidence_symbols": ["_LIBMU-COPY-BANK-BODY", "_LIBMU-FULL-CANDIDATE-READBACK"]
-    },
-    {
-      "id": "library.corpus-query",
-      "module": "tui/applets/library/query.f",
-      "operation": "ordered and filtered corpus query",
-      "current_structure": "fixed catalog slots with optional reject accelerator",
-      "current_complexity": "O(catalog slots + candidate content verification)",
-      "scale_risk": "ordinary queries retain a corpus-wide scan path",
-      "replacement_requirement": "ordered/compound indexes and opaque keyset cursors",
-      "target_landing": "L12",
-      "evidence_symbols": ["_LIBRARY-VFS-STORE-QUERY-CORPUS", "_LIBCQ-INDEX-REQUIRED?"]
+      "evidence_symbols": ["_LIBPIX-STAGING-MUTATION-PAGES", "_LIBPIX-STAGE-NEXT-ROOM?", "RECLAIM-TX-ROOM?", "_LIBPIX-STAGE-PUBLISH", "_LIBPIX-STAGE-FINAL-PUBLISH"]
     },
     {
       "id": "streams.observation-checkpoint",
@@ -496,51 +504,11 @@
   ],
   "capacities": [
     {
-      "id": "library.catalog",
+      "id": "library.content-window",
       "module": "tui/applets/library/model.f",
-      "symbol": "LIB-CATALOG-MAX",
-      "value": 128,
-      "scope": "aggregate-corpus",
-      "scale_axis": "primary-record-cardinality"
-    },
-    {
-      "id": "library.collections",
-      "module": "tui/applets/library/model.f",
-      "symbol": "LIB-COLLECTION-MAX",
-      "value": 32,
-      "scope": "aggregate-corpus",
-      "scale_axis": "relationship-cardinality"
-    },
-    {
-      "id": "library.collection-members",
-      "module": "tui/applets/library/model.f",
-      "symbol": "LIB-COLLECTION-MEMBER-MAX",
-      "value": 128,
-      "scope": "aggregate-relationship",
-      "scale_axis": "relationship-cardinality"
-    },
-    {
-      "id": "library.tags",
-      "module": "tui/applets/library/model.f",
-      "symbol": "LIB-TAG-MAX",
-      "value": 16,
-      "scope": "per-record-inline",
-      "scale_axis": "model-complexity"
-    },
-    {
-      "id": "library.lineage",
-      "module": "tui/applets/library/model.f",
-      "symbol": "LIB-LINEAGE-MAX",
-      "value": 4,
-      "scope": "per-record-inline",
-      "scale_axis": "model-complexity"
-    },
-    {
-      "id": "library.content-bytes",
-      "module": "tui/applets/library/model.f",
-      "symbol": "LIB-CONTENT-MAX",
+      "symbol": "LIB-CONTENT-WINDOW-MAX",
       "value": 65536,
-      "scope": "whole-record-buffer",
+      "scope": "working-set",
       "scale_axis": "content-bytes"
     },
     {
@@ -557,7 +525,7 @@
       "symbol": "LIB-QUERY-PAGE-MAX",
       "value": 32,
       "scope": "working-set",
-      "scale_axis": "ui-window"
+      "scale_axis": "relationship-cardinality"
     },
     {
       "id": "library.live-projections",
