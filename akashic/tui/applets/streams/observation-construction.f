@@ -1,0 +1,628 @@
+\ =====================================================================
+\  observation-construction.f - Same-byte Streams observation assembly
+\ =====================================================================
+\  This boundary constructs one immutable observation revision inside an
+\  already-active Streams persistence-adapter transaction.  It proves the
+\  PBLOB/content-digest byte relationship by giving STREAMS-PA-BLOB-WRITE
+\  one frozen view of the exact candidate OCC.CONTENT bytes and then giving
+\  the same candidate to SPREC-OBSERVATION-CANDIDATE!, which hashes that
+\  exact content view into the checked observation.
+\
+\  Candidate, fully checked SUCCEEDED attempt, and fully checked native head
+\  are admitted before PBLOB mutation.  Their source, namespace, exact native
+\  identity, acquisition sequence, and current revision must agree.  The
+\  finished observation must pass the complete publication-agreement
+\  predicate before it is returned.
+\
+\  All mutable state, including the PBLOB descriptor scratch and callback
+\  state, is caller-owned.  This module never begins, commits, or aborts a
+\  transaction.  On a returned failure, every admitted output observation is
+\  all-zero.  STREAMS-OC-ABORT-REQUIRED? is conservative: after any failed
+\  adapter blob-write call, or any later failure, the caller must abort the
+\  surrounding transaction and reinitialize the construction work before
+\  reusing it.
+\
+\  Public API:
+\    STREAMS-OC-WORK-SIZE
+\    STREAMS-OC-WORK-INIT       ( work -- status )
+\    STREAMS-OC-WORK-VALID?     ( work -- flag )
+\    STREAMS-OC-WORK-STATUS@    ( work -- status )
+\    STREAMS-OC-ABORT-REQUIRED? ( work -- flag )
+\    STREAMS-OC-CONSTRUCT
+\      ( candidate attempt native-head output-observation
+\        adapter adapter-work construction-work -- status )
+\
+\  The all-zero failure guarantee necessarily begins only after the output
+\  span itself and its fixed caller-owned neighbours have been admitted.
+\  A null, wrapping, protected-graph, or aliased output is rejected without
+\  dereference.
+\ =====================================================================
+
+PROVIDED akashic-tui-streams-observation-construction
+
+REQUIRE persistence-adapter.f
+REQUIRE semantic-record-agreement.f
+
+\ ---------------------------------------------------------------------
+\ Status domain
+\ ---------------------------------------------------------------------
+
+STREAMS-PA-S-OK          CONSTANT STREAMS-OC-S-OK
+STREAMS-PA-S-ABSENT      CONSTANT STREAMS-OC-S-ABSENT
+STREAMS-PA-S-INVALID     CONSTANT STREAMS-OC-S-INVALID
+STREAMS-PA-S-CAPACITY    CONSTANT STREAMS-OC-S-CAPACITY
+STREAMS-PA-S-IO          CONSTANT STREAMS-OC-S-IO
+STREAMS-PA-S-CORRUPT     CONSTANT STREAMS-OC-S-CORRUPT
+STREAMS-PA-S-BUSY        CONSTANT STREAMS-OC-S-BUSY
+STREAMS-PA-S-CONFLICT    CONSTANT STREAMS-OC-S-CONFLICT
+STREAMS-PA-S-UNCERTAIN   CONSTANT STREAMS-OC-S-UNCERTAIN
+STREAMS-PA-S-NOT-FOUND   CONSTANT STREAMS-OC-S-NOT-FOUND
+STREAMS-PA-S-FAULT       CONSTANT STREAMS-OC-S-FAULT
+STREAMS-PA-S-UNSUPPORTED CONSTANT STREAMS-OC-S-UNSUPPORTED
+
+: _SOC-STATUS?  ( status -- flag )
+    DUP STREAMS-OC-S-OK >=
+    SWAP STREAMS-OC-S-UNSUPPORTED <= AND ;
+
+: _SOC-ADAPTER>STATUS  ( adapter-status -- construction-status )
+    DUP STREAMS-PA-S-OK <
+    OVER STREAMS-PA-S-UNSUPPORTED > OR IF
+        DROP STREAMS-OC-S-FAULT
+    THEN ;
+
+: _SOC-SPREC>STATUS  ( record-status -- construction-status )
+    CASE
+        SPREC-S-OK OF
+            STREAMS-OC-S-OK ENDOF
+        SPREC-S-INVALID OF
+            STREAMS-OC-S-INVALID ENDOF
+        SPREC-S-CAPACITY OF
+            STREAMS-OC-S-CAPACITY ENDOF
+        SPREC-S-CORRUPT OF
+            STREAMS-OC-S-CORRUPT ENDOF
+        STREAMS-OC-S-FAULT SWAP
+    ENDCASE ;
+
+: _SOC-DROP7  ( x1 x2 x3 x4 x5 x6 x7 -- )
+    2DROP 2DROP 2DROP DROP ;
+
+: _SOC-DROP6  ( x1 x2 x3 x4 x5 x6 -- )
+    2DROP 2DROP 2DROP ;
+
+\ ---------------------------------------------------------------------
+\ Caller-owned construction work
+\ ---------------------------------------------------------------------
+
+0x5354524D4F435731 CONSTANT _SOCW-MAGIC  \ "STRMOCW1"
+
+  0 CONSTANT _SOCW-MAGIC-OFF
+  8 CONSTANT _SOCW-SELF-OFF
+ 16 CONSTANT _SOCW-BUSY-OFF
+ 24 CONSTANT _SOCW-STATUS-OFF
+ 32 CONSTANT _SOCW-ABORT-REQUIRED-OFF
+ 40 CONSTANT _SOCW-OUTPUT-ADMITTED-OFF
+ 48 CONSTANT _SOCW-BLOB-CALLED-OFF
+ 56 CONSTANT _SOCW-CANDIDATE-OFF
+ 64 CONSTANT _SOCW-ATTEMPT-OFF
+ 72 CONSTANT _SOCW-NATIVE-OFF
+ 80 CONSTANT _SOCW-OUTPUT-OFF
+ 88 CONSTANT _SOCW-ADAPTER-OFF
+ 96 CONSTANT _SOCW-ADAPTER-WORK-OFF
+104 CONSTANT _SOCW-CONTENT-A-OFF
+112 CONSTANT _SOCW-CONTENT-U-OFF
+120 CONSTANT _SOCW-BLOB-OFF
+_SOCW-BLOB-OFF PBLOB-SIZE + CONSTANT _SOCW-RESERVED-OFF
+_SOCW-RESERVED-OFF 8 + CONSTANT STREAMS-OC-WORK-SIZE
+
+: _SOCW.MAGIC           ( work -- a ) _SOCW-MAGIC-OFF + ;
+: _SOCW.SELF            ( work -- a ) _SOCW-SELF-OFF + ;
+: _SOCW.BUSY            ( work -- a ) _SOCW-BUSY-OFF + ;
+: _SOCW.STATUS          ( work -- a ) _SOCW-STATUS-OFF + ;
+: _SOCW.ABORT-REQUIRED  ( work -- a ) _SOCW-ABORT-REQUIRED-OFF + ;
+: _SOCW.OUTPUT-ADMITTED ( work -- a ) _SOCW-OUTPUT-ADMITTED-OFF + ;
+: _SOCW.BLOB-CALLED     ( work -- a ) _SOCW-BLOB-CALLED-OFF + ;
+: _SOCW.CANDIDATE       ( work -- a ) _SOCW-CANDIDATE-OFF + ;
+: _SOCW.ATTEMPT         ( work -- a ) _SOCW-ATTEMPT-OFF + ;
+: _SOCW.NATIVE          ( work -- a ) _SOCW-NATIVE-OFF + ;
+: _SOCW.OUTPUT          ( work -- a ) _SOCW-OUTPUT-OFF + ;
+: _SOCW.ADAPTER         ( work -- a ) _SOCW-ADAPTER-OFF + ;
+: _SOCW.ADAPTER-WORK    ( work -- a ) _SOCW-ADAPTER-WORK-OFF + ;
+: _SOCW.CONTENT-A       ( work -- a ) _SOCW-CONTENT-A-OFF + ;
+: _SOCW.CONTENT-U       ( work -- a ) _SOCW-CONTENT-U-OFF + ;
+: _SOCW.BLOB            ( work -- blob ) _SOCW-BLOB-OFF + ;
+: _SOCW.RESERVED        ( work -- a ) _SOCW-RESERVED-OFF + ;
+
+: _SOC-BOOLEAN?  ( x -- flag )
+    DUP 0= SWAP -1 = OR ;
+
+: STREAMS-OC-WORK-VALID?  ( work -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP STREAMS-OC-WORK-SIZE MSPAN-NONWRAPPING?
+        0= IF DROP 0 EXIT THEN
+    DUP _SOCW.MAGIC @ _SOCW-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _SOCW.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _SOCW.BUSY @ _SOC-BOOLEAN? 0= IF DROP 0 EXIT THEN
+    DUP _SOCW.STATUS @ _SOC-STATUS? 0= IF DROP 0 EXIT THEN
+    DUP _SOCW.ABORT-REQUIRED @ _SOC-BOOLEAN?
+        0= IF DROP 0 EXIT THEN
+    DUP _SOCW.OUTPUT-ADMITTED @ _SOC-BOOLEAN?
+        0= IF DROP 0 EXIT THEN
+    DUP _SOCW.BLOB-CALLED @ _SOC-BOOLEAN?
+        0= IF DROP 0 EXIT THEN
+    _SOCW.RESERVED @ 0= ;
+
+: STREAMS-OC-WORK-INIT  ( work -- status )
+    DUP 0= IF DROP STREAMS-OC-S-INVALID EXIT THEN
+    DUP STREAMS-OC-WORK-SIZE MSPAN-NONWRAPPING?
+        0= IF DROP STREAMS-OC-S-INVALID EXIT THEN
+    DUP STREAMS-OC-WORK-SIZE 0 FILL
+    _SOCW-MAGIC OVER _SOCW.MAGIC !
+    DUP OVER _SOCW.SELF !
+    STREAMS-OC-S-OK OVER _SOCW.STATUS !
+    DROP STREAMS-OC-S-OK ;
+
+: STREAMS-OC-WORK-STATUS@  ( work -- status )
+    DUP STREAMS-OC-WORK-VALID? IF
+        _SOCW.STATUS @
+    ELSE
+        DROP STREAMS-OC-S-INVALID
+    THEN ;
+
+: STREAMS-OC-ABORT-REQUIRED?  ( work -- flag )
+    DUP STREAMS-OC-WORK-VALID? IF
+        _SOCW.ABORT-REQUIRED @
+    ELSE
+        DROP -1
+    THEN ;
+
+: _SOCW-RESET-OP  ( work -- )
+    STREAMS-OC-S-INVALID OVER _SOCW.STATUS !
+    0 OVER _SOCW.OUTPUT-ADMITTED !
+    0 OVER _SOCW.BLOB-CALLED !
+    0 OVER _SOCW.CONTENT-A !
+    0 OVER _SOCW.CONTENT-U !
+    DUP _SOCW.BLOB PBLOB-SIZE 0 FILL
+    DROP ;
+
+\ ---------------------------------------------------------------------
+\ Span admission
+\ ---------------------------------------------------------------------
+
+: _SOC-DISJOINT?  ( a u b v -- flag )
+    2OVER MSPAN-NONWRAPPING? 0= IF 2DROP 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 2DROP 0 EXIT THEN
+    MSPAN-OVERLAP? 0= ;
+
+: _SOC-FIXED-SPANS?  ( work -- flag )
+    >R
+    R@ _SOCW.CANDIDATE @ DUP 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    OCHK-CANDIDATE-SIZE MSPAN-NONWRAPPING?
+        0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.ATTEMPT @ DUP 0= IF DROP R> DROP 0 EXIT THEN
+    SPREC-ATTEMPT-SIZE MSPAN-NONWRAPPING?
+        0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.NATIVE @ DUP 0= IF DROP R> DROP 0 EXIT THEN
+    SPREC-NATIVE-HEAD-SIZE MSPAN-NONWRAPPING?
+        0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.OUTPUT @ DUP 0= IF DROP R> DROP 0 EXIT THEN
+    SPREC-OBSERVATION-SIZE MSPAN-NONWRAPPING?
+        0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.ADAPTER @ STREAMS-PA-VALID?
+        0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-WORK-VALID?
+        0= IF R> DROP 0 EXIT THEN
+
+    R@ _SOCW.CANDIDATE @ OCHK-CANDIDATE-SIZE
+    R@ _SOCW.ATTEMPT @ SPREC-ATTEMPT-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCHK-CANDIDATE-SIZE
+    R@ _SOCW.NATIVE @ SPREC-NATIVE-HEAD-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCHK-CANDIDATE-SIZE
+    R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCHK-CANDIDATE-SIZE
+    R@ STREAMS-OC-WORK-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCHK-CANDIDATE-SIZE
+    R@ _SOCW.ADAPTER @ STREAMS-PA-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+
+    R@ _SOCW.ATTEMPT @ SPREC-ATTEMPT-SIZE
+    R@ _SOCW.NATIVE @ SPREC-NATIVE-HEAD-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.ATTEMPT @ SPREC-ATTEMPT-SIZE
+    R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.ATTEMPT @ SPREC-ATTEMPT-SIZE
+    R@ STREAMS-OC-WORK-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.ATTEMPT @ SPREC-ATTEMPT-SIZE
+    R@ _SOCW.ADAPTER @ STREAMS-PA-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+
+    R@ _SOCW.NATIVE @ SPREC-NATIVE-HEAD-SIZE
+    R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.NATIVE @ SPREC-NATIVE-HEAD-SIZE
+    R@ STREAMS-OC-WORK-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.NATIVE @ SPREC-NATIVE-HEAD-SIZE
+    R@ _SOCW.ADAPTER @ STREAMS-PA-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+
+    R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE
+    R@ STREAMS-OC-WORK-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE
+    R@ _SOCW.ADAPTER @ STREAMS-PA-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ STREAMS-OC-WORK-SIZE
+    R@ _SOCW.ADAPTER @ STREAMS-PA-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.ADAPTER @ STREAMS-PA-SIZE
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-WORK-SIZE
+        _SOC-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+
+    R@ _SOCW.CANDIDATE @ OCHK-CANDIDATE-SIZE
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-SPAN-DISJOINT?
+        0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.ATTEMPT @ SPREC-ATTEMPT-SIZE
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-SPAN-DISJOINT?
+        0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.NATIVE @ SPREC-NATIVE-HEAD-SIZE
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-SPAN-DISJOINT?
+        0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-SPAN-DISJOINT?
+        0= IF R> DROP 0 EXIT THEN
+    R@ STREAMS-OC-WORK-SIZE
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-SPAN-DISJOINT?
+    R> DROP ;
+
+: _SOC-CANDIDATE-VIEW-SAFE?  ( a u work -- flag )
+    >R
+    DUP 0= IF 2DROP R> DROP -1 EXIT THEN
+    OVER 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SOCW.CANDIDATE @ OCHK-CANDIDATE-SIZE
+        _SOC-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SOCW.ATTEMPT @ SPREC-ATTEMPT-SIZE
+        _SOC-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SOCW.NATIVE @ SPREC-NATIVE-HEAD-SIZE
+        _SOC-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE
+        _SOC-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ STREAMS-OC-WORK-SIZE
+        _SOC-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SOCW.ADAPTER @ STREAMS-PA-SIZE
+        _SOC-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-SPAN-DISJOINT?
+    R> DROP ;
+
+: _SOC-CANDIDATE-VIEWS-SAFE?  ( work -- flag )
+    >R
+    R@ _SOCW.CANDIDATE @ OCC.NATIVE-A @
+    R@ _SOCW.CANDIDATE @ OCC.NATIVE-U @
+    R@ _SOC-CANDIDATE-VIEW-SAFE? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCC.TITLE-A @
+    R@ _SOCW.CANDIDATE @ OCC.TITLE-U @
+    R@ _SOC-CANDIDATE-VIEW-SAFE? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCC.URL-A @
+    R@ _SOCW.CANDIDATE @ OCC.URL-U @
+    R@ _SOC-CANDIDATE-VIEW-SAFE? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCC.SUMMARY-A @
+    R@ _SOCW.CANDIDATE @ OCC.SUMMARY-U @
+    R@ _SOC-CANDIDATE-VIEW-SAFE? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCC.CONTENT-A @
+    R@ _SOCW.CANDIDATE @ OCC.CONTENT-U @
+    R@ _SOC-CANDIDATE-VIEW-SAFE? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCC.PUBLISHED-A @
+    R@ _SOCW.CANDIDATE @ OCC.PUBLISHED-U @
+    R@ _SOC-CANDIDATE-VIEW-SAFE? 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.CANDIDATE @ OCC.MODIFIED-A @
+    R@ _SOCW.CANDIDATE @ OCC.MODIFIED-U @
+    R@ _SOC-CANDIDATE-VIEW-SAFE?
+    R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Exact preflight agreement
+\ ---------------------------------------------------------------------
+
+: _SOC-BYTES=  ( a1 u1 a2 u2 -- flag )
+    2 PICK OVER <> IF 2DROP 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP 2DROP -1 EXIT THEN
+    DUP 0 ?DO
+        3 PICK I + C@ 2 PICK I + C@ <> IF
+            2DROP 2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP 2DROP -1 ;
+
+: _SOC-LINEAGE-AGREES?  ( attempt native-head -- flag )
+    >R
+    DUP SPRA.STATE @ OCHK-ATTEMPT-SUCCEEDED <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP SPRA.SOURCE-ID R@ SPRH.SOURCE-ID RID= 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP SPRA.NAMESPACE R@ SPRH.NAMESPACE
+        SHA3-256-COMPARE 0= IF DROP R> DROP 0 EXIT THEN
+    SPRA.ATTEMPT-SEQUENCE @
+    R@ SPRH.LAST-SEEN-SEQUENCE @ =
+    R> DROP ;
+
+\ A completely valid native head binds its observation RID to source,
+\ namespace, format, kind, and exact native bytes.  Exact equality of the
+\ candidate constituents therefore proves the candidate's observation
+\ identity without duplicating the frozen identity-hash domain here.
+: _SOC-CANDIDATE-NATIVE-AGREES?  ( candidate native-head -- flag )
+    >R
+    DUP OCC.FORMAT @ R@ SPRH.OBSERVATION-FORMAT @ <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP OCC.NATIVE-KIND @ R@ SPRH.NATIVE-KIND @ <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP OCC.NATIVE-A @ OVER OCC.NATIVE-U @
+    R@ SPRH-NATIVE$ _SOC-BYTES=
+    NIP R> DROP ;
+
+: _SOC-ADMIT-OUTPUT  ( work -- status )
+    DUP _SOC-FIXED-SPANS? 0= IF
+        DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    -1 OVER _SOCW.OUTPUT-ADMITTED !
+    _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE 0 FILL
+    STREAMS-OC-S-OK ;
+
+: _SOC-PREFLIGHT  ( work -- status )
+    >R
+    R@ _SOC-ADMIT-OUTPUT DUP IF R> DROP EXIT THEN DROP
+    R@ _SOCW.ABORT-REQUIRED @ IF
+        R> DROP STREAMS-OC-S-BUSY EXIT
+    THEN
+    R@ _SOCW.CANDIDATE @ SPREC-CANDIDATE-VALID? 0= IF
+        R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    R@ _SOC-CANDIDATE-VIEWS-SAFE? 0= IF
+        R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    R@ _SOCW.ATTEMPT @ SPREC-ATTEMPT-SIZE
+        SPREC-ATTEMPT-VALID? 0= IF
+        R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    R@ _SOCW.NATIVE @ SPREC-NATIVE-HEAD-SIZE
+        SPREC-NATIVE-VALID? 0= IF
+        R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    R@ _SOCW.ADAPTER-WORK @ STREAMS-PA-ACTIVE? 0= IF
+        R> DROP STREAMS-OC-S-BUSY EXIT
+    THEN
+    R@ _SOCW.ATTEMPT @ R@ _SOCW.NATIVE @
+        _SOC-LINEAGE-AGREES? 0= IF
+        R> DROP STREAMS-OC-S-CONFLICT EXIT
+    THEN
+    R@ _SOCW.CANDIDATE @ R@ _SOCW.NATIVE @
+        _SOC-CANDIDATE-NATIVE-AGREES? 0= IF
+        R> DROP STREAMS-OC-S-CONFLICT EXIT
+    THEN
+    R@ _SOCW.CANDIDATE @ OCC.CONTENT-A @
+        R@ _SOCW.CONTENT-A !
+    R@ _SOCW.CANDIDATE @ OCC.CONTENT-U @
+        R@ _SOCW.CONTENT-U !
+    R> DROP STREAMS-OC-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Exact-content callback and observation assembly
+\ ---------------------------------------------------------------------
+
+\ PBLOB source callback:
+\   ( position destination requested context -- actual status )
+: _SOC-CONTENT-SOURCE  ( position destination requested work -- actual status )
+    >R
+    DUP 0< IF
+        2DROP DROP R> DROP 0 PERSIST-S-INVALID EXIT
+    THEN
+    2 PICK 0< IF
+        2DROP DROP R> DROP 0 PERSIST-S-INVALID EXIT
+    THEN
+    DUP IF
+        OVER 0= IF 2DROP DROP R> DROP 0 PERSIST-S-INVALID EXIT THEN
+        OVER OVER MSPAN-NONWRAPPING? 0= IF
+            2DROP DROP R> DROP 0 PERSIST-S-INVALID EXIT
+        THEN
+    THEN
+    2 PICK R@ _SOCW.CONTENT-U @ > IF
+        2DROP DROP R> DROP 0 PERSIST-S-INVALID EXIT
+    THEN
+    R@ _SOCW.CONTENT-U @ 3 PICK - OVER < IF
+        2DROP DROP R> DROP 0 PERSIST-S-INVALID EXIT
+    THEN
+    2 PICK R@ _SOCW.CONTENT-A @ +
+    2 PICK 2 PICK MOVE
+    NIP NIP
+    R> DROP PERSIST-S-OK ;
+
+: _SOC-CONTENT-STILL-EXACT?  ( work -- flag )
+    DUP _SOCW.CANDIDATE @ OCC.CONTENT-A @
+        OVER _SOCW.CONTENT-A @ =
+    SWAP
+    DUP _SOCW.CANDIDATE @ OCC.CONTENT-U @
+        SWAP _SOCW.CONTENT-U @ =
+    AND ;
+
+: _SOC-INSTALL-STABLE-FIELDS  ( work -- status )
+    >R
+    R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-INIT
+    DUP IF _SOC-SPREC>STATUS R> DROP EXIT THEN DROP
+    R@ _SOCW.NATIVE @ SPRH.OBSERVATION-ID
+    R@ _SOCW.OUTPUT @ SPRO.OBSERVATION-ID
+        RID-SIZE MOVE
+    R@ _SOCW.NATIVE @ SPRH.SOURCE-ID
+    R@ _SOCW.OUTPUT @ SPRO.SOURCE-ID
+        RID-SIZE MOVE
+    R@ _SOCW.NATIVE @ SPRH.NAMESPACE
+    R@ _SOCW.OUTPUT @ SPRO.NAMESPACE
+        SHA3-256-LEN MOVE
+    R@ _SOCW.ATTEMPT @ SPRA.ATTEMPT-ID
+    R@ _SOCW.OUTPUT @ SPRO.ATTEMPT-ID
+        RID-SIZE MOVE
+    R@ _SOCW.ATTEMPT @ SPRA.ATTEMPT-SEQUENCE @
+    R@ _SOCW.OUTPUT @ SPRO.ACQUISITION-SEQUENCE !
+    R@ _SOCW.NATIVE @ SPRH.LATEST-REVISION @
+    R@ _SOCW.OUTPUT @ SPRO.REVISION !
+    R> DROP STREAMS-OC-S-OK ;
+
+: _SOC-STABLE-FIELDS-AGREE?  ( work -- flag )
+    >R
+    R@ _SOCW.OUTPUT @ SPRO.OBSERVATION-ID
+    R@ _SOCW.NATIVE @ SPRH.OBSERVATION-ID RID= 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SOCW.OUTPUT @ SPRO.SOURCE-ID
+    R@ _SOCW.NATIVE @ SPRH.SOURCE-ID RID= 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SOCW.OUTPUT @ SPRO.NAMESPACE
+    R@ _SOCW.NATIVE @ SPRH.NAMESPACE
+        SHA3-256-COMPARE 0= IF R> DROP 0 EXIT THEN
+    R@ _SOCW.OUTPUT @ SPRO.ATTEMPT-ID
+    R@ _SOCW.ATTEMPT @ SPRA.ATTEMPT-ID RID= 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SOCW.OUTPUT @ SPRO.ACQUISITION-SEQUENCE @
+    R@ _SOCW.ATTEMPT @ SPRA.ATTEMPT-SEQUENCE @ <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SOCW.OUTPUT @ SPRO.ACQUISITION-SEQUENCE @
+    R@ _SOCW.NATIVE @ SPRH.LAST-SEEN-SEQUENCE @ <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SOCW.OUTPUT @ SPRO.REVISION @
+    R@ _SOCW.NATIVE @ SPRH.LATEST-REVISION @ =
+    R> DROP ;
+
+: _SOC-CONSTRUCT-RUN  ( work -- status )
+    >R
+    R@ _SOC-PREFLIGHT DUP IF R> DROP EXIT THEN DROP
+
+    -1 R@ _SOCW.BLOB-CALLED !
+    R@ _SOCW.CONTENT-U @
+    ['] _SOC-CONTENT-SOURCE R@
+    R@ _SOCW.BLOB
+    R@ _SOCW.ADAPTER @
+    R@ _SOCW.ADAPTER-WORK @
+    STREAMS-PA-BLOB-WRITE
+    DUP IF _SOC-ADAPTER>STATUS R> DROP EXIT THEN DROP
+
+    R@ _SOCW.BLOB PBLOB-VALID? 0= IF
+        R> DROP STREAMS-OC-S-CORRUPT EXIT
+    THEN
+    R@ _SOCW.BLOB PBLOB-TOTAL@
+    R@ _SOCW.CONTENT-U @ <> IF
+        R> DROP STREAMS-OC-S-CORRUPT EXIT
+    THEN
+    R@ _SOC-CONTENT-STILL-EXACT? 0= IF
+        R> DROP STREAMS-OC-S-CONFLICT EXIT
+    THEN
+
+    R@ _SOC-INSTALL-STABLE-FIELDS
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SOC-STABLE-FIELDS-AGREE? 0= IF
+        R> DROP STREAMS-OC-S-CORRUPT EXIT
+    THEN
+
+    R@ _SOCW.CANDIDATE @
+    R@ _SOCW.BLOB
+    R@ _SOCW.OUTPUT @
+    SPREC-OBSERVATION-CANDIDATE!
+    DUP IF _SOC-SPREC>STATUS R> DROP EXIT THEN DROP
+
+    R@ _SOCW.OUTPUT @
+    R@ _SOCW.ATTEMPT @
+    R@ _SOCW.NATIVE @
+    STREAMS-SRA-OBSERVATION-PUBLICATION-AGREES? 0= IF
+        R> DROP STREAMS-OC-S-CONFLICT EXIT
+    THEN
+    R> DROP STREAMS-OC-S-OK ;
+
+: _SOC-WORK-CATCH  ( work body-xt -- status )
+    CATCH DUP IF
+        2DROP STREAMS-OC-S-FAULT
+    ELSE
+        DROP
+    THEN ;
+
+: _SOC-OP-END  ( status work -- status )
+    >R
+    DUP _SOC-STATUS? 0= IF DROP STREAMS-OC-S-FAULT THEN
+    DUP IF
+        R@ _SOCW.OUTPUT-ADMITTED @ IF
+            R@ _SOCW.OUTPUT @ SPREC-OBSERVATION-SIZE 0 FILL
+        THEN
+        R@ _SOCW.BLOB-CALLED @ IF
+            -1 R@ _SOCW.ABORT-REQUIRED !
+        THEN
+    ELSE
+        0 R@ _SOCW.ABORT-REQUIRED !
+    THEN
+    DUP R@ _SOCW.STATUS !
+    0 R@ _SOCW.BUSY !
+    R> DROP ;
+
+: STREAMS-OC-CONSTRUCT
+  ( candidate attempt native-head output-observation adapter adapter-work construction-work -- status )
+    DUP STREAMS-OC-WORK-VALID? 0= IF
+        _SOC-DROP7 STREAMS-OC-S-INVALID EXIT
+    THEN
+    DUP _SOCW.BUSY @ IF
+        _SOC-DROP7 STREAMS-OC-S-BUSY EXIT
+    THEN
+    >R
+    DUP STREAMS-PA-WORK-VALID? 0= IF
+        _SOC-DROP6 R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OC-WORK-SIZE
+    2 PICK STREAMS-PA-SPAN-DISJOINT? 0= IF
+        _SOC-DROP6 R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    5 PICK OCHK-CANDIDATE-SIZE
+    R@ STREAMS-OC-WORK-SIZE _SOC-DISJOINT? 0= IF
+        _SOC-DROP6 R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    4 PICK SPREC-ATTEMPT-SIZE
+    R@ STREAMS-OC-WORK-SIZE _SOC-DISJOINT? 0= IF
+        _SOC-DROP6 R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    3 PICK SPREC-NATIVE-HEAD-SIZE
+    R@ STREAMS-OC-WORK-SIZE _SOC-DISJOINT? 0= IF
+        _SOC-DROP6 R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    2 PICK SPREC-OBSERVATION-SIZE
+    R@ STREAMS-OC-WORK-SIZE _SOC-DISJOINT? 0= IF
+        _SOC-DROP6 R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    1 PICK STREAMS-PA-SIZE
+    R@ STREAMS-OC-WORK-SIZE _SOC-DISJOINT? 0= IF
+        _SOC-DROP6 R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    DUP STREAMS-PA-WORK-SIZE
+    R@ STREAMS-OC-WORK-SIZE _SOC-DISJOINT? 0= IF
+        _SOC-DROP6 R> DROP STREAMS-OC-S-INVALID EXIT
+    THEN
+    R@ _SOCW-RESET-OP
+    -1 R@ _SOCW.BUSY !
+    5 PICK R@ _SOCW.CANDIDATE !
+    4 PICK R@ _SOCW.ATTEMPT !
+    3 PICK R@ _SOCW.NATIVE !
+    2 PICK R@ _SOCW.OUTPUT !
+    1 PICK R@ _SOCW.ADAPTER !
+    DUP R@ _SOCW.ADAPTER-WORK !
+    2DROP 2DROP 2DROP
+    R@ ['] _SOC-CONSTRUCT-RUN _SOC-WORK-CATCH
+    R@ _SOC-OP-END
+    R> DROP ;

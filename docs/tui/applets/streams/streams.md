@@ -26,6 +26,10 @@ publication are not supported. The complete target boundary and deliberately
 unimplemented portions are recorded in
 [information-integration.md](information-integration.md).
 
+L13's scalable configured-source authority, four-index topology, conservative
+no-admission-eviction policy, and cold one-way cutover are fixed in
+[l13-authority-topology-retention.md](l13-authority-topology-retention.md).
+
 Normal launches start with no feed and recover the draft stored by the
 preceding launch. The host qualification harness alone injects a hand-authored
 synthetic page under `/testing/streams/`; `timeline.json` is test input, not a

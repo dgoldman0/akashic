@@ -1,0 +1,1418 @@
+\ =====================================================================
+\  persistence-records.f - Current Streams semantic persistence records
+\ =====================================================================
+\  These are the pointer-free semantic values stored behind the four L13
+\  ordered indexes.  They own no path, store, transaction, query cursor,
+\  Desk authority, Library document meaning, or public-Bluesky state.
+\
+\  Every record has one current checked header:
+\      magic, format, kind, exact byte size, semantic SHA3-256 seal.
+\  Every unused inline byte is zero.  Relationships use stable RIDs,
+\  namespaces, digests, revisions, and sequences rather than physical
+\  record references.  The sole admitted physical locator is the PBLOB
+\  descriptor in an immutable observation revision.
+\
+\  The observation seal deliberately excludes the PBLOB descriptor.  It
+\  binds the exact content length and content digest instead, so compaction
+\  may rewrite PBLOB's physical root without changing semantic identity.
+\  PBLOB construction/readback is responsible for proving that the bytes
+\  named by the descriptor have the recorded digest.
+\
+\  Construction is caller-owned:
+\    SPREC-SOURCE-CONSTRUCT       ( source creation-sequence record -- status )
+\    SPREC-SOURCE-TOMBSTONE-CONSTRUCT
+\      ( source-record removal-sequence tombstone -- status )
+\    SPREC-ATTEMPT-CONSTRUCT      ( ochk-attempt-head record -- status )
+\    SPREC-NATIVE-INIT            ( record -- status )
+\    SPREC-NATIVE-CANDIDATE!      ( candidate record -- status )
+\    SPREC-OBSERVATION-INIT       ( record -- status )
+\    SPREC-OBSERVATION-CANDIDATE!
+\      ( candidate content-blob record -- status )
+\
+\  NATIVE-CANDIDATE! and OBSERVATION-CANDIDATE! finish records whose stable
+\  identity/sequence fields were filled through the accessors after INIT.
+\  They require fresh candidate-owned spans and restore those spans to zero
+\  on every returned post-write failure.  Exact copies reject overlap and
+\  revalidate the semantic seal.
+\
+\  This module allocates no mutable process-global scratch.
+\ =====================================================================
+
+PROVIDED akashic-streams-persistence-records
+
+REQUIRE source-registry.f
+REQUIRE observation-state.f
+REQUIRE ../../../persistence/blob.f
+
+\ ---------------------------------------------------------------------
+\ Status, current format, kinds, and common checked header
+\ ---------------------------------------------------------------------
+
+0 CONSTANT SPREC-S-OK
+1 CONSTANT SPREC-S-INVALID
+2 CONSTANT SPREC-S-CAPACITY
+3 CONSTANT SPREC-S-CORRUPT
+
+1 CONSTANT SPREC-FORMAT-CURRENT
+
+1 CONSTANT SPREC-KIND-SOURCE
+2 CONSTANT SPREC-KIND-ATTEMPT
+3 CONSTANT SPREC-KIND-NATIVE-HEAD
+4 CONSTANT SPREC-KIND-OBSERVATION
+5 CONSTANT SPREC-KIND-SOURCE-TOMBSTONE
+
+16 CONSTANT SPREC-NATIVE-COLLISION-MAX
+
+0x5354524D50524331 CONSTANT _SPREC-MAGIC  \ "STRMPRC1"
+
+ 0 CONSTANT _SPR-MAGIC
+ 8 CONSTANT _SPR-FORMAT
+16 CONSTANT _SPR-KIND
+24 CONSTANT _SPR-SIZE
+32 CONSTANT _SPR-SEAL
+64 CONSTANT SPREC-HEADER-SIZE
+
+: SPREC.MAGIC   ( record -- a ) _SPR-MAGIC + ;
+: SPREC.FORMAT  ( record -- a ) _SPR-FORMAT + ;
+: SPREC.KIND    ( record -- a ) _SPR-KIND + ;
+: SPREC.SIZE    ( record -- a ) _SPR-SIZE + ;
+: SPREC.SEAL    ( record -- digest ) _SPR-SEAL + ;
+
+\ ---------------------------------------------------------------------
+\ Current source record - 304 cells / 2432 bytes
+\ ---------------------------------------------------------------------
+\ The embedded source value is byte-for-byte STREAMS-SOURCE-SIZE.
+\ OBSERVATION-COUNT is the exact number of retained immutable observation
+\ versions belonging to this current source.  Keeping that sealed aggregate
+\ with the source makes observation-max admission O(batch) rather than a
+\ synchronous scan of as many as ten million source-time rows.  Source
+\ replacement and enable preserve it; successful apply alone increments it.
+
+  64 CONSTANT _SPRS-CREATION-SEQUENCE
+  72 CONSTANT _SPRS-SOURCE
+2360 CONSTANT _SPRS-OBSERVATION-COUNT
+2368 CONSTANT _SPRS-RESERVED
+2432 CONSTANT SPREC-SOURCE-SIZE
+
+: SPRS.CREATION-SEQUENCE  ( record -- a )
+    _SPRS-CREATION-SEQUENCE + ;
+: SPRS.SOURCE             ( record -- source ) _SPRS-SOURCE + ;
+: SPRS.OBSERVATION-COUNT  ( record -- a )
+    _SPRS-OBSERVATION-COUNT + ;
+: SPRS.RESERVED           ( record -- a ) _SPRS-RESERVED + ;
+
+: SPRS.ID               ( record -- rid ) SPRS.SOURCE SSOURCE.ID ;
+: SPRS.REVISION         ( record -- a ) SPRS.SOURCE SSOURCE.REVISION ;
+: SPRS.KIND             ( record -- a ) SPRS.SOURCE SSOURCE.KIND ;
+: SPRS.SOURCE-FORMAT    ( record -- a ) SPRS.SOURCE SSOURCE.FORMAT ;
+: SPRS.FLAGS            ( record -- a ) SPRS.SOURCE SSOURCE.FLAGS ;
+: SPRS.REDIRECT-MAX     ( record -- a ) SPRS.SOURCE SSOURCE.REDIRECT-MAX ;
+: SPRS.RESPONSE-MAX     ( record -- a ) SPRS.SOURCE SSOURCE.RESPONSE-MAX ;
+: SPRS.PAGE-MAX         ( record -- a ) SPRS.SOURCE SSOURCE.PAGE-MAX ;
+: SPRS.OBSERVATION-MAX  ( record -- a )
+    SPRS.SOURCE SSOURCE.OBSERVATION-MAX ;
+: SPRS.REVISION-MAX     ( record -- a )
+    SPRS.SOURCE SSOURCE.REVISION-MAX ;
+: SPRS.REFRESH-POLICY   ( record -- a )
+    SPRS.SOURCE SSOURCE.REFRESH-POLICY ;
+: SPRS.INTERVAL-MS      ( record -- a ) SPRS.SOURCE SSOURCE.INTERVAL-MS ;
+: SPRS.LABEL-U          ( record -- a ) SPRS.SOURCE SSOURCE.LABEL-U ;
+: SPRS.ENDPOINT-U       ( record -- a ) SPRS.SOURCE SSOURCE.ENDPOINT-U ;
+: SPRS.CONFIG-U         ( record -- a ) SPRS.SOURCE SSOURCE.CONFIG-U ;
+: SPRS.LABEL            ( record -- a ) SPRS.SOURCE SSOURCE.LABEL ;
+: SPRS.ENDPOINT         ( record -- a ) SPRS.SOURCE SSOURCE.ENDPOINT ;
+: SPRS.CONFIG           ( record -- a ) SPRS.SOURCE SSOURCE.CONFIG ;
+: SPRS-LABEL$           ( record -- a u )
+    SPRS.SOURCE STREAMS-SOURCE-LABEL$ ;
+: SPRS-ENDPOINT$        ( record -- a u )
+    SPRS.SOURCE STREAMS-SOURCE-ENDPOINT$ ;
+: SPRS-CONFIG$          ( record -- a u )
+    SPRS.SOURCE STREAMS-SOURCE-CONFIG$ ;
+
+\ ---------------------------------------------------------------------
+\ Removed-source tombstone - 32 cells / 256 bytes
+\ ---------------------------------------------------------------------
+\ The source-rid directory row remains reachable and points to this checked
+\ fact after removal.  The source-order row is removed.  Source mutation must
+\ reject while the source has an accepted active attempt; it must never strand
+\ an ACCEPTED history record by deleting only the active-attempt row.
+\ The exact last source-record seal preserves evidence without retaining
+\ endpoint or provider-configuration bytes in the tombstone itself.
+
+ 64 CONSTANT _SPRT-SOURCE-ID
+ 96 CONSTANT _SPRT-CREATION-SEQUENCE
+104 CONSTANT _SPRT-SOURCE-REVISION
+112 CONSTANT _SPRT-REMOVAL-SEQUENCE
+120 CONSTANT _SPRT-SOURCE-SEAL
+152 CONSTANT _SPRT-RESERVED
+256 CONSTANT SPREC-SOURCE-TOMBSTONE-SIZE
+
+: SPRT.SOURCE-ID          ( record -- rid ) _SPRT-SOURCE-ID + ;
+: SPRT.CREATION-SEQUENCE  ( record -- a )
+    _SPRT-CREATION-SEQUENCE + ;
+: SPRT.SOURCE-REVISION    ( record -- a ) _SPRT-SOURCE-REVISION + ;
+: SPRT.REMOVAL-SEQUENCE   ( record -- a ) _SPRT-REMOVAL-SEQUENCE + ;
+: SPRT.SOURCE-SEAL        ( record -- digest ) _SPRT-SOURCE-SEAL + ;
+: SPRT.RESERVED           ( record -- a ) _SPRT-RESERVED + ;
+
+\ ---------------------------------------------------------------------
+\ Retained attempt record - 304 cells / 2432 bytes
+\ ---------------------------------------------------------------------
+\ The embedded attempt is the exact current OCHK source-attempt shape.
+\ Its last 48 bytes are the required reserved-zero tail.
+
+  64 CONSTANT _SPRA-ATTEMPT
+2384 CONSTANT _SPRA-RESERVED
+2432 CONSTANT SPREC-ATTEMPT-SIZE
+
+: SPRA.ATTEMPT           ( record -- attempt ) _SPRA-ATTEMPT + ;
+: SPRA.STATE             ( record -- a ) SPRA.ATTEMPT OCS.STATE ;
+: SPRA.ATTEMPT-SEQUENCE  ( record -- a )
+    SPRA.ATTEMPT OCS.ATTEMPT-SEQUENCE ;
+: SPRA.SOURCE-REVISION   ( record -- a )
+    SPRA.ATTEMPT OCS.SOURCE-REVISION ;
+: SPRA.PROVIDER-KIND     ( record -- a )
+    SPRA.ATTEMPT OCS.PROVIDER-KIND ;
+: SPRA.ATTEMPT-ID        ( record -- rid ) SPRA.ATTEMPT OCS.ATTEMPT-ID ;
+: SPRA.SOURCE-ID         ( record -- rid ) SPRA.ATTEMPT OCS.SOURCE-ID ;
+: SPRA.NAMESPACE         ( record -- digest ) SPRA.ATTEMPT OCS.NAMESPACE ;
+: SPRA.REQUEST-SEAL      ( record -- digest )
+    SPRA.ATTEMPT OCS.REQUEST-SEAL ;
+: SPRA.STARTED-MS        ( record -- a ) SPRA.ATTEMPT OCS.STARTED-MS ;
+: SPRA.FINISHED-MS       ( record -- a ) SPRA.ATTEMPT OCS.FINISHED-MS ;
+: SPRA.OUTCOME           ( record -- a ) SPRA.ATTEMPT OCS.OUTCOME ;
+: SPRA.DETAIL            ( record -- a ) SPRA.ATTEMPT OCS.DETAIL ;
+: SPRA.HTTP-STATUS       ( record -- a ) SPRA.ATTEMPT OCS.HTTP-STATUS ;
+: SPRA.DECODE-STATUS     ( record -- a ) SPRA.ATTEMPT OCS.DECODE-STATUS ;
+: SPRA.NEW-COUNT         ( record -- a ) SPRA.ATTEMPT OCS.NEW-COUNT ;
+: SPRA.REVISED-COUNT     ( record -- a ) SPRA.ATTEMPT OCS.REVISED-COUNT ;
+: SPRA.UNCHANGED-COUNT   ( record -- a )
+    SPRA.ATTEMPT OCS.UNCHANGED-COUNT ;
+: SPRA.REJECTED-COUNT    ( record -- a ) SPRA.ATTEMPT OCS.REJECTED-COUNT ;
+: SPRA.XIO-ERROR         ( record -- a ) SPRA.ATTEMPT OCS.XIO-ERROR ;
+: SPRA.CLEANUP-ERROR     ( record -- a ) SPRA.ATTEMPT OCS.CLEANUP-ERROR ;
+: SPRA.REQUESTED-U       ( record -- a )
+    SPRA.ATTEMPT _OCS-REQUESTED-U + ;
+: SPRA.EFFECTIVE-U       ( record -- a )
+    SPRA.ATTEMPT _OCS-EFFECTIVE-U + ;
+: SPRA.REQUESTED         ( record -- a ) SPRA.ATTEMPT _OCS-REQUESTED + ;
+: SPRA.EFFECTIVE         ( record -- a ) SPRA.ATTEMPT _OCS-EFFECTIVE + ;
+: SPRA.RESERVED          ( record -- a ) _SPRA-RESERVED + ;
+: SPRA-REQUESTED$        ( record -- a u ) SPRA.ATTEMPT OCS.REQUESTED$ ;
+: SPRA-EFFECTIVE$        ( record -- a u ) SPRA.ATTEMPT OCS.EFFECTIVE$ ;
+
+\ ---------------------------------------------------------------------
+\ Exact native-key head - 104 cells / 832 bytes
+\ ---------------------------------------------------------------------
+
+ 64 CONSTANT _SPRH-SOURCE-ID
+ 96 CONSTANT _SPRH-NAMESPACE
+128 CONSTANT _SPRH-OBSERVATION-ID
+160 CONSTANT _SPRH-NATIVE-DIGEST
+192 CONSTANT _SPRH-LATEST-REVISION
+200 CONSTANT _SPRH-LAST-SEEN-SEQUENCE
+208 CONSTANT _SPRH-OBSERVATION-FORMAT
+216 CONSTANT _SPRH-NATIVE-KIND
+224 CONSTANT _SPRH-COLLISION-ORDINAL
+232 CONSTANT _SPRH-NATIVE-U
+240 CONSTANT _SPRH-NATIVE
+752 CONSTANT _SPRH-RESERVED
+832 CONSTANT SPREC-NATIVE-HEAD-SIZE
+
+: SPRH.SOURCE-ID           ( record -- rid ) _SPRH-SOURCE-ID + ;
+: SPRH.NAMESPACE           ( record -- digest ) _SPRH-NAMESPACE + ;
+: SPRH.OBSERVATION-ID      ( record -- rid ) _SPRH-OBSERVATION-ID + ;
+: SPRH.NATIVE-DIGEST       ( record -- digest ) _SPRH-NATIVE-DIGEST + ;
+: SPRH.LATEST-REVISION     ( record -- a ) _SPRH-LATEST-REVISION + ;
+: SPRH.LAST-SEEN-SEQUENCE  ( record -- a )
+    _SPRH-LAST-SEEN-SEQUENCE + ;
+: SPRH.OBSERVATION-FORMAT  ( record -- a )
+    _SPRH-OBSERVATION-FORMAT + ;
+: SPRH.NATIVE-KIND         ( record -- a ) _SPRH-NATIVE-KIND + ;
+: SPRH.COLLISION-ORDINAL   ( record -- a )
+    _SPRH-COLLISION-ORDINAL + ;
+: SPRH.NATIVE-U            ( record -- a ) _SPRH-NATIVE-U + ;
+: SPRH.NATIVE              ( record -- a ) _SPRH-NATIVE + ;
+: SPRH.RESERVED            ( record -- a ) _SPRH-RESERVED + ;
+: SPRH-NATIVE$             ( record -- a u )
+    DUP SPRH.NATIVE SWAP SPRH.NATIVE-U @ ;
+
+\ ---------------------------------------------------------------------
+\ Immutable observation revision - 304 cells / 2432 bytes
+\ ---------------------------------------------------------------------
+\ Content is one PBLOB descriptor.  Current bounded value facts remain
+\ inline so ordinary query projections need no body read.
+\
+\ Current-format configured providers supply no exact thread-root or parent
+\ evidence.  This record format therefore authorizes no thread-time index
+\ row.  A provider that adds such evidence requires a checked successor
+\ record shape before its adapter may emit thread-time rows; a digest alone
+\ would not permit the required exact-byte dereference verification.
+
+  64 CONSTANT _SPRO-OBSERVATION-ID
+  96 CONSTANT _SPRO-SOURCE-ID
+ 128 CONSTANT _SPRO-NAMESPACE
+ 160 CONSTANT _SPRO-ATTEMPT-ID
+ 192 CONSTANT _SPRO-SEMANTIC-DIGEST
+ 224 CONSTANT _SPRO-CONTENT-DIGEST
+ 256 CONSTANT _SPRO-ACQUISITION-SEQUENCE
+ 264 CONSTANT _SPRO-REVISION
+ 272 CONSTANT _SPRO-OBSERVATION-FORMAT
+ 280 CONSTANT _SPRO-CONTENT-U
+ 288 CONSTANT _SPRO-TITLE-U
+ 296 CONSTANT _SPRO-URL-U
+ 304 CONSTANT _SPRO-SUMMARY-U
+ 312 CONSTANT _SPRO-PUBLISHED-U
+ 320 CONSTANT _SPRO-MODIFIED-U
+ 328 CONSTANT _SPRO-CONTENT
+ 400 CONSTANT _SPRO-TITLE
+ 656 CONSTANT _SPRO-URL
+1168 CONSTANT _SPRO-SUMMARY
+2192 CONSTANT _SPRO-PUBLISHED
+2256 CONSTANT _SPRO-MODIFIED
+2320 CONSTANT _SPRO-RESERVED
+2432 CONSTANT SPREC-OBSERVATION-SIZE
+
+: SPRO.OBSERVATION-ID      ( record -- rid ) _SPRO-OBSERVATION-ID + ;
+: SPRO.SOURCE-ID           ( record -- rid ) _SPRO-SOURCE-ID + ;
+: SPRO.NAMESPACE           ( record -- digest ) _SPRO-NAMESPACE + ;
+: SPRO.ATTEMPT-ID          ( record -- rid ) _SPRO-ATTEMPT-ID + ;
+: SPRO.SEMANTIC-DIGEST     ( record -- digest )
+    _SPRO-SEMANTIC-DIGEST + ;
+: SPRO.CONTENT-DIGEST      ( record -- digest ) _SPRO-CONTENT-DIGEST + ;
+: SPRO.ACQUISITION-SEQUENCE ( record -- a )
+    _SPRO-ACQUISITION-SEQUENCE + ;
+: SPRO.REVISION            ( record -- a ) _SPRO-REVISION + ;
+: SPRO.OBSERVATION-FORMAT  ( record -- a )
+    _SPRO-OBSERVATION-FORMAT + ;
+: SPRO.CONTENT-U           ( record -- a ) _SPRO-CONTENT-U + ;
+: SPRO.TITLE-U             ( record -- a ) _SPRO-TITLE-U + ;
+: SPRO.URL-U               ( record -- a ) _SPRO-URL-U + ;
+: SPRO.SUMMARY-U           ( record -- a ) _SPRO-SUMMARY-U + ;
+: SPRO.PUBLISHED-U         ( record -- a ) _SPRO-PUBLISHED-U + ;
+: SPRO.MODIFIED-U          ( record -- a ) _SPRO-MODIFIED-U + ;
+: SPRO.CONTENT             ( record -- blob ) _SPRO-CONTENT + ;
+: SPRO.TITLE               ( record -- a ) _SPRO-TITLE + ;
+: SPRO.URL                 ( record -- a ) _SPRO-URL + ;
+: SPRO.SUMMARY             ( record -- a ) _SPRO-SUMMARY + ;
+: SPRO.PUBLISHED           ( record -- a ) _SPRO-PUBLISHED + ;
+: SPRO.MODIFIED            ( record -- a ) _SPRO-MODIFIED + ;
+: SPRO.RESERVED            ( record -- a ) _SPRO-RESERVED + ;
+
+: SPRO-TITLE$  ( record -- a u )
+    DUP SPRO.TITLE SWAP SPRO.TITLE-U @ ;
+: SPRO-URL$  ( record -- a u )
+    DUP SPRO.URL SWAP SPRO.URL-U @ ;
+: SPRO-SUMMARY$  ( record -- a u )
+    DUP SPRO.SUMMARY SWAP SPRO.SUMMARY-U @ ;
+: SPRO-PUBLISHED$  ( record -- a u )
+    DUP SPRO.PUBLISHED SWAP SPRO.PUBLISHED-U @ ;
+: SPRO-MODIFIED$  ( record -- a u )
+    DUP SPRO.MODIFIED SWAP SPRO.MODIFIED-U @ ;
+
+\ One caller allocation safely holds every current semantic record.
+SPREC-SOURCE-SIZE SPREC-ATTEMPT-SIZE MAX
+SPREC-NATIVE-HEAD-SIZE MAX SPREC-OBSERVATION-SIZE MAX
+SPREC-SOURCE-TOMBSTONE-SIZE MAX
+    CONSTANT STREAMS-PERSISTENCE-RECORD-MAX
+
+\ ---------------------------------------------------------------------
+\ Shared checked helpers
+\ ---------------------------------------------------------------------
+
+: _SPREC-ZERO?  ( a u -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+: _SPREC-BASE?  ( record-a record-u -- flag )
+    OVER 0= IF 2DROP 0 EXIT THEN
+    DUP SPREC-HEADER-SIZE < IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    OVER SPREC.MAGIC @ _SPREC-MAGIC <> IF 2DROP 0 EXIT THEN
+    OVER SPREC.FORMAT @ SPREC-FORMAT-CURRENT <> IF 2DROP 0 EXIT THEN
+    OVER SPREC.SIZE @ OVER <> IF 2DROP 0 EXIT THEN
+    OVER SPREC.KIND @ DUP SPREC-KIND-SOURCE <
+        SWAP SPREC-KIND-SOURCE-TOMBSTONE > OR IF 2DROP 0 EXIT THEN
+    2DROP -1 ;
+
+: _SPREC-SOURCE-HEADER?  ( record -- flag )
+    DUP SPREC-SOURCE-SIZE _SPREC-BASE? 0= IF DROP 0 EXIT THEN
+    SPREC.KIND @ SPREC-KIND-SOURCE = ;
+
+: _SPREC-SOURCE-TOMBSTONE-HEADER?  ( record -- flag )
+    DUP SPREC-SOURCE-TOMBSTONE-SIZE _SPREC-BASE?
+        0= IF DROP 0 EXIT THEN
+    SPREC.KIND @ SPREC-KIND-SOURCE-TOMBSTONE = ;
+
+: _SPREC-ATTEMPT-HEADER?  ( record -- flag )
+    DUP SPREC-ATTEMPT-SIZE _SPREC-BASE? 0= IF DROP 0 EXIT THEN
+    SPREC.KIND @ SPREC-KIND-ATTEMPT = ;
+
+: _SPREC-NATIVE-HEADER?  ( record -- flag )
+    DUP SPREC-NATIVE-HEAD-SIZE _SPREC-BASE? 0= IF DROP 0 EXIT THEN
+    SPREC.KIND @ SPREC-KIND-NATIVE-HEAD = ;
+
+: _SPREC-OBSERVATION-HEADER?  ( record -- flag )
+    DUP SPREC-OBSERVATION-SIZE _SPREC-BASE? 0= IF DROP 0 EXIT THEN
+    SPREC.KIND @ SPREC-KIND-OBSERVATION = ;
+
+\ address/capacity/length order makes validation of fixed inline slots
+\ concise.  ALLOW-EMPTY? is false for required text.
+: _SPREC-TEXT-SLOT?  ( address capacity length allow-empty? -- flag )
+    >R
+    DUP 0< IF DROP 2DROP R> DROP 0 EXIT THEN
+    DUP 2 PICK > IF DROP 2DROP R> DROP 0 EXIT THEN
+    DUP 0= R@ 0= AND IF DROP 2DROP R> DROP 0 EXIT THEN
+    DUP IF
+        2 PICK OVER UTF8-VALID? 0= IF
+            DROP 2DROP R> DROP 0 EXIT
+        THEN
+    THEN
+    TUCK - >R + R> _SPREC-ZERO?
+    R> DROP ;
+
+: _SPREC-TEXT-VIEW?  ( address length capacity -- flag )
+    >R
+    DUP 0< OVER R@ > OR IF 2DROP R> DROP 0 EXIT THEN
+    DUP 0= IF 2DROP R> DROP -1 EXIT THEN
+    OVER 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP R> DROP 0 EXIT THEN
+    UTF8-VALID? R> DROP ;
+
+: _SPREC-TEXT!  ( source-a source-u destination capacity -- status )
+    >R
+    DUP 0= IF 2DROP DROP R> DROP SPREC-S-INVALID EXIT THEN
+    DUP R@ MSPAN-NONWRAPPING? 0= IF
+        2DROP DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER 0< IF 2DROP DROP R> DROP SPREC-S-CAPACITY EXIT THEN
+    OVER R@ > IF 2DROP DROP R> DROP SPREC-S-CAPACITY EXIT THEN
+    2 PICK 0= 2 PICK 0> AND IF
+        2DROP DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER IF
+        2 PICK 2 PICK MSPAN-NONWRAPPING? 0= IF
+            2DROP DROP R> DROP SPREC-S-INVALID EXIT
+        THEN
+        2 PICK 2 PICK UTF8-VALID? 0= IF
+            2DROP DROP R> DROP SPREC-S-INVALID EXIT
+        THEN
+        2 PICK OVER 3 PICK MOVE
+    THEN
+    DUP 2 PICK + R@ 3 PICK - 0 FILL
+    2DROP DROP R> DROP SPREC-S-OK ;
+
+: _SPREC-VIEW-DISJOINT?  ( a u b v -- flag )
+    2 PICK 0= IF 2DROP 2DROP -1 EXIT THEN
+    2OVER MSPAN-NONWRAPPING? 0= IF 2DROP 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 2DROP 0 EXIT THEN
+    MSPAN-OVERLAP? 0= ;
+
+: _SPREC-INIT  ( kind size destination -- status )
+    >R
+    DUP SPREC-HEADER-SIZE < IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    R@ 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    R@ OVER MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ OVER 0 FILL
+    _SPREC-MAGIC R@ SPREC.MAGIC !
+    SPREC-FORMAT-CURRENT R@ SPREC.FORMAT !
+    OVER R@ SPREC.KIND !
+    DUP R@ SPREC.SIZE !
+    2DROP R> DROP SPREC-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Exact current pointer-bearing decode candidate qualification
+\ ---------------------------------------------------------------------
+
+: SPREC-CANDIDATE-VALID?  ( candidate -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP OCHK-CANDIDATE-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP OCC.FORMAT @ DUP SSOURCE-FORMAT-AUTO <
+        SWAP SSOURCE-FORMAT-JSON-FEED > OR IF DROP 0 EXIT THEN
+    DUP OCC.NATIVE-KIND @ 0> 0= IF DROP 0 EXIT THEN
+    DUP OCC.NATIVE-A @ OVER OCC.NATIVE-U @ OCHK-NATIVE-ID-MAX
+        _SPREC-TEXT-VIEW? 0= IF DROP 0 EXIT THEN
+    DUP OCC.NATIVE-U @ 0= IF DROP 0 EXIT THEN
+    DUP OCC.TITLE-A @ OVER OCC.TITLE-U @ OCHK-TITLE-MAX
+        _SPREC-TEXT-VIEW? 0= IF DROP 0 EXIT THEN
+    DUP OCC.URL-A @ OVER OCC.URL-U @ OCHK-URL-MAX
+        _SPREC-TEXT-VIEW? 0= IF DROP 0 EXIT THEN
+    DUP OCC.SUMMARY-A @ OVER OCC.SUMMARY-U @ OCHK-SUMMARY-MAX
+        _SPREC-TEXT-VIEW? 0= IF DROP 0 EXIT THEN
+    DUP OCC.CONTENT-A @ OVER OCC.CONTENT-U @ OCHK-CONTENT-MAX
+        _SPREC-TEXT-VIEW? 0= IF DROP 0 EXIT THEN
+    DUP OCC.PUBLISHED-A @ OVER OCC.PUBLISHED-U @ OCHK-DATETIME-MAX
+        _SPREC-TEXT-VIEW? 0= IF DROP 0 EXIT THEN
+    DUP OCC.MODIFIED-A @ SWAP OCC.MODIFIED-U @ OCHK-DATETIME-MAX
+        _SPREC-TEXT-VIEW? ;
+
+\ This immutable cell is part of the frozen observation.value.v1 byte
+\ domain.  It replaces OCHK's mutable numeric hashing scratch.
+CREATE _SPREC-OBSERVATION-VALUE-DOMAIN-U
+36 ,
+
+: _SPREC-CANDIDATE-SEMANTIC-FEED  ( candidate -- )
+    SHA3-256-BEGIN
+    _SPREC-OBSERVATION-VALUE-DOMAIN-U 8 SHA3-256-ADD
+    S" akashic.streams.observation.value.v1" SHA3-256-ADD
+    DUP OCC.FORMAT 8 SHA3-256-ADD
+    DUP OCC.NATIVE-KIND 8 SHA3-256-ADD
+    DUP OCC.NATIVE-U 8 SHA3-256-ADD
+    DUP OCC.NATIVE-A @ OVER OCC.NATIVE-U @ SHA3-256-ADD
+    DUP OCC.TITLE-U 8 SHA3-256-ADD
+    DUP OCC.TITLE-A @ OVER OCC.TITLE-U @ SHA3-256-ADD
+    DUP OCC.URL-U 8 SHA3-256-ADD
+    DUP OCC.URL-A @ OVER OCC.URL-U @ SHA3-256-ADD
+    DUP OCC.SUMMARY-U 8 SHA3-256-ADD
+    DUP OCC.SUMMARY-A @ OVER OCC.SUMMARY-U @ SHA3-256-ADD
+    DUP OCC.CONTENT-U 8 SHA3-256-ADD
+    DUP OCC.CONTENT-A @ OVER OCC.CONTENT-U @ SHA3-256-ADD
+    DUP OCC.PUBLISHED-U 8 SHA3-256-ADD
+    DUP OCC.PUBLISHED-A @ OVER OCC.PUBLISHED-U @ SHA3-256-ADD
+    DUP OCC.MODIFIED-U 8 SHA3-256-ADD
+    DUP OCC.MODIFIED-A @ SWAP OCC.MODIFIED-U @ SHA3-256-ADD ;
+
+: SPREC-CANDIDATE-SEMANTIC-DIGEST!
+  ( candidate destination -- status )
+    >R
+    DUP SPREC-CANDIDATE-VALID? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ 0= IF DROP R> DROP SPREC-S-INVALID EXIT THEN
+    R@ SHA3-256-LEN MSPAN-NONWRAPPING? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP OCHK-CANDIDATE-SIZE R@ SHA3-256-LEN
+        _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    _SPREC-CANDIDATE-SEMANTIC-FEED
+    R> SHA3-256-END SPREC-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Source validation, construction, and seal
+\ ---------------------------------------------------------------------
+
+: _SPREC-SOURCE-HASH-FEED  ( record -- )
+    SHA3-256-BEGIN
+    S" akashic.streams.persistence.source-record.v1" SHA3-256-ADD
+    DUP SPREC.FORMAT 8 SHA3-256-ADD
+    DUP SPREC.KIND 8 SHA3-256-ADD
+    DUP SPRS.CREATION-SEQUENCE 8 SHA3-256-ADD
+    DUP SPRS.SOURCE STREAMS-SOURCE-SIZE SHA3-256-ADD
+    SPRS.OBSERVATION-COUNT 8 SHA3-256-ADD ;
+
+: _SPREC-SOURCE-SHAPE?  ( record -- flag )
+    DUP _SPREC-SOURCE-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP SPRS.CREATION-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRS.SOURCE STREAMS-SOURCE-VALID? 0= IF DROP 0 EXIT THEN
+    DUP SPRS.OBSERVATION-COUNT @ DUP 0<
+        SWAP PERSIST-MAX-SIGNED > OR IF DROP 0 EXIT THEN
+    SPRS.RESERVED SPREC-SOURCE-SIZE _SPRS-RESERVED -
+        _SPREC-ZERO? ;
+
+: _SPREC-SOURCE-SEAL-MATCHES?  ( record -- flag )
+    DUP SPREC.SEAL RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-SOURCE-HASH-FEED
+    SPREC.SEAL SHA3-256-END-COMPARE ;
+
+: SPREC-SOURCE-VALID?  ( record-a record-u -- flag )
+    DUP SPREC-SOURCE-SIZE <> IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _SPREC-SOURCE-SHAPE? 0= IF DROP 0 EXIT THEN
+    _SPREC-SOURCE-SEAL-MATCHES? ;
+
+: SPREC-SOURCE-INIT  ( record -- status )
+    >R SPREC-KIND-SOURCE SPREC-SOURCE-SIZE R@
+        _SPREC-INIT DUP IF R> DROP EXIT THEN DROP
+    R@ SPRS.SOURCE STREAMS-SOURCE-INIT
+    R> DROP SPREC-S-OK ;
+
+: SPREC-SOURCE-SEAL!  ( record -- status )
+    DUP _SPREC-SOURCE-SHAPE? 0= IF DROP SPREC-S-INVALID EXIT THEN
+    DUP _SPREC-SOURCE-HASH-FEED
+    DUP SPREC.SEAL SHA3-256-END
+    DUP SPREC-SOURCE-SIZE SPREC-SOURCE-VALID? IF
+        DROP SPREC-S-OK
+    ELSE
+        DUP SPREC.SEAL SHA3-256-LEN 0 FILL
+        DROP SPREC-S-CORRUPT
+    THEN ;
+
+: SPREC-SOURCE-CONSTRUCT
+  ( source creation-sequence record -- status )
+    >R
+    OVER STREAMS-SOURCE-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER STREAMS-SOURCE-VALID? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP 0> 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    R@ SPREC-SOURCE-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER STREAMS-SOURCE-SIZE R@ SPREC-SOURCE-SIZE
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ SPREC-SOURCE-INIT DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP
+    OVER R@ SPRS.SOURCE STREAMS-SOURCE-SIZE MOVE
+    DUP R@ SPRS.CREATION-SEQUENCE !
+    2DROP
+    R@ SPREC-SOURCE-SEAL! R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Removed-source tombstone validation, construction, and seal
+\ ---------------------------------------------------------------------
+
+: _SPREC-SOURCE-TOMBSTONE-HASH-FEED  ( record -- )
+    SHA3-256-BEGIN
+    S" akashic.streams.persistence.source-tombstone.v1" SHA3-256-ADD
+    DUP SPREC.FORMAT 8 SHA3-256-ADD
+    DUP SPREC.KIND 8 SHA3-256-ADD
+    DUP SPRT.SOURCE-ID RID-SIZE SHA3-256-ADD
+    DUP SPRT.CREATION-SEQUENCE 8 SHA3-256-ADD
+    DUP SPRT.SOURCE-REVISION 8 SHA3-256-ADD
+    DUP SPRT.REMOVAL-SEQUENCE 8 SHA3-256-ADD
+    SPRT.SOURCE-SEAL SHA3-256-LEN SHA3-256-ADD ;
+
+: _SPREC-SOURCE-TOMBSTONE-SHAPE?  ( record -- flag )
+    DUP _SPREC-SOURCE-TOMBSTONE-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP SPRT.SOURCE-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRT.CREATION-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRT.SOURCE-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRT.REMOVAL-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRT.REMOVAL-SEQUENCE @
+        OVER SPRT.CREATION-SEQUENCE @ <= IF DROP 0 EXIT THEN
+    DUP SPRT.SOURCE-SEAL RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    SPRT.RESERVED SPREC-SOURCE-TOMBSTONE-SIZE _SPRT-RESERVED -
+        _SPREC-ZERO? ;
+
+: _SPREC-SOURCE-TOMBSTONE-SEAL-MATCHES?  ( record -- flag )
+    DUP SPREC.SEAL RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-SOURCE-TOMBSTONE-HASH-FEED
+    SPREC.SEAL SHA3-256-END-COMPARE ;
+
+: SPREC-SOURCE-TOMBSTONE-VALID?  ( record-a record-u -- flag )
+    DUP SPREC-SOURCE-TOMBSTONE-SIZE <> IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _SPREC-SOURCE-TOMBSTONE-SHAPE? 0= IF DROP 0 EXIT THEN
+    _SPREC-SOURCE-TOMBSTONE-SEAL-MATCHES? ;
+
+: SPREC-SOURCE-TOMBSTONE-INIT  ( record -- status )
+    SPREC-KIND-SOURCE-TOMBSTONE SPREC-SOURCE-TOMBSTONE-SIZE
+        ROT _SPREC-INIT ;
+
+: SPREC-SOURCE-TOMBSTONE-SEAL!  ( record -- status )
+    DUP _SPREC-SOURCE-TOMBSTONE-SHAPE? 0= IF
+        DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP _SPREC-SOURCE-TOMBSTONE-HASH-FEED
+    DUP SPREC.SEAL SHA3-256-END
+    DUP SPREC-SOURCE-TOMBSTONE-SIZE
+        SPREC-SOURCE-TOMBSTONE-VALID? IF
+        DROP SPREC-S-OK
+    ELSE
+        DUP SPREC.SEAL SHA3-256-LEN 0 FILL
+        DROP SPREC-S-CORRUPT
+    THEN ;
+
+: SPREC-SOURCE-TOMBSTONE-CONSTRUCT
+  ( source-record removal-sequence tombstone -- status )
+    >R
+    OVER SPREC-SOURCE-SIZE SPREC-SOURCE-VALID? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP 0> 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    OVER SPRS.CREATION-SEQUENCE @ OVER >= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    R@ SPREC-SOURCE-TOMBSTONE-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER SPREC-SOURCE-SIZE
+        R@ SPREC-SOURCE-TOMBSTONE-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ SPREC-SOURCE-TOMBSTONE-INIT DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP
+    OVER SPRS.ID R@ SPRT.SOURCE-ID RID-COPY
+    OVER SPRS.CREATION-SEQUENCE @ R@ SPRT.CREATION-SEQUENCE !
+    OVER SPRS.REVISION @ R@ SPRT.SOURCE-REVISION !
+    OVER SPREC.SEAL R@ SPRT.SOURCE-SEAL RID-COPY
+    DUP R@ SPRT.REMOVAL-SEQUENCE !
+    2DROP
+    R@ SPREC-SOURCE-TOMBSTONE-SEAL! R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Attempt validation, construction, and seal
+\ ---------------------------------------------------------------------
+
+\ Immutable domain-length cells preserve the exact existing attempt and
+\ request-seal byte domains without mutable numeric hashing scratch.
+CREATE _SPREC-ATTEMPT-DOMAIN-U
+26 ,
+CREATE _SPREC-REQUEST-DOMAIN-U
+26 ,
+
+: _SPREC-ATTEMPT-ID-FEED  ( attempt -- )
+    SHA3-256-BEGIN
+    _SPREC-ATTEMPT-DOMAIN-U 8 SHA3-256-ADD
+    S" akashic.streams.attempt.v1" SHA3-256-ADD
+    DUP OCS.SOURCE-ID RID-SIZE SHA3-256-ADD
+    DUP OCS.NAMESPACE SHA3-256-LEN SHA3-256-ADD
+    DUP OCS.SOURCE-REVISION 8 SHA3-256-ADD
+    DUP OCS.ATTEMPT-SEQUENCE 8 SHA3-256-ADD
+    DUP _OCS-REQUESTED-U + 8 SHA3-256-ADD
+    DUP _OCS-REQUESTED + SWAP _OCS-REQUESTED-U + @
+        SHA3-256-ADD ;
+
+: _SPREC-REQUEST-SEAL-FEED  ( attempt -- )
+    SHA3-256-BEGIN
+    _SPREC-REQUEST-DOMAIN-U 8 SHA3-256-ADD
+    S" akashic.streams.request.v1" SHA3-256-ADD
+    DUP OCS.SOURCE-ID RID-SIZE SHA3-256-ADD
+    DUP OCS.NAMESPACE SHA3-256-LEN SHA3-256-ADD
+    DUP OCS.SOURCE-REVISION 8 SHA3-256-ADD
+    DUP OCS.PROVIDER-KIND 8 SHA3-256-ADD
+    DUP _OCS-REQUESTED-U + 8 SHA3-256-ADD
+    DUP _OCS-REQUESTED + SWAP _OCS-REQUESTED-U + @
+        SHA3-256-ADD ;
+
+: _SPREC-ATTEMPT-DERIVATIONS?  ( attempt -- flag )
+    DUP _SPREC-ATTEMPT-ID-FEED
+    DUP OCS.ATTEMPT-ID SHA3-256-END-COMPARE 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _SPREC-REQUEST-SEAL-FEED
+    OCS.REQUEST-SEAL SHA3-256-END-COMPARE ;
+
+: _SPREC-ATTEMPT-COUNT-TOTAL  ( attempt -- count )
+    DUP OCS.NEW-COUNT @ OVER OCS.REVISED-COUNT @ +
+    OVER OCS.UNCHANGED-COUNT @ + SWAP OCS.REJECTED-COUNT @ + ;
+
+: _SPREC-ATTEMPT-COUNTS?  ( attempt -- flag )
+    DUP OCS.NEW-COUNT @ DUP 0< SWAP OCHK-BATCH-MAX > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP OCS.REVISED-COUNT @ DUP 0< SWAP OCHK-BATCH-MAX > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP OCS.UNCHANGED-COUNT @ DUP 0< SWAP OCHK-BATCH-MAX > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP OCS.REJECTED-COUNT @ DUP 0< SWAP OCHK-BATCH-MAX > OR IF
+        DROP 0 EXIT
+    THEN
+    _SPREC-ATTEMPT-COUNT-TOTAL OCHK-BATCH-MAX <= ;
+
+: _SPREC-ATTEMPT-ERROR-FACTS-ZERO?  ( attempt -- flag )
+    DUP OCS.DETAIL @ 0=
+    OVER OCS.HTTP-STATUS @ 0= AND
+    OVER OCS.DECODE-STATUS @ 0= AND
+    OVER OCS.XIO-ERROR @ 0= AND
+    OVER OCS.CLEANUP-ERROR @ 0= AND
+    NIP ;
+
+: _SPREC-ATTEMPT-FINISHED-AFTER-START?  ( attempt -- flag )
+    DUP OCS.FINISHED-MS @ DUP 0< IF
+        2DROP 0 EXIT
+    THEN
+    SWAP OCS.STARTED-MS @ >= ;
+
+: _SPREC-ATTEMPT-STATE?  ( attempt -- flag )
+    DUP OCS.STATE @ OCHK-ATTEMPT-ACCEPTED = IF
+        DUP OCS.OUTCOME @ OCHK-O-NONE <> IF DROP 0 EXIT THEN
+        DUP OCS.FINISHED-MS @ IF DROP 0 EXIT THEN
+        DUP _OCS-EFFECTIVE-U + @ IF DROP 0 EXIT THEN
+        DUP _SPREC-ATTEMPT-COUNT-TOTAL 0= 0= IF DROP 0 EXIT THEN
+        _SPREC-ATTEMPT-ERROR-FACTS-ZERO? EXIT
+    THEN
+    DUP OCS.OUTCOME @ OCHK-O-NONE = IF DROP 0 EXIT THEN
+    DUP _SPREC-ATTEMPT-FINISHED-AFTER-START? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP OCS.STATE @ OCHK-ATTEMPT-SUCCEEDED = IF
+        DUP OCS.OUTCOME @ OCHK-O-OK <> IF DROP 0 EXIT THEN
+        DUP OCS.REJECTED-COUNT @ IF DROP 0 EXIT THEN
+        DUP OCS.XIO-ERROR @ IF DROP 0 EXIT THEN
+        DUP OCS.CLEANUP-ERROR @ IF DROP 0 EXIT THEN
+        _OCS-EFFECTIVE-U + @ DUP 1 >=
+            SWAP OCHK-URI-MAX <= AND EXIT
+    THEN
+    DUP _OCS-EFFECTIVE-U + @ IF DROP 0 EXIT THEN
+    DUP _SPREC-ATTEMPT-COUNT-TOTAL IF DROP 0 EXIT THEN
+    DUP OCS.STATE @ OCHK-ATTEMPT-INDETERMINATE = IF
+        OCS.OUTCOME @ OCHK-O-INDETERMINATE = EXIT
+    THEN
+    DUP OCS.STATE @ OCHK-ATTEMPT-CANCELLED = IF
+        OCS.OUTCOME @ DUP OCHK-O-CANCELLED =
+        SWAP OCHK-O-CLEANUP = OR EXIT
+    THEN
+    OCS.OUTCOME @ DUP OCHK-O-OK <>
+    OVER OCHK-O-NONE <> AND
+    SWAP OCHK-O-INDETERMINATE <> AND ;
+
+: _SPREC-ATTEMPT-PAYLOAD?  ( attempt -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP OCHK-SOURCE-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP OCS.STATE @ DUP OCHK-ATTEMPT-ACCEPTED <
+        SWAP OCHK-ATTEMPT-INDETERMINATE > OR IF DROP 0 EXIT THEN
+    DUP OCS.ATTEMPT-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP OCS.SOURCE-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP OCS.PROVIDER-KIND @ 0> 0= IF DROP 0 EXIT THEN
+    DUP OCS.ATTEMPT-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP OCS.SOURCE-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP OCS.NAMESPACE RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP OCS.REQUEST-SEAL RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-ATTEMPT-DERIVATIONS? 0= IF DROP 0 EXIT THEN
+    DUP OCS.STARTED-MS @ 0< IF DROP 0 EXIT THEN
+    DUP OCS.OUTCOME @ DUP OCHK-O-NONE <
+        SWAP OCHK-O-CLEANUP > OR IF DROP 0 EXIT THEN
+    DUP _OCS-REQUESTED +
+        OCHK-URI-MAX 2 PICK _OCS-REQUESTED-U + @
+        0 _SPREC-TEXT-SLOT? 0= IF DROP 0 EXIT THEN
+    DUP _OCS-EFFECTIVE +
+        OCHK-URI-MAX 2 PICK _OCS-EFFECTIVE-U + @
+        -1 _SPREC-TEXT-SLOT? 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-ATTEMPT-COUNTS? 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-ATTEMPT-STATE? 0= IF DROP 0 EXIT THEN
+    _OCS-RESERVED + OCHK-SOURCE-SIZE _OCS-RESERVED -
+        _SPREC-ZERO? ;
+
+: _SPREC-ATTEMPT-HASH-FEED  ( record -- )
+    SHA3-256-BEGIN
+    S" akashic.streams.persistence.attempt-record.v1" SHA3-256-ADD
+    DUP SPREC.FORMAT 8 SHA3-256-ADD
+    DUP SPREC.KIND 8 SHA3-256-ADD
+    SPRA.ATTEMPT OCHK-SOURCE-SIZE SHA3-256-ADD ;
+
+: _SPREC-ATTEMPT-SHAPE?  ( record -- flag )
+    DUP _SPREC-ATTEMPT-HEADER? 0= IF DROP 0 EXIT THEN
+    SPRA.ATTEMPT _SPREC-ATTEMPT-PAYLOAD? ;
+
+: _SPREC-ATTEMPT-SEAL-MATCHES?  ( record -- flag )
+    DUP SPREC.SEAL RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-ATTEMPT-HASH-FEED
+    SPREC.SEAL SHA3-256-END-COMPARE ;
+
+: SPREC-ATTEMPT-VALID?  ( record-a record-u -- flag )
+    DUP SPREC-ATTEMPT-SIZE <> IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _SPREC-ATTEMPT-SHAPE? 0= IF DROP 0 EXIT THEN
+    _SPREC-ATTEMPT-SEAL-MATCHES? ;
+
+: SPREC-ATTEMPT-INIT  ( record -- status )
+    SPREC-KIND-ATTEMPT SPREC-ATTEMPT-SIZE ROT _SPREC-INIT ;
+
+: SPREC-ATTEMPT-SEAL!  ( record -- status )
+    DUP _SPREC-ATTEMPT-SHAPE? 0= IF DROP SPREC-S-INVALID EXIT THEN
+    DUP _SPREC-ATTEMPT-HASH-FEED
+    DUP SPREC.SEAL SHA3-256-END
+    DUP SPREC-ATTEMPT-SIZE SPREC-ATTEMPT-VALID? IF
+        DROP SPREC-S-OK
+    ELSE
+        DUP SPREC.SEAL SHA3-256-LEN 0 FILL
+        DROP SPREC-S-CORRUPT
+    THEN ;
+
+: SPREC-ATTEMPT-CONSTRUCT  ( ochk-attempt-head record -- status )
+    >R
+    DUP _SPREC-ATTEMPT-PAYLOAD? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ SPREC-ATTEMPT-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP OCHK-SOURCE-SIZE R@ SPREC-ATTEMPT-SIZE
+        MSPAN-OVERLAP? IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ SPREC-ATTEMPT-INIT DUP IF
+        >R DROP R> R> DROP EXIT
+    THEN DROP
+    DUP R@ SPRA.ATTEMPT OCHK-SOURCE-SIZE MOVE
+    DROP
+    R@ SPREC-ATTEMPT-SEAL! R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Native-head validation, construction, and seal
+\ ---------------------------------------------------------------------
+
+CREATE _SPREC-OBSERVATION-IDENTITY-DOMAIN-U
+39 ,
+
+: _SPREC-NATIVE-OBSERVATION-ID-FEED  ( record -- )
+    SHA3-256-BEGIN
+    _SPREC-OBSERVATION-IDENTITY-DOMAIN-U 8 SHA3-256-ADD
+    S" akashic.streams.observation.identity.v1" SHA3-256-ADD
+    DUP SPRH.SOURCE-ID RID-SIZE SHA3-256-ADD
+    DUP SPRH.NAMESPACE SHA3-256-LEN SHA3-256-ADD
+    DUP SPRH.OBSERVATION-FORMAT 8 SHA3-256-ADD
+    DUP SPRH.NATIVE-KIND 8 SHA3-256-ADD
+    DUP SPRH.NATIVE-U 8 SHA3-256-ADD
+    DUP SPRH.NATIVE SWAP SPRH.NATIVE-U @ SHA3-256-ADD ;
+
+: _SPREC-NATIVE-OBSERVATION-ID-MATCHES?  ( record -- flag )
+    DUP _SPREC-NATIVE-OBSERVATION-ID-FEED
+    SPRH.OBSERVATION-ID SHA3-256-END-COMPARE ;
+
+: _SPREC-NATIVE-STABLE?  ( record -- flag )
+    DUP _SPREC-NATIVE-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP SPRH.SOURCE-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRH.NAMESPACE RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRH.LATEST-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRH.LAST-SEEN-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRH.LATEST-REVISION @
+        OVER SPRH.LAST-SEEN-SEQUENCE @ > IF DROP 0 EXIT THEN
+    DUP SPRH.COLLISION-ORDINAL @ DUP 1 <
+        SWAP SPREC-NATIVE-COLLISION-MAX > OR IF DROP 0 EXIT THEN
+    DUP SPREC.SEAL SHA3-256-LEN _SPREC-ZERO? 0= IF DROP 0 EXIT THEN
+    DUP _SPRH-OBSERVATION-ID + 64 _SPREC-ZERO?
+        0= IF DROP 0 EXIT THEN
+    DUP _SPRH-OBSERVATION-FORMAT + 16 _SPREC-ZERO?
+        0= IF DROP 0 EXIT THEN
+    DUP _SPRH-NATIVE-U +
+        _SPRH-RESERVED _SPRH-NATIVE-U - _SPREC-ZERO?
+        0= IF DROP 0 EXIT THEN
+    SPRH.RESERVED SPREC-NATIVE-HEAD-SIZE _SPRH-RESERVED -
+        _SPREC-ZERO? ;
+
+: _SPREC-NATIVE-HASH-FEED  ( record -- )
+    SHA3-256-BEGIN
+    S" akashic.streams.persistence.native-head.v1" SHA3-256-ADD
+    DUP SPREC.FORMAT 8 SHA3-256-ADD
+    DUP SPREC.KIND 8 SHA3-256-ADD
+    DUP SPRH.SOURCE-ID RID-SIZE SHA3-256-ADD
+    DUP SPRH.NAMESPACE SHA3-256-LEN SHA3-256-ADD
+    DUP SPRH.OBSERVATION-ID RID-SIZE SHA3-256-ADD
+    DUP SPRH.NATIVE-DIGEST SHA3-256-LEN SHA3-256-ADD
+    DUP SPRH.LATEST-REVISION 8 SHA3-256-ADD
+    DUP SPRH.LAST-SEEN-SEQUENCE 8 SHA3-256-ADD
+    DUP SPRH.OBSERVATION-FORMAT 8 SHA3-256-ADD
+    DUP SPRH.NATIVE-KIND 8 SHA3-256-ADD
+    DUP SPRH.COLLISION-ORDINAL 8 SHA3-256-ADD
+    DUP SPRH.NATIVE-U 8 SHA3-256-ADD
+    DUP SPRH.NATIVE SWAP SPRH.NATIVE-U @ SHA3-256-ADD ;
+
+: _SPREC-NATIVE-SHAPE?  ( record -- flag )
+    DUP _SPREC-NATIVE-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP SPRH.SOURCE-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRH.NAMESPACE RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRH.OBSERVATION-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRH.NATIVE-DIGEST RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRH.LATEST-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRH.LAST-SEEN-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRH.LATEST-REVISION @
+        OVER SPRH.LAST-SEEN-SEQUENCE @ > IF DROP 0 EXIT THEN
+    DUP SPRH.OBSERVATION-FORMAT @ DUP SSOURCE-FORMAT-AUTO <
+        SWAP SSOURCE-FORMAT-JSON-FEED > OR IF DROP 0 EXIT THEN
+    DUP SPRH.NATIVE-KIND @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRH.COLLISION-ORDINAL @ DUP 1 <
+        SWAP SPREC-NATIVE-COLLISION-MAX > OR IF DROP 0 EXIT THEN
+    DUP SPRH.NATIVE OCHK-NATIVE-ID-MAX
+        2 PICK SPRH.NATIVE-U @ 0 _SPREC-TEXT-SLOT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP SPRH-NATIVE$ 2 PICK SPRH.NATIVE-DIGEST
+        SHA3-256-HASH-COMPARE 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-NATIVE-OBSERVATION-ID-MATCHES? 0= IF DROP 0 EXIT THEN
+    SPRH.RESERVED SPREC-NATIVE-HEAD-SIZE _SPRH-RESERVED -
+        _SPREC-ZERO? ;
+
+: _SPREC-NATIVE-SEAL-MATCHES?  ( record -- flag )
+    DUP SPREC.SEAL RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-NATIVE-HASH-FEED
+    SPREC.SEAL SHA3-256-END-COMPARE ;
+
+: SPREC-NATIVE-VALID?  ( record-a record-u -- flag )
+    DUP SPREC-NATIVE-HEAD-SIZE <> IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _SPREC-NATIVE-SHAPE? 0= IF DROP 0 EXIT THEN
+    _SPREC-NATIVE-SEAL-MATCHES? ;
+
+: SPREC-NATIVE-INIT  ( record -- status )
+    SPREC-KIND-NATIVE-HEAD SPREC-NATIVE-HEAD-SIZE ROT _SPREC-INIT ;
+
+: SPREC-NATIVE-BYTES!  ( a u record -- status )
+    >R
+    R@ _SPREC-NATIVE-HEADER? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    2DUP R@ SPRH.NATIVE OCHK-NATIVE-ID-MAX _SPREC-TEXT!
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP
+    DUP R@ SPRH.NATIVE-U !
+    R@ SPRH-NATIVE$ R@ SPRH.NATIVE-DIGEST SHA3-256-HASH
+    2DROP R> DROP SPREC-S-OK ;
+
+: SPREC-NATIVE-SEAL!  ( record -- status )
+    DUP _SPREC-NATIVE-SHAPE? 0= IF DROP SPREC-S-INVALID EXIT THEN
+    DUP _SPREC-NATIVE-HASH-FEED
+    DUP SPREC.SEAL SHA3-256-END
+    DUP SPREC-NATIVE-HEAD-SIZE SPREC-NATIVE-VALID? IF
+        DROP SPREC-S-OK
+    ELSE
+        DUP SPREC.SEAL SHA3-256-LEN 0 FILL
+        DROP SPREC-S-CORRUPT
+    THEN ;
+
+: _SPREC-NATIVE-CANDIDATE-RESET!  ( record -- )
+    DUP SPREC.SEAL SHA3-256-LEN 0 FILL
+    DUP _SPRH-OBSERVATION-ID + 64 0 FILL
+    DUP _SPRH-OBSERVATION-FORMAT + 16 0 FILL
+    DUP _SPRH-NATIVE-U +
+        _SPRH-RESERVED _SPRH-NATIVE-U - 0 FILL
+    DROP ;
+
+: SPREC-NATIVE-CANDIDATE!  ( candidate record -- status )
+    >R
+    DUP SPREC-CANDIDATE-VALID? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ _SPREC-NATIVE-STABLE? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP OCHK-CANDIDATE-SIZE R@ SPREC-NATIVE-HEAD-SIZE
+        _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP OCC.NATIVE-A @ OVER OCC.NATIVE-U @
+        R@ SPREC-NATIVE-HEAD-SIZE _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP OCC.FORMAT @ R@ SPRH.OBSERVATION-FORMAT !
+    DUP OCC.NATIVE-KIND @ R@ SPRH.NATIVE-KIND !
+    DUP OCC.NATIVE-A @ OVER OCC.NATIVE-U @ R@ SPREC-NATIVE-BYTES!
+    DUP IF
+        >R DROP R> R@ _SPREC-NATIVE-CANDIDATE-RESET!
+        R> DROP EXIT
+    THEN DROP
+    DROP
+    R@ _SPREC-NATIVE-OBSERVATION-ID-FEED
+    R@ SPRH.OBSERVATION-ID SHA3-256-END
+    R@ SPREC-NATIVE-SEAL!
+    DUP IF R@ _SPREC-NATIVE-CANDIDATE-RESET! THEN
+    R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Observation validation, candidate construction, and seal
+\ ---------------------------------------------------------------------
+
+: _SPREC-CANDIDATE-OBSERVATION-ID-FEED  ( candidate record -- )
+    >R
+    SHA3-256-BEGIN
+    _SPREC-OBSERVATION-IDENTITY-DOMAIN-U 8 SHA3-256-ADD
+    S" akashic.streams.observation.identity.v1" SHA3-256-ADD
+    R@ SPRO.SOURCE-ID RID-SIZE SHA3-256-ADD
+    R@ SPRO.NAMESPACE SHA3-256-LEN SHA3-256-ADD
+    DUP OCC.FORMAT 8 SHA3-256-ADD
+    DUP OCC.NATIVE-KIND 8 SHA3-256-ADD
+    DUP OCC.NATIVE-U 8 SHA3-256-ADD
+    DUP OCC.NATIVE-A @ OVER OCC.NATIVE-U @ SHA3-256-ADD
+    DROP R> DROP ;
+
+: _SPREC-CANDIDATE-OBSERVATION-ID-MATCHES?
+  ( candidate record -- flag )
+    2DUP _SPREC-CANDIDATE-OBSERVATION-ID-FEED
+    NIP SPRO.OBSERVATION-ID SHA3-256-END-COMPARE ;
+
+: _SPREC-OBSERVATION-STABLE?  ( candidate record -- flag )
+    >R
+    R@ _SPREC-OBSERVATION-HEADER? 0= IF DROP R> DROP 0 EXIT THEN
+    R@ SPRO.OBSERVATION-ID RID-PRESENT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ SPRO.SOURCE-ID RID-PRESENT? 0= IF DROP R> DROP 0 EXIT THEN
+    R@ SPRO.NAMESPACE RID-PRESENT? 0= IF DROP R> DROP 0 EXIT THEN
+    R@ SPRO.ATTEMPT-ID RID-PRESENT? 0= IF DROP R> DROP 0 EXIT THEN
+    R@ SPRO.ACQUISITION-SEQUENCE @ 0> 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ SPRO.REVISION @ 0> 0= IF DROP R> DROP 0 EXIT THEN
+    R@ SPRO.REVISION @
+        R@ SPRO.ACQUISITION-SEQUENCE @ > IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ SPREC.SEAL SHA3-256-LEN _SPREC-ZERO? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ SPRO.SEMANTIC-DIGEST 64 _SPREC-ZERO? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ _SPRO-OBSERVATION-FORMAT +
+        _SPRO-RESERVED _SPRO-OBSERVATION-FORMAT -
+        _SPREC-ZERO? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ SPRO.RESERVED
+        SPREC-OBSERVATION-SIZE _SPRO-RESERVED -
+        _SPREC-ZERO? 0= IF DROP R> DROP 0 EXIT THEN
+    R@ _SPREC-CANDIDATE-OBSERVATION-ID-MATCHES?
+    R> DROP ;
+
+: _SPREC-OBSERVATION-HASH-FEED  ( record -- )
+    SHA3-256-BEGIN
+    S" akashic.streams.persistence.observation-record.v1" SHA3-256-ADD
+    DUP SPREC.FORMAT 8 SHA3-256-ADD
+    DUP SPREC.KIND 8 SHA3-256-ADD
+    DUP SPRO.OBSERVATION-ID RID-SIZE SHA3-256-ADD
+    DUP SPRO.SOURCE-ID RID-SIZE SHA3-256-ADD
+    DUP SPRO.NAMESPACE SHA3-256-LEN SHA3-256-ADD
+    DUP SPRO.ATTEMPT-ID RID-SIZE SHA3-256-ADD
+    DUP SPRO.SEMANTIC-DIGEST SHA3-256-LEN SHA3-256-ADD
+    DUP SPRO.CONTENT-DIGEST SHA3-256-LEN SHA3-256-ADD
+    DUP SPRO.ACQUISITION-SEQUENCE 8 SHA3-256-ADD
+    DUP SPRO.REVISION 8 SHA3-256-ADD
+    DUP SPRO.OBSERVATION-FORMAT 8 SHA3-256-ADD
+    DUP SPRO.CONTENT-U 8 SHA3-256-ADD
+    DUP SPRO.TITLE-U 8 SHA3-256-ADD
+    DUP SPRO.TITLE OVER SPRO.TITLE-U @ SHA3-256-ADD
+    DUP SPRO.URL-U 8 SHA3-256-ADD
+    DUP SPRO.URL OVER SPRO.URL-U @ SHA3-256-ADD
+    DUP SPRO.SUMMARY-U 8 SHA3-256-ADD
+    DUP SPRO.SUMMARY OVER SPRO.SUMMARY-U @ SHA3-256-ADD
+    DUP SPRO.PUBLISHED-U 8 SHA3-256-ADD
+    DUP SPRO.PUBLISHED OVER SPRO.PUBLISHED-U @ SHA3-256-ADD
+    DUP SPRO.MODIFIED-U 8 SHA3-256-ADD
+    DUP SPRO.MODIFIED SWAP SPRO.MODIFIED-U @ SHA3-256-ADD ;
+
+: _SPREC-OBSERVATION-SHAPE?  ( record -- flag )
+    DUP _SPREC-OBSERVATION-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP SPRO.OBSERVATION-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRO.SOURCE-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRO.NAMESPACE RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRO.ATTEMPT-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRO.SEMANTIC-DIGEST RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRO.CONTENT-DIGEST RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP SPRO.ACQUISITION-SEQUENCE @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRO.REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SPRO.REVISION @
+        OVER SPRO.ACQUISITION-SEQUENCE @ > IF DROP 0 EXIT THEN
+    DUP SPRO.OBSERVATION-FORMAT @ DUP SSOURCE-FORMAT-AUTO <
+        SWAP SSOURCE-FORMAT-JSON-FEED > OR IF DROP 0 EXIT THEN
+    DUP SPRO.CONTENT-U @ DUP 0< SWAP OCHK-CONTENT-MAX > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP SPRO.CONTENT PBLOB-VALID? 0= IF DROP 0 EXIT THEN
+    DUP SPRO.CONTENT PBLOB-TOTAL@ OVER SPRO.CONTENT-U @ <> IF
+        DROP 0 EXIT
+    THEN
+    DUP SPRO.TITLE OCHK-TITLE-MAX
+        2 PICK SPRO.TITLE-U @ -1 _SPREC-TEXT-SLOT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP SPRO.URL OCHK-URL-MAX
+        2 PICK SPRO.URL-U @ -1 _SPREC-TEXT-SLOT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP SPRO.SUMMARY OCHK-SUMMARY-MAX
+        2 PICK SPRO.SUMMARY-U @ -1 _SPREC-TEXT-SLOT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP SPRO.PUBLISHED OCHK-DATETIME-MAX
+        2 PICK SPRO.PUBLISHED-U @ -1 _SPREC-TEXT-SLOT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP SPRO.MODIFIED OCHK-DATETIME-MAX
+        2 PICK SPRO.MODIFIED-U @ -1 _SPREC-TEXT-SLOT? 0= IF
+        DROP 0 EXIT
+    THEN
+    SPRO.RESERVED SPREC-OBSERVATION-SIZE _SPRO-RESERVED -
+        _SPREC-ZERO? ;
+
+: _SPREC-OBSERVATION-SEAL-MATCHES?  ( record -- flag )
+    DUP SPREC.SEAL RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _SPREC-OBSERVATION-HASH-FEED
+    SPREC.SEAL SHA3-256-END-COMPARE ;
+
+: SPREC-OBSERVATION-VALID?  ( record-a record-u -- flag )
+    DUP SPREC-OBSERVATION-SIZE <> IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _SPREC-OBSERVATION-SHAPE? 0= IF DROP 0 EXIT THEN
+    _SPREC-OBSERVATION-SEAL-MATCHES? ;
+
+: SPREC-OBSERVATION-INIT  ( record -- status )
+    SPREC-KIND-OBSERVATION SPREC-OBSERVATION-SIZE ROT _SPREC-INIT ;
+
+: SPREC-OBSERVATION-TITLE!  ( a u record -- status )
+    >R
+    R@ _SPREC-OBSERVATION-HEADER? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    2DUP R@ SPRO.TITLE OCHK-TITLE-MAX _SPREC-TEXT!
+    DUP IF >R 2DROP R> R> DROP EXIT THEN DROP
+    DUP R@ SPRO.TITLE-U !
+    2DROP R> DROP SPREC-S-OK ;
+
+: SPREC-OBSERVATION-URL!  ( a u record -- status )
+    >R
+    R@ _SPREC-OBSERVATION-HEADER? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    2DUP R@ SPRO.URL OCHK-URL-MAX _SPREC-TEXT!
+    DUP IF >R 2DROP R> R> DROP EXIT THEN DROP
+    DUP R@ SPRO.URL-U !
+    2DROP R> DROP SPREC-S-OK ;
+
+: SPREC-OBSERVATION-SUMMARY!  ( a u record -- status )
+    >R
+    R@ _SPREC-OBSERVATION-HEADER? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    2DUP R@ SPRO.SUMMARY OCHK-SUMMARY-MAX _SPREC-TEXT!
+    DUP IF >R 2DROP R> R> DROP EXIT THEN DROP
+    DUP R@ SPRO.SUMMARY-U !
+    2DROP R> DROP SPREC-S-OK ;
+
+: SPREC-OBSERVATION-PUBLISHED!  ( a u record -- status )
+    >R
+    R@ _SPREC-OBSERVATION-HEADER? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    2DUP R@ SPRO.PUBLISHED OCHK-DATETIME-MAX _SPREC-TEXT!
+    DUP IF >R 2DROP R> R> DROP EXIT THEN DROP
+    DUP R@ SPRO.PUBLISHED-U !
+    2DROP R> DROP SPREC-S-OK ;
+
+: SPREC-OBSERVATION-MODIFIED!  ( a u record -- status )
+    >R
+    R@ _SPREC-OBSERVATION-HEADER? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    2DUP R@ SPRO.MODIFIED OCHK-DATETIME-MAX _SPREC-TEXT!
+    DUP IF >R 2DROP R> R> DROP EXIT THEN DROP
+    DUP R@ SPRO.MODIFIED-U !
+    2DROP R> DROP SPREC-S-OK ;
+
+: SPREC-OBSERVATION-CONTENT!
+  ( content-digest content-blob record -- status )
+    >R
+    R@ _SPREC-OBSERVATION-HEADER? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    OVER SHA3-256-LEN MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER RID-PRESENT? 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    DUP PBLOB-VALID? 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    OVER R@ SPRO.CONTENT-DIGEST <> IF
+        OVER SHA3-256-LEN R@ SPREC-OBSERVATION-SIZE
+            _SPREC-VIEW-DISJOINT? 0= IF
+            2DROP R> DROP SPREC-S-INVALID EXIT
+        THEN
+    THEN
+    DUP PBLOB-SIZE R@ SPREC-OBSERVATION-SIZE
+        _SPREC-VIEW-DISJOINT? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP PBLOB-TOTAL@ DUP 0< OVER OCHK-CONTENT-MAX > OR IF
+        DROP 2DROP R> DROP SPREC-S-CAPACITY EXIT
+    THEN
+    OVER R@ SPRO.CONTENT PBLOB-COPY DUP PERSIST-S-OK <> IF
+        >R DROP 2DROP R> DROP R> DROP SPREC-S-INVALID EXIT
+    THEN DROP
+    DUP R@ SPRO.CONTENT-U !
+    2 PICK R@ SPRO.CONTENT-DIGEST SHA3-256-LEN MOVE
+    2DROP DROP R> DROP SPREC-S-OK ;
+
+: SPREC-OBSERVATION-SEAL!  ( record -- status )
+    DUP _SPREC-OBSERVATION-SHAPE? 0= IF
+        DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP _SPREC-OBSERVATION-HASH-FEED
+    DUP SPREC.SEAL SHA3-256-END
+    DUP SPREC-OBSERVATION-SIZE SPREC-OBSERVATION-VALID? IF
+        DROP SPREC-S-OK
+    ELSE
+        DUP SPREC.SEAL SHA3-256-LEN 0 FILL
+        DROP SPREC-S-CORRUPT
+    THEN ;
+
+: _SPREC-CANDIDATE-VIEWS-DISJOINT?  ( candidate record -- flag )
+    >R
+    DUP OCC.NATIVE-A @ OVER OCC.NATIVE-U @
+        R@ SPREC-OBSERVATION-SIZE _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP OCC.TITLE-A @ OVER OCC.TITLE-U @
+        R@ SPREC-OBSERVATION-SIZE _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP OCC.URL-A @ OVER OCC.URL-U @
+        R@ SPREC-OBSERVATION-SIZE _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP OCC.SUMMARY-A @ OVER OCC.SUMMARY-U @
+        R@ SPREC-OBSERVATION-SIZE _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP OCC.CONTENT-A @ OVER OCC.CONTENT-U @
+        R@ SPREC-OBSERVATION-SIZE _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP OCC.PUBLISHED-A @ OVER OCC.PUBLISHED-U @
+        R@ SPREC-OBSERVATION-SIZE _SPREC-VIEW-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP OCC.MODIFIED-A @ SWAP OCC.MODIFIED-U @
+        R@ SPREC-OBSERVATION-SIZE _SPREC-VIEW-DISJOINT?
+    R> DROP ;
+
+: _SPREC-OBSERVATION-CANDIDATE-RESET!  ( record -- )
+    DUP SPREC.SEAL SHA3-256-LEN 0 FILL
+    DUP SPRO.SEMANTIC-DIGEST 64 0 FILL
+    DUP _SPRO-OBSERVATION-FORMAT +
+        _SPRO-RESERVED _SPRO-OBSERVATION-FORMAT - 0 FILL
+    DROP ;
+
+: SPREC-OBSERVATION-CANDIDATE!
+  ( candidate content-blob record -- status )
+    >R
+    OVER SPREC-CANDIDATE-VALID? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP PBLOB-VALID? 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    OVER R@ _SPREC-OBSERVATION-STABLE? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP PBLOB-TOTAL@ 2 PICK OCC.CONTENT-U @ <> IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER OCHK-CANDIDATE-SIZE R@ SPREC-OBSERVATION-SIZE
+        _SPREC-VIEW-DISJOINT? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    DUP PBLOB-SIZE R@ SPREC-OBSERVATION-SIZE
+        _SPREC-VIEW-DISJOINT? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER R@ _SPREC-CANDIDATE-VIEWS-DISJOINT? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+
+    OVER OCC.FORMAT @ R@ SPRO.OBSERVATION-FORMAT !
+
+    OVER OCC.TITLE-A @ 2 PICK OCC.TITLE-U @
+        R@ SPREC-OBSERVATION-TITLE!
+    DUP IF
+        >R 2DROP R> R@ _SPREC-OBSERVATION-CANDIDATE-RESET!
+        R> DROP EXIT
+    THEN DROP
+
+    OVER OCC.URL-A @ 2 PICK OCC.URL-U @
+        R@ SPREC-OBSERVATION-URL!
+    DUP IF
+        >R 2DROP R> R@ _SPREC-OBSERVATION-CANDIDATE-RESET!
+        R> DROP EXIT
+    THEN DROP
+
+    OVER OCC.SUMMARY-A @ 2 PICK OCC.SUMMARY-U @
+        R@ SPREC-OBSERVATION-SUMMARY!
+    DUP IF
+        >R 2DROP R> R@ _SPREC-OBSERVATION-CANDIDATE-RESET!
+        R> DROP EXIT
+    THEN DROP
+
+    OVER OCC.PUBLISHED-A @ 2 PICK OCC.PUBLISHED-U @
+        R@ SPREC-OBSERVATION-PUBLISHED!
+    DUP IF
+        >R 2DROP R> R@ _SPREC-OBSERVATION-CANDIDATE-RESET!
+        R> DROP EXIT
+    THEN DROP
+
+    OVER OCC.MODIFIED-A @ 2 PICK OCC.MODIFIED-U @
+        R@ SPREC-OBSERVATION-MODIFIED!
+    DUP IF
+        >R 2DROP R> R@ _SPREC-OBSERVATION-CANDIDATE-RESET!
+        R> DROP EXIT
+    THEN DROP
+
+    OVER OCC.CONTENT-A @ 2 PICK OCC.CONTENT-U @
+        R@ SPRO.CONTENT-DIGEST SHA3-256-HASH
+    R@ SPRO.CONTENT-DIGEST OVER R@ SPREC-OBSERVATION-CONTENT!
+    DUP IF
+        >R 2DROP R> R@ _SPREC-OBSERVATION-CANDIDATE-RESET!
+        R> DROP EXIT
+    THEN DROP
+
+    OVER R@ SPRO.SEMANTIC-DIGEST
+        SPREC-CANDIDATE-SEMANTIC-DIGEST!
+    DUP IF
+        >R 2DROP R> R@ _SPREC-OBSERVATION-CANDIDATE-RESET!
+        R> DROP EXIT
+    THEN DROP
+
+    2DROP
+    R@ SPREC-OBSERVATION-SEAL!
+    DUP IF R@ _SPREC-OBSERVATION-CANDIDATE-RESET! THEN
+    R> DROP ;
+
+\ ---------------------------------------------------------------------
+\ Generic current-record validation and exact copies
+\ ---------------------------------------------------------------------
+
+: SPREC-VALID?  ( record-a record-u -- flag )
+    2DUP _SPREC-BASE? 0= IF 2DROP 0 EXIT THEN
+    OVER SPREC.KIND @
+    DUP SPREC-KIND-SOURCE = IF
+        DROP SPREC-SOURCE-VALID? EXIT
+    THEN
+    DUP SPREC-KIND-ATTEMPT = IF
+        DROP SPREC-ATTEMPT-VALID? EXIT
+    THEN
+    DUP SPREC-KIND-NATIVE-HEAD = IF
+        DROP SPREC-NATIVE-VALID? EXIT
+    THEN
+    DUP SPREC-KIND-OBSERVATION = IF
+        DROP SPREC-OBSERVATION-VALID? EXIT
+    THEN
+    SPREC-KIND-SOURCE-TOMBSTONE = IF
+        SPREC-SOURCE-TOMBSTONE-VALID? EXIT
+    THEN
+    2DROP 0 ;
+
+: SPREC-COPY  ( source-a source-u destination -- status )
+    >R
+    2DUP SPREC-VALID? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    R@ 0= IF 2DROP R> DROP SPREC-S-INVALID EXIT THEN
+    R@ OVER MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER OVER R@ 3 PICK MSPAN-OVERLAP? IF
+        2DROP R> DROP SPREC-S-INVALID EXIT
+    THEN
+    OVER R@ 2 PICK MOVE
+    R@ OVER SPREC-VALID? 0= IF
+        2DROP R> DROP SPREC-S-CORRUPT EXIT
+    THEN
+    2DROP R> DROP SPREC-S-OK ;
+
+: SPREC-SOURCE-COPY  ( source-record destination -- status )
+    >R SPREC-SOURCE-SIZE R> SPREC-COPY ;
+
+: SPREC-ATTEMPT-COPY  ( attempt-record destination -- status )
+    >R SPREC-ATTEMPT-SIZE R> SPREC-COPY ;
+
+: SPREC-NATIVE-COPY  ( native-head destination -- status )
+    >R SPREC-NATIVE-HEAD-SIZE R> SPREC-COPY ;
+
+: SPREC-OBSERVATION-COPY  ( observation destination -- status )
+    >R SPREC-OBSERVATION-SIZE R> SPREC-COPY ;
+
+: SPREC-SOURCE-TOMBSTONE-COPY  ( tombstone destination -- status )
+    >R SPREC-SOURCE-TOMBSTONE-SIZE R> SPREC-COPY ;
