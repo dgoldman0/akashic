@@ -467,12 +467,12 @@ def test_capacity_ledger_is_live_and_distinguishes_scope() -> None:
         "streams.checkpoint-bytes",
         "streams.source-registry",
     }
-    qualified_sr1_cell_ids = {
+    qualified_sr1_prototype_ids = {
         capacity["id"]
         for capacity in _policy()["capacities"]
-        if capacity.get("status") == "qualified-sr1-cell"
+        if capacity.get("status") == "qualified-sr1-prototype"
     }
-    assert qualified_sr1_cell_ids == {
+    assert qualified_sr1_prototype_ids == {
         "streams.sr1-cell-admissions",
         "streams.sr1-payload-bytes",
         "streams.sr1-operation-bytes",
@@ -583,7 +583,7 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         "historical-inactive"
     )
     assert policy["scale_profiles"]["sr1_contract"] == {
-        "status": "qualified-execution-cell",
+        "status": "qualified-prototype-cell",
         "input_connectors": 1,
         "execution_cells": 1,
         "transforms": 1,
@@ -593,7 +593,9 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         "operation_max_bytes": 256,
         "storage": "none",
         "qualification": "deterministic-mocks",
-        "capacity_role": "version-1 cell bounds, not product-wide limits",
+        "capacity_role": (
+            "SR1 prototype cell bounds, not supported product limits"
+        ),
     }
     assert policy["scale_profiles"]["streams_capacity_convergence"] == {
         "status": "required",
@@ -614,9 +616,10 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
                 "measured memory and latency",
             ],
             "persistence": "none",
-            "abi_rule": (
-                "layout changes use an explicit replacement ABI; general "
-                "code does not persist raw descriptors"
+            "cutover_rule": (
+                "replace the unreleased SR1 layout atomically; no parallel "
+                "layout, adapter, migration, deprecation, or legacy reader; "
+                "general code does not persist raw descriptors"
             ),
         },
         "sr3": {
@@ -633,8 +636,9 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
                 "durable acceptance"
             ),
             "recovery": (
-                "versioned formats, interrupted publication, corrupt/future "
-                "refusal, restart, receipts, and visible indeterminate work"
+                "self-identifying current format, interrupted publication, "
+                "corrupt or unknown refusal, restart, receipts, and visible "
+                "indeterminate work; prerelease changes replace the prototype"
             ),
             "retry": (
                 "no automatic indeterminate-effect retry without a safe "
@@ -644,7 +648,7 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         "sr6": {
             "purpose": (
                 "qualify supported workload profiles without redesigning "
-                "runtime semantics or durable formats"
+                "runtime semantics or durable record shapes"
             ),
             "required_axes": [
                 "connectors",
@@ -669,7 +673,7 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         ),
         "must_not_require": [
             "runtime semantic redesign",
-            "durable format redesign",
+            "durable record-shape redesign",
             "reuse of historical source and observation cardinalities",
         ],
     }

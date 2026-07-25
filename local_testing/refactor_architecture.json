@@ -343,7 +343,7 @@
       "content_shape": "variable-size summaries and content separated from indexed observation metadata"
     },
     "sr1_contract": {
-      "status": "qualified-execution-cell",
+      "status": "qualified-prototype-cell",
       "input_connectors": 1,
       "execution_cells": 1,
       "transforms": 1,
@@ -353,7 +353,7 @@
       "operation_max_bytes": 256,
       "storage": "none",
       "qualification": "deterministic-mocks",
-      "capacity_role": "version-1 cell bounds, not product-wide limits"
+      "capacity_role": "SR1 prototype cell bounds, not supported product limits"
     },
     "streams_capacity_convergence": {
       "status": "required",
@@ -368,17 +368,17 @@
           "measured memory and latency"
         ],
         "persistence": "none",
-        "abi_rule": "layout changes use an explicit replacement ABI; general code does not persist raw descriptors"
+        "cutover_rule": "replace the unreleased SR1 layout atomically; no parallel layout, adapter, migration, deprecation, or legacy reader; general code does not persist raw descriptors"
       },
       "sr3": {
         "runtime_relation": "durable queues and spools are separate from the active-cell pool",
         "capacity": "independent item and byte bounds with exact-full and one-over behavior",
         "acceptance": "exact payload snapshot and attempt identity commit before durable acceptance",
-        "recovery": "versioned formats, interrupted publication, corrupt/future refusal, restart, receipts, and visible indeterminate work",
+        "recovery": "self-identifying current format, interrupted publication, corrupt or unknown refusal, restart, receipts, and visible indeterminate work; prerelease changes replace the prototype",
         "retry": "no automatic indeterminate-effect retry without a safe declared idempotency contract"
       },
       "sr6": {
-        "purpose": "qualify supported workload profiles without redesigning runtime semantics or durable formats",
+        "purpose": "qualify supported workload profiles without redesigning runtime semantics or durable record shapes",
         "required_axes": [
           "connectors",
           "flows",
@@ -399,7 +399,7 @@
       "workload": "derive supported profiles from the working SR2 runtime and SR3 durable path",
       "must_not_require": [
         "runtime semantic redesign",
-        "durable format redesign",
+        "durable record-shape redesign",
         "reuse of historical source and observation cardinalities"
       ]
     },
@@ -752,7 +752,7 @@
       "value": 1,
       "scope": "execution-cell",
       "scale_axis": "work-scheduling",
-      "status": "qualified-sr1-cell"
+      "status": "qualified-sr1-prototype"
     },
     {
       "id": "streams.sr1-payload-bytes",
@@ -761,7 +761,7 @@
       "value": 4096,
       "scope": "execution-cell-layout",
       "scale_axis": "content-bytes",
-      "status": "qualified-sr1-cell"
+      "status": "qualified-sr1-prototype"
     },
     {
       "id": "streams.sr1-operation-bytes",
@@ -770,7 +770,7 @@
       "value": 256,
       "scope": "execution-cell-layout",
       "scale_axis": "content-bytes",
-      "status": "qualified-sr1-cell"
+      "status": "qualified-sr1-prototype"
     },
     {
       "id": "streams.sources",

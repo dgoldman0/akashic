@@ -92,17 +92,19 @@ copies it nor grants an operation.
 ## Streams-owned contracts
 
 SR1 seals the minimum standalone connector, event, flow, and attempt semantics
-and qualifies their version-1 byte layouts. “Sealed” does not permanently
-freeze an unreleased descriptor size. Protocol-specific extension,
-persistence, applet/Desk composition, and cross-owner capability schemas
-remain work for their named later milestones.
+and qualifies one prototype byte layout. “Sealed” applies to the proven
+lifecycle and effect rules, not to an unreleased descriptor size. SR2 may
+replace that layout in one clean cutover. It must not add parallel layouts,
+compatibility adapters, migrations, deprecation periods, or legacy readers.
+Protocol-specific extension, persistence, applet/Desk composition, and
+cross-owner capability schemas remain work for their named later milestones.
 
-The SR1 flow ABI is one qualified transfer cell, not the final queue or a
+The SR1 flow descriptor is one qualified transfer cell, not the final queue or a
 product-wide capacity promise. Its one-slot, 4,096-byte payload, and 256-byte
-operation limits describe the version-1 layout. SR2 must put a bounded pool
-and named payload profiles around that semantic core, and must use an explicit
-new ABI if a descriptor layout changes. No later milestone may present a
-larger literal constant as scalability.
+operation limits describe the prototype layout. SR2 must put a bounded pool
+and named payload profiles around that semantic core, replacing the prototype
+layout atomically if necessary. No later milestone may present either
+compatibility scaffolding or a larger literal constant as scalability.
 
 ### Connector
 
@@ -213,11 +215,13 @@ grow Library-style titles, arbitrary user metadata, revision trees,
 collections, archive search, or indefinite content retention.
 
 SR3 keeps durable queue/spool capacity separate from SR2's active-cell pool.
-Each persisted format has an explicit version, item and byte ceilings,
-full/one-over behavior, and a cold upgrade or refusal rule. Qualification
-covers interrupted publication, corrupt/future records, queue exhaustion,
-restart, exact retry bytes, idempotency, receipts, and operator-visible
-indeterminate work.
+Each persisted format identifies its current shape and has item and byte
+ceilings, full/one-over behavior, and fail-closed unknown-format handling.
+Qualification covers interrupted publication, corrupt or unknown records,
+queue exhaustion, restart, exact retry bytes, idempotency, receipts, and
+operator-visible indeterminate work. Before the first supported release,
+format changes replace the prototype atomically rather than accumulating
+legacy readers.
 
 Work is reported durably accepted only after the exact payload snapshot and
 attempt identity commit. An indeterminate external effect is not retried
@@ -246,13 +250,13 @@ protocol state caller-owned, bound request and response bodies, compose SR1
 cancellation and cleanup, avoid a blocking accept/serve loop, and qualify
 framing, smuggling, route isolation, and simultaneous connection ownership.
 
-SR2 begins by sealing the active-cell pool, payload profiles, and descriptor
-versioning rule. It then proves one real route and response, followed by two
-interleaved requests, a body larger than 4,096 bytes without enlarging every
-cell, a slow or cancelled peer, pool exhaustion, and exact teardown within
-measured memory. General code uses descriptor accessors and never persists raw
-runtime layouts. This is runtime qualification only; SR2 does not add a
-durable queue.
+SR2 begins by sealing the active-cell pool and payload profiles and by
+replacing the prototype layout once, if necessary. It then proves one real
+route and response, followed by two interleaved requests, a body larger than
+4,096 bytes without enlarging every cell, a slow or cancelled peer, pool
+exhaustion, and exact teardown within measured memory. General code uses
+descriptor accessors and never persists raw runtime layouts. This is runtime
+qualification only; SR2 does not add a durable queue.
 
 Routes, requests, responses, middleware, and template expansion remain general
 `web/` behavior. Streams owns the admitted route/connector, event flow,
@@ -390,10 +394,10 @@ deliberately HTTP-first and storage-light:
    indeterminate state.
 8. Leave Library unchanged unless the user explicitly chooses Collect.
 
-SR2 is split into reviewable landings: first the pool/payload/version boundary,
+SR2 is split into reviewable landings: first the pool/payload/cutover boundary,
 then the cooperative HTTP journey, then interleaving and capacity refusal.
 The first route may use a conservative payload profile, but the profile is
-named and its upgrade path is settled before applet composition. It must also
+named and its larger-body path is settled before applet composition. It must also
 prove a larger bounded body before SR2 closes. “Enqueued” or “durably accepted”
 remains SR3 language.
 

@@ -61,7 +61,7 @@ precondition.
 
 ## Capacity and evolution boundary
 
-SR1 qualifies one version-1 execution cell, not the final Streams queue or a
+SR1 qualifies one prototype execution cell, not the final Streams queue or a
 product-wide capacity limit. Its singular ingress/egress event and attempt
 fields make the one-slot behavior structural. The 4,096-byte payload and
 256-byte operation bounds also size storage embedded in each flow descriptor;
@@ -77,17 +77,22 @@ these choices expensive to change:
   profiles for small inline messages and larger bounded or streamed bodies;
 - exact ordering, digest, cancellation, and cleanup rules when one logical
   payload spans more than one buffer or event; and
-- an explicit descriptor ABI revision whenever capacity changes alter layout.
+- one clean replacement of the prototype descriptor layout if the supported
+  runtime shape needs different storage.
 
-The standalone version-1 cell has no persisted representation or applet
-consumer, so SR2 may replace it atomically rather than maintain two runtime
-ABIs. It must preserve SR1's ownership, attempt/effect truth, staleness,
-cleanup, generation, and retirement semantics. Raising a constant without
-that versioned design and qualification is not an accepted scale path.
-General HTTP and persistence code must use the public contract rather than
-persisting raw descriptors, depending on version-1 offsets, or retaining
-inline addresses. SR2 must move at least one bounded HTTP body larger than the
-SR1 inline limit without enlarging every execution cell.
+The standalone cell has no persisted representation, released consumer, or
+compatibility obligation. SR2 replaces it atomically; it does not add parallel
+layouts, adapters, migrations, deprecation periods, or legacy readers. The
+current magic, size, and ABI fields reject mismatched caller memory within the
+current build only. They are not a promise to preserve this prototype layout.
+
+The replacement must preserve SR1's ownership, attempt/effect truth,
+staleness, cleanup, generation, and retirement semantics. Raising a constant
+without redesigning and requalifying the runtime shape is not an accepted
+scale path. General HTTP and persistence code must use the public contract
+rather than persisting raw descriptors, depending on prototype offsets, or
+retaining inline addresses. SR2 must move at least one bounded HTTP body
+larger than the SR1 inline limit without enlarging every execution cell.
 
 ## Attempt and effect truth
 
