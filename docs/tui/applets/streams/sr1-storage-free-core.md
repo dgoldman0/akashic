@@ -88,8 +88,9 @@ without redesigning and requalifying the runtime shape is not an accepted
 scale path. General HTTP and persistence code must use the public contract
 rather than persisting raw descriptors, depending on prototype offsets, or
 retaining inline addresses. The SR2 runtime fixture now moves bounded payloads
-larger than the old inline limit without enlarging every execution cell. The
-real HTTP journey remains the next landing.
+larger than the old inline limit without enlarging every execution cell, and
+the completed SR2 HTTP pressure gate carries that path through cooperative
+connection ownership.
 
 ## Attempt and effect truth
 
@@ -205,7 +206,7 @@ SR1 adds no:
 - compatibility cutover, observation sidecar, old L13 qualification, or
   replacement of the existing prototype surfaces.
 
-## Exit and SR2 handoff
+## Exit and completed SR2 continuation
 
 The SR1 exit is satisfied: one bounded mock input produces an exact event, one
 explicit transform consumes it, and one mock output emits an exact result
@@ -213,9 +214,9 @@ while backpressure, cancellation, timeout, stale state, primary/effect truth,
 and cleanup remain explicit.
 
 SR2 has carried those semantics into the external-carrier, mixed-profile pool
-described by [`sr2-runtime-shape.md`](sr2-runtime-shape.md). Its next landing
-composes the general `web/` and `net/` repairs needed for the first real
-bidirectional HTTP slice. Route/server/request/response/template mechanics
-remain general, Streams configuration and attempt truth remain
-Streams-owned, and the milestone remains storage-free until that runtime
-behavior establishes what SR3 actually needs to persist.
+and cooperative HTTP pressure path described by
+[`sr2-runtime-shape.md`](sr2-runtime-shape.md). General `web/` and `net/`
+mechanics remain outside Streams ownership; Streams owns configuration, event
+routing, and attempt truth. The completed milestone remains storage-free and
+now establishes the runtime behavior from which SR3 can derive only the
+operational durability it actually needs.

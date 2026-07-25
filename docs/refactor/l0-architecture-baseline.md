@@ -39,11 +39,11 @@ The machine policy now makes capacity convergence explicit. SR2's bounded
 active-cell pool, separate payload storage, named profiles, two-cell isolation,
 larger-body path, saturation refusal, measured cost, atomic replacement of the
 unreleased descriptor layout, and first cooperative HTTP request/response are
-qualified. The final connection-pressure landing remains. The runtime adds no
-parallel layout, ABI selector, adapter, migration, deprecation path, or
-old-layout reader. SR3 adds separately item/byte-bounded durable queues/spools
-only after SR2 HTTP closes. SR6 qualifies supported workloads from those
-working paths without redesigning their semantics or record shapes.
+qualified, including the closing interleaved connection-pressure gate. The
+runtime adds no parallel layout, ABI selector, adapter, migration, deprecation
+path, or old-layout reader. SR3 next adds separately item/byte-bounded durable
+queues/spools. SR6 qualifies supported workloads from those working paths
+without redesigning their semantics or record shapes.
 
 The five source/observation checkpoint capacities remain source-anchored facts
 about the older prototype. The whole-corpus observation checkpoint complexity
@@ -200,8 +200,8 @@ the contract:
 | Streams workstation | historical-inactive | 10,000 sources, 1,000,000 observations, and 2,000,000 retained attempts |
 | Streams large host/model | historical-inactive | 100,000 sources, 10,000,000 observations, and 20,000,000 retained attempts |
 | Streams SR1 | qualified prototype cell | one deterministic mock input, flow, transform, and output; one admission; payloads at most 4,096 bytes; connector operations at most 256 bytes; no storage |
-| Streams SR2 | runtime and first HTTP journey qualified; pressure pending | bounded active-cell pool, separate payload/connection storage, named payload profiles, atomic prototype replacement, two-flow isolation, larger-than-4-KiB body, saturation refusal, measured runtime cost, and cooperative HTTP |
-| Streams SR3 | deferred until SR2 HTTP closes | independently item/byte-bounded queue/spool with a self-identifying current format, exact durable acceptance, retry evidence, and cold recovery |
+| Streams SR2 | complete deterministic qualification | bounded active-cell pool, separate payload/connection storage, named payload profiles, atomic prototype replacement, two-flow and two-connection isolation, larger-than-4-KiB body, saturation refusal, slow-peer cancellation, measured runtime cost, and cooperative HTTP |
+| Streams SR3 | next | independently item/byte-bounded queue/spool with a self-identifying current format, exact durable acceptance, retry evidence, and cold recovery |
 | Streams SR6 | deferred qualification | workload-derived supported connector, flow, in-flight, payload-mix, queue-byte/item, throughput, latency, memory, disk-amplification, and recovery profiles without runtime or format redesign |
 | Emulator | representative-reduced | Applet-specific datasets at structural transitions preserving index-height, page-count, amplification, working-set, and fault invariants |
 
@@ -233,13 +233,14 @@ persistence-page I/O, allocation events, and peak live allocation remain named
 instrumentation gaps; they are added with the replacement engine rather than
 invented from sector counts.
 
-Only Library currently has isolated cycle/operation telemetry. Streams' active
-gap now points to SR2 cell-pool, connection, payload-profile, transform,
-cancellation, acknowledgement, latency, and memory measurements; SR3 adds
-durable queue byte/item and recovery measurements; SR6 derives supported
-workload profiles. Agent, the other data applets, and Desk/TUI remain
+Only Library currently has isolated cycle/operation telemetry. SR2 now records
+exact cell-pool, profile, and connection workspace bytes plus deterministic
+owner-step and emulator-run observations; those journey measurements are not
+production latency or allocation telemetry. SR3 adds durable queue byte/item
+and recovery measurements, while SR6 derives supported traffic, latency, and
+resource profiles. Agent, the other data applets, and Desk/TUI remain
 explicitly marked as measurement gaps; L0 inventories that absence instead of
-presenting journey tests as counters.
+presenting journey tests as operational counters.
 
 Committed reference points include:
 

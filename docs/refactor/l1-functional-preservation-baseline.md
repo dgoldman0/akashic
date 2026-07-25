@@ -50,7 +50,7 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | Applet | Groups | Covered | Partial | Prerequisite-only | Named prerequisites | Evidence references |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Library | 4 | 4 | 0 | 0 | 0 | 19 |
-| Streams | 6 | 3 | 3 | 0 | 1 | 27 |
+| Streams | 6 | 3 | 3 | 0 | 1 | 28 |
 | Agent | 4 | 3 | 1 | 0 | 1 | 23 |
 | Daybook | 3 | 2 | 1 | 0 | 1 | 9 |
 | Pad | 3 | 2 | 1 | 0 | 2 | 10 |
@@ -58,7 +58,7 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
 | Desk | 3 | 3 | 0 | 0 | 0 | 14 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **31** | **18** | **11** | **2** | **13** | **117** |
+| **Total** | **31** | **18** | **11** | **2** | **13** | **118** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -89,7 +89,8 @@ groups. Focused linked drivers and host architecture ratchets pin external
 segmented carriers, the bounded mixed-profile pool,
 connector/event/flow/backpressure semantics, strict request framing, copied
 route authority, bounded response construction, exact request-to-response
-movement, cancellation, outcome, isolation, and cleanup. This evidence makes
+movement, two-connection pressure, larger-body profile selection, saturation,
+slow-peer cancellation, outcome, isolation, and cleanup. This evidence makes
 no persistence, listener/TLS, Desk hosting, live-connectivity, general
 scheduler, or old-authority claim.
 

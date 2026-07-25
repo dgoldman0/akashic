@@ -102,6 +102,11 @@ Listener ownership, accept scheduling, TLS policy, keep-alive, pipelining, and
 Desk service hosting are outside this one-request owner. They can schedule any
 number of descriptors without introducing shared protocol state.
 
+The SR2 pressure gate exercises that scheduling seam with three independent
+descriptors over one sealed router: two requests hold separate Streams leases
+while a third receives overload, and cancelling a stalled connection does not
+alter the successful peer's parser, response source, route operation, or port.
+
 ## Streams composition
 
 `tui/applets/streams/http-route.f` composes these general facilities with one

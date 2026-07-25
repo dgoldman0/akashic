@@ -181,8 +181,8 @@
           "id": "streams.sr2-cooperative-http",
           "coverage": "covered",
           "facets": ["interfaces", "providers", "failures", "journeys"],
-          "preserve": ["Strict caller-owned HTTP request framing, copied route authority, bounded response construction and cooperative partial-send progress remain general web contracts", "One fragmented admitted request leases a fitting Streams cell, commits exact event metadata and JSON, transforms it, and returns the exact terminal egress as a JSON response", "The response source retains the exact terminal generation only until connection cleanup retires and wipes both carriers, releases the pool lease, wipes operation storage and closes the port"],
-          "evidence": ["driver:local_testing/test_web_http_primitives.py", "driver:local_testing/test_streams_sr2_http_route.py"]
+          "preserve": ["Strict caller-owned HTTP request framing, copied route authority, bounded response construction and cooperative partial-send progress remain general web contracts", "Interleaved fragmented requests hold distinct compact and standard leases and route operations, including an exact body larger than 4096 bytes, truthful one-over refusal, and a slow peer cancelled without obstructing its successful peer", "Each response source retains only its own exact terminal payload generation until connection cleanup retires the corresponding flow generation, wipes both carriers and operation storage, releases the lease, and closes or cancels its port without request or attempt crossover"],
+          "evidence": ["driver:local_testing/test_web_http_primitives.py", "driver:local_testing/test_streams_sr2_http_route.py", "driver:local_testing/test_streams_sr2_http_pressure.py"]
         }
       ],
       "supplemental_evidence": ["profile:streams-live-public", "profile:streams-configured-refresh-live"],

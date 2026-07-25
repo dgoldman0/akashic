@@ -1,8 +1,6 @@
 # Streams information integration contract
 
-**Status:** normative product and ownership contract; the SR2 bounded runtime
-and cooperative HTTP journey are complete; final isolation/pressure
-qualification remains
+**Status:** normative product and ownership contract; SR2 is complete
 
 **Reconciled:** 2026-07-25
 
@@ -251,19 +249,20 @@ The existing `akashic/web/` packages provide request parsing, response
 construction, routing, middleware, server behavior, templates, and a concrete
 RPC composition.
 
-Those packages are starting points, not a completed cooperative web runtime.
-Before the first Streams route depends on them, SR2 must make required
-protocol state caller-owned, bind request and response bodies, compose runtime
-cancellation and cleanup, avoid a blocking accept/serve loop, and qualify
-framing, smuggling, route isolation, and simultaneous connection ownership.
+Those packages remain broader starting points rather than one completed
+cooperative web runtime. SR2 made the subset needed by its first route
+caller-owned, bound request and response bodies, composed runtime cancellation
+and cleanup, and qualified framing, smuggling, route isolation, and
+simultaneous connection ownership. Listener acceptance and Desk service
+hosting remain outside that accepted-connection slice.
 
 The active-cell pool, payload profiles, clean descriptor replacement, and
 first cooperative route-to-response journey are complete. The closing landing
-carries that composition through two interleaved requests, a body larger than
+carried that composition through two interleaved requests, a body larger than
 4,096 bytes without enlarging every cell, a slow or cancelled peer, pool
-exhaustion, and exact teardown within measured memory. General code uses
-descriptor accessors and never persists raw runtime layouts. SR2 does not add
-a durable queue.
+exhaustion, and exact teardown within measured workspace memory. General code
+uses descriptor accessors and never persists raw runtime layouts. SR2 does not
+add a durable queue.
 
 Routes, requests, responses, middleware, and template expansion remain general
 `web/` behavior. Streams owns the admitted route/connector, event flow,
@@ -405,17 +404,19 @@ HTTP-first and storage-light:
    indeterminate state.
 8. Leave Library unchanged unless the user explicitly chooses Collect.
 
-SR2 is split into reviewable landings. The pool/payload/cutover boundary and
-cooperative HTTP journey are complete; interleaving and pressure qualification
-close the milestone. The route uses a named profile, and the larger-body
-runtime path is already settled without enlarging every cell. The HTTP
-composition must still prove that larger path under connection pressure before
-SR2 closes. “Enqueued” or “durably accepted” remains SR3 language.
+SR2 landed in three reviewable stages. The pool/payload/cutover boundary, the
+cooperative HTTP journey, and the closing interleaving/pressure gate are
+complete. The route uses a named fitting profile; a 4,097-byte request crosses
+the first byte beyond the compact carrier while an interleaved small request
+remains in that cell, so the larger path does not enlarge every cell. Two active leases,
+one-over refusal, slow-peer cancellation, independent completion, and exact
+teardown are qualified. “Enqueued” or “durably accepted” remains SR3 language.
 
 The in-memory/mock flow contract is now qualified before durable queues. The
-real HTTP slice remains unqualified and comes before AT Protocol and Bluesky
-restructuring. HTTP output, AT Protocol restructuring, and Library/draft
-migration must not be combined in one landing.
+deterministic cooperative HTTP slice is also qualified before AT Protocol and
+Bluesky restructuring. Applet/Desk hosting, listener/TLS composition, live
+connectivity, and hardware parity remain unqualified. HTTP output, AT Protocol
+restructuring, and Library/draft migration must not be combined in one landing.
 
 ## Acceptance and evidence
 
@@ -448,9 +449,9 @@ but one-worker and many-worker execution must preserve the same event,
 backpressure, retry, delivery, and cleanup semantics.
 
 The current SR2 runtime earns the bounded-runtime portion of
-`offline-contract`; the first HTTP landing earns `protocol-framing`,
-deterministic cooperative transport, and the request/response form of
-`bidirectional-flow`. External segmented carriers, exact payload
+`offline-contract`; the HTTP landings earn `protocol-framing`, deterministic
+cooperative transport, and the request/response form of `bidirectional-flow`.
+External segmented carriers, exact payload
 copy/digest/integrity, compact and standard profiles, a mixed measured pool,
 two interleaved flows, full/one-over and no-fitting-cell refusal,
 single-shot ownership, separate ingress and egress attempts, failure/effect
@@ -466,6 +467,8 @@ compatibility or ABI layer.
 qualifies strict request, route, response, partial-send, source-fault, and
 cancellation behavior, while
 [`test_streams_sr2_http_route.py`](../../../../local_testing/test_streams_sr2_http_route.py)
-qualifies one exact fragmented JSON request-to-response lifecycle. The final
-two-connection pressure gate and all live, Desk, and hardware labels remain
-unearned.
+qualifies one exact fragmented JSON request-to-response lifecycle, and
+[`test_streams_sr2_http_pressure.py`](../../../../local_testing/test_streams_sr2_http_pressure.py)
+qualifies interleaved compact/standard requests, a 4,097-byte body, exact
+full/one-over refusal, a stalled/cancelled peer, independent success, and
+cross-request cleanup. All live, Desk, and hardware labels remain unearned.

@@ -1,8 +1,7 @@
 # Streams
 
-**Status:** older applet behavior plus the qualified SR2 bounded runtime and
-first cooperative HTTP journey; connection pressure and applet composition
-are next
+**Status:** older applet behavior plus complete deterministic SR2 runtime and
+cooperative HTTP pressure qualification; SR3 operational durability is next
 
 **Forward product contract:**
 [`information-integration.md`](information-integration.md)
@@ -37,14 +36,17 @@ flows, shared-connector serialization, full/one-over refusal, cancellation,
 timeout, stale state, failed-before, failed-after-known-effect,
 indeterminate-effect, integrity, isolation, and exactly-once cleanup behavior.
 
-The first cooperative HTTP composition now admits one fragmented JSON request,
-leases a fitting runtime cell, transforms its exact event, and sends the exact
-terminal egress through the caller-owned general web response layer before
-retirement and teardown. The runtime and route remain deliberately standalone
-from the current applet: `streams.f` does not require them, Desk does not host
-them, and no applet capability exposes them. They have no persistence, VFS,
-durable queue, AT Protocol, Library/Pad, UI, listener/TLS, or live-network
-composition. The precise current boundary and evidence are recorded in
+The cooperative HTTP composition admits fragmented requests, leases fitting
+runtime cells, transforms exact events, and sends each terminal egress through
+the caller-owned general web response layer before retirement and teardown.
+Its closing gate interleaves compact and standard cells, carries a 4,097-byte
+body without enlarging the compact cell, refuses a third request while the pool
+is full, and cancels a stalled peer without crossing into the successful
+request. The runtime and route remain deliberately standalone from the current
+applet: `streams.f` does not require them, Desk does not host them, and no
+applet capability exposes them. They have no persistence, VFS, durable queue,
+AT Protocol, Library/Pad, UI, listener/TLS, or live-network composition. The
+precise current boundary and evidence are recorded in
 [`sr2-runtime-shape.md`](sr2-runtime-shape.md).
 
 The current prototype is still primarily a Bluesky-shaped reader plus a

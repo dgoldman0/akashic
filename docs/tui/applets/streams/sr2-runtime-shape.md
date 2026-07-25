@@ -1,7 +1,7 @@
 # Streams SR2 bounded runtime shape
 
-**Status:** runtime-shape and cooperative-HTTP landings complete; final
-isolation/pressure qualification remains
+**Status:** complete; runtime shape, cooperative HTTP, and connection
+isolation/pressure are deterministically qualified
 
 **Qualified:** 2026-07-25
 
@@ -104,10 +104,19 @@ are not charged repeatedly.
 | One compact cell | 10,848 |
 | One standard cell | 35,824 |
 | Two-entry pool with one compact and one standard cell | 47,000 |
+| One connection-private HTTP bundle | 2,592 |
+| Three connection-private bundles in the pressure gate | 7,776 |
+| Pressure composition: pool, three bundles, shared router/config/connectors | 55,400 |
 
 The 1,904-byte flow descriptor contains event and attempt metadata but no
 inline body buffer and no inline connector-operation buffer. Capacity changes
 therefore change caller-supplied workspaces, not every flow descriptor.
+Connection-private measurement includes the owner, request and response
+descriptors, route match, I/O port, route operation, authority, and their
+header/RX/send arenas. The pressure total counts the shared router, route
+config, and two connector descriptors once. Mock wire-input, capture, and
+fixture-control buffers are test transport data rather than live server
+storage and are excluded.
 
 ## Cooperative HTTP journey
 
@@ -132,6 +141,32 @@ geometry. Body limits, header arenas, receive/send scratch, route capacity,
 operation arenas, and execution profiles are supplied by the composition;
 there is no process-global request, route, response, connection, admission, or
 4 KiB body ceiling.
+
+## Connection isolation and pressure
+
+The closing SR2 landing schedules three independent connection owners over one
+sealed router and one mixed two-cell pool. A small request leases the compact
+cell and reaches a deliberately stalled response send. An interleaved
+4,097-byte request skips that cell, leases the standard cell, crosses the
+4,096-byte segment boundary, and reaches its independent response. While both
+leases remain active, a third request is refused as HTTP `503` without
+acquiring a cell or mutating either active flow. The refusal completes while
+both leases remain held.
+
+Cancelling the stalled peer retires only its exact flow generation and cancels
+only its port while the successful peer remains live and unchanged; that peer
+then completes independently. The gate exits with zero active leases, both
+cells idle, empty and wiped carriers and connector-operation workspaces, wiped
+route operations, closed successful ports, an exactly cancelled slow port,
+preserved connector descriptors, and no event, attempt, payload, response, or
+callback-state crossover.
+
+The closing linked gate records 493 guest assertions. The stalled compact
+owner takes 60 cooperative owner steps, the 4,097-byte standard owner takes
+148, and the refused owner takes 30; peak pool occupancy is two. The complete
+one-core emulator run takes 1,325,092,021 checked guest steps in 19.63 seconds
+with 128 MiB of external memory. These are deterministic fixture and emulator
+observations, not a supported production latency claim.
 
 ## Clean prerelease replacement
 
@@ -174,6 +209,11 @@ qualifies the first complete request-to-response journey, including exact
 metadata/body transformation, live terminal response-source reads, partial
 transport acknowledgement, exact retirement, pool release, operation wipe,
 and port close.
+[`test_streams_sr2_http_pressure.py`](../../../../local_testing/test_streams_sr2_http_pressure.py)
+qualifies the closing interleaved pressure journey: compact and standard
+selection, a 4,097-byte exact body, two active leases, one-over `503`, a
+stalled/cancelled peer, an independently successful response, and exhaustive
+isolation and teardown checks.
 
 [`test_streams_sr2_static.py`](../../../../local_testing/test_streams_sr2_static.py)
 keeps both the four-module runtime and HTTP composition dependency closures
@@ -182,9 +222,10 @@ workspace and caller-owned HTTP lifecycle surfaces, proves the SR1 files were
 replaced, and rejects prerelease compatibility, migration, deprecation, or ABI
 layers.
 
-The first two landings earn the bounded runtime portion of `offline-contract`,
-HTTP `protocol-framing`, deterministic cooperative transport, and the first
-request/response form of `bidirectional-flow`. They do not yet earn the final
-two-connection pressure gate, applet or Desk composition, live connectivity,
-or hardware parity. They add no VFS path, durable queue, spool, outbox, retry
-record, or other persistence; those remain SR3 work after SR2 closes.
+SR2 earns the bounded runtime portion of `offline-contract`, HTTP
+`protocol-framing`, deterministic cooperative transport, and the
+request/response form of `bidirectional-flow`, including two-connection
+pressure and cancellation. It does not earn applet or Desk composition,
+listener/TLS hosting, live connectivity, or hardware parity. It adds no VFS
+path, durable queue, spool, outbox, retry record, or other persistence; those
+are SR3 work.

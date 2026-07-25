@@ -1,8 +1,8 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "streams-sr2-http-journey-20260725",
-    "commit": "8c920eb97f377ac20f3460091865af7117cb5bfb",
+    "name": "streams-sr2-complete-20260725",
+    "commit": "7484c4287e178db07620725cdbb22f48d689d976",
     "expected": {
       "module_count": 429,
       "resolved_require_occurrence_count": 1403,
@@ -356,22 +356,22 @@
       "capacity_role": "SR1 prototype cell bounds, not supported product limits"
     },
     "streams_capacity_convergence": {
-      "status": "runtime-http-qualified-pressure-pending",
+      "status": "runtime-http-pressure-qualified",
       "sr2": {
         "landing_status": {
           "runtime_shape": "qualified",
           "cooperative_http": "qualified",
-          "connection_isolation_pressure": "pending"
+          "connection_isolation_pressure": "qualified"
         },
         "runtime": "bounded caller-owned execution-cell pool",
         "payload": "named payload profiles with body and connection storage separate from each cell",
-        "http": "caller-owned strict request framing, copied routing, bounded response sources and one exact cooperative request-to-response journey",
+        "http": "caller-owned strict request framing, copied routing, bounded response sources and exact interleaved cooperative request-to-response journeys under pool pressure",
         "qualification": [
           "two interleaved cells",
           "one body larger than 4096 bytes without enlarging every cell",
           "exact-full and one-over pool refusal",
           "slow or cancelled peer teardown",
-          "measured memory and latency"
+          "measured live workspace memory and deterministic owner-step cost"
         ],
         "persistence": "none",
         "cutover_rule": "the unreleased SR1 layout is replaced atomically; no parallel layout, ABI selector, adapter, migration, deprecation path, or old-layout reader; general code does not persist raw descriptors"

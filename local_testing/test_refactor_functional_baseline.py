@@ -30,7 +30,7 @@ def test_live_functional_ledger_is_complete_and_source_anchored() -> None:
         "partial_groups": 11,
         "prerequisite_only_groups": 2,
         "prerequisites": 13,
-        "evidence_references": 117,
+        "evidence_references": 118,
     }
 
 
@@ -102,6 +102,15 @@ def test_streams_reset_replaces_cancelled_l13_gates() -> None:
         ),
     ]
     assert "prerequisite_ids" not in sr2_runtime
+
+    sr2_http = behaviors["streams.sr2-cooperative-http"]
+    assert sr2_http["coverage"] == "covered"
+    assert sr2_http["evidence"] == [
+        "driver:local_testing/test_web_http_primitives.py",
+        "driver:local_testing/test_streams_sr2_http_route.py",
+        "driver:local_testing/test_streams_sr2_http_pressure.py",
+    ]
+    assert "prerequisite_ids" not in sr2_http
 
 
 def test_partial_behavior_must_name_a_reviewable_prerequisite() -> None:

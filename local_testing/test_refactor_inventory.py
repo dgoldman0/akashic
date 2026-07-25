@@ -600,12 +600,12 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         ),
     }
     assert policy["scale_profiles"]["streams_capacity_convergence"] == {
-        "status": "runtime-http-qualified-pressure-pending",
+        "status": "runtime-http-pressure-qualified",
         "sr2": {
             "landing_status": {
                 "runtime_shape": "qualified",
                 "cooperative_http": "qualified",
-                "connection_isolation_pressure": "pending",
+                "connection_isolation_pressure": "qualified",
             },
             "runtime": "bounded caller-owned execution-cell pool",
             "payload": (
@@ -614,8 +614,8 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
             ),
             "http": (
                 "caller-owned strict request framing, copied routing, "
-                "bounded response sources and one exact cooperative "
-                "request-to-response journey"
+                "bounded response sources and exact interleaved cooperative "
+                "request-to-response journeys under pool pressure"
             ),
             "qualification": [
                 "two interleaved cells",
@@ -625,7 +625,10 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
                 ),
                 "exact-full and one-over pool refusal",
                 "slow or cancelled peer teardown",
-                "measured memory and latency",
+                (
+                    "measured live workspace memory and deterministic "
+                    "owner-step cost"
+                ),
             ],
             "persistence": "none",
             "cutover_rule": (
