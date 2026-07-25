@@ -29,6 +29,7 @@ CREATE _sr1c-flow-b      STREAMS-FLOW-SIZE ALLOT
 CREATE _sr1c-event-a     STREAMS-EVENT-SIZE ALLOT
 CREATE _sr1c-event-b     STREAMS-EVENT-SIZE ALLOT
 CREATE _sr1c-event-c     STREAMS-EVENT-SIZE ALLOT
+CREATE _sr1c-large-payload STREAMS-FLOW-PAYLOAD-MAX ALLOT
 
 VARIABLE _sr1c-mode
 VARIABLE _sr1c-release-mode
@@ -48,6 +49,7 @@ VARIABLE _sr1c-t-result
 VARIABLE _sr1c-build-event
 VARIABLE _sr1c-build-flow
 VARIABLE _sr1c-build-tag
+VARIABLE _sr1c-build-timeout
 VARIABLE _sr1c-build-a
 VARIABLE _sr1c-build-u
 VARIABLE _sr1c-expected-status
@@ -70,6 +72,7 @@ VARIABLE _sr1c-expected-effect
 13 CONSTANT _SR1C-MODE-POLL-THROW
 14 CONSTANT _SR1C-MODE-TRANSFORM-THROW
 15 CONSTANT _SR1C-MODE-PENDING-APPLIED
+16 CONSTANT _SR1C-MODE-CANCEL-THROW
 
 0x535231434F504D31 CONSTANT _SR1C-OP-MARK
 
@@ -156,7 +159,8 @@ VARIABLE _sr1c-expected-effect
         EXIT
     THEN
     _sr1c-mode @ _SR1C-MODE-PENDING =
-    _sr1c-mode @ _SR1C-MODE-POLL-THROW = OR IF
+    _sr1c-mode @ _SR1C-MODE-POLL-THROW = OR
+    _sr1c-mode @ _SR1C-MODE-CANCEL-THROW = OR IF
         STREAMS-CONNECTOR-COMPLETION-PENDING
         STREAMS-EFFECT-UNCERTAIN 0 0
         _sr1c-cb-result @ _sr1c-result!
@@ -217,6 +221,7 @@ VARIABLE _sr1c-expected-effect
     1 _sr1c-cancels +!
     _sr1c-cb-event @ _sr1c-check-output-event
     _sr1c-cb-op @ @ _SR1C-OP-MARK = _sr1c-assert
+    _sr1c-mode @ _SR1C-MODE-CANCEL-THROW = IF -768 THROW THEN
     _sr1c-mode @ _SR1C-MODE-CANCEL-PENDING = IF
         STREAMS-CONNECTOR-COMPLETION-PENDING
         STREAMS-EFFECT-UNCERTAIN 401 0
@@ -292,21 +297,25 @@ VARIABLE _sr1c-expected-effect
         STREAMS-FLOW-S-OK = _sr1c-assert
     _sr1c-bidi STREAMS-CONNECTOR-VALID? _sr1c-assert ;
 
-: _sr1c-setup-flow  ( id-byte flow -- )
+: _sr1c-configure-flow  ( id-byte timeout-ms flow -- status )
     _sr1c-build-flow !
+    _sr1c-build-timeout !
     _sr1c-build-tag !
     _sr1c-build-flow @ STREAMS-FLOW-INIT
         STREAMS-FLOW-S-OK = _sr1c-assert
     _sr1c-build-flow @ SFLOW.ID RID-SIZE
         _sr1c-build-tag @ FILL
     7 _sr1c-build-flow @ SFLOW.REVISION !
-    100 _sr1c-build-flow @ SFLOW.TIMEOUT-MS !
+    _sr1c-build-timeout @ _sr1c-build-flow @ SFLOW.TIMEOUT-MS !
     _sr1c-input _sr1c-build-flow @ SFLOW.INPUT-CONNECTOR !
     _sr1c-output _sr1c-build-flow @ SFLOW.OUTPUT-CONNECTOR !
     ['] _sr1c-transform _sr1c-build-flow @ SFLOW.TRANSFORM-XT !
     0 _sr1c-build-flow @ SFLOW.TRANSFORM-CONTEXT !
     201 _sr1c-build-flow @ SFLOW.OUTPUT-MEDIA !
-    _sr1c-build-flow @ STREAMS-FLOW-SEAL
+    _sr1c-build-flow @ STREAMS-FLOW-SEAL ;
+
+: _sr1c-setup-flow  ( id-byte flow -- )
+    >R 100 R> _sr1c-configure-flow
         STREAMS-FLOW-S-OK = _sr1c-assert
     _sr1c-build-flow @ STREAMS-FLOW-VALID? _sr1c-assert ;
 
@@ -416,6 +425,102 @@ VARIABLE _sr1c-expected-effect
     _sr1c-bad STREAMS-CONNECTOR-SEAL
         STREAMS-FLOW-S-INVALID = _sr1c-assert
     _sr1c-bad STREAMS-CONNECTOR-VALID? 0= _sr1c-assert
+    _sr1c-stack ;
+
+: _sr1c-output-with-op-size  ( operation-bytes -- status )
+    >R
+    _sr1c-bad STREAMS-CONNECTOR-INIT
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    0x16 0x26 _sr1c-bad _sr1c-connector-identity
+    1 _sr1c-bad SCON.REVISION !
+    STREAMS-CONNECTOR-DIRECTION-OUTPUT _sr1c-bad SCON.DIRECTION !
+    106 _sr1c-bad SCON.PROTOCOL !
+    R> _sr1c-bad SCON.OP-SIZE !
+    ['] _sr1c-start _sr1c-bad SCON.START-XT !
+    ['] _sr1c-poll _sr1c-bad SCON.POLL-XT !
+    ['] _sr1c-cancel _sr1c-bad SCON.CANCEL-XT !
+    ['] _sr1c-cleanup _sr1c-bad SCON.CLEANUP-XT !
+    _sr1c-bad STREAMS-CONNECTOR-SEAL ;
+
+: _sr1c-test-exact-bounds  ( -- )
+    STREAMS-FLOW-OP-MAX _sr1c-output-with-op-size
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    _sr1c-bad STREAMS-CONNECTOR-VALID? _sr1c-assert
+    STREAMS-FLOW-OP-MAX 1+ _sr1c-output-with-op-size
+        STREAMS-FLOW-S-INVALID = _sr1c-assert
+    _sr1c-bad STREAMS-CONNECTOR-VALID? 0= _sr1c-assert
+
+    0x33 0 _sr1c-flow-b _sr1c-configure-flow
+        STREAMS-FLOW-S-INVALID = _sr1c-assert
+    0x33 STREAMS-FLOW-TIMEOUT-MAX-MS 1+
+        _sr1c-flow-b _sr1c-configure-flow
+        STREAMS-FLOW-S-INVALID = _sr1c-assert
+    0x33 STREAMS-FLOW-TIMEOUT-MAX-MS
+        _sr1c-flow-b _sr1c-configure-flow
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    _sr1c-flow-b STREAMS-FLOW-VALID? _sr1c-assert
+
+    S" edge" 0x3F _sr1c-event-c _sr1c-flow-b
+        _sr1c-build-borrowed
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    _sr1c-event-c 7
+        _SFLOW-CELL-MAX STREAMS-FLOW-TIMEOUT-MAX-MS - 1+
+        _sr1c-flow-b STREAMS-FLOW-ADMIT
+        STREAMS-FLOW-S-CAPACITY = _sr1c-assert
+    _sr1c-event-c STREAMS-EVENT-VALID? _sr1c-assert
+    _sr1c-event-c STREAMS-EVENT-CLOSE
+        STREAMS-FLOW-S-OK = _sr1c-assert
+
+    0x40 _sr1c-event-a _sr1c-event-header
+    _sr1c-large-payload STREAMS-FLOW-PAYLOAD-MAX
+        _sr1c-event-a STREAMS-EVENT-BORROW
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    _sr1c-event-a STREAMS-EVENT-CLOSE
+        STREAMS-FLOW-S-OK = _sr1c-assert
+
+    0x41 _sr1c-event-b _sr1c-event-header
+    _sr1c-large-payload STREAMS-FLOW-PAYLOAD-MAX 1+
+        _sr1c-event-b STREAMS-EVENT-BORROW
+        STREAMS-FLOW-S-CAPACITY = _sr1c-assert
+    _sr1c-stack ;
+
+: _sr1c-test-event-binding-rollback  ( -- )
+    _sr1c-reset-counters
+
+    0x49 _sr1c-event-c _sr1c-event-header
+    S" ping" ['] _sr1c-release 0x49 _sr1c-event-c
+        STREAMS-EVENT-OWN
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    S" pong" ['] _sr1c-release 0x4A _sr1c-event-c
+        STREAMS-EVENT-OWN
+        STREAMS-FLOW-S-INVALID = _sr1c-assert
+    S" pong" _sr1c-event-c STREAMS-EVENT-BORROW
+        STREAMS-FLOW-S-INVALID = _sr1c-assert
+    _sr1c-event-c SEVT.RELEASE-CONTEXT @ 0x49 =
+        _sr1c-assert
+    _sr1c-event-c STREAMS-EVENT-SEAL
+        STREAMS-FLOW-S-INVALID = _sr1c-assert
+    _sr1c-event-c STREAMS-EVENT-CLOSE
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    _sr1c-releases @ 1 = _sr1c-assert
+    _sr1c-event-c SEVT.STATE @ _SEVT-STATE-CLOSED =
+        _sr1c-assert
+    _sr1c-event-c SEVT.PAYLOAD-A @ 0= _sr1c-assert
+    _sr1c-event-c SEVT.RELEASE-XT @ 0= _sr1c-assert
+    _sr1c-event-c SEVT.RELEASE-CONTEXT @ 0= _sr1c-assert
+    _sr1c-event-c STREAMS-EVENT-CLOSE
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    _sr1c-releases @ 1 = _sr1c-assert
+
+    0x4B _sr1c-event-c _sr1c-event-header
+    S" ping" _sr1c-event-c STREAMS-EVENT-BORROW
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    S" pong" ['] _sr1c-release 0x4B _sr1c-event-c
+        STREAMS-EVENT-OWN
+        STREAMS-FLOW-S-INVALID = _sr1c-assert
+    _sr1c-event-c STREAMS-EVENT-CLOSE
+        STREAMS-FLOW-S-OK = _sr1c-assert
+    _sr1c-releases @ 1 = _sr1c-assert
     _sr1c-stack ;
 
 : _sr1c-test-event-lifecycle-and-full  ( -- )
@@ -675,6 +780,24 @@ VARIABLE _sr1c-expected-effect
     _sr1c-cleanups @ 1 = _sr1c-assert
     _sr1c-retire-a
 
+    _SR1C-MODE-CANCEL-THROW _sr1c-new-a
+    _sr1c-to-output-ready
+    12 _sr1c-flow-a STREAMS-FLOW-STEP
+        STREAMS-FLOW-S-PENDING = _sr1c-assert
+    1 13 _sr1c-flow-a STREAMS-FLOW-CANCEL
+        STREAMS-FLOW-S-INDETERMINATE = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.STATE @
+        STREAMS-ATTEMPT-STATE-INDETERMINATE = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.EFFECT @
+        STREAMS-EFFECT-UNCERTAIN = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.REASON @
+        STREAMS-ATTEMPT-REASON-CALLBACK = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.ERROR @ -768 =
+        _sr1c-assert
+    _sr1c-cancels @ 1 = _sr1c-assert
+    _sr1c-cleanups @ 1 = _sr1c-assert
+    _sr1c-retire-a
+
     _SR1C-MODE-PENDING _sr1c-new-a
     _sr1c-to-output-ready
     12 _sr1c-flow-a STREAMS-FLOW-STEP
@@ -864,6 +987,8 @@ VARIABLE _sr1c-expected-effect
     _sr1c-setup-connectors
     _sr1c-stack
     _sr1c-test-connector-directions
+    _sr1c-test-exact-bounds
+    _sr1c-test-event-binding-rollback
     _sr1c-test-event-lifecycle-and-full
     _sr1c-test-owned-cleanup-failures
     _sr1c-test-happy-retire-reuse
