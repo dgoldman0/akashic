@@ -735,6 +735,40 @@ VARIABLE _sr1c-expected-effect
         STREAMS-ATTEMPT-REASON-STALE = _sr1c-assert
     1 _sr1c-input SCON.REVISION !
     _sr1c-retire-a
+
+    _SR1C-MODE-PENDING _sr1c-new-a
+    _sr1c-to-output-ready
+    12 _sr1c-flow-a STREAMS-FLOW-STEP
+        STREAMS-FLOW-S-PENDING = _sr1c-assert
+    2 _sr1c-output SCON.REVISION !
+    13 _sr1c-flow-a STREAMS-FLOW-STEP
+        STREAMS-FLOW-S-INDETERMINATE = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.STATE @
+        STREAMS-ATTEMPT-STATE-INDETERMINATE = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.EFFECT @
+        STREAMS-EFFECT-UNCERTAIN = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.REASON @
+        STREAMS-ATTEMPT-REASON-STALE = _sr1c-assert
+    _sr1c-cleanups @ 1 = _sr1c-assert
+    1 _sr1c-output SCON.REVISION !
+    _sr1c-retire-a
+
+    _SR1C-MODE-PENDING-APPLIED _sr1c-new-a
+    _sr1c-to-output-ready
+    12 _sr1c-flow-a STREAMS-FLOW-STEP
+        STREAMS-FLOW-S-PENDING = _sr1c-assert
+    2 _sr1c-output SCON.REVISION !
+    13 _sr1c-flow-a STREAMS-FLOW-STEP
+        STREAMS-FLOW-S-FAILED = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.STATE @
+        STREAMS-ATTEMPT-STATE-FAILED-AFTER = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.EFFECT @
+        STREAMS-EFFECT-APPLIED = _sr1c-assert
+    _sr1c-flow-a SFLOW.EGRESS-ATTEMPT SATT.REASON @
+        STREAMS-ATTEMPT-REASON-STALE = _sr1c-assert
+    _sr1c-cleanups @ 1 = _sr1c-assert
+    1 _sr1c-output SCON.REVISION !
+    _sr1c-retire-a
     _sr1c-stack ;
 
 : _sr1c-test-cleanup-and-throws  ( -- )
