@@ -141,6 +141,8 @@ local_testing/*
 !local_testing/test_streams_l13_compaction.py
 !local_testing/streams-l13-apply.f
 !local_testing/test_streams_l13_apply.py
+!local_testing/streams-l13-refresh-owner.f
+!local_testing/test_streams_l13_refresh_owner.py
 !local_testing/streams_scale_model.py
 !local_testing/test_streams_scale_model.py
 !local_testing/streams-cold-l13-test.f
