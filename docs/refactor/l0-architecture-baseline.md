@@ -32,9 +32,17 @@ The old Streams workstation and large-host observation profiles and their
 model workload remain numerically intact as `historical-inactive` evidence.
 They are not SR1 acceptance targets. SR1 instead proves exactly one
 deterministic in-memory input connector, flow, transform, and output connector
-with one queue slot, a 4,096-byte maximum payload, a 256-byte maximum connector
-operation, and no storage. A corrected scale workload is deferred to SR6,
-after real connector, flow, queue, and delivery behavior exists.
+as one execution cell with one admission, a 4,096-byte maximum payload, a
+256-byte maximum connector operation, and no storage. Those are qualified
+version-1 cell bounds, not product-wide limits.
+
+The machine policy now makes capacity convergence explicit. SR2 must define a
+bounded active-cell pool, separate body/connection storage, named payload
+profiles, two-cell isolation, a body beyond 4 KiB, saturation refusal, and
+descriptor replacement rules before HTTP composition closes. SR3 adds
+separately item/byte-bounded and versioned durable queues/spools. SR6 qualifies
+supported workloads from those working paths without redesigning their
+semantics or durable formats.
 
 The five source/observation checkpoint capacities remain source-anchored
 compatibility facts. The whole-corpus observation checkpoint complexity item is
@@ -157,8 +165,8 @@ The initial ledger covers Library, Streams, Agent, Daybook, Pad, Grid,
 FExplorer, Desk, runtime registries, request bus, UIDL, app-shell, and tree
 limits. The JSON report fails if any named literal silently changes. The five
 old Streams corpus/checkpoint entries are labeled `compatibility`; SR1's
-separate queue, payload, and operation bounds describe only the storage-free
-flow core.
+separate admission, payload, and operation bounds are labeled
+`qualified-sr1-cell` and describe only the storage-free execution cell.
 
 A separate source-anchored complexity ledger records the current structure,
 operation, complexity, scale failure, replacement requirement, and landing for
@@ -187,8 +195,10 @@ the contract:
 | Library large host/model | active | 1,000,000 documents, 10,000,000 revisions, and 10,000,000 relationship edges |
 | Streams workstation | historical-inactive | 10,000 sources, 1,000,000 observations, and 2,000,000 retained attempts |
 | Streams large host/model | historical-inactive | 100,000 sources, 10,000,000 observations, and 20,000,000 retained attempts |
-| Streams SR1 | active | one deterministic mock input, flow, transform, and output; one queue slot; payloads at most 4,096 bytes; connector operations at most 256 bytes; no storage |
-| Streams SR6 | deferred | workload-derived connector, flow, queue, delivery, concurrency, throughput, latency, memory, disk-amplification, and recovery profiles |
+| Streams SR1 | qualified execution cell | one deterministic mock input, flow, transform, and output; one admission; payloads at most 4,096 bytes; connector operations at most 256 bytes; no storage |
+| Streams SR2 | required next | bounded active-cell pool, separate payload/connection storage, named payload profiles, two-flow isolation, larger-than-4-KiB body, saturation refusal, and measured runtime cost |
+| Streams SR3 | deferred until SR2 | independently item/byte-bounded versioned queue/spool, exact durable acceptance, retry evidence, and cold recovery |
+| Streams SR6 | deferred qualification | workload-derived supported connector, flow, in-flight, payload-mix, queue-byte/item, throughput, latency, memory, disk-amplification, and recovery profiles without runtime or format redesign |
 | Emulator | representative-reduced | Applet-specific datasets at structural transitions preserving index-height, page-count, amplification, working-set, and fault invariants |
 
 The profile also fixes query and complexity shapes: point lookup, ordered and
@@ -220,11 +230,12 @@ instrumentation gaps; they are added with the replacement engine rather than
 invented from sector counts.
 
 Only Library currently has isolated cycle/operation telemetry. Streams' active
-gap now points to SR2+ connector, flow, queue, transform, cancellation,
-acknowledgement, and input/output delivery measurements, followed by
-workload-derived SR6 scale evidence. Agent, the other data applets, and Desk/TUI
-remain explicitly marked as measurement gaps; L0 inventories that absence
-instead of presenting journey tests as counters.
+gap now points to SR2 cell-pool, connection, payload-profile, transform,
+cancellation, acknowledgement, latency, and memory measurements; SR3 adds
+durable queue byte/item and recovery measurements; SR6 derives supported
+workload profiles. Agent, the other data applets, and Desk/TUI remain
+explicitly marked as measurement gaps; L0 inventories that absence instead of
+presenting journey tests as counters.
 
 Committed reference points include:
 

@@ -343,20 +343,65 @@
       "content_shape": "variable-size summaries and content separated from indexed observation metadata"
     },
     "sr1_contract": {
-      "status": "active",
+      "status": "qualified-execution-cell",
       "input_connectors": 1,
-      "flows": 1,
+      "execution_cells": 1,
       "transforms": 1,
       "output_connectors": 1,
-      "queue_slots": 1,
+      "admission_slots_per_cell": 1,
       "payload_max_bytes": 4096,
       "operation_max_bytes": 256,
       "storage": "none",
-      "qualification": "deterministic-mocks"
+      "qualification": "deterministic-mocks",
+      "capacity_role": "version-1 cell bounds, not product-wide limits"
+    },
+    "streams_capacity_convergence": {
+      "status": "required",
+      "sr2": {
+        "runtime": "bounded caller-owned execution-cell pool",
+        "payload": "named payload profiles with body and connection storage separate from each cell",
+        "qualification": [
+          "two interleaved cells",
+          "one body larger than 4096 bytes without enlarging every cell",
+          "exact-full and one-over pool refusal",
+          "slow or cancelled peer teardown",
+          "measured memory and latency"
+        ],
+        "persistence": "none",
+        "abi_rule": "layout changes use an explicit replacement ABI; general code does not persist raw descriptors"
+      },
+      "sr3": {
+        "runtime_relation": "durable queues and spools are separate from the active-cell pool",
+        "capacity": "independent item and byte bounds with exact-full and one-over behavior",
+        "acceptance": "exact payload snapshot and attempt identity commit before durable acceptance",
+        "recovery": "versioned formats, interrupted publication, corrupt/future refusal, restart, receipts, and visible indeterminate work",
+        "retry": "no automatic indeterminate-effect retry without a safe declared idempotency contract"
+      },
+      "sr6": {
+        "purpose": "qualify supported workload profiles without redesigning runtime semantics or durable formats",
+        "required_axes": [
+          "connectors",
+          "flows",
+          "in-flight cells",
+          "payload-size mix",
+          "ingress items and bytes",
+          "egress items and bytes",
+          "throughput",
+          "latency",
+          "memory",
+          "disk amplification",
+          "recovery time"
+        ]
+      }
     },
     "future_sr6": {
-      "status": "deferred",
-      "workload": "derive scale profiles from real connector, flow, queue, delivery, concurrency, throughput, latency, memory, disk-amplification, and recovery behavior"
+      "status": "deferred-qualification",
+      "workload": "derive supported profiles from the working SR2 runtime and SR3 durable path",
+      "must_not_require": [
+        "runtime semantic redesign",
+        "durable format redesign",
+        "reuse of historical source and observation cardinalities"
+      ]
     },
     "persistence_instance_workload": {
       "interleaved_stores": 4,
@@ -701,31 +746,31 @@
       "scale_axis": "simultaneous-instances"
     },
     {
-      "id": "streams.sr1-queue-slots",
+      "id": "streams.sr1-cell-admissions",
       "module": "tui/applets/streams/flow-core.f",
       "symbol": "STREAMS-FLOW-QUEUE-CAPACITY",
       "value": 1,
-      "scope": "queue",
+      "scope": "execution-cell",
       "scale_axis": "work-scheduling",
-      "status": "active-sr1"
+      "status": "qualified-sr1-cell"
     },
     {
       "id": "streams.sr1-payload-bytes",
       "module": "tui/applets/streams/flow-core.f",
       "symbol": "STREAMS-FLOW-PAYLOAD-MAX",
       "value": 4096,
-      "scope": "working-set",
+      "scope": "execution-cell-layout",
       "scale_axis": "content-bytes",
-      "status": "active-sr1"
+      "status": "qualified-sr1-cell"
     },
     {
       "id": "streams.sr1-operation-bytes",
       "module": "tui/applets/streams/flow-core.f",
       "symbol": "STREAMS-FLOW-OP-MAX",
       "value": 256,
-      "scope": "working-set",
+      "scope": "execution-cell-layout",
       "scale_axis": "content-bytes",
-      "status": "active-sr1"
+      "status": "qualified-sr1-cell"
     },
     {
       "id": "streams.sources",

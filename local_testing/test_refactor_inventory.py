@@ -467,13 +467,13 @@ def test_capacity_ledger_is_live_and_distinguishes_scope() -> None:
         "streams.checkpoint-bytes",
         "streams.source-registry",
     }
-    active_sr1_ids = {
+    qualified_sr1_cell_ids = {
         capacity["id"]
         for capacity in _policy()["capacities"]
-        if capacity.get("status") == "active-sr1"
+        if capacity.get("status") == "qualified-sr1-cell"
     }
-    assert active_sr1_ids == {
-        "streams.sr1-queue-slots",
+    assert qualified_sr1_cell_ids == {
+        "streams.sr1-cell-admissions",
         "streams.sr1-payload-bytes",
         "streams.sr1-operation-bytes",
     }
@@ -583,24 +583,95 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         "historical-inactive"
     )
     assert policy["scale_profiles"]["sr1_contract"] == {
-        "status": "active",
+        "status": "qualified-execution-cell",
         "input_connectors": 1,
-        "flows": 1,
+        "execution_cells": 1,
         "transforms": 1,
         "output_connectors": 1,
-        "queue_slots": 1,
+        "admission_slots_per_cell": 1,
         "payload_max_bytes": 4096,
         "operation_max_bytes": 256,
         "storage": "none",
         "qualification": "deterministic-mocks",
+        "capacity_role": "version-1 cell bounds, not product-wide limits",
+    }
+    assert policy["scale_profiles"]["streams_capacity_convergence"] == {
+        "status": "required",
+        "sr2": {
+            "runtime": "bounded caller-owned execution-cell pool",
+            "payload": (
+                "named payload profiles with body and connection storage "
+                "separate from each cell"
+            ),
+            "qualification": [
+                "two interleaved cells",
+                (
+                    "one body larger than 4096 bytes without enlarging "
+                    "every cell"
+                ),
+                "exact-full and one-over pool refusal",
+                "slow or cancelled peer teardown",
+                "measured memory and latency",
+            ],
+            "persistence": "none",
+            "abi_rule": (
+                "layout changes use an explicit replacement ABI; general "
+                "code does not persist raw descriptors"
+            ),
+        },
+        "sr3": {
+            "runtime_relation": (
+                "durable queues and spools are separate from the "
+                "active-cell pool"
+            ),
+            "capacity": (
+                "independent item and byte bounds with exact-full and "
+                "one-over behavior"
+            ),
+            "acceptance": (
+                "exact payload snapshot and attempt identity commit before "
+                "durable acceptance"
+            ),
+            "recovery": (
+                "versioned formats, interrupted publication, corrupt/future "
+                "refusal, restart, receipts, and visible indeterminate work"
+            ),
+            "retry": (
+                "no automatic indeterminate-effect retry without a safe "
+                "declared idempotency contract"
+            ),
+        },
+        "sr6": {
+            "purpose": (
+                "qualify supported workload profiles without redesigning "
+                "runtime semantics or durable formats"
+            ),
+            "required_axes": [
+                "connectors",
+                "flows",
+                "in-flight cells",
+                "payload-size mix",
+                "ingress items and bytes",
+                "egress items and bytes",
+                "throughput",
+                "latency",
+                "memory",
+                "disk amplification",
+                "recovery time",
+            ],
+        },
     }
     assert policy["scale_profiles"]["future_sr6"] == {
-        "status": "deferred",
+        "status": "deferred-qualification",
         "workload": (
-            "derive scale profiles from real connector, flow, queue, "
-            "delivery, concurrency, throughput, latency, memory, "
-            "disk-amplification, and recovery behavior"
+            "derive supported profiles from the working SR2 runtime and "
+            "SR3 durable path"
         ),
+        "must_not_require": [
+            "runtime semantic redesign",
+            "durable format redesign",
+            "reuse of historical source and observation cardinalities",
+        ],
     }
     assert policy["hot_path_budgets"] == {
         "cold_open_max_metadata_pages": 64,

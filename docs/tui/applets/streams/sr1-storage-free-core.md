@@ -59,6 +59,36 @@ retirement. A positive revision change is handled as staleness; invalidating
 or reusing the descriptor storage before retirement violates this lifetime
 precondition.
 
+## Capacity and evolution boundary
+
+SR1 qualifies one version-1 execution cell, not the final Streams queue or a
+product-wide capacity limit. Its singular ingress/egress event and attempt
+fields make the one-slot behavior structural. The 4,096-byte payload and
+256-byte operation bounds also size storage embedded in each flow descriptor;
+they are not runtime knobs. The timeout is configurable per flow within its
+qualified ceiling.
+
+SR2 must settle the production-facing shape before HTTP composition makes
+these choices expensive to change:
+
+- a bounded caller-owned pool of execution cells with explicit pool-full
+  refusal and connector-callback ownership;
+- payload and connection storage separated from the cell layout, with named
+  profiles for small inline messages and larger bounded or streamed bodies;
+- exact ordering, digest, cancellation, and cleanup rules when one logical
+  payload spans more than one buffer or event; and
+- an explicit descriptor ABI revision whenever capacity changes alter layout.
+
+The standalone version-1 cell has no persisted representation or applet
+consumer, so SR2 may replace it atomically rather than maintain two runtime
+ABIs. It must preserve SR1's ownership, attempt/effect truth, staleness,
+cleanup, generation, and retirement semantics. Raising a constant without
+that versioned design and qualification is not an accepted scale path.
+General HTTP and persistence code must use the public contract rather than
+persisting raw descriptors, depending on version-1 offsets, or retaining
+inline addresses. SR2 must move at least one bounded HTTP body larger than the
+SR1 inline limit without enlarging every execution cell.
+
 ## Attempt and effect truth
 
 Ingress and egress are deliberately different attempts. A successful
@@ -173,5 +203,6 @@ SR2 now composes these semantics with only the general `web/` and `net/`
 repairs needed for the first real bidirectional HTTP slice. It must keep the
 route/server/request/response/template mechanics general, keep Streams
 configuration and attempt truth applet-owned, prove cooperative Desk
-progress/teardown, and remain storage-free until that runtime behavior
+progress/teardown, first settle the execution-pool and payload-profile
+boundary above, and remain storage-free until that runtime behavior
 establishes what SR3 actually needs to persist.
