@@ -147,6 +147,9 @@ local_testing/*
 !local_testing/test_streams_l13_runtime.py
 !local_testing/streams_scale_model.py
 !local_testing/test_streams_scale_model.py
+!local_testing/streams-sr1-core.f
+!local_testing/test_streams_sr1_core.py
+!local_testing/test_streams_sr1_static.py
 !local_testing/streams-cold-l13-test.f
 !local_testing/streams_l13_two_boot.py
 !local_testing/desk-gate0-baseline.f
