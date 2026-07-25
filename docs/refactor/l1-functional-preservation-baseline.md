@@ -50,7 +50,7 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | Applet | Groups | Covered | Partial | Prerequisite-only | Named prerequisites | Evidence references |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Library | 4 | 4 | 0 | 0 | 0 | 19 |
-| Streams | 5 | 2 | 3 | 0 | 1 | 25 |
+| Streams | 6 | 3 | 3 | 0 | 1 | 27 |
 | Agent | 4 | 3 | 1 | 0 | 1 | 23 |
 | Daybook | 3 | 2 | 1 | 0 | 1 | 9 |
 | Pad | 3 | 2 | 1 | 0 | 2 | 10 |
@@ -58,7 +58,7 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
 | Desk | 3 | 3 | 0 | 0 | 0 | 14 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **30** | **17** | **11** | **2** | **13** | **115** |
+| **Total** | **31** | **18** | **11** | **2** | **13** | **117** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -84,11 +84,14 @@ remains live, or an explicit deletion or user-data export decision. Fixtures
 alone create no preservation duty; neither the halted authority cutover nor
 its emulator gates are required.
 
-SR2 now records one covered, storage-free runtime behavior group. Its focused
-linked driver and host architecture ratchets pin external segmented carriers,
-the bounded mixed-profile pool, connector/event/flow/backpressure semantics,
-cancellation, outcome, isolation, and cleanup. This evidence makes no
-persistence, network-transport, general scheduler, or old-authority claim.
+SR2 now records covered storage-free runtime and cooperative HTTP behavior
+groups. Focused linked drivers and host architecture ratchets pin external
+segmented carriers, the bounded mixed-profile pool,
+connector/event/flow/backpressure semantics, strict request framing, copied
+route authority, bounded response construction, exact request-to-response
+movement, cancellation, outcome, isolation, and cleanup. This evidence makes
+no persistence, listener/TLS, Desk hosting, live-connectivity, general
+scheduler, or old-authority claim.
 
 ## Important evidence decisions
 

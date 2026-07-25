@@ -1,8 +1,8 @@
 # Streams information integration contract
 
 **Status:** normative product and ownership contract; the SR2 bounded runtime
-shape is complete; cooperative HTTP and final isolation/pressure landings
-remain
+and cooperative HTTP journey are complete; final isolation/pressure
+qualification remains
 
 **Reconciled:** 2026-07-25
 
@@ -257,13 +257,13 @@ protocol state caller-owned, bind request and response bodies, compose runtime
 cancellation and cleanup, avoid a blocking accept/serve loop, and qualify
 framing, smuggling, route isolation, and simultaneous connection ownership.
 
-The active-cell pool, payload profiles, and clean descriptor replacement are
-complete. The next landing proves one real route and response. The closing
-landing carries that composition through two interleaved requests, a body
-larger than 4,096 bytes without enlarging every cell, a slow or cancelled
-peer, pool exhaustion, and exact teardown within measured memory. General code
-uses descriptor accessors and never persists raw runtime layouts. SR2 does not
-add a durable queue.
+The active-cell pool, payload profiles, clean descriptor replacement, and
+first cooperative route-to-response journey are complete. The closing landing
+carries that composition through two interleaved requests, a body larger than
+4,096 bytes without enlarging every cell, a slow or cancelled peer, pool
+exhaustion, and exact teardown within measured memory. General code uses
+descriptor accessors and never persists raw runtime layouts. SR2 does not add
+a durable queue.
 
 Routes, requests, responses, middleware, and template expansion remain general
 `web/` behavior. Streams owns the admitted route/connector, event flow,
@@ -405,12 +405,12 @@ HTTP-first and storage-light:
    indeterminate state.
 8. Leave Library unchanged unless the user explicitly chooses Collect.
 
-SR2 is split into reviewable landings. The pool/payload/cutover boundary is
-complete; the cooperative HTTP journey is next; interleaving and pressure
-qualification close the milestone. The route uses a named profile, and the
-larger-body runtime path is already settled without enlarging every cell. The
-HTTP composition must still prove that path before SR2 closes. “Enqueued” or
-“durably accepted” remains SR3 language.
+SR2 is split into reviewable landings. The pool/payload/cutover boundary and
+cooperative HTTP journey are complete; interleaving and pressure qualification
+close the milestone. The route uses a named profile, and the larger-body
+runtime path is already settled without enlarging every cell. The HTTP
+composition must still prove that larger path under connection pressure before
+SR2 closes. “Enqueued” or “durably accepted” remains SR3 language.
 
 The in-memory/mock flow contract is now qualified before durable queues. The
 real HTTP slice remains unqualified and comes before AT Protocol and Bluesky
@@ -448,7 +448,8 @@ but one-worker and many-worker execution must preserve the same event,
 backpressure, retry, delivery, and cleanup semantics.
 
 The current SR2 runtime earns the bounded-runtime portion of
-`offline-contract` and requalifies the standalone/mock form of
+`offline-contract`; the first HTTP landing earns `protocol-framing`,
+deterministic cooperative transport, and the request/response form of
 `bidirectional-flow`. External segmented carriers, exact payload
 copy/digest/integrity, compact and standard profiles, a mixed measured pool,
 two interleaved flows, full/one-over and no-fitting-cell refusal,
@@ -460,5 +461,11 @@ qualified by
 [`test_streams_sr2_static.py`](../../../../local_testing/test_streams_sr2_static.py)
 qualifies the storage-free dependency closure, absence of top-level mutable
 storage, clean SR1 layout replacement, and absence of a prerelease
-compatibility or ABI layer. None of the protocol, transport, live, Desk, or
-hardware labels has yet been earned.
+compatibility or ABI layer.
+[`test_web_http_primitives.py`](../../../../local_testing/test_web_http_primitives.py)
+qualifies strict request, route, response, partial-send, source-fault, and
+cancellation behavior, while
+[`test_streams_sr2_http_route.py`](../../../../local_testing/test_streams_sr2_http_route.py)
+qualifies one exact fragmented JSON request-to-response lifecycle. The final
+two-connection pressure gate and all live, Desk, and hardware labels remain
+unearned.

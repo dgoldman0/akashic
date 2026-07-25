@@ -600,17 +600,22 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         ),
     }
     assert policy["scale_profiles"]["streams_capacity_convergence"] == {
-        "status": "runtime-shape-qualified-http-pending",
+        "status": "runtime-http-qualified-pressure-pending",
         "sr2": {
             "landing_status": {
                 "runtime_shape": "qualified",
-                "cooperative_http": "pending",
+                "cooperative_http": "qualified",
                 "connection_isolation_pressure": "pending",
             },
             "runtime": "bounded caller-owned execution-cell pool",
             "payload": (
                 "named payload profiles with body and connection storage "
                 "separate from each cell"
+            ),
+            "http": (
+                "caller-owned strict request framing, copied routing, "
+                "bounded response sources and one exact cooperative "
+                "request-to-response journey"
             ),
             "qualification": [
                 "two interleaved cells",

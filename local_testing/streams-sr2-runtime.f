@@ -869,9 +869,45 @@ VARIABLE _sr2r-expected-effect
         STREAMS-FLOW-S-DELIVERED = _sr2r-assert
     _sr2r-starts @ 1 = _sr2r-assert
     _sr2r-cleanups @ 1 = _sr2r-assert
+    _sr2r-flow-a SFLOW.INGRESS-CARRIER SPAY.STATE @
+        STREAMS-PAYLOAD-STATE-SEALED = _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-CARRIER SPAY.STATE @
+        STREAMS-PAYLOAD-STATE-SEALED = _sr2r-assert
+    0 _sr2r-copy-buffer 7
+        _sr2r-flow-a SFLOW.EGRESS-CARRIER SPAY.GENERATION @
+        _sr2r-flow-a SFLOW.EGRESS-CARRIER STREAMS-PAYLOAD-READ
+        STREAMS-PAYLOAD-S-OK = _sr2r-assert
+    _sr2r-copy-buffer 7 S" tx:ping" COMPARE 0= _sr2r-assert
+    _sr2r-flow-a SFLOW.GENERATION @ 1+
+        _sr2r-flow-a STREAMS-FLOW-RETIRE
+        STREAMS-FLOW-S-STALE = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-TERMINAL =
+        _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-CARRIER SPAY.GENERATION @
+        _sr2r-flow-a SFLOW.EGRESS-CARRIER
+        STREAMS-PAYLOAD-EXACT? _sr2r-assert
     _sr2r-retire-a
     _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
         _sr2r-assert
+    _sr2r-flow-a SFLOW.INGRESS-CARRIER SPAY.STATE @
+        STREAMS-PAYLOAD-STATE-BUILDING = _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-CARRIER SPAY.STATE @
+        STREAMS-PAYLOAD-STATE-BUILDING = _sr2r-assert
+    _sr2r-flow-a SFLOW.INGRESS-CARRIER SPAY.BYTE-U @ 0=
+        _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-CARRIER SPAY.BYTE-U @ 0=
+        _sr2r-assert
+    _sr2r-in-segments-a SPSEG.USED @ 0= _sr2r-assert
+    _sr2r-out-segments-a SPSEG.USED @ 0= _sr2r-assert
+    _sr2r-in-bytes-a STREAMS-RUNTIME-SEGMENT-BYTES
+        _SPAY-ZERO? _sr2r-assert
+    _sr2r-out-bytes-a STREAMS-RUNTIME-SEGMENT-BYTES
+        _SPAY-ZERO? _sr2r-assert
+    _sr2r-operation-a
+        STREAMS-RUNTIME-PROFILE-COMPACT
+        STREAMS-RUNTIME-OPERATION-CAPACITY
+        _SPAY-ZERO? _sr2r-assert
+    _sr2r-cleanups @ 1 = _sr2r-assert
 
     S" pong" 0x46 _sr2r-event-b _sr2r-flow-a
         _sr2r-build-borrowed

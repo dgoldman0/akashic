@@ -37,13 +37,13 @@ prototype cell bounds, not supported product-wide limits.
 
 The machine policy now makes capacity convergence explicit. SR2's bounded
 active-cell pool, separate payload storage, named profiles, two-cell isolation,
-larger-body path, saturation refusal, measured cost, and atomic replacement of
-the unreleased descriptor layout are qualified. Cooperative HTTP and the final
-connection-pressure landing remain. The runtime adds no parallel layout, ABI
-selector, adapter, migration, deprecation path, or old-layout reader. SR3 adds
-separately item/byte-bounded durable queues/spools only after SR2 HTTP closes.
-SR6 qualifies supported workloads from those working paths without redesigning
-their semantics or record shapes.
+larger-body path, saturation refusal, measured cost, atomic replacement of the
+unreleased descriptor layout, and first cooperative HTTP request/response are
+qualified. The final connection-pressure landing remains. The runtime adds no
+parallel layout, ABI selector, adapter, migration, deprecation path, or
+old-layout reader. SR3 adds separately item/byte-bounded durable queues/spools
+only after SR2 HTTP closes. SR6 qualifies supported workloads from those
+working paths without redesigning their semantics or record shapes.
 
 The five source/observation checkpoint capacities remain source-anchored facts
 about the older prototype. The whole-corpus observation checkpoint complexity
@@ -200,7 +200,7 @@ the contract:
 | Streams workstation | historical-inactive | 10,000 sources, 1,000,000 observations, and 2,000,000 retained attempts |
 | Streams large host/model | historical-inactive | 100,000 sources, 10,000,000 observations, and 20,000,000 retained attempts |
 | Streams SR1 | qualified prototype cell | one deterministic mock input, flow, transform, and output; one admission; payloads at most 4,096 bytes; connector operations at most 256 bytes; no storage |
-| Streams SR2 | runtime shape qualified; HTTP/isolation pending | bounded active-cell pool, separate payload/connection storage, named payload profiles, atomic prototype replacement, two-flow isolation, larger-than-4-KiB body, saturation refusal, measured runtime cost, and cooperative HTTP |
+| Streams SR2 | runtime and first HTTP journey qualified; pressure pending | bounded active-cell pool, separate payload/connection storage, named payload profiles, atomic prototype replacement, two-flow isolation, larger-than-4-KiB body, saturation refusal, measured runtime cost, and cooperative HTTP |
 | Streams SR3 | deferred until SR2 HTTP closes | independently item/byte-bounded queue/spool with a self-identifying current format, exact durable acceptance, retry evidence, and cold recovery |
 | Streams SR6 | deferred qualification | workload-derived supported connector, flow, in-flight, payload-mix, queue-byte/item, throughput, latency, memory, disk-amplification, and recovery profiles without runtime or format redesign |
 | Emulator | representative-reduced | Applet-specific datasets at structural transitions preserving index-height, page-count, amplification, working-set, and fault invariants |

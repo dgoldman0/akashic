@@ -1,12 +1,12 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "streams-sr2-runtime-shape-20260725",
-    "commit": "6aafea24de52b3b9c981990c1495e3f2c09c25fb",
+    "name": "streams-sr2-http-journey-20260725",
+    "commit": "8c920eb97f377ac20f3460091865af7117cb5bfb",
     "expected": {
-      "module_count": 424,
-      "resolved_require_occurrence_count": 1392,
-      "unique_resolved_edge_count": 1392,
+      "module_count": 429,
+      "resolved_require_occurrence_count": 1403,
+      "unique_resolved_edge_count": 1403,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -14,8 +14,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "a07bd99d501905a6a49371d94ab93eb087181dd8e28e83d7644b35670f9765a9",
-      "state_sha256": "f52d1f46da43966053790cc5990d1ef1222d3cfc70cb5b8cc8b5d67a1b55be83",
+      "graph_sha256": "619bb054857a92d2856e7f30a47830cd5016abc24c9f7a4a056a12438f35cefd",
+      "state_sha256": "fe44c974934f5e1e31311b95174934233ea1a9ad1abe9e7434c6b7c5e95cb211",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -356,15 +356,16 @@
       "capacity_role": "SR1 prototype cell bounds, not supported product limits"
     },
     "streams_capacity_convergence": {
-      "status": "runtime-shape-qualified-http-pending",
+      "status": "runtime-http-qualified-pressure-pending",
       "sr2": {
         "landing_status": {
           "runtime_shape": "qualified",
-          "cooperative_http": "pending",
+          "cooperative_http": "qualified",
           "connection_isolation_pressure": "pending"
         },
         "runtime": "bounded caller-owned execution-cell pool",
         "payload": "named payload profiles with body and connection storage separate from each cell",
+        "http": "caller-owned strict request framing, copied routing, bounded response sources and one exact cooperative request-to-response journey",
         "qualification": [
           "two interleaved cells",
           "one body larger than 4096 bytes without enlarging every cell",

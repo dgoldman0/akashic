@@ -176,6 +176,13 @@
           "facets": ["interfaces", "providers", "failures", "journeys"],
           "preserve": ["Caller-owned connector descriptors distinguish input, output and bidirectional direction while segmented event carriers make bounded payload ownership explicit", "A measured mixed-profile execution pool admits fitting transfer cells, refuses full and over-capacity work, serializes shared connector callbacks and detects cell retargeting or mutable-span crossover", "Exact input-to-transform-to-output truth, timeout, cancellation, connector failure, cleanup and payload integrity remain qualified without persistence, network transport or a general scheduler"],
           "evidence": ["driver:local_testing/test_streams_sr2_runtime.py", "pytest:local_testing/test_streams_sr2_static.py::test_streams_sr2_runtime_dependency_closure_is_storage_free"]
+        },
+        {
+          "id": "streams.sr2-cooperative-http",
+          "coverage": "covered",
+          "facets": ["interfaces", "providers", "failures", "journeys"],
+          "preserve": ["Strict caller-owned HTTP request framing, copied route authority, bounded response construction and cooperative partial-send progress remain general web contracts", "One fragmented admitted request leases a fitting Streams cell, commits exact event metadata and JSON, transforms it, and returns the exact terminal egress as a JSON response", "The response source retains the exact terminal generation only until connection cleanup retires and wipes both carriers, releases the pool lease, wipes operation storage and closes the port"],
+          "evidence": ["driver:local_testing/test_web_http_primitives.py", "driver:local_testing/test_streams_sr2_http_route.py"]
         }
       ],
       "supplemental_evidence": ["profile:streams-live-public", "profile:streams-configured-refresh-live"],

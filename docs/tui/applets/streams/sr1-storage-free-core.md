@@ -115,11 +115,12 @@ following distinctions:
 | Deadline reached | Timeout is explicit and active output is cancelled through the same bounded callback contract |
 | Output cleanup fails or throws | Primary delivery/effect truth is retained; cleanup error is reported separately |
 
-Terminal work is immutable. A caller must retire the exact current generation
-before the historical flow cell can be reused; retirement clears payload and
-operation storage and the next admission receives a new generation. Two
-caller-owned flows progress independently; the core declares no hidden
-flow-owned mutable state.
+Terminal work is immutable. Healthy carrier-backed events and payload bytes
+remain readable until a caller retires the exact current generation.
+Retirement closes and wipes both carriers, expires the events, clears
+operation storage, and only then permits reuse; the next admission receives a
+new generation. Two caller-owned flows progress independently; the core
+declares no hidden flow-owned mutable state.
 
 ## Deterministic evidence
 
@@ -129,7 +130,9 @@ builds the focused linked profile and requalifies the complete SR1 semantic
 surface against the replacement runtime. Its happy path admits `ping`,
 transforms it to `tx:ping`, seals and revalidates the payload digest,
 acknowledges ingress, delivers egress, performs output cleanup once, and
-retires the exact generation.
+reads the exact terminal egress, proves a stale retirement leaves it intact,
+then retires the exact generation and proves both carriers and operation
+storage were wiped.
 
 The replacement fixture retains coverage of:
 

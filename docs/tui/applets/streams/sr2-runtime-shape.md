@@ -1,7 +1,7 @@
 # Streams SR2 bounded runtime shape
 
-**Status:** first SR2 landing complete; cooperative HTTP and final
-isolation/pressure qualification remain
+**Status:** runtime-shape and cooperative-HTTP landings complete; final
+isolation/pressure qualification remains
 
 **Qualified:** 2026-07-25
 
@@ -10,6 +10,10 @@ isolation/pressure qualification remain
 [`payload-carrier.f`](../../../../akashic/tui/applets/streams/payload-carrier.f),
 [`flow-core.f`](../../../../akashic/tui/applets/streams/flow-core.f), and
 [`execution-pool.f`](../../../../akashic/tui/applets/streams/execution-pool.f)
+
+**HTTP composition:**
+[`http-route.f`](../../../../akashic/tui/applets/streams/http-route.f) and
+[`http-ownership.md`](../../../web/http-ownership.md)
 
 **Normative product contract:**
 [`information-integration.md`](information-integration.md)
@@ -80,8 +84,10 @@ Ingress and egress attempts continue to preserve the SR1 distinctions among
 failed-before, failed-after-known-effect, cancelled, stale, timed out, and
 indeterminate work. Payload integrity failure cannot overwrite primary effect
 truth; a failure discovered during close remains separately visible as a
-cleanup error. Terminal work remains immutable until its exact generation is
-retired.
+cleanup error. Healthy carrier-backed events and sealed payloads remain
+readable and immutable after terminal publication. Exact retirement closes
+and wipes both carriers, expires those events, clears operation storage, and
+only then makes the cell reusable.
 
 ## Measured live memory
 
@@ -102,6 +108,30 @@ are not charged repeatedly.
 The 1,904-byte flow descriptor contains event and attempt metadata but no
 inline body buffer and no inline connector-operation buffer. Capacity changes
 therefore change caller-supplied workspaces, not every flow descriptor.
+
+## Cooperative HTTP journey
+
+The second SR2 landing adds strict incremental request framing, copied
+caller-owned routing, bounded pull-source responses, and one cooperative
+connection owner under general `web/` ownership. Streams contributes only the
+admitted route, pool, event metadata, transform, attempt truth, and
+per-connection route operation. Listener acceptance, TLS, keep-alive, Desk
+hosting, and durable work remain outside this slice.
+
+`POST /hooks/demo` now crosses one already-open mock port as fragmented HTTP,
+leases a fitting cell, incrementally commits the exact JSON body, runs one
+explicit transform and output attempt, and returns the exact transformed JSON
+through partial response sends. The route retains the terminal egress only
+while the response pull source can reach it, pinning the carrier generation
+separately from the flow generation used for cancellation and retirement.
+Connection cleanup then retires and wipes the exact flow generation, releases
+the lease, wipes route-operation storage, and closes the port.
+
+The route and connection owner admit only complete non-overlapping caller
+geometry. Body limits, header arenas, receive/send scratch, route capacity,
+operation arenas, and execution profiles are supplied by the composition;
+there is no process-global request, route, response, connection, admission, or
+4 KiB body ceiling.
 
 ## Clean prerelease replacement
 
@@ -131,17 +161,30 @@ truth, then adds:
   full-pool/one-over refusal, no-fitting-cell refusal, and stale-lease
   rejection;
 - two interleaved flows and shared-connector callback re-entry; and
-- pool-metadata, peer-workspace, and partial-connector-overlap rejection.
+- pool-metadata, peer-workspace, and partial-connector-overlap rejection; and
+- post-terminal payload reads, stale-retirement preservation, and exact
+  retirement wipe of both carriers and connector-operation storage.
+
+[`test_web_http_primitives.py`](../../../../local_testing/test_web_http_primitives.py)
+qualifies strict fragmented framing, hostile framing refusal, copied routing,
+bounded response construction, source faults, partial sends, cancellation,
+and completion precedence.
+[`test_streams_sr2_http_route.py`](../../../../local_testing/test_streams_sr2_http_route.py)
+qualifies the first complete request-to-response journey, including exact
+metadata/body transformation, live terminal response-source reads, partial
+transport acknowledgement, exact retirement, pool release, operation wipe,
+and port close.
 
 [`test_streams_sr2_static.py`](../../../../local_testing/test_streams_sr2_static.py)
-keeps the four-module dependency closure storage-free, rejects top-level
-mutable storage, requires the external workspace surface, proves the SR1 files
-were replaced, and rejects prerelease ABI, compatibility, migration, adapter,
-reader, version, or semantic-free reserved-padding layers.
+keeps both the four-module runtime and HTTP composition dependency closures
+storage-free, rejects top-level mutable storage, requires the external
+workspace and caller-owned HTTP lifecycle surfaces, proves the SR1 files were
+replaced, and rejects prerelease compatibility, migration, deprecation, or ABI
+layers.
 
-This landing earns the bounded runtime portion of `offline-contract` and
-requalifies the standalone/mock form of `bidirectional-flow`. It does not yet
-earn HTTP `protocol-framing`, cooperative transport, applet or Desk
-composition, live connectivity, or hardware parity. It adds no VFS path,
-durable queue, spool, outbox, retry record, or other persistence; those remain
-SR3 work after SR2 establishes the HTTP runtime behavior.
+The first two landings earn the bounded runtime portion of `offline-contract`,
+HTTP `protocol-framing`, deterministic cooperative transport, and the first
+request/response form of `bidirectional-flow`. They do not yet earn the final
+two-connection pressure gate, applet or Desk composition, live connectivity,
+or hardware parity. They add no VFS path, durable queue, spool, outbox, retry
+record, or other persistence; those remain SR3 work after SR2 closes.
