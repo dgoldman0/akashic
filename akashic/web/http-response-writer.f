@@ -1,0 +1,1107 @@
+\ =====================================================================
+\ http-response-writer.f - caller-owned cooperative HTTP/1.1 responses
+\ =====================================================================
+\ The writer owns no socket and allocates no memory.  Its caller supplies
+\ separate header and send-scratch arenas.  A response body is an exact
+\ declared length exposed through one pull callback:
+\
+\   READ-XT  ( offset scratch-a requested-u context
+\              -- count source-status )
+\
+\ A successful callback must return 1..requested-u bytes.  END before the
+\ declared length is short input.  All non-OK outcomes return a zero count;
+\ FAILED, CANCELLED, and STALE are explicit source outcomes.  Throws, unknown
+\ statuses, zero progress, and overcounts are contained and published as
+\ terminal writer errors.
+\
+\ A send step calls NIO-SEND at most once.  In particular it does not poll
+\ the port.  A scratch chunk remains stable in the writer across partial or
+\ zero-progress sends, and the source is not called again until that chunk
+\ has been sent completely.
+\ =====================================================================
+
+PROVIDED akashic-web-http-response-writer
+
+REQUIRE ../net/io-port.f
+REQUIRE ../utils/memory-span.f
+
+\ ---------------------------------------------------------------------
+\ State, status, source, pump, and byte-effect domains
+\ ---------------------------------------------------------------------
+
+0 CONSTANT HRESP-STATE-BUILDING
+1 CONSTANT HRESP-STATE-SEALED
+2 CONSTANT HRESP-STATE-SENDING
+3 CONSTANT HRESP-STATE-READING
+4 CONSTANT HRESP-STATE-TRANSPORT
+5 CONSTANT HRESP-STATE-SENT
+6 CONSTANT HRESP-STATE-ERROR
+7 CONSTANT HRESP-STATE-CANCELLED
+
+0  CONSTANT HRESP-S-OK
+1  CONSTANT HRESP-S-INVALID
+2  CONSTANT HRESP-S-CAPACITY
+3  CONSTANT HRESP-S-STATE
+4  CONSTANT HRESP-S-TRANSPORT
+5  CONSTANT HRESP-S-CANCELLED
+6  CONSTANT HRESP-S-SOURCE-INVALID
+7  CONSTANT HRESP-S-SOURCE-THREW
+8  CONSTANT HRESP-S-SOURCE-SHORT
+9  CONSTANT HRESP-S-SOURCE-ZERO
+10 CONSTANT HRESP-S-SOURCE-OVERCOUNT
+11 CONSTANT HRESP-S-SOURCE-FAILED
+12 CONSTANT HRESP-S-SOURCE-STALE
+
+0 CONSTANT HRESP-SOURCE-S-OK
+1 CONSTANT HRESP-SOURCE-S-END
+2 CONSTANT HRESP-SOURCE-S-FAILED
+3 CONSTANT HRESP-SOURCE-S-CANCELLED
+4 CONSTANT HRESP-SOURCE-S-STALE
+
+0 CONSTANT HRESP-PUMP-IDLE
+1 CONSTANT HRESP-PUMP-PROGRESS
+2 CONSTANT HRESP-PUMP-DONE
+3 CONSTANT HRESP-PUMP-ERROR-BEFORE-BYTES
+4 CONSTANT HRESP-PUMP-ERROR-AFTER-BYTES
+5 CONSTANT HRESP-PUMP-CANCELLED-BEFORE-BYTES
+6 CONSTANT HRESP-PUMP-CANCELLED-AFTER-BYTES
+7 CONSTANT HRESP-PUMP-CANCEL-PENDING
+8 CONSTANT HRESP-PUMP-INVALID
+
+0 CONSTANT HRESP-OUTCOME-NONE
+1 CONSTANT HRESP-OUTCOME-SENT
+2 CONSTANT HRESP-OUTCOME-FAILED-BEFORE-BYTES
+3 CONSTANT HRESP-OUTCOME-FAILED-AFTER-BYTES
+4 CONSTANT HRESP-OUTCOME-CANCELLED-BEFORE-BYTES
+5 CONSTANT HRESP-OUTCOME-CANCELLED-AFTER-BYTES
+
+1 CONSTANT HRESP-F-STATUS
+2 CONSTANT HRESP-F-CONTENT-TYPE
+4 CONSTANT HRESP-F-SOURCE
+8 CONSTANT HRESP-F-CANCEL-REQUESTED
+15 CONSTANT _HRESP-FLAGS-MASK
+
+\ ---------------------------------------------------------------------
+\ Caller-owned descriptor
+\ ---------------------------------------------------------------------
+\ This is the sole current, unreleased layout.  The descriptor is interpreted
+\ directly from its declared fields.
+
+ 0 CELLS CONSTANT _HRESP-STATE-O
+ 1 CELLS CONSTANT _HRESP-STATUS-O
+ 2 CELLS CONSTANT _HRESP-HTTP-STATUS-O
+ 3 CELLS CONSTANT _HRESP-FLAGS-O
+ 4 CELLS CONSTANT _HRESP-OUTCOME-O
+ 5 CELLS CONSTANT _HRESP-HEADER-A-O
+ 6 CELLS CONSTANT _HRESP-HEADER-CAPACITY-O
+ 7 CELLS CONSTANT _HRESP-HEADER-U-O
+ 8 CELLS CONSTANT _HRESP-HEADER-SENT-O
+ 9 CELLS CONSTANT _HRESP-SEND-A-O
+10 CELLS CONSTANT _HRESP-SEND-CAPACITY-O
+11 CELLS CONSTANT _HRESP-BODY-U-O
+12 CELLS CONSTANT _HRESP-BODY-SENT-O
+13 CELLS CONSTANT _HRESP-CHUNK-U-O
+14 CELLS CONSTANT _HRESP-CHUNK-SENT-O
+15 CELLS CONSTANT _HRESP-SOURCE-CONTEXT-O
+16 CELLS CONSTANT _HRESP-SOURCE-READ-XT-O
+17 CELLS CONSTANT HTTP-RESPONSE-WRITER-SIZE
+
+: HRESP.STATE           ( writer -- a ) _HRESP-STATE-O + ;
+: HRESP.STATUS          ( writer -- a ) _HRESP-STATUS-O + ;
+: HRESP.HTTP-STATUS     ( writer -- a ) _HRESP-HTTP-STATUS-O + ;
+: HRESP.FLAGS           ( writer -- a ) _HRESP-FLAGS-O + ;
+: HRESP.OUTCOME         ( writer -- a ) _HRESP-OUTCOME-O + ;
+: HRESP.HEADER-A        ( writer -- a ) _HRESP-HEADER-A-O + ;
+: HRESP.HEADER-CAPACITY ( writer -- a ) _HRESP-HEADER-CAPACITY-O + ;
+: HRESP.HEADER-U        ( writer -- a ) _HRESP-HEADER-U-O + ;
+: HRESP.HEADER-SENT     ( writer -- a ) _HRESP-HEADER-SENT-O + ;
+: HRESP.SEND-A          ( writer -- a ) _HRESP-SEND-A-O + ;
+: HRESP.SEND-CAPACITY   ( writer -- a ) _HRESP-SEND-CAPACITY-O + ;
+: HRESP.BODY-U          ( writer -- a ) _HRESP-BODY-U-O + ;
+: HRESP.BODY-SENT       ( writer -- a ) _HRESP-BODY-SENT-O + ;
+: HRESP.CHUNK-U         ( writer -- a ) _HRESP-CHUNK-U-O + ;
+: HRESP.CHUNK-SENT      ( writer -- a ) _HRESP-CHUNK-SENT-O + ;
+: HRESP.SOURCE-CONTEXT  ( writer -- a ) _HRESP-SOURCE-CONTEXT-O + ;
+: HRESP.SOURCE-READ-XT  ( writer -- a ) _HRESP-SOURCE-READ-XT-O + ;
+
+: _HRESP-STATE?  ( state -- flag )
+    DUP HRESP-STATE-BUILDING >=
+    SWAP HRESP-STATE-CANCELLED <= AND ;
+
+: _HRESP-STATUS?  ( status -- flag )
+    DUP HRESP-S-OK >=
+    SWAP HRESP-S-SOURCE-STALE <= AND ;
+
+: _HRESP-SOURCE-STATUS?  ( source-status -- flag )
+    DUP HRESP-SOURCE-S-OK >=
+    SWAP HRESP-SOURCE-S-STALE <= AND ;
+
+: _HRESP-OUTCOME?  ( outcome -- flag )
+    DUP HRESP-OUTCOME-NONE >=
+    SWAP HRESP-OUTCOME-CANCELLED-AFTER-BYTES <= AND ;
+
+: _HRESP-HTTP-STATUS?  ( code -- flag )
+    DUP 200 >= SWAP 599 <= AND ;
+
+: _HRESP-NO-CONTENT?  ( code -- flag )
+    DUP 204 = OVER 205 = OR
+    SWAP 304 = OR ;
+
+: _HRESP-ARENA?  ( arena-a arena-capacity -- flag )
+    DUP 1 < IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _HRESP-ARENAS?  ( writer -- flag )
+    >R
+    R@ HRESP.HEADER-A @ R@ HRESP.HEADER-CAPACITY @
+        _HRESP-ARENA? 0= IF R> DROP 0 EXIT THEN
+    R@ HRESP.SEND-A @ R@ HRESP.SEND-CAPACITY @
+        _HRESP-ARENA? 0= IF R> DROP 0 EXIT THEN
+    R@ HRESP.HEADER-A @ R@ HRESP.HEADER-CAPACITY @
+        R@ HTTP-RESPONSE-WRITER-SIZE MSPAN-OVERLAP? IF
+        R> DROP 0 EXIT
+    THEN
+    R@ HRESP.SEND-A @ R@ HRESP.SEND-CAPACITY @
+        R@ HTTP-RESPONSE-WRITER-SIZE MSPAN-OVERLAP? IF
+        R> DROP 0 EXIT
+    THEN
+    R@ HRESP.HEADER-A @ R@ HRESP.HEADER-CAPACITY @
+        R@ HRESP.SEND-A @ R@ HRESP.SEND-CAPACITY @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R> DROP -1 ;
+
+: _HRESP-LENGTHS?  ( writer -- flag )
+    >R
+    R@ HRESP.HEADER-U @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+    R@ HRESP.HEADER-CAPACITY @ > IF R> DROP 0 EXIT THEN
+    R@ HRESP.HEADER-SENT @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+    R@ HRESP.HEADER-U @ > IF R> DROP 0 EXIT THEN
+    R@ HRESP.BODY-U @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+    DROP
+    R@ HRESP.BODY-SENT @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+    R@ HRESP.BODY-U @ > IF R> DROP 0 EXIT THEN
+    R@ HRESP.HEADER-SENT @ R@ HRESP.HEADER-U @ <>
+    R@ HRESP.BODY-SENT @ 0<> AND IF R> DROP 0 EXIT THEN
+    R@ HRESP.CHUNK-U @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+    R@ HRESP.SEND-CAPACITY @ > IF R> DROP 0 EXIT THEN
+    R@ HRESP.CHUNK-SENT @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+    R@ HRESP.CHUNK-U @ > IF R> DROP 0 EXIT THEN
+    R@ HRESP.CHUNK-U @ 0= IF
+        R@ HRESP.CHUNK-SENT @ IF R> DROP 0 EXIT THEN
+    ELSE
+        R@ HRESP.CHUNK-SENT @ R@ HRESP.CHUNK-U @ >= IF
+            R> DROP 0 EXIT
+        THEN
+        R@ HRESP.HEADER-SENT @ R@ HRESP.HEADER-U @ <> IF
+            R> DROP 0 EXIT
+        THEN
+    THEN
+    R@ HRESP.CHUNK-U @ R@ HRESP.CHUNK-SENT @ -
+    R@ HRESP.BODY-U @ R@ HRESP.BODY-SENT @ - > IF
+        R> DROP 0 EXIT
+    THEN
+    R> DROP -1 ;
+
+: _HRESP-CONFIG?  ( writer -- flag )
+    >R
+    R@ HRESP.FLAGS @ HRESP-F-STATUS AND IF
+        R@ HRESP.HTTP-STATUS @ _HRESP-HTTP-STATUS? 0= IF
+            R> DROP 0 EXIT
+        THEN
+    ELSE
+        R@ HRESP.HTTP-STATUS @ IF R> DROP 0 EXIT THEN
+    THEN
+    R@ HRESP.FLAGS @ HRESP-F-SOURCE AND IF
+        R@ HRESP.BODY-U @ 0>
+        R@ HRESP.SOURCE-READ-XT @ 0= AND IF R> DROP 0 EXIT THEN
+    ELSE
+        R@ HRESP.BODY-U @
+        R@ HRESP.BODY-SENT @ OR
+        R@ HRESP.CHUNK-U @ OR
+        R@ HRESP.CHUNK-SENT @ OR
+        R@ HRESP.SOURCE-CONTEXT @ OR
+        R@ HRESP.SOURCE-READ-XT @ OR IF R> DROP 0 EXIT THEN
+    THEN
+    R> DROP -1 ;
+
+: _HRESP-PUBLISHED-BYTES?  ( writer -- flag )
+    DUP HRESP.HEADER-SENT @
+    SWAP HRESP.BODY-SENT @ OR 0<> ;
+
+: _HRESP-FAILED-OUTCOME  ( writer -- outcome )
+    _HRESP-PUBLISHED-BYTES?
+    IF HRESP-OUTCOME-FAILED-AFTER-BYTES
+    ELSE HRESP-OUTCOME-FAILED-BEFORE-BYTES THEN ;
+
+: _HRESP-CANCELLED-OUTCOME  ( writer -- outcome )
+    _HRESP-PUBLISHED-BYTES?
+    IF HRESP-OUTCOME-CANCELLED-AFTER-BYTES
+    ELSE HRESP-OUTCOME-CANCELLED-BEFORE-BYTES THEN ;
+
+: _HRESP-REQUIRED-FLAGS?  ( writer -- flag )
+    HRESP.FLAGS @ HRESP-F-STATUS HRESP-F-SOURCE OR AND
+    HRESP-F-STATUS HRESP-F-SOURCE OR = ;
+
+: _HRESP-HEADER-DONE?  ( writer -- flag )
+    DUP HRESP.HEADER-SENT @ SWAP HRESP.HEADER-U @ = ;
+
+: _HRESP-BODY-DONE?  ( writer -- flag )
+    DUP HRESP.BODY-SENT @ SWAP HRESP.BODY-U @ = ;
+
+: _HRESP-CHUNK-EMPTY?  ( writer -- flag )
+    DUP HRESP.CHUNK-U @ 0=
+    SWAP HRESP.CHUNK-SENT @ 0= AND ;
+
+: _HRESP-CANCEL-REQUESTED?  ( writer -- flag )
+    HRESP.FLAGS @ HRESP-F-CANCEL-REQUESTED AND 0<> ;
+
+: _HRESP-CANCEL-REQUEST!  ( writer -- )
+    HRESP.FLAGS DUP @ HRESP-F-CANCEL-REQUESTED OR SWAP ! ;
+
+: _HRESP-CLEAR-CANCEL-REQUEST!  ( writer -- )
+    HRESP.FLAGS DUP @ HRESP-F-CANCEL-REQUESTED INVERT AND SWAP ! ;
+
+: _HRESP-HEADER-IN-FLIGHT?  ( writer -- flag )
+    DUP HRESP.HEADER-SENT @ OVER HRESP.HEADER-U @ <
+    SWAP _HRESP-CHUNK-EMPTY? AND ;
+
+: _HRESP-BODY-IN-FLIGHT?  ( writer -- flag )
+    DUP _HRESP-HEADER-DONE?
+    SWAP HRESP.CHUNK-U @ 0> AND ;
+
+: _HRESP-TRANSPORT-IN-FLIGHT?  ( writer -- flag )
+    DUP _HRESP-HEADER-IN-FLIGHT?
+    SWAP _HRESP-BODY-IN-FLIGHT? OR ;
+
+: _HRESP-STATE-INVARIANTS?  ( writer -- flag )
+    DUP HRESP.STATE @ CASE
+        HRESP-STATE-BUILDING OF
+            DUP HRESP.STATUS @ HRESP-S-OK =
+            OVER HRESP.OUTCOME @ HRESP-OUTCOME-NONE = AND
+            OVER HRESP.HEADER-SENT @ 0= AND
+            OVER HRESP.BODY-SENT @ 0= AND
+            OVER _HRESP-CHUNK-EMPTY? AND
+            SWAP DROP
+        ENDOF
+        HRESP-STATE-SEALED OF
+            DUP HRESP.STATUS @ HRESP-S-OK =
+            OVER HRESP.OUTCOME @ HRESP-OUTCOME-NONE = AND
+            OVER _HRESP-REQUIRED-FLAGS? AND
+            OVER HRESP.HEADER-SENT @ 0= AND
+            OVER HRESP.BODY-SENT @ 0= AND
+            OVER _HRESP-CHUNK-EMPTY? AND
+            SWAP DROP
+        ENDOF
+        HRESP-STATE-SENDING OF
+            DUP HRESP.STATUS @ HRESP-S-OK =
+            OVER HRESP.OUTCOME @ HRESP-OUTCOME-NONE = AND
+            OVER _HRESP-REQUIRED-FLAGS? AND
+            SWAP DROP
+        ENDOF
+        HRESP-STATE-READING OF
+            DUP HRESP.STATUS @ HRESP-S-OK =
+            OVER HRESP.OUTCOME @ HRESP-OUTCOME-NONE = AND
+            OVER _HRESP-REQUIRED-FLAGS? AND
+            OVER _HRESP-HEADER-DONE? AND
+            OVER _HRESP-CHUNK-EMPTY? AND
+            OVER HRESP.BODY-SENT @
+                2 PICK HRESP.BODY-U @ < AND
+            SWAP DROP
+        ENDOF
+        HRESP-STATE-TRANSPORT OF
+            DUP HRESP.STATUS @ HRESP-S-OK =
+            OVER HRESP.OUTCOME @ HRESP-OUTCOME-NONE = AND
+            OVER _HRESP-REQUIRED-FLAGS? AND
+            OVER _HRESP-TRANSPORT-IN-FLIGHT? AND
+            SWAP DROP
+        ENDOF
+        HRESP-STATE-SENT OF
+            DUP HRESP.STATUS @ HRESP-S-OK =
+            OVER HRESP.OUTCOME @ HRESP-OUTCOME-SENT = AND
+            OVER _HRESP-REQUIRED-FLAGS? AND
+            OVER _HRESP-HEADER-DONE? AND
+            OVER _HRESP-BODY-DONE? AND
+            OVER _HRESP-CHUNK-EMPTY? AND
+            SWAP DROP
+        ENDOF
+        HRESP-STATE-ERROR OF
+            DUP HRESP.STATUS @ DUP HRESP-S-OK <>
+                SWAP HRESP-S-CANCELLED <> AND
+            OVER HRESP.OUTCOME @ 2 PICK _HRESP-FAILED-OUTCOME = AND
+            SWAP DROP
+        ENDOF
+        HRESP-STATE-CANCELLED OF
+            DUP HRESP.STATUS @ HRESP-S-CANCELLED =
+            OVER HRESP.OUTCOME @ 2 PICK _HRESP-CANCELLED-OUTCOME = AND
+            SWAP DROP
+        ENDOF
+        2DROP 0 0
+    ENDCASE ;
+
+: HRESP-VALID?  ( writer -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP HTTP-RESPONSE-WRITER-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP HRESP.STATE @ _HRESP-STATE? 0= IF DROP 0 EXIT THEN
+    DUP HRESP.STATUS @ _HRESP-STATUS? 0= IF DROP 0 EXIT THEN
+    DUP HRESP.OUTCOME @ _HRESP-OUTCOME? 0= IF DROP 0 EXIT THEN
+    DUP HRESP.FLAGS @ _HRESP-FLAGS-MASK INVERT AND IF DROP 0 EXIT THEN
+    DUP _HRESP-CANCEL-REQUESTED? IF
+        DUP HRESP.STATE @ DUP HRESP-STATE-READING =
+        SWAP HRESP-STATE-TRANSPORT = OR 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP _HRESP-ARENAS? 0= IF DROP 0 EXIT THEN
+    DUP _HRESP-LENGTHS? 0= IF DROP 0 EXIT THEN
+    DUP _HRESP-CONFIG? 0= IF DROP 0 EXIT THEN
+    _HRESP-STATE-INVARIANTS? ;
+
+\ ---------------------------------------------------------------------
+\ Initialization and terminal cleanup
+\ ---------------------------------------------------------------------
+
+: HRESP-INIT  ( header-a header-capacity send-a send-capacity writer -- status )
+    >R
+    R@ 0= IF 2DROP 2DROP R> DROP HRESP-S-INVALID EXIT THEN
+    R@ HTTP-RESPONSE-WRITER-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP 2DROP R> DROP HRESP-S-INVALID EXIT
+    THEN
+    R@ HRESP-VALID? IF
+        R@ HRESP.STATE @ DUP HRESP-STATE-READING =
+        SWAP HRESP-STATE-TRANSPORT = OR IF
+            2DROP 2DROP R> DROP HRESP-S-STATE EXIT
+        THEN
+    THEN
+    3 PICK 3 PICK _HRESP-ARENA? 0= IF
+        2DROP 2DROP R> DROP HRESP-S-INVALID EXIT
+    THEN
+    2DUP _HRESP-ARENA? 0= IF
+        2DROP 2DROP R> DROP HRESP-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK R@ HTTP-RESPONSE-WRITER-SIZE MSPAN-OVERLAP? IF
+        2DROP 2DROP R> DROP HRESP-S-INVALID EXIT
+    THEN
+    2DUP R@ HTTP-RESPONSE-WRITER-SIZE MSPAN-OVERLAP? IF
+        2DROP 2DROP R> DROP HRESP-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK 3 PICK 3 PICK MSPAN-OVERLAP? IF
+        2DROP 2DROP R> DROP HRESP-S-INVALID EXIT
+    THEN
+    R@ HTTP-RESPONSE-WRITER-SIZE 0 FILL
+    3 PICK 3 PICK 0 FILL
+    2DUP 0 FILL
+    DUP R@ HRESP.SEND-CAPACITY !
+    OVER R@ HRESP.SEND-A !
+    2 PICK R@ HRESP.HEADER-CAPACITY !
+    3 PICK R@ HRESP.HEADER-A !
+    2DROP 2DROP
+    HRESP-STATE-BUILDING R@ HRESP.STATE !
+    HRESP-S-OK R@ HRESP.STATUS !
+    HRESP-OUTCOME-NONE R@ HRESP.OUTCOME !
+    R> DROP HRESP-S-OK ;
+
+: _HRESP-TERMINAL?  ( writer -- flag )
+    HRESP.STATE @ DUP HRESP-STATE-SENT =
+    OVER HRESP-STATE-ERROR = OR
+    SWAP HRESP-STATE-CANCELLED = OR ;
+
+: _HRESP-BORROWED?  ( writer -- flag )
+    HRESP.STATE @ DUP HRESP-STATE-READING =
+    SWAP HRESP-STATE-TRANSPORT = OR ;
+
+: _HRESP-CLEAR-OPERATION  ( writer -- )
+    >R
+    R@ HRESP.HEADER-A @ R@ HRESP.HEADER-CAPACITY @ 0 FILL
+    R@ HRESP.SEND-A @ R@ HRESP.SEND-CAPACITY @ 0 FILL
+    HRESP-STATE-BUILDING R@ HRESP.STATE !
+    HRESP-S-OK R@ HRESP.STATUS !
+    0 R@ HRESP.HTTP-STATUS !
+    0 R@ HRESP.FLAGS !
+    HRESP-OUTCOME-NONE R@ HRESP.OUTCOME !
+    0 R@ HRESP.HEADER-U !
+    0 R@ HRESP.HEADER-SENT !
+    0 R@ HRESP.BODY-U !
+    0 R@ HRESP.BODY-SENT !
+    0 R@ HRESP.CHUNK-U !
+    0 R@ HRESP.CHUNK-SENT !
+    0 R@ HRESP.SOURCE-CONTEXT !
+    0 R@ HRESP.SOURCE-READ-XT !
+    R> DROP ;
+
+: HRESP-RESET  ( writer -- status )
+    DUP HRESP-VALID? 0= IF DROP HRESP-S-INVALID EXIT THEN
+    DUP _HRESP-TERMINAL? 0= IF DROP HRESP-S-STATE EXIT THEN
+    _HRESP-CLEAR-OPERATION
+    HRESP-S-OK ;
+
+: HRESP-WIPE  ( writer -- status )
+    DUP HRESP-VALID? 0= IF DROP HRESP-S-INVALID EXIT THEN
+    DUP _HRESP-TERMINAL? 0= IF DROP HRESP-S-STATE EXIT THEN
+    DUP HRESP.HEADER-A @ OVER HRESP.HEADER-CAPACITY @ 0 FILL
+    DUP HRESP.SEND-A @ OVER HRESP.SEND-CAPACITY @ 0 FILL
+    HTTP-RESPONSE-WRITER-SIZE 0 FILL
+    HRESP-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Terminal publication
+\ ---------------------------------------------------------------------
+
+: _HRESP-CLEAR-CHUNK  ( writer -- )
+    DUP HRESP.SEND-A @ OVER HRESP.SEND-CAPACITY @ 0 FILL
+    DUP 0 SWAP HRESP.CHUNK-U !
+    0 SWAP HRESP.CHUNK-SENT ! ;
+
+: _HRESP-ERROR!  ( status writer -- )
+    >R
+    R@ _HRESP-CLEAR-CANCEL-REQUEST!
+    R@ _HRESP-CLEAR-CHUNK
+    DUP R@ HRESP.STATUS !
+    HRESP-STATE-ERROR R@ HRESP.STATE !
+    R@ _HRESP-FAILED-OUTCOME R@ HRESP.OUTCOME !
+    DROP R> DROP ;
+
+: _HRESP-BUILD-FAIL  ( status writer -- status )
+    OVER >R _HRESP-ERROR! R> ;
+
+: _HRESP-ERROR-PUMP  ( writer -- pump-status )
+    HRESP.OUTCOME @ HRESP-OUTCOME-FAILED-AFTER-BYTES =
+    IF HRESP-PUMP-ERROR-AFTER-BYTES
+    ELSE HRESP-PUMP-ERROR-BEFORE-BYTES THEN ;
+
+: _HRESP-CANCEL-PUMP  ( writer -- pump-status )
+    HRESP.OUTCOME @ HRESP-OUTCOME-CANCELLED-AFTER-BYTES =
+    IF HRESP-PUMP-CANCELLED-AFTER-BYTES
+    ELSE HRESP-PUMP-CANCELLED-BEFORE-BYTES THEN ;
+
+: _HRESP-SEND-FAIL  ( status writer -- pump-status )
+    DUP >R _HRESP-ERROR! R> _HRESP-ERROR-PUMP ;
+
+: _HRESP-CANCEL!  ( writer -- )
+    >R
+    R@ _HRESP-CLEAR-CANCEL-REQUEST!
+    R@ _HRESP-CLEAR-CHUNK
+    HRESP-S-CANCELLED R@ HRESP.STATUS !
+    HRESP-STATE-CANCELLED R@ HRESP.STATE !
+    R@ _HRESP-CANCELLED-OUTCOME R@ HRESP.OUTCOME !
+    R> DROP ;
+
+: HRESP-CANCEL  ( writer -- pump-status )
+    DUP HRESP-VALID? 0= IF DROP HRESP-PUMP-INVALID EXIT THEN
+    DUP HRESP.STATE @ HRESP-STATE-SENT = IF
+        DROP HRESP-PUMP-DONE EXIT
+    THEN
+    DUP HRESP.STATE @ HRESP-STATE-ERROR = IF
+        _HRESP-ERROR-PUMP EXIT
+    THEN
+    DUP HRESP.STATE @ HRESP-STATE-CANCELLED = IF
+        _HRESP-CANCEL-PUMP EXIT
+    THEN
+    DUP HRESP.STATE @ DUP HRESP-STATE-READING =
+    SWAP HRESP-STATE-TRANSPORT = OR IF
+        DUP _HRESP-CANCEL-REQUEST!
+        DROP HRESP-PUMP-CANCEL-PENDING EXIT
+    THEN
+    DUP _HRESP-CANCEL!
+    _HRESP-CANCEL-PUMP ;
+
+\ ---------------------------------------------------------------------
+\ Bounded header construction
+\ ---------------------------------------------------------------------
+
+: _HRESP-REMAINING  ( writer -- remaining-u )
+    DUP HRESP.HEADER-CAPACITY @ SWAP HRESP.HEADER-U @ - ;
+
+: _HRESP-VALUE-WITH-FIXED-FITS?  ( value-u fixed-u writer -- flag )
+    >R
+    OVER 0< OVER 0< OR IF 2DROP R> DROP 0 EXIT THEN
+    R@ _HRESP-REMAINING OVER < IF 2DROP R> DROP 0 EXIT THEN
+    R@ _HRESP-REMAINING SWAP - <=
+    R> DROP ;
+
+: _HRESP-APPEND  ( source-a source-u writer -- )
+    >R
+    DUP IF
+        2DUP R@ HRESP.HEADER-A @ R@ HRESP.HEADER-U @ + SWAP CMOVE
+        DUP R@ HRESP.HEADER-U +!
+    THEN
+    2DROP R> DROP ;
+
+: _HRESP-APPEND-C  ( c writer -- )
+    >R
+    R@ HRESP.HEADER-A @ R@ HRESP.HEADER-U @ + C!
+    1 R@ HRESP.HEADER-U +!
+    R> DROP ;
+
+: _HRESP-CRLF  ( writer -- )
+    >R 13 R@ _HRESP-APPEND-C 10 R> _HRESP-APPEND-C ;
+
+: _HRESP-APPEND-U  ( unsigned writer -- )
+    >R
+    DUP 10 >= IF
+        10 /MOD
+        R@ RECURSE
+        [CHAR] 0 + R> _HRESP-APPEND-C EXIT
+    THEN
+    [CHAR] 0 + R> _HRESP-APPEND-C ;
+
+: _HRESP-U-DIGITS  ( unsigned -- digits )
+    1 SWAP
+    BEGIN DUP 10 >= WHILE
+        10 / SWAP 1+ SWAP
+    REPEAT
+    DROP ;
+
+: _HRESP-FIELD-VALUE?  ( value-a value-u -- flag )
+    DUP 1 < IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ DUP 9 = IF
+            DROP
+        ELSE
+            DUP 32 < SWAP 126 > OR IF
+                DROP 0 UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _HRESP-TCHAR?  ( c -- flag )
+    DUP 33 < IF DROP 0 EXIT THEN
+    DUP 126 > IF DROP 0 EXIT THEN
+    DUP 34 = OVER 40 = OR OVER 41 = OR OVER 44 = OR
+    OVER 47 = OR OVER 58 = OR OVER 59 = OR OVER 60 = OR
+    OVER 61 = OR OVER 62 = OR OVER 63 = OR OVER 64 = OR
+    OVER 91 = OR OVER 92 = OR OVER 93 = OR OVER 123 = OR
+    OVER 125 = OR IF DROP 0 ELSE DROP -1 THEN ;
+
+: _HRESP-TOKEN?  ( addr len -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ _HRESP-TCHAR? 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _HRESP-LOWER  ( c -- c' )
+    DUP [CHAR] A >= OVER [CHAR] Z <= AND IF 32 + THEN ;
+
+: _HRESP-CIEQ?  ( a1 u1 a2 u2 -- flag )
+    2 PICK OVER <> IF 2DROP 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP 2DROP -1 EXIT THEN
+    >R SWAP DROP R>
+    0 ?DO
+        OVER I + C@ _HRESP-LOWER
+        OVER I + C@ _HRESP-LOWER
+        <> IF 2DROP 0 UNLOOP EXIT THEN
+    LOOP
+    2DROP -1 ;
+
+: _HRESP-GENERIC-VALUE?  ( value-a value-u -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP -1 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ DUP 32 < SWAP 127 = OR IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _HRESP-RESERVED-FIELD?  ( name-a name-u -- flag )
+    2DUP S" Content-Length" _HRESP-CIEQ? IF 2DROP -1 EXIT THEN
+    2DUP S" Transfer-Encoding" _HRESP-CIEQ? IF 2DROP -1 EXIT THEN
+    2DUP S" Connection" _HRESP-CIEQ? IF 2DROP -1 EXIT THEN
+    S" Content-Type" _HRESP-CIEQ? ;
+
+: _HRESP-SOURCE-DISJOINT?  ( source-a source-u writer -- flag )
+    >R
+    DUP 0= IF 2DROP R> DROP -1 EXIT THEN
+    2DUP R@ HTTP-RESPONSE-WRITER-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ HRESP.HEADER-A @ R@ HRESP.HEADER-CAPACITY @
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ HRESP.SEND-A @ R@ HRESP.SEND-CAPACITY @
+        MSPAN-OVERLAP? 0=
+    R> DROP ;
+
+: _HRESP-FIELD-FITS?  ( name-u value-u writer -- flag )
+    >R
+    OVER 1 < OVER 0< OR IF 2DROP R> DROP 0 EXIT THEN
+    R@ _HRESP-REMAINING DUP 4 < IF
+        DROP 2DROP R> DROP 0 EXIT
+    THEN
+    4 - 2 PICK < IF 2DROP R> DROP 0 EXIT THEN
+    R@ _HRESP-REMAINING 4 - ROT - <=
+    R> DROP ;
+
+: _HRESP-REASON$  ( code -- a u )
+    CASE
+        200 OF S" OK" ENDOF
+        201 OF S" Created" ENDOF
+        202 OF S" Accepted" ENDOF
+        204 OF S" No Content" ENDOF
+        205 OF S" Reset Content" ENDOF
+        206 OF S" Partial Content" ENDOF
+        301 OF S" Moved Permanently" ENDOF
+        302 OF S" Found" ENDOF
+        303 OF S" See Other" ENDOF
+        304 OF S" Not Modified" ENDOF
+        307 OF S" Temporary Redirect" ENDOF
+        308 OF S" Permanent Redirect" ENDOF
+        400 OF S" Bad Request" ENDOF
+        401 OF S" Unauthorized" ENDOF
+        403 OF S" Forbidden" ENDOF
+        404 OF S" Not Found" ENDOF
+        405 OF S" Method Not Allowed" ENDOF
+        408 OF S" Request Timeout" ENDOF
+        409 OF S" Conflict" ENDOF
+        410 OF S" Gone" ENDOF
+        411 OF S" Length Required" ENDOF
+        412 OF S" Precondition Failed" ENDOF
+        413 OF S" Content Too Large" ENDOF
+        414 OF S" URI Too Long" ENDOF
+        415 OF S" Unsupported Media Type" ENDOF
+        416 OF S" Range Not Satisfiable" ENDOF
+        417 OF S" Expectation Failed" ENDOF
+        421 OF S" Misdirected Request" ENDOF
+        422 OF S" Unprocessable Content" ENDOF
+        425 OF S" Too Early" ENDOF
+        426 OF S" Upgrade Required" ENDOF
+        428 OF S" Precondition Required" ENDOF
+        429 OF S" Too Many Requests" ENDOF
+        431 OF S" Request Header Fields Too Large" ENDOF
+        451 OF S" Unavailable For Legal Reasons" ENDOF
+        500 OF S" Internal Server Error" ENDOF
+        501 OF S" Not Implemented" ENDOF
+        502 OF S" Bad Gateway" ENDOF
+        503 OF S" Service Unavailable" ENDOF
+        504 OF S" Gateway Timeout" ENDOF
+        505 OF S" HTTP Version Not Supported" ENDOF
+        0 0 ROT
+    ENDCASE ;
+
+: HRESP-BEGIN  ( status-code writer -- status )
+    >R
+    R@ HRESP-VALID? 0= IF DROP R> DROP HRESP-S-INVALID EXIT THEN
+    R@ _HRESP-BORROWED? IF
+        DROP R> DROP HRESP-S-STATE EXIT
+    THEN
+    R@ HRESP.STATE @ HRESP-STATE-BUILDING <>
+    R@ HRESP.FLAGS @ HRESP-F-STATUS AND 0<> OR IF
+        DROP HRESP-S-STATE R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    DUP _HRESP-HTTP-STATUS? 0= IF
+        DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    DUP _HRESP-REASON$ NIP
+    S" HTTP/1.1 " NIP 3 +
+    S"  " NIP + 2 +
+    R@ _HRESP-VALUE-WITH-FIXED-FITS? 0= IF
+        DROP HRESP-S-CAPACITY R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    DUP R@ HRESP.HTTP-STATUS !
+    R@ HRESP.FLAGS DUP @ HRESP-F-STATUS OR SWAP !
+    S" HTTP/1.1 " R@ _HRESP-APPEND
+    DUP R@ _HRESP-APPEND-U
+    S"  " R@ _HRESP-APPEND
+    DUP _HRESP-REASON$ R@ _HRESP-APPEND
+    R@ _HRESP-CRLF
+    DROP R> DROP HRESP-S-OK ;
+
+: HRESP-CONTENT-TYPE  ( value-a value-u writer -- status )
+    >R
+    R@ HRESP-VALID? 0= IF 2DROP R> DROP HRESP-S-INVALID EXIT THEN
+    R@ _HRESP-BORROWED? IF
+        2DROP R> DROP HRESP-S-STATE EXIT
+    THEN
+    R@ HRESP.STATE @ HRESP-STATE-BUILDING <>
+    R@ HRESP.FLAGS @ HRESP-F-STATUS AND 0= OR
+    R@ HRESP.FLAGS @ HRESP-F-CONTENT-TYPE AND 0<> OR IF
+        2DROP HRESP-S-STATE R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    2DUP _HRESP-FIELD-VALUE? 0= IF
+        2DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    2DUP R@ _HRESP-SOURCE-DISJOINT? 0= IF
+        2DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    DUP S" Content-Type: " NIP 2 +
+    R@ _HRESP-VALUE-WITH-FIXED-FITS? 0= IF
+        2DROP HRESP-S-CAPACITY R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    S" Content-Type: " R@ _HRESP-APPEND
+    R@ _HRESP-APPEND
+    R@ _HRESP-CRLF
+    R@ HRESP.FLAGS DUP @ HRESP-F-CONTENT-TYPE OR SWAP !
+    R> DROP HRESP-S-OK ;
+
+\ Generic fields may repeat; framing and media fields remain dedicated APIs.
+: HRESP-HEADER-FIELD  ( name-a name-u value-a value-u writer -- status )
+    >R
+    R@ HRESP-VALID? 0= IF
+        2DROP 2DROP R> DROP HRESP-S-INVALID EXIT
+    THEN
+    R@ _HRESP-BORROWED? IF
+        2DROP 2DROP R> DROP HRESP-S-STATE EXIT
+    THEN
+    R@ HRESP.STATE @ HRESP-STATE-BUILDING <>
+    R@ HRESP.FLAGS @ HRESP-F-STATUS AND 0= OR IF
+        2DROP 2DROP HRESP-S-STATE R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    3 PICK 3 PICK _HRESP-TOKEN? 0= IF
+        2DROP 2DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    3 PICK 3 PICK _HRESP-RESERVED-FIELD? IF
+        2DROP 2DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    2DUP _HRESP-GENERIC-VALUE? 0= IF
+        2DROP 2DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    3 PICK 3 PICK R@ _HRESP-SOURCE-DISJOINT? 0= IF
+        2DROP 2DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    2DUP R@ _HRESP-SOURCE-DISJOINT? 0= IF
+        2DROP 2DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    2 PICK OVER R@ _HRESP-FIELD-FITS? 0= IF
+        2DROP 2DROP HRESP-S-CAPACITY R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    3 PICK 3 PICK R@ _HRESP-APPEND
+    S" : " R@ _HRESP-APPEND
+    2DUP R@ _HRESP-APPEND
+    R@ _HRESP-CRLF
+    2DROP 2DROP
+    R> DROP HRESP-S-OK ;
+
+: HRESP-BODY-SOURCE  ( body-u source-context source-read-xt writer -- status )
+    >R
+    R@ HRESP-VALID? 0= IF 2DROP DROP R> DROP HRESP-S-INVALID EXIT THEN
+    R@ _HRESP-BORROWED? IF
+        2DROP DROP R> DROP HRESP-S-STATE EXIT
+    THEN
+    R@ HRESP.STATE @ HRESP-STATE-BUILDING <>
+    R@ HRESP.FLAGS @ HRESP-F-STATUS AND 0= OR
+    R@ HRESP.FLAGS @ HRESP-F-SOURCE AND 0<> OR IF
+        2DROP DROP HRESP-S-STATE R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    2 PICK 0< IF
+        2DROP DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    DUP 0= 3 PICK 0> AND IF
+        2DROP DROP HRESP-S-INVALID R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    DUP R@ HRESP.SOURCE-READ-XT !
+    DROP
+    DUP R@ HRESP.SOURCE-CONTEXT !
+    DROP
+    R@ HRESP.BODY-U !
+    R@ HRESP.FLAGS DUP @ HRESP-F-SOURCE OR SWAP !
+    R> DROP HRESP-S-OK ;
+
+: HRESP-SEAL  ( writer -- status )
+    DUP HRESP-VALID? 0= IF DROP HRESP-S-INVALID EXIT THEN
+    DUP _HRESP-BORROWED? IF DROP HRESP-S-STATE EXIT THEN
+    DUP HRESP.STATE @ HRESP-STATE-BUILDING <>
+    OVER HRESP.FLAGS @ HRESP-F-STATUS HRESP-F-SOURCE OR AND
+        HRESP-F-STATUS HRESP-F-SOURCE OR <> OR IF
+        HRESP-S-STATE SWAP _HRESP-BUILD-FAIL EXIT
+    THEN
+    DUP HRESP.BODY-U @ 0>
+    OVER HRESP.FLAGS @ HRESP-F-CONTENT-TYPE AND 0= AND IF
+        HRESP-S-INVALID SWAP _HRESP-BUILD-FAIL EXIT
+    THEN
+    DUP HRESP.HTTP-STATUS @ _HRESP-NO-CONTENT?
+    OVER HRESP.BODY-U @ 0<> AND IF
+        HRESP-S-INVALID SWAP _HRESP-BUILD-FAIL EXIT
+    THEN
+    >R
+    R@ HRESP.HTTP-STATUS @ _HRESP-NO-CONTENT? IF
+        0 S" Connection: close" NIP 4 +
+    ELSE
+        R@ HRESP.BODY-U @ _HRESP-U-DIGITS
+        S" Content-Length: " NIP
+        S" Connection: close" NIP + 6 +
+    THEN
+    R@ _HRESP-VALUE-WITH-FIXED-FITS? 0= IF
+        HRESP-S-CAPACITY R> _HRESP-BUILD-FAIL EXIT
+    THEN
+    R@ HRESP.HTTP-STATUS @ _HRESP-NO-CONTENT? 0= IF
+        S" Content-Length: " R@ _HRESP-APPEND
+        R@ HRESP.BODY-U @ R@ _HRESP-APPEND-U
+        R@ _HRESP-CRLF
+    THEN
+    S" Connection: close" R@ _HRESP-APPEND
+    R@ _HRESP-CRLF
+    R@ _HRESP-CRLF
+    HRESP-STATE-SEALED R@ HRESP.STATE !
+    HRESP-S-OK R@ HRESP.STATUS !
+    R> DROP HRESP-S-OK ;
+
+\ ---------------------------------------------------------------------
+\ Read callback containment
+\ ---------------------------------------------------------------------
+
+: _HRESP-READ-CATCH  ( offset scratch-a requested-u context xt -- count source-status completed? )
+    CATCH ?DUP IF
+        2DROP 2DROP DROP
+        0 HRESP-SOURCE-S-FAILED 0 EXIT
+    THEN
+    -1 ;
+
+: _HRESP-SOURCE-REQUEST-U  ( writer -- requested-u )
+    DUP HRESP.BODY-U @ OVER HRESP.BODY-SENT @ -
+    SWAP HRESP.SEND-CAPACITY @ MIN ;
+
+: _HRESP-CALL-SOURCE  ( requested-u writer -- count source-status completed? )
+    >R
+    R@ HRESP.BODY-SENT @ SWAP
+    R@ HRESP.SEND-A @ SWAP
+    R@ HRESP.SOURCE-CONTEXT @
+    R@ HRESP.SOURCE-READ-XT @
+    _HRESP-READ-CATCH
+    R> DROP ;
+
+: _HRESP-FILL-SCRATCH  ( writer -- status )
+    >R
+    HRESP-STATE-READING R@ HRESP.STATE !
+    R@ _HRESP-SOURCE-REQUEST-U R@ _HRESP-CALL-SOURCE
+    R@ HRESP.STATE @ HRESP-STATE-READING <> IF
+        DROP 2DROP
+        R@ HRESP.STATE @ HRESP-STATE-CANCELLED = IF
+            R@ _HRESP-CLEAR-CHUNK
+            R> DROP HRESP-S-CANCELLED EXIT
+        THEN
+        R@ HRESP.STATE @ HRESP-STATE-ERROR = IF
+            R@ _HRESP-CLEAR-CHUNK
+            R@ HRESP.STATUS @ R> DROP EXIT
+        THEN
+        R> DROP HRESP-S-SOURCE-STALE EXIT
+    THEN
+    HRESP-STATE-SENDING R@ HRESP.STATE !
+    R@ _HRESP-CANCEL-REQUESTED? IF
+        DROP 2DROP
+        R@ _HRESP-CANCEL!
+        R> DROP HRESP-S-CANCELLED EXIT
+    THEN
+    0= IF
+        2DROP R> DROP HRESP-S-SOURCE-THREW EXIT
+    THEN
+    DUP _HRESP-SOURCE-STATUS? 0= IF
+        2DROP R> DROP HRESP-S-SOURCE-INVALID EXIT
+    THEN
+    DUP HRESP-SOURCE-S-OK = IF
+        DROP
+        DUP 0< IF DROP R> DROP HRESP-S-SOURCE-INVALID EXIT THEN
+        DUP 0= IF DROP R> DROP HRESP-S-SOURCE-ZERO EXIT THEN
+        DUP R@ _HRESP-SOURCE-REQUEST-U > IF
+            DROP R> DROP HRESP-S-SOURCE-OVERCOUNT EXIT
+        THEN
+        DUP R@ HRESP.CHUNK-U !
+        DROP
+        0 R@ HRESP.CHUNK-SENT !
+        R> DROP HRESP-S-OK EXIT
+    THEN
+    OVER 0<> IF 2DROP R> DROP HRESP-S-SOURCE-INVALID EXIT THEN
+    NIP CASE
+        HRESP-SOURCE-S-END OF
+            R> DROP HRESP-S-SOURCE-SHORT EXIT
+        ENDOF
+        HRESP-SOURCE-S-FAILED OF
+            R> DROP HRESP-S-SOURCE-FAILED EXIT
+        ENDOF
+        HRESP-SOURCE-S-CANCELLED OF
+            R> DROP HRESP-S-CANCELLED EXIT
+        ENDOF
+        HRESP-SOURCE-S-STALE OF
+            R> DROP HRESP-S-SOURCE-STALE EXIT
+        ENDOF
+        DROP R> DROP HRESP-S-SOURCE-INVALID EXIT
+    ENDCASE ;
+
+\ ---------------------------------------------------------------------
+\ Cooperative send pump
+\ ---------------------------------------------------------------------
+
+: HRESP-HEADER$  ( writer -- header-a header-u )
+    DUP HRESP.HEADER-A @ SWAP HRESP.HEADER-U @ ;
+
+: HRESP-HEADER-CAPACITY@  ( writer -- capacity )
+    DUP HRESP-VALID? 0= IF DROP 0 EXIT THEN
+    HRESP.HEADER-CAPACITY @ ;
+
+: HRESP-SEND-ARENA  ( writer -- send-a send-capacity )
+    DUP HRESP-VALID? 0= IF DROP 0 0 EXIT THEN
+    DUP HRESP.SEND-A @ SWAP HRESP.SEND-CAPACITY @ ;
+
+: HRESP-HEADER-SENT@  ( writer -- sent-u )
+    HRESP.HEADER-SENT @ ;
+
+: HRESP-BODY-U@  ( writer -- body-u )
+    HRESP.BODY-U @ ;
+
+: HRESP-BODY-SENT@  ( writer -- sent-u )
+    HRESP.BODY-SENT @ ;
+
+: _HRESP-PUBLISH-SENT  ( writer -- pump-status )
+    >R
+    R@ _HRESP-CLEAR-CANCEL-REQUEST!
+    HRESP-STATE-SENT R@ HRESP.STATE !
+    HRESP-S-OK R@ HRESP.STATUS !
+    HRESP-OUTCOME-SENT R@ HRESP.OUTCOME !
+    R> DROP HRESP-PUMP-DONE ;
+
+: _HRESP-SEND-HEADER  ( port writer -- pump-status )
+    >R
+    R@ HRESP.HEADER-A @ R@ HRESP.HEADER-SENT @ +
+    R@ HRESP.HEADER-U @ R@ HRESP.HEADER-SENT @ -
+    HRESP-STATE-TRANSPORT R@ HRESP.STATE !
+    ROT NIO-SEND
+    R@ HRESP.STATE @ HRESP-STATE-TRANSPORT <> IF
+        R@ HRESP.STATE @ HRESP-STATE-CANCELLED = IF
+            2DROP R@ _HRESP-CANCEL-PUMP R> DROP EXIT
+        THEN
+        R@ HRESP.STATE @ HRESP-STATE-ERROR = IF
+            2DROP R@ _HRESP-ERROR-PUMP R> DROP EXIT
+        THEN
+        2DROP HRESP-S-STATE R> _HRESP-SEND-FAIL EXIT
+    THEN
+    HRESP-STATE-SENDING R@ HRESP.STATE !
+    DUP NIO-S-CANCELLED = IF
+        2DROP
+        R@ _HRESP-CANCEL!
+        R@ _HRESP-CANCEL-PUMP R> DROP EXIT
+    THEN
+    DUP NIO-S-OK <> IF
+        2DROP HRESP-S-TRANSPORT R> _HRESP-SEND-FAIL EXIT
+    THEN
+    DROP
+    DUP 0> IF
+        DUP R@ HRESP.HEADER-SENT +!
+        R@ HRESP.HEADER-SENT @ R@ HRESP.HEADER-U @ = IF
+            R@ HRESP.BODY-U @ 0= IF
+                DROP R@ _HRESP-PUBLISH-SENT R> DROP EXIT
+            THEN
+        THEN
+        R@ _HRESP-CANCEL-REQUESTED? IF
+            DROP R@ _HRESP-CANCEL!
+            R@ _HRESP-CANCEL-PUMP R> DROP EXIT
+        THEN
+        DROP R> DROP HRESP-PUMP-PROGRESS EXIT
+    THEN
+    DROP
+    R@ _HRESP-CANCEL-REQUESTED? IF
+        R@ _HRESP-CANCEL!
+        R@ _HRESP-CANCEL-PUMP R> DROP EXIT
+    THEN
+    R> DROP HRESP-PUMP-IDLE ;
+
+: _HRESP-SEND-CHUNK  ( port writer -- pump-status )
+    >R
+    R@ HRESP.SEND-A @ R@ HRESP.CHUNK-SENT @ +
+    R@ HRESP.CHUNK-U @ R@ HRESP.CHUNK-SENT @ -
+    HRESP-STATE-TRANSPORT R@ HRESP.STATE !
+    ROT NIO-SEND
+    R@ HRESP.STATE @ HRESP-STATE-TRANSPORT <> IF
+        R@ HRESP.STATE @ HRESP-STATE-CANCELLED = IF
+            2DROP R@ _HRESP-CANCEL-PUMP R> DROP EXIT
+        THEN
+        R@ HRESP.STATE @ HRESP-STATE-ERROR = IF
+            2DROP R@ _HRESP-ERROR-PUMP R> DROP EXIT
+        THEN
+        2DROP HRESP-S-STATE R> _HRESP-SEND-FAIL EXIT
+    THEN
+    HRESP-STATE-SENDING R@ HRESP.STATE !
+    DUP NIO-S-CANCELLED = IF
+        2DROP
+        R@ _HRESP-CANCEL!
+        R@ _HRESP-CANCEL-PUMP R> DROP EXIT
+    THEN
+    DUP NIO-S-OK <> IF
+        2DROP HRESP-S-TRANSPORT R> _HRESP-SEND-FAIL EXIT
+    THEN
+    DROP
+    DUP 0> IF
+        DUP R@ HRESP.CHUNK-SENT +!
+        DUP R@ HRESP.BODY-SENT +!
+        DROP
+        R@ HRESP.CHUNK-SENT @ R@ HRESP.CHUNK-U @ = IF
+            0 R@ HRESP.CHUNK-U !
+            0 R@ HRESP.CHUNK-SENT !
+        THEN
+        R@ HRESP.BODY-SENT @ R@ HRESP.BODY-U @ = IF
+            R@ _HRESP-PUBLISH-SENT R> DROP EXIT
+        THEN
+        R@ _HRESP-CANCEL-REQUESTED? IF
+            R@ _HRESP-CANCEL!
+            R@ _HRESP-CANCEL-PUMP R> DROP EXIT
+        THEN
+        R> DROP HRESP-PUMP-PROGRESS EXIT
+    THEN
+    DROP
+    R@ _HRESP-CANCEL-REQUESTED? IF
+        R@ _HRESP-CANCEL!
+        R@ _HRESP-CANCEL-PUMP R> DROP EXIT
+    THEN
+    R> DROP HRESP-PUMP-IDLE ;
+
+: HRESP-SEND-STEP  ( port writer -- pump-status )
+    DUP HRESP-VALID? 0= IF 2DROP HRESP-PUMP-INVALID EXIT THEN
+    DUP HRESP.STATE @ HRESP-STATE-SENT = IF
+        2DROP HRESP-PUMP-DONE EXIT
+    THEN
+    DUP HRESP.STATE @ HRESP-STATE-ERROR = IF
+        NIP _HRESP-ERROR-PUMP EXIT
+    THEN
+    DUP HRESP.STATE @ HRESP-STATE-CANCELLED = IF
+        NIP _HRESP-CANCEL-PUMP EXIT
+    THEN
+    DUP HRESP.STATE @ HRESP-STATE-READING = IF
+        DUP _HRESP-CANCEL-REQUESTED?
+        IF 2DROP HRESP-PUMP-CANCEL-PENDING
+        ELSE 2DROP HRESP-PUMP-IDLE THEN
+        EXIT
+    THEN
+    DUP HRESP.STATE @ HRESP-STATE-TRANSPORT = IF
+        DUP _HRESP-CANCEL-REQUESTED?
+        IF 2DROP HRESP-PUMP-CANCEL-PENDING
+        ELSE 2DROP HRESP-PUMP-IDLE THEN
+        EXIT
+    THEN
+    DUP HRESP.STATE @ DUP HRESP-STATE-SEALED <>
+    SWAP HRESP-STATE-SENDING <> AND IF
+        NIP HRESP-S-STATE SWAP _HRESP-SEND-FAIL EXIT
+    THEN
+    HRESP-STATE-SENDING OVER HRESP.STATE !
+    DUP HRESP.HEADER-SENT @ OVER HRESP.HEADER-U @ < IF
+        _HRESP-SEND-HEADER EXIT
+    THEN
+    DUP HRESP.BODY-SENT @ OVER HRESP.BODY-U @ = IF
+        NIP _HRESP-PUBLISH-SENT EXIT
+    THEN
+    DUP HRESP.CHUNK-U @ 0= IF
+        DUP _HRESP-FILL-SCRATCH
+        OVER HRESP.STATE @ HRESP-STATE-CANCELLED = IF
+            DROP NIP _HRESP-CANCEL-PUMP EXIT
+        THEN
+        OVER HRESP.STATE @ HRESP-STATE-ERROR = IF
+            DROP NIP _HRESP-ERROR-PUMP EXIT
+        THEN
+        DUP HRESP-S-CANCELLED = IF
+            DROP NIP HRESP-CANCEL EXIT
+        THEN
+        DUP HRESP-S-OK <> IF
+            ROT DROP SWAP _HRESP-SEND-FAIL EXIT
+        THEN
+        DROP
+        2DROP HRESP-PUMP-PROGRESS EXIT
+    THEN
+    _HRESP-SEND-CHUNK ;
