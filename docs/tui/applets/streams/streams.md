@@ -1,12 +1,16 @@
 # Streams
 
-**Status:** current prototype and compatibility behavior
+**Status:** current prototype and compatibility behavior plus a qualified
+standalone SR1 core; SR2 applet/HTTP composition is next
 
 **Forward product contract:**
 [`information-integration.md`](information-integration.md)
 
 **SR0 inventory and disposition:**
 [`sr0-reconciliation.md`](sr0-reconciliation.md)
+
+**SR1 core and qualification:**
+[`sr1-storage-free-core.md`](sr1-storage-free-core.md)
 
 **Architectural reset:**
 [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
@@ -16,6 +20,22 @@ the forward product definition. Streams is now defined as bidirectional
 internet-data infrastructure: connectors, bounded events, flows, queues,
 attempts, input, output, delivery, and reconciliation. Library remains the
 owner of deliberately retained documents and corpus behavior.
+
+The new storage-free `flow-core.f` is the first qualified implementation of
+that replacement direction. It provides caller-owned input, output, and
+bidirectional connector descriptors, exact bounded event envelopes, a
+one-slot flow, and separate ingress/egress attempt truth. Its fixed ceilings
+are 4,096 payload bytes and 256 output-operation bytes. Deterministic mocks
+qualify exact input → transform → output, full-queue refusal, cancellation,
+timeout, stale state, failed-before, failed-after-known-effect,
+indeterminate-effect, and exactly-once cleanup behavior.
+
+That module is deliberately standalone. `streams.f` does not require it, Desk
+does not host it, no applet capability exposes it, and it has no persistence,
+VFS, HTTP/web, durable queue, AT Protocol, Library/Pad, UI, or live-network
+composition. Its mock output is not evidence that the current applet can send
+or respond. The precise boundary and evidence are recorded in
+[`sr1-storage-free-core.md`](sr1-storage-free-core.md).
 
 The current prototype is still primarily a Bluesky-shaped reader plus a
 configured-source acquisition path. Its first end-to-end configured-source

@@ -537,7 +537,7 @@ long logical operations may publish physical roots without falsely advancing
 their logical generation. Query, membership, content, and compaction work use
 bounded caller-owned working sets instead of aggregate corpus allocation.
 
-The clean SR1 tree at `ab269b160e44923de7aeabb5a4891f9cb0130e53`
+The clean SR1 tree at `746c847304bf2906c7b18f18021640288b98e754`
 contains 421 modules, 1,386 resolved `REQUIRE` occurrences and unique edges,
 78 unchanged reviewed unresolved imports, no cycle, no layer violation, and no
 placement debt. Its graph digest is

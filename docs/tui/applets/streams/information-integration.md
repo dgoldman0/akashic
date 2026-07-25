@@ -1,12 +1,16 @@
 # Streams information integration contract
 
-**Status:** SR0 normative product and ownership contract
+**Status:** normative product and ownership contract; SR0 and the standalone
+storage-free SR1 core complete; SR2 is next
 
 **Reconciled:** 2026-07-25
 
 **Controlling decision:** [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
 **SR0 inventory and disposition:** [`sr0-reconciliation.md`](sr0-reconciliation.md)
+
+**SR1 core and qualification:**
+[`sr1-storage-free-core.md`](sr1-storage-free-core.md)
 
 **Current implementation:** [`streams.md`](streams.md)
 
@@ -87,8 +91,10 @@ copies it nor grants an operation.
 
 ## Streams-owned contracts
 
-The exact ABIs are SR1 work. The following semantic separation is already
-normative.
+SR1 seals the minimum standalone connector, event, flow, and attempt ABIs
+described below. Protocol-specific extension, persistence, applet/Desk
+composition, and cross-owner capability schemas remain work for their named
+later milestones.
 
 ### Connector
 
@@ -197,10 +203,10 @@ construction, routing, middleware, server behavior, templates, and a concrete
 RPC composition.
 
 Those packages are starting points, not a completed cooperative web runtime.
-Before the first Streams route depends on them, SR1/SR2 must make required
-state caller-owned, bound request and response bodies, integrate cancellation
-and cleanup, avoid a blocking accept/serve loop, and qualify framing,
-smuggling, route isolation, and simultaneous connection ownership.
+Before the first Streams route depends on them, SR2 must make required
+protocol state caller-owned, bound request and response bodies, compose SR1
+cancellation and cleanup, avoid a blocking accept/serve loop, and qualify
+framing, smuggling, route isolation, and simultaneous connection ownership.
 
 Routes, requests, responses, middleware, and template expansion remain general
 `web/` behavior. Streams owns the admitted route/connector, event flow,
@@ -259,8 +265,10 @@ under a later contract. Streams may reference and render them through general
 
 ## Capability horizon
 
-Names and schemas below are directional, not stable ABI assignments. SR1
-seals the minimum set before implementation.
+Names and schemas below are directional, not stable capability ABI
+assignments. The SR1 record seals only the minimum storage-free runtime
+descriptors; SR2 and later milestones must close their own protocol and
+cross-owner schemas before composition.
 
 | Resource/effect | Required shape |
 | --- | --- |
@@ -292,6 +300,12 @@ in [`streams.md`](streams.md):
 - the fixed source and observation snapshot stores; and
 - the landed but not production-composed L13 repository modules.
 
+The standalone SR1 `flow-core.f` now sits beside those compatibility surfaces.
+It is the first qualified replacement implementation, but it is not required
+by `streams.f`, exposed as an applet capability, composed with Desk, connected
+to HTTP/web, or backed by any durable store. Its deterministic mock output is
+therefore not a claim of production applet output.
+
 Disposition:
 
 - preserve existing behavior until a separately qualified compatibility
@@ -314,7 +328,9 @@ tax.
 
 ## First replacement slice
 
-The first demonstrator is deliberately HTTP-first and storage-light:
+SR1 has qualified the storage-free mock connector → event → transform →
+output semantics. The first composed demonstrator remains SR2 and is
+deliberately HTTP-first and storage-light:
 
 1. Configure a local route such as `POST /hooks/demo`.
 2. Receive one bounded JSON or form request without blocking Desk.
@@ -327,10 +343,10 @@ The first demonstrator is deliberately HTTP-first and storage-light:
    indeterminate state.
 8. Leave Library unchanged unless the user explicitly chooses Collect.
 
-The in-memory/mock flow contract is qualified before durable queues. The real
-HTTP slice is qualified before AT Protocol and Bluesky restructuring. Output,
-AT Protocol restructuring, and Library/draft migration must not be combined in
-one landing.
+The in-memory/mock flow contract is now qualified before durable queues. The
+real HTTP slice remains unqualified and comes before AT Protocol and Bluesky
+restructuring. HTTP output, AT Protocol restructuring, and Library/draft
+migration must not be combined in one landing.
 
 ## Acceptance and evidence
 
@@ -361,3 +377,16 @@ The first slice must prove:
 No label implies a stronger one. Concurrency may increase physical throughput,
 but one-worker and many-worker execution must preserve the same event,
 backpressure, retry, delivery, and cleanup semantics.
+
+SR1 earns only `offline-contract` and the standalone/mock form of
+`bidirectional-flow`. Its one-slot flow, 4,096-byte payload ceiling, 256-byte
+output-operation ceiling, exact payload copy/digest, single-shot ownership
+with failed-seal rollback, separate ingress and egress attempts, full-queue
+refusal, failure/effect distinctions, cancel-callback faults,
+timeout/deadline-overflow/stale handling, and exactly-once cleanup are
+qualified by
+[`test_streams_sr1_core.py`](../../../../local_testing/test_streams_sr1_core.py).
+[`test_streams_sr1_static.py`](../../../../local_testing/test_streams_sr1_static.py)
+qualifies the storage-free dependency closure and absence of top-level mutable
+definitions in `flow-core.f`. None of the protocol, transport, live, Desk, or
+hardware labels has been earned.

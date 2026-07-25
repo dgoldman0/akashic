@@ -2,7 +2,7 @@
   "schema": "akashic.refactor.l0",
   "baseline": {
     "name": "streams-sr1-core-baseline-20260725",
-    "commit": "ab269b160e44923de7aeabb5a4891f9cb0130e53",
+    "commit": "746c847304bf2906c7b18f18021640288b98e754",
     "expected": {
       "module_count": 421,
       "resolved_require_occurrence_count": 1386,
