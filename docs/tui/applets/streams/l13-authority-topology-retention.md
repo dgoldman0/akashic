@@ -1,6 +1,21 @@
-# L13 Streams authority, topology, retention, and cutover
+# Halted L13 Streams authority, topology, retention, and cutover
 
-Status: normative implementation decision for L13.
+**Status:** cancelled historical prototype decision; non-normative
+
+**Halted:** 2026-07-25
+
+**Controlling contract:** [`information-integration.md`](information-integration.md)
+
+**Reset rationale and salvage ledger:**
+[Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
+
+> This entire document records the design of the cancelled L13
+> observation-repository effort. It is retained so its implementation,
+> migration, failure, and scale decisions can be understood and selectively
+> mined. Do not activate the four-tree authority, run its migration or
+> authority flip, finish the uncommitted applet cutover, or use its acceptance
+> checklist. Its monitored-inbox and no-output boundary does not describe the
+> replacement Streams product.
 
 This decision covers configured streaming sources, acquisition attempts,
 observation identities and revisions, acquired content, query indexes,

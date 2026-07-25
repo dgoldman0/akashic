@@ -1,16 +1,31 @@
 # Streams
 
-Streams is moving from a Bluesky-shaped reader toward the Desk ecosystem's
-bounded information-integration applet. Its first end-to-end configured-source
-slice can now manually refresh one exact enabled RSS, Atom, or JSON Feed source
+**Status:** current prototype and compatibility behavior
+
+**Forward product contract:**
+[`information-integration.md`](information-integration.md)
+
+**SR0 inventory and disposition:**
+[`sr0-reconciliation.md`](sr0-reconciliation.md)
+
+**Architectural reset:**
+[Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
+
+This document describes what the current prototype actually does. It is not
+the forward product definition. Streams is now defined as bidirectional
+internet-data infrastructure: connectors, bounded events, flows, queues,
+attempts, input, output, delivery, and reconciliation. Library remains the
+owner of deliberately retained documents and corpus behavior.
+
+The current prototype is still primarily a Bluesky-shaped reader plus a
+configured-source acquisition path. Its first end-to-end configured-source
+slice can manually refresh one exact enabled RSS, Atom, or JSON Feed source
 revision through Desk external I/O, retain immutable observation versions in a
 replacement store, suppress exact unchanged versions, and recover an
 interrupted accepted attempt truthfully. The durable multi-kind source
-registry, sanitized source resources, watched-page codecs, existing retained
-Bluesky page, partial-thread navigation, local search, and crash-recoverable
-unpublished draft remain alongside that path. The Bluesky surface is retained
-compatibility, and the draft is frozen legacy-to-migrate input; neither defines
-the configured-source product.
+registry, sanitized source resources, watched-page codecs, retained Bluesky
+page, partial-thread navigation, local search, and crash-recoverable
+unpublished draft remain alongside that path.
 
 Ordinary `STREAMS-ENTRY` remains offline even when Desk exposes external I/O:
 it installs no concrete configured-source provider factory, and source
@@ -22,13 +37,15 @@ may separately import a reviewed exact-host MPTA artifact before freezing
 machine trust; source creation, applet launch, and refresh cannot add or widen
 trust. The repository ships neither a catch-all feed trust set nor an ambient
 WebPKI fallback. Credentials, scheduling, notification providers, outputs, and
-publication are not supported. The complete target boundary and deliberately
-unimplemented portions are recorded in
+publication are not implemented by the current applet. Their correct forward
+ownership and sequencing are recorded in
 [information-integration.md](information-integration.md).
 
-L13's scalable configured-source authority, four-index topology, conservative
-no-admission-eviction policy, and cold one-way cutover are fixed in
-[l13-authority-topology-retention.md](l13-authority-topology-retention.md).
+The former L13 scalable configured-source authority, four-index topology,
+retention policy, and cold one-way cutover are cancelled product work. Their
+historical design and salvage evidence remain in
+[`l13-authority-topology-retention.md`](l13-authority-topology-retention.md);
+do not finish or activate that cutover.
 
 Normal launches start with no feed and recover the draft stored by the
 preceding launch. The host qualification harness alone injects a hand-authored
@@ -36,18 +53,21 @@ synthetic page under `/testing/streams/`; `timeline.json` is test input, not a
 runtime fallback or library data source.
 
 The five `streams.draft.*` capabilities and `/streams-draft.bin` remain
-behavior-compatible only for recovery and later explicit migration. New code
-must not build output documents, saved sets, Library access, or generic text
-storage on that surface. The exact Gate 0 revision-7 record is retained as
-migration input; Library must not read the path or codec.
+behavior-compatible for recovery and possible explicit export if real user
+content is identified. New code must not build output delivery, saved sets,
+Library access, or generic text storage on that surface. Future output uses
+connector/event/delivery contracts, not the draft. The exact Gate 0 revision-7
+record is a deterministic compatibility fixture and possible export witness,
+not proof that a migration is required. Library must not read the path or
+codec.
 
 Streams is a peer applet, not an inter-applet coordinator. Desk hosts target
 discovery, capability dispatch, review composition, and applet lifecycle.
 Practice retains durable contextual bindings and authority policy; Streams
 still validates and owns each operation over its state. This shared boundary
-does not make Streams a special workflow substrate.
+does not make Streams a universal workflow engine.
 
-## Capability surface
+## Current capability surface
 
 Every capability has a distinct bounded input and output schema. Map schemas
 are closed, every declared field is required, retained-feed lists are capped
@@ -73,9 +93,10 @@ so external text cannot be interpreted as protocol structure.
 | `streams.source.set-enabled` | `{resource, enabled}` | sanitized source map | Mutate + Persist |
 | `streams.source.refresh` | `{resource, expected_revision}` | `{resource, source_revision, accepted, request_generation, state}` | Persist + External |
 
-The draft rows above describe current compatibility behavior, not the near
-Streams capability target. They remain unchanged until the separately gated,
-verified Library migration and cutover.
+Every row above describes current prototype or compatibility behavior, not the
+forward Streams capability target. The draft rows remain unchanged until an
+explicit compatibility retirement, with a separately gated and verified
+Library migration only if actual user content is found.
 
 An item map contains `resource`, `provider`, `provenance`, `cid`, `author`,
 `text`, `created_at`, `indexed_at`, `counts`, `reply`, and `reason`. `author`
@@ -112,7 +133,7 @@ retained author-feed page is not a complete conversation fetch. Feed reads
 also expose the retained cursor and last accepted request generation. Local
 search reports the scope `retained`.
 
-## Configured sources
+## Current configured sources
 
 Normal lifecycle initialization binds `/streams-sources.bin` and recovers a
 pointer-free registry of at most sixteen sources. A source has a stable local
@@ -199,7 +220,7 @@ yet wired acquisition providers or evidence that configured HTTP acquisition,
 observation persistence, scheduling, notifications, outputs, or Outbox are
 complete.
 
-## Manual-refresh observation store
+## Current manual-refresh observation store
 
 Normal lifecycle now owns an exactly 131,072-byte (128 KiB), pointer-free
 observation checkpoint behind the optimistic replacement record
@@ -249,15 +270,18 @@ observation companion was ever established. A missing observation record is
 therefore treated as the legitimate never-refreshed state; Streams cannot yet
 distinguish that case from external loss of a previously established companion
 and makes no stronger pair-loss claim. A durable pair marker and migration are
-required before that distinction can fail closed.
+required before that old format could distinguish the cases; SR0 does not
+authorize adding them to continue the compatibility model.
 
-## Local drafts
+## Current local-draft compatibility
 
 This section is a compatibility record for the frozen legacy owner. The draft
-is not the model for future Streams outputs or retained findings. Migration
-must be non-destructive and idempotent, preserve the original record as
-recovery evidence, and use a Streams-owned adapter plus ordinary typed Library
-operations after Library is qualified. Gate 1 performs none of that migration.
+is not the model for future Streams outputs or retained findings. If actual
+user content is identified, its migration must be non-destructive and
+idempotent, preserve the original record as recovery evidence, and use a
+Streams-owned adapter plus ordinary typed Library operations. If no real data
+exists, SR6 may retire the compatibility owner without building a migration
+framework, after explicit approval.
 
 The current target-scoped draft has the stable resource
 `streams:draft:local` and the shape `{resource, revision, text}`. Creation is
@@ -293,7 +317,7 @@ nullable `problem`. This draft revision is part of the Streams resource
 contract; it is separate from the component revision used by Desk's request
 bus for owner-level optimistic concurrency.
 
-## Applet interaction
+## Current applet interaction
 
 The `Sources` menu, `S`, or `Ctrl+S` opens the standalone source manager.
 Users can add syndication feeds and watched pages using a conservative
@@ -350,7 +374,7 @@ movement do not. Capability draft handlers use the underlying mutation path
 without touching the owner themselves because Desk's request bus performs that
 commit for successful mutating calls.
 
-## Integration boundary
+## Current integration and qualification boundary
 
 Other applets can currently read explicit item, thread, feed, selection, draft,
 and sanitized source resources through Desk's ordinary typed capability path.
@@ -361,10 +385,12 @@ selection may be observed but must not retarget an Agent-visible or scheduled
 mutation. Desk owns discovery, dispatch, review composition, lifecycle, and
 machine-serialized external I/O. Practice owns durable contextual bindings and
 authority policy, while Streams validates and owns its operation semantics.
-In an explicit configured composition, Streams owns provider admission, HTTP
-policy, feed decode, observation deduplication, and durable
+In the current explicit configured composition, Streams owns provider
+admission, HTTP policy, feed decode, observation deduplication, and durable
 attempt/observation commit. A composed instance commits a completion only when
-instance, source, owner, and request generations remain exact.
+instance, source, owner, and request generations remain exact. This is a
+description of the compatibility implementation, not a requirement that the
+replacement event/flow runtime retain its observation corpus.
 
 The external-I/O service is not itself a Streams capability, and Streams does
 not coordinate unrelated applets. When a live Streams target exists, Desk's
@@ -373,8 +399,10 @@ curated Observe facet may expose only `streams.source.query` and
 generation. It grants neither endpoint/configuration disclosure nor source
 mutation, refresh, staging, dispatch, or any external effect. Public reads
 require no app password, and Streams accepts or stores no credential.
-Authenticated AT Protocol operations and publication remain outside this
-applet boundary.
+Authenticated AT Protocol operations and publication are currently
+unimplemented. General caller-owned AT Protocol/PDS machinery belongs under
+`akashic/atproto/`; future Streams input and output connectors compose it, with
+Bluesky as one application profile.
 
 The deterministic `streams-refresh-owner-contracts` gate covers durable
 acceptance-before-XIO, decode/apply commit, exact deduplication, stale and
