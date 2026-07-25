@@ -31,6 +31,30 @@ from refactor_inventory import (
     load_policy,
 )
 
+DORMANT_STREAMS_L13_MODULES = {
+    "tui/applets/streams/acquisition-authority.f",
+    "tui/applets/streams/apply-authority.f",
+    "tui/applets/streams/authority-root.f",
+    "tui/applets/streams/compaction.f",
+    "tui/applets/streams/index-keys.f",
+    "tui/applets/streams/index-record-agreement.f",
+    "tui/applets/streams/migration.f",
+    "tui/applets/streams/observation-construction.f",
+    "tui/applets/streams/persistence-adapter.f",
+    "tui/applets/streams/persistence-records.f",
+    "tui/applets/streams/query.f",
+    "tui/applets/streams/repository-refresh-owner.f",
+    "tui/applets/streams/repository.f",
+    "tui/applets/streams/runtime-owner.f",
+    "tui/applets/streams/semantic-record-agreement.f",
+    "tui/applets/streams/source-authority.f",
+}
+COMMITTED_STREAMS_COMPATIBILITY_ROOTS = (
+    "tui/applets/streams/streams.f",
+    "tui/applets/streams/streams-online.f",
+)
+STREAMS_SR1_CORE = "tui/applets/streams/flow-core.f"
+
 
 def _policy() -> dict:
     return load_policy()
@@ -99,9 +123,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 404,
-        "resolved_require_occurrence_count": 1333,
-        "unique_resolved_edge_count": 1333,
+        "module_count": 421,
+        "resolved_require_occurrence_count": 1386,
+        "unique_resolved_edge_count": 1386,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -206,6 +230,31 @@ def test_every_module_has_a_reviewed_responsibility_class() -> None:
     assert classify_module("new-product/widget.f", _policy())["class"] == (
         "unclassified"
     )
+
+
+def test_halted_streams_l13_modules_are_exact_and_dormant() -> None:
+    policy = _policy()
+    historical_rules = {
+        rule["module"]: rule
+        for rule in policy["ownership"]["exact"]
+        if rule.get("ownership_decision") == "historical-dormant-l13"
+    }
+    assert set(historical_rules) == DORMANT_STREAMS_L13_MODULES
+    assert all(
+        rule["class"] == "applet"
+        and rule["owner"] == "streams"
+        and rule["placement"] == "correct"
+        and rule["target"] == module
+        for module, rule in historical_rules.items()
+    )
+
+    for root in (
+        *COMMITTED_STREAMS_COMPATIBILITY_ROOTS,
+        STREAMS_SR1_CORE,
+    ):
+        closure = set(dependency_closure(SOURCE_ROOT, (root,)))
+        assert root in closure
+        assert DORMANT_STREAMS_L13_MODULES.isdisjoint(closure), root
 
 
 def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
@@ -406,6 +455,28 @@ def test_capacity_ledger_is_live_and_distinguishes_scope() -> None:
         "simultaneous-instances",
         "work-scheduling",
     }
+    compatibility_ids = {
+        capacity["id"]
+        for capacity in _policy()["capacities"]
+        if capacity.get("status") == "compatibility"
+    }
+    assert compatibility_ids == {
+        "streams.sources",
+        "streams.observations",
+        "streams.keys",
+        "streams.checkpoint-bytes",
+        "streams.source-registry",
+    }
+    active_sr1_ids = {
+        capacity["id"]
+        for capacity in _policy()["capacities"]
+        if capacity.get("status") == "active-sr1"
+    }
+    assert active_sr1_ids == {
+        "streams.sr1-queue-slots",
+        "streams.sr1-payload-bytes",
+        "streams.sr1-operation-bytes",
+    }
 
 
 def test_structure_and_complexity_ledger_is_source_anchored() -> None:
@@ -430,6 +501,20 @@ def test_structure_and_complexity_ledger_is_source_anchored() -> None:
     assert all("O(" in item["current_complexity"] for item in ledger)
     statuses = {item["id"]: item.get("status", "open") for item in ledger}
     assert statuses["library.metadata-mutation"] == "resolved"
+    assert statuses["streams.observation-checkpoint"] == (
+        "superseded-compatibility"
+    )
+    checkpoint = next(
+        item
+        for item in ledger
+        if item["id"] == "streams.observation-checkpoint"
+    )
+    assert checkpoint["replacement_requirement"] == (
+        "retain only as frozen compatibility evidence until SR6 retirement; "
+        "derive any future operational persistence from the SR2 flow and "
+        "delivery semantics in SR3, never from the superseded observation "
+        "corpus"
+    )
     target_landings = {item["id"]: item["target_landing"] for item in ledger}
     assert target_landings["library.metadata-mutation"] == "L12"
     assert "library.corpus-query" not in target_landings
@@ -467,12 +552,14 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         "purpose": "prove the live Library index geometry, amplification, and bounded working memory without aggregate target allocation",
     }
     assert policy["scale_profiles"]["streams"]["workstation"] == {
+        "status": "historical-inactive",
         "sources": 10000,
         "observations": 1000000,
         "retained_attempts": 2000000,
         "purpose": "interactive Streams source, refresh, timeline, thread, and search qualification",
     }
     assert policy["scale_profiles"]["streams"]["large_host_model"] == {
+        "status": "historical-inactive",
         "sources": 100000,
         "observations": 10000000,
         "retained_attempts": 20000000,
@@ -491,6 +578,29 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
     assert policy["scale_profiles"]["persistence_instance_workload"] == {
         "interleaved_stores": 4,
         "hidden_process_global_current_store": False,
+    }
+    assert policy["scale_profiles"]["streams_model_workload"]["status"] == (
+        "historical-inactive"
+    )
+    assert policy["scale_profiles"]["sr1_contract"] == {
+        "status": "active",
+        "input_connectors": 1,
+        "flows": 1,
+        "transforms": 1,
+        "output_connectors": 1,
+        "queue_slots": 1,
+        "payload_max_bytes": 4096,
+        "operation_max_bytes": 256,
+        "storage": "none",
+        "qualification": "deterministic-mocks",
+    }
+    assert policy["scale_profiles"]["future_sr6"] == {
+        "status": "deferred",
+        "workload": (
+            "derive scale profiles from real connector, flow, queue, "
+            "delivery, concurrency, throughput, latency, memory, "
+            "disk-amplification, and recovery behavior"
+        ),
     }
     assert policy["hot_path_budgets"] == {
         "cold_open_max_metadata_pages": 64,
@@ -610,6 +720,11 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         "Daybook/Pad/Grid/FExplorer": "functional-and-capacity-only",
         "Desk/TUI": "journey-only",
     }
+    streams_coverage = next(
+        entry for entry in baseline["coverage"] if entry["area"] == "Streams"
+    )
+    assert "SR2+" in streams_coverage["missing"]
+    assert "SR6" in streams_coverage["missing"]
 
 
 def test_live_module_inventory_includes_exact_mutable_symbols() -> None:

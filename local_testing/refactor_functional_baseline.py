@@ -46,7 +46,9 @@ EXPECTED_DIRECT_INPUT_APPLETS = {
     "soundlab",
     "streams",
 }
-VALID_LANDINGS = {f"L{number}" for number in range(2, 15)}
+VALID_LANDINGS = {f"L{number}" for number in range(2, 15)} | {
+    f"SR{number}" for number in range(1, 7)
+}
 VALID_COVERAGE = {"covered", "partial", "prerequisite"}
 
 

@@ -18,6 +18,31 @@ machine-readable graph and includes every production module, every resolved and
 unresolved `REQUIRE` occurrence, ownership/target placement, exact lexical
 mutable symbols, declared capacities, and reviewed scale profiles.
 
+## SR0/SR1 Streams reset amendment
+
+The 2026-07-25 Streams architectural reset supersedes the original
+observation-repository L13 direction without rewriting its evidence. Sixteen
+landed L13 production modules remain under their correct Streams applet owner
+but now carry the exact
+`ownership_decision: historical-dormant-l13`. Neither the committed
+compatibility applet roots nor the additive SR1 flow core may import any of
+them.
+
+The old Streams workstation and large-host observation profiles and their
+model workload remain numerically intact as `historical-inactive` evidence.
+They are not SR1 acceptance targets. SR1 instead proves exactly one
+deterministic in-memory input connector, flow, transform, and output connector
+with one queue slot, a 4,096-byte maximum payload, a 256-byte maximum connector
+operation, and no storage. A corrected scale workload is deferred to SR6,
+after real connector, flow, queue, and delivery behavior exists.
+
+The five source/observation checkpoint capacities remain source-anchored
+compatibility facts. The whole-corpus observation checkpoint complexity item is
+`superseded-compatibility`: its replacement is not the cancelled indexed
+observation repository. Any required operational persistence will be derived
+from the proven SR2 flow and delivery semantics in SR3; compatibility
+retirement and corrected scale qualification belong to SR6.
+
 ## Settled ownership model
 
 There are three active ownership classes:
@@ -42,7 +67,9 @@ ledger consequently classifies:
   product policy;
 - the shared-document lens as transitional resource-session machinery whose
   neutral successor remains under interop;
-- Streams source/observation/store/refresh modules as correctly applet-owned;
+- the current Streams compatibility source/observation/store/refresh modules as
+  correctly applet-owned, while the sixteen rejected L13 repository modules
+  remain explicitly historical and dormant;
 - Agent authentication/settings widgets as misplaced Agent-applet widgets.
 
 Game is the explicit exception to final ownership settlement. `game/` retains
@@ -128,15 +155,20 @@ unlinked numbers into prose. Each entry distinguishes its scope and scale axis:
 
 The initial ledger covers Library, Streams, Agent, Daybook, Pad, Grid,
 FExplorer, Desk, runtime registries, request bus, UIDL, app-shell, and tree
-limits. The JSON report fails if any named literal silently changes.
+limits. The JSON report fails if any named literal silently changes. The five
+old Streams corpus/checkpoint entries are labeled `compatibility`; SR1's
+separate queue, payload, and operation bounds describe only the storage-free
+flow core.
 
 A separate source-anchored complexity ledger records the current structure,
 operation, complexity, scale failure, replacement requirement, and landing for
 13 major hot paths. Every claim names live Forth words that must still exist;
 the ratchet fails if prose drifts away from the source being described. Library
-entries target L12 and Streams targets L13. Agent, Daybook, Pad, FExplorer,
-Grid, Desk-catalog, runtime-registry, request-bus, and UIDL scale directions
-remain recorded but explicitly deferred.
+entries target L12. The Streams checkpoint entry's L13 attribution is
+historical and its status is `superseded-compatibility`; it cannot authorize
+the cancelled repository design. Agent, Daybook, Pad, FExplorer, Grid,
+Desk-catalog, runtime-registry, request-bus, and UIDL scale directions remain
+recorded but explicitly deferred.
 
 `target_landing` records the landing responsible for an item; it is not itself
 an open/closed flag. Resolved items carry an explicit `status`. The Library
@@ -146,22 +178,27 @@ admission work has landed.
 
 ## Scale profiles and units
 
-The active qualification targets are applet-specific:
+The qualification profiles are applet-specific, and their status is part of
+the contract:
 
-| Profile | Shape |
-| --- | --- |
-| Library workstation | 100,000 documents, at least 1,000,000 revisions or relationships, and content beyond 64 KiB |
-| Library large host/model | 1,000,000 documents, 10,000,000 revisions, and 10,000,000 relationship edges |
-| Streams workstation | 10,000 sources, 1,000,000 observations, and 2,000,000 retained attempts |
-| Streams large host/model | 100,000 sources, 10,000,000 observations, and 20,000,000 retained attempts |
-| Emulator | Reduced applet-specific datasets at structural transitions preserving index-height, page-count, amplification, working-set, and fault invariants |
+| Profile | Status | Shape |
+| --- | --- | --- |
+| Library workstation | active | 100,000 documents, at least 1,000,000 revisions or relationships, and content beyond 64 KiB |
+| Library large host/model | active | 1,000,000 documents, 10,000,000 revisions, and 10,000,000 relationship edges |
+| Streams workstation | historical-inactive | 10,000 sources, 1,000,000 observations, and 2,000,000 retained attempts |
+| Streams large host/model | historical-inactive | 100,000 sources, 10,000,000 observations, and 20,000,000 retained attempts |
+| Streams SR1 | active | one deterministic mock input, flow, transform, and output; one queue slot; payloads at most 4,096 bytes; connector operations at most 256 bytes; no storage |
+| Streams SR6 | deferred | workload-derived connector, flow, queue, delivery, concurrency, throughput, latency, memory, disk-amplification, and recovery profiles |
+| Emulator | representative-reduced | Applet-specific datasets at structural transitions preserving index-height, page-count, amplification, working-set, and fault invariants |
 
 The profile also fixes query and complexity shapes: point lookup, ordered and
 compound ranges, relationship neighborhoods, text candidate verification, and
 deep keyset pagination; variable per-record metadata; sparse, skewed, and
-high-degree relationships; and variable/chunked content. Streams additionally
-qualifies skewed source histories, retained attempts, bounded refresh batches,
-and deep time/source/thread continuation.
+high-degree relationships; and variable/chunked content. The historical Streams
+model additionally described skewed source histories, retained attempts,
+bounded refresh batches, and deep time/source/thread continuation. Those shapes
+remain evidence about the rejected observation design, not active acceptance
+criteria for the corrected product.
 
 Active reentrancy qualification is scoped to four interleaved converted stores
 with no hidden process-global current store. Ecosystem-wide same-type applet,
@@ -182,9 +219,12 @@ persistence-page I/O, allocation events, and peak live allocation remain named
 instrumentation gaps; they are added with the replacement engine rather than
 invented from sector counts.
 
-Only Library currently has isolated cycle/operation telemetry. Streams, Agent,
-the other data applets, and Desk/TUI are explicitly marked as measurement gaps;
-L0 inventories that absence instead of presenting journey tests as counters.
+Only Library currently has isolated cycle/operation telemetry. Streams' active
+gap now points to SR2+ connector, flow, queue, transform, cancellation,
+acknowledgement, and input/output delivery measurements, followed by
+workload-derived SR6 scale evidence. Agent, the other data applets, and Desk/TUI
+remain explicitly marked as measurement gaps; L0 inventories that absence
+instead of presenting journey tests as counters.
 
 Committed reference points include:
 
@@ -497,12 +537,13 @@ long logical operations may publish physical roots without falsely advancing
 their logical generation. Query, membership, content, and compaction work use
 bounded caller-owned working sets instead of aggregate corpus allocation.
 
-The reviewed graph now contains 404 modules, 1,333 resolved `REQUIRE`
-occurrences and unique edges, 78 unchanged reviewed unresolved imports, no
-cycle, no layer violation, and no placement debt. Its graph digest is
-`8022e4ecb92e66e75eadb821ba01842ca09e72ae143f28201cf69e0356992473`;
+The clean SR1 tree at `ab269b160e44923de7aeabb5a4891f9cb0130e53`
+contains 421 modules, 1,386 resolved `REQUIRE` occurrences and unique edges,
+78 unchanged reviewed unresolved imports, no cycle, no layer violation, and no
+placement debt. Its graph digest is
+`d7712bcc831a29e5a0a606bdf92c23353e2cec3975cb89a50a57b6044d9ae4ba`;
 the mutable-state digest is
-`d4f1056d9e157bf8e13337d6fb2217ac24414887ea6959476609a2837bd9b602`;
+`93a482a105815842f52f4dc7be6f2bb8e643f1923f53ec5b21815c14b6240903`;
 the empty-placement and unchanged unresolved-import digests remain
 `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`
 and

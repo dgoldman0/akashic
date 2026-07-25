@@ -31,7 +31,7 @@
   "applets": [
     {
       "id": "library",
-      "active_landings": ["L2", "L3", "L4", "L5", "L6", "L8", "L9", "L10", "L11", "L12", "L13", "L14"],
+      "active_landings": ["L2", "L3", "L4", "L5", "L6", "L8", "L9", "L10", "L11", "L12", "L14"],
       "uidl_surface": {
         "path": "akashic/tui/applets/library/library.uidl",
         "menus": ["File", "Browse", "Document", "Page", "Help"],
@@ -111,7 +111,7 @@
     },
     {
       "id": "streams",
-      "active_landings": ["L2", "L3", "L4", "L9", "L13", "L14"],
+      "active_landings": ["L2", "L3", "L4", "L9", "SR1", "SR2", "SR3", "SR4", "SR5", "SR6"],
       "uidl_surface": {
         "path": "akashic/tui/applets/streams/streams.uidl",
         "menus": ["File", "Feed", "Sources", "Post", "Help"],
@@ -142,7 +142,7 @@
         {
           "id": "streams.views-drafts-and-actions",
           "coverage": "partial",
-          "prerequisite_ids": ["streams.refresh-card-rendering"],
+          "prerequisite_ids": ["streams.compatibility-retirement"],
           "facets": ["actions", "journeys"],
           "preserve": ["Timeline, retained search and partial-thread navigation", "Local draft create, read, edit, validate and cancel without implicit publication", "Source manager creation, independent selection, enable/disable, exact confirmed removal and manual refresh"],
           "evidence": ["profile:streams", "profile:streams-contracts", "profile:streams-source-ui-contracts", "profile:desktop-streams"]
@@ -157,7 +157,7 @@
         {
           "id": "streams.observation-truth-and-recovery",
           "coverage": "partial",
-          "prerequisite_ids": ["streams.observation-capacity", "streams.observation-future-format"],
+          "prerequisite_ids": ["streams.compatibility-retirement"],
           "facets": ["persistence", "failures"],
           "preserve": ["Accepted attempts, success, unchanged, revision, terminal failure and recovered-indeterminate truth", "Deduplication, retained last-good observations and exact stale/cancel/transport/HTTP/decode distinctions", "Source, observation and draft replacement recovery; corrupt/future/blocked records do not become writable authority"],
           "evidence": ["profile:streams-draft-contracts", "profile:streams-persistence-contracts", "profile:streams-source-registry-contracts", "profile:streams-source-store-contracts", "profile:streams-observation-contracts", "profile:streams-observation-store-contracts", "profile:streams-refresh-owner-contracts"]
@@ -165,41 +165,27 @@
         {
           "id": "streams.desk-manual-refresh",
           "coverage": "partial",
-          "prerequisite_ids": ["streams.combined-cold-process"],
+          "prerequisite_ids": ["streams.compatibility-retirement"],
           "facets": ["providers", "journeys", "persistence", "failures"],
           "preserve": ["Offline refusal and typed/UI manual refresh through the real Desk XIO service", "Accepted, busy, success, unchanged and accepted-to-indeterminate recovery", "Desk source/draft persistence across close and relaunch; ordinary Agent sees only sanitized source query/read capabilities"],
           "evidence": ["profile:streams-manual-refresh-contracts", "profile:desktop-streams", "profile:desktop-agent-hardening"]
+        },
+        {
+          "id": "streams.sr1-storage-free-flow",
+          "coverage": "covered",
+          "facets": ["interfaces", "providers", "failures", "journeys"],
+          "preserve": ["Caller-owned bounded connector descriptors distinguish input, output and bidirectional direction while event envelopes make payload ownership explicit", "One admitted input event follows one route and transform to one exact output with explicit backpressure, correlation, idempotency, acknowledgement and terminal outcome", "Timeout, cancellation, connector failure and cleanup remain truthful without persistence, network transport, a general scheduler or legacy Streams authority"],
+          "evidence": ["driver:local_testing/test_streams_sr1_core.py", "pytest:local_testing/test_streams_sr1_static.py::test_streams_sr1_core_dependency_closure_is_storage_free"]
         }
       ],
       "supplemental_evidence": ["profile:streams-live-public", "profile:streams-configured-refresh-live"],
       "prerequisites": [
         {
-          "id": "streams.combined-cold-process",
-          "before_landing": "L13",
-          "trigger": "Production persistence cutover.",
-          "characterization": "Run a spawn-isolated MP64FS journey containing a source registry, draft, successful observations and a durably accepted attempt that reopens as indeterminate.",
-          "reason": "Current descriptor reopens and desktop relaunches occur inside one guest process."
-        },
-        {
-          "id": "streams.observation-capacity",
-          "before_landing": "L13",
-          "trigger": "Observation/attempt storage or retention cutover.",
-          "characterization": "Exhaust observation/blob retention and prove capacity is reported, the terminal attempt is recorded and all last-good observations/key heads remain unchanged.",
-          "reason": "No current test reaches the production OCHK-S-CAPACITY and SREF-S-CAPACITY path."
-        },
-        {
-          "id": "streams.observation-future-format",
-          "before_landing": "L13",
-          "trigger": "Observation-store format replacement.",
-          "characterization": "Prove a valid future observation-store record is preserved and refused through both the store and owner projection.",
-          "reason": "Source and draft future records are covered; observation-store future format is not."
-        },
-        {
-          "id": "streams.refresh-card-rendering",
-          "before_landing": "L13",
-          "trigger": "Source-card rendering is changed by the bounded UI conversion.",
-          "characterization": "Assert rendered accepted, succeeded, failed and recovered-indeterminate source-card states.",
-          "reason": "Semantic projections are tested, but the exact visible state distinctions are not."
+          "id": "streams.compatibility-retirement",
+          "before_landing": "SR6",
+          "trigger": "A replacement milestone touches or retires any listed legacy Streams source, observation, draft, rendering or manual-refresh behavior.",
+          "characterization": "Add only the focused characterization needed for the touched compatibility branch, or record an approved explicit retirement or export decision; the halted L13 authority cutover and its gates are not required.",
+          "reason": "Current compatibility behavior remains authoritative until replacement evidence exists, while the additive storage-free SR1 core must not be gated on the cancelled observation-repository design."
         }
       ]
     },

@@ -1,12 +1,12 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "post-gate4-refactor-baseline-20260720",
-    "commit": "ce340fc8bef0b2c1331339f6ceaf4c02d4c020f5",
+    "name": "streams-sr1-core-baseline-20260725",
+    "commit": "ab269b160e44923de7aeabb5a4891f9cb0130e53",
     "expected": {
-      "module_count": 404,
-      "resolved_require_occurrence_count": 1333,
-      "unique_resolved_edge_count": 1333,
+      "module_count": 421,
+      "resolved_require_occurrence_count": 1386,
+      "unique_resolved_edge_count": 1386,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -14,8 +14,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "8022e4ecb92e66e75eadb821ba01842ca09e72ae143f28201cf69e0356992473",
-      "state_sha256": "d4f1056d9e157bf8e13337d6fb2217ac24414887ea6959476609a2837bd9b602",
+      "graph_sha256": "d7712bcc831a29e5a0a606bdf92c23353e2cec3975cb89a50a57b6044d9ae4ba",
+      "state_sha256": "93a482a105815842f52f4dc7be6f2bb8e643f1923f53ec5b21815c14b6240903",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -59,7 +59,136 @@
     "note": "Scale and architecture qualification use the generic VFS contract; ext4 is an optional integration backend."
   },
   "ownership": {
-    "exact": [],
+    "exact": [
+      {
+        "module": "tui/applets/streams/acquisition-authority.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/acquisition-authority.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/apply-authority.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/apply-authority.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/authority-root.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/authority-root.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/compaction.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/compaction.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/index-keys.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/index-keys.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/index-record-agreement.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/index-record-agreement.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/migration.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/migration.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/observation-construction.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/observation-construction.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/persistence-adapter.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/persistence-adapter.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/persistence-records.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/persistence-records.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/query.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/query.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/repository-refresh-owner.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/repository-refresh-owner.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/repository.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/repository.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/runtime-owner.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/runtime-owner.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/semantic-record-agreement.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/semantic-record-agreement.f",
+        "ownership_decision": "historical-dormant-l13"
+      },
+      {
+        "module": "tui/applets/streams/source-authority.f",
+        "class": "applet",
+        "owner": "streams",
+        "placement": "correct",
+        "target": "tui/applets/streams/source-authority.f",
+        "ownership_decision": "historical-dormant-l13"
+      }
+    ],
     "prefixes": [
       {
         "prefix": "game/",
@@ -152,12 +281,14 @@
     },
     "streams": {
       "workstation": {
+        "status": "historical-inactive",
         "sources": 10000,
         "observations": 1000000,
         "retained_attempts": 2000000,
         "purpose": "interactive Streams source, refresh, timeline, thread, and search qualification"
       },
       "large_host_model": {
+        "status": "historical-inactive",
         "sources": 100000,
         "observations": 10000000,
         "retained_attempts": 20000000,
@@ -206,9 +337,26 @@
       "content_shape": "variable-size and chunked content, including documents beyond whole-buffer limits"
     },
     "streams_model_workload": {
+      "status": "historical-inactive",
       "source_distribution": "skewed observation and retained-attempt histories across enabled and disabled sources",
       "query_shape": "deep time, source, thread, and text-candidate continuation",
       "content_shape": "variable-size summaries and content separated from indexed observation metadata"
+    },
+    "sr1_contract": {
+      "status": "active",
+      "input_connectors": 1,
+      "flows": 1,
+      "transforms": 1,
+      "output_connectors": 1,
+      "queue_slots": 1,
+      "payload_max_bytes": 4096,
+      "operation_max_bytes": 256,
+      "storage": "none",
+      "qualification": "deterministic-mocks"
+    },
+    "future_sr6": {
+      "status": "deferred",
+      "workload": "derive scale profiles from real connector, flow, queue, delivery, concurrency, throughput, latency, memory, disk-amplification, and recovery behavior"
     },
     "persistence_instance_workload": {
       "interleaved_stores": 4,
@@ -315,7 +463,7 @@
       {
         "area": "Streams",
         "status": "functional-and-capacity-only",
-        "missing": "isolated refresh, apply, persistence, and query operation telemetry"
+        "missing": "SR2+ connector, flow, queue, transform, cancellation, acknowledgement, and input/output delivery telemetry; SR6 workload-derived concurrency, throughput, latency, memory, disk-amplification, and recovery evidence"
       },
       {
         "area": "Agent",
@@ -376,7 +524,8 @@
       "current_structure": "one checksummed whole-corpus checkpoint",
       "current_complexity": "O(sources + observations + keys) bytes per load/save",
       "scale_risk": "every mutation rewrites and verifies aggregate state",
-      "replacement_requirement": "indexed source/observation records and retained attempts",
+      "replacement_requirement": "retain only as frozen compatibility evidence until SR6 retirement; derive any future operational persistence from the SR2 flow and delivery semantics in SR3, never from the superseded observation corpus",
+      "status": "superseded-compatibility",
       "target_landing": "L13",
       "evidence_symbols": ["_OSTORE-ENCODE-PAYLOAD", "_STREAMS-OBSERVATION-STORE-SAVE"]
     },
@@ -552,12 +701,40 @@
       "scale_axis": "simultaneous-instances"
     },
     {
+      "id": "streams.sr1-queue-slots",
+      "module": "tui/applets/streams/flow-core.f",
+      "symbol": "STREAMS-FLOW-QUEUE-CAPACITY",
+      "value": 1,
+      "scope": "queue",
+      "scale_axis": "work-scheduling",
+      "status": "active-sr1"
+    },
+    {
+      "id": "streams.sr1-payload-bytes",
+      "module": "tui/applets/streams/flow-core.f",
+      "symbol": "STREAMS-FLOW-PAYLOAD-MAX",
+      "value": 4096,
+      "scope": "working-set",
+      "scale_axis": "content-bytes",
+      "status": "active-sr1"
+    },
+    {
+      "id": "streams.sr1-operation-bytes",
+      "module": "tui/applets/streams/flow-core.f",
+      "symbol": "STREAMS-FLOW-OP-MAX",
+      "value": 256,
+      "scope": "working-set",
+      "scale_axis": "content-bytes",
+      "status": "active-sr1"
+    },
+    {
       "id": "streams.sources",
       "module": "tui/applets/streams/observation-state.f",
       "symbol": "OCHK-SOURCE-MAX",
       "value": 16,
       "scope": "aggregate-corpus",
-      "scale_axis": "primary-record-cardinality"
+      "scale_axis": "primary-record-cardinality",
+      "status": "compatibility"
     },
     {
       "id": "streams.observations",
@@ -565,7 +742,8 @@
       "symbol": "OCHK-OBSERVATION-MAX",
       "value": 48,
       "scope": "aggregate-corpus",
-      "scale_axis": "primary-record-cardinality"
+      "scale_axis": "primary-record-cardinality",
+      "status": "compatibility"
     },
     {
       "id": "streams.keys",
@@ -573,7 +751,8 @@
       "symbol": "OCHK-KEY-MAX",
       "value": 64,
       "scope": "aggregate-corpus",
-      "scale_axis": "index-cardinality"
+      "scale_axis": "index-cardinality",
+      "status": "compatibility"
     },
     {
       "id": "streams.checkpoint-bytes",
@@ -581,7 +760,8 @@
       "symbol": "STREAMS-OBSERVATION-CHECKPOINT-SIZE",
       "value": 131072,
       "scope": "whole-corpus-buffer",
-      "scale_axis": "content-bytes"
+      "scale_axis": "content-bytes",
+      "status": "compatibility"
     },
     {
       "id": "streams.source-registry",
@@ -589,7 +769,8 @@
       "symbol": "STREAMS-SOURCE-MAX",
       "value": 16,
       "scope": "aggregate-corpus",
-      "scale_axis": "primary-record-cardinality"
+      "scale_axis": "primary-record-cardinality",
+      "status": "compatibility"
     },
     {
       "id": "agent.messages",
