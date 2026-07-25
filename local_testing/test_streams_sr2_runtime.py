@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused linked qualification for the storage-free Streams SR1 core."""
+"""Focused linked qualification for the bounded Streams SR2 runtime."""
 
 from __future__ import annotations
 
@@ -14,15 +14,15 @@ sys.path.insert(0, str(LOCAL_TESTING))
 import akashic_tui as harness  # noqa: E402
 
 
-PROFILE = "streams-sr1-core-contracts"
-IMAGE = Path("/tmp/akashic-streams-sr1-core-contracts.img")
-CONTRACT = LOCAL_TESTING / "streams-sr1-core.f"
+PROFILE = "streams-sr2-runtime-contracts"
+IMAGE = Path("/tmp/akashic-streams-sr2-runtime-contracts.img")
+CONTRACT = LOCAL_TESTING / "streams-sr2-runtime.f"
 
-AUTOEXEC = r"""\ autoexec.f - storage-free Streams SR1 core contracts
+AUTOEXEC = r"""\ autoexec.f - bounded Streams SR2 runtime contracts
 ENTER-USERLAND
-REQUIRE tui/applets/streams/flow-core.f
-REQUIRE local_testing/streams-sr1-core.f
-_SR1C-RUN
+REQUIRE tui/applets/streams/execution-pool.f
+REQUIRE local_testing/streams-sr2-runtime.f
+_SR2R-RUN
 """
 
 
@@ -32,22 +32,22 @@ def main() -> int:
     args = parser.parse_args()
 
     harness.PROFILES[PROFILE] = harness.Profile(
-        roots=("tui/applets/streams/flow-core.f",),
+        roots=("tui/applets/streams/execution-pool.f",),
         resources=(),
         autoexec=AUTOEXEC,
-        ready_markers=("STREAMS SR1 CORE PASS",),
-        stable_markers=("STREAMS SR1 CORE PASS",),
+        ready_markers=("STREAMS SR2 RUNTIME PASS",),
+        stable_markers=("STREAMS SR2 RUNTIME PASS",),
         failure_markers=(
-            "STREAMS SR1 CORE FAIL",
-            "STREAMS SR1 CORE ASSERT",
-            "STREAMS SR1 CORE STACK",
+            "STREAMS SR2 RUNTIME FAIL",
+            "STREAMS SR2 RUNTIME ASSERT",
+            "STREAMS SR2 RUNTIME STACK",
             "DRIVER THROW",
             "dictionary full",
             "exception",
             "(not found)",
         ),
         initial_files=(
-            ("local_testing/streams-sr1-core.f", CONTRACT.read_bytes()),
+            ("local_testing/streams-sr2-runtime.f", CONTRACT.read_bytes()),
         ),
         linked=True,
         include_large_sample=False,
@@ -59,7 +59,7 @@ def main() -> int:
         image,
         cols=120,
         rows=40,
-        max_steps=1_000_000_000,
+        max_steps=800_000_000,
         timeout=args.timeout,
         ext_mem_mib=128,
     )

@@ -57,50 +57,51 @@ def test_streams_reset_replaces_cancelled_l13_gates() -> None:
     behaviors = {
         behavior["id"]: behavior for behavior in streams["behaviors"]
     }
-    compatibility_groups = {
+    prerelease_groups = {
         "streams.views-drafts-and-actions",
         "streams.observation-truth-and-recovery",
         "streams.desk-manual-refresh",
     }
     assert all(
         behaviors[behavior_id]["prerequisite_ids"]
-        == ["streams.compatibility-retirement"]
-        for behavior_id in compatibility_groups
+        == ["streams.prerelease-replacement"]
+        for behavior_id in prerelease_groups
     )
     assert streams["prerequisites"] == [
         {
-            "id": "streams.compatibility-retirement",
+            "id": "streams.prerelease-replacement",
             "before_landing": "SR6",
             "trigger": (
-                "A replacement milestone touches or retires any listed legacy "
+                "A replacement milestone touches or displaces any listed "
+                "current "
                 "Streams source, observation, draft, rendering or "
                 "manual-refresh behavior."
             ),
             "characterization": (
-                "Add only the focused characterization needed for the touched "
-                "compatibility branch, or record an approved explicit "
-                "retirement or export decision; the halted L13 authority "
-                "cutover and its gates are not required."
+                "Add only the focused evidence needed for a still-live branch "
+                "or record an explicit deletion or user-data export decision; "
+                "fixtures alone create no preservation duty and the halted L13 "
+                "authority cutover and its gates are not required."
             ),
             "reason": (
-                "Current compatibility behavior remains authoritative until "
-                "replacement evidence exists, while the additive storage-free "
-                "SR1 core must not be gated on the cancelled "
-                "observation-repository design."
+                "Preserve exact user-created data and only the live behavior "
+                "temporarily required to reach a qualified replacement; "
+                "otherwise delete displaced prerelease paths instead of "
+                "maintaining parallel implementations."
             ),
         }
     ]
 
-    sr1 = behaviors["streams.sr1-storage-free-flow"]
-    assert sr1["coverage"] == "covered"
-    assert sr1["evidence"] == [
-        "driver:local_testing/test_streams_sr1_core.py",
+    sr2_runtime = behaviors["streams.sr2-storage-free-runtime"]
+    assert sr2_runtime["coverage"] == "covered"
+    assert sr2_runtime["evidence"] == [
+        "driver:local_testing/test_streams_sr2_runtime.py",
         (
-            "pytest:local_testing/test_streams_sr1_static.py::"
-            "test_streams_sr1_core_dependency_closure_is_storage_free"
+            "pytest:local_testing/test_streams_sr2_static.py::"
+            "test_streams_sr2_runtime_dependency_closure_is_storage_free"
         ),
     ]
-    assert "prerequisite_ids" not in sr1
+    assert "prerequisite_ids" not in sr2_runtime
 
 
 def test_partial_behavior_must_name_a_reviewable_prerequisite() -> None:

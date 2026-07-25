@@ -1,7 +1,8 @@
 # Streams information integration contract
 
-**Status:** normative product and ownership contract; SR0 and the standalone
-storage-free SR1 core complete; SR2 is next
+**Status:** normative product and ownership contract; the SR2 bounded runtime
+shape is complete; cooperative HTTP and final isolation/pressure landings
+remain
 
 **Reconciled:** 2026-07-25
 
@@ -11,6 +12,8 @@ storage-free SR1 core complete; SR2 is next
 
 **SR1 core and qualification:**
 [`sr1-storage-free-core.md`](sr1-storage-free-core.md)
+
+**SR2 bounded runtime:** [`sr2-runtime-shape.md`](sr2-runtime-shape.md)
 
 **Current implementation:** [`streams.md`](streams.md)
 
@@ -91,20 +94,22 @@ copies it nor grants an operation.
 
 ## Streams-owned contracts
 
-SR1 seals the minimum standalone connector, event, flow, and attempt semantics
-and qualifies one prototype byte layout. “Sealed” applies to the proven
-lifecycle and effect rules, not to an unreleased descriptor size. SR2 may
-replace that layout in one clean cutover. It must not add parallel layouts,
-compatibility adapters, migrations, deprecation periods, or legacy readers.
-Protocol-specific extension, persistence, applet/Desk composition, and
-cross-owner capability schemas remain work for their named later milestones.
+SR1 sealed the minimum connector, event, flow, attempt, ownership, and effect
+semantics against one prototype byte layout. The first SR2 landing has
+requalified those semantics after replacing that unreleased layout outright.
+The current runtime has external segmented carriers, named compact and
+standard workspaces, and a measured mixed-profile pool. It contains no
+alternate descriptor, ABI selector, adapter, migration, deprecation path, or
+old-layout reader.
 
-The SR1 flow descriptor is one qualified transfer cell, not the final queue or a
-product-wide capacity promise. Its one-slot, 4,096-byte payload, and 256-byte
-operation limits describe the prototype layout. SR2 must put a bounded pool
-and named payload profiles around that semantic core, replacing the prototype
-layout atomically if necessary. No later milestone may present either
-compatibility scaffolding or a larger literal constant as scalability.
+One flow is still one active transfer cell, but it is no longer the system's
+only admission slot and it contains no inline body or operation buffer. Pool
+capacity is supplied by the caller; a fitting free cell is leased exactly,
+all-active exhaustion reports `FULL`, and a free pool with no fitting profile
+reports `CAPACITY`. Connector callbacks serialize at the shared connector
+descriptor. Protocol-specific extension, persistence, applet/Desk
+composition, and cross-owner capability schemas remain work for their named
+later milestones.
 
 ### Connector
 
@@ -164,16 +169,18 @@ Backpressure is part of the flow contract. Queue admission, refusal, pause,
 resume, cancellation, timeout, and teardown must remain truthful whether
 physical network progression is serialized or concurrent.
 
-In SR2, Streams owns a bounded set of active transfer cells; the general web
-runtime separately owns its bounded route and connection state. Payload and
-connection storage do not become fixed inline fields in every cell. Pool
-capacity and memory cost are explicit, exhaustion refuses new work without
-retargeting an occupied cell, and connector callbacks have one stated
-serialization rule. At least two interleaved request/response flows, one body
-larger than the SR1 inline bound, and an exactly-full/one-over case must prove
-that the design is neither a hidden singleton nor tied to 4 KiB messages. A
-durable queue is not simulated by keeping more live cells; it remains SR3
-work.
+Streams now owns a caller-supplied bounded set of active transfer cells; the
+general web runtime will separately own its bounded route and connection
+state. Payload storage is external segmented carrier geometry rather than a
+fixed inline field in every cell. Pool capacity and measured memory cost are
+explicit, exhaustion refuses new work without retargeting an occupied cell,
+and one connector serializes its callbacks across sharing cells. Two
+interleaved mock flows, an 8,192-byte transform path, exact profile bounds,
+and a full two-cell pool plus one refused admission prove the runtime is
+neither a hidden singleton nor tied to the historical 4 KiB payload. The HTTP
+landing must now prove those properties through real framing and cooperative
+connections. A durable queue is not simulated by keeping more live cells; it
+remains SR3 work.
 
 ### Transfer attempt and delivery
 
@@ -246,17 +253,17 @@ RPC composition.
 
 Those packages are starting points, not a completed cooperative web runtime.
 Before the first Streams route depends on them, SR2 must make required
-protocol state caller-owned, bound request and response bodies, compose SR1
+protocol state caller-owned, bind request and response bodies, compose runtime
 cancellation and cleanup, avoid a blocking accept/serve loop, and qualify
 framing, smuggling, route isolation, and simultaneous connection ownership.
 
-SR2 begins by sealing the active-cell pool and payload profiles and by
-replacing the prototype layout once, if necessary. It then proves one real
-route and response, followed by two interleaved requests, a body larger than
-4,096 bytes without enlarging every cell, a slow or cancelled peer, pool
-exhaustion, and exact teardown within measured memory. General code uses
-descriptor accessors and never persists raw runtime layouts. This is runtime
-qualification only; SR2 does not add a durable queue.
+The active-cell pool, payload profiles, and clean descriptor replacement are
+complete. The next landing proves one real route and response. The closing
+landing carries that composition through two interleaved requests, a body
+larger than 4,096 bytes without enlarging every cell, a slow or cancelled
+peer, pool exhaustion, and exact teardown within measured memory. General code
+uses descriptor accessors and never persists raw runtime layouts. SR2 does not
+add a durable queue.
 
 Routes, requests, responses, middleware, and template expansion remain general
 `web/` behavior. Streams owns the admitted route/connector, event flow,
@@ -338,28 +345,31 @@ an ambient destination. Every external effect names the exact connector,
 destination, payload identity/digest, expected operational state, and reviewed
 authorization.
 
-## Current prototype and compatibility state
+## Current older prototype state
 
 The current implementation predates this contract. Its facts remain documented
 in [`streams.md`](streams.md):
 
-- the legacy Bluesky-shaped retained page, thread, feed, search, and public
+- the older Bluesky-shaped retained page, thread, feed, search, and public
   refresh surface;
 - `/streams-draft.bin` and five draft capabilities;
 - configured source and manual syndication refresh behavior;
 - the fixed source and observation snapshot stores; and
 - the landed but not production-composed L13 repository modules.
 
-The standalone SR1 `flow-core.f` now sits beside those compatibility surfaces.
-It is the first qualified replacement implementation, but it is not required
-by `streams.f`, exposed as an applet capability, composed with Desk, connected
-to HTTP/web, or backed by any durable store. Its deterministic mock output is
-therefore not a claim of production applet output.
+The SR2 `runtime-profile.f`, `payload-carrier.f`, `flow-core.f`, and
+`execution-pool.f` now sit beside those older prototype surfaces. They are the
+qualified replacement runtime, but they are not yet required by `streams.f`,
+exposed as an applet capability, composed with Desk, connected to HTTP/web, or
+backed by any durable store. Deterministic mock output is therefore not a claim
+of production applet output.
 
 Disposition:
 
-- preserve existing behavior until a separately qualified compatibility
-  retirement;
+- preserve exact user-created data and only the still-live behavior
+  temporarily required to bridge to a qualified replacement;
+- delete displaced prerelease paths when their replacement lands rather than
+  accumulating parallel implementations;
 - do not build new product semantics on the private draft or fixed observation
   checkpoint;
 - do not activate the L13 four-tree repository, run its authority-flip
@@ -378,9 +388,10 @@ tax.
 
 ## First replacement slice
 
-SR1 has qualified the storage-free mock connector → event → transform →
-output semantics. The first composed demonstrator remains SR2 and is
-deliberately HTTP-first and storage-light:
+SR1 qualified the storage-free mock connector → event → transform → output
+semantics, and the first SR2 landing carried them into the bounded pool and
+segmented carriers. The first composed demonstrator remains deliberately
+HTTP-first and storage-light:
 
 1. Configure a local route such as `POST /hooks/demo`.
 2. Receive one bounded JSON or form request without blocking Desk.
@@ -394,12 +405,12 @@ deliberately HTTP-first and storage-light:
    indeterminate state.
 8. Leave Library unchanged unless the user explicitly chooses Collect.
 
-SR2 is split into reviewable landings: first the pool/payload/cutover boundary,
-then the cooperative HTTP journey, then interleaving and capacity refusal.
-The first route may use a conservative payload profile, but the profile is
-named and its larger-body path is settled before applet composition. It must also
-prove a larger bounded body before SR2 closes. “Enqueued” or “durably accepted”
-remains SR3 language.
+SR2 is split into reviewable landings. The pool/payload/cutover boundary is
+complete; the cooperative HTTP journey is next; interleaving and pressure
+qualification close the milestone. The route uses a named profile, and the
+larger-body runtime path is already settled without enlarging every cell. The
+HTTP composition must still prove that path before SR2 closes. “Enqueued” or
+“durably accepted” remains SR3 language.
 
 The in-memory/mock flow contract is now qualified before durable queues. The
 real HTTP slice remains unqualified and comes before AT Protocol and Bluesky
@@ -436,15 +447,18 @@ No label implies a stronger one. Concurrency may increase physical throughput,
 but one-worker and many-worker execution must preserve the same event,
 backpressure, retry, delivery, and cleanup semantics.
 
-SR1 earns only `offline-contract` and the standalone/mock form of
-`bidirectional-flow`. Its one-slot flow, 4,096-byte payload ceiling, 256-byte
-output-operation ceiling, exact payload copy/digest, single-shot ownership
-with failed-seal rollback, separate ingress and egress attempts, full-queue
-refusal, failure/effect distinctions, cancel-callback faults,
+The current SR2 runtime earns the bounded-runtime portion of
+`offline-contract` and requalifies the standalone/mock form of
+`bidirectional-flow`. External segmented carriers, exact payload
+copy/digest/integrity, compact and standard profiles, a mixed measured pool,
+two interleaved flows, full/one-over and no-fitting-cell refusal,
+single-shot ownership, separate ingress and egress attempts, failure/effect
+distinctions, callback serialization and faults,
 timeout/deadline-overflow/stale handling, and exactly-once cleanup are
 qualified by
-[`test_streams_sr1_core.py`](../../../../local_testing/test_streams_sr1_core.py).
-[`test_streams_sr1_static.py`](../../../../local_testing/test_streams_sr1_static.py)
-qualifies the storage-free dependency closure and absence of top-level mutable
-definitions in `flow-core.f`. None of the protocol, transport, live, Desk, or
-hardware labels has been earned.
+[`test_streams_sr2_runtime.py`](../../../../local_testing/test_streams_sr2_runtime.py).
+[`test_streams_sr2_static.py`](../../../../local_testing/test_streams_sr2_static.py)
+qualifies the storage-free dependency closure, absence of top-level mutable
+storage, clean SR1 layout replacement, and absence of a prerelease
+compatibility or ABI layer. None of the protocol, transport, live, Desk, or
+hardware labels has yet been earned.

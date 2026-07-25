@@ -123,9 +123,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 421,
-        "resolved_require_occurrence_count": 1386,
-        "unique_resolved_edge_count": 1386,
+        "module_count": 424,
+        "resolved_require_occurrence_count": 1392,
+        "unique_resolved_edge_count": 1392,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -467,15 +467,17 @@ def test_capacity_ledger_is_live_and_distinguishes_scope() -> None:
         "streams.checkpoint-bytes",
         "streams.source-registry",
     }
-    qualified_sr1_prototype_ids = {
+    qualified_sr2_runtime_ids = {
         capacity["id"]
         for capacity in _policy()["capacities"]
-        if capacity.get("status") == "qualified-sr1-prototype"
+        if capacity.get("status") == "qualified-sr2-runtime"
     }
-    assert qualified_sr1_prototype_ids == {
-        "streams.sr1-cell-admissions",
-        "streams.sr1-payload-bytes",
-        "streams.sr1-operation-bytes",
+    assert qualified_sr2_runtime_ids == {
+        "streams.sr2-segment-bytes",
+        "streams.sr2-compact-segments",
+        "streams.sr2-standard-segments",
+        "streams.sr2-compact-operation-bytes",
+        "streams.sr2-standard-operation-bytes",
     }
 
 
@@ -598,8 +600,13 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         ),
     }
     assert policy["scale_profiles"]["streams_capacity_convergence"] == {
-        "status": "required",
+        "status": "runtime-shape-qualified-http-pending",
         "sr2": {
+            "landing_status": {
+                "runtime_shape": "qualified",
+                "cooperative_http": "pending",
+                "connection_isolation_pressure": "pending",
+            },
             "runtime": "bounded caller-owned execution-cell pool",
             "payload": (
                 "named payload profiles with body and connection storage "
@@ -617,9 +624,10 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
             ],
             "persistence": "none",
             "cutover_rule": (
-                "replace the unreleased SR1 layout atomically; no parallel "
-                "layout, adapter, migration, deprecation, or legacy reader; "
-                "general code does not persist raw descriptors"
+                "the unreleased SR1 layout is replaced atomically; no "
+                "parallel layout, ABI selector, adapter, migration, "
+                "deprecation path, or old-layout reader; general code does "
+                "not persist raw descriptors"
             ),
         },
         "sr3": {

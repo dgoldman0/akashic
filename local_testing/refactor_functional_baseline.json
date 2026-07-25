@@ -142,7 +142,7 @@
         {
           "id": "streams.views-drafts-and-actions",
           "coverage": "partial",
-          "prerequisite_ids": ["streams.compatibility-retirement"],
+          "prerequisite_ids": ["streams.prerelease-replacement"],
           "facets": ["actions", "journeys"],
           "preserve": ["Timeline, retained search and partial-thread navigation", "Local draft create, read, edit, validate and cancel without implicit publication", "Source manager creation, independent selection, enable/disable, exact confirmed removal and manual refresh"],
           "evidence": ["profile:streams", "profile:streams-contracts", "profile:streams-source-ui-contracts", "profile:desktop-streams"]
@@ -157,7 +157,7 @@
         {
           "id": "streams.observation-truth-and-recovery",
           "coverage": "partial",
-          "prerequisite_ids": ["streams.compatibility-retirement"],
+          "prerequisite_ids": ["streams.prerelease-replacement"],
           "facets": ["persistence", "failures"],
           "preserve": ["Accepted attempts, success, unchanged, revision, terminal failure and recovered-indeterminate truth", "Deduplication, retained last-good observations and exact stale/cancel/transport/HTTP/decode distinctions", "Source, observation and draft replacement recovery; corrupt/future/blocked records do not become writable authority"],
           "evidence": ["profile:streams-draft-contracts", "profile:streams-persistence-contracts", "profile:streams-source-registry-contracts", "profile:streams-source-store-contracts", "profile:streams-observation-contracts", "profile:streams-observation-store-contracts", "profile:streams-refresh-owner-contracts"]
@@ -165,27 +165,27 @@
         {
           "id": "streams.desk-manual-refresh",
           "coverage": "partial",
-          "prerequisite_ids": ["streams.compatibility-retirement"],
+          "prerequisite_ids": ["streams.prerelease-replacement"],
           "facets": ["providers", "journeys", "persistence", "failures"],
           "preserve": ["Offline refusal and typed/UI manual refresh through the real Desk XIO service", "Accepted, busy, success, unchanged and accepted-to-indeterminate recovery", "Desk source/draft persistence across close and relaunch; ordinary Agent sees only sanitized source query/read capabilities"],
           "evidence": ["profile:streams-manual-refresh-contracts", "profile:desktop-streams", "profile:desktop-agent-hardening"]
         },
         {
-          "id": "streams.sr1-storage-free-flow",
+          "id": "streams.sr2-storage-free-runtime",
           "coverage": "covered",
           "facets": ["interfaces", "providers", "failures", "journeys"],
-          "preserve": ["Caller-owned bounded connector descriptors distinguish input, output and bidirectional direction while event envelopes make payload ownership explicit", "One admitted input event follows one route and transform to one exact output with explicit backpressure, correlation, idempotency, acknowledgement and terminal outcome", "Timeout, cancellation, connector failure and cleanup remain truthful without persistence, network transport, a general scheduler or legacy Streams authority"],
-          "evidence": ["driver:local_testing/test_streams_sr1_core.py", "pytest:local_testing/test_streams_sr1_static.py::test_streams_sr1_core_dependency_closure_is_storage_free"]
+          "preserve": ["Caller-owned connector descriptors distinguish input, output and bidirectional direction while segmented event carriers make bounded payload ownership explicit", "A measured mixed-profile execution pool admits fitting transfer cells, refuses full and over-capacity work, serializes shared connector callbacks and detects cell retargeting or mutable-span crossover", "Exact input-to-transform-to-output truth, timeout, cancellation, connector failure, cleanup and payload integrity remain qualified without persistence, network transport or a general scheduler"],
+          "evidence": ["driver:local_testing/test_streams_sr2_runtime.py", "pytest:local_testing/test_streams_sr2_static.py::test_streams_sr2_runtime_dependency_closure_is_storage_free"]
         }
       ],
       "supplemental_evidence": ["profile:streams-live-public", "profile:streams-configured-refresh-live"],
       "prerequisites": [
         {
-          "id": "streams.compatibility-retirement",
+          "id": "streams.prerelease-replacement",
           "before_landing": "SR6",
-          "trigger": "A replacement milestone touches or retires any listed legacy Streams source, observation, draft, rendering or manual-refresh behavior.",
-          "characterization": "Add only the focused characterization needed for the touched compatibility branch, or record an approved explicit retirement or export decision; the halted L13 authority cutover and its gates are not required.",
-          "reason": "Current compatibility behavior remains authoritative until replacement evidence exists, while the additive storage-free SR1 core must not be gated on the cancelled observation-repository design."
+          "trigger": "A replacement milestone touches or displaces any listed current Streams source, observation, draft, rendering or manual-refresh behavior.",
+          "characterization": "Add only the focused evidence needed for a still-live branch or record an explicit deletion or user-data export decision; fixtures alone create no preservation duty and the halted L13 authority cutover and its gates are not required.",
+          "reason": "Preserve exact user-created data and only the live behavior temporarily required to reach a qualified replacement; otherwise delete displaced prerelease paths instead of maintaining parallel implementations."
         }
       ]
     },

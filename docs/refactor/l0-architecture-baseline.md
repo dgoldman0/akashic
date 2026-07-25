@@ -25,8 +25,7 @@ observation-repository L13 direction without rewriting its evidence. Sixteen
 landed L13 production modules remain under their correct Streams applet owner
 but now carry the exact
 `ownership_decision: historical-dormant-l13`. Neither the committed
-compatibility applet roots nor the additive SR1 flow core may import any of
-them.
+older applet roots nor the replacement runtime may import any of them.
 
 The old Streams workstation and large-host observation profiles and their
 model workload remain numerically intact as `historical-inactive` evidence.
@@ -36,21 +35,23 @@ as one execution cell with one admission, a 4,096-byte maximum payload, a
 256-byte maximum connector operation, and no storage. Those are qualified
 prototype cell bounds, not supported product-wide limits.
 
-The machine policy now makes capacity convergence explicit. SR2 must define a
-bounded active-cell pool, separate body/connection storage, named payload
-profiles, two-cell isolation, a body beyond 4 KiB, saturation refusal, and
-one atomic replacement of the unreleased descriptor layout before HTTP
-composition closes. It adds no parallel layout, adapter, migration, deprecation,
-or legacy reader. SR3 adds separately item/byte-bounded durable queues/spools
-with a self-identifying current format. SR6 qualifies supported workloads from
-those working paths without redesigning their semantics or record shapes.
+The machine policy now makes capacity convergence explicit. SR2's bounded
+active-cell pool, separate payload storage, named profiles, two-cell isolation,
+larger-body path, saturation refusal, measured cost, and atomic replacement of
+the unreleased descriptor layout are qualified. Cooperative HTTP and the final
+connection-pressure landing remain. The runtime adds no parallel layout, ABI
+selector, adapter, migration, deprecation path, or old-layout reader. SR3 adds
+separately item/byte-bounded durable queues/spools only after SR2 HTTP closes.
+SR6 qualifies supported workloads from those working paths without redesigning
+their semantics or record shapes.
 
-The five source/observation checkpoint capacities remain source-anchored
-compatibility facts. The whole-corpus observation checkpoint complexity item is
-`superseded-compatibility`: its replacement is not the cancelled indexed
-observation repository. Any required operational persistence will be derived
-from the proven SR2 flow and delivery semantics in SR3; compatibility
-retirement and corrected scale qualification belong to SR6.
+The five source/observation checkpoint capacities remain source-anchored facts
+about the older prototype. The whole-corpus observation checkpoint complexity
+item is superseded; its replacement is not the cancelled indexed observation
+repository. Any required operational persistence will be derived from the
+proven SR2 flow and delivery semantics in SR3. Exact user-created data is
+preserved or exported when identified; displaced prerelease paths otherwise
+carry no retention requirement.
 
 ## Settled ownership model
 
@@ -165,9 +166,11 @@ unlinked numbers into prose. Each entry distinguishes its scope and scale axis:
 The initial ledger covers Library, Streams, Agent, Daybook, Pad, Grid,
 FExplorer, Desk, runtime registries, request bus, UIDL, app-shell, and tree
 limits. The JSON report fails if any named literal silently changes. The five
-old Streams corpus/checkpoint entries are labeled `compatibility`; SR1's
-separate admission, payload, and operation bounds are labeled
-`qualified-sr1-prototype` and describe only the storage-free execution cell.
+old Streams corpus/checkpoint entries remain source-anchored facts. The dead
+SR1 cell constants are not retained: the live ledger instead names SR2's
+segment size, per-profile segment counts, and per-profile operation workspace
+as `qualified-sr2-runtime`. Pool capacity is caller-selected and observable,
+so it is not misrepresented as another fixed product-wide literal.
 
 A separate source-anchored complexity ledger records the current structure,
 operation, complexity, scale failure, replacement requirement, and landing for
@@ -197,8 +200,8 @@ the contract:
 | Streams workstation | historical-inactive | 10,000 sources, 1,000,000 observations, and 2,000,000 retained attempts |
 | Streams large host/model | historical-inactive | 100,000 sources, 10,000,000 observations, and 20,000,000 retained attempts |
 | Streams SR1 | qualified prototype cell | one deterministic mock input, flow, transform, and output; one admission; payloads at most 4,096 bytes; connector operations at most 256 bytes; no storage |
-| Streams SR2 | required next | bounded active-cell pool, separate payload/connection storage, named payload profiles, atomic prototype replacement, two-flow isolation, larger-than-4-KiB body, saturation refusal, and measured runtime cost |
-| Streams SR3 | deferred until SR2 | independently item/byte-bounded queue/spool with a self-identifying current format, exact durable acceptance, retry evidence, and cold recovery |
+| Streams SR2 | runtime shape qualified; HTTP/isolation pending | bounded active-cell pool, separate payload/connection storage, named payload profiles, atomic prototype replacement, two-flow isolation, larger-than-4-KiB body, saturation refusal, measured runtime cost, and cooperative HTTP |
+| Streams SR3 | deferred until SR2 HTTP closes | independently item/byte-bounded queue/spool with a self-identifying current format, exact durable acceptance, retry evidence, and cold recovery |
 | Streams SR6 | deferred qualification | workload-derived supported connector, flow, in-flight, payload-mix, queue-byte/item, throughput, latency, memory, disk-amplification, and recovery profiles without runtime or format redesign |
 | Emulator | representative-reduced | Applet-specific datasets at structural transitions preserving index-height, page-count, amplification, working-set, and fault invariants |
 

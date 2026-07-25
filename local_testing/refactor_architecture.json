@@ -1,12 +1,12 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "streams-sr1-core-baseline-20260725",
-    "commit": "746c847304bf2906c7b18f18021640288b98e754",
+    "name": "streams-sr2-runtime-shape-20260725",
+    "commit": "6aafea24de52b3b9c981990c1495e3f2c09c25fb",
     "expected": {
-      "module_count": 421,
-      "resolved_require_occurrence_count": 1386,
-      "unique_resolved_edge_count": 1386,
+      "module_count": 424,
+      "resolved_require_occurrence_count": 1392,
+      "unique_resolved_edge_count": 1392,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -14,8 +14,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "d7712bcc831a29e5a0a606bdf92c23353e2cec3975cb89a50a57b6044d9ae4ba",
-      "state_sha256": "93a482a105815842f52f4dc7be6f2bb8e643f1923f53ec5b21815c14b6240903",
+      "graph_sha256": "a07bd99d501905a6a49371d94ab93eb087181dd8e28e83d7644b35670f9765a9",
+      "state_sha256": "f52d1f46da43966053790cc5990d1ef1222d3cfc70cb5b8cc8b5d67a1b55be83",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -356,8 +356,13 @@
       "capacity_role": "SR1 prototype cell bounds, not supported product limits"
     },
     "streams_capacity_convergence": {
-      "status": "required",
+      "status": "runtime-shape-qualified-http-pending",
       "sr2": {
+        "landing_status": {
+          "runtime_shape": "qualified",
+          "cooperative_http": "pending",
+          "connection_isolation_pressure": "pending"
+        },
         "runtime": "bounded caller-owned execution-cell pool",
         "payload": "named payload profiles with body and connection storage separate from each cell",
         "qualification": [
@@ -368,7 +373,7 @@
           "measured memory and latency"
         ],
         "persistence": "none",
-        "cutover_rule": "replace the unreleased SR1 layout atomically; no parallel layout, adapter, migration, deprecation, or legacy reader; general code does not persist raw descriptors"
+        "cutover_rule": "the unreleased SR1 layout is replaced atomically; no parallel layout, ABI selector, adapter, migration, deprecation path, or old-layout reader; general code does not persist raw descriptors"
       },
       "sr3": {
         "runtime_relation": "durable queues and spools are separate from the active-cell pool",
@@ -746,31 +751,49 @@
       "scale_axis": "simultaneous-instances"
     },
     {
-      "id": "streams.sr1-cell-admissions",
-      "module": "tui/applets/streams/flow-core.f",
-      "symbol": "STREAMS-FLOW-QUEUE-CAPACITY",
-      "value": 1,
-      "scope": "execution-cell",
-      "scale_axis": "work-scheduling",
-      "status": "qualified-sr1-prototype"
-    },
-    {
-      "id": "streams.sr1-payload-bytes",
-      "module": "tui/applets/streams/flow-core.f",
-      "symbol": "STREAMS-FLOW-PAYLOAD-MAX",
+      "id": "streams.sr2-segment-bytes",
+      "module": "tui/applets/streams/runtime-profile.f",
+      "symbol": "STREAMS-RUNTIME-SEGMENT-BYTES",
       "value": 4096,
-      "scope": "execution-cell-layout",
+      "scope": "payload-segment",
       "scale_axis": "content-bytes",
-      "status": "qualified-sr1-prototype"
+      "status": "qualified-sr2-runtime"
     },
     {
-      "id": "streams.sr1-operation-bytes",
-      "module": "tui/applets/streams/flow-core.f",
-      "symbol": "STREAMS-FLOW-OP-MAX",
-      "value": 256,
-      "scope": "execution-cell-layout",
+      "id": "streams.sr2-compact-segments",
+      "module": "tui/applets/streams/runtime-profile.f",
+      "symbol": "STREAMS-RUNTIME-COMPACT-SEGMENTS",
+      "value": 1,
+      "scope": "execution-profile",
       "scale_axis": "content-bytes",
-      "status": "qualified-sr1-prototype"
+      "status": "qualified-sr2-runtime"
+    },
+    {
+      "id": "streams.sr2-standard-segments",
+      "module": "tui/applets/streams/runtime-profile.f",
+      "symbol": "STREAMS-RUNTIME-STANDARD-SEGMENTS",
+      "value": 4,
+      "scope": "execution-profile",
+      "scale_axis": "content-bytes",
+      "status": "qualified-sr2-runtime"
+    },
+    {
+      "id": "streams.sr2-compact-operation-bytes",
+      "module": "tui/applets/streams/runtime-profile.f",
+      "symbol": "STREAMS-RUNTIME-COMPACT-OPERATION-BYTES",
+      "value": 256,
+      "scope": "execution-profile",
+      "scale_axis": "content-bytes",
+      "status": "qualified-sr2-runtime"
+    },
+    {
+      "id": "streams.sr2-standard-operation-bytes",
+      "module": "tui/applets/streams/runtime-profile.f",
+      "symbol": "STREAMS-RUNTIME-STANDARD-OPERATION-BYTES",
+      "value": 512,
+      "scope": "execution-profile",
+      "scale_axis": "content-bytes",
+      "status": "qualified-sr2-runtime"
     },
     {
       "id": "streams.sources",

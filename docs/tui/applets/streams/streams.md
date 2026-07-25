@@ -1,7 +1,7 @@
 # Streams
 
-**Status:** current prototype and compatibility behavior plus a qualified
-standalone SR1 core; SR2 applet/HTTP composition is next
+**Status:** older applet behavior plus the qualified SR2 bounded runtime;
+cooperative HTTP and applet composition are next
 
 **Forward product contract:**
 [`information-integration.md`](information-integration.md)
@@ -12,6 +12,9 @@ standalone SR1 core; SR2 applet/HTTP composition is next
 **SR1 core and qualification:**
 [`sr1-storage-free-core.md`](sr1-storage-free-core.md)
 
+**SR2 bounded runtime:**
+[`sr2-runtime-shape.md`](sr2-runtime-shape.md)
+
 **Architectural reset:**
 [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
@@ -21,21 +24,25 @@ internet-data infrastructure: connectors, bounded events, flows, queues,
 attempts, input, output, delivery, and reconciliation. Library remains the
 owner of deliberately retained documents and corpus behavior.
 
-The new storage-free `flow-core.f` is the first qualified implementation of
-that replacement direction. It provides caller-owned input, output, and
-bidirectional connector descriptors, exact bounded event envelopes, a
-one-slot flow, and separate ingress/egress attempt truth. Its fixed ceilings
-are 4,096 payload bytes and 256 output-operation bytes. Deterministic mocks
-qualify exact input → transform → output, full-queue refusal, cancellation,
+The storage-free SR2 runtime is the qualified implementation of that
+replacement direction. It provides caller-owned input, output, and
+bidirectional connectors; exact bounded event envelopes; external segmented
+payload carriers; named compact and standard workspaces; a measured
+mixed-profile execution pool; and separate ingress/egress attempt truth. The
+pool supplies multiple admission slots, refuses exact exhaustion, and admits
+larger bodies without putting a repeated payload buffer in every flow.
+Deterministic mocks qualify exact input → transform → output, two interleaved
+flows, shared-connector serialization, full/one-over refusal, cancellation,
 timeout, stale state, failed-before, failed-after-known-effect,
-indeterminate-effect, and exactly-once cleanup behavior.
+indeterminate-effect, integrity, isolation, and exactly-once cleanup behavior.
 
-That module is deliberately standalone. `streams.f` does not require it, Desk
-does not host it, no applet capability exposes it, and it has no persistence,
-VFS, HTTP/web, durable queue, AT Protocol, Library/Pad, UI, or live-network
-composition. Its mock output is not evidence that the current applet can send
-or respond. The precise boundary and evidence are recorded in
-[`sr1-storage-free-core.md`](sr1-storage-free-core.md).
+Those four modules remain deliberately standalone. `streams.f` does not
+require them, Desk does not host them, no applet capability exposes them, and
+they have no persistence, VFS, HTTP/web composition, durable queue, AT
+Protocol, Library/Pad, UI, or live-network composition. Mock output is not
+evidence that the current applet can send or respond. The precise current
+boundary and evidence are recorded in
+[`sr2-runtime-shape.md`](sr2-runtime-shape.md).
 
 The current prototype is still primarily a Bluesky-shaped reader plus a
 configured-source acquisition path. Its first end-to-end configured-source
