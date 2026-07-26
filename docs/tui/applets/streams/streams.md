@@ -1,8 +1,8 @@
 # Streams
 
 **Status:** older applet behavior plus complete deterministic SR2 runtime;
-SR3 standalone admission and delivery/recovery are qualified, while runtime
-composition and finite retirement remain
+SR3 standalone admission, delivery/recovery, and logical cleanup are qualified,
+while runtime composition and physical compaction remain
 
 **Forward product contract:**
 [`information-integration.md`](information-integration.md)
@@ -59,12 +59,14 @@ atomically accepts exact payload snapshots, revision-checks ready-to-active
 dispatch, commits terminal effect truth and deterministic receipts, permits
 only declared exact-idempotent same-attempt requeue, refuses stale
 configuration, and cold-recovers interrupted active work as visible
-indeterminate truth. Its focused admission and delivery/recovery gates are
-qualified against deterministic faults and repeat cold audits. The spool is
-still standalone: it is not yet fed by an SR2 result or dispatched through an
-SR2 cell, and terminal cleanup, reclaim, and bounded compaction are Landing 3
-work. It therefore does not complete SR3 or change the live applet capability
-surface.
+indeterminate truth. It also retires one policy-eligible terminal attempt in a
+revision-checked publication while pinning uncertain or cleanup-failed work and
+reporting exact cleanup-failure and uncompacted-cleanup counts. Its focused
+admission and delivery/recovery/cleanup gates are qualified against
+deterministic faults and repeat cold audits. The spool is still standalone: it
+is not yet fed by an SR2 result or dispatched through an SR2 cell, and bounded
+physical compaction remains Landing 3 work. It therefore does not complete SR3
+or change the live applet capability surface.
 
 The current prototype is still primarily a Bluesky-shaped reader plus a
 configured-source acquisition path. Its first end-to-end configured-source

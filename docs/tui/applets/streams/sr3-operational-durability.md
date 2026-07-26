@@ -1,7 +1,7 @@
 # Streams SR3 operational durability
 
-**Status:** Landings 1 and 2 are implemented and qualified; SR3 implementation
-is in progress while SR2 composition and finite retirement proceed in Landing 3
+**Status:** Landings 1 and 2 and Landing 3 logical cleanup are implemented and
+qualified; SR2 composition and physical compaction remain in progress
 
 **Scope:** one bounded durable egress outbox over the neutral persistence
 substrate, with exact payload snapshots, restart and delivery truth, receipts,
@@ -68,8 +68,10 @@ an outbox item makes its semantic records and blob unreachable in a committed
 Streams root and retires replaced B+tree pages through reclaim. Segment
 records and blob chunks become physically reusable only after a bounded
 compaction publishes a new bank containing the live set and safely retires
-the old bank. Operational status must distinguish logical terminal cleanup,
-pending physical retirement, and completed physical reclamation.
+the old bank. Operational status distinguishes the exact count of terminal
+cleanups whose append-only records have not yet been compacted from completed
+physical reclamation; it does not misreport those items as reclaimed bytes or
+pages.
 
 ## Pointer-free semantic state
 
@@ -257,12 +259,12 @@ Only then may the attempt record, receipt, and blob be unreachable. Reclaim
 handles retired pages under its two-root fence; compaction later copies the
 bounded live set and physically retires unreachable segment/blob storage.
 
-Capacity reporting therefore exposes at least current retained item count,
-current retained logical payload bytes, configured ceilings, whether
-admission is full by either dimension, logical cleanup backlog, and physical
-retirement/compaction state. Storage damage, unknown format, uncertain
-publication, and cleanup uncertainty remain distinct from ordinary full
-capacity.
+Capacity reporting therefore exposes current retained item count, current
+retained logical payload bytes, configured ceilings, whether admission is full
+by either dimension, the exact cleanup-failed terminal count, and the exact
+uncompacted-cleanup count. Reclaim reports retired/reusable B+tree pages
+separately. Storage damage, unknown format, uncertain publication, and cleanup
+uncertainty remain distinct from ordinary full capacity.
 
 ## Reviewable landing sequence
 
@@ -311,7 +313,7 @@ saturation, cross-record evidence-time refusal, convergence replay without
 reinvoking the receipt source, unsafe retry refusal, and final cold receipt
 preservation.
 
-### Landing 3 — SR2 composition and finite retirement — pending
+### Landing 3 — SR2 composition and finite retirement — in progress
 
 Compose one exact SR2 egress result into outbox acceptance without persisting
 runtime descriptors. Dispatch accepted work through a fitting active cell,
@@ -320,6 +322,16 @@ retention, logical cleanup, reclaim, and bounded compaction. Qualify cold
 restart across the composed journey, outbox-full behavior while runtime cells
 are free, runtime-full behavior while the outbox remains authoritative,
 receipt inspection, and truthful physical retirement.
+
+The spool now selects the oldest policy-eligible terminal item, pins cleanup
+failures and uncertain effects, enforces oldest-safe order under terminal-count
+pressure, and removes one selected attempt with its terminal, idempotency, and
+usage rows in one revision-checked publication. Item, payload, receipt, remote
+evidence, connector-usage, cleanup-failure, and uncompacted-cleanup counters
+remain exact across cold open. The expanded delivery/recovery/cleanup gate
+passes 415 assertions in 3,106,539,410 guest steps. SR2 composition, bounded
+live-set compaction, and the composed two-boot gate remain pending, so this
+does not yet complete Landing 3 or SR3.
 
 Closeout updates the architecture inventory and milestone ledger only after
 all required gates pass. It removes any displaced prerelease path rather than
@@ -341,7 +353,8 @@ closeout stages remain pending and continue to bound any SR3 completion claim.
    root selection.
 3. Run the focused recovery/delivery gate for every attempt/effect state,
    exact retry bytes, receipts, idempotency, cancellation, staleness, and
-   visible indeterminate work.
+   visible indeterminate work, plus terminal-order cleanup, pinned uncertainty,
+   exact counter/index deletion, and cold reduced-live-set reconciliation.
 4. Run the composed SR2-to-outbox restart gate, including independent runtime
    and durable capacity pressure, terminal cleanup, reclaim, and finite
    physical compaction.

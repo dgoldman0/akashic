@@ -305,6 +305,8 @@ def test_streams_sr3_attempt_uses_only_the_current_receipt_reference_shape() -> 
         "SOPATT.DISPATCH-COUNT",
         "SOPROOT.RECEIPT-COUNT",
         "SOPROOT.RECEIPT-BYTES",
+        "SOPROOT.CLEANUP-FAILED-COUNT",
+        "SOPROOT.UNCOMPACTED-CLEANUP-COUNT",
     }
     receipt_accessors = {
         word for word in words if word.startswith("SOPATT.RECEIPT-")
@@ -328,6 +330,7 @@ def test_streams_sr3_attempt_uses_only_the_current_receipt_reference_shape() -> 
 
 def test_streams_sr3_lifecycle_surface_is_exact_and_safe_only() -> None:
     words = _defined_words(OPERATIONAL_SPOOL)
+    operational_words = set().union(*map(_defined_words, OPERATIONAL_MODULES))
     required = {
         "STREAMS-SPOOL-ATTEMPT@",
         "STREAMS-SPOOL-PAYLOAD-STREAM",
@@ -337,6 +340,8 @@ def test_streams_sr3_lifecycle_surface_is_exact_and_safe_only() -> None:
         "STREAMS-SPOOL-REQUEUE-SAFE",
         "STREAMS-SPOOL-RECEIPT@",
         "STREAMS-SPOOL-RECEIPT-STREAM",
+        "STREAMS-SPOOL-CLEANUP-CANDIDATE@",
+        "STREAMS-SPOOL-CLEANUP",
         "STREAMS-SPOOL-COMPLETION-INIT",
         "STREAMS-SPOOL-COMPLETION-VALID?",
     }
@@ -345,10 +350,14 @@ def test_streams_sr3_lifecycle_surface_is_exact_and_safe_only() -> None:
         "STREAMS-SPOOL-REQUEUE-FORCE",
         "STREAMS-SPOOL-RETRY-FORCE",
         "STREAMS-SPOOL-TERMINALIZE-FORCE",
+        "SOPROOT.CLEANUP-BACKLOG",
+        "SOPROOT.PHYSICAL-RETIREMENT",
+        "SPOOLCAP.CLEANUP-BACKLOG",
+        "SPOOLCAP.PHYSICAL-RETIREMENT",
     }
 
     assert required <= words
-    assert words.isdisjoint(forbidden)
+    assert operational_words.isdisjoint(forbidden)
 
 
 def test_streams_sr3_configuration_embeds_no_secret_or_runtime_handle() -> None:

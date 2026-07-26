@@ -84,11 +84,13 @@ CREATE _sr3d-request STREAMS-SPOOL-REQUEST-SIZE ALLOT
 CREATE _sr3d-result-exact STREAMS-SPOOL-RESULT-SIZE ALLOT
 CREATE _sr3d-result-unsafe STREAMS-SPOOL-RESULT-SIZE ALLOT
 CREATE _sr3d-result-stale STREAMS-SPOOL-RESULT-SIZE ALLOT
+CREATE _sr3d-result-cleanup STREAMS-SPOOL-RESULT-SIZE ALLOT
 CREATE _sr3d-ready STREAMS-OPATT-SIZE ALLOT
 CREATE _sr3d-attempt STREAMS-OPATT-SIZE ALLOT
 CREATE _sr3d-completion STREAMS-SPOOL-COMPLETION-SIZE ALLOT
 CREATE _sr3d-receipt STREAMS-OPRECEIPT-SIZE ALLOT
 CREATE _sr3d-capacity STREAMS-SPOOL-CAPACITY-SIZE ALLOT
+CREATE _sr3d-usage STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE ALLOT
 
 CREATE _sr3d-payload-exact 4 ALLOT
 CREATE _sr3d-payload-unsafe 4 ALLOT
@@ -515,6 +517,20 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
     _sr3d-completion STREAMS-SPOOL-COMPLETION-VALID? _sr3d-assert
     _sr3d-stack ;
 
+: _sr3d-build-cleanup-failure  ( -- )
+    _sr3d-completion STREAMS-SPOOL-COMPLETION-INIT
+        STREAMS-SPOOL-S-OK _sr3d-status
+    STREAMS-OPATT-STATE-FAILED-BEFORE
+        _sr3d-completion SPOOLCOMP.STATE !
+    STREAMS-OPATT-EFFECT-NOT-APPLIED
+        _sr3d-completion SPOOLCOMP.EFFECT !
+    STREAMS-OPATT-REASON-NONE
+        _sr3d-completion SPOOLCOMP.REASON !
+    77 _sr3d-completion SPOOLCOMP.CLEANUP-ERROR !
+    510 _sr3d-completion SPOOLCOMP.FINISHED-MS !
+    _sr3d-completion STREAMS-SPOOL-COMPLETION-VALID? _sr3d-assert
+    _sr3d-stack ;
+
 : _sr3d-check-completion-contract  ( -- )
     _sr3d-completion STREAMS-SPOOL-COMPLETION-INIT
         STREAMS-SPOOL-S-OK _sr3d-status
@@ -564,7 +580,7 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
 
 : _sr3d-first-land  ( -- )
     _sr3d-bind-a STREAMS-SPOOL-S-ABSENT _sr3d-status
-    _sr3d-authority 3 12 3 0
+    _sr3d-authority 3 12 3 50
         _sr3d-current-spool @ _sr3d-current-work @
         STREAMS-SPOOL-PROVISION STREAMS-SPOOL-S-OK _sr3d-status
 
@@ -830,6 +846,196 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
         STREAMS-SPOOL-READY@ STREAMS-SPOOL-S-NOT-FOUND _sr3d-status
     _sr3d-stack ;
 
+: _sr3d-cleanup-and-final-cold  ( -- )
+    \ Terminal-count pressure skips the older pinned indeterminate attempt
+    \ and identifies the oldest safe terminal attempt.  A different target
+    \ cannot bypass that order while pressure is active.
+    330 _sr3d-ready
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP-CANDIDATE@
+        STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-ready
+        DUP SOPATT.ATTEMPT-ID
+            _sr3d-result-exact SPOOLRESULT.ATTEMPT-ID RID=
+            _sr3d-assert
+        DUP SOPATT.RECORD-REVISION @ 6 = _sr3d-assert
+        SOPATT.STATE @ STREAMS-OPATT-STATE-DELIVERED = _sr3d-assert
+
+    _sr3d-store-a PSTORE-GENERATION@ _sr3d-old-generation !
+    _sr3d-result-stale SPOOLRESULT.ATTEMPT-ID
+        2 330 _sr3d-attempt
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP
+        STREAMS-SPOOL-S-CONFLICT _sr3d-status
+    _sr3d-store-a PSTORE-GENERATION@
+        _sr3d-old-generation @ = _sr3d-assert
+
+    \ The selected delivered attempt retires in one publication.  Its
+    \ attempt, payload, receipt, idempotency row, and exact retained usage
+    \ all leave logical authority together.
+    _sr3d-result-exact SPOOLRESULT.ATTEMPT-ID
+        6 330 _sr3d-attempt
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-attempt
+        DUP SOPATT.ATTEMPT-ID
+            _sr3d-result-exact SPOOLRESULT.ATTEMPT-ID RID=
+            _sr3d-assert
+        SOPATT.RECORD-REVISION @ 6 = _sr3d-assert
+    _sr3d-result-exact SPOOLRESULT.ATTEMPT-ID
+        _sr3d-attempt@ STREAMS-SPOOL-S-NOT-FOUND _sr3d-status
+    0 _sr3d-sink-bytes !
+    _sr3d-result-exact SPOOLRESULT.ATTEMPT-ID
+        ['] _sr3d-sink _sr3d-readback
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-PAYLOAD-STREAM
+        STREAMS-SPOOL-S-NOT-FOUND _sr3d-status
+    _sr3d-result-exact SPOOLRESULT.ATTEMPT-ID
+        _sr3d-receipt
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-RECEIPT@
+        STREAMS-SPOOL-S-NOT-FOUND _sr3d-status
+    _sr3d-exact-connector-id _sr3d-usage
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CONNECTOR-USAGE@
+        STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-usage STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-ITEM-COUNT@
+        SWAP 1 = AND _sr3d-assert
+    _sr3d-usage STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-PAYLOAD-BYTES@
+        SWAP 4 = AND _sr3d-assert
+    _sr3d-capacity@
+        DUP SPOOLCAP.ITEM-COUNT @ 2 = _sr3d-assert
+        DUP SPOOLCAP.BYTE-COUNT @ 8 = _sr3d-assert
+        DUP SPOOLCAP.TERMINAL-COUNT @ 2 = _sr3d-assert
+        DUP SPOOLCAP.INDETERMINATE-COUNT @ 1 = _sr3d-assert
+        DUP SPOOLCAP.RECEIPT-COUNT @ 0= _sr3d-assert
+        DUP SPOOLCAP.RECEIPT-BYTES @ 0= _sr3d-assert
+        DUP SPOOLCAP.CLEANUP-FAILED-COUNT @ 0= _sr3d-assert
+        SPOOLCAP.UNCOMPACTED-CLEANUP-COUNT @ 1 = _sr3d-assert
+
+    \ With pressure relieved, the stale attempt remains retained until its
+    \ configured age expires.  The indeterminate attempt remains pinned.
+    400 _sr3d-ready
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP-CANDIDATE@
+        STREAMS-SPOOL-S-NOT-FOUND _sr3d-status
+    450 _sr3d-ready
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP-CANDIDATE@
+        STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-ready SOPATT.ATTEMPT-ID
+        _sr3d-result-stale SPOOLRESULT.ATTEMPT-ID RID= _sr3d-assert
+    _sr3d-result-unsafe SPOOLRESULT.ATTEMPT-ID
+        3 450 _sr3d-attempt
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP
+        STREAMS-SPOOL-S-CONFLICT _sr3d-status
+    _sr3d-result-stale SPOOLRESULT.ATTEMPT-ID
+        2 450 _sr3d-attempt
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-result-stale SPOOLRESULT.ATTEMPT-ID
+        _sr3d-attempt@ STREAMS-SPOOL-S-NOT-FOUND _sr3d-status
+
+    \ Reusing the newly freed capacity, create a terminal cleanup failure.
+    \ ACCEPTED work is rejected before a cleanup transaction, and the later
+    \ cleanup error remains an exact pinned terminal count.
+    _sr3d-payload-exact 4 -1 _sr3d-request _sr3d-request!
+    2 _sr3d-request SPOOLREQ.CONNECTOR-REVISION !
+    2 _sr3d-request SPOOLREQ.FLOW-REVISION !
+    _sr3d-request STREAMS-SPOOL-REQUEST-VALID? _sr3d-assert
+    _sr3d-request _sr3d-result-cleanup
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-ADMIT STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-store-a PSTORE-GENERATION@ _sr3d-old-generation !
+    _sr3d-result-cleanup SPOOLRESULT.ATTEMPT-ID
+        1 600 _sr3d-attempt
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP
+        STREAMS-SPOOL-S-CONFLICT _sr3d-status
+    _sr3d-store-a PSTORE-GENERATION@
+        _sr3d-old-generation @ = _sr3d-assert
+    _sr3d-result-cleanup SPOOLRESULT.ATTEMPT-ID
+        1 500 _sr3d-attempt
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-ACTIVATE STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-result-cleanup SPOOLRESULT.ATTEMPT-ID
+        2 600 _sr3d-ready
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP
+        STREAMS-SPOOL-S-CONFLICT _sr3d-status
+    _sr3d-build-cleanup-failure
+    _sr3d-result-cleanup SPOOLRESULT.ATTEMPT-ID
+        2 _sr3d-completion _sr3d-attempt
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-TERMINALIZE STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-attempt
+        DUP SOPATT.RECORD-REVISION @ 3 = _sr3d-assert
+        DUP SOPATT.STATE @ STREAMS-OPATT-STATE-FAILED-BEFORE =
+            _sr3d-assert
+        DUP SOPATT.EFFECT @ STREAMS-OPATT-EFFECT-NOT-APPLIED =
+            _sr3d-assert
+        SOPATT.CLEANUP-ERROR @ 77 = _sr3d-assert
+    _sr3d-store-a PSTORE-GENERATION@ _sr3d-old-generation !
+    _sr3d-result-cleanup SPOOLRESULT.ATTEMPT-ID
+        3 600 _sr3d-ready
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP
+        STREAMS-SPOOL-S-CONFLICT _sr3d-status
+    _sr3d-store-a PSTORE-GENERATION@
+        _sr3d-old-generation @ = _sr3d-assert
+    600 _sr3d-ready
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CLEANUP-CANDIDATE@
+        STREAMS-SPOOL-S-NOT-FOUND _sr3d-status
+    _sr3d-exact-connector-id _sr3d-usage
+        _sr3d-current-spool @ _sr3d-current-work @
+        STREAMS-SPOOL-CONNECTOR-USAGE@
+        STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-usage STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-ITEM-COUNT@
+        SWAP 1 = AND _sr3d-assert
+    _sr3d-usage STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-PAYLOAD-BYTES@
+        SWAP 4 = AND _sr3d-assert
+    _sr3d-capacity@
+        DUP SPOOLCAP.ITEM-COUNT @ 2 = _sr3d-assert
+        DUP SPOOLCAP.BYTE-COUNT @ 8 = _sr3d-assert
+        DUP SPOOLCAP.READY-COUNT @ 0= _sr3d-assert
+        DUP SPOOLCAP.ACTIVE-COUNT @ 0= _sr3d-assert
+        DUP SPOOLCAP.TERMINAL-COUNT @ 2 = _sr3d-assert
+        DUP SPOOLCAP.INDETERMINATE-COUNT @ 1 = _sr3d-assert
+        DUP SPOOLCAP.RECEIPT-COUNT @ 0= _sr3d-assert
+        DUP SPOOLCAP.CLEANUP-FAILED-COUNT @ 1 = _sr3d-assert
+        SPOOLCAP.UNCOMPACTED-CLEANUP-COUNT @ 2 = _sr3d-assert
+
+    \ A fresh descriptor must recompute the reduced live set and preserve the
+    \ two pinned attempts; append-only garbage remains truthfully uncompacted.
+    _sr3d-bind-b STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-result-unsafe SPOOLRESULT.ATTEMPT-ID
+        _sr3d-attempt@ STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-attempt
+        DUP SOPATT.STATE @ STREAMS-OPATT-STATE-INDETERMINATE =
+            _sr3d-assert
+        SOPATT.EFFECT @ STREAMS-OPATT-EFFECT-UNCERTAIN =
+            _sr3d-assert
+    _sr3d-result-cleanup SPOOLRESULT.ATTEMPT-ID
+        _sr3d-attempt@ STREAMS-SPOOL-S-OK _sr3d-status
+    _sr3d-attempt
+        DUP SOPATT.STATE @ STREAMS-OPATT-STATE-FAILED-BEFORE =
+            _sr3d-assert
+        SOPATT.CLEANUP-ERROR @ 77 = _sr3d-assert
+    _sr3d-capacity@
+        DUP SPOOLCAP.ITEM-COUNT @ 2 = _sr3d-assert
+        DUP SPOOLCAP.BYTE-COUNT @ 8 = _sr3d-assert
+        DUP SPOOLCAP.TERMINAL-COUNT @ 2 = _sr3d-assert
+        DUP SPOOLCAP.INDETERMINATE-COUNT @ 1 = _sr3d-assert
+        DUP SPOOLCAP.CLEANUP-FAILED-COUNT @ 1 = _sr3d-assert
+        SPOOLCAP.UNCOMPACTED-CLEANUP-COUNT @ 2 = _sr3d-assert
+    _sr3d-stack ;
+
 : _SR3D-RUN  ( -- )
     0 _sr3d-fails !
     0 _sr3d-checks !
@@ -848,6 +1054,7 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
     _sr3d-first-land
     _sr3d-cold-recovery-and-finish
     _sr3d-stale-and-final-cold
+    _sr3d-cleanup-and-final-cold
 
     _sr3d-old-vfs @ VFS-USE
     _sr3d-vfs @ VFS-DESTROY

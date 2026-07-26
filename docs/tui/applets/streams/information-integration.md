@@ -1,8 +1,8 @@
 # Streams information integration contract
 
 **Status:** normative product and ownership contract; SR2 is complete and SR3
-implementation is in progress with standalone admission and delivery/recovery
-qualified
+implementation is in progress with standalone admission, delivery/recovery,
+and logical cleanup qualified
 
 **Reconciled:** 2026-07-26
 
@@ -243,9 +243,10 @@ raw runtime descriptors.
 The current standalone egress outbox qualifies atomic local acceptance,
 ready/active/terminal transitions, exact payload redispatch, deterministic
 receipt evidence, cold active-to-indeterminate recovery, stale-revision
-refusal, and safe same-attempt requeue under exact idempotency. It does not yet
-compose an SR2 result or cell with that authority, and it does not yet claim
-logical terminal cleanup, reclaim completion, or finite physical compaction.
+refusal, safe same-attempt requeue under exact idempotency, and exact
+policy-eligible logical terminal cleanup while uncertain or cleanup-failed
+work remains pinned. It does not yet compose an SR2 result or cell with that
+authority, and it does not yet claim finite physical compaction.
 
 ## Protocol and package boundaries
 
