@@ -320,10 +320,8 @@ CREATE _sr3c-checkpoint-snapshot STREAMS-OPCHECKPOINT-SIZE ALLOT
 
     STREAMS-OPCONN-ENDPOINT-PINNED ['] SOPCONN.ENDPOINT-POLICY
         _sr3c-connector-field-valid
-    STREAMS-OPCONN-ENDPOINT-ALLOWLISTED ['] SOPCONN.ENDPOINT-POLICY
-        _sr3c-connector-field-valid
     0 ['] SOPCONN.ENDPOINT-POLICY _sr3c-connector-field-invalid
-    3 ['] SOPCONN.ENDPOINT-POLICY _sr3c-connector-field-invalid
+    2 ['] SOPCONN.ENDPOINT-POLICY _sr3c-connector-field-invalid
 
     STREAMS-OPCONN-IDEMPOTENCY-NONE
         ['] SOPCONN.IDEMPOTENCY-POLICY _sr3c-connector-field-valid

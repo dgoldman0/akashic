@@ -84,11 +84,11 @@ The current durable model has the following semantic families:
 
 | Record | Required meaning |
 | --- | --- |
-| Connector configuration | Stable connector identity, positive configuration revision, direction, protocol/profile and admitted endpoint policy, explicit queue/retry/timeout bounds, declared idempotency contract, lifecycle policy, and an opaque credential reference rather than secret bytes |
+| Connector configuration | Stable connector identity, positive configuration revision, direction, protocol/profile and one pinned endpoint identity/seal, explicit queue/retry/timeout bounds, declared idempotency contract, lifecycle policy, and an opaque credential reference rather than secret bytes; no allowlist mode is admitted without a durable allowlist authority |
 | Flow configuration | Stable flow identity and positive revision, exact connector identities/revisions, one bounded route/transform description, enable state, and admitted operational policy |
 | Checkpoint | Connector/flow identity and revision, protocol-specific cursor/resume/subscription value, ordering fact, and the last committed checkpoint identity |
-| Outbox attempt | Stable attempt, event, connector, flow, correlation, and idempotency identities; configuration revisions; exact destination/protocol/media facts; payload length, SHA3-256 digest, and `PBLOB` descriptor; accepted ordering; current transfer/effect truth; reason/detail; and retention state |
-| Receipt | Exact attempt identity, acknowledgement/delivery identity and time, bounded protocol result, remote correlation or receipt bytes when present, and the payload identity/digest to which it applies |
+| Outbox attempt | Stable attempt, event, connector, flow, correlation, and idempotency identities; admitted connector/flow revisions, endpoint seal, protocol/profile/media, and receipt policy/limit; payload length, SHA3-256 digest, and `PBLOB`; distinct accepted and current-ready ordering; dispatch/retry counts; current transfer/effect truth; and an optional receipt identity plus checked record reference |
+| Receipt | Stable receipt and attempt identities; request seal and payload length/digest; connector/flow identities and revisions; protocol/profile; acknowledgement/delivery identities and times; bounded protocol result; and optional remote receipt/correlation bytes bound by their exact lengths, a digest, and one checked `PBLOB` containing receipt bytes followed by correlation bytes |
 
 Connector and flow records are operational configuration, not authored
 documents. Checkpoints are continuation facts, not content history. Attempts
@@ -105,9 +105,39 @@ appropriate. The root also names the exact index roots, current counters,
 capacity policy, retention state, and store identity needed to validate the
 complete authority.
 
+The one egress-outbox index set has eight bound physical trees: connector
+configuration, flow configuration, checkpoints, attempt directory, shared
+ready/active dispatch ordering, terminal retention ordering, idempotency, and
+shared operational usage. The usage tree has distinct key families. A
+connector row carries its retained item count and retained payload bytes; a
+flow row carries its active count. The application root separately carries
+the global item/payload totals and retained receipt count/bytes. Usage-tree
+cardinality is exactly connector-configuration cardinality plus
+flow-configuration cardinality, including canonical zero-valued rows.
+Root receipt bytes mean the exact logical remote-receipt plus
+remote-correlation bytes retained through receipt `PBLOB`s; the fixed
+512-byte semantic-record cost is bounded by the shape rather than charged to
+that logical byte counter. A connector receipt policy of `NONE` admits the
+semantic receipt record needed for local effect truth but requires those
+remote-evidence lengths and bytes to remain zero. `BOUNDED` permits remote
+evidence only through the exact positive limit snapshotted into the attempt.
+The root rejects a receipt count above terminal count, nonzero receipt bytes
+with zero receipts, or an active-plus-terminal count above terminal capacity.
+
 Cold open accepts only the current shape and validates the complete reachable
 root before exposing configuration, queue counts, payload bytes, or delivery
-state. Unknown kinds, unknown shapes, malformed lengths, nonzero reserved
+state. It recomputes connector and flow usage from the reachable attempts and
+their states, and requires exact agreement with every persisted usage row and
+the root totals. Every attempt that names a receipt must resolve its checked
+record reference and match the receipt identity, attempt identity, request
+seal, payload facts, configuration identities/revisions, and admitted
+protocol/profile; receipt evidence length must also fit the admitted receipt
+limit. A retained attempt or checkpoint, and a temporarily stale flow
+reference, may name a positive revision less than or equal to the current
+same-ID configuration: a lower revision is valid historical/stale truth that
+hot authorization refuses, while a revision above the current configuration
+is an impossible future reference and therefore corruption. Unknown kinds,
+unknown shapes, malformed lengths, nonzero reserved
 fields, invalid enum values, counter/index disagreement, bad blob
 descriptors, corrupt checked records, and invalid references fail closed as
 damaged or unknown-format state. They are never treated as an empty outbox and
@@ -141,13 +171,20 @@ item-count one-over is refused as capacity with no attempt identity exposed,
 no accepted status, and no mutation of current authority. Item capacity and
 byte capacity are tested independently as well as together.
 
+Hot admission reads and transactionally updates the persisted connector usage
+row rather than rescanning retained attempts. Flow active usage is likewise
+updated with the state transition that acquires or releases active work. The
+full cold-open recomputation is the integrity proof for those hot-path
+counters, not an alternate source of live authority.
+
 One `PSTORE` transaction forms the acceptance boundary. It must:
 
 1. write and transactionally validate the exact payload through `PBLOB`;
 2. encode the stable attempt identity and semantic outbox record that names
    that blob, exact length, digest, destination, configuration revisions,
    correlation, and idempotency facts;
-3. update the required ordered indexes and both capacity counters; and
+3. update the required ordered indexes, global capacity counters, and exact
+   connector usage row; and
 4. publish one new validated Streams application root.
 
 The API reports **durably accepted** only after the complete proposal is known
@@ -191,6 +228,11 @@ It never follows a newer Library/Pad revision, a newer transient carrier, or
 a changed connector revision. A stale configuration requires an explicit new
 attempt under the new revision rather than retargeting the old one.
 
+Accepted ordering is immutable admission history. Ready ordering is a distinct
+monotonic sequence allocated on initial admission and again on every requeue;
+a retry therefore joins the current tail and cannot regain its original queue
+priority.
+
 An indeterminate effect is not automatically retried by default. Automatic
 retry is permitted only when the recorded connector configuration declares a
 safe idempotency contract for that exact operation and the retry preserves the
@@ -231,7 +273,8 @@ prototype or compatibility seam behind.
 ### Landing 1 — Current outbox shape and atomic admission
 
 Implement the Streams persistence adapter, current root and semantic codecs,
-one egress-outbox index, exact payload snapshot, item/byte counters, and
+one egress-outbox index set, exact payload snapshot, global and per-connector
+item/byte counters, and
 single-transaction acceptance boundary. Qualify exact-full and each one-over
 case, interrupted publication, cold open, current-shape validation, corrupt
 records, unknown shape, and no partial payload/attempt visibility.

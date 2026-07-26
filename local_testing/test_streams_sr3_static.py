@@ -220,6 +220,7 @@ def test_streams_sr3_operational_shape_has_no_prerelease_legacy_surface() -> Non
     }
     assert {
         "STREAMS-OPATT-HEADER-CLASSIFY",
+        "STREAMS-OPRECEIPT-HEADER-CLASSIFY",
         "STREAMS-OPROOT-HEADER-CLASSIFY",
     } <= operational_words
 
@@ -241,6 +242,36 @@ def test_streams_sr3_operational_bytes_do_not_embed_sr2_runtime_records() -> Non
 
     assert forbidden_descriptors.isdisjoint(source.split())
     assert not any(prefix in source for prefix in forbidden_field_prefixes)
+
+
+def test_streams_sr3_attempt_uses_only_the_current_receipt_reference_shape() -> None:
+    words = _defined_words(OPERATIONAL_RECORDS)
+    required = {
+        "SOPATT.ENDPOINT-SEAL",
+        "SOPATT.PROFILE",
+        "SOPATT.READY-SEQUENCE",
+        "SOPATT.DISPATCH-COUNT",
+        "SOPROOT.RECEIPT-COUNT",
+        "SOPROOT.RECEIPT-BYTES",
+    }
+    receipt_accessors = {
+        word for word in words if word.startswith("SOPATT.RECEIPT-")
+    }
+    root_sequence_accessors = {
+        word for word in words if word.startswith("SOPROOT.NEXT-")
+    }
+
+    assert required <= words
+    assert receipt_accessors == {
+        "SOPATT.RECEIPT-POLICY",
+        "SOPATT.RECEIPT-BYTE-LIMIT",
+        "SOPATT.RECEIPT-ID",
+        "SOPATT.RECEIPT-REF",
+    }
+    assert root_sequence_accessors == {
+        "SOPROOT.NEXT-ACCEPTED-SEQUENCE",
+        "SOPROOT.NEXT-READY-SEQUENCE",
+    }
 
 
 def test_streams_sr3_configuration_embeds_no_secret_or_runtime_handle() -> None:
@@ -274,7 +305,7 @@ def test_streams_sr3_configuration_embeds_no_secret_or_runtime_handle() -> None:
     }
 
 
-def test_streams_sr3_root_and_index_agree_on_exactly_seven_trees() -> None:
+def test_streams_sr3_root_and_index_agree_on_exactly_eight_trees() -> None:
     record_constants = _integer_constants(OPERATIONAL_RECORDS)
     index_constants = _integer_constants(OPERATIONAL_INDEX)
     record_trees = {
@@ -285,6 +316,7 @@ def test_streams_sr3_root_and_index_agree_on_exactly_seven_trees() -> None:
         "dispatch": record_constants["STREAMS-OPROOT-TREE-DISPATCH"],
         "terminal": record_constants["STREAMS-OPROOT-TREE-TERMINAL"],
         "idempotency": record_constants["STREAMS-OPROOT-TREE-IDEMPOTENCY"],
+        "usage": record_constants["STREAMS-OPROOT-TREE-USAGE"],
     }
     index_trees = {
         "connector": index_constants["STREAMS-OI-TREE-CONNECTOR-CONFIG"],
@@ -296,12 +328,39 @@ def test_streams_sr3_root_and_index_agree_on_exactly_seven_trees() -> None:
             "STREAMS-OI-TREE-TERMINAL-RETENTION"
         ],
         "idempotency": index_constants["STREAMS-OI-TREE-IDEMPOTENCY"],
+        "usage": index_constants["STREAMS-OI-TREE-OPERATIONAL-USAGE"],
     }
 
-    assert record_constants["STREAMS-OPROOT-TREE-COUNT"] == 7
-    assert index_constants["STREAMS-OI-TREE-COUNT"] == 7
+    assert record_constants["STREAMS-OPROOT-TREE-COUNT"] == 8
+    assert index_constants["STREAMS-OI-TREE-COUNT"] == 8
     assert record_trees == index_trees
-    assert set(record_trees.values()) == set(range(7))
+    assert set(record_trees.values()) == set(range(8))
+    scopes = {
+        value
+        for name, value in index_constants.items()
+        if name.startswith("STREAMS-OI-SCOPE-")
+    }
+    families = {
+        value
+        for name, value in index_constants.items()
+        if name.startswith("STREAMS-OI-F-")
+    }
+    assert len(scopes) == 8
+    assert 0 not in scopes
+    assert len(families) == 10
+    assert 0 not in families
+
+
+def test_streams_sr3_endpoint_policy_is_pinned_only() -> None:
+    config_constants = _integer_constants(OPERATIONAL_CONFIG_RECORDS)
+
+    assert {
+        name: value
+        for name, value in config_constants.items()
+        if name.startswith("STREAMS-OPCONN-ENDPOINT-")
+    } == {
+        "STREAMS-OPCONN-ENDPOINT-PINNED": 1,
+    }
 
 
 def test_streams_sr3_operational_contract_is_linked_and_in_progress() -> None:
