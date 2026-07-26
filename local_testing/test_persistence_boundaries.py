@@ -186,6 +186,13 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
     assert "_RCA-CLASSIFY-CURRENT" in reclaim
     assert "_RECLAIM-STATE-CANONICAL-EMPTY?" in reclaim
     assert "_RCL.AUDITED-GENERATION" in reclaim
+    audit_entry = reclaim[
+        reclaim.index(": RECLAIM-AUDIT-CURRENT") :
+        reclaim.index(": _RECLAIM-RESERVE-FITS?")
+    ]
+    assert "R@ ['] _RCA-RUN CATCH" in audit_entry
+    assert "DROP DROP PERSIST-S-FAULT" in audit_entry
+    assert "R> _RCA-END" in audit_entry
     assert re.search(r"\b_PROOT[-.]", reclaim) is None
     assert re.search(r"(?m)^(?:VARIABLE|CREATE|VALUE|DEFER)\b", reclaim) is None
     assert "PSTORE-BEGIN" not in reclaim

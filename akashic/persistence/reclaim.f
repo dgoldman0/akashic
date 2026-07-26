@@ -1591,7 +1591,12 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     0 R@ _RCA.RECLAIM @ _RCL.AUDITED-GENERATION !
     PERSIST-S-OK R@ _RCA.STATUS !
     0 R@ _RCA.PHASE !
-    R@ _RCA-RUN
+    R@ ['] _RCA-RUN CATCH
+    DUP IF
+        DROP DROP PERSIST-S-FAULT
+    ELSE
+        DROP
+    THEN
     R> _RCA-END ;
 
 \ Report whether an active transaction can absorb caller-supplied worst-case
