@@ -65,6 +65,9 @@ LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _LM12-record
 LIBRARY-REPOSITORY-STAGE-BUFFER-MIN XBUF _LM12-stage
 LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _LM12-builder-record
 512 XBUF _LM12-compact-buffer
+8192 CONSTANT _LM12-audit-map-capacity
+_LM12-audit-map-capacity XBUF _LM12-audit-map
+_LM12-audit-map-capacity XBUF _LM12-builder-audit-map
 
 CREATE _LM12-bootstrap RID-SIZE ALLOT
 LIBRARY-REPOSITORY-INSPECTION-SIZE XBUF _LM12-report-a
@@ -338,6 +341,8 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
     _LM12-stage LIBRARY-REPOSITORY-STAGE-BUFFER-MIN
     _LM12-builder-record LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
     _LM12-compact-buffer 512
+    _LM12-audit-map _LM12-audit-map-capacity
+    _LM12-builder-audit-map _LM12-audit-map-capacity
     _LM12-repository _LM12-work LIBRARY-REPOSITORY-WORK-INIT
         LIBRARY-REPOSITORY-S-OK _LM12-status
     _LM12-repository LIBRARY-REPOSITORY-VALID? _LM12-assert

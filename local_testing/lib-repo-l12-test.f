@@ -34,6 +34,9 @@ LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _LR12-record-a
 LIBRARY-REPOSITORY-STAGE-BUFFER-MIN XBUF _LR12-stage-a
 LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _LR12-builder-record-a
 512 XBUF _LR12-compact-buffer-a
+8192 CONSTANT _LR12-audit-map-capacity
+_LR12-audit-map-capacity XBUF _LR12-audit-map-a
+_LR12-audit-map-capacity XBUF _LR12-builder-audit-map-a
 
 CREATE _LR12-bootstrap RID-SIZE ALLOT
 LIBRARY-REPOSITORY-INSPECTION-SIZE XBUF _LR12-inspection
@@ -130,10 +133,23 @@ CREATE _LR12-raw 64 ALLOT
     LIBRARY-REPOSITORY-INIT
         LIBRARY-REPOSITORY-S-OK _LR12-status
     _LR12-repository-a LIBRARY-REPOSITORY-VALID? _LR12-assert
+    0xA5 _LR12-audit-map-a C!
     _LR12-record-a LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
     _LR12-stage-a LIBRARY-REPOSITORY-STAGE-BUFFER-MIN
     _LR12-builder-record-a LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
     _LR12-compact-buffer-a 512
+    _LR12-audit-map-a _LR12-audit-map-capacity
+    _LR12-audit-map-a _LR12-audit-map-capacity
+    _LR12-repository-a _LR12-work-a LIBRARY-REPOSITORY-WORK-INIT
+        LIBRARY-REPOSITORY-S-INVALID _LR12-status
+    _LR12-work-a LIBRARY-REPOSITORY-WORK-VALID? 0= _LR12-assert
+    _LR12-audit-map-a C@ 0xA5 = _LR12-assert
+    _LR12-record-a LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
+    _LR12-stage-a LIBRARY-REPOSITORY-STAGE-BUFFER-MIN
+    _LR12-builder-record-a LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
+    _LR12-compact-buffer-a 512
+    _LR12-audit-map-a _LR12-audit-map-capacity
+    _LR12-builder-audit-map-a _LR12-audit-map-capacity
     _LR12-repository-a _LR12-work-a LIBRARY-REPOSITORY-WORK-INIT
         LIBRARY-REPOSITORY-S-OK _LR12-status
     _LR12-work-a LIBRARY-REPOSITORY-WORK-VALID? _LR12-assert

@@ -43,7 +43,7 @@ BRANCH_CAPACITY = (PAGE_PAYLOAD_BYTES - NODE_HEADER_BYTES) // BRANCH_ENTRY_BYTES
 
 BLOB_CHUNK_BYTES = 32 * 1024
 BLOB_WORKSPACE_BYTES = 46_960
-LIBRARY_INDEX_WORKSPACE_BYTES = 119_840
+LIBRARY_INDEX_WORKSPACE_BYTES = 170_568
 LIBRARY_INDEX_TREE_COUNT = 15
 MAX_ANALYTIC_SAMPLES = 256
 MAX_RECLAIM_BATCH = 32
@@ -54,14 +54,9 @@ RECLAIM_MAINTENANCE_MAX_PAGE_WRITES_PER_STEP = 1
 RECLAIM_MAINTENANCE_MAX_RETIREMENTS_PER_STEP = 2
 PBTREE_MUTATION_PAGE_MAX = 2 * MAX_BTREE_HEIGHT + 1
 APPLICATION_ROOT_PAGE_ALLOCATIONS = 1
-RECLAIM_FINALIZER_METADATA_PAGE_MAX = (
-    (MAX_RETIRED_PAGES_PER_TRANSACTION + MAX_RECLAIM_BATCH - 1)
-    // MAX_RECLAIM_BATCH
-    + (MAX_DISCARDED_PAGES_PER_TRANSACTION + MAX_RECLAIM_BATCH - 1)
-    // MAX_RECLAIM_BATCH
-)
-LIBRARY_HIGH_WATER_MUTATIONS_BEFORE_ROLLOVER = (
-    MAX_ALLOCATED_PAGES_PER_TRANSACTION - APPLICATION_ROOT_PAGE_ALLOCATIONS
+LIBRARY_ARENA_TRANSACTION_PAGES = 128
+LIBRARY_ARENA_MUTATIONS_BEFORE_ROLLOVER = (
+    LIBRARY_ARENA_TRANSACTION_PAGES - APPLICATION_ROOT_PAGE_ALLOCATIONS
 ) // PBTREE_MUTATION_PAGE_MAX
 
 LIBRARY_DOCUMENTS = 1_000_000
@@ -766,16 +761,12 @@ def relationship_range_cost(
 
 @dataclass(frozen=True, slots=True)
 class StagingMutationBudget:
-    """Live-ledger reservation for one more mutation and safe publication."""
+    """Physical-arena reservation for one mutation and its publication."""
 
     tree_height: int
     mutation_page_max: int
     application_root_pages: int
-    maintenance_retirement_pages: int
-    finalizer_metadata_pages: int
-    allocated_page_ledger: int
-    retired_page_ledger: int
-    discarded_page_ledger: int
+    physical_arena_pages: int
 
     def page_allocation_bound(self, index_mutations: int) -> int:
         if index_mutations < 0:
@@ -786,42 +777,13 @@ class StagingMutationBudget:
         )
 
     @property
-    def allocation_reserve(self) -> int:
+    def admission_reserve(self) -> int:
         return self.mutation_page_max + self.application_root_pages
 
-    @property
-    def retirement_reserve(self) -> int:
-        # Staging pages are strict high-water claims and cannot drain reusable
-        # buckets. Publication can retire two metadata pages while taking one
-        # maintenance step, one while allocating the application root, and one
-        # per bounded pending/discard metadata allocation during finalization.
-        return (
-            self.maintenance_retirement_pages
-            + self.application_root_pages
-            + self.finalizer_metadata_pages
-        )
-
-    @property
-    def discard_reserve(self) -> int:
-        return 0
-
-    def room(
-        self,
-        *,
-        allocated: int = 0,
-        retired: int = 0,
-        discarded: int = 0,
-    ) -> bool:
-        if min(allocated, retired, discarded) < 0:
-            raise ValueError("ledger counts must be non-negative")
-        return (
-            allocated + self.allocation_reserve
-            <= self.allocated_page_ledger
-            and retired + self.retirement_reserve
-            <= self.retired_page_ledger
-            and discarded + self.discard_reserve
-            <= self.discarded_page_ledger
-        )
+    def room(self, *, used_pages: int = 0) -> bool:
+        if used_pages < 0:
+            raise ValueError("used_pages must be non-negative")
+        return used_pages + self.admission_reserve <= self.physical_arena_pages
 
     @property
     def fresh_stage_has_room(self) -> bool:
@@ -830,7 +792,7 @@ class StagingMutationBudget:
     @property
     def high_water_mutations_before_rollover(self) -> int:
         return (
-            self.allocated_page_ledger - self.application_root_pages
+            self.physical_arena_pages - self.application_root_pages
         ) // self.mutation_page_max
 
 
@@ -841,11 +803,9 @@ def live_staging_mutation_budget(
 
     A worst-case B+tree put/delete can claim ``2h + 1`` strict high-water pages.
     Publication also reserves one consumer-issued application-root page.
-    Retirement room covers the maintenance source/output pair, application
-    root allocation, and bounded pending/discard metadata allocations.
-    The adapter checks these reservations against the transaction's *current*
-    public reclaim ledgers and physically publishes before another mutation
-    when room is exhausted; there is no fixed mutation-count trigger.
+    The adapter checks that reserve against the current physical transaction's
+    bounded arena usage and publishes before another mutation when room is
+    exhausted; there is no dataset-sized or fixed row-count trigger.
     """
 
     tree_height = max(index.height for index in profile.indexes)
@@ -854,13 +814,7 @@ def live_staging_mutation_budget(
         tree_height=tree_height,
         mutation_page_max=mutation_page_max,
         application_root_pages=APPLICATION_ROOT_PAGE_ALLOCATIONS,
-        maintenance_retirement_pages=(
-            RECLAIM_MAINTENANCE_MAX_RETIREMENTS_PER_STEP
-        ),
-        finalizer_metadata_pages=RECLAIM_FINALIZER_METADATA_PAGE_MAX,
-        allocated_page_ledger=MAX_ALLOCATED_PAGES_PER_TRANSACTION,
-        retired_page_ledger=MAX_RETIRED_PAGES_PER_TRANSACTION,
-        discarded_page_ledger=MAX_DISCARDED_PAGES_PER_TRANSACTION,
+        physical_arena_pages=LIBRARY_ARENA_TRANSACTION_PAGES,
     )
 
 
@@ -1122,7 +1076,8 @@ __all__ = [
     "LIBRARY_QUERY_PAGE_MAX",
     "LIBRARY_INDEX_TREE_COUNT",
     "LIBRARY_INDEX_WORKSPACE_BYTES",
-    "LIBRARY_HIGH_WATER_MUTATIONS_BEFORE_ROLLOVER",
+    "LIBRARY_ARENA_MUTATIONS_BEFORE_ROLLOVER",
+    "LIBRARY_ARENA_TRANSACTION_PAGES",
     "LIBRARY_MEMBERSHIPS",
     "LIBRARY_REPRESENTATIVE_TAGS_PER_DOCUMENT",
     "LIBRARY_REVISIONS",
@@ -1139,7 +1094,6 @@ __all__ = [
     "PBTREE_MUTATION_PAGE_MAX",
     "RECLAIM_MAINTENANCE_MAX_PAGE_WRITES_PER_STEP",
     "RECLAIM_MAINTENANCE_MAX_RETIREMENTS_PER_STEP",
-    "RECLAIM_FINALIZER_METADATA_PAGE_MAX",
     "RID_DIRECTORY_GEOMETRY",
     "SHARED_DIRECTORY_GEOMETRY",
     "STATE_ORDER_GEOMETRY",

@@ -36,6 +36,9 @@ CREATE _LR12-adapter LIBPA-SIZE ALLOT
 CREATE _LR12-adapter-cold LIBPA-SIZE ALLOT
 LIBPA-INDEX-WORK-SIZE XBUF _LR12-work
 LIBPA-INDEX-WORK-SIZE XBUF _LR12-work-cold
+8192 CONSTANT _LR12-audit-map-capacity
+_LR12-audit-map-capacity XBUF _LR12-audit-map
+_LR12-audit-map-capacity XBUF _LR12-audit-map-cold
 GUARD _LR12-guard
 GUARD _LR12-guard-cold
 
@@ -132,7 +135,8 @@ CREATE _LR12-large-digest
         _LR12-store-init
     _LR12-store _LR12-adapter LIBPA-INIT
         LIBPA-S-OK _LR12-status
-    _LR12-pwork _LR12-adapter _LR12-work
+    _LR12-audit-map _LR12-audit-map-capacity
+        _LR12-pwork _LR12-adapter _LR12-work
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _LR12-status
     _LR12-store _LR12-pwork PSTORE-PROVISION
         PERSIST-S-OK _LR12-status
@@ -591,7 +595,8 @@ CREATE _LR12-large-digest
     _LR12-guard-cold _LR12-store-init
     _LR12-store-cold _LR12-adapter-cold LIBPA-INIT
         LIBPA-S-OK _LR12-status
-    _LR12-pwork-cold _LR12-adapter-cold _LR12-work-cold
+    _LR12-audit-map-cold _LR12-audit-map-capacity
+        _LR12-pwork-cold _LR12-adapter-cold _LR12-work-cold
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _LR12-status
     _LR12-store-cold _LR12-pwork-cold PSTORE-PROVISION
         PERSIST-S-OK _LR12-status

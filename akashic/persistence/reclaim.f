@@ -226,8 +226,9 @@ REQUIRE store.f
  16 CONSTANT _RCA-BUSY
  64 CONSTANT _RCA-RECLAIM
 792 CONSTANT _RCA-BUCKET
-PERSIST-PAGE-PAYLOAD-SIZE _RCA-BUCKET +
-    CONSTANT RECLAIM-AUDIT-WORK-SIZE
+PERSIST-PAGE-PAYLOAD-SIZE _RCA-BUCKET + CONSTANT _RCA-ARENA-START
+8 _RCA-ARENA-START + CONSTANT _RCA-ARENA-COUNT
+8 _RCA-ARENA-COUNT + CONSTANT RECLAIM-AUDIT-WORK-SIZE
 
   0 CONSTANT _RCL-MAGIC
   8 CONSTANT _RCL-SELF
@@ -632,6 +633,18 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
 : _RCA.ROOT-B            ( work -- root ) _RCA-ROOT-B + ;
 : _RCA.SLOT-ROOT         ( work -- root ) _RCA-SLOT-ROOT + ;
 : _RCA.BUCKET            ( work -- payload ) _RCA-BUCKET + ;
+: _RCA.ARENA-START       ( work -- a ) _RCA-ARENA-START + ;
+: _RCA.ARENA-COUNT       ( work -- a ) _RCA-ARENA-COUNT + ;
+
+: _RCA-ARENA-BOUNDS?  ( first-page page-count audit-work -- flag )
+    >R
+    OVER 0< OVER 0< OR IF 2DROP R> DROP 0 EXIT THEN
+    OVER R@ _RCA.SLOT-PAGE-COUNT @ > IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _RCA.SLOT-PAGE-COUNT @ 2 PICK -
+    ROT DROP <=
+    R> DROP ;
 
 : _RECLAIM-STATUS?  ( status -- flag )
     DUP PERSIST-S-OK >= SWAP PERSIST-S-FAULT <= AND ;
@@ -665,6 +678,16 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
         DUP _RCA.PHASE @ DUP 0=
         SWAP DUP _RCA-PHASE-OLD =
         SWAP _RCA-PHASE-CURRENT = OR OR 0= IF DROP 0 EXIT THEN
+        DUP _RCA.ARENA-START @ DUP -1 < IF 2DROP 0 EXIT THEN
+        DUP -1 = IF
+            DROP
+            DUP _RCA.ARENA-COUNT @ IF DROP 0 EXIT THEN
+        ELSE
+            DROP
+            DUP _RCA.ARENA-START @
+            OVER _RCA.ARENA-COUNT @
+            2 PICK _RCA-ARENA-BOUNDS? 0= IF DROP 0 EXIT THEN
+        THEN
     THEN
     DROP -1 ;
 
@@ -676,6 +699,7 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     DUP RECLAIM-AUDIT-WORK-SIZE 0 FILL
     _RECLAIM-AUDIT-MAGIC OVER _RCA.MAGIC !
     DUP OVER _RCA.SELF !
+    -1 OVER _RCA.ARENA-START !
     PERSIST-S-INVALID SWAP _RCA.STATUS !
     PERSIST-S-OK ;
 
@@ -827,6 +851,51 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     THEN
     DUP >R _RCA-PHASE-APP-MARK R@ _RCA-MARK-UNIQUE
     R> DROP ;
+
+\ A consumer may encounter a page through more than one application root
+\ while auditing copy-on-write snapshots.  This assertion accepts only a page
+\ already classified as application-owned in the current audit phase; it does
+\ not make arbitrary duplicate submissions idempotent.
+: RECLAIM-AUDIT-APPLICATION-PAGE-SHARED
+  ( page-id audit-work -- status )
+    DUP _RCA-SUBMISSION-READY? 0= IF
+        2DROP PERSIST-S-INVALID EXIT
+    THEN
+    DUP _RCA.ROOT-SUBMITTED @ -1 <>
+    OVER _RCA.STATE-SUBMITTED @ -1 <> OR IF
+        2DROP PERSIST-S-INVALID EXIT
+    THEN
+    >R
+    DUP 0< IF DROP R> DROP PERSIST-S-CORRUPT EXIT THEN
+    DUP R@ _RCA.SLOT-PAGE-COUNT @ >= IF
+        DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _RCA.MAP @ + C@ R@ _RCA-PHASE-MASK AND
+    R@ _RCA-PHASE-APP-MARK =
+    R> DROP IF PERSIST-S-OK ELSE PERSIST-S-CORRUPT THEN ;
+
+\ A consumer may conservatively retain one exact page interval as opaque
+\ application-owned arena storage until compaction.  The interval is applied
+\ only after the submitted reclaim state has classified its metadata and
+\ ledgers; any neutral classification inside the interval is an ownership
+\ collision and only an existing application mark may be shared.
+: RECLAIM-AUDIT-APPLICATION-ARENA!
+  ( first-page page-count audit-work -- status )
+    >R
+    R@ _RCA-SUBMISSION-READY? 0= IF
+        2DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    R@ _RCA.ROOT-SUBMITTED @ -1 <>
+    R@ _RCA.STATE-SUBMITTED @ -1 <> OR
+    R@ _RCA.ARENA-START @ -1 <> OR IF
+        2DROP R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    2DUP R@ _RCA-ARENA-BOUNDS? 0= IF
+        2DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    DUP R@ _RCA.ARENA-COUNT !
+    OVER R@ _RCA.ARENA-START !
+    2DROP R> DROP PERSIST-S-OK ;
 
 : RECLAIM-AUDIT-APPLICATION-COMPLETE  ( audit-work -- status )
     DUP _RCA-SUBMISSION-READY? 0= IF
@@ -1104,6 +1173,36 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     AND DUP 0= IF DROP 0 EXIT THEN
     DUP 1- AND 0= ;
 
+: _RCA-AUDIT-ARENA  ( work -- status )
+    >R
+    R@ _RCA.ARENA-START @ -1 = IF
+        R> DROP PERSIST-S-OK EXIT
+    THEN
+    R@ _RCA.ARENA-START @
+    R@ _RCA.ARENA-COUNT @
+    R@ _RCA-ARENA-BOUNDS? 0= IF
+        R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    0 R@ _RCA.CHAIN-INDEX !
+    BEGIN
+        R@ _RCA.CHAIN-INDEX @ R@ _RCA.ARENA-COUNT @ <
+    WHILE
+        R@ _RCA.ARENA-START @ R@ _RCA.CHAIN-INDEX @ + DUP
+        R@ _RCA.MAP @ + C@ R@ _RCA-PHASE-MASK AND
+        DUP IF
+            R@ _RCA-PHASE-APP-MARK <> IF
+                DROP R> DROP PERSIST-S-CORRUPT EXIT
+            THEN
+            DROP
+        ELSE
+            DROP
+            R@ _RCA-PHASE-APP-MARK R@ _RCA-MARK-UNIQUE
+            DUP IF R> DROP EXIT THEN DROP
+        THEN
+        1 R@ _RCA.CHAIN-INDEX +!
+    REPEAT
+    R> DROP PERSIST-S-OK ;
+
 : _RCA-CLASSIFY-OLD  ( work -- status )
     DUP _RCA.SLOT-PAGE-COUNT @ 0 ?DO
         DUP _RCA.MAP @ I + C@ _RCA-M-OLD _RCA-ONE-BIT? 0= IF
@@ -1220,6 +1319,8 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     0 R@ _RCA.ROOT-SUBMITTED !
     0 R@ _RCA.STATE-SUBMITTED !
     0 R@ _RCA.COMPLETE !
+    -1 R@ _RCA.ARENA-START !
+    0 R@ _RCA.ARENA-COUNT !
     DROP
     R@ _RCA-CALL-ENUMERATOR
     DUP IF R> DROP EXIT THEN DROP
@@ -1233,6 +1334,8 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
         THEN
     THEN
     R@ _RCA-AUDIT-SUBMITTED-STATE
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _RCA-AUDIT-ARENA
     DUP IF R> DROP EXIT THEN DROP
     R@ _RCA.PHASE @ _RCA-PHASE-OLD = IF
         R> _RCA-CLASSIFY-OLD

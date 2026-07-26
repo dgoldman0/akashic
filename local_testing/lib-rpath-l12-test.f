@@ -47,6 +47,9 @@ LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _LRP12-record
 LIBRARY-REPOSITORY-STAGE-BUFFER-MIN XBUF _LRP12-stage
 LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _LRP12-builder-record
 512 XBUF _LRP12-compact-buffer
+8192 CONSTANT _LRP12-audit-map-capacity
+_LRP12-audit-map-capacity XBUF _LRP12-audit-map
+_LRP12-audit-map-capacity XBUF _LRP12-builder-audit-map
 
 CREATE _LRP12-bootstrap RID-SIZE ALLOT
 LIBRARY-REPOSITORY-INSPECTION-SIZE XBUF _LRP12-report
@@ -147,6 +150,8 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
     _LRP12-stage LIBRARY-REPOSITORY-STAGE-BUFFER-MIN
     _LRP12-builder-record LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
     _LRP12-compact-buffer 512
+    _LRP12-audit-map _LRP12-audit-map-capacity
+    _LRP12-builder-audit-map _LRP12-audit-map-capacity
     _LRP12-repository _LRP12-work
     LIBRARY-REPOSITORY-WORK-INIT
         LIBRARY-REPOSITORY-S-OK _LRP12-status

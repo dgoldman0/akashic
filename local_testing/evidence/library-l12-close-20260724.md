@@ -59,16 +59,18 @@ one cold point lookup therefore reads at most twelve index pages, and one
 32-row keyset window reads at most 44.
 
 Ordinary work remains bounded and caller-owned. The Library index workspace is
-119,840 bytes and contains one B+tree workspace, one blob workspace, one
-reclaim workspace, fifteen tree descriptors and root pairs, bounded staging
-values, one page scratch buffer, and a 32 KiB content window. Query pages hold
-at most 32 rows. Larger content is delivered by range or stream. Compaction
-advances by caller-supplied byte, work, and per-step byte budgets.
+170,568 bytes and contains one B+tree workspace, one blob workspace, one
+reclaim workspace, fifteen tree descriptors and three root arrays, bounded
+staging values, fixed cold-audit work, one page scratch buffer, and a 32 KiB
+content window. Cold ownership uses two caller-owned bytes per committed page.
+Query pages hold at most 32 rows. Larger content is delivered by range or
+stream. Compaction advances by caller-supplied byte, work, and per-step byte
+budgets.
 
 Tree mutation admission reserves the tallest possible copy-on-write path,
-application-root publication, and reclaim finalization before each staged
-mutation. A long logical operation may publish intermediate physical roots,
-but advances the Library logical generation exactly once.
+plus application-root publication, inside a bounded 128-page high-water arena
+before each staged mutation. A long logical operation may publish intermediate
+physical roots, but advances the Library logical generation exactly once.
 
 ## Durability and recovery closure
 

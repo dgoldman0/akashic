@@ -44,6 +44,9 @@ LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _LC12-record
 LIBRARY-REPOSITORY-STAGE-BUFFER-MIN XBUF _LC12-stage
 LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _LC12-builder-record
 512 XBUF _LC12-compact-buffer
+8192 CONSTANT _LC12-audit-map-capacity
+_LC12-audit-map-capacity XBUF _LC12-audit-map
+_LC12-audit-map-capacity XBUF _LC12-builder-audit-map
 
 LIBRARY-SERVICE-SIZE XBUF _LC12-service
 LIBRARY-SERVICE-WORK-SIZE XBUF _LC12-service-work
@@ -136,6 +139,8 @@ CREATE _LC12-read-bytes 64 ALLOT
     _LC12-stage LIBRARY-REPOSITORY-STAGE-BUFFER-MIN
     _LC12-builder-record LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
     _LC12-compact-buffer 512
+    _LC12-audit-map _LC12-audit-map-capacity
+    _LC12-builder-audit-map _LC12-audit-map-capacity
     _LC12-repository _LC12-repository-work
         LIBRARY-REPOSITORY-WORK-INIT
         LIBRARY-REPOSITORY-S-OK _LC12-status ;

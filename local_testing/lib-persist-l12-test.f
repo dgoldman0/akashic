@@ -21,17 +21,28 @@ CREATE _L12P-bootstrap-other RID-SIZE ALLOT
 CREATE _L12P-bootstrap-out RID-SIZE ALLOT
 CREATE _L12P-store PSTORE-SIZE ALLOT
 CREATE _L12P-store-cold PSTORE-SIZE ALLOT
+CREATE _L12P-store-small PSTORE-SIZE ALLOT
 CREATE _L12P-pwork PSTORE-WORK-SIZE ALLOT
 CREATE _L12P-pwork-cold PSTORE-WORK-SIZE ALLOT
+CREATE _L12P-pwork-small PSTORE-WORK-SIZE ALLOT
 LIBPA-RECORD-MAX PERSIST-RECORD-HEADER-SIZE + CONSTANT _L12P-buffer-u
 _L12P-buffer-u XBUF _L12P-buffer
 _L12P-buffer-u XBUF _L12P-buffer-cold
+_L12P-buffer-u XBUF _L12P-buffer-small
 CREATE _L12P-adapter LIBPA-SIZE ALLOT
 CREATE _L12P-adapter-cold LIBPA-SIZE ALLOT
+CREATE _L12P-adapter-small LIBPA-SIZE ALLOT
 LIBPA-INDEX-WORK-SIZE XBUF _L12P-work
 LIBPA-INDEX-WORK-SIZE XBUF _L12P-work-cold
+LIBPA-INDEX-WORK-SIZE XBUF _L12P-work-small
+LIBPA-INDEX-WORK-SIZE XBUF _L12P-work-invalid
+8192 CONSTANT _L12P-audit-map-capacity
+_L12P-audit-map-capacity XBUF _L12P-audit-map
+_L12P-audit-map-capacity XBUF _L12P-audit-map-cold
+1 XBUF _L12P-audit-map-small
 GUARD _L12P-guard
 GUARD _L12P-guard-cold
+GUARD _L12P-guard-small
 
 CREATE _L12P-collection LIB-COLLECTION-SIZE ALLOT
 CREATE _L12P-collection-out LIB-COLLECTION-SIZE ALLOT
@@ -204,12 +215,21 @@ CREATE _L12P-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
 
     _L12P-store _L12P-pwork _L12P-buffer _L12P-guard _L12P-store-init
     _L12P-store _L12P-adapter LIBPA-INIT LIBPA-S-OK _L12P-status
-    _L12P-pwork _L12P-adapter _L12P-work
+    _L12P-work-invalid LIBPA-INDEX-WORK-SIZE 0x5A FILL
+    _L12P-work-invalid 1 _L12P-pwork _L12P-adapter _L12P-work-invalid
+        LIBPA-INDEX-WORK-INIT LIBPA-S-INVALID _L12P-status
+    _L12P-work-invalid C@ 0x5A = _L12P-assert
+    _L12P-work-invalid LIBPA-INDEX-WORK-SIZE + 1- C@
+        0x5A = _L12P-assert
+    _L12P-audit-map _L12P-audit-map-capacity
+        _L12P-pwork _L12P-adapter _L12P-work
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12P-status
     _L12P-store _L12P-pwork PSTORE-PROVISION
         PERSIST-S-OK _L12P-status
     _L12P-adapter _L12P-work LIBPA-INDEX-OPEN
-        LIBPA-S-ABSENT _L12P-status ;
+        LIBPA-S-ABSENT _L12P-status
+    _L12P-work LIBPA-INDEX-AUDIT-MAP-REQUIRED@ 0=
+        _L12P-assert ;
 
 : _L12P-bootstrap-contracts  ( -- )
     _L12P-bootstrap-out RID-SIZE 0xCC FILL
@@ -241,6 +261,11 @@ CREATE _L12P-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
     _L12P-work LIBPA-INDEX-DOCUMENT-COUNT@ 1 = _L12P-assert
     _L12P-work LIBPA-INDEX-MUTATION-SEQUENCE@ 1 = _L12P-assert
     _L12P-store PSTORE-GENERATION@ 2 > _L12P-assert
+    _L12P-work _LIBPIX-ARENA-ACTIVE? _L12P-assert
+    _L12P-work _LIBPIX.ARENA-PAGE-BASE @ 0> _L12P-assert
+    _L12P-work _LIBPIX.ARENA-ROOT-PAGE @ DUP 0>= _L12P-assert
+    _L12P-work _LIBPIX.ARENA-PAGE-BASE @ < _L12P-assert
+    _L12P-work LIBPA-RECLAIM-STEP-CALLS@ 0= _L12P-assert
     _L12P-store PSTORE-GENERATION@ >R
     _L12P-entry-out LIB-ENTRY-SIZE 0xA5 FILL
     \ Idempotency resolves before the now-stale expected generation.
@@ -500,11 +525,32 @@ CREATE _L12P-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
         _L12P-store-init
     _L12P-store-cold _L12P-adapter-cold LIBPA-INIT
         LIBPA-S-OK _L12P-status
-    _L12P-pwork-cold _L12P-adapter-cold _L12P-work-cold
+    _L12P-audit-map-cold _L12P-audit-map-capacity
+        _L12P-pwork-cold _L12P-adapter-cold _L12P-work-cold
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12P-status
     _L12P-store-cold _L12P-pwork-cold PSTORE-PROVISION
         PERSIST-S-OK _L12P-status
     _L12P-adapter-cold _L12P-work-cold LIBPA-INDEX-OPEN
+        LIBPA-S-OK _L12P-status
+    _L12P-work-cold LIBPA-INDEX-AUDITED-GENERATION@
+        _L12P-store-cold PSTORE-GENERATION@ = _L12P-assert
+    _L12P-work-cold LIBPA-INDEX-AUDIT-MAP-REQUIRED@ 0> _L12P-assert
+    _L12P-work-cold LIBPA-INDEX-AUDIT-MAP-REQUIRED@
+    _L12P-store-cold PSTORE-CURRENT-ROOT@
+        PROOTV.PAGE-COUNT @ 2 * = _L12P-assert
+    _L12P-work-cold LIBPA-INDEX-AUDIT-MAP-CAPACITY@
+        _L12P-audit-map-capacity = _L12P-assert
+    _L12P-work-cold _LIBPIX-ARENA-ACTIVE? _L12P-assert
+    _L12P-work-cold _LIBPIX.ARENA-PAGE-BASE @
+        _L12P-work _LIBPIX.ARENA-PAGE-BASE @ = _L12P-assert
+    _L12P-work-cold _LIBPIX.ARENA-ROOT-PAGE @
+        _L12P-work _LIBPIX.ARENA-ROOT-PAGE @ = _L12P-assert
+    _L12P-adapter-cold _L12P-work-cold LIBPA-INDEX-BEGIN
+        LIBPA-S-OK _L12P-status
+    _L12P-work-cold _LIBPIX.ARENA-TX-PAGES @ 0= _L12P-assert
+    _L12P-adapter-cold _L12P-work-cold LIBPA-INDEX-ABORT
+        LIBPA-S-OK _L12P-status
+    _L12P-adapter-cold _L12P-work-cold LIBPA-INDEX-REBIND
         LIBPA-S-OK _L12P-status
     _L12P-work-cold LIBPA-INDEX-LOGICAL-GENERATION@ 3 = _L12P-assert
     _L12P-bootstrap-out _L12P-work-cold LIBPA-INDEX-BOOTSTRAP-ID@
@@ -515,6 +561,27 @@ CREATE _L12P-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
         LIBPA-S-OK _L12P-status
     _L12P-entry-next _L12P-entry-cold LIB-ENTRY-SIZE
         _L12P-bytes= _L12P-assert ;
+
+: _L12P-cold-capacity-contracts  ( -- )
+    _L12P-store-small _L12P-pwork-small
+        _L12P-buffer-small _L12P-guard-small _L12P-store-init
+    _L12P-store-small _L12P-adapter-small LIBPA-INIT
+        LIBPA-S-OK _L12P-status
+    0xA5 _L12P-audit-map-small C!
+    _L12P-audit-map-small 1
+        _L12P-pwork-small _L12P-adapter-small _L12P-work-small
+        LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12P-status
+    _L12P-store-small _L12P-pwork-small PSTORE-PROVISION
+        PERSIST-S-OK _L12P-status
+    _L12P-adapter-small _L12P-work-small LIBPA-INDEX-OPEN
+        LIBPA-S-CAPACITY _L12P-status
+    _L12P-audit-map-small C@ 0xA5 = _L12P-assert
+    _L12P-work-small LIBPA-INDEX-AUDIT-MAP-REQUIRED@
+        _L12P-work-small LIBPA-INDEX-AUDIT-MAP-CAPACITY@ >
+        _L12P-assert
+    _L12P-pwork-small PSTORE-PROPOSED-ROOT@ 0= _L12P-assert
+    _L12P-work-small LIBPA-INDEX-AUDITED-GENERATION@ 0=
+        _L12P-assert ;
 
 : _L12P-collection-record-contracts  ( -- )
     _L12P-collection LIB-COLLECTION-INIT
@@ -546,7 +613,7 @@ CREATE _L12P-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
     0 _L12P-fails !
     DEPTH _L12P-depth !
     PBLOB-WORK-SIZE 46960 = _L12P-assert
-    LIBPA-INDEX-WORK-SIZE 119840 = _L12P-assert
+    LIBPA-INDEX-WORK-SIZE 170568 = _L12P-assert
     _L12P-setup
     _L12P-bootstrap-contracts
     _L12P-document-create-contracts
@@ -554,6 +621,7 @@ CREATE _L12P-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
     _L12P-document-content-replace-contracts
     _L12P-range-contracts
     _L12P-cold-contracts
+    _L12P-cold-capacity-contracts
     _L12P-collection-record-contracts
     _L12P-stack
     _L12P-fails @ IF

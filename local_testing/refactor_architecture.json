@@ -415,18 +415,19 @@
     }
   },
   "hot_path_budgets": {
-    "cold_open_max_metadata_pages": 64,
+    "cold_open_page_read_policy": "complete valid-slot application and reclaim ownership audit",
+    "cold_open_working_memory": "two caller-owned bytes per largest valid-slot page plus fixed audit work",
     "large_profile_point_lookup_max_index_pages": 12,
     "large_profile_32_result_keyset_max_index_page_reads": 44,
     "large_profile_250000_edge_range_max_index_page_reads": 273455,
     "library_index_tree_count": 15,
-    "library_index_workspace_bytes": 119840,
+    "library_index_workspace_bytes": 170568,
     "btree_mutation_max_allocated_pages": 25,
     "allocated_page_ledger": 128,
-    "staging_admission_policy": "dynamic public-ledger page reservation",
+    "staging_admission_policy": "bounded high-water arena reservation",
     "staging_mutation_page_reservation": "2h+1 pages at the tallest current staging root",
-    "staging_publication_reservation": "one application-root page plus bounded reclaim-step and reclaim-finalizer retirement/discard pages",
-    "stage_policy_within_page_ledger": true,
+    "staging_publication_reservation": "one application-root page within the 128-page physical transaction arena",
+    "stage_policy_within_physical_arena": true,
     "reclaim_maintenance_max_page_writes_per_step": 1,
     "ui_max_collection_pages": 3,
     "ordinary_operation_corpus_proportional_allocation": false,
@@ -453,25 +454,26 @@
     },
     "live_topology": {
       "index_tree_count": 15,
-      "library_index_workspace_bytes": 119840,
+      "library_index_workspace_bytes": 170568,
       "large_profile_point_lookup_max_index_pages": 12,
       "large_profile_32_result_keyset_max_index_page_reads": 44,
       "large_profile_250000_edge_range_max_index_page_reads": 273455,
       "btree_mutation_max_allocated_pages": 25,
       "allocated_page_ledger": 128,
-      "staging_admission_policy": "dynamic public-ledger page reservation",
+      "staging_admission_policy": "bounded high-water arena reservation",
       "staging_mutation_page_reservation": "2h+1 pages at the tallest current staging root",
-      "staging_publication_reservation": "one application-root page plus bounded reclaim-step and reclaim-finalizer retirement/discard pages"
+      "staging_publication_reservation": "one application-root page within the 128-page physical transaction arena"
     },
-    "resolved": "L12 admits each staged mutation only when the public allocation, retirement, and discard ledgers can absorb its dynamic tree-height reservation and the remaining publication/finalization reserves; physical publications split long logical operations without advancing their logical generation.",
+    "resolved": "L12 admits each staged mutation only when its dynamic tree-height reservation and the next application-root page fit the bounded physical staging arena; physical publications split long logical operations without advancing their logical generation, and two-bank compaction replaces the prior bank arena with an explicitly owned target-build arena.",
     "evidence": [
       "exact fifteen-root Library adapter topology",
       "twelve-level churn-retained body-postings bound",
       "7,813 cache-preserving 32-result membership slices",
-      "119,840-byte caller-owned Library index workspace",
+      "170,568-byte caller-owned Library index workspace",
       "all-tree page-read, page-write, and comparison telemetry",
       "2h+1 mutation-page reservation from the tallest current staging root",
-      "public-ledger admission through RECLAIM-TX-ROOM?",
+      "bounded 128-page high-water arena admission",
+      "two-byte-per-page cold ownership and structural-uniqueness audit",
       "physical and final publication paths with distinct logical-generation semantics"
     ]
   },
@@ -550,8 +552,8 @@
       },
       {
         "operation": "staged publication admission",
-        "shape": "dynamic tallest-root mutation reservation plus application-root and reclaim-finalization reserves",
-        "admission": "checked against the live public allocation, retirement, and discard ledgers before each mutation"
+        "shape": "dynamic tallest-root mutation reservation plus one application-root page",
+        "admission": "checked against current usage of the bounded 128-page physical staging arena before each mutation"
       }
     ]
   },
@@ -560,13 +562,13 @@
       "id": "library.metadata-mutation",
       "module": "tui/applets/library/persistence-adapter.f",
       "operation": "staged document, collection, and posting mutation publication",
-      "current_structure": "fifteen copy-on-write indexes with each staged mutation admitted against the public allocation, retirement, and discard ledgers",
+      "current_structure": "fifteen copy-on-write indexes with each staged mutation admitted against a bounded high-water physical arena",
       "current_complexity": "O((changed keys + candidate postings) log n)",
-      "scale_risk": "transaction ledgers remain deliberately bounded, so long logical operations may require multiple physical publications whose count follows live tree height and reclaim pressure",
-      "replacement_requirement": "delivered in L12: reserve mutation, application-root, reclaim-step, and reclaim-finalizer ledger room before admission, publishing physical roots when the next mutation would not fit",
+      "scale_risk": "long logical operations may require multiple bounded physical publications whose count follows live tree height and changed-key volume",
+      "replacement_requirement": "delivered in L12: reserve the tallest mutation path and next application-root page inside the current physical arena, publishing a physical checkpoint when the next mutation would not fit",
       "status": "resolved",
       "target_landing": "L12",
-      "evidence_symbols": ["_LIBPIX-STAGING-MUTATION-PAGES", "_LIBPIX-STAGE-NEXT-ROOM?", "RECLAIM-TX-ROOM?", "_LIBPIX-STAGE-PUBLISH", "_LIBPIX-STAGE-FINAL-PUBLISH"]
+      "evidence_symbols": ["_LIBPIX-ARENA-TX-PAGE-MAX", "_LIBPIX-ARENA-ACTIVATE", "_LIBPIX-STAGING-MUTATION-PAGES", "_LIBPIX-STAGE-NEXT-ROOM?", "_LIBPIX-STAGE-PUBLISH", "_LIBPIX-STAGE-FINAL-PUBLISH", "_LIBPACOM-ROOT-ARENA"]
     },
     {
       "id": "streams.observation-checkpoint",

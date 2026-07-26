@@ -694,23 +694,29 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         ],
     }
     assert policy["hot_path_budgets"] == {
-        "cold_open_max_metadata_pages": 64,
+        "cold_open_page_read_policy": (
+            "complete valid-slot application and reclaim ownership audit"
+        ),
+        "cold_open_working_memory": (
+            "two caller-owned bytes per largest valid-slot page plus fixed "
+            "audit work"
+        ),
         "large_profile_point_lookup_max_index_pages": 12,
         "large_profile_32_result_keyset_max_index_page_reads": 44,
         "large_profile_250000_edge_range_max_index_page_reads": 273455,
         "library_index_tree_count": 15,
-        "library_index_workspace_bytes": 119840,
+        "library_index_workspace_bytes": 170568,
         "btree_mutation_max_allocated_pages": 25,
         "allocated_page_ledger": 128,
-        "staging_admission_policy": "dynamic public-ledger page reservation",
+        "staging_admission_policy": "bounded high-water arena reservation",
         "staging_mutation_page_reservation": (
             "2h+1 pages at the tallest current staging root"
         ),
         "staging_publication_reservation": (
-            "one application-root page plus bounded reclaim-step and "
-            "reclaim-finalizer retirement/discard pages"
+            "one application-root page within the 128-page physical "
+            "transaction arena"
         ),
-        "stage_policy_within_page_ledger": True,
+        "stage_policy_within_physical_arena": True,
         "reclaim_maintenance_max_page_writes_per_step": 1,
         "ui_max_collection_pages": 3,
         "ordinary_operation_corpus_proportional_allocation": False,
@@ -737,38 +743,40 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         },
         "live_topology": {
             "index_tree_count": 15,
-            "library_index_workspace_bytes": 119840,
+            "library_index_workspace_bytes": 170568,
             "large_profile_point_lookup_max_index_pages": 12,
             "large_profile_32_result_keyset_max_index_page_reads": 44,
             "large_profile_250000_edge_range_max_index_page_reads": 273455,
             "btree_mutation_max_allocated_pages": 25,
             "allocated_page_ledger": 128,
             "staging_admission_policy": (
-                "dynamic public-ledger page reservation"
+                "bounded high-water arena reservation"
             ),
             "staging_mutation_page_reservation": (
                 "2h+1 pages at the tallest current staging root"
             ),
             "staging_publication_reservation": (
-                "one application-root page plus bounded reclaim-step and "
-                "reclaim-finalizer retirement/discard pages"
+                "one application-root page within the 128-page physical "
+                "transaction arena"
             ),
         },
         "resolved": (
-            "L12 admits each staged mutation only when the public allocation, "
-            "retirement, and discard ledgers can absorb its dynamic tree-height "
-            "reservation and the remaining publication/finalization reserves; "
-            "physical publications split long logical operations without "
-            "advancing their logical generation."
+            "L12 admits each staged mutation only when its dynamic tree-height "
+            "reservation and the next application-root page fit the bounded "
+            "physical staging arena; physical publications split long logical "
+            "operations without advancing their logical generation, and "
+            "two-bank compaction replaces the prior bank arena with an "
+            "explicitly owned target-build arena."
         ),
         "evidence": [
             "exact fifteen-root Library adapter topology",
             "twelve-level churn-retained body-postings bound",
             "7,813 cache-preserving 32-result membership slices",
-            "119,840-byte caller-owned Library index workspace",
+            "170,568-byte caller-owned Library index workspace",
             "all-tree page-read, page-write, and comparison telemetry",
             "2h+1 mutation-page reservation from the tallest current staging root",
-            "public-ledger admission through RECLAIM-TX-ROOM?",
+            "bounded 128-page high-water arena admission",
+            "two-byte-per-page cold ownership and structural-uniqueness audit",
             "physical and final publication paths with distinct logical-generation semantics",
         ],
     }

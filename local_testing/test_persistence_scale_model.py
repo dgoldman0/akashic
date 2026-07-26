@@ -60,7 +60,7 @@ def test_analytical_geometry_is_ratcheted_to_production_constants() -> None:
     calculated_blob_work = frontier + 9 * 64 * ref_size + model.BLOB_CHUNK_BYTES
     assert calculated_blob_work == model.BLOB_WORKSPACE_BYTES
     assert model.BLOB_WORKSPACE_BYTES == 46_960
-    assert model.LIBRARY_INDEX_WORKSPACE_BYTES == 119_840
+    assert model.LIBRARY_INDEX_WORKSPACE_BYTES == 170_568
     assert (
         _forth_decimal_constant(
             "tui/applets/library/model.f",
@@ -90,7 +90,8 @@ def test_analytical_geometry_is_ratcheted_to_production_constants() -> None:
     assert "LIBPA-INDEX-PAGE-WRITES@" in adapter_source
     assert "LIBPA-INDEX-COMPARISONS@" in adapter_source
     assert "LIBPA-STAGING-MUTATION-MAX" not in adapter_source
-    assert "RECLAIM-TX-ROOM?" in adapter_source
+    assert "_LIBPIX-ARENA-TX-PAGE-MAX" in adapter_source
+    assert "_LIBPIX-ARENA-ACTIVE?" in adapter_source
     assert "_LIBPIX-STAGE-NEXT-ROOM?" in adapter_source
 
     index_keys_source = (
@@ -516,32 +517,23 @@ def test_high_degree_relationship_range_never_scans_the_edge_corpus() -> None:
     assert one_window.page_reads == 35
 
 
-def test_live_stage_uses_current_page_ledgers_at_height_twelve() -> None:
+def test_live_stage_uses_bounded_physical_arena_at_height_twelve() -> None:
     budget = model.live_staging_mutation_budget()
     assert budget.tree_height == model.MAX_BTREE_HEIGHT == 12
     assert budget.mutation_page_max == model.PBTREE_MUTATION_PAGE_MAX == 25
     assert budget.application_root_pages == 1
-    assert budget.maintenance_retirement_pages == 2
-    assert budget.finalizer_metadata_pages == (
-        model.RECLAIM_FINALIZER_METADATA_PAGE_MAX
-    ) == 4
-    assert budget.allocated_page_ledger == 128
-    assert budget.retired_page_ledger == 64
-    assert budget.discarded_page_ledger == 64
-    assert budget.allocation_reserve == 26
-    assert budget.retirement_reserve == 7
-    assert budget.discard_reserve == 0
+    assert budget.physical_arena_pages == (
+        model.LIBRARY_ARENA_TRANSACTION_PAGES
+    ) == 128
+    assert budget.admission_reserve == 26
     assert budget.fresh_stage_has_room is True
     assert budget.high_water_mutations_before_rollover == (
-        model.LIBRARY_HIGH_WATER_MUTATIONS_BEFORE_ROLLOVER
+        model.LIBRARY_ARENA_MUTATIONS_BEFORE_ROLLOVER
     ) == 5
     assert budget.page_allocation_bound(5) == 126
     assert budget.page_allocation_bound(6) == 151
-    assert budget.room(allocated=102) is True
-    assert budget.room(allocated=103) is False
-    assert budget.room(retired=57) is True
-    assert budget.room(retired=58) is False
-    assert budget.room(discarded=64) is True
+    assert budget.room(used_pages=102) is True
+    assert budget.room(used_pages=103) is False
 
 
 @pytest.mark.parametrize(
@@ -722,6 +714,6 @@ def test_invalid_ranges_and_geometry_fail_closed() -> None:
     with pytest.raises(ValueError):
         model.live_staging_mutation_budget().page_allocation_bound(-1)
     with pytest.raises(ValueError):
-        model.live_staging_mutation_budget().room(retired=-1)
+        model.live_staging_mutation_budget().room(used_pages=-1)
     with pytest.raises(ValueError):
         model.RID_DIRECTORY_GEOMETRY.height_for(25_705_247_658)

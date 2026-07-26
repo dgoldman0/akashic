@@ -21,14 +21,18 @@ CREATE _L12X-ops VFS-OPS-SIZE ALLOT
 CREATE _L12X-binding VFS-BINDING-DESC-SIZE ALLOT
 CREATE _L12X-identity PERSIST-IDENTITY-SIZE ALLOT
 CREATE _L12X-bootstrap RID-SIZE ALLOT
+CREATE _L12X-loaded-root PERSIST-ROOT-VALUE-SIZE ALLOT
+CREATE _L12X-root-work PROOT-WORK-SIZE ALLOT
 
 LIBPA-RECORD-MAX PERSIST-RECORD-HEADER-SIZE + CONSTANT _L12X-buffer-u
+8192 CONSTANT _L12X-audit-map-capacity
 
 CREATE _L12X-es-store PSTORE-SIZE ALLOT
 CREATE _L12X-es-pwork PSTORE-WORK-SIZE ALLOT
 _L12X-buffer-u XBUF _L12X-es-buffer
 CREATE _L12X-es-adapter LIBPA-SIZE ALLOT
 LIBPA-INDEX-WORK-SIZE XBUF _L12X-es-work
+_L12X-audit-map-capacity XBUF _L12X-es-audit-map
 GUARD _L12X-es-guard
 
 CREATE _L12X-eb-store PSTORE-SIZE ALLOT
@@ -36,6 +40,7 @@ CREATE _L12X-eb-pwork PSTORE-WORK-SIZE ALLOT
 _L12X-buffer-u XBUF _L12X-eb-buffer
 CREATE _L12X-eb-adapter LIBPA-SIZE ALLOT
 LIBPA-INDEX-WORK-SIZE XBUF _L12X-eb-work
+_L12X-audit-map-capacity XBUF _L12X-eb-audit-map
 GUARD _L12X-eb-guard
 CREATE _L12X-empty-context LIBPA-COMPACTION-CONTEXT-SIZE ALLOT
 
@@ -44,6 +49,7 @@ CREATE _L12X-ds-pwork PSTORE-WORK-SIZE ALLOT
 _L12X-buffer-u XBUF _L12X-ds-buffer
 CREATE _L12X-ds-adapter LIBPA-SIZE ALLOT
 LIBPA-INDEX-WORK-SIZE XBUF _L12X-ds-work
+_L12X-audit-map-capacity XBUF _L12X-ds-audit-map
 GUARD _L12X-ds-guard
 
 CREATE _L12X-db-store PSTORE-SIZE ALLOT
@@ -51,6 +57,7 @@ CREATE _L12X-db-pwork PSTORE-WORK-SIZE ALLOT
 _L12X-buffer-u XBUF _L12X-db-buffer
 CREATE _L12X-db-adapter LIBPA-SIZE ALLOT
 LIBPA-INDEX-WORK-SIZE XBUF _L12X-db-work
+_L12X-audit-map-capacity XBUF _L12X-db-audit-map
 GUARD _L12X-db-guard
 CREATE _L12X-document-context LIBPA-COMPACTION-CONTEXT-SIZE ALLOT
 
@@ -131,7 +138,8 @@ CREATE _L12X-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
         PSTORE-WORK-INIT PERSIST-S-OK _L12X-status
     _L12X-es-store _L12X-es-adapter LIBPA-INIT
         LIBPA-S-OK _L12X-status
-    _L12X-es-pwork _L12X-es-adapter _L12X-es-work
+    _L12X-es-audit-map _L12X-audit-map-capacity
+        _L12X-es-pwork _L12X-es-adapter _L12X-es-work
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12X-status
     _L12X-es-store _L12X-es-pwork PSTORE-PROVISION
         PERSIST-S-OK _L12X-status
@@ -150,7 +158,8 @@ CREATE _L12X-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
         PSTORE-WORK-INIT PERSIST-S-OK _L12X-status
     _L12X-eb-store _L12X-eb-adapter LIBPA-INIT
         LIBPA-S-OK _L12X-status
-    _L12X-eb-pwork _L12X-eb-adapter _L12X-eb-work
+    _L12X-eb-audit-map _L12X-audit-map-capacity
+        _L12X-eb-pwork _L12X-eb-adapter _L12X-eb-work
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12X-status
     _L12X-eb-store _L12X-eb-pwork PSTORE-PROVISION
         PERSIST-S-OK _L12X-status
@@ -167,7 +176,8 @@ CREATE _L12X-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
         PSTORE-WORK-INIT PERSIST-S-OK _L12X-status
     _L12X-ds-store _L12X-ds-adapter LIBPA-INIT
         LIBPA-S-OK _L12X-status
-    _L12X-ds-pwork _L12X-ds-adapter _L12X-ds-work
+    _L12X-ds-audit-map _L12X-audit-map-capacity
+        _L12X-ds-pwork _L12X-ds-adapter _L12X-ds-work
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12X-status
     _L12X-ds-store _L12X-ds-pwork PSTORE-PROVISION
         PERSIST-S-OK _L12X-status
@@ -186,7 +196,8 @@ CREATE _L12X-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
         PSTORE-WORK-INIT PERSIST-S-OK _L12X-status
     _L12X-db-store _L12X-db-adapter LIBPA-INIT
         LIBPA-S-OK _L12X-status
-    _L12X-db-pwork _L12X-db-adapter _L12X-db-work
+    _L12X-db-audit-map _L12X-audit-map-capacity
+        _L12X-db-pwork _L12X-db-adapter _L12X-db-work
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12X-status
     _L12X-db-store _L12X-db-pwork PSTORE-PROVISION
         PERSIST-S-OK _L12X-status
@@ -218,6 +229,14 @@ CREATE _L12X-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
     _L12X-step-done @ _L12X-assert
     _L12X-stack ;
 
+: _L12X-mirror-builder-root  ( store -- )
+    >R
+    _L12X-root-work PROOT-WORK-INIT PERSIST-S-OK _L12X-status
+    _L12X-loaded-root R@ PSTORE-ROOT-FILE@ _L12X-root-work PROOT-LOAD
+    PERSIST-S-OK = SWAP 0> AND _L12X-assert
+    R> PSTORE-ROOT-FILE@ _L12X-root-work PROOT-MIRROR
+        PERSIST-S-OK _L12X-status ;
+
 : _L12X-empty-contract  ( -- )
     _L12X-es-init
     _L12X-eb-init
@@ -237,8 +256,18 @@ CREATE _L12X-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
     _L12X-eb-store _L12X-eb-pwork _L12X-empty-context
         LIBPA-COMPACTION-FINALIZE-XT EXECUTE
         LIBPA-S-OK _L12X-status
+    \ The direct callback fixture mirrors its private target before cold
+    \ rebind, matching PCOMPACT's shared publication/mirror boundary.
+    _L12X-eb-store _L12X-mirror-builder-root
     _L12X-eb-adapter _L12X-eb-work LIBPA-INDEX-REBIND
         LIBPA-S-OK _L12X-status
+    _L12X-eb-work _LIBPIX-ARENA-ACTIVE? _L12X-assert
+    _L12X-eb-work _LIBPIX.ARENA-PAGE-BASE @ 0=
+        _L12X-assert
+    _L12X-eb-work _LIBPIX.ARENA-ROOT-PAGE @ -1 =
+        _L12X-assert
+    _L12X-eb-work _LIBPIX.ARENA-TX-PAGES @ 0=
+        _L12X-assert
     _L12X-eb-work LIBPA-INDEX-LOGICAL-GENERATION@ 0=
         _L12X-assert
     _L12X-eb-work LIBPA-INDEX-MUTATION-SEQUENCE@ 0=
@@ -426,9 +455,17 @@ CREATE _L12X-metadata-summary LIB-METADATA-SUMMARY-SIZE ALLOT
     _L12X-db-store _L12X-db-pwork _L12X-document-context
         LIBPA-COMPACTION-FINALIZE-XT EXECUTE
         LIBPA-S-OK _L12X-status
+    _L12X-db-store _L12X-mirror-builder-root
     _L12X-db-adapter _L12X-db-work LIBPA-INDEX-REBIND
         LIBPA-S-OK _L12X-status
 
+    _L12X-db-work _LIBPIX-ARENA-ACTIVE? _L12X-assert
+    _L12X-db-work _LIBPIX.ARENA-PAGE-BASE @ 0=
+        _L12X-assert
+    _L12X-db-work _LIBPIX.ARENA-ROOT-PAGE @ -1 =
+        _L12X-assert
+    _L12X-db-work _LIBPIX.ARENA-TX-PAGES @ 0=
+        _L12X-assert
     _L12X-db-work LIBPA-INDEX-LOGICAL-GENERATION@ 5 =
         _L12X-assert
     _L12X-db-work LIBPA-INDEX-MUTATION-SEQUENCE@ 5 =

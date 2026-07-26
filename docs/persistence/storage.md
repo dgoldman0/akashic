@@ -634,18 +634,19 @@ traversal, but callbacks within that window retain the cursor path and
 one-page cache instead of reopening an operation for every row. Blob ranges
 account for one complete manifest path per touched chunk.
 
-The Library index workspace is exactly 165,928 bytes. Its largest constituents
+The Library index workspace is exactly 170,568 bytes. Its largest constituents
 are one 17,672-byte B+tree workspace, one 46,960-byte blob workspace, one
-10,800-byte reclaim workspace, one 41,104-byte B+tree audit workspace, one
-4,824-byte reclaim audit workspace, fifteen 80-byte tree descriptors, two
+10,800-byte reclaim workspace, one 44,744-byte B+tree audit workspace, one
+4,840-byte reclaim audit workspace, fifteen 80-byte tree descriptors, three
 arrays of fifteen 64-byte roots, the current/old document and collection
 stages, one 4,032-byte page scratch area, and one 32 KiB content scratch
 window. The caller-owned `PSTORE` workspace, record buffer, cache, cache
 frames, and cold ownership map remain separate. The map capacity is supplied
 to the sole current `LIBPA-INDEX-WORK-INIT` signature; cold open discovers the
-largest valid root-slot page count while holding a clean store transaction and
-passes exactly that prefix to `RECLAIM-AUDIT-CURRENT`. An undersized map
-returns capacity before any map byte is touched;
+largest valid root-slot page count while holding a clean store transaction.
+It reserves two bytes per page: one exact Reclaim ownership class and one
+Library traversal-uniqueness mark. An undersized map returns capacity before
+any map byte is touched;
 `LIBPA-INDEX-AUDIT-MAP-REQUIRED@` reports the exact discovered requirement so
 the caller can rebuild the current work graph with sufficient storage.
 `allocation_events = 0`
@@ -654,9 +655,11 @@ operation; copy-on-write transactions still allocate physical pages.
 
 For a nonempty cold authority, Library validates the current application root,
 then audits both valid atomic-root snapshots before making the index workspace
-ready. Its neutral enumerator submits the application-root page and exact
-embedded reclaim state, and uses `PBTREE-AUDIT-SNAPSHOT-TX` to submit every
-reachable node of all fifteen Library trees exactly once. The read-only store
+ready. A clean root submits its application root, exact embedded reclaim state,
+and every node reachable from all fifteen Library trees. An arena root also
+validates the retained pre-arena root forest, requires every current reference
+below the arena base to belong to that forest, and classifies the exact
+high-water suffix as retained application storage. The read-only store
 transaction is always aborted on the contained exit; successful ownership
 evidence remains latched for the selected generation, while corruption,
 callback faults, rebinding, or cleanup failure leave the workspace unable to
@@ -667,15 +670,19 @@ begin a mutation.
 all fifteen roots. Blob byte/chunk/manifest counters and reclaim progress remain
 available from their respective caller-owned workspaces.
 
-Staged mutation admission is page-budget-aware. Before another index mutation,
-the adapter derives the largest possible allocation from the current tree
-height, reserves the application-root and reclaim finalization pages, and asks
-the public reclaim transaction ledger whether that complete reserve fits. If
-it does not, the adapter physically publishes the current stage before
-continuing. A height-12 B+tree mutation can allocate at most `2h+1 = 25`
-checked pages, so at most five such index mutations plus one application root
-fit in the 128-page consumer ledger (`5*25+1 = 126`); the live decision also
-accounts for allocations already consumed by blob work.
+Staged mutation admission is page-budget-aware. At the first staged mutation,
+the root captures one immutable pre-stage baseline and an exact high-water
+page base. Arena-era page allocations remain above that base and are retained
+until compaction; intermediate physical publications keep the visible roots
+unchanged, while the final publication installs the candidate roots and
+advances logical generation once. Before another mutation, the adapter derives
+the largest possible `2h+1` allocation from the tallest tree and reserves one
+application-root page inside the 128-page physical-transaction arena. If it
+does not fit, the adapter publishes a physical checkpoint and continues in a
+fresh bounded transaction. Compaction emits the sole target root and removes
+the prior bank, including its retained baseline and arena. The rebuilt target
+root starts a new exact arena at page zero so every provisional rebuild page
+remains explicitly owned; no target-bank prefix is hidden as garbage.
 
 ## Fault and cleanup contract
 

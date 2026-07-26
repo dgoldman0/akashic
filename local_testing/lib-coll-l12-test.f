@@ -31,6 +31,9 @@ CREATE _L12C-adapter LIBPA-SIZE ALLOT
 CREATE _L12C-adapter-cold LIBPA-SIZE ALLOT
 LIBPA-INDEX-WORK-SIZE XBUF _L12C-work
 LIBPA-INDEX-WORK-SIZE XBUF _L12C-work-cold
+8192 CONSTANT _L12C-audit-map-capacity
+_L12C-audit-map-capacity XBUF _L12C-audit-map
+_L12C-audit-map-capacity XBUF _L12C-audit-map-cold
 GUARD _L12C-guard
 GUARD _L12C-guard-cold
 
@@ -113,7 +116,8 @@ CREATE _L12C-many-collection LIB-COLLECTION-SIZE ALLOT
         _L12C-store-init
     _L12C-store _L12C-adapter LIBPA-INIT
         LIBPA-S-OK _L12C-status
-    _L12C-pwork _L12C-adapter _L12C-work
+    _L12C-audit-map _L12C-audit-map-capacity
+        _L12C-pwork _L12C-adapter _L12C-work
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12C-status
     _L12C-store _L12C-pwork PSTORE-PROVISION
         PERSIST-S-OK _L12C-status
@@ -348,7 +352,8 @@ CREATE _L12C-many-collection LIB-COLLECTION-SIZE ALLOT
         _L12C-buffer-cold _L12C-guard-cold _L12C-store-init
     _L12C-store-cold _L12C-adapter-cold LIBPA-INIT
         LIBPA-S-OK _L12C-status
-    _L12C-pwork-cold _L12C-adapter-cold _L12C-work-cold
+    _L12C-audit-map-cold _L12C-audit-map-capacity
+        _L12C-pwork-cold _L12C-adapter-cold _L12C-work-cold
         LIBPA-INDEX-WORK-INIT LIBPA-S-OK _L12C-status
     _L12C-adapter-cold _L12C-work-cold LIBPA-INDEX-OPEN
         LIBPA-S-OK _L12C-status

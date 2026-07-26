@@ -31,6 +31,7 @@ VARIABLE _RB-audit-payload
 VARIABLE _RB-audit-calls
 VARIABLE _RB-audit-enumerator-xt
 VARIABLE _RB-audit-shape-pages
+VARIABLE _RB-audit-slot-pages
 CREATE _RB-reclaim RECLAIM-SIZE ALLOT
 CREATE _RB-work RECLAIM-WORK-SIZE ALLOT
 CREATE _RB-state RECLAIM-STATE-SIZE ALLOT
@@ -1128,6 +1129,7 @@ GUARD _RB-audit-shape-guard
 
 : _RB-audit-enumerator
   ( snapshot-root generation slot audit-work context -- status )
+    4 PICK PROOTV.PAGE-COUNT @ _RB-audit-slot-pages !
     DROP SWAP DROP SWAP DROP
     1 _RB-audit-calls +!
     _RB-audit-callback-mode @ 1 = IF
@@ -1190,6 +1192,28 @@ GUARD _RB-audit-shape-guard
         DUP IF -ROT 2DROP UNLOOP EXIT THEN DROP
     LOOP
     DROP
+    _RB-audit-callback-mode @ 9 = IF
+        _RB-audit-slot-pages @ 1 > IF
+            1 OVER RECLAIM-AUDIT-APPLICATION-PAGE
+            DUP IF NIP EXIT THEN DROP
+            1 OVER
+            RECLAIM-AUDIT-APPLICATION-PAGE-SHARED
+            DUP IF NIP EXIT THEN DROP
+        THEN
+    THEN
+    _RB-audit-callback-mode @ 10 = IF
+        _RB-audit-slot-pages @ 1 > IF
+            1 _RB-audit-slot-pages @ 1- 2 PICK
+                RECLAIM-AUDIT-APPLICATION-ARENA!
+            DUP IF NIP EXIT THEN DROP
+        THEN
+    THEN
+    _RB-audit-callback-mode @ 11 = IF
+        _RB-audit-slot-pages @ 2 > IF
+            2 1 2 PICK RECLAIM-AUDIT-APPLICATION-ARENA!
+            DUP IF NIP EXIT THEN DROP
+        THEN
+    THEN
     RECLAIM-AUDIT-APPLICATION-COMPLETE ;
 
 : _RB-audit-call-i0  ( map-u -- status )
@@ -1744,6 +1768,63 @@ GUARD _RB-audit-shape-guard
     _PSTC-store-i1 _RB-audit-alias-pstore-work
         PSTORE-ABORT PERSIST-S-OK _RB-s ;
 
+\ Exercise the two neutral application-ownership extensions without relying on
+\ a Library root.  One pass uniquely submits and then shares a separate
+\ application page.  A second pass admits that page only through an exact arena
+\ interval, while the existing i0 reclaim metadata page proves that the same
+\ interval cannot hide a neutral ownership collision.
+: _RB-audit-application-extensions  ( -- )
+    \ The preceding overlap case deliberately rebound i1 to its alias
+    \ workspace.  Restore the ordinary disjoint workspace before mutating the
+    \ same neutral authority.
+    _PSTC-store-i1 _PSTC-work-i1
+        PSTORE-OPEN-ACTIVE PERSIST-S-OK _RB-s
+    _PSTC-store-i1 _PSTC-work-i1 PSTORE-BEGIN PERSIST-S-OK _RB-s
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 91 FILL
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE
+        _PSTC-store-i1 _PSTC-work-i1 PSTORE-APPEND-PAGE
+    PERSIST-S-OK = SWAP 1 = AND _RB-a
+    0 _PSTC-store-i1 _PSTC-work-i1 PSTORE-APPLICATION-ROOT!
+        PERSIST-S-OK _RB-s
+    _PSTC-store-i1 _PSTC-work-i1 PSTORE-COMMIT PERSIST-S-OK _RB-s
+    0 _PSTC-store-i1 _PSTC-work-i1 PSTORE-READ-PAGE PERSIST-S-OK _RB-s
+    _PSTC-work-i1 PSTORE-PAGE-PAYLOAD$
+    DUP PERSIST-PAGE-PAYLOAD-SIZE = _RB-a
+    DROP _RB-state RECLAIM-STATE-SIZE MOVE
+    _RB-state RECLAIM-STATE-SIZE _PSTC-store-i1 _RB-reclaim-i1
+        RECLAIM-OPEN PERSIST-S-OK _RB-s
+
+    _PSTC-store-i1 _PSTC-work-i1 PSTORE-BEGIN PERSIST-S-OK _RB-s
+    _PSTC-store-i1 _RB-audit-store !
+    _PSTC-work-i1 _RB-audit-pstore-work !
+    9 _RB-audit-callback-mode !
+    0 _RB-audit-calls !
+    2 _RB-audit-call-i1 PERSIST-S-OK _RB-s
+    _RB-audit-calls @ 2 = _RB-a
+    _RB-audit-map 1+ C@ _RCA-M-CURRENT-APP = _RB-a
+    _PSTC-store-i1 _PSTC-work-i1 PSTORE-ABORT PERSIST-S-OK _RB-s
+
+    _PSTC-store-i1 _PSTC-work-i1 PSTORE-BEGIN PERSIST-S-OK _RB-s
+    _PSTC-store-i1 _RB-audit-store !
+    _PSTC-work-i1 _RB-audit-pstore-work !
+    10 _RB-audit-callback-mode !
+    0 _RB-audit-calls !
+    2 _RB-audit-call-i1 PERSIST-S-OK _RB-s
+    _RB-audit-calls @ 2 = _RB-a
+    _RB-audit-map 1+ C@ _RCA-M-CURRENT-APP = _RB-a
+    _PSTC-store-i1 _PSTC-work-i1 PSTORE-ABORT PERSIST-S-OK _RB-s
+
+    _PSTC-store-i0 _PSTC-work-i0 PSTORE-BEGIN PERSIST-S-OK _RB-s
+    _PSTC-store-i0 _RB-audit-store !
+    _PSTC-work-i0 _RB-audit-pstore-work !
+    11 _RB-audit-callback-mode !
+    0 _RB-audit-calls !
+    3 _RB-audit-call-i0 PERSIST-S-CORRUPT _RB-s
+    _RB-audit-calls @ 2 = _RB-a
+    _RB-reclaim-i0 RECLAIM-AUDITED-GENERATION@ 0= _RB-a
+    _PSTC-store-i0 _PSTC-work-i0 PSTORE-ABORT PERSIST-S-OK _RB-s
+    0 _RB-audit-callback-mode ! ;
+
 : _RB-audit-page-save  ( page-id -- )
     _PSTC-store-i0 _PSTC-work-i0 PSTORE-READ-PAGE PERSIST-S-OK _RB-s
     _PSTC-work-i0 PSTORE-PAGE-PAYLOAD$
@@ -1905,6 +1986,7 @@ GUARD _RB-audit-shape-guard
     _RB-audit-healthy-mid-rotation
     _RB-audit-healthy-chained-ready
     _RB-audit-pstore-overlap-arguments
+    _RB-audit-application-extensions
     _RB-stack ;
 
 : _PRC-RUN  ( -- )

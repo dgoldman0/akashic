@@ -54,6 +54,9 @@ LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _lpo-record-buffer
 LIBRARY-REPOSITORY-STAGE-BUFFER-MIN XBUF _lpo-stage-buffer
 LIBRARY-REPOSITORY-RECORD-BUFFER-MIN XBUF _lpo-builder-record-buffer
 512 XBUF _lpo-compact-buffer
+8192 CONSTANT _lpo-audit-map-capacity
+_lpo-audit-map-capacity XBUF _lpo-audit-map
+_lpo-audit-map-capacity XBUF _lpo-builder-audit-map
 LIBRARY-SERVICE-SIZE XBUF _lpo-service
 LIBRARY-SERVICE-WORK-SIZE XBUF _lpo-service-work
 
@@ -500,6 +503,8 @@ VARIABLE _lpo-exact-locator
     _lpo-stage-buffer LIBRARY-REPOSITORY-STAGE-BUFFER-MIN
     _lpo-builder-record-buffer LIBRARY-REPOSITORY-RECORD-BUFFER-MIN
     _lpo-compact-buffer 512
+    _lpo-audit-map _lpo-audit-map-capacity
+    _lpo-builder-audit-map _lpo-audit-map-capacity
     _lpo-repository _lpo-repository-work
         LIBRARY-REPOSITORY-WORK-INIT
         LIBRARY-REPOSITORY-S-OK _lpo-status ;

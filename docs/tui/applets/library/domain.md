@@ -105,13 +105,14 @@ pages use semantic keyset continuation, body verification streams immutable
 content, and compaction copies bounded semantic units into the inactive data
 bank.
 
-Large multi-index mutations are staged according to actual page and
-reclamation room. Before each step the adapter reserves for the tallest
-copy-on-write path, application-root publication, and reclaim finalization. It
-may publish intermediate physical roots without changing visible Library
-state, then advances the logical generation exactly once at final publication.
-This avoids both corpus-proportional memory and an arbitrary fixed mutation
-row limit.
+Large multi-index mutations use a persisted high-water staging arena. Before
+each step the adapter reserves the tallest copy-on-write path and the next
+application-root publication within one bounded physical transaction. It may
+publish intermediate physical roots without changing visible Library state,
+then advances the logical generation exactly once at final publication.
+Compaction replaces the old bank and its retained baseline with a fresh,
+explicitly owned target-build arena. This avoids both corpus-proportional
+memory and an arbitrary fixed mutation row limit.
 
 ## Durable owner
 
@@ -131,12 +132,14 @@ receipts, membership, history, and search postings are index populations;
 content and metadata are immutable blobs.
 
 Cold open does not trust that embedded reclamation header by itself. Before a
-nonempty workspace becomes ready, the adapter uses one caller-owned byte per
+nonempty workspace becomes ready, the adapter uses two caller-owned bytes per
 committed page and fixed caller-owned audit work to prove both valid root-slot
-snapshots: it submits the application root, the exact reclaim state, and every
-node reachable from all fifteen trees. Only a successful audit of the still
-selected generation authorizes the next transaction. The supplied map is an
-operational memory budget rather than a persisted Library limit; an
+snapshots: one byte records exact ownership and one independently rejects
+duplicate structural traversal. Clean roots submit the application root,
+reclaim state, and all fifteen trees; arena roots additionally prove their
+pre-stage baseline and exact retained suffix. Only a successful audit of the
+still selected generation authorizes the next transaction. The supplied map
+is an operational memory budget rather than a persisted Library limit; an
 undersized map reports capacity without creating a second format or bypass.
 The bundled desktop controller supplies independent 1 MiB source and builder
 maps, while direct repository deployments size those maps for their authority

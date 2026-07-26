@@ -37,6 +37,8 @@ LIBPA-RECORD-MAX PERSIST-RECORD-HEADER-SIZE + CONSTANT _LQ12E-buffer-u
 _LQ12E-buffer-u XBUF _LQ12E-buffer
 CREATE _LQ12E-adapter LIBPA-SIZE ALLOT
 LIBPA-INDEX-WORK-SIZE XBUF _LQ12E-index-work
+8192 CONSTANT _LQ12E-audit-map-capacity
+_LQ12E-audit-map-capacity XBUF _LQ12E-audit-map
 GUARD _LQ12E-guard
 
 CREATE _LQ12E-entry LIB-ENTRY-SIZE ALLOT
@@ -217,7 +219,8 @@ _LQ12E-collection-rid-three RID-SIZE 0 FILL
 _LQ12E-store-init
 _LQ12E-store _LQ12E-adapter LIBPA-INIT
     LIBPA-S-OK _LQ12E-status
-_LQ12E-pwork _LQ12E-adapter _LQ12E-index-work
+_LQ12E-audit-map _LQ12E-audit-map-capacity
+    _LQ12E-pwork _LQ12E-adapter _LQ12E-index-work
     LIBPA-INDEX-WORK-INIT LIBPA-S-OK _LQ12E-status
 _LQ12E-store _LQ12E-pwork PSTORE-PROVISION
     PERSIST-S-OK _LQ12E-status

@@ -45,6 +45,7 @@ def main() -> int:
             "LIBRARY PERSISTENCE L12 ASSERT",
             "LIBRARY PERSISTENCE L12 STACK",
             "DRIVER THROW",
+            " ? (not found)",
             "dictionary full",
             "exception",
         ),
