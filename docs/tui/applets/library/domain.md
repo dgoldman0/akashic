@@ -130,6 +130,18 @@ identity, ordered-index roots, and reclamation state. Documents, collections,
 receipts, membership, history, and search postings are index populations;
 content and metadata are immutable blobs.
 
+Cold open does not trust that embedded reclamation header by itself. Before a
+nonempty workspace becomes ready, the adapter uses one caller-owned byte per
+committed page and fixed caller-owned audit work to prove both valid root-slot
+snapshots: it submits the application root, the exact reclaim state, and every
+node reachable from all fifteen trees. Only a successful audit of the still
+selected generation authorizes the next transaction. The supplied map is an
+operational memory budget rather than a persisted Library limit; an
+undersized map reports capacity without creating a second format or bypass.
+The bundled desktop controller supplies independent 1 MiB source and builder
+maps, while direct repository deployments size those maps for their authority
+and can rebuild the work graph from the reported requirement.
+
 Publication follows the neutral transaction fence: append/check records,
 write/read back copy-on-write pages, write/read back the application root, then
 replace the atomic root. A failed transaction leaves no new logical authority.
