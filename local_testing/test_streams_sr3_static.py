@@ -24,11 +24,13 @@ OPERATIONAL_INDEX = "tui/applets/streams/operational-index.f"
 OPERATIONAL_CONFIG_RECORDS = (
     "tui/applets/streams/operational-config-records.f"
 )
+OPERATIONAL_SPOOL = "tui/applets/streams/operational-spool.f"
 SHA3_CONTEXT = "math/sha3-context.f"
 OPERATIONAL_MODULES = (
     OPERATIONAL_RECORDS,
     OPERATIONAL_INDEX,
     OPERATIONAL_CONFIG_RECORDS,
+    OPERATIONAL_SPOOL,
 )
 
 REPOSITORY_ROOT = SOURCE_ROOT.parent
@@ -54,6 +56,11 @@ INTEGER_CONSTANT_RE = re.compile(
     r"(?m)^\s*(?P<value>-?(?:0x[0-9A-Fa-f]+|\d+))\s+"
     r"CONSTANT\s+(?P<name>\S+)"
 )
+LOOP_CONTROL_RE = re.compile(
+    r"(?<!\S)(?:\?DO|DO|\+LOOP|LOOP|2>R|2R>|2R@|>R|R>|R@)(?!\S)",
+    re.IGNORECASE,
+)
+RETURN_STACK_TOKENS = {"2>R", "2R>", "2R@", ">R", "R>", "R@"}
 
 
 def _source(module: str) -> str:
@@ -74,6 +81,48 @@ def _integer_constants(module: str) -> dict[str, int]:
         match.group("name"): int(match.group("value"), 0)
         for match in INTEGER_CONSTANT_RE.finditer(_source(module))
     }
+
+
+def _return_stack_uses_inside_do(source: str) -> list[tuple[int, str]]:
+    """Report return-stack operators lexically nested inside DO/?DO loops."""
+    depth = 0
+    violations: list[tuple[int, str]] = []
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        code = line.split("\\", 1)[0]
+        code = re.sub(r"\([^)]*\)", " ", code)
+        code = re.sub(r'(?:[A-Z.]*)?"[^"]*"', " ", code)
+        for match in LOOP_CONTROL_RE.finditer(code):
+            token = match.group(0).upper()
+            if token in {"DO", "?DO"}:
+                depth += 1
+            elif token in {"LOOP", "+LOOP"}:
+                depth = max(0, depth - 1)
+            elif depth and token in RETURN_STACK_TOKENS:
+                violations.append((line_number, token))
+    return violations
+
+
+def test_streams_sr3_cold_audit_loops_do_not_borrow_return_stack() -> None:
+    sources = {
+        "persistence/reclaim.f": _source("persistence/reclaim.f"),
+        "library/persistence-adapter.f": _source(
+            "tui/applets/library/persistence-adapter.f"
+        ),
+        "streams/operational-spool.f": _source(OPERATIONAL_SPOOL),
+        "persist-reclaim-test.f": (
+            LOCAL_TESTING / "persist-reclaim-test.f"
+        ).read_text(encoding="utf-8"),
+        "streams-sr3-admission.f": (
+            LOCAL_TESTING / "streams-sr3-admission.f"
+        ).read_text(encoding="utf-8"),
+    }
+    violations = {
+        name: found
+        for name, source in sources.items()
+        if (found := _return_stack_uses_inside_do(source))
+    }
+
+    assert violations == {}
 
 
 def test_streams_sr3_operational_closure_is_neutral_persistence_only() -> None:
