@@ -1,6 +1,7 @@
 # Streams information integration contract
 
-**Status:** normative product and ownership contract; SR2 is complete
+**Status:** normative product and ownership contract; SR2 is complete and SR3
+implementation is in progress
 
 **Reconciled:** 2026-07-25
 
@@ -12,6 +13,9 @@
 [`sr1-storage-free-core.md`](sr1-storage-free-core.md)
 
 **SR2 bounded runtime:** [`sr2-runtime-shape.md`](sr2-runtime-shape.md)
+
+**SR3 operational durability:**
+[`sr3-operational-durability.md`](sr3-operational-durability.md)
 
 **Current implementation:** [`streams.md`](streams.md)
 
@@ -176,9 +180,9 @@ and one connector serializes its callbacks across sharing cells. Two
 interleaved mock flows, an 8,192-byte transform path, exact profile bounds,
 and a full two-cell pool plus one refused admission prove the runtime is
 neither a hidden singleton nor tied to the historical 4 KiB payload. The HTTP
-landing must now prove those properties through real framing and cooperative
-connections. A durable queue is not simulated by keeping more live cells; it
-remains SR3 work.
+landings prove the corresponding framing, connection isolation, pressure,
+and cancellation properties. A durable queue is not simulated by keeping
+more live cells; it remains SR3 work.
 
 ### Transfer attempt and delivery
 
@@ -359,9 +363,10 @@ in [`streams.md`](streams.md):
 The SR2 `runtime-profile.f`, `payload-carrier.f`, `flow-core.f`, and
 `execution-pool.f` now sit beside those older prototype surfaces. They are the
 qualified replacement runtime, but they are not yet required by `streams.f`,
-exposed as an applet capability, composed with Desk, connected to HTTP/web, or
-backed by any durable store. Deterministic mock output is therefore not a claim
-of production applet output.
+exposed as an applet capability, composed with Desk, or backed by any durable
+store. The standalone `http-route.f` composition qualifies the accepted
+HTTP/web journey without making it the live applet authority. Deterministic
+mock output is therefore not a claim of production applet output.
 
 Disposition:
 
