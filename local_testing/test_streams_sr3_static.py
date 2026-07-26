@@ -25,6 +25,8 @@ OPERATIONAL_CONFIG_RECORDS = (
     "tui/applets/streams/operational-config-records.f"
 )
 OPERATIONAL_SPOOL = "tui/applets/streams/operational-spool.f"
+OPERATIONAL_DISPATCH = "tui/applets/streams/operational-dispatch.f"
+EXECUTION_POOL = "tui/applets/streams/execution-pool.f"
 SHA3_CONTEXT = "math/sha3-context.f"
 OPERATIONAL_MODULES = (
     OPERATIONAL_RECORDS,
@@ -32,6 +34,7 @@ OPERATIONAL_MODULES = (
     OPERATIONAL_CONFIG_RECORDS,
     OPERATIONAL_SPOOL,
 )
+CURRENT_SR3_MODULES = (*OPERATIONAL_MODULES, OPERATIONAL_DISPATCH)
 
 REPOSITORY_ROOT = SOURCE_ROOT.parent
 SR3_DOC = (
@@ -83,6 +86,29 @@ def _integer_constants(module: str) -> dict[str, int]:
     }
 
 
+def _colon_words(module: str) -> set[str]:
+    return {
+        match.group("name")
+        for match in FORTH_WORD_DEFINITION_RES[0].finditer(_source(module))
+    }
+
+
+def _colon_definition(module: str, word: str) -> str:
+    match = re.search(
+        rf"(?ms)^\s*:\s+{re.escape(word)}(?:\s|$)(.*?)(?<!\S);(?=\s|$)",
+        _source(module),
+    )
+    assert match is not None, f"missing colon definition: {module}:{word}"
+    return match.group(1)
+
+
+def _forth_code(source: str) -> str:
+    code = "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
+    code = re.sub(r"\([^)]*\)", " ", code, flags=re.DOTALL)
+    code = re.sub(r'(?:[A-Z.]*)?"[^"]*"', " ", code)
+    return code
+
+
 def _return_stack_uses_inside_do(source: str) -> list[tuple[int, str]]:
     """Report return-stack operators lexically nested inside DO/?DO loops."""
     depth = 0
@@ -109,6 +135,7 @@ def test_streams_sr3_cold_audit_loops_do_not_borrow_return_stack() -> None:
             "tui/applets/library/persistence-adapter.f"
         ),
         "streams/operational-spool.f": _source(OPERATIONAL_SPOOL),
+        "streams/operational-dispatch.f": _source(OPERATIONAL_DISPATCH),
         "persist-reclaim-test.f": (
             LOCAL_TESTING / "persist-reclaim-test.f"
         ).read_text(encoding="utf-8"),
@@ -189,6 +216,34 @@ def test_streams_sr3_operational_modules_do_not_reenter_displaced_streams() -> N
     }
 
 
+def test_streams_sr3_dispatch_closure_is_the_sr2_sr3_composition_edge() -> None:
+    closure = set(dependency_closure(SOURCE_ROOT, (OPERATIONAL_DISPATCH,)))
+    streams_closure = {
+        module
+        for module in closure
+        if module.startswith("tui/applets/streams/")
+    }
+
+    assert streams_closure == {
+        EXECUTION_POOL,
+        "tui/applets/streams/flow-core.f",
+        OPERATIONAL_CONFIG_RECORDS,
+        OPERATIONAL_DISPATCH,
+        OPERATIONAL_INDEX,
+        OPERATIONAL_RECORDS,
+        OPERATIONAL_SPOOL,
+        "tui/applets/streams/payload-carrier.f",
+        "tui/applets/streams/runtime-profile.f",
+    }
+    assert not {
+        module
+        for module in closure
+        if module.startswith("tui/applets/library/")
+        or module.startswith("tui/app-")
+        or "http" in Path(module).name.lower()
+    }
+
+
 def test_streams_sr3_operational_modules_own_no_mutable_storage() -> None:
     mutable_definitions: dict[str, dict[str, list[str]]] = {}
     for module in OPERATIONAL_MODULES:
@@ -202,6 +257,17 @@ def test_streams_sr3_operational_modules_own_no_mutable_storage() -> None:
             mutable_definitions[module] = owned
 
     assert mutable_definitions == {}
+
+
+def test_streams_sr3_dispatch_owns_no_mutable_storage() -> None:
+    definitions = _lexical_definitions(_source(OPERATIONAL_DISPATCH))
+    owned = {
+        kind: definitions[kind]
+        for kind in MUTABLE_DEFINITION_KINDS
+        if definitions[kind]
+    }
+
+    assert owned == {}
 
 
 def test_streams_sr3_geometry_guards_abort_during_interpretation() -> None:
@@ -243,7 +309,7 @@ def test_streams_sr3_incremental_hash_is_caller_owned_and_software_only() -> Non
 
 
 def test_streams_sr3_operational_shape_has_no_prerelease_legacy_surface() -> None:
-    operational_words = set().union(*map(_defined_words, OPERATIONAL_MODULES))
+    operational_words = set().union(*map(_defined_words, CURRENT_SR3_MODULES))
     glut_terms = (
         "ABI",
         "COMPAT",
@@ -275,6 +341,119 @@ def test_streams_sr3_operational_shape_has_no_prerelease_legacy_surface() -> Non
         "STREAMS-OPRECEIPT-HEADER-CLASSIFY",
         "STREAMS-OPROOT-HEADER-CLASSIFY",
     } <= operational_words
+
+
+def test_streams_sr3_dispatch_lifecycle_surface_is_exact() -> None:
+    public_words = {
+        word
+        for word in _colon_words(OPERATIONAL_DISPATCH)
+        if word.startswith("STREAMS-OPDISPATCH-")
+    }
+
+    assert public_words == {
+        "STREAMS-OPDISPATCH-VALID?",
+        "STREAMS-OPDISPATCH-STATE@",
+        "STREAMS-OPDISPATCH-STATUS@",
+        "STREAMS-OPDISPATCH-SPOOL-STATUS@",
+        "STREAMS-OPDISPATCH-FLOW-STATUS@",
+        "STREAMS-OPDISPATCH-SPOOL@",
+        "STREAMS-OPDISPATCH-POOL@",
+        "STREAMS-OPDISPATCH-FLOW@",
+        "STREAMS-OPDISPATCH-LEASE@",
+        "STREAMS-OPDISPATCH-GENERATION@",
+        "STREAMS-OPDISPATCH-ATTEMPT@",
+        "STREAMS-OPDISPATCH-COMPLETION@",
+        "STREAMS-OPDISPATCH-PAYLOAD-U@",
+        "STREAMS-OPDISPATCH-CLEANUP-ERROR@",
+        "STREAMS-OPDISPATCH-INIT",
+        "STREAMS-OPDISPATCH-BIND",
+        "STREAMS-OPDISPATCH-ENQUEUE",
+        "STREAMS-OPDISPATCH-DISPATCH",
+        "STREAMS-OPDISPATCH-POLL",
+        "STREAMS-OPDISPATCH-CANCEL",
+        "STREAMS-OPDISPATCH-RELEASE",
+    }
+
+
+def test_streams_sr3_dispatch_commits_authority_before_runtime_effect() -> None:
+    enqueue = _forth_code(
+        _colon_definition(
+            OPERATIONAL_DISPATCH,
+            "STREAMS-OPDISPATCH-ENQUEUE",
+        )
+    )
+    dispatch = _forth_code(
+        _colon_definition(
+            OPERATIONAL_DISPATCH,
+            "STREAMS-OPDISPATCH-DISPATCH",
+        )
+    )
+    activate = _forth_code(
+        _colon_definition(
+            OPERATIONAL_DISPATCH,
+            "_SOD-ACTIVATE-DURABLE",
+        )
+    )
+    poll = _forth_code(
+        _colon_definition(
+            OPERATIONAL_DISPATCH,
+            "STREAMS-OPDISPATCH-POLL",
+        )
+    )
+
+    assert "STREAMS-SPOOL-ADMIT" in enqueue
+    direct_effect_words = {
+        "SCON.START-XT",
+        "STREAMS-FLOW-START",
+        "STREAMS-FLOW-STEP",
+    }
+    assert direct_effect_words.isdisjoint(enqueue.split())
+    assert direct_effect_words.isdisjoint(dispatch.split())
+    assert "STREAMS-FLOW-STEP" in poll
+    assert poll.index("STREAMS-OPDISPATCH-STATE-ACTIVE") < poll.index(
+        "STREAMS-FLOW-STEP"
+    )
+    assert dispatch.index("_SOD-STAGE-RUNTIME") < dispatch.index(
+        "_SOD-ACTIVATE-DURABLE"
+    )
+    assert activate.index("STREAMS-SPOOL-ACTIVATE") < activate.index(
+        "STREAMS-OPDISPATCH-STATE-ACTIVE"
+    )
+
+
+def test_streams_sr3_dispatch_checks_authority_before_runtime_acquisition() -> None:
+    dispatch = _forth_code(
+        _colon_definition(
+            OPERATIONAL_DISPATCH,
+            "STREAMS-OPDISPATCH-DISPATCH",
+        )
+    )
+    classify = _forth_code(
+        _colon_definition(
+            OPERATIONAL_DISPATCH,
+            "_SOD-CLASSIFY-STALE",
+        )
+    )
+    activate = _forth_code(
+        _colon_definition(
+            OPERATIONAL_DISPATCH,
+            "_SOD-ACTIVATE-DURABLE",
+        )
+    )
+    replay_start = activate.index("DUP STREAMS-SPOOL-S-REPLAY = IF")
+    replay_end = activate.index("THEN", replay_start)
+    replay_branch = activate[replay_start:replay_end]
+
+    assert dispatch.index("_SOD-CLASSIFY-STALE") < dispatch.index(
+        "_SOD-ACQUIRE-RUNTIME"
+    )
+    assert "STREAMS-SPOOL-CLASSIFY-STALE" in classify
+    assert "STREAMS-OPDISPATCH-S-BUSY EXIT" in replay_branch
+    assert {
+        "STREAMS-OPDISPATCH-S-OK",
+        "STREAMS-OPDISPATCH-S-PENDING",
+        "STREAMS-OPDISPATCH-STATE-ACTIVE",
+    }.isdisjoint(replay_branch.split())
 
 
 def test_streams_sr3_operational_bytes_do_not_embed_sr2_runtime_records() -> None:
