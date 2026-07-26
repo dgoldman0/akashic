@@ -1,9 +1,10 @@
 # Streams information integration contract
 
 **Status:** normative product and ownership contract; SR2 is complete and SR3
-implementation is in progress
+implementation is in progress with standalone admission and delivery/recovery
+qualified
 
-**Reconciled:** 2026-07-25
+**Reconciled:** 2026-07-26
 
 **Controlling decision:** [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
@@ -182,7 +183,8 @@ and a full two-cell pool plus one refused admission prove the runtime is
 neither a hidden singleton nor tied to the historical 4 KiB payload. The HTTP
 landings prove the corresponding framing, connection isolation, pressure,
 and cancellation properties. A durable queue is not simulated by keeping
-more live cells; it remains SR3 work.
+more live cells. The standalone SR3 outbox now supplies that durable
+authority; composing it with these cells remains Landing 3 work.
 
 ### Transfer attempt and delivery
 
@@ -237,6 +239,13 @@ attempt identity commit. An indeterminate external effect is not retried
 automatically unless the connector's declared idempotency contract makes that
 safe. Durable formats store semantic records and payload bytes or chunks, not
 raw runtime descriptors.
+
+The current standalone egress outbox qualifies atomic local acceptance,
+ready/active/terminal transitions, exact payload redispatch, deterministic
+receipt evidence, cold active-to-indeterminate recovery, stale-revision
+refusal, and safe same-attempt requeue under exact idempotency. It does not yet
+compose an SR2 result or cell with that authority, and it does not yet claim
+logical terminal cleanup, reclaim completion, or finite physical compaction.
 
 ## Protocol and package boundaries
 
@@ -415,7 +424,8 @@ complete. The route uses a named fitting profile; a 4,097-byte request crosses
 the first byte beyond the compact carrier while an interleaved small request
 remains in that cell, so the larger path does not enlarge every cell. Two active leases,
 one-over refusal, slow-peer cancellation, independent completion, and exact
-teardown are qualified. “Enqueued” or “durably accepted” remains SR3 language.
+teardown are qualified. “Durably accepted” is now qualified for the standalone
+SR3 outbox, but not yet for the composed HTTP/runtime journey.
 
 The in-memory/mock flow contract is now qualified before durable queues. The
 deterministic cooperative HTTP slice is also qualified before AT Protocol and

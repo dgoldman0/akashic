@@ -56,6 +56,7 @@ def main() -> int:
         linked=True,
         include_large_sample=False,
         total_sectors=2048,
+        link_chunk_bytes=192 * 1024,
     )
     image = harness.build_image(PROFILE, IMAGE)
     ok = harness.smoke(

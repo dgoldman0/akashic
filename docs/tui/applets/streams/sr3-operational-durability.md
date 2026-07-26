@@ -1,7 +1,7 @@
 # Streams SR3 operational durability
 
-**Status:** implementation contract fixed; SR3 implementation and
-qualification are in progress
+**Status:** Landings 1 and 2 are implemented and qualified; SR3 implementation
+is in progress while SR2 composition and finite retirement proceed in Landing 3
 
 **Scope:** one bounded durable egress outbox over the neutral persistence
 substrate, with exact payload snapshots, restart and delivery truth, receipts,
@@ -270,7 +270,7 @@ SR3 is divided into three informative landings. A later landing may refine the
 current prerelease implementation directly; it must not leave a parallel
 prototype or compatibility seam behind.
 
-### Landing 1 — Current outbox shape and atomic admission
+### Landing 1 — Current outbox shape and atomic admission — qualified
 
 Implement the Streams persistence adapter, current root and semantic codecs,
 one egress-outbox index set, exact payload snapshot, global and per-connector
@@ -282,7 +282,13 @@ records, unknown shape, and no partial payload/attempt visibility.
 This landing may report only durable local acceptance. It does not claim
 dispatch, remote delivery, automatic retry, receipts, or completed retention.
 
-### Landing 2 — Recovery and delivery evidence
+The current-shape codecs, eight-tree authority, exact `PBLOB` snapshots,
+single-transaction admission, capacity boundaries, interrupted publication,
+and cold semantic/physical audits are implemented in the standalone
+operational spool. The focused admission gate passes 704 assertions in
+2,859,752,044 guest steps; the record gate passes in 734,515,713 guest steps.
+
+### Landing 2 — Recovery and delivery evidence — qualified
 
 Add durable active/terminal transitions, effect truth, exact-byte dispatch,
 receipts, restart classification, stale-revision refusal, and the declared
@@ -295,7 +301,17 @@ This landing proves the durable attempt lifecycle against deterministic mock
 connectors. It does not by itself claim Desk hosting, live connectivity, or
 physical retention completion.
 
-### Landing 3 — SR2 composition and finite retirement
+The spool now selects the oldest ready attempt, revision-checks activation,
+persists monotonic effect truth and deterministic receipts, streams the exact
+payload and remote evidence, safely requeues only the same attempt under exact
+idempotency, refuses stale configuration, and converts cold active work into
+visible indeterminate truth. The focused delivery/recovery gate passes 306
+assertions in 2,497,666,644 guest steps, including transaction cleanup on flow
+saturation, cross-record evidence-time refusal, convergence replay without
+reinvoking the receipt source, unsafe retry refusal, and final cold receipt
+preservation.
+
+### Landing 3 — SR2 composition and finite retirement — pending
 
 Compose one exact SR2 egress result into outbox acceptance without persisting
 runtime descriptors. Dispatch accepted work through a fitting active cell,
@@ -313,6 +329,9 @@ preserving a second implementation.
 
 Qualification proceeds from cheap structural evidence to focused linked
 emulator evidence. Test suites are never run in parallel.
+
+The first three stages below are currently qualified. The composed journey and
+closeout stages remain pending and continue to bound any SR3 completion claim.
 
 1. Run host/static checks for dependency closure, current-format-only codecs,
    pointer-free records, exact constants, no observation-repository imports,

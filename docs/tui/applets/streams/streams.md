@@ -1,7 +1,8 @@
 # Streams
 
-**Status:** older applet behavior plus complete deterministic SR2 runtime and
-cooperative HTTP pressure qualification; SR3 operational durability is next
+**Status:** older applet behavior plus complete deterministic SR2 runtime;
+SR3 standalone admission and delivery/recovery are qualified, while runtime
+composition and finite retirement remain
 
 **Forward product contract:**
 [`information-integration.md`](information-integration.md)
@@ -14,6 +15,9 @@ cooperative HTTP pressure qualification; SR3 operational durability is next
 
 **SR2 bounded runtime:**
 [`sr2-runtime-shape.md`](sr2-runtime-shape.md)
+
+**SR3 operational durability:**
+[`sr3-operational-durability.md`](sr3-operational-durability.md)
 
 **Architectural reset:**
 [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
@@ -48,6 +52,19 @@ applet capability exposes them. They have no persistence, VFS, durable queue,
 AT Protocol, Library/Pad, UI, listener/TLS, or live-network composition. The
 precise current boundary and evidence are recorded in
 [`sr2-runtime-shape.md`](sr2-runtime-shape.md).
+
+Separate from that runtime, the current SR3 operational spool now implements
+one bounded durable egress outbox over the neutral persistence substrate. It
+atomically accepts exact payload snapshots, revision-checks ready-to-active
+dispatch, commits terminal effect truth and deterministic receipts, permits
+only declared exact-idempotent same-attempt requeue, refuses stale
+configuration, and cold-recovers interrupted active work as visible
+indeterminate truth. Its focused admission and delivery/recovery gates are
+qualified against deterministic faults and repeat cold audits. The spool is
+still standalone: it is not yet fed by an SR2 result or dispatched through an
+SR2 cell, and terminal cleanup, reclaim, and bounded compaction are Landing 3
+work. It therefore does not complete SR3 or change the live applet capability
+surface.
 
 The current prototype is still primarily a Bluesky-shaped reader plus a
 configured-source acquisition path. Its first end-to-end configured-source

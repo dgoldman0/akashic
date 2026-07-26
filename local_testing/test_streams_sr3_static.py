@@ -115,6 +115,9 @@ def test_streams_sr3_cold_audit_loops_do_not_borrow_return_stack() -> None:
         "streams-sr3-admission.f": (
             LOCAL_TESTING / "streams-sr3-admission.f"
         ).read_text(encoding="utf-8"),
+        "streams-sr3-delivery.f": (
+            LOCAL_TESTING / "streams-sr3-delivery.f"
+        ).read_text(encoding="utf-8"),
     }
     violations = {
         name: found
@@ -321,6 +324,31 @@ def test_streams_sr3_attempt_uses_only_the_current_receipt_reference_shape() -> 
         "SOPROOT.NEXT-ACCEPTED-SEQUENCE",
         "SOPROOT.NEXT-READY-SEQUENCE",
     }
+
+
+def test_streams_sr3_lifecycle_surface_is_exact_and_safe_only() -> None:
+    words = _defined_words(OPERATIONAL_SPOOL)
+    required = {
+        "STREAMS-SPOOL-ATTEMPT@",
+        "STREAMS-SPOOL-PAYLOAD-STREAM",
+        "STREAMS-SPOOL-READY@",
+        "STREAMS-SPOOL-ACTIVATE",
+        "STREAMS-SPOOL-TERMINALIZE",
+        "STREAMS-SPOOL-REQUEUE-SAFE",
+        "STREAMS-SPOOL-RECEIPT@",
+        "STREAMS-SPOOL-RECEIPT-STREAM",
+        "STREAMS-SPOOL-COMPLETION-INIT",
+        "STREAMS-SPOOL-COMPLETION-VALID?",
+    }
+    forbidden = {
+        "STREAMS-SPOOL-REQUEUE",
+        "STREAMS-SPOOL-REQUEUE-FORCE",
+        "STREAMS-SPOOL-RETRY-FORCE",
+        "STREAMS-SPOOL-TERMINALIZE-FORCE",
+    }
+
+    assert required <= words
+    assert words.isdisjoint(forbidden)
 
 
 def test_streams_sr3_configuration_embeds_no_secret_or_runtime_handle() -> None:
