@@ -545,6 +545,23 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
     0 _sr3d-completion SPOOLCOMP.RESULT !
     _sr3d-completion STREAMS-SPOOL-COMPLETION-VALID?
         _sr3d-assert
+    STREAMS-OPATT-REASON-CALLBACK
+        _sr3d-completion SPOOLCOMP.REASON !
+    -491 _sr3d-completion SPOOLCOMP.DETAIL !
+    -4901 _sr3d-completion SPOOLCOMP.ERROR !
+    -770 _sr3d-completion SPOOLCOMP.CLEANUP-ERROR !
+    _sr3d-completion STREAMS-SPOOL-COMPLETION-VALID?
+        _sr3d-assert
+    STREAMS-OPATT-STATE-STALE
+        _sr3d-completion SPOOLCOMP.STATE !
+    STREAMS-OPATT-REASON-STALE
+        _sr3d-completion SPOOLCOMP.REASON !
+    _sr3d-completion STREAMS-SPOOL-COMPLETION-VALID?
+        _sr3d-assert
+    STREAMS-OPATT-REASON-RECOVERED-ACTIVE 1+
+        _sr3d-completion SPOOLCOMP.REASON !
+    _sr3d-completion STREAMS-SPOOL-COMPLETION-VALID? 0=
+        _sr3d-assert
     _sr3d-stack ;
 
 : _sr3d-check-receipt  ( -- )

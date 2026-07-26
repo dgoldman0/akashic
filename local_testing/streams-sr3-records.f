@@ -935,6 +935,33 @@ CREATE _sr3q-root-c STREAMS-OPROOT-SIZE ALLOT
     _sr3q-attempt-b STREAMS-OPATT-SIZE
         STREAMS-OPATT-VALID? _sr3q-assert
 
+    \ Runtime callback and throw evidence is preserved as signed cells, and
+    \ a stale-before-output attempt is a truthful terminal outcome.
+    _sr3q-attempt-b _sr3q-valid-attempt!
+    STREAMS-OPATT-STATE-STALE _sr3q-attempt-b SOPATT.STATE !
+    STREAMS-OPATT-EFFECT-NOT-APPLIED _sr3q-attempt-b SOPATT.EFFECT !
+    STREAMS-OPATT-REASON-STALE _sr3q-attempt-b SOPATT.REASON !
+    -491 _sr3q-attempt-b SOPATT.DETAIL !
+    -4901 _sr3q-attempt-b SOPATT.ERROR !
+    -770 _sr3q-attempt-b SOPATT.CLEANUP-ERROR !
+    1002 _sr3q-attempt-b SOPATT.FINISHED-MS !
+    _sr3q-attempt-b STREAMS-OPATT-SEAL
+        STREAMS-OPREC-S-OK = _sr3q-assert
+    _sr3q-attempt-b STREAMS-OPATT-SIZE
+        STREAMS-OPATT-VALID? _sr3q-assert
+    STREAMS-OPATT-STATE-STALE
+        STREAMS-OPATT-EFFECT-NOT-APPLIED
+        STREAMS-OPATT-TERMINAL-STATE-EFFECT? _sr3q-assert
+    _sr3q-attempt-b SOPATT.DETAIL @ -491 = _sr3q-assert
+    _sr3q-attempt-b SOPATT.ERROR @ -4901 = _sr3q-assert
+    _sr3q-attempt-b SOPATT.CLEANUP-ERROR @ -770 = _sr3q-assert
+
+    _sr3q-attempt-b _sr3q-valid-attempt!
+    STREAMS-OPATT-REASON-RECOVERED-ACTIVE 1+
+        _sr3q-attempt-b SOPATT.REASON !
+    _sr3q-attempt-b STREAMS-OPATT-SEAL
+        STREAMS-OPREC-S-INVALID = _sr3q-assert
+
     _sr3q-attempt-b _sr3q-valid-attempt!
     STREAMS-OPATT-STATE-FAILED-BEFORE
         _sr3q-attempt-b SOPATT.STATE !

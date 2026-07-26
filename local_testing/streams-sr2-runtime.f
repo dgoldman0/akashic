@@ -507,6 +507,22 @@ VARIABLE _sr2r-expected-effect
     STREAMS-EVENT-DIRECTION-INGRESS R@ SEVT.DIRECTION !
     _sr2r-input SCON.PROTOCOL @ R> SEVT.PROTOCOL ! ;
 
+: _sr2r-egress-routing  ( event -- )
+    >R
+    _sr2r-output SCON.ID R@ SEVT.CONNECTOR-ID RID-COPY
+    _sr2r-flow-a SFLOW.ID R@ SEVT.FLOW-ID RID-COPY
+    _sr2r-output SCON.ENDPOINT-ID R@ SEVT.DESTINATION-ID RID-COPY
+    _sr2r-output SCON.REVISION @ R@ SEVT.CONNECTOR-REVISION !
+    STREAMS-EVENT-DIRECTION-EGRESS R@ SEVT.DIRECTION !
+    _sr2r-output SCON.PROTOCOL @ R@ SEVT.PROTOCOL !
+    _sr2r-flow-a SFLOW.OUTPUT-MEDIA @ R> SEVT.MEDIA ! ;
+
+: _sr2r-build-egress-metadata  ( payload-a payload-u tag event -- )
+    >R
+    R@ _sr2r-event-header
+    R@ _sr2r-egress-routing
+    R> SEVT.PAYLOAD-DIGEST SHA3-256-HASH ;
+
 : _sr2r-build-borrowed
   ( payload-a payload-u tag event flow -- status )
     _sr2r-build-flow !
@@ -1628,6 +1644,127 @@ VARIABLE _sr2r-expected-effect
         _sr2r-reservation-generation @ = _sr2r-assert
     _sr2r-stack ;
 
+: _sr2r-test-direct-egress  ( -- )
+    _sr2r-reset-counters
+    _SR2R-MODE-DELIVER _sr2r-mode !
+    0x31 _sr2r-flow-a _sr2r-setup-flow
+
+    S" tx:ping" 0x71 _sr2r-event-a _sr2r-build-egress-metadata
+    _sr2r-event-a _SEVT-DIGESTED-EGRESS-METADATA? _sr2r-assert
+    _sr2r-output _sr2r-event-a 7 7 10 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    DUP 1 = _sr2r-assert
+    _sr2r-reservation-generation !
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @
+        STREAMS-FLOW-STATE-EGRESS-STAGING = _sr2r-assert
+    _sr2r-flow-a SFLOW.INGRESS-CARRIER SPAY.BYTE-U @ 0=
+        _sr2r-assert
+    _sr2r-flow-a SFLOW.INGRESS-ATTEMPT SATT.STATE @
+        STREAMS-ATTEMPT-STATE-EMPTY = _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-ATTEMPT SATT.STATE @
+        STREAMS-ATTEMPT-STATE-EMPTY = _sr2r-assert
+    _sr2r-event-a SEVT.PAYLOAD-DIGEST
+        _sr2r-flow-a SFLOW.TRANSFORM-RESULT
+        SHA3-256-COMPARE _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-EVENT SEVT.ORIGIN-ID
+        _sr2r-event-a SEVT.ORIGIN-ID RID= _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-EVENT SEVT.PAYLOAD-DIGEST
+        SHA3-256-LEN _SFLOW-ZERO? _sr2r-assert
+
+    S" tx:" _sr2r-reservation-generation @ 11 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-APPEND
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation @ 12 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-COMMIT
+        STREAMS-FLOW-S-CAPACITY = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @
+        STREAMS-FLOW-STATE-EGRESS-STAGING = _sr2r-assert
+    S" ping" _sr2r-reservation-generation @ 13 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-APPEND
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation @ 14 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-COMMIT
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @
+        STREAMS-FLOW-STATE-OUTPUT-READY = _sr2r-assert
+    _sr2r-flow-a SFLOW.INGRESS-ATTEMPT SATT.STATE @
+        STREAMS-ATTEMPT-STATE-EMPTY = _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-ATTEMPT SATT.STATE @
+        STREAMS-ATTEMPT-STATE-ACCEPTED = _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-EVENT STREAMS-EVENT-VALID?
+        _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-EVENT SEVT.PAYLOAD-DIGEST
+        _sr2r-event-a SEVT.PAYLOAD-DIGEST
+        SHA3-256-COMPARE _sr2r-assert
+    15 _sr2r-flow-a STREAMS-FLOW-STEP
+        STREAMS-FLOW-S-DELIVERED = _sr2r-assert
+    _sr2r-starts @ 1 = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-TERMINAL =
+        _sr2r-assert
+    _sr2r-reservation-generation @ _sr2r-flow-a STREAMS-FLOW-RETIRE
+        STREAMS-FLOW-S-OK = _sr2r-assert
+
+    S" tx:ping" 0x72 _sr2r-event-b _sr2r-build-egress-metadata
+    _sr2r-output _sr2r-event-b 7 7 20 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    DUP _sr2r-old-generation !
+    _sr2r-reservation-generation !
+    1 _sr2r-flow-a SFLOW.EGRESS-EVENT SEVT.SEQUENCE +!
+    _sr2r-flow-a STREAMS-FLOW-VALID? 0= _sr2r-assert
+    -1 _sr2r-flow-a SFLOW.EGRESS-EVENT SEVT.SEQUENCE +!
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+    _sr2r-flow-a SFLOW.TRANSFORM-RESULT
+        DUP C@ 1 XOR SWAP C!
+    _sr2r-flow-a STREAMS-FLOW-VALID? 0= _sr2r-assert
+    _sr2r-flow-a SFLOW.TRANSFORM-RESULT
+        DUP C@ 1 XOR SWAP C!
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+    _sr2r-old-generation @ 1- 21 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-ABORT
+        STREAMS-FLOW-S-STALE = _sr2r-assert
+    _sr2r-reservation-generation @ 22 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-ABORT
+        STREAMS-FLOW-S-CANCELLED = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-out-bytes-a STREAMS-RUNTIME-SEGMENT-BYTES
+        _SPAY-ZERO? _sr2r-assert
+
+    S" tx:ping" 0x73 _sr2r-event-c _sr2r-build-egress-metadata
+    _sr2r-output _sr2r-event-c 7 7 30 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    S" tx:pong" _sr2r-reservation-generation @ 31 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-APPEND
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation @ 32 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-COMMIT
+        STREAMS-FLOW-S-INVALID = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a SFLOW.EGRESS-ATTEMPT SATT.STATE @
+        STREAMS-ATTEMPT-STATE-EMPTY = _sr2r-assert
+    _sr2r-starts @ 1 = _sr2r-assert
+    _sr2r-out-bytes-a STREAMS-RUNTIME-SEGMENT-BYTES
+        _SPAY-ZERO? _sr2r-assert
+
+    0 0 0x74 _sr2r-event-a _sr2r-build-egress-metadata
+    _sr2r-output _sr2r-event-a 0 7 40 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    140 _sr2r-flow-a STREAMS-FLOW-STEP
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a SFLOW.GENERATION @
+        _sr2r-reservation-generation @ = _sr2r-assert
+    _sr2r-stack ;
+
 : _sr2r-test-execution-pool  ( -- )
     _sr2r-output _sr2r-output _SPOOL-CONNECTORS-SAME-OR-DISJOINT?
         _sr2r-assert
@@ -1800,6 +1937,7 @@ VARIABLE _sr2r-expected-effect
     _sr2r-test-alias-preflights
     _sr2r-test-between-call-tamper
     _sr2r-test-direct-ingress
+    _sr2r-test-direct-egress
     _sr2r-test-isolation
     _sr2r-test-execution-pool
     _sr2r-fails @ 0= IF
