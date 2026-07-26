@@ -21,6 +21,15 @@ REQUIRE store.f
 64 CONSTANT RECLAIM-DISCARD-MAX
 128 CONSTANT RECLAIM-STATE-SIZE
 
+\ Exact retirement-ledger effects for callers that budget a complete
+\ transaction before beginning copy-on-write mutations.  STEP can retire one
+\ consumed READY bucket and one maintenance source; one allocation can retire
+\ one exhausted READY bucket; FINALIZE can consume at most four READY buckets
+\ while materializing its bounded pending and discard metadata.
+2 CONSTANT RECLAIM-STEP-RETIREMENT-MAX
+1 CONSTANT RECLAIM-ALLOCATION-RETIREMENT-MAX
+4 CONSTANT RECLAIM-FINALIZE-RETIREMENT-MAX
+
 0x52434C4D53543031 CONSTANT _RECLAIM-STATE-MAGIC   \ "RCLMST01"
 0x52434C4D42543031 CONSTANT _RECLAIM-BUCKET-MAGIC  \ "RCLMBT01"
 0x52434C4D44453031 CONSTANT _RECLAIM-MAGIC         \ "RCLMDE01"
@@ -754,8 +763,15 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     LOOP
     2DROP ;
 
+: _RCW-RESERVE-BLOCKED  ( work -- page-id status )
+    -1 OVER _RCW.REQUESTED !
+    DROP -1 PERSIST-S-CAPACITY ;
+
 \ Select the next reusable id.  Reserve is the number of additional retire
 \ slots the enclosing metadata operation still needs after this allocation.
+\ REQUESTED retains that nonnegative reserve on every ordinary failure and is
+\ changed to -1 only after a fully validated final READY entry is rejected
+\ solely because retiring its bucket would invade the reserve.
 : _RCW-ALLOCATE-ID  ( reserve work -- page-id status )
     >R
     DUP 0< IF DROP R> DROP -1 PERSIST-S-INVALID EXIT THEN
@@ -798,31 +814,35 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
         DROP R> DROP -1 PERSIST-S-CORRUPT EXIT
     THEN
     DUP R@ _RCW.BUCKET _RCB.ENTRY @ R@ _RCW.RESULT !
+    R@ _RCW.RESULT @ R@ _RCW.TEMP @ = IF
+        DROP R> DROP -1 PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _RCW.RESULT @ R@ _RCW.BASE-PAGE-COUNT @ >= IF
+        DROP R> DROP -1 PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _RCW.RESULT @ R@ _RCW-STAGED-CONTAINS? IF
+        DROP R> DROP -1 PERSIST-S-CONFLICT EXIT
+    THEN
+    R@ _RCW.RESULT @ R@ _RCW-ALLOCATED-CONTAINS? IF
+        DROP R> DROP -1 PERSIST-S-CONFLICT EXIT
+    THEN
+    R@ _RCW.STATE _RCS.REUSABLE-COUNT @ 0> 0= IF
+        DROP R> DROP -1 PERSIST-S-CORRUPT EXIT
+    THEN
     1+ R@ _RCW.BUCKET _RCB.COUNT @ = IF
-        R@ _RCW.STAGED-COUNT @ R@ _RCW.REQUESTED @ _RECLAIM-ADD?
-        0= IF DROP R> DROP -1 PERSIST-S-CAPACITY EXIT THEN
-        1 _RECLAIM-ADD? 0= IF
-            DROP R> DROP -1 PERSIST-S-CAPACITY EXIT
-        THEN
-        RECLAIM-RETIRED-MAX > IF R> DROP -1 PERSIST-S-CAPACITY EXIT THEN
         R@ _RCW.TEMP @ R@ _RCW-STAGED-CONTAINS? IF
             R> DROP -1 PERSIST-S-CORRUPT EXIT
         THEN
-    THEN
-    R@ _RCW.RESULT @ R@ _RCW.TEMP @ = IF
-        R> DROP -1 PERSIST-S-CORRUPT EXIT
-    THEN
-    R@ _RCW.RESULT @ R@ _RCW.BASE-PAGE-COUNT @ >= IF
-        R> DROP -1 PERSIST-S-CORRUPT EXIT
-    THEN
-    R@ _RCW.RESULT @ R@ _RCW-STAGED-CONTAINS? IF
-        R> DROP -1 PERSIST-S-CONFLICT EXIT
-    THEN
-    R@ _RCW.RESULT @ R@ _RCW-ALLOCATED-CONTAINS? IF
-        R> DROP -1 PERSIST-S-CONFLICT EXIT
-    THEN
-    R@ _RCW.STATE _RCS.REUSABLE-COUNT @ 0> 0= IF
-        R> DROP -1 PERSIST-S-CORRUPT EXIT
+        R@ _RCW.STAGED-COUNT @ R@ _RCW.REQUESTED @ _RECLAIM-ADD?
+        0= IF
+            DROP R@ _RCW-RESERVE-BLOCKED R> DROP EXIT
+        THEN
+        1 _RECLAIM-ADD? 0= IF
+            DROP R@ _RCW-RESERVE-BLOCKED R> DROP EXIT
+        THEN
+        RECLAIM-RETIRED-MAX > IF
+            R@ _RCW-RESERVE-BLOCKED R> DROP EXIT
+        THEN
     THEN
     -1 R@ _RCW.STATE _RCS.REUSABLE-COUNT +!
     R@ _RCW.STATE _RCS.READY-INDEX @ 1+
@@ -840,6 +860,15 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     THEN
     PERSIST-S-OK R> DROP ;
 
+: _RCW-HIGH-WATER-ID  ( work -- page-id status )
+    DUP _RCW-PROPOSED-PAGE-COUNT DUP 0< IF
+        2DROP -1 PERSIST-S-CONFLICT EXIT
+    THEN
+    DUP 2 PICK _RCW-ALLOCATED-CONTAINS? IF
+        2DROP -1 PERSIST-S-CONFLICT EXIT
+    THEN
+    NIP PERSIST-S-OK ;
+
 : RECLAIM-ALLOCATE
   ( reclaim-context store pstore-work -- page-id status )
     >R
@@ -856,6 +885,51 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     THEN
     DUP 4 PICK _RCW-SET-STATUS DROP
     2SWAP 2DROP R> DROP ;
+
+: _RCW-PROTECTED-END
+  ( reserve reclaim-context store page-id status -- page-id status )
+    DUP 4 PICK _RCW-SET-STATUS DROP
+    2SWAP 2DROP ROT DROP ;
+
+\ Allocate a consumer page while preserving an exact retirement-ledger
+\ promise for later work in this transaction.  A non-final READY entry is
+\ still preferred.  When consuming the final entry would itself retire that
+\ READY bucket and exceed the promise, allocation instead reserves the exact
+\ PSTORE high-water id without changing the READY cursor or staged ledger.
+: RECLAIM-ALLOCATE-PROTECTED
+  ( future-retirement-reserve reclaim-context store pstore-work -- page-id status )
+    >R
+    OVER OVER R@ _RCW-ACTIVE? 0= IF
+        _RECLAIM-DROP3 R> DROP -1 PERSIST-S-BUSY EXIT
+    THEN
+    2 PICK DUP 0< SWAP RECLAIM-RETIRED-MAX > OR IF
+        -1 PERSIST-S-INVALID _RCW-PROTECTED-END
+        R> DROP EXIT
+    THEN
+    OVER _RCW.ALLOCATED-COUNT @ RECLAIM-ALLOCATED-MAX >= IF
+        -1 PERSIST-S-CAPACITY _RCW-PROTECTED-END
+        R> DROP EXIT
+    THEN
+    OVER _RCW.STAGED-COUNT @ 3 PICK _RECLAIM-ADD? 0= IF
+        DROP -1 PERSIST-S-CAPACITY _RCW-PROTECTED-END
+        R> DROP EXIT
+    THEN
+    DUP RECLAIM-RETIRED-MAX > IF
+        DROP -1 PERSIST-S-CAPACITY _RCW-PROTECTED-END
+        R> DROP EXIT
+    THEN
+    DROP
+    2 PICK 2 PICK _RCW-ALLOCATE-ID
+    DUP PERSIST-S-CAPACITY = IF
+        3 PICK _RCW.REQUESTED @ -1 = IF
+            2DROP
+            OVER _RCW-HIGH-WATER-ID
+        THEN
+    THEN
+    DUP 0= IF
+        DROP DUP 3 PICK _RCW-RECORD-ALLOCATION
+    THEN
+    _RCW-PROTECTED-END R> DROP ;
 
 : _RCW-RETIRE-SPAN?  ( page-ids-a count work -- flag )
     >R
@@ -1261,14 +1335,12 @@ RECLAIM-STATE-SIZE _RCW-SAVED-STATE + CONSTANT RECLAIM-WORK-SIZE
     DUP PERSIST-S-CAPACITY <> IF
         >R NIP R> R> DROP EXIT
     THEN
+    R@ _RCW.REQUESTED @ -1 <> IF
+        >R NIP R> R> DROP EXIT
+    THEN
     2DROP DROP
-    R@ _RCW-PROPOSED-PAGE-COUNT DUP 0< IF
-        DROP R> DROP -1 PERSIST-S-CONFLICT EXIT
-    THEN
-    DUP R@ _RCW-ALLOCATED-CONTAINS? IF
-        DROP R> DROP -1 PERSIST-S-CONFLICT EXIT
-    THEN
-    PERSIST-S-OK R> DROP ;
+    R@ _RCW-HIGH-WATER-ID
+    R> DROP ;
 
 : _RCW-DISCARD-CHUNKS  ( work -- count )
     _RCW.DISCARD-COUNT @ DUP 0= IF EXIT THEN

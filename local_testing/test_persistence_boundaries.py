@@ -135,11 +135,21 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
     assert re.search(r"(?m)^64\s+CONSTANT RECLAIM-RETIRED-MAX$", reclaim)
     assert re.search(r"(?m)^64\s+CONSTANT RECLAIM-DISCARD-MAX$", reclaim)
     assert re.search(r"(?m)^128\s+CONSTANT RECLAIM-ALLOCATED-MAX$", reclaim)
+    assert re.search(
+        r"(?m)^2\s+CONSTANT RECLAIM-STEP-RETIREMENT-MAX$", reclaim
+    )
+    assert re.search(
+        r"(?m)^1\s+CONSTANT RECLAIM-ALLOCATION-RETIREMENT-MAX$", reclaim
+    )
+    assert re.search(
+        r"(?m)^4\s+CONSTANT RECLAIM-FINALIZE-RETIREMENT-MAX$", reclaim
+    )
     for word in (
         "RECLAIM-TX-BEGIN",
         "RECLAIM-TX-ROOM?",
         "RECLAIM-CLAIM-HIGH-WATER",
         "RECLAIM-ALLOCATE",
+        "RECLAIM-ALLOCATE-PROTECTED",
         "RECLAIM-RETIRE-BATCH",
         "RECLAIM-DISCARD-BATCH",
         "RECLAIM-RELEASE-BATCH",
@@ -149,6 +159,11 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
         "RECLAIM-ABORT",
     ):
         assert word in reclaim
+    assert (
+        "( future-retirement-reserve reclaim-context store pstore-work"
+        in reclaim
+    )
+    assert "-- page-id status )" in reclaim
     assert "PROOT-SLOT-GENERATION@" in reclaim
     assert "GPAIR-SLOT-A" in reclaim
     assert "GPAIR-SLOT-B" in reclaim

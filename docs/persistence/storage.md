@@ -367,6 +367,7 @@ RECLAIM-TX-BEGIN
 RECLAIM-TX-ROOM?
 RECLAIM-CLAIM-HIGH-WATER
 RECLAIM-ALLOCATE
+RECLAIM-ALLOCATE-PROTECTED
 RECLAIM-RETIRE-BATCH
 RECLAIM-DISCARD-BATCH
 RECLAIM-RELEASE-BATCH
@@ -402,11 +403,33 @@ at most eight bucket page writes. It exports the proposed state before the
 application root is published. Bucket pages are internal metadata and do not
 appear in the consumer's 128-entry issued-page ledger.
 `RECLAIM-TX-ROOM?` checks caller-supplied worst-case reservations against all
-three live ledgers. `RECLAIM-CLAIM-HIGH-WATER` lets a hidden copy-on-write
-owner insist on PSTORE's exact current high-water id while admitting that id
-to the same consumer-issued ledger before the page is written. Wrong,
-duplicate, or over-capacity claims poison the proposal just like an ordinary
-allocation failure.
+three live ledgers. The public constants
+`RECLAIM-STEP-RETIREMENT-MAX` (2),
+`RECLAIM-ALLOCATION-RETIREMENT-MAX` (1), and
+`RECLAIM-FINALIZE-RETIREMENT-MAX` (4) are the exact maximum additions those
+operations can make to the shared retirement ledger. They let a caller include
+maintenance, every consumer allocation, and finalization in one checked
+preflight instead of depending on allocator internals.
+
+`RECLAIM-ALLOCATE-PROTECTED` has the stack contract
+`( future-retirement-reserve reclaim-context store pstore-work -- page-id
+status )`. It prefers a fenced reusable id while preserving the stated number
+of retirement slots for the transaction's later work. If the selected id is
+the last entry in its READY bucket and retiring that exhausted metadata page
+would invade the reserve, the call instead returns PSTORE's exact current
+high-water id. That fallback is a successful consumer allocation: it records
+the id exactly once in the issued ledger while leaving the reusable count,
+READY head/index, and staged-retirement ledger unchanged. A reserve outside
+`0..RECLAIM-RETIRED-MAX`, insufficient current ledger room, a duplicate
+high-water reservation, genuine damaged READY metadata, or an exhausted
+issued ledger remains an error and poisons the active proposal; those cases
+are never converted into fallback success.
+
+`RECLAIM-CLAIM-HIGH-WATER` lets a hidden copy-on-write owner insist on
+PSTORE's exact current high-water id while admitting that id to the same
+consumer-issued ledger before the page is written. Wrong, duplicate, or
+over-capacity claims poison the proposal just like an ordinary allocation
+failure.
 The ready cursor is exact: an empty head requires index zero and is equivalent
 to a zero reusable count; a nonempty head requires a positive count. Rotation
 preserves its pending source before allocating output metadata, because that

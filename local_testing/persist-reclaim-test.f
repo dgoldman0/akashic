@@ -11,6 +11,11 @@ VARIABLE _RB-fault-point
 VARIABLE _RB-fault-occurrence
 VARIABLE _RB-before-staged
 VARIABLE _RB-before-discard
+VARIABLE _RB-before-ready-head
+VARIABLE _RB-before-ready-index
+VARIABLE _RB-before-reusable
+VARIABLE _RB-before-allocated
+VARIABLE _RB-before-proposed
 VARIABLE _RB-snapshot-page
 VARIABLE _RB-reserved
 VARIABLE _RB-cadence-live-a
@@ -81,6 +86,15 @@ CREATE _RB-ids 129 CELLS ALLOT
     _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE ROT FILL
     _RB-work _PSTC-store-a _PSTC-work-a RECLAIM-ALLOCATE
         PERSIST-S-OK _RB-s
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 2 PICK
+        _PSTC-store-a _PSTC-work-a PSTORE-WRITE-PAGE-TX
+        PERSIST-S-OK _RB-s ;
+
+: _RB-protected-write  ( byte future-retirement-reserve -- page-id )
+    >R
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE ROT FILL
+    R> _RB-work _PSTC-store-a _PSTC-work-a
+        RECLAIM-ALLOCATE-PROTECTED PERSIST-S-OK _RB-s
     _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 2 PICK
         _PSTC-store-a _PSTC-work-a PSTORE-WRITE-PAGE-TX
         PERSIST-S-OK _RB-s ;
@@ -515,6 +529,179 @@ CREATE _RB-ids 129 CELLS ALLOT
     _RB-reclaim-b RECLAIM-REUSABLE-COUNT@ 33 = _RB-a
     _RB-reclaim-b RECLAIM-FENCE@ 5 = _RB-a ;
 
+\ A protected consumer allocation preserves its caller's exact future
+\ retirement promise.  At the final entry of a READY bucket, a full reserve
+\ selects high water without moving any reusable or staged state; one slot
+\ less permits reuse, retires the exhausted metadata page, and leaves every
+\ promised slot available for later retirements and bounded finalization.
+: _RB-protected-allocation-contract  ( -- )
+    RECLAIM-STEP-RETIREMENT-MAX 2 = _RB-a
+    RECLAIM-ALLOCATION-RETIREMENT-MAX 1 = _RB-a
+    RECLAIM-FINALIZE-RETIREMENT-MAX 4 = _RB-a
+
+    0 _RB-work _PSTC-store-a _PSTC-work-a
+        RECLAIM-ALLOCATE-PROTECTED
+        PERSIST-S-BUSY = SWAP -1 = AND _RB-a
+
+    _RB-begin
+    -1 _RB-work _PSTC-store-a _PSTC-work-a
+        RECLAIM-ALLOCATE-PROTECTED
+        PERSIST-S-INVALID = SWAP -1 = AND _RB-a
+    _RB-work _RCW.ALLOCATED-COUNT @ 0= _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-TX-READY? 0= _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+
+    _RB-begin
+    RECLAIM-RETIRED-MAX 1+ _RB-work
+        _PSTC-store-a _PSTC-work-a RECLAIM-ALLOCATE-PROTECTED
+        PERSIST-S-INVALID = SWAP -1 = AND _RB-a
+    _RB-work _RCW.ALLOCATED-COUNT @ 0= _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+
+    \ Current staged work that already fills part of the promise is genuine
+    \ capacity, not the READY-exhaustion fallback.
+    _RB-begin
+    0 0 _RB-id !
+    _RB-ids 1 _RB-work RECLAIM-RETIRE-BATCH PERSIST-S-OK _RB-s
+    RECLAIM-RETIRED-MAX _RB-work
+        _PSTC-store-a _PSTC-work-a RECLAIM-ALLOCATE-PROTECTED
+        PERSIST-S-CAPACITY = SWAP -1 = AND _RB-a
+    _RB-work _RCW.ALLOCATED-COUNT @ 0= _RB-a
+    _RB-work _RCW.STAGED-COUNT @ 1 = _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+
+    \ Reserve pressure is considered only after the selected READY entry is
+    \ semantically valid.  A transaction-local bucket whose final entry is
+    \ its own metadata page must report corruption, not escape to high water.
+    _RB-begin
+    _PSTC-work-a PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @
+        DUP _RB-reserved !
+    DUP _RB-work RECLAIM-CLAIM-HIGH-WATER PERSIST-S-OK _RB-s DROP
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 0 FILL
+    _RECLAIM-BUCKET-MAGIC _PSTC-page _RCB.MAGIC !
+    _RECLAIM-BUCKET-READY _PSTC-page _RCB.KIND !
+    1 _PSTC-page _RCB.COUNT !
+    -1 _PSTC-page _RCB.NEXT !
+    _RB-reserved @ 0 _PSTC-page _RCB.ENTRY !
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE _RB-reserved @
+        _PSTC-store-a _PSTC-work-a PSTORE-WRITE-PAGE-TX
+        PERSIST-S-OK _RB-s
+    _RB-reserved @ _RB-work _RCW.STATE _RCS.READY-HEAD !
+    0 _RB-work _RCW.STATE _RCS.READY-INDEX !
+    1 _RB-work _RCW.STATE _RCS.REUSABLE-COUNT !
+    RECLAIM-RETIRED-MAX _RB-work
+        _PSTC-store-a _PSTC-work-a RECLAIM-ALLOCATE-PROTECTED
+        PERSIST-S-CORRUPT = SWAP -1 = AND _RB-a
+    _RB-work _RCW.ALLOCATED-COUNT @ 1 = _RB-a
+    _RB-work _RCW.STAGED-COUNT @ 0= _RB-a
+    _RB-work _RCW.STATE _RCS.READY-HEAD @ _RB-reserved @ = _RB-a
+    _RB-work _RCW.STATE _RCS.READY-INDEX @ 0= _RB-a
+    _RB-work _RCW.STATE _RCS.REUSABLE-COUNT @ 1 = _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+
+    \ Position immediately before the last entry in the first READY bucket.
+    \ These non-exhausting allocations need no retirement slots.
+    _RB-begin
+    31 0 ?DO
+        I 141 + RECLAIM-RETIRED-MAX _RB-protected-write
+        DUP I 82 + = _RB-a DROP
+    LOOP
+    _RB-work _RCW.ALLOCATED-COUNT @ DUP 31 = _RB-a
+        _RB-before-allocated !
+    _RB-work _RCW.STAGED-COUNT @ DUP 0= _RB-a _RB-before-staged !
+    _RB-work _RCW.STATE _RCS.READY-HEAD @ _RB-before-ready-head !
+    _RB-work _RCW.STATE _RCS.READY-INDEX @ DUP 31 = _RB-a
+        _RB-before-ready-index !
+    _RB-work _RCW.STATE _RCS.REUSABLE-COUNT @ DUP 2 = _RB-a
+        _RB-before-reusable !
+    _PSTC-work-a PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @
+        _RB-before-proposed !
+    _RB-work _RCW.STATE _RB-state RECLAIM-STATE-SIZE MOVE
+
+    RECLAIM-RETIRED-MAX _RB-work
+        _PSTC-store-a _PSTC-work-a RECLAIM-ALLOCATE-PROTECTED
+        SWAP _RB-reserved ! PERSIST-S-OK _RB-s
+    _RB-reserved @ _RB-before-proposed @ = _RB-a
+    _RB-state RECLAIM-STATE-SIZE _RB-work _RCW.STATE
+        RECLAIM-STATE-SIZE COMPARE 0= _RB-a
+    _RB-work _RCW.STATE _RCS.READY-HEAD @
+        _RB-before-ready-head @ = _RB-a
+    _RB-work _RCW.STATE _RCS.READY-INDEX @
+        _RB-before-ready-index @ = _RB-a
+    _RB-work _RCW.STATE _RCS.REUSABLE-COUNT @
+        _RB-before-reusable @ = _RB-a
+    _RB-work _RCW.STAGED-COUNT @ _RB-before-staged @ = _RB-a
+    _PSTC-work-a PSTORE-PROPOSED-ROOT@ PROOTV.PAGE-COUNT @
+        _RB-before-proposed @ = _RB-a
+    _RB-work _RCW.ALLOCATED-COUNT @
+        _RB-before-allocated @ 1+ = _RB-a
+    _RB-before-allocated @ _RB-work _RCW.ALLOCATED-ENTRY @
+        _RB-reserved @ = _RB-a
+    0 RECLAIM-RETIRED-MAX 0 _RB-work RECLAIM-TX-ROOM? _RB-a
+
+    \ An unwritten high-water reservation cannot be issued twice.  The
+    \ rejected duplicate neither consumes READY state nor adds a ledger row.
+    RECLAIM-RETIRED-MAX _RB-work
+        _PSTC-store-a _PSTC-work-a RECLAIM-ALLOCATE-PROTECTED
+        PERSIST-S-CONFLICT = SWAP -1 = AND _RB-a
+    _RB-state RECLAIM-STATE-SIZE _RB-work _RCW.STATE
+        RECLAIM-STATE-SIZE COMPARE 0= _RB-a
+    _RB-work _RCW.ALLOCATED-COUNT @
+        _RB-before-allocated @ 1+ = _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+
+    \ Reserving one slot less permits the boundary entry to be reused and
+    \ stages its exhausted READY bucket.  The remaining 63 slots cover 59
+    \ caller retirements plus the exact four-slot finalization maximum.
+    _RB-begin
+    31 0 ?DO
+        I 173 + RECLAIM-RETIRED-MAX _RB-protected-write DROP
+    LOOP
+    204
+    RECLAIM-RETIRED-MAX RECLAIM-ALLOCATION-RETIREMENT-MAX -
+        _RB-protected-write DUP 113 = _RB-a DROP
+    _RB-work _RCW.STAGED-COUNT @ 1 = _RB-a
+    _RB-work _RCW.STATE _RCS.REUSABLE-COUNT @ 1 = _RB-a
+    0
+    RECLAIM-RETIRED-MAX RECLAIM-ALLOCATION-RETIREMENT-MAX -
+    0 _RB-work RECLAIM-TX-ROOM? _RB-a
+    RECLAIM-RETIRED-MAX
+        RECLAIM-ALLOCATION-RETIREMENT-MAX -
+        RECLAIM-FINALIZE-RETIREMENT-MAX -
+    0 ?DO I I _RB-id ! LOOP
+    _RB-ids 32 _RB-work RECLAIM-RETIRE-BATCH PERSIST-S-OK _RB-s
+    32 _RB-id
+    RECLAIM-RETIRED-MAX
+        RECLAIM-ALLOCATION-RETIREMENT-MAX -
+        RECLAIM-FINALIZE-RETIREMENT-MAX -
+        32 -
+    _RB-work RECLAIM-RETIRE-BATCH PERSIST-S-OK _RB-s
+    _RB-work _RCW.STAGED-COUNT @
+        RECLAIM-RETIRED-MAX RECLAIM-FINALIZE-RETIREMENT-MAX -
+        = _RB-a
+    0 RECLAIM-FINALIZE-RETIREMENT-MAX 0
+        _RB-work RECLAIM-TX-ROOM? _RB-a
+    _RB-work RECLAIM-FINALIZE PERSIST-S-OK _RB-s
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+
+    \ Issued-ledger exhaustion is checked before READY selection and cannot be
+    \ mistaken for reserve fallback.
+    _RB-begin
+    RECLAIM-ALLOCATED-MAX 0 ?DO I 1+ _RB-claim-write DROP LOOP
+    0 _RB-work _PSTC-store-a _PSTC-work-a
+        RECLAIM-ALLOCATE-PROTECTED
+        PERSIST-S-CAPACITY = SWAP -1 = AND _RB-a
+    _RB-work _RCW.ALLOCATED-COUNT @ RECLAIM-ALLOCATED-MAX = _RB-a
+    _PSTC-store-a _PSTC-work-a PSTORE-ABORT PERSIST-S-OK _RB-s
+    _RB-work RECLAIM-ABORT PERSIST-S-OK _RB-s
+    _RB-stack ;
+
 : _RB-nth-page-fault  ( point ordinal context -- status )
     DROP SWAP
     _RB-fault-point @ <> IF DROP PERSIST-S-OK EXIT THEN
@@ -902,6 +1089,7 @@ CREATE _RB-ids 129 CELLS ALLOT
     _RB-layer-failure-poisons
     _RB-discard-33
     _RB-cold-discard
+    _RB-protected-allocation-contract
     _RB-finalize-page-faults
     _RB-step-page-faults
     _RB-staged-metadata-boundary
