@@ -24,6 +24,7 @@ OPERATIONAL_INDEX = "tui/applets/streams/operational-index.f"
 OPERATIONAL_CONFIG_RECORDS = (
     "tui/applets/streams/operational-config-records.f"
 )
+SHA3_CONTEXT = "math/sha3-context.f"
 OPERATIONAL_MODULES = (
     OPERATIONAL_RECORDS,
     OPERATIONAL_INDEX,
@@ -149,6 +150,31 @@ def test_streams_sr3_operational_modules_own_no_mutable_storage() -> None:
             mutable_definitions[module] = owned
 
     assert mutable_definitions == {}
+
+
+def test_streams_sr3_incremental_hash_is_caller_owned_and_software_only() -> None:
+    closure = set(dependency_closure(SOURCE_ROOT, (SHA3_CONTEXT,)))
+    words = _defined_words(SHA3_CONTEXT)
+    definitions = _lexical_definitions(_source(SHA3_CONTEXT))
+    owned_mutable = {
+        kind: definitions[kind]
+        for kind in MUTABLE_DEFINITION_KINDS
+        if definitions[kind]
+    }
+    public_api = {
+        "SHA3-256-CONTEXT-VALID?",
+        "SHA3-256-CONTEXT-INIT",
+        "SHA3-256-CONTEXT-UPDATE",
+        "SHA3-256-CONTEXT-FINAL",
+        "SHA3-256-CONTEXT-FINAL-COMPARE",
+    }
+
+    assert closure == {
+        SHA3_CONTEXT,
+        "utils/memory-span.f",
+    }
+    assert public_api <= words
+    assert owned_mutable == {}
 
 
 def test_streams_sr3_operational_shape_has_no_prerelease_legacy_surface() -> None:
