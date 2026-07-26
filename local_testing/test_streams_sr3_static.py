@@ -21,9 +21,13 @@ from refactor_inventory import (  # noqa: E402
 
 OPERATIONAL_RECORDS = "tui/applets/streams/operational-records.f"
 OPERATIONAL_INDEX = "tui/applets/streams/operational-index.f"
+OPERATIONAL_CONFIG_RECORDS = (
+    "tui/applets/streams/operational-config-records.f"
+)
 OPERATIONAL_MODULES = (
     OPERATIONAL_RECORDS,
     OPERATIONAL_INDEX,
+    OPERATIONAL_CONFIG_RECORDS,
 )
 
 REPOSITORY_ROOT = SOURCE_ROOT.parent
@@ -198,6 +202,37 @@ def test_streams_sr3_operational_bytes_do_not_embed_sr2_runtime_records() -> Non
 
     assert forbidden_descriptors.isdisjoint(source.split())
     assert not any(prefix in source for prefix in forbidden_field_prefixes)
+
+
+def test_streams_sr3_configuration_embeds_no_secret_or_runtime_handle() -> None:
+    words = _defined_words(OPERATIONAL_CONFIG_RECORDS)
+    forbidden_handle_terms = (
+        "ADDRESS",
+        "CALLBACK",
+        "CARRIER",
+        "LEASE",
+        "PASSWORD",
+        "POINTER",
+        "SECRET",
+        "SESSION",
+        "SOCKET",
+        "TOKEN",
+        "TRUST",
+        "WORKSPACE",
+    )
+    credential_accessors = {
+        word for word in words if word.startswith("SOPCONN.CREDENTIAL")
+    }
+
+    assert credential_accessors == {
+        "SOPCONN.CREDENTIAL-ID",
+        "SOPCONN.CREDENTIAL-POLICY",
+    }
+    assert not {
+        word
+        for word in words
+        if any(term in word.upper() for term in forbidden_handle_terms)
+    }
 
 
 def test_streams_sr3_root_and_index_agree_on_exactly_seven_trees() -> None:
