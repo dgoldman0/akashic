@@ -129,26 +129,29 @@ RID-SIZE STREAMS-OI-REQUEST-SEAL-SIZE +
 
 \ These assertions bind the operational bytes directly to the only neutral
 \ ordered-index limits they are allowed to inhabit.
+: _SOI-GEOMETRY-ABORT  ( -- )
+    ." Streams operational index geometry mismatch" CR ABORT ;
+
 RID-SIZE 32 <> [IF]
-    ABORT" Streams operational identities must be exact 32-byte RIDs"
+    _SOI-GEOMETRY-ABORT
 [THEN]
 PERSIST-REF-SIZE 24 <> [IF]
-    ABORT" Streams operational row values require exact 24-byte references"
+    _SOI-GEOMETRY-ABORT
 [THEN]
 STREAMS-OI-CHECKPOINT-KEY-SIZE PBTREE-KEY-MAX > [IF]
-    ABORT" Streams operational key exceeds neutral key maximum"
+    _SOI-GEOMETRY-ABORT
 [THEN]
 STREAMS-OI-IDEMPOTENCY-KEY-SIZE PBTREE-KEY-MAX > [IF]
-    ABORT" Streams idempotency key exceeds neutral key maximum"
+    _SOI-GEOMETRY-ABORT
 [THEN]
 STREAMS-OI-ROW-VALUE-SIZE PBTREE-VALUE-MAX > [IF]
-    ABORT" Streams operational row value exceeds neutral value maximum"
+    _SOI-GEOMETRY-ABORT
 [THEN]
 STREAMS-OI-IDEMPOTENCY-VALUE-SIZE PBTREE-VALUE-MAX > [IF]
-    ABORT" Streams idempotency value exceeds neutral value maximum"
+    _SOI-GEOMETRY-ABORT
 [THEN]
 STREAMS-OI-IDEMPOTENCY-VALUE-SIZE PBTREE-VALUE-MAX <> [IF]
-    ABORT" Streams idempotency value must fill the neutral value maximum"
+    _SOI-GEOMETRY-ABORT
 [THEN]
 
 \ ---------------------------------------------------------------------

@@ -621,46 +621,49 @@ REQUIRE operational-records.f
 \ Compile-time geometry guards
 \ ---------------------------------------------------------------------
 
+: _SOPCFG-GEOMETRY-ABORT  ( -- )
+    ." Streams operational configuration geometry mismatch" CR ABORT ;
+
 1 CELLS 8 <> [IF]
-    ABORT" Streams operational configuration requires 64-bit cells"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 RID-SIZE 32 <> [IF]
-    ABORT" Streams operational configuration requires 32-byte RIDs"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 SHA3-256-LEN 32 <> [IF]
-    ABORT" Streams operational configuration requires SHA3-256 seals"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 PBLOB-SIZE 72 <> [IF]
-    ABORT" Streams checkpoints require exact PBLOB descriptors"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 STREAMS-OPREC-HEADER-SIZE 64 <> [IF]
-    ABORT" Streams operational configuration requires its current header"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 STREAMS-OPCONN-SIZE _SOPC-RESERVED - 120 <> [IF]
-    ABORT" Streams connector reserved geometry changed"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 STREAMS-OPFLOW-SIZE _SOPF-RESERVED - 152 <> [IF]
-    ABORT" Streams flow reserved geometry changed"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 STREAMS-OPCHECKPOINT-SIZE _SOPK-RESERVED - 96 <> [IF]
-    ABORT" Streams checkpoint reserved geometry changed"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 STREAMS-OPCONN-SIZE PERSIST-PAGE-PAYLOAD-SIZE > [IF]
-    ABORT" Streams connector record exceeds one neutral page payload"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 STREAMS-OPFLOW-SIZE PERSIST-PAGE-PAYLOAD-SIZE > [IF]
-    ABORT" Streams flow record exceeds one neutral page payload"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]
 
 STREAMS-OPCHECKPOINT-SIZE PERSIST-PAGE-PAYLOAD-SIZE > [IF]
-    ABORT" Streams checkpoint record exceeds one neutral page payload"
+    _SOPCFG-GEOMETRY-ABORT
 [THEN]

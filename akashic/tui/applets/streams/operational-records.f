@@ -738,22 +738,25 @@ PERSIST-PAGE-PAYLOAD-SIZE CONSTANT STREAMS-OPROOT-SIZE
 \ The complete root must fit one neutral application-root page.  The adapter
 \ separately rejects a configured segment payload smaller than OPATT-SIZE;
 \ PBLOB chunk geometry does not establish the segment-record ceiling.
+: _SOPREC-GEOMETRY-ABORT  ( -- )
+    ." Streams operational record geometry mismatch" CR ABORT ;
+
 STREAMS-OPROOT-SIZE PERSIST-PAGE-PAYLOAD-SIZE <> [IF]
-    ABORT" Streams operational root must fill one page payload"
+    _SOPREC-GEOMETRY-ABORT
 [THEN]
 
 1 CELLS 8 <> [IF]
-    ABORT" Streams operational bytes require exact 64-bit cells"
+    _SOPREC-GEOMETRY-ABORT
 [THEN]
 
 RID-SIZE 32 <> [IF]
-    ABORT" Streams operational identities require exact 32-byte RIDs"
+    _SOPREC-GEOMETRY-ABORT
 [THEN]
 
 SHA3-256-LEN 32 <> [IF]
-    ABORT" Streams operational seals require exact SHA3-256 geometry"
+    _SOPREC-GEOMETRY-ABORT
 [THEN]
 
 PBLOB-SIZE 72 <> [IF]
-    ABORT" Streams operational blob descriptors require exact 72-byte geometry"
+    _SOPREC-GEOMETRY-ABORT
 [THEN]

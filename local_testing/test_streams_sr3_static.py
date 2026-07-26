@@ -152,6 +152,19 @@ def test_streams_sr3_operational_modules_own_no_mutable_storage() -> None:
     assert mutable_definitions == {}
 
 
+def test_streams_sr3_geometry_guards_abort_during_interpretation() -> None:
+    deferred_abort = re.compile(
+        r"\[IF\]\s*(?:\\[^\r\n]*\r?\n\s*)*ABORT\"",
+        re.IGNORECASE,
+    )
+
+    assert not {
+        module
+        for module in OPERATIONAL_MODULES
+        if deferred_abort.search(_source(module))
+    }
+
+
 def test_streams_sr3_incremental_hash_is_caller_owned_and_software_only() -> None:
     closure = set(dependency_closure(SOURCE_ROOT, (SHA3_CONTEXT,)))
     words = _defined_words(SHA3_CONTEXT)
