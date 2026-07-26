@@ -1,0 +1,914 @@
+\ =====================================================================
+\  operational-index.f - Streams operational ordered-index bytes
+\ =====================================================================
+\  This module defines the exact pointer-free keys and values used by the
+\  bounded Streams egress outbox.  The neutral B+tree sees only unsigned
+\  byte strings; all operational meaning and physical-tree selection stay
+\  here under Streams.
+\
+\  Every key starts with one nonzero family byte.  Nonnegative ordering
+\  fields use fixed eight-byte big-endian encodings so lexicographic order
+\  agrees with sequence/time order.  Every ordinary value is one exact
+\  immutable-record reference.  The idempotency lookup instead carries the
+\  exact attempt RID and request seal needed to distinguish an identical
+\  replay from a mismatched request with one logarithmic lookup.
+\
+\  Constructors validate complete source and destination spans, reject
+\  aliasing between borrowed sources and destinations, and perform no write
+\  until every input is valid.  This file owns no mutable state and encodes
+\  no runtime address, execution token, callback, or active-cell object.
+\ =====================================================================
+
+PROVIDED akashic-tui-streams-operational-index
+
+REQUIRE ../../../runtime/identity.f
+REQUIRE ../../../utils/memory-span.f
+REQUIRE ../../../persistence/core.f
+REQUIRE ../../../persistence/btree.f
+
+PERSIST-S-OK      CONSTANT STREAMS-OI-S-OK
+PERSIST-S-INVALID CONSTANT STREAMS-OI-S-INVALID
+
+PBTREE-KEY-MAX   CONSTANT STREAMS-OI-KEY-MAX
+PBTREE-VALUE-MAX CONSTANT STREAMS-OI-VALUE-MAX
+
+1  CONSTANT STREAMS-OI-FAMILY-PREFIX-SIZE
+8  CONSTANT STREAMS-OI-ORDER-SIZE
+32 CONSTANT STREAMS-OI-REQUEST-SEAL-SIZE
+
+\ ---------------------------------------------------------------------
+\ Exact physical-tree indexes and scopes
+\ ---------------------------------------------------------------------
+
+0 CONSTANT STREAMS-OI-TREE-CONNECTOR-CONFIG
+1 CONSTANT STREAMS-OI-TREE-FLOW-CONFIG
+2 CONSTANT STREAMS-OI-TREE-CHECKPOINT
+3 CONSTANT STREAMS-OI-TREE-ATTEMPT-DIRECTORY
+4 CONSTANT STREAMS-OI-TREE-DISPATCH
+5 CONSTANT STREAMS-OI-TREE-TERMINAL-RETENTION
+6 CONSTANT STREAMS-OI-TREE-IDEMPOTENCY
+7 CONSTANT STREAMS-OI-TREE-COUNT
+
+\ Scope values are positive, stable, and unique within the application root.
+0x53524F49434F4E4E CONSTANT STREAMS-OI-SCOPE-CONNECTOR-CONFIG \ "SROICONN"
+0x53524F49464C4F57 CONSTANT STREAMS-OI-SCOPE-FLOW-CONFIG      \ "SROIFLOW"
+0x53524F4943484B50 CONSTANT STREAMS-OI-SCOPE-CHECKPOINT       \ "SROICHKP"
+0x53524F494154544D CONSTANT STREAMS-OI-SCOPE-ATTEMPT-DIRECTORY \ "SROIATTM"
+0x53524F4944495350 CONSTANT STREAMS-OI-SCOPE-DISPATCH         \ "SROIDISP"
+0x53524F495445524D CONSTANT STREAMS-OI-SCOPE-TERMINAL-RETENTION \ "SROITERM"
+0x53524F494944454D CONSTANT STREAMS-OI-SCOPE-IDEMPOTENCY      \ "SROIIDEM"
+
+\ Family bytes remain globally distinct even where two families share the
+\ same physical dispatch tree.
+0x11 CONSTANT STREAMS-OI-F-CONNECTOR-CONFIG
+0x21 CONSTANT STREAMS-OI-F-FLOW-CONFIG
+0x31 CONSTANT STREAMS-OI-F-CHECKPOINT
+0x41 CONSTANT STREAMS-OI-F-ATTEMPT-DIRECTORY
+0x51 CONSTANT STREAMS-OI-F-DISPATCH-READY
+0x52 CONSTANT STREAMS-OI-F-DISPATCH-ACTIVE
+0x61 CONSTANT STREAMS-OI-F-TERMINAL-RETENTION
+0x71 CONSTANT STREAMS-OI-F-IDEMPOTENCY
+
+\ ---------------------------------------------------------------------
+\ Exact key and value geometry
+\ ---------------------------------------------------------------------
+
+1 RID-SIZE +
+    CONSTANT STREAMS-OI-CONNECTOR-CONFIG-KEY-SIZE
+STREAMS-OI-FAMILY-PREFIX-SIZE
+    CONSTANT STREAMS-OI-CONNECTOR-CONFIG-PREFIX-SIZE
+
+1 RID-SIZE +
+    CONSTANT STREAMS-OI-FLOW-CONFIG-KEY-SIZE
+STREAMS-OI-FAMILY-PREFIX-SIZE
+    CONSTANT STREAMS-OI-FLOW-CONFIG-PREFIX-SIZE
+
+1 RID-SIZE + RID-SIZE +
+    CONSTANT STREAMS-OI-CHECKPOINT-KEY-SIZE
+1 RID-SIZE +
+    CONSTANT STREAMS-OI-CHECKPOINT-CONNECTOR-PREFIX-SIZE
+STREAMS-OI-FAMILY-PREFIX-SIZE
+    CONSTANT STREAMS-OI-CHECKPOINT-FAMILY-PREFIX-SIZE
+
+1 RID-SIZE +
+    CONSTANT STREAMS-OI-ATTEMPT-KEY-SIZE
+STREAMS-OI-FAMILY-PREFIX-SIZE
+    CONSTANT STREAMS-OI-ATTEMPT-PREFIX-SIZE
+
+1 STREAMS-OI-ORDER-SIZE + RID-SIZE +
+    CONSTANT STREAMS-OI-DISPATCH-READY-KEY-SIZE
+1 STREAMS-OI-ORDER-SIZE +
+    CONSTANT STREAMS-OI-DISPATCH-READY-ORDER-PREFIX-SIZE
+STREAMS-OI-FAMILY-PREFIX-SIZE
+    CONSTANT STREAMS-OI-DISPATCH-READY-PREFIX-SIZE
+
+1 STREAMS-OI-ORDER-SIZE + RID-SIZE +
+    CONSTANT STREAMS-OI-DISPATCH-ACTIVE-KEY-SIZE
+1 STREAMS-OI-ORDER-SIZE +
+    CONSTANT STREAMS-OI-DISPATCH-ACTIVE-TIME-PREFIX-SIZE
+STREAMS-OI-FAMILY-PREFIX-SIZE
+    CONSTANT STREAMS-OI-DISPATCH-ACTIVE-PREFIX-SIZE
+
+1 STREAMS-OI-ORDER-SIZE + RID-SIZE +
+    CONSTANT STREAMS-OI-TERMINAL-RETENTION-KEY-SIZE
+1 STREAMS-OI-ORDER-SIZE +
+    CONSTANT STREAMS-OI-TERMINAL-RETENTION-TIME-PREFIX-SIZE
+STREAMS-OI-FAMILY-PREFIX-SIZE
+    CONSTANT STREAMS-OI-TERMINAL-RETENTION-PREFIX-SIZE
+
+1 RID-SIZE + RID-SIZE +
+    CONSTANT STREAMS-OI-IDEMPOTENCY-KEY-SIZE
+1 RID-SIZE +
+    CONSTANT STREAMS-OI-IDEMPOTENCY-CONNECTOR-PREFIX-SIZE
+STREAMS-OI-FAMILY-PREFIX-SIZE
+    CONSTANT STREAMS-OI-IDEMPOTENCY-FAMILY-PREFIX-SIZE
+
+PERSIST-REF-SIZE CONSTANT STREAMS-OI-ROW-VALUE-SIZE
+RID-SIZE STREAMS-OI-REQUEST-SEAL-SIZE +
+    CONSTANT STREAMS-OI-IDEMPOTENCY-VALUE-SIZE
+
+\ These assertions bind the operational bytes directly to the only neutral
+\ ordered-index limits they are allowed to inhabit.
+RID-SIZE 32 <> [IF]
+    ABORT" Streams operational identities must be exact 32-byte RIDs"
+[THEN]
+PERSIST-REF-SIZE 24 <> [IF]
+    ABORT" Streams operational row values require exact 24-byte references"
+[THEN]
+STREAMS-OI-CHECKPOINT-KEY-SIZE PBTREE-KEY-MAX > [IF]
+    ABORT" Streams operational key exceeds neutral key maximum"
+[THEN]
+STREAMS-OI-IDEMPOTENCY-KEY-SIZE PBTREE-KEY-MAX > [IF]
+    ABORT" Streams idempotency key exceeds neutral key maximum"
+[THEN]
+STREAMS-OI-ROW-VALUE-SIZE PBTREE-VALUE-MAX > [IF]
+    ABORT" Streams operational row value exceeds neutral value maximum"
+[THEN]
+STREAMS-OI-IDEMPOTENCY-VALUE-SIZE PBTREE-VALUE-MAX > [IF]
+    ABORT" Streams idempotency value exceeds neutral value maximum"
+[THEN]
+STREAMS-OI-IDEMPOTENCY-VALUE-SIZE PBTREE-VALUE-MAX <> [IF]
+    ABORT" Streams idempotency value must fill the neutral value maximum"
+[THEN]
+
+\ ---------------------------------------------------------------------
+\ Pure structural helpers
+\ ---------------------------------------------------------------------
+
+: _SOI-DROP3  ( x1 x2 x3 -- ) 2DROP DROP ;
+
+: _SOI-SPAN?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _SOI-KEY-DEST?  ( destination bytes -- flag )
+    DUP 0> OVER PBTREE-KEY-MAX <= AND 0= IF 2DROP 0 EXIT THEN
+    _SOI-SPAN? ;
+
+: _SOI-VALUE-DEST?  ( destination bytes -- flag )
+    DUP 0> OVER PBTREE-VALUE-MAX <= AND 0= IF 2DROP 0 EXIT THEN
+    _SOI-SPAN? ;
+
+: _SOI-NONZERO?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ IF DROP -1 UNLOOP EXIT THEN
+    LOOP
+    DROP 0 ;
+
+: _SOI-BYTES=  ( left right bytes -- flag )
+    DUP 0< IF DROP 2DROP 0 EXIT THEN
+    0 ?DO
+        2DUP I + C@ SWAP I + C@ <> IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP -1 ;
+
+: _SOI-RID?  ( rid -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP RID-SIZE _SOI-SPAN? 0= IF DROP 0 EXIT THEN
+    RID-SIZE _SOI-NONZERO? ;
+
+: _SOI-REQUEST-SEAL?  ( seal -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP STREAMS-OI-REQUEST-SEAL-SIZE _SOI-SPAN? 0= IF DROP 0 EXIT THEN
+    STREAMS-OI-REQUEST-SEAL-SIZE _SOI-NONZERO? ;
+
+: _SOI-NONNEGATIVE?  ( value -- flag ) 0< 0= ;
+
+: STREAMS-OI-FAMILY-VALID?  ( family -- flag )
+    DUP STREAMS-OI-F-CONNECTOR-CONFIG =
+    OVER STREAMS-OI-F-FLOW-CONFIG = OR
+    OVER STREAMS-OI-F-CHECKPOINT = OR
+    OVER STREAMS-OI-F-ATTEMPT-DIRECTORY = OR
+    OVER STREAMS-OI-F-DISPATCH-READY = OR
+    OVER STREAMS-OI-F-DISPATCH-ACTIVE = OR
+    OVER STREAMS-OI-F-TERMINAL-RETENTION = OR
+    SWAP STREAMS-OI-F-IDEMPOTENCY = OR ;
+
+: STREAMS-OI-TREE-VALID?  ( tree-index -- flag )
+    DUP 0>= SWAP STREAMS-OI-TREE-COUNT < AND ;
+
+: STREAMS-OI-TREE-SCOPE  ( tree-index -- scope|0 )
+    CASE
+        STREAMS-OI-TREE-CONNECTOR-CONFIG OF
+            STREAMS-OI-SCOPE-CONNECTOR-CONFIG
+        ENDOF
+        STREAMS-OI-TREE-FLOW-CONFIG OF
+            STREAMS-OI-SCOPE-FLOW-CONFIG
+        ENDOF
+        STREAMS-OI-TREE-CHECKPOINT OF
+            STREAMS-OI-SCOPE-CHECKPOINT
+        ENDOF
+        STREAMS-OI-TREE-ATTEMPT-DIRECTORY OF
+            STREAMS-OI-SCOPE-ATTEMPT-DIRECTORY
+        ENDOF
+        STREAMS-OI-TREE-DISPATCH OF
+            STREAMS-OI-SCOPE-DISPATCH
+        ENDOF
+        STREAMS-OI-TREE-TERMINAL-RETENTION OF
+            STREAMS-OI-SCOPE-TERMINAL-RETENTION
+        ENDOF
+        STREAMS-OI-TREE-IDEMPOTENCY OF
+            STREAMS-OI-SCOPE-IDEMPOTENCY
+        ENDOF
+        0 SWAP
+    ENDCASE ;
+
+: STREAMS-OI-SCOPE-TREE  ( scope -- tree-index|-1 )
+    DUP STREAMS-OI-SCOPE-CONNECTOR-CONFIG = IF
+        DROP STREAMS-OI-TREE-CONNECTOR-CONFIG EXIT
+    THEN
+    DUP STREAMS-OI-SCOPE-FLOW-CONFIG = IF
+        DROP STREAMS-OI-TREE-FLOW-CONFIG EXIT
+    THEN
+    DUP STREAMS-OI-SCOPE-CHECKPOINT = IF
+        DROP STREAMS-OI-TREE-CHECKPOINT EXIT
+    THEN
+    DUP STREAMS-OI-SCOPE-ATTEMPT-DIRECTORY = IF
+        DROP STREAMS-OI-TREE-ATTEMPT-DIRECTORY EXIT
+    THEN
+    DUP STREAMS-OI-SCOPE-DISPATCH = IF
+        DROP STREAMS-OI-TREE-DISPATCH EXIT
+    THEN
+    DUP STREAMS-OI-SCOPE-TERMINAL-RETENTION = IF
+        DROP STREAMS-OI-TREE-TERMINAL-RETENTION EXIT
+    THEN
+    STREAMS-OI-SCOPE-IDEMPOTENCY = IF
+        STREAMS-OI-TREE-IDEMPOTENCY
+    ELSE
+        -1
+    THEN ;
+
+: STREAMS-OI-FAMILY-TREE  ( family -- tree-index|-1 )
+    DUP STREAMS-OI-F-CONNECTOR-CONFIG = IF
+        DROP STREAMS-OI-TREE-CONNECTOR-CONFIG EXIT
+    THEN
+    DUP STREAMS-OI-F-FLOW-CONFIG = IF
+        DROP STREAMS-OI-TREE-FLOW-CONFIG EXIT
+    THEN
+    DUP STREAMS-OI-F-CHECKPOINT = IF
+        DROP STREAMS-OI-TREE-CHECKPOINT EXIT
+    THEN
+    DUP STREAMS-OI-F-ATTEMPT-DIRECTORY = IF
+        DROP STREAMS-OI-TREE-ATTEMPT-DIRECTORY EXIT
+    THEN
+    DUP STREAMS-OI-F-DISPATCH-READY =
+    OVER STREAMS-OI-F-DISPATCH-ACTIVE = OR IF
+        DROP STREAMS-OI-TREE-DISPATCH EXIT
+    THEN
+    DUP STREAMS-OI-F-TERMINAL-RETENTION = IF
+        DROP STREAMS-OI-TREE-TERMINAL-RETENTION EXIT
+    THEN
+    STREAMS-OI-F-IDEMPOTENCY = IF
+        STREAMS-OI-TREE-IDEMPOTENCY
+    ELSE
+        -1
+    THEN ;
+
+: STREAMS-OI-FAMILY-SCOPE  ( family -- scope|0 )
+    STREAMS-OI-FAMILY-TREE
+    DUP 0< IF DROP 0 ELSE STREAMS-OI-TREE-SCOPE THEN ;
+
+: _SOI-EXACT-TAG?  ( key-a key-u exact-u family -- flag )
+    >R
+    2 PICK 2 PICK _SOI-SPAN? 0= IF
+        _SOI-DROP3 R> DROP 0 EXIT
+    THEN
+    OVER <> IF 2DROP R> DROP 0 EXIT THEN
+    DROP C@ R> = ;
+
+: _SOI-U64-BE!  ( nonnegative-value destination -- )
+    >R
+    DUP 56 RSHIFT 255 AND R@     C!
+    DUP 48 RSHIFT 255 AND R@ 1 + C!
+    DUP 40 RSHIFT 255 AND R@ 2 + C!
+    DUP 32 RSHIFT 255 AND R@ 3 + C!
+    DUP 24 RSHIFT 255 AND R@ 4 + C!
+    DUP 16 RSHIFT 255 AND R@ 5 + C!
+    DUP  8 RSHIFT 255 AND R@ 6 + C!
+        255 AND R@ 7 + C!
+    R> DROP ;
+
+: _SOI-U64-BE-NONNEGATIVE?  ( source -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP STREAMS-OI-ORDER-SIZE _SOI-SPAN? 0= IF DROP 0 EXIT THEN
+    C@ 128 AND 0= ;
+
+: _SOI-U64-BE@  ( source -- nonnegative-value )
+    0 SWAP
+    STREAMS-OI-ORDER-SIZE 0 ?DO
+        DUP I + C@ ROT 8 LSHIFT OR SWAP
+    LOOP
+    DROP ;
+
+: STREAMS-OI-NONNEGATIVE-U64-BE!
+  ( nonnegative-value destination -- status )
+    OVER _SOI-NONNEGATIVE? 0= IF
+        2DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP STREAMS-OI-ORDER-SIZE _SOI-KEY-DEST? 0= IF
+        2DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    _SOI-U64-BE! STREAMS-OI-S-OK ;
+
+: STREAMS-OI-NONNEGATIVE-U64-BE@
+  ( source -- nonnegative-value flag )
+    DUP _SOI-U64-BE-NONNEGATIVE? 0= IF DROP 0 0 EXIT THEN
+    _SOI-U64-BE@ -1 ;
+
+: _SOI-FAMILY-PREFIX  ( family destination -- status )
+    >R
+    DUP STREAMS-OI-FAMILY-VALID? 0= IF
+        DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-FAMILY-PREFIX-SIZE _SOI-KEY-DEST? 0= IF
+        DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ C!
+    R> DROP STREAMS-OI-S-OK ;
+
+: _SOI-FAMILY-PREFIX?  ( prefix-a prefix-u family -- flag )
+    >R
+    STREAMS-OI-FAMILY-PREFIX-SIZE R> _SOI-EXACT-TAG? ;
+
+: _SOI-ONE-RID-KEY  ( rid family destination -- status )
+    >R
+    OVER _SOI-RID? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP STREAMS-OI-FAMILY-VALID? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-CONNECTOR-CONFIG-KEY-SIZE
+        _SOI-KEY-DEST? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    OVER RID-SIZE R@ STREAMS-OI-CONNECTOR-CONFIG-KEY-SIZE
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-CONNECTOR-CONFIG-KEY-SIZE 0 FILL
+    DUP R@ C!
+    OVER R@ 1+ RID-COPY
+    2DROP R> DROP STREAMS-OI-S-OK ;
+
+: _SOI-ONE-RID-KEY?  ( key-a key-u family -- flag )
+    >R
+    2DUP STREAMS-OI-CONNECTOR-CONFIG-KEY-SIZE R@
+        _SOI-EXACT-TAG? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    OVER 1+ _SOI-RID? NIP NIP
+    R> DROP ;
+
+: _SOI-TWO-RID-KEY  ( first-rid second-rid family destination -- status )
+    >R
+    2 PICK _SOI-RID? 0= IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    OVER _SOI-RID? 0= IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP STREAMS-OI-FAMILY-VALID? 0= IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-CHECKPOINT-KEY-SIZE _SOI-KEY-DEST? 0= IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    2 PICK RID-SIZE R@ STREAMS-OI-CHECKPOINT-KEY-SIZE
+        MSPAN-OVERLAP? IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    OVER RID-SIZE R@ STREAMS-OI-CHECKPOINT-KEY-SIZE
+        MSPAN-OVERLAP? IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-CHECKPOINT-KEY-SIZE 0 FILL
+    DUP R@ C!
+    2 PICK R@ 1+ RID-COPY
+    OVER R@ 1 RID-SIZE + + RID-COPY
+    _SOI-DROP3 R> DROP STREAMS-OI-S-OK ;
+
+: _SOI-TWO-RID-KEY?  ( key-a key-u family -- flag )
+    >R
+    2DUP STREAMS-OI-CHECKPOINT-KEY-SIZE R@
+        _SOI-EXACT-TAG? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    OVER 1+ _SOI-RID? 0= IF 2DROP R> DROP 0 EXIT THEN
+    OVER 1 RID-SIZE + + _SOI-RID? NIP NIP
+    R> DROP ;
+
+: _SOI-FIRST-RID-PREFIX  ( first-rid family destination -- status )
+    _SOI-ONE-RID-KEY ;
+
+: _SOI-FIRST-RID-PREFIX?  ( prefix-a prefix-u family -- flag )
+    _SOI-ONE-RID-KEY? ;
+
+: _SOI-ORDER-PREFIX
+  ( nonnegative-order family destination -- status )
+    >R
+    OVER _SOI-NONNEGATIVE? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP STREAMS-OI-FAMILY-VALID? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-DISPATCH-READY-ORDER-PREFIX-SIZE
+        _SOI-KEY-DEST? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-DISPATCH-READY-ORDER-PREFIX-SIZE 0 FILL
+    DUP R@ C!
+    OVER R@ 1+ _SOI-U64-BE!
+    2DROP R> DROP STREAMS-OI-S-OK ;
+
+: _SOI-ORDER-PREFIX?  ( prefix-a prefix-u family -- flag )
+    >R
+    2DUP STREAMS-OI-DISPATCH-READY-ORDER-PREFIX-SIZE R@
+        _SOI-EXACT-TAG? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    OVER 1+ _SOI-U64-BE-NONNEGATIVE? NIP NIP
+    R> DROP ;
+
+: _SOI-ORDER-KEY
+  ( nonnegative-order rid family destination -- status )
+    >R
+    2 PICK _SOI-NONNEGATIVE? 0= IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    OVER _SOI-RID? 0= IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP STREAMS-OI-FAMILY-VALID? 0= IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-DISPATCH-READY-KEY-SIZE _SOI-KEY-DEST? 0= IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    OVER RID-SIZE R@ STREAMS-OI-DISPATCH-READY-KEY-SIZE
+        MSPAN-OVERLAP? IF
+        _SOI-DROP3 R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-DISPATCH-READY-KEY-SIZE 0 FILL
+    DUP R@ C!
+    2 PICK R@ 1+ _SOI-U64-BE!
+    OVER R@ 1 STREAMS-OI-ORDER-SIZE + + RID-COPY
+    _SOI-DROP3 R> DROP STREAMS-OI-S-OK ;
+
+: _SOI-ORDER-KEY?  ( key-a key-u family -- flag )
+    >R
+    2DUP STREAMS-OI-DISPATCH-READY-KEY-SIZE R@
+        _SOI-EXACT-TAG? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    OVER 1+ _SOI-U64-BE-NONNEGATIVE? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    OVER 1 STREAMS-OI-ORDER-SIZE + + _SOI-RID? NIP NIP
+    R> DROP ;
+
+: _SOI-ONE-RID-KEY-ID@  ( key-a key-u family -- rid|0 )
+    >R
+    2DUP R> _SOI-ONE-RID-KEY? IF
+        DROP 1+
+    ELSE
+        2DROP 0
+    THEN ;
+
+: _SOI-TWO-RID-KEY-FIRST@  ( key-a key-u family -- rid|0 )
+    >R
+    2DUP R> _SOI-TWO-RID-KEY? IF
+        DROP 1+
+    ELSE
+        2DROP 0
+    THEN ;
+
+: _SOI-TWO-RID-KEY-SECOND@  ( key-a key-u family -- rid|0 )
+    >R
+    2DUP R> _SOI-TWO-RID-KEY? IF
+        DROP 1 RID-SIZE + +
+    ELSE
+        2DROP 0
+    THEN ;
+
+: _SOI-ORDER-KEY-ORDER@  ( key-a key-u family -- order flag )
+    >R
+    2DUP R> _SOI-ORDER-KEY? IF
+        DROP 1+ _SOI-U64-BE@ -1
+    ELSE
+        2DROP 0 0
+    THEN ;
+
+: _SOI-ORDER-KEY-ATTEMPT@  ( key-a key-u family -- rid|0 )
+    >R
+    2DUP R> _SOI-ORDER-KEY? IF
+        DROP 1 STREAMS-OI-ORDER-SIZE + +
+    ELSE
+        2DROP 0
+    THEN ;
+
+\ ---------------------------------------------------------------------
+\ Connector, flow, checkpoint, and attempt directory keys
+\ ---------------------------------------------------------------------
+
+: STREAMS-OI-CONNECTOR-CONFIG-PREFIX  ( destination -- status )
+    STREAMS-OI-F-CONNECTOR-CONFIG SWAP _SOI-FAMILY-PREFIX ;
+
+: STREAMS-OI-CONNECTOR-CONFIG-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-CONNECTOR-CONFIG _SOI-FAMILY-PREFIX? ;
+
+: STREAMS-OI-CONNECTOR-CONFIG-KEY
+  ( connector-rid destination -- status )
+    STREAMS-OI-F-CONNECTOR-CONFIG SWAP _SOI-ONE-RID-KEY ;
+
+: STREAMS-OI-CONNECTOR-CONFIG-KEY-VALID?  ( key-a key-u -- flag )
+    STREAMS-OI-F-CONNECTOR-CONFIG _SOI-ONE-RID-KEY? ;
+
+: STREAMS-OI-CONNECTOR-CONFIG-KEY-ID@  ( key-a key-u -- rid|0 )
+    STREAMS-OI-F-CONNECTOR-CONFIG _SOI-ONE-RID-KEY-ID@ ;
+
+: STREAMS-OI-FLOW-CONFIG-PREFIX  ( destination -- status )
+    STREAMS-OI-F-FLOW-CONFIG SWAP _SOI-FAMILY-PREFIX ;
+
+: STREAMS-OI-FLOW-CONFIG-PREFIX-VALID?  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-FLOW-CONFIG _SOI-FAMILY-PREFIX? ;
+
+: STREAMS-OI-FLOW-CONFIG-KEY  ( flow-rid destination -- status )
+    STREAMS-OI-F-FLOW-CONFIG SWAP _SOI-ONE-RID-KEY ;
+
+: STREAMS-OI-FLOW-CONFIG-KEY-VALID?  ( key-a key-u -- flag )
+    STREAMS-OI-F-FLOW-CONFIG _SOI-ONE-RID-KEY? ;
+
+: STREAMS-OI-FLOW-CONFIG-KEY-ID@  ( key-a key-u -- rid|0 )
+    STREAMS-OI-F-FLOW-CONFIG _SOI-ONE-RID-KEY-ID@ ;
+
+: STREAMS-OI-CHECKPOINT-FAMILY-PREFIX  ( destination -- status )
+    STREAMS-OI-F-CHECKPOINT SWAP _SOI-FAMILY-PREFIX ;
+
+: STREAMS-OI-CHECKPOINT-FAMILY-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-CHECKPOINT _SOI-FAMILY-PREFIX? ;
+
+: STREAMS-OI-CHECKPOINT-CONNECTOR-PREFIX
+  ( connector-rid destination -- status )
+    STREAMS-OI-F-CHECKPOINT SWAP _SOI-FIRST-RID-PREFIX ;
+
+: STREAMS-OI-CHECKPOINT-CONNECTOR-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-CHECKPOINT _SOI-FIRST-RID-PREFIX? ;
+
+: STREAMS-OI-CHECKPOINT-KEY
+  ( connector-rid flow-rid destination -- status )
+    STREAMS-OI-F-CHECKPOINT SWAP _SOI-TWO-RID-KEY ;
+
+: STREAMS-OI-CHECKPOINT-KEY-VALID?  ( key-a key-u -- flag )
+    STREAMS-OI-F-CHECKPOINT _SOI-TWO-RID-KEY? ;
+
+: STREAMS-OI-CHECKPOINT-KEY-CONNECTOR@
+  ( key-a key-u -- connector-rid|0 )
+    STREAMS-OI-F-CHECKPOINT _SOI-TWO-RID-KEY-FIRST@ ;
+
+: STREAMS-OI-CHECKPOINT-KEY-FLOW@  ( key-a key-u -- flow-rid|0 )
+    STREAMS-OI-F-CHECKPOINT _SOI-TWO-RID-KEY-SECOND@ ;
+
+: STREAMS-OI-ATTEMPT-PREFIX  ( destination -- status )
+    STREAMS-OI-F-ATTEMPT-DIRECTORY SWAP _SOI-FAMILY-PREFIX ;
+
+: STREAMS-OI-ATTEMPT-PREFIX-VALID?  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-ATTEMPT-DIRECTORY _SOI-FAMILY-PREFIX? ;
+
+: STREAMS-OI-ATTEMPT-KEY  ( attempt-rid destination -- status )
+    STREAMS-OI-F-ATTEMPT-DIRECTORY SWAP _SOI-ONE-RID-KEY ;
+
+: STREAMS-OI-ATTEMPT-KEY-VALID?  ( key-a key-u -- flag )
+    STREAMS-OI-F-ATTEMPT-DIRECTORY _SOI-ONE-RID-KEY? ;
+
+: STREAMS-OI-ATTEMPT-KEY-ID@  ( key-a key-u -- attempt-rid|0 )
+    STREAMS-OI-F-ATTEMPT-DIRECTORY _SOI-ONE-RID-KEY-ID@ ;
+
+\ ---------------------------------------------------------------------
+\ Ready/active dispatch and terminal-retention orderings
+\ ---------------------------------------------------------------------
+
+: STREAMS-OI-DISPATCH-READY-PREFIX  ( destination -- status )
+    STREAMS-OI-F-DISPATCH-READY SWAP _SOI-FAMILY-PREFIX ;
+
+: STREAMS-OI-DISPATCH-READY-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-DISPATCH-READY _SOI-FAMILY-PREFIX? ;
+
+: STREAMS-OI-DISPATCH-READY-ORDER-PREFIX
+  ( accepted-sequence destination -- status )
+    OVER 0> 0= IF 2DROP STREAMS-OI-S-INVALID EXIT THEN
+    STREAMS-OI-F-DISPATCH-READY SWAP _SOI-ORDER-PREFIX ;
+
+: STREAMS-OI-DISPATCH-READY-ORDER-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    2DUP STREAMS-OI-F-DISPATCH-READY _SOI-ORDER-PREFIX? 0= IF
+        2DROP 0 EXIT
+    THEN
+    OVER 1+ _SOI-U64-BE@ 0> NIP NIP ;
+
+: STREAMS-OI-DISPATCH-READY-KEY
+  ( accepted-sequence attempt-rid destination -- status )
+    2 PICK 0> 0= IF
+        _SOI-DROP3 STREAMS-OI-S-INVALID EXIT
+    THEN
+    STREAMS-OI-F-DISPATCH-READY SWAP _SOI-ORDER-KEY ;
+
+: STREAMS-OI-DISPATCH-READY-KEY-VALID?  ( key-a key-u -- flag )
+    2DUP STREAMS-OI-F-DISPATCH-READY _SOI-ORDER-KEY? 0= IF
+        2DROP 0 EXIT
+    THEN
+    OVER 1+ _SOI-U64-BE@ 0> NIP NIP ;
+
+: STREAMS-OI-DISPATCH-READY-KEY-SEQUENCE@
+  ( key-a key-u -- accepted-sequence flag )
+    2DUP STREAMS-OI-DISPATCH-READY-KEY-VALID? 0= IF
+        2DROP 0 0 EXIT
+    THEN
+    DROP 1+ _SOI-U64-BE@ -1 ;
+
+: STREAMS-OI-DISPATCH-READY-KEY-ATTEMPT@
+  ( key-a key-u -- attempt-rid|0 )
+    2DUP STREAMS-OI-DISPATCH-READY-KEY-VALID? IF
+        DROP 1 STREAMS-OI-ORDER-SIZE + +
+    ELSE
+        2DROP 0
+    THEN ;
+
+: STREAMS-OI-DISPATCH-ACTIVE-PREFIX  ( destination -- status )
+    STREAMS-OI-F-DISPATCH-ACTIVE SWAP _SOI-FAMILY-PREFIX ;
+
+: STREAMS-OI-DISPATCH-ACTIVE-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-DISPATCH-ACTIVE _SOI-FAMILY-PREFIX? ;
+
+: STREAMS-OI-DISPATCH-ACTIVE-TIME-PREFIX
+  ( started-time destination -- status )
+    STREAMS-OI-F-DISPATCH-ACTIVE SWAP _SOI-ORDER-PREFIX ;
+
+: STREAMS-OI-DISPATCH-ACTIVE-TIME-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-DISPATCH-ACTIVE _SOI-ORDER-PREFIX? ;
+
+: STREAMS-OI-DISPATCH-ACTIVE-KEY
+  ( started-time attempt-rid destination -- status )
+    STREAMS-OI-F-DISPATCH-ACTIVE SWAP _SOI-ORDER-KEY ;
+
+: STREAMS-OI-DISPATCH-ACTIVE-KEY-VALID?  ( key-a key-u -- flag )
+    STREAMS-OI-F-DISPATCH-ACTIVE _SOI-ORDER-KEY? ;
+
+: STREAMS-OI-DISPATCH-ACTIVE-KEY-TIME@
+  ( key-a key-u -- started-time flag )
+    STREAMS-OI-F-DISPATCH-ACTIVE _SOI-ORDER-KEY-ORDER@ ;
+
+: STREAMS-OI-DISPATCH-ACTIVE-KEY-ATTEMPT@
+  ( key-a key-u -- attempt-rid|0 )
+    STREAMS-OI-F-DISPATCH-ACTIVE _SOI-ORDER-KEY-ATTEMPT@ ;
+
+: STREAMS-OI-TERMINAL-RETENTION-PREFIX  ( destination -- status )
+    STREAMS-OI-F-TERMINAL-RETENTION SWAP _SOI-FAMILY-PREFIX ;
+
+: STREAMS-OI-TERMINAL-RETENTION-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-TERMINAL-RETENTION _SOI-FAMILY-PREFIX? ;
+
+: STREAMS-OI-TERMINAL-RETENTION-TIME-PREFIX
+  ( terminal-time destination -- status )
+    STREAMS-OI-F-TERMINAL-RETENTION SWAP _SOI-ORDER-PREFIX ;
+
+: STREAMS-OI-TERMINAL-RETENTION-TIME-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-TERMINAL-RETENTION _SOI-ORDER-PREFIX? ;
+
+: STREAMS-OI-TERMINAL-RETENTION-KEY
+  ( terminal-time attempt-rid destination -- status )
+    STREAMS-OI-F-TERMINAL-RETENTION SWAP _SOI-ORDER-KEY ;
+
+: STREAMS-OI-TERMINAL-RETENTION-KEY-VALID?
+  ( key-a key-u -- flag )
+    STREAMS-OI-F-TERMINAL-RETENTION _SOI-ORDER-KEY? ;
+
+: STREAMS-OI-TERMINAL-RETENTION-KEY-TIME@
+  ( key-a key-u -- terminal-time flag )
+    STREAMS-OI-F-TERMINAL-RETENTION _SOI-ORDER-KEY-ORDER@ ;
+
+: STREAMS-OI-TERMINAL-RETENTION-KEY-ATTEMPT@
+  ( key-a key-u -- attempt-rid|0 )
+    STREAMS-OI-F-TERMINAL-RETENTION _SOI-ORDER-KEY-ATTEMPT@ ;
+
+\ ---------------------------------------------------------------------
+\ Idempotency lookup
+\ ---------------------------------------------------------------------
+
+: STREAMS-OI-IDEMPOTENCY-FAMILY-PREFIX  ( destination -- status )
+    STREAMS-OI-F-IDEMPOTENCY SWAP _SOI-FAMILY-PREFIX ;
+
+: STREAMS-OI-IDEMPOTENCY-FAMILY-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-IDEMPOTENCY _SOI-FAMILY-PREFIX? ;
+
+: STREAMS-OI-IDEMPOTENCY-CONNECTOR-PREFIX
+  ( connector-rid destination -- status )
+    STREAMS-OI-F-IDEMPOTENCY SWAP _SOI-FIRST-RID-PREFIX ;
+
+: STREAMS-OI-IDEMPOTENCY-CONNECTOR-PREFIX-VALID?
+  ( prefix-a prefix-u -- flag )
+    STREAMS-OI-F-IDEMPOTENCY _SOI-FIRST-RID-PREFIX? ;
+
+: STREAMS-OI-IDEMPOTENCY-KEY
+  ( connector-rid idempotency-rid destination -- status )
+    STREAMS-OI-F-IDEMPOTENCY SWAP _SOI-TWO-RID-KEY ;
+
+: STREAMS-OI-IDEMPOTENCY-KEY-VALID?  ( key-a key-u -- flag )
+    STREAMS-OI-F-IDEMPOTENCY _SOI-TWO-RID-KEY? ;
+
+: STREAMS-OI-IDEMPOTENCY-KEY-CONNECTOR@
+  ( key-a key-u -- connector-rid|0 )
+    STREAMS-OI-F-IDEMPOTENCY _SOI-TWO-RID-KEY-FIRST@ ;
+
+: STREAMS-OI-IDEMPOTENCY-KEY-ID@
+  ( key-a key-u -- idempotency-rid|0 )
+    STREAMS-OI-F-IDEMPOTENCY _SOI-TWO-RID-KEY-SECOND@ ;
+
+\ ---------------------------------------------------------------------
+\ Generic exact key validation and mapping
+\ ---------------------------------------------------------------------
+
+: STREAMS-OI-KEY-VALID?  ( key-a key-u -- flag )
+    2DUP _SOI-SPAN? 0= IF 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER C@
+    DUP STREAMS-OI-F-CONNECTOR-CONFIG = IF
+        DROP STREAMS-OI-CONNECTOR-CONFIG-KEY-VALID? EXIT
+    THEN
+    DUP STREAMS-OI-F-FLOW-CONFIG = IF
+        DROP STREAMS-OI-FLOW-CONFIG-KEY-VALID? EXIT
+    THEN
+    DUP STREAMS-OI-F-CHECKPOINT = IF
+        DROP STREAMS-OI-CHECKPOINT-KEY-VALID? EXIT
+    THEN
+    DUP STREAMS-OI-F-ATTEMPT-DIRECTORY = IF
+        DROP STREAMS-OI-ATTEMPT-KEY-VALID? EXIT
+    THEN
+    DUP STREAMS-OI-F-DISPATCH-READY = IF
+        DROP STREAMS-OI-DISPATCH-READY-KEY-VALID? EXIT
+    THEN
+    DUP STREAMS-OI-F-DISPATCH-ACTIVE = IF
+        DROP STREAMS-OI-DISPATCH-ACTIVE-KEY-VALID? EXIT
+    THEN
+    DUP STREAMS-OI-F-TERMINAL-RETENTION = IF
+        DROP STREAMS-OI-TERMINAL-RETENTION-KEY-VALID? EXIT
+    THEN
+    STREAMS-OI-F-IDEMPOTENCY = IF
+        STREAMS-OI-IDEMPOTENCY-KEY-VALID?
+    ELSE
+        2DROP 0
+    THEN ;
+
+: STREAMS-OI-KEY-TREE  ( key-a key-u -- tree-index|-1 )
+    2DUP STREAMS-OI-KEY-VALID? 0= IF 2DROP -1 EXIT THEN
+    DROP C@ STREAMS-OI-FAMILY-TREE ;
+
+: STREAMS-OI-KEY-SCOPE  ( key-a key-u -- scope|0 )
+    2DUP STREAMS-OI-KEY-VALID? 0= IF 2DROP 0 EXIT THEN
+    DROP C@ STREAMS-OI-FAMILY-SCOPE ;
+
+\ ---------------------------------------------------------------------
+\ Exact B+tree values
+\ ---------------------------------------------------------------------
+
+: STREAMS-OI-ROW-VALUE
+  ( persistent-record-ref destination -- status )
+    >R
+    DUP PERSIST-REF-VALID? 0= IF
+        DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-ROW-VALUE-SIZE _SOI-VALUE-DEST? 0= IF
+        DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP PERSIST-REF-SIZE R@ STREAMS-OI-ROW-VALUE-SIZE
+        MSPAN-OVERLAP? IF
+        DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP R@ PERSIST-REF-COPY
+    DROP R> DROP STREAMS-OI-S-OK ;
+
+: STREAMS-OI-ROW-VALUE-VALID?  ( value-a value-u -- flag )
+    2DUP _SOI-SPAN? 0= IF 2DROP 0 EXIT THEN
+    STREAMS-OI-ROW-VALUE-SIZE <> IF DROP 0 EXIT THEN
+    PERSIST-REF-VALID? ;
+
+: STREAMS-OI-ROW-VALUE-REF@  ( value-a value-u -- record-ref|0 )
+    2DUP STREAMS-OI-ROW-VALUE-VALID? IF
+        DROP
+    ELSE
+        2DROP 0
+    THEN ;
+
+: STREAMS-OI-IDEMPOTENCY-VALUE
+  ( attempt-rid request-seal destination -- status )
+    >R
+    OVER _SOI-RID? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP _SOI-REQUEST-SEAL? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-IDEMPOTENCY-VALUE-SIZE _SOI-VALUE-DEST? 0= IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    OVER RID-SIZE R@ STREAMS-OI-IDEMPOTENCY-VALUE-SIZE
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    DUP STREAMS-OI-REQUEST-SEAL-SIZE
+        R@ STREAMS-OI-IDEMPOTENCY-VALUE-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP STREAMS-OI-S-INVALID EXIT
+    THEN
+    R@ STREAMS-OI-IDEMPOTENCY-VALUE-SIZE 0 FILL
+    OVER R@ RID-COPY
+    DUP R@ RID-SIZE + STREAMS-OI-REQUEST-SEAL-SIZE MOVE
+    2DROP R> DROP STREAMS-OI-S-OK ;
+
+: STREAMS-OI-IDEMPOTENCY-VALUE-VALID?  ( value-a value-u -- flag )
+    2DUP _SOI-SPAN? 0= IF 2DROP 0 EXIT THEN
+    STREAMS-OI-IDEMPOTENCY-VALUE-SIZE <> IF DROP 0 EXIT THEN
+    DUP _SOI-RID? 0= IF DROP 0 EXIT THEN
+    RID-SIZE + _SOI-REQUEST-SEAL? ;
+
+: STREAMS-OI-IDEMPOTENCY-VALUE-ATTEMPT@
+  ( value-a value-u -- attempt-rid|0 )
+    2DUP STREAMS-OI-IDEMPOTENCY-VALUE-VALID? IF
+        DROP
+    ELSE
+        2DROP 0
+    THEN ;
+
+: STREAMS-OI-IDEMPOTENCY-VALUE-SEAL@
+  ( value-a value-u -- request-seal|0 )
+    2DUP STREAMS-OI-IDEMPOTENCY-VALUE-VALID? IF
+        DROP RID-SIZE +
+    ELSE
+        2DROP 0
+    THEN ;
+
+: STREAMS-OI-IDEMPOTENCY-VALUE-MATCH?
+  ( value-a value-u attempt-rid request-seal -- flag )
+    3 PICK 3 PICK STREAMS-OI-IDEMPOTENCY-VALUE-VALID? 0= IF
+        2DROP 2DROP 0 EXIT
+    THEN
+    OVER _SOI-RID? 0= IF 2DROP 2DROP 0 EXIT THEN
+    DUP _SOI-REQUEST-SEAL? 0= IF 2DROP 2DROP 0 EXIT THEN
+    3 PICK 2 PICK RID-SIZE _SOI-BYTES= 0= IF
+        2DROP 2DROP 0 EXIT
+    THEN
+    3 PICK RID-SIZE + OVER STREAMS-OI-REQUEST-SEAL-SIZE
+        _SOI-BYTES=
+    >R 2DROP 2DROP R> ;
+
+: STREAMS-OI-FAMILY-VALUE-VALID?
+  ( value-a value-u family -- flag )
+    DUP STREAMS-OI-FAMILY-VALID? 0= IF
+        DROP 2DROP 0 EXIT
+    THEN
+    STREAMS-OI-F-IDEMPOTENCY = IF
+        STREAMS-OI-IDEMPOTENCY-VALUE-VALID?
+    ELSE
+        STREAMS-OI-ROW-VALUE-VALID?
+    THEN ;
+
+: STREAMS-OI-KEY-VALUE-VALID?
+  ( key-a key-u value-a value-u -- flag )
+    2OVER STREAMS-OI-KEY-VALID? 0= IF
+        2DROP 2DROP 0 EXIT
+    THEN
+    3 PICK C@ STREAMS-OI-FAMILY-VALUE-VALID?
+    NIP NIP ;
