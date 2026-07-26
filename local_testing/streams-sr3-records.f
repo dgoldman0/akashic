@@ -660,6 +660,8 @@ CREATE _sr3q-root-c STREAMS-OPROOT-SIZE ALLOT
     _sr3q-stack ;
 
 : _sr3q-test-attempt-record  ( -- )
+    0 STREAMS-OPATT-SIZE STREAMS-OPATT-VALID? 0= _sr3q-assert
+    -1 STREAMS-OPATT-SIZE STREAMS-OPATT-VALID? 0= _sr3q-assert
     _sr3q-attempt-a _sr3q-valid-attempt!
     _sr3q-attempt-a STREAMS-OPATT-SIZE
         STREAMS-OPATT-VALID? _sr3q-assert
@@ -783,6 +785,8 @@ CREATE _sr3q-root-c STREAMS-OPROOT-SIZE ALLOT
     _sr3q-stack ;
 
 : _sr3q-test-root-record  ( -- )
+    0 STREAMS-OPROOT-STRUCTURE-VALID? 0= _sr3q-assert
+    -1 STREAMS-OPROOT-STRUCTURE-VALID? 0= _sr3q-assert
     _sr3q-rid-h 8 1024 4 60000 _sr3q-root-a
         STREAMS-OPROOT-TEMPLATE-INIT
         STREAMS-OPREC-S-OK = _sr3q-assert

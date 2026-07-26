@@ -653,6 +653,8 @@ CREATE _sr3c-checkpoint-snapshot STREAMS-OPCHECKPOINT-SIZE ALLOT
     _sr3c-stack ;
 
 : _sr3c-test-connector-seal-copy-header  ( -- )
+    0 STREAMS-OPCONN-SIZE STREAMS-OPCONN-VALID? 0= _sr3c-assert
+    -1 STREAMS-OPCONN-SIZE STREAMS-OPCONN-VALID? 0= _sr3c-assert
     _sr3c-connector-a _sr3c-valid-connector!
     _sr3c-connector-a _sr3c-connector-b STREAMS-OPCONN-COPY
         STREAMS-OPREC-S-OK = _sr3c-assert
@@ -706,6 +708,8 @@ CREATE _sr3c-checkpoint-snapshot STREAMS-OPCHECKPOINT-SIZE ALLOT
     _sr3c-stack ;
 
 : _sr3c-test-flow-seal-copy-header  ( -- )
+    0 STREAMS-OPFLOW-SIZE STREAMS-OPFLOW-VALID? 0= _sr3c-assert
+    -1 STREAMS-OPFLOW-SIZE STREAMS-OPFLOW-VALID? 0= _sr3c-assert
     _sr3c-flow-a _sr3c-valid-flow!
     _sr3c-flow-a _sr3c-flow-b STREAMS-OPFLOW-COPY
         STREAMS-OPREC-S-OK = _sr3c-assert
@@ -750,6 +754,10 @@ CREATE _sr3c-checkpoint-snapshot STREAMS-OPCHECKPOINT-SIZE ALLOT
     _sr3c-stack ;
 
 : _sr3c-test-checkpoint-seal-copy-header  ( -- )
+    0 STREAMS-OPCHECKPOINT-SIZE
+        STREAMS-OPCHECKPOINT-VALID? 0= _sr3c-assert
+    -1 STREAMS-OPCHECKPOINT-SIZE
+        STREAMS-OPCHECKPOINT-VALID? 0= _sr3c-assert
     _sr3c-checkpoint-a _sr3c-valid-checkpoint!
     _sr3c-checkpoint-a _sr3c-checkpoint-b STREAMS-OPCHECKPOINT-COPY
         STREAMS-OPREC-S-OK = _sr3c-assert
