@@ -979,6 +979,32 @@ PSEG-WORK-SIZE _PROOT-W-SEGMENT-WORK + CONSTANT PROOT-WORK-SIZE
     1 R@ _PROOT-W.LOADED !
     R> DROP PERSIST-S-OK ;
 
+\ Read and validate exactly one named root slot without performing A/B
+\ selection.  A missing slot is ABSENT, while a present malformed slot is
+\ CORRUPT.  The destination is not exposed until the complete checked record,
+\ root geometry, and application-root page have all validated.
+: _PROOT-SLOT-RUN  ( work -- persist-status )
+    >R
+    R@ _PROOT-W.SLOT @ R@ _PROOT-READ-CANDIDATE
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _PROOT-CANDIDATE DUP GPAIR-CANDIDATE-CLASS@
+    DUP GPAIR-C-ABSENT = IF
+        2DROP R> DROP PERSIST-S-ABSENT EXIT
+    THEN
+    GPAIR-C-CORRUPT = IF
+        DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    DUP GPAIR-CANDIDATE-CLASS@ GPAIR-C-VALID <> IF
+        DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    DUP GPAIR-CANDIDATE-GENERATION@ DUP 0> 0= IF
+        2DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _PROOT-W.GENERATION !
+    GPAIR-CANDIDATE-VALUE@
+    R@ _PROOT-W.VALUE @ PERSIST-ROOT-VALUE-SIZE MOVE
+    R> DROP PERSIST-S-OK ;
+
 \ =====================================================================
 \  Inactive-slot publication
 \ =====================================================================
@@ -1263,6 +1289,43 @@ PSEG-WORK-SIZE _PROOT-W-SEGMENT-WORK + CONSTANT PROOT-WORK-SIZE
     R@ _PROOT-WORK-END
     DUP PERSIST-S-OK = IF
         R@ _PROOT-W.GPAIR GPAIR-GENERATION@ SWAP
+    ELSE
+        0 SWAP
+    THEN
+    R> DROP ;
+
+\ Checked independent slot inspection.  The caller must externally serialize
+\ this standalone primitive against publication; PSTORE-ROOT-SLOT@ supplies
+\ that serialization for composed stores.
+: PROOT-SLOT@
+  ( slot destination-root-value root work -- generation status )
+    >R
+    DUP R@ _PROOT-ROOT-WORK? 0= IF
+        _PROOT-DROP3 R> DROP 0 PERSIST-S-INVALID EXIT
+    THEN
+    R@ _PROOT-W.BUSY @ IF
+        _PROOT-DROP3 R> DROP 0 PERSIST-S-BUSY EXIT
+    THEN
+    2 PICK DUP GPAIR-SLOT-A = SWAP GPAIR-SLOT-B = OR 0= IF
+        _PROOT-DROP3 R> DROP 0 PERSIST-S-INVALID EXIT
+    THEN
+    1 PICK 1 PICK R@ _PROOT-VALUE-DISJOINT? 0= IF
+        _PROOT-DROP3 R> DROP 0 PERSIST-S-INVALID EXIT
+    THEN
+    1 PICK PERSIST-ROOT-VALUE-SIZE 0 FILL
+    DUP R@ _PROOT-W.ROOT !
+    1 PICK R@ _PROOT-W.VALUE !
+    2 PICK R@ _PROOT-W.SLOT !
+    1 R@ _PROOT-W.BUSY !
+    0 R@ _PROOT-W.LOADED !
+    0 R@ _PROOT-W.GENERATION !
+    GPAIR-W-NO-EFFECT R@ _PROOT-W.OUTCOME !
+    PERSIST-S-INVALID R@ _PROOT-W.STATUS !
+    _PROOT-DROP3
+    R@ ['] _PROOT-SLOT-RUN _PROOT-RUN-CATCH
+    R@ _PROOT-WORK-END
+    DUP PERSIST-S-OK = IF
+        R@ _PROOT-W.GENERATION @ SWAP
     ELSE
         0 SWAP
     THEN

@@ -175,6 +175,84 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
     assert "library" not in reclaim.lower()
 
 
+def test_snapshot_slot_and_btree_audit_authority_is_explicit() -> None:
+    atomic_root = _source("persistence/atomic-root.f")
+    store = _source("persistence/store.f")
+    btree = _source("persistence/btree.f")
+
+    assert "PROOT-SLOT@" in atomic_root
+    assert (
+        "( slot destination-root-value root work -- generation status )"
+        in atomic_root
+    )
+    assert "PSTORE-ROOT-SLOT@" in store
+    assert "PSTORE-SNAPSHOT-BOUND-TX?" in store
+    assert "PSTORE-READ-PAGE-SNAPSHOT-TX" in store
+    assert "_PSW.SNAPSHOT-ROOT-WORK" in store
+    assert "_PSW.ROOT-WORK PROOT-SLOT@" not in store
+
+    assert "PBTREE-AUDIT-PENDING-MAX" in btree
+    assert "PBTREE-AUDIT-WORK-SIZE" in btree
+    assert "PBTREE-AUDIT-WORK-INIT" in btree
+    assert "PBTREE-AUDIT-SNAPSHOT-TX" in btree
+    assert (
+        "tree-root snapshot-generation snapshot-page-count snapshot-data-bank"
+        in btree
+    )
+    assert (
+        "visitor-xt visitor-context tree audit-work"
+        " -- node-count row-count status"
+        in btree
+    )
+    assert re.search(
+        r"6 PICK _PBTR\.GENERATION @ 6 PICK <> IF",
+        btree,
+    )
+    assert "_PBTA.PREVIOUS-KEY" in btree
+    assert "_PBTA-CURRENT-HIGH?" in btree
+    assert "_PBTA-NODE-OCCUPANCY?" in btree
+    assert "_PBTA-SNAPSHOT-STILL-BOUND?" in btree
+    assert "PSTORE-READ-PAGE-SNAPSHOT-TX" in btree
+    assert (
+        "PBTREE-AUDIT-WORK-SIZE OVER _PBTD.WORKING-BYTES @ MAX"
+        in btree
+    )
+    reject = btree.split(": _PBTA-REJECT", 1)[1].split(
+        ": _PBTA-PUSH", 1
+    )[0]
+    assert "R@ _PBTA.BUSY @ 0= IF" in reject
+    assert "0 R@ _PBTA.BUSY !" not in reject
+    push_children = btree.split(": _PBTA-PUSH-CHILDREN", 1)[1].split(
+        ": _PBTA-ACCEPT-CURRENT", 1
+    )[0]
+    assert "R@" not in push_children
+    assert "5 PICK _PBTA-PUSH" in push_children
+
+    runner = (
+        Path(__file__).resolve().parent
+        / "test_persistence_snapshot_audit.py"
+    ).read_text(encoding="utf-8")
+    fixture = (
+        Path(__file__).resolve().parent
+        / "persist-snap-audit.f"
+    ).read_text(encoding="utf-8")
+    assert "max_steps=4_000_000_000" in runner
+    assert "_PBTSA-bound-generation @ 1+" in fixture
+    assert "PBTREE-WORKING-BYTES@" in fixture
+    assert "PERSIST-DATA-BANK-0 = IF" in fixture
+    assert "_PBTSA-bad-tree-root _PBTR.GENERATION +!" in fixture
+    assert "PROOT-RECORD-SIZE" in fixture
+    assert "PERSIST-S-CORRUPT 1 _PBTSA-audit" in fixture
+    assert "PERSIST-S-FAULT 2 _PBTSA-audit" in fixture
+    assert "_PBTSA-reentry" in fixture
+    assert "PERSIST-S-OK 5 _PBTSA-audit" in fixture
+    assert "_PBTSA-audit-work _PBTA.BUSY @ -1 =" in fixture
+    assert "_PBTSA-rebinding" in fixture
+    assert "PERSIST-S-CONFLICT 6 _PBTSA-audit" in fixture
+    assert "_PBTSA-old-slot @ DUP _PBTSA-slot-root _PBTSA-read-slot" in fixture
+    assert "_PBTSA-calls @ 1 =" in fixture
+
+
 def test_l12_compaction_is_neutral_bounded_and_journal_free() -> None:
     source = _source("persistence/compaction.f")
     markers = {

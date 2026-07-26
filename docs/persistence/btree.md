@@ -191,9 +191,95 @@ boundaries crossed. The direct height-three qualification returns each of two
 successive 32-row windows in no more than 17 page reads, with no corpus-sized
 allocation or restart from the root.
 
+## Immutable snapshot audit
+
+Cold ownership and recovery checks cannot substitute a current-only cursor for
+an exact older A/B root. The root and store layers expose checked slot
+inspection and a guard-bound arbitrary-bank page seam:
+
+```forth
+( slot destination-root root proot-work -- generation status ) PROOT-SLOT@
+( slot destination-root store pstore-work -- generation status )
+    PSTORE-ROOT-SLOT@
+( generation page-count data-bank store pstore-work -- flag )
+    PSTORE-SNAPSHOT-BOUND-TX?
+( page-id store pstore-work -- status ) PSTORE-READ-PAGE-SNAPSHOT-TX
+```
+
+The slot operations zero their destination first and expose the exact 96-byte
+root only after the named checked record, positive generation, physical bounds,
+and application-root page validate. A missing slot is `PERSIST-S-ABSENT`;
+malformed bytes are `PERSIST-S-CORRUPT`; I/O remains distinct. Standalone
+`PROOT-SLOT@` requires external publication serialization. The PSTORE form
+holds the store guard, verifies store identity, rejects a slot newer than its
+loaded authority, and requires exact bytes when the slot generation is
+current.
+
+A caller begins an ordinary clean PSTORE transaction and calls
+`PSTORE-ROOT-SLOT@` inside it. Success binds the exact slot, generation,
+root, `PAGE-COUNT`, and `DATA-BANK` in caller-owned work. Page reads accept no
+fallback bank/bound argument and expose the verified payload through
+`PSTORE-PAGE-PAYLOAD$`. A second slot read replaces the binding; transaction
+end clears it. This uses the existing guard authority, not another session
+state machine or persisted format.
+
+The caller then initializes a dedicated fixed audit workspace:
+
+```forth
+( pstore-work audit-work -- status ) PBTREE-AUDIT-WORK-INIT
+( tree-root snapshot-generation snapshot-page-count snapshot-data-bank
+  visitor-xt visitor-context tree audit-work
+  -- node-count row-count status ) PBTREE-AUDIT-SNAPSHOT-TX
+```
+
+The three explicit snapshot dimensions must exactly match the guard-bound slot
+value. This deliberate redundancy catches swapped or stale caller metadata;
+the physical page reader still takes its bank and bound only from the bound
+root. A persisted B+tree root may be older than the currently selected store
+generation, but its generation must exactly equal the submitted slot
+generation.
+
+The auditor is iterative and reads each node once in a valid topology. Its
+caller-owned frontier has the exact worst-case capacity
+`1 + (PBTREE-HEIGHT-MAX - 1) * (PBTREE-BRANCH-CAPACITY - 1)`, so memory is
+fixed by the checked height/fanout contract rather than corpus cardinality.
+Every checked node must satisfy snapshot bounds, scope, exact expected height
+and kind, canonical slots and zero padding, root/non-root occupancy, and strict
+local key ordering. Parent high keys travel with pending children and must
+equal each child's actual maximum. Leaves are visited globally left-to-right
+and each next minimum must exceed the previous maximum. The accumulated leaf
+rows must equal the root cardinality exactly. Height decrement rejects branch
+cycles, while the high-key and global range proofs reject shared subtrees even
+if a visitor accepts every page.
+
+Before a page is counted or read, the visitor receives:
+
+```forth
+( page-id expected-height visitor-context -- status )
+```
+
+This is the ownership hook for detecting aliases against other trees,
+application roots, blobs, and reclaim metadata. `PERSIST-S-OK` accepts the
+page; the first other in-domain persistence status is returned unchanged.
+Throws and results outside the persistence-status domain become
+`PERSIST-S-FAULT`. Returned node and row counts include only work accepted
+before the result. After every accepted callback and before the page read, the
+auditor rechecks the original generation, page count, and data bank against
+the still-bound store snapshot. A callback that replaces or invalidates that
+binding yields `PERSIST-S-CONFLICT` without reading under the replacement.
+An empty tree invokes no visitor, permits a null visitor execution token, and
+returns zero counts; a nonempty tree requires a visitor.
+
+A successful audit begin raises the tree's `PBTREE-WORKING-BYTES@` high-water
+mark to at least `PBTREE-AUDIT-WORK-SIZE`, alongside the page-read and key
+comparison metrics accumulated by traversal. Rejected preflight calls do not
+claim an operation workspace.
+
 All descriptors, roots, workspaces, cursors, input keys, output roots, and the
 complete nested `PSTORE` object graph have explicit non-overlap boundaries.
-Busy flags reject callback reentry and are cleared on every contained exit.
+Busy flags reject callback reentry. A rejected nested call leaves the active
+audit's status and busy ownership untouched; only the owning call clears busy
+on its contained exit.
 The linked RAM-VFS qualification exercises height transitions, sorted scans,
 seek/resume across a newly published root, fixed-seed mixed mutation traces and
 root collapse, cold reopen, chained transaction reads, measured point/window
