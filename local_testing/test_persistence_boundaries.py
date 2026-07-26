@@ -157,6 +157,14 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
         "RECLAIM-FINALIZE",
         "RECLAIM-ADOPT",
         "RECLAIM-ABORT",
+        "RECLAIM-AUDIT-MAP-BYTES?",
+        "RECLAIM-AUDIT-WORK-INIT",
+        "RECLAIM-AUDIT-APPLICATION-ROOT!",
+        "RECLAIM-AUDIT-STATE!",
+        "RECLAIM-AUDIT-APPLICATION-PAGE",
+        "RECLAIM-AUDIT-APPLICATION-COMPLETE",
+        "RECLAIM-AUDIT-CURRENT",
+        "RECLAIM-AUDITED-GENERATION@",
     ):
         assert word in reclaim
     assert (
@@ -167,12 +175,66 @@ def test_l11_index_blob_and_reclaim_boundaries_are_explicit() -> None:
     assert "PROOT-SLOT-GENERATION@" in reclaim
     assert "GPAIR-SLOT-A" in reclaim
     assert "GPAIR-SLOT-B" in reclaim
+    assert "PSTORE-ROOT-SLOT@" in reclaim
+    assert "PSTORE-READ-PAGE-SNAPSHOT-TX" in reclaim
+    assert "PERSIST-PAGE-PAYLOAD-SIZE _RCA-BUCKET +" in reclaim
+    assert (
+        "( map-a map-u xt ctx reclaim store pstore-work audit-work -- status )"
+        in reclaim
+    )
+    assert "_RCA-M-OLD-LIVE" in reclaim
+    assert "_RCA-CLASSIFY-CURRENT" in reclaim
+    assert "_RECLAIM-STATE-CANONICAL-EMPTY?" in reclaim
+    assert "_RCL.AUDITED-GENERATION" in reclaim
     assert re.search(r"\b_PROOT[-.]", reclaim) is None
     assert re.search(r"(?m)^(?:VARIABLE|CREATE|VALUE|DEFER)\b", reclaim) is None
     assert "PSTORE-BEGIN" not in reclaim
     assert "PSTORE-COMMIT" not in reclaim
     assert "PSTORE-ABORT" not in reclaim
     assert "library" not in reclaim.lower()
+
+    reclaim_runner = (
+        Path(__file__).resolve().parent / "test_persistence_reclaim.py"
+    ).read_text(encoding="utf-8")
+    reclaim_fixture = (
+        Path(__file__).resolve().parent / "persist-reclaim-test.f"
+    ).read_text(encoding="utf-8")
+
+    def return_stack_words_inside_do(source: str) -> list[str]:
+        source = re.sub(r"(?m)\\.*$", "", source)
+        source = re.sub(r"\([^)]*\)", "", source, flags=re.DOTALL)
+        offenders: list[str] = []
+        for definition in re.finditer(
+            r"(?ms)^:\s+([^\s]+)(.*?);", source
+        ):
+            for loop_body in re.finditer(
+                r"(?s)(?<!\S)(?:\?DO|DO)(?!\S)(.*?)(?<!\S)LOOP(?!\S)",
+                definition.group(2),
+            ):
+                if re.search(
+                    r"(?<!\S)(?:>R|R@|R>)(?!\S)", loop_body.group(1)
+                ):
+                    offenders.append(definition.group(1))
+        return offenders
+
+    assert return_stack_words_inside_do(reclaim) == []
+    assert return_stack_words_inside_do(reclaim_fixture) == []
+    assert "max_steps=4_000_000_000" in reclaim_runner
+    assert "link_chunk_bytes=192 * 1024" in reclaim_runner
+    for witness in (
+        "_RB-audit-mirrored-once",
+        "_RB-audit-cross-bank-max",
+        "_RB-audit-role-cross",
+        "_RB-audit-healthy-partial-out",
+        "_RB-audit-healthy-mid-rotation",
+        "_RB-audit-healthy-chained-ready",
+        "_RB-audit-overlap-arguments",
+        "_RB-audit-pstore-overlap-arguments",
+        "_RB-audit-reentry",
+        "_RECLAIM-BUCKET-READY _PSTC-page _RCB.KIND !",
+        "1 _PSTC-page _RCB.GENERATION !",
+    ):
+        assert witness in reclaim_fixture
 
 
 def test_snapshot_slot_and_btree_audit_authority_is_explicit() -> None:
@@ -311,6 +373,100 @@ def test_l12_library_slice_is_applet_owned_with_bounded_consumers() -> None:
     assert "tui/applets/library/record-codec.f" not in markers
     assert "tui/applets/library/repository.f" not in markers
     assert "tui/applets/library/service.f" not in markers
+
+    assert adapter.count(": LIBPA-INDEX-WORK-INIT") == 1
+    assert (
+        "( audit-map-a audit-map-cap pstore-work adapter work -- status )"
+        in adapter
+    )
+    for witness in (
+        "RECLAIM-AUDIT-WORK-SIZE",
+        "PBTREE-AUDIT-WORK-SIZE",
+        "RECLAIM-AUDIT-CURRENT",
+        "PBTREE-AUDIT-SNAPSHOT-TX",
+        "RECLAIM-AUDIT-APPLICATION-ROOT!",
+        "RECLAIM-AUDIT-STATE!",
+        "RECLAIM-AUDIT-APPLICATION-PAGE",
+        "RECLAIM-AUDIT-APPLICATION-COMPLETE",
+        "RECLAIM-AUDITED-GENERATION@",
+        "PSTORE-ROOT-SLOT@",
+        "PSTORE-READ-PAGE-SNAPSHOT-TX",
+        "LIBPA-INDEX-AUDIT-MAP-CAPACITY@",
+        "LIBPA-INDEX-AUDIT-MAP-REQUIRED@",
+        "LIBPA-INDEX-AUDITED-GENERATION@",
+    ):
+        assert witness in adapter
+    assert re.search(r"\b_(?:RCA|PBTA|PBTR|PST|PROOT|RCL)[-.]", adapter) is None
+
+    audit_region = adapter[
+        adapter.index(": _LIBPIX-AUDIT-ROOT?") :
+        adapter.index(": _LIBPIX-LOAD-CURRENT")
+    ]
+    for definition in re.finditer(r"(?ms)^:\s+(\S+)(.*?);", adapter):
+        body = definition.group(2)
+        assert not (
+            "R@" in body and re.search(r"(?<!\?)\bDO\b|\?DO", body)
+        ), definition.group(1)
+    assert "_LIBPIX.AUDIT-MAP-CAPACITY @ > IF" in audit_region
+    assert "PERSIST-S-CAPACITY EXIT" in audit_region
+    assert "PSTORE-ABORT" in audit_region
+
+    open_run = adapter[
+        adapter.index(": _LIBPIX-OPEN-RUN") :
+        adapter.index(": LIBPA-INDEX-OPEN")
+    ]
+    root_decode = adapter[
+        adapter.index(": _LIBPIX-ROOT>WORK") :
+        adapter.index(": _LIBPIX-WORK>ROOT")
+    ]
+    assert "_LIBPIX-STATE-READY" not in root_decode
+    assert "_LIBPIX-COLD-AUDIT" in open_run
+    assert "RECLAIM-AUDITED-GENERATION@" in open_run
+    assert open_run.index("RECLAIM-AUDITED-GENERATION@") < open_run.index(
+        "_LIBPIX-STATE-READY"
+    )
+
+    focused_fixture = (
+        Path(__file__).resolve().parent / "lib-persist-l12-test.f"
+    ).read_text(encoding="utf-8")
+    assert "_L12P-audit-map-cold _L12P-audit-map-capacity" in focused_fixture
+    assert "LIBPA-INDEX-AUDITED-GENERATION@" in focused_fixture
+    assert "LIBPA-INDEX-BEGIN" in focused_fixture
+    assert "LIBPA-INDEX-ABORT" in focused_fixture
+    assert "LIBPA-S-CAPACITY _L12P-status" in focused_fixture
+    assert "_L12P-audit-map-small C@ 0xA5 =" in focused_fixture
+    assert "_L12P-pwork-small PSTORE-PROPOSED-ROOT@ 0=" in focused_fixture
+    assert "LIBPA-S-INVALID _L12P-status" in focused_fixture
+    assert "_L12P-work-invalid C@ 0x5A =" in focused_fixture
+
+    repository = _source("tui/applets/library/repository.f")
+    assert repository.count(": LIBRARY-REPOSITORY-WORK-INIT") == 1
+    assert "audit-map-a audit-map-cap builder-audit-map-a" in repository
+    assert "_LRW.AUDIT-MAP-A @ R@ _LRW.AUDIT-MAP-U @" in repository
+    assert (
+        "_LRW.BUILDER-AUDIT-MAP-A @\n"
+        "    R@ _LRW.BUILDER-AUDIT-MAP-U @"
+        in repository
+    )
+
+    for path in SOURCE_ROOT.parent.rglob("*.f"):
+        source = path.read_text(encoding="utf-8")
+        relative = path.relative_to(SOURCE_ROOT.parent).as_posix()
+        for word, defining_module in (
+            ("LIBPA-INDEX-WORK-INIT", f"akashic/{LIBRARY_ADAPTER}"),
+            (
+                "LIBRARY-REPOSITORY-WORK-INIT",
+                "akashic/tui/applets/library/repository.f",
+            ),
+        ):
+            if relative == defining_module:
+                continue
+            for call in re.finditer(rf"\b{word}\b", source):
+                preceding = source[max(0, call.start() - 320) : call.start()]
+                upper = preceding.upper()
+                assert (
+                    "AUDIT-MAP" in upper or "WORK-INVALID 1" in upper
+                ), (relative, word)
 
     production_importers = []
     for path in SOURCE_ROOT.rglob("*.f"):

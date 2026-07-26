@@ -57,6 +57,7 @@ def main() -> int:
         ),
         initial_files=initial_files,
         linked=True,
+        link_chunk_bytes=192 * 1024,
         include_large_sample=False,
         total_sectors=8192,
     )

@@ -363,6 +363,9 @@ be selected by cold recovery and may still reference that page.
 ```forth
 RECLAIM-STATE-INIT
 RECLAIM-OPEN
+RECLAIM-AUDIT-MAP-BYTES?
+RECLAIM-AUDIT-WORK-INIT
+RECLAIM-AUDIT-CURRENT
 RECLAIM-TX-BEGIN
 RECLAIM-TX-ROOM?
 RECLAIM-CLAIM-HIGH-WATER
@@ -454,8 +457,9 @@ durable root can reference it.
 uses the proposal's issued-page ledger to classify each id into those two
 groups. This is required when a second copy-on-write mutation produces a path
 with new ancestors and untouched committed descendants.
-One runtime reclaim descriptor has exactly one active reclaim workspace.
-Another begin or open is rejected until that exact owner adopts or aborts.
+One runtime reclaim descriptor has exactly one transient owner: either one
+reclaim transaction workspace or one cold-audit workspace, never both.
+Another begin, audit, or open is rejected until that exact owner finishes.
 Abort is deliberately layered: `PSTORE-ABORT` must first end the physical
 proposal, then `RECLAIM-ABORT` discards the staged retirements, discards,
 issued-page consumption, and maintenance progress. Reclaim abort refuses to
@@ -471,6 +475,77 @@ matching reclamation state is adopted in process. A maybe-effect/uncertain
 publication is not adopted: the live descriptor is discarded and cold open
 reconstructs both store and reclamation state from whichever root is selected.
 There is no legacy free-list reader, version dispatch, or migration layer.
+
+### Cold reclaim authority
+
+The 128-byte header is not sufficient evidence by itself that its bucket
+graphs are complete. `RECLAIM-OPEN` validates and binds that selected header,
+but deliberately clears the descriptor's audited-generation latch. Before a
+nonempty cold-opened state may begin a mutation, the consumer opens one clean,
+read-only PSTORE transaction and calls `RECLAIM-AUDIT-CURRENT`. A successful
+audit latches exactly the still-locked current generation. Aborting that
+read-only PSTORE transaction does not clear the latch. `RECLAIM-TX-BEGIN`
+rejects a nonempty state unless the latch still equals PSTORE's generation;
+successful `RECLAIM-ADOPT` advances both bindings together, while
+`RECLAIM-ABORT` never fabricates audit evidence. The sole exception is the
+exact canonical empty state: all five heads are `-1`, both indices and both
+counts are zero, rotation is false, and all reserved bytes are zero. That
+fresh state has no reusable id with which damaged metadata could overwrite a
+live page.
+
+The transient audit workspace is fixed-size and caller-owned. Before binding
+any supplied argument, the entry point validates the map, descriptor, store,
+PSTORE workspace, and audit workspace and requires all mutable spans to be
+disjoint. Invalid aliases therefore leave every supplied object byte-exact.
+Once admitted, the reclaim descriptor names the exact audit workspace until
+the contained call finishes; recursive audit and transaction begin attempts
+return `PERSIST-S-BUSY`, and cleanup clears only that exact owner.
+
+The separate map is exactly one byte per committed page in the largest valid
+A/B slot snapshot; `RECLAIM-AUDIT-MAP-BYTES?` performs that checked sizing.
+The auditor reads both valid root slots while PSTORE's guard is held, audits
+an older distinct snapshot first, and audits byte-identical mirrored current
+snapshots once. Slots in different data banks reuse the map sequentially and
+never compare equal numeric ids across banks. Same-bank old marks remain while
+the current snapshot is checked. Thus an old application or reclaim-metadata
+page may remain the same kind of live current page, or may occur in current
+PENDING only when its retirement generation is strictly newer than the old
+slot generation. It may never occur in current READY.
+
+The application enumerator has the exact callback contract
+`( snapshot-root snapshot-generation slot reclaim-audit-work context --
+status )`. For each snapshot it must make these submissions in order:
+
+1. `RECLAIM-AUDIT-APPLICATION-ROOT!` exactly once, with the root value's exact
+   application page (`-1` only for a zero-page snapshot);
+2. `RECLAIM-AUDIT-STATE!` exactly once, with the embedded current-format
+   reclaim state;
+3. `RECLAIM-AUDIT-APPLICATION-PAGE` exactly once for every other
+   consumer-owned page; and
+4. `RECLAIM-AUDIT-APPLICATION-COMPLETE` exactly once and last.
+
+The callback normally obtains consumer pages through
+`PBTREE-AUDIT-SNAPSHOT-TX`, whose visitor submits each checked B+tree node.
+PBLOB references are segment offsets and are not page ownership. A throw or
+out-of-domain callback result becomes `PERSIST-S-FAULT`; an in-domain nonzero
+status propagates, and missing or out-of-order completion cannot latch
+success. The current snapshot's submitted reclaim header must also match the
+exact header already bound by `RECLAIM-OPEN`; auditing a different valid state
+cannot authorize the live descriptor.
+
+For each submitted state the auditor follows IN, OUT, ROTATE-SOURCE,
+ROTATE-BUILD, and READY through `PSTORE-READ-PAGE-SNAPSHOT-TX`. It validates
+every checked bucket, active suffix index, kind, generation, link direction,
+rotation boundary, exact retired/reusable count, metadata cycle/shared-tail,
+active data-id uniqueness, and data/metadata/application separation. Consumed
+prefixes are intentionally ignored because their ids have already left that
+population. A final linear pass requires every committed page in each audited
+bank snapshot to be application-owned, reclaim metadata, active pending, or
+active ready. Referenced absent pages, duplicates, aliases, unexplained
+committed pages, and unsafe old/current overlap are durable corruption. The
+algorithm is `O(page_count + bucket_count + enumerated_application_pages)`;
+it has no global table, heap allocation, quadratic scan, or persisted audit
+format.
 
 ## Bounded two-bank compaction
 
@@ -544,8 +619,10 @@ separately streamed and qualified.
 
 Together these scalar profiles have a 2,471,699,942-page conservative live-tree
 envelope (10,124,082,962,432 bytes). This is not a physical-file bound under
-churn. A cold point lookup reads at most twelve index pages. With the cache
-reset once at range entry, a
+churn. After the required cold ownership audit has completed, a point lookup
+reads at most twelve index pages. Cold open itself deliberately scans every
+committed page in the valid current and fallback snapshots; it is an integrity
+boundary, not a point-lookup path. With the cache reset once at range entry, a
 deep 32-result keyset window uses one cache-preserving B+tree operation and
 reads at most 44 index pages (35 on the nine-level edge index). Descending
 windows have the same bound. 7,813 edge windows cover a 250,000-edge contiguous
@@ -557,15 +634,33 @@ traversal, but callbacks within that window retain the cursor path and
 one-page cache instead of reopening an operation for every row. Blob ranges
 account for one complete manifest path per touched chunk.
 
-The Library index workspace is exactly 119,840 bytes. Its largest constituents
+The Library index workspace is exactly 165,928 bytes. Its largest constituents
 are one 17,672-byte B+tree workspace, one 46,960-byte blob workspace, one
-10,800-byte reclaim workspace, fifteen 80-byte tree descriptors, two arrays of
-fifteen 64-byte roots, the current/old document and collection stages, one
-4,032-byte page scratch area, and one 32 KiB content scratch window. The
-caller-owned `PSTORE` workspace, record buffer, cache, and cache frames remain
-separate. `allocation_events = 0` means no dynamic or corpus-proportional
-memory allocation during an ordinary operation; copy-on-write transactions
-still allocate physical pages.
+10,800-byte reclaim workspace, one 41,104-byte B+tree audit workspace, one
+4,824-byte reclaim audit workspace, fifteen 80-byte tree descriptors, two
+arrays of fifteen 64-byte roots, the current/old document and collection
+stages, one 4,032-byte page scratch area, and one 32 KiB content scratch
+window. The caller-owned `PSTORE` workspace, record buffer, cache, cache
+frames, and cold ownership map remain separate. The map capacity is supplied
+to the sole current `LIBPA-INDEX-WORK-INIT` signature; cold open discovers the
+largest valid root-slot page count while holding a clean store transaction and
+passes exactly that prefix to `RECLAIM-AUDIT-CURRENT`. An undersized map
+returns capacity before any map byte is touched;
+`LIBPA-INDEX-AUDIT-MAP-REQUIRED@` reports the exact discovered requirement so
+the caller can rebuild the current work graph with sufficient storage.
+`allocation_events = 0`
+means no dynamic or corpus-proportional memory allocation during an ordinary
+operation; copy-on-write transactions still allocate physical pages.
+
+For a nonempty cold authority, Library validates the current application root,
+then audits both valid atomic-root snapshots before making the index workspace
+ready. Its neutral enumerator submits the application-root page and exact
+embedded reclaim state, and uses `PBTREE-AUDIT-SNAPSHOT-TX` to submit every
+reachable node of all fifteen Library trees exactly once. The read-only store
+transaction is always aborted on the contained exit; successful ownership
+evidence remains latched for the selected generation, while corruption,
+callback faults, rebinding, or cleanup failure leave the workspace unable to
+begin a mutation.
 
 `LIBPA-INDEX-PAGE-READS@`, `LIBPA-INDEX-PAGE-WRITES@`, and
 `LIBPA-INDEX-COMPARISONS@` sum the cumulative neutral B+tree counters across
