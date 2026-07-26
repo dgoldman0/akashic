@@ -1642,6 +1642,68 @@ VARIABLE _sr2r-expected-effect
         _sr2r-assert
     _sr2r-flow-a SFLOW.GENERATION @
         _sr2r-reservation-generation @ = _sr2r-assert
+
+    0x68 _sr2r-event-b _sr2r-event-header
+    _sr2r-input _sr2r-event-b 4 7 200 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    S" ping" _sr2r-reservation-generation @ 301 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-APPEND
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+    _sr2r-in-bytes-a STREAMS-RUNTIME-SEGMENT-BYTES
+        _SPAY-ZERO? _sr2r-assert
+
+    0x69 _sr2r-event-c _sr2r-event-header
+    _sr2r-input _sr2r-event-c 0 7 400 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    _sr2r-reservation-generation @ 501 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-COMMIT
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+
+    0x6A _sr2r-event-a _sr2r-event-header
+    _sr2r-input _sr2r-event-a 4 7 600 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    S" ping" _sr2r-reservation-generation @ 1- 701 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-APPEND
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+
+    0x6B _sr2r-event-b _sr2r-event-header
+    _sr2r-input _sr2r-event-b 4 7 800 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    _sr2r-reservation-generation @ 1- 901 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-ABORT
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+
+    0x6C _sr2r-event-c _sr2r-event-header
+    _sr2r-input _sr2r-event-c 4 7 1000 _sr2r-flow-a
+        STREAMS-FLOW-INGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    _sr2r-reservation-generation @ 1- 1101 _sr2r-flow-a
+        STREAMS-FLOW-CANCEL
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
     _sr2r-stack ;
 
 : _sr2r-test-direct-egress  ( -- )
@@ -1763,6 +1825,68 @@ VARIABLE _sr2r-expected-effect
         _sr2r-assert
     _sr2r-flow-a SFLOW.GENERATION @
         _sr2r-reservation-generation @ = _sr2r-assert
+
+    S" tx:ping" 0x75 _sr2r-event-b _sr2r-build-egress-metadata
+    _sr2r-output _sr2r-event-b 7 7 200 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    S" tx:ping" _sr2r-reservation-generation @ 301 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-APPEND
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+    _sr2r-out-bytes-a STREAMS-RUNTIME-SEGMENT-BYTES
+        _SPAY-ZERO? _sr2r-assert
+
+    0 0 0x76 _sr2r-event-c _sr2r-build-egress-metadata
+    _sr2r-output _sr2r-event-c 0 7 400 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    _sr2r-reservation-generation @ 501 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-COMMIT
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+
+    S" tx:ping" 0x77 _sr2r-event-a _sr2r-build-egress-metadata
+    _sr2r-output _sr2r-event-a 7 7 600 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    S" tx:ping" _sr2r-reservation-generation @ 1- 701 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-APPEND
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+
+    S" tx:ping" 0x78 _sr2r-event-b _sr2r-build-egress-metadata
+    _sr2r-output _sr2r-event-b 7 7 800 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    _sr2r-reservation-generation @ 1- 901 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-ABORT
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
+
+    S" tx:ping" 0x79 _sr2r-event-c _sr2r-build-egress-metadata
+    _sr2r-output _sr2r-event-c 7 7 1000 _sr2r-flow-a
+        STREAMS-FLOW-EGRESS-BEGIN
+        STREAMS-FLOW-S-OK = _sr2r-assert
+    _sr2r-reservation-generation !
+    _sr2r-reservation-generation @ 1- 1101 _sr2r-flow-a
+        STREAMS-FLOW-CANCEL
+        STREAMS-FLOW-S-TIMED-OUT = _sr2r-assert
+    _sr2r-flow-a SFLOW.STATE @ STREAMS-FLOW-STATE-IDLE =
+        _sr2r-assert
+    _sr2r-flow-a STREAMS-FLOW-VALID? _sr2r-assert
     _sr2r-stack ;
 
 : _sr2r-test-execution-pool  ( -- )
