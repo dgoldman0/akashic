@@ -93,6 +93,9 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   every lower cryptographic scratch and ownership region. Deterministic
   ECDSA-P256 builds fixed-width JOSE signatures with RFC 6979 nonces and
   verifies them through the same caller-owned hardware-backed boundary.
+  Strict public P-256 JWK parsing, canonical emission, and RFC 7638
+  thumbprints provide protocol-neutral key representation above that curve
+  layer.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
