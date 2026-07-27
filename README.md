@@ -90,7 +90,9 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   and transactional publication rules. Caller-owned NIST P-256 key and point
   operations keep the chip Field ALU transaction across each complete
   computation, use fixed 256-round scalar schedules, and reject aliases with
-  every lower cryptographic scratch and ownership region.
+  every lower cryptographic scratch and ownership region. Deterministic
+  ECDSA-P256 builds fixed-width JOSE signatures with RFC 6979 nonces and
+  verifies them through the same caller-owned hardware-backed boundary.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
