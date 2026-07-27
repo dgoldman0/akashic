@@ -79,8 +79,10 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   SHA-512 over the chip accelerator. The entropy library delegates physical
   span and health enforcement to BIOS rather than duplicating MMIO policy;
   hashing provides multi-span input, preflighted caller geometry, scoped
-  ownership, and failure cleanup. Ed25519 consumes the checked SHA-512
-  boundary without exposing an ambient streaming context.
+  ownership, and failure cleanup. Caller-owned HMAC-SHA-256 stages its digest
+  and zeroes key-bearing workspace before a successful return. Ed25519
+  consumes the checked SHA-512 boundary without exposing an ambient streaming
+  context.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
