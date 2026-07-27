@@ -95,8 +95,10 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   verifies them through the same caller-owned hardware-backed boundary.
   Strict public P-256 JWK parsing, canonical emission, and RFC 7638
   thumbprints provide protocol-neutral key representation above that curve
-  layer. The standalone OAuth utility layer begins with checked RFC 7636
-  PKCE S256 generation and derivation backed by hardware entropy and SHA-256.
+  layer, while strict compact JWS composes canonical Base64url, protected
+  JSON, and ES256 without importing JWT or OAuth claim policy. The standalone
+  OAuth utility layer begins with checked RFC 7636 PKCE S256 generation and
+  derivation backed by hardware entropy and SHA-256.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
