@@ -49,6 +49,7 @@ def _assert_source_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     doc = DOC.read_text(encoding="utf-8")
 
+    assert "U<=" not in source
     assert not re.search(
         r"(?mi)^[ \t]*(?:VARIABLE|VALUE|DEFER|CREATE)\b", source
     ), "metadata operations must use only caller-owned mutable storage"

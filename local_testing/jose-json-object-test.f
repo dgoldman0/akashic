@@ -10,7 +10,7 @@ VARIABLE _jjot-depth
     1 _jjot-checks +!
     0= IF
         1 _jjot-fails +!
-        ." JOSE JSON OBJECT ASSERT " _jjot-checks @ . CR
+        ." JOSE JSON OBJECT ASSERT " _jjot-checks @ . CR TX-FLUSH
     THEN ;
 
 : _jjot-stack  ( -- )
@@ -21,18 +21,38 @@ VARIABLE _jjot-depth
     _jjot-depth @ = _jjot-assert ;
 
 : _jjot-filled?  ( address length byte -- flag )
-    SWAP 0 ?DO
-        OVER I + C@ OVER <> IF
-            2DROP 0 UNLOOP EXIT
+    0x0101010101010101 *
+    BEGIN
+        2 PICK 7 AND 0<>
+        2 PICK 0<> AND
+    WHILE
+        2 PICK C@ OVER 0xFF AND <> IF
+            2DROP DROP 0 EXIT
         THEN
-    LOOP
-    2DROP -1 ;
+        >R
+        1- SWAP 1+ SWAP
+        R>
+    REPEAT
+    BEGIN 1 PICK 8 U< 0= WHILE
+        2 PICK @ OVER <> IF
+            2DROP DROP 0 EXIT
+        THEN
+        >R
+        8 - SWAP 8 + SWAP
+        R>
+    REPEAT
+    BEGIN 1 PICK WHILE
+        2 PICK C@ OVER 0xFF AND <> IF
+            2DROP DROP 0 EXIT
+        THEN
+        >R
+        1- SWAP 1+ SWAP
+        R>
+    REPEAT
+    2DROP DROP -1 ;
 
 : _jjot-zero?  ( address length -- flag )
-    0 ?DO
-        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
-    LOOP
-    DROP -1 ;
+    0 _jjot-filled? ;
 
 JOSE-JSON-MAX-MEMBERS JOSE-JSON-OBJECT-BYTES
 JOSE-JSON-S-OK <> [IF]
@@ -46,10 +66,12 @@ JOSE-JSON-S-OK <> [IF]
 [THEN]
 CONSTANT _JJOT-ACTIVE-DESCRIPTOR-SIZE
 
+4097 CONSTANT _JJOT-LONG-STRING-BYTES
+
 CREATE _jjot-input
-    JOSE-JSON-MAX-STRING-BYTES 32 + ALLOT
+    _JJOT-LONG-STRING-BYTES 32 + ALLOT
 CREATE _jjot-descriptor  _JJOT-DESCRIPTOR-SIZE ALLOT
-CREATE _jjot-names       JOSE-JSON-MAX-STRING-BYTES ALLOT
+CREATE _jjot-names       JOSE-JSON-MAX-NAME-BYTES ALLOT
 CREATE _jjot-work        JOSE-JSON-OBJECT-WORKSPACE-SIZE ALLOT
 CREATE _jjot-string-work JOSE-JSON-STRING-WORKSPACE-SIZE ALLOT
 CREATE _jjot-output      128 ALLOT
@@ -75,6 +97,12 @@ VARIABLE _jjot-decoded-u
 : _jjot-text  ( address length -- )
     DUP _jjot-copy-u !
     _jjot-input _jjot-input-u @ + SWAP MOVE
+    _jjot-copy-u @ _jjot-input-u +! ;
+
+: _jjot-repeat-char  ( byte count -- )
+    DUP _jjot-copy-u ! >R
+    _jjot-input _jjot-input-u @ + SWAP
+    R> SWAP FILL
     _jjot-copy-u @ _jjot-input-u +! ;
 
 : _jjot-quote  ( -- ) 34 _jjot-char ;
@@ -167,9 +195,9 @@ VARIABLE _jjot-decoded-u
 : _jjot-build-too-deep  ( -- )
     _jjot-reset _jjot-lbrace
     S" x" _jjot-key
-    32 0 DO _jjot-lbrack LOOP
+    91 32 _jjot-repeat-char
     S" null" _jjot-text
-    32 0 DO _jjot-rbrack LOOP
+    93 32 _jjot-repeat-char
     _jjot-rbrace ;
 
 : _jjot-build-empty  ( -- )
@@ -186,8 +214,18 @@ VARIABLE _jjot-decoded-u
 : _jjot-build-value-string  ( decoded-u -- )
     _jjot-reset _jjot-lbrace
     S" x" _jjot-key _jjot-quote
-    0 ?DO 97 _jjot-char LOOP
+    97 SWAP _jjot-repeat-char
     _jjot-quote _jjot-rbrace ;
+
+: _jjot-build-standalone-string  ( decoded-u -- )
+    _jjot-reset _jjot-quote
+    97 SWAP _jjot-repeat-char
+    _jjot-quote ;
+
+: _jjot-build-name-string  ( decoded-u -- )
+    _jjot-reset _jjot-lbrace _jjot-quote
+    110 SWAP _jjot-repeat-char
+    _jjot-quote _jjot-colon 49 _jjot-char _jjot-rbrace ;
 
 : _jjot-parse  ( member-capacity names-capacity -- status )
     _jjot-names-cap ! _jjot-member-cap !
@@ -224,11 +262,11 @@ VARIABLE _jjot-decoded-u
 
 : _jjot-fill-publication  ( -- )
     _jjot-descriptor _JJOT-DESCRIPTOR-SIZE 0xA5 FILL
-    _jjot-names JOSE-JSON-MAX-STRING-BYTES 0x5A FILL ;
+    _jjot-names JOSE-JSON-MAX-NAME-BYTES 0x5A FILL ;
 
 : _jjot-publication-unchanged?  ( -- flag )
     _jjot-descriptor _JJOT-DESCRIPTOR-SIZE 0xA5 _jjot-filled?
-    _jjot-names JOSE-JSON-MAX-STRING-BYTES 0x5A _jjot-filled?
+    _jjot-names JOSE-JSON-MAX-NAME-BYTES 0x5A _jjot-filled?
     AND ;
 
 : _jjot-fill-preflight  ( -- )
@@ -401,15 +439,54 @@ VARIABLE _jjot-decoded-u
         _jjot-zero? _jjot-assert
     _jjot-stack ;
 
-: _jjot-test-object-string-bound  ( -- )
-    JOSE-JSON-MAX-STRING-BYTES _jjot-build-value-string
+: _jjot-test-split-string-bounds  ( -- )
+    _JJOT-LONG-STRING-BYTES
+    JOSE-JSON-MAX-VALUE-STRING-BYTES U< _jjot-assert
+    JOSE-JSON-MAX-NAME-BYTES
+    _JJOT-LONG-STRING-BYTES U< _jjot-assert
+
+    \ Object value strings are no longer constrained by the decoded-name
+    \ staging bound.
+    _JJOT-LONG-STRING-BYTES _jjot-build-value-string
     16 256 _jjot-parse
         JOSE-JSON-S-OK = _jjot-assert
     _jjot-descriptor JOSE-JSON-OBJECT-VALID? _jjot-assert
+    0 _jjot-member
+    _jjot-type @ JOSE-JSON-T-STRING = _jjot-assert
+    _jjot-value-u @ _JJOT-LONG-STRING-BYTES 2 + =
+        _jjot-assert
     _jjot-work JOSE-JSON-OBJECT-WORKSPACE-SIZE
         _jjot-zero? _jjot-assert
 
-    JOSE-JSON-MAX-STRING-BYTES 1+ _jjot-build-value-string
+    \ Standalone decoding uses the widened value bound.  Its first pass calls
+    \ the public measurement path before any destination byte is published.
+    _JJOT-LONG-STRING-BYTES _jjot-build-standalone-string
+
+    _jjot-work _JJOT-LONG-STRING-BYTES 0xA5 FILL
+    _jjot-input _jjot-input-u @
+    _jjot-work _JJOT-LONG-STRING-BYTES _jjot-string-work
+    JOSE-JSON-STRING-DECODE
+        JOSE-JSON-S-OK = _jjot-assert
+        _JJOT-LONG-STRING-BYTES = _jjot-assert
+    _jjot-work _JJOT-LONG-STRING-BYTES 97
+        _jjot-filled? _jjot-assert
+    _jjot-string-work JOSE-JSON-STRING-WORKSPACE-SIZE
+        _jjot-zero? _jjot-assert
+
+    \ An undersized destination rejects before publishing any prefix.
+    _jjot-work _JJOT-LONG-STRING-BYTES 0xA5 FILL
+    _jjot-input _jjot-input-u @
+    _jjot-work 4096 _jjot-string-work
+    JOSE-JSON-STRING-DECODE
+        JOSE-JSON-S-CAPACITY = _jjot-assert
+        0= _jjot-assert
+    _jjot-work _JJOT-LONG-STRING-BYTES 0xA5
+        _jjot-filled? _jjot-assert
+    _jjot-string-work JOSE-JSON-STRING-WORKSPACE-SIZE
+        _jjot-zero? _jjot-assert
+
+    \ Decoded member names retain their independent 4096-byte ceiling.
+    JOSE-JSON-MAX-NAME-BYTES 1+ _jjot-build-name-string
     JOSE-JSON-S-STRING _jjot-reject-transactionally
     _jjot-stack ;
 
@@ -444,7 +521,7 @@ VARIABLE _jjot-decoded-u
     _jjot-names 256
     _jjot-work JOSE-JSON-OBJECT-PARSE
         JOSE-JSON-S-INVALID = _jjot-assert
-    _jjot-names JOSE-JSON-MAX-STRING-BYTES
+    _jjot-names JOSE-JSON-MAX-NAME-BYTES
         0x5A _jjot-filled? _jjot-assert
     _jjot-work JOSE-JSON-OBJECT-WORKSPACE-SIZE
         0xC3 _jjot-filled? _jjot-assert
@@ -506,12 +583,18 @@ VARIABLE _jjot-decoded-u
     _jjot-stack ;
 
 : _jjot-throw-after-partial-publication
-  ( source source-u descriptor member-capacity
-    names names-capacity workspace -- status )
+  \ Stack: source source-u descriptor member-capacity
+  \        names names-capacity workspace -- status
     _JJO-BIND
     DUP _JJW.DESCRIPTOR @
         _JJOT-ACTIVE-DESCRIPTOR-SIZE 0x33 FILL
     DUP _JJW.NAMES @ 256 0x44 FILL
+    \ Cleanup geometry must survive an unexpected operation corrupting the
+    \ workspace's bound copies before it throws.
+    0 OVER _JJW.DESCRIPTOR !
+    0 OVER _JJW.MEMBER-CAPACITY !
+    0 OVER _JJW.NAMES !
+    0 OVER _JJW.NAMES-CAPACITY !
     -777 THROW ;
 
 : _jjot-test-throw-cleanup  ( -- )
@@ -531,7 +614,7 @@ VARIABLE _jjot-decoded-u
     0xA5 _jjot-filled? _jjot-assert
     _jjot-names 256 _jjot-zero? _jjot-assert
     _jjot-names 256 +
-    JOSE-JSON-MAX-STRING-BYTES 256 -
+    JOSE-JSON-MAX-NAME-BYTES 256 -
     0x5A _jjot-filled? _jjot-assert
     _jjot-work JOSE-JSON-OBJECT-WORKSPACE-SIZE
         _jjot-zero? _jjot-assert
@@ -600,7 +683,7 @@ VARIABLE _jjot-decoded-u
     _jjot-test-strict-rejections
     _jjot-test-capacity-and-alias
     _jjot-test-string-api
-    _jjot-test-object-string-bound
+    _jjot-test-split-string-bounds
     _jjot-test-mapped-spans
     _jjot-test-throw-cleanup
     _jjot-test-publication-and-cleanup-throws

@@ -17,7 +17,9 @@ REQUIRE akashic/security/jose/json-object.f
 JOSE-JSON-MAX-DOCUMENT-BYTES  ( -- 65536 )
 JOSE-JSON-MAX-DEPTH           ( -- 32 )
 JOSE-JSON-MAX-MEMBERS         ( -- 64 )
-JOSE-JSON-MAX-STRING-BYTES    ( -- 4096 )
+JOSE-JSON-MAX-NAME-BYTES      ( -- 4096 )
+JOSE-JSON-MAX-VALUE-STRING-BYTES
+                                  ( -- 65536 )
 
 JOSE-JSON-STRING-WORKSPACE-SIZE  ( -- 72 )
 JOSE-JSON-OBJECT-WORKSPACE-SIZE  ( -- bytes )
@@ -25,14 +27,18 @@ JOSE-JSON-OBJECT-WORKSPACE-SIZE  ( -- bytes )
 
 The parser validates the complete document before publishing output. It
 enforces strict UTF-8, JSON number grammar, escapes and UTF-16 surrogate
-pairs, bounded nesting and strings, complete nested values, and duplicate
-member-name rejection after names are unescaped. Trailing JSON whitespace is
-accepted; trailing non-whitespace input is rejected.
+pairs, bounded nesting, bounded member names, document-sized string values,
+complete nested values, and duplicate member-name rejection after names are
+unescaped. Trailing JSON whitespace is accepted; trailing non-whitespace
+input is rejected.
 
-`JOSE-JSON-MAX-STRING-BYTES` applies to each decoded JSON value string, to
-each decoded member name, and to the standalone string operations. The
+`JOSE-JSON-MAX-NAME-BYTES` applies to each decoded member name and to the
 combined decoded top-level and currently nested member names simultaneously
-staged by one object parse also fit within that bound.
+staged by one object parse. `JOSE-JSON-MAX-VALUE-STRING-BYTES` applies
+independently to each decoded JSON value string and to standalone string
+operations. It equals the document bound; because a standalone string source
+also includes its two quote bytes, the largest reachable decoded standalone
+string is 65534 bytes.
 
 ## Offset-only object descriptors
 
@@ -94,7 +100,7 @@ not shrink to the prefixes eventually used.
 Parsing stages the descriptor and decoded names, so neither published output
 changes on ordinary rejection. An unexpected validation/staging `THROW`
 scrubs the complete admitted descriptor, the first
-`min(names-capacity, JOSE-JSON-MAX-STRING-BYTES)` bytes of the names span, and
+`min(names-capacity, JOSE-JSON-MAX-NAME-BYTES)` bytes of the names span, and
 the complete workspace; it becomes `JOSE-JSON-S-INTERNAL` only when that
 mandatory scrub succeeds. A scrub `THROW` propagates instead.
 
@@ -115,14 +121,16 @@ JOSE-JSON-STRING-DECODE
   ( source source-u destination capacity workspace -- written status )
 ```
 
-The source must be exactly one quoted JSON string token. Measurement performs
-the same escape, UTF-8, surrogate, length, and trailing-input checks as
-decoding. Decode measures first and writes only after the complete token and
-capacity are accepted; its publishing pass independently rechecks complete
-source consumption. Rejection leaves the destination unchanged provided the
-caller keeps the source bytes immutable for the whole call. In particular,
-the caller must not mutate the source between decode's measurement and
-publication passes.
+The source must be exactly one quoted JSON string token and may be at most
+`JOSE-JSON-MAX-DOCUMENT-BYTES` bytes. Measurement performs the same escape,
+UTF-8, surrogate, value-string length, and trailing-input checks as decoding.
+Decode measures first and accepts any caller capacity large enough for the
+measured result; an undersized destination returns
+`JOSE-JSON-S-CAPACITY` before any destination write. Its publishing pass
+independently rechecks complete source consumption. Rejection leaves the
+destination unchanged provided the caller keeps the source bytes immutable
+for the whole call. In particular, the caller must not mutate the source
+between decode's measurement and publication passes.
 
 The source, destination, and workspace must not overlap. All complete
 advertised spans are caller-qualified before mutation. The standalone 72-byte
@@ -149,7 +157,7 @@ JOSE-JSON-STRING-WORKSPACE-CLEAR  ( workspace -- status )
 | `JOSE-JSON-S-ALIAS` | Public spans overlap in a forbidden way. |
 | `JOSE-JSON-S-DEPTH` | The nesting bound was exceeded. |
 | `JOSE-JSON-S-MEMBERS` | A bounded object-member limit was exceeded. |
-| `JOSE-JSON-S-STRING` | A decoded string exceeded its bound. |
+| `JOSE-JSON-S-STRING` | A decoded member name, aggregate staged names, or value string exceeded its corresponding bound. |
 | `JOSE-JSON-S-DUPLICATE` | An object repeats a decoded member name. |
 | `JOSE-JSON-S-DOCUMENT` | The document exceeds the public byte bound. |
 | `JOSE-JSON-S-INTERNAL` | Caller-span qualification had a platform failure, or validation/staging threw and every mandatory scrub succeeded. Publication and cleanup throws propagate instead. |

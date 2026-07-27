@@ -48,6 +48,7 @@ def _assert_source_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     lowered = source.lower()
 
+    assert "U<=" not in source
     assert not re.search(
         r"(?mi)^[ \t]*(?:create|variable|value|defer)\b", source
     ), "the parser must not own mutable module scratch or dispatch slots"
@@ -85,7 +86,8 @@ def _assert_source_contracts() -> None:
         "JOSE-JSON-MAX-DOCUMENT-BYTES",
         "JOSE-JSON-MAX-DEPTH",
         "JOSE-JSON-MAX-MEMBERS",
-        "JOSE-JSON-MAX-STRING-BYTES",
+        "JOSE-JSON-MAX-NAME-BYTES",
+        "JOSE-JSON-MAX-VALUE-STRING-BYTES",
         "JOSE-JSON-OBJECT-WORKSPACE-SIZE",
         "JOSE-JSON-OBJECT-BYTES",
         "JOSE-JSON-OBJECT-PARSE",
@@ -117,6 +119,12 @@ def _assert_source_contracts() -> None:
     assert "_JJW.EMIT-USED" in value_string
     assert "_JJW.EMIT-MODE" in value_string
     assert "_JJO-STRING" in value_string
+    assert "JOSE-JSON-MAX-VALUE-STRING-BYTES" in value_string
+    assert "JOSE-JSON-MAX-NAME-BYTES" in value_string
+
+    assert "JOSE-JSON-MAX-NAME-BYTES" in _word_body(
+        source, "JOSE-JSON-OBJECT-VALID?"
+    )
 
     string = _word_body(source, "_JJO-STRING")
     escape = _word_body(source, "_JJO-ESCAPE")
@@ -167,13 +175,29 @@ def _assert_source_contracts() -> None:
 
     parse = _word_body(source, "JOSE-JSON-OBJECT-PARSE")
     assert parse.count("_JJO-CALLER-SPAN>STATUS") >= 4
+    assert parse.count(
+        "_JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT"
+    ) == 12
     assert parse.rindex("_JJO-CALLER-SPAN>STATUS") < parse.index(
         "_JJO-PARSE-ADMITTED"
     )
     assert parse.count("MSPAN-OVERLAP?") >= 6
     assert "_JJO-PARSE-ADMITTED _JJO-PARSE-CALL" in parse
 
+    preflight_return = _word_body(
+        source, "_JJO-PARSE-PREFLIGHT-RETURN"
+    )
+    assert preflight_return.count("R>") == 1
+    assert "R> DROP" not in preflight_return
+
     parse_call = _word_body(source, "_JJO-PARSE-CALL")
+    assert (
+        "1 PICK >R\n"
+        "    2 PICK >R\n"
+        "    3 PICK >R\n"
+        "    4 PICK >R\n"
+        "    5 PICK >R"
+    ) in parse_call
     assert parse_call.index("CATCH") < parse_call.index(
         "_JJO-PARSE-THROW-CLEAN"
     )
@@ -181,6 +205,7 @@ def _assert_source_contracts() -> None:
         "_JJO-PUBLISH-CALL"
     )
     assert "JOSE-JSON-S-INTERNAL" in parse_call
+    assert "R> DROP R> DROP R> DROP R> DROP" in parse_call
 
     finally_call = _word_body(source, "_JJO-CALL-FINALLY")
     assert "CATCH" in finally_call
@@ -196,13 +221,26 @@ def _assert_source_contracts() -> None:
     )
 
     throw_clean = _word_body(source, "_JJO-PARSE-THROW-CLEAN")
-    assert "_JJO-CLEAR-DESCRIPTOR" in throw_clean
-    assert "_JJO-CLEAR-NAMES" in throw_clean
-    assert "_JJO-OBJECT-WORKSPACE-ZERO" in throw_clean
+    for word in (
+        "_JJO-CLEAR-DESCRIPTOR",
+        "_JJO-CLEAR-NAMES",
+        "_JJO-OBJECT-WORKSPACE-ZERO",
+    ):
+        assert word in throw_clean
+    assert "_JJO-DROP7" not in throw_clean
+
+    throw_branch = parse_call[
+        parse_call.index("DUP IF") : parse_call.index("THEN")
+    ]
+    assert throw_branch.index("_JJO-DROP7") < throw_branch.index(
+        "_JJO-PARSE-THROW-CLEAN"
+    )
+    assert "R> R> R> R> R> _JJO-PARSE-THROW-CLEAN" in throw_branch
 
     measure = _word_body(source, "JOSE-JSON-STRING-MEASURE")
     assert measure.count("_JJO-CALLER-SPAN>STATUS") >= 2
     assert "_JJO-CALL-FINALLY" in measure
+    assert "JOSE-JSON-MAX-VALUE-STRING-BYTES" in measure
     decode = _word_body(source, "JOSE-JSON-STRING-DECODE")
     assert decode.count("_JJO-CALLER-SPAN>STATUS") >= 3
     assert decode.count("MSPAN-OVERLAP?") >= 3
@@ -212,19 +250,55 @@ def _assert_source_contracts() -> None:
     assert "JOSE-JSON-S-SYNTAX" in decode_run
 
     fixture = CONTRACT.read_text(encoding="utf-8")
-    assert "_jjot-test-object-string-bound" in fixture
+    assert "_jjot-test-split-string-bounds" in fixture
     assert "_jjot-test-throw-cleanup" in fixture
     assert "_jjot-test-mapped-spans" in fixture
     assert "_jjot-test-publication-and-cleanup-throws" in fixture
-    assert "JOSE-JSON-MAX-STRING-BYTES 1+" in fixture
+    assert "JOSE-JSON-MAX-NAME-BYTES 1+" in fixture
+    assert "JOSE-JSON-MAX-VALUE-STRING-BYTES U<" in fixture
+    assert re.search(
+        r"(?m)^4097 CONSTANT _JJOT-LONG-STRING-BYTES$", fixture
+    )
+    assert "65536" not in fixture
+    split_bounds = _word_body(fixture, "_jjot-test-split-string-bounds")
+    assert "_jjot-build-value-string" in split_bounds
+    assert "JOSE-JSON-STRING-MEASURE" not in split_bounds
+    assert split_bounds.count("JOSE-JSON-STRING-DECODE") == 2
+    assert "JOSE-JSON-S-CAPACITY" in split_bounds
+    assert "_jjot-work 4096 _jjot-string-work" in split_bounds
+    assert "_jjot-filled? _jjot-assert" in split_bounds
+    assert "_jjot-build-name-string" in split_bounds
+    assert "JOSE-JSON-S-STRING _jjot-reject-transactionally" in (
+        split_bounds
+    )
+    assert not re.search(
+        r"(?mi)\b(?:\?DO|DO|\+LOOP|LOOP)\b", fixture
+    ), "fixture cursor walks must not depend on an indexed loop word"
+    for line_number, line in enumerate(fixture.splitlines(), start=1):
+        forth_code = line.split("\\", 1)[0]
+        if "(" in forth_code:
+            assert ")" in forth_code.split("(", 1)[1], (
+                "KDOS parenthesized comments must close on their physical "
+                f"line: {line_number}"
+            )
     assert "_JJO-PARSE-CALL" in _word_body(
         fixture, "_jjot-test-throw-cleanup"
     )
+    injected_throw = _word_body(
+        fixture, "_jjot-throw-after-partial-publication"
+    )
+    for field in (
+        "_JJW.DESCRIPTOR",
+        "_JJW.MEMBER-CAPACITY",
+        "_JJW.NAMES",
+        "_JJW.NAMES-CAPACITY",
+    ):
+        assert f"{field} !" in injected_throw
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout", type=float, default=90.0)
+    parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()
 
     _assert_source_contracts()

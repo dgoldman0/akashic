@@ -14,8 +14,9 @@
 \  The complete document is validated before either published output is
 \  changed.  Validation includes strict UTF-8, JSON number grammar, escape
 \  and UTF-16 surrogate handling, bounded nesting, and duplicate member
-\  names after unescaping.  Every decoded value string has an independent
-\  4096-byte bound, and unknown nested values are parsed completely.
+\  names after unescaping.  Decoded member names and their aggregate staging
+\  have a 4096-byte bound.  Decoded value strings use the document-sized
+\  value bound, and unknown nested values are parsed completely.
 \  Publication invalidates the descriptor before copying and writes its
 \  magic last.  Unexpected validation/staging THROW is mapped to INTERNAL
 \  only after admitted outputs and workspace are scrubbed successfully.
@@ -89,7 +90,9 @@ REQUIRE ../../utils/caller-span.f
 65536 CONSTANT JOSE-JSON-MAX-DOCUMENT-BYTES
 32    CONSTANT JOSE-JSON-MAX-DEPTH
 64    CONSTANT JOSE-JSON-MAX-MEMBERS
-4096  CONSTANT JOSE-JSON-MAX-STRING-BYTES
+4096  CONSTANT JOSE-JSON-MAX-NAME-BYTES
+JOSE-JSON-MAX-DOCUMENT-BYTES
+CONSTANT JOSE-JSON-MAX-VALUE-STRING-BYTES
 
 72 CONSTANT JOSE-JSON-STRING-WORKSPACE-SIZE
 
@@ -167,7 +170,7 @@ REQUIRE ../../utils/caller-span.f
     DUP 0< IF 2DROP R> DROP 0 EXIT THEN
     OVER 0< IF 2DROP R> DROP 0 EXIT THEN
     OVER R@ U> IF 2DROP R> DROP 0 EXIT THEN
-    R@ ROT - U<=
+    R@ ROT - U> 0=
     R> DROP ;
 
 : _JJO-DESCRIPTOR-ENTRIES-VALID?  ( descriptor -- flag )
@@ -205,7 +208,7 @@ REQUIRE ../../utils/caller-span.f
     DUP _JJD.COUNT @ DUP 0< IF 2DROP 0 EXIT THEN
     OVER _JJD.CAPACITY @ > IF DROP 0 EXIT THEN
     DUP _JJD.NAMES-U @ DUP 0< IF 2DROP 0 EXIT THEN
-    JOSE-JSON-MAX-STRING-BYTES > IF DROP 0 EXIT THEN
+    JOSE-JSON-MAX-NAME-BYTES > IF DROP 0 EXIT THEN
     DUP _JJD.SOURCE-U @ DUP 0< IF 2DROP 0 EXIT THEN
     JOSE-JSON-MAX-DOCUMENT-BYTES > IF DROP 0 EXIT THEN
     DUP _JJD.RESERVED @ IF DROP 0 EXIT THEN
@@ -296,7 +299,7 @@ _JJO-KEY-STAGE-OFF
     JOSE-JSON-MAX-MEMBERS 16 * +
 CONSTANT _JJO-NAME-STAGE-OFF
 _JJO-NAME-STAGE-OFF
-    JOSE-JSON-MAX-STRING-BYTES +
+    JOSE-JSON-MAX-NAME-BYTES +
 CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
 
 : _JJW.SOURCE          ( w -- a ) _JJW-SOURCE + ;
@@ -828,14 +831,17 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
 
 : _JJO-VALUE-STRING  ( workspace -- status )
     \ Object member names share the decoded-name staging cursor.  Save that
-    \ cursor while a value string is measured against the independent
-    \ per-string bound, then restore it before the enclosing parse resumes.
+    \ cursor while a value string is measured against the document-sized
+    \ value bound, then restore the name limit before parsing resumes.
     DUP _JJW.EMIT-USED @ OVER _JJW.RESERVED0 !
     DUP _JJW.EMIT-MODE @ OVER _JJW.RESERVED1 !
     1 OVER _JJW.EMIT-MODE !
     0 OVER _JJW.EMIT-USED !
+    JOSE-JSON-MAX-VALUE-STRING-BYTES
+        OVER _JJW.EMIT-CAPACITY !
     DUP _JJO-STRING
     >R
+    JOSE-JSON-MAX-NAME-BYTES OVER _JJW.EMIT-CAPACITY !
     DUP _JJW.RESERVED1 @ OVER _JJW.EMIT-MODE !
     DUP _JJW.RESERVED0 @ SWAP _JJW.EMIT-USED !
     R> ;
@@ -1048,9 +1054,9 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     2DROP 2DROP 2DROP DROP ;
 
 : _JJO-PARSE-PREFLIGHT-RETURN
-  ( source source-u descriptor member-capacity
-    names names-capacity status -- status )
-    >R _JJO-DROP6 R> R> DROP ;
+  \ ( source source-u descriptor member-capacity
+  \   names names-capacity status -- status )
+    >R _JJO-DROP6 R> ;
 
 : _JJO-OUTPUT-ALIASED?  ( workspace -- flag )
     DUP _JJW.MEMBER-CAPACITY @ JOSE-JSON-OBJECT-BYTES
@@ -1100,8 +1106,8 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     DROP R> DROP ;
 
 : _JJO-BIND
-  ( source source-u descriptor member-capacity
-    names names-capacity workspace -- workspace )
+  \ ( source source-u descriptor member-capacity
+  \   names names-capacity workspace -- workspace )
     DUP JOSE-JSON-OBJECT-WORKSPACE-SIZE 0 FILL
     6 PICK OVER _JJW.SOURCE !
     5 PICK OVER _JJW.SOURCE-U !
@@ -1117,7 +1123,7 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     THEN
 
     DUP _JJO-STAGED-NAMES OVER _JJW.EMIT-A !
-    JOSE-JSON-MAX-STRING-BYTES OVER _JJW.EMIT-CAPACITY !
+    JOSE-JSON-MAX-NAME-BYTES OVER _JJW.EMIT-CAPACITY !
     1 OVER _JJW.DEPTH !
 
     DUP _JJO-TOP-OBJECT
@@ -1134,8 +1140,8 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     DROP JOSE-JSON-S-OK ;
 
 : _JJO-PARSE-ADMITTED
-  ( source source-u descriptor member-capacity
-    names names-capacity workspace -- status )
+  \ ( source source-u descriptor member-capacity
+  \   names names-capacity workspace -- status )
     _JJO-BIND _JJO-PARSE-STAGE ;
 
 : _JJO-CLEAR-DESCRIPTOR  ( descriptor member-capacity -- )
@@ -1143,15 +1149,15 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     JOSE-JSON-OBJECT-BYTES DROP 0 FILL ;
 
 : _JJO-CLEAR-NAMES  ( names names-capacity -- )
-    JOSE-JSON-MAX-STRING-BYTES MIN 0 FILL ;
+    JOSE-JSON-MAX-NAME-BYTES MIN 0 FILL ;
 
 : _JJO-PARSE-THROW-CLEAN
-  ( source source-u descriptor member-capacity
-    names names-capacity workspace -- )
-    4 PICK 4 PICK _JJO-CLEAR-DESCRIPTOR
-    2 PICK 2 PICK _JJO-CLEAR-NAMES
-    DUP _JJO-OBJECT-WORKSPACE-ZERO
-    _JJO-DROP7 ;
+  \ ( descriptor member-capacity names names-capacity workspace -- )
+    >R
+    3 PICK 3 PICK _JJO-CLEAR-DESCRIPTOR
+    1 PICK 1 PICK _JJO-CLEAR-NAMES
+    2DROP 2DROP
+    R> _JJO-OBJECT-WORKSPACE-ZERO ;
 
 : _JJO-PUBLISH-CALL  ( workspace -- )
     ['] _JJO-PUBLISH
@@ -1159,16 +1165,26 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     _JJO-CALL-FINALLY ;
 
 : _JJO-PARSE-CALL
-  ( source source-u descriptor member-capacity
-    names names-capacity workspace xt -- status )
+  \ ( source source-u descriptor member-capacity
+  \   names names-capacity workspace xt -- status )
+    \ KDOS CATCH restores depth after THROW, not the values in cells consumed
+    \ by the caught operation.  Preserve authoritative cleanup geometry below
+    \ CATCH's return-stack frame.  These R> operations must remain inline:
+    \ a called helper would put its own return address above the saved cells.
     1 PICK >R
+    2 PICK >R
+    3 PICK >R
+    4 PICK >R
+    5 PICK >R
     CATCH
     DUP IF
         DROP
-        _JJO-PARSE-THROW-CLEAN
-        R> DROP JOSE-JSON-S-INTERNAL EXIT
+        _JJO-DROP7
+        R> R> R> R> R> _JJO-PARSE-THROW-CLEAN
+        JOSE-JSON-S-INTERNAL EXIT
     THEN
     DROP
+    R> DROP R> DROP R> DROP R> DROP
     DUP IF
         R@ _JJO-OBJECT-WORKSPACE-ZERO
         R> DROP EXIT
@@ -1187,42 +1203,44 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     \ have passed the platform caller-memory boundary.
     R@ JOSE-JSON-OBJECT-WORKSPACE-SIZE
         _JJO-CALLER-SPAN>STATUS ?DUP IF
-        _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
     5 PICK 5 PICK _JJO-CALLER-SPAN>STATUS ?DUP IF
-        _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
     4 PICK JOSE-JSON-MAX-DOCUMENT-BYTES > IF
         JOSE-JSON-S-DOCUMENT
-        _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
     2DUP _JJO-CALLER-SPAN>STATUS ?DUP IF
-        _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
 
     2 PICK JOSE-JSON-OBJECT-BYTES
     DUP IF
-        NIP _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        NIP _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
     DROP
     4 PICK OVER _JJO-CALLER-SPAN>STATUS ?DUP IF
-        SWAP DROP _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        SWAP DROP _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
 
     4 PICK OVER R@ JOSE-JSON-OBJECT-WORKSPACE-SIZE
         MSPAN-OVERLAP? IF
         DROP JOSE-JSON-S-ALIAS
-        _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
     DROP
 
     5 PICK 5 PICK R@ JOSE-JSON-OBJECT-WORKSPACE-SIZE
         MSPAN-OVERLAP? IF
-        JOSE-JSON-S-ALIAS _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        JOSE-JSON-S-ALIAS
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
     2DUP R@ JOSE-JSON-OBJECT-WORKSPACE-SIZE
         MSPAN-OVERLAP? IF
-        JOSE-JSON-S-ALIAS _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        JOSE-JSON-S-ALIAS
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
 
     \ Complete source/descriptor/names table alias admission before entering
@@ -1230,14 +1248,17 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     \ prefixes, participate in these checks.
     5 PICK 5 PICK 5 PICK 5 PICK
     JOSE-JSON-OBJECT-BYTES DROP MSPAN-OVERLAP? IF
-        JOSE-JSON-S-ALIAS _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        JOSE-JSON-S-ALIAS
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
     5 PICK 5 PICK 3 PICK 3 PICK MSPAN-OVERLAP? IF
-        JOSE-JSON-S-ALIAS _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        JOSE-JSON-S-ALIAS
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
     3 PICK 3 PICK JOSE-JSON-OBJECT-BYTES DROP
     3 PICK 3 PICK MSPAN-OVERLAP? IF
-        JOSE-JSON-S-ALIAS _JJO-PARSE-PREFLIGHT-RETURN EXIT
+        JOSE-JSON-S-ALIAS
+        _JJO-PARSE-PREFLIGHT-RETURN R> DROP EXIT
     THEN
 
     R> ['] _JJO-PARSE-ADMITTED _JJO-PARSE-CALL ;
@@ -1280,7 +1301,7 @@ CONSTANT JOSE-JSON-OBJECT-WORKSPACE-SIZE
     DUP R@ _JJW.SOURCE-U ! DROP
     DUP R@ _JJW.SOURCE ! DROP
     1 R@ _JJW.EMIT-MODE !
-    JOSE-JSON-MAX-STRING-BYTES R@ _JJW.EMIT-CAPACITY !
+    JOSE-JSON-MAX-VALUE-STRING-BYTES R@ _JJW.EMIT-CAPACITY !
 
     R>
     ['] _JJO-STRING-MEASURE-RUN
@@ -1381,7 +1402,7 @@ _JJO-NAME-STAGE-OFF <> [IF]
 [THEN]
 
 _JJO-NAME-STAGE-OFF
-JOSE-JSON-MAX-STRING-BYTES +
+JOSE-JSON-MAX-NAME-BYTES +
 JOSE-JSON-OBJECT-WORKSPACE-SIZE <> [IF]
     _JJO-GEOMETRY-ABORT
 [THEN]

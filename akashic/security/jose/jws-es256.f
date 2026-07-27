@@ -131,7 +131,7 @@ JOSE-JSON-S-OK <> [IF]
 [THEN]
 CONSTANT _JJWS-DESCRIPTOR-SIZE
 
-JOSE-JSON-MAX-STRING-BYTES CONSTANT _JJWS-NAMES-SIZE
+JOSE-JSON-MAX-NAME-BYTES CONSTANT _JJWS-NAMES-SIZE
 
 \ =====================================================================
 \  Exact compact sizing
