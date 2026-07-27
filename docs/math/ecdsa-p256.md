@@ -20,6 +20,7 @@ ECDSA-P256-PRIVATE-SIZE    ( -- 32 )
 ECDSA-P256-PUBLIC-SIZE     ( -- 65 )
 ECDSA-P256-SIGNATURE-SIZE  ( -- 64 )
 ECDSA-P256-WORKSPACE-SIZE  ( -- 2064 )
+ECDSA-P256-RESERVED-OVERLAP? ( address length -- flag )
 ```
 
 Hashes and private scalars use 32-byte big-endian order. Public keys are
@@ -67,6 +68,9 @@ RANGE, PROTECTED, and PLATFORM remain distinct ECDSA statuses. Each span is
 also rejected if it intersects ECDSA's immutable subgroup-order tables,
 SHA-256's exposed reserved boundary, or the reserved boundaries exported by
 Field and P-256.
+`ECDSA-P256-RESERVED-OVERLAP?` exposes the combined P-256/Field/crypto
+footprint plus ECDSA's local tables so higher generic layers can qualify
+their own workspaces before touching caller memory.
 
 The four public spans must be pairwise disjoint. The caller must own the
 workspace exclusively from entry through return; sharing it with another task

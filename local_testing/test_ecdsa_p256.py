@@ -94,6 +94,7 @@ def _assert_source_contracts() -> None:
         "ECDSA-P256-SIGNATURE-SIZE",
         "ECDSA-P256-WORKSPACE-SIZE",
         "ECDSA-P256-STATUS-VALID?",
+        "ECDSA-P256-RESERVED-OVERLAP?",
         "ECDSA-P256-WORKSPACE-CLEAR",
         "ECDSA-P256-SIGN-HASH",
         "ECDSA-P256-VERIFY-HASH",
@@ -159,9 +160,7 @@ def _assert_source_contracts() -> None:
     assert "CALLER-SPAN-STATUS" in fixed_span
     assert "_ECP-CALLER>STATUS" in fixed_span
     assert "_ECP-SHA-SPAN>STATUS" in fixed_span
-    assert "FIELD-RESERVED-OVERLAP?" in fixed_span
-    assert "P256-RESERVED-OVERLAP?" in fixed_span
-    assert "_ECP-TABLE-OVERLAP?" in fixed_span
+    assert "ECDSA-P256-RESERVED-OVERLAP?" in fixed_span
     caller_map = _word_body(source, "_ECP-CALLER>STATUS")
     for lower, upper in (
         ("CALLER-SPAN-S-RANGE", "ECDSA-P256-S-RANGE"),
@@ -173,6 +172,11 @@ def _assert_source_contracts() -> None:
     table_overlap = _word_body(source, "_ECP-TABLE-OVERLAP?")
     assert "_ECP-N" in table_overlap
     assert "_ECP-PINV0" in table_overlap
+    reserved_overlap = _word_body(
+        source, "ECDSA-P256-RESERVED-OVERLAP?"
+    )
+    assert "P256-RESERVED-OVERLAP?" in reserved_overlap
+    assert "_ECP-TABLE-OVERLAP?" in reserved_overlap
     p256_map = _word_body(source, "_ECP-P256>STATUS")
     for lower, upper in (
         ("P256-S-ALIAS", "ECDSA-P256-S-ALIAS"),
