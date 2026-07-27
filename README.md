@@ -102,11 +102,16 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   form-component encoder supplies bounded `application/x-www-form-urlencoded`
   serialization without inheriting the legacy URL builder's global scratch.
   Opaque access, refresh, and identity tokens live in caller-owned guarded
-  storage with staged replacement, zeroization, and a generation-bound
-  one-shot lease for refresh-token rotation. Standalone RFC 9449 DPoP proof
+  storage with staged replacement and zeroization. Refresh-token rotation uses
+  a caller-owned one-shot descriptor bound to the exact token object,
+  generation, and nonce; no unleased refresh borrow or ordinary update path
+  bypasses that transaction. Standalone RFC 9449 DPoP proof
   construction derives its public JWK, obtains a fresh entropy-backed `jti`,
   hashes token68 credentials for `ath`, and signs transactionally with the
-  hardware-backed ES256 stack.
+  hardware-backed ES256 stack. Strict authorization-server metadata parsing
+  retains bounded endpoint, scope, client-authentication, signing-algorithm,
+  PKCE, PAR, response-issuer, and client-metadata capabilities without
+  importing transport, discovery, AT Protocol, or application policy.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O

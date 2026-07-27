@@ -5613,6 +5613,7 @@ VARIABLE _ca-access-seen
     ['] _ca-recv _ca-port NIO.RECV-XT !
     CODEX-DEVICE-AUTH-SIZE ALLOCATE DUP 0= _ca-assert DROP _ca-auth !
     _ca-port _ca-auth @ CODEX-DEVICE-AUTH-INIT AAUTH-S-OK = _ca-assert
+    O2TOK-S-ABSENT _CDA-TOKEN-STATUS AAUTH-S-INVALID = _ca-assert
     _ca-auth @ CDA.AUTH AAUTH.STATE @ AAUTH-STATE-SIGNED-OUT = _ca-assert
     _ca-auth @ CDA.AUTH AAUTH-BEGIN AAUTH-S-PENDING = _ca-assert
     _ca-pump-to-pending
@@ -5650,20 +5651,28 @@ VARIABLE _ca-access-seen
     _ca-auth @ CDA.WORK @ 0= _ca-assert
 
     _ca-auth @ CDA.AUTH AAUTH-REFRESH AAUTH-S-PENDING = _ca-assert
+    _ca-auth @ CDA.REFRESH-LEASE _O2LEASE.OWNER @
+    _ca-auth @ CDA.TOKENS = _ca-assert
+    _ca-auth @ CDA.TOKENS _O2TOK.LEASE-USED @ -1 = _ca-assert
     _ca-pump-to-ready
     _ca-auth @ CDA.AUTH AAUTH-READY? _ca-assert
+    _ca-auth @ CDA.REFRESH-LEASE _O2LEASE.OWNER @ 0= _ca-assert
     _ca-opens @ 3 = _ca-assert
     _ca-requests @ 5 = _ca-assert
     _ca-request _ca-request-u @ S" refresh_token" STR-STR-CONTAINS _ca-assert
 
     _ca-auth @ CDA.AUTH AAUTH-LOGOUT AAUTH-S-OK = _ca-assert
-    _ca-auth @ CDA.TOKENS O2TOK-PRESENT? 0= _ca-assert
+    _ca-auth @ CDA.TOKENS O2TOK-PRESENCE
+    O2TOK-S-OK = _ca-assert
+    0= _ca-assert
     _ca-id-token _ca-id-token-u @
     _ca-access-token _ca-access-token-u @
     S" refresh-fixture" 4102444800000 _ca-auth @
     CODEX-DEVICE-AUTH-RESTORE AAUTH-S-OK = _ca-assert
     _ca-auth @ CDA.AUTH AAUTH-READY? _ca-assert
-    _ca-auth @ CDA.TOKENS O2TOK-PRESENT? _ca-assert
+    _ca-auth @ CDA.TOKENS O2TOK-PRESENCE
+    O2TOK-S-OK = _ca-assert
+    _ca-assert
     _ca-auth @ CDA.WORK @ 0= _ca-assert
     _ca-auth @ CDA.AUTH AAUTH.ACCOUNT-ID DUP CV-DATA@ SWAP CV-LEN@
     S" account-fixture" STR-STR= _ca-assert

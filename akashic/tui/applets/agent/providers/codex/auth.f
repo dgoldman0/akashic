@@ -40,7 +40,8 @@ REQUIRE ../../../../../net/url.f
 
   0 CONSTANT _CDA-AUTH
 _CDA-AUTH AGENT-PROVIDER-AUTH-SIZE + CONSTANT _CDA-TOKENS
-_CDA-TOKENS OAUTH2-TOKEN-SET-SIZE + CONSTANT _CDA-PORT
+_CDA-TOKENS OAUTH2-TOKEN-SET-SIZE + CONSTANT _CDA-REFRESH-LEASE
+_CDA-REFRESH-LEASE OAUTH2-REFRESH-LEASE-SIZE + CONSTANT _CDA-PORT
 _CDA-PORT 8 + CONSTANT _CDA-SUBSTATE
 _CDA-SUBSTATE 8 + CONSTANT _CDA-STARTED-MS
 _CDA-STARTED-MS 8 + CONSTANT _CDA-NEXT-POLL-MS
@@ -61,6 +62,7 @@ _CDAW-CLAIMS CDA-CLAIMS-CAPACITY + CONSTANT CODEX-DEVICE-WORK-SIZE
 
 : CDA.AUTH           ( context -- auth ) _CDA-AUTH + ;
 : CDA.TOKENS         ( context -- tokens ) _CDA-TOKENS + ;
+: CDA.REFRESH-LEASE  ( context -- lease ) _CDA-REFRESH-LEASE + ;
 : CDA.PORT           ( context -- a ) _CDA-PORT + ;
 : CDA.SUBSTATE       ( context -- a ) _CDA-SUBSTATE + ;
 : CDA.STARTED-MS     ( context -- a ) _CDA-STARTED-MS + ;
@@ -122,6 +124,23 @@ VARIABLE _CDA-IOR
     _CDA-C ! _CDA-U ! _CDA-A ! _CDA-STATUS !
     _CDA-A @ _CDA-U @ _CDA-C @ CDA.AUTH AAUTH.ERROR CV-STRING! DROP
     _CDA-STATUS @ AAUTH-STATE-ERROR _CDA-C @ _CDA-AUTH-TOUCH ;
+
+: _CDA-TOKEN-STATUS  ( token-status -- auth-status )
+    CASE
+        O2TOK-S-OK OF AAUTH-S-OK ENDOF
+        O2TOK-S-INVALID OF AAUTH-S-INVALID ENDOF
+        O2TOK-S-CAPACITY OF AAUTH-S-CAPACITY ENDOF
+        O2TOK-S-BUSY OF AAUTH-S-BUSY ENDOF
+        AAUTH-S-INVALID SWAP
+    ENDCASE ;
+
+: _CDA-TOKENS-CLEAR?  ( context -- auth-status )
+    CDA.TOKENS O2TOK-CLEAR? _CDA-TOKEN-STATUS ;
+
+: _CDA-REFRESH-ABORT?  ( context -- auth-status )
+    DUP CDA.REFRESH-LEASE
+    SWAP CDA.TOKENS
+    O2TOK-REFRESH-ABORT _CDA-TOKEN-STATUS ;
 
 : _CDA-FIELD  ( object-a object-u key-a key-u -- value-a value-u flag )
     JSON-FIELD _CDA-IOR ! _CDA-FOUND ! _CDA-VU ! _CDA-VA !
@@ -188,7 +207,9 @@ VARIABLE _CDA-BUILD-TYPE-U
     _CDA-C @ _CDA-WORK-NEW ?DUP IF
         S" Insufficient memory for device login" _CDA-C @ _CDA-FAIL EXIT
     THEN
-    _CDA-C @ CDA.TOKENS O2TOK-CLEAR
+    _CDA-C @ _CDA-TOKENS-CLEAR? ?DUP IF
+        >R _CDA-C @ _CDA-WORK-FREE R> EXIT
+    THEN
     _CDA-C @ CDA.AUTH AAUTH-METADATA-CLEAR
     MS@ DUP _CDA-C @ CDA.STARTED-MS !
     CDA-LOGIN-TIMEOUT-MS + _CDA-C @ CDA.AUTH AAUTH.EXPIRES-MS !
@@ -314,20 +335,13 @@ VARIABLE _CDAR-REFRESH-U
 VARIABLE _CDAR-EXPIRES
 VARIABLE _CDAR-STATUS
 
-: _CDA-TOKEN-STATUS  ( token-status -- auth-status )
-    CASE
-        O2TOK-S-INVALID OF AAUTH-S-INVALID ENDOF
-        O2TOK-S-CAPACITY OF AAUTH-S-CAPACITY ENDOF
-        O2TOK-S-BUSY OF AAUTH-S-BUSY ENDOF
-        DROP AAUTH-S-INVALID
-    ENDCASE ;
-
 : CODEX-DEVICE-AUTH-RESTORE  ( id-a id-u access-a access-u refresh-a refresh-u expires-ms context -- status )
     _CDAR-C ! _CDAR-EXPIRES !
     _CDAR-REFRESH-U ! _CDAR-REFRESH-A !
     _CDAR-ACCESS-U ! _CDAR-ACCESS-A !
     _CDAR-ID-U ! _CDAR-ID-A !
     _CDAR-C @ 0= IF AAUTH-S-INVALID EXIT THEN
+    _CDAR-C @ CDA.AUTH AAUTH-PENDING? IF AAUTH-S-BUSY EXIT THEN
     _CDAR-C @ _CDA-TRANSIENT-CLEAR
     _CDAR-ID-A @ _CDAR-ID-U @
     _CDAR-ACCESS-A @ _CDAR-ACCESS-U @
@@ -336,16 +350,29 @@ VARIABLE _CDAR-STATUS
     DUP O2TOK-S-OK <> IF _CDA-TOKEN-STATUS EXIT THEN DROP
     _CDAR-C @ CDA.AUTH AAUTH-METADATA-CLEAR
     _CDAR-C @ _CDA-WORK-NEW ?DUP IF
-        _CDAR-C @ CDA.TOKENS O2TOK-CLEAR
-        AAUTH-STATE-SIGNED-OUT _CDAR-C @ _CDA-AUTH-TOUCH EXIT
+        >R
+        _CDAR-C @ _CDA-TOKENS-CLEAR? ?DUP IF
+            R> DROP
+            S" Restored token cleanup failed"
+            _CDAR-C @ _CDA-FAIL EXIT
+        THEN
+        R> AAUTH-STATE-SIGNED-OUT
+        _CDAR-C @ _CDA-AUTH-TOUCH EXIT
     THEN
     _CDAR-ID-A @ _CDAR-ID-U @ _CDAR-C @ _CDA-CLAIMS-METADATA
     _CDAR-STATUS !
     _CDAR-C @ _CDA-WORK-FREE
     _CDAR-STATUS @ ?DUP IF
-        _CDAR-C @ CDA.TOKENS O2TOK-CLEAR
+        >R
+        _CDAR-C @ _CDA-TOKENS-CLEAR? ?DUP IF
+            R> DROP
+            _CDAR-C @ CDA.AUTH AAUTH-METADATA-CLEAR
+            S" Restored identity cleanup failed"
+            _CDAR-C @ _CDA-FAIL EXIT
+        THEN
         _CDAR-C @ CDA.AUTH AAUTH-METADATA-CLEAR
-        AAUTH-STATE-SIGNED-OUT _CDAR-C @ _CDA-AUTH-TOUCH EXIT
+        R> AAUTH-STATE-SIGNED-OUT
+        _CDAR-C @ _CDA-AUTH-TOUCH EXIT
     THEN
     0 _CDAR-C @ CDA.STARTED-MS !
     0 _CDAR-C @ CDA.NEXT-POLL-MS !
@@ -432,11 +459,18 @@ VARIABLE _CDAR-STATUS
     _CDA-ID-A @ _CDA-ID-U @ _CDA-ACCESS-A @ _CDA-ACCESS-U @
     _CDA-REFRESH-A @ _CDA-REFRESH-U @ _CDA-EXP-MS @ _CDA-C @ CDA.TOKENS
     O2TOK-SET ?DUP IF
-        DROP AAUTH-S-CAPACITY S" OAuth tokens exceed native bounds"
+        _CDA-TOKEN-STATUS S" OAuth token transaction failed"
         _CDA-C @ _CDA-FAIL EXIT
     THEN
     _CDA-ID-A @ _CDA-ID-U @ _CDA-C @ _CDA-CLAIMS-METADATA ?DUP IF
-        S" Identity token lacks Codex account claims" _CDA-C @ _CDA-FAIL EXIT
+        >R
+        _CDA-C @ _CDA-TOKENS-CLEAR? ?DUP IF
+            R> DROP
+            S" Invalid identity cleanup failed"
+            _CDA-C @ _CDA-FAIL EXIT
+        THEN
+        R> S" Identity token lacks Codex account claims"
+        _CDA-C @ _CDA-FAIL EXIT
     THEN
     _CDA-C @ _CDA-WORK-FREE
     _CDA-C @ CDA.AUTH AAUTH.USER-CODE CV-FREE
@@ -447,7 +481,10 @@ VARIABLE _CDAR-STATUS
 
 : _CDA-HANDLE-REFRESH  ( context -- status )
     DUP _CDA-C ! CDA.EXCHANGE HBUF.HTTP-CODE @ 200 <> IF
-        _CDA-C @ CDA.TOKENS O2TOK-CLEAR
+        _CDA-C @ _CDA-TOKENS-CLEAR? ?DUP IF
+            S" Rejected refresh cleanup failed"
+            _CDA-C @ _CDA-FAIL EXIT
+        THEN
         AAUTH-S-PROTOCOL S" Session refresh was rejected" _CDA-C @ _CDA-FAIL EXIT
     THEN
     _CDA-C @ CDA.RESPONSE _CDA-C @ CDA.EXCHANGE HBUF.BODY-U @
@@ -472,14 +509,27 @@ VARIABLE _CDAR-STATUS
         0
     THEN _CDA-EXP-MS !
     _CDA-ID-A @ _CDA-ID-U @ _CDA-ACCESS-A @ _CDA-ACCESS-U @
-    _CDA-REFRESH-A @ _CDA-REFRESH-U @ _CDA-EXP-MS @ _CDA-C @ CDA.TOKENS
-    O2TOK-UPDATE ?DUP IF
-        DROP AAUTH-S-CAPACITY S" Refreshed tokens exceed native bounds"
+    _CDA-REFRESH-A @ _CDA-REFRESH-U @ _CDA-EXP-MS @
+    _CDA-C @ CDA.REFRESH-LEASE _CDA-C @ CDA.TOKENS
+    O2TOK-REFRESH-COMMIT ?DUP IF
+        >R
+        _CDA-C @ _CDA-TOKENS-CLEAR? ?DUP IF
+            R> DROP
+            S" Refresh transaction cleanup failed"
+            _CDA-C @ _CDA-FAIL EXIT
+        THEN
+        R> _CDA-TOKEN-STATUS S" Refreshed token transaction failed"
         _CDA-C @ _CDA-FAIL EXIT
     THEN
     _CDA-ID-U @ IF
         _CDA-ID-A @ _CDA-ID-U @ _CDA-C @ _CDA-CLAIMS-METADATA ?DUP IF
-            S" Refreshed identity lacks Codex account claims"
+            >R
+            _CDA-C @ _CDA-TOKENS-CLEAR? ?DUP IF
+                R> DROP
+                S" Refreshed identity cleanup failed"
+                _CDA-C @ _CDA-FAIL EXIT
+            THEN
+            R> S" Refreshed identity lacks Codex account claims"
             _CDA-C @ _CDA-FAIL EXIT
         THEN
     THEN
@@ -510,6 +560,13 @@ VARIABLE _CDAR-STATUS
         DROP AAUTH-S-PENDING EXIT
     THEN
     DUP HBUF-S-OK <> IF
+        _CDA-POLL-C @ CDA.SUBSTATE @ CDA-SUB-REFRESH = IF
+            _CDA-POLL-C @ _CDA-TOKENS-CLEAR? ?DUP IF
+                >R DROP R>
+                S" Refresh transport cleanup failed"
+                _CDA-POLL-C @ _CDA-FAIL EXIT
+            THEN
+        THEN
         DROP AAUTH-S-TRANSPORT S" Authentication transport failed"
         _CDA-POLL-C @ _CDA-FAIL EXIT
     THEN DROP
@@ -520,11 +577,12 @@ VARIABLE _CDAR-STATUS
             _CDA-POLL-C @ _CDA-HANDLE-TOKEN-EXCHANGE
         ENDOF
         CDA-SUB-REFRESH OF _CDA-POLL-C @ _CDA-HANDLE-REFRESH ENDOF
-        AAUTH-S-PROTOCOL
+        AAUTH-S-PROTOCOL SWAP
     ENDCASE ;
 
 : _CDA-CANCEL  ( context -- status )
     DUP _CDA-C ! _CDA-TRANSIENT-CLEAR
+    _CDA-C @ _CDA-TOKENS-CLEAR? ?DUP IF EXIT THEN
     _CDA-C @ CDA.AUTH AAUTH.USER-CODE CV-FREE
     _CDA-C @ CDA.AUTH AAUTH.VERIFY-URI CV-FREE
     0 _CDA-C @ CDA.AUTH AAUTH.EXPIRES-MS !
@@ -532,7 +590,7 @@ VARIABLE _CDAR-STATUS
 
 : _CDA-LOGOUT  ( context -- status )
     DUP _CDA-C ! _CDA-TRANSIENT-CLEAR
-    _CDA-C @ CDA.TOKENS O2TOK-CLEAR
+    _CDA-C @ _CDA-TOKENS-CLEAR? ?DUP IF EXIT THEN
     _CDA-C @ CDA.AUTH AAUTH-METADATA-CLEAR
     AAUTH-S-OK AAUTH-STATE-SIGNED-OUT _CDA-C @ _CDA-AUTH-TOUCH ;
 
@@ -567,14 +625,36 @@ VARIABLE _CDA-REFRESH-C
         AAUTH-S-BUSY EXIT
     THEN
     _CDA-C @ _CDA-WORK-NEW ?DUP IF EXIT THEN
-    ['] _CDA-REFRESH-BODY _CDA-C @ _CDA-C @ CDA.TOKENS
-    O2TOK-WITH-REFRESH ?DUP IF
-        DROP _CDA-C @ _CDA-WORK-FREE AAUTH-S-INVALID EXIT
+    _CDA-C @ CDA.REFRESH-LEASE _CDA-C @ CDA.TOKENS
+    O2TOK-REFRESH-BEGIN ?DUP IF
+        _CDA-C @ _CDA-WORK-FREE
+        _CDA-TOKEN-STATUS EXIT
+    THEN
+    ['] _CDA-REFRESH-BODY _CDA-C @
+    _CDA-C @ CDA.REFRESH-LEASE _CDA-C @ CDA.TOKENS
+    O2TOK-WITH-REFRESH-LEASE ?DUP IF
+        >R
+        _CDA-C @ _CDA-REFRESH-ABORT?
+        _CDA-C @ _CDA-WORK-FREE
+        ?DUP IF
+            R> DROP
+            S" Refresh body cleanup failed"
+            _CDA-C @ _CDA-FAIL EXIT
+        THEN
+        R> DROP AAUTH-S-INVALID EXIT
     THEN
     CDA-SUB-REFRESH _CDA-C @ CDA.SUBSTATE !
     CODEX-AUTH-TOKEN-PATH S" application/json" _CDA-C @
     _CDA-START-REQUEST DUP AAUTH-S-PENDING <> IF
-        _CDA-C @ _CDA-WORK-FREE EXIT
+        >R
+        _CDA-C @ _CDA-REFRESH-ABORT?
+        _CDA-C @ _CDA-TRANSIENT-CLEAR
+        ?DUP IF
+            R> DROP
+            S" Refresh start cleanup failed"
+            _CDA-C @ _CDA-FAIL EXIT
+        THEN
+        R> EXIT
     THEN
     DROP AAUTH-S-PENDING AAUTH-STATE-REFRESHING _CDA-C @ _CDA-AUTH-TOUCH ;
 
@@ -592,6 +672,7 @@ VARIABLE _CDAN-C
     _CDAN-C @ CODEX-DEVICE-AUTH-SIZE 0 FILL
     _CDAN-C @ CDA.AUTH AAUTH-INIT
     _CDAN-C @ CDA.TOKENS O2TOK-INIT
+    _CDAN-C @ CDA.REFRESH-LEASE O2TOK-REFRESH-LEASE-INIT
     _CDAN-PORT @ _CDAN-C @ CDA.PORT !
     AAUTH-M-DEVICE _CDAN-C @ CDA.AUTH AAUTH.METHODS !
     AAUTH-STATE-SIGNED-OUT _CDAN-C @ CDA.AUTH AAUTH.STATE !

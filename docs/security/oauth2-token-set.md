@@ -26,7 +26,8 @@ buffer O2TOK-INIT?  ( -- status )
 Initialization validates the complete object span, wipes it, initializes its
 embedded spin guard, and starts a nonzero generation. Reinitialization is
 only valid while the caller has exclusive ownership; it is not a concurrent
-reset operation.
+reset operation. An active refresh lease makes reinitialization `BUSY`; clear
+the token object first so its descriptor is invalidated.
 
 `O2TOK-CLEAR? ( tokens -- status )` acquires the object guard, zeroizes all
 live and staged token capacity, clears any refresh lease, and advances the
@@ -35,10 +36,14 @@ convenience surface. Clear returns `BUSY` through `O2TOK-CLEAR?` while a
 callback is borrowing bytes. An active refresh lease does not prevent an
 explicit clear, so logout can invalidate an in-flight result.
 
-`O2TOK-PRESENT? ( tokens -- flag )` is true when a usable access token is
-present. Refresh and identity tokens are independently optional.
+`O2TOK-PRESENCE ( tokens -- present? status )` reports whether a nonempty access
+token is stored. `O2TOK-S-OK` makes the flag authoritative; guard contention
+and admission/object failures return an explicit status instead of being
+collapsed into false. Presence does not inspect the expiration cell or assert
+that a token is currently usable. Refresh and identity tokens are
+independently optional.
 
-## Set and update
+## Initial publication
 
 The public capacities remain:
 
@@ -53,21 +58,28 @@ O2TOK-SET
   ( id-a id-u access-a access-u refresh-a refresh-u
     expires-ms tokens -- status )
 
-O2TOK-UPDATE
-  ( id-a id-u access-a access-u refresh-a refresh-u
-    expires-ms tokens -- status )
 ```
 
-`SET` requires a nonempty access token. Refresh and identity tokens are
-optional. `UPDATE` requires an existing usable access token; a zero length
-retains the corresponding token, and an expiration of zero retains the
-current expiration. Expiration values are nonnegative; a negative value is
-rejected before the object is locked.
+`SET` publishes the result of an initial authorization grant into an empty
+object and requires a nonempty access token. Refresh and identity tokens are
+optional. A populated object returns `BUSY`; callers must explicitly clear it
+before starting or restoring a different authorization. Expiration values are
+nonnegative; a negative value is rejected before the object is locked.
+
+There is deliberately no general update word. Once a refresh credential has
+been stored, replacement access, refresh, and identity tokens can be published
+only by the lease-mediated refresh transaction below. This prevents an
+unleased refresh launch followed by an ordinary update from bypassing
+single-use rotation.
 
 Every complete source span and the complete token object are qualified before
 the guard is acquired. Any nonempty source overlapping any part of the token
 object is rejected. Source/source overlap is harmless and accepted because
-sources are read-only.
+sources are read-only. The caller must keep every admitted source byte stable,
+readable, and immutable until the operation returns; the object guard cannot
+synchronize memory owned by another component. The module never owns or wipes
+source storage, so callers should erase superseded source copies—especially
+the initial refresh credential—after successful publication.
 
 Replacement bytes are copied into the object's guarded staging area before
 any current token is wiped. Publication then zeroizes every live capacity,
@@ -76,14 +88,13 @@ entire staging area. Failed geometry and lease checks do not alter tokens.
 Unexpected admitted-memory faults propagate after guard release and staging
 cleanup.
 
-While a refresh lease is active, ordinary `SET` and `UPDATE` return `BUSY`;
-rotation must use `O2TOK-REFRESH-COMMIT`.
+While a refresh lease is active, `SET` returns `BUSY`; rotation must use
+`O2TOK-REFRESH-COMMIT`.
 
 ## Callback borrows
 
 ```forth
 O2TOK-WITH-ACCESS   ( callback context tokens -- callback-status )
-O2TOK-WITH-REFRESH  ( callback context tokens -- callback-status )
 O2TOK-WITH-ID       ( callback context tokens -- callback-status )
 ```
 
@@ -101,15 +112,20 @@ return. On ordinary return, the callback's single status cell is passed
 through unchanged, so application callback statuses need not belong to the
 `O2TOK` status vocabulary.
 
-`O2TOK-WITH-REFRESH` is an ordinary opaque borrow. A caller preparing a
-refresh-token grant must use the lease path below, which prevents a generally
-single-use refresh token from being launched twice.
+There is no unleased refresh-token borrow. Refresh bytes are exposed only by
+the one-shot lease callback below.
 
 ## Refresh lease transaction
 
 ```forth
+OAUTH2-REFRESH-LEASE-SIZE
+
+lease O2TOK-REFRESH-LEASE-INIT
+\ or:
+lease O2TOK-REFRESH-LEASE-INIT?  ( -- status )
+
 O2TOK-REFRESH-BEGIN
-  ( tokens -- lease status )
+  ( lease tokens -- status )
 
 O2TOK-WITH-REFRESH-LEASE
   ( callback context lease tokens -- callback-status )
@@ -122,9 +138,16 @@ O2TOK-REFRESH-ABORT
   ( lease tokens -- status )
 ```
 
-`BEGIN` atomically creates one opaque, nonzero lease bound to the current
-token generation. A second begin returns `BUSY`; a set without a refresh
-token returns `ABSENT`.
+Each asynchronous refresh context owns an
+`OAUTH2-REFRESH-LEASE-SIZE`-byte descriptor. Initialize it under exclusive
+ownership before first use and keep the descriptor admitted, disjoint from
+the token object, and stable until a terminal commit, abort, or token clear.
+A descriptor must not be shared by concurrent refresh operations.
+
+`BEGIN` atomically binds a free descriptor to the exact token-object address,
+current generation, and a nonzero per-object nonce. A descriptor active for
+another transaction and a second begin both return `BUSY`; a set without a
+refresh token returns `ABSENT`. Descriptor/object overlap returns `ALIAS`.
 
 `WITH-REFRESH-LEASE` validates that exact lease and permits exactly one
 callback invocation. It marks the lease consumed before invoking the
@@ -134,28 +157,32 @@ leaves the lease active and consumed, preventing an accidental second launch.
 The caller must later commit the response or explicitly abort when it knows
 the refresh token was not spent.
 
-`COMMIT` requires the active lease, its original generation, the completed
-one-shot borrow, and a nonempty replacement access token. Zero-length identity
-and refresh fields retain their current values, as does an expiration of zero.
-The operation stages the complete replacement, zeroizes retired secrets,
-advances generation, and clears the lease atomically.
+`COMMIT` requires a descriptor bound to that exact token object, its original
+generation and nonce, the completed one-shot borrow, and a nonempty replacement
+access token. A descriptor from another object is `STALE`, even when both
+objects happen to have equal generations and nonce values. Descriptor/source
+overlap is rejected. Zero-length identity and refresh fields retain their
+current values, as does an expiration of zero. The operation stages the
+complete replacement, zeroizes retired secrets, advances generation, and
+invalidates the descriptor atomically.
 
-`ABORT` clears only the matching lease and does not change token bytes or
-generation. A mismatched lease or a result invalidated by clear returns
-`STALE`. Lease values are opaque and must not be derived from generation
-numbers.
+`ABORT` invalidates only the matching descriptor and does not change token
+bytes or generation. A mismatched descriptor or a result invalidated by clear
+returns `STALE`. `O2TOK-CLEAR?` also invalidates the active descriptor.
+Descriptor fields are private transaction metadata and must not be inspected
+or modified by callers.
 
 ## Status values
 
 | Status | Meaning |
 |---|---|
 | `O2TOK-S-OK` | Operation completed. |
-| `O2TOK-S-INVALID` | Invalid object, callback, lease value, or object state. |
+| `O2TOK-S-INVALID` | Invalid object, callback, lease descriptor, or object state. |
 | `O2TOK-S-CAPACITY` | A source length exceeds its public token capacity. |
 | `O2TOK-S-ABSENT` | A required token or token set is absent. |
 | `O2TOK-S-BUSY` | The guard, borrow state, active lease, or one-shot use prevents the operation. |
 | `O2TOK-S-CALLBACK` | A token callback threw. |
-| `O2TOK-S-ALIAS` | A source overlaps the mutable token object. |
+| `O2TOK-S-ALIAS` | A source, lease descriptor, or token object has a forbidden overlap. |
 | `O2TOK-S-STALE` | The supplied refresh lease is not the active generation-bound lease. |
 | `O2TOK-S-RANGE` | A complete caller span has invalid or unmapped geometry. |
 | `O2TOK-S-PROTECTED` | A caller span intersects protected platform storage. |

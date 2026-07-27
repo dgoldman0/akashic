@@ -25,6 +25,17 @@ SOURCE = (
     / "oauth2"
     / "token-set.f"
 )
+AUTH_SOURCE = (
+    LOCAL_TESTING.parent
+    / "akashic"
+    / "tui"
+    / "applets"
+    / "agent"
+    / "providers"
+    / "codex"
+    / "auth.f"
+)
+HARNESS_SOURCE = LOCAL_TESTING / "akashic_tui.py"
 
 AUTOEXEC = r"""\ autoexec.f - opaque OAuth token ownership contracts
 ENTER-USERLAND
@@ -46,6 +57,8 @@ def _word_body(source: str, name: str) -> str:
 
 def _assert_source_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
+    auth = AUTH_SOURCE.read_text(encoding="utf-8")
+    harness_source = HARNESS_SOURCE.read_text(encoding="utf-8")
     lowered = source.lower()
 
     assert not re.search(
@@ -75,15 +88,16 @@ def _assert_source_contracts() -> None:
         "O2TOK-REFRESH-CAPACITY",
         "O2TOK-ID-CAPACITY",
         "OAUTH2-TOKEN-SET-SIZE",
+        "OAUTH2-REFRESH-LEASE-SIZE",
         "O2TOK-INIT?",
         "O2TOK-INIT",
+        "O2TOK-REFRESH-LEASE-INIT?",
+        "O2TOK-REFRESH-LEASE-INIT",
         "O2TOK-CLEAR?",
         "O2TOK-CLEAR",
-        "O2TOK-PRESENT?",
+        "O2TOK-PRESENCE",
         "O2TOK-SET",
-        "O2TOK-UPDATE",
         "O2TOK-WITH-ACCESS",
-        "O2TOK-WITH-REFRESH",
         "O2TOK-WITH-ID",
         "O2TOK-REFRESH-BEGIN",
         "O2TOK-WITH-REFRESH-LEASE",
@@ -104,7 +118,27 @@ def _assert_source_contracts() -> None:
         r"(?m)^4096 CONSTANT O2TOK-REFRESH-CAPACITY$", source
     )
     assert re.search(r"(?m)^8192 CONSTANT O2TOK-ID-CAPACITY$", source)
+    assert re.search(
+        r"(?m)^32[ \t]+CONSTANT OAUTH2-REFRESH-LEASE-SIZE$", source
+    )
     assert not re.search(r"(?i)\b(?:v2|compat(?:ibility)?)\b", source)
+    assert not re.search(
+        r"(?m)^:[ \t]+O2TOK-UPDATE(?=[ \t\r\n(])", source
+    )
+    assert not re.search(
+        r"(?m)^:[ \t]+O2TOK-WITH-REFRESH(?=[ \t\r\n(])", source
+    )
+    assert not re.search(
+        r"(?m)^:[ \t]+O2TOK-PRESENT\?(?=[ \t\r\n(])", source
+    )
+    assert not re.search(r"(?m)^:[ \t]+O2TOK\.REFRESH(?:-U)?\b", source)
+    for retired in (
+        r"\bO2TOK-UPDATE\b",
+        r"\bO2TOK-WITH-REFRESH(?!-LEASE)\b",
+        r"\bO2TOK-PRESENT\?",
+    ):
+        assert not re.search(retired, auth)
+        assert not re.search(retired, harness_source)
 
     object_status = _word_body(source, "_O2TOK-OBJECT-STATUS")
     assert "OAUTH2-TOKEN-SET-SIZE _O2TOK-ADMIT-SPAN" in object_status
@@ -113,9 +147,8 @@ def _assert_source_contracts() -> None:
     assert "OAUTH2-TOKEN-SET-SIZE MSPAN-OVERLAP?" in source_status
 
     set_geometry = _word_body(source, "_O2TOK-SET-GEOMETRY")
-    update_geometry = _word_body(source, "_O2TOK-UPDATE-GEOMETRY")
     commit_geometry = _word_body(source, "_O2TOK-COMMIT-GEOMETRY")
-    for body in (set_geometry, update_geometry, commit_geometry):
+    for body in (set_geometry, commit_geometry):
         assert "_O2TOK-OBJECT-STATUS" in body
         assert body.count("_O2TOK-SOURCE-STATUS") == 3
         assert not re.search(
@@ -124,20 +157,21 @@ def _assert_source_contracts() -> None:
             body,
         ), "geometry must not mutate caller storage"
     assert "1 PICK 0<" in set_geometry
-    assert "1 PICK 0<" in update_geometry
     assert "2 PICK 0<" in commit_geometry
+    assert "_O2TOK-LEASE-DESC-STATUS" in commit_geometry
+    assert commit_geometry.count("_O2TOK-LEASE-SOURCE-OVERLAP?") == 3
     assert (
         "6 PICK 6 PICK O2TOK-ACCESS-CAPACITY -1 4 PICK"
         in commit_geometry
     )
 
     set_body = _word_body(source, "_O2TOK-SET-BODY")
-    update_body = _word_body(source, "_O2TOK-UPDATE-BODY")
     commit_body = _word_body(source, "_O2TOK-COMMIT-BODY")
-    for body in (set_body, update_body, commit_body):
+    for body in (set_body, commit_body):
         assert body.index("_O2TOK-STAGE-ALL") < body.index(
             "_O2TOK-PUBLISH-STAGE"
         )
+    assert "_O2TOK-PRESENT-LOCKED?" in set_body
     assert "_O2TOK-LEASE-MATCH?" in commit_body
     assert "_O2TOK-MODE-COMMIT" in commit_body
 
@@ -145,7 +179,7 @@ def _assert_source_contracts() -> None:
     assert publish.index("_O2TOK-WIPE-LIVE") < publish.index(
         "_O2TOK.STAGE-ACCESS R@ O2TOK.ACCESS"
     )
-    assert publish.index("_O2TOK.STAGE-REFRESH R@ O2TOK.REFRESH") < (
+    assert publish.index("_O2TOK.STAGE-REFRESH R@ _O2TOK.REFRESH") < (
         publish.index("_O2TOK-WIPE-STAGE")
     )
     assert "O2TOK.GENERATION _O2TOK-NEXT-NONZERO" in publish
@@ -168,25 +202,46 @@ def _assert_source_contracts() -> None:
     assert "_O2TOK.LEASE-ID @" in begin
     assert "_O2TOK.LEASE-SEQUENCE _O2TOK-NEXT-NONZERO" in begin
     assert "O2TOK.GENERATION @" in begin
+    assert "_O2TOK-LEASE-DESC-STATUS" in begin
+    assert "_O2LEASE.OWNER" in begin
+    assert "_O2LEASE.GENERATION" in begin
+    assert "_O2LEASE.ID" in begin
 
     abort = _word_body(source, "O2TOK-REFRESH-ABORT")
     assert "_O2TOK-LEASE-MATCH?" in abort
     assert "_O2TOK-CLEAR-LEASE" in abort
     assert "O2TOK.GENERATION _O2TOK-NEXT-NONZERO" not in abort
 
+    token_status = _word_body(auth, "_CDA-TOKEN-STATUS")
+    assert "AAUTH-S-INVALID SWAP" in token_status
+    assert "DROP AAUTH-S-INVALID" not in token_status
+    codex_refresh = _word_body(auth, "_CDA-REFRESH")
+    assert "O2TOK-REFRESH-BEGIN" in codex_refresh
+    assert "O2TOK-WITH-REFRESH-LEASE" in codex_refresh
+    assert codex_refresh.count("_CDA-REFRESH-ABORT?") == 2
+    assert "_CDA-TRANSIENT-CLEAR" in codex_refresh
+    assert "O2TOK-CLEAR" not in codex_refresh
+    for terminal in ("_CDA-CANCEL", "_CDA-LOGOUT"):
+        assert "_CDA-TOKENS-CLEAR?" in _word_body(auth, terminal)
+    assert "CDA.REFRESH-LEASE _O2LEASE.OWNER @" in harness_source
+    assert "CDA.TOKENS _O2TOK.LEASE-USED @ -1 =" in harness_source
+
     fixture = CONTRACT.read_text(encoding="utf-8")
     for test_word in (
         "_otst-test-set-stage-and-alias",
         "_otst-test-optional-refresh-and-id",
-        "_otst-test-update-and-borrow",
+        "_otst-test-access-borrow",
         "_otst-test-lease-throw-and-abort",
         "_otst-test-lease-commit",
+        "_otst-test-cross-object-lease",
         "_otst-test-clear-invalidates-lease",
     ):
         assert test_word in fixture
     assert "O2TOK-S-CALLBACK" in fixture
     assert "O2TOK-S-STALE" in fixture
     assert "_O2TOK.STAGE-ACCESS" in fixture
+    assert "_otst-tokens-b" in fixture
+    assert "_O2LEASE.OWNER" in fixture
 
 
 def main() -> int:
