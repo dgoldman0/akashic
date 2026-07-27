@@ -98,7 +98,9 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   layer, while strict compact JWS composes canonical Base64url, protected
   JSON, and ES256 without importing JWT or OAuth claim policy. The standalone
   OAuth utility layer begins with checked RFC 7636 PKCE S256 generation and
-  derivation backed by hardware entropy and SHA-256.
+  derivation backed by hardware entropy and SHA-256. A separate stateless
+  form-component encoder supplies bounded `application/x-www-form-urlencoded`
+  serialization without inheriting the legacy URL builder's global scratch.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
