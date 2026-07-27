@@ -51,6 +51,7 @@ SR3_DOC = (
     / "sr3-operational-durability.md"
 )
 INTEGRATION_DOC = SR3_DOC.with_name("information-integration.md")
+STREAMS_DOC = SR3_DOC.with_name("streams.md")
 
 FORTH_WORD_DEFINITION_RES = (
     re.compile(r"(?m)^\s*:\s+(?P<name>\S+)"),
@@ -720,27 +721,74 @@ def test_streams_sr3_endpoint_policy_is_pinned_only() -> None:
     }
 
 
-def test_streams_sr3_operational_contract_is_linked_and_in_progress() -> None:
+def test_streams_sr3_operational_contract_is_linked_and_complete() -> None:
     sr3_doc = SR3_DOC.read_text(encoding="utf-8")
     integration_doc = INTEGRATION_DOC.read_text(encoding="utf-8")
+    streams_doc = STREAMS_DOC.read_text(encoding="utf-8")
     normalized_sr3 = " ".join(sr3_doc.lower().split())
     normalized_integration = " ".join(integration_doc.lower().split())
+    normalized_streams = " ".join(streams_doc.lower().split())
 
-    assert re.search(
-        r"\*\*status:\*\*[^\n]*(?:\n[^\n]*)?in progress",
-        sr3_doc,
-        re.IGNORECASE,
-    )
+    assert "all three landings are implemented and qualified" in normalized_sr3
+    assert "sr3 is complete" in normalized_sr3
     assert (
         "[`sr3-operational-durability.md`](sr3-operational-durability.md)"
         in integration_doc
     )
-    assert "sr3 implementation is in progress" in normalized_integration
+    assert (
+        "sr2 and deterministic offline sr3 operational durability are complete"
+        in normalized_integration
+    )
+    assert "offline sr3 operational durability" in normalized_streams
+    assert "applet and live-system composition remain unearned" in (
+        normalized_streams
+    )
     assert "one bounded durable egress outbox" in normalized_sr3
     assert "current root and semantic codecs" in normalized_sr3
     assert "one egress-outbox index" in normalized_sr3
-    assert "must not leave a parallel prototype or compatibility seam behind" in (
-        normalized_sr3
+    assert (
+        "landing 3 — sr2 composition and finite retirement — qualified"
+        in normalized_sr3
     )
+    assert (
+        "closeout removed displaced prerelease paths rather than preserving "
+        "parallel implementations"
+    ) in normalized_sr3
+    assert "bank 0's page and segment files" in normalized_sr3
+    assert "zero uncompacted cleanups" in normalized_sr3
+    for stale in (
+        "landing 3 — sr2 composition and finite retirement — in progress",
+        "sr2 composition, bounded live-set compaction, and the composed "
+        "two-boot gate remain pending",
+        "does not yet complete landing 3 or sr3",
+        "the composed journey and closeout stages remain pending",
+    ):
+        assert stale not in normalized_sr3
+    for stale in (
+        "sr3 implementation is in progress",
+        "composing it with these cells remains landing 3 work",
+        "it does not yet compose an sr2 result",
+        "it does not yet claim finite physical compaction",
+    ):
+        assert stale not in normalized_integration
+    for stale in (
+        "sr3 standalone admission",
+        "runtime composition and physical compaction remain",
+        "the spool is still standalone",
+        "does not complete sr3",
+    ):
+        assert stale not in normalized_streams
+    for document in (
+        normalized_sr3,
+        normalized_integration,
+        normalized_streams,
+    ):
+        assert "streams.f" in document
+        assert "applet" in document
+        assert "desk" in document
+        assert "live http/tls" in document
+        assert "hardware" in document
+        assert "sr6 production workload/profile" in document
+        assert "unearned" in document
     for module in OPERATIONAL_MODULES:
         assert "egress outbox" in _source(module).lower()

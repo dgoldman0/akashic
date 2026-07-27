@@ -41,9 +41,12 @@ larger-body path, saturation refusal, measured cost, atomic replacement of the
 unreleased descriptor layout, and first cooperative HTTP request/response are
 qualified, including the closing interleaved connection-pressure gate. The
 runtime adds no parallel layout, ABI selector, adapter, migration, deprecation
-path, or old-layout reader. SR3 next adds separately item/byte-bounded durable
-queues/spools. SR6 qualifies supported workloads from those working paths
-without redesigning their semantics or record shapes.
+path, or old-layout reader. SR3 now completes deterministic durability with
+separately item/byte-bounded operational spools, exact acceptance and delivery
+truth, cold recovery, SR2 dispatch composition, logical cleanup, and bounded
+current-only live-set compaction. SR6 is the production workload/profile stage;
+it qualifies supported operation from those working paths without redesigning
+their semantics or record shapes.
 
 The five source/observation checkpoint capacities remain source-anchored facts
 about the older prototype. The whole-corpus observation checkpoint complexity
@@ -142,9 +145,9 @@ Current responsibility-class totals are:
 
 | Responsibility class | Modules | Lines | Lexical globals |
 | --- | ---: | ---: | ---: |
-| applet | 62 | 48,422 | 2,766 |
-| Desk ecosystem | 59 | 24,141 | 1,102 |
-| independent library | 259 | 122,295 | 7,065 |
+| applet | 96 | 94,957 | 2,383 |
+| Desk ecosystem | 61 | 24,895 | 1,154 |
+| independent library | 279 | 146,723 | 7,087 |
 
 The state digest prevents unreviewed new global declarations. Later landings
 reduce the appropriate module-global scratch/guards by moving them into explicit
@@ -201,8 +204,8 @@ the contract:
 | Streams large host/model | historical-inactive | 100,000 sources, 10,000,000 observations, and 20,000,000 retained attempts |
 | Streams SR1 | qualified prototype cell | one deterministic mock input, flow, transform, and output; one admission; payloads at most 4,096 bytes; connector operations at most 256 bytes; no storage |
 | Streams SR2 | complete deterministic qualification | bounded active-cell pool, separate payload/connection storage, named payload profiles, atomic prototype replacement, two-flow and two-connection isolation, larger-than-4-KiB body, saturation refusal, slow-peer cancellation, measured runtime cost, and cooperative HTTP |
-| Streams SR3 | next | independently item/byte-bounded queue/spool with a self-identifying current format, exact durable acceptance, retry evidence, and cold recovery |
-| Streams SR6 | deferred qualification | workload-derived supported connector, flow, in-flight, payload-mix, queue-byte/item, throughput, latency, memory, disk-amplification, and recovery profiles without runtime or format redesign |
+| Streams SR3 | complete deterministic durability | independently item/byte-bounded current-format spool, exact durable acceptance, delivery and receipt truth, cold recovery, SR2 composition, logical cleanup, and finite two-bank compaction |
+| Streams SR6 | production workload/profile stage | workload-derived supported connector, flow, in-flight, payload-mix, queue-byte/item, throughput, latency, memory, disk-amplification, and recovery profiles without runtime or format redesign |
 | Emulator | representative-reduced | Applet-specific datasets at structural transitions preserving index-height, page-count, amplification, working-set, and fault invariants |
 
 The profile also fixes query and complexity shapes: point lookup, ordered and
@@ -236,11 +239,12 @@ invented from sector counts.
 Only Library currently has isolated cycle/operation telemetry. SR2 now records
 exact cell-pool, profile, and connection workspace bytes plus deterministic
 owner-step and emulator-run observations; those journey measurements are not
-production latency or allocation telemetry. SR3 adds durable queue byte/item
-and recovery measurements, while SR6 derives supported traffic, latency, and
-resource profiles. Agent, the other data applets, and Desk/TUI remain
-explicitly marked as measurement gaps; L0 inventories that absence instead of
-presenting journey tests as operational counters.
+production latency or allocation telemetry. SR3 now records exact durable queue
+item/byte pressure, recovery, cleanup, compaction, and physical-retirement
+observations. SR6 derives production-supported traffic, latency, and resource
+profiles. Agent, the other data applets, and Desk/TUI remain explicitly marked
+as measurement gaps; L0 inventories that absence instead of presenting journey
+tests as operational counters.
 
 Committed reference points include:
 
@@ -567,3 +571,46 @@ and
 The final executable, persistence, scale-model, packaging, and cold-reopen
 results are recorded in
 `local_testing/evidence/library-l12-close-20260724.md`.
+
+## SR3 reviewed ratchet update
+
+SR3 adds one current operational durability path beneath Streams. Configuration
+and pointer-free records define connector, flow, checkpoint, attempt, payload,
+receipt, usage, and cleanup authority. The spool provides independent item and
+payload-byte admission, exact attempt identity and payload snapshots, immutable
+delivery/effect truth, visible indeterminate recovery, revision-checked logical
+cleanup, and cold structural and reclaim audits. Caller-owned dispatch is the
+only SR2/SR3 composition seam: it checks durable authority before acquiring a
+fitting cell, commits active authority before runtime effect, and retains the
+cell until terminal evidence is durable.
+
+Finite retirement uses the neutral two-bank coordinator through the current
+`akashic-streams-opcompact` consumer. It copies only the four authoritative
+primary families, rewrites their blobs incrementally, rebuilds the four derived
+index families from current meaning, carries exact reclaim ownership, publishes
+all eight roots at one shared generation, removes the old bank, and reopens the
+selected bank. No displaced Streams repository, Library module, compatibility
+format, version selector, migration, adapter, or old-layout reader enters this
+closure.
+
+The reviewed `streams-sr3-complete-20260726` tree is anchored to physical
+landing `08472587bf8363c71803d6d659991bc73049a12f`. It contains 436 production
+modules, 1,427 resolved `REQUIRE` occurrences and unique edges, 78 unchanged
+reviewed unresolved imports, no cycle, no layer violation, and no placement
+debt. The graph digest is
+`0955a5fad441d6f4d98d06d4e1f5f67946f84444949d4c929cc70c6399b92531`;
+the mutable-state digest is
+`9582642b66da7b6486d64f005f780c7e5d6a263ef8b49d662881a283a1e42c02`;
+the unchanged placement and unresolved-import digests remain
+`4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`
+and
+`98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb`.
+The only two provider issues remain the known duplicate FExplorer identity and
+its bounded-key collision; the renamed compaction provider adds none.
+
+SR3 is therefore complete deterministic durability. SR6 is now the production
+workload/profile stage for connector and flow mixes, concurrent in-flight work,
+payload and queue distributions, throughput, latency, memory, disk
+amplification, and recovery time. Those qualifications use the landed runtime
+and durable path; they do not preserve a prototype limit or introduce a second
+record shape.

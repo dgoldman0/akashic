@@ -1,8 +1,8 @@
 # Streams
 
-**Status:** older applet behavior plus complete deterministic SR2 runtime;
-SR3 standalone admission, delivery/recovery, and logical cleanup are qualified,
-while runtime composition and physical compaction remain
+**Status:** older applet behavior plus complete deterministic SR2 runtime and
+offline SR3 operational durability; applet and live-system composition remain
+unearned
 
 **Forward product contract:**
 [`information-integration.md`](information-integration.md)
@@ -53,20 +53,39 @@ AT Protocol, Library/Pad, UI, listener/TLS, or live-network composition. The
 precise current boundary and evidence are recorded in
 [`sr2-runtime-shape.md`](sr2-runtime-shape.md).
 
-Separate from that runtime, the current SR3 operational spool now implements
-one bounded durable egress outbox over the neutral persistence substrate. It
-atomically accepts exact payload snapshots, revision-checks ready-to-active
-dispatch, commits terminal effect truth and deterministic receipts, permits
-only declared exact-idempotent same-attempt requeue, refuses stale
-configuration, and cold-recovers interrupted active work as visible
-indeterminate truth. It also retires one policy-eligible terminal attempt in a
-revision-checked publication while pinning uncertain or cleanup-failed work and
-reporting exact cleanup-failure and uncompacted-cleanup counts. Its focused
-admission and delivery/recovery/cleanup gates are qualified against
-deterministic faults and repeat cold audits. The spool is still standalone: it
-is not yet fed by an SR2 result or dispatched through an SR2 cell, and bounded
-physical compaction remains Landing 3 work. It therefore does not complete SR3
-or change the live applet capability surface.
+The current SR3 operational spool implements one bounded durable egress outbox
+over the neutral persistence substrate. It atomically accepts exact payload
+snapshots, revision-checks ready-to-active dispatch, commits terminal effect
+truth and deterministic receipts, permits only declared exact-idempotent
+same-attempt requeue, refuses stale configuration, and cold-recovers
+interrupted active work as visible indeterminate truth. It retires one
+policy-eligible terminal attempt in a revision-checked publication while
+pinning uncertain or cleanup-failed work and reporting exact cleanup-failure
+and uncompacted-cleanup counts.
+
+The caller-owned operational dispatcher now snapshots an exact SR2
+output-ready result into that outbox and dispatches accepted work through a
+fitting cell without persisting runtime addresses. The finite current-shape
+compactor rebuilds the exact live set in the inactive bank, publishes and
+mirrors it, removes all physical bytes from the old bank, and cold-reopens the
+selected bank. The composed gate begins with nonempty bank 0 and empty bank 1;
+after cleanup, bank 0's page and segment files each report zero bytes, bank
+1's are nonempty, the durable generation has advanced once, and cold physical
+audit retains exactly two terminal attempts, 4,104 payload bytes, one
+zero-byte remote receipt, one cleanup-failed terminal, and zero uncompacted
+cleanups.
+
+This completes SR3's deterministic offline boundary. The structural gate
+passes 22 checks; admission passes 704 assertions in 2,877,337,637 guest steps
+and 74.53 seconds; delivery/recovery/cleanup passes 415 assertions in
+3,108,360,905 guest steps and 78.96 seconds; and the composed first and cold
+boots pass 401 assertions in 3,073,739,777 guest steps and 89.28 seconds, then
+348 assertions in 3,771,120,192 guest steps and 102.19 seconds. These linked
+gates ran sequentially with one guest core, 128 MiB of external memory, and
+the checked-in 4,000,000,000-step ceiling. `streams.f` still does not require
+the operational modules, no applet capability exposes them, Desk does not host
+them, and live HTTP/TLS, live connectivity, hardware parity, and SR6 production
+workload/profile qualification remain unearned.
 
 The current prototype is still primarily a Bluesky-shaped reader plus a
 configured-source acquisition path. Its first end-to-end configured-source

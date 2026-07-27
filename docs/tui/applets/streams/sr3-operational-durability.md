@@ -1,7 +1,7 @@
 # Streams SR3 operational durability
 
-**Status:** Landings 1 and 2 and Landing 3 logical cleanup are implemented and
-qualified; SR2 composition and physical compaction remain in progress
+**Status:** all three landings are implemented and qualified; SR3 is complete
+for its deterministic offline operational-durability boundary
 
 **Scope:** one bounded durable egress outbox over the neutral persistence
 substrate, with exact payload snapshots, restart and delivery truth, receipts,
@@ -268,9 +268,9 @@ uncertainty remain distinct from ordinary full capacity.
 
 ## Reviewable landing sequence
 
-SR3 is divided into three informative landings. A later landing may refine the
-current prerelease implementation directly; it must not leave a parallel
-prototype or compatibility seam behind.
+SR3 is divided into three informative landings. Each landing advanced the one
+current implementation directly, and closeout removed displaced prerelease
+paths rather than preserving parallel implementations.
 
 ### Landing 1 — Current outbox shape and atomic admission — qualified
 
@@ -288,7 +288,8 @@ The current-shape codecs, eight-tree authority, exact `PBLOB` snapshots,
 single-transaction admission, capacity boundaries, interrupted publication,
 and cold semantic/physical audits are implemented in the standalone
 operational spool. The focused admission gate passes 704 assertions in
-2,859,752,044 guest steps; the record gate passes in 734,515,713 guest steps.
+2,877,337,637 guest steps and 74.53 seconds; the record gate passes in
+734,515,713 guest steps.
 
 ### Landing 2 — Recovery and delivery evidence — qualified
 
@@ -307,13 +308,13 @@ The spool now selects the oldest ready attempt, revision-checks activation,
 persists monotonic effect truth and deterministic receipts, streams the exact
 payload and remote evidence, safely requeues only the same attempt under exact
 idempotency, refuses stale configuration, and converts cold active work into
-visible indeterminate truth. The focused delivery/recovery gate passes 306
-assertions in 2,497,666,644 guest steps, including transaction cleanup on flow
-saturation, cross-record evidence-time refusal, convergence replay without
-reinvoking the receipt source, unsafe retry refusal, and final cold receipt
-preservation.
+visible indeterminate truth. The final focused delivery/recovery/cleanup gate
+passes 415 assertions in 3,108,360,905 guest steps and 78.96 seconds,
+including transaction cleanup on flow saturation, cross-record evidence-time
+refusal, convergence replay without reinvoking the receipt source, unsafe
+retry refusal, terminal cleanup, and final cold receipt preservation.
 
-### Landing 3 — SR2 composition and finite retirement — in progress
+### Landing 3 — SR2 composition and finite retirement — qualified
 
 Compose one exact SR2 egress result into outbox acceptance without persisting
 runtime descriptors. Dispatch accepted work through a fitting active cell,
@@ -323,42 +324,58 @@ restart across the composed journey, outbox-full behavior while runtime cells
 are free, runtime-full behavior while the outbox remains authoritative,
 receipt inspection, and truthful physical retirement.
 
-The spool now selects the oldest policy-eligible terminal item, pins cleanup
-failures and uncertain effects, enforces oldest-safe order under terminal-count
-pressure, and removes one selected attempt with its terminal, idempotency, and
-usage rows in one revision-checked publication. Item, payload, receipt, remote
-evidence, connector-usage, cleanup-failure, and uncompacted-cleanup counters
-remain exact across cold open. The expanded delivery/recovery/cleanup gate
-passes 415 assertions in 3,106,539,410 guest steps. SR2 composition, bounded
-live-set compaction, and the composed two-boot gate remain pending, so this
-does not yet complete Landing 3 or SR3.
+The caller-owned operational dispatcher now snapshots one exact SR2
+output-ready result into durable acceptance, validates durable authority before
+runtime acquisition, dispatches through a fitting active cell, and preserves
+independent runtime-pool and outbox pressure. Terminal retirement selects the
+oldest policy-eligible item, pins cleanup failures and uncertain effects,
+enforces oldest-safe order under terminal-count pressure, and removes the
+selected attempt with its terminal, idempotency, and usage rows in one
+revision-checked publication. Item, payload, receipt, remote-evidence,
+connector-usage, cleanup-failure, and uncompacted-cleanup counters remain exact
+across cold open.
 
-Closeout updates the architecture inventory and milestone ledger only after
-all required gates pass. It removes any displaced prerelease path rather than
-preserving a second implementation.
+The finite caller-owned compactor consumes only the current operational shape.
+It walks the four primary families, copies live payload and receipt blobs
+incrementally, and derives all dispatch, terminal, idempotency, and usage
+indexes into the inactive bank. In the composed qualification, bank 0 begins
+with nonempty page and segment files while bank 1 is empty. The bounded build
+takes more than one step and copies more than the surviving 4,097-byte payload;
+finalize, publish, mirror, and cleanup advance the durable generation exactly
+once, select bank 1, leave bank 1's page and segment files nonempty, and remove
+all physical bytes from bank 0's page and segment files. A normal cold open
+then adopts bank 1 and passes the physical audit with the cleaned attempt
+absent, two terminal attempts and 4,104 payload bytes retained, one zero-byte
+remote receipt, one cleanup-failed terminal, no active or ready work, and zero
+uncompacted cleanups.
+
+The composed gate passes 401 assertions in 3,073,739,777 guest steps and
+89.28 seconds on its first boot, then 348 assertions in 3,771,120,192 guest
+steps and 102.19 seconds in a fresh cold process. The structural gate passes
+22 checks. Every linked gate ran sequentially with one guest core, 128 MiB of
+external memory, and its checked-in 4,000,000,000-step ceiling.
 
 ## Sequential qualification plan
 
 Qualification proceeds from cheap structural evidence to focused linked
 emulator evidence. Test suites are never run in parallel.
 
-The first three stages below are currently qualified. The composed journey and
-closeout stages remain pending and continue to bound any SR3 completion claim.
+All five stages below are qualified.
 
-1. Run host/static checks for dependency closure, current-format-only codecs,
-   pointer-free records, exact constants, no observation-repository imports,
-   and no compatibility or legacy reader.
-2. Run the focused atomic-admission gate for fresh provision, exact-full and
+1. Host/static checks cover dependency closure, current-shape-only codecs,
+   pointer-free records, exact constants, and no observation-repository
+   imports.
+2. The focused atomic-admission gate covers fresh provision, exact-full and
    one-over capacity, interrupted publication, corrupt/unknown state, and cold
    root selection.
-3. Run the focused recovery/delivery gate for every attempt/effect state,
+3. The focused recovery/delivery gate covers every attempt/effect state,
    exact retry bytes, receipts, idempotency, cancellation, staleness, and
    visible indeterminate work, plus terminal-order cleanup, pinned uncertainty,
    exact counter/index deletion, and cold reduced-live-set reconciliation.
-4. Run the composed SR2-to-outbox restart gate, including independent runtime
+4. The composed SR2-to-outbox restart gate covers independent runtime
    and durable capacity pressure, terminal cleanup, reclaim, and finite
    physical compaction.
-5. Run the architecture inventory and milestone closeout suites after the
+5. The architecture inventory and milestone closeout checks run after the
    focused gates pass.
 
 Each linked gate uses one worker, checked-in step and memory ceilings, bounded
@@ -369,13 +386,14 @@ separately qualified.
 
 ## SR3 exit
 
-SR3 is complete only when a cold restart either resumes accepted work or
-truthfully terminalizes it; exact retry bytes and receipts survive restart;
-indeterminate effects follow the connector's declared idempotency rule; and
-full, damaged, unknown-format, uncertain-publication, and cleanup states are
-reported without silent loss. Queued payload remains an operational Streams
-snapshot and is never presented as a Library document.
+SR3 meets its exit: cold restart either resumes accepted work or truthfully
+terminalizes it; exact retry bytes and receipts survive restart; indeterminate
+effects follow the connector's declared idempotency rule; and full, damaged,
+unknown-format, uncertain-publication, cleanup, and finite physical-retirement
+states are reported without silent loss. Queued payload remains an operational
+Streams snapshot and is never presented as a Library document.
 
-Until the three landings and sequential gates above are complete, this file is
-the implementation contract and plan. It does not award SR3, live
-connectivity, live Desk, or hardware-parity evidence.
+This completion does not make `streams.f` require the operational modules,
+expose them as an applet capability, host them through Desk, or award live
+HTTP/TLS, live-connectivity, hardware-parity, or SR6 production
+workload/profile evidence.

@@ -123,9 +123,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 424,
-        "resolved_require_occurrence_count": 1392,
-        "unique_resolved_edge_count": 1392,
+        "module_count": 436,
+        "resolved_require_occurrence_count": 1427,
+        "unique_resolved_edge_count": 1427,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -600,7 +600,7 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         ),
     }
     assert policy["scale_profiles"]["streams_capacity_convergence"] == {
-        "status": "runtime-http-pressure-qualified",
+        "status": "sr3-deterministic-durability-qualified",
         "sr2": {
             "landing_status": {
                 "runtime_shape": "qualified",
@@ -639,6 +639,12 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
             ),
         },
         "sr3": {
+            "landing_status": {
+                "atomic_admission": "qualified",
+                "delivery_recovery_cleanup": "qualified",
+                "sr2_runtime_composition": "qualified",
+                "finite_retirement": "qualified",
+            },
             "runtime_relation": (
                 "durable queues and spools are separate from the "
                 "active-cell pool"
@@ -651,17 +657,57 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
                 "exact payload snapshot and attempt identity commit before "
                 "durable acceptance"
             ),
+            "delivery": (
+                "durable ready, active, terminal, receipt, stale-revision, "
+                "cancellation, cleanup-failure, and visible indeterminate "
+                "truth with current-only recovery"
+            ),
             "recovery": (
                 "self-identifying current format, interrupted publication, "
                 "corrupt or unknown refusal, restart, receipts, and visible "
                 "indeterminate work; prerelease changes replace the prototype"
             ),
+            "composition": (
+                "caller-owned dispatch binds exact durable authority to a "
+                "fitting SR2 cell, commits active authority before runtime "
+                "effect, and retires the cell only after durable terminal "
+                "evidence"
+            ),
+            "retirement": (
+                "revision-checked logical cleanup and current-only bounded "
+                "two-bank live-set compaction remove unreachable records and "
+                "payloads, reopen the selected bank, and physically remove "
+                "the old bank"
+            ),
             "retry": (
                 "no automatic indeterminate-effect retry without a safe "
                 "declared idempotency contract"
             ),
+            "qualification": [
+                "current configuration and operational record codecs",
+                "exact-full and one-over atomic admission",
+                (
+                    "delivery, receipt, stale-revision, "
+                    "indeterminate-recovery, and logical-cleanup journeys"
+                ),
+                (
+                    "SR2 dispatch composition with authority-before-effect "
+                    "and finite runtime retirement"
+                ),
+                (
+                    "bounded live-set compaction, old-bank removal, "
+                    "selected-bank reopen, and cold physical audit"
+                ),
+            ],
+            "cutover_rule": (
+                "the unreleased durable prototype has one current record and "
+                "compaction path; no parallel format, version selector, "
+                "adapter, migration, deprecation path, or old-layout reader "
+                "remains"
+            ),
         },
         "sr6": {
+            "status": "production-workload-profile-stage",
             "purpose": (
                 "qualify supported workload profiles without redesigning "
                 "runtime semantics or durable record shapes"
@@ -682,10 +728,10 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
         },
     }
     assert policy["scale_profiles"]["future_sr6"] == {
-        "status": "deferred-qualification",
+        "status": "production-workload-profile-stage",
         "workload": (
-            "derive supported profiles from the working SR2 runtime and "
-            "SR3 durable path"
+            "derive production-supported profiles from the qualified SR2 "
+            "runtime and SR3 deterministic durable path"
         ),
         "must_not_require": [
             "runtime semantic redesign",
@@ -814,7 +860,7 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
     coverage = {entry["area"]: entry["status"] for entry in baseline["coverage"]}
     assert coverage == {
         "Library": "analytical-and-focused-guest",
-        "Streams": "functional-and-capacity-only",
+        "Streams": "deterministic-runtime-and-durability-qualified",
         "Agent": "functional-and-capacity-only",
         "Daybook/Pad/Grid/FExplorer": "functional-and-capacity-only",
         "Desk/TUI": "journey-only",
@@ -822,8 +868,9 @@ def test_scale_profiles_and_measurement_gaps_are_explicit() -> None:
     streams_coverage = next(
         entry for entry in baseline["coverage"] if entry["area"] == "Streams"
     )
-    assert "SR2+" in streams_coverage["missing"]
+    assert "SR2+" not in streams_coverage["missing"]
     assert "SR6" in streams_coverage["missing"]
+    assert "production workload" in streams_coverage["missing"]
 
 
 def test_live_module_inventory_includes_exact_mutable_symbols() -> None:

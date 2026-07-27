@@ -1,8 +1,7 @@
 # Streams information integration contract
 
-**Status:** normative product and ownership contract; SR2 is complete and SR3
-implementation is in progress with standalone admission, delivery/recovery,
-and logical cleanup qualified
+**Status:** normative product and ownership contract; SR2 and deterministic
+offline SR3 operational durability are complete
 
 **Reconciled:** 2026-07-26
 
@@ -110,9 +109,8 @@ only admission slot and it contains no inline body or operation buffer. Pool
 capacity is supplied by the caller; a fitting free cell is leased exactly,
 all-active exhaustion reports `FULL`, and a free pool with no fitting profile
 reports `CAPACITY`. Connector callbacks serialize at the shared connector
-descriptor. Protocol-specific extension, persistence, applet/Desk
-composition, and cross-owner capability schemas remain work for their named
-later milestones.
+descriptor. Protocol-specific extension, applet/Desk composition, and
+cross-owner capability schemas remain work for their named later milestones.
 
 ### Connector
 
@@ -183,8 +181,9 @@ and a full two-cell pool plus one refused admission prove the runtime is
 neither a hidden singleton nor tied to the historical 4 KiB payload. The HTTP
 landings prove the corresponding framing, connection isolation, pressure,
 and cancellation properties. A durable queue is not simulated by keeping
-more live cells. The standalone SR3 outbox now supplies that durable
-authority; composing it with these cells remains Landing 3 work.
+more live cells. The SR3 outbox supplies that durable authority, and its
+caller-owned dispatcher composes accepted work with fitting cells while
+preserving the two independent capacity boundaries.
 
 ### Transfer attempt and delivery
 
@@ -229,10 +228,9 @@ SR3 keeps durable queue/spool capacity separate from SR2's active-cell pool.
 Each persisted format identifies its current shape and has item and byte
 ceilings, full/one-over behavior, and fail-closed unknown-format handling.
 Qualification covers interrupted publication, corrupt or unknown records,
-queue exhaustion, restart, exact retry bytes, idempotency, receipts, and
-operator-visible indeterminate work. Before the first supported release,
-format changes replace the prototype atomically rather than accumulating
-legacy readers.
+queue exhaustion, restart, exact retry bytes, idempotency, receipts,
+operator-visible indeterminate work, logical cleanup, and finite physical
+retirement.
 
 Work is reported durably accepted only after the exact payload snapshot and
 attempt identity commit. An indeterminate external effect is not retried
@@ -240,13 +238,17 @@ automatically unless the connector's declared idempotency contract makes that
 safe. Durable formats store semantic records and payload bytes or chunks, not
 raw runtime descriptors.
 
-The current standalone egress outbox qualifies atomic local acceptance,
+The current egress outbox qualifies atomic local acceptance,
 ready/active/terminal transitions, exact payload redispatch, deterministic
 receipt evidence, cold active-to-indeterminate recovery, stale-revision
 refusal, safe same-attempt requeue under exact idempotency, and exact
 policy-eligible logical terminal cleanup while uncertain or cleanup-failed
-work remains pinned. It does not yet compose an SR2 result or cell with that
-authority, and it does not yet claim finite physical compaction.
+work remains pinned. The operational dispatcher snapshots an exact SR2
+output-ready result into that authority and dispatches accepted work through a
+fitting cell. The finite current-shape compactor rebuilds the live primary
+families, blobs, derived indexes, and usage into the inactive bank, publishes
+and mirrors it, removes the old bank, and reopens the selected bank under an
+exact cold physical audit.
 
 ## Protocol and package boundaries
 
@@ -372,11 +374,14 @@ in [`streams.md`](streams.md):
 
 The SR2 `runtime-profile.f`, `payload-carrier.f`, `flow-core.f`, and
 `execution-pool.f` now sit beside those older prototype surfaces. They are the
-qualified replacement runtime, but they are not yet required by `streams.f`,
-exposed as an applet capability, composed with Desk, or backed by any durable
-store. The standalone `http-route.f` composition qualifies the accepted
-HTTP/web journey without making it the live applet authority. Deterministic
-mock output is therefore not a claim of production applet output.
+qualified replacement runtime. SR3's `operational-dispatch.f` composes that
+runtime with the durable outbox, and `operational-compaction.f` completes
+finite physical retirement over the current shape. These modules are not yet
+required by `streams.f`, exposed as an applet capability, or composed with
+Desk. The standalone `http-route.f` composition qualifies the accepted
+HTTP/web journey without joining it to the durable bridge or making it the
+live applet authority. Deterministic mock output is therefore not a claim of
+production applet output.
 
 Disposition:
 
@@ -426,7 +431,8 @@ the first byte beyond the compact carrier while an interleaved small request
 remains in that cell, so the larger path does not enlarge every cell. Two active leases,
 one-over refusal, slow-peer cancellation, independent completion, and exact
 teardown are qualified. “Durably accepted” is now qualified for the standalone
-SR3 outbox, but not yet for the composed HTTP/runtime journey.
+outbox and the composed SR2 output-to-outbox/runtime-dispatch journey, but not
+for the standalone HTTP route or a live applet journey.
 
 The in-memory/mock flow contract is now qualified before durable queues. The
 deterministic cooperative HTTP slice is also qualified before AT Protocol and
@@ -487,4 +493,23 @@ qualifies one exact fragmented JSON request-to-response lifecycle, and
 [`test_streams_sr2_http_pressure.py`](../../../../local_testing/test_streams_sr2_http_pressure.py)
 qualifies interleaved compact/standard requests, a 4,097-byte body, exact
 full/one-over refusal, a stalled/cancelled peer, independent success, and
-cross-request cleanup. All live, Desk, and hardware labels remain unearned.
+cross-request cleanup.
+
+SR3 earns the operational-durability portion of `offline-contract`.
+[`test_streams_sr3_static.py`](../../../../local_testing/test_streams_sr3_static.py)
+passes 22 structural checks. The focused admission gate passes 704 assertions
+in 2,877,337,637 guest steps and 74.53 seconds, and the focused
+delivery/recovery/cleanup gate passes 415 assertions in 3,108,360,905 guest
+steps and 78.96 seconds. The composed gate passes 401 assertions in
+3,073,739,777 guest steps and 89.28 seconds on its first boot, then 348
+assertions in 3,771,120,192 guest steps and 102.19 seconds in a fresh cold
+process. That journey advances from nonempty bank 0 and empty bank 1 through
+bounded rebuild, publish, mirror, and cleanup; cold reopen selects nonempty
+bank 1 after both old-bank files report zero physical bytes and validates the
+exact surviving live set. The linked gates run sequentially with one guest
+core, 128 MiB of external memory, and the checked-in
+4,000,000,000-step ceiling.
+
+`streams.f` wiring, applet capabilities, Desk hosting, live HTTP/TLS, live
+connectivity, hardware parity, and SR6 production workload/profile
+qualification remain unearned.

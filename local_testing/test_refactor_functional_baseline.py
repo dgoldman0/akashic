@@ -25,12 +25,12 @@ def test_live_functional_ledger_is_complete_and_source_anchored() -> None:
     assert check_ledger(ledger) == []
     assert summary(ledger) == {
         "applets": 9,
-        "behavior_groups": 31,
-        "fully_covered_groups": 18,
+        "behavior_groups": 32,
+        "fully_covered_groups": 19,
         "partial_groups": 11,
         "prerequisite_only_groups": 2,
         "prerequisites": 13,
-        "evidence_references": 118,
+        "evidence_references": 124,
     }
 
 
@@ -111,6 +111,27 @@ def test_streams_reset_replaces_cancelled_l13_gates() -> None:
         "driver:local_testing/test_streams_sr2_http_pressure.py",
     ]
     assert "prerequisite_ids" not in sr2_http
+
+    sr3_durability = behaviors["streams.sr3-operational-durability"]
+    assert sr3_durability["coverage"] == "covered"
+    assert sr3_durability["facets"] == [
+        "interfaces",
+        "persistence",
+        "failures",
+        "journeys",
+    ]
+    assert sr3_durability["evidence"] == [
+        "driver:local_testing/test_streams_sr3_config_records.py",
+        "driver:local_testing/test_streams_sr3_records.py",
+        "driver:local_testing/test_streams_sr3_admission.py",
+        "driver:local_testing/test_streams_sr3_delivery.py",
+        "driver:local_testing/test_streams_sr3_composed.py",
+        (
+            "pytest:local_testing/test_streams_sr3_static.py::"
+            "test_streams_sr3_compaction_closure_is_neutral_and_current_only"
+        ),
+    ]
+    assert "prerequisite_ids" not in sr3_durability
 
 
 def test_partial_behavior_must_name_a_reviewable_prerequisite() -> None:

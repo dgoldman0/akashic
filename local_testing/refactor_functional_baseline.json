@@ -183,6 +183,13 @@
           "facets": ["interfaces", "providers", "failures", "journeys"],
           "preserve": ["Strict caller-owned HTTP request framing, copied route authority, bounded response construction and cooperative partial-send progress remain general web contracts", "Interleaved fragmented requests hold distinct compact and standard leases and route operations, including an exact body larger than 4096 bytes, truthful one-over refusal, and a slow peer cancelled without obstructing its successful peer", "Each response source retains only its own exact terminal payload generation until connection cleanup retires the corresponding flow generation, wipes both carriers and operation storage, releases the lease, and closes or cancels its port without request or attempt crossover"],
           "evidence": ["driver:local_testing/test_web_http_primitives.py", "driver:local_testing/test_streams_sr2_http_route.py", "driver:local_testing/test_streams_sr2_http_pressure.py"]
+        },
+        {
+          "id": "streams.sr3-operational-durability",
+          "coverage": "covered",
+          "facets": ["interfaces", "persistence", "failures", "journeys"],
+          "preserve": ["One current self-identifying configuration, record, index, spool, dispatch, and compaction path owns exact connector/flow limits, payload snapshots, attempt identities, revisions, receipts, usage, and failure truth without runtime handles, secrets, or a prerelease compatibility format", "Atomic exact-full and one-over admission, ready/active/terminal delivery, stale-revision refusal, cancellation, cleanup failure, logical cleanup, cold recovery, and visible indeterminate effects remain durable and never manufacture a safe retry", "Caller-owned dispatch commits active authority before SR2 runtime effect and retains each cell through durable terminal evidence; bounded current-only two-bank compaction rebuilds the exact live set and derived indexes, removes the old bank, reopens the selected bank, and preserves exact survivor and physical-audit truth"],
+          "evidence": ["driver:local_testing/test_streams_sr3_config_records.py", "driver:local_testing/test_streams_sr3_records.py", "driver:local_testing/test_streams_sr3_admission.py", "driver:local_testing/test_streams_sr3_delivery.py", "driver:local_testing/test_streams_sr3_composed.py", "pytest:local_testing/test_streams_sr3_static.py::test_streams_sr3_compaction_closure_is_neutral_and_current_only"]
         }
       ],
       "supplemental_evidence": ["profile:streams-live-public", "profile:streams-configured-refresh-live"],

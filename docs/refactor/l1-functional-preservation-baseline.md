@@ -50,7 +50,7 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | Applet | Groups | Covered | Partial | Prerequisite-only | Named prerequisites | Evidence references |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Library | 4 | 4 | 0 | 0 | 0 | 19 |
-| Streams | 6 | 3 | 3 | 0 | 1 | 28 |
+| Streams | 7 | 4 | 3 | 0 | 1 | 34 |
 | Agent | 4 | 3 | 1 | 0 | 1 | 23 |
 | Daybook | 3 | 2 | 1 | 0 | 1 | 9 |
 | Pad | 3 | 2 | 1 | 0 | 2 | 10 |
@@ -58,7 +58,7 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
 | Desk | 3 | 3 | 0 | 0 | 0 | 14 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **31** | **18** | **11** | **2** | **13** | **118** |
+| **Total** | **32** | **19** | **11** | **2** | **13** | **124** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -66,7 +66,7 @@ trigger named in the ledger. `prerequisite-only` is intentionally stronger: it
 claims no behavioral evidence at all. This avoids both false coverage claims
 and a broad test-writing project for code an active landing may never touch.
 
-## Streams SR0/SR2 reset amendment
+## Streams SR0/SR3 reset amendment
 
 The cancelled L13 observation-repository landing is no longer an active
 functional touchpoint for either Library or Streams, and the former
@@ -94,6 +94,18 @@ slow-peer cancellation, outcome, isolation, and cleanup. This evidence makes
 no persistence, listener/TLS, Desk hosting, live-connectivity, general
 scheduler, or old-authority claim.
 
+SR3 now records one covered deterministic operational-durability group.
+Configuration and record-codec drivers, standalone admission and
+delivery/recovery/cleanup journeys, the composed SR2/SR3 two-boot journey, and
+the exact current-only compaction-closure ratchet pin one durable authority.
+Together they cover independent item/byte pressure, exact payload and attempt
+acceptance, delivery and receipt truth, stale and indeterminate recovery,
+logical cleanup, authority-before-effect runtime composition, finite cell
+retirement, bounded two-bank live-set compaction, selected-bank reopen, old-bank
+removal, and cold physical audit. This is SR3's complete deterministic
+durability qualification; SR6 is the production workload/profile stage rather
+than a reason to redesign the qualified runtime semantics or durable records.
+
 ## Important evidence decisions
 
 - Library's Gate 4 owner, storage, query, projection, maintenance and
@@ -109,8 +121,9 @@ scheduler, or old-authority claim.
   applet-surface group to covered without adding or removing a product action.
 - Streams live-network profiles are supplemental. Deterministic offline, XIO,
   owner, codec, persistence and Desk journeys remain compatibility evidence;
-  the SR1 storage-free core has separate focused linked and host-static
-  evidence and does not invoke the cancelled L13 gates.
+  the SR1/SR2 runtime and SR3 durable authority have separate focused linked,
+  cold-reopen, and host-static evidence and do not invoke the cancelled L13
+  gates.
 - Agent retains offline, scripted, OpenAI and Codex providers, all access
   presets, authentication/device/settings behavior and durable transcript
   semantics. L7's `agent-provider-ui-commands` profile closes the provider
