@@ -103,7 +103,10 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   serialization without inheriting the legacy URL builder's global scratch.
   Opaque access, refresh, and identity tokens live in caller-owned guarded
   storage with staged replacement, zeroization, and a generation-bound
-  one-shot lease for refresh-token rotation.
+  one-shot lease for refresh-token rotation. Standalone RFC 9449 DPoP proof
+  construction derives its public JWK, obtains a fresh entropy-backed `jti`,
+  hashes token68 credentials for `ath`, and signs transactionally with the
+  hardware-backed ES256 stack.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
