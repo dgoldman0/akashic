@@ -33,6 +33,7 @@ def _assert_source_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     acc_source = ACC_SOURCE.read_text(encoding="utf-8")
     assert "REQUIRE crypto-acc.f" in source
+    assert "REQUIRE ../utils/memory-span.f" in source
     assert "GUARD-BLOCKING _crypto-acc-guard" in acc_source
     assert "REQUIRE ../utils/memory-span.f" in acc_source
     assert "CRYPTO-ACC-RESERVED-OVERLAP?" in acc_source
@@ -41,7 +42,27 @@ def _assert_source_contracts() -> None:
     assert "GUARD-BLOCKING _fld-guard" in source
     assert "FIELD-WITH-TRANSACTION" in source
     assert "FIELD-TRANSACTION-MINE?" in source
+    assert "FIELD-RESERVED-OVERLAP?" in source
     assert "FIELD-MAC-RAW" not in source
+
+    reserved = re.search(
+        rf"(?ms)^:\s+{re.escape('FIELD-RESERVED-OVERLAP?')}"
+        r"(?=[ \t(])(?P<body>.*?)\s+;",
+        source,
+    )
+    assert reserved is not None
+    reserved_body = reserved.group("body")
+    for region in (
+        "CRYPTO-ACC-RESERVED-OVERLAP?",
+        "_fld-guard",
+        "_FLD-HEX",
+        "_FLD-ZERO",
+        "_FLD-ONE",
+        "_FLD-TMP",
+        "_FLD-CMP",
+    ):
+        assert region in reserved_body
+    assert reserved_body.count("MSPAN-OVERLAP?") == 6
 
     guard_region = source[source.index("GUARD-BLOCKING _fld-guard") :]
     assert "[DEFINED] GUARDED" not in guard_region

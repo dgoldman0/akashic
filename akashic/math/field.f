@@ -17,6 +17,9 @@
 \       computation.  Curve implementations must use this boundary whenever
 \       correctness depends on the selected modulus remaining unchanged.
 \   FIELD-TRANSACTION-MINE? ( -- flag )
+\   FIELD-RESERVED-OVERLAP? ( address length -- flag )
+\       Report overlap with crypto-ACC state or Field-owned tables, scratch,
+\       and guard storage.  Checked higher layers use this before admission.
 \
 \  Public API — buffer management:
 \   FIELD-BUF         ( "name" -- )     create named 32-byte element
@@ -48,7 +51,7 @@
 \  Constants:
 \   FIELD-BYTES  ( -- 32 )
 \
-\  Buffers (internal, available for convenience):
+\  Module storage (internal; never caller-owned):
 \   _FLD-ZERO   ( -- addr )   32-byte zero element
 \   _FLD-ONE    ( -- addr )   32-byte element = 1
 \   _FLD-TMP    ( -- addr )   scratch buffer for NEG, ZERO?, etc.
@@ -60,15 +63,17 @@
 \   FADD FSUB FMUL FSQR FINV FPOW FMUL-RAW FCMOV FCEQ
 \   FMAC
 \
-\  Every public operation is serialized under both the shared EXT.CRYPTO
-\  accumulator transaction and the Field module guard.  Independent
-\  multi-operation computations are safe when enclosed by
-\  FIELD-WITH-TRANSACTION.
+\  Every public operation that selects or touches Field/ACC state is
+\  serialized under both the shared EXT.CRYPTO accumulator transaction and
+\  the Field module guard.  FIELD-RESERVED-OVERLAP? is a pure interval
+\  predicate.  Independent multi-operation computations are safe when
+\  enclosed by FIELD-WITH-TRANSACTION.
 \ =================================================================
 
 PROVIDED akashic-field
 
 REQUIRE crypto-acc.f
+REQUIRE ../utils/memory-span.f
 
 \ =====================================================================
 \  Constants
@@ -250,6 +255,32 @@ CREATE _FLD-CMP  32 ALLOT
 \  not depend on a build flag.
 
 GUARD-BLOCKING _fld-guard
+
+\ The transaction mutates both ownership guards and crypto-ACC scrub state;
+\ Field helpers also read or overwrite the storage below.  A checked
+\ higher-level operation cannot safely admit a caller span that aliases any
+\ of it.  This predicate reports borrowed geometry only.  It neither proves
+\ allocation ownership nor reads, writes, or retains the named caller bytes.
+: FIELD-RESERVED-OVERLAP?  ( address length -- flag )
+    2DUP CRYPTO-ACC-RESERVED-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    2DUP _fld-guard GUARD-BLOCKING-SIZE MSPAN-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    2DUP _FLD-HEX 16 MSPAN-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    2DUP _FLD-ZERO FIELD-BYTES MSPAN-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    2DUP _FLD-ONE FIELD-BYTES MSPAN-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    2DUP _FLD-TMP FIELD-BYTES MSPAN-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    _FLD-CMP FIELD-BYTES MSPAN-OVERLAP? ;
 
 ' FIELD-USE-25519  CONSTANT _fld-use25519-xt
 ' FIELD-USE-SECP   CONSTANT _fld-usesecp-xt

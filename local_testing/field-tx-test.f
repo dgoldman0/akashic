@@ -89,12 +89,30 @@ CREATE _ftxt-acc 32 ALLOT
     _ftxt-r _ftxt-expected FIELD-EQ? _ftxt-assert
     _ftxt-stack ;
 
+: _ftxt-test-reserved-geometry  ( -- )
+    _ftxt-a FIELD-BYTES FIELD-RESERVED-OVERLAP? 0= _ftxt-assert
+    0 0 FIELD-RESERVED-OVERLAP? 0= _ftxt-assert
+
+    _FLD-HEX 1 FIELD-RESERVED-OVERLAP? _ftxt-assert
+    _FLD-ZERO 1 FIELD-RESERVED-OVERLAP? _ftxt-assert
+    _FLD-ONE 1 FIELD-RESERVED-OVERLAP? _ftxt-assert
+    _FLD-TMP 1 FIELD-RESERVED-OVERLAP? _ftxt-assert
+    _FLD-CMP 1 FIELD-RESERVED-OVERLAP? _ftxt-assert
+    _fld-guard 1 FIELD-RESERVED-OVERLAP? _ftxt-assert
+    _crypto-acc-guard 1 FIELD-RESERVED-OVERLAP? _ftxt-assert
+    _CACC-SCRUB-LO 1 FIELD-RESERVED-OVERLAP? _ftxt-assert
+
+    \ Partial intersection with a reserved region is still an alias.
+    _FLD-TMP 1- 2 FIELD-RESERVED-OVERLAP? _ftxt-assert
+    _ftxt-stack ;
+
 : _FTXT-RUN  ( -- )
     0 _ftxt-fails !
     0 _ftxt-checks !
     DEPTH _ftxt-depth !
     _ftxt-test-recursion
     _ftxt-test-throw-release
+    _ftxt-test-reserved-geometry
     _ftxt-stack
     _ftxt-fails @ 0= IF
         ." FIELD TRANSACTION PASS " _ftxt-checks @ . CR

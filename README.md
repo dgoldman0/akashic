@@ -87,7 +87,10 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   The generic JOSE layer begins with a state-free, canonical unpadded
   Base64url codec rather than reusing the permissive network decoder, plus
   bounded caller-owned JSON mechanics with strict Unicode, duplicate-key,
-  and transactional publication rules.
+  and transactional publication rules. Caller-owned NIST P-256 key and point
+  operations keep the chip Field ALU transaction across each complete
+  computation, use fixed 256-round scalar schedules, and reject aliases with
+  every lower cryptographic scratch and ownership region.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
