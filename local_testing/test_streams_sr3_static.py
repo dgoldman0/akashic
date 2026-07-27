@@ -25,6 +25,7 @@ OPERATIONAL_CONFIG_RECORDS = (
     "tui/applets/streams/operational-config-records.f"
 )
 OPERATIONAL_SPOOL = "tui/applets/streams/operational-spool.f"
+OPERATIONAL_COMPACTION = "tui/applets/streams/operational-compaction.f"
 OPERATIONAL_DISPATCH = "tui/applets/streams/operational-dispatch.f"
 EXECUTION_POOL = "tui/applets/streams/execution-pool.f"
 SHA3_CONTEXT = "math/sha3-context.f"
@@ -34,7 +35,11 @@ OPERATIONAL_MODULES = (
     OPERATIONAL_CONFIG_RECORDS,
     OPERATIONAL_SPOOL,
 )
-CURRENT_SR3_MODULES = (*OPERATIONAL_MODULES, OPERATIONAL_DISPATCH)
+CURRENT_SR3_MODULES = (
+    *OPERATIONAL_MODULES,
+    OPERATIONAL_COMPACTION,
+    OPERATIONAL_DISPATCH,
+)
 
 REPOSITORY_ROOT = SOURCE_ROOT.parent
 SR3_DOC = (
@@ -135,6 +140,9 @@ def test_streams_sr3_cold_audit_loops_do_not_borrow_return_stack() -> None:
             "tui/applets/library/persistence-adapter.f"
         ),
         "streams/operational-spool.f": _source(OPERATIONAL_SPOOL),
+        "streams/operational-compaction.f": _source(
+            OPERATIONAL_COMPACTION
+        ),
         "streams/operational-dispatch.f": _source(OPERATIONAL_DISPATCH),
         "persist-reclaim-test.f": (
             LOCAL_TESTING / "persist-reclaim-test.f"
@@ -216,6 +224,59 @@ def test_streams_sr3_operational_modules_do_not_reenter_displaced_streams() -> N
     }
 
 
+def test_streams_sr3_compaction_closure_is_neutral_and_current_only() -> None:
+    closure = set(
+        dependency_closure(SOURCE_ROOT, (OPERATIONAL_COMPACTION,))
+    )
+    current_streams_family = {
+        *OPERATIONAL_MODULES,
+        OPERATIONAL_COMPACTION,
+    }
+    neutral_infrastructure_prefixes = (
+        "concurrency/",
+        "math/",
+        "persistence/",
+        "text/",
+        "utils/",
+    )
+    neutral_exact_modules = {
+        "runtime/identity.f",
+    }
+    explicitly_displaced = {
+        "tui/applets/streams/compaction.f",
+        "tui/applets/streams/persistence-adapter.f",
+        "tui/applets/streams/repository.f",
+    }
+
+    assert {
+        module
+        for module in closure
+        if module.startswith("tui/applets/streams/")
+    } == current_streams_family
+    assert {
+        "persistence/compaction.f",
+        "persistence/btree.f",
+        "persistence/blob.f",
+        "persistence/core.f",
+        "persistence/reclaim.f",
+    } <= closure
+    assert closure.isdisjoint(explicitly_displaced)
+    assert not {
+        module
+        for module in closure
+        if module not in current_streams_family
+        and module not in neutral_exact_modules
+        and not module.startswith(neutral_infrastructure_prefixes)
+    }
+    assert not {
+        module
+        for module in closure
+        if module.startswith("tui/applets/library/")
+        or module.startswith("tui/app-")
+        or "http" in Path(module).name.lower()
+    }
+
+
 def test_streams_sr3_dispatch_closure_is_the_sr2_sr3_composition_edge() -> None:
     closure = set(dependency_closure(SOURCE_ROOT, (OPERATIONAL_DISPATCH,)))
     streams_closure = {
@@ -261,6 +322,17 @@ def test_streams_sr3_operational_modules_own_no_mutable_storage() -> None:
 
 def test_streams_sr3_dispatch_owns_no_mutable_storage() -> None:
     definitions = _lexical_definitions(_source(OPERATIONAL_DISPATCH))
+    owned = {
+        kind: definitions[kind]
+        for kind in MUTABLE_DEFINITION_KINDS
+        if definitions[kind]
+    }
+
+    assert owned == {}
+
+
+def test_streams_sr3_compaction_is_entirely_caller_owned() -> None:
+    definitions = _lexical_definitions(_source(OPERATIONAL_COMPACTION))
     owned = {
         kind: definitions[kind]
         for kind in MUTABLE_DEFINITION_KINDS
@@ -373,6 +445,26 @@ def test_streams_sr3_dispatch_lifecycle_surface_is_exact() -> None:
         "STREAMS-OPDISPATCH-CANCEL",
         "STREAMS-OPDISPATCH-RELEASE",
     }
+
+
+def test_streams_sr3_compaction_surface_is_exact_and_neutral() -> None:
+    public_prefix = "STREAMS-SPOOL-COMPACTION-"
+    public_colon_words = {
+        word
+        for word in _colon_words(OPERATIONAL_COMPACTION)
+        if word.startswith(public_prefix)
+    }
+    words = _defined_words(OPERATIONAL_COMPACTION)
+
+    assert public_colon_words == {
+        "STREAMS-SPOOL-COMPACTION-CONTEXT-VALID?",
+        "STREAMS-SPOOL-COMPACTION-STATUS@",
+        "STREAMS-SPOOL-COMPACTION-CONTEXT-INIT",
+        "STREAMS-SPOOL-COMPACTION-CANCEL",
+        "STREAMS-SPOOL-COMPACTION-STEP-XT",
+        "STREAMS-SPOOL-COMPACTION-FINALIZE-XT",
+    }
+    assert "STREAMS-SPOOL-COMPACTION-CONTEXT-SIZE" in words
 
 
 def test_streams_sr3_dispatch_commits_authority_before_runtime_effect() -> None:

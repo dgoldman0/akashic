@@ -7,7 +7,9 @@ two attempts while leaving one exact 4,097-byte attempt READY.  The parent
 retains only serialized MP64FS bytes and the three printed attempt RIDs.  A
 fresh process and Forth dictionary must reopen the same current-format
 authority, inspect the terminal evidence, dispatch the remaining exact bytes
-through a fitting standard cell, and release all runtime state.
+through a fitting standard cell, release all runtime state, logically clean
+one delivered attempt, compact the exact live set into the inactive bank,
+remove the old physical bank, and reopen the compacted authority.
 
 The emulator processes run strictly sequentially.  This module never creates
 more than one guest worker and every guest machine has exactly one core.
@@ -72,6 +74,7 @@ EXT_MEM_MIB: Final = 128
 FIRST_AUTOEXEC = rf"""\ autoexec.f - first composed SR2/SR3 boot
 ENTER-USERLAND
 REQUIRE tui/applets/streams/operational-dispatch.f
+REQUIRE tui/applets/streams/operational-compaction.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 REQUIRE {GUEST_FIXTURE}
 _SR3C-FIRST-RUN
@@ -98,6 +101,7 @@ def _cold_autoexec(
     return rf"""\ autoexec.f - cold composed SR2/SR3 readback
 ENTER-USERLAND
 REQUIRE tui/applets/streams/operational-dispatch.f
+REQUIRE tui/applets/streams/operational-compaction.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
 REQUIRE {GUEST_FIXTURE}
 
@@ -120,6 +124,7 @@ def _profile() -> Profile:
     return Profile(
         roots=(
             "tui/applets/streams/operational-dispatch.f",
+            "tui/applets/streams/operational-compaction.f",
             "utils/fs/drivers/vfs-mp64fs.f",
         ),
         resources=(),

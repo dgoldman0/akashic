@@ -99,8 +99,27 @@ PSTORE-SIZE XBUF _sr3c-store
 PSTORE-WORK-SIZE XBUF _sr3c-pstore-work
 STREAMS-SPOOL-RECORD-BUFFER-MIN XBUF _sr3c-record-buffer
 GUARD _sr3c-guard
+PERSIST-PAGE-FILE-SIZE XBUF _sr3c-bank1-page
+PSEG-FILE-SIZE XBUF _sr3c-bank1-segment
 STREAMS-SPOOL-SIZE XBUF _sr3c-spool
 STREAMS-SPOOL-WORK-SIZE XBUF _sr3c-spool-work
+
+PSTORE-SIZE XBUF _sr3c-builder-store
+PSTORE-WORK-SIZE XBUF _sr3c-builder-pstore-work
+STREAMS-SPOOL-RECORD-BUFFER-MIN XBUF _sr3c-builder-record-buffer
+GUARD _sr3c-builder-guard
+STREAMS-SPOOL-SIZE XBUF _sr3c-builder-spool
+STREAMS-SPOOL-WORK-SIZE XBUF _sr3c-builder-spool-work
+
+STREAMS-SPOOL-COMPACTION-CONTEXT-SIZE
+    XBUF _sr3c-compaction-context
+PCOMPACT-SIZE XBUF _sr3c-compaction
+PCOMPACT-WORK-SIZE XBUF _sr3c-compaction-work
+512 XBUF _sr3c-compaction-buffer
+PERSIST-PAGE-WORK-SIZE XBUF _sr3c-page-size-work
+PSEG-WORK-SIZE XBUF _sr3c-segment-size-work
+512 XBUF _sr3c-segment-size-buffer
+VARIABLE _sr3c-compaction-steps
 
 4194304 PERSIST-PAGE-FILE-SIZE /
     2 1 3 STREAMS-SPOOL-COLD-AUDIT-BYTES?
@@ -125,6 +144,8 @@ STREAMS-OPATT-SIZE XBUF _sr3c-attempt
 STREAMS-OPATT-SIZE XBUF _sr3c-attempt-before
 STREAMS-OPRECEIPT-SIZE XBUF _sr3c-receipt
 STREAMS-SPOOL-CAPACITY-SIZE XBUF _sr3c-capacity
+STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE XBUF _sr3c-connector-usage
+STREAMS-OI-FLOW-USAGE-VALUE-SIZE XBUF _sr3c-flow-usage
 
 CREATE _sr3c-identity RID-SIZE ALLOT
 CREATE _sr3c-authority RID-SIZE ALLOT
@@ -321,16 +342,46 @@ STREAMS-EXECUTION-POOL-SIZE XBUF _sr3c-pool
     _sr3c-vfs @ 0 0 _sr3c-guard 0 0 _sr3c-store
         PSTORE-INIT ;
 
+: _sr3c-bank1-init  ( -- status )
+    S" /s3cp1" _sr3c-vfs @ 0 0 _sr3c-bank1-page
+        PPAGE-FILE-INIT DUP IF EXIT THEN DROP
+    S" /s3cs1" STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
+        _sr3c-vfs @ 0 _sr3c-bank1-segment PSEG-FILE-INIT ;
+
+: _sr3c-builder-store-init  ( -- status )
+    S" /s3cp" S" /s3cs" S" /s3cba" S" /s3cbb"
+    _sr3c-identity
+    STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
+    _sr3c-vfs @ 0 0 _sr3c-builder-guard 0 0
+        _sr3c-builder-store PSTORE-INIT ;
+
+: _sr3c-configure-two-bank-stores  ( -- status )
+    _sr3c-bank1-init DUP IF EXIT THEN DROP
+    _sr3c-bank1-page _sr3c-bank1-segment _sr3c-store
+        PSTORE-BANK1-CONFIGURE DUP IF EXIT THEN DROP
+    _sr3c-builder-store-init DUP IF EXIT THEN DROP
+    _sr3c-bank1-page _sr3c-bank1-segment _sr3c-builder-store
+        PSTORE-BANK1-CONFIGURE ;
+
 : _sr3c-spool-bind  ( -- status )
     _sr3c-spool _sr3c-current-spool !
     _sr3c-spool-work _sr3c-current-work !
     _sr3c-store-init DUP IF EXIT THEN DROP
+    _sr3c-configure-two-bank-stores DUP IF EXIT THEN DROP
     _sr3c-record-buffer STREAMS-SPOOL-RECORD-BUFFER-MIN
         _sr3c-pstore-work PSTORE-WORK-INIT DUP IF EXIT THEN DROP
+    _sr3c-builder-record-buffer STREAMS-SPOOL-RECORD-BUFFER-MIN
+        _sr3c-builder-pstore-work PSTORE-WORK-INIT
+        DUP IF EXIT THEN DROP
     _sr3c-store _sr3c-pstore-work PSTORE-PROVISION DUP IF EXIT THEN DROP
     _sr3c-store _sr3c-spool STREAMS-SPOOL-INIT DUP IF EXIT THEN DROP
+    _sr3c-builder-store _sr3c-builder-spool STREAMS-SPOOL-INIT
+        DUP IF EXIT THEN DROP
     _sr3c-cold-audit _sr3c-cold-audit-u
         _sr3c-pstore-work _sr3c-spool _sr3c-spool-work
+        STREAMS-SPOOL-WORK-INIT DUP IF EXIT THEN DROP
+    0 0 _sr3c-builder-pstore-work
+        _sr3c-builder-spool _sr3c-builder-spool-work
         STREAMS-SPOOL-WORK-INIT DUP IF EXIT THEN DROP
     _sr3c-spool _sr3c-spool-work STREAMS-SPOOL-OPEN ;
 
@@ -1290,6 +1341,243 @@ STREAMS-EXECUTION-POOL-SIZE XBUF _sr3c-pool
         DUP SPOOLCAP.CLEANUP-FAILED-COUNT @ 1 = _sr3c-assert
         SPOOLCAP.UNCOMPACTED-CLEANUP-COUNT @ 0= _sr3c-assert ;
 
+: _sr3c-logical-cleanup  ( -- )
+    10000 _sr3c-attempt
+        _sr3c-current-spool @ _sr3c-current-work @
+        STREAMS-SPOOL-CLEANUP-CANDIDATE@
+        STREAMS-SPOOL-S-OK _sr3c-status
+    _sr3c-attempt SOPATT.ATTEMPT-ID
+        _sr3c-delivered-id RID= _sr3c-assert
+    _sr3c-attempt SOPATT.ATTEMPT-ID
+        _sr3c-current-id RID-COPY
+    _sr3c-current-id
+    _sr3c-attempt SOPATT.RECORD-REVISION @
+    10000 _sr3c-ready
+        _sr3c-current-spool @ _sr3c-current-work @
+        STREAMS-SPOOL-CLEANUP
+        STREAMS-SPOOL-S-OK _sr3c-status
+    _sr3c-ready SOPATT.ATTEMPT-ID
+        _sr3c-delivered-id RID= _sr3c-assert
+    _sr3c-delivered-id _sr3c-attempt@
+        STREAMS-SPOOL-S-NOT-FOUND _sr3c-status
+    _sr3c-capacity@
+        DUP SPOOLCAP.ITEM-COUNT @ 2 = _sr3c-assert
+        DUP SPOOLCAP.BYTE-COUNT @ 4104 = _sr3c-assert
+        DUP SPOOLCAP.READY-COUNT @ 0= _sr3c-assert
+        DUP SPOOLCAP.ACTIVE-COUNT @ 0= _sr3c-assert
+        DUP SPOOLCAP.TERMINAL-COUNT @ 2 = _sr3c-assert
+        DUP SPOOLCAP.INDETERMINATE-COUNT @ 0= _sr3c-assert
+        DUP SPOOLCAP.RECEIPT-COUNT @ 1 = _sr3c-assert
+        DUP SPOOLCAP.RECEIPT-BYTES @ 0= _sr3c-assert
+        DUP SPOOLCAP.CLEANUP-FAILED-COUNT @ 1 = _sr3c-assert
+        SPOOLCAP.UNCOMPACTED-CLEANUP-COUNT @ 1 = _sr3c-assert ;
+
+: _sr3c-size-result  ( bytes status -- bytes )
+    DUP PERSIST-S-OK =
+    OVER PERSIST-S-ABSENT = OR _sr3c-assert
+    DUP PERSIST-S-ABSENT = IF 2DROP 0 EXIT THEN
+    DROP ;
+
+: _sr3c-page-size  ( bank -- bytes )
+    _sr3c-store PSTORE-PAGE-FILE-FOR-BANK@
+        _sr3c-page-size-work PPAGE-FILE-SIZE?
+    _sr3c-size-result ;
+
+: _sr3c-segment-size  ( bank -- bytes )
+    _sr3c-store PSTORE-SEGMENT-FILE-FOR-BANK@
+        _sr3c-segment-size-work PSEG-FILE-SIZE?
+    _sr3c-size-result ;
+
+: _sr3c-compaction-init  ( -- )
+    _sr3c-page-size-work PPAGE-WORK-INIT
+        PERSIST-S-OK _sr3c-status
+    _sr3c-segment-size-buffer 512
+        _sr3c-segment-size-work PSEG-WORK-INIT
+        PERSIST-S-OK _sr3c-status
+    _sr3c-compaction-buffer 512
+        _sr3c-compaction-work PCOMPACT-WORK-INIT
+        PERSIST-S-OK _sr3c-status
+    _sr3c-spool _sr3c-spool-work
+        _sr3c-builder-spool _sr3c-builder-spool-work
+        _sr3c-compaction-context
+        STREAMS-SPOOL-COMPACTION-CONTEXT-INIT
+        STREAMS-SPOOL-S-OK _sr3c-status
+    _sr3c-store PSTORE-ROOT-FILE@
+        _sr3c-builder-store _sr3c-builder-pstore-work
+        STREAMS-SPOOL-COMPACTION-STEP-XT
+        STREAMS-SPOOL-COMPACTION-FINALIZE-XT
+        _sr3c-compaction-context
+        65536 64 8192 _sr3c-compaction PCOMPACT-INIT
+        PERSIST-S-OK _sr3c-status
+    _sr3c-compaction PCOMPACT-VALID? _sr3c-assert
+    _sr3c-compaction-context
+        STREAMS-SPOOL-COMPACTION-CONTEXT-VALID? _sr3c-assert ;
+
+: _sr3c-compaction-build  ( -- status )
+    0 _sr3c-compaction-steps !
+    BEGIN
+        _sr3c-compaction-work PCOMPACT-STATE@
+            PCOMPACT-STATE-BUILDING =
+        _sr3c-compaction-steps @ 64 < AND
+    WHILE
+        _sr3c-compaction-work PCOMPACT-STEP
+        DUP PERSIST-S-OK <> IF EXIT THEN
+        DROP
+        1 _sr3c-compaction-steps +!
+    REPEAT
+    _sr3c-compaction-work PCOMPACT-STATE@
+        PCOMPACT-STATE-READY =
+    IF PERSIST-S-OK ELSE PERSIST-S-CAPACITY THEN ;
+
+: _sr3c-compact-live-set  ( -- )
+    _sr3c-store PSTORE-GENERATION@ _sr3c-old-generation !
+    _sr3c-runtime-clean? _sr3c-assert
+    _sr3c-compaction-init
+    PERSIST-DATA-BANK-0 _sr3c-page-size 0> _sr3c-assert
+    PERSIST-DATA-BANK-0 _sr3c-segment-size 0> _sr3c-assert
+    PERSIST-DATA-BANK-1 _sr3c-page-size 0= _sr3c-assert
+    PERSIST-DATA-BANK-1 _sr3c-segment-size 0= _sr3c-assert
+
+    _sr3c-compaction _sr3c-compaction-work PCOMPACT-BEGIN
+        PERSIST-S-OK _sr3c-status
+    _sr3c-compaction-work PCOMPACT-STATE@
+        PCOMPACT-STATE-BUILDING = _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-SOURCE-BANK@
+        PERSIST-DATA-BANK-0 = _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-TARGET-BANK@
+        PERSIST-DATA-BANK-1 = _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-NEXT-GENERATION@
+        _sr3c-old-generation @ 1+ = _sr3c-assert
+
+    _sr3c-compaction-build
+    DUP PERSIST-S-OK <> IF
+        >R
+        _sr3c-compaction-context STREAMS-SPOOL-COMPACTION-CANCEL
+            STREAMS-SPOOL-S-OK _sr3c-status
+        _sr3c-compaction-work PCOMPACT-ABORT
+            PERSIST-S-OK _sr3c-status
+        R> PERSIST-S-OK _sr3c-status
+        EXIT
+    THEN
+    DROP
+    _sr3c-compaction-work PCOMPACT-STATE@
+        PCOMPACT-STATE-READY = _sr3c-assert
+    _sr3c-compaction-steps @ 1 > _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-WORK-USED@
+        _sr3c-compaction-steps @ = _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-BYTES-USED@
+        4097 > _sr3c-assert
+
+    _sr3c-compaction-work PCOMPACT-FINALIZE
+        PERSIST-S-OK _sr3c-status
+    _sr3c-compaction-work PCOMPACT-STATE@
+        PCOMPACT-STATE-FINALIZED = _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-TARGET-ROOT@
+        DUP 0<> _sr3c-assert
+        PROOTV.DATA-BANK @
+            PERSIST-DATA-BANK-1 = _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-PUBLISH
+        PERSIST-S-OK _sr3c-status
+    _sr3c-compaction-work PCOMPACT-STATE@
+        PCOMPACT-STATE-PUBLISHED = _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-MIRROR
+        PERSIST-S-OK _sr3c-status
+    _sr3c-compaction-work PCOMPACT-STATE@
+        PCOMPACT-STATE-MIRRORED = _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-CLEANUP-ELIGIBLE?
+        _sr3c-assert
+    _sr3c-compaction-work PCOMPACT-CLEANUP
+        PERSIST-S-OK _sr3c-status
+    _sr3c-compaction-work PCOMPACT-STATE@
+        PCOMPACT-STATE-CLEANED = _sr3c-assert
+    _sr3c-compaction-context STREAMS-SPOOL-COMPACTION-STATUS@
+        STREAMS-SPOOL-S-OK = _sr3c-assert
+
+    PERSIST-DATA-BANK-0 _sr3c-page-size 0= _sr3c-assert
+    PERSIST-DATA-BANK-0 _sr3c-segment-size 0= _sr3c-assert
+    PERSIST-DATA-BANK-1 _sr3c-page-size 0> _sr3c-assert
+    PERSIST-DATA-BANK-1 _sr3c-segment-size 0> _sr3c-assert
+
+    \ Rebuild current descriptors from serialized authority and force the
+    \ normal cold physical audit against the selected compacted bank.
+    _sr3c-spool-bind STREAMS-SPOOL-S-OK _sr3c-status
+    _sr3c-store PSTORE-GENERATION@
+        _sr3c-old-generation @ 1+ = _sr3c-assert
+    _sr3c-store PSTORE-CURRENT-ROOT@ PROOTV.DATA-BANK @
+        PERSIST-DATA-BANK-1 = _sr3c-assert ;
+
+: _sr3c-check-compacted-usage  ( -- )
+    _sr3c-local-id _sr3c-connector-usage
+        _sr3c-current-spool @ _sr3c-current-work @
+        STREAMS-SPOOL-CONNECTOR-USAGE@
+        STREAMS-SPOOL-S-OK _sr3c-status
+    _sr3c-connector-usage
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-VALID? _sr3c-assert
+    _sr3c-connector-usage
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-ITEM-COUNT@
+        _sr3c-assert 0= _sr3c-assert
+    _sr3c-connector-usage
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-PAYLOAD-BYTES@
+        _sr3c-assert 0= _sr3c-assert
+
+    _sr3c-remote-id _sr3c-connector-usage
+        _sr3c-current-spool @ _sr3c-current-work @
+        STREAMS-SPOOL-CONNECTOR-USAGE@
+        STREAMS-SPOOL-S-OK _sr3c-status
+    _sr3c-connector-usage
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-ITEM-COUNT@
+        _sr3c-assert 2 = _sr3c-assert
+    _sr3c-connector-usage
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-SIZE
+        STREAMS-OI-CONNECTOR-USAGE-VALUE-PAYLOAD-BYTES@
+        _sr3c-assert 4104 = _sr3c-assert
+
+    _sr3c-flow-id _sr3c-flow-usage
+        _sr3c-current-spool @ _sr3c-current-work @
+        STREAMS-SPOOL-FLOW-USAGE@
+        STREAMS-SPOOL-S-OK _sr3c-status
+    _sr3c-flow-usage STREAMS-OI-FLOW-USAGE-VALUE-SIZE
+        STREAMS-OI-FLOW-USAGE-VALUE-VALID? _sr3c-assert
+    _sr3c-flow-usage STREAMS-OI-FLOW-USAGE-VALUE-SIZE
+        STREAMS-OI-FLOW-USAGE-VALUE-ACTIVE-COUNT@
+        _sr3c-assert 0= _sr3c-assert ;
+
+: _sr3c-check-compacted-live-set  ( -- )
+    _sr3c-delivered-id _sr3c-attempt@
+        STREAMS-SPOOL-S-NOT-FOUND _sr3c-status
+
+    7000 _sr3c-dispatch-ms !
+    _sr3c-failure-id _sr3c-current-id RID-COPY
+    _sr3c-check-failure-terminal
+    _sr3c-failure-id _sr3c-small-failure 7
+        _sr3c-stream-attempt
+
+    9000 _sr3c-dispatch-ms !
+    _sr3c-large-id _sr3c-current-id RID-COPY
+    _sr3c-check-delivered-terminal
+    _sr3c-large-id _sr3c-large 4097
+        _sr3c-stream-attempt
+
+    _sr3c-ready@ STREAMS-SPOOL-S-NOT-FOUND _sr3c-status
+    _sr3c-capacity@
+        DUP SPOOLCAP.ITEM-LIMIT @ 3 = _sr3c-assert
+        DUP SPOOLCAP.BYTE-LIMIT @ 4113 = _sr3c-assert
+        DUP SPOOLCAP.ITEM-COUNT @ 2 = _sr3c-assert
+        DUP SPOOLCAP.BYTE-COUNT @ 4104 = _sr3c-assert
+        DUP SPOOLCAP.READY-COUNT @ 0= _sr3c-assert
+        DUP SPOOLCAP.ACTIVE-COUNT @ 0= _sr3c-assert
+        DUP SPOOLCAP.TERMINAL-COUNT @ 2 = _sr3c-assert
+        DUP SPOOLCAP.INDETERMINATE-COUNT @ 0= _sr3c-assert
+        DUP SPOOLCAP.RECEIPT-COUNT @ 1 = _sr3c-assert
+        DUP SPOOLCAP.RECEIPT-BYTES @ 0= _sr3c-assert
+        DUP SPOOLCAP.CLEANUP-FAILED-COUNT @ 1 = _sr3c-assert
+        SPOOLCAP.UNCOMPACTED-CLEANUP-COUNT @ 0= _sr3c-assert
+    _sr3c-check-compacted-usage ;
+
 : _sr3c-reset  ( -- )
     0 _sr3c-fails !
     0 _sr3c-checks !
@@ -1369,8 +1657,11 @@ STREAMS-EXECUTION-POOL-SIZE XBUF _sr3c-pool
     _sr3c-check-cold-existing
     _sr3c-large-id _SR3C-REMOTE-DELIVER
         STREAMS-RUNTIME-PROFILE-STANDARD 9000
-        _sr3c-dispatch-success
+    _sr3c-dispatch-success
     _sr3c-check-cold-final-capacity
+    _sr3c-logical-cleanup
+    _sr3c-compact-live-set
+    _sr3c-check-compacted-live-set
     _sr3c-remote-starts @ 1 = _sr3c-assert
     _sr3c-remote-polls @ 0= _sr3c-assert
     _sr3c-remote-cancels @ 0= _sr3c-assert

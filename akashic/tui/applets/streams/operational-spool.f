@@ -1492,8 +1492,10 @@ PERSIST-RECORD-HEADER-SIZE +
         R> DROP STREAMS-SPOOL-S-BUSY EXIT
     THEN
     _SSPW-STATE-REOPEN R@ _SSPW.STATE !
+    \ Adopt the checked selected bank so the same current descriptor shape
+    \ reopens after neutral two-bank compaction in either direction.
     R@ _SSPW.SPOOL @ _SSP-D.STORE @
-    R@ _SSPW.PSTORE-WORK @ PSTORE-OPEN
+    R@ _SSPW.PSTORE-WORK @ PSTORE-OPEN-ACTIVE
     DUP PERSIST-S-ABSENT = IF
         DROP R> _SSPW-OPEN-EMPTY EXIT
     THEN
