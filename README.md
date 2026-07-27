@@ -75,14 +75,15 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
 - **Statistics and regression** — running mean/variance/stddev, Welford's online algorithm, min/max tracking, histograms, linear regression, polynomial fit, time-series moving averages (SMA, EMA, DEMA), and advanced statistics (skewness, kurtosis, percentiles).
 - **Probability** — discrete and continuous distributions, random sampling.
 - **DSP filters** — biquad coefficients (low-pass, high-pass, band-pass, notch, peaking EQ), shared with the audio synth.
-- **Cryptography** — checked platform entropy plus one-shot SHA-256 and
-  SHA-512 over the chip accelerator. The entropy library delegates physical
-  span and health enforcement to BIOS rather than duplicating MMIO policy;
-  hashing provides multi-span input, preflighted caller geometry, scoped
-  ownership, and failure cleanup. Caller-owned HMAC-SHA-256 stages its digest
-  and zeroes key-bearing workspace before a successful return. Ed25519
-  consumes the checked SHA-512 boundary without exposing an ambient streaming
-  context.
+- **Cryptography** — a protocol-neutral caller-span utility plus checked
+  platform entropy and one-shot SHA-256 and SHA-512 over the chip accelerator.
+  The shared span boundary rejects unmapped and platform-protected memory
+  without pretending to prove allocator ownership. Entropy delegates that
+  physical policy and health enforcement to BIOS rather than duplicating
+  MMIO access; hashing provides multi-span input, scoped ownership, and
+  failure cleanup. Caller-owned HMAC-SHA-256 stages its digest and zeroes
+  key-bearing workspace before a successful return. Ed25519 consumes the
+  checked SHA-512 boundary without exposing an ambient streaming context.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
