@@ -1,7 +1,8 @@
 \ =====================================================================
 \  form-urlencoded.f - Stateless application/x-www-form-urlencoded
 \ =====================================================================
-\  This byte-oriented utility measures and encodes one form component.
+\  This byte-oriented utility measures, encodes, and strictly decodes one
+\  form component.
 \  It owns no storage or mutable operation state.  Callers compose complete
 \  bodies by writing separators and encoded names/values into their own
 \  transaction buffer.
@@ -14,6 +15,11 @@
 \    FORM-URLENCODED-MEASURE
 \      ( source source-u -- encoded-u status )
 \    FORM-URLENCODED-ENCODE
+\      ( source source-u destination destination-capacity
+\        -- written status )
+\    FORM-URLENCODED-DECODE-MEASURE
+\      ( source source-u -- decoded-u status )
+\    FORM-URLENCODED-DECODE
 \      ( source source-u destination destination-capacity
 \        -- written status )
 \ =====================================================================
@@ -30,12 +36,13 @@ REQUIRE ../utils/caller-span.f
 4 CONSTANT FORM-URLENCODED-S-RANGE
 5 CONSTANT FORM-URLENCODED-S-PROTECTED
 6 CONSTANT FORM-URLENCODED-S-PLATFORM
+7 CONSTANT FORM-URLENCODED-S-ENCODING
 
 -1 1 RSHIFT CONSTANT _FUE-LENGTH-MAX
 
 : FORM-URLENCODED-STATUS-VALID?  ( status -- flag )
     DUP FORM-URLENCODED-S-OK >=
-    SWAP FORM-URLENCODED-S-PLATFORM <= AND ;
+    SWAP FORM-URLENCODED-S-ENCODING <= AND ;
 
 : _FUE-CALLER>STATUS  ( caller-status -- status )
     DUP CALLER-SPAN-S-OK = IF
@@ -71,20 +78,27 @@ REQUIRE ../utils/caller-span.f
     DUP _FUE-LITERAL? IF DROP 1 EXIT THEN
     32 = IF 1 ELSE 3 THEN ;
 
+: _FUE-NEXT
+  ( source source-u value -- source' source-u' value )
+    >R
+    1-
+    SWAP 1+ SWAP
+    R> ;
+
 : FORM-URLENCODED-MEASURE  ( source source-u -- encoded-u status )
     2DUP _FUE-SPAN-STATUS ?DUP IF
         >R 2DROP 0 R> EXIT
     THEN
-    0 SWAP 0 ?DO                         ( source encoded-u )
-        OVER I + C@ _FUE-BYTE-SIZE       ( source encoded-u add-u )
-        DUP _FUE-LENGTH-MAX SWAP -       ( source encoded-u add-u room )
-        2 PICK U> IF
-            2DROP DROP 0 FORM-URLENCODED-S-CAPACITY
-            UNLOOP EXIT
+    0                                    ( source source-u encoded-u )
+    BEGIN OVER WHILE
+        2 PICK C@ _FUE-BYTE-SIZE         ( source source-u encoded-u add-u )
+        OVER _FUE-LENGTH-MAX 2 PICK - U> IF
+            2DROP 2DROP
+            0 FORM-URLENCODED-S-CAPACITY EXIT
         THEN
-        +                                ( source encoded-u' )
-    LOOP
-    NIP FORM-URLENCODED-S-OK ;
+        + _FUE-NEXT                      ( source' source-u' encoded-u' )
+    REPEAT
+    >R 2DROP R> FORM-URLENCODED-S-OK ;
 
 : _FUE-GEOMETRY
   ( source source-u destination destination-capacity -- encoded-u status )
@@ -127,8 +141,8 @@ REQUIRE ../utils/caller-span.f
         >R DROP 2DROP 2DROP 0 R> EXIT
     THEN
     >R DROP                              ( source source-u dest ) ( R: n )
-    SWAP 0 ?DO                           ( source destination )
-        OVER I + C@                      ( source destination byte )
+    BEGIN OVER WHILE
+        2 PICK C@                        ( source source-u destination byte )
         DUP _FUE-LITERAL? IF
             OVER C! 1+
         ELSE
@@ -138,5 +152,110 @@ REQUIRE ../utils/caller-span.f
                 SWAP _FUE-ESCAPE
             THEN
         THEN
-    LOOP
-    2DROP R> FORM-URLENCODED-S-OK ;
+        _FUE-NEXT
+    REPEAT
+    2DROP DROP R> FORM-URLENCODED-S-OK ;
+
+\ =====================================================================
+\  Strict component decoding
+\ =====================================================================
+
+: _FUE-HEX-VALUE  ( byte -- value valid? )
+    DUP 48 58 WITHIN IF 48 - -1 EXIT THEN
+    DUP 65 71 WITHIN IF 65 - 10 + -1 EXIT THEN
+    DUP 97 103 WITHIN IF 97 - 10 + -1 EXIT THEN
+    DROP 0 0 ;
+
+: _FUE-DECODE-MEASURE-ADVANCE
+  ( decoded-u source source-u consumed -- decoded-u' source' source-u' )
+    >R
+    R@ -
+    SWAP R> + SWAP
+    ROT 1+ -ROT ;
+
+: FORM-URLENCODED-DECODE-MEASURE
+  ( source source-u -- decoded-u status )
+    2DUP _FUE-SPAN-STATUS ?DUP IF
+        >R 2DROP 0 R> EXIT
+    THEN
+    0 -ROT
+    BEGIN DUP WHILE
+        OVER C@ 37 = IF
+            DUP 3 < IF
+                2DROP DROP 0 FORM-URLENCODED-S-ENCODING EXIT
+            THEN
+            OVER 1+ C@ _FUE-HEX-VALUE
+            0= IF
+                DROP 2DROP DROP
+                0 FORM-URLENCODED-S-ENCODING EXIT
+            THEN
+            DROP
+            OVER 2 + C@ _FUE-HEX-VALUE
+            0= IF
+                DROP 2DROP DROP
+                0 FORM-URLENCODED-S-ENCODING EXIT
+            THEN
+            DROP 3
+        ELSE
+            1
+        THEN
+        _FUE-DECODE-MEASURE-ADVANCE
+    REPEAT
+    2DROP FORM-URLENCODED-S-OK ;
+
+: _FUE-DECODE-GEOMETRY
+  ( source source-u destination destination-capacity -- decoded-u status )
+    2>R
+    2DUP _FUE-SPAN-STATUS ?DUP IF
+        -ROT 2DROP
+        2R> 2DROP 0 SWAP EXIT
+    THEN
+    2R@ _FUE-SPAN-STATUS ?DUP IF
+        -ROT 2DROP
+        2R> 2DROP 0 SWAP EXIT
+    THEN
+    2DUP 2R@ MSPAN-OVERLAP? IF
+        2DROP 2R> 2DROP
+        0 FORM-URLENCODED-S-ALIAS EXIT
+    THEN
+    FORM-URLENCODED-DECODE-MEASURE
+    ?DUP IF
+        NIP 2R> 2DROP 0 SWAP EXIT
+    THEN
+    2R@ NIP OVER < IF
+        DROP 2R> 2DROP
+        0 FORM-URLENCODED-S-CAPACITY EXIT
+    THEN
+    2R> 2DROP FORM-URLENCODED-S-OK ;
+
+: _FUE-DECODE-ADVANCE
+  ( source source-u destination consumed -- source' source-u' destination' )
+    >R
+    1+
+    SWAP R@ - SWAP
+    ROT R> + -ROT ;
+
+: FORM-URLENCODED-DECODE
+  ( source source-u destination destination-capacity -- written status )
+    2OVER 2OVER _FUE-DECODE-GEOMETRY
+    ?DUP IF
+        >R DROP 2DROP 2DROP 0 R> EXIT
+    THEN
+    >R DROP
+    BEGIN OVER WHILE
+        2 PICK C@ DUP 37 = IF
+            DROP
+            2 PICK 1+ C@ _FUE-HEX-VALUE DROP
+            3 PICK 2 + C@ _FUE-HEX-VALUE DROP
+            SWAP 4 LSHIFT OR
+            OVER C!
+            3
+        ELSE
+            DUP 43 = IF DROP 32 THEN
+            OVER C!
+            1
+        THEN
+        _FUE-DECODE-ADVANCE
+    REPEAT
+    2DROP DROP
+    R> FORM-URLENCODED-S-OK ;

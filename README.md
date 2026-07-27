@@ -99,8 +99,9 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   JSON, and ES256 without importing JWT or OAuth claim policy. The standalone
   OAuth utility layer begins with checked RFC 7636 PKCE S256 generation and
   derivation backed by hardware entropy and SHA-256. A separate stateless
-  form-component encoder supplies bounded `application/x-www-form-urlencoded`
-  serialization without inheriting the legacy URL builder's global scratch.
+  form-component codec supplies bounded `application/x-www-form-urlencoded`
+  serialization and strict decoding without inheriting the legacy URL
+  builder's global scratch.
   Opaque access, refresh, and identity tokens live in caller-owned guarded
   storage with staged replacement and zeroization. Refresh-token rotation uses
   a caller-owned one-shot descriptor bound to the exact token object,
