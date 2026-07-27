@@ -75,7 +75,10 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
 - **Statistics and regression** — running mean/variance/stddev, Welford's online algorithm, min/max tracking, histograms, linear regression, polynomial fit, time-series moving averages (SMA, EMA, DEMA), and advanced statistics (skewness, kurtosis, percentiles).
 - **Probability** — discrete and continuous distributions, random sampling.
 - **DSP filters** — biquad coefficients (low-pass, high-pass, band-pass, notch, peaking EQ), shared with the audio synth.
-- **Cryptography** — SHA-256 and SHA-512, full message-schedule unrolled implementations used by the AT Protocol module for content hashing, and by the WebSocket handshake for inline SHA-1.
+- **Cryptography** — checked one-shot SHA-256 and SHA-512 over the chip
+  accelerator, including multi-span hashing, preflighted caller geometry,
+  scoped ownership, and failure cleanup. Ed25519 consumes the checked
+  SHA-512 boundary without exposing an ambient streaming context.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O

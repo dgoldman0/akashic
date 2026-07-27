@@ -1569,25 +1569,19 @@ Memory cost: 16 × 24 bytes = 384 bytes per module.  Trivial.
 
 **This is the recommended pattern for Category 2/3 modules.**
 
-**Step 4: Handle multi-step APIs.**
+**Step 4: Avoid caller-spanning cryptographic state.**
 
-For modules with BEGIN/ADD/END patterns (sha256, sha3), the guard
-must span multiple calls.  Use explicit `GUARD-ACQUIRE`/`GUARD-RELEASE`
-as sha256.f already does:
+This roadmap originally used SHA-256's `BEGIN`/`ADD`/`END` words as the
+example for holding a guard across a multi-call operation. Those words are no
+longer public. SHA-256 and SHA-512 now expose only complete
+`HASH`/`HASH-2`/`HASH-3` operations, each of which initializes, consumes all
+borrowed spans, finalizes, scrubs, and releases ownership in one exception-safe
+scope.
 
-```forth
-: SHA256-BEGIN  _sha256-guard GUARD-ACQUIRE  ... ;
-: SHA256-ADD    _sha256-guard GUARD-MINE? 0= IF -258 THROW THEN  ... ;
-: SHA256-END    ...  _sha256-guard GUARD-RELEASE ;
-```
-
-With per-core guards, this becomes:
-
-```forth
-: SHA256-BEGIN  _sha256-my-guard GUARD-ACQUIRE  ... ;
-: SHA256-ADD    _sha256-my-guard GUARD-MINE? 0= IF -258 THROW THEN ... ;
-: SHA256-END    ...  _sha256-my-guard GUARD-RELEASE ;
-```
+Modules that still expose a genuinely stateful multi-call API must either make
+the caller own the complete state or provide a separately qualified scoped
+callback. Do not reintroduce an ambient SHA stream whose guard can be stranded
+by an early exit or whose running state can be reset by same-owner recursion.
 
 ### Invariants & Constraints
 

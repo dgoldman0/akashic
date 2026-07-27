@@ -34,6 +34,8 @@ def _assert_source_contracts() -> None:
     acc_source = ACC_SOURCE.read_text(encoding="utf-8")
     assert "REQUIRE crypto-acc.f" in source
     assert "GUARD-BLOCKING _crypto-acc-guard" in acc_source
+    assert "REQUIRE ../utils/memory-span.f" in acc_source
+    assert "CRYPTO-ACC-RESERVED-OVERLAP?" in acc_source
     assert "_CACC-SCRUB" in acc_source
     assert "_CACC-WITH-OUTER" in acc_source
     assert "GUARD-BLOCKING _fld-guard" in source

@@ -12,8 +12,9 @@
 \  Constants:
 \   ED25519-KEY-LEN  ( -- 32 )
 \   ED25519-SIG-LEN  ( -- 64 )
+\   ED25519-E-SHA    ( -- -2519 )
 \
-\  Not reentrant.
+\  Public operations are serialized; private scratch is not reentrant.
 \ =================================================================
 
 REQUIRE sha512.f
@@ -23,6 +24,15 @@ PROVIDED akashic-ed25519
 
 32 CONSTANT ED25519-KEY-LEN
 64 CONSTANT ED25519-SIG-LEN
+
+\ Public Ed25519 operations use the existing exception contract.  A checked
+\ SHA-512 status cannot be left on the data stack or treated as digest data.
+-2519 CONSTANT ED25519-E-SHA
+
+: _ED-SHA-CHECK  ( sha-status -- )
+    ?DUP IF
+        DROP ED25519-E-SHA THROW
+    THEN ;
 
 \ -----------------------------------------------------------------
 \  Curve constants — 32-byte LE buffers
@@ -352,7 +362,7 @@ VARIABLE _ED-CT-MSK
 : ED25519-KEYGEN  ( seed pub priv -- )
     _ED-KG-PRIV ! _ED-KG-PUB ! _ED-KG-SEED !
     _ED-INIT-BASE
-    _ED-KG-SEED @ 32 _ED-H64 SHA512-HASH
+    _ED-KG-SEED @ 32 _ED-H64 SHA512-HASH _ED-SHA-CHECK
     \ Clamp
     _ED-H64 C@ 0xF8 AND _ED-H64 C!
     _ED-H64 31 + C@ 0x3F AND _ED-H64 31 + C!
@@ -373,21 +383,19 @@ VARIABLE _ED-CT-MSK
     _ED-MSG-L ! _ED-MSG-A !
     _ED-INIT-BASE
     \ r = SHA-512(prefix || msg) mod L
-    SHA512-BEGIN
-    _ED-SG-PRIV @ 32 + 32 SHA512-ADD
-    _ED-MSG-A @ _ED-MSG-L @ SHA512-ADD
-    _ED-H64 SHA512-END
+    _ED-SG-PRIV @ 32 + 32
+    _ED-MSG-A @ _ED-MSG-L @
+    _ED-H64 SHA512-HASH-2 _ED-SHA-CHECK
     _ED-H64 _ED-SC1 _ED-REDUCE
     \ R = r * B
     _ED-SC1 _ED-BASE _ED-SMUL
     _ED-PA _ED-PC 128 CMOVE
     _ED-PC _ED-SG-SIG @ _ED-ENCODE
     \ h = SHA-512(R || pub || msg) mod L
-    SHA512-BEGIN
-    _ED-SG-SIG @ 32 SHA512-ADD
-    _ED-SG-PUB @ 32 SHA512-ADD
-    _ED-MSG-A @ _ED-MSG-L @ SHA512-ADD
-    _ED-H64 SHA512-END
+    _ED-SG-SIG @ 32
+    _ED-SG-PUB @ 32
+    _ED-MSG-A @ _ED-MSG-L @
+    _ED-H64 SHA512-HASH-3 _ED-SHA-CHECK
     _ED-H64 _ED-SC2 _ED-REDUCE
     \ S = (r + h*a) mod L
     _ED-USE-L
@@ -417,11 +425,10 @@ VARIABLE _ED-CT-MSK
     \ ── P02: reject malleable signatures (S >= L) ──
     _ED-VF-SIG @ 32 + _ED-L _ED-BYTES-GTE? IF FALSE EXIT THEN
     \ h = SHA-512(R||pub||msg) mod L
-    SHA512-BEGIN
-    _ED-VF-SIG @ 32 SHA512-ADD
-    _ED-VF-PUB @ 32 SHA512-ADD
-    _ED-MSG-A @ _ED-MSG-L @ SHA512-ADD
-    _ED-H64 SHA512-END
+    _ED-VF-SIG @ 32
+    _ED-VF-PUB @ 32
+    _ED-MSG-A @ _ED-MSG-L @
+    _ED-H64 SHA512-HASH-3 _ED-SHA-CHECK
     _ED-H64 _ED-SC1 _ED-REDUCE
     \ S*B  — encode immediately before second SMUL clobbers PB
     _ED-VF-SIG @ 32 + _ED-BASE _ED-SMUL
@@ -440,16 +447,36 @@ VARIABLE _ED-CT-MSK
     _ED-H64 64 0 FILL
     _ED-SC1 32 0 FILL ;
 
-\ ── Concurrency Guard ─────────────────────────────────────
-[DEFINED] GUARDED [IF] GUARDED [IF]
+\ =====================================================================
+\  Always-present operation and field transactions
+\ =====================================================================
+\  Ed25519 owns module scratch and switches the shared Field ALU between
+\  p=2^255-19 and the subgroup order.  Both protections are therefore part
+\  of the public operation, not optional build behavior.
+
 REQUIRE ../concurrency/guard.f
-GUARD _ed25519-guard
+GUARD-BLOCKING _ed25519-guard
 
 ' ED25519-KEYGEN  CONSTANT _ed-keygen-xt
 ' ED25519-SIGN    CONSTANT _ed-sign-xt
 ' ED25519-VERIFY  CONSTANT _ed-verify-xt
 
-: ED25519-KEYGEN  _ed-keygen-xt  _ed25519-guard WITH-GUARD ;
-: ED25519-SIGN    _ed-sign-xt    _ed25519-guard WITH-GUARD ;
-: ED25519-VERIFY  _ed-verify-xt  _ed25519-guard WITH-GUARD ;
-[THEN] [THEN]
+: _ED25519-KEYGEN-OWNED
+    _ed-keygen-xt _ed25519-guard WITH-GUARD ;
+: _ED25519-SIGN-OWNED
+    _ed-sign-xt _ed25519-guard WITH-GUARD ;
+: _ED25519-VERIFY-OWNED
+    _ed-verify-xt _ed25519-guard WITH-GUARD ;
+
+' _ED25519-KEYGEN-OWNED CONSTANT _ed-keygen-owned-xt
+' _ED25519-SIGN-OWNED   CONSTANT _ed-sign-owned-xt
+' _ED25519-VERIFY-OWNED CONSTANT _ed-verify-owned-xt
+
+\ Canonical lock order is Field -> Ed25519 -> SHA-512.  A caller already
+\ holding FIELD-WITH-TRANSACTION may recurse safely without an ABBA edge.
+: ED25519-KEYGEN
+    _ed-keygen-owned-xt FIELD-WITH-TRANSACTION ;
+: ED25519-SIGN
+    _ed-sign-owned-xt FIELD-WITH-TRANSACTION ;
+: ED25519-VERIFY
+    _ed-verify-owned-xt FIELD-WITH-TRANSACTION ;

@@ -1,337 +1,259 @@
 #!/usr/bin/env python3
-"""Test suite for Tier-1 crypto concurrency guards.
+"""Focused linked qualification for scoped SHA-256/SHA-512 operations."""
 
-Validates that the guard wrappers on crypto modules:
-  1. Preserve functional correctness (one-shot + streaming APIs).
-  2. Fail loud (-258 throw) when streaming ops called without BEGIN.
-  3. Release the guard after one-shot and streaming completion.
-  4. Release the guard on exception paths (error cleanup).
-  5. Allow recursive nesting (one-shot wraps streaming internals).
+from __future__ import annotations
 
-Uses SHA-256 as the representative module since it has both
-one-shot (SHA256-HASH) and streaming (SHA256-BEGIN/ADD/END) APIs.
+import argparse
+import re
+import sys
+from pathlib import Path
+
+
+LOCAL_TESTING = Path(__file__).resolve().parent
+sys.path.insert(0, str(LOCAL_TESTING))
+
+import akashic_tui as harness  # noqa: E402
+from asm import assemble  # noqa: E402
+
+
+PROFILE_PREFIX = "sha-scoped-contracts"
+MATH = LOCAL_TESTING.parent / "akashic" / "math"
+SHA256 = MATH / "sha256.f"
+SHA512 = MATH / "sha512.f"
+BIOS = harness.MEGAPAD_ROOT / "bios.asm"
+
+AUTOEXEC = r"""\ autoexec.f - scoped SHA operation contract
+ENTER-USERLAND
+: _SHA-CONTRACT-BOOT ." SHA CONTRACT BOOT" CR ;
+_SHA-CONTRACT-BOOT
+{context_address} CONSTANT _SHA-CONTRACT-CONTEXT
+REQUIRE math/{module}.f
+: _SHA-MODULE-LOADED ." SHA MODULE LOADED" CR ;
+_SHA-MODULE-LOADED
+REQUIRE local_testing/{contract}
+: _SHA-FIXTURE-LOADED ." SHA FIXTURE LOADED" CR ;
+_SHA-FIXTURE-LOADED
+{entrypoint}
 """
-import os, sys, time
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
-SHA256_F   = os.path.join(ROOT_DIR, "akashic", "math", "sha256.f")
-EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 
-sys.path.insert(0, EMU_DIR)
-from asm import assemble
-from system import MegapadSystem
+def _word_body(source: str, name: str) -> str:
+    match = re.search(
+        rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+        rf"(?P<body>.*?)[ \t]+;",
+        source,
+    )
+    assert match is not None, f"missing definition for {name}"
+    return match.group("body")
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
-# ── Emulator helpers ──
+def _assert_checked_source(path: Path, prefix: str, short: str) -> None:
+    source = path.read_text(encoding="utf-8")
+    assert "REQUIRE crypto-acc.f" in source
+    assert "REQUIRE ../utils/memory-span.f" in source
+    assert re.search(
+        rf"(?m)^GUARD-BLOCKING _{prefix.lower()}-guard$",
+        source,
+    )
 
-_snapshot = None
+    for status in (
+        "OK",
+        "STATE",
+        "RANGE",
+        "ALIAS",
+        "LENGTH-OVERFLOW",
+        "INVALID",
+        "CRYPTO",
+    ):
+        assert f"{prefix}-S-{status}" in source
+    assert f"{prefix}-STATUS-VALID?" in source
 
-def _load_bios():
-    with open(BIOS_PATH) as f:
-        return assemble(f.read())
+    local_reserved = _word_body(
+        source, f"_{short}-LOCAL-RESERVED-OVERLAP?"
+    )
+    assert "CRYPTO-ACC-RESERVED-OVERLAP?" in local_reserved
+    assert "GUARD-BLOCKING-SIZE MSPAN-OVERLAP?" in local_reserved
 
-def _load_forth_lines(path):
-    with open(path) as f:
-        lines = []
-        for line in f.read().splitlines():
-            s = line.strip()
-            if not s or s.startswith('\\'):
-                continue
-            if s.startswith('REQUIRE ') or s.startswith('PROVIDED '):
-                continue
-            lines.append(line)
-        return lines
+    bios_span = _word_body(source, f"_{short}-BIOS-SPAN-STATUS")
+    assert "['] SHA2-SPAN-STATUS CATCH" in bios_span
+    assert f"_{short}-DROP3" in bios_span
+    for admitted in ("OK", "RANGE", "ALIAS"):
+        assert f"{prefix}-S-{admitted}" in bios_span
+    for impossible in ("STATE", "LENGTH-OVERFLOW", "INVALID"):
+        assert f"{prefix}-S-{impossible}" not in bios_span
+    assert f"{prefix}-S-CRYPTO" in bios_span
 
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
+    caller_span = _word_body(source, f"{prefix}-CALLER-SPAN-STATUS")
+    input_check = caller_span.index(f"_{short}-INPUT-SPAN?")
+    local_check = caller_span.index(
+        f"_{short}-LOCAL-RESERVED-OVERLAP?"
+    )
+    bios_check = caller_span.index(f"_{short}-BIOS-SPAN-STATUS")
+    assert input_check < local_check < bios_check
+    assert f"{prefix}-S-INVALID" in caller_span
+    assert f"{prefix}-S-ALIAS" in caller_span
+    assert f"{prefix}-INIT" not in caller_span
 
-def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
-    return buf
+    for removed in ("BEGIN", "ADD", "END"):
+        assert not re.search(
+            rf"(?m)^:\s+{prefix}-{removed}\b",
+            source,
+        ), f"unsafe public streaming word {prefix}-{removed} still exists"
+    assert f"_{prefix}-RAW-" not in source
 
-def uart_text(buf):
-    return "".join(
-        chr(b) if (0x20 <= b < 0x7F or b in (10, 13, 9)) else ""
-        for b in buf)
+    compare = _word_body(source, f"{prefix}-COMPARE")
+    assert ">R" not in compare
+    assert "R>" not in compare
+    assert compare.count("2 PICK I + C@") == 2
+    assert "XOR OR" in compare
 
-def save_cpu_state(cpu):
-    return {k: getattr(cpu, k) for k in
-            ['pc','psel','xsel','spsel','flag_z','flag_c','flag_n','flag_v',
-             'flag_p','flag_g','flag_i','flag_s','d_reg','q_out','t_reg',
-             'ivt_base','ivec_id','trap_addr','halted','idle','cycle_count',
-             '_ext_modifier']} | {'regs': list(cpu.regs)}
+    finish = _word_body(source, f"_{short}-FINISH")
+    assert f"['] {prefix}-FINAL CATCH" in finish
+    assert f"_{short}-CLEAR-AFTER-FAILURE" in finish
+    assert "R> THROW" in finish
 
-def restore_cpu_state(cpu, state):
-    cpu.regs[:] = state['regs']
-    for k, v in state.items():
-        if k != 'regs':
-            setattr(cpu, k, v)
+    clear = _word_body(source, f"_{short}-CLEAR-STATUS")
+    assert f"['] {prefix}-CLEAR CATCH" in clear
 
-def build_snapshot():
-    global _snapshot
-    if _snapshot: return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + sha256.f ...")
-    t0 = time.time()
-    bios_code    = _load_bios()
-    kdos_lines   = _load_forth_lines(KDOS_PATH)
-    event_lines  = _load_forth_lines(EVENT_F)
-    sem_lines    = _load_forth_lines(SEM_F)
-    guard_lines  = _load_forth_lines(GUARD_F)
-    sha256_lines = _load_forth_lines(SHA256_F)
+    for number, updates in ((1, 1), (2, 2), (3, 3)):
+        prefix_body = _word_body(source, f"_{short}-PREFIX-{number}")
+        assert prefix_body.count(f"{prefix}-INIT") == 1
+        assert prefix_body.count(f"{prefix}-UPDATE") == updates
 
-    # Test helpers
-    helpers = [
-        'CREATE _TB 512 ALLOT  VARIABLE _TL',
-        ': TR  0 _TL ! ;',
-        ': TC  ( c -- ) _TB _TL @ + C!  1 _TL +! ;',
-        ': TA  ( -- addr u ) _TB _TL @ ;',
-    ]
+        unit = _word_body(source, f"_{short}-UNIT-{number}")
+        assert unit.index("GUARD-ACQUIRE") < unit.index(
+            f"_{short}-PREFIX-{number} CATCH"
+        )
+        assert f"_{short}-CLEAR-AFTER-FAILURE" in unit
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
+    for suffix, number in (("HASH", 1), ("HASH-2", 2), ("HASH-3", 3)):
+        public = _word_body(source, f"{prefix}-{suffix}")
+        assert public.index(f"_{short}-PREFLIGHT-{number}") < public.index(
+            "CRYPTO-ACC-WITH-TRANSACTION"
+        )
+        assert f"_{short}-UNIT-{number}" in public
+        preflight = _word_body(source, f"_{short}-PREFLIGHT-{number}")
+        assert preflight.count(
+            f"{prefix}-CALLER-SPAN-STATUS"
+        ) == number + 1
 
-    all_lines = (kdos_lines + ["ENTER-USERLAND"]
-                 + event_lines + sem_lines + guard_lines
-                 + sha256_lines
-                 + helpers)
-    payload = "\n".join(all_lines) + "\n"
-    data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
-    while steps < mx:
-        if sys_obj.cpu.halted: break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else: break
-            continue
-        batch = sys_obj.run_batch(min(100_000, mx - steps))
-        steps += max(batch, 1)
-    text = uart_text(buf)
-    for l in text.strip().split('\n'):
-        if '?' in l and 'not found' in l.lower():
-            print(f"  [!] {l}")
-    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
-                 bytes(sys_obj._ext_mem))
-    print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
-    return _snapshot
 
-def run_forth(lines, max_steps=50_000_000):
-    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-    for _ in range(5_000_000):
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        sys_obj.run_batch(10_000)
-    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
-    buf.clear()
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode(); pos = 0; steps = 0
-    while steps < max_steps:
-        if sys_obj.cpu.halted: break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else: break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-    return uart_text(buf)
+def _assert_fixture_source(
+    path: Path, prefix: str, short: str, later_offset: int
+) -> None:
+    source = path.read_text(encoding="utf-8")
+    caller_span = _word_body(
+        source, f"_{short.lower()}t-test-caller-span-status"
+    )
+    assert f"{prefix}-CALLER-SPAN-STATUS" in caller_span
+    for status in ("OK", "RANGE", "ALIAS", "INVALID"):
+        assert f"{prefix}-S-{status}" in caller_span
+    assert "EXT-MEM-BASE EXT-MEM-SIZE + 1 - 2" in caller_span
+    assert "_SHA-CONTRACT-CONTEXT" in caller_span
+    assert f"{prefix}-INIT" in caller_span
+    assert f"{prefix}-UPDATE" in caller_span
+    assert f"{prefix}-CLEAR" in caller_span
 
-# ── Test framework ──
+    compare = _word_body(source, f"_{short.lower()}t-test-compare")
+    assert f"_s{short[1:]}t-copy {later_offset} +" in compare
+    assert compare.count(f"{prefix}-COMPARE 0=") == 2
 
-_pass_count = 0
-_fail_count = 0
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=float, default=900.0)
+    parser.add_argument(
+        "--part",
+        choices=("all", "sha256", "sha512"),
+        default="all",
+        help="run one bounded image or both images serially",
+    )
+    args = parser.parse_args()
 
-# ── Reference values ──
-# SHA256("abc") bytes: 186 120 22 191 ...
-# We check first 4 bytes as decimal
+    _assert_checked_source(SHA256, "SHA256", "S256")
+    _assert_checked_source(SHA512, "SHA512", "S512")
+    _assert_fixture_source(
+        LOCAL_TESTING / "sha256-scoped-test.f", "SHA256", "S256", 17
+    )
+    _assert_fixture_source(
+        LOCAL_TESTING / "sha512-scoped-test.f", "SHA512", "S512", 41
+    )
+    sha512_source = SHA512.read_text(encoding="utf-8")
+    for removed_software_state in (
+        "_S512-K",
+        "_S512-IV",
+        "_S512-H ",
+        "_S512-W ",
+        "_S512-BUF",
+        "_S512-COMPRESS",
+    ):
+        assert removed_software_state not in sha512_source
+    bios_labels: dict[str, int] = {}
+    assemble(BIOS.read_text(encoding="utf-8"), labels_out=bios_labels)
 
-# Helper: 3-byte "abc" buffer + 32-byte hash buffer
-_ABC_SETUP = [
-    'CREATE _m 3 ALLOT',
-    '97 _m C!  98 _m 1 + C!  99 _m 2 + C!',
-    'CREATE _h 32 ALLOT',
-]
+    parts = (
+        (
+            "sha256",
+            "sha256-scoped-test.f",
+            "_S256T-RUN",
+            "SHA256 SCOPED",
+            "sha256_contexts",
+        ),
+        (
+            "sha512",
+            "sha512-scoped-test.f",
+            "_S512T-RUN",
+            "SHA512 SCOPED",
+            "sha512_contexts",
+        ),
+    )
+    selected_parts = (
+        parts if args.part == "all" else tuple(p for p in parts if p[0] == args.part)
+    )
+    for part, contract_name, entrypoint, marker, context_label in selected_parts:
+        profile = f"{PROFILE_PREFIX}-{part}"
+        image_path = Path(f"/tmp/akashic-{profile}.img")
+        contract = LOCAL_TESTING / contract_name
+        harness.PROFILES[profile] = harness.Profile(
+            roots=(f"math/{part}.f",),
+            resources=(),
+            autoexec=AUTOEXEC.format(
+                module=part,
+                contract=contract_name,
+                entrypoint=entrypoint,
+                context_address=bios_labels[context_label],
+            ),
+            ready_markers=(f"{marker} PASS",),
+            stable_markers=(f"{marker} PASS",),
+            failure_markers=(
+                f"{marker} FAIL",
+                f"{marker} ASSERT",
+                f"{marker} STACK",
+                "DRIVER THROW",
+                "dictionary full",
+                "exception",
+                "(not found)",
+            ),
+            initial_files=(
+                (f"local_testing/{contract_name}", contract.read_bytes()),
+            ),
+            linked=True,
+            include_large_sample=False,
+            total_sectors=2048,
+        )
+        image = harness.build_image(profile, image_path)
+        if not harness.smoke(
+            profile,
+            image,
+            cols=120,
+            rows=40,
+            max_steps=800_000_000,
+            timeout=args.timeout,
+            ext_mem_mib=128,
+        ):
+            return 1
+    return 0
 
-def _hash_check_lines():
-    """Lines that print first 4 bytes after hash is in _h."""
-    return ['." B0=" _h C@ .  ." B1=" _h 1 + C@ .  ." B2=" _h 2 + C@ .  ." B3=" _h 3 + C@ .']
-
-ABC_EXPECTED = 'B0=186 B1=120 B2=22 B3=191 '
-
-# ============================================================
-# Tests
-# ============================================================
-
-def main():
-    build_snapshot()
-    print()
-
-    # ── 1. One-shot functionality preserved ──
-    print("=== One-shot correctness (guard transparent) ===")
-    check("SHA256-HASH abc via guard",
-          _ABC_SETUP + [
-           '_m 3 _h SHA256-HASH',
-          ] + _hash_check_lines(),
-          ABC_EXPECTED)
-
-    # ── 2. Streaming functionality preserved ──
-    print("\n=== Streaming correctness (guard transparent) ===")
-    check("SHA256 streaming abc via guard",
-          _ABC_SETUP + [
-           'SHA256-BEGIN',
-           '_m 3 SHA256-ADD',
-           '_h SHA256-END',
-          ] + _hash_check_lines(),
-          ABC_EXPECTED)
-
-    # ── 3. Guard released after one-shot ──
-    print("\n=== Guard released after one-shot ===")
-    check("guard free after SHA256-HASH",
-          _ABC_SETUP + [
-           '_m 3 _h SHA256-HASH',
-           '_sha256-guard GUARD-HELD?',
-           'IF ." HELD" ELSE ." FREE" THEN'],
-          "FREE")
-
-    # ── 4. Guard released after streaming END ──
-    print("\n=== Guard released after streaming END ===")
-    check("guard free after SHA256-END",
-          _ABC_SETUP + [
-           'SHA256-BEGIN',
-           '_m 3 SHA256-ADD',
-           '_h SHA256-END',
-           '_sha256-guard GUARD-HELD?',
-           'IF ." HELD" ELSE ." FREE" THEN'],
-          "FREE")
-
-    # ── 5. Guard held between BEGIN and END ──
-    print("\n=== Guard held during streaming session ===")
-    check("guard held after SHA256-BEGIN",
-          _ABC_SETUP + [
-           'SHA256-BEGIN',
-           '_sha256-guard GUARD-HELD?',
-           'IF ." HELD" ELSE ." FREE" THEN',
-           '_h SHA256-END'],
-          "HELD")
-
-    # ── 6. -258 on SHA256-ADD without BEGIN ──
-    print("\n=== -258 on unguarded streaming ops ===")
-    check("SHA256-ADD without BEGIN throws -258",
-          _ABC_SETUP + [
-           ": _TADD  _m 3 SHA256-ADD ;",
-           "' _TADD CATCH .",
-          ],
-          "-258 ")
-
-    check("SHA256-END without BEGIN throws -258",
-          _ABC_SETUP + [
-           ": _TEND  _h SHA256-END ;",
-           "' _TEND CATCH .",
-          ],
-          "-258 ")
-
-    # ── 7. Guard released on throw in one-shot ──
-    print("\n=== Guard cleanup on exception ===")
-    # Two sequential one-shot calls — second must succeed (guard not stuck)
-    check("two sequential SHA256-HASH calls succeed",
-          _ABC_SETUP + [
-           'CREATE _h2 32 ALLOT',
-           '_m 3 _h SHA256-HASH',
-           '_m 3 _h2 SHA256-HASH',
-           '." B0=" _h2 C@ .  ." B1=" _h2 1 + C@ .  ." B2=" _h2 2 + C@ .  ." B3=" _h2 3 + C@ .'],
-          ABC_EXPECTED)
-
-    # ── 8. Two sequential streaming sessions succeed ──
-    print("\n=== Sequential streaming sessions ===")
-    check("second streaming session after first END",
-          _ABC_SETUP + [
-           'CREATE _h2 32 ALLOT',
-           'SHA256-BEGIN  _m 3 SHA256-ADD  _h SHA256-END',
-           'SHA256-BEGIN  _m 3 SHA256-ADD  _h2 SHA256-END',
-           '." B0=" _h2 C@ .  ." B1=" _h2 1 + C@ .  ." B2=" _h2 2 + C@ .  ." B3=" _h2 3 + C@ .'],
-          ABC_EXPECTED)
-
-    # ── 9. One-shot after streaming and vice versa ──
-    print("\n=== Mixed one-shot/streaming sequences ===")
-    check("one-shot after streaming",
-          _ABC_SETUP + [
-           'CREATE _h2 32 ALLOT',
-           'SHA256-BEGIN  _m 3 SHA256-ADD  _h SHA256-END',
-           '_m 3 _h2 SHA256-HASH',
-           '." B0=" _h2 C@ .  ." B1=" _h2 1 + C@ .  ." B2=" _h2 2 + C@ .  ." B3=" _h2 3 + C@ .'],
-          ABC_EXPECTED)
-
-    check("streaming after one-shot",
-          _ABC_SETUP + [
-           'CREATE _h2 32 ALLOT',
-           '_m 3 _h SHA256-HASH',
-           'SHA256-BEGIN  _m 3 SHA256-ADD  _h2 SHA256-END',
-           '." B0=" _h2 C@ .  ." B1=" _h2 1 + C@ .  ." B2=" _h2 2 + C@ .  ." B3=" _h2 3 + C@ .'],
-          ABC_EXPECTED)
-
-    # ── 10. Recursive guard nesting (one-shot uses streaming internally) ──
-    print("\n=== Recursive guard nesting ===")
-    # SHA256-HASH internally does BEGIN/ADD/END via the old xt.
-    # If late binding causes the NEW guarded versions to be called,
-    # the recursive guard (depth counter) must allow this.
-    # Best proof: SHA256-HASH simply produces correct output.
-    check("one-shot works (implies recursive nesting)",
-          _ABC_SETUP + [
-           '_m 3 _h SHA256-HASH',
-          ] + _hash_check_lines(),
-          ABC_EXPECTED)
-
-    # ── 11. Guard stays free when -258 thrown ──
-    print("\n=== Guard stays free after -258 throw ===")
-    check("guard free after -258 from ADD",
-          _ABC_SETUP + [
-           ": _TADD2  _m 3 SHA256-ADD ;",
-           "' _TADD2 CATCH DROP",
-           '_sha256-guard GUARD-HELD?',
-           'IF ." HELD" ELSE ." FREE" THEN'],
-          "FREE")
-
-    # ── Summary ──
-    print()
-    print("=" * 60)
-    print(f"Crypto guard tests: {_pass_count}/{_pass_count + _fail_count} passed, "
-          f"{_fail_count} failed")
-    if _fail_count == 0:
-        print("All crypto guard tests passed!")
-    else:
-        print("SOME TESTS FAILED")
-        sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
