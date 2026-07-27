@@ -84,6 +84,8 @@ Megapad-64's tile engine provides hardware FP16 arithmetic (IEEE 754 half-precis
   failure cleanup. Caller-owned HMAC-SHA-256 stages its digest and zeroes
   key-bearing workspace before a successful return. Ed25519 consumes the
   checked SHA-512 boundary without exposing an ambient streaming context.
+  The generic JOSE layer begins with a state-free, canonical unpadded
+  Base64url codec rather than reusing the permissive network decoder.
 - **Sorting and interpolation** — in-place quicksort, linear/cubic interpolation, search utilities.
 
 ### audio/ — Synthesis, Sequencing, and Audio I/O
