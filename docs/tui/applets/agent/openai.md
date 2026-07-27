@@ -66,8 +66,8 @@ The prompt buffer is zeroed on submit, cancel, and shutdown. The provider copies
 the bytes into `security/credential.f`; it never exposes a secret pointer,
 prints the credential, adds it to a transcript, or stores it in Desk TOML.
 
-Credential persistence is intentionally absent until the generic encrypted
-vault and its key lifecycle are reviewed.
+Credential persistence is intentionally absent until the generic durable
+secret store and its root-key lifecycle are available.
 
 ## Trust Gate
 

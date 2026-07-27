@@ -26,7 +26,7 @@
 \      in-place (no alloc/free).
 \    - Growing a slot: XMEM-ALLOT new block, CMOVE, XMEM-FREE-BLOCK
 \      old block.  No RESIZE in XMEM — this is the standard pattern
-\      (cf. vault.f, surface.f).
+\      (cf. surface.f).
 \    - Capacities are rounded up to 64-byte boundaries (XMEM tile
 \      alignment) with a 64-byte minimum, reducing churn.
 \

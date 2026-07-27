@@ -1,347 +1,189 @@
-# akashic-aes — AES-256/128-GCM Authenticated Encryption
+# `akashic-aes` — caller-owned AES-GCM
 
-Hardware-accelerated AES-GCM authenticated encryption and decryption.
-Wraps the Megapad-64 AES MMIO accelerator at `0x0700` with a clean
-Akashic-layer API supporting AES-256 and AES-128, optional AAD
-(Additional Authenticated Data), and both one-shot and streaming modes.
+`akashic/math/aes.f` is the generic authenticated-encryption boundary for
+Megapad's AES-GCM engine. It provides AES-128-GCM and AES-256-GCM without
+owning a current key, selected mode, tag, stream, or operation buffer.
+Protocol choices such as OAuth credential envelopes, AT Protocol records,
+and Streams persistence belong to their respective callers.
 
 ```forth
-REQUIRE aes.f
+REQUIRE math/aes.f
 ```
 
-`PROVIDED akashic-aes` — no dependencies (uses BIOS/KDOS AES MMIO primitives).
+The current native-model qualification profile admits a 96-bit IV and a
+128-bit authentication tag. AAD and data may have any byte length from zero
+through `0xFFFFFFFF`. Larger Forth cells are rejected instead of being
+narrowed into the 32-bit MMIO length registers.
 
----
+## API
 
-## Table of Contents
+```forth
+AES-GCM-DESCRIPTOR-SIZE       ( -- 88 )
+AES-GCM-WORKSPACE-SIZE        ( -- 240 )
 
-- [Design Principles](#design-principles)
-- [Constants](#constants)
-- [Mode Selection](#mode-selection)
-- [One-Shot Encryption](#one-shot-encryption)
-- [One-Shot Decryption](#one-shot-decryption)
-- [Encryption with AAD](#encryption-with-aad)
-- [Decryption with AAD](#decryption-with-aad)
-- [Streaming API](#streaming-api)
-- [Tag Operations](#tag-operations)
-- [Usage Examples](#usage-examples)
-- [Quick Reference](#quick-reference)
-- [Internals](#internals)
+AES-GCM-DESCRIPTOR-CLEAR      ( descriptor -- status )
+AES-GCM-WORKSPACE-CLEAR       ( workspace -- status )
+AES-GCM-DESCRIPTOR-VALID?     ( descriptor -- flag )
+AES-GCM-STATUS-VALID?         ( status -- flag )
 
----
+AES-GCM-SEAL                  ( descriptor workspace -- status )
+AES-GCM-OPEN                  ( descriptor workspace -- status )
+```
 
-## Design Principles
+`SEAL` encrypts `INPUT` into `OUTPUT` and writes a tag to `TAG`. `OPEN`
+first authenticates all of `INPUT` without reading or publishing DOUT, clears
+the engine, and then repeats the authenticated operation to publish plaintext.
+The publication pass rechecks the tag. Both APIs are one-shot, scoped calls.
+There is deliberately no public begin/feed/finish lifecycle and no “last tag”
+state.
 
-| Principle | Realisation |
+## Descriptor
+
+The descriptor contains eleven cells. Field words return the address of the
+cell so callers populate them with `!`.
+
+| Field | Meaning |
 |---|---|
-| **Hardware-accelerated** | All AES-GCM operations go through the MMIO accelerator — no software AES |
-| **AEAD** | GCM provides both confidentiality and authenticity in a single operation |
-| **Variable-length data** | Handles any length including non-16-aligned via zero-padded partial blocks |
-| **AES-256 and AES-128** | Both key sizes supported; AES-256 is the default |
-| **Not reentrant** | Uses module-level VARIABLEs; one encryption at a time |
+| `AES-GCM-D.KEY` | Borrowed key address |
+| `AES-GCM-D.KEY-U` | Exactly 16 or 32 |
+| `AES-GCM-D.IV` | Borrowed IV address |
+| `AES-GCM-D.IV-U` | Exactly 12 |
+| `AES-GCM-D.AAD` | Borrowed AAD address; zero is allowed when `AAD-U` is zero |
+| `AES-GCM-D.AAD-U` | Unsigned 32-bit byte length |
+| `AES-GCM-D.INPUT` | Borrowed plaintext for `SEAL`, ciphertext for `OPEN` |
+| `AES-GCM-D.OUTPUT` | Ciphertext destination for `SEAL`, plaintext destination for `OPEN` |
+| `AES-GCM-D.DATA-U` | Shared input/output byte length, unsigned 32-bit |
+| `AES-GCM-D.TAG` | Tag destination for `SEAL`, expected tag for `OPEN` |
+| `AES-GCM-D.TAG-U` | Exactly 16 |
 
----
+Key size selects AES-128 or AES-256 for that operation; there is no
+persistent mode switch. The workspace stages a 16-byte key into a safe
+32-byte BIOS key window, avoiding an out-of-bounds read by the machine's
+fixed-width `AES-KEY!` primitive.
 
-## Constants
-
-```forth
-AES-GCM-KEY-LEN     ( -- 32 )    \ AES-256 key size in bytes
-AES-GCM-KEY128-LEN  ( -- 16 )    \ AES-128 key size in bytes
-AES-GCM-IV-LEN      ( -- 12 )    \ Nonce size in bytes
-AES-GCM-TAG-LEN     ( -- 16 )    \ Authentication tag size in bytes
-AES-GCM-BLK-LEN     ( -- 16 )    \ Block size in bytes
-```
-
----
-
-## Mode Selection
+Example descriptor setup:
 
 ```forth
-AES-GCM-USE-256  ( -- )    \ Select AES-256 (default, 14 rounds)
-AES-GCM-USE-128  ( -- )    \ Select AES-128 (10 rounds)
+CREATE D AES-GCM-DESCRIPTOR-SIZE ALLOT
+CREATE W AES-GCM-WORKSPACE-SIZE ALLOT
+
+D AES-GCM-DESCRIPTOR-CLEAR DROP
+MY-KEY D AES-GCM-D.KEY !
+32     D AES-GCM-D.KEY-U !
+MY-IV  D AES-GCM-D.IV !
+12     D AES-GCM-D.IV-U !
+MY-AAD D AES-GCM-D.AAD !
+MY-AAD-U D AES-GCM-D.AAD-U !
+MY-PLAINTEXT D AES-GCM-D.INPUT !
+MY-CIPHERTEXT D AES-GCM-D.OUTPUT !
+MY-DATA-U D AES-GCM-D.DATA-U !
+MY-TAG D AES-GCM-D.TAG !
+16     D AES-GCM-D.TAG-U !
+
+D W AES-GCM-SEAL
 ```
 
-Mode persists until changed. Default after module load is AES-256.
-
----
-
-## One-Shot Encryption
-
-### AES-GCM-ENCRYPT
-
-```forth
-AES-GCM-ENCRYPT  ( key iv pt ct len -- )
-```
-
-Encrypt `len` bytes from `pt` to `ct`. The 16-byte authentication tag is
-stored internally — retrieve it with `AES-GCM-TAG@` or display with
-`AES-GCM-TAG.`.
-
-| Parameter | Size | Description |
-|---|---|---|
-| `key` | 32 bytes (or 16 for AES-128) | Encryption key |
-| `iv` | 12 bytes | Nonce / initialization vector |
-| `pt` | `len` bytes | Plaintext input |
-| `ct` | `len` bytes | Ciphertext output |
-| `len` | cell | Data length (any size, including non-16-aligned) |
-
----
-
-## One-Shot Decryption
-
-### AES-GCM-DECRYPT
-
-```forth
-AES-GCM-DECRYPT  ( key iv ct pt len tag -- flag )
-```
-
-Decrypt `len` bytes from `ct` to `pt` and verify the authentication tag.
-Returns TRUE (-1) if the tag matches, FALSE (0) on authentication failure.
-
-| Parameter | Size | Description |
-|---|---|---|
-| `tag` | 16 bytes | Expected authentication tag |
-| Returns | flag | TRUE = authentic, FALSE = tampered |
-
-**Important:** On authentication failure, the plaintext output should be
-considered invalid and discarded.
-
----
-
-## Encryption with AAD
-
-### AES-GCM-ENCRYPT-AAD
-
-```forth
-AES-GCM-ENCRYPT-AAD  ( key iv aad alen pt ct len -- )
-```
-
-Encrypt with Additional Authenticated Data. AAD is authenticated but not
-encrypted — used for headers, sequence numbers, etc.
-
-| Parameter | Size | Description |
-|---|---|---|
-| `aad` | `alen` bytes | Additional authenticated data (max 16 bytes per block) |
-| `alen` | cell | AAD length |
-
----
-
-## Decryption with AAD
-
-### AES-GCM-DECRYPT-AAD
-
-```forth
-AES-GCM-DECRYPT-AAD  ( key iv aad alen ct pt len tag -- flag )
-```
-
-Decrypt and verify with AAD. Both the AAD and ciphertext are authenticated.
-
----
-
-## Streaming API
-
-For multi-step operations where key setup, AAD, and data feeding happen
-in separate phases.
-
-### AES-GCM-BEGIN
-
-```forth
-AES-GCM-BEGIN  ( key iv aadlen datalen dir -- )
-```
-
-Initialize a GCM context. `dir`: 0 = encrypt, 1 = decrypt.
-For decryption, write the expected tag via `AES-TAG!` before calling this.
-
-### AES-GCM-FEED-AAD
-
-```forth
-AES-GCM-FEED-AAD  ( addr len -- )
-```
-
-Feed AAD data. Call once, before feeding any data blocks.
-
-### AES-GCM-FEED-DATA
-
-```forth
-AES-GCM-FEED-DATA  ( src dst len -- )
-```
-
-Feed data blocks through the engine. Handles partial final blocks.
-
-### AES-GCM-FINISH
-
-```forth
-AES-GCM-FINISH  ( -- )
-```
-
-Finalize the GCM operation. Reads the computed tag into the internal
-tag buffer.
-
----
-
-## Tag Operations
-
-### AES-GCM-TAG@
-
-```forth
-AES-GCM-TAG@  ( dst -- )
-```
-
-Copy the 16-byte tag from the last encryption to `dst`.
-
-### AES-GCM-TAG.
-
-```forth
-AES-GCM-TAG.  ( -- )
-```
-
-Print the last tag as 32 lowercase hex characters.
-
-### AES-GCM-TAG-EQ?
-
-```forth
-AES-GCM-TAG-EQ?  ( a -- flag )
-```
-
-Constant-time compare 16-byte buffer at `a` against the last computed tag.
-Returns TRUE if equal.
-
-### AES-GCM-STATUS
-
-```forth
-AES-GCM-STATUS  ( -- n )
-```
-
-Return hardware status: 0 = idle, 2 = done (OK), 3 = auth fail.
-
----
-
-## Usage Examples
-
-### Basic Encrypt / Decrypt
-
-```forth
-REQUIRE akashic/math/aes.f
-
-CREATE MY-KEY 32 ALLOT   \ fill with key bytes
-CREATE MY-IV  12 ALLOT   \ fill with nonce
-CREATE MY-PT  64 ALLOT   \ plaintext
-CREATE MY-CT  64 ALLOT   \ ciphertext
-CREATE MY-TAG 16 ALLOT   \ tag buffer
-CREATE MY-OUT 64 ALLOT   \ decrypted output
-
-\ Encrypt 64 bytes
-MY-KEY MY-IV MY-PT MY-CT 64 AES-GCM-ENCRYPT
-MY-TAG AES-GCM-TAG@
-
-\ Decrypt and verify
-MY-KEY MY-IV MY-CT MY-OUT 64 MY-TAG AES-GCM-DECRYPT
-IF ." Authentic" ELSE ." TAMPERED" THEN
-```
-
-### With AAD (e.g., TLS record header)
-
-```forth
-CREATE HDR 5 ALLOT   \ TLS record header
-
-MY-KEY MY-IV HDR 5 MY-PT MY-CT 64 AES-GCM-ENCRYPT-AAD
-MY-TAG AES-GCM-TAG@
-
-MY-KEY MY-IV HDR 5 MY-CT MY-OUT 64 MY-TAG AES-GCM-DECRYPT-AAD
-IF ." OK" THEN
-```
-
-### AES-128 Mode
-
-```forth
-AES-GCM-USE-128
-CREATE KEY128 16 ALLOT
-\ ... encrypt with 16-byte key ...
-AES-GCM-USE-256   \ restore default
-```
-
-### Streaming
-
-```forth
-MY-KEY MY-IV 5 64 0 AES-GCM-BEGIN   \ encrypt, 5B AAD, 64B data
-HDR 5 AES-GCM-FEED-AAD
-MY-PT MY-CT 64 AES-GCM-FEED-DATA
-AES-GCM-FINISH
-MY-TAG AES-GCM-TAG@
-```
-
----
-
-## Quick Reference
-
-| Word | Stack | Description |
-|---|---|---|
-| `AES-GCM-KEY-LEN` | `( -- 32 )` | AES-256 key size |
-| `AES-GCM-KEY128-LEN` | `( -- 16 )` | AES-128 key size |
-| `AES-GCM-IV-LEN` | `( -- 12 )` | Nonce size |
-| `AES-GCM-TAG-LEN` | `( -- 16 )` | Tag size |
-| `AES-GCM-BLK-LEN` | `( -- 16 )` | Block size |
-| `AES-GCM-USE-256` | `( -- )` | Select AES-256 |
-| `AES-GCM-USE-128` | `( -- )` | Select AES-128 |
-| `AES-GCM-ENCRYPT` | `( key iv pt ct len -- )` | Encrypt (no AAD) |
-| `AES-GCM-DECRYPT` | `( key iv ct pt len tag -- flag )` | Decrypt + verify |
-| `AES-GCM-ENCRYPT-AAD` | `( key iv aad alen pt ct len -- )` | Encrypt with AAD |
-| `AES-GCM-DECRYPT-AAD` | `( key iv aad alen ct pt len tag -- flag )` | Decrypt with AAD |
-| `AES-GCM-BEGIN` | `( key iv aadlen datalen dir -- )` | Init streaming |
-| `AES-GCM-FEED-AAD` | `( addr len -- )` | Feed AAD block |
-| `AES-GCM-FEED-DATA` | `( src dst len -- )` | Feed data |
-| `AES-GCM-FINISH` | `( -- )` | Finalize, tag ready |
-| `AES-GCM-TAG@` | `( dst -- )` | Copy tag to dst |
-| `AES-GCM-TAG.` | `( -- )` | Print tag hex |
-| `AES-GCM-TAG-EQ?` | `( a -- flag )` | Compare tag |
-| `AES-GCM-STATUS` | `( -- n )` | Hardware status |
-
----
-
-## Internals
-
-### Hardware
-
-The AES-GCM accelerator lives at MMIO base `0xFFFF_FF00_0000_0700`.
-It implements AES-256-GCM and AES-128-GCM with hardware key expansion,
-CTR-mode encryption, and GHASH authentication in GF(2^128).
-
-Block processing is triggered by writing byte 15 of the DIN register.
-Tag finalization happens automatically after the last data block.
-
-### Scratch Buffers
-
-| Buffer | Size | Purpose |
-|---|---|---|
-| `_AES-TAG-BUF` | 16 bytes | Last computed authentication tag |
-| `_AES-PAD` | 16 bytes | Zero-padding for AAD and partial blocks |
-
-### Variables
-
-| Variable | Purpose |
-|---|---|
-| `_AES-VSRC` | Current source pointer during block feed |
-| `_AES-VDST` | Current destination pointer during block feed |
-| `_AES-VLEN` | Data length for current operation |
-| `_AES-VAAD` | AAD source address |
-| `_AES-VAADL` | AAD length |
-
----
-
-## Test Coverage
-
-27 tests covering:
-
-- Constants (5)
-- Module compilation (1)
-- AES-256 encryption: 1-block, 2-block, ciphertext + tag verification (4)
-- Decrypt roundtrip: plaintext recovery + auth success (2)
-- Authentication failure: corrupted tag detection (1)
-- AAD: encrypt + decrypt with associated data (3)
-- Partial blocks: non-16-aligned data with AAD (3)
-- AES-128: ciphertext + tag against reference (2)
-- Tag display, constant-time comparison (3)
-- Streaming API: encrypt with AAD (2)
-- Two-block decrypt roundtrip (1)
-
-Source: 205 lines of Forth. Test file: `local_testing/test_aes.py`.
+## Aliasing and publication
+
+Exact in-place data operation is supported by setting `INPUT` and `OUTPUT`
+to the same address. If those addresses differ, their spans must be
+disjoint. The output and tag spans must also be disjoint from all borrowed
+inputs, and descriptor/workspace storage must be disjoint from each other
+and every external span. Borrowed key, IV, AAD, and input spans may overlap
+one another.
+
+The caller must retain exclusive ownership of the descriptor, workspace, key,
+IV, AAD, input, output, and tag spans until the call returns. In particular,
+another core must neither mutate the authenticated inputs between OPEN's two
+passes nor observe the destination during its publication pass. This ownership
+rule is part of the API contract, not merely a performance recommendation.
+The second pass reauthenticates the bytes it observes and wipes on a failed
+tag check; it is not a general detector for concurrent mutation. No bounded
+workspace can make concurrent observation of an arbitrarily large destination
+safe. The library guard serializes compliant API callers; code that bypasses
+the library and writes the AES MMIO window must participate in the same
+exclusive-ownership discipline.
+
+All geometry is checked before the workspace, output, or tag is changed.
+`SEAL` stages its tag in the workspace and publishes it only after the
+complete encryption and engine-clearing transaction succeed. Once an operation
+is admitted, any `SEAL` failure clears the entire ciphertext destination. Any
+`OPEN` failure—including a bad tag in either pass—clears the entire plaintext
+destination. Engine cleanup is attempted before caller-output cleanup, and
+workspace wiping is independently attempted after every other admitted stage.
+Engine and memory-operation THROWs inside the locked call boundary are
+converted to `AES-GCM-S-INTERNAL`; recovery independently attempts engine,
+output, and workspace cleanup.
+
+## IV uniqueness
+
+For a fixed AES key, a 96-bit GCM IV must never be reused. Reusing a key/IV
+pair can destroy both confidentiality and authentication; a merely different
+plaintext, AAD value, or tag destination does not make reuse safe.
+
+This library neither allocates IVs nor persists nonce history. The caller must
+provide a production nonce strategy—normally a durable, non-wrapping counter
+or another reviewed construction—and rotate the key before that strategy can
+repeat or exhaust its space. If random IVs are used, collision probability and
+the permitted invocation count must be bounded by the application's security
+policy. Failure to obtain a definitely fresh IV must fail closed before
+`AES-GCM-SEAL` is called.
+
+## Status
+
+| Constant | Value | Meaning |
+|---|---:|---|
+| `AES-GCM-S-OK` | 0 | Operation completed and, for `OPEN`, authenticated |
+| `AES-GCM-S-INVALID` | 1 | Invalid descriptor, span, fixed size, or length |
+| `AES-GCM-S-ALIAS` | 2 | Forbidden overlap |
+| `AES-GCM-S-TIMEOUT` | 3 | Bounded engine-state poll expired |
+| `AES-GCM-S-HARDWARE` | 4 | Incoherent or rejected engine transaction |
+| `AES-GCM-S-AUTH` | 5 | Authentication failed during `OPEN` |
+| `AES-GCM-S-INTERNAL` | 6 | Unexpected THROW or cleanup failure |
+
+The locked operation boundary maps exceptions to status, and the unconditional
+cross-core guard is released on both ordinary and caught-failure paths. The API
+never exposes the hardware status byte as an application result.
+
+## Machine lifecycle and qualification boundary
+
+The BIOS byte-window ABI is unchanged:
+
+- `AES-KEY!`, `AES-IV!`, `AES-KEY-MODE!`
+- `AES-AAD-LEN!`, `AES-DATA-LEN!`, `AES-CMD!`
+- `AES-DIN!`, `AES-DOUT@`, `AES-TAG!`, `AES-TAG@`, `AES-STATUS@`
+
+Status zero is idle, one is active, two is complete, and three is terminal
+authentication/transaction failure. Every complete DIN window accounts for
+exactly the remaining declared AAD or data bytes. Partial final windows are
+zero-padded inside the native model. A tag mismatch clears native DOUT before
+status three becomes observable.
+
+The native model tracks which bytes of KEY, IV, both lengths, and (for OPEN)
+TAG were written. CMD accepts only a complete configuration; key mode uses the
+architectural AES-256 default when it is not explicitly selected.
+Writing configuration while status is active aborts and zeroizes that
+transaction; the byte that initiated reconfiguration is accepted as the first
+byte of a new configuration, but CMD cannot restart until all required fields
+have been rewritten. This is the native model's robust-entry behavior in the
+absence of an architectural reset register.
+
+The register contract has no dedicated abort/reset command. The scoped
+cleanup therefore runs a zero-key, zero-length transaction, waits for its
+terminal state with a fixed poll budget, then clears the visible tag
+window. This overwrites the native key schedule and keeps cleanup inside the
+existing BIOS ABI. A future machine-contract revision should add an
+explicit abort-and-zeroize command.
+
+The C++ native model is the qualification target for this landing.
+Native-model qualification covers NIST SP 800-38D/CAVP vectors for empty,
+AAD-only, partial, multi-block, AES-128, AES-256, in-place, stale-active
+recovery, DOUT clearing, and bad-tag paths. The build embeds the SHA-256 digest
+of `mp64_crypto.h`, and the focused runner requires the linked accelerator to
+contain that exact source-derived fingerprint. A stale native extension
+therefore fails the build gate before vectors run.
+
+RTL parity is intentionally deferred. This landing makes no claim that the RTL
+state machine has acquired the native model's tightened feed accounting,
+configuration latching, authenticate-first publication, or zeroization
+behavior.

@@ -300,7 +300,6 @@ No per-buffer guards or per-call-frame copies needed.
 
 ## Files NOT touched (no issues found)
 
-- `store/vault.f` — key storage, no issues flagged
 - `web/middleware.f` — CORS only, D02 (auth) would add to this later
 - `web/template.f`, `web/response.f`, `web/request.f`, `web/router.f` — not in blockchain path
 - `utils/json.f`, `utils/fmt.f`, `utils/datetime.f` — consumed but not changed
