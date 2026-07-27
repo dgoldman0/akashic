@@ -74,7 +74,7 @@
 \      ( alg-a alg-u metadata -- supported status )
 \ =====================================================================
 
-PROVIDED akashic-security-oauth2-metadata
+PROVIDED akashic-oauth2-metadata
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

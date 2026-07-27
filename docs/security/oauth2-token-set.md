@@ -1,4 +1,4 @@
-# akashic-oauth2-token-set — Opaque OAuth token ownership
+# akashic-oauth2-tokens — Opaque OAuth token ownership
 
 `security/oauth2/token-set.f` owns bounded OAuth access, refresh, and optional
 identity-token bytes in caller-supplied storage. Tokens remain opaque byte

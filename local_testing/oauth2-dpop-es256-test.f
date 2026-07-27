@@ -1,6 +1,6 @@
 \ oauth2-dpop-es256-test.f - Focused standalone DPoP proof contracts
 
-PROVIDED akashic-oauth2-dpop-es256-test
+PROVIDED akashic-odpop-contracts
 
 VARIABLE _odpt-fails
 VARIABLE _odpt-checks

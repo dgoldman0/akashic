@@ -30,7 +30,7 @@
 \                                  -- written status )
 \ =====================================================================
 
-PROVIDED akashic-security-jose-base64url
+PROVIDED akashic-jose-base64url
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

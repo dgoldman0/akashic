@@ -62,7 +62,7 @@
 \        -- protected-u payload-u valid? status )
 \ =====================================================================
 
-PROVIDED akashic-security-jose-jws-es256
+PROVIDED akashic-jose-jws-es256
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

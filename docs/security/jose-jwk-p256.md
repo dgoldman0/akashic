@@ -1,4 +1,4 @@
-# akashic-security-jose-jwk-p256 — Strict Public P-256 JWKs
+# akashic-jose-jwk-p256 — Strict Public P-256 JWKs
 
 `jose/jwk-p256.f` converts between uncompressed SEC 1 P-256 public keys and a
 strict public JSON Web Key, and computes RFC 7638 thumbprints. It is generic
@@ -9,7 +9,7 @@ application policy belong above it.
 REQUIRE akashic/security/jose/jwk-p256.f
 ```
 
-`PROVIDED akashic-security-jose-jwk-p256` — requires strict JOSE Base64url
+`PROVIDED akashic-jose-jwk-p256` — requires strict JOSE Base64url
 and JSON, SHA-256, P-256, `utils/memory-span.f`, and
 `utils/caller-span.f`.
 

@@ -51,7 +51,7 @@
 \      ( public digest-output workspace -- status )
 \ =====================================================================
 
-PROVIDED akashic-security-jose-jwk-p256
+PROVIDED akashic-jose-jwk-p256
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

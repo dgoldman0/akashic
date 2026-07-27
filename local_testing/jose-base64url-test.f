@@ -1,6 +1,6 @@
 \ jose-base64url-test.f - Strict caller-owned Base64url contracts
 
-PROVIDED akashic-jose-base64url-test
+PROVIDED akashic-jbu-contracts
 
 VARIABLE _jbut-fails
 VARIABLE _jbut-checks

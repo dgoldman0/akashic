@@ -22,7 +22,7 @@
 \  active and consumed; only explicit COMMIT, ABORT, or CLEAR resolves it.
 \ =====================================================================
 
-PROVIDED akashic-oauth2-token-set
+PROVIDED akashic-oauth2-tokens
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f
@@ -223,7 +223,7 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
 
 : _O2TOK-BOUNDED-LENGTH?  ( length capacity -- flag )
     OVER 0< IF 2DROP 0 EXIT THEN
-    U<= ;
+    U> 0= ;
 
 : _O2TOK-LEASE-FLAG?  ( value -- flag )
     DUP 0= SWAP -1 = OR ;
@@ -411,8 +411,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
     THEN ;
 
 : _O2TOK-SET-GEOMETRY
-  ( id-a id-u access-a access-u refresh-a refresh-u expires tokens
-    -- status )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires tokens
+  \   -- status )
     DUP _O2TOK-OBJECT-STATUS ?DUP IF
         >R _O2TOK-DROP8 R> EXIT
     THEN
@@ -438,8 +438,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
     OAUTH2-REFRESH-LEASE-SIZE MSPAN-OVERLAP? ;
 
 : _O2TOK-COMMIT-GEOMETRY
-  ( id-a id-u access-a access-u refresh-a refresh-u expires lease tokens
-    -- status )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires lease tokens
+  \   -- status )
     DUP _O2TOK-OBJECT-STATUS ?DUP IF
         >R _O2TOK-DROP9 R> EXIT
     THEN
@@ -477,8 +477,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
 \ =====================================================================
 
 : _O2TOK-LOAD-OP8
-  ( id-a id-u access-a access-u refresh-a refresh-u expires tokens
-    -- tokens )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires tokens
+  \   -- tokens )
     >R
     R@ _O2TOK.OP-EXPIRES !
     R@ _O2TOK.OP-REFRESH-U !
@@ -490,8 +490,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
     R> ;
 
 : _O2TOK-LOAD-OP9
-  ( id-a id-u access-a access-u refresh-a refresh-u expires lease tokens
-    -- tokens )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires lease tokens
+  \   -- tokens )
     >R
     R@ _O2TOK.OP-LEASE !
     R@ _O2TOK.OP-EXPIRES !
@@ -608,8 +608,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
     R> DROP ;
 
 : _O2TOK-SET-BODY
-  ( id-a id-u access-a access-u refresh-a refresh-u expires tokens
-    -- status )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires tokens
+  \   -- status )
     DUP O2TOK.BORROWED @ IF
         _O2TOK-DROP8 O2TOK-S-BUSY EXIT
     THEN
@@ -629,8 +629,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
     DROP O2TOK-S-OK ;
 
 : _O2TOK-COMMIT-BODY
-  ( id-a id-u access-a access-u refresh-a refresh-u expires lease tokens
-    -- status )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires lease tokens
+  \   -- status )
     DUP O2TOK.BORROWED @ IF
         _O2TOK-DROP9 O2TOK-S-BUSY EXIT
     THEN
@@ -655,8 +655,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
 \ These wrappers release the object guard on normal return and on THROW.
 \ Unexpected mutation faults propagate after staging/control cleanup.
 : _O2TOK-CALL8
-  ( id-a id-u access-a access-u refresh-a refresh-u expires tokens xt
-    -- status )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires tokens xt
+  \   -- status )
     1 PICK >R
     CATCH
     DUP IF
@@ -672,8 +672,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
     R> DROP ;
 
 : _O2TOK-CALL9
-  ( id-a id-u access-a access-u refresh-a refresh-u expires lease tokens xt
-    -- status )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires lease tokens xt
+  \   -- status )
     1 PICK >R
     CATCH
     DUP IF
@@ -693,8 +693,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
 \ =====================================================================
 
 : O2TOK-SET
-  ( id-a id-u access-a access-u refresh-a refresh-u expires-ms tokens
-    -- status )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires-ms tokens
+  \   -- status )
     _O2TOK-8DUP _O2TOK-SET-GEOMETRY ?DUP IF
         >R _O2TOK-DROP8 R> EXIT
     THEN
@@ -731,8 +731,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
 \ Preserve the three arguments and append a status.  OK means the guard is
 \ held.  Same-owner recursion is rejected through BORROWED after acquisition.
 : _O2TOK-BORROW-LOCK
-  ( callback callback-context tokens
-    -- callback callback-context tokens status )
+  \ ( callback callback-context tokens
+  \   -- callback callback-context tokens status )
     2 PICK 0= IF O2TOK-S-INVALID EXIT THEN
     DUP _O2TOK-OBJECT-STATUS ?DUP IF EXIT THEN
     DUP _O2TOK-LOCK ?DUP IF EXIT THEN
@@ -878,8 +878,8 @@ _O2T-STAGE-ID O2TOK-ID-CAPACITY + CONSTANT OAUTH2-TOKEN-SET-SIZE
     2DROP O2TOK-S-OK ;
 
 : O2TOK-REFRESH-COMMIT
-  ( id-a id-u access-a access-u refresh-a refresh-u expires-ms lease tokens
-    -- status )
+  \ ( id-a id-u access-a access-u refresh-a refresh-u expires-ms lease tokens
+  \   -- status )
     _O2TOK-9DUP _O2TOK-COMMIT-GEOMETRY ?DUP IF
         >R _O2TOK-DROP9 R> EXIT
     THEN

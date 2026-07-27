@@ -1,6 +1,6 @@
 \ oauth2-token-set-test.f - Focused opaque token ownership contracts
 
-PROVIDED akashic-oauth2-token-set-test
+PROVIDED akashic-o2tok-contracts
 
 VARIABLE _otst-fails
 VARIABLE _otst-checks
@@ -23,18 +23,20 @@ VARIABLE _otst-observed-u
     _otst-depth @ = _otst-assert ;
 
 : _otst-zero?  ( address length -- flag )
-    0 ?DO
-        DUP R + C@ IF DROP 0 UNLOOP EXIT THEN
-    LOOP
-    DROP -1 ;
+    BEGIN DUP WHILE
+        OVER C@ IF 2DROP 0 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
 
 : _otst-filled?  ( address length byte -- flag )
-    SWAP 0 ?DO
-        OVER R + C@ OVER <> IF
-            2DROP 0 UNLOOP EXIT
+    BEGIN OVER WHILE
+        2 PICK C@ OVER <> IF
+            2DROP DROP 0 EXIT
         THEN
-    LOOP
-    2DROP -1 ;
+        >R 1- SWAP 1+ SWAP R>
+    REPEAT
+    2DROP DROP -1 ;
 
 : _otst-bytes=  ( first second length -- flag )
     >R SWAP R@ ROT R> COMPARE 0= ;

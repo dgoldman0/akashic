@@ -1,6 +1,6 @@
 \ jose-jws-es256-test.f - Strict generic compact-JWS ES256 contracts
 
-PROVIDED akashic-jose-jws-es256-test
+PROVIDED akashic-jjws-contracts
 
 VARIABLE _jjwst-fails
 VARIABLE _jjwst-checks

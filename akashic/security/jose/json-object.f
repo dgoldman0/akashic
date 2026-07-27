@@ -57,7 +57,7 @@
 \  containers.
 \ =====================================================================
 
-PROVIDED akashic-security-jose-json-object
+PROVIDED akashic-jose-jsonobj
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

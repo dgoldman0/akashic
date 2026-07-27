@@ -50,7 +50,7 @@ def _assert_source_contracts() -> None:
     assert not re.search(
         r"(?mi)^[ \t]*(?:CREATE|VARIABLE|VALUE|DEFER)\b", source
     ), "DPoP operation state and staging must remain caller-owned"
-    assert "PROVIDED akashic-security-oauth2-dpop-es256" in source
+    assert "PROVIDED akashic-oauth2-dpop256" in source
 
     requires = re.findall(r"(?mi)^[ \t]*REQUIRE[ \t]+(\S+)", source)
     assert requires == [

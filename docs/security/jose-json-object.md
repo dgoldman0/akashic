@@ -1,4 +1,4 @@
-# akashic-security-jose-json-object — Strict Caller-Owned JSON Mechanics
+# akashic-jose-jsonobj — Strict Caller-Owned JSON Mechanics
 
 `jose/json-object.f` supplies strict JSON object and string decoding for JOSE
 consumers. It understands JSON syntax and Unicode, but deliberately owns no
@@ -8,7 +8,7 @@ JWT, OAuth, key, authorization, or application field policy.
 REQUIRE akashic/security/jose/json-object.f
 ```
 
-`PROVIDED akashic-security-jose-json-object` — requires
+`PROVIDED akashic-jose-jsonobj` — requires
 `utils/memory-span.f` and `utils/caller-span.f`.
 
 ## Bounds

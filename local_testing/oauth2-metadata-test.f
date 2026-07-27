@@ -1,6 +1,6 @@
 \ Focused strict OAuth 2 authorization-server metadata contracts.
 
-PROVIDED akashic-oauth2-metadata-test
+PROVIDED akashic-o2md-contracts
 
 VARIABLE _o2mdt-checks
 VARIABLE _o2mdt-fails

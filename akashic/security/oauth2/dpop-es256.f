@@ -39,7 +39,7 @@
 \        destination capacity workspace -- written status )
 \ =====================================================================
 
-PROVIDED akashic-security-oauth2-dpop-es256
+PROVIDED akashic-oauth2-dpop256
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

@@ -1,6 +1,6 @@
 \ oauth2-pkce-test.f - Focused generic RFC 7636 S256 contracts
 
-PROVIDED akashic-oauth2-pkce-test
+PROVIDED akashic-opkce-contracts
 
 VARIABLE _opkt-fails
 VARIABLE _opkt-checks

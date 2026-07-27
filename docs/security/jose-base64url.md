@@ -1,4 +1,4 @@
-# akashic-security-jose-base64url — Canonical Unpadded Base64url
+# akashic-jose-base64url — Canonical Unpadded Base64url
 
 `jose/base64url.f` is a strict RFC 4648 Base64url codec for JOSE. It is
 independent of the permissive legacy network Base64 codec and owns no mutable
@@ -9,7 +9,7 @@ policy.
 REQUIRE akashic/security/jose/base64url.f
 ```
 
-`PROVIDED akashic-security-jose-base64url` — requires
+`PROVIDED akashic-jose-base64url` — requires
 `utils/memory-span.f` and `utils/caller-span.f`.
 
 ## Accepted representation

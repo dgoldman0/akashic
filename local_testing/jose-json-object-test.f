@@ -1,6 +1,6 @@
 \ jose-json-object-test.f - Strict caller-owned JSON object contracts
 
-PROVIDED akashic-jose-json-object-test
+PROVIDED akashic-jjo-contracts
 
 VARIABLE _jjot-fails
 VARIABLE _jjot-checks

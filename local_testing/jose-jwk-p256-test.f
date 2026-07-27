@@ -1,6 +1,6 @@
 \ jose-jwk-p256-test.f - Strict P-256 public JWK contracts
 
-PROVIDED akashic-jose-jwk-p256-test
+PROVIDED akashic-jjwk-contracts
 
 VARIABLE _jjpkt-fails
 VARIABLE _jjpkt-checks

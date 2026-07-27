@@ -1,4 +1,4 @@
-# akashic-security-jose-jws-es256 — Compact JWS with ES256
+# akashic-jose-jws-es256 — Compact JWS with ES256
 
 `jose/jws-es256.f` implements the ordinary three-segment JWS Compact
 Serialization with ECDSA P-256 and SHA-256. It owns no OAuth, DPoP, AT
@@ -8,7 +8,7 @@ Protocol, JWT-claim, key-discovery, or application-header policy.
 REQUIRE akashic/security/jose/jws-es256.f
 ```
 
-`PROVIDED akashic-security-jose-jws-es256` — requires strict JOSE Base64url
+`PROVIDED akashic-jose-jws-es256` — requires strict JOSE Base64url
 and JSON, SHA-256, ECDSA-P256, `utils/memory-span.f`, and
 `utils/caller-span.f`.
 

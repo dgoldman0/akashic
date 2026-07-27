@@ -61,6 +61,8 @@ def _assert_source_contracts() -> None:
     harness_source = HARNESS_SOURCE.read_text(encoding="utf-8")
     lowered = source.lower()
 
+    assert "U<=" not in source
+    assert not re.search(r"(?m)^[ \t]*\([^)\n]*$", source)
     assert not re.search(
         r"(?mi)^[ \t]*(?:CREATE|VARIABLE|VALUE|DEFER)\b", source
     ), "all mutable token, lease, guard, and staging state must be caller-owned"
