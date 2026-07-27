@@ -1,16 +1,14 @@
 # akashic-field — Field Arithmetic (Hardware Field ALU)
 
 256-bit modular arithmetic over standard elliptic-curve primes and
-user-defined custom primes.  Delegates all computation to the
-hardware Field ALU at MMIO `0xFFFF_FF00_0000_0840` (C++ device
-`CryptoFieldALU`), which provides single-cycle modular
-add/sub/mul/sqr/inv/pow plus 512-bit raw multiply.
+user-defined custom primes. Computation uses the per-core EXT.CRYPTO Field
+ALU instructions; there is no software bignum fallback.
 
 ```forth
 REQUIRE field.f
 ```
 
-`PROVIDED akashic-field` — no dependencies.
+`PROVIDED akashic-field` — requires `math/crypto-acc.f`.
 
 ---
 
@@ -18,6 +16,7 @@ REQUIRE field.f
 
 - [Design Principles](#design-principles)
 - [Constants](#constants)
+- [Transaction Ownership](#transaction-ownership)
 - [Prime Selection](#prime-selection)
 - [Buffer Management](#buffer-management)
 - [Core Arithmetic](#core-arithmetic)
@@ -36,9 +35,10 @@ REQUIRE field.f
 | **Hardware-accelerated** | Every arithmetic operation maps to a single Field ALU command — no software bignum fallback. |
 | **Address-based API** | All operands are 32-byte RAM buffers (little-endian). Words take addresses, not values. |
 | **Four built-in primes** | Curve25519 (`2^255 − 19`), secp256k1, NIST P-256, plus one user-loadable custom prime. |
-| **Thin wrappers** | Core words (`FIELD-ADD`, `FIELD-MUL`, etc.) are 1:1 wrappers over KDOS primitives. |
+| **Explicit state** | Public operations take every operand from caller memory. `FIELD-MAC` primes the chip accumulator from caller `r`; it does not depend on ambient prior state. |
 | **Constant-time comparison** | `FIELD-EQ?` uses hardware `FCEQ` — no timing side-channels. |
-| **Not re-entrant** | Single hardware device, one computation at a time. |
+| **Shared ownership** | A recursive outer crypto-ACC transaction prevents SHA-256 and Field operations from clobbering shared ACC0–ACC3 state. A Field-local guard protects modulus sessions and helper scratch. |
+| **All-path cleanup** | The outermost crypto-ACC scope overwrites ACC0–ACC3 and the Field ALU previous-result registers before releasing ownership, including after `THROW`. |
 
 ---
 
@@ -51,6 +51,30 @@ FIELD-BYTES  ( -- 32 )
 ```
 
 Size of a field element buffer in bytes (256 bits).
+
+---
+
+## Transaction Ownership
+
+### FIELD-WITH-TRANSACTION
+
+```forth
+FIELD-WITH-TRANSACTION  ( i*x xt -- j*x )
+```
+
+Execute `xt` while holding both the shared crypto-ACC transaction and the
+recursive Field-local guard. Use this around any multi-operation computation
+whose correctness depends on a stable selected modulus. Public `FIELD-*`
+operations recurse safely into the same transaction.
+
+### FIELD-TRANSACTION-MINE?
+
+```forth
+FIELD-TRANSACTION-MINE?  ( -- flag )
+```
+
+Return true only when the current execution owns both transaction layers.
+Only the outermost crypto-ACC exit scrubs the chip state.
 
 ---
 
@@ -226,8 +250,9 @@ FIELD-NEG  ( a r -- )
 FIELD-MAC  ( a b r -- )
 ```
 
-Multiply-accumulate: `r += (a × b) mod p`.  Accumulates into the
-hardware result register, then copies out.
+Compute `r = (r + a × b) mod p`. The incoming `r` is explicitly loaded into
+the chip's previous-result state first, so separate calls cannot inherit an
+unrelated prior operation.
 
 ---
 
@@ -267,16 +292,6 @@ FIELD-MUL-RAW  ( a b rlo rhi -- )
 
 512-bit raw product: `{rhi, rlo} = a × b`.  Both `rlo` and `rhi`
 are 32-byte buffer addresses.  No modular reduction is applied.
-
-### FIELD-MAC-RAW
-
-```forth
-FIELD-MAC-RAW  ( a b rlo rhi -- )
-```
-
-512-bit multiply-accumulate: `{rhi, rlo} += a × b`.
-
----
 
 ## Comparison
 
@@ -325,6 +340,8 @@ x FIELD.
 | Word | Stack | Description |
 |---|---|---|
 | `FIELD-BYTES` | `( -- 32 )` | Element size in bytes |
+| `FIELD-WITH-TRANSACTION` | `( i*x xt -- j*x )` | Scoped stable-modulus/ACC ownership |
+| `FIELD-TRANSACTION-MINE?` | `( -- flag )` | Query current transaction ownership |
 | `FIELD-USE-25519` | `( -- )` | Select Curve25519 prime |
 | `FIELD-USE-SECP` | `( -- )` | Select secp256k1 prime |
 | `FIELD-USE-P256` | `( -- )` | Select P-256 prime |
@@ -344,7 +361,6 @@ x FIELD.
 | `FIELD-NEG` | `( a r -- )` | Additive inverse |
 | `FIELD-MAC` | `( a b r -- )` | Multiply-accumulate |
 | `FIELD-MUL-RAW` | `( a b rlo rhi -- )` | 512-bit raw multiply |
-| `FIELD-MAC-RAW` | `( a b rlo rhi -- )` | 512-bit raw MAC |
 | `FIELD-EQ?` | `( a b -- flag )` | Constant-time equality |
 | `FIELD-ZERO?` | `( a -- flag )` | Test if zero |
 | `FIELD.` | `( addr -- )` | Print as hex |

@@ -24,6 +24,7 @@ EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
 SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
 GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 FP16_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp16.f")
+CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
 SHA512_F   = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
 FIELD_F    = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
 SHA3_F     = os.path.join(ROOT_DIR, "akashic", "math", "sha3.f")
@@ -106,7 +107,7 @@ def build_snapshot():
 
     dep_lines = []
     for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
-                 SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
+                 CRYPTO_ACC_F, SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
                  ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
                  MERKLE_F, TX_F, SMT_F, STATE_F, BLOCK_F,
                  CONSENSUS_F, MEMPOOL_F]:

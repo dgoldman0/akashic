@@ -26,6 +26,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
 
+CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
 SHA512_F   = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
 FIELD_F    = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
 ED25519_F  = os.path.join(ROOT_DIR, "akashic", "math", "ed25519.f")
@@ -99,6 +100,7 @@ def build_snapshot():
     event_lines  = _load_forth_lines(EVENT_F)
     sem_lines    = _load_forth_lines(SEM_F)
     guard_lines  = _load_forth_lines(GUARD_F)
+    crypto_acc_lines = _load_forth_lines(CRYPTO_ACC_F)
     sha512_lines = _load_forth_lines(SHA512_F)
     field_lines  = _load_forth_lines(FIELD_F)
     ed_lines     = _load_forth_lines(ED25519_F)
@@ -120,6 +122,7 @@ def build_snapshot():
 
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
                  + event_lines + sem_lines + guard_lines
+                 + crypto_acc_lines
                  + sha512_lines
                  + field_lines
                  + ed_lines
