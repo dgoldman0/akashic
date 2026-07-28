@@ -13,6 +13,7 @@ callbacks. It does not share the legacy XRPC/session globals described below.
 REQUIRE aturi.f    \ AT URI parser + builder
 REQUIRE did.f      \ strict generic DID identifier syntax
 REQUIRE handle.f   \ AT Protocol handle syntax + lowercase normalization
+REQUIRE did-document.f \ strict caller-owned AT Protocol identity profile
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -23,6 +24,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 
 `PROVIDED akashic-aturi` / `akashic-did` /
 `akashic-atproto-handle` / `akashic-tid` /
+`akashic-atproto-diddoc` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
@@ -35,6 +37,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [AT URI — aturi.f](#at-uri--aturif)
 - [DID — did.f](#did--didf)
 - [Handle — handle.f](#handle--handlef)
+- [DID document — did-document.f](#did-document--did-documentf)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
@@ -133,6 +136,22 @@ AT-HANDLE-NORMALIZE
 ```
 
 It owns no DNS, HTTPS, IDNA, reserved-TLD, or bidirectional identity policy.
+
+## DID document — did-document.f
+
+The [DID document profile](did-document.md) strictly validates one
+caller-supplied JSON DID document and publishes self-contained copies of its
+exact DID, optional first valid `at://` handle, modern `#atproto` Multikey,
+and HTTPS-origin `#atproto_pds` service.
+
+```forth
+AT-DIDDOC-PARSE
+  ( source source-u expected-did expected-did-u
+    document workspace -- status )
+```
+
+It owns no resolution or transport state. Handle absence is explicit optional
+evidence; missing key or PDS evidence is a profile failure.
 
 ---
 
