@@ -15,6 +15,7 @@ REQUIRE did.f      \ strict generic DID identifier syntax
 REQUIRE handle.f   \ AT Protocol handle syntax + lowercase normalization
 REQUIRE did-document.f \ strict caller-owned AT Protocol identity profile
 REQUIRE identity.f \ caller-owned handle/DID/PDS discovery coordinator
+REQUIRE identity-hres.f \ identity over generic HTTPS resources
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -26,6 +27,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 `PROVIDED akashic-aturi` / `akashic-did` /
 `akashic-atproto-handle` / `akashic-tid` /
 `akashic-atproto-diddoc` / `akashic-atproto-identity` /
+`akashic-atid-hres` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
@@ -40,6 +42,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [Handle — handle.f](#handle--handlef)
 - [DID document — did-document.f](#did-document--did-documentf)
 - [Identity discovery — identity.f](#identity-discovery--identityf)
+- [Identity HTTP composition — identity-hres.f](#identity-http-composition--identity-hresf)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
@@ -172,6 +175,17 @@ ATID-ACTION@       ( resolver -- action status )
 
 DNS TXT, bounded CNAME progression, HTTPS well-known fallback, DID-document
 fetch, and reverse handle confirmation are explicit caller-driven actions.
+
+## Identity HTTP composition — identity-hres.f
+
+The [state-free HTTP-resource adapter](identity-http-resource.md) applies the
+AT identity HTTP profile to a generic caller-owned HTTPS resource and submits
+only an admitted result bound to the resolver's exact current action target.
+It admits final 2xx responses without treating `Content-Type` as identity
+evidence, bounds redirects to three, and permits cross-authority redirects
+only between default-port HTTPS targets. DNS, public-address admission, TLS
+hostname authentication, port leases, and retry exhaustion remain platform
+composition responsibilities.
 
 ---
 

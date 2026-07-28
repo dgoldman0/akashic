@@ -25,10 +25,11 @@ VARIABLE _hrc-depth
 
 4 CONSTANT _HRC-HOP-CAP
 4096 CONSTANT _HRC-RESPONSE-CAP
+2048 CONSTANT _HRC-BODY-CAP
 
 CREATE _hrc-spec HRES-SPEC-SIZE ALLOT
 CREATE _hrc-resource HTTP-RESOURCE-SIZE ALLOT
-CREATE _hrc-body 128 ALLOT
+CREATE _hrc-body _HRC-BODY-CAP ALLOT
 CREATE _hrc-port NET-IO-PORT-SIZE ALLOT
 CREATE _hrc-service XIO-SERVICE-SIZE ALLOT
 CREATE _hrc-operation XIO-OP-SIZE ALLOT
@@ -505,7 +506,7 @@ VARIABLE _hrc-policy-media
 
 : _hrc-clean-result  ( -- )
     _hrc-resource HRES-WIPE HRES-S-OK = _hrc-assert
-    _hrc-body 128 _hrc-zero? _hrc-assert
+    _hrc-body _hrc-body-cap @ _hrc-zero? _hrc-assert
     _hrc-resource HRES-DECONFIGURE HRES-S-OK = _hrc-assert
     _hrc-resource HRES-STATE@ HRES-STATE-IDLE = _hrc-assert ;
 

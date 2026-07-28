@@ -143,9 +143,13 @@ Handle response content type is intentionally not a trust condition, matching
 the AT Protocol handle specification. DID-document JSON is delegated to the
 strict caller-owned DID-document parser.
 
-This explicit boundary avoids inheriting assumptions from a particular HTTP
-resource wrapper, including mandatory content type, a hard-coded success
-status, or a narrower redirect model.
+This explicit core boundary avoids inheriting assumptions from a particular
+HTTP implementation. The state-free
+[generic HTTP-resource adapter](identity-http-resource.md) supplies the
+production composition profile: final 2xx, ignored media type, three
+redirects, exact requested-action binding, and default-port HTTPS
+cross-authority admission. The identity core remains usable with any
+transport that enforces the same contract.
 
 ## Evidence and participation
 
