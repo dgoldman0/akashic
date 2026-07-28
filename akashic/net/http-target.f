@@ -111,6 +111,26 @@ _HT-SOURCE HTARGET-URI-CAPACITY + CONSTANT HTARGET-SIZE
     SWAP HTARGET.REDIRECT-COUNT @ DUP 0>=
         SWAP HTARGET-REDIRECT-MAX <= AND AND ;
 
+\ HTARGET-HTU$ ( target -- a u )
+\   Return the canonical absolute target URI without its query component.
+\   HTARGET rejects fragments during admission, so removing the first query
+\   delimiter produces the exact RFC 9449 htu value for this target.
+: _HTARGET-HTU-LENGTH  ( address length -- htu-length )
+    0 >R
+    BEGIN DUP WHILE
+        OVER C@ [CHAR] ? = IF
+            2DROP R> EXIT
+        THEN
+        1 /STRING
+        R> 1+ >R
+    REPEAT
+    2DROP R> ;
+
+: HTARGET-HTU$  ( target -- a u )
+    DUP HTARGET-VALID? 0= IF DROP 0 0 EXIT THEN
+    HTARGET-URI$
+    2DUP _HTARGET-HTU-LENGTH NIP ;
+
 : _HTARGET-FAIL  ( status target -- status )
     >R
     R@ _HT-FLAGS + HTARGET-SIZE _HT-FLAGS - 0 FILL
