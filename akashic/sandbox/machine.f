@@ -1,0 +1,507 @@
+\ =====================================================================
+\  machine.f - Permanent neutral sandbox machine metadata
+\ =====================================================================
+\  This module owns the closed opcode numbers and immutable verifier/runtime
+\  metadata for the neutral scalar machine.  It contains no handler, profile,
+\  plan, VM state, table allocation, mutable scratch, or ambient lookup.
+\
+\  Typed-value instructions deliberately do not live here.  They are a later
+\  ABI layer over this scalar machine.  IMPORT.CALL remains here because its
+\  operand and stack effect are part of the generic machine boundary even
+\  when an exact profile disables imports.
+\
+\  Every public metadata query returns an explicit status.  Unknown, omitted,
+\  and later-layer opcodes return zero as the value plus
+\  SBOX-MACHINE-S-UNKNOWN-OPCODE; callers MUST inspect the status.
+\ =====================================================================
+
+PROVIDED akashic-sbx-machine
+
+\ =====================================================================
+\  Query status
+\ =====================================================================
+
+0 CONSTANT SBOX-MACHINE-S-OK
+1 CONSTANT SBOX-MACHINE-S-UNKNOWN-OPCODE
+
+: SBOX-MACHINE-STATUS-VALID?  ( status -- flag )
+    DUP SBOX-MACHINE-S-OK >=
+    SWAP SBOX-MACHINE-S-UNKNOWN-OPCODE <= AND ;
+
+\ =====================================================================
+\  Closed metadata enums
+\ =====================================================================
+
+\ Operand shapes form the closed neutral scalar descriptor enum.
+0 CONSTANT SBOX-MACHINE-OPERAND-NONE
+1 CONSTANT SBOX-MACHINE-OPERAND-I64
+2 CONSTANT SBOX-MACHINE-OPERAND-BRANCH
+3 CONSTANT SBOX-MACHINE-OPERAND-FUNCTION
+4 CONSTANT SBOX-MACHINE-OPERAND-ABORT
+5 CONSTANT SBOX-MACHINE-OPERAND-LOCAL
+6 CONSTANT SBOX-MACHINE-OPERAND-LOOP-EXIT
+7 CONSTANT SBOX-MACHINE-OPERAND-LOOP-BODY
+8 CONSTANT SBOX-MACHINE-OPERAND-IMPORT
+
+\ Cell-effect kinds form the closed neutral scalar effect enum.
+0 CONSTANT SBOX-MACHINE-EFFECT-FIXED
+1 CONSTANT SBOX-MACHINE-EFFECT-CALL
+2 CONSTANT SBOX-MACHINE-EFFECT-RETURN
+3 CONSTANT SBOX-MACHINE-EFFECT-IMPORT
+
+\ Cost kinds used by this scalar machine.  Values 3 through 5 belong to the
+\ later typed-value ABI layer and are intentionally not named here.
+0 CONSTANT SBOX-MACHINE-COST-FIXED
+1 CONSTANT SBOX-MACHINE-COST-CALL-LOCALS
+2 CONSTANT SBOX-MACHINE-COST-RUNTIME-LENGTH
+6 CONSTANT SBOX-MACHINE-COST-IMPORT
+
+\ Extra-charge kinds used by this scalar machine.  Typed-value charge kinds
+\ remain owned by the later ABI layer.
+0 CONSTANT SBOX-MACHINE-EXTRA-NONE
+2 CONSTANT SBOX-MACHINE-EXTRA-COPY-LENGTH
+4 CONSTANT SBOX-MACHINE-EXTRA-IMPORT-RW-COPY
+
+\ =====================================================================
+\  Permanent opcode numbers
+\ =====================================================================
+
+\ Control, calls, locals, and typed loop frames.
+0x00 CONSTANT SBOX-MACHINE-OP-NOP
+0x01 CONSTANT SBOX-MACHINE-OP-LIT-I64
+0x02 CONSTANT SBOX-MACHINE-OP-BR
+0x03 CONSTANT SBOX-MACHINE-OP-BR-ZERO
+0x04 CONSTANT SBOX-MACHINE-OP-BR-NONZERO
+0x05 CONSTANT SBOX-MACHINE-OP-CALL
+0x06 CONSTANT SBOX-MACHINE-OP-RETURN
+0x07 CONSTANT SBOX-MACHINE-OP-ABORT
+0x08 CONSTANT SBOX-MACHINE-OP-LOCAL-GET
+0x09 CONSTANT SBOX-MACHINE-OP-LOCAL-SET
+0x0A CONSTANT SBOX-MACHINE-OP-LOCAL-TEE
+0x0B CONSTANT SBOX-MACHINE-OP-LOOP-ENTER
+0x0C CONSTANT SBOX-MACHINE-OP-LOOP-NEXT
+0x0D CONSTANT SBOX-MACHINE-OP-LOOP-NEXT-BY
+0x0E CONSTANT SBOX-MACHINE-OP-LOOP-INDEX
+
+\ Operand-stack operations.
+0x10 CONSTANT SBOX-MACHINE-OP-DROP
+0x11 CONSTANT SBOX-MACHINE-OP-DUP
+0x12 CONSTANT SBOX-MACHINE-OP-SWAP
+0x13 CONSTANT SBOX-MACHINE-OP-OVER
+0x14 CONSTANT SBOX-MACHINE-OP-ROT
+0x15 CONSTANT SBOX-MACHINE-OP-NIP
+0x16 CONSTANT SBOX-MACHINE-OP-TUCK
+0x17 CONSTANT SBOX-MACHINE-OP-2DROP
+0x18 CONSTANT SBOX-MACHINE-OP-2DUP
+0x19 CONSTANT SBOX-MACHINE-OP-2SWAP
+0x1A CONSTANT SBOX-MACHINE-OP-2OVER
+
+\ Integer arithmetic, comparison, and bit operations.
+0x20 CONSTANT SBOX-MACHINE-OP-I64-ADD
+0x21 CONSTANT SBOX-MACHINE-OP-I64-SUB
+0x22 CONSTANT SBOX-MACHINE-OP-I64-MUL
+0x23 CONSTANT SBOX-MACHINE-OP-I64-DIV-S
+0x24 CONSTANT SBOX-MACHINE-OP-I64-REM-S
+0x25 CONSTANT SBOX-MACHINE-OP-I64-DIVMOD-S
+0x26 CONSTANT SBOX-MACHINE-OP-I64-NEG
+0x27 CONSTANT SBOX-MACHINE-OP-I64-ABS
+0x28 CONSTANT SBOX-MACHINE-OP-I64-MIN-S
+0x29 CONSTANT SBOX-MACHINE-OP-I64-MAX-S
+0x2A CONSTANT SBOX-MACHINE-OP-I64-INC
+0x2B CONSTANT SBOX-MACHINE-OP-I64-DEC
+0x2C CONSTANT SBOX-MACHINE-OP-I64-EQ
+0x2D CONSTANT SBOX-MACHINE-OP-I64-NE
+0x2E CONSTANT SBOX-MACHINE-OP-I64-LT-S
+0x2F CONSTANT SBOX-MACHINE-OP-I64-LE-S
+0x30 CONSTANT SBOX-MACHINE-OP-I64-GT-S
+0x31 CONSTANT SBOX-MACHINE-OP-I64-GE-S
+0x32 CONSTANT SBOX-MACHINE-OP-I64-LT-U
+0x33 CONSTANT SBOX-MACHINE-OP-I64-LE-U
+0x34 CONSTANT SBOX-MACHINE-OP-I64-GT-U
+0x35 CONSTANT SBOX-MACHINE-OP-I64-GE-U
+0x36 CONSTANT SBOX-MACHINE-OP-I64-ZERO?
+0x37 CONSTANT SBOX-MACHINE-OP-I64-NEGATIVE?
+0x38 CONSTANT SBOX-MACHINE-OP-I64-POSITIVE?
+0x39 CONSTANT SBOX-MACHINE-OP-I64-AND
+0x3A CONSTANT SBOX-MACHINE-OP-I64-OR
+0x3B CONSTANT SBOX-MACHINE-OP-I64-XOR
+0x3C CONSTANT SBOX-MACHINE-OP-I64-NOT
+0x3D CONSTANT SBOX-MACHINE-OP-I64-SHL
+0x3E CONSTANT SBOX-MACHINE-OP-I64-SHR-U
+
+\ Checked guest linear-memory operations.
+0x40 CONSTANT SBOX-MACHINE-OP-MEM-SIZE
+0x41 CONSTANT SBOX-MACHINE-OP-MEM-LOAD8-U
+0x42 CONSTANT SBOX-MACHINE-OP-MEM-STORE8
+0x43 CONSTANT SBOX-MACHINE-OP-MEM-LOAD64
+0x44 CONSTANT SBOX-MACHINE-OP-MEM-STORE64
+0x45 CONSTANT SBOX-MACHINE-OP-MEM-MOVE
+0x46 CONSTANT SBOX-MACHINE-OP-MEM-FILL
+
+\ Generic typed-import dispatch.  Exact profiles may disable this opcode.
+0x50 CONSTANT SBOX-MACHINE-OP-IMPORT-CALL
+
+65 CONSTANT SBOX-MACHINE-SUPPORTED-OPCODE-COUNT
+
+\ =====================================================================
+\  Immutable opcode metadata
+\ =====================================================================
+
+\ Expand one fixed-effect/fixed-cost row without storing a native table.
+\ Stack: operand pop push base
+\     -- operand effect pop push cost-kind base divisor extra status
+: _SBOX-MACHINE-FIXED-META
+    >R >R >R
+    SBOX-MACHINE-EFFECT-FIXED
+    R> R>
+    SBOX-MACHINE-COST-FIXED
+    R>
+    0
+    SBOX-MACHINE-EXTRA-NONE
+    SBOX-MACHINE-S-OK ;
+
+\ Return the complete declarative row.  The ordering matches the profile
+\ descriptor after its opcode and semantic identifier fields.
+: SBOX-MACHINE-METADATA
+    ( opcode -- operand effect pop push cost-kind base divisor extra status )
+    CASE
+        SBOX-MACHINE-OP-NOP OF
+            SBOX-MACHINE-OPERAND-NONE 0 0 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-LIT-I64 OF
+            SBOX-MACHINE-OPERAND-I64 0 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-BR OF
+            SBOX-MACHINE-OPERAND-BRANCH 0 0 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-BR-ZERO OF
+            SBOX-MACHINE-OPERAND-BRANCH 1 0 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-BR-NONZERO OF
+            SBOX-MACHINE-OPERAND-BRANCH 1 0 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-CALL OF
+            SBOX-MACHINE-OPERAND-FUNCTION
+            SBOX-MACHINE-EFFECT-CALL
+            0 0
+            SBOX-MACHINE-COST-CALL-LOCALS
+            2 8
+            SBOX-MACHINE-EXTRA-NONE
+            SBOX-MACHINE-S-OK EXIT
+        ENDOF
+        SBOX-MACHINE-OP-RETURN OF
+            SBOX-MACHINE-OPERAND-NONE
+            SBOX-MACHINE-EFFECT-RETURN
+            0 0
+            SBOX-MACHINE-COST-FIXED
+            1 0
+            SBOX-MACHINE-EXTRA-NONE
+            SBOX-MACHINE-S-OK EXIT
+        ENDOF
+        SBOX-MACHINE-OP-ABORT OF
+            SBOX-MACHINE-OPERAND-ABORT 0 0 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-LOCAL-GET OF
+            SBOX-MACHINE-OPERAND-LOCAL 0 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-LOCAL-SET OF
+            SBOX-MACHINE-OPERAND-LOCAL 1 0 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-LOCAL-TEE OF
+            SBOX-MACHINE-OPERAND-LOCAL 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-LOOP-ENTER OF
+            SBOX-MACHINE-OPERAND-LOOP-EXIT 2 0 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-LOOP-NEXT OF
+            SBOX-MACHINE-OPERAND-LOOP-BODY 0 0 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-LOOP-NEXT-BY OF
+            SBOX-MACHINE-OPERAND-LOOP-BODY 1 0 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-LOOP-INDEX OF
+            SBOX-MACHINE-OPERAND-NONE 0 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+
+        SBOX-MACHINE-OP-DROP OF
+            SBOX-MACHINE-OPERAND-NONE 1 0 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-DUP OF
+            SBOX-MACHINE-OPERAND-NONE 1 2 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-SWAP OF
+            SBOX-MACHINE-OPERAND-NONE 2 2 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-OVER OF
+            SBOX-MACHINE-OPERAND-NONE 2 3 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-ROT OF
+            SBOX-MACHINE-OPERAND-NONE 3 3 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-NIP OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-TUCK OF
+            SBOX-MACHINE-OPERAND-NONE 2 3 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-2DROP OF
+            SBOX-MACHINE-OPERAND-NONE 2 0 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-2DUP OF
+            SBOX-MACHINE-OPERAND-NONE 2 4 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-2SWAP OF
+            SBOX-MACHINE-OPERAND-NONE 4 4 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-2OVER OF
+            SBOX-MACHINE-OPERAND-NONE 4 6 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+
+        SBOX-MACHINE-OP-I64-ADD OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-SUB OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-MUL OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-DIV-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-REM-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-DIVMOD-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 2 3
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-NEG OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-ABS OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-MIN-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-MAX-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-INC OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-DEC OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-EQ OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-NE OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-LT-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-LE-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-GT-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-GE-S OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-LT-U OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-LE-U OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-GT-U OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-GE-U OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-ZERO? OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-NEGATIVE? OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-POSITIVE? OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-AND OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-OR OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-XOR OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-NOT OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-SHL OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-I64-SHR-U OF
+            SBOX-MACHINE-OPERAND-NONE 2 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+
+        SBOX-MACHINE-OP-MEM-SIZE OF
+            SBOX-MACHINE-OPERAND-NONE 0 1 1
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-MEM-LOAD8-U OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-MEM-STORE8 OF
+            SBOX-MACHINE-OPERAND-NONE 2 0 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-MEM-LOAD64 OF
+            SBOX-MACHINE-OPERAND-NONE 1 1 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-MEM-STORE64 OF
+            SBOX-MACHINE-OPERAND-NONE 2 0 2
+            _SBOX-MACHINE-FIXED-META EXIT
+        ENDOF
+        SBOX-MACHINE-OP-MEM-MOVE OF
+            SBOX-MACHINE-OPERAND-NONE
+            SBOX-MACHINE-EFFECT-FIXED
+            3 0
+            SBOX-MACHINE-COST-RUNTIME-LENGTH
+            2 8
+            SBOX-MACHINE-EXTRA-COPY-LENGTH
+            SBOX-MACHINE-S-OK EXIT
+        ENDOF
+        SBOX-MACHINE-OP-MEM-FILL OF
+            SBOX-MACHINE-OPERAND-NONE
+            SBOX-MACHINE-EFFECT-FIXED
+            3 0
+            SBOX-MACHINE-COST-RUNTIME-LENGTH
+            2 8
+            SBOX-MACHINE-EXTRA-COPY-LENGTH
+            SBOX-MACHINE-S-OK EXIT
+        ENDOF
+
+        SBOX-MACHINE-OP-IMPORT-CALL OF
+            SBOX-MACHINE-OPERAND-IMPORT
+            SBOX-MACHINE-EFFECT-IMPORT
+            0 0
+            SBOX-MACHINE-COST-IMPORT
+            1 0
+            SBOX-MACHINE-EXTRA-IMPORT-RW-COPY
+            SBOX-MACHINE-S-OK EXIT
+        ENDOF
+    ENDCASE
+
+    0 0 0 0 0 0 0 0 SBOX-MACHINE-S-UNKNOWN-OPCODE ;
+
+\ =====================================================================
+\  Status-returning field queries
+\ =====================================================================
+
+: _SBOX-MACHINE-DROP8  ( x0 x1 x2 x3 x4 x5 x6 x7 -- )
+    2DROP 2DROP 2DROP 2DROP ;
+
+\ Select one field from a complete metadata result.  Field zero is the
+\ rightmost metadata value (extra); field seven is the leftmost (operand).
+\ Stack: operand effect pop push cost-kind base divisor extra status field
+\     -- value status
+: _SBOX-MACHINE-FIELD
+    SWAP >R
+    PICK >R
+    _SBOX-MACHINE-DROP8
+    R> R> ;
+
+: SBOX-MACHINE-OPERAND@  ( opcode -- operand status )
+    SBOX-MACHINE-METADATA 7 _SBOX-MACHINE-FIELD ;
+
+: SBOX-MACHINE-EFFECT@  ( opcode -- effect status )
+    SBOX-MACHINE-METADATA 6 _SBOX-MACHINE-FIELD ;
+
+: SBOX-MACHINE-POP@  ( opcode -- pop status )
+    SBOX-MACHINE-METADATA 5 _SBOX-MACHINE-FIELD ;
+
+: SBOX-MACHINE-PUSH@  ( opcode -- push status )
+    SBOX-MACHINE-METADATA 4 _SBOX-MACHINE-FIELD ;
+
+: SBOX-MACHINE-COST-KIND@  ( opcode -- cost-kind status )
+    SBOX-MACHINE-METADATA 3 _SBOX-MACHINE-FIELD ;
+
+: SBOX-MACHINE-BASE-COST@  ( opcode -- base status )
+    SBOX-MACHINE-METADATA 2 _SBOX-MACHINE-FIELD ;
+
+: SBOX-MACHINE-COST-DIVISOR@  ( opcode -- divisor status )
+    SBOX-MACHINE-METADATA 1 _SBOX-MACHINE-FIELD ;
+
+: SBOX-MACHINE-EXTRA-CHARGE@  ( opcode -- extra status )
+    SBOX-MACHINE-METADATA 0 _SBOX-MACHINE-FIELD ;
+
+: SBOX-MACHINE-OPCODE-STATUS  ( opcode -- status )
+    SBOX-MACHINE-METADATA
+    >R _SBOX-MACHINE-DROP8 R> ;
+
+: SBOX-MACHINE-OPCODE-SUPPORTED?  ( opcode -- flag )
+    SBOX-MACHINE-OPCODE-STATUS SBOX-MACHINE-S-OK = ;

@@ -226,6 +226,7 @@
       "persistence/",
       "render/",
       "runtime/",
+      "sandbox/",
       "security/",
       "sml/",
       "store/",

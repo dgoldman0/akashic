@@ -21639,6 +21639,66 @@ REQUIRE local_testing/crec-contracts.f
 )
 
 
+PROFILES["sandbox-format-contracts"] = Profile(
+    roots=("sandbox/format.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral sandbox format contracts
+ENTER-USERLAND
+." [akashic] loading sandbox format contracts" CR
+REQUIRE sandbox/format.f
+REQUIRE local_testing/sbox-format-contracts.f
+""",
+    ready_markers=("SBOX FORMAT CONTRACTS PASS",),
+    stable_markers=("SBOX FORMAT CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX FORMAT CONTRACTS FAIL",
+        "SBOX FORMAT ASSERT",
+        "SBOX FORMAT STACK",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-format-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-format-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-core-contracts"] = Profile(
+    roots=("sandbox/binding.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral sandbox core contracts
+ENTER-USERLAND
+." [akashic] loading sandbox core contracts" CR
+REQUIRE sandbox/binding.f
+REQUIRE local_testing/sbox-core-contracts.f
+""",
+    ready_markers=("SBOX CORE CONTRACTS PASS",),
+    stable_markers=("SBOX CORE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX CORE CONTRACTS FAIL",
+        "SBOX CORE ASSERT",
+        "SBOX CORE STACK",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-core-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-core-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["vfs-ram-capacity-contracts"] = Profile(
     roots=("utils/fs/vfs.f",),
     resources=(),

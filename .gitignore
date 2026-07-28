@@ -71,6 +71,8 @@ local_testing/*
 !local_testing/vfs-access-contracts.f
 !local_testing/checked-record-contracts.f
 !local_testing/generation-pair-contracts.f
+!local_testing/sandbox-format-contracts.f
+!local_testing/sandbox-core-contracts.f
 !local_testing/test_persistence_storage.py
 !local_testing/test_persistence_atomic_root.py
 !local_testing/test_library_index_keys.py
