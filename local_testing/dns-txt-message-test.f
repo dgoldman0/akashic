@@ -16,9 +16,15 @@ CREATE _dntt-rr-result-allocation DNS-TXT-RR-RESULT-SIZE 7 + ALLOT
 _dntt-rr-result-allocation 7 + -8 AND CONSTANT _dntt-rr-result
 CREATE _dntt-iter-allocation DNS-TXT-ITER-SIZE 7 + ALLOT
 _dntt-iter-allocation 7 + -8 AND CONSTANT _dntt-iter
+CREATE _dntt-cname-allocation DNS-TXT-CNAME-RESULT-SIZE 7 + ALLOT
+_dntt-cname-allocation 7 + -8 AND CONSTANT _dntt-cname
+CREATE _dntt-small-cname-allocation DNS-TXT-CNAME-RESULT-SIZE 7 + ALLOT
+_dntt-small-cname-allocation 7 + -8 AND CONSTANT _dntt-small-cname
 CREATE _dntt-value 128 ALLOT
 CREATE _dntt-small-value 4 ALLOT
 CREATE _dntt-rr-value 8 ALLOT
+CREATE _dntt-cname-target DNS-TXT-NAME-MAX ALLOT
+CREATE _dntt-small-cname-target 4 ALLOT
 CREATE _dntt-response 1024 ALLOT
 CREATE _dntt-name 320 ALLOT
 
@@ -118,6 +124,16 @@ CREATE _dntt-name 320 ALLOT
     _dntt-rr-value 8 _dntt-rr-result DNS-TXT-RR-RESULT-INIT
     DNS-TXT-S-OK = _dntt-assert ;
 
+: _dntt-cname-reset  ( -- )
+    _dntt-cname-target DNS-TXT-NAME-MAX
+    _dntt-cname DNS-TXT-CNAME-RESULT-INIT
+    DNS-TXT-S-OK = _dntt-assert ;
+
+: _dntt-small-cname-reset  ( -- )
+    _dntt-small-cname-target 4
+    _dntt-small-cname DNS-TXT-CNAME-RESULT-INIT
+    DNS-TXT-S-OK = _dntt-assert ;
+
 : _dntt-append-owner-and-fixed  ( ttl rdlength -- )
     >R
     12 _dntt-append-pointer
@@ -160,6 +176,18 @@ CREATE _dntt-name 320 ALLOT
     0 _dntt-append-byte
     2 _dntt-append-byte
     1 _dntt-append-byte ;
+
+\ The primary query's "Example" label begins at packet offset 21.
+: _dntt-append-cname-label  ( label-a label-u ttl -- )
+    >R
+    12 _dntt-append-pointer
+    5 _dntt-append-u16
+    1 _dntt-append-u16
+    R> _dntt-append-u32
+    DUP 3 + _dntt-append-u16
+    DUP _dntt-append-byte
+    _dntt-append-bytes
+    21 _dntt-append-pointer ;
 
 : _dntt-build-primary-query  ( -- )
     S" _AtProto.Example" 0xBEEF _dntt-query
@@ -593,6 +621,8 @@ CREATE _dntt-name 320 ALLOT
     _dntt-iter DNS-TXT-ITER-VALIDATED? 0= _dntt-assert
     _dntt-iter DNS-TXT-ITER-STATUS@
     DNS-TXT-S-PROVISIONAL = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-RCODE@ 0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-FLAGS@ 0x8180 = _dntt-assert
     _dntt-rr-result DNS-TXT-RR-PRESENT? 0= _dntt-assert
 
     _dntt-iter DNS-TXT-ITER-NEXT
@@ -711,7 +741,169 @@ CREATE _dntt-name 320 ALLOT
     _dntt-iter DNS-TXT-ITER-WIPE DNS-TXT-S-OK = _dntt-assert
     _dntt-stack ;
 
+: _dntt-test-iterator-header-diagnostics  ( -- )
+    _dntt-rr-result-reset
+    _dntt-response-base
+    0x8183 _dntt-set-flags
+    _dntt-response _dntt-response-u @
+    _dntt-query _dntt-rr-result _dntt-iter
+    DNS-TXT-ITER-BEGIN DNS-TXT-S-RCODE = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALID? _dntt-assert
+    _dntt-iter DNS-TXT-ITER-TERMINAL? _dntt-assert
+    _dntt-iter DNS-TXT-ITER-STATUS@
+    DNS-TXT-S-RCODE = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-RCODE@ 3 = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-FLAGS@ 0x8183 = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-WIPE DNS-TXT-S-OK = _dntt-assert
+    _dntt-stack ;
+
+: _dntt-cname-parse  ( result -- status )
+    >R
+    _dntt-response _dntt-response-u @
+    _dntt-query R> DNS-TXT-CNAME-PARSE ;
+
+: _dntt-cname-evidence  ( -- evidence )
+    DNS-TXT-E-RESPONSE DNS-TXT-E-ID OR
+    DNS-TXT-E-QUESTION OR DNS-TXT-E-CNAME OR ;
+
+: _dntt-test-cname  ( -- )
+    _dntt-cname-reset
+    _dntt-response-base
+    1 _dntt-set-answer-count
+    S" Alias" 600 _dntt-append-cname-label
+    _dntt-cname _dntt-cname-parse
+    DNS-TXT-S-OK = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-RESULT-VALID? _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-STATUS@ DNS-TXT-S-OK = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-TARGET$
+    S" Alias.Example" COMPARE 0= _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-RCODE@ 0= _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-FLAGS@ 0x8180 = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-EVIDENCE@
+    _dntt-cname-evidence = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-ANSWER-COUNT@ 1 = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-MATCHED-COUNT@ 1 = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-TTL@ 600 = _dntt-assert
+
+    \ Published target evidence and target syntax are lifecycle invariants.
+    DNS-TXT-E-QUESTION
+    _dntt-cname _DNTR.EVIDENCE !
+    _dntt-cname DNS-TXT-CNAME-RESULT-VALID? 0= _dntt-assert
+    _dntt-cname-evidence _dntt-cname _DNTR.EVIDENCE !
+    0 _dntt-cname-target C!
+    _dntt-cname DNS-TXT-CNAME-RESULT-VALID? 0= _dntt-assert
+    [CHAR] A _dntt-cname-target C!
+
+    \ No direct CNAME is distinct from an unrelated answer.
+    _dntt-cname-reset
+    _dntt-response-base
+    1 _dntt-set-answer-count
+    _dntt-append-a-record
+    _dntt-cname _dntt-cname-parse
+    DNS-TXT-S-NODATA = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-MATCHED-COUNT@ 0= _dntt-assert
+
+    \ More than one direct CNAME is an explicit ambiguity.
+    _dntt-cname-reset
+    _dntt-response-base
+    2 _dntt-set-answer-count
+    S" Alias" 600 _dntt-append-cname-label
+    S" Other" 500 _dntt-append-cname-label
+    _dntt-cname _dntt-cname-parse
+    DNS-TXT-S-DUPLICATE = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-RESULT-VALID? _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-MATCHED-COUNT@ 2 = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-TARGET$ NIP 0= _dntt-assert
+    _dntt-cname-target DNS-TXT-NAME-MAX 0
+    _dntt-byte? _dntt-assert
+
+    \ Ambiguity never hides a malformed later direct CNAME.
+    _dntt-cname-reset
+    _dntt-response-base
+    3 _dntt-set-answer-count
+    S" Alias" 600 _dntt-append-cname-label
+    S" Other" 500 _dntt-append-cname-label
+    12 _dntt-append-pointer
+    5 _dntt-append-u16
+    1 _dntt-append-u16
+    400 _dntt-append-u32
+    9 _dntt-append-u16
+    5 _dntt-append-byte
+    S" Third" _dntt-append-bytes
+    21 _dntt-append-pointer
+    0xAA _dntt-append-byte
+    _dntt-cname _dntt-cname-parse
+    DNS-TXT-S-MALFORMED = _dntt-assert
+
+    \ Capacity is decided only after the complete packet has been drained.
+    _dntt-small-cname-reset
+    _dntt-response-base
+    1 _dntt-set-answer-count
+    1 _dntt-set-additional-count
+    S" Alias" 600 _dntt-append-cname-label
+    _dntt-append-a-record
+    _dntt-small-cname _dntt-cname-parse
+    DNS-TXT-S-CAPACITY = _dntt-assert
+    _dntt-small-cname DNS-TXT-CNAME-RESULT-VALID? _dntt-assert
+    _dntt-small-cname-target 4 0 _dntt-byte? _dntt-assert
+
+    _dntt-small-cname-reset
+    _dntt-response-base
+    1 _dntt-set-answer-count
+    1 _dntt-set-additional-count
+    S" Alias" 600 _dntt-append-cname-label
+    0x40 _dntt-append-byte
+    _dntt-small-cname _dntt-cname-parse
+    DNS-TXT-S-MALFORMED = _dntt-assert
+    _dntt-small-cname DNS-TXT-CNAME-RESULT-VALID? _dntt-assert
+
+    \ A CNAME target must consume the complete RDATA.
+    _dntt-cname-reset
+    _dntt-response-base
+    1 _dntt-set-answer-count
+    12 _dntt-append-pointer
+    5 _dntt-append-u16
+    1 _dntt-append-u16
+    60 _dntt-append-u32
+    9 _dntt-append-u16
+    5 _dntt-append-byte
+    S" Alias" _dntt-append-bytes
+    21 _dntt-append-pointer
+    0xAA _dntt-append-byte
+    _dntt-cname _dntt-cname-parse
+    DNS-TXT-S-MALFORMED = _dntt-assert
+
+    \ A wire label containing a dot cannot enter the unescaped profile.
+    _dntt-cname-reset
+    _dntt-response-base
+    1 _dntt-set-answer-count
+    S" Bad.Name" 60 _dntt-append-cname-label
+    _dntt-cname _dntt-cname-parse
+    DNS-TXT-S-MALFORMED = _dntt-assert
+
+    \ Bound response diagnostics survive a nonzero RCODE outcome.
+    _dntt-cname-reset
+    _dntt-response-base
+    0x8183 _dntt-set-flags
+    _dntt-cname _dntt-cname-parse
+    DNS-TXT-S-RCODE = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-RCODE@ 3 = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-FLAGS@ 0x8183 = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-EVIDENCE@
+    DNS-TXT-E-RESPONSE DNS-TXT-E-ID OR
+    DNS-TXT-E-QUESTION OR DNS-TXT-E-RCODE OR
+    = _dntt-assert
+    _dntt-stack ;
+
 : _dntt-test-wipe  ( -- )
+    _dntt-cname-reset
+    _dntt-cname-target DNS-TXT-NAME-MAX 0xA5 FILL
+    _dntt-cname DNS-TXT-CNAME-RESULT-WIPE
+    DNS-TXT-S-OK = _dntt-assert
+    _dntt-cname DNS-TXT-CNAME-RESULT-VALID? 0= _dntt-assert
+    _dntt-cname-target DNS-TXT-NAME-MAX 0
+    _dntt-byte? _dntt-assert
+
     _dntt-result-reset
     _dntt-value 128 0xA5 FILL
     _dntt-result DNS-TXT-RESULT-WIPE
@@ -741,6 +933,8 @@ CREATE _dntt-name 320 ALLOT
     _dntt-test-iterator-records
     _dntt-test-iterator-oversize
     _dntt-test-iterator-late-failure
+    _dntt-test-iterator-header-diagnostics
+    _dntt-test-cname
     _dntt-test-wipe
     _dntt-fails @ 0= IF
         ." DNS TXT MESSAGE PASS " _dntt-checks @ . CR

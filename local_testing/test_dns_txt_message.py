@@ -128,9 +128,24 @@ def _assert_static_contracts() -> None:
         "DNS-TXT-ITER-TERMINAL?",
         "DNS-TXT-ITER-VALIDATED?",
         "DNS-TXT-ITER-STATUS@",
+        "DNS-TXT-ITER-RCODE@",
+        "DNS-TXT-ITER-FLAGS@",
         "DNS-TXT-ITER-EVIDENCE@",
         "DNS-TXT-ITER-MATCHED-COUNT@",
         "DNS-TXT-ITER-WIPE",
+        "DNS-TXT-CNAME-RESULT-SIZE",
+        "DNS-TXT-CNAME-RESULT-INIT",
+        "DNS-TXT-CNAME-RESULT-VALID?",
+        "DNS-TXT-CNAME-PARSE",
+        "DNS-TXT-CNAME-STATUS@",
+        "DNS-TXT-CNAME-TARGET$",
+        "DNS-TXT-CNAME-RCODE@",
+        "DNS-TXT-CNAME-FLAGS@",
+        "DNS-TXT-CNAME-EVIDENCE@",
+        "DNS-TXT-CNAME-ANSWER-COUNT@",
+        "DNS-TXT-CNAME-MATCHED-COUNT@",
+        "DNS-TXT-CNAME-TTL@",
+        "DNS-TXT-CNAME-RESULT-WIPE",
         "DNS-TXT-RESULT-INIT",
         "DNS-TXT-RESULT-VALID?",
         "DNS-TXT-PARSE",
@@ -152,6 +167,7 @@ def _assert_static_contracts() -> None:
         "DNS-TXT-S-DUPLICATE",
         "DNS-TXT-S-PROVISIONAL",
         "DNS-TXT-ITER-E-VALIDATED",
+        "DNS-TXT-E-CNAME",
     ):
         assert word in source
 
@@ -160,6 +176,9 @@ def _assert_static_contracts() -> None:
     )
     assert re.search(
         r"(?m)^512 CONSTANT DNS-TXT-RESULT-SIZE$", source
+    )
+    assert re.search(
+        r"(?m)^512 CONSTANT DNS-TXT-CNAME-RESULT-SIZE$", source
     )
     assert re.search(
         r"(?m)^96 CONSTANT DNS-TXT-RR-RESULT-SIZE$", source
@@ -386,6 +405,52 @@ def _assert_static_contracts() -> None:
     ):
         assert marker in iterator_valid
 
+    cname_init = _word_body(source, "DNS-TXT-CNAME-RESULT-INIT")
+    assert cname_init.index("_DNT-CNAME-RESULT-STATUS") < cname_init.index(
+        "0 FILL"
+    )
+    assert cname_init.index("_DNT-SPAN-STATUS") < cname_init.index("0 FILL")
+    assert cname_init.index("MSPAN-OVERLAP?") < cname_init.index("0 FILL")
+
+    cname_parse = _word_body(source, "DNS-TXT-CNAME-PARSE")
+    assert cname_parse.index(
+        "DNS-TXT-CNAME-RESULT-VALID?"
+    ) < cname_parse.index("_DNTC-RESET")
+    assert cname_parse.index(
+        "DNS-TXT-QUERY-VALID?"
+    ) < cname_parse.index("_DNTC-RESET")
+    assert cname_parse.index("_DNT-PARSE-ALIASES?") < cname_parse.index(
+        "_DNTC-RESET"
+    )
+    assert "_DNTC-PARSE-BODY" in cname_parse
+    assert "_DNTC-FAIL" in cname_parse
+
+    cname_body = _word_body(source, "_DNTC-PARSE-BODY")
+    for marker in (
+        "_DNT-BIND-QUESTION",
+        "_DNTC-PARSE-SECTION",
+        "_DNTR.CURSOR",
+        "_DNTR.MESSAGE-U",
+        "DNS-TXT-S-CAPACITY",
+        "DNS-TXT-S-NODATA",
+        "DNS-TXT-S-DUPLICATE",
+        "DNS-TXT-E-CNAME",
+    ):
+        assert marker in cname_body
+    assert cname_body.count("_DNTC-PARSE-SECTION") == 3
+
+    cname_target = _word_body(source, "_DNTC-TARGET-DECODE")
+    for marker in (
+        "_DNT-NAME-DECODE",
+        "_DNTR.NAME-NEXT",
+        "_DNTR.RDATA-END",
+        "_DNTC-TARGET-SCAN",
+        "_DNTC-TARGET-COPY",
+    ):
+        assert marker in cname_target
+    cname_copy = _word_body(source, "_DNTC-TARGET-COPY")
+    assert cname_copy.count("_DNTR.BUFFER @") == 2
+
     compare = _word_body(source, "_DNT-NAME=QUERY?")
     assert "?DO" in compare and "LOOP" in compare
     assert not re.search(r"(?<![A-Za-z0-9_])R@?(?![A-Za-z0-9_])", compare)
@@ -397,11 +462,14 @@ def _assert_static_contracts() -> None:
         "one `DNS-TXT-RESULT-SIZE` (512-byte)",
         "one `DNS-TXT-ITER-SIZE` (512-byte)",
         "one `DNS-TXT-RR-RESULT-SIZE` (96-byte)",
+        "one `DNS-TXT-CNAME-RESULT-SIZE` (512-byte)",
         "4,096",
         "65,535",
         "compression chain",
         "exactly one direct `IN/TXT` answer",
         "CNAME traversal remains resolver work",
+        "exactly one direct `IN/CNAME` RR",
+        "supplies a fresh unpredictable transaction ID",
         "concatenated in wire order",
         "provisional",
         "mandatory terminal `present?` false",
@@ -429,11 +497,18 @@ def _assert_static_contracts() -> None:
         "_dntt-test-iterator-records",
         "_dntt-test-iterator-oversize",
         "_dntt-test-iterator-late-failure",
+        "_dntt-test-iterator-header-diagnostics",
+        "_dntt-test-cname",
         "DNS-TXT-ITER-BEGIN",
         "DNS-TXT-ITER-NEXT",
         "DNS-TXT-RR-PROVISIONAL?",
         "DNS-TXT-ITER-VALIDATED?",
         "DNS-TXT-ITER-E-VALIDATED",
+        "DNS-TXT-ITER-RCODE@",
+        "DNS-TXT-ITER-FLAGS@",
+        "DNS-TXT-CNAME-PARSE",
+        "DNS-TXT-CNAME-TARGET$",
+        "DNS-TXT-E-CNAME",
         "_dntt-test-wipe",
         "DNS-TXT-S-ALIAS",
         "DNS-TXT-S-TRUNCATED",

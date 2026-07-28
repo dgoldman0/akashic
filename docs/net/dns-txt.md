@@ -3,9 +3,10 @@
 `akashic/net/dns-txt.f` is a protocol-neutral, caller-owned DNS wire utility.
 It builds one recursive Internet-class TXT query and either iterates all
 direct matching records or applies a strict exactly-one convenience parse to
-one response. It does not choose a resolver, open a socket, retry over TCP,
-cache an answer, chase aliases, interpret application text, or confer trust
-on DNS data.
+one response. A separate transaction-bound result can extract one direct
+`IN/CNAME` target so a higher resolver can issue a fresh query. The utility
+does not choose a resolver, open a socket, retry over TCP, cache an answer,
+chase aliases, interpret application text, or confer trust on DNS data.
 
 The implementation follows the DNS header, question, resource-record, name
 compression, and TXT character-string formats in
@@ -24,9 +25,13 @@ The module owns no mutable state. A caller allocates one
 - for strict parsing, one `DNS-TXT-RESULT-SIZE` (512-byte) aligned result
   descriptor and one result byte arena; or
 - for iteration, one `DNS-TXT-ITER-SIZE` (512-byte) aligned iterator, one
-  `DNS-TXT-RR-RESULT-SIZE` (96-byte) aligned RR result, and one RR byte arena.
+  `DNS-TXT-RR-RESULT-SIZE` (96-byte) aligned RR result, and one RR byte arena;
+  or
+- for direct-alias extraction, one `DNS-TXT-CNAME-RESULT-SIZE` (512-byte)
+  aligned result and one target-name arena.
 
-Each arena is 1 through `DNS-TXT-VALUE-MAX` (4,096) bytes.
+TXT arenas are 1 through `DNS-TXT-VALUE-MAX` (4,096) bytes. A CNAME target
+arena is 1 through `DNS-TXT-NAME-MAX` (253) bytes.
 
 The query descriptor contains the complete packet. A strict result or
 iterator contains all decompression scratch and retained response evidence, so
@@ -92,6 +97,8 @@ DNS-TXT-ITER-VALID?        ( iter -- flag )
 DNS-TXT-ITER-TERMINAL?     ( iter -- flag )
 DNS-TXT-ITER-VALIDATED?    ( iter -- flag )
 DNS-TXT-ITER-STATUS@       ( iter -- status )
+DNS-TXT-ITER-RCODE@        ( iter -- rcode )
+DNS-TXT-ITER-FLAGS@        ( iter -- header-flags )
 DNS-TXT-ITER-EVIDENCE@     ( iter -- evidence )
 DNS-TXT-ITER-MATCHED-COUNT@ ( iter -- count )
 DNS-TXT-ITER-WIPE          ( iter -- status )
@@ -128,6 +135,47 @@ validation.
 `DNS-TXT-ITER-WIPE` clears the bound RR arena, RR result, and iterator.
 Reinitialization and admission failures follow the same caller-ownership and
 preflight rules as the strict parser.
+
+## Direct CNAME extraction
+
+```forth
+DNS-TXT-CNAME-RESULT-INIT  ( target-a target-cap result -- status )
+DNS-TXT-CNAME-RESULT-VALID? ( result -- flag )
+DNS-TXT-CNAME-PARSE        ( response-a response-u query result -- status )
+DNS-TXT-CNAME-STATUS@      ( result -- status )
+DNS-TXT-CNAME-TARGET$      ( result -- target-a target-u )
+DNS-TXT-CNAME-RCODE@       ( result -- rcode )
+DNS-TXT-CNAME-FLAGS@       ( result -- header-flags )
+DNS-TXT-CNAME-EVIDENCE@    ( result -- evidence )
+DNS-TXT-CNAME-ANSWER-COUNT@ ( result -- count )
+DNS-TXT-CNAME-MATCHED-COUNT@ ( result -- count )
+DNS-TXT-CNAME-TTL@         ( result -- ttl )
+DNS-TXT-CNAME-RESULT-WIPE  ( result -- status )
+```
+
+`DNS-TXT-CNAME-PARSE` binds the same response transaction, echoed TXT
+question, flags, and RCODE as the TXT parsers. It structurally drains every
+declared answer, authority, and additional RR and requires the packet to end
+exactly at the final record boundary. Success means there was exactly one
+direct `IN/CNAME` RR at the queried owner. Its compressed target must consume
+the complete CNAME RDATA and decode into the utility's bounded, unescaped
+dotted presentation-name profile. The target is then suitable as the name of
+a fresh `DNS-TXT-QUERY-BUILD` call.
+
+No direct CNAME is `DNS-TXT-S-NODATA`; more than one is
+`DNS-TXT-S-DUPLICATE`; an invalid target or late structural fault is
+`DNS-TXT-S-MALFORMED`. If the sole structurally valid target exceeds the
+caller arena, the parser still drains and validates the complete packet
+before returning `DNS-TXT-S-CAPACITY`. Admission failures leave a prior live
+result unchanged. Parse failures clear the complete target arena and retain
+bounded transaction diagnostics.
+
+This interface extracts one progression edge; it does not chase it. The
+resolver owns a bounded hop count and case-insensitive visited-name set,
+supplies a fresh unpredictable transaction ID, builds a new query, and
+conservatively queries the CNAME target even when the prior response also
+carried records for that target. That keeps each published query/response
+binding explicit and makes loops and ambiguity higher-level resolver policy.
 
 ## Strict response lifecycle
 
@@ -206,6 +254,7 @@ direct matching TXT answer.
 | `DNS-TXT-E-RCODE` | a nonzero header RCODE was observed |
 | `DNS-TXT-E-VALUE` | exactly one direct matching TXT RR was published |
 | `DNS-TXT-ITER-E-VALIDATED` | iterator reached the exact, structurally valid packet end |
+| `DNS-TXT-E-CNAME` | exactly one direct CNAME target was published |
 
 The iterator never treats a yielded provisional RR as value evidence; its
 validation bit appears only after the terminal raw-wire drain succeeds. These
@@ -214,7 +263,8 @@ resolver provenance, destination admission, and application-specific
 confirmation remain separate policy.
 
 `DNS-TXT-S-ALIAS` refers to unsafe overlapping caller memory, not a DNS CNAME.
-CNAME traversal remains resolver work rather than raw TXT message parsing.
+CNAME target extraction is transaction-bound wire parsing; traversal remains
+resolver work.
 The remaining admission statuses distinguish invalid arguments, capacity,
 physical range, protected spans, and platform qualification failure from
 wire-level mismatch and malformation.
