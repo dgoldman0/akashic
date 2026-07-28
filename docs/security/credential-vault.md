@@ -385,28 +385,40 @@ status until recovery succeeds or the caller abandons the object with
 CVAULT-VALID?        ( vault -- flag )
 CVAULT-BLOCKED?      ( vault -- flag )
 CVAULT-LAST-STATUS@  ( vault -- status )
+CVAULT-SECRET-CAPACITY@
+  ( vault -- secret-capacity status )
 
 CVAULT-RECOVER
-  ( vault -- generation state status )
+  ( expected-rid vault -- generation state status )
 ```
 
 `CVAULT-VALID?` remains true for a structurally valid blocked vault.
 `CVAULT-BLOCKED?` returns false for an invalid descriptor, while
 `CVAULT-LAST-STATUS@` returns `CVAULT-S-INVALID` for one.
+`CVAULT-SECRET-CAPACITY@` returns the immutable configured capacity for an
+idle valid vault, including a blocked vault. It returns `CVAULT-S-BUSY`
+during an active operation and never exposes backing-store geometry or
+secret bytes.
 
-`CVAULT-RECOVER` is valid only for a blocked vault. It finalizes the retained
-snapshot descriptor, re-verifies the root and shard topology, initializes a
-fresh per-RID snapshot lifecycle, runs VFS replacement recovery, and then
-reloads, floor-checks, authenticates, and validates the credential. A present
-credential returns its generation, `CVAULT-STATE-PRESENT`, and
-`CVAULT-S-OK`. An authenticated tombstone returns its generation,
-`CVAULT-STATE-TOMBSTONE`, and `CVAULT-S-REVOKED`. Either result clears the
-block and closes the active per-RID lifecycle. Any other recovery result
-returns `0 0 status` and leaves the vault blocked for a later retry or
-administrative abandonment. If that returned status is not itself a blocking
-status, the retained `CVAULT-LAST-STATUS@` is normalized to
-`CVAULT-S-RECOVERY` so the descriptor remains structurally valid and
-retryable; an invalid status is retained as `CVAULT-S-INTERNAL`.
+`CVAULT-RECOVER` is valid only for a blocked vault and atomically requires
+`expected-rid` to equal the RID retained by the failed operation. A different
+valid RID returns `0 0 CVAULT-S-CONFLICT`; invalid RID geometry is rejected.
+Either rejection leaves the vault blocked and preserves its retained RID,
+path, recovery evidence, and `CVAULT-LAST-STATUS@`.
+
+For the matching RID, recovery finalizes the retained snapshot descriptor,
+re-verifies the root and shard topology, initializes a fresh per-RID snapshot
+lifecycle, runs VFS replacement recovery, and then reloads, floor-checks,
+authenticates, and validates the credential. A present credential returns its
+generation, `CVAULT-STATE-PRESENT`, and `CVAULT-S-OK`. An authenticated
+tombstone returns its generation, `CVAULT-STATE-TOMBSTONE`, and
+`CVAULT-S-REVOKED`. Either result clears the block and closes the active
+per-RID lifecycle. Any other recovery result returns `0 0 status` and leaves
+the vault blocked for a later retry or administrative abandonment. If that
+returned status is not itself a blocking status, the retained
+`CVAULT-LAST-STATUS@` is normalized to `CVAULT-S-RECOVERY` so the descriptor
+remains structurally valid and retryable; an invalid status is retained as
+`CVAULT-S-INTERNAL`.
 
 Recovery applies to the one RID retained by the failed operation. It is not a
 filesystem scan, RID index, orphan collector, key recovery mechanism, or

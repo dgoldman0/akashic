@@ -248,7 +248,7 @@ def _assert_statuses_and_public_api(source: str, doc: str) -> None:
         "CVAULT-RECOVER": (
             "_CVAULT-RECOVER",
             "_cvault-recover-xt",
-            "vault -- generation state status",
+            "expected-rid vault -- generation state status",
         ),
         "CVAULT-PATH": (
             "_CVAULT-PATH",
@@ -269,6 +269,11 @@ def _assert_statuses_and_public_api(source: str, doc: str) -> None:
             "_CVAULT-LAST-STATUS@",
             "_cvault-last-status-xt",
             "vault -- status",
+        ),
+        "CVAULT-SECRET-CAPACITY@": (
+            "_CVAULT-SECRET-CAPACITY@",
+            "_cvault-secret-capacity-xt",
+            "vault -- secret-capacity status",
         ),
     }
     for word, (internal, capture, stack) in public.items():
@@ -829,6 +834,9 @@ def _assert_entropy_floor_and_generations(source: str, doc: str) -> None:
         in normalized_doc
     )
     assert "There is no software random source" in doc
+    assert "CVAULT-SECRET-CAPACITY@" in LIFECYCLE_FIXTURE.read_text(
+        encoding="utf-8"
+    )
 
     floor_status = _word_body(source, "_CV-FLOOR-STATUS-VALID?")
     assert "CVAULT-STATUS-VALID?" in floor_status
@@ -1011,6 +1019,8 @@ def _assert_tombstone_recovery_and_wipes(source: str, doc: str) -> None:
     _ordered(
         recovery,
         "_CV-RECOVER-BEGIN",
+        "_CV-RID-PREFLIGHT",
+        "_CV.ACTIVE-RID RID=",
         "_CV-STORE-FINI",
         "_CV-OP-RECOVER",
         "_CV-TOPOLOGY",
@@ -1025,6 +1035,7 @@ def _assert_tombstone_recovery_and_wipes(source: str, doc: str) -> None:
     )
     assert "_CV-ACTIVATE" not in recovery
     assert "_CVAULT-CREATE" not in recovery
+    assert "CVAULT-S-CONFLICT R@ _CV-RECOVER-REJECT" in recovery
     recover_begin = _word_body(source, "_CV-RECOVER-BEGIN")
     assert "_CV-F-BLOCKED AND 0=" in recover_begin
     finish_blocked = _word_body(source, "_CV-FINISH-BLOCKED")
@@ -1120,6 +1131,7 @@ def _assert_tombstone_recovery_and_wipes(source: str, doc: str) -> None:
         "a RID is never reusable",
         "There is no delete operation",
         "CVAULT-RECOVER is valid only for a blocked vault",
+        "expected-rid to equal the RID retained by the failed operation",
         "finalizes the retained snapshot descriptor",
         "runs VFS replacement recovery",
         "Any other recovery result",

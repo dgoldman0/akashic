@@ -1819,6 +1819,14 @@ CREATE _CV-VFS-MAGIC
     _CV-F-BUSY OVER _CV.FLAGS DUP @ ROT OR SWAP !
     DROP CVAULT-S-OK ;
 
+: _CV-RECOVER-REJECT  ( status vault -- status )
+    >R
+    DUP CVAULT-STATUS-VALID? 0= IF
+        DROP CVAULT-S-INTERNAL
+    THEN
+    R@ _CV.FLAGS DUP @ _CV-F-BUSY INVERT AND SWAP !
+    R> DROP ;
+
 : _CV-RID-ALIASES?  ( rid vault -- flag )
     >R
     DUP RID-SIZE R@ CVAULT-SIZE MSPAN-OVERLAP? IF
@@ -2483,10 +2491,22 @@ CREATE _CV-VFS-MAGIC
     2DROP
     R> R> R> ;
 
-: _CVAULT-RECOVER  ( vault -- generation state status )
+: _CVAULT-RECOVER  ( expected-rid vault -- generation state status )
     >R
     R@ _CV-RECOVER-BEGIN
     DUP IF
+        NIP R> DROP _CV-ZERO-RECOVERY EXIT
+    THEN
+    DROP
+    DUP R@ _CV-RID-PREFLIGHT
+    DUP IF
+        NIP R@ _CV-RECOVER-REJECT
+        R> DROP _CV-ZERO-RECOVERY EXIT
+    THEN
+    DROP
+    DUP R@ _CV.ACTIVE-RID RID= 0= IF
+        DROP
+        CVAULT-S-CONFLICT R@ _CV-RECOVER-REJECT
         R> DROP _CV-ZERO-RECOVERY EXIT
     THEN
     DROP
@@ -2541,6 +2561,16 @@ CREATE _CV-VFS-MAGIC
     DUP _CVAULT-VALID? 0= IF DROP CVAULT-S-INVALID EXIT THEN
     _CV.LAST-STATUS @ ;
 
+: _CVAULT-SECRET-CAPACITY@
+  ( vault -- secret-capacity status )
+    DUP _CVAULT-VALID? 0= IF
+        DROP 0 CVAULT-S-INVALID EXIT
+    THEN
+    DUP _CV.FLAGS @ _CV-F-BUSY AND IF
+        DROP 0 CVAULT-S-BUSY EXIT
+    THEN
+    _CV.SECRET-CAP @ CVAULT-S-OK ;
+
 ' _CVAULT-CONFIG-CLEAR CONSTANT _cvault-config-clear-xt
 ' _CVAULT-INIT         CONSTANT _cvault-init-xt
 ' _CVAULT-FINI         CONSTANT _cvault-fini-xt
@@ -2555,6 +2585,7 @@ CREATE _CV-VFS-MAGIC
 ' _CVAULT-VALID?       CONSTANT _cvault-valid-xt
 ' _CVAULT-BLOCKED?     CONSTANT _cvault-blocked-xt
 ' _CVAULT-LAST-STATUS@ CONSTANT _cvault-last-status-xt
+' _CVAULT-SECRET-CAPACITY@ CONSTANT _cvault-secret-capacity-xt
 
 : CVAULT-CONFIG-CLEAR  ( config -- status )
     _cvault-config-clear-xt _credential-vault-guard WITH-GUARD ;
@@ -2588,7 +2619,7 @@ CREATE _CV-VFS-MAGIC
   ( rid consumer-xt consumer-context vault -- generation kind consumer-result status )
     _cvault-with-xt _credential-vault-guard WITH-GUARD ;
 
-: CVAULT-RECOVER  ( vault -- generation state status )
+: CVAULT-RECOVER  ( expected-rid vault -- generation state status )
     _cvault-recover-xt _credential-vault-guard WITH-GUARD ;
 
 : CVAULT-PATH
@@ -2603,6 +2634,11 @@ CREATE _CV-VFS-MAGIC
 
 : CVAULT-LAST-STATUS@  ( vault -- status )
     _cvault-last-status-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-SECRET-CAPACITY@
+  ( vault -- secret-capacity status )
+    _cvault-secret-capacity-xt
+    _credential-vault-guard WITH-GUARD ;
 
 \ =====================================================================
 \  Compile-time geometry assertions
