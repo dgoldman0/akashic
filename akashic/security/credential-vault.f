@@ -1,0 +1,2648 @@
+\ =====================================================================
+\  credential-vault.f - RID-addressed durable secret ownership
+\ =====================================================================
+\  One random, nonzero 32-byte RID names one independently recoverable VFS
+\  snapshot.  The full RID is encoded collision-free as:
+\
+\      ROOT/<20 lowercase hex>/<22 lowercase hex>/<22 lowercase hex>
+\
+\  Each file contains one fixed-size sealed record.  Its authenticated
+\  plaintext binds the vault identity, RID, state, kind, revision, and exact
+\  secret length.  Revocation writes an authenticated tombstone and never
+\  unlinks or reuses the RID.
+\
+\  The caller owns the root-key resolver, optional trusted rollback-floor
+\  provider, VFS, descriptor, and dynamically sized backing store.  This
+\  module owns no OAuth, AT Protocol, Streams, UI, prompt, or root key.
+\ =====================================================================
+
+PROVIDED akashic-cred-vault
+
+REQUIRE sealed-record.f
+REQUIRE ../runtime/identity.f
+REQUIRE ../math/entropy.f
+REQUIRE ../utils/fs/vfs-fixed-snapshot.f
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../concurrency/guard.f
+
+CREATE _CV-PRIVATE-BEGIN 0 ALLOT
+CREATE _CV-PRIVATE-LIMIT 0 ,
+GUARD _credential-vault-guard
+
+\ =====================================================================
+\  Public status, state, and geometry vocabulary
+\ =====================================================================
+
+0  CONSTANT CVAULT-S-OK
+1  CONSTANT CVAULT-S-INVALID
+2  CONSTANT CVAULT-S-CAPACITY
+3  CONSTANT CVAULT-S-ABSENT
+4  CONSTANT CVAULT-S-REVOKED
+5  CONSTANT CVAULT-S-CONFLICT
+6  CONSTANT CVAULT-S-LOCKED
+7  CONSTANT CVAULT-S-CALLBACK
+8  CONSTANT CVAULT-S-ENTROPY
+9  CONSTANT CVAULT-S-CRYPTO
+10 CONSTANT CVAULT-S-AUTH
+11 CONSTANT CVAULT-S-CORRUPT
+12 CONSTANT CVAULT-S-UNSUPPORTED
+13 CONSTANT CVAULT-S-IO
+14 CONSTANT CVAULT-S-RECOVERY
+15 CONSTANT CVAULT-S-BUSY
+16 CONSTANT CVAULT-S-ROLLBACK
+17 CONSTANT CVAULT-S-RANGE
+18 CONSTANT CVAULT-S-PROTECTED
+19 CONSTANT CVAULT-S-PLATFORM
+20 CONSTANT CVAULT-S-INTERNAL
+
+: CVAULT-STATUS-VALID?  ( status -- flag )
+    DUP CVAULT-S-OK >= SWAP CVAULT-S-INTERNAL <= AND ;
+
+1 CONSTANT CVAULT-STATE-PRESENT
+2 CONSTANT CVAULT-STATE-TOMBSTONE
+
+0 CONSTANT _CV-OP-NONE
+1 CONSTANT _CV-OP-CREATE
+2 CONSTANT _CV-OP-WITH
+3 CONSTANT _CV-OP-METADATA
+4 CONSTANT _CV-OP-REPLACE
+5 CONSTANT _CV-OP-REVOKE
+6 CONSTANT _CV-OP-RECOVER
+7 CONSTANT _CV-OP-INIT
+
+128 CONSTANT CVAULT-PLAINTEXT-HEADER-SIZE
+SEALED-RECORD-DATA-MAX CVAULT-PLAINTEXT-HEADER-SIZE -
+    CONSTANT CVAULT-SECRET-CAPACITY-MAX
+
+187 CONSTANT CVAULT-ROOT-MAX
+256 CONSTANT _CV-PATH-CAP
+
+0x414B43564C543031 CONSTANT _CV-SEALED-PURPOSE  \ "AKCVLT01"
+0x414B4356504C3031 CONSTANT _CV-PLAIN-MAGIC     \ "AKCVPL01"
+1 CONSTANT _CV-PLAIN-VERSION
+1 CONSTANT _CV-VFS-FORMAT
+
+: CVAULT-PLAINTEXT-SIZE  ( secret-capacity -- plaintext-u|0 )
+    DUP 0> 0= IF DROP 0 EXIT THEN
+    DUP CVAULT-SECRET-CAPACITY-MAX U> IF DROP 0 EXIT THEN
+    CVAULT-PLAINTEXT-HEADER-SIZE + ;
+
+: CVAULT-RECORD-SIZE  ( secret-capacity -- record-u|0 )
+    CVAULT-PLAINTEXT-SIZE DUP 0= IF EXIT THEN
+    SEALED-RECORD-SIZE ;
+
+: CVAULT-BACKING-SIZE  ( secret-capacity -- backing-u|0 )
+    CVAULT-PLAINTEXT-SIZE DUP 0= IF EXIT THEN
+    \ VFS scratch, loaded sealed record, plaintext, sealed-record workspace.
+    DUP SEALED-RECORD-SIZE 2* +
+    VFSNAP-HEADER-SIZE +
+    SEALED-RECORD-WORKSPACE-SIZE + ;
+
+\ =====================================================================
+\  Caller-owned initialization descriptor
+\ =====================================================================
+
+ 0 CONSTANT _CVC-ROOT
+ 8 CONSTANT _CVC-ROOT-U
+16 CONSTANT _CVC-SECRET-CAP
+24 CONSTANT _CVC-BACKING
+32 CONSTANT _CVC-BACKING-U
+40 CONSTANT _CVC-VFS
+48 CONSTANT _CVC-VAULT-ID
+56 CONSTANT _CVC-KEY-ID
+64 CONSTANT _CVC-RESOLVER-XT
+72 CONSTANT _CVC-RESOLVER-CONTEXT
+80 CONSTANT _CVC-FLOOR-READ-XT
+88 CONSTANT _CVC-FLOOR-ADVANCE-XT
+96 CONSTANT _CVC-FLOOR-CONTEXT
+104 CONSTANT CVAULT-CONFIG-SIZE
+
+: CVAULT-C.ROOT              ( config -- a ) _CVC-ROOT + ;
+: CVAULT-C.ROOT-U            ( config -- a ) _CVC-ROOT-U + ;
+: CVAULT-C.SECRET-CAPACITY   ( config -- a ) _CVC-SECRET-CAP + ;
+: CVAULT-C.BACKING           ( config -- a ) _CVC-BACKING + ;
+: CVAULT-C.BACKING-U         ( config -- a ) _CVC-BACKING-U + ;
+: CVAULT-C.VFS               ( config -- a ) _CVC-VFS + ;
+: CVAULT-C.VAULT-ID          ( config -- a ) _CVC-VAULT-ID + ;
+: CVAULT-C.KEY-ID            ( config -- a ) _CVC-KEY-ID + ;
+: CVAULT-C.RESOLVER-XT       ( config -- a ) _CVC-RESOLVER-XT + ;
+: CVAULT-C.RESOLVER-CONTEXT  ( config -- a )
+    _CVC-RESOLVER-CONTEXT + ;
+: CVAULT-C.FLOOR-READ-XT     ( config -- a ) _CVC-FLOOR-READ-XT + ;
+: CVAULT-C.FLOOR-ADVANCE-XT  ( config -- a )
+    _CVC-FLOOR-ADVANCE-XT + ;
+: CVAULT-C.FLOOR-CONTEXT     ( config -- a ) _CVC-FLOOR-CONTEXT + ;
+
+\ =====================================================================
+\  Caller-owned vault descriptor
+\ =====================================================================
+
+0x435641554C543031 CONSTANT _CV-MAGIC  \ "CVAULT01"
+
+1  CONSTANT _CV-F-CONFIGURED
+2  CONSTANT _CV-F-BUSY
+4  CONSTANT _CV-F-BLOCKED
+8  CONSTANT _CV-F-STORE-ACTIVE
+16 CONSTANT _CV-F-FLOOR
+
+  0 CONSTANT _CV-MAGIC-OFF
+  8 CONSTANT _CV-FLAGS
+ 16 CONSTANT _CV-LAST-STATUS
+ 24 CONSTANT _CV-LAST-SEALED
+ 32 CONSTANT _CV-LAST-VFSNAP
+ 40 CONSTANT _CV-SECRET-CAP
+ 48 CONSTANT _CV-PLAIN-U
+ 56 CONSTANT _CV-RECORD-U
+ 64 CONSTANT _CV-BACKING
+ 72 CONSTANT _CV-BACKING-U
+ 80 CONSTANT _CV-VFS
+ 88 CONSTANT _CV-RESOLVER-XT
+ 96 CONSTANT _CV-RESOLVER-CONTEXT
+104 CONSTANT _CV-FLOOR-READ-XT
+112 CONSTANT _CV-FLOOR-ADVANCE-XT
+120 CONSTANT _CV-FLOOR-CONTEXT
+128 CONSTANT _CV-ROOT-U
+136 CONSTANT _CV-SHARD1-U
+144 CONSTANT _CV-SHARD2-U
+152 CONSTANT _CV-TARGET-U
+160 CONSTANT _CV-GENERATION
+168 CONSTANT _CV-STATE
+176 CONSTANT _CV-KIND
+184 CONSTANT _CV-SECRET-U
+192 CONSTANT _CV-CALLBACK-XT
+200 CONSTANT _CV-CALLBACK-CONTEXT
+208 CONSTANT _CV-CALLBACK-STATUS
+216 CONSTANT _CV-FLOOR
+224 CONSTANT _CV-INPUT
+232 CONSTANT _CV-INPUT-U
+240 CONSTANT _CV-EXPECTED
+248 CONSTANT _CV-OPERATION
+256 CONSTANT _CV-RESULT-REVISION
+264 CONSTANT _CV-DIR-PATH
+272 CONSTANT _CV-DIR-PATH-U
+280 CONSTANT _CV-DIR-PARENT
+288 CONSTANT _CV-DIR-PARENT-U
+296 CONSTANT _CV-DIR-NAME
+304 CONSTANT _CV-DIR-NAME-U
+312 CONSTANT _CV-DIR-OLD-CWD
+320 CONSTANT _CV-VFS-STATUS
+328 CONSTANT _CV-CLEANUP-STATUS
+336 CONSTANT _CV-SEALED-WRITTEN
+344 CONSTANT _CV-FLOOR-STATUS
+352 CONSTANT _CV-RESERVED0
+360 CONSTANT _CV-RESERVED1
+368 CONSTANT _CV-RESERVED2
+376 CONSTANT _CV-RESERVED3
+
+384 CONSTANT _CV-VAULT-ID
+_CV-VAULT-ID RID-SIZE + CONSTANT _CV-KEY-ID
+_CV-KEY-ID RID-SIZE + CONSTANT _CV-ACTIVE-RID
+_CV-ACTIVE-RID RID-SIZE + CONSTANT _CV-BINDING-ID
+_CV-BINDING-ID RID-SIZE + CONSTANT _CV-SEAL-KEY-ID
+_CV-SEAL-KEY-ID RID-SIZE + CONSTANT _CV-SEAL-RECORD-ID
+_CV-SEAL-RECORD-ID RID-SIZE + CONSTANT _CV-ROOT
+_CV-ROOT CVAULT-ROOT-MAX + 7 + -8 AND
+    CONSTANT _CV-SHARD1
+_CV-SHARD1 _CV-PATH-CAP + CONSTANT _CV-SHARD2
+_CV-SHARD2 _CV-PATH-CAP + CONSTANT _CV-TARGET
+_CV-TARGET _CV-PATH-CAP + CONSTANT _CV-SEALED-DESCRIPTOR
+_CV-SEALED-DESCRIPTOR SEALED-RECORD-DESCRIPTOR-SIZE +
+    CONSTANT _CV-VFS-SPEC
+_CV-VFS-SPEC VFSNAP-SPEC-SIZE + CONSTANT _CV-VFS-STORE
+_CV-VFS-STORE VFSNAP-STORE-SIZE + CONSTANT CVAULT-SIZE
+
+\ One private frame makes external callback mutation detectable without
+\ trusting the caller-owned descriptor for cleanup geometry.  The module guard
+\ serializes frame ownership; reentrant mutating APIs return BUSY while active.
+CREATE _CV-FRAME CVAULT-SIZE ALLOT
+CREATE _CV-FRAME-VAULT 0 ,
+CREATE _CV-FRAME-ACTIVE 0 ,
+CREATE _CV-CALLBACK-DEPTH 0 ,
+
+\ VFS selector and namespace traversal state must remain outside backend-owned
+\ or caller-owned memory while a binding callback is executing.
+CREATE _CV-VFS-OLD 0 ,
+CREATE _CV-VFS-TARGET 0 ,
+CREATE _CV-VFS-OLD-CWD 0 ,
+CREATE _CV-VFS-SELECTED 0 ,
+CREATE _CV-DIR-ROOT-INODE 0 ,
+CREATE _CV-DIR-SHARD1-INODE 0 ,
+CREATE _CV-DIR-SHARD2-INODE 0 ,
+
+: _CV.MAGIC             ( vault -- a ) _CV-MAGIC-OFF + ;
+: _CV.FLAGS             ( vault -- a ) _CV-FLAGS + ;
+: _CV.LAST-STATUS       ( vault -- a ) _CV-LAST-STATUS + ;
+: _CV.LAST-SEALED       ( vault -- a ) _CV-LAST-SEALED + ;
+: _CV.LAST-VFSNAP       ( vault -- a ) _CV-LAST-VFSNAP + ;
+: _CV.SECRET-CAP        ( vault -- a ) _CV-SECRET-CAP + ;
+: _CV.PLAIN-U           ( vault -- a ) _CV-PLAIN-U + ;
+: _CV.RECORD-U          ( vault -- a ) _CV-RECORD-U + ;
+: _CV.BACKING           ( vault -- a ) _CV-BACKING + ;
+: _CV.BACKING-U         ( vault -- a ) _CV-BACKING-U + ;
+: _CV.VFS               ( vault -- a ) _CV-VFS + ;
+: _CV.RESOLVER-XT       ( vault -- a ) _CV-RESOLVER-XT + ;
+: _CV.RESOLVER-CONTEXT  ( vault -- a ) _CV-RESOLVER-CONTEXT + ;
+: _CV.FLOOR-READ-XT     ( vault -- a ) _CV-FLOOR-READ-XT + ;
+: _CV.FLOOR-ADVANCE-XT  ( vault -- a ) _CV-FLOOR-ADVANCE-XT + ;
+: _CV.FLOOR-CONTEXT     ( vault -- a ) _CV-FLOOR-CONTEXT + ;
+: _CV.ROOT-U            ( vault -- a ) _CV-ROOT-U + ;
+: _CV.SHARD1-U          ( vault -- a ) _CV-SHARD1-U + ;
+: _CV.SHARD2-U          ( vault -- a ) _CV-SHARD2-U + ;
+: _CV.TARGET-U          ( vault -- a ) _CV-TARGET-U + ;
+: _CV.GENERATION        ( vault -- a ) _CV-GENERATION + ;
+: _CV.STATE             ( vault -- a ) _CV-STATE + ;
+: _CV.KIND              ( vault -- a ) _CV-KIND + ;
+: _CV.SECRET-U          ( vault -- a ) _CV-SECRET-U + ;
+: _CV.CALLBACK-XT       ( vault -- a ) _CV-CALLBACK-XT + ;
+: _CV.CALLBACK-CONTEXT  ( vault -- a ) _CV-CALLBACK-CONTEXT + ;
+: _CV.CALLBACK-STATUS   ( vault -- a ) _CV-CALLBACK-STATUS + ;
+: _CV.FLOOR             ( vault -- a ) _CV-FLOOR + ;
+: _CV.INPUT             ( vault -- a ) _CV-INPUT + ;
+: _CV.INPUT-U           ( vault -- a ) _CV-INPUT-U + ;
+: _CV.EXPECTED          ( vault -- a ) _CV-EXPECTED + ;
+: _CV.OPERATION         ( vault -- a ) _CV-OPERATION + ;
+: _CV.RESULT-REVISION   ( vault -- a ) _CV-RESULT-REVISION + ;
+: _CV.DIR-PATH          ( vault -- a ) _CV-DIR-PATH + ;
+: _CV.DIR-PATH-U        ( vault -- a ) _CV-DIR-PATH-U + ;
+: _CV.DIR-PARENT        ( vault -- a ) _CV-DIR-PARENT + ;
+: _CV.DIR-PARENT-U      ( vault -- a ) _CV-DIR-PARENT-U + ;
+: _CV.DIR-NAME          ( vault -- a ) _CV-DIR-NAME + ;
+: _CV.DIR-NAME-U        ( vault -- a ) _CV-DIR-NAME-U + ;
+: _CV.DIR-OLD-CWD       ( vault -- a ) _CV-DIR-OLD-CWD + ;
+: _CV.VFS-STATUS        ( vault -- a ) _CV-VFS-STATUS + ;
+: _CV.CLEANUP-STATUS    ( vault -- a ) _CV-CLEANUP-STATUS + ;
+: _CV.SEALED-WRITTEN    ( vault -- a ) _CV-SEALED-WRITTEN + ;
+: _CV.FLOOR-STATUS      ( vault -- a ) _CV-FLOOR-STATUS + ;
+: _CV.RESERVED0         ( vault -- a ) _CV-RESERVED0 + ;
+: _CV.RESERVED1         ( vault -- a ) _CV-RESERVED1 + ;
+: _CV.RESERVED2         ( vault -- a ) _CV-RESERVED2 + ;
+: _CV.RESERVED3         ( vault -- a ) _CV-RESERVED3 + ;
+
+: _CV.VAULT-ID          ( vault -- a ) _CV-VAULT-ID + ;
+: _CV.KEY-ID            ( vault -- a ) _CV-KEY-ID + ;
+: _CV.ACTIVE-RID        ( vault -- a ) _CV-ACTIVE-RID + ;
+: _CV.BINDING-ID        ( vault -- a ) _CV-BINDING-ID + ;
+: _CV.SEAL-KEY-ID       ( vault -- a ) _CV-SEAL-KEY-ID + ;
+: _CV.SEAL-RECORD-ID    ( vault -- a ) _CV-SEAL-RECORD-ID + ;
+: _CV.ROOT              ( vault -- a ) _CV-ROOT + ;
+: _CV.SHARD1            ( vault -- a ) _CV-SHARD1 + ;
+: _CV.SHARD2            ( vault -- a ) _CV-SHARD2 + ;
+: _CV.TARGET            ( vault -- a ) _CV-TARGET + ;
+: _CV.SEALED-DESCRIPTOR ( vault -- descriptor )
+    _CV-SEALED-DESCRIPTOR + ;
+: _CV.VFS-SPEC          ( vault -- spec ) _CV-VFS-SPEC + ;
+: _CV.VFS-STORE         ( vault -- store ) _CV-VFS-STORE + ;
+
+\ =====================================================================
+\  Backing-store views
+\ =====================================================================
+
+: _CV.VFS-SCRATCH  ( vault -- a ) _CV.BACKING @ ;
+
+: _CV.VFS-SCRATCH-U  ( vault -- u )
+    _CV.RECORD-U @ VFSNAP-HEADER-SIZE + ;
+
+: _CV.SEALED  ( vault -- a )
+    DUP _CV.BACKING @
+    SWAP _CV.VFS-SCRATCH-U + ;
+
+: _CV.PLAIN  ( vault -- a )
+    DUP _CV.SEALED
+    SWAP _CV.RECORD-U @ + ;
+
+: _CV.SEALED-WORKSPACE  ( vault -- a )
+    DUP _CV.PLAIN
+    SWAP _CV.PLAIN-U @ + ;
+
+\ =====================================================================
+\  Span, status, and byte helpers
+\ =====================================================================
+
+: _CV-REQUIRED-SPAN?  ( address length -- flag )
+    DUP 0> 0= IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _CV-CALLER-SPAN>STATUS  ( address length -- status )
+    CALLER-SPAN-STATUS
+    DUP CALLER-SPAN-S-OK = IF DROP CVAULT-S-OK EXIT THEN
+    DUP CALLER-SPAN-S-RANGE = IF DROP CVAULT-S-RANGE EXIT THEN
+    DUP CALLER-SPAN-S-PROTECTED = IF DROP CVAULT-S-PROTECTED EXIT THEN
+    DROP CVAULT-S-PLATFORM ;
+
+: _CV-ADMIT-SPAN  ( address length -- status )
+    2DUP _CV-REQUIRED-SPAN? 0= IF
+        2DROP CVAULT-S-INVALID EXIT
+    THEN
+    _CV-CALLER-SPAN>STATUS ;
+
+: _CV-PRIVATE-LENGTH  ( -- u )
+    _CV-PRIVATE-LIMIT @ _CV-PRIVATE-BEGIN - ;
+
+: _CV-PRIVATE-ALIASES?  ( address length -- flag )
+    _CV-PRIVATE-BEGIN _CV-PRIVATE-LENGTH
+    MSPAN-OVERLAP? ;
+
+: _CV-ALL-PRIVATE-ALIASES?  ( address length -- flag )
+    2DUP _VFSNAP-DEPENDENCY-ALIASES? IF
+        2DROP -1 EXIT
+    THEN
+    2DUP _S256-LOCAL-RESERVED-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    2DUP _aes-gcm-guard GUARD-SPIN-SIZE MSPAN-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    _CV-PRIVATE-ALIASES? ;
+
+: _CV-STATUS-BLOCKING?  ( status -- flag )
+    DUP CVAULT-S-CORRUPT =
+    OVER CVAULT-S-UNSUPPORTED = OR
+    OVER CVAULT-S-IO = OR
+    OVER CVAULT-S-RECOVERY = OR
+    OVER CVAULT-S-ROLLBACK = OR
+    SWAP CVAULT-S-INTERNAL = OR ;
+
+: _CV-BLOCKING-NORMALIZE  ( status -- blocking-status )
+    DUP CVAULT-STATUS-VALID? 0= IF
+        DROP CVAULT-S-INTERNAL EXIT
+    THEN
+    DUP _CV-STATUS-BLOCKING? IF EXIT THEN
+    DROP CVAULT-S-RECOVERY ;
+
+: _CV-NONZERO?  ( address length -- flag )
+    BEGIN
+        DUP
+    WHILE
+        OVER C@ IF 2DROP -1 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP 0 ;
+
+: _CV-ZERO?  ( address length -- flag )
+    BEGIN
+        DUP
+    WHILE
+        OVER C@ IF 2DROP 0 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
+
+: _CV-BE64!  ( nonnegative-u destination -- )
+    >R
+    DUP 56 RSHIFT 255 AND R@      C!
+    DUP 48 RSHIFT 255 AND R@ 1+   C!
+    DUP 40 RSHIFT 255 AND R@ 2 +  C!
+    DUP 32 RSHIFT 255 AND R@ 3 +  C!
+    DUP 24 RSHIFT 255 AND R@ 4 +  C!
+    DUP 16 RSHIFT 255 AND R@ 5 +  C!
+    DUP  8 RSHIFT 255 AND R@ 6 +  C!
+        255 AND R@ 7 + C!
+    R> DROP ;
+
+: _CV-BE64@  ( source -- nonnegative-u )
+    >R
+    R@     C@ 56 LSHIFT
+    R@ 1+  C@ 48 LSHIFT OR
+    R@ 2 + C@ 40 LSHIFT OR
+    R@ 3 + C@ 32 LSHIFT OR
+    R@ 4 + C@ 24 LSHIFT OR
+    R@ 5 + C@ 16 LSHIFT OR
+    R@ 6 + C@  8 LSHIFT OR
+    R> 7 + C@ OR ;
+
+: _CV-BE64-NONNEGATIVE?  ( source -- flag )
+    C@ 0x80 AND 0= ;
+
+: _CV-NIBBLE>LOWER  ( nibble -- byte )
+    15 AND DUP 10 < IF 48 + ELSE 87 + THEN ;
+
+: _CV-HEX!  ( source byte-count destination -- )
+    >R
+    DUP 0= IF 2DROP R> DROP EXIT THEN
+    OVER C@ DUP 4 RSHIFT _CV-NIBBLE>LOWER R@ C!
+    15 AND _CV-NIBBLE>LOWER R@ 1+ C!
+    1- SWAP 1+ SWAP
+    R> 2 + RECURSE ;
+
+: _CV-XOR!  ( first second destination byte-count -- )
+    DUP 0= IF DROP 2DROP DROP EXIT THEN
+    >R
+    2 PICK C@ 2 PICK C@ XOR 1 PICK C!
+    1+ >R
+    1+ SWAP 1+ SWAP
+    R> R> 1-
+    DUP IF RECURSE ELSE 2DROP 2DROP THEN ;
+
+: _CV-JOIN-POS  ( destination root-u -- position )
+    DUP 1 = IF 2DROP 1 EXIT THEN
+    2DUP + [CHAR] / SWAP C!
+    1+ NIP ;
+
+: _CV-COMPONENT-CANONICAL?  ( address length -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    DUP 23 U> IF 2DROP 0 EXIT THEN
+    DUP 1 = IF
+        OVER C@ [CHAR] . = IF 2DROP 0 EXIT THEN
+    THEN
+    DUP 2 = IF
+        OVER C@ [CHAR] . =
+        2 PICK 1+ C@ [CHAR] . = AND IF 2DROP 0 EXIT THEN
+    THEN
+    BEGIN
+        DUP
+    WHILE
+        OVER C@ DUP 0= SWAP [CHAR] / = OR IF
+            2DROP 0 EXIT
+        THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
+
+: _CV-COMPONENT-LENGTH  ( address length -- component-u )
+    0 >R
+    BEGIN
+        DUP
+    WHILE
+        OVER C@ [CHAR] / = IF 2DROP R> EXIT THEN
+        1- SWAP 1+ SWAP
+        R> 1+ >R
+    REPEAT
+    2DROP R> ;
+
+: _CV-ROOT-SEGMENTS-CANONICAL?  ( address length -- flag )
+    2DUP _CV-COMPONENT-LENGTH >R
+    OVER R@ _CV-COMPONENT-CANONICAL? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ OVER = IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    OVER R@ + 1+
+    1 PICK R@ - 1-
+    R> DROP
+    _CV-ROOT-SEGMENTS-CANONICAL? >R
+    2DROP R> ;
+
+: _CV-ROOT-CANONICAL?  ( address length -- flag )
+    2DUP _CV-REQUIRED-SPAN? 0= IF 2DROP 0 EXIT THEN
+    DUP CVAULT-ROOT-MAX U> IF 2DROP 0 EXIT THEN
+    OVER C@ [CHAR] / <> IF 2DROP 0 EXIT THEN
+    DUP 1 = IF 2DROP -1 EXIT THEN
+    2DUP + 1- C@ [CHAR] / = IF 2DROP 0 EXIT THEN
+    1- SWAP 1+ SWAP _CV-ROOT-SEGMENTS-CANONICAL? ;
+
+: _CV-PATH-SLASH  ( rid destination position -- rid destination position' )
+    [CHAR] / 2 PICK 2 PICK + C!
+    1+ ;
+
+: _CV-BACKING-WIPE  ( vault -- )
+    DUP _CV.BACKING @
+    SWAP _CV.BACKING-U @ 0 FILL ;
+
+: _CV-RESULT  ( status vault -- status )
+    OVER SWAP _CV.LAST-STATUS ! ;
+
+: _CV-FRAME-BEGIN?  ( vault -- flag )
+    _CV-FRAME-ACTIVE @ IF DROP 0 EXIT THEN
+    DUP _CV-FRAME-VAULT !
+    DUP _CV-FRAME CVAULT-SIZE MOVE
+    DROP
+    -1 _CV-FRAME-ACTIVE !
+    -1 ;
+
+: _CV-FRAME-INTACT?  ( vault -- flag )
+    _CV-FRAME-ACTIVE @ 0= IF DROP 0 EXIT THEN
+    DUP _CV-FRAME-VAULT @ <> IF DROP 0 EXIT THEN
+    CVAULT-SIZE _CV-FRAME CVAULT-SIZE COMPARE 0= ;
+
+: _CV-FRAME-RESTORE  ( vault -- )
+    _CV-FRAME SWAP CVAULT-SIZE MOVE ;
+
+: _CV-FRAME-CLEAR  ( -- )
+    _CV-FRAME CVAULT-SIZE 0 FILL
+    0 _CV-FRAME-VAULT !
+    0 _CV-FRAME-ACTIVE !
+    0 _CV-CALLBACK-DEPTH ! ;
+
+: _CV-FRAME-END  ( vault -- intact? )
+    DUP _CV-FRAME-INTACT?
+    DUP 0= IF OVER _CV-FRAME-RESTORE THEN
+    NIP >R _CV-FRAME-CLEAR R> ;
+
+\ =====================================================================
+\  RID binding and canonical path construction
+\ =====================================================================
+
+: _CV-BUILD-BINDING  ( vault -- )
+    >R
+    R@ _CV.VAULT-ID R@ _CV.ACTIVE-RID R@ _CV.BINDING-ID RID-SIZE
+        _CV-XOR!
+    R> DROP ;
+
+: _CV-BUILD-PATHS  ( vault -- )
+    >R
+    R@ _CV.SHARD1 _CV-PATH-CAP 0 FILL
+    R@ _CV.SHARD2 _CV-PATH-CAP 0 FILL
+    R@ _CV.TARGET _CV-PATH-CAP 0 FILL
+
+    R@ _CV.ROOT R@ _CV.SHARD1 R@ _CV.ROOT-U @ MOVE
+    R@ _CV.SHARD1 R@ _CV.ROOT-U @ _CV-JOIN-POS
+    R@ _CV.ACTIVE-RID 10 R@ _CV.SHARD1 3 PICK + _CV-HEX!
+    20 + R@ _CV.SHARD1-U !
+
+    R@ _CV.SHARD1 R@ _CV.SHARD2 R@ _CV.SHARD1-U @ MOVE
+    R@ _CV.SHARD2 R@ _CV.SHARD1-U @ _CV-JOIN-POS
+    R@ _CV.ACTIVE-RID 10 + 11 R@ _CV.SHARD2 3 PICK + _CV-HEX!
+    22 + R@ _CV.SHARD2-U !
+
+    R@ _CV.SHARD2 R@ _CV.TARGET R@ _CV.SHARD2-U @ MOVE
+    R@ _CV.TARGET R@ _CV.SHARD2-U @ _CV-JOIN-POS
+    R@ _CV.ACTIVE-RID 21 + 11 R@ _CV.TARGET 3 PICK + _CV-HEX!
+    22 + R@ _CV.TARGET-U !
+    R@ _CV-BUILD-BINDING
+    R> DROP ;
+
+: _CV-TARGET-LENGTH  ( vault -- length )
+    _CV.ROOT-U @
+    DUP 1 <> IF 1+ THEN
+    66 + ;
+
+: _CV-PATH-OUTPUT-ALIASES?  ( rid destination capacity vault -- flag )
+    >R
+    2 PICK RID-SIZE 3 PICK 3 PICK MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP -1 EXIT
+    THEN
+    1 PICK 1 PICK R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP -1 EXIT
+    THEN
+    1 PICK 1 PICK R@ _CV.BACKING @ R@ _CV.BACKING-U @
+        MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP -1 EXIT
+    THEN
+    1 PICK 1 PICK R@ _CV.VFS @ VFS-DESC-SIZE
+        MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP -1 EXIT
+    THEN
+    1 PICK 1 PICK _CV-ALL-PRIVATE-ALIASES?
+    >R 2DROP DROP R> R> DROP ;
+
+: _CV-PATH-WRITE  ( rid destination vault -- written )
+    >R
+    R@ _CV.ROOT 1 PICK R@ _CV.ROOT-U @ MOVE
+    R@ _CV.ROOT-U @
+    DUP 1 <> IF _CV-PATH-SLASH THEN
+
+    2 PICK 10 3 PICK 3 PICK + _CV-HEX!
+    20 + _CV-PATH-SLASH
+    2 PICK 10 + 11 3 PICK 3 PICK + _CV-HEX!
+    22 + _CV-PATH-SLASH
+    2 PICK 21 + 11 3 PICK 3 PICK + _CV-HEX!
+    22 +
+
+    >R 2DROP R> R> DROP ;
+
+\ =====================================================================
+\  Authenticated fixed plaintext envelope
+\ =====================================================================
+
+  0 CONSTANT _CVP-MAGIC
+  8 CONSTANT _CVP-VERSION
+ 16 CONSTANT _CVP-HEADER-U
+ 24 CONSTANT _CVP-STATE
+ 32 CONSTANT _CVP-GENERATION
+ 40 CONSTANT _CVP-KIND
+ 48 CONSTANT _CVP-SECRET-U
+ 56 CONSTANT _CVP-FLAGS
+ 64 CONSTANT _CVP-VAULT-ID
+ 96 CONSTANT _CVP-RID
+128 CONSTANT _CVP-SECRET
+
+: _CV-PLAIN-NUMERIC-SHAPE?  ( plaintext -- flag )
+    DUP _CVP-MAGIC + _CV-BE64-NONNEGATIVE?
+    OVER _CVP-VERSION + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVP-HEADER-U + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVP-STATE + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVP-GENERATION + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVP-KIND + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVP-SECRET-U + _CV-BE64-NONNEGATIVE? AND
+    SWAP _CVP-FLAGS + _CV-BE64-NONNEGATIVE? AND ;
+
+: _CV-BUILD-PLAINTEXT  ( vault -- status )
+    >R
+    R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+    _CV-PLAIN-MAGIC R@ _CV.PLAIN _CVP-MAGIC + _CV-BE64!
+    _CV-PLAIN-VERSION R@ _CV.PLAIN _CVP-VERSION + _CV-BE64!
+    CVAULT-PLAINTEXT-HEADER-SIZE
+        R@ _CV.PLAIN _CVP-HEADER-U + _CV-BE64!
+    R@ _CV.STATE @ R@ _CV.PLAIN _CVP-STATE + _CV-BE64!
+    R@ _CV.RESULT-REVISION @
+        R@ _CV.PLAIN _CVP-GENERATION + _CV-BE64!
+    R@ _CV.KIND @ R@ _CV.PLAIN _CVP-KIND + _CV-BE64!
+    R@ _CV.STATE @ CVAULT-STATE-PRESENT = IF
+        R@ _CV.INPUT-U @
+    ELSE
+        0
+    THEN
+    R@ _CV.PLAIN _CVP-SECRET-U + _CV-BE64!
+    0 R@ _CV.PLAIN _CVP-FLAGS + _CV-BE64!
+    R@ _CV.VAULT-ID
+        R@ _CV.PLAIN _CVP-VAULT-ID + RID-SIZE MOVE
+    R@ _CV.ACTIVE-RID
+        R@ _CV.PLAIN _CVP-RID + RID-SIZE MOVE
+    R@ _CV.STATE @ CVAULT-STATE-PRESENT = IF
+        R@ _CV.INPUT @ R@ _CV.PLAIN _CVP-SECRET +
+            R@ _CV.INPUT-U @ MOVE
+    THEN
+    R> DROP CVAULT-S-OK ;
+
+: _CV-VALIDATE-PLAINTEXT  ( vault -- status )
+    >R
+    0 R@ _CV.STATE ! 0 R@ _CV.KIND ! 0 R@ _CV.SECRET-U !
+    R@ _CV.PLAIN DUP _CV-PLAIN-NUMERIC-SHAPE? 0= IF
+        DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DUP _CVP-MAGIC + _CV-BE64@ _CV-PLAIN-MAGIC <> IF
+        DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DUP _CVP-VERSION + _CV-BE64@ _CV-PLAIN-VERSION <> IF
+        DROP R> DROP CVAULT-S-UNSUPPORTED EXIT
+    THEN
+    DUP _CVP-HEADER-U + _CV-BE64@
+        CVAULT-PLAINTEXT-HEADER-SIZE <> IF
+        DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DUP _CVP-GENERATION + _CV-BE64@
+        R@ _CV.GENERATION @ <> IF
+        DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DUP _CVP-FLAGS + _CV-BE64@ IF
+        DROP R> DROP CVAULT-S-UNSUPPORTED EXIT
+    THEN
+    DUP _CVP-VAULT-ID + RID-SIZE
+        R@ _CV.VAULT-ID RID-SIZE
+        COMPARE IF
+        DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DUP _CVP-RID + RID-SIZE
+        R@ _CV.ACTIVE-RID RID-SIZE
+        COMPARE IF
+        DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+
+    DUP _CVP-STATE + _CV-BE64@ DUP
+    CVAULT-STATE-PRESENT =
+    OVER CVAULT-STATE-TOMBSTONE = OR 0= IF
+        DROP DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DROP
+
+    DUP _CVP-KIND + _CV-BE64@ DUP 0> 0= IF
+        DROP DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DROP
+
+    DUP _CVP-SECRET-U + _CV-BE64@ DUP
+    R@ _CV.SECRET-CAP @ U> IF
+        DROP DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DROP
+
+    DUP _CVP-STATE + _CV-BE64@ CVAULT-STATE-PRESENT = IF
+        DUP _CVP-SECRET-U + _CV-BE64@ 0= IF
+            DROP R> DROP CVAULT-S-CORRUPT EXIT
+        THEN
+    ELSE
+        DUP _CVP-SECRET-U + _CV-BE64@ IF
+            DROP R> DROP CVAULT-S-CORRUPT EXIT
+        THEN
+    THEN
+    DUP _CVP-SECRET +
+    OVER _CVP-SECRET-U + _CV-BE64@ +
+    R@ _CV.SECRET-CAP @
+    2 PICK _CVP-SECRET-U + _CV-BE64@ -
+        _CV-ZERO? 0= IF
+        DROP R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    DUP _CVP-STATE + _CV-BE64@ R@ _CV.STATE !
+    DUP _CVP-KIND + _CV-BE64@ R@ _CV.KIND !
+    DUP _CVP-SECRET-U + _CV-BE64@ R@ _CV.SECRET-U !
+    DROP R> DROP CVAULT-S-OK ;
+
+\ =====================================================================
+\  Fixed VFS payload adapter and sealed-record binding
+\ =====================================================================
+
+0x414B535345414C31 CONSTANT _CV-SEALED-MAGIC  \ "AKSSEAL1"
+1 CONSTANT _CV-SEALED-VERSION
+
+  0 CONSTANT _CVS-MAGIC
+  8 CONSTANT _CVS-VERSION
+ 16 CONSTANT _CVS-HEADER-U
+ 24 CONSTANT _CVS-TOTAL-U
+ 32 CONSTANT _CVS-DATA-U
+ 40 CONSTANT _CVS-PURPOSE
+ 48 CONSTANT _CVS-REVISION
+ 56 CONSTANT _CVS-FLAGS
+ 64 CONSTANT _CVS-KEY-ID
+ 96 CONSTANT _CVS-RECORD-ID
+128 CONSTANT _CVS-SALT
+
+: _CV-SEALED-NUMERIC-SHAPE?  ( record -- flag )
+    DUP _CVS-MAGIC + _CV-BE64-NONNEGATIVE?
+    OVER _CVS-VERSION + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVS-HEADER-U + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVS-TOTAL-U + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVS-DATA-U + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVS-PURPOSE + _CV-BE64-NONNEGATIVE? AND
+    OVER _CVS-REVISION + _CV-BE64-NONNEGATIVE? AND
+    SWAP _CVS-FLAGS + _CV-BE64-NONNEGATIVE? AND ;
+
+: _CV-VFS-VALIDATE
+  ( payload-a payload-u envelope-generation -- snapshot-status )
+    >R
+    DUP SEALED-RECORD-OVERHEAD U> 0= IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    DUP SEALED-RECORD-SIZE-MAX U> IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CV-SEALED-NUMERIC-SHAPE? 0= IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-MAGIC + _CV-BE64@ _CV-SEALED-MAGIC <> IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-VERSION + _CV-BE64@ _CV-SEALED-VERSION <> IF
+        2DROP R> DROP VFSNAP-S-UNSUPPORTED EXIT
+    THEN
+    OVER _CVS-HEADER-U + _CV-BE64@
+        SEALED-RECORD-HEADER-SIZE <> IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-TOTAL-U + _CV-BE64@ 1 PICK <> IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-DATA-U + _CV-BE64@
+        1 PICK SEALED-RECORD-OVERHEAD - <> IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-PURPOSE + _CV-BE64@ _CV-SEALED-PURPOSE <> IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-REVISION + _CV-BE64@ R@ <> IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-FLAGS + _CV-BE64@ IF
+        2DROP R> DROP VFSNAP-S-UNSUPPORTED EXIT
+    THEN
+    OVER _CVS-KEY-ID + SEALED-RECORD-ID-SIZE
+        _CV-NONZERO? 0= IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-RECORD-ID + SEALED-RECORD-ID-SIZE
+        _CV-NONZERO? 0= IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    OVER _CVS-SALT + SEALED-RECORD-SALT-SIZE
+        _CV-NONZERO? 0= IF
+        2DROP R> DROP VFSNAP-S-CORRUPT EXIT
+    THEN
+    2DROP R> DROP VFSNAP-S-OK ;
+
+: _CV-SEALED>STATUS  ( sealed-status -- vault-status )
+    CASE
+        SEALED-RECORD-S-OK OF CVAULT-S-OK ENDOF
+        SEALED-RECORD-S-INVALID OF CVAULT-S-INVALID ENDOF
+        SEALED-RECORD-S-CAPACITY OF CVAULT-S-CAPACITY ENDOF
+        SEALED-RECORD-S-ALIAS OF CVAULT-S-INVALID ENDOF
+        SEALED-RECORD-S-BUSY OF CVAULT-S-BUSY ENDOF
+        SEALED-RECORD-S-KEY OF CVAULT-S-LOCKED ENDOF
+        SEALED-RECORD-S-CALLBACK OF CVAULT-S-CALLBACK ENDOF
+        SEALED-RECORD-S-ENTROPY OF CVAULT-S-ENTROPY ENDOF
+        SEALED-RECORD-S-CRYPTO OF CVAULT-S-CRYPTO ENDOF
+        SEALED-RECORD-S-AUTH OF CVAULT-S-AUTH ENDOF
+        SEALED-RECORD-S-FORMAT OF CVAULT-S-CORRUPT ENDOF
+        SEALED-RECORD-S-MISMATCH OF CVAULT-S-CORRUPT ENDOF
+        SEALED-RECORD-S-RANGE OF CVAULT-S-RANGE ENDOF
+        SEALED-RECORD-S-PROTECTED OF CVAULT-S-PROTECTED ENDOF
+        SEALED-RECORD-S-PLATFORM OF CVAULT-S-PLATFORM ENDOF
+        CVAULT-S-INTERNAL SWAP
+    ENDCASE ;
+
+: _CV-VFSNAP>STATUS  ( snapshot-status -- vault-status )
+    CASE
+        VFSNAP-S-OK OF CVAULT-S-OK ENDOF
+        VFSNAP-S-ABSENT OF CVAULT-S-ABSENT ENDOF
+        VFSNAP-S-CORRUPT OF CVAULT-S-CORRUPT ENDOF
+        VFSNAP-S-UNSUPPORTED OF CVAULT-S-UNSUPPORTED ENDOF
+        VFSNAP-S-INVALID OF CVAULT-S-INVALID ENDOF
+        VFSNAP-S-CAPACITY OF CVAULT-S-CAPACITY ENDOF
+        VFSNAP-S-IO OF CVAULT-S-IO ENDOF
+        VFSNAP-S-RECOVERY OF CVAULT-S-RECOVERY ENDOF
+        VFSNAP-S-BUSY OF CVAULT-S-BUSY ENDOF
+        VFSNAP-S-CONFLICT OF CVAULT-S-CONFLICT ENDOF
+        CVAULT-S-RECOVERY SWAP
+    ENDCASE ;
+
+: _CV-SEALED-DESCRIPTOR-RESET  ( vault -- descriptor )
+    >R
+    R@ _CV.KEY-ID R@ _CV.SEAL-KEY-ID RID-COPY
+    R@ _CV.BINDING-ID R@ _CV.SEAL-RECORD-ID RID-COPY
+    R@ _CV.SEALED-DESCRIPTOR DUP
+        SEALED-RECORD-DESCRIPTOR-CLEAR DROP
+    R@ _CV.SEAL-KEY-ID OVER SEALED-RECORD-D.KEY-ID !
+    R@ _CV.SEAL-RECORD-ID OVER SEALED-RECORD-D.RECORD-ID !
+    _CV-SEALED-PURPOSE OVER SEALED-RECORD-D.PURPOSE !
+    R@ _CV.RESOLVER-XT @ OVER SEALED-RECORD-D.RESOLVER-XT !
+    R@ _CV.RESOLVER-CONTEXT @
+        OVER SEALED-RECORD-D.RESOLVER-CONTEXT !
+    R> DROP ;
+
+: _CV-STAGED-IDS-INTACT?  ( vault -- flag )
+    >R
+    R@ _CV.KEY-ID R@ _CV.SEAL-KEY-ID RID=
+    R@ _CV.BINDING-ID R@ _CV.SEAL-RECORD-ID RID= AND
+    R> DROP ;
+
+: _CV-BIND-SEALED-SEAL  ( payload vault -- descriptor )
+    >R
+    R@ _CV-SEALED-DESCRIPTOR-RESET
+    R@ _CV.PLAIN OVER SEALED-RECORD-D.INPUT !
+    R@ _CV.PLAIN-U @ OVER SEALED-RECORD-D.INPUT-U !
+    R@ _CV.RESULT-REVISION @ OVER SEALED-RECORD-D.REVISION !
+    OVER OVER SEALED-RECORD-D.OUTPUT !
+    R@ _CV.RECORD-U @ OVER SEALED-RECORD-D.OUTPUT-CAP !
+    NIP R> DROP ;
+
+: _CV-BIND-SEALED-OPEN  ( vault -- descriptor )
+    >R
+    R@ _CV-SEALED-DESCRIPTOR-RESET
+    R@ _CV.SEALED OVER SEALED-RECORD-D.INPUT !
+    R@ _CV.RECORD-U @ OVER SEALED-RECORD-D.INPUT-U !
+    R@ _CV.GENERATION @ OVER SEALED-RECORD-D.REVISION !
+    R@ _CV.PLAIN OVER SEALED-RECORD-D.OUTPUT !
+    R@ _CV.PLAIN-U @ OVER SEALED-RECORD-D.OUTPUT-CAP !
+    R> DROP ;
+
+: _CV-SEALED-SEAL-SAFE  ( descriptor workspace -- written status )
+    ['] SEALED-RECORD-SEAL CATCH
+    DUP IF
+        2DROP DROP 0 SEALED-RECORD-S-INTERNAL
+    ELSE
+        DROP
+    THEN ;
+
+: _CV-SEALED-OPEN-SAFE  ( descriptor workspace -- written status )
+    ['] SEALED-RECORD-OPEN CATCH
+    DUP IF
+        2DROP DROP 0 SEALED-RECORD-S-INTERNAL
+    ELSE
+        DROP
+    THEN ;
+
+: _CV-ENCODE-SEAL  ( payload vault -- snapshot-status )
+    >R
+    R@ _CV-BIND-SEALED-SEAL
+    R@ _CV-FRAME-BEGIN? 0= IF
+        DROP R> DROP VFSNAP-S-BUSY EXIT
+    THEN
+    R@ _CV.SEALED-WORKSPACE _CV-SEALED-SEAL-SAFE
+    R@ _CV-FRAME-END 0= IF
+        2DROP
+        SEALED-RECORD-S-INTERNAL R@ _CV.LAST-SEALED !
+        R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+        R@ _CV.SEALED-WORKSPACE SEALED-RECORD-WORKSPACE-SIZE 0 FILL
+        R> DROP VFSNAP-S-INVALID EXIT
+    THEN
+    DUP R@ _CV.LAST-SEALED !
+    DUP IF
+        2DROP
+        R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+        R> DROP VFSNAP-S-INVALID EXIT
+    THEN
+    DROP
+    R@ _CV-STAGED-IDS-INTACT? 0= IF
+        SEALED-RECORD-S-CALLBACK R@ _CV.LAST-SEALED !
+        DROP
+        R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+        R> DROP VFSNAP-S-INVALID EXIT
+    THEN
+    R@ _CV.RECORD-U @ <> IF
+        R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+        R> DROP VFSNAP-S-INVALID EXIT
+    THEN
+    R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+    R> DROP VFSNAP-S-OK ;
+
+: _CV-VFS-ENCODE
+  ( vault payload-a payload-u next-generation -- snapshot-status )
+    >R
+    DUP 3 PICK _CV.RECORD-U @ <> IF
+        2DROP DROP R> DROP VFSNAP-S-CAPACITY EXIT
+    THEN
+    R@ 0> 0= IF
+        2DROP DROP R> DROP VFSNAP-S-INVALID EXIT
+    THEN
+    R@ 3 PICK _CV.RESULT-REVISION !
+    DROP
+    OVER _CV-BUILD-PLAINTEXT
+    DUP IF
+        >R 2DROP R> DROP R> DROP VFSNAP-S-INVALID EXIT
+    THEN
+    DROP SWAP _CV-ENCODE-SEAL
+    R> DROP ;
+
+CREATE _CV-VFS-MAGIC
+65 C, 75 C, 67 C, 86 C, 83 C, 48 C, 48 C, 49 C,  \ "AKCVS001"
+
+: _CV-SPEC-PRIVATE-EXACT?  ( spec -- flag )
+    VFSNAP-SPEC.PRIVATE-SET
+    DUP MSPAN-SET-COUNT@ 1 <> IF DROP 0 EXIT THEN
+    0 SWAP _MSPAN-SET-NTH
+    DUP @ _CV-PRIVATE-BEGIN =
+    SWAP 8 + @ _CV-PRIVATE-LENGTH = AND ;
+
+: _CV-SPEC-IDENTITY?  ( vault -- flag )
+    >R
+    R@ _CV.VFS-SPEC VFSNAP-SPEC-SEALED? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _CV.VFS-SPEC VFSNAP-SPEC.RECORD-MAGIC 8
+        _CV-VFS-MAGIC 8 COMPARE IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-SPEC VFSNAP-SPEC.FORMAT @
+        _CV-VFS-FORMAT <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-SPEC VFSNAP-SPEC.PAYLOAD-U @
+        R@ _CV.RECORD-U @ <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-SPEC VFSNAP-SPEC.ENCODE-XT @
+        ['] _CV-VFS-ENCODE <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-SPEC VFSNAP-SPEC.VALIDATE-XT @
+        ['] _CV-VFS-VALIDATE <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-SPEC _CV-SPEC-PRIVATE-EXACT?
+    R> DROP ;
+
+: _CV-STORE-IDENTITY?  ( vault -- flag )
+    >R
+    R@ _CV.VFS-STORE VFSNAP.SPEC @
+        R@ _CV.VFS-SPEC <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-STORE VFSNAP.VFS @
+        R@ _CV.VFS @ <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-STORE VFSNAP.SCRATCH-A @
+        R@ _CV.VFS-SCRATCH <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-STORE VFSNAP.SCRATCH-U @
+        R@ _CV.VFS-SCRATCH-U <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-STORE VFSNAP.REPLACE VREPL.VFS @
+        R@ _CV.VFS @ <> IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-STORE VFSNAP-VALID? 0= IF R> DROP 0 EXIT THEN
+    R@ _CV.VFS-STORE VFSNAP-PATH$
+    R@ _CV.TARGET R@ _CV.TARGET-U @ COMPARE 0=
+    R> DROP ;
+
+: _CV-VAULT-SHAPE?  ( vault -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP CVAULT-SIZE _CV-ADMIT-SPAN CVAULT-S-OK <> IF DROP 0 EXIT THEN
+    DUP CVAULT-SIZE _CV-ALL-PRIVATE-ALIASES? IF DROP 0 EXIT THEN
+    DUP _CV.MAGIC @ _CV-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _CV.FLAGS @ DUP
+        _CV-F-CONFIGURED _CV-F-BUSY OR _CV-F-BLOCKED OR
+        _CV-F-STORE-ACTIVE OR _CV-F-FLOOR OR
+        INVERT AND IF 2DROP 0 EXIT THEN
+    _CV-F-CONFIGURED AND 0= IF DROP 0 EXIT THEN
+    DUP _CV.LAST-STATUS @ CVAULT-STATUS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _CV.FLAGS @ _CV-F-BLOCKED AND IF
+        DUP _CV.LAST-STATUS @ _CV-STATUS-BLOCKING? 0= IF
+            DROP 0 EXIT
+        THEN
+    THEN
+    DUP _CV.ROOT OVER _CV.ROOT-U @ _CV-ROOT-CANONICAL? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _CV.SECRET-CAP @ CVAULT-PLAINTEXT-SIZE
+        OVER _CV.PLAIN-U @ <> IF DROP 0 EXIT THEN
+    DUP _CV.SECRET-CAP @ CVAULT-RECORD-SIZE
+        OVER _CV.RECORD-U @ <> IF DROP 0 EXIT THEN
+    DUP _CV.SECRET-CAP @ CVAULT-BACKING-SIZE
+        OVER _CV.BACKING-U @ <> IF DROP 0 EXIT THEN
+    DUP _CV-SPEC-IDENTITY? 0= IF DROP 0 EXIT THEN
+    DUP _CV.BACKING @ OVER _CV.BACKING-U @
+        _CV-ADMIT-SPAN CVAULT-S-OK <> IF DROP 0 EXIT THEN
+    DUP _CV.BACKING @ OVER _CV.BACKING-U @
+        2 PICK CVAULT-SIZE MSPAN-OVERLAP? IF DROP 0 EXIT THEN
+    DUP _CV.BACKING @ OVER _CV.BACKING-U @
+        _CV-ALL-PRIVATE-ALIASES? IF DROP 0 EXIT THEN
+    DUP _CV.VFS @ 0= IF DROP 0 EXIT THEN
+    DUP _CV.VFS @ VFS-DESC-SIZE _CV-ADMIT-SPAN
+        CVAULT-S-OK <> IF DROP 0 EXIT THEN
+    DUP _CV.VFS @ VFS-DESC-SIZE
+        2 PICK CVAULT-SIZE MSPAN-OVERLAP? IF DROP 0 EXIT THEN
+    DUP _CV.VFS @ VFS-DESC-SIZE
+        _CV-ALL-PRIVATE-ALIASES? IF DROP 0 EXIT THEN
+    DUP _CV.BACKING @ OVER _CV.BACKING-U @
+        2 PICK _CV.VFS @ VFS-DESC-SIZE
+        MSPAN-OVERLAP? IF DROP 0 EXIT THEN
+    DUP _CV.RESOLVER-XT @ 0= IF DROP 0 EXIT THEN
+    DUP _CV.VAULT-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _CV.KEY-ID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _CV.FLOOR-READ-XT @ 0<>
+    OVER _CV.FLOOR-ADVANCE-XT @ 0<> <> IF DROP 0 EXIT THEN
+    DUP _CV.FLOOR-READ-XT @ 0<> IF
+        DUP _CV.FLAGS @ _CV-F-FLOOR AND 0= IF DROP 0 EXIT THEN
+    ELSE
+        DUP _CV.FLAGS @ _CV-F-FLOOR AND IF DROP 0 EXIT THEN
+    THEN
+    DUP _CV.FLAGS @ _CV-F-STORE-ACTIVE AND IF
+        DUP _CV.FLAGS @ _CV-F-BUSY _CV-F-BLOCKED OR AND 0= IF
+            DROP 0 EXIT
+        THEN
+        DUP _CV-STORE-IDENTITY? 0= IF DROP 0 EXIT THEN
+    THEN
+    DROP -1 ;
+
+\ =====================================================================
+\  Configuration admission and immutable descriptor publication
+\ =====================================================================
+
+: _CV-CONFIG-PRIVATE-ALIASES?  ( config vault -- flag )
+    >R
+    DUP CVAULT-CONFIG-SIZE _CV-ALL-PRIVATE-ALIASES? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    R@ CVAULT-SIZE _CV-ALL-PRIVATE-ALIASES? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.BACKING @ OVER CVAULT-C.BACKING-U @
+        _CV-ALL-PRIVATE-ALIASES? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.VFS @ VFS-DESC-SIZE _CV-ALL-PRIVATE-ALIASES? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.ROOT @ OVER CVAULT-C.ROOT-U @
+        _CV-ALL-PRIVATE-ALIASES? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.VAULT-ID @ RID-SIZE _CV-ALL-PRIVATE-ALIASES? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.KEY-ID @ RID-SIZE _CV-ALL-PRIVATE-ALIASES?
+    >R DROP R> R> DROP ;
+
+: _CV-CONFIG-ALIASES?  ( config vault -- flag )
+    >R
+    DUP CVAULT-CONFIG-SIZE R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.BACKING @ OVER CVAULT-C.BACKING-U @
+        R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.BACKING @ OVER CVAULT-C.BACKING-U @
+        2 PICK CVAULT-CONFIG-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.VFS @ VFS-DESC-SIZE
+        R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.VFS @ VFS-DESC-SIZE
+        2 PICK CVAULT-C.BACKING @ 3 PICK CVAULT-C.BACKING-U @
+        MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.VFS @ VFS-DESC-SIZE
+        2 PICK CVAULT-CONFIG-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+
+    DUP CVAULT-C.ROOT @ OVER CVAULT-C.ROOT-U @
+        R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.ROOT @ OVER CVAULT-C.ROOT-U @
+        2 PICK CVAULT-C.BACKING @ 3 PICK CVAULT-C.BACKING-U @
+        MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.ROOT @ OVER CVAULT-C.ROOT-U @
+        2 PICK CVAULT-C.VFS @ VFS-DESC-SIZE
+        MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+
+    DUP CVAULT-C.VAULT-ID @ RID-SIZE
+        R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.VAULT-ID @ RID-SIZE
+        2 PICK CVAULT-C.BACKING @ 3 PICK CVAULT-C.BACKING-U @
+        MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.VAULT-ID @ RID-SIZE
+        2 PICK CVAULT-C.VFS @ VFS-DESC-SIZE
+        MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.KEY-ID @ RID-SIZE
+        R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.KEY-ID @ RID-SIZE
+        2 PICK CVAULT-C.BACKING @ 3 PICK CVAULT-C.BACKING-U @
+        MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP CVAULT-C.KEY-ID @ RID-SIZE
+        2 PICK CVAULT-C.VFS @ VFS-DESC-SIZE
+        MSPAN-OVERLAP?
+    >R DROP R> R> DROP ;
+
+: _CV-CONFIG-PREFLIGHT  ( config vault -- status )
+    >R
+    DUP CVAULT-CONFIG-SIZE _CV-ADMIT-SPAN
+    DUP IF NIP R> DROP EXIT THEN DROP
+    R@ CVAULT-SIZE _CV-ADMIT-SPAN
+    DUP IF NIP R> DROP EXIT THEN DROP
+
+    DUP CVAULT-C.ROOT @ OVER CVAULT-C.ROOT-U @ _CV-ADMIT-SPAN
+    DUP IF NIP R> DROP EXIT THEN DROP
+    DUP CVAULT-C.ROOT @ OVER CVAULT-C.ROOT-U @
+        _CV-ROOT-CANONICAL? 0= IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+
+    DUP CVAULT-C.SECRET-CAPACITY @ CVAULT-BACKING-SIZE
+    DUP 0= IF
+        DROP DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    OVER CVAULT-C.BACKING-U @ <> IF
+        DROP R> DROP CVAULT-S-CAPACITY EXIT
+    THEN
+    DUP CVAULT-C.BACKING @ OVER CVAULT-C.BACKING-U @ _CV-ADMIT-SPAN
+    DUP IF NIP R> DROP EXIT THEN DROP
+
+    DUP CVAULT-C.VAULT-ID @ RID-SIZE _CV-ADMIT-SPAN
+    DUP IF NIP R> DROP EXIT THEN DROP
+    DUP CVAULT-C.VAULT-ID @ RID-PRESENT? 0= IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP CVAULT-C.KEY-ID @ RID-SIZE _CV-ADMIT-SPAN
+    DUP IF NIP R> DROP EXIT THEN DROP
+    DUP CVAULT-C.KEY-ID @ RID-PRESENT? 0= IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP CVAULT-C.VFS @ 0= IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP CVAULT-C.VFS @ VFS-DESC-SIZE _CV-ADMIT-SPAN
+    DUP IF NIP R> DROP EXIT THEN DROP
+    DUP CVAULT-C.RESOLVER-XT @ 0= IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP CVAULT-C.FLOOR-READ-XT @ 0<>
+    OVER CVAULT-C.FLOOR-ADVANCE-XT @ 0<> <> IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP R@ _CV-CONFIG-PRIVATE-ALIASES? IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP R@ _CV-CONFIG-ALIASES? IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DROP R> DROP CVAULT-S-OK ;
+
+: _CV-SPEC-INIT  ( vault -- status )
+    >R
+    _CV-VFS-MAGIC 8 _CV-VFS-FORMAT
+    R@ _CV.RECORD-U @
+    ['] _CV-VFS-ENCODE ['] _CV-VFS-VALIDATE
+    R@ _CV.VFS-SPEC VFSNAP-SPEC-INIT
+    DUP IF
+        _CV-VFSNAP>STATUS R> DROP EXIT
+    THEN
+    DROP
+    _CV-PRIVATE-BEGIN _CV-PRIVATE-LENGTH
+        R@ _CV.VFS-SPEC VFSNAP-SPEC-PRIVATE-ADD
+    DUP IF
+        _CV-VFSNAP>STATUS R> DROP EXIT
+    THEN
+    DROP
+    R@ _CV.VFS-SPEC VFSNAP-SPEC-SEAL
+    _CV-VFSNAP>STATUS
+    R> DROP ;
+
+: _CV-POPULATE  ( config vault -- status )
+    >R
+    R@ CVAULT-SIZE 0 FILL
+    DUP CVAULT-C.BACKING @ OVER CVAULT-C.BACKING-U @ 0 FILL
+
+    DUP CVAULT-C.SECRET-CAPACITY @ R@ _CV.SECRET-CAP !
+    DUP CVAULT-C.SECRET-CAPACITY @ CVAULT-PLAINTEXT-SIZE
+        R@ _CV.PLAIN-U !
+    DUP CVAULT-C.SECRET-CAPACITY @ CVAULT-RECORD-SIZE
+        R@ _CV.RECORD-U !
+    DUP CVAULT-C.BACKING @ R@ _CV.BACKING !
+    DUP CVAULT-C.BACKING-U @ R@ _CV.BACKING-U !
+    DUP CVAULT-C.VFS @ R@ _CV.VFS !
+    DUP CVAULT-C.RESOLVER-XT @ R@ _CV.RESOLVER-XT !
+    DUP CVAULT-C.RESOLVER-CONTEXT @ R@ _CV.RESOLVER-CONTEXT !
+    DUP CVAULT-C.FLOOR-READ-XT @ R@ _CV.FLOOR-READ-XT !
+    DUP CVAULT-C.FLOOR-ADVANCE-XT @ R@ _CV.FLOOR-ADVANCE-XT !
+    DUP CVAULT-C.FLOOR-CONTEXT @ R@ _CV.FLOOR-CONTEXT !
+    DUP CVAULT-C.ROOT-U @ DUP R@ _CV.ROOT-U !
+    OVER CVAULT-C.ROOT @ R@ _CV.ROOT ROT MOVE
+    DUP CVAULT-C.VAULT-ID @ R@ _CV.VAULT-ID RID-COPY
+    DUP CVAULT-C.KEY-ID @ R@ _CV.KEY-ID RID-COPY
+
+    R@ _CV-SPEC-INIT
+    DUP IF
+        SWAP
+        DUP CVAULT-C.BACKING @ OVER CVAULT-C.BACKING-U @ 0 FILL
+        DROP
+        R@ CVAULT-SIZE 0 FILL
+        R> DROP EXIT
+    THEN
+    DROP
+    _CV-F-CONFIGURED
+    OVER CVAULT-C.FLOOR-READ-XT @ IF _CV-F-FLOOR OR THEN
+    R@ _CV.FLAGS !
+    _CV-MAGIC R@ _CV.MAGIC !
+    CVAULT-S-OK R@ _CV.LAST-STATUS !
+    DROP R> DROP CVAULT-S-OK ;
+
+\ =====================================================================
+\  Trusted-root verification and collision-safe shard provisioning
+\ =====================================================================
+
+: _CV-IOR>STATUS  ( ior -- vault-status )
+    DUP 0= IF DROP CVAULT-S-OK EXIT THEN
+    VFS-IOR-REASON
+    CASE
+        VFS-R-NOENT OF CVAULT-S-ABSENT ENDOF
+        VFS-R-NOTDIR OF CVAULT-S-CORRUPT ENDOF
+        VFS-R-CORRUPT OF CVAULT-S-CORRUPT ENDOF
+        VFS-R-UNSUPPORTED OF CVAULT-S-UNSUPPORTED ENDOF
+        VFS-R-LOOP OF CVAULT-S-CORRUPT ENDOF
+        CVAULT-S-IO SWAP
+    ENDCASE ;
+
+: _CV-DIRECTORY-RESULT  ( inode ior -- inode status )
+    DUP IF
+        _CV-IOR>STATUS >R DROP 0 R> EXIT
+    THEN
+    DROP
+    DUP 0= IF CVAULT-S-CORRUPT EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR <> IF
+        DROP 0 CVAULT-S-CORRUPT EXIT
+    THEN
+    CVAULT-S-OK ;
+
+: _CV-RESOLVE-ROOT  ( vault -- inode status )
+    >R
+    R@ _CV.ROOT R@ _CV.ROOT-U @
+    VFS-RP-NOFOLLOW-FINAL R@ _CV.VFS @
+    VFS-RESOLVE-POLICY? _CV-DIRECTORY-RESULT
+    R> DROP ;
+
+: _CV-LOOKUP-DIRECTORY
+  ( name-a name-u parent vault -- inode status )
+    >R
+    R@ _CV.VFS @ VFS-LOOKUP _CV-DIRECTORY-RESULT
+    R> DROP ;
+
+: _CV-SHARD1-NAME$  ( vault -- address length )
+    DUP _CV.SHARD1
+    SWAP _CV.SHARD1-U @ 20 - +
+    20 ;
+
+: _CV-SHARD2-NAME$  ( vault -- address length )
+    DUP _CV.SHARD2
+    SWAP _CV.SHARD2-U @ 22 - +
+    22 ;
+
+: _CV-ROOT-LOAD  ( vault -- status )
+    DUP _CV-RESOLVE-ROOT
+    DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    DROP
+    NIP _CV-DIR-ROOT-INODE !
+    CVAULT-S-OK ;
+
+: _CV-SHARD1-LOAD  ( vault -- status )
+    DUP _CV-SHARD1-NAME$
+    _CV-DIR-ROOT-INODE @
+    3 PICK _CV-LOOKUP-DIRECTORY
+    DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    DROP
+    NIP _CV-DIR-SHARD1-INODE !
+    CVAULT-S-OK ;
+
+: _CV-SHARD2-LOAD  ( vault -- status )
+    DUP _CV-SHARD2-NAME$
+    _CV-DIR-SHARD1-INODE @
+    3 PICK _CV-LOOKUP-DIRECTORY
+    DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    DROP
+    NIP _CV-DIR-SHARD2-INODE !
+    CVAULT-S-OK ;
+
+: _CV-MKDIR-ONE  ( name-a name-u parent vault -- status )
+    >R
+    R@ _CV.VFS @ V.CWD !
+    R@ _CV.VFS @ VFS-MKDIR
+    DUP 0= IF DROP R> DROP CVAULT-S-OK EXIT THEN
+    DUP VFS-IOR-REASON VFS-R-EXISTS = IF
+        DROP R> DROP CVAULT-S-OK EXIT
+    THEN
+    _CV-IOR>STATUS
+    R> DROP ;
+
+: _CV-ENSURE-SHARD1  ( vault -- status )
+    DUP _CV-SHARD1-LOAD
+    DUP CVAULT-S-ABSENT <> IF NIP EXIT THEN
+    DROP
+    DUP _CV-SHARD1-NAME$
+    _CV-DIR-ROOT-INODE @
+    3 PICK _CV-MKDIR-ONE
+    DUP IF NIP EXIT THEN DROP
+    _CV-SHARD1-LOAD ;
+
+: _CV-ENSURE-SHARD2  ( vault -- status )
+    DUP _CV-SHARD2-LOAD
+    DUP CVAULT-S-ABSENT <> IF NIP EXIT THEN
+    DROP
+    DUP _CV-SHARD2-NAME$
+    _CV-DIR-SHARD1-INODE @
+    3 PICK _CV-MKDIR-ONE
+    DUP IF NIP EXIT THEN DROP
+    _CV-SHARD2-LOAD ;
+
+: _CV-VERIFY-SHARDS  ( vault -- status )
+    DUP _CV-SHARD1-LOAD
+    DUP IF
+        DUP CVAULT-S-ABSENT = IF
+            2DROP CVAULT-S-RECOVERY
+        ELSE
+            NIP
+        THEN
+        EXIT
+    THEN
+    DROP
+    _CV-SHARD2-LOAD
+    DUP CVAULT-S-ABSENT = IF DROP CVAULT-S-RECOVERY THEN ;
+
+: _CV-PROVISION-SHARDS  ( vault -- status )
+    DUP _CV-ENSURE-SHARD1
+    DUP IF NIP EXIT THEN DROP
+    DUP _CV-ENSURE-SHARD2
+    DUP IF NIP EXIT THEN DROP
+    _CV.VFS @ VFS-SYNC
+    _CV-IOR>STATUS ;
+
+: _CV-TOPOLOGY-BODY  ( vault -- status )
+    DUP _CV-ROOT-LOAD
+    DUP IF
+        OVER _CV.OPERATION @ _CV-OP-INIT = 0= IF
+            DUP CVAULT-S-ABSENT = IF
+                DROP CVAULT-S-RECOVERY
+            THEN
+        THEN
+        NIP EXIT
+    THEN
+    DROP
+    DUP _CV.OPERATION @ _CV-OP-CREATE = IF
+        _CV-PROVISION-SHARDS
+    ELSE
+        DUP _CV.OPERATION @ _CV-OP-INIT = IF
+            DROP CVAULT-S-OK
+        ELSE
+            _CV-VERIFY-SHARDS
+        THEN
+    THEN ;
+
+: _CV-VFS-USE-SAVED  ( vault -- )
+    DROP _CV-VFS-OLD @ VFS-USE ;
+
+: _CV-VFS-SELECT  ( vault -- )
+    >R
+    0 _CV-VFS-SELECTED !
+    VFS-CUR _CV-VFS-OLD !
+    R@ _CV.VFS @ DUP _CV-VFS-TARGET !
+    V.CWD @ _CV-VFS-OLD-CWD !
+    1 _CV-VFS-SELECTED !
+    _CV-VFS-TARGET @ VFS-USE
+    2 _CV-VFS-SELECTED !
+    R> DROP ;
+
+: _CV-VFS-RESTORE  ( vault -- status )
+    DROP
+    _CV-VFS-OLD-CWD @ _CV-VFS-TARGET @ V.CWD !
+    0
+    DUP ['] _CV-VFS-USE-SAVED CATCH
+    DUP IF
+        2DROP DROP CVAULT-S-RECOVERY EXIT
+    THEN
+    DROP DROP CVAULT-S-OK ;
+
+: _CV-VFS-RESTORE-IF-SELECTED  ( vault -- status )
+    >R
+    _CV-VFS-SELECTED @ 1 U< IF
+        R> DROP CVAULT-S-OK EXIT
+    THEN
+    R@ _CV-VFS-RESTORE
+    0 _CV-VFS-SELECTED !
+    0 _CV-VFS-OLD !
+    0 _CV-VFS-TARGET !
+    0 _CV-VFS-OLD-CWD !
+    R> DROP ;
+
+: _CV-VFS-CLEANUP-CALL
+  ( vault primary cleanup-xt -- vault final )
+    2 PICK SWAP CATCH
+    DUP IF
+        2DROP DROP
+        CVAULT-S-RECOVERY EXIT
+    THEN
+    DROP
+    DUP IF
+        2DROP CVAULT-S-RECOVERY
+    ELSE
+        DROP
+    THEN ;
+
+: _CV-TOPOLOGY-DISPATCH  ( vault -- status )
+    0 _CV-VFS-SELECTED !
+    DUP ['] _CV-VFS-SELECT CATCH
+    DUP IF
+        2DROP CVAULT-S-IO
+        ['] _CV-VFS-RESTORE-IF-SELECTED _CV-VFS-CLEANUP-CALL
+        NIP EXIT
+    THEN
+    DROP
+    DUP ['] _CV-TOPOLOGY-BODY CATCH
+    DUP IF
+        2DROP CVAULT-S-IO
+    ELSE
+        DROP
+        DUP CVAULT-STATUS-VALID? 0= IF
+            DROP CVAULT-S-INTERNAL
+        THEN
+    THEN
+    ['] _CV-VFS-RESTORE-IF-SELECTED _CV-VFS-CLEANUP-CALL
+    NIP ;
+
+: _CV-TOPOLOGY-TRANSACTION-CALL  ( vault -- status )
+    ['] _CV-TOPOLOGY-DISPATCH VFS-TRANSACTION ;
+
+: _CV-TOPOLOGY  ( vault -- status )
+    DUP _CV-FRAME-BEGIN? 0= IF
+        DROP CVAULT-S-BUSY EXIT
+    THEN
+    DUP ['] _CV-TOPOLOGY-TRANSACTION-CALL CATCH
+    DUP IF
+        2DROP CVAULT-S-IO
+    ELSE
+        DROP
+        DUP CVAULT-STATUS-VALID? 0= IF
+            DROP CVAULT-S-INTERNAL
+        THEN
+    THEN
+    OVER _CV-FRAME-END 0= IF
+        2DROP CVAULT-S-INTERNAL EXIT
+    THEN
+    NIP ;
+
+\ =====================================================================
+\  Optional trusted rollback-floor provider
+\ =====================================================================
+
+-3201 CONSTANT _CV-E-FLOOR-STACK
+0x4356464C4F4F5231 CONSTANT _CV-FLOOR-CANARY  \ "CVFLOOR1"
+
+: _CV-FLOOR-STATUS-VALID?  ( status -- flag )
+    DUP CVAULT-STATUS-VALID?
+    SWAP CVAULT-S-REVOKED <> AND ;
+
+: _CV-FLOOR-STAGE-IDS  ( vault -- )
+    DUP _CV.VAULT-ID OVER _CV.SEAL-KEY-ID RID-COPY
+    DUP _CV.ACTIVE-RID SWAP _CV.SEAL-RECORD-ID RID-COPY ;
+
+: _CV-FLOOR-STAGED-IDS-INTACT?  ( vault -- flag )
+    >R
+    R@ _CV.VAULT-ID R@ _CV.SEAL-KEY-ID RID=
+    R@ _CV.ACTIVE-RID R@ _CV.SEAL-RECORD-ID RID= AND
+    R> DROP ;
+
+: _CV-FLOOR-READ-INVOKE  ( vault -- generation status )
+    >R
+    DEPTH _CV-CALLBACK-DEPTH !
+    _CV-FLOOR-CANARY
+    R@
+    R@ _CV.SEAL-KEY-ID RID-SIZE
+    R@ _CV.SEAL-RECORD-ID RID-SIZE
+    R@ _CV.FLOOR-CONTEXT @
+    R@ _CV.FLOOR-READ-XT @ EXECUTE
+    DEPTH _CV-CALLBACK-DEPTH @ 4 + <> IF
+        _CV-E-FLOOR-STACK THROW
+    THEN
+    3 PICK _CV-FLOOR-CANARY <> IF
+        _CV-E-FLOOR-STACK THROW
+    THEN
+    2 PICK R@ <> IF
+        _CV-E-FLOOR-STACK THROW
+    THEN
+    >R >R 2DROP R> R>
+    R> DROP ;
+
+: _CV-FLOOR-READ-SAFE  ( vault -- generation status )
+    ['] _CV-FLOOR-READ-INVOKE CATCH
+    DUP IF
+        2DROP 0 CVAULT-S-CALLBACK EXIT
+    THEN
+    DROP
+    DUP _CV-FLOOR-STATUS-VALID? 0= IF
+        2DROP 0 CVAULT-S-CALLBACK EXIT
+    THEN
+    DUP IF
+        NIP 0 SWAP EXIT
+    THEN
+    OVER 0< IF
+        2DROP 0 CVAULT-S-CALLBACK EXIT
+    THEN ;
+
+: _CV-FLOOR-ADVANCE-INVOKE  ( vault -- status )
+    >R
+    DEPTH _CV-CALLBACK-DEPTH !
+    _CV-FLOOR-CANARY
+    R@
+    R@ _CV.SEAL-KEY-ID RID-SIZE
+    R@ _CV.SEAL-RECORD-ID RID-SIZE
+    R@ _CV.GENERATION @
+    R@ _CV.FLOOR-CONTEXT @
+    R@ _CV.FLOOR-ADVANCE-XT @ EXECUTE
+    DEPTH _CV-CALLBACK-DEPTH @ 3 + <> IF
+        _CV-E-FLOOR-STACK THROW
+    THEN
+    2 PICK _CV-FLOOR-CANARY <> IF
+        _CV-E-FLOOR-STACK THROW
+    THEN
+    1 PICK R@ <> IF
+        _CV-E-FLOOR-STACK THROW
+    THEN
+    >R 2DROP R>
+    R> DROP ;
+
+: _CV-FLOOR-ADVANCE-SAFE  ( vault -- status )
+    ['] _CV-FLOOR-ADVANCE-INVOKE CATCH
+    DUP IF
+        2DROP CVAULT-S-CALLBACK EXIT
+    THEN
+    DROP
+    DUP _CV-FLOOR-STATUS-VALID? 0= IF
+        DROP CVAULT-S-CALLBACK
+    THEN ;
+
+: _CV-FLOOR-READ  ( vault -- status )
+    >R
+    0 R@ _CV.FLOOR !
+    CVAULT-S-OK R@ _CV.FLOOR-STATUS !
+    R@ _CV.FLAGS @ _CV-F-FLOOR AND 0= IF
+        R> DROP CVAULT-S-OK EXIT
+    THEN
+    R@ _CV-FLOOR-STAGE-IDS
+    R@ _CV-FRAME-BEGIN? 0= IF
+        CVAULT-S-BUSY DUP R@ _CV.FLOOR-STATUS !
+        R> DROP EXIT
+    THEN
+    R@ _CV-FLOOR-READ-SAFE
+    R@ _CV-FRAME-END 0= IF
+        2DROP
+        CVAULT-S-INTERNAL DUP R@ _CV.FLOOR-STATUS !
+        R> DROP EXIT
+    THEN
+    R@ _CV-FLOOR-STAGED-IDS-INTACT? 0= IF
+        2DROP
+        CVAULT-S-CALLBACK DUP R@ _CV.FLOOR-STATUS !
+        R> DROP EXIT
+    THEN
+    DUP R@ _CV.FLOOR-STATUS !
+    DUP IF
+        NIP R> DROP EXIT
+    THEN
+    DROP
+    DUP R@ _CV.FLOOR !
+    R@ _CV.GENERATION @ U> IF
+        R> DROP CVAULT-S-ROLLBACK EXIT
+    THEN
+    R> DROP CVAULT-S-OK ;
+
+: _CV-FLOOR-CATCH-UP  ( vault -- status )
+    >R
+    R@ _CV.FLAGS @ _CV-F-FLOOR AND 0= IF
+        R> DROP CVAULT-S-OK EXIT
+    THEN
+    R@ _CV.GENERATION @ R@ _CV.FLOOR @ U< IF
+        R> DROP CVAULT-S-ROLLBACK EXIT
+    THEN
+    R@ _CV.GENERATION @ R@ _CV.FLOOR @ = IF
+        R> DROP CVAULT-S-OK EXIT
+    THEN
+    R@ _CV-FLOOR-STAGE-IDS
+    R@ _CV-FRAME-BEGIN? 0= IF
+        CVAULT-S-BUSY DUP R@ _CV.FLOOR-STATUS !
+        R> DROP EXIT
+    THEN
+    R@ _CV-FLOOR-ADVANCE-SAFE
+    R@ _CV-FRAME-END 0= IF
+        DROP
+        CVAULT-S-INTERNAL DUP R@ _CV.FLOOR-STATUS !
+        R> DROP EXIT
+    THEN
+    R@ _CV-FLOOR-STAGED-IDS-INTACT? 0= IF
+        DROP
+        CVAULT-S-CALLBACK DUP R@ _CV.FLOOR-STATUS !
+        R> DROP EXIT
+    THEN
+    DUP R@ _CV.FLOOR-STATUS !
+    DUP IF R> DROP EXIT THEN
+    DROP
+    R@ _CV.GENERATION @ R@ _CV.FLOOR !
+    R> DROP CVAULT-S-OK ;
+
+\ =====================================================================
+\  Per-RID snapshot lifecycle and authenticated load
+\ =====================================================================
+
+: _CV-TRANSIENT-WIPE  ( vault -- )
+    >R
+    R@ _CV.SEAL-KEY-ID RID-CLEAR
+    R@ _CV.SEAL-RECORD-ID RID-CLEAR
+    R@ _CV.SEALED R@ _CV.RECORD-U @ 0 FILL
+    R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+    R@ _CV.SEALED-WORKSPACE SEALED-RECORD-WORKSPACE-SIZE 0 FILL
+    0 R@ _CV.STATE !
+    0 R@ _CV.KIND !
+    0 R@ _CV.SECRET-U !
+    0 R@ _CV.CALLBACK-XT !
+    0 R@ _CV.CALLBACK-CONTEXT !
+    0 R@ _CV.CALLBACK-STATUS !
+    0 R@ _CV.INPUT !
+    0 R@ _CV.INPUT-U !
+    0 R@ _CV.EXPECTED !
+    R> DROP ;
+
+: _CV-PARSED-WIPE  ( vault -- )
+    >R
+    R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+    0 R@ _CV.STATE !
+    0 R@ _CV.KIND !
+    0 R@ _CV.SECRET-U !
+    R> DROP ;
+
+: _CV-ACTIVE-CLEAR  ( vault -- )
+    >R
+    R@ _CV.ACTIVE-RID RID-CLEAR
+    R@ _CV.BINDING-ID RID-CLEAR
+    R@ _CV.SHARD1 _CV-PATH-CAP 0 FILL
+    R@ _CV.SHARD2 _CV-PATH-CAP 0 FILL
+    R@ _CV.TARGET _CV-PATH-CAP 0 FILL
+    0 R@ _CV.SHARD1-U !
+    0 R@ _CV.SHARD2-U !
+    0 R@ _CV.TARGET-U !
+    0 R@ _CV.GENERATION !
+    0 R@ _CV.RESULT-REVISION !
+    _CV-OP-NONE R@ _CV.OPERATION !
+    R> DROP ;
+
+: _CV-STORE-INIT  ( vault -- status )
+    >R
+    R@ _CV.TARGET R@ _CV.TARGET-U @
+    R@ _CV.VFS-SCRATCH R@ _CV.VFS-SCRATCH-U
+    R@ _CV.VFS @ R@ _CV.VFS-SPEC R@ _CV.VFS-STORE
+    VFSNAP-INIT-AT
+    DUP R@ _CV.LAST-VFSNAP !
+    DUP VFSNAP-S-OK = IF
+        _CV-F-STORE-ACTIVE R@ _CV.FLAGS DUP @ ROT OR SWAP !
+    THEN
+    _CV-VFSNAP>STATUS
+    R> DROP ;
+
+: _CV-STORE-FINI  ( vault -- status )
+    >R
+    R@ _CV.FLAGS @ _CV-F-STORE-ACTIVE AND 0= IF
+        R> DROP CVAULT-S-OK EXIT
+    THEN
+    R@ _CV.VFS-STORE VFSNAP-FINI
+    DUP R@ _CV.LAST-VFSNAP !
+    DUP VFSNAP-S-OK = IF
+        R@ _CV.FLAGS DUP @ _CV-F-STORE-ACTIVE INVERT AND SWAP !
+    THEN
+    _CV-VFSNAP>STATUS
+    R> DROP ;
+
+: _CV-BLOCK!  ( status vault -- status )
+    >R
+    DUP R@ _CV.LAST-STATUS !
+    _CV-F-BLOCKED R@ _CV.FLAGS DUP @ ROT OR SWAP !
+    R> DROP ;
+
+: _CV-FINISH  ( status vault -- status )
+    >R
+    DUP CVAULT-STATUS-VALID? 0= IF
+        DROP CVAULT-S-INTERNAL
+    THEN
+    R@ _CV-TRANSIENT-WIPE
+    DUP _CV-STATUS-BLOCKING?
+    R@ _CV.FLAGS @ _CV-F-BLOCKED AND 0<> OR IF
+        R@ _CV.FLAGS DUP @ _CV-F-BUSY INVERT AND SWAP !
+        DUP _CV-BLOCKING-NORMALIZE R@ _CV-BLOCK! DROP
+        R> DROP EXIT
+    THEN
+    R@ _CV-STORE-FINI
+    DUP IF
+        DROP DROP
+        R@ _CV.FLAGS DUP @ _CV-F-BUSY INVERT AND SWAP !
+        CVAULT-S-RECOVERY R@ _CV-BLOCK!
+        R> DROP EXIT
+    THEN
+    DROP
+    R@ _CV-ACTIVE-CLEAR
+    R@ _CV.FLAGS DUP @ _CV-F-BUSY INVERT AND SWAP !
+    DUP R@ _CV.LAST-STATUS !
+    R> DROP ;
+
+: _CV-FINISH-BLOCKED  ( status vault -- status )
+    >R
+    DUP CVAULT-STATUS-VALID? 0= IF
+        DROP CVAULT-S-INTERNAL
+    THEN
+    R@ _CV-TRANSIENT-WIPE
+    R@ _CV.FLAGS DUP @ _CV-F-BUSY INVERT AND SWAP !
+    DUP _CV-BLOCKING-NORMALIZE R@ _CV-BLOCK! DROP
+    R> DROP ;
+
+: _CV-OP-BEGIN  ( vault -- status )
+    _CV-FRAME-ACTIVE @ IF
+        DROP CVAULT-S-BUSY EXIT
+    THEN
+    DUP _CV-VAULT-SHAPE? 0= IF
+        DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP _CV.FLAGS @ _CV-F-BUSY AND IF
+        DROP CVAULT-S-BUSY EXIT
+    THEN
+    DUP _CV.FLAGS @ _CV-F-BLOCKED AND IF
+        _CV.LAST-STATUS @ EXIT
+    THEN
+    _CV-F-BUSY OVER _CV.FLAGS DUP @ ROT OR SWAP !
+    DROP CVAULT-S-OK ;
+
+: _CV-RECOVER-BEGIN  ( vault -- status )
+    _CV-FRAME-ACTIVE @ IF
+        DROP CVAULT-S-BUSY EXIT
+    THEN
+    DUP _CV-VAULT-SHAPE? 0= IF
+        DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP _CV.FLAGS @ _CV-F-BUSY AND IF
+        DROP CVAULT-S-BUSY EXIT
+    THEN
+    DUP _CV.FLAGS @ _CV-F-BLOCKED AND 0= IF
+        DROP CVAULT-S-INVALID EXIT
+    THEN
+    _CV-F-BUSY OVER _CV.FLAGS DUP @ ROT OR SWAP !
+    DROP CVAULT-S-OK ;
+
+: _CV-RID-ALIASES?  ( rid vault -- flag )
+    >R
+    DUP RID-SIZE R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP RID-SIZE R@ _CV.BACKING @ R@ _CV.BACKING-U @
+        MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    DUP RID-SIZE R@ _CV.VFS @ VFS-DESC-SIZE
+        MSPAN-OVERLAP? IF
+        DROP R> DROP -1 EXIT
+    THEN
+    RID-SIZE _CV-ALL-PRIVATE-ALIASES?
+    R> DROP ;
+
+: _CV-RID-PREFLIGHT  ( rid vault -- status )
+    >R
+    DUP RID-SIZE _CV-ADMIT-SPAN
+    DUP IF NIP R> DROP EXIT THEN DROP
+    DUP RID-PRESENT? 0= IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP R@ _CV-RID-ALIASES? IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP R@ _CV.VAULT-ID RID= IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DROP R> DROP CVAULT-S-OK ;
+
+: _CVAULT-PATH
+  ( rid destination capacity vault -- written status )
+    >R
+    R@ CVAULT-SIZE _CV-ADMIT-SPAN DUP IF
+        >R 2DROP DROP R> R> DROP 0 SWAP EXIT
+    THEN DROP
+    R@ _CV-VAULT-SHAPE? 0= IF
+        2DROP DROP R> DROP 0 CVAULT-S-INVALID EXIT
+    THEN
+    R@ _CV.FLAGS @ _CV-F-BUSY AND IF
+        2DROP DROP R> DROP 0 CVAULT-S-BUSY EXIT
+    THEN
+    2 PICK R@ _CV-RID-PREFLIGHT
+    DUP IF
+        >R 2DROP DROP R> R> DROP 0 SWAP EXIT
+    THEN
+    DROP
+    DUP 0> 0= IF
+        2DROP DROP R> DROP 0 CVAULT-S-INVALID EXIT
+    THEN
+    OVER OVER _CV-ADMIT-SPAN DUP IF
+        >R 2DROP DROP R> R> DROP 0 SWAP EXIT
+    THEN DROP
+    R@ _CV-TARGET-LENGTH OVER > IF
+        2DROP DROP R> DROP 0 CVAULT-S-CAPACITY EXIT
+    THEN
+    2 PICK 2 PICK 2 PICK R@ _CV-PATH-OUTPUT-ALIASES? IF
+        2DROP DROP R> DROP 0 CVAULT-S-INVALID EXIT
+    THEN
+    DROP R@ _CV-PATH-WRITE
+    R> DROP CVAULT-S-OK ;
+
+: _CV-SECRET-PREFLIGHT  ( secret-a secret-u vault -- status )
+    >R
+    DUP 0> 0= IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP R@ _CV.SECRET-CAP @ U> IF
+        2DROP R> DROP CVAULT-S-CAPACITY EXIT
+    THEN
+    2DUP _CV-ADMIT-SPAN
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    2DUP R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    2DUP R@ _CV.BACKING @ R@ _CV.BACKING-U @
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    2DUP R@ _CV.VFS @ VFS-DESC-SIZE
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    2DUP _CV-ALL-PRIVATE-ALIASES? IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    2DROP R> DROP CVAULT-S-OK ;
+
+: _CV-ACTIVATE  ( rid operation vault -- status )
+    >R
+    DUP R@ _CV.OPERATION !
+    DROP
+    DUP R@ _CV.ACTIVE-RID RID-COPY
+    DROP
+    R@ _CV-BUILD-PATHS
+    R@ _CV.BINDING-ID RID-PRESENT? 0= IF
+        R@ _CV-ACTIVE-CLEAR
+        R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    R@ _CV-TOPOLOGY
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _CV-STORE-INIT
+    R> DROP ;
+
+: _CV-LOAD-SEALED  ( vault -- status )
+    >R
+    R@ _CV.SEALED R@ _CV.RECORD-U @ 0 FILL
+    0 R@ _CV.GENERATION !
+    R@ _CV.SEALED R@ _CV.RECORD-U @
+    R@ _CV.GENERATION R@ _CV.VFS-STORE VFSNAP-LOAD
+    DUP R@ _CV.LAST-VFSNAP !
+    _CV-VFSNAP>STATUS
+    R> DROP ;
+
+: _CV-OPEN-SEALED  ( vault -- status )
+    >R
+    R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+    R@ _CV-BIND-SEALED-OPEN
+    R@ _CV-FRAME-BEGIN? 0= IF
+        DROP R> DROP CVAULT-S-BUSY EXIT
+    THEN
+    R@ _CV.SEALED-WORKSPACE _CV-SEALED-OPEN-SAFE
+    R@ _CV-FRAME-END 0= IF
+        2DROP
+        SEALED-RECORD-S-INTERNAL R@ _CV.LAST-SEALED !
+        R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+        R@ _CV.SEALED-WORKSPACE SEALED-RECORD-WORKSPACE-SIZE 0 FILL
+        R> DROP CVAULT-S-INTERNAL EXIT
+    THEN
+    DUP R@ _CV.LAST-SEALED !
+    DUP IF
+        _CV-SEALED>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _CV-STAGED-IDS-INTACT? 0= IF
+        SEALED-RECORD-S-CALLBACK R@ _CV.LAST-SEALED !
+        DROP R> DROP CVAULT-S-CALLBACK EXIT
+    THEN
+    R@ _CV.PLAIN-U @ <> IF
+        R> DROP CVAULT-S-CORRUPT EXIT
+    THEN
+    R@ _CV-VALIDATE-PLAINTEXT
+    R> DROP ;
+
+: _CV-FLOOR-PUBLISH  ( vault -- status )
+    DUP _CV-FLOOR-CATCH-UP
+    DUP CVAULT-S-ROLLBACK = IF NIP EXIT THEN
+    DUP IF
+        2DROP CVAULT-S-RECOVERY
+    ELSE
+        NIP
+    THEN ;
+
+: _CV-FLOOR-ADVANCE-NEEDED?  ( vault -- flag )
+    DUP _CV.FLAGS @ _CV-F-FLOOR AND 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _CV.GENERATION @
+    SWAP _CV.FLOOR @ U> ;
+
+: _CV-LOAD-AUTHENTICATED  ( vault -- status )
+    DUP _CV-LOAD-SEALED
+    DUP IF NIP EXIT THEN DROP
+    DUP _CV-FLOOR-READ
+    DUP IF NIP EXIT THEN DROP
+    DUP _CV-OPEN-SEALED
+    DUP IF NIP EXIT THEN DROP
+    DUP _CV-FLOOR-ADVANCE-NEEDED? IF
+        DUP _CV-PARSED-WIPE
+        DUP _CV-FLOOR-PUBLISH
+        DUP IF NIP EXIT THEN DROP
+        DUP _CV-OPEN-SEALED
+        DUP IF NIP EXIT THEN DROP
+    THEN
+    _CV.STATE @ CVAULT-STATE-TOMBSTONE =
+    IF CVAULT-S-REVOKED ELSE CVAULT-S-OK THEN ;
+
+: _CV-SAVE  ( expected-generation vault -- status )
+    >R
+    DUP 0< IF
+        DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    SEALED-RECORD-S-OK R@ _CV.LAST-SEALED !
+    R@ SWAP R@ _CV.VFS-STORE VFSNAP-SAVE
+    DUP R@ _CV.LAST-VFSNAP !
+    DUP VFSNAP-S-OK <> IF
+        DUP VFSNAP-S-INVALID =
+        R@ _CV.LAST-SEALED @ SEALED-RECORD-S-OK <> AND IF
+            DROP
+            R@ _CV.LAST-SEALED @ _CV-SEALED>STATUS
+            R> DROP EXIT
+        THEN
+        _CV-VFSNAP>STATUS R> DROP EXIT
+    THEN
+    DROP
+    R@ _CV.RESULT-REVISION @ R@ _CV.GENERATION !
+    R@ _CV-FLOOR-PUBLISH
+    R> DROP ;
+
+\ =====================================================================
+\  Synchronous secret borrowing
+\ =====================================================================
+
+-3202 CONSTANT _CV-E-CONSUMER-STACK
+0x4356434F4E53554D CONSTANT _CV-CONSUMER-CANARY  \ "CVCONSUM"
+
+: _CV-BORROW-PREPARE  ( vault -- )
+    >R
+    R@ _CV.SEALED R@ _CV.RECORD-U @ 0 FILL
+    R@ _CV.PLAIN _CVP-SECRET +
+    R@ _CV.SEALED
+    R@ _CV.SECRET-U @ MOVE
+    R@ _CV.PLAIN R@ _CV.PLAIN-U @ 0 FILL
+    R> DROP ;
+
+: _CV-CONSUMER-INVOKE  ( vault -- consumer-result )
+    >R
+    DEPTH _CV-CALLBACK-DEPTH !
+    _CV-CONSUMER-CANARY
+    R@
+    R@ _CV.SEALED
+    R@ _CV.SECRET-U @
+    R@ _CV.KIND @
+    R@ _CV.GENERATION @
+    R@ _CV.CALLBACK-CONTEXT @
+    R@ _CV.CALLBACK-XT @ EXECUTE
+    DEPTH _CV-CALLBACK-DEPTH @ 3 + <> IF
+        _CV-E-CONSUMER-STACK THROW
+    THEN
+    2 PICK _CV-CONSUMER-CANARY <> IF
+        _CV-E-CONSUMER-STACK THROW
+    THEN
+    1 PICK R@ <> IF
+        _CV-E-CONSUMER-STACK THROW
+    THEN
+    >R 2DROP R>
+    R> DROP ;
+
+: _CV-CONSUMER-SAFE  ( vault -- consumer-result status )
+    ['] _CV-CONSUMER-INVOKE CATCH
+    DUP IF
+        2DROP 0 CVAULT-S-CALLBACK
+    ELSE
+        DROP CVAULT-S-OK
+    THEN ;
+
+: _CV-CALL-CONSUMER  ( vault -- consumer-result status )
+    >R
+    R@ _CV-BORROW-PREPARE
+    R@ _CV-FRAME-BEGIN? 0= IF
+        R@ _CV.SEALED R@ _CV.RECORD-U @ 0 FILL
+        R> DROP 0 CVAULT-S-BUSY EXIT
+    THEN
+    R@ _CV-CONSUMER-SAFE
+    R@ _CV-FRAME-END 0= IF
+        2DROP
+        R@ _CV.SEALED R@ _CV.RECORD-U @ 0 FILL
+        R> DROP 0 CVAULT-S-INTERNAL EXIT
+    THEN
+    DUP R@ _CV.CALLBACK-STATUS !
+    R@ _CV.SEALED R@ _CV.RECORD-U @ 0 FILL
+    R> DROP ;
+
+\ =====================================================================
+\  Public lifecycle and credential operations
+\ =====================================================================
+
+: _CV-DROP4  ( x1 x2 x3 x4 -- ) 2DROP 2DROP ;
+
+: _CV-ZERO-METADATA  ( status -- 0 0 0 0 status )
+    >R 0 0 0 0 R> ;
+
+: _CV-ZERO-WITH  ( status -- 0 0 0 status )
+    >R 0 0 0 R> ;
+
+: _CV-COMPLETE-GENERATION  ( status vault -- generation status )
+    DUP _CV.GENERATION @ >R
+    _CV-FINISH
+    DUP IF
+        R> DROP 0 SWAP
+    ELSE
+        R> SWAP
+    THEN ;
+
+: _CV-COMPLETE-METADATA
+  ( status vault -- generation state kind secret-u status )
+    DUP _CV.GENERATION @
+    1 PICK _CV.STATE @
+    2 PICK _CV.KIND @
+    3 PICK _CV.SECRET-U @
+    5 PICK 5 PICK _CV-FINISH
+    DUP CVAULT-S-OK =
+    OVER CVAULT-S-REVOKED = OR 0= IF
+        >R 2DROP 2DROP 2DROP R>
+        >R 0 0 0 0 R> EXIT
+    THEN
+    >R >R >R >R >R
+    2DROP
+    R> R> R> R> R> ;
+
+: _CV-COMPLETE-WITH
+  ( consumer-result status vault -- generation kind consumer-result status )
+    DUP _CV.GENERATION @
+    1 PICK _CV.KIND @
+    3 PICK 3 PICK _CV-FINISH
+    DUP IF
+        >R _CV-DROP4 DROP R>
+        >R 0 0 0 R> EXIT
+    THEN
+    >R >R >R
+    ROT >R 2DROP
+    R> R> R> ROT R> ;
+
+: _CV-DESTROY  ( vault -- )
+    >R
+    R@ _CV.BACKING @ R@ _CV.BACKING-U @ 0 FILL
+    R@ CVAULT-SIZE 0 FILL
+    R> DROP ;
+
+: _CVAULT-CONFIG-CLEAR  ( config -- status )
+    DUP CVAULT-CONFIG-SIZE _CV-ADMIT-SPAN
+    DUP IF NIP EXIT THEN DROP
+    DUP CVAULT-CONFIG-SIZE _CV-ALL-PRIVATE-ALIASES? IF
+        DROP CVAULT-S-INVALID EXIT
+    THEN
+    CVAULT-CONFIG-SIZE 0 FILL
+    CVAULT-S-OK ;
+
+: _CVAULT-INIT  ( config vault -- status )
+    _CV-FRAME-ACTIVE @ IF
+        2DROP CVAULT-S-BUSY EXIT
+    THEN
+    >R
+    DUP R@ _CV-CONFIG-PREFLIGHT
+    DUP IF
+        NIP R> DROP EXIT
+    THEN
+    DROP
+    DUP R@ _CV-POPULATE
+    DUP IF
+        NIP R> DROP EXIT
+    THEN
+    DROP
+    _CV-F-BUSY R@ _CV.FLAGS DUP @ ROT OR SWAP !
+    _CV-OP-INIT R@ _CV.OPERATION !
+    R@ _CV-TOPOLOGY
+    DUP IF
+        SWAP
+        R@ _CV-DESTROY
+        DROP R> DROP EXIT
+    THEN
+    DROP
+    _CV-OP-NONE R@ _CV.OPERATION !
+    R@ _CV.FLAGS DUP @ _CV-F-BUSY INVERT AND SWAP !
+    CVAULT-S-OK R@ _CV.LAST-STATUS !
+    DROP R> DROP CVAULT-S-OK ;
+
+: _CVAULT-FINI  ( vault -- status )
+    _CV-FRAME-ACTIVE @ IF
+        DROP CVAULT-S-BUSY EXIT
+    THEN
+    DUP CVAULT-SIZE _CV-ADMIT-SPAN
+    DUP IF NIP EXIT THEN DROP
+    DUP _CV-VAULT-SHAPE? 0= IF
+        DROP CVAULT-S-INVALID EXIT
+    THEN
+    DUP _CV.FLAGS @ _CV-F-BUSY AND IF
+        DROP CVAULT-S-BUSY EXIT
+    THEN
+    DUP _CV-STORE-FINI
+    DUP IF NIP EXIT THEN DROP
+    _CV-DESTROY
+    CVAULT-S-OK ;
+
+: _CV-ENTROPY>STATUS  ( entropy-status -- vault-status )
+    CASE
+        ENTROPY-S-OK OF CVAULT-S-OK ENDOF
+        ENTROPY-S-UNAVAILABLE OF CVAULT-S-ENTROPY ENDOF
+        ENTROPY-S-RANGE OF CVAULT-S-RANGE ENDOF
+        ENTROPY-S-PROTECTED OF CVAULT-S-PROTECTED ENDOF
+        CVAULT-S-PLATFORM SWAP
+    ENDCASE ;
+
+: _CV-RID-ENTROPY-CALL  ( destination -- status )
+    RID-SIZE ENTROPY-FILL _CV-ENTROPY>STATUS ;
+
+: _CV-RID-ENTROPY-SAFE  ( destination vault -- status | throws )
+    >R
+    DUP ['] _CV-RID-ENTROPY-CALL CATCH
+    DUP IF
+        >R DROP
+        DUP RID-SIZE 0 FILL DROP
+        R>
+        CVAULT-S-ENTROPY R@ _CV-FINISH DROP
+        R> DROP
+        THROW
+    ELSE
+        DROP NIP
+    THEN
+    R> DROP ;
+
+8 CONSTANT _CV-RID-ENTROPY-ATTEMPTS
+
+: _CVAULT-RID-NEW  ( destination vault -- status )
+    >R
+    R@ _CV-OP-BEGIN
+    DUP IF
+        NIP R> DROP EXIT
+    THEN
+    DROP
+    DUP RID-SIZE _CV-ADMIT-SPAN
+    DUP IF
+        NIP R@ _CV-FINISH R> DROP EXIT
+    THEN
+    DROP
+    DUP R@ _CV-RID-ALIASES? IF
+        DROP
+        CVAULT-S-INVALID R@ _CV-FINISH R> DROP EXIT
+    THEN
+    _CV-RID-ENTROPY-ATTEMPTS R@ _CV.EXPECTED !
+    BEGIN
+        DUP RID-SIZE 0 FILL
+        DUP R@ _CV-RID-ENTROPY-SAFE
+        DUP IF
+            >R DUP RID-SIZE 0 FILL DROP
+            R> R@ _CV-FINISH R> DROP EXIT
+        THEN
+        DROP
+        DUP RID-PRESENT?
+        OVER R@ _CV.VAULT-ID RID= 0= AND IF
+            DROP
+            CVAULT-S-OK R@ _CV-FINISH R> DROP EXIT
+        THEN
+        -1 R@ _CV.EXPECTED +!
+        R@ _CV.EXPECTED @ 0=
+    UNTIL
+    DUP RID-SIZE 0 FILL DROP
+    CVAULT-S-ENTROPY R@ _CV-FINISH
+    R> DROP ;
+
+: _CVAULT-CREATE
+  ( rid kind secret-a secret-u vault -- generation status )
+    >R
+    R@ _CV-OP-BEGIN
+    DUP IF
+        >R _CV-DROP4 R> R> DROP 0 SWAP EXIT
+    THEN
+    DROP
+    3 PICK R@ _CV-RID-PREFLIGHT
+    DUP IF
+        >R _CV-DROP4 R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    2 PICK 0> 0= IF
+        _CV-DROP4
+        CVAULT-S-INVALID R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    OVER OVER R@ _CV-SECRET-PREFLIGHT
+    DUP IF
+        >R _CV-DROP4 R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    3 PICK _CV-OP-CREATE R@ _CV-ACTIVATE
+    DUP IF
+        >R _CV-DROP4 R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    CVAULT-STATE-PRESENT R@ _CV.STATE !
+    2 PICK R@ _CV.KIND !
+    1 PICK R@ _CV.INPUT !
+    DUP R@ _CV.INPUT-U !
+    _CV-DROP4
+    0 R@ _CV.GENERATION !
+    R@ _CV-FLOOR-READ
+    DUP IF
+        R@ _CV-COMPLETE-GENERATION R> DROP EXIT
+    THEN
+    DROP
+    0 R@ _CV-SAVE
+    R@ _CV-COMPLETE-GENERATION
+    R> DROP ;
+
+: _CVAULT-REPLACE
+  ( rid expected-generation secret-a secret-u vault -- generation status )
+    >R
+    R@ _CV-OP-BEGIN
+    DUP IF
+        >R _CV-DROP4 R> R> DROP 0 SWAP EXIT
+    THEN
+    DROP
+    3 PICK R@ _CV-RID-PREFLIGHT
+    DUP IF
+        >R _CV-DROP4 R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    2 PICK 0> 0= IF
+        _CV-DROP4
+        CVAULT-S-INVALID R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    OVER OVER R@ _CV-SECRET-PREFLIGHT
+    DUP IF
+        >R _CV-DROP4 R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    2 PICK R@ _CV.EXPECTED !
+    3 PICK _CV-OP-REPLACE R@ _CV-ACTIVATE
+    DUP IF
+        >R _CV-DROP4 R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    R@ _CV-LOAD-AUTHENTICATED
+    DUP IF
+        >R _CV-DROP4 R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    2 PICK R@ _CV.GENERATION @ <> IF
+        _CV-DROP4
+        CVAULT-S-CONFLICT R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    CVAULT-STATE-PRESENT R@ _CV.STATE !
+    1 PICK R@ _CV.INPUT !
+    DUP R@ _CV.INPUT-U !
+    _CV-DROP4
+    R@ _CV.EXPECTED @ R@ _CV-SAVE
+    R@ _CV-COMPLETE-GENERATION
+    R> DROP ;
+
+: _CVAULT-REVOKE
+  ( rid expected-generation vault -- generation status )
+    >R
+    R@ _CV-OP-BEGIN
+    DUP IF
+        >R 2DROP R> R> DROP 0 SWAP EXIT
+    THEN
+    DROP
+    OVER R@ _CV-RID-PREFLIGHT
+    DUP IF
+        >R 2DROP R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    DUP 0> 0= IF
+        2DROP
+        CVAULT-S-INVALID R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    OVER _CV-OP-REVOKE R@ _CV-ACTIVATE
+    DUP IF
+        >R 2DROP R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    R@ _CV-LOAD-AUTHENTICATED
+    DUP IF
+        >R 2DROP R> R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    DROP
+    DUP R@ _CV.GENERATION @ <> IF
+        2DROP
+        CVAULT-S-CONFLICT R@ _CV-COMPLETE-GENERATION
+        R> DROP EXIT
+    THEN
+    CVAULT-STATE-TOMBSTONE R@ _CV.STATE !
+    0 R@ _CV.INPUT !
+    0 R@ _CV.INPUT-U !
+    NIP
+    R@ _CV-SAVE
+    R@ _CV-COMPLETE-GENERATION
+    R> DROP ;
+
+: _CVAULT-METADATA
+  ( rid vault -- generation state kind secret-u status )
+    >R
+    R@ _CV-OP-BEGIN
+    DUP IF
+        NIP R> DROP _CV-ZERO-METADATA EXIT
+    THEN
+    DROP
+    DUP R@ _CV-RID-PREFLIGHT
+    DUP IF
+        >R DROP R> R@ _CV-COMPLETE-METADATA
+        R> DROP EXIT
+    THEN
+    DROP
+    DUP _CV-OP-METADATA R@ _CV-ACTIVATE
+    DUP IF
+        >R DROP R> R@ _CV-COMPLETE-METADATA
+        R> DROP EXIT
+    THEN
+    DROP DROP
+    R@ _CV-LOAD-AUTHENTICATED
+    R@ _CV-COMPLETE-METADATA
+    R> DROP ;
+
+: _CVAULT-WITH
+  ( rid consumer-xt consumer-context vault -- generation kind consumer-result status )
+    >R
+    R@ _CV-OP-BEGIN
+    DUP IF
+        >R 2DROP DROP R> R> DROP _CV-ZERO-WITH EXIT
+    THEN
+    DROP
+    2 PICK R@ _CV-RID-PREFLIGHT
+    DUP IF
+        >R 2DROP DROP 0 R> R@ _CV-COMPLETE-WITH
+        R> DROP EXIT
+    THEN
+    DROP
+    OVER 0= IF
+        2DROP DROP
+        0 CVAULT-S-INVALID R@ _CV-COMPLETE-WITH
+        R> DROP EXIT
+    THEN
+    2 PICK _CV-OP-WITH R@ _CV-ACTIVATE
+    DUP IF
+        >R 2DROP DROP 0 R> R@ _CV-COMPLETE-WITH
+        R> DROP EXIT
+    THEN
+    DROP
+    OVER R@ _CV.CALLBACK-XT !
+    DUP R@ _CV.CALLBACK-CONTEXT !
+    2DROP DROP
+    R@ _CV-LOAD-AUTHENTICATED
+    DUP IF
+        0 SWAP R@ _CV-COMPLETE-WITH R> DROP EXIT
+    THEN
+    DROP
+    R@ _CV-CALL-CONSUMER
+    R@ _CV-COMPLETE-WITH
+    R> DROP ;
+
+: _CV-ZERO-RECOVERY  ( status -- 0 0 status )
+    >R 0 0 R> ;
+
+: _CV-COMPLETE-RECOVERY
+  ( status vault -- generation state status )
+    DUP _CV.GENERATION @
+    1 PICK _CV.STATE @
+    3 PICK 3 PICK _CV-FINISH
+    DUP CVAULT-S-OK =
+    OVER CVAULT-S-REVOKED = OR 0= IF
+        >R _CV-DROP4 R>
+        _CV-ZERO-RECOVERY EXIT
+    THEN
+    >R >R >R
+    2DROP
+    R> R> R> ;
+
+: _CVAULT-RECOVER  ( vault -- generation state status )
+    >R
+    R@ _CV-RECOVER-BEGIN
+    DUP IF
+        R> DROP _CV-ZERO-RECOVERY EXIT
+    THEN
+    DROP
+    R@ _CV-STORE-FINI
+    DUP IF
+        R@ _CV-FINISH-BLOCKED
+        R> DROP _CV-ZERO-RECOVERY EXIT
+    THEN
+    DROP
+    _CV-OP-RECOVER R@ _CV.OPERATION !
+    R@ _CV-TOPOLOGY
+    DUP IF
+        R@ _CV-FINISH-BLOCKED
+        R> DROP _CV-ZERO-RECOVERY EXIT
+    THEN
+    DROP
+    R@ _CV-STORE-INIT
+    DUP IF
+        R@ _CV-FINISH-BLOCKED
+        R> DROP _CV-ZERO-RECOVERY EXIT
+    THEN
+    DROP
+    R@ _CV.VFS-STORE VFSNAP-RECOVER
+    DUP R@ _CV.LAST-VFSNAP !
+    _CV-VFSNAP>STATUS
+    DUP IF
+        R@ _CV-FINISH-BLOCKED
+        R> DROP _CV-ZERO-RECOVERY EXIT
+    THEN
+    DROP
+    R@ _CV-LOAD-AUTHENTICATED
+    DUP CVAULT-S-OK =
+    OVER CVAULT-S-REVOKED = OR IF
+        R@ _CV.FLAGS DUP @ _CV-F-BLOCKED INVERT AND SWAP !
+        R@ _CV-COMPLETE-RECOVERY
+        R> DROP EXIT
+    THEN
+    R@ _CV-FINISH-BLOCKED
+    R> DROP _CV-ZERO-RECOVERY ;
+
+: _CVAULT-VALID?  ( vault -- flag )
+    DUP CVAULT-SIZE _CV-ADMIT-SPAN CVAULT-S-OK <> IF
+        DROP 0 EXIT
+    THEN
+    _CV-VAULT-SHAPE? ;
+
+: _CVAULT-BLOCKED?  ( vault -- flag )
+    DUP _CVAULT-VALID? 0= IF DROP 0 EXIT THEN
+    _CV.FLAGS @ _CV-F-BLOCKED AND 0<> ;
+
+: _CVAULT-LAST-STATUS@  ( vault -- status )
+    DUP _CVAULT-VALID? 0= IF DROP CVAULT-S-INVALID EXIT THEN
+    _CV.LAST-STATUS @ ;
+
+' _CVAULT-CONFIG-CLEAR CONSTANT _cvault-config-clear-xt
+' _CVAULT-INIT         CONSTANT _cvault-init-xt
+' _CVAULT-FINI         CONSTANT _cvault-fini-xt
+' _CVAULT-RID-NEW      CONSTANT _cvault-rid-new-xt
+' _CVAULT-CREATE       CONSTANT _cvault-create-xt
+' _CVAULT-REPLACE      CONSTANT _cvault-replace-xt
+' _CVAULT-REVOKE       CONSTANT _cvault-revoke-xt
+' _CVAULT-METADATA     CONSTANT _cvault-metadata-xt
+' _CVAULT-WITH         CONSTANT _cvault-with-xt
+' _CVAULT-RECOVER      CONSTANT _cvault-recover-xt
+' _CVAULT-PATH         CONSTANT _cvault-path-xt
+' _CVAULT-VALID?       CONSTANT _cvault-valid-xt
+' _CVAULT-BLOCKED?     CONSTANT _cvault-blocked-xt
+' _CVAULT-LAST-STATUS@ CONSTANT _cvault-last-status-xt
+
+: CVAULT-CONFIG-CLEAR  ( config -- status )
+    _cvault-config-clear-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-INIT  ( config vault -- status )
+    _cvault-init-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-FINI  ( vault -- status )
+    _cvault-fini-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-RID-NEW  ( destination vault -- status )
+    _cvault-rid-new-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-CREATE
+  ( rid kind secret-a secret-u vault -- generation status )
+    _cvault-create-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-REPLACE
+  ( rid expected-generation secret-a secret-u vault -- generation status )
+    _cvault-replace-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-REVOKE
+  ( rid expected-generation vault -- generation status )
+    _cvault-revoke-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-METADATA
+  ( rid vault -- generation state kind secret-u status )
+    _cvault-metadata-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-WITH
+  ( rid consumer-xt consumer-context vault -- generation kind consumer-result status )
+    _cvault-with-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-RECOVER  ( vault -- generation state status )
+    _cvault-recover-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-PATH
+  ( rid destination capacity vault -- written status )
+    _cvault-path-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-VALID?  ( vault -- flag )
+    _cvault-valid-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-BLOCKED?  ( vault -- flag )
+    _cvault-blocked-xt _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-LAST-STATUS@  ( vault -- status )
+    _cvault-last-status-xt _credential-vault-guard WITH-GUARD ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+: _CV-GEOMETRY-ABORT  ( -- )
+    ." Credential vault geometry mismatch" CR ABORT ;
+
+1 CELLS 8 <> [IF]
+    _CV-GEOMETRY-ABORT
+[THEN]
+
+_CVC-FLOOR-CONTEXT 8 + CVAULT-CONFIG-SIZE <> [IF]
+    _CV-GEOMETRY-ABORT
+[THEN]
+
+_CV-RESERVED3 8 + _CV-VAULT-ID <> [IF]
+    _CV-GEOMETRY-ABORT
+[THEN]
+
+_CV-BINDING-ID RID-SIZE + _CV-SEAL-KEY-ID <> [IF]
+    _CV-GEOMETRY-ABORT
+[THEN]
+
+_CV-SEAL-RECORD-ID RID-SIZE + _CV-ROOT <> [IF]
+    _CV-GEOMETRY-ABORT
+[THEN]
+
+CVAULT-ROOT-MAX 67 + 255 U> [IF]
+    _CV-GEOMETRY-ABORT
+[THEN]
+
+CVAULT-SECRET-CAPACITY-MAX CVAULT-PLAINTEXT-SIZE
+SEALED-RECORD-DATA-MAX <> [IF]
+    _CV-GEOMETRY-ABORT
+[THEN]
+
+CVAULT-SECRET-CAPACITY-MAX CVAULT-RECORD-SIZE
+SEALED-RECORD-SIZE-MAX <> [IF]
+    _CV-GEOMETRY-ABORT
+[THEN]
+
+HERE _CV-PRIVATE-LIMIT !
