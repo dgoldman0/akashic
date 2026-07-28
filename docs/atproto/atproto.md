@@ -14,6 +14,7 @@ REQUIRE aturi.f    \ AT URI parser + builder
 REQUIRE did.f      \ strict generic DID identifier syntax
 REQUIRE handle.f   \ AT Protocol handle syntax + lowercase normalization
 REQUIRE did-document.f \ strict caller-owned AT Protocol identity profile
+REQUIRE identity.f \ caller-owned handle/DID/PDS discovery coordinator
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -24,7 +25,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 
 `PROVIDED akashic-aturi` / `akashic-did` /
 `akashic-atproto-handle` / `akashic-tid` /
-`akashic-atproto-diddoc` /
+`akashic-atproto-diddoc` / `akashic-atproto-identity` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
@@ -38,6 +39,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [DID — did.f](#did--didf)
 - [Handle — handle.f](#handle--handlef)
 - [DID document — did-document.f](#did-document--did-documentf)
+- [Identity discovery — identity.f](#identity-discovery--identityf)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
@@ -154,6 +156,22 @@ AT-DIDDOC-PARSE
 It owns no resolution or transport state. Missing optional evidence does not
 erase a valid identity. `AT-DIDDOC-PARTICIPATION-STATUS` separately requires
 both a usable Multikey and PDS endpoint before participation.
+
+## Identity discovery — identity.f
+
+The [identity and PDS discovery coordinator](identity.md) drives production
+handle and DID resolution without owning DNS or HTTP transport state. It
+publishes exact document identity independently from optional handle, key, and
+PDS participation evidence.
+
+```forth
+ATID-BEGIN-HANDLE  ( handle-a handle-u result resolver -- status )
+ATID-BEGIN-DID     ( did-a did-u result resolver -- status )
+ATID-ACTION@       ( resolver -- action status )
+```
+
+DNS TXT, bounded CNAME progression, HTTPS well-known fallback, DID-document
+fetch, and reverse handle confirmation are explicit caller-driven actions.
 
 ---
 
