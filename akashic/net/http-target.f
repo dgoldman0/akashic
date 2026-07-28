@@ -6,11 +6,11 @@
 \  into a caller-owned record, and exposes canonical host, numeric port,
 \  origin-form request target, and URI views. It performs no DNS or I/O.
 \
-\  Redirect admission accepts absolute HTTPS or origin-relative locations.
-\  Absolute redirects must retain the exact canonical host and port. A
-\  distinct status reports redirects which require a new authority decision.
-\  Callers retain the redirect chain and may use HTARGET-EQUAL? to reject a
-\  candidate seen before; immediate self-redirects are rejected here.
+\  Redirect resolution accepts absolute HTTPS or origin-relative locations.
+\  HTARGET-REDIRECT-RESOLVE returns a canonical candidate without making an
+\  authority decision.  HTARGET-REDIRECT is the strict same-origin policy
+\  wrapper.  Callers retain the redirect chain and may use HTARGET-EQUAL? to
+\  reject a candidate seen before; immediate self-redirects are rejected here.
 \ =====================================================================
 
 PROVIDED akashic-http-target
@@ -573,7 +573,8 @@ _HT-SOURCE HTARGET-URI-CAPACITY + CONSTANT HTARGET-SIZE
     THEN
     DUP _HTARGET-PARSE-SOURCE _HTARGET-REDIRECT-RETURN ;
 
-: HTARGET-REDIRECT  ( location-a location-u current candidate -- status )
+: HTARGET-REDIRECT-RESOLVE
+    ( location-a location-u current candidate -- status )
     DUP 0= IF 2DROP 2DROP HTARGET-S-INVALID EXIT THEN
     2DUP = IF
         2DROP 2DROP HTARGET-S-INVALID EXIT
@@ -613,13 +614,24 @@ _HT-SOURCE HTARGET-URI-CAPACITY + CONSTANT HTARGET-SIZE
     THEN
     DROP
 
-    2DUP HTARGET-SAME-ORIGIN? 0= IF
-        HTARGET-S-AUTHORITY-REQUIRED
-            _HTARGET-REDIRECT-FAIL EXIT
-    THEN
     2DUP HTARGET-EQUAL? IF
         HTARGET-S-LOOP _HTARGET-REDIRECT-FAIL EXIT
     THEN
     OVER HTARGET.REDIRECT-COUNT @ 1+
         OVER HTARGET.REDIRECT-COUNT !
     HTARGET-S-OK _HTARGET-REDIRECT-RETURN ;
+
+VARIABLE _HTREDIRECT-CURRENT
+VARIABLE _HTREDIRECT-CANDIDATE
+
+: HTARGET-REDIRECT  ( location-a location-u current candidate -- status )
+    DUP _HTREDIRECT-CANDIDATE !
+    OVER _HTREDIRECT-CURRENT !
+    HTARGET-REDIRECT-RESOLVE DUP HTARGET-S-OK <> IF EXIT THEN
+    DROP
+    _HTREDIRECT-CURRENT @ _HTREDIRECT-CANDIDATE @
+        HTARGET-SAME-ORIGIN? 0= IF
+        HTARGET-S-AUTHORITY-REQUIRED
+            _HTREDIRECT-CANDIDATE @ _HTARGET-FAIL EXIT
+    THEN
+    HTARGET-S-OK ;

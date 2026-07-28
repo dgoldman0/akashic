@@ -64,6 +64,14 @@ VARIABLE _hrc-release-mode
 VARIABLE _hrc-media-mode
 VARIABLE _hrc-media-calls
 VARIABLE _hrc-media-errors
+VARIABLE _hrc-success-low
+VARIABLE _hrc-success-high
+VARIABLE _hrc-spec-media-mode
+VARIABLE _hrc-authority-mode
+VARIABLE _hrc-authority-calls
+VARIABLE _hrc-authority-errors
+VARIABLE _hrc-authority-current
+VARIABLE _hrc-authority-candidate
 VARIABLE _hrc-forbid-io
 VARIABLE _hrc-late-io
 VARIABLE _hrc-lease-errors
@@ -261,6 +269,10 @@ VARIABLE _hrc-hop-status
     0 _hrc-bind-status !
     -1 _hrc-release-open-state ! -1 _hrc-release-close-state !
     0 _hrc-media-mode ! 0 _hrc-media-calls ! 0 _hrc-media-errors !
+    200 _hrc-success-low ! 200 _hrc-success-high !
+    HRES-MEDIA-REQUIRED _hrc-spec-media-mode !
+    0 _hrc-authority-mode ! 0 _hrc-authority-calls !
+    0 _hrc-authority-errors !
     0 _hrc-forbid-io ! 0 _hrc-late-io ! 0 _hrc-lease-errors !
     _hrc-port-install _hrc-port _hrc-bind-port ! ;
 
@@ -301,6 +313,24 @@ VARIABLE _hrc-hop-status
     THEN
     0 ;
 
+: _hrc-authority-policy
+    ( current-target candidate-target context -- policy-status )
+    _hrc-resource <> IF 1 _hrc-authority-errors +! THEN
+    _hrc-authority-candidate ! _hrc-authority-current !
+    _hrc-authority-current @ HTARGET-VALID? 0= IF
+        1 _hrc-authority-errors +!
+    THEN
+    _hrc-authority-candidate @ HTARGET-VALID? 0= IF
+        1 _hrc-authority-errors +!
+    THEN
+    _hrc-authority-current @ _hrc-authority-candidate @
+        HTARGET-SAME-ORIGIN? IF 1 _hrc-authority-errors +! THEN
+    1 _hrc-authority-calls +!
+    _hrc-authority-mode @ 2 = IF -7640 EXIT THEN
+    _hrc-authority-mode @ 3 = IF -7641 THROW THEN
+    _hrc-authority-mode @ 4 = IF 0 99 EXIT THEN
+    0 ;
+
 : _hrc-build-ok  ( hop -- )
     _hrc-response-select
     S" HTTP/1.1 200 OK" _hrc-response-line,
@@ -322,6 +352,26 @@ VARIABLE _hrc-hop-status
     S" Connection: close" _hrc-response-line,
     _hrc-response-crlf,
     S" second" _hrc-response, ;
+
+VARIABLE _hrc-policy-status
+VARIABLE _hrc-policy-media
+
+: _hrc-build-policy-final  ( hop status media-case -- )
+    _hrc-policy-media ! _hrc-policy-status ! _hrc-response-select
+    S" HTTP/1.1 " _hrc-response,
+    _hrc-policy-status @ NUM>STR _hrc-response,
+    S"  Policy" _hrc-response-line,
+    _hrc-policy-media @ 1 = IF
+        S" Content-Type: not-a-media-type" _hrc-response-line,
+    THEN
+    _hrc-policy-media @ 2 = IF
+        S" Content-Type: application/json" _hrc-response-line,
+        S" Content-Type: text/plain" _hrc-response-line,
+    THEN
+    5 _hrc-content-length,
+    S" Connection: close" _hrc-response-line,
+    _hrc-response-crlf,
+    S" hello" _hrc-response, ;
 
 : _hrc-build-two-params  ( duplicate? -- )
     _hrc-mode ! 0 _hrc-response-select
@@ -415,10 +465,21 @@ VARIABLE _hrc-hop-status
         _hrc-spec HRES-SPEC-ACCEPT! HRES-S-OK = _hrc-assert
     _hrc-redirect-max @ _hrc-spec HRES-SPEC-REDIRECT-MAX!
         HRES-S-OK = _hrc-assert
+    _hrc-success-low @ _hrc-success-high @
+        _hrc-spec HRES-SPEC-SUCCESS-RANGE! HRES-S-OK = _hrc-assert
+    _hrc-spec-media-mode @ _hrc-spec HRES-SPEC-MEDIA-MODE!
+        HRES-S-OK = _hrc-assert
     _hrc-resource ['] _hrc-bind ['] _hrc-release
         _hrc-spec HRES-SPEC-BINDING! HRES-S-OK = _hrc-assert
-    _hrc-resource ['] _hrc-media-policy _hrc-spec HRES-SPEC-MEDIA!
-        HRES-S-OK = _hrc-assert
+    _hrc-spec-media-mode @ HRES-MEDIA-REQUIRED = IF
+        _hrc-resource ['] _hrc-media-policy _hrc-spec HRES-SPEC-MEDIA!
+            HRES-S-OK = _hrc-assert
+    THEN
+    _hrc-authority-mode @ IF
+        _hrc-resource ['] _hrc-authority-policy
+            _hrc-spec HRES-SPEC-REDIRECT-AUTHORITY!
+            HRES-S-OK = _hrc-assert
+    THEN
     _hrc-spec HRES-SPEC-SEAL HRES-S-OK = _hrc-assert
     _hrc-spec HRES-SPEC-VALID? _hrc-assert
     _hrc-resource HRES-INIT
@@ -792,6 +853,117 @@ VARIABLE _hrc-hop-status
     _hrc-releases @ 1 = _hrc-assert
     _hrc-clean-result _hrc-stack ;
 
+: _hrc-test-configured-final-policy  ( -- )
+    _hrc-fixture-reset 0 201 0 _hrc-build-policy-final
+    S" https://identity.example.test/value" 0 128 _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ HRES-O-HTTP = _hrc-assert
+    _hrc-resource HRES-DETAIL@ 201 = _hrc-assert
+    _hrc-resource HRES-RESULT-VALID? 0= _hrc-assert
+    _hrc-media-calls @ 0= _hrc-assert
+    _hrc-clean-result
+
+    _hrc-fixture-reset
+    200 _hrc-success-low ! 299 _hrc-success-high !
+    HRES-MEDIA-IGNORED _hrc-spec-media-mode !
+    0 201 0 _hrc-build-policy-final
+    S" https://identity.example.test/value" 0 128 _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ HRES-O-OK = _hrc-assert
+    _hrc-resource HRES-HTTP-STATUS@ 201 = _hrc-assert
+    _hrc-resource HRES-RESULT-VALID? _hrc-assert
+    _hrc-resource HRES-BODY@ S" hello" STR-STR= _hrc-assert
+    _hrc-resource HRES-MEDIA@ 0= _hrc-assert DROP
+    _hrc-media-calls @ 0= _hrc-assert
+    _hrc-clean-result
+
+    _hrc-fixture-reset
+    200 _hrc-success-low ! 299 _hrc-success-high !
+    HRES-MEDIA-IGNORED _hrc-spec-media-mode !
+    0 299 2 _hrc-build-policy-final
+    S" https://identity.example.test/value" 0 128 _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ HRES-O-OK = _hrc-assert
+    _hrc-resource HRES-HTTP-STATUS@ 299 = _hrc-assert
+    _hrc-resource HRES-RESULT-VALID? _hrc-assert
+    _hrc-resource HRES-MEDIA@ 0= _hrc-assert DROP
+    _hrc-media-calls @ 0= _hrc-assert
+    _hrc-clean-result
+
+    _hrc-fixture-reset
+    200 _hrc-success-low ! 299 _hrc-success-high !
+    HRES-MEDIA-IGNORED _hrc-spec-media-mode !
+    0 300 0 _hrc-build-policy-final
+    S" https://identity.example.test/value" 0 128 _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ HRES-O-HTTP = _hrc-assert
+    _hrc-resource HRES-DETAIL@ 300 = _hrc-assert
+    _hrc-resource HRES-RESULT-VALID? 0= _hrc-assert
+    _hrc-clean-result _hrc-stack ;
+
+: _hrc-test-authority-policy  ( -- )
+    _hrc-fixture-reset
+    200 _hrc-success-low ! 299 _hrc-success-high !
+    HRES-MEDIA-IGNORED _hrc-spec-media-mode !
+    1 _hrc-authority-mode !
+    0 S" https://did.example.test/document" _hrc-build-redirect
+    1 201 1 _hrc-build-policy-final
+    S" https://handle.example.test/.well-known/atproto-did" 3 128
+        _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ HRES-O-OK = _hrc-assert
+    _hrc-resource HRES-RESULT-VALID? _hrc-assert
+    _hrc-resource HRES-REDIRECT-COUNT@ 1 = _hrc-assert
+    _hrc-resource HRES-EFFECTIVE-URI$
+        S" https://did.example.test/document" STR-STR= _hrc-assert
+    0 302 _hrc-hop-status? 1 201 _hrc-hop-status?
+    _hrc-authority-calls @ 1 = _hrc-assert
+    _hrc-authority-errors @ 0= _hrc-assert
+    _hrc-binds @ 2 = _hrc-assert _hrc-releases @ 2 = _hrc-assert
+    _hrc-media-calls @ 0= _hrc-assert
+    S" /.well-known/atproto-did" S" handle.example.test"
+        _hrc-build-expected
+    0 _hrc-wire? _hrc-assert
+    S" /document" S" did.example.test" _hrc-build-expected
+    1 _hrc-wire? _hrc-assert
+    _hrc-clean-result
+
+    _hrc-fixture-reset
+    2 _hrc-authority-mode !
+    0 S" https://other.example.test/document" _hrc-build-redirect
+    S" https://handle.example.test/value" 3 128 _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@
+        HRES-O-AUTHORITY-REQUIRED = _hrc-assert
+    _hrc-resource HRES-DETAIL@ -7640 = _hrc-assert
+    _hrc-resource HRES-POLICY-STATUS@ -7640 = _hrc-assert
+    _hrc-resource HRES-REDIRECT-COUNT@ 0= _hrc-assert
+    _hrc-authority-calls @ 1 = _hrc-assert
+    _hrc-binds @ 1 = _hrc-assert _hrc-releases @ 1 = _hrc-assert
+    _hrc-clean-result
+
+    _hrc-fixture-reset
+    3 _hrc-authority-mode !
+    0 S" https://other.example.test/document" _hrc-build-redirect
+    S" https://handle.example.test/value" 3 128 _hrc-setup
+    _hrc-run-resource HRES-S-FAULT = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ HRES-O-FAULT = _hrc-assert
+    _hrc-resource HRES-DETAIL@ HRES-D-REDIRECT-POLICY = _hrc-assert
+    _hrc-resource HRES-POLICY-STATUS@ -7641 = _hrc-assert
+    _hrc-authority-calls @ 1 = _hrc-assert
+    _hrc-binds @ 1 = _hrc-assert _hrc-releases @ 1 = _hrc-assert
+    _hrc-clean-result
+
+    _hrc-fixture-reset
+    4 _hrc-authority-mode !
+    0 S" https://other.example.test/document" _hrc-build-redirect
+    S" https://handle.example.test/value" 3 128 _hrc-setup
+    _hrc-run-resource HRES-S-FAULT = _hrc-assert
+    _hrc-resource HRES-DETAIL@ HRES-D-REDIRECT-POLICY = _hrc-assert
+    _hrc-resource HRES-POLICY-STATUS@ HRES-XERR-FAULT = _hrc-assert
+    _hrc-authority-calls @ 1 = _hrc-assert
+    _hrc-clean-result _hrc-stack ;
+
 : _hrc-pb-setup  ( -- )
     _hrc-fixture-reset 0 _hrc-build-ok
     S" https://feeds.example.test/feed" 2 128 _hrc-setup ;
@@ -815,7 +987,17 @@ VARIABLE _hrc-hop-status
     HRES-HOST-VALUE-STORAGE 264 = _hrc-assert
     _HRES-LOCATION _HRES-HOST-VALUE -
         HRES-HOST-VALUE-STORAGE = _hrc-assert
-    HTTP-RESOURCE-SIZE 45856 = _hrc-assert
+    HTTP-RESOURCE-SIZE 45888 = _hrc-assert
+    _hrc-spec HRES-SPEC-INIT
+    199 299 _hrc-spec HRES-SPEC-SUCCESS-RANGE!
+        HRES-S-INVALID = _hrc-assert
+    200 300 _hrc-spec HRES-SPEC-SUCCESS-RANGE!
+        HRES-S-INVALID = _hrc-assert
+    250 249 _hrc-spec HRES-SPEC-SUCCESS-RANGE!
+        HRES-S-INVALID = _hrc-assert
+    2 _hrc-spec HRES-SPEC-MEDIA-MODE! HRES-S-INVALID = _hrc-assert
+    0 0 _hrc-spec HRES-SPEC-REDIRECT-AUTHORITY!
+        HRES-S-INVALID = _hrc-assert
     _hrc-stack ;
 
 : _hrc-pb-sensitive-zero  ( -- )
@@ -1259,6 +1441,10 @@ VARIABLE _hrc-hop-status
     _hrc-test-media-policy
     S" media-params" _hrc-mark
     _hrc-test-media-params
+    S" configured-final-policy" _hrc-mark
+    _hrc-test-configured-final-policy
+    S" authority-policy" _hrc-mark
+    _hrc-test-authority-policy
     S" provider-boundary" _hrc-mark
     _hrc-test-provider-boundary
     S" deadline-overrides-result" _hrc-mark

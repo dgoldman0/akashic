@@ -2,14 +2,14 @@
 
 `akashic/net/http-resource.f` is the transport-neutral boundary for fetching
 one configured HTTPS resource. It owns the canonical target chain, exact GET
-request, cooperative buffered exchange, header admission, syntax-parsed media
-type with caller-supplied semantic admission, opaque validators, and terminal
-acquisition outcome. It does not depend
-on KDOS, Desk, Streams, trust anchors, credentials, or a payload decoder.
+request, cooperative buffered exchange, sealed final-status/media/redirect
+policy, header admission, opaque validators, and terminal acquisition outcome.
+It does not depend on KDOS, AT Protocol, Desk, Streams, trust anchors,
+credentials, or a payload decoder.
 
 The response body is caller-owned. The resource borrows that positive,
 bounded buffer while configured and wipes it on cancellation, release, and
-every outcome which is not an admitted final `200` response.
+every outcome which is not admitted by the sealed final-status policy.
 
 The copied target admits a DNS hostname through the complete generic
 `HTARGET-HOST-CAPACITY` bound. Request staging therefore reserves
@@ -35,6 +35,22 @@ bind-context ['] bind-target ['] release-port
 media-context ['] admit-media spec HRES-SPEC-MEDIA! THROW
 spec HRES-SPEC-SEAL THROW
 ```
+
+`HRES-SPEC-INIT` defaults to the deliberately strict profile used above:
+exactly status `200`, required media admission, and same-origin redirects.
+Before sealing, a generic caller may instead configure an inclusive success
+range within `200..299`:
+
+```forth
+200 299 spec HRES-SPEC-SUCCESS-RANGE! THROW
+```
+
+`HRES-MEDIA-REQUIRED spec HRES-SPEC-MEDIA-MODE!` requires the configured
+media callback and preserves the strict default. `HRES-MEDIA-IGNORED` makes
+Content-Type non-authoritative: the field is neither counted nor parsed, no
+media callback is required or invoked, and `HRES-MEDIA@` reports no model.
+Malformed or duplicate Content-Type fields therefore cannot affect a result
+whose consumer parses the body under some stronger protocol authority.
 
 `bind-target` has stack effect
 `( target bind-context -- port provider-status )`. It receives the exact
@@ -62,17 +78,36 @@ lower open, close, or cancellation path has proved detachment. It is not called
 when that proof is unavailable. A callback failure or uncertain retained port
 poisons cleanup rather than being reported as an ordinary HTTP outcome.
 
-`admit-media` has stack effect
+In required mode, `admit-media` has stack effect
 `( media-model media-context -- media-status )`. It receives the resource-owned,
-syntax-valid `MTYPE` for the final `200`. Zero admits it; a nonzero status is a
-retained media rejection, and a throw is a callback fault. The callback is a
-pure policy check and must not mutate the media model or perform I/O.
+syntax-valid `MTYPE` for a final success status. Zero admits it; a nonzero
+status is a retained media rejection, and a throw is a callback fault. The
+callback is a pure policy check and must not mutate the media model or perform
+I/O.
+
+Cross-origin redirects require an explicit authority callback installed with:
+
+```forth
+authority-context ['] admit-redirect-authority
+    spec HRES-SPEC-REDIRECT-AUTHORITY! THROW
+```
+
+The callback has stack effect
+`( current-target candidate-target authority-context -- policy-status )`.
+It receives two canonical, valid HTTPS `HTARGET` records after syntax
+resolution and loop checking but before the candidate enters the public chain.
+Zero admits the new authority. A nonzero result becomes an exact retained
+`HRES-O-AUTHORITY-REQUIRED` diagnostic; a throw or stack-shape violation faults
+the resource. With no callback, every cross-origin candidate is rejected.
+This callback must be pure and non-reentrant. It can constrain canonical host
+and port, but it cannot replace the binding provider's per-hop DNS result,
+public-address, and TLS-name admission.
 
 The module is single-threaded and non-reentrant. Its implementation shares
-module-level scratch across resources, so bind, release, and media callbacks
-must not call any `HRES-*` operation, even for a different resource. Owners may
-drive multiple resources cooperatively, but each public call must return before
-another resource is entered.
+module-level scratch across resources, so bind, release, media, and redirect
+authority callbacks must not call any `HRES-*` operation, even for a different
+resource. Owners may drive multiple resources cooperatively, but each public
+call must return before another resource is entered.
 
 This lease boundary lets a KDOS composition configure its TLS adapter from
 the supplied canonical host and port without making the generic resource know
@@ -130,37 +165,43 @@ An admitted result provides:
 
 - exact requested and effective canonical URI;
 - up to four retained targets and per-hop HTTP statuses;
-- final status `200`;
-- one owned, syntax-valid and caller-admitted `MTYPE` model;
+- one final status in the sealed inclusive success range;
+- in required mode, one owned, syntax-valid and caller-admitted `MTYPE` model;
+- in ignored mode, an intentionally absent media model;
 - optional singleton, nonempty `ETag` and `Last-Modified` copies;
 - the exact admitted caller-owned body; and
 - separate primary, transport/parser/policy/provider, and cleanup diagnostics.
 
-The consuming syndication or watched-page adapter supplies the semantic media
-policy callback and still owns charset policy, payload decode, and any durable
-commit.
+The consuming protocol adapter still owns payload syntax, charset policy, and
+any durable commit. Required media mode is appropriate when Content-Type is
+part of that protocol's admission contract. Ignored mode is appropriate only
+when some other protocol rule authoritatively identifies the body.
 
-## First-version admission policy
+## Admission policy
 
 Every request is an exact origin-form `GET` with canonical `Host` (including a
 non-default port), caller-bounded `Accept`, `Accept-Encoding: identity`, a
 fixed user agent, and `Connection: close`. No authorization, cookie,
 conditional, or provider-specific header is accepted from configuration.
 
-Only `301`, `302`, `303`, `307`, and `308` redirect. `HTARGET-REDIRECT` admits
-only the existing strict origin-relative form or same-origin absolute HTTPS
-target. Every candidate is compared with the complete retained chain, and the
-configured limit cannot exceed three. Cross-origin redirects remain a
-distinct authority-required outcome. `304` is deliberately an HTTP outcome,
-not success, until a retained-representation owner can bind validators to the
-exact prior effective URI.
+Only `301`, `302`, `303`, `307`, and `308` redirect.
+`HTARGET-REDIRECT-RESOLVE` canonicalizes an absolute HTTPS or
+origin-relative Location without deciding authority; HRES then compares the
+candidate with the complete retained chain. Same-origin candidates need no
+extra callback. Cross-origin candidates require the sealed authority callback,
+and every admitted hop receives a fresh bind. The configured redirect limit
+cannot exceed three. Network-path, path-relative, and query-only Location
+references are currently rejected rather than resolved ambiguously. `304` is
+deliberately an HTTP outcome, not success, until a retained-representation
+owner can bind validators to the exact prior effective URI.
 
 Before any response is used, the resource rejects duplicate Content-Length,
-Content-Type, Content-Encoding, Location, ETag, or Last-Modified fields,
-Trailer declarations, and actual chunked trailers. Content-Encoding must be
-absent or singleton `identity`. A final `200` requires exactly one syntactically
-valid Content-Type which the sealed media callback admits; duplicate media
-parameter names are rejected case-insensitively.
+Content-Encoding, Location, ETag, or Last-Modified fields, Trailer
+declarations, and actual chunked trailers. Content-Encoding must be absent or
+singleton `identity`. Required media mode additionally rejects duplicate
+Content-Type, requires exactly one syntactically valid value, invokes the
+sealed media callback, and rejects duplicate media parameter names
+case-insensitively. Ignored mode does not inspect Content-Type.
 
 The body bound is the aggregate transfer-decoded body budget across redirect
 hops, not a total on-wire byte counter. Redirect responses are fully consumed
@@ -176,5 +217,11 @@ extension.
 Run the deterministic fake-transport gate with:
 
 ```sh
-python3 -B local_testing/akashic_tui.py smoke --profile http-resource-contracts
+python3 -B local_testing/test_http_resource.py --static-only
+python3 -B local_testing/test_http_resource.py --lifecycle
 ```
+
+The lifecycle driver stages each dependency, source, fixture, and execution
+phase behind a key gate with a hard 120-million-step ceiling. This avoids
+turning a large transitive `REQUIRE` closure into one opaque, unbounded boot
+phase.
