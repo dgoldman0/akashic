@@ -1,0 +1,1370 @@
+\ =====================================================================
+\  kdos-dns.f - Caller-owned cooperative KDOS DNS exchange
+\ =====================================================================
+\  This protocol-neutral transport copies one standard single-question DNS
+\  query into caller-owned adapter storage, exchanges it with one configured
+\  IPv4 recursive server, and publishes the exact response in a caller-owned
+\  arena.  UDP is normative.  A question-bound TC response retries the same
+\  query over RFC 1035 length-framed TCP.
+\
+\  The descriptor owns every retained transaction byte and scalar.  One module
+\  owner pointer is only a serialization boundary around KDOS's machine-global
+\  NIC, packet, and TCP-table state; it does not retain transaction material.
+\  This module performs no DNS answer parsing, alias chase, caching, resolver
+\  selection, DNSSEC, application decoding, HTTP, AT Protocol, or Streams
+\  policy.
+\
+\  Public API:
+\    KDOSDNS-INIT          ( response-a response-cap adapter -- status )
+\    KDOSDNS-VALID?        ( adapter -- flag )
+\    KDOSDNS-START         ( query-a query-u server-ip adapter -- status )
+\    KDOSDNS-POLL          ( adapter -- status )
+\    KDOSDNS-CANCEL        ( adapter -- status )
+\    KDOSDNS-WIPE          ( adapter -- status )
+\    KDOSDNS-STATE@        ( adapter -- state )
+\    KDOSDNS-STATUS@       ( adapter -- status )
+\    KDOSDNS-PHASE@        ( adapter -- phase )
+\    KDOSDNS-RESPONSE$     ( adapter -- response-a response-u status )
+\    KDOSDNS-USED-TCP?     ( adapter -- flag )
+\    KDOSDNS-RCODE@        ( adapter -- rcode )
+\    KDOSDNS-FLAGS@        ( adapter -- header-flags )
+\    KDOSDNS-EVIDENCE@     ( adapter -- evidence )
+\    KDOSDNS-STEP-COUNT@   ( adapter -- count )
+\    KDOSDNS-LAST-STEP-CYCLES@ ( adapter -- cycles )
+\    KDOSDNS-MAX-STEP-CYCLES@ ( adapter -- cycles )
+\ =====================================================================
+
+PROVIDED akashic-kdos-dns
+
+REQUIRE ../../utils/memory-span.f
+REQUIRE ../../utils/caller-span.f
+
+\ =====================================================================
+\  Public bounds, states, statuses, phases, and evidence
+\ =====================================================================
+
+512   CONSTANT KDOSDNS-QUERY-MAX
+65535 CONSTANT KDOSDNS-RESPONSE-MAX
+255   CONSTANT KDOSDNS-WIRE-NAME-MAX
+128   CONSTANT KDOSDNS-COMPRESSION-HOPS-MAX
+
+0 CONSTANT KDOSDNS-STATE-IDLE
+1 CONSTANT KDOSDNS-STATE-ACTIVE
+2 CONSTANT KDOSDNS-STATE-COMPLETE
+3 CONSTANT KDOSDNS-STATE-FAILED
+4 CONSTANT KDOSDNS-STATE-CANCELLED
+
+0  CONSTANT KDOSDNS-S-OK
+1  CONSTANT KDOSDNS-S-INVALID
+2  CONSTANT KDOSDNS-S-CAPACITY
+3  CONSTANT KDOSDNS-S-ALIAS
+4  CONSTANT KDOSDNS-S-RANGE
+5  CONSTANT KDOSDNS-S-PROTECTED
+6  CONSTANT KDOSDNS-S-PLATFORM
+7  CONSTANT KDOSDNS-S-BUSY
+8  CONSTANT KDOSDNS-S-PENDING
+9  CONSTANT KDOSDNS-S-TIMEOUT
+10 CONSTANT KDOSDNS-S-IO
+11 CONSTANT KDOSDNS-S-MALFORMED
+12 CONSTANT KDOSDNS-S-MISMATCH
+13 CONSTANT KDOSDNS-S-CANCELLED
+14 CONSTANT KDOSDNS-S-FAULT
+15 CONSTANT KDOSDNS-S-CLEANUP
+
+0  CONSTANT KDOSDNS-PHASE-IDLE
+1  CONSTANT KDOSDNS-PHASE-ARP-CHECK
+2  CONSTANT KDOSDNS-PHASE-ARP-SEND
+3  CONSTANT KDOSDNS-PHASE-ARP-WAIT
+4  CONSTANT KDOSDNS-PHASE-UDP-SEND
+5  CONSTANT KDOSDNS-PHASE-UDP-WAIT
+6  CONSTANT KDOSDNS-PHASE-TCP-OPEN
+7  CONSTANT KDOSDNS-PHASE-TCP-WAIT
+8  CONSTANT KDOSDNS-PHASE-TCP-SEND
+9  CONSTANT KDOSDNS-PHASE-TCP-PREFIX
+10 CONSTANT KDOSDNS-PHASE-TCP-BODY
+11 CONSTANT KDOSDNS-PHASE-TCP-CLOSE
+12 CONSTANT KDOSDNS-PHASE-TCP-CLOSE-WAIT
+13 CONSTANT KDOSDNS-PHASE-DONE
+14 CONSTANT KDOSDNS-PHASE-FAILED
+15 CONSTANT KDOSDNS-PHASE-CANCELLED
+
+1    CONSTANT KDOSDNS-E-SERVER
+2    CONSTANT KDOSDNS-E-LOCAL-PORT
+4    CONSTANT KDOSDNS-E-UDP-CHECKSUM
+8    CONSTANT KDOSDNS-E-DNS-HEADER
+16   CONSTANT KDOSDNS-E-ID
+32   CONSTANT KDOSDNS-E-QUESTION
+64   CONSTANT KDOSDNS-E-TRUNCATED
+128  CONSTANT KDOSDNS-E-TCP-CONNECTED
+256  CONSTANT KDOSDNS-E-TCP-LENGTH
+512  CONSTANT KDOSDNS-E-RESPONSE
+1024 CONSTANT KDOSDNS-E-CLEANUP-FALLBACK
+
+15000 CONSTANT KDOSDNS-TRANSACTION-TIMEOUT-MS
+2000  CONSTANT KDOSDNS-CLOSE-TIMEOUT-MS
+250   CONSTANT KDOSDNS-ARP-RETRY-MS
+1000  CONSTANT KDOSDNS-UDP-RETRY-MS
+3     CONSTANT KDOSDNS-RETRY-MAX
+
+\ =====================================================================
+\  Caller-owned descriptor geometry
+\ =====================================================================
+
+0x4B444E53444E5331 CONSTANT _KDNS-MAGIC-VALUE  \ "KDNSDNS1"
+
+  0 CONSTANT _KDNS-MAGIC
+  8 CONSTANT _KDNS-STATE
+ 16 CONSTANT _KDNS-STATUS
+ 24 CONSTANT _KDNS-PHASE
+ 32 CONSTANT _KDNS-RESPONSE
+ 40 CONSTANT _KDNS-RESPONSE-CAP
+ 48 CONSTANT _KDNS-RESPONSE-U
+ 56 CONSTANT _KDNS-SERVER-IP
+ 64 CONSTANT _KDNS-LOCAL-PORT
+ 72 CONSTANT _KDNS-QUERY-U
+ 80 CONSTANT _KDNS-QUERY-ID
+ 88 CONSTANT _KDNS-QTYPE
+ 96 CONSTANT _KDNS-QCLASS
+104 CONSTANT _KDNS-QNAME-U
+112 CONSTANT _KDNS-DEADLINE-MS
+120 CONSTANT _KDNS-RETRY-AT-MS
+128 CONSTANT _KDNS-RETRIES
+136 CONSTANT _KDNS-USED-TCP
+144 CONSTANT _KDNS-EVIDENCE
+152 CONSTANT _KDNS-TCB
+160 CONSTANT _KDNS-TCB-ISS
+168 CONSTANT _KDNS-TCP-PREFIX-U
+176 CONSTANT _KDNS-TCP-EXPECTED-U
+184 CONSTANT _KDNS-TCP-TX-OFFSET
+192 CONSTANT _KDNS-CLOSE-DEADLINE-MS
+200 CONSTANT _KDNS-AFTER-ARP-PHASE
+208 CONSTANT _KDNS-STEP-COUNT
+216 CONSTANT _KDNS-LAST-STEP-CYCLES
+224 CONSTANT _KDNS-MAX-STEP-CYCLES
+232 CONSTANT _KDNS-NOW-XT
+240 CONSTANT _KDNS-STEP-XT
+248 CONSTANT _KDNS-ARP-TARGET
+
+\ Name decompression work is retained in the descriptor so no query or
+\ response material enters module-global storage.
+256 CONSTANT _KDNS-WORK-MESSAGE
+264 CONSTANT _KDNS-WORK-MESSAGE-U
+272 CONSTANT _KDNS-WORK-CURSOR
+280 CONSTANT _KDNS-WORK-NEXT
+288 CONSTANT _KDNS-WORK-HOPS
+296 CONSTANT _KDNS-WORK-JUMPED
+304 CONSTANT _KDNS-WORK-OUT-U
+
+312 CONSTANT _KDNS-DNS-FLAGS
+320 CONSTANT _KDNS-RCODE
+328 CONSTANT _KDNS-TCP-PREFIX
+336 CONSTANT _KDNS-QNAME
+592 CONSTANT _KDNS-NAME-SCRATCH
+848 CONSTANT _KDNS-TCP-FRAME
+850 CONSTANT _KDNS-QUERY
+1368 CONSTANT KDOSDNS-SIZE
+
+: _KDNS.MAGIC          ( adapter -- a ) _KDNS-MAGIC + ;
+: _KDNS.STATE          ( adapter -- a ) _KDNS-STATE + ;
+: _KDNS.STATUS         ( adapter -- a ) _KDNS-STATUS + ;
+: _KDNS.PHASE          ( adapter -- a ) _KDNS-PHASE + ;
+: _KDNS.RESPONSE       ( adapter -- a ) _KDNS-RESPONSE + ;
+: _KDNS.RESPONSE-CAP   ( adapter -- a ) _KDNS-RESPONSE-CAP + ;
+: _KDNS.RESPONSE-U     ( adapter -- a ) _KDNS-RESPONSE-U + ;
+: _KDNS.SERVER-IP      ( adapter -- a ) _KDNS-SERVER-IP + ;
+: _KDNS.LOCAL-PORT     ( adapter -- a ) _KDNS-LOCAL-PORT + ;
+: _KDNS.QUERY-U        ( adapter -- a ) _KDNS-QUERY-U + ;
+: _KDNS.QUERY-ID       ( adapter -- a ) _KDNS-QUERY-ID + ;
+: _KDNS.QTYPE          ( adapter -- a ) _KDNS-QTYPE + ;
+: _KDNS.QCLASS         ( adapter -- a ) _KDNS-QCLASS + ;
+: _KDNS.QNAME-U        ( adapter -- a ) _KDNS-QNAME-U + ;
+: _KDNS.DEADLINE-MS    ( adapter -- a ) _KDNS-DEADLINE-MS + ;
+: _KDNS.RETRY-AT-MS    ( adapter -- a ) _KDNS-RETRY-AT-MS + ;
+: _KDNS.RETRIES        ( adapter -- a ) _KDNS-RETRIES + ;
+: _KDNS.USED-TCP       ( adapter -- a ) _KDNS-USED-TCP + ;
+: _KDNS.EVIDENCE       ( adapter -- a ) _KDNS-EVIDENCE + ;
+: _KDNS.TCB            ( adapter -- a ) _KDNS-TCB + ;
+: _KDNS.TCB-ISS        ( adapter -- a ) _KDNS-TCB-ISS + ;
+: _KDNS.TCP-PREFIX-U   ( adapter -- a ) _KDNS-TCP-PREFIX-U + ;
+: _KDNS.TCP-EXPECTED-U ( adapter -- a ) _KDNS-TCP-EXPECTED-U + ;
+: _KDNS.TCP-TX-OFFSET  ( adapter -- a ) _KDNS-TCP-TX-OFFSET + ;
+: _KDNS.CLOSE-DEADLINE-MS
+                        ( adapter -- a ) _KDNS-CLOSE-DEADLINE-MS + ;
+: _KDNS.AFTER-ARP-PHASE
+                        ( adapter -- a ) _KDNS-AFTER-ARP-PHASE + ;
+: _KDNS.STEP-COUNT     ( adapter -- a ) _KDNS-STEP-COUNT + ;
+: _KDNS.LAST-STEP-CYCLES
+                        ( adapter -- a ) _KDNS-LAST-STEP-CYCLES + ;
+: _KDNS.MAX-STEP-CYCLES
+                        ( adapter -- a ) _KDNS-MAX-STEP-CYCLES + ;
+: _KDNS.NOW-XT         ( adapter -- a ) _KDNS-NOW-XT + ;
+: _KDNS.STEP-XT        ( adapter -- a ) _KDNS-STEP-XT + ;
+: _KDNS.ARP-TARGET     ( adapter -- a ) _KDNS-ARP-TARGET + ;
+: _KDNS.WORK-MESSAGE   ( adapter -- a ) _KDNS-WORK-MESSAGE + ;
+: _KDNS.WORK-MESSAGE-U ( adapter -- a ) _KDNS-WORK-MESSAGE-U + ;
+: _KDNS.WORK-CURSOR    ( adapter -- a ) _KDNS-WORK-CURSOR + ;
+: _KDNS.WORK-NEXT      ( adapter -- a ) _KDNS-WORK-NEXT + ;
+: _KDNS.WORK-HOPS      ( adapter -- a ) _KDNS-WORK-HOPS + ;
+: _KDNS.WORK-JUMPED    ( adapter -- a ) _KDNS-WORK-JUMPED + ;
+: _KDNS.WORK-OUT-U     ( adapter -- a ) _KDNS-WORK-OUT-U + ;
+: _KDNS.DNS-FLAGS      ( adapter -- a ) _KDNS-DNS-FLAGS + ;
+: _KDNS.RCODE          ( adapter -- a ) _KDNS-RCODE + ;
+: _KDNS.TCP-PREFIX     ( adapter -- a ) _KDNS-TCP-PREFIX + ;
+: _KDNS.QNAME          ( adapter -- a ) _KDNS-QNAME + ;
+: _KDNS.NAME-SCRATCH   ( adapter -- a ) _KDNS-NAME-SCRATCH + ;
+: _KDNS.TCP-FRAME      ( adapter -- a ) _KDNS-TCP-FRAME + ;
+: _KDNS.QUERY          ( adapter -- a ) _KDNS-QUERY + ;
+
+\ KDOS's raw receive/TX scratch and TCP table are machine-global.  This gate
+\ serializes this adapter class only; it contains no DNS transaction state.
+VARIABLE _KDOSDNS-OWNER
+0 _KDOSDNS-OWNER !
+
+: _KDNS-NEXT-LOCAL-PORT  ( -- port )
+    RANDOM32 16383 AND 49152 + ;
+
+\ =====================================================================
+\  Generic admission and lifecycle predicates
+\ =====================================================================
+
+: _KDNS-CALLER>STATUS  ( caller-status -- status )
+    DUP CALLER-SPAN-S-OK = IF DROP KDOSDNS-S-OK EXIT THEN
+    DUP CALLER-SPAN-S-RANGE = IF DROP KDOSDNS-S-RANGE EXIT THEN
+    DUP CALLER-SPAN-S-PROTECTED = IF
+        DROP KDOSDNS-S-PROTECTED EXIT
+    THEN
+    DROP KDOSDNS-S-PLATFORM ;
+
+: _KDNS-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP KDOSDNS-S-INVALID EXIT THEN
+    DUP 0= IF 2DROP KDOSDNS-S-OK EXIT THEN
+    OVER 0= IF 2DROP KDOSDNS-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _KDNS-CALLER>STATUS ;
+
+: _KDNS-FIXED-STATUS  ( adapter -- status )
+    DUP 0= IF DROP KDOSDNS-S-INVALID EXIT THEN
+    DUP 7 AND IF DROP KDOSDNS-S-INVALID EXIT THEN
+    KDOSDNS-SIZE _KDNS-SPAN-STATUS ;
+
+: _KDNS-FLAG?  ( x -- flag )
+    DUP 0= SWAP -1 = OR ;
+
+: _KDNS-STATE-VALID?  ( state -- flag )
+    DUP KDOSDNS-STATE-IDLE >=
+    SWAP KDOSDNS-STATE-CANCELLED <= AND ;
+
+: _KDNS-STATUS-VALID?  ( status -- flag )
+    DUP KDOSDNS-S-OK >=
+    SWAP KDOSDNS-S-CLEANUP <= AND ;
+
+: _KDNS-PHASE-VALID?  ( phase -- flag )
+    DUP KDOSDNS-PHASE-IDLE >=
+    SWAP KDOSDNS-PHASE-CANCELLED <= AND ;
+
+: _KDNS-IDLE-STATE?  ( adapter -- flag )
+    DUP _KDNS.STATUS @ KDOSDNS-S-OK =
+    OVER _KDNS.PHASE @ KDOSDNS-PHASE-IDLE = AND
+    OVER _KDNS.QUERY-U @ 0= AND
+    SWAP _KDNS.RESPONSE-U @ 0= AND ;
+
+: _KDNS-ACTIVE-STATE?  ( adapter -- flag )
+    DUP _KDNS.STATUS @ KDOSDNS-S-PENDING =
+    OVER _KDNS.PHASE @ KDOSDNS-PHASE-ARP-CHECK >= AND
+    OVER _KDNS.PHASE @ KDOSDNS-PHASE-TCP-CLOSE-WAIT <= AND
+    OVER _KDNS.QUERY-U @ 17 >= AND
+    SWAP _KDNS.QNAME-U @ 1 >= AND ;
+
+: _KDNS-COMPLETE-STATE?  ( adapter -- flag )
+    DUP _KDNS.STATUS @ KDOSDNS-S-OK =
+    OVER _KDNS.PHASE @ KDOSDNS-PHASE-DONE = AND
+    OVER _KDNS.RESPONSE-U @ 12 >= AND
+    OVER _KDNS.EVIDENCE @
+    KDOSDNS-E-DNS-HEADER KDOSDNS-E-ID OR
+    KDOSDNS-E-QUESTION OR KDOSDNS-E-RESPONSE OR
+    AND
+    KDOSDNS-E-DNS-HEADER KDOSDNS-E-ID OR
+    KDOSDNS-E-QUESTION OR KDOSDNS-E-RESPONSE OR = AND
+    SWAP DROP ;
+
+: _KDNS-FAILED-STATE?  ( adapter -- flag )
+    DUP _KDNS.PHASE @ KDOSDNS-PHASE-FAILED =
+    OVER _KDNS.STATUS @ KDOSDNS-S-OK <> AND
+    OVER _KDNS.STATUS @ KDOSDNS-S-PENDING <> AND
+    OVER _KDNS.STATUS @ KDOSDNS-S-CANCELLED <> AND
+    SWAP _KDNS.RESPONSE-U @ 0= AND ;
+
+: _KDNS-CANCELLED-STATE?  ( adapter -- flag )
+    DUP _KDNS.PHASE @ KDOSDNS-PHASE-CANCELLED =
+    OVER _KDNS.STATUS @ DUP KDOSDNS-S-CANCELLED =
+    SWAP KDOSDNS-S-CLEANUP = OR AND
+    OVER _KDNS.QUERY-U @ 0= AND
+    SWAP _KDNS.RESPONSE-U @ 0= AND ;
+
+: _KDNS-LIFECYCLE?  ( adapter -- flag )
+    DUP _KDNS.STATE @ KDOSDNS-STATE-IDLE = IF
+        _KDNS-IDLE-STATE? EXIT
+    THEN
+    DUP _KDNS.STATE @ KDOSDNS-STATE-ACTIVE = IF
+        _KDNS-ACTIVE-STATE? EXIT
+    THEN
+    DUP _KDNS.STATE @ KDOSDNS-STATE-COMPLETE = IF
+        _KDNS-COMPLETE-STATE? EXIT
+    THEN
+    DUP _KDNS.STATE @ KDOSDNS-STATE-FAILED = IF
+        _KDNS-FAILED-STATE? EXIT
+    THEN
+    _KDNS-CANCELLED-STATE? ;
+
+: KDOSDNS-VALID?  ( adapter -- flag )
+    DUP _KDNS-FIXED-STATUS ?DUP IF 2DROP 0 EXIT THEN
+    DUP _KDNS.MAGIC @ _KDNS-MAGIC-VALUE <> IF DROP 0 EXIT THEN
+    DUP _KDNS.STATE @ _KDNS-STATE-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _KDNS.STATUS @ _KDNS-STATUS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _KDNS.PHASE @ _KDNS-PHASE-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _KDNS.RESPONSE-CAP @
+    DUP 12 < OVER KDOSDNS-RESPONSE-MAX > OR IF
+        2DROP 0 EXIT
+    THEN
+    DROP
+    DUP _KDNS.RESPONSE @
+    OVER _KDNS.RESPONSE-CAP @ _KDNS-SPAN-STATUS
+    KDOSDNS-S-OK <> IF DROP 0 EXIT THEN
+    DUP _KDNS.RESPONSE @ OVER _KDNS.RESPONSE-CAP @
+    2 PICK KDOSDNS-SIZE MSPAN-OVERLAP? IF DROP 0 EXIT THEN
+    DUP _KDNS.RESPONSE-U @
+    DUP 0< IF 2DROP 0 EXIT THEN
+    OVER _KDNS.RESPONSE-CAP @ U> IF DROP 0 EXIT THEN
+    DUP _KDNS.QUERY-U @
+    DUP 0< SWAP KDOSDNS-QUERY-MAX > OR IF DROP 0 EXIT THEN
+    DUP _KDNS.QNAME-U @
+    DUP 0< SWAP KDOSDNS-WIRE-NAME-MAX > OR IF DROP 0 EXIT THEN
+    DUP _KDNS.USED-TCP @ _KDNS-FLAG? 0= IF DROP 0 EXIT THEN
+    DUP _KDNS.EVIDENCE @
+    DUP 0< SWAP 2047 > OR IF DROP 0 EXIT THEN
+    DUP _KDNS.DNS-FLAGS @
+    DUP 0< SWAP 65535 > OR IF DROP 0 EXIT THEN
+    DUP _KDNS.RCODE @ DUP 0< SWAP 15 > OR IF DROP 0 EXIT THEN
+    DUP _KDNS.TCP-PREFIX-U @
+    DUP 0< SWAP 2 > OR IF DROP 0 EXIT THEN
+    DUP _KDNS.TCP-EXPECTED-U @
+    DUP 0< SWAP KDOSDNS-RESPONSE-MAX > OR IF DROP 0 EXIT THEN
+    DUP _KDNS.TCP-TX-OFFSET @
+    DUP 0< IF 2DROP 0 EXIT THEN
+    OVER _KDNS.QUERY-U @ 2 + U> IF DROP 0 EXIT THEN
+    DUP _KDNS.DNS-FLAGS @ 0x0F AND
+    OVER _KDNS.RCODE @ <> IF DROP 0 EXIT THEN
+    DUP _KDNS-LIFECYCLE? 0= IF
+        DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+: KDOSDNS-STATE@  ( adapter -- state )
+    DUP KDOSDNS-VALID? IF _KDNS.STATE @
+    ELSE DROP KDOSDNS-STATE-FAILED THEN ;
+
+: KDOSDNS-STATUS@  ( adapter -- status )
+    DUP KDOSDNS-VALID? IF _KDNS.STATUS @
+    ELSE DROP KDOSDNS-S-INVALID THEN ;
+
+: KDOSDNS-PHASE@  ( adapter -- phase )
+    DUP KDOSDNS-VALID? IF _KDNS.PHASE @
+    ELSE DROP KDOSDNS-PHASE-FAILED THEN ;
+
+: KDOSDNS-USED-TCP?  ( adapter -- flag )
+    DUP KDOSDNS-VALID? IF _KDNS.USED-TCP @
+    ELSE DROP 0 THEN ;
+
+: KDOSDNS-RCODE@  ( adapter -- rcode )
+    DUP KDOSDNS-VALID? IF _KDNS.RCODE @
+    ELSE DROP 0 THEN ;
+
+: KDOSDNS-FLAGS@  ( adapter -- header-flags )
+    DUP KDOSDNS-VALID? IF _KDNS.DNS-FLAGS @
+    ELSE DROP 0 THEN ;
+
+: KDOSDNS-EVIDENCE@  ( adapter -- evidence )
+    DUP KDOSDNS-VALID? IF _KDNS.EVIDENCE @
+    ELSE DROP 0 THEN ;
+
+: KDOSDNS-STEP-COUNT@  ( adapter -- count )
+    DUP KDOSDNS-VALID? IF _KDNS.STEP-COUNT @
+    ELSE DROP 0 THEN ;
+
+: KDOSDNS-LAST-STEP-CYCLES@  ( adapter -- cycles )
+    DUP KDOSDNS-VALID? IF _KDNS.LAST-STEP-CYCLES @
+    ELSE DROP 0 THEN ;
+
+: KDOSDNS-MAX-STEP-CYCLES@  ( adapter -- cycles )
+    DUP KDOSDNS-VALID? IF _KDNS.MAX-STEP-CYCLES @
+    ELSE DROP 0 THEN ;
+
+\ =====================================================================
+\  Standard one-question query admission
+\ =====================================================================
+
+VARIABLE _KDQV-A
+VARIABLE _KDQV-U
+VARIABLE _KDQV-POS
+VARIABLE _KDQV-LABEL
+
+: _KDNS-QUERY-VALID?  ( query-a query-u -- flag )
+    _KDQV-U ! _KDQV-A !
+    _KDQV-A @ 0= _KDQV-U @ 17 < OR
+    _KDQV-U @ KDOSDNS-QUERY-MAX > OR IF 0 EXIT THEN
+    _KDQV-A @ _KDQV-U @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _KDQV-A @ 2 + NW16@ DUP 0x8000 AND IF DROP 0 EXIT THEN
+    DUP 0x7800 AND IF DROP 0 EXIT THEN
+    \ AA, TC, RA, reserved Z, and query RCODE are response-only/invalid.
+    \ RD, AD, and CD remain available to a standards-aware caller.
+    0x06CF AND IF 0 EXIT THEN
+    _KDQV-A @ 4 + NW16@ 1 <> IF 0 EXIT THEN
+    _KDQV-A @ 6 + NW16@ IF 0 EXIT THEN
+    _KDQV-A @ 8 + NW16@ IF 0 EXIT THEN
+    _KDQV-A @ 10 + NW16@ IF 0 EXIT THEN
+    12 _KDQV-POS !
+    BEGIN
+        _KDQV-POS @ _KDQV-U @ U<
+    WHILE
+        _KDQV-A @ _KDQV-POS @ + C@ DUP _KDQV-LABEL !
+        0= IF
+            _KDQV-POS @ 12 - 1+
+            KDOSDNS-WIRE-NAME-MAX > IF 0 EXIT THEN
+            1 _KDQV-POS +!
+            _KDQV-POS @ 4 + _KDQV-U @ =
+            EXIT
+        THEN
+        _KDQV-LABEL @ 63 > IF 0 EXIT THEN
+        _KDQV-POS @ 1+ _KDQV-LABEL @ + DUP _KDQV-U @ U> IF
+            DROP 0 EXIT
+        THEN
+        _KDQV-POS !
+        _KDQV-POS @ 12 - KDOSDNS-WIRE-NAME-MAX > IF 0 EXIT THEN
+    REPEAT
+    0 ;
+
+VARIABLE _KDQC-A
+VARIABLE _KDQC-T
+VARIABLE _KDQC-POS
+VARIABLE _KDQC-OUT
+VARIABLE _KDQC-N
+
+: _KDNS-ASCII-LOWER  ( c -- c )
+    DUP [CHAR] A >= OVER [CHAR] Z <= AND IF 32 + THEN ;
+
+: _KDNS-CAPTURE-QUESTION  ( query-a adapter -- )
+    _KDQC-T ! _KDQC-A !
+    12 _KDQC-POS !
+    0 _KDQC-OUT !
+    BEGIN
+        _KDQC-A @ _KDQC-POS @ + C@ DUP
+        _KDQC-T @ _KDNS.QNAME _KDQC-OUT @ + C!
+        1 _KDQC-OUT +!
+        1 _KDQC-POS +!
+        DUP 0<>
+    WHILE
+        _KDQC-N !
+        BEGIN
+            _KDQC-N @ 0>
+        WHILE
+            _KDQC-A @ _KDQC-POS @ + C@ _KDNS-ASCII-LOWER
+            _KDQC-T @ _KDNS.QNAME _KDQC-OUT @ + C!
+            1 _KDQC-POS +!
+            1 _KDQC-OUT +!
+            -1 _KDQC-N +!
+        REPEAT
+    REPEAT
+    DROP
+    _KDQC-OUT @ _KDQC-T @ _KDNS.QNAME-U !
+    _KDQC-A @ _KDQC-POS @ + NW16@ _KDQC-T @ _KDNS.QTYPE !
+    _KDQC-A @ _KDQC-POS @ 2 + + NW16@ _KDQC-T @ _KDNS.QCLASS ! ;
+
+\ =====================================================================
+\  Compression-safe response-question binding
+\ =====================================================================
+
+VARIABLE _KDDN-T
+VARIABLE _KDDN-OCTET
+VARIABLE _KDDN-LABEL
+VARIABLE _KDDN-PTR
+VARIABLE _KDDN-SRC
+VARIABLE _KDDN-DST
+VARIABLE _KDDN-LEFT
+
+: _KDNS-WORK-APPEND-BYTE  ( c adapter -- flag )
+    _KDDN-T !
+    _KDDN-T @ _KDNS.WORK-OUT-U @ KDOSDNS-WIRE-NAME-MAX >= IF
+        DROP 0 EXIT
+    THEN
+    _KDDN-T @ _KDNS.NAME-SCRATCH
+    _KDDN-T @ _KDNS.WORK-OUT-U @ + C!
+    1 _KDDN-T @ _KDNS.WORK-OUT-U +!
+    -1 ;
+
+: _KDNS-WORK-COPY-LABEL  ( source-a label-u adapter -- flag )
+    _KDDN-T ! _KDDN-LEFT ! _KDDN-SRC !
+    _KDDN-T @ _KDNS.WORK-OUT-U @
+    _KDDN-LEFT @ + KDOSDNS-WIRE-NAME-MAX > IF 0 EXIT THEN
+    _KDDN-T @ _KDNS.NAME-SCRATCH
+    _KDDN-T @ _KDNS.WORK-OUT-U @ + _KDDN-DST !
+    BEGIN
+        _KDDN-LEFT @ 0>
+    WHILE
+        _KDDN-SRC @ C@ _KDNS-ASCII-LOWER _KDDN-DST @ C!
+        1 _KDDN-SRC +!
+        1 _KDDN-DST +!
+        -1 _KDDN-LEFT +!
+        1 _KDDN-T @ _KDNS.WORK-OUT-U +!
+    REPEAT
+    -1 ;
+
+: _KDNS-DECODE-NAME  ( message-a message-u position adapter -- flag )
+    _KDDN-T !
+    _KDDN-T @ _KDNS.WORK-CURSOR !
+    _KDDN-T @ _KDNS.WORK-MESSAGE-U !
+    _KDDN-T @ _KDNS.WORK-MESSAGE !
+    0 _KDDN-T @ _KDNS.WORK-NEXT !
+    0 _KDDN-T @ _KDNS.WORK-HOPS !
+    0 _KDDN-T @ _KDNS.WORK-JUMPED !
+    0 _KDDN-T @ _KDNS.WORK-OUT-U !
+    _KDDN-T @ _KDNS.NAME-SCRATCH 256 0 FILL
+    BEGIN
+        _KDDN-T @ _KDNS.WORK-CURSOR @
+        _KDDN-T @ _KDNS.WORK-MESSAGE-U @ U<
+    WHILE
+        _KDDN-T @ _KDNS.WORK-MESSAGE @
+        _KDDN-T @ _KDNS.WORK-CURSOR @ + C@ DUP _KDDN-OCTET !
+        DUP 0= IF
+            DROP
+            0 _KDDN-T @ _KDNS-WORK-APPEND-BYTE 0= IF 0 EXIT THEN
+            _KDDN-T @ _KDNS.WORK-JUMPED @ 0= IF
+                _KDDN-T @ _KDNS.WORK-CURSOR @ 1+
+                _KDDN-T @ _KDNS.WORK-NEXT !
+            THEN
+            -1 EXIT
+        THEN
+        DUP 0xC0 AND 0xC0 = IF
+            DROP
+            _KDDN-T @ _KDNS.WORK-CURSOR @ 1+
+            _KDDN-T @ _KDNS.WORK-MESSAGE-U @ U< 0= IF 0 EXIT THEN
+            _KDDN-OCTET @ 0x3F AND 8 LSHIFT
+            _KDDN-T @ _KDNS.WORK-MESSAGE @
+            _KDDN-T @ _KDNS.WORK-CURSOR @ 1+ + C@ OR
+            _KDDN-PTR !
+            _KDDN-PTR @
+            _KDDN-T @ _KDNS.WORK-CURSOR @ U< 0= IF 0 EXIT THEN
+            _KDDN-T @ _KDNS.WORK-JUMPED @ 0= IF
+                _KDDN-T @ _KDNS.WORK-CURSOR @ 2 +
+                _KDDN-T @ _KDNS.WORK-NEXT !
+            THEN
+            -1 _KDDN-T @ _KDNS.WORK-JUMPED !
+            1 _KDDN-T @ _KDNS.WORK-HOPS +!
+            _KDDN-T @ _KDNS.WORK-HOPS @
+            KDOSDNS-COMPRESSION-HOPS-MAX > IF 0 EXIT THEN
+            _KDDN-PTR @ _KDDN-T @ _KDNS.WORK-CURSOR !
+        ELSE
+            DUP 0xC0 AND IF DROP 0 EXIT THEN
+            DUP 63 > IF DROP 0 EXIT THEN
+            DUP _KDDN-LABEL !
+            _KDDN-T @ _KDNS-WORK-APPEND-BYTE 0= IF 0 EXIT THEN
+            _KDDN-T @ _KDNS.WORK-CURSOR @ 1+
+            _KDDN-LABEL @ + DUP
+            _KDDN-T @ _KDNS.WORK-MESSAGE-U @ U> IF DROP 0 EXIT THEN
+            _KDDN-T @ _KDNS.WORK-MESSAGE @
+            _KDDN-T @ _KDNS.WORK-CURSOR @ 1+ +
+            _KDDN-LABEL @ _KDDN-T @
+            _KDNS-WORK-COPY-LABEL 0= IF 0 EXIT THEN
+            _KDDN-T @ _KDNS.WORK-CURSOR !
+            _KDDN-T @ _KDNS.WORK-JUMPED @ 0= IF
+                _KDDN-T @ _KDNS.WORK-CURSOR @
+                _KDDN-T @ _KDNS.WORK-NEXT !
+            THEN
+        THEN
+    REPEAT
+    0 ;
+
+VARIABLE _KDQM-A
+VARIABLE _KDQM-U
+VARIABLE _KDQM-T
+
+: _KDNS-QUESTION-MATCH?  ( response-a response-u adapter -- flag )
+    _KDQM-T ! _KDQM-U ! _KDQM-A !
+    _KDQM-U @ 12 < IF 0 EXIT THEN
+    _KDQM-A @ NW16@ _KDQM-T @ _KDNS.QUERY-ID @ <> IF 0 EXIT THEN
+    _KDQM-A @ 2 + NW16@
+    DUP 0x8000 AND 0= IF DROP 0 EXIT THEN
+    0x7800 AND IF 0 EXIT THEN
+    _KDQM-A @ 2 + NW16@ 0x0040 AND IF 0 EXIT THEN
+    _KDQM-A @ 4 + NW16@ 1 <> IF 0 EXIT THEN
+    _KDQM-A @ _KDQM-U @ 12 _KDQM-T @
+    _KDNS-DECODE-NAME 0= IF 0 EXIT THEN
+    _KDQM-T @ _KDNS.WORK-OUT-U @
+    _KDQM-T @ _KDNS.QNAME-U @ <> IF 0 EXIT THEN
+    _KDQM-T @ _KDNS.NAME-SCRATCH
+    _KDQM-T @ _KDNS.QNAME
+    _KDQM-T @ _KDNS.QNAME-U @ SAMESTR? 0= IF 0 EXIT THEN
+    _KDQM-T @ _KDNS.WORK-NEXT @ 4 +
+    _KDQM-U @ U> IF 0 EXIT THEN
+    _KDQM-A @ _KDQM-T @ _KDNS.WORK-NEXT @ + NW16@
+    _KDQM-T @ _KDNS.QTYPE @ <> IF 0 EXIT THEN
+    _KDQM-A @ _KDQM-T @ _KDNS.WORK-NEXT @ 2 + + NW16@
+    _KDQM-T @ _KDNS.QCLASS @ = ;
+
+: _KDNS-CAPTURE-DIAGNOSTICS  ( response-a adapter -- )
+    >R
+    2 + NW16@ DUP R@ _KDNS.DNS-FLAGS !
+    0x0F AND R> _KDNS.RCODE ! ;
+
+\ =====================================================================
+\  Native KDOS ownership, route, TCP, and completion helpers
+\ =====================================================================
+
+: _KDNS-NOW-DEFAULT  ( adapter -- ms )
+    DROP MS@ ;
+
+: _KDNS-NOW@  ( adapter -- ms )
+    DUP _KDNS.NOW-XT @ EXECUTE ;
+
+: _KDNS-TIME-REACHED?  ( now deadline -- flag )
+    - 0>= ;
+
+VARIABLE _KDPA
+
+: _KDNS-PHASE!  ( phase -- )
+    _KDPA @ _KDNS.PHASE ! ;
+
+: _KDNS-EVIDENCE+  ( bits adapter -- )
+    _KDNS.EVIDENCE DUP @ ROT OR SWAP ! ;
+
+: _KDNS-RETRY-AFTER!  ( delay-ms -- )
+    _KDPA @ _KDNS-NOW@ +
+    _KDPA @ _KDNS.RETRY-AT-MS ! ;
+
+: _KDNS-RETRY-DUE?  ( -- flag )
+    _KDPA @ _KDNS-NOW@
+    _KDPA @ _KDNS.RETRY-AT-MS @ _KDNS-TIME-REACHED? ;
+
+: _KDNS-REMOTE-CACHED?  ( adapter -- flag )
+    _KDNS.SERVER-IP NEXT-HOP ARP-LOOKUP 0<> ;
+
+VARIABLE _KDTP-TCB
+VARIABLE _KDTP-BASE
+
+: _KDNS-TCB-POINTER?  ( tcb -- flag )
+    _KDTP-TCB !
+    TCP-TCBS @ DUP _KDTP-BASE ! 0= IF 0 EXIT THEN
+    _KDTP-TCB @ _KDTP-BASE @ U< IF 0 EXIT THEN
+    _KDTP-TCB @ _KDTP-BASE @ -
+    DUP /TCB MOD 0=
+    SWAP /TCB /TCP-MAX-CONN * U< AND ;
+
+: _KDNS-TCB-MATCH?  ( adapter -- flag )
+    DUP _KDNS.TCB @ DUP 0= IF 2DROP 0 EXIT THEN
+    DUP _KDNS-TCB-POINTER? 0= IF 2DROP 0 EXIT THEN
+    _KDTP-TCB !
+    _KDTP-TCB @ TCB.LOCAL-PORT @
+    OVER _KDNS.LOCAL-PORT @ <>
+    _KDTP-TCB @ TCB.REMOTE-PORT @ 53 <> OR
+    _KDTP-TCB @ TCB.REMOTE-IP
+    2 PICK _KDNS.SERVER-IP IP= 0= OR
+    _KDTP-TCB @ TCB.ISS @
+    2 PICK _KDNS.TCB-ISS @ <> OR
+    NIP 0= ;
+
+: _KDNS-TCB@  ( adapter -- tcb | 0 )
+    DUP _KDNS-TCB-MATCH? IF _KDNS.TCB @
+    ELSE DROP 0 THEN ;
+
+VARIABLE _KDTR-A
+VARIABLE _KDTR-HDR
+VARIABLE _KDTR-U
+
+: _KDNS-TCP-RECEIVE-ONE  ( adapter -- )
+    _KDTR-A !
+    _KDTR-A @ _KDNS-REMOTE-CACHED? 0= IF EXIT THEN
+    IP-RECV DUP 0= IF 2DROP EXIT THEN
+    _KDTR-U ! _KDTR-HDR !
+    _KDTR-HDR @ IP-H.PROTO C@ IP-PROTO-TCP <> IF EXIT THEN
+    _KDTR-HDR @ IP-H.SRC NEXT-HOP ARP-LOOKUP 0= IF EXIT THEN
+    _KDTR-HDR @ _KDTR-U @ TCP-INPUT ;
+
+VARIABLE _KDAB-A
+VARIABLE _KDAB-OK
+
+: _KDNS-TCP-ABORT-INNER  ( -- )
+    _KDAB-A @ _KDNS.TCB @ 0= IF
+        -1 _KDAB-OK ! EXIT
+    THEN
+    _KDAB-A @ _KDNS.TCB @ DUP _KDNS-TCB-POINTER? 0= IF
+        DROP 0 _KDAB-OK ! EXIT
+    THEN
+    DROP
+    \ A valid table slot with a changed fingerprint proves that our old
+    \ connection is gone.  Never abort a slot that may already be reused.
+    _KDAB-A @ _KDNS-TCB@ ?DUP IF TCP-ABORT DROP THEN
+    -1 _KDAB-OK ! ;
+
+: _KDNS-TCP-ABORT  ( adapter -- cleanup-ok? )
+    _KDAB-A !
+    0 _KDAB-OK !
+    ['] _KDNS-TCP-ABORT-INNER CATCH IF 0 EXIT THEN
+    _KDAB-OK @ 0= IF 0 EXIT THEN
+    0 _KDAB-A @ _KDNS.TCB !
+    0 _KDAB-A @ _KDNS.TCB-ISS !
+    -1 ;
+
+: _KDNS-RELEASE-OWNER  ( adapter -- )
+    _KDOSDNS-OWNER @ OVER = IF 0 _KDOSDNS-OWNER ! THEN
+    DROP ;
+
+: _KDNS-CLEAR-RESPONSE  ( adapter -- )
+    DUP _KDNS.RESPONSE @ OVER _KDNS.RESPONSE-CAP @ 0 FILL
+    0 SWAP _KDNS.RESPONSE-U ! ;
+
+: _KDNS-FAIL  ( status adapter -- status )
+    _KDPA ! DUP
+    _KDPA @ _KDNS.STATUS !
+    DUP KDOSDNS-S-CLEANUP <>
+    _KDPA @ _KDNS.TCB @ 0<> AND IF
+        _KDPA @ _KDNS-TCP-ABORT 0= IF
+            DROP KDOSDNS-S-CLEANUP DUP
+            _KDPA @ _KDNS.STATUS !
+        THEN
+    THEN
+    _KDPA @ _KDNS-CLEAR-RESPONSE
+    KDOSDNS-PHASE-FAILED _KDPA @ _KDNS.PHASE !
+    KDOSDNS-STATE-FAILED _KDPA @ _KDNS.STATE !
+    _KDPA @ _KDNS.TCB @ 0= IF
+        _KDPA @ _KDNS-RELEASE-OWNER
+    THEN ;
+
+: _KDNS-FINISH-OK  ( adapter -- status )
+    _KDPA !
+    KDOSDNS-E-RESPONSE _KDPA @ _KDNS-EVIDENCE+
+    KDOSDNS-S-OK _KDPA @ _KDNS.STATUS !
+    KDOSDNS-PHASE-DONE _KDPA @ _KDNS.PHASE !
+    KDOSDNS-STATE-COMPLETE _KDPA @ _KDNS.STATE !
+    _KDPA @ _KDNS-RELEASE-OWNER
+    KDOSDNS-S-OK ;
+
+: _KDNS-TCP-FINISH-FALLBACK  ( adapter -- status )
+    DUP _KDNS-TCP-ABORT 0= IF
+        KDOSDNS-S-CLEANUP SWAP _KDNS-FAIL EXIT
+    THEN
+    KDOSDNS-E-CLEANUP-FALLBACK OVER _KDNS-EVIDENCE+
+    _KDNS-FINISH-OK ;
+
+\ =====================================================================
+\  UDP response admission
+\ =====================================================================
+
+VARIABLE _KDU-A
+VARIABLE _KDU-HDR
+VARIABLE _KDU-IP-U
+VARIABLE _KDU-UDP
+VARIABLE _KDU-UDP-U
+VARIABLE _KDU-MESSAGE
+VARIABLE _KDU-MESSAGE-U
+
+\ Result: 0 unrelated, 1 complete response, 2 matched TC, 3 capacity.
+: _KDNS-UDP-RECEIVE-ONE  ( adapter -- result )
+    _KDU-A !
+    IP-RECV DUP 0= IF 2DROP 0 EXIT THEN
+    _KDU-IP-U ! _KDU-HDR !
+    _KDU-HDR @ IP-H.PROTO C@ IP-PROTO-UDP <> IF 0 EXIT THEN
+    _KDU-IP-U @ /IP-HDR - DUP /UDP-HDR < IF DROP 0 EXIT THEN
+    _KDU-HDR @ IP-H.DATA DUP _KDU-UDP !
+    UDP-H.LEN NW16@ DUP _KDU-UDP-U ! <> IF 0 EXIT THEN
+    _KDU-HDR @ IP-H.SRC _KDU-A @ _KDNS.SERVER-IP IP= 0= IF 0 EXIT THEN
+    _KDU-UDP @ UDP-H.SPORT NW16@ 53 <> IF 0 EXIT THEN
+    _KDU-UDP @ UDP-H.DPORT NW16@
+    _KDU-A @ _KDNS.LOCAL-PORT @ <> IF 0 EXIT THEN
+    _KDU-HDR @ IP-H.SRC _KDU-HDR @ IP-H.DST
+    _KDU-UDP @ _KDU-UDP-U @ UDP-VERIFY-CKSUM 0= IF 0 EXIT THEN
+    _KDU-UDP @ UDP-H.DATA _KDU-MESSAGE !
+    _KDU-UDP-U @ /UDP-HDR - _KDU-MESSAGE-U !
+    _KDU-MESSAGE @ _KDU-MESSAGE-U @ _KDU-A @
+    _KDNS-QUESTION-MATCH? 0= IF 0 EXIT THEN
+    KDOSDNS-E-SERVER KDOSDNS-E-LOCAL-PORT OR
+    KDOSDNS-E-UDP-CHECKSUM OR _KDU-A @ _KDNS-EVIDENCE+
+    _KDU-MESSAGE @ _KDU-A @ _KDNS-CAPTURE-DIAGNOSTICS
+    KDOSDNS-E-DNS-HEADER KDOSDNS-E-ID OR
+    KDOSDNS-E-QUESTION OR _KDU-A @ _KDNS-EVIDENCE+
+    _KDU-MESSAGE @ 2 + NW16@ 0x0200 AND IF
+        KDOSDNS-E-TRUNCATED _KDU-A @ _KDNS-EVIDENCE+
+        2 EXIT
+    THEN
+    _KDU-MESSAGE-U @ _KDU-A @ _KDNS.RESPONSE-CAP @ U> IF 3 EXIT THEN
+    _KDU-MESSAGE @ _KDU-A @ _KDNS.RESPONSE @
+    _KDU-MESSAGE-U @ CMOVE
+    _KDU-MESSAGE-U @ _KDU-A @ _KDNS.RESPONSE-U !
+    1 ;
+
+\ =====================================================================
+\  Cooperative lower state machine
+\ =====================================================================
+
+: _KDNS-STEP-ARP-CHECK  ( -- status )
+    _KDPA @ _KDNS.SERVER-IP NEXT-HOP
+    _KDPA @ _KDNS.ARP-TARGET 4 CMOVE
+    _KDPA @ _KDNS.ARP-TARGET ARP-LOOKUP IF
+        _KDPA @ _KDNS.AFTER-ARP-PHASE @ _KDNS-PHASE!
+    ELSE
+        0 _KDPA @ _KDNS.RETRIES !
+        KDOSDNS-PHASE-ARP-SEND _KDNS-PHASE!
+    THEN
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-ARP-SEND  ( -- status )
+    _KDPA @ _KDNS.RETRIES @ KDOSDNS-RETRY-MAX >= IF
+        KDOSDNS-S-TIMEOUT _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    _KDPA @ _KDNS.ARP-TARGET ARP-SEND-REQUEST
+    1 _KDPA @ _KDNS.RETRIES +!
+    KDOSDNS-ARP-RETRY-MS _KDNS-RETRY-AFTER!
+    KDOSDNS-PHASE-ARP-WAIT _KDNS-PHASE!
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-ARP-WAIT  ( -- status )
+    ARP-POLL IF DROP
+    ELSE
+        DUP 0> IF
+            _KDPA @ _KDNS.ARP-TARGET ARP-REPLY-FOR? IF
+                ETH-RX-BUF ETH-PLD ARP-PARSE-REPLY
+            THEN
+        THEN DROP
+    THEN
+    _KDPA @ _KDNS.ARP-TARGET ARP-LOOKUP IF
+        _KDPA @ _KDNS.AFTER-ARP-PHASE @ _KDNS-PHASE!
+    ELSE
+        _KDNS-RETRY-DUE? IF
+            KDOSDNS-PHASE-ARP-SEND _KDNS-PHASE!
+        THEN
+    THEN
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-UDP-SEND  ( -- status )
+    _KDPA @ _KDNS-REMOTE-CACHED? 0= IF
+        KDOSDNS-PHASE-UDP-SEND
+        _KDPA @ _KDNS.AFTER-ARP-PHASE !
+        KDOSDNS-PHASE-ARP-CHECK _KDNS-PHASE!
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDPA @ _KDNS.RETRIES @ KDOSDNS-RETRY-MAX >= IF
+        KDOSDNS-S-TIMEOUT _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    _KDPA @ _KDNS.SERVER-IP 53
+    _KDPA @ _KDNS.LOCAL-PORT @
+    _KDPA @ _KDNS.QUERY
+    _KDPA @ _KDNS.QUERY-U @ UDP-SEND IF
+        KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    1 _KDPA @ _KDNS.RETRIES +!
+    KDOSDNS-UDP-RETRY-MS _KDNS-RETRY-AFTER!
+    KDOSDNS-PHASE-UDP-WAIT _KDNS-PHASE!
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-BEGIN-TCP  ( -- status )
+    -1 _KDPA @ _KDNS.USED-TCP !
+    0 _KDPA @ _KDNS.TCP-PREFIX-U !
+    0 _KDPA @ _KDNS.TCP-EXPECTED-U !
+    0 _KDPA @ _KDNS.TCP-TX-OFFSET !
+    _KDPA @ _KDNS.TCP-PREFIX 8 0 FILL
+    _KDPA @ _KDNS.QUERY-U @
+    _KDPA @ _KDNS.TCP-FRAME NW16!
+    KDOSDNS-PHASE-TCP-OPEN
+    _KDPA @ _KDNS.AFTER-ARP-PHASE !
+    KDOSDNS-PHASE-ARP-CHECK _KDNS-PHASE!
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-UDP-WAIT  ( -- status )
+    _KDPA @ _KDNS-UDP-RECEIVE-ONE
+    DUP 1 = IF DROP _KDPA @ _KDNS-FINISH-OK EXIT THEN
+    DUP 2 = IF DROP _KDNS-BEGIN-TCP EXIT THEN
+    3 = IF KDOSDNS-S-CAPACITY _KDPA @ _KDNS-FAIL EXIT THEN
+    _KDNS-RETRY-DUE? IF
+        KDOSDNS-PHASE-UDP-SEND _KDNS-PHASE!
+    THEN
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-TCP-OPEN  ( -- status )
+    _KDPA @ _KDNS-REMOTE-CACHED? 0= IF
+        KDOSDNS-PHASE-TCP-OPEN
+        _KDPA @ _KDNS.AFTER-ARP-PHASE !
+        KDOSDNS-PHASE-ARP-CHECK _KDNS-PHASE!
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDNS-NEXT-LOCAL-PORT DUP _KDPA @ _KDNS.LOCAL-PORT !
+    _KDPA @ _KDNS.SERVER-IP 53 ROT TCP-CONNECT DUP 0= IF
+        DROP KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    DUP _KDPA @ _KDNS.TCB !
+    TCB.ISS @ _KDPA @ _KDNS.TCB-ISS !
+    KDOSDNS-PHASE-TCP-WAIT _KDNS-PHASE!
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-TCP-ROUTE-OR  ( resume-phase -- ready? )
+    _KDPA @ _KDNS-REMOTE-CACHED? IF DROP -1 EXIT THEN
+    _KDPA @ _KDNS.AFTER-ARP-PHASE !
+    KDOSDNS-PHASE-ARP-CHECK _KDNS-PHASE!
+    0 ;
+
+VARIABLE _KDTS-TCB
+VARIABLE _KDTS-N
+VARIABLE _KDTS-REMAIN
+
+: _KDNS-STEP-TCP-WAIT  ( -- status )
+    KDOSDNS-PHASE-TCP-WAIT _KDNS-TCP-ROUTE-OR 0= IF
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDPA @ _KDNS-TCP-RECEIVE-ONE
+    _KDPA @ _KDNS-TCB@ DUP 0= IF
+        DROP KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    TCB.STATE @ DUP TCPS-ESTABLISHED = IF
+        DROP
+        KDOSDNS-E-TCP-CONNECTED _KDPA @ _KDNS-EVIDENCE+
+        KDOSDNS-PHASE-TCP-SEND _KDNS-PHASE!
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    TCPS-SYN-SENT = IF KDOSDNS-S-PENDING EXIT THEN
+    KDOSDNS-S-IO _KDPA @ _KDNS-FAIL ;
+
+: _KDNS-STEP-TCP-SEND  ( -- status )
+    KDOSDNS-PHASE-TCP-SEND _KDNS-TCP-ROUTE-OR 0= IF
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDPA @ _KDNS-TCB@ DUP 0= IF
+        DROP KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    DUP _KDTS-TCB !
+    TCB.STATE @ TCPS-ESTABLISHED <> IF
+        KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    _KDTS-TCB @ TCP-SEND-READY? 0= IF
+        _KDPA @ _KDNS-TCP-RECEIVE-ONE
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDPA @ _KDNS.QUERY-U @ 2 +
+    _KDPA @ _KDNS.TCP-TX-OFFSET @ - _KDTS-REMAIN !
+    _KDTS-REMAIN @ 0= IF
+        KDOSDNS-PHASE-TCP-PREFIX _KDNS-PHASE!
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDTS-TCB @
+    _KDPA @ _KDNS.TCP-FRAME
+    _KDPA @ _KDNS.TCP-TX-OFFSET @ +
+    _KDTS-REMAIN @ TCP-SEND _KDTS-N !
+    _KDTS-N @ 0< _KDTS-N @ _KDTS-REMAIN @ > OR IF
+        KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    _KDTS-N @ _KDPA @ _KDNS.TCP-TX-OFFSET +!
+    _KDPA @ _KDNS.TCP-TX-OFFSET @
+    _KDPA @ _KDNS.QUERY-U @ 2 + = IF
+        KDOSDNS-PHASE-TCP-PREFIX _KDNS-PHASE!
+    THEN
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-TCP-READABLE?  ( tcb -- flag )
+    DUP TCB.STATE @ DUP TCPS-ESTABLISHED =
+    SWAP TCPS-CLOSE-WAIT = OR
+    SWAP TCB.RX-COUNT @ 0> AND ;
+
+: _KDNS-STEP-TCP-PREFIX  ( -- status )
+    KDOSDNS-PHASE-TCP-PREFIX _KDNS-TCP-ROUTE-OR 0= IF
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDPA @ _KDNS-TCP-RECEIVE-ONE
+    _KDPA @ _KDNS-TCB@ DUP 0= IF
+        DROP KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    _KDTS-TCB !
+    _KDTS-TCB @ _KDNS-TCP-READABLE? IF
+        _KDTS-TCB @
+        _KDPA @ _KDNS.TCP-PREFIX
+        _KDPA @ _KDNS.TCP-PREFIX-U @ +
+        2 _KDPA @ _KDNS.TCP-PREFIX-U @ -
+        TCP-RECV _KDTS-N !
+        _KDTS-N @ 0<
+        _KDPA @ _KDNS.TCP-PREFIX-U @ _KDTS-N @ + 2 > OR IF
+            KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+        THEN
+        _KDTS-N @ _KDPA @ _KDNS.TCP-PREFIX-U +!
+    THEN
+    _KDPA @ _KDNS.TCP-PREFIX-U @ 2 = IF
+        _KDPA @ _KDNS.TCP-PREFIX NW16@ DUP
+        12 < IF DROP KDOSDNS-S-MALFORMED _KDPA @ _KDNS-FAIL EXIT THEN
+        DUP _KDPA @ _KDNS.RESPONSE-CAP @ U> IF
+            DROP KDOSDNS-S-CAPACITY _KDPA @ _KDNS-FAIL EXIT
+        THEN
+        _KDPA @ _KDNS.TCP-EXPECTED-U !
+        KDOSDNS-E-TCP-LENGTH _KDPA @ _KDNS-EVIDENCE+
+        KDOSDNS-PHASE-TCP-BODY _KDNS-PHASE!
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDTS-TCB @ TCB.STATE @ TCPS-CLOSE-WAIT = IF
+        KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-TCP-BODY  ( -- status )
+    KDOSDNS-PHASE-TCP-BODY _KDNS-TCP-ROUTE-OR 0= IF
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDPA @ _KDNS-TCP-RECEIVE-ONE
+    _KDPA @ _KDNS-TCB@ DUP 0= IF
+        DROP KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    _KDTS-TCB !
+    _KDTS-TCB @ _KDNS-TCP-READABLE? IF
+        _KDTS-TCB @
+        _KDPA @ _KDNS.RESPONSE @
+        _KDPA @ _KDNS.RESPONSE-U @ +
+        _KDPA @ _KDNS.TCP-EXPECTED-U @
+        _KDPA @ _KDNS.RESPONSE-U @ -
+        TCP-RECV _KDTS-N !
+        _KDTS-N @ 0<
+        _KDPA @ _KDNS.RESPONSE-U @ _KDTS-N @ +
+        _KDPA @ _KDNS.TCP-EXPECTED-U @ > OR IF
+            KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+        THEN
+        _KDTS-N @ _KDPA @ _KDNS.RESPONSE-U +!
+    THEN
+    _KDPA @ _KDNS.RESPONSE-U @
+    _KDPA @ _KDNS.TCP-EXPECTED-U @ = IF
+        _KDPA @ _KDNS.RESPONSE @
+        _KDPA @ _KDNS.RESPONSE-U @
+        _KDPA @ _KDNS-QUESTION-MATCH? 0= IF
+            KDOSDNS-S-MISMATCH _KDPA @ _KDNS-FAIL EXIT
+        THEN
+        _KDPA @ _KDNS.RESPONSE @
+        _KDPA @ _KDNS-CAPTURE-DIAGNOSTICS
+        _KDPA @ _KDNS.RESPONSE @ 2 + NW16@ 0x0200 AND IF
+            KDOSDNS-S-MALFORMED _KDPA @ _KDNS-FAIL EXIT
+        THEN
+        KDOSDNS-E-DNS-HEADER KDOSDNS-E-ID OR
+        KDOSDNS-E-QUESTION OR _KDPA @ _KDNS-EVIDENCE+
+        KDOSDNS-PHASE-TCP-CLOSE _KDNS-PHASE!
+        KDOSDNS-S-PENDING EXIT
+    THEN
+    _KDTS-TCB @ TCB.STATE @ TCPS-CLOSE-WAIT = IF
+        KDOSDNS-S-IO _KDPA @ _KDNS-FAIL EXIT
+    THEN
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-TCP-CLOSE  ( -- status )
+    _KDPA @ _KDNS-TCB@ DUP 0= IF
+        DROP _KDPA @ _KDNS-FINISH-OK EXIT
+    THEN
+    _KDTS-TCB !
+    _KDPA @ _KDNS-REMOTE-CACHED? 0= IF
+        _KDPA @ _KDNS-TCP-FINISH-FALLBACK EXIT
+    THEN
+    _KDTS-TCB @ TCP-CLOSE
+    _KDTS-TCB @ TCB.STATE @ DUP TCPS-CLOSED =
+    SWAP TCPS-TIME-WAIT = OR IF
+        _KDPA @ _KDNS-FINISH-OK EXIT
+    THEN
+    _KDTS-TCB @ TCB.STATE @ DUP TCPS-FIN-WAIT-1 =
+    SWAP TCPS-LAST-ACK = OR 0= IF
+        _KDPA @ _KDNS-TCP-FINISH-FALLBACK EXIT
+    THEN
+    _KDPA @ _KDNS-NOW@ KDOSDNS-CLOSE-TIMEOUT-MS +
+    _KDPA @ _KDNS.CLOSE-DEADLINE-MS !
+    KDOSDNS-PHASE-TCP-CLOSE-WAIT _KDNS-PHASE!
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-TCP-CLOSE-WAIT  ( -- status )
+    _KDPA @ _KDNS-REMOTE-CACHED? 0= IF
+        _KDPA @ _KDNS-TCP-FINISH-FALLBACK EXIT
+    THEN
+    _KDPA @ _KDNS-TCP-RECEIVE-ONE
+    _KDPA @ _KDNS-TCB@ DUP 0= IF
+        DROP _KDPA @ _KDNS-FINISH-OK EXIT
+    THEN
+    TCB.STATE @ DUP TCPS-CLOSED =
+    SWAP TCPS-TIME-WAIT = OR IF
+        _KDPA @ _KDNS-FINISH-OK EXIT
+    THEN
+    _KDPA @ _KDNS-NOW@
+    _KDPA @ _KDNS.CLOSE-DEADLINE-MS @ _KDNS-TIME-REACHED? IF
+        _KDPA @ _KDNS-TCP-FINISH-FALLBACK EXIT
+    THEN
+    KDOSDNS-S-PENDING ;
+
+: _KDNS-STEP-DEFAULT  ( adapter -- status )
+    _KDPA !
+    _KDPA @ _KDNS.PHASE @
+    CASE
+        KDOSDNS-PHASE-ARP-CHECK OF _KDNS-STEP-ARP-CHECK ENDOF
+        KDOSDNS-PHASE-ARP-SEND OF _KDNS-STEP-ARP-SEND ENDOF
+        KDOSDNS-PHASE-ARP-WAIT OF _KDNS-STEP-ARP-WAIT ENDOF
+        KDOSDNS-PHASE-UDP-SEND OF _KDNS-STEP-UDP-SEND ENDOF
+        KDOSDNS-PHASE-UDP-WAIT OF _KDNS-STEP-UDP-WAIT ENDOF
+        KDOSDNS-PHASE-TCP-OPEN OF _KDNS-STEP-TCP-OPEN ENDOF
+        KDOSDNS-PHASE-TCP-WAIT OF _KDNS-STEP-TCP-WAIT ENDOF
+        KDOSDNS-PHASE-TCP-SEND OF _KDNS-STEP-TCP-SEND ENDOF
+        KDOSDNS-PHASE-TCP-PREFIX OF _KDNS-STEP-TCP-PREFIX ENDOF
+        KDOSDNS-PHASE-TCP-BODY OF _KDNS-STEP-TCP-BODY ENDOF
+        KDOSDNS-PHASE-TCP-CLOSE OF _KDNS-STEP-TCP-CLOSE ENDOF
+        KDOSDNS-PHASE-TCP-CLOSE-WAIT OF
+            _KDNS-STEP-TCP-CLOSE-WAIT
+        ENDOF
+        KDOSDNS-S-INVALID _KDPA @ _KDNS-FAIL SWAP
+    ENDCASE ;
+
+\ =====================================================================
+\  Public lifecycle
+\ =====================================================================
+
+VARIABLE _KDI-R
+VARIABLE _KDI-C
+VARIABLE _KDI-T
+
+: KDOSDNS-INIT  ( response-a response-cap adapter -- status )
+    _KDI-T ! _KDI-C ! _KDI-R !
+    _KDI-T @ _KDNS-FIXED-STATUS ?DUP IF EXIT THEN
+    _KDI-C @ 12 < _KDI-C @ KDOSDNS-RESPONSE-MAX > OR IF
+        KDOSDNS-S-CAPACITY EXIT
+    THEN
+    _KDI-R @ _KDI-C @ _KDNS-SPAN-STATUS ?DUP IF EXIT THEN
+    _KDI-R @ _KDI-C @ _KDI-T @ KDOSDNS-SIZE
+    MSPAN-OVERLAP? IF KDOSDNS-S-ALIAS EXIT THEN
+    _KDI-T @ _KDNS.MAGIC @ _KDNS-MAGIC-VALUE = IF
+        _KDI-T @ KDOSDNS-VALID? 0= IF KDOSDNS-S-INVALID EXIT THEN
+        _KDI-T @ _KDNS.STATE @ KDOSDNS-STATE-ACTIVE = IF
+            KDOSDNS-S-BUSY EXIT
+        THEN
+        _KDOSDNS-OWNER @ _KDI-T @ = IF
+            KDOSDNS-S-BUSY EXIT
+        THEN
+        _KDI-T @ _KDNS-CLEAR-RESPONSE
+    THEN
+    _KDI-R @ _KDI-C @ 0 FILL
+    _KDI-T @ KDOSDNS-SIZE 0 FILL
+    _KDI-R @ _KDI-T @ _KDNS.RESPONSE !
+    _KDI-C @ _KDI-T @ _KDNS.RESPONSE-CAP !
+    KDOSDNS-STATE-IDLE _KDI-T @ _KDNS.STATE !
+    KDOSDNS-S-OK _KDI-T @ _KDNS.STATUS !
+    KDOSDNS-PHASE-IDLE _KDI-T @ _KDNS.PHASE !
+    ['] _KDNS-NOW-DEFAULT _KDI-T @ _KDNS.NOW-XT !
+    ['] _KDNS-STEP-DEFAULT _KDI-T @ _KDNS.STEP-XT !
+    _KDNS-MAGIC-VALUE _KDI-T @ _KDNS.MAGIC !
+    KDOSDNS-S-OK ;
+
+VARIABLE _KDS-Q
+VARIABLE _KDS-U
+VARIABLE _KDS-IP
+VARIABLE _KDS-T
+VARIABLE _KDS-NOW
+VARIABLE _KDS-PORT
+
+: _KDNS-START-SOURCES  ( -- )
+    _KDS-T @ _KDNS-NOW@ _KDS-NOW !
+    _KDNS-NEXT-LOCAL-PORT _KDS-PORT ! ;
+
+: _KDNS-START-CLEAR  ( adapter -- )
+    DUP _KDNS-CLEAR-RESPONSE
+    DUP _KDNS.SERVER-IP 8 0 FILL
+    DUP 0 SWAP _KDNS.LOCAL-PORT !
+    DUP 0 SWAP _KDNS.QUERY-U !
+    DUP 0 SWAP _KDNS.QUERY-ID !
+    DUP 0 SWAP _KDNS.QTYPE !
+    DUP 0 SWAP _KDNS.QCLASS !
+    DUP 0 SWAP _KDNS.QNAME-U !
+    DUP 0 SWAP _KDNS.DEADLINE-MS !
+    DUP 0 SWAP _KDNS.RETRY-AT-MS !
+    DUP 0 SWAP _KDNS.RETRIES !
+    DUP 0 SWAP _KDNS.USED-TCP !
+    DUP 0 SWAP _KDNS.EVIDENCE !
+    DUP 0 SWAP _KDNS.TCB !
+    DUP 0 SWAP _KDNS.TCB-ISS !
+    DUP 0 SWAP _KDNS.TCP-PREFIX-U !
+    DUP 0 SWAP _KDNS.TCP-EXPECTED-U !
+    DUP 0 SWAP _KDNS.TCP-TX-OFFSET !
+    DUP 0 SWAP _KDNS.CLOSE-DEADLINE-MS !
+    DUP 0 SWAP _KDNS.AFTER-ARP-PHASE !
+    DUP 0 SWAP _KDNS.STEP-COUNT !
+    DUP 0 SWAP _KDNS.LAST-STEP-CYCLES !
+    DUP 0 SWAP _KDNS.MAX-STEP-CYCLES !
+    DUP _KDNS.ARP-TARGET 64 0 FILL
+    DUP 0 SWAP _KDNS.DNS-FLAGS !
+    DUP 0 SWAP _KDNS.RCODE !
+    DUP _KDNS.TCP-PREFIX 8 0 FILL
+    DUP _KDNS.QNAME 512 0 FILL
+    _KDNS.TCP-FRAME 520 0 FILL ;
+
+: KDOSDNS-START  ( query-a query-u server-ip adapter -- status )
+    _KDS-T ! _KDS-IP ! _KDS-U ! _KDS-Q !
+    _KDS-T @ KDOSDNS-VALID? 0= IF KDOSDNS-S-INVALID EXIT THEN
+    _KDS-T @ _KDNS.STATE @ KDOSDNS-STATE-ACTIVE = IF
+        KDOSDNS-S-BUSY EXIT
+    THEN
+    _KDOSDNS-OWNER @ IF KDOSDNS-S-BUSY EXIT THEN
+    _KDS-Q @ _KDS-U @ _KDNS-SPAN-STATUS ?DUP IF EXIT THEN
+    _KDS-IP @ 4 _KDNS-SPAN-STATUS ?DUP IF EXIT THEN
+    _KDS-Q @ _KDS-U @ _KDNS-QUERY-VALID? 0= IF
+        KDOSDNS-S-INVALID EXIT
+    THEN
+    _KDS-Q @ _KDS-U @ _KDS-T @ KDOSDNS-SIZE
+    MSPAN-OVERLAP? IF KDOSDNS-S-ALIAS EXIT THEN
+    _KDS-Q @ _KDS-U @
+    _KDS-T @ _KDNS.RESPONSE @
+    _KDS-T @ _KDNS.RESPONSE-CAP @
+    MSPAN-OVERLAP? IF KDOSDNS-S-ALIAS EXIT THEN
+    _KDS-IP @ 4 _KDS-T @ KDOSDNS-SIZE
+    MSPAN-OVERLAP? IF KDOSDNS-S-ALIAS EXIT THEN
+    _KDS-IP @ 4
+    _KDS-T @ _KDNS.RESPONSE @
+    _KDS-T @ _KDNS.RESPONSE-CAP @
+    MSPAN-OVERLAP? IF KDOSDNS-S-ALIAS EXIT THEN
+    ['] _KDNS-START-SOURCES CATCH IF KDOSDNS-S-FAULT EXIT THEN
+
+    _KDS-T @ _KDNS-START-CLEAR
+    _KDS-IP @ _KDS-T @ _KDNS.SERVER-IP 4 CMOVE
+    _KDS-Q @ _KDS-T @ _KDNS.QUERY _KDS-U @ CMOVE
+    _KDS-U @ _KDS-T @ _KDNS.QUERY-U !
+    _KDS-T @ _KDNS.QUERY NW16@ _KDS-T @ _KDNS.QUERY-ID !
+    _KDS-T @ _KDNS.QUERY _KDS-T @ _KDNS-CAPTURE-QUESTION
+    _KDS-PORT @ _KDS-T @ _KDNS.LOCAL-PORT !
+    KDOSDNS-PHASE-UDP-SEND _KDS-T @ _KDNS.AFTER-ARP-PHASE !
+    _KDS-NOW @ KDOSDNS-TRANSACTION-TIMEOUT-MS +
+    _KDS-T @ _KDNS.DEADLINE-MS !
+    KDOSDNS-STATE-ACTIVE _KDS-T @ _KDNS.STATE !
+    KDOSDNS-S-PENDING _KDS-T @ _KDNS.STATUS !
+    KDOSDNS-PHASE-ARP-CHECK _KDS-T @ _KDNS.PHASE !
+    _KDS-T @ _KDOSDNS-OWNER !
+    KDOSDNS-S-PENDING ;
+
+VARIABLE _KDP-T
+VARIABLE _KDP-START
+VARIABLE _KDP-NOW
+
+: _KDNS-STEP-RECORD  ( cycles adapter -- )
+    >R
+    1 R@ _KDNS.STEP-COUNT +!
+    DUP R@ _KDNS.LAST-STEP-CYCLES !
+    R@ _KDNS.MAX-STEP-CYCLES @ OVER U< IF
+        DUP R@ _KDNS.MAX-STEP-CYCLES !
+    THEN
+    DROP R> DROP ;
+
+: _KDNS-POLL-INNER  ( -- status )
+    _KDP-T @ DUP _KDNS.STEP-XT @ EXECUTE ;
+
+: _KDNS-POLL-NOW-INNER  ( -- )
+    _KDP-T @ _KDNS-NOW@ _KDP-NOW ! ;
+
+: KDOSDNS-POLL  ( adapter -- status )
+    DUP _KDP-T !
+    KDOSDNS-VALID? 0= IF KDOSDNS-S-INVALID EXIT THEN
+    _KDP-T @ _KDNS.STATE @ KDOSDNS-STATE-ACTIVE <> IF
+        _KDP-T @ _KDNS.STATUS @ EXIT
+    THEN
+    _KDOSDNS-OWNER @ _KDP-T @ <> IF
+        KDOSDNS-S-CLEANUP EXIT
+    THEN
+    _KDP-T @ _KDNS.PHASE @ KDOSDNS-PHASE-TCP-CLOSE < IF
+        ['] _KDNS-POLL-NOW-INNER CATCH IF
+            KDOSDNS-S-FAULT _KDP-T @ _KDNS-FAIL EXIT
+        THEN
+        _KDP-NOW @
+        _KDP-T @ _KDNS.DEADLINE-MS @ _KDNS-TIME-REACHED? IF
+            KDOSDNS-S-TIMEOUT _KDP-T @ _KDNS-FAIL EXIT
+        THEN
+    THEN
+    PERF-CYCLES _KDP-START !
+    ['] _KDNS-POLL-INNER CATCH
+    PERF-CYCLES _KDP-START @ - _KDP-T @ _KDNS-STEP-RECORD
+    ?DUP IF
+        DROP KDOSDNS-S-FAULT _KDP-T @ _KDNS-FAIL EXIT
+    THEN
+    _KDP-T @ KDOSDNS-VALID? 0= IF
+        DROP KDOSDNS-S-FAULT _KDP-T @ _KDNS-FAIL EXIT
+    THEN
+    DUP KDOSDNS-S-PENDING = IF EXIT THEN
+    DUP KDOSDNS-S-OK = IF
+        _KDP-T @ _KDNS.STATE @ KDOSDNS-STATE-COMPLETE =
+        _KDP-T @ _KDNS.PHASE @ KDOSDNS-PHASE-DONE = AND IF EXIT THEN
+        DROP KDOSDNS-S-FAULT _KDP-T @ _KDNS-FAIL EXIT
+    THEN
+    _KDP-T @ _KDNS.STATE @ KDOSDNS-STATE-FAILED = IF EXIT THEN
+    DROP KDOSDNS-S-FAULT _KDP-T @ _KDNS-FAIL ;
+
+VARIABLE _KDC-T
+VARIABLE _KDC-STATUS
+
+: KDOSDNS-CANCEL  ( adapter -- status )
+    DUP _KDC-T !
+    KDOSDNS-VALID? 0= IF KDOSDNS-S-INVALID EXIT THEN
+    _KDC-T @ _KDNS.STATE @ KDOSDNS-STATE-ACTIVE = IF
+        _KDOSDNS-OWNER @ _KDC-T @ <> IF
+            KDOSDNS-S-CLEANUP EXIT
+        THEN
+        _KDC-T @ _KDNS-TCP-ABORT 0= IF
+            KDOSDNS-S-CLEANUP EXIT
+        THEN
+    ELSE
+        _KDC-T @ _KDNS.STATUS @ KDOSDNS-S-CLEANUP =
+        _KDC-T @ _KDNS.TCB @ 0<> AND IF
+            _KDOSDNS-OWNER @ _KDC-T @ <> IF
+                KDOSDNS-S-CLEANUP EXIT
+            THEN
+            _KDC-T @ _KDNS-TCP-ABORT 0= IF
+                KDOSDNS-S-CLEANUP EXIT
+            THEN
+        THEN
+    THEN
+    KDOSDNS-S-CANCELLED _KDC-STATUS !
+    _KDC-T @ _KDNS-RELEASE-OWNER
+    _KDC-T @ _KDNS-START-CLEAR
+    KDOSDNS-STATE-CANCELLED _KDC-T @ _KDNS.STATE !
+    KDOSDNS-PHASE-CANCELLED _KDC-T @ _KDNS.PHASE !
+    _KDC-STATUS @ _KDC-T @ _KDNS.STATUS !
+    _KDC-STATUS @ ;
+
+VARIABLE _KDW-T
+VARIABLE _KDW-R
+VARIABLE _KDW-C
+
+: KDOSDNS-WIPE  ( adapter -- status )
+    DUP _KDW-T !
+    KDOSDNS-VALID? 0= IF KDOSDNS-S-INVALID EXIT THEN
+    _KDW-T @ _KDNS.RESPONSE @ _KDW-R !
+    _KDW-T @ _KDNS.RESPONSE-CAP @ _KDW-C !
+    _KDW-T @ KDOSDNS-CANCEL
+    KDOSDNS-S-CLEANUP = IF
+        KDOSDNS-S-CLEANUP EXIT
+    THEN
+    _KDW-R @ _KDW-C @ 0 FILL
+    _KDW-T @ KDOSDNS-SIZE 0 FILL
+    KDOSDNS-S-OK ;
+
+: KDOSDNS-RESPONSE$  ( adapter -- response-a response-u status )
+    DUP KDOSDNS-VALID? 0= IF
+        DROP 0 0 KDOSDNS-S-INVALID EXIT
+    THEN
+    DUP _KDNS.STATE @ KDOSDNS-STATE-COMPLETE <> IF
+        DUP _KDNS.STATUS @ >R DROP 0 0 R> EXIT
+    THEN
+    DUP _KDNS.RESPONSE @
+    OVER _KDNS.RESPONSE-U @
+    ROT DROP KDOSDNS-S-OK ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+: _KDNS-GEOMETRY-ABORT  ( -- )
+    ." KDOS DNS geometry mismatch" CR ABORT ;
+
+1 CELLS 8 <> [IF]
+    _KDNS-GEOMETRY-ABORT
+[THEN]
+
+KDOSDNS-SIZE 1368 <> [IF]
+    _KDNS-GEOMETRY-ABORT
+[THEN]
+
+_KDNS-QUERY _KDNS-TCP-FRAME - 2 <> [IF]
+    _KDNS-GEOMETRY-ABORT
+[THEN]
