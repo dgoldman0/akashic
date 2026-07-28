@@ -329,6 +329,10 @@ VARIABLE _hrc-hop-status
     _hrc-authority-mode @ 2 = IF -7640 EXIT THEN
     _hrc-authority-mode @ 3 = IF -7641 THROW THEN
     _hrc-authority-mode @ 4 = IF 0 99 EXIT THEN
+    _hrc-authority-mode @ 5 = IF
+        S" https://mutated.example.test/changed"
+            _hrc-authority-candidate @ HTARGET-PARSE DROP
+    THEN
     0 ;
 
 : _hrc-build-ok  ( hop -- )
@@ -938,6 +942,7 @@ VARIABLE _hrc-policy-media
     _hrc-resource HRES-DETAIL@ -7640 = _hrc-assert
     _hrc-resource HRES-POLICY-STATUS@ -7640 = _hrc-assert
     _hrc-resource HRES-REDIRECT-COUNT@ 0= _hrc-assert
+    1 _hrc-resource HRES-TARGET-NTH HTARGET-VALID? 0= _hrc-assert
     _hrc-authority-calls @ 1 = _hrc-assert
     _hrc-binds @ 1 = _hrc-assert _hrc-releases @ 1 = _hrc-assert
     _hrc-clean-result
@@ -950,6 +955,7 @@ VARIABLE _hrc-policy-media
     _hrc-resource HRES-OUTCOME@ HRES-O-FAULT = _hrc-assert
     _hrc-resource HRES-DETAIL@ HRES-D-REDIRECT-POLICY = _hrc-assert
     _hrc-resource HRES-POLICY-STATUS@ -7641 = _hrc-assert
+    1 _hrc-resource HRES-TARGET-NTH HTARGET-VALID? 0= _hrc-assert
     _hrc-authority-calls @ 1 = _hrc-assert
     _hrc-binds @ 1 = _hrc-assert _hrc-releases @ 1 = _hrc-assert
     _hrc-clean-result
@@ -961,7 +967,24 @@ VARIABLE _hrc-policy-media
     _hrc-run-resource HRES-S-FAULT = _hrc-assert
     _hrc-resource HRES-DETAIL@ HRES-D-REDIRECT-POLICY = _hrc-assert
     _hrc-resource HRES-POLICY-STATUS@ HRES-XERR-FAULT = _hrc-assert
+    1 _hrc-resource HRES-TARGET-NTH HTARGET-VALID? 0= _hrc-assert
     _hrc-authority-calls @ 1 = _hrc-assert
+    _hrc-clean-result
+
+    _hrc-fixture-reset
+    200 _hrc-success-low ! 299 _hrc-success-high !
+    HRES-MEDIA-IGNORED _hrc-spec-media-mode !
+    5 _hrc-authority-mode !
+    0 S" https://other.example.test/document" _hrc-build-redirect
+    1 203 0 _hrc-build-policy-final
+    S" https://handle.example.test/value" 3 128 _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ HRES-O-OK = _hrc-assert
+    _hrc-resource HRES-EFFECTIVE-URI$
+        S" https://other.example.test/document" STR-STR= _hrc-assert
+    _hrc-authority-calls @ 1 = _hrc-assert
+    _hrc-authority-errors @ 0= _hrc-assert
+    _hrc-binds @ 2 = _hrc-assert _hrc-releases @ 2 = _hrc-assert
     _hrc-clean-result _hrc-stack ;
 
 : _hrc-pb-setup  ( -- )

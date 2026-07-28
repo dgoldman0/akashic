@@ -94,11 +94,14 @@ authority-context ['] admit-redirect-authority
 
 The callback has stack effect
 `( current-target candidate-target authority-context -- policy-status )`.
-It receives two canonical, valid HTTPS `HTARGET` records after syntax
-resolution and loop checking but before the candidate enters the public chain.
+It receives borrowed, callback-lifetime scratch copies of two canonical, valid
+HTTPS `HTARGET` records after syntax resolution and loop checking but before
+the candidate enters the public chain. Mutating those copies cannot alter the
+live target chain, and both copies are scrubbed immediately after return.
 Zero admits the new authority. A nonzero result becomes an exact retained
 `HRES-O-AUTHORITY-REQUIRED` diagnostic; a throw or stack-shape violation faults
-the resource. With no callback, every cross-origin candidate is rejected.
+the resource. Every rejected candidate slot is cleared before the outcome is
+published. With no callback, every cross-origin candidate is rejected.
 This callback must be pure and non-reentrant. It can constrain canonical host
 and port, but it cannot replace the binding provider's per-hop DNS result,
 public-address, and TLS-name admission.

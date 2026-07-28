@@ -105,6 +105,10 @@ def _assert_static_contracts() -> None:
     assert "HRSPEC.REDIRECT-XT" in authority
     assert "CATCH" in authority
     assert "HRES-O-AUTHORITY-REQUIRED" in authority
+    assert "_HRES-REDIRECT-CANDIDATE-CLEAR" in authority
+    authority_inner = _word_body(source, "_HRES-REDIRECT-AUTH-INNER")
+    assert "_HRES-AUTH-CURRENT" in authority_inner
+    assert "_HRES-AUTH-CANDIDATE" in authority_inner
     final = _word_body(source, "_HRES-ADMIT-FINAL")
     assert "_HRES-MEDIA-REQUIRED?" in final
     assert "MTYPE-INIT" in final
@@ -115,6 +119,7 @@ def _assert_static_contracts() -> None:
     for marker in (
         "_hrc-test-configured-final-policy",
         "_hrc-test-authority-policy",
+        "mutated.example.test",
         "HRES-XERR-FAULT",
         "HTTP RESOURCE CONTRACTS PASS",
     ):
