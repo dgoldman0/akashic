@@ -27,7 +27,7 @@ transport KDOSTLS.PORT NIO-CLOSE-START
 \ Poll NIO-CLOSE-POLL until it returns a terminal status.
 ```
 
-`KDOSTLS-CONFIGURE` accepts one validated DNS hostname of at most 64 bytes and a
+`KDOSTLS-CONFIGURE` accepts one validated DNS hostname of at most 253 bytes and a
 remote port from 1 through 65535. `KDOSTLS-INIT` installs native
 `NIO.OPEN-START-XT`, `NIO.OPEN-POLL-XT`, `NIO.CLOSE-START-XT`,
 `NIO.CLOSE-POLL-XT`, and `NIO.CANCEL-XT` callbacks. `NIO-OPEN` and `NIO-CLOSE`
@@ -37,6 +37,11 @@ open remains deliberately blocking and may enter `NET-IDLE` between at most
 4096 state-machine polls. Compatibility close performs at most 256 nonwaiting
 polls and aborts if teardown is still pending; new consumers use the explicit
 asynchronous callbacks for both directions.
+
+Configuration copies the hostname into the descriptor before any network
+work. Passing the exact borrowed `KDOSTLS-HOST` view back to
+`KDOSTLS-CONFIGURE` is safe; any partial overlap with the retained hostname
+arena is rejected without changing the prior configuration.
 
 Open invokes one scheduled network or handshake phase per poll: TLS/ClientHello
 preparation, cooperative DNS and ARP, TCP establishment, at most one incoming

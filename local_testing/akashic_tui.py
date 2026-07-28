@@ -26737,6 +26737,11 @@ CREATE _htc-ip 4 ALLOT
     S" https://" _htc-host SWAP CMOVE
     _htc-host 8 + _htc-host-u @ [CHAR] a FILL
     [CHAR] . _htc-host 39 + C!
+    [CHAR] . _htc-host 79 + C!
+    [CHAR] . _htc-host 119 + C!
+    [CHAR] . _htc-host 159 + C!
+    [CHAR] . _htc-host 199 + C!
+    [CHAR] . _htc-host 239 + C!
     [CHAR] / _htc-host 8 + _htc-host-u @ + C!
     DROP _htc-host _htc-host-u @ 9 + ;
 
@@ -26782,10 +26787,10 @@ CREATE _htc-ip 4 ALLOT
     S" https://example.test:65535/" _htc-a HTARGET-PARSE
         HTARGET-S-OK = _htc-assert
     _htc-a HTARGET-PORT@ 65535 = _htc-assert
-    64 _htc-host-uri _htc-a HTARGET-PARSE
+    253 _htc-host-uri _htc-a HTARGET-PARSE
         HTARGET-S-OK = _htc-assert
-    _htc-a HTARGET-HOST$ NIP 64 = _htc-assert
-    65 _htc-host-uri HTARGET-S-HOST _htc-reject ;
+    _htc-a HTARGET-HOST$ NIP 253 = _htc-assert
+    254 _htc-host-uri HTARGET-S-HOST _htc-reject ;
 
 : _htc-authority-contracts  ( -- )
     S" http://example.test/" HTARGET-S-SCHEME _htc-reject
