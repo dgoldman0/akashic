@@ -21699,6 +21699,96 @@ REQUIRE local_testing/sbox-core-contracts.f
 )
 
 
+PROFILES["sandbox-stage1-contracts"] = Profile(
+    roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - pure neutral sandbox Stage 1 contracts
+ENTER-USERLAND
+." [akashic] loading sandbox Stage 1 contracts" CR TX-FLUSH
+REQUIRE sandbox/vm.f
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-stage1-contracts.f
+""",
+    ready_markers=("SBOX STAGE1 CONTRACTS PASS",),
+    stable_markers=("SBOX STAGE1 CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX STAGE1 CONTRACTS FAIL",
+        "SBOX STAGE1 ASSERT",
+        "SBOX STAGE1 STACK",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-stage1-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-stage1-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+def _sandbox_stage1_group_profile(
+    entry_word: str,
+    marker: str,
+) -> Profile:
+    return Profile(
+        roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f"),
+        resources=(),
+        autoexec=rf"""\ autoexec.f - bounded pure sandbox VM contracts
+ENTER-USERLAND
+1 CONSTANT SBOX-STAGE1-DEFER-AUTORUN
+." [akashic] loading bounded sandbox VM contracts" CR TX-FLUSH
+REQUIRE sandbox/vm.f
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-stage1-contracts.f
+{entry_word}
+""",
+        ready_markers=(f"{marker} PASS",),
+        stable_markers=(f"{marker} PASS",),
+        failure_markers=(
+            f"{marker} FAIL",
+            "SBOX STAGE1 ASSERT",
+            "SBOX STAGE1 STACK",
+        ),
+        linked=True,
+        include_large_sample=False,
+        initial_files=(
+            (
+                "local_testing/sbox-stage1-contracts.f",
+                (
+                    AKASHIC_ROOT / "local_testing" /
+                    "sandbox-stage1-contracts.f"
+                ).read_bytes(),
+            ),
+        ),
+    )
+
+
+PROFILES["sandbox-stage1-vm-scalar-contracts"] = (
+    _sandbox_stage1_group_profile(
+        "_S1-RUN-VM-SCALAR",
+        "SBOX STAGE1 VM SCALAR",
+    )
+)
+PROFILES["sandbox-stage1-vm-state-contracts"] = (
+    _sandbox_stage1_group_profile(
+        "_S1-RUN-VM-STATE",
+        "SBOX STAGE1 VM STATE",
+    )
+)
+PROFILES["sandbox-stage1-vm-terminal-contracts"] = (
+    _sandbox_stage1_group_profile(
+        "_S1-RUN-VM-TERMINAL",
+        "SBOX STAGE1 VM TERMINAL",
+    )
+)
+
+
 PROFILES["vfs-ram-capacity-contracts"] = Profile(
     roots=("utils/fs/vfs.f",),
     resources=(),
