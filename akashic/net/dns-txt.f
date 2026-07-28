@@ -19,6 +19,25 @@
 \    DNS-TXT-QUERY$         ( query -- packet-a packet-u status )
 \    DNS-TXT-QUERY-ID@      ( query -- id status )
 \    DNS-TXT-QUERY-WIPE     ( query -- status )
+\    DNS-TXT-RR-RESULT-INIT ( value-a value-cap rr-result -- status )
+\    DNS-TXT-RR-RESULT-VALID? ( rr-result -- flag )
+\    DNS-TXT-RR-PRESENT?    ( rr-result -- flag )
+\    DNS-TXT-RR-PROVISIONAL? ( rr-result -- flag )
+\    DNS-TXT-RR-PREFIX$     ( rr-result -- prefix-a prefix-u )
+\    DNS-TXT-RR-TOTAL-LENGTH@ ( rr-result -- total-u )
+\    DNS-TXT-RR-COMPLETE?   ( rr-result -- flag )
+\    DNS-TXT-RR-STRING-COUNT@ ( rr-result -- count )
+\    DNS-TXT-RR-TTL@        ( rr-result -- ttl )
+\    DNS-TXT-RR-RESULT-WIPE ( rr-result -- status )
+\    DNS-TXT-ITER-BEGIN     ( response-a response-u query rr-result iter -- status )
+\    DNS-TXT-ITER-NEXT      ( iter -- present? status )
+\    DNS-TXT-ITER-VALID?    ( iter -- flag )
+\    DNS-TXT-ITER-TERMINAL? ( iter -- flag )
+\    DNS-TXT-ITER-VALIDATED? ( iter -- flag )
+\    DNS-TXT-ITER-STATUS@   ( iter -- status )
+\    DNS-TXT-ITER-EVIDENCE@ ( iter -- evidence )
+\    DNS-TXT-ITER-MATCHED-COUNT@ ( iter -- count )
+\    DNS-TXT-ITER-WIPE      ( iter -- status )
 \    DNS-TXT-RESULT-INIT    ( value-a value-cap result -- status )
 \    DNS-TXT-RESULT-VALID?  ( result -- flag )
 \    DNS-TXT-PARSE          ( response-a response-u query result -- status )
@@ -65,10 +84,11 @@ REQUIRE ../utils/caller-span.f
 11 CONSTANT DNS-TXT-S-RCODE
 12 CONSTANT DNS-TXT-S-NODATA
 13 CONSTANT DNS-TXT-S-DUPLICATE
+14 CONSTANT DNS-TXT-S-PROVISIONAL
 
 : DNS-TXT-STATUS-VALID?  ( status -- flag )
     DUP DNS-TXT-S-OK >=
-    SWAP DNS-TXT-S-DUPLICATE <= AND ;
+    SWAP DNS-TXT-S-PROVISIONAL <= AND ;
 
 1  CONSTANT DNS-TXT-E-RESPONSE
 2  CONSTANT DNS-TXT-E-ID
@@ -76,6 +96,7 @@ REQUIRE ../utils/caller-span.f
 8  CONSTANT DNS-TXT-E-TRUNCATED
 16 CONSTANT DNS-TXT-E-RCODE
 32 CONSTANT DNS-TXT-E-VALUE
+64 CONSTANT DNS-TXT-ITER-E-VALIDATED
 
 \ =====================================================================
 \  Wire constants and caller-owned geometry
@@ -172,6 +193,69 @@ REQUIRE ../utils/caller-span.f
 : _DNTR.COPY           ( result -- address ) _DNTR-COPY + ;
 : _DNTR.NAME           ( result -- address ) _DNTR-NAME + ;
 
+0x444E545252303031 CONSTANT _DNTRR-MAGIC-VALUE  \ "DNTRR001"
+
+ 0 CONSTANT _DNTRR-MAGIC
+ 8 CONSTANT _DNTRR-BUFFER
+16 CONSTANT _DNTRR-CAPACITY
+24 CONSTANT _DNTRR-PREFIX-U
+32 CONSTANT _DNTRR-TOTAL-U
+40 CONSTANT _DNTRR-PRESENT
+48 CONSTANT _DNTRR-COMPLETE
+56 CONSTANT _DNTRR-PROVISIONAL
+64 CONSTANT _DNTRR-STRING-COUNT
+72 CONSTANT _DNTRR-TTL
+96 CONSTANT DNS-TXT-RR-RESULT-SIZE
+
+: _DNTRR.MAGIC       ( rr-result -- address ) _DNTRR-MAGIC + ;
+: _DNTRR.BUFFER      ( rr-result -- address ) _DNTRR-BUFFER + ;
+: _DNTRR.CAPACITY    ( rr-result -- address ) _DNTRR-CAPACITY + ;
+: _DNTRR.PREFIX-U    ( rr-result -- address ) _DNTRR-PREFIX-U + ;
+: _DNTRR.TOTAL-U     ( rr-result -- address ) _DNTRR-TOTAL-U + ;
+: _DNTRR.PRESENT     ( rr-result -- address ) _DNTRR-PRESENT + ;
+: _DNTRR.COMPLETE    ( rr-result -- address ) _DNTRR-COMPLETE + ;
+: _DNTRR.PROVISIONAL ( rr-result -- address ) _DNTRR-PROVISIONAL + ;
+: _DNTRR.STRING-COUNT
+  ( rr-result -- address ) _DNTRR-STRING-COUNT + ;
+: _DNTRR.TTL         ( rr-result -- address ) _DNTRR-TTL + ;
+
+0x444E544954303031 CONSTANT _DNTI-MAGIC-VALUE  \ "DNTIT001"
+
+\ Offsets 40 through 256 deliberately mirror the singleton result parser.
+\ This lets both front ends share question binding, name decompression, and
+\ RR-header walking without callbacks, globals, or a second wire engine.
+  0 CONSTANT _DNTI-MAGIC
+  8 CONSTANT _DNTI-RR-RESULT
+ 16 CONSTANT _DNTI-PHASE
+ 24 CONSTANT _DNTI-ANSWER-COUNT
+ 32 CONSTANT _DNTI-STATUS
+ 40 CONSTANT _DNTI-RCODE
+ 48 CONSTANT _DNTI-FLAGS
+ 56 CONSTANT _DNTI-EVIDENCE
+ 64 CONSTANT _DNTI-ANSWER-LEFT
+ 72 CONSTANT _DNTI-YIELDED
+ 80 CONSTANT _DNTI-AUTHORITY-LEFT
+ 88 CONSTANT _DNTI-ADDITIONAL-LEFT
+512 CONSTANT DNS-TXT-ITER-SIZE
+
+1 CONSTANT _DNTI-PHASE-ACTIVE
+2 CONSTANT _DNTI-PHASE-VALIDATED
+3 CONSTANT _DNTI-PHASE-FAILED
+
+: _DNTI.MAGIC          ( iter -- address ) _DNTI-MAGIC + ;
+: _DNTI.RR-RESULT      ( iter -- address ) _DNTI-RR-RESULT + ;
+: _DNTI.PHASE          ( iter -- address ) _DNTI-PHASE + ;
+: _DNTI.ANSWER-COUNT   ( iter -- address ) _DNTI-ANSWER-COUNT + ;
+: _DNTI.STATUS         ( iter -- address ) _DNTI-STATUS + ;
+: _DNTI.RCODE          ( iter -- address ) _DNTI-RCODE + ;
+: _DNTI.FLAGS          ( iter -- address ) _DNTI-FLAGS + ;
+: _DNTI.EVIDENCE       ( iter -- address ) _DNTI-EVIDENCE + ;
+: _DNTI.ANSWER-LEFT    ( iter -- address ) _DNTI-ANSWER-LEFT + ;
+: _DNTI.YIELDED        ( iter -- address ) _DNTI-YIELDED + ;
+: _DNTI.AUTHORITY-LEFT ( iter -- address ) _DNTI-AUTHORITY-LEFT + ;
+: _DNTI.ADDITIONAL-LEFT
+  ( iter -- address ) _DNTI-ADDITIONAL-LEFT + ;
+
 \ =====================================================================
 \  Generic admission and stack helpers
 \ =====================================================================
@@ -204,17 +288,29 @@ REQUIRE ../utils/caller-span.f
 : _DNT-RESULT-STATUS  ( result -- status )
     DNS-TXT-RESULT-SIZE _DNT-FIXED-STATUS ;
 
+: _DNT-RR-RESULT-STATUS  ( rr-result -- status )
+    DNS-TXT-RR-RESULT-SIZE _DNT-FIXED-STATUS ;
+
+: _DNT-ITER-STATUS  ( iter -- status )
+    DNS-TXT-ITER-SIZE _DNT-FIXED-STATUS ;
+
 : _DNT-DROP3  ( x1 x2 x3 -- )
     2DROP DROP ;
 
 : _DNT-DROP4  ( x1 x2 x3 x4 -- )
     2DROP 2DROP ;
 
+: _DNT-DROP5  ( x1 x2 x3 x4 x5 -- )
+    2DROP 2DROP DROP ;
+
 : _DNT-RETURN3  ( x1 x2 x3 status -- status )
     >R _DNT-DROP3 R> ;
 
 : _DNT-RETURN4  ( x1 x2 x3 x4 status -- status )
     >R _DNT-DROP4 R> ;
+
+: _DNT-RETURN5  ( x1 x2 x3 x4 x5 status -- status )
+    >R _DNT-DROP5 R> ;
 
 : _DNT-/STRING  ( address length prefix-u -- address' length' )
     >R SWAP R@ + SWAP R> - ;
@@ -467,6 +563,189 @@ REQUIRE ../utils/caller-span.f
         DROP DNS-TXT-S-INVALID EXIT
     THEN
     DNS-TXT-QUERY-SIZE 0 FILL
+    DNS-TXT-S-OK ;
+
+\ =====================================================================
+\  Reused per-RR iterator result
+\ =====================================================================
+
+: _DNT-FLAG?  ( value -- flag )
+    DUP 0= SWAP -1 = OR ;
+
+: _DNTRR-EMPTY-STATE?  ( rr-result -- flag )
+    DUP _DNTRR.PREFIX-U @ IF DROP 0 EXIT THEN
+    DUP _DNTRR.TOTAL-U @ IF DROP 0 EXIT THEN
+    DUP _DNTRR.COMPLETE @ IF DROP 0 EXIT THEN
+    DUP _DNTRR.PROVISIONAL @ IF DROP 0 EXIT THEN
+    DUP _DNTRR.STRING-COUNT @ IF DROP 0 EXIT THEN
+    _DNTRR.TTL @ 0= ;
+
+: _DNTRR-PRESENT-STATE?  ( rr-result -- flag )
+    DUP _DNTRR.PROVISIONAL @ -1 <> IF DROP 0 EXIT THEN
+    DUP _DNTRR.STRING-COUNT @ 1 < IF DROP 0 EXIT THEN
+    DUP _DNTRR.PREFIX-U @
+    OVER _DNTRR.TOTAL-U @ U> IF DROP 0 EXIT THEN
+    DUP _DNTRR.TOTAL-U @
+    OVER _DNTRR.CAPACITY @ U> IF
+        DUP _DNTRR.PREFIX-U @
+        OVER _DNTRR.CAPACITY @ <> IF DROP 0 EXIT THEN
+        _DNTRR.COMPLETE @ 0=
+    ELSE
+        DUP _DNTRR.PREFIX-U @
+        OVER _DNTRR.TOTAL-U @ <> IF DROP 0 EXIT THEN
+        _DNTRR.COMPLETE @ -1 =
+    THEN ;
+
+: DNS-TXT-RR-RESULT-VALID?  ( rr-result -- flag )
+    DUP _DNT-RR-RESULT-STATUS ?DUP IF
+        2DROP 0 EXIT
+    THEN
+    DUP _DNTRR.MAGIC @ _DNTRR-MAGIC-VALUE <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTRR.CAPACITY @
+    DUP 1 < OVER DNS-TXT-VALUE-MAX > OR IF
+        2DROP 0 EXIT
+    THEN
+    DROP
+    DUP _DNTRR.BUFFER @
+    OVER _DNTRR.CAPACITY @
+    _DNT-SPAN-STATUS DNS-TXT-S-OK <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTRR.BUFFER @
+    OVER _DNTRR.CAPACITY @
+    2 PICK DNS-TXT-RR-RESULT-SIZE
+    MSPAN-OVERLAP? IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTRR.PREFIX-U @
+    DUP 0< IF 2DROP 0 EXIT THEN
+    OVER _DNTRR.CAPACITY @ U> IF DROP 0 EXIT THEN
+    DUP _DNTRR.TOTAL-U @
+    DUP 0< SWAP 65535 > OR IF DROP 0 EXIT THEN
+    DUP _DNTRR.PRESENT @ _DNT-FLAG? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTRR.COMPLETE @ _DNT-FLAG? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTRR.PROVISIONAL @ _DNT-FLAG? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTRR.STRING-COUNT @
+    DUP 0< SWAP 65535 > OR IF DROP 0 EXIT THEN
+    DUP _DNTRR.TTL @
+    DUP 0< SWAP 0x7FFFFFFF > OR IF DROP 0 EXIT THEN
+    DUP _DNTRR.PRESENT @ IF
+        _DNTRR-PRESENT-STATE?
+    ELSE
+        _DNTRR-EMPTY-STATE?
+    THEN ;
+
+: DNS-TXT-RR-RESULT-INIT  ( value-a value-cap rr-result -- status )
+    DUP _DNT-RR-RESULT-STATUS ?DUP IF
+        _DNT-RETURN3 EXIT
+    THEN
+    OVER 1 < 2 PICK DNS-TXT-VALUE-MAX > OR IF
+        DNS-TXT-S-CAPACITY _DNT-RETURN3 EXIT
+    THEN
+    2 PICK 2 PICK _DNT-SPAN-STATUS ?DUP IF
+        _DNT-RETURN3 EXIT
+    THEN
+    2 PICK 2 PICK
+    2 PICK DNS-TXT-RR-RESULT-SIZE
+    MSPAN-OVERLAP? IF
+        DNS-TXT-S-ALIAS _DNT-RETURN3 EXIT
+    THEN
+
+    DUP _DNTRR.MAGIC @ _DNTRR-MAGIC-VALUE = IF
+        DUP DNS-TXT-RR-RESULT-VALID? 0= IF
+            DNS-TXT-S-INVALID _DNT-RETURN3 EXIT
+        THEN
+        DUP _DNTRR.BUFFER @ OVER _DNTRR.CAPACITY @ 0 FILL
+    THEN
+
+    >R
+    2DUP 0 FILL
+    R@ DNS-TXT-RR-RESULT-SIZE 0 FILL
+    OVER R@ _DNTRR.BUFFER !
+    DUP R@ _DNTRR.CAPACITY !
+    _DNTRR-MAGIC-VALUE R@ _DNTRR.MAGIC !
+    2DROP
+    R> DROP
+    DNS-TXT-S-OK ;
+
+: _DNTRR-RESET  ( rr-result -- )
+    DUP _DNTRR.BUFFER @
+    OVER _DNTRR.CAPACITY @
+    2DUP 0 FILL
+    ROT >R
+    R@ DNS-TXT-RR-RESULT-SIZE 0 FILL
+    OVER R@ _DNTRR.BUFFER !
+    DUP R@ _DNTRR.CAPACITY !
+    _DNTRR-MAGIC-VALUE R@ _DNTRR.MAGIC !
+    2DROP
+    R> DROP ;
+
+: DNS-TXT-RR-PRESENT?  ( rr-result -- flag )
+    DUP DNS-TXT-RR-RESULT-VALID? IF
+        _DNTRR.PRESENT @
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-RR-PROVISIONAL?  ( rr-result -- flag )
+    DUP DNS-TXT-RR-RESULT-VALID? IF
+        _DNTRR.PROVISIONAL @
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-RR-PREFIX$  ( rr-result -- prefix-a prefix-u )
+    DUP DNS-TXT-RR-RESULT-VALID? 0= IF
+        DROP 0 0 EXIT
+    THEN
+    DUP _DNTRR.PRESENT @ 0= IF
+        DROP 0 0 EXIT
+    THEN
+    DUP _DNTRR.BUFFER @
+    SWAP _DNTRR.PREFIX-U @ ;
+
+: DNS-TXT-RR-TOTAL-LENGTH@  ( rr-result -- total-u )
+    DUP DNS-TXT-RR-RESULT-VALID? IF
+        _DNTRR.TOTAL-U @
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-RR-COMPLETE?  ( rr-result -- flag )
+    DUP DNS-TXT-RR-RESULT-VALID? IF
+        _DNTRR.COMPLETE @
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-RR-STRING-COUNT@  ( rr-result -- count )
+    DUP DNS-TXT-RR-RESULT-VALID? IF
+        _DNTRR.STRING-COUNT @
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-RR-TTL@  ( rr-result -- ttl )
+    DUP DNS-TXT-RR-RESULT-VALID? IF
+        _DNTRR.TTL @
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-RR-RESULT-WIPE  ( rr-result -- status )
+    DUP DNS-TXT-RR-RESULT-VALID? 0= IF
+        DROP DNS-TXT-S-INVALID EXIT
+    THEN
+    DUP _DNTRR.BUFFER @ OVER _DNTRR.CAPACITY @ 0 FILL
+    DNS-TXT-RR-RESULT-SIZE 0 FILL
     DNS-TXT-S-OK ;
 
 \ =====================================================================
@@ -1019,6 +1298,34 @@ REQUIRE ../utils/caller-span.f
     R@ _DNTR.RDATA-POS !
     R> DROP DNS-TXT-S-OK ;
 
+\ Consume one bounded DNS character-string from the current RR.  Both the
+\ singleton parser and iterator use this exact framing/advance primitive.
+: _DNT-TXT-NEXT-STRING  ( work -- string-a string-u present? status )
+    >R
+    R@ _DNTR.RDATA-POS @
+    R@ _DNTR.RDATA-END @ = IF
+        R> DROP 0 0 0 DNS-TXT-S-OK EXIT
+    THEN
+    R@ _DNTR.RDATA-POS @
+    R@ _DNTR.RDATA-END @ U> IF
+        R> DROP 0 0 0 DNS-TXT-S-MALFORMED EXIT
+    THEN
+    R@ _DNTR.MESSAGE @
+    R@ _DNTR.RDATA-POS @ + C@
+    DUP R@ _DNTR.LABEL-U !
+    R@ _DNTR.RDATA-POS @ 1+
+    OVER +
+    DUP R@ _DNTR.RDATA-END @ U> IF
+        2DROP R> DROP 0 0 0 DNS-TXT-S-MALFORMED EXIT
+    THEN
+    DROP
+    R@ _DNTR.MESSAGE @
+    R@ _DNTR.RDATA-POS @ + 1+
+    SWAP
+    R@ _DNTR.LABEL-U @ 1+
+    R@ _DNTR.RDATA-POS +!
+    R> DROP -1 DNS-TXT-S-OK ;
+
 : _DNT-PARSE-TXT-RDATA  ( copy? result -- status )
     >R
     R@ _DNTR.COPY !
@@ -1027,37 +1334,30 @@ REQUIRE ../utils/caller-span.f
         R> DROP DNS-TXT-S-MALFORMED EXIT
     THEN
     BEGIN
-        R@ _DNTR.RDATA-POS @
-        R@ _DNTR.RDATA-END @ U<
-    WHILE
-        R@ _DNTR.MESSAGE @
-        R@ _DNTR.RDATA-POS @ + C@
-        R@ _DNTR.LABEL-U !
-        R@ _DNTR.RDATA-POS @ 1+
-        R@ _DNTR.LABEL-U @ +
-        R@ _DNTR.RDATA-END @ U> IF
-            R> DROP DNS-TXT-S-MALFORMED EXIT
+        R@ _DNT-TXT-NEXT-STRING
+        DUP IF
+            >R _DNT-DROP3 R> R> DROP EXIT
+        THEN
+        DROP
+        0= IF
+            2DROP R> DROP DNS-TXT-S-OK EXIT
         THEN
         1 R@ _DNTR.STRING-COUNT +!
 
         R@ _DNTR.COPY @ IF
-            R@ _DNTR.LENGTH @
-            R@ _DNTR.LABEL-U @ +
+            R@ _DNTR.LENGTH @ OVER +
             R@ _DNTR.CAPACITY @ U> IF
-                R> DROP DNS-TXT-S-CAPACITY EXIT
+                2DROP R> DROP DNS-TXT-S-CAPACITY EXIT
             THEN
-            R@ _DNTR.MESSAGE @
-            R@ _DNTR.RDATA-POS @ + 1+
+            OVER
             R@ _DNTR.BUFFER @
             R@ _DNTR.LENGTH @ +
-            R@ _DNTR.LABEL-U @ CMOVE
-            R@ _DNTR.LABEL-U @
+            2 PICK CMOVE
+            DUP
             R@ _DNTR.LENGTH +!
         THEN
-        R@ _DNTR.LABEL-U @ 1+
-        R@ _DNTR.RDATA-POS +!
-    REPEAT
-    R> DROP DNS-TXT-S-OK ;
+        2DROP
+    AGAIN ;
 
 : _DNT-PARSE-RR  ( result -- status )
     >R
@@ -1101,7 +1401,9 @@ REQUIRE ../utils/caller-span.f
     REPEAT
     R> DROP DNS-TXT-S-OK ;
 
-: _DNT-PARSE-BODY  ( result -- status )
+\ Admit the response header and bind its sole echoed question.  The strict
+\ singleton parser and per-RR iterator share this complete trust boundary.
+: _DNT-BIND-QUESTION  ( work -- status )
     >R
     R@ _DNTR.MESSAGE @ _DNT-U16@
     R@ _DNTR.QUERY @ _DNTQ.ID @ <> IF
@@ -1142,7 +1444,13 @@ REQUIRE ../utils/caller-span.f
     R@ _DNTR.RCODE @ IF
         R> DROP DNS-TXT-S-RCODE EXIT
     THEN
+    R> DROP DNS-TXT-S-OK ;
 
+: _DNT-PARSE-BODY  ( result -- status )
+    >R
+    R@ _DNT-BIND-QUESTION ?DUP IF
+        R> DROP EXIT
+    THEN
     R@ _DNTR.ANSWER-COUNT @ -1
     R@ _DNT-PARSE-SECTION ?DUP IF
         R> DROP EXIT
@@ -1167,6 +1475,465 @@ REQUIRE ../utils/caller-span.f
         R> DROP DNS-TXT-S-DUPLICATE EXIT
     THEN
     DNS-TXT-E-VALUE R@ _DNT-EVIDENCE+
+    R> DROP DNS-TXT-S-OK ;
+
+\ =====================================================================
+\  Per-RR TXT iterator
+\ =====================================================================
+
+: _DNTI-FAILURE-STATUS?  ( status -- flag )
+    DUP DNS-TXT-S-MALFORMED >=
+    SWAP DNS-TXT-S-RCODE <= AND ;
+
+: _DNTI-ALIASES?
+  ( response-a response-u query rr-result iter -- flag )
+    4 PICK 4 PICK
+    2 PICK DNS-TXT-ITER-SIZE MSPAN-OVERLAP? IF
+        _DNT-DROP5 -1 EXIT
+    THEN
+    4 PICK 4 PICK
+    3 PICK DNS-TXT-RR-RESULT-SIZE MSPAN-OVERLAP? IF
+        _DNT-DROP5 -1 EXIT
+    THEN
+    4 PICK 4 PICK
+    3 PICK DUP _DNTRR.BUFFER @
+    SWAP _DNTRR.CAPACITY @ MSPAN-OVERLAP? IF
+        _DNT-DROP5 -1 EXIT
+    THEN
+    2 PICK DNS-TXT-QUERY-SIZE
+    2 PICK DNS-TXT-ITER-SIZE MSPAN-OVERLAP? IF
+        _DNT-DROP5 -1 EXIT
+    THEN
+    2 PICK DNS-TXT-QUERY-SIZE
+    3 PICK DNS-TXT-RR-RESULT-SIZE MSPAN-OVERLAP? IF
+        _DNT-DROP5 -1 EXIT
+    THEN
+    2 PICK DNS-TXT-QUERY-SIZE
+    3 PICK DUP _DNTRR.BUFFER @
+    SWAP _DNTRR.CAPACITY @ MSPAN-OVERLAP? IF
+        _DNT-DROP5 -1 EXIT
+    THEN
+    DUP DNS-TXT-ITER-SIZE
+    3 PICK DNS-TXT-RR-RESULT-SIZE MSPAN-OVERLAP? IF
+        _DNT-DROP5 -1 EXIT
+    THEN
+    DUP DNS-TXT-ITER-SIZE
+    3 PICK DUP _DNTRR.BUFFER @
+    SWAP _DNTRR.CAPACITY @ MSPAN-OVERLAP? IF
+        _DNT-DROP5 -1 EXIT
+    THEN
+    _DNT-DROP5 0 ;
+
+: _DNTI-RR-EMPTY?  ( iter -- flag )
+    _DNTI.RR-RESULT @
+    DUP _DNTRR.PRESENT @ 0=
+    SWAP _DNTRR.PROVISIONAL @ 0= AND ;
+
+: _DNTI-COMMON-VALID?  ( iter -- flag )
+    DUP _DNTI.RCODE @ 0<>
+    OVER DNS-TXT-E-RCODE _DNT-RESULT-EVIDENCE? <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.STATUS @ DNS-TXT-S-TRUNCATED =
+    OVER DNS-TXT-E-TRUNCATED _DNT-RESULT-EVIDENCE? <> IF
+        DROP 0 EXIT
+    THEN
+    DUP DNS-TXT-E-VALUE _DNT-RESULT-EVIDENCE? IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.PHASE @ _DNTI-PHASE-VALIDATED =
+    OVER DNS-TXT-ITER-E-VALIDATED
+    _DNT-RESULT-EVIDENCE? <> IF
+        DROP 0 EXIT
+    THEN
+    DUP DNS-TXT-E-RESPONSE _DNT-RESULT-EVIDENCE? IF
+        DUP DNS-TXT-E-ID _DNT-RESULT-EVIDENCE? 0= IF
+            DROP 0 EXIT
+        THEN
+        DUP _DNT-RESULT-RESPONSE-FLAGS? 0= IF
+            DROP 0 EXIT
+        THEN
+    THEN
+    DUP _DNT-RESULT-QUESTION? IF
+        DUP DNS-TXT-E-RESPONSE _DNT-RESULT-EVIDENCE? 0= IF
+            DROP 0 EXIT
+        THEN
+        DUP _DNT-RESULT-RCODE-FLAGS? 0= IF
+            DROP 0 EXIT
+        THEN
+    THEN
+    DUP DNS-TXT-E-RCODE _DNT-RESULT-EVIDENCE? IF
+        DUP _DNT-RESULT-QUESTION? 0= IF DROP 0 EXIT THEN
+    THEN
+    DROP -1 ;
+
+: _DNTI-ACTIVE-STATE?  ( iter -- flag )
+    DUP _DNTI.STATUS @ DNS-TXT-S-PROVISIONAL <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNT-RESULT-QUESTION? 0= IF DROP 0 EXIT THEN
+    DUP _DNTI.RCODE @ IF DROP 0 EXIT THEN
+    DUP _DNT-RESULT-TC? IF DROP 0 EXIT THEN
+    DUP _DNTI.RR-RESULT @ _DNTRR.PRESENT @ IF
+        DUP _DNTI.YIELDED @ 0= IF DROP 0 EXIT THEN
+    ELSE
+        DUP _DNTI.YIELDED @ IF DROP 0 EXIT THEN
+        DUP _DNTI.ANSWER-LEFT @
+        OVER _DNTI.ANSWER-COUNT @ <> IF DROP 0 EXIT THEN
+    THEN
+    DROP -1 ;
+
+: _DNTI-VALIDATED-STATE?  ( iter -- flag )
+    DUP _DNT-RESULT-QUESTION? 0= IF DROP 0 EXIT THEN
+    DUP _DNTI.RCODE @ IF DROP 0 EXIT THEN
+    DUP _DNT-RESULT-TC? IF DROP 0 EXIT THEN
+    DUP _DNTI.ANSWER-LEFT @ IF DROP 0 EXIT THEN
+    DUP _DNTI.AUTHORITY-LEFT @ IF DROP 0 EXIT THEN
+    DUP _DNTI.ADDITIONAL-LEFT @ IF DROP 0 EXIT THEN
+    DUP _DNTR.CURSOR @
+    OVER _DNTR.MESSAGE-U @ <> IF DROP 0 EXIT THEN
+    DUP _DNTI-RR-EMPTY? 0= IF DROP 0 EXIT THEN
+    DUP _DNTI.YIELDED @ IF
+        _DNTI.STATUS @ DNS-TXT-S-OK =
+    ELSE
+        _DNTI.STATUS @ DNS-TXT-S-NODATA =
+    THEN ;
+
+: _DNTI-FAILED-STATE?  ( iter -- flag )
+    DUP _DNTI.STATUS @ _DNTI-FAILURE-STATUS? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI-RR-EMPTY? 0= IF DROP 0 EXIT THEN
+    DUP _DNTI.STATUS @ DNS-TXT-S-MISMATCH = IF
+        DUP _DNT-RESULT-QUESTION? IF DROP 0 EXIT THEN
+        DUP _DNTI.RCODE @ IF DROP 0 EXIT THEN
+    THEN
+    DUP _DNTI.STATUS @ DNS-TXT-S-MALFORMED = IF
+        DUP _DNTI.RCODE @ IF DROP 0 EXIT THEN
+        DUP _DNT-RESULT-QUESTION? IF
+            DUP _DNT-RESULT-TC? IF DROP 0 EXIT THEN
+        THEN
+    THEN
+    DUP _DNTI.STATUS @ DNS-TXT-S-MALFORMED <> IF
+        DUP _DNTI.ANSWER-LEFT @
+        OVER _DNTI.ANSWER-COUNT @ <> IF DROP 0 EXIT THEN
+        DUP _DNTI.YIELDED @ IF DROP 0 EXIT THEN
+        DUP _DNTI.AUTHORITY-LEFT @ IF DROP 0 EXIT THEN
+        DUP _DNTI.ADDITIONAL-LEFT @ IF DROP 0 EXIT THEN
+    ELSE
+        DUP _DNT-RESULT-QUESTION? 0= IF
+            DUP _DNTI.AUTHORITY-LEFT @ IF DROP 0 EXIT THEN
+            DUP _DNTI.ADDITIONAL-LEFT @ IF DROP 0 EXIT THEN
+        THEN
+    THEN
+    DUP _DNTI.STATUS @ DNS-TXT-S-TRUNCATED = IF
+        DUP _DNT-RESULT-QUESTION? 0= IF DROP 0 EXIT THEN
+        DUP _DNT-RESULT-TC? 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP _DNTI.STATUS @ DNS-TXT-S-RCODE = IF
+        DUP _DNT-RESULT-QUESTION? 0= IF DROP 0 EXIT THEN
+        DUP _DNTI.RCODE @ 0= IF DROP 0 EXIT THEN
+        DUP _DNT-RESULT-TC? IF DROP 0 EXIT THEN
+    THEN
+    DROP -1 ;
+
+: DNS-TXT-ITER-VALID?  ( iter -- flag )
+    DUP _DNT-ITER-STATUS ?DUP IF
+        2DROP 0 EXIT
+    THEN
+    DUP _DNTI.MAGIC @ _DNTI-MAGIC-VALUE <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.RR-RESULT @
+    DNS-TXT-RR-RESULT-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _DNTR.MESSAGE-U @
+    DUP 0< SWAP DNS-TXT-MESSAGE-MAX U> OR IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTR.MESSAGE @
+    OVER _DNTR.MESSAGE-U @
+    _DNT-SPAN-STATUS DNS-TXT-S-OK <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTR.QUERY @ DNS-TXT-QUERY-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTR.MESSAGE @
+    OVER _DNTR.MESSAGE-U @
+    2 PICK _DNTR.QUERY @
+    3 PICK _DNTI.RR-RESULT @
+    4 PICK _DNTI-ALIASES? IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.PHASE @ DUP _DNTI-PHASE-ACTIVE <
+    SWAP _DNTI-PHASE-FAILED > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.STATUS @ DNS-TXT-STATUS-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.RCODE @ DUP 0< SWAP 15 > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.FLAGS @ DUP 0< SWAP 65535 > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.EVIDENCE @ DUP 0< SWAP 127 > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP _DNTI.ANSWER-COUNT @
+    DUP 0< SWAP 65535 > OR IF DROP 0 EXIT THEN
+    DUP _DNTI.ANSWER-LEFT @
+    DUP 0< SWAP 65535 > OR IF DROP 0 EXIT THEN
+    DUP _DNTI.ANSWER-LEFT @
+    OVER _DNTI.ANSWER-COUNT @ > IF DROP 0 EXIT THEN
+    DUP _DNTI.YIELDED @
+    DUP 0< SWAP 65535 > OR IF DROP 0 EXIT THEN
+    DUP _DNTI.YIELDED @
+    OVER _DNTI.ANSWER-COUNT @ > IF DROP 0 EXIT THEN
+    DUP _DNTI.YIELDED @
+    OVER _DNTI.ANSWER-LEFT @ +
+    OVER _DNTI.ANSWER-COUNT @ > IF DROP 0 EXIT THEN
+    DUP _DNTI.ANSWER-LEFT @
+    OVER _DNTI.ANSWER-COUNT @ <> IF
+        DUP _DNT-RESULT-QUESTION? 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP _DNTI.AUTHORITY-LEFT @
+    DUP 0< SWAP 65535 > OR IF DROP 0 EXIT THEN
+    DUP _DNTI.ADDITIONAL-LEFT @
+    DUP 0< SWAP 65535 > OR IF DROP 0 EXIT THEN
+    DUP _DNTR.CURSOR @
+    DUP 0< IF 2DROP 0 EXIT THEN
+    OVER _DNTR.MESSAGE-U @ U> IF DROP 0 EXIT THEN
+    DUP _DNTI-COMMON-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _DNTI.PHASE @ _DNTI-PHASE-ACTIVE = IF
+        _DNTI-ACTIVE-STATE? EXIT
+    THEN
+    DUP _DNTI.PHASE @ _DNTI-PHASE-VALIDATED = IF
+        _DNTI-VALIDATED-STATE? EXIT
+    THEN
+    _DNTI-FAILED-STATE? ;
+
+: _DNT-U-MIN  ( u1 u2 -- min-u )
+    2DUP U< IF DROP ELSE NIP THEN ;
+
+: _DNTI-PREFIX-COPY  ( source-a source-u iter -- )
+    >R
+    DUP
+    R@ _DNTI.RR-RESULT @
+    DUP _DNTRR.CAPACITY @
+    SWAP _DNTRR.PREFIX-U @ -
+    _DNT-U-MIN
+    DUP IF
+        2 PICK
+        R@ _DNTI.RR-RESULT @
+        DUP _DNTRR.BUFFER @
+        SWAP _DNTRR.PREFIX-U @ +
+        2 PICK CMOVE
+        DUP R@ _DNTI.RR-RESULT @ _DNTRR.PREFIX-U +!
+    THEN
+    DROP 2DROP R> DROP ;
+
+: _DNTI-PARSE-TXT-RDATA  ( iter -- status )
+    >R
+    R@ _DNTR.RDATA-POS @
+    R@ _DNTR.RDATA-END @ = IF
+        R> DROP DNS-TXT-S-MALFORMED EXIT
+    THEN
+    R@ _DNTR.RR-TTL @
+    R@ _DNTI.RR-RESULT @ _DNTRR.TTL !
+    BEGIN
+        R@ _DNT-TXT-NEXT-STRING
+        DUP IF
+            >R _DNT-DROP3 R> R> DROP EXIT
+        THEN
+        DROP
+        0= IF
+            2DROP
+            R@ _DNTI.RR-RESULT @
+            DUP _DNTRR.TOTAL-U @
+            OVER _DNTRR.CAPACITY @ U> 0=
+            OVER _DNTRR.COMPLETE !
+            -1 OVER _DNTRR.PRESENT !
+            -1 SWAP _DNTRR.PROVISIONAL !
+            R> DROP DNS-TXT-S-OK EXIT
+        THEN
+        1 R@ _DNTI.RR-RESULT @ _DNTRR.STRING-COUNT +!
+        DUP R@ _DNTI.RR-RESULT @ _DNTRR.TOTAL-U +!
+        R@ _DNTI-PREFIX-COPY
+    AGAIN ;
+
+: _DNTI-RR-MATCH?  ( iter -- flag )
+    DUP _DNTR.OWNER-MATCH @
+    OVER _DNTR.RR-TYPE @ _DNT-TYPE-TXT = AND
+    SWAP _DNTR.RR-CLASS @ _DNT-CLASS-IN = AND ;
+
+: _DNTI-DRAIN-SECTION  ( counter-a iter -- status )
+    >R
+    BEGIN
+        DUP @
+    WHILE
+        R@ _DNT-PARSE-RR-HEADER ?DUP IF
+            >R DROP R> R> DROP EXIT
+        THEN
+        -1 OVER +!
+    REPEAT
+    DROP R> DROP DNS-TXT-S-OK ;
+
+: _DNTI-FAIL  ( status iter -- status )
+    >R
+    DUP R@ _DNTI.STATUS !
+    _DNTI-PHASE-FAILED R@ _DNTI.PHASE !
+    R@ _DNTI.RR-RESULT @ _DNTRR-RESET
+    R> DROP ;
+
+: _DNTI-NEXT-ACTIVE  ( iter -- present? status )
+    >R
+    R@ _DNTI.RR-RESULT @ _DNTRR-RESET
+    BEGIN
+        R@ _DNTI.ANSWER-LEFT @
+    WHILE
+        R@ _DNT-PARSE-RR-HEADER ?DUP IF
+            R@ _DNTI-FAIL R> DROP 0 SWAP EXIT
+        THEN
+        -1 R@ _DNTI.ANSWER-LEFT +!
+        R@ _DNTI-RR-MATCH? IF
+            R@ _DNTI-PARSE-TXT-RDATA ?DUP IF
+                R@ _DNTI-FAIL R> DROP 0 SWAP EXIT
+            THEN
+            1 R@ _DNTI.YIELDED +!
+            R> DROP -1 DNS-TXT-S-OK EXIT
+        THEN
+    REPEAT
+
+    R@ _DNTI.AUTHORITY-LEFT R@
+    _DNTI-DRAIN-SECTION ?DUP IF
+        R@ _DNTI-FAIL R> DROP 0 SWAP EXIT
+    THEN
+    R@ _DNTI.ADDITIONAL-LEFT R@
+    _DNTI-DRAIN-SECTION ?DUP IF
+        R@ _DNTI-FAIL R> DROP 0 SWAP EXIT
+    THEN
+    R@ _DNTR.CURSOR @ R@ _DNTR.MESSAGE-U @ <> IF
+        DNS-TXT-S-MALFORMED R@ _DNTI-FAIL
+        R> DROP 0 SWAP EXIT
+    THEN
+
+    DNS-TXT-ITER-E-VALIDATED R@ _DNT-EVIDENCE+
+    _DNTI-PHASE-VALIDATED R@ _DNTI.PHASE !
+    R@ _DNTI.YIELDED @ IF
+        DNS-TXT-S-OK
+    ELSE
+        DNS-TXT-S-NODATA
+    THEN
+    DUP R@ _DNTI.STATUS !
+    R> DROP 0 SWAP ;
+
+: DNS-TXT-ITER-NEXT  ( iter -- present? status )
+    DUP DNS-TXT-ITER-VALID? 0= IF
+        DROP 0 DNS-TXT-S-INVALID EXIT
+    THEN
+    DUP _DNTI.PHASE @ _DNTI-PHASE-ACTIVE = IF
+        _DNTI-NEXT-ACTIVE EXIT
+    THEN
+    DUP _DNTI.STATUS @
+    SWAP DROP 0 SWAP ;
+
+: DNS-TXT-ITER-TERMINAL?  ( iter -- flag )
+    DUP DNS-TXT-ITER-VALID? IF
+        _DNTI.PHASE @ _DNTI-PHASE-ACTIVE <>
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-ITER-VALIDATED?  ( iter -- flag )
+    DUP DNS-TXT-ITER-VALID? IF
+        _DNTI.PHASE @ _DNTI-PHASE-VALIDATED =
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-ITER-STATUS@  ( iter -- status )
+    DUP DNS-TXT-ITER-VALID? IF
+        _DNTI.STATUS @
+    ELSE
+        DROP DNS-TXT-S-INVALID
+    THEN ;
+
+: DNS-TXT-ITER-EVIDENCE@  ( iter -- evidence )
+    DUP DNS-TXT-ITER-VALID? IF
+        _DNTI.EVIDENCE @
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-ITER-MATCHED-COUNT@  ( iter -- count )
+    DUP DNS-TXT-ITER-VALID? IF
+        _DNTI.YIELDED @
+    ELSE
+        DROP 0
+    THEN ;
+
+: DNS-TXT-ITER-WIPE  ( iter -- status )
+    DUP DNS-TXT-ITER-VALID? 0= IF
+        DROP DNS-TXT-S-INVALID EXIT
+    THEN
+    DUP _DNTI.RR-RESULT @ DNS-TXT-RR-RESULT-WIPE DROP
+    DNS-TXT-ITER-SIZE 0 FILL
+    DNS-TXT-S-OK ;
+
+: DNS-TXT-ITER-BEGIN
+  ( response-a response-u query rr-result iter -- status )
+    DUP _DNT-ITER-STATUS ?DUP IF
+        _DNT-RETURN5 EXIT
+    THEN
+    OVER DNS-TXT-RR-RESULT-VALID? 0= IF
+        DNS-TXT-S-INVALID _DNT-RETURN5 EXIT
+    THEN
+    2 PICK DNS-TXT-QUERY-VALID? 0= IF
+        DNS-TXT-S-INVALID _DNT-RETURN5 EXIT
+    THEN
+    3 PICK 0< IF
+        DNS-TXT-S-INVALID _DNT-RETURN5 EXIT
+    THEN
+    3 PICK DNS-TXT-MESSAGE-MAX U> IF
+        DNS-TXT-S-CAPACITY _DNT-RETURN5 EXIT
+    THEN
+    4 PICK 4 PICK _DNT-SPAN-STATUS ?DUP IF
+        _DNT-RETURN5 EXIT
+    THEN
+    4 PICK 4 PICK 4 PICK 4 PICK 4 PICK
+    _DNTI-ALIASES? IF
+        DNS-TXT-S-ALIAS _DNT-RETURN5 EXIT
+    THEN
+
+    OVER _DNTRR-RESET
+    DUP DNS-TXT-ITER-SIZE 0 FILL
+    >R
+    DUP R@ _DNTI.RR-RESULT !
+    OVER R@ _DNTR.QUERY !
+    3 PICK R@ _DNTR.MESSAGE !
+    2 PICK R@ _DNTR.MESSAGE-U !
+    _DNTI-MAGIC-VALUE R@ _DNTI.MAGIC !
+    _DNT-DROP4
+
+    R@ _DNTR.MESSAGE-U @ 12 < IF
+        DNS-TXT-S-MALFORMED R@ _DNTI-FAIL
+        R> DROP EXIT
+    THEN
+    R@ _DNT-BIND-QUESTION
+    R@ _DNTI.ANSWER-LEFT @ R@ _DNTI.ANSWER-COUNT !
+    DUP IF
+        R@ _DNTI-FAIL R> DROP EXIT
+    THEN
+    DROP
+
+    R@ _DNTR.MESSAGE @ 8 + _DNT-U16@
+    R@ _DNTI.AUTHORITY-LEFT !
+    R@ _DNTR.MESSAGE @ 10 + _DNT-U16@
+    R@ _DNTI.ADDITIONAL-LEFT !
+    DNS-TXT-S-PROVISIONAL R@ _DNTI.STATUS !
+    _DNTI-PHASE-ACTIVE R@ _DNTI.PHASE !
     R> DROP DNS-TXT-S-OK ;
 
 \ =====================================================================
@@ -1251,5 +2018,13 @@ DNS-TXT-QUERY-SIZE 304 <> [IF]
 [THEN]
 
 DNS-TXT-RESULT-SIZE 512 <> [IF]
+    _DNT-GEOMETRY-ABORT
+[THEN]
+
+DNS-TXT-RR-RESULT-SIZE 96 <> [IF]
+    _DNT-GEOMETRY-ABORT
+[THEN]
+
+DNS-TXT-ITER-SIZE 512 <> [IF]
     _DNT-GEOMETRY-ABORT
 [THEN]

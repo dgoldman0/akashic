@@ -12,8 +12,13 @@ CREATE _dntt-result-allocation DNS-TXT-RESULT-SIZE 7 + ALLOT
 _dntt-result-allocation 7 + -8 AND CONSTANT _dntt-result
 CREATE _dntt-small-result-allocation DNS-TXT-RESULT-SIZE 7 + ALLOT
 _dntt-small-result-allocation 7 + -8 AND CONSTANT _dntt-small-result
+CREATE _dntt-rr-result-allocation DNS-TXT-RR-RESULT-SIZE 7 + ALLOT
+_dntt-rr-result-allocation 7 + -8 AND CONSTANT _dntt-rr-result
+CREATE _dntt-iter-allocation DNS-TXT-ITER-SIZE 7 + ALLOT
+_dntt-iter-allocation 7 + -8 AND CONSTANT _dntt-iter
 CREATE _dntt-value 128 ALLOT
 CREATE _dntt-small-value 4 ALLOT
+CREATE _dntt-rr-value 8 ALLOT
 CREATE _dntt-response 1024 ALLOT
 CREATE _dntt-name 320 ALLOT
 
@@ -81,6 +86,12 @@ CREATE _dntt-name 320 ALLOT
 : _dntt-set-answer-count  ( count -- )
     _dntt-response 6 + _dntt-u16! ;
 
+: _dntt-set-authority-count  ( count -- )
+    _dntt-response 8 + _dntt-u16! ;
+
+: _dntt-set-additional-count  ( count -- )
+    _dntt-response 10 + _dntt-u16! ;
+
 : _dntt-set-flags  ( flags -- )
     _dntt-response 2 + _dntt-u16! ;
 
@@ -91,7 +102,9 @@ CREATE _dntt-name 320 ALLOT
     DUP _dntt-response-u !
     _dntt-response SWAP CMOVE
     0x8180 _dntt-set-flags
-    0 _dntt-set-answer-count ;
+    0 _dntt-set-answer-count
+    0 _dntt-set-authority-count
+    0 _dntt-set-additional-count ;
 
 : _dntt-result-reset  ( -- )
     _dntt-value 128 _dntt-result DNS-TXT-RESULT-INIT
@@ -99,6 +112,10 @@ CREATE _dntt-name 320 ALLOT
 
 : _dntt-small-result-reset  ( -- )
     _dntt-small-value 4 _dntt-small-result DNS-TXT-RESULT-INIT
+    DNS-TXT-S-OK = _dntt-assert ;
+
+: _dntt-rr-result-reset  ( -- )
+    _dntt-rr-value 8 _dntt-rr-result DNS-TXT-RR-RESULT-INIT
     DNS-TXT-S-OK = _dntt-assert ;
 
 : _dntt-append-owner-and-fixed  ( ttl rdlength -- )
@@ -115,6 +132,23 @@ CREATE _dntt-name 320 ALLOT
     S" did=" _dntt-append-bytes
     7 _dntt-append-byte
     S" example" _dntt-append-bytes ;
+
+: _dntt-append-text-txt  ( text-a text-u ttl -- )
+    >R
+    DUP 1+
+    R> SWAP _dntt-append-owner-and-fixed
+    DUP _dntt-append-byte
+    _dntt-append-bytes ;
+
+: _dntt-append-root-txt  ( ttl -- )
+    >R
+    0 _dntt-append-byte
+    16 _dntt-append-u16
+    1 _dntt-append-u16
+    R> _dntt-append-u32
+    2 _dntt-append-u16
+    1 _dntt-append-byte
+    [CHAR] x _dntt-append-byte ;
 
 : _dntt-append-a-record  ( -- )
     12 _dntt-append-pointer
@@ -525,6 +559,158 @@ CREATE _dntt-name 320 ALLOT
     DNS-TXT-S-MALFORMED = _dntt-assert
     _dntt-stack ;
 
+: _dntt-iterator-begin  ( -- )
+    _dntt-response _dntt-response-u @
+    _dntt-query _dntt-rr-result _dntt-iter
+    DNS-TXT-ITER-BEGIN DNS-TXT-S-OK = _dntt-assert ;
+
+: _dntt-iterator-evidence  ( -- evidence )
+    DNS-TXT-E-RESPONSE DNS-TXT-E-ID OR
+    DNS-TXT-E-QUESTION OR DNS-TXT-ITER-E-VALIDATED OR ;
+
+: _dntt-test-iterator-records  ( -- )
+    _dntt-rr-result-reset
+    _dntt-rr-result DNS-TXT-RR-RESULT-VALID? _dntt-assert
+
+    \ Descriptor integrity rejects a partly published per-RR observation.
+    -1 _dntt-rr-result _DNTRR.PRESENT !
+    _dntt-rr-result DNS-TXT-RR-RESULT-VALID? 0= _dntt-assert
+    0 _dntt-rr-result _DNTRR.PRESENT !
+    _dntt-rr-result DNS-TXT-RR-RESULT-VALID? _dntt-assert
+
+    _dntt-response-base
+    5 _dntt-set-answer-count
+    _dntt-append-a-record
+    90 _dntt-append-root-txt
+    S" one" 111 _dntt-append-text-txt
+    _dntt-append-a-record
+    S" two" 222 _dntt-append-text-txt
+    _dntt-iter DNS-TXT-ITER-SIZE 0xA5 FILL
+    _dntt-iterator-begin
+
+    _dntt-iter DNS-TXT-ITER-VALID? _dntt-assert
+    _dntt-iter DNS-TXT-ITER-TERMINAL? 0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALIDATED? 0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-STATUS@
+    DNS-TXT-S-PROVISIONAL = _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PRESENT? 0= _dntt-assert
+
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-OK = _dntt-assert
+    _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-RESULT-VALID? _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PRESENT? _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PROVISIONAL? _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PREFIX$
+    S" one" COMPARE 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-TOTAL-LENGTH@ 3 = _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-COMPLETE? _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-STRING-COUNT@ 1 = _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-TTL@ 111 = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-MATCHED-COUNT@ 1 = _dntt-assert
+
+    \ A yielded RR is provisional and cannot be published yet.
+    _dntt-iter DNS-TXT-ITER-VALIDATED? 0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-EVIDENCE@
+    DNS-TXT-ITER-E-VALIDATED AND 0= _dntt-assert
+
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-OK = _dntt-assert
+    _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PREFIX$
+    S" two" COMPARE 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-TTL@ 222 = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-MATCHED-COUNT@ 2 = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALIDATED? 0= _dntt-assert
+
+    \ The terminal false result drains all sections and validates exact length.
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-OK = _dntt-assert
+    0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-TERMINAL? _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALIDATED? _dntt-assert
+    _dntt-iter DNS-TXT-ITER-STATUS@ DNS-TXT-S-OK = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-EVIDENCE@
+    _dntt-iterator-evidence = _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PRESENT? 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PROVISIONAL? 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PREFIX$ NIP 0= _dntt-assert
+    _dntt-rr-value 8 0 _dntt-byte? _dntt-assert
+
+    \ Terminal NEXT is stable and never republishes the last arena contents.
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-OK = _dntt-assert
+    0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-WIPE DNS-TXT-S-OK = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALID? 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-RESULT-VALID? 0= _dntt-assert
+    _dntt-rr-value 8 0 _dntt-byte? _dntt-assert
+    _dntt-stack ;
+
+: _dntt-test-iterator-oversize  ( -- )
+    _dntt-rr-result-reset
+    _dntt-response-base
+    1 _dntt-set-answer-count
+    333 _dntt-append-good-txt
+    _dntt-iterator-begin
+
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-OK = _dntt-assert
+    _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PREFIX$
+    S" did=exam" COMPARE 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-TOTAL-LENGTH@ 11 = _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-COMPLETE? 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-STRING-COUNT@ 2 = _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-TTL@ 333 = _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PROVISIONAL? _dntt-assert
+
+    \ Even an ignored oversized RR must be followed by the terminal drain.
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-OK = _dntt-assert
+    0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALIDATED? _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PRESENT? 0= _dntt-assert
+    _dntt-rr-value 8 0 _dntt-byte? _dntt-assert
+    _dntt-stack ;
+
+: _dntt-test-iterator-late-failure  ( -- )
+    _dntt-rr-result-reset
+    _dntt-response-base
+    1 _dntt-set-answer-count
+    1 _dntt-set-additional-count
+    S" late" 444 _dntt-append-text-txt
+    0x40 _dntt-append-byte
+    _dntt-iterator-begin
+
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-OK = _dntt-assert
+    _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PREFIX$
+    S" late" COMPARE 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PROVISIONAL? _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALIDATED? 0= _dntt-assert
+
+    \ Malformed trailing data invalidates every provisional candidate.
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-MALFORMED = _dntt-assert
+    0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALID? _dntt-assert
+    _dntt-iter DNS-TXT-ITER-TERMINAL? _dntt-assert
+    _dntt-iter DNS-TXT-ITER-VALIDATED? 0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-STATUS@
+    DNS-TXT-S-MALFORMED = _dntt-assert
+    _dntt-iter DNS-TXT-ITER-MATCHED-COUNT@ 1 = _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PRESENT? 0= _dntt-assert
+    _dntt-rr-result DNS-TXT-RR-PROVISIONAL? 0= _dntt-assert
+    _dntt-rr-value 8 0 _dntt-byte? _dntt-assert
+
+    _dntt-iter DNS-TXT-ITER-NEXT
+    DNS-TXT-S-MALFORMED = _dntt-assert
+    0= _dntt-assert
+    _dntt-iter DNS-TXT-ITER-WIPE DNS-TXT-S-OK = _dntt-assert
+    _dntt-stack ;
+
 : _dntt-test-wipe  ( -- )
     _dntt-result-reset
     _dntt-value 128 0xA5 FILL
@@ -552,6 +738,9 @@ CREATE _dntt-name 320 ALLOT
     _dntt-test-header-outcomes
     _dntt-test-malformed-names
     _dntt-test-malformed-rdata
+    _dntt-test-iterator-records
+    _dntt-test-iterator-oversize
+    _dntt-test-iterator-late-failure
     _dntt-test-wipe
     _dntt-fails @ 0= IF
         ." DNS TXT MESSAGE PASS " _dntt-checks @ . CR

@@ -18,7 +18,7 @@ CONTRACT = LOCAL_TESTING / "dns-txt-message-test.f"
 PROFILE = "dns-txt-message-contracts"
 IMAGE = Path("/tmp/akashic-dns-txt-message-contracts.img")
 PASS_MARKER = "DNS TXT MESSAGE PASS"
-PHASE_MAX_STEPS = 120_000_000
+PHASE_MAX_STEPS = 180_000_000
 LOAD_STAGES = (
     ("source", "DNS TXT SOURCE READY"),
     ("fixture", "DNS TXT FIXTURE READY"),
@@ -63,9 +63,10 @@ def _assert_static_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     lowered = source.lower()
     doc = DOC.read_text(encoding="utf-8")
+    doc_flat = " ".join(doc.split())
     fixture = CONTRACT.read_text(encoding="utf-8")
 
-    assert 0 < PHASE_MAX_STEPS <= 120_000_000
+    assert 0 < PHASE_MAX_STEPS <= 180_000_000
     assert all(marker in AUTOEXEC for _, marker in LOAD_STAGES)
     assert AUTOEXEC.count("KEY DROP") == len(LOAD_STAGES)
     assert "PROVIDED akashic-dns-txt" in source
@@ -102,6 +103,8 @@ def _assert_static_contracts() -> None:
         "DNS-TXT-COMPRESSION-HOPS-MAX",
         "DNS-TXT-QUERY-SIZE",
         "DNS-TXT-RESULT-SIZE",
+        "DNS-TXT-RR-RESULT-SIZE",
+        "DNS-TXT-ITER-SIZE",
         "DNS-TXT-STATUS-VALID?",
         "DNS-TXT-NAME-VALIDATE",
         "DNS-TXT-QUERY-BUILD",
@@ -109,6 +112,25 @@ def _assert_static_contracts() -> None:
         "DNS-TXT-QUERY$",
         "DNS-TXT-QUERY-ID@",
         "DNS-TXT-QUERY-WIPE",
+        "DNS-TXT-RR-RESULT-INIT",
+        "DNS-TXT-RR-RESULT-VALID?",
+        "DNS-TXT-RR-PRESENT?",
+        "DNS-TXT-RR-PROVISIONAL?",
+        "DNS-TXT-RR-PREFIX$",
+        "DNS-TXT-RR-TOTAL-LENGTH@",
+        "DNS-TXT-RR-COMPLETE?",
+        "DNS-TXT-RR-STRING-COUNT@",
+        "DNS-TXT-RR-TTL@",
+        "DNS-TXT-RR-RESULT-WIPE",
+        "DNS-TXT-ITER-BEGIN",
+        "DNS-TXT-ITER-NEXT",
+        "DNS-TXT-ITER-VALID?",
+        "DNS-TXT-ITER-TERMINAL?",
+        "DNS-TXT-ITER-VALIDATED?",
+        "DNS-TXT-ITER-STATUS@",
+        "DNS-TXT-ITER-EVIDENCE@",
+        "DNS-TXT-ITER-MATCHED-COUNT@",
+        "DNS-TXT-ITER-WIPE",
         "DNS-TXT-RESULT-INIT",
         "DNS-TXT-RESULT-VALID?",
         "DNS-TXT-PARSE",
@@ -128,6 +150,8 @@ def _assert_static_contracts() -> None:
         "DNS-TXT-S-RCODE",
         "DNS-TXT-S-NODATA",
         "DNS-TXT-S-DUPLICATE",
+        "DNS-TXT-S-PROVISIONAL",
+        "DNS-TXT-ITER-E-VALIDATED",
     ):
         assert word in source
 
@@ -136,6 +160,12 @@ def _assert_static_contracts() -> None:
     )
     assert re.search(
         r"(?m)^512 CONSTANT DNS-TXT-RESULT-SIZE$", source
+    )
+    assert re.search(
+        r"(?m)^96 CONSTANT DNS-TXT-RR-RESULT-SIZE$", source
+    )
+    assert re.search(
+        r"(?m)^512 CONSTANT DNS-TXT-ITER-SIZE$", source
     )
     assert re.search(r"(?m)^4096 CONSTANT DNS-TXT-VALUE-MAX$", source)
     assert re.search(r"(?m)^65535 CONSTANT DNS-TXT-MESSAGE-MAX$", source)
@@ -260,7 +290,7 @@ def _assert_static_contracts() -> None:
     assert "_DNTR.CAPACITY" in txt
     assert "CMOVE" in txt
 
-    body = _word_body(source, "_DNT-PARSE-BODY")
+    bind = _word_body(source, "_DNT-BIND-QUESTION")
     for marker in (
         "0x8000",
         "0x7800",
@@ -268,16 +298,93 @@ def _assert_static_contracts() -> None:
         "0x0200",
         "DNS-TXT-S-TRUNCATED",
         "DNS-TXT-S-RCODE",
+        "_DNT-PARSE-QUESTION",
+        "_DNTR.RCODE !",
+    ):
+        assert marker in bind
+    assert bind.index("_DNT-PARSE-QUESTION") < bind.index("0x0200 AND")
+    assert bind.index("_DNT-PARSE-QUESTION") < bind.index("_DNTR.RCODE !")
+
+    body = _word_body(source, "_DNT-PARSE-BODY")
+    for marker in (
+        "_DNT-BIND-QUESTION",
         "DNS-TXT-S-NODATA",
         "DNS-TXT-S-DUPLICATE",
         "DNS-TXT-E-VALUE",
     ):
         assert marker in body
     assert body.count("_DNT-PARSE-SECTION") == 3
-    assert body.index("_DNT-PARSE-QUESTION") < body.index("0x0200 AND")
-    assert body.index("_DNT-PARSE-QUESTION") < body.index(
-        "_DNTR.RCODE !"
+
+    framing = _word_body(source, "_DNT-TXT-NEXT-STRING")
+    for marker in (
+        "_DNTR.RDATA-POS",
+        "_DNTR.RDATA-END",
+        "_DNTR.MESSAGE",
+        "DNS-TXT-S-MALFORMED",
+    ):
+        assert marker in framing
+    assert "_DNT-TXT-NEXT-STRING" in txt
+
+    iterator_txt = _word_body(source, "_DNTI-PARSE-TXT-RDATA")
+    for marker in (
+        "_DNT-TXT-NEXT-STRING",
+        "_DNTI-PREFIX-COPY",
+        "_DNTRR.TOTAL-U",
+        "_DNTRR.COMPLETE",
+        "_DNTRR.STRING-COUNT",
+        "_DNTRR.TTL",
+        "_DNTRR.PROVISIONAL",
+    ):
+        assert marker in iterator_txt
+    iterator_prefix = _word_body(source, "_DNTI-PREFIX-COPY")
+    for marker in (
+        "_DNTRR.BUFFER",
+        "_DNTRR.CAPACITY",
+        "_DNTRR.PREFIX-U",
+        "_DNT-U-MIN",
+        "CMOVE",
+    ):
+        assert marker in iterator_prefix
+
+    iterator_begin = _word_body(source, "DNS-TXT-ITER-BEGIN")
+    assert iterator_begin.index("_DNT-ITER-STATUS") < iterator_begin.index(
+        "DNS-TXT-ITER-SIZE 0 FILL"
     )
+    assert iterator_begin.index(
+        "DNS-TXT-RR-RESULT-VALID?"
+    ) < iterator_begin.index("_DNTRR-RESET")
+    assert iterator_begin.index(
+        "DNS-TXT-QUERY-VALID?"
+    ) < iterator_begin.index("_DNTRR-RESET")
+    assert iterator_begin.index("_DNTI-ALIASES?") < iterator_begin.index(
+        "_DNTRR-RESET"
+    )
+    assert "_DNT-BIND-QUESTION" in iterator_begin
+
+    iterator_next = _word_body(source, "_DNTI-NEXT-ACTIVE")
+    assert iterator_next.count("_DNT-PARSE-RR-HEADER") == 1
+    assert iterator_next.count("_DNTI-DRAIN-SECTION") == 2
+    for marker in (
+        "_DNTI-PARSE-TXT-RDATA",
+        "_DNTR.CURSOR",
+        "_DNTR.MESSAGE-U",
+        "DNS-TXT-ITER-E-VALIDATED",
+        "_DNTI-PHASE-VALIDATED",
+        "DNS-TXT-S-NODATA",
+    ):
+        assert marker in iterator_next
+
+    iterator_valid = _word_body(source, "DNS-TXT-ITER-VALID?")
+    for marker in (
+        "DNS-TXT-RR-RESULT-VALID?",
+        "DNS-TXT-QUERY-VALID?",
+        "_DNTI-ALIASES?",
+        "_DNTI-COMMON-VALID?",
+        "_DNTI-ACTIVE-STATE?",
+        "_DNTI-VALIDATED-STATE?",
+        "_DNTI-FAILED-STATE?",
+    ):
+        assert marker in iterator_valid
 
     compare = _word_body(source, "_DNT-NAME=QUERY?")
     assert "?DO" in compare and "LOOP" in compare
@@ -288,19 +395,24 @@ def _assert_static_contracts() -> None:
         "module owns no mutable state",
         "one `DNS-TXT-QUERY-SIZE` (304-byte)",
         "one `DNS-TXT-RESULT-SIZE` (512-byte)",
+        "one `DNS-TXT-ITER-SIZE` (512-byte)",
+        "one `DNS-TXT-RR-RESULT-SIZE` (96-byte)",
         "4,096",
         "65,535",
         "compression chain",
         "exactly one direct `IN/TXT` answer",
         "CNAME traversal remains resolver work",
         "concatenated in wire order",
+        "provisional",
+        "mandatory terminal `present?` false",
+        "drains every declared authority and additional RR",
         "`DNS-TXT-S-DUPLICATE`",
         "describe parser observations, not authenticity",
         "unsafe overlapping caller memory",
         "https://www.rfc-editor.org/rfc/rfc1035.html",
         "https://www.rfc-editor.org/rfc/rfc2181.html",
     ):
-        assert phrase in doc
+        assert phrase in doc_flat
 
     assert len(CONTRACT.name) <= 23
     assert "PROVIDED akashic-dns-txt-contracts" in fixture
@@ -314,6 +426,14 @@ def _assert_static_contracts() -> None:
         "_dntt-test-header-outcomes",
         "_dntt-test-malformed-names",
         "_dntt-test-malformed-rdata",
+        "_dntt-test-iterator-records",
+        "_dntt-test-iterator-oversize",
+        "_dntt-test-iterator-late-failure",
+        "DNS-TXT-ITER-BEGIN",
+        "DNS-TXT-ITER-NEXT",
+        "DNS-TXT-RR-PROVISIONAL?",
+        "DNS-TXT-ITER-VALIDATED?",
+        "DNS-TXT-ITER-E-VALIDATED",
         "_dntt-test-wipe",
         "DNS-TXT-S-ALIAS",
         "DNS-TXT-S-TRUNCATED",

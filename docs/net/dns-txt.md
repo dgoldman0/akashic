@@ -1,10 +1,11 @@
 # DNS TXT wire utility
 
 `akashic/net/dns-txt.f` is a protocol-neutral, caller-owned DNS wire utility.
-It builds one recursive Internet-class TXT query and parses one matching
-response. It does not choose a resolver, open a socket, retry over TCP, cache
-an answer, chase aliases, interpret application text, or confer trust on DNS
-data.
+It builds one recursive Internet-class TXT query and either iterates all
+direct matching records or applies a strict exactly-one convenience parse to
+one response. It does not choose a resolver, open a socket, retry over TCP,
+cache an answer, chase aliases, interpret application text, or confer trust
+on DNS data.
 
 The implementation follows the DNS header, question, resource-record, name
 compression, and TXT character-string formats in
@@ -17,19 +18,24 @@ unsigned 31-bit range clarified by
 
 ## Ownership and limits
 
-The module owns no mutable state. A caller allocates:
+The module owns no mutable state. A caller allocates one
+`DNS-TXT-QUERY-SIZE` (304-byte) aligned query descriptor and then either:
 
-- one `DNS-TXT-QUERY-SIZE` (304-byte) aligned query descriptor;
-- one `DNS-TXT-RESULT-SIZE` (512-byte) aligned result descriptor; and
-- a result byte arena of 1 through `DNS-TXT-VALUE-MAX` (4,096) bytes.
+- for strict parsing, one `DNS-TXT-RESULT-SIZE` (512-byte) aligned result
+  descriptor and one result byte arena; or
+- for iteration, one `DNS-TXT-ITER-SIZE` (512-byte) aligned iterator, one
+  `DNS-TXT-RR-RESULT-SIZE` (96-byte) aligned RR result, and one RR byte arena.
 
-The query descriptor contains the complete packet. The result descriptor
-contains all decompression and parse scratch as well as retained evidence, so
-different descriptors may be used independently. The result arena and result
-descriptor must be disjoint from each other, the query descriptor, and the
-response being parsed. Query and response are read-only and may overlap if
-both complete views remain structurally valid. Exact adjacency is valid.
-Public entry points qualify caller spans before reading or writing them.
+Each arena is 1 through `DNS-TXT-VALUE-MAX` (4,096) bytes.
+
+The query descriptor contains the complete packet. A strict result or
+iterator contains all decompression scratch and retained response evidence, so
+different caller-owned instances may be used independently. Every writable
+descriptor and arena participating in one operation must be disjoint from the
+others and from the query and response. Query and response are read-only and
+may overlap if both complete views remain structurally valid. Exact adjacency
+is valid. Public entry points qualify caller spans before reading or writing
+them.
 
 Presentation query names are a deliberately small, unescaped DNS discovery
 profile: one through 253 visible ASCII bytes, dot-separated nonempty labels,
@@ -66,7 +72,64 @@ overlap with the query descriptor, leaves the existing descriptor unchanged.
 `DNS-TXT-QUERY$` returns a synchronous borrowed view into the descriptor.
 `DNS-TXT-QUERY-WIPE` invalidates and zeroes the entire descriptor.
 
-## Response lifecycle
+## Per-RR iteration
+
+```forth
+DNS-TXT-RR-RESULT-INIT     ( value-a value-cap rr-result -- status )
+DNS-TXT-RR-RESULT-VALID?   ( rr-result -- flag )
+DNS-TXT-RR-PRESENT?        ( rr-result -- flag )
+DNS-TXT-RR-PROVISIONAL?    ( rr-result -- flag )
+DNS-TXT-RR-PREFIX$         ( rr-result -- prefix-a prefix-u )
+DNS-TXT-RR-TOTAL-LENGTH@   ( rr-result -- total-u )
+DNS-TXT-RR-COMPLETE?       ( rr-result -- flag )
+DNS-TXT-RR-STRING-COUNT@   ( rr-result -- count )
+DNS-TXT-RR-TTL@            ( rr-result -- ttl )
+DNS-TXT-RR-RESULT-WIPE     ( rr-result -- status )
+
+DNS-TXT-ITER-BEGIN         ( response-a response-u query rr-result iter -- status )
+DNS-TXT-ITER-NEXT          ( iter -- present? status )
+DNS-TXT-ITER-VALID?        ( iter -- flag )
+DNS-TXT-ITER-TERMINAL?     ( iter -- flag )
+DNS-TXT-ITER-VALIDATED?    ( iter -- flag )
+DNS-TXT-ITER-STATUS@       ( iter -- status )
+DNS-TXT-ITER-EVIDENCE@     ( iter -- evidence )
+DNS-TXT-ITER-MATCHED-COUNT@ ( iter -- count )
+DNS-TXT-ITER-WIPE          ( iter -- status )
+```
+
+`DNS-TXT-ITER-BEGIN` binds the response header and echoed question to the
+query, but does not publish an answer. Success starts an active iterator whose
+stored status is `DNS-TXT-S-PROVISIONAL`. Each successful
+`DNS-TXT-ITER-NEXT` may return `present?` true for the next direct `IN/TXT`
+answer at the queried owner. Unrelated records are consumed and ignored; the
+iterator does not chase aliases or apply application policy.
+
+A present RR result is always provisional. Its character-strings are
+concatenated in wire order into the bounded arena. `DNS-TXT-RR-PREFIX$`
+returns the retained prefix, while `DNS-TXT-RR-TOTAL-LENGTH@` reports the full
+logical length even when it exceeds the arena.
+`DNS-TXT-RR-COMPLETE?`, `DNS-TXT-RR-STRING-COUNT@`, and `DNS-TXT-RR-TTL@`
+report completeness, character-string count, and TTL for that RR. The same
+arena is cleared and reused by the next `NEXT`, so a caller that needs several
+records must copy each provisional result into its own staging storage before
+advancing.
+
+Iteration is complete only when `NEXT` returns `present?` false. Reaching that
+terminal result drains every declared authority and additional RR and requires
+the raw packet to end exactly at the final record boundary. A successful
+terminal state has `DNS-TXT-ITER-VALIDATED?` true and returns
+`DNS-TXT-S-OK` when records were yielded or `DNS-TXT-S-NODATA` when none were
+found. A malformed late record, truncation, or other terminal failure leaves
+validation false and invalidates every candidate yielded earlier. Consumers
+must therefore keep yielded records provisional and publish them only after
+observing the mandatory terminal `present?` false result and successful
+validation.
+
+`DNS-TXT-ITER-WIPE` clears the bound RR arena, RR result, and iterator.
+Reinitialization and admission failures follow the same caller-ownership and
+preflight rules as the strict parser.
+
+## Strict response lifecycle
 
 ```forth
 DNS-TXT-RESULT-INIT    ( value-a value-cap result -- status )
@@ -104,9 +167,11 @@ wire error may stop decoding at any boundary.
 matching the supplied query. It safely decodes compressed names throughout
 the question and every declared answer, authority, and additional record. A
 successful result contains exactly one direct `IN/TXT` answer whose owner is
-the query owner. Unrelated records are structurally consumed but ignored.
-CNAME traversal remains resolver work; this utility never treats an
-unproven, differently owned TXT answer as the requested value.
+the query owner. It is the exactly-one convenience interface: unrelated
+records are structurally consumed but ignored, while more than one matching
+record is an explicit duplicate result. CNAME traversal remains resolver
+work; this utility never treats an unproven, differently owned TXT answer as
+the requested value.
 
 One matching TXT RR may contain several character-strings. Their binary
 contents are concatenated in wire order, zero-length strings are retained as
@@ -140,12 +205,16 @@ direct matching TXT answer.
 | `DNS-TXT-E-TRUNCATED` | the header carried `TC=1` |
 | `DNS-TXT-E-RCODE` | a nonzero header RCODE was observed |
 | `DNS-TXT-E-VALUE` | exactly one direct matching TXT RR was published |
+| `DNS-TXT-ITER-E-VALIDATED` | iterator reached the exact, structurally valid packet end |
 
-These bits describe parser observations, not authenticity. DNSSEC validation,
+The iterator never treats a yielded provisional RR as value evidence; its
+validation bit appears only after the terminal raw-wire drain succeeds. These
+bits describe parser observations, not authenticity. DNSSEC validation,
 resolver provenance, destination admission, and application-specific
 confirmation remain separate policy.
 
 `DNS-TXT-S-ALIAS` refers to unsafe overlapping caller memory, not a DNS CNAME.
+CNAME traversal remains resolver work rather than raw TXT message parsing.
 The remaining admission statuses distinguish invalid arguments, capacity,
 physical range, protected spans, and platform qualification failure from
 wire-level mismatch and malformation.
