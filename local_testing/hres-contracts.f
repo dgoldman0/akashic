@@ -810,11 +810,20 @@ VARIABLE _hrc-hop-status
     _hrc-close-starts @ 0= _hrc-assert _hrc-close-polls @ 0= _hrc-assert
     _hrc-media-calls @ 0= _hrc-assert ;
 
+: _hrc-test-geometry  ( -- )
+    HRES-HOST-VALUE-MAX 259 = _hrc-assert
+    HRES-HOST-VALUE-STORAGE 264 = _hrc-assert
+    _HRES-LOCATION _HRES-HOST-VALUE -
+        HRES-HOST-VALUE-STORAGE = _hrc-assert
+    HTTP-RESOURCE-SIZE 45856 = _hrc-assert
+    _hrc-stack ;
+
 : _hrc-pb-sensitive-zero  ( -- )
     _hrc-body 128 _hrc-zero? _hrc-assert
     _hrc-resource HRES.BODY-U @ 0= _hrc-assert
     _hrc-resource HRES.WIRE HRES-REQUEST-MAX _hrc-zero? _hrc-assert
-    _hrc-resource HRES.HOST-VALUE 72 _hrc-zero? _hrc-assert
+    _hrc-resource HRES.HOST-VALUE
+        HRES-HOST-VALUE-STORAGE _hrc-zero? _hrc-assert
     _hrc-resource HRES.EXCHANGE HBUF.REQUEST @ 0= _hrc-assert
     _hrc-resource HRES.EXCHANGE HBUF.BODY-A @ 0= _hrc-assert
     _hrc-resource HRES.EXCHANGE HBUF.BODY-CAP @ 0= _hrc-assert
@@ -1224,6 +1233,8 @@ VARIABLE _hrc-hop-status
 
 : _hrc-run  ( -- )
     0 _hrc-fails ! 0 _hrc-checks ! DEPTH _hrc-depth !
+    S" geometry" _hrc-mark
+    _hrc-test-geometry
     S" idle-cleanup" _hrc-mark
     _hrc-test-idle-cleanup
     S" success" _hrc-mark

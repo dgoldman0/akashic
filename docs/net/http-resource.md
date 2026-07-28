@@ -11,6 +11,14 @@ The response body is caller-owned. The resource borrows that positive,
 bounded buffer while configured and wipes it on cancellation, release, and
 every outcome which is not an admitted final `200` response.
 
+The copied target admits a DNS hostname through the complete generic
+`HTARGET-HOST-CAPACITY` bound. Request staging therefore reserves
+`HRES-HOST-VALUE-MAX` (259) bytes for a 253-byte host followed by `:` and the
+largest five-digit TCP port. `HRES-HOST-VALUE-STORAGE` is the aligned
+264-byte internal span. This storage is part of `HTTP-RESOURCE-SIZE`; callers
+must always allocate and clear resources through that public size rather than
+embedding internal offsets.
+
 ## Frozen specification
 
 A specification is built and sealed before it is copied into a resource:

@@ -12,6 +12,7 @@ from pathlib import Path
 LOCAL_TESTING = Path(__file__).resolve().parent
 ROOT = LOCAL_TESTING.parent
 HTTP_TARGET = ROOT / "akashic" / "net" / "http-target.f"
+HTTP_RESOURCE = ROOT / "akashic" / "net" / "http-resource.f"
 KDOS_TLS = ROOT / "akashic" / "net" / "transports" / "kdos-tls.f"
 MEGAPAD_NETWORKING = ROOT.parent / "megapad" / "networking.f"
 
@@ -26,12 +27,36 @@ LOAD_STAGES = (
     ("string", "NETWORK HOSTNAME STRING READY"),
     ("memory-span", "NETWORK HOSTNAME MEMORY SPAN READY"),
     ("http-target", "NETWORK HOSTNAME HTTP TARGET READY"),
+    ("external-io", "NETWORK HOSTNAME EXTERNAL IO READY"),
+    ("io-port", "NETWORK HOSTNAME IO PORT READY"),
+    ("http-request", "NETWORK HOSTNAME HTTP REQUEST READY"),
+    ("http-stream", "NETWORK HOSTNAME HTTP STREAM READY"),
+    ("http-buffered", "NETWORK HOSTNAME HTTP BUFFERED READY"),
+    ("media-type", "NETWORK HOSTNAME MEDIA TYPE READY"),
+    ("http-resource", "NETWORK HOSTNAME HTTP RESOURCE READY"),
     ("fixture", "NETWORK HOSTNAME FIXTURE READY"),
+)
+STAGED_REQUIRES = (
+    "concurrency/event.f",
+    "concurrency/semaphore.f",
+    "concurrency/guard.f",
+    "utils/string.f",
+    "utils/memory-span.f",
+    "net/http-target.f",
+    "net/external-io.f",
+    "net/io-port.f",
+    "net/http-request.f",
+    "net/http-stream.f",
+    "net/http-buffered.f",
+    "net/media-type.f",
+    "net/http-resource.f",
+    "local_testing/net-host-cap.f",
 )
 
 
 def _assert_static_contracts() -> None:
     target = HTTP_TARGET.read_text(encoding="utf-8")
+    resource = HTTP_RESOURCE.read_text(encoding="utf-8")
     transport = KDOS_TLS.read_text(encoding="utf-8")
     megapad = MEGAPAD_NETWORKING.read_text(encoding="utf-8")
 
@@ -44,6 +69,21 @@ def _assert_static_contracts() -> None:
     assert (
         "_HT-HOST HTARGET-HOST-STORAGE + CONSTANT _HT-REQUEST" in target
     )
+
+    assert re.search(
+        r"(?m)^259\s+CONSTANT HRES-HOST-VALUE-MAX$", resource
+    )
+    assert re.search(
+        r"(?m)^264\s+CONSTANT HRES-HOST-VALUE-STORAGE$", resource
+    )
+    assert (
+        "_HRES-HOST-VALUE HRES-HOST-VALUE-STORAGE "
+        "+ CONSTANT _HRES-LOCATION"
+    ) in resource
+    assert (
+        "HRES.HOST-VALUE HRES-HOST-VALUE-STORAGE 0 FILL"
+    ) in resource
+    assert "HRES.HOST-VALUE 72 0 FILL" not in resource
 
     assert re.search(
         r"(?m)^253 CONSTANT KDOSTLS-HOST-CAPACITY$", transport
@@ -99,9 +139,10 @@ VARIABLE _NHC-DEPTH
 VARIABLE _NHC-HOST-U
 
 CREATE _NHC-HOST 260 ALLOT
-CREATE _NHC-URI 264 ALLOT
+CREATE _NHC-URI 272 ALLOT
 CREATE _NHC-TARGET HTARGET-SIZE 8 + ALLOT
 CREATE _NHC-TARGET-TOO-LONG HTARGET-SIZE 8 + ALLOT
+CREATE _NHC-RESOURCE HTTP-RESOURCE-SIZE 8 + ALLOT
 
 : _NHC-ASSERT  ( flag -- )
     1 _NHC-CHECKS +!
@@ -117,6 +158,15 @@ CREATE _NHC-TARGET-TOO-LONG HTARGET-SIZE 8 + ALLOT
     THEN
     _NHC-DEPTH @ = _NHC-ASSERT ;
 
+: _NHC-ZERO?  ( address length -- flag )
+    BEGIN
+        DUP
+    WHILE
+        OVER C@ IF 2DROP 0 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
+
 : _NHC-HOST!  ( length -- )
     DUP _NHC-HOST-U !
     DROP
@@ -127,17 +177,31 @@ CREATE _NHC-TARGET-TOO-LONG HTARGET-SIZE 8 + ALLOT
 
 : _NHC-URI!  ( host-length -- address length )
     _NHC-HOST!
-    _NHC-URI 264 0 FILL
+    _NHC-URI 272 0 FILL
     S" https://" _NHC-URI SWAP CMOVE
     _NHC-HOST _NHC-URI 8 + _NHC-HOST-U @ CMOVE
     [CHAR] / _NHC-URI 8 + _NHC-HOST-U @ + C!
     _NHC-URI _NHC-HOST-U @ 9 + ;
+
+: _NHC-URI-PORT!  ( -- address length )
+    253 _NHC-HOST!
+    _NHC-URI 272 0 FILL
+    S" https://" _NHC-URI SWAP CMOVE
+    _NHC-HOST _NHC-URI 8 + 253 CMOVE
+    S" :65535/" _NHC-URI 261 + SWAP CMOVE
+    _NHC-URI 268 ;
 
 : _NHC-GEOMETRY  ( -- )
     HTARGET-HOST-CAPACITY 253 = _NHC-ASSERT
     HTARGET-HOST-STORAGE 256 = _NHC-ASSERT
     _HT-REQUEST _HT-HOST - HTARGET-HOST-STORAGE = _NHC-ASSERT
     HTARGET-SIZE 3424 = _NHC-ASSERT
+
+    HRES-HOST-VALUE-MAX 259 = _NHC-ASSERT
+    HRES-HOST-VALUE-STORAGE 264 = _NHC-ASSERT
+    _HRES-LOCATION _HRES-HOST-VALUE -
+        HRES-HOST-VALUE-STORAGE = _NHC-ASSERT
+    HTTP-RESOURCE-SIZE 45856 = _NHC-ASSERT
 
     _NHC-STACK ;
 
@@ -159,12 +223,44 @@ CREATE _NHC-TARGET-TOO-LONG HTARGET-SIZE 8 + ALLOT
         0xA5 = _NHC-ASSERT
     _NHC-STACK ;
 
+: _NHC-HTTP-RESOURCE  ( -- )
+    _NHC-RESOURCE HTTP-RESOURCE-SIZE 8 + 0xA5 FILL
+    _NHC-RESOURCE HRES-INIT
+
+    _NHC-URI-PORT! _NHC-TARGET HTARGET-PARSE
+        HTARGET-S-OK = _NHC-ASSERT
+    _NHC-TARGET HTARGET-VALID? _NHC-ASSERT
+    _NHC-TARGET HTARGET-HOST$ NIP 253 = _NHC-ASSERT
+    _NHC-TARGET HTARGET-PORT@ 65535 = _NHC-ASSERT
+
+    _NHC-TARGET _NHC-RESOURCE HRES.TARGETS
+        HTARGET-SIZE CMOVE
+    0 _NHC-RESOURCE HRES.CURRENT !
+    _NHC-RESOURCE HRES.HOST-VALUE
+        HRES-HOST-VALUE-STORAGE 0xA5 FILL
+    _NHC-RESOURCE _HRES-HOST-BUILD _NHC-ASSERT
+    _HRHOST-U @ HRES-HOST-VALUE-MAX = _NHC-ASSERT
+    _NHC-RESOURCE HRES.HOST-VALUE 253
+        _NHC-HOST 253 STR-STR= _NHC-ASSERT
+    _NHC-RESOURCE HRES.HOST-VALUE 253 + C@
+        [CHAR] : = _NHC-ASSERT
+    _NHC-RESOURCE HRES.HOST-VALUE 254 + 5
+        S" 65535" STR-STR= _NHC-ASSERT
+    _NHC-RESOURCE HRES.HOST-VALUE
+        HRES-HOST-VALUE-MAX +
+        HRES-HOST-VALUE-STORAGE HRES-HOST-VALUE-MAX -
+        _NHC-ZERO? _NHC-ASSERT
+    _NHC-RESOURCE HTTP-RESOURCE-SIZE + C@
+        0xA5 = _NHC-ASSERT
+    _NHC-STACK ;
+
 : _NHC-RUN  ( -- )
     0 _NHC-FAILS !
     0 _NHC-CHECKS !
     DEPTH _NHC-DEPTH !
     _NHC-GEOMETRY
     _NHC-HTTP-TARGET
+    _NHC-HTTP-RESOURCE
     _NHC-FAILS @ 0= IF
         ." NETWORK HOSTNAME CAPACITY PASS " _NHC-CHECKS @ . CR
     ELSE
@@ -179,42 +275,36 @@ def _run_lifecycle(timeout: float) -> int:
     import akashic_tui as harness
 
     fixture = harness._minify_forth(_fixture_source()).encode("utf-8")
-    autoexec = (
-        "\\ autoexec.f - generic network hostname capacity\n"
-        "ENTER-USERLAND\n"
-        f'." {LOAD_STAGES[0][1]}" CR TX-FLUSH\n'
-        "KEY DROP\n"
-        "REQUIRE concurrency/event.f\n"
-        f'." {LOAD_STAGES[1][1]}" CR TX-FLUSH\n'
-        "KEY DROP\n"
-        "REQUIRE concurrency/semaphore.f\n"
-        f'." {LOAD_STAGES[2][1]}" CR TX-FLUSH\n'
-        "KEY DROP\n"
-        "REQUIRE concurrency/guard.f\n"
-        f'." {LOAD_STAGES[3][1]}" CR TX-FLUSH\n'
-        "KEY DROP\n"
-        "REQUIRE utils/string.f\n"
-        f'." {LOAD_STAGES[4][1]}" CR TX-FLUSH\n'
-        "KEY DROP\n"
-        "REQUIRE utils/memory-span.f\n"
-        f'." {LOAD_STAGES[5][1]}" CR TX-FLUSH\n'
-        "KEY DROP\n"
-        "REQUIRE net/http-target.f\n"
-        f'." {LOAD_STAGES[6][1]}" CR TX-FLUSH\n'
-        "KEY DROP\n"
-        "REQUIRE local_testing/net-host-cap.f\n"
-        "DEPTH IF\n"
-        '  ." NETWORK HOSTNAME CAPACITY LOAD STACK FAIL" CR TX-FLUSH\n'
-        "THEN\n"
-        f'." {LOAD_STAGES[7][1]}" CR TX-FLUSH\n'
-        "KEY DROP\n"
-        "_NHC-RUN\n"
-    )
+    autoexec_parts = [
+        "\\ autoexec.f - generic network hostname capacity\n",
+        "ENTER-USERLAND\n",
+        f'." {LOAD_STAGES[0][1]}" CR TX-FLUSH\n',
+        "KEY DROP\n",
+    ]
+    for index, required_path in enumerate(STAGED_REQUIRES, start=1):
+        autoexec_parts.append(f"REQUIRE {required_path}\n")
+        if required_path == "local_testing/net-host-cap.f":
+            autoexec_parts.extend(
+                (
+                    "DEPTH IF\n",
+                    '  ." NETWORK HOSTNAME CAPACITY LOAD STACK FAIL" '
+                    "CR TX-FLUSH\n",
+                    "THEN\n",
+                )
+            )
+        autoexec_parts.extend(
+            (
+                f'." {LOAD_STAGES[index][1]}" CR TX-FLUSH\n',
+                "KEY DROP\n",
+            )
+        )
+    autoexec_parts.append("_NHC-RUN\n")
+    autoexec = "".join(autoexec_parts)
 
     profile_name = "network-hostname-capacity"
     image = Path("/tmp/akashic-network-hostname-capacity.img")
     harness.PROFILES[profile_name] = harness.Profile(
-        roots=("net/http-target.f",),
+        roots=("net/http-resource.f",),
         resources=(),
         autoexec=autoexec,
         ready_markers=(PASS_MARKER,),
@@ -254,7 +344,7 @@ def _run_lifecycle(timeout: float) -> int:
         cols=120,
         rows=44,
         batch_steps=500_000,
-        ext_mem_size=64 << 20,
+        ext_mem_size=128 << 20,
         num_cores=1,
     ) as machine:
         machine.boot()
