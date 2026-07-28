@@ -1,88 +1,186 @@
-\ did.f — DID Validation for KDOS / Megapad-64
+\ =====================================================================
+\  did.f - Strict generic DID identifier syntax for AT Protocol
+\ =====================================================================
+\  This module validates the method-independent DID identifier syntax used
+\  by AT Protocol Lexicon strings.  It deliberately accepts syntactically
+\  valid unsupported methods; method support and resolution are separate
+\  policy.  DID identifiers are case-sensitive and are never normalized.
 \
-\ DID (Decentralized Identifier) utilities.
-\ Validates did:plc: and did:web: format DIDs.
+\  The implementation owns no mutable state.  Returned method and
+\  method-specific-ID spans are synchronous read-only borrows into the
+\  caller's admitted source.
 \
-\ Prefix: DID-   (public API)
-\         _DID-  (internal helpers)
-\
-\ Load with:   REQUIRE did.f
+\  Public API:
+\    DID-LENGTH-MIN                 ( -- 7 )
+\    DID-LENGTH-MAX                 ( -- 2048 )
+\    DID-STATUS-VALID?              ( status -- flag )
+\    DID-VALIDATE                   ( did-a did-u -- status )
+\    DID-VALID?                     ( did-a did-u -- flag )
+\    DID-METHOD@                    ( did-a did-u
+\                                      -- method-a method-u status )
+\    DID-SPECIFIC-ID@               ( did-a did-u
+\                                      -- id-a id-u status )
+\ =====================================================================
 
 PROVIDED akashic-did
 
-\ =====================================================================
-\  DID-VALID?
-\ =====================================================================
-
-VARIABLE _DID-PTR
-VARIABLE _DID-LEN
-
-\ _DID-MATCH ( addr len prefix-a prefix-len -- flag )
-\   Check if addr/len starts with prefix.
-: _DID-MATCH  ( addr len pfx-a pfx-len -- flag )
-    _DID-LEN !
-    \ Stack: addr len pfx-a
-    SWAP                  \ addr pfx-a len
-    DUP _DID-LEN @ < IF  \ len < pfx-len?
-        DROP 2DROP 0 EXIT
-    THEN
-    DROP                  \ addr pfx-a
-    _DID-LEN @ 0 ?DO
-        OVER I + C@       \ input char
-        OVER I + C@       \ prefix char
-        <> IF 2DROP 0 UNLOOP EXIT THEN
-    LOOP
-    2DROP -1 ;
-
-\ DID-VALID? ( addr len -- flag )
-\   True if string is a valid DID (did:plc:... or did:web:...).
-\   Minimal validation: checks prefix and minimum length.
-: DID-VALID?  ( addr len -- flag )
-    DUP 8 < IF 2DROP 0 EXIT THEN    \ minimum: "did:plc:" = 8 + content
-    2DUP S" did:plc:" _DID-MATCH IF 2DROP -1 EXIT THEN
-    S" did:web:" _DID-MATCH ;
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
 
 \ =====================================================================
-\  DID-METHOD
+\  Public bounds and status vocabulary
 \ =====================================================================
 
-\ DID-METHOD ( addr len -- method-a method-u )
-\   Extract method portion ("plc" or "web") from a DID.
-\   Assumes valid DID (starts with "did:").
-\   Returns pointer into the original string.
+7    CONSTANT DID-LENGTH-MIN
+2048 CONSTANT DID-LENGTH-MAX
 
-VARIABLE _DM-SRC
-VARIABLE _DM-LEN
-VARIABLE _DM-I
+0 CONSTANT DID-S-OK
+1 CONSTANT DID-S-INVALID
+2 CONSTANT DID-S-CAPACITY
+3 CONSTANT DID-S-SYNTAX
+4 CONSTANT DID-S-ENCODING
+5 CONSTANT DID-S-RANGE
+6 CONSTANT DID-S-PROTECTED
+7 CONSTANT DID-S-PLATFORM
 
-: DID-METHOD  ( addr len -- method-a method-u )
-    _DM-LEN ! _DM-SRC !
-    _DM-LEN @ 4 < IF _DM-SRC @ 0 EXIT THEN
-    \ method starts at offset 4 (after "did:")
-    _DM-SRC @ 4 +               \ method-start
-    0 _DM-I !
-    BEGIN
-        _DM-I @ _DM-LEN @ 4 - < IF
-            _DM-SRC @ 4 + _DM-I @ + C@ 58 = IF  \ ':'
-                _DM-SRC @ 4 + _DM-I @
-                EXIT
-            THEN
-            1 _DM-I +!
-            DROP _DM-SRC @ 4 +    \ keep method-start on stack
-            0
-        ELSE
-            _DM-LEN @ 4 - -1     \ no colon — rest is method
+: DID-STATUS-VALID?  ( status -- flag )
+    DUP DID-S-OK >= SWAP DID-S-PLATFORM <= AND ;
+
+\ =====================================================================
+\  Caller-span admission
+\ =====================================================================
+
+: _DID-CALLER>STATUS  ( caller-status -- status )
+    DUP CALLER-SPAN-S-OK = IF DROP DID-S-OK EXIT THEN
+    DUP CALLER-SPAN-S-RANGE = IF DROP DID-S-RANGE EXIT THEN
+    DUP CALLER-SPAN-S-PROTECTED = IF DROP DID-S-PROTECTED EXIT THEN
+    DUP CALLER-SPAN-S-PLATFORM = IF DROP DID-S-PLATFORM EXIT THEN
+    DROP DID-S-PLATFORM ;
+
+: _DID-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP DID-S-INVALID EXIT THEN
+    DUP DID-LENGTH-MAX U> IF 2DROP DID-S-CAPACITY EXIT THEN
+    DUP 0= IF 2DROP DID-S-OK EXIT THEN
+    OVER 0= IF 2DROP DID-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _DID-CALLER>STATUS ;
+
+: _DID-/STRING  ( address length prefix-u -- address' length' )
+    >R SWAP R@ + SWAP R> - ;
+
+\ =====================================================================
+\  Syntax predicates
+\ =====================================================================
+
+: _DID-LOWER?  ( byte -- flag )
+    [CHAR] a [CHAR] z 1+ WITHIN ;
+
+: _DID-UPPER?  ( byte -- flag )
+    [CHAR] A [CHAR] Z 1+ WITHIN ;
+
+: _DID-DIGIT?  ( byte -- flag )
+    [CHAR] 0 [CHAR] 9 1+ WITHIN ;
+
+: _DID-ALPHA?  ( byte -- flag )
+    DUP _DID-LOWER? IF DROP -1 EXIT THEN
+    _DID-UPPER? ;
+
+: _DID-HEX?  ( byte -- flag )
+    DUP _DID-DIGIT? IF DROP -1 EXIT THEN
+    DUP [CHAR] A [CHAR] F 1+ WITHIN IF DROP -1 EXIT THEN
+    [CHAR] a [CHAR] f 1+ WITHIN ;
+
+: _DID-ID-PLAIN?  ( byte -- flag )
+    DUP _DID-ALPHA? IF DROP -1 EXIT THEN
+    DUP _DID-DIGIT? IF DROP -1 EXIT THEN
+    DUP [CHAR] . = IF DROP -1 EXIT THEN
+    DUP [CHAR] _ = IF DROP -1 EXIT THEN
+    DUP [CHAR] : = IF DROP -1 EXIT THEN
+    [CHAR] - = ;
+
+: _DID-PREFIX?  ( address length -- flag )
+    OVER C@ [CHAR] d =
+    2 PICK 1+ C@ [CHAR] i = AND
+    2 PICK 2 + C@ [CHAR] d = AND
+    2 PICK 3 + C@ [CHAR] : = AND
+    >R 2DROP R> ;
+
+\ Return the method length and true only when a nonempty lowercase method
+\ is followed by a colon.  The input begins immediately after "did:".
+: _DID-METHOD-LENGTH  ( address length -- method-u found? )
+    0 >R
+    BEGIN DUP WHILE
+        OVER C@ DUP [CHAR] : = IF
+            DROP 2DROP R> DUP 0<> EXIT
         THEN
-    UNTIL ;
+        _DID-LOWER? 0= IF
+            2DROP R> DROP 0 0 EXIT
+        THEN
+        1 _DID-/STRING
+        R> 1+ >R
+    REPEAT
+    2DROP R> DROP 0 0 ;
 
-\ ── guard ────────────────────────────────────────────────
-[DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
-GUARD _did-guard
+: _DID-ID-STATUS  ( address length -- status )
+    DUP 0= IF 2DROP DID-S-SYNTAX EXIT THEN
+    BEGIN DUP WHILE
+        OVER C@ DUP [CHAR] % = IF
+            DROP
+            DUP 3 < IF 2DROP DID-S-ENCODING EXIT THEN
+            OVER 1+ C@ _DID-HEX? 0= IF
+                2DROP DID-S-ENCODING EXIT
+            THEN
+            OVER 2 + C@ _DID-HEX? 0= IF
+                2DROP DID-S-ENCODING EXIT
+            THEN
+            3 _DID-/STRING
+        ELSE
+            DUP _DID-ID-PLAIN? 0= IF
+                DROP 2DROP DID-S-SYNTAX EXIT
+            THEN
+            [CHAR] : = OVER 1 = AND IF
+                2DROP DID-S-SYNTAX EXIT
+            THEN
+            1 _DID-/STRING
+        THEN
+    REPEAT
+    2DROP DID-S-OK ;
 
-' DID-VALID?      CONSTANT _did-valid-q-xt
-' DID-METHOD      CONSTANT _did-method-xt
+\ =====================================================================
+\  Public validation and borrowed views
+\ =====================================================================
 
-: DID-VALID?      _did-valid-q-xt _did-guard WITH-GUARD ;
-: DID-METHOD      _did-method-xt _did-guard WITH-GUARD ;
-[THEN] [THEN]
+: DID-VALIDATE  ( did-a did-u -- status )
+    2DUP _DID-SPAN-STATUS ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    DUP DID-LENGTH-MIN < IF
+        2DROP DID-S-SYNTAX EXIT
+    THEN
+    2DUP _DID-PREFIX? 0= IF
+        2DROP DID-S-SYNTAX EXIT
+    THEN
+    2DUP 4 _DID-/STRING _DID-METHOD-LENGTH 0= IF
+        DROP 2DROP DID-S-SYNTAX EXIT
+    THEN
+    5 + _DID-/STRING
+    _DID-ID-STATUS ;
+
+: DID-VALID?  ( did-a did-u -- flag )
+    DID-VALIDATE DID-S-OK = ;
+
+: DID-METHOD@  ( did-a did-u -- method-a method-u status )
+    2DUP DID-VALIDATE ?DUP IF
+        >R 2DROP 0 0 R> EXIT
+    THEN
+    2DUP 4 _DID-/STRING _DID-METHOD-LENGTH
+    DROP >R
+    DROP 4 +
+    R> DID-S-OK ;
+
+: DID-SPECIFIC-ID@  ( did-a did-u -- id-a id-u status )
+    2DUP DID-VALIDATE ?DUP IF
+        >R 2DROP 0 0 R> EXIT
+    THEN
+    2DUP 4 _DID-/STRING _DID-METHOD-LENGTH
+    DROP 5 + _DID-/STRING
+    DID-S-OK ;

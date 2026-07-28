@@ -11,7 +11,8 @@ callbacks. It does not share the legacy XRPC/session globals described below.
 
 ```forth
 REQUIRE aturi.f    \ AT URI parser + builder
-REQUIRE did.f      \ DID validation + method extraction
+REQUIRE did.f      \ strict generic DID identifier syntax
+REQUIRE handle.f   \ AT Protocol handle syntax + lowercase normalization
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -20,7 +21,8 @@ REQUIRE session.f  \ Session auth (login/refresh/bearer)
 REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 ```
 
-`PROVIDED akashic-aturi` / `akashic-did` / `akashic-tid` /
+`PROVIDED akashic-aturi` / `akashic-did` /
+`akashic-atproto-handle` / `akashic-tid` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
@@ -32,6 +34,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [Design Principles](#design-principles)
 - [AT URI — aturi.f](#at-uri--aturif)
 - [DID — did.f](#did--didf)
+- [Handle — handle.f](#handle--handlef)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
@@ -48,9 +51,9 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 | Principle | Detail |
 |---|---|
 | **Independent files** | Each file is independently `REQUIRE`-able with its own `PROVIDED` guard. |
-| **Buffer-based** | Parsed components are copied into fixed-size static buffers. |
+| **Explicit ownership** | New identity syntax utilities are stateless; older components retain the ownership documented in their sections. |
 | **AT Protocol spec** | Follows the AT Protocol specification for URI syntax, DID validation, TID encoding, XRPC, and session management. |
-| **Variable-based state** | All internal loops use `VARIABLE`s to avoid KDOS R-stack conflicts. |
+| **Statusful syntax** | DID and handle admission preserve capacity and platform failures rather than collapsing them into syntax errors. |
 | **ASCII codes for JSON** | Manual JSON building uses numeric char codes (34 for `"`, 123 for `{`, etc.) since KDOS has no `S\"` word. |
 
 ---
@@ -100,31 +103,36 @@ rkey to omit them.  Returns bytes written to `dst`.
 
 ## DID — did.f
 
-Decentralized Identifiers (DIDs) used in the AT Protocol.
-
-### DID-VALID?
-
-```forth
-DID-VALID?  ( addr len -- flag )
-```
-
-Returns `-1` if the string is a valid DID with a recognized method
-prefix (`did:plc:` or `did:web:`).  Minimum length check: 8 characters.
-Returns `0` otherwise.
-
-### DID-METHOD
+The [generic DID syntax component](did.md) validates any method-independent
+AT Protocol DID identifier up to 2048 bytes. Unsupported methods remain
+syntactically valid so that the identity layer can distinguish them from
+malformed identifiers and resolution failures.
 
 ```forth
-DID-METHOD  ( addr len -- method-a method-u )
+DID-VALIDATE       ( did-a did-u -- status )
+DID-VALID?         ( did-a did-u -- flag )
+DID-METHOD@        ( did-a did-u -- method-a method-u status )
+DID-SPECIFIC-ID@   ( did-a did-u -- id-a id-u status )
 ```
 
-Extract the method portion from a DID string.  Returns a pointer into
-the original input.
+Borrowed method and identifier views point into the caller's source. DIDs are
+case-sensitive and are not normalized.
 
-Examples:
-- `"did:plc:abc123"` → `"plc"` (length 3)
-- `"did:web:example.com"` → `"web"` (length 3)
-- `"did"` → zero-length result
+## Handle — handle.f
+
+The [handle syntax component](handle.md) validates the complete AT Protocol
+ASCII hostname profile and publishes lowercase canonical bytes into
+caller-owned storage.
+
+```forth
+AT-HANDLE-VALIDATE       ( source source-u -- status )
+AT-HANDLE-VALID?         ( source source-u -- flag )
+AT-HANDLE-NORMALIZED?    ( source source-u -- normalized? status )
+AT-HANDLE-NORMALIZE
+  ( source source-u destination capacity -- written status )
+```
+
+It owns no DNS, HTTPS, IDNA, reserved-TLD, or bidirectional identity policy.
 
 ---
 
@@ -386,8 +394,19 @@ Delete a record at the given AT URI.  Builds
 
 | Word | Stack | Purpose |
 |---|---|---|
+| `DID-VALIDATE` | `( addr len -- status )` | Validate generic DID syntax |
 | `DID-VALID?` | `( addr len -- flag )` | Validate DID format |
-| `DID-METHOD` | `( addr len -- method-a method-u )` | Extract method |
+| `DID-METHOD@` | `( addr len -- method-a method-u status )` | Borrow method |
+| `DID-SPECIFIC-ID@` | `( addr len -- id-a id-u status )` | Borrow method-specific ID |
+
+### handle.f
+
+| Word | Stack | Purpose |
+|---|---|---|
+| `AT-HANDLE-VALIDATE` | `( addr len -- status )` | Validate handle syntax |
+| `AT-HANDLE-VALID?` | `( addr len -- flag )` | Collapse validation to a predicate |
+| `AT-HANDLE-NORMALIZED?` | `( addr len -- flag status )` | Inspect lowercase canonical form |
+| `AT-HANDLE-NORMALIZE` | `( source source-u destination capacity -- written status )` | Publish lowercase canonical form |
 
 ### tid.f
 
@@ -480,14 +499,15 @@ _BUF SWAP TYPE
 
 ```forth
 S" did:plc:abc123" DID-VALID? .    \ → -1 (valid)
-S" did:key:z6Mk" DID-VALID? .     \ → 0  (unknown method)
+S" did:key:z6Mk" DID-VALID? .     \ → -1 (valid unsupported method)
 S" hello" DID-VALID? .            \ → 0  (not a DID)
 ```
 
 ### Extract DID method
 
 ```forth
-S" did:web:example.com" DID-METHOD TYPE   \ → web
+S" did:web:example.com" DID-METHOD@
+DID-S-OK = IF TYPE ELSE 2DROP THEN        \ → web
 ```
 
 ### Generate and compare TIDs
@@ -543,7 +563,8 @@ S" at://did:plc:abc/app.bsky.feed.post/rk42" REPO-DELETE
 
 - **aturi.f** — requires `uri.f` (generic URI parser) and `string.f`
   (for `STR-INDEX`).
-- **did.f** — standalone, no dependencies.
+- **did.f** — requires caller-span and memory-span qualification.
+- **handle.f** — requires caller-span and memory-span qualification.
 - **tid.f** — standalone, uses BIOS `EPOCH@` for timestamps.
 - **xrpc.f** — requires `http.f`, `string.f`, `json.f`.
 - **feed-model.f** — requires `json.f` and `string.f`; it performs no I/O.
@@ -568,10 +589,9 @@ repo.f → session.f → xrpc.f → http.f → headers.f → url.f → string.f
 - `_ATU-BPOS` / `_ATU-BDST` / `_ATU-BMAX` — builder cursor
 - `_ATU-RK-A/L`, `_ATU-CO-A/L` — deep stack stash for builder
 
-### did.f — prefixed `_DID-` / `_DM-`
+### did.f and handle.f
 
-- `_DID-PTR` / `_DID-LEN` — prefix match state
-- `_DM-SRC` / `_DM-LEN` / `_DM-I` — method extraction
+The identity syntax modules contain no mutable module operation state.
 
 ### tid.f — prefixed `_TID-`
 
