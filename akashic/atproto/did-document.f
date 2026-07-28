@@ -8,13 +8,16 @@
 \  The complete JSON document is validated before profile selection.  The
 \  parser then requires:
 \
-\    * an `id` string exactly equal to the caller's expected DID;
+\    * an `id` string exactly equal to the caller's expected DID.
+\
+\  Independently, it retains:
+\
 \    * the first modern `#atproto` Multikey verification method whose
 \      controller is that DID and whose publicKeyMultibase is syntactically
 \      Base58btc;
 \    * the first `#atproto_pds` AtprotoPersonalDataServer service whose
 \      serviceEndpoint is an absolute HTTPS origin; and
-\    * optionally, the first syntactically valid `at://` handle in
+\    * the first syntactically valid `at://` handle in
 \      `alsoKnownAs`.
 \
 \  Fragment identifiers may be relative (`#atproto`) or fully qualified
@@ -24,10 +27,11 @@
 \  duplicate decoded names.
 \
 \  A successful parse publishes one fixed-size, self-contained result.  No
-\  result view borrows the receive buffer.  The optional-handle evidence is
-\  explicit: a conforming document without a usable handle succeeds with
-\  AT-DIDDOC-E-MISSING.  Missing or unusable key/PDS candidates instead
-\  return AT-DIDDOC-S-KEY or AT-DIDDOC-S-PDS and publish nothing.
+\  result view borrows the receive buffer.  Handle, key, and PDS evidence is
+\  independent: a conforming document without any one of them still
+\  publishes its exact identity with AT-DIDDOC-E-MISSING for that field.
+\  AT-DIDDOC-PARTICIPATION-STATUS separately requires a usable modern key
+\  and HTTPS-origin PDS when a caller needs participation readiness.
 \
 \  Public API:
 \    AT-DIDDOC-SIZE
@@ -40,6 +44,7 @@
 \        document workspace -- status )
 \    AT-DIDDOC-EVIDENCE@
 \      ( document -- id-e handle-e key-e pds-e status )
+\    AT-DIDDOC-PARTICIPATION-STATUS  ( document -- status )
 \    AT-DIDDOC-DID@                   ( document -- a u status )
 \    AT-DIDDOC-HANDLE@                ( document -- a u status )
 \    AT-DIDDOC-PUBLIC-KEY-MULTIBASE@
@@ -67,14 +72,13 @@ REQUIRE handle.f
 3  CONSTANT AT-DIDDOC-S-ALIAS
 4  CONSTANT AT-DIDDOC-S-JSON
 5  CONSTANT AT-DIDDOC-S-ID
-6  CONSTANT AT-DIDDOC-S-HANDLE
-7  CONSTANT AT-DIDDOC-S-KEY
-8  CONSTANT AT-DIDDOC-S-PDS
-9  CONSTANT AT-DIDDOC-S-MISSING
-10 CONSTANT AT-DIDDOC-S-INTERNAL
-11 CONSTANT AT-DIDDOC-S-RANGE
-12 CONSTANT AT-DIDDOC-S-PROTECTED
-13 CONSTANT AT-DIDDOC-S-PLATFORM
+6  CONSTANT AT-DIDDOC-S-KEY
+7  CONSTANT AT-DIDDOC-S-PDS
+8  CONSTANT AT-DIDDOC-S-MISSING
+9  CONSTANT AT-DIDDOC-S-INTERNAL
+10 CONSTANT AT-DIDDOC-S-RANGE
+11 CONSTANT AT-DIDDOC-S-PROTECTED
+12 CONSTANT AT-DIDDOC-S-PLATFORM
 
 : AT-DIDDOC-STATUS-VALID?  ( status -- flag )
     DUP AT-DIDDOC-S-OK >=
@@ -94,9 +98,10 @@ AT-DIDDOC-DID-CAPACITY 12 + CONSTANT _ATDD-SCRATCH-CAPACITY
 2 CONSTANT _ATDD-F-HANDLE
 4 CONSTANT _ATDD-F-KEY
 8 CONSTANT _ATDD-F-PDS
-_ATDD-F-ID _ATDD-F-KEY OR _ATDD-F-PDS OR
-    CONSTANT _ATDD-F-REQUIRED
-_ATDD-F-REQUIRED _ATDD-F-HANDLE OR CONSTANT _ATDD-F-ALL
+_ATDD-F-KEY _ATDD-F-PDS OR CONSTANT _ATDD-F-PARTICIPATION
+_ATDD-F-ID CONSTANT _ATDD-F-REQUIRED
+_ATDD-F-REQUIRED _ATDD-F-HANDLE OR _ATDD-F-PARTICIPATION OR
+    CONSTANT _ATDD-F-ALL
 
 1 CONSTANT _ATDD-P-ID
 2 CONSTANT _ATDD-P-ALSO-KNOWN-AS
@@ -214,9 +219,14 @@ _ATDD-TARGET-OFF HTARGET-SIZE + CONSTANT AT-DIDDOC-SIZE
         SWAP AT-DIDDOC-HANDLE-CAPACITY > OR IF
         R> DROP 0 EXIT
     THEN
-    R@ _ATDD.KEY-U @ DUP 2 <
+    R@ _ATDD.KEY-U @ DUP 0<
         SWAP AT-DIDDOC-KEY-CAPACITY > OR IF
         R> DROP 0 EXIT
+    THEN
+    R@ _ATDD.FLAGS @ _ATDD-F-KEY AND IF
+        R@ _ATDD.KEY-U @ 2 < IF R> DROP 0 EXIT THEN
+    ELSE
+        R@ _ATDD.KEY-U @ IF R> DROP 0 EXIT THEN
     THEN
     R> DROP -1 ;
 
@@ -236,10 +246,16 @@ _ATDD-TARGET-OFF HTARGET-SIZE + CONSTANT AT-DIDDOC-SIZE
     ELSE
         DUP _ATDD.HANDLE-U @ IF DROP 0 EXIT THEN
     THEN
-    DUP _ATDD.KEY OVER _ATDD.KEY-U @ _ATDD-MULTIBASE? 0= IF
-        DROP 0 EXIT
+    DUP _ATDD.FLAGS @ _ATDD-F-KEY AND IF
+        DUP _ATDD.KEY OVER _ATDD.KEY-U @ _ATDD-MULTIBASE? 0= IF
+            DROP 0 EXIT
+        THEN
     THEN
-    _ATDD.TARGET _ATDD-ORIGIN-TARGET? ;
+    DUP _ATDD.FLAGS @ _ATDD-F-PDS AND IF
+        _ATDD.TARGET _ATDD-ORIGIN-TARGET?
+    ELSE
+        DROP -1
+    THEN ;
 
 \ =====================================================================
 \  Result accessors
@@ -250,14 +266,36 @@ _ATDD-TARGET-OFF HTARGET-SIZE + CONSTANT AT-DIDDOC-SIZE
     DUP AT-DIDDOC-VALID? 0= IF
         DROP 0 0 0 0 AT-DIDDOC-S-INVALID EXIT
     THEN
-    _ATDD.FLAGS @
+    _ATDD.FLAGS @ >R
     AT-DIDDOC-E-VALID
-    SWAP _ATDD-F-HANDLE AND IF
+    R@ _ATDD-F-HANDLE AND IF
         AT-DIDDOC-E-VALID
     ELSE
         AT-DIDDOC-E-MISSING
     THEN
-    AT-DIDDOC-E-VALID AT-DIDDOC-E-VALID
+    R@ _ATDD-F-KEY AND IF
+        AT-DIDDOC-E-VALID
+    ELSE
+        AT-DIDDOC-E-MISSING
+    THEN
+    R> _ATDD-F-PDS AND IF
+        AT-DIDDOC-E-VALID
+    ELSE
+        AT-DIDDOC-E-MISSING
+    THEN
+    AT-DIDDOC-S-OK ;
+
+: AT-DIDDOC-PARTICIPATION-STATUS  ( document -- status )
+    DUP AT-DIDDOC-VALID? 0= IF
+        DROP AT-DIDDOC-S-INVALID EXIT
+    THEN
+    _ATDD.FLAGS @
+    DUP _ATDD-F-KEY AND 0= IF
+        DROP AT-DIDDOC-S-KEY EXIT
+    THEN
+    _ATDD-F-PDS AND 0= IF
+        AT-DIDDOC-S-PDS EXIT
+    THEN
     AT-DIDDOC-S-OK ;
 
 : AT-DIDDOC-DID@  ( document -- address length status )
@@ -282,6 +320,9 @@ _ATDD-TARGET-OFF HTARGET-SIZE + CONSTANT AT-DIDDOC-SIZE
     DUP AT-DIDDOC-VALID? 0= IF
         DROP 0 0 AT-DIDDOC-S-INVALID EXIT
     THEN
+    DUP _ATDD.FLAGS @ _ATDD-F-KEY AND 0= IF
+        DROP 0 0 AT-DIDDOC-S-MISSING EXIT
+    THEN
     DUP _ATDD.KEY SWAP _ATDD.KEY-U @
     AT-DIDDOC-S-OK ;
 
@@ -289,11 +330,17 @@ _ATDD-TARGET-OFF HTARGET-SIZE + CONSTANT AT-DIDDOC-SIZE
     DUP AT-DIDDOC-VALID? 0= IF
         DROP 0 AT-DIDDOC-S-INVALID EXIT
     THEN
+    DUP _ATDD.FLAGS @ _ATDD-F-PDS AND 0= IF
+        DROP 0 AT-DIDDOC-S-MISSING EXIT
+    THEN
     _ATDD.TARGET AT-DIDDOC-S-OK ;
 
 : AT-DIDDOC-PDS-ORIGIN@  ( document -- address length status )
     DUP AT-DIDDOC-VALID? 0= IF
         DROP 0 0 AT-DIDDOC-S-INVALID EXIT
+    THEN
+    DUP _ATDD.FLAGS @ _ATDD-F-PDS AND 0= IF
+        DROP 0 0 AT-DIDDOC-S-MISSING EXIT
     THEN
     _ATDD.TARGET HTARGET-URI$
     AT-DIDDOC-S-OK ;
@@ -923,7 +970,7 @@ _ATDDW-SCRATCH-OFF _ATDD-SCRATCH-STORAGE +
         R> DROP AT-DIDDOC-S-OK EXIT
     THEN
     R@ _ATDDW.AKA-TYPE @ JOSE-JSON-T-ARRAY <> IF
-        R> DROP AT-DIDDOC-S-HANDLE EXIT
+        R> DROP AT-DIDDOC-S-OK EXIT
     THEN
     R@ _ATDDW.AKA-A @ R@ _ATDDW.AKA-U @ R@ _ATDD-ARRAY-BIND
     DUP IF R> DROP EXIT THEN DROP
@@ -1069,10 +1116,10 @@ _ATDDW-SCRATCH-OFF _ATDD-SCRATCH-STORAGE +
 : _ATDD-SELECT-VM  ( workspace -- status )
     >R
     R@ _ATDDW.PRESENT @ _ATDD-P-VERIFICATION AND 0= IF
-        R> DROP AT-DIDDOC-S-KEY EXIT
+        R> DROP AT-DIDDOC-S-OK EXIT
     THEN
     R@ _ATDDW.VM-TYPE @ JOSE-JSON-T-ARRAY <> IF
-        R> DROP AT-DIDDOC-S-KEY EXIT
+        R> DROP AT-DIDDOC-S-OK EXIT
     THEN
     R@ _ATDDW.VM-A @ R@ _ATDDW.VM-U @ R@ _ATDD-ARRAY-BIND
     DUP IF R> DROP EXIT THEN DROP
@@ -1082,7 +1129,7 @@ _ATDDW-SCRATCH-OFF _ATDD-SCRATCH-STORAGE +
             >R DROP R> R> DROP EXIT
         THEN
         DROP
-        0= IF R> DROP AT-DIDDOC-S-KEY EXIT THEN
+        0= IF R> DROP AT-DIDDOC-S-OK EXIT THEN
         R@ _ATDD-TRY-VM
         DUP IF
             >R DROP R> R> DROP EXIT
@@ -1179,10 +1226,10 @@ _ATDDW-SCRATCH-OFF _ATDD-SCRATCH-STORAGE +
 : _ATDD-SELECT-PDS  ( workspace -- status )
     >R
     R@ _ATDDW.PRESENT @ _ATDD-P-SERVICE AND 0= IF
-        R> DROP AT-DIDDOC-S-PDS EXIT
+        R> DROP AT-DIDDOC-S-OK EXIT
     THEN
     R@ _ATDDW.SVC-TYPE @ JOSE-JSON-T-ARRAY <> IF
-        R> DROP AT-DIDDOC-S-PDS EXIT
+        R> DROP AT-DIDDOC-S-OK EXIT
     THEN
     R@ _ATDDW.SVC-A @ R@ _ATDDW.SVC-U @ R@ _ATDD-ARRAY-BIND
     DUP IF R> DROP EXIT THEN DROP
@@ -1192,7 +1239,7 @@ _ATDDW-SCRATCH-OFF _ATDD-SCRATCH-STORAGE +
             >R DROP R> R> DROP EXIT
         THEN
         DROP
-        0= IF R> DROP AT-DIDDOC-S-PDS EXIT THEN
+        0= IF R> DROP AT-DIDDOC-S-OK EXIT THEN
         R@ _ATDD-TRY-PDS
         DUP IF
             >R DROP R> R> DROP EXIT
@@ -1200,6 +1247,34 @@ _ATDDW-SCRATCH-OFF _ATDD-SCRATCH-STORAGE +
         DROP
         IF R> DROP AT-DIDDOC-S-OK EXIT THEN
     AGAIN ;
+
+\ Rejected candidates may have written into their destination while being
+\ decoded.  Optional evidence that was not completely selected publishes no
+\ residual candidate bytes, and selected text owns a zeroed unused tail.
+: _ATDD-CANONICALIZE-OPTIONALS  ( workspace -- )
+    >R
+    R@ _ATDDW.STAGE _ATDD.FLAGS @ _ATDD-F-HANDLE AND IF
+        R@ _ATDDW.STAGE _ATDD.HANDLE
+        R@ _ATDDW.STAGE _ATDD.HANDLE-U @ +
+        256 R@ _ATDDW.STAGE _ATDD.HANDLE-U @ - 0 FILL
+    ELSE
+        0 R@ _ATDDW.STAGE _ATDD.HANDLE-U !
+        R@ _ATDDW.STAGE _ATDD.HANDLE 256 0 FILL
+    THEN
+    R@ _ATDDW.STAGE _ATDD.FLAGS @ _ATDD-F-KEY AND IF
+        R@ _ATDDW.STAGE _ATDD.KEY
+        R@ _ATDDW.STAGE _ATDD.KEY-U @ +
+        AT-DIDDOC-KEY-CAPACITY
+        R@ _ATDDW.STAGE _ATDD.KEY-U @ - 0 FILL
+    ELSE
+        0 R@ _ATDDW.STAGE _ATDD.KEY-U !
+        R@ _ATDDW.STAGE _ATDD.KEY
+            AT-DIDDOC-KEY-CAPACITY 0 FILL
+    THEN
+    R@ _ATDDW.STAGE _ATDD.FLAGS @ _ATDD-F-PDS AND 0= IF
+        R@ _ATDDW.STAGE _ATDD.TARGET HTARGET-SIZE 0 FILL
+    THEN
+    R> DROP ;
 
 \ =====================================================================
 \  Staging, publication, and public parse
@@ -1235,6 +1310,7 @@ _ATDDW-SCRATCH-OFF _ATDD-SCRATCH-STORAGE +
     R@ _ATDD-SELECT-PDS
     DUP IF R> DROP EXIT THEN DROP
 
+    R@ _ATDD-CANONICALIZE-OPTIONALS
     R@ _ATDDW.STAGE _ATDD.FLAGS @
         _ATDD-F-REQUIRED AND _ATDD-F-REQUIRED <> IF
         R> DROP AT-DIDDOC-S-INTERNAL EXIT

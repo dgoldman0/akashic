@@ -140,9 +140,10 @@ It owns no DNS, HTTPS, IDNA, reserved-TLD, or bidirectional identity policy.
 ## DID document — did-document.f
 
 The [DID document profile](did-document.md) strictly validates one
-caller-supplied JSON DID document and publishes self-contained copies of its
-exact DID, optional first valid `at://` handle, modern `#atproto` Multikey,
-and HTTPS-origin `#atproto_pds` service.
+caller-supplied JSON DID document and publishes a self-contained exact-ID
+result. Its first valid `at://` handle, modern `#atproto` Multikey, and
+HTTPS-origin `#atproto_pds` service are retained as independent optional
+evidence.
 
 ```forth
 AT-DIDDOC-PARSE
@@ -150,8 +151,9 @@ AT-DIDDOC-PARSE
     document workspace -- status )
 ```
 
-It owns no resolution or transport state. Handle absence is explicit optional
-evidence; missing key or PDS evidence is a profile failure.
+It owns no resolution or transport state. Missing optional evidence does not
+erase a valid identity. `AT-DIDDOC-PARTICIPATION-STATUS` separately requires
+both a usable Multikey and PDS endpoint before participation.
 
 ---
 
