@@ -1,7 +1,11 @@
 # Canonical typed-value codec
 
-**Status:** Stage 0 ratified canonical codec; implementation has not begun
+**Status:** Stage 0 long-term codec reference; deferred from the Stage 1 gate
 **Codec identity:** `org.akashic.sandbox.value-tree-le`
+
+The scalar sandbox runtime does not depend on this codec. Typed value graphs
+remain a later ABI layer; see
+[`stage1-implementation.md`](stage1-implementation.md).
 
 This document defines the exact address-free byte representation of typed
 values crossing the neutral sandbox boundary. It is the canonical codec for

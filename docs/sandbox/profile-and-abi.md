@@ -1,7 +1,9 @@
 # Pure-computation sandbox profile and ABI
 
-Status: ratified permanent production least-authority profile and baseline
-qualification contract. Implementation has not begun.
+Status: long-term ABI reference. The scalar pure profile is implemented;
+typed value graphs and production import adapters are deferred from the Stage
+1 runtime gate. See
+[`stage1-implementation.md`](stage1-implementation.md).
 
 This document defines Akashic's permanent pure-computation execution profile:
 

@@ -1,8 +1,13 @@
 # Canonical execution-profile descriptor
 
-**Status:** Stage 0 canonical codec contract
+**Status:** Stage 0 long-term codec reference; deferred from the Stage 1 gate
 **Scope:** immutable machine-readable profile identity, independent validation,
 and runtime-binding compatibility
+
+Stage 1 implements the immutable internal runtime profile first. Canonical
+profile text/bytes, cryptographic identity, distribution, and cache lookup are
+not prerequisites; see
+[`stage1-implementation.md`](stage1-implementation.md).
 
 This document defines the exact bytes hashed by an Akashic sandbox artifact's
 profile-digest field. The descriptor is declarative trusted configuration. It

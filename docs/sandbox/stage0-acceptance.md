@@ -1,8 +1,13 @@
 # Stage 0 adversarial acceptance contract
 
-**Status:** Stage 0 ratified design; implementation has not begun
+**Status:** Stage 0 long-term acceptance reference
 **Scope:** qualification requirements derived from
 [`threat-model.md`](threat-model.md)
+
+The focused Stage 1 gate is the compiler-to-candidate-to-verifier-to-plan-to-VM
+path in [`stage1-implementation.md`](stage1-implementation.md). Digest,
+distribution, typed-value, and production-import cases here do not block that
+gate.
 
 This document fixes the negative-test oracle before implementation. It does
 not claim that any current ITC or contract test satisfies these cases.
@@ -12,13 +17,14 @@ least-authority profile and the baseline qualification profile. It provides
 pure value-to-value computation with zero bound imports, zero effects, and
 zero proposal surface. It is not a toy or transitional runtime.
 
-The shared artifact format, verifier, profile representation, executor, and
-typed-import dispatch machinery are general production architecture from the
-beginning. The pure-compute profile uses that complete architecture with an
-empty import set. Additional profiles add concrete adapters and capability
-sets; they never replace or reduce the common core.
+The candidate format, verifier, profile representation, plan, empty binding,
+and executor are the current permanent runtime architecture. Candidate import
+records and the import-call opcode reserve the permanent extension boundary,
+but nonempty binding and dispatch are qualified with the later host layer that
+first introduces them. Additional profiles and adapters extend these
+interfaces; they do not replace the pure runtime.
 
-The same Stage 1 core includes the profile's production typed counted-loop
+The Stage 1 core includes the profile's production typed counted-loop
 instructions and verifier state. `DO`, `LOOP`, `+LOOP`, and `R` execute over
 separate invocation-local loop frames. `R` is the current innermost lexical
 loop counter. Loop frames never reuse or alias call frames or the host return
@@ -32,14 +38,21 @@ fault injection, or deterministic unit fixtures as appropriate.
 
 The gates are:
 
-- **Stage 1 — neutral core:** compiler, canonical profile and artifact,
-  independent verifier, generic import binding, typed loop machinery, value
-  codec, executor, and invocation-local cleanup.
+- **Stage 1 — pure neutral core:** bounded compiler, address-free candidate,
+  immutable internal profile, independent verifier, owned plan, empty binding,
+  typed loop machinery, executor, and invocation-local cleanup.
 - **Stage 2 — Akashic host:** exact module declaration and schema resolution,
-  capability-empty child Context, copied input/output, Practice policy, and
-  host lifecycle.
+  typed value codec, nonempty binding/dispatch qualification, capability-empty
+  child Context, copied input/output, Practice policy, and host lifecycle.
 - **Stage 3 — Desk and Agent:** package-class admission, Desk release, and
   Agent-facing compile/verify/test/invoke adapters.
+
+The case tables below preserve the complete qualification backlog. Their
+historical family labels do not expand the current implementation gate: the
+controlling active subset is the explicit **Stage 1 exit criteria** near the
+end of this document. Cases involving nonempty imports, typed values, host
+allocation or fault injection, and transfer linearization remain deferred as
+stated there.
 
 Within Stage 1, **verified-artifact runtime** cases execute an ordinary
 artifact accepted by the verifier. **Executor defense-in-depth** cases use a
@@ -103,12 +116,12 @@ worker-spawning or unusually memory-intensive tests require approval.
 | ART-19 | Control-flow merge with different loop-frame depth or identity | Verification failure |
 | ART-20 | `R` occurs where the verifier's current lexical loop identity is absent or differs from the innermost active counted loop | Verification failure |
 
-## Stage 1 — profiles and typed-import machinery
+## Later host layer — profiles and typed-import machinery
 
-The permanent pure-compute profile binds zero imports, but the general
-profile/import mechanism is part of baseline core qualification. Synthetic
-qualification descriptors and trusted test adapters may exercise nonzero
-import tables without adding product authority to
+The permanent pure-compute profile binds zero imports. These retained `PRF-*`
+cases qualify the later nonempty binding and dispatch layer, not the active
+Stage 1 gate. Synthetic qualification descriptors and trusted test adapters
+may exercise nonzero import tables without adding product authority to
 `org.akashic.sandbox.pure-compute`.
 
 | ID | Adversarial stimulus | Required oracle |
@@ -151,7 +164,7 @@ import tables without adding product authority to
 | RUN-13 | Verified `+LOOP` executes with step zero | `GUEST_TRAP / LOOP_ZERO_STEP` before loop index, frame, stack, or continuation is mutated |
 | RUN-14 | Verified `LOOP` advances `INT64_MAX`, or verified positive/negative `+LOOP` advances beyond `INT64_MAX`/`INT64_MIN` | `GUEST_TRAP / LOOP_ARITHMETIC_OVERFLOW` before loop index, frame, stack, or continuation is mutated |
 
-## Stage 1 — executor defense-in-depth fault injection
+## Later hardening — executor defense-in-depth fault injection
 
 The `DEF-*` cases deliberately bypass ordinary verifier guarantees through a
 trusted test seam. No `DEF-*` fixture is evidence that a malformed artifact
@@ -181,7 +194,7 @@ was admitted.
 | MEM-07 | Bulk move/fill at exact copy-byte budget and one byte over | Exact budget succeeds; excess is rejected before mutation |
 | MEM-08 | Trap after a validated source read but before a bulk destination write | Destination remains unchanged |
 
-## Stage 1 — typed-value codec, handles, and graphs
+## Later ABI layer — typed-value codec, handles, and graphs
 
 | ID | Adversarial stimulus | Required oracle |
 | --- | --- | --- |
@@ -243,30 +256,29 @@ was admitted.
 
 ## Stage 1 exit criteria
 
-The shared neutral runtime and its permanent
-`org.akashic.sandbox.pure-compute` baseline are not qualified until:
+The active Stage 1 gate qualifies the pure scalar runtime when focused,
+deterministic tests demonstrate:
 
-- every Stage 1 `SRC-*`, `ART-*`, `PRF-*`, `RUN-*`, `DEF-*`, `MEM-*`,
-  `VAL-*`, `ISO-*`, `AUTH-*`, and `LIFE-*` case above has an executable
-  deterministic oracle;
-- bounded parser/verifier/compiler fuzzing has no escaping native throw,
-  out-of-bounds access, or leaked live allocation;
-- host stack/dictionary restoration is checked across every public failure
-  class;
-- branch and counted loops prove that no opcode is free;
-- typed loop-frame isolation, lexical `R`, nesting, calls, and `+LOOP`
-  semantics pass both verified-artifact and defense-in-depth cases;
-- value handles, codec, UTF-8, maps, DAG sharing, graph bounds, and value/copy
-  budgets pass the `VAL-*` cases and every mandatory case in
-  [`value-codec.md`](value-codec.md) section 12;
-- two-instance and recycled-memory tests prove lifecycle isolation;
-- exact artifact/profile verify-to-execute binding is demonstrated;
-- the generic typed-import/profile machinery passes the `PRF-*` cases even
-  though the pure-compute production profile binds zero imports; and
-- compiler and verifier statuses remain separate from the neutral run result,
-  while the host invocation result preserves its specified request, profile,
-  verification, trap, exhaustion, output-rejection, import-failure,
-  cancellation, and host-failure distinctions.
+- bounded non-evaluating source compilation, including malformed source,
+  control nesting, forward calls, counted loops, and failure without candidate
+  publication;
+- independent rejection of malformed geometry, records, opcodes, targets,
+  loop structure, stack merges, wrong returns, and unreachable instructions;
+- compile-to-candidate-to-plan-to-execution behavior for scalar, call, loop,
+  local, and checked-memory programs;
+- charge-before-effect instruction exhaustion, cancellation, arithmetic trap
+  containment, successful checked-memory behavior, deterministic cleanup, and
+  result ownership;
+- interleaved live instances with independent stacks, calls, loops, memory,
+  budget, cancellation, traps, and results; and
+- separate bounded compiler, verifier, and run result vocabularies.
+
+Nonempty import adapters and their failure staging, typed value graphs and
+codecs, digest/package identity, host allocation/fault injection, and transfer
+linearization remain qualification requirements for the later layer that
+introduces each feature. Their `PRF-*`, `VAL-*`, and host-lifecycle cases stay
+in this document so that future work does not lose them; they do not block the
+empty-binding Stage 1 runtime.
 
 Tests whose expected result preserves known unsafe prototype behavior MUST be
 rewritten or removed rather than cited as compatibility requirements.
