@@ -417,11 +417,27 @@ PROVIDED akashic-sbx-plan
     R> * R> +
     SBOX-PLAN-DESCRIPTOR-SIZE + + ;
 
+\ Internal execution accessors are valid only after a public boundary has
+\ admitted the sealed plan.  They avoid revalidating the same immutable plan
+\ and embedded layout for every instruction in one uninterrupted VM slice.
+: _SPLAN-FUNCTION-ADMITTED@  ( index plan -- record|0 )
+    DUP _SPLAN-P.FUNCTION-N @
+    1 PICK _SPLAN-LAYOUT _SCAND-L.FUNCTION-OFF @
+    SBOX-CANDIDATE-FUNCTION-SIZE _SPLAN-INDEXED@ ;
+
+: _SPLAN-ENTRY-ADMITTED@  ( index plan -- record|0 )
+    DUP _SPLAN-P.ENTRY-N @
+    1 PICK _SPLAN-LAYOUT _SCAND-L.ENTRY-OFF @
+    SBOX-CANDIDATE-ENTRY-SIZE _SPLAN-INDEXED@ ;
+
+: _SPLAN-INSTRUCTION-ADMITTED@  ( index plan -- record|0 )
+    DUP _SPLAN-P.INSTRUCTION-N @
+    1 PICK _SPLAN-LAYOUT _SCAND-L.INSTRUCTION-OFF @
+    SBOX-CANDIDATE-INSTRUCTION-SIZE _SPLAN-INDEXED@ ;
+
 : SBOX-PLAN-FUNCTION@  ( index plan -- record|0 )
     DUP SBOX-PLAN-VALID? 0= IF 2DROP 0 EXIT THEN
-    DUP _SPLAN-P.FUNCTION-N @
-    1 PICK _SPLAN-LAYOUT SBOX-CANDIDATE-LAYOUT-FUNCTIONS@
-    SBOX-CANDIDATE-FUNCTION-SIZE _SPLAN-INDEXED@ ;
+    _SPLAN-FUNCTION-ADMITTED@ ;
 
 : SBOX-PLAN-IMPORT@  ( index plan -- record|0 )
     DUP SBOX-PLAN-VALID? 0= IF 2DROP 0 EXIT THEN
@@ -431,9 +447,7 @@ PROVIDED akashic-sbx-plan
 
 : SBOX-PLAN-ENTRY@  ( index plan -- record|0 )
     DUP SBOX-PLAN-VALID? 0= IF 2DROP 0 EXIT THEN
-    DUP _SPLAN-P.ENTRY-N @
-    1 PICK _SPLAN-LAYOUT SBOX-CANDIDATE-LAYOUT-ENTRIES@
-    SBOX-CANDIDATE-ENTRY-SIZE _SPLAN-INDEXED@ ;
+    _SPLAN-ENTRY-ADMITTED@ ;
 
 : SBOX-PLAN-NAME@  ( index plan -- byte-address|0 )
     DUP SBOX-PLAN-VALID? 0= IF 2DROP 0 EXIT THEN
@@ -449,9 +463,7 @@ PROVIDED akashic-sbx-plan
 
 : SBOX-PLAN-INSTRUCTION@  ( index plan -- record|0 )
     DUP SBOX-PLAN-VALID? 0= IF 2DROP 0 EXIT THEN
-    DUP _SPLAN-P.INSTRUCTION-N @
-    1 PICK _SPLAN-LAYOUT SBOX-CANDIDATE-LAYOUT-INSTRUCTIONS@
-    SBOX-CANDIDATE-INSTRUCTION-SIZE _SPLAN-INDEXED@ ;
+    _SPLAN-INSTRUCTION-ADMITTED@ ;
 
 \ =====================================================================
 \  Deterministic release

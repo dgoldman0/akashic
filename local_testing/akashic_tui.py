@@ -21787,6 +21787,12 @@ PROFILES["sandbox-stage1-vm-terminal-contracts"] = (
         "SBOX STAGE1 VM TERMINAL",
     )
 )
+PROFILES["sandbox-stage1-vm-hotloop-contracts"] = (
+    _sandbox_stage1_group_profile(
+        "_S1-RUN-VM-HOTLOOP",
+        "SBOX STAGE1 VM HOTLOOP",
+    )
+)
 
 
 PROFILES["vfs-ram-capacity-contracts"] = Profile(

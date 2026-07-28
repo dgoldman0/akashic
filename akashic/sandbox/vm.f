@@ -5,12 +5,14 @@
 \  operands, call frames, locals, typed counted-loop frames, function-start
 \  indices, and linear memory never live in globals or across calls on the
 \  host stacks.  STEP executes at most one instruction; RUN-SLICE is only a
-\  deterministic bounded repetition of STEP.
+\  deterministic bounded repetition of admitted internal steps.
 \
-\  The verifier is the semantic admission authority.  This executor still
-\  rechecks every address, stack, frame, target, opcode, cost, and memory
-\  invariant before mutation.  It contains no allocator, callback, hook,
-\  worker, import handler, output console, or ambient lookup.
+\  The verifier is the semantic admission authority.  Public resume
+\  boundaries validate the sealed static objects and continuation; one
+\  uninterrupted slice then trusts that admitted immutable state while still
+\  checking every guest-dynamic stack, frame, target, cost, budget, and memory
+\  condition before mutation.  The executor contains no allocator, callback,
+\  hook, worker, import handler, output console, or ambient lookup.
 \ =====================================================================
 
 REQUIRE binding.f
@@ -494,13 +496,13 @@ PROVIDED akashic-sbx-vm
     R> DROP ;
 
 : _SVM-FUNCTION  ( index instance -- record|0 )
-    >R R@ _SVI.PLAN @ SBOX-PLAN-FUNCTION@ R> DROP ;
+    >R R@ _SVI.PLAN @ _SPLAN-FUNCTION-ADMITTED@ R> DROP ;
 
 : _SVM-ENTRY-RECORD  ( index instance -- record|0 )
-    >R R@ _SVI.PLAN @ SBOX-PLAN-ENTRY@ R> DROP ;
+    >R R@ _SVI.PLAN @ _SPLAN-ENTRY-ADMITTED@ R> DROP ;
 
 : _SVM-INSTRUCTION  ( index instance -- record|0 )
-    >R R@ _SVI.PLAN @ SBOX-PLAN-INSTRUCTION@ R> DROP ;
+    >R R@ _SVI.PLAN @ _SPLAN-INSTRUCTION-ADMITTED@ R> DROP ;
 
 : _SVM-CALL.RETURN-IP  ( frame -- a ) _SVC-RETURN-IP + ;
 : _SVM-CALL.FUNCTION   ( frame -- a ) _SVC-FUNCTION + ;
@@ -1141,9 +1143,13 @@ PROVIDED akashic-sbx-vm
     DUP _SVI.CURRENT-FUNCTION @ SWAP _SVM-START-CELL @ ;
 
 : _SVM-CURRENT-END  ( instance -- index )
-    DUP _SVM-CURRENT-START
-    OVER _SVM-CURRENT-FUNCTION-RECORD
-        _SVM-FUNCTION-INSTRUCTION-N@ + NIP ;
+    DUP _SVI.CURRENT-FUNCTION @ 1+
+    OVER _SVI.FUNCTION-N @
+    OVER SWAP U< IF
+        SWAP _SVM-START-CELL @
+    ELSE
+        DROP _SVI.INSTRUCTION-N @
+    THEN ;
 
 : _SVM-FALLTHROUGH?  ( instance -- flag )
     DUP _SVI.IP @ 1+
@@ -1191,7 +1197,11 @@ PROVIDED akashic-sbx-vm
     SWAP R@ _SVI.LOOP-N @ U> OR 0=
     R> DROP ;
 
-: _SVM-DYNAMIC-READY?  ( instance -- flag )
+: _SVM-RESUME-READY?  ( instance -- flag )
+    DUP _SVI.RUN-STATE @ SBOX-VM-RUN-RUNNABLE <> IF
+        DROP -1 EXIT
+    THEN
+    DUP _SVI.CANCEL-DETAIL @ IF DROP -1 EXIT THEN
     DUP _SVM-STARTS-VALID? 0= IF
         SBOX-VM-TRAP-BAD-CALL-TARGET 0 2 PICK _SVM-TRAP
         DROP DROP 0 EXIT
@@ -1200,6 +1210,9 @@ PROVIDED akashic-sbx-vm
         SBOX-VM-TRAP-CALL-STACK-UNDERFLOW 0 2 PICK _SVM-TRAP
         DROP DROP 0 EXIT
     THEN
+    DROP -1 ;
+
+: _SVM-DYNAMIC-READY?  ( instance -- flag )
     DUP _SVI.IP @ DUP 0<
     SWAP 2 PICK _SVM-CURRENT-START U< OR IF
         SBOX-VM-TRAP-BAD-INSTRUCTION-POINTER 0 2 PICK _SVM-TRAP
@@ -1211,41 +1224,7 @@ PROVIDED akashic-sbx-vm
     THEN
     DROP -1 ;
 
-: _SVM-OPERAND-SHAPE?  ( operand-kind a b -- flag )
-    >R
-    SWAP
-    CASE
-        SBOX-MACHINE-OPERAND-NONE OF
-            0= R> 0= AND EXIT
-        ENDOF
-        SBOX-MACHINE-OPERAND-I64 OF
-            0= R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OPERAND-ABORT OF
-            DUP 0xFFFF AND = R> 0= AND EXIT
-        ENDOF
-        SBOX-MACHINE-OPERAND-BRANCH OF
-            DROP R> 0= EXIT
-        ENDOF
-        SBOX-MACHINE-OPERAND-FUNCTION OF
-            DROP R> 0= EXIT
-        ENDOF
-        SBOX-MACHINE-OPERAND-LOCAL OF
-            DROP R> 0= EXIT
-        ENDOF
-        SBOX-MACHINE-OPERAND-LOOP-EXIT OF
-            DROP R> 0= EXIT
-        ENDOF
-        SBOX-MACHINE-OPERAND-LOOP-BODY OF
-            DROP R> 0= EXIT
-        ENDOF
-        SBOX-MACHINE-OPERAND-IMPORT OF
-            DROP R> 0= EXIT
-        ENDOF
-    ENDCASE
-    DROP R> DROP 0 ;
-
-: _SVM-FETCH-VALID?  ( instance -- flag )
+: _SVM-FETCH-ADMITTED?  ( instance -- flag )
     >R
     R@ _SVI.IP @ R@ _SVM-INSTRUCTION
     DUP 0= IF DROP R> DROP 0 EXIT THEN
@@ -1257,18 +1236,7 @@ PROVIDED akashic-sbx-vm
         SBOX-CANDIDATE-U32-LE@ R@ _SVI.TMP-A !
     SBOX-CANDIDATE-INSTRUCTION-B-OFFSET +
         SBOX-CANDIDATE-U64-LE@ R@ _SVI.TMP-B !
-
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OPERAND@
-    DUP SBOX-MACHINE-S-OK <> IF 2DROP R> DROP 0 EXIT THEN
-    DROP
-    R@ _SVI.TMP-A @ R@ _SVI.TMP-B @ _SVM-OPERAND-SHAPE? 0= IF
-        R> DROP 0 EXIT
-    THEN
-    R@ _SVI.TMP-OPCODE @ R@ _SVI.PROFILE @
-        SBOX-PROFILE-OPCODE-ENABLED?
-    DUP IF 2DROP R> DROP 0 EXIT THEN
-    DROP
-    R> DROP ;
+    R> DROP -1 ;
 
 \ =====================================================================
 \  Ordinary fixed-effect operations
@@ -2402,10 +2370,7 @@ PROVIDED akashic-sbx-vm
         DROP 0
     THEN ;
 
-: SBOX-VM-STEP  ( instance -- run-state )
-    DUP SBOX-VM-INSTANCE-VALID? 0= IF
-        DROP SBOX-VM-RUN-INVALID EXIT
-    THEN
+: _SVM-STEP-ADMITTED  ( instance -- run-state )
     DUP _SVI.RUN-STATE @ SBOX-VM-RUN-RUNNABLE <> IF
         _SVI.RUN-STATE @ EXIT
     THEN
@@ -2413,22 +2378,32 @@ PROVIDED akashic-sbx-vm
         SWAP _SVM-CANCELLED! EXIT
     THEN
     DUP _SVM-DYNAMIC-READY? 0= IF _SVI.RUN-STATE @ EXIT THEN
-    DUP _SVM-FETCH-VALID? 0= IF
+    DUP _SVM-FETCH-ADMITTED? 0= IF
         SBOX-VM-TRAP-BAD-OPCODE SWAP _SVM-TRAP0 EXIT
     THEN
     _SVM-DISPATCH ;
+
+: SBOX-VM-STEP  ( instance -- run-state )
+    DUP SBOX-VM-INSTANCE-VALID? 0= IF
+        DROP SBOX-VM-RUN-INVALID EXIT
+    THEN
+    DUP _SVM-RESUME-READY? 0= IF _SVI.RUN-STATE @ EXIT THEN
+    _SVM-STEP-ADMITTED ;
 
 : SBOX-VM-RUN-SLICE  ( max-steps instance -- run-state )
     OVER 0< IF 2DROP SBOX-VM-RUN-INVALID EXIT THEN
     DUP SBOX-VM-INSTANCE-VALID? 0= IF
         2DROP SBOX-VM-RUN-INVALID EXIT
     THEN
+    DUP _SVM-RESUME-READY? 0= IF
+        NIP _SVI.RUN-STATE @ EXIT
+    THEN
     >R
     BEGIN
         DUP 0>
         R@ _SVI.RUN-STATE @ SBOX-VM-RUN-RUNNABLE = AND
     WHILE
-        R@ SBOX-VM-STEP DROP
+        R@ _SVM-STEP-ADMITTED DROP
         1-
     REPEAT
     DROP R@ _SVI.RUN-STATE @

@@ -118,3 +118,12 @@ def test_focused_foundation_profiles_are_registered() -> None:
     assert 'PROFILES["sandbox-stage1-vm-scalar-contracts"]' in harness
     assert 'PROFILES["sandbox-stage1-vm-state-contracts"]' in harness
     assert 'PROFILES["sandbox-stage1-vm-terminal-contracts"]' in harness
+    assert 'PROFILES["sandbox-stage1-vm-hotloop-contracts"]' in harness
+
+
+def test_run_slice_uses_one_public_admission_boundary() -> None:
+    source = _source(Path("sandbox/vm.f"))
+
+    assert "DUP _SVM-RESUME-READY? 0= IF" in source
+    assert "R@ _SVM-STEP-ADMITTED DROP" in source
+    assert "R@ SBOX-VM-STEP DROP" not in source

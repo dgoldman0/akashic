@@ -39,6 +39,15 @@ The implementation is divided into three reviewable commits:
 These are concern boundaries, not format or compatibility versions. The
 project remains unreleased and no predecessor runtime is preserved.
 
+The subsequent bounded reduction pass keeps those boundaries but removes
+their duplication from the instruction loop. `STEP` still validates the
+instance and continuation at its public boundary. `RUN-SLICE` now performs
+that admission once, uses private O(1) sealed-plan accessors, and executes
+admitted internal steps while retaining all guest-dynamic stack, frame,
+branch, memory, budget, cancellation, and trap checks. A native caller racing
+writes into a sealed plan or live instance during one slice is outside the
+object contract; guest code has no path to either native span.
+
 ## Corrected Stage 1 boundary
 
 Stage 1 owns:
@@ -77,21 +86,27 @@ The focused gates passed sequentially:
 
 - `sandbox-format-contracts`: 101 assertions;
 - `sandbox-core-contracts`: 66 assertions;
-- `test_sandbox_stage1_structure.py`: 6 tests;
-- `sandbox-stage1-vm-scalar-contracts`: 138 assertions, 343,580,309 guest
-  steps, 219.16 seconds;
-- `sandbox-stage1-vm-state-contracts`: 114 assertions, 409,897,414 guest
-  steps, 300.03 seconds; and
-- `sandbox-stage1-vm-terminal-contracts`: 136 assertions, 329,253,805 guest
-  steps, 217.07 seconds.
+- `test_sandbox_stage1_structure.py`: 7 tests;
+- `sandbox-stage1-vm-hotloop-contracts`: 32 assertions; the identical
+  64-unit spin slice fell from 75,359,091 to 1,417,407 emulator cycles,
+  a 53.17x speedup and 98.12% reduction;
+- `sandbox-stage1-vm-scalar-contracts`: 138 assertions, 327,022,291 emulator
+  steps, 197.88 seconds;
+- `sandbox-stage1-vm-state-contracts`: 114 assertions, 321,083,262 emulator
+  steps, 203.99 seconds; and
+- `sandbox-stage1-vm-terminal-contracts`: 136 assertions, 325,092,822
+  emulator steps, 210.39 seconds.
 
 The original aggregate profile remains available as a whole-suite diagnostic,
 but it is not the routine acceptance gate: repeated source compilation in one
 interpreted guest run exceeds the five-minute development ceiling. The three
 bounded VM profiles qualify the same runtime contracts without raising the
 checked-in step limits or running test suites concurrently. The state group
-finished at the wall-time boundary and should be split again if it becomes a
-frequent inner-loop test; that harness refinement is not a runtime dependency.
+now finishes comfortably below the wall-time boundary. The remaining
+multi-minute duration is dominated by image startup, module loading, and
+repeated compiler/verifier workspace initialization rather than guest
+instruction execution; reducing those development-harness costs is not on the
+Stage 1 critical path.
 
 ## Explicitly deferred consumers and layers
 
