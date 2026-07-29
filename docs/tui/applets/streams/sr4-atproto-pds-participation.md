@@ -88,7 +88,11 @@ Landing 3 currently includes:
 - `3cedab0` — single-validation AT OAuth client selection;
 - `a88a655` — structural OAuth Client ID Metadata Document parsing;
 - `ff5bbbd` — caller-owned AT OAuth deployment binding; and
-- `73ba6a3` — checked public P-256 JWK Set selection.
+- `73ba6a3` — checked public P-256 JWK Set selection;
+- `66e603f` — credential-vault external composition-span admission;
+- `9e518e5` — compact SR4 security module-key normalization; and
+- `2ae49bc` — durable OAuth client-authentication and DPoP P-256 key
+  ownership.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -104,17 +108,26 @@ uninterpreted time/revocation metadata, enforces the public ES256 profile,
 selects one globally unique decoded `kid`, and publishes the public key plus
 RFC 7638 thumbprint from caller-owned scratch.
 
-The remaining closeout begins by applying that selector to both the borrowed
-inline `jwks` token and bounded remotely acquired bodies, then binding the
-selected public identity to the locally owned private key while keeping it
-distinct from each session's DPoP key. A bounded HTTPS acquisition owner must
-also prove the Client Identifier and `jwks_uri` transport provenance that a
-structural parser cannot establish. After that, production composition must
-drive PAR/PKCE and the authorization response, perform DPoP-aware token
-exchange and nonce retry, admit the grant into the durable generic session,
-and prove cold recovery, refresh rotation, logout,
-revocation/reauthorization, cancellation, and complete cleanup. Existing
-generic pieces should be composed rather than reimplemented.
+`66e603f` gives higher-level owners a checked way to reject caller spans that
+alias a live credential vault or any of its private dependencies before a
+borrow begins. `2ae49bc` uses that boundary to provision role-bound P-256
+records, publish canonical RID/generation/thumbprint slots, reconstruct those
+slots after reboot, and resolve copied public identity only after the
+credential-vault borrow has ended. Client-authentication and DPoP keys have
+distinct kinds and authenticated roles; their binding requires distinct RIDs
+and RFC 7638 thumbprints.
+
+The next closeout applies the JWK Set selector to the deployment binder's
+borrowed inline `jwks` token and compares its selected public key and
+thumbprint with the new local owner. That composition must also resolve and
+recheck the distinct DPoP identity without nesting credential-vault borrows.
+Bounded remote `jwks_uri` acquisition follows with proof of Client Identifier
+and transport provenance that a structural parser cannot establish. After
+that, production composition must drive PAR/PKCE and the authorization
+response, perform DPoP-aware token exchange and nonce retry, admit the grant
+into the durable generic session, and prove cold recovery, refresh rotation,
+logout, revocation/reauthorization, cancellation, and complete cleanup.
+Existing generic pieces should be composed rather than reimplemented.
 
 ## Current repository handoff
 
@@ -123,33 +136,30 @@ At preparation time:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  73ba6a3 (Add checked public P-256 JWK Set selection)
+code base:  2ae49bc (Add durable OAuth P-256 key ownership)
 record:     this handoff is committed immediately after that code base
-upstream:   origin/main at 50adcca
-ahead:      2 commits after committing this record
+upstream:   origin/main at 66e603f
+ahead:      3 commits after committing this record
 tests:      no test process running
 ```
 
-There is no current SR4-owned uncommitted work. The two latest qualified
-milestones are:
+There is no current SR4-owned uncommitted work. The latest SR4 commits are:
 
 ```text
-ff5bbbd Bind AT OAuth Client ID metadata to deployments
-73ba6a3 Add checked public P-256 JWK Set selection
+66e603f Expose credential-vault composition span admission
+9e518e5 Normalize SR4 security module keys
+2ae49bc Add durable OAuth P-256 key ownership
 ```
 
-`ff5bbbd` added `AT-OAUTH-DEPLOYMENT-WITH` and the borrowed-view AT client
-hooks that let the binder retain one generic configuration validation. The
-adapter is state-free, uses a caller-owned 53,760-byte workspace, and
-preserves explicit preflight precedence, source immutability, callback
-lifetimes, and deterministic cleanup.
-
-`73ba6a3` added `JOSE-JWK-SET-P256-SELECT`, its caller-owned 39,528-byte
-workspace, the lower JWK caller-span composition boundary, strict whole-set
-policy, documentation, and deterministic qualification. The deployment
-binder still does not invoke it, acquire `jwks_uri`, prove HTTP provenance, or
-prove private-key possession; that composition is now the next production
-boundary.
+`2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
+`OAUTH2-P256-KEY-SLOT-LOAD-*`, and `OAUTH2-P256-KEY-WITH-*` over a
+caller-owned 17,879-byte workspace. Its canonical 192-byte binding fits the
+immutable generic client configuration, retains no private scalar, pins each
+role to one credential RID/generation/thumbprint, snapshots caller identity
+before durable access, and invokes application code only after the exact
+vault borrow has returned and wiped. The deployment binder still does not
+invoke this owner or the JWK Set selector; their AT-layer composition is now
+the next production boundary.
 
 The following files are preserved unrelated user/old-L13 work. Do not stage,
 restore, rewrite, or delete them as part of SR4:
@@ -228,6 +238,21 @@ Completed evidence:
   protected-span admission, input/output canaries, mandatory cleanup, exact
   32-key success, and 33-key capacity rejection. Every phase stayed below its
   checked-in 300,000,000-step ceiling.
+- The exact credential-vault source committed at `66e603f` passed its static
+  gate and 268-assertion lifecycle in 202,519,471 guest steps and 132.93
+  seconds. The added cases covered complete external-span admission,
+  dependency-private aliases, and a dynamic partial AES-GCM workspace
+  overlap.
+- The final P-256 owner source committed at `2ae49bc` passed the repository
+  module-key gate, its static contract gate, all staged loads, six behavior
+  groups, and the finish marker in 243,389,294 guest steps and 149.84 summed
+  stage seconds on one core with 128 MiB of external machine memory. It
+  covered canonical binding roles and distinctness, client and DPoP
+  provisioning, reboot-style slot reconstruction, stale generation and
+  thumbprint mismatch, role substitution, public callback timing, callback
+  throw/stack containment, protected-span precedence, complete cleanup,
+  staged-binding validation, and adversarial mutation of the caller RID after
+  snapshot.
 
 The 16-minute-52-second result is a complete staged module-load and contract
 qualification, not the measured latency of one OAuth admission or one network
