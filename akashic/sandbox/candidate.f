@@ -69,12 +69,14 @@ PROVIDED akashic-sbx-candidate
 
 \ Entry:
 \   [u32 name-off, u16 name-u, u16 flags=0,
-\    u32 function-index, u32 reserved=0]
+\    u32 function-index, u32 signature-id]
+\ Signature zero is the internal scalar qualification surface.  Production
+\ module declarations may expose only a profile-owned nonzero signature.
  0 CONSTANT SBOX-CANDIDATE-ENTRY-NAME-OFFSET
  4 CONSTANT SBOX-CANDIDATE-ENTRY-NAME-U-OFFSET
  6 CONSTANT SBOX-CANDIDATE-ENTRY-FLAGS-OFFSET
  8 CONSTANT SBOX-CANDIDATE-ENTRY-FUNCTION-INDEX-OFFSET
-12 CONSTANT SBOX-CANDIDATE-ENTRY-RESERVED-OFFSET
+12 CONSTANT SBOX-CANDIDATE-ENTRY-SIGNATURE-ID-OFFSET
 
 \ Instruction:
 \   [u16 opcode, u16 flags=0, u32 operand-a, u64 operand-b]

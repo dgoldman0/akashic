@@ -21703,6 +21703,41 @@ REQUIRE local_testing/sbox-abi-test.f
 )
 
 
+PROFILES["sandbox-signature-contracts"] = Profile(
+    roots=("sandbox/compiler.f", "sandbox/verifier.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - sandbox signature contracts
+ENTER-USERLAND
+." [akashic] loading sandbox signature contracts" CR TX-FLUSH
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-signature-test.f
+""",
+    ready_markers=("SBOX SIGNATURE CONTRACTS PASS",),
+    stable_markers=("SBOX SIGNATURE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX SIGNATURE CONTRACTS FAIL",
+        "SBOX SIGNATURE ASSERT",
+        "SBOX SIGNATURE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-signature-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-signature-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),

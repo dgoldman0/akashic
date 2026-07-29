@@ -856,7 +856,9 @@ PROVIDED akashic-sbx-vm
         SBOX-CANDIDATE-U16-LE@ IF
         DROP R> DROP -1 SBOX-VM-S-ENTRY EXIT
     THEN
-    DUP SBOX-CANDIDATE-ENTRY-RESERVED-OFFSET +
+    \ This scalar executor accepts only the internal qualification signature.
+    \ Signature one becomes executable with the typed-VM landing.
+    DUP SBOX-CANDIDATE-ENTRY-SIGNATURE-ID-OFFSET +
         SBOX-CANDIDATE-U32-LE@ IF
         DROP R> DROP -1 SBOX-VM-S-ENTRY EXIT
     THEN

@@ -160,7 +160,8 @@ function-declaration
                   END
 
 entry-declaration
-                = ENTRY entry-name function-name entry-signature-id
+                = ENTRY [ SIGNATURE entry-signature-id ]
+                  entry-name function-name
 
 form            = simple-form
                 | IF { form } [ ELSE { form } ] THEN
@@ -174,6 +175,13 @@ form            = simple-form
 At least one function and one entry are required. Imports, if any, precede all
 functions; functions precede all entries. No token may follow the final entry
 except whitespace or a line comment.
+
+Omitting `SIGNATURE` selects signature zero, the internal scalar qualification
+surface retained for Stage 1 regression. Production pure-computation entries
+spell `SIGNATURE 1` explicitly and bind a one-parameter, one-result function.
+All entries in one candidate currently use the same signature. A
+signature-zero candidate cannot contain typed-value opcodes, so a scalar entry
+cannot indirectly reach the production typed surface.
 
 Import declarations must be strictly increasing by numeric profile import ID.
 Entry declarations must be strictly increasing by raw entry-name bytes. These

@@ -1,5 +1,5 @@
 \ =====================================================================
-\  profile.f - Caller-owned sealed scalar-machine policy
+\  profile.f - Caller-owned sealed sandbox ABI policy
 \ =====================================================================
 \  A profile is one fixed native runtime object.  It owns only a nonzero
 \  semantic tag, scalar resource ceilings, and a 256-opcode allow bitmap
@@ -20,7 +20,7 @@
 
 PROVIDED akashic-sbx-profile
 
-REQUIRE machine.f
+REQUIRE abi.f
 REQUIRE ../utils/caller-span.f
 REQUIRE ../utils/memory-span.f
 
@@ -229,7 +229,7 @@ REQUIRE ../utils/memory-span.f
         >R DROP R> R> DROP EXIT
     THEN
     DROP
-    DUP SBOX-MACHINE-OPCODE-STATUS SBOX-MACHINE-S-OK <> IF
+    DUP SBOX-ABI-OPCODE-STATUS SBOX-MACHINE-S-OK <> IF
         DROP R> DROP SBOX-PROFILE-S-OPCODE EXIT
     THEN
     DUP R@ _SBOX-PROFILE-OPCODE-CELL
@@ -242,7 +242,7 @@ REQUIRE ../utils/memory-span.f
         >R DROP R> R> DROP EXIT
     THEN
     DROP
-    DUP SBOX-MACHINE-OPCODE-STATUS SBOX-MACHINE-S-OK <> IF
+    DUP SBOX-ABI-OPCODE-STATUS SBOX-MACHINE-S-OK <> IF
         DROP R> DROP SBOX-PROFILE-S-OPCODE EXIT
     THEN
     DUP R@ _SBOX-PROFILE-OPCODE-CELL
@@ -254,7 +254,7 @@ REQUIRE ../utils/memory-span.f
 \ =====================================================================
 
 0x7FFFFFFF07FF7FFF CONSTANT _SBP-MACHINE-MASK0
-0x000000000001007F CONSTANT _SBP-MACHINE-MASK1
+0x007F01FF0001007F CONSTANT _SBP-MACHINE-MASK1
 0x0000000000007800 CONSTANT _SBP-LOOP-MASK0
 
 : _SBOX-PROFILE-LIMITS-SET?  ( profile -- flag )
@@ -427,7 +427,7 @@ REQUIRE ../utils/memory-span.f
         >R DROP R> R> DROP 0 SWAP EXIT
     THEN
     DROP
-    DUP SBOX-MACHINE-OPCODE-STATUS SBOX-MACHINE-S-OK <> IF
+    DUP SBOX-ABI-OPCODE-STATUS SBOX-MACHINE-S-OK <> IF
         DROP R> DROP 0 SBOX-PROFILE-S-OPCODE EXIT
     THEN
     R@ _SBOX-PROFILE-RAW-OPCODE?
@@ -435,7 +435,7 @@ REQUIRE ../utils/memory-span.f
     R> DROP ;
 
 \ =====================================================================
-\  Production pure scalar profile
+\  Production pure-computation profile
 \ =====================================================================
 
 0x5055524553425800 CONSTANT SBOX-PROFILE-PURE-TAG  \ "PURESBX\0"
@@ -481,7 +481,7 @@ REQUIRE ../utils/memory-span.f
         SBOX-PROFILE-LIMIT-INSTRUCTIONS R@ _SBP.LIMIT !
 
     _SBP-MACHINE-MASK0 R@ _SBP.OPCODES !
-    0x000000000000007F R@ _SBP.OPCODES 8 + !
+    0x007F01FF0000007F R@ _SBP.OPCODES 8 + !
 
     R@ SBOX-PROFILE-SEAL
     DUP IF R@ SBOX-PROFILE-SIZE 0 FILL THEN

@@ -1,5 +1,5 @@
 \ =====================================================================
-\  compiler.f - Bounded non-evaluating scalar sandbox frontend
+\  compiler.f - Bounded non-evaluating sandbox frontend
 \ =====================================================================
 \  Source is tokenized and lowered as inert bytes.  No source byte is ever
 \  offered to FIND, EVALUATE, an execution token, an include mechanism, or
@@ -15,7 +15,7 @@
 
 REQUIRE candidate.f
 REQUIRE profile.f
-REQUIRE machine.f
+REQUIRE abi.f
 REQUIRE ../utils/caller-span.f
 REQUIRE ../utils/memory-span.f
 
@@ -100,12 +100,12 @@ _SCC-FMETA-OFF
 SBOX-CANDIDATE-FUNCTION-MAX _SCC-FMETA-SIZE * +
 CONSTANT _SCC-FNAME-OFF
 
-\ Entry metadata: name offset, name length, resolved function index, reserved.
+\ Entry metadata: name offset, name length, resolved function index, signature.
 32 CONSTANT _SCC-EMETA-SIZE
  0 CONSTANT _SCEM-NAME-OFF
  8 CONSTANT _SCEM-NAME-U
 16 CONSTANT _SCEM-FUNCTION
-24 CONSTANT _SCEM-RESERVED
+24 CONSTANT _SCEM-SIGNATURE
 
 _SCC-FNAME-OFF
 SBOX-CANDIDATE-FUNCTION-MAX _SCC-NAME-SLOT-SIZE * +
@@ -847,6 +847,55 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
         2DROP SBOX-MACHINE-OP-MEM-FILL -1 EXIT
     THEN
 
+    2DUP S" V.TYPE" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-TYPE -1 EXIT
+    THEN
+    2DUP S" V.BOOL.GET" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-BOOL-GET -1 EXIT
+    THEN
+    2DUP S" V.I64.GET" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-I64-GET -1 EXIT
+    THEN
+    2DUP S" V.LEN" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-LEN -1 EXIT
+    THEN
+    2DUP S" V.LIST.GET" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-LIST-GET -1 EXIT
+    THEN
+    2DUP S" V.MAP.KEY" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-MAP-KEY -1 EXIT
+    THEN
+    2DUP S" V.MAP.VALUE" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-MAP-VALUE -1 EXIT
+    THEN
+    2DUP S" V.MAP.FIND" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-MAP-FIND -1 EXIT
+    THEN
+    2DUP S" V.BLOB.COPY" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-BLOB-COPY -1 EXIT
+    THEN
+    2DUP S" V.NEW.NULL" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-NEW-NULL -1 EXIT
+    THEN
+    2DUP S" V.NEW.BOOL" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-NEW-BOOL -1 EXIT
+    THEN
+    2DUP S" V.NEW.I64" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-NEW-I64 -1 EXIT
+    THEN
+    2DUP S" V.NEW.BYTES" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-NEW-BYTES -1 EXIT
+    THEN
+    2DUP S" V.NEW.UTF8" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-NEW-UTF8 -1 EXIT
+    THEN
+    2DUP S" V.NEW.LIST" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-NEW-LIST -1 EXIT
+    THEN
+    2DUP S" V.NEW.MAP" _SCC-MATCH? IF
+        2DROP SBOX-ABI-OP-V-NEW-MAP -1 EXIT
+    THEN
+
     2DROP 0 0 ;
 
 \ =====================================================================
@@ -1283,7 +1332,21 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCC-ENTRY-CAPACITY? 0= IF
         R> DROP SBOX-COMPILER-S-CAPACITY EXIT
     THEN
+    0 R@ _SCW.TMP-X !
     R@ _SCC-NEXT-REQUIRED ?DUP IF R> DROP EXIT THEN
+    S" SIGNATURE" R@ _SCC-TOKEN= IF
+        R@ _SCC-NEXT-REQUIRED ?DUP IF R> DROP EXIT THEN
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE R@ _SCC-READ-U
+        DUP IF
+            >R DROP R> R> DROP EXIT
+        THEN
+        DROP
+        DUP 0= IF
+            DROP R> DROP SBOX-COMPILER-S-SOURCE EXIT
+        THEN
+        R@ _SCW.TMP-X !
+        R@ _SCC-NEXT-REQUIRED ?DUP IF R> DROP EXIT THEN
+    THEN
     R@ _SCC-CURRENT-NAME? 0= IF
         R> DROP SBOX-COMPILER-S-SOURCE EXIT
     THEN
@@ -1294,8 +1357,9 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     SBOX-CANDIDATE-NAME-BYTES-MAX R@ _SCW.NAME-U @ -
     U> IF R> DROP SBOX-COMPILER-S-CAPACITY EXIT THEN
 
-    R@ _SCW.ENTRY-N @ R@ _SCC-EMETA >R
-    0 R@ _SCEM-RESERVED + !
+    R@ _SCW.TMP-X @
+    R@ _SCW.ENTRY-N @ R@ _SCC-EMETA
+    DUP >R _SCEM-SIGNATURE + !
     R>
     R@ _SCW.NAME-U @ OVER _SCEM-NAME-OFF + !
     R@ _SCW.TOKEN-U @ OVER _SCEM-NAME-U + !
@@ -1312,7 +1376,24 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     0= IF
         DROP R> DROP SBOX-COMPILER-S-SOURCE EXIT
     THEN
-    R@ _SCW.ENTRY-N @ R@ _SCC-EMETA _SCEM-FUNCTION + !
+    DUP R@ _SCW.ENTRY-N @ R@ _SCC-EMETA _SCEM-FUNCTION + !
+    DROP
+
+    \ Signature zero remains the explicit internal scalar qualification
+    \ form.  A production entry is spelled `ENTRY SIGNATURE 1 ...`; its
+    \ function shape is checked here and again by the independent verifier.
+    R@ _SCW.ENTRY-N @ R@ _SCC-EMETA _SCEM-SIGNATURE + @
+    ?DUP IF
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
+            R> DROP SBOX-COMPILER-S-SOURCE EXIT
+        THEN
+        R@ _SCW.ENTRY-N @ R@ _SCC-EMETA _SCEM-FUNCTION + @
+        R@ _SCC-FMETA
+        DUP _SCFM-PARAMS + @ 1 <>
+        SWAP _SCFM-RESULTS + @ 1 <> OR IF
+            R> DROP SBOX-COMPILER-S-SOURCE EXIT
+        THEN
+    THEN
 
     \ TOKEN-U now names the function, so recover the entry length from metadata.
     R@ _SCW.ENTRY-N @ R@ _SCC-EMETA _SCEM-NAME-U + @
@@ -1336,6 +1417,51 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
         1+
     REPEAT
     DROP R> DROP SBOX-COMPILER-S-OK ;
+
+: _SCC-TYPED-OPCODE?  ( opcode -- flag )
+    DUP SBOX-ABI-OP-V-TYPE >=
+    OVER SBOX-ABI-OP-V-BLOB-COPY <= AND
+    SWAP
+    DUP SBOX-ABI-OP-V-NEW-NULL >=
+    SWAP SBOX-ABI-OP-V-NEW-MAP <= AND
+    OR ;
+
+: _SCC-VALIDATE-ENTRY-SURFACE  ( workspace -- status )
+    >R
+    R@ _SCW.ENTRY-N @ 0= IF
+        R> DROP SBOX-COMPILER-S-SOURCE EXIT
+    THEN
+
+    \ Signature zero exists only for scalar qualification.  Production
+    \ candidates currently expose one physical ABI across all entries; this
+    \ avoids giving a scalar entry an indirect route to typed instructions.
+    0 R@ _SCC-EMETA _SCEM-SIGNATURE + @
+        R@ _SCW.TMP-X !
+    1
+    BEGIN DUP R@ _SCW.ENTRY-N @ U< WHILE
+        DUP R@ _SCC-EMETA _SCEM-SIGNATURE + @
+        R@ _SCW.TMP-X @ <> IF
+            DROP R> DROP SBOX-COMPILER-S-SOURCE EXIT
+        THEN
+        1+
+    REPEAT
+    DROP
+
+    R@ _SCW.TMP-X @ 0= IF
+        0
+        BEGIN DUP R@ _SCW.INSTRUCTION-N @ U< WHILE
+            DUP R@ _SCC-INSTRUCTION
+            SBOX-CANDIDATE-INSTRUCTION-OPCODE-OFFSET +
+            SBOX-CANDIDATE-U16-LE@
+            _SCC-TYPED-OPCODE? IF
+                DROP R> DROP SBOX-COMPILER-S-SOURCE EXIT
+            THEN
+            1+
+        REPEAT
+        DROP
+    THEN
+
+    R> DROP SBOX-COMPILER-S-OK ;
 
 : _SCC-PARSE-SOURCE  ( workspace -- status )
     >R
@@ -1363,7 +1489,10 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
         R@ _SCC-NEXT
         DUP _SCC-S-EOF = IF
             DROP
-            R@ _SCC-RESOLVE-FIXUPS
+            R@ _SCC-RESOLVE-FIXUPS ?DUP IF
+                R> DROP EXIT
+            THEN
+            R@ _SCC-VALIDATE-ENTRY-SURFACE
             R> DROP EXIT
         THEN
         ?DUP IF R> DROP EXIT THEN
@@ -1422,6 +1551,10 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
         R@ _SCW.TMP-A @ _SCEM-FUNCTION + @
         R@ _SCW.TMP-B @
             SBOX-CANDIDATE-ENTRY-FUNCTION-INDEX-OFFSET +
+            SBOX-CANDIDATE-U32-LE!
+        R@ _SCW.TMP-A @ _SCEM-SIGNATURE + @
+        R@ _SCW.TMP-B @
+            SBOX-CANDIDATE-ENTRY-SIGNATURE-ID-OFFSET +
             SBOX-CANDIDATE-U32-LE!
         1+
     REPEAT
