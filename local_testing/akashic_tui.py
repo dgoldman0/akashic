@@ -21669,6 +21669,40 @@ REQUIRE local_testing/sbox-format-contracts.f
 )
 
 
+PROFILES["sandbox-abi-contracts"] = Profile(
+    roots=("sandbox/abi.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral sandbox ABI contracts
+ENTER-USERLAND
+." [akashic] loading sandbox ABI contracts" CR TX-FLUSH
+REQUIRE sandbox/abi.f
+REQUIRE local_testing/sbox-abi-test.f
+""",
+    ready_markers=("SBOX ABI CONTRACTS PASS",),
+    stable_markers=("SBOX ABI CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX ABI CONTRACTS FAIL",
+        "SBOX ABI ASSERT",
+        "SBOX ABI STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-abi-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-abi-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),
