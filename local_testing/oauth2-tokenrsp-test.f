@@ -12,6 +12,8 @@ VARIABLE _o2trt-callback-count
 VARIABLE _o2trt-saved-view
 VARIABLE _o2trt-expected-type-a
 VARIABLE _o2trt-expected-type-u
+VARIABLE _o2trt-expected-subject-a
+VARIABLE _o2trt-expected-subject-u
 
 OAUTH2-TOKEN-VIEW-ACCESS-CAPACITY 256 +
 CONSTANT _O2TRT-INPUT-SIZE
@@ -141,6 +143,10 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     _o2trt-string _o2trt-comma
     S" expires_in" _o2trt-key S" 3600" _o2trt-text
     _o2trt-comma
+    S" sub" _o2trt-key _o2trt-quote
+    S" opaque" _o2trt-text _o2trt-slash S" u002D" _o2trt-text
+    S" subject" _o2trt-text _o2trt-quote
+    _o2trt-comma
     S" extension" _o2trt-key _o2trt-lbrace
     S" nested" _o2trt-key S" [true,null]" _o2trt-text
     _o2trt-rbrace _o2trt-rbrace ;
@@ -211,6 +217,25 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     S" expires_in" _o2trt-key S" 10" _o2trt-string
     _o2trt-rbrace ;
 
+: _o2trt-build-subject-value  ( address length -- )
+    _o2trt-reset _o2trt-lbrace
+    _o2trt-access _o2trt-comma _o2trt-type _o2trt-comma
+    S" sub" _o2trt-key _o2trt-string
+    _o2trt-rbrace ;
+
+: _o2trt-build-long-subject  ( decoded-u -- )
+    _o2trt-reset _o2trt-lbrace
+    _o2trt-access _o2trt-comma _o2trt-type _o2trt-comma
+    S" sub" _o2trt-key _o2trt-quote
+    115 SWAP _o2trt-repeat-char
+    _o2trt-quote _o2trt-rbrace ;
+
+: _o2trt-build-subject-number  ( -- )
+    _o2trt-reset _o2trt-lbrace
+    _o2trt-access _o2trt-comma _o2trt-type _o2trt-comma
+    S" sub" _o2trt-key S" 7" _o2trt-text
+    _o2trt-rbrace ;
+
 : _o2trt-build-missing-access  ( -- )
     _o2trt-reset _o2trt-lbrace _o2trt-type _o2trt-rbrace ;
 
@@ -254,7 +279,10 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     2DROP
     _o2trt-saved-view @ OAUTH2-TOKEN-VIEW-EXPIRES-IN@
     OAUTH2-TOKEN-RESPONSE-S-INVALID _o2trt-status
-    DROP ;
+    DROP
+    _o2trt-saved-view @ OAUTH2-TOKEN-VIEW-SUBJECT@
+    OAUTH2-TOKEN-RESPONSE-S-INVALID _o2trt-status
+    2DROP ;
 
 : _o2trt-callback-minimal  ( view context -- callback-status )
     1 _o2trt-callback-count +!
@@ -275,6 +303,9 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     DUP OAUTH2-TOKEN-VIEW-EXPIRES-IN@
     OAUTH2-TOKEN-RESPONSE-S-MISSING _o2trt-status
     DROP
+    DUP OAUTH2-TOKEN-VIEW-SUBJECT@
+    OAUTH2-TOKEN-RESPONSE-S-MISSING _o2trt-status
+    2DROP
     DROP 101 ;
 
 : _o2trt-callback-full  ( view context -- callback-status )
@@ -296,6 +327,9 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     DUP OAUTH2-TOKEN-VIEW-EXPIRES-IN@
     OAUTH2-TOKEN-RESPONSE-S-OK _o2trt-status
     3600 = _o2trt-assert
+    DUP OAUTH2-TOKEN-VIEW-SUBJECT@
+    OAUTH2-TOKEN-RESPONSE-S-OK _o2trt-status
+    S" opaque-subject" COMPARE 0= _o2trt-assert
     DROP 202 ;
 
 : _o2trt-callback-vschar  ( view context -- callback-status )
@@ -338,6 +372,16 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     _o2trt-expected-type-a @ _o2trt-expected-type-u @
     COMPARE 0= _o2trt-assert
     606 ;
+
+: _o2trt-callback-subject  ( view context -- callback-status )
+    1 _o2trt-callback-count +!
+    DROP
+    DUP _o2trt-saved-view !
+    OAUTH2-TOKEN-VIEW-SUBJECT@
+    OAUTH2-TOKEN-RESPONSE-S-OK _o2trt-status
+    _o2trt-expected-subject-a @ _o2trt-expected-subject-u @
+    COMPARE 0= _o2trt-assert
+    707 ;
 
 : _o2trt-callback-never  ( view context -- callback-status )
     1 _o2trt-callback-count +!
@@ -386,6 +430,14 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     DROP _o2trt-expected-type-a !
     _o2trt-build-type-value
     ['] _o2trt-callback-type 0 606
+    _o2trt-expect-success ;
+
+: _o2trt-expect-subject-success  ( address length -- )
+    2DUP
+    DUP _o2trt-expected-subject-u !
+    DROP _o2trt-expected-subject-a !
+    _o2trt-build-subject-value
+    ['] _o2trt-callback-subject 0 707
     _o2trt-expect-success ;
 
 : _o2trt-test-statuses  ( -- )
@@ -498,6 +550,18 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     OAUTH2-TOKEN-RESPONSE-S-VALUE _o2trt-expect-rejection
     _o2trt-stack ;
 
+: _o2trt-test-subject  ( -- )
+    S" external account 42" _o2trt-expect-subject-success
+
+    S" " _o2trt-build-subject-value
+    OAUTH2-TOKEN-RESPONSE-S-VALUE _o2trt-expect-rejection
+    _o2trt-build-subject-number
+    OAUTH2-TOKEN-RESPONSE-S-TYPE _o2trt-expect-rejection
+    OAUTH2-TOKEN-VIEW-SUBJECT-CAPACITY 1+
+    _o2trt-build-long-subject
+    OAUTH2-TOKEN-RESPONSE-S-CAPACITY _o2trt-expect-rejection
+    _o2trt-stack ;
+
 : _o2trt-test-callback-throw  ( -- )
     _o2trt-build-minimal
     0 _o2trt-callback-count !
@@ -568,6 +632,8 @@ CREATE _o2trt-work OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE ALLOT
     ." OAUTH2 TOKEN RESPONSE GROUP GRAMMARS" CR TX-FLUSH
     _o2trt-test-expiry
     ." OAUTH2 TOKEN RESPONSE GROUP EXPIRY" CR TX-FLUSH
+    _o2trt-test-subject
+    ." OAUTH2 TOKEN RESPONSE GROUP SUBJECT" CR TX-FLUSH
     _o2trt-test-callback-throw
     _o2trt-test-callback-stack
     _o2trt-test-internal-throw

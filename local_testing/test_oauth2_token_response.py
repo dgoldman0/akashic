@@ -69,8 +69,10 @@ def _assert_source_contracts() -> None:
         "OAUTH2-TOKEN-VIEW-REFRESH-TOKEN@",
         "OAUTH2-TOKEN-VIEW-SCOPE@",
         "OAUTH2-TOKEN-VIEW-EXPIRES-IN@",
+        "OAUTH2-TOKEN-VIEW-SUBJECT@",
         "OAUTH2-TOKEN-RESPONSE-STATUS-VALID?",
         "OAUTH2-TOKEN-VIEW-MAX-EXPIRES-IN",
+        "OAUTH2-TOKEN-VIEW-SUBJECT-CAPACITY",
     )
     for word in public_words:
         assert word in source
@@ -94,6 +96,7 @@ def _assert_source_contracts() -> None:
         "OAUTH2-TOKEN-VIEW-TOKEN-TYPE-CAPACITY",
         "OAUTH2-TOKEN-VIEW-REFRESH-CAPACITY",
         "OAUTH2-TOKEN-VIEW-SCOPE-CAPACITY",
+        "OAUTH2-TOKEN-VIEW-SUBJECT-CAPACITY",
     ):
         assert re.search(rf"(?m)^4096 CONSTANT {capacity}$", source)
     assert re.search(
@@ -102,9 +105,10 @@ def _assert_source_contracts() -> None:
         source,
     )
     assert re.search(
-        r"(?m)^OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE 30976 <> \[IF\]$",
+        r"(?m)^OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE 35080 <> \[IF\]$",
         source,
     )
+    assert re.search(r"(?m)^_O2TR-VIEW-SIZE 24632 <> \[IF\]$", source)
 
     geometry = _word_body(source, "_O2TR-WITH-GEOMETRY")
     assert geometry.count("_O2TR-ADMIT-SPAN") == 2
@@ -130,10 +134,10 @@ def _assert_source_contracts() -> None:
         'S" refresh_token"',
         'S" scope"',
         'S" expires_in"',
+        'S" sub"',
     ):
         assert member in process
     assert 'S" id_token"' not in process
-    assert 'S" sub"' not in process
     assert "JOSE-JSON-STRING-DECODE" in _word_body(
         source, "_O2TR-COPY-MEMBER-STRING"
     )
@@ -173,6 +177,7 @@ def _assert_source_contracts() -> None:
         "OAUTH2-TOKEN-VIEW-REFRESH-TOKEN@",
         "OAUTH2-TOKEN-VIEW-SCOPE@",
         "OAUTH2-TOKEN-VIEW-EXPIRES-IN@",
+        "OAUTH2-TOKEN-VIEW-SUBJECT@",
     ):
         assert "_O2TR-VIEW-VALID?" in _word_body(source, accessor)
 
@@ -181,11 +186,15 @@ def _assert_source_contracts() -> None:
         "_o2trt-test-errors-and-duplicates",
         "_o2trt-test-value-grammars",
         "_o2trt-test-expiry",
+        "_o2trt-test-subject",
         "_o2trt-test-callback-throw",
         "_o2trt-test-callback-stack",
         "_o2trt-test-internal-throw",
         "_o2trt-test-preflight-alias",
         "OAUTH2-TOKEN-VIEW-ACCESS-CAPACITY 1+",
+        "OAUTH2-TOKEN-VIEW-SUBJECT-CAPACITY 1+",
+        "external account 42",
+        "opaque-subject",
         'S" D PoP"',
         "urn:ietf:params:oauth:token-type:example",
         "https://[2001:db8::1]/oauth?kind=proof#v1",

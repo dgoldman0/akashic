@@ -18,6 +18,7 @@ REQUIRE identity.f \ caller-owned handle/DID/PDS discovery coordinator
 REQUIRE identity-hres.f \ identity over generic HTTPS resources
 REQUIRE oauth-profile.f \ exact PDS-to-OAuth issuer trust-chain profile
 REQUIRE oauth-profile-hres.f \ OAuth discovery over HTTPS resources
+REQUIRE oauth-grant.f \ AT token policy over generic OAuth grants
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -30,7 +31,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 `akashic-atproto-handle` / `akashic-tid` /
 `akashic-atproto-diddoc` / `akashic-atproto-identity` /
 `akashic-atid-hres` / `akashic-at-oauth-prof` /
-`akashic-at-oauth-hres` /
+`akashic-at-oauth-hres` / `akashic-at-oauth-grant` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
@@ -48,6 +49,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [Identity HTTP composition — identity-hres.f](#identity-http-composition--identity-hresf)
 - [OAuth discovery profile — oauth-profile.f](#oauth-discovery-profile--oauth-profilef)
 - [OAuth HTTP composition — oauth-profile-hres.f](#oauth-http-composition--oauth-profile-hresf)
+- [OAuth token-grant admission — oauth-grant.f](#oauth-token-grant-admission--oauth-grantf)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
@@ -220,6 +222,19 @@ Successfully parsed resource, issuer, capability, or endpoint violations are
 terminal profile failures. DNS, public-address admission, authenticated TLS,
 and port-lease ownership remain responsibilities of the caller's `HRES` bind
 provider.
+
+## OAuth token-grant admission — oauth-grant.f
+
+The
+[state-free AT grant adapter](oauth-grant.md)
+applies the token-response requirements to the generic ephemeral OAuth decoder
+and a ready discovery profile. It requires `DPoP`, exact `atproto` scope-token
+membership, a valid `sub` DID exactly matching the identity-started profile,
+checked expiry conversion, and a refresh-token member for refresh rotation.
+
+Only after those checks does it lend a populated generic `O2SESSION` grant to
+one synchronous callback. HTTP, DPoP proof and nonce ownership, durable session
+mutation, credential-RID association, and Streams remain outside the adapter.
 
 ---
 

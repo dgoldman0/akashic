@@ -13,7 +13,7 @@ token type or scope and contains no provider- or application-specific behavior.
 
 ## Recognized members
 
-The input must be one complete JSON object. Five root members are recognized:
+The input must be one complete JSON object. Six root members are recognized:
 
 | Member | Requirement and validation |
 | --- | --- |
@@ -22,6 +22,7 @@ The input must be one complete JSON object. Five root members are recognized:
 | `refresh_token` | Optional; when present, a nonempty JSON string of at most 4096 decoded `VSCHAR` bytes |
 | `scope` | Optional; when present, a nonempty RFC 6749 scope string of at most 4096 decoded bytes |
 | `expires_in` | Optional; when present, an integral JSON number from `0` through `2147483647` |
+| `sub` | Optional; when present, a nonempty JSON string of at most 4096 decoded UTF-8 bytes |
 
 The published capacity constants are:
 
@@ -30,6 +31,7 @@ OAUTH2-TOKEN-VIEW-ACCESS-CAPACITY
 OAUTH2-TOKEN-VIEW-TOKEN-TYPE-CAPACITY
 OAUTH2-TOKEN-VIEW-REFRESH-CAPACITY
 OAUTH2-TOKEN-VIEW-SCOPE-CAPACITY
+OAUTH2-TOKEN-VIEW-SUBJECT-CAPACITY
 OAUTH2-TOKEN-VIEW-MAX-EXPIRES-IN
 ```
 
@@ -41,6 +43,11 @@ single spaces. Token bytes are `0x21`, `0x23`–`0x5b`, or `0x5d`–`0x7e`;
 leading, trailing, and repeated spaces are rejected. `expires_in` accepts
 decimal digits only. Signs, fractions, exponent notation, and overflow beyond
 the published maximum are rejected.
+
+The `sub` value is exposed as an opaque decoded string. This generic component
+does not require a URI, DID, account name, or any other provider-specific
+subject syntax. Consumers must apply their own identity syntax and binding
+rules. This decoder does not recognize or decode `id_token`.
 
 A token `type-name` contains only ASCII letters, digits, `-`, `.`, and `_`.
 The alternative URI-reference form is validated as RFC 3986 syntax, including
@@ -64,7 +71,7 @@ those resource limits is a capacity failure.
 Allocate at least the published workspace size:
 
 ```forth
-OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE  \ 30976 bytes
+OAUTH2-TOKEN-RESPONSE-WORKSPACE-SIZE  \ 35080 bytes
 ```
 
 Then invoke:
@@ -125,12 +132,16 @@ OAUTH2-TOKEN-VIEW-SCOPE@
 
 OAUTH2-TOKEN-VIEW-EXPIRES-IN@
 ( view -- seconds status )
+
+OAUTH2-TOKEN-VIEW-SUBJECT@
+( view -- address length status )
 ```
 
 The access token and token type accessors succeed for every valid view.
-Optional accessors return `OAUTH2-TOKEN-RESPONSE-S-MISSING` when their member
-was absent. Missing string accessors return a zero address and zero length;
-missing `expires_in` returns zero seconds.
+Optional accessors, including the subject accessor, return
+`OAUTH2-TOKEN-RESPONSE-S-MISSING` when their member was absent. Missing string
+accessors return a zero address and zero length; missing `expires_in` returns
+zero seconds.
 
 The view and every string span returned from it point inside the operation
 workspace. They are valid only during that callback invocation. The final wipe
