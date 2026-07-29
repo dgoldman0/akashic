@@ -21772,6 +21772,40 @@ REQUIRE local_testing/sbox-value-contracts.f
 )
 
 
+PROFILES["sandbox-module-owner-contracts"] = Profile(
+    roots=("runtime/sandbox-module-owner.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - installed sandbox module owner contracts
+ENTER-USERLAND
+." [akashic] loading sandbox module owner contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-module-owner.f
+REQUIRE local_testing/sbox-mod-owner-test.f
+""",
+    ready_markers=("SBOX MODULE OWNER CONTRACTS PASS",),
+    stable_markers=("SBOX MODULE OWNER CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX MODULE OWNER CONTRACTS FAIL",
+        "SBOX MODULE OWNER ASSERT",
+        "SBOX MODULE OWNER STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-mod-owner-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-module-owner-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),
