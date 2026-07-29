@@ -224,6 +224,46 @@ REQUIRE ../utils/memory-span.f
     DUP _SMO-HEADER? 0= IF DROP 0 EXIT THEN
     _SMO-ENTRIES-VALID? ;
 
+: SBOX-MODULE-OWNER-SEALED?  ( owner -- flag )
+    DUP _SMO-SEALED? IF SBOX-MODULE-OWNER-VALID? ELSE DROP 0 THEN ;
+
+: _SMO-ENTRY-SPAN-DISJOINT?
+  ( address length entry -- flag )
+    >R
+    2DUP
+    R@ _SMO.E-PLAN @ DUP SBOX-PLAN-TOTAL@
+        MSPAN-OVERLAP? 0=
+    2 PICK 2 PICK
+    R@ _SMO.E-PROFILE @ SBOX-PROFILE-SIZE
+        MSPAN-OVERLAP? 0= AND
+    ROT DROP SWAP DROP
+    R> DROP ;
+
+\ A sealed owner pins three lifetime domains: its complete measured catalog
+\ span and every borrowed verified plan/profile pair.  Callers that publish
+\ their own mutable descriptors use this predicate before writing so catalog
+\ release can never invalidate or erase those descriptors.
+: SBOX-MODULE-OWNER-SPAN-DISJOINT?
+  ( address length owner -- flag )
+    2 PICK 2 PICK _SMO-SPAN? 0= IF
+        2DROP DROP 0 EXIT
+    THEN
+    DUP SBOX-MODULE-OWNER-SEALED? 0= IF
+        2DROP DROP 0 EXIT
+    THEN
+    2 PICK 2 PICK 2 PICK DUP _SMO.H-TOTAL @
+        MSPAN-OVERLAP? IF
+        2DROP DROP 0 EXIT
+    THEN
+    DUP _SMO.H-COUNT @ 0 ?DO
+        2 PICK 2 PICK
+        I 3 PICK _SMO-NTH
+        _SMO-ENTRY-SPAN-DISJOINT? 0= IF
+            2DROP DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP DROP -1 ;
+
 : _SMO-KEY-DISJOINT?  ( rid owner -- flag )
     OVER RID-SIZE
     2 PICK DUP _SMO.H-TOTAL @ MSPAN-OVERLAP? 0=
