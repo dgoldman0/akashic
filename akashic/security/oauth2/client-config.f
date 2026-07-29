@@ -28,10 +28,11 @@ REQUIRE ../../utils/caller-span.f
 5 CONSTANT OAUTH2-CLIENT-CONFIG-S-RANGE
 6 CONSTANT OAUTH2-CLIENT-CONFIG-S-PROTECTED
 7 CONSTANT OAUTH2-CLIENT-CONFIG-S-PLATFORM
+8 CONSTANT OAUTH2-CLIENT-CONFIG-S-CALLBACK
 
 : OAUTH2-CLIENT-CONFIG-STATUS-VALID?  ( status -- flag )
     DUP OAUTH2-CLIENT-CONFIG-S-OK >=
-    SWAP OAUTH2-CLIENT-CONFIG-S-PLATFORM <= AND ;
+    SWAP OAUTH2-CLIENT-CONFIG-S-CALLBACK <= AND ;
 
 0 CONSTANT OAUTH2-CLIENT-CONFIG-APPLICATION-WEB
 1 CONSTANT OAUTH2-CLIENT-CONFIG-APPLICATION-NATIVE
@@ -677,6 +678,100 @@ _O2CC-AUTH-ALGORITHM-OFF
     DROP
     OAUTH2-CLIENT-CONFIG-F-DPOP-BOUND AND 0<>
     OAUTH2-CLIENT-CONFIG-S-OK ;
+
+\ =====================================================================
+\  Single-validation callback view
+\ =====================================================================
+
+\ These accessors accept only the borrowed view supplied to an
+\ OAUTH2-CLIENT-CONFIG-WITH callback.  WITH has already validated the
+\ complete immutable record, so the accessors deliberately do not rescan it.
+
+: OAUTH2-CLIENT-VIEW-BINDING@  ( view -- address length )
+    DUP _O2CC.BINDING SWAP _O2CC.BINDING-U @ ;
+
+: OAUTH2-CLIENT-VIEW-CLIENT-ID@  ( view -- address length )
+    DUP _O2CC.CLIENT-ID SWAP _O2CC.CLIENT-ID-U @ ;
+
+: OAUTH2-CLIENT-VIEW-REDIRECT-URI@  ( view -- address length )
+    DUP _O2CC.REDIRECT SWAP _O2CC.REDIRECT-U @ ;
+
+: OAUTH2-CLIENT-VIEW-SCOPE@  ( view -- address length )
+    DUP _O2CC.SCOPE-U @ DUP 0= IF
+        2DROP 0 0 EXIT
+    THEN
+    >R _O2CC.SCOPE R> ;
+
+: OAUTH2-CLIENT-VIEW-AUTH-METHOD@  ( view -- address length )
+    DUP _O2CC.AUTH-METHOD SWAP _O2CC.AUTH-METHOD-U @ ;
+
+: OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@  ( view -- address length )
+    DUP _O2CC.AUTH-ALGORITHM-U @ DUP 0= IF
+        2DROP 0 0 EXIT
+    THEN
+    >R _O2CC.AUTH-ALGORITHM R> ;
+
+: OAUTH2-CLIENT-VIEW-FLAGS@  ( view -- flags )
+    _O2CC.FLAGS @ ;
+
+: OAUTH2-CLIENT-VIEW-APPLICATION-TYPE@  ( view -- application-type )
+    OAUTH2-CLIENT-VIEW-FLAGS@
+    OAUTH2-CLIENT-CONFIG-F-NATIVE AND IF
+        OAUTH2-CLIENT-CONFIG-APPLICATION-NATIVE
+    ELSE
+        OAUTH2-CLIENT-CONFIG-APPLICATION-WEB
+    THEN ;
+
+: OAUTH2-CLIENT-VIEW-REFRESH?  ( view -- flag )
+    OAUTH2-CLIENT-VIEW-FLAGS@
+    OAUTH2-CLIENT-CONFIG-F-REFRESH AND 0<> ;
+
+: OAUTH2-CLIENT-VIEW-DPOP-BOUND?  ( view -- flag )
+    OAUTH2-CLIENT-VIEW-FLAGS@
+    OAUTH2-CLIENT-CONFIG-F-DPOP-BOUND AND 0<> ;
+
+-17601 CONSTANT _O2CC-E-CALLBACK-STACK
+0x4F32434347554152 CONSTANT _O2CC-CALLBACK-GUARD
+
+: _O2CC-DROP3  ( x1 x2 x3 -- )
+    2DROP DROP ;
+
+: _O2CC-CALLBACK-RUN  ( view callback context -- callback-status )
+    DEPTH >R
+    >R >R >R
+    _O2CC-CALLBACK-GUARD
+    R> R> R> SWAP
+    EXECUTE
+    DEPTH R@ 1- <> IF
+        _O2CC-E-CALLBACK-STACK THROW
+    THEN
+    OVER _O2CC-CALLBACK-GUARD <> IF
+        _O2CC-E-CALLBACK-STACK THROW
+    THEN
+    NIP
+    R> DROP ;
+
+: _O2CC-CALLBACK-SAFE
+  ( view callback context -- callback-status config-status )
+    ['] _O2CC-CALLBACK-RUN CATCH
+    DUP IF
+        DROP
+        _O2CC-DROP3
+        0 OAUTH2-CLIENT-CONFIG-S-CALLBACK EXIT
+    THEN
+    DROP
+    OAUTH2-CLIENT-CONFIG-S-OK ;
+
+: OAUTH2-CLIENT-CONFIG-WITH
+  ( config callback context -- callback-status config-status )
+    1 PICK 0= IF
+        _O2CC-DROP3
+        0 OAUTH2-CLIENT-CONFIG-S-INVALID EXIT
+    THEN
+    2 PICK _O2CC-OBJECT-STATUS ?DUP IF
+        >R _O2CC-DROP3 0 R> EXIT
+    THEN
+    _O2CC-CALLBACK-SAFE ;
 
 \ =====================================================================
 \  Compile-time geometry assertions

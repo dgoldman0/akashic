@@ -149,6 +149,39 @@ Application type is either
 `OAUTH2-CLIENT-CONFIG-APPLICATION-WEB` or
 `OAUTH2-CLIENT-CONFIG-APPLICATION-NATIVE`.
 
+Each ordinary accessor independently validates the complete record before
+returning a borrowed value. Code which needs several fields in one operation
+should validate once with the callback-scoped view:
+
+```forth
+config callback context OAUTH2-CLIENT-CONFIG-WITH
+  ( -- callback-status config-status )
+```
+
+The callback receives `( view context -- callback-status )`. During that
+callback only, it may use:
+
+```forth
+OAUTH2-CLIENT-VIEW-BINDING@
+OAUTH2-CLIENT-VIEW-CLIENT-ID@
+OAUTH2-CLIENT-VIEW-REDIRECT-URI@
+OAUTH2-CLIENT-VIEW-SCOPE@
+OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@
+OAUTH2-CLIENT-VIEW-FLAGS@
+OAUTH2-CLIENT-VIEW-APPLICATION-TYPE@
+OAUTH2-CLIENT-VIEW-REFRESH?
+OAUTH2-CLIENT-VIEW-DPOP-BOUND?
+```
+
+String view accessors return `( address length )`; scalar view accessors
+return one value. They deliberately do not revalidate the record. The view
+must not be retained or used outside the callback, and the caller must keep
+the configuration stable and unmodified until the callback returns. `WITH`
+rejects a zero callback or invalid record before invocation and converts a
+callback throw or stack-shape violation to
+`( 0 OAUTH2-CLIENT-CONFIG-S-CALLBACK )`.
+
 ## Statuses
 
 | Status | Meaning |
@@ -161,6 +194,7 @@ Application type is either
 | `OAUTH2-CLIENT-CONFIG-S-RANGE` | caller span has invalid physical geometry |
 | `OAUTH2-CLIENT-CONFIG-S-PROTECTED` | caller span intersects platform-private storage |
 | `OAUTH2-CLIENT-CONFIG-S-PLATFORM` | caller-memory qualification failed unexpectedly |
+| `OAUTH2-CLIENT-CONFIG-S-CALLBACK` | a `WITH` callback threw or returned the wrong stack shape |
 
 Source/source overlap is accepted because every source is borrowed
 read-only. No source pointer survives successful initialization.

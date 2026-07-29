@@ -5,6 +5,7 @@ PROVIDED oauth2-client-config-test
 VARIABLE _o2cct-fails
 VARIABLE _o2cct-checks
 VARIABLE _o2cct-depth
+VARIABLE _o2cct-callback-runs
 
 CREATE _o2cct-input-storage
     OAUTH2-CLIENT-CONFIG-INPUT-SIZE 7 + ALLOT
@@ -100,6 +101,40 @@ CREATE _o2cct-source-storage
     _o2cct-input _o2cct-config OAUTH2-CLIENT-CONFIG-INIT
         OAUTH2-CLIENT-CONFIG-S-OK = _o2cct-assert ;
 
+: _o2cct-view-callback  ( view context -- result )
+    7123 = _o2cct-assert
+
+    DUP OAUTH2-CLIENT-VIEW-BINDING@
+    S" client-config-binding" COMPARE 0= _o2cct-assert
+    DUP OAUTH2-CLIENT-VIEW-CLIENT-ID@
+    S" https://client.example/oauth/client-metadata.json"
+        COMPARE 0= _o2cct-assert
+    DUP OAUTH2-CLIENT-VIEW-REDIRECT-URI@
+    S" https://client.example/oauth/callback"
+        COMPARE 0= _o2cct-assert
+    DUP OAUTH2-CLIENT-VIEW-SCOPE@
+    S" profile email" COMPARE 0= _o2cct-assert
+    DUP OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+    S" none" COMPARE 0= _o2cct-assert
+    DUP OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@
+    SWAP 0= SWAP 0= AND _o2cct-assert
+    DUP OAUTH2-CLIENT-VIEW-FLAGS@ 0= _o2cct-assert
+    DUP OAUTH2-CLIENT-VIEW-APPLICATION-TYPE@
+    OAUTH2-CLIENT-CONFIG-APPLICATION-WEB = _o2cct-assert
+    DUP OAUTH2-CLIENT-VIEW-REFRESH? 0= _o2cct-assert
+    OAUTH2-CLIENT-VIEW-DPOP-BOUND? 0= _o2cct-assert
+
+    1 _o2cct-callback-runs +!
+    2468 ;
+
+: _o2cct-throw-callback  ( view context -- result )
+    2DROP
+    -17602 THROW ;
+
+: _o2cct-stack-callback  ( view context -- result extra )
+    2DROP
+    1 2 ;
+
 : _o2cct-test-vocabulary  ( -- )
     OAUTH2-CLIENT-CONFIG-INPUT-SIZE 104 = _o2cct-assert
     OAUTH2-CLIENT-CONFIG-SIZE 11072 = _o2cct-assert
@@ -111,7 +146,9 @@ CREATE _o2cct-source-storage
         OAUTH2-CLIENT-CONFIG-STATUS-VALID? _o2cct-assert
     OAUTH2-CLIENT-CONFIG-S-PLATFORM
         OAUTH2-CLIENT-CONFIG-STATUS-VALID? _o2cct-assert
-    OAUTH2-CLIENT-CONFIG-S-PLATFORM 1+
+    OAUTH2-CLIENT-CONFIG-S-CALLBACK
+        OAUTH2-CLIENT-CONFIG-STATUS-VALID? _o2cct-assert
+    OAUTH2-CLIENT-CONFIG-S-CALLBACK 1+
         OAUTH2-CLIENT-CONFIG-STATUS-VALID? 0= _o2cct-assert
     -1 OAUTH2-CLIENT-CONFIG-STATUS-VALID? 0= _o2cct-assert
     _o2cct-input 1+ OAUTH2-CLIENT-CONFIG-INPUT-CLEAR
@@ -335,6 +372,42 @@ CREATE _o2cct-source-storage
         OAUTH2-CLIENT-CONFIG-S-OK = _o2cct-assert
     _o2cct-stack ;
 
+: _o2cct-test-validated-view  ( -- )
+    _o2cct-init-public
+    0 _o2cct-callback-runs !
+    _o2cct-config ['] _o2cct-view-callback 7123
+    OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-OK = _o2cct-assert DROP
+    2468 = _o2cct-assert
+    _o2cct-callback-runs @ 1 = _o2cct-assert
+
+    _o2cct-config 0 7123 OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-INVALID = _o2cct-assert DROP
+    0= _o2cct-assert
+    _o2cct-callback-runs @ 1 = _o2cct-assert
+
+    1 _o2cct-config _O2CC.CLIENT-ID
+    _o2cct-config _O2CC.CLIENT-ID-U @ + C!
+    _o2cct-config ['] _o2cct-view-callback 7123
+    OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-INVALID = _o2cct-assert DROP
+    0= _o2cct-assert
+    _o2cct-callback-runs @ 1 = _o2cct-assert
+
+    _o2cct-init-public
+    _o2cct-config ['] _o2cct-throw-callback 0
+    OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-CALLBACK = _o2cct-assert DROP
+    0= _o2cct-assert
+    _o2cct-config OAUTH2-CLIENT-CONFIG-VALID? _o2cct-assert
+
+    _o2cct-config ['] _o2cct-stack-callback 0
+    OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-CALLBACK = _o2cct-assert DROP
+    0= _o2cct-assert
+    _o2cct-config OAUTH2-CLIENT-CONFIG-VALID? _o2cct-assert
+    _o2cct-stack ;
+
 : _O2CCT-RUN  ( -- )
     0 _o2cct-fails !
     0 _o2cct-checks !
@@ -344,6 +417,7 @@ CREATE _o2cct-source-storage
     _o2cct-test-private-and-scope
     _o2cct-test-syntax
     _o2cct-test-state-alias-and-corruption
+    _o2cct-test-validated-view
     _o2cct-stack
     _o2cct-fails @ IF
         ." OAUTH2 CLIENT CONFIG FAIL " _o2cct-fails @ .

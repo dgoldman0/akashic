@@ -86,6 +86,13 @@ def _assert_static_contracts() -> None:
         "OAUTH2-CLIENT-CONFIG-APPLICATION-TYPE@",
         "OAUTH2-CLIENT-CONFIG-REFRESH?",
         "OAUTH2-CLIENT-CONFIG-DPOP-BOUND?",
+        "OAUTH2-CLIENT-CONFIG-WITH",
+        "OAUTH2-CLIENT-VIEW-CLIENT-ID@",
+        "OAUTH2-CLIENT-VIEW-REDIRECT-URI@",
+        "OAUTH2-CLIENT-VIEW-SCOPE@",
+        "OAUTH2-CLIENT-VIEW-AUTH-METHOD@",
+        "OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@",
+        "OAUTH2-CLIENT-VIEW-FLAGS@",
     ):
         assert word in source
 
@@ -133,14 +140,21 @@ def _assert_static_contracts() -> None:
         "OAUTH2-CLIENT-CONFIG-FLAGS@",
     ):
         assert "_O2CC-OBJECT-STATUS" in _word_body(source, accessor)
+    with_body = _word_body(source, "OAUTH2-CLIENT-CONFIG-WITH")
+    assert "1 PICK 0=" in with_body
+    assert "_O2CC-OBJECT-STATUS" in with_body
+    assert "_O2CC-CALLBACK-SAFE" in with_body
+    assert "CATCH" in _word_body(source, "_O2CC-CALLBACK-SAFE")
 
     for marker in (
         "_o2cct-test-public-copy",
         "_o2cct-test-private-and-scope",
         "_o2cct-test-syntax",
         "_o2cct-test-state-alias-and-corruption",
+        "_o2cct-test-validated-view",
         "OAUTH2-CLIENT-CONFIG-S-ALIAS",
         "OAUTH2-CLIENT-CONFIG-S-CAPACITY",
+        "OAUTH2-CLIENT-CONFIG-S-CALLBACK",
         "_O2CC.CLIENT-ID-U @ + C!",
     ):
         assert marker in fixture
@@ -151,6 +165,7 @@ def _assert_static_contracts() -> None:
         "exact selected redirect URI",
         "Private keys",
         "AT Protocol",
+        "callback-scoped view",
     ):
         assert marker in doc
 
