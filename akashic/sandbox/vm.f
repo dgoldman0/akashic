@@ -1514,10 +1514,12 @@ PROVIDED akashic-sbx-vm
 \ both arenas to the invocation; failure leaves every typed resource with the
 \ caller.  Signature zero remains private for qualification of the scalar
 \ machine shared by this executor.
+\ Stack input:
+\   plan binding entry value-state value-work value-work-u
+\   instruction-budget value-op-budget copy-byte-budget
+\   instance instance-u
+\ Stack output: status.
 : SBOX-VM-INIT
-  ( plan binding entry value-state value-work value-work-u
-    instruction-budget value-op-budget copy-byte-budget
-    instance instance-u -- status )
     _SVM-TYPED-INIT-BOUNDARY
     DUP IF
         >R DROP _SVM-DROP11 R> EXIT

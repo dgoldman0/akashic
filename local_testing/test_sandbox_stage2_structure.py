@@ -76,8 +76,16 @@ def test_invocation_host_is_per_run_and_uses_exact_vm_ownership() -> None:
         r"^\s*(?:VARIABLE|VALUE|CREATE)\b",
         re.MULTILINE,
     )
+    multiline_paren_comment = re.compile(
+        r"^\s*\([^)\n]*$",
+        re.MULTILINE,
+    )
 
     assert mutable_definition.search(host) is None
+    assert multiline_paren_comment.search(host) is None
+    assert multiline_paren_comment.search(vm) is None
+    assert "CTX-FREE DROP" not in host
+    assert "FREE DROP" not in host
     assert "SBOX-HOST-ENTRY-RESOLVE-EXACT" in host
     assert "SBOX-HOST-INIT" in host
     assert "SBOX-HOST-RUN-SLICE" in host
@@ -86,6 +94,20 @@ def test_invocation_host_is_per_run_and_uses_exact_vm_ownership() -> None:
     assert "SBOX-HOST-RELEASE" in host
     assert "SBOX-VM-INSTANCE-BOUND?" in host
     assert ": SBOX-VM-INSTANCE-BOUND?" in vm
+
+
+def test_production_signature_parser_consumes_the_value_once() -> None:
+    compiler = (AKASHIC_ROOT / "sandbox/compiler.f").read_text(
+        encoding="utf-8"
+    )
+    parse_entry = compiler.split(": _SCC-PARSE-ENTRY", 1)[1].split(
+        ": _SCC-RESOLVE-FIXUPS", 1
+    )[0]
+    signature_prefix = parse_entry.split('S" SIGNATURE"', 1)[1].split(
+        "SBOX-ABI-SIGNATURE-VALUE-TO-VALUE", 1
+    )[0]
+
+    assert "_SCC-NEXT-REQUIRED" not in signature_prefix
 
 
 def test_stage2_vertical_composes_two_exact_isolated_modules() -> None:

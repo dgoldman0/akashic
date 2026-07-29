@@ -407,7 +407,7 @@ REQUIRE ../sandbox/vm.f
 : _SHOST-SCRUB-FREE  ( address length -- )
     OVER 0= IF 2DROP EXIT THEN
     DUP 0> IF 2DUP 0 FILL THEN
-    DROP FREE DROP ;
+    DROP FREE ;
 
 : _SHOST-SETUP-CHILD  ( host -- status )
     DUP _SHI.PARENT @ CTX-CHILD-NEW
@@ -571,7 +571,7 @@ REQUIRE ../sandbox/vm.f
     R@ _SHI.INPUT @ R@ _SHI.INPUT-U @ _SHOST-SCRUB-FREE
     R@ _SHI.CHILD @ ?DUP IF
         0 OVER CTX.FLAGS !
-        CTX-FREE DROP
+        CTX-FREE
     THEN
     R@ SBOX-HOST-INVOCATION-SIZE 0 FILL
     R> DROP ;
@@ -580,9 +580,11 @@ REQUIRE ../sandbox/vm.f
   ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 -- )
     2DROP 2DROP 2DROP 2DROP 2DROP ;
 
+\ Stack input:
+\   parent plan entry source source-u limits
+\   instruction-budget value-op-budget copy-budget host
+\ Stack output: status.
 : SBOX-HOST-INIT
-  ( parent plan entry source source-u limits
-    instruction-budget value-op-budget copy-budget host -- status )
     _SHOST-INIT-BOUNDARY
     DUP IF
         >R _SHOST-DROP10 R> EXIT
