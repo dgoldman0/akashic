@@ -84,13 +84,18 @@ Landing 3 currently includes:
 - `e3d43c7` — AT token-grant admission against a ready profile;
 - `c47e829` — immutable generic OAuth client configurations;
 - `6a5f176` — AT OAuth client-selection policy; and
-- `b1bb0ad` — generic single-validation OAuth client views.
+- `b1bb0ad` — generic single-validation OAuth client views;
+- `3cedab0` — single-validation AT OAuth client selection; and
+- `a88a655` — structural OAuth Client ID Metadata Document parsing.
 
 These commits do not close landing 3. The remaining closeout is the
-production composition that binds the selected client deployment to its
-metadata and keys, drives PAR/PKCE and the authorization response, performs
-DPoP-aware token exchange and nonce retry, admits the grant into the durable
-generic session, and proves cold recovery, refresh rotation, logout,
+AT-specific deployment binder and acquisition path that tie the fetched
+metadata document byte-for-byte to its URL and selected immutable client
+configuration, enforce the AT metadata profile, and fully qualify public
+inline or remotely acquired keys. After that, production composition must
+drive PAR/PKCE and the authorization response, perform DPoP-aware token
+exchange and nonce retry, admit the grant into the durable generic session,
+and prove cold recovery, refresh rotation, logout,
 revocation/reauthorization, cancellation, and complete cleanup. Existing
 generic pieces should be composed rather than reimplemented.
 
@@ -101,37 +106,28 @@ At preparation time:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  b1bb0ad (Expose single-validation OAuth client views)
+code base:  a88a655 (Add structural OAuth Client ID Metadata parsing)
 record:     this handoff is committed immediately after that code base
-upstream:   origin/main at c47e829
-ahead:      3 commits after committing this record
+upstream:   origin/main at 3cedab0
+ahead:      2 commits after committing this record
 tests:      no test process running
 ```
 
-The current SR4-owned uncommitted work is:
+There is no current SR4-owned uncommitted work. The two latest qualified
+milestones are:
 
 ```text
- M akashic/atproto/oauth-client.f
- M docs/atproto/oauth-client.md
- M local_testing/at-oauth-client-test.f
- M local_testing/test_at_oauth_client.py
+3cedab0 Use single-validation AT OAuth client views
+a88a655 Add structural OAuth Client ID Metadata parsing
 ```
 
-That change migrates the AT client-policy adapter to
-`OAUTH2-CLIENT-CONFIG-WITH`, so the immutable 11,072-byte generic
-configuration is validated once and callback-scoped view accessors supply the
-selected fields. It removes repeated whole-record scans from one admission
-and reduces redundant full-input copies in the fixture while retaining
-representative success, rejection, preflight, and thrown-path immutability
-checks.
-
-One semantic difference must be reviewed deliberately before committing the
-adapter: when both inputs are bad, the current diff checks a non-ready AT
-OAuth profile before full generic configuration validation, so `PROFILE`
-precedes `CONFIG`. Do not let that precedence change land merely as an
-accidental consequence of the scan optimization. The current source also
-needs a final stack/cleanup review around `_ATOC-ADMIT-OP` and
-`_ATOC-WITH-CONFIG`.
+`3cedab0` migrated the AT client-policy adapter to
+`OAUTH2-CLIENT-CONFIG-WITH`, preserving the established
+`CONFIG`-before-`PROFILE` precedence and exact preflight/cleanup behavior while
+removing repeated whole-record scans. `a88a655` added the bounded generic
+structural parser used by the next binder. That parser deliberately does not
+perform HTTP acquisition, exact deployment binding, AT policy, or full JWK
+qualification; those remain the next production boundary.
 
 The following files are preserved unrelated user/old-L13 work. Do not stage,
 restore, rewrite, or delete them as part of SR4:
@@ -173,9 +169,17 @@ Completed evidence:
 - The final generic view implementation committed at `b1bb0ad` passed its
   bounded linked suite in 144,652,928 guest steps with zero test-attributed
   swaps.
-- Static checks for the current AT adapter migration have passed, and
-  `git diff --check` is clean. The optimized linked AT lifecycle has not yet
-  been rerun, so no runtime reduction or final pass is claimed.
+- The optimized AT adapter committed at `3cedab0` passed its static gate and
+  completed all 17 linked load stages, 14 contract groups, and the finish
+  marker in 979,786,924 guest steps and 13 minutes 17.81 seconds. The
+  monitored process reached 117,120 KiB peak RSS and incurred no
+  process-attributed swaps. Host-wide `vmstat` changed by +336 `pswpin` and
+  +5,205 `pswpout` pages during the run, so do not misstate that result as a
+  system-wide no-swap interval.
+- The generic Client ID Metadata parser committed at `a88a655` passed its
+  static gate and a 480-assertion linked matrix in 366,109,694 guest steps and
+  286.94 seconds, below its checked-in 500,000,000-step ceiling and the
+  300-second test wall.
 
 The 16-minute-52-second result is a complete staged module-load and contract
 qualification, not the measured latency of one OAuth admission or one network
@@ -190,23 +194,24 @@ delta. Do not run another suite or a test subagent concurrently.
 
 ## Exact next actions
 
-1. Read `AGENTS.md`, this record, and the current four-file AT adapter diff.
-   Confirm stack and wipe behavior and decide the dual-invalid
-   `CONFIG`/`PROFILE` precedence explicitly.
-2. Run only the cheap static gate first:
-
-   ```text
-   python local_testing/test_at_oauth_client.py --static-only
-   ```
-
-3. Profile or otherwise inspect stage costs before launching the full checked-in
-   lifecycle. Keep the native C++ backend. Treat guest Forth JIT experiments
-   or linked/prebuilt image work as separately qualified harness changes, not
-   as production AT OAuth work.
-4. Run the optimized AT lifecycle sequentially with resource monitoring. If
-   it passes, commit only the four SR4-owned adapter files with an informative
-   multi-paragraph message recording exact steps, time, memory, and swap
-   evidence.
+1. Read `AGENTS.md`, this record,
+   `docs/security/oauth2-client-metadata.md`, and
+   `docs/atproto/oauth-client.md`. Treat `a88a655` as a structural decoder,
+   not as proof that a deployed AT client is valid.
+2. Add a caller-owned AT client-metadata/deployment binder over
+   `OAUTH2-CLIENT-METADATA-WITH` and `OAUTH2-CLIENT-CONFIG-WITH`. It must
+   enforce byte-for-byte client-ID/deployment identity, the current AT
+   metadata requirements, positive admission of supported non-secret token
+   authentication, selected redirect/scope compatibility, and DPoP policy
+   without inventing defaults for omitted optional metadata.
+3. Compose checked inline/remote JWK qualification and the bounded HTTPS
+   acquisition policy around that binder. Keep transport status, redirect,
+   media-type, response-size, and SSRF decisions outside the structural JSON
+   parser, and reject private or symmetric client key material.
+4. Qualify the binder and acquisition boundaries with cheap static gates
+   first, then sequential linked deterministic fixtures. Preserve exact
+   preflight contents, callback lifetime, source immutability, workspace
+   cleanup, and explicit error precedence.
 5. Close landing 3 with the missing production authorization/session
    composition and deterministic recovery evidence. Do not begin XRPC,
    repository/blob, subscription, and Streams wiring simultaneously.
