@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Static contracts for the headless Stage 3 Desk sandbox component."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+AKASHIC_ROOT = REPO_ROOT / "akashic"
+LOCAL_TESTING = REPO_ROOT / "local_testing"
+
+sys.path.insert(0, str(LOCAL_TESTING))
+
+from forth_dependencies import dependency_closure, dependency_markers  # noqa: E402
+
+
+COMPONENT = Path("tui/applets/desk/sandbox-component.f")
+DESK = Path("tui/applets/desk/desk.f")
+HOST = Path("runtime/sandbox-host.f")
+FIXTURE = Path("sandbox-stage3-desk-component.f")
+FOCUSED_PROFILES = (
+    ("sandbox-stage3-desk-component", "_S3D-COMPOSE-RUN"),
+    ("sandbox-stage3-desk-cancel", "_S3D-CANCEL-RUN"),
+    ("sandbox-stage3-desk-drain", "_S3D-DRAIN-RUN"),
+    ("sandbox-stage3-desk-close", "_S3D-CLOSE-RUN"),
+)
+
+PUBLIC_WORDS = (
+    "DESK-SBOX-COMPONENT-INIT",
+    "DESK-SBOX-ADMIT",
+    "DESK-SBOX-RUN-SLICE",
+    "DESK-SBOX-RUN-STATE@",
+    "DESK-SBOX-CANCEL",
+    "DESK-SBOX-RESULT-TAKE",
+    "DESK-SBOX-CLOSE",
+    "DESK-SBOX-DRAIN",
+    "DESK-SBOX-COMPONENT-RELEASE",
+    "DESK-SBOX-RESULT-VALID?",
+    "DESK-SBOX-RESULT-PAYLOAD@",
+    "DESK-SBOX-RESULT-RELEASE",
+)
+
+FORBIDDEN_DEPENDENCY_FRAGMENTS = (
+    "app-desc",
+    "applet-host",
+    "/agent/",
+    "practice",
+    "schema",
+    "digest",
+    "cache",
+    "vfs",
+    "provider",
+    "service",
+)
+
+
+def _source(path: Path) -> str:
+    return (AKASHIC_ROOT / path).read_text(encoding="utf-8")
+
+
+def test_desk_explicitly_imports_the_headless_component() -> None:
+    markers = dependency_markers(_source(DESK), DESK.as_posix())
+
+    assert any(
+        marker.raw == "sandbox-component.f"
+        and marker.normalized == COMPONENT.as_posix()
+        for marker in markers
+    )
+
+
+def test_component_closure_stays_on_the_isolated_runtime_path() -> None:
+    closure = dependency_closure(AKASHIC_ROOT, (COMPONENT.as_posix(),))
+
+    assert "runtime/sandbox-module-owner.f" in closure
+    assert "runtime/sandbox-host.f" in closure
+    for module in closure:
+        if module == COMPONENT.as_posix():
+            continue
+        normalized = f"/{module.lower()}"
+        assert not any(
+            fragment in normalized
+            for fragment in FORBIDDEN_DEPENDENCY_FRAGMENTS
+        ), module
+
+
+def test_component_is_caller_owned_and_publishes_the_lifecycle_api() -> None:
+    source = _source(COMPONENT)
+
+    assert re.search(r"^\s*VARIABLE\s+", source, re.MULTILINE) is None
+    assert re.search(r"^\s*CREATE\s+", source, re.MULTILINE) is None
+    assert re.search(r"^\s+--", source, re.MULTILINE) is None
+    assert "768 CONSTANT DESK-SBOX-COMPONENT-SIZE" in source
+    assert "64 CONSTANT DESK-SBOX-RESULT-SIZE" in source
+    assert "SBOX-HOST-SPAN-DISJOINT?" in source
+    assert ": SBOX-HOST-SPAN-DISJOINT?" in _source(HOST)
+    for word in PUBLIC_WORDS:
+        assert re.search(
+            rf"^:\s+{re.escape(word)}(?:\s|$)",
+            source,
+            re.MULTILINE,
+        ), word
+
+
+def test_close_publishes_admission_barrier_before_host_cancellation() -> None:
+    source = _source(COMPONENT)
+    close = source.index(": DESK-SBOX-CLOSE")
+    drain = source.index(": _DSC-DRAIN-CLEAR", close)
+    body = source[close:drain]
+
+    state = body.index("DESK-SBOX-COMPONENT-STATE-CLOSING")
+    cancel = body.index("SBOX-HOST-CANCEL")
+    assert state < cancel
+    assert "SBOX-VM-CANCEL-HOST-SHUTDOWN" in body
+
+
+def test_drain_releases_host_before_ending_borrows() -> None:
+    source = _source(COMPONENT)
+    drain = source.index(": DESK-SBOX-DRAIN")
+    state_accessor = source.index(": DESK-SBOX-COMPONENT-STATE@", drain)
+    body = source[drain:state_accessor]
+
+    release = body.index("SBOX-HOST-RELEASE")
+    clear = body.index("_DSC-DRAIN-CLEAR")
+    assert release < clear
+
+
+def test_headless_component_has_a_focused_executable_gate() -> None:
+    harness = (LOCAL_TESTING / "akashic_tui.py").read_text(encoding="utf-8")
+    fixture = (LOCAL_TESTING / FIXTURE).read_text(encoding="utf-8")
+
+    assert f'"{FIXTURE.as_posix()}"' in harness
+    assert "_S3D-COMPONENT-A" in fixture
+    assert "_S3D-COMPONENT-B" in fixture
+    assert "_S3D-BUILD-ECHO-CANDIDATE" in fixture
+    assert "SBOX-COMPILE" not in fixture
+    assert "SBOX-VM-CANCEL-HOST-SHUTDOWN" in fixture
+    for profile, entry_word in FOCUSED_PROFILES:
+        assert f'PROFILES["{profile}"]' in harness
+        assert entry_word in harness
+        assert entry_word in fixture
+    for word in PUBLIC_WORDS:
+        assert word in fixture

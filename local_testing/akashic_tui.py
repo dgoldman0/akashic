@@ -21929,6 +21929,111 @@ PROFILES["sandbox-stage3-agent-invoke"] = (
     )
 )
 
+
+def _sandbox_stage3_desk_fixture_bytes(group: str) -> bytes:
+    source = (
+        AKASHIC_ROOT / "local_testing" /
+        "sandbox-stage3-desk-component.f"
+    ).read_text(encoding="utf-8")
+    lines: list[str] = []
+    selected = True
+    for source_line in source.splitlines():
+        line = source_line.lstrip(" ")
+        if line.startswith("\\ @profile ") and line.endswith(" begin"):
+            selected = group in line.split()[2].split(",")
+            continue
+        if line.startswith("\\ @profile ") and line.endswith(" end"):
+            selected = True
+            continue
+        if not selected:
+            continue
+        if not line or line.startswith("\\"):
+            continue
+        match = COLON_STACK_EFFECT_RE.match(source_line)
+        if match:
+            suffix = source_line[match.end() :].lstrip(" ")
+            line = match.group("head").lstrip(" ")
+            if suffix:
+                line += " " + suffix
+        lines.append(line)
+    return "".join(line + "\n" for line in lines).encode("utf-8")
+
+
+def _sandbox_stage3_desk_profile(
+    group: str,
+    entry_word: str,
+    marker: str,
+) -> Profile:
+    return Profile(
+        roots=(
+            "tui/applets/desk/sandbox-component.f",
+            "sandbox/verifier.f",
+        ),
+        resources=(),
+        autoexec=rf"""\ autoexec.f - headless Stage 3 Desk sandbox component
+ENTER-USERLAND
+1 CONSTANT SBOX-STAGE3-DESK-DEFER-AUTORUN
+." [akashic] loading Stage 3 Desk sandbox component" CR TX-FLUSH
+REQUIRE tui/applets/desk/sandbox-component.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-s3-desk-comp.f
+{entry_word}
+""",
+        ready_markers=(f"{marker} PASS",),
+        stable_markers=(f"{marker} PASS",),
+        failure_markers=(
+            f"{marker} FAIL",
+            "SBOX STAGE3 DESK ASSERT",
+            "SBOX STAGE3 DESK STACK",
+            "? (not found)",
+            "Branch offset overflow",
+            "dictionary full",
+            "exception",
+        ),
+        linked=True,
+        include_large_sample=False,
+        initial_files=(
+            (
+                "local_testing/sbox-s3-desk-comp.f",
+                _sandbox_stage3_desk_fixture_bytes(group),
+            ),
+        ),
+    )
+
+
+PROFILES["sandbox-stage3-desk-component"] = (
+    _sandbox_stage3_desk_profile(
+        "compose",
+        "_S3D-COMPOSE-RUN",
+        "SBOX STAGE3 DESK COMPOSE",
+    )
+)
+
+PROFILES["sandbox-stage3-desk-cancel"] = (
+    _sandbox_stage3_desk_profile(
+        "cancel",
+        "_S3D-CANCEL-RUN",
+        "SBOX STAGE3 DESK CANCEL",
+    )
+)
+
+PROFILES["sandbox-stage3-desk-drain"] = (
+    _sandbox_stage3_desk_profile(
+        "drain",
+        "_S3D-DRAIN-RUN",
+        "SBOX STAGE3 DESK DRAIN",
+    )
+)
+
+PROFILES["sandbox-stage3-desk-close"] = (
+    _sandbox_stage3_desk_profile(
+        "close",
+        "_S3D-CLOSE-RUN",
+        "SBOX STAGE3 DESK CLOSE",
+    )
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),
