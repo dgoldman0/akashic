@@ -1,11 +1,12 @@
 \ =====================================================================
-\  vm.f - Caller-owned resumable neutral scalar sandbox executor
+\  vm.f - Caller-owned resumable neutral sandbox executor
 \ =====================================================================
 \  One measured caller span owns every mutable invocation byte.  Guest
 \  operands, call frames, locals, typed counted-loop frames, function-start
-\  indices, and linear memory never live in globals or across calls on the
-\  host stacks.  STEP executes at most one instruction; RUN-SLICE is only a
-\  deterministic bounded repetition of admitted internal steps.
+\  indices, linear memory, and typed-value accounting never live in globals
+\  or across calls on the host stacks.  STEP executes at most one
+\  instruction; RUN-SLICE is only a deterministic bounded repetition of
+\  admitted internal steps.
 \
 \  The verifier is the semantic admission authority.  Public resume
 \  boundaries validate the sealed static objects and continuation; one
@@ -19,6 +20,7 @@ REQUIRE binding.f
 REQUIRE plan.f
 REQUIRE profile.f
 REQUIRE machine.f
+REQUIRE abi.f
 REQUIRE candidate.f
 REQUIRE value.f
 
@@ -59,7 +61,7 @@ PROVIDED akashic-sbx-vm
     SWAP SBOX-VM-RUN-FINISHED <= AND ;
 
 \ Result class numbers retain the neutral invocation vocabulary.  This
-\ scalar executor itself publishes only OK, GUEST-TRAP,
+\ executor itself publishes only OK, GUEST-TRAP,
 \ RESOURCE-EXHAUSTED, CANCELLED, and HOST-FAILURE.
 0 CONSTANT SBOX-VM-CLASS-OK
 1 CONSTANT SBOX-VM-CLASS-REQUEST-REJECTED
@@ -89,6 +91,12 @@ PROVIDED akashic-sbx-vm
 11 CONSTANT SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS
 12 CONSTANT SBOX-VM-TRAP-MEMORY-MISALIGNED
 13 CONSTANT SBOX-VM-TRAP-MEMORY-READ-ONLY
+14 CONSTANT SBOX-VM-TRAP-INVALID-VALUE-HANDLE
+15 CONSTANT SBOX-VM-TRAP-VALUE-TYPE-MISMATCH
+16 CONSTANT SBOX-VM-TRAP-VALUE-INDEX-RANGE
+17 CONSTANT SBOX-VM-TRAP-INVALID-UTF8
+18 CONSTANT SBOX-VM-TRAP-DUPLICATE-MAP-KEY
+19 CONSTANT SBOX-VM-TRAP-INVALID-RESULT-GRAPH
 20 CONSTANT SBOX-VM-TRAP-EXPLICIT-ABORT
 21 CONSTANT SBOX-VM-TRAP-LOCAL-INDEX-RANGE
 22 CONSTANT SBOX-VM-TRAP-INVALID-LENGTH
@@ -96,11 +104,18 @@ PROVIDED akashic-sbx-vm
 24 CONSTANT SBOX-VM-TRAP-LOOP-ZERO-STEP
 25 CONSTANT SBOX-VM-TRAP-LOOP-ARITHMETIC-OVERFLOW
 26 CONSTANT SBOX-VM-TRAP-LOOP-STATE-INVALID
+27 CONSTANT SBOX-VM-TRAP-MAP-KEY-ORDER
 
 1 CONSTANT SBOX-VM-EXHAUST-INSTRUCTION-UNITS
+2 CONSTANT SBOX-VM-EXHAUST-VALUE-OPS
+3 CONSTANT SBOX-VM-EXHAUST-COPY-BYTES
 4 CONSTANT SBOX-VM-EXHAUST-DATA-STACK
 5 CONSTANT SBOX-VM-EXHAUST-CALL-FRAMES
 6 CONSTANT SBOX-VM-EXHAUST-LOOP-FRAMES
+7 CONSTANT SBOX-VM-EXHAUST-OUTPUT-ARENA-NODES
+8 CONSTANT SBOX-VM-EXHAUST-OUTPUT-ARENA-BYTES
+9 CONSTANT SBOX-VM-EXHAUST-OUTPUT-RESULT-NODES
+10 CONSTANT SBOX-VM-EXHAUST-OUTPUT-RESULT-BYTES
 
 1 CONSTANT SBOX-VM-CANCEL-CALLER
 2 CONSTANT SBOX-VM-CANCEL-CONTEXT
@@ -297,7 +312,9 @@ PROVIDED akashic-sbx-vm
 424 CONSTANT _SVI-VALUE-OPS-BUDGET
 432 CONSTANT _SVI-COPY-USAGE
 440 CONSTANT _SVI-COPY-BUDGET
-448 CONSTANT _SVI-RESERVED-BEGIN
+448 CONSTANT _SVI-TMP-POP
+456 CONSTANT _SVI-TMP-PUSH
+464 CONSTANT _SVI-RESERVED-BEGIN
 512 CONSTANT SBOX-VM-INSTANCE-DESCRIPTOR-SIZE
 
 64 CONSTANT _SVM-CALL-FRAME-SIZE
@@ -376,6 +393,8 @@ PROVIDED akashic-sbx-vm
 : _SVI.VALUE-OPS-BUDGET  ( i -- a ) _SVI-VALUE-OPS-BUDGET + ;
 : _SVI.COPY-USAGE        ( i -- a ) _SVI-COPY-USAGE + ;
 : _SVI.COPY-BUDGET       ( i -- a ) _SVI-COPY-BUDGET + ;
+: _SVI.TMP-POP           ( i -- a ) _SVI-TMP-POP + ;
+: _SVI.TMP-PUSH          ( i -- a ) _SVI-TMP-PUSH + ;
 
 : _SVM-INSTANCE-HEADER-STATUS  ( instance -- status )
     DUP 0= IF DROP SBOX-VM-S-INVALID EXIT THEN
@@ -1313,6 +1332,9 @@ PROVIDED akashic-sbx-vm
     >R SBOX-VM-CLASS-GUEST-TRAP -ROT
     SBOX-VM-RUN-TRAPPED R> _SVM-TERMINAL! ;
 
+: _SVM-TRAP0  ( detail instance -- run-state )
+    0 SWAP _SVM-TRAP ;
+
 : _SVM-EXHAUST  ( detail instance -- run-state )
     >R SBOX-VM-CLASS-RESOURCE-EXHAUSTED SWAP 0
     SBOX-VM-RUN-EXHAUSTED R> _SVM-TERMINAL! ;
@@ -1320,6 +1342,57 @@ PROVIDED akashic-sbx-vm
 : _SVM-COMPLETE  ( instance -- run-state )
     >R SBOX-VM-CLASS-OK 0 0 SBOX-VM-RUN-COMPLETE
     R> _SVM-TERMINAL! ;
+
+: _SVM-HOST-FAIL  ( detail instance -- run-state )
+    >R SBOX-VM-CLASS-HOST-FAILURE SWAP 0
+    SBOX-VM-RUN-TRAPPED R> _SVM-TERMINAL! ;
+
+: _SVM-VALUE-FAIL  ( value-status instance -- run-state )
+    >R
+    CASE
+        SBOX-VALUE-S-HANDLE OF
+            SBOX-VM-TRAP-INVALID-VALUE-HANDLE R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-TYPE OF
+            SBOX-VM-TRAP-VALUE-TYPE-MISMATCH R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-RANGE OF
+            SBOX-VM-TRAP-VALUE-INDEX-RANGE R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-UTF8 OF
+            SBOX-VM-TRAP-INVALID-UTF8 R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-MAP-ORDER OF
+            SBOX-VM-TRAP-MAP-KEY-ORDER R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-DUPLICATE-KEY OF
+            SBOX-VM-TRAP-DUPLICATE-MAP-KEY R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-INVALID-LENGTH OF
+            SBOX-VM-TRAP-INVALID-LENGTH R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-DEPTH OF
+            SBOX-VM-TRAP-INVALID-RESULT-GRAPH R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-CYCLE OF
+            SBOX-VM-TRAP-INVALID-RESULT-GRAPH R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VALUE-S-ARENA-NODES OF
+            SBOX-VM-EXHAUST-OUTPUT-ARENA-NODES R@ _SVM-EXHAUST
+        ENDOF
+        SBOX-VALUE-S-ARENA-BYTES OF
+            SBOX-VM-EXHAUST-OUTPUT-ARENA-BYTES R@ _SVM-EXHAUST
+        ENDOF
+        SBOX-VALUE-S-RESULT-NODES OF
+            SBOX-VM-EXHAUST-OUTPUT-RESULT-NODES R@ _SVM-EXHAUST
+        ENDOF
+        SBOX-VALUE-S-RESULT-BYTES OF
+            SBOX-VM-EXHAUST-OUTPUT-RESULT-BYTES R@ _SVM-EXHAUST
+        ENDOF
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL
+        SWAP
+    ENDCASE
+    R> DROP ;
 
 : _SVM-TOP@  ( depth instance -- value )
     >R
@@ -1395,6 +1468,65 @@ PROVIDED akashic-sbx-vm
     >R
     R@ _SVI.TMP-CHARGE @ R@ _SVI.USAGE +!
     0 R@ _SVI.TMP-CHARGE !
+    R> DROP ;
+
+: _SVM-VALUE-RESERVATION-CLEAR  ( instance -- )
+    0 OVER _SVI.TMP-CHARGE !
+    0 SWAP _SVI.TMP-A ! ;
+
+: _SVM-VALUE-STACK-CAPACITY?  ( instance -- flag )
+    >R
+    R@ _SVI.OPERAND-N @
+    R@ _SVI.TMP-POP @ -
+    R@ _SVI.TMP-PUSH @ +
+    R@ _SVI.OPERAND-CAP @ U> IF
+        SBOX-VM-EXHAUST-DATA-STACK R@ _SVM-EXHAUST DROP
+        R> DROP 0 EXIT
+    THEN
+    -1 R> DROP ;
+
+: _SVM-VALUE-RESERVE?  ( copy-bytes instruction-charge instance -- flag )
+    >R
+    R@ _SVI.ENTRY-SIGNATURE @
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
+        2DROP
+        SBOX-VM-TRAP-INVALID-VALUE-HANDLE R@ _SVM-TRAP0 DROP
+        R> DROP 0 EXIT
+    THEN
+    OVER 0< IF
+        2DROP
+        SBOX-VM-TRAP-INVALID-LENGTH R@ _SVM-TRAP0 DROP
+        R> DROP 0 EXIT
+    THEN
+    DUP R@ _SVM-RESERVE? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    1 R@ _SVI.VALUE-OPS-BUDGET @
+        R@ _SVI.VALUE-OPS-USAGE @ - U> IF
+        DROP R@ _SVM-VALUE-RESERVATION-CLEAR
+        SBOX-VM-EXHAUST-VALUE-OPS R@ _SVM-EXHAUST DROP
+        R> DROP 0 EXIT
+    THEN
+    DUP R@ _SVI.COPY-BUDGET @ R@ _SVI.COPY-USAGE @ - U> IF
+        DROP R@ _SVM-VALUE-RESERVATION-CLEAR
+        SBOX-VM-EXHAUST-COPY-BYTES R@ _SVM-EXHAUST DROP
+        R> DROP 0 EXIT
+    THEN
+    DUP R@ _SVI.TMP-A !
+    DROP
+    R@ _SVM-VALUE-STACK-CAPACITY? 0= IF
+        R@ _SVM-VALUE-RESERVATION-CLEAR
+        R> DROP 0 EXIT
+    THEN
+    -1 R> DROP ;
+
+: _SVM-VALUE-COMMIT!  ( instance -- )
+    >R
+    R@ _SVM-COMMIT-RESERVATION!
+    1 R@ _SVI.VALUE-OPS-USAGE +!
+    R@ _SVI.TMP-A @ R@ _SVI.COPY-USAGE +!
+    0 R@ _SVI.TMP-A !
     R> DROP ;
 
 : _SVM-BASE-COST  ( instance -- cost|0 flag )
@@ -1558,9 +1690,6 @@ PROVIDED akashic-sbx-vm
 \ =====================================================================
 \  Ordinary fixed-effect operations
 \ =====================================================================
-
-: _SVM-TRAP0  ( detail instance -- run-state )
-    0 SWAP _SVM-TRAP ;
 
 : _SVM-CANCELLED!  ( detail instance -- run-state )
     >R
@@ -1996,6 +2125,128 @@ PROVIDED akashic-sbx-vm
     THEN
     SBOX-BYTE-LENGTH+ DUP IF
         2DROP R> DROP 0 0 EXIT
+    THEN
+    DROP -1 R> DROP ;
+
+: _SVM-VALUE-BASE-COST  ( instance -- cost|0 flag )
+    DUP _SVI.TMP-OPCODE @ SBOX-ABI-BASE-COST@
+    DUP SBOX-MACHINE-S-OK <> IF
+        2DROP DROP 0 0 EXIT
+    THEN
+    DROP NIP -1 ;
+
+: _SVM-VALUE-CHARGE  ( dynamic-units instance -- charge flag )
+    >R
+    DUP 0< IF DROP R> DROP 0 0 EXIT THEN
+    R@ _SVM-VALUE-BASE-COST 0= IF
+        2DROP R> DROP 0 0 EXIT
+    THEN
+    SBOX-BYTE-LENGTH+ DUP IF
+        2DROP R> DROP 0 0 EXIT
+    THEN
+    DROP -1 R> DROP ;
+
+: _SVM-VALUE-SHAPE?  ( instance -- flag )
+    >R
+    R@ _SVI.TMP-OPCODE @ SBOX-ABI-POP@
+    DUP SBOX-MACHINE-S-OK <> IF
+        2DROP SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0 DROP
+        R> DROP 0 EXIT
+    THEN
+    DROP R@ _SVI.TMP-POP !
+    R@ _SVI.TMP-OPCODE @ SBOX-ABI-PUSH@
+    DUP SBOX-MACHINE-S-OK <> IF
+        2DROP SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0 DROP
+        R> DROP 0 EXIT
+    THEN
+    DROP R@ _SVI.TMP-PUSH !
+    R@ _SVI.TMP-POP @ R@ _SVI.TMP-PUSH @
+        R@ _SVM-STACK-VALID?
+    R> DROP ;
+
+: _SVM-VALUE-BEGIN?  ( instance -- flag )
+    >R
+    R@ _SVI.ENTRY-SIGNATURE @
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
+        SBOX-VM-TRAP-INVALID-VALUE-HANDLE R@ _SVM-TRAP0 DROP
+        R> DROP 0 EXIT
+    THEN
+    R@ _SVM-VALUE-SHAPE? 0= IF R> DROP 0 EXIT THEN
+    R@ _SVM-FALLTHROUGH? 0= IF
+        SBOX-VM-TRAP-BAD-INSTRUCTION-POINTER R@ _SVM-TRAP0 DROP
+        R> DROP 0 EXIT
+    THEN
+    -1 R> DROP ;
+
+: _SVM-VALUE-STAGE?  ( value value-status instance -- flag )
+    >R
+    DUP IF
+        SWAP DROP R@ _SVM-VALUE-FAIL DROP
+        R> DROP 0 EXIT
+    THEN
+    DROP R@ _SVI.TMP-X !
+    -1 R> DROP ;
+
+: _SVM-VALUE-PREPARE?  ( value-status instance -- flag )
+    >R
+    DUP IF
+        R@ _SVM-VALUE-FAIL DROP
+        R> DROP 0 EXIT
+    THEN
+    DROP -1 R> DROP ;
+
+: _SVM-VALUE-METRIC-STAGE?  ( metric value-status instance -- flag )
+    >R
+    DUP IF
+        SWAP DROP R@ _SVM-VALUE-FAIL DROP
+        R> DROP 0 EXIT
+    THEN
+    DROP R@ _SVI.TMP-W !
+    -1 R> DROP ;
+
+: _SVM-VALUE-DISCARD-PREPARED!  ( instance -- )
+    >R
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-DISCARD-PREPARED
+    DUP IF
+        DROP
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL DROP
+    ELSE
+        DROP
+    THEN
+    R> DROP ;
+
+: _SVM-VALUE-PUBLISH-PREPARED?  ( instance -- flag )
+    >R
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-PUBLISH-PREPARED
+    DUP IF
+        2DROP
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL DROP
+        R> DROP 0 EXIT
+    THEN
+    DROP R@ _SVI.TMP-X !
+    -1 R> DROP ;
+
+: _SVM-VALUE-READY?  ( copy-bytes dynamic-units instance -- flag )
+    >R
+    R@ _SVM-VALUE-CHARGE 0= IF
+        2DROP
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL DROP
+        R> DROP 0 EXIT
+    THEN
+    R@ _SVM-VALUE-RESERVE?
+    R> DROP ;
+
+: _SVM-VALUE-PREPARED-CAPACITY?  ( instance -- flag )
+    >R
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-PREPARED-CAPACITY
+    DUP IF
+        R@ _SVM-VALUE-RESERVATION-CLEAR
+        R@ _SVM-VALUE-DISCARD-PREPARED!
+        R@ _SVI.RUN-STATE @ SBOX-VM-RUN-RUNNABLE <> IF
+            DROP R> DROP 0 EXIT
+        THEN
+        R@ _SVM-VALUE-FAIL DROP
+        R> DROP 0 EXIT
     THEN
     DROP -1 R> DROP ;
 
@@ -2486,6 +2737,442 @@ PROVIDED akashic-sbx-vm
     R> DROP ;
 
 \ =====================================================================
+\  Typed value ABI execution
+\ =====================================================================
+
+: _SVM-EXEC-VALUE-QUERY  ( instance -- run-state )
+    >R
+    R@ _SVM-VALUE-BEGIN? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-OPCODE @
+    CASE
+        SBOX-ABI-OP-V-TYPE OF
+            0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-TYPE@
+            R@ _SVM-VALUE-STAGE? 0= IF
+                R@ _SVI.RUN-STATE @ R> DROP EXIT
+            THEN
+        ENDOF
+        SBOX-ABI-OP-V-BOOL-GET OF
+            0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-BOOL@
+            R@ _SVM-VALUE-STAGE? 0= IF
+                R@ _SVI.RUN-STATE @ R> DROP EXIT
+            THEN
+        ENDOF
+        SBOX-ABI-OP-V-I64-GET OF
+            0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-I64@
+            R@ _SVM-VALUE-STAGE? 0= IF
+                R@ _SVI.RUN-STATE @ R> DROP EXIT
+            THEN
+        ENDOF
+        SBOX-ABI-OP-V-LEN OF
+            0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-LEN@
+            R@ _SVM-VALUE-STAGE? 0= IF
+                R@ _SVI.RUN-STATE @ R> DROP EXIT
+            THEN
+        ENDOF
+        SBOX-ABI-OP-V-LIST-GET OF
+            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-LIST@
+            R@ _SVM-VALUE-STAGE? 0= IF
+                R@ _SVI.RUN-STATE @ R> DROP EXIT
+            THEN
+        ENDOF
+        SBOX-ABI-OP-V-MAP-KEY OF
+            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-MAP-KEY@
+            R@ _SVM-VALUE-STAGE? 0= IF
+                R@ _SVI.RUN-STATE @ R> DROP EXIT
+            THEN
+        ENDOF
+        SBOX-ABI-OP-V-MAP-VALUE OF
+            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-MAP-VALUE@
+            R@ _SVM-VALUE-STAGE? 0= IF
+                R@ _SVI.RUN-STATE @ R> DROP EXIT
+            THEN
+        ENDOF
+        SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
+        SWAP DROP R> DROP EXIT
+    ENDCASE
+    0 0 R@ _SVM-VALUE-READY? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-COMMIT!
+    R@ _SVI.TMP-OPCODE @
+    DUP SBOX-ABI-OP-V-LIST-GET =
+    OVER SBOX-ABI-OP-V-MAP-KEY = OR
+    SWAP SBOX-ABI-OP-V-MAP-VALUE = OR IF
+        R@ _SVI.TMP-X @ R@ _SVM-BINARY!
+    ELSE
+        R@ _SVI.TMP-X @ 0 R@ _SVM-TOP!
+    THEN
+    R@ _SVM-FINISH-ORDINARY
+    R> DROP ;
+
+: _SVM-MAP-FIND-STAGE?
+    ( value found compared-n compared-bytes status instance -- flag )
+    >R
+    DUP IF
+        >R 2DROP 2DROP R>
+        R@ _SVM-VALUE-FAIL DROP
+        R> DROP 0 EXIT
+    THEN
+    DROP
+    R@ _SVI.TMP-W !
+    R@ _SVI.TMP-Z !
+    R@ _SVI.TMP-Y !
+    R@ _SVI.TMP-X !
+    -1 R> DROP ;
+
+: _SVM-MAP-FIND-DYNAMIC  ( instance -- units status )
+    >R
+    R@ _SVI.TMP-B @ _SVM-CEIL8
+    R@ _SVI.TMP-Z @ SBOX-BYTE-LENGTH+
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SVI.TMP-W @ _SVM-CEIL8
+    SBOX-BYTE-LENGTH+
+    R> DROP ;
+
+: _SVM-EXEC-VALUE-MAP-FIND  ( instance -- run-state )
+    >R
+    R@ _SVM-VALUE-BEGIN? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    1 R@ _SVM-TOP@ DUP 0< IF
+        DROP
+        SBOX-VM-TRAP-INVALID-LENGTH R@ _SVM-TRAP0
+        R> DROP EXIT
+    THEN
+    DUP R@ _SVI.TMP-B ! DROP
+    2 R@ _SVM-TOP@ R@ _SVI.TMP-B @
+    R@ _SVM-MEMORY-SPAN? 0= IF
+        SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS R@ _SVM-TRAP0
+        R> DROP EXIT
+    THEN
+    2 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
+    R@ _SVI.TMP-B @
+    0 R@ _SVM-TOP@
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-MAP-FIND
+    R@ _SVM-MAP-FIND-STAGE? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-MAP-FIND-DYNAMIC
+    DUP IF
+        2DROP
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL
+        R> DROP EXIT
+    THEN
+    DROP
+    0 SWAP R@ _SVM-VALUE-READY? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-COMMIT!
+    3 R@ _SVM-DROP-N
+    R@ _SVI.TMP-X @ R@ _SVM-PUSH!
+    R@ _SVI.TMP-Y @ R@ _SVM-PUSH!
+    R@ _SVM-FINISH-ORDINARY
+    R> DROP ;
+
+: _SVM-BLOB-STAGE?  ( address length status instance -- flag )
+    >R
+    DUP IF
+        >R 2DROP R>
+        R@ _SVM-VALUE-FAIL DROP
+        R> DROP 0 EXIT
+    THEN
+    DROP
+    R@ _SVI.TMP-Y !
+    R@ _SVI.TMP-X !
+    -1 R> DROP ;
+
+: _SVM-EXEC-VALUE-BLOB-COPY  ( instance -- run-state )
+    >R
+    R@ _SVM-VALUE-BEGIN? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    0 R@ _SVM-TOP@
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-BLOB@
+    R@ _SVM-BLOB-STAGE? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    1 R@ _SVM-TOP@ DUP 0< IF
+        DROP
+        SBOX-VM-TRAP-INVALID-LENGTH R@ _SVM-TRAP0
+        R> DROP EXIT
+    THEN
+    DUP R@ _SVI.TMP-Z !
+    3 R@ _SVM-TOP@ DUP 0< IF
+        DROP
+        SBOX-VM-TRAP-VALUE-INDEX-RANGE R@ _SVM-TRAP0
+        R> DROP EXIT
+    THEN
+    DUP R@ _SVI.TMP-W !
+    R@ _SVI.TMP-Y @ OVER U< IF
+        DROP
+        SBOX-VM-TRAP-VALUE-INDEX-RANGE R@ _SVM-TRAP0
+        R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-Y @ SWAP -
+    R@ _SVI.TMP-Z @ U< IF
+        SBOX-VM-TRAP-VALUE-INDEX-RANGE R@ _SVM-TRAP0
+        R> DROP EXIT
+    THEN
+    2 R@ _SVM-TOP@
+    R@ _SVI.TMP-Z @
+    R@ _SVM-MEMORY-SPAN? 0= IF
+        SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS R@ _SVM-TRAP0
+        R> DROP EXIT
+    THEN
+    2 R@ _SVM-TOP@
+    R@ _SVI.TMP-Z @
+    R@ _SVM-MEMORY-WRITABLE? 0= IF
+        SBOX-VM-TRAP-MEMORY-READ-ONLY R@ _SVM-TRAP0
+        R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-Z @
+    R@ _SVI.TMP-Z @ _SVM-CEIL8
+    R@ _SVM-VALUE-READY? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-COMMIT!
+    R@ _SVI.TMP-X @ R@ _SVI.TMP-W @ +
+    2 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
+    R@ _SVI.TMP-Z @ MOVE
+    4 R@ _SVM-DROP-N
+    R@ _SVM-FINISH-ORDINARY
+    R> DROP ;
+
+: _SVM-EXEC-VALUE-NEW-SCALAR  ( instance -- run-state )
+    >R
+    R@ _SVM-VALUE-BEGIN? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-OPCODE @
+    CASE
+        SBOX-ABI-OP-V-NEW-NULL OF
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-PREPARE-NULL
+        ENDOF
+        SBOX-ABI-OP-V-NEW-BOOL OF
+            0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-PREPARE-BOOL
+        ENDOF
+        SBOX-ABI-OP-V-NEW-I64 OF
+            0 R@ _SVM-TOP@
+            R@ _SVI.VALUE-STATE @ SBOX-VALUE-PREPARE-I64
+        ENDOF
+        SBOX-VALUE-S-CORRUPT SWAP
+    ENDCASE
+    R@ _SVM-VALUE-PREPARE? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    0 0 R@ _SVM-VALUE-READY? 0= IF
+        R@ _SVM-VALUE-DISCARD-PREPARED!
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-PREPARED-CAPACITY? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-COMMIT!
+    R@ _SVM-VALUE-PUBLISH-PREPARED? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-OPCODE @ SBOX-ABI-OP-V-NEW-NULL = IF
+        R@ _SVI.TMP-X @ R@ _SVM-PUSH!
+    ELSE
+        R@ _SVI.TMP-X @ 0 R@ _SVM-TOP!
+    THEN
+    R@ _SVM-FINISH-ORDINARY
+    R> DROP ;
+
+0 CONSTANT _SVM-NEW-SPAN-OK
+1 CONSTANT _SVM-NEW-SPAN-INVALID-LENGTH
+2 CONSTANT _SVM-NEW-SPAN-MEMORY
+3 CONSTANT _SVM-NEW-SPAN-HOST
+
+: _SVM-NEW-LIMIT@  ( element-u instance -- limit flag )
+    >R
+    CASE
+        1 OF SBOX-VALUE-LIMIT-BLOB-BYTES ENDOF
+        8 OF SBOX-VALUE-LIMIT-LIST-COUNT ENDOF
+        16 OF SBOX-VALUE-LIMIT-MAP-COUNT ENDOF
+        DROP R> DROP 0 0 EXIT
+    ENDCASE
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-LIMIT@
+    DUP IF
+        2DROP R> DROP 0 0 EXIT
+    THEN
+    DROP -1 R> DROP ;
+
+: _SVM-NEW-SPAN
+  ( element-u instance -- address byte-u count span-status )
+    >R
+    DUP R@ _SVI.TMP-W ! DROP
+    0 R@ _SVM-TOP@ DUP 0< IF
+        DROP R> DROP 0 0 0 _SVM-NEW-SPAN-INVALID-LENGTH EXIT
+    THEN
+    DUP R@ _SVI.TMP-Z !
+    R@ _SVI.TMP-W @ R@ _SVM-NEW-LIMIT@ 0= IF
+        2DROP R> DROP 0 0 0 _SVM-NEW-SPAN-HOST EXIT
+    THEN
+    OVER SWAP U> IF
+        DROP R> DROP 0 0 0 _SVM-NEW-SPAN-INVALID-LENGTH EXIT
+    THEN
+    DUP R@ _SVI.TMP-W @ SBOX-BYTE-LENGTH*
+    DUP IF
+        2DROP DROP R> DROP
+        0 0 0 _SVM-NEW-SPAN-INVALID-LENGTH EXIT
+    THEN
+    DROP
+    1 R@ _SVM-TOP@ OVER R@ _SVM-MEMORY-SPAN? 0= IF
+        2DROP R> DROP 0 0 0 _SVM-NEW-SPAN-MEMORY EXIT
+    THEN
+    1 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
+    -ROT SWAP
+    _SVM-NEW-SPAN-OK R> DROP ;
+
+: _SVM-NEW-SPAN-FAIL  ( span-status instance -- run-state )
+    >R
+    CASE
+        _SVM-NEW-SPAN-INVALID-LENGTH OF
+            SBOX-VM-TRAP-INVALID-LENGTH R@ _SVM-TRAP0
+        ENDOF
+        _SVM-NEW-SPAN-MEMORY OF
+            SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS R@ _SVM-TRAP0
+        ENDOF
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL
+        SWAP
+    ENDCASE
+    R> DROP ;
+
+: _SVM-EXEC-VALUE-NEW-BLOB  ( instance -- run-state )
+    >R
+    R@ _SVM-VALUE-BEGIN? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    1 R@ _SVM-NEW-SPAN
+    DUP IF
+        >R 2DROP DROP R>
+        R@ _SVM-NEW-SPAN-FAIL
+        R> DROP EXIT
+    THEN
+    DROP
+    \ Address and byte length remain; byte spans have count = byte length.
+    DROP
+    DUP R@ _SVI.TMP-Z !
+    R@ _SVI.TMP-OPCODE @ SBOX-ABI-OP-V-NEW-BYTES = IF
+        R@ _SVI.VALUE-STATE @ SBOX-VALUE-PREPARE-BYTES
+    ELSE
+        R@ _SVI.VALUE-STATE @ SBOX-VALUE-PREPARE-UTF8
+    THEN
+    R@ _SVM-VALUE-PREPARE? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-Z @
+    R@ _SVI.TMP-Z @ _SVM-CEIL8
+    R@ _SVM-VALUE-READY? 0= IF
+        R@ _SVM-VALUE-DISCARD-PREPARED!
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-PREPARED-CAPACITY? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-COMMIT!
+    R@ _SVM-VALUE-PUBLISH-PREPARED? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-X @ R@ _SVM-BINARY!
+    R@ _SVM-FINISH-ORDINARY
+    R> DROP ;
+
+: _SVM-EXEC-VALUE-NEW-LIST  ( instance -- run-state )
+    >R
+    R@ _SVM-VALUE-BEGIN? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    8 R@ _SVM-NEW-SPAN
+    DUP IF
+        >R 2DROP DROP R>
+        R@ _SVM-NEW-SPAN-FAIL
+        R> DROP EXIT
+    THEN
+    DROP
+    \ Keep address and count; discard the checked byte extent.
+    SWAP DROP
+    DUP R@ _SVI.TMP-Z !
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-PREPARE-LIST
+    R@ _SVM-VALUE-PREPARE? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    0 R@ _SVI.TMP-Z @ R@ _SVM-VALUE-READY? 0= IF
+        R@ _SVM-VALUE-DISCARD-PREPARED!
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-PREPARED-CAPACITY? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-COMMIT!
+    R@ _SVM-VALUE-PUBLISH-PREPARED? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-X @ R@ _SVM-BINARY!
+    R@ _SVM-FINISH-ORDINARY
+    R> DROP ;
+
+: _SVM-EXEC-VALUE-NEW-MAP  ( instance -- run-state )
+    >R
+    R@ _SVM-VALUE-BEGIN? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    16 R@ _SVM-NEW-SPAN
+    DUP IF
+        >R 2DROP DROP R>
+        R@ _SVM-NEW-SPAN-FAIL
+        R> DROP EXIT
+    THEN
+    DROP
+    SWAP DROP
+    DUP R@ _SVI.TMP-Z !
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-PREPARE-MAP
+    R@ _SVM-VALUE-METRIC-STAGE? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-Z @ 2
+    SBOX-BYTE-LENGTH* DUP IF
+        2DROP
+        R@ _SVM-VALUE-DISCARD-PREPARED!
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL
+        R> DROP EXIT
+    THEN
+    DROP
+    R@ _SVI.TMP-W @ _SVM-CEIL8
+    SBOX-BYTE-LENGTH+ DUP IF
+        2DROP
+        R@ _SVM-VALUE-DISCARD-PREPARED!
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL
+        R> DROP EXIT
+    THEN
+    DROP
+    0 SWAP R@ _SVM-VALUE-READY? 0= IF
+        R@ _SVM-VALUE-DISCARD-PREPARED!
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-PREPARED-CAPACITY? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVM-VALUE-COMMIT!
+    R@ _SVM-VALUE-PUBLISH-PREPARED? 0= IF
+        R@ _SVI.RUN-STATE @ R> DROP EXIT
+    THEN
+    R@ _SVI.TMP-X @ R@ _SVM-BINARY!
+    R@ _SVM-FINISH-ORDINARY
+    R> DROP ;
+
+\ =====================================================================
 \  Public resumable execution and cancellation
 \ =====================================================================
 
@@ -2661,6 +3348,56 @@ PROVIDED akashic-sbx-vm
         SBOX-MACHINE-OP-MEM-FILL OF
             R@ _SVM-EXEC-BULK R> DROP EXIT
         ENDOF
+
+        SBOX-ABI-OP-V-TYPE OF
+            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-BOOL-GET OF
+            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-I64-GET OF
+            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-LEN OF
+            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-LIST-GET OF
+            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-MAP-KEY OF
+            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-MAP-VALUE OF
+            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-MAP-FIND OF
+            R@ _SVM-EXEC-VALUE-MAP-FIND R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-BLOB-COPY OF
+            R@ _SVM-EXEC-VALUE-BLOB-COPY R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-NEW-NULL OF
+            R@ _SVM-EXEC-VALUE-NEW-SCALAR R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-NEW-BOOL OF
+            R@ _SVM-EXEC-VALUE-NEW-SCALAR R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-NEW-I64 OF
+            R@ _SVM-EXEC-VALUE-NEW-SCALAR R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-NEW-BYTES OF
+            R@ _SVM-EXEC-VALUE-NEW-BLOB R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-NEW-UTF8 OF
+            R@ _SVM-EXEC-VALUE-NEW-BLOB R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-NEW-LIST OF
+            R@ _SVM-EXEC-VALUE-NEW-LIST R> DROP EXIT
+        ENDOF
+        SBOX-ABI-OP-V-NEW-MAP OF
+            R@ _SVM-EXEC-VALUE-NEW-MAP R> DROP EXIT
+        ENDOF
+
         SBOX-MACHINE-OP-IMPORT-CALL OF
             SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
             R> DROP EXIT

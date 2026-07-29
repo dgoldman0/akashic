@@ -1904,10 +1904,12 @@ PROVIDED akashic-sbx-value
 \ =====================================================================
 \
 \  PREPARE validates the complete operation, stages its exact operands and
-\  metrics in the caller's state, and locks that state.  Borrowed source spans
-\  must remain mapped and quiescent until PUBLISH-PREPARED or
-\  DISCARD-PREPARED.  Publishing is the sole visibility point.  NEW-* words
-\  are synchronous prepare-plus-publish conveniences.
+\  metrics in the caller's state, and locks that state.  The separate
+\  PREPARED-CAPACITY query lets an executor reserve instruction/value/copy
+\  counters before the arena/result resources without publishing anything.
+\  Borrowed source spans must remain mapped and quiescent until
+\  PUBLISH-PREPARED or DISCARD-PREPARED.  Publishing is the sole visibility
+\  point.  NEW-* words are synchronous prepare-plus-publish conveniences.
 
 : _SVS-CONSTRUCTOR-BEGIN  ( state -- status )
     DUP SBOX-VALUE-STATE-VALID? 0= IF
@@ -1947,12 +1949,16 @@ PROVIDED akashic-sbx-value
         R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
         R> DROP SBOX-VALUE-S-DEPTH EXIT
     THEN
-    R@ _SVS.NODES @
+    R@ _SVS.NODES @ DUP 0< IF
+        DROP R> DROP SBOX-VALUE-S-RESULT-NODES EXIT
+    THEN
         SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES
         R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
         R> DROP SBOX-VALUE-S-RESULT-NODES EXIT
     THEN
-    R@ _SVS.BYTES @
+    R@ _SVS.BYTES @ DUP 0< IF
+        DROP R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT
+    THEN
         SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES
         R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
         R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT
@@ -1971,9 +1977,7 @@ PROVIDED akashic-sbx-value
     SWAP R@ _SVS.STATUS !
     R@ _SVS.N !
     0 R@ _SVS.AUX !
-    R@ _SVS-CONSTRUCTOR-CAPACITY
-    DUP IF R@ _SVS-CONSTRUCTOR-FAIL THEN
-    R> DROP ;
+    R> DROP SBOX-VALUE-S-OK ;
 
 : SBOX-VALUE-PREPARE-NULL  ( state -- status )
     >R
@@ -2038,9 +2042,7 @@ PROVIDED akashic-sbx-value
     0 R@ _SVS.STATUS !
     1 R@ _SVS.DEPTH !
     1 R@ _SVS.NODES !
-    R@ _SVS-CONSTRUCTOR-CAPACITY
-    DUP IF R@ _SVS-CONSTRUCTOR-FAIL THEN
-    R> DROP ;
+    R> DROP SBOX-VALUE-S-OK ;
 
 : SBOX-VALUE-PREPARE-BYTES  ( address length state -- status )
     >R SBOX-VALUE-T-BYTES R> _SVS-PREPARE-BLOB ;
@@ -2048,28 +2050,40 @@ PROVIDED akashic-sbx-value
 : SBOX-VALUE-PREPARE-UTF8  ( address length state -- status )
     >R SBOX-VALUE-T-UTF8 R> _SVS-PREPARE-BLOB ;
 
+\ PREPARE must still validate every child after an expanded result ceiling
+\ is crossed, while leaving resource-priority selection to the executor.
+: _SVS-SATURATING-METRIC+
+    ( increment current limit -- saturated-total )
+    >R
+    DUP 0< IF NIP R> DROP EXIT THEN
+    DUP R@ U> IF NIP R> DROP EXIT THEN
+    _SVAL-ADD
+    DUP IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    DROP
+    DUP R@ U> IF DROP R@ 1+ THEN
+    R> DROP ;
+
 : _SVS-ADD-CHILD-METRICS  ( node state -- status )
     >R
-    DUP _SVN.NODES @ R@ _SVS.NODES @ SWAP _SVAL-ADD
-    DUP IF
-        2DROP DROP R> DROP SBOX-VALUE-S-RESULT-NODES EXIT
-    THEN DROP
-    DUP R@ _SVS.NODES !
-    DUP SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES
-        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
-        2DROP R> DROP SBOX-VALUE-S-RESULT-NODES EXIT
-    THEN DROP
-    DUP _SVN.VALUE-BYTES @ R@ _SVS.BYTES @ SWAP _SVAL-ADD
-    DUP IF
-        2DROP DROP R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT
-    THEN DROP
-    DUP R@ _SVS.BYTES !
-    DUP SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES
-        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
-        2DROP R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT
-    THEN DROP
+    DUP _SVN.NODES @
+    R@ _SVS.NODES @
+    SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@
+    _SVS-SATURATING-METRIC+ R@ _SVS.NODES !
+    DUP _SVN.VALUE-BYTES @
+    R@ _SVS.BYTES @
+    SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@
+    _SVS-SATURATING-METRIC+ R@ _SVS.BYTES !
     _SVN.DEPTH @ 1+
-    R@ _SVS.DEPTH @ MAX R@ _SVS.DEPTH !
+    R@ _SVS.DEPTH @ MAX
+    DUP R@ _SVS.DEPTH !
+    SBOX-VALUE-LIMIT-DEPTH
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
+        R> DROP SBOX-VALUE-S-DEPTH EXIT
+    THEN
     R> DROP SBOX-VALUE-S-OK ;
 
 : _SVS-AGGREGATE-BEGIN
@@ -2138,9 +2152,7 @@ PROVIDED akashic-sbx-value
         THEN DROP
         1 R@ _SVS.I +!
     REPEAT
-    R@ _SVS-CONSTRUCTOR-CAPACITY
-    DUP IF R@ _SVS-CONSTRUCTOR-FAIL THEN
-    R> DROP ;
+    R> DROP SBOX-VALUE-S-OK ;
 
 : _SVS-PREPARE-MAP-ENTRY  ( state -- status )
     >R
@@ -2201,13 +2213,17 @@ PROVIDED akashic-sbx-value
             0 SWAP R> DROP EXIT
         THEN DROP
     REPEAT
-    R@ _SVS-CONSTRUCTOR-CAPACITY
-    DUP IF
-        R@ _SVS-CONSTRUCTOR-FAIL
-        0 SWAP R> DROP EXIT
-    THEN DROP
     R@ _SVS.KEY-BYTES @
     R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-PREPARED-CAPACITY  ( state -- status )
+    DUP _SVS-BASE-VALID? 0= IF
+        DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP _SVS.BUSY @ _SVAL-STATE-BUSY-CONSTRUCTOR <> IF
+        DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVS-CONSTRUCTOR-CAPACITY ;
 
 : SBOX-VALUE-PUBLISH-PREPARED  ( state -- handle status )
     DUP _SVS-BASE-VALID? 0= IF
