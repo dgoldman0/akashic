@@ -22060,6 +22060,32 @@ REQUIRE tui/applets/desk/sandbox-admission.f
 )
 
 
+PROFILES["sandbox-desk-service"] = Profile(
+    roots=(
+        "tui/applets/desk/sandbox-service.f",
+        "sandbox/verifier.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - bounded transient Desk sandbox job service
+ENTER-USERLAND
+." [akashic] loading bounded Desk sandbox job service" CR TX-FLUSH
+REQUIRE tui/applets/desk/sandbox-service.f
+." SBOX DESK SERVICE LOAD PASS" CR TX-FLUSH
+""",
+    ready_markers=("SBOX DESK SERVICE LOAD PASS",),
+    stable_markers=("SBOX DESK SERVICE LOAD PASS",),
+    failure_markers=(
+        "SBOX DESK SERVICE LOAD FAIL",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),
