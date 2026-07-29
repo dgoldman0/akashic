@@ -628,6 +628,7 @@ def _register_profiles() -> None:
         stable_markers=("APPLET CLOSE PASS",),
         failure_markers=("APPLET CLOSE FAIL", "CLOSE ASSERT"),
         linked=True,
+        total_sectors=8192,
     )
 
 

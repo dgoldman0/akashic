@@ -2080,6 +2080,7 @@ _dx-run
         failure_markers=("DESK EXTERNAL IO FAIL",),
         linked=True,
         include_large_sample=False,
+        total_sectors=8192,
     ),
     "tls-trust-registry": Profile(
         roots=("tui/applets/agent/providers/codex/trust.f",),
@@ -27716,8 +27717,9 @@ CREATE _dst-daybook-owner 8 ALLOT
     ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
-    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-COUNT @ 12 = _dst-assert
     S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.runtime" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.tool-gateway" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.provider-source" _DESK-SERVICE-FIND 0<> _dst-assert
@@ -27736,6 +27738,8 @@ CREATE _dst-daybook-owner 8 ALLOT
     _DESK-XIO-INIT XIO-S-OK = _dst-assert
     S" org.akashic.net.external-io" _dst-service
         _DESK-EXTERNAL-IO = _dst-assert
+    S" org.akashic.sandbox.pure-compute" _dst-service
+        0= _dst-assert
     S" org.akashic.agent.runtime" _dst-service
         _dst-runtime = _dst-assert
     S" org.akashic.agent.tool-gateway" _dst-service
@@ -27831,7 +27835,7 @@ CREATE _dst-daybook-owner 8 ALLOT
 
 : _dst-teardown-wipe  ( -- )
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
-    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-COUNT @ 12 = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _DESK-SERVICE-COUNT @ 0= _dst-assert
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
@@ -27899,6 +27903,7 @@ _dst-run
     ),
     linked=True,
     include_large_sample=False,
+    total_sectors=8192,
 )
 
 
@@ -28088,6 +28093,7 @@ _smrc-run
     linked=True,
     link_chunk_bytes=192 * 1024,
     include_large_sample=False,
+    total_sectors=8192,
     initial_files=(
         (
             "local_testing/smrc-contracts.f",
