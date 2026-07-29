@@ -20,6 +20,7 @@ REQUIRE plan.f
 REQUIRE profile.f
 REQUIRE machine.f
 REQUIRE candidate.f
+REQUIRE value.f
 
 PROVIDED akashic-sbx-vm
 
@@ -288,7 +289,15 @@ PROVIDED akashic-sbx-vm
 360 CONSTANT _SVI-TMP-Y
 368 CONSTANT _SVI-TMP-Z
 376 CONSTANT _SVI-TMP-W
-384 CONSTANT _SVI-RESERVED-BEGIN
+384 CONSTANT _SVI-ENTRY-SIGNATURE
+392 CONSTANT _SVI-VALUE-STATE
+400 CONSTANT _SVI-VALUE-WORK
+408 CONSTANT _SVI-VALUE-WORK-U
+416 CONSTANT _SVI-VALUE-OPS-USAGE
+424 CONSTANT _SVI-VALUE-OPS-BUDGET
+432 CONSTANT _SVI-COPY-USAGE
+440 CONSTANT _SVI-COPY-BUDGET
+448 CONSTANT _SVI-RESERVED-BEGIN
 512 CONSTANT SBOX-VM-INSTANCE-DESCRIPTOR-SIZE
 
 64 CONSTANT _SVM-CALL-FRAME-SIZE
@@ -359,6 +368,14 @@ PROVIDED akashic-sbx-vm
 : _SVI.TMP-Y             ( i -- a ) _SVI-TMP-Y + ;
 : _SVI.TMP-Z             ( i -- a ) _SVI-TMP-Z + ;
 : _SVI.TMP-W             ( i -- a ) _SVI-TMP-W + ;
+: _SVI.ENTRY-SIGNATURE   ( i -- a ) _SVI-ENTRY-SIGNATURE + ;
+: _SVI.VALUE-STATE       ( i -- a ) _SVI-VALUE-STATE + ;
+: _SVI.VALUE-WORK        ( i -- a ) _SVI-VALUE-WORK + ;
+: _SVI.VALUE-WORK-U      ( i -- a ) _SVI-VALUE-WORK-U + ;
+: _SVI.VALUE-OPS-USAGE   ( i -- a ) _SVI-VALUE-OPS-USAGE + ;
+: _SVI.VALUE-OPS-BUDGET  ( i -- a ) _SVI-VALUE-OPS-BUDGET + ;
+: _SVI.COPY-USAGE        ( i -- a ) _SVI-COPY-USAGE + ;
+: _SVI.COPY-BUDGET       ( i -- a ) _SVI-COPY-BUDGET + ;
 
 : _SVM-INSTANCE-HEADER-STATUS  ( instance -- status )
     DUP 0= IF DROP SBOX-VM-S-INVALID EXIT THEN
@@ -639,6 +656,123 @@ PROVIDED akashic-sbx-vm
     LOOP
     DROP -1 ;
 
+: _SVM-ENTRY-SIGNATURE@  ( instance -- signature|-1 )
+    DUP _SVI.ENTRY @
+    SWAP _SVI.PLAN @ SBOX-PLAN-ENTRY-SIGNATURE@
+    IF EXIT THEN
+    DROP -1 ;
+
+: _SVM-SPAN-DISJOINT-FROM-STATIC?  ( address length instance -- flag )
+    >R
+    2DUP R@ R@ _SVI.TOTAL @ MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP
+    R@ _SVI.PLAN @ DUP SBOX-PLAN-TOTAL@
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP
+    R@ _SVI.BINDING @ SBOX-BINDING-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP
+    R@ _SVI.PROFILE @ SBOX-PROFILE-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DROP R> DROP -1 ;
+
+: _SVM-TYPED-SPANS-VALID?  ( instance -- flag )
+    >R
+    R@ _SVI.VALUE-STATE @
+    DUP SBOX-VALUE-STATE-VALID? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    SBOX-VALUE-STATE-SIZE R@ _SVM-SPAN-DISJOINT-FROM-STATIC?
+    0= IF R> DROP 0 EXIT THEN
+
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-INPUT-SPAN@
+    DUP IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    2DUP R@ _SVM-SPAN-DISJOINT-FROM-STATIC? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _SVI.VALUE-WORK @ R@ _SVI.VALUE-WORK-U @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-OUTPUT-SPAN@
+    DUP IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    2DUP R@ _SVM-SPAN-DISJOINT-FROM-STATIC? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _SVI.VALUE-WORK @ R@ _SVI.VALUE-WORK-U @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+
+    R@ _SVI.VALUE-WORK @ R@ _SVI.VALUE-WORK-U @
+    2DUP _SVM-SPAN-STATUS IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _SVM-SPAN-DISJOINT-FROM-STATIC? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SVI.VALUE-WORK  @
+    R@ _SVI.VALUE-WORK-U @
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-WORK-MEASURE
+    DUP IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    R@ _SVI.VALUE-WORK-U @ U>
+    R> DROP 0= ;
+
+: _SVM-TYPED-EXTENSION-VALID?  ( instance -- flag )
+    >R
+    R@ _SVM-RESERVED-ZERO? 0= IF R> DROP 0 EXIT THEN
+    R@ _SVI.ENTRY-SIGNATURE @ DUP 0= IF
+        DROP
+        R@ _SVI.VALUE-STATE @
+        R@ _SVI.VALUE-WORK @ OR
+        R@ _SVI.VALUE-WORK-U @ OR
+        R@ _SVI.VALUE-OPS-USAGE @ OR
+        R@ _SVI.VALUE-OPS-BUDGET @ OR
+        R@ _SVI.COPY-USAGE @ OR
+        R@ _SVI.COPY-BUDGET @ OR 0=
+        R> DROP EXIT
+    THEN
+    SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF R> DROP 0 EXIT THEN
+    R@ _SVM-ENTRY-SIGNATURE@
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SVM-TYPED-SPANS-VALID? 0= IF R> DROP 0 EXIT THEN
+    R@ _SVI.VALUE-OPS-USAGE @ DUP 0<
+    SWAP R@ _SVI.VALUE-OPS-BUDGET @ U> OR IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SVI.VALUE-OPS-BUDGET @ DUP 0> 0=
+    SWAP SBOX-PROFILE-LIMIT-VALUE-OPS
+        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ U> OR IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SVI.COPY-USAGE @ DUP 0<
+    SWAP R@ _SVI.COPY-BUDGET @ U> OR IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SVI.COPY-BUDGET @ DUP 0> 0=
+    SWAP SBOX-PROFILE-LIMIT-COPY-BYTES
+        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ U> OR 0=
+    R> DROP ;
+
 : _SVM-CAPS-MATCH-PROFILE?  ( instance -- flag )
     >R
     R@ _SVI.OPERAND-CAP @
@@ -729,7 +863,7 @@ PROVIDED akashic-sbx-vm
     DUP _SVI.SCRUBBED @ IF DROP 0 EXIT THEN
     DUP _SVM-CAPS-MATCH-PROFILE? 0= IF DROP 0 EXIT THEN
     DUP _SVM-LAYOUT-VALID? 0= IF DROP 0 EXIT THEN
-    _SVM-RESERVED-ZERO? ;
+    _SVM-TYPED-EXTENSION-VALID? ;
 
 \ =====================================================================
 \  INIT boundary, plan projection, and initial frame
@@ -856,10 +990,9 @@ PROVIDED akashic-sbx-vm
         SBOX-CANDIDATE-U16-LE@ IF
         DROP R> DROP -1 SBOX-VM-S-ENTRY EXIT
     THEN
-    \ This scalar executor accepts only the internal qualification signature.
-    \ Signature one becomes executable with the typed-VM landing.
     DUP SBOX-CANDIDATE-ENTRY-SIGNATURE-ID-OFFSET +
-        SBOX-CANDIDATE-U32-LE@ IF
+        SBOX-CANDIDATE-U32-LE@
+        R@ _SVI.ENTRY-SIGNATURE @ <> IF
         DROP R> DROP -1 SBOX-VM-S-ENTRY EXIT
     THEN
     SBOX-CANDIDATE-ENTRY-FUNCTION-INDEX-OFFSET +
@@ -913,7 +1046,13 @@ PROVIDED akashic-sbx-vm
         R@ _SVI.IP !
 
     R@ _SVI.INPUT-N @ ?DUP IF
-        R@ _SVI.INPUT-A @ R@ _SVM-OPERANDS ROT 8 * MOVE
+        R@ _SVI.ENTRY-SIGNATURE @
+            SBOX-ABI-SIGNATURE-VALUE-TO-VALUE = IF
+            DROP
+            R@ _SVI.INPUT-A @ R@ _SVM-OPERANDS !
+        ELSE
+            R@ _SVI.INPUT-A @ R@ _SVM-OPERANDS ROT 8 * MOVE
+        THEN
     THEN
     0 R@ _SVI.INPUT-A !
     0 R@ _SVI.INPUT-N !
@@ -951,9 +1090,10 @@ PROVIDED akashic-sbx-vm
         DROP SBOX-VM-S-INVALID
     THEN ;
 
-\ Stack: plan binding entry-index input input-n budget instance instance-u
-\     -- status
-: SBOX-VM-INIT
+\ Private signature-zero setup retained only for scalar executor
+\ qualification.  The production entry boundary below accepts signature one.
+: _SVM-SCALAR-INIT
+  ( plan binding entry input input-n budget instance instance-u -- status )
     _SVM-INIT-BOUNDARY
     DUP IF
         >R DROP _SVM-DROP8 R> EXIT
@@ -980,6 +1120,181 @@ PROVIDED akashic-sbx-vm
     THEN
     R> DROP
     _SVM-DROP9>STATUS ;
+
+: _SVM-DROP7  ( x1 x2 x3 x4 x5 x6 x7 -- )
+    2DROP 2DROP 2DROP DROP ;
+
+: _SVM-TYPED-DESTINATION-DISJOINT?
+  ( plan binding state work work-u instance instance-u -- flag )
+    6 PICK DUP SBOX-PLAN-TOTAL@
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        _SVM-DROP7 0 EXIT
+    THEN
+    5 PICK SBOX-BINDING-SIZE
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        _SVM-DROP7 0 EXIT
+    THEN
+    6 PICK SBOX-PLAN-PROFILE@ SBOX-PROFILE-SIZE
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        _SVM-DROP7 0 EXIT
+    THEN
+    4 PICK SBOX-VALUE-STATE-SIZE
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        _SVM-DROP7 0 EXIT
+    THEN
+    4 PICK SBOX-VALUE-STATE-INPUT-SPAN@
+    DUP IF
+        2DROP DROP _SVM-DROP7 0 EXIT
+    THEN
+    DROP
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        _SVM-DROP7 0 EXIT
+    THEN
+    4 PICK SBOX-VALUE-STATE-OUTPUT-SPAN@
+    DUP IF
+        2DROP DROP _SVM-DROP7 0 EXIT
+    THEN
+    DROP
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        _SVM-DROP7 0 EXIT
+    THEN
+    3 PICK 3 PICK
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        _SVM-DROP7 0 EXIT
+    THEN
+    _SVM-DROP7 -1 ;
+
+\ Stack input:
+\   plan binding entry value-state value-work value-work-u
+\   instruction-budget value-op-budget copy-byte-budget instance instance-u
+\ Stack output: the same eleven inputs followed by measured status.
+: _SVM-TYPED-INIT-BOUNDARY
+    1 PICK 0= IF 0 SBOX-VM-S-INVALID EXIT THEN
+    1 PICK 7 AND IF 0 SBOX-VM-S-INVALID EXIT THEN
+    1 PICK OVER _SVM-SPAN-STATUS ?DUP IF 0 SWAP EXIT THEN
+
+    10 PICK SBOX-PLAN-VALID? 0= IF
+        0 SBOX-VM-S-INVALID EXIT
+    THEN
+    10 PICK 10 PICK SBOX-BINDING-VALID-FOR? 0= IF
+        0 SBOX-VM-S-BINDING EXIT
+    THEN
+    10 PICK SBOX-VM-INSTANCE-MEASURE
+    DUP IF EXIT THEN
+    DROP
+    DUP 2 PICK U> IF
+        DROP 0 SBOX-VM-S-CAPACITY EXIT
+    THEN
+    >R
+
+    7 PICK SBOX-VALUE-STATE-VALID? 0= IF
+        R> DROP 0 SBOX-VM-S-INPUT EXIT
+    THEN
+    6 PICK 0= IF
+        R> DROP 0 SBOX-VM-S-INPUT EXIT
+    THEN
+    5 PICK 0> 0= IF
+        R> DROP 0 SBOX-VM-S-INPUT EXIT
+    THEN
+    6 PICK 7 AND IF
+        R> DROP 0 SBOX-VM-S-INPUT EXIT
+    THEN
+    6 PICK 6 PICK _SVM-SPAN-STATUS ?DUP IF
+        R> DROP 0 SWAP EXIT
+    THEN
+    7 PICK SBOX-VALUE-STATE-WORK-MEASURE
+    DUP IF
+        >R DROP R> R> DROP 0 SWAP EXIT
+    THEN
+    DROP
+    6 PICK U> IF
+        R> DROP 0 SBOX-VM-S-CAPACITY EXIT
+    THEN
+
+    4 PICK DUP 0> 0= IF
+        DROP R> DROP 0 SBOX-VM-S-INPUT EXIT
+    THEN
+    11 PICK SBOX-PLAN-PROFILE@
+    SBOX-PROFILE-LIMIT-MAX-BUDGET SWAP _SVM-PROFILE-LIMIT@
+    U> IF R> DROP 0 SBOX-VM-S-CAPACITY EXIT THEN
+
+    3 PICK DUP 0> 0= IF
+        DROP R> DROP 0 SBOX-VM-S-INPUT EXIT
+    THEN
+    11 PICK SBOX-PLAN-PROFILE@
+    SBOX-PROFILE-LIMIT-VALUE-OPS SWAP _SVM-PROFILE-LIMIT@
+    U> IF R> DROP 0 SBOX-VM-S-CAPACITY EXIT THEN
+
+    2 PICK DUP 0> 0= IF
+        DROP R> DROP 0 SBOX-VM-S-INPUT EXIT
+    THEN
+    11 PICK SBOX-PLAN-PROFILE@
+    SBOX-PROFILE-LIMIT-COPY-BYTES SWAP _SVM-PROFILE-LIMIT@
+    U> IF R> DROP 0 SBOX-VM-S-CAPACITY EXIT THEN
+
+    8 PICK 11 PICK SBOX-PLAN-ENTRY-SIGNATURE@
+    0= IF
+        DROP R> DROP 0 SBOX-VM-S-ENTRY EXIT
+    THEN
+    SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
+        R> DROP 0 SBOX-VM-S-ENTRY EXIT
+    THEN
+
+    10 PICK 10 PICK 9 PICK 9 PICK 9 PICK 6 PICK 6 PICK
+    _SVM-TYPED-DESTINATION-DISJOINT? 0= IF
+        R> DROP 0 SBOX-VM-S-ALIAS EXIT
+    THEN
+
+    R> SBOX-VM-S-OK ;
+
+: _SVM-DROP11  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 -- )
+    2DROP 2DROP 2DROP 2DROP 2DROP DROP ;
+
+: _SVM-DROP12>STATUS
+  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 status -- status )
+    >R DROP _SVM-DROP11 R> ;
+
+\ Complete signature-one staging seam.  It remains private until typed
+\ dispatch and canonical result transfer land together.
+: _SVM-TYPED-INIT
+  ( plan binding entry value-state value-work value-work-u
+    instruction-budget value-op-budget copy-byte-budget
+    instance instance-u -- status )
+    _SVM-TYPED-INIT-BOUNDARY
+    DUP IF
+        >R DROP _SVM-DROP11 R> EXIT
+    THEN
+    DROP
+    2 PICK 2 PICK 0 FILL
+
+    2 PICK >R
+    DUP R@ _SVI.TOTAL !
+    11 PICK R@ _SVI.PLAN !
+    10 PICK R@ _SVI.BINDING !
+    11 PICK SBOX-PLAN-PROFILE@ R@ _SVI.PROFILE !
+    9 PICK R@ _SVI.ENTRY !
+    SBOX-ABI-SIGNATURE-VALUE-TO-VALUE
+        R@ _SVI.ENTRY-SIGNATURE !
+    8 PICK R@ _SVI.VALUE-STATE !
+    7 PICK R@ _SVI.VALUE-WORK !
+    6 PICK R@ _SVI.VALUE-WORK-U !
+    5 PICK R@ _SVI.BUDGET !
+    4 PICK R@ _SVI.VALUE-OPS-BUDGET !
+    3 PICK R@ _SVI.COPY-BUDGET !
+    8 PICK SBOX-VALUE-STATE-INPUT-ROOT@
+    DROP R@ _SVI.INPUT-A !
+    1 R@ _SVI.INPUT-N !
+
+    R@ _SVM-TYPED-SPANS-VALID? IF
+        R@ _SVM-INIT-STAGED
+    ELSE
+        SBOX-VM-S-INVALID
+    THEN
+    DUP IF
+        3 PICK 2 PICK 0 FILL
+    THEN
+    R> DROP
+    _SVM-DROP12>STATUS ;
 
 \ =====================================================================
 \  Terminal transitions, operand stack, and deterministic charging
@@ -2501,6 +2816,13 @@ PROVIDED akashic-sbx-vm
     DUP _SVI.RUN-STATE @ _SVM-FINISHABLE? 0= IF
         2DROP SBOX-VM-S-STATE EXIT
     THEN
+    \ Invocation-local handles are never published through the scalar
+    \ qualification result.  The production finish path lands with the
+    \ canonical result-owned transfer.
+    DUP _SVI.ENTRY-SIGNATURE @
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE = IF
+        2DROP SBOX-VM-S-STATE EXIT
+    THEN
     OVER _SVM-RESULT-SPAN-STATUS ?DUP IF
         >R 2DROP R> EXIT
     THEN
@@ -2531,6 +2853,39 @@ PROVIDED akashic-sbx-vm
     LOOP
     DROP -1 ;
 
+: _SVM-TYPED-RESOURCES-RELEASE  ( instance -- status )
+    >R
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-INPUT-SPAN@
+    DUP IF
+        2DROP DROP R> DROP SBOX-VM-S-INVALID EXIT
+    THEN
+    DROP
+    R@ _SVI.TMP-B !
+    R@ _SVI.TMP-A !
+
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-OUTPUT-SPAN@
+    DUP IF
+        2DROP DROP R> DROP SBOX-VM-S-INVALID EXIT
+    THEN
+    DROP
+    R@ _SVI.TMP-Y !
+    R@ _SVI.TMP-X !
+
+    0 R@ _SVI.TMP-Z !
+    R@ _SVI.VALUE-WORK @ R@ _SVI.VALUE-WORK-U @
+        SBOX-VALUE-WORK-RELEASE IF 1 R@ _SVI.TMP-Z ! THEN
+    R@ _SVI.VALUE-STATE @
+        SBOX-VALUE-STATE-RELEASE IF 1 R@ _SVI.TMP-Z ! THEN
+    R@ _SVI.TMP-A @ R@ _SVI.TMP-B @
+        SBOX-VALUE-ARENA-RELEASE IF 1 R@ _SVI.TMP-Z ! THEN
+    R@ _SVI.TMP-X @ R@ _SVI.TMP-Y @
+        SBOX-VALUE-ARENA-RELEASE IF 1 R@ _SVI.TMP-Z ! THEN
+    R@ _SVI.TMP-Z @ IF
+        R> DROP SBOX-VM-S-INVALID
+    ELSE
+        R> DROP SBOX-VM-S-OK
+    THEN ;
+
 : SBOX-VM-RELEASE  ( instance -- status )
     DUP _SVM-INSTANCE-HEADER-STATUS ?DUP IF NIP EXIT THEN
     DUP _SVM-INSTANCE-ZERO? IF DROP SBOX-VM-S-OK EXIT THEN
@@ -2544,7 +2899,13 @@ PROVIDED akashic-sbx-vm
         DUP SBOX-VM-INSTANCE-DESCRIPTOR-SIZE 0 FILL
         DROP SBOX-VM-S-OK EXIT
     THEN
+    DUP _SVI.ENTRY-SIGNATURE @
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE = IF
+        DUP _SVM-TYPED-RESOURCES-RELEASE >R
+    ELSE
+        SBOX-VM-S-OK >R
+    THEN
     DUP _SVI.TOTAL @ >R
     0 OVER _SVI.MAGIC !
     DUP R@ 0 FILL
-    R> DROP DROP SBOX-VM-S-OK ;
+    R> DROP DROP R> ;
