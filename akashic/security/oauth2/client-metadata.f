@@ -57,7 +57,7 @@
 \    OAUTH2-CLIENT-METADATA-VIEW-JWKS-URI@
 \ =====================================================================
 
-PROVIDED akashic-oauth2-clientmeta
+PROVIDED akashic-oauth2-cmeta
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

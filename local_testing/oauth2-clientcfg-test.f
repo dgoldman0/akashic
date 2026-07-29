@@ -1,6 +1,6 @@
 \ Focused contracts for the immutable generic OAuth client configuration.
 
-PROVIDED oauth2-client-config-test
+PROVIDED oauth2-clientcfg-test
 
 VARIABLE _o2cct-fails
 VARIABLE _o2cct-checks

@@ -5,7 +5,7 @@
 \ fixture.  Invoke _O2SVT-RUN from autoexec.  The fixture is provider-neutral
 \ and deliberately configures no rollback-floor provider.
 
-PROVIDED oauth2-session-vault-test
+PROVIDED oauth2-session-cv-test
 
 VARIABLE _O2SVT-FAILS
 VARIABLE _O2SVT-CHECKS

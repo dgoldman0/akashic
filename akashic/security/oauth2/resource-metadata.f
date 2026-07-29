@@ -26,7 +26,7 @@
 \    OAUTH2-RESOURCE-METADATA-AUTHORIZATION-SERVER@
 \ =====================================================================
 
-PROVIDED akashic-oauth2-resource-metadata
+PROVIDED akashic-oauth2-rmeta
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

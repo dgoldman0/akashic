@@ -47,7 +47,7 @@
 \        public-output thumbprint-output workspace -- status )
 \ =====================================================================
 
-PROVIDED akashic-jose-jwk-set-p256
+PROVIDED akashic-jose-jwks-p256
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE json-object.f

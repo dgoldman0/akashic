@@ -1,4 +1,4 @@
-# akashic-jose-jwk-set-p256 — Checked Public P-256 JWK Sets
+# akashic-jose-jwks-p256 — Checked Public P-256 JWK Sets
 
 `jose/jwk-set-p256.f` validates a bounded homogeneous public-P-256 JWK Set
 and selects one key by decoded `kid`. It is a strict selection profile for
@@ -9,7 +9,7 @@ reader.
 REQUIRE akashic/security/jose/jwk-set-p256.f
 ```
 
-`PROVIDED akashic-jose-jwk-set-p256` — requires the strict offset-only JSON
+`PROVIDED akashic-jose-jwks-p256` — requires the strict offset-only JSON
 object parser, the public P-256 JWK codec, and checked memory-span geometry.
 It has no AT Protocol, OAuth, HTTP, session, persistence, or Streams
 dependency.

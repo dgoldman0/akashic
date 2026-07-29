@@ -11,7 +11,7 @@
 \  opaque here: it is an identity, not a private key container.
 \ =====================================================================
 
-PROVIDED akashic-oauth2-client-config
+PROVIDED akashic-oauth2-cconfig
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/caller-span.f

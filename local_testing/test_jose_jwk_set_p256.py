@@ -173,7 +173,7 @@ def _assert_static_contracts() -> None:
     assert len(set(markers)) == len(markers)
     assert len(CONTRACT.name.encode("utf-8")) <= 23
 
-    assert "PROVIDED akashic-jose-jwk-set-p256" in source
+    assert "PROVIDED akashic-jose-jwks-p256" in source
     assert _requires(SOURCE) == [
         "../../utils/memory-span.f",
         "json-object.f",

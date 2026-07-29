@@ -51,7 +51,7 @@ def _assert_static_contracts() -> None:
     lowered = source.lower()
 
     assert len(FIXTURE.name) <= 23
-    assert "PROVIDED akashic-oauth2-clientmeta" in source
+    assert "PROVIDED akashic-oauth2-cmeta" in source
     assert re.findall(r"(?mi)^[ \t]*REQUIRE[ \t]+(\S+)", source) == [
         "../../utils/memory-span.f",
         "../../utils/caller-span.f",
@@ -238,7 +238,7 @@ def _assert_static_contracts() -> None:
         "structural boundary",
         "byte-for-byte equality",
         "five-kilobyte",
-        "private or symmetric",
+        "private, symmetric",
         "present empty array",
         "callback",
         "AT Protocol binder",

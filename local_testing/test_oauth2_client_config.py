@@ -50,7 +50,7 @@ def _assert_static_contracts() -> None:
     doc = DOC.read_text(encoding="utf-8")
     lowered = source.lower()
 
-    assert "PROVIDED akashic-oauth2-client-config" in source
+    assert "PROVIDED akashic-oauth2-cconfig" in source
     assert re.findall(r"(?mi)^[ \t]*REQUIRE[ \t]+(\S+)", source) == [
         "../../utils/memory-span.f",
         "../../utils/caller-span.f",

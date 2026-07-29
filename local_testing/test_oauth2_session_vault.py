@@ -112,7 +112,7 @@ def _assert_static_contracts() -> None:
             + SESSION.read_text(encoding="utf-8")
         )
     for marker in (
-        "PROVIDED oauth2-session-vault-test",
+        "PROVIDED oauth2-session-cv-test",
         "_O2SVT-RUN",
         PASS_MARKER,
         "CVAULT-INIT",
