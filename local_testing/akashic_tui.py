@@ -22034,6 +22034,32 @@ PROFILES["sandbox-stage3-desk-close"] = (
 )
 
 
+PROFILES["sandbox-desk-admission"] = Profile(
+    roots=(
+        "tui/applets/desk/sandbox-admission.f",
+        "sandbox/verifier.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - exact transient Desk sandbox admission
+ENTER-USERLAND
+." [akashic] loading exact Desk sandbox admission" CR TX-FLUSH
+REQUIRE tui/applets/desk/sandbox-admission.f
+." SBOX DESK ADMISSION LOAD PASS" CR TX-FLUSH
+""",
+    ready_markers=("SBOX DESK ADMISSION LOAD PASS",),
+    stable_markers=("SBOX DESK ADMISSION LOAD PASS",),
+    failure_markers=(
+        "SBOX DESK ADMISSION LOAD FAIL",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),
