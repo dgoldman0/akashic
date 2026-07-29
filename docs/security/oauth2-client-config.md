@@ -24,6 +24,12 @@ grant unsafe to continue, including the deployed client registration and the
 selected client-authentication and DPoP key identities. Private keys and
 credentials remain in their dedicated hardware, vault, or session owners.
 
+For ES256 client authentication and DPoP, the opaque binding can use the
+canonical address-free record provided by
+[`security/oauth2/key-p256.f`](oauth2-key-p256.md). That owner pins each role
+to a credential RID, generation, and RFC 7638 thumbprint while keeping the
+private scalar behind the credential-vault boundary.
+
 This module is not a Client ID Metadata Document parser or serializer. An
 authorization server fetches that published document, while the local
 deployment owner is responsible for ensuring this exact runtime selection is
