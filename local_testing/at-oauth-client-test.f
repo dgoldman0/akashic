@@ -218,13 +218,11 @@ CREATE _atoct-long-redirect
 
 : _atoct-expect-admitted  ( expected-status -- )
     _atoct-expected !
-    _atoct-config-snapshot
     _atoct-fill-work
     _atoct-config _atopt-profile _atoct-work
     AT-OAUTH-CLIENT-ADMIT
         _atoct-expected @ _atoct-status
-    _atoct-work-zero? _atoct-assert
-    _atoct-config-unchanged? _atoct-assert ;
+    _atoct-work-zero? _atoct-assert ;
 
 : _atoct-expect-preflight  ( expected-status -- )
     _atoct-expected !
@@ -779,6 +777,7 @@ CREATE _atoct-long-redirect
     _atopt-profile AT-OAUTH-PROFILE-INIT
         AT-OAUTH-PROFILE-S-OK _atopt-status
     1 _atoct-config OAUTH2-CLIENT-CONFIG-SIZE 1- + C!
+    \ CONFIG deliberately precedes PROFILE when both records are unusable.
     AT-OAUTH-CLIENT-S-CONFIG _atoct-expect-preflight
 
     _atopt-profile-ready
@@ -804,9 +803,24 @@ CREATE _atoct-long-redirect
     _atopt-profile-ready
     _atoct-defaults
     _atoct-config-build
-    _atoct-profile-snapshot
-    AT-OAUTH-CLIENT-S-OK _atoct-expect-admitted
-    _atoct-profile-unchanged? _atoct-assert
+    _atoct-snapshot
+    _atoct-fill-work
+    _atoct-config _atopt-profile _atoct-work
+    AT-OAUTH-CLIENT-ADMIT
+        AT-OAUTH-CLIENT-S-OK _atoct-status
+    _atoct-work-zero? _atoct-assert
+    _atoct-inputs-unchanged? _atoct-assert
+
+    _atoct-defaults
+    S" http://client.example/client.json" _atoct-client!
+    _atoct-config-build
+    _atoct-snapshot
+    _atoct-fill-work
+    _atoct-config _atopt-profile _atoct-work
+    AT-OAUTH-CLIENT-ADMIT
+        AT-OAUTH-CLIENT-S-CLIENT-ID _atoct-status
+    _atoct-work-zero? _atoct-assert
+    _atoct-inputs-unchanged? _atoct-assert
 
     _atoct-snapshot
     _atoct-fill-work

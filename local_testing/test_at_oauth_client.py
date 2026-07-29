@@ -296,21 +296,30 @@ def _assert_static_contracts() -> None:
     )
     geometry = _word_body(source, "_ATOC-GEOMETRY")
     assert geometry.count("MSPAN-OVERLAP?") == 2
-    assert "OAUTH2-CLIENT-CONFIG-VALID?" in geometry
-    assert "AT-OAUTH-PROFILE-READY?" in geometry
+    assert "AT-OAUTH-PROFILE-READY?" not in geometry
+    assert "OAUTH2-CLIENT-CONFIG-VALID?" not in source
+
+    with_config = _word_body(source, "_ATOC-WITH-CONFIG")
+    assert with_config.index(
+        "AT-OAUTH-PROFILE-READY?"
+    ) < with_config.index("_ATOC-WIPE-WORKSPACE")
 
     binding = _word_body(source, "_ATOC-BIND")
     for accessor in (
-        "OAUTH2-CLIENT-CONFIG-CLIENT-ID@",
-        "OAUTH2-CLIENT-CONFIG-REDIRECT-URI@",
-        "OAUTH2-CLIENT-CONFIG-APPLICATION-TYPE@",
+        "OAUTH2-CLIENT-VIEW-CLIENT-ID@",
+        "OAUTH2-CLIENT-VIEW-REDIRECT-URI@",
+        "OAUTH2-CLIENT-VIEW-APPLICATION-TYPE@",
     ):
         assert accessor in binding
 
-    assert "OAUTH2-CLIENT-CONFIG-SCOPE@" in source
-    assert "OAUTH2-CLIENT-CONFIG-AUTH-METHOD@" in source
-    assert "OAUTH2-CLIENT-CONFIG-AUTH-ALGORITHM@" in source
-    assert "OAUTH2-CLIENT-CONFIG-DPOP-BOUND?" in source
+    assert "OAUTH2-CLIENT-VIEW-SCOPE@" in source
+    assert "OAUTH2-CLIENT-VIEW-AUTH-METHOD@" in source
+    assert "OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@" in source
+    assert "OAUTH2-CLIENT-VIEW-DPOP-BOUND?" in source
+    assert "OAUTH2-CLIENT-CONFIG-WITH" in _word_body(
+        source, "_ATOC-ADMIT-OP"
+    )
+    assert "_O2CC" not in source
     assert "CATCH" in _word_body(source, "_ATOC-ADMIT-CALL")
     assert "_ATOC-WIPE-WORKSPACE" in _word_body(
         source, "_ATOC-FINISH"
@@ -479,6 +488,11 @@ def _run_lifecycle(timeout: float) -> int:
                     print(f"  {failure}")
                 print(raw[-4000:])
                 return 1
+            print(
+                f"AT OAuth client {stage_name}: PASS "
+                f"({report.steps:,} steps, {report.elapsed_s:.2f}s)",
+                flush=True,
+            )
 
         machine.clear_output()
         machine.send_text("x")

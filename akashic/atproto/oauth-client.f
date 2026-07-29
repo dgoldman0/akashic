@@ -47,7 +47,9 @@ REQUIRE oauth-profile.f
 \  Caller-owned transient workspace
 \ =====================================================================
 
-  0 CONSTANT _ATOCW-CONFIG
+\ ACTIVE carries the profile during callback preflight and the borrowed
+\ configuration view after readiness.  Preflight restores its original cell.
+  0 CONSTANT _ATOCW-ACTIVE
   8 CONSTANT _ATOCW-CLIENT-ID-A
  16 CONSTANT _ATOCW-CLIENT-ID-U
  24 CONSTANT _ATOCW-REDIRECT-A
@@ -72,7 +74,7 @@ REQUIRE oauth-profile.f
 176 CONSTANT _ATOCW-REVERSE
 432 CONSTANT AT-OAUTH-CLIENT-WORKSPACE-SIZE
 
-: _ATOCW.CONFIG          ( workspace -- address ) _ATOCW-CONFIG + ;
+: _ATOCW.ACTIVE          ( workspace -- address ) _ATOCW-ACTIVE + ;
 : _ATOCW.CLIENT-ID-A     ( workspace -- address )
     _ATOCW-CLIENT-ID-A + ;
 : _ATOCW.CLIENT-ID-U     ( workspace -- address )
@@ -162,12 +164,6 @@ REQUIRE oauth-profile.f
         AT-OAUTH-CLIENT-S-ALIAS _ATOC-RETURN3 EXIT
     THEN
 
-    2 PICK OAUTH2-CLIENT-CONFIG-VALID? 0= IF
-        AT-OAUTH-CLIENT-S-CONFIG _ATOC-RETURN3 EXIT
-    THEN
-    1 PICK AT-OAUTH-PROFILE-READY? 0= IF
-        AT-OAUTH-CLIENT-S-PROFILE _ATOC-RETURN3 EXIT
-    THEN
     AT-OAUTH-CLIENT-S-OK _ATOC-RETURN3 ;
 
 \ =====================================================================
@@ -723,12 +719,7 @@ REQUIRE oauth-profile.f
 
 : _ATOC-SCOPE-POLICY  ( workspace -- status )
     >R
-    R@ _ATOCW.CONFIG @ OAUTH2-CLIENT-CONFIG-SCOPE@
-    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
-        >R 2DROP R> DROP R> DROP
-        AT-OAUTH-CLIENT-S-INTERNAL EXIT
-    THEN
-    DROP
+    R@ _ATOCW.ACTIVE @ OAUTH2-CLIENT-VIEW-SCOPE@
     _ATOC-ATPROTO-SCOPE? IF
         R> DROP AT-OAUTH-CLIENT-S-OK
     ELSE
@@ -737,12 +728,7 @@ REQUIRE oauth-profile.f
 
 : _ATOC-AUTH-POLICY  ( workspace -- status )
     >R
-    R@ _ATOCW.CONFIG @ OAUTH2-CLIENT-CONFIG-AUTH-METHOD@
-    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
-        >R 2DROP R> DROP R> DROP
-        AT-OAUTH-CLIENT-S-INTERNAL EXIT
-    THEN
-    DROP
+    R@ _ATOCW.ACTIVE @ OAUTH2-CLIENT-VIEW-AUTH-METHOD@
     R@ _ATOCW.APPLICATION @
     OAUTH2-CLIENT-CONFIG-APPLICATION-NATIVE = IF
         2DUP S" none" COMPARE 0= 0= IF
@@ -752,13 +738,8 @@ REQUIRE oauth-profile.f
     THEN
     2DUP S" none" COMPARE 0= IF
         2DROP
-        R@ _ATOCW.CONFIG @
-            OAUTH2-CLIENT-CONFIG-AUTH-ALGORITHM@
-        DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
-            >R 2DROP R> DROP R> DROP
-            AT-OAUTH-CLIENT-S-INTERNAL EXIT
-        THEN
-        DROP
+        R@ _ATOCW.ACTIVE @
+            OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@
         DUP 0= IF
             2DROP R> DROP AT-OAUTH-CLIENT-S-OK
         ELSE
@@ -770,12 +751,7 @@ REQUIRE oauth-profile.f
         R> DROP AT-OAUTH-CLIENT-S-AUTH-METHOD EXIT
     THEN
 
-    R@ _ATOCW.CONFIG @ OAUTH2-CLIENT-CONFIG-AUTH-ALGORITHM@
-    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
-        >R 2DROP R> DROP R> DROP
-        AT-OAUTH-CLIENT-S-INTERNAL EXIT
-    THEN
-    DROP
+    R@ _ATOCW.ACTIVE @ OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@
     S" ES256" COMPARE 0= IF
         R> DROP AT-OAUTH-CLIENT-S-OK
     ELSE
@@ -783,11 +759,7 @@ REQUIRE oauth-profile.f
     THEN ;
 
 : _ATOC-DPOP-POLICY  ( workspace -- status )
-    _ATOCW.CONFIG @ OAUTH2-CLIENT-CONFIG-DPOP-BOUND?
-    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
-        2DROP AT-OAUTH-CLIENT-S-INTERNAL EXIT
-    THEN
-    DROP
+    _ATOCW.ACTIVE @ OAUTH2-CLIENT-VIEW-DPOP-BOUND?
     IF AT-OAUTH-CLIENT-S-OK
     ELSE AT-OAUTH-CLIENT-S-DPOP THEN ;
 
@@ -795,38 +767,23 @@ REQUIRE oauth-profile.f
 \  Binding, policy execution, and public entry point
 \ =====================================================================
 
-: _ATOC-BIND  ( config profile workspace -- status )
+: _ATOC-BIND  ( view workspace -- workspace )
     >R
-    DROP
-    DUP R@ _ATOCW.CONFIG !
+    DUP R@ _ATOCW.ACTIVE !
 
-    DUP OAUTH2-CLIENT-CONFIG-CLIENT-ID@
-    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
-        >R 2DROP DROP R> DROP R> DROP
-        AT-OAUTH-CLIENT-S-INTERNAL EXIT
-    THEN
-    DROP
+    DUP OAUTH2-CLIENT-VIEW-CLIENT-ID@
     DUP R@ _ATOCW.CLIENT-ID-U !
     OVER R@ _ATOCW.CLIENT-ID-A !
     2DROP
 
-    DUP OAUTH2-CLIENT-CONFIG-REDIRECT-URI@
-    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
-        >R 2DROP DROP R> DROP R> DROP
-        AT-OAUTH-CLIENT-S-INTERNAL EXIT
-    THEN
-    DROP
+    DUP OAUTH2-CLIENT-VIEW-REDIRECT-URI@
     DUP R@ _ATOCW.REDIRECT-U !
     OVER R@ _ATOCW.REDIRECT-A !
     2DROP
 
-    OAUTH2-CLIENT-CONFIG-APPLICATION-TYPE@
-    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
-        2DROP R> DROP AT-OAUTH-CLIENT-S-INTERNAL EXIT
-    THEN
-    DROP
+    OAUTH2-CLIENT-VIEW-APPLICATION-TYPE@
     R@ _ATOCW.APPLICATION !
-    R> DROP AT-OAUTH-CLIENT-S-OK ;
+    R> ;
 
 : _ATOC-POLICY  ( workspace -- status )
     DUP _ATOC-CLIENT-ID? 0= IF
@@ -847,15 +804,57 @@ REQUIRE oauth-profile.f
     R@ _ATOC-WIPE-WORKSPACE
     R> DROP ;
 
-: _ATOC-FINISH3  ( config profile workspace status -- status )
-    >R NIP NIP R> SWAP _ATOC-FINISH ;
+: _ATOC-WITH-CONFIG  ( view workspace -- status )
+    DUP _ATOCW.ACTIVE @ AT-OAUTH-PROFILE-READY? 0= IF
+        2DROP AT-OAUTH-CLIENT-S-PROFILE EXIT
+    THEN
+    DUP _ATOC-WIPE-WORKSPACE
+    _ATOC-BIND
+    DUP _ATOC-POLICY
+    SWAP _ATOC-FINISH ;
+
+: _ATOC-CONFIG>STATUS  ( config-status -- status )
+    DUP OAUTH2-CLIENT-CONFIG-S-INVALID = IF
+        DROP AT-OAUTH-CLIENT-S-CONFIG EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-RANGE = IF
+        DROP AT-OAUTH-CLIENT-S-RANGE EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-PROTECTED = IF
+        DROP AT-OAUTH-CLIENT-S-PROTECTED EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-PLATFORM = IF
+        DROP AT-OAUTH-CLIENT-S-PLATFORM EXIT
+    THEN
+    DROP AT-OAUTH-CLIENT-S-INTERNAL ;
 
 : _ATOC-ADMIT-OP  ( config profile workspace -- status )
-    DUP _ATOC-WIPE-WORKSPACE
-    2 PICK 2 PICK 2 PICK _ATOC-BIND
-    ?DUP IF _ATOC-FINISH3 EXIT THEN
-    DUP _ATOC-POLICY
-    _ATOC-FINISH3 ;
+    \ Preserve the caller's active cell while it carries profile context.
+    DUP >R
+    DUP _ATOCW.ACTIVE @ >R
+    1 PICK OVER _ATOCW.ACTIVE !
+    NIP
+    ['] _ATOC-WITH-CONFIG SWAP
+    OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-OK = IF
+        DROP
+        DUP AT-OAUTH-CLIENT-S-PROFILE = IF
+            R> R@ _ATOCW.ACTIVE !
+        ELSE
+            R> DROP
+        THEN
+        R> DROP EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-CALLBACK = IF
+        2DROP
+        R> DROP
+        R@ _ATOC-WIPE-WORKSPACE
+        R> DROP
+        AT-OAUTH-CLIENT-S-INTERNAL EXIT
+    THEN
+    NIP _ATOC-CONFIG>STATUS
+    R> R@ _ATOCW.ACTIVE !
+    R> DROP ;
 
 : _ATOC-ADMIT-CALL  ( config profile workspace operation-xt -- status )
     1 PICK >R

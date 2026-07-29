@@ -31,9 +31,17 @@ structurally valid, ready `AT-OAUTH-PROFILE`. The 432-byte workspace must not
 overlap either input.
 
 Geometry, alias, invalid-config, and non-ready-profile failures are preflight
-failures and leave the workspace unchanged. Once geometry is admitted, every
-normal or thrown path wipes the complete workspace. The configuration and
+failures and leave the workspace unchanged. After fixed-span and alias
+admission, configuration-record validation deliberately precedes profile
+readiness, so `AT-OAUTH-CLIENT-S-CONFIG` wins when both records are unusable.
+Once both records are admitted, every normal result wipes the complete
+workspace; a thrown callback path wipes it as well. The configuration and
 profile are read-only on every path.
+
+The adapter consumes the generic configuration through
+`OAUTH2-CLIENT-CONFIG-WITH`: the complete 11,072-byte immutable record is
+validated once per admission, then its callback-scoped borrowed view supplies
+the selected fields without repeated whole-record scans.
 
 ## Local AT policy
 
