@@ -118,11 +118,16 @@ The authorization, token, and PAR target accessors become available only in
 `READY`. All returned strings and targets are borrowed from the profile and
 remain valid until reinitialization or wipe.
 
-## Remaining boundaries
+## HTTP-resource composition
 
-The HTTP adapter must independently require exact status `200`,
-`application/json`, zero redirects, and an exact requested-target match before
-calling either metadata transition.
+The
+[generic HTTP-resource adapter](oauth-profile-http-resource.md)
+independently requires exact status `200`, `application/json`, zero redirects,
+and exact requested and effective target matches before parsing and calling
+either metadata transition. Its transient parser storage is caller-owned and
+is wiped after each admitted submission.
+
+## Remaining boundaries
 
 Later composition must still bind the token response to this profile: the
 token type must be DPoP, granted scope must contain `atproto`, and the token

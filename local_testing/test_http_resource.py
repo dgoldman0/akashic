@@ -93,6 +93,7 @@ def _assert_static_contracts() -> None:
         "HRES-MEDIA-REQUIRED",
         "HRES-MEDIA-IGNORED",
         "HRES-RESULT-VALID?",
+        "HRES-BODY-STORAGE@",
         "HRES-MEDIA@",
         "HRES-D-REDIRECT-POLICY",
     ):
@@ -120,6 +121,7 @@ def _assert_static_contracts() -> None:
         "_hrc-test-configured-final-policy",
         "_hrc-test-authority-policy",
         "mutated.example.test",
+        "HRES-BODY-STORAGE@",
         "HRES-XERR-FAULT",
         "HTTP RESOURCE CONTRACTS PASS",
     ):

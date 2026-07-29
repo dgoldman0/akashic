@@ -17,6 +17,7 @@ REQUIRE did-document.f \ strict caller-owned AT Protocol identity profile
 REQUIRE identity.f \ caller-owned handle/DID/PDS discovery coordinator
 REQUIRE identity-hres.f \ identity over generic HTTPS resources
 REQUIRE oauth-profile.f \ exact PDS-to-OAuth issuer trust-chain profile
+REQUIRE oauth-profile-hres.f \ OAuth discovery over HTTPS resources
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -29,6 +30,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 `akashic-atproto-handle` / `akashic-tid` /
 `akashic-atproto-diddoc` / `akashic-atproto-identity` /
 `akashic-atid-hres` / `akashic-at-oauth-prof` /
+`akashic-at-oauth-hres` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
@@ -45,6 +47,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [Identity discovery — identity.f](#identity-discovery--identityf)
 - [Identity HTTP composition — identity-hres.f](#identity-http-composition--identity-hresf)
 - [OAuth discovery profile — oauth-profile.f](#oauth-discovery-profile--oauth-profilef)
+- [OAuth HTTP composition — oauth-profile-hres.f](#oauth-http-composition--oauth-profile-hresf)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
@@ -200,6 +203,23 @@ ready.
 The profile owns no transport, browser, token, DPoP, session, XRPC, or Streams
 state. A separate HTTP-resource adapter supplies metadata responses under the
 required exact-200, JSON, and no-redirect policy.
+
+## OAuth HTTP composition — oauth-profile-hres.f
+
+The
+[state-free HTTP-resource adapter](oauth-profile-http-resource.md)
+connects admitted generic `HRES` results to the OAuth discovery profile. It
+uses one caller-owned transient workspace for the generic protected-resource
+and authorization-server metadata parsers, independently rechecks the exact
+requested and effective targets, status 200, zero redirects, and
+`application/json`, and submits only successful parses to the trust-chain
+state machine.
+
+HTTP-envelope and parse failures leave the pending discovery phase retryable.
+Successfully parsed resource, issuer, capability, or endpoint violations are
+terminal profile failures. DNS, public-address admission, authenticated TLS,
+and port-lease ownership remain responsibilities of the caller's `HRES` bind
+provider.
 
 ---
 

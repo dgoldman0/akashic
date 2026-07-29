@@ -528,6 +528,9 @@ VARIABLE _hrc-policy-media
     _hrc-resource HRES-HTTP-STATUS@ 200 = _hrc-assert
     _hrc-resource HRES-RESULT-VALID? _hrc-assert
     _hrc-resource HRES-BODY@ S" hello" STR-STR= _hrc-assert
+    _hrc-resource HRES-BODY-STORAGE@
+        _hrc-body-cap @ = _hrc-assert
+        _hrc-body = _hrc-assert
     _hrc-resource HRES-ETAG@ _hrc-assert
         S" v1" STR-STR= _hrc-assert
     _hrc-resource HRES-LAST-MODIFIED@ _hrc-assert

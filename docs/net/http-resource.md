@@ -175,6 +175,14 @@ An admitted result provides:
 - the exact admitted caller-owned body; and
 - separate primary, transport/parser/policy/provider, and cleanup diagnostics.
 
+`HRES-BODY@` returns only the admitted body bytes. `HRES-BODY-STORAGE@`
+returns the complete borrowed response-buffer address and configured capacity.
+Protocol adapters which own mutable parser or scratch storage must use the
+storage view when proving complete ownership disjointness; checking only the
+used body bytes can miss an alias in the unused tail. Both views remain
+borrowed from the caller and are valid only while the configured resource and
+its body buffer remain alive.
+
 The consuming protocol adapter still owns payload syntax, charset policy, and
 any durable commit. Required media mode is appropriate when Content-Type is
 part of that protocol's admission contract. Ignored mode is appropriate only
