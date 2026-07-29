@@ -86,8 +86,9 @@ Landing 3 currently includes:
 - `6a5f176` — AT OAuth client-selection policy;
 - `b1bb0ad` — generic single-validation OAuth client views;
 - `3cedab0` — single-validation AT OAuth client selection;
-- `a88a655` — structural OAuth Client ID Metadata Document parsing; and
-- `ff5bbbd` — caller-owned AT OAuth deployment binding.
+- `a88a655` — structural OAuth Client ID Metadata Document parsing;
+- `ff5bbbd` — caller-owned AT OAuth deployment binding; and
+- `73ba6a3` — checked public P-256 JWK Set selection.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -97,14 +98,19 @@ client identity, application defaults, exact grant and response sets,
 selected and all-declared redirects, scope subsets, explicit authentication,
 ES256, DPoP, and inline-versus-remote key-source policy.
 
-The remaining closeout begins with a bounded checked JWK Set layer over the
-existing strict public P-256 JWK codec. It must qualify both inline and
-remotely acquired sets, reject private and symmetric material, apply
-client-authentication key-selection policy, and bind the selected public key
-to the locally owned private-key identity. A bounded HTTPS acquisition owner
-must then prove the Client Identifier and `jwks_uri` transport provenance
-that a structural parser cannot establish. After that, production composition
-must drive PAR/PKCE and the authorization response, perform DPoP-aware token
+`73ba6a3` completes the generic checked JWK Set boundary. It validates the
+complete bounded set, rejects private, symmetric, certificate-linked, and
+uninterpreted time/revocation metadata, enforces the public ES256 profile,
+selects one globally unique decoded `kid`, and publishes the public key plus
+RFC 7638 thumbprint from caller-owned scratch.
+
+The remaining closeout begins by applying that selector to both the borrowed
+inline `jwks` token and bounded remotely acquired bodies, then binding the
+selected public identity to the locally owned private key while keeping it
+distinct from each session's DPoP key. A bounded HTTPS acquisition owner must
+also prove the Client Identifier and `jwks_uri` transport provenance that a
+structural parser cannot establish. After that, production composition must
+drive PAR/PKCE and the authorization response, perform DPoP-aware token
 exchange and nonce retry, admit the grant into the durable generic session,
 and prove cold recovery, refresh rotation, logout,
 revocation/reauthorization, cancellation, and complete cleanup. Existing
@@ -117,9 +123,9 @@ At preparation time:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  ff5bbbd (Bind AT OAuth Client ID metadata to deployments)
+code base:  73ba6a3 (Add checked public P-256 JWK Set selection)
 record:     this handoff is committed immediately after that code base
-upstream:   origin/main at fa10ad7
+upstream:   origin/main at 50adcca
 ahead:      2 commits after committing this record
 tests:      no test process running
 ```
@@ -128,18 +134,22 @@ There is no current SR4-owned uncommitted work. The two latest qualified
 milestones are:
 
 ```text
-a88a655 Add structural OAuth Client ID Metadata parsing
 ff5bbbd Bind AT OAuth Client ID metadata to deployments
+73ba6a3 Add checked public P-256 JWK Set selection
 ```
 
-`a88a655` added the bounded generic structural parser used by the deployment
-binder. `ff5bbbd` added `AT-OAUTH-DEPLOYMENT-WITH` and the borrowed-view AT
-client hooks that let the binder retain one generic configuration validation.
-The new adapter is state-free, uses a caller-owned 53,760-byte workspace, and
+`ff5bbbd` added `AT-OAUTH-DEPLOYMENT-WITH` and the borrowed-view AT client
+hooks that let the binder retain one generic configuration validation. The
+adapter is state-free, uses a caller-owned 53,760-byte workspace, and
 preserves explicit preflight precedence, source immutability, callback
-lifetimes, and deterministic cleanup. It deliberately does not claim HTTP
-provenance, validate a complete JWK Set, acquire `jwks_uri`, or prove
-private-key possession; those are now the next production boundary.
+lifetimes, and deterministic cleanup.
+
+`73ba6a3` added `JOSE-JWK-SET-P256-SELECT`, its caller-owned 39,528-byte
+workspace, the lower JWK caller-span composition boundary, strict whole-set
+policy, documentation, and deterministic qualification. The deployment
+binder still does not invoke it, acquire `jwks_uri`, prove HTTP provenance, or
+prove private-key possession; that composition is now the next production
+boundary.
 
 The following files are preserved unrelated user/old-L13 work. Do not stage,
 restore, rewrite, or delete them as part of SR4:
@@ -208,6 +218,16 @@ Completed evidence:
   canaries, preflight contents, and full cleanup. Its largest phase was
   authentication/DPoP/key-source policy at 136,751,108 steps, below the same
   checked-in ceiling.
+- The exact source committed at `73ba6a3` passed the new JWK Set static gate,
+  the existing JWK codec static gate, all 9 staged loads, 6 contract groups,
+  and the finish marker in 584,366,923 guest steps and 498.30 summed stage
+  seconds on one core with 128 MiB of external machine memory. It covered
+  independent key/thumbprint vectors, first/middle/last and escaped-`kid`
+  selection, nested JSON traps, full-set late rejection, current
+  sensitive/unsupported parameter policy, decoded-`kid` ambiguity, alias and
+  protected-span admission, input/output canaries, mandatory cleanup, exact
+  32-key success, and 33-key capacity rejection. Every phase stayed below its
+  checked-in 300,000,000-step ceiling.
 
 The 16-minute-52-second result is a complete staged module-load and contract
 qualification, not the measured latency of one OAuth admission or one network
@@ -225,34 +245,30 @@ delta. Do not run another suite or a test subagent concurrently.
 1. Read `AGENTS.md`, this record,
    `docs/atproto/oauth-deployment.md`,
    `docs/security/oauth2-client-metadata.md`, and
-   `docs/security/jose-jwk-p256.md`. Treat `ff5bbbd` as local structural and
-   semantic deployment admission, not as checked key or transport evidence.
-2. Add a bounded caller-owned generic JWK Set parser/selector that composes
-   `JOSE-JWK-P256-PUBLIC-PARSE` for each candidate. Enforce the selected
-   client-authentication `kid`, `use`, `alg`, and `key_ops` policy above the
-   binary codec; reject empty or ambiguous selections and every private,
-   symmetric, non-EC, non-P-256, or otherwise unusable key without retaining
-   borrowed JSON views.
-3. Apply that same checked set boundary to inline `jwks` and bounded
+   `docs/security/jose-jwk-p256.md`, and
+   `docs/security/jose-jwk-set-p256.md`. Treat `ff5bbbd` as local structural
+   and semantic deployment admission and `73ba6a3` as checked public-set
+   selection; neither proves transport provenance or private-key possession.
+2. Apply the checked set boundary to inline `jwks` and bounded
    `jwks_uri` bodies. Resolve the configuration's opaque binding through the
    durable private-key owner, compare the recovered public identity or RFC
    7638 thumbprint with the selected published key, and keep the
    client-authentication and per-session DPoP key identities distinct.
-4. Build the bounded HTTP-resource acquisition adapter around
+3. Build the bounded HTTP-resource acquisition adapter around
    `AT-OAUTH-DEPLOYMENT-WITH`. Require exact requested/effective target
    equality, status 200, zero redirects, accepted JSON media type, response
    bounds, HTTPS hostname verification, public-address/SSRF admission,
    deadlines, and truthful lease cleanup for both the Client Identifier and
    `jwks_uri`.
-5. Qualify JWK Set parsing and acquisition with cheap static gates first,
-   then sequential deterministic fixtures. Preserve exact preflight contents,
-   borrowed-view lifetimes, source immutability, workspace canaries, cleanup,
-   and explicit error precedence.
-6. Close landing 3 with production PAR/PKCE, authorization-response,
+4. Qualify the deployment/key-owner composition and acquisition with cheap
+   static gates first, then sequential deterministic fixtures. Preserve exact
+   preflight contents, borrowed-view lifetimes, source immutability, workspace
+   canaries, cleanup, and explicit error precedence.
+5. Close landing 3 with production PAR/PKCE, authorization-response,
    DPoP/token/nonce, durable install/recovery/refresh/logout, cancellation, and
    reauthorization composition. Do not begin XRPC, repository/blob,
    subscription, and Streams wiring simultaneously.
-7. Return for a landing-boundary status report, then begin landing 4 by
+6. Return for a landing-boundary status report, then begin landing 4 by
    replacing—not wrapping—the global XRPC/session/repository prototypes.
 
 No live credential, account, public client metadata deployment, redirect
