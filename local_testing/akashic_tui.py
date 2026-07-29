@@ -10205,6 +10205,7 @@ AGENT-RUN
 """,
         ready_markers=("Agent", "Run", "Review", "Ready"),
         stable_markers=("Agent", "Run", "Review", "Ready"),
+        linked=True,
     ),
     "agent-auth-ui": Profile(
         roots=(
@@ -10252,6 +10253,7 @@ AGENT-RUN
 """,
         ready_markers=("Agent", "Connection", "Sign-in required"),
         stable_markers=("Agent", "Connection"),
+        linked=True,
     ),
     "uidl-lifecycle": Profile(
         roots=("tui/uidl-tui.f",),
@@ -18619,6 +18621,7 @@ PROFILES["agent-layout-ui"] = Profile(
     ),
     ready_markers=PROFILES["agent-ui"].ready_markers,
     stable_markers=PROFILES["agent-ui"].stable_markers,
+    linked=PROFILES["agent-ui"].linked,
 )
 
 PROFILES["agent-applet-capabilities"] = Profile(
@@ -21847,6 +21850,84 @@ REQUIRE local_testing/sbox-stage2-vertical.f
     ),
 )
 
+
+def _sandbox_stage3_fixture_bytes() -> bytes:
+    source = (
+        AKASHIC_ROOT / "local_testing" /
+        "sandbox-stage3-agent-operations.f"
+    ).read_text(encoding="utf-8")
+    lines: list[str] = []
+    for source_line in source.splitlines():
+        line = source_line.lstrip(" ")
+        if not line or line.startswith("\\"):
+            continue
+        match = COLON_STACK_EFFECT_RE.match(source_line)
+        if match:
+            suffix = source_line[match.end() :].lstrip(" ")
+            line = match.group("head").lstrip(" ")
+            if suffix:
+                line += " " + suffix
+        lines.append(line)
+    return "".join(line + "\n" for line in lines).encode("utf-8")
+
+
+def _sandbox_stage3_agent_profile(
+    entry_word: str,
+    marker: str,
+) -> Profile:
+    return Profile(
+        roots=("tui/applets/agent/sandbox-operations.f",),
+        resources=(),
+        autoexec=rf"""\ autoexec.f - explicit Stage 3 Agent sandbox operations
+ENTER-USERLAND
+1 CONSTANT SBOX-STAGE3-DEFER-AUTORUN
+." [akashic] loading Stage 3 Agent sandbox operations" CR TX-FLUSH
+REQUIRE tui/applets/agent/sandbox-operations.f
+REQUIRE local_testing/sbox-s3-agent-ops.f
+{entry_word}
+""",
+        ready_markers=(f"{marker} PASS",),
+        stable_markers=(f"{marker} PASS",),
+        failure_markers=(
+            f"{marker} FAIL",
+            "SBOX STAGE3 AGENT ASSERT",
+            "SBOX STAGE3 AGENT STACK",
+            "? (not found)",
+            "Branch offset overflow",
+            "dictionary full",
+            "exception",
+        ),
+        linked=True,
+        include_large_sample=False,
+        initial_files=(
+            (
+                "local_testing/sbox-s3-agent-ops.f",
+                _sandbox_stage3_fixture_bytes(),
+            ),
+        ),
+    )
+
+
+PROFILES["sandbox-stage3-agent-operations"] = (
+    _sandbox_stage3_agent_profile(
+        "_S3A-COMPILE-VERIFY-RUN",
+        "SBOX STAGE3 AGENT COMPILE VERIFY",
+    )
+)
+
+PROFILES["sandbox-stage3-agent-test"] = (
+    _sandbox_stage3_agent_profile(
+        "_S3A-TEST-RUN",
+        "SBOX STAGE3 AGENT TEST",
+    )
+)
+
+PROFILES["sandbox-stage3-agent-invoke"] = (
+    _sandbox_stage3_agent_profile(
+        "_S3A-INVOKE-RUN",
+        "SBOX STAGE3 AGENT INVOKE",
+    )
+)
 
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),

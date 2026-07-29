@@ -11,5 +11,6 @@ PROVIDED akashic-tui-agent-service
 
 REQUIRE runtime.f
 REQUIRE mandate-run.f
+REQUIRE sandbox-operations.f
 REQUIRE providers/offline.f
 REQUIRE storage/vfs-conversation.f
