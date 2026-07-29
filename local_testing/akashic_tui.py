@@ -21738,6 +21738,40 @@ REQUIRE local_testing/sbox-signature-test.f
 )
 
 
+PROFILES["sandbox-value-contracts"] = Profile(
+    roots=("sandbox/value.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - canonical Stage 2 sandbox value contracts
+ENTER-USERLAND
+." [akashic] loading sandbox value contracts" CR TX-FLUSH
+REQUIRE sandbox/value.f
+REQUIRE local_testing/sbox-value-contracts.f
+""",
+    ready_markers=("SBOX VALUE CONTRACTS PASS",),
+    stable_markers=("SBOX VALUE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX VALUE CONTRACTS FAIL",
+        "SBOX VALUE ASSERT",
+        "SBOX VALUE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-value-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-value-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),
