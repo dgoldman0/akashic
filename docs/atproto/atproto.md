@@ -18,6 +18,7 @@ REQUIRE identity.f \ caller-owned handle/DID/PDS discovery coordinator
 REQUIRE identity-hres.f \ identity over generic HTTPS resources
 REQUIRE oauth-profile.f \ exact PDS-to-OAuth issuer trust-chain profile
 REQUIRE oauth-profile-hres.f \ OAuth discovery over HTTPS resources
+REQUIRE oauth-client.f \ AT policy over generic OAuth client configuration
 REQUIRE oauth-grant.f \ AT token policy over generic OAuth grants
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
@@ -31,7 +32,8 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 `akashic-atproto-handle` / `akashic-tid` /
 `akashic-atproto-diddoc` / `akashic-atproto-identity` /
 `akashic-atid-hres` / `akashic-at-oauth-prof` /
-`akashic-at-oauth-hres` / `akashic-at-oauth-grant` /
+`akashic-at-oauth-hres` / `akashic-at-oauth-client` /
+`akashic-at-oauth-grant` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
@@ -49,6 +51,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [Identity HTTP composition — identity-hres.f](#identity-http-composition--identity-hresf)
 - [OAuth discovery profile — oauth-profile.f](#oauth-discovery-profile--oauth-profilef)
 - [OAuth HTTP composition — oauth-profile-hres.f](#oauth-http-composition--oauth-profile-hresf)
+- [OAuth client policy — oauth-client.f](#oauth-client-policy--oauth-clientf)
 - [OAuth token-grant admission — oauth-grant.f](#oauth-token-grant-admission--oauth-grantf)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
@@ -222,6 +225,17 @@ Successfully parsed resource, issuer, capability, or endpoint violations are
 terminal profile failures. DNS, public-address admission, authenticated TLS,
 and port-lease ownership remain responsibilities of the caller's `HRES` bind
 provider.
+
+## OAuth client policy — oauth-client.f
+
+The [AT OAuth client-selection adapter](oauth-client.md) qualifies an immutable
+generic OAuth client configuration against the AT client profile and a ready
+OAuth discovery profile. It enforces production client-ID, redirect, scope,
+client-authentication, and DPoP declarations without owning metadata transport,
+keys, browser state, tokens, sessions, XRPC, or Streams state.
+
+The adapter uses one 432-byte caller-owned transient workspace and wipes it
+after every geometrically admitted result.
 
 ## OAuth token-grant admission — oauth-grant.f
 
