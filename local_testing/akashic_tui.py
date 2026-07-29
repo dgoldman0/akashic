@@ -21806,6 +21806,48 @@ REQUIRE local_testing/sbox-mod-owner-test.f
 )
 
 
+PROFILES["sandbox-stage2-vertical"] = Profile(
+    roots=(
+        "runtime/sandbox-module-owner.f",
+        "runtime/sandbox-host.f",
+        "sandbox/compiler.f",
+        "sandbox/verifier.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - focused sandbox Stage 2 composition gate
+ENTER-USERLAND
+." [akashic] loading sandbox Stage 2 vertical" CR TX-FLUSH
+REQUIRE runtime/sandbox-module-owner.f
+REQUIRE runtime/sandbox-host.f
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-stage2-vertical.f
+""",
+    ready_markers=("SBOX STAGE2 VERTICAL PASS",),
+    stable_markers=("SBOX STAGE2 VERTICAL PASS",),
+    failure_markers=(
+        "SBOX STAGE2 VERTICAL FAIL",
+        "SBOX STAGE2 ASSERT",
+        "SBOX STAGE2 STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-stage2-vertical.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-stage2-vertical.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),

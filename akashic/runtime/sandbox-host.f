@@ -138,9 +138,9 @@ REQUIRE ../sandbox/vm.f
     DUP _SHI.TEMP-LIMITS @ IF DROP 0 EXIT THEN
     DROP -1 ;
 
-\ A child may retain trusted Practice/owner/policy metadata copied by
-\ CTX-CHILD-NEW.  These are the authority-bearing surfaces that must remain
-\ absent from a sandbox activation.
+\ A child may retain trusted host-only Practice/owner/policy metadata copied
+\ by CTX-CHILD-NEW.  The guest cannot reach that Context.  The service and
+\ capability surfaces checked below must remain absent from the activation.
 : _SHOST-CHILD-EMPTY?  ( child -- flag )
     DUP CTX-VALID? 0= IF DROP 0 EXIT THEN
     DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0<> 

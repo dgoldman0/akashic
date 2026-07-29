@@ -19,6 +19,7 @@ from forth_dependencies import dependency_closure  # noqa: E402
 
 OWNER = Path("runtime/sandbox-module-owner.f")
 HOST = Path("runtime/sandbox-host.f")
+VERTICAL = Path("sandbox-stage2-vertical.f")
 
 
 def test_module_owner_is_above_the_neutral_sandbox() -> None:
@@ -85,3 +86,19 @@ def test_invocation_host_is_per_run_and_uses_exact_vm_ownership() -> None:
     assert "SBOX-HOST-RELEASE" in host
     assert "SBOX-VM-INSTANCE-BOUND?" in host
     assert ": SBOX-VM-INSTANCE-BOUND?" in vm
+
+
+def test_stage2_vertical_composes_two_exact_isolated_modules() -> None:
+    harness = (LOCAL_TESTING / "akashic_tui.py").read_text(encoding="utf-8")
+    vertical = (LOCAL_TESTING / VERTICAL).read_text(encoding="utf-8")
+
+    assert 'PROFILES["sandbox-stage2-vertical"]' in harness
+    assert "runtime/sandbox-module-owner.f" in harness
+    assert "runtime/sandbox-host.f" in harness
+    assert vertical.count("SBOX-MODULE-OWNER-ADD") == 2
+    assert vertical.count("SBOX-HOST-INIT") == 2
+    assert "_S2V-SOURCE-ECHO" in vertical
+    assert "_S2V-SOURCE-INCREMENT" in vertical
+    assert "SBOX-MODULE-OWNER-S-STALE-REVISION" in vertical
+    assert "SBOX-HOST-CONTEXT-IDENTITY@" in vertical
+    assert "SBOX STAGE2 VERTICAL PASS" in vertical
