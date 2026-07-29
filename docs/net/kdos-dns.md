@@ -62,7 +62,17 @@ substitute for transaction-ID freshness.
 
 The descriptor owns all retained query, response, question-binding, TCP
 framing, deadline, and diagnostic state. Module variables are transient KDOS
-call scratch, so calls into this adapter must still be serialized.
+call scratch. The shared
+[KDOS network owner](kdos-network-owner.md) serializes every participating
+machine-global network transport.
+
+All mutating lifecycle entries—`KDOSDNS-INIT`, `KDOSDNS-START`,
+`KDOSDNS-POLL`, `KDOSDNS-CANCEL`, and `KDOSDNS-WIPE`—are core-0-only and return
+`KDOSDNS-S-PLATFORM` before touching module scratch when called from another
+core. Read-only descriptor and owner queries remain available on every core.
+The configurable clock and step callbacks are non-reentrant transport
+callbacks. Start and poll reject a nested invocation, and revalidate exact
+operational authority after each callback before continuing.
 
 ## Cooperative exchange
 
@@ -128,12 +138,13 @@ not by themselves establish a platform-independent real-time ceiling.
 
 ## Cancellation, erasure, and ownership
 
-`KDOSDNS-CANCEL` aborts a live matching TCB when necessary, releases the module
+`KDOSDNS-CANCEL` aborts a live matching TCB when necessary, releases the shared
 owner, clears all transaction and response material, and leaves a valid
-cancelled descriptor. If lower cleanup throws or ownership cannot be proven,
-it returns `KDOSDNS-S-CLEANUP` without erasing the state needed to retry
-cleanup. A failure reached through polling follows the same rule: uncertain
-TCP cleanup retains the owner and TCB fingerprint.
+cancelled descriptor. If lower cleanup throws, the exact shared owner cannot
+be proven, or owner release fails, it returns `KDOSDNS-S-CLEANUP` without
+erasing the state needed to retry cleanup. A failure reached through polling
+follows the same rule: uncertain TCP cleanup retains the owner and TCB
+fingerprint.
 
 `KDOSDNS-WIPE` first performs that cancellation contract, then zeros the entire
 response arena and descriptor. It refuses to erase either span after
@@ -141,11 +152,15 @@ response arena and descriptor. It refuses to erase either span after
 initialized before reuse.
 
 KDOS has machine-global NIC receive storage, ARP state, TCP tables, transmit
-scratch, and network configuration. `_KDOSDNS-OWNER` therefore allows one
-active `kdos-dns` adapter at a time. That gate coordinates only instances of
-this module: a machine composition must also serialize every other KDOS NIC
-reader and TCP consumer, including `kdos-tls`. It is not safe to let two
-independent network pumps consume frames concurrently.
+scratch, and network configuration. `KDOSDNS-START` therefore claims the
+generic core-0 `KDOSNET` owner with the exact caller-owned adapter token. An
+active `kdos-dns` exchange excludes both another DNS exchange and `kdos-tls`;
+either direction reports busy before consuming a frame or mutating shared
+network state. Successful completion or proven cancellation releases the
+token. Uncertain cleanup deliberately quarantines it. Ownership identity is
+readable on every core so initialization cannot mistake an off-core query for
+detachment, while operational authority additionally requires core 0 before
+any frame admission, TCP abort, or other lower mutation.
 
 ## Resolver boundary
 

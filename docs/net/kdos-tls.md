@@ -2,8 +2,8 @@
 
 `akashic/net/transports/kdos-tls.f` binds Akashic's caller-owned `NIO`
 byte-stream port to KDOS DNS, TCP, and authenticated TLS 1.3 services.
-It contains no HTTP, credential, Agent, provider, Desk, TUI, emulator, or host
-bridge code.
+It contains no HTTP, credential, application, user-interface, emulator, or
+host-bridge code.
 
 ```forth
 REQUIRE net/transports/kdos-tls.f
@@ -15,7 +15,7 @@ REQUIRE net/transports/kdos-tls.f
 CREATE transport KDOSTLS-SIZE ALLOT
 
 transport KDOSTLS-INIT
-S" api.openai.com" 443 transport KDOSTLS-CONFIGURE THROW
+S" example.com" 443 transport KDOSTLS-CONFIGURE THROW
 
 \ Optional only for a separately reviewed policy. The default is public IPv4.
 policy-context ['] my-address-policy transport KDOSTLS-ADDRESS-POLICY! THROW
@@ -38,6 +38,22 @@ open remains deliberately blocking and may enter `NET-IDLE` between at most
 polls and aborts if teardown is still pending; new consumers use the explicit
 asynchronous callbacks for both directions.
 
+An initialized descriptor carries a private layout identity. `KDOSTLS-INIT`
+refuses to erase one which is still the exact shared network owner, retains a
+cleanup error or TLS context, or remains in a live/opening/closing state. Thus
+the quarantine survives even if a foreign owner later comes and goes. The
+caller must prove lower detachment before reinitializing or freeing that
+storage.
+
+`KDOSTLS-INIT` returns normally or throws `-KDOSTLS-E-CLEANUP` when retained
+state cannot be proven detached and `-KDOSTLS-E-PLATFORM` off core 0.
+`KDOSTLS-FREE` may throw the same domains rather than erase or release unsafe
+storage. Configuration, allocation, lifecycle, and `NIO` mutation are
+core-0-only; status-returning entries report their documented platform or
+failed status before touching module scratch, while throwing entries use
+`-KDOSTLS-E-PLATFORM`. Read-only ownership identity remains observable from
+every core.
+
 Configuration copies the hostname into the descriptor before any network
 work. Passing the exact borrowed `KDOSTLS-HOST` view back to
 `KDOSTLS-CONFIGURE` is safe; any partial overlap with the retained hostname
@@ -51,6 +67,12 @@ sends, and accepts success only while it still owns the adapter, the recorded
 TCB identity still matches, TCP and TLS are established, and peer authentication
 is set. The request uses HTTP/1.1 ALPN, and the KDOS trust store must already
 contain an applicable anchor.
+
+Configurable clock, cooperative-step, send, receive, poll, close-notify, and
+address-policy callbacks are caller-controlled and non-reentrant with respect
+to this transport. The adapter catches lifecycle callback exceptions where
+cleanup is required and revalidates exact core-0 ownership after a callback
+before consuming its result or continuing lower network work.
 
 Normal close is also cooperative. It retains the TLS context and machine owner
 while it sends `close_notify`, waits for that alert to be acknowledged, sends
@@ -117,17 +139,22 @@ The adapter descriptor owns configuration and connection state but not the
 KDOS trust store. `KDOSTLS-NEW`/`KDOSTLS-FREE` are available for heap ownership;
 `KDOSTLS-INIT` supports embedded or static descriptors.
 
-Normal Akashic boots provision KDOS through the
+Platform startup provisions KDOS through the
 [machine trust registry](tls-trust-registry.md): reviewed modules contribute
-scoped anchors, and Desk freezes the composed snapshot before external I/O is
-initialized. Provider constructors and applets do not call `TLS-TRUST-LOAD` or
-`TLS-TRUST-RESET`; those remain platform provisioning primitives.
+scoped anchors, and the composed snapshot is frozen before external I/O is
+initialized. Application constructors do not call `TLS-TRUST-LOAD` or
+`TLS-TRUST-RESET`; those remain platform-provisioning primitives.
 
-KDOS currently shares its TLS handshake, SNI, record, and receive scratch.
-`kdos-tls.f` therefore permits one active adapter at a time and reports
-`KDOSTLS-E-BUSY` to another opener. This is an explicit machine-layer limit, not
-a provider or Desk policy. Concurrent TLS requires descriptor-owned KDOS record
-state in a later KDOS change.
+KDOS currently shares its NIC receive path, TCP tables, TLS handshake, SNI,
+record, and receive scratch. The generic
+[KDOS network owner](kdos-network-owner.md) therefore serializes `kdos-tls`
+against both another TLS adapter and a raw `kdos-dns` exchange.
+`KDOSTLS-E-BUSY` reports ordinary contention. Exact ownership is checked again
+before polling, abort, close, and release; a mismatch fails closed without
+touching foreign lower state. Uncertain cleanup deliberately retains the token
+as a quarantine. This is an explicit machine-layer limit, not application
+policy. Concurrent TLS requires descriptor-owned KDOS record state in a later
+KDOS change.
 
 Graceful detach and `TLS-ABORT` wipe the adapter's TLS context and the
 connector-owned staging fields. They do **not** yet prove sanitization of all
@@ -150,29 +177,25 @@ single error enumeration. Error constants distinguish invalid configuration,
 owner contention, absent or changed trust, DNS/connect/authentication failure,
 timeout, cancellation, cleanup failure, I/O failure, and a thrown platform
 callback. Address-policy denial has its own `KDOSTLS-E-ADDRESS` result rather
-than being reported as DNS or TCP failure.
+than being reported as DNS or TCP failure. `KDOSTLS-E-PLATFORM` reports that
+the shared owner cannot be acquired on the calling core.
 
 TCB identity checks validate table range and alignment plus the local/remote
 tuple and initial send sequence. They reject pointer and fingerprint mismatch,
 but KDOS exposes no allocation generation: a future slot reuse that recreates
 the exact tuple and ISS remains theoretically indistinguishable.
 
-Streams' explicit public-author-feed composition and the Codex source both use
-this connector implementation through separate caller-owned descriptors. They
-do not maintain parallel application-specific TLS connection logic; the
-machine owner gate serializes their use of KDOS's shared TLS state.
-
 The deterministic offline `tls-port` gate passes with cooperative callback
 installation, exact phase progression, default-public address admission,
 reviewed override and mutation hardening, cancellation across open phases,
 trust drift and timeout handling, partial I/O and peer EOF, graceful close,
 backpressure, half-close, deadline and notifier abort fallback, TCB-reuse
-fingerprint-mismatch guarding, and context/owner release checks. It also
+fingerprint-mismatch guarding, cross-transport owner contention, retained-owner
+reinitialization refusal, foreign-owner close/poll isolation, and exact
+context/owner release checks. It also
 exercises the real lower ClientHello-preparation prefix and records guest
 cycles. It has not yet measured the complete certificate-chain and
 signature-verification work inside every live handshake phase, so
 one-message-per-poll is not yet a demonstrated CPU ceiling for all cryptographic
-leaves. Nor has a full live TAP connection or a Desk-hosted live journey been
-established by that offline gate. Separately, `streams-live-public` passes its
-focused real-TAP component journey; the Desk-hosted live responsiveness and
-recovery journey remains pending.
+leaves. Nor does that offline gate establish a full live TAP connection or a
+higher-level application responsiveness and recovery journey.

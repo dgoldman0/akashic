@@ -25,6 +25,7 @@ LOAD_STAGES = (
     ("net-stub", "KDOS DNS NET STUB READY"),
     ("memory-span", "KDOS DNS MEMORY SPAN READY"),
     ("caller-span", "KDOS DNS CALLER SPAN READY"),
+    ("owner", "KDOS DNS OWNER READY"),
     ("source", "KDOS DNS SOURCE READY"),
     ("fixture", "KDOS DNS FIXTURE READY"),
 )
@@ -32,6 +33,7 @@ LIFECYCLE_STAGES = (
     ("admission", "KDOS DNS LIFE ADMISSION"),
     ("flags", "KDOS DNS LIFE FLAGS"),
     ("owner", "KDOS DNS LIFE OWNER"),
+    ("reentry", "KDOS DNS LIFE REENTRY"),
     ("root", "KDOS DNS LIFE ROOT"),
     ("binding", "KDOS DNS LIFE BINDING"),
     ("complete-prep", "KDOS DNS COMPLETE PREP"),
@@ -58,6 +60,10 @@ KEY DROP
 REQUIRE utils/caller-span.f
 DEPTH IF ." KDOS DNS LOAD STACK FAIL caller-span" CR TX-FLUSH THEN
 ." KDOS DNS CALLER SPAN READY" CR TX-FLUSH
+KEY DROP
+REQUIRE net/kdos-network-owner.f
+DEPTH IF ." KDOS DNS LOAD STACK FAIL owner" CR TX-FLUSH THEN
+." KDOS DNS OWNER READY" CR TX-FLUSH
 KEY DROP
 REQUIRE net/transports/kdos-dns.f
 DEPTH IF ." KDOS DNS LOAD STACK FAIL source" CR TX-FLUSH THEN
@@ -108,6 +114,7 @@ def _assert_static_contracts() -> None:
     ) == [
         "../../utils/memory-span.f",
         "../../utils/caller-span.f",
+        "../kdos-network-owner.f",
     ]
     assert not re.search(r"(?mi)^[ \t]*CREATE\b", source)
     for forbidden in (
@@ -168,7 +175,7 @@ def _assert_static_contracts() -> None:
     assert "RANDOM32" in next_port
     assert "_KDOSDNS-NEXT-PORT" not in source
 
-    start = _word_body(source, "KDOSDNS-START")
+    start = _word_body(source, "_KDNS-START-BODY")
     assert start.index("_KDNS-SPAN-STATUS") < start.index(
         "_KDNS-START-CLEAR"
     )
@@ -180,11 +187,37 @@ def _assert_static_contracts() -> None:
     )
     assert "_KDNS.QUERY" in start
     assert "_KDNS-CAPTURE-QUESTION" in start
-    assert "_KDOSDNS-OWNER !" in start
+    assert "_KDNS-CLAIM" in start
+    assert "_KDOSDNS-OWNER" not in source
+    assert "KDOSNET-CLAIM" in _word_body(source, "_KDNS-CLAIM")
+    assert "KDOSNET-RELEASE" in _word_body(
+        source, "_KDNS-RELEASE-OWNER"
+    )
+    assert "KDOSNET-OPERATE? 0= IF" in _word_body(
+        source, "_KDNS-TCP-ABORT"
+    )
+    assert "KDOSDNS-S-CLEANUP = IF" in _word_body(
+        source, "KDOSDNS-CANCEL"
+    )
+    for lifecycle_word in (
+        "KDOSDNS-INIT",
+        "KDOSDNS-START",
+        "KDOSDNS-POLL",
+        "KDOSDNS-CANCEL",
+        "KDOSDNS-WIPE",
+    ):
+        lifecycle_body = _word_body(source, lifecycle_word).lstrip()
+        lifecycle_body = re.sub(r"^\([^)]*\)\s*", "", lifecycle_body)
+        assert lifecycle_body.startswith("COREID 0<> IF")
     assert start.index("_KDNS-START-SOURCES") < start.index(
         "_KDNS-START-CLEAR"
     )
     assert "CATCH IF KDOSDNS-S-FAULT EXIT THEN" in start
+    assert "_KDS-BUSY" in _word_body(source, "KDOSDNS-START")
+    assert "_KDP-BUSY" in _word_body(source, "KDOSDNS-POLL")
+    assert "_kdt-now-reenter-start" in CONTRACT.read_text()
+    assert "_kdt-step-reenter-poll" in CONTRACT.read_text()
+    assert "_kdt-step-transfer-owner" in CONTRACT.read_text()
 
     question = _word_body(source, "_KDNS-QUESTION-MATCH?")
     for marker in (
@@ -245,7 +278,7 @@ def _assert_static_contracts() -> None:
     ):
         assert marker in tcp_body
 
-    poll = _word_body(source, "KDOSDNS-POLL")
+    poll = _word_body(source, "_KDNS-POLL-BODY")
     assert "['] _KDNS-POLL-INNER CATCH" in poll
     assert "['] _KDNS-POLL-NOW-INNER CATCH" in poll
     assert "_KDNS-STEP-RECORD" in poll
@@ -291,8 +324,8 @@ def _assert_static_contracts() -> None:
         "fresh unpredictable value for each logical query",
         "raw DNS message as normative",
         "contains no application-protocol, credential, feed",
-        "one active `kdos-dns` adapter at a time",
-        "serialize every other KDOS NIC reader",
+        "generic core-0 `KDOSNET` owner",
+        "excludes both another DNS exchange and `kdos-tls`",
         "`KDOSDNS-S-CLEANUP` without erasing",
         "not DNS authenticity",
         "real recursive-server journey",
@@ -332,6 +365,8 @@ def _assert_static_contracts() -> None:
         "_kdt-step-complete",
         "_kdt-step-throw",
         "KDOSDNS-S-BUSY",
+        "KDOSNET-CLAIM",
+        "KDOSNET-OWNER?",
         "KDOSDNS-S-TIMEOUT",
         "KDOSDNS-S-FAULT",
         "KDOSDNS-E-TRUNCATED",

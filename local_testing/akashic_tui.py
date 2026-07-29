@@ -3439,7 +3439,7 @@ VARIABLE _mt-bind-a
     _mt-b KDOSTLS.PORT NIO.CLOSE-ERROR @ 0= _mt-assert
     _mt-b KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
     _mt-b KDOSTLS.CONTEXT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     ['] _mt-close _mt-b KDOSTLS.CLOSE-XT !
     _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
     _mt-a KDOSTLS.PORT NIO-CLOSE ;
@@ -3567,7 +3567,7 @@ VARIABLE _mt-address-result
     _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPENING = _mt-assert
     _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-TLS-PREP = _mt-assert
     _mt-a KDOSTLS.TRUST-GENERATION @ 17 = _mt-assert
-    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    KDOSNET-OWNER@ _mt-a = _mt-assert
     _mt-a KDOSTLS.PORT NIO.OPEN-START-XT @ 0= _mt-assert
     _mt-a KDOSTLS.PORT NIO.OPEN-POLL-XT @ 0= _mt-assert
     _mt-a KDOSTLS.PORT NIO.CANCEL-XT @ 0= _mt-assert
@@ -3587,7 +3587,7 @@ VARIABLE _mt-address-result
     _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
     _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
     _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CANCELLED = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert ;
 
 : _mt-test-prep-failures  ( -- )
@@ -3596,7 +3596,7 @@ VARIABLE _mt-address-result
     0 TLS-TRUST-COUNT !
     _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind
     _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
@@ -3604,7 +3604,7 @@ VARIABLE _mt-address-result
     _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TRUST-CHANGED = _mt-assert
     _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-FAILED = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind
     _mt-a KDOSTLS-PREP-START DROP
@@ -3612,7 +3612,7 @@ VARIABLE _mt-address-result
     _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TIMEOUT = _mt-assert
     _mt-a KDOSTLS.STEP-COUNT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind
     -1 _mt-prep-throw !
@@ -3620,20 +3620,20 @@ VARIABLE _mt-address-result
     _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
     _mt-a KDOSTLS.STEP-COUNT @ 1 = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind
     -1 _mt-prep-early-ready !
     _mt-a KDOSTLS-PREP-START DROP
     _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-INVALID = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind _mt-b _mt-prep-bind
     _mt-a KDOSTLS-PREP-START DROP
     _mt-b KDOSTLS-PREP-START KDOSTLS-PREP-S-FAILED = _mt-assert
     _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
-    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    KDOSNET-OWNER@ _mt-a = _mt-assert
     _mt-a KDOSTLS-PREP-CANCEL DROP ;
 
 : _mt-test-prep-cancel-phases  ( -- )
@@ -3643,7 +3643,7 @@ VARIABLE _mt-address-result
         I _mt-a KDOSTLS.PHASE !
         _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
         _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-        _KDOSTLS-OWNER @ 0= _mt-assert
+        KDOSNET-OWNER@ 0= _mt-assert
     LOOP ;
 
 : _mt-test-prep-default-prefix  ( -- )
@@ -3673,7 +3673,7 @@ VARIABLE _mt-address-result
     _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
     _mt-prep-ctx @ /TLS-CTX _mt-zeroed? _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     ARP-CLEAR ;
 
 VARIABLE _mt-alert-hits
@@ -3746,7 +3746,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-FAILED = _mt-assert
     _mt-a KDOSTLS.REMOTE-IP 4 _mt-zeroed? _mt-assert
     _mt-a KDOSTLS.AFTER-ARP-PHASE @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind2
     _mt-a KDOSTLS-PREP-START DROP
@@ -3769,7 +3769,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
     _mt-address-hits @ 0= _mt-assert
     _mt-a KDOSTLS.REMOTE-IP 8 _mt-zeroed? _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     \ A reviewed override receives the owned bytes and its exact context.
     \ Changing the borrowed source after the copy cannot change admission.
@@ -3810,7 +3810,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
     _mt-a KDOSTLS.REMOTE-IP 4 _mt-zeroed? _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     \ A policy cannot mutate its inspected copy and redirect TCP afterward.
     _mt-prep-fixture _mt-a _mt-prep-bind2
@@ -3824,11 +3824,78 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-ADDRESS = _mt-assert
     _mt-a KDOSTLS.REMOTE-IP 8 _mt-zeroed? _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert ;
+    KDOSNET-OWNER@ 0= _mt-assert ;
+
+: _mt-init-b-inner  ( -- )
+    _mt-b KDOSTLS-INIT ;
+
+: _mt-init-a-inner  ( -- )
+    _mt-a KDOSTLS-INIT ;
+
+: _mt-test-shared-network-owner  ( -- )
+    \ An owned descriptor cannot be erased by reinitialization.  The exact
+    \ foreign token remains installed until its holder explicitly releases it.
+    _mt-b KDOSTLS-SIZE 165 FILL
+    _mt-b KDOSNET-CLAIM KDOSNET-S-OK = _mt-assert
+    ['] _mt-init-b-inner CATCH
+        KDOSTLS-E-CLEANUP NEGATE = _mt-assert
+    _mt-b C@ 165 = _mt-assert
+    KDOSNET-OWNER@ _mt-b = _mt-assert
+
+    \ A foreign raw-network owner excludes TLS start and NIO polling without
+    \ invoking the adapter's lower callback.
+    _mt-a _mt-prep-bind2
+    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
+    0 _mt-poll-hits !
+    ['] _mt-poll _mt-a KDOSTLS.POLL-XT !
+    _mt-a KDOSTLS.PORT NIO-POLL
+    _mt-poll-hits @ 0= _mt-assert
+    KDOSNET-OWNER@ _mt-b = _mt-assert
+    _mt-b KDOSNET-RELEASE KDOSNET-S-OK = _mt-assert
+
+    \ Close ownership mismatch must not abort or scrub another transport's
+    \ machine-global TCP/TLS state.  Its quarantine survives owner release
+    \ and refuses descriptor reinitialization.
+    _mt-prep-fixture _mt-a _mt-prep-bind2
+    _mt-a _mt-attach-authenticated
+    KDOSTLS-PHASE-OPEN _mt-a KDOSTLS.PHASE !
+    KDOSTLS-STATE-OPEN _mt-a KDOSTLS.STATE !
+    _mt-b KDOSNET-CLAIM KDOSNET-S-OK = _mt-assert
+    _mt-a _KDOSTLS-NIO-CLOSE-START NIO-S-FAILED = _mt-assert
+    _mt-a _KDOSTLS-NIO-CLOSE-POLL NIO-S-FAILED = _mt-assert
+    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-CLEANUP = _mt-assert
+    _mt-a KDOSTLS.CLEANUP-ERROR @ KDOSTLS-E-CLEANUP = _mt-assert
+    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-ERROR = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
+    _mt-native-tcb @ TCB.STATE @ TCPS-ESTABLISHED = _mt-assert
+    KDOSNET-OWNER@ _mt-b = _mt-assert
+    _mt-b KDOSNET-RELEASE KDOSNET-S-OK = _mt-assert
+    ['] _mt-init-a-inner CATCH
+        KDOSTLS-E-CLEANUP NEGATE = _mt-assert
+    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
+    _mt-native-tcb @ TCB.STATE @ TCPS-ESTABLISHED = _mt-assert
+
+    \ Losing ownership during preparation quarantines the second descriptor.
+    \ Poll and cancel leave the foreign token and retained state untouched.
+    _mt-prep-fixture _mt-b _mt-prep-bind2
+    _mt-b KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
+    _mt-b KDOSNET-RELEASE KDOSNET-S-OK = _mt-assert
+    _mt-a KDOSNET-CLAIM KDOSNET-S-OK = _mt-assert
+    _mt-b KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-b KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-FAILED = _mt-assert
+    _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-CLEANUP = _mt-assert
+    _mt-b KDOSTLS.CLEANUP-ERROR @ KDOSTLS-E-CLEANUP = _mt-assert
+    _mt-b KDOSTLS.STATE @ KDOSTLS-STATE-ERROR = _mt-assert
+    KDOSNET-OWNER@ _mt-a = _mt-assert
+    _mt-a KDOSNET-RELEASE KDOSNET-S-OK = _mt-assert
+    ['] _mt-init-b-inner CATCH
+        KDOSTLS-E-CLEANUP NEGATE = _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert ;
 
 : _mt-force-open  ( adapter -- )
     DUP _mt-prep-bind2 DUP _mt-attach-authenticated
-    DUP _KDOSTLS-OWNER !
+    DUP KDOSNET-CLAIM KDOSNET-S-OK = _mt-assert
     DUP KDOSTLS-PHASE-OPEN SWAP KDOSTLS.PHASE !
     DUP KDOSTLS-STATE-OPEN SWAP KDOSTLS.STATE !
     DUP KDOSTLS.PORT NIO-OPEN-STATE-OPEN SWAP NIO.OPEN-STATE !
@@ -3877,11 +3944,11 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.STEP-COUNT @ KDOSTLS-PHASE-OPEN = _mt-assert
     _mt-a KDOSTLS.MAX-STEP-CYCLES @
         _mt-a KDOSTLS.LAST-STEP-CYCLES @ >= _mt-assert
-    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    KDOSNET-OWNER@ _mt-a = _mt-assert
     ARP-CLEAR
     _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert ;
+    KDOSNET-OWNER@ 0= _mt-assert ;
 
 : _mt-test-prep-failures2  ( -- )
     1000 _mt-prep-now ! 0 _mt-prep-throw ! 0 _mt-prep-early-ready !
@@ -3889,14 +3956,14 @@ VARIABLE _mt-alert-hits
     _mt-a _mt-prep-bind2 0 TLS-TRUST-COUNT !
     _mt-a KDOSTLS.PORT NIO-OPEN-START NIO-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind2
     _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
     18 TLS-TRUST-GENERATION !
     _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
     _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TRUST-CHANGED = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind2
     _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
@@ -3921,13 +3988,13 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
     _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-CANCELLED = _mt-assert
     _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-prep-bind2 _mt-b _mt-prep-bind2
     _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
     _mt-b KDOSTLS.PORT NIO-OPEN-START NIO-S-FAILED = _mt-assert
     _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
-    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    KDOSNET-OWNER@ _mt-a = _mt-assert
     _mt-a KDOSTLS.PORT NIO-CANCEL DROP
 
     KDOSTLS-PHASE-OPEN 1+ 1 DO
@@ -3937,7 +4004,7 @@ VARIABLE _mt-alert-hits
         _mt-a KDOSTLS-PREP-CANCEL
             KDOSTLS-PREP-S-CANCELLED = _mt-assert
         _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-        _KDOSTLS-OWNER @ 0= _mt-assert
+        KDOSNET-OWNER@ 0= _mt-assert
     LOOP ;
 
 : _mt-test-io-and-peer-eof  ( -- )
@@ -3966,10 +4033,10 @@ VARIABLE _mt-alert-hits
     NIO-S-EOF = _mt-assert 0= _mt-assert
     _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
-    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    KDOSNET-OWNER@ _mt-a = _mt-assert
     _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert ;
+    KDOSNET-OWNER@ 0= _mt-assert ;
 
 : _mt-test-graceful-close  ( -- )
     _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
@@ -3979,7 +4046,7 @@ VARIABLE _mt-alert-hits
     _mt-alert-hits @ 1 = _mt-assert
     _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-FIN = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
-    _KDOSTLS-OWNER @ _mt-a = _mt-assert
+    KDOSNET-OWNER@ _mt-a = _mt-assert
     _mt-native-tcb @ TCB.SND-NXT @ _mt-native-tcb @ TCB.SND-UNA !
     _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-PENDING = _mt-assert
     _mt-native-tcb @ TCB.STATE @ TCPS-FIN-WAIT-1 = _mt-assert
@@ -3988,7 +4055,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-OK = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
     _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     _mt-native-tcb @ TCB.STATE @ TCPS-TIME-WAIT = _mt-assert
     _mt-a KDOSTLS.CLOSE-FALLBACKS @ 0= _mt-assert
     ARP-CLEAR ;
@@ -4024,7 +4091,7 @@ VARIABLE _mt-alert-hits
     _KDOSTLS-CLOSE-POST-RECEIVE NIO-S-OK = _mt-assert
     _mt-native-tcb @ TCB.LOCAL-PORT @ 0= _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     _mt-a KDOSTLS.CLOSE-FALLBACKS @ 0= _mt-assert
     ARP-CLEAR ;
 
@@ -4036,7 +4103,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-OK = _mt-assert
     _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
 
     _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
     ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
@@ -4060,7 +4127,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
     _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     ARP-CLEAR ;
 
 : _mt-test-default-route-guards  ( -- )
@@ -4091,7 +4158,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
     _mt-a KDOSTLS.NATIVE-ERROR @ TLS-E-POST-HANDSHAKE = _mt-assert
     _mt-native-ctx @ /TLS-CTX _mt-zeroed? _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     ARP-CLEAR ;
 
 : _mt-test-blocking-close-bound  ( -- )
@@ -4101,7 +4168,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
     _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     ARP-CLEAR ;
 
 : _mt-test-tcb-reuse-guard  ( -- )
@@ -4110,7 +4177,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-OK = _mt-assert
     _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert
+    KDOSNET-OWNER@ 0= _mt-assert
     _mt-native-tcb @ TCB.STATE @ TCPS-ESTABLISHED = _mt-assert
 
     _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
@@ -4118,7 +4185,7 @@ VARIABLE _mt-alert-hits
     _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-OK = _mt-assert
     _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
     _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _KDOSTLS-OWNER @ 0= _mt-assert ;
+    KDOSNET-OWNER@ 0= _mt-assert ;
 
 VARIABLE _mt-default-depth
 CREATE _mt-peer-ip 4 ALLOT
@@ -4185,6 +4252,7 @@ CREATE _mt-peer-ip 4 ALLOT
     _mt-test-tcb-reuse-guard
     _mt-test-prep-default-prefix
     ." TLS PREP MAX-CYCLES " _mt-a KDOSTLS.MAX-STEP-CYCLES @ . CR
+    _mt-test-shared-network-owner
     _mt-old-trust @ TLS-TRUST-COUNT !
     _mt-old-trust-generation @ TLS-TRUST-GENERATION !
     _mt-stack
@@ -16483,7 +16551,7 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
     THEN
     ."  native=" TLS-CONNECT-LAST-ERROR @ .
     ." /" TLS-CERT-LAST-ERROR @ .
-    ."  tls_owner=" _KDOSTLS-OWNER @ .
+    ."  net_owner=" KDOSNET-OWNER@ .
     ."  tcb=" TCB-USAGE SWAP . ." /" . CR TX-FLUSH ;
 
 : _slp-assert  ( flag -- )
@@ -16569,7 +16637,7 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
         PAF.BODY-U @ 0= _slp-assert
     _STM-PUBLIC-PROVIDER @ SPUB.CONTEXT @ PAF.TRANSPORT
         KDOSTLS.CONTEXT @ 0= _slp-assert
-    _KDOSTLS-OWNER @ 0= _slp-assert ;
+    KDOSNET-OWNER@ 0= _slp-assert ;
 
 : _slp-shutdown-body  ( -- )
     _slp-inst @ STREAMS-SHUTDOWN-CB ;
@@ -16594,7 +16662,7 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
     _STM-XIO-OP XIO-OP-SIZE _slp-zeroed? AND
     _slp-service XIOS.ACTIVE @ 0= AND
     _slp-service XIOS.RETAINED @ 0= AND
-    _KDOSTLS-OWNER @ 0= AND ;
+    KDOSNET-OWNER@ 0= AND ;
 
 : _slp-cleanup  ( -- )
     0 _slp-release-ok ! 0 _slp-fini-ok ! 0 _slp-state-zero !
@@ -16628,7 +16696,7 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
         _slp-release-ok @ _slp-fini-ok @ AND _slp-state-zero @ AND
         _slp-service XIOS.ACTIVE @ 0= AND
         _slp-service XIOS.RETAINED @ 0= AND
-        _KDOSTLS-OWNER @ 0= AND IF
+        KDOSNET-OWNER@ 0= AND IF
             ['] _slp-free-body CATCH ?DUP IF
                 _slp-cleanup-error
             ELSE
@@ -16654,10 +16722,10 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
             ." STREAMS LIVE PUBLIC CLEANUP FAIL service-retained" CR
         THEN
     THEN
-    _KDOSTLS-OWNER @ IF
+    KDOSNET-OWNER@ IF
         1 _slp-cleanup-fails +!
-        ." STREAMS LIVE PUBLIC CLEANUP FAIL tls-owner="
-            _KDOSTLS-OWNER @ . CR
+        ." STREAMS LIVE PUBLIC CLEANUP FAIL net-owner="
+            KDOSNET-OWNER@ . CR
     THEN ;
 
 : _slp-run  ( -- )

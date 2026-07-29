@@ -10,6 +10,8 @@ VARIABLE _kdt-ra
 VARIABLE _kdt-ru
 VARIABLE _kdt-rs
 VARIABLE _kdt-tcb
+VARIABLE _kdt-nested-start-status
+VARIABLE _kdt-nested-poll-status
 
 CREATE _kdt-a-allocation KDOSDNS-SIZE 7 + ALLOT
 _kdt-a-allocation 7 + -8 AND CONSTANT _kdt-a
@@ -91,6 +93,22 @@ CREATE _kdt-server 4 ALLOT
 
 : _kdt-step-invalid-ok  ( adapter -- status )
     DROP KDOSDNS-S-OK ;
+
+: _kdt-now-reenter-start  ( adapter -- ms )
+    DROP
+    _kdt-query 34 _kdt-server _kdt-a KDOSDNS-START
+        _kdt-nested-start-status !
+    0 ;
+
+: _kdt-step-reenter-poll  ( adapter -- status )
+    DUP KDOSDNS-POLL _kdt-nested-poll-status !
+    DROP KDOSDNS-S-PENDING ;
+
+: _kdt-step-transfer-owner  ( adapter -- status )
+    DUP KDOSNET-RELEASE KDOSNET-S-OK = _kdt-assert
+    DROP
+    _kdt-b KDOSNET-CLAIM KDOSNET-S-OK = _kdt-assert
+    KDOSDNS-S-PENDING ;
 
 : _kdt-step-complete  ( adapter -- status )
     _kdt-step-a !
@@ -188,12 +206,28 @@ CREATE _kdt-server 4 ALLOT
 
 : _kdt-test-start-and-owner  ( -- )
     _kdt-init-a
+    _kdt-b KDOSDNS-SIZE 0xA5 FILL
+    _kdt-b KDOSNET-CLAIM KDOSNET-S-OK = _kdt-assert
+    _kdt-response-b 1024 _kdt-b KDOSDNS-INIT
+        KDOSDNS-S-BUSY = _kdt-assert
+    _kdt-b KDOSDNS-SIZE 0xA5 _kdt-byte? _kdt-assert
+    _kdt-b KDOSNET-RELEASE KDOSNET-S-OK = _kdt-assert
     _kdt-init-b
+    _kdt-b KDOSNET-CLAIM KDOSNET-S-OK = _kdt-assert
+    _kdt-query 34 _kdt-server _kdt-a KDOSDNS-START
+        KDOSDNS-S-BUSY = _kdt-assert
+    _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-IDLE = _kdt-assert
+    KDOSNET-OWNER@ _kdt-b = _kdt-assert
+    _kdt-b KDOSNET-RELEASE KDOSNET-S-OK = _kdt-assert
     _kdt-start-a
     _kdt-a KDOSDNS-VALID? _kdt-assert
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-ACTIVE = _kdt-assert
     _kdt-a KDOSDNS-STATUS@ KDOSDNS-S-PENDING = _kdt-assert
-    _KDOSDNS-OWNER @ _kdt-a = _kdt-assert
+    KDOSNET-OWNER@ _kdt-a = _kdt-assert
+    _kdt-a KDOSNET-OWNER? _kdt-assert
+    _kdt-response-a 1024 _kdt-a KDOSDNS-INIT
+        KDOSDNS-S-BUSY = _kdt-assert
+    _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-ACTIVE = _kdt-assert
     _kdt-a _KDNS.QUERY-U @ 34 = _kdt-assert
     _kdt-a _KDNS.QNAME-U @ 18 = _kdt-assert
     _kdt-a _KDNS.QTYPE @ 16 = _kdt-assert
@@ -220,11 +254,59 @@ CREATE _kdt-server 4 ALLOT
     _kdt-a KDOSDNS-VALID? _kdt-assert
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-CANCELLED = _kdt-assert
     _kdt-a _KDNS.QUERY-U @ 0= _kdt-assert
-    _KDOSDNS-OWNER @ 0= _kdt-assert
+    KDOSNET-OWNER@ 0= _kdt-assert
     _kdt-response-a 1024 0 _kdt-byte? _kdt-assert
 
     _kdt-wipe-a
     _kdt-wipe-b
+    _kdt-stack ;
+
+: _kdt-test-reentry  ( -- )
+    _kdt-init-a
+    -1 _kdt-nested-start-status !
+    ['] _kdt-now-reenter-start _kdt-a _KDNS.NOW-XT !
+    _kdt-query 34 _kdt-server _kdt-a KDOSDNS-START
+        KDOSDNS-S-PENDING = _kdt-assert
+    _kdt-nested-start-status @ KDOSDNS-S-BUSY = _kdt-assert
+    _KDS-BUSY @ 0= _kdt-assert
+    KDOSNET-OWNER@ _kdt-a = _kdt-assert
+    _kdt-a KDOSDNS-CANCEL
+        KDOSDNS-S-CANCELLED = _kdt-assert
+    _kdt-wipe-a
+
+    _kdt-init-a
+    _kdt-fake-clock-a
+    _kdt-start-a
+    -1 _kdt-nested-poll-status !
+    ['] _kdt-step-reenter-poll _kdt-a _KDNS.STEP-XT !
+    _kdt-a KDOSDNS-POLL KDOSDNS-S-PENDING = _kdt-assert
+    _kdt-nested-poll-status @ KDOSDNS-S-BUSY = _kdt-assert
+    _KDP-BUSY @ 0= _kdt-assert
+    _kdt-a KDOSDNS-STATE@
+        KDOSDNS-STATE-ACTIVE = _kdt-assert
+    KDOSNET-OWNER@ _kdt-a = _kdt-assert
+    _kdt-a KDOSDNS-CANCEL
+        KDOSDNS-S-CANCELLED = _kdt-assert
+    _kdt-wipe-a
+
+    _kdt-init-a
+    _kdt-fake-clock-a
+    _kdt-start-a
+    ['] _kdt-step-transfer-owner _kdt-a _KDNS.STEP-XT !
+    _kdt-a KDOSDNS-POLL KDOSDNS-S-CLEANUP = _kdt-assert
+    _kdt-a KDOSDNS-STATE@
+        KDOSDNS-STATE-ACTIVE = _kdt-assert
+    _kdt-a KDOSDNS-STATUS@
+        KDOSDNS-S-PENDING = _kdt-assert
+    _KDP-BUSY @ 0= _kdt-assert
+    KDOSNET-OWNER@ _kdt-b = _kdt-assert
+    _kdt-a KDOSDNS-CANCEL
+        KDOSDNS-S-CLEANUP = _kdt-assert
+    _kdt-b KDOSNET-RELEASE KDOSNET-S-OK = _kdt-assert
+    _kdt-a KDOSNET-CLAIM KDOSNET-S-OK = _kdt-assert
+    _kdt-a KDOSDNS-CANCEL
+        KDOSDNS-S-CANCELLED = _kdt-assert
+    _kdt-wipe-a
     _kdt-stack ;
 
 : _kdt-test-root-question  ( -- )
@@ -236,6 +318,30 @@ CREATE _kdt-server 4 ALLOT
     _kdt-a _KDNS.QNAME C@ 0= _kdt-assert
     _kdt-a KDOSDNS-CANCEL
     KDOSDNS-S-CANCELLED = _kdt-assert
+    _kdt-wipe-a
+
+    \ A quarantined terminal descriptor cannot interpret a foreign owner as
+    \ proof of detachment and erase the evidence needed for later cleanup.
+    _kdt-init-a
+    _kdt-fake-clock-a
+    _kdt-start-a
+    _kdt-a KDOSNET-RELEASE KDOSNET-S-OK = _kdt-assert
+    _kdt-b KDOSNET-CLAIM KDOSNET-S-OK = _kdt-assert
+    KDOSDNS-S-CLEANUP _kdt-a _KDNS.STATUS !
+    KDOSDNS-PHASE-FAILED _kdt-a _KDNS.PHASE !
+    KDOSDNS-STATE-FAILED _kdt-a _KDNS.STATE !
+    _kdt-a KDOSDNS-CANCEL
+        KDOSDNS-S-CLEANUP = _kdt-assert
+    _kdt-a KDOSDNS-STATE@
+        KDOSDNS-STATE-FAILED = _kdt-assert
+    _kdt-a KDOSDNS-STATUS@
+        KDOSDNS-S-CLEANUP = _kdt-assert
+    _kdt-a _KDNS.QUERY-U @ 34 = _kdt-assert
+    KDOSNET-OWNER@ _kdt-b = _kdt-assert
+    _kdt-b KDOSNET-RELEASE KDOSNET-S-OK = _kdt-assert
+    _kdt-a KDOSNET-CLAIM KDOSNET-S-OK = _kdt-assert
+    _kdt-a KDOSDNS-CANCEL
+        KDOSDNS-S-CANCELLED = _kdt-assert
     _kdt-wipe-a
     _kdt-stack ;
 
@@ -300,7 +406,7 @@ CREATE _kdt-server 4 ALLOT
     _kdt-a KDOSDNS-STEP-COUNT@ 1 = _kdt-assert
     _kdt-a KDOSDNS-MAX-STEP-CYCLES@
     _kdt-a KDOSDNS-LAST-STEP-CYCLES@ U< 0= _kdt-assert
-    _KDOSDNS-OWNER @ 0= _kdt-assert
+    KDOSNET-OWNER@ 0= _kdt-assert
     ." KDOS DNS COMPLETE POLL" CR TX-FLUSH KEY DROP
 
     _kdt-a _kdt-response!
@@ -331,7 +437,7 @@ CREATE _kdt-server 4 ALLOT
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-IDLE = _kdt-assert
     _kdt-a KDOSDNS-STATUS@ KDOSDNS-S-OK = _kdt-assert
     _kdt-a _KDNS.QUERY-U @ 0= _kdt-assert
-    _KDOSDNS-OWNER @ 0= _kdt-assert
+    KDOSNET-OWNER@ 0= _kdt-assert
     _kdt-wipe-a
 
     _kdt-init-a
@@ -341,7 +447,7 @@ CREATE _kdt-server 4 ALLOT
     _kdt-a KDOSDNS-POLL KDOSDNS-S-FAULT = _kdt-assert
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-FAILED = _kdt-assert
     _kdt-a KDOSDNS-STATUS@ KDOSDNS-S-FAULT = _kdt-assert
-    _KDOSDNS-OWNER @ 0= _kdt-assert
+    KDOSNET-OWNER@ 0= _kdt-assert
     _kdt-wipe-a
 
     _kdt-init-a
@@ -357,7 +463,7 @@ CREATE _kdt-server 4 ALLOT
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-FAILED = _kdt-assert
     _kdt-a KDOSDNS-STATUS@ KDOSDNS-S-TIMEOUT = _kdt-assert
     _kdt-a KDOSDNS-STEP-COUNT@ 1 = _kdt-assert
-    _KDOSDNS-OWNER @ 0= _kdt-assert
+    KDOSNET-OWNER@ 0= _kdt-assert
     _kdt-wipe-a
 
     _kdt-init-a
@@ -368,7 +474,7 @@ CREATE _kdt-server 4 ALLOT
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-FAILED = _kdt-assert
     _kdt-a KDOSDNS-STATUS@ KDOSDNS-S-FAULT = _kdt-assert
     _kdt-a KDOSDNS-STEP-COUNT@ 1 = _kdt-assert
-    _KDOSDNS-OWNER @ 0= _kdt-assert
+    KDOSNET-OWNER@ 0= _kdt-assert
     _kdt-wipe-a
 
     _kdt-init-a
@@ -377,7 +483,7 @@ CREATE _kdt-server 4 ALLOT
     ['] _kdt-step-invalid-ok _kdt-a _KDNS.STEP-XT !
     _kdt-a KDOSDNS-POLL KDOSDNS-S-FAULT = _kdt-assert
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-FAILED = _kdt-assert
-    _KDOSDNS-OWNER @ 0= _kdt-assert
+    KDOSNET-OWNER@ 0= _kdt-assert
     _kdt-wipe-a
     _kdt-stack ;
 
@@ -393,7 +499,8 @@ CREATE _kdt-server 4 ALLOT
     KDOSDNS-STATE-ACTIVE = _kdt-assert
     _kdt-a _KDNS.TCB @ 8 = _kdt-assert
     _kdt-a _KDNS.TCB-ISS @ 0x12345678 = _kdt-assert
-    _KDOSDNS-OWNER @ _kdt-a = _kdt-assert
+    KDOSNET-OWNER@ _kdt-a = _kdt-assert
+    _kdt-a KDOSNET-OWNER? _kdt-assert
 
     0 _kdt-a _KDNS.TCB !
     0 _kdt-a _KDNS.TCB-ISS !
@@ -425,7 +532,7 @@ CREATE _kdt-server 4 ALLOT
     KDOSDNS-S-IO = _kdt-assert
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-FAILED = _kdt-assert
     _kdt-a _KDNS.TCB @ 0= _kdt-assert
-    _KDOSDNS-OWNER @ 0= _kdt-assert
+    KDOSNET-OWNER@ 0= _kdt-assert
 
     _kdt-start-a
     _kdt-a KDOSDNS-STATE@ KDOSDNS-STATE-ACTIVE = _kdt-assert
@@ -469,6 +576,8 @@ CREATE _kdt-server 4 ALLOT
     ." KDOS DNS LIFE FLAGS" CR TX-FLUSH KEY DROP
     _kdt-test-start-and-owner
     ." KDOS DNS LIFE OWNER" CR TX-FLUSH KEY DROP
+    _kdt-test-reentry
+    ." KDOS DNS LIFE REENTRY" CR TX-FLUSH KEY DROP
     _kdt-test-root-question
     ." KDOS DNS LIFE ROOT" CR TX-FLUSH KEY DROP
     _kdt-test-question-binding
