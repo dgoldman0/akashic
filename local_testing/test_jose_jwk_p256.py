@@ -136,6 +136,7 @@ def _assert_source_contracts() -> None:
         "JOSE-JWK-P256-THUMBPRINT-SIZE",
         "JOSE-JWK-P256-MAX-MEMBERS",
         "JOSE-JWK-P256-WORKSPACE-SIZE",
+        "JOSE-JWK-P256-CALLER-SPAN-STATUS",
         "JOSE-JWK-P256-PUBLIC-PARSE",
         "JOSE-JWK-P256-PUBLIC-EMIT",
         "JOSE-JWK-P256-THUMBPRINT",
@@ -155,6 +156,10 @@ def _assert_source_contracts() -> None:
         assert source_status in caller_map and jwk_status in caller_map
     assert "_JJPK-SPAN?" not in source
     assert "MSPAN-NONWRAPPING?" not in source
+    caller_span = _word_body(
+        source, "JOSE-JWK-P256-CALLER-SPAN-STATUS"
+    )
+    assert "_JJPK-ADMIT-SPAN" in caller_span
 
     for geometry in (
         "_JJPK-PARSE-GEOMETRY",
@@ -253,6 +258,8 @@ def _assert_source_contracts() -> None:
     assert "42 _jjpkt-build-x-width" in fixture
     assert "0x5A _jjpkt-input 73 + C!" in fixture
     assert "_jjpkt-test-mapped-spans" in fixture
+    assert "_jjpkt-test-caller-span" in fixture
+    assert fixture.count("JOSE-JWK-P256-CALLER-SPAN-STATUS") >= 3
     assert "_jjpkt-test-publication-throws" in fixture
 
 

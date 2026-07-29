@@ -42,6 +42,8 @@
 \    JOSE-JWK-P256-MAX-MEMBERS       ( -- 32 )
 \    JOSE-JWK-P256-WORKSPACE-SIZE    ( -- bytes )
 \    JOSE-JWK-P256-STATUS-VALID?     ( status -- flag )
+\    JOSE-JWK-P256-CALLER-SPAN-STATUS
+\      ( address length -- status )
 \    JOSE-JWK-P256-WORKSPACE-CLEAR  ( workspace -- status )
 \    JOSE-JWK-P256-PUBLIC-PARSE
 \      ( source source-u public-output workspace -- status )
@@ -267,6 +269,13 @@ CREATE _JJPK-CANONICAL-SUFFIX
         2DROP JOSE-JWK-P256-S-ALIAS EXIT
     THEN
     SHA256-CALLER-SPAN-STATUS _JJPK-SHA>STATUS ;
+
+\ Export the complete nonmutating caller boundary so checked JOSE layers can
+\ qualify their outer workspaces before any write.  This preserves the P-256,
+\ immutable JWK serialization, and SHA-256 reserved footprints in one place.
+: JOSE-JWK-P256-CALLER-SPAN-STATUS
+  ( address length -- status )
+    _JJPK-ADMIT-SPAN ;
 
 : JOSE-JWK-P256-WORKSPACE-CLEAR  ( workspace -- status )
     DUP JOSE-JWK-P256-WORKSPACE-SIZE _JJPK-ADMIT-SPAN

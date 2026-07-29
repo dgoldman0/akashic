@@ -198,15 +198,16 @@ equality check does not replace transport provenance.
 ### Checked inline JWKS
 
 For inline `jwks`, the generic parser proves only that the borrowed token is a
-strict JSON object. This binder does not require a `keys` array, enumerate its
-members, reject empty sets, qualify JWK key types or coordinates, enforce
-`kid`, `use`, `alg`, or `key_ops`, reject every private or symmetric parameter,
-or select a client-authentication key.
+strict JSON object. This binder still does not invoke
+`JOSE-JWK-SET-P256-SELECT`, which performs the bounded full-set validation,
+private/symmetric and unsupported-metadata rejection, decoded-`kid` selection,
+public-key parsing, and thumbprint derivation required for an ES256
+client-authentication key.
 
-A later checked JWKS layer must perform those operations. The existing
-`JOSE-JWK-P256-PUBLIC-PARSE` and `JOSE-JWK-P256-THUMBPRINT` operations are
-reusable for individual public ES256 keys after a bounded JWK Set layer has
-identified each object.
+The deployment owner must invoke that selector synchronously while the
+metadata callback's raw `jwks` span remains borrowed, or first copy the exact
+token into separately owned stable storage. Binder success alone does not
+claim checked-JWKS success.
 
 ### `jwks_uri` acquisition
 
@@ -217,8 +218,8 @@ and does not fetch the resource.
 A later acquisition owner must apply HTTPS target policy, hardened DNS and SSRF
 admission, authenticated TLS, exact requested/effective target equality, exact
 HTTP status and redirect policy, JSON media validation, and a bounded response.
-The acquired body must then pass the same checked JWKS qualification used for
-inline data.
+The acquired body must then pass `JOSE-JWK-SET-P256-SELECT`, the same checked
+JWK Set qualification used for inline data.
 
 ### Private-key ownership
 

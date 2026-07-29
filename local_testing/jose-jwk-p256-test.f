@@ -359,6 +359,20 @@ VARIABLE _jjpkt-copy-u
         0xA5 _jjpkt-filled? _jjpkt-assert
     _jjpkt-stack ;
 
+: _jjpkt-test-caller-span  ( -- )
+    _jjpkt-work JOSE-JWK-P256-WORKSPACE-SIZE
+    JOSE-JWK-P256-CALLER-SPAN-STATUS
+        JOSE-JWK-P256-S-OK = _jjpkt-assert
+
+    _jjpkt-bad-span
+    JOSE-JWK-P256-CALLER-SPAN-STATUS
+        JOSE-JWK-P256-S-RANGE = _jjpkt-assert
+
+    _JJPK-CANONICAL-PREFIX _JJPK-CANONICAL-PREFIX-SIZE
+    JOSE-JWK-P256-CALLER-SPAN-STATUS
+        JOSE-JWK-P256-S-ALIAS = _jjpkt-assert
+    _jjpkt-stack ;
+
 : _jjpkt-stage-throw
   ( source source-u public-output workspace -- status )
     DUP JOSE-JWK-P256-WORKSPACE-SIZE 0x44 FILL
@@ -437,6 +451,7 @@ VARIABLE _jjpkt-copy-u
     _jjpkt-test-encoding-and-point
     _jjpkt-test-alias
     _jjpkt-test-mapped-spans
+    _jjpkt-test-caller-span
     _jjpkt-test-publication-throws
 
     _jjpkt-stack

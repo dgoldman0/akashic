@@ -231,8 +231,9 @@ transport context or semantic modules:
 - defining-spec relationships among application type and redirects,
   response and grant declarations, and the authentication method, signing
   algorithm, and selected key source;
-- a fully valid public JWK Set, including rejection of private or symmetric
-  key material and qualification of fetched `jwks_uri` keys; and
+- checked selection with `JOSE-JWK-SET-P256-SELECT` for either inline `jwks`
+  or a bounded fetched `jwks_uri` body, including full-set validation and
+  rejection of private, symmetric, or unsupported key metadata; and
 - exact agreement with the locally selected immutable client configuration.
 
 The AT Protocol binder additionally requires its profile fields and values,

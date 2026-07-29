@@ -65,6 +65,9 @@ JOSE-JWK-P256-PUBLIC-EMIT
 JOSE-JWK-P256-THUMBPRINT
   ( public digest-output workspace -- status )
 
+JOSE-JWK-P256-CALLER-SPAN-STATUS
+  ( address length -- status )
+
 JOSE-JWK-P256-WORKSPACE-CLEAR
   ( workspace -- status )
 ```
@@ -87,6 +90,12 @@ footprint, this module's immutable serialization tables, or SHA-256's
 reserved/admission boundary. Operation operands must be mutually disjoint as
 documented; output capacity participates in full, not merely the prefix
 eventually written.
+
+`JOSE-JWK-P256-CALLER-SPAN-STATUS` exports that complete nonmutating
+admission boundary for checked JOSE composition. It includes generic caller
+qualification plus the P-256, immutable JWK serialization, and SHA-256
+reserved footprints. A composing layer must apply it to its complete outer
+workspace before clearing any byte.
 
 The caller must keep borrowed source bytes stable for the complete call.
 `PUBLIC-PARSE` retains only offsets while validating and decoding the
