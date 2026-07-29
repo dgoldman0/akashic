@@ -1099,6 +1099,28 @@ PROVIDED akashic-sbx-vm
     DUP _SVM-LAYOUT-VALID? 0= IF DROP 0 EXIT THEN
     _SVM-TYPED-EXTENSION-VALID? ;
 
+\ Constant-time ownership probe for a typed activation.  Hosts use this to
+\ reject a valid instance borrowed from another invocation before dispatching
+\ through it; the VM operation itself still performs full instance validation.
+: SBOX-VM-INSTANCE-BOUND?
+  ( plan binding value-state value-work value-work-u instance -- flag )
+    DUP _SVM-INSTANCE-HEADER-STATUS IF
+        2DROP 2DROP 2DROP 0 EXIT
+    THEN
+    DUP _SVI.MAGIC @ _SVM-INSTANCE-MAGIC <> IF
+        2DROP 2DROP 2DROP 0 EXIT
+    THEN
+    DUP _SVI.SELF @ OVER <> IF
+        2DROP 2DROP 2DROP 0 EXIT
+    THEN
+    >R
+    4 PICK R@ _SVI.PLAN @ =
+    4 PICK R@ _SVI.BINDING @ = AND
+    3 PICK R@ _SVI.VALUE-STATE @ = AND
+    2 PICK R@ _SVI.VALUE-WORK @ = AND
+    1 PICK R@ _SVI.VALUE-WORK-U @ = AND
+    >R 2DROP 2DROP DROP R> R> DROP ;
+
 \ =====================================================================
 \  INIT boundary, plan projection, and initial frame
 \ =====================================================================
