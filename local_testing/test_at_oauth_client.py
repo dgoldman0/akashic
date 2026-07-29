@@ -186,6 +186,12 @@ GROUP_STAGES = (
         180_000_000,
     ),
     (
+        "view-apis",
+        "_atoct-test-view-apis",
+        "ATOC VIEW APIS READY",
+        180_000_000,
+    ),
+    (
         "readiness-precedence",
         "_atoct-test-readiness-precedence",
         "ATOC READINESS PRECEDENCE READY",
@@ -276,6 +282,8 @@ def _assert_static_contracts() -> None:
         "AT-OAUTH-CLIENT-WORKSPACE-CLEAR",
         "AT-OAUTH-CLIENT-STATUS-VALID?",
         "AT-OAUTH-CLIENT-ADMIT",
+        "AT-OAUTH-CLIENT-VIEW-ADMIT",
+        "AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT",
         "AT-OAUTH-CLIENT-S-OK",
         "AT-OAUTH-CLIENT-S-ALIAS",
         "AT-OAUTH-CLIENT-S-CONFIG",
@@ -299,10 +307,19 @@ def _assert_static_contracts() -> None:
     assert "AT-OAUTH-PROFILE-READY?" not in geometry
     assert "OAUTH2-CLIENT-CONFIG-VALID?" not in source
 
-    with_config = _word_body(source, "_ATOC-WITH-CONFIG")
-    assert with_config.index(
+    view_admit = _word_body(source, "AT-OAUTH-CLIENT-VIEW-ADMIT")
+    assert view_admit.index(
         "AT-OAUTH-PROFILE-READY?"
-    ) < with_config.index("_ATOC-WIPE-WORKSPACE")
+    ) < view_admit.index("_ATOC-CALL3-CLEAN")
+    assert "AT-OAUTH-CLIENT-VIEW-ADMIT" in _word_body(
+        source, "_ATOC-WITH-CONFIG"
+    )
+    redirect_admit = _word_body(
+        source, "AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT"
+    )
+    assert redirect_admit.index("_ATOC-REDIRECT-GEOMETRY") < (
+        redirect_admit.index("_ATOC-REDIRECT-CALL")
+    )
 
     binding = _word_body(source, "_ATOC-BIND")
     for accessor in (
@@ -320,13 +337,13 @@ def _assert_static_contracts() -> None:
         source, "_ATOC-ADMIT-OP"
     )
     assert "_O2CC" not in source
-    assert "CATCH" in _word_body(source, "_ATOC-ADMIT-CALL")
+    assert "CATCH" in _word_body(source, "_ATOC-CALL3-CLEAN")
     assert "_ATOC-WIPE-WORKSPACE" in _word_body(
         source, "_ATOC-FINISH"
     )
     public_admit = _word_body(source, "AT-OAUTH-CLIENT-ADMIT")
     assert public_admit.index("_ATOC-GEOMETRY") < public_admit.index(
-        "_ATOC-ADMIT-CALL"
+        "_ATOC-CALL3-CLEAN"
     )
 
     assert "PROVIDED at-oauth-prof-test" in profile_fixture
@@ -345,17 +362,20 @@ def _assert_static_contracts() -> None:
         "RS256",
         "AT-OAUTH-CLIENT-S-AUTH-ALGORITHM",
         "AT-OAUTH-CLIENT-S-ALIAS",
+        "AT-OAUTH-CLIENT-VIEW-ADMIT",
+        "AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT",
+        "OAUTH2-CLIENT-CONFIG-WITH",
+        "_atoct-test-view-apis",
         "_atoct-work-zero?",
         "_atoct-inputs-unchanged?",
     ):
         assert marker in fixture
     assert not re.search(
-        r"(?i)\b(?:_ATOC-(?!ADMIT-CALL\b)|_ATOCW[.-])",
+        r"(?i)\b(?:_ATOC-|_ATOCW[.-])",
         "\n".join(
             line.split("\\", 1)[0] for line in fixture.splitlines()
         ),
     ), "fixture must use public production APIs"
-    assert fixture.count("_ATOC-ADMIT-CALL") == 1
 
     for marker in (
         "AT-OAUTH-CLIENT-ADMIT",

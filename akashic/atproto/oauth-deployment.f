@@ -1,0 +1,843 @@
+\ =====================================================================
+\  oauth-deployment.f - AT OAuth client deployment binding
+\ =====================================================================
+\  This state-free adapter binds one structurally decoded Client ID
+\  Metadata Document to one immutable OAuth client configuration and one
+\  ready AT OAuth profile.  It lends the overlapping borrowed config and
+\  metadata views to one synchronous caller callback only after every
+\  local AT deployment declaration has been admitted.
+\
+\  This module owns no HTTP, DNS, TLS, redirect following, browser,
+\  private key, JWKS acquisition/qualification, token, session, XRPC, or
+\  Streams state.  Inline JWKS bytes and decoded jwks_uri bytes remain
+\  borrowed from the generic metadata view during the callback.
+\
+\  Public API:
+\
+\    AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE
+\    AT-OAUTH-DEPLOYMENT-WORKSPACE-CLEAR
+\    AT-OAUTH-DEPLOYMENT-STATUS-VALID?
+\    AT-OAUTH-DEPLOYMENT-WITH
+\ =====================================================================
+
+PROVIDED akashic-at-oauth-deployment
+
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../security/oauth2/client-config.f
+REQUIRE ../security/oauth2/client-metadata.f
+REQUIRE oauth-profile.f
+REQUIRE oauth-client.f
+
+\ =====================================================================
+\  Public status vocabulary
+\ =====================================================================
+
+0  CONSTANT AT-OAUTH-DEPLOYMENT-S-OK
+1  CONSTANT AT-OAUTH-DEPLOYMENT-S-INVALID
+2  CONSTANT AT-OAUTH-DEPLOYMENT-S-CAPACITY
+3  CONSTANT AT-OAUTH-DEPLOYMENT-S-ALIAS
+4  CONSTANT AT-OAUTH-DEPLOYMENT-S-CONFIG
+5  CONSTANT AT-OAUTH-DEPLOYMENT-S-PROFILE
+6  CONSTANT AT-OAUTH-DEPLOYMENT-S-METADATA
+7  CONSTANT AT-OAUTH-DEPLOYMENT-S-CLIENT-ID
+8  CONSTANT AT-OAUTH-DEPLOYMENT-S-APPLICATION
+9  CONSTANT AT-OAUTH-DEPLOYMENT-S-GRANT
+10 CONSTANT AT-OAUTH-DEPLOYMENT-S-RESPONSE
+11 CONSTANT AT-OAUTH-DEPLOYMENT-S-REDIRECT
+12 CONSTANT AT-OAUTH-DEPLOYMENT-S-SCOPE
+13 CONSTANT AT-OAUTH-DEPLOYMENT-S-AUTH-METHOD
+14 CONSTANT AT-OAUTH-DEPLOYMENT-S-AUTH-ALGORITHM
+15 CONSTANT AT-OAUTH-DEPLOYMENT-S-DPOP
+16 CONSTANT AT-OAUTH-DEPLOYMENT-S-KEY-SOURCE
+17 CONSTANT AT-OAUTH-DEPLOYMENT-S-CALLBACK
+18 CONSTANT AT-OAUTH-DEPLOYMENT-S-INTERNAL
+19 CONSTANT AT-OAUTH-DEPLOYMENT-S-RANGE
+20 CONSTANT AT-OAUTH-DEPLOYMENT-S-PROTECTED
+21 CONSTANT AT-OAUTH-DEPLOYMENT-S-PLATFORM
+
+: AT-OAUTH-DEPLOYMENT-STATUS-VALID?  ( status -- flag )
+    DUP AT-OAUTH-DEPLOYMENT-S-OK >=
+    SWAP AT-OAUTH-DEPLOYMENT-S-PLATFORM <= AND ;
+
+\ =====================================================================
+\  Caller-owned operation workspace
+\ =====================================================================
+
+ 0 CONSTANT _ATODW-DOCUMENT
+ 8 CONSTANT _ATODW-DOCUMENT-U
+16 CONSTANT _ATODW-PROFILE
+24 CONSTANT _ATODW-CALLBACK
+32 CONSTANT _ATODW-CONTEXT
+40 CONSTANT _ATODW-CONFIG-VIEW
+48 CONSTANT _ATODW-CALLBACK-RESULT
+56 CONSTANT _ATODW-REDIRECT-INDEX
+64 CONSTANT _ATODW-REDIRECT-COUNT
+72 CONSTANT _ATODW-CLIENT-WORK-OFF
+
+_ATODW-CLIENT-WORK-OFF AT-OAUTH-CLIENT-WORKSPACE-SIZE +
+    CONSTANT _ATODW-METADATA-WORK-OFF
+_ATODW-METADATA-WORK-OFF
+    OAUTH2-CLIENT-METADATA-WORKSPACE-SIZE +
+    CONSTANT AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE
+
+: _ATODW.DOCUMENT  ( workspace -- field )
+    _ATODW-DOCUMENT + ;
+: _ATODW.DOCUMENT-U  ( workspace -- field )
+    _ATODW-DOCUMENT-U + ;
+: _ATODW.PROFILE  ( workspace -- field )
+    _ATODW-PROFILE + ;
+: _ATODW.CALLBACK  ( workspace -- field )
+    _ATODW-CALLBACK + ;
+: _ATODW.CONTEXT  ( workspace -- field )
+    _ATODW-CONTEXT + ;
+: _ATODW.CONFIG-VIEW  ( workspace -- field )
+    _ATODW-CONFIG-VIEW + ;
+: _ATODW.CALLBACK-RESULT  ( workspace -- field )
+    _ATODW-CALLBACK-RESULT + ;
+: _ATODW.REDIRECT-INDEX  ( workspace -- field )
+    _ATODW-REDIRECT-INDEX + ;
+: _ATODW.REDIRECT-COUNT  ( workspace -- field )
+    _ATODW-REDIRECT-COUNT + ;
+
+: _ATODW.CLIENT-WORK  ( workspace -- client-workspace )
+    _ATODW-CLIENT-WORK-OFF + ;
+: _ATODW.METADATA-WORK  ( workspace -- metadata-workspace )
+    _ATODW-METADATA-WORK-OFF + ;
+
+: _ATOD-WIPE  ( workspace -- )
+    AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Caller-memory admission
+\ =====================================================================
+
+: _ATOD-CALLER>STATUS  ( caller-status -- status )
+    DUP CALLER-SPAN-S-OK = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-OK EXIT
+    THEN
+    DUP CALLER-SPAN-S-RANGE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-RANGE EXIT
+    THEN
+    DUP CALLER-SPAN-S-PROTECTED = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PROTECTED EXIT
+    THEN
+    DUP CALLER-SPAN-S-PLATFORM = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PLATFORM EXIT
+    THEN
+    DROP AT-OAUTH-DEPLOYMENT-S-PLATFORM ;
+
+: _ATOD-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF
+        2DROP AT-OAUTH-DEPLOYMENT-S-INVALID EXIT
+    THEN
+    DUP 0= IF
+        2DROP AT-OAUTH-DEPLOYMENT-S-OK EXIT
+    THEN
+    OVER 0= IF
+        2DROP AT-OAUTH-DEPLOYMENT-S-INVALID EXIT
+    THEN
+    CALLER-SPAN-STATUS _ATOD-CALLER>STATUS ;
+
+: _ATOD-FIXED-STATUS  ( address length -- status )
+    OVER 0= IF
+        2DROP AT-OAUTH-DEPLOYMENT-S-INVALID EXIT
+    THEN
+    OVER 7 AND IF
+        2DROP AT-OAUTH-DEPLOYMENT-S-INVALID EXIT
+    THEN
+    _ATOD-SPAN-STATUS ;
+
+: _ATOD-DROP7  ( seven-values -- )
+    2DROP 2DROP 2DROP DROP ;
+
+: _ATOD-DROP3  ( three-values -- )
+    2DROP DROP ;
+
+: _ATOD-7DUP  ( seven-values -- the-same-seven-values twice )
+    6 PICK 6 PICK 6 PICK 6 PICK
+    6 PICK 6 PICK 6 PICK ;
+
+: _ATOD-RETURN7  ( seven-values status -- status )
+    >R _ATOD-DROP7 R> ;
+
+: _ATOD-GEOMETRY
+  ( document document-u config profile callback context workspace -- status )
+    DUP AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE _ATOD-FIXED-STATUS
+    ?DUP IF _ATOD-RETURN7 EXIT THEN
+
+    6 PICK 6 PICK _ATOD-SPAN-STATUS
+    ?DUP IF _ATOD-RETURN7 EXIT THEN
+    5 PICK 0> 0= IF
+        AT-OAUTH-DEPLOYMENT-S-INVALID _ATOD-RETURN7 EXIT
+    THEN
+    5 PICK OAUTH2-CLIENT-METADATA-MAX-DOCUMENT-BYTES U> IF
+        AT-OAUTH-DEPLOYMENT-S-CAPACITY _ATOD-RETURN7 EXIT
+    THEN
+
+    4 PICK OAUTH2-CLIENT-CONFIG-SIZE _ATOD-FIXED-STATUS
+    ?DUP IF _ATOD-RETURN7 EXIT THEN
+    3 PICK AT-OAUTH-PROFILE-SIZE _ATOD-FIXED-STATUS
+    ?DUP IF _ATOD-RETURN7 EXIT THEN
+    2 PICK 0= IF
+        AT-OAUTH-DEPLOYMENT-S-INVALID _ATOD-RETURN7 EXIT
+    THEN
+
+    6 PICK 6 PICK 2 PICK AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-DEPLOYMENT-S-ALIAS _ATOD-RETURN7 EXIT
+    THEN
+    4 PICK OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-DEPLOYMENT-S-ALIAS _ATOD-RETURN7 EXIT
+    THEN
+    3 PICK AT-OAUTH-PROFILE-SIZE
+    2 PICK AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-DEPLOYMENT-S-ALIAS _ATOD-RETURN7 EXIT
+    THEN
+
+    AT-OAUTH-DEPLOYMENT-S-OK _ATOD-RETURN7 ;
+
+: AT-OAUTH-DEPLOYMENT-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE _ATOD-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    _ATOD-WIPE
+    AT-OAUTH-DEPLOYMENT-S-OK ;
+
+\ =====================================================================
+\  Subordinate status mapping
+\ =====================================================================
+
+: _ATOD-CONFIG>STATUS  ( config-status -- deployment-status )
+    DUP OAUTH2-CLIENT-CONFIG-S-INVALID = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-CONFIG EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-RANGE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-RANGE EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-PROTECTED = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PROTECTED EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-PLATFORM = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PLATFORM EXIT
+    THEN
+    DROP AT-OAUTH-DEPLOYMENT-S-INTERNAL ;
+
+: _ATOD-CLIENT>STATUS  ( client-status -- deployment-status )
+    DUP AT-OAUTH-CLIENT-S-OK = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-OK EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-PROFILE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PROFILE EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-CLIENT-ID = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-CLIENT-ID EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-REDIRECT = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-REDIRECT EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-SCOPE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-SCOPE EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-AUTH-METHOD = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-AUTH-METHOD EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-AUTH-ALGORITHM = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-AUTH-ALGORITHM EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-DPOP = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-DPOP EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-RANGE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-RANGE EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-PROTECTED = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PROTECTED EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-PLATFORM = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PLATFORM EXIT
+    THEN
+    DROP AT-OAUTH-DEPLOYMENT-S-INTERNAL ;
+
+: _ATOD-METADATA>STATUS  ( metadata-status -- deployment-status )
+    DUP OAUTH2-CLIENT-METADATA-S-OK = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-OK EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-CAPACITY = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-CAPACITY EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-ALIAS = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-ALIAS EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-RANGE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-RANGE EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-PROTECTED = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PROTECTED EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-PLATFORM = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-PLATFORM EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-JSON = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-METADATA EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-MISSING = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-METADATA EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-TYPE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-METADATA EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-VALUE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-METADATA EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-DUPLICATE = IF
+        DROP AT-OAUTH-DEPLOYMENT-S-METADATA EXIT
+    THEN
+    DROP AT-OAUTH-DEPLOYMENT-S-INTERNAL ;
+
+\ =====================================================================
+\  Exact byte and scope-set helpers
+\ =====================================================================
+
+: _ATOD-BYTES=  ( first-a first-u second-a second-u -- flag )
+    COMPARE 0= ;
+
+: _ATOD-SCOPE-TOKEN-U  ( address length -- token-length )
+    0
+    BEGIN
+        DUP 2 PICK U<
+    WHILE
+        2 PICK OVER + C@ BL = IF
+            >R 2DROP R> EXIT
+        THEN
+        1+
+    REPEAT
+    >R 2DROP R> ;
+
+: _ATOD-SCOPE-HAS?
+  ( needle-a needle-u scope-a scope-u -- flag )
+    BEGIN
+        DUP
+    WHILE
+        2DUP _ATOD-SCOPE-TOKEN-U >R
+        3 PICK 3 PICK 3 PICK R@ _ATOD-BYTES= IF
+            2DROP 2DROP R> DROP -1 EXIT
+        THEN
+        DUP R@ = IF
+            2DROP 2DROP R> DROP 0 EXIT
+        THEN
+        R> 1+ /STRING
+    REPEAT
+    2DROP 2DROP 0 ;
+
+: _ATOD-SCOPE-SUBSET?
+  ( requested-a requested-u declared-a declared-u -- flag )
+    BEGIN
+        2 PICK
+    WHILE
+        3 PICK 3 PICK _ATOD-SCOPE-TOKEN-U >R
+        3 PICK R@ 3 PICK 3 PICK _ATOD-SCOPE-HAS? 0= IF
+            2DROP 2DROP R> DROP 0 EXIT
+        THEN
+        2 PICK R@ = IF
+            2DROP 2DROP R> DROP -1 EXIT
+        THEN
+        2SWAP
+        R> 1+ /STRING
+        2SWAP
+    REPEAT
+    2DROP 2DROP -1 ;
+
+\ =====================================================================
+\  Metadata/config policy
+\ =====================================================================
+
+: _ATOD-CLIENT-ID-POLICY
+  ( metadata-view workspace -- status )
+    >R
+    OAUTH2-CLIENT-METADATA-VIEW-CLIENT-ID@
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        _ATOD-DROP3 R> DROP
+        AT-OAUTH-DEPLOYMENT-S-INTERNAL EXIT
+    THEN
+    DROP
+    R@ _ATODW.CONFIG-VIEW @
+        OAUTH2-CLIENT-VIEW-CLIENT-ID@
+    _ATOD-BYTES= IF
+        R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+    ELSE
+        R> DROP AT-OAUTH-DEPLOYMENT-S-CLIENT-ID
+    THEN ;
+
+: _ATOD-APPLICATION-POLICY
+  ( metadata-view workspace -- status )
+    >R
+    OAUTH2-CLIENT-METADATA-VIEW-APPLICATION-TYPE@
+    DUP OAUTH2-CLIENT-METADATA-S-MISSING = IF
+        _ATOD-DROP3
+        R@ _ATODW.CONFIG-VIEW @
+            OAUTH2-CLIENT-VIEW-APPLICATION-TYPE@
+        OAUTH2-CLIENT-CONFIG-APPLICATION-WEB = IF
+            R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+        ELSE
+            R> DROP AT-OAUTH-DEPLOYMENT-S-APPLICATION
+        THEN
+        EXIT
+    THEN
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        _ATOD-DROP3 R> DROP
+        AT-OAUTH-DEPLOYMENT-S-INTERNAL EXIT
+    THEN
+    DROP
+    R@ _ATODW.CONFIG-VIEW @
+        OAUTH2-CLIENT-VIEW-APPLICATION-TYPE@
+    OAUTH2-CLIENT-CONFIG-APPLICATION-NATIVE = IF
+        S" native"
+    ELSE
+        S" web"
+    THEN
+    _ATOD-BYTES= IF
+        R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+    ELSE
+        R> DROP AT-OAUTH-DEPLOYMENT-S-APPLICATION
+    THEN ;
+
+: _ATOD-MEMBERSHIP-OK?  ( present metadata-status -- flag )
+    OAUTH2-CLIENT-METADATA-S-OK =
+    SWAP 0<> AND ;
+
+: _ATOD-GRANT-POLICY  ( metadata-view workspace -- status )
+    >R
+    DUP OAUTH2-CLIENT-METADATA-VIEW-GRANT-TYPE-COUNT@
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        2DROP DROP R> DROP
+        AT-OAUTH-DEPLOYMENT-S-GRANT EXIT
+    THEN
+    DROP
+    R@ _ATODW.CONFIG-VIEW @ OAUTH2-CLIENT-VIEW-REFRESH? IF
+        2
+    ELSE
+        1
+    THEN
+    <> IF
+        DROP R> DROP AT-OAUTH-DEPLOYMENT-S-GRANT EXIT
+    THEN
+
+    S" authorization_code" 2 PICK
+    OAUTH2-CLIENT-METADATA-VIEW-GRANT-TYPE?
+    _ATOD-MEMBERSHIP-OK? 0= IF
+        DROP R> DROP AT-OAUTH-DEPLOYMENT-S-GRANT EXIT
+    THEN
+
+    R@ _ATODW.CONFIG-VIEW @ OAUTH2-CLIENT-VIEW-REFRESH? IF
+        S" refresh_token" 2 PICK
+        OAUTH2-CLIENT-METADATA-VIEW-GRANT-TYPE?
+        _ATOD-MEMBERSHIP-OK? 0= IF
+            DROP R> DROP AT-OAUTH-DEPLOYMENT-S-GRANT EXIT
+        THEN
+    THEN
+    DROP R> DROP AT-OAUTH-DEPLOYMENT-S-OK ;
+
+: _ATOD-RESPONSE-POLICY  ( metadata-view workspace -- status )
+    >R
+    DUP OAUTH2-CLIENT-METADATA-VIEW-RESPONSE-TYPE-COUNT@
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        2DROP DROP R> DROP
+        AT-OAUTH-DEPLOYMENT-S-RESPONSE EXIT
+    THEN
+    DROP
+    1 <> IF
+        DROP R> DROP AT-OAUTH-DEPLOYMENT-S-RESPONSE EXIT
+    THEN
+    S" code" 2 PICK
+    OAUTH2-CLIENT-METADATA-VIEW-RESPONSE-TYPE?
+    _ATOD-MEMBERSHIP-OK? 0= IF
+        DROP R> DROP AT-OAUTH-DEPLOYMENT-S-RESPONSE EXIT
+    THEN
+    DROP R> DROP AT-OAUTH-DEPLOYMENT-S-OK ;
+
+: _ATOD-REDIRECT-ONE
+  ( redirect-a redirect-u workspace -- status )
+    >R
+    R@ _ATODW.CONFIG-VIEW @
+    R@ _ATODW.CLIENT-WORK
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+    DUP AT-OAUTH-CLIENT-S-OK = IF
+        DROP R> DROP AT-OAUTH-DEPLOYMENT-S-OK EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-REDIRECT = IF
+        DROP R> DROP AT-OAUTH-DEPLOYMENT-S-REDIRECT EXIT
+    THEN
+    DROP R> DROP AT-OAUTH-DEPLOYMENT-S-INTERNAL ;
+
+: _ATOD-REDIRECT-POLICY  ( metadata-view workspace -- status )
+    >R
+    DUP OAUTH2-CLIENT-METADATA-VIEW-REDIRECT-URI-COUNT@
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        2DROP DROP R> DROP
+        AT-OAUTH-DEPLOYMENT-S-REDIRECT EXIT
+    THEN
+    DROP
+    DUP 0= IF
+        2DROP R> DROP AT-OAUTH-DEPLOYMENT-S-REDIRECT EXIT
+    THEN
+    DUP R@ _ATODW.REDIRECT-COUNT !
+    DROP
+
+    R@ _ATODW.CONFIG-VIEW @
+        OAUTH2-CLIENT-VIEW-REDIRECT-URI@
+    2 PICK
+    OAUTH2-CLIENT-METADATA-VIEW-REDIRECT-URI?
+    _ATOD-MEMBERSHIP-OK? 0= IF
+        DROP R> DROP AT-OAUTH-DEPLOYMENT-S-REDIRECT EXIT
+    THEN
+
+    0 R@ _ATODW.REDIRECT-INDEX !
+    BEGIN
+        R@ _ATODW.REDIRECT-INDEX @
+        R@ _ATODW.REDIRECT-COUNT @ U<
+    WHILE
+        R@ _ATODW.REDIRECT-INDEX @
+        OVER OAUTH2-CLIENT-METADATA-VIEW-REDIRECT-URI@
+        DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+            _ATOD-DROP3 DROP R> DROP
+            AT-OAUTH-DEPLOYMENT-S-INTERNAL EXIT
+        THEN
+        DROP
+        R@ _ATOD-REDIRECT-ONE ?DUP IF
+            >R DROP R> R> DROP EXIT
+        THEN
+        1 R@ _ATODW.REDIRECT-INDEX +!
+    REPEAT
+    DROP R> DROP AT-OAUTH-DEPLOYMENT-S-OK ;
+
+: _ATOD-SCOPE-POLICY  ( metadata-view workspace -- status )
+    >R
+    OAUTH2-CLIENT-METADATA-VIEW-SCOPE@
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        _ATOD-DROP3 R> DROP
+        AT-OAUTH-DEPLOYMENT-S-SCOPE EXIT
+    THEN
+    DROP
+    R@ _ATODW.CONFIG-VIEW @ OAUTH2-CLIENT-VIEW-SCOPE@
+    2SWAP
+    _ATOD-SCOPE-SUBSET? IF
+        R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+    ELSE
+        R> DROP AT-OAUTH-DEPLOYMENT-S-SCOPE
+    THEN ;
+
+: _ATOD-AUTH-METHOD-POLICY
+  ( metadata-view workspace -- status )
+    >R
+    OAUTH2-CLIENT-METADATA-VIEW-TOKEN-AUTH-METHOD@
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        _ATOD-DROP3 R> DROP
+        AT-OAUTH-DEPLOYMENT-S-AUTH-METHOD EXIT
+    THEN
+    DROP
+    2DUP S" none" _ATOD-BYTES=
+    2 PICK 2 PICK S" private_key_jwt" _ATOD-BYTES= OR
+    0= IF
+        2DROP R> DROP
+        AT-OAUTH-DEPLOYMENT-S-AUTH-METHOD EXIT
+    THEN
+    R@ _ATODW.CONFIG-VIEW @
+        OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+    _ATOD-BYTES= IF
+        R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+    ELSE
+        R> DROP AT-OAUTH-DEPLOYMENT-S-AUTH-METHOD
+    THEN ;
+
+: _ATOD-AUTH-ALGORITHM-PUBLIC
+  ( metadata-view workspace -- status )
+    DROP
+    OAUTH2-CLIENT-METADATA-VIEW-TOKEN-AUTH-SIGNING-ALG@
+    DUP OAUTH2-CLIENT-METADATA-S-MISSING = IF
+        _ATOD-DROP3 AT-OAUTH-DEPLOYMENT-S-OK EXIT
+    THEN
+    _ATOD-DROP3 AT-OAUTH-DEPLOYMENT-S-AUTH-ALGORITHM ;
+
+: _ATOD-AUTH-ALGORITHM-CONFIDENTIAL
+  ( metadata-view workspace -- status )
+    >R
+    OAUTH2-CLIENT-METADATA-VIEW-TOKEN-AUTH-SIGNING-ALG@
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        _ATOD-DROP3 R> DROP
+        AT-OAUTH-DEPLOYMENT-S-AUTH-ALGORITHM EXIT
+    THEN
+    DROP
+    2DUP S" ES256" _ATOD-BYTES= 0= IF
+        2DROP R> DROP
+        AT-OAUTH-DEPLOYMENT-S-AUTH-ALGORITHM EXIT
+    THEN
+    R@ _ATODW.CONFIG-VIEW @
+        OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@
+    _ATOD-BYTES= IF
+        R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+    ELSE
+        R> DROP AT-OAUTH-DEPLOYMENT-S-AUTH-ALGORITHM
+    THEN ;
+
+: _ATOD-AUTH-ALGORITHM-POLICY
+  ( metadata-view workspace -- status )
+    DUP _ATODW.CONFIG-VIEW @
+        OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+    S" none" _ATOD-BYTES= IF
+        _ATOD-AUTH-ALGORITHM-PUBLIC EXIT
+    THEN
+    _ATOD-AUTH-ALGORITHM-CONFIDENTIAL ;
+
+: _ATOD-DPOP-POLICY  ( metadata-view workspace -- status )
+    >R
+    OAUTH2-CLIENT-METADATA-VIEW-DPOP-BOUND?
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        2DROP R> DROP AT-OAUTH-DEPLOYMENT-S-DPOP EXIT
+    THEN
+    DROP 0= IF
+        R> DROP AT-OAUTH-DEPLOYMENT-S-DPOP EXIT
+    THEN
+    R@ _ATODW.CONFIG-VIEW @
+        OAUTH2-CLIENT-VIEW-DPOP-BOUND? IF
+        R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+    ELSE
+        R> DROP AT-OAUTH-DEPLOYMENT-S-DPOP
+    THEN ;
+
+: _ATOD-KEY-SOURCE-POLICY
+  ( metadata-view workspace -- status )
+    >R
+    OAUTH2-CLIENT-METADATA-VIEW-PRESENCE@
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        2DROP R> DROP
+        AT-OAUTH-DEPLOYMENT-S-INTERNAL EXIT
+    THEN
+    DROP
+    R@ _ATODW.CONFIG-VIEW @
+        OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+    S" none" _ATOD-BYTES= IF
+        OAUTH2-CLIENT-METADATA-P-JWKS
+        OAUTH2-CLIENT-METADATA-P-JWKS-URI OR
+        AND 0= IF
+            R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+        ELSE
+            R> DROP AT-OAUTH-DEPLOYMENT-S-KEY-SOURCE
+        THEN
+        EXIT
+    THEN
+    OAUTH2-CLIENT-METADATA-P-JWKS
+    OAUTH2-CLIENT-METADATA-P-JWKS-URI OR
+    AND 0<> IF
+        R> DROP AT-OAUTH-DEPLOYMENT-S-OK
+    ELSE
+        R> DROP AT-OAUTH-DEPLOYMENT-S-KEY-SOURCE
+    THEN ;
+
+: _ATOD-POLICY  ( metadata-view workspace -- status )
+    2DUP _ATOD-CLIENT-ID-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _ATOD-APPLICATION-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _ATOD-GRANT-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _ATOD-RESPONSE-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _ATOD-REDIRECT-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _ATOD-SCOPE-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _ATOD-AUTH-METHOD-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _ATOD-AUTH-ALGORITHM-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _ATOD-DPOP-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    _ATOD-KEY-SOURCE-POLICY ;
+
+\ =====================================================================
+\  Guarded deployment callback
+\ =====================================================================
+
+-17631 CONSTANT _ATOD-E-CALLBACK-STACK
+0x41544F4447554152 CONSTANT _ATOD-CALLBACK-GUARD
+
+: _ATOD-CALLBACK-RUN
+  ( metadata-view workspace -- callback-result )
+    DEPTH >R
+    DUP _ATODW.CALLBACK @ >R
+    _ATOD-CALLBACK-GUARD
+    1 PICK _ATODW.CONFIG-VIEW @
+    3 PICK
+    3 PICK _ATODW.CONTEXT @
+    R> EXECUTE
+    DEPTH R@ 2 + <> IF
+        _ATOD-E-CALLBACK-STACK THROW
+    THEN
+    OVER _ATOD-CALLBACK-GUARD <> IF
+        _ATOD-E-CALLBACK-STACK THROW
+    THEN
+    NIP
+    >R 2DROP
+    R>
+    R> DROP ;
+
+: _ATOD-CALLBACK-SAFE
+  ( metadata-view workspace -- callback-result status )
+    ['] _ATOD-CALLBACK-RUN CATCH
+    DUP IF
+        DROP
+        2DROP
+        0 AT-OAUTH-DEPLOYMENT-S-CALLBACK EXIT
+    THEN
+    DROP
+    AT-OAUTH-DEPLOYMENT-S-OK ;
+
+: _ATOD-WITH-METADATA
+  ( metadata-view workspace -- deployment-status )
+    2DUP _ATOD-POLICY ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    DUP >R
+    _ATOD-CALLBACK-SAFE
+    DUP AT-OAUTH-DEPLOYMENT-S-OK = IF
+        DROP
+        R@ _ATODW.CALLBACK-RESULT !
+        R> DROP
+        AT-OAUTH-DEPLOYMENT-S-OK EXIT
+    THEN
+    NIP
+    R> DROP ;
+
+\ =====================================================================
+\  Nested config/metadata operation and mandatory cleanup
+\ =====================================================================
+
+: _ATOD-WITH-CONFIG
+  ( config-view workspace -- deployment-status )
+    1 PICK
+    7 PICK
+    2 PICK _ATODW.CLIENT-WORK
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+    DUP AT-OAUTH-CLIENT-S-OK <> IF
+        _ATOD-CLIENT>STATUS >R
+        2DROP R> EXIT
+    THEN
+    DROP
+
+    DUP _ATOD-WIPE
+    9 PICK OVER _ATODW.DOCUMENT !
+    8 PICK OVER _ATODW.DOCUMENT-U !
+    6 PICK OVER _ATODW.PROFILE !
+    5 PICK OVER _ATODW.CALLBACK !
+    4 PICK OVER _ATODW.CONTEXT !
+    1 PICK OVER _ATODW.CONFIG-VIEW !
+    NIP
+
+    DUP _ATODW.DOCUMENT @
+    OVER _ATODW.DOCUMENT-U @
+    ['] _ATOD-WITH-METADATA
+    3 PICK
+    4 PICK _ATODW.METADATA-WORK
+    OAUTH2-CLIENT-METADATA-WITH
+    DUP OAUTH2-CLIENT-METADATA-S-OK <> IF
+        _ATOD-METADATA>STATUS >R
+        2DROP R> EXIT
+    THEN
+    DROP
+    DUP AT-OAUTH-DEPLOYMENT-STATUS-VALID? 0= IF
+        2DROP AT-OAUTH-DEPLOYMENT-S-INTERNAL EXIT
+    THEN
+    NIP ;
+
+: _ATOD-WITH-OP
+  \ ( document document-u config profile callback context workspace
+  \   -- callback-result deployment-status )
+    4 PICK
+    ['] _ATOD-WITH-CONFIG
+    2 PICK
+    OAUTH2-CLIENT-CONFIG-WITH
+
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        DUP OAUTH2-CLIENT-CONFIG-S-CALLBACK = IF
+            2DROP
+            DUP _ATOD-WIPE
+            _ATOD-DROP7
+            0 AT-OAUTH-DEPLOYMENT-S-INTERNAL EXIT
+        THEN
+        _ATOD-CONFIG>STATUS >R
+        DROP
+        _ATOD-DROP7
+        0 R> EXIT
+    THEN
+    DROP
+
+    DUP AT-OAUTH-DEPLOYMENT-S-PROFILE = IF
+        >R _ATOD-DROP7 0 R> EXIT
+    THEN
+    DUP AT-OAUTH-DEPLOYMENT-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-DEPLOYMENT-S-INTERNAL
+    THEN
+    >R
+    R@ AT-OAUTH-DEPLOYMENT-S-OK = IF
+        DUP _ATODW.CALLBACK-RESULT @
+    ELSE
+        0
+    THEN
+    >R
+    DUP _ATOD-WIPE
+    _ATOD-DROP7
+    R> R> ;
+
+: _ATOD-WITH-CALL
+  \ ( document document-u config profile callback context workspace
+  \   operation-xt -- callback-result deployment-status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        R@ _ATOD-WIPE
+        _ATOD-DROP7
+        R> DROP
+        0 AT-OAUTH-DEPLOYMENT-S-INTERNAL EXIT
+    THEN
+    DROP
+    R> DROP ;
+
+: AT-OAUTH-DEPLOYMENT-WITH
+  \ ( document document-u config profile callback context workspace
+  \   -- callback-result deployment-status )
+    _ATOD-7DUP _ATOD-GEOMETRY
+    ?DUP IF _ATOD-RETURN7 0 SWAP EXIT THEN
+    ['] _ATOD-WITH-OP _ATOD-WITH-CALL ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+1 CELLS 8 <> [IF]
+    ." AT OAuth deployment cell geometry mismatch" CR ABORT
+[THEN]
+
+_ATODW-CLIENT-WORK-OFF 72 <> [IF]
+    ." AT OAuth deployment client workspace mismatch" CR ABORT
+[THEN]
+
+_ATODW-METADATA-WORK-OFF 504 <> [IF]
+    ." AT OAuth deployment metadata workspace mismatch" CR ABORT
+[THEN]
+
+AT-OAUTH-DEPLOYMENT-WORKSPACE-SIZE 53760 <> [IF]
+    ." AT OAuth deployment workspace mismatch" CR ABORT
+[THEN]

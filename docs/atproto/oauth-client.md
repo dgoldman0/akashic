@@ -43,6 +43,48 @@ The adapter consumes the generic configuration through
 validated once per admission, then its callback-scoped borrowed view supplies
 the selected fields without repeated whole-record scans.
 
+## Borrowed-view composition
+
+Code already running inside an `OAUTH2-CLIENT-CONFIG-WITH` callback can reuse
+the same validated configuration view:
+
+```forth
+AT-OAUTH-CLIENT-VIEW-ADMIT
+  ( config-view profile workspace -- status )
+
+AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+  ( redirect-a redirect-u config-view workspace -- status )
+```
+
+These words accept only the borrowed `config-view` supplied to that callback.
+They do not turn an arbitrary address into a configuration and do not extend
+the view lifetime.
+
+`AT-OAUTH-CLIENT-VIEW-ADMIT` applies the complete local client policy against
+one ready profile. It is the composable operation used by
+`AT-OAUTH-CLIENT-ADMIT`, so a metadata binder can retain the generic owner's
+single-validation guarantee instead of rescanning the immutable record. It
+returns the same profile and semantic-policy statuses as ordinary admission;
+`AT-OAUTH-CLIENT-S-CONFIG` is not a result for a valid borrowed view.
+
+`AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT` applies the same client-ID,
+application-type, and redirect parsing used by complete admission to one
+arbitrary nonempty redirect span. It does not test whether that redirect is
+declared or selected. A metadata binder first proves exact selected-redirect
+membership and then calls this word for every declared redirect. An invalid
+borrowed client identifier returns `AT-OAUTH-CLIENT-S-CLIENT-ID`; an invalid
+candidate returns `AT-OAUTH-CLIENT-S-REDIRECT`.
+
+Both words qualify the complete borrowed-view and workspace spans, require an
+eight-byte-aligned workspace, and reject overlap with that writable workspace.
+The redirect word also qualifies its complete source span, bounds it to the
+generic redirect capacity, and rejects source/workspace overlap. These
+geometry, capacity, alias, and non-ready-profile checks are preflight failures
+and leave every workspace byte unchanged. Once admitted, an operation wipes
+the complete 432-byte workspace after success, policy rejection, or a caught
+internal throw. The view, profile, redirect source, and configuration remain
+read-only.
+
 ## Local AT policy
 
 The adapter enforces the selected values which can be proven locally:
@@ -67,9 +109,10 @@ The adapter enforces the selected values which can be proven locally:
   Additional valid OAuth scope tokens are allowed.
 - A public selection uses `token_endpoint_auth_method` `none` and no signing
   algorithm. A confidential web selection uses `private_key_jwt` with `ES256`.
-  Native selections are public; a mobile or desktop architecture with a
-  token-mediating confidential backend is represented by the web application
-  component.
+  This adapter deliberately narrows native selections to public clients as a
+  local deployment model, not as a general AT Protocol requirement. A mobile
+  or desktop architecture with a token-mediating confidential backend is
+  represented here by its web application component.
 - `dpop_bound_access_tokens` is true. Both refresh-enabled and
   authentication-only selections are valid.
 
@@ -89,13 +132,22 @@ compatible with the ready server profile. A production deployment must also
 prove facts which are not present in that record:
 
 - Fetch the Client ID Metadata Document from the exact `client_id` with an
-  exact HTTP 200 response, a JSON media type, no redirect, hardened
+  exact HTTP 200 response, `application/json`, no redirect, hardened
   public-address policy, authenticated TLS, and bounded response handling.
 - Require the document's `client_id` to match the fetched URL byte-for-byte.
-  Its `application_type`, `grant_types`, `response_types`, `redirect_uris`,
-  `scope`, `token_endpoint_auth_method`,
-  `token_endpoint_auth_signing_alg`, and `dpop_bound_access_tokens` declarations
-  must match the selected configuration.
+  An absent `application_type` has the specification-defined `web` default;
+  an explicit value must match the selected application type.
+- Require the selected redirect URI to be an exact, case-sensitive member of
+  `redirect_uris`, and apply the AT redirect policy to every declared member.
+  The selected configuration may choose one member from a larger valid set.
+- Require every exact scope token requested by the selected configuration to
+  occur in the metadata `scope`; the requested scope is a subset of the
+  declared scope, not necessarily the same serialized string.
+- Bind `grant_types`, `response_types`, explicit non-secret
+  `token_endpoint_auth_method`, conditional
+  `token_endpoint_auth_signing_alg`, and
+  `dpop_bound_access_tokens` to the selected configuration and AT profile
+  without inventing defaults for omitted authentication metadata.
 - A confidential deployment supplies exactly one of `jwks` or `jwks_uri`,
   publishes only public client-authentication keys, and proves that the opaque
   configuration binding resolves to the corresponding private key. The

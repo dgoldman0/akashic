@@ -21,6 +21,7 @@ VARIABLE _atoct-flags
 
 VARIABLE _atoct-long-client-u
 VARIABLE _atoct-long-redirect-u
+VARIABLE _atoct-view
 
 CREATE _atoct-input-storage
     OAUTH2-CLIENT-CONFIG-INPUT-SIZE 15 + ALLOT
@@ -244,11 +245,6 @@ CREATE _atoct-long-redirect
     _atoct-config-build
     AT-OAUTH-CLIENT-S-REDIRECT _atoct-expect-admitted ;
 
-: _atoct-throw-operation
-  ( config profile workspace -- status )
-    2DROP DROP
-    -17621 THROW ;
-
 : _atoct-long-client-text  ( address length -- )
     DUP _atoct-expected !
     _atoct-long-client _atoct-long-client-u @ + SWAP MOVE
@@ -321,6 +317,146 @@ CREATE _atoct-long-redirect
     [CHAR] . _atoct-long-redirect-char
     [CHAR] a 63 _atoct-long-redirect-repeat
     S" :/callback" _atoct-long-redirect-text ;
+
+\ =====================================================================
+\  Borrowed-view callbacks
+\ =====================================================================
+
+: _atoct-view-api-callback  ( view context -- result )
+    7123 = _atoct-assert
+    _atoct-view !
+
+    _atoct-fill-work
+    _atoct-view @ _atopt-profile _atoct-work
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-OK _atoct-status
+    _atoct-work-zero? _atoct-assert
+
+    _atoct-fill-work
+    0 _atopt-profile _atoct-work
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    _atoct-view @ 1+ _atopt-profile _atoct-work
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    _atoct-view @ _atopt-profile 1+ _atoct-work
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    _atoct-view @ _atopt-profile _atoct-work 1+
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-view @ _atopt-profile _atoct-view @
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-ALIAS _atoct-status
+    _atoct-config-unchanged? _atoct-assert
+
+    _atoct-view @ _atopt-profile _atopt-profile
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-ALIAS _atoct-status
+    _atoct-profile-unchanged? _atoct-assert
+
+    _atoct-fill-work
+    S" https://callback.example/oauth/callback"
+    2DUP _atoct-view @ _atoct-work
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-OK _atoct-status
+    S" https://callback.example/oauth/callback"
+        COMPARE 0= _atoct-assert
+    _atoct-work-zero? _atoct-assert
+
+    _atoct-fill-work
+    S" http://callback.example/oauth/callback"
+    2DUP _atoct-view @ _atoct-work
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-REDIRECT _atoct-status
+    S" http://callback.example/oauth/callback"
+        COMPARE 0= _atoct-assert
+    _atoct-work-zero? _atoct-assert
+
+    _atoct-fill-work
+    0 1 _atoct-view @ _atoct-work
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    S" x" DROP 0 _atoct-view @ _atoct-work
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    _atoct-long-redirect _ATOCT-LONG-REDIRECT-CAPACITY 1+
+    _atoct-view @ _atoct-work
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    S" https://callback.example/oauth/callback"
+    0 _atoct-work
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    S" https://callback.example/oauth/callback"
+    _atoct-view @ 1+ _atoct-work
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    S" https://callback.example/oauth/callback"
+    _atoct-view @ _atoct-work 1+
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-INVALID _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    _atoct-fill-work
+    _atoct-work 8 + 8 _atoct-view @ _atoct-work
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-ALIAS _atoct-status
+    _atoct-work-filled? _atoct-assert
+
+    S" https://callback.example/oauth/callback"
+    _atoct-view @ _atoct-view @
+    AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+        AT-OAUTH-CLIENT-S-ALIAS _atoct-status
+    _atoct-config-unchanged? _atoct-assert
+
+    0 _atoct-view !
+    2468 ;
+
+: _atoct-view-profile-preflight-callback
+  ( view context -- result )
+    DROP
+    _atoct-fill-work
+    _atopt-profile _atoct-work
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-PROFILE _atoct-status
+    _atoct-work-filled? _atoct-assert
+    2468 ;
+
+: _atoct-view-policy-callback  ( view context -- result )
+    DROP
+    _atoct-fill-work
+    _atopt-profile _atoct-work
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+        AT-OAUTH-CLIENT-S-CLIENT-ID _atoct-status
+    _atoct-work-zero? _atoct-assert
+    2468 ;
 
 \ =====================================================================
 \  Contract groups
@@ -756,6 +892,40 @@ CREATE _atoct-long-redirect
     _atoct-profile-unchanged? _atoct-assert
     _atoct-stack ;
 
+: _atoct-test-view-apis  ( -- )
+    _atopt-profile-ready
+    _atoct-defaults
+    _atoct-config-build
+    _atoct-snapshot
+    _atoct-config ['] _atoct-view-api-callback 7123
+    OAUTH2-CLIENT-CONFIG-WITH
+        OAUTH2-CLIENT-CONFIG-S-OK _atoct-status
+    2468 = _atoct-assert
+    _atoct-view @ 0= _atoct-assert
+    _atoct-inputs-unchanged? _atoct-assert
+
+    _atopt-profile AT-OAUTH-PROFILE-INIT
+        AT-OAUTH-PROFILE-S-OK _atopt-status
+    _atoct-snapshot
+    _atoct-config
+    ['] _atoct-view-profile-preflight-callback 0
+    OAUTH2-CLIENT-CONFIG-WITH
+        OAUTH2-CLIENT-CONFIG-S-OK _atoct-status
+    2468 = _atoct-assert
+    _atoct-inputs-unchanged? _atoct-assert
+
+    _atopt-profile-ready
+    _atoct-defaults
+    S" http://client.example/client.json" _atoct-client!
+    _atoct-config-build
+    _atoct-snapshot
+    _atoct-config ['] _atoct-view-policy-callback 0
+    OAUTH2-CLIENT-CONFIG-WITH
+        OAUTH2-CLIENT-CONFIG-S-OK _atoct-status
+    2468 = _atoct-assert
+    _atoct-inputs-unchanged? _atoct-assert
+    _atoct-stack ;
+
 : _atoct-test-readiness-precedence  ( -- )
     _atopt-profile-ready
     _atoct-defaults
@@ -822,13 +992,6 @@ CREATE _atoct-long-redirect
     _atoct-work-zero? _atoct-assert
     _atoct-inputs-unchanged? _atoct-assert
 
-    _atoct-snapshot
-    _atoct-fill-work
-    _atoct-config _atopt-profile _atoct-work
-    ['] _atoct-throw-operation _ATOC-ADMIT-CALL
-        AT-OAUTH-CLIENT-S-INTERNAL _atoct-status
-    _atoct-work-zero? _atoct-assert
-    _atoct-inputs-unchanged? _atoct-assert
     _atoct-stack ;
 
 : _ATOCT-INIT  ( -- )

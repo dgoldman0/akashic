@@ -134,6 +134,11 @@ REQUIRE oauth-profile.f
     OVER 7 AND IF 2DROP AT-OAUTH-CLIENT-S-INVALID EXIT THEN
     CALLER-SPAN-STATUS _ATOC-CALLER>STATUS ;
 
+: _ATOC-REQUIRED-SPAN-STATUS  ( address length -- status )
+    DUP 0> 0= IF 2DROP AT-OAUTH-CLIENT-S-INVALID EXIT THEN
+    OVER 0= IF 2DROP AT-OAUTH-CLIENT-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATOC-CALLER>STATUS ;
+
 : AT-OAUTH-CLIENT-WORKSPACE-CLEAR  ( workspace -- status )
     DUP AT-OAUTH-CLIENT-WORKSPACE-SIZE _ATOC-FIXED-STATUS
     ?DUP IF NIP EXIT THEN
@@ -142,10 +147,15 @@ REQUIRE oauth-profile.f
 
 : _ATOC-DROP3  ( x1 x2 x3 -- ) 2DROP DROP ;
 
+: _ATOC-DROP4  ( x1 x2 x3 x4 -- ) 2DROP 2DROP ;
+
 : _ATOC-RETURN3  ( x1 x2 x3 status -- status )
     >R _ATOC-DROP3 R> ;
 
-: _ATOC-GEOMETRY  ( config profile workspace -- status )
+: _ATOC-RETURN4  ( x1 x2 x3 x4 status -- status )
+    >R _ATOC-DROP4 R> ;
+
+: _ATOC-GEOMETRY  ( config-or-view profile workspace -- status )
     DUP AT-OAUTH-CLIENT-WORKSPACE-SIZE _ATOC-FIXED-STATUS
     ?DUP IF _ATOC-RETURN3 EXIT THEN
     1 PICK AT-OAUTH-PROFILE-SIZE _ATOC-FIXED-STATUS
@@ -165,6 +175,31 @@ REQUIRE oauth-profile.f
     THEN
 
     AT-OAUTH-CLIENT-S-OK _ATOC-RETURN3 ;
+
+: _ATOC-REDIRECT-GEOMETRY
+  ( redirect-a redirect-u view workspace -- status )
+    DUP AT-OAUTH-CLIENT-WORKSPACE-SIZE _ATOC-FIXED-STATUS
+    ?DUP IF _ATOC-RETURN4 EXIT THEN
+    1 PICK OAUTH2-CLIENT-CONFIG-SIZE _ATOC-FIXED-STATUS
+    ?DUP IF _ATOC-RETURN4 EXIT THEN
+    3 PICK 3 PICK _ATOC-REQUIRED-SPAN-STATUS
+    ?DUP IF _ATOC-RETURN4 EXIT THEN
+    2 PICK OAUTH2-CLIENT-CONFIG-REDIRECT-URI-CAPACITY U> IF
+        AT-OAUTH-CLIENT-S-INVALID _ATOC-RETURN4 EXIT
+    THEN
+
+    3 PICK 3 PICK
+    2 PICK AT-OAUTH-CLIENT-WORKSPACE-SIZE
+        MSPAN-OVERLAP? IF
+        AT-OAUTH-CLIENT-S-ALIAS _ATOC-RETURN4 EXIT
+    THEN
+    1 PICK OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK AT-OAUTH-CLIENT-WORKSPACE-SIZE
+        MSPAN-OVERLAP? IF
+        AT-OAUTH-CLIENT-S-ALIAS _ATOC-RETURN4 EXIT
+    THEN
+
+    AT-OAUTH-CLIENT-S-OK _ATOC-RETURN4 ;
 
 \ =====================================================================
 \  ASCII, URI, DNS, and path helpers
@@ -785,6 +820,16 @@ REQUIRE oauth-profile.f
     R@ _ATOCW.APPLICATION !
     R> ;
 
+: _ATOC-BIND-CANDIDATE
+  ( redirect-a redirect-u view workspace -- workspace )
+    >R
+    DUP R@ _ATOC-BIND
+    2DROP
+    DUP R@ _ATOCW.REDIRECT-U !
+    OVER R@ _ATOCW.REDIRECT-A !
+    2DROP
+    R> ;
+
 : _ATOC-POLICY  ( workspace -- status )
     DUP _ATOC-CLIENT-ID? 0= IF
         DROP AT-OAUTH-CLIENT-S-CLIENT-ID EXIT
@@ -804,14 +849,80 @@ REQUIRE oauth-profile.f
     R@ _ATOC-WIPE-WORKSPACE
     R> DROP ;
 
-: _ATOC-WITH-CONFIG  ( view workspace -- status )
-    DUP _ATOCW.ACTIVE @ AT-OAUTH-PROFILE-READY? 0= IF
-        2DROP AT-OAUTH-CLIENT-S-PROFILE EXIT
-    THEN
+: _ATOC-VIEW-OP  ( view profile workspace -- status )
+    SWAP DROP
     DUP _ATOC-WIPE-WORKSPACE
     _ATOC-BIND
     DUP _ATOC-POLICY
     SWAP _ATOC-FINISH ;
+
+: _ATOC-CALL3-CLEAN  ( x1 x2 workspace operation-xt -- status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        R@ _ATOC-WIPE-WORKSPACE
+        _ATOC-DROP3
+        R> DROP
+        AT-OAUTH-CLIENT-S-INTERNAL EXIT
+    THEN
+    DROP
+    R> DROP ;
+
+\ The view is trusted only because OAUTH2-CLIENT-CONFIG-WITH supplied it.
+\ Geometry and profile readiness are preflight and leave workspace unchanged.
+: AT-OAUTH-CLIENT-VIEW-ADMIT
+  ( view profile workspace -- status )
+    2 PICK 2 PICK 2 PICK _ATOC-GEOMETRY
+    ?DUP IF _ATOC-RETURN3 EXIT THEN
+    1 PICK AT-OAUTH-PROFILE-READY? 0= IF
+        AT-OAUTH-CLIENT-S-PROFILE _ATOC-RETURN3 EXIT
+    THEN
+    ['] _ATOC-VIEW-OP _ATOC-CALL3-CLEAN ;
+
+: _ATOC-REDIRECT-POLICY  ( workspace -- status )
+    DUP _ATOC-CLIENT-ID? 0= IF
+        DROP AT-OAUTH-CLIENT-S-CLIENT-ID EXIT
+    THEN
+    _ATOC-REDIRECT? IF
+        AT-OAUTH-CLIENT-S-OK
+    ELSE
+        AT-OAUTH-CLIENT-S-REDIRECT
+    THEN ;
+
+: _ATOC-REDIRECT-OP
+  ( redirect-a redirect-u view workspace -- status )
+    DUP _ATOC-WIPE-WORKSPACE
+    _ATOC-BIND-CANDIDATE
+    DUP _ATOC-REDIRECT-POLICY
+    SWAP _ATOC-FINISH ;
+
+: _ATOC-REDIRECT-CALL
+  ( redirect-a redirect-u view workspace operation-xt -- status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        R@ _ATOC-WIPE-WORKSPACE
+        _ATOC-DROP4
+        R> DROP
+        AT-OAUTH-CLIENT-S-INTERNAL EXIT
+    THEN
+    DROP
+    R> DROP ;
+
+\ Validate one arbitrary deployment redirect with the same client-ID,
+\ application-type, and redirect policy used by full admission.  The view is
+\ valid only inside its OAUTH2-CLIENT-CONFIG-WITH callback.
+: AT-OAUTH-CLIENT-VIEW-REDIRECT-ADMIT
+  ( redirect-a redirect-u view workspace -- status )
+    3 PICK 3 PICK 3 PICK 3 PICK _ATOC-REDIRECT-GEOMETRY
+    ?DUP IF _ATOC-RETURN4 EXIT THEN
+    ['] _ATOC-REDIRECT-OP _ATOC-REDIRECT-CALL ;
+
+: _ATOC-WITH-CONFIG  ( view workspace -- status )
+    DUP _ATOCW.ACTIVE @ SWAP
+    AT-OAUTH-CLIENT-VIEW-ADMIT ;
 
 : _ATOC-CONFIG>STATUS  ( config-status -- status )
     DUP OAUTH2-CLIENT-CONFIG-S-INVALID = IF
@@ -856,23 +967,10 @@ REQUIRE oauth-profile.f
     R> R@ _ATOCW.ACTIVE !
     R> DROP ;
 
-: _ATOC-ADMIT-CALL  ( config profile workspace operation-xt -- status )
-    1 PICK >R
-    CATCH
-    DUP IF
-        DROP
-        R@ _ATOC-WIPE-WORKSPACE
-        _ATOC-DROP3
-        R> DROP
-        AT-OAUTH-CLIENT-S-INTERNAL EXIT
-    THEN
-    DROP
-    R> DROP ;
-
 : AT-OAUTH-CLIENT-ADMIT  ( config profile workspace -- status )
     2 PICK 2 PICK 2 PICK _ATOC-GEOMETRY
     ?DUP IF _ATOC-RETURN3 EXIT THEN
-    ['] _ATOC-ADMIT-OP _ATOC-ADMIT-CALL ;
+    ['] _ATOC-ADMIT-OP _ATOC-CALL3-CLEAN ;
 
 \ =====================================================================
 \  Compile-time geometry assertions

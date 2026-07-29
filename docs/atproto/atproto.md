@@ -19,6 +19,7 @@ REQUIRE identity-hres.f \ identity over generic HTTPS resources
 REQUIRE oauth-profile.f \ exact PDS-to-OAuth issuer trust-chain profile
 REQUIRE oauth-profile-hres.f \ OAuth discovery over HTTPS resources
 REQUIRE oauth-client.f \ AT policy over generic OAuth client configuration
+REQUIRE oauth-deployment.f \ local Client ID Metadata deployment binding
 REQUIRE oauth-grant.f \ AT token policy over generic OAuth grants
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
@@ -33,6 +34,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 `akashic-atproto-diddoc` / `akashic-atproto-identity` /
 `akashic-atid-hres` / `akashic-at-oauth-prof` /
 `akashic-at-oauth-hres` / `akashic-at-oauth-client` /
+`akashic-at-oauth-deployment` /
 `akashic-at-oauth-grant` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
@@ -52,6 +54,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [OAuth discovery profile — oauth-profile.f](#oauth-discovery-profile--oauth-profilef)
 - [OAuth HTTP composition — oauth-profile-hres.f](#oauth-http-composition--oauth-profile-hresf)
 - [OAuth client policy — oauth-client.f](#oauth-client-policy--oauth-clientf)
+- [OAuth deployment binding — oauth-deployment.f](#oauth-deployment-binding--oauth-deploymentf)
 - [OAuth token-grant admission — oauth-grant.f](#oauth-token-grant-admission--oauth-grantf)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
@@ -236,6 +239,20 @@ keys, browser state, tokens, sessions, XRPC, or Streams state.
 
 The adapter uses one 432-byte caller-owned transient workspace and wipes it
 after every geometrically admitted result.
+
+## OAuth deployment binding — oauth-deployment.f
+
+The [AT OAuth client deployment binder](oauth-deployment.md) composes one
+validated generic client configuration, one ready AT OAuth profile, and one
+structurally decoded Client ID Metadata Document. It enforces exact deployment
+identity, application, grant, response, redirect, scope, authentication, DPoP,
+and key-source declarations, then lends both callback-scoped views to one
+synchronous caller callback.
+
+The state-free adapter uses one 53,760-byte caller-owned workspace and wipes it
+after every admitted outcome. HTTP provenance, checked JWK Set qualification,
+`jwks_uri` acquisition, private-key ownership, browser authorization, and
+session installation remain explicit later boundaries.
 
 ## OAuth token-grant admission — oauth-grant.f
 
