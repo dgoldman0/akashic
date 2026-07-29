@@ -167,10 +167,10 @@ PROVIDED akashic-sbx-vm
     SBOX-BYTE-LENGTH+ _SVM-BYTE>STATUS ;
 
 \ =====================================================================
-\  Fixed caller-owned result
+\  Private fixed scalar-qualification result
 \ =====================================================================
 
-0x534258564D524553 CONSTANT _SVM-RESULT-MAGIC  \ "SBXVMRES"
+0x534258564D524553 CONSTANT _SVM-SCALAR-RESULT-MAGIC
 
   0 CONSTANT _SVR-MAGIC
   8 CONSTANT _SVR-SELF
@@ -181,8 +181,8 @@ PROVIDED akashic-sbx-vm
  48 CONSTANT _SVR-COUNT
  56 CONSTANT _SVR-RESERVED
  64 CONSTANT _SVR-CELLS
-192 CONSTANT SBOX-VM-RESULT-SIZE
-16  CONSTANT SBOX-VM-RESULT-CELL-MAX
+192 CONSTANT _SVM-SCALAR-RESULT-SIZE
+16  CONSTANT _SVM-SCALAR-RESULT-CELL-MAX
 
 : _SVR.MAGIC    ( result -- address ) _SVR-MAGIC + ;
 : _SVR.SELF     ( result -- address ) _SVR-SELF + ;
@@ -194,19 +194,19 @@ PROVIDED akashic-sbx-vm
 : _SVR.RESERVED ( result -- address ) _SVR-RESERVED + ;
 : _SVR.CELLS    ( result -- address ) _SVR-CELLS + ;
 
-: _SVM-RESULT-SPAN-STATUS  ( result -- status )
+: _SVM-SCALAR-RESULT-SPAN-STATUS  ( result -- status )
     DUP 0= IF DROP SBOX-VM-S-INVALID EXIT THEN
     DUP 7 AND IF DROP SBOX-VM-S-INVALID EXIT THEN
-    SBOX-VM-RESULT-SIZE _SVM-SPAN-STATUS ;
+    _SVM-SCALAR-RESULT-SIZE _SVM-SPAN-STATUS ;
 
-: SBOX-VM-RESULT-VALID?  ( result -- flag )
-    DUP _SVM-RESULT-SPAN-STATUS IF DROP 0 EXIT THEN
-    DUP _SVR.MAGIC @ _SVM-RESULT-MAGIC <> IF DROP 0 EXIT THEN
+: _SVM-SCALAR-RESULT-VALID?  ( result -- flag )
+    DUP _SVM-SCALAR-RESULT-SPAN-STATUS IF DROP 0 EXIT THEN
+    DUP _SVR.MAGIC @ _SVM-SCALAR-RESULT-MAGIC <> IF DROP 0 EXIT THEN
     DUP _SVR.SELF @ OVER <> IF DROP 0 EXIT THEN
     DUP _SVR.CLASS @ SBOX-VM-RESULT-CLASS-VALID? 0= IF DROP 0 EXIT THEN
     DUP _SVR.CLASS @ SBOX-VM-CLASS-OK = IF
         DUP _SVR.DETAIL @ IF DROP 0 EXIT THEN
-        DUP _SVR.COUNT @ DUP 0< SWAP SBOX-VM-RESULT-CELL-MAX >
+        DUP _SVR.COUNT @ DUP 0< SWAP _SVM-SCALAR-RESULT-CELL-MAX >
             OR IF DROP 0 EXIT THEN
     ELSE
         DUP _SVR.DETAIL @ 0= IF DROP 0 EXIT THEN
@@ -215,40 +215,216 @@ PROVIDED akashic-sbx-vm
     DUP _SVR.USAGE @ 0< IF DROP 0 EXIT THEN
     _SVR.RESERVED @ 0= ;
 
-: SBOX-VM-RESULT-CLASS@  ( result -- class|-1 )
-    DUP SBOX-VM-RESULT-VALID? IF _SVR.CLASS @ ELSE DROP -1 THEN ;
+: _SVM-SCALAR-RESULT-CLASS@  ( result -- class|-1 )
+    DUP _SVM-SCALAR-RESULT-VALID? IF _SVR.CLASS @ ELSE DROP -1 THEN ;
 
-: SBOX-VM-RESULT-DETAIL@  ( result -- detail|0 )
-    DUP SBOX-VM-RESULT-VALID? IF _SVR.DETAIL @ ELSE DROP 0 THEN ;
+: _SVM-SCALAR-RESULT-DETAIL@  ( result -- detail|0 )
+    DUP _SVM-SCALAR-RESULT-VALID? IF _SVR.DETAIL @ ELSE DROP 0 THEN ;
 
-: SBOX-VM-RESULT-AUX@  ( result -- aux|0 )
-    DUP SBOX-VM-RESULT-VALID? IF _SVR.AUX @ ELSE DROP 0 THEN ;
+: _SVM-SCALAR-RESULT-AUX@  ( result -- aux|0 )
+    DUP _SVM-SCALAR-RESULT-VALID? IF _SVR.AUX @ ELSE DROP 0 THEN ;
 
-: SBOX-VM-RESULT-USAGE@  ( result -- usage|0 )
-    DUP SBOX-VM-RESULT-VALID? IF _SVR.USAGE @ ELSE DROP 0 THEN ;
+: _SVM-SCALAR-RESULT-USAGE@  ( result -- usage|0 )
+    DUP _SVM-SCALAR-RESULT-VALID? IF _SVR.USAGE @ ELSE DROP 0 THEN ;
 
-: SBOX-VM-RESULT-COUNT@  ( result -- count|0 )
-    DUP SBOX-VM-RESULT-VALID? IF _SVR.COUNT @ ELSE DROP 0 THEN ;
+: _SVM-SCALAR-RESULT-COUNT@  ( result -- count|0 )
+    DUP _SVM-SCALAR-RESULT-VALID? IF _SVR.COUNT @ ELSE DROP 0 THEN ;
 
-: SBOX-VM-RESULT-CELL@  ( index result -- value flag )
-    DUP SBOX-VM-RESULT-VALID? 0= IF 2DROP 0 0 EXIT THEN
+: _SVM-SCALAR-RESULT-CELL@  ( index result -- value flag )
+    DUP _SVM-SCALAR-RESULT-VALID? 0= IF 2DROP 0 0 EXIT THEN
     OVER 0< IF 2DROP 0 0 EXIT THEN
     OVER OVER _SVR.COUNT @ >= IF 2DROP 0 0 EXIT THEN
     _SVR.CELLS SWAP 8 * + @ -1 ;
 
-: _SVM-RESULT-ZERO?  ( result -- flag )
-    SBOX-VM-RESULT-SIZE 0 ?DO
+: _SVM-SCALAR-RESULT-ZERO?  ( result -- flag )
+    _SVM-SCALAR-RESULT-SIZE 0 ?DO
         DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
     LOOP
     DROP -1 ;
 
-: SBOX-VM-RESULT-RELEASE  ( result -- status )
-    DUP _SVM-RESULT-SPAN-STATUS ?DUP IF NIP EXIT THEN
-    DUP _SVM-RESULT-ZERO? IF DROP SBOX-VM-S-OK EXIT THEN
-    DUP SBOX-VM-RESULT-VALID? >R
+: _SVM-SCALAR-RESULT-RELEASE  ( result -- status )
+    DUP _SVM-SCALAR-RESULT-SPAN-STATUS ?DUP IF NIP EXIT THEN
+    DUP _SVM-SCALAR-RESULT-ZERO? IF DROP SBOX-VM-S-OK EXIT THEN
+    DUP _SVM-SCALAR-RESULT-VALID? >R
     0 OVER _SVR.MAGIC !
-    DUP SBOX-VM-RESULT-SIZE 0 FILL
+    DUP _SVM-SCALAR-RESULT-SIZE 0 FILL
     DROP R> IF SBOX-VM-S-OK ELSE SBOX-VM-S-RESULT THEN ;
+
+\ =====================================================================
+\  Production result-owned canonical value
+\ =====================================================================
+
+0x534258564D56414C CONSTANT _SVM-RESULT-MAGIC  \ "SBXVMVAL"
+
+ 0 CONSTANT _SVT-MAGIC
+ 8 CONSTANT _SVT-SELF
+16 CONSTANT _SVT-TOTAL
+24 CONSTANT _SVT-CLASS
+32 CONSTANT _SVT-DETAIL
+40 CONSTANT _SVT-AUX
+48 CONSTANT _SVT-INSTRUCTION-USAGE
+56 CONSTANT _SVT-VALUE-OPS-USAGE
+64 CONSTANT _SVT-COPY-USAGE
+72 CONSTANT _SVT-CANDIDATE-U
+80 CONSTANT _SVT-RESERVED0
+88 CONSTANT _SVT-RESERVED1
+96 CONSTANT SBOX-VM-RESULT-HEADER-SIZE
+
+: _SVT.MAGIC              ( result -- address ) _SVT-MAGIC + ;
+: _SVT.SELF               ( result -- address ) _SVT-SELF + ;
+: _SVT.TOTAL              ( result -- address ) _SVT-TOTAL + ;
+: _SVT.CLASS              ( result -- address ) _SVT-CLASS + ;
+: _SVT.DETAIL             ( result -- address ) _SVT-DETAIL + ;
+: _SVT.AUX                ( result -- address ) _SVT-AUX + ;
+: _SVT.INSTRUCTION-USAGE  ( result -- address )
+    _SVT-INSTRUCTION-USAGE + ;
+: _SVT.VALUE-OPS-USAGE    ( result -- address )
+    _SVT-VALUE-OPS-USAGE + ;
+: _SVT.COPY-USAGE         ( result -- address ) _SVT-COPY-USAGE + ;
+: _SVT.CANDIDATE-U        ( result -- address ) _SVT-CANDIDATE-U + ;
+: _SVT.RESERVED0          ( result -- address ) _SVT-RESERVED0 + ;
+: _SVT.RESERVED1          ( result -- address ) _SVT-RESERVED1 + ;
+
+: _SVM-RESULT-HEADER-STATUS  ( result -- status )
+    DUP 0= IF DROP SBOX-VM-S-INVALID EXIT THEN
+    DUP 7 AND IF DROP SBOX-VM-S-INVALID EXIT THEN
+    SBOX-VM-RESULT-HEADER-SIZE _SVM-SPAN-STATUS ;
+
+: _SVM-RESULT-SPAN-STATUS  ( result result-u -- status )
+    OVER 0= IF 2DROP SBOX-VM-S-INVALID EXIT THEN
+    OVER 7 AND IF 2DROP SBOX-VM-S-INVALID EXIT THEN
+    DUP 0< IF 2DROP SBOX-VM-S-INVALID EXIT THEN
+    DUP SBOX-VM-RESULT-HEADER-SIZE < IF
+        2DROP SBOX-VM-S-CAPACITY EXIT
+    THEN
+    _SVM-SPAN-STATUS ;
+
+\ VM result envelopes use only the five terminal classes produced by this
+\ executor.  The wider result-class vocabulary belongs to future host layers.
+: _SVM-PUBLISHED-RESULT-FIELDS-VALID?  ( class detail aux -- flag )
+    ROT CASE
+        SBOX-VM-CLASS-OK OF
+            OR 0=
+        ENDOF
+        SBOX-VM-CLASS-GUEST-TRAP OF
+            DROP DUP 1 >= SWAP
+                SBOX-VM-TRAP-MAP-KEY-ORDER <= AND
+        ENDOF
+        SBOX-VM-CLASS-RESOURCE-EXHAUSTED OF
+            0= SWAP DUP 1 >= SWAP
+                SBOX-VM-EXHAUST-OUTPUT-RESULT-BYTES <= AND AND
+        ENDOF
+        SBOX-VM-CLASS-CANCELLED OF
+            0= SWAP DUP 1 >= SWAP
+                SBOX-VM-CANCEL-ADAPTER <= AND AND
+        ENDOF
+        SBOX-VM-CLASS-HOST-FAILURE OF
+            0= SWAP SBOX-VM-HOST-INTERNAL-INVARIANT = AND
+        ENDOF
+        >R 2DROP 0 R>
+    ENDCASE ;
+
+\ This validates the native sealed envelope.  A consumer still decodes the
+\ candidate through value.f, which is the hostile-wire validation boundary.
+: SBOX-VM-RESULT-VALID?  ( result -- flag )
+    DUP _SVM-RESULT-HEADER-STATUS IF DROP 0 EXIT THEN
+    DUP _SVT.MAGIC @ _SVM-RESULT-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _SVT.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _SVT.TOTAL @ DUP SBOX-VM-RESULT-HEADER-SIZE < IF
+        2DROP 0 EXIT
+    THEN
+    2DUP _SVM-SPAN-STATUS IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _SVT.CLASS @
+    OVER _SVT.DETAIL @
+    2 PICK _SVT.AUX @
+    _SVM-PUBLISHED-RESULT-FIELDS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _SVT.CANDIDATE-U @ DUP 0< IF 2DROP 0 EXIT THEN
+    OVER _SVT.TOTAL @ SBOX-VM-RESULT-HEADER-SIZE -
+        OVER <> IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _SVT.CLASS @ SBOX-VM-CLASS-OK = IF
+        DUP _SVT.DETAIL @ IF DROP 0 EXIT THEN
+        DUP _SVT.CANDIDATE-U @
+            SBOX-VALUE-WIRE-HEADER-SIZE < IF DROP 0 EXIT THEN
+    ELSE
+        DUP _SVT.DETAIL @ 0= IF DROP 0 EXIT THEN
+        DUP _SVT.CANDIDATE-U @ IF DROP 0 EXIT THEN
+    THEN
+    DUP _SVT.INSTRUCTION-USAGE @ 0< IF DROP 0 EXIT THEN
+    DUP _SVT.VALUE-OPS-USAGE @ 0< IF DROP 0 EXIT THEN
+    DUP _SVT.COPY-USAGE @ 0< IF DROP 0 EXIT THEN
+    DUP _SVT.RESERVED0 @
+    SWAP _SVT.RESERVED1 @ OR 0= ;
+
+: SBOX-VM-RESULT-TOTAL@  ( result -- total|0 )
+    DUP SBOX-VM-RESULT-VALID? IF _SVT.TOTAL @ ELSE DROP 0 THEN ;
+
+: SBOX-VM-RESULT-CLASS@  ( result -- class|-1 )
+    DUP SBOX-VM-RESULT-VALID? IF _SVT.CLASS @ ELSE DROP -1 THEN ;
+
+: SBOX-VM-RESULT-DETAIL@  ( result -- detail|0 )
+    DUP SBOX-VM-RESULT-VALID? IF _SVT.DETAIL @ ELSE DROP 0 THEN ;
+
+: SBOX-VM-RESULT-AUX@  ( result -- aux|0 )
+    DUP SBOX-VM-RESULT-VALID? IF _SVT.AUX @ ELSE DROP 0 THEN ;
+
+: SBOX-VM-RESULT-USAGE@  ( result -- usage|0 )
+    DUP SBOX-VM-RESULT-VALID? IF
+        _SVT.INSTRUCTION-USAGE @
+    ELSE
+        DROP 0
+    THEN ;
+
+: SBOX-VM-RESULT-VALUE-OPS-USAGE@  ( result -- usage|0 )
+    DUP SBOX-VM-RESULT-VALID? IF
+        _SVT.VALUE-OPS-USAGE @
+    ELSE
+        DROP 0
+    THEN ;
+
+: SBOX-VM-RESULT-COPY-USAGE@  ( result -- usage|0 )
+    DUP SBOX-VM-RESULT-VALID? IF
+        _SVT.COPY-USAGE @
+    ELSE
+        DROP 0
+    THEN ;
+
+: SBOX-VM-RESULT-CANDIDATE@
+    ( result -- candidate candidate-u flag )
+    DUP SBOX-VM-RESULT-VALID? 0= IF
+        DROP 0 0 0 EXIT
+    THEN
+    DUP _SVT.CLASS @ SBOX-VM-CLASS-OK <> IF
+        DROP 0 0 0 EXIT
+    THEN
+    DUP _SVT.CANDIDATE-U @ >R
+    SBOX-VM-RESULT-HEADER-SIZE +
+    R> -1 ;
+
+: _SVM-RESULT-ZERO?  ( result result-u -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+: SBOX-VM-RESULT-RELEASE  ( result result-capacity -- status )
+    2DUP _SVM-RESULT-SPAN-STATUS ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    2DUP _SVM-RESULT-ZERO? IF
+        2DROP SBOX-VM-S-OK EXIT
+    THEN
+    OVER _SVT.TOTAL @ DUP SBOX-VM-RESULT-HEADER-SIZE >=
+    SWAP 2 PICK <= AND IF
+        OVER SBOX-VM-RESULT-VALID?
+    ELSE
+        0
+    THEN
+    >R
+    0 2 PICK _SVT.MAGIC !
+    2DUP 0 FILL
+    2DROP R> IF SBOX-VM-S-OK ELSE SBOX-VM-S-RESULT THEN ;
 
 \ =====================================================================
 \  Measured instance representation
@@ -580,7 +756,7 @@ PROVIDED akashic-sbx-vm
     DUP _SVM-FUNCTION-INSTRUCTION-N@ 0>
     OVER _SVM-FUNCTION-PARAMS@ R@ _SVI.OPERAND-CAP @ <= AND
     OVER _SVM-FUNCTION-RESULTS@ R@ _SVI.OPERAND-CAP @ <= AND
-    OVER _SVM-FUNCTION-RESULTS@ SBOX-VM-RESULT-CELL-MAX <= AND
+    OVER _SVM-FUNCTION-RESULTS@ _SVM-SCALAR-RESULT-CELL-MAX <= AND
     OVER _SVM-FUNCTION-LOCALS@ R@ _SVI.LOCALS-CAP @ <= AND
     OVER SBOX-CANDIDATE-FUNCTION-FLAGS-OFFSET +
         SBOX-CANDIDATE-U16-LE@ 0= AND
@@ -843,6 +1019,44 @@ PROVIDED akashic-sbx-vm
     _SVM-CELLS-ZERO?
     R> DROP ;
 
+: _SVM-TERMINAL-COHERENT?  ( instance -- flag )
+    >R
+    R@ _SVI.TERMINAL-CLASS @
+    R@ _SVI.TERMINAL-DETAIL @
+    R@ _SVI.TERMINAL-AUX @
+    _SVM-PUBLISHED-RESULT-FIELDS-VALID? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _SVI.RUN-STATE @
+    DUP SBOX-VM-RUN-RUNNABLE =
+    OVER SBOX-VM-RUN-COMPLETE = OR IF
+        DROP
+        R@ _SVI.TERMINAL-CLASS @ SBOX-VM-CLASS-OK =
+        R@ _SVI.CANCEL-DETAIL @ 0= AND
+        R> DROP EXIT
+    THEN
+    DUP SBOX-VM-RUN-TRAPPED = IF
+        DROP
+        R@ _SVI.TERMINAL-CLASS @ DUP SBOX-VM-CLASS-GUEST-TRAP =
+        SWAP SBOX-VM-CLASS-HOST-FAILURE = OR
+        R@ _SVI.CANCEL-DETAIL @ 0= AND
+        R> DROP EXIT
+    THEN
+    DUP SBOX-VM-RUN-EXHAUSTED = IF
+        DROP
+        R@ _SVI.TERMINAL-CLASS @
+            SBOX-VM-CLASS-RESOURCE-EXHAUSTED =
+        R@ _SVI.CANCEL-DETAIL @ 0= AND
+        R> DROP EXIT
+    THEN
+    SBOX-VM-RUN-CANCELLED = IF
+        R@ _SVI.TERMINAL-CLASS @ SBOX-VM-CLASS-CANCELLED =
+        R@ _SVI.CANCEL-DETAIL @
+        R@ _SVI.TERMINAL-DETAIL @ = AND
+        R> DROP EXIT
+    THEN
+    R> DROP 0 ;
+
 : SBOX-VM-INSTANCE-VALID?  ( instance -- flag )
     DUP _SVM-INSTANCE-HEADER-STATUS IF DROP 0 EXIT THEN
     DUP _SVI.MAGIC @ _SVM-INSTANCE-MAGIC <> IF DROP 0 EXIT THEN
@@ -864,6 +1078,7 @@ PROVIDED akashic-sbx-vm
     DUP DUP _SVI.TOTAL @ _SVM-SPAN-STATUS IF DROP 0 EXIT THEN
     DUP _SVI.RUN-STATE @ DUP SBOX-VM-RUN-RUNNABLE <
     SWAP SBOX-VM-RUN-FINISHED > OR IF DROP 0 EXIT THEN
+    DUP _SVM-TERMINAL-COHERENT? 0= IF DROP 0 EXIT THEN
     DUP _SVI.BUDGET @ DUP 0> 0= IF 2DROP 0 EXIT THEN
     OVER _SVI.USAGE @ DUP 0< IF 2DROP DROP 0 EXIT THEN
     U< IF DROP 0 EXIT THEN
@@ -1273,9 +1488,11 @@ PROVIDED akashic-sbx-vm
   ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 status -- status )
     >R DROP _SVM-DROP11 R> ;
 
-\ Complete signature-one staging seam.  It remains private until typed
-\ dispatch and canonical result transfer land together.
-: _SVM-TYPED-INIT
+\ Production signature-one activation.  Success transfers state, work, and
+\ both arenas to the invocation; failure leaves every typed resource with the
+\ caller.  Signature zero remains private for qualification of the scalar
+\ machine shared by this executor.
+: SBOX-VM-INIT
   ( plan binding entry value-state value-work value-work-u
     instruction-budget value-op-budget copy-byte-budget
     instance instance-u -- status )
@@ -3424,6 +3641,32 @@ PROVIDED akashic-sbx-vm
         DROP 0
     THEN ;
 
+: SBOX-VM-VALUE-OPS-USAGE@  ( instance -- usage|0 )
+    DUP SBOX-VM-INSTANCE-VALID? IF
+        DUP _SVI.RUN-STATE @ SBOX-VM-RUN-FINISHED =
+        OVER _SVI.ENTRY-SIGNATURE @
+            SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> OR IF
+            DROP 0
+        ELSE
+            _SVI.VALUE-OPS-USAGE @
+        THEN
+    ELSE
+        DROP 0
+    THEN ;
+
+: SBOX-VM-COPY-USAGE@  ( instance -- usage|0 )
+    DUP SBOX-VM-INSTANCE-VALID? IF
+        DUP _SVI.RUN-STATE @ SBOX-VM-RUN-FINISHED =
+        OVER _SVI.ENTRY-SIGNATURE @
+            SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> OR IF
+            DROP 0
+        ELSE
+            _SVI.COPY-USAGE @
+        THEN
+    ELSE
+        DROP 0
+    THEN ;
+
 : _SVM-STEP-ADMITTED  ( instance -- run-state )
     DUP _SVI.RUN-STATE @ SBOX-VM-RUN-RUNNABLE <> IF
         _SVI.RUN-STATE @ EXIT
@@ -3490,17 +3733,17 @@ PROVIDED akashic-sbx-vm
 \  Result transfer, exactly-once invocation scrub, and release
 \ =====================================================================
 
-: _SVM-RESULT-DISJOINT?  ( result instance -- flag )
+: _SVM-SCALAR-RESULT-DISJOINT?  ( result instance -- flag )
     >R
-    DUP SBOX-VM-RESULT-SIZE
+    DUP _SVM-SCALAR-RESULT-SIZE
     R@ R@ _SVI.TOTAL @ MSPAN-OVERLAP? 0=
-    OVER SBOX-VM-RESULT-SIZE
+    OVER _SVM-SCALAR-RESULT-SIZE
     R@ _SVI.PLAN @ DUP SBOX-PLAN-TOTAL@
         MSPAN-OVERLAP? 0= AND
-    OVER SBOX-VM-RESULT-SIZE
+    OVER _SVM-SCALAR-RESULT-SIZE
     R@ _SVI.BINDING @ SBOX-BINDING-SIZE
         MSPAN-OVERLAP? 0= AND
-    OVER SBOX-VM-RESULT-SIZE
+    OVER _SVM-SCALAR-RESULT-SIZE
     R@ _SVI.PROFILE @ SBOX-PROFILE-SIZE
         MSPAN-OVERLAP? 0= AND
     NIP R> DROP ;
@@ -3511,9 +3754,139 @@ PROVIDED akashic-sbx-vm
     OVER SBOX-VM-RUN-EXHAUSTED = OR
     SWAP SBOX-VM-RUN-CANCELLED = OR ;
 
-: _SVM-PUBLISH-RESULT  ( result instance -- status )
+: _SVM-RESULT-DISJOINT?  ( result result-u instance -- flag )
     >R
-    DUP SBOX-VM-RESULT-SIZE 0 FILL
+    2DUP R@ _SVM-SPAN-DISJOINT-FROM-STATIC? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-INPUT-SPAN@
+    DUP IF
+        >R 2DROP 2DROP 2DROP R> DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-OUTPUT-SPAN@
+    DUP IF
+        >R 2DROP 2DROP 2DROP R> DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP
+    R@ _SVI.VALUE-WORK @ R@ _SVI.VALUE-WORK-U @
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DROP R> DROP -1 ;
+
+\ A malformed returned graph is a guest-visible typed terminal failure, not a
+\ half-published host result.  The invocation remains finishable and measures
+\ as a header-only terminal envelope after this transition.
+: _SVM-TYPED-CANDIDATE-MEASURE?  ( instance -- wire-u flag )
+    >R
+    R@ _SVI.EXPECTED-RESULTS @ 1 <>
+    R@ _SVI.OPERAND-N @ 1 <> OR IF
+        SBOX-VM-HOST-INTERNAL-INVARIANT R@ _SVM-HOST-FAIL DROP
+        R> DROP 0 0 EXIT
+    THEN
+    0 R@ _SVM-TOP@
+    R@ _SVI.VALUE-STATE @
+    R@ _SVI.VALUE-WORK @
+    R@ _SVI.VALUE-WORK-U @
+    SBOX-VALUE-ENCODE-MEASURE
+    DUP IF
+        >R 2DROP 2DROP
+        R> R@ _SVM-VALUE-FAIL DROP
+        R> DROP 0 0 EXIT
+    THEN
+    DROP 2DROP DROP -1
+    R> DROP ;
+
+: SBOX-VM-RESULT-MEASURE  ( instance -- result-u|0 status )
+    DUP SBOX-VM-INSTANCE-VALID? 0= IF
+        DROP 0 SBOX-VM-S-INVALID EXIT
+    THEN
+    DUP _SVI.ENTRY-SIGNATURE @
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
+        DROP 0 SBOX-VM-S-STATE EXIT
+    THEN
+    DUP _SVI.RUN-STATE @ _SVM-FINISHABLE? 0= IF
+        DROP 0 SBOX-VM-S-STATE EXIT
+    THEN
+    DUP _SVM-TERMINAL-COHERENT? 0= IF
+        DROP 0 SBOX-VM-S-RESULT EXIT
+    THEN
+    DUP _SVI.RUN-STATE @ SBOX-VM-RUN-COMPLETE = IF
+        DUP _SVM-TYPED-CANDIDATE-MEASURE? IF
+            NIP
+            SBOX-VM-RESULT-HEADER-SIZE SBOX-BYTE-LENGTH+
+            DUP IF
+                _SVM-BYTE>STATUS >R DROP 0 R> EXIT
+            THEN
+            DROP SBOX-VM-S-OK EXIT
+        THEN
+        DROP
+        DUP _SVM-TERMINAL-COHERENT? 0= IF
+            DROP 0 SBOX-VM-S-RESULT EXIT
+        THEN
+    THEN
+    DROP SBOX-VM-RESULT-HEADER-SIZE SBOX-VM-S-OK ;
+
+\ Stage a complete native envelope with a deliberately zero magic cell.
+\ The caller-provided capacity is scrubbed in full, while TOTAL records only
+\ the exact measured prefix owned by the sealed result.
+: _SVM-STAGE-RESULT
+  ( result result-capacity required instance -- status )
+    >R
+    2 PICK 2 PICK 0 FILL
+    2 PICK DUP _SVT.SELF !
+    DUP 3 PICK _SVT.TOTAL !
+    R@ _SVI.TERMINAL-CLASS @ 3 PICK _SVT.CLASS !
+    R@ _SVI.TERMINAL-DETAIL @ 3 PICK _SVT.DETAIL !
+    R@ _SVI.TERMINAL-AUX @ 3 PICK _SVT.AUX !
+    R@ _SVI.USAGE @ 3 PICK _SVT.INSTRUCTION-USAGE !
+    R@ _SVI.VALUE-OPS-USAGE @ 3 PICK _SVT.VALUE-OPS-USAGE !
+    R@ _SVI.COPY-USAGE @ 3 PICK _SVT.COPY-USAGE !
+
+    R@ _SVI.RUN-STATE @ SBOX-VM-RUN-COMPLETE = IF
+        0 R@ _SVM-TOP@
+        R@ _SVI.VALUE-STATE @
+        R@ _SVI.VALUE-WORK @
+        R@ _SVI.VALUE-WORK-U @
+        6 PICK SBOX-VM-RESULT-HEADER-SIZE +
+        5 PICK SBOX-VM-RESULT-HEADER-SIZE -
+        SBOX-VALUE-ENCODE
+        DUP IF
+            2DROP
+            2 PICK 2 PICK 0 FILL
+            2DROP DROP R> DROP SBOX-VM-S-RESULT EXIT
+        THEN
+        DROP
+        1 PICK SBOX-VM-RESULT-HEADER-SIZE - <> IF
+            2 PICK 2 PICK 0 FILL
+            2DROP DROP R> DROP SBOX-VM-S-RESULT EXIT
+        THEN
+        DUP SBOX-VM-RESULT-HEADER-SIZE -
+        3 PICK _SVT.CANDIDATE-U !
+    ELSE
+        DUP SBOX-VM-RESULT-HEADER-SIZE <> IF
+            2 PICK 2 PICK 0 FILL
+            2DROP DROP R> DROP SBOX-VM-S-RESULT EXIT
+        THEN
+    THEN
+    2DROP DROP R> DROP SBOX-VM-S-OK ;
+
+: _SVM-PUBLISH-SCALAR-RESULT  ( result instance -- status )
+    >R
+    DUP _SVM-SCALAR-RESULT-SIZE 0 FILL
     DUP DUP _SVR.SELF !
     R@ _SVI.TERMINAL-CLASS @ OVER _SVR.CLASS !
     R@ _SVI.TERMINAL-DETAIL @ OVER _SVR.DETAIL !
@@ -3527,11 +3900,11 @@ PROVIDED akashic-sbx-vm
             ROT 8 * MOVE
         THEN
     THEN
-    _SVM-RESULT-MAGIC OVER _SVR.MAGIC !
-    DUP SBOX-VM-RESULT-VALID? IF
+    _SVM-SCALAR-RESULT-MAGIC OVER _SVR.MAGIC !
+    DUP _SVM-SCALAR-RESULT-VALID? IF
         DROP R> DROP SBOX-VM-S-OK
     ELSE
-        DUP SBOX-VM-RESULT-SIZE 0 FILL
+        DUP _SVM-SCALAR-RESULT-SIZE 0 FILL
         DROP R> DROP SBOX-VM-S-RESULT
     THEN ;
 
@@ -3546,7 +3919,7 @@ PROVIDED akashic-sbx-vm
     1 R@ _SVI.SCRUBBED !
     R> DROP ;
 
-: SBOX-VM-FINISH  ( result instance -- status )
+: _SVM-SCALAR-FINISH  ( result instance -- status )
     DUP SBOX-VM-INSTANCE-VALID? 0= IF
         2DROP SBOX-VM-S-INVALID EXIT
     THEN
@@ -3560,15 +3933,15 @@ PROVIDED akashic-sbx-vm
         SBOX-ABI-SIGNATURE-VALUE-TO-VALUE = IF
         2DROP SBOX-VM-S-STATE EXIT
     THEN
-    OVER _SVM-RESULT-SPAN-STATUS ?DUP IF
+    OVER _SVM-SCALAR-RESULT-SPAN-STATUS ?DUP IF
         >R 2DROP R> EXIT
     THEN
-    2DUP _SVM-RESULT-DISJOINT? 0= IF
+    2DUP _SVM-SCALAR-RESULT-DISJOINT? 0= IF
         2DROP SBOX-VM-S-ALIAS EXIT
     THEN
     DUP _SVI.RUN-STATE @ SBOX-VM-RUN-COMPLETE = IF
         DUP _SVI.OPERAND-N @ DUP 0<
-        SWAP SBOX-VM-RESULT-CELL-MAX > OR IF
+        SWAP _SVM-SCALAR-RESULT-CELL-MAX > OR IF
             2DROP SBOX-VM-S-RESULT EXIT
         THEN
         DUP _SVI.OPERAND-N @
@@ -3576,7 +3949,7 @@ PROVIDED akashic-sbx-vm
             2DROP SBOX-VM-S-RESULT EXIT
         THEN
     THEN
-    2DUP _SVM-PUBLISH-RESULT
+    2DUP _SVM-PUBLISH-SCALAR-RESULT
     DUP IF
         >R 2DROP R> EXIT
     THEN
@@ -3590,8 +3963,11 @@ PROVIDED akashic-sbx-vm
     LOOP
     DROP -1 ;
 
-: _SVM-TYPED-RESOURCES-RELEASE  ( instance -- status )
+: _SVM-TYPED-RESOURCES-PREFLIGHT  ( instance -- status )
     >R
+    R@ _SVM-TYPED-SPANS-VALID? 0= IF
+        R> DROP SBOX-VM-S-INVALID EXIT
+    THEN
     R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-INPUT-SPAN@
     DUP IF
         2DROP DROP R> DROP SBOX-VM-S-INVALID EXIT
@@ -3608,20 +3984,84 @@ PROVIDED akashic-sbx-vm
     R@ _SVI.TMP-Y !
     R@ _SVI.TMP-X !
 
-    0 R@ _SVI.TMP-Z !
     R@ _SVI.VALUE-WORK @ R@ _SVI.VALUE-WORK-U @
-        SBOX-VALUE-WORK-RELEASE IF 1 R@ _SVI.TMP-Z ! THEN
-    R@ _SVI.VALUE-STATE @
-        SBOX-VALUE-STATE-RELEASE IF 1 R@ _SVI.TMP-Z ! THEN
+        _SVM-SPAN-STATUS ?DUP IF R> DROP EXIT THEN
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-SIZE
+        _SVM-SPAN-STATUS ?DUP IF R> DROP EXIT THEN
     R@ _SVI.TMP-A @ R@ _SVI.TMP-B @
-        SBOX-VALUE-ARENA-RELEASE IF 1 R@ _SVI.TMP-Z ! THEN
+        _SVM-SPAN-STATUS ?DUP IF R> DROP EXIT THEN
     R@ _SVI.TMP-X @ R@ _SVI.TMP-Y @
-        SBOX-VALUE-ARENA-RELEASE IF 1 R@ _SVI.TMP-Z ! THEN
-    R@ _SVI.TMP-Z @ IF
-        R> DROP SBOX-VM-S-INVALID
-    ELSE
-        R> DROP SBOX-VM-S-OK
-    THEN ;
+        _SVM-SPAN-STATUS ?DUP IF R> DROP EXIT THEN
+    R> DROP SBOX-VM-S-OK ;
+
+\ PREFLIGHT has resolved and checked every owned span.  The commit phase is
+\ deliberately void and infallible: no partial sequence of release calls can
+\ strand a terminal invocation between ownership states.
+: _SVM-TYPED-RESOURCES-SCRUB!  ( instance -- )
+    >R
+    R@ _SVI.VALUE-WORK @ R@ _SVI.VALUE-WORK-U @ 0 FILL
+    R@ _SVI.VALUE-STATE @ SBOX-VALUE-STATE-SIZE 0 FILL
+    R@ _SVI.TMP-A @ R@ _SVI.TMP-B @ 0 FILL
+    R@ _SVI.TMP-X @ R@ _SVI.TMP-Y @ 0 FILL
+    R> DROP ;
+
+: _SVM-TYPED-RESOURCES-RELEASE  ( instance -- status )
+    DUP _SVM-TYPED-RESOURCES-PREFLIGHT
+    DUP IF NIP EXIT THEN
+    DROP
+    _SVM-TYPED-RESOURCES-SCRUB!
+    SBOX-VM-S-OK ;
+
+: SBOX-VM-FINISH  ( result result-capacity instance -- status )
+    DUP SBOX-VM-INSTANCE-VALID? 0= IF
+        2DROP DROP SBOX-VM-S-INVALID EXIT
+    THEN
+    DUP _SVI.RUN-STATE @ _SVM-FINISHABLE? 0= IF
+        2DROP DROP SBOX-VM-S-STATE EXIT
+    THEN
+    DUP _SVI.ENTRY-SIGNATURE @
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
+        2DROP DROP SBOX-VM-S-STATE EXIT
+    THEN
+    DUP _SVM-TERMINAL-COHERENT? 0= IF
+        2DROP DROP SBOX-VM-S-RESULT EXIT
+    THEN
+    >R
+
+    2DUP _SVM-RESULT-SPAN-STATUS ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    2DUP R@ _SVM-RESULT-DISJOINT? 0= IF
+        2DROP R> DROP SBOX-VM-S-ALIAS EXIT
+    THEN
+
+    R@ SBOX-VM-RESULT-MEASURE
+    DUP IF
+        >R DROP 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DUP 2 PICK U> IF
+        2DROP DROP R> DROP SBOX-VM-S-CAPACITY EXIT
+    THEN
+
+    R@ _SVM-TYPED-RESOURCES-PREFLIGHT ?DUP IF
+        >R 2DROP DROP R> R> DROP EXIT
+    THEN
+
+    2 PICK 2 PICK 2 PICK R@ _SVM-STAGE-RESULT
+    DUP IF
+        >R DROP 2DROP DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DROP
+
+    R@ _SVM-TYPED-RESOURCES-SCRUB!
+    R@ _SVM-SCRUB-FINISHED
+
+    \ This is the only seal write and the final operation that can affect the
+    \ result.  Every fallible check and every ownership transition is complete.
+    _SVM-RESULT-MAGIC 2 PICK _SVT.MAGIC !
+    2DROP R> DROP SBOX-VM-S-OK ;
 
 : SBOX-VM-RELEASE  ( instance -- status )
     DUP _SVM-INSTANCE-HEADER-STATUS ?DUP IF NIP EXIT THEN
