@@ -21795,6 +21795,108 @@ PROFILES["sandbox-stage1-vm-hotloop-contracts"] = (
 )
 
 
+PROFILES["sandbox-value-contracts"] = Profile(
+    roots=("sandbox/value.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - canonical Stage 2 sandbox value contracts
+ENTER-USERLAND
+." [akashic] loading sandbox value contracts" CR TX-FLUSH
+REQUIRE sandbox/value.f
+REQUIRE local_testing/sbox-value-contracts.f
+""",
+    ready_markers=("SBOX VALUE CONTRACTS PASS",),
+    stable_markers=("SBOX VALUE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX VALUE CONTRACTS FAIL",
+        "SBOX VALUE ASSERT",
+        "SBOX VALUE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-value-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-value-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-schema-contracts"] = Profile(
+    roots=("runtime/sandbox-schema.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - canonical Stage 2 sandbox schema contracts
+ENTER-USERLAND
+." [akashic] loading sandbox schema contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-schema.f
+REQUIRE local_testing/sbox-schema-contracts.f
+""",
+    ready_markers=("SBOX SCHEMA CONTRACTS PASS",),
+    stable_markers=("SBOX SCHEMA CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX SCHEMA CONTRACTS FAIL",
+        "SBOX SCHEMA ASSERT",
+        "SBOX SCHEMA STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-schema-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-schema-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-declaration-contracts"] = Profile(
+    roots=("runtime/sandbox-declaration.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - exact Stage 2 declaration contracts
+ENTER-USERLAND
+." [akashic] loading sandbox declaration contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-declaration.f
+REQUIRE local_testing/sbx-decl-test.f
+""",
+    ready_markers=("SBOX DECL CONTRACTS PASS",),
+    stable_markers=("SBOX DECL CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX DECL CONTRACTS FAIL",
+        "SBOX DECL ASSERT",
+        "SBOX DECL STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbx-decl-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-declaration-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["vfs-ram-capacity-contracts"] = Profile(
     roots=("utils/fs/vfs.f",),
     resources=(),

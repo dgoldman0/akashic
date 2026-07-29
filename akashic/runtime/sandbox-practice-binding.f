@@ -1,0 +1,868 @@
+\ =====================================================================
+\  sandbox-practice-binding.f - Inert exact sandbox role bindings
+\ =====================================================================
+\  One canonical pointer-free binding set maps Practice-local machine roles
+\  to exact sandbox declaration, artifact, profile, entry, schema, and
+\  Practice budget-ceiling identities.
+\
+\  The durable bytes contain no path, resolver, Context, plan, VM, native
+\  object, handler, XT, callback, grant, authority, capability, queue, VFS
+\  object, or "latest" selector.  Validation, lookup, PHEAD matching, and
+\  declaration cross-checking are data operations only.  This file has no
+\  dispatch or invocation surface.
+\
+\  A validated view is transient caller-owned inspection state and borrows
+\  the immutable source.  It is not the durable binding and must never be
+\  stored in PHEAD.  PHEAD.BINDING-ROOT stores only the exact 32-byte
+\  domain-separated binding-set digest.
+\ =====================================================================
+
+REQUIRE sandbox-declaration.f
+REQUIRE practice-head.f
+REQUIRE ../sandbox/budget.f
+REQUIRE ../sandbox/digest.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../utils/memory-span.f
+
+\ =====================================================================
+\  Public status and closed format bounds
+\ =====================================================================
+
+ 0 CONSTANT SBOX-PBIND-S-OK
+ 1 CONSTANT SBOX-PBIND-S-INVALID
+ 2 CONSTANT SBOX-PBIND-S-CAPACITY
+ 3 CONSTANT SBOX-PBIND-S-ALIAS
+ 4 CONSTANT SBOX-PBIND-S-RANGE
+ 5 CONSTANT SBOX-PBIND-S-PROTECTED
+ 6 CONSTANT SBOX-PBIND-S-PLATFORM
+ 7 CONSTANT SBOX-PBIND-S-FORMAT
+ 8 CONSTANT SBOX-PBIND-S-RESERVED
+ 9 CONSTANT SBOX-PBIND-S-IDENTITY
+10 CONSTANT SBOX-PBIND-S-ORDER
+11 CONSTANT SBOX-PBIND-S-ROLE
+12 CONSTANT SBOX-PBIND-S-ENTRY
+13 CONSTANT SBOX-PBIND-S-DIGEST
+14 CONSTANT SBOX-PBIND-S-BUDGET
+15 CONSTANT SBOX-PBIND-S-NOT-FOUND
+16 CONSTANT SBOX-PBIND-S-DECLARATION
+17 CONSTANT SBOX-PBIND-S-MISMATCH
+18 CONSTANT SBOX-PBIND-S-FAULT
+
+: SBOX-PBIND-STATUS-VALID?  ( status -- flag )
+    DUP SBOX-PBIND-S-OK >=
+    SWAP SBOX-PBIND-S-FAULT <= AND ;
+
+1 CONSTANT SBOX-PBIND-FORMAT-V1
+
+128 CONSTANT SBOX-PBIND-HEADER-SIZE
+544 CONSTANT SBOX-PBIND-RECORD-SIZE
+112 CONSTANT SBOX-PBIND-VIEW-SIZE
+
+64    CONSTANT SBOX-PBIND-RECORD-MAX
+63    CONSTANT SBOX-PBIND-NAME-MAX
+34944 CONSTANT SBOX-PBIND-BYTES-MAX
+
+\ =====================================================================
+\  Canonical wire layout
+\ =====================================================================
+
+0x314E494250584253 CONSTANT _PBIND-WIRE-MAGIC  \ "SBXPBIN1"
+
+  0 CONSTANT _PBI-H-MAGIC
+  8 CONSTANT _PBI-H-FORMAT
+ 10 CONSTANT _PBI-H-HEADER-U
+ 12 CONSTANT _PBI-H-FLAGS
+ 16 CONSTANT _PBI-H-TOTAL-U
+ 24 CONSTANT _PBI-H-RECORD-N
+ 28 CONSTANT _PBI-H-BUDGET-FIELD-N
+ 30 CONSTANT _PBI-H-NAME-MAX
+ 32 CONSTANT _PBI-H-PRACTICE-RID
+ 64 CONSTANT _PBI-H-RESERVED
+
+  0 CONSTANT _PBI-R-ROLE-U
+  2 CONSTANT _PBI-R-ENTRY-U
+  4 CONSTANT _PBI-R-SIGNATURE
+  6 CONSTANT _PBI-R-BUDGET-FIELD-N
+  8 CONSTANT _PBI-R-FLAGS
+ 12 CONSTANT _PBI-R-RESERVED
+ 16 CONSTANT _PBI-R-ROLE
+ 80 CONSTANT _PBI-R-ENTRY
+144 CONSTANT _PBI-R-OWNER-RID
+176 CONSTANT _PBI-R-MODULE-RID
+208 CONSTANT _PBI-R-MODULE-REVISION
+216 CONSTANT _PBI-R-DECLARATION-DIGEST
+248 CONSTANT _PBI-R-ARTIFACT-DIGEST
+280 CONSTANT _PBI-R-PROFILE-DIGEST
+312 CONSTANT _PBI-R-INPUT-SCHEMA-DIGEST
+344 CONSTANT _PBI-R-OUTPUT-SCHEMA-DIGEST
+376 CONSTANT _PBI-R-BUDGETS
+
+: _PBIND-GEOMETRY-ABORT  ( -- )
+    ." sandbox Practice binding geometry mismatch" CR ABORT ;
+
+1 CELLS 8 <> [IF]
+    _PBIND-GEOMETRY-ABORT
+[THEN]
+
+RID-SIZE 32 <> [IF]
+    _PBIND-GEOMETRY-ABORT
+[THEN]
+
+SBOX-DIGEST-SIZE RID-SIZE <> [IF]
+    _PBIND-GEOMETRY-ABORT
+[THEN]
+
+SBOX-BUDGET-LIMIT-FIELD-COUNT 21 <> [IF]
+    _PBIND-GEOMETRY-ABORT
+[THEN]
+
+_PBI-H-PRACTICE-RID RID-SIZE +
+    _PBI-H-RESERVED <> [IF]
+    _PBIND-GEOMETRY-ABORT
+[THEN]
+
+_PBI-R-BUDGETS
+    SBOX-BUDGET-LIMIT-FIELD-COUNT 8 * +
+    SBOX-PBIND-RECORD-SIZE <> [IF]
+    _PBIND-GEOMETRY-ABORT
+[THEN]
+
+SBOX-PBIND-HEADER-SIZE
+    SBOX-PBIND-RECORD-MAX SBOX-PBIND-RECORD-SIZE * +
+    SBOX-PBIND-BYTES-MAX <> [IF]
+    _PBIND-GEOMETRY-ABORT
+[THEN]
+
+\ PROVIDED keys are truncated to 23 bytes by the image loader.  This
+\ 20-byte key is intentionally unique within that comparison width.
+S" akashic-rt-sbx-pbind" NIP 20 <> [IF]
+    _PBIND-GEOMETRY-ABORT
+[THEN]
+
+PROVIDED akashic-rt-sbx-pbind
+
+\ =====================================================================
+\  Caller-owned validated view
+\ =====================================================================
+
+0x3130575649425053 CONSTANT _PBIND-VIEW-MAGIC  \ "SPBIVW01"
+
+  0 CONSTANT _PBV-MAGIC
+  8 CONSTANT _PBV-SELF
+ 16 CONSTANT _PBV-SOURCE
+ 24 CONSTANT _PBV-LENGTH
+ 32 CONSTANT _PBV-RECORDS
+ 40 CONSTANT _PBV-RECORD-N
+ 48 CONSTANT _PBV-DIGEST
+ 80 CONSTANT _PBV-WORKSPACE
+ 88 CONSTANT _PBV-RESERVED-A
+ 96 CONSTANT _PBV-RESERVED-B
+104 CONSTANT _PBV-RESERVED-C
+
+: _PBV.MAGIC       ( view -- address ) _PBV-MAGIC + ;
+: _PBV.SELF        ( view -- address ) _PBV-SELF + ;
+: _PBV.SOURCE      ( view -- address ) _PBV-SOURCE + ;
+: _PBV.LENGTH      ( view -- address ) _PBV-LENGTH + ;
+: _PBV.RECORDS     ( view -- address ) _PBV-RECORDS + ;
+: _PBV.RECORD-N    ( view -- address ) _PBV-RECORD-N + ;
+: _PBV.DIGEST      ( view -- address ) _PBV-DIGEST + ;
+: _PBV.WORKSPACE   ( view -- address ) _PBV-WORKSPACE + ;
+: _PBV.RESERVED-A  ( view -- address ) _PBV-RESERVED-A + ;
+: _PBV.RESERVED-B  ( view -- address ) _PBV-RESERVED-B + ;
+: _PBV.RESERVED-C  ( view -- address ) _PBV-RESERVED-C + ;
+
+\ =====================================================================
+\  Mechanical helpers
+\ =====================================================================
+
+: _PBIND-U16@  ( address -- value )
+    DUP C@ SWAP 1+ C@ 8 LSHIFT OR ;
+
+: _PBIND-U32@  ( address -- value )
+    DUP _PBIND-U16@
+    SWAP 2 + _PBIND-U16@ 16 LSHIFT OR ;
+
+: _PBIND-U64@  ( address -- value )
+    DUP _PBIND-U32@
+    SWAP 4 + _PBIND-U32@ 32 LSHIFT OR ;
+
+: _PBIND-DROP4  ( x1 x2 x3 x4 -- )
+    2DROP 2DROP ;
+
+: _PBIND-ZERO?  ( address length -- flag )
+    BEGIN DUP 0> WHILE
+        OVER C@ IF 2DROP 0 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
+
+: _PBIND-32-PRESENT?  ( address -- flag )
+    SBOX-DIGEST-SIZE _PBIND-ZERO? 0= ;
+
+: _PBIND-32=  ( a b -- flag )
+    SBOX-DIGEST-SIZE SWAP SBOX-DIGEST-SIZE COMPARE 0= ;
+
+: _PBIND-NAME-FIRST?  ( byte -- flag )
+    DUP [CHAR] a >= SWAP [CHAR] z <= AND ;
+
+: _PBIND-NAME-REST?  ( byte -- flag )
+    DUP _PBIND-NAME-FIRST? IF DROP -1 EXIT THEN
+    DUP [CHAR] 0 >= OVER [CHAR] 9 <= AND IF DROP -1 EXIT THEN
+    DUP [CHAR] . = IF DROP -1 EXIT THEN
+    DUP [CHAR] _ = IF DROP -1 EXIT THEN
+    [CHAR] - = ;
+
+: _PBIND-NAME?  ( address length -- flag )
+    DUP 1 < IF 2DROP 0 EXIT THEN
+    DUP SBOX-PBIND-NAME-MAX > IF 2DROP 0 EXIT THEN
+    OVER C@ _PBIND-NAME-FIRST? 0= IF 2DROP 0 EXIT THEN
+    1- SWAP 1+ SWAP
+    BEGIN DUP 0> WHILE
+        OVER C@ _PBIND-NAME-REST? 0= IF 2DROP 0 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
+
+: _PBIND-CALLER>STATUS  ( caller-status -- status )
+    DUP CALLER-SPAN-S-OK = IF DROP SBOX-PBIND-S-OK EXIT THEN
+    DUP CALLER-SPAN-S-RANGE = IF DROP SBOX-PBIND-S-RANGE EXIT THEN
+    DUP CALLER-SPAN-S-PROTECTED = IF
+        DROP SBOX-PBIND-S-PROTECTED EXIT
+    THEN
+    DROP SBOX-PBIND-S-PLATFORM ;
+
+: _PBIND-DIGEST>STATUS  ( digest-status -- status )
+    DUP SBOX-DIGEST-S-OK = IF DROP SBOX-PBIND-S-OK EXIT THEN
+    DUP SBOX-DIGEST-S-CAPACITY = IF
+        DROP SBOX-PBIND-S-CAPACITY EXIT
+    THEN
+    DUP SBOX-DIGEST-S-ALIAS = IF DROP SBOX-PBIND-S-ALIAS EXIT THEN
+    DUP SBOX-DIGEST-S-INVALID = IF DROP SBOX-PBIND-S-INVALID EXIT THEN
+    DROP SBOX-PBIND-S-FAULT ;
+
+: _PBIND-RECORD[]  ( index view -- record )
+    _PBV.RECORDS @ SWAP SBOX-PBIND-RECORD-SIZE * + ;
+
+: _PBIND-ROLE$  ( record -- address length )
+    DUP _PBI-R-ROLE + SWAP _PBI-R-ROLE-U + _PBIND-U16@ ;
+
+: _PBIND-ENTRY$  ( record -- address length )
+    DUP _PBI-R-ENTRY + SWAP _PBI-R-ENTRY-U + _PBIND-U16@ ;
+
+: _PBIND-BUDGET  ( field record -- address )
+    SWAP 8 * _PBI-R-BUDGETS + + ;
+
+\ =====================================================================
+\  Preflight, view lifecycle, and integrity
+\ =====================================================================
+
+: _PBIND-PREFLIGHT
+  ( source source-u view digest-workspace -- status )
+    2 PICK SBOX-PBIND-HEADER-SIZE SBOX-PBIND-RECORD-SIZE + < IF
+        _PBIND-DROP4 SBOX-PBIND-S-CAPACITY EXIT
+    THEN
+    2 PICK SBOX-PBIND-BYTES-MAX > IF
+        _PBIND-DROP4 SBOX-PBIND-S-CAPACITY EXIT
+    THEN
+    3 PICK 0= IF _PBIND-DROP4 SBOX-PBIND-S-INVALID EXIT THEN
+    3 PICK 3 PICK MSPAN-NONWRAPPING? 0= IF
+        _PBIND-DROP4 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK CALLER-SPAN-STATUS
+        _PBIND-CALLER>STATUS ?DUP IF
+        >R _PBIND-DROP4 R> EXIT
+    THEN
+
+    1 PICK 0= IF _PBIND-DROP4 SBOX-PBIND-S-INVALID EXIT THEN
+    1 PICK 7 AND IF _PBIND-DROP4 SBOX-PBIND-S-INVALID EXIT THEN
+    1 PICK SBOX-PBIND-VIEW-SIZE MSPAN-NONWRAPPING? 0= IF
+        _PBIND-DROP4 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    1 PICK SBOX-PBIND-VIEW-SIZE CALLER-SPAN-STATUS
+        _PBIND-CALLER>STATUS ?DUP IF
+        >R _PBIND-DROP4 R> EXIT
+    THEN
+
+    DUP 0= IF _PBIND-DROP4 SBOX-PBIND-S-INVALID EXIT THEN
+    DUP 7 AND IF _PBIND-DROP4 SBOX-PBIND-S-INVALID EXIT THEN
+    DUP SBOX-DIGEST-WORKSPACE-SIZE MSPAN-NONWRAPPING? 0= IF
+        _PBIND-DROP4 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DUP SBOX-DIGEST-WORKSPACE-SIZE CALLER-SPAN-STATUS
+        _PBIND-CALLER>STATUS ?DUP IF
+        >R _PBIND-DROP4 R> EXIT
+    THEN
+
+    3 PICK 3 PICK 3 PICK SBOX-PBIND-VIEW-SIZE
+        MSPAN-OVERLAP? IF
+        _PBIND-DROP4 SBOX-PBIND-S-ALIAS EXIT
+    THEN
+    3 PICK 3 PICK 2 PICK SBOX-DIGEST-WORKSPACE-SIZE
+        MSPAN-OVERLAP? IF
+        _PBIND-DROP4 SBOX-PBIND-S-ALIAS EXIT
+    THEN
+    1 PICK SBOX-PBIND-VIEW-SIZE
+        2 PICK SBOX-DIGEST-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        _PBIND-DROP4 SBOX-PBIND-S-ALIAS EXIT
+    THEN
+    _PBIND-DROP4 SBOX-PBIND-S-OK ;
+
+: _PBIND-BIND
+  ( source source-u view digest-workspace -- view )
+    >R
+    DUP SBOX-PBIND-VIEW-SIZE 0 FILL
+    DUP DUP _PBV.SELF !
+    2 PICK OVER _PBV.SOURCE !
+    1 PICK OVER _PBV.LENGTH !
+    2 PICK SBOX-PBIND-HEADER-SIZE + OVER _PBV.RECORDS !
+    R> OVER _PBV.WORKSPACE !
+    NIP NIP ;
+
+: _PBIND-FAIL  ( status view -- status )
+    SWAP >R
+    SBOX-PBIND-VIEW-SIZE 0 FILL
+    R> ;
+
+: SBOX-PBIND-VIEW-VALID?  ( view -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP SBOX-PBIND-VIEW-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP SBOX-PBIND-VIEW-SIZE CALLER-SPAN-STATUS
+        CALLER-SPAN-S-OK <> IF DROP 0 EXIT THEN
+    DUP _PBV.MAGIC @ _PBIND-VIEW-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _PBV.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _PBV.SOURCE @ OVER _PBV.LENGTH @
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _PBV.SOURCE @ OVER _PBV.LENGTH @ CALLER-SPAN-STATUS
+        CALLER-SPAN-S-OK <> IF DROP 0 EXIT THEN
+    DUP _PBV.LENGTH @ DUP
+        SBOX-PBIND-HEADER-SIZE SBOX-PBIND-RECORD-SIZE + <
+        SWAP SBOX-PBIND-BYTES-MAX > OR IF DROP 0 EXIT THEN
+    DUP _PBV.RECORD-N @ DUP 1 <
+        SWAP SBOX-PBIND-RECORD-MAX > OR IF DROP 0 EXIT THEN
+    DUP _PBV.RECORD-N @ SBOX-PBIND-RECORD-SIZE *
+        SBOX-PBIND-HEADER-SIZE +
+        OVER _PBV.LENGTH @ <> IF DROP 0 EXIT THEN
+    DUP _PBV.SOURCE @ SBOX-PBIND-HEADER-SIZE +
+        OVER _PBV.RECORDS @ <> IF DROP 0 EXIT THEN
+    DUP _PBV.DIGEST _PBIND-32-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _PBV.WORKSPACE @ IF DROP 0 EXIT THEN
+    DUP _PBV.RESERVED-A @ IF DROP 0 EXIT THEN
+    DUP _PBV.RESERVED-B @ IF DROP 0 EXIT THEN
+    _PBV.RESERVED-C @ 0= ;
+
+\ =====================================================================
+\  Header and record validation
+\ =====================================================================
+
+: _PBIND-HEADER-VALIDATE  ( view -- status )
+    >R
+    R@ _PBV.SOURCE @ _PBI-H-MAGIC +
+        _PBIND-U64@ _PBIND-WIRE-MAGIC <> IF
+        R> DROP SBOX-PBIND-S-FORMAT EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-FORMAT + _PBIND-U16@
+        SBOX-PBIND-FORMAT-V1 <> IF
+        R> DROP SBOX-PBIND-S-FORMAT EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-HEADER-U + _PBIND-U16@
+        SBOX-PBIND-HEADER-SIZE <> IF
+        R> DROP SBOX-PBIND-S-FORMAT EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-FLAGS + _PBIND-U32@ IF
+        R> DROP SBOX-PBIND-S-RESERVED EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-TOTAL-U + _PBIND-U64@
+        R@ _PBV.LENGTH @ <> IF
+        R> DROP SBOX-PBIND-S-FORMAT EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-BUDGET-FIELD-N + _PBIND-U16@
+        SBOX-BUDGET-LIMIT-FIELD-COUNT <> IF
+        R> DROP SBOX-PBIND-S-BUDGET EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-NAME-MAX + _PBIND-U16@
+        SBOX-PBIND-NAME-MAX <> IF
+        R> DROP SBOX-PBIND-S-FORMAT EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-PRACTICE-RID +
+        _PBIND-32-PRESENT? 0= IF
+        R> DROP SBOX-PBIND-S-IDENTITY EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-RESERVED +
+        SBOX-PBIND-HEADER-SIZE _PBI-H-RESERVED -
+        _PBIND-ZERO? 0= IF
+        R> DROP SBOX-PBIND-S-RESERVED EXIT
+    THEN
+    R@ _PBV.SOURCE @ _PBI-H-RECORD-N + _PBIND-U32@
+    DUP 1 < OVER SBOX-PBIND-RECORD-MAX > OR IF
+        DROP R> DROP SBOX-PBIND-S-CAPACITY EXIT
+    THEN
+    DUP R@ _PBV.RECORD-N !
+    SBOX-PBIND-RECORD-SIZE *
+    SBOX-PBIND-HEADER-SIZE +
+    R@ _PBV.LENGTH @ <> IF
+        R> DROP SBOX-PBIND-S-FORMAT EXIT
+    THEN
+    R> DROP SBOX-PBIND-S-OK ;
+
+: _PBIND-FIXED-NAME?  ( record length-offset bytes-offset -- flag )
+    >R
+    OVER + _PBIND-U16@
+    OVER R@ + OVER _PBIND-NAME? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    OVER R@ + OVER +
+    64 2 PICK -
+    _PBIND-ZERO? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DROP R> DROP -1 ;
+
+: _PBIND-RECORD-IDENTITIES?  ( record -- flag )
+    DUP _PBI-R-OWNER-RID + _PBIND-32-PRESENT?
+    OVER _PBI-R-MODULE-RID + _PBIND-32-PRESENT? AND
+    SWAP _PBI-R-MODULE-REVISION + _PBIND-U64@ 0> AND ;
+
+: _PBIND-RECORD-DIGESTS?  ( record -- flag )
+    DUP _PBI-R-DECLARATION-DIGEST + _PBIND-32-PRESENT?
+    OVER _PBI-R-ARTIFACT-DIGEST + _PBIND-32-PRESENT? AND
+    OVER _PBI-R-PROFILE-DIGEST + _PBIND-32-PRESENT? AND
+    OVER _PBI-R-INPUT-SCHEMA-DIGEST + _PBIND-32-PRESENT? AND
+    SWAP _PBI-R-OUTPUT-SCHEMA-DIGEST + _PBIND-32-PRESENT? AND ;
+
+: _PBIND-RECORD-BUDGETS?  ( record -- flag )
+    >R
+    0
+    BEGIN DUP SBOX-BUDGET-LIMIT-FIELD-COUNT < WHILE
+        DUP R@ _PBIND-BUDGET _PBIND-U64@
+        DUP 0< IF
+            2DROP R> DROP 0 EXIT
+        THEN
+        DUP IF
+            OVER SBOX-BUDGET-LIMIT-MAX@
+            DUP SBOX-BUDGET-S-OK <> IF
+                2DROP 2DROP R> DROP 0 EXIT
+            THEN
+            DROP >R
+            DUP R@ > IF
+                2DROP R> DROP R> DROP 0 EXIT
+            THEN
+            R> DROP
+        THEN
+        DROP 1+
+    REPEAT
+    DROP R> DROP -1 ;
+
+: _PBIND-ONE-RECORD-VALIDATE  ( index view -- status )
+    >R
+    DUP R@ _PBIND-RECORD[]
+    DUP _PBI-R-BUDGET-FIELD-N + _PBIND-U16@
+        SBOX-BUDGET-LIMIT-FIELD-COUNT <> IF
+        2DROP R> DROP SBOX-PBIND-S-BUDGET EXIT
+    THEN
+    DUP _PBI-R-SIGNATURE + _PBIND-U16@
+        SBOX-DECL-SIGNATURE-PURE-VALUE <> IF
+        2DROP R> DROP SBOX-PBIND-S-ENTRY EXIT
+    THEN
+    DUP _PBI-R-FLAGS + _PBIND-U32@ IF
+        2DROP R> DROP SBOX-PBIND-S-RESERVED EXIT
+    THEN
+    DUP _PBI-R-RESERVED + _PBIND-U32@ IF
+        2DROP R> DROP SBOX-PBIND-S-RESERVED EXIT
+    THEN
+    DUP _PBI-R-ROLE-U _PBI-R-ROLE
+        _PBIND-FIXED-NAME? 0= IF
+        2DROP R> DROP SBOX-PBIND-S-ROLE EXIT
+    THEN
+    DUP _PBI-R-ENTRY-U _PBI-R-ENTRY
+        _PBIND-FIXED-NAME? 0= IF
+        2DROP R> DROP SBOX-PBIND-S-ENTRY EXIT
+    THEN
+    DUP _PBIND-RECORD-IDENTITIES? 0= IF
+        2DROP R> DROP SBOX-PBIND-S-IDENTITY EXIT
+    THEN
+    DUP _PBIND-RECORD-DIGESTS? 0= IF
+        2DROP R> DROP SBOX-PBIND-S-DIGEST EXIT
+    THEN
+    DUP _PBIND-RECORD-BUDGETS? 0= IF
+        2DROP R> DROP SBOX-PBIND-S-BUDGET EXIT
+    THEN
+    OVER 0> IF
+        DUP SBOX-PBIND-RECORD-SIZE - _PBIND-ROLE$
+        2 PICK _PBIND-ROLE$
+        COMPARE 0< 0= IF
+            2DROP R> DROP SBOX-PBIND-S-ORDER EXIT
+        THEN
+    THEN
+    2DROP R> DROP SBOX-PBIND-S-OK ;
+
+: _PBIND-RECORDS-VALIDATE  ( view -- status )
+    >R
+    0
+    BEGIN DUP R@ _PBV.RECORD-N @ < WHILE
+        DUP R@ _PBIND-ONE-RECORD-VALIDATE
+        DUP IF NIP R> DROP EXIT THEN
+        DROP 1+
+    REPEAT
+    DROP R> DROP SBOX-PBIND-S-OK ;
+
+\ =====================================================================
+\  Validation and exact binding-set identity
+\ =====================================================================
+
+: SBOX-PBIND-DIGEST
+  ( source source-u digest digest-workspace -- status | throws )
+    SBOX-DIGEST-PRACTICE-BINDING _PBIND-DIGEST>STATUS ;
+
+: SBOX-PBIND-VALIDATE
+  ( source source-u view digest-workspace -- status | throws )
+    2OVER 2OVER _PBIND-PREFLIGHT ?DUP IF
+        >R _PBIND-DROP4 R> EXIT
+    THEN
+    DUP SBOX-DIGEST-WORKSPACE-CLEAR
+        _PBIND-DIGEST>STATUS ?DUP IF
+        >R _PBIND-DROP4 R> EXIT
+    THEN
+    _PBIND-BIND >R
+    R@ _PBIND-HEADER-VALIDATE ?DUP IF
+        R> _PBIND-FAIL EXIT
+    THEN
+    R@ _PBIND-RECORDS-VALIDATE ?DUP IF
+        R> _PBIND-FAIL EXIT
+    THEN
+    R@ _PBV.SOURCE @ R@ _PBV.LENGTH @
+    R@ _PBV.DIGEST R@ _PBV.WORKSPACE @
+        SBOX-DIGEST-PRACTICE-BINDING _PBIND-DIGEST>STATUS
+    DUP IF
+        0 R@ _PBV.WORKSPACE !
+        R> _PBIND-FAIL EXIT
+    THEN
+    DROP
+    0 R@ _PBV.WORKSPACE !
+    _PBIND-VIEW-MAGIC R@ _PBV.MAGIC !
+    R@ SBOX-PBIND-VIEW-VALID? 0= IF
+        SBOX-PBIND-S-INVALID R> _PBIND-FAIL EXIT
+    THEN
+    R> DROP SBOX-PBIND-S-OK ;
+
+\ =====================================================================
+\  Validated lookup and accessors
+\ =====================================================================
+
+: SBOX-PBIND-SOURCE@  ( view -- source source-u status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        DROP 0 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DUP _PBV.SOURCE @ SWAP _PBV.LENGTH @ SBOX-PBIND-S-OK ;
+
+: SBOX-PBIND-PRACTICE-RID@  ( view -- rid status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    _PBV.SOURCE @ _PBI-H-PRACTICE-RID + SBOX-PBIND-S-OK ;
+
+: SBOX-PBIND-DIGEST@  ( view -- digest status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    _PBV.DIGEST SBOX-PBIND-S-OK ;
+
+: SBOX-PBIND-RECORD-COUNT@  ( view -- count status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    _PBV.RECORD-N @ SBOX-PBIND-S-OK ;
+
+: SBOX-PBIND-RECORD@  ( index view -- record status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    2DUP _PBV.RECORD-N @ U>= IF
+        2DROP 0 SBOX-PBIND-S-NOT-FOUND EXIT
+    THEN
+    _PBIND-RECORD[] SBOX-PBIND-S-OK ;
+
+: _PBIND-RECORD-BELONGS?  ( record view -- flag )
+    >R
+    DUP R@ _PBV.RECORDS @ U< IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP R@ _PBV.RECORDS @ -
+    R@ _PBV.RECORD-N @ SBOX-PBIND-RECORD-SIZE * U>= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ _PBV.RECORDS @ -
+    SBOX-PBIND-RECORD-SIZE MOD 0=
+    R> DROP ;
+
+: _PBIND-LOOKUP-NAME-STATUS  ( address length -- status )
+    DUP 1 < OVER SBOX-PBIND-NAME-MAX > OR IF
+        2DROP SBOX-PBIND-S-ROLE EXIT
+    THEN
+    OVER 0= IF 2DROP SBOX-PBIND-S-INVALID EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP SBOX-PBIND-S-INVALID EXIT
+    THEN
+    2DUP CALLER-SPAN-STATUS _PBIND-CALLER>STATUS ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    _PBIND-NAME? IF SBOX-PBIND-S-OK ELSE SBOX-PBIND-S-ROLE THEN ;
+
+: SBOX-PBIND-ROLE-FIND-EXACT
+  ( role role-u view -- record status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    >R
+    2DUP _PBIND-LOOKUP-NAME-STATUS ?DUP IF
+        >R 2DROP R> R> DROP 0 SWAP EXIT
+    THEN
+    0
+    BEGIN DUP R@ _PBV.RECORD-N @ < WHILE
+        2 PICK 2 PICK
+        2 PICK R@ _PBIND-RECORD[] _PBIND-ROLE$
+        COMPARE 0= IF
+            DUP R@ _PBIND-RECORD[] >R
+            2DROP DROP
+            R> R> DROP SBOX-PBIND-S-OK EXIT
+        THEN
+        1+
+    REPEAT
+    2DROP DROP R> DROP 0 SBOX-PBIND-S-NOT-FOUND ;
+
+: SBOX-PBIND-RECORD-ROLE@
+  ( record view -- address length status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP 0 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    2DUP _PBIND-RECORD-BELONGS? 0= IF
+        2DROP 0 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DROP _PBIND-ROLE$ SBOX-PBIND-S-OK ;
+
+: SBOX-PBIND-RECORD-ENTRY@
+  ( record view -- address length signature status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP 0 0 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    2DUP _PBIND-RECORD-BELONGS? 0= IF
+        2DROP 0 0 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DROP
+    DUP _PBIND-ENTRY$
+    2 PICK _PBI-R-SIGNATURE + _PBIND-U16@
+    >R >R >R DROP R> R> R>
+    SBOX-PBIND-S-OK ;
+
+: _PBIND-RECORD-IDENTITY@
+  ( record view offset -- identity status )
+    >R
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP R> DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    2DUP _PBIND-RECORD-BELONGS? 0= IF
+        2DROP R> DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DROP R> + SBOX-PBIND-S-OK ;
+
+: SBOX-PBIND-RECORD-OWNER-RID@
+  ( record view -- rid status )
+    _PBI-R-OWNER-RID _PBIND-RECORD-IDENTITY@ ;
+
+: SBOX-PBIND-RECORD-MODULE-RID@
+  ( record view -- rid status )
+    _PBI-R-MODULE-RID _PBIND-RECORD-IDENTITY@ ;
+
+: SBOX-PBIND-RECORD-DECLARATION-DIGEST@
+  ( record view -- digest status )
+    _PBI-R-DECLARATION-DIGEST _PBIND-RECORD-IDENTITY@ ;
+
+: SBOX-PBIND-RECORD-ARTIFACT-DIGEST@
+  ( record view -- digest status )
+    _PBI-R-ARTIFACT-DIGEST _PBIND-RECORD-IDENTITY@ ;
+
+: SBOX-PBIND-RECORD-PROFILE-DIGEST@
+  ( record view -- digest status )
+    _PBI-R-PROFILE-DIGEST _PBIND-RECORD-IDENTITY@ ;
+
+: SBOX-PBIND-RECORD-INPUT-SCHEMA-DIGEST@
+  ( record view -- digest status )
+    _PBI-R-INPUT-SCHEMA-DIGEST _PBIND-RECORD-IDENTITY@ ;
+
+: SBOX-PBIND-RECORD-OUTPUT-SCHEMA-DIGEST@
+  ( record view -- digest status )
+    _PBI-R-OUTPUT-SCHEMA-DIGEST _PBIND-RECORD-IDENTITY@ ;
+
+: SBOX-PBIND-RECORD-MODULE-REVISION@
+  ( record view -- revision status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    2DUP _PBIND-RECORD-BELONGS? 0= IF
+        2DROP 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DROP _PBI-R-MODULE-REVISION + _PBIND-U64@
+    SBOX-PBIND-S-OK ;
+
+: SBOX-PBIND-RECORD-BUDGET@
+  ( field record view -- value present? status )
+    DUP SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP DROP 0 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    2DUP _PBIND-RECORD-BELONGS? 0= IF
+        2DROP DROP 0 0 SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DROP >R
+    DUP SBOX-BUDGET-LIMIT-MAX@
+    SBOX-BUDGET-S-OK <> IF
+        2DROP R> DROP 0 0 SBOX-PBIND-S-BUDGET EXIT
+    THEN
+    DROP
+    R> _PBIND-BUDGET _PBIND-U64@
+    DUP 0<> SBOX-PBIND-S-OK ;
+
+\ =====================================================================
+\  PHEAD seam and independent declaration cross-check
+\ =====================================================================
+
+: SBOX-PBIND-MATCH-PHEAD  ( view head -- status )
+    DUP PHEAD-VALID? 0= IF
+        2DROP SBOX-PBIND-S-INVALID EXIT
+    THEN
+    OVER SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DUP PHEAD.BINDING-ROOT _PBIND-32-PRESENT? 0= IF
+        2DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+    OVER _PBV.DIGEST
+    OVER PHEAD.BINDING-ROOT
+    _PBIND-32= 0= IF
+        2DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+    DUP PHEAD.ID
+    2 PICK _PBV.SOURCE @ _PBI-H-PRACTICE-RID +
+    RID= >R
+    2DROP R>
+    IF SBOX-PBIND-S-OK ELSE SBOX-PBIND-S-MISMATCH THEN ;
+
+: _PBIND-SCHEMA-RESULT=
+  ( bytes schema-u digest storage declaration-status expected -- status )
+    >R
+    DUP SBOX-DECL-S-OK <> IF
+        2DROP 2DROP DROP R> DROP
+        SBOX-PBIND-S-DECLARATION EXIT
+    THEN
+    DROP
+    DROP
+    R> _PBIND-32=
+    >R 2DROP R>
+    IF SBOX-PBIND-S-OK ELSE SBOX-PBIND-S-MISMATCH THEN ;
+
+: _PBIND-RECORD-MATCH-DECL  ( record declaration-view -- status )
+    SWAP >R
+    DUP SBOX-DECL-OWNER-RID@
+    DUP SBOX-DECL-S-OK <> IF
+        2DROP DROP R> DROP SBOX-PBIND-S-DECLARATION EXIT
+    THEN
+    DROP
+    R@ _PBI-R-OWNER-RID + SWAP _PBIND-32= 0= IF
+        DROP R> DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+
+    DUP SBOX-DECL-MODULE-RID@
+    DUP SBOX-DECL-S-OK <> IF
+        2DROP DROP R> DROP SBOX-PBIND-S-DECLARATION EXIT
+    THEN
+    DROP
+    R@ _PBI-R-MODULE-RID + SWAP _PBIND-32= 0= IF
+        DROP R> DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+
+    DUP SBOX-DECL-MODULE-REVISION@
+    DUP SBOX-DECL-S-OK <> IF
+        2DROP DROP R> DROP SBOX-PBIND-S-DECLARATION EXIT
+    THEN
+    DROP
+    R@ _PBI-R-MODULE-REVISION + _PBIND-U64@ <> IF
+        DROP R> DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+
+    DUP SBOX-DECL-ARTIFACT-DIGEST@
+    DUP SBOX-DECL-S-OK <> IF
+        2DROP DROP R> DROP SBOX-PBIND-S-DECLARATION EXIT
+    THEN
+    DROP
+    R@ _PBI-R-ARTIFACT-DIGEST + SWAP _PBIND-32= 0= IF
+        DROP R> DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+
+    DUP SBOX-DECL-PROFILE-DIGEST@
+    DUP SBOX-DECL-S-OK <> IF
+        2DROP DROP R> DROP SBOX-PBIND-S-DECLARATION EXIT
+    THEN
+    DROP
+    R@ _PBI-R-PROFILE-DIGEST + SWAP _PBIND-32= 0= IF
+        DROP R> DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+
+    DUP R@ _PBIND-ENTRY$ ROT SBOX-DECL-ENTRY-FIND-EXACT
+    DUP IF
+        SBOX-DECL-S-NOT-FOUND = IF
+            2DROP R> DROP SBOX-PBIND-S-MISMATCH
+        ELSE
+            2DROP R> DROP SBOX-PBIND-S-DECLARATION
+        THEN
+        EXIT
+    THEN
+    DROP
+
+    2DUP SWAP SBOX-DECL-ENTRY-SIGNATURE@
+    DUP SBOX-DECL-S-OK <> IF
+        2DROP 2DROP R> DROP SBOX-PBIND-S-DECLARATION EXIT
+    THEN
+    DROP
+    R@ _PBI-R-SIGNATURE + _PBIND-U16@ <> IF
+        2DROP R> DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+
+    2DUP SWAP SBOX-DECL-ENTRY-INPUT-SCHEMA@
+    R@ _PBI-R-INPUT-SCHEMA-DIGEST + _PBIND-SCHEMA-RESULT=
+    ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+
+    2DUP SWAP SBOX-DECL-ENTRY-OUTPUT-SCHEMA@
+    R@ _PBI-R-OUTPUT-SCHEMA-DIGEST + _PBIND-SCHEMA-RESULT=
+    ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    2DROP R> DROP SBOX-PBIND-S-OK ;
+
+: SBOX-PBIND-RECORD-MATCH-DECLARATION
+  ( record binding-view declaration-view declaration-digest -- status )
+    DUP 0= IF
+        2DROP 2DROP SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DUP SBOX-DIGEST-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP 2DROP SBOX-PBIND-S-INVALID EXIT
+    THEN
+    DUP SBOX-DIGEST-SIZE CALLER-SPAN-STATUS
+        _PBIND-CALLER>STATUS ?DUP IF
+        >R 2DROP 2DROP R> EXIT
+    THEN
+    1 PICK SBOX-DECL-VIEW-VALID? 0= IF
+        2DROP 2DROP SBOX-PBIND-S-DECLARATION EXIT
+    THEN
+    2 PICK SBOX-PBIND-VIEW-VALID? 0= IF
+        2DROP 2DROP SBOX-PBIND-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK _PBIND-RECORD-BELONGS? 0= IF
+        2DROP 2DROP SBOX-PBIND-S-INVALID EXIT
+    THEN
+    3 PICK _PBI-R-DECLARATION-DIGEST +
+        OVER _PBIND-32= 0= IF
+        2DROP 2DROP SBOX-PBIND-S-MISMATCH EXIT
+    THEN
+    DROP NIP
+    _PBIND-RECORD-MATCH-DECL ;

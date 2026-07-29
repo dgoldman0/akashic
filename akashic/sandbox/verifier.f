@@ -2,7 +2,7 @@
 \  verifier.f - Independent bounded sandbox candidate verifier
 \ =====================================================================
 \  This module accepts hostile address-free candidate bytes, one sealed
-\  scalar-machine profile, and caller-owned plan/workspace spans.  It does
+\  sandbox ABI profile, and caller-owned plan/workspace spans.  It does
 \  not call the compiler or execute candidate code.  Verification derives
 \  record geometry, lexical loop structure, exact control-flow stack heights,
 \  and resource bounds independently, then asks plan.f to publish one owned
@@ -16,7 +16,7 @@
 
 REQUIRE candidate.f
 REQUIRE profile.f
-REQUIRE machine.f
+REQUIRE abi.f
 REQUIRE plan.f
 REQUIRE ../utils/caller-span.f
 REQUIRE ../utils/memory-span.f
@@ -516,8 +516,8 @@ _SVW-LOOP-STACK SBOX-PROFILE-MAX-LOOP-FRAMES 8 * +
     SBOX-CANDIDATE-ENTRY-FUNCTION-INDEX-OFFSET +
     SBOX-CANDIDATE-U32-LE@ ;
 
-: _SV-ENTRY-RESERVED@  ( record -- value )
-    SBOX-CANDIDATE-ENTRY-RESERVED-OFFSET +
+: _SV-ENTRY-SIGNATURE@  ( record -- value )
+    SBOX-CANDIDATE-ENTRY-SIGNATURE-ID-OFFSET +
     SBOX-CANDIDATE-U32-LE@ ;
 
 : _SV-INSTRUCTION-OPCODE@  ( record -- value )
@@ -1015,13 +1015,29 @@ _SVW-LOOP-STACK SBOX-PROFILE-MAX-LOOP-FRAMES 8 * +
             R@ _SVW.CURRENT-INDEX @ R@
             _SV-FAIL R> DROP EXIT
         THEN
-        DROP
-        R@ _SVW.CURRENT-RECORD @ _SV-ENTRY-FLAGS@
-        R@ _SVW.CURRENT-RECORD @ _SV-ENTRY-RESERVED@ OR IF
+        R@ _SVW.CURRENT-FUNCTION !
+        R@ _SVW.CURRENT-RECORD @ _SV-ENTRY-FLAGS@ IF
             SBOX-VERIFIER-S-ENTRY
             SBOX-VERIFIER-D-ENTRY-FLAGS
             R@ _SVW.CURRENT-INDEX @ R@
             _SV-FAIL R> DROP EXIT
+        THEN
+        R@ _SVW.CURRENT-RECORD @ _SV-ENTRY-SIGNATURE@
+        DUP SBOX-ABI-SIGNATURE-VALUE-TO-VALUE U> IF
+            DROP SBOX-VERIFIER-S-ENTRY
+            SBOX-VERIFIER-D-ENTRY-FLAGS
+            R@ _SVW.CURRENT-INDEX @ R@
+            _SV-FAIL R> DROP EXIT
+        THEN
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE = IF
+            R@ _SVW.CURRENT-FUNCTION @ R@ _SV-FUNCTION[]
+            DUP _SV-FUNCTION-PARAMS@ 1 <>
+            SWAP _SV-FUNCTION-RESULTS@ 1 <> OR IF
+                SBOX-VERIFIER-S-ENTRY
+                SBOX-VERIFIER-D-FUNCTION-SIGNATURE
+                R@ _SVW.CURRENT-INDEX @ R@
+                _SV-FAIL R> DROP EXIT
+            THEN
         THEN
 
         R@ _SVW.CURRENT-RECORD @ _SV-ENTRY-NAME-U@
@@ -1183,7 +1199,7 @@ _SVW-LOOP-STACK SBOX-PROFILE-MAX-LOOP-FRAMES 8 * +
     THEN
 
     R@ _SVW.CURRENT-RECORD @ _SV-INSTRUCTION-OPCODE@
-    DUP SBOX-MACHINE-OPCODE-STATUS SBOX-MACHINE-S-OK <> IF
+    DUP SBOX-ABI-OPCODE-STATUS SBOX-MACHINE-S-OK <> IF
         DROP SBOX-VERIFIER-S-OPCODE
         SBOX-VERIFIER-D-INSTRUCTION-OPCODE R@
         _SV-FAIL-CURRENT R> DROP EXIT
@@ -1201,7 +1217,7 @@ _SVW-LOOP-STACK SBOX-PROFILE-MAX-LOOP-FRAMES 8 * +
     THEN
 
     R@ _SVW.CURRENT-RECORD @ _SV-INSTRUCTION-OPCODE@
-    SBOX-MACHINE-OPERAND@
+    SBOX-ABI-OPERAND@
     DUP IF
         2DROP SBOX-VERIFIER-S-OPCODE
         SBOX-VERIFIER-D-INSTRUCTION-OPCODE R@
@@ -1456,7 +1472,7 @@ _SVW-LOOP-STACK SBOX-PROFILE-MAX-LOOP-FRAMES 8 * +
 
 : _SV-FIXED-EFFECT  ( opcode workspace -- status )
     >R
-    DUP SBOX-MACHINE-POP@
+    DUP SBOX-ABI-POP@
     DUP IF
         >R 2DROP R> DROP
         SBOX-VERIFIER-S-OPCODE
@@ -1464,7 +1480,7 @@ _SVW-LOOP-STACK SBOX-PROFILE-MAX-LOOP-FRAMES 8 * +
         _SV-FAIL-CURRENT R> DROP EXIT
     THEN
     DROP SWAP
-    SBOX-MACHINE-PUSH@
+    SBOX-ABI-PUSH@
     DUP IF
         >R 2DROP R> DROP
         SBOX-VERIFIER-S-OPCODE

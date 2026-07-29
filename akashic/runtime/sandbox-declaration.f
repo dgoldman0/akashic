@@ -1,0 +1,1161 @@
+\ =====================================================================
+\  sandbox-declaration.f - Exact pointer-free sandbox module metadata
+\ =====================================================================
+\  A declaration binds one owner/module revision to one exact artifact and
+\  profile and to a bounded sorted set of exposed entries.  It is policy and
+\  validation input only: no field is an authority, grant, handler, runtime
+\  pointer, storage path, VM object, or "latest" selector.
+\
+\  Validation is independent of compilation and execution.  The complete
+\  source extent, every zero-reserved byte, canonical section order, entry
+\  order, budget field, and embedded-schema digest are checked.  The caller
+\  owns the immutable source, one address-bound view, and the digest
+\  workspace.  A valid view borrows source spans only for that source's
+\  mapped and quiescent lifetime.
+\ =====================================================================
+
+REQUIRE ../sandbox/format.f
+REQUIRE ../sandbox/digest.f
+REQUIRE ../sandbox/budget.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../utils/memory-span.f
+REQUIRE identity.f
+
+: _SDECL-GEOMETRY-ABORT  ( -- )
+    ." sandbox declaration geometry mismatch" CR ABORT ;
+
+1 CELLS 8 <> [IF]
+    _SDECL-GEOMETRY-ABORT
+[THEN]
+
+RID-SIZE 32 <> [IF]
+    _SDECL-GEOMETRY-ABORT
+[THEN]
+
+SBOX-DIGEST-SIZE 32 <> [IF]
+    _SDECL-GEOMETRY-ABORT
+[THEN]
+
+PROVIDED akashic-rt-sbx-decl
+
+\ =====================================================================
+\  Public status, format, and closed bounds
+\ =====================================================================
+
+ 0 CONSTANT SBOX-DECL-S-OK
+ 1 CONSTANT SBOX-DECL-S-INVALID
+ 2 CONSTANT SBOX-DECL-S-CAPACITY
+ 3 CONSTANT SBOX-DECL-S-ALIAS
+ 4 CONSTANT SBOX-DECL-S-RANGE
+ 5 CONSTANT SBOX-DECL-S-PROTECTED
+ 6 CONSTANT SBOX-DECL-S-PLATFORM
+ 7 CONSTANT SBOX-DECL-S-FORMAT
+ 8 CONSTANT SBOX-DECL-S-RESERVED
+ 9 CONSTANT SBOX-DECL-S-IDENTITY
+10 CONSTANT SBOX-DECL-S-REVISION
+11 CONSTANT SBOX-DECL-S-DIGEST
+12 CONSTANT SBOX-DECL-S-UTF8
+13 CONSTANT SBOX-DECL-S-ORDER
+14 CONSTANT SBOX-DECL-S-ENTRY
+15 CONSTANT SBOX-DECL-S-SCHEMA
+16 CONSTANT SBOX-DECL-S-PURE
+17 CONSTANT SBOX-DECL-S-CEILING
+18 CONSTANT SBOX-DECL-S-NOT-FOUND
+19 CONSTANT SBOX-DECL-S-FAULT
+
+: SBOX-DECL-STATUS-VALID?  ( status -- flag )
+    DUP SBOX-DECL-S-OK >=
+    SWAP SBOX-DECL-S-FAULT <= AND ;
+
+1 CONSTANT SBOX-DECL-FORMAT-V1
+
+256 CONSTANT SBOX-DECL-HEADER-SIZE
+ 16 CONSTANT SBOX-DECL-CEILING-SIZE
+192 CONSTANT SBOX-DECL-ENTRY-SIZE
+
+1048576 CONSTANT SBOX-DECL-BYTES-MAX
+32      CONSTANT SBOX-DECL-ENTRY-MAX
+63      CONSTANT SBOX-DECL-PROFILE-ID-MAX
+63      CONSTANT SBOX-DECL-ENTRY-NAME-MAX
+262144  CONSTANT SBOX-DECL-SCHEMA-BYTES-MAX
+65536   CONSTANT SBOX-DECL-ONE-SCHEMA-MAX
+
+1 CONSTANT SBOX-DECL-SCHEMA-EMBEDDED
+2 CONSTANT SBOX-DECL-SCHEMA-REFERENCED
+
+0 CONSTANT SBOX-DECL-PROVENANCE-NONE
+1 CONSTANT SBOX-DECL-PROVENANCE-PACKAGE
+
+\ Stage 2 admits only the ratified pure value-handle machine signature.
+1 CONSTANT SBOX-DECL-SIGNATURE-PURE-VALUE
+
+\ =====================================================================
+\  Canonical little-endian wire layout
+\ =====================================================================
+
+  0 CONSTANT _SDCL-H-MAGIC
+  8 CONSTANT _SDCL-H-FORMAT
+ 10 CONSTANT _SDCL-H-HEADER-U
+ 12 CONSTANT _SDCL-H-FLAGS
+ 16 CONSTANT _SDCL-H-TOTAL-U
+ 24 CONSTANT _SDCL-H-ENTRY-N
+ 28 CONSTANT _SDCL-H-CEILING-N
+ 30 CONSTANT _SDCL-H-PROFILE-ID-U
+ 32 CONSTANT _SDCL-H-PROVENANCE-KIND
+ 34 CONSTANT _SDCL-H-RESERVED0
+ 36 CONSTANT _SDCL-H-IMPORT-N
+ 40 CONSTANT _SDCL-H-EFFECTS
+ 48 CONSTANT _SDCL-H-SCHEMA-U
+ 56 CONSTANT _SDCL-H-OWNER-RID
+ 88 CONSTANT _SDCL-H-MODULE-RID
+120 CONSTANT _SDCL-H-MODULE-REVISION
+128 CONSTANT _SDCL-H-ARTIFACT-DIGEST
+160 CONSTANT _SDCL-H-PROFILE-DIGEST
+192 CONSTANT _SDCL-H-PROVENANCE-RID
+224 CONSTANT _SDCL-H-PROVENANCE-REVISION
+232 CONSTANT _SDCL-H-RESERVED1
+
+0x314C434544584253 CONSTANT _SDECL-WIRE-MAGIC  \ "SBXDECL1"
+
+ 0 CONSTANT _SDCL-C-FIELD
+ 2 CONSTANT _SDCL-C-RESERVED0
+ 4 CONSTANT _SDCL-C-RESERVED1
+ 8 CONSTANT _SDCL-C-VALUE
+
+  0 CONSTANT _SDCL-E-NAME-U
+  2 CONSTANT _SDCL-E-SIGNATURE
+  4 CONSTANT _SDCL-E-INPUT-STORAGE
+  5 CONSTANT _SDCL-E-OUTPUT-STORAGE
+  6 CONSTANT _SDCL-E-FLAGS
+ 8 CONSTANT _SDCL-E-NAME
+ 72 CONSTANT _SDCL-E-INPUT-U
+ 80 CONSTANT _SDCL-E-INPUT-OFFSET
+ 88 CONSTANT _SDCL-E-INPUT-DIGEST
+120 CONSTANT _SDCL-E-OUTPUT-U
+128 CONSTANT _SDCL-E-OUTPUT-OFFSET
+136 CONSTANT _SDCL-E-OUTPUT-DIGEST
+168 CONSTANT _SDCL-E-RESERVED
+
+64 CONSTANT _SDECL-ENTRY-NAME-AREA-SIZE
+
+\ =====================================================================
+\  Caller-owned validated view
+\ =====================================================================
+
+0x3130564344584253 CONSTANT _SDECL-VIEW-MAGIC  \ "SBXDCV01"
+
+  0 CONSTANT _SDV-MAGIC
+  8 CONSTANT _SDV-SELF
+ 16 CONSTANT _SDV-SOURCE
+ 24 CONSTANT _SDV-LENGTH
+ 32 CONSTANT _SDV-PROFILE
+ 40 CONSTANT _SDV-PROFILE-U
+ 48 CONSTANT _SDV-CEILINGS
+ 56 CONSTANT _SDV-CEILING-N
+ 64 CONSTANT _SDV-ENTRIES
+ 72 CONSTANT _SDV-ENTRY-N
+ 80 CONSTANT _SDV-SCHEMAS
+ 88 CONSTANT _SDV-SCHEMA-U
+ 96 CONSTANT _SDV-HASH
+128 CONSTANT _SDV-EXPECTED-DIGEST
+136 CONSTANT _SDV-SCHEMA-OFFSET
+144 CONSTANT _SDV-PREVIOUS-ENTRY
+152 CONSTANT _SDV-WORKSPACE
+160 CONSTANT _SDV-CURRENT-ENTRY
+168 CONSTANT _SDV-RESERVED
+176 CONSTANT SBOX-DECL-VIEW-SIZE
+
+: _SDV.MAGIC            ( view -- address ) _SDV-MAGIC + ;
+: _SDV.SELF             ( view -- address ) _SDV-SELF + ;
+: _SDV.SOURCE           ( view -- address ) _SDV-SOURCE + ;
+: _SDV.LENGTH           ( view -- address ) _SDV-LENGTH + ;
+: _SDV.PROFILE          ( view -- address ) _SDV-PROFILE + ;
+: _SDV.PROFILE-U        ( view -- address ) _SDV-PROFILE-U + ;
+: _SDV.CEILINGS         ( view -- address ) _SDV-CEILINGS + ;
+: _SDV.CEILING-N        ( view -- address ) _SDV-CEILING-N + ;
+: _SDV.ENTRIES          ( view -- address ) _SDV-ENTRIES + ;
+: _SDV.ENTRY-N          ( view -- address ) _SDV-ENTRY-N + ;
+: _SDV.SCHEMAS          ( view -- address ) _SDV-SCHEMAS + ;
+: _SDV.SCHEMA-U         ( view -- address ) _SDV-SCHEMA-U + ;
+: _SDV.HASH             ( view -- address ) _SDV-HASH + ;
+: _SDV.EXPECTED-DIGEST  ( view -- address ) _SDV-EXPECTED-DIGEST + ;
+: _SDV.SCHEMA-OFFSET    ( view -- address ) _SDV-SCHEMA-OFFSET + ;
+: _SDV.PREVIOUS-ENTRY   ( view -- address ) _SDV-PREVIOUS-ENTRY + ;
+: _SDV.WORKSPACE        ( view -- address ) _SDV-WORKSPACE + ;
+: _SDV.CURRENT-ENTRY    ( view -- address ) _SDV-CURRENT-ENTRY + ;
+: _SDV.RESERVED         ( view -- address ) _SDV-RESERVED + ;
+
+\ =====================================================================
+\  Mechanical helpers
+\ =====================================================================
+
+: _SDECL-U16@  ( address -- value )
+    DUP C@ SWAP 1+ C@ 8 LSHIFT OR ;
+
+: _SDECL-U32@  ( address -- value )
+    DUP _SDECL-U16@
+    SWAP 2 + _SDECL-U16@ 16 LSHIFT OR ;
+
+: _SDECL-U64@  ( address -- value )
+    DUP _SDECL-U32@
+    SWAP 4 + _SDECL-U32@ 32 LSHIFT OR ;
+
+: _SDECL-DROP4  ( x1 x2 x3 x4 -- )
+    2DROP 2DROP ;
+
+: _SDECL-ZERO?  ( address length -- flag )
+    BEGIN DUP 0> WHILE
+        OVER C@ IF 2DROP 0 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
+
+: _SDECL-NUL-FREE?  ( address length -- flag )
+    BEGIN DUP 0> WHILE
+        OVER C@ 0= IF 2DROP 0 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
+
+: _SDECL-UTF8-CONT?  ( byte -- flag )
+    0xC0 AND 0x80 = ;
+
+: _SDECL-UTF8-ADVANCE  ( address length count -- address' length' true )
+    >R
+    SWAP R@ + SWAP
+    R> - -1 ;
+
+: _SDECL-UTF8-BAD  ( address length -- 0 0 false )
+    2DROP 0 0 0 ;
+
+\ Validate and consume one shortest-form Unicode scalar encoding.  This owns
+\ no variables or dictionary scratch; temporary lead-byte state uses the
+\ return stack only and never crosses a DO loop.
+: _SDECL-UTF8-NEXT  ( address length -- address' length' flag )
+    DUP 0= IF _SDECL-UTF8-BAD EXIT THEN
+    OVER C@
+
+    DUP 0x80 < IF
+        DROP 1 _SDECL-UTF8-ADVANCE EXIT
+    THEN
+
+    DUP 0xC2 >= OVER 0xDF <= AND IF
+        DROP
+        DUP 2 < IF _SDECL-UTF8-BAD EXIT THEN
+        OVER 1+ C@ _SDECL-UTF8-CONT? 0= IF
+            _SDECL-UTF8-BAD EXIT
+        THEN
+        2 _SDECL-UTF8-ADVANCE EXIT
+    THEN
+
+    DUP 0xE0 >= OVER 0xEF <= AND IF
+        >R
+        DUP 3 < IF R> DROP _SDECL-UTF8-BAD EXIT THEN
+        OVER 1+ C@
+        R@ 0xE0 = IF
+            DUP 0xA0 >= SWAP 0xBF <= AND
+        ELSE
+            R@ 0xED = IF
+                DUP 0x80 >= SWAP 0x9F <= AND
+            ELSE
+                _SDECL-UTF8-CONT?
+            THEN
+        THEN
+        0= IF R> DROP _SDECL-UTF8-BAD EXIT THEN
+        OVER 2 + C@ _SDECL-UTF8-CONT? 0= IF
+            R> DROP _SDECL-UTF8-BAD EXIT
+        THEN
+        R> DROP 3 _SDECL-UTF8-ADVANCE EXIT
+    THEN
+
+    DUP 0xF0 >= OVER 0xF4 <= AND IF
+        >R
+        DUP 4 < IF R> DROP _SDECL-UTF8-BAD EXIT THEN
+        OVER 1+ C@
+        R@ 0xF0 = IF
+            DUP 0x90 >= SWAP 0xBF <= AND
+        ELSE
+            R@ 0xF4 = IF
+                DUP 0x80 >= SWAP 0x8F <= AND
+            ELSE
+                _SDECL-UTF8-CONT?
+            THEN
+        THEN
+        0= IF R> DROP _SDECL-UTF8-BAD EXIT THEN
+        OVER 2 + C@ _SDECL-UTF8-CONT? 0= IF
+            R> DROP _SDECL-UTF8-BAD EXIT
+        THEN
+        OVER 3 + C@ _SDECL-UTF8-CONT? 0= IF
+            R> DROP _SDECL-UTF8-BAD EXIT
+        THEN
+        R> DROP 4 _SDECL-UTF8-ADVANCE EXIT
+    THEN
+
+    DROP _SDECL-UTF8-BAD ;
+
+: _SDECL-UTF8?  ( address length -- flag )
+    BEGIN DUP 0> WHILE
+        _SDECL-UTF8-NEXT 0= IF
+            2DROP 0 EXIT
+        THEN
+    REPEAT
+    2DROP -1 ;
+
+: _SDECL-RID-PRESENT?  ( address -- flag )
+    RID-SIZE _SDECL-ZERO? 0= ;
+
+: _SDECL-DIGEST-PRESENT?  ( address -- flag )
+    SBOX-DIGEST-SIZE _SDECL-ZERO? 0= ;
+
+: _SDECL-DIGEST=  ( a b -- flag )
+    SBOX-DIGEST-SIZE SWAP SBOX-DIGEST-SIZE COMPARE 0= ;
+
+: _SDECL-NAME-FIRST?  ( byte -- flag )
+    DUP [CHAR] a >= SWAP [CHAR] z <= AND ;
+
+: _SDECL-NAME-REST?  ( byte -- flag )
+    DUP _SDECL-NAME-FIRST? IF DROP -1 EXIT THEN
+    DUP [CHAR] 0 >= OVER [CHAR] 9 <= AND IF DROP -1 EXIT THEN
+    DUP [CHAR] . = IF DROP -1 EXIT THEN
+    DUP [CHAR] _ = IF DROP -1 EXIT THEN
+    [CHAR] - = ;
+
+: _SDECL-ENTRY-NAME?  ( address length -- flag )
+    DUP 1 < IF 2DROP 0 EXIT THEN
+    DUP SBOX-DECL-ENTRY-NAME-MAX > IF 2DROP 0 EXIT THEN
+    OVER C@ _SDECL-NAME-FIRST? 0= IF 2DROP 0 EXIT THEN
+    1- SWAP 1+ SWAP
+    BEGIN DUP 0> WHILE
+        OVER C@ _SDECL-NAME-REST? 0= IF 2DROP 0 EXIT THEN
+        1- SWAP 1+ SWAP
+    REPEAT
+    2DROP -1 ;
+
+: _SDECL-CALLER>STATUS  ( caller-status -- status )
+    DUP CALLER-SPAN-S-OK = IF DROP SBOX-DECL-S-OK EXIT THEN
+    DUP CALLER-SPAN-S-RANGE = IF DROP SBOX-DECL-S-RANGE EXIT THEN
+    DUP CALLER-SPAN-S-PROTECTED = IF
+        DROP SBOX-DECL-S-PROTECTED EXIT
+    THEN
+    DROP SBOX-DECL-S-PLATFORM ;
+
+: _SDECL-DIGEST>STATUS  ( digest-status -- status )
+    DUP SBOX-DIGEST-S-OK = IF DROP SBOX-DECL-S-OK EXIT THEN
+    DUP SBOX-DIGEST-S-CAPACITY = IF
+        DROP SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    DUP SBOX-DIGEST-S-ALIAS = IF DROP SBOX-DECL-S-ALIAS EXIT THEN
+    DUP SBOX-DIGEST-S-INVALID = IF DROP SBOX-DECL-S-INVALID EXIT THEN
+    DROP SBOX-DECL-S-FAULT ;
+
+: _SDECL-PREFLIGHT
+  ( source source-u view digest-workspace -- status )
+    2 PICK SBOX-DECL-HEADER-SIZE < IF
+        _SDECL-DROP4 SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    2 PICK SBOX-DECL-BYTES-MAX > IF
+        _SDECL-DROP4 SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    3 PICK 0= IF _SDECL-DROP4 SBOX-DECL-S-INVALID EXIT THEN
+    3 PICK 3 PICK MSPAN-NONWRAPPING? 0= IF
+        _SDECL-DROP4 SBOX-DECL-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK CALLER-SPAN-STATUS
+        _SDECL-CALLER>STATUS ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+
+    1 PICK 0= IF _SDECL-DROP4 SBOX-DECL-S-INVALID EXIT THEN
+    1 PICK 7 AND IF _SDECL-DROP4 SBOX-DECL-S-INVALID EXIT THEN
+    1 PICK SBOX-DECL-VIEW-SIZE MSPAN-NONWRAPPING? 0= IF
+        _SDECL-DROP4 SBOX-DECL-S-INVALID EXIT
+    THEN
+    1 PICK SBOX-DECL-VIEW-SIZE CALLER-SPAN-STATUS
+        _SDECL-CALLER>STATUS ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+
+    DUP 0= IF _SDECL-DROP4 SBOX-DECL-S-INVALID EXIT THEN
+    DUP 7 AND IF _SDECL-DROP4 SBOX-DECL-S-INVALID EXIT THEN
+    DUP SBOX-DIGEST-WORKSPACE-SIZE MSPAN-NONWRAPPING? 0= IF
+        _SDECL-DROP4 SBOX-DECL-S-INVALID EXIT
+    THEN
+    DUP SBOX-DIGEST-WORKSPACE-SIZE CALLER-SPAN-STATUS
+        _SDECL-CALLER>STATUS ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+
+    3 PICK 3 PICK 3 PICK SBOX-DECL-VIEW-SIZE
+        MSPAN-OVERLAP? IF
+        _SDECL-DROP4 SBOX-DECL-S-ALIAS EXIT
+    THEN
+    3 PICK 3 PICK 2 PICK SBOX-DIGEST-WORKSPACE-SIZE
+        MSPAN-OVERLAP? IF
+        _SDECL-DROP4 SBOX-DECL-S-ALIAS EXIT
+    THEN
+    1 PICK SBOX-DECL-VIEW-SIZE
+        2 PICK SBOX-DIGEST-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        _SDECL-DROP4 SBOX-DECL-S-ALIAS EXIT
+    THEN
+    _SDECL-DROP4 SBOX-DECL-S-OK ;
+
+: _SDECL-BIND
+  ( source source-u view digest-workspace -- view )
+    >R
+    DUP SBOX-DECL-VIEW-SIZE 0 FILL
+    DUP DUP _SDV.SELF !
+    2 PICK OVER _SDV.SOURCE !
+    1 PICK OVER _SDV.LENGTH !
+    R> OVER _SDV.WORKSPACE !
+    NIP NIP ;
+
+: _SDECL-FAIL  ( status view -- status )
+    SWAP >R
+    SBOX-DECL-VIEW-SIZE 0 FILL
+    R> ;
+
+: _SDECL-CEILING[]  ( index view -- record )
+    _SDV.CEILINGS @ SWAP SBOX-DECL-CEILING-SIZE * + ;
+
+: _SDECL-ENTRY[]  ( index view -- record )
+    _SDV.ENTRIES @ SWAP SBOX-DECL-ENTRY-SIZE * + ;
+
+: _SDECL-ENTRY-NAME$  ( entry -- address length )
+    DUP _SDCL-E-NAME + SWAP _SDCL-E-NAME-U + _SDECL-U16@ ;
+
+\ =====================================================================
+\  View integrity
+\ =====================================================================
+
+: _SDECL-VIEW-LAYOUT?  ( view -- flag )
+    >R
+    R@ _SDV.PROFILE-U @ SBOX-BYTE-PAD8
+    DUP IF 2DROP R> DROP 0 EXIT THEN
+    DROP
+
+    R@ _SDV.SOURCE @ SBOX-DECL-HEADER-SIZE +
+        R@ _SDV.PROFILE @ <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ _SDV.PROFILE @ OVER +
+        R@ _SDV.CEILINGS @ <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ _SDV.CEILINGS @
+        R@ _SDV.CEILING-N @ SBOX-DECL-CEILING-SIZE * +
+        R@ _SDV.ENTRIES @ <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ _SDV.ENTRIES @
+        R@ _SDV.ENTRY-N @ SBOX-DECL-ENTRY-SIZE * +
+        R@ _SDV.SCHEMAS @ <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+
+    SBOX-DECL-HEADER-SIZE OVER +
+    R@ _SDV.CEILING-N @ SBOX-DECL-CEILING-SIZE * +
+    R@ _SDV.ENTRY-N @ SBOX-DECL-ENTRY-SIZE * +
+    R@ _SDV.SCHEMA-U @ +
+    R@ _SDV.LENGTH @ =
+    SWAP DROP
+    R> DROP ;
+
+: SBOX-DECL-VIEW-VALID?  ( view -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP SBOX-DECL-VIEW-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP SBOX-DECL-VIEW-SIZE CALLER-SPAN-STATUS
+        CALLER-SPAN-S-OK <> IF DROP 0 EXIT THEN
+    DUP _SDV.MAGIC @ _SDECL-VIEW-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _SDV.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _SDV.SOURCE @ OVER _SDV.LENGTH @
+        MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _SDV.SOURCE @ OVER _SDV.LENGTH @ CALLER-SPAN-STATUS
+        CALLER-SPAN-S-OK <> IF DROP 0 EXIT THEN
+    DUP _SDV.LENGTH @ DUP SBOX-DECL-HEADER-SIZE <
+        SWAP SBOX-DECL-BYTES-MAX > OR IF DROP 0 EXIT THEN
+    DUP _SDV.PROFILE-U @ DUP 1 <
+        SWAP SBOX-DECL-PROFILE-ID-MAX > OR IF DROP 0 EXIT THEN
+    DUP _SDV.CEILING-N @ DUP 0<
+        SWAP SBOX-BUDGET-LIMIT-FIELD-COUNT > OR IF DROP 0 EXIT THEN
+    DUP _SDV.ENTRY-N @ DUP 1 <
+        SWAP SBOX-DECL-ENTRY-MAX > OR IF DROP 0 EXIT THEN
+    DUP _SDV.SCHEMA-U @ DUP 0<
+        SWAP SBOX-DECL-SCHEMA-BYTES-MAX > OR IF DROP 0 EXIT THEN
+    DUP _SDECL-VIEW-LAYOUT? 0= IF DROP 0 EXIT THEN
+    DUP _SDV.HASH SBOX-DIGEST-SIZE _SDECL-ZERO? 0= IF DROP 0 EXIT THEN
+    DUP _SDV.EXPECTED-DIGEST @ IF DROP 0 EXIT THEN
+    DUP _SDV.SCHEMA-OFFSET @ IF DROP 0 EXIT THEN
+    DUP _SDV.PREVIOUS-ENTRY @ IF DROP 0 EXIT THEN
+    DUP _SDV.WORKSPACE @ IF DROP 0 EXIT THEN
+    DUP _SDV.CURRENT-ENTRY @ IF DROP 0 EXIT THEN
+    _SDV.RESERVED @ 0= ;
+
+\ =====================================================================
+\  Header and canonical section geometry
+\ =====================================================================
+
+: _SDECL-HEADER-VALIDATE  ( view -- status )
+    >R
+    R@ _SDV.SOURCE @ _SDCL-H-MAGIC +
+        _SDECL-U64@ _SDECL-WIRE-MAGIC <> IF
+        R> DROP SBOX-DECL-S-FORMAT EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-FORMAT + _SDECL-U16@
+        SBOX-DECL-FORMAT-V1 <> IF
+        R> DROP SBOX-DECL-S-FORMAT EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-HEADER-U + _SDECL-U16@
+        SBOX-DECL-HEADER-SIZE <> IF
+        R> DROP SBOX-DECL-S-FORMAT EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-FLAGS + _SDECL-U32@ IF
+        R> DROP SBOX-DECL-S-RESERVED EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-TOTAL-U + _SDECL-U64@
+        R@ _SDV.LENGTH @ <> IF
+        R> DROP SBOX-DECL-S-FORMAT EXIT
+    THEN
+
+    R@ _SDV.SOURCE @ _SDCL-H-RESERVED0 + _SDECL-U16@ IF
+        R> DROP SBOX-DECL-S-RESERVED EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-RESERVED1 + 24
+        _SDECL-ZERO? 0= IF
+        R> DROP SBOX-DECL-S-RESERVED EXIT
+    THEN
+
+    R@ _SDV.SOURCE @ _SDCL-H-IMPORT-N + _SDECL-U32@ IF
+        R> DROP SBOX-DECL-S-PURE EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-EFFECTS + _SDECL-U64@ IF
+        R> DROP SBOX-DECL-S-PURE EXIT
+    THEN
+
+    R@ _SDV.SOURCE @ _SDCL-H-OWNER-RID +
+        _SDECL-RID-PRESENT? 0= IF
+        R> DROP SBOX-DECL-S-IDENTITY EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-MODULE-RID +
+        _SDECL-RID-PRESENT? 0= IF
+        R> DROP SBOX-DECL-S-IDENTITY EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-MODULE-REVISION + _SDECL-U64@
+        0> 0= IF
+        R> DROP SBOX-DECL-S-REVISION EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-ARTIFACT-DIGEST +
+        _SDECL-DIGEST-PRESENT? 0= IF
+        R> DROP SBOX-DECL-S-DIGEST EXIT
+    THEN
+    R@ _SDV.SOURCE @ _SDCL-H-PROFILE-DIGEST +
+        _SDECL-DIGEST-PRESENT? 0= IF
+        R> DROP SBOX-DECL-S-DIGEST EXIT
+    THEN
+
+    R@ _SDV.SOURCE @ _SDCL-H-ENTRY-N + _SDECL-U32@
+    DUP 1 < OVER SBOX-DECL-ENTRY-MAX > OR IF
+        DROP R> DROP SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    R@ _SDV.ENTRY-N !
+
+    R@ _SDV.SOURCE @ _SDCL-H-CEILING-N + _SDECL-U16@
+    DUP SBOX-BUDGET-LIMIT-FIELD-COUNT > IF
+        DROP R> DROP SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    R@ _SDV.CEILING-N !
+
+    R@ _SDV.SOURCE @ _SDCL-H-PROFILE-ID-U + _SDECL-U16@
+    DUP 1 < OVER SBOX-DECL-PROFILE-ID-MAX > OR IF
+        DROP R> DROP SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    R@ _SDV.PROFILE-U !
+
+    R@ _SDV.SOURCE @ _SDCL-H-SCHEMA-U + _SDECL-U64@
+    DUP 0< OVER SBOX-DECL-SCHEMA-BYTES-MAX > OR IF
+        DROP R> DROP SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    R@ _SDV.SCHEMA-U !
+
+    R@ _SDV.SOURCE @ _SDCL-H-PROVENANCE-KIND + _SDECL-U16@
+    DUP SBOX-DECL-PROVENANCE-NONE = IF
+        DROP
+        R@ _SDV.SOURCE @ _SDCL-H-PROVENANCE-RID +
+            RID-SIZE _SDECL-ZERO? 0= IF
+            R> DROP SBOX-DECL-S-IDENTITY EXIT
+        THEN
+        R@ _SDV.SOURCE @ _SDCL-H-PROVENANCE-REVISION +
+            _SDECL-U64@ IF
+            R> DROP SBOX-DECL-S-REVISION EXIT
+        THEN
+    ELSE
+        SBOX-DECL-PROVENANCE-PACKAGE <> IF
+            R> DROP SBOX-DECL-S-IDENTITY EXIT
+        THEN
+        R@ _SDV.SOURCE @ _SDCL-H-PROVENANCE-RID +
+            _SDECL-RID-PRESENT? 0= IF
+            R> DROP SBOX-DECL-S-IDENTITY EXIT
+        THEN
+        R@ _SDV.SOURCE @ _SDCL-H-PROVENANCE-REVISION +
+            _SDECL-U64@ 0> 0= IF
+            R> DROP SBOX-DECL-S-REVISION EXIT
+        THEN
+    THEN
+    R> DROP SBOX-DECL-S-OK ;
+
+: _SDECL-LAYOUT  ( view -- status )
+    >R
+    R@ _SDV.PROFILE-U @ SBOX-BYTE-PAD8
+    DUP IF
+        2DROP R> DROP SBOX-DECL-S-FORMAT EXIT
+    THEN
+    DROP
+    DUP R@ _SDV.SCHEMA-OFFSET !
+
+    SBOX-DECL-HEADER-SIZE +
+    R@ _SDV.CEILING-N @ SBOX-DECL-CEILING-SIZE * +
+    R@ _SDV.ENTRY-N @ SBOX-DECL-ENTRY-SIZE * +
+    R@ _SDV.SCHEMA-U @ +
+    R@ _SDV.LENGTH @ <> IF
+        R> DROP SBOX-DECL-S-FORMAT EXIT
+    THEN
+
+    R@ _SDV.SOURCE @ SBOX-DECL-HEADER-SIZE +
+    DUP R@ _SDV.PROFILE !
+    R@ _SDV.PROFILE @ R@ _SDV.PROFILE-U @ +
+    R@ _SDV.SCHEMA-OFFSET @ R@ _SDV.PROFILE-U @ -
+        _SDECL-ZERO? 0= IF
+        DROP R> DROP SBOX-DECL-S-RESERVED EXIT
+    THEN
+    R@ _SDV.SCHEMA-OFFSET @ +
+    DUP R@ _SDV.CEILINGS !
+
+    R@ _SDV.CEILING-N @ SBOX-DECL-CEILING-SIZE *
+    + DUP R@ _SDV.ENTRIES !
+
+    R@ _SDV.ENTRY-N @ SBOX-DECL-ENTRY-SIZE *
+    + DUP R@ _SDV.SCHEMAS !
+    DROP
+    0 R@ _SDV.SCHEMA-OFFSET !
+    R> DROP SBOX-DECL-S-OK ;
+
+: _SDECL-PROFILE-ID-VALIDATE  ( view -- status )
+    DUP _SDV.PROFILE @ OVER _SDV.PROFILE-U @
+        2DUP _SDECL-UTF8? 0= IF
+        2DROP DROP SBOX-DECL-S-UTF8 EXIT
+    THEN
+    _SDECL-NUL-FREE? 0= IF
+        DROP SBOX-DECL-S-UTF8 EXIT
+    THEN
+    DROP SBOX-DECL-S-OK ;
+
+\ =====================================================================
+\  Canonical requested-ceiling records
+\ =====================================================================
+
+: _SDECL-CEILING-PAIR-VALID?  ( record -- flag )
+    DUP _SDCL-C-RESERVED0 + _SDECL-U16@ IF DROP 0 EXIT THEN
+    DUP _SDCL-C-RESERVED1 + _SDECL-U32@ IF DROP 0 EXIT THEN
+    DUP _SDCL-C-FIELD + _SDECL-U16@ SBOX-BUDGET-LIMIT-MAX@
+    DUP SBOX-BUDGET-S-OK <> IF
+        2DROP DROP 0 EXIT
+    THEN
+    DROP >R
+    _SDCL-C-VALUE + _SDECL-U64@
+    DUP 0> SWAP R@ <= AND
+    R> DROP ;
+
+: _SDECL-ONE-CEILING-VALIDATE  ( index view -- status )
+    >R
+    DUP R@ _SDECL-CEILING[]
+    DUP _SDECL-CEILING-PAIR-VALID? 0= IF
+        2DROP R> DROP SBOX-DECL-S-CEILING EXIT
+    THEN
+    OVER 0> IF
+        OVER 1- R@ _SDECL-CEILING[]
+            _SDCL-C-FIELD + _SDECL-U16@
+        OVER _SDCL-C-FIELD + _SDECL-U16@
+        < 0= IF
+            2DROP R> DROP SBOX-DECL-S-ORDER EXIT
+        THEN
+    THEN
+    2DROP R> DROP SBOX-DECL-S-OK ;
+
+: _SDECL-CEILINGS-VALIDATE  ( view -- status )
+    >R
+    0
+    BEGIN DUP R@ _SDV.CEILING-N @ < WHILE
+        DUP R@ _SDECL-ONE-CEILING-VALIDATE
+        DUP IF NIP R> DROP EXIT THEN
+        DROP 1+
+    REPEAT
+    DROP R> DROP SBOX-DECL-S-OK ;
+
+\ =====================================================================
+\  Entry and schema validation
+\ =====================================================================
+
+: _SDECL-HASH-MATCH
+  ( source source-u expected-digest view digest-workspace -- status | throws )
+    >R
+    OVER OVER _SDV.EXPECTED-DIGEST !
+    SWAP DROP
+    -ROT
+    2 PICK _SDV.HASH
+    R> SBOX-DIGEST-SCHEMA _SDECL-DIGEST>STATUS
+    DUP IF NIP EXIT THEN
+    DROP
+    DUP _SDV.HASH OVER _SDV.EXPECTED-DIGEST @
+        _SDECL-DIGEST=
+    >R
+    DUP _SDV.HASH SBOX-DIGEST-SIZE 0 FILL
+    0 OVER _SDV.EXPECTED-DIGEST !
+    DROP R> IF SBOX-DECL-S-OK ELSE SBOX-DECL-S-DIGEST THEN ;
+
+: _SDECL-INPUT-VALIDATE  ( view -- status | throws )
+    DUP _SDV.CURRENT-ENTRY @ >R
+    R@ _SDCL-E-INPUT-U + _SDECL-U64@
+    DUP 0> SWAP SBOX-DECL-ONE-SCHEMA-MAX <= AND 0= IF
+        DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+    R@ _SDCL-E-INPUT-DIGEST + _SDECL-DIGEST-PRESENT? 0= IF
+        DROP R> DROP SBOX-DECL-S-DIGEST EXIT
+    THEN
+
+    R@ _SDCL-E-INPUT-STORAGE + C@
+    DUP SBOX-DECL-SCHEMA-REFERENCED = IF
+        DROP
+        R@ _SDCL-E-INPUT-OFFSET + _SDECL-U64@ IF
+            DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+        THEN
+        DROP R> DROP SBOX-DECL-S-OK EXIT
+    THEN
+    SBOX-DECL-SCHEMA-EMBEDDED <> IF
+        DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+
+    R@ _SDCL-E-INPUT-OFFSET + _SDECL-U64@
+        OVER _SDV.SCHEMA-OFFSET @ <> IF
+        DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+    DUP _SDV.SCHEMA-U @ OVER _SDV.SCHEMA-OFFSET @ -
+    R@ _SDCL-E-INPUT-U + _SDECL-U64@ SWAP U> IF
+        DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+
+    DUP _SDV.SCHEMAS @
+    OVER _SDV.SCHEMA-OFFSET @ +
+    R@ _SDCL-E-INPUT-U + _SDECL-U64@
+    R@ _SDCL-E-INPUT-DIGEST +
+    3 PICK
+    4 PICK _SDV.WORKSPACE @
+    _SDECL-HASH-MATCH
+    DUP IF NIP R> DROP EXIT THEN
+    DROP
+    R@ _SDCL-E-INPUT-U + _SDECL-U64@
+        OVER _SDV.SCHEMA-OFFSET +!
+    DROP R> DROP SBOX-DECL-S-OK ;
+
+: _SDECL-OUTPUT-VALIDATE  ( view -- status | throws )
+    DUP _SDV.CURRENT-ENTRY @ >R
+    R@ _SDCL-E-OUTPUT-U + _SDECL-U64@
+    DUP 0> SWAP SBOX-DECL-ONE-SCHEMA-MAX <= AND 0= IF
+        DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+    R@ _SDCL-E-OUTPUT-DIGEST + _SDECL-DIGEST-PRESENT? 0= IF
+        DROP R> DROP SBOX-DECL-S-DIGEST EXIT
+    THEN
+
+    R@ _SDCL-E-OUTPUT-STORAGE + C@
+    DUP SBOX-DECL-SCHEMA-REFERENCED = IF
+        DROP
+        R@ _SDCL-E-OUTPUT-OFFSET + _SDECL-U64@ IF
+            DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+        THEN
+        DROP R> DROP SBOX-DECL-S-OK EXIT
+    THEN
+    SBOX-DECL-SCHEMA-EMBEDDED <> IF
+        DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+
+    R@ _SDCL-E-OUTPUT-OFFSET + _SDECL-U64@
+        OVER _SDV.SCHEMA-OFFSET @ <> IF
+        DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+    DUP _SDV.SCHEMA-U @ OVER _SDV.SCHEMA-OFFSET @ -
+    R@ _SDCL-E-OUTPUT-U + _SDECL-U64@ SWAP U> IF
+        DROP R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+
+    DUP _SDV.SCHEMAS @
+    OVER _SDV.SCHEMA-OFFSET @ +
+    R@ _SDCL-E-OUTPUT-U + _SDECL-U64@
+    R@ _SDCL-E-OUTPUT-DIGEST +
+    3 PICK
+    4 PICK _SDV.WORKSPACE @
+    _SDECL-HASH-MATCH
+    DUP IF NIP R> DROP EXIT THEN
+    DROP
+    R@ _SDCL-E-OUTPUT-U + _SDECL-U64@
+        OVER _SDV.SCHEMA-OFFSET +!
+    DROP R> DROP SBOX-DECL-S-OK ;
+
+: _SDECL-ONE-ENTRY-VALIDATE  ( index view -- status | throws )
+    2DUP _SDECL-ENTRY[]
+    OVER _SDV.CURRENT-ENTRY !
+    NIP
+
+    DUP _SDV.CURRENT-ENTRY @ >R
+    R@ _SDCL-E-NAME-U + _SDECL-U16@
+    DUP 1 < OVER SBOX-DECL-ENTRY-NAME-MAX > OR IF
+        DROP R> DROP DROP SBOX-DECL-S-ENTRY EXIT
+    THEN
+    R@ _SDCL-E-NAME + OVER
+        _SDECL-ENTRY-NAME? 0= IF
+        DROP R> DROP DROP SBOX-DECL-S-ENTRY EXIT
+    THEN
+    R@ _SDCL-E-NAME + OVER +
+    _SDECL-ENTRY-NAME-AREA-SIZE ROT -
+        _SDECL-ZERO? 0= IF
+        R> DROP DROP SBOX-DECL-S-RESERVED EXIT
+    THEN
+
+    R@ _SDCL-E-SIGNATURE + _SDECL-U16@
+        SBOX-DECL-SIGNATURE-PURE-VALUE <> IF
+        R> DROP DROP SBOX-DECL-S-ENTRY EXIT
+    THEN
+    R@ _SDCL-E-FLAGS + _SDECL-U16@ IF
+        R> DROP DROP SBOX-DECL-S-RESERVED EXIT
+    THEN
+    R@ _SDCL-E-RESERVED + 24 _SDECL-ZERO? 0= IF
+        R> DROP DROP SBOX-DECL-S-RESERVED EXIT
+    THEN
+
+    DUP _SDV.PREVIOUS-ENTRY @ ?DUP IF
+        _SDECL-ENTRY-NAME$
+        R@ _SDECL-ENTRY-NAME$
+        COMPARE 0< 0= IF
+            R> DROP DROP SBOX-DECL-S-ORDER EXIT
+        THEN
+    THEN
+    R@ OVER _SDV.PREVIOUS-ENTRY !
+    R> DROP
+
+    DUP _SDECL-INPUT-VALIDATE
+    DUP IF NIP EXIT THEN DROP
+    DUP _SDECL-OUTPUT-VALIDATE
+    DUP IF NIP EXIT THEN DROP
+    DROP SBOX-DECL-S-OK ;
+
+: _SDECL-ENTRIES-VALIDATE  ( view -- status | throws )
+    >R
+    0
+    BEGIN DUP R@ _SDV.ENTRY-N @ < WHILE
+        DUP R@ _SDECL-ONE-ENTRY-VALIDATE
+        DUP IF NIP R> DROP EXIT THEN
+        DROP 1+
+    REPEAT
+    DROP
+    R@ _SDV.SCHEMA-OFFSET @ R@ _SDV.SCHEMA-U @ <> IF
+        R> DROP SBOX-DECL-S-SCHEMA EXIT
+    THEN
+    R> DROP SBOX-DECL-S-OK ;
+
+\ =====================================================================
+\  Independent validation and declaration identity
+\ =====================================================================
+
+: SBOX-DECL-VALIDATE
+  ( source source-u view digest-workspace -- status | throws )
+    2OVER 2OVER _SDECL-PREFLIGHT ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+    DUP SBOX-DIGEST-WORKSPACE-CLEAR
+    _SDECL-DIGEST>STATUS ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+    _SDECL-BIND >R
+
+    R@ _SDECL-HEADER-VALIDATE ?DUP IF
+        R> _SDECL-FAIL EXIT
+    THEN
+    R@ _SDECL-LAYOUT ?DUP IF
+        R> _SDECL-FAIL EXIT
+    THEN
+    R@ _SDECL-PROFILE-ID-VALIDATE ?DUP IF
+        R> _SDECL-FAIL EXIT
+    THEN
+    R@ _SDECL-CEILINGS-VALIDATE ?DUP IF
+        R> _SDECL-FAIL EXIT
+    THEN
+    R@ _SDECL-ENTRIES-VALIDATE ?DUP IF
+        R> _SDECL-FAIL EXIT
+    THEN
+
+    R@ _SDV.HASH SBOX-DIGEST-SIZE 0 FILL
+    0 R@ _SDV.EXPECTED-DIGEST !
+    0 R@ _SDV.SCHEMA-OFFSET !
+    0 R@ _SDV.PREVIOUS-ENTRY !
+    0 R@ _SDV.WORKSPACE !
+    0 R@ _SDV.CURRENT-ENTRY !
+    _SDECL-VIEW-MAGIC R@ _SDV.MAGIC !
+
+    R@ SBOX-DECL-VIEW-VALID? 0= IF
+        SBOX-DECL-S-INVALID R> _SDECL-FAIL EXIT
+    THEN
+    R> DROP SBOX-DECL-S-OK ;
+
+: _SDECL-DIGEST-PREFLIGHT
+  ( source source-u digest digest-workspace -- status )
+    2 PICK SBOX-DECL-HEADER-SIZE < IF
+        _SDECL-DROP4 SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    2 PICK SBOX-DECL-BYTES-MAX > IF
+        _SDECL-DROP4 SBOX-DECL-S-CAPACITY EXIT
+    THEN
+    3 PICK 3 PICK CALLER-SPAN-STATUS
+        _SDECL-CALLER>STATUS ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+    1 PICK SBOX-DIGEST-SIZE CALLER-SPAN-STATUS
+        _SDECL-CALLER>STATUS ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+    DUP SBOX-DIGEST-WORKSPACE-SIZE CALLER-SPAN-STATUS
+        _SDECL-CALLER>STATUS ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+    _SDECL-DROP4 SBOX-DECL-S-OK ;
+
+: SBOX-DECL-DIGEST
+  ( source source-u digest digest-workspace -- status | throws )
+    2OVER 2OVER _SDECL-DIGEST-PREFLIGHT ?DUP IF
+        >R _SDECL-DROP4 R> EXIT
+    THEN
+    SBOX-DIGEST-DECLARATION _SDECL-DIGEST>STATUS ;
+
+\ =====================================================================
+\  Validated declaration accessors
+\ =====================================================================
+
+: SBOX-DECL-SOURCE@  ( view -- source source-u status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    DUP _SDV.SOURCE @ SWAP _SDV.LENGTH @ SBOX-DECL-S-OK ;
+
+: SBOX-DECL-OWNER-RID@  ( view -- rid status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDV.SOURCE @ _SDCL-H-OWNER-RID + SBOX-DECL-S-OK ;
+
+: SBOX-DECL-MODULE-RID@  ( view -- rid status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDV.SOURCE @ _SDCL-H-MODULE-RID + SBOX-DECL-S-OK ;
+
+: SBOX-DECL-MODULE-REVISION@  ( view -- revision status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDV.SOURCE @ _SDCL-H-MODULE-REVISION +
+        _SDECL-U64@ SBOX-DECL-S-OK ;
+
+: SBOX-DECL-ARTIFACT-DIGEST@  ( view -- digest status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDV.SOURCE @ _SDCL-H-ARTIFACT-DIGEST + SBOX-DECL-S-OK ;
+
+: SBOX-DECL-PROFILE-ID@  ( view -- address length status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    DUP _SDV.PROFILE @ SWAP _SDV.PROFILE-U @ SBOX-DECL-S-OK ;
+
+: SBOX-DECL-PROFILE-DIGEST@  ( view -- digest status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDV.SOURCE @ _SDCL-H-PROFILE-DIGEST + SBOX-DECL-S-OK ;
+
+: SBOX-DECL-PROVENANCE@
+  ( view -- kind provenance-rid revision status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDV.SOURCE @ >R
+    R@ _SDCL-H-PROVENANCE-KIND + _SDECL-U16@
+    R@ _SDCL-H-PROVENANCE-RID +
+    R> _SDCL-H-PROVENANCE-REVISION + _SDECL-U64@
+    SBOX-DECL-S-OK ;
+
+: SBOX-DECL-ENTRY-COUNT@  ( view -- count status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDV.ENTRY-N @ SBOX-DECL-S-OK ;
+
+: SBOX-DECL-CEILING-COUNT@  ( view -- count status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDV.CEILING-N @ SBOX-DECL-S-OK ;
+
+: SBOX-DECL-CEILING@
+  ( field view -- value present? status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        2DROP 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    >R
+    DUP SBOX-BUDGET-LIMIT-MAX@
+    SBOX-BUDGET-S-OK <> IF
+        2DROP R> DROP 0 0 SBOX-DECL-S-CEILING EXIT
+    THEN
+    DROP
+    0
+    BEGIN DUP R@ _SDV.CEILING-N @ < WHILE
+        DUP R@ _SDECL-CEILING[]
+        DUP _SDCL-C-FIELD + _SDECL-U16@
+        3 PICK = IF
+            _SDCL-C-VALUE + _SDECL-U64@
+            ROT DROP SWAP DROP
+            R> DROP -1 SBOX-DECL-S-OK EXIT
+        THEN
+        DROP 1+
+    REPEAT
+    2DROP R> DROP 0 0 SBOX-DECL-S-OK ;
+
+: SBOX-DECL-ENTRY@  ( index view -- entry status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        2DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    2DUP _SDV.ENTRY-N @ U< 0= IF
+        2DROP 0 SBOX-DECL-S-NOT-FOUND EXIT
+    THEN
+    _SDECL-ENTRY[] SBOX-DECL-S-OK ;
+
+: _SDECL-ENTRY-BELONGS?  ( entry view -- flag )
+    >R
+    DUP R@ _SDV.ENTRIES @ U< IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP R@ _SDV.ENTRIES @ -
+    R@ _SDV.ENTRY-N @ SBOX-DECL-ENTRY-SIZE * U< 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ _SDV.ENTRIES @ -
+    SBOX-DECL-ENTRY-SIZE MOD 0=
+    R> DROP ;
+
+: SBOX-DECL-ENTRY-NAME@  ( entry view -- address length status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        2DROP 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    2DUP _SDECL-ENTRY-BELONGS? 0= IF
+        2DROP 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    DROP _SDECL-ENTRY-NAME$ SBOX-DECL-S-OK ;
+
+: SBOX-DECL-ENTRY-SIGNATURE@  ( entry view -- signature status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        2DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    2DUP _SDECL-ENTRY-BELONGS? 0= IF
+        2DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    DROP _SDCL-E-SIGNATURE + _SDECL-U16@ SBOX-DECL-S-OK ;
+
+: _SDECL-LOOKUP-NAME-STATUS  ( address length -- status )
+    DUP 1 < OVER SBOX-DECL-ENTRY-NAME-MAX > OR IF
+        2DROP SBOX-DECL-S-ENTRY EXIT
+    THEN
+    OVER 0= IF 2DROP SBOX-DECL-S-INVALID EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP SBOX-DECL-S-INVALID EXIT
+    THEN
+    2DUP CALLER-SPAN-STATUS _SDECL-CALLER>STATUS ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    _SDECL-ENTRY-NAME? IF SBOX-DECL-S-OK ELSE SBOX-DECL-S-ENTRY THEN ;
+
+: _SDECL-REQUEST-COMPARE  ( address length entry -- result )
+    >R R@ _SDECL-ENTRY-NAME$ COMPARE R> DROP ;
+
+: SBOX-DECL-ENTRY-FIND-EXACT
+  ( name name-u view -- entry status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        2DROP DROP 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    >R
+    2DUP _SDECL-LOOKUP-NAME-STATUS ?DUP IF
+        >R 2DROP R> R> DROP 0 SWAP EXIT
+    THEN
+    0
+    BEGIN DUP R@ _SDV.ENTRY-N @ < WHILE
+        2 PICK 2 PICK
+        2 PICK R@ _SDECL-ENTRY[]
+        _SDECL-REQUEST-COMPARE 0= IF
+            DUP R@ _SDECL-ENTRY[] >R
+            2DROP DROP
+            R> R> DROP SBOX-DECL-S-OK EXIT
+        THEN
+        1+
+    REPEAT
+    2DROP DROP R> DROP 0 SBOX-DECL-S-NOT-FOUND ;
+
+: _SDECL-ENTRY-INPUT-SCHEMA@
+  ( entry view -- bytes schema-u digest storage status )
+    >R
+    DUP _SDCL-E-INPUT-STORAGE + C@
+    DUP SBOX-DECL-SCHEMA-EMBEDDED = IF
+        OVER _SDCL-E-INPUT-OFFSET + _SDECL-U64@
+        R@ _SDV.SCHEMAS @ +
+    ELSE
+        0
+    THEN
+    2 PICK _SDCL-E-INPUT-U + _SDECL-U64@
+    3 PICK _SDCL-E-INPUT-DIGEST +
+    >R
+    2SWAP SWAP DROP
+    R> SWAP
+    R> DROP SBOX-DECL-S-OK ;
+
+: _SDECL-ENTRY-OUTPUT-SCHEMA@
+  ( entry view -- bytes schema-u digest storage status )
+    >R
+    DUP _SDCL-E-OUTPUT-STORAGE + C@
+    DUP SBOX-DECL-SCHEMA-EMBEDDED = IF
+        OVER _SDCL-E-OUTPUT-OFFSET + _SDECL-U64@
+        R@ _SDV.SCHEMAS @ +
+    ELSE
+        0
+    THEN
+    2 PICK _SDCL-E-OUTPUT-U + _SDECL-U64@
+    3 PICK _SDCL-E-OUTPUT-DIGEST +
+    >R
+    2SWAP SWAP DROP
+    R> SWAP
+    R> DROP SBOX-DECL-S-OK ;
+
+: SBOX-DECL-ENTRY-INPUT-SCHEMA@
+  ( entry view -- bytes schema-u digest storage status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        2DROP 0 0 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    2DUP _SDECL-ENTRY-BELONGS? 0= IF
+        2DROP 0 0 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDECL-ENTRY-INPUT-SCHEMA@ ;
+
+: SBOX-DECL-ENTRY-OUTPUT-SCHEMA@
+  ( entry view -- bytes schema-u digest storage status )
+    DUP SBOX-DECL-VIEW-VALID? 0= IF
+        2DROP 0 0 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    2DUP _SDECL-ENTRY-BELONGS? 0= IF
+        2DROP 0 0 0 0 SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDECL-ENTRY-OUTPUT-SCHEMA@ ;
