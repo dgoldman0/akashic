@@ -2571,6 +2571,33 @@ CREATE _CV-VFS-MAGIC
     THEN
     _CV.SECRET-CAP @ CVAULT-S-OK ;
 
+: _CVAULT-EXTERNAL-SPAN-STATUS
+  ( address length vault -- status )
+    >R
+    2DUP _CV-ADMIT-SPAN ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    R@ _CVAULT-VALID? 0= IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    R@ _CV.FLAGS @ _CV-F-BUSY AND IF
+        2DROP R> DROP CVAULT-S-BUSY EXIT
+    THEN
+    2DUP R@ CVAULT-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    2DUP R@ _CV.BACKING @ R@ _CV.BACKING-U @
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    2DUP R@ _CV.VFS @ VFS-DESC-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    _CV-ALL-PRIVATE-ALIASES? IF
+        R> DROP CVAULT-S-INVALID EXIT
+    THEN
+    R> DROP CVAULT-S-OK ;
+
 ' _CVAULT-CONFIG-CLEAR CONSTANT _cvault-config-clear-xt
 ' _CVAULT-INIT         CONSTANT _cvault-init-xt
 ' _CVAULT-FINI         CONSTANT _cvault-fini-xt
@@ -2586,6 +2613,7 @@ CREATE _CV-VFS-MAGIC
 ' _CVAULT-BLOCKED?     CONSTANT _cvault-blocked-xt
 ' _CVAULT-LAST-STATUS@ CONSTANT _cvault-last-status-xt
 ' _CVAULT-SECRET-CAPACITY@ CONSTANT _cvault-secret-capacity-xt
+' _CVAULT-EXTERNAL-SPAN-STATUS CONSTANT _cvault-external-span-status-xt
 
 : CVAULT-CONFIG-CLEAR  ( config -- status )
     _cvault-config-clear-xt _credential-vault-guard WITH-GUARD ;
@@ -2638,6 +2666,11 @@ CREATE _CV-VFS-MAGIC
 : CVAULT-SECRET-CAPACITY@
   ( vault -- secret-capacity status )
     _cvault-secret-capacity-xt
+    _credential-vault-guard WITH-GUARD ;
+
+: CVAULT-EXTERNAL-SPAN-STATUS
+  ( address length vault -- status )
+    _cvault-external-span-status-xt
     _credential-vault-guard WITH-GUARD ;
 
 \ =====================================================================

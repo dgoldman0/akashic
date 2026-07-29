@@ -275,6 +275,11 @@ def _assert_statuses_and_public_api(source: str, doc: str) -> None:
             "_cvault-secret-capacity-xt",
             "vault -- secret-capacity status",
         ),
+        "CVAULT-EXTERNAL-SPAN-STATUS": (
+            "_CVAULT-EXTERNAL-SPAN-STATUS",
+            "_cvault-external-span-status-xt",
+            "address length vault -- status",
+        ),
     }
     for word, (internal, capture, stack) in public.items():
         assert re.search(
@@ -290,6 +295,24 @@ def _assert_statuses_and_public_api(source: str, doc: str) -> None:
         )
         assert flat.count("WITH-GUARD") == 1
         assert word in doc
+
+    external_span = _word_body(
+        source, "_CVAULT-EXTERNAL-SPAN-STATUS"
+    )
+    for required in (
+        "_CV-ADMIT-SPAN",
+        "_CVAULT-VALID?",
+        "_CV-F-BUSY",
+        "CVAULT-S-BUSY",
+        "CVAULT-SIZE MSPAN-OVERLAP?",
+        "_CV.BACKING @",
+        "_CV.BACKING-U @",
+        "_CV.VFS @ VFS-DESC-SIZE MSPAN-OVERLAP?",
+        "_CV-ALL-PRIVATE-ALIASES?",
+    ):
+        assert required in external_span
+    assert external_span.count("CVAULT-S-INVALID") >= 4
+    assert external_span.count("MSPAN-OVERLAP?") == 3
 
 
 def _assert_geometry(
@@ -1200,6 +1223,11 @@ def _assert_lifecycle_fixture_contracts() -> None:
         "CVAULT-REVOKE",
         "CVAULT-WITH",
         "CVAULT-RECOVER",
+        "CVAULT-EXTERNAL-SPAN-STATUS",
+        "_CVTL-EXTERNAL-SPAN-CASE",
+        "_CVTL-EXTERNAL-BUSY-CASE",
+        "CREDENTIAL VAULT LIFE EXTERNAL SPANS",
+        "CREDENTIAL VAULT LIFE EXTERNAL BUSY",
         "CVAULT-S-REVOKED _CVTL-FLOOR-READ-STATUS !",
         "CVAULT-S-CALLBACK = _CVTL-ASSERT",
         "CVAULT-S-RECOVERY = _CVTL-ASSERT",

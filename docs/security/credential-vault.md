@@ -145,6 +145,29 @@ The vault descriptor and backing store are address-bound initialized
 objects. Keep both at stable addresses for the complete initialized lifetime
 and do not copy their bytes.
 
+### External composition spans
+
+Code that uses scratch or output while a vault operation is live must first
+qualify the complete external span:
+
+```forth
+CVAULT-EXTERNAL-SPAN-STATUS
+  ( address length vault -- status )
+```
+
+`CVAULT-S-OK` proves that the required nonempty caller span is physically
+admitted and does not overlap the live vault descriptor, its complete
+configured backing store, its VFS descriptor, or vault/dependency-private
+storage. The check is read-only and does not claim ownership of the span.
+Callers must keep the vault initialized and every admitted address stable
+through the later synchronous operation.
+
+An empty or null span, an invalid vault, or forbidden overlap returns
+`CVAULT-S-INVALID`. A currently active vault returns `CVAULT-S-BUSY`.
+Invalid physical geometry preserves `CVAULT-S-RANGE`,
+`CVAULT-S-PROTECTED`, or `CVAULT-S-PLATFORM`. No rejection changes the
+external span or vault.
+
 ## Configuration
 
 Allocate and clear one `CVAULT-CONFIG-SIZE` descriptor:
