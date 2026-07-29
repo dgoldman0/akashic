@@ -16,6 +16,7 @@ REQUIRE handle.f   \ AT Protocol handle syntax + lowercase normalization
 REQUIRE did-document.f \ strict caller-owned AT Protocol identity profile
 REQUIRE identity.f \ caller-owned handle/DID/PDS discovery coordinator
 REQUIRE identity-hres.f \ identity over generic HTTPS resources
+REQUIRE oauth-profile.f \ exact PDS-to-OAuth issuer trust-chain profile
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ XRPC client (GET/POST) + pagination
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -27,7 +28,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 `PROVIDED akashic-aturi` / `akashic-did` /
 `akashic-atproto-handle` / `akashic-tid` /
 `akashic-atproto-diddoc` / `akashic-atproto-identity` /
-`akashic-atid-hres` /
+`akashic-atid-hres` / `akashic-at-oauth-prof` /
 `akashic-xrpc` / `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` / `akashic-session` /
 `akashic-repo` — safe to include multiple times.
@@ -43,6 +44,7 @@ REQUIRE repo.f     \ Record CRUD (get/create/put/delete)
 - [DID document — did-document.f](#did-document--did-documentf)
 - [Identity discovery — identity.f](#identity-discovery--identityf)
 - [Identity HTTP composition — identity-hres.f](#identity-http-composition--identity-hresf)
+- [OAuth discovery profile — oauth-profile.f](#oauth-discovery-profile--oauth-profilef)
 - [TID — tid.f](#tid--tidf)
 - [XRPC Client — xrpc.f](#xrpc-client--xrpcf)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
@@ -186,6 +188,18 @@ evidence, bounds redirects to three, and permits cross-authority redirects
 only between default-port HTTPS targets. DNS, public-address admission, TLS
 hostname authentication, port leases, and retry exhaustion remain platform
 composition responsibilities.
+
+## OAuth discovery profile — oauth-profile.f
+
+The [caller-owned OAuth discovery profile](oauth-profile.md) binds a resolved
+DID and PDS to the PDS-selected authorization server using exact RFC 9728 and
+RFC 8414 identifiers. It enforces the AT OAuth capabilities and exposes
+authorization, token, and PAR targets only after the complete trust chain is
+ready.
+
+The profile owns no transport, browser, token, DPoP, session, XRPC, or Streams
+state. A separate HTTP-resource adapter supplies metadata responses under the
+required exact-200, JSON, and no-redirect policy.
 
 ---
 
