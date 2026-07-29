@@ -76,6 +76,7 @@ REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../daybook/shared-document.f
 REQUIRE agent-access-policy.f
+REQUIRE sandbox-component.f
 
 \ =====================================================================
 \  §1 — Host Slot Compatibility Views

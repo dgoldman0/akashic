@@ -659,14 +659,36 @@ REQUIRE ../sandbox/vm.f
         2DROP 0 SBOX-HOST-S-STATE
     THEN ;
 
-: _SHOST-RESULT-DISJOINT?  ( result result-u host -- flag )
+\ A live host owns one complete invocation graph, not merely its fixed
+\ descriptor.  Adapters use this predicate before publishing caller-owned
+\ metadata so neither that metadata nor a direct result buffer can alias a
+\ child Context, borrowed plan/profile, or any allocation FINISH will scrub.
+: SBOX-HOST-SPAN-DISJOINT?  ( address length host -- flag )
     >R
+    2DUP _SHOST-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R@ SBOX-HOST-VALID? 0= IF 2DROP R> DROP 0 EXIT THEN
     2DUP R@ SBOX-HOST-INVOCATION-SIZE
         MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
     2DUP R@ _SHI.CHILD @ CTX-SIZE
         MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _SHI.PARENT @ CTX-SIZE MSPAN-OVERLAP? 0=
-    R> DROP ;
+    2DUP R@ _SHI.PARENT @ CTX-SIZE
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SHI.PLAN @ DUP SBOX-PLAN-TOTAL@
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SHI.PLAN @ SBOX-PLAN-PROFILE@ SBOX-PROFILE-SIZE
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SHI.INPUT @ R@ _SHI.INPUT-U @
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SHI.OUTPUT @ R@ _SHI.OUTPUT-U @
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SHI.WORK @ R@ _SHI.WORK-U @
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _SHI.VM @ R@ _SHI.VM-U @
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DROP R> DROP -1 ;
+
+: _SHOST-RESULT-DISJOINT?  ( result result-u host -- flag )
+    SBOX-HOST-SPAN-DISJOINT? ;
 
 : _SHOST-FINISH>STATUS  ( vm-status -- host-status )
     DUP SBOX-VM-S-ALIAS = IF DROP SBOX-HOST-S-ALIAS EXIT THEN
