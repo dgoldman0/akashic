@@ -254,6 +254,21 @@ after every admitted outcome. HTTP provenance, checked JWK Set qualification,
 `jwks_uri` acquisition, private-key ownership, browser authorization, and
 session installation remain explicit later boundaries.
 
+## OAuth confidential inline deployment — oauth-deployment-inline.f
+
+The
+[confidential inline deployment composition](oauth-deployment-inline.md)
+extends the deployment binder with checked P-256 JWK Set selection and durable
+local client-authentication and DPoP key ownership. It accepts only inline
+`jwks`, requires an exact two-role key binding, compares both the selected
+public key and thumbprint with the authenticated local client identity, and
+resolves the distinct DPoP identity without nesting vault borrows.
+
+The state-free composition uses one 111,928-byte caller-owned workspace and
+wipes it after every admitted outcome. Client-metadata acquisition,
+`jwks_uri`, assertion and DPoP-proof construction, browser authorization, token
+exchange, and durable session installation remain separate boundaries.
+
 ## OAuth token-grant admission — oauth-grant.f
 
 The

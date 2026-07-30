@@ -12,6 +12,10 @@ selected configuration and the declarations in the supplied document agree
 under the policy below. It does not prove where the document came from and does
 not qualify or acquire its client-authentication keys.
 
+For the complete confidential inline-`jwks` composition, including checked
+P-256 selection and comparison with durable local client and DPoP identities,
+see [AT OAuth Confidential Inline Deployment](oauth-deployment-inline.md).
+
 ## Public contract
 
 ```forth
@@ -209,6 +213,11 @@ metadata callback's raw `jwks` span remains borrowed, or first copy the exact
 token into separately owned stable storage. Binder success alone does not
 claim checked-JWKS success.
 
+`oauth-deployment-inline.f` closes this inline boundary together with local
+private-key identity for confidential deployments. It deliberately rejects
+public and `jwks_uri` key sources rather than treating them as the same
+composition.
+
 ### `jwks_uri` acquisition
 
 For `jwks_uri`, the binder proves only the declaration relationship required by
@@ -233,6 +242,12 @@ selected published JWK, for example through an RFC 7638 thumbprint. It must also
 prove that the client-authentication key and the per-session DPoP key are
 distinct identities. Vault recovery, rotation, revocation, assertion signing,
 and durable key continuity remain outside this module.
+
+The confidential inline composition described in
+[AT OAuth Confidential Inline Deployment](oauth-deployment-inline.md) performs
+that synchronous local resolution, compares both the public key and
+thumbprint, and proves client/DPoP distinctness. Remote `jwks_uri` acquisition
+remains outside it.
 
 Native custom-scheme or universal/app-link ownership, browser launch, PAR,
 PKCE, token exchange, session persistence, XRPC, and Streams integration also
