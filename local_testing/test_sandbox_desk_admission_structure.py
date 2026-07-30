@@ -162,6 +162,15 @@ def test_receipt_accessors_reuse_the_validated_nested_result() -> None:
     assert "_DSR-PAYLOAD-VALIDATED@" in payload
 
 
+def test_receipt_release_reuses_the_validated_nested_result() -> None:
+    source = _source()
+    release = _definition(source, "DESK-SBOX-RECEIPT-RELEASE")
+
+    assert "DESK-SBOX-RECEIPT-VALID?" in release
+    assert "_DSR-RELEASE-VALIDATED" in release
+    assert "DESK-SBOX-RESULT-RELEASE" not in release
+
+
 def test_receipt_preflight_covers_the_whole_live_invocation_graph() -> None:
     source = _source()
     active = _definition(source, "_DSA-ACTIVE-SHAPE?")

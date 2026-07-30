@@ -142,6 +142,22 @@ def test_vm_total_accessor_reuses_its_complete_envelope_validation() -> None:
     assert "_SVM-RESULT-TOTAL-VALIDATED@" in public
 
 
+def test_vm_result_release_scrubs_the_validated_span_once() -> None:
+    vm = (AKASHIC_ROOT / VM).read_text(encoding="utf-8")
+    private = vm.split(
+        ": _SVM-RESULT-RELEASE-VALIDATED", 1
+    )[1].split(": SBOX-VM-RESULT-RELEASE", 1)[0]
+    public = vm.split(": SBOX-VM-RESULT-RELEASE", 1)[1].split(
+        "\\ =====================================================================", 1
+    )[0]
+
+    assert "_SVT.MAGIC !" in private
+    assert private.count("0 FILL") == 1
+    assert "SBOX-VM-RESULT-VALID?" not in private
+    assert "SBOX-VM-RESULT-VALID?" in public
+    assert "_SVM-RESULT-RELEASE-VALIDATED" in public
+
+
 def test_finish_reuses_validated_measure_and_host_span_proofs() -> None:
     host = (AKASHIC_ROOT / HOST).read_text(encoding="utf-8")
     vm = (AKASHIC_ROOT / VM).read_text(encoding="utf-8")

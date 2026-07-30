@@ -171,6 +171,18 @@ def test_detached_result_accessors_reuse_one_nested_envelope_proof() -> None:
     assert "_DSR-PAYLOAD-VALIDATED@" in payload
 
 
+def test_detached_result_release_reuses_the_nested_envelope_proof() -> None:
+    source = _source(COMPONENT)
+    private = _definition(source, "_DSR-RELEASE-VALIDATED")
+    public = _definition(source, "DESK-SBOX-RESULT-RELEASE")
+
+    assert "_SVM-RESULT-RELEASE-VALIDATED" in private
+    assert "SBOX-VM-RESULT-RELEASE" not in private
+    assert "_DSC-SCRUB-FREE" not in private
+    assert "DESK-SBOX-RESULT-VALID?" in public
+    assert "_DSR-RELEASE-VALIDATED" in public
+
+
 def test_close_publishes_admission_barrier_before_host_cancellation() -> None:
     source = _source(COMPONENT)
     close = source.index(": DESK-SBOX-CLOSE")

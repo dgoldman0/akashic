@@ -697,6 +697,16 @@ REQUIRE ../../../utils/memory-span.f
     DUP 0> IF 2DUP 0 FILL THEN
     DROP FREE ;
 
+\ The enclosing Desk result or receipt has just validated this exact nested
+\ VM result.  Scrub it once, free the zeroed allocation, then clear metadata.
+: _DSR-RELEASE-VALIDATED  ( result -- )
+    >R
+    R@ _DSR.PAYLOAD @ R@ _DSR.PAYLOAD-CAP @
+    2DUP _SVM-RESULT-RELEASE-VALIDATED
+    DROP FREE
+    R@ DESK-SBOX-RESULT-SIZE 0 FILL
+    R> DROP ;
+
 : DESK-SBOX-RESULT-RELEASE  ( result -- status )
     DUP _DSR-FIXED? 0= IF
         DROP DESK-SBOX-S-INVALID EXIT
@@ -707,13 +717,7 @@ REQUIRE ../../../utils/memory-span.f
     DUP DESK-SBOX-RESULT-VALID? 0= IF
         DROP DESK-SBOX-S-INVALID EXIT
     THEN
-    >R
-    R@ _DSR.PAYLOAD @ R@ _DSR.PAYLOAD-CAP @
-        SBOX-VM-RESULT-RELEASE DROP
-    R@ _DSR.PAYLOAD @ R@ _DSR.PAYLOAD-CAP @
-        _DSC-SCRUB-FREE
-    R@ DESK-SBOX-RESULT-SIZE 0 FILL
-    R> DROP
+    _DSR-RELEASE-VALIDATED
     DESK-SBOX-S-OK ;
 
 : _DSC-TAKE-SPAN-VALIDATED

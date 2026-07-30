@@ -245,6 +245,7 @@ def test_result_and_shutdown_paths_end_borrows_before_reuse() -> None:
     owner_drain = _definition(source, "DESK-SBOX-JOB-OWNER-DRAIN")
     close = _definition(source, "DESK-SBOX-JOB-SERVICE-CLOSE")
     drain = _definition(source, "DESK-SBOX-JOB-SERVICE-DRAIN")
+    release = _definition(source, "DESK-SBOX-JOB-SERVICE-RELEASE")
 
     assert "_DSA-RESULT-TAKE-PRECHECKED" in take
     assert take.index("_DSJ-LOOKUP") < take.index(
@@ -283,6 +284,11 @@ def test_result_and_shutdown_paths_end_borrows_before_reuse() -> None:
     assert "_DSJ-DRAIN-CLEAR" in drain
     assert drain.index("DESK-SBOX-JOB-SERVICE-CLOSE") < drain.index(
         "_DSJ-DRAIN-CLEAR"
+    )
+    assert "DESK-SBOX-JOB-SERVICE-SIZE 0 FILL" in release
+    assert "OVER _DSJ-OWNER-CORE 0 FILL" in release
+    assert release.index("DESK-SBOX-JOB-SERVICE-DRAIN") < release.index(
+        "OVER _DSJ-OWNER-CORE 0 FILL"
     )
 
 

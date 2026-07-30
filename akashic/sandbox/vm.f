@@ -413,6 +413,13 @@ PROVIDED akashic-sbx-vm
     LOOP
     DROP -1 ;
 
+\ The exact caller-owned writable span has been validated and any envelope
+\ validity result has already been saved.  Clear a possible seal first, then
+\ scrub the entire supplied capacity atomically.
+: _SVM-RESULT-RELEASE-VALIDATED  ( result result-capacity -- )
+    0 2 PICK _SVT.MAGIC !
+    0 FILL ;
+
 : SBOX-VM-RESULT-RELEASE  ( result result-capacity -- status )
     2DUP _SVM-RESULT-SPAN-STATUS ?DUP IF
         >R 2DROP R> EXIT
@@ -427,9 +434,8 @@ PROVIDED akashic-sbx-vm
         0
     THEN
     >R
-    0 2 PICK _SVT.MAGIC !
-    2DUP 0 FILL
-    2DROP R> IF SBOX-VM-S-OK ELSE SBOX-VM-S-RESULT THEN ;
+    _SVM-RESULT-RELEASE-VALIDATED
+    R> IF SBOX-VM-S-OK ELSE SBOX-VM-S-RESULT THEN ;
 
 \ =====================================================================
 \  Measured instance representation
