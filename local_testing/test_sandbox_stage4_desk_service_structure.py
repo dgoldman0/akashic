@@ -180,6 +180,19 @@ def test_fixture_uses_the_public_discovery_job_and_receipt_path() -> None:
     assert "SBOX-VERIFY" not in fixture
 
 
+def test_fixture_reports_caught_failures_with_the_active_phase() -> None:
+    fixture = _source(FIXTURE)
+    run = _definition(fixture, "_S4-RUN")
+    failure = _definition(fixture, "_S4-FAIL")
+
+    assert "['] _S4-BODY CATCH" in run
+    assert "_S4-FAIL EXIT" in run
+    assert "SBOX STAGE4 DESK SERVICE FAIL PHASE" in failure
+    assert "_4F @" in failure
+    assert "STATUS" in failure
+    assert "TX-FLUSH" in failure
+
+
 def test_fixture_uses_the_fixed_desk_budgets_and_bounded_scheduler() -> None:
     fixture = _source(FIXTURE)
     candidate = _definition(fixture, "_4EC")
@@ -209,7 +222,7 @@ def test_receipts_are_read_only_after_all_borrowed_state_is_gone() -> None:
     fixture = _source(FIXTURE)
     teardown = _definition(fixture, "_S4-TEARDOWN")
     detached = _definition(fixture, "_S4-DETACHED-RESULT")
-    run = _definition(fixture, "_S4-RUN")
+    body = _definition(fixture, "_S4-BODY")
 
     service = teardown.index("DESK-SBOX-JOB-SERVICE-RELEASE")
     owner = teardown.index("SBOX-MODULE-OWNER-RELEASE")
@@ -221,6 +234,6 @@ def test_receipts_are_read_only_after_all_borrowed_state_is_gone() -> None:
         fixture,
         "_S4-RESULT=?",
     )
-    assert run.index("_S4-TEARDOWN") < run.index(
+    assert body.index("_S4-TEARDOWN") < body.index(
         "_S4-DETACHED-RESULT"
     )
